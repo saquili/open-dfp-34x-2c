@@ -68,6 +68,10 @@ class RepoScanner:
             modified |= gitio.worktree_modified(self.repo, sub + "/")
         for path in files:
             full = os.path.join(self.repo, path)
+            sub = _upstream_dir(path)
+            base = baselines[sub].get(path[len(sub) + 1:]) if sub in baselines else None
+            if base is not None and path not in modified and index.get(path) == base:
+                continue  # pristine upstream, a file or a symbolic link
             if os.path.islink(full):
                 # A link's target is content too (git stores it as a blob).
                 self._scan_file(path, os.fsencode(os.readlink(full)))
@@ -76,14 +80,9 @@ class RepoScanner:
                 continue
             lines = None
             check_size = True
-            sub = _upstream_dir(path)
-            if sub in baselines:
-                base = baselines[sub].get(path[len(sub) + 1:])
-                if base is not None:
-                    if path not in modified and index.get(path) == base:
-                        continue  # pristine upstream file
-                    lines = self._changed_lines(base, path, index.get(path), path in modified)
-                    check_size = False
+            if base is not None:
+                lines = self._changed_lines(base, path, index.get(path), path in modified)
+                check_size = False
             with open(full, "rb") as handle:
                 data = handle.read()
             self._scan_file(path, data, lines=lines, check_size=check_size)

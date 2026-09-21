@@ -149,12 +149,14 @@ class Repo:
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").strip()
 
-    def subtree_import(self, prefix: str, files: dict[str, str]) -> str:
+    def subtree_import(self, prefix: str, files: dict[str, str],
+                       links: Optional[dict[str, str]] = None) -> str:
         """Import ``files`` under ``prefix`` the way ``git subtree add --squash`` does.
 
-        A parentless squash commit holds the upstream tree at its root; a merge
-        commit brings it in under the prefix. Built from plumbing, so the tests
-        do not depend on the subtree script being installed.
+        ``links`` maps the path of a symbolic link to its target. A parentless
+        squash commit holds the upstream tree at its root; a merge commit
+        brings it in under the prefix. Built from plumbing, so the tests do not
+        depend on the subtree script being installed.
         """
         with tempfile.TemporaryDirectory() as tmp:
             for rel, content in files.items():
@@ -162,6 +164,10 @@ class Repo:
                 os.makedirs(os.path.dirname(full), exist_ok=True)
                 with open(full, "w", encoding="utf-8") as handle:
                     handle.write(content)
+            for rel, target in (links or {}).items():
+                full = os.path.join(tmp, "tree", rel)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                os.symlink(target, full)
             env = dict(git_env(), GIT_INDEX_FILE=os.path.join(tmp, "index"))
             self.git("--work-tree", os.path.join(tmp, "tree"), "add", "-A", env=env)
             tree = self.git("write-tree", env=env).strip()
