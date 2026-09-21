@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 
-from . import compare, kconfig, lang, trees, yaml
+from . import compare, kconfig, lang, manifest, trees, yaml
 from .tok import LexError
 
 EXIT_SAME = 0
@@ -285,12 +285,84 @@ def yaml_strip(argv, prog):
                        yaml.strip)
 
 
+# -- obj-manifest / compare-objs ------------------------------------------------------------
+
+def obj_manifest(argv, prog):
+    p = argparse.ArgumentParser(
+        prog=prog,
+        description='Print the SHA-256 manifest of a kernel build directory: '
+                    '.config, vmlinux, every object (*.o, *.ko), device '
+                    'trees and boot images, in sha256sum format.')
+    p.add_argument('--target-only', action='store_true',
+                   help='leave out the objects of host programs (ELF files '
+                        'for another machine than vmlinux)')
+    p.add_argument('-o', '--output', metavar='FILE',
+                   help='write the manifest to FILE instead of stdout')
+    p.add_argument('build_dir', metavar='OUT')
+    args = p.parse_args(argv)
+    try:
+        text = manifest.format_manifest(
+            manifest.record(args.build_dir, args.target_only))
+    except (OSError, manifest.ManifestError) as e:
+        _err(prog, str(e))
+        return EXIT_ERROR
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8',
+                  errors='surrogateescape') as f:
+            f.write(text)
+    else:
+        _out(text)
+    return EXIT_SAME
+
+
+def compare_objs(argv, prog):
+    p = argparse.ArgumentParser(
+        prog=prog,
+        description='Compare two object manifests (files written by '
+                    'obj-manifest, or build directories).  Exit status 0 '
+                    'when they list the same files with the same hashes.')
+    p.add_argument('--target-only', action='store_true',
+                   help='when reading a build directory, leave out the '
+                        'objects of host programs')
+    p.add_argument('--json', action='store_true', help='print JSON')
+    p.add_argument('a', metavar='A')
+    p.add_argument('b', metavar='B')
+    args = p.parse_args(argv)
+    try:
+        ma = manifest.load(args.a, args.target_only)
+        mb = manifest.load(args.b, args.target_only)
+    except (OSError, manifest.ManifestError) as e:
+        _err(prog, str(e))
+        return EXIT_ERROR
+    only_a, only_b, differ = manifest.diff(ma, mb)
+    same = len(set(ma) & set(mb)) - len(differ)
+    status = EXIT_SAME if not (only_a or only_b or differ) else EXIT_DIFFERENT
+    if args.json:
+        _out(json.dumps({'a': args.a, 'b': args.b, 'status': status,
+                         'identical': same, 'differ': differ,
+                         'only_a': only_a, 'only_b': only_b},
+                        indent=2) + '\n')
+        return status
+    for path in differ:
+        _out('differ   %s\n' % path)
+    for path in only_a:
+        _out('only-A   %s\n' % path)
+    for path in only_b:
+        _out('only-B   %s\n' % path)
+    _out('%d entries in A, %d in B: %d identical, %d differ, %d only in A, '
+         '%d only in B\n' % (len(ma), len(mb), same, len(differ), len(only_a),
+                             len(only_b)))
+    return status
+
+
 _TOOLS = {
     'c-tokens': c_tokens,
     'compare-files': compare_files,
     'compare-trees': compare_trees,
     'kconfig-strip': kconfig_strip,
     'yaml-strip': yaml_strip,
+    'obj-manifest': obj_manifest,
+    'compare-objs': compare_objs,
 }
 
 

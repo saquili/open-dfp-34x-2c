@@ -1,0 +1,84 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# in-toolchain -- run a command in the cross-toolchain container, with a
+# case-sensitive work volume.
+#
+# Usage: in-toolchain --image IMAGE [--volume NAME] [--mount DIR]...
+#                     [--] COMMAND [ARG...]
+#
+# The container gets:
+#
+#   /work        the Docker volume NAME (default: equiv-work), created on first
+#                use.  It lives on the container host's own file system,
+#                which is case-sensitive even when the machine running Docker
+#                is not -- the place to unpack and build a kernel tree.
+#   this repository, read-only, at the same absolute path it has here, so
+#                that tools/equiv/kbuild-repro and friends run by that path;
+#   every --mount DIR, read-only, at its own absolute path;
+#   no network.
+#
+# Standard input is passed through, so a tree can be streamed in:
+#
+#   git -C ~/linux archive HEAD |
+#       tools/equiv/in-toolchain --image IMAGE -- sh -c \
+#           'mkdir -p /work/src && tar -x -C /work/src'
+#
+# IMAGE may also come from the environment as EQUIV_IMAGE, NAME as
+# EQUIV_VOLUME.  Paths with blanks are not supported.
+
+set -eu
+
+me=${0##*/}
+image=${EQUIV_IMAGE:-}
+volume=${EQUIV_VOLUME:-equiv-work}
+mounts=
+
+die() {
+	printf '%s: %s\n' "$me" "$*" >&2
+	exit 1
+}
+
+usage() {
+	# The comment block at the top, from 'Usage:' on.
+	awk '/^# Usage:/ { p = 1 } p && !/^#/ { exit } p { sub(/^# ?/, ""); print }' \
+		"$0" >&2
+	exit 2
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--image) [ $# -ge 2 ] || usage; image=$2; shift 2 ;;
+	--volume) [ $# -ge 2 ] || usage; volume=$2; shift 2 ;;
+	--mount)
+		[ $# -ge 2 ] || usage
+		[ -d "$2" ] || die "not a directory: $2"
+		dir=$(cd "$2" && pwd -P)
+		case $dir in *' '*) die "path with a blank: $dir" ;; esac
+		mounts="$mounts $dir"
+		shift 2
+		;;
+	-h | --help) usage ;;
+	--) shift; break ;;
+	-*) die "unknown option: $1" ;;
+	*) break ;;
+	esac
+done
+[ $# -ge 1 ] || usage
+[ -n "$image" ] || die "no toolchain image: pass --image or set EQUIV_IMAGE"
+command -v docker >/dev/null 2>&1 || die "docker is not installed"
+
+repo=$(cd "$(dirname "$0")/../.." && pwd -P)
+case $repo in *' '*) die "path with a blank: $repo" ;; esac
+
+docker volume inspect "$volume" >/dev/null 2>&1 ||
+	docker volume create "$volume" >/dev/null
+
+# "$@" is the command; put the image, then the extra mounts, in front of it.
+set -- "$image" "$@"
+for dir in $mounts; do
+	set -- -v "$dir:$dir:ro" "$@"
+done
+exec docker run --rm -i --network none -v "$volume:/work" \
+	-v "$repo:$repo:ro" -w /work "$@"

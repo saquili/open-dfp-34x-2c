@@ -8,9 +8,10 @@ whitespace and prose; 3 string literals only; 1 code; 2 error.
 
 import json
 import os
+import subprocess
 import unittest
 
-from equivtest import TempDirTest, run_tool
+from equivtest import TempDirTest, case_sensitive, needs_git, run_tool
 
 C_A = 'int f(void)\n{\n\treturn g("text");\n}\n'
 C_B_COMMENT = '/* f */\nint f(void) { return g("text"); }\n'
@@ -124,6 +125,131 @@ class CompareTreesTest(TempDirTest):
     def test_not_a_directory(self):
         self.assertEqual(run_tool('compare-trees', self.tmp,
                                   os.path.join(self.tmp, 'missing'))[0], 2)
+
+
+class ManifestToolsTest(TempDirTest):
+
+    def build(self, name, body):
+        self.write(name + '/.config', 'CONFIG_A=y\n')
+        self.write(name + '/vmlinux', b'\x7fELF\x01\x02\x01' + bytes(9)
+                   + b'\x00\x01\x00\x08' + body)
+        return os.path.join(self.tmp, name)
+
+    def test_record_and_compare(self):
+        a = self.build('a', b'one')
+        b = self.build('b', b'one')
+        c = self.build('c', b'two')
+        ma = os.path.join(self.tmp, 'a.sha256')
+        self.assertEqual(run_tool('obj-manifest', '-o', ma, a)[0], 0)
+        status, out, _ = run_tool('obj-manifest', b)
+        self.assertEqual(status, 0)
+        with open(ma) as f:
+            self.assertEqual(f.read(), out)
+        status, out, _ = run_tool('compare-objs', ma, b)
+        self.assertEqual(status, 0)
+        self.assertIn('2 entries in A, 2 in B: 2 identical, 0 differ', out)
+        status, out, _ = run_tool('compare-objs', ma, c)
+        self.assertEqual(status, 1)
+        self.assertIn('differ   vmlinux\n', out)
+        status, out, _ = run_tool('compare-objs', '--json', ma, c)
+        self.assertEqual(json.loads(out)['differ'], ['vmlinux'])
+
+    def test_errors(self):
+        missing = os.path.join(self.tmp, 'missing')
+        self.assertEqual(run_tool('obj-manifest', missing)[0], 2)
+        bad = self.write('bad.sha256', 'not a manifest\n')
+        self.assertEqual(run_tool('compare-objs', bad, bad)[0], 2)
+
+
+class ShellToolsTest(TempDirTest):
+    """The shell tools refuse bad input before they start any work."""
+
+    def fake_tree(self):
+        self.write('linux/Makefile', 'all:\n')
+        self.write('linux/Kconfig', 'config A\n\tbool\n')
+        return os.path.join(self.tmp, 'linux')
+
+    def test_help(self):
+        for name in ('kbuild-repro', 'in-toolchain', 'repro-check'):
+            status, _, err = run_tool(name, '--help')
+            self.assertEqual(status, 2, name)
+            self.assertTrue(err.startswith('Usage: ' + name), err)
+
+    def test_kbuild_repro_refusals(self):
+        tree = self.fake_tree()
+        out = os.path.join(self.tmp, 'out')
+        cfg = self.write('x.config', 'CONFIG_A=y\n')
+        cases = (
+            (['--config', cfg, '--defconfig', 'tinyconfig', tree, out],
+             'exclude each other'),
+            (['--fragment', cfg, tree, out], '--fragment needs --defconfig'),
+            ([self.tmp, out], 'does not look like a kernel tree'),
+            (['--build-version', 'x', tree, out],
+             '--build-version must be a number'),
+            (['-j', '0', tree, out], '--jobs must be a positive number'),
+            (['--source-date-epoch', '-1', tree, out],
+             '--source-date-epoch must be a number'),
+            (['--bogus', tree, out], 'unknown option'),
+        )
+        for argv, message in cases:
+            status, _, err = run_tool('kbuild-repro', '--dry-run', *argv)
+            self.assertEqual(status, 1, (argv, err))
+            self.assertIn(message, err)
+
+    def test_kbuild_repro_dry_run(self):
+        tree = self.fake_tree()
+        out = os.path.join(self.tmp, 'out')
+        status, stdout, err = run_tool('kbuild-repro', '--dry-run', tree, out)
+        if not case_sensitive(self.tmp):
+            # Refused, and rightly: the kernel holds paths that differ only
+            # in case.
+            self.assertEqual(status, 1)
+            self.assertIn('case-insensitive', err)
+            return
+        self.assertEqual(status, 0, err)
+        for line in ('KBUILD_BUILD_TIMESTAMP=1970-01-01 00:00:00 UTC',
+                     'KBUILD_BUILD_USER=build', 'KBUILD_BUILD_HOST=build',
+                     'KBUILD_BUILD_VERSION=1', 'SOURCE_DATE_EPOCH=0',
+                     'LC_ALL=C', 'TZ=UTC'):
+            self.assertIn('  %s\n' % line, stdout)
+        maps = '-ffile-prefix-map=%s=.' % tree
+        for var in ('KCFLAGS', 'KCPPFLAGS', 'HOSTCFLAGS', 'HOSTCXXFLAGS',
+                    'USERCFLAGS'):
+            self.assertIn(' %s=' % var, stdout)
+        self.assertIn(maps, stdout)
+        self.assertIn(' LOCALVERSION= ', stdout)
+        self.assertTrue(stdout.rstrip().endswith(' all'), stdout)
+
+    def test_in_toolchain_refusals(self):
+        env = dict(os.environ)
+        env.pop('EQUIV_IMAGE', None)
+        status, _, err = run_tool('in-toolchain', 'true', env=env)
+        self.assertEqual(status, 1)
+        self.assertIn('no toolchain image', err)
+        status, _, err = run_tool('in-toolchain', '--image', 'x', '--mount',
+                                  os.path.join(self.tmp, 'missing'), 'true')
+        self.assertEqual(status, 1)
+        self.assertIn('not a directory', err)
+
+    @needs_git
+    def test_repro_check_refusals(self):
+        env = dict(os.environ)
+        env.pop('EQUIV_IMAGE', None)
+        repo = os.path.join(self.tmp, 'repo')
+        os.makedirs(repo)
+        subprocess.run(['git', '-C', repo, 'init', '-q'], check=True)
+        cases = (
+            ([], 'no toolchain image'),
+            (['--image', 'x'], 'no repository'),
+            (['--image', 'x', '--git', repo, '--name', '../x'], '--name'),
+            (['--image', 'x', '--git', repo, '--jobs-b', '0'], '--jobs-b'),
+            (['--image', 'x', '--git', repo], 'not a revision'),
+            (['--image', 'x', '--git', repo, 'extra'], 'unknown argument'),
+        )
+        for argv, message in cases:
+            status, _, err = run_tool('repro-check', *argv, env=env)
+            self.assertEqual(status, 2, (argv, err))
+            self.assertIn(message, err)
 
 
 if __name__ == '__main__':

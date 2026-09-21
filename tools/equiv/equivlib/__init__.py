@@ -5,8 +5,8 @@
 The modules of this package turn a source file into a canonical token stream
 (``ctok`` for C, assembly and device-tree source; ``kconfig``, ``make`` and
 ``yaml`` for the build and schema languages), classify the difference between
-two streams (``compare``) and walk two trees (``trees``).  ``cli`` holds the
-command-line front ends.
+two streams (``compare``), walk two trees (``trees``) and record the hashes of
+a kernel build (``manifest``).  ``cli`` holds the command-line front ends.
 
 Only the Python 3 standard library is used.
 """
