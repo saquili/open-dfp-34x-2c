@@ -143,7 +143,7 @@ exceptions that depend on where a word appears belong in the allowlist.
      - the memory-map constants in the allowlist
    * - ``issue-reference``
      - a hash sign, or ``GH-``, followed by a number
-     - colours, HTML entities, URL fragments
+     - colours, HTML entities, URL fragments, assembler immediates
    * - ``lab-path``
      - home-directory, volume and temporary paths, and the laboratory's own
        directory and file names

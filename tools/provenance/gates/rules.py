@@ -142,6 +142,12 @@ def _leak(m: re.Match, _kind: str, _path: str) -> Optional[str]:
     return None
 
 
+def _issue(m: re.Match, _kind: str, _path: str) -> Optional[str]:
+    if re.search(r",[ \t]*$", _line_around(m)[0]):
+        return None  # an assembler immediate operand: "mov r0, #1"
+    return "a reference to an issue of a private tracker"
+
+
 def _corpus(m: re.Match, _kind: str, _path: str) -> Optional[str]:
     before, _after = _words_around(m, 1)
     if before and before[0] in ("fuzz", "fuzzing", "fuzzer", "seed", "test"):
@@ -176,7 +182,7 @@ FORBIDDEN_RULES = (
           value=_strip_c_suffix),
     _rule(GATE_FORBIDDEN, "issue-reference",
           r"(?<![\w&/#\"'=:.])#\d{1,5}(?![\w-])|\bGH-\d+\b",
-          "a reference to an issue of a private tracker"),
+          "a reference to an issue of a private tracker", check=_issue),
     _rule(GATE_FORBIDDEN, "lab-path",
           r"/Users/[A-Za-z0-9._-]+"
           r"|/home/[A-Za-z0-9._-]+/(?:git|src|work|projects?|code|dev|Documents|Downloads|Desktop)\b"

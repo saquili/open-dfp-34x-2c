@@ -102,6 +102,7 @@ class ForbiddenWords(unittest.TestCase):
             self.fires(text, "issue-reference")
         self.quiet('fill="#000000"; color: #333333; &#123; https://example.org/page#12')
         self.quiet("Issue a CCTL operation; the driver issues 3 reads.")
+        self.quiet("\tmov r0, #1\n\tadd sp, sp,#16\n", "entry.S")
 
     def test_lab_paths(self) -> None:
         for text in ("/" + word("Us", "ers/someone"), word("/ho", "me/someone/git/tree"),
