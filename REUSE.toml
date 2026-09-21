@@ -1,10 +1,23 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# REUSE annotations for files that carry the licence text itself and so are
-# not tagged inline. The GNU GPL version 2 text in COPYING is the Free
-# Software Foundation's; the project uses it under GPL-2.0-only. Everything
-# else in the tree carries an inline SPDX header.
+# REUSE annotations for the files that do not carry their licensing inline.
+#
+# COPYING carries the licence text itself. The GNU GPL version 2 text in it is
+# the Free Software Foundation's; the project uses it under GPL-2.0-only.
+#
+# linux/ is the Linux kernel, imported unchanged from its release, and keeps
+# the kernel's own licensing scheme: each source file names its licence with
+# an SPDX identifier, linux/LICENSES/ holds the licence texts, and
+# linux/Documentation/process/license-rules.rst gives the rules, which the
+# kernel's scripts/spdxcheck.py and scripts/checkpatch.pl check. REUSE cannot
+# read that scheme file by file -- many identifiers use older SPDX forms, and
+# not every file is tagged -- so the annotation below states, for REUSE, the
+# licence of the kernel as a whole, as linux/COPYING gives it. The texts it
+# names are in LICENSES/, copied from linux/LICENSES/. Inside linux/, the
+# information in each file remains authoritative.
+#
+# Everything else in the tree carries an inline SPDX header.
 
 version = 1
 
@@ -13,3 +26,9 @@ path = "COPYING"
 precedence = "override"
 SPDX-FileCopyrightText = "1989, 1991 Free Software Foundation, Inc."
 SPDX-License-Identifier = "GPL-2.0-only"
+
+[[annotations]]
+path = "linux/**"
+precedence = "override"
+SPDX-FileCopyrightText = "The Linux kernel contributors"
+SPDX-License-Identifier = "GPL-2.0-only WITH Linux-syscall-note"
