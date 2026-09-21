@@ -1,0 +1,366 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# kbuild-repro -- build a Linux tree so that two builds of it are identical.
+#
+# Usage: kbuild-repro [options] TREE OUT [TARGET...]
+#
+# Builds the kernel source tree TREE out of tree into OUT (make O=OUT) with
+# everything that would otherwise vary between two builds pinned:
+#
+#   KBUILD_BUILD_TIMESTAMP  '1970-01-01 00:00:00 UTC' (--timestamp)
+#   SOURCE_DATE_EPOCH       the same instant in seconds (--source-date-epoch)
+#   KBUILD_BUILD_USER/HOST  build / build
+#   KBUILD_BUILD_VERSION    1 (--build-version)
+#   LOCALVERSION            set and empty, so no '+' is appended
+#   the build paths         -ffile-prefix-map and -fdebug-prefix-map from TREE
+#                           and from OUT to '.', for every compiler the build
+#                           runs: KCFLAGS for kernel C; KCPPFLAGS for all that
+#                           is preprocessed, which includes the MIPS vDSO --
+#                           it replaces KBUILD_CFLAGS, losing KCFLAGS, but
+#                           keeps KBUILD_CPPFLAGS, and it is always built with
+#                           debug information, whose paths feed the vDSO's
+#                           build ID and so reach vmlinux; HOSTCFLAGS and
+#                           HOSTCXXFLAGS for host programs; USERCFLAGS for
+#                           user programs
+#   LC_ALL=C, TZ=UTC, umask 022, and nothing else from the caller's
+#                           environment: make runs under 'env -i'
+#
+# The configuration comes from one of:
+#   --config FILE        copied to OUT/.config, then 'make olddefconfig'
+#   --defconfig TARGET   'make TARGET' (tinyconfig, a *_defconfig), then each
+#                        --fragment merged with scripts/kconfig/merge_config.sh
+#                        and 'make olddefconfig'; every CONFIG_ line of every
+#                        fragment must survive into .config, or the build
+#                        stops
+#   neither              an OUT/.config already there, then olddefconfig
+# Refused, because they make every build different (see
+# Documentation/kbuild/reproducible-builds.rst in the kernel tree):
+#   CONFIG_LOCALVERSION_AUTO=y  writes the source control state into the
+#                               release string
+#   CONFIG_MODULE_SIG_ALL=y     signs with a key generated for each build
+#   CONFIG_RANDSTRUCT=y         lays out structures from a random seed
+#
+# TARGETs default to 'all'.  The kernel tree and OUT must be on a
+# case-sensitive file system: the tree holds paths that differ only in case.
+# See README.rst for running this inside a container on a machine whose own
+# file system is not case-sensitive.
+#
+# Other options:
+#   --arch ARCH              default mips
+#   --cross-compile PREFIX   default mips-linux-gnu-
+#   -j N, --jobs N           parallel jobs (default: the number of CPUs)
+#   --dry-run                check and print, run nothing
+#
+# A record of the build (tools, pinned values, configuration source and
+# targets) is written to OUT/kbuild-repro.info.
+
+set -eu
+umask 022
+
+me=${0##*/}
+arch=mips
+cross=mips-linux-gnu-
+jobs=
+config=
+defconfig=
+fragments=
+timestamp='1970-01-01 00:00:00 UTC'
+epoch=
+build_version=1
+build_user=build
+build_host=build
+dry_run=0
+
+die() {
+	printf '%s: %s\n' "$me" "$*" >&2
+	exit 1
+}
+
+usage() {
+	# The comment block at the top, from 'Usage:' on.
+	awk '/^# Usage:/ { p = 1 } p && !/^#/ { exit } p { sub(/^# ?/, ""); print }' \
+		"$0" >&2
+	exit 2
+}
+
+need() {
+	[ $# -ge 2 ] || die "option $1 needs a value"
+}
+
+# A path name must not carry a newline or a space: the lists below are
+# space-separated, and a kernel build does not survive such paths anyway.
+plain_path() {
+	case $1 in
+	*' '* | *'
+'*)
+		die "path with a blank or newline is not supported: $1" ;;
+	esac
+}
+
+abs_file() {
+	[ -f "$1" ] || die "not a file: $1"
+	plain_path "$1"
+	printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--config) need "$@"; config=$(abs_file "$2"); shift 2 ;;
+	--defconfig) need "$@"; defconfig=$2; shift 2 ;;
+	--fragment) need "$@"; fragments="$fragments $(abs_file "$2")"; shift 2 ;;
+	--arch) need "$@"; arch=$2; shift 2 ;;
+	--cross-compile) need "$@"; cross=$2; shift 2 ;;
+	-j | --jobs) need "$@"; jobs=$2; shift 2 ;;
+	-j*) jobs=${1#-j}; shift ;;
+	--timestamp) need "$@"; timestamp=$2; shift 2 ;;
+	--source-date-epoch) need "$@"; epoch=$2; shift 2 ;;
+	--build-version) need "$@"; build_version=$2; shift 2 ;;
+	--dry-run) dry_run=1; shift ;;
+	-h | --help) usage ;;
+	--) shift; break ;;
+	-*) die "unknown option: $1" ;;
+	*) break ;;
+	esac
+done
+[ $# -ge 2 ] || usage
+tree=$1
+out=$2
+shift 2
+targets=${*:-all}
+
+[ -n "$config" ] && [ -n "$defconfig" ] &&
+	die "--config and --defconfig exclude each other"
+[ -n "$fragments" ] && [ -z "$defconfig" ] &&
+	die "--fragment needs --defconfig"
+
+# -- the pinned values -----------------------------------------------------------
+
+if [ -z "$epoch" ]; then
+	if [ "$timestamp" = '1970-01-01 00:00:00 UTC' ]; then
+		epoch=0
+	else
+		epoch=$(date -u -d "$timestamp" +%s 2>/dev/null) ||
+			die "cannot convert '$timestamp' to seconds here; pass --source-date-epoch"
+	fi
+fi
+case $epoch in
+'' | *[!0-9]*) die "--source-date-epoch must be a number of seconds" ;;
+esac
+case $build_version in
+'' | *[!0-9]*) die "--build-version must be a number" ;;
+esac
+if [ -z "$jobs" ]; then
+	jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+fi
+case $jobs in
+'' | 0 | *[!0-9]*) die "--jobs must be a positive number" ;;
+esac
+
+# -- the tree and the output directory ---------------------------------------
+
+[ -f "$tree/Makefile" ] && [ -f "$tree/Kconfig" ] ||
+	die "$tree does not look like a kernel tree (no Makefile and Kconfig)"
+plain_path "$tree"
+plain_path "$out"
+tree=$(cd "$tree" && pwd -P)
+mkdir -p "$out"
+out=$(cd "$out" && pwd -P)
+
+# On a case-insensitive file system MAKEFILE names the top-level Makefile.
+if [ -e "$tree/MAKEFILE" ]; then
+	die "$tree is on a case-insensitive file system; the kernel holds paths
+that differ only in case, so one of each pair is lost there.  Build on a
+case-sensitive file system (see README.rst)."
+fi
+probe="$out/.kbuild-repro-case-probe"
+: >"$probe"
+if [ -e "$out/.KBUILD-REPRO-CASE-PROBE" ]; then
+	rm -f "$probe"
+	die "$out is on a case-insensitive file system; objects whose names differ
+only in case would overwrite each other there."
+fi
+rm -f "$probe"
+
+# A tree that went through a case-insensitive file system once has lost one
+# of each pair, even if it sits on a case-sensitive one now.
+twin_a=include/uapi/linux/netfilter/xt_CONNMARK.h
+twin_b=include/uapi/linux/netfilter/xt_connmark.h
+if [ -e "$tree/$twin_a" ] || [ -e "$tree/$twin_b" ]; then
+	if ! [ -e "$tree/$twin_a" ] || ! [ -e "$tree/$twin_b" ]; then
+		printf '%s: warning: %s holds only one of %s and %s:\n' \
+			"$me" "$tree" "$twin_a" "${twin_b##*/}" >&2
+		printf '%s: warning: it lost a path of each pair that differs only in case,\n' \
+			"$me" >&2
+		printf '%s: warning: probably on a case-insensitive file system\n' \
+			"$me" >&2
+	fi
+fi
+
+# -- the pinned environment ------------------------------------------------------
+
+prefix_maps="-fdebug-prefix-map=$tree=. -ffile-prefix-map=$tree=."
+prefix_maps="$prefix_maps -fdebug-prefix-map=$out=. -ffile-prefix-map=$out=."
+
+# run_env CMD...: run CMD with only the pinned environment.
+run_env() {
+	if [ "$dry_run" = 1 ]; then
+		printf '+ %s\n' "$*"
+		return 0
+	fi
+	env -i \
+		PATH="$PATH" \
+		LC_ALL=C \
+		TZ=UTC \
+		KBUILD_BUILD_TIMESTAMP="$timestamp" \
+		KBUILD_BUILD_USER="$build_user" \
+		KBUILD_BUILD_HOST="$build_host" \
+		KBUILD_BUILD_VERSION="$build_version" \
+		SOURCE_DATE_EPOCH="$epoch" \
+		"$@"
+}
+
+# The make variables that carry the prefix maps (see the top of this file).
+map_vars='KCFLAGS KCPPFLAGS HOSTCFLAGS HOSTCXXFLAGS USERCFLAGS'
+
+# kmake ARGS...: make in the tree, out of tree, with the pinned variables.
+kmake() {
+	run_env make -C "$tree" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" \
+		LOCALVERSION= KCFLAGS="$prefix_maps" KCPPFLAGS="$prefix_maps" \
+		HOSTCFLAGS="$prefix_maps" HOSTCXXFLAGS="$prefix_maps" \
+		USERCFLAGS="$prefix_maps" -j"$jobs" "$@"
+}
+
+if [ "$dry_run" = 1 ]; then
+	printf 'environment (nothing else is passed on):\n'
+	printf '  PATH=%s\n  LC_ALL=C\n  TZ=UTC\n' "$PATH"
+	printf '  KBUILD_BUILD_TIMESTAMP=%s\n' "$timestamp"
+	printf '  KBUILD_BUILD_USER=%s\n  KBUILD_BUILD_HOST=%s\n' \
+		"$build_user" "$build_host"
+	printf '  KBUILD_BUILD_VERSION=%s\n  SOURCE_DATE_EPOCH=%s\n' \
+		"$build_version" "$epoch"
+fi
+
+# -- configuration ---------------------------------------------------------------
+
+# check_fragments: every CONFIG_ line of every fragment is in .config.
+# merge_config.sh and olddefconfig drop a symbol whose dependencies are not
+# met without a word; this is where that is caught.
+check_fragments() {
+	# shellcheck disable=SC2086 # the list is space-separated on purpose
+	awk '
+	FNR == NR {
+		if ($0 ~ /^CONFIG_[A-Za-z0-9_]+=/) {
+			i = index($0, "=")
+			cfg[substr($0, 1, i - 1)] = substr($0, i + 1)
+		}
+		next
+	}
+	/^CONFIG_[A-Za-z0-9_]+=/ {
+		i = index($0, "=")
+		k = substr($0, 1, i - 1)
+		want = substr($0, i + 1)
+		if (!(k in cfg)) {
+			printf "  %s: %s=%s asked, not set\n", FILENAME, k, want
+			bad = 1
+		} else if (cfg[k] != want) {
+			printf "  %s: %s=%s asked, got %s\n", FILENAME, k, want, cfg[k]
+			bad = 1
+		}
+		next
+	}
+	/^# CONFIG_[A-Za-z0-9_]+ is not set$/ {
+		if ($2 in cfg) {
+			printf "  %s: %s off asked, got %s\n", FILENAME, $2, cfg[$2]
+			bad = 1
+		}
+	}
+	END { exit bad }
+	' "$out/.config" $fragments
+}
+
+if [ -n "$config" ]; then
+	config_source="copy of $config"
+	if [ "$dry_run" = 1 ]; then
+		printf '+ cp %s %s/.config\n' "$config" "$out"
+	else
+		cp "$config" "$out/.config"
+	fi
+	kmake olddefconfig
+elif [ -n "$defconfig" ]; then
+	config_source="make $defconfig"
+	kmake "$defconfig"
+	if [ -n "$fragments" ]; then
+		config_source="$config_source + fragments:$fragments"
+		merge_log=/dev/null
+		[ "$dry_run" = 1 ] && merge_log=/dev/stdout
+		# shellcheck disable=SC2086 # the list is space-separated on purpose
+		(cd "$out" && run_env "$tree/scripts/kconfig/merge_config.sh" \
+			-m .config $fragments >"$merge_log")
+		kmake olddefconfig
+		if [ "$dry_run" = 0 ] && ! check_fragments >&2; then
+			die "the configuration does not hold what the fragments ask for
+(usually an option whose dependencies are not met)"
+		fi
+	fi
+else
+	[ -f "$out/.config" ] || [ "$dry_run" = 1 ] ||
+		die "no configuration: pass --config or --defconfig, or put a .config in $out"
+	config_source="existing $out/.config"
+	kmake olddefconfig
+fi
+
+# refuse SYMBOL WHY: stop if the configuration sets SYMBOL=y.
+refuse() {
+	if [ "$dry_run" = 0 ] && grep -qx "$1=y" "$out/.config"; then
+		die "$1=y $2, so no two builds are alike; turn it off in the
+configuration (see Documentation/kbuild/reproducible-builds.rst)"
+	fi
+}
+refuse CONFIG_LOCALVERSION_AUTO 'writes the source control state into the
+release string'
+refuse CONFIG_MODULE_SIG_ALL 'signs the modules with a key generated for each
+build'
+refuse CONFIG_RANDSTRUCT 'lays out structures from a random seed'
+
+# -- the build ---------------------------------------------------------------------
+
+# shellcheck disable=SC2086 # targets are words
+kmake $targets
+
+[ "$dry_run" = 1 ] && exit 0
+
+tool_version() {
+	"$@" --version 2>/dev/null | head -n 1
+}
+
+{
+	printf 'tree=%s\nout=%s\narch=%s\ncross_compile=%s\n' \
+		"$tree" "$out" "$arch" "$cross"
+	printf 'targets=%s\njobs=%s\nconfig=%s\n' "$targets" "$jobs" \
+		"$config_source"
+	for f in $fragments; do
+		printf 'fragment=%s sha256=%s\n' "$f" \
+			"$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)"
+	done
+	printf 'KBUILD_BUILD_TIMESTAMP=%s\nSOURCE_DATE_EPOCH=%s\n' \
+		"$timestamp" "$epoch"
+	printf 'KBUILD_BUILD_USER=%s\nKBUILD_BUILD_HOST=%s\n' \
+		"$build_user" "$build_host"
+	printf 'KBUILD_BUILD_VERSION=%s\nLOCALVERSION=\n' "$build_version"
+	for var in $map_vars; do
+		printf '%s=%s\n' "$var" "$prefix_maps"
+	done
+	printf 'cc=%s\n' "$(tool_version "${cross}gcc")"
+	printf 'ld=%s\n' "$(tool_version "${cross}ld")"
+	printf 'hostcc=%s\n' "$(tool_version gcc)"
+	printf 'make=%s\n' "$(tool_version make)"
+	printf 'kernelrelease=%s\n' "$(cat "$out/include/config/kernel.release" 2>/dev/null)"
+	# The version string the kernel prints at boot: user, host, build number
+	# and timestamp as pinned above.
+	printf 'banner=%s\n' "$(LC_ALL=C grep -a -m 1 -o \
+		'Linux version [[:print:]]*' "$out/vmlinux" 2>/dev/null)"
+} >"$out/kbuild-repro.info"
+
+printf '%s: built %s in %s\n' "$me" "$targets" "$out"

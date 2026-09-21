@@ -1,0 +1,206 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# repro-check -- build one kernel tree twice, under conditions that differ,
+# and check that the two builds are identical.
+#
+# Usage: repro-check --image IMAGE --git REPO [options] [-- KBUILD-REPRO-ARG...]
+#
+# Exports revision REV of the git repository REPO with 'git archive' -- the
+# working files are never read -- and unpacks it twice on the Docker volume
+# of in-toolchain.  Each copy is built with kbuild-repro; the second build
+# differs from the first in
+#
+#   the source path     /work/NAME/a/linux       /work/NAME/b/src/tree
+#   the build path      /work/NAME/a/out         /work/NAME/b/build/obj
+#   source file times   those of the archive     the time of unpacking
+#   parallel jobs       as kbuild-repro decides  --jobs-b
+#   the time of day     later, by the length of the first build
+#   the caller          umask 077 and a foreign environment: TZ, locale,
+#                       KBUILD_BUILD_*, SOURCE_DATE_EPOCH, and KAFLAGS=-g,
+#                       which would change every assembly object if it
+#                       reached the build
+#
+# Then the manifest of each build is recorded with obj-manifest (.config,
+# vmlinux, every object, device trees, boot images) and the two are compared
+# with compare-objs.  Exit status: 0 identical, 1 different, 2 error.
+#
+# Options:
+#   --image IMAGE   the toolchain image (default: $EQUIV_IMAGE)
+#   --volume NAME   the Docker volume (default: $EQUIV_VOLUME or equiv-work)
+#   --git REPO      the git repository that holds the kernel tree
+#   --rev REV       the tree to build: a revision, or a tree-ish such as
+#                   HEAD:linux (default HEAD)
+#   --name NAME     the work directory, /work/NAME on the volume; it is
+#                   emptied first (default repro-check)
+#   --mount DIR     make DIR readable in the container at its own path, for
+#                   configuration fragments and initramfs sources; repeatable
+#   --target T      a make target; repeatable (default: all)
+#   --jobs-b N      parallel jobs of the second build (default 3)
+#   --b-arg ARG     one more kbuild-repro argument for the second build only;
+#                   repeatable, no blanks.  A negative control: with
+#                   '--b-arg --build-version --b-arg 2' the check must report
+#                   the objects that carry the build number as different
+#   --save DIR      copy the manifests, the build records, the .config and
+#                   the comparison to DIR on this machine
+#
+# Arguments after '--' go to both kbuild-repro runs (--defconfig, --fragment,
+# --config, --arch, --cross-compile, ...).  Every path in them must be
+# readable in the container, from a --mount or from the volume, and must not
+# change while the check runs.
+
+set -eu
+
+me=${0##*/}
+here=$(cd "$(dirname "$0")" && pwd -P)
+image=${EQUIV_IMAGE:-}
+volume=${EQUIV_VOLUME:-equiv-work}
+repo=
+rev=HEAD
+name=repro-check
+mounts=
+targets=
+jobs_b=3
+b_args=
+save=
+
+die() {
+	printf '%s: %s\n' "$me" "$*" >&2
+	exit 2
+}
+
+usage() {
+	# The comment block at the top, from 'Usage:' on.
+	awk '/^# Usage:/ { p = 1 } p && !/^#/ { exit } p { sub(/^# ?/, ""); print }' \
+		"$0" >&2
+	exit 2
+}
+
+need() {
+	[ $# -ge 2 ] || die "option $1 needs a value"
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--image) need "$@"; image=$2; shift 2 ;;
+	--volume) need "$@"; volume=$2; shift 2 ;;
+	--git) need "$@"; repo=$2; shift 2 ;;
+	--rev) need "$@"; rev=$2; shift 2 ;;
+	--name) need "$@"; name=$2; shift 2 ;;
+	--mount) need "$@"; mounts="$mounts --mount $2"; shift 2 ;;
+	--target) need "$@"; targets="$targets $2"; shift 2 ;;
+	--jobs-b) need "$@"; jobs_b=$2; shift 2 ;;
+	--b-arg) need "$@"; b_args="$b_args $2"; shift 2 ;;
+	--save) need "$@"; save=$2; shift 2 ;;
+	-h | --help) usage ;;
+	--) shift; break ;;
+	*) die "unknown argument: $1 (kbuild-repro arguments go after '--')" ;;
+	esac
+done
+
+[ -n "$image" ] || die "no toolchain image: pass --image or set EQUIV_IMAGE"
+[ -n "$repo" ] || die "no repository: pass --git REPO"
+case $name in
+'' | .* | *[!A-Za-z0-9._-]*) die "--name takes letters, digits, '.', '_' and '-'" ;;
+esac
+case $jobs_b in
+'' | 0 | *[!0-9]*) die "--jobs-b takes a positive number" ;;
+esac
+case $mounts$targets$b_args in
+*'
+'*) die "a --mount, --target or --b-arg with a newline is not supported" ;;
+esac
+targets=${targets:-all}
+if [ -n "$save" ]; then
+	mkdir -p "$save" || die "cannot create $save"
+	save=$(cd "$save" && pwd -P)
+fi
+
+commit=$(git -C "$repo" rev-parse --verify -q "$rev^{commit}" 2>/dev/null) ||
+	commit=
+tree=$(git -C "$repo" rev-parse --verify -q "$rev^{tree}" 2>/dev/null) ||
+	die "$rev is not a revision or tree in $repo"
+
+w=/work/$name
+
+# tc ARG...: run ARG... in the toolchain container.
+tc() {
+	# shellcheck disable=SC2086 # the mount options are words
+	"$here/in-toolchain" --image "$image" --volume "$volume" $mounts -- "$@"
+}
+
+# build LOG ARG...: run kbuild-repro ARG... in the container, its output in
+# LOG on the volume; show the end of LOG if it fails.
+build_cmd='log=$1; shift
+"$@" >"$log" 2>&1 || { tail -n 30 "$log" >&2; exit 1; }'
+
+now() {
+	date +%s
+}
+
+printf '%s: tree %s' "$me" "$tree"
+[ -n "$commit" ] && printf ' (commit %s)' "$commit"
+printf ' of %s\n' "$repo"
+
+tc sh -c 'rm -rf "$1" && mkdir -p "$1/a/linux" "$1/b/src/tree"' sh "$w" \
+	</dev/null || die "cannot prepare $w on volume $volume"
+
+git -C "$repo" archive --format=tar "$rev" |
+	tc tar -x -C "$w/a/linux" || die "cannot unpack $rev into $w/a/linux"
+git -C "$repo" archive --format=tar "$rev" |
+	tc tar -x -m -C "$w/b/src/tree" || die "cannot unpack $rev into $w/b/src/tree"
+
+t0=$(now)
+# shellcheck disable=SC2086 # targets are words
+tc sh -c "$build_cmd" sh "$w/a/build.log" \
+	"$here/kbuild-repro" "$@" "$w/a/linux" "$w/a/out" $targets \
+	</dev/null || die "build A failed; log: $w/a/build.log"
+t1=$(now)
+printf '%s: build A done in %ss (%s)\n' "$me" "$((t1 - t0))" "$w/a/out"
+
+# shellcheck disable=SC2086 # b_args and targets are words
+tc sh -c "umask 077
+export TZ=Pacific/Chatham LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8
+export KBUILD_BUILD_TIMESTAMP='2030-02-03 04:05:06 +1345'
+export KBUILD_BUILD_USER=other KBUILD_BUILD_HOST=elsewhere
+export KBUILD_BUILD_VERSION=99 SOURCE_DATE_EPOCH=1900000000
+export KAFLAGS=-g
+$build_cmd" sh "$w/b/build.log" \
+	"$here/kbuild-repro" "$@" -j "$jobs_b" $b_args \
+	"$w/b/src/tree" "$w/b/build/obj" $targets </dev/null ||
+	die "build B failed; log: $w/b/build.log"
+t2=$(now)
+printf '%s: build B done in %ss (%s)\n' "$me" "$((t2 - t1))" "$w/b/build/obj"
+
+set +e
+tc sh -c '
+set -e
+"$1/obj-manifest" -o "$2/manifest-a.sha256" "$2/a/out"
+"$1/obj-manifest" -o "$2/manifest-b.sha256" "$2/b/build/obj"
+set +e
+"$1/compare-objs" "$2/manifest-a.sha256" "$2/manifest-b.sha256" \
+	>"$2/compare.txt"
+status=$?
+cat "$2/compare.txt"
+grep -E "^(kernelrelease|banner|cc|ld|hostcc)=" "$2/a/out/kbuild-repro.info"
+exit $status
+' sh "$here" "$w" </dev/null
+status=$?
+set -e
+[ "$status" -le 1 ] || die "cannot record or compare the manifests"
+
+if [ -n "$save" ]; then
+	tc tar -c -C "$w" manifest-a.sha256 manifest-b.sha256 compare.txt \
+		a/out/kbuild-repro.info b/build/obj/kbuild-repro.info a/out/.config \
+		</dev/null | tar -x -C "$save" ||
+		die "cannot copy the results to $save"
+	printf '%s: results copied to %s\n' "$me" "$save"
+fi
+
+if [ "$status" = 0 ]; then
+	printf '%s: the two builds are identical\n' "$me"
+else
+	printf '%s: the two builds DIFFER\n' "$me"
+fi
+exit "$status"
