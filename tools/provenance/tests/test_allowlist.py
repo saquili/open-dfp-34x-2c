@@ -9,6 +9,8 @@ import unittest
 from gates.allowlist import Allowlist, AllowlistError
 from gates.findings import Finding, Report
 
+from .support import COMMITTED_ALLOWLIST
+
 REASON = 'reason = "a reason of at least five words"\n'
 
 
@@ -117,6 +119,18 @@ class Matching(unittest.TestCase):
         text = report.render_text(verbose=True)
         self.assertIn("allowed by the allowlist: 1", text)
         self.assertIn("#2 (unit-ids) matched nothing", text)
+
+
+
+class CommittedAllowlist(unittest.TestCase):
+
+    def test_it_parses_and_every_entry_is_narrowed_and_reasoned(self) -> None:
+        allowlist = Allowlist.load(COMMITTED_ALLOWLIST)
+        self.assertTrue(allowlist.entries)
+        for entry in allowlist.entries:
+            self.assertGreaterEqual(len(entry.reason.split()), 5, entry.label())
+            self.assertTrue(entry.paths or entry.commits or entry.values or entry.hashes
+                            or entry.match, entry.label())
 
 
 if __name__ == "__main__":
