@@ -3,9 +3,9 @@
 #
 # Top-level entry points for rtl9601d-linux.
 #
-# Every target below is a stub. It prints what it will do and which work item
-# implements it, then exits non-zero so that nothing mistakes a stub for a
-# finished build. Real behaviour arrives with the component the target drives.
+# Until the component a target drives has landed, the target is a stub: it
+# prints what it will do and which work item implements it, then exits
+# non-zero so that nothing mistakes a stub for a finished build.
 
 .DEFAULT_GOAL := image
 
@@ -48,12 +48,11 @@ docs:
 	@echo '  Arrives with: the handbook (WI-20).'
 	@exit 1
 
+# The provenance gates: their own tests, then the tree and the commits since
+# main. The equivalence checks join this target when they land (WI-03).
 check:
-	@echo 'rtl9601d-linux: "make check" is not implemented yet.'
-	@echo '  Planned: run the provenance and equivalence gates and other'
-	@echo '           offline checks.'
-	@echo '  Arrives with: provenance and equivalence tooling (WI-02, WI-03).'
-	@exit 1
+	tools/provenance/check selftest
+	tools/provenance/check all
 
 ramboot:
 	@echo 'rtl9601d-linux: "make ramboot" is not implemented yet.'
@@ -80,7 +79,7 @@ distclean:
 	@exit 1
 
 help:
-	@echo 'rtl9601d-linux entry points (every target is a stub today):'
+	@echo 'rtl9601d-linux entry points (all but "make check" are stubs today):'
 	@echo '  make               build the flashable images (default)'
 	@echo '  make linux         build the kernel'
 	@echo '  make omcid         build the OMCI daemon'

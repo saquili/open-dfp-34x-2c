@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# Justified exceptions to the provenance gates (tools/provenance/check).
+#
+# Every entry names the gate it relaxes, narrows where it applies, and says
+# why the exception is right. An entry cannot switch a gate off: it must name
+# paths, commits, values, hashes or a match. A binaries entry also states
+# where the file comes from. The format is described in README.rst.
+
+# --- Files that must name what they forbid ----------------------------------
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["re-tool", "nonpublic-material", "dev-kit", "narrative"]
+paths = ["docs/policy/provenance.rst"]
+reason = """
+The provenance policy defines the categories of material that may not enter
+the repository, so its text has to name them. It is normative and changes
+only as policy.
+"""
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["re-tool"]
+paths = ["CONTRIBUTING.rst"]
+reason = """
+The contribution guide lists the vocabulary a commit message must not
+contain, pointing to the policy; it has to name that vocabulary to do so.
+"""
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["re-tool", "narrative", "dev-kit", "board-package", "nonpublic-material",
+         "source-collection", "lab-path"]
+paths = ["tools/provenance/gates/rules.py", "tools/provenance/README.rst"]
+reason = """
+The gate's own rule definitions and their documentation: the patterns, the
+vocabulary exceptions and the explanation of each rule spell out the words
+the rules refuse.
+"""
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["board-package"]
+paths = ["docs/adr/0005-distribution-build-buildroot.rst"]
+reason = """
+The record weighs distribution build systems and names the board-support
+layer convention of one of them generically; it refers to no party's code.
+Accepted records are immutable, so the exception cannot widen.
+"""
+
+# --- Values that have the shape of a finding but are not one ---------------
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["code-address"]
+values = ["0x80000000", "0x800003ff", "0x80040000", "0x80100000"]
+reason = """
+Memory-map constants of the MIPS architecture, not code addresses: the base
+of the unmapped, cached kernel segment (KSEG0), the last byte of the
+exception-vector area at its start, and the two kernel load addresses the
+upstream MIPS tree uses above that area.
+"""
+
+# --- History that predates the gates ----------------------------------------
+
+[[allow]]
+gate = "commit-message"
+rules = ["subject-prefix", "body-line-length"]
+commits = [
+    "f9aad8a876201d3f872d626b74c884bf072fda1d",
+    "c69daae4d46f3076e4de9dac3b73e8cecf176905",
+    "1a14e501b20f11d16e5cac04146d6c979b73de5d",
+    "11d9c9446f9d94afa1a40e2ea92083f94b7c1422",
+]
+reason = """
+The four founding commits were written before the commit-message gate
+existed: three subjects lack a component prefix and some body lines run one
+or two columns past 75. Published history is never rewritten (ADR 0007), so
+these commits are accepted as they are; later commits follow the rule.
+"""
+
+[[allow]]
+gate = "one-component"
+commits = ["11d9c9446f9d94afa1a40e2ea92083f94b7c1422"]
+reason = """
+The skeleton commit created the placeholder README of every top-level
+directory at once, founding the component layout that this rule protects. It
+adds nothing but those placeholders and the MAINTAINERS file.
+"""
