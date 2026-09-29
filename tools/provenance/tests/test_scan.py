@@ -24,13 +24,15 @@ class Scanning(TempDirTestCase):
         # Upstream text that the gates would refuse if they read it.
         self.upstream_ip = self.seeds.private_ipv4()
         self.narrative = "the " + word("ven", "dor")
+        # An upstream link whose target the gates would refuse if they read it.
+        self.lab_path = "/" + word("Us", "ers") + "/someone/"
         self.repo = Repo(os.path.join(self.tmp, "repo"))
         self.repo.write("README.rst", "A tree.\n")
         self.root = self.repo.commit("README: describe the tree", "Say what the tree holds.")
         self.repo.subtree_import("linux", {
             "net/core.c": "int core;\n/* reach %s */\nint tail;\n" % self.upstream_ip,
             "MAINTAINERS": "x\n" * 10,
-        })
+        }, links={"net/link": self.lab_path + "upstream"})
         self.merge = self.repo.head()
 
     def findings(self, report: dict) -> list[tuple[str, str, str, int]]:
@@ -60,6 +62,24 @@ class Scanning(TempDirTestCase):
         self.assertEqual({(r, p) for r, p, _t, _n in self.findings(report)},
                          {("narrative", "linux/net/core.c"), ("mac-address", "linux/drivers/new.c")})
         self.assertNotIn(self.upstream_ip, str(report))
+
+    def test_an_upstream_link_is_read_once_it_changes(self) -> None:
+        # As imported, the link is upstream's and its target is not read.
+        code, report = run_check("tree", repo=self.repo.path)
+        self.assertEqual(code, 0, report)
+        link = os.path.join(self.repo.path, "linux/net/link")
+        os.remove(link)
+        os.symlink(self.lab_path + "changed", link)
+        # Uncommitted, the working tree is compared with the import.
+        code, report = run_check("tree", repo=self.repo.path)
+        self.assertEqual([(f["rule"], f["path"]) for f in report["findings"]],
+                         [("lab-path", "linux/net/link")])
+        # Committed, both the tree and the commit read the new target.
+        self.repo.commit("net: move the link", "Move it.")
+        code, report = run_check("all", "--base", self.merge, repo=self.repo.path)
+        found = sorted((f["rule"], f["path"], f["commit"] is None) for f in report["findings"])
+        self.assertEqual(found, [("lab-path", "linux/net/link", False),
+                                 ("lab-path", "linux/net/link", True)])
 
     def test_history_skips_the_import_and_reads_added_lines(self) -> None:
         with open(os.path.join(self.repo.path, "linux/net/core.c"), "a", encoding="utf-8") as fh:

@@ -31,9 +31,11 @@ Status
 ======
 
 Early bring-up. The repository skeleton, licence, provenance policy and the
-first architecture decision records are in place. The kernel, the distribution
-build and the userspace are populated by later work items; each top-level
-directory carries a short README naming the component that will fill it.
+first architecture decision records are in place, and ``linux/`` holds the
+Linux 6.18.48 release that our kernel work will build on (see "The kernel
+tree" in ``CONTRIBUTING.rst``). Our kernel series, the distribution build and
+the userspace are populated by later work items; each top-level directory
+still waiting for its component carries a short README naming it.
 
 Building
 ========

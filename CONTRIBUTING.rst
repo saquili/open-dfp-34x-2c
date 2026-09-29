@@ -75,3 +75,98 @@ A commit message must not contain comparative narrative about another
 implementation, reverse-engineering vocabulary, third-party code names or
 addresses, investigation history, private issue numbers, laboratory paths or
 addresses, or unit identifiers. See ``docs/policy/provenance.rst``.
+
+The kernel tree
+===============
+
+``linux/`` holds a Linux release exactly as upstream publishes it -- now Linux
+6.18.48, from the kernel.org release tarball -- imported with
+``git subtree add --squash``, and our kernel work on top of it as ordinary
+kernel commits. Upstream files change only through such commits, never by
+editing the import, and a kernel commit touches nothing outside ``linux/``.
+That keeps the kernel history separable::
+
+    git subtree split -P linux
+
+prints a commit whose history is the imported release followed by exactly our
+kernel commits, with the kernel at its root: a kernel branch to publish, to
+rebase onto the upstream stable tag, or to turn into patches with
+``git format-patch``.
+
+The split starts at the commit the import was squashed from, which no branch
+contains; the tag ``linux-6.18.48`` keeps it. Without the tag,
+``git subtree split`` stops with "could not rev-parse split hash", so fetch and
+push the tag along with the branches::
+
+    git push origin main linux-6.18.48
+
+A case-sensitive file system
+----------------------------
+
+The kernel holds 13 pairs of paths that differ only in case, such as
+``net/netfilter/xt_DSCP.c`` and ``net/netfilter/xt_dscp.c``, and both files of
+each pair are part of the kernel. A file system that ignores case -- the
+default on macOS and on Windows -- keeps one file of each pair. Git keeps the
+committed files right, but the working tree cannot hold them: a build compiles
+one file under both names, ``git status`` always reports 13 modified paths
+(restoring one modifies its twin), and whatever needs a clean working tree
+refuses to run, ``git rebase`` and ``git subtree merge`` among them. Change,
+build and check ``linux/`` on a case-sensitive file system:
+
+* on Linux, any native file system; on Windows, the file system of a WSL 2
+  distribution;
+* on macOS, a case-sensitive APFS volume -- one added with Disk Utility, or a
+  disk image that grows as it fills::
+
+      hdiutil create -type SPARSE -size 40g -fs 'Case-sensitive APFS' \
+          -volname rtl9601d rtl9601d.sparseimage
+      mkdir -p "$HOME/rtl9601d"
+      hdiutil attach -nobrowse -mountpoint "$HOME/rtl9601d" \
+          rtl9601d.sparseimage
+
+  and clone the repository into it;
+* to build only, ``tools/equiv/in-toolchain``, which streams a tree into a
+  case-sensitive volume of the toolchain container (see
+  ``tools/equiv/README.rst``).
+
+For work outside ``linux/``, a case-insensitive file system will do if the
+kernel stays out of the checkout from the start::
+
+    git clone --no-checkout <repository> rtl9601d-linux
+    cd rtl9601d-linux
+    git sparse-checkout set --no-cone '/*' '!/linux/'
+    git checkout main
+
+The provenance gates run in such a checkout; ``reuse lint`` and
+``git subtree`` need the kernel's files and do not.
+
+Updating to a newer release
+---------------------------
+
+A newer stable release comes in as the first one did: from its release
+tarball, checked against the SHA-256 digest kernel.org signs in
+``sha256sums.asc``, as one commit whose tree is the tarball's files and whose
+parent is the previous release commit. On a case-sensitive file system, in
+the unpacked tarball::
+
+    export GIT_DIR=<repository>/.git GIT_WORK_TREE="$PWD"
+    export GIT_INDEX_FILE="$(mktemp -u)"
+    git add -A -f && tree=$(git write-tree) && rm -f "$GIT_INDEX_FILE"
+    commit=$(git commit-tree -p 'linux-6.18.48^{commit}' \
+        -m 'Linux 6.18.49' \
+        -m 'The release tarball linux-6.18.49.tar.xz, SHA-256 <digest>.' \
+        "$tree")
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+then, in the repository::
+
+    git tag -a -m 'Linux 6.18.49, as imported into linux/' \
+        linux-6.18.49 "$commit"
+    git subtree merge --squash -P linux \
+        -m 'linux: update to Linux 6.18.49' linux-6.18.49
+
+As the new release commit descends from the previous one, the squash commit
+lists only the releases in between, and the gates treat it as pristine
+upstream, as they treat the import. A merge from the upstream stable
+repository instead would list that repository's whole history in the squash
+commit, because the release commits here are not upstream's own.

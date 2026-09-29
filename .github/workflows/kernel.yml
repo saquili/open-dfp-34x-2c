@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The kernel in linux/: build, checkpatch over our series, device-tree
+# bindings, documentation.
+#
+# linux/ is a kernel release imported with "git subtree add --squash", with
+# our kernel commits on top (CONTRIBUTING.rst). The jobs judge what our
+# series adds or changes: warnings about upstream's own files are printed
+# and pass; a tool that stops with an error fails the job.
+# .github/scripts/kernel-series locates the import and the series.
+
+name: kernel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - linux/**
+      - .github/workflows/kernel.yml
+      - .github/scripts/kernel-series
+  pull_request:
+    paths:
+      - linux/**
+      - .github/workflows/kernel.yml
+      - .github/scripts/kernel-series
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ARCH: mips
+  CROSS_COMPILE: mips-linux-gnu-
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build:
+    name: build (${{ matrix.config }})
+    runs-on: ubuntu-24.04
+    # The pinned host build environment: Debian 13, by digest.
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The board configuration -- rtl9602c_defconfig, alone and with the
+        # development fragment -- joins this list with the series that adds
+        # it, and with it "make dtbs_check W=1".
+        config: [tinyconfig]
+    steps:
+      - name: Install the build tools
+        # xz-utils and u-boot-tools: the default make target of a MIPS
+        # configuration also builds the compressed kernel (vmlinuz, packed
+        # with xz) and a FIT image (vmlinux.gz.itb, made by mkimage).
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bc bison ca-certificates \
+            flex gcc gcc-mips-linux-gnu git libc6-dev make perl python3 \
+            u-boot-tools xz-utils
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Configure
+        run: make -C linux O="$PWD/out" ${{ matrix.config }}
+      - name: Build with W=1
+        run: |
+          make -C linux O="$PWD/out" W=1 -j"$(nproc)" 2>&1 | tee build.log
+          echo "diagnostics in the whole build: $(grep -cE ': (warning|error):' build.log || true)"
+      - name: No diagnostics in the files of our series
+        run: .github/scripts/kernel-series check-log build.log
+
+  checkpatch:
+    runs-on: ubuntu-24.04
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 20
+    env:
+      # checkpatch message types to leave out, comma-separated. A series adds
+      # its files first and its MAINTAINERS entries last, so every commit
+      # that adds a file would otherwise ask whether MAINTAINERS needs
+      # updating.
+      CHECKPATCH_IGNORE: "FILE_PATH_CHANGES"
+    steps:
+      - name: Install the tools
+        # With python3-ply and python3-git, checkpatch validates SPDX
+        # expressions through the kernel's scripts/spdxcheck.py.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git perl \
+            python3 python3-git python3-ply
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Split the kernel history out of linux/
+        # The kernel branch as it would be published, checked out as a tree
+        # of its own. The split starts at the commit the import was squashed
+        # from; the repository keeps that commit with a tag
+        # (CONTRIBUTING.rst), and without it the split fails.
+        run: |
+          import=$(.github/scripts/kernel-series import)
+          upstream=$(.github/scripts/kernel-series upstream)
+          split=$(git subtree split -P linux HEAD)
+          printf 'import=%s\nupstream=%s\nsplit=%s\n' "$import" "$upstream" "$split" |
+            tee -a "$GITHUB_ENV"
+          git worktree add --detach "$RUNNER_TEMP/kernel" "$split"
+          git log --oneline --no-merges "$upstream..$split"
+      - name: checkpatch --strict on every commit of the series
+        run: |
+          cd "$RUNNER_TEMP/kernel"
+          if [ "$(git rev-list --count --no-merges "$upstream..HEAD")" = 0 ]; then
+            echo "No kernel commits above the import."
+            # The split of an empty series is the imported release itself.
+            test "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "$import^{tree}")"
+            exit 0
+          fi
+          # Tool assistance is credited with a Co-Authored-By: trailer
+          # (CONTRIBUTING.rst), which checkpatch does not know; it is taken
+          # out of the patches before they are checked, and nothing else.
+          git format-patch -q -o "$RUNNER_TEMP/patches" "$upstream..HEAD"
+          sed -i '/^Co-Authored-By: /d' "$RUNNER_TEMP"/patches/*.patch
+          ./scripts/checkpatch.pl --strict \
+            ${CHECKPATCH_IGNORE:+--ignore "$CHECKPATCH_IGNORE"} "$RUNNER_TEMP"/patches/*.patch
+
+  dt-bindings:
+    runs-on: ubuntu-24.04
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 45
+    steps:
+      - name: Install the tools
+        # dtschema needs swig and the Python headers to build pylibfdt; the
+        # kernel's dtc needs libyaml for the checks.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends bison ca-certificates flex \
+            gcc git libc6-dev libyaml-dev make pkg-config python3 python3-dev \
+            python3-venv swig
+          git config --global --add safe.directory '*'
+          python3 -m venv /opt/dt
+          /opt/dt/bin/pip install dtschema yamllint
+          /opt/dt/bin/dt-doc-validate --version
+          echo /opt/dt/bin >>"$GITHUB_PATH"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: make dt_binding_check
+        # The bindings the series adds or changes -- or all of them while it
+        # has none, so that the job always exercises the checker.
+        run: |
+          .github/scripts/kernel-series files Documentation/devicetree/bindings >bindings.txt
+          files=$(grep '\.yaml$' bindings.txt | paste -sd: - || true)
+          make -C linux O="$PWD/out" -j"$(nproc)" ${files:+DT_SCHEMA_FILES="$files"} \
+            dt_binding_check 2>&1 | tee dt.log
+      - name: No diagnostics in the files of our series
+        run: .github/scripts/kernel-series check-log dt.log
+
+  docs:
+    runs-on: ubuntu-24.04
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 45
+    env:
+      # The documentation directories our pages go to.
+      SPHINXDIRS: arch/mips networking
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git graphviz \
+            make perl python3 python3-sphinx python3-yaml
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: make htmldocs
+        run: make -C linux O="$PWD/out" SPHINXDIRS="$SPHINXDIRS" htmldocs 2>&1 | tee docs.log
+      - name: No diagnostics in the files of our series
+        run: .github/scripts/kernel-series check-log docs.log
+      - name: kernel-doc on the sources of our series
+        run: |
+          .github/scripts/kernel-series files '*.c' '*.h' | sed 's|^|linux/|' >sources.txt
+          if [ -s sources.txt ]; then
+            xargs -a sources.txt -d '\n' linux/scripts/kernel-doc -none -Wall -Werror
+          fi

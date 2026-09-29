@@ -1,0 +1,97 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# kernel-series -- locate our kernel series on top of the release in linux/.
+#
+# Usage: kernel-series import
+#        kernel-series upstream
+#        kernel-series files [PATHSPEC...]
+#        kernel-series check-log LOG
+#
+# linux/ is a kernel release imported with "git subtree add --squash", with
+# our kernel commits on top (see CONTRIBUTING.rst).
+#
+#   import      the squash commit of the release linux/ is based on now: the
+#               latest "Squashed 'linux/' ..." commit reachable from HEAD.
+#               Its tree is the release as it is.
+#   upstream    the commit that squash was made from, named by its
+#               git-subtree-split trailer: the commit at which the history
+#               of "git subtree split -P linux" starts.
+#   files       the paths, relative to linux/, that HEAD adds or changes on
+#               top of the release, one per line; PATHSPECs, relative to
+#               linux/ as well, narrow the list.
+#   check-log   print the lines of LOG -- the output of a compiler, a checker
+#               or a documentation build -- that name a file the series adds
+#               or changes, as "linux/<path>:", and exit 1 if there is any.
+#               Diagnostics about upstream's own files pass unjudged.
+#
+# Exit status: 0 success, 1 check-log found lines, 2 usage or repository
+# error.
+
+set -eu
+
+me=${0##*/}
+
+die() {
+	printf '%s: %s\n' "$me" "$*" >&2
+	exit 2
+}
+
+usage() {
+	awk '/^# Usage:/ { p = 1 } p && !/^#/ { exit } p { sub(/^# ?/, ""); print }' \
+		"$0" >&2
+	exit 2
+}
+
+top=$(git rev-parse --show-toplevel) || die "not inside a git repository"
+
+import_commit() {
+	commit=$(git -C "$top" log -1 --format=%H --all-match \
+		--grep='^git-subtree-dir: linux/*$' \
+		--grep="^Squashed 'linux/' " HEAD) || exit 2
+	[ -n "$commit" ] || die "no subtree import of linux/ is reachable from HEAD"
+	printf '%s\n' "$commit"
+}
+
+series_files() {
+	squash=$(import_commit)
+	git -C "$top" diff --name-only --no-renames --diff-filter=AMT \
+		"$squash" HEAD:linux -- "$@"
+}
+
+[ $# -ge 1 ] || usage
+command=$1
+shift
+case $command in
+import)
+	[ $# -eq 0 ] || usage
+	import_commit
+	;;
+upstream)
+	[ $# -eq 0 ] || usage
+	squash=$(import_commit)
+	split=$(git -C "$top" log -1 --format=%B "$squash" |
+		sed -n 's/^git-subtree-split: *\([0-9a-f]\{40,\}\) *$/\1/p')
+	[ -n "$split" ] || die "$squash has no git-subtree-split trailer"
+	printf '%s\n' "$split"
+	;;
+files)
+	series_files "$@"
+	;;
+check-log)
+	[ $# -eq 1 ] || usage
+	[ -r "$1" ] || die "cannot read $1"
+	files=$(series_files)
+	[ -n "$files" ] || exit 0
+	patterns=$(mktemp)
+	trap 'rm -f "$patterns"' EXIT
+	printf '%s\n' "$files" | sed 's|^|linux/|; s|$|:|' >"$patterns"
+	if grep -F -f "$patterns" "$1"; then
+		exit 1
+	fi
+	;;
+*)
+	usage
+	;;
+esac
