@@ -66,7 +66,7 @@ class SeededViolations(TempDirTestCase):
         self.assertEqual(found[0]["path"], "tools/demo/demo.c")
 
     def test_a_register_name_from_nonpublic_tables(self) -> None:
-        macro = "RTL9601D_%s_CTRL" % self.register
+        macro = "RTL9602C_%s_CTRL" % self.register
         found = self.assertFails(self.plant("#define %s 0x0400\n" % macro), "denylist", "register")
         self.assertEqual(found[0]["text"], macro)
         self.assertEqual(found[0]["value"], self.register.lower())
