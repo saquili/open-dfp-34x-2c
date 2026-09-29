@@ -20,7 +20,7 @@ record.
      - Status
    * - 0001
      - Repository name: ``rtl9601d-linux``
-     - Accepted
+     - Superseded by 0008
    * - 0002
      - Licence: GPL-2.0-only for everything we author
      - Accepted
@@ -38,4 +38,7 @@ record.
      - Accepted
    * - 0007
      - Fresh git history, separate from the laboratory repository
+     - Accepted
+   * - 0008
+     - Repository name: ``open-dfp-34x-2c``
      - Accepted

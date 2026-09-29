@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-List of maintainers for rtl9601d-linux
-======================================
+List of maintainers for open-dfp-34x-2c
+=======================================
 
 This file uses the Linux kernel MAINTAINERS format so that, once the kernel
 tree is imported under linux/ and components are added, per-subsystem entries

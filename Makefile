@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Top-level entry points for rtl9601d-linux.
+# Top-level entry points for open-dfp-34x-2c.
 #
 # Until the component a target drives has landed, the target is a stub: it
 # prints what it will do and which work item implements it, then exits
@@ -13,37 +13,37 @@
         clean distclean help
 
 image:
-	@echo 'rtl9601d-linux: "make" (image) is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make" (image) is not implemented yet.'
 	@echo '  Planned: build the kernel and root filesystem images for the board.'
 	@echo '  Arrives with: the distribution build (WI-14).'
 	@exit 1
 
 linux:
-	@echo 'rtl9601d-linux: "make linux" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make linux" is not implemented yet.'
 	@echo '  Planned: build the Linux kernel from linux/.'
 	@echo '  Arrives with: kernel import and series (WI-11 then WI-12).'
 	@exit 1
 
 omcid:
-	@echo 'rtl9601d-linux: "make omcid" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make omcid" is not implemented yet.'
 	@echo '  Planned: build the OMCI daemon from omcid/.'
 	@echo '  Arrives with: userspace (WI-16).'
 	@exit 1
 
 sdk:
-	@echo 'rtl9601d-linux: "make sdk" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make sdk" is not implemented yet.'
 	@echo '  Planned: produce a relocatable cross toolchain for developers.'
 	@echo '  Arrives with: the distribution build (WI-14).'
 	@exit 1
 
 legal-info:
-	@echo 'rtl9601d-linux: "make legal-info" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make legal-info" is not implemented yet.'
 	@echo '  Planned: collect the source and licence bundle a release owes.'
 	@echo '  Arrives with: the distribution build (WI-14).'
 	@exit 1
 
 docs:
-	@echo 'rtl9601d-linux: "make docs" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make docs" is not implemented yet.'
 	@echo '  Planned: render the handbook and the kernel documentation.'
 	@echo '  Arrives with: the handbook (WI-20).'
 	@exit 1
@@ -55,31 +55,31 @@ check:
 	tools/provenance/check all
 
 ramboot:
-	@echo 'rtl9601d-linux: "make ramboot" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make ramboot" is not implemented yet.'
 	@echo '  Planned: load a trial kernel on the board over the serial bench.'
 	@echo '  Arrives with: bench tooling (WI-15).'
 	@exit 1
 
 flash:
-	@echo 'rtl9601d-linux: "make flash" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make flash" is not implemented yet.'
 	@echo '  Planned: flash an image to the scratch bank, with the bank guard.'
 	@echo '  Arrives with: bench tooling (WI-15).'
 	@exit 1
 
 clean:
-	@echo 'rtl9601d-linux: "make clean" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make clean" is not implemented yet.'
 	@echo '  Planned: remove build products.'
 	@echo '  Arrives with: the distribution build (WI-14).'
 	@exit 1
 
 distclean:
-	@echo 'rtl9601d-linux: "make distclean" is not implemented yet.'
+	@echo 'open-dfp-34x-2c: "make distclean" is not implemented yet.'
 	@echo '  Planned: remove build products and the download cache.'
 	@echo '  Arrives with: the distribution build (WI-14).'
 	@exit 1
 
 help:
-	@echo 'rtl9601d-linux entry points (all but "make check" are stubs today):'
+	@echo 'open-dfp-34x-2c entry points (all but "make check" are stubs today):'
 	@echo '  make               build the flashable images (default)'
 	@echo '  make linux         build the kernel'
 	@echo '  make omcid         build the OMCI daemon'

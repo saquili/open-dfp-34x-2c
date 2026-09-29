@@ -5,7 +5,7 @@
 ADR 0001: Repository name
 ==================================
 
-:Status: Accepted
+:Status: Superseded by ADR 0008
 :Date: 2026-09-21
 
 Context

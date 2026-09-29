@@ -1,12 +1,13 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 .. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-==============
-rtl9601d-linux
-==============
+===============
+open-dfp-34x-2c
+===============
 
-A from-source Linux distribution for GPON SFP ONU sticks built on the
-Realtek RTL9601D system-on-chip.
+A from-source Linux distribution for one product: the ODI DFP-34X-2C2 and
+DFP-34X-2C3 GPON SFP ONU sticks, which are built on the Realtek RTL9601D
+system-on-chip. Other products built on the same chip are not supported.
 
 Scope
 =====
@@ -65,7 +66,9 @@ Certificate of Origin and the provenance policy; see ``CONTRIBUTING.rst`` and
 Trademarks and affiliation
 ==========================
 
-"Realtek" and "RTL9601D" are names of Realtek Semiconductor Corp. This project
-is not affiliated with, authorised by, or endorsed by Realtek Semiconductor
-Corp. Other product and company names that appear here may be the trademarks of
-their respective owners. No third-party logos are used or distributed.
+"Realtek" and "RTL9601D" are names of Realtek Semiconductor Corp. "ODI" and
+"DFP-34X" are names of the stick's manufacturer. This project is not affiliated
+with, authorised by, or endorsed by Realtek Semiconductor Corp. or by that
+manufacturer. Other product and company names that appear here may be the
+trademarks of their respective owners. No third-party logos are used or
+distributed.

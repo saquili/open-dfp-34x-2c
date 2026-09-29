@@ -1,9 +1,9 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 .. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-==============================
-Contributing to rtl9601d-linux
-==============================
+===============================
+Contributing to open-dfp-34x-2c
+===============================
 
 Developer Certificate of Origin
 ===============================

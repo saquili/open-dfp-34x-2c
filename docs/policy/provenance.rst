@@ -7,7 +7,7 @@ Provenance policy
 
 :Status: adopted
 
-This is the rule for what may and may not enter rtl9601d-linux, and how the
+This is the rule for what may and may not enter open-dfp-34x-2c, and how the
 things that may enter are written. It is normative: the categories below are
 enforced by the gates named at the end, and each gate ships with a
 seeded-violation test that makes it fail.
@@ -16,7 +16,7 @@ Scope
 =====
 
 This policy applies to every file, every commit message, every generated
-artefact and every release asset of rtl9601d-linux.
+artefact and every release asset of open-dfp-34x-2c.
 
 What may enter
 ==============
