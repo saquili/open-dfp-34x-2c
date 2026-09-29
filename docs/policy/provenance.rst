@@ -99,7 +99,7 @@ Register and identifier naming
 ==============================
 
 * Every register and field macro is named by us, systematically and from
-  function: ``RTL9601D_<BLOCK>_<REG>`` and ``..._<REG>_<FIELD>``, with block
+  function: ``RTL9602C_<BLOCK>_<REG>`` and ``..._<REG>_<FIELD>``, with block
   mnemonics we choose, and with standards terms wherever a register implements
   a standard concept (GTC, BWMAP, PLOAM, GEM, T-CONT, Alloc-ID, ONU-ID, EqD;
   the IEEE and SFF names). The aim is not to avoid every coincidence with a

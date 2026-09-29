@@ -35,10 +35,13 @@ record.
      - Accepted
    * - 0006
      - Register and identifier naming
-     - Accepted
+     - Accepted, amended by 0009
    * - 0007
      - Fresh git history, separate from the laboratory repository
      - Accepted
    * - 0008
      - Repository name: ``open-dfp-34x-2c``
+     - Accepted
+   * - 0009
+     - Register macros take the driver's prefix
      - Accepted

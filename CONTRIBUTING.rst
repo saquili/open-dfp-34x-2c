@@ -49,8 +49,8 @@ problem first and then the change.
 
 * **Kernel commits** (under ``linux/``) use the kernel form
   ``subsystem: component: imperative summary`` -- for example
-  ``net: dsa: realtek: rtl9601d: add PTP hardware clock`` or
-  ``dt-bindings: net: add realtek,rtl9601d-eth``. The body explains the
+  ``net: dsa: realtek: rtl9602c: add PTP hardware clock`` or
+  ``dt-bindings: net: add realtek,rtl9602c-eth``. The body explains the
   problem, then the change in hardware terms, cites standards by clause, and
   gives measurements as results on the named board, with counts.
 * **Userspace and distribution commits** use their component prefix:

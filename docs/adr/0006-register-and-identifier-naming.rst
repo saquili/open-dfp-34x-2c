@@ -5,7 +5,7 @@
 ADR 0006: Register and identifier naming
 ==========================================
 
-:Status: Accepted
+:Status: Accepted; the prefix is amended by ADR 0009
 :Date: 2026-09-21
 
 Context
