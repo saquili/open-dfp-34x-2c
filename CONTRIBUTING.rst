@@ -100,18 +100,31 @@ push the tag along with the branches::
 
     git push origin main linux-6.18.48
 
-A case-sensitive file system
-----------------------------
+Paths that differ only in case
+------------------------------
 
 The kernel holds 13 pairs of paths that differ only in case, such as
 ``net/netfilter/xt_DSCP.c`` and ``net/netfilter/xt_dscp.c``, and both files of
 each pair are part of the kernel. A file system that ignores case -- the
 default on macOS and on Windows -- keeps one file of each pair. Git keeps the
-committed files right, but the working tree cannot hold them: a build compiles
-one file under both names, ``git status`` always reports 13 modified paths
-(restoring one modifies its twin), and whatever needs a clean working tree
-refuses to run, ``git rebase`` and ``git subtree merge`` among them. Change,
-build and check ``linux/`` on a case-sensitive file system:
+committed files right, but the working tree cannot hold them: ``git status``
+always reports 13 modified paths (restoring one modifies its twin), and
+whatever needs a clean working tree refuses to run, ``git rebase`` among them.
+
+On such a file system, leave the pairs out of the working tree::
+
+    git clone --no-checkout <repository> open-dfp-34x-2c
+    cd open-dfp-34x-2c
+    git show HEAD:tools/case-insensitive-checkout | sh
+    git checkout main
+
+``tools/case-insensitive-checkout`` sets up a sparse checkout without both
+files of every pair; in an existing checkout, run it directly. The index
+keeps all files, so commits, merges and ``git archive`` are unaffected, and
+the board configuration builds none of the 26 files.
+
+Work that changes those files -- importing a kernel release, below -- needs a
+case-sensitive file system:
 
 * on Linux, any native file system; on Windows, the file system of a WSL 2
   distribution;
@@ -119,26 +132,15 @@ build and check ``linux/`` on a case-sensitive file system:
   disk image that grows as it fills::
 
       hdiutil create -type SPARSE -size 40g -fs 'Case-sensitive APFS' \
-          -volname rtl9601d rtl9601d.sparseimage
-      mkdir -p "$HOME/rtl9601d"
-      hdiutil attach -nobrowse -mountpoint "$HOME/rtl9601d" \
-          rtl9601d.sparseimage
+          -volname open-dfp-34x-2c open-dfp-34x-2c.sparseimage
+      mkdir -p "$HOME/open-dfp-34x-2c-cs"
+      hdiutil attach -nobrowse -mountpoint "$HOME/open-dfp-34x-2c-cs" \
+          open-dfp-34x-2c.sparseimage
 
   and clone the repository into it;
 * to build only, ``tools/equiv/in-toolchain``, which streams a tree into a
   case-sensitive volume of the toolchain container (see
   ``tools/equiv/README.rst``).
-
-For work outside ``linux/``, a case-insensitive file system will do if the
-kernel stays out of the checkout from the start::
-
-    git clone --no-checkout <repository> rtl9601d-linux
-    cd rtl9601d-linux
-    git sparse-checkout set --no-cone '/*' '!/linux/'
-    git checkout main
-
-The provenance gates run in such a checkout; ``reuse lint`` and
-``git subtree`` need the kernel's files and do not.
 
 Updating to a newer release
 ---------------------------
