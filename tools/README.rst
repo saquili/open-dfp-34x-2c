@@ -18,3 +18,9 @@ item:
   a target binary (**WI-14**).
 
 Each subdirectory carries its own README until it is filled.
+
+One script stands alone:
+
+* ``case-insensitive-checkout`` -- sets up a sparse checkout that leaves out
+  the kernel's paths that differ only in case, for a working tree on a file
+  system that ignores case (see ``CONTRIBUTING.rst``).

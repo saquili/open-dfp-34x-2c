@@ -1,0 +1,50 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# case-insensitive-checkout -- fit the working tree to a file system that
+# ignores case.
+#
+# Usage: tools/case-insensitive-checkout [REVISION]
+#
+# The kernel under linux/ holds pairs of paths that differ only in case. A
+# file system that ignores case keeps one file of each pair, and git then
+# reports the pair as modified for good. This sets up a sparse checkout that
+# leaves out both files of every such pair under linux/ in REVISION (default
+# HEAD), so that the working tree holds only paths it can represent and
+# "git status" is clean. The index keeps every file: commits, merges of
+# other paths and "git archive" are unaffected.
+#
+# Run it in a clone made with --no-checkout, then check out; or in an
+# existing checkout, where it also removes the pairs that are there.
+#
+# The build of the board configuration uses none of these files. Work that
+# changes them, such as importing a kernel release, needs a case-sensitive
+# file system; see CONTRIBUTING.rst.
+
+set -eu
+
+rev=${1:-HEAD}
+
+pairs=$(git -c core.quotePath=false ls-tree -r --name-only "$rev" -- linux |
+	awk '{ k = tolower($0); n[k]++; p[NR] = $0 }
+	     END { for (i = 1; i <= NR; i++) if (n[tolower(p[i])] > 1) print p[i] }')
+
+if [ -z "$pairs" ]; then
+	echo "case-insensitive-checkout: no paths differ only in case in $rev" >&2
+	exit 0
+fi
+
+{
+	echo '/*'
+	printf '%s\n' "$pairs" | sed 's|^|!/|'
+} | git sparse-checkout set --no-cone --stdin
+
+# In an existing checkout "set" cannot leave out a file whose twin was
+# written over it, because git sees that file as modified. Once "set" has
+# removed the twins, the second pass leaves out the rest.
+if [ -n "$(git ls-files -- linux | head -n 1)" ]; then
+	git sparse-checkout reapply
+fi
+
+echo "case-insensitive-checkout: left out $(printf '%s\n' "$pairs" | wc -l | tr -d ' ') paths under linux/" >&2
