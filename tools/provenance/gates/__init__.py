@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
-"""Provenance gates for rtl9601d-linux.
+"""Provenance gates for open-dfp-34x-2c.
 
 The gates enforce docs/policy/provenance.rst: a hashed deny-list over
 identifier-like tokens, plain regular expressions for forbidden words and
