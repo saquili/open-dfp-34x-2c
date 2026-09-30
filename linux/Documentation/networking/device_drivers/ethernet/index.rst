@@ -52,6 +52,7 @@ Contents:
    pensando/ionic
    pensando/ionic_rdma
    qualcomm/ppe/ppe
+   realtek/rtl9602c
    smsc/smc9
    stmicro/stmmac
    ti/cpsw

@@ -1,0 +1,2247 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+===============================================
+Realtek RTL9602C CPU port driver (rtl9602c-eth)
+===============================================
+
+Overview
+========
+
+The Ethernet switch of the RTL9602C has four ports. Port 0 is the SerDes lane
+to the host, port 1 exists in the silicon and is not wired on this board, port
+2 is the PON port, behind which the GPON MAC sits, and port 3 is the CPU port.
+The CPU port has no MAC behind it: it ends in a DMA engine that moves frames
+between memory and the switch through two descriptor rings, one for transmit
+and one for receive.
+
+Everything that decides where a frame goes travels in the descriptors, as the
+CPU tag, and none of it is in the frame. On transmit the descriptor carries a
+destination port mask, a priority and a PON flow. On receive it carries the
+source port, the reason the switch sent the frame up and the PON flow the frame
+arrived on. The tag has two halves: the descriptor fields, which this driver
+fills in and reads, and two controls in the switch, which the switch driver
+sets (see "The CPU tag, switch side").
+
+The driver, ``rtl9602c-eth``, is the conduit of the switch driver in the sense
+of DSA: the network interface that connects the CPU to the switch. It is named
+``cpu``, and the switch's user ports appear on top of it as ``sfp@cpu`` and
+``pon@cpu``. The DSA tag driver, ``rtl9602c``, moves no bytes, because the tag
+is not in the frame: on transmit it records the destination port for the
+conduit, and on receive the conduit tells DSA which port a frame came from
+without calling it. Besides ordinary frames the conduit:
+
+- carries the OMCI channel of the PON port: the switch driver sends OMCI
+  messages through the conduit and receives them from it;
+- carries the frames of the GEM ports: a frame of a GEM interface reaches the
+  conduit directly and leaves in the PON flow it names, and a frame that
+  arrives in a PON flow is offered to the switch driver first;
+- takes off the timestamp tag that the switch inserts into the PTP messages it
+  sends to the CPU, keeping its time as the frame's hardware timestamp;
+- counts frames, and the frames the switch sent up per reason.
+
+The path of a frame, from the users of the conduit down to the switch::
+
+    sfp@cpu   pon@cpu        GEM interfaces          OMCI port
+       |         |                 |                     |
+    +--+---------+--+              |                     |
+    |   tag driver  |              |                     |
+    +-------+-------+              |                     |
+            |                      |                     |
+            +----------------------+---------------------+
+                                   |
+                     cpu (rtl9602c-eth), the conduit
+                                   |
+              two descriptor rings, the CPU tag in the descriptors
+                                   |
+                 DMA engine = CPU port = switch port 3
+                                   |
+                 +-----------------+-----------------+
+                 |                                   |
+          port 0: SerDes lane                 port 2: PON port
+          to the host                         (GPON MAC)
+
+``sfp@cpu`` and ``pon@cpu`` are user ports of DSA, and the tag driver records
+the destination port of their frames. A frame of a GEM interface and an OMCI
+message reach the conduit without it: the GEM interfaces and the OMCI port
+belong to the PON class (Documentation/networking/pon.rst), which the switch
+driver feeds through the conduit. The switch itself is described in
+Documentation/networking/dsa/rtl9602c.rst, and the GPON MAC and the PON MAC in
+Documentation/networking/device_drivers/pon/rtl9602c.rst.
+
+Configuration
+-------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Symbol
+     - Effect
+   * - ``CONFIG_RTL9602C_ETH``
+     - Tristate, "Realtek RTL9602C switch CPU port"; depends on ``RTL9602C ||
+       COMPILE_TEST``. Builds ``drivers/net/ethernet/realtek/rtl9602c-eth.c``
+       as ``rtl9602c-eth.o``; as a module it is ``rtl9602c-eth``. It is the
+       conduit of the switch driver and carries the OMCI channel of the PON
+       port, so an RTL9602C board builds it in or as a module.
+   * - ``CONFIG_NET_VENDOR_REALTEK``
+     - The menu that holds the driver. Its dependencies include ``RTL9602C``,
+       so it is offered on this platform.
+   * - ``CONFIG_NET_DSA_TAG_RTL9602C``
+     - Tristate, "Tag driver for Realtek RTL9602C switches". Builds
+       ``net/dsa/tag_rtl9602c.c`` as ``tag_rtl9602c.o``. ``NET_DSA_RTL9602C``
+       selects it.
+   * - ``CONFIG_NET_DSA_RTL9602C``
+     - The switch driver, the user of the conduit. It depends on
+       ``RTL9602C_ETH || !RTL9602C_ETH``: when the conduit is a module, the
+       switch driver is a module too.
+
+``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the conduit and the
+switch driver in: ``CONFIG_RTL9602C_ETH=y``, ``CONFIG_NET_DSA=y`` and
+``CONFIG_NET_DSA_RTL9602C=y``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``CONFIG_RTL9602C_ETH`` (tristate, depends on ``RTL9602C ||
+       COMPILE_TEST``, object ``rtl9602c-eth.o``); ``NET_VENDOR_REALTEK`` is
+       also offered on ``RTL9602C``; ``CONFIG_NET_DSA_TAG_RTL9602C`` (tristate)
+       builds the tag driver.
+     - T
+     - The kernel builds with them and the conduit probes (kernel log).
+
+Device tree and binding
+-----------------------
+
+The ``eth`` node of ``arch/mips/boot/dts/realtek/rtl9602c.dtsi`` describes the
+engine, and the CPU port of the switch (``port@3``) refers to it through its
+``ethernet`` property::
+
+    eth: ethernet@18012000 {
+            compatible = "realtek,rtl9602c-eth";
+            reg = <0x18012000 0x1440>;
+            interrupt-parent = <&intc>;
+            interrupts = <26>;
+    };
+
+    port@3 {
+            reg = <3>;
+            ethernet = <&eth>;
+            phy-mode = "internal";
+
+            fixed-link {
+                    speed = <1000>;
+                    full-duplex;
+            };
+    };
+
+The binding is
+``Documentation/devicetree/bindings/net/realtek,rtl9602c-eth.yaml``. It
+requires ``compatible`` (the constant ``realtek,rtl9602c-eth``), ``reg`` (one
+region) and ``interrupts`` (one interrupt), allows no other property and
+expects the node name ``ethernet@<address>``. The unit's MAC address is not a
+device tree property: the boot loader leaves it in the engine's address
+registers, and the driver adopts it (see "Registers"). The driver maps the
+region with ``devm_platform_ioremap_resource()`` and takes the interrupt with
+``platform_get_irq()``.
+
+Where the code is
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - File
+     - Contents
+   * - ``drivers/net/ethernet/realtek/rtl9602c-eth.c``
+     - The conduit: the engine's registers, the rings and descriptors, the
+       interrupt and the NAPI poll, the PTP timestamp tag, the debugfs file and
+       the calls the switch driver uses. It is a platform driver named
+       ``rtl9602c-eth``, matched by ``realtek,rtl9602c-eth``.
+   * - ``net/dsa/tag_rtl9602c.c``
+     - The tag driver: protocol ``DSA_TAG_PROTO_RTL9602C``, name ``rtl9602c``.
+   * - ``include/linux/dsa/rtl9602c.h``
+     - The contract between the conduit, the tag driver and the switch driver:
+       ``RTL9602C_PORT_PON``, the two handler types, the five calls and their
+       stubs for a kernel built without the conduit.
+   * - ``include/net/dsa.h``
+     - ``DSA_TAG_PROTO_RTL9602C``, value 30.
+   * - ``Documentation/devicetree/bindings/net/realtek,rtl9602c-eth.yaml``
+     - The binding.
+   * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``
+     - The ``eth`` node and the CPU port that refers to it.
+   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``, ``rtl9602c.h``
+     - The switch's half of the CPU tag (``RTL9602C_CPUTAG_CTRL``), the frame
+       length limit (``RTL9602C_FRAME_OVERHEAD``) and the tag protocol the
+       switch driver reports.
+   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``, ``rtl9602c-gem.c``
+     - The users of the conduit's calls: the OMCI port and the GEM data path
+       of the PON class.
+   * - ``drivers/net/dsa/realtek/rtl9602c-ptp.c``
+     - ``rtl9602c_port_rxtstamp()``, which completes the seconds of the receive
+       timestamp that the conduit takes from the PTP tag.
+   * - ``Kconfig`` and ``Makefile`` in ``drivers/net/ethernet/realtek/`` and
+       in ``net/dsa/``
+     - The build entries.
+
+Interfaces to user space
+------------------------
+
+- The network interface ``cpu``. ``ip -s link show cpu`` shows its counters
+  (see "Statistics"). Its address is the one the boot loader left in the
+  engine, or a random one when that is not a usable unicast address;
+  ``ip link set cpu address`` changes the interface's address only, because the
+  driver never writes the engine's address registers and the engine accepts
+  every frame. It has four transmit queues, one per switch port, and one
+  receive queue. ``ip link set cpu down`` halts the engine and setting it up
+  again restarts it (see "Sequences").
+- The user ports ``sfp@cpu`` and ``pon@cpu``. The ``SO_PRIORITY`` of a frame
+  sent on ``sfp`` chooses its egress queue at the switch, and the receive time
+  of a PTP message on ``sfp`` arrives as the frame's hardware timestamp (see
+  "Transmit" and "The timestamp tag on PTP frames").
+- ``ethtool -S cpu``. The conduit has no ``ethtool`` operations of its own, and
+  the driver no module parameters; DSA adds the switch's counters for the CPU
+  port under the prefix ``s00_p03_``
+  (Documentation/networking/dsa/rtl9602c.rst).
+- ``/sys/kernel/debug/rtl9602c-eth/rxreason``: the frames the switch sent up,
+  counted per reason. Reading it lists the non-zero counts and any write
+  clears them (see "Statistics").
+- ``/proc/interrupts``: the engine's interrupt, source 26 of the SoC interrupt
+  controller, is Linux interrupt 34 and is named after the interface::
+
+    34: ...  rtl9602c-intc  26 cpu
+
+- The kernel log lines that begin with ``rtl9602c-eth`` and the interface name
+  (see "Logging").
+- Through the switch driver, the OMCI port ``/dev/pon0omci0`` and the GEM
+  interfaces of the PON class (Documentation/networking/pon.rst) send and
+  receive their frames through the conduit.
+
+How to read the fact tables
+===========================
+
+Each block below has a short account of what the hardware does and what the
+driver does with it, followed by fact tables with three columns: *Fact*, *Tag*
+and *Checked by*. The tag says how the fact is established. **M**, measured on
+the board (the DFP-34X-2C3): *Checked by* gives the command or observation,
+through the driver's own interfaces (the kernel log, ``ip``, ``ethtool``,
+debugfs), that shows it. **T**, tested by function: the driver depends on the
+fact, and the named behaviour fails if it is wrong. **P**, public standard:
+*Checked by* names the document and the clause. **I**, inferred, not verified:
+the fact is an assumption, and *Checked by* says what would confirm or refute
+it. The last chapter collects these facts and says which of them the driver
+depends on.
+
+A row with two tags is established in two ways, or in two parts; *Checked by*
+says which part carries which tag. "Every boot" means that the line is in the
+kernel log of every boot of this kernel. Register offsets are from the base of
+the engine's window, physical ``0x18012000``. The words of a descriptor are
+numbered from 0, and a range of bits such as 28:23 runs from the high bit to the
+low one. The behaviours that a tested fact depends on are named in words: the
+board boots to a shell; bridged traffic passes both ways, sourced from the
+host; OMCI messages pass both ways over ``/dev/pon0omci0``.
+
+The engine
+==========
+
+The engine has a register window of its own in the SoC's peripheral area, apart
+from the switch's registers. The registers are big-endian, and on this
+big-endian CPU ``readl()`` and ``writel()`` access them in native order; the
+byte and half-word registers are accessed at their own width. The boot loader
+leaves the engine idle and leaves the unit's MAC address in its address
+registers. The engine's interrupt is source 26 of the SoC interrupt controller,
+which is Linux interrupt 34 (Documentation/arch/mips/rtl9602c.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The engine's registers are at physical ``0x18012000``, in the SoC
+       peripheral window, apart from the switch registers at ``0x1b000000``.
+       The device tree node is ``ethernet@18012000`` with ``reg = <0x18012000
+       0x1440>`` and the compatible ``realtek,rtl9602c-eth``.
+     - M
+     - The address registers (see "Address and receive filtering") read the
+       unit's MAC address at the boot loader prompt, and the rings work (see
+       "The rings").
+   * - The registers are big-endian, and ``readl()`` and ``writel()`` access
+       them in native order on this big-endian CPU: the MAC address comes out
+       in the right byte order. Byte and half-word registers are accessed at
+       their own width with ``readb()``, ``writeb()``, ``readw()`` and
+       ``writew()``, at the addresses given below.
+     - T
+     - The probe line prints the unit's address in the order the boot loader
+       shows it, and every byte and half-word register below does what is
+       described.
+   * - The engine's interrupt is source 26 of the SoC interrupt controller, in
+       bank 0, not behind the cascade (device tree ``interrupts = <26>``).
+     - M
+     - With frames arriving, bit 26 of ``RTL9602C_INTC_STAT`` appeared once the
+       source was enabled in ``RTL9602C_INTC_EN``; receive is interrupt-driven
+       on every boot. The open line of every boot names the Linux interrupt,
+       34.
+   * - When Linux starts, the engine is idle: the four ring registers
+       (``RTL9602C_NIC_TX_RING_BASE``, ``RTL9602C_NIC_TX_RING_CUR``,
+       ``RTL9602C_NIC_RX_RING_BASE`` and ``RTL9602C_NIC_RX_RING_CUR``) read 0
+       at the boot loader prompt.
+     - M
+     - Register read at the boot loader prompt.
+
+Registers
+=========
+
+The driver sets the engine up with whole-register writes when the interface
+opens, in the order given under "Setting the engine up". The map below lists
+every register the driver touches and what it does with it; "Bits" is the
+width the driver accesses the register with.
+
+Register map
+------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 34 9 48
+
+   * - Offset
+     - Register
+     - Bits
+     - What the driver does
+   * - ``+0x0000``
+     - ``RTL9602C_NIC_MAC_ADDR_HI``
+     - 32
+     - Reads it at probe.
+   * - ``+0x0004``
+     - ``RTL9602C_NIC_MAC_ADDR_LO``
+     - 32
+     - Reads it at probe.
+   * - ``+0x0008``
+     - ``RTL9602C_NIC_MC_HASH_LO``
+     - 32
+     - Writes all ones.
+   * - ``+0x000c``
+     - ``RTL9602C_NIC_MC_HASH_HI``
+     - 32
+     - Writes all ones.
+   * - ``+0x002a``
+     - ``RTL9602C_NIC_RX_NO_DESC_CNT``
+     - 16
+     - Reads it at open and on every poll.
+   * - ``+0x003b``
+     - ``RTL9602C_NIC_CTRL``
+     - 8
+     - Writes ``0x0a``.
+   * - ``+0x003c``
+     - ``RTL9602C_NIC_IRQ_MASK``
+     - 16
+     - Writes ``RTL9602C_NIC_IRQ_MASK_RXTX`` (``0x00f5``) at open and at the end
+       of a poll, and 0 in the interrupt handler and at stop.
+   * - ``+0x003e``
+     - ``RTL9602C_NIC_IRQ_STAT``
+     - 16
+     - Reads it in the interrupt handler and writes the value back; writes
+       ``0xffff`` at open.
+   * - ``+0x0040``
+     - ``RTL9602C_NIC_TX_CFG``
+     - 32
+     - Writes ``0x00000c00``.
+   * - ``+0x0044``
+     - ``RTL9602C_NIC_RX_FILTER``
+     - 32
+     - Writes ``0x0000000f``.
+   * - ``+0x0048``
+     - ``RTL9602C_NIC_CPUTAG``
+     - 32
+     - Writes ``0x901eff04``.
+   * - ``+0x004c``
+     - ``RTL9602C_NIC_CFG``
+     - 32
+     - Writes ``0x20000000``; reads it for the open line.
+   * - ``+0x0050``
+     - ``RTL9602C_NIC_CPUTAG_SRC``
+     - 32
+     - Writes ``0x00004072``.
+   * - ``+0x0058``
+     - ``RTL9602C_NIC_MEDIA_STAT``
+     - 8
+     - Clears bits 7 and 6, keeping the others; reads it for the open line.
+   * - ``+0x1300``
+     - ``RTL9602C_NIC_TX_RING_BASE``
+     - 32
+     - Writes the bus address of the transmit ring.
+   * - ``+0x1304``
+     - ``RTL9602C_NIC_TX_RING_CUR``
+     - 16
+     - Writes 0.
+   * - ``+0x1370``
+     - ``RTL9602C_NIC_RX_PRI_TO_RING``
+     - 32
+     - Writes 0.
+   * - ``+0x13f0``
+     - ``RTL9602C_NIC_RX_RING_BASE``
+     - 32
+     - Writes the bus address of the receive ring.
+   * - ``+0x13f4``
+     - ``RTL9602C_NIC_RX_RING_CUR``
+     - 16
+     - Writes 0.
+   * - ``+0x13f6``
+     - ``RTL9602C_NIC_RX_RING_LEN``
+     - 8
+     - Writes 255.
+   * - ``+0x13f7``
+     - ``RTL9602C_NIC_RX_RING_LEN_HI``
+     - 8
+     - Writes 0.
+   * - ``+0x13fc``
+     - ``RTL9602C_NIC_REG_13FC``
+     - 32
+     - Writes 0.
+   * - ``+0x142c``
+     - ``RTL9602C_NIC_RX_PAUSE_OFF_THR_HI``
+     - 8
+     - Writes 0.
+   * - ``+0x1430``
+     - ``RTL9602C_NIC_RX_RING_TAIL``
+     - 8
+     - Writes 255 at start, then the index of each receive descriptor it gives
+       back.
+   * - ``+0x1431``
+     - ``RTL9602C_NIC_RX_PAUSE_ON_THR``
+     - 8
+     - Writes 16.
+   * - ``+0x1432``
+     - ``RTL9602C_NIC_RX_PAUSE_OFF_THR``
+     - 8
+     - Writes 48.
+   * - ``+0x1433``
+     - ``RTL9602C_NIC_RX_RING_TAIL_HI``
+     - 8
+     - Writes 0.
+   * - ``+0x1434``
+     - ``RTL9602C_NIC_DMA_CTRL``
+     - 32
+     - Writes ``RTL9602C_NIC_DMA_CTRL_INIT`` (``0xc059f130``) to start the
+       engine, that value with bit 0 (``RTL9602C_NIC_DMA_CTRL_TX_POLL``) to
+       kick it, and 0 to halt it; reads it before each kick.
+   * - ``+0x1438``
+     - ``RTL9602C_NIC_RING_CFG``
+     - 32
+     - Writes ``RTL9602C_NIC_RING_CFG_INIT`` (``0x32000001``), and 0 to halt.
+
+Address and receive filtering
+-----------------------------
+
+The boot loader leaves the unit's MAC address in the engine's address
+registers, and the driver adopts it as the address of ``cpu``. The engine
+accepts every frame the switch hands it and does not filter again: the switch
+decides what reaches the CPU. The receive format is written rather than
+inherited, so that it does not depend on what the boot loader left.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_NIC_MAC_ADDR_HI`` (``+0x0000``, 32-bit) holds MAC address
+       bytes 0 to 3, byte 0 in bits 31:24; ``RTL9602C_NIC_MAC_ADDR_LO``
+       (``+0x0004``) holds bytes 4 and 5 in bits 31:16, and bits 15:0 read 0.
+       The boot loader leaves the unit's address there. The driver adopts it
+       and never writes these registers; if they do not hold a valid unicast
+       address it says so and uses a random one.
+     - M
+     - The same address is read at the boot loader prompt and printed by the
+       probe line.
+   * - ``RTL9602C_NIC_RX_FILTER`` (``+0x0044``) is written with
+       ``RTL9602C_NIC_RX_FILTER_PROMISC`` (``0x0000000f``): the engine accepts
+       every frame the switch hands it, whatever the destination address. The
+       switch decides what reaches the CPU; the engine does not filter again.
+     - T
+     - Frames addressed to other hosts cross the CPU when it bridges them;
+       broadcast (ARP) and the board's own unicast frames arrive (ssh to the
+       board works).
+   * - ``RTL9602C_NIC_MC_HASH_LO`` and ``RTL9602C_NIC_MC_HASH_HI`` (``+0x0008``,
+       ``+0x000c``) form a 64-bit multicast hash filter; the driver writes all
+       ones to both so that no multicast group is filtered.
+     - T
+     - Multicast reaches the CPU: PTP Sync frames to ``01:1b:19:00:00:00`` are
+       received and timestamped (also measured on the DFP-34X-2C3); IPv6
+       neighbour discovery works.
+   * - ``RTL9602C_NIC_CTRL`` (``+0x003b``, 8-bit) is written with
+       ``RTL9602C_NIC_CTRL_INIT``, ``RTL9602C_NIC_CTRL_RX_CSUM`` (bit 1) and
+       ``RTL9602C_NIC_CTRL_RX_JUMBO`` (bit 3) together: ``0x0a``. Bit 2 stays
+       clear, and with it clear a received frame keeps its 802.1Q tag in the
+       frame. The register is written rather than inherited, so that the
+       receive format does not depend on what the boot loader left.
+     - T
+     - VLAN-tagged frames of the management VLAN arrive whole: ssh over the
+       management VLAN works, and so does a long reply over it.
+   * - With ``RTL9602C_NIC_CTRL_RX_JUMBO`` set, a 1522-byte VLAN-tagged frame (a
+       full 1500-byte payload) is received. That bit 3 is what admits frames
+       above 1518 bytes is an assumption: it was never tested with the bit
+       clear.
+     - M, I
+     - M: 1500-byte pings over a VLAN, every request counted by the board's own
+       ICMP statistics. I: clearing the bit and repeating the pings would
+       settle it.
+
+Transmit configuration and the CPU tag registers
+------------------------------------------------
+
+``RTL9602C_NIC_CPUTAG`` switches the CPU tag on in the descriptors. With it,
+and with the switch's own controls (see "The CPU tag, switch side"), the switch
+obeys the port mask of transmit word 3 and fills receive words 2 and 3.
+``RTL9602C_NIC_CPUTAG_SRC`` takes a second value whose fields are not
+established. The driver writes these two registers, and ``RTL9602C_NIC_TX_CFG``,
+as whole values.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_NIC_TX_CFG`` (``+0x0040``) is written with
+       ``RTL9602C_NIC_TX_CFG_IPG_3`` (``0x00000c00``), a whole word. The value
+       is taken to set an inter-packet gap of 3 (bits 11:10) with loopback off
+       (bits 9:8 zero); that reading of its fields is an assumption, not
+       verified (see "Registers written whole").
+     - T, I
+     - T: transmit works, for every frame the CPU sends. I: changing one field
+       alone and watching traffic would settle the reading.
+   * - ``RTL9602C_NIC_CPUTAG`` (``+0x0048``) is written with
+       ``RTL9602C_NIC_CPUTAG_INIT`` = ``0x901eff04``, composed of
+       ``RTL9602C_NIC_CPUTAG_EN`` (bit 31), ``RTL9602C_NIC_CPUTAG_TX_SIZE_2``
+       (2 in bits 30:27), ``RTL9602C_NIC_CPUTAG_FMT_ONCHIP`` (7 in bits 21:18),
+       ``RTL9602C_NIC_CPUTAG_RX_SIZE_2`` (2 in bits 17:16) and
+       ``RTL9602C_NIC_CPUTAG_PROTO_MATCH`` (``0xff04`` in bits 15:0). With it,
+       and with the switch's side (see "The CPU tag, switch side"), the port
+       mask of transmit word 3 is obeyed and receive words 2 and 3 are filled.
+       The driver writes the word whole; what its fields are named after is
+       not established (see "Registers written whole").
+     - T
+     - Frames go where word 3 aims them, and received frames carry their
+       source port (see "Transmit" and "Receive").
+   * - ``RTL9602C_NIC_CPUTAG_SRC`` (``+0x0050``) is written with
+       ``RTL9602C_NIC_CPUTAG_SRC_INIT`` (``0x00004072``); it reads back
+       ``0x00004002``, so bits 7:4 hold nothing.
+     - M
+     - The register written and read back.
+   * - In ``RTL9602C_NIC_CPUTAG_SRC``, bits 3:0 (2) are taken to be the source
+       port number reported for frames from the PON port, and bits 15:8
+       (``0x40``, 64) a default flow. Frames from the PON port do report source
+       port 2 (see "Receive"); that this register is why is not established.
+     - I
+     - Writing another value to bits 3:0 and reading the source port of an OMCI
+       frame would settle it.
+
+Media status and configuration
+------------------------------
+
+The driver clears two bits of the media status register, so that the engine
+and the switch exchange no pause. It also writes the engine's configuration
+register with one field set, which keeps the ring's receive interrupt in
+``RTL9602C_NIC_IRQ_STAT``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_NIC_MEDIA_STAT`` (``+0x0058``, 8-bit): the driver clears bits
+       7 and 6 (``RTL9602C_NIC_MEDIA_STAT_PAUSE_EN``) by read-modify-write, so
+       the engine and the switch exchange no pause. With bits 7, 6 and 5 set, a
+       counter of the switch's CPU port climbed with no traffic offered and
+       nothing left the SerDes port; with 7 and 6 clear, transmit works. After
+       the driver's write the register reads ``0x10``. Which bit enables which
+       direction is an assumption.
+     - M, I
+     - M: both settings were tried with the switch's per-port counters read; the
+       value appears as ``msr 10`` in the open line of every boot. I: setting
+       the bits one at a time and reading the same counters would settle which
+       direction each enables.
+   * - ``RTL9602C_NIC_CFG`` (``+0x004c``) is written with
+       ``RTL9602C_NIC_CFG_RX_FIFO_2K`` (2 in bits 29:28, ``0x20000000``) and
+       every other bit clear; bit 24 in particular stays clear, which keeps the
+       ring's receive interrupt in ``RTL9602C_NIC_IRQ_STAT``. It reads back
+       ``0x20000000``. The name of the field, a receive FIFO size, is not
+       verified.
+     - M
+     - The open line of every boot shows ``config 20000000``; the interrupt
+       handler reads ``RTL9602C_NIC_IRQ_STAT`` only, and receive is
+       interrupt-driven.
+
+Priority steering and the missed-frame counter
+----------------------------------------------
+
+One register of the engine has a field per internal priority that names the
+receive ring for that priority. The driver serves one ring and writes 0 to
+every field. Frames the engine drops because no receive descriptor is free are
+counted in a 16-bit register that wraps quickly under load.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_NIC_RX_PRI_TO_RING`` (``+0x1370``) holds eight 4-bit fields,
+       one per internal priority, each naming the receive ring for that
+       priority; 0 is the ring at ``RTL9602C_NIC_RX_RING_BASE``. The driver
+       writes 0, so every priority lands in the one ring it serves, including
+       7, which the switch driver gives the OMCI frames it traps
+       (Documentation/networking/device_drivers/pon/rtl9602c.rst). The layout
+       of the fields beyond "0 everywhere" is an assumption.
+     - T, I
+     - T: OMCI messages and data frames both arrive (OMCI both ways over
+       ``/dev/pon0omci0``; any traffic).
+   * - ``RTL9602C_NIC_REG_13FC`` (``+0x13fc``) is written with 0 when the
+       engine is set up. Its function is not established.
+     - I
+     - Not known to be load-bearing. Leaving it at a non-zero value and
+       comparing traffic would settle it.
+   * - ``RTL9602C_NIC_RX_NO_DESC_CNT`` (``+0x002a``, 16-bit, free-running)
+       counts frames the engine dropped because no receive descriptor was free.
+       The driver adds the 16-bit difference since the last poll to
+       ``rx_missed_errors`` on every poll, because under a flood it wraps in
+       under a second.
+     - M
+     - It advanced by the frames the switch delivered to the CPU port minus the
+       frames the driver received, modulo 65536: 600,075 delivered = 496,074
+       received + 104,004 counted, to within 3. Repeatable: ``ip -s link show
+       cpu`` against the CPU port's transmit counter in ``ethtool -S cpu``.
+
+Registers written whole
+-----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The driver writes these registers as whole values and uses none of
+       their fields separately: ``RTL9602C_NIC_TX_CFG``,
+       ``RTL9602C_NIC_CPUTAG``, ``RTL9602C_NIC_CFG``, ``RTL9602C_NIC_RING_CFG``,
+       ``RTL9602C_NIC_DMA_CTRL`` (bit 0 apart), and bits 0 to 3 of
+       ``RTL9602C_NIC_RX_FILTER``. What each field does (inter-packet gap, tag
+       sizes and format, the in-frame tag match, FIFO size, per-ring controls,
+       thresholds) is not established here, and nothing depends on it while the
+       values are written whole. ``RTL9602C_NIC_CTRL_RX_CSUM`` too: the driver
+       never reads a checksum result.
+     - I
+     - Not load-bearing. A field would be settled by changing it alone and
+       watching traffic.
+
+Interrupts and the poll
+=======================
+
+The engine has one interrupt line, source 26 of the SoC interrupt controller,
+Linux interrupt 34. ``RTL9602C_NIC_IRQ_STAT`` shows what is pending and
+``RTL9602C_NIC_IRQ_MASK`` selects what may raise the line; the two share one
+bit layout. The handler ``rtl9602c_eth_irq()`` reads the status: zero means the
+interrupt is not the engine's. Otherwise it writes the status back to
+acknowledge it, writes 0 to the mask and schedules the NAPI poll. The poll,
+``rtl9602c_eth_poll()``, folds in the missed-frame count, reaps transmit
+completions and receives up to its budget; when it finishes under the budget it
+writes ``RTL9602C_NIC_IRQ_MASK_RXTX`` to the mask again. Every status bit is
+handled alike, whatever raised it, so the meaning of the individual bits
+carries no weight (see "The interrupt and the poll" under "Sequences").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_NIC_IRQ_MASK`` (``+0x003c``, 16-bit) and
+       ``RTL9602C_NIC_IRQ_STAT`` (``+0x003e``, 16-bit) share one bit layout; a
+       status bit is acknowledged by writing it back as 1.
+     - T
+     - Interrupt-driven receive without an interrupt storm, on every boot.
+   * - ``RTL9602C_NIC_IRQ_RX_DONE`` (bit 0): a frame was received into the
+       ring.
+     - M
+     - With frames arriving, receive is interrupt-driven on this bit: 14 frames
+       over a run of 20 pings, none dropped; the same on every boot.
+   * - ``RTL9602C_NIC_IRQ_TX_DONE`` (bit 6): a transmit completed. The driver
+       needs it to reap completed descriptors and wake its queues when nothing
+       is being received.
+     - T
+     - Transmit-only bursts from the CPU keep running (18,400 frames/s
+       upstream); a 32-descriptor ring would stall after 31 frames without a
+       completion interrupt.
+   * - The driver also enables ``RTL9602C_NIC_IRQ_RX_RUNT`` (bit 2),
+       ``RTL9602C_NIC_IRQ_RX_OVERFLOW`` (bit 4), ``RTL9602C_NIC_IRQ_RX_NO_DESC``
+       (bit 5) and ``RTL9602C_NIC_IRQ_TX_ERR`` (bit 7); with bits 0 and 6 they
+       make ``RTL9602C_NIC_IRQ_MASK_RXTX`` (``0x00f5``). Every status bit is
+       treated alike (acknowledge, mask, poll), so their individual meanings
+       carry no weight. The names are assumptions, not verified.
+     - I
+     - Not load-bearing. Each would be settled by producing its event (a runt,
+       an exhausted ring) and reading the status.
+
+The rings
+=========
+
+The engine has one transmit ring and one receive ring, each an array of
+descriptors in coherent memory (see "Descriptors"). The driver gives the engine
+the bus address of descriptor 0 of each ring, and the engine walks a ring by an
+index of its own, returning to descriptor 0 after the descriptor marked
+``RTL9602C_NIC_DESC_RING_END``. The two sides pass a descriptor to each other
+with the ownership bit of word 0: set, the descriptor is the engine's. The
+engine learns that the transmit ring has work from a kick, a write to
+``RTL9602C_NIC_DMA_CTRL`` with the poll bit set. The receive ring has a tail
+register that holds the index of the last descriptor handed back to the engine,
+and the driver writes it each time it gives a descriptor back.
+
+The ring registers
+------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_NIC_TX_RING_BASE`` (``+0x1300``) and
+       ``RTL9602C_NIC_RX_RING_BASE`` (``+0x13f0``) take the bus address of
+       descriptor 0 as ``dma_alloc_coherent()`` returns it, with no
+       uncached-alias bits added.
+     - M
+     - The engine took a frame from a transmit ring given the bare address (the
+       transmit test at open).
+   * - ``RTL9602C_NIC_TX_RING_CUR`` (``+0x1304``, 16-bit) and
+       ``RTL9602C_NIC_RX_RING_CUR`` (``+0x13f4``, 16-bit) are the engine's own
+       indices into the rings; the driver writes 0 to both before starting, so
+       both sides begin at descriptor 0.
+     - T
+     - Transmit and receive work from the first frame after open.
+   * - The engine keeps its own transmit index and advances it over every
+       descriptor it consumes; nothing reconciles it with the driver's indices.
+       The driver must post descriptors in exactly the order the engine walks
+       them, and account for any descriptor it posts outside the normal path
+       (the transmit test at open).
+     - M
+     - With the driver one descriptor behind, 31 frames left on a 32-descriptor
+       ring and transmit stopped; the ring read OWN still set on descriptor 0
+       only. With the driver's indices following the engine's, 120 pings of 120
+       passed, the ring wrapping three times.
+   * - ``RTL9602C_NIC_RX_RING_LEN`` (``+0x13f6``, 8-bit) is written with the
+       ring length minus 1 (255); ``RTL9602C_NIC_RX_RING_LEN_HI`` (``+0x13f7``,
+       8-bit) with 0. The high part is written rather than inherited, so a
+       stale value cannot make the engine walk a longer ring than was
+       allocated. What the high part holds is an assumption.
+     - T, I
+     - T: the 256-descriptor ring runs (see "Sizes, load and locking").
+   * - ``RTL9602C_NIC_RX_RING_TAIL`` (``+0x1430``, 8-bit) is the index of the
+       last receive descriptor handed back to the engine: written with the
+       length minus 1 at start, then with i each time descriptor i is given
+       back. Without that write the ring runs dry and receive stops.
+       ``RTL9602C_NIC_RX_RING_TAIL_HI`` (``+0x1433``) is written with 0: it
+       holds the high parts of the tail and of the pause-on threshold. Because
+       only the low byte is written per frame, the ring has at most 256
+       descriptors (a ``static_assert`` in the driver).
+     - T
+     - Receive continues past one ring's worth of frames: 400,000 frames at
+       20,000 per second (see "Sizes, load and locking").
+   * - ``RTL9602C_NIC_RX_PAUSE_ON_THR`` (``+0x1431``) is written with 16,
+       ``RTL9602C_NIC_RX_PAUSE_OFF_THR`` (``+0x1432``) with 48 and
+       ``RTL9602C_NIC_RX_PAUSE_OFF_THR_HI`` (``+0x142c``) with 0:
+       free-descriptor thresholds for asserting and releasing receive pause
+       toward the switch. They have no effect: under a flood the switch
+       delivers every frame to the CPU port and the engine drops what it has no
+       descriptor for. The switch's side of that pause is not enabled.
+     - M
+     - The switch's CPU port counted all 799,712 frames of a flood and discarded
+       none, while the engine dropped the excess (see "Registers").
+   * - ``RTL9602C_NIC_RING_CFG`` (``+0x1438``) is written with
+       ``RTL9602C_NIC_RING_CFG_INIT`` (``0x32000001``) before the engine is
+       started, and with 0 to halt it.
+     - T
+     - Transmit and receive work (any traffic); ``ip link set cpu down`` and up
+       again restores both.
+   * - ``RTL9602C_NIC_DMA_CTRL`` (``+0x1434``) is written with
+       ``RTL9602C_NIC_DMA_CTRL_INIT`` (``0xc059f130``) last, to start the
+       engine, and with 0 first, to halt it.
+     - T
+     - As for the previous row.
+   * - ``RTL9602C_NIC_DMA_CTRL_TX_POLL`` (bit 0) tells the engine the transmit
+       ring has work. The driver kicks by writing
+       ``RTL9602C_NIC_DMA_CTRL_INIT | RTL9602C_NIC_DMA_CTRL_TX_POLL`` as a whole
+       word: the configured word is known, and reading it back to modify it
+       could only keep a bit the hardware set.
+     - T
+     - Every transmit.
+   * - Before each kick the driver issues ``wmb()`` and then reads
+       ``RTL9602C_NIC_DMA_CTRL``: a read from the device cannot complete before
+       the writes ahead of it, so the descriptor has reached memory when the
+       engine is told. That uncached stores can otherwise still be in flight at
+       the kick is not established.
+     - I
+     - Not load-bearing: the read is always done. Kicking without it under load
+       and checking for descriptors taken half-written would settle it.
+
+Sizes, load and locking
+-----------------------
+
+The receive ring has 256 descriptors (``RTL9602C_RX_RING``) and the transmit
+ring 32 (``RTL9602C_TX_RING``). Receive and OMCI share the one receive ring, and
+data frames and OMCI messages share the one transmit ring under one lock
+(``tx_lock``), which also guards the stopping and waking of the transmit
+queues.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_RX_RING`` = 256 receive descriptors. At 20,000 frames/s, 16
+       descriptors lost 877 frames of 400,000 (frames the switch counted as
+       delivered to the CPU port and the driver never received), and 256 lost
+       none, twice. The CPU's receive ceiling is about 24,000 to 25,000
+       frames/s whatever the frame size; beyond it the engine drops what it has
+       no descriptor for (see "Registers").
+     - M
+     - Floods sent from the host side, counted at both ends: the switch's
+       CPU-port counter and the frames the driver received.
+   * - OMCI shares the one receive ring with data: under a downstream flood to
+       the CPU, OMCI messages are dropped in the engine like any other frame.
+     - M
+     - During a flood of 40,000 frames/s an OMCI message the OLT sent was
+       missing at the OMCI port.
+   * - ``RTL9602C_TX_RING`` = 32 transmit descriptors, one always left unused so
+       that head equal to tail means empty. One ring serves every transmit
+       queue and the OMCI path under one lock; the queues stop together when it
+       fills and are woken together by the reaper, which runs from the poll
+       (and once at stop), so a wake cannot be lost between a full ring and a
+       reap. The reaper stops at the oldest descriptor the engine still owns
+       and alone counts transmitted frames.
+     - T
+     - Transmit under load from the data path and OMCI at once (OMCI both ways
+       over ``/dev/pon0omci0`` during traffic); ``tx_packets`` of the conduit
+       tracks the switch's CPU-port counter.
+
+Descriptors
+===========
+
+A descriptor is an array of big-endian 32-bit words in coherent memory
+(``dma_alloc_coherent()``): uncached on this CPU, which is not cache-coherent
+with DMA, so the driver and the engine see each other's stores without cache
+maintenance. A transmit descriptor has five words (``struct rtl9602c_tx_desc``:
+``stslen``, ``addr``, ``tag``, ``dest``, ``lso``) and a receive descriptor four
+(``struct rtl9602c_rx_desc``: the first four). Word 0 holds the ownership and
+control bits and the length, word 1 the bus address of the buffer, and words 2
+and 3 the CPU tag; word 4, transmit only, is large-send offload and is always
+0. The tables give the fields by word; the rows that follow say what the
+driver does with them.
+
+Transmit descriptor:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 10 42 40
+
+   * - Word
+     - Bits
+     - Field
+     - Role
+   * - 0
+     - 31
+     - ``RTL9602C_NIC_DESC_OWN``
+     - The engine's turn.
+   * - 0
+     - 30
+     - ``RTL9602C_NIC_DESC_RING_END``
+     - The last descriptor of the ring.
+   * - 0
+     - 29
+     - ``RTL9602C_NIC_DESC_FIRST_SEG``
+     - First buffer of the frame.
+   * - 0
+     - 28
+     - ``RTL9602C_NIC_DESC_LAST_SEG``
+     - Last buffer of the frame.
+   * - 0
+     - 27
+     - ``RTL9602C_NIC_TXD_IP_CSUM``
+     - Set on OMCI messages only.
+   * - 0
+     - 25
+     - ``RTL9602C_NIC_TXD_NO_REWRITE``
+     - Set on every frame.
+   * - 0
+     - 23
+     - ``RTL9602C_NIC_TXD_ADD_FCS``
+     - The engine appends the FCS.
+   * - 0
+     - 21
+     - ``RTL9602C_NIC_TXD_NO_LEARN``
+     - Set on OMCI messages only.
+   * - 0
+     - 18
+     - ``RTL9602C_NIC_TXD_FLOW_SEL``
+     - Word 3 names a PON flow.
+   * - 0
+     - 16:0
+     - ``RTL9602C_NIC_TXD_LEN``
+     - Bytes in the buffer, without the FCS.
+   * - 1
+     - 31:0
+     - (bus address)
+     - The buffer.
+   * - 2
+     - 31
+     - ``RTL9602C_NIC_TXD_CPUTAG_EN``
+     - The descriptor carries CPU-tag fields.
+   * - 2
+     - 30
+     - ``RTL9602C_NIC_TXD_PRI_EN``
+     - Take the priority from ``RTL9602C_NIC_TXD_PRI``.
+   * - 2
+     - 29:27
+     - ``RTL9602C_NIC_TXD_PRI``
+     - The frame's internal priority.
+   * - 2
+     - 19
+     - ``RTL9602C_NIC_TXD_FID_EXT_EN``
+     - Set on OMCI messages only.
+   * - 3
+     - 28:23
+     - ``RTL9602C_NIC_TXD_DST_PORTS``
+     - Destination port mask, bit n for switch port n.
+   * - 3
+     - 22:16
+     - ``RTL9602C_NIC_TXD_FLOW``
+     - The PON flow, 0 to 127.
+   * - 3
+     - 1
+     - ``RTL9602C_NIC_TXD_L34_BYPASS``
+     - Set on every frame.
+   * - 4
+     - 31:0
+     - (large send)
+     - Always 0.
+
+Receive descriptor:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 8 10 42 40
+
+   * - Word
+     - Bits
+     - Field
+     - Role
+   * - 0
+     - 31
+     - ``RTL9602C_NIC_DESC_OWN``
+     - The engine's turn.
+   * - 0
+     - 30
+     - ``RTL9602C_NIC_DESC_RING_END``
+     - The last descriptor of the ring.
+   * - 0
+     - 27
+     - ``RTL9602C_NIC_RXD_FCS_ERR``
+     - Taken to mark a frame that failed its FCS.
+   * - 0
+     - 24
+     - ``RTL9602C_NIC_RXD_DMA_ERR``
+     - Taken to mark a frame whose DMA did not complete.
+   * - 0
+     - 14
+     - ``RTL9602C_NIC_RXD_OMCI``
+     - An OMCI message from the PON MAC.
+   * - 0
+     - 11:0
+     - ``RTL9602C_NIC_RXD_LEN``
+     - Received length, FCS included. The driver hands the descriptor over
+       with ``RTL9602C_RX_BUF`` (``0x600``) here.
+   * - 1
+     - 31:0
+     - (bus address)
+     - The buffer.
+   * - 2
+     - 31
+     - ``RTL9602C_NIC_RXD_CPUTAG_VALID``
+     - The switch attached a CPU tag; word 3 is valid.
+   * - 2
+     - 26:20
+     - ``RTL9602C_NIC_RXD_FLOW``
+     - The PON flow the frame arrived on, 0 to 127.
+   * - 3
+     - 31:28
+     - ``RTL9602C_NIC_RXD_SRC_PORT``
+     - The switch port the frame entered by.
+   * - 3
+     - 20:13
+     - ``RTL9602C_NIC_RXD_TRAP_REASON``
+     - Why the switch sent the frame to the CPU.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A transmit descriptor is five big-endian 32-bit words (20 bytes): word 0
+       status and length, word 1 buffer bus address, word 2 CPU-tag flags and
+       priority, word 3 destination, word 4 large-send (always 0 here). A
+       receive descriptor is four (16 bytes): words 0 to 3 alike, word 3
+       carrying where the frame came from.
+     - M, T
+     - M: the engine took a frame from a ring laid out at a 20-byte stride; a
+       wrong stride leaves OWN set. T: receive at a 16-byte stride works with
+       any traffic.
+   * - The rings are in ``dma_alloc_coherent()`` memory: uncached on this CPU,
+       which is not cache-coherent with DMA, and page-aligned. The driver and
+       the engine see each other's writes without cache maintenance.
+     - T
+     - Any traffic.
+   * - Word 0, both directions: ``RTL9602C_NIC_DESC_OWN`` (bit 31) set means the
+       engine's turn: the driver sets it when handing a descriptor over, and the
+       engine clears it when it has sent the frame or filled the buffer.
+       ``RTL9602C_NIC_DESC_RING_END`` (bit 30) marks the last descriptor, after
+       which the engine returns to descriptor 0.
+       ``RTL9602C_NIC_DESC_FIRST_SEG`` (29) and
+       ``RTL9602C_NIC_DESC_LAST_SEG`` (28) mark the first and last buffer of a
+       frame; the driver sends every frame in one buffer (both set) and
+       receives into buffers large enough for one.
+     - M
+     - OWN is cleared by the engine on transmit, and the ring wraps past its
+       last descriptor (see "The ring registers").
+   * - Word 0 is stored last, in one store that carries OWN with the rest of
+       word 0. On receive a ``dma_wmb()`` separates it from the other words. On
+       transmit the words are plain stores to uncached memory, in program
+       order, and the kick's barrier follows them; the driver relies on the
+       engine not taking a transmit descriptor before all five words are in
+       memory.
+     - T
+     - Frames arrive intact under load: no corrupt frame among all those
+       verified in the floods, upstream at 18,400 frames/s.
+   * - When a transmit completes, the engine rewrites word 0: OWN clear, bits 25
+       and 23 clear, ``RTL9602C_NIC_DESC_RING_END``,
+       ``RTL9602C_NIC_DESC_FIRST_SEG``, ``RTL9602C_NIC_DESC_LAST_SEG`` and the
+       length kept.
+     - M
+     - The ring read from memory: completed descriptors ``0x3000003c``, the
+       ring's last ``0x70000062``, one never taken ``0xb280003c``.
+
+Worked examples
+---------------
+
+The words of some descriptors, put together from the fields above and written
+as the log lines print them (eight hexadecimal digits). Word 0 of the 60-byte
+data frame is the descriptor ``b280003c`` that the ring dump above shows as
+never taken, and the words of the OMCI message are what the log line of a
+message sent prints as ``w0``, ``w2`` and ``w3``. The last descriptor of a ring
+also has ``RTL9602C_NIC_DESC_RING_END`` (bit 30) set in word 0.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 20 20 20
+
+   * - Descriptor
+     - Word 0
+     - Word 2
+     - Word 3
+   * - A 60-byte data frame to port 0 at priority 0; the transmit test frame
+       is the same
+     - ``b280003c``
+     - ``c0000000``
+     - ``00800002``
+   * - The same frame with ``SO_PRIORITY`` 5
+     - ``b280003c``
+     - ``e8000000``
+     - ``00800002``
+   * - A 48-byte OMCI message to the PON port in the OMCC's flow, 64
+     - ``baa40030``
+     - ``80080000``
+     - ``02400002``
+   * - A receive descriptor as the driver hands it to the engine
+     - ``80000600``
+     - ``00000000``
+     - ``00000000``
+
+Transmit
+--------
+
+For each frame the driver builds the descriptor from the frame and its queue.
+The switch port comes from the transmit queue, which the tag driver chose (see
+"The conduit and DSA"); the priority from ``skb->priority``, and the PON flow
+from a ``METADATA_HW_PORT_MUX`` dst that a GEM interface's frame carries. The
+driver pads a frame shorter than 60 bytes, has the engine append the FCS, and
+always names exactly one destination port. An OMCI message is sent differently
+from a data frame (see "The OMCI channel").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Word 0: ``RTL9602C_NIC_TXD_LEN`` (bits 16:0) is the number of bytes in
+       the buffer, the frame without its FCS.
+     - T
+     - Every transmit.
+   * - Word 0: ``RTL9602C_NIC_TXD_ADD_FCS`` (bit 23) makes the engine append the
+       4-byte FCS. Without it the switch discards every frame from the CPU as
+       a CRC error.
+     - M
+     - With the bit clear the switch counted, on the CPU port, a CRC error and a
+       drop for each of 2 frames sent, and nothing left the SerDes port; with
+       it set there were no errors, 128 octets left the SerDes port, and the
+       frames were captured at the far end.
+   * - A frame shorter than 60 bytes is padded to 60 before it is posted, so
+       with the appended FCS it meets the 64-byte minimum. OMCI messages are
+       the exception (see "The OMCI channel").
+     - P
+     - IEEE 802.3, clause 4.4.2 (minFrameSize, 512 bits).
+   * - Word 0: ``RTL9602C_NIC_TXD_NO_REWRITE`` (bit 25) is set on every frame,
+       and is meant to keep the switch from rewriting a frame the CPU has
+       already aimed. Its effect is not established.
+     - I
+     - No run with it clear. Clearing it and comparing frames at the far end
+       would settle it.
+   * - Word 2: ``RTL9602C_NIC_TXD_CPUTAG_EN`` (bit 31) says the descriptor
+       carries CPU-tag fields; the driver sets it on every frame. With it set,
+       word 3 decides the egress port. What the switch does with a frame
+       without it is not established: the one observation (a frame counted into
+       the CPU port and out of none) was made while frames also lacked their
+       FCS, so it decides nothing.
+     - I
+     - The bit is always set, so nothing depends on the unknown case. Sending
+       one frame with it clear and a valid FCS would settle it.
+   * - Word 3: ``RTL9602C_NIC_TXD_DST_PORTS`` (bits 28:23) is the destination
+       port mask, bit n for switch port n; ``RTL9602C_NIC_TXD_DST_PORT(p)``
+       builds the mask for one port, p taken modulo 4. The switch sends the
+       frame out of the port the mask names; the driver always names exactly
+       one.
+     - M, T
+     - M: frames aimed at port 1 or port 2 did not leave by the SerDes, none of
+       them, and with the aim back on port 0 every frame did. T: port 2 carries
+       frames upstream (OMCI both ways over ``/dev/pon0omci0``; the GEM upstream
+       path).
+   * - A frame with a zero port mask is not dropped: the switch forwards it by
+       its own decision. The driver never sends one.
+     - M
+     - A PTP frame sent with word 3 empty still left by port 0 (that port's PTP
+       transmit indicator set).
+   * - ``RTL9602C_PORT_SFP`` = 0 is where a frame goes when nothing chose a
+       port: the conduit used without DSA, and the transmit test frame
+       (``RTL9602C_NIC_TXD_DST_SFP``).
+     - T
+     - The transmit test passes at open (see "The transmit test").
+   * - Word 2: ``RTL9602C_NIC_TXD_PRI_EN`` (bit 30) makes the switch take the
+       frame's internal priority from ``RTL9602C_NIC_TXD_PRI`` (bits 29:27).
+       The driver sets both on every data frame, from ``skb->priority`` (7 at
+       most), so ``SO_PRIORITY`` and the ``tc`` priority map choose the egress
+       queue through the switch's priority maps
+       (Documentation/networking/dsa/rtl9602c.rst). Control frames carry
+       neither.
+     - M
+     - ``SO_PRIORITY`` 0, 3, 5 and 7 on frames to the SerDes port each added
+       exactly one egress queue of port 0, the one its priority maps to
+       (queues 0, 3, 5 and 7), read as queue high-water marks through the
+       switch driver's debugfs ``qdepth``.
+   * - On data frames, bits 26:0 of word 2 are written as zero: the VLAN action
+       (bits 26:25) 0 leaves the frame's own VLAN tag as it is, whereas action 3
+       replaces it with the tag held in the descriptor's own VID and priority
+       fields (actions 1 and 2 untried). The PPPoE action and index (bits
+       24:20) at 0 leave the frame unchanged, as does every other value on a
+       frame aimed by port mask.
+     - M
+     - A frame tagged VID 100 left as VID 100 with action 0, and as VID 300
+       priority 6 or VID 111 priority 2 with action 3 and those values in the
+       descriptor. All four PPPoE actions, with the L3 engine off and on, left
+       the frame an unchanged IPv4 frame.
+   * - Word 3: ``RTL9602C_NIC_TXD_L34_BYPASS`` (bit 1) is set on every frame.
+       With it clear, and with the L3 engine enabled, a frame aimed by port mask
+       still left unchanged; what it changes is not established.
+     - I
+     - Not load-bearing: it had no effect on port-aimed frames. A frame the L3
+       engine would route would settle it.
+   * - Word 3: ``RTL9602C_NIC_TXD_FLOW`` (bits 22:16) is the PON flow the frame
+       goes upstream in, 0..127; the PON MAC files the frame under that flow's
+       T-CONT queue and GEM Port-ID
+       (Documentation/networking/device_drivers/pon/rtl9602c.rst). Word 0:
+       ``RTL9602C_NIC_TXD_FLOW_SEL`` (bit 18) is set whenever word 3 names a
+       flow. Whether the flow is honoured without bit 18 is an assumption.
+     - T, I
+     - T: OMCI upstream, and GEM upstream: 40 frames of 40 reached the far end.
+   * - An OMCI frame (a PON control frame) is sent with: word 0 = OWN, first and
+       last segment, ``RTL9602C_NIC_TXD_IP_CSUM`` (bit 27),
+       ``RTL9602C_NIC_TXD_NO_REWRITE``, ``RTL9602C_NIC_TXD_ADD_FCS``,
+       ``RTL9602C_NIC_TXD_NO_LEARN`` (bit 21), ``RTL9602C_NIC_TXD_FLOW_SEL`` and
+       the length; word 2 = ``RTL9602C_NIC_TXD_CPUTAG_EN |
+       RTL9602C_NIC_TXD_FID_EXT_EN`` (bit 19), no priority; word 3 = the PON
+       port in the mask, the OMCC's flow in ``RTL9602C_NIC_TXD_FLOW``,
+       ``RTL9602C_NIC_TXD_L34_BYPASS``. It is not padded: the message is 48
+       bytes and leaves as 48.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``: the OLT walks its OMCI sequence,
+       answered through this path, and the MIB upload completes.
+   * - ``RTL9602C_NIC_TXD_IP_CSUM``, ``RTL9602C_NIC_TXD_NO_LEARN`` and
+       ``RTL9602C_NIC_TXD_FID_EXT_EN`` (which marks word 2 bits 18:16, a
+       filtering-database id left 0, as valid) are set on OMCI frames only.
+       Their effect is not established.
+     - I
+     - OMCI crosses with them set; no run with them clear. Clearing them one at
+       a time and repeating the OMCI exchange would settle it.
+
+Receive
+-------
+
+The driver hands each receive descriptor to the engine with a buffer size of
+1536 bytes (``RTL9602C_RX_BUF``) and allocates 64 bytes more
+(``RTL9602C_RX_SLACK``). The engine writes a received frame from 2 bytes into
+the buffer (``RTL9602C_NIC_RX_DATA_OFFSET``), and the length in word 0 counts
+the frame with its FCS but not those 2 bytes. Words 2 and 3 are written only
+for a frame the switch attached a CPU tag to. The driver reads them once, after
+the engine has released the descriptor, and clears them when it gives the
+descriptor back. A frame marked as an OMCI message has no Ethernet header (see
+"The OMCI channel").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The driver hands each receive descriptor over with ``RTL9602C_RX_BUF``
+       (``0x600``, 1536) in its length field, the buffer size it advertises, and
+       allocates ``RTL9602C_RX_BUF`` + ``RTL9602C_RX_SLACK`` (64) bytes
+       (``RTL9602C_RX_ALLOC``), so a frame of the advertised length written 2
+       bytes in still ends inside the buffer. That the engine writes that far
+       is not established; the margin makes the question harmless.
+     - I
+     - Not load-bearing. Receiving a frame of exactly the advertised length and
+       checking the bytes past it would settle it.
+   * - Word 0: ``RTL9602C_NIC_RXD_LEN`` (bits 11:0) is the received length in
+       bytes including the 4-byte FCS (``RTL9602C_NIC_RX_FCS_LEN``); the driver
+       removes the FCS by length. It drops as a length error a frame shorter
+       than 20 bytes by that count (``RTL9602C_NIC_RX_DATA_OFFSET`` +
+       ``ETH_HLEN`` + ``RTL9602C_NIC_RX_FCS_LEN``) or longer than 1536, so the
+       CPU receives no frame longer than 1536 bytes with its FCS.
+     - T
+     - Received frames reach the stack at the length that was sent: a 60-byte
+       PTP frame arrives as 60 bytes (also measured on the DFP-34X-2C3).
+   * - The engine writes a received frame starting 2 bytes into the buffer
+       (``RTL9602C_NIC_RX_DATA_OFFSET``); the 2 bytes are not in the length.
+     - T
+     - Every received frame parses.
+   * - Word 0: ``RTL9602C_NIC_RXD_FCS_ERR`` (bit 27) and
+       ``RTL9602C_NIC_RXD_DMA_ERR`` (bit 24) are taken to mark a frame that
+       failed its FCS or whose DMA did not complete. The driver drops such a
+       frame and counts it (``rx_errors``, with ``rx_crc_errors`` or
+       ``rx_fifo_errors``).
+     - I
+     - Neither has been observed set. Not load-bearing for good frames. Sending
+       a frame with a bad FCS from the host and reading the counters would
+       settle it.
+   * - Word 0: ``RTL9602C_NIC_RXD_OMCI`` (bit 14) marks an OMCI message from the
+       PON MAC. It has no Ethernet header: once the FCS and the 2-byte offset
+       are off, the data starts at the message's first byte (the 4 bytes the
+       PON MAC appends after each message are described with the PON MAC in
+       Documentation/networking/device_drivers/pon/rtl9602c.rst).
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``: OLT messages reach the OMCI port
+       only through this bit.
+   * - Word 2: ``RTL9602C_NIC_RXD_CPUTAG_VALID`` (bit 31) says the switch
+       attached a CPU tag; word 3 is written only then. Read from a frame
+       without it, the source port would be 0 for everything, which on this
+       board is also the one live port, so the driver uses word 3 only when the
+       bit is set and otherwise lets the tag driver drop the frame.
+     - M
+     - With the switch's insert bit clear (see "The CPU tag, switch side"),
+       bit 31 and word 3 read 0 on every frame; with it set, bit 31 was 1 on
+       every frame and word 3 carried the port fields.
+   * - Word 2: ``RTL9602C_NIC_RXD_FLOW`` (bits 26:20) is the PON flow a frame
+       from the PON port arrived on, 0..127.
+     - T
+     - GEM downstream: frames on GEM Port-ID 4095 were delivered to that GEM
+       interface, 80 of 80.
+   * - Word 3: ``RTL9602C_NIC_RXD_SRC_PORT`` (bits 31:28) is the switch port the
+       frame entered by: 0 for the SerDes, 2 for the PON.
+     - M, T
+     - M: 0 for frames from the host. T: port 2, OMCI both ways over
+       ``/dev/pon0omci0`` (the OMCI handler takes frames from port 2 only).
+   * - Word 3: ``RTL9602C_NIC_RXD_TRAP_REASON`` (bits 20:13) says why the switch
+       sent the frame to the CPU: 8 bits, ``RTL9602C_RX_REASONS`` = 256 values.
+       The driver counts tagged frames per reason (see "Statistics"); 0 is
+       ordinary forwarding to the CPU; the other values belong to the blocks
+       that trap frames (Documentation/networking/dsa/rtl9602c.rst).
+     - M
+     - Through debugfs ``rtl9602c-eth/rxreason``: a burst of frames forwarded to
+       the CPU counted under reason 0, a burst of routable frames under reason
+       16.
+   * - The driver reads words 2 and 3 once, after ``dma_rmb()``, before the
+       descriptor is given back, and clears them when it gives it back, so a
+       stale value can never pass for a fresh one.
+     - T
+     - Any traffic.
+   * - A received frame is handed up only once its replacement buffer is mapped;
+       if there is no memory, the frame is dropped (``rx_dropped``) and its own
+       buffer goes straight back into the descriptor, so the ring never holds a
+       descriptor without a buffer.
+     - M
+     - At 40,000 frames/s the flood runs through in this order. Handing the
+       frame up before its replacement is mapped leaves a descriptor without a
+       buffer under the same flood, and the next poll crashes within 11
+       seconds.
+
+The CPU tag, switch side
+========================
+
+The CPU tag is one mechanism with two halves. The engine's half is in the
+descriptors (see "Descriptors"). The switch's half is one register of the
+switch, ``RTL9602C_CPUTAG_CTRL``, which the switch driver writes in its setup
+by read-modify-write: ``RTL9602C_CPUTAG_CTRL_INSERT`` makes the switch attach a
+tag to every frame it sends to the CPU port, which is what fills receive words
+2 and 3, and ``RTL9602C_CPUTAG_CTRL_PARSE`` makes it read the tag of the frames
+from the CPU. The switch's frame-length check counts the CPU tag on a frame
+entering from the CPU port, although the tag is not in the frame, and the
+switch driver allows for it in the limit it programs
+(Documentation/networking/dsa/rtl9602c.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_CPUTAG_CTRL`` (switch window ``+0x023030``) reads 0 when the
+       switch driver first touches it.
+     - M
+     - The register read at bring-up.
+   * - ``RTL9602C_CPUTAG_CTRL_INSERT`` (bit 8): the switch attaches a CPU tag to
+       every frame it sends to the CPU port, which is what fills receive words 2
+       and 3 (see "Receive").
+     - M
+     - With the bit clear, the tag-present bit and word 3 read 0 on every
+       frame; with it set they carry the port fields (see "Receive").
+   * - ``RTL9602C_CPUTAG_CTRL_PARSE`` (bit 9): the switch reads the CPU tag of
+       frames from the CPU. The switch driver sets both bits at setup, by
+       read-modify-write.
+     - I
+     - Never tested clear: the port-mask measurement (see "Transmit") ran with
+       it set. Clearing the bit and repeating that measurement would settle it.
+   * - ``RTL9602C_CPUTAG_LEN`` = 8: the switch's maximum-frame-length check
+       counts 8 bytes for the CPU tag on a frame entering from the CPU port,
+       although the tag is not in the frame. A frame of the same size entering
+       from the SerDes for the CPU passes without it. The switch driver
+       therefore programs its frame-length limit (``RTL9602C_FRAMELEN_LIMIT0``)
+       as the MTU plus ``RTL9602C_FRAME_OVERHEAD`` = 34.
+     - M
+     - The limit was bisected with 1500-byte pings over a VLAN (1522-byte
+       frames): the CPU's replies were dropped at a limit of 1528 and passed at
+       1530; the requests from the host passed at 1526. A long reply over the
+       management VLAN holds it.
+   * - The other 26 bytes of ``RTL9602C_FRAME_OVERHEAD``: the 14-byte Ethernet
+       header and the 4-byte FCS, and two 4-byte VLAN tags, an S-tag over a
+       C-tag, which is what the board translates between.
+     - P
+     - IEEE 802.3, clause 3.1.1 (frame format); IEEE 802.1Q, clause 9 (tag
+       format).
+
+The timestamp tag on PTP frames
+===============================
+
+The switch writes the receive time of a PTP message into the frame itself. This
+is separate from the CPU tag: the timestamp tag is in the frame, the CPU tag in
+the descriptor. The switch inserts 16 bytes into a well-formed PTP message that
+it sends to the CPU port, between the source address and the message's own
+EtherType, and the tag opens with EtherType ``0x8899``. The conduit takes the
+tag off before DSA or a PTP stack sees the frame: it keeps the time as the
+frame's hardware timestamp (``skb_hwtstamps()``), moves the two addresses
+forward by 16 bytes and pulls the tag, so that the frame reaches the stack as
+it was sent. The tag carries only the low 16 bits of the seconds of the
+switch's PTP clock; the switch driver completes them from the clock
+(``rtl9602c_port_rxtstamp()``, Documentation/networking/dsa/rtl9602c.rst).
+
+The tag, with offsets from the start of the frame as the switch delivers it:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 8 82
+
+   * - Offset
+     - Bytes
+     - Content
+   * - 12
+     - 2
+     - EtherType ``0x8899`` (``RTL9602C_ETH_P_REALTEK``).
+   * - 14
+     - 1
+     - Protocol byte (``RTL9602C_PTP_TAG_PROTO_OFFSET``): 4 in every tag seen.
+   * - 15
+     - 1
+     - Reason (``RTL9602C_PTP_TAG_REASON_OFFSET``): 240 or 241.
+   * - 16
+     - 6
+     - Not read.
+   * - 22
+     - 2
+     - The low 16 bits of the seconds (``RTL9602C_PTP_TAG_SEC_OFFSET``).
+   * - 24
+     - 4
+     - The nanoseconds (``RTL9602C_PTP_TAG_NSEC_OFFSET``).
+   * - 28
+     - 2
+     - The frame's own EtherType, ``0x88f7`` for PTP over Ethernet; the rest of
+       the frame follows.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The switch inserts 16 bytes (``RTL9602C_PTP_TAG_LEN``) into a well-formed
+       PTP message that it sends to the CPU port, between the source address and
+       the frame's own EtherType: at offset 12 EtherType ``0x8899``
+       (``RTL9602C_ETH_P_REALTEK``), the frame's own EtherType then at offset
+       28.
+     - M
+     - A 60-byte Sync with EtherType ``0x88f7`` arrived as 76 bytes, bytes 12 to
+       27 inserted.
+   * - Offset 14 (``RTL9602C_PTP_TAG_PROTO_OFFSET``) is a protocol byte, 4 in
+       every tag seen. Offset 15 (``RTL9602C_PTP_TAG_REASON_OFFSET``) says why
+       the frame went up: 240 for a PTP frame sent to the CPU in the ordinary
+       way, 241 for one the ingress mirror action copied. No other value has
+       been seen. The driver logs each new reason value once and treats all
+       alike.
+     - M
+     - The kernel log with the switch's ingress action for Sync at "none" (240)
+       and at "mirror" (241).
+   * - Offsets 22 and 23 (``RTL9602C_PTP_TAG_SEC_OFFSET``) are the low 16 bits
+       of the seconds of the switch's PTP clock at the moment the switch
+       stamped the frame; offsets 24 to 27 (``RTL9602C_PTP_TAG_NSEC_OFFSET``)
+       the nanoseconds, 32 bits, big-endian, counted in nanoseconds. The
+       conduit stores the two as the frame's hardware timestamp; the switch
+       driver fills in the upper seconds from its clock.
+     - M
+     - The seconds tracked the PTP clock read alongside; frames sent 250 ms
+       apart were stamped 250.221 and 250.177 ms apart, frames 200 ms apart
+       200,209,520 and 200,212,192 ns apart, read through ``SO_TIMESTAMPING``
+       on the switch port.
+   * - Offsets 16 to 21 are not read (one dump read ``00 08 00 00 00 00``).
+       Whether offsets 18 to 21 carry higher bits of the seconds is not
+       established, nor whether the stamp is taken when the frame enters the
+       switch or when it leaves toward the CPU.
+     - I
+     - Not load-bearing for this driver: the upper seconds come from the clock,
+       and the stamp is passed on as it is. Reading the bytes with the clock set
+       past 65,536 s would settle the first question.
+   * - The insertion does not depend on the port's PTP enable nor on the ingress
+       action, and the EtherType alone does not cause it: bare frames with
+       EtherType ``0x88f7``, ``0x88f8`` or ``0x0800`` and a zero body arrive
+       untagged.
+     - M
+     - Frames were tagged with the port's PTP enable on and off and under every
+       ingress action; the three bare frames arrived at 60 bytes.
+   * - The conduit takes the tag off: when a frame longer than 16 bytes has
+       EtherType ``0x8899`` at offset 12, it records the timestamp, moves the
+       two addresses forward by 16 bytes and pulls the tag, so the frame reaches
+       the stack as it was sent. It must: a PTP message over Ethernet is
+       recognised by EtherType ``0x88F7``, which neither the DSA core's PTP
+       classification nor any PTP stack would find behind the tag.
+     - M
+     - The Sync reaches user space as 60 bytes with EtherType ``0x88f7``, three
+       frames of three. PTP over Ethernet: IEEE 1588-2008, Annex F.
+   * - Only PTP-tagged frames carry EtherType ``0x8899`` at offset 12 when they
+       reach the conduit. The switch's loop-detection probes use EtherType
+       ``0x8899`` too (captured at the far end), and any such frame delivered
+       to the CPU would lose 16 bytes of its payload and gain a timestamp; the
+       protocol byte at offset 14 (4 for the timestamp tag) would tell them
+       apart, but the driver does not check it.
+     - I
+     - Load-bearing whenever a ``0x8899`` frame of another protocol reaches the
+       CPU. Sending one, with a protocol byte other than 4, to the board's
+       address and checking that it arrives whole would settle it.
+
+The conduit and DSA
+===================
+
+DSA reaches the CPU port through its conduit, and a DSA switch normally has a
+tag in every frame: the tag driver adds it on transmit and removes it on
+receive. Here the CPU tag is in the descriptors, so the tag driver has no bytes
+to move and the work is split between it and the conduit as follows.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 43 43
+
+   * - Direction
+     - Tag driver (``net/dsa/tag_rtl9602c.c``)
+     - Conduit (``rtl9602c-eth.c``)
+   * - Transmit
+     - Records the destination port of the user port in the frame's queue
+       mapping and returns the frame unchanged. Drops a frame sent on the
+       ``pon`` interface.
+     - Turns the queue into the port mask of descriptor word 3, and adds the
+       priority (word 2) and, for a GEM frame, the flow.
+   * - Receive
+     - Its callback drops every frame it is called with.
+     - Attaches to each tagged frame a dst that names the source port, so that
+       DSA delivers the frame on that user port without calling the tag
+       driver.
+
+The tag driver
+--------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Tag protocol ``DSA_TAG_PROTO_RTL9602C`` (``rtl9602c``, value 30,
+       ``tag_rtl9602c.c``). Its transmit callback moves no bytes and records the
+       destination port in ``skb->queue_mapping``; it drops, counting
+       ``tx_dropped``, a frame sent on the PON port's own interface, which names
+       no flow. Its receive callback drops every frame that reaches it: only a
+       frame the conduit could not attribute gets there.
+     - T
+     - Frames from the host-facing user port reach the SerDes, and frames on the
+       ``pon`` interface itself are counted as dropped.
+   * - The tag driver has to exist although it moves no bytes:
+       ``netdev_uses_dsa()`` is true only when the conduit's CPU port has a
+       receive callback, and ``eth_type_trans()`` hands frames to DSA only then.
+     - T
+     - The DSA user ports receive at all (any traffic to the board).
+
+Choosing the port
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - For every tagged frame the conduit attaches a ``METADATA_HW_PORT_MUX``
+       dst whose ``port_id`` is ``RTL9602C_NIC_RXD_SRC_PORT``, one
+       preallocated per switch port; ``dsa_switch_rcv()`` delivers on it
+       without calling the tag driver.
+     - T
+     - Any frame to the board reaches its user port.
+   * - The conduit has one transmit queue per switch port
+       (``RTL9602C_SW_PORTS`` = 4). Its ``ndo_select_queue`` returns the port
+       the tag driver recorded, or 0 when DSA is not in use or the recorded
+       port is not one of the queues, and the conduit puts ``BIT(queue)`` in
+       word 3. With a single queue the core resets ``queue_mapping`` to 0 and
+       every frame goes to port 0; ``skb->cb``, the other obvious carrier, is
+       overwritten by ``struct qdisc_skb_cb`` in ``dev_queue_xmit()``.
+     - M
+     - With one queue, every frame for the PON port left by port 0. A priority
+       carried in ``skb->cb`` read back 0 for ``SO_PRIORITY`` 5.
+   * - A GEM interface's frame reaches the conduit directly, on the PON port's
+       queue, with a ``METADATA_HW_PORT_MUX`` dst whose ``port_id`` is the flow;
+       the conduit keeps dsts (``netif_keep_dst()``) and puts the flow in word 3
+       with ``RTL9602C_NIC_TXD_FLOW_SEL``.
+     - T
+     - GEM upstream: 40 frames of 40 reached the far end.
+
+The interface to the switch driver
+----------------------------------
+
+The switch driver reaches the PON port's control and data paths through the
+conduit, with the five calls of ``include/linux/dsa/rtl9602c.h``. Each call
+checks that its ``dev`` is this driver's conduit and does nothing, or returns
+``-EINVAL``, if it is not. There is one OMCI handler and one data-frame handler
+at a time.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 44 56
+
+   * - Call
+     - What it does
+   * - ``rtl9602c_conduit_ctrl_attach(dev, rx, ctx)``
+     - Attaches the OMCI receive handler. Returns 0, ``-EINVAL`` for a device
+       that is not the conduit or a NULL handler, or ``-EBUSY`` if a handler is
+       attached already.
+   * - ``rtl9602c_conduit_ctrl_detach(dev)``
+     - Detaches it. On return no poll is still running the handler and its
+       context may be freed. Process context; sleeps.
+   * - ``rtl9602c_conduit_ctrl_xmit(dev, skb, port, stream)``
+     - Sends an OMCI message (see "The OMCI channel"): ``port`` is the switch
+       port it leaves by, the PON port, and ``stream`` the PON flow to send it
+       in, the OMCC's, 0 to 127. Returns 0 once the message is queued, and the
+       driver then owns ``skb``; otherwise ``skb`` stays the caller's and the
+       error is ``-EINVAL`` (a device that is not the conduit, a port or flow
+       out of range, or an empty, oversized or non-linear ``skb``),
+       ``-ENETDOWN`` while the conduit is down, ``-ENOMEM`` if ``skb`` cannot
+       be mapped, or ``-EAGAIN`` while the transmit ring is full.
+   * - ``rtl9602c_conduit_flow_attach(dev, rx, ctx)``
+     - Attaches the receive handler for data frames; returns as
+       ``rtl9602c_conduit_ctrl_attach()`` does.
+   * - ``rtl9602c_conduit_flow_detach(dev)``
+     - Detaches it; as ``rtl9602c_conduit_ctrl_detach()``.
+
+The two handler types:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Type
+     - Called
+   * - ``rtl9602c_ctrl_rx_t``: ``bool (*)(void *ctx, struct sk_buff *skb,
+       unsigned int port)``
+     - From the receive poll, for each frame that the PON MAC marks as OMCI and
+       that carries a CPU tag, with the frame and the switch port it came in by.
+       The data starts at the message's first byte. Returns true if it took the
+       frame, which it then owns; false lets the frame continue up the ordinary
+       receive path.
+   * - ``rtl9602c_flow_rx_t``: ``bool (*)(void *ctx, struct sk_buff *skb,
+       unsigned int port, unsigned int flow)``
+     - From the receive poll, while DSA uses the conduit, for each frame with a
+       CPU tag that the OMCI handler has not taken. The frame is as it arrived,
+       from its Ethernet header, before DSA sees it and before a PTP timestamp
+       tag is taken off. ``flow`` (0 to 127) means something only for a frame
+       from the PON port. Returns true if it took the frame; false lets DSA
+       deliver it to the user port of ``port``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PORT_PON`` = 2 (in the shared header) is the switch port
+       behind which the GPON MAC sits.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``.
+   * - The switch driver attaches two receive handlers to the conduit: one for
+       OMCI frames (``RTL9602C_NIC_RXD_OMCI`` and a tag), called with the source
+       port; one for every tagged data frame, called with the source port and
+       the flow. A handler returns whether it took the frame; a frame it leaves
+       goes up the ordinary path. Attach publishes the context before the
+       handler (release, paired with an acquire on the receive path); detach
+       clears the handler and waits out every poll (``synchronize_net()``).
+       ``rtl9602c_conduit_ctrl_xmit()`` sends an OMCI frame (see "The OMCI
+       channel"), returning ``-EAGAIN`` when the ring is full. Without the
+       conduit driver built, the header's stubs return ``-EOPNOTSUPP``.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``; GEM downstream, frames delivered
+       to their GEM interface by flow.
+   * - The conduit is named ``cpu``: the user ports appear as ``sfp@cpu`` and
+       ``pon@cpu``.
+     - T
+     - ``ip link`` on every boot.
+
+The OMCI channel
+================
+
+OMCI messages (ITU-T G.988) cross the PON port in the flow of the OMCC, the
+ONU's OMCI channel. Downstream, the PON MAC hands the message to the switch,
+which traps it to the CPU port and marks it in the receive descriptor
+(``RTL9602C_NIC_RXD_OMCI``); the conduit offers it, with its source port, to the
+switch driver's OMCI handler. A message has no Ethernet header. Upstream, the
+switch driver's OMCI port passes the message to
+``rtl9602c_conduit_ctrl_xmit()`` with the PON port and the OMCC's flow. The
+message shares the transmit ring with data frames, leaves at the length given
+(a 48-byte baseline message is not padded to 60) and carries no priority.
+Messages and data share the one receive ring, so a flood of data to the CPU
+drops OMCI messages too (see "Sizes, load and locking"). The four bytes that
+follow each downstream message, and the flow, T-CONT and Port-ID of the OMCC,
+belong to the PON MAC
+(Documentation/networking/device_drivers/pon/rtl9602c.rst); the OMCI port
+itself is part of the PON class (Documentation/networking/pon.rst).
+
+The descriptor words of the two kinds of transmitted frame:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 45 45
+
+   * - Word
+     - Data frame (``rtl9602c_eth_start_xmit()``)
+     - OMCI message (``rtl9602c_conduit_ctrl_xmit()``)
+   * - 0
+     - ``RTL9602C_NIC_DESC_OWN``, first and last segment,
+       ``RTL9602C_NIC_TXD_ADD_FCS``, ``RTL9602C_NIC_TXD_NO_REWRITE``, the
+       length, and ``RTL9602C_NIC_TXD_FLOW_SEL`` when the frame carries a flow
+       dst.
+     - ``RTL9602C_NIC_DESC_OWN``, first and last segment,
+       ``RTL9602C_NIC_TXD_IP_CSUM``, ``RTL9602C_NIC_TXD_NO_REWRITE``,
+       ``RTL9602C_NIC_TXD_ADD_FCS``, ``RTL9602C_NIC_TXD_NO_LEARN``,
+       ``RTL9602C_NIC_TXD_FLOW_SEL`` and the length.
+   * - 2
+     - ``RTL9602C_NIC_TXD_CPUTAG_EN``, ``RTL9602C_NIC_TXD_PRI_EN`` and the
+       priority from ``skb->priority``.
+     - ``RTL9602C_NIC_TXD_CPUTAG_EN`` and ``RTL9602C_NIC_TXD_FID_EXT_EN``; no
+       priority.
+   * - 3
+     - The port of the queue, the flow from a flow dst (0 otherwise) and
+       ``RTL9602C_NIC_TXD_L34_BYPASS``.
+     - The PON port, the OMCC's flow and ``RTL9602C_NIC_TXD_L34_BYPASS``.
+   * - Length
+     - Padded to 60 bytes.
+     - Not padded.
+   * - Ring full
+     - The queues stop and the stack retries.
+     - The call returns ``-EAGAIN``.
+
+Statistics
+==========
+
+The conduit counts in the ``net_device`` statistics that ``ip -s link show cpu``
+prints. It has no ``ethtool`` statistics of its own: ``ethtool -S cpu`` lists
+the switch's counters for the CPU port, which DSA adds under the prefix
+``s00_p03_`` (Documentation/networking/dsa/rtl9602c.rst). The switch counts the
+same frames on its side of the engine, so its counters cross-check the
+conduit's: the frames the switch delivered to the CPU port match the frames the
+conduit received plus the missed frames, to within a few (see "Registers"), and
+``tx_packets`` of the conduit tracks the switch's CPU-port counter (see "Sizes,
+load and locking"). The two sides are read with::
+
+    ip -s link show cpu
+    ethtool -S cpu
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Counter
+     - Counted
+   * - ``rx_packets``
+     - For each frame handed to the stack, and for each frame that the OMCI
+       handler or the data-frame handler took.
+   * - ``rx_bytes``
+     - For each frame handed to the stack, its length after ``eth_type_trans()``
+       has pulled the 14-byte Ethernet header. Frames the handlers took add
+       nothing.
+   * - ``rx_dropped``
+     - A frame for which no replacement buffer could be allocated or mapped. The
+       frame is dropped and its own buffer goes back to the descriptor.
+   * - ``rx_errors``
+     - A descriptor with ``RTL9602C_NIC_RXD_FCS_ERR`` or
+       ``RTL9602C_NIC_RXD_DMA_ERR`` set.
+   * - ``rx_crc_errors``
+     - Those with ``RTL9602C_NIC_RXD_FCS_ERR`` set.
+   * - ``rx_fifo_errors``
+     - Those with ``RTL9602C_NIC_RXD_DMA_ERR`` set.
+   * - ``rx_length_errors``
+     - A frame shorter than 20 bytes or longer than 1536 by the length in word
+       0.
+   * - ``rx_missed_errors``
+     - Frames the engine dropped for want of a receive descriptor: on every
+       poll the 16-bit difference of ``RTL9602C_NIC_RX_NO_DESC_CNT`` since the
+       previous poll.
+   * - ``tx_packets``, ``tx_bytes``
+     - When the reaper finds a completed descriptor that carries a frame: a
+       data frame or an OMCI message, not the transmit test. The bytes are the
+       frame's length, padding included, without the FCS.
+   * - ``tx_dropped``
+     - A data frame that could not be padded or mapped. The tag driver also
+       counts here the frames it drops on the ``pon`` interface, in that
+       interface's statistics.
+   * - ``tx_errors``
+     - Not counted. The totals line at stop prints it.
+
+The frames the switch sent up are also counted per trap reason, in memory, for
+frames that carry a CPU tag, that the OMCI handler did not take, while DSA uses
+the conduit. ``/sys/kernel/debug/rtl9602c-eth/rxreason`` (mode ``0600``) lists
+the reasons with a non-zero count, as many as fit in a page, and any write to it
+clears all the counts::
+
+    # cat /sys/kernel/debug/rtl9602c-eth/rxreason
+    reason   0  1542
+    reason  16  87
+
+Before any tagged frame has arrived it reads "no tagged frame has been
+received".
+
+Logging
+=======
+
+The driver prefixes its lines with ``rtl9602c-eth`` and the interface name. The
+open line of a boot reads, for example::
+
+   rtl9602c-eth cpu: up: interrupt 34, msr 10, config 20000000; transmit test ok
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The driver logs the address at probe, the self-test result, the
+       interrupt, ``RTL9602C_NIC_MEDIA_STAT`` and ``RTL9602C_NIC_CFG`` at open,
+       the totals at stop, the first ``RTL9602C_RX_LOG`` (4) received frames,
+       the first frame from each source port, and the first 4 OMCI frames each
+       way with their descriptor words.
+     - T
+     - The kernel log of a boot.
+
+The lines, with the conversions the driver uses:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - When
+     - Line
+   * - Probe, failure
+     - ``cannot map the CPU port registers``, ``no interrupt declared for the
+       CPU port`` or ``cannot register the interface``, reported by
+       ``dev_err_probe()``
+   * - Probe, unusable address
+     - ``identity registers hold <MAC>, which is not a usable address; using a
+       random one``, a device warning that carries the device name instead of
+       the prefix
+   * - Probe, after registration
+     - ``CPU port at <address>, address <MAC>``
+   * - Probe, self-test
+     - ``self-test passed: the engine took a frame and returned the
+       descriptor``, ``SELF-TEST FAILED: the engine never released the
+       descriptor, so the ring is not being consumed`` or ``self-test skipped:
+       no memory for the rings``
+   * - Open
+     - ``up: interrupt <n>, msr <MEDIA_STAT>, config <CFG>; transmit test ok``
+       or ``transmit test FAILED -- the engine kept the descriptor``
+   * - Stop
+     - ``down: rx <frames> frames / <bytes> bytes, tx <frames> / <bytes>;
+       dropped rx <n> tx <n>, tx errors <n>``
+   * - The first 4 frames, and the first frame from each source port
+     - ``<eth rx> port <p> receives: <n> bytes from <MAC>, proto 0x<type>,
+       cpu-tagged; descriptor <w0> <w2> <w3>``; for a frame without a CPU tag
+       ``NO CPU TAG, so the source port is a guess`` takes the place of
+       ``cpu-tagged`` and the port printed is 0. ``<type>`` is the
+       ``skb->protocol`` that ``eth_type_trans()`` returns, which is
+       ``ETH_P_XDSA`` (``0x00f8``) while DSA uses the conduit
+   * - The first 4 OMCI messages received
+     - ``pon ctrl[<i>] <n> bytes w0 <w0> w2 <w2> w3 <w3> src <p>:`` and the
+       first 16 bytes
+   * - The first 4 OMCI messages sent
+     - ``pon ctrl tx[<i>] <n> bytes w0 <w0> w2 <w2> w3 <w3> slot <i>:`` and the
+       first 16 bytes
+   * - A new PTP tag reason
+     - ``ptp tag reason <reason>, protocol <byte>``, once per reason value
+
+Sequences
+=========
+
+The steps are in the order the driver takes them. The tag in parentheses at the
+end of a step is the tag of the fact the step rests on (see the tables above);
+a step tagged I rests on an assumption.
+
+Probe
+-----
+
+1. Allocate the network device with ``RTL9602C_SW_PORTS`` (4) transmit queues
+   and one receive queue, name it ``cpu`` and keep dsts (``netif_keep_dst()``).
+   Purpose: a queue per switch port carries the destination port, the name
+   makes the user ports ``sfp@cpu`` and ``pon@cpu``, and the flow of a GEM
+   frame travels in a dst. (M, T)
+2. Map the register window and take the interrupt from the device tree.
+   Purpose: reach the engine and its interrupt line. (M)
+3. Read the MAC address from the engine's address registers. Use it if it is a
+   valid unicast address; otherwise warn and use a random one. Purpose: the
+   interface has the unit's own address. (M)
+4. Allocate one ``METADATA_HW_PORT_MUX`` dst per switch port, with ``port_id``
+   the port number. Purpose: a received frame gets the dst of its source port.
+   (T)
+5. Add the NAPI poll, and create the debugfs directory ``rtl9602c-eth`` with
+   its file ``rxreason``. Purpose: the poll does the receive work, and the
+   reasons can be read back. (M)
+6. Register the network device and log the address line. Purpose: DSA attaches
+   the user ports to a registered conduit. (T)
+7. Run the transmit test on rings set up for it alone and free them again; log
+   the result. The result does not stop the probe. Purpose: report whether the
+   engine takes and returns a descriptor. (M)
+
+Setting the engine up
+---------------------
+
+This is done by the open, and by the transmit test at probe, in this order:
+
+1. Allocate both rings and give every receive descriptor a mapped buffer:
+   ``RTL9602C_NIC_DESC_OWN | 0x600``, and ``RTL9602C_NIC_DESC_RING_END`` on the
+   last. Purpose: the engine may fill any descriptor once it is started. (T)
+2. Write the transmit ring's bus address to ``RTL9602C_NIC_TX_RING_BASE`` and 0
+   to ``RTL9602C_NIC_TX_RING_CUR``; the same for the receive ring. Purpose:
+   both sides start at descriptor 0. (M for the base, T for the index)
+3. Write ``0x0f`` to ``RTL9602C_NIC_RX_FILTER``, ``0x0c00`` to
+   ``RTL9602C_NIC_TX_CFG`` and ``0x0a`` to ``RTL9602C_NIC_CTRL``. Purpose:
+   accept every frame the switch hands over, and a receive format that does not
+   depend on the boot loader. (T)
+4. Write 255 to ``RTL9602C_NIC_RX_RING_LEN`` and to
+   ``RTL9602C_NIC_RX_RING_TAIL``. Purpose: a 256-descriptor ring, all of it
+   available. (T)
+5. Write 16 to ``RTL9602C_NIC_RX_PAUSE_ON_THR`` and 48 to
+   ``RTL9602C_NIC_RX_PAUSE_OFF_THR``; then write 0 to
+   ``RTL9602C_NIC_RX_RING_LEN_HI``, ``RTL9602C_NIC_RX_RING_TAIL_HI`` and
+   ``RTL9602C_NIC_RX_PAUSE_OFF_THR_HI``. Purpose: the thresholds, and no high
+   part left over from the boot loader. (M for the thresholds, T for the high
+   parts)
+6. Write 0 to ``RTL9602C_NIC_REG_13FC``. Purpose: a known value in a register
+   whose function is not established. (I)
+7. Write all ones to ``RTL9602C_NIC_MC_HASH_LO`` and
+   ``RTL9602C_NIC_MC_HASH_HI``. Purpose: no multicast group is filtered. (T)
+8. Write ``0x20000000`` to ``RTL9602C_NIC_CFG`` and 0 to
+   ``RTL9602C_NIC_RX_PRI_TO_RING``. Purpose: the receive interrupt stays in
+   ``RTL9602C_NIC_IRQ_STAT``, and every priority goes to the one ring. (M for
+   the configuration, T for the steering)
+9. Clear bits 7 and 6 of ``RTL9602C_NIC_MEDIA_STAT``, keeping the other bits.
+   Purpose: no pause between the engine and the switch. (M)
+10. Write ``0x901eff04`` to ``RTL9602C_NIC_CPUTAG`` and ``0x4072`` to
+    ``RTL9602C_NIC_CPUTAG_SRC``. Purpose: the CPU tag in the descriptors, both
+    directions. (T for the tag register, M for the source register)
+11. Write ``0x32000001`` to ``RTL9602C_NIC_RING_CFG``, then ``0xc059f130`` to
+    ``RTL9602C_NIC_DMA_CTRL``. Purpose: configure, then start. (T)
+
+Open
+----
+
+1. Allocate the rings and set the engine up (above). Purpose: descriptors and
+   registers are ready before anything can arrive. (T)
+2. Read ``RTL9602C_NIC_RX_NO_DESC_CNT`` as the base for the missed frames.
+   Purpose: the count starts from the value at open. (M)
+3. Run the transmit test. Its result is logged and does not stop the open.
+   Purpose: every boot shows whether the engine takes and returns a
+   descriptor. (M)
+4. Enable the poll. Purpose: the poll can run as soon as the interrupt does.
+   (T)
+5. Write ``0xffff`` to ``RTL9602C_NIC_IRQ_STAT``. Purpose: nothing stale
+   reaches the handler. (T)
+6. Request the interrupt; if that fails, undo the steps above and fail the
+   open. Purpose: the handler is installed before any cause is unmasked. (M)
+7. Write ``RTL9602C_NIC_IRQ_MASK_RXTX`` to ``RTL9602C_NIC_IRQ_MASK``. Purpose:
+   from here the causes in the mask raise the interrupt. (T)
+8. Start the transmit queues and log the open line. Purpose: the stack may
+   transmit. (T)
+
+The transmit test
+-----------------
+
+The test sends one 60-byte broadcast frame from the interface's own address,
+aimed at the SerDes port (word 2 ``RTL9602C_NIC_TXD_CPUTAG_EN |
+RTL9602C_NIC_TXD_PRI_EN``, word 3 ``RTL9602C_NIC_TXD_DST_SFP |
+RTL9602C_NIC_TXD_L34_BYPASS``), kicks the engine, and waits up to 100 times,
+100 to 200 microseconds each, for OWN to clear. On success both driver indices
+step past the descriptor it used, because the engine has moved past it (see
+"The ring registers"). Either way the descriptor is taken back and its buffer
+freed.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - At open the transmit test passes on every boot.
+     - M
+     - The open line of every boot: ``transmit test ok``.
+   * - At probe the same test (rings up, one frame, rings down) fails on every
+       boot: the engine does not release the descriptor.
+     - M
+     - The boot log of every boot: ``SELF-TEST FAILED`` at probe, ``transmit
+       test ok`` at open.
+   * - The probe-time failure is because the switch driver has not set up the
+       CPU port yet (it forces the port's link up in its setup, see
+       Documentation/networking/dsa/rtl9602c.rst).
+     - I
+     - Running the test after the switch driver's setup and seeing it pass would
+       settle it.
+
+Transmitting a data frame
+-------------------------
+
+1. Pad the frame to 60 bytes and map it for DMA. Purpose: with the appended FCS
+   the frame meets the 64-byte minimum, and the engine reads it from memory.
+   (P)
+2. Build word 0: ``RTL9602C_NIC_DESC_OWN``, first and last segment,
+   ``RTL9602C_NIC_TXD_ADD_FCS``, ``RTL9602C_NIC_TXD_NO_REWRITE`` and the length;
+   add ``RTL9602C_NIC_TXD_FLOW_SEL`` and take the flow from the dst if the frame
+   carries a flow dst. Purpose: describe the frame to the engine. (T)
+3. Take the ring lock. If the ring is full, stop every queue, drop the lock,
+   unmap the frame and return busy. Purpose: one ring and one lock serve every
+   queue, and the stack retries when the ring has room again. (T)
+4. Write word 1 (the buffer), word 2 (``RTL9602C_NIC_TXD_CPUTAG_EN |
+   RTL9602C_NIC_TXD_PRI_EN`` and the priority), word 3 (the queue's port, the
+   flow, ``RTL9602C_NIC_TXD_L34_BYPASS``) and word 4 (0). Purpose: aim the frame
+   at one port, with its priority and flow. (T)
+5. Write word 0 last, with ``RTL9602C_NIC_DESC_RING_END`` if this is the last
+   descriptor of the ring. Advance the head, and stop the queues if the ring is
+   now full. Purpose: the engine must not take the descriptor before its other
+   words are in memory. (T)
+6. Kick: ``wmb()``, read ``RTL9602C_NIC_DMA_CTRL``, then write
+   ``RTL9602C_NIC_DMA_CTRL_INIT | RTL9602C_NIC_DMA_CTRL_TX_POLL``. Drop the
+   lock. Purpose: tell the engine the ring has work. (T, and I for the read)
+
+Receiving
+---------
+
+For each descriptor, up to the poll budget:
+
+1. Stop at the first descriptor with OWN set. Purpose: the engine has not
+   filled it yet. (T)
+2. ``dma_rmb()``; read words 2 and 3. Purpose: they are this frame's. (T)
+3. Drop and count a frame with an error bit set or with a bad length. Purpose:
+   such a frame never reaches the stack, and its buffer returns to the
+   descriptor. (I for the error bits, T for the lengths)
+4. Get a replacement buffer first; if there is none, drop the frame and keep its
+   buffer for the descriptor. Purpose: the ring never holds a descriptor without
+   a buffer. (M)
+5. Skip the 2-byte offset and remove the FCS by length. Purpose: the frame
+   starts at its first byte. (T)
+6. Offer a frame marked OMCI to the OMCI handler; if it takes the frame, go to
+   step 10. Purpose: OMCI messages go to the OMCI port. (T)
+7. For a tagged frame while DSA uses the conduit: count its trap reason, offer
+   it to the data-frame handler, and if that leaves it attach the dst of its
+   source port. Purpose: the frame reaches its GEM interface or its user port.
+   (M, T)
+8. Take off a PTP timestamp tag if the frame carries one. Purpose: the frame
+   reaches the stack as it was sent, with its hardware timestamp. (M)
+9. Hand the frame up with ``eth_type_trans()`` and ``netif_receive_skb()``.
+10. Give the descriptor back, with the new buffer or the old one, and write its
+    index to ``RTL9602C_NIC_RX_RING_TAIL``. Purpose: without the write the ring
+    runs dry. (T)
+
+The interrupt and the poll
+--------------------------
+
+The interrupt:
+
+1. Read ``RTL9602C_NIC_IRQ_STAT``. If it is zero the interrupt is not the
+   engine's. Purpose: tell an interrupt of the engine from one that is not.
+   (T)
+2. Write the value back. Purpose: acknowledge every cause that was pending.
+   (T)
+3. If the poll is not already scheduled, write 0 to ``RTL9602C_NIC_IRQ_MASK``
+   and schedule it. Purpose: the poll does the work with the causes masked. (T)
+
+The poll:
+
+1. Fold in the missed frames (``RTL9602C_NIC_RX_NO_DESC_CNT``). Purpose: the
+   16-bit counter wraps quickly under load. (M)
+2. Reap the transmit completions. Purpose: free the sent frames and wake the
+   queues. (T)
+3. Receive (above).
+4. If it finished under the budget, complete the poll and write
+   ``RTL9602C_NIC_IRQ_MASK_RXTX`` to ``RTL9602C_NIC_IRQ_MASK``. Purpose: let the
+   causes raise the interrupt again. (T)
+
+Stop
+----
+
+1. Log the totals, then stop the transmit queues. Purpose: nothing new is
+   posted. (T)
+2. Write 0 to ``RTL9602C_NIC_IRQ_MASK``, free the interrupt and stop the poll.
+   Purpose: nothing runs against the rings once the engine is halted. (T)
+3. Write 0 to ``RTL9602C_NIC_DMA_CTRL``, then 0 to ``RTL9602C_NIC_RING_CFG``.
+   Purpose: halt the engine. (T)
+4. Reap what the engine sent, then free the rings and their buffers. Purpose:
+   nothing is left mapped. (T)
+
+Known limitations
+=================
+
+- The conduit takes every frame longer than 16 bytes that has EtherType
+  ``0x8899`` at offset 12 to carry a PTP timestamp tag, and does not check the
+  protocol byte at offset 14. The switch's loop-detection probes are frames with
+  that EtherType. A probe that reached the CPU would lose 16 bytes of its
+  payload and gain a timestamp.
+- The transmit test at probe fails on every boot: the kernel log carries
+  ``SELF-TEST FAILED`` from the probe, although the engine transmits and the
+  same test at open passes. The probe-time result is only logged. The cause is
+  assumed to be that the switch driver has not yet set up the CPU port (see
+  "Open questions").
+- The engine drops frames when it has no receive descriptor free. The CPU's
+  receive ceiling is about 24,000 to 25,000 frames/s whatever the frame size,
+  and beyond it the excess is counted in ``rx_missed_errors``. The receive
+  pause thresholds have no effect, because the switch's side of the pause is
+  not enabled. OMCI messages share the one receive ring with data, so under a
+  downstream flood to the CPU they are dropped in the engine like any other
+  frame.
+- The conduit receives no frame longer than 1536 bytes including the FCS, and it
+  keeps the Ethernet default of 1500 for its ``max_mtu``. DSA limits the largest
+  MTU of the user ports by the conduit's maximum, so a larger MTU on a user port
+  fails with ``-ERANGE``. The limit the switch itself applies is described in
+  Documentation/networking/dsa/rtl9602c.rst.
+- A frame marked as OMCI that no handler takes goes up the ordinary receive
+  path, although it has no Ethernet header. That happens when no OMCI handler is
+  attached, when the frame carries no CPU tag, and when the handler declines it
+  (the switch driver's handler declines a frame from any port but the PON
+  port).
+
+Open questions
+==============
+
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the assumption the driver depends on: the
+driver is correct on this board only if it holds. The second list holds the
+questions to which the code is indifferent: it works whichever way they
+resolve. Four of them are still worth a board test, because they decide what
+the switch needs in the CPU tag; they come first.
+
+Assumptions the driver depends on
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - No frame with EtherType ``0x8899`` other than a PTP timestamp tag reaches
+       the conduit ("The timestamp tag on PTP frames"). The switch's
+       loop-detection probe is one that could; the driver would cut 16 bytes
+       out of it.
+     - Sending a ``0x8899`` frame with a protocol byte other than 4 to the
+       board's address and checking that it arrives whole.
+
+Questions the code does not depend on
+-------------------------------------
+
+Worth a board test
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether the switch needs ``RTL9602C_NIC_TXD_CPUTAG_EN`` in transmit word
+       2 to obey the port mask of word 3, and what it does with a frame without
+       it. The driver always sets it ("Transmit").
+     - Sending one frame with the bit clear and a valid FCS, and reading where
+       it leaves.
+   * - Whether the switch needs ``RTL9602C_CPUTAG_CTRL_PARSE``. The switch
+       driver always sets it ("The CPU tag, switch side").
+     - Clearing the bit and repeating the port-mask measurement.
+   * - Whether ``RTL9602C_NIC_CPUTAG_SRC`` is why frames from the PON port
+       report source port 2 (bits 3:0), and what bits 15:8 do ("Transmit
+       configuration and the CPU tag registers").
+     - Writing another value to bits 3:0 and reading the source port of an OMCI
+       frame.
+   * - Why the transmit test at probe fails on every boot; the assumption is
+       that the switch driver has not yet set up the CPU port ("The transmit
+       test").
+     - Running the test after the switch driver's setup.
+
+About the receive path
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether ``RTL9602C_NIC_CTRL_RX_JUMBO`` (bit 3) is what admits frames
+       above 1518 bytes ("Address and receive filtering").
+     - Clearing the bit and repeating the 1500-byte pings over a VLAN.
+   * - Whether the engine ever writes a frame of the advertised length past its
+       buffer; the 64 bytes of slack make the question harmless ("Receive").
+     - Receiving a frame of exactly the advertised length and checking the bytes
+       past it.
+   * - Whether ``RTL9602C_NIC_RXD_FCS_ERR`` and ``RTL9602C_NIC_RXD_DMA_ERR``
+       mean what their names say ("Receive").
+     - Sending a frame with a bad FCS from the host and reading
+       ``rx_crc_errors``.
+   * - The layout of the fields of ``RTL9602C_NIC_RX_PRI_TO_RING`` beyond "0
+       everywhere" ("Priority steering and the missed-frame counter").
+     - Nothing settles it while the driver serves one receive ring; steering to
+       a second ring would.
+
+About the transmit path
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - What ``RTL9602C_NIC_TXD_NO_REWRITE`` (set on every frame) does.
+     - Clearing it and comparing frames at the far end.
+   * - What ``RTL9602C_NIC_TXD_L34_BYPASS`` (set on every frame) changes.
+     - Sending a frame the L3 engine would route.
+   * - Whether the flow of transmit word 3 is honoured without
+       ``RTL9602C_NIC_TXD_FLOW_SEL``.
+     - Sending a frame with a flow and the bit clear.
+   * - What ``RTL9602C_NIC_TXD_IP_CSUM``, ``RTL9602C_NIC_TXD_NO_LEARN`` and
+       ``RTL9602C_NIC_TXD_FID_EXT_EN`` (set on OMCI frames only) do.
+     - Clearing them one at a time and repeating the OMCI exchange.
+
+About the registers
+~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - The meaning of the interrupt bits other than bits 0 and 6 ("Interrupts
+       and the poll").
+     - Producing each event (a runt, an exhausted ring) and reading the status.
+   * - Which of bits 7 and 6 of ``RTL9602C_NIC_MEDIA_STAT`` enables pause in
+       which direction ("Media status and configuration").
+     - Setting the bits one at a time and reading the switch's per-port
+       counters.
+   * - What ``RTL9602C_NIC_REG_13FC`` does.
+     - Leaving it at a non-zero value and comparing traffic.
+   * - What the fields of the registers written whole do: the inter-packet gap
+       and loopback of ``RTL9602C_NIC_TX_CFG``, the tag sizes, format and match
+       of ``RTL9602C_NIC_CPUTAG``, the FIFO size of ``RTL9602C_NIC_CFG``, the
+       per-ring controls and thresholds of ``RTL9602C_NIC_RING_CFG`` and
+       ``RTL9602C_NIC_DMA_CTRL``, and ``RTL9602C_NIC_CTRL_RX_CSUM``
+       ("Registers written whole").
+     - Changing one field alone and watching traffic.
+   * - What ``RTL9602C_NIC_RX_RING_LEN_HI`` holds ("The ring registers").
+     - Nothing settles it while the ring has 256 descriptors; a longer ring
+       would need it.
+   * - Whether the read of ``RTL9602C_NIC_DMA_CTRL`` before each kick is needed
+       ("The ring registers").
+     - Kicking without it under load and checking for descriptors taken
+       half-written.
+
+About the timestamp tag
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether offsets 18 to 21 of the tag carry higher bits of the seconds, and
+       whether the stamp is taken when the frame enters the switch or when it
+       leaves toward the CPU ("The timestamp tag on PTP frames").
+     - Reading the bytes with the clock set past 65,536 s settles the first; no
+       test is known for the second.

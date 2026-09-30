@@ -21721,6 +21721,7 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml
 F:	Documentation/devicetree/bindings/net/realtek,rtl9602c-eth.yaml
+F:	Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst
 F:	drivers/net/dsa/realtek/rtl9602c*
 F:	drivers/net/ethernet/realtek/rtl9602c-eth.c
 F:	include/linux/dsa/rtl9602c.h
