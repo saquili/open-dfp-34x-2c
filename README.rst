@@ -31,11 +31,19 @@ Status
 ======
 
 Early bring-up. The repository skeleton, licence, provenance policy and the
-first architecture decision records are in place, and ``linux/`` holds the
-Linux 6.18.48 release that our kernel work will build on (see "The kernel
-tree" in ``CONTRIBUTING.rst``). Our kernel series, the distribution build and
-the userspace are populated by later work items; each top-level directory
-still waiting for its component carries a short README naming it.
+architecture decision records are in place. ``linux/`` holds the Linux 6.18.48
+release with our kernel series on top (see "The kernel tree" in
+``CONTRIBUTING.rst``): support for the RTL9602C system-on-chip and its Lexra
+core, the DFP-34X-2C3 board and ``rtl9602c_defconfig``, and the drivers of the
+switch, its CPU port, the GPON and PON MACs, the optics interface and the PON
+class, with their device tree bindings and hardware documentation under
+``linux/Documentation/``. The continuous integration builds the kernel for
+``tinyconfig`` and for the board's configuration, checks the bindings and the
+board's device tree, builds the documentation and runs ``checkpatch.pl`` over
+every commit of the series. The series has not yet been run on the stick: the
+board tests are pending. The distribution build and the userspace are
+populated by later work items; each top-level directory still waiting for its
+component carries a short README naming it.
 
 Building
 ========
