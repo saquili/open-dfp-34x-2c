@@ -453,6 +453,7 @@ The other pages of the port, by the short names used in the tables above:
    :hidden:
 
    rtl9602c-bridging
+   rtl9602c-acl-qos
 
 How to read the fact tables
 ===========================
