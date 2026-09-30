@@ -895,6 +895,8 @@ patternProperties:
     description: Shenzhen LeMaker Technology Co., Ltd.
   "^lenovo,.*":
     description: Lenovo Group Ltd.
+  "^lexra,.*":
+    description: Lexra, Inc.
   "^lg,.*":
     description: LG Corporation
   "^lgphilips,.*":
@@ -1161,6 +1163,8 @@ patternProperties:
     description: Orient Chip Technology Co., Ltd.
   "^oct,.*":
     description: Octavo Systems LLC
+  "^odi,.*":
+    description: ODI, maker of SFP optical modules
   "^okaya,.*":
     description: Okaya Electric America, Inc.
   "^oki,.*":
