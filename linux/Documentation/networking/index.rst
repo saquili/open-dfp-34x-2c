@@ -98,6 +98,7 @@ Contents:
    phy-link-topology
    pktgen
    plip
+   pon
    ppp_generic
    proc_net_tcp
    pse-pd/index

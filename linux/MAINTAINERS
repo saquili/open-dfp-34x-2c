@@ -20501,6 +20501,7 @@ M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/netlink/specs/pon.yaml
+F:	Documentation/networking/pon.rst
 F:	drivers/net/pon/
 F:	include/linux/pon.h
 F:	include/uapi/linux/pon.h
