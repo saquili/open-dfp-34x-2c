@@ -75,6 +75,7 @@ obj-$(CONFIG_WAN) += wan/
 obj-$(CONFIG_WLAN) += wireless/
 obj-$(CONFIG_IEEE802154) += ieee802154/
 obj-$(CONFIG_WWAN) += wwan/
+obj-$(CONFIG_PON) += pon/
 obj-$(CONFIG_MCTP) += mctp/
 
 obj-$(CONFIG_VMXNET3) += vmxnet3/

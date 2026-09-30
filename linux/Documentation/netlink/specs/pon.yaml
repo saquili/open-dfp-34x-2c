@@ -1,0 +1,392 @@
+# SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause)
+---
+name: pon
+doc: |
+  Optical network units (ONUs) of passive optical networks. For each ONU
+  the family reports the state of its transmission convergence layer as
+  the ONU's MAC gives it (the activation state, the identifiers the OLT
+  assigned, the alarms present now and the counters), and its T-CONTs.
+
+  The MAC drivers register the objects. Userspace reads them and is told
+  of changes, but can neither create nor change any, because the kernel
+  runs the transmission convergence layer. An ONU's traffic travels on its
+  gem network interfaces and its OMCI on the character device ponNomci0;
+  neither passes through this family. Requests are answered in every
+  network namespace; notifications are sent in the initial one only.
+
+definitions:
+  -
+    type: enum
+    name: type
+    doc: >-
+      The kind of passive optical network, by the ITU-T recommendation that
+      its transmission convergence layer follows.
+    entries:
+      -
+        name: gpon
+        doc: >-
+          G-PON, ITU-T G.984: 2.48832 Gbit/s downstream, 1.24416 or 2.48832
+          Gbit/s upstream.
+        value: 1
+      -
+        name: xgpon
+        doc: >-
+          XG-PON, ITU-T G.987: 9.95328 Gbit/s downstream, 2.48832 Gbit/s
+          upstream.
+      -
+        name: xgspon
+        doc: >-
+          XGS-PON, ITU-T G.9807.1: 9.95328 Gbit/s both ways.
+      -
+        name: ngpon2
+        doc: >-
+          NG-PON2, ITU-T G.989: several TWDM wavelength channels.
+  -
+    type: enum
+    name: onu-state
+    doc: >-
+      The activation states of an ONU, O1 to O7, as ITU-T G.984.3
+      clause 10.2.1 defines them, and the corresponding states of the other
+      transmission convergence layers. An ONU transmits upstream only in
+      O3, O4 and O5, and carries traffic only in O5.
+    entries:
+      -
+        name: o1
+        doc: >-
+          Initial: LOS or LOF is asserted.
+        value: 1
+      -
+        name: o2
+        doc: >-
+          Standby: the downstream is synchronised, and the ONU waits for
+          Upstream_Overhead.
+      -
+        name: o3
+        doc: >-
+          Serial number: the ONU answers serial number requests and waits
+          for Assign_ONU-ID.
+      -
+        name: o4
+        doc: >-
+          Ranging: the ONU has its ONU-ID, answers ranging requests and
+          waits for its equalisation delay (Ranging_Time).
+      -
+        name: o5
+        doc: >-
+          Operation: the ONU sends data and PLOAM messages as the OLT
+          directs.
+      -
+        name: o6
+        doc: >-
+          POPUP: entered from O5 on LOS or LOF, with upstream transmission
+          stopped. A directed POPUP message returns the ONU to O5, a
+          broadcast one to O4, and expiry of timer TO2 to O1.
+      -
+        name: o7
+        doc: >-
+          Emergency stop: after Disable_Serial_Number the laser is off and
+          the ONU sends nothing upstream.
+  -
+    type: flags
+    name: alarm
+    doc: >-
+      Alarms of the downstream: conditions present now, not events seen. A
+      MAC reports the flags it has.
+    entries:
+      -
+        name: los
+        doc: >-
+          Loss of signal: no valid downstream signal is received
+          (ITU-T G.984.3 clause 11.1.2).
+      -
+        name: lof
+        doc: >-
+          Loss of frame: five consecutive invalid PSync fields
+          (ITU-T G.984.3 clause 11.1.2).
+      -
+        name: lom
+        doc: >-
+          Loss of PLOAM: the frames are synchronised but the PLOAM channel
+          is not delineated. It is not an ONU alarm of ITU-T G.984.3, which
+          lists loss of PLOAM only among the OLT's alarms, but a condition
+          some MACs report; that a MAC's flag means exactly this is an
+          assumption, not verified.
+
+attribute-sets:
+  -
+    name: dev-stats
+    doc: >-
+      Counters of the transmission convergence layer: totals since the MAC
+      was brought up, not register values, so that every reader sees the
+      same numbers even where the MAC's counters clear when read. Every
+      counter is sent, zeros included, since a zero is a measurement; a MAC
+      that counts none of this leaves the whole nest out. A counter takes 4
+      bytes while its value fits in 32 bits and 8 bytes after, so a reader
+      must accept both widths. What exactly each one counts is the MAC's
+      own definition.
+    attributes:
+      -
+        name: sn-requests
+        doc: >-
+          Serial number requests: allocations to the activation Alloc-ID,
+          254, with the PLOAMu flag.
+        type: uint
+      -
+        name: ranging-requests
+        doc: >-
+          Ranging requests: allocations to the ONU's default Alloc-ID, its
+          ONU-ID, with the PLOAMu flag. In O5 they cannot be told from the
+          OLT's other requests for a PLOAM message.
+        type: uint
+      -
+        name: ploam-rx
+        doc: >-
+          Downstream PLOAM messages received.
+        type: uint
+      -
+        name: ploam-crc-errors
+        doc: >-
+          Downstream PLOAM messages with a bad CRC, which are discarded.
+        type: uint
+      -
+        name: ploam-overflows
+        doc: >-
+          Overflows in receiving downstream PLOAM messages. That each is a
+          message lost for want of room in the MAC is an assumption, not
+          verified.
+        type: uint
+      -
+        name: bwmap-rx
+        doc: >-
+          Bandwidth maps received.
+        type: uint
+      -
+        name: bwmap-crc-errors
+        doc: >-
+          Bandwidth map CRC errors, counted per map or per allocation
+          structure, since each allocation structure carries its own CRC.
+        type: uint
+      -
+        name: bwmap-overflows
+        doc: >-
+          Overflows in receiving bandwidth maps. That each is a map lost for
+          want of room in the MAC is an assumption, not verified.
+        type: uint
+      -
+        name: gem-frames
+        doc: >-
+          Downstream GEM frames that carried something; idle frames are not
+          counted.
+        type: uint
+      -
+        name: bip-errors
+        doc: >-
+          Errors of the downstream bit-interleaved parity (BIP,
+          ITU-T G.984.3 clause 8.1.3.4), counted as blocks whose BIP
+          disagreed or as the bits that differed, as G.984.3's ERR does
+          (clause 11.2.2).
+        type: uint
+  -
+    name: dev
+    doc: >-
+      An ONU, as its MAC reports it. What the MAC does not know is left out
+      rather than sent as 0, because 0 is a valid ONU-ID, Port-ID and
+      Alloc-ID, and "no alarms" is a claim a MAC in reset cannot make.
+    attributes:
+      -
+        name: id
+        doc: >-
+          The ONU's number, the N of its PON device ponN: the lowest number
+          free when the MAC first registered.
+        type: u32
+      -
+        name: ifindex
+        doc: >-
+          The network interface that carries the ONU's traffic, on which its
+          gem interfaces are created. Absent when unknown.
+        type: u32
+      -
+        name: type
+        doc: >-
+          The kind of PON. Absent when unknown.
+        type: u32
+        enum: type
+      -
+        name: onu-state
+        doc: >-
+          The activation state. Absent when unknown, as while the MAC is
+          down.
+        type: u32
+        enum: onu-state
+      -
+        name: onu-id
+        doc: >-
+          The ONU-ID the OLT assigned with Assign_ONU-ID in O3, from 0 to 253
+          (255 addresses every ONU), until Deactivate_ONU-ID discards it.
+          Absent while the ONU has none.
+        type: u32
+      -
+        name: alloc-id
+        doc: >-
+          An Alloc-ID the OLT assigned to the ONU, one attribute each. A
+          report carries at most 32, the first 32 of a MAC that holds more;
+          that no OLT assigns this many to one ONU is an assumption, not
+          verified. Alloc-IDs have 12 bits: the default Alloc-ID equals the
+          ONU-ID and carries PLOAM and OMCI, and a MAC may leave it out;
+          further ones, from 256 to 4095, come with Assign_Alloc-ID; 254 is
+          the activation Alloc-ID and 255 means unassigned.
+        type: u32
+        multi-attr: true
+      -
+        name: omcc-port-id
+        doc: >-
+          The Port-ID of the OMCI channel, once the OLT has configured it
+          with Configure_Port-ID. Its messages reach the OMCI control port
+          ponNomci0; it is never a gem interface. Absent until configured.
+        type: u32
+      -
+        name: alarms
+        doc: >-
+          The alarms present now. Absent when the MAC cannot report them, so
+          a clear flag means no alarm only when the attribute is there.
+        type: u32
+        enum: alarm
+        enum-as-flags: true
+      -
+        name: stats
+        doc: >-
+          The counters of the transmission convergence layer. Absent when the
+          MAC keeps none.
+        type: nest
+        nested-attributes: dev-stats
+      -
+        name: serial-number
+        doc: >-
+          The ONU's serial number as the ONU sends it in Serial_Number_ONU
+          (ITU-T G.984.3 clause 9.2.4.1): four ASCII characters of Vendor_ID,
+          then four bytes of vendor-specific serial number. Absent while the
+          MAC has none.
+        type: binary
+        checks:
+          exact-len: 8
+      -
+        name: num-gem-ports
+        doc: >-
+          The size of the MAC's flow space, as its data path registered it.
+          The ONU has no more gem interfaces than this; a MAC that keeps
+          flows for itself, as one that carries OMCI in a flow of its own
+          does, offers fewer. 0 while no data path is registered.
+        type: u32
+      -
+        name: num-tconts
+        doc: >-
+          The T-CONTs the ONU can be given for subscriber traffic, as its
+          data path registered them; their indices run from 0 to this less
+          one. A T-CONT the MAC keeps for its own management channel is not
+          counted: no T-CONT managed entity (ITU-T G.988 clause 9.2.2) need
+          point at it, since the default Alloc-ID, which carries OMCI, can
+          stay outside all of them. 0 until a data path is registered; the
+          value stays when the data path unregisters.
+        type: u32
+  -
+    name: tcont
+    doc: >-
+      A transmission container (T-CONT), the unit the OLT grants upstream
+      bandwidth to: each allocation of the bandwidth map is for one T-CONT,
+      named by its Alloc-ID (ITU-T G.984.3 clause 8.1.3.6). ITU-T G.988
+      models it as the T-CONT managed entity (clause 9.2.2).
+    attributes:
+      -
+        name: id
+        doc: >-
+          The ONU, by the id of its dev object.
+        type: u32
+      -
+        name: index
+        doc: >-
+          The T-CONT's index, from 0 and below the ONU's num-tconts: the
+          number that IFLA_GEM_TCONT gives when a gem interface is created.
+        type: u32
+      -
+        name: alloc-id
+        doc: >-
+          The Alloc-ID bound to the T-CONT. Absent while the T-CONT is idle,
+          since 0 is a valid Alloc-ID: the default Alloc-ID of ONU-ID 0.
+        type: u32
+operations:
+  list:
+    -
+      name: dev-get
+      doc: >-
+        Get one ONU by id, or dump every ONU. A report starts from nothing
+        known and takes what the MAC reports; an ONU whose MAC gives no
+        status, or fails to, is reported with id, num-gem-ports and
+        num-tconts only. A get without id fails with EINVAL, and one for an
+        unknown id with ENODEV.
+      attribute-set: dev
+      flags: [admin-perm]
+
+      do:
+        request:
+          attributes:
+            - id
+        reply: &dev-attrs
+          attributes:
+            - id
+            - ifindex
+            - type
+            - onu-state
+            - onu-id
+            - alloc-id
+            - omcc-port-id
+            - alarms
+            - stats
+            - serial-number
+            - num-gem-ports
+            - num-tconts
+
+      dump:
+        reply: *dev-attrs
+
+    -
+      name: dev-change-ntf
+      doc: >-
+        A change of an ONU's status as its MAC reports it, with the
+        attributes of a dev-get reply, sent to the monitor group in the
+        initial network namespace. The group has no permission flag: any
+        process may join it and receive these notifications, serial number
+        included, while dev-get needs CAP_NET_ADMIN.
+      notify: dev-get
+      mcgrp: monitor
+
+    -
+      name: tcont-get
+      doc: >-
+        Get one T-CONT of an ONU by id and index, or dump every T-CONT of
+        every ONU; alloc-id is absent while the T-CONT is idle. A get fails
+        with EINVAL without id or index, with ENODEV for an unknown ONU, and
+        with ENOENT when the MAC does not report T-CONTs or has no T-CONT of
+        that index; a dump skips the ONUs whose MAC does not report T-CONTs.
+        Both expect the ONU's MAC to have registered its data path, which a
+        num-gem-ports other than 0 shows; the kernel does not check for it.
+      attribute-set: tcont
+      flags: [admin-perm]
+
+      do:
+        request:
+          attributes:
+            - id
+            - index
+        reply: &tcont-attrs
+          attributes:
+            - id
+            - index
+            - alloc-id
+
+      dump:
+        reply: *tcont-attrs
+
+mcast-groups:
+  list:
+    -
+      name: monitor

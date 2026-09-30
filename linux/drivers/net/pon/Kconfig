@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config PON
+	tristate "Passive Optical Network (PON) ONU support"
+	help
+	  The class for drivers of optical network units (ONUs), the
+	  subscriber end of a passive optical network such as G-PON. It gives
+	  each ONU a PON device, ponN, and three interfaces to userspace:
+
+	  - the character device /dev/ponNomci0, through which a management
+	    daemon exchanges the messages of the ONU management and control
+	    interface (OMCI, ITU-T G.988) with the OLT;
+	  - the "gem" link kind, one network interface for each GEM port,
+	    which carries the ONU's traffic and which management creates;
+	  - the "pon" generic netlink family, which reports the ONU's
+	    activation state, the identifiers the OLT assigned to it, its
+	    alarms and counters, and its T-CONTs.
+
+	  The drivers of ONU MACs select this option, so it needs setting by
+	  hand only to build the class without one. If unsure, say N.
+
+	  To compile this as a module, choose M here: the module will be
+	  called pon.
