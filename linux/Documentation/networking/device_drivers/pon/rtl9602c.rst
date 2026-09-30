@@ -1,0 +1,2198 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+==========================================
+Realtek RTL9602C PON MAC and packet buffer
+==========================================
+
+Overview
+========
+
+The RTL9602C is a SoC for GPON optical network units (ONUs). Three blocks on
+the PON side of its switch turn the switch's PON port, port 2, into a link over
+a fibre to an optical line terminal (OLT):
+
+- The GPON MAC is the transmission convergence layer of ITU-T G.984.3. It
+  receives the downstream frames of the OLT with their PLOAM messages and
+  bandwidth maps, runs the ONU's activation from O1 to O5, builds the upstream
+  bursts in the allocations the OLT grants, and holds the tables that say which
+  Alloc-IDs and GEM Port-IDs belong to the ONU.
+- The PON MAC sits between the GPON MAC and the switch's PON port. It is a
+  packet buffer for each direction, which keeps frames in on-chip SRAM and
+  spills them into DRAM, and, upstream, the streams, the queues and the T-CONT
+  scheduler that decide when a frame is offered to the GPON MAC. When the
+  driver builds it, it also makes a few settings in the switch that the OMCI
+  path needs. This page is about the PON MAC.
+- The optics are the laser driver on the stick and the transmitter and
+  receiver it runs. The GPON MAC drives them through the PON SerDes and an
+  analog front end, and the SoC reaches the laser driver's management
+  interface over an I2C master.
+
+The GPON MAC and the PON MAC sit in the register window of the switch, physical
+``0x1b000000``, together with the I2C masters that reach the optics. One
+driver, ``rtl9602c``, drives all of them and the switch itself. The driver is a
+DSA driver, and it offers the PON side through the PON class
+(Documentation/networking/pon.rst): an OMCI control port, a network interface
+for each GEM port, and a generic netlink family. This page gives the overview
+of the three blocks and describes the PON MAC, the GEM ports as network
+interfaces and the OMCI path as far as the switch driver carries it. The GPON
+MAC has a page of its own,
+Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst, and so have the
+optics, Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
+
+The path of a frame, from the switch to the fibre::
+
+    host
+     |  SerDes lane
+    port 0 (sfp)                           port 3 (CPU)
+    +-------------------------------+      +-------------------+
+    |          switch core          |------| DMA engine (cpu)  |--- CPU
+    +-------------------------------+      +-------------------+
+    port 2 (pon)
+     |  upstream: frames with a stream    downstream: frames with a flow
+    +--------------------------------------------------------------+
+    | PON MAC                                   rtl9602c-ponmac.c  |
+    |   packet buffer: upstream half, downstream half              |
+    |   upstream: stream -> queue -> T-CONT                        |
+    +--------------------------------------------------------------+
+     |  GEM frames
+    +--------------------------------------------------------------+
+    | GPON MAC                                    rtl9602c-gpon.c  |
+    |   GTC framing, PLOAM, O1 to O5, bandwidth map                |
+    |   Alloc-ID table, Port-ID table, GEM counters                |
+    +--------------------------------------------------------------+
+     |  PON SerDes, analog front end
+    +--------------------------------------------------------------+
+    | optics                                    rtl9602c-optics.c  |
+    |   laser driver on I2C master 1, TX_DISABLE, diagnostics      |
+    +--------------------------------------------------------------+
+     |  fibre
+    OLT
+
+Upstream, a frame that the switch sends to port 2 carries a stream, which
+names a queue. The queue belongs to a T-CONT, and the T-CONT sends its queues in
+the allocations that the OLT grants to its Alloc-ID. For a GEM port the stream
+is its flow, the GPON MAC's own number for the port, and the flow gives the
+frames their GEM Port-ID. Downstream, the GPON MAC takes a GEM frame whose
+Port-ID is in its table into the flow of that table entry, and the downstream
+half of the packet buffer hands it to port 2 with the flow. The ONU's OMCI
+channel, the OMCC, is the GEM port of flow 64. The CPU sees the OMCC's messages
+and the frames of the GEM interfaces through the CPU port's DMA engine, the
+conduit of DSA, which has its own page:
+Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst.
+
+The words of this page:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 80
+
+   * - Term
+     - Meaning
+   * - GEM port
+     - One logical connection on the PON, identified by the 12-bit GEM Port-ID
+       in the header of its GEM frames (ITU-T G.984.3 clause 8.3.1).
+   * - Alloc-ID
+     - The identifier of an upstream bandwidth allocation. The OLT grants
+       upstream time to Alloc-IDs. The default Alloc-ID equals the ONU-ID.
+   * - T-CONT
+     - A transmission container: the traffic that the ONU sends in the
+       allocations granted to one Alloc-ID. The scheduler of the PON MAC has
+       17 of them, 0 to 16, and the driver refers to a T-CONT by this index.
+   * - OMCC
+     - The ONU management and control channel, the GEM port that carries OMCI.
+       The driver gives it flow 64, T-CONT 16, queue 64 and stream 64.
+   * - Flow
+     - The GPON MAC's number, 0 to 127, for a GEM port: its entry in the
+       Port-ID table and its per-flow configuration. Flow 64 is the OMCC's.
+   * - Stream
+     - The PON MAC's upstream classification, 0 to 64. A GEM port's stream is
+       its flow number, and stream 64 is the OMCC's.
+   * - Queue
+     - One of the PON MAC's 65 upstream queues, 0 to 64. A stream names a
+       queue, and a T-CONT schedules the queues in its map.
+   * - Half
+     - The upstream or the downstream half of the packet buffer. A register
+       written ``X(d)`` in this page has one address for each half, given as
+       up / down.
+
+The order of events on the PON side, from the boot of the kernel:
+
+1. Probe. ``rtl9602c_ponmac_probe()`` looks up the system controller and the
+   two memory regions of the packet buffer in the device tree. It reads nothing
+   in the block. A system controller that has not probed yet defers the probe.
+   The code treats a device tree without them as "no PON MAC" and leaves the
+   switch working (see "The buffer's DRAM").
+2. Setup. The driver creates its debugfs directory and views, registers the
+   optics' I2C adapter and hwmon device, creates the OMCI port, and registers
+   the GEM data path with the PON class. The last two happen only when the
+   system controller, the buffers and the CPU port's conduit exist.
+3. ``ip link set pon up``. The first bring-up of the PON builds the PON MAC
+   (see "Building the PON MAC"); every bring-up programs the GEM ports again.
+   Until the build succeeds, no GEM interface can be created and no OMCI
+   message crosses.
+4. The OLT activates the ONU. Configure_Port-ID binds the OMCC, which brings
+   the OMCI port's link up. Assign_Alloc-ID binds Alloc-IDs to T-CONTs, which
+   starts the upstream half of the GEM ports on those T-CONTs.
+
+The blocks and their files
+--------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 30 26 30
+
+   * - Block
+     - Where
+     - Driver file
+     - Page
+   * - GPON MAC
+     - Offsets ``0x700000`` to ``0x706cfc`` of the switch's window.
+     - ``rtl9602c-gpon.c``
+     - Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst
+   * - PON MAC
+     - From ``0xf00000`` of the switch's window, behind an enable in the system
+       controller.
+     - ``rtl9602c-ponmac.c``
+     - This page.
+   * - GEM ports
+     - Flows of the GPON MAC, streams and queues of the PON MAC.
+     - ``rtl9602c-gem.c``
+     - This page; Documentation/networking/pon.rst for the interfaces.
+   * - OMCI path
+     - Flow 64, stream 64, and a few switch registers.
+     - ``rtl9602c-omci.c``
+     - This page; Documentation/networking/pon.rst for the port.
+   * - Optics
+     - The I2C master registers and the pad multiplexer in the switch's window,
+       and a GPIO line.
+     - ``rtl9602c-optics.c``
+     - Documentation/networking/device_drivers/pon/rtl9602c-optics.rst
+
+The register definitions of all of them are in ``rtl9602c.h``.
+
+Configuration
+-------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Symbol
+     - Effect
+   * - ``CONFIG_NET_DSA_RTL9602C``
+     - Tristate, "Realtek RTL9602C switch". Depends on ``NET_DSA``,
+       ``HAS_IOMEM`` and ``RTL9602C_ETH || !RTL9602C_ETH``. Selects
+       ``MFD_SYSCON``, ``NET_DSA_TAG_RTL9602C`` and ``PON``. Builds
+       ``rtl9602c.o`` from ``rtl9602c-main.o``, ``rtl9602c-l2.o``,
+       ``rtl9602c-gpon.o``, ``rtl9602c-ponmac.o``, ``rtl9602c-omci.o``,
+       ``rtl9602c-gem.o``, ``rtl9602c-optics.o``, ``rtl9602c-offload.o`` and
+       ``rtl9602c-ptp.o``; as a module it is ``rtl9602c``. The PON MAC, the
+       GPON MAC, the OMCI port, the GEM data path and the optics have no
+       options of their own, apart from the one below.
+   * - ``CONFIG_PON``
+     - The PON class. The switch driver selects it.
+   * - ``CONFIG_MFD_SYSCON``
+     - The system controller is found as a syscon regmap. The switch driver
+       selects it.
+   * - ``CONFIG_RTL9602C_ETH``
+     - The conduit. The OMCI messages and the GEM frames cross it. Without the
+       conduit driver the calls that the switch driver makes into it return
+       ``-EOPNOTSUPP``, and no OMCI port or GEM data path is created.
+   * - ``CONFIG_RTL9602C_OPTICS_RO``
+     - Bool. The driver writes nothing to the optics part itself. The optics
+       page describes it.
+   * - ``CONFIG_I2C``
+     - The driver registers an I2C adapter and uses declarations that exist
+       only with ``CONFIG_I2C``. Its Kconfig entry neither selects nor depends
+       on it. ``rtl9602c_defconfig`` sets it.
+   * - ``CONFIG_HWMON``
+     - Needed for the hwmon device of the optics; without it nothing is
+       registered. The Kconfig entry neither selects nor depends on it.
+       ``rtl9602c_defconfig`` does not name it, but the option defaults to
+       ``y``, so the configuration it resolves to has it.
+   * - ``CONFIG_DEBUG_FS``
+     - The debugfs directory ``rtl9602c`` and its views. ``rtl9602c_defconfig``
+       sets it.
+
+``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver and
+the conduit in (``CONFIG_NET_DSA_RTL9602C=y`` and ``CONFIG_RTL9602C_ETH=y``),
+which builds the PON class in.
+
+Device tree and binding
+-----------------------
+
+The ``switch`` node of ``arch/mips/boot/dts/realtek/rtl9602c.dtsi`` describes
+the switch, and with it the GPON MAC, the PON MAC and the I2C masters of the
+optics, which are in its register window. The board file ``dfp-34x-2c3.dts``
+adds the two memory regions of the packet buffer. The system controller is a
+node of its own. The nodes the PON side uses, without the ports::
+
+    sysctl: syscon@18000000 {
+            compatible = "realtek,rtl9602c-sysctl", "syscon";
+            reg = <0x18000000 0x1000>;
+    };
+
+    switch: switch@1b000000 {
+            compatible = "realtek,rtl9602c-switch";
+            reg = <0x1b000000 0xf10000>;
+            interrupt-parent = <&intc>;
+            interrupts = <8>;
+            tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            realtek,sysctl = <&sysctl>;
+
+            /* from dfp-34x-2c3.dts */
+            memory-region = <&pbo_us>, <&pbo_ds>;
+            memory-region-names = "pbo-us", "pbo-ds";
+
+            ports { ... };
+    };
+
+and, in ``dfp-34x-2c3.dts``::
+
+    reserved-memory {
+            #address-cells = <1>;
+            #size-cells = <1>;
+            ranges;
+
+            pbo_ds: pbo@16ff000 {
+                    reg = <0x016ff000 0x101000>;
+                    no-map;
+            };
+
+            pbo_us: pbo@1eff000 {
+                    reg = <0x01eff000 0x101000>;
+                    no-map;
+            };
+    };
+
+The binding is
+``Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml``. The
+PON side reads these properties of the switch node; the others belong to the
+switch and to DSA (Documentation/networking/dsa/rtl9602c.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Property
+     - What the driver does with it
+   * - ``reg``
+     - The register window, ``0xf10000`` bytes from ``0x1b000000``. It holds
+       the GPON MAC, the PON MAC and the I2C masters as well as the switch
+       core.
+   * - ``interrupts``
+     - One interrupt for all the switch's sources, the GPON MAC's among them.
+   * - ``tx-disable-gpios``
+     - Optional. The hard transmit-disable input of the laser driver; the
+       optics page describes it.
+   * - ``realtek,sysctl``
+     - A phandle to the system controller, looked up as a syscon regmap. The
+       system controller holds the enable in front of the PON MAC. Without it
+       the PON MAC is not available.
+   * - ``memory-region``, ``memory-region-names``
+     - The two DRAM areas of the packet buffer, found by the names ``pbo-us``
+       (upstream) and ``pbo-ds`` (downstream). Each must be at least 1 MiB
+       (``RTL9602C_PBO_DRAM``) and ``no-map``. The binding requires
+       ``realtek,sysctl`` and ``memory-region-names`` with ``memory-region``.
+       On this board each is 1 MiB and 4 KiB, of which the driver programs the
+       first 1 MiB. Without either one the PON MAC is not available.
+
+The placement of the two regions in DRAM and the rest of the board's device
+tree are on the page for the SoC and the board,
+Documentation/arch/mips/rtl9602c.rst. The facts about the regions are under
+"The buffer's DRAM".
+
+Where the code is
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - File
+     - Contents
+   * - ``drivers/net/dsa/realtek/rtl9602c-ponmac.c``
+     - The PON MAC: ``rtl9602c_ponmac_probe()`` (the system controller and the
+       regions), ``rtl9602c_ponmac_init()`` (the build), ``rtl9602c_pbo_init()``
+       (the packet buffer), the stream, queue and T-CONT operations
+       (``rtl9602c_ponq_stream_queue_set()``, ``rtl9602c_ponmac_sid_valid()``,
+       ``rtl9602c_pon_drain()``, ``rtl9602c_pon_queue_add()``) and the debugfs
+       views ``ponmac``, ``ponpath`` and ``pondp``.
+   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
+     - GEM ports as network interfaces of the PON class:
+       ``rtl9602c_gem_setup()`` and ``rtl9602c_gem_teardown()``, the operations
+       table ``rtl9602c_pon_ops``, the programming of a flow
+       (``rtl9602c_gem_program()`` and ``rtl9602c_gem_unprogram()``), the
+       bridge and VLAN operations, and the upstream octet count of a port.
+   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``
+     - The OMCI channel as the PON class's OMCI port: ``rtl9602c_omci_setup()``
+       and ``rtl9602c_omci_teardown()``, the receive handler
+       ``rtl9602c_omci_rx()`` and the transmit operation
+       ``rtl9602c_omci_tx()``.
+   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+     - The GPON MAC. It calls ``rtl9602c_ponmac_init()`` and
+       ``rtl9602c_gem_restore()`` at each bring-up,
+       ``rtl9602c_gem_tcont_ready()`` when an Alloc-ID is bound to a T-CONT, and
+       ``rtl9602c_ponmac_sid_valid()`` when it binds or unbinds the OMCC.
+   * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
+     - The optics: the I2C master and adapter, the hwmon device, TX_DISABLE and
+       the debugfs views ``a2`` and ``eeblocks``.
+   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
+     - Probe (which calls ``rtl9602c_ponmac_probe()``), setup and teardown (in
+       which the OMCI port and the GEM data path are created and removed), and
+       the debugfs directory.
+   * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``, ``rtl9602c-offload.c``
+     - The switch side of the GEM ports: ``rtl9602c_bridge_refresh()`` and
+       ``rtl9602c_cf_sid_refresh()``, which give the PON port its bridge and
+       the frames it forwards their stream.
+   * - ``drivers/net/dsa/realtek/rtl9602c.h``
+     - The register map of all these blocks, the driver state ``struct
+       rtl9602c_priv`` (``sysctl``, ``pbo_base``, ``ponmac_up``, ``gem_flows``,
+       ``gem_cfg`` and the rest), and the functions the files call across.
+   * - ``include/linux/dsa/rtl9602c.h``
+     - The contract with the conduit: the handler types and the five calls that
+       the OMCI port and the GEM data path use.
+   * - ``drivers/net/dsa/realtek/Kconfig``, ``Makefile``
+     - The build entries.
+   * - Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml
+     - The binding.
+   * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``
+     - The ``sysctl`` and ``switch`` nodes, and the reserved memory of the
+       packet buffer.
+
+Interfaces to user space
+------------------------
+
+- ``ip link set pon up`` starts the ONU's activation and, the first time, builds
+  the PON MAC. ``ip link set pon down`` stops the activation and leaves the
+  PON MAC built.
+- The PON class (Documentation/networking/pon.rst): the OMCI port
+  ``/dev/pon0omci0``, the class directory ``/sys/class/pon``, which holds
+  ``pon0`` and ``pon0omci0``, and the generic netlink family ``pon``. Both
+  ``/dev/pon0omci0`` and the GEM interfaces exist only when the PON MAC is
+  available.
+- The ``gem`` network interfaces of the PON class, created on ``pon`` by
+  management::
+
+    ip link add gem0 link pon type gem port-id 1000 tcont 0
+
+  ``ethtool -S gem0`` shows ``pon_tx_octets``, the octets the port has sent
+  upstream (see "GEM ports as network interfaces").
+- debugfs, in the directory ``/sys/kernel/debug/rtl9602c/``, which every block
+  of the driver adds its views to. This page describes ``ponmac``, ``ponpath``
+  and ``pondp`` (see "The debugfs views"). The GPON MAC creates ``gpon``,
+  ``gpontbl``, ``ploamlog``, ``usburst``, ``gemusintr``, ``bwmap`` and
+  ``uscntr``, and the optics ``a2`` and ``eeblocks``.
+- The hwmon device ``rtl9602c_optics`` (temperature, supply voltage, bias
+  current, transmitted and received power of the optics) and the I2C adapter
+  ``rtl9602c i2c``, which the optics page describes. The hwmon device exists
+  only with ``CONFIG_HWMON`` (on in the board's configuration).
+- ``devlink`` on the switch, for the parameters and the region that the
+  devlink page describes (Documentation/networking/devlink/rtl9602c.rst); the
+  ONU's serial number is set there.
+- The kernel log lines that begin ``rtl9602c-switch:``. Those of the PON MAC
+  and the GEM ports:
+
+  .. list-table::
+     :header-rows: 1
+     :widths: 50 50
+
+     * - Line
+       - When
+     * - ``PON MAC built: chip rev 2, OMCC in T-CONT 16 queue 64, buffers at
+         0x01eff000 and 0x016ff000, ready in 4000 us``
+       - The first bring-up of the PON, once the build has succeeded. One line;
+         the values are those of this board.
+     * - ``no system controller: PON MAC not available``, ``no pbo-us buffer of
+         1048576 bytes: PON MAC not available`` (``pbo-ds`` likewise)
+       - Probe, when the device tree lacks the system controller or a region.
+     * - ``PON MAC not built (<error>): OMCI will not flow``
+       - A bring-up whose build failed. Activation goes on.
+     * - ``the PON packet buffer's upstream half did not finish initialising in
+         50 ms: <status>`` (``downstream`` likewise)
+       - The build, when a half does not report
+         ``RTL9602C_PKTBUF_STAT_INIT_DONE``.
+     * - ``PON queue <q> did not drain in 500 ms: ...`` and ``PON queue <q>
+         drained in <n> us, past the 10000 us this port allows, ...``
+       - A queue drain that is slow (a warning) or never ends (an error).
+     * - ``<GEM> port <id>: T-CONT <t> has no Alloc-ID; upstream parked`` and
+         ``<GEM> port <id>: upstream started, T-CONT <t> assigned``
+       - A GEM port programmed before, and then after, the OLT has assigned an
+         Alloc-ID to its T-CONT.
+
+Where to read next
+------------------
+
+- Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst: the GPON MAC,
+  its activation, PLOAM messages, bandwidth map, Alloc-ID and Port-ID tables.
+- Documentation/networking/device_drivers/pon/rtl9602c-optics.rst: the I2C
+  master, the laser driver's management interface, the diagnostics and
+  TX_DISABLE.
+- Documentation/networking/pon.rst: the PON class, the OMCI port, the GEM
+  interfaces and the ``pon`` netlink family.
+- Documentation/networking/dsa/rtl9602c.rst: the switch, and its siblings for
+  bridging, the classifier entries that give a frame its stream, and the L3
+  engine.
+- Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst: the
+  CPU port's DMA engine, which carries the OMCI messages and the GEM frames.
+- Documentation/networking/devlink/rtl9602c.rst: the devlink parameters,
+  including the serial number.
+- Documentation/arch/mips/rtl9602c.rst: the SoC, the memory map and the board.
+
+How to read the fact tables
+===========================
+
+Each block below has a short account of what the hardware does and what the
+driver does with it, followed by fact tables with three columns: *Fact*, *Tag*
+and *Checked by*. The tag says how the fact is established. **M**, measured on
+the board (the DFP-34X-2C3): *Checked by* gives the command or observation,
+through the driver's own interfaces (the kernel log, ``ip``, ``ethtool``,
+debugfs), that shows it. **T**, tested by function: the driver depends on the
+fact, and the named behaviour fails if it is wrong. **P**, public standard:
+*Checked by* names the document and the clause. **I**, inferred, not verified:
+the fact is an assumption, and *Checked by* says what would confirm or refute
+it. Where the driver writes a value that no measurement or test has shown to
+matter, the value is **I**, and the register and field it goes into are **T**
+only where a working function needs them. The last chapter collects the **I**
+facts and says which of them the driver depends on.
+
+A row with two tags is established in two ways, or in two parts; *Checked by*
+says which part carries which tag. Register offsets are in the switch's
+register window, physical ``0x1b000000``, unless a row says that they are the
+system controller's. The PON MAC starts at ``0xf00000`` in that window. "Up"
+and "down" are the two halves of the packet buffer, ``RTL9602C_PBO_US`` (0) and
+``RTL9602C_PBO_DS`` (1); a macro written ``X(d)`` has one address for each
+half, given as up / down. "Every build" means the kernel log line of the build
+(see "Interfaces to user space") in every logged boot of this kernel.
+
+The behaviours that a tested fact depends on are named in words:
+
+- the board boots to a shell with the switch driver probed;
+- OMCI messages pass both ways over ``/dev/pon0omci0``: the daemon completes a
+  MIB upload and the OLT keeps the ONU in O5;
+- GEM data passes both ways through the packet buffer, in throughput runs with
+  traffic on the board;
+- bridged traffic passes both ways, sourced from the host;
+- the downstream locks, and the ONU reaches O5 and holds it on an OLT;
+- the *routed-traffic checks* are cases run with traffic on the board; a row
+  that cites one says what it shows.
+
+The enable in the system controller
+===================================
+
+Every register of the PON MAC sits behind an enable in the system controller,
+the block of the SoC that holds its state and the enables of its on-chip
+blocks. While the enable is clear, a read anywhere in the PON MAC never
+completes: the CPU stalls on the bus and the board stops, with the console, the
+network and ssh silent. Nothing before Linux sets it. The switch driver finds
+the system controller as a syscon regmap through the ``realtek,sysctl``
+phandle of the switch node, sets the enable as the first act of the build of
+the PON MAC, reads and writes nothing in the block before that, and never
+clears the enable. For the same reason, a tool that reads the switch's window
+by address, such as a boot-loader command or ``devmem``, must not read at or
+above ``0xf00000`` before a bring-up of the PON has built the PON MAC. The
+switch page describes the same enable from the switch's side
+(Documentation/networking/dsa/rtl9602c.rst). The offsets in the first rows are
+the system controller's.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Every register of the PON MAC is behind
+       ``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF``, bit 5 of
+       ``RTL9602C_SYSCTL_BLOCK_EN`` (offset ``0x63c`` of the system
+       controller). While the bit is clear a read anywhere in the block never
+       completes: the CPU stalls on the bus and the board stops, console,
+       network and ssh silent.
+     - M
+     - Reads of the block with the bit clear stopped the board each time they
+       were tried: a single read at the boot-loader prompt, and reads from
+       Linux. With the bit set by hand at the boot-loader prompt, a read of
+       offset ``0xf0006c`` returned a value.
+   * - A stall behind the enable is not reliably recovered by the watchdog: in
+       one stall it reset the board after about 36 s, in another it did nothing
+       for minutes and the board needed a power cycle.
+     - M
+     - Two stalls from Linux.
+   * - Nothing before Linux opens the enable: at hand-over from the boot loader
+       ``RTL9602C_SYSCTL_BLOCK_EN`` reads ``0x00000010`` (bit 5 clear) and
+       ``RTL9602C_SYSCTL_SOC_STATE`` (offset ``0x044``) reads ``0x35e``, with
+       ``RTL9602C_SYSCTL_SOC_STATE_READY`` (bit 0) clear.
+     - M
+     - Both registers read at the boot-loader prompt.
+   * - The build sets ``RTL9602C_SYSCTL_SOC_STATE_READY`` and then
+       ``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF``, each by read-modify-write through
+       the system controller's regmap, as its first two acts and before any
+       access to the block. It never clears either.
+     - T
+     - Every build of the block: OMCI both ways over ``/dev/pon0omci0``, and
+       133 of 133 logged builds completed.
+   * - What ``RTL9602C_SYSCTL_SOC_STATE_READY`` does. The driver sets it, and
+       nothing the driver measures depends on it.
+     - I
+     - Assumption: the block may need it. Building the block with the bit left
+       clear, then reading the ``ponmac`` view, would show whether the enable
+       or the block needs it.
+   * - Nothing in the driver reads or writes the block until a build has
+       succeeded (``ponmac_up``): stream admission asked for by the GPON MAC
+       side is ignored before it, the ``ponpath`` and ``pondp`` views print
+       "PON MAC not built", and the ``ponmac`` view reads only the system
+       controller, the GPON MAC and the switch until then. A failed build
+       leaves the flag clear, and the next bring-up runs the whole build again.
+     - T
+     - Reading the three views before the first bring-up. A violation stops the
+       board (first row).
+   * - The system controller is found through the switch node's
+       ``realtek,sysctl`` phandle, as a syscon regmap.
+     - T
+     - The board builds the block with the shipped device tree: OMCI both ways
+       over ``/dev/pon0omci0``.
+
+The buffer's DRAM
+=================
+
+Each half of the packet buffer keeps frames in on-chip SRAM first and spills
+them into DRAM that the kernel never uses. The device tree reserves that DRAM
+as two regions, one for each half, and the switch node names them in
+``memory-region-names``. The driver gives each half the physical start of its
+region (see "The packet buffer") and never touches the memory itself.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The packet buffer spills into DRAM the kernel never uses: two
+       reserved-memory regions, named ``pbo-us`` and ``pbo-ds`` in the switch
+       node's ``memory-region-names``, each at least ``RTL9602C_PBO_DRAM``
+       (``0x100000``, 1 MiB) and ``no-map``. The physical start of each is its
+       half's DMA base (``RTL9602C_PKTBUF_DRAM_BASE``).
+     - T
+     - GEM traffic both ways through the buffer with the regions as shipped: a
+       throughput run, and a 30-minute soak with 21.6 million frames down and
+       4.1 million up, every one verified intact.
+   * - On this board the regions start at ``0x01eff000`` (up) and
+       ``0x016ff000`` (down); the page for the SoC and the board places them
+       (Documentation/arch/mips/rtl9602c.rst).
+     - M
+     - The build's log line "PON MAC built: ... buffers at 0x01eff000 and
+       0x016ff000 ...", in 133 of 133 logged builds.
+   * - Without the phandle, or without either region, or with a region under
+       1 MiB, the driver logs which, and offers no PON MAC, no OMCI channel and
+       no GEM interface; the switch works as an L2 switch.
+     - I
+     - Design choice, not exercised. Booting a device tree without them would
+       show it.
+
+Sizes and numbering
+===================
+
+The PON MAC numbers its streams, queues and T-CONTs from 0, and the GPON MAC
+numbers its flows from 0. The driver uses the numbers as in the table, and the
+facts below give what is known of each.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 12 32 28
+
+   * - What
+     - Count
+     - Macro
+     - Use
+   * - Flows of the GPON MAC
+     - 128
+     - ``RTL9602C_GPON_NUM_FLOW``
+     - All 128 are registered with the PON class. Flow 64 is the OMCC's.
+   * - Upstream streams of the PON MAC
+     - 65 (0 to 64)
+     - ``RTL9602C_PON_NUM_SID``
+     - A GEM port's stream is its flow. Stream 64 is the OMCC's.
+   * - Upstream queues
+     - 65 (0 to 64)
+     - ``RTL9602C_PON_NUM_QUEUE``
+     - Queue 64 is the OMCC's; queue 63 is where unused streams park.
+   * - T-CONTs of the scheduler
+     - 17 (0 to 16)
+     - ``RTL9602C_PON_NUM_TCONT``
+     - T-CONTs 0 to 15 are offered to GEM ports, T-CONT 16 is the OMCC's.
+   * - T-CONT entries of the GPON MAC's Alloc-ID table
+     - 32
+     - ``RTL9602C_GPON_NUM_TCONT``
+     - The driver uses entries 0 to 16 (the GPON MAC page).
+   * - A T-CONT's queue q
+     - 32 x (t / 8) + q
+     - ``RTL9602C_PON_QUEUE(t, q)``
+     - Only q = 0 is attached for GEM ports.
+   * - Page of the packet buffer
+     - 128 bytes
+     - ``RTL9602C_PBO_PAGE``
+     - SRAM of 0x4000 bytes up and 0x1000 down, and a DRAM region of 1 MiB for
+       each half.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The upstream scheduler has 17 T-CONTs, 0 to 16
+       (``RTL9602C_PON_NUM_TCONT``), and 65 queues, 0 to 64
+       (``RTL9602C_PON_NUM_QUEUE``); upstream classification has 65 streams, 0
+       to 64 (``RTL9602C_PON_NUM_SID``).
+     - I
+     - Assumption, load-bearing for the counts beyond the ones used. T-CONT 16,
+       queue 64 and stream 64 carry OMCI (OMCI both ways over
+       ``/dev/pon0omci0``); T-CONT 0 and queue 0 carry data (see the next
+       row); nothing above them has been addressed. The layout agrees with the
+       counts: 65 committed-rate words from ``0xf02198`` end at ``0xf0229c``,
+       where the peak-rate words start; 65 of those end at ``0xf023a0``, where
+       the 17 T-CONT maps start, which end at ``0xf023e4``, the T-CONT enable
+       word; 17 words of stream map from ``0xf020f8`` end at ``0xf0213c``, the
+       stream-admission words.
+   * - A T-CONT's queue q is queue 32 x (t / 8) + q
+       (``RTL9602C_PON_QUEUE``), and ``RTL9602C_PONSCH_TCONT_QUEUES(t)`` is a
+       bitmap over the queues of t's group: bit 0 of T-CONT 0's map is queue
+       0, bit 0 of T-CONT 16's is queue 64.
+     - M
+     - While every sampled bandwidth-map entry gave T-CONT 0 the whole frame,
+       a stream pointed at queue 0 delivered 15,700 of 15,717 frames with none
+       discarded; pointed at queue 64, only 465 to 1,664 of about 15,800 left
+       and the switch discarded 89 to 96 % at the ingress port (four
+       alternating runs). OMCI rides queue 64 in T-CONT 16 (OMCI both ways over
+       ``/dev/pon0omci0``).
+   * - The default Alloc-ID equals the ONU-ID, is assigned with it without an
+       Assign_Alloc-ID, and carries the upstream PLOAM and OMCC traffic;
+       upstream OMCI uses the default Alloc-ID.
+     - P
+     - ITU-T G.984.3 (01/2014) clauses 5.5.3 and 14.1.
+   * - The GPON MAC grants the default Alloc-ID's allocations to T-CONT 16.
+     - M
+     - All 192 bandwidth-map entries sampled over twelve captures, taken when
+       the OLT allocated to the default Alloc-ID only, resolved to T-CONT 16,
+       and OMCI crossed.
+   * - The driver keeps T-CONT 16 (``RTL9602C_GPON_DEFAULT_TCONT_IDX``) and its
+       queue 64 for the OMCC and offers T-CONTs 0 to 15 to GEM ports. Stream 64
+       (``RTL9602C_GPON_OMCC_FLOW``) is the OMCC's; a GEM port's stream is its
+       GPON MAC flow number.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``, and GEM upstream (see "GEM ports
+       as network interfaces").
+   * - The GPON MAC has 128 flows (``RTL9602C_GPON_NUM_FLOW``) and the driver
+       registers all 128 with the PON core, but streams exist for 0 to 64 only.
+       The driver takes flows lowest first, skipping 64, so flows 0 to 63 are
+       used first. A GEM port in a flow from 65 to 127 has no stream: its
+       admission is ignored, and for 68 and above the stream-map macro yields
+       addresses from ``0xf0213c`` up, the stream-admission words and the
+       registers after them. The driver writes that map when it programs an
+       upstream port, and when it parks any port, downstream-only ones
+       included, on deletion.
+     - I
+     - Not exercised: at most six GEM ports have been provisioned. Creating 68
+       GEM ports and reading the stream-admission words would show what
+       happens.
+   * - Queue rates are 18 bits (``RTL9602C_PONSCH_QUEUE_RATE``).
+       ``RTL9602C_PONSCH_QUEUE_RATE_MAX`` (``0x3ffff``) as a queue's peak rate
+       leaves the queue unshaped at the line's full grant.
+     - M
+     - A throughput run with every queue's committed rate 0 and peak rate
+       ``0x3ffff``: the switch-bridged upstream delivered 988.2 Mbit/s, the
+       limit of the test, against a grant of 15,417 bytes per 125 us frame,
+       about 987 Mbit/s.
+   * - The unit of the rate fields.
+     - I
+     - Unused: the driver writes only 0 and the maximum. A peak rate below the
+       maximum against a flood above it would give the unit.
+   * - Entry arrays pack floor(32 / width) entries into a word, the
+       lowest-numbered entry in the lowest bits: 7-bit stream-to-queue entries
+       four to a word, 10-bit weights three, 2-bit downstream queue entries
+       sixteen, one-bit enables thirty-two.
+     - I
+     - Measured for the stream-to-queue map (``RTL9602C_PONQ_US_STREAM_QUEUE``,
+       see "Upstream streams, queues and T-CONTs"); the other arrays are taken
+       to follow the same rule.
+   * - The same numbering for the other T-CONTs: T-CONTs 1 to 7 draw on queues 0
+       to 31, T-CONTs 8 to 15 on queues 32 to 63, each map bit q naming queue q
+       of the group.
+     - I
+     - Not measured: only T-CONTs 0 and 16 have carried traffic. A GEM port on
+       a granted T-CONT from 8 to 15, its stream on queue 32, would confirm
+       the upper group.
+
+The packet buffer
+=================
+
+The packet buffer has two halves with the same register set at different
+addresses. The upstream half, ``RTL9602C_PBO_US``, carries everything the
+switch sends to the PON; the downstream half, ``RTL9602C_PBO_DS``, carries
+everything the PON delivers to the switch. Each half keeps frames in pages, in
+its on-chip SRAM first and then in its DRAM region (see "The buffer's DRAM").
+The driver sets both halves up for 128-byte pages. Between a half and the
+switch there is a DMA engine and a MAC that faces the switch, and the build
+writes settings into both. The build stops the DMA engines and disables the
+halves before it reconfigures them, and enables the halves and then the DMA
+engines again before it waits for the halves to finish initialising.
+
+Halves, pages and pools
+-----------------------
+
+A half's memory is two pools, one of SRAM pages and one of DRAM pages. The
+registers take the page counts written as count minus 1, and the pool limits
+as page levels at which a pool counts as exhausted. The driver takes the sizes
+of the two SRAMs and of the DRAM pool from its own definitions
+(``RTL9602C_PBO_SRAM_US``, ``RTL9602C_PBO_SRAM_DS`` and ``RTL9602C_PBO_DRAM``);
+of the region in the device tree it uses the start and checks the size.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The buffer has an upstream half (``RTL9602C_PBO_US``) and a downstream
+       half (``RTL9602C_PBO_DS``) with the same register set at different
+       addresses; the upstream half carries everything the switch sends to the
+       PON, the downstream half everything the PON delivers to the switch.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``, and GEM data both ways in a
+       throughput run.
+   * - Each half keeps frames in pages, in on-chip SRAM first and then in its
+       DRAM region: SRAM of ``0x4000`` bytes up (``RTL9602C_PBO_SRAM_US``) and
+       ``0x1000`` down (``RTL9602C_PBO_SRAM_DS``). The driver uses 128-byte
+       pages (``RTL9602C_PBO_PAGE``): 128 SRAM pages up, 32 down, and 8192 DRAM
+       pages each.
+     - I
+     - Assumption, load-bearing for the pool configuration. The data path runs
+       with the page counts derived from these sizes, but nothing has read the
+       pools at their limits; the flood in the next rows would.
+   * - ``RTL9602C_PKTBUF_POOL_CFG(d)``, ``0xf0215c`` / ``0xf0a0cc``:
+       ``RTL9602C_PKTBUF_POOL_CFG_SRAM_PAGES`` (bits 12:0) and
+       ``RTL9602C_PKTBUF_POOL_CFG_DRAM_PAGES`` (bits 28:16) hold the pool's
+       page counts, written as count - 1: 127 up and 31 down, and 8191 in both
+       halves (the driver caps the DRAM count at 8192, exactly the 1 MiB
+       region). ``RTL9602C_PKTBUF_POOL_CFG_PAGE_SIZE`` (bits 14:13) = 0 selects
+       128-byte pages.
+     - I
+     - Assumption, load-bearing: the driver writes these values. The count - 1
+       encoding and the page-size code decide whether the DRAM pool ends
+       inside its region. A downstream flood above the switch's egress rate,
+       reading ``RTL9602C_PKTBUF_POOL_USED`` as it fills, would show the pool's
+       real extent.
+   * - ``RTL9602C_PKTBUF_POOL_LIMIT(d)``, ``0xf020e0`` / ``0xf0a0b4``:
+       ``RTL9602C_PKTBUF_POOL_LIMIT_SRAM`` (bits 12:0) and
+       ``RTL9602C_PKTBUF_POOL_LIMIT_DRAM`` (bits 28:16), the page levels at
+       which each pool counts as exhausted. Written: SRAM pages - 2 (126 up, 30
+       down); DRAM 8192 - 40 - SRAM pages (8024 up, 8120 down).
+     - I
+     - Assumption, load-bearing: the driver writes these values. The flood of
+       the previous row would show where each half stops taking frames.
+   * - ``RTL9602C_PKTBUF_DRAM_BASE(d)``, ``0xf020e8`` / ``0xf0a0b8``: the
+       physical address of the half's DRAM region (32 bits; the driver writes
+       the low 32 bits of the region's start).
+     - T
+     - GEM traffic both ways through the buffer with the regions as shipped
+       (see "The buffer's DRAM").
+   * - ``RTL9602C_PKTBUF_POOL_USED(d)``, ``0xf020ec`` / ``0xf0a0bc``: the
+       half's page descriptors in use, ``RTL9602C_PKTBUF_POOL_USED_SRAM`` (bits
+       12:0) and ``RTL9602C_PKTBUF_POOL_USED_DRAM`` (bits 28:16). The upstream
+       half reads three in use when idle and one more for each message it
+       holds.
+     - M
+     - Three when idle and one more per OMCI answer held while every grant went
+       out empty; three at the start of the queue drains after a warm reset.
+       Readable in the "usage" column of the ``ponmac`` view.
+
+Control, enables and the DMA engines
+------------------------------------
+
+Each half has a control word that enables it and selects the framing, and a DMA
+engine with its own control word. The two enables of the DMA engine are the
+only bits of it known to be needed; the build writes the other fields of the
+word at the same time, from values that no measurement has shown to matter.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PKTBUF_CTRL(d)``, ``0xf020d8`` / ``0xf0a0ac``:
+       ``RTL9602C_PKTBUF_CTRL_EN`` (bit 0) enables the half;
+       ``RTL9602C_PKTBUF_CTRL_EPON_MODE`` (bit 2) selects EPON framing and is
+       cleared for GPON.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0`` and GEM data both ways need both
+       halves enabled in GPON framing.
+   * - ``RTL9602C_PKTBUF_CTRL_RX_STOP_EN`` (bit 1, upstream half only) is set by
+       the build.
+     - I
+     - Assumption, load-bearing: the driver sets it. Leaving it clear would
+       show whether the upstream half needs it.
+   * - Bit 6 of the upstream ``RTL9602C_PKTBUF_CTRL``, which the driver does
+       not use: setting it at the start of the build, with both DMA engines
+       running and the half enabled, froze the board, and the watchdog did not
+       recover it. The driver never resets the block, and it stops the engines
+       before it reconfigures the buffer.
+     - M
+     - One boot, after which the board needed a power cycle.
+   * - ``RTL9602C_PKTBUF_DMA_CTRL(d)``, ``0xf05434`` / ``0xf0d434``:
+       ``RTL9602C_PKTBUF_DMA_CTRL_GMII_RX_EN`` (bit 5) and
+       ``RTL9602C_PKTBUF_DMA_CTRL_GMII_TX_EN`` (bit 4) run the half's DMA
+       engine. The build clears both first and sets them last.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``, and GEM data both ways.
+   * - The rest of ``RTL9602C_PKTBUF_DMA_CTRL(d)``, written with the enables:
+       ``RTL9602C_PKTBUF_DMA_CTRL_MAX_BURST_SEL0`` (bit 31) set and
+       ``RTL9602C_PKTBUF_DMA_CTRL_MAX_BURST_SEL1`` (bit 29) clear, the
+       burst-size select; ``RTL9602C_PKTBUF_DMA_CTRL_EARLY_TX`` (bit 28) set,
+       sending before the whole frame is in the FIFO;
+       ``RTL9602C_PKTBUF_DMA_CTRL_TX_FIFO_THR`` (bits 20:19) = 2 up and 1 down;
+       ``RTL9602C_PKTBUF_DMA_CTRL_RX_FIFO_THR`` (bits 12:11) = 2;
+       ``RTL9602C_PKTBUF_DMA_CTRL_RX_MAX_BURST`` (bits 7:6) = 1.
+     - I
+     - Assumption, load-bearing: the driver writes these values. Bound: at the
+       burst-overhead level where the OMCI of a newly reached O5 failed or
+       passed, the upstream ``RTL9602C_PKTBUF_DMA_CTRL_TX_FIFO_THR`` at 0, 1 or
+       2 changed nothing. Changing one field at a time under a throughput run
+       and the OMCI exchange would show which matter.
+   * - ``RTL9602C_PKTBUF_DMA_PAGE_CFG(d)``, ``0xf05438`` / ``0xf0d438``:
+       ``RTL9602C_PKTBUF_DMA_PAGE_CFG_RX_SIZE`` (bits 5:4) and
+       ``RTL9602C_PKTBUF_DMA_PAGE_CFG_TX_SIZE`` (bits 1:0), the engine's page
+       sizes; both 0, 128 bytes, like the pool's.
+     - I
+     - Assumption, load-bearing, as for the pool's page size above.
+   * - ``RTL9602C_PKTBUF_DMA_DBG_SEL(d)``, ``0xf05400`` / ``0xf0d400``: the
+       build ORs 2 into ``RTL9602C_PKTBUF_DMA_DBG_SEL_FUNC`` (bits 7:5), a debug
+       selection of the DMA engine.
+     - I
+     - Assumption, load-bearing: the driver writes it. Leaving the field as
+       found would show whether the data path depends on it.
+
+The switch-facing MACs and the upstream FIFO
+--------------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The switch-facing MAC of each half.
+       ``RTL9602C_PKTBUF_MAC_CFG(d)``, ``0xf0404c`` / ``0xf0c04c``:
+       ``RTL9602C_PKTBUF_MAC_CFG_RX_AFULL_EN`` (bit 26),
+       ``RTL9602C_PKTBUF_MAC_CFG_TX_STOP_EN`` (bit 17) and
+       ``RTL9602C_PKTBUF_MAC_CFG_TX_EN_EXTRA`` (bit 16) set.
+       ``RTL9602C_PKTBUF_MAC_TX_CFG(d)``, ``0xf04040`` / ``0xf0c040``:
+       ``RTL9602C_PKTBUF_MAC_TX_CFG_IPG`` (bits 12:10) = 3,
+       ``RTL9602C_PKTBUF_MAC_TX_CFG_PREAMBLE_LEN`` (bits 2:1) = 1,
+       ``RTL9602C_PKTBUF_MAC_TX_CFG_PAD_EN`` (bit 0) set.
+       ``RTL9602C_PKTBUF_MAC_RX_CFG(d)``, ``0xf04044`` / ``0xf0c044``:
+       ``RTL9602C_PKTBUF_MAC_RX_CFG_ACCEPT_ERR`` (bit 5) set, accepting frames
+       received with errors.
+     - I
+     - Assumption, load-bearing: the driver writes these values. Changing one
+       at a time under a throughput run and the OMCI exchange would show which
+       matter.
+   * - ``RTL9602C_PKTBUF_US_FIFO_CFG``, ``0xf020f0``:
+       ``RTL9602C_PKTBUF_US_FIFO_CFG_START`` (bits 3:0) = 3 and
+       ``RTL9602C_PKTBUF_US_FIFO_CFG_SPACE`` (bits 5:4) = 1, when the upstream
+       FIFO starts passing a frame on to the GPON MAC.
+     - I
+     - Assumption, load-bearing: the driver writes these values. Bound: at the
+       burst-overhead level of the DMA control row, the start level at 0, 1 or
+       3 changed nothing.
+
+Back-pressure and flow control
+------------------------------
+
+The build gives each half marks, in pages, at which it asks for frames to stop
+and to resume. The marks follow from the pool limits. Which field of a mark is
+the level that asserts is not established, because upstream the on level lies
+above the off level and downstream below it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Upstream back-pressure marks, in pages, each register with
+       ``RTL9602C_PKTBUF_THR_ON`` (bits 28:16) and ``RTL9602C_PKTBUF_THR_OFF``
+       (bits 12:0): ``RTL9602C_PKTBUF_THR_US_STOP`` (``0xf02450``), where a
+       stream is stopped, off = 7984; ``RTL9602C_PKTBUF_THR_US_GLOBAL``
+       (``0xf02454``), shared by all streams, on 7904 and off 7744;
+       ``RTL9602C_PKTBUF_THR_US_STREAM(s)`` (``0xf02458`` + 4s), per stream,
+       all 65, on 150 and off 130. The first three derive from the upstream DRAM
+       limit 8024: less 40, 120 and 280.
+     - I
+     - Assumption, load-bearing: the driver writes these values. An upstream
+       flood above the grant, reading the pool and the switch's pause counters,
+       would show when each asserts.
+   * - Downstream flow control, ``RTL9602C_PKTBUF_THR_DS`` (``0xf0a0fc``), from
+       8150 (the downstream DRAM limit 8120 plus the SRAM limit 30): off =
+       8018, written first, then on = 7986. Upstream the on level is above off,
+       downstream below it, so which field is the assert level is not
+       established.
+     - I
+     - Assumption, load-bearing: the driver writes these values. A downstream
+       flood above the switch's egress rate, reading the pool and the pause
+       counters, would settle the levels and the meaning of the fields.
+
+The downstream queue of a stream
+--------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PONQ_DS_STREAM_QUEUE(s)``, ``0xf0a0e4`` + 4 (s / 16), 2 bits
+       per stream at bit 2 (s % 16) (``RTL9602C_PONQ_DS_STREAM_QUEUE_MASK``,
+       ``RTL9602C_PONQ_DS_STREAM_QUEUE_SHIFT``): which of four downstream
+       buffer queues a stream's frames take to the switch. The build writes 0
+       for stream 64 and nothing for the others.
+     - I
+     - Assumption, load-bearing: the driver writes it. OMCI crosses downstream
+       with it (OMCI both ways over ``/dev/pon0omci0``).
+
+Initialisation of a half
+------------------------
+
+After its DMA engine starts, each half initialises itself and sets a status bit
+when it has finished. The build waits for the bit in the upstream half and then
+in the downstream half, because a queue drain that is issued earlier is taken
+not to complete (see "What a queue drain depends on").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PKTBUF_STAT(d)``, ``0xf020f4`` / ``0xf0a0c0``:
+       ``RTL9602C_PKTBUF_STAT_INIT_DONE`` (bit 0) is set by the half itself once
+       it has finished initialising after its engines start.
+     - M
+     - Every build waits for it in both halves and has seen it set: 133 of 133
+       logged builds.
+   * - The build waits for ``RTL9602C_PKTBUF_STAT_INIT_DONE`` in the upstream
+       half and then the downstream half, polling every 10 us up to
+       ``RTL9602C_PON_IPRDY_US`` (50,000 us) each, and fails with
+       ``-ETIMEDOUT``, naming the half and the status word, if it does not
+       come. The bound is the driver's. The bit came within about one 4 ms
+       step of the clock (see "What a queue drain depends on").
+     - M
+     - The build's "ready in" time read 4,000 us on 132 of 133 logged builds and
+       12,000 us on one.
+   * - With the wait in place no build has reported a slow or failed queue
+       drain; with the wait left out, 3 of 44 bring-ups failed the first drain.
+     - M
+     - None of the 133 logged builds reported one; for the other figure, see
+       "What a queue drain depends on".
+   * - A queue drain issued before ``RTL9602C_PKTBUF_STAT_INIT_DONE`` is set
+       does not complete: the reading of the previous row on which the wait
+       rests.
+     - I
+     - Not observed directly: the failed drains were not reported with the bit.
+       Draining right after the engines start, repeatedly, and recording the bit
+       at that moment would confirm it.
+
+Upstream streams, queues and T-CONTs
+====================================
+
+Upstream, every frame that reaches the PON MAC carries a stream. A map gives
+each stream the number of its queue, and an admission bit for each stream lets
+its frames into the queue; a frame of a stream that is not admitted is not
+queued. A queue reaches the fibre through a T-CONT: each T-CONT has a map, a
+bitmap over the queues of its group, and an enable bit, and the scheduler sends
+the queues in the map of an enabled T-CONT in the allocations that the OLT
+grants to the T-CONT's Alloc-ID. Each queue has its own scheduling settings,
+which the driver sets to strict priority, committed rate 0, peak rate the
+maximum and weight 1, so that a queue sends as much as its T-CONT is granted.
+
+The chain from a frame to the fibre, and the numbers the driver gives it::
+
+    stream s  --(stream map, admission bit)-->  queue q
+    queue q   --(bit in the map of T-CONT t)--> T-CONT t, if enabled
+    T-CONT t  --(allocations of its Alloc-ID)-> GPON MAC, then the fibre
+
+    GEM port:  stream f --> queue 32 x (t / 8) --> T-CONT t, t = 0 to 15
+    OMCC:      stream 64 --> queue 64 --> T-CONT 16
+    unused:    streams 0 to 63 --> queue 63, not admitted, in no T-CONT's map
+
+The build points the streams that no GEM port uses, 0 to 63, at queue 63 and
+does not admit them. No T-CONT that the driver enables has queue 63 in its map,
+so the frames of a parked stream are never scheduled. A stream starts parked,
+and a deleted GEM port's stream is parked again. Stream 64, the OMCC's, is
+pointed at queue 64, which the build attaches to T-CONT 16.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PONQ_US_STREAM_QUEUE(s)``, ``0xf020f8`` + 4 (s / 4): each
+       stream's 7-bit queue number (``RTL9602C_PONQ_US_STREAM_QUEUE_MASK``),
+       four streams to a word at bit 7 (s % 4)
+       (``RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT``).
+     - M
+     - The first word read ``0x07efdf80`` after the build, stream 0 at queue 0
+       (a GEM port on T-CONT 0) and streams 1 to 3 at 63, and ``0x07efdfc0``
+       once stream 0 was set to 64; the traffic followed the stream's queue
+       (the numbering row under "Sizes and numbering"). The stream line of the
+       ``ponmac`` view reads stream 64's entry.
+   * - ``RTL9602C_PONQ_US_STREAM_EN(s)``, ``0xf0213c`` + 4 (s / 32), one bit
+       per stream, admits the stream's frames to its queue.
+     - T
+     - OMCI upstream and GEM upstream run with the stream admitted; the stream
+       line of the ``ponmac`` view reads stream 64's bit.
+   * - A frame the switch forwards to port 2 without a stream is dropped in the
+       PON MAC. The switch counts it as sent on port 2, with no discard, and
+       nothing the driver reads counts the drop.
+     - M
+     - A bridged data path without the classifier's stream entries lost its
+       frames this way; and a routed flow with no stream: port 2's MIB counted
+       100 frames out and 0 discards, and the far end received only the 10 the
+       CPU sent.
+   * - Upstream bandwidth is allocated per Alloc-ID, so a T-CONT the OLT has
+       mapped no Alloc-ID to receives no allocation.
+     - P
+     - ITU-T G.984.3 (01/2014) clauses 5.5.3 and 5.5.4.
+   * - A stream's queue drains only as fast as its T-CONT is granted, and the
+       switch discards what the queue cannot take at the ingress port, where its
+       ingress-discard counter counts it. It reads like the forwarding engine
+       refusing to forward.
+     - M
+     - The runs of the numbering row under "Sizes and numbering": with queue
+       64's T-CONT hardly granted, 89 to 96 % discarded at ingress; with queue
+       0's T-CONT granted the whole frame, none.
+   * - Upstream frames offered above the grant are lost between the subscriber
+       port and port 2's transmit counter, and none of the counters the driver
+       exposes counts them; what port 2 counts as sent reaches the far end.
+       Where exactly they are dropped is not established.
+     - M
+     - About 569,000 frames of an overload lost with none of the driver's
+       switch counters moving; in a second run 215,410 lost and none of 46
+       counters accounting for them.
+   * - ``RTL9602C_OMCI_OMCC_CFG``, ``0xf02154``:
+       ``RTL9602C_OMCI_OMCC_CFG_STREAM`` (bits 6:0) names the OMCC's stream to
+       the PON MAC; the build writes 64.
+     - I
+     - Assumption, load-bearing: the driver writes it, and OMCI runs with it.
+       Leaving it at its reset value would show whether the upstream OMCC needs
+       it. The "omci sid" line of the ``ponmac`` view reads it.
+   * - ``RTL9602C_PONQ_DRAIN_CMD``, ``0xf020e4``, empties one upstream queue:
+       ``RTL9602C_PONQ_DRAIN_CMD_IDX`` (bits 9:3) names the queue,
+       ``RTL9602C_PONQ_DRAIN_CMD_BY_QUEUE`` (bit 2) says the index is a queue,
+       ``RTL9602C_PONQ_DRAIN_CMD_START`` (bit 1) starts the drain and is
+       cleared by the hardware when taken, and
+       ``RTL9602C_PONQ_DRAIN_CMD_BUSY`` (bit 0) stays set until the drain ends.
+     - M
+     - The three failed drains of "What a queue drain depends on" left the
+       register at ``0x00000205``: index 64, by queue, start taken, busy set.
+       From a cold boot the OMCC's drain ends before the first step of the
+       clock.
+   * - Per queue: ``RTL9602C_PONSCH_QUEUE_WFQ(q)``, ``0xf023e8`` + 4 (q / 32),
+       one bit per queue, clear for strict priority;
+       ``RTL9602C_PONSCH_QUEUE_CIR(q)`` at ``0xf02198`` + 4q and
+       ``RTL9602C_PONSCH_QUEUE_PIR(q)`` at ``0xf0229c`` + 4q, the committed and
+       peak rates in ``RTL9602C_PONSCH_QUEUE_RATE``;
+       ``RTL9602C_PONSCH_QUEUE_WEIGHT(q)``, ``0xf023f8`` + 4 (q / 3), a 10-bit
+       weight at bit 10 (q % 3) (``RTL9602C_PONSCH_QUEUE_WEIGHT_MASK``,
+       ``RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT``). The driver sets every queue it
+       touches strict, committed rate 0, peak rate
+       ``RTL9602C_PONSCH_QUEUE_RATE_MAX``, weight 1.
+     - T
+     - The peak rate: the rate row under "Sizes and numbering".
+   * - What strict, a committed rate of 0 and weight 1 do. With one queue per
+       T-CONT they choose nothing.
+     - I
+     - Assumption, load-bearing: the driver writes these values. Two loaded
+       queues in one T-CONT would show the scheduler's behaviour.
+   * - ``RTL9602C_PONSCH_TCONT_EN``, ``0xf023e4``, one enable bit per T-CONT;
+       ``RTL9602C_PONSCH_TCONT_QUEUES(t)``, ``0xf023a0`` + 4t, the queues the
+       T-CONT schedules (the numbering row under "Sizes and numbering"). A
+       T-CONT is enabled when its first queue is attached.
+     - M
+     - The enable word read ``0x00010000`` right after the driver enabled T-CONT
+       16, its map still empty before the drain; OMCI crosses once queue 64 is
+       in T-CONT 16's map (OMCI both ways over ``/dev/pon0omci0``).
+   * - ``RTL9602C_PONSCH_TOKEN_CLK``, ``0xf02190``: the token-bucket clock of
+       the queue rate limiters, ``RTL9602C_PONSCH_TOKEN_CLK_PERIOD`` (bits 7:0)
+       = ``0x6e`` and ``RTL9602C_PONSCH_TOKEN_CLK_TOKENS`` (bits 15:8) =
+       ``0x95``. It is the build's first write into the block.
+     - I
+     - Assumption, load-bearing: the driver writes it. With every peak rate at
+       the maximum nothing measured depends on it; a limited peak rate would.
+   * - ``RTL9602C_PONSCH_CIR_FORCE_EN`` (``0xf02170``) and
+       ``RTL9602C_PONSCH_CIR_FORCE_VAL`` (``0xf02174``), per-bit forcing of the
+       committed-rate state: the build writes ``0xffffffff`` to both, whole
+       words, bits no field is known for included.
+     - I
+     - Assumption, load-bearing: the driver writes them. Removing the writes
+       and repeating the OMCI exchange would show whether they matter.
+   * - ``RTL9602C_PONSCH_GRANT_THR``, ``0xf02150``: thresholds on the remainder
+       of a grant, ``RTL9602C_PONSCH_GRANT_THR_LAST`` (bits 29:16) and
+       ``RTL9602C_PONSCH_GRANT_THR_RUNT`` (bits 13:0), both 5.
+     - I
+     - Assumption, load-bearing: the driver writes them; their effect is
+       unmeasured.
+   * - ``RTL9602C_PONSCH_CFG``, ``0xf02194``: ``RTL9602C_PONSCH_CFG_PIR_DROP``
+       (bit 18) drops what exceeds a queue's peak rate. The build sets it, and
+       clears it again on chip revision 1.
+     - I
+     - Assumption, load-bearing: the driver writes it. With the peak rate at the
+       maximum it cannot act. Revision 1 has not been seen (see "Switch
+       settings in the build").
+
+What a queue drain depends on
+-----------------------------
+
+A queue is emptied before it is attached to a T-CONT, so that it is attached
+empty. The drain is a command to the PON MAC that the hardware takes at once
+and finishes later; the driver polls the busy bit (see "Draining a queue"
+under "Sequences"). On a cold boot the drain of the OMCC's queue ends before
+the first step of the clock. It does not end while the GPON MAC is still in
+the state that a warm reset left it in, which is why the bring-up takes the ONU
+to O1 before it builds the PON MAC. The driver's clock advances in steps of
+about 4 ms, so the durations that it reports are multiples of one.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - After a warm reset that left the GPON MAC in its earlier state (ranged,
+       in O5, transmitting in its grants), the drain of queue 64 did not end
+       within 0.5 s, with the pool at three descriptors, T-CONT 16 enabled, its
+       map empty and ``RTL9602C_PKTBUF_STAT_INIT_DONE`` set: the same readings
+       as after a cold boot, where the drain ends at once. Bringing the ONU to
+       O1 before the build removes it (the GPON MAC page).
+     - M
+     - Four of four warm resets.
+   * - What the drain waits for. The previous row says it depends on the state
+       of the GPON MAC the queue drains towards, not on the queue's contents.
+     - I
+     - A drain with the GPON MAC held in O1 against one in O5, each with a known
+       number of frames queued, would say more.
+   * - A drain issued while other streams keep feeding the queue. The driver
+       drains a queue every time an upstream GEM port is attached to it, and
+       GEM ports of one T-CONT group share a queue (see "GEM ports as network
+       interfaces"), so an attach can drain a queue carrying other ports'
+       traffic.
+     - I
+     - Assumption, load-bearing for a second GEM port on a group that is
+       already sending. Not exercised with traffic running. Attaching a second
+       GEM port to a group during an upstream flood of the first, reading the
+       first port's octet count, would show whether the drain completes and what
+       it discards.
+   * - With the build not waiting for ``RTL9602C_PKTBUF_STAT_INIT_DONE``, the
+       first drain failed on 3 of 44 bring-ups, the drain register reading
+       ``0x00000205`` each time (start taken, busy set). In one failure the busy
+       flag was still set after 0.5 s and the pool held zero SRAM and zero DRAM
+       descriptors. The ONU still reached O5, because ranging does not touch
+       the block, with no OMCI crossing and every GEM port refused
+       (``-ENETDOWN``); taking the ``pon`` interface down and up built the block
+       every time.
+     - M
+     - Bring-ups counted with the wait left out.
+   * - Queues are never detached and T-CONTs never disabled after the build: a
+       deleted GEM port's queue stays in its T-CONT's map until reboot, and its
+       stream is parked instead (see "GEM ports as network interfaces").
+     - T
+     - Deleting GEM interfaces leaves the remaining one carrying traffic: a
+       routed-traffic check deletes the spare GEM interfaces and the bridge,
+       and the remaining interface carries the routed traffic.
+   * - The driver's clock advances in 4 ms steps on this board (HZ 250, and no
+       clock source finer than the tick: the core has no cycle counter,
+       Documentation/arch/mips/rtl9602c.rst), so every time the build reports,
+       the ready time or a slow drain's duration, is a multiple of about 4 ms,
+       and the polling budgets end on a step.
+     - M
+     - Every ready time in the build's log line is 4,000 or 12,000 us.
+
+Switch settings in the build
+============================
+
+Besides its own registers, the build makes the settings in the switch that the
+OMCI path needs, and gives the PON port a few of its own. The switch page and
+its siblings describe the registers from the switch's side.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_OMCI_TRAP_CFG``, ``0x0111f8``:
+       ``RTL9602C_OMCI_TRAP_CFG_PRI`` (bits 2:0), the internal priority the
+       switch gives an OMCI frame it traps to the CPU; the build writes 7
+       (``RTL9602C_OMCI_TRAP_CFG_PRI_HIGHEST``).
+     - I
+     - Assumption, load-bearing: the driver writes it. The CPU port maps every
+       priority to its one receive ring
+       (Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst),
+       so the priority picks no ring. A downstream flood through the CPU port
+       with the priority at 0 and at 7, counting OMCI answers, would show
+       whether it matters.
+   * - ``RTL9602C_PORT_MAC_CFG(p)``, ``0x020004`` + ``0x400`` p:
+       ``RTL9602C_PORT_MAC_CFG_RX_PON_CTRL`` (bit 2) lets the port pass PON
+       control frames such as OMCI; the build sets it on port 2 (PON) and port 3
+       (CPU). Nothing else in the driver writes the register.
+     - I
+     - Assumption, load-bearing: the driver writes it, and OMCI crosses with
+       both set. Clearing one at a time while the OLT sends would show whether
+       the path depends on it.
+   * - The switch's buffer pause marks, in pages:
+       ``RTL9602C_PAUSE_THR_GLOBAL_HIGH`` (``0x0230e4``) and
+       ``RTL9602C_PAUSE_THR_GLOBAL_LOW`` (``0x0230e8``), and port 2's own
+       ``RTL9602C_PAUSE_THR_PON_HIGH`` (``0x02311c``) and
+       ``RTL9602C_PAUSE_THR_PON_LOW`` (``0x023120``), each with
+       ``RTL9602C_PAUSE_THR_ON`` (bits 25:16) and ``RTL9602C_PAUSE_THR_OFF``
+       (bits 9:0). The build sets port 2's pair to the global pair plus
+       ``RTL9602C_FC_PON_EXTRA`` (``0x30``), each clamped to its field
+       (Documentation/networking/dsa/rtl9602c-acl-qos.rst, "Flow-control
+       thresholds").
+     - I
+     - Assumption, load-bearing: the driver writes them. An upstream flood above
+       the grant, reading the pause counters, would show whether port 2's marks
+       act, and may locate the loss of the upstream overload row.
+   * - ``RTL9602C_DGASP_CFG``, ``0x0001ec``: ``RTL9602C_DGASP_CFG_INVERT``
+       (bit 3) inverts the output of the dying-gasp comparator, the supply-loss
+       detector; the build sets it. The driver does nothing else with dying
+       gasp (the Dying_Gasp message of ITU-T G.984.3 clause 9.2.4.3 is the
+       GPON MAC page's).
+     - I
+     - Assumption, load-bearing: the driver writes it. Removing the supply with
+       the dying-gasp interrupt source unmasked, under each polarity, would show
+       which reports a real loss.
+   * - ``RTL9602C_CHIP_IDENT``, ``0x010004``: ``RTL9602C_CHIP_IDENT_REV`` (bits
+       19:16) is the silicon revision. The driver writes
+       ``RTL9602C_CHIP_IDENT_READ_KEY`` (``0xa0000000``) before reading it and 0
+       after.
+     - I
+     - Assumption, load-bearing: the driver writes the key. Reading without the
+       key would show whether the key is needed.
+   * - This board's chip reads revision 2, so the revision-1 branch (the
+       ``RTL9602C_PONSCH_CFG_PIR_DROP`` row under "Upstream streams, queues and
+       T-CONTs") has never run.
+     - M
+     - The build's log line "PON MAC built: chip rev 2, ..." in 133 of 133
+       logged builds.
+   * - The switch's OMCI counters in the MIB block:
+       ``RTL9602C_MIB_OMCI_DISCARDS`` (``0x0329b8``),
+       ``RTL9602C_MIB_OMCI_TX_PKTS`` (``0x0329bc``),
+       ``RTL9602C_MIB_OMCI_RX_PKTS`` (``0x0329c0``),
+       ``RTL9602C_MIB_OMCI_TX_OCTETS`` (``0x0329c4``),
+       ``RTL9602C_MIB_OMCI_RX_OCTETS`` (``0x0329c8``) and
+       ``RTL9602C_MIB_OMCI_RX_CRC_ERRORS`` (``0x0329cc``): OMCI frames port 2
+       dropped, sent and received, and the received ones with a bad CRC. Only
+       the ``ponmac`` view reads them.
+     - I
+     - Unmeasured as such. The view read before and after an exchange of a known
+       number of 48-byte messages would confirm each; a data-path check of OMCI
+       under load relies on the receive, transmit and discard lines.
+
+GEM ports as network interfaces
+===============================
+
+The switch driver registers the ONU behind its PON port with the PON class,
+with 128 flows and 16 T-CONTs, and management creates one ``gem`` interface on
+``pon`` for each GEM port (Documentation/networking/pon.rst). A GEM interface
+is one flow of the GPON MAC: the flow holds the port's Port-ID in the GPON
+MAC's Port-ID table and the type of its downstream traffic, and it is the
+port's upstream stream in the PON MAC, which takes the port's frames to a queue
+of its T-CONT. The driver programs the downstream half of a port when the port
+is created, and the upstream half once the OLT has given the port's T-CONT an
+Alloc-ID. That Alloc-ID arrives in a PLOAM message, and the OMCI that creates
+the port arrives separately, in either order.
+
+A frame of a GEM interface goes to the conduit directly, with its flow in a
+port-mux dst, and a frame that arrives from the PON port in a flow other than
+the OMCC's goes to the GEM interface of that flow. In a bridge, the switch
+forwards between the GEM ports and the bridge's other ports itself, treating
+every GEM port as its one PON port.
+
+The class lists what ``gem_add`` refuses (an upstream port on a T-CONT of 16 or
+above, a PON MAC that is not built, a Port-ID already in use, no free flow); the
+facts below give what the driver programs.
+
+Flows, streams and T-CONTs
+--------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The switch registers with the PON core as the ONU its port 2 belongs to,
+       with 128 flows and 16 T-CONTs (0 to 15; 16 is the OMCC's), when the block
+       has its system controller and buffers and the CPU port has a conduit. A
+       GEM interface sits on the ``pon`` interface, DSA port 2.
+     - T
+     - GEM interfaces created on ``pon`` carry traffic (the transmit and
+       receive rows below).
+   * - A GEM interface is one flow of the GPON MAC: the flow is its Port-ID
+       table entry and per-flow configuration there (the GPON MAC page) and its
+       stream in the PON MAC. A new port gets the lowest free flow, never 64.
+     - M
+     - The first two ports took flows 0 and 1.
+   * - A GEM Port-ID identifies one logical connection; the OMCC's is assigned
+       by Configure_Port-ID and all others through the OMCC. So the driver
+       refuses a GEM port whose Port-ID is the OMCC's (while one is bound) or
+       already another GEM interface's (``-EEXIST``).
+     - P
+     - ITU-T G.984.3 (01/2014) clause 5.5.5.
+   * - The downstream half, programmed whatever the T-CONT: the flow's Port-ID
+       table entry when the port carries downstream traffic (the GPON MAC
+       page), and ``RTL9602C_GEM_DS_FLOW_CFG(f)`` (``0x701400`` + 4f) with
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE`` (bits 4:0) =
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH`` (bit 1), plus
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC`` (bit 0) for a multicast port: the
+       flow carries Ethernet. The type is written for an upstream-only port
+       too. The OMCC's flow is typed ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_OMCI``
+       (bit 2) by the Configure_Port-ID handling (the GPON MAC page).
+     - M
+     - A downstream-only multicast port (Port-ID 4095, flow 1) received 80 of 80
+       frames sent at the OLT side: untagged broadcast, unicast, IPv4 multicast
+       and VLAN-tagged broadcast, the tag intact (68 bytes counted for a
+       64-byte frame).
+   * - What ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC`` does on its own.
+     - I
+     - With it set the flow passed broadcast, unicast and tagged frames as well
+       as multicast (previous row). The same flow without it, against the
+       downstream multicast filter (the GPON MAC page), would isolate its
+       effect.
+   * - The upstream half, programmed only when the T-CONT is bound (the
+       binding row below): queue index 0 of the T-CONT's group attached (see
+       "Attaching a queue to a T-CONT"); ``RTL9602C_GEM_US_FLOW_CFG(f)``
+       (``0x706400`` + 4f), ``RTL9602C_GEM_US_FLOW_CFG_PORTID`` (bits 11:0) =
+       the Port-ID the flow's GEM headers carry (a Port-ID is 12 bits, ITU-T
+       G.984.3 clause 8.3.1); the stream pointed at ``RTL9602C_PON_QUEUE(t,
+       0)``; then admitted.
+     - M
+     - 40 of 40 frames sent through a bidirectional port on T-CONT 0 reached the
+       far end of the OLT intact and once each.
+   * - Every GEM port on T-CONTs 0 to 7 uses queue 0, and every one on T-CONTs 8
+       to 15 queue 32, because the driver attaches only index 0 of a group. With
+       more than one granted T-CONT in a group, their ports share one queue,
+       which then sits in several T-CONTs' maps.
+     - I
+     - Not exercised: the OLT the board was tested against assigns one data
+       Alloc-ID. Two granted T-CONTs in one group, each with an upstream GEM
+       port, reading each port's octet count against its T-CONT's grants, would
+       show whether either T-CONT's grants drain the shared queue.
+   * - The driver's T-CONT t is bound when the GPON MAC holds an Alloc-ID for
+       it: T-CONT 16 always (the default Alloc-ID), T-CONTs 0 to 15 once the OLT
+       has assigned an Alloc-ID with Assign_Alloc-ID, a PLOAM message and not
+       OMCI. OMCI may create a GEM port first; the two arrive in either order.
+     - P
+     - ITU-T G.984.3 (01/2014) clause 5.5.3 (the default Alloc-ID is implicit;
+       others are assigned by Assign_Alloc-ID type 1 and removed by type 255)
+       and clause 5.5.4 (the T-CONT to Alloc-ID mapping is made through the
+       OMCC).
+   * - A port whose T-CONT is not bound gets its downstream half and a warning
+       ("upstream parked"), and its upstream half waits. Binding an Alloc-ID to
+       that T-CONT programs every upstream port waiting on it ("upstream
+       started"). A stream pointed at an unbound T-CONT's queue would lose its
+       frames at the switch's ingress (the ingress-discard rows under "Upstream
+       streams, queues and T-CONTs").
+     - M
+     - A port on T-CONT 5, to which the OLT assigned nothing, warned; a port on
+       T-CONT 0, holding Alloc-ID 257, did not; with the PON taken down and up,
+       the Assign_Alloc-ID for T-CONT 0 came again and the waiting port's
+       upstream started. A routed-traffic run of thirteen cases passed on a
+       clean boot.
+   * - ``RTL9602C_GEM_PARKING_QUEUE`` is queue 63, ``RTL9602C_PON_QUEUE(15,
+       31)``. No T-CONT the driver enables has it in its map (only index 0 of a
+       group is ever attached, and the build empties the maps of T-CONTs 0 to
+       15), so a parked stream's frames are never scheduled. The build parks
+       streams 0 to 63 unadmitted, so a new port's stream starts parked, and
+       deleting a port parks it again.
+     - M
+     - The stream-map read-back of "Upstream streams, queues and T-CONTs":
+       streams 1 to 3 at 63 after the build.
+   * - After every bring-up the driver programs each GEM port again, because the
+       bring-up empties the GPON MAC's tables (the GPON MAC page) and the
+       interface outlives it. The PON MAC is not rebuilt, so the stream map and
+       admissions stay as they were. Every T-CONT is unbound at that moment: a
+       bidirectional port gets its downstream half and the "upstream parked"
+       warning while its stream keeps its old queue and admission until the
+       Alloc-ID arrives.
+     - I
+     - What happens to frames sent in that window is not measured. Sending
+       upstream through the port between the bring-up and the Assign_Alloc-ID,
+       reading the switch's ingress-discard counter, would show whether they are
+       lost at ingress.
+   * - Deleting a GEM port: it leaves the bridge; a routed flow naming it loses
+       the reference and the classifier's stream entries are rebuilt; then, if
+       the block is built, its stream is unadmitted and parked, its upstream
+       Port-ID and downstream type are zeroed, and its Port-ID table entry is
+       cleared (its queue stays in its T-CONT's map).
+     - T
+     - A routed-traffic check deletes the spare GEM interfaces and the bridge,
+       and the remaining interface carries the routed traffic.
+
+Transmit and receive
+--------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Transmit: a GEM interface's frame goes to the conduit directly, on the
+       conduit's transmit queue for port 2, with the flow in a port-mux dst that
+       the conduit writes into the transmit descriptor's stream field (the CPU
+       port page). Sent through the ``pon`` interface it would lose the dst in
+       the core, and the flow with it.
+     - M
+     - The 40 frames of the upstream row above.
+   * - Receive: a frame from port 2 whose receive descriptor names a flow other
+       than 64 goes to that flow's GEM interface through the PON core; the
+       conduit reads the flow from the descriptor (the CPU port page).
+     - M
+     - The 80 frames of the downstream row above.
+
+The upstream octet count
+------------------------
+
+Each flow has a 64-bit count of the octets it has sent upstream. The driver
+reads it to give each GEM interface the ethtool statistic ``pon_tx_octets``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_GEM_US_FLOW_BYTES(f)``, ``0x706800`` + 8f: the octets flow f
+       sent upstream, 64 bits, the low word at the lower address.
+     - M
+     - The lower word tracked the traffic sent (138 octets for a burst of that
+       size) while the upper word stayed 0.
+   * - It clears when read.
+     - M
+     - A read, an immediate second read returning 0, and a third after three
+       seconds of traffic returning only those three seconds.
+   * - It counts each GEM frame whole, the 5-byte GEM header included.
+     - M
+     - Flow 64 grew 53 octets per 48-byte OMCI message sent, the message and its
+       header (ITU-T G.984.3 clause 8.3.1); 2,000 frames of 1,000 bytes moved a
+       GEM port's count by 2,018,571.
+   * - It counts per flow.
+     - M
+     - Traffic through one service moved only the flow whose upstream Port-ID
+       held that service's Port-ID; with nothing else sending, flow 64, the
+       OMCC, counted steadily.
+   * - It keeps its count across a warm reset, so the first read after a flow is
+       created can hold a count from before. The driver reads it once when the
+       port is created and starts the port's total at zero.
+     - M
+     - On a line provisioned minutes before, the first read returned
+       5,405,355,647,246,905,511 octets for one port and
+       1,166,682,720,194,251,067 for another, which the driver discarded.
+   * - Because the register clears when read, the driver keeps each GEM port's
+       total and is the register's only reader for GEM interfaces; the GEM
+       interface's ethtool statistic ``pon_tx_octets`` returns that total. Any
+       other reader of a GEM interface's flow would take octets out of it. The
+       ``ponpath`` view reads flow 64's, which no GEM interface has.
+     - T
+     - The GEM-port figure of the row on whole GEM frames above was read as
+       that statistic.
+
+Status and offload
+------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Whether a flow's upstream half is ready (the block built, the flow a GEM
+       port's, carrying upstream, its T-CONT bound) is what the flowtable
+       offload asks before it promises the switch will carry a flow out of a GEM
+       interface (Documentation/networking/dsa/rtl9602c-l3-nat.rst).
+     - T
+     - Routed-traffic checks of the flowtable offload through a GEM interface.
+   * - The pon family's T-CONT query reports the Alloc-ID the driver recorded
+       for T-CONT 0 to 15, or none. It answers from the driver's record rather
+       than the GPON MAC's Alloc-ID table, because the table keeps what it held
+       through a reset and so tells what was written, not what the OLT still
+       assigns.
+     - M
+     - After a watchdog reset and a fresh bring-up all 32 entries of the table
+       answered as in use (the GPON MAC page).
+
+Bridges and VLANs
+-----------------
+
+The switch keeps isolation, learning and VLAN membership for each of its ports,
+and it sees every GEM port as its one port 2. The bridge side of the GEM
+interfaces follows from that. A frame that the switch forwards from a
+subscriber port carries no stream of its own, so classifier entries give it
+one; the driver rebuilds them from the GEM side's record whenever a bridge
+membership or a VLAN changes (see "Bridging the GEM ports" in
+Documentation/networking/dsa/rtl9602c-bridging.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The switch sees every GEM port as its one port 2, and keeps isolation,
+       learning and VLAN membership for each switch port. So the GEM interfaces
+       share one bridge (joining a second is refused, ``-EBUSY``); a bridged GEM
+       interface's VLANs are given to port 2, added and removed with the
+       interface's; and when the last one leaves, port 2's learned addresses are
+       flushed.
+     - M
+     - Without the bridge's VLANs on port 2 it kept its reset PVID, lookups
+       missed and upstream frames flooded: of 150,000 sent, all reached the
+       CPU; with them, 75 did.
+   * - A frame the switch forwards from a subscriber port gets its upstream
+       stream from classifier entries that the driver rebuilds from the GEM
+       side's record whenever membership changes. In a bridge where no VLAN
+       claims a stream, each bridged port's entry names the stream of the last
+       upstream GEM interface to join.
+     - T
+     - Bridged traffic passes both ways, sourced from the host, and a
+       throughput run: the bridged path carries 910 Mbit/s down and 988 up while
+       the CPU port moves by a few hundred frames at most in twelve seconds.
+   * - Where VLANs claim streams, the entries are keyed on the ingress port and
+       the C-VID. An upstream GEM interface claims the VLANs the bridge gives
+       it; a second upstream interface in a VLAN already claimed is refused
+       (``-EBUSY``), since no entry could tell the two apart. An interface
+       leaving the bridge gives up its claims itself, since the bridge reports a
+       port's VLANs going away only while it is still a bridge port.
+     - I
+     - Assumption, load-bearing for more than one service per bridge. Upstream
+       traffic through several GEM ports told apart by VLAN has not been
+       measured: the OLT the board was tested against grants one data T-CONT
+       and provisions no VLAN filter. A provisioning with two upstream GEM ports
+       in different VLANs, each on a granted T-CONT, sending in both VLANs and
+       reading each port's octet count, would settle it.
+
+The OMCI channel
+================
+
+OMCI messages (ITU-T G.988) cross the PON port in the flow of the OMCC, the
+ONU's OMCI channel. Downstream, the GPON MAC takes a message in flow 64 and
+the downstream half of the packet buffer passes it to port 2; the switch traps
+it to the CPU port and marks it in the receive descriptor, and the conduit
+offers it, with its source port, to the OMCI handler of the switch driver
+(``rtl9602c_omci_rx()``). The handler removes four bytes that the hardware adds
+after every message, and hands the message to the PON class's OMCI port if the
+ONU is in O5. Upstream, a message written to ``/dev/pon0omci0`` goes to the
+conduit with port 2 and stream 64 (``rtl9602c_omci_tx()``); stream 64 is queue
+64 of T-CONT 16, which the allocations of the default Alloc-ID feed. The driver
+neither checks nor computes the message integrity check (MIC): the daemon
+behind the port builds every message whole. The OMCI port is described on the
+PON class page (Documentation/networking/pon.rst), and the conduit's side of
+the path on the CPU port page
+(Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Downstream, an OMCI message is taken by the GPON MAC in flow 64 (the
+       OMCC's Port-ID, typed OMCI: the GPON MAC page), passed by the downstream
+       half to port 2 (stream 64 in buffer queue 0, see "The downstream queue of
+       a stream"), trapped by the switch to the CPU port (see "Switch settings
+       in the build"), marked a PON control frame in the CPU port's receive
+       descriptor and handed with its source port to the switch driver (the CPU
+       port page).
+     - M
+     - Every message of the OLT's opening exchange reached
+       ``/dev/pon0omci0``.
+   * - With no PON MAC built, no OMCI message reaches the CPU, and the OLT
+       sends Deactivate_ONU-ID about 12 s into O5.
+     - M
+     - An ONU brought to O5 with the PON MAC never built: no OMCI message
+       reached the CPU, and the OLT sent Deactivate_ONU-ID about 12 s into O5.
+   * - Only control frames from port 2 are taken; one from any other port goes
+       back to the ordinary receive path.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``: every OMCI message arrives from
+       port 2.
+   * - Every downstream OMCI message arrives with four zero bytes after it. A
+       48-byte baseline message comes up 52 bytes long once the conduit has
+       removed the FCS: the message, whose last four bytes are its MIC and
+       verify against the first 44, then four zeros. The GPON MAC's counters for
+       flow 64 count 48 bytes a message, so the four are added between the GPON
+       MAC and the switch; which stage adds them is not measured. The driver
+       removes ``RTL9602C_OMCI_RX_TRAILER`` (4) bytes from every control frame
+       and drops a frame of 4 bytes or fewer.
+     - M
+     - The first OMCI messages carried, which came up 52 bytes long at the
+       conduit.
+   * - Whether an extended message, of variable length up to 1980 bytes with
+       device identifier ``0x0B``, arrives with the same four bytes. The driver
+       trims four from every control frame.
+     - I
+     - Assumption, load-bearing for extended messages. Only baseline messages
+       have been received. An OLT that negotiates the extended set (ITU-T G.988
+       (11/2022) clause 11.1) would show it.
+   * - A message is delivered only in O5 (``RTL9602C_ONU_O5_OPERATION``) and
+       dropped in any other state; the driver implements no O6. In O5 the ONU
+       exchanges traffic with the OLT; in O6 it stops transmitting upstream.
+     - P, I
+     - P: ITU-T G.984.3 (01/2014) clauses 10.2.1 and 10.2.2 e) and f), the two
+       states. I: that a message received outside O5 must be dropped is not
+       verified; delivering one would show whether any harm follows.
+   * - Upstream, a message written to ``/dev/pon0omci0`` goes to the conduit
+       with port 2 and stream 64 for its descriptor (the CPU port page); stream
+       64 is queue 64 of T-CONT 16 (the facts under "Sizes and numbering").
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``.
+   * - The OMCC's messages travel in GEM frames that carry the OMCC's Port-ID,
+       upstream in the default Alloc-ID's allocations.
+     - P
+     - ITU-T G.984.3 (01/2014) clause 14.1; ITU-T G.988 (11/2022) clause 11.2.
+   * - An upstream message reaches the OLT whole and unpadded.
+     - M
+     - Flow 64's upstream count grows 53 octets per 48-byte message (the row on
+       whole GEM frames under "The upstream octet count"). The OLT walked its
+       opening exchange one transaction each with no retransmission, and the
+       daemon then completed the MIB upload.
+   * - A message is sent only while the OMCC has a Port-ID, bound by the
+       Configure_Port-ID handling (the GPON MAC page); otherwise ``-ENOLINK``.
+       The PON core checks the link first; the driver's own check closes the
+       race with an unbind.
+     - P
+     - ITU-T G.984.3 (01/2014) clauses 5.5.5 and 14.1: the OMCC's GEM frames
+       carry the Port-ID that Configure_Port-ID assigned.
+   * - The driver neither checks nor computes the MIC: the message passes
+       through unchanged both ways, and the daemon computes the MIC of what it
+       sends.
+     - T
+     - OMCI both ways over ``/dev/pon0omci0``: the OLT accepts the daemon's
+       messages.
+   * - Every OMCI message carries its MIC in its last four bytes; in G.984
+       systems it is a 32-bit CRC as specified in ITU-T I.363.5.
+     - P
+     - ITU-T G.988 (11/2022) clauses 11.1 and 11.2.7.
+   * - OMCI shares the CPU port's one receive ring with CPU-bound data: under a
+       downstream flood crossing the CPU at 40,000 frames a second an OMCI
+       message was lost before the driver saw it, and the OLT did not repeat it.
+       With the data path forwarded by the switch, OMCI kept answering through a
+       line-rate flood.
+     - M
+     - A downstream flood through the CPU, and the same flood forwarded by the
+       switch, with the OMCI exchange running.
+
+The debugfs views
+=================
+
+The PON MAC creates three views in the switch's debugfs directory,
+``/sys/kernel/debug/rtl9602c/``, all of mode 0400: ``ponmac``, ``ponpath`` and
+``pondp``. None of them writes the hardware apart from the selectors of
+indirect counters, but reading ``ponpath`` clears the counters it reads that
+clear on read. They are safe to read before the PON MAC is built: ``ponpath``
+and ``pondp`` then print one line and read nothing, and ``ponmac`` reads only
+the system controller, the GPON MAC and the switch::
+
+    # cat /sys/kernel/debug/rtl9602c/ponpath
+    PON MAC not built: the PON link is down
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 84
+
+   * - View, line
+     - Shows
+   * - ``ponmac``, the first two lines
+     - The system controller's ``RTL9602C_SYSCTL_BLOCK_EN`` word and whether
+       the enable is ``open`` or ``CLOSED`` (or there is no system controller);
+       whether the PON MAC is ``built``.
+   * - ``ponmac``, GPON MAC
+     - Flow 64's downstream type word (``traffic``) and upstream Port-ID word
+       (``us port``).
+   * - ``ponmac``, PON MAC
+     - Once built only: ``omci sid``, the OMCC's stream register; ``sid 64``,
+       stream 64's queue and whether it is ``valid`` (admitted); ``tcont en``,
+       the T-CONT enable word, and ``qmap[16]``, T-CONT 16's map; then a line
+       for each half, ``us`` and ``ds``, with ``ctl`` (the control word),
+       ``ready`` (``RTL9602C_PKTBUF_STAT_INIT_DONE``), ``base`` (the DRAM base),
+       ``usage`` (the pool in use) and ``io`` (the DMA control word).
+   * - ``ponmac``, switch
+     - ``trap pri``, the OMCI trap priority; ``port misc``, the port
+       configuration words of ports 2 and 3; ``omci rx`` and ``omci tx``, the
+       switch's OMCI counters.
+   * - ``ponpath``
+     - Once built only, the counters along the same path: flow 64's Port-ID
+       table entry (``MAC cam``), the GTC's GEM counters (``GTC gem``), flow
+       64's downstream frame and byte counts and its upstream octets, sixteen
+       downstream GEM counters (``GEM misc``), the packet buffer's own counters
+       (``ds rx/tx``, ``ds pages``, ``us rx/tx``), the switch-facing MACs, and
+       the first sixteen MIB words of port 2's receive and transmit and of port
+       3's transmit.
+   * - ``pondp``
+     - Once built only: the upstream FIFO configuration word with its start and
+       space fields, and the upstream DMA control word with its transmit
+       threshold and early-transmit bit.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Three views in the switch's debugfs directory, mode 0400: ``ponmac``,
+       ``ponpath`` and ``pondp``. None writes the hardware apart from the
+       selectors of indirect counters; reading ``ponpath`` clears the counters
+       it reads that clear on read (see the counter rows below).
+     - T
+     - A data-path check reads ``ponmac`` on every run; for reads before the
+       build, see "The enable in the system controller".
+   * - ``ponmac`` follows the OMCC's path in the order a message crosses it (the
+       table above). It reads none of the counters ``ponpath`` reads.
+     - T
+     - A data-path check of OMCI under load reads its "omci rx" and "omci tx"
+       lines.
+   * - ``ponpath``, only once built, prints the counters along the same path
+       (the table above). Flow 64's Port-ID table entry is read under the lock
+       the PLOAM path holds while it writes the table.
+     - T
+     - Read during the measurement of the whole-GEM-frame row under "The
+       upstream octet count".
+   * - ``RTL9602C_GTC_DS_GEM_MISMATCH_CNT``, ``0x7011c0``: bits 31:16 count GEM
+       frames whose Port-ID the Port-ID table does not hold.
+     - M
+     - It counted every OMCI GEM frame while the table held entries left from
+       before a reset, and stopped once the table was emptied.
+   * - Bits 15:0 of ``0x7011c0`` count GEM frames whose length disagreed with
+       their header; ``RTL9602C_GTC_DS_GEM_NON_IDLE_CNT``, ``0x7011c4``, counts
+       non-idle downstream GEM frames. The same register ``0x7011c4`` is
+       ``RTL9602C_GPON_CNT_GEM_FRAMES`` in the GPON MAC's statistics: two names
+       for one address.
+     - I
+     - Unmeasured. A downstream burst of a known number of frames on one GEM
+       port would confirm ``0x7011c4``.
+   * - Every counter from ``0x701180`` to ``0x7011fc`` clears when read. So a
+       ``ponpath`` read resets ``0x7011c0`` and ``0x7011c4``, and the counts it
+       takes from ``0x7011c4`` are missing from the device's GEM frame total,
+       which the GPON MAC's statistics add up from the same register.
+     - M
+     - Measured over that counter range on this chip. The collision with the
+       GPON MAC's total follows from it and has not been measured as such.
+   * - ``RTL9602C_GEM_DS_STATS_IDX`` (``0x704064``) selects one of sixteen
+       downstream GEM counters and ``RTL9602C_GEM_DS_STATS_DATA``
+       (``0x704068``) returns it; ``ponpath`` prints all sixteen.
+     - I
+     - The meaning of each, and whether they clear on read, are unmeasured.
+   * - The buffer's counters, read by raw offset in ``ponpath``. Upstream half:
+       ``0xf0203c`` good frames received, ``0xf02050`` receive errors,
+       ``0xf02054`` bad frames received, ``0xf02068`` transmitted, ``0xf0207c``
+       transmitted fragments, ``0xf02090`` bursts ended empty, ``0xf02094``
+       received. Downstream half: ``0xf0a024`` good received, ``0xf0a038`` bad,
+       ``0xf0a04c`` fragments, ``0xf0a060`` dropped, ``0xf0a064`` errors,
+       ``0xf0a068`` transmitted; page accounting ``0xf0a0d8`` total pages,
+       ``0xf0a100`` queue 0's pages, ``0xf0a07c`` counter mask, ``0xf0a0f8``
+       queue configuration. Each switch-facing MAC (``0xf04000`` up,
+       ``0xf0c000`` down): +0x10 good, +0x14 errors, +0x18 missed, +0x38
+       command, +0x3c interrupt, +0x44 receive configuration
+       (``RTL9602C_PKTBUF_MAC_RX_CFG``), +0x4c configuration
+       (``RTL9602C_PKTBUF_MAC_CFG``), +0x58 media status.
+     - I
+     - The labels are unmeasured, except the two of the next row.
+   * - ``0xf02090`` climbs while the grants go out as empty bursts with messages
+       waiting in the upstream half, and the receive half of ``0xf04010`` moves
+       as messages from the switch enter the upstream half.
+     - M
+     - With the Alloc-ID table holding entries left from before a reset (the
+       GPON MAC page), OMCI answers entered the buffer (``0xf04010`` moved, the
+       pool grew by one per answer) while every grant went out empty
+       (``0xf02090`` climbed).
+   * - ``pondp``, once built: the upstream FIFO configuration word with its
+       start and space fields (``RTL9602C_PKTBUF_US_FIFO_CFG``), and the
+       upstream DMA control word with its transmit threshold and early-transmit
+       bit (``RTL9602C_PKTBUF_DMA_CTRL``). Together they decide how much of a
+       frame the upstream path holds before passing it to the GPON MAC.
+     - I
+     - The view reads the registers (first row); what the fields decide is open
+       (the DMA control and FIFO rows under "The packet buffer").
+
+Sequences
+=========
+
+The steps are in the order the driver takes them. The tag in parentheses at the
+end of a step is the tag of the fact the step rests on (see the tables above);
+a step tagged I rests on an assumption.
+
+Building the PON MAC
+--------------------
+
+``rtl9602c_ponmac_init()`` is called at the start of every bring-up of the PON
+(``ip link set pon up``), after the ONU has been taken to O1 and before the
+SerDes is switched to GPON mode.
+
+1. Return at once if the block is already built; return ``-ENODEV`` if the
+   system controller or the buffers are missing. A build that fails is logged
+   as a warning and the activation goes on: the ONU reaches O5 without OMCI, and
+   the next bring-up runs the whole build again. Purpose: the block is built
+   once per boot, and the switch works without it. (M)
+2. Set ``RTL9602C_SYSCTL_SOC_STATE_READY``, then
+   ``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF``. Purpose: open the enable before any
+   access to the block. (M for the enable, I for the first bit)
+3. Write the token clock. Purpose: the clock of the queue rate limiters; it is
+   the first write into the block. (I)
+4. Write the committed-rate force words. Purpose: the driver writes them whole.
+   (I)
+5. Invert the dying-gasp polarity. Purpose: the supply-loss detector. (I)
+6. Write the grant thresholds. Purpose: thresholds on the remainder of a grant.
+   (I)
+7. For T-CONTs 0 to 15, clear the enable bit and empty the map; leave T-CONT 16
+   as found. Purpose: no T-CONT schedules a queue that the driver has not
+   attached, and the parking queue stays unscheduled. (T)
+8. Set the peak-rate drop. Purpose: what exceeds a queue's peak rate is dropped.
+   (I)
+9. For every queue, 0 to 64, set strict priority, committed rate 0, peak rate
+   the maximum and weight 1. Purpose: a queue sends as much as its T-CONT is
+   granted. (T)
+10. Set the OMCI trap priority to 7. Purpose: the priority of the OMCI frames
+    the switch traps to the CPU. (I)
+11. Point streams 0 to 63 at queue 63 without admitting them; point stream 64 at
+    queue 64 and admit it; name stream 64 as the OMCC's in
+    ``RTL9602C_OMCI_OMCC_CFG``. Purpose: a new GEM port's stream starts parked,
+    and the OMCC's stream is ready. (M for the streams, I for the naming)
+12. Build the packet buffer (next list). Purpose: frames can cross the PON MAC.
+    (T)
+13. Point the downstream stream 64 at buffer queue 0. Purpose: the OMCC's
+    messages take a queue towards the switch. (I)
+14. Set the control-frame bit of port 2, then give port 2 its pause marks, then
+    set the control-frame bit of port 3. Purpose: the PON control frames pass,
+    and the PON port has its own margin. (I)
+15. Read the chip revision; on revision 1, turn the peak-rate drop off again.
+    Purpose: the exception for the one revision it was written for. (I)
+16. Attach queue 64 to T-CONT 16 (see "Attaching a queue to a T-CONT"), then
+    point stream 64 at queue 64 once more. Purpose: the OMCC's queue is in a
+    T-CONT that the default Alloc-ID's allocations feed. (T)
+17. Mark the block built and log "PON MAC built: ...". Purpose: nothing touches
+    the block before this point; later bring-ups find it built and never tear it
+    down. (M)
+
+Building the packet buffer
+--------------------------
+
+``rtl9602c_pbo_init()``, step 12 of the list above.
+
+1. Stop the DMA engine of both halves, then disable both halves. Purpose:
+   nothing runs while the buffer is reconfigured. (T)
+2. For each half, write the DRAM base, the pool page counts and the pool
+   limits. Purpose: the pools, and the region the DRAM pool lives in. (T for the
+   base, I for the counts and limits)
+3. Write the upstream stop mark and the global and per-stream marks, and the
+   downstream off level and then the on level. Purpose: back-pressure and flow
+   control. (I)
+4. Put both halves in GPON framing; set the upstream receive stop; set the
+   upstream FIFO start and space; select 128-byte pages in both pools and both
+   engines. Purpose: the framing and the page size the driver assumes. (T for
+   the framing, I for the rest)
+5. Enable both halves. Purpose: they can initialise. (T)
+6. Set the DMA debug selection. Purpose: the value the driver assumes. (I)
+7. Set the switch-facing MACs. Purpose: the values the driver assumes. (I)
+8. Write the DMA control words whole, which enables the engines last. Purpose:
+   the engines run once everything else is set. (T)
+9. Wait for ``RTL9602C_PKTBUF_STAT_INIT_DONE`` in the upstream half and then
+   the downstream half. Purpose: a queue drain issued earlier does not
+   complete. (M)
+
+Attaching a queue to a T-CONT
+-----------------------------
+
+``rtl9602c_pon_queue_add()``, for the OMCC's queue in the build and for each
+upstream GEM port.
+
+1. Compute the queue number from the T-CONT and the queue index
+   (``RTL9602C_PON_QUEUE()``). Purpose: bit q of the T-CONT's map is queue q of
+   its group. (M)
+2. If the T-CONT's map is empty, set its enable bit. Purpose: the first queue
+   switches the T-CONT on. (M)
+3. Drain the queue (next list). A drain that does not end fails the attach.
+   Purpose: the queue is attached empty. (T)
+4. Add the queue to the T-CONT's map. Purpose: the T-CONT schedules it. (T)
+5. Set the queue strict, committed rate 0, peak rate the maximum, weight 1.
+   Purpose: it sends as much as the T-CONT is granted. (T)
+6. Admit every stream whose entry already points at the queue. Purpose: frames
+   that were waiting for the queue now enter it. (T)
+
+Draining a queue
+----------------
+
+``rtl9602c_pon_drain()``.
+
+1. Read the upstream pool in use. Purpose: report it with the outcome; a pool
+   with nothing in it and a queue that will not empty are different faults. (T)
+2. Write the queue in ``RTL9602C_PONQ_DRAIN_CMD_IDX`` with
+   ``RTL9602C_PONQ_DRAIN_CMD_BY_QUEUE`` and ``RTL9602C_PONQ_DRAIN_CMD_START`` in
+   one write. Purpose: start the drain. (M)
+3. Poll ``RTL9602C_PONQ_DRAIN_CMD_BUSY`` back to back for up to
+   ``RTL9602C_PON_DRN_US`` (10,000 us). Purpose: every drain that has succeeded
+   needed no more. (M)
+4. If it is still busy, poll every 100 us up to ``RTL9602C_PON_DRN_SLOW_US``
+   (500,000 us). Ending here is a warning with the time taken and the pool at
+   the start; not ending is an error with the register, the pool and whether
+   ``RTL9602C_PKTBUF_STAT_INIT_DONE`` was set, and ``-ETIMEDOUT``. Purpose: tell
+   a slow queue from one that cannot empty. Both budgets are the driver's; what
+   one read of this window costs is not measured. (T)
+
+Programming a GEM port
+----------------------
+
+``rtl9602c_gem_program()``, at the creation of a port, for every port after
+each bring-up, and for the ports of a T-CONT when an Alloc-ID is bound to it.
+
+1. If the port carries downstream traffic, put its Port-ID in the flow's
+   Port-ID table entry. Type the flow's downstream traffic as Ethernet, with the
+   multicast bit for a multicast port, whatever the direction. Purpose: the GPON
+   MAC takes the port's downstream frames into the flow and hands them on as
+   Ethernet. (M)
+2. If the port carries upstream traffic and its T-CONT holds no Alloc-ID, log
+   "upstream parked" and stop here. Purpose: a T-CONT without an Alloc-ID is
+   granted nothing, and its queue would lose the frames at the switch's ingress.
+   (P, M)
+3. Attach queue 0 of the T-CONT's group (see "Attaching a queue to a T-CONT").
+   Purpose: the queue the stream will name is scheduled. (T)
+4. Write the port's Port-ID into the flow's upstream configuration. Purpose:
+   the GPON MAC puts it in the headers of the port's upstream frames. (M)
+5. Point the flow's stream at the queue and admit it. Purpose: the port's frames
+   reach its T-CONT. (M)
+
+Deleting a GEM port
+-------------------
+
+1. Take the port out of its bridge. Purpose: the switch stops forwarding to it.
+   (M)
+2. If a routed flow names the port, forget it and rebuild the classifier's
+   stream entries without it. Purpose: no entry names a flow that is gone. (T)
+3. If the block is built, unadmit the flow's stream and point it at queue 63,
+   zero the flow's upstream Port-ID and downstream type, and clear its Port-ID
+   table entry. The queue stays in its T-CONT's map. Purpose: the flow is free,
+   and its stream is parked. (T)
+
+Known limitations
+=================
+
+- The driver offers more GEM flows than the PON MAC has streams. The GPON MAC
+  has 128 flows, and the driver registers all of them with the PON class, so up
+  to 127 GEM interfaces can be created (flow 64 is the OMCC's). The upstream
+  streams are numbered 0 to 64, and stream 64 is the OMCC's. A new GEM port
+  takes the lowest free flow other than 64, so the first 64 ports, in flows 0
+  to 63, have a stream. A port in a flow from 65 to 127 has none, and its
+  stream is not admitted. For a flow from 68 up, the driver's write of the
+  stream map lands past the map, among the stream-admission words and the
+  registers after them; what that does has not been exercised.
+- The driver attaches only queue 0 of a T-CONT's group. Every GEM port on
+  T-CONTs 0 to 7 therefore sends through queue 0 and every port on T-CONTs 8 to
+  15 through queue 32, and two T-CONTs of one group share a queue that sits in
+  both of their maps. Which T-CONT's grants then drain it has not been
+  exercised. Attaching a port drains the queue it uses, which may discard
+  frames that other ports of the group have queued; this has not been exercised
+  with traffic running. Queues are never detached and T-CONTs never disabled
+  after the build, so a deleted port's queue stays in its T-CONT's map until
+  the next boot. Only T-CONTs 0 and 16 have carried traffic, so the queue
+  numbering of T-CONTs 1 to 15 is not measured.
+- Every queue is strict priority with committed rate 0 and the maximum peak
+  rate, so a T-CONT sends what the OLT grants it and the driver offers no rate
+  limit, priority or weighting between GEM ports on the PON side. The unit of
+  the rate fields is not known.
+- Some losses are not counted. A frame that the switch forwards to the PON port
+  without a stream is dropped in the PON MAC while the switch counts it as sent,
+  and upstream frames offered above the grant are lost with no counter that the
+  driver exposes moving. A stream whose T-CONT has no Alloc-ID would have its
+  frames discarded at the switch's ingress port, where they are counted as
+  ingress discards.
+- A bring-up programs every GEM port again while all T-CONTs are unbound. A
+  port that sends upstream keeps its stream's previous queue and admission until
+  the OLT assigns the Alloc-ID again. What becomes of upstream frames sent in
+  that window has not been measured.
+- All GEM interfaces must be in one bridge, and a VLAN can travel up one GEM
+  interface only. The entries that tell GEM interfaces apart by VLAN have not
+  been measured with two upstream GEM ports; the OLT the board was tested
+  against grants one data T-CONT.
+- The OMCI messages share the CPU port's one receive ring with CPU-bound data.
+  Under a flood of frames through the CPU an OMCI message can be lost before the
+  driver sees it, and the OLT does not repeat it. The driver removes four bytes
+  from every control frame; whether an extended message carries the same four
+  has not been observed, and an extended message without them would lose the
+  last four bytes of its MIC.
+- Reading the ``ponpath`` view takes counts out of the GPON MAC's own total of
+  downstream GEM frames, because both read the same register and it clears when
+  read. Likewise, any reader of a GEM flow's upstream octet register other than
+  the driver takes octets out of the port's ``pon_tx_octets``.
+- When the PON MAC cannot be built, the ONU is activated all the same and can
+  reach O5 without an OMCI path: no OMCI message crosses and GEM interfaces are
+  refused with ``-ENETDOWN``. Taking ``pon`` down and up builds the block again.
+- A read anywhere in the PON MAC's window before the PON MAC is built stops the
+  board, and the watchdog may not recover it. The driver never reads it before
+  the build, and a tool that reads the window by address has to keep to the
+  same rule.
+- The driver's Kconfig entry neither selects nor depends on ``CONFIG_I2C``,
+  which the optics' adapter needs, or on ``CONFIG_HWMON``, which the hwmon
+  device needs. The board's configuration has both, but a configuration
+  without ``CONFIG_I2C`` does not link, and one without ``CONFIG_HWMON``
+  registers no hwmon device; the diagnostics are then read through the ``a2``
+  debugfs view.
+
+Open questions
+==============
+
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the assumptions the driver depends on: the
+values it writes and the behaviour it relies on without a measurement, so the
+driver is correct on this board only if they hold. The second list holds the
+questions to which the code is indifferent: it works whichever way they
+resolve.
+
+Assumptions the driver depends on
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - Whether the block needs ``RTL9602C_SYSCTL_SOC_STATE_READY``, which the
+       driver sets before the enable ("The enable in the system controller").
+     - Building the block with the bit left clear, then reading the ``ponmac``
+       view: whether the packet buffer still reports itself initialised.
+   * - The counts of T-CONTs, queues and streams beyond the ones used, the
+       packing of entry arrays other than the stream map, and the queue
+       numbering of T-CONTs 1 to 15 ("Sizes and numbering").
+     - A GEM port on a granted T-CONT from 8 to 15, its stream on queue 32,
+       sending upstream.
+   * - That flows 65 to 127 have no stream, and what the driver's write of the
+       stream map does from flow 68 up ("Sizes and numbering", "Known
+       limitations").
+     - Creating 68 GEM ports and reading the stream-admission words.
+   * - The SRAM sizes and the 128-byte page, the page-count encoding with the
+       page-size code, and the pool limits ("Halves, pages and pools").
+     - A downstream flood above the switch's egress rate, reading
+       ``RTL9602C_PKTBUF_POOL_USED`` as the pool fills: where each pool ends
+       and where each half stops taking frames.
+   * - That the upstream half needs ``RTL9602C_PKTBUF_CTRL_RX_STOP_EN``
+       ("Control, enables and the DMA engines").
+     - Leaving the bit clear and repeating the OMCI exchange and a throughput
+       run.
+   * - That a queue drain issued before ``RTL9602C_PKTBUF_STAT_INIT_DONE`` is
+       set does not complete ("Initialisation of a half"), which is why the
+       build waits.
+     - Draining right after the engines start, repeatedly, and recording the bit
+       at that moment.
+   * - The fields of the DMA control words, the engines' page sizes, the DMA
+       debug selection, the settings of the switch-facing MACs and the upstream
+       FIFO start and space ("Control, enables and the DMA engines", "The
+       switch-facing MACs and the upstream FIFO").
+     - Changing one field at a time under a throughput run and the OMCI
+       exchange. Bound: at the burst-overhead level where the OMCI of a newly
+       reached O5 failed or passed, the upstream transmit threshold and the FIFO
+       start level changed nothing.
+   * - The upstream back-pressure marks, the downstream flow-control marks and
+       which field of each asserts ("Back-pressure and flow control").
+     - An upstream flood above the grant and a downstream flood above the
+       switch's egress rate, reading the pool and the pause counters.
+   * - That the downstream buffer queue 0 for stream 64, and the OMCC's stream
+       named in ``RTL9602C_OMCI_OMCC_CFG``, are what the OMCC needs ("The
+       downstream queue of a stream", "Upstream streams, queues and T-CONTs").
+     - Leaving the upstream register at its reset value, and writing another
+       downstream queue, then repeating the OMCI exchange.
+   * - What strict priority, committed rate 0 and weight 1 do between queues of
+       one T-CONT.
+     - Two loaded queues in one T-CONT.
+   * - The token clock, the committed-rate force words, the grant thresholds and
+       the peak-rate drop with its exception for chip revision 1
+       ("Upstream streams, queues and T-CONTs").
+     - Removing each write and repeating the OMCI exchange; a limited peak rate
+       against a flood above it. Revision 1 has not been seen.
+   * - What the drain waits for, and what it does to a queue that other streams
+       go on feeding ("What a queue drain depends on").
+     - A drain with the GPON MAC held in O1 against one in O5, each with a known
+       number of frames queued; attaching a second GEM port to a group during an
+       upstream flood of the first, reading the first port's octet count.
+   * - The OMCI trap priority, the control-frame bit of ports 2 and 3, port 2's
+       pause marks, the dying-gasp polarity and the chip identity key
+       ("Switch settings in the build").
+     - Flooding the CPU port with the priority at 0 and at 7, counting OMCI
+       answers; clearing the control-frame bits one at a time while the OLT
+       sends; an upstream flood above the grant, reading the pause counters;
+       removing the supply under each dying-gasp polarity; reading the chip
+       identity without the key.
+   * - What the multicast type bit of a downstream flow does on its own, that
+       two T-CONTs of one group can share a queue, that a stream left on its old
+       queue after a bring-up does no harm, and that streams chosen by VLAN tell
+       GEM interfaces apart ("GEM ports as network interfaces").
+     - The same flow without the bit, against the downstream multicast filter;
+       two granted T-CONTs in one group, each with an upstream GEM port, reading
+       each port's octet count; sending upstream between the bring-up and the
+       Assign_Alloc-ID, reading the ingress-discard counter; two upstream GEM
+       ports in different VLANs, each on a granted T-CONT, sending in both
+       VLANs.
+   * - That an extended OMCI message arrives with the same four trailing bytes
+       ("The OMCI channel"), and that a message received outside O5 must be
+       dropped.
+     - An OLT that negotiates the extended message set; delivering a message
+       received outside O5 and looking for harm.
+
+Questions the code does not depend on
+-------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether the driver falls back to a switch without the PON MAC when the
+       device tree lacks the system controller or a region ("The buffer's
+       DRAM").
+     - Booting a device tree without them.
+   * - The unit of the queue rate fields ("Sizes and numbering").
+     - A peak rate below the maximum against a flood above it.
+   * - Whether the switch's OMCI counters count what their names say ("Switch
+       settings in the build").
+     - The ``ponmac`` view read before and after an exchange of a known number
+       of 48-byte messages.
+   * - What the length-mismatch half of ``0x7011c0`` and the non-idle counter
+       ``0x7011c4`` count, and what the sixteen downstream GEM counters and the
+       raw counters of the packet buffer are ("The debugfs views").
+     - A downstream burst of a known number of frames on one GEM port; reading
+       each counter before and after known traffic, and whether it clears on
+       read.
+   * - What the start and space fields of the upstream FIFO and the transmit
+       threshold and early-transmit bit of the upstream DMA control word decide
+       together, as the ``pondp`` view shows them.
+     - Changing them one at a time under a throughput run.

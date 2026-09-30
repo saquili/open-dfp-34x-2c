@@ -14,6 +14,7 @@ Contents:
    ethernet/index
    fddi/index
    hamradio/index
+   pon/index
    wifi/index
    wwan/index
 

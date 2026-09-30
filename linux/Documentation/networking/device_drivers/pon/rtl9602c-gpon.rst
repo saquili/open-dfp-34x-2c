@@ -1,0 +1,2814 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+=========================
+Realtek RTL9602C GPON MAC
+=========================
+
+Overview
+========
+
+The GPON MAC is the block of the RTL9602C that runs the ONU's side of the
+transmission convergence layer of ITU-T G.984.3, the GTC layer. Downstream it
+finds the 125 us frame, reads the PLOAM channel and the bandwidth map, and sorts
+the GEM frames by Port-ID into flows. Upstream it sends a burst in each
+allocation that the OLT grants to one of the ONU's Alloc-IDs: the physical layer
+overhead, a PLOAM message if the allocation asks for one, and the GEM frames
+that the PON MAC queues for the allocation's T-CONT. Its registers, tables and
+counters are in the switch's register window, at offsets ``0x700000`` to
+``0x706cfc``.
+
+The MAC does not run the activation by itself. It takes its activation state
+from a register that the driver writes, and classifies the OLT's grants by that
+state; the driver runs the state machine of G.984.3 from O1 to O5 on the PLOAM
+messages that the MAC queues for it. The MAC answers the OLT's serial-number and
+ranging requests by itself, from message templates that the driver arms. G.984.3
+gives the ONU 750 us to act on a PLOAM message, so the driver dispatches PLOAM
+messages from the switch's interrupt thread and not from a poll.
+
+``ip link set pon up`` starts the activation and ``ip link set pon down`` stops
+it. The ONU's serial number comes from the devlink parameter ``gpon_serial``;
+the driver has no default, and the interface does not come up until one is set.
+
+The block between the fibre and switch port 2::
+
+       fibre
+         |
+       optics
+         |
+       PON SerDes: analog front end, GPON mode
+         |
+       +-------------------------------------------------------------+
+       | GPON MAC                                    (this page)     |
+       |  downstream: GTC framing, PLOAM queue, bandwidth map,       |
+       |              GEM framing, Port-ID table -> flows            |
+       |  upstream:   burst overhead, PLOAM queues and templates,    |
+       |              GEM framing, Alloc-ID table -> T-CONTs         |
+       +-------------------------------------------------------------+
+         |
+       PON MAC: packet buffer, streams, queues, T-CONT scheduler
+         |
+       switch port 2 (pon)
+
+This page describes the block as the driver sets it up: the boot report, the
+bring-up and take-down, the PON SerDes and its analog front end, the downstream
+lock, the activation state machine, PLOAM in both directions, the burst overhead
+and the upstream timing, the bandwidth map, the Alloc-ID and Port-ID tables, GEM
+framing, the counters, FEC and encryption, and what the driver reports to the
+PON class, through devlink and in debugfs. The PON MAC and the packet buffer are
+on Documentation/networking/device_drivers/pon/rtl9602c.rst, which also
+introduces the set of pages for the PON hardware; the optics are on
+Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
+
+Activation in brief
+-------------------
+
+The driver implements the states O1 to O5 of ITU-T G.984.3 (clause 10.2.1). A
+normal activation runs as follows; "The activation state machine" has the facts
+of each step.
+
+1. Bring-up leaves the ONU in O2, with TX_DISABLE asserted, the message
+   templates armed and the GPON interrupt source enabled.
+2. The OLT broadcasts Upstream_Overhead. The driver programs the burst overhead
+   and the pre-assigned delay from it, releases TX_DISABLE and moves to O3. The
+   MAC answers each discovery grant, an allocation to Alloc-ID 254 with the
+   PLOAMu flag, with the Serial_Number_ONU template.
+3. The OLT sends Assign_ONU-ID carrying the ONU's serial number. The driver
+   writes the ONU-ID, binds the default Alloc-ID, which equals the ONU-ID, and
+   moves to O4. The OLT then sends the new ONU-ID a ranging request, which the
+   MAC answers by itself.
+4. The OLT sends Ranging_Time. The driver writes the equalization delay and the
+   burst overhead length of the ranged state, and moves to O5.
+5. Next the OLT sends Configure_Port-ID, and Assign_Alloc-ID for any T-CONT
+   beyond the default one. The driver acknowledges both: the Port-ID binds the
+   OMCC, the ONU's OMCI channel, and each Alloc-ID goes into one of T-CONTs 0 to
+   15. OMCI messages then cross the PON MAC to ``/dev/pon0omci0``.
+
+The table lists every event that changes the state. TO1 is the timer of G.984.3
+that bounds the time in O3 and O4; the driver's use of it is described with the
+state machine.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 12 10 48
+
+   * - Event
+     - From
+     - To
+     - What the driver does
+   * - ``ip link set pon up``
+     - any
+     - O1, then O2
+     - Bring-up sets O1, builds and programs everything (see "Bring-up and
+       take-down") and ends in O2 with no ONU-ID.
+   * - Upstream_Overhead, broadcast
+     - O2
+     - O3
+     - Programs the burst overhead and the pre-assigned delay, arms the
+       Serial_Number_ONU template again, releases TX_DISABLE and arms TO1.
+   * - Assign_ONU-ID carrying the ONU's serial number
+     - O3
+     - O4
+     - Writes the ONU-ID, binds the default Alloc-ID into T-CONT 16, arms a
+       bandwidth-map capture and arms TO1 again.
+   * - Ranging_Time for the main path, directed
+     - O4
+     - O5
+     - Writes the equalization delay and the burst overhead length of the ranged
+       state, flushes the upstream PLOAM queues and disarms TO1.
+   * - TO1 expires
+     - O3 or O4
+     - O2
+     - Gives back the ONU-ID, the Alloc-IDs and the OMCC if they are held. The
+       next Upstream_Overhead programs everything again.
+   * - Deactivate_ONU-ID, directed or broadcast
+     - O4 or O5
+     - O2
+     - Gives back the ONU-ID, the Alloc-IDs and the OMCC.
+   * - ``ip link set pon down``
+     - any
+     - O1
+     - Asserts TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the OMCC.
+       The MAC is not reset.
+
+Configuration
+-------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Symbol
+     - Effect
+   * - ``CONFIG_NET_DSA_RTL9602C``
+     - Tristate. Builds ``rtl9602c-gpon.o`` into the module ``rtl9602c`` with
+       the other blocks of the switch driver; the GPON MAC cannot be left out of
+       it. It selects ``PON``.
+   * - ``CONFIG_PON``
+     - The PON class (Documentation/networking/pon.rst). The GPON MAC code
+       reports the ONU's status and the state of the OMCI channel to it through
+       ``include/linux/pon.h``.
+   * - ``CONFIG_DEBUG_FS``
+     - The seven debugfs views of the GPON MAC exist only with it (see "The
+       debugfs views").
+   * - ``CONFIG_DYNAMIC_DEBUG``
+     - The per-message PLOAM trace and a few more lines are ``pr_debug()``
+       lines. They print once enabled through dynamic debug (see "The kernel
+       log").
+   * - ``CONFIG_RTL9602C_OPTICS_RO``
+     - With it the modulation hold of the bring-up returns at once and writes
+       nothing (see
+       Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
+
+``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver in
+(``CONFIG_NET_DSA_RTL9602C=y``) and sets ``CONFIG_DEBUG_FS=y`` and
+``CONFIG_DYNAMIC_DEBUG=y``.
+
+Device tree
+-----------
+
+The GPON MAC has no device tree node of its own. It is part of the register
+window of the switch node, compatible ``realtek,rtl9602c-switch``, which
+Documentation/networking/dsa/rtl9602c.rst describes with its binding. The GPON
+code depends on these properties of that node.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Property
+     - What the GPON code does with it
+   * - ``reg``
+     - The register window. The GPON MAC is at offsets ``0x700000`` to
+       ``0x706cfc`` of it.
+   * - ``interrupts``
+     - The switch's one interrupt, shared by all its sources. The GPON MAC is
+       one of them, ``RTL9602C_IRQ_SRC_GPON`` (bit 10 of
+       ``RTL9602C_IRQ_ENABLE``, ``0x01d00c``): the bring-up enables it, and the
+       interrupt thread dispatches PLOAM messages. The binding requires the
+       property.
+   * - ``tx-disable-gpios``
+     - Optional. The laser's TX_DISABLE line, which the state machine asserts in
+       O1 and O2 and releases from O3. Without the property every TX_DISABLE
+       step is skipped.
+   * - ``realtek,sysctl``, ``memory-region``
+     - Read at probe for the PON MAC, which the bring-up builds (see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst).
+
+Where the code is
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - File
+     - Contents
+   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+     - The GPON MAC: the boot report, the PON SerDes and analog set-up, bring-up
+       and take-down, the activation state machine, PLOAM receive and transmit,
+       the burst overhead and the upstream timing, the Alloc-ID, Port-ID and
+       multicast tables, the counters, the status report to the PON class and
+       the debugfs views.
+   * - ``drivers/net/dsa/realtek/rtl9602c.h``
+     - The register map of the GPON MAC, and the fields of ``struct
+       rtl9602c_priv`` that hold its state (their names begin ``gpon_`` and
+       ``ploam_``).
+   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
+     - The GPON source of the switch interrupt (``rtl9602c_irq()`` and
+       ``rtl9602c_irq_thread()``, which calls ``rtl9602c_gpon_irq()``), the
+       set-up of the worker, ``rtl9602c_port_enable()`` and
+       ``rtl9602c_port_disable()`` of the PON port, the devlink parameter
+       ``gpon_serial`` and the info item ``gpon.mac``, and the calls of
+       ``rtl9602c_gpon_report()`` and of the debugfs set-up at switch setup.
+   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
+     - The PON class's data path. This block calls ``rtl9602c_gem_restore()``
+       and ``rtl9602c_gem_tcont_ready()`` in it. It calls back
+       ``rtl9602c_gpon_port_bind()`` and ``rtl9602c_gpon_port_unbind()`` for the
+       Port-ID table and ``rtl9602c_gpon_fill_status()`` for the status, and it
+       answers the T-CONT query from the driver's record of the Alloc-IDs.
+   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``
+     - The OMCI port. It reads the activation state and whether the OMCC is
+       bound; this block reports the OMCI channel's link to the port.
+   * - ``rtl9602c-ponmac.c`` and ``rtl9602c-optics.c``, same directory
+     - Called from this block: ``rtl9602c_ponmac_init()`` and
+       ``rtl9602c_ponmac_sid_valid()`` of the PON MAC, and
+       ``rtl9602c_l_txdis_gpio()`` and ``rtl9602c_optics_hold_modulation()`` of
+       the optics. The ``ponpath`` view of the PON MAC calls
+       ``rtl9602c_gpon_port_get()`` and ``rtl9602c_gpon_flow_cntr()``.
+
+Locks
+-----
+
+The state of the block is kept in ``struct rtl9602c_priv`` and protected by
+three locks.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 14 66
+
+   * - Lock
+     - Type
+     - What it serialises
+   * - ``gpon_lock``
+     - mutex
+     - PLOAM dispatch from the interrupt thread and the worker, the Alloc-ID and
+       Port-ID tables, bring-up and take-down, and the status report.
+   * - ``ploam_lock``
+     - mutex
+     - The writers of upstream PLOAM messages.
+   * - ``ploam_log_lock``
+     - spinlock
+     - The ``ploamlog`` ring.
+
+Interfaces to user space
+------------------------
+
+- ``ip link set pon up`` starts the activation and ``ip link set pon down``
+  stops it. Bringing the interface up fails with ``ENXIO`` until a serial number
+  has been set. The driver keeps the interface dormant in every state but O5;
+  that ``ip link show pon`` then shows it so is not verified.
+- The devlink parameter ``gpon_serial`` on ``platform/1b000000.switch`` sets the
+  serial number, and ``devlink dev info`` reports the MAC's revision word as the
+  fixed version ``gpon.mac``. The parameter list is on
+  Documentation/networking/devlink/rtl9602c.rst.
+- Through the PON class (Documentation/networking/pon.rst): the OMCI port
+  ``/dev/pon0omci0``, which carries the OMCC; the ``gem`` interfaces; and the
+  ``pon`` generic netlink family, which reports the activation state, the
+  ONU-ID, the Alloc-IDs, the OMCC's Port-ID, the alarms, the counters and the
+  serial number, and announces changes.
+- Seven debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``gpon``, ``gpontbl``,
+  ``ploamlog``, ``bwmap``, ``usburst``, ``uscntr`` and ``gemusintr`` (see "The
+  debugfs views").
+- The kernel log: the lines of this block begin ``rtl9602c-switch: <GPON>`` (see
+  "The kernel log").
+
+The serial number is a per-device setting. An example in the form the driver
+accepts, with a made-up number::
+
+    devlink dev param set platform/1b000000.switch name gpon_serial \
+            value ABCD0000A001 cmode runtime
+    ip link set pon up
+
+The kernel log
+--------------
+
+The lines of this block begin ``rtl9602c-switch: <GPON>``, with exceptions noted
+in the table. The transitions and the reports of the bring-up are at information
+level. The per-message trace of the PLOAM channel is at debug level: dynamic
+debug switches it on, with ``echo 'file rtl9602c-gpon.c +p' >
+/sys/kernel/debug/dynamic_debug/control``. It prints before the message is acted
+on, and a console line costs about 9 ms at 115200 baud, against the 750 us that
+G.984.3 gives the ONU. The table gives the lines a maintainer meets; the facts
+name the others.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 46 14 40
+
+   * - Line, after the prefix
+     - Level
+     - Meaning
+   * - ``<GPON> MAC rev 0x11110320, self test passed, data retention included``
+     - info
+     - The boot report (see "The register block").
+   * - ``<GPON> MAC: nothing answers below the top level yet``, or ``<GPON> MAC:
+       the transmission-convergence layer is answering (0x...)``
+     - info
+     - The boot report: the MAC is in reset, or it is running.
+   * - ``<GPON> MAC brought up``
+     - info
+     - The bring-up returned 0.
+   * - ``the PON has no serial number: set one before bringing the interface
+       up``
+     - error
+     - Bring-up refused with ``-ENXIO``. No ``<GPON>`` tag.
+   * - ``PON MAC not built (err): OMCI will not flow``
+     - warning
+     - The PON MAC failed to build. No ``<GPON>`` tag.
+   * - ``<GPON> MAC did not leave reset (reset control ...)``
+     - error
+     - The MAC reset timed out.
+   * - ``<GPON> tables emptied: N Alloc-IDs (...), N Port-IDs, N multicast``
+     - info
+     - The tables held entries at bring-up.
+   * - ``<GPON> O2 standby -> O3 serial-number``, and the other transitions;
+       ``<GPON> O5 operation -> O2 standby after S.mmm s in O5``
+     - info
+     - A state change, logged after it is made.
+   * - ``<GPON> burst: guard ...``, ``<GPON> Upstream_Overhead raw: ...``
+     - info
+     - Upstream_Overhead was acted on in O2.
+   * - ``<GPON> EQD: d + c * 128 = s -> mf m, in-frame b``
+     - info
+     - The equalization delay was written.
+   * - ``<GPON> burst length: p B pre-ranging, r after; overhead x/y``
+     - info
+     - Extended_Burst_Length was acted on in O3.
+   * - ``<GPON> ONU-ID N assigned; O4 T us after the interrupt``
+     - info
+     - Assign_ONU-ID was acted on in O3.
+   * - ``<GPON> Ranging_Time raw: ... -- eqd N``
+     - info
+     - Ranging_Time took the ONU from O4 to O5.
+   * - ``<GPON> the OLT deactivated this ONU in O5``
+     - info
+     - Deactivate_ONU-ID was acted on.
+   * - ``<GPON> TO1 expired in O4; trying again``
+     - info
+     - TO1 took the ONU back to O2.
+   * - ``<GPON> signal detect disagrees with the burst (latch 0x...)``
+     - warning, rate-limited
+     - The upstream latch reported bit 8 or 9. The device name replaces the
+       prefix.
+   * - ``<GPON> upstream PLOAM queue N full``
+     - warning, rate-limited
+     - A message was refused with ``-EBUSY``. The device name replaces the
+       prefix.
+   * - ``<GPON> serial number set``
+     - info
+     - The devlink parameter was accepted.
+
+Where to read next
+------------------
+
+The other pages of the port, for what this page leaves to them:
+
+- Documentation/networking/device_drivers/pon/rtl9602c.rst: the PON MAC and the
+  packet buffer, the upstream streams, queues and T-CONT scheduler, the GEM
+  ports as network interfaces and the OMCI path.
+- Documentation/networking/device_drivers/pon/rtl9602c-optics.rst: the I2C
+  masters of the optics, the laser driver's pages, the digital diagnostics,
+  TX_DISABLE and the loss-of-signal input.
+- Documentation/networking/pon.rst: the PON class, its OMCI port, the ``gem``
+  interfaces and the ``pon`` netlink family.
+- Documentation/networking/dsa/rtl9602c.rst: the switch, its register window,
+  its interrupt and the device tree node.
+- Documentation/networking/devlink/rtl9602c.rst: the devlink parameters, the
+  region and the info reply.
+- Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst: the CPU
+  port and the OMCI frames that reach it.
+- Documentation/arch/mips/rtl9602c.rst: the CPU core, the platform and the
+  board.
+
+How to read the fact tables
+===========================
+
+Each block below has a short account of what the hardware does and what the
+driver does with it, followed by fact tables with three columns: *Fact*, *Tag*
+and *Checked by*. The tag says how the fact is established. **M**, measured on
+the board (the DFP-34X-2C3): *Checked by* gives the command or observation,
+through the driver's own interfaces (the kernel log, the debugfs views, ``ip``,
+``devlink``), or the register reads that show it. **T**, tested by function: the
+driver depends on the fact, and the named behaviour fails if it is wrong. **P**,
+public standard: *Checked by* names the document and the clause. **I**,
+inferred, not verified: the fact is an assumption, and *Checked by* says what
+would confirm or refute it. Where the driver writes a value that nothing shows
+to be needed, *Required: unverified* means that removing the write and repeating
+the named behaviour is what would settle it. The last chapter collects the **I**
+facts and says which of them the driver depends on.
+
+A row with two tags is established in two ways, or in two parts; *Checked by*
+says which part carries which tag. Register offsets are from the base of the
+switch register window, physical ``0x1b000000``, and values are 32-bit words as
+``readl()`` and ``writel()`` see them on this big-endian CPU. Bit positions are
+those of the macros. PLOAM octets are numbered as G.984.3 numbers them: octet 1
+is the ONU-ID, octet 2 the message identifier, octets 3 to 12 the data and octet
+13 the CRC. The driver's ``RTL9602C_PLOAM_*`` offset macros count from 0, so the
+offset n is octet n + 1. "The test OLT" is the OLT that the board was measured
+against; what a row says it sent is what the driver received from it, not a
+requirement.
+
+The behaviours that a tested fact depends on are named in words: the board boots
+to a shell; the downstream locks, and the ONU reaches O5 on an OLT and holds it;
+OMCI messages pass both ways over ``/dev/pon0omci0``; the optics diagnostics
+read, the laser is off before O3 and TX_DISABLE is honoured. Four further checks
+ran with traffic on the board: downstream GEM frames reach the SFP port;
+upstream GEM frames reach the OLT while the ONU's state is held; OMCI messages
+keep being answered while data flows; and a routed flow leaves by a GEM port on
+the T-CONT whose Alloc-ID the OLT assigned, which shows that the bandwidth map
+grants that T-CONT. "Every debugfs view reads" means that each view of this page
+can be read without an error.
+
+The register block
+==================
+
+The GPON MAC occupies offsets ``0x700000`` to ``0x706cfc`` of the switch's
+register window. Its top region, ``0x700000`` to ``0x700280``, answers at any
+time: it holds the reset control, the revision word, the block's interrupt
+enable and status, and the result of a memory self-test. Every other register,
+from ``0x701000`` up, answers only once the MAC has been taken out of reset;
+until then a read returns ``RTL9602C_GPON_NO_RESPONSE``, which is the bus's
+reply when nothing decodes the access and not register content. Reading it is
+harmless. The table gives the layout in outline; the registers are named where
+the facts use them.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 24 62
+
+   * - Offsets
+     - Sub-block
+     - What the driver uses there
+   * - ``0x700000``
+     - Top region
+     - Reset control, revision, interrupt enable and status, memory self-test.
+   * - ``0x701000``
+     - Downstream GTC and GEM
+     - The downstream interrupt latch, enable and status; ONU control (state and
+       ONU-ID); downstream control; LOS; the superframe counter; the PLOAM
+       receive queue; the Alloc-ID and Port-ID tables; the per-flow counters;
+       the GTC counters from ``0x701180`` to ``0x7011fc``; the OMCI PTI match;
+       the frame-derived pulse; and each flow's downstream type from
+       ``0x701400``.
+   * - ``0x702000``
+     - Bandwidth-map capture
+     - Capture control, status and data.
+   * - ``0x704000``
+     - Downstream GEM filter
+     - The multicast filter and the multicast table.
+   * - ``0x705000``
+     - Upstream GTC
+     - The upstream interrupt latch and enable; the upstream ONU-ID and control;
+       the write key; the response and equalization delays; the laser timing;
+       the burst overhead; the PLOAM transmit slots; the upstream counters; the
+       signal-detect limits; the transmit mode and the power save.
+   * - ``0x706000``
+     - Upstream GEM
+     - The upstream GEM interrupt latch and status; the PTI codes; the power
+       save; the burst merge threshold; each flow's upstream Port-ID from
+       ``0x706400`` and upstream octet counter from ``0x706800``.
+
+After a cold start the boot report has two lines, each with the prefix
+``rtl9602c-switch:``. The prefix is left out here::
+
+    <GPON> MAC rev 0x11110320, self test passed, data retention included
+    <GPON> MAC: nothing answers below the top level yet
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The GPON MAC occupies offsets ``0x700000`` to ``0x706cfc`` of the switch
+       register window. Its top region, ``0x700000`` to ``0x700280``, holds the
+       reset control ``RTL9602C_GPON_RESET_CTRL`` (``0x70000c``), the revision
+       word ``RTL9602C_GPON_REVISION`` (``0x700010``), the interrupt enable
+       ``RTL9602C_GPON_IRQ_EN`` (``0x700040``) and status
+       ``RTL9602C_GPON_IRQ_STAT`` (``0x700044``), and the memory self-test
+       result ``RTL9602C_GPON_MEM_SELFTEST`` (``0x700280``). The GTC, GEM,
+       bandwidth-map and table registers start at ``0x701000``.
+     - M
+     - Register reads through the switch window: the whole range read in one
+       pass without a hang, and two passes read alike.
+   * - The top region answers at any time. From ``0x701000`` up every register
+       returns ``RTL9602C_GPON_NO_RESPONSE`` (``0xca0eca0f``) until the MAC has
+       been taken out of reset (see "Bring-up and take-down"): the bus's reply
+       when nothing decodes the access, not register content. Reading it is
+       harmless. Once the MAC runs, every register answers.
+     - M
+     - With the MAC never brought up, eight top-region registers answered and
+       the 1000 words from ``0x701000`` up all read ``0xca0eca0f``; with the ONU
+       in O5, all of them answered and none read the pattern.
+   * - ``RTL9602C_GPON_REVISION`` reads ``0x11110320`` on this chip.
+       ``rtl9602c_gpon_report()`` prints it at setup, and
+       ``rtl9602c_devlink_info_get()`` reports it as the fixed version
+       ``gpon.mac``.
+     - M
+     - The register read; ``devlink dev info platform/1b000000.switch`` shows
+       ``gpon.mac 0x11110320``.
+   * - ``RTL9602C_GPON_MEM_SELFTEST`` reads ``0x00000007`` at setup on a working
+       chip: ``RTL9602C_GPON_MEM_SELFTEST_DONE`` (bit 0) and
+       ``RTL9602C_GPON_MEM_SELFTEST_RETAIN_DONE`` (bit 1) among the set bits,
+       ``RTL9602C_GPON_MEM_SELFTEST_FAIL`` (bit 3) and
+       ``RTL9602C_GPON_MEM_SELFTEST_RETAIN_FAIL`` (bit 4) clear.
+     - M
+     - The boot log line ``MAC rev ..., self test passed, data retention
+       included``.
+   * - The bits mean: the memory test finished, the data-retention test
+       finished, the memory test failed, the retention test failed. A set
+       failure bit has never been seen.
+     - I
+     - A part with a failing MAC memory. Only log lines depend on it.
+   * - ``rtl9602c_gpon_report()``, called once at switch setup, prints an error
+       when either failure bit is set, a warning when
+       ``RTL9602C_GPON_MEM_SELFTEST_DONE`` is clear, and otherwise the revision,
+       adding "data retention included" when
+       ``RTL9602C_GPON_MEM_SELFTEST_RETAIN_DONE`` is set. It then reads
+       ``RTL9602C_GTC_DS_IRQ_STAT`` and prints whether the transmission
+       convergence layer answers, that is whether the value is anything but
+       ``RTL9602C_GPON_NO_RESPONSE``. It writes nothing.
+     - T
+     - The board boots to a shell: both lines are in the boot log.
+
+Bring-up and take-down
+======================
+
+``ip link set pon up`` brings the GPON MAC up from whatever state the hardware
+was left in. The chip may have been reset by the watchdog or restarted by a warm
+reset, the MAC may still hold an activation, and its tables keep their contents
+through the MAC reset and the chip reset. The bring-up therefore starts from O1,
+builds the PON MAC, puts the PON SerDes in GPON mode, resets the MAC, empties
+its tables, and only then programs the registers of the activation path,
+enabling the interrupt last. It runs under ``gpon_lock``. If it fails the
+interface does not open.
+
+Bring-up, in order
+------------------
+
+The steps of ``rtl9602c_gpon_bringup()``, in order. The tags in parentheses are
+those of the facts that carry each step.
+
+1. Set O1. Purpose: end an activation that survived a warm reset, which restarts
+   the CPU but not the GPON MAC. (M)
+2. Build the PON MAC (``rtl9602c_ponmac_init()``, see
+   Documentation/networking/device_drivers/pon/rtl9602c.rst). Purpose: every
+   OMCI message crosses it. A failure is logged and bring-up goes on, because
+   activation does not depend on it. That the PON MAC has to be built before
+   step 3 is an assumption. (M for the need, I for the order)
+3. Put the PON SerDes in GPON mode (``rtl9602c_pon_serdes_gpon()``, see "PON
+   SerDes and analog front end"): park it, reset it, enable the burst-enable
+   output driver, set GPON mode, override the bit-error indication and force no
+   burst enable. Purpose: the MAC reset of step 5 completes only once the SerDes
+   is in GPON mode. (M for the mode and the burst-enable force, I for the rest)
+4. Write the analog front end (``rtl9602c_pon_analog_init()``), ending with the
+   burst-enable path out of power-down. Purpose: the receiver recovers the clock
+   and detects signal, and the burst output works. (M for the signal-detect bit,
+   I for the rest)
+5. Reset the MAC (``rtl9602c_gpon_reset()``). Purpose: from here the GTC
+   registers answer. A timeout fails the bring-up. (M)
+6. Empty the Alloc-ID, Port-ID and multicast tables
+   (``rtl9602c_gpon_tables_clear()``). Purpose: neither the MAC reset nor the
+   chip reset clears them, and what an earlier run left in them breaks the next
+   activation. (M)
+7. Program the GEM ports that exist again (``rtl9602c_gem_restore()``). Purpose:
+   they live in the tables that step 6 emptied. (M)
+8. Hold the optics' modulation (``rtl9602c_optics_hold_modulation()``, see
+   Documentation/networking/device_drivers/pon/rtl9602c-optics.rst). Purpose:
+   before the laser is first enabled in O3. A failure is logged and bring-up
+   goes on. (I)
+9. Set the burst merge threshold. (I)
+10. Write the response delay under the write key. Purpose: upstream timing. (M)
+11. Write the period of the frame-derived pulse. (I)
+12. Set the signal-detect mismatch limit to its reset value; step 20 writes the
+    whole register. (I)
+13. Enable the optical LOS input and select its polarity. Purpose: downstream
+    lock. (M)
+14. Write the FEC detection threshold. (I)
+15. Keep only the bandwidth-map allocations for this ONU. Purpose: the ONU
+    answers the discovery grants and its own grants only. (M)
+16. Write the OMCI PTI match. Purpose: the OMCC downstream. (T)
+17. Write the downstream GEM filter. Purpose: GEM data downstream. (T)
+18. Enable the downstream GTC interrupts, then the two sub-blocks at the top
+    level. Purpose: PLOAM messages from the interrupt. (T, M)
+19. Write the laser lead and lag. Purpose: burst timing. (M)
+20. Write the signal-detect limits, the whole register. (I)
+21. Enable the upstream GTC interrupts. (M)
+22. Enable the burst power save, in the GTC under the write key and then in the
+    GEM framer. (I)
+23. Write the upstream PTI codes. Purpose: GEM data upstream. (T)
+24. Write the upstream control word under the write key. Purpose: the PLOAMu
+    field, the scrambler and the burst-enable polarity. (T)
+25. Write the transmit mode under the write key. Purpose: bursts that start in
+    the previous frame. (M)
+26. Keep only the allocations for this ONU, once more. (M)
+27. Mark the ONU-ID unassigned and set O2. Purpose: wait for Upstream_Overhead.
+    (P)
+28. Arm the No message, Dying_Gasp and Serial_Number_ONU templates. Purpose:
+    they are ready before the first discovery grant. (M, P)
+29. Enable the GPON source of the switch interrupt and run the worker at once.
+    Purpose: activation starts, and the first PLOAM message dispatched finds
+    every register of the activation path programmed. (T)
+
+The steps tagged M are measured, each in the facts of the section that describes
+it. The steps tagged T are checked by the ONU reaching O5 on an OLT and OMCI
+messages passing both ways over ``/dev/pon0omci0``. The steps tagged I are
+written on inference; the last chapter lists them.
+
+The MAC reset
+-------------
+
+The MAC reset, ``rtl9602c_gpon_reset()``, is a pulse on one bit and a wait for
+another:
+
+1. Set ``RTL9602C_GPON_RESET_CTRL_TRIGGER`` (bit 0 of
+   ``RTL9602C_GPON_RESET_CTRL``). Purpose: start the reset. (M)
+2. Clear the bit again. (M)
+3. Poll ``RTL9602C_GPON_RESET_CTRL_DONE`` (bit 8) every 100 us for at most 20
+   ms. Purpose: the GTC registers answer once it is set. A timeout is logged
+   with the register's value (``MAC did not leave reset``) and fails the
+   bring-up. (M)
+
+Take-down and the facts of the bring-up
+---------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``ip link set pon up`` reaches ``rtl9602c_port_enable()``, which calls
+       ``rtl9602c_gpon_start()``. It returns ``-ENXIO`` while no serial number
+       has been set; 0 at once when the PON is already up, because a second
+       bring-up would reset the MAC under a live activation; otherwise it zeroes
+       the running totals of the counters and runs ``rtl9602c_gpon_bringup()``.
+       The PON counts as up only when that returns 0, and an error fails the
+       interface's open.
+     - M
+     - With no serial number set, ``ip link set pon up`` failed with ``ENXIO``;
+       with one set, the interface came up and the ONU reached O5.
+   * - ``ip link set pon down`` reaches ``rtl9602c_port_disable()``, which calls
+       ``rtl9602c_gpon_stop()``: the state machine goes to O1, which asserts
+       TX_DISABLE and gives back what O4 and O5 built (see "The activation state
+       machine"), and the PON is marked down. The MAC is not reset; the GPON
+       interrupt source and the worker stay active, and in O1 no received
+       message is acted on.
+     - M
+     - ``down`` took the ``onu`` line of the ``gpon`` view from ``00000105``
+       (O5, ONU-ID 1) to ``0000ff01`` (O1, ONU-ID 255), and ``up`` walked O3 and
+       O4 back to O5; from a cold boot a down and up re-ranged in 1 to 3 s, 20
+       times of 20.
+   * - A warm reset restarts the CPU but not the GPON MAC, which keeps the
+       previous activation: ranged, in O5, transmitting in its bursts. The PON
+       MAC cannot be built beneath a MAC in that state, because the drain of the
+       OMCC's queue that its build starts with does not complete. Bring-up
+       therefore begins by setting O1.
+     - M
+     - The drain completed in 0 us after cold boots and was still busy 0.5 s
+       later after every warm reset (4 of 4); the ONU still reached O5 and no
+       OMCI message crossed; ``down`` then ``up``, which sets O1 first, repaired
+       it.
+   * - The PON MAC (``rtl9602c_ponmac_init()``) is built next. A failure is
+       logged and bring-up goes on: activation does not depend on it, every OMCI
+       message does.
+     - M
+     - With the PON MAC never built, the ONU reached O5, no OMCI message reached
+       the CPU, and the OLT sent Deactivate_ONU-ID about 12 s later.
+   * - The PON MAC is built before the SerDes is put in GPON mode, not after.
+     - I
+     - Required: unverified; reversing the two and checking that OMCI messages
+       pass both ways.
+   * - The MAC reset completes only once the SerDes is in GPON mode, so it comes
+       after it. Afterwards ``RTL9602C_ONU_CTRL`` reads ``0x0000ff01``: ONU-ID
+       255, O1.
+     - M
+     - With the SerDes in GPON mode the reset completed and the ``onu`` line
+       read ``0000ff01``; without it the trigger bit read back set and the done
+       bit stayed clear through 1000 polls.
+   * - The GEM ports that exist are programmed again
+       (``rtl9602c_gem_restore()``, see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst) right after the
+       tables are emptied, because they live in those tables.
+     - M
+     - After a PON down and up, a GEM port created before it was restored, and
+       its upstream restarted when the Alloc-ID was assigned again (the kernel
+       log line ``upstream started``).
+   * - The optics' modulation is held (``rtl9602c_optics_hold_modulation()``,
+       see Documentation/networking/device_drivers/pon/rtl9602c-optics.rst)
+       before the laser is first enabled in O3; a failure is logged and bring-up
+       goes on.
+     - I
+     - Whether activation needs the hold is open: activations have been clean
+       with the hold on and off.
+   * - The GPON source of the switch interrupt (``RTL9602C_IRQ_SRC_GPON``, bit
+       10 of ``RTL9602C_IRQ_ENABLE``, ``0x01d00c``) is enabled last and the
+       worker is run at once, so that the first PLOAM message dispatched finds
+       every register of the activation path programmed.
+     - T
+     - The downstream locks and the ONU reaches O5 on an OLT.
+
+PON SerDes and analog front end
+===============================
+
+The PON SerDes sits between the optics and the GPON MAC. Its analog front end
+holds the receiver, the clock recovery, the line-rate profile and the
+burst-enable output to the optics. Its registers are in the switch's register
+window, outside the GPON MAC's range: ``0x0001d0``, ``0x000104`` and the SerDes
+block from ``0x022034`` to ``0x022a74``. The bring-up writes them in two
+functions. ``rtl9602c_pon_serdes_gpon()`` parks the SerDes, resets it and puts
+it in GPON mode. ``rtl9602c_pon_analog_init()`` then writes the analog front
+end: five tuning words, the clock recovery (CDR) with its loop setting, the
+line-rate profile, the burst-enable output level, the transmit amplitude and the
+receiver enable, and at the end takes the burst-enable path out of power-down.
+
+Two of these are known to matter: the GPON mode, without which the MAC reset
+does not complete, and the state of ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR``, which
+has to be clear for the downstream to frame. The others are written because the
+downstream locks and the ONU reaches O5 with all of them in place; none has been
+removed on its own to see whether it is needed, and the rows say so.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Park the PON SerDes: ``RTL9602C_SERDES_PON_CTRL_MODE`` (bits 4:0 of
+       ``RTL9602C_SERDES_PON_CTRL``, ``0x0001d0``) is set to
+       ``RTL9602C_SERDES_PON_CTRL_MODE_OFF`` (``0x1f``), then
+       ``RTL9602C_SERDES_PON_RESET`` (``0x022034``) is written 0, so that the
+       analog side is configured while it is stopped.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT.
+   * - Set ``RTL9602C_CHIP_RESET_PON_SERDES`` (bit 0 of ``RTL9602C_CHIP_RESET``,
+       ``0x000104``) and wait 10 to 11 ms; the driver never clears the bit. It
+       resets the PON SerDes; that it resets the GPON MAC as well is not
+       established.
+     - I
+     - A MAC register written before this step and read after it.
+   * - Set ``RTL9602C_SERDES_PON_OPTIC_CTRL_BURST_OE`` (bit 12 of
+       ``RTL9602C_SERDES_PON_OPTIC_CTRL``, ``0x022090``), the output driver of
+       the burst-enable signal to the optics; clear
+       ``RTL9602C_SERDES_PON_TX_CFG_BURST_DLY`` (bits 6:4, the burst enable's
+       delay against the data) and ``RTL9602C_SERDES_PON_TX_CFG_D2A_SEL`` (bits
+       3:0, the transmitter's data source) of ``RTL9602C_SERDES_PON_TX_CFG``
+       (``0x02203c``).
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT and the OLT hears its
+       bursts.
+   * - ``RTL9602C_SERDES_PON_CTRL_MODE`` is set to
+       ``RTL9602C_SERDES_PON_CTRL_MODE_GPON`` (``0x08``): the PON SerDes in GPON
+       mode. The MAC reset completes only after it.
+     - M
+     - The MAC reset completes with it and not without it (see "Bring-up and
+       take-down").
+   * - Set ``RTL9602C_SERDES_ANA_FORCE_BER_VAL`` (bit 13) and
+       ``RTL9602C_SERDES_ANA_FORCE_BER_EN`` (bit 12) of
+       ``RTL9602C_SERDES_ANA_FORCE_BER`` (``0x022508``), an override of the
+       SerDes's bit-error indication.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT.
+   * - Clear ``RTL9602C_SERDES_PON_BURST_FORCE_EN`` (bit 0 of
+       ``RTL9602C_SERDES_PON_BURST_FORCE``, ``0x0220e4``), so that no burst
+       enable is forced. Set, it does not make the module transmit; what it
+       forces is not established.
+     - M
+     - With the bit set and TX_DISABLE released, the module's own diagnostics
+       (see Documentation/networking/device_drivers/pon/rtl9602c-optics.rst)
+       read zero bias and zero power; forcing the module's burst enable instead
+       read 14.1 mA and +2.3 dBm.
+   * - Write whole, in this order: ``RTL9602C_SERDES_ANA_TUNE2`` (``0x022588``)
+       = ``RTL9602C_SERDES_ANA_TUNE2_INIT`` (``0x6df8``);
+       ``RTL9602C_SERDES_ANA_PLL_CFG`` (``0x02258c``, the clock multiplier) =
+       ``RTL9602C_SERDES_ANA_PLL_CFG_INIT`` (``0x8941``);
+       ``RTL9602C_SERDES_ANA_TUNE8`` (``0x0225a0``) =
+       ``RTL9602C_SERDES_ANA_TUNE8_INIT`` (``0x0713``);
+       ``RTL9602C_SERDES_ANA_TUNE25`` (``0x0225e4``) =
+       ``RTL9602C_SERDES_ANA_TUNE25_INIT`` (``0x001f``);
+       ``RTL9602C_SERDES_ANA_TUNE24`` (``0x0225e0``) =
+       ``RTL9602C_SERDES_ANA_TUNE24_INIT`` (``0x8001``).
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT with them.
+   * - ``RTL9602C_SERDES_ANA_CDR_LOOP_1G25`` (``0x0226b8``),
+       ``RTL9602C_SERDES_ANA_CDR_LOOP_EPON`` (``0x0227b8``) and
+       ``RTL9602C_SERDES_ANA_CDR_LOOP_GPON`` (``0x022738``) are each set to
+       ``RTL9602C_SERDES_ANA_CDR_LOOP_INIT`` (``0x80c5``): one clock-recovery
+       loop-filter setting for all three line-rate profiles, read as integral
+       gain 1 and proportional gains 4 and 2.
+     - I
+     - The value and its decoding are unverified; the ONU reaches O5 on an OLT
+       with them.
+   * - Set ``RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE`` (bit 14 of
+       ``RTL9602C_SERDES_ANA_RX_CFG``, ``0x0225b0``), the enable of the clock
+       recovery's analog front end, in the same write that clears bit 15
+       (``RTL9602C_SERDES_ANA_RX_CFG_SD_POR``, see "Downstream lock, LOS and
+       alarms").
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT.
+   * - ``RTL9602C_SERDES_ANA_FORCE_RATE`` (``0x022504``):
+       ``RTL9602C_SERDES_ANA_FORCE_RATE_VAL`` (bits 7:5) is set to
+       ``RTL9602C_SERDES_ANA_FORCE_RATE_VAL_GPON`` (1) and
+       ``RTL9602C_SERDES_ANA_FORCE_RATE_EN`` (bit 4) is set: the analog
+       line-rate profile is forced to GPON's 2.48832 Gbit/s downstream and
+       1.24416 Gbit/s upstream instead of following the digital side.
+     - I
+     - Required: unverified; the register reads ``0x30`` after bring-up and 0
+       before.
+   * - Set ``RTL9602C_SERDES_ANA_BURST_OUT_TTL`` (bit 14 of
+       ``RTL9602C_SERDES_ANA_BURST_OUT``, ``0x022584``): the burst-enable output
+       to the optics at TTL level.
+     - I
+     - Required: unverified; the register reads ``0x73a4`` after bring-up and
+       ``0x33a4`` before.
+   * - ``RTL9602C_SERDES_ANA_TX_CFG_AMP`` (bits 5:3 of
+       ``RTL9602C_SERDES_ANA_TX_CFG``, ``0x0225d8``) is set to
+       ``RTL9602C_SERDES_ANA_TX_CFG_AMP_GPON`` (5), the upstream transmit
+       amplitude; it resets to 7.
+     - I
+     - Required: unverified; the register reads ``0x39`` before and ``0x29``
+       after.
+   * - Clear ``RTL9602C_SERDES_ANA_RX_FILTER_CFG`` (bits 7:0 of
+       ``RTL9602C_SERDES_ANA_RX_FILTER``, ``0x0225ac``), the receiver filter
+       configuration.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT.
+   * - Set ``RTL9602C_SERDES_ANA_CDR_CTRL_RESET`` (bit 14) and
+       ``RTL9602C_SERDES_ANA_CDR_CTRL_LPF_EN`` (bit 10) of
+       ``RTL9602C_SERDES_ANA_CDR_CTRL`` (``0x0225cc``), manual controls of the
+       clock recovery's reset and loop filter. Which level of the reset bit
+       holds the clock recovery in reset is not known.
+     - I
+     - Required, and the polarity, unverified; the ONU reaches O5 on an OLT.
+   * - ``RTL9602C_SERDES_ANA_FORCE_RX`` (``0x022500``) is written
+       ``RTL9602C_SERDES_ANA_FORCE_RX_OFF`` (``0x0010``), then
+       ``RTL9602C_SERDES_ANA_FORCE_RX_ON`` (``0x0030``), then the driver waits
+       50 ms: the receiver-enable override on with the receiver off, then on.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT.
+   * - Last, ``RTL9602C_SERDES_PON_PDOWN_BURST`` (bit 10 of
+       ``RTL9602C_SERDES_PON_PDOWN``, ``0x022038``) is cleared: the burst-enable
+       path is out of power-down.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT and the OLT hears its
+       bursts.
+   * - Written on their own, the tuning words, the loop setting, the clock
+       recovery's front-end enable, the receiver filter, the manual
+       clock-recovery controls, the receiver-enable override and the burst-path
+       power-down changed no reading. The downstream framed only once the
+       line-rate profile, the burst-enable output level, the transmit amplitude,
+       the optical LOS input (see "Downstream lock, LOS and alarms"), the FEC
+       detection threshold, the OMCI PTI match and the interrupt enables were
+       written as well. It framed in that measurement with
+       ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` set, which it does not do under
+       other conditions (see the next section).
+     - M
+     - The ``gpon`` view and register reads before and after each group of
+       writes.
+
+Downstream lock, LOS and alarms
+===============================
+
+A downstream GTC frame lasts 125 us. The receiver recovers the clock from the
+2.48832 Gbit/s stream, the MAC finds the frame by its PSync field and tracks the
+superframe counter in the Ident field, and from then on it reads the PLOAM
+channel and the bandwidth map of every frame. The driver's part is to set the
+SerDes up (see the previous section), to let the optical module's LOS input act
+on the receiver, and to read the result: the superframe counter advances 8000
+times a second while the downstream is framed, and the levels in
+``RTL9602C_GTC_DS_IRQ_STAT`` say whether the MAC reports LOS, LOF or LOM, and
+whether the line carries FEC.
+
+To see whether the downstream is framed, read the ``gpon`` view twice, ten
+seconds apart::
+
+    cat /sys/kernel/debug/rtl9602c/gpon
+    sleep 10
+    cat /sys/kernel/debug/rtl9602c/gpon
+
+The ``frame`` line advances by about 80000 while the downstream is framed and
+stands still otherwise; ``signok 1`` on the ``sig`` line says that the receiver
+detects a signal.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A downstream GTC frame lasts 125 us (38880 bytes at 2.48832 Gbit/s). The
+       Ident field of its PCBd carries a 30-bit superframe counter, one larger
+       in each frame, which the ONU tracks with a local counter.
+     - P
+     - ITU-T G.984.3 clause 8.1 and clause 8.1.3.2.
+   * - ``RTL9602C_GTC_DS_SUPERFRAME`` (``0x701048``), field
+       ``RTL9602C_GTC_DS_SUPERFRAME_CNT`` (bits 29:0), follows the received
+       superframe counter: it advances 8000 times a second while the downstream
+       is framed and not at all otherwise. The ``gpon`` view prints it on its
+       ``frame`` line, read from the register at every read.
+     - M
+     - The ``frame`` line read twice: 7996.7 to 8004.7 a second over five 10 s
+       intervals against the uptime clock, and no advance before the downstream
+       framed; 80169 in 10.0 s.
+   * - ``RTL9602C_SERDES_PON_RX_STAT`` (``0x022a74``):
+       ``RTL9602C_SERDES_PON_RX_STAT_SIGNAL`` (bit 8) is 1 while the PON
+       receiver detects a signal. The ``gpon`` view prints it on its ``sig``
+       line as ``signok``.
+     - M
+     - The ``sig`` line read 0 and then 1 across the change of the signal-detect
+       bit in the next row, the OLT transmitting.
+   * - ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` (bit 15 of
+       ``RTL9602C_SERDES_ANA_RX_CFG``) must be clear: set, the receiver's signal
+       detect reports no signal and the downstream does not frame. The driver
+       clears it in the analog set-up.
+     - M
+     - With the OLT transmitting and only this bit changed: set, the ``signok``
+       bit read 0 and the ``frame`` line stood still; clear, it read 1 and 80169
+       superframes passed in 10.0 s, LOS, LOF and LOM were clear, the ONU
+       reached O3, and PLOAM messages and bandwidth maps were accepted with no
+       CRC error.
+   * - What bit 15 selects is not established: the downstream has also framed at
+       8 kHz with the bit set, so its effect depends on a condition that has not
+       been identified.
+     - I
+     - Repeating the change of the previous row, and with the optics'
+       signal-detect configuration changed.
+   * - ``RTL9602C_GTC_DS_LOS`` (``0x701040``): ``RTL9602C_GTC_DS_LOS_OPTIC``
+       (bit 8) is the level of the optical module's LOS input and
+       ``RTL9602C_GTC_DS_LOS_CDR`` (bit 10) the clock recovery's loss
+       indication, both 1 for loss; ``RTL9602C_GTC_DS_LOS_OPTIC_EN`` (bit 0)
+       lets the input act on the receiver and ``RTL9602C_GTC_DS_LOS_OPTIC_POL``
+       (bit 1) selects which level of it means loss. Both configuration bits
+       reset clear; the driver sets both.
+     - M
+     - The register read ``0x00000100`` (bit 8 set on live light) before and
+       ``0x00000003`` after the bring-up writes; the ``los`` line of the
+       ``gpon`` view prints the two loss bits.
+   * - That setting bit 1 is right because this board's module drives its pin as
+       signal detect rather than as loss of signal, and whether bits 0 and 1 are
+       still needed now that ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` is clear, are
+       not established.
+     - I
+     - Clearing each and reading the ``los`` line and the superframe counter,
+       with the ONU reaching O5 on an OLT.
+   * - ``RTL9602C_SERDES_PON_RX_STAT_SYNC`` (bit 9) read 0 on a framed
+       downstream; what it reports is not established. The ``gpon`` view prints
+       it beside bit 8 as ``lecsync``.
+     - I
+     - The ``sig`` line read ``00000100``; a reading where bit 9 is 1 would
+       settle its meaning.
+   * - ``RTL9602C_GTC_DS_IRQ_STAT`` (``0x701008``) holds the present condition:
+       ``RTL9602C_GTC_DS_IRQ_LOS`` (bit 0), ``RTL9602C_GTC_DS_IRQ_LOF`` (bit 1),
+       ``RTL9602C_GTC_DS_IRQ_FEC`` (bit 2, the downstream carries FEC) and
+       ``RTL9602C_GTC_DS_IRQ_LOM`` (bit 3). The driver reports LOS, LOF and LOM
+       from it as alarms (see "Reporting: the PON class and devlink"); FEC is a
+       property of the line, not an alarm.
+     - M
+     - The ``ds`` line of the ``gpon`` view read ``0000000a`` (LOF and LOM) with
+       the SerDes reporting no signal, and ``00000000`` on a framed downstream.
+   * - ``RTL9602C_GTC_DS_IRQ_LATCH`` (``0x701000``) latches the same events at
+       the same bit positions, with ``RTL9602C_GTC_DS_IRQ_SN_REQ`` (bit 8, a
+       grant classified as a serial-number request),
+       ``RTL9602C_GTC_DS_IRQ_RANGING_REQ`` (bit 9, one classified as a ranging
+       request) and ``RTL9602C_GTC_DS_IRQ_PLOAM_RX`` (bit 10, a PLOAM message
+       waits). Reading it clears it, and the read is the acknowledgment.
+       ``RTL9602C_GTC_DS_IRQ_EN`` (``0x701004``) uses the same positions; the
+       bring-up enables all seven (``0x70f``; 0 at reset).
+     - T
+     - The ONU reaches O5 on an OLT: activation runs from this interrupt, and it
+       does not assert again once the latch is read (see "PLOAM receive").
+   * - G.984.3's ONU detects LOS when no valid downstream signal is received and
+       LOF after five consecutive invalid PSync fields, cleared by two
+       consecutive correct ones; on either it switches its laser off and changes
+       state per clause 10.
+     - P
+     - ITU-T G.984.3 clause 11.1.2 and clause 8.1.3.1.
+   * - LOM is not among G.984.3's ONU alarms. What the MAC's LOM bit detects is
+       not established; the driver reports it as loss of PLOAM
+       (``PON_ALARM_LOM`` in ``include/uapi/linux/pon.h``).
+     - I
+     - A downstream with frames and a corrupted PLOAM channel.
+   * - ``RTL9602C_GTC_DS_PPS`` (``0x70126c``): the driver writes
+       ``RTL9602C_GTC_DS_PPS_PERIOD`` (bits 12:0) =
+       ``RTL9602C_GTC_DS_PPS_PERIOD_1S`` (7999: a pulse every 8000 downstream
+       frames, one second at 125 us a frame) and ``RTL9602C_GTC_DS_PPS_OFFSET``
+       (bits 31:26) = 1. Nothing the driver reports uses the pulse.
+     - I
+     - What consumes the pulse and what the offset counts are not identified.
+       Required: unverified.
+
+The upstream write key
+======================
+
+Some upstream GTC registers are locked: a write to one is dropped without any
+error unless the key was written first. The driver opens the key around each
+write to a register that it believes locked, and closes it again.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_GTC_US_WRITE_KEY`` (``0x705018``): writing
+       ``RTL9602C_GTC_US_WRITE_KEY_UNLOCK`` (``0xcc19``) opens the locked
+       upstream GTC registers to writes; writing
+       ``RTL9602C_GTC_US_WRITE_KEY_LOCK`` (0) closes them. A write to a locked
+       register without the key is dropped without any error.
+     - M
+     - A write to ``RTL9602C_GTC_US_CTRL`` without the key read back unchanged.
+   * - The driver writes ``RTL9602C_GTC_US_RESP_DELAY`` between the two key
+       writes, and ``RTL9602C_GTC_US_CTRL``, ``RTL9602C_GTC_US_TX_MODE`` and
+       ``RTL9602C_GTC_US_POWERSAVE`` through ``rtl9602c_gpon_us_locked_rmw()``
+       (unlock, read-modify-write, lock). That the response delay, the transmit
+       mode and the power save are locked like the control register, and that no
+       other register the driver writes is, are not established; a key that is
+       not needed costs nothing.
+     - I
+     - A write to each without the key, read back (the ``usburst`` view shows
+       them; the equalization delay write reads the response delay back).
+
+The activation state machine
+============================
+
+G.984.3 defines seven ONU states and two timers, and the driver implements O1 to
+O5 and TO1 ("Known limitations" says what it leaves out). The state is
+software's: ``rtl9602c_gpon_apply_state()`` writes it into ``RTL9602C_ONU_CTRL``
+on every transition and the MAC follows what is written. The MAC classifies the
+OLT's grants by it: in O1 it counts no grant as a serial-number request, and in
+O3 it takes the discovery grants.
+
+The code that causes a transition writes the registers that the new state needs,
+and then asks for the transition. The transition
+(``rtl9602c_gpon_apply_state()``) does the following, in this order.
+
+1. Record the new state for the rest of the driver. (M)
+2. Make the ``pon`` interface dormant, or not dormant in O5. (I)
+3. Record the event in the ``ploamlog`` ring. (M)
+4. Arm TO1 in O3 and O4 and disarm it otherwise. (M)
+5. Write the state into ``RTL9602C_ONU_CTRL``. Purpose: the MAC follows it. (M)
+6. Below O4, if an ONU-ID is held: write 255 into the ONU-ID registers and
+   unbind the default Alloc-ID, the Alloc-IDs in T-CONTs 0 to 15 and the OMCC.
+   Purpose: deactivation discards them. (M)
+7. Drive TX_DISABLE: asserted below O3, released from O3. (T)
+8. Log the transition, and on leaving O5 how long the ONU was in it. Purpose: a
+   console line costs about 9 ms, so the log comes after the writes that have to
+   meet the 750 us. (M)
+
+The report to the PON class follows the log line
+(``rtl9602c_gpon_set_state()``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - G.984.3 defines seven ONU states, O1 Initial, O2 Standby, O3
+       Serial_Number, O4 Ranging, O5 Operation, O6 POPUP and O7 Emergency Stop,
+       and two timers: TO1 bounds the time in O3 and O4 together (recommended 10
+       s), TO2 the time in O6 (recommended 100 ms).
+     - P
+     - ITU-T G.984.3 clause 10.2.1.
+   * - ``RTL9602C_ONU_CTRL`` (``0x701010``): ``RTL9602C_ONU_CTRL_STATE`` (bits
+       3:0) holds the state as the numbers 1 to 5 (``RTL9602C_ONU_O1_INITIAL``,
+       ``RTL9602C_ONU_O2_STANDBY``, ``RTL9602C_ONU_O3_SERIAL_NUMBER``,
+       ``RTL9602C_ONU_O4_RANGING``, ``RTL9602C_ONU_O5_OPERATION``), and
+       ``RTL9602C_ONU_CTRL_ONUID`` (bits 15:8) the ONU-ID, 255 until one is
+       assigned. The state is software's: ``rtl9602c_gpon_apply_state()`` writes
+       it on every transition and the MAC follows what is written.
+     - M
+     - Writing O2 and O3 read back ``0x0000ff02`` and ``0x0000ff03``; the
+       ``onu`` line of the ``gpon`` view prints the register.
+   * - The state gates the MAC's classification of grants: in O1 no grant is
+       counted as a serial-number request; in O3 the discovery grants are.
+     - M
+     - The serial-number request count (``sn-requests`` on the ``cntr`` line of
+       the ``gpon`` view) stayed 0 for 100 s in O1 while bandwidth maps arrived
+       8000 a second, and counted 8 in 8 s once O3 was written.
+   * - Bring-up ends in O2 with no ONU-ID. Upstream_Overhead, acted on only in
+       O2, takes the ONU to O3 and starts TO1.
+     - P
+     - ITU-T G.984.3 clause 10.2.5.1 a) and Table 10-1; the ONU reaches O5 on an
+       OLT.
+   * - Assign_ONU-ID carrying the ONU's own serial number, acted on only in O3,
+       takes it to O4.
+     - P
+     - ITU-T G.984.3 clause 10.2.5.1 c); the ONU reaches O5 on an OLT.
+   * - Ranging_Time for the main path, directed to the ONU's ONU-ID, is acted on
+       in O4 and O5: in O4 it sets the equalization delay and takes the ONU to
+       O5, stopping TO1; in O5 it only changes the delay.
+     - P
+     - ITU-T G.984.3 clause 10.2.5.1 d) and Table 10-1; the ONU reaches O5 on an
+       OLT.
+   * - Deactivate_ONU-ID, directed to the ONU's ONU-ID or broadcast, is acted on
+       in O4 and O5 and takes the ONU to O2.
+     - P
+     - ITU-T G.984.3 clause 10.2.5.1 h); the OLT's Deactivate_ONU-ID after
+       unacknowledged messages took the ONU to O2.
+   * - TO1 is armed for ``RTL9602C_GPON_TO1_MS`` (10 s) on entering O3 and armed
+       again on entering O4, and it is disarmed in every other state. The
+       worker, which runs every 50 ms, checks it. On expiry the ONU goes to O2
+       and the next Upstream_Overhead programs everything again.
+     - M
+     - ``TO1 expired in O4; trying again`` in the kernel log, then a new pass
+       through O3.
+   * - Whenever the state drops below O4 while an ONU-ID is held (TO1,
+       Deactivate_ONU-ID, the interface going down), the driver writes
+       ``RTL9602C_ONU_ONUID_UNASSIGNED`` (255) into ``RTL9602C_ONU_US_ONUID``
+       (``0x705010``) and into ``RTL9602C_ONU_CTRL_ONUID``, clears the default
+       Alloc-ID's table entry (T-CONT 16) and every T-CONT from 0 to 15 in use,
+       and unbinds the OMCC (``rtl9602c_gpon_o5_teardown()``).
+     - M
+     - With the ONU-ID of a failed ranging left in ``RTL9602C_ONU_US_ONUID``,
+       discovery never succeeded again (O3, TO1, O2, O3 ...); writing 255 into
+       it brought Assign_ONU-ID back within one TO1. ITU-T G.984.3 clause 9.2.1
+       and clause 5.5.4: deactivation discards the ONU-ID, the OMCI Port-ID and
+       every Alloc-ID.
+   * - Which upstream field takes ``RTL9602C_ONU_US_ONUID``, the burst header's
+       ONU-ID (G.984.3 clause 8.2.2.2), octet 1 of every upstream PLOAM message
+       whatever the template holds there, or both, is not established; the row
+       above shows only that the ONU identifies itself by it.
+     - I
+     - A capture of the upstream at the OLT with the register at 255 and at an
+       assigned value.
+   * - TX_DISABLE follows the state: it is asserted in O1 and O2 and released
+       from O3 on (``rtl9602c_l_txdis_gpio()``, see
+       Documentation/networking/device_drivers/pon/rtl9602c-optics.rst). Only
+       the hard block is lifted: the burst enable still confines emission to the
+       allocations that the OLT grants.
+     - T
+     - The laser is off before O3. ITU-T G.984.3 clause 10.2.2 (no upstream
+       transmission before O3); clause 9.2.1 and clause 11.1.2
+       (Deactivate_ONU-ID and loss of signal switch the laser off).
+   * - The PON port's operational state is dormant in every state but O5, and up
+       in O5 (``rtl9602c_gpon_operstate()``, on each transition and when the
+       port is enabled): up but waiting for an external event, as RFC 2863
+       defines dormant.
+     - I
+     - ``ip link show pon`` below O5 and in O5; RFC 2863 section 3.1.12.
+   * - A transition is logged only after the state, the ONU-ID and TX_DISABLE
+       are written, and the PON class report follows the log line. The
+       per-message PLOAM trace is debug-level; the lines left at information
+       level come after the writes they describe. G.984.3 gives the ONU 750 us,
+       and a console line costs about 9 ms at 115200 baud.
+     - M
+     - An Assign_ONU-ID queued behind two logged Upstream_Overhead lines was
+       acted on 20 ms after its interrupt, and the interrupt thread printing at
+       real-time priority starved the watchdog's feeder until the board reset.
+       ITU-T G.984.3 clause 9.2.
+   * - G.984.3 gives the ONU 750 us to process a downstream message and prepare
+       the upstream action. After Assign_ONU-ID the OLT issues a ranging
+       request, a grant to the new ONU-ID, which the MAC answers by itself from
+       the ONU-ID, the state and the default T-CONT entry already written; those
+       writes have to land within that time, which is why PLOAM messages are
+       taken from the interrupt.
+     - M
+     - Dispatched from the 50 ms worker, the ranging request was never counted
+       and TO1 expired in O4 on every attempt; a poll every 4 ms did no better;
+       from the interrupt every activation reached O5. ITU-T G.984.3 clause 9.2
+       and clause 10.2.5.2.
+
+PLOAM receive
+=============
+
+The OLT sends PLOAM messages in the PLOAMd field of the downstream frame. The
+MAC checks each message's CRC, counts the failures and queues the good ones; the
+driver pops a message, which the queue presents in seven 16-bit words, and acts
+on it in ``rtl9602c_gpon_ploam_rx()``. The MAC raises the PLOAM-received event
+in ``RTL9602C_GTC_DS_IRQ_LATCH``, and the switch's interrupt thread pops and
+dispatches up to 32 messages under ``gpon_lock``. The 50 ms worker does the same
+as a safety net and normally finds nothing.
+
+The interrupt path, in order:
+
+1. The hard interrupt handler (``rtl9602c_irq()``) notes the time and wakes the
+   thread, leaving the GPON source pending and the line masked. Purpose: the
+   source asserts again until the GTC latches are read. (M)
+2. The thread (``rtl9602c_irq_thread()``, which calls ``rtl9602c_gpon_irq()``)
+   reads ``RTL9602C_GPON_IRQ_STAT``. (M)
+3. If ``RTL9602C_GPON_IRQ_GTC_US`` is set, it reads the upstream latch (see
+   "Upstream timing"). Purpose: a latch left unread keeps the source asserted.
+   (M)
+4. If ``RTL9602C_GPON_IRQ_GTC_DS`` is set, it reads
+   ``RTL9602C_GTC_DS_IRQ_LATCH``, which clears it, and records any bit other
+   than PLOAM_RX in the ``ploamlog`` ring. (M)
+5. On ``RTL9602C_GTC_DS_IRQ_PLOAM_RX`` it pops and dispatches up to 32 PLOAM
+   messages, under ``gpon_lock``. (M)
+6. It writes the source's bit into ``RTL9602C_IRQ_PENDING`` to clear it. (M)
+
+A message is acted on only when its ONU-ID is 255 or the ONU's own, and each
+type needs a state. The table lists what the driver acts on; a type not in it is
+recorded in the ``ploamlog`` ring and dropped.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 26 22 30
+
+   * - Message (identifier)
+     - Addressed to
+     - Acted on in
+     - What the driver does
+   * - Upstream_Overhead (1)
+     - All ONUs
+     - O2
+     - Burst overhead and pre-assigned delay; O3.
+   * - Extended_Burst_Length (20)
+     - All ONUs
+     - O3
+     - Type 3 preamble lengths before and after ranging.
+   * - Assign_ONU-ID (3)
+     - All ONUs; octets 4 to 11 must be the ONU's serial number
+     - O3
+     - ONU-ID and default Alloc-ID; O4.
+   * - Ranging_Time (4)
+     - The ONU-ID
+     - O4, O5
+     - Equalization delay; from O4, O5.
+   * - Deactivate_ONU-ID (5)
+     - The ONU-ID or all ONUs
+     - O4, O5
+     - O2.
+   * - Assign_Alloc-ID (10)
+     - The ONU-ID
+     - Wherever octet 1 equals the ONU-ID the driver holds: O4 and O5 in
+       practice
+     - Binds or unbinds an Alloc-ID in a T-CONT; acknowledged.
+   * - Configure_Port-ID (14)
+     - The ONU-ID
+     - As Assign_Alloc-ID
+     - Binds or unbinds the OMCC; acknowledged.
+   * - PON-ID (21)
+     - All ONUs
+     - None
+     - Not recorded and not acted on.
+
+The octets of Upstream_Overhead, with the offset macros that name them (they
+count from 0, so the offset is the octet number less one):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 52 38
+
+   * - Octet
+     - Content
+     - Offset macros
+   * - 3
+     - The number of guard bits.
+     - ``RTL9602C_PLOAM_OVERHEAD_GUARD_BITS`` (2)
+   * - 4
+     - The number of type 1 preamble bits (all ones).
+     - ``RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS`` (3)
+   * - 5
+     - The number of type 2 preamble bits (all zeros).
+     - ``RTL9602C_PLOAM_OVERHEAD_TYPE2_BITS`` (4)
+   * - 6
+     - The type 3 preamble pattern.
+     - ``RTL9602C_PLOAM_OVERHEAD_TYPE3_PATTERN`` (5)
+   * - 7 to 9
+     - The delimiter.
+     - ``RTL9602C_PLOAM_OVERHEAD_DELIMITER`` (6) and
+       ``RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN`` (3)
+   * - 10
+     - The flags ``xxemsspp``: e (bit 5), the pre-assigned delay applies; m (bit
+       4), deprecated; ss (bits 3:2), the number of extra serial-number
+       transmissions, deprecated, 00; pp (bits 1:0), the default transmit power
+       level mode, 0 the highest.
+     - ``RTL9602C_PLOAM_OVERHEAD_FLAGS`` (9),
+       ``RTL9602C_PLOAM_OVERHEAD_PRE_EQD_EN`` (bit 5),
+       ``RTL9602C_PLOAM_OVERHEAD_EXTRA_SN_SHIFT`` (2) with
+       ``RTL9602C_PLOAM_OVERHEAD_EXTRA_SN_MASK`` (3)
+   * - 11 and 12
+     - The pre-assigned delay, in units of 32 bytes.
+     - ``RTL9602C_PLOAM_OVERHEAD_PRE_EQD_HI`` (10) and
+       ``RTL9602C_PLOAM_OVERHEAD_PRE_EQD_LO`` (11);
+       ``RTL9602C_PLOAM_OVERHEAD_PRE_EQD_SHIFT`` (8) turns the units into bits
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A PLOAM message is 13 octets (``RTL9602C_GPON_PLOAM_BYTES``): ONU-ID (0
+       to 253 once assigned, 255 broadcast), message identifier, 10 data octets,
+       and a CRC over x^8 + x^2 + x + 1. The OLT sends each downstream message
+       three times; the ONU acts on one valid copy.
+     - P
+     - ITU-T G.984.3 clause 9.1 and clause 10.2.5.1.
+   * - The receive queue: in ``RTL9602C_PLOAM_RX_CTRL`` (``0x701080``),
+       ``RTL9602C_PLOAM_RX_CTRL_EMPTY`` (bit 5) is 1 while no PLOAM message
+       waits, and setting ``RTL9602C_PLOAM_RX_CTRL_POP`` (bit 0) removes the
+       message at the head. The head message is in ``RTL9602C_PLOAM_RX_DATA(i)``
+       (``0x7010a0`` + 4i), each word's ``RTL9602C_PLOAM_RX_DATA_WORD`` (bits
+       15:0) holding two octets, the earlier in bits 15:8; word 0 holds the
+       ONU-ID and the message identifier. ``rtl9602c_ploam_pop()`` reads
+       ``RTL9602C_GPON_PLOAM_WORDS`` (7) words into 14 bytes, then pops. The MAC
+       checks the CRC and counts failures (see "Counters").
+     - T
+     - The ONU reaches O5 on an OLT: every activation decodes the OLT's
+       messages.
+   * - ``RTL9602C_GPON_IRQ_EN`` enables the two sub-block bits of
+       ``RTL9602C_GPON_IRQ_STAT``, ``RTL9602C_GPON_IRQ_GTC_US`` (bit 5) and
+       ``RTL9602C_GPON_IRQ_GTC_DS`` (bit 1); it is 0 at reset. The interrupt
+       path above runs from the switch interrupt's GPON source, with the line
+       masked while the thread runs.
+     - M
+     - Every activation reaches O5 from this path; dispatched from a poll,
+       ranging does not complete (see "The activation state machine").
+   * - The worker (``rtl9602c_gpon_work()``, every ``RTL9602C_GPON_POLL_MS``, 50
+       ms) pops and dispatches up to 32 PLOAM messages, which is a safety net
+       since the interrupt normally leaves none; records changes of the upstream
+       queues in the ``ploamlog`` ring once the PON MAC is built; runs TO1;
+       takes the counters; and sends the PON class the ONU's status if it
+       changed. ``gpon_lock`` keeps it and the interrupt thread from dispatching
+       at the same time.
+     - T
+     - The ONU reaches O5 on an OLT.
+   * - A message is acted on only when its ONU-ID is 255 or the ONU's own; each
+       type also needs a state (see the table above). Types the driver does not
+       handle are recorded and dropped.
+     - P
+     - ITU-T G.984.3 clause 9.1.1 and clause 10.2.5.1.
+   * - Upstream_Overhead (identifier 1, broadcast) carries, in octets 3 to 12,
+       the guard bits, the type 1, type 2 and type 3 preamble parameters, the
+       delimiter, a flags octet and the pre-assigned delay in units of 32 bytes,
+       laid out as in the table above.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.1.
+   * - On Upstream_Overhead in O2 (``rtl9602c_gpon_set_overhead()``) the driver
+       writes the burst overhead bytes and the pre-ranged length (see "The burst
+       overhead"); writes the extra serial-number count into
+       ``RTL9602C_GTC_DS_CTRL_EXTRA_SN`` (see "The bandwidth map"); sets the
+       equalization delay to the pre-assigned delay when e is set and to 0
+       otherwise, so that a zero delay named by the OLT is used as zero (see
+       "Upstream timing"); and keeps the message for the length computation and
+       zeroes both stored type 3 lengths. The Serial_Number_ONU template is then
+       armed again and the state becomes O3. Every field of the message is
+       logged.
+     - T
+     - The ONU reaches O5 on an OLT; the test OLT's flags octet is ``0x20``: e
+       set with a zero delay.
+   * - Extended_Burst_Length (identifier 20, broadcast): octet 3 the type 3
+       preamble bytes in the pre-ranged states O3 and O4, octet 4 those used
+       from O5 on (``RTL9602C_PLOAM_EXT_BURST_LEN_PRERANGED`` 2,
+       ``RTL9602C_PLOAM_EXT_BURST_LEN_RANGED`` 3); the whole burst mode overhead
+       is at most 128 bytes. The ONU acts on it only in O3 and only before any
+       serial-number request.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.20 and clause 10.2.5.1 b).
+   * - The driver acts on it when it is broadcast and the state is O3: a copy
+       with the values already stored is ignored; otherwise both lengths are
+       stored, the pre-ranged overhead length is applied at once (see "The burst
+       overhead"), the ranged one is kept for Ranging_Time, and the change is
+       logged.
+     - T
+     - The ONU reaches O5 on an OLT; on the test OLT the log line reads ``burst
+       length: 96 B pre-ranging, 56 after; overhead 103/63``.
+   * - Assign_ONU-ID (identifier 3, broadcast): octet 3 the ONU-ID, octets 4 to
+       11 the serial number of the ONU it is for
+       (``RTL9602C_PLOAM_ASSIGN_ONUID_ONUID`` 2,
+       ``RTL9602C_PLOAM_ASSIGN_ONUID_SERIAL`` 3). The default Alloc-ID, equal to
+       the ONU-ID, is assigned with it.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.3 and clause 5.5.3.
+   * - In O3, when octets 4 to 11 equal the ONU's serial number, the driver
+       writes the ONU-ID into ``RTL9602C_ONU_US_ONUID`` (at the field position
+       of ``RTL9602C_ONU_CTRL_ONUID``, bits 15:8) and into
+       ``RTL9602C_ONU_CTRL_ONUID``; binds the default Alloc-ID into T-CONT 16
+       (see "Tables: Alloc-ID, Port-ID and multicast"); writes the bandwidth-map
+       filter bits (see "The bandwidth map"); sets O4; arms the bandwidth-map
+       capture for 16 allocations; and arms the Serial_Number_ONU template
+       again. The kernel log then states the time since the interrupt, which the
+       clock shows only in whole ticks.
+     - M
+     - ``ONU-ID 1 assigned; O4 4000 us after the interrupt``: the kernel's only
+       clock source advances in 4 ms ticks, so the figure is one tick and not a
+       measurement of the 750 us.
+   * - Ranging_Time (identifier 4, directed): octet 3 bit 0, 0 for the main path
+       and 1 for the protection path; octets 4 to 7 the equalization delay in
+       bits, most significant first (``RTL9602C_PLOAM_RANGING_TIME_PATH`` 2 with
+       ``RTL9602C_PLOAM_RANGING_TIME_PATH_PROTECT`` bit 0,
+       ``RTL9602C_PLOAM_RANGING_TIME_EQD`` 3,
+       ``RTL9602C_PLOAM_RANGING_TIME_EQD_LEN`` 4). The OLT may send it at any
+       time to correct the delay.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.4 and clause 10.3.5.
+   * - Directed to the ONU's ONU-ID, in O4 or O5: a protection-path delay is
+       logged and not applied. In O4 the capture armed at Assign_ONU-ID is read,
+       the delay is applied (see "Upstream timing"), the ranged overhead length
+       is applied (see "The burst overhead"), the upstream PLOAM queues are
+       flushed, the state becomes O5, and the message is logged raw. In O5 the
+       delay is written only when it differs from the last one written, and the
+       change is logged.
+     - T
+     - The ONU reaches O5 on an OLT.
+   * - Deactivate_ONU-ID (identifier 5), directed or broadcast: the ONU switches
+       off its laser, discards its ONU-ID, OMCI Port-ID and Alloc-IDs, and goes
+       to O2. The driver also records the upstream queue state in the
+       ``ploamlog`` ring.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.5 and clause 9.2.1.
+   * - Assign_Alloc-ID (identifier 10, directed): octet 3 the Alloc-ID's bits 11
+       to 4, bits 7 to 4 of octet 4 its bits 3 to 0, octet 5 the type: 1 GEM
+       payload (``RTL9602C_PLOAM_ASSIGN_ALLOCID_GEM``), 255 de-allocate
+       (``RTL9602C_PLOAM_ASSIGN_ALLOCID_DEALLOC``), the rest reserved. Every
+       correctly received copy is acknowledged.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.10 and clause 9.2.1.
+   * - Directed to the ONU's ONU-ID: type 1 binds the Alloc-ID into a T-CONT
+       (see "Tables: Alloc-ID, Port-ID and multicast"), type 255 unbinds it,
+       other types change nothing, and every copy is acknowledged (see "PLOAM
+       transmit"). The driver tests only that octet 1 equals the ONU-ID it
+       holds, which is 255 until O4.
+     - M
+     - Unacknowledged, the OLT sent Assign_Alloc-ID and Configure_Port-ID three
+       times each and then Deactivate_ONU-ID; acknowledged, the activation
+       stays; the PON class report lists Alloc-ID 257.
+   * - Configure_Port-ID (identifier 14, directed): octet 3 bit 0, 1 activates
+       and 0 deactivates; octet 4 the Port-ID's bits 11 to 4 and bits 7 to 4 of
+       octet 5 its bits 3 to 0. An ONU has at most one OMCI connection, and a
+       second replaces the first. Every correctly received copy is acknowledged.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.14 and clause 9.2.1.
+   * - Directed to the ONU's ONU-ID, with the same test as for Assign_Alloc-ID:
+       activate binds the OMCC to that Port-ID (see "Tables: Alloc-ID, Port-ID
+       and multicast"), replacing an earlier binding; deactivate unbinds it if
+       it is bound; every copy is acknowledged.
+     - T
+     - OMCI messages pass both ways over ``/dev/pon0omci0``.
+   * - PON-ID (identifier 21) is broadcast about once a second; it is not
+       recorded in the ``ploamlog`` ring and not acted on. Other identifiers are
+       recorded by name and dropped: the downstream names are those of G.984.3
+       clause 9.2.3 and its Annexes C to E (2 and 7 deprecated), the upstream
+       ones those of clause 9.2.4 and its Annex E.
+     - P
+     - ITU-T G.984.3 Annexes C, D and E.
+
+PLOAM transmit
+==============
+
+The ONU sends an upstream PLOAM message (PLOAMu, 13 octets) in an allocation
+whose Flags request it. The MAC has five slots for upstream messages, selected
+in ``RTL9602C_PLOAM_TX_CTRL``: two queues and three templates. The driver writes
+a message of twelve octets into a slot and the MAC adds the CRC. The driver
+sends only acknowledgments through a queue, the urgent one, and arms the three
+templates; the normal queue is not used.
+
+Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
+
+1. For the normal or urgent queue, check the queue's FULL bit and refuse the
+   message with ``-EBUSY`` if it is set. (I)
+2. Select the slot in ``RTL9602C_PLOAM_TX_CTRL_SLOT`` with
+   ``RTL9602C_PLOAM_TX_CTRL_PUSH`` clear. Purpose: the data window addresses the
+   slot selected last. (M)
+3. Write ``RTL9602C_GPON_PLOAM_PAYLOAD_WORDS`` (6) words into
+   ``RTL9602C_PLOAM_TX_DATA(i)``: octets 1 to 12, two to a word with the earlier
+   in bits 15:8. (M)
+4. Set ``RTL9602C_PLOAM_TX_CTRL_PUSH`` (bit 0). Purpose: hand the message to the
+   slot. (M)
+5. Record the write in the ``ploamlog`` ring with the slot and the queue flags.
+   (M)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 36 8 30 26
+
+   * - Slot
+     - Number
+     - What the MAC does with it
+     - What the driver writes
+   * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL``
+     - 0
+     - A queue: its messages go out in the ONU's allocations.
+     - Nothing.
+   * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT``
+     - 1
+     - A queue, as the normal one.
+     - Acknowledge messages.
+   * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_DYING_GASP``
+     - 5
+     - A template that the MAC sends by itself.
+     - Dying_Gasp, at bring-up.
+   * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_SN_ONU``
+     - 6
+     - A template that answers every discovery grant, without software.
+     - Serial_Number_ONU, while a serial number is set.
+   * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_NO_MESSAGE``
+     - 7
+     - A template that the MAC sends by itself.
+     - No message, at bring-up.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - An upstream PLOAM message (PLOAMu, 13 octets) is sent in an allocation
+       whose Flags request it (bit 10), which the OLT should do only for the
+       default Alloc-ID. In discovery and ranging the answer to the OLT's
+       request is a burst of PLOu and a PLOAMu carrying Serial_Number_ONU.
+     - P
+     - ITU-T G.984.3 clause 8.2.3, clause 8.1.3.6.2 and clause 10.2.5.2.
+   * - ``RTL9602C_PLOAM_TX_CTRL`` (``0x7050c0``):
+       ``RTL9602C_PLOAM_TX_CTRL_SLOT`` (bits 10:8) selects what the data window
+       ``RTL9602C_PLOAM_TX_DATA(i)`` (``0x7050e0`` + 4i) addresses.
+       ``RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL`` (0) and
+       ``RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT`` (1) are queues of messages sent in
+       the ONU's allocations; ``RTL9602C_PLOAM_TX_CTRL_SLOT_DYING_GASP`` (5),
+       ``RTL9602C_PLOAM_TX_CTRL_SLOT_SN_ONU`` (6) and
+       ``RTL9602C_PLOAM_TX_CTRL_SLOT_NO_MESSAGE`` (7) hold templates that the
+       MAC sends by itself. The serial-number template answers every discovery
+       grant without software.
+     - M
+     - The ``uscntr`` view: 979 transmissions from the templates against 957
+       serial-number requests, and none from the queues.
+   * - The data window addresses the slot that was selected last, so data
+       written before the slot is selected lands in whichever slot was selected
+       before. ``ploam_lock`` serialises the writers.
+     - M
+     - The No message template read back ``ff 04 aa aa aa aa``, data meant for
+       another slot.
+   * - The MAC generates octet 13, the CRC; the driver writes twelve octets.
+     - T
+     - The OLT accepts the ONU's PLOAM messages.
+   * - ``RTL9602C_PLOAM_TX_CTRL_NORMAL_EMPTY`` (bit 7) and
+       ``RTL9602C_PLOAM_TX_CTRL_URGENT_EMPTY`` (bit 5) are 1 while their queue
+       holds nothing: accepting a message clears the bit, sending it sets it
+       again.
+     - M
+     - The register read ``0x000000a0`` before a message was pushed to the
+       normal queue and ``0x00000020`` after, with the normal queue empty again
+       10 ms later.
+   * - Before writing to the normal or urgent queue the driver checks
+       ``RTL9602C_PLOAM_TX_CTRL_NORMAL_FULL`` (bit 6) or
+       ``RTL9602C_PLOAM_TX_CTRL_URGENT_FULL`` (bit 4). When it is set the driver
+       refuses the message with ``-EBUSY``, records the refusal in the
+       ``ploamlog`` ring and warns, rate-limited, because the data window is
+       taken to be the queue's tail and a write would overwrite the message
+       waiting there.
+     - I
+     - That a write into a full queue overwrites its tail is unverified; the
+       refusal has never fired.
+   * - At bring-up the driver arms the No message template (octet 1 255, octet 2
+       4, the rest zero) and then the Dying_Gasp template (255, 3, zero). Every
+       allocation that asks for a PLOAMu carries a message, so the No message
+       template must hold a well-formed one.
+     - M
+     - Before it was armed, the No message template held leftover bytes after a
+       correct header; after arming it read back ``ff 04`` and zeros. ITU-T
+       G.984.3 clause 9.2.4.3 and clause 9.2.4.4.
+   * - The Serial_Number_ONU template (``rtl9602c_gpon_arm_sn()``): octet 1 255,
+       octet 2 1, octets 3 to 10 the serial number
+       (``RTL9602C_PLOAM_SN_ONU_SERIAL`` 2, ``RTL9602C_GPON_SN_BYTES`` 8), octet
+       11 zero, and octet 12 (``RTL9602C_PLOAM_SN_ONU_FLAGS`` 11) ``0x05``: G,
+       GEM transport supported (``RTL9602C_PLOAM_SN_ONU_GEM``, bit 2), and TT,
+       the transmit power level mode (``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL``,
+       bits 1:0) = ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_DEF`` (1, medium). It is
+       armed at bring-up, on Upstream_Overhead, on Assign_ONU-ID and when a
+       serial number is set, and not at all while none is set.
+     - P
+     - ITU-T G.984.3 clause 9.2.4.1; the ONU reaches O5 on an OLT.
+   * - The random delay of the serial-number response (0 to 48 us, new for each
+       response) is left zero in the template; that the MAC inserts the delay
+       and writes it into the message is not established.
+     - I
+     - ITU-T G.984.3 clause 10.4.2.1; a capture of the serial-number responses
+       at the OLT, or the spread of their arrival across discovery attempts.
+   * - TT is declared 1 (medium) whatever power level mode Upstream_Overhead
+       gives; the test OLT gives mode 0, normal, which is the highest (the two
+       codings run in opposite directions). Whether TT should follow that mode
+       is unverified; the ONU reaches O5 with 1.
+     - I
+     - ITU-T G.984.3 clause 9.2.3.1 note 4, clause 9.2.4.1 note 2 and
+       clause 10.5.1; an OLT that checks the mode.
+   * - The template is written again, unchanged, on entering O4; whether that is
+       needed is unverified.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT.
+   * - Acknowledge (``rtl9602c_gpon_ploam_ack()``): octet 1 the ONU's ONU-ID,
+       octet 2 9 (``RTL9602C_PLOAM_US_ACKNOWLEDGE``), octet 3 the downstream
+       message's identifier, octets 4 to 12 octets 1 to 9 of the downstream
+       message; on the urgent queue.
+     - P
+     - ITU-T G.984.3 clause 9.2.4.9; acknowledged Assign_Alloc-ID and
+       Configure_Port-ID keep the activation.
+   * - ``RTL9602C_PLOAM_TX_CFG`` (``0x705100``), ``RTL9602C_PLOAM_TX_CFG_FLUSH``
+       (bit 4): a rising edge empties the upstream PLOAM queues. On Ranging_Time
+       in O4 the driver writes it 0 then 1 and leaves it 1, so that nothing
+       queued during discovery goes out ahead of the first acknowledgment.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT and OMCI messages pass
+       both ways.
+   * - The identifiers the driver uses. Downstream: Upstream_Overhead 1
+       (``RTL9602C_PLOAM_DS_UPSTREAM_OVERHEAD``), Assign_ONU-ID 3
+       (``RTL9602C_PLOAM_DS_ASSIGN_ONUID``), Ranging_Time 4
+       (``RTL9602C_PLOAM_DS_RANGING_TIME``), Deactivate_ONU-ID 5
+       (``RTL9602C_PLOAM_DS_DEACTIVATE_ONUID``), Assign_Alloc-ID 10
+       (``RTL9602C_PLOAM_DS_ASSIGN_ALLOCID``), Configure_Port-ID 14
+       (``RTL9602C_PLOAM_DS_CONFIGURE_PORTID``), Extended_Burst_Length 20
+       (``RTL9602C_PLOAM_DS_EXTENDED_BURST_LENGTH``), PON-ID 21
+       (``RTL9602C_PLOAM_DS_PONID``). Upstream: Serial_Number_ONU 1
+       (``RTL9602C_PLOAM_US_SERIAL_NUMBER_ONU``), Dying_Gasp 3
+       (``RTL9602C_PLOAM_US_DYING_GASP``), No message 4
+       (``RTL9602C_PLOAM_US_NO_MESSAGE``), Acknowledge 9. ONU-ID 255
+       (``RTL9602C_ONU_ONUID_UNASSIGNED``) is the broadcast address downstream
+       and the unassigned ONU upstream.
+     - P
+     - ITU-T G.984.3 clause 9.2.3, clause 9.2.4 and clause 5.5.2, and Annex C.
+
+The burst overhead
+==================
+
+Every upstream burst opens with the physical layer overhead: the guard time, in
+which the ONU sends no light, the preamble and the delimiter, and then the burst
+header. The OLT dictates the preamble and the delimiter in Upstream_Overhead and
+Extended_Burst_Length, and the MAC sends them immediately before the byte that
+StartTime points at. The driver programs the overhead in two places:
+``RTL9602C_BURST_DATA(i)`` holds the overhead bytes, the type 3 preamble pattern
+and then the delimiter, and ``RTL9602C_BURST_CFG`` holds the overhead's length
+in bytes and a repeat index, which is taken to name the byte that the MAC
+repeats to make up the length. The length is the one thing that changes with the
+state.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - When
+     - Length written to ``RTL9602C_BURST_CFG``
+   * - Upstream_Overhead, in O2
+     - ``RTL9602C_BURST_CFG_PRERANGED`` (``0x080c``): repeat index 8 and 12
+       bytes. The type 3 lengths are zeroed, so without Extended_Burst_Length
+       this length stays in every state.
+   * - Extended_Burst_Length, in O3
+     - The length computed from the pre-ranged type 3 length.
+   * - Ranging_Time, in O4
+     - The length computed from the ranged type 3 length.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Every upstream burst opens with the physical layer overhead: the guard
+       time (no light), the preamble and the delimiter, then the three-octet
+       burst header. The ONU sends preamble and delimiter as the OLT dictates in
+       Upstream_Overhead and Extended_Burst_Length, immediately before the byte
+       StartTime points at. Type 3 preamble bytes carry octet 6's pattern; the
+       delimiter field is 24 bits, and a 20-bit delimiter (``0xB5983`` proposed)
+       is completed at its start by preamble bits.
+     - P
+     - ITU-T G.984.3 clause 5.7, clause 8.2.2 and clause 9.2.3.1 notes 1 to 3;
+       the guard time without light: ITU-T G.984.2 Appendix I.
+   * - At 1244.16 Mbit/s the total burst mode overhead is 96 bits (mandatory):
+       guard at least 32, preamble 44 and delimiter 20 suggested; the
+       transmitter's enable and disable times at most 16 bits each. With no
+       Extended_Burst_Length the type 3 length is that total less the guard,
+       type 1, type 2 and delimiter bits.
+     - P
+     - ITU-T G.984.2 Appendix I, Table I.2; ITU-T G.984.3 clause 9.2.3.20 note
+       2.
+   * - ``RTL9602C_BURST_DATA(i)`` (``0x705080`` + 4i, i from 0 to 11:
+       ``RTL9602C_GPON_BOH_BYTES``) each hold one overhead byte in
+       ``RTL9602C_BURST_DATA_BYTE`` (bits 7:0). The driver writes nine bytes of
+       the type 3 pattern and then the three delimiter octets.
+     - M
+     - Read back as nine ``aa`` then ``ab 59 83``, the test OLT's pattern and
+       delimiter.
+   * - ``RTL9602C_BURST_CFG`` (``0x705054``): ``RTL9602C_BURST_CFG_LEN`` (bits
+       7:0) is the overhead length in bytes; ``RTL9602C_BURST_CFG_REPEAT_IDX``
+       (bits 11:8) is written ``RTL9602C_BURST_CFG_REPEAT_IDX_DEF`` (8), the
+       index of the last pattern byte before the delimiter. The register reads
+       ``0x0880`` at reset.
+     - T
+     - The ONU reaches O5 on an OLT with the lengths 12, 103 and 63; the
+       register read at reset.
+   * - That ``RTL9602C_BURST_CFG_REPEAT_IDX`` names the byte the MAC repeats to
+       stretch the preamble to the length is inferred from its value.
+     - I
+     - Another index, with the OLT's delineation of the bursts as the witness.
+   * - The length (``rtl9602c_gpon_boh_len()``): with no type 3 length,
+       ``RTL9602C_BURST_CFG_LEN_DEF`` (12 bytes, the 96-bit total of G.984.2 in
+       the row above); otherwise the guard bits (at most 32) divided by 8, plus
+       the type 3 bytes, plus 3 for the delimiter, plus the type 1 and type 2
+       bits divided by 8, clamped between 12 and ``RTL9602C_BURST_CFG_LEN_MAX``
+       (252).
+     - T
+     - The ONU reaches O5 on an OLT with 103 and 63 bytes, from the test OLT's
+       values.
+   * - When the length is written: on Upstream_Overhead the driver writes
+       ``RTL9602C_BURST_CFG_PRERANGED`` (``0x080c``: index 8, 12 bytes); on
+       Extended_Burst_Length in O3, the length from its pre-ranged value; on
+       Ranging_Time in O4, the length from its ranged value. Upstream_Overhead
+       zeroes both stored lengths, so without Extended_Burst_Length the overhead
+       stays at 12 bytes in every state.
+     - M
+     - With ``0x080c`` the OLT decoded the serial-number burst and assigned an
+       ONU-ID; the lengths of the previous row then took the ONU to O5. ITU-T
+       G.984.3 clause 9.2.3.20.
+   * - The test OLT's Upstream_Overhead: guard 32 bits, type 1 and type 2 zero,
+       pattern ``0xaa``, delimiter ``0xab5983``, flags ``0x20`` (the
+       pre-assigned delay applies and is zero; no extra serial numbers; power
+       level mode 0). Its Extended_Burst_Length: 96 bytes pre-ranged, 56 ranged.
+     - M
+     - The kernel log lines ``burst: ...``, ``Upstream_Overhead raw: ...`` and
+       ``burst length: ...``.
+   * - That the type 1 (all ones) and type 2 (all zeros) preambles, which are
+       not programmed (see "Known limitations"), are not needed: the test OLT
+       sends zero for both, and an OLT that asks for them is untested.
+     - I
+     - An OLT with non-zero type 1 or type 2 counts.
+   * - The upper clamp of the length is 252 bytes (see "Known limitations"); the
+       guard is counted into the length only up to 32 bits; that the length
+       counts the guard at all rests on the lengths of the rows above reaching
+       O5.
+     - I
+     - ITU-T G.984.3 clause 9.2.3.20 note 2; an OLT with a guard longer than 32
+       bits.
+
+Upstream timing
+===============
+
+The ONU sends each burst at a fixed distance from the downstream frame that
+carried its allocation. The distance is the ONU's response time plus the
+equalization delay that the OLT assigns in ranging, so that the bursts of all
+ONUs arrive at the OLT as if they were equally far away. The driver writes the
+response time once at bring-up (``RTL9602C_GTC_US_RESP_DELAY``) and the
+equalization delay whenever Upstream_Overhead or Ranging_Time gives one
+(``RTL9602C_RANGING_EQD``). The rest of this section is the laser timing, the
+upstream interrupt latch and the upstream control, transmit mode, power save,
+signal-detect and burst-merge registers that the bring-up writes.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The ONU keeps an upstream frame clock locked to the downstream frame and
+       offset by its response time (35 us +/- 1 us) plus a requisite delay: in
+       O3 the pre-assigned delay and a random delay, in O4 the pre-assigned
+       delay, in O5 the equalization delay of Ranging_Time. An upstream frame is
+       19440 bytes at 1.24416 Gbit/s. Delays reach about 250 us over 20 km,
+       optionally 625 us.
+     - P
+     - ITU-T G.984.3 clause 10.4.1, clause 10.4.2.1, clause 10.4.3.1,
+       clause 10.4.4, clause 10.4.3.4 and clause 8.2.
+   * - ``RTL9602C_GTC_US_RESP_DELAY`` (``0x705040``, written under the key):
+       ``RTL9602C_GTC_US_RESP_DELAY_COARSE`` (bits 15:7) =
+       ``RTL9602C_GTC_US_RESP_DELAY_COARSE_DEF`` (290) and
+       ``RTL9602C_GTC_US_RESP_DELAY_FINE`` (bits 6:0) =
+       ``RTL9602C_GTC_US_RESP_DELAY_FINE_DEF`` (50), both in units of 16 bytes
+       (``RTL9602C_GTC_US_RESP_DELAY_COARSE_BITS``, 128 bits). Together they
+       delay the ONU's response.
+     - M
+     - Raising the fine part from 50 to 114 moved the delay the OLT assigned by
+       -8192 bits (64 times 128); the ONU reaches O5 on an OLT with 290 and 50.
+   * - (290 + 50) times 128 bits is 43520 bits, 34.98 us at 1.24416 Gbit/s,
+       which is the response time of G.984.3. That the register realises the ONU
+       response time is inferred from that equality.
+     - I
+     - Ranging with other values and comparing the delay the OLT assigns.
+   * - ``RTL9602C_RANGING_EQD`` (``0x705044``): ``RTL9602C_RANGING_EQD_FRAMES``
+       (bits 26:24) whole upstream frames and ``RTL9602C_RANGING_EQD_BITS``
+       (bits 17:0) the remainder in bits. ``rtl9602c_gpon_set_eqd(delay)`` reads
+       the coarse response delay back from ``RTL9602C_GTC_US_RESP_DELAY``, adds
+       it times 128 bits to the delay, and splits the sum at
+       ``RTL9602C_GPON_EQD_FRAME_BITS`` (155520, one upstream frame in bits)
+       into the two fields, written as one word.
+     - T
+     - The ONU reaches O5 on an OLT: the bursts land where the OLT listens, in
+       ranging and in O5.
+   * - The delay given to ``rtl9602c_gpon_set_eqd()``: on Upstream_Overhead the
+       pre-assigned delay in bits when e is set, else 0; on Ranging_Time the
+       equalization delay. The driver keeps the delay last written, compares
+       against it in O5, and logs each write (``EQD: ...``).
+     - P
+     - ITU-T G.984.3 clause 10.4.2.1, clause 10.4.3.1 and clause 10.4.4.
+   * - On the test OLT the assigned equalization delay is about 97300 bits. It
+       took one of two values 128 bits apart from one activation to the next;
+       the source of the step was not identified.
+     - M
+     - The ``EQD:`` line of the kernel log across activations.
+   * - ``RTL9602C_GTC_US_LASER`` (``0x70504c``):
+       ``RTL9602C_GTC_US_LASER_ON_LEAD`` (bits 13:8, how early the laser is
+       keyed before a burst) = ``RTL9602C_GTC_US_LASER_ON_LEAD_DEF`` (``0x20``);
+       ``RTL9602C_GTC_US_LASER_OFF_LAG`` (bits 5:0, how long it stays keyed
+       after) = ``RTL9602C_GTC_US_LASER_OFF_LAG_DEF`` (``0x28``); the lag resets
+       to 24.
+     - M
+     - Lags below 40 broke discovery; leads of 32 and 0 made no measurable
+       difference; the lag read 24 before the bring-up wrote it.
+   * - The unit of the lead and the lag is not measured, nor whether a lead of
+       32 is needed.
+     - I
+     - ITU-T G.984.2 Table I.2 bounds the transmitter's enable and disable times
+       at 16 bits; the ONU reaches O5 on an OLT with other values.
+   * - ``RTL9602C_GTC_US_IRQ_LATCH`` (``0x705000``) latches upstream GTC events
+       and clears when read: ``RTL9602C_GTC_US_IRQ_SD_MISMATCH`` (bit 9), taken
+       to mean that the optics' signal detect disagreed with the keyed burst;
+       ``RTL9602C_GTC_US_IRQ_SD_TOO_LONG`` (bit 8), that it stayed asserted too
+       long. ``RTL9602C_GTC_US_IRQ_EN`` (``0x705004``) is written
+       ``RTL9602C_GTC_US_IRQ_EN_DEF`` (``0xa4``); it is 0 at reset. The
+       interrupt thread reads the latch whenever ``RTL9602C_GPON_IRQ_GTC_US`` is
+       set, records a non-zero value in the ``ploamlog`` ring and warns,
+       rate-limited, on bit 8 or 9.
+     - M
+     - In O5 a latch left unread kept the source asserted, the interrupt thread
+       re-entered without end and the watchdog reset the board; bits 8 and 9
+       were never set under this driver.
+   * - What bits 8 and 9 detect, and which events bits 2, 5 and 7 of the enable
+       select, are not established.
+     - I
+     - A burst keyed with the laser disabled (bit 9).
+   * - ``RTL9602C_GTC_US_CTRL`` (``0x705014``, locked): the driver sets
+       ``RTL9602C_GTC_US_CTRL_IND_NORMAL_PLOAM`` (bit 10: a queued normal PLOAM
+       message is flagged as waiting in the burst header's Ind field) and
+       ``RTL9602C_GTC_US_CTRL_BEN_POL`` (bit 3, the polarity of the burst-enable
+       output), and clears ``RTL9602C_GTC_US_CTRL_PLOAM_DIS`` (bit 9, which
+       would stop the PLOAMu field) and ``RTL9602C_GTC_US_CTRL_SCRAMBLE_DIS``
+       (bit 0, which would switch the upstream scrambler off).
+     - T
+     - The ONU reaches O5 on an OLT; scrambling is ITU-T G.984.3 clause 8.2.1,
+       the Ind field clause 8.2.2.3.
+   * - Which level ``RTL9602C_GTC_US_CTRL_BEN_POL`` selects, and whether bit 10
+       does what its use suggests, are not established.
+     - I
+     - Clearing each under the key and checking that the ONU reaches O5 on an
+       OLT.
+   * - ``RTL9602C_GTC_US_TX_MODE`` (``0x705200``, written under the key):
+       ``RTL9602C_GTC_US_TX_MODE_SMALL_SSTART`` (bit 0) is set, so that a burst
+       whose StartTime is smaller than its overhead starts in the previous
+       upstream frame; ``RTL9602C_GTC_US_TX_MODE_SUPPRESS_DIS`` (bit 1) is
+       clear, so that the automatic laser suppression stays enabled. Bit 0
+       resets to 1 and the write changes nothing; it is written because the
+       driver depends on it.
+     - M
+     - Bit 0 read 1 before bring-up; the test OLT grants StartTime 16 in every
+       frame (the ``bwmap`` view), so every burst begins in the previous frame.
+   * - The meanings of bits 0 and 1 are inferred from their use; what the laser
+       suppression suppresses is not known.
+     - I
+     - Clearing bit 0 under the key with StartTime 16 grants, and checking that
+       the ONU reaches O5 on an OLT.
+   * - Power save around bursts: under the key the driver sets
+       ``RTL9602C_GTC_US_POWERSAVE_EN`` (bit 0 of ``RTL9602C_GTC_US_POWERSAVE``,
+       ``0x70526c``, 0 at reset), keeping the transmitter enabled only around
+       bursts; in ``RTL9602C_GEM_US_POWERSAVE`` (``0x706024``) it writes
+       ``RTL9602C_GEM_US_POWERSAVE_LAG`` (bits 20:16) = ``0x10`` and
+       ``RTL9602C_GEM_US_POWERSAVE_LEAD`` (bits 9:0) = ``0x100``, the window
+       around a burst in cycles; that register reads ``0x30`` at reset. The
+       ``usburst`` view also shows bit 31 of it.
+     - I
+     - Required: unverified; the registers read as stated at reset.
+   * - ``RTL9602C_GTC_US_SD_THR`` (``0x705188``, also defined as
+       ``RTL9602C_GTC_US_SD_THR_ALIAS``) holds limits on the optics' signal
+       detect against the keyed burst, ``RTL9602C_GTC_US_SD_THR_MISMATCH`` (bits
+       30:16) among them. The driver first sets the mismatch field to
+       ``RTL9602C_GTC_US_SD_THR_MISMATCH_DEF`` (``0xa0``), its reset value, and
+       later writes the whole word ``RTL9602C_GTC_US_SD_THR_DEF``
+       (``0x00504bfa``), which is what stays: mismatch ``0x50``, low half
+       ``0x4bfa``. It reads ``0x00a04bfa`` at reset.
+     - I
+     - Required: unverified; the register read at reset.
+   * - ``RTL9602C_GEM_US_BURST_MERGE_THR`` (bits 6:0 of
+       ``RTL9602C_GEM_US_BURST_MERGE``, ``0x706260``) =
+       ``RTL9602C_GEM_US_BURST_MERGE_THR_DEF`` (40): the threshold below which
+       adjacent burst ends are merged; its unit is not measured.
+     - I
+     - Required: unverified; the ONU reaches O5 on an OLT and upstream GEM
+       frames reach the OLT with the ONU's state held.
+
+The bandwidth map
+=================
+
+The OLT tells the ONU when to send in the bandwidth map (BWmap), an array of
+allocation structures at the start of every downstream frame. The MAC reads it
+and sends a burst, or part of one, for each allocation to one of the ONU's
+Alloc-IDs. The driver sets a filter by ONU-ID in ``RTL9602C_GTC_DS_CTRL`` and
+uses a capture facility that records allocations, for the ``bwmap`` view and for
+the grants that the ONU was ranged on.
+
+Arming a capture (``rtl9602c_gpon_bwm_arm()``):
+
+1. Write 0 to ``RTL9602C_BWMAP_CAPTURE_CTRL`` (``0x70200c``). (M)
+2. Write ``RTL9602C_BWMAP_CAPTURE_CTRL_CLEAR`` (bit 14) with the count in
+   ``RTL9602C_BWMAP_CAPTURE_CTRL_COUNT`` (bits 7:0). (M)
+3. Write ``RTL9602C_BWMAP_CAPTURE_CTRL_START`` (bit 15) with the count. Purpose:
+   the MAC records that many allocations. (M)
+
+A captured allocation is two words:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 70 20
+
+   * - Word
+     - Field
+     - Bits
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_TCONT``, the T-CONT matched
+     - 4:0
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_MULTIFRAME``
+     - 14:12
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_DBRU``, the DBRu mode
+     - 17:16
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_FEC``, use FEC
+     - 18
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_PLOAMU``
+     - 19
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_BURST_START`` and
+       ``RTL9602C_BWMAP_ALLOC_BURST_END``: the allocation opens or closes a
+       burst
+     - 20 and 21
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_LAST``, last of its map
+     - 22
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_VALID``
+     - 23
+   * - 0
+     - ``RTL9602C_BWMAP_ALLOC_FRAME``, the downstream frame count modulo 16
+     - 27:24
+   * - 1
+     - ``RTL9602C_BWMAP_ALLOC_SSTART``, the StartTime
+     - 15:0
+   * - 1
+     - ``RTL9602C_BWMAP_ALLOC_SSTOP``, the StopTime
+     - 31:16
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The BWmap is an array of 8-byte allocation structures: Alloc-ID (12
+       bits), Flags (12 bits: bit 10 send PLOAMu, bit 9 use FEC, bits 8 and 7
+       the DBRu mode), StartTime and StopTime (16 bits each, bytes from the
+       start of the upstream frame, StopTime the last byte), CRC. Alloc-ID 254
+       addresses every ONU in O3 (a serial-number request: PLOAMu set, StopTime
+       = StartTime + 12); a ranging request is addressed to the ONU's default
+       Alloc-ID, its ONU-ID.
+     - P
+     - ITU-T G.984.3 clause 8.1.3.6, clause 8.1.3.6.1, clause 8.1.3.6.2 and
+       clause 10.2.5.2.
+   * - ``RTL9602C_GTC_DS_CTRL`` (``0x701014``):
+       ``RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID`` (bit 10) keeps only the
+       allocations for this ONU as programmed;
+       ``RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL`` (bit 11) treats every
+       allocation as this ONU's. The driver sets bit 10 and clears bit 11 in
+       every state, including while the ONU-ID is 255: the discovery grants are
+       matched then as well.
+     - M
+     - In O3 over 6 s: with bit 10 set, 6 maps were accepted and 6 serial-number
+       requests counted; with bit 11 set, 48086 maps were accepted, and a
+       message queued for sending left within 10 ms, long before the next
+       discovery grant.
+   * - ``RTL9602C_GTC_DS_CTRL_EXTRA_SN`` (bits 7:6) receives Upstream_Overhead's
+       ss bits, the number of extra serial-number transmissions per request.
+       G.984.3 deprecates them (ss = 00), and the test OLT sends 00.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.1 note 6.
+   * - Once started, the MAC records that many allocations it matched to this
+       ONU's T-CONTs in ``RTL9602C_BWMAP_CAPTURE_DATA(i)`` (``0x702400`` + 4i),
+       two words each. ``RTL9602C_BWMAP_CAPTURE_STAT`` (``0x702010``) is printed
+       raw; its fields are not measured.
+     - M
+     - The ``bwmap`` view.
+   * - Entry word 0: ``RTL9602C_BWMAP_ALLOC_TCONT`` (bits 4:0, the T-CONT
+       matched), ``RTL9602C_BWMAP_ALLOC_PLOAMU`` (bit 19),
+       ``RTL9602C_BWMAP_ALLOC_VALID`` (bit 23). Word 1:
+       ``RTL9602C_BWMAP_ALLOC_SSTART`` (bits 15:0) and
+       ``RTL9602C_BWMAP_ALLOC_SSTOP`` (bits 31:16), the allocation's StartTime
+       and StopTime.
+     - M
+     - In O4 and O5: T-CONT 16 with PLOAMu, StartTime 16 and StopTime 15432 in
+       every frame (the ``bwmap`` view). A check with traffic on the board reads
+       the view's T-CONT column to see that the bandwidth map grants the GEM
+       port's T-CONT.
+   * - The other fields of word 0 are displayed but not measured:
+       ``RTL9602C_BWMAP_ALLOC_DBRU`` (bits 17:16, DBRu mode),
+       ``RTL9602C_BWMAP_ALLOC_FEC`` (bit 18, use FEC),
+       ``RTL9602C_BWMAP_ALLOC_BURST_START`` (bit 20) and
+       ``RTL9602C_BWMAP_ALLOC_BURST_END`` (bit 21) (the allocation opens or
+       closes a burst), ``RTL9602C_BWMAP_ALLOC_LAST`` (bit 22, last of its map),
+       ``RTL9602C_BWMAP_ALLOC_MULTIFRAME`` (bits 14:12),
+       ``RTL9602C_BWMAP_ALLOC_FRAME`` (bits 27:24, the downstream frame count
+       modulo 16).
+     - I
+     - An OLT granting FEC or DBRu, or several allocations in one burst.
+   * - On Assign_ONU-ID the driver arms a capture of
+       ``RTL9602C_GPON_BWM_O4_ENTRIES`` (16) allocations and reads it back when
+       Ranging_Time arrives: the grants the ONU was ranged on, kept for the
+       ``bwmap`` view.
+     - T
+     - The ``bwmap`` view, its "captured on entering O4" part.
+
+Tables: Alloc-ID, Port-ID and multicast
+=======================================
+
+Three tables in the GPON MAC map identifiers to the driver's numbers. The
+Alloc-ID table has one entry for each of 32 T-CONTs
+(``RTL9602C_GPON_NUM_TCONT``) and holds the Alloc-ID whose allocations that
+T-CONT takes. The driver uses entries 0 to 15 for the Alloc-IDs that
+Assign_Alloc-ID gives the ONU and entry 16 (``RTL9602C_GPON_DEFAULT_TCONT_IDX``)
+for the default Alloc-ID, which carries the upstream PLOAM messages and the
+OMCC. The Port-ID table has one entry for each of 128 flows
+(``RTL9602C_GPON_NUM_FLOW``) and holds the GEM Port-ID that the MAC takes from
+the downstream into that flow: the ONU's GEM port filter. Flow 64
+(``RTL9602C_GPON_OMCC_FLOW``) is the OMCC's, and the GEM port code never gives
+it out. The multicast filter table has 256 entries (``RTL9602C_GPON_NUM_MC``);
+the driver only reads it and clears it. All three are RAM that neither the MAC
+reset nor the chip reset clears.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 12 32 28 28
+
+   * - Table
+     - Command register
+     - Write data
+     - Read data
+   * - Alloc-ID
+     - ``RTL9602C_ALLOCID_TBL_CMD`` (``0x7010c0``)
+     - ``RTL9602C_ALLOCID_TBL_WDATA`` (``0x7010c4``)
+     - ``RTL9602C_ALLOCID_TBL_RDATA`` (``0x7010cc``)
+   * - Port-ID
+     - ``RTL9602C_GEM_DS_PORTID_TBL_CMD`` (``0x701100``)
+     - ``RTL9602C_GEM_DS_PORTID_TBL_WDATA`` (``0x701104``)
+     - ``RTL9602C_GEM_DS_PORTID_TBL_RDATA`` (``0x70110c``)
+   * - Multicast
+     - ``RTL9602C_GEM_DS_MC_TBL_CMD`` (``0x704084``)
+     - None.
+     - None; the command register's VALID bit says whether the entry is in use.
+
+Reading and writing an entry
+----------------------------
+
+Writing or clearing an entry is ``rtl9602c_gpon_tbl_op()``:
+
+1. Write the command word with the operation and the index and EXEC clear.
+   Purpose: data written before the index goes to another entry. (M)
+2. Write the data word, the identifier in bits 11:0. (M)
+3. Write the command word again with EXEC set. Purpose: start the operation. (M)
+4. Poll DONE up to 100 times, 1 us apart. Purpose: the operation has completed
+   when DONE is set; ``-ETIMEDOUT`` otherwise. (M)
+
+Reading an entry is ``rtl9602c_gpon_tbl_read()``:
+
+1. Write the command word with the read operation and the index and EXEC clear.
+   (M)
+2. Write the command word again with EXEC set. (M)
+3. Poll DONE, with the same budget. (M)
+4. Read VALID (bit 13) from the command register, which says whether the entry
+   is in use, and the identifier from the read-data register. (M)
+
+The multicast table is reached the same way by ``rtl9602c_gpon_mc_op()`` with an
+8-bit index and without the data step.
+
+Binding the OMCC
+----------------
+
+On Configure_Port-ID the driver binds the OMCC to its Port-ID
+(``rtl9602c_gpon_omcc_bind()``), in flow ``RTL9602C_GPON_OMCC_FLOW`` (64):
+
+1. Write the Port-ID into flow 64's entry of the Port-ID table. Purpose: the MAC
+   takes the OMCC's downstream frames into flow 64. (T)
+2. Type flow 64's downstream configuration (``RTL9602C_GEM_DS_FLOW_CFG(64)``) as
+   OMCI. (T)
+3. Give flow 64's upstream configuration (``RTL9602C_GEM_US_FLOW_CFG(64)``) the
+   Port-ID. Purpose: the upstream frames of the flow carry it. (T)
+4. Admit the flow's stream into the PON MAC (``rtl9602c_ponmac_sid_valid()``,
+   see Documentation/networking/device_drivers/pon/rtl9602c.rst). (T)
+5. Record the OMCC as bound, and report the OMCI port's link up. (T)
+
+``rtl9602c_gpon_omcc_unbind()`` undoes all of it. It reports the link down
+first, which drops the messages still waiting for the reader, and then clears
+the Port-ID entry, the downstream type, the upstream Port-ID and the stream's
+admission. OMCI messages pass both ways over ``/dev/pon0omci0`` with the OMCC
+bound.
+
+Facts about the tables
+----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The three tables are reached through a command register and data
+       registers. Command: ``RTL9602C_GPON_TBL_CMD_EXEC`` (bit 15, start),
+       ``RTL9602C_GPON_TBL_CMD_DONE`` (bit 14, set by the MAC when done),
+       ``RTL9602C_GPON_TBL_CMD_VALID`` (bit 13, the entry read is in use),
+       ``RTL9602C_GPON_TBL_CMD_OP`` (bits 9:8:
+       ``RTL9602C_GPON_TBL_CMD_OP_WRITE`` 1, ``RTL9602C_GPON_TBL_CMD_OP_READ``
+       2, ``RTL9602C_GPON_TBL_CMD_OP_CLEAR`` 3) and
+       ``RTL9602C_GPON_TBL_CMD_IDX`` (bits 6:0); data:
+       ``RTL9602C_GPON_TBL_DATA_ID`` (bits 11:0).
+     - M
+     - With the data written before the index, the default Alloc-ID went to
+       another entry and in O4 the MAC sent nothing and classified nothing; the
+       ``gpontbl`` view reads the entries back.
+   * - Alloc-ID table: ``RTL9602C_ALLOCID_TBL_CMD`` (``0x7010c0``),
+       ``RTL9602C_ALLOCID_TBL_WDATA`` (``0x7010c4``),
+       ``RTL9602C_ALLOCID_TBL_RDATA`` (``0x7010cc``);
+       ``RTL9602C_GPON_NUM_TCONT`` (32) entries indexed by T-CONT, each the
+       Alloc-ID whose allocations that T-CONT takes.
+     - M
+     - Entry 16 read back from ``0x7010cc`` the ONU-ID written into it, while
+       ``0x7010c8`` read 0.
+   * - Port-ID table: ``RTL9602C_GEM_DS_PORTID_TBL_CMD`` (``0x701100``),
+       ``RTL9602C_GEM_DS_PORTID_TBL_WDATA`` (``0x701104``),
+       ``RTL9602C_GEM_DS_PORTID_TBL_RDATA`` (``0x70110c``);
+       ``RTL9602C_GPON_NUM_FLOW`` (128) entries indexed by flow, each the GEM
+       Port-ID the MAC takes from the downstream into that flow: the ONU's GEM
+       port filter.
+     - M
+     - The ``gpontbl`` view; ITU-T G.984.3 clause 5.5.1.
+   * - Multicast filter table: ``RTL9602C_GEM_DS_MC_TBL_CMD`` (``0x704084``),
+       with the command bits of the first row and an 8-bit index
+       ``RTL9602C_GEM_DS_MC_TBL_CMD_IDX`` (bits 7:0); ``RTL9602C_GPON_NUM_MC``
+       (256) entries. The driver only reads VALID and clears entries
+       (``rtl9602c_gpon_mc_op()``).
+     - M
+     - All 256 entries read in use after a reset.
+   * - The three tables are RAM that neither the watchdog's chip reset nor the
+       MAC reset clears. Right after the MAC reset, before anything is written
+       into them, ``rtl9602c_gpon_tables_clear()`` clears every entry of each
+       (the Port-ID entries with their flow type, see below), counts those it
+       found in use, logs ``tables emptied: ...`` when there were any, forgets
+       its record of T-CONTs 0 to 15, and marks the OMCC unbound.
+     - M
+     - After a watchdog reset and a fresh bring-up all 32 Alloc-ID, 128 Port-ID
+       and 256 multicast entries were in use; with that residue the OMCC's entry
+       at flow 64 matched no OMCI frame and every upstream grant got an empty
+       burst; emptied, both worked.
+   * - The default Alloc-ID, equal to the ONU-ID, goes into T-CONT
+       ``RTL9602C_GPON_DEFAULT_TCONT_IDX`` (16): bound on Assign_ONU-ID, cleared
+       when the ONU-ID is given back. The upstream PLOAM messages and the OMCC
+       travel in it.
+     - T
+     - The ONU reaches O5 on an OLT and OMCI messages pass both ways; ITU-T
+       G.984.3 clause 5.5.3 and clause 5.5.4.
+   * - An Alloc-ID of Assign_Alloc-ID type 1 goes into the lowest T-CONT from 0
+       to 15 not in use; one already bound is not bound again (the OLT sends
+       three copies); with none free the driver warns. The GEM port code is then
+       told (``rtl9602c_gem_tcont_ready()``, see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst). Type 255
+       clears every T-CONT holding that Alloc-ID. The driver's own record, not a
+       table read, answers what each T-CONT holds (see "Reporting: the PON class
+       and devlink").
+     - M
+     - The PON class report lists Alloc-ID 257; a GEM port on the T-CONT holding
+       it sends upstream (a routed flow leaves by that GEM port).
+   * - ``RTL9602C_GEM_DS_FLOW_CFG(f)`` (``0x701400`` + 4f):
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE`` (bits 4:0) says what a downstream flow
+       carries, ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC`` (bit 0) multicast,
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH`` (bit 1) Ethernet,
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_OMCI`` (bit 2) OMCI.
+       ``RTL9602C_GEM_US_FLOW_CFG(f)`` (``0x706400`` + 4f):
+       ``RTL9602C_GEM_US_FLOW_CFG_PORTID`` (bits 11:0), the Port-ID put on the
+       flow's upstream frames. ``RTL9602C_GEM_US_FLOW_BYTES(f)`` (``0x706800`` +
+       8f) counts the flow's upstream bytes. The GEM port code uses the
+       multicast and Ethernet types and the byte counter (see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst).
+     - T
+     - OMCI messages pass both ways (the OMCI type); downstream GEM frames reach
+       the SFP port and upstream GEM frames reach the OLT, checked with traffic
+       on the board.
+   * - Why stale entries elsewhere in the Port-ID table kept flow 64 from
+       matching is not understood; emptying every entry does not depend on it.
+     - I
+     - Refilling the table with stale entries and binding the OMCC.
+
+GEM framing
+===========
+
+Downstream the MAC takes the GEM frames whose Port-ID is in the Port-ID table
+into their flows, and each flow has a type: multicast, Ethernet or OMCI.
+Upstream it puts the flow's Port-ID and a PTI code in each GEM header. The
+driver writes three settings, the PTI match that tells the last fragment of an
+OMCI message, the PTI codes of the upstream framer and the downstream filter,
+and reads the per-flow downstream counters.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A GEM header carries PLI (12 bits), Port-ID (12), PTI (3) and HEC (13).
+       PTI 000 marks a user-data fragment that does not end a frame, 001 one
+       that does, 100 and 101 GEM OAM.
+     - P
+     - ITU-T G.984.3 clause 8.3.1.
+   * - ``RTL9602C_GEM_DS_OMCI_PTI`` (``0x701204``):
+       ``RTL9602C_GEM_DS_OMCI_PTI_MASK`` (bits 6:4, the PTI bits compared) and
+       ``RTL9602C_GEM_DS_OMCI_PTI_END`` (bits 2:0, the PTI of an OMCI message's
+       last fragment) are both set to ``RTL9602C_GEM_DS_OMCI_PTI_EOF`` (1, user
+       data, end of frame). They reset to 5 and 5.
+     - T
+     - OMCI messages arrive on the OMCI port; the register read ``0x55`` at
+       reset.
+   * - ``RTL9602C_GEM_US_PTI_MAP`` (``0x706020``): four 3-bit PTI codes,
+       ``RTL9602C_GEM_US_PTI_MAP_0`` (bits 2:0), ``RTL9602C_GEM_US_PTI_MAP_1``
+       (bits 6:4), ``RTL9602C_GEM_US_PTI_MAP_2`` (bits 10:8) and
+       ``RTL9602C_GEM_US_PTI_MAP_3`` (bits 14:12), written 0, 1, 0, 1: the codes
+       the upstream GEM framer puts in its headers. Which kind of fragment uses
+       which slot is not established.
+     - T
+     - OMCI messages pass both ways, and the OLT takes the upstream OMCI and
+       data (upstream GEM frames reach the OLT with the ONU's state held).
+   * - ``RTL9602C_GEM_DS_MC_FILTER`` (``0x704080``): the driver sets
+       ``RTL9602C_GEM_DS_MC_FILTER_BCAST_PASS`` (bit 6),
+       ``RTL9602C_GEM_DS_MC_FILTER_UCAST_PASS`` (bit 4, frames that are not
+       multicast), ``RTL9602C_GEM_DS_MC_FILTER_FCS_CHECK`` (bit 3) and
+       ``RTL9602C_GEM_DS_MC_FILTER_EXCLUDE`` (bit 0: the table lists multicast
+       to drop, and it is empty), and clears the IPv4 and IPv6 overrides
+       ``RTL9602C_GEM_DS_MC_FILTER_IPV4_PASS`` (bit 2),
+       ``RTL9602C_GEM_DS_MC_FILTER_IPV4_DROP`` (bit 1),
+       ``RTL9602C_GEM_DS_MC_FILTER_IPV6_PASS`` (bit 10) and
+       ``RTL9602C_GEM_DS_MC_FILTER_IPV6_DROP`` (bit 9). At reset it reads
+       ``0x08``: an including filter with nothing in it, which refuses broadcast
+       and unicast.
+     - T
+     - Downstream GEM frames reach the SFP port, checked with traffic on the
+       board; the register read at reset.
+   * - Per-flow downstream counters (``rtl9602c_gpon_flow_cntr()``): write the
+       flow into ``RTL9602C_GEM_DS_CNT_CMD_FLOW`` (bits 6:0 of
+       ``RTL9602C_GEM_DS_CNT_CMD``, ``0x701140``), with
+       ``RTL9602C_GEM_DS_CNT_CMD_BYTES`` (bit 8) for bytes rather than frames;
+       poll ``RTL9602C_GEM_DS_CNT_CMD_DONE`` (bit 15) for up to 1 ms; read
+       ``RTL9602C_GEM_DS_CNT_DATA`` (``0x701144``); the result is all ones when
+       it never completes. They count the downstream only.
+     - M
+     - A flow carrying 268896 frames upstream showed nothing in the ``gpontbl``
+       view.
+   * - That these counters clear when read is not established.
+     - I
+     - Two reads of the ``gpontbl`` view over a steady downstream flow.
+
+Counters
+========
+
+The GTC counters are registers from ``0x701180`` to ``0x7011fc`` that clear when
+read. ``rtl9602c_gpon_cntr_sync()`` reads them, from the worker every 50 ms and
+before every status report and every read of the ``gpon`` view, and adds them
+into running totals (``struct pon_dev_stats``) that start at zero at each
+bring-up. The PON class report and the ``gpon`` view read the totals, so the two
+agree. The table gives the register behind each total. A second reader of one of
+the registers takes counts out of the totals (see "Known limitations").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 42 36
+
+   * - Total
+     - Register
+     - Field
+   * - ``sn_requests``
+     - ``RTL9602C_GPON_CNT_ACTIVATION`` (``0x7011ac``)
+     - ``RTL9602C_GPON_CNT_ACTIVATION_SN`` (bits 15:0)
+   * - ``ranging_requests``
+     - ``RTL9602C_GPON_CNT_ACTIVATION`` (``0x7011ac``)
+     - ``RTL9602C_GPON_CNT_ACTIVATION_RANGING`` (bits 31:16)
+   * - ``ploam_rx``
+     - ``RTL9602C_GPON_CNT_PLOAM_RX`` (``0x70119c``)
+     - The whole word.
+   * - ``ploam_crc_errors``
+     - ``RTL9602C_GPON_CNT_PLOAM_ERR`` (``0x7011a0``)
+     - ``RTL9602C_GPON_CNT_PLOAM_ERR_CRC`` (bits 15:0)
+   * - ``ploam_overflows``
+     - ``RTL9602C_GPON_CNT_PLOAM_ERR`` (``0x7011a0``)
+     - ``RTL9602C_GPON_CNT_PLOAM_ERR_OVERFLOW`` (bits 31:16)
+   * - ``bwmap_rx``
+     - ``RTL9602C_GPON_CNT_BWMAP_RX`` (``0x7011b0``)
+     - The whole word.
+   * - ``bwmap_crc_errors``
+     - ``RTL9602C_GPON_CNT_BWMAP_ERR`` (``0x7011a4``)
+     - ``RTL9602C_GPON_CNT_BWMAP_ERR_CRC`` (bits 15:0)
+   * - ``bwmap_overflows``
+     - ``RTL9602C_GPON_CNT_BWMAP_ERR`` (``0x7011a4``)
+     - ``RTL9602C_GPON_CNT_BWMAP_ERR_OVERFLOW`` (bits 31:16)
+   * - ``gem_frames``
+     - ``RTL9602C_GPON_CNT_GEM_FRAMES`` (``0x7011c4``)
+     - The whole word.
+   * - ``bip_errors``
+     - ``RTL9602C_GPON_CNT_BIP_ERR`` (``0x701180``)
+     - The whole word.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Every counter from ``0x701180`` to ``0x7011fc`` clears when read.
+     - M
+     - Three reads of ``RTL9602C_GPON_CNT_PLOAM_RX`` two seconds apart gave
+       ``0x270``, ``0x0c`` and ``0x06`` on an unchanging link, while the
+       superframe counter rose 16046.
+   * - ``RTL9602C_GPON_CNT_ACTIVATION`` (``0x7011ac``):
+       ``RTL9602C_GPON_CNT_ACTIVATION_SN`` (bits 15:0) counts grants classified
+       as serial-number requests. ``RTL9602C_GPON_CNT_PLOAM_RX`` (``0x70119c``)
+       counts downstream PLOAM messages accepted, ``RTL9602C_GPON_CNT_BWMAP_RX``
+       (``0x7011b0``) bandwidth maps accepted.
+     - M
+     - One serial-number request per discovery grant in O3; 8094 maps a second
+       against 8000 downstream frames, and PLOAM messages counted, in the
+       ``gpon`` view.
+   * - Not measured field by field: ``RTL9602C_GPON_CNT_ACTIVATION_RANGING``
+       (bits 31:16, ranging requests); ``RTL9602C_GPON_CNT_PLOAM_ERR``
+       (``0x7011a0``) with ``RTL9602C_GPON_CNT_PLOAM_ERR_CRC`` (bits 15:0) and
+       ``RTL9602C_GPON_CNT_PLOAM_ERR_OVERFLOW`` (bits 31:16);
+       ``RTL9602C_GPON_CNT_BWMAP_ERR`` (``0x7011a4``) with
+       ``RTL9602C_GPON_CNT_BWMAP_ERR_CRC`` and
+       ``RTL9602C_GPON_CNT_BWMAP_ERR_OVERFLOW`` at the same positions;
+       ``RTL9602C_GPON_CNT_BIP_ERR`` (``0x701180``), downstream blocks whose
+       8-bit BIP failed; ``RTL9602C_GPON_CNT_GEM_FRAMES`` (``0x7011c4``),
+       non-idle downstream GEM frames.
+     - I
+     - The ranging count reading 1 after each activation; a fibre attenuated
+       towards errors for the CRC and BIP counts. ITU-T G.984.3 clause 8.1.3.4
+       for the BIP.
+   * - ``rtl9602c_gpon_cntr_sync()`` reads these registers: from the worker
+       every 50 ms and before every report, only while the PON is up, adding
+       into running totals (``struct pon_dev_stats``) that start at zero at each
+       bring-up. The ``gpon`` view and the PON class report's statistics both
+       read the totals.
+     - M
+     - Two reads five seconds apart gave 711266 then 751736 maps and 685 then
+       715 PLOAM messages, one PLOAM CRC error and one BIP error block since
+       bring-up, the same in the ``gpon`` view and in the netlink report.
+   * - The bandwidth-map counter is 16 bits wide, so at 8000 maps a second it
+       must be read within 8 s; the 50 ms period leaves that margin.
+     - I
+     - A read after more than 8 s without a sync.
+   * - Upstream counters: write an index to ``RTL9602C_GPON_CNT_US_SEL``
+       (``0x705140``) and read ``RTL9602C_GPON_CNT_US_DATA`` (``0x705148``);
+       ``RTL9602C_GPON_US_CNTR_COUNT`` (8) indexes. Index 0 (``ploam-overhead``
+       in the ``uscntr`` view) counts burst overheads sent, index 2
+       (``ploam-cpu``) PLOAM messages sent from the normal and urgent queues,
+       index 3 (``ploam-auto``) PLOAM messages sent from the templates.
+     - M
+     - The ``uscntr`` view: index 2 counted 8 for 8 messages pushed to a queue;
+       indexes 0 and 3 counted 979 each for 957 serial-number requests.
+   * - Index 1 (``dbru``, DBRu sent) and index 4 (``gem-bytes``, GEM bytes sent)
+       are named in the ``uscntr`` view but not measured, indexes 5 to 7 are
+       unnamed, and whether reading clears them is not established.
+     - I
+     - Readings in O5 under upstream traffic.
+
+FEC and encryption
+==================
+
+G.984.3 lets the OLT switch on forward error correction in both directions, and
+provides encryption of the GEM payload. The driver handles neither beyond one
+detection threshold: what it leaves out is under "Known limitations", and the
+rows here state what the driver does and what is assumed.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Downstream FEC is signalled by the FEC bit of the Ident field, with a
+       four-frame hysteresis at the ONU; upstream FEC is requested per
+       allocation by the Use FEC flag and is not used outside O5. Encryption is
+       128-bit AES in counter mode over GEM payloads, with keys the ONU
+       generates on Request_Key and switches to at Key_Switching_Time.
+     - P
+     - ITU-T G.984.3 clause 13.2.3, clause 13.1.2.2, clause 13.4, clause 12.2,
+       clause 12.3 and clause 12.4.
+   * - Downstream FEC: ``RTL9602C_GTC_DS_IRQ_FEC`` shows whether the line
+       carries FEC (the ``ds`` line of the ``gpon`` view). The driver writes
+       ``RTL9602C_GTC_DS_CTRL_FEC_DET_THR`` (bits 3:1 of
+       ``RTL9602C_GTC_DS_CTRL``) = ``RTL9602C_GTC_DS_CTRL_FEC_DET_THR_DEF`` (0),
+       a detection threshold that reads 1 at reset.
+     - I
+     - Required: unverified; the test OLT's downstream FEC setting is not
+       recorded. An OLT with downstream FEC on would settle it.
+   * - That no upstream FEC is needed (see "Known limitations"): a grant's Use
+       FEC flag is only displayed (the ``bwmap`` view).
+     - I
+     - An OLT that sets Use FEC.
+   * - That no encryption is needed (see "Known limitations"): whether the ONU
+       needs it depends on the OLT, and the test OLT encrypts no Port-ID.
+     - I
+     - An OLT that encrypts a Port-ID.
+
+Reporting: the PON class and devlink
+====================================
+
+The GPON code reports the ONU to the PON class
+(Documentation/networking/pon.rst). The PON device is registered by the GEM port
+code (see Documentation/networking/device_drivers/pon/rtl9602c.rst), and its
+``dev_status`` operation calls ``rtl9602c_gpon_fill_status()`` under
+``gpon_lock``, so that a report is one moment of the activation.
+``rtl9602c_gpon_notify()`` sends the class the report when it changes. The
+serial number that the ONU presents to the OLT is the devlink parameter
+``gpon_serial``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The PON device, registered by the GEM port code (see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst) with 128 flows
+       and 16 T-CONTs (the seventeenth being the OMCC's), takes its status from
+       ``rtl9602c_gpon_fill_status()`` under ``gpon_lock``: type GPON; the
+       serial number when set; the ifindex of the PON port
+       (``RTL9602C_PORT_PON``); and, only while the PON is up, the state (the
+       driver's numbers 1 to 5 equal the class's O1 to O5), the ONU-ID unless it
+       is 255, the OMCC Port-ID when bound, the Alloc-IDs of T-CONTs 0 to 15 in
+       use, the totals of the counters, and LOS, LOF and LOM from
+       ``RTL9602C_GTC_DS_IRQ_STAT``. With the PON down there is no state, no
+       alarm and no counter: an absent value, not a zero.
+     - M
+     - The PON class report in O5 on an OLT: state O5, ONU-ID 1, Alloc-ID 257,
+       OMCC Port-ID 1, no alarms, agreeing with the ``gpon`` view.
+   * - ``rtl9602c_gpon_notify()`` compares the report, counters left out, with
+       the last one sent and sends the full report when they differ; it runs
+       after every transition and from the worker every 50 ms.
+     - M
+     - Across a down and up a listener on the class's ``monitor`` group received
+       O1; a report with no state and no alarms; O2; O3; O4 with the ONU-ID; O5;
+       O5 with the Alloc-ID and the OMCC.
+   * - The PON class's T-CONT query is answered from the driver's record of
+       T-CONTs 0 to 15: the Alloc-ID, ``-ENOENT`` when idle, ``-ERANGE`` from 16
+       on.
+     - I
+     - The class's ``tcont-get`` in O5, which nothing has issued yet, should
+       name Alloc-ID 257 at the T-CONT that the driver chose for it.
+   * - The devlink parameter ``gpon_serial`` (string, runtime): it reads empty
+       until set, then four characters and eight upper-case hexadecimal digits.
+       Setting takes at least 12 characters, the first four printable ASCII
+       (``0x20`` to ``0x7e``) and the next eight hexadecimal digits as four
+       bytes; characters after the twelfth are ignored; anything else is
+       ``-EINVAL``. It is refused with ``-EBUSY`` while the PON is up. A valid
+       value is kept, logged as ``serial number set`` (the log line does not
+       carry the value), and at once written into the Serial_Number_ONU
+       template. The format is G.984.3's serial number: the 4 characters of
+       Vendor_ID and a 4-byte serial number (VSSN).
+     - M
+     - The parameter read empty before it was set; ``ENXIO`` on ``up`` without
+       it, ``EBUSY`` while up, ``EINVAL`` for a malformed value, and O5 with a
+       valid one. ITU-T G.984.3 clause 9.2.4.1.
+
+The debugfs views
+=================
+
+Seven views are created by ``rtl9602c_gpon_debugfs_init()`` in the switch's
+debugfs directory, ``/sys/kernel/debug/rtl9602c/``. All are mode 0400 but
+``ploamlog``, which is 0600 because a write to it empties the log. They exist
+only with ``CONFIG_DEBUG_FS``. Times in the ``ploamlog`` view advance in ticks
+of 4 ms on this board.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``gpon`` (mode 0400): ``top`` is ``RTL9602C_GPON_IRQ_STAT``; ``ds`` is
+       ``RTL9602C_GTC_DS_IRQ_STAT`` with its LOS, LOF, LOM and FEC bits; ``onu``
+       is ``RTL9602C_ONU_CTRL`` with the ONU-ID and the state; ``los`` is
+       ``RTL9602C_GTC_DS_LOS`` with its ``cdr`` and ``optical`` loss bits (1 is
+       loss); ``sig`` is ``RTL9602C_SERDES_PON_RX_STAT`` with its signal bit
+       (``signok``, 1 is present) and its sync bit (``lecsync``); ``frame`` is
+       the superframe counter; then come the totals of the counters (``cntr``:
+       ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
+       maps accepted, CRC errors, overflows, non-idle GEM frames, BIP error
+       blocks). A read takes the counters and writes no register.
+     - T
+     - A check with traffic on the board reads the ``onu`` line before and after
+       a flood; every debugfs view reads.
+   * - ``gpontbl`` (0400): the Alloc-ID entries in use (T-CONT and Alloc-ID),
+       the Port-ID entries in use with the flow's type and upstream Port-ID, and
+       each flow whose downstream GEM counters are non-zero. It reads through
+       the table protocol under ``gpon_lock``.
+     - M
+     - The residue after a reset (see "Tables: Alloc-ID, Port-ID and multicast")
+       and the per-flow counters (see "GEM framing") were read with it.
+   * - ``ploamlog`` (0600; a write clears it): a ring of
+       ``RTL9602C_PLOAM_LOG_LEN`` (256) events, oldest first, each with its time
+       since boot and the state then. ``RTL9602C_EV_DS``: a downstream message
+       (PON-ID never; Upstream_Overhead only in O2; Extended_Burst_Length only
+       in O3). ``RTL9602C_EV_US``: an upstream message written, with its slot
+       and queue flags. ``RTL9602C_EV_US_REFUSED``: one refused because its
+       queue was full. ``RTL9602C_EV_STATE``: a transition. ``RTL9602C_EV_USQ``:
+       the queues' empty flags changed, and at Deactivate_ONU-ID.
+       ``RTL9602C_EV_US_INTR``: the upstream latch. ``RTL9602C_EV_DS_INTR``: the
+       downstream latch when it holds more than PLOAM_RX. An event equal to the
+       previous one counts as its repeat, up to 65535, and refreshes its time.
+     - M
+     - The view showed each re-ranging across activations.
+   * - ``bwmap`` (0400): arms a capture of 16 allocations, waits 5 ms plus 125
+       us per allocation, prints each valid one under the header
+       ``RTL9602C_BWM_HEADER`` (frame, MF, T-CONT, PLOAMu, FEC, DBRu, StartTime,
+       StopTime, their length, burst start and end, last), marks one that does
+       not fit in a 19440-byte frame, then prints the capture kept from O4.
+     - M
+     - The view read in O4 and O5 (see "The bandwidth map"); a check with
+       traffic on the board reads its T-CONT column.
+   * - ``usburst`` (0400): ``RTL9602C_GTC_US_LASER`` (lead, lag),
+       ``RTL9602C_GTC_US_CTRL``, ``RTL9602C_GTC_US_POWERSAVE`` (on or off),
+       ``RTL9602C_GEM_US_POWERSAVE`` (bit 31, lag, lead), ``RTL9602C_BURST_CFG``
+       (index, length) and ``RTL9602C_GTC_US_TX_MODE`` (its two bits).
+     - T
+     - Every debugfs view reads.
+   * - ``uscntr`` (0400): writes each index 0 to 7 into
+       ``RTL9602C_GPON_CNT_US_SEL`` and prints ``RTL9602C_GPON_CNT_US_DATA``
+       beside the names of the upstream counters.
+     - M
+     - The readings of the upstream counters (see "Counters").
+   * - ``gemusintr`` (0400): ``RTL9602C_GEM_US_IRQ_LATCH`` (``0x706000``,
+       printed as ``latch``: events of the upstream GEM framer since the last
+       read) and ``RTL9602C_GEM_US_IRQ_STAT`` (``0x706008``, printed as
+       ``status``: the conditions now), with names for bits 0 to 9:
+       ``underflow``, ``overflow``, ``residue``, ``excess``,
+       ``burst-over-grant``, ``pli-error``, ``short-grant``, ``late-request``,
+       ``sd-mismatch``, ``sd-too-long``. These two addresses are defined in
+       ``rtl9602c-gpon.c`` and not in the header.
+     - M
+     - In O5 activations bit 0 (``underflow``) appeared now and then and bit 8
+       (``sd-mismatch``) was always set.
+   * - What the ten bits of the ``gemusintr`` view detect beyond their names,
+       and that reading the latch clears it, are not established.
+     - I
+     - Two reads in a row under upstream traffic.
+
+Known limitations
+=================
+
+- The state machine has the states O1 to O5 and the timer TO1. O6 (POPUP), O7
+  (Emergency Stop) and the timer TO2 are not implemented. LOS and LOF are
+  reported as alarms and change no state, where G.984.3 moves an ONU in O2, O3
+  or O4 to O1 on LOS or LOF, and one in O5 to O6, and switches the laser off.
+- The bring-up enters O2 without checking LOS or LOF, where G.984.3 leaves O1
+  for O2 once both are clear. On a dark fibre the ONU reports O2 with the LOS
+  alarm.
+- TO1 is armed on entering O3 and again on entering O4, so that the ONU may
+  spend up to 10 s in each of the two states. G.984.3 starts TO1 once, on
+  entering O3, and bounds the two states together.
+- Extended_Burst_Length is acted on whenever it changes in O3, where G.984.3 has
+  the ONU act on it only before its first serial-number request. The upper clamp
+  of the computed overhead length is 252 bytes, where G.984.3 allows at most
+  128. No type 1 or type 2 preamble is programmed; their bit counts only enter
+  the length.
+- Every downstream message that the table in "PLOAM receive" does not list is
+  recorded and dropped, including some for which G.984.3 requires an answer:
+  Request_Password gets no Password message, and BER Interval,
+  Key_Switching_Time and Encrypted_Port-ID get no Acknowledge. POPUP,
+  Swift_POPUP, Disable_Serial_Number, Change_Power_Level, Request_Key,
+  Ranging_Adjustment, Sleep_Allow, PST and Physical_Equipment_Error are not
+  acted on either.
+- There is no encryption. The driver programs no key and does not act on
+  Encrypted_Port-ID, Request_Key or Key_Switching_Time, so a Port-ID that the
+  OLT encrypts (128-bit AES in counter mode, ITU-T G.984.3 clause 12) would be
+  delivered as ciphertext. Nothing is set up for upstream FEC, and downstream
+  FEC has only its detection threshold.
+- There is no power levelling, no REI message and no signal-fail or
+  signal-degrade alarm from the BIP count.
+- Nothing in the driver sends the Dying_Gasp message that the MAC holds armed.
+- The total of GEM frames in the statistics misses the frames that the
+  ``ponpath`` view of the PON MAC reads: it reads the same clear-on-read
+  register, ``RTL9602C_GPON_CNT_GEM_FRAMES``, under another name (see
+  Documentation/networking/device_drivers/pon/rtl9602c.rst).
+
+Open questions
+==============
+
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the assumptions the driver depends on, because
+it writes the value or relies on the behaviour, and those behind the known
+limitations: the driver is correct on this board only if they hold, and a board
+test must settle them. The second list holds the questions to which the code is
+indifferent: it works whichever way they resolve, and they only label what a
+view or a log line shows.
+
+Assumptions the driver depends on
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - That the PON MAC has to be built before the SerDes is put in GPON mode
+       ("Bring-up and take-down").
+     - Reversing the two and checking that OMCI messages pass both ways.
+   * - That activation needs the optics' modulation held ("Bring-up and
+       take-down").
+     - The ONU reaching O5 and OMCI messages passing both ways with the hold off
+       (``CONFIG_RTL9602C_OPTICS_RO``).
+   * - That parking the SerDes and clearing its reset register is needed ("PON
+       SerDes and analog front end").
+     - Removing the writes and checking that the ONU reaches O5 on an OLT.
+   * - That the reset of the PON SerDes is needed, and whether it resets the
+       GPON MAC as well ("PON SerDes and analog front end").
+     - Writing a MAC register before the step and reading it after it.
+   * - That the burst-enable output driver, the cleared burst delay and the
+       cleared data source are needed ("PON SerDes and analog front end").
+     - Removing the writes and checking that the OLT hears the bursts.
+   * - That the override of the SerDes's bit-error indication is needed ("PON
+       SerDes and analog front end").
+     - Removing the write and checking that the ONU reaches O5 on an OLT.
+   * - That each of the five analog tuning words is needed ("PON SerDes and
+       analog front end").
+     - Removing each and checking that the ONU reaches O5 on an OLT.
+   * - That the clock-recovery loop setting is needed, and how it decodes ("PON
+       SerDes and analog front end").
+     - Removing it and checking that the ONU reaches O5 on an OLT.
+   * - That the enable of the clock recovery's analog front end is needed ("PON
+       SerDes and analog front end").
+     - Clearing it and checking that the ONU reaches O5 on an OLT.
+   * - That forcing the analog line-rate profile to GPON's is needed ("PON
+       SerDes and analog front end").
+     - Removing it and checking that the ONU reaches O5 on an OLT.
+   * - That the burst-enable output at TTL level is needed ("PON SerDes and
+       analog front end").
+     - Clearing it and checking that the OLT hears the bursts.
+   * - That transmit amplitude 5 rather than the reset value 7 is needed ("PON
+       SerDes and analog front end").
+     - Amplitude 7, and checking that the ONU reaches O5 on an OLT.
+   * - That clearing the receiver filter configuration is needed ("PON SerDes
+       and analog front end").
+     - Removing it and checking that the ONU reaches O5 on an OLT.
+   * - That the manual controls of the clock recovery are needed, and which
+       level of the reset bit holds it in reset ("PON SerDes and analog front
+       end").
+     - Removing them and checking that the ONU reaches O5 on an OLT.
+   * - That cycling the receiver-enable override is needed ("PON SerDes and
+       analog front end").
+     - Removing it and checking that the ONU reaches O5 on an OLT.
+   * - That taking the burst-enable path out of power-down is needed ("PON
+       SerDes and analog front end").
+     - Removing it and checking that the OLT hears the bursts.
+   * - That the optical module's LOS polarity bit is set rightly, and whether
+       both LOS configuration bits are still needed ("Downstream lock, LOS and
+       alarms").
+     - Clearing each and reading the ``los`` line and the superframe counter,
+       with the ONU reaching O5 on an OLT.
+   * - That the frame-derived pulse and its offset are needed ("Downstream lock,
+       LOS and alarms").
+     - Finding what consumes the pulse, or removing the write.
+   * - Which upstream registers the write key locks ("The upstream write key").
+     - A write to each without the key, read back.
+   * - That the PON port is dormant below O5 and up in O5 ("The activation state
+       machine").
+     - ``ip link show pon`` in each state.
+   * - That a write into a full upstream PLOAM queue overwrites its tail ("PLOAM
+       transmit").
+     - Filling a queue and reading its slot.
+   * - That the MAC inserts the serial-number response's random delay ("PLOAM
+       transmit").
+     - The spread of the responses' arrival at the OLT.
+   * - That declaring transmit power level mode 1 whatever the OLT's mode does
+       no harm ("PLOAM transmit").
+     - ITU-T G.984.3 clause 10.5.1, and an OLT that checks the mode.
+   * - That arming the Serial_Number_ONU template again on entering O4 is needed
+       ("PLOAM transmit").
+     - Removing it and checking that the ONU reaches O5 on an OLT.
+   * - That flushing the upstream PLOAM queues on entering O5 is needed ("PLOAM
+       transmit").
+     - Removing it and checking that the ONU reaches O5 and OMCI messages pass
+       both ways.
+   * - That the repeat index of the burst overhead names the byte that is
+       stretched into the preamble ("The burst overhead").
+     - Another index, with the OLT's delineation of the bursts as the witness.
+   * - That type 1 and type 2 preambles are not needed ("The burst overhead",
+       "Known limitations").
+     - An OLT that asks for them.
+   * - That the overhead length counts the guard, up to 32 bits, and the clamp
+       at 252 bytes does no harm ("The burst overhead", "Known limitations").
+     - An OLT with a guard longer than 32 bits.
+   * - The unit of the laser lead and lag, and that the lead is needed
+       ("Upstream timing").
+     - Checking that the ONU reaches O5 on an OLT with other values (ITU-T
+       G.984.2 Table I.2 bounds the transmitter's enable and disable times at 16
+       bits).
+   * - Which level the burst-enable polarity selects, and that the Ind bit does
+       what its use suggests ("Upstream timing").
+     - Clearing each under the key and checking that the ONU reaches O5 on an
+       OLT.
+   * - That the small-StartTime and laser-suppression bits do what their use
+       suggests ("Upstream timing").
+     - Clearing bit 0 under the key with StartTime 16 grants and checking that
+       the ONU reaches O5 on an OLT.
+   * - That the burst power save, and its window, are needed ("Upstream
+       timing").
+     - Removing the writes and checking that the ONU reaches O5 on an OLT.
+   * - That the signal-detect limits are needed ("Upstream timing").
+     - Removing the write and checking that the ONU reaches O5 on an OLT and the
+       upstream latch stays quiet.
+   * - That the burst merge threshold is needed ("Upstream timing").
+     - Removing the write and checking that the ONU reaches O5 on an OLT and
+       upstream GEM frames reach the OLT.
+   * - That the bandwidth-map counter is 16 bits wide, so that the 50 ms period
+       of the worker reads it in time ("Counters").
+     - A read after more than 8 s without a sync.
+   * - That a downstream FEC detection threshold of 0 is right ("FEC and
+       encryption").
+     - An OLT with downstream FEC on.
+   * - That no upstream FEC is needed ("FEC and encryption", "Known
+       limitations").
+     - An OLT that sets Use FEC.
+   * - That no encryption is needed ("FEC and encryption", "Known limitations").
+     - An OLT that encrypts a Port-ID.
+
+Questions the code does not depend on
+-------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - What the bits of the memory self-test mean ("The register block").
+     - A part with a failing MAC memory.
+   * - What bit 15 of ``RTL9602C_SERDES_ANA_RX_CFG`` selects, given that the
+       downstream has also framed with it set ("Downstream lock, LOS and
+       alarms").
+     - Repeating the change of the bit with the optics' signal-detect
+       configuration changed.
+   * - What the receiver's sync bit reports ("Downstream lock, LOS and alarms").
+     - A reading where it is 1.
+   * - What the MAC's LOM bit detects ("Downstream lock, LOS and alarms").
+     - A downstream with frames and a corrupted PLOAM channel.
+   * - Which upstream field takes the upstream ONU-ID register ("The activation
+       state machine").
+     - A capture of the upstream at the OLT with the register at 255 and at an
+       assigned value.
+   * - That the response delay realises the ONU response time ("Upstream
+       timing").
+     - Ranging with other values and comparing the delay the OLT assigns.
+   * - What the upstream signal-detect bits and the enable bits select
+       ("Upstream timing").
+     - A burst keyed with the laser disabled.
+   * - What the capture fields other than the T-CONT, PLOAMu, valid, StartTime
+       and StopTime hold ("The bandwidth map").
+     - An OLT granting FEC or DBRu, or several allocations in one burst.
+   * - Why stale Port-ID entries kept flow 64 from matching ("Tables: Alloc-ID,
+       Port-ID and multicast").
+     - Refilling the table with stale entries and binding the OMCC.
+   * - Whether the per-flow downstream counters clear when read ("GEM framing").
+     - Two reads of the ``gpontbl`` view over a steady downstream flow.
+   * - What the error, ranging, BIP and GEM frame counter fields count
+       ("Counters").
+     - A fibre attenuated towards errors, and one ranging count per activation.
+   * - What the unmeasured upstream counters count, and whether reading clears
+       them ("Counters").
+     - Readings in O5 under upstream traffic.
+   * - Whether the PON class's T-CONT query follows the driver's record
+       ("Reporting: the PON class and devlink").
+     - The class's ``tcont-get`` in O5.
+   * - What the ten bits of the upstream GEM framer's latch detect, and whether
+       reading it clears it ("The debugfs views").
+     - Two reads in a row under upstream traffic.
+   * - What makes the MAC send the Dying_Gasp template it holds ("PLOAM
+       transmit", "Known limitations").
+     - The dying-gasp input asserted with the ONU in O5 (see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst).
