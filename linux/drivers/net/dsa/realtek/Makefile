@@ -16,3 +16,5 @@ ifdef CONFIG_NET_DSA_REALTEK_RTL8366RB_LEDS
 rtl8366-objs 				+= rtl8366rb-leds.o
 endif
 obj-$(CONFIG_NET_DSA_REALTEK_RTL8365MB) += rtl8365mb.o
+obj-$(CONFIG_NET_DSA_RTL9602C)		+= rtl9602c.o
+rtl9602c-objs := rtl9602c-main.o rtl9602c-l2.o rtl9602c-gpon.o rtl9602c-ponmac.o rtl9602c-omci.o rtl9602c-gem.o rtl9602c-optics.o rtl9602c-offload.o rtl9602c-ptp.o
