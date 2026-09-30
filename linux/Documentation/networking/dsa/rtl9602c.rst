@@ -449,6 +449,11 @@ The other pages of the port, by the short names used in the tables above:
 - *MIPS*, Documentation/arch/mips/rtl9602c.rst: the CPU core, the platform and
   the board.
 
+.. toctree::
+   :hidden:
+
+   rtl9602c-bridging
+
 How to read the fact tables
 ===========================
 
