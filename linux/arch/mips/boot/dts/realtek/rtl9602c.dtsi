@@ -107,6 +107,10 @@
 		 * itself, and no driver binds this node in this kernel. From
 		 * this clock the 8250 core would compute the divisor the boot
 		 * loader leaves, 109.
+		 *
+		 * The interrupt is the port's source in intc. Nothing reads
+		 * it: the platform code registers the port with its interrupt
+		 * before intc's interrupt domain exists.
 		 */
 		uart0: serial@18002000 {
 			compatible = "ns16550a";
@@ -114,6 +118,8 @@
 			reg-shift = <2>;
 			reg-io-width = <1>;
 			clock-frequency = <200000000>;
+			interrupt-parent = <&intc>;
+			interrupts = <49>;
 			status = "okay";
 		};
 
