@@ -6,7 +6,7 @@
 config NET_VENDOR_REALTEK
 	bool "Realtek devices"
 	default y
-	depends on PCI || (PARPORT && X86)
+	depends on PCI || (PARPORT && X86) || RTL9602C
 	help
 	  If you have a network (Ethernet) card belonging to this class, say Y.
 
@@ -139,5 +139,17 @@ config RTASE
 
 	  To compile this driver as a module, choose M here: the module
 	  will be called rtase. This is recommended.
+
+config RTL9602C_ETH
+	tristate "Realtek RTL9602C switch CPU port"
+	depends on RTL9602C || COMPILE_TEST
+	help
+	  Driver for the CPU port of the switch in Realtek RTL9602C SoCs: the
+	  DMA engine that moves frames between memory and the switch. It is
+	  the conduit of the RTL9602C DSA switch driver and also carries the
+	  OMCI channel of the PON port, so say Y or M on an RTL9602C board.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called rtl9602c-eth.
 
 endif # NET_VENDOR_REALTEK
