@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/realtek,rtl9602c-eth.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Realtek RTL9602C switch CPU port DMA engine
+
+maintainers:
+  - Paweł Phan <szop.hektar_1w@icloud.com>
+
+description: |
+  The CPU port of the Realtek RTL9602C's Ethernet switch, port 3 of
+  realtek,rtl9602c-switch, has no MAC behind it: a DMA engine moves frames
+  between memory and the switch through descriptor rings. What the switch and
+  the CPU tell each other about a frame travels in its descriptor, not in the
+  frame: on transmit the destination port, a priority and a PON flow; on
+  receive the source port, the reason the switch sent the frame to the CPU
+  and the PON flow it arrived on.
+
+  The switch's CPU port refers to this node through its ethernet property.
+  The engine's address registers hold the unit's MAC address, which the boot
+  loader leaves there.
+
+properties:
+  $nodename:
+    pattern: "^ethernet@[0-9a-f]+$"
+
+  compatible:
+    const: realtek,rtl9602c-eth
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+  - interrupts
+
+additionalProperties: false
+
+examples:
+  - |
+    ethernet@18012000 {
+        compatible = "realtek,rtl9602c-eth";
+        reg = <0x18012000 0x1440>;
+        interrupt-parent = <&intc>;
+        interrupts = <26>;
+    };
