@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/watchdog/realtek,rtl9602c-wdt.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Realtek RTL9602C watchdog timer
+
+maintainers:
+  - Paweł Phan <szop.hektar_1w@icloud.com>
+
+description:
+  The watchdog of the Realtek RTL9602C counts ticks of the 200 MHz LX bus
+  clock, each 2^25, 2^26, 2^27 or 2^28 cycles long (about 0.17 to 1.34 s),
+  through two phases of 1 to 32 ticks each. At the end of phase one it sets a
+  flag in its status register; at the end of phase two it resets the whole
+  chip, the switch included. Writing its keepalive bit restarts the count.
+
+allOf:
+  - $ref: watchdog.yaml#
+
+properties:
+  compatible:
+    const: realtek,rtl9602c-wdt
+
+  reg:
+    maxItems: 1
+
+  interrupts:
+    description:
+      The warning at the end of phase one. The block sets its status flag
+      then, but has not been seen to raise an interrupt.
+    maxItems: 1
+
+required:
+  - compatible
+  - reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    watchdog@18003260 {
+        compatible = "realtek,rtl9602c-wdt";
+        reg = <0x18003260 0xc>;
+        interrupt-parent = <&intc>;
+        interrupts = <5>;
+    };
