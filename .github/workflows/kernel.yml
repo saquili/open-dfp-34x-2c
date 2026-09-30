@@ -52,10 +52,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The board configuration -- rtl9602c_defconfig, alone and with the
-        # development fragment -- joins this list with the series that adds
-        # it, and with it "make dtbs_check W=1".
-        config: [tinyconfig]
+        # tinyconfig builds the smallest kernel of the architecture;
+        # rtl9602c_defconfig is the board's own configuration (its device
+        # tree is checked in the dt-bindings job).
+        config: [tinyconfig, rtl9602c_defconfig]
     steps:
       - name: Install the build tools
         # xz-utils and u-boot-tools: the default make target of a MIPS
@@ -142,8 +142,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends bison ca-certificates flex \
-            gcc git libc6-dev libyaml-dev make pkg-config python3 python3-dev \
-            python3-venv swig
+            gcc gcc-mips-linux-gnu git libc6-dev libyaml-dev make pkg-config \
+            python3 python3-dev python3-venv swig
           git config --global --add safe.directory '*'
           python3 -m venv /opt/dt
           /opt/dt/bin/pip install dtschema yamllint
@@ -162,6 +162,19 @@ jobs:
             dt_binding_check 2>&1 | tee dt.log
       - name: No diagnostics in the files of our series
         run: .github/scripts/kernel-series check-log dt.log
+      - name: make dtbs_check W=1
+        # The board's device tree against every schema, with the compiler's
+        # own warnings on. The board configuration builds only this
+        # board's tree, so a diagnostic that names it is ours; the tools
+        # name a tree by its .dtb or by the .dts or .dtsi it comes from.
+        run: |
+          make -C linux O="$PWD/out-board" rtl9602c_defconfig
+          make -C linux O="$PWD/out-board" W=1 CHECK_DTBS=y \
+            realtek/dfp-34x-2c3.dtb 2>&1 | tee dtbs.log
+          if grep -E '(dfp-34x-2c3|rtl9602c)\.(dtb|dts|dtsi)[: ]' dtbs.log |
+              grep -v '^  DTC'; then
+            exit 1
+          fi
 
   docs:
     runs-on: ubuntu-24.04
