@@ -455,6 +455,7 @@ The other pages of the port, by the short names used in the tables above:
    rtl9602c-bridging
    rtl9602c-acl-qos
    rtl9602c-l3-nat
+   rtl9602c-ptp
 
 How to read the fact tables
 ===========================
