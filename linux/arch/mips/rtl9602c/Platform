@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Realtek RTL9602C
+#
+# The machine's header directory goes on the include path, the MIPS
+# convention by which a machine can override mach-generic headers. It holds
+# only rtl9602c.h, which the code includes by its full path, so every
+# mach-generic header applies.
+#
+# The kernel is loaded 1 MiB into DRAM: MIPS I fixes the exception vectors
+# at 0x80000000, and the kernel installs its handlers in the first kilobyte
+# there. CONFIG_PHYSICAL_START, offered once CRASH_DUMP is set, overrides
+# this address with a default above the board's 32 MiB, so CRASH_DUMP must
+# stay off.
+#
+cflags-$(CONFIG_RTL9602C)	+= -I$(srctree)/arch/mips/include/asm/mach-rtl9602c
+load-$(CONFIG_RTL9602C)		+= 0xffffffff80100000

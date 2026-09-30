@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * ODI DFP-34X-2C3: a GPON ONU in an SFP module, built on the Realtek
+ * RTL9602C with 32 MiB of DRAM and 8 MiB of SPI NOR flash. Its only
+ * electrical data interface is the SFP edge connector, wired to the switch's
+ * SerDes lane (port 0). The GPON MAC drives a separate laser driver IC,
+ * which the SoC also reaches over I2C.
+ */
+
+/dts-v1/;
+
+#include "rtl9602c.dtsi"
+
+/ {
+	model = "ODI DFP-34X-2C3";
+	compatible = "odi,dfp-34x-2c3", "realtek,rtl9602c";
+
+	/* The platform code adds the same range to memblock itself. */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x02000000>;
+	};
+
+	/*
+	 * The PON MAC's packet-buffer areas in DRAM, one per direction. The
+	 * PON MAC reads and writes them by DMA and the CPU never touches them,
+	 * so no-map keeps them out of the kernel's memory. Each is 1 MiB and
+	 * 4 KiB, of which the driver programs the first 1 MiB; whether the PON
+	 * MAC touches the 4 KiB beyond is not verified, so they are kept
+	 * reserved too. The upstream area ends at the top of DRAM and the
+	 * downstream area 8 MiB lower, in another quarter of DRAM; whether
+	 * that placement matters is not verified either.
+	 */
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		pbo_ds: pbo@16ff000 {
+			reg = <0x016ff000 0x101000>;
+			no-map;
+		};
+
+		pbo_us: pbo@1eff000 {
+			reg = <0x01eff000 0x101000>;
+			no-map;
+		};
+	};
+
+	chosen {
+		/*
+		 * Taken to have no effect, which is not verified: no driver
+		 * binds uart0, no earlycon argument is passed, and the boot
+		 * loader's console= argument selects the console.
+		 */
+		stdout-path = &uart0;
+
+		/*
+		 * rtl9602c_defconfig sets MIPS_CMDLINE_DTB_EXTEND: the kernel
+		 * command line is these arguments, then the boot loader's.
+		 * panic=10 reboots the board 10 s after a panic.
+		 */
+		bootargs = "panic=10";
+	};
+};
+
+/*
+ * The switch finds the packet-buffer areas by name and needs each to be at
+ * least 1 MiB. Without both of them, or without realtek,sysctl, it is meant
+ * to work as a switch with the PON MAC off; not verified.
+ */
+&switch {
+	memory-region = <&pbo_us>, <&pbo_ds>;
+	memory-region-names = "pbo-us", "pbo-ds";
+};
+
+/ {
+	/*
+	 * The SPI NOR flash, which the SoC maps whole at 0x14000000 for
+	 * reading. mtd-rom probes as map_rom, a read-only mapping: nothing in
+	 * the flash can be written from Linux, whatever the partitions' flags
+	 * say. The window is read 16 bits at a time, which needs
+	 * MTD_MAP_BANK_WIDTH_2.
+	 */
+	flash@14000000 {
+		compatible = "mtd-rom";
+		reg = <0x14000000 0x800000>;
+		bank-width = <2>;
+
+		/*
+		 * The boot loader's own layout, which covers the whole chip.
+		 * The partitions register in this order as mtd0 to mtd7,
+		 * block devices 31:0 to 31:7, and the boot loader names the
+		 * root filesystem by number (root=31:5 for bank 0, root=31:7
+		 * for bank 1): the order is part of the boot contract.
+		 *
+		 * read-only marks everything outside bank 0, where this system
+		 * is installed, so that a writable flash driver could never
+		 * write the boot loader, its environment, the configuration
+		 * store or the fallback bank. That is not verified, as no such
+		 * driver exists yet.
+		 */
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/* The boot loader, run from the reset vector */
+			partition@0 {
+				label = "boot";
+				reg = <0x000000 0x040000>;
+				read-only;
+			};
+
+			/* The boot loader's environment and its copy */
+			partition@40000 {
+				label = "env";
+				reg = <0x040000 0x002000>;
+				read-only;
+			};
+
+			partition@42000 {
+				label = "env2";
+				reg = <0x042000 0x002000>;
+				read-only;
+			};
+
+			/*
+			 * The configuration store of the firmware the board
+			 * shipped with, a JFFS2 image; not mounted here.
+			 */
+			partition@44000 {
+				label = "config";
+				reg = <0x044000 0x03c000>;
+				read-only;
+			};
+
+			/* Bank 0: this system's kernel and root filesystem */
+			partition@80000 {
+				label = "k0";
+				reg = <0x080000 0x14c000>;
+			};
+
+			partition@1cc000 {
+				label = "r0";
+				reg = <0x1cc000 0x274000>;
+			};
+
+			/* Bank 1: the shipped firmware, the fallback */
+			partition@440000 {
+				label = "k1";
+				reg = <0x440000 0x14c000>;
+				read-only;
+			};
+
+			partition@58c000 {
+				label = "r1";
+				reg = <0x58c000 0x274000>;
+				read-only;
+			};
+		};
+	};
+};

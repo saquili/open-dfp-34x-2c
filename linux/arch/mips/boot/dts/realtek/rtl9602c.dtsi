@@ -1,0 +1,218 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Realtek RTL9602C, a SoC for GPON optical network units: a Lexra LX5281
+ * core, the peripherals the kernel drives, and an Ethernet switch with the
+ * GPON MAC behind its PON port.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "realtek,rtl9602c";
+
+	/* One core; the kernel identifies it by its PRId, not by this node. */
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "lexra,lx5281";
+			reg = <0>;
+		};
+	};
+
+	/*
+	 * The CPU's eight interrupt lines. The platform code sets up their
+	 * domain without this node, so no interrupt resolves against it; it
+	 * serves as the parent of intc.
+	 */
+	cpuintc: interrupt-controller {
+		#address-cells = <0>;
+		#interrupt-cells = <1>;
+		interrupt-controller;
+		compatible = "mti,cpu-interrupt-controller";
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * The system controller: the SoC's state and the enables of
+		 * its on-chip blocks. The switch driver sets the enable in
+		 * front of the PON MAC and its packet buffer here before its
+		 * first access to them.
+		 */
+		sysctl: syscon@18000000 {
+			compatible = "realtek,rtl9602c-sysctl", "syscon";
+			reg = <0x18000000 0x1000>;
+		};
+
+		/* Three registers: keepalive, interrupt status and control */
+		wdt: watchdog@18003260 {
+			compatible = "realtek,rtl9602c-wdt";
+			reg = <0x18003260 0xc>;
+
+			/*
+			 * The phase-one warning. The block has not been seen
+			 * to raise any interrupt, so this source number is not
+			 * verified; the driver runs without it.
+			 */
+			interrupt-parent = <&intc>;
+			interrupts = <5>;
+		};
+
+		/*
+		 * The second-level interrupt controller; its one cell is the
+		 * source number, 0 to 63. It reaches the CPU on line 2, which
+		 * the platform code fixes, so it has no interrupts property.
+		 * The window ends at 0x100 because the block at 0x18003100 is
+		 * a different controller. The platform code finds this node
+		 * by its compatible to anchor the interrupt domain.
+		 */
+		intc: interrupt-controller@18003000 {
+			compatible = "realtek,rtl9602c-intc";
+			reg = <0x18003000 0x100>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			interrupt-parent = <&cpuintc>;
+		};
+
+		/*
+		 * The GPIO bank. Only line 13 is used, by the switch, and no
+		 * line as an interrupt; the width of 32 lines is not verified.
+		 *
+		 * Line n is taken to be bit n of a word in the CPU's own
+		 * big-endian order, which the realtek,rtl9602c-gpio entry
+		 * provides; not verified. Note that the generic
+		 * realtek,otto-gpio match assumes a byte-swapped order: a
+		 * kernel that knows only the fallback would drive line 13 on
+		 * bit 21.
+		 */
+		gpio0: gpio@18003300 {
+			compatible = "realtek,rtl9602c-gpio", "realtek,otto-gpio";
+			reg = <0x18003300 0x1c>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <32>;
+		};
+
+		/*
+		 * The console UART. The platform code registers the port
+		 * itself, and no driver binds this node in this kernel. From
+		 * this clock the 8250 core would compute the divisor the boot
+		 * loader leaves, 109.
+		 */
+		uart0: serial@18002000 {
+			compatible = "ns16550a";
+			reg = <0x18002000 0x100>;
+			reg-shift = <2>;
+			reg-io-width = <1>;
+			clock-frequency = <200000000>;
+			status = "okay";
+		};
+
+		/* The CPU port's DMA engine, the switch's conduit */
+		eth: ethernet@18012000 {
+			compatible = "realtek,rtl9602c-eth";
+			reg = <0x18012000 0x1440>;
+			interrupt-parent = <&intc>;
+			interrupts = <26>;
+		};
+
+		/*
+		 * The Ethernet switch. Its register file, which ends at
+		 * offset 0xf0d438, also holds the GPON MAC, the PON MAC with
+		 * its packet buffer, the L3/NAT engine, the IEEE 1588 clock
+		 * and the I2C masters of the optics.
+		 */
+		switch: switch@1b000000 {
+			compatible = "realtek,rtl9602c-switch";
+
+			reg = <0x1b000000 0xf10000>;
+
+			/* One source for all of the switch's own interrupts */
+			interrupt-parent = <&intc>;
+			interrupts = <8>;
+
+			/*
+			 * The hard transmit-disable input of the laser driver,
+			 * taken to be GPIO 13 with high turning the light off;
+			 * not verified. The switch driver requests it asserted
+			 * and releases it only while the PON link needs the
+			 * laser.
+			 */
+			tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+
+			/* Holds the enable in front of the PON MAC. */
+			realtek,sysctl = <&sysctl>;
+
+			/*
+			 * Port 1 exists in the silicon and is left out:
+			 * nothing on this board is known to connect to it.
+			 *
+			 * Note: the switch driver registers its I2C adapter
+			 * with the switch node, so the I2C core also takes
+			 * this node for an I2C device and logs that it cannot
+			 * create one.
+			 */
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				/*
+				 * The SerDes lane to the host: no PHY and no
+				 * in-band status, so a fixed link, whose real
+				 * state the switch driver reports to phylink.
+				 * phylink passes this phy-mode to the driver
+				 * when the port starts, so a lane run at
+				 * 1000BASE-X (rtl9602c.sfp_mode=1000basex) may
+				 * need "1000base-x" here too; not verified.
+				 */
+				port@0 {
+					reg = <0>;
+					label = "sfp";
+					phy-mode = "2500base-x";
+
+					fixed-link {
+						speed = <2500>;
+						full-duplex;
+					};
+				};
+
+				/*
+				 * The PON port, behind which the GPON MAC
+				 * sits; bringing it up starts the ONU's
+				 * activation.
+				 */
+				port@2 {
+					reg = <2>;
+					label = "pon";
+					phy-mode = "internal";
+
+					fixed-link {
+						speed = <1000>;
+						full-duplex;
+					};
+				};
+
+				/* The CPU port */
+				port@3 {
+					reg = <3>;
+					ethernet = <&eth>;
+					phy-mode = "internal";
+
+					fixed-link {
+						speed = <1000>;
+						full-duplex;
+					};
+				};
+			};
+		};
+	};
+};
