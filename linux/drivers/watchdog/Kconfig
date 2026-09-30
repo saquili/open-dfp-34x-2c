@@ -1981,6 +1981,21 @@ config LOONGSON1_WDT
 	help
 	  Hardware driver for the Loongson1 SoC Watchdog Timer.
 
+config RTL9602C_WATCHDOG
+	tristate "Realtek RTL9602C watchdog"
+	depends on MIPS || COMPILE_TEST
+	select WATCHDOG_CORE
+	help
+	  Watchdog driver for Realtek RTL9602C SoCs. On expiry the watchdog
+	  resets the whole chip, the switch included. It is armed when the
+	  driver probes, and the watchdog core feeds it until userspace opens
+	  /dev/watchdog, so it recovers a board whose kernel stops running.
+	  It does not recover a CPU stalled in a bus access that is never
+	  answered.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called rtl9602c_wdt.
+
 config RALINK_WDT
 	tristate "Ralink SoC watchdog"
 	select WATCHDOG_CORE
