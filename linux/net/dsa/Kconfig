@@ -24,6 +24,14 @@ config NET_DSA_TAG_NONE
 	  Say Y or M if you want to enable support for switches which don't tag
 	  frames over the CPU port.
 
+config NET_DSA_TAG_RTL9602C
+	tristate "Tag driver for Realtek RTL9602C switches"
+	help
+	  Say Y or M if you want to enable support for the switch in Realtek
+	  RTL9602C SoCs. Its CPU tag travels in the DMA descriptors of the CPU
+	  port rather than in the frame, so this tag driver adds no bytes; it
+	  passes the destination port on to the CPU port driver.
+
 config NET_DSA_TAG_AR9331
 	tristate "Tag driver for Atheros AR9331 SoC with built-in switch"
 	help
