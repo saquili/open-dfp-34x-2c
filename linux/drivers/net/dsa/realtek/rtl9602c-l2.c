@@ -1,0 +1,1272 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * RTL9602C switch: bridging. The address table (unicast entries, multicast
+ * groups, flush, ageing and learning), flooding, port isolation,
+ * spanning-tree state, VLAN membership and filtering, the frame-length limit
+ * and port mirroring, as DSA switch operations; and the address-table
+ * entries the L3 engine depends on: this device's own addresses behind the
+ * CPU port, and the entries the engine's next hops point at.
+ */
+
+#define pr_fmt(fmt) "rtl9602c-switch: " fmt
+
+#include <linux/bitfield.h>
+#include <linux/debugfs.h>
+#include <linux/ptp_clock_kernel.h>
+#include <linux/unaligned.h>
+#include <net/ipv6.h>
+#include <linux/dcbnl.h>
+#include <linux/bitops.h>
+#include <linux/delay.h>
+#include <linux/io.h>
+#include <linux/kernel.h>
+#include <linux/math64.h>
+#include <linux/if_bridge.h>
+#include <linux/etherdevice.h>
+#include <linux/if_vlan.h>
+#include <linux/iopoll.h>
+#include <linux/module.h>
+#include <linux/interrupt.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
+#include <linux/i2c.h>
+#include <linux/platform_device.h>
+#include <net/dsa.h>
+#include <net/flow_offload.h>
+#include <net/pkt_cls.h>
+
+#include "rtl9602c.h"
+
+/*
+ * The address table is used through its hash only: the engine hashes the
+ * address and VID of the key in @e and goes to the slot of the bucket the
+ * key belongs in, and a read returns the entry found there. A write by index
+ * would be accepted and discarded. The CAM after the hashed slots is never
+ * used: an entry there cannot be changed, found through the hash or flushed,
+ * so every walk stops at RTL9602C_FDB_HASH_ENTRIES, and independent learning
+ * on every VLAN in use keeps hashed writes out of it. Every hashed slot reads
+ * back with RTL9602C_FDB_W2_VALID set, occupied or not: only the hit flag
+ * tells an entry from an empty slot.
+ *
+ * All six tables share the table engine's registers, hence table_lock.
+ */
+static int rtl9602c_l2_lookup(struct rtl9602c_priv *p, u32 *e,
+			      struct rtl9602c_lookup *out)
+{
+	int err;
+
+	mutex_lock(&p->table_lock);
+	err = rtl9602c_table_op(p, RTL9602C_TBLACC_CMD_TABLE_FDB,
+				RTL9602C_TBLACC_CMD_MODE_HASH, 0, e,
+				RTL9602C_FDB_ENTRY_WORDS, false, out);
+	mutex_unlock(&p->table_lock);
+	return err;
+}
+
+/*
+ * Put @e in the slot its key hashes to or, with RTL9602C_FDB_W2_VALID clear,
+ * delete the entry the key names. A write the table does not take (hit
+ * clear) is taken to have found the bucket full, which is not verified; with
+ * the CAM unused, a bucket can be full while the table has room.
+ *
+ * A write of a key already in the table does not always replace it and can
+ * add another copy. An entry is therefore changed by deleting its key
+ * RTL9602C_FDB_HASH_WAYS times, once per slot of a bucket, then adding it
+ * once.
+ */
+static int rtl9602c_l2_place(struct rtl9602c_priv *p, u32 *e,
+			     struct rtl9602c_lookup *out)
+{
+	int err;
+
+	mutex_lock(&p->table_lock);
+	err = rtl9602c_table_op(p, RTL9602C_TBLACC_CMD_TABLE_FDB,
+				RTL9602C_TBLACC_CMD_MODE_HASH, 0, e,
+				RTL9602C_FDB_ENTRY_WORDS, true, out);
+	mutex_unlock(&p->table_lock);
+	return err;
+}
+
+/*
+ * A unicast entry for @addr behind @port. It is keyed by VID (independent
+ * learning), which has to agree with the learning bit of the VLAN's own
+ * entry for frames to match it. A static entry is left alone by the dynamic
+ * flush and does not age out, although its age counts down like any other;
+ * it is assumed, not verified, that source learning does not move it either.
+ */
+static void rtl9602c_l2_pack(u32 *e, const unsigned char *addr, u16 vid,
+			     int port, bool is_static)
+{
+	e[0] = addr[2] << 24 | addr[3] << 16 | addr[4] << 8 | addr[5];
+	e[1] = FIELD_PREP(RTL9602C_FDB_W1_MAC_HI, addr[0] << 8 | addr[1]) |
+	       FIELD_PREP(RTL9602C_FDB_W1_VID, vid) |
+	       RTL9602C_FDB_W1_IVL;
+	if (is_static)
+		e[1] |= RTL9602C_FDB_W1_STATIC;
+	e[2] = FIELD_PREP(RTL9602C_FDB_W2_PORT, port) |
+	       FIELD_PREP(RTL9602C_FDB_W2_AGE, RTL9602C_FDB_W2_AGE_MAX) |
+	       RTL9602C_FDB_W2_VALID;
+}
+
+static u16 rtl9602c_port_pvid(struct rtl9602c_priv *p, int port)
+{
+	u32 v = rtl9602c_r(p, RTL9602C_VLAN_PVID(port));
+
+	return (v >> RTL9602C_VLAN_PVID_SHIFT(port)) & RTL9602C_VLAN_PVID_MASK;
+}
+
+static void rtl9602c_l2_unpack(const u32 *e, unsigned char *addr, u16 *vid,
+			       int *port)
+{
+	u32 hi = FIELD_GET(RTL9602C_FDB_W1_MAC_HI, e[1]);
+
+	addr[0] = hi >> 8;
+	addr[1] = hi;
+	addr[2] = e[0] >> 24;
+	addr[3] = e[0] >> 16;
+	addr[4] = e[0] >> 8;
+	addr[5] = e[0];
+	*vid = FIELD_GET(RTL9602C_FDB_W1_VID, e[1]);
+	*port = FIELD_GET(RTL9602C_FDB_W2_PORT, e[2]);
+}
+
+/**
+ * rtl9602c_port_fdb_add() - add a static unicast entry
+ * @ds: the switch
+ * @port: the port the address lives behind
+ * @addr: the address; a group goes through rtl9602c_port_mdb_add()
+ * @vid: the VLAN the entry is keyed by, 0 standing for the port's PVID
+ * @db: the database DSA files the entry in; unused, as entries are keyed by
+ *	address and VID alone
+ *
+ * The switch gives an untagged frame its ingress port's PVID before the
+ * address lookup, so an entry filed under VID 0, which DSA passes for a
+ * VLAN-unaware bridge, would match nothing.
+ *
+ * Return: 0 on success, -EINVAL for a multicast address, -ENOSPC when the
+ * address's bucket is full, or a negative error code from the table access.
+ */
+int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
+			  const unsigned char *addr, u16 vid,
+			  struct dsa_db db)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	struct rtl9602c_lookup out;
+	int err;
+
+	if (is_multicast_ether_addr(addr))
+		return -EINVAL;
+
+	if (!vid)
+		vid = rtl9602c_port_pvid(p, port);
+
+	rtl9602c_l2_pack(e, addr, vid, port, true);
+
+	/*
+	 * An address behind the CPU port is one of this device's own. While
+	 * the L3 engine is up it gets the router bit, assumed (not verified)
+	 * to hand its frames to the engine, like the entries that
+	 * rtl9602c_l2_l3lookup_cpu() placed.
+	 */
+	if (p->l34_up && port == RTL9602C_PORT_CPU)
+		e[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
+
+	err = rtl9602c_l2_place(p, e, &out);
+	if (err)
+		return err;
+
+	if (!out.hit) {
+		pr_err("%pM vlan %u: its hash bucket is full\n", addr, vid);
+		return -ENOSPC;
+	}
+	return 0;
+}
+
+/**
+ * rtl9602c_port_fdb_del() - delete a unicast entry
+ * @ds: the switch
+ * @port: the port the entry was added on; only its PVID is used
+ * @addr: the address
+ * @vid: the VLAN the entry is keyed by, 0 standing for the port's PVID
+ * @db: unused, as in rtl9602c_port_fdb_add()
+ *
+ * The key is written through the hash with %RTL9602C_FDB_W2_VALID clear,
+ * which deletes the entry it names. It carries port 0 whatever port the
+ * entry lives behind: the hashed search is assumed, not verified, to ignore
+ * the port.
+ *
+ * Return: 0 on success or a negative error code from the table access.
+ */
+int rtl9602c_port_fdb_del(struct dsa_switch *ds, int port,
+			  const unsigned char *addr, u16 vid,
+			  struct dsa_db db)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	struct rtl9602c_lookup out;
+
+	if (!vid)
+		vid = rtl9602c_port_pvid(p, port);
+
+	rtl9602c_l2_pack(e, addr, vid, 0, true);
+	e[2] &= ~RTL9602C_FDB_W2_VALID;
+
+	return rtl9602c_l2_place(p, e, &out);
+}
+
+/*
+ * Add @port to a group's member set or take it out. The CPU port is a member
+ * only together with the first extension port, as in the isolation and VLAN
+ * masks; for groups this is assumed, not verified. The entry stays valid
+ * while any member remains and is deleted with the last.
+ */
+static void rtl9602c_mdb_members(u32 *e, int port, bool member)
+{
+	u32 mbr = FIELD_GET(RTL9602C_FDB_W2_MC_PORTS, e[2]);
+	u32 ext = FIELD_GET(RTL9602C_FDB_W2_MC_EXT_PORTS, e[2]);
+
+	if (member)
+		mbr |= BIT(port);
+	else
+		mbr &= ~BIT(port);
+
+	if (port == RTL9602C_PORT_CPU) {
+		if (member)
+			ext |= RTL9602C_FDB_W2_MC_EXT_PORTS_CPU;
+		else
+			ext &= ~RTL9602C_FDB_W2_MC_EXT_PORTS_CPU;
+	}
+
+	e[2] &= ~(RTL9602C_FDB_W2_MC_PORTS | RTL9602C_FDB_W2_MC_EXT_PORTS);
+	e[2] |= FIELD_PREP(RTL9602C_FDB_W2_MC_PORTS, mbr) |
+		FIELD_PREP(RTL9602C_FDB_W2_MC_EXT_PORTS, ext);
+
+	if (mbr | ext)
+		e[2] |= RTL9602C_FDB_W2_VALID;
+	else
+		e[2] &= ~RTL9602C_FDB_W2_VALID;
+}
+
+/*
+ * A group is one entry that holds its member sets where a unicast entry
+ * holds its port and age, so word 2 is built from zero. The lookup, the
+ * change and the write run under fdb_lock as one operation: two ports
+ * joining at once would otherwise each write back the set they read before
+ * the other.
+ */
+static int rtl9602c_mdb_edit(struct dsa_switch *ds, int port,
+			     const unsigned char *addr, u16 vid, bool member)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	struct rtl9602c_lookup out;
+	int err;
+
+	if (!is_multicast_ether_addr(addr))
+		return -EINVAL;
+
+	if (!vid)
+		vid = rtl9602c_port_pvid(p, port);
+
+	mutex_lock(&p->fdb_lock);
+
+	rtl9602c_l2_pack(e, addr, vid, 0, true);
+	e[2] = 0;
+
+	err = rtl9602c_l2_lookup(p, e, &out);
+	if (err)
+		goto out;
+
+	/*
+	 * Not in the table: a removal has nothing to do, and an addition
+	 * starts again from the key, as the data read on a miss are no entry.
+	 */
+	if (!out.hit) {
+		if (!member)
+			goto out;
+		rtl9602c_l2_pack(e, addr, vid, 0, true);
+		e[2] = 0;
+	}
+
+	rtl9602c_mdb_members(e, port, member);
+
+	err = rtl9602c_l2_place(p, e, &out);
+	if (!err && !out.hit) {
+		pr_err("%pM vlan %u: nowhere left to put it\n", addr, vid);
+		err = -ENOSPC;
+	}
+out:
+	mutex_unlock(&p->fdb_lock);
+	return err;
+}
+
+/**
+ * rtl9602c_port_mdb_add() - add a port to a multicast group
+ * @ds: the switch
+ * @port: the port
+ * @mdb: the group's address and VLAN, VID 0 standing for the port's PVID
+ * @db: unused, as in rtl9602c_port_fdb_add()
+ *
+ * Return: 0 on success, -EINVAL for a unicast address, -ENOSPC when the
+ * group's bucket is full, or a negative error code from the table access.
+ */
+int rtl9602c_port_mdb_add(struct dsa_switch *ds, int port,
+			  const struct switchdev_obj_port_mdb *mdb,
+			  struct dsa_db db)
+{
+	return rtl9602c_mdb_edit(ds, port, mdb->addr, mdb->vid, true);
+}
+
+/**
+ * rtl9602c_port_mdb_del() - remove a port from a multicast group
+ * @ds: the switch
+ * @port: the port
+ * @mdb: the group's address and VLAN, VID 0 standing for the port's PVID
+ * @db: unused, as in rtl9602c_port_fdb_add()
+ *
+ * The group's entry is deleted with its last member.
+ *
+ * Return: 0 on success, also when the group is not in the table, -EINVAL for
+ * a unicast address, or another negative error code.
+ */
+int rtl9602c_port_mdb_del(struct dsa_switch *ds, int port,
+			  const struct switchdev_obj_port_mdb *mdb,
+			  struct dsa_db db)
+{
+	return rtl9602c_mdb_edit(ds, port, mdb->addr, mdb->vid, false);
+}
+
+/**
+ * rtl9602c_l2_clear() - empty the address table
+ * @p: driver private data
+ *
+ * The switch keeps its address table across a restart of the SoC. At setup
+ * every hashed slot is read by index, and every entry found is written back
+ * through the hash with %RTL9602C_FDB_W2_VALID clear, which deletes exactly
+ * that entry, unicast or multicast. A port flush is taken not to reach a
+ * multicast entry, whose member set lies where the port would be; that is
+ * not verified. Stops at the first failed table access.
+ */
+void rtl9602c_l2_clear(struct rtl9602c_priv *p)
+{
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	struct rtl9602c_lookup out;
+	unsigned int i, gone = 0;
+	bool hit;
+
+	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+		if (rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
+					RTL9602C_FDB_ENTRY_WORDS, &hit))
+			return;
+		if (!hit)
+			continue;
+
+		e[2] &= ~RTL9602C_FDB_W2_VALID;
+		if (rtl9602c_l2_place(p, e, &out))
+			return;
+		gone++;
+	}
+
+	if (gone)
+		pr_info("cleared %u address(es) left in the table by the previous kernel\n",
+			gone);
+}
+
+static void rtl9602c_port_learning(struct rtl9602c_priv *p, int port, bool on);
+
+/**
+ * rtl9602c_l2_l3lookup_cpu() - route or trap this device's own addresses
+ * @p: driver private data
+ * @on: true to hand frames for them to the L3 engine, false to trap them to
+ *	the CPU port again
+ *
+ * Every address behind the CPU port is one of this device's own. With @on,
+ * learning is turned off on the CPU port and the learned entries behind it
+ * are deleted: the switch learns these addresses from the CPU's own
+ * transmissions, as entries without the router bit that are rewritten
+ * continuously and win the lookup. Each user port's own address is then
+ * placed at the port's PVID with %RTL9602C_FDB_W1_ROUTER_MAC; DSA installs
+ * none of them, as it filters host addresses only on a switch with per-port
+ * VLAN filtering. Last, with @on or without, every CPU-port entry whose
+ * router bit disagrees with @on is replaced by one that agrees.
+ *
+ * The router bit is taken to have the switch hand a frame for that address
+ * to the L3 engine rather than to the CPU port: routing works with it set,
+ * but that the bit is what does it is not verified. For the same reason,
+ * also unverified, @on has to wait until the engine runs, or this device's
+ * own traffic, management included, would go to a block that is not
+ * running.
+ *
+ * Return: the number of entries placed or changed, or a negative error code
+ * from the table access.
+ */
+int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on)
+{
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	struct rtl9602c_lookup out;
+	unsigned int i, done = 0;
+	bool hit;
+	int err;
+
+	/* Stop learning the duplicates; static entries replace them below. */
+	if (on)
+		rtl9602c_port_learning(p, RTL9602C_PORT_CPU, false);
+
+	/* Learning off stops the next duplicate, not those already learned. */
+	if (on) {
+		for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+			unsigned char mac[ETH_ALEN];
+			u32 k[RTL9602C_FDB_ENTRY_WORDS];
+			u16 vid;
+
+			err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
+						  RTL9602C_FDB_ENTRY_WORDS, &hit);
+			if (err)
+				return err;
+			if (!hit || !(e[2] & RTL9602C_FDB_W2_VALID) ||
+			    FIELD_GET(RTL9602C_FDB_W2_PORT, e[2]) != RTL9602C_PORT_CPU ||
+			    (e[1] & RTL9602C_FDB_W1_STATIC))
+				continue;
+
+			vid = FIELD_GET(RTL9602C_FDB_W1_VID, e[1]);
+			mac[0] = FIELD_GET(RTL9602C_FDB_W1_MAC_HI, e[1]) >> 8;
+			mac[1] = FIELD_GET(RTL9602C_FDB_W1_MAC_HI, e[1]);
+			mac[2] = e[0] >> 24; mac[3] = e[0] >> 16;
+			mac[4] = e[0] >> 8;  mac[5] = e[0];
+
+			rtl9602c_l2_pack(k, mac, vid, RTL9602C_PORT_CPU, true);
+			k[2] &= ~RTL9602C_FDB_W2_VALID;
+			if (rtl9602c_l2_place(p, k, &out) == 0)
+				pr_info("<L2> dropped a learned duplicate of %pM on the CPU port\n",
+					mac);
+		}
+	}
+
+	/* Place each user port's own address, which DSA does not install. */
+	if (on) {
+		struct dsa_port *dp;
+
+		dsa_switch_for_each_user_port(dp, &p->ds) {
+			u32 k[RTL9602C_FDB_ENTRY_WORDS];
+			unsigned int way;
+			u16 vid;
+
+			if (!dp->user)
+				continue;
+			vid = rtl9602c_port_pvid(p, dp->index);
+
+			/* Empty the key, then place it once. */
+			for (way = 0; way < RTL9602C_FDB_HASH_WAYS; way++) {
+				rtl9602c_l2_pack(k, dp->user->dev_addr, vid,
+						 RTL9602C_PORT_CPU, true);
+				k[2] &= ~RTL9602C_FDB_W2_VALID;
+				rtl9602c_l2_place(p, k, &out);
+			}
+
+			rtl9602c_l2_pack(k, dp->user->dev_addr, vid,
+					 RTL9602C_PORT_CPU, true);
+			k[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
+			err = rtl9602c_l2_place(p, k, &out);
+			if (err)
+				return err;
+			if (!out.hit) {
+				pr_err("%pM vlan %u: its hash bucket is full, so this device's own frames stay trapped\n",
+				       dp->user->dev_addr, vid);
+				continue;
+			}
+			pr_info("<L2> %pM vlan %u is this switch's own address: it gets routed, not trapped to the CPU\n",
+				dp->user->dev_addr, vid);
+			done++;
+		}
+	}
+
+	/* Then every CPU-port entry whose router bit disagrees with @on. */
+	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+		err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
+					  RTL9602C_FDB_ENTRY_WORDS, &hit);
+		if (err)
+			return err;
+		if (!hit || !(e[2] & RTL9602C_FDB_W2_VALID) ||
+		    FIELD_GET(RTL9602C_FDB_W2_PORT, e[2]) != RTL9602C_PORT_CPU)
+			continue;
+		if (!!(e[1] & RTL9602C_FDB_W1_ROUTER_MAC) == on)
+			continue;
+
+		unsigned char mac[ETH_ALEN];
+		u32 k[RTL9602C_FDB_ENTRY_WORDS];
+		unsigned int way;
+		u16 vid;
+
+		vid = FIELD_GET(RTL9602C_FDB_W1_VID, e[1]);
+		mac[0] = FIELD_GET(RTL9602C_FDB_W1_MAC_HI, e[1]) >> 8;
+		mac[1] = FIELD_GET(RTL9602C_FDB_W1_MAC_HI, e[1]);
+		mac[2] = e[0] >> 24; mac[3] = e[0] >> 16;
+		mac[4] = e[0] >> 8;  mac[5] = e[0];
+
+		/* Empty the key, then place it once with the bit @on asks for. */
+		for (way = 0; way < RTL9602C_FDB_HASH_WAYS; way++) {
+			rtl9602c_l2_pack(k, mac, vid, RTL9602C_PORT_CPU, true);
+			k[2] &= ~RTL9602C_FDB_W2_VALID;
+			rtl9602c_l2_place(p, k, &out);
+		}
+
+		rtl9602c_l2_pack(k, mac, vid, RTL9602C_PORT_CPU, true);
+		if (on)
+			k[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
+		err = rtl9602c_l2_place(p, k, &out);
+		if (err)
+			return err;
+		done++;
+	}
+
+	if (done)
+		pr_info("<L2> %u CPU-port entr%s now %s\n", done,
+			done == 1 ? "y" : "ies",
+			on ? "routed by the L3 engine" : "trapped as before");
+	return done;
+}
+
+/* Let frames arriving on @port leave by the ports in @add as well. */
+static void rtl9602c_isolation_permit(struct rtl9602c_priv *p, int port,
+				      u32 add)
+{
+	int shift = RTL9602C_ISOLATE_EGRESS_SHIFT(port);
+
+	rtl9602c_rmw(p, RTL9602C_ISOLATE_EGRESS(port), 0,
+		     (add & RTL9602C_ISOLATE_EGRESS_MASK) << shift);
+}
+
+static const char *rtl9602c_l2_portname(struct rtl9602c_priv *p, int port)
+{
+	struct dsa_port *dp = dsa_to_port(&p->ds, port);
+
+	return dp && dp->user ? netdev_name(dp->user) : "?";
+}
+
+/**
+ * rtl9602c_l2_nexthop_place() - place the address-table entry of a next hop
+ * @p: driver private data
+ * @mac: the next hop's address, unicast
+ * @port: the port the next hop lives behind
+ * @want_vid: the VLAN to file the entry under, or %RTL9602C_L2_VID_PVID for
+ *	the port's PVID; set to the VID used
+ * @slot: set to the entry's index in the table
+ *
+ * A next hop names its destination by an index into the address table: the
+ * routed frame's destination address and egress port come from the entry
+ * there. Nothing else puts that entry in the table, as a routed port is
+ * standalone and learns nothing, so the key is emptied and one static entry
+ * is placed with %RTL9602C_FDB_W2_NEXTHOP, without which the switch discards
+ * the routed frame at its ingress port. The entry stays when the neighbour
+ * goes, until the table is cleared.
+ *
+ * The caller files the entry under the VLAN the routed frame leaves in, on
+ * the assumption, not verified, that the switch looks the destination up at
+ * that VID and would not see an entry filed under another.
+ *
+ * Routed frames obey port isolation, so the first next hop behind a port
+ * opens that port to every other user port; rtl9602c_bridge_refresh() keeps
+ * the opening while the engine is up.
+ *
+ * Return: 0 on success, -EINVAL for a multicast address, -ENOSPC when the
+ * address's bucket is full, or a negative error code from the table access.
+ */
+int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
+			      int port, u16 *want_vid, unsigned int *slot)
+{
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	struct rtl9602c_lookup out;
+	unsigned int way;
+	int err;
+	u16 vid;
+
+	if (is_multicast_ether_addr(mac))
+		return -EINVAL;
+
+	vid = *want_vid == RTL9602C_L2_VID_PVID ? rtl9602c_port_pvid(p, port)
+						: *want_vid;
+	*want_vid = vid;
+
+	/* Empty the key, then place it once. */
+	for (way = 0; way < RTL9602C_FDB_HASH_WAYS; way++) {
+		rtl9602c_l2_pack(e, mac, vid, port, true);
+		e[2] &= ~RTL9602C_FDB_W2_VALID;
+		rtl9602c_l2_place(p, e, &out);
+	}
+
+	rtl9602c_l2_pack(e, mac, vid, port, true);
+
+	e[2] |= RTL9602C_FDB_W2_NEXTHOP;
+	err = rtl9602c_l2_place(p, e, &out);
+	if (err)
+		return err;
+	if (!out.hit) {
+		pr_err("%pM vlan %u: its hash bucket is full\n", mac, vid);
+		return -ENOSPC;
+	}
+
+	*slot = out.addr;
+
+	if (!(p->l34_nh_ports & BIT(port))) {
+		struct dsa_port *dp;
+
+		p->l34_nh_ports |= BIT(port);
+		dsa_switch_for_each_user_port(dp, &p->ds)
+			if (dp->index != port)
+				rtl9602c_isolation_permit(p, dp->index,
+							  BIT(port));
+	}
+
+	pr_info("<L2 next hop> %pM %s (port %d), vlan %u; forwarding-table -> %u\n",
+		mac, rtl9602c_l2_portname(p, port), port, vid, out.addr);
+	return 0;
+}
+
+/**
+ * rtl9602c_port_fdb_dump() - report the address-table entries behind a port
+ * @ds: the switch
+ * @port: the port
+ * @cb: called for each entry
+ * @data: passed to @cb
+ *
+ * The hashed slots are read by index; only those the table engine reports a
+ * hit for hold an entry.
+ *
+ * Return: 0, or the first error from the table access or from @cb.
+ */
+int rtl9602c_port_fdb_dump(struct dsa_switch *ds, int port,
+			   dsa_fdb_dump_cb_t *cb, void *data)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	unsigned char addr[ETH_ALEN];
+	u32 e[RTL9602C_FDB_ENTRY_WORDS];
+	unsigned int i;
+	int hport, err;
+	bool hit;
+	u16 vid;
+
+	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+		err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
+					  RTL9602C_FDB_ENTRY_WORDS, &hit);
+		if (err)
+			return err;
+		if (!hit)
+			continue;
+
+		rtl9602c_l2_unpack(e, addr, &vid, &hport);
+		if (hport != port)
+			continue;
+
+		err = cb(addr, vid, !!(e[1] & RTL9602C_FDB_W1_STATIC),
+			 data);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+/*
+ * Flush the entries of @ports that @kinds selects. The ports go in a register
+ * of their own; RTL9602C_FDB_FLUSH_CTRL_START reads back clear once the flush
+ * is done.
+ */
+static void rtl9602c_l2_flush(struct rtl9602c_priv *p, u32 ports, u32 kinds)
+{
+	u32 v;
+
+	rtl9602c_w(p, RTL9602C_FDB_FLUSH_PORTS, ports);
+	rtl9602c_w(p, RTL9602C_FDB_FLUSH_CTRL,
+		   FIELD_PREP(RTL9602C_FDB_FLUSH_CTRL_MODE,
+			      RTL9602C_FDB_FLUSH_CTRL_MODE_PORT) |
+		   kinds | RTL9602C_FDB_FLUSH_CTRL_START);
+
+	if (read_poll_timeout(rtl9602c_r, v, !(v & RTL9602C_FDB_FLUSH_CTRL_START),
+			      100, 100000, false, p, RTL9602C_FDB_FLUSH_CTRL))
+		pr_err("the L2 flush never finished\n");
+}
+
+/**
+ * rtl9602c_port_fast_age() - flush the entries a port has learned
+ * @ds: the switch
+ * @port: the port
+ *
+ * DSA calls this when a port stops forwarding or leaves a bridge, so that
+ * the switch does not keep forwarding to a port whose topology has changed.
+ * It is also called for the PON port when the last GEM interface leaves its
+ * bridge, the port's learned entries being stale then. Static entries stay.
+ */
+void rtl9602c_port_fast_age(struct dsa_switch *ds, int port)
+{
+	struct rtl9602c_priv *p = ds->priv;
+
+	mutex_lock(&p->fdb_lock);
+	rtl9602c_l2_flush(p, BIT(port), RTL9602C_FDB_FLUSH_CTRL_DYNAMIC);
+	mutex_unlock(&p->fdb_lock);
+}
+
+/**
+ * rtl9602c_port_stp_state_set() - set a port's spanning-tree state
+ * @ds: the switch
+ * @port: the port
+ * @state: the bridge's port state
+ *
+ * The switch has four states to the bridge's five: listening becomes
+ * blocking, as in both a port discards frames and learns nothing
+ * (IEEE 802.1D-1998, 8.4). Only spanning-tree instance 0 is written.
+ * Forwarding is the reset state; the encodings of the other three states
+ * are not verified.
+ */
+void rtl9602c_port_stp_state_set(struct dsa_switch *ds, int port,
+				 u8 state)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 val;
+
+	switch (state) {
+	case BR_STATE_DISABLED:
+		val = RTL9602C_STP_PORT_STATE_DISABLED;
+		break;
+	case BR_STATE_BLOCKING:
+	case BR_STATE_LISTENING:
+		val = RTL9602C_STP_PORT_STATE_BLOCKING;
+		break;
+	case BR_STATE_LEARNING:
+		val = RTL9602C_STP_PORT_STATE_LEARNING;
+		break;
+	default:
+		val = RTL9602C_STP_PORT_STATE_FORWARDING;
+		break;
+	}
+
+	rtl9602c_rmw(p, RTL9602C_STP_PORT_STATE(port), RTL9602C_STP_PORT_STATE_MSTI0, val);
+}
+
+static void rtl9602c_isolation_set(struct rtl9602c_priv *p, int port, u32 mask)
+{
+	int shift = RTL9602C_ISOLATE_EGRESS_SHIFT(port);
+
+	rtl9602c_rmw(p, RTL9602C_ISOLATE_EGRESS(port),
+		     RTL9602C_ISOLATE_EGRESS_MASK << shift,
+		     (mask & RTL9602C_ISOLATE_EGRESS_MASK) << shift);
+}
+
+static void rtl9602c_port_learning(struct rtl9602c_priv *p, int port, bool on);
+static void rtl9602c_port_flood_apply(struct rtl9602c_priv *p,
+				      const struct dsa_port *dp);
+
+/*
+ * The bridge a port is in. The PON port is in the one its GEM interfaces
+ * share, as DSA never bridges the PON port itself.
+ */
+static struct net_device *rtl9602c_port_bridge_dev(struct rtl9602c_priv *p,
+						   const struct dsa_port *dp)
+{
+	if (dp->index == RTL9602C_PORT_PON)
+		return p->pon_br;
+	return dp->bridge ? dp->bridge->dev : NULL;
+}
+
+/**
+ * rtl9602c_bridge_refresh() - apply bridge membership to the switch
+ * @ds: the switch
+ *
+ * Bridging is expressed as port isolation. A user port may send to the CPU
+ * port together with the first extension port, without which nothing
+ * reaches the CPU; to every other user port in its bridge; and, while the L3
+ * engine is up, to every other port a next hop lives behind. The CPU port's
+ * own field keeps its reset value, open to every port. The flood masks
+ * follow the same membership, the PON port learns only while GEM interfaces
+ * are bridged, and the classifier entries that give bridged ports a GEM
+ * stream are rebuilt.
+ *
+ * Called on every membership change of a switch port or a GEM interface,
+ * with RTNL held, and once at setup, before any port has an interface.
+ */
+void rtl9602c_bridge_refresh(struct dsa_switch *ds)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	struct dsa_port *dp;
+
+	dsa_switch_for_each_user_port(dp, ds) {
+		struct net_device *br = rtl9602c_port_bridge_dev(p, dp);
+		struct dsa_port *other;
+
+		u32 mask = BIT(dsa_upstream_port(ds, dp->index)) |
+			   RTL9602C_ISOLATE_EGRESS_EXT0;
+
+		/* Routed frames obey isolation too. */
+		if (p->l34_up)
+			mask |= p->l34_nh_ports & ~BIT(dp->index);
+
+		dsa_switch_for_each_user_port(other, ds) {
+			if (other != dp && br &&
+			    br == rtl9602c_port_bridge_dev(p, other))
+				mask |= BIT(other->index);
+		}
+		rtl9602c_isolation_set(p, dp->index, mask);
+		rtl9602c_port_flood_apply(p, dp);
+	}
+
+	/*
+	 * DSA never bridges the PON port, so its learning follows the GEM
+	 * interfaces: without it, every frame toward the network side would be
+	 * flooded, a copy to the CPU included.
+	 */
+	rtl9602c_port_learning(p, RTL9602C_PORT_PON, !!p->pon_br);
+
+	/*
+	 * A frame the switch forwards to the PON port leaves only in the GEM
+	 * stream a classifier entry gave it.
+	 */
+	rtl9602c_cf_sid_refresh(p);
+}
+
+/**
+ * rtl9602c_port_bridge_join() - put a port in a bridge
+ * @ds: the switch
+ * @port: the port
+ * @bridge: the bridge; unused, membership is read from DSA's ports
+ * @tx_fwd_offload: left unset, as transmit forwarding offload is not offered
+ * @extack: for the error message
+ *
+ * The PON port is refused: a frame the switch forwards to it must name a GEM
+ * port, and the PON port names none. Its GEM interfaces are bridged instead,
+ * and DSA bridges the PON port in software.
+ *
+ * Return: 0, or -EOPNOTSUPP for the PON port.
+ */
+int rtl9602c_port_bridge_join(struct dsa_switch *ds, int port,
+			      struct dsa_bridge bridge,
+			      bool *tx_fwd_offload,
+			      struct netlink_ext_ack *extack)
+{
+	if (port == RTL9602C_PORT_PON) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "bridge the GEM interfaces, not pon itself");
+		return -EOPNOTSUPP;
+	}
+
+	rtl9602c_bridge_refresh(ds);
+	return 0;
+}
+
+/**
+ * rtl9602c_port_bridge_leave() - take a port out of a bridge
+ * @ds: the switch
+ * @port: the port
+ * @bridge: the bridge; unused, as in rtl9602c_port_bridge_join()
+ */
+void rtl9602c_port_bridge_leave(struct dsa_switch *ds, int port,
+				struct dsa_bridge bridge)
+{
+	rtl9602c_bridge_refresh(ds);
+}
+
+/**
+ * rtl9602c_vlan_set_member() - add a port to a VLAN or remove it
+ * @p: driver private data
+ * @vid: the VLAN, which is also its entry's index
+ * @port: the port
+ * @member: true to add the port, false to remove it
+ * @untagged: when adding, whether the port sends the VLAN untagged
+ *
+ * The entry is read, changed and written back, so the other ports' bits
+ * survive. The CPU port is a member only together with the first extension
+ * port: with VLAN filtering on, frames in the VLAN do not reach the CPU
+ * without it. Adding a port also sets independent learning, never cleared
+ * again, so that every VLAN agrees with the address-table entries, which
+ * are all keyed by VID; under shared learning a second write of one address
+ * would add a second entry.
+ *
+ * Return: 0 on success or a negative error code from the table access.
+ */
+int rtl9602c_vlan_set_member(struct rtl9602c_priv *p, u16 vid,
+			     int port, bool member, bool untagged)
+{
+	u32 entry, mbr, untag;
+	int err;
+
+	err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_VLAN, vid, &entry, 1, NULL);
+	if (err)
+		return err;
+
+	mbr = FIELD_GET(RTL9602C_VLAN_ENTRY_MEMBER_SET, entry);
+	untag = FIELD_GET(RTL9602C_VLAN_ENTRY_UNTAGGED_SET, entry);
+
+	if (member) {
+		mbr |= BIT(port);
+		if (untagged)
+			untag |= BIT(port);
+		else
+			untag &= ~BIT(port);
+	} else {
+		mbr &= ~BIT(port);
+		untag &= ~BIT(port);
+	}
+
+	entry &= ~(RTL9602C_VLAN_ENTRY_MEMBER_SET | RTL9602C_VLAN_ENTRY_UNTAGGED_SET);
+	entry |= FIELD_PREP(RTL9602C_VLAN_ENTRY_MEMBER_SET, mbr) |
+		 FIELD_PREP(RTL9602C_VLAN_ENTRY_UNTAGGED_SET, untag);
+
+	if (port == RTL9602C_PORT_CPU) {
+		if (member)
+			entry |= RTL9602C_VLAN_ENTRY_EXT0_MEMBER;
+		else
+			entry &= ~RTL9602C_VLAN_ENTRY_EXT0_MEMBER;
+	}
+
+	if (member)
+		entry |= RTL9602C_VLAN_ENTRY_IVL;
+
+	return rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_VLAN, vid, &entry, 1);
+}
+
+static void rtl9602c_port_set_pvid(struct rtl9602c_priv *p, int port, u16 vid)
+{
+	u32 mask = RTL9602C_VLAN_PVID_MASK << RTL9602C_VLAN_PVID_SHIFT(port);
+
+	rtl9602c_rmw(p, RTL9602C_VLAN_PVID(port), mask,
+		     (vid & RTL9602C_VLAN_PVID_MASK)
+		     << RTL9602C_VLAN_PVID_SHIFT(port));
+}
+
+/**
+ * rtl9602c_port_vlan_add() - add a port to a VLAN
+ * @ds: the switch
+ * @port: the port; DSA also adds the CPU port to every VLAN the host must see
+ * @vlan: the VLAN and its flags; with %BRIDGE_VLAN_INFO_PVID it also becomes
+ *	the port's PVID
+ * @extack: for the error message
+ *
+ * Return: 0 on success or a negative error code from the table access.
+ */
+int rtl9602c_port_vlan_add(struct dsa_switch *ds, int port,
+			   const struct switchdev_obj_port_vlan *vlan,
+			   struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	bool untagged = vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED;
+	int err;
+
+	err = rtl9602c_vlan_set_member(p, vlan->vid, port, true, untagged);
+	if (err) {
+		NL_SET_ERR_MSG_MOD(extack, "the VLAN table did not answer");
+		return err;
+	}
+
+	if (vlan->flags & BRIDGE_VLAN_INFO_PVID)
+		rtl9602c_port_set_pvid(p, port, vlan->vid);
+
+	return 0;
+}
+
+/**
+ * rtl9602c_port_vlan_del() - remove a port from a VLAN
+ * @ds: the switch
+ * @port: the port
+ * @vlan: the VLAN
+ *
+ * The port's PVID stays as it is.
+ *
+ * Return: 0 on success or a negative error code from the table access.
+ */
+int rtl9602c_port_vlan_del(struct dsa_switch *ds, int port,
+			   const struct switchdev_obj_port_vlan *vlan)
+{
+	struct rtl9602c_priv *p = ds->priv;
+
+	return rtl9602c_vlan_set_member(p, vlan->vid, port, false, false);
+}
+
+static void rtl9602c_port_flood(struct rtl9602c_priv *p, u32 mask_reg,
+				int port, bool on)
+{
+	rtl9602c_rmw(p, mask_reg, BIT(port), on ? BIT(port) : 0);
+}
+
+/*
+ * A flood mask bit lets a broadcast, a multicast frame no entry knows or a
+ * unicast frame no entry knows leave by that port. A port gets the flags the
+ * bridge asked for only while it shares a bridge with another switch port.
+ * A standalone port needs no flooding, as what leaves by it comes from the
+ * CPU with an explicit port or from the L3 engine as routed unicast; and
+ * isolation cannot keep floods between two routed ports apart, since routed
+ * frames need the opening. The CPU port's bits keep their reset value, set,
+ * which is how unknown traffic reaches the host.
+ */
+static void rtl9602c_port_flood_apply(struct rtl9602c_priv *p,
+				      const struct dsa_port *dp)
+{
+	struct net_device *br = rtl9602c_port_bridge_dev(p, dp);
+	unsigned long req = p->flood_req[dp->index];
+	struct dsa_port *other;
+	bool peer = false;
+
+	if (br)
+		dsa_switch_for_each_user_port(other, &p->ds)
+			if (other != dp &&
+			    br == rtl9602c_port_bridge_dev(p, other))
+				peer = true;
+
+	rtl9602c_port_flood(p, RTL9602C_FLOOD_UNKNOWN_UCAST, dp->index,
+			    peer && (req & BR_FLOOD));
+	rtl9602c_port_flood(p, RTL9602C_FLOOD_UNKNOWN_MCAST, dp->index,
+			    peer && (req & BR_MCAST_FLOOD));
+	rtl9602c_port_flood(p, RTL9602C_FLOOD_BCAST, dp->index,
+			    peer && (req & BR_BCAST_FLOOD));
+}
+
+/*
+ * Learning is a limit, not a switch: the maximum stands for unlimited and 0
+ * for learning off. The over-limit action is set to forward before every
+ * limit change, which makes a limit of 0 mean "learn nothing" rather than
+ * "forward nothing"; the per-port layout of that register is not verified,
+ * every field holding 0 either way. The learning-limit alarm, armed only
+ * while some port has a limit other than 0 or the maximum, is re-evaluated.
+ */
+static void rtl9602c_port_learning(struct rtl9602c_priv *p, int port, bool on)
+{
+	u32 limit = on ? RTL9602C_FDB_LEARN_LIMIT_MAX : 0;
+
+	rtl9602c_rmw(p, RTL9602C_FDB_LEARN_LIMIT_ACT,
+		     RTL9602C_FDB_LEARN_LIMIT_ACT_MASK <<
+			RTL9602C_FDB_LEARN_LIMIT_ACT_SHIFT(port),
+		     RTL9602C_FDB_LEARN_LIMIT_ACT_FORWARD <<
+			RTL9602C_FDB_LEARN_LIMIT_ACT_SHIFT(port));
+
+	rtl9602c_rmw(p, RTL9602C_FDB_LEARN_LIMIT(port),
+		     RTL9602C_FDB_LEARN_MASK << RTL9602C_FDB_LEARN_SHIFT(port),
+		     limit << RTL9602C_FDB_LEARN_SHIFT(port));
+
+	rtl9602c_lrn_over_intr_sync(p);
+}
+
+/**
+ * rtl9602c_port_pre_bridge_flags() - check bridge port flags
+ * @ds: the switch
+ * @port: the port
+ * @flags: the flags to be changed
+ * @extack: for the error message
+ *
+ * The switch offers learning and the three flood masks,
+ * %RTL9602C_BRIDGE_FLAGS.
+ *
+ * Return: 0, or -EINVAL if @flags changes any other flag.
+ */
+int rtl9602c_port_pre_bridge_flags(struct dsa_switch *ds, int port,
+				   struct switchdev_brport_flags flags,
+				   struct netlink_ext_ack *extack)
+{
+	if (flags.mask & ~(unsigned long)RTL9602C_BRIDGE_FLAGS) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "this switch has learning and the three flood masks, and nothing else");
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/**
+ * rtl9602c_port_bridge_flags() - apply bridge port flags
+ * @ds: the switch
+ * @port: the port
+ * @flags: the flags to change and their new values
+ * @extack: unused
+ *
+ * Learning takes effect at once. %BR_FLOOD, %BR_MCAST_FLOOD and
+ * %BR_BCAST_FLOOD each drive their own mask, for unknown unicast, unknown
+ * multicast and broadcast; they are recorded, and reach the hardware only
+ * while the port has a bridge peer.
+ *
+ * Return: 0.
+ */
+int rtl9602c_port_bridge_flags(struct dsa_switch *ds, int port,
+			       struct switchdev_brport_flags flags,
+			       struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_priv *p = ds->priv;
+
+	if (flags.mask & BR_LEARNING)
+		rtl9602c_port_learning(p, port, flags.val & BR_LEARNING);
+
+	flags.mask &= BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD;
+	p->flood_req[port] = (p->flood_req[port] & ~flags.mask) |
+			     (flags.val & flags.mask);
+	rtl9602c_port_flood_apply(p, dsa_to_port(ds, port));
+
+	return 0;
+}
+
+/**
+ * rtl9602c_set_ageing_time() - set how long a learned entry lives unrefreshed
+ * @ds: the switch
+ * @msecs: the ageing time in milliseconds
+ *
+ * One value for the whole switch, in units of
+ * %RTL9602C_FDB_CFG_AGEING_TIME_UNIT_MS. The bridge keeps @msecs within the
+ * range declared at probe, which the field can hold.
+ *
+ * Return: 0.
+ */
+int rtl9602c_set_ageing_time(struct dsa_switch *ds, unsigned int msecs)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 units = msecs / RTL9602C_FDB_CFG_AGEING_TIME_UNIT_MS;
+
+	rtl9602c_rmw(p, RTL9602C_FDB_CFG, RTL9602C_FDB_CFG_AGEING_TIME,
+		     FIELD_PREP(RTL9602C_FDB_CFG_AGEING_TIME, units));
+	return 0;
+}
+
+/**
+ * rtl9602c_port_vlan_filtering() - turn VLAN awareness on or off
+ * @ds: the switch
+ * @port: unused: the setting is one bit for the whole switch, hence
+ *	vlan_filtering_is_global
+ * @on: true to forward by VLAN membership
+ * @extack: unused
+ *
+ * With the bit set the switch forwards every frame by VLAN table membership;
+ * it is not a per-port ingress check.
+ *
+ * Return: 0.
+ */
+int rtl9602c_port_vlan_filtering(struct dsa_switch *ds, int port,
+				 bool on,
+				 struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_priv *p = ds->priv;
+
+	rtl9602c_rmw(p, RTL9602C_VLAN_CFG, RTL9602C_VLAN_CFG_AWARE,
+		     on ? RTL9602C_VLAN_CFG_AWARE : 0);
+	return 0;
+}
+
+/**
+ * rtl9602c_port_max_mtu() - the largest MTU a port can take
+ * @ds: the switch
+ * @port: unused; the limit is the same for every port
+ *
+ * DSA takes the lower of this and the conduit's own limit.
+ *
+ * Return: the longest frame the switch accepts, less %RTL9602C_FRAME_OVERHEAD.
+ */
+int rtl9602c_port_max_mtu(struct dsa_switch *ds, int port)
+{
+	return RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX - RTL9602C_FRAME_OVERHEAD;
+}
+
+/**
+ * rtl9602c_port_change_mtu() - set a port's MTU
+ * @ds: the switch
+ * @port: the port
+ * @new_mtu: the MTU
+ *
+ * The frame-length check counts the Ethernet header, the FCS, the VLAN tags
+ * and, measured on this board, the CPU tag as well, although that travels in
+ * the DMA descriptor: the check is made where the CPU port feeds the switch.
+ * %RTL9602C_FRAME_OVERHEAD allows for all of them with two VLAN tags, a C-tag
+ * and an S-tag. Two length registers cannot give four ports four limits, so
+ * %RTL9602C_FRAMELEN_LIMIT0 takes the largest MTU any port has asked for and
+ * the port is pointed at it. That the 10/100 Mb/s selector works like the
+ * gigabit one is not verified.
+ *
+ * Return: 0.
+ */
+int rtl9602c_port_change_mtu(struct dsa_switch *ds, int port,
+			     int new_mtu)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	unsigned int i, largest = 0;
+
+	p->mtu[port] = new_mtu;
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		largest = max(largest, p->mtu[i]);
+
+	rtl9602c_rmw(p, RTL9602C_FRAMELEN_LIMIT0, RTL9602C_FRAMELEN_LIMIT0_BYTES,
+		     FIELD_PREP(RTL9602C_FRAMELEN_LIMIT0_BYTES,
+				largest + RTL9602C_FRAME_OVERHEAD));
+
+	rtl9602c_rmw(p, RTL9602C_FRAMELEN_SEL(port),
+		     RTL9602C_FRAMELEN_SEL_1000M | RTL9602C_FRAMELEN_SEL_10_100M, 0);
+	return 0;
+}
+
+/**
+ * rtl9602c_port_mirror_add() - mirror a port's traffic
+ * @ds: the switch
+ * @port: the port whose traffic is copied
+ * @mirror: the rule; its monitor port sends the copies
+ * @ingress: true to copy what the port receives, false what it sends
+ * @extack: for the error message
+ *
+ * The switch is taken to have one monitor port and one direction for all its
+ * source ports, and a source mask of the four ports only, so that what the
+ * CPU sends cannot be mirrored; none of this is verified. A rule naming
+ * another monitor port or the other direction is refused rather than
+ * widening the first, and source ports accumulate.
+ *
+ * Return: 0, -EBUSY if another monitor port is in use, or -EOPNOTSUPP if the
+ * other direction is.
+ */
+int rtl9602c_port_mirror_add(struct dsa_switch *ds, int port,
+			     struct dsa_mall_mirror_tc_entry *mirror,
+			     bool ingress,
+			     struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 v = rtl9602c_r(p, RTL9602C_MIRROR_CTRL);
+	u32 mask = FIELD_GET(RTL9602C_MIRROR_CTRL_SRC_PORTS, v);
+
+	if (mask) {
+		if (p->mirror_to != mirror->to_local_port) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "this switch has one monitor port and it is already in use");
+			return -EBUSY;
+		}
+		if (p->mirror_ingress != ingress) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "ingress and egress mirroring are one switch-wide bit each, so both directions cannot be mirrored to different ports");
+			return -EOPNOTSUPP;
+		}
+	}
+
+	p->mirror_to = mirror->to_local_port;
+	p->mirror_ingress = ingress;
+
+	v &= ~(RTL9602C_MIRROR_CTRL_DEST_PORT | RTL9602C_MIRROR_CTRL_INGRESS |
+	       RTL9602C_MIRROR_CTRL_EGRESS);
+	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_DEST_PORT, mirror->to_local_port);
+	v |= ingress ? RTL9602C_MIRROR_CTRL_INGRESS : RTL9602C_MIRROR_CTRL_EGRESS;
+	v &= ~RTL9602C_MIRROR_CTRL_SRC_PORTS;
+	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_SRC_PORTS, mask | BIT(port));
+	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, v);
+
+	mirror->ingress = ingress;
+	return 0;
+}
+
+/**
+ * rtl9602c_port_mirror_del() - stop mirroring a port
+ * @ds: the switch
+ * @port: the port
+ * @mirror: the rule; unused
+ *
+ * The last source port out clears both directions. The monitor port field
+ * keeps its value, inert with no source port.
+ */
+void rtl9602c_port_mirror_del(struct dsa_switch *ds, int port,
+			      struct dsa_mall_mirror_tc_entry *mirror)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	u32 v = rtl9602c_r(p, RTL9602C_MIRROR_CTRL);
+	u32 mask = FIELD_GET(RTL9602C_MIRROR_CTRL_SRC_PORTS, v) & ~BIT(port);
+
+	v &= ~RTL9602C_MIRROR_CTRL_SRC_PORTS;
+	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_SRC_PORTS, mask);
+
+	if (!mask)
+		v &= ~(RTL9602C_MIRROR_CTRL_INGRESS | RTL9602C_MIRROR_CTRL_EGRESS);
+
+	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, v);
+}

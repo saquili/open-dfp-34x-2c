@@ -67,6 +67,7 @@
 #define PRID_IMP_AU1_REV1	0x0100
 #define PRID_IMP_AU1_REV2	0x0200
 #define PRID_IMP_R3000		0x0200		/* Same as R2000A  */
+#define PRID_IMP_LEXRA		0xdc00		/* Lexra LX5281 (RTL9602C) */
 #define PRID_IMP_R6000		0x0300		/* Same as R3000A  */
 #define PRID_IMP_R4000		0x0400
 #define PRID_IMP_R6000A		0x0600

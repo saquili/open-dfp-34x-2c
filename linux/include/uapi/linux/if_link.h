@@ -2009,4 +2009,48 @@ enum {
 
 #define IFLA_OVPN_MAX	(__IFLA_OVPN_MAX - 1)
 
+/* GEM section */
+
+/**
+ * enum ifla_gem_direction - the directions a GEM port carries traffic in
+ * @IFLA_GEM_DIR_UPSTREAM: towards the OLT only
+ * @IFLA_GEM_DIR_DOWNSTREAM: from the OLT only
+ * @IFLA_GEM_DIR_BOTH: both ways
+ *
+ * The encoding of the direction attribute of the GEM port network CTP in
+ * ITU-T G.988 clause 9.2.3: bit 0 towards the OLT, bit 1 from it.
+ */
+enum ifla_gem_direction {
+	IFLA_GEM_DIR_UPSTREAM = 1,
+	IFLA_GEM_DIR_DOWNSTREAM = 2,
+	IFLA_GEM_DIR_BOTH = 3,
+};
+
+/*
+ * Attributes of the "gem" link kind: a GEM port of a PON ONU, stacked on
+ * the interface that carries the ONU's traffic (IFLA_LINK).
+ *
+ * IFLA_GEM_PORT_ID: u16, the GEM Port-ID, 0 to 4095, the width of the
+ *	Port-ID field of the GEM header (ITU-T G.984.3 clause 8.3.1).
+ *	Required.
+ * IFLA_GEM_DIRECTION: u8, an enum ifla_gem_direction; both ways if absent.
+ * IFLA_GEM_TCONT: u32, the index of the T-CONT that carries the port
+ *	upstream, counted from 0 and below the number of T-CONTs the "pon"
+ *	family reports. Several GEM ports may share a T-CONT. Required when
+ *	the direction includes upstream.
+ * IFLA_GEM_MULTICAST: flag, a multicast GEM port. Allowed only with
+ *	IFLA_GEM_DIR_DOWNSTREAM: a multicast GEM port carries downstream
+ *	traffic only (ITU-T G.988 clause 9.2.5).
+ */
+enum {
+	IFLA_GEM_UNSPEC,
+	IFLA_GEM_PORT_ID,
+	IFLA_GEM_DIRECTION,
+	IFLA_GEM_TCONT,
+	IFLA_GEM_MULTICAST,
+	__IFLA_GEM_MAX,
+};
+
+#define IFLA_GEM_MAX	(__IFLA_GEM_MAX - 1)
+
 #endif /* _UAPI_LINUX_IF_LINK_H */

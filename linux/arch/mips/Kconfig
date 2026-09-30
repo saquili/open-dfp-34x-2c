@@ -694,6 +694,28 @@ config RALINK
 	select ARCH_HAS_RESET_CONTROLLER
 	select RESET_CONTROLLER
 
+config RTL9602C
+	bool "Realtek RTL9602C (Lexra LX5281) based machines"
+	select BOOT_RAW
+	select DMA_NONCOHERENT
+	select IRQ_MIPS_CPU
+	select SYS_HAS_CPU_R3000
+	select SYS_HAS_EARLY_PRINTK
+	select SYS_SUPPORTS_32BIT_KERNEL
+	select SYS_SUPPORTS_BIG_ENDIAN
+	select HAVE_KERNEL_LZMA
+	select CPU_LEXRA_CACHE
+	select USE_OF
+	select BUILTIN_DTB
+	help
+	  Support for boards built on the Realtek RTL9602C, a SoC for GPON
+	  optical network units, such as the ODI DFP-34X-2C3 SFP stick. Its
+	  Lexra LX5281 core runs big-endian as a MIPS I (R3000) processor.
+	  The kernel carries the board's device tree, and the boot loader
+	  starts it from an LZMA-compressed uImage of the raw kernel.
+
+	  Say Y to build a kernel for such a board.
+
 config MACH_REALTEK_RTL
 	bool "Realtek RTL838x/RTL839x based machines"
 	select MIPS_GENERIC
@@ -2196,6 +2218,14 @@ config CPU_R2300_FPU
 	bool
 	depends on MIPS_FP_SUPPORT
 	default y if CPU_R3000
+
+config CPU_LEXRA_CACHE
+	bool
+	help
+	  Cache maintenance for the Lexra LX5281 core through CP0 register
+	  20, which cpu_cache_init() uses in place of the R3000 cache code:
+	  that code does not work on this core. Every operation acts on a
+	  whole cache. The platforms built on the core select this.
 
 config CPU_R3K_TLB
 	bool

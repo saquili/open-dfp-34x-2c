@@ -50,3 +50,50 @@ config NET_DSA_REALTEK_RTL8366RB_LEDS
 	default NET_DSA_REALTEK_RTL8366RB
 
 endif
+
+config RTL9602C_OPTICS_RO
+	bool "RTL9602C: never write to the optics part"
+	depends on NET_DSA_RTL9602C
+	help
+	  At every bring-up of the PON, the RTL9602C switch driver turns off
+	  the automatic extinction-ratio loop of the laser driver behind the
+	  optics' I2C master, so that the laser's modulation runs from the
+	  value the module loads at power-up. The change is made so that the
+	  module does not store it: the loop stays off until the module loses
+	  power. The same sequence also writes A2h bytes 123 to 127, where the
+	  module keeps what is written across a power cycle; byte 127 is
+	  written back as it was found.
+
+	  With this option that sequence returns at once, and the driver
+	  itself writes nothing to the part; the diagnostics it reads through
+	  hwmon and debugfs stay as they are. The option stops only that
+	  sequence: the driver still registers the I2C master as an I2C
+	  adapter, and a client of the adapter, userspace through i2c-dev
+	  included, can still write A0h and A2h.
+
+	  Say Y for an image that must leave the module as it was found. With
+	  the loop running, the modulation current falls and the OLT can find
+	  it harder to lock onto the ONU's bursts. If unsure, say N.
+
+config NET_DSA_RTL9602C
+	tristate "Realtek RTL9602C switch"
+	depends on NET_DSA
+	depends on HAS_IOMEM
+	depends on RTL9602C_ETH || !RTL9602C_ETH
+	select MFD_SYSCON
+	select NET_DSA_TAG_RTL9602C
+	select PON
+	help
+	  DSA driver for the Ethernet switch of Realtek RTL9602C SoCs, the
+	  chip of GPON ONUs such as SFP sticks. The switch has a SerDes port
+	  to the host, the PON port and the CPU port, whose conduit is the
+	  RTL9602C_ETH driver. Besides the switch itself (bridging, VLANs, the
+	  address table, ACL and classifier rules, QoS, storm control and
+	  L3/NAT offload), the driver runs the chip's GPON MAC and PON MAC and
+	  offers them through the PON class: the ONU's activation, its OMCI
+	  channel and a network interface per GEM port. It also registers the
+	  switch's IEEE 1588 clock, and the I2C master and diagnostics of the
+	  optics.
+
+	  Say Y or M on an RTL9602C board. To compile this driver as a module,
+	  choose M here: the module will be called rtl9602c.

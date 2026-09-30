@@ -1723,6 +1723,17 @@ static int dsa_user_setup_ft_block(struct dsa_switch *ds, int port,
 				   void *type_data)
 {
 	struct net_device *conduit = dsa_port_to_conduit(dsa_to_port(ds, port));
+	int err = -EOPNOTSUPP;
+
+	/*
+	 * Offer the flow block to the switch first, for a switch that offloads
+	 * flows in an engine of its own; the conduit gets the offer only when
+	 * the switch declines it with -EOPNOTSUPP.
+	 */
+	if (ds->ops->port_setup_tc)
+		err = ds->ops->port_setup_tc(ds, port, TC_SETUP_FT, type_data);
+	if (err != -EOPNOTSUPP)
+		return err;
 
 	if (!conduit->netdev_ops->ndo_setup_tc)
 		return -EOPNOTSUPP;

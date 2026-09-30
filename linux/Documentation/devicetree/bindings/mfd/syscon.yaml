@@ -103,6 +103,7 @@ select:
           - nuvoton,wpcm450-shm
           - qcom,apq8064-mmss-sfpb
           - qcom,apq8064-sps-sic
+          - realtek,rtl9602c-sysctl
           - rockchip,px30-qos
           - rockchip,rk3036-qos
           - rockchip,rk3066-qos
@@ -212,6 +213,7 @@ properties:
           - nuvoton,wpcm450-shm
           - qcom,apq8064-mmss-sfpb
           - qcom,apq8064-sps-sic
+          - realtek,rtl9602c-sysctl
           - rockchip,px30-qos
           - rockchip,rk3036-qos
           - rockchip,rk3066-qos

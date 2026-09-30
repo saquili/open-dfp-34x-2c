@@ -17350,6 +17350,21 @@ F:	arch/mips/loongson64/
 F:	drivers/irqchip/irq-loongson*
 F:	drivers/platform/mips/cpu_hwmon.c
 
+MIPS/REALTEK RTL9602C ARCHITECTURE
+M:	Paweł Phan <szop.hektar_1w@icloud.com>
+L:	linux-mips@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/interrupt-controller/realtek,rtl9602c-intc.yaml
+F:	Documentation/devicetree/bindings/mips/realtek-rtl9602c.yaml
+F:	Documentation/devicetree/bindings/watchdog/realtek,rtl9602c-wdt.yaml
+F:	arch/mips/boot/dts/realtek/dfp-34x-2c3.dts
+F:	arch/mips/boot/dts/realtek/rtl9602c.dtsi
+F:	arch/mips/configs/rtl9602c_defconfig
+F:	arch/mips/include/asm/mach-rtl9602c/
+F:	arch/mips/mm/c-lexra.c
+F:	arch/mips/rtl9602c/
+F:	drivers/watchdog/rtl9602c_wdt.c
+
 MIROSOUND PCM20 FM RADIO RECEIVER DRIVER
 M:	Hans Verkuil <hverkuil@kernel.org>
 L:	linux-media@vger.kernel.org
@@ -20480,6 +20495,15 @@ S:	Maintained
 F:	drivers/pnp/
 F:	include/linux/pnp.h
 
+PON ONU CLASS
+M:	Paweł Phan <szop.hektar_1w@icloud.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/netlink/specs/pon.yaml
+F:	drivers/net/pon/
+F:	include/linux/pon.h
+F:	include/uapi/linux/pon.h
+
 PORTWELL EC DRIVER
 M:	Yen-Chi Huang <jesse.huang@portwell.com.tw>
 L:	platform-driver-x86@vger.kernel.org
@@ -21689,6 +21713,17 @@ M:	Alvin Šipraga <alsi@bang-olufsen.dk>
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/dsa/realtek.yaml
 F:	drivers/net/dsa/realtek/*
+
+REALTEK RTL9602C SWITCH AND GPON DRIVERS
+M:	Paweł Phan <szop.hektar_1w@icloud.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml
+F:	Documentation/devicetree/bindings/net/realtek,rtl9602c-eth.yaml
+F:	drivers/net/dsa/realtek/rtl9602c*
+F:	drivers/net/ethernet/realtek/rtl9602c-eth.c
+F:	include/linux/dsa/rtl9602c.h
+F:	net/dsa/tag_rtl9602c.c
 
 REALTEK SPI-NAND
 M:	Chris Packham <chris.packham@alliedtelesis.co.nz>

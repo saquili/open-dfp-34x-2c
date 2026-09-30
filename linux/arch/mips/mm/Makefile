@@ -35,6 +35,7 @@ obj-$(CONFIG_DMA_NONCOHERENT)	+= dma-noncoherent.o
 obj-$(CONFIG_CPU_R3K_TLB)	+= tlb-r3k.o
 obj-$(CONFIG_CPU_R4K_CACHE_TLB) += c-r4k.o cex-gen.o tlb-r4k.o
 obj-$(CONFIG_CPU_R3000)		+= c-r3k.o
+obj-$(CONFIG_CPU_LEXRA_CACHE)	+= c-lexra.o
 obj-$(CONFIG_CPU_SB1)		+= c-r4k.o cerr-sb1.o cex-sb1.o tlb-r4k.o
 obj-$(CONFIG_CPU_CAVIUM_OCTEON) += c-octeon.o cex-oct.o tlb-r4k.o
 

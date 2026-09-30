@@ -30,6 +30,7 @@ properties:
           - realtek,rtl8390-gpio
           - realtek,rtl9300-gpio
           - realtek,rtl9310-gpio
+          - realtek,rtl9602c-gpio
       - const: realtek,otto-gpio
 
   reg: true
