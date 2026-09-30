@@ -10,6 +10,7 @@
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
 #include <asm/addrspace.h>
+#include <asm/sync.h>
 
 #include <kernel-entry-init.h>
 
@@ -93,7 +94,7 @@ done:
 	synci		0($0)
 	.set pop
 #else
-	sync
+	__SYNC(full, always)
 #endif
 	/* jump to kexec_start_address */
 	j		s1
@@ -129,7 +130,7 @@ LEAF(kexec_smp_wait)
 #ifdef USE_KEXEC_SMP_WAIT_FINAL
 	kexec_smp_wait_final
 #else
-	sync
+	__SYNC(full, always)
 #endif
 	j		s1
 	END(kexec_smp_wait)
