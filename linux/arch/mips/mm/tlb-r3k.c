@@ -52,6 +52,14 @@ static void local_flush_tlb_from(int entry)
 	write_c0_entryhi(old_ctx);
 }
 
+/*
+ * How many entries at the bottom of the TLB a full flush leaves alone: 8 on
+ * the R3000, whose random replacement never selects entries 0 to 7.
+ * cpu_probe() sets it to 0 for a core whose full flush must clear every
+ * entry.
+ */
+int r3k_wired_entries = 8;
+
 void local_flush_tlb_all(void)
 {
 	unsigned long flags;
@@ -60,7 +68,7 @@ void local_flush_tlb_all(void)
 	printk("[tlball]");
 #endif
 	local_irq_save(flags);
-	local_flush_tlb_from(8);
+	local_flush_tlb_from(r3k_wired_entries);
 	local_irq_restore(flags);
 }
 
@@ -95,7 +103,14 @@ void local_flush_tlb_range(struct vm_area_struct *vma, unsigned long start,
 				tlb_probe();
 				idx = read_c0_index();
 				write_c0_entrylo0(0);
-				write_c0_entryhi(KSEG0);
+				/*
+				 * Retire the entry at an unmapped KSEG0
+				 * address of its own, 0x80000000 + entry *
+				 * 1 MiB: a shared value would leave several
+				 * entries with one EntryHi, which the
+				 * architecture leaves undefined.
+				 */
+				write_c0_entryhi((idx | 0x80000) << 12);
 				if (idx < 0)		/* BARRIER */
 					continue;
 				tlb_write_indexed();
@@ -132,7 +147,8 @@ void local_flush_tlb_kernel_range(unsigned long start, unsigned long end)
 			tlb_probe();
 			idx = read_c0_index();
 			write_c0_entrylo0(0);
-			write_c0_entryhi(KSEG0);
+			/* An unmapped KSEG0 address unique to the entry */
+			write_c0_entryhi((idx | 0x80000) << 12);
 			if (idx < 0)			/* BARRIER */
 				continue;
 			tlb_write_indexed();
@@ -165,7 +181,8 @@ void local_flush_tlb_page(struct vm_area_struct *vma, unsigned long page)
 		tlb_probe();
 		idx = read_c0_index();
 		write_c0_entrylo0(0);
-		write_c0_entryhi(KSEG0);
+		/* An unmapped KSEG0 address unique to the entry */
+		write_c0_entryhi((idx | 0x80000) << 12);
 		if (idx < 0)				/* BARRIER */
 			goto finish;
 		tlb_write_indexed();

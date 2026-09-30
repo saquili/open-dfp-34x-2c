@@ -22,6 +22,7 @@
 #include <asm/mipsregs.h>
 #include <asm/elf.h>
 #include <asm/traps.h>
+#include <asm/tlbmisc.h>
 
 #include "fpu-probe.h"
 
@@ -115,6 +116,37 @@ void cpu_probe(void)
 			     MIPS_CPU_NOFPUEX;
 		if (__cpu_has_fpu())
 			c->options |= MIPS_CPU_FPU;
+		c->tlbsize = 64;
+		break;
+	case PRID_COMP_LEGACY | PRID_IMP_LEXRA:
+		/*
+		 * The Lexra LX5281 of the Realtek RTL9602C, run as an
+		 * R3000. Without this case the BUG_ON() below would stop
+		 * the boot before any console exists.
+		 */
+		c->cputype = CPU_R3000;
+		__cpu_name[cpu] = "Lexra LX5281";
+		/*
+		 * A full flush clears the whole TLB, entries 0 to 7
+		 * included: whether this core's random replacement, like
+		 * the R3000's, never selects them is not verified, and
+		 * nothing on this platform installs wired entries there.
+		 */
+		r3k_wired_entries = 0;
+		/*
+		 * MIPS_CPU_3K_CACHE as on the R3000, but the cache is
+		 * served by the Lexra cache code (CONFIG_CPU_LEXRA_CACHE).
+		 * No MIPS_CPU_LLSC: ll works, but sc never stores, always
+		 * reports failure and never traps, so code built on them
+		 * would loop forever (measured on this board). No FPU
+		 * probe: __cpu_has_fpu() enables coprocessor 1 and reads
+		 * its implementation register, which on a core without an
+		 * FPU faults before any console exists; whether this core
+		 * has one is not verified.
+		 */
+		c->options = MIPS_CPU_TLB | MIPS_CPU_3K_CACHE |
+			     MIPS_CPU_NOFPUEX;
+		/* As on the R3000; the size is not probed and not verified. */
 		c->tlbsize = 64;
 		break;
 	}

@@ -8,4 +8,10 @@
 extern void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
 	unsigned long entryhi, unsigned long pagemask);
 
+/*
+ * - r3k_wired_entries: entries at the bottom of an R3000-style TLB that a
+ *   full flush leaves alone
+ */
+extern int r3k_wired_entries;
+
 #endif /* __ASM_TLBMISC_H */
