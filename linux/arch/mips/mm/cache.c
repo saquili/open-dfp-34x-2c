@@ -205,7 +205,13 @@ static inline void setup_protection_map(void)
 
 void cpu_cache_init(void)
 {
-	if (IS_ENABLED(CONFIG_CPU_R3000) && cpu_has_3k_cache)
+	/*
+	 * A Lexra core is probed as an R3000 with an R3000-style cache, but
+	 * the R3000 cache code does not work on it: its own comes first.
+	 */
+	if (IS_ENABLED(CONFIG_CPU_LEXRA_CACHE))
+		lexra_cache_init();
+	else if (IS_ENABLED(CONFIG_CPU_R3000) && cpu_has_3k_cache)
 		r3k_cache_init();
 	if ((IS_ENABLED(CONFIG_CPU_R4K_CACHE_TLB) ||
 	     IS_ENABLED(CONFIG_CPU_SB1)) && cpu_has_4k_cache)

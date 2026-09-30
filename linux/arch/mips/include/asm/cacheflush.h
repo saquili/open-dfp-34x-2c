@@ -87,6 +87,8 @@ static inline void flush_anon_page(struct vm_area_struct *vma,
 
 extern void (*flush_icache_range)(unsigned long start, unsigned long end);
 extern void (*local_flush_icache_range)(unsigned long start, unsigned long end);
+
+void lexra_cache_init(void);
 extern void (*__flush_icache_user_range)(unsigned long start,
 					 unsigned long end);
 extern void (*__local_flush_icache_user_range)(unsigned long start,

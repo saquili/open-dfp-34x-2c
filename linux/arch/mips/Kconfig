@@ -2197,6 +2197,14 @@ config CPU_R2300_FPU
 	depends on MIPS_FP_SUPPORT
 	default y if CPU_R3000
 
+config CPU_LEXRA_CACHE
+	bool
+	help
+	  Cache maintenance for the Lexra LX5281 core through CP0 register
+	  20, which cpu_cache_init() uses in place of the R3000 cache code:
+	  that code does not work on this core. Every operation acts on a
+	  whole cache. The platforms built on the core select this.
+
 config CPU_R3K_TLB
 	bool
 
