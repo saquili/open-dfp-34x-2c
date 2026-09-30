@@ -24,6 +24,10 @@
 #   check-log   print the lines of LOG -- the output of a compiler, a checker
 #               or a documentation build -- that name a file the series adds
 #               or changes, as "linux/<path>:", and exit 1 if there is any.
+#               A file the series adds is judged whole. A file of the release
+#               that the series changes is judged by its changed lines: a
+#               diagnostic "linux/<path>:<line>" counts only when <line> is
+#               one the series added or changed, or when it names no line.
 #               Diagnostics about upstream's own files pass unjudged.
 #
 # Exit status: 0 success, 1 check-log found lines, 2 usage or repository
@@ -60,6 +64,23 @@ series_files() {
 		"$squash" HEAD:linux -- "$@"
 }
 
+# The lines a modified file of the release gained, as "path first last".
+series_hunks() {
+	squash=$(import_commit)
+	git -C "$top" diff -U0 --no-renames --diff-filter=MT \
+		"$squash" HEAD:linux |
+		awk '
+			/^\+\+\+ / { path = substr($0, 7); next }
+			/^@@ / {
+				plus = $3
+				sub(/^\+/, "", plus)
+				n = split(plus, a, ",")
+				count = (n > 1) ? a[2] : 1
+				if (count > 0)
+					print path, a[1], a[1] + count - 1
+			}'
+}
+
 [ $# -ge 1 ] || usage
 command=$1
 shift
@@ -82,12 +103,47 @@ files)
 check-log)
 	[ $# -eq 1 ] || usage
 	[ -r "$1" ] || die "cannot read $1"
-	files=$(series_files)
-	[ -n "$files" ] || exit 0
-	patterns=$(mktemp)
-	trap 'rm -f "$patterns"' EXIT
-	printf '%s\n' "$files" | sed 's|^|linux/|; s|$|:|' >"$patterns"
-	if grep -F -f "$patterns" "$1"; then
+	files=$(mktemp)
+	hunks=$(mktemp)
+	trap 'rm -f "$files" "$hunks"' EXIT
+	series_files >"$files"
+	[ -s "$files" ] || exit 0
+	series_hunks >"$hunks"
+	if ! awk -v files="$files" -v hunks="$hunks" '
+		BEGIN {
+			while ((getline p < files) > 0)
+				known[p] = 1
+			while ((getline l < hunks) > 0) {
+				split(l, f, " ")
+				modified[f[1]] = 1
+				n[f[1]]++
+				lo[f[1], n[f[1]]] = f[2]
+				hi[f[1], n[f[1]]] = f[3]
+			}
+		}
+		{
+			rest = $0
+			while (match(rest, /linux\/[^: \t]+:[0-9]*/)) {
+				ref = substr(rest, RSTART + 6, RLENGTH - 6)
+				rest = substr(rest, RSTART + RLENGTH)
+				split(ref, r, ":")
+				if (!(r[1] in known))
+					continue
+				if ((r[1] in modified) && r[2] != "") {
+					judged = 0
+					for (i = 1; i <= n[r[1]]; i++)
+						if (r[2] + 0 >= lo[r[1], i] && r[2] + 0 <= hi[r[1], i])
+							judged = 1
+					if (!judged)
+						continue
+				}
+				print
+				bad = 1
+				break
+			}
+		}
+		END { exit bad }
+	' "$1"; then
 		exit 1
 	fi
 	;;
