@@ -334,6 +334,17 @@ static const struct irq_chip realtek_gpio_irq_chip = {
 };
 
 static const struct of_device_id realtek_gpio_of_match[] = {
+	/*
+	 * RTL9602C: line N is bit N of a 32-bit word in the CPU's own
+	 * big-endian byte order, which the reversed port order reads with
+	 * plain 32-bit accesses; the byte-swapped access of the generic entry
+	 * would put line 13 on bit 21. This bit order is not verified. No line
+	 * is used as an interrupt, so interrupts stay disabled.
+	 */
+	{
+		.compatible = "realtek,rtl9602c-gpio",
+		.data = (void *)(GPIO_PORTS_REVERSED | GPIO_INTERRUPTS_DISABLED),
+	},
 	{
 		.compatible = "realtek,otto-gpio",
 		.data = (void *)GPIO_INTERRUPTS_DISABLED,
