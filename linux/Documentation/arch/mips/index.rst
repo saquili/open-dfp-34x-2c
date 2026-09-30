@@ -10,6 +10,7 @@ MIPS-specific Documentation
 
    booting
    ingenic-tcu
+   rtl9602c
 
    features
 

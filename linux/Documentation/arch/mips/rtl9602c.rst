@@ -1,0 +1,2717 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+========================================
+Realtek RTL9602C and the ODI DFP-34X-2C3
+========================================
+
+Overview
+========
+
+The Realtek RTL9602C is a system-on-chip for GPON optical network units (ONUs).
+Its processor is one Lexra LX5281 core, a big-endian MIPS I design that Linux
+runs as an R3000-class CPU. Around the core the chip has a peripheral window
+(system controller, console UART, interrupt controller, general-purpose timers,
+watchdog and GPIO bank), an Ethernet switch with a DMA engine on its CPU port
+and, behind the switch's PON port, the GPON MAC and the PON MAC.
+
+The ODI DFP-34X-2C3 is a GPON ONU in an SFP module built on this SoC, with 32
+MiB of DRAM and 8 MiB of SPI NOR flash. Its only electrical data interface is
+the SFP edge connector, wired to the switch's SerDes lane; the GPON MAC drives a
+separate laser driver IC that the SoC reaches over I2C.
+
+This page is the reference for the MIPS side of the port: the CPU core, the
+memory map, the platform code, the watchdog, the GPIO bank, the flash and its
+partitions, the board's device tree and the contract under which the boot loader
+starts the kernel. The switch, the CPU port's DMA engine, the GPON and PON MACs
+and the optics have their own drivers under ``drivers/net/`` and are described
+with them.
+
+Configuration
+-------------
+
+``CONFIG_RTL9602C`` (``arch/mips/Kconfig``, "Realtek RTL9602C (Lexra LX5281)
+based machines") is a member of the MIPS system-type choice. It builds
+``arch/mips/rtl9602c/``, selects the CPU, cache, interrupt, console,
+image-format and device-tree options that the core and the boot loader need
+(listed under "Build and configuration") and is what ``GPIO_REALTEK_OTTO`` and
+``RTL9602C_ETH`` depend on. ``rtl9602c_defconfig`` (``arch/mips/configs/``) is
+the configuration of the board. The settings of it that this page relies on:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 38 62
+
+   * - Setting
+     - Effect
+   * - ``CONFIG_RTL9602C=y``
+     - The platform: ``arch/mips/rtl9602c/``, the Lexra cache code and the
+       built-in device tree.
+   * - ``CONFIG_MIPS_CMDLINE_DTB_EXTEND=y``, no built-in ``CONFIG_CMDLINE``
+     - The kernel command line is ``/chosen/bootargs`` followed by the boot
+       loader's arguments (see "Boot contract").
+   * - ``# CONFIG_MIPS_FP_SUPPORT is not set``
+     - The kernel has no floating-point support, and the CPU probe does not
+       touch coprocessor 1.
+   * - ``CONFIG_KEXEC=y``, ``# CONFIG_CRASH_DUMP is not set``
+     - kexec builds (it does not start a new kernel on the board).
+       ``CRASH_DUMP`` stays off because it would move the load address.
+   * - ``CONFIG_MTD_ROM=y``, ``CONFIG_MTD_PHYSMAP_OF=y``, ``CONFIG_MTD_BLOCK=y``
+     - The flash window as a read-only MTD device and its partitions as MTD and
+       block devices.
+   * - ``CONFIG_SERIAL_8250=y``, ``CONFIG_SERIAL_8250_CONSOLE=y``
+     - The 8250 core drives the console UART, whose port the platform code
+       registers.
+   * - ``CONFIG_GPIO_REALTEK_OTTO=y``
+     - The GPIO bank (``GPIO_REALTEK_OTTO`` depends on
+       ``MACH_REALTEK_RTL || RTL9602C``).
+   * - ``CONFIG_RTL9602C_WATCHDOG=y``
+     - The watchdog (``RTL9602C_WATCHDOG`` depends on ``MIPS || COMPILE_TEST``).
+
+Device tree and bindings
+------------------------
+
+The kernel carries its device tree (``USE_OF`` with ``BUILTIN_DTB``); the boot
+loader passes none. ``arch/mips/boot/dts/realtek/rtl9602c.dtsi`` describes the
+SoC. ``dfp-34x-2c3.dts`` includes it and adds the board: the memory, the
+reserved packet-buffer areas, ``chosen``, the switch's memory regions and the
+flash with its partitions. The ``Makefile`` in that directory builds
+``dfp-34x-2c3.dtb`` for ``CONFIG_RTL9602C`` only.
+
+Every compatible string of the tree has a binding schema under
+``Documentation/devicetree/bindings/``. The prefixes ``lexra`` and ``odi`` are
+listed in ``vendor-prefixes.yaml``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 18 48
+
+   * - Compatible
+     - Node
+     - Binding
+   * - ``odi,dfp-34x-2c3``, ``realtek,rtl9602c``
+     - root
+     - ``mips/realtek-rtl9602c.yaml``
+   * - ``lexra,lx5281``
+     - ``cpu@0``
+     - ``mips/cpus.yaml``
+   * - ``mti,cpu-interrupt-controller``
+     - ``cpuintc``
+     - ``interrupt-controller/mti,cpu-interrupt-controller.yaml``
+   * - ``realtek,rtl9602c-sysctl``, ``syscon``
+     - ``sysctl``
+     - ``mfd/syscon.yaml``
+   * - ``realtek,rtl9602c-intc``
+     - ``intc``
+     - ``interrupt-controller/realtek,rtl9602c-intc.yaml``
+   * - ``realtek,rtl9602c-wdt``
+     - ``wdt``
+     - ``watchdog/realtek,rtl9602c-wdt.yaml``
+   * - ``realtek,rtl9602c-gpio``, ``realtek,otto-gpio``
+     - ``gpio0``
+     - ``gpio/realtek,otto-gpio.yaml``
+   * - ``ns16550a``
+     - ``uart0``
+     - ``serial/8250.yaml``
+   * - ``realtek,rtl9602c-eth``
+     - ``eth``
+     - ``net/realtek,rtl9602c-eth.yaml``
+   * - ``realtek,rtl9602c-switch``
+     - ``switch``
+     - ``net/dsa/realtek,rtl9602c-switch.yaml``
+   * - ``mtd-rom``
+     - ``flash@14000000``
+     - ``mtd/mtd-physmap.yaml``
+   * - ``fixed-partitions``
+     - ``partitions``
+     - ``mtd/partitions/fixed-partitions.yaml``
+
+Where the code is
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 46 22 18
+
+   * - Block
+     - Code
+     - Configuration
+     - Device tree
+   * - CPU identification
+     - ``arch/mips/kernel/cpu-r3k-probe.c`` (the ``PRID_IMP_LEXRA`` case);
+       ``arch/mips/include/asm/cpu.h``
+     - ``CPU_R3000`` (from ``SYS_HAS_CPU_R3000``)
+     - ``cpu@0``
+   * - Caches
+     - ``arch/mips/mm/c-lexra.c``; ``cpu_cache_init()`` in
+       ``arch/mips/mm/cache.c``; ``lexra_cache_init()`` in
+       ``arch/mips/include/asm/cacheflush.h``
+     - ``CPU_LEXRA_CACHE``
+     - none
+   * - TLB
+     - ``arch/mips/mm/tlb-r3k.c``; ``arch/mips/include/asm/tlbmisc.h``
+     - ``CPU_R3K_TLB``
+     - none
+   * - kexec
+     - ``arch/mips/kernel/relocate_kernel.S``
+     - ``KEXEC``
+     - none
+   * - Platform code
+     - ``arch/mips/rtl9602c/setup.c`` (setup, restart, console UART
+       registration, write-buffer flush); ``irq.c`` (interrupt controller);
+       ``timer.c`` (tick); ``early_printk.c`` (early console); ``Makefile``;
+       ``Platform`` (load address);
+       ``arch/mips/include/asm/mach-rtl9602c/rtl9602c.h``;
+       ``arch/mips/Kbuild.platforms``
+     - ``RTL9602C``; ``EARLY_PRINTK`` for the early console
+     - ``soc``, ``intc``, ``uart0``
+   * - Watchdog
+     - ``drivers/watchdog/rtl9602c_wdt.c``
+     - ``RTL9602C_WATCHDOG``
+     - ``wdt``
+   * - GPIO bank
+     - ``drivers/gpio/gpio-realtek-otto.c``
+     - ``GPIO_REALTEK_OTTO``
+     - ``gpio0``
+   * - Pad control
+     - ``RTL9602C_PADMUX_*`` in ``drivers/net/dsa/realtek/rtl9602c.h``, used by
+       ``rtl9602c-optics.c``
+     - ``NET_DSA_RTL9602C``
+     - ``switch``
+   * - Flash
+     - ``drivers/mtd/maps/physmap-core.c``; ``drivers/mtd/chips/map_rom.c``
+     - ``MTD_PHYSMAP_OF``, ``MTD_ROM``, ``MTD_BLOCK``
+     - ``flash@14000000``, ``partitions``
+   * - Device trees
+     - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``,
+       ``Makefile``
+     - ``RTL9602C``, ``BUILTIN_DTB``
+     - the whole tree
+   * - Switch, CPU port, GPON and PON MACs, optics
+     - ``drivers/net/dsa/realtek/rtl9602c*``;
+       ``drivers/net/ethernet/realtek/rtl9602c-eth.c``;
+       ``net/dsa/tag_rtl9602c.c``
+     - ``NET_DSA_RTL9602C``, ``RTL9602C_ETH``
+     - ``switch``, ``eth``
+
+Interfaces to user space
+------------------------
+
+- ``/proc/cpuinfo``: ``system type`` reads ``Realtek RTL9602C`` and
+  ``cpu model`` names ``Lexra LX5281``.
+- ``/proc/cmdline`` and the ``Kernel command line:`` line of the kernel log:
+  ``panic=10`` from the tree, then the boot loader's arguments.
+- ``/proc/interrupts``: the SoC's interrupt sources appear under
+  ``rtl9602c-intc``, the tick as ``rtl9602c-tick`` and the console as ``ttyS0``.
+- ``/dev/ttyS0``: the console, at 115200 baud.
+- ``/dev/watchdog`` (and the watchdog core's sysfs entries): the watchdog is
+  armed when the driver probes, and the kernel feeds it until the device is
+  opened.
+- ``/sys/class/mtd/mtd0`` to ``mtd7`` and the block devices 31:0 to 31:7: the
+  flash partitions, read-only whatever their flags say.
+- A gpiolib chip of 32 lines; line 13 is requested by the switch driver as
+  TX_DISABLE.
+- ``reboot``, ``halt`` and ``poweroff``: reboot restarts through the CPU's reset
+  vector; halt and power off spin with interrupts disabled.
+
+How to read the fact tables
+===========================
+
+Each block below has a short account of what the hardware does and what the code
+does with it, followed by fact tables with three columns: *Fact*, *Tag* and
+*Checked by*. The tag says how the fact is established. **M**, measured on the
+board: *Checked by* gives the command or observation, through the driver's own
+interfaces (the kernel log, ``/proc``, sysfs, debugfs, ``devlink``,
+``ethtool``), that shows it. **T**, tested by function: the driver depends on
+the fact, and the named behaviour fails if it is wrong. **P**, public standard:
+*Checked by* names the document and the clause. **I**, inferred, not verified:
+the fact is an assumption, and *Checked by* says what would confirm or refute
+it. The last chapter collects these facts and says which of them the driver
+depends on.
+
+A row with two tags is established in two ways, or in two parts; *Checked by*
+says which part carries which tag. "Every boot" means that the line is in the
+kernel log of every boot of this kernel. Addresses are physical unless marked
+KSEG1. The behaviours that a tested fact depends on are named in words: the
+board boots to a shell; the watchdog is armed at probe, fed and disarmed;
+bridged traffic passes both ways, sourced from the host; the optics diagnostics
+read, the laser is off before O3 and TX_DISABLE is honoured. "The stress run" is
+a user-space program that repeats fork, exec, memory and unaligned-access checks
+for a set time and compares every result with the expected one.
+
+CPU core
+========
+
+The core is a Lexra LX5281. It runs big-endian and implements MIPS I with a
+software-refilled, R3000-style TLB; user space is the o32 ABI. The kernel treats
+it as an R3000 (``CPU_R3000``, reached through ``SYS_HAS_CPU_R3000``) and
+departs from the generic R3000 code in three places:
+
+- ``cpu_probe()`` recognises the core by its PRId and names it ``Lexra LX5281``.
+- The caches are maintained through CP0 register 20 by
+  ``arch/mips/mm/c-lexra.c``, because the R3000 cache code does not work on this
+  core.
+- A full TLB flush clears all 64 entries, not only entries 8 to 63.
+
+MIPS I also sets limits that the rest of the kernel has to respect: the
+exception vectors are fixed at ``0x80000000``, there is no ``sync`` instruction,
+and the core's ``ll`` and ``sc`` cannot be used.
+
+Identification and CPU class
+----------------------------
+
+The kernel log of every boot names the core::
+
+   CPU0 revision is: 0000dc02 (Lexra LX5281)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The processor ID (CP0 PRId) reads ``0x0000dc02``: company field 0 (the
+       legacy encoding used before MIPS32), implementation ``0xdc``, revision
+       ``0x02``.
+     - M
+     - Every boot: ``dmesg`` shows ``CPU0 revision is: 0000dc02 (Lexra
+       LX5281)``.
+   * - ``PRID_IMP_LEXRA`` (``0xdc00``, ``asm/cpu.h``) is that implementation
+       field in its PRId position. ``cpu_probe()`` in ``cpu-r3k-probe.c`` (the
+       probe a ``CPU_R3000`` kernel builds) matches
+       ``PRID_COMP_LEGACY | PRID_IMP_LEXRA``. Without a matching case
+       ``__cpu_name[cpu]`` stays NULL and ``BUG_ON(!__cpu_name[cpu])`` fires
+       inside ``setup_arch()``, before the early console exists, so the boot
+       stops without a word.
+     - M
+     - A kernel without the case stops after the boot loader's
+       ``Starting kernel ...`` with no output; with the case the boot continues.
+   * - The core is handled as an R3000: ``cputype = CPU_R3000``, name
+       ``"Lexra LX5281"`` (the ``cpu model`` line of ``/proc/cpuinfo``),
+       ``options = MIPS_CPU_TLB | MIPS_CPU_3K_CACHE | MIPS_CPU_NOFPUEX``,
+       ``tlbsize = 64`` (see "TLB").
+     - T
+     - The board boots to a shell.
+   * - The probe sets none of ``MIPS_CPU_FPU``, ``MIPS_CPU_COUNTER`` or
+       ``MIPS_CPU_LLSC``, and a MIPS I core has none of the MIPS32 release 2
+       features. Consequences the kernel relies on: atomic operations are made
+       by disabling interrupts, never with ``ll`` and ``sc``; the CP0 counter is
+       not used, so the tick comes from the SoC timer (see "Timers and the
+       tick"); the exception base is fixed.
+     - T
+     - The board boots to a shell; ``dmesg`` names ``jiffies`` as the only
+       clocksource and shows ``sched_clock: 32 bits at 250 Hz`` (the
+       jiffies-based one).
+   * - ``MIPS_CPU_3K_CACHE`` selects the R3000 cache code in
+       ``cpu_cache_init()``, where the ``CPU_LEXRA_CACHE`` branch comes first
+       (see "Caches"), so it selects nothing there on this platform.
+       ``show_cpuinfo()`` (``arch/mips/kernel/proc.c``) also reads it, for the
+       ``Options implemented`` line of ``/proc/cpuinfo``.
+     - T
+     - The board boots to a shell.
+   * - The probe does not call ``__cpu_has_fpu()``, which enables coprocessor 1
+       and reads its implementation register: on a core without an FPU that
+       access would fault before any console exists. The platform's kernel is
+       built without floating-point support (``MIPS_FP_SUPPORT`` off;
+       ``__cpu_has_fpu()`` is then a stub returning 0) and user space is built
+       soft-float, so nothing depends on the answer. Whether the core has a
+       coprocessor 1 is not established.
+     - I
+     - A hard-float binary faulting does not settle it, because a kernel without
+       floating-point support never enables coprocessor 1. A kernel with
+       ``MIPS_FP_SUPPORT`` reading the FP implementation register would.
+   * - The core runs big-endian, MIPS I, o32.
+     - M
+     - Every binary the board runs is a big-endian MIPS I o32 ELF; the kernel
+       boots built with ``-march=mips1 -EB`` (every boot).
+   * - The core clock is 300 MHz. Nothing in the kernel uses the figure.
+     - M
+     - The boot loader's banner prints ``CPU 300MHz`` on every reset.
+
+MIPS I limits the kernel respects
+---------------------------------
+
+.. warning::
+
+   ``ll`` executes and returns the loaded value, but ``sc`` executes, never
+   stores and always reports failure, and it never traps. Code built on ``ll``
+   and ``sc`` does not crash on this core: it loops forever. The kernel emits
+   neither, and user space must not either.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``ll`` executes and returns the loaded value; ``sc`` executes, never
+       stores and always reports failure, and never traps. Code built on ``ll``
+       and ``sc`` loops forever. The kernel emits neither (see "Identification
+       and CPU class"); user space must not either.
+     - M
+     - A freestanding user-space probe runs ``ll``, ``addiu``, ``sc`` on a
+       counter: ``sc`` returns 0 and the value is unchanged, repeatably.
+   * - ``lwl``, ``lwr``, ``swl`` and ``swr`` execute and give the correct result
+       at all four byte offsets, for loads and stores. A MIPS I kernel uses them
+       for unaligned accesses.
+     - M
+     - The stress run's unaligned-access test passes for loads at 4 of 4 offsets
+       and stores at 4 of 4; the same test with an injected fault fails, as it
+       must.
+   * - ``sync`` is not a MIPS I instruction: the assembler refuses it for
+       ``-march=mips1`` (``opcode not supported on this processor: mips1``).
+       ``CPU_HAS_SYNC`` depends on ``!CPU_R3000``, so ``__SYNC()`` from
+       ``asm/sync.h`` assembles to nothing on this platform and to ``sync``
+       where the CPU has it.
+     - T
+     - A kernel with ``CONFIG_KEXEC`` builds for this platform only with
+       ``__SYNC()`` in ``relocate_kernel.S``.
+   * - The kernel does not use CP0 Count (register 9) or Compare (register 11).
+       Whether the core implements them is not established.
+     - I
+     - Reading Count twice across a known delay would show.
+   * - MIPS I has no exception base register: with Status.BEV clear the TLB
+       refill vector is at ``0x80000000`` and the general exception vector 0x80
+       bytes above it. ``trap_init()`` installs its handlers in
+       ``0x80000000``-``0x800003ff``, and ``cpu_probe()`` reserves physical
+       ``0x0``-``0x3ff`` for them (``reserve_exception_space(0, 0x400)``). A
+       kernel whose image starts at ``0x80000000`` has its first kilobyte
+       overwritten there.
+     - P, M
+     - P: the exception vector addresses of MIPS I (R3000). M: a kernel linked
+       at ``0x80000000`` stops inside ``trap_init()``; linked at ``0x80100000``
+       it boots (see "Boot contract").
+   * - ``CPU_R3000`` selects ``CPU_HAS_WB``: the core is taken to have a write
+       buffer between it and the bus, and ``mb()`` and ``iob()`` call the
+       platform's ``__wbflush()`` (see "Platform setup, restart and build"),
+       which drains it with an uncached load.
+     - I
+     - That an uncached load waits for earlier buffered writes on this core is
+       the R3000-class convention and is not measured. A store to a device
+       register followed by an uncached read of a register that reflects it
+       would show.
+
+Caches
+------
+
+The R3000 cache code (``arch/mips/mm/c-r3k.c``) invalidates by isolating the
+cache with Status.IsC and Status.SwC (bits 16 and 17) and storing bytes; it does
+not work on this core. ``arch/mips/mm/c-lexra.c`` maintains the caches through
+CP0 register 20, which MIPS I leaves unassigned, one operation word at a time.
+Every operation acts on a whole cache.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The caches are maintained through CP0 register 20, which MIPS I leaves
+       unassigned. ``cctl_op()`` writes 0 to it and then the operation word,
+       with ``.set noreorder`` and a ``"memory"`` clobber so that no memory
+       access is moved across the operation.
+     - T
+     - Run-time generated code (TLB handlers, ``clear_page()``, ``copy_page()``)
+       runs after the flush: the board boots to a shell, and the generated TLB
+       refill handler reads back intact before and after the flush.
+   * - The zero written before each operation word. The two-write sequence
+       works; whether the first write is needed is not established.
+     - I
+     - Removing it and running the stress run would show.
+   * - ``RTL9602C_LEXRA_CACHE_CTRL_ICACHE_INV`` (``0x00000002``): invalidate the
+       whole instruction cache.
+     - T
+     - The board boots to a shell (generated code executes).
+   * - ``RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB`` (``0x00000100``): write every
+       dirty data-cache line back to memory.
+     - T
+     - The board boots to a shell (``flush_icache_range()``); frames the CPU
+       sends by DMA arrive intact.
+   * - ``RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB_INV`` (``0x00000200``): write the
+       data cache back, then invalidate it.
+     - T
+     - Frames received by DMA are read correctly; the stress run's memory and
+       fork tests pass.
+   * - Every operation acts on a whole cache; the driver has no line-granular
+       form, so every range request is served by a whole-cache operation. That
+       is correct (writing back all of the cache is a superset of writing back a
+       range) and slow: each DMA sync writes back and invalidates the whole data
+       cache.
+     - T, I
+     - T: bridged traffic passes both ways, sourced from the host. I: whether
+       the core offers a range form is not established; no test is known.
+   * - The driver never issues a data-cache invalidate without write-back.
+       Applied to the whole cache it would discard dirty lines of data that have
+       nothing to do with the request. ``_dma_cache_inv`` is therefore the
+       write-back-and-invalidate operation.
+     - T
+     - Bridged traffic passes both ways; correct whichever way the write-back
+       question below resolves.
+   * - Whether the data cache is write-back or write-through.
+     - I
+     - Not measured. Writing a pattern through KSEG0 and reading the same
+       address through KSEG1 before any flush would show: a stale value means
+       write-back.
+   * - With the R3000 cache code the boot stops silently at the first call into
+       run-time generated code (``TLBMISS_HANDLER_SETUP_PGD()``); with the CP0
+       register 20 operations it passes. The likely explanation is that the core
+       does not implement cache isolation, so that the isolated stores reach
+       memory and zero the exception vectors.
+     - M, I
+     - M: one boot each way. I: the explanation has not been confirmed by
+       reading the exception vector area back; doing so after an R3000-style
+       flush would show.
+   * - ``cpu_cache_init()`` (``cache.c``) calls ``lexra_cache_init()`` when
+       ``CONFIG_CPU_LEXRA_CACHE`` is set, ahead of the R3000 branch that
+       ``MIPS_CPU_3K_CACHE`` would otherwise select. ``asm/cacheflush.h``
+       declares ``lexra_cache_init()`` for it.
+     - T
+     - The board boots to a shell.
+   * - ``CPU_LEXRA_CACHE`` is a bool without a prompt, selected by the platform
+       (``RTL9602C``): cache maintenance through CP0 register 20 in place of the
+       R3000 cache code. It builds ``c-lexra.o`` (``arch/mips/mm/Makefile``) and
+       makes ``cpu_cache_init()`` call ``lexra_cache_init()``.
+     - T
+     - The kernel builds and the board boots to a shell.
+   * - The cache sizes and line length are not probed and nothing needs them:
+       every operation acts on a whole cache. (The R3000 size probe also relies
+       on isolation.)
+     - T
+     - The board boots to a shell.
+   * - The DMA API calls the hooks from ``arch_sync_dma_for_device()``:
+       ``_dma_cache_wback`` for ``DMA_TO_DEVICE``, ``_dma_cache_inv`` for
+       ``DMA_FROM_DEVICE``, ``_dma_cache_wback_inv`` for bidirectional buffers
+       and for preparing coherent allocations, which are then used through
+       uncached KSEG1. ``arch_sync_dma_for_cpu()`` does nothing on this core
+       (``cpu_needs_post_dma_flush()`` is false for ``CPU_R3000`` without
+       MAARs), so a buffer must not be read by the CPU while the device owns it.
+     - T
+     - Bridged traffic passes both ways: the CPU port's rings carry traffic in
+       both directions.
+
+``lexra_cache_init()``, in order
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Install ``flush_cache_all`` and ``__flush_cache_all``: write back and
+   invalidate the data cache, then invalidate the instruction cache. Purpose:
+   whole-cache maintenance for the generic code. (T)
+2. Install ``flush_cache_mm``: the same, skipped when the mm has no ASID on this
+   CPU (``cpu_context() == 0``). Install ``flush_cache_range`` and
+   ``flush_cache_page``: the same skip; otherwise the data cache, plus the
+   instruction cache when the mapping is executable (``VM_EXEC``). Purpose: an
+   mm that has never run on this CPU has nothing cached through its mappings
+   (the rule of the R3000 code). (T)
+3. Install ``flush_icache_range``, ``local_flush_icache_range``,
+   ``__flush_icache_user_range`` and ``__local_flush_icache_user_range``: write
+   the data cache back, then invalidate the instruction cache; the range is
+   ignored. Purpose: instructions written through the data side must be in
+   memory before the instruction cache refetches them, so the order matters. (T)
+4. Install ``__flush_kernel_vmap_range`` and ``flush_data_cache_page``: write
+   back and invalidate the data cache. (T)
+5. Install ``_dma_cache_wback_inv`` and ``_dma_cache_inv``: write back and
+   invalidate the data cache; install ``_dma_cache_wback``: write it back.
+   Purpose: never an invalidate without write-back, and the hooks of the DMA
+   API. (T)
+6. Flush both caches. Purpose: put the caches in a known state before anything
+   relies on them; what the boot loader leaves in them is not known. (I)
+7. Call ``build_clear_page()`` and ``build_copy_page()``. Purpose:
+   ``clear_page()`` and ``copy_page()`` are assembled at run time and made
+   executable with the instruction-cache flush installed in step 3; until then
+   the image holds a placeholder that jumps to itself. Every MIPS cache driver
+   ends with these two calls. (M: without them the CPU enters the placeholder at
+   the first ``__GFP_ZERO`` page allocation and never leaves it; with them the
+   boot completes.)
+
+TLB
+---
+
+The TLB has 64 entries and is refilled by software, as on the R3000; the refill
+handler that ``tlbex.c`` generates for that TLB runs unchanged.
+``r3k_wired_entries`` (``arch/mips/mm/tlb-r3k.c``) sets how many entries at the
+bottom of the TLB a full flush leaves alone; on this core it is 0.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``c->tlbsize = 64``.
+     - I
+     - Not probed. Writing a distinct EntryHi to each index 0 to 63 with
+       ``tlbwi`` and reading every index back with ``tlbr`` would confirm the
+       count; index 64 would show whether more entries exist or indices wrap.
+   * - The TLB is R3000-style and refilled by software: Index holds the entry
+       number in bits 13:8 (the code writes ``entry << 8``) and the
+       probe-failure flag in bit 31; EntryHi holds the virtual page and a 6-bit
+       ASID (``MIPS_ASID_BITS`` 6); the R3000 refill handler generated by
+       ``tlbex.c`` runs unchanged.
+     - M
+     - A 15-minute stress run of 795 cycles of fork and exec load (about 150 000
+       forks, recycling ASIDs) shows no divergence.
+   * - ``r3k_wired_entries`` (``tlb-r3k.c``, declared in ``asm/tlbmisc.h``,
+       which ``cpu-r3k-probe.c`` includes to set it) is the number of entries at
+       the bottom of the TLB that ``local_flush_tlb_all()`` leaves alone. It is
+       8 by default, the R3000's entries 0 to 7, which its random replacement
+       never selects. ``cpu_probe()`` sets it to 0 on this core, so every full
+       flush (ASID rollover, large ranges) invalidates all 64 entries.
+       ``tlb_init()`` clears all 64 at boot in any case. Nothing on this
+       platform installs wired entries (``add_wired_entry()`` has no caller
+       here), so clearing entries 0 to 7 costs nothing.
+     - T, I
+     - T: the board boots to a shell and the stress run of 795 cycles shows no
+       divergence. I: whether this core's random replacement can select entries
+       0 to 7 is not established (if it can, skipping them would leave stale
+       user translations after an ASID rollover); reading CP0 Random (register
+       1) many times would show its range.
+   * - Retiring a probed entry (``local_flush_tlb_range()``,
+       ``local_flush_tlb_kernel_range()``, ``local_flush_tlb_page()``) writes
+       EntryLo 0 and EntryHi ``(idx | 0x80000) << 12``, where ``idx`` is the
+       Index value (entry number in bits 13:8): an address in unmapped KSEG0, so
+       the entry can never match a translation, and different for every entry
+       (``0x80000000`` + entry x 1 MiB). ``local_flush_tlb_from()`` already uses
+       a distinct address per entry (``0x80000000`` + entry x 4 KiB); the two
+       schemes give the same address only for entry 0. A single shared value
+       would leave several entries with the same EntryHi.
+     - T, I
+     - T: the stress run of 795 cycles shows no divergence. I: what this core
+       does with duplicate EntryHi values is not measured; the MIPS
+       architectures treat more than one matching entry as undefined. Writing
+       two entries with one EntryHi and probing would show.
+
+kexec
+-----
+
+``CONFIG_KEXEC`` builds for the platform. The relocation code
+(``arch/mips/kernel/relocate_kernel.S``) writes ``__SYNC(full, always)`` where
+it had a bare ``sync``; on MIPS I that assembles to nothing. A kernel started
+with kexec does not run on the DFP-34X-2C3. To run a development kernel without
+writing flash, use the RAM boot described under "Boot contract".
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``relocate_kernel.S`` includes ``asm/sync.h`` and writes
+       ``__SYNC(full, always)`` at the two places that had a bare ``sync``
+       (before jumping to the new kernel, and in ``kexec_smp_wait``). On MIPS I
+       it assembles to nothing (see "MIPS I limits the kernel respects");
+       elsewhere it is the same ``sync`` as before.
+     - T
+     - ``CONFIG_KEXEC=y`` builds for this platform.
+   * - kexec does not start the new kernel on this board: ``kexec_load()``
+       accepts the segments, then ``reboot(LINUX_REBOOT_CMD_KEXEC)`` drops the
+       network connection and nothing appears on the console; only a power cycle
+       recovers the board. The flash is not written.
+     - M
+     - kexec started over the network, with the console watched.
+   * - Why the new kernel does not start: one candidate is that
+       ``relocate_new_kernel`` copies the new image through the cached segment
+       and jumps to it with no cache maintenance on MIPS I (no ``sync``, no
+       ``synci``, and the relocation code issues no CP0 register 20 operation);
+       with a write-back data cache part of the new kernel would still be in the
+       cache when the CPU fetches it.
+     - I
+     - Adding a data-cache write-back and an instruction-cache invalidate before
+       the jump and repeating the kexec start would confirm or refute it.
+
+Memory map and address windows
+==============================
+
+Physical addresses below 512 MiB are reached through KSEG1, the unmapped,
+uncached segment at ``0xa0000000``, so the platform code needs no ``ioremap()``.
+DRAM is at physical 0, the flash is mapped for reading at ``0x14000000``, the
+peripherals sit in a window at ``0x18000000`` and the switch and PON register
+file starts at ``0x1b000000``. Each window is described in the section named in
+the last column.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 26 20 24
+
+   * - Physical range
+     - Block
+     - Node
+     - Section
+   * - ``0x00000000``-``0x01ffffff``
+     - DRAM, 32 MiB
+     - ``memory@0``
+     - Board DFP-34X-2C3
+   * - ``0x14000000``-``0x147fffff``
+     - SPI NOR flash, read-only
+     - ``flash@14000000``
+     - Flash window and partitions
+   * - ``0x18000000``-``0x18000fff``
+     - System controller
+     - ``sysctl``
+     - Board DFP-34X-2C3
+   * - ``0x18002000``-``0x180020ff``
+     - UART0 (console)
+     - ``uart0``
+     - UART and early console
+   * - ``0x18003000``-``0x180030ff``
+     - Interrupt controller
+     - ``intc``
+     - Interrupt controller
+   * - ``0x18003200`` and up, ``0x10`` apart
+     - General-purpose timers
+     - none
+     - Timers and the tick
+   * - ``0x18003260``-``0x1800326b``
+     - Watchdog
+     - ``wdt``
+     - Watchdog
+   * - ``0x18003300``-``0x1800331b``
+     - GPIO bank
+     - ``gpio0``
+     - GPIO and pad control
+   * - ``0x18012000``-``0x1801343f``
+     - CPU port DMA engine
+     - ``eth``
+     - Board DFP-34X-2C3
+   * - ``0x1b000000``-``0x1bf0ffff``
+     - Switch and PON register file
+     - ``switch``
+     - Board DFP-34X-2C3
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_IOMEM_BASE`` (``0x18000000``) is the peripheral window. The
+       blocks the platform code uses: UART0 at ``+0x2000``, the interrupt
+       controller at ``+0x3000``, the timers at ``+0x3200``, the watchdog at
+       ``+0x3260``. Also in this window: the system controller at ``+0x0000``,
+       the GPIO bank at ``+0x3300`` (its address is not verified, see "GPIO and
+       pad control") and the CPU port's DMA engine at ``+0x12000``.
+     - M
+     - Each of the four blocks works at that address; see the sections on the
+       UART, the interrupt controller, the tick and the watchdog.
+   * - The platform code reaches its registers through ``KSEG1ADDR()``: KSEG1
+       maps the low 512 MiB of physical space unmapped and uncached, so no
+       ``ioremap()`` is needed and no access is cached.
+     - P, T
+     - P: the MIPS I address map (kseg1, ``0xa0000000``-``0xbfffffff``). T: the
+       board boots to a shell.
+   * - Some addresses stall the CPU on a load instead of returning a value or
+       raising a bus error: physical ``0x1c000000``, which no block decodes, and
+       the registers of an on-chip block that has not been enabled (the PON MAC
+       before the switch driver enables it). No exception is raised, nothing
+       reaches the console, and the watchdog does not reset the chip from that
+       state; only a power cycle recovers the board. The platform code touches
+       only the blocks it drives.
+     - M
+     - One read of ``0x1c000000`` stalls the board. A read inside the PON block
+       before it is enabled, with the watchdog armed for 42.9 s and read back as
+       armed, produces no reset in eleven minutes.
+   * - ``RTL9602C_RESET_VECTOR`` (``0xbfc00000``, KSEG1) is the MIPS reset
+       exception vector; on this board the boot loader runs there.
+     - P, M
+     - P: MIPS I, the reset vector is ``0xbfc00000``. M: a jump to it reaches
+       the boot loader's autoboot prompt 1.81 s later.
+
+Platform setup, restart and build
+=================================
+
+The platform code in ``arch/mips/rtl9602c/`` provides the hooks that the MIPS
+architecture code calls. In the order in which the kernel reaches them:
+
+1. ``cpu_probe()`` identifies the core (see "CPU core").
+2. ``prom_init()`` (``setup.c``) builds the firmware command line from the boot
+   loader's arguments.
+3. ``setup_early_printk()`` starts the early console: from here
+   ``prom_putchar()`` (``early_printk.c``) prints every character until the 8250
+   driver takes over the console UART.
+4. ``plat_mem_setup()`` (``setup.c``) stops the watchdog, adds the DRAM to
+   memblock, hands the built-in device tree to the OF core, registers the
+   console UART and installs restart, halt and power off (the steps are listed
+   below).
+5. ``cpu_cache_init()`` calls ``lexra_cache_init()`` (see "Caches").
+6. ``arch_init_irq()`` (``irq.c``) sets up the interrupt controller.
+7. ``plat_time_init()`` (``timer.c``) sets up the tick.
+8. ``rtl9602c_populate_dt()`` (``arch_initcall``) creates the devices of the
+   tree.
+9. The drivers probe at ``device_initcall`` time; the watchdog driver arms the
+   watchdog.
+
+Platform setup
+--------------
+
+``plat_mem_setup()``, in order
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Write 0 to the watchdog control register. Purpose: a count armed before this
+   kernel, by a restart or by the boot loader's one-shot boot mode, keeps
+   running across the jump into this kernel although the register then reads 0,
+   and would reset the board; writing 0 stops it. Nothing watches the boot from
+   here until the watchdog driver arms the watchdog at probe. (M, I)
+2. Add the DRAM (``RTL9602C_RAM_BASE``, ``RTL9602C_RAM_SIZE``) to memblock.
+   Purpose: early allocation works whatever the tree says. (T)
+3. Call ``__dt_setup_arch(__dtb_start)``. Purpose: hand the built-in device tree
+   blob to the OF core. (T)
+4. Call ``rtl9602c_serial_init()``. Purpose: register the console UART, so that
+   the port is in the 8250 driver's table when ``console_init()`` runs (see
+   "UART and early console"). (M, T)
+5. Install ``_machine_restart``, ``_machine_halt`` and ``pm_power_off``.
+   Purpose: restart through the reset vector, and spin on halt and power off.
+   (I)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``prom_init()`` calls ``fw_init_cmdline()``, which builds the firmware
+       command line from the boot loader's argument vector (see "Boot
+       contract").
+     - M
+     - Every boot: the boot loader's arguments appear in
+       ``Kernel command line:`` and in ``/proc/cmdline``.
+   * - The board's DRAM (``RTL9602C_RAM_BASE`` 0, ``RTL9602C_RAM_SIZE`` 32 MiB)
+       is added to memblock before the device tree is parsed, so early
+       allocation works whatever the tree says; the tree's memory node describes
+       the same range.
+     - T
+     - Every boot: ``Normal [mem 0x0000000000000000-0x0000000001ffffff]``.
+   * - ``__dt_setup_arch(__dtb_start)`` hands the first built-in device tree
+       blob to the OF core (the only one this kernel carries).
+     - T
+     - Every boot: the board's reserved-memory regions are reported.
+   * - ``rtl9602c_populate_dt()`` creates the devices with
+       ``of_platform_default_populate()`` as an ``arch_initcall``, so they exist
+       before any driver's ``device_initcall`` probes.
+     - T
+     - The board boots to a shell: every device of the tree that has a driver
+       binds.
+   * - Restart, halt and power off are installed at the end of
+       ``plat_mem_setup()``. Halt and power off disable interrupts and spin: the
+       board has no control over its own supply, which comes from the host's
+       cage.
+     - I
+     - The restart path is exercised by every RAM boot (the board boots to a
+       shell); halt and power off are not exercised.
+   * - ``__wbflush`` is initialised at compile time to ``rtl9602c_wbflush()``,
+       an uncached load (``lw $0`` from the KSEG1 base, physical 0) followed by
+       a ``nop``. ``mb()`` and ``iob()`` call it on this kernel (see "MIPS I
+       limits the kernel respects"), and code runs before ``plat_mem_setup()``
+       (the early console starts first), so a pointer filled in at run time
+       would be NULL for that stretch. ``wbflush_setup()`` exists because
+       ``asm/wbflush.h`` declares it; nothing calls it on this platform.
+     - T, I
+     - T: the board boots to a shell. I: that nothing calls ``mb()`` before
+       ``plat_mem_setup()`` is not established, so the failure of the run-time
+       alternative is not observed; a run-time assignment with a trap on NULL
+       would show.
+
+Restart
+-------
+
+``rtl9602c_machine_restart()``, in order
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Disable interrupts. Purpose: nothing may run in between. (T)
+2. Write ``RTL9602C_WDT_CTRL_ARM_MAX`` to the watchdog control register.
+   Purpose: a safety net; if the jump never reaches the boot loader, the chip
+   resets 44 s later. (M)
+3. Print one line at emergency level. Purpose: the console shows that the reset
+   vector was entered. (T)
+4. Jump to ``RTL9602C_RESET_VECTOR``. Purpose: the boot loader starts at once,
+   1.81 s to its autoboot prompt against about 46 s by the watchdog alone. (M)
+5. Spin with ``cpu_relax()`` if the jump returns. Purpose: the watchdog armed in
+   step 2 resets the chip. (T)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Step 4 is a jump, not a reset: the CPU's CP0 state, caches and TLB, and
+       every on-chip block, keep their state; the boot loader re-initialises
+       what it uses and the next kernel's drivers the rest.
+     - T, I
+     - T: every RAM boot restarts this way. I: which blocks the boot loader
+       leaves untouched is not established; comparing register snapshots before
+       a restart and at the next kernel's start would show.
+
+Build and configuration
+-----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C`` is a member of the MIPS system-type choice ("Realtek
+       RTL9602C (Lexra LX5281) based machines"). It selects:
+       ``SYS_HAS_CPU_R3000`` (the core runs as an R3000);
+       ``SYS_SUPPORTS_32BIT_KERNEL`` and ``SYS_SUPPORTS_BIG_ENDIAN``;
+       ``CPU_LEXRA_CACHE`` (the cache driver); ``IRQ_MIPS_CPU`` (the CPU's eight
+       lines, step 2 of ``arch_init_irq()``); ``SYS_HAS_EARLY_PRINTK``
+       (``prom_putchar()``); ``DMA_NONCOHERENT`` (device DMA is kept coherent by
+       cache maintenance); and ``HAVE_KERNEL_LZMA``, ``BOOT_RAW``, ``USE_OF``
+       and ``BUILTIN_DTB`` (the image format and the built-in tree).
+     - T
+     - The kernel builds and the board boots to a shell; bridged traffic passes
+       both ways for the DMA.
+   * - Whether device DMA snoops the CPU caches.
+     - I
+     - Not tested; the non-coherent handling is correct either way. Disabling
+       the maintenance on one buffer and comparing would show.
+   * - ``arch/mips/Kbuild.platforms`` adds ``rtl9602c/`` for
+       ``CONFIG_RTL9602C``, which builds the directory and reads its
+       ``Platform`` file. The ``Makefile`` builds ``setup.o``, ``irq.o`` and
+       ``timer.o``, and ``early_printk.o`` only with ``CONFIG_EARLY_PRINTK``.
+     - T
+     - The kernel builds.
+   * - ``Platform`` adds ``arch/mips/include/asm/mach-rtl9602c`` to the include
+       path, the MIPS convention by which a machine directory can override the
+       ``mach-generic`` headers. This directory holds only ``rtl9602c.h``, which
+       the code includes by its full path, so every generic header applies.
+     - T
+     - The kernel builds.
+
+Interrupt controller
+====================
+
+There are two levels. The CPU's eight interrupt lines are Linux interrupts 0 to
+7 (``mips_cpu_irq_init()``). Behind line 2 sits a second-level controller with
+64 sources, in two banks of 32, each with an enable and a status register. It
+has no acknowledge register: a status bit clears when the device that raised it
+is serviced, so the chip has only mask and unmask and every source is handled as
+level-triggered. Sources 32 to 63 have no line of their own; they reach the CPU
+through source 12 of the lower bank, which the driver enables once and never
+masks. The controller is described by the ``intc`` node
+(``realtek,rtl9602c-intc``); an interrupt specifier is one cell, the source
+number.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 40 50
+
+   * - Offset
+     - Register
+     - Meaning
+   * - ``+0x00``
+     - ``RTL9602C_INTC_EN(hw)`` for sources 0 to 31
+     - Enable; a set bit lets the source through.
+   * - ``+0x04``
+     - ``RTL9602C_INTC_EN(hw)`` for sources 32 to 63
+     - Enable.
+   * - ``+0x08``
+     - ``RTL9602C_INTC_STAT(hw)`` for sources 0 to 31
+     - Status; a bit is set while the source asserts, masked or not.
+   * - ``+0x0c``
+     - ``RTL9602C_INTC_STAT(hw)`` for sources 32 to 63
+     - Status.
+   * - ``+0x10``
+     - ``RTL9602C_INTC_ROUTE``
+     - Seven 32-bit registers (``RTL9602C_INTC_ROUTE_NUM``) of eight 4-bit
+       fields; a field names the CPU line of one source.
+
+``/proc/interrupts`` shows the sources in use by their number::
+
+    51: ...  rtl9602c-intc  43 rtl9602c-tick
+    57: ...  rtl9602c-intc  49 ttyS0
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 16 74
+
+   * - Source
+     - Linux interrupt
+     - Used by
+   * - 5
+     - 13
+     - The watchdog's phase-one warning, as named in the tree; never seen
+       asserted.
+   * - 8
+     - 16
+     - The switch's interrupt block.
+   * - 12
+     - 20
+     - The way to sources 32 to 63 (``RTL9602C_INTC_SRC_CASCADE``); not
+       dispatched.
+   * - 26
+     - 34
+     - The CPU port's DMA engine.
+   * - 43
+     - 51
+     - Timer 0, the tick (``RTL9602C_INTC_SRC_TIMER0``).
+   * - 49
+     - 57
+     - UART0, the console (``RTL9602C_INTC_SRC_UART0``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_INTC_BASE`` (``0x18003000``): the controller that delivers
+       this CPU's interrupts. The block at ``0x18003100`` has the same layout
+       but is a separate controller, not a mirror; programming it delivers
+       nothing here.
+     - M
+     - ``0xaaaaaaaa`` written at ``0x18003020`` and ``0x55555555`` at
+       ``0x18003120`` both read back; the tick arrives only once the driver uses
+       ``0x18003000``.
+   * - ``RTL9602C_INTC_EN(hw)``: enable register, ``+0x00`` for sources 0 to 31,
+       ``+0x04`` for 32 to 63; a set bit lets the source through.
+       ``RTL9602C_INTC_STAT(hw)``: status, ``+0x08`` and ``+0x0c``; a bit is set
+       while the source asserts, masked or not. ``RTL9602C_INTC_SRC_BIT(hw)`` is
+       ``BIT(hw % 32)``.
+     - M
+     - Timer 0 (source 43) sets bit 11 of the upper status word; the switch
+       (source 8) sets bit 8 of the lower one while its enable bit is left
+       clear.
+   * - There is no acknowledge register: a status bit clears when the device
+       that raised it is serviced. The chip therefore has only mask and unmask,
+       and every source is handled with ``handle_level_irq``.
+     - M
+     - Bit 8 clears when the switch's own interrupt status is acknowledged, and
+       stays set until then.
+   * - Sources 32 to 63 have no line of their own: they reach the CPU only when
+       their own enable bit and bit 12 (``RTL9602C_INTC_SRC_CASCADE``) of the
+       lower enable register are both set; lower status bit 12 is seen set
+       whenever an upper source is pending. The driver enables source 12 once at
+       init, never masks it, and removes it from the lower pending set instead
+       of dispatching it.
+     - M, T
+     - M: timer 0's source stays invisible to the CPU until bit 12 is enabled,
+       and lower status bit 12 is set while it is pending. T: the board boots to
+       a shell (tick and console both come through the cascade).
+   * - Routing: ``RTL9602C_INTC_ROUTE`` (``+0x10``) starts
+       ``RTL9602C_INTC_ROUTE_NUM`` (7) 32-bit registers of eight 4-bit fields; a
+       field names the CPU line for one source. The driver writes
+       ``RTL9602C_INTC_ROUTE_ALL(RTL9602C_INTC_CPU_IRQ)`` = ``0x22222222`` into
+       all seven, so every source is routed to CPU line 2 and the enable
+       registers alone decide what may interrupt.
+     - M
+     - Writing whole routing registers raises the line, and the CPU's Cause
+       register shows line 2 pending with the tick (``0x40000400``); the routing
+       registers read back ``0x22222222`` on the running kernel.
+   * - Which field belongs to which source, and which of the 64 sources the 56
+       fields cover.
+     - I
+     - Setting single fields moved no line. A per-field sweep with source 12
+       enabled and a known-good source pending would settle it.
+   * - Fixed numbering: SoC source *s* is Linux interrupt
+       ``RTL9602C_SOC_IRQ(s)`` = ``RTL9602C_SOC_IRQ_BASE`` (8) + *s*, for
+       ``RTL9602C_SOC_IRQS`` (64) sources, through a legacy domain. Fixed
+       because the console port is registered in ``plat_mem_setup()``, before
+       ``arch_init_irq()`` creates the domain. Build-time checks keep the range
+       clear of the CPU's lines (``MIPS_CPU_IRQ_BASE`` + 8 <= 8) and inside
+       ``NR_IRQS`` (256).
+     - M
+     - ``/proc/interrupts`` shows ``51: ... rtl9602c-intc 43 rtl9602c-tick`` and
+       ``57: ... 49 ttyS0``; every boot: ``NR_IRQS: 256``.
+   * - The domain is anchored to the device-tree node ``realtek,rtl9602c-intc``
+       and translates one cell, so a device node names its source number.
+     - M
+     - Every boot: the switch (source 8) gets interrupt 16 and the CPU port
+       (source 26) interrupt 34.
+   * - The pending set is status AND enable, per bank: a masked source can stay
+       asserted in status, and dispatching it would call a handler that asked
+       not to be called. Bank 0 is dispatched first (without bit 12), lowest
+       source first, then bank 1 as 32 + bit.
+     - T
+     - The board boots to a shell; bridged traffic passes both ways.
+   * - The enable registers are shared by 32 sources each, so mask and unmask
+       are a read-modify-write under one raw spinlock.
+     - T
+     - The board boots to a shell.
+   * - ``plat_irq_dispatch()`` takes Status.IM AND Cause.IP (bits 15:8) and
+       hands the highest pending CPU line to ``do_IRQ()``; with none pending it
+       counts a spurious interrupt. Line 2 carries the chained handler of the
+       second-level controller. The exception handler (``genex.S``) calls this
+       function for every interrupt, and every MIPS platform must provide it.
+     - M
+     - Without a dispatch that reaches ``do_IRQ()`` the tick never advances
+       ``jiffies``; with it the tick runs.
+
+``arch_init_irq()``, in order
+-----------------------------
+
+1. Build-time checks of the numbering. Purpose: the fixed numbers must not
+   collide. (T)
+2. ``mips_cpu_irq_init()``. Purpose: the CPU's eight lines as Linux interrupts 0
+   to 7. (T)
+3. Write 0 to both enable registers. Purpose: start from silence; nothing is
+   enabled that no driver asked for. (T)
+4. Write ``0x22222222`` to the seven routing registers. Purpose: every source on
+   CPU line 2. (M)
+5. Create the legacy domain (64 sources at 8), anchored to the
+   ``realtek,rtl9602c-intc`` node; panic if it cannot be created. Purpose: the
+   numbering and the device tree translation. (T)
+6. Enable source 12. Purpose: the way to sources 32 to 63. (M)
+7. Chain the handler to CPU line 2. Purpose: this unmasks line 2 in Status. (T)
+
+Timers and the tick
+===================
+
+MIPS I defines no CP0 Count and Compare registers, and the kernel uses none on
+this core. The tick comes from general-purpose timer 0 of the SoC, a periodic
+clockevent (``rtl9602c-tc0``) that counts the LX bus clock divided by 1000 and
+expires once per jiffy. There is no one-shot mode and no clocksource, so the
+kernel runs a periodic tick with jiffies as its clock. The boot loader leaves
+timer 1 running; the kernel neither uses nor stops it, and its interrupt stays
+disabled.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 34 56
+
+   * - Offset
+     - Register
+     - Meaning
+   * - ``+0x00``
+     - ``RTL9602C_TIMER_RELOAD``
+     - Counts per period.
+   * - ``+0x04``
+     - (current count)
+     - Unused.
+   * - ``+0x08``
+     - ``RTL9602C_TIMER_CTRL``
+     - Bit 28 ``RTL9602C_TIMER_CTRL_EN`` starts the timer; bit 24
+       ``RTL9602C_TIMER_CTRL_PERIODIC`` makes it reload and expire repeatedly;
+       the low bits hold the clock divisor.
+   * - ``+0x0c``
+     - ``RTL9602C_TIMER_IRQ``
+     - Bit 20 ``RTL9602C_TIMER_IRQ_EN`` lets the timer raise its interrupt; bit
+       16 ``RTL9602C_TIMER_IRQ_PENDING`` is set on expiry and cleared by writing
+       1 to it.
+
+Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
+``RTL9602C_TIMER_STRIDE`` (``0x10``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_TIMER_BASE`` (``0x18003200``) holds general-purpose timers
+       ``RTL9602C_TIMER_STRIDE`` (``0x10``) apart. Per timer:
+       ``RTL9602C_TIMER_RELOAD`` (``+0x00``, counts per period), a current count
+       at ``+0x04`` (unused), ``RTL9602C_TIMER_CTRL`` (``+0x08``),
+       ``RTL9602C_TIMER_IRQ`` (``+0x0c``).
+     - M
+     - At the boot loader prompt timer 1 (``+0x10``) is running with control
+       ``0x11000032``; timer 0 driven by hand with the driver's values counts
+       and sets its pending bit.
+   * - ``RTL9602C_TIMER_CTRL_EN`` (bit 28) starts the timer;
+       ``RTL9602C_TIMER_CTRL_PERIODIC`` (bit 24) makes it reload and expire
+       repeatedly; the low bits hold the clock divisor.
+     - M
+     - The boot loader's ``0x11000032`` is EN, PERIODIC, divisor 50. The running
+       tick's control register reads ``0x110003e8`` (divisor 1000) and its
+       reload register ``0x320`` (800).
+   * - The width of the divisor field.
+     - I
+     - 1000 (10 bits) works; the upper limit is not established. Writing larger
+       divisors and timing the period would show.
+   * - ``RTL9602C_TIMER_IRQ_EN`` (bit 20) lets the timer raise its interrupt;
+       ``RTL9602C_TIMER_IRQ_PENDING`` (bit 16) is set on expiry and cleared by
+       writing 1 to it.
+     - M
+     - The tick handler clears it this way and the tick runs (every boot); the
+       running tick's interrupt register reads ``0x00100000``.
+   * - The timers count the LX bus clock, ``RTL9602C_LX_HZ`` = 200 MHz, divided
+       by ``RTL9602C_TIMER_DIVISOR`` (1000): ``RTL9602C_TIMER_HZ`` = 200 kHz.
+       The tick reloads with ``RTL9602C_TIMER_HZ / HZ`` (800 at HZ = 250), one
+       expiry per jiffy.
+     - M
+     - The boot loader banner prints ``LX 200MHz``; the watchdog's expiry at
+       four settings matches 2^(25 + prescale) / 200 MHz within 10 ms; 252 tick
+       interrupts arrive between two reads of ``/proc/interrupts`` one second
+       apart.
+   * - Whether the timer divides by the divisor and the reload value exactly or
+       by one more.
+     - I
+     - A 0.1 % difference; timing a long interval against an outside reference
+       would show.
+   * - Timer 0 (``RTL9602C_TIMER_TICK_IDX``) drives the tick; its interrupt is
+       source 43 (``RTL9602C_INTC_SRC_TIMER0``, Linux 51), which reaches the CPU
+       only through the cascade.
+     - M
+     - Driving timer 0 raises bit 11 of the upper status word;
+       ``/proc/interrupts`` shows ``51: ... rtl9602c-intc 43 rtl9602c-tick``.
+   * - The clockevent ``rtl9602c-tc0`` is periodic only (no one-shot: there is
+       no ``set_next_event``), rating 300, bound to CPU 0 (``cpumask_of(0)``;
+       the clockevents core warns about ``cpu_all_mask``), registered at 200 kHz
+       with delta limits ``0x100``-``0xffffff``. The limits only matter in
+       one-shot mode. The kernel therefore runs a periodic tick.
+     - M, I
+     - M: with ``cpu_all_mask`` the clockevents core warns; with
+       ``cpumask_of(0)`` it does not. I: the counter's width behind ``0xffffff``
+       is not established; it matters only for a one-shot mode the driver does
+       not have.
+   * - The interrupt handler writes the interrupt register back with the pending
+       bit set (keeping the enable), then calls the clockevent handler. It does
+       not check the source: ``irq.c`` calls it only when source 43 is pending
+       and enabled.
+     - T
+     - The board boots to a shell.
+
+Timer sequences
+---------------
+
+Stopping the timer
+~~~~~~~~~~~~~~~~~~
+
+1. Write 0 to the control register. Purpose: stop counting. (T)
+2. Write ``RTL9602C_TIMER_IRQ_PENDING`` to the interrupt register. Purpose:
+   clear an expiry left pending; this also clears the interrupt enable. (T)
+
+Starting the timer
+~~~~~~~~~~~~~~~~~~
+
+1. Stop (above). Purpose: start from a known state. (T)
+2. Write the reload register: counts per period. (T)
+3. Write the control register with the divisor only. Purpose: set the rate while
+   the timer is stopped. (T)
+4. Write the interrupt register with ``RTL9602C_TIMER_IRQ_EN``. (T)
+5. Write the control register with the divisor, ``RTL9602C_TIMER_CTRL_EN`` and
+   ``RTL9602C_TIMER_CTRL_PERIODIC``. Purpose: start. (T)
+
+Setting up the tick
+~~~~~~~~~~~~~~~~~~~
+
+1. ``plat_time_init()`` maps the block and stops timer 0. Purpose: whatever
+   timer 0 was doing before the kernel is cleared. (T)
+2. Register the clockevent. Purpose: the clockevents core switches it to
+   periodic mode, which starts it with ``RTL9602C_TIMER_HZ / HZ`` counts;
+   shutdown stops it. (T)
+3. ``request_irq()`` on Linux interrupt 51 with ``IRQF_TIMER``. Purpose: it
+   enables source 43; with the cascade already open the tick reaches the CPU.
+   (T)
+
+UART and early console
+======================
+
+The console is UART0 at ``0x18002000``, a 16550A-compatible port whose registers
+sit 4 bytes apart and are accessed as bytes. The boot loader leaves it at 115200
+baud with divisor 109. Two pieces of platform code drive it. The early console
+(``early_printk.c``) polls the UART directly from ``setup_early_printk()`` until
+the 8250 driver takes over. ``rtl9602c_serial_init()`` (``setup.c``) registers
+the port with ``early_serial_setup()``, so that the 8250 driver owns the console
+and ``/dev/console``. The ``uart0`` node of the tree describes the same UART,
+but no driver binds it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_UART0_BASE`` (``0x18002000``) is a 16550A-compatible UART, the
+       console.
+     - M
+     - Every boot: ``ttyS0 at MMIO 0x18002000 (irq = 57, base_baud = 12556800)
+       is a 16550A`` (the 8250 core's own type detection).
+   * - 16550 register *n* sits at byte offset 4 x *n* (``RTL9602C_UART_SHIFT``
+       2) and is read and written with byte accesses at that address; on this
+       big-endian bus that byte is the most significant byte lane of the 32-bit
+       slot.
+     - M
+     - The early console and the 8250 driver both work this way on every boot.
+   * - Offsets the early console uses: ``RTL9602C_UART_THR`` ``0x00`` (transmit
+       holding, register 0), ``RTL9602C_UART_FCR`` ``0x08`` (FIFO control,
+       register 2), ``RTL9602C_UART_LSR`` ``0x14`` (line status, register 5).
+       ``UART_LSR_THRE`` is LSR bit 5, set when the transmit holding register
+       can take a character.
+     - P, M
+     - P: the 16550 register map (PC16550D data sheet). M: the byte access
+       above.
+   * - The boot loader leaves the UART at 115200 baud with divisor 109
+       (``RTL9602C_CONSOLE_BAUD``, the rate the console keeps).
+     - M
+     - Every boot: ``rtl9602c: uart clock 200908800 Hz, from the divisor 109 the
+       bootloader left (a 200000000 Hz bus would have given 107)``.
+   * - ``rtl9602c_serial_init()`` sets the port's clock to divisor x 16 x 115200
+       (200 908 800 Hz for 109), so that the 8250 core, which computes
+       ``DIV_ROUND_CLOSEST(uartclk, 16 x baud)``, programs exactly the divisor
+       that already works when it sets 115200. The figure preserves the divisor;
+       it is not a measurement of the UART's input clock. With a 200 MHz clock
+       the same rounding would also give 109 (200 000 000 / 1 843 200 = 108.5).
+     - T
+     - The console keeps working through the hand-over from the boot loader to
+       the 8250 driver (the board boots to a shell).
+   * - Reading the divisor: save LCR, set ``UART_LCR_DLAB``, read DLL and DLM
+       (``DLL | DLM << 8``), restore LCR. Nothing may be printed in between:
+       with DLAB set, register 0 is DLL, so a transmitted byte would become the
+       low divisor byte.
+     - P, T
+     - P: 16550 divisor latch access (DLAB, registers 0 and 1). T: the board
+       boots to a shell.
+   * - Fallback: a divisor of 0 (never programmed) or ``0xffff`` (nothing
+       answering) gives no reference, and the port then gets
+       ``RTL9602C_UART_CLK`` = ``RTL9602C_LX_HZ`` - 24 x 115200 = 197 235 200
+       Hz, for which the 8250 core's rounding gives divisor 107; a warning says
+       so. Divisor 107 works at 115200, but switching from the boot loader's 109
+       to it corrupts one character at the hand-over.
+     - M, I
+     - M: a kernel that sets 107 keeps a working console and loses one character
+       at the hand-over. I: the fallback path itself has never run, since the
+       boot loader always leaves 109; forcing a divisor of 0 would show.
+   * - The port is registered with ``early_serial_setup()``: line 0,
+       ``UPIO_MEM``, ``regshift`` 2, ``mapbase`` ``0x18002000``, ``membase`` its
+       KSEG1 address, interrupt ``RTL9602C_SOC_IRQ(RTL9602C_INTC_SRC_UART0)``
+       (57), ``UPF_BOOT_AUTOCONF`` (the 8250 core detects type and FIFO itself;
+       ``PORT_16550A`` and ``fifosize`` 1 are only starting values it replaces),
+       ``UPF_SKIP_TEST`` (the core's loopback test is skipped). It is registered
+       from ``plat_mem_setup()``, so that the port is in the 8250 driver's table
+       when ``console_init()`` runs. The early console is not a tty and cannot
+       back ``/dev/console``: without a registered port, init runs with no
+       output at all.
+     - M, T, I
+     - M: without the registration the kernel reaches ``Run /init`` and nothing
+       more appears; with it init's output appears. T: every boot prints
+       ``console [ttyS0] enabled``. I: whether this UART passes the loopback
+       test is not established; registering without ``UPF_SKIP_TEST`` would
+       show.
+   * - ``RTL9602C_INTC_SRC_UART0`` (49) is the UART's interrupt source, Linux
+       interrupt 57. With it, console input is interrupt-driven; polled at
+       115200, a pasted line overflowed the FIFO
+       (``ttyS0: N input overrun(s)``).
+     - M
+     - ``/proc/interrupts`` shows ``57: ... rtl9602c-intc 49 ttyS0`` with a
+       growing count; a 200-byte line written in one call comes back whole; the
+       same test fails on a build without the interrupt.
+   * - ``get_system_type()`` returns ``"Realtek RTL9602C"``, the ``system type``
+       line of ``/proc/cpuinfo``.
+     - M
+     - ``/proc/cpuinfo``.
+   * - ``uart0: serial@18002000``, ``compatible = "ns16550a"``,
+       ``reg = <0x18002000 0x100>``, ``reg-shift = <2>``,
+       ``reg-io-width = <1>``, ``clock-frequency = <200000000>``,
+       ``status = "okay"``: the console UART as described above. No driver binds
+       this node in this kernel: the port is registered by the platform code.
+       With 200 MHz the 8250 core would compute the boot loader's divisor, 109.
+     - T
+     - Every boot: ``ttyS0 at MMIO 0x18002000`` comes from the platform
+       registration (``irq = 57``); the node's own clock figure is not used.
+
+Early console, ``prom_putchar()``
+---------------------------------
+
+The MIPS early console calls ``prom_putchar()`` for every character from
+``setup_early_printk()`` onwards, before the 8250 driver exists; every boot
+shows ``printk: legacy bootconsole [early0] enabled``, then ``disabled`` when
+``ttyS0`` takes over. It must work where nothing else does, so it takes no lock
+and never waits without a bound.
+
+1. Read LSR (byte access) until ``UART_LSR_THRE`` is set, at most
+   ``RTL9602C_UART_TX_POLL_MAX`` (30000) times. Purpose: a character may be
+   written only into an empty holding register; the bound keeps a stuck
+   transmitter from hanging the boot at a point where nothing can report it (the
+   number is a software choice). (T)
+2. If THRE came: write the character to THR (byte access). (T)
+3. If the bound ran out: write ``RTL9602C_UART_FCR_TX_FIFO_RESET`` to FCR and
+   drop the character. Purpose: an attempt to free a wedged transmitter. (I)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_UART_FCR_TX_FIFO_RESET`` = ``UART_FCR_CLEAR_XMIT |
+       UART_FCR_TRIGGER_14`` (``0xc4``). Its FIFO-enable bit (bit 0) is clear.
+       On a 16550, writing FCR with bit 0 clear disables and empties both FIFOs
+       and leaves the other bits unprogrammed, so the write turns the FIFOs off
+       rather than resetting only the transmit FIFO. The 8250 driver reprograms
+       FCR when it takes the port.
+     - P, I
+     - P: PC16550D data sheet, FIFO control register, bit 0. I: whether the last
+       step above ever runs, and whether it frees this UART, is not observed;
+       stalling the transmitter and watching the console would show.
+
+Watchdog
+========
+
+The watchdog block divides the 200 MHz LX bus clock into ticks and counts them
+through two phases. The end of phase one sets a flag in the status register; the
+end of phase two carries out the expiry action, which the driver sets to a reset
+of the whole chip. Writing the kick bit restarts the count. The block is
+described by the ``wdt`` node (``realtek,rtl9602c-wdt``).
+
+The driver (``drivers/watchdog/rtl9602c_wdt.c``, ``CONFIG_RTL9602C_WATCHDOG``)
+arms the watchdog when it probes, with a 44 s deadline unless the device tree
+gives ``timeout-sec``, and marks it running in hardware. The watchdog core then
+feeds it until user space opens ``/dev/watchdog``: a slow user space is not
+reset, a kernel that stops running is. Once the device is open, user space must
+write to it, or the board resets at the deadline. The driver offers
+``WDIOF_SETTIMEOUT``, ``WDIOF_MAGICCLOSE`` and ``WDIOF_KEEPALIVEPING`` and no
+pretimeout. The platform code writes the same control register in two places, a
+clear at every boot and an arm on restart.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 34 56
+
+   * - Offset
+     - Register
+     - Fields
+   * - ``+0x00``
+     - ``RTL9602C_WDT_KEEPALIVE``
+     - Bit 31 ``RTL9602C_WDT_KEEPALIVE_KICK`` restarts the count.
+   * - ``+0x04``
+     - ``RTL9602C_WDT_IRQ_STAT``
+     - Bit 31 ``RTL9602C_WDT_IRQ_STAT_PHASE1``: phase one has expired.
+   * - ``+0x08``
+     - ``RTL9602C_WDT_CTRL``
+     - ``RTL9602C_WDT_CTRL_EN`` (bit 31), ``RTL9602C_WDT_CTRL_PRESCALE`` (bits
+       30:29), ``RTL9602C_WDT_CTRL_PHASE1`` (bits 26:22),
+       ``RTL9602C_WDT_CTRL_PHASE2`` (bits 19:15), ``RTL9602C_WDT_CTRL_ACTION``
+       (bits 1:0). All other bits hold nothing.
+
+The default control word ``0xe7800000`` is the enable (bit 31, ``0x80000000``),
+prescale 3 (``0x60000000``), phase one 30 (``0x07800000``), phase two 0 and
+action 0: 32 ticks of 1.342 s, which is 42.9 s.
+
+Registers and fields
+--------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Three 32-bit registers at physical ``0x18003260``, in the SoC peripheral
+       window (device tree ``reg = <0x18003260 0xc>``, compatible
+       ``realtek,rtl9602c-wdt``); the driver maps them as one resource.
+     - M
+     - Arming through ``+0x08`` resets the board on the predicted schedule;
+       opening ``/dev/watchdog`` and not writing to it resets the board.
+   * - ``RTL9602C_WDT_KEEPALIVE`` (``+0x00``): writing
+       ``RTL9602C_WDT_KEEPALIVE_KICK`` (bit 31) restarts the timeout count.
+     - M
+     - ``/dev/watchdog`` written every 3 s for 66 s against a 44 s timeout; the
+       board stays up.
+   * - ``RTL9602C_WDT_IRQ_STAT`` (``+0x04``): ``RTL9602C_WDT_IRQ_STAT_PHASE1``
+       (bit 31) sets when phase one expires and stays set until the expiry
+       action.
+     - M
+     - Control word ``0xe3830000`` (phase one 20.1 s, phase two 9.4 s), the
+       register sampled every 4 s: 0 up to t = 20 s, bit 31 alone at t = 24 s,
+       still set when the reset comes.
+   * - Writing ``RTL9602C_WDT_IRQ_STAT_PHASE1`` back to
+       ``RTL9602C_WDT_IRQ_STAT`` clears it (write one to clear). The interrupt
+       handler does this, but the handler has never run (see "The phase-one
+       interrupt").
+     - I
+     - Not load-bearing: the handler also disables its line after one
+       notification. Writing bit 31 back during phase two and reading the
+       register would settle it.
+   * - ``RTL9602C_WDT_CTRL`` (``+0x08``) holds what is written to its fields:
+       ``0xe7c00000`` reads back ``0xe7c00000``, ``0`` reads back ``0``.
+     - M
+     - Written and read back on the running board.
+   * - ``RTL9602C_WDT_CTRL_EN`` (bit 31): writing the control word with it set
+       arms the watchdog; writing it clear disarms it. (What a read shows after
+       a restart is another matter, see "What it recovers from, and what it does
+       not".)
+     - M
+     - An armed board whose control word is rewritten with bit 31 clear is still
+       running at 57 s on a 20 s deadline; every reset of the prescale test has
+       the bit set.
+   * - ``RTL9602C_WDT_CTRL_PRESCALE`` (bits 30:29,
+       ``0..RTL9602C_WDT_CTRL_PRESCALE_MAX`` = 3): one tick is
+       2^(``RTL9602C_WDT_TICK_SHIFT`` + PRESCALE) = 2^(25 + PRESCALE) cycles of
+       the watchdog clock: 0.168, 0.336, 0.671 and 1.342 s at 200 MHz.
+     - M
+     - Four control words armed and left: the enable alone (bit 31),
+       ``0xe0000000``, ``0x87c00000`` and ``0xe7c00000`` (prescale 0 and 3,
+       phase one 0 and 31, phase two 0). Time to the boot loader banner: 1.94,
+       4.29, 7.14 and 45.9 s, each (PHASE1 + 1 + PHASE2 + 1) ticks plus the same
+       1.60 s, which is the chip reset's own time to the banner.
+   * - ``RTL9602C_WDT_LX_HZ``: the clock the watchdog divides runs at 200 MHz.
+     - M
+     - It is the one rate that brings all four timings above into agreement, to
+       within 10 ms after the 1.60 s is taken off.
+   * - ``RTL9602C_WDT_CTRL_PHASE1`` (bits 26:22,
+       ``0..RTL9602C_WDT_CTRL_PHASE_MAX`` = 31): phase one lasts PHASE1 + 1
+       ticks.
+     - M
+     - The prescale test, the rows with phase one 0 and 31.
+   * - ``RTL9602C_WDT_CTRL_PHASE2`` (bits 19:15, 0..31): phase two lasts PHASE2
+       + 1 ticks after phase one, so the whole deadline is (PHASE1 + 1) +
+       (PHASE2 + 1) ticks.
+     - M
+     - ``0xe3830000`` (prescale 3, phase one 14, phase two 6): the phase-one
+       flag appears between 20 and 24 s (20.1 s predicted) and the reset about 9
+       s later (9.4 s predicted); the prescale test covers phase two 0.
+   * - ``RTL9602C_WDT_CTRL_ACTION`` (bits 1:0) =
+       ``RTL9602C_WDT_CTRL_ACTION_CHIP_RESET`` (0): expiry resets the whole
+       chip, the switch included. The switch's PTP clock, which keeps counting
+       through a restart via the CPU reset vector, starts again from zero, and
+       the boot loader brings the switch core up from scratch. The driver uses
+       this action because it needs nothing from the CPU: the failure the
+       watchdog is for is a kernel that no longer runs.
+     - M
+     - The switch's PTP seconds counter read before and after: 153 s to 21 s
+       across 233 s of wall clock for a watchdog expiry, against 80 s to 153 s
+       across 73 s for a restart through the reset vector. Repeatable through
+       the PHC, which reads the same counter.
+   * - Bits 28, 27, 21:20 and 14:2 of ``RTL9602C_WDT_CTRL`` hold nothing:
+       written as ones they read back as zero. The control word therefore has no
+       interrupt enable.
+     - M
+     - ``0x183ffffc`` ORed into a control write (phase two forced to 31 in the
+       same write); the word reads back ``0xc6cf8000``: enable, prescale 2,
+       phase one 27, phase two 31, every other bit zero.
+
+The deadline as the driver programs it
+--------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The driver computes a tick in whole milliseconds, 2^(25 + PRESCALE) /
+       (200 000 000 / 1000): 167, 335, 671 and 1342 ms. Ticks per second would
+       be zero at prescale 3, where a tick is longer than a second, and the next
+       division would divide by zero; dividing by the clock in kHz keeps the
+       numerator at most 2^28, within 32 bits.
+     - T
+     - The watchdog is armed at probe, fed and disarmed; the driver probes on
+       every boot. Dividing by ticks per second would divide by zero at prescale
+       3 and trap in probe.
+   * - The longest deadline at each prescale is 33 ticks (phase one 31, phase
+       two one tick): 5, 11, 22 and 44 s after truncation to whole seconds. The
+       driver offers 1..44 s and starts at 44 s.
+     - M
+     - Every boot: the probe line reports ``1..44 s, two-phase, full chip reset;
+       armed at 44 s``.
+   * - A deadline of S seconds with a warning of P seconds is programmed as: the
+       finest prescale whose longest deadline reaches S; total ticks = floor(S /
+       tick); phase-two ticks = floor(P / tick), or 1
+       (``RTL9602C_WDT_PHASE2_TICKS``) when P is 0, kept within 1..32; total
+       ticks at least phase two + 1; PHASE1 = total - phase-two ticks - 1, at
+       most 31; PHASE2 = phase-two ticks - 1; ACTION 0. One prescale serves both
+       phases.
+     - T
+     - The watchdog is armed at probe, fed and disarmed; the next two rows are
+       this rule measured.
+   * - The default 44 s programs prescale 3, phase one 30, phase two 0: 32
+       ticks, 42.9 s. With the enable the word reads ``0xe7800000``.
+     - M
+     - Control word read back on the running board; ``/dev/watchdog`` opened and
+       left unwritten: reset 44.55 s later (42.9 s plus 1.6 s to the banner).
+   * - A 30 s deadline with a 10 s warning programs ``0xe3830000``: prescale 3,
+       15 ticks of phase one (20.1 s) and 7 of phase two (9.4 s).
+     - M
+     - As the ``0xe3830000`` run above.
+
+Operating it
+------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Probe arms the watchdog and marks it running in hardware
+       (``WDOG_HW_RUNNING``); the watchdog core then feeds it from its own
+       worker until user space opens ``/dev/watchdog``. A slow user space is
+       therefore not reset; a kernel that stops running is.
+     - M
+     - After probe the control word reads ``0xe7800000``, enable on, and the
+       board runs over five minutes with nothing opening the device, against a
+       42.9 s deadline.
+   * - Opening ``/dev/watchdog`` and not writing to it resets the board at the
+       deadline; writing to it keeps the board up. This is also how a full chip
+       reset is obtained on demand.
+     - M
+     - Reset 44.55 s after the open; kept up for 66 s by a write every 3 s.
+   * - Reprogramming (a new timeout or warning) keeps ``RTL9602C_WDT_CTRL_EN``
+       as the register reads it, because the timeout fields and the enable share
+       one word. Composing the word afresh disarms a running watchdog silently,
+       and for the rest of the boot: the core arms it at probe and never calls
+       start again, while it goes on reporting the device active.
+     - M
+     - Two boots differing only in a ``WDIOC_SETTIMEOUT`` of 20 s after arming,
+       the device then closed without the magic character: with the word
+       composed afresh the board is alive at 57 s; with the enable kept, it
+       resets.
+   * - After reprogramming a running watchdog the driver writes
+       ``RTL9602C_WDT_KEEPALIVE_KICK``, so the new deadline counts from the
+       request. Whether a control write restarts the count by itself is not
+       established; without the kick, a deadline shorter than the count already
+       reached might expire at once.
+     - I
+     - Not load-bearing: the kick is always written. Rewriting the control word
+       of a running watchdog without a kick, to a deadline shorter than the
+       count reached, and timing the reset would settle it.
+   * - Start writes the control word, then ``RTL9602C_WDT_KEEPALIVE_KICK``, then
+       sets ``RTL9602C_WDT_CTRL_EN``, so counting starts from zero whatever
+       count an earlier owner left. Whether setting the enable clears the count
+       by itself is not established.
+     - I
+     - Not load-bearing: the kick precedes the enable. Stopping a watchdog
+       mid-count, re-enabling it without a kick and timing the reset would
+       settle it.
+   * - Stop clears ``RTL9602C_WDT_CTRL_EN`` by read-modify-write. The core stops
+       the watchdog on an orderly reboot and when the driver unregisters
+       (``watchdog_stop_on_reboot()``, ``watchdog_stop_on_unregister()``), so a
+       reboot is not cut short; the platform's restart arms it again afterwards
+       as a net.
+     - T
+     - The watchdog is disarmed; ``reboot`` completes.
+   * - Once phase one has expired the block refuses kicks, so the deadline
+       cannot move during phase two.
+     - I
+     - Not load-bearing: nothing relies on it. Kicking during phase two and
+       timing the reset would settle it.
+
+The phase-one interrupt
+-----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The device tree names source 5 of the SoC interrupt controller for the
+       phase-one flag (``interrupts = <5>`` on the ``wdt`` node). The driver
+       requests it as optional and runs without it; the probe line reports it
+       taken.
+     - I
+     - The number is unverified: nothing has ever been seen on it. Not
+       load-bearing. Enabling every source and watching the status registers
+       while phase one expires would settle it.
+   * - The block raises no interrupt: with ``RTL9602C_WDT_IRQ_STAT_PHASE1``
+       standing for seconds and source 5 enabled (``RTL9602C_INTC_EN`` of bank 0
+       read ``0x00001020``), both ``RTL9602C_INTC_STAT`` words read 0 at every
+       sample and no handler runs. The same status register does latch a source
+       that asserts (the switch's source 8 reads set until acknowledged).
+     - M
+     - The run of the flag test above, with the interrupt controller's enable
+       and status words read at each 4 s sample.
+   * - A pretimeout cannot be delivered, because the block raises no interrupt
+       when phase one ends. The driver therefore does not advertise
+       ``WDIOF_PRETIMEOUT``: its options are ``WDIOF_SETTIMEOUT``,
+       ``WDIOF_MAGICCLOSE`` and ``WDIOF_KEEPALIVEPING``. The core then never
+       sets a pretimeout, phase two is always one tick, and the handler and
+       ``set_pretimeout`` stay unused.
+     - T
+     - ``WDIOC_GETSUPPORT`` on ``/dev/watchdog`` reports no pretimeout option.
+   * - The handler, should the interrupt ever arrive: returns ``IRQ_NONE``
+       unless the phase-one flag is set; writes the flag back; disables its
+       line, so there is one notification per arming (a flag that did not clear
+       would otherwise repeat the interrupt at once); counts it; calls
+       ``watchdog_notify_pretimeout()``. Start enables the line again.
+     - I
+     - Never exercised, as the block raises no interrupt.
+   * - ``interrupts = <5>`` (parent ``intc``) on the ``wdt`` node: the phase-one
+       warning. Never seen asserted: with source 5 enabled and phase one expired
+       (the watchdog's own phase-one flag set for seconds), both status
+       registers of the interrupt controller stayed 0. The driver takes the
+       interrupt if the tree gives one and offers no pretimeout.
+     - I
+     - Measured as described. Whether source 5 is the right number, or whether
+       the block raises any source at all, would be settled by enabling every
+       source and watching the status registers while phase one expires.
+
+What it recovers from, and what it does not
+-------------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The watchdog does not reset a CPU stalled in a bus read that is never
+       answered. Armed and fed by the core (control word ``0xe7800000``), a read
+       of an unanswered address in the PON block stalls the CPU mid-load, and no
+       reset comes in 11 minutes, about 15 deadlines; only a power cycle
+       recovers the board. What it covers is a kernel that stops feeding it, not
+       a CPU held on the bus.
+     - M
+     - On the console: silence from the stalled read onward, no boot loader
+       banner for 11 minutes.
+   * - Whether, during such a stall, the count stops or the count runs and the
+       reset cannot be delivered is not established.
+     - I
+     - Not load-bearing. It would need the phase-one flag read after recovery,
+       and the flag does not survive the power cycle that recovery takes.
+   * - The chip reset leaves the switch's table memories as they were: after a
+       watchdog reset the GPON MAC's Alloc-ID, Port-ID and multicast tables
+       still hold entries from before it. The drivers empty such tables at
+       bring-up.
+     - M
+     - The tables read through the driver's debugfs view after a watchdog reset
+       and a fresh bring-up.
+   * - After a restart through the CPU reset vector with the watchdog armed, the
+       next kernel reads ``RTL9602C_WDT_CTRL`` as 0 while the count armed before
+       the restart still resets the board 47 s after it; writing 0 to the
+       register stops it. The boot loader does neither. The platform writes 0 at
+       every boot for this reason, so the driver finds the watchdog stopped at
+       probe.
+     - M
+     - Two boots without the write are reset 47.0 and 46.9 s after the restart;
+       a boot with 0 written by hand, and one with the platform's write, run
+       past that mark.
+
+Platform code and the watchdog
+------------------------------
+
+The platform code writes the control register in two places only:
+``plat_mem_setup()`` clears it, and the restart path arms it as a net. Both use
+``RTL9602C_WDT_CTRL_ADDR`` and go through KSEG1.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_WDT_CTRL_ADDR`` (``0x18003268``) is the watchdog control
+       register (``RTL9602C_WDT_CTRL`` in the watchdog driver). It reads back
+       what was written.
+     - M
+     - ``0xe7c00000`` and ``0`` both read back.
+   * - ``RTL9602C_WDT_CTRL_ARM_MAX`` (``0xe7c00000``) is
+       ``RTL9602C_WDT_CTRL_EN`` set, ``RTL9602C_WDT_CTRL_PRESCALE`` 3 (2^28 LX
+       clocks, 1.342 s per tick), ``RTL9602C_WDT_CTRL_PHASE1`` 31,
+       ``RTL9602C_WDT_CTRL_PHASE2`` 0, ``RTL9602C_WDT_CTRL_ACTION`` 0 (full chip
+       reset): the chip resets (31 + 1 + 0 + 1) x 1.342 s = 44.3 s after the
+       write.
+     - M
+     - 45.9 s from arming to the boot loader's first output, about 1.6 s of it
+       the reset's own path.
+   * - ``plat_mem_setup()`` writes 0 to the control register before anything
+       else, so a watchdog armed by a previous kernel's restart (or by the boot
+       loader's one-shot boot mode) does not reset a kernel that booted. Until
+       the watchdog driver arms it again at probe, nothing watches the boot.
+     - M, I
+     - M: with the write in place the board survives (see the row on the count
+       that outlives a restart). I: that a hang between this write and the
+       watchdog driver's probe goes unrecovered is not observed; a deliberate
+       hang in that stretch during a one-shot boot would show.
+
+Kconfig and device tree
+-----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``CONFIG_RTL9602C_WATCHDOG``: tristate, depends on
+       ``MIPS || COMPILE_TEST``, selects ``WATCHDOG_CORE``; object
+       ``rtl9602c_wdt.o``.
+     - T
+     - The kernel builds with it and the driver probes (boot log).
+   * - ``wdt: watchdog@18003260``, ``compatible = "realtek,rtl9602c-wdt"``,
+       ``reg = <0x18003260 0xc>``: three 32-bit registers, keepalive, interrupt
+       status and control.
+     - T
+     - The watchdog is armed at probe, fed and disarmed.
+
+Watchdog sequences
+------------------
+
+Probe
+~~~~~
+
+1. Map the three registers. (T)
+2. Request the phase-one interrupt if the device tree gives one; on failure,
+   warn and go on without it. Purpose: the line is live before the counter is.
+   (I)
+3. Set the range 1..44 s and the default 44 s, then apply a ``timeout-sec`` from
+   the device tree if there is one. (T)
+4. Start (below), then set ``WDOG_HW_RUNNING``. Purpose: the core feeds the
+   watchdog until user space takes over. (M)
+5. Ask the core to stop the watchdog on reboot and on unregister. (T)
+6. Print the range, the armed timeout and whether the interrupt was taken;
+   register the device. (T)
+
+Start the watchdog
+~~~~~~~~~~~~~~~~~~
+
+1. Program the control word for the timeout and the (always zero) pretimeout,
+   keeping the enable as read. (M)
+2. Write ``RTL9602C_WDT_KEEPALIVE_KICK``. Purpose: count from zero. (I)
+3. Read ``RTL9602C_WDT_CTRL`` and write it back with ``RTL9602C_WDT_CTRL_EN``.
+   Purpose: arm. (M)
+4. If the interrupt was masked after a notification, enable it again. (I)
+
+Set timeout, ping and stop
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- Set timeout (and set pretimeout, which the core never calls): store the value;
+  if the watchdog is active, program the control word keeping the enable (M) and
+  write the kick (I).
+- Ping: write ``RTL9602C_WDT_KEEPALIVE_KICK``. (M)
+- Stop: clear ``RTL9602C_WDT_CTRL_EN`` by read-modify-write. (T)
+
+GPIO and pad control
+====================
+
+The SoC's GPIO bank is driven by the Otto GPIO driver
+(``drivers/gpio/gpio-realtek-otto.c``, ``CONFIG_GPIO_REALTEK_OTTO``), unchanged
+apart from one match entry for ``realtek,rtl9602c-gpio``. On this board one line
+is used: line 13, taken to be the laser driver's TX_DISABLE input (not verified,
+see the facts below), which the switch driver requests through
+``tx-disable-gpios`` on the ``switch`` node. Two pad-function registers in the
+switch register window route pins to their functions:
+``RTL9602C_PADMUX_GPIO_EN`` selects GPIO use per pin, and
+``RTL9602C_PADMUX_FUNC_EN`` enables other functions, the I2C masters among them.
+
+The GPIO bank
+-------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The bank is at physical ``0x18003300``, ``0x1c`` bytes (device tree node
+       ``gpio@18003300``, ``reg = <0x18003300 0x1c>``), with the register layout
+       the upstream Otto GPIO driver expects: direction at ``+0x08`` (a set bit
+       makes the line an output), data at ``+0x0c`` (the level driven),
+       interrupt status and masks from ``+0x10``. The driver uses direction and
+       data only.
+     - I
+     - No access to this bank has been observed to act on a pin. The check that
+       the laser is off before O3 and that TX_DISABLE is honoured settles it.
+   * - Line N is bit N of a native big-endian 32-bit word, with no byte
+       swapping. The RTL9602C entry therefore passes ``GPIO_PORTS_REVERSED``,
+       which selects plain ``ioread32()``/``iowrite32()`` access (and, for the
+       interrupt masks, two bits per line at bit 2N). The byte-swapped access of
+       the generic ``realtek,otto-gpio`` entry would put line 13's value on bit
+       21.
+     - I
+     - As above: the TX_DISABLE check.
+   * - No GPIO line is used as an interrupt on this board: the RTL9602C entry
+       passes ``GPIO_INTERRUPTS_DISABLED``, and the device tree gives the bank
+       no interrupt.
+     - T
+     - Boot: the bank registers without an interrupt chip and nothing asks for a
+       GPIO interrupt.
+   * - The device tree declares 32 lines (``ngpios = <32>``). Only line 13 is
+       used.
+     - I
+     - Not load-bearing beyond line 13. The width of the bank is not
+       established.
+   * - The node's compatible list is ``realtek,rtl9602c-gpio``,
+       ``realtek,otto-gpio``; the driver has an entry for the first, and its
+       flags apply. ``GPIO_REALTEK_OTTO`` depends on
+       ``MACH_REALTEK_RTL || RTL9602C``, so the driver builds for this platform.
+     - T
+     - The switch driver probes: it takes its TX_DISABLE line from this bank at
+       probe, and a missing provider would defer or fail it.
+   * - ``gpio0: gpio@18003300``, ``compatible = "realtek,rtl9602c-gpio",
+       "realtek,otto-gpio"``, ``reg = <0x18003300 0x1c>``, ``gpio-controller``,
+       ``#gpio-cells = <2>``, ``ngpios = <32>``; no interrupt properties: no
+       GPIO interrupt is used on this board.
+     - T
+     - Laser off before O3, TX_DISABLE honoured.
+   * - Line 13 is the laser's TX_DISABLE input, high = transmitter off
+       (``tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>`` on the switch node).
+       The switch driver requests it asserted (``GPIOD_OUT_HIGH``), so no light
+       leaves before anything else runs, and then drives it from the ONU state:
+       asserted below O3, released from O3 on. A board whose device tree has no
+       such line skips all of this.
+     - I
+     - Half supported: the ONU reaches O5 on an OLT with the line released from
+       O3, so the released level does not block transmission. That the line
+       reaches the laser and that high cuts the light are not established: with
+       burst enable forced, the module's own transmit-power reading must fall to
+       zero while the line is high.
+
+Pad control
+-----------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PADMUX_GPIO_EN`` (switch window ``+0x000048``, physical
+       ``0x1b000048``): a set bit N routes pad N to its GPIO function.
+     - I
+     - The TX_DISABLE check settles it for pad 13; a run with the bit clear
+       would show whether it is needed at all.
+   * - ``RTL9602C_PADMUX_GPIO_EN_TX_DISABLE`` = 13 is both the GPIO line of
+       TX_DISABLE and its bit in ``RTL9602C_PADMUX_GPIO_EN``.
+     - I
+     - The TX_DISABLE check.
+   * - Every time the switch driver drives TX_DISABLE it first sets that bit by
+       read-modify-write (only bit 13 changes, and setting it again is
+       harmless), then sets the line through gpiolib, because gpiolib owns
+       direction and level but not the pad function, which lives in the switch
+       window.
+     - T
+     - The TX_DISABLE check; the ONU state changes of an activation run this
+       path on every transition.
+   * - Offset ``0x48`` of the switch window has nothing to do with offset
+       ``0x48`` of the CPU port block, which is the CPU-tag engine control at
+       physical ``0x18012048``.
+     - T
+     - Both drivers use their own offset: the CPU tag works while this register
+       only ever gains bit 13.
+   * - ``RTL9602C_PADMUX_FUNC_EN`` (switch window ``+0x023018``): per-function
+       pad enables. ``RTL9602C_PADMUX_FUNC_EN_I2C`` =
+       ``BIT(13 + RTL9602C_I2C_OPTICS_MASTER)`` = bit 14 for master 1, the
+       master wired to the optics. With it clear, a command on master 1 never
+       starts: it completes with no busy, no acknowledge and zero data. Set, the
+       master runs at once. The driver sets it by read-modify-write before it
+       registers the I2C adapter.
+     - M
+     - Commands issued on master 1 before and after setting bit 14. The optics
+       diagnostics read through hwmon depend on it.
+   * - Bit 13 of ``RTL9602C_PADMUX_FUNC_EN`` is master 0's enable, as the
+       ``BIT(13 + master)`` form says.
+     - I
+     - Not used: the driver drives master 1 only. Enabling master 0 and issuing
+       a command on it would settle it.
+   * - The other bits of ``RTL9602C_PADMUX_FUNC_EN`` enable other pad functions.
+       On a running board the word reads ``0x01026040``: bits 6, 13, 14 and 24
+       set, of which the driver has set only 14. Which functions bits 6 and 24
+       enable is not established. The driver changes only its own bit, so it
+       depends on none of the others; a whole-word write could take away a pad
+       function in use.
+     - M
+     - Register read on a running board.
+
+GPIO sequences
+--------------
+
+TX_DISABLE, at each ONU state change
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This sequence belongs to the switch driver (``rtl9602c_l_txdis_gpio()`` in
+``rtl9602c-optics.c``).
+
+1. If the device tree gave no TX_DISABLE line, stop. (T)
+2. Set bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` by read-modify-write. Purpose: the
+   pad is a GPIO. (I)
+3. ``gpiod_set_value_cansleep()``: asserted below O3, released from O3 on; the
+   flags of the device tree turn "asserted" into a high level. (I)
+
+I2C master enable, before the adapter is registered
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Set ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
+   read-modify-write. Purpose: without it the master ignores every command. (M)
+
+Flash window and partitions
+===========================
+
+The SoC maps the whole 8 MiB SPI NOR flash into physical memory at
+``0x14000000``-``0x147fffff`` for reading. The tree describes it as
+``flash@14000000`` with ``compatible = "mtd-rom"``, which the physmap driver
+probes as ``map_rom``, a read-only mapping: nothing in the flash can be written
+from Linux. Its partitions are the boot loader's own layout. The kernel and the
+root filesystem of two banks sit in ``k0`` and ``r0`` (bank 0, where this system
+is installed) and ``k1`` and ``r1`` (bank 1, the firmware the board shipped
+with, kept as the fallback).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 12 22 46 10
+
+   * - Partition
+     - Offset
+     - Size
+     - Holds
+     - ``read-only``
+   * - ``boot``
+     - ``0x000000``
+     - 256 KiB (``0x040000``)
+     - The boot loader.
+     - yes
+   * - ``env``
+     - ``0x040000``
+     - 8 KiB (``0x002000``)
+     - The boot loader's environment.
+     - yes
+   * - ``env2``
+     - ``0x042000``
+     - 8 KiB (``0x002000``)
+     - Its redundant copy.
+     - yes
+   * - ``config``
+     - ``0x044000``
+     - 240 KiB (``0x03c000``)
+     - The configuration store of the shipped firmware, a big-endian JFFS2
+       image; this system does not mount it.
+     - yes
+   * - ``k0``
+     - ``0x080000``
+     - 1328 KiB (``0x14c000``)
+     - Bank 0 kernel, where this system is installed.
+     - no
+   * - ``r0``
+     - ``0x1cc000``
+     - 2512 KiB (``0x274000``)
+     - Bank 0 root filesystem.
+     - no
+   * - ``k1``
+     - ``0x440000``
+     - 1328 KiB (``0x14c000``)
+     - Bank 1 kernel: the shipped firmware, the fallback.
+     - yes
+   * - ``r1``
+     - ``0x58c000``
+     - 2512 KiB (``0x274000``)
+     - Bank 1 root filesystem.
+     - yes
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - 8 MiB of SPI NOR flash, JEDEC ID C2 20 17 (manufacturer C2: Macronix; a
+       64 Mbit part), which the SoC maps whole into physical memory at
+       ``0x14000000``-``0x147fffff`` for reading. The boot loader starts the
+       kernel of a bank from this window (see "Boot contract").
+     - M, P
+     - M: the boot loader's banner reports the ID, 8 MB and a 16-bit
+       memory-mapped mode; read through the window: a jump instruction at offset
+       0 (the boot loader), the image magic ``0x27051956`` at ``0x080000`` and
+       at ``0x440000`` (the two kernels), erased bytes at the end; byte and word
+       reads both work, cached and uncached. P: JEDEC JEP106 (manufacturer
+       code).
+   * - ``flash@14000000``, at the root of the tree: ``compatible = "mtd-rom"``,
+       which the physmap driver probes as ``map_rom``, a read-only mapping:
+       every partition's ``type`` in ``/sys/class/mtd/`` reads ``rom``, and
+       nothing in the flash can be written from Linux, whatever the partitions'
+       flags say. ``reg = <0x14000000 0x800000>`` is the whole chip.
+       ``bank-width = <2>``: ``map_rom`` reads the window 16 bits at a time
+       (``MTD_MAP_BANK_WIDTH_2`` must be built).
+     - M, T
+     - M: with the flash registered through a platform device that uses the same
+       ``map_rom`` probe, the squashfs root in ``r0`` mounts and runs through it
+       at bank width 2, and ``type`` reads ``rom`` for all eight partitions. T:
+       the board boots to a shell with the same mapping through the ``mtd-rom``
+       node; that check has not yet run on this tree.
+   * - The partitions (``partitions``, ``compatible = "fixed-partitions"``) are
+       the boot loader's own layout, offsets and sizes as its environment lists
+       them. The eight cover the chip exactly (``0x58c000`` + ``0x274000`` =
+       ``0x800000``).
+     - M
+     - The boot loader's environment, printed at its prompt: the same offsets
+       and sizes.
+   * - Numbering: the partitions register in tree order as mtd0 to mtd7, block
+       devices 31:0 to 31:7. The boot loader's arguments name the root
+       filesystem by number: ``root=31:5`` (``r0``) for bank 0, ``root=31:7``
+       (``r1``) for bank 1. The order of the nodes is therefore part of the boot
+       contract.
+     - T
+     - The board boots to a shell with its root from ``r0`` (the check has not
+       yet run on this tree); with the same numbering the log shows ``VFS:
+       Mounted root (squashfs filesystem) readonly on device 31:5``.
+   * - What the partitions hold: ``boot`` is what the CPU's reset vector runs;
+       ``env`` holds the boot loader's settings; ``config`` is JFFS2
+       (big-endian, zlib-compressed files); ``k1`` starts with a legacy U-Boot
+       image header (magic ``0x27051956``, LZMA).
+     - M
+     - Every reset reaches the boot loader; ``config`` read with ``dd`` and
+       walked as JFFS2; ``k1``'s header read and its magic checked.
+   * - ``read-only`` marks every partition outside bank 0, so that a writable
+       flash driver could never write the boot loader, its environment, the
+       configuration store or the fallback bank; bank 0 stays writable because
+       this system is installed there. With ``map_rom`` nothing is writable
+       today, so the flags change nothing yet.
+     - I
+     - Untested until a writable flash driver exists; a write to a marked
+       partition must then fail.
+   * - ``k0`` bounds a kernel installed in bank 0 to 1 359 872 bytes. The
+       development image, which carries its user space, is larger and boots only
+       from RAM (see "RAM boot over TFTP").
+     - M
+     - The uImage's size against the partition's; the boot loader's
+       ``Bytes transferred =`` line during a RAM boot.
+
+Board DFP-34X-2C3
+=================
+
+The board
+---------
+
+The switch's SerDes lane runs to the SFP edge connector, and so to the host's
+cage. The CPU reaches the switch through the CPU port's DMA engine, and the GPON
+MAC and PON MAC sit behind the PON port. The laser driver IC is a separate part.
+
+The wiring, as the device tree has it::
+
+   host cage
+      |  SFP edge connector, SerDes lane, 2500BASE-X
+   port 0 (sfp)
+   +--------------+  port 3 (CPU)   +---------------+
+   |    switch    |-----------------| DMA engine    |--- LX5281 CPU
+   +--------------+                 | (eth)         |
+   port 2 (pon)                     +---------------+
+      |
+   GPON MAC, PON MAC
+      |
+   laser driver IC   (I2C master 1; TX_DISABLE taken to be GPIO 13)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The board is an ODI DFP-34X-2C3, a GPON ONU in an SFP module, built on an
+       RTL9602C. The tree says so: ``model = "ODI DFP-34X-2C3"``, ``compatible =
+       "odi,dfp-34x-2c3", "realtek,rtl9602c"``; the SoC file's root carries
+       ``"realtek,rtl9602c"`` on its own.
+     - M
+     - The chip's model word (``RTL9602C_CHIP_MODEL``, in the switch register
+       window) decodes to RTL9602C: read at the boot loader prompt, and reported
+       by ``devlink dev info``.
+   * - The stick's only electrical data interface is the SFP edge connector,
+       wired to the switch's SerDes (port 0), which runs 2500BASE-X to the
+       host's cage.
+     - M
+     - Every boot with the module in a host cage:
+       ``sfp: Link is Up - 2.5Gbps/Full``; the link comes up and recovers after
+       host-side link bounces.
+   * - The optical side: the GPON MAC drives a separate laser-driver IC, which
+       the SoC reaches over its I2C master 1. Its hard transmit-disable input is
+       taken to be SoC GPIO 13 (see "GPIO and pad control"; not verified).
+     - M
+     - The optics diagnostics read through hwmon over master 1 (see "GPIO and
+       pad control").
+   * - Switch port 1 exists in the silicon; nothing on this board is known to
+       connect to it, and the tree does not describe it.
+     - I
+     - Not measured; the board has no connector for it.
+
+DRAM and reserved memory
+------------------------
+
+The board has one bank of 32 MiB of DRAM at physical 0. The PON MAC keeps its
+packet buffer in two areas of DRAM, one per direction; the tree reserves them
+with ``no-map`` so the kernel never allocates or maps them, and the switch
+driver finds them by name through its ``memory-region`` property.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - DRAM: one bank of 32 MiB at physical 0 (DDR2 according to the boot
+       loader). ``memory@0`` has ``reg = <0x00000000 0x02000000>``; the platform
+       code adds the same range itself (``RTL9602C_RAM_BASE``,
+       ``RTL9602C_RAM_SIZE``). Memory tests must go through KSEG1: through KSEG0
+       the data cache answers for addresses where there is no memory.
+     - M
+     - At the boot loader prompt, through KSEG1: a word written at
+       ``0x01fffff0`` reads back, one written at ``0x02000000`` does not (a
+       different value comes back); the boot loader reports 32 MB; every boot:
+       ``Normal [mem 0x0000000000000000-0x0000000001ffffff]``.
+   * - ``reserved-memory`` (``#address-cells`` and ``#size-cells`` 1,
+       ``ranges``) holds the PON MAC's packet-buffer areas in DRAM, one per
+       direction: ``pbo_us: pbo@1eff000``, ``reg = <0x01eff000 0x101000>``, and
+       ``pbo_ds: pbo@16ff000``, ``reg = <0x016ff000 0x101000>``. The PON MAC
+       reads and writes them by DMA; the CPU never touches them. ``no-map``
+       takes them out of the kernel's memory entirely, so the kernel neither
+       allocates nor maps them.
+     - M, T
+     - M, every boot: ``OF: reserved mem: 0x016ff000..0x017fffff (1028 KiB)
+       nomap non-reusable pbo@16ff000`` and the same for ``0x01eff000``; the
+       switch driver reports ``buffers at 0x01eff000 and 0x016ff000``. T:
+       downstream lock, time to O5 and hold time on an OLT, and OMCI both ways
+       over ``/dev/pon0omci0`` (GEM traffic and OMCI through the PON MAC).
+   * - ``&switch { memory-region = <&pbo_us>, <&pbo_ds>; memory-region-names =
+       "pbo-us", "pbo-ds"; }``. The switch driver finds the regions by name,
+       requires each to be at least ``RTL9602C_PBO_DRAM`` (1 MiB) and gives the
+       PON MAC each region's start. Without both regions, or without
+       ``realtek,sysctl``, the switch works and the PON MAC stays off.
+     - T, I
+     - T: downstream lock, time to O5 and hold time on an OLT, and OMCI both
+       ways. I: running without them is not exercised; booting a tree without
+       them would show.
+   * - Each region is 1 MiB + 4 KiB; the driver uses the first 1 MiB.
+     - I
+     - Whether the PON MAC touches anything past 1 MiB is not established;
+       shrinking the regions to ``0x100000`` and repeating the downstream-lock
+       and OMCI checks would show.
+   * - Placement: the upstream region ends at the top of DRAM (``0x01eff000`` +
+       ``0x101000`` = ``0x02000000``) and the downstream region 8 MiB lower (it
+       ends at ``0x01800000``), so the two lie in different 8 MiB quarters of
+       DRAM.
+     - I
+     - That the placement matters is not established. The memory controller's
+       configuration register (``0x18001004``) reads ``0x11211000``; which bank
+       size that encodes is not verified. Moving the downstream region into the
+       upstream region's quarter and repeating the downstream-lock and OMCI
+       checks would show.
+
+The device tree
+---------------
+
+``rtl9602c.dtsi`` describes the SoC and ``dfp-34x-2c3.dts`` the board. The nodes
+of the watchdog, GPIO bank and console UART are described in their own chapters;
+the rest are here.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Root: ``#address-cells = <1>``, ``#size-cells = <1>``: 32-bit physical
+       addresses and sizes. ``cpus`` holds one ``cpu@0``
+       (``device_type = "cpu"``, ``compatible = "lexra,lx5281"``,
+       ``reg = <0>``): one core, which the kernel identifies from its PRId (see
+       "CPU core"), not from this node.
+     - T
+     - The board boots to a shell.
+   * - ``cpuintc: interrupt-controller``, ``compatible =
+       "mti,cpu-interrupt-controller"``, ``interrupt-controller``,
+       ``#interrupt-cells = <1>``, ``#address-cells = <0>``: the CPU's eight
+       interrupt lines. The platform code creates their domain with
+       ``mips_cpu_irq_init()`` without this node, so nothing can resolve an
+       interrupt against it; its one reference is the ``interrupt-parent`` of
+       ``intc``.
+     - T
+     - Every interrupt the board uses is named against ``intc`` and resolves
+       (the board boots to a shell).
+   * - ``soc``: ``compatible = "simple-bus"``, ``#address-cells`` and
+       ``#size-cells`` 1, empty ``ranges`` (child addresses are physical). The
+       platform code populates it and the root-level ``flash`` node at
+       ``arch_initcall``.
+     - T
+     - The board boots to a shell.
+   * - ``sysctl: syscon@18000000``, ``compatible = "realtek,rtl9602c-sysctl",
+       "syscon"``, ``reg = <0x18000000 0x1000>``: the system controller (SoC
+       state and the enables of on-chip blocks). Nothing else in the tree maps
+       this page. The switch driver reaches it as a syscon regmap through its
+       ``realtek,sysctl`` phandle and sets ``RTL9602C_SYSCTL_SOC_STATE_READY``
+       and ``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF`` before its first access to the
+       PON MAC.
+     - T
+     - Downstream lock, time to O5 and hold time on an OLT, and OMCI both ways.
+   * - ``intc: interrupt-controller@18003000``, ``compatible =
+       "realtek,rtl9602c-intc"``, ``reg = <0x18003000 0x100>``,
+       ``interrupt-controller``, ``#interrupt-cells = <1>`` (the cell is the
+       source number, 0 to 63), ``interrupt-parent = <&cpuintc>``, no
+       ``interrupts``: the CPU line it uses (2) is fixed in the platform code.
+       The window stops at ``0x100`` because ``0x18003100`` is a different
+       controller; the watchdog follows in the same page at ``0x260``. The
+       platform code finds this node by its compatible to anchor the interrupt
+       domain.
+     - T
+     - Every boot: the switch (source 8) gets Linux interrupt 16, the CPU port
+       (source 26) interrupt 34.
+   * - ``eth: ethernet@18012000``, ``compatible = "realtek,rtl9602c-eth"``,
+       ``reg = <0x18012000 0x1440>`` (the ring registers),
+       ``interrupt-parent = <&intc>``, ``interrupts = <26>``.
+     - M, T
+     - M: with frames arriving, bit 26 of the lower status register appears when
+       the CPU port's interrupt is enabled; every boot: ``interrupt 34``. T:
+       bridged traffic passes both ways, sourced from the host.
+   * - ``switch: switch@1b000000``, ``compatible = "realtek,rtl9602c-switch"``,
+       ``reg = <0x1b000000 0xf10000>``: the switch and PON register file, which
+       ends at ``0xf0d438``; the driver reaches the counters, the GPON MAC, the
+       L3/NAT engine and the PON MAC inside it. On MIPS ``ioremap()`` of a
+       physical address below 512 MiB returns the KSEG1 alias, so the size does
+       not limit what the driver reaches; it states the extent.
+     - M, T
+     - M: with ``0x30000`` declared the driver read counters at ``+0x0323ac``
+       correctly. T: bridged traffic passes both ways; downstream lock, time to
+       O5 and hold time on an OLT.
+   * - ``interrupts = <8>`` (parent ``intc``) on the switch: one source for all
+       the switch's own interrupts, in the lower bank (no cascade).
+     - M
+     - Enabling one source in the switch's own interrupt mask makes bit 8 of the
+       lower status register appear, and masking it removes it; every boot:
+       ``interrupt 16``.
+   * - ``realtek,sysctl = <&sysctl>`` on the switch: the system controller
+       above.
+     - T
+     - Downstream lock, time to O5 and hold time on an OLT.
+
+.. note::
+
+   The switch driver registers its I2C adapter with the switch's own node, so
+   the I2C core tries to instantiate the node's ``ports`` child as an I2C device
+   and logs ``of_i2c: modalias failure on /soc/switch@1b000000/ports`` and
+   ``Failed to create I2C device`` on every boot.
+
+The switch's ports
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``port@0``: ``label = "sfp"``, ``phy-mode = "2500base-x"``, ``fixed-link
+       { speed = <2500>; full-duplex; }``: the SerDes to the host, with no PHY
+       and nothing to negotiate. A fixed link and not in-band status: phylink
+       refuses both together (``can't use both fixed-link and in-band-status``,
+       ``-EINVAL``). The switch driver reports the link's real state through
+       phylink's fixed-state callback.
+     - M, T
+     - M: every boot, ``sfp: Link is Up - 2.5Gbps/Full``. T: the SerDes link to
+       the host comes up and recovers after host-side link bounces.
+   * - ``port@2``: ``label = "pon"``, ``phy-mode = "internal"``, fixed link 1000
+       full duplex: the PON MAC's port.
+     - M, T
+     - M: every boot, ``pon: Link is Up - 1Gbps/Full``. T: downstream lock, time
+       to O5 and hold time on an OLT, and OMCI both ways.
+   * - ``port@3``: ``ethernet = <&eth>``, ``phy-mode = "internal"``, fixed link
+       1000 full duplex: the CPU port, whose conduit is the CPU port's DMA
+       engine.
+     - T
+     - Bridged traffic passes both ways, sourced from the host.
+   * - The labels ``sfp`` and ``pon`` are the interface names user space uses.
+     - T
+     - The link, bridging, VLAN, filtering, PTP, activation, OMCI and optics
+       checks all address the ports by these names.
+
+``chosen``
+~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``stdout-path = &uart0``: not consulted by this kernel. No device-tree
+       serial driver is built (the console port is registered by the platform
+       code) and no ``earlycon`` argument is passed; the console is selected by
+       the boot loader's ``console=ttyS0,115200``.
+     - I
+     - Booting without the property would show that nothing changes.
+   * - ``bootargs = "panic=10"`` is applied by the board configuration.
+       ``rtl9602c_defconfig`` sets ``MIPS_CMDLINE_DTB_EXTEND`` and has no
+       built-in ``CONFIG_CMDLINE``: ``bootcmdline_init()``
+       (``arch/mips/kernel/setup.c``) starts from an empty line, takes
+       ``/chosen/bootargs`` first and appends the boot loader's arguments, so
+       the kernel command line is ``panic=10`` followed by them, and with
+       ``CONFIG_PANIC_TIMEOUT`` 0 a panic reboots the board after 10 s. A kernel
+       with ``MIPS_CMDLINE_BUILTIN_EXTEND`` and a built-in command line empties
+       the line ``early_init_dt_scan_chosen()`` filled, starts from
+       ``CONFIG_CMDLINE`` and never reads ``/chosen/bootargs``: it halts on a
+       panic instead.
+     - M, I
+     - M, for a kernel configured with a built-in command line: the
+       ``Kernel command line:`` line (and ``/proc/cmdline``) holds a built-in
+       ``lpj=`` and the boot loader's arguments and no ``panic=``. I, for the
+       board configuration: it follows from the source of ``bootcmdline_init()``
+       and has not been read from a boot of this configuration; the
+       ``Kernel command line:`` line of such a boot, with ``panic=10`` first,
+       would settle it.
+
+Building the tree
+~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``arch/mips/boot/dts/Makefile`` enters ``realtek/`` for
+       ``CONFIG_RTL9602C``, and ``realtek/Makefile`` guards every ``dtb`` line
+       by its platform (``dtb-$(CONFIG_RTL9602C) += dfp-34x-2c3.dtb``). On MIPS
+       ``BUILTIN_DTB`` selects ``BUILTIN_DTB_ALL``, which links every blob the
+       tree builds, and the platform code uses the first (``__dtb_start``);
+       unguarded, another board's tree could be the one this kernel boots with.
+     - T
+     - Every boot uses this board's tree: the reserved-memory lines name
+       ``pbo@16ff000`` and ``pbo@1eff000``.
+
+Boot contract
+=============
+
+The boot loader, a U-Boot of the 2011.12 release (its banner says so on every
+reset), lives in the ``boot`` partition and starts the kernel. This chapter
+states the contract between the two as an interface: what the kernel image must
+look like, how it is entered, what it is handed and what it finds when it
+starts.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Image: a legacy U-Boot image of the raw kernel, LZMA-compressed; the boot
+       loader checks and decompresses it itself, so the kernel selects
+       ``HAVE_KERNEL_LZMA`` and no self-extracting wrapper. Header: MIPS, Linux,
+       kernel, lzma; load address ``0x80100000``; entry point the address of
+       ``kernel_entry``.
+     - M
+     - Every boot: the boot loader prints ``Image Type: MIPS Linux Kernel Image
+       (lzma compressed)``, ``Load Address: 80100000``, the entry point, and
+       ``Uncompressing Kernel Image ... OK``.
+   * - The load address comes from ``Platform``: ``load-$(CONFIG_RTL9602C) +=
+       0xffffffff80100000``, the sign-extended KSEG0 address of physical
+       ``0x00100000``. The kernel must lie above the fixed exception vectors at
+       ``0x80000000``-``0x800003ff`` (see "MIPS I limits the kernel respects");
+       1 MiB up is the usual choice in arch/mips.
+     - M, T
+     - M: linked at ``0x80000000`` the kernel stops in ``trap_init()``; at
+       ``0x80100000`` it boots. T: comparing the load address in the built
+       image's header with ``Platform`` catches a difference.
+   * - ``CONFIG_PHYSICAL_START``, which the architecture offers once
+       ``CRASH_DUMP`` is on (and ``KEXEC`` turns ``CRASH_DUMP`` on by default),
+       overrides the platform's load address; its default puts the kernel at
+       physical ``0x04000000``, above this board's 32 MiB. The configuration
+       keeps ``CRASH_DUMP`` off.
+     - M
+     - Turning ``KEXEC`` on moves the image header's load address from
+       ``0x80100000`` to ``0x84000000`` with no other change; the header
+       comparison above catches it.
+   * - Entry: the boot loader jumps to the entry point with ``a0`` = argument
+       count, ``a1`` = pointer to an argument vector (``argv[0]`` unused),
+       ``a2`` = environment pointer (the MIPS convention of U-Boot's ``bootm``);
+       ``kernel_entry`` saves them as ``fw_arg0``-``fw_arg3``.
+       ``fw_init_cmdline()`` accepts them when ``a0`` < ``0x80000000`` and
+       ``a1`` >= ``0x80000000``, and joins ``argv[1]`` and the following
+       arguments with spaces. The environment is not used. ``BOOT_RAW`` also
+       puts a jump to ``kernel_entry`` at the load address, so an image entered
+       at its load address starts too; this boot loader enters at the entry
+       point.
+     - M, T
+     - M: every boot, the boot loader's arguments appear in
+       ``Kernel command line:``. T: the board boots to a shell.
+   * - The boot loader passes no device tree; the kernel carries this board's
+       (``USE_OF``, ``BUILTIN_DTB``).
+     - T
+     - The board boots to a shell.
+   * - Command line: the tree's ``/chosen/bootargs`` (``panic=10``), then the
+       boot loader's arguments. For bank 0 those are ``console=ttyS0,115200``,
+       an ``mtdparts=`` table for the boot loader's own flash naming, which this
+       kernel ignores (the partitions come from the tree and no command-line
+       partition parser is built), and ``root=31:5``; bank 1's are the same with
+       ``root=31:7``, and bank 1 is read-only.
+     - M, I
+     - M: the boot loader's arguments, every boot, in ``Kernel command line:``
+       and in the boot loader's environment. I: their order after ``panic=10``;
+       see the row on ``chosen``.
+   * - Which bank a plain reset boots is set in the boot loader's environment: a
+       committed bank, and a one-shot mode that arms the watchdog before booting
+       so that a failing image costs one reset. A flash boot loads the image
+       from the flash window in place (KSEG0 ``0x94080000`` for bank 0). The
+       kernel cannot change the choice: the flash, the environment included, is
+       read-only from Linux.
+     - M
+     - The boot loader's environment, read at its prompt and from the ``env``
+       partition.
+   * - The kernel's first act in ``plat_mem_setup()`` clears the watchdog, which
+       also ends a one-shot boot's watchdog; from the watchdog driver's probe
+       on, the kernel feeds the watchdog until user space opens it. A one-shot
+       boot whose kernel hangs before that probe, or whose user space never
+       opens the watchdog, is therefore not reset by it.
+     - I
+     - Not observed; a one-shot boot of a kernel that stops early would show.
+   * - Restart: the kernel enters the reset vector, the boot loader starts and
+       counts down to autoboot, then boots the committed bank unless interrupted
+       at the console.
+     - M
+     - 1.81 s from the jump to the autoboot prompt.
+
+RAM boot over TFTP
+------------------
+
+This is the way to run a development kernel. Nothing is written to flash, and a
+kernel that fails costs one reset.
+
+1. Stop the autoboot countdown at the console. Purpose: the board is at the boot
+   loader prompt. (M)
+2. Bring the host link up. Purpose: the boot loader's network interface is the
+   switch's SerDes, and it leaves the SerDes off (mode field ``0x1f`` in
+   ``RTL9602C_SERDES_CTRL``); the same 2500BASE-X bring-up that the switch
+   driver performs has to be written from the prompt, for instance by a macro in
+   the boot loader's saved environment. (M)
+3. ``tftpboot 0x81000000 uImage``. Purpose: the image into DRAM at physical 16
+   MiB. (M)
+4. Set the boot arguments to bank 0's. Purpose: the kernel gets its usual
+   command line. (M)
+5. ``bootm 0x81000000``. Purpose: the boot loader checks the image, decompresses
+   it to ``0x80100000`` and enters it. (M)
+
+The commands of steps 3 and 5::
+
+   tftpboot 0x81000000 uImage
+   bootm 0x81000000
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The macro and the network settings must be in the saved environment: a
+       setting made without saving is gone after the next reset.
+     - M
+     - A setting made without saving does not survive the reset.
+   * - The image is decompressed to 1 MiB while its compressed copy sits at 16
+       MiB, so the decompressed kernel must end below physical ``0x01000000``
+       (15 MiB of room). The boot loader may also cap the decompressed size, at
+       a limit not known. A development kernel of about 8 MB decompressed fits.
+     - I
+     - Arithmetic, not tested at the limit; the size is the sum of code, rwdata,
+       rodata and init in the kernel's ``Memory:`` line. RAM-boot images of
+       growing size until one fails would show.
+   * - What the boot loader leaves for the kernel: UART0 at 115200 baud with
+       divisor 109; timer 1 running with control ``0x11000032``, which the
+       kernel neither uses nor stops (its interrupt stays disabled); the SerDes
+       off unless the RAM boot's second step ran; the system controller's PON
+       packet-buffer enable clear (``RTL9602C_SYSCTL_BLOCK_EN`` at ``+0x63c``
+       reads ``0x10``); the watchdog disarmed unless a restart or a one-shot
+       boot armed it.
+     - M
+     - Every boot for the divisor; timer 1 and the SerDes control register
+       (``0x0004801f`` at the prompt) read at the boot loader prompt; the system
+       controller register read; the watchdog as in the row on the count that
+       outlives a restart.
+
+Open questions
+==============
+
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the assumptions the driver depends on: the
+kernel is correct on this board only if they hold. The second list holds the
+questions to which the code is indifferent: it works whichever way they resolve.
+
+Assumptions the driver depends on
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - An uncached load drains the write buffer, so ``mb()`` and ``iob()`` order
+       device writes ("MIPS I limits the kernel respects").
+     - A store to a device register, then a read back through an uncached load
+       of a register that reflects the store.
+   * - The TLB has exactly 64 entries ("TLB").
+     - ``tlbwi`` and ``tlbr`` over indices 0 to 64.
+   * - Nothing needs a watchdog between ``plat_mem_setup()`` and the watchdog
+       driver's probe ("Platform code and the watchdog").
+     - A deliberate hang in that stretch during a one-shot boot of the boot
+       loader.
+   * - The PON MAC's DMA stays inside each reserved region. Whether it uses the
+       4 KiB past the programmed 1 MiB is unknown, so that 4 KiB is kept ("DRAM
+       and reserved memory").
+     - Shrinking both regions to ``0x100000`` and repeating the downstream-lock
+       and OMCI checks.
+   * - The placement of the two regions is acceptable to the PON MAC ("DRAM and
+       reserved memory").
+     - Moving the downstream region and repeating the same checks.
+   * - The GPIO bank is at ``0x18003300`` with direction at ``+0x08`` and data
+       at ``+0x0c`` ("The GPIO bank").
+     - The TX_DISABLE check: with burst enable forced, the module's own
+       transmit-power reading must fall to zero while the line is high.
+   * - Line N of the bank is bit N of a native big-endian word
+       (``GPIO_PORTS_REVERSED``).
+     - The same TX_DISABLE check.
+   * - GPIO 13 is the laser's hard transmit-disable input, active high.
+     - The same TX_DISABLE check.
+   * - Bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` routes pad 13 to its GPIO function.
+     - The same TX_DISABLE check; a run with the bit clear shows whether it is
+       needed at all.
+   * - The decompressed kernel stays below 15 MiB and below whatever cap the
+       boot loader has ("RAM boot over TFTP").
+     - RAM-boot images of growing size until one fails.
+   * - The flash reads through the ``mtd-rom`` node as it does through a
+       platform device with the same ``map_rom`` probe ("Flash window and
+       partitions"). This is a check not yet run on this tree rather than a
+       tagged assumption.
+     - Booting to a shell with the root in ``r0`` through the node.
+
+Questions the code does not depend on
+-------------------------------------
+
+About the CPU core
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether the core has a coprocessor 1.
+     - Reading the FP implementation register from a kernel with
+       ``MIPS_FP_SUPPORT``.
+   * - Whether CP0 Count and Compare exist.
+     - Reading Count twice across a known delay.
+   * - Whether the zero write in ``cctl_op()`` is needed.
+     - Dropping it and running the stress run.
+   * - Whether a range-granular cache operation exists.
+     - No test known.
+   * - Whether the data cache is write-back or write-through.
+     - Writing through KSEG0 and reading through KSEG1 before any flush.
+   * - Why the R3000 cache code fails here (taken to be missing cache
+       isolation).
+     - Reading the exception vector area back after an R3000-style flush.
+   * - Whether the boot loader leaves the caches in a usable state.
+     - None needed: the flush at the start of ``lexra_cache_init()`` is harmless
+       either way.
+   * - Whether the random replacement reaches TLB entries 0 to 7.
+     - Sampling CP0 Random repeatedly.
+   * - What duplicate EntryHi values do.
+     - Writing two entries with one EntryHi and probing.
+   * - Why kexec does not start the new kernel.
+     - A cache write-back and invalidate before the kexec jump.
+
+About the platform code
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether the console fallback path (divisor 0 or ``0xffff`` from the boot
+       loader) behaves as written.
+     - Forcing a divisor of 0 and checking the console.
+   * - Whether the UART passes the 8250 loopback test.
+     - Registering without ``UPF_SKIP_TEST``.
+   * - What the write of ``RTL9602C_UART_FCR_TX_FIFO_RESET`` in the early
+       console does, and whether it ever happens.
+     - Stalling the transmitter and watching the console.
+   * - The routing field map of the interrupt controller.
+     - A per-field sweep with source 12 enabled and a known-good source pending.
+   * - The width of the timer's divisor field.
+     - Writing larger divisors and timing the period.
+   * - Whether the timer divides by N or N + 1.
+     - Timing a long interval against an outside reference.
+   * - The width of the timer's counter.
+     - Only matters for a one-shot mode the driver does not have.
+   * - Whether halt and power off leave the board spinning quietly.
+     - ``halt`` and ``poweroff`` on the board.
+   * - Whether anything calls ``mb()`` before ``plat_mem_setup()``.
+     - A run-time assignment of ``__wbflush`` with a trap on NULL.
+   * - Which blocks the boot loader leaves as they were after the jump to the
+       reset vector.
+     - Comparing register snapshots before a restart and at the next kernel's
+       start.
+   * - Whether device DMA snoops the CPU caches.
+     - Disabling the maintenance on one buffer and comparing.
+
+About the watchdog
+~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether writing the phase-one flag back clears it.
+     - Writing bit 31 back during phase two and reading the register.
+   * - Whether a control write restarts the count by itself.
+     - Rewriting the control word of a running watchdog without a kick, to a
+       deadline shorter than the count reached, and timing the reset.
+   * - Whether setting the enable clears the count by itself.
+     - Stopping a watchdog mid-count, re-enabling it without a kick and timing
+       the reset.
+   * - Whether the block refuses kicks once phase one has expired.
+     - Kicking during phase two and timing the reset.
+   * - Whether source 5 is the watchdog's warning, or whether the block raises
+       any source at all; how the interrupt handler behaves.
+     - Enabling every source and watching the status registers while phase one
+       expires.
+   * - Whether, during a stalled bus access, the count stops or the count runs
+       and the reset cannot be delivered.
+     - Reading the phase-one flag after recovery; the flag does not survive the
+       power cycle that recovery takes.
+
+About the GPIO bank
+~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - The width of the GPIO bank (the tree declares 32 lines; only line 13 is
+       used).
+     - None needed beyond line 13.
+   * - Whether bit 13 of ``RTL9602C_PADMUX_FUNC_EN`` is I2C master 0's enable.
+     - Enabling master 0 and issuing a command on it.
+
+About the board and the boot contract
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether anything connects to switch port 1.
+     - None needed.
+   * - Whether the ``read-only`` flags protect the partitions.
+     - A write through a writable flash driver, once one exists.
+   * - Whether the switch runs without the PON MAC when the reserved regions or
+       the system controller are missing.
+     - Booting a tree without them.
+   * - Whether ``stdout-path`` has any effect.
+     - Booting without it.
+   * - Whether ``/chosen/bootargs`` (``panic=10``) is applied ahead of the boot
+       loader's arguments under ``MIPS_CMDLINE_DTB_EXTEND``, and in what order
+       the arguments follow.
+     - The ``Kernel command line:`` line of a boot of the board configuration,
+       with ``panic=10`` first.
+   * - Whether an early hang in a one-shot boot goes unrecovered.
+     - A one-shot boot of a kernel that stops before the watchdog driver probes.

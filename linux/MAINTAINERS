@@ -17354,6 +17354,7 @@ MIPS/REALTEK RTL9602C ARCHITECTURE
 M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	linux-mips@vger.kernel.org
 S:	Maintained
+F:	Documentation/arch/mips/rtl9602c.rst
 F:	Documentation/devicetree/bindings/interrupt-controller/realtek,rtl9602c-intc.yaml
 F:	Documentation/devicetree/bindings/mips/realtek-rtl9602c.yaml
 F:	Documentation/devicetree/bindings/watchdog/realtek,rtl9602c-wdt.yaml
