@@ -1,0 +1,1905 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+=======================
+Realtek RTL9602C switch
+=======================
+
+Overview
+========
+
+The RTL9602C is a SoC for GPON optical network units, such as SFP sticks. Its
+Ethernet switch has four ports. Port 0 is a SerDes lane to the host, the
+equipment the stick is plugged into. Port 1 exists in the silicon and is not
+wired on this board. Port 2 is the PON port, behind which the PON MAC and the
+GPON MAC sit, and beyond them the optics and the fibre. Port 3 is the CPU port,
+which ends in a DMA engine: the conduit of DSA.
+
+The switch's register window, physical ``0x1b000000``, is larger than the
+switch core. It also holds the GPON MAC, the PON MAC with its packet buffer,
+the L3/NAT engine, the IEEE 1588 clock and the I2C masters of the optics, and
+one driver, ``rtl9602c``, drives all of it. The driver is a DSA driver for the
+switch, and it registers the GPON side with the PON class
+(Documentation/networking/pon.rst). This page describes the switch core as the
+driver sets it up: probe and identification, the forced MAC ability of the
+ports, the SerDes lane to the host and phylink, the switch's half of the CPU
+tag, the frame length limit, the switch's interrupt, the per-port counters,
+restart and teardown, the order of setup, and the enable in the system
+controller in front of the PON packet buffer. The other blocks have pages of
+their own (see "Where to read next").
+
+The wiring of the ports::
+
+    host cage
+       |  SFP edge connector, SerDes lane, 2500BASE-X or 1000BASE-X
+    port 0 (sfp)
+    +--------------+  port 3 (CPU)   +----------------+
+    | switch core  |-----------------| DMA engine     |--- LX5281 CPU
+    +--------------+                 | (cpu, conduit) |
+    port 2 (pon)                     +----------------+
+       |
+    PON MAC, GPON MAC
+       |
+    optics, fibre
+
+The ports
+---------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 12 46 36
+
+   * - Port
+     - Interface
+     - What it is
+     - In the code and the device tree
+   * - 0
+     - ``sfp``
+     - The SerDes lane to the host. It has no PHY and nothing is negotiated on
+       it, so it is a fixed link whose real state the driver reports to
+       phylink.
+     - ``RTL9602C_PORT_SFP``; ``port@0`` with ``label = "sfp"`` and
+       ``phy-mode = "2500base-x"``.
+   * - 1
+     - none
+     - Present in the silicon and not wired on this board. It has no device
+       tree node and no interface.
+     - none
+   * - 2
+     - ``pon``
+     - The PON port. Bringing the interface up starts the ONU's activation, and
+       the GEM interfaces of the PON class stack on it.
+     - ``RTL9602C_PORT_PON``, defined in ``include/linux/dsa/rtl9602c.h``, the
+       header the tag driver and the conduit share; ``port@2`` with ``label =
+       "pon"`` and ``phy-mode = "internal"``.
+   * - 3
+     - none
+     - The CPU port, behind the DMA engine that is the conduit of DSA. The
+       conduit is the network interface ``cpu``.
+     - ``RTL9602C_PORT_CPU``; ``port@3`` with ``ethernet = <&eth>`` and
+       ``phy-mode = "internal"``.
+
+``RTL9602C_NUM_PORTS`` is 4, and every per-port register in the driver is
+indexed by the hardware's port numbers.
+
+How the driver plugs into DSA
+-----------------------------
+
+The driver is a platform driver named ``rtl9602c``, matched by the compatible
+``realtek,rtl9602c-switch``. ``rtl9602c_probe()`` describes the switch to DSA
+(the number of ports, the operations ``rtl9602c_switch_ops``, the phylink MAC
+operations, VLAN filtering that is switch-wide and the ageing range) and calls
+``dsa_register_switch()``. DSA then calls ``rtl9602c_setup()`` (see "Setup, in
+order"). Three things are particular to this switch:
+
+- The tag protocol is ``DSA_TAG_PROTO_RTL9602C``, and
+  ``rtl9602c_get_tag_protocol()`` returns it for every port. The CPU tag does
+  not travel in the frame but in the descriptors of the CPU port's DMA engine,
+  so the tag driver (``net/dsa/tag_rtl9602c.c``) moves no bytes. It has to
+  exist all the same: the conduit hands the frames it receives to DSA only when
+  its CPU port has a tag driver. The switch has a half of the mechanism too
+  (see "The CPU tag, switch side").
+- The conduit is the network interface ``cpu`` of the driver ``rtl9602c-eth``,
+  which port 3 names in its ``ethernet`` property. The user ports appear on top
+  of it as ``sfp@cpu`` and ``pon@cpu``. The conduit, the tag driver and the
+  five calls that the switch driver makes into the conduit are described in
+  Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst.
+- Every port is a fixed link. phylink does not learn a state from a PHY: it
+  asks the driver for the state of each port, and the driver forces each MAC's
+  link, speed and duplex, because no port has a partner to learn them from (see
+  "Forced MAC ability" and "phylink and the lane parameters").
+
+The driver implements 48 operations of ``struct dsa_switch_ops`` and the three
+operations of ``struct phylink_mac_ops`` (``mac_config``, ``mac_link_up`` and
+``mac_link_down``). The table groups the switch operations by the page that
+describes what they do, named as in "Where to read next"; every operation name
+is prefixed ``rtl9602c_``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 62 18
+
+   * - File
+     - Operations
+     - Page
+   * - ``rtl9602c-main.c``
+     - ``get_tag_protocol``, ``setup``, ``teardown``, ``phylink_get_caps``,
+       ``phylink_fixed_state``, ``port_enable``, ``port_disable``,
+       ``get_sset_count``, ``get_strings``, ``get_ethtool_stats``
+     - This page.
+   * - ``rtl9602c-main.c``
+     - ``devlink_info_get``, ``devlink_param_get``, ``devlink_param_set``
+     - This page for the identification, *devlink* for the rest.
+   * - ``rtl9602c-l2.c``
+     - ``port_change_mtu``, ``port_max_mtu``
+     - This page.
+   * - ``rtl9602c-l2.c``
+     - ``port_bridge_join``, ``port_bridge_leave``, ``port_pre_bridge_flags``,
+       ``port_bridge_flags``, ``port_stp_state_set``, ``set_ageing_time``,
+       ``port_vlan_filtering``, ``port_vlan_add``, ``port_vlan_del``,
+       ``port_fdb_add``, ``port_fdb_del``, ``port_fdb_dump``, ``port_mdb_add``,
+       ``port_mdb_del``, ``port_fast_age``, ``port_mirror_add``,
+       ``port_mirror_del``
+     - *bridging*
+   * - ``rtl9602c-offload.c``
+     - ``cls_flower_add``, ``cls_flower_del``, ``port_setup_tc``,
+       ``port_policer_add``, ``port_policer_del``, ``port_get_default_prio``,
+       ``port_set_default_prio``, ``port_get_dscp_prio``,
+       ``port_add_dscp_prio``, ``port_del_dscp_prio``, ``port_set_apptrust``,
+       ``port_get_apptrust``
+     - *acl-qos*; the flowtable offload of ``port_setup_tc`` is *l3-nat*'s.
+   * - ``rtl9602c-ptp.c``
+     - ``get_ts_info``, ``port_hwtstamp_get``, ``port_hwtstamp_set``,
+       ``port_rxtstamp``
+     - *ptp*
+
+What the switch offloads
+------------------------
+
+Each item names the page that describes it.
+
+- Bridging. A bridge of ``sfp`` and ``pon`` is forwarded by the switch: the
+  address table, learning and its per-port limits, ageing, the flood flags of
+  each port, port isolation, the spanning-tree state, VLAN filtering and
+  membership, the S-VLAN and port mirroring (*bridging*). The GEM interfaces of
+  the PON class are bridge ports too, and the switch forwards between them and
+  the bridge's other ports itself.
+- Filtering and quality of service. ``tc`` flower rules that drop or trap
+  become ACL rules, a rule that rewrites a C-VID a classifier entry, and a rule
+  that polices broadcast, multicast or ARP by packet rate storm control; a
+  matchall police is the port's ingress policer, ``tc`` tbf and ets set the
+  egress shaper and scheduler of a port, and DCB sets the default priority, the
+  DSCP map and the trust order of PCP and DSCP (*acl-qos*). The DoS checks, the
+  storm-control classes that ``tc`` cannot describe, loop detection and the
+  header-capture latch belong to the same page.
+- Routing and NAT. The L3/NAT engine translates the source address and port of
+  IPv4 TCP and UDP flows and forwards them, and their replies, without the CPU;
+  its tables follow the kernel's address, neighbour and route notifiers, and
+  each flow that netfilter's flowtable offload hands over gets its entries
+  (*l3-nat*).
+- Time. The switch's IEEE 1588 clock is a PTP hardware clock, and the PTP
+  messages the switch sends to the CPU carry the time of the frame (*ptp*).
+- The PON side. The GPON MAC and the PON MAC are driven through the PON class:
+  the ONU's activation, the OMCI channel and a network interface for each GEM
+  port (*PON* and *PON class*).
+
+Configuration
+-------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Symbol
+     - Effect
+   * - ``CONFIG_NET_DSA_RTL9602C``
+     - Tristate, "Realtek RTL9602C switch"; depends on ``NET_DSA``,
+       ``HAS_IOMEM`` and ``RTL9602C_ETH || !RTL9602C_ETH`` (when the conduit is
+       a module, the switch driver is a module too), and selects
+       ``MFD_SYSCON``, ``NET_DSA_TAG_RTL9602C`` and ``PON``. Builds
+       ``rtl9602c-main.o``, ``rtl9602c-l2.o``, ``rtl9602c-gpon.o``,
+       ``rtl9602c-ponmac.o``, ``rtl9602c-omci.o``, ``rtl9602c-gem.o``,
+       ``rtl9602c-optics.o``, ``rtl9602c-offload.o`` and ``rtl9602c-ptp.o``
+       into ``rtl9602c.o``; as a module it is ``rtl9602c``. The symbol is not
+       inside the ``NET_DSA_REALTEK`` menu, and does not depend on it.
+   * - ``CONFIG_NET_DSA_TAG_RTL9602C``
+     - Tristate, "Tag driver for Realtek RTL9602C switches". Builds
+       ``net/dsa/tag_rtl9602c.c``. ``NET_DSA_RTL9602C`` selects it.
+   * - ``CONFIG_RTL9602C_ETH``
+     - The conduit, the driver of the CPU port's DMA engine.
+   * - ``CONFIG_PON``
+     - The PON class (Documentation/networking/pon.rst). ``NET_DSA_RTL9602C``
+       selects it.
+   * - ``CONFIG_RTL9602C_OPTICS_RO``
+     - Bool, depends on ``NET_DSA_RTL9602C``. With it, the sequence that turns
+       off the laser driver's automatic extinction-ratio loop at every PON
+       bring-up returns without writing, and the driver itself writes nothing to
+       the optics part (*PON*).
+   * - ``CONFIG_DEBUG_FS``
+     - The debugfs directory ``rtl9602c`` and its views exist only with it.
+   * - ``CONFIG_HWMON``
+     - The hwmon device ``rtl9602c_optics`` exists only with it; without it its
+       registration is a stub that returns 0.
+   * - ``CONFIG_PTP_1588_CLOCK``
+     - The PTP hardware clock exists only with it; without it no clock is
+       registered.
+
+``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver, the
+conduit and DSA in (``CONFIG_NET_DSA_RTL9602C=y``, ``CONFIG_RTL9602C_ETH=y``
+and ``CONFIG_NET_DSA=y``) and sets the options through which the offloads are
+used: the bridge with VLAN filtering, the ``tc`` classifiers, actions and
+qdiscs (flower, matchall, police, gact, mirred, vlan, tbf and ets), DCB, and
+netfilter's flowtable (``CONFIG_NF_FLOW_TABLE``, ``CONFIG_NFT_FLOW_OFFLOAD``).
+It also sets ``CONFIG_DEBUG_FS=y``.
+
+Device tree and binding
+-----------------------
+
+The ``switch`` node of ``arch/mips/boot/dts/realtek/rtl9602c.dtsi`` describes
+the switch, and the board file ``dfp-34x-2c3.dts`` adds the two memory regions
+of the PON MAC's packet buffer to it. The node, without the properties of the
+ports::
+
+    switch: switch@1b000000 {
+            compatible = "realtek,rtl9602c-switch";
+            reg = <0x1b000000 0xf10000>;
+            interrupt-parent = <&intc>;
+            interrupts = <8>;
+            tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+            realtek,sysctl = <&sysctl>;
+
+            /* from dfp-34x-2c3.dts */
+            memory-region = <&pbo_us>, <&pbo_ds>;
+            memory-region-names = "pbo-us", "pbo-ds";
+
+            ports {
+                    #address-cells = <1>;
+                    #size-cells = <0>;
+
+                    port@0 { ... };
+                    port@2 { ... };
+                    port@3 { ... };
+            };
+    };
+
+The binding is
+``Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml``. It
+takes ``dsa.yaml`` as its base, requires ``compatible`` (the constant
+``realtek,rtl9602c-switch``), ``reg`` (one region) and ``interrupts`` (one
+interrupt), and allows no property that neither it nor ``dsa.yaml`` names.
+``memory-region`` needs ``realtek,sysctl`` and ``memory-region-names`` beside
+it. DSA accepts the ports under ``ports`` as well as ``ethernet-ports``: the
+tree uses ``ports``, the binding's example ``ethernet-ports``. The ports'
+properties (``label``, ``phy-mode``, ``fixed-link``, ``ethernet``) are read by
+DSA and phylink, not by the driver. The driver reads the other properties as
+follows.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Property
+     - What the driver does with it
+   * - ``reg``
+     - Resource 0 is the register window, mapped once with
+       ``devm_platform_ioremap_resource()`` (see "Access and
+       identification").
+   * - ``interrupts``
+     - The output of the switch's interrupt block, which all of its sources
+       share. It is source 8 of the SoC interrupt controller, Linux interrupt
+       16, and is taken with ``platform_get_irq_optional()`` (see "The switch
+       interrupt").
+   * - ``tx-disable-gpios``
+     - Optional. The hard transmit-disable input of the laser driver. Probe
+       requests it with ``devm_gpiod_get_optional()`` as ``tx-disable``, already
+       driven to its asserted level; without it every TX_DISABLE step is
+       skipped. That GPIO 13, active high, is the laser driver's
+       transmit-disable is not verified (*MIPS*).
+   * - ``realtek,sysctl``
+     - A phandle to the system controller, looked up with
+       ``syscon_regmap_lookup_by_phandle()``. It holds the enable in front of
+       the PON MAC (see "The system-controller enable in front of the PON
+       packet buffer").
+   * - ``memory-region``, ``memory-region-names``
+     - The two DRAM areas of the packet buffer, found by the names ``pbo-us``
+       and ``pbo-ds`` and each at least 1 MiB (``RTL9602C_PBO_DRAM``).
+
+The board's device tree as a whole, including the fixed links of the three
+ports, is described on the *MIPS* page.
+
+Where the code is
+-----------------
+
+The last column names the page that covers the file, as in "Where to read
+next".
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 46 20
+
+   * - File
+     - Contents
+     - Page
+   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
+     - Probe and remove, ``rtl9602c_setup()`` and ``rtl9602c_teardown()``, the
+       register accessors and the access to the indirect table engine, the
+       SerDes lane and phylink, the forced MAC ability, the switch's
+       interrupt, the per-port counters, the devlink parameters, region and
+       info, the module parameters and the debugfs directory.
+     - This page; *devlink*
+   * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``
+     - The address table, flooding, isolation, spanning tree, VLANs, ageing,
+       mirroring, the frame length limit, and the address table entries that
+       the L3 engine depends on.
+     - This page for the frame length limit; *bridging*
+   * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
+     - Filtering and quality of service as ``tc`` and DCB offloads, storm
+       control, the L3/NAT engine with its notifiers, and the debugfs views of
+       these blocks.
+     - *acl-qos*; *l3-nat*
+   * - ``drivers/net/dsa/realtek/rtl9602c-ptp.c``
+     - The IEEE 1588 clock, the receive timestamps and the time-of-day
+       output.
+     - *ptp*
+   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+     - The GPON MAC: activation, PLOAM, ranging, the tables, the counters and
+       the debugfs views.
+     - *PON*
+   * - ``drivers/net/dsa/realtek/rtl9602c-ponmac.c``
+     - The PON MAC: the packet buffer, the streams, the queues and the T-CONT
+       scheduler.
+     - *PON*
+   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
+     - GEM ports as network interfaces of the PON class.
+     - *PON*; *PON class*
+   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``
+     - The OMCI channel as the PON class's OMCI port.
+     - *PON*; *PON class*
+   * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
+     - The optics I2C master, the hwmon diagnostics and TX_DISABLE.
+     - *PON*
+   * - ``drivers/net/dsa/realtek/rtl9602c.h``
+     - The register map block by block, the driver's state ``struct
+       rtl9602c_priv`` and the functions the files call across.
+     - Each page names its own macros.
+   * - ``drivers/net/dsa/realtek/Kconfig``, ``Makefile``
+     - The build entries.
+     - This page.
+   * - ``net/dsa/tag_rtl9602c.c``, ``include/linux/dsa/rtl9602c.h``
+     - The tag driver, and the contract between the conduit, the tag driver
+       and the switch driver.
+     - *CPU port*
+   * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``
+     - The ``switch`` node, its ports and the reserved memory of the packet
+       buffer.
+     - This page; *MIPS*
+
+Interfaces to user space
+------------------------
+
+- The network interfaces ``sfp`` and ``pon``. ``ip link set sfp up`` brings
+  port 0 up, and the carrier of ``sfp`` follows the receiver of the SerDes lane
+  (``/sys/class/net/sfp/carrier``, see "The SerDes lane to the host").
+  ``ip link set pon up`` starts the ONU's activation, and fails if the driver
+  refuses to start it, for instance when no serial number has been set. The CPU
+  port has no user interface of its own; its conduit is the network interface
+  ``cpu``.
+- ``ip``, ``bridge``, ``tc`` and ``dcb`` for everything the switch offers to
+  offload, and ``nft`` flowtables for routing and NAT; the pages listed under
+  "What the switch offloads" describe what each command becomes in the
+  hardware.
+- ``ethtool -S sfp`` and ``ethtool -S pon`` list the 44 counters of the port
+  (see "Per-port counters"). The counters of the CPU port appear in the
+  conduit's statistics under DSA's prefix ``s00_p03_``::
+
+      ethtool -S cpu | grep s00_p03_
+
+- ``devlink`` on the handle ``platform/1b000000.switch``: ``devlink dev info``,
+  the 22 driver parameters (``devlink dev param``) and the region
+  ``frame_capture`` (``devlink region``). ``devlink dev info`` also shows the
+  identification of the part (see "Access and identification"); the rest is on
+  the *devlink* page.
+- The module parameters ``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an``, on the
+  kernel command line and as read-only files in
+  ``/sys/module/rtl9602c/parameters/`` (see "phylink and the lane parameters").
+- ``/sys/kernel/debug/rtl9602c/``, one directory whose views the blocks of the
+  driver create. ``rtl9602c-offload.c`` creates ``qdepth``, ``rma``, ``svlan``,
+  ``hsd``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf`` and ``l3capture``;
+  ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``, ``usburst``,
+  ``gemusintr``, ``bwmap`` and ``uscntr``; ``rtl9602c-ponmac.c`` creates
+  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``
+  and ``eeblocks``; ``rtl9602c-ptp.c`` creates ``todstat`` and ``ptpstat``. A
+  view belongs to the block that creates it, and the page of that block says
+  what it shows.
+- ``/proc/interrupts``: the switch's interrupt is source 8 of the SoC interrupt
+  controller, Linux interrupt 16, and is named ``rtl9602c-switch``::
+
+      16: ...  rtl9602c-intc   8 rtl9602c-switch
+
+- The hwmon device ``rtl9602c_optics``, the I2C adapter ``rtl9602c i2c`` and
+  the PTP hardware clock ``rtl9602c-ptp``, which the *PON* and *ptp* pages
+  describe.
+- Through the PON class: the OMCI port ``/dev/pon0omci0``, the ``gem``
+  interfaces and the ``pon`` generic netlink family (*PON class*).
+- The kernel log lines that begin ``rtl9602c-switch:``. The lines of the blocks
+  on this page are named where their facts are.
+
+Where to read next
+------------------
+
+The other pages of the port, by the short names used in the tables above:
+
+- *bridging*, Documentation/networking/dsa/rtl9602c-bridging.rst: the address
+  table, learning, ageing, flooding, isolation, spanning tree, VLANs and the
+  S-VLAN, and the indirect table engine they go through.
+- *acl-qos*, Documentation/networking/dsa/rtl9602c-acl-qos.rst: the ACL and the
+  classifier, meters and storm control, the DoS checks, loop detection, the
+  header-capture latch, priorities, scheduling and shaping.
+- *l3-nat*, Documentation/networking/dsa/rtl9602c-l3-nat.rst: the L3/NAT
+  engine, its tables and the flowtable offload.
+- *ptp*, Documentation/networking/dsa/rtl9602c-ptp.rst: the PTP clock, the
+  timestamps and the time-of-day output.
+- *devlink*, Documentation/networking/devlink/rtl9602c.rst: the devlink
+  parameters, the region and the info reply as the user sees them.
+- *PON*, Documentation/networking/device_drivers/pon/rtl9602c.rst: the GPON
+  MAC, the PON MAC and the optics.
+- *CPU port*,
+  Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst: the
+  CPU port's DMA engine and the CPU tag.
+- *PON class*, Documentation/networking/pon.rst: the PON class.
+- *MIPS*, Documentation/arch/mips/rtl9602c.rst: the CPU core, the platform and
+  the board.
+
+How to read the fact tables
+===========================
+
+Each block below has a short account of what the hardware does and what the
+driver does with it, followed by fact tables with three columns: *Fact*, *Tag*
+and *Checked by*. The tag says how the fact is established. **M**, measured on
+the board (the DFP-34X-2C3): *Checked by* gives the command or observation,
+through the driver's own interfaces (the kernel log, ``ip``, ``ethtool``,
+``devlink``, sysfs, debugfs), that shows it. **T**, tested by function: the
+driver depends on the fact, and the named behaviour fails if it is wrong.
+**P**, public standard: *Checked by* names the document and the clause. **I**,
+inferred, not verified: the fact is an assumption, and *Checked by* says what
+would confirm or refute it. The last chapter collects these facts and says
+which of them the driver depends on.
+
+A row with two tags is established in two ways, or in two parts; *Checked by*
+says which part carries which tag. Register offsets are from the base of the
+switch register window, physical ``0x1b000000``, unless a row says they are the
+system controller's. Values are 32-bit words as ``readl()`` and ``writel()``
+see them on this big-endian CPU. Port numbers are the hardware's, and "the
+host" is the equipment at the far end of the SFP lane. The devlink handle of
+the switch is ``platform/1b000000.switch``. The behaviours that a tested fact
+depends on are named in words: the board boots to a shell; the SerDes link to
+the host comes up, and recovers after host-side link bounces; bridged traffic
+passes both ways, sourced from the host; VLAN filtering, FDB learning and
+ageing work; the ACL hit counters, the policer and the storm-control rates
+match their settings; the ONU reaches O5 on an OLT; OMCI messages pass both
+ways over ``/dev/pon0omci0``; the optics diagnostics read, the laser is off
+before O3 and TX_DISABLE is honoured.
+
+Access and identification
+=========================
+
+The driver maps the switch's register window once and reaches every register
+with a 32-bit read or write at a fixed offset. The part names itself in a model
+register, which ``devlink dev info`` reads each time it is asked. Probe is
+short: it finds what the PON MAC needs outside the switch, takes the laser's
+TX_DISABLE line and registers the switch with DSA, whose call to setup does the
+rest (see "Setup, in order").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The driver maps the switch register window once, memory resource 0 of
+       the switch node (``devm_platform_ioremap_resource()``), and reaches every
+       switch register with a 32-bit read or write at a fixed offset
+       (``rtl9602c_r()`` and ``rtl9602c_w()``). A read-modify-write
+       (``rtl9602c_rmw()``) is a read followed by a write.
+     - T
+     - The board boots to a shell with the switch probed; every other fact on
+       this page goes through these accessors.
+   * - ``RTL9602C_CHIP_MODEL`` (``0x010000``) names the part.
+       ``RTL9602C_CHIP_MODEL_FAMILY`` (bits 31:16) is the part number as four
+       hexadecimal digits; ``RTL9602C_CHIP_MODEL_LETTER1`` (bits 15:11),
+       ``RTL9602C_CHIP_MODEL_LETTER2`` (10:6) and
+       ``RTL9602C_CHIP_MODEL_LETTER3`` (5:1) are letters counted from A = 1,
+       with 0 meaning none. The register reads ``0x96021800``: 9602, then 3
+       (C), then two empty slots, so RTL9602C.
+     - M
+     - Read at the boot loader prompt and after a full chip reset. Through the
+       driver, ``devlink dev info platform/1b000000.switch`` shows ``asic.id
+       RTL9602C``.
+   * - ``devlink dev info`` builds that name from the register each time it is
+       asked; an empty slot is left out and a slot above 26 is printed as
+       ``?``. It also reports ``gpon.mac``: the word at
+       ``RTL9602C_GPON_REVISION`` (``0x700010``), as ``0x`` and eight
+       hexadecimal digits, read when asked. The word reads ``0x11110320`` and
+       answers with no light on the fibre.
+     - M
+     - The word read with the fibre dark; through the driver, the same
+       ``devlink dev info`` (output below).
+   * - The compatible is ``realtek,rtl9602c-switch``. The platform driver and
+       the module are named ``rtl9602c``, so the parameters are
+       ``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an`` on the kernel command line
+       and read-only files in ``/sys/module/rtl9602c/parameters/``. The debugfs
+       views are in ``/sys/kernel/debug/rtl9602c/``, and the driver's log lines
+       begin ``rtl9602c-switch:``.
+     - T
+     - The board boots to a shell with the switch probed.
+   * - Port numbers: 0 is the SFP SerDes lane to the host
+       (``RTL9602C_PORT_SFP``); 1 exists in the silicon and is not wired on
+       this board, so it has no device tree node and no interface; 2 is the PON
+       MAC (``RTL9602C_PORT_PON``, defined in the header shared with the tag
+       driver and the conduit); 3 is the CPU port behind the DMA engine
+       (``RTL9602C_PORT_CPU``). ``RTL9602C_NUM_PORTS`` is 4, and every per-port
+       register is indexed by these numbers.
+     - T
+     - Bridged traffic passes both ways, sourced from the host (ports 0 and 3);
+       OMCI passes both ways over ``/dev/pon0omci0`` (port 2); the counters of
+       ``sfp`` and ``pon`` in ``ethtool -S`` count the same frames on ports 0
+       and 2 in a datapath test.
+   * - ``RTL9602C_CHIP_MEM_SELFTEST`` (``0x0310b8``) keeps the verdict of the
+       self-test that the chip runs over its internal memories at power-on:
+       ``RTL9602C_CHIP_MEM_SELFTEST_DONE`` (bit 0),
+       ``RTL9602C_CHIP_MEM_SELFTEST_RETAIN_DONE`` (bit 1, the data-retention
+       phase), ``RTL9602C_CHIP_MEM_SELFTEST_FAIL`` (bit 3) and
+       ``RTL9602C_CHIP_MEM_SELFTEST_RETAIN_FAIL`` (bit 4). It reads
+       ``0x00000007``. Setup reads it once and logs "passed", "did not
+       complete" or "FAILED"; the driver never starts a test itself.
+     - M
+     - The register read on the board; through the driver, the boot log line
+       ``power-on self test passed, data retention included``.
+
+The output of ``devlink dev info`` on the DFP-34X-2C3::
+
+    # devlink dev info platform/1b000000.switch
+    platform/1b000000.switch:
+      driver rtl9602c
+      versions:
+          fixed:
+            asic.id RTL9602C
+            gpon.mac 0x11110320
+
+Probe
+-----
+
+``rtl9602c_probe()``, in order:
+
+1. Map the register window (resource 0 of the switch node). Purpose: every
+   register access goes through it. (T)
+2. Look up the system controller and the two packet-buffer regions
+   (``rtl9602c_ponmac_probe()``; see "The system-controller enable in front of
+   the PON packet buffer"). Purpose: the PON MAC needs them. A system
+   controller that has not probed yet defers the probe; anything else missing
+   only leaves the PON MAC unavailable. (T)
+3. Request the optional ``tx-disable`` GPIO, already driven to its asserted
+   level. Purpose: the laser emits nothing before the PON path enables it. (T)
+4. Describe the switch to DSA (four ports, VLAN filtering switch-wide, the
+   ageing range (*bridging*), the phylink MAC operations) and register it with
+   ``dsa_register_switch()``. Purpose: DSA then calls
+   ``rtl9602c_setup()``. (T)
+
+All four steps are checked by the board booting to a shell with the switch
+probed; steps 2 and 3 also by the laser being off before O3, with TX_DISABLE
+honoured.
+
+Forced MAC ability
+==================
+
+No port has a PHY, and nothing is negotiated on port 0's lane, so no MAC can
+learn its link from a partner. The driver therefore forces the link, speed and
+duplex of every port it brings up, through two registers per port:
+``RTL9602C_PORT_FORCE_VAL(p)`` holds the ability the MAC is told to use, and
+``RTL9602C_PORT_FORCE_EN(p)`` says which forced values the MAC uses. Setup
+forces the CPU port up, and phylink's link-up and link-down callbacks force
+every port (``rtl9602c_force_link()``), the CPU port included. Port enable and
+port disable change one bit of the enable word. 2.5 Gb/s is not among the
+speeds a port can be forced to: port 0 at 2500BaseX runs as a 1000 Mb/s port
+with a line-rate override.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PORT_FORCE_VAL(p)`` (``0x000180`` + 4p) is the ability the
+       MAC of port p is told to use: ``RTL9602C_PORT_FORCE_SPEED`` (bits 1:0;
+       ``RTL9602C_PORT_FORCE_SPEED_1000`` = 2 is 1000 Mb/s),
+       ``RTL9602C_PORT_FORCE_DUPLEX`` (bit 2, full duplex) and
+       ``RTL9602C_PORT_FORCE_LINK`` (bit 4, link up).
+       ``RTL9602C_PORT_FORCE_EN(p)`` (``0x0001b4`` + 4p) says which forced
+       values the MAC uses; ``rtl9602c_force_link()`` always writes
+       ``RTL9602C_PORT_FORCE_EN_ALL`` (``GENMASK(11, 0)``, every enable of bits
+       11:0). It writes only speed, duplex and link into the value, so every
+       other forced ability is 0.
+     - M
+     - Register reads after bring-up: the value words of ports 0 and 3 read
+       ``0x16`` (1000 Mb/s, full duplex, link up) and their enable words
+       ``0xfff``.
+   * - The CPU port has no PHY, and nothing is negotiated on port 0's lane
+       (in-band negotiation is off, see "The SerDes lane to the host"), so no
+       port has a partner to learn its link from and the driver forces the MAC
+       of each port it brings up. Setup forces port 3 up at 1000 Mb/s full
+       duplex, and phylink's link-up forces its port up at 1000 Mb/s with the
+       duplex phylink resolved (full on every port here).
+     - T
+     - Bridged traffic passes both ways, sourced from the host: frames cross
+       between the host and the CPU port both ways.
+   * - After a full chip reset and the boot loader, ports 0 to 2 have both
+       force words at 0, and port 3 has ``0x186`` and ``0xfff``: forced to 1000
+       Mb/s full duplex with the link bit clear, so the CPU port is down until
+       the driver forces it.
+     - M
+     - Register reads after a full chip reset, with the switch driver not
+       loaded.
+   * - In ``RTL9602C_PORT_FORCE_EN`` bit 4, the position of
+       ``RTL9602C_PORT_FORCE_LINK``, is taken to be the enable of the forced
+       link. Port disable sets it with the link value clear, forcing the port
+       down; port enable clears it, so that no forced-down state remains while
+       phylink brings the link up and forces it again.
+     - I
+     - Not measured bit by bit. It matters only between port enable and
+       phylink's link-up, because phylink's link-down and link-up write the
+       whole enable word. Not load-bearing.
+   * - Port enable on port 2 starts GPON activation (``rtl9602c_gpon_start()``);
+       a refusal fails the open instead of leaving an interface that claims to
+       be up with the laser dark. Port disable on port 2 stops activation
+       before the link is forced down.
+     - T
+     - ``ip link set pon up`` starts activation and the ONU reaches O5 on an
+       OLT.
+   * - phylink's link-down forces the port down (link value clear, all enables
+       set, the value keeping 1000 Mb/s and full duplex) and, on port 0,
+       re-latches the SerDes lane (see "Link-down resync"). Link-up forces the
+       port up as above.
+     - T
+     - The SerDes link to the host recovers after host-side link bounces: 20
+       of 20 recoveries.
+   * - 2.5 Gb/s cannot be written into ``RTL9602C_PORT_FORCE_SPEED``.
+       ``RTL9602C_SHAPE_2G5_CFG`` (``0x02d8b8``) holds the 2.5G line-rate
+       override: ``RTL9602C_SHAPE_2G5_CFG_EN`` (bit 19) and
+       ``RTL9602C_SHAPE_2G5_CFG_RATE`` (bits 18:0), whose value
+       ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL`` (``0x3ffff``) is the full rate.
+       Port 0 at 2500BaseX is programmed as a 1000 Mb/s port with the override
+       on.
+     - T
+     - The SerDes link to the host comes up and bridged traffic crosses, the
+       host reporting 2.5 Gb/s full duplex, with the word at ``0x000bffff``.
+   * - ``RTL9602C_SHAPE_2G5_CFG_RATE`` is also where the port-0 egress shaper
+       puts its rate, so the SerDes bring-up changes the word by
+       read-modify-write: 2500BaseX sets the enable and writes
+       ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL``; any other mode clears the enable
+       only. The word reads ``0x000bffff`` at 2500BaseX, ``0x0003ffff`` after a
+       bring-up in 1000BaseX and ``0x000bffff`` again after returning to
+       2500BaseX; a chip the driver has not touched reads ``0x000bffff``.
+     - M
+     - The bring-up run in each mode with the word read after each; the
+       untouched value read after a full chip reset.
+   * - That the override lets port 0 carry more than 1 Gb/s has not been
+       measured: every forwarding measurement made on the board is bounded by
+       a 1 Gb/s link elsewhere.
+     - I
+     - A flow above 1 Gb/s from the host through port 0. Not load-bearing for
+       function.
+
+The SerDes lane to the host
+===========================
+
+Port 0 has one SerDes lane, wired to the SFP edge connector. The host sees
+carrier from this side's transmitter alone; the lane's own receiver has to
+synchronise separately, and ``RTL9602C_SERDES_CTRL_LINK_UP`` says that it has.
+The driver brings the lane up in a mode, 2500BaseX or 1000BaseX, with a fixed
+sequence (``rtl9602c_serdes_init()``). The sequence runs at setup and again
+when phylink asks for another mode, and it takes the link down. When the host
+restarts its end, the lane is re-latched from phylink's link-down callback.
+
+Registers and modes
+-------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_SERDES_CTRL`` (``0x000214``), field
+       ``RTL9602C_SERDES_CTRL_MODE`` (bits 4:0), selects the lane's mode:
+       ``RTL9602C_SERDES_CTRL_MODE_2500BASEX`` = 22,
+       ``RTL9602C_SERDES_CTRL_MODE_1000BASEX`` = 4 and
+       ``RTL9602C_SERDES_CTRL_MODE_OFF`` = ``0x1f``, the lane parked.
+     - M
+     - The field reads 22 with a working 2.5 Gb/s link, 4 after a 1000BaseX
+       bring-up, and ``0x1f`` at the boot loader prompt with the lane
+       unconfigured.
+   * - ``RTL9602C_SERDES_CTRL_LINK_UP`` (bit 17) is read-only (a written 1 does
+       not stick) and says that this lane's own receiver has synchronised. It is
+       not the same as the host seeing carrier: with the receiver
+       unsynchronised the host still reported a 2.5 Gb/s link, because it locks
+       onto this side's transmitter. After a correct bring-up the bit rises in
+       about 20 ms; in 1000BaseX against a host running 2500BaseX it stays
+       clear.
+     - M
+     - With the host up, the bit clear and symbol errors flagged; the rise in
+       about 20 ms after a correct bring-up; the bit clear in 1000BaseX
+       against 2.5 Gb/s. Through the driver, ``/sys/class/net/sfp/carrier``
+       follows it (see "phylink and the lane parameters").
+   * - ``RTL9602C_SERDES_CTRL_CLK_STOP`` (bit 13) stops the lane's clock;
+       ``RTL9602C_SERDES_CTRL_PCIE`` (bit 15) and
+       ``RTL9602C_SERDES_CTRL_PHY_MODE`` (bit 8) are cleared by every
+       bring-up.
+     - T
+     - The lane links with the sequence below.
+
+Bring-up
+--------
+
+The ten steps of ``rtl9602c_serdes_init()``, in order:
+
+1. Set ``RTL9602C_SERDES_CTRL_CLK_STOP``. Purpose: stop the lane's clock before
+   touching its analog settings. (T)
+2. Clear ``RTL9602C_SERDES_CTRL_PCIE`` and set the mode to
+   ``RTL9602C_SERDES_CTRL_MODE_OFF``. Purpose: park the lane. (T)
+3. Write the seven analog words of ``RTL9602C_SERDES_ANA_BASEX_SEQ``, in the
+   order of the table below. Purpose: the lane's analog settings, written while
+   the lane is parked. (T)
+4. In ``RTL9602C_SERDES_CTRL`` clear ``PCIE``, ``CLK_STOP`` and ``PHY_MODE``
+   and set the requested mode. Purpose: restart the lane in that mode with its
+   clock running. (T)
+5. Clear ``RTL9602C_SERDES_FIBER_CTRL_PDOWN`` (bit 11 of
+   ``RTL9602C_SERDES_FIBER_CTRL``, ``0x021c00``). Purpose: take the fibre PHY
+   out of power-down. (T)
+6. Set ``RTL9602C_PHY_CTRL_PATCH_DONE`` (bit 0 of ``RTL9602C_PHY_CTRL``,
+   ``0x000110``). Purpose: set the patch-done flag of the fibre PHY. (T)
+7. Write ``RTL9602C_SERDES_RESET`` (``0x021500``) three times with
+   ``RTL9602C_SERDES_RESET_SEQ``: ``0x10``, ``0x30``, ``0x00``. Purpose: a reset
+   pulse for the lane. (T)
+8. Set or clear the 2.5G override for the mode: at 2500BaseX set
+   ``RTL9602C_SHAPE_2G5_CFG_EN`` and write ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL``,
+   in any other mode clear the enable only (see "Forced MAC ability").
+   Purpose: port 0 carries 2.5 Gb/s as a 1000 Mb/s port with the override. (M)
+9. Last, write ``RTL9602C_SERDES_AN_CTRL`` (``0x021808``) with
+   ``RTL9602C_SERDES_AN_CTRL_INIT`` (``0x71e0``). Purpose: turn in-band
+   auto-negotiation off on the SFP lane; without it the lane transmits and its
+   receiver never synchronises. (M)
+10. Remember the mode as the programmed one (``sds_mode``). Purpose: phylink's
+    state and the check for a no-op ``mac_config`` read it. (T)
+
+The steps tagged T are checked by the SerDes link to the host coming up: the
+lane links about 20 ms after the sequence. Step 8 is checked as in "Forced MAC
+ability". Step 9 is checked by the word ``RTL9602C_SERDES_AN_CTRL``, which read
+``0x70e0`` on an unconfigured lane and ``0x71e0`` with a working link, the only
+difference in the SerDes registers; with ``0x71e0`` written last,
+``RTL9602C_SERDES_CTRL_LINK_UP`` rose and frames crossed. Whether steps 5 and 6
+are needed is not known (see "Open questions").
+
+The analog words of step 3, in the order they are written:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - Write
+     - Offset
+     - Value
+   * - 1
+     - ``0x021700``
+     - ``0x1800``
+   * - 2
+     - ``0x02170c``
+     - ``0x7b01``
+   * - 3
+     - ``0x021718``
+     - ``0x0168``
+   * - 4
+     - ``0x0215b8``
+     - ``0x98c5``
+   * - 5
+     - ``0x0215b4``
+     - ``0x1764``
+   * - 6
+     - ``0x0215bc``
+     - ``0x400f``
+   * - 7
+     - ``0x0215e4``
+     - ``0xfc00``
+
+Three things about the bring-up are assumptions:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - 1000BaseX uses the same seven analog words as 2500BaseX; only the mode
+       differs. No frame has crossed a 1000BaseX link with this driver, so
+       whether 1000BaseX needs other analog values is open.
+     - I
+     - Pass traffic over a 1000BaseX link to a host that only offers
+       1000BaseX. Load-bearing for such hosts.
+   * - The analog words take effect as the lane comes out of park and reset,
+       which is why they are written only while the lane is parked. Whether
+       writing them to a running lane is harmful has not been isolated: the
+       change that made the receiver synchronise was step 9.
+     - I
+     - Skip steps 1 and 2 with step 9 in place and watch
+       ``RTL9602C_SERDES_CTRL_LINK_UP``. Not load-bearing: the driver always
+       parks the lane first.
+   * - Whether steps 5 and 6 are needed is not known: after the boot loader,
+       ``RTL9602C_SERDES_FIBER_CTRL`` already reads ``0x1140`` (power-down
+       clear) and ``RTL9602C_PHY_CTRL`` reads ``0x1`` (``PATCH_DONE`` set), so
+       on this board both writes change nothing.
+     - I
+     - Omit each and bring the lane up after a full chip reset with a boot
+       loader that does not configure the SerDes. Not load-bearing.
+
+In-band auto-negotiation
+------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_SERDES_AN_CTRL_FORCE`` (bits 9:8) carries one bit per SerDes
+       lane of its block, bit 8 for lane 0, the SFP lane
+       (``RTL9602C_SERDES_LANE_SFP`` = 0); set for a lane, it means that the
+       lane's negotiation result is forced, that is, in-band negotiation is off.
+       ``RTL9602C_SERDES_AN_CTRL_RESTART`` (bits 3:0) is written 0 by the
+       bring-up and pulsed on bit 0 by ``sfp_an``; a pulse alone does not
+       change a live link. ``RTL9602C_SERDES_AN_CTRL_INIT`` has FORCE = 0b01
+       and RESTART = 0; its other bits are written as they stand in that value.
+     - M
+     - FORCE bit 8 is the one-bit difference between the unconfigured and the
+       working word of step 9, and clearing and setting it moves the lane.
+   * - Against a host that does not negotiate in band, turning the SFP lane's
+       in-band negotiation on takes the link down: in five alternating
+       repetitions, 0 of 4 pings from the host with it on and 4 of 4 with it
+       off. (IEEE 802.3 clause 37 is the in-band negotiation of 1000BASE-X that
+       this setting concerns.)
+     - M
+     - Pings from the host, the port bounced between cells.
+   * - A change to ``RTL9602C_SERDES_AN_CTRL`` does not reach a live link, not
+       even with a restart pulse, while the word already reads back the new
+       value; it takes effect when the lane is parked and restarted, as a port
+       bounce does.
+     - M
+     - Without a bounce the old behaviour persisted and a repeat in reversed
+       order disagreed; with ``ip link set sfp down`` and ``ip link set sfp
+       up`` between cells, 5 of 5 each way.
+   * - In-band negotiation with a host that itself negotiates in band has never
+       been tried. It is what ``rtl9602c.sfp_an=on`` is for.
+     - I
+     - A host port managed in band: bring the stick up with ``sfp_an=on`` and
+       pass traffic. Load-bearing only for hosts that require in-band
+       negotiation.
+
+Link-down resync
+----------------
+
+``rtl9602c_serdes_resync()`` runs from phylink's link-down callback on port 0,
+where sleeping is allowed:
+
+1. Save ``RTL9602C_SERDES_CTRL``. Purpose: the word to restore. (T)
+2. Write it back with ``RTL9602C_SERDES_CTRL_CLK_STOP`` set. Purpose: stop the
+   lane's clock. (T)
+3. Write it with ``RTL9602C_SERDES_CTRL_PCIE`` clear and the mode
+   ``RTL9602C_SERDES_CTRL_MODE_OFF``, the clock still stopped. Purpose: park the
+   lane. (T)
+4. Wait 20 ms. Purpose: let the parked lane settle. (T)
+5. Write the saved word with ``RTL9602C_SERDES_CTRL_CLK_STOP`` clear. Purpose:
+   restart the lane in its programmed mode with its clock running. (T)
+6. Wait 50 ms. Purpose: give the lane time to settle. (T)
+
+The steps are checked by the SerDes link to the host recovering after host-side
+link bounces, 20 of 20 times, without rebooting the stick.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Without that resync, a lane whose peer restarted is assumed to stay with
+       signal present and ``RTL9602C_SERDES_CTRL_LINK_UP`` clear, and waiting
+       does not help.
+     - I
+     - Remove the resync and bounce the host port; the assumption predicts
+       ``LINK_UP`` stays clear. Not load-bearing: the resync is always done.
+
+phylink and the lane parameters
+===============================
+
+All three ports are fixed links in the device tree, so phylink does not learn a
+state from a PHY: it asks the driver for the state of each port once a second,
+and at once when the interrupt reports a link change. The link of port 0 is the
+receiver of its SerDes lane, not the carrier the host sees. The speed of the
+lane is the host's choice, so it is a module parameter, ``sfp_mode``, and not a
+device tree property; a second parameter, ``sfp_an``, sets the lane's in-band
+negotiation. Both are applied once, at setup, before phylink starts the port.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The MAC capabilities are 2500 and 1000 Mb/s full duplex and symmetric
+       pause (see "Known limitations"). Port 0 offers the interfaces
+       2500BASE-X and 1000BASE-X; ports 2 and 3 offer INTERNAL. All three are
+       fixed links in the device tree, so phylink asks the driver for their
+       state (``rtl9602c_phylink_fixed_state()``): port 0 reports full duplex,
+       its link as ``RTL9602C_SERDES_CTRL_LINK_UP`` and the speed of the
+       programmed mode (1000 for 1000BaseX, 2500 otherwise); ports 2 and 3
+       report 1000 Mb/s full duplex and are always up. The operational state of
+       port 2 is set by the GPON code.
+     - T
+     - ``/sys/class/net/sfp/carrier`` drops and returns with each host-side
+       link bounce; the kernel log carries ``sfp: Link is Up - 2.5Gbps/Full``
+       at every boot with the module in a host cage.
+   * - Port 0's reported speed has to follow the programmed mode: a fixed
+       report of 2500 makes phylink bring a lane set to 1000BaseX back up at
+       2500BaseX about a second later. With the speed following the mode, the
+       link comes up and stays at ``1Gbps/Full``.
+     - M
+     - The kernel log of the stick after setting the lane to 1000BaseX at run
+       time.
+   * - ``mac_config`` (``rtl9602c_mac_config()``) re-runs the whole bring-up
+       only for port 0, and only when phylink's interface maps to a mode
+       (2500BASEX to 22, 1000BASEX to 4) other than the programmed one, logging
+       ``SerDes to 2500BaseX`` or ``SerDes to 1000BaseX``. The sequence takes
+       the link down, so a no-op must not run it.
+     - T
+     - The SerDes link to the host comes up and stays up: no flap on link
+       events.
+   * - ``sfp_mode`` is a read-only string parameter: ``2500basex``, the
+       default, or ``1000basex``; anything else logs a warning and means
+       ``2500basex``. Setup programs this mode (log ``SFP lane up in ...``,
+       with ``2500BaseX`` or ``1000BaseX``) before phylink starts the port. It
+       is a parameter and not a device tree property because the host decides
+       the speed and nothing on the lane tells the stick which: one host port
+       offers 2500BaseX and 1000BaseX, another only 1000BaseX.
+     - T
+     - The board boots to a shell and the SerDes link to the host comes up with
+       the default. The offers of the two host ports were read from the hosts.
+   * - ``sfp_an`` is a read-only string parameter: ``keep``, the default,
+       leaves ``RTL9602C_SERDES_AN_CTRL`` as the bring-up wrote it; ``on``
+       clears the SFP lane's FORCE bit (in-band negotiation on); ``off`` sets
+       it; anything else logs a warning and changes nothing. After changing
+       FORCE the driver sets and then clears the SFP lane's RESTART bit, and
+       logs ``SFP lane in-band auto-negotiation on`` or ``off``. It is applied
+       once, at setup, after the bring-up.
+     - T
+     - The board boots to a shell and the SerDes link comes up with ``keep``.
+       The effect of ``on`` has not been tried against a host that negotiates in
+       band (see "Open questions").
+
+The CPU tag, switch side
+========================
+
+The CPU tag is one mechanism with two halves. The engine's half is in the
+descriptors of the CPU port's DMA engine (see the *CPU port* page); the
+switch's half is one register, ``RTL9602C_CPUTAG_CTRL``, which setup writes by
+read-modify-write.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_CPUTAG_CTRL`` (``0x023030``) reads 0 until the driver writes
+       it. ``RTL9602C_CPUTAG_CTRL_INSERT`` (bit 8) makes the switch attach its
+       own tag to the frames it delivers to the CPU. With bit 8 clear the
+       receive descriptor's tag-present flag stays clear and its tag word is
+       never written; with it set, the tag word carries a destination mask that
+       follows the frame (every port for a broadcast, one port for a frame
+       addressed to the CPU) and the source port. The layout of the tag is on
+       the *CPU port* page. Setup sets the bit.
+     - M
+     - The same traffic with the register at ``0x200`` and at ``0x300``; with
+       the driver setting it, 30 of 30 pings, and the conduit's received count
+       equal to the one of ``sfp``.
+   * - ``RTL9602C_CPUTAG_CTRL_PARSE`` (bit 9) is taken to make the switch read
+       the tag that the CPU port's DMA engine supplies with each frame the CPU
+       sends. Setup sets it, but that it is needed has not been verified: it
+       has never been tested clear, and every measurement of the port mask of
+       transmitted frames ran with it set.
+     - I
+     - Clear the bit and repeat the port-mask measurement: frames leave by the
+       port the descriptor names.
+
+Maximum frame length
+====================
+
+The switch drops a frame longer than its frame length limit. The limit counts a
+whole frame: header, VLAN tags, payload and FCS. The switch has two such
+limits for all four ports, and a selector per port and speed class picks one.
+The driver uses one of them, ``RTL9602C_FRAMELEN_LIMIT0``, and sets it to the
+largest MTU any port has, plus a fixed overhead. The overhead,
+``RTL9602C_FRAME_OVERHEAD``, allows for two VLAN tags, a C-tag and an S-tag,
+because translating between them is what the stick is for, and for the 8-byte
+CPU tag, which the switch counts on a frame from the CPU port although the tag
+travels in the DMA descriptor.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_FRAMELEN_LIMIT0`` (``0x023034``), field
+       ``RTL9602C_FRAMELEN_LIMIT0_BYTES`` (bits 13:0), is the largest frame the
+       switch accepts, counted as a whole frame;
+       ``RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX`` is ``0x3fff``. The switch has two
+       such limits for all four ports;
+       ``RTL9602C_FRAMELEN_SEL(p)`` (``0x011008`` + 4p) picks one per port and
+       speed class, ``RTL9602C_FRAMELEN_SEL_1000M`` (bit 1) for gigabit and
+       ``RTL9602C_FRAMELEN_SEL_10_100M`` (bit 0) for 10/100, a clear bit
+       choosing ``RTL9602C_FRAMELEN_LIMIT0``. Both limits read ``0x3ff0`` and
+       every selector 0 until the driver writes them.
+     - M
+     - Register reads before the driver writes them; through the driver, the
+       frame sizes that pass (next row).
+   * - For a frame from the CPU port the switch also counts the 8-byte CPU tag
+       (``RTL9602C_CPUTAG_LEN``), although the tag travels in the DMA
+       descriptor: a 1522-byte VLAN-tagged frame from the CPU was dropped with
+       the limit at 1528 and passed at 1530. A 1522-byte tagged frame from the
+       host passed with the limit at 1526.
+     - M
+     - Bisecting the limit with 1500-byte IP packets over a VLAN from the host:
+       the stick received every request, and its replies were lost until the
+       limit reached 1530.
+   * - ``rtl9602c_port_change_mtu()`` keeps each port's requested MTU and
+       writes ``RTL9602C_FRAMELEN_LIMIT0`` = the largest of them +
+       ``RTL9602C_FRAME_OVERHEAD`` (34: 14 for the header, 4 for the FCS, two
+       4-byte VLAN tags and the 8-byte CPU tag), and points both selectors of
+       the port at ``RTL9602C_FRAMELEN_LIMIT0``. The default MTU of 1500 gives
+       ``0x5fe``. ``rtl9602c_port_max_mtu()`` reports 0x3fff - 34 = 16349; the
+       MTU a user port can take in practice is lower (see "Known
+       limitations"). The ports are forced to 1000 Mb/s, so the gigabit
+       selector is the one in use; that the 10/100 selector works like it has
+       not been verified.
+     - T, I
+     - T: full-size replies over the management VLAN pass, and bridged traffic
+       passes both ways, sourced from the host. I: send frames on a port forced
+       to 10 or 100 Mb/s; the driver forces none.
+   * - A MAC frame carries 14 octets of addresses and type and 4 of FCS around
+       its payload, and each VLAN tag adds 4 octets. Room for two tags is left
+       because translating between a C-tag and an S-tag is what the stick is
+       for.
+     - P
+     - IEEE 802.3 clause 3.1.1; IEEE 802.1Q clause 9.
+
+The switch interrupt
+====================
+
+The switch has an interrupt block of its own. Every source that is enabled
+drives one output line into the SoC's interrupt controller: source 8, Linux
+interrupt 16 (*MIPS*). ``RTL9602C_IRQ_ENABLE`` is the mask of the sources and
+``RTL9602C_IRQ_PENDING`` shows which are pending. The driver requests the line
+as a threaded interrupt named ``rtl9602c-switch``. The hard handler
+``rtl9602c_irq()`` handles most of the sources itself and leaves the GPON
+source to the thread ``rtl9602c_irq_thread()``.
+
+Registers
+---------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The switch has its own interrupt block; every enabled source drives one
+       output line into the SoC's interrupt controller (the switch node's
+       interrupt). Unmasking a single source in ``RTL9602C_IRQ_ENABLE`` raised
+       that line; masking it again dropped it.
+     - M
+     - The SoC controller's status read with nothing delivered (see the *MIPS*
+       page); through the driver, the ``rtl9602c-switch`` line in
+       ``/proc/interrupts``.
+   * - ``RTL9602C_IRQ_ENABLE`` (``0x01d00c``) is the source mask;
+       ``RTL9602C_IRQ_PENDING`` (``0x01d010``) holds the pending sources,
+       cleared by writing 1. It shows a source as pending whether the source is
+       enabled or not (after a full chip reset it read ``0x1109`` with the mask
+       at 0), so the handler acts only on pending sources that are also
+       enabled. The line stays asserted until the source's pending bit is
+       written; clearing the per-port detail (next row) does not release it.
+     - M
+     - After a full chip reset the register read ``0x1109``; writing 1 gave
+       ``0x1108`` and the line dropped. A handler that cleared only the detail
+       kept finding nothing, and the kernel disabled the line after 100000
+       unhandled interrupts.
+   * - ``RTL9602C_IRQ_LINK_STAT`` (``0x01d014``) is the per-port link detail,
+       one bit per port in each field: ``RTL9602C_IRQ_LINK_STAT_CHANGE`` (bits
+       3:0), ``RTL9602C_IRQ_LINK_STAT_UP`` (11:8) and
+       ``RTL9602C_IRQ_LINK_STAT_DOWN`` (19:16). These three,
+       ``RTL9602C_IRQ_LINK_STAT_EVENTS``, are cleared by writing 1. Bits 25:24
+       hold a state that a write does not clear, so the driver writes back only
+       the event fields. A host-side bounce added port 0's bit to the down
+       field beside port 3's.
+     - M
+     - Writing the whole word back took ``0x03090909`` to ``0x03000000``; the
+       down field went from ``0x8`` to ``0x9`` on a bounce.
+
+Sources
+-------
+
+The sources the driver uses are bits of ``RTL9602C_IRQ_ENABLE`` and
+``RTL9602C_IRQ_PENDING``; the others stay masked.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 6 24 40
+
+   * - Source
+     - Bit
+     - Enabled by
+     - What the driver does with it
+   * - ``RTL9602C_IRQ_SRC_LINK``
+     - 0
+     - Setup.
+     - Tells phylink of each port's link change.
+   * - ``RTL9602C_IRQ_SRC_METER``
+     - 1
+     - Setup.
+     - Logs the meters that exceeded their rate.
+   * - ``RTL9602C_IRQ_SRC_LEARN_LIMIT``
+     - 2
+     - Setup and every write of a learning limit, by rule.
+     - Masks itself, logs, and is re-armed a second later.
+   * - ``RTL9602C_IRQ_SRC_LOOP``
+     - 5
+     - The ``loop_detect`` devlink parameter.
+     - Logs the loops found and cleared (*acl-qos*).
+   * - ``RTL9602C_IRQ_SRC_ACL``
+     - 7
+     - Setup.
+     - Masks itself, logs the templates that matched, and is re-armed a second
+       later.
+   * - ``RTL9602C_IRQ_SRC_GPON``
+     - 10
+     - The GPON bring-up.
+     - Runs the GPON handler in the interrupt thread (*PON*).
+   * - ``RTL9602C_IRQ_SRC_PTP_PPS``
+     - 12
+     - The PHC's pulse-per-second request.
+     - Counts the pulse and passes a ``PTP_CLOCK_PPS`` event to the PHC
+       (*ptp*).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The sources the driver uses, as bits of ``RTL9602C_IRQ_ENABLE`` and
+       ``RTL9602C_IRQ_PENDING``: ``RTL9602C_IRQ_SRC_LINK`` 0, ``_METER`` 1,
+       ``_LEARN_LIMIT`` 2, ``_LOOP`` 5, ``_ACL`` 7, ``_GPON`` 10 and
+       ``_PTP_PPS`` 12. The others stay masked.
+     - T
+     - The rows below, one per source.
+   * - The hard handler takes pending = ``RTL9602C_IRQ_PENDING`` &
+       ``RTL9602C_IRQ_ENABLE`` & the seven sources, and returns "not mine" when
+       that is empty. The non-link sources it handles are acknowledged by
+       writing their pending bits back.
+     - T
+     - The board boots to a shell; the SerDes link to the host comes up and
+       recovers.
+   * - LINK: read ``RTL9602C_IRQ_LINK_STAT``, write back its event fields,
+       acknowledge the pending bit, then tell phylink port by port, from the up
+       and down fields, so that a link change is seen when it happens instead
+       of at the next one-second poll.
+     - T
+     - The SerDes link to the host recovers after host-side link bounces.
+   * - GPON: note the time, leave the source pending and wake the thread; the
+       thread runs the GPON handler (*PON*) and only then writes the GPON
+       pending bit, because the source asserts again until the GTC latches that
+       raised it are read. The line stays masked meanwhile
+       (``IRQF_ONESHOT``).
+     - T
+     - The ONU reaches O5 on an OLT, with PLOAM handled from this interrupt.
+   * - PTP_PPS: count the pulse (the ``ptpstat`` view shows the count) and pass
+       a ``PTP_CLOCK_PPS`` event to the PHC; arming the source is the *ptp*
+       page's.
+     - I
+     - Arm the pulse through the PHC and read ``pulses`` in ``ptpstat`` twice,
+       ten seconds apart: it should advance by ten.
+   * - METER: ``RTL9602C_METER_EXCEEDED`` (``0x025084``) has one latching bit
+       per meter, cleared by writing 1; it asserts once and again only after a
+       clear and a fresh excess. The handler writes back the bits it read and
+       logs ``meters 0x... exceeded their rate``, rate-limited. A 400-frame
+       flood against a limit of 1 packet/s cost two interrupts.
+     - M
+     - An unknown-multicast storm limit on port 0, frames from the host:
+       ``/proc/interrupts`` and the log line
+       ``meters 0x1 exceeded their rate``.
+   * - LEARN_LIMIT: ``RTL9602C_IRQ_LEARN_STAT`` (``0x01d020``) bit
+       ``RTL9602C_IRQ_LEARN_STAT_LIMIT`` (bit 0, one for all ports) says that a
+       port met its learning limit; it is cleared by writing 1. It is raised by
+       an attempt to learn an unknown address on a port at its limit, including
+       a limit of 0, which is how learning off is expressed (see the
+       *bridging* page); so the CPU port, which never learns, raises it
+       whenever one of its addresses ages out and is offered again. The driver
+       therefore subscribes the source only while some port's limit is neither
+       0 nor ``RTL9602C_FDB_LEARN_LIMIT_MAX``, that is, a limit somebody set,
+       and re-evaluates that whenever a limit is written
+       (``rtl9602c_lrn_over_intr_sync()``).
+     - M
+     - Three alarms per 20 s at idle from the CPU port, none after raising its
+       limit; with the rule, none at idle, and two with port 0 limited to 1
+       and 400 frames from 64 new source addresses.
+   * - LEARN_LIMIT and ACL mask themselves: the handler takes the source out of
+       ``RTL9602C_IRQ_ENABLE``, clears its status and logs, rate-limited
+       (``a port reached its address-learning limit`` and
+       ``acl templates 0x... matched``); one second later a work item
+       (``rtl9602c_intr_rearm()``) clears the status again and unmasks it, so
+       that the source fires on a fresh event and not on the one already
+       reported. For LEARN_LIMIT the work first re-evaluates the subscription
+       and leaves the source masked if nothing is subscribed.
+     - M
+     - 300 frames from 300 new source addresses on a learning-off port cost 5
+       interrupts with the self-masking and 277 without.
+   * - ACL: ``RTL9602C_ACL_HIT_STAT`` (``0x0151c8``), field
+       ``RTL9602C_ACL_HIT_STAT_TMPL`` (bits 7:0), has one latch per rule
+       template, cleared by writing the bits back. No ACL interrupt has ever
+       been seen: no rule that the driver writes asks for one, and with the
+       source unmasked, 300 matching frames of a rule that did ask for one
+       raised none, with ``RTL9602C_ACL_HIT_STAT`` staying 0.
+     - I
+     - Produce one; what a rule needs to raise it is the *acl-qos* page's. Not
+       load-bearing.
+
+Interrupt setup
+---------------
+
+``rtl9602c_irq_setup()``, from ``rtl9602c_setup()``, in order:
+
+1. Initialise the re-arm work and the GPON worker. Purpose: the handler and the
+   GPON code use them. (T)
+2. Write ``RTL9602C_IRQ_ENABLE`` = 0. Purpose: no source asserts the line while
+   the handler is being put in place. (T)
+3. Clear the event fields of ``RTL9602C_IRQ_LINK_STAT`` (a full chip reset left
+   ``0x03080909`` there). Purpose: link events latched before the driver must
+   not assert a line nobody handles. (T)
+4. Request the line as a threaded interrupt with ``IRQF_ONESHOT``, named
+   ``rtl9602c-switch``. Purpose: the handler exists before any source is
+   unmasked. (T)
+5. Register the teardown (``rtl9602c_irq_disable()``, run from devres).
+   Purpose: mask every source and cancel the two work items before the line is
+   freed. (T)
+6. Enable LINK, METER and ACL. Purpose: link changes reach phylink at once, and
+   policed drops and ACL hits are events. (T)
+7. Subscribe the learning limit by rule (``rtl9602c_lrn_over_intr_sync()``).
+   Purpose: the source is on only while a port has a limit somebody set. (T)
+
+The mask goes up only after the handler exists, so that latched events from
+before the driver cannot assert an unhandled line. With no interrupt in the
+device tree, or if the request fails, the driver says so and leaves the link
+state to phylink's once-a-second poll of the fixed links (see "Known
+limitations"). The log line of a successful setup begins
+``interrupt 16: link changes, policed drops and acl hits are events now`` and
+ends with ``, and a deliberate learning limit`` when the learning limit is
+subscribed. The steps are checked by the board booting to a shell and the
+SerDes link recovering after host-side link bounces: at idle the count in
+``/proc/interrupts`` does not move over 20 s, and a host bounce adds 2.
+
+Per-port counters
+=================
+
+Each port has a receive block and a transmit block of counters in the switch's
+register window, one 32-bit counter per word, read directly with no latch step.
+``rtl9602c_get_ethtool_stats()`` reads all 44 counters of a port on every
+``ethtool -S``, under the names of the tables below; DSA lists its own
+``tx_packets``, ``tx_bytes``, ``rx_packets`` and ``rx_bytes`` before them. The
+two octet counters are 64 bits wide: the driver reads the high word, the low
+word and the high word again, and repeats while the high word moved, so that a
+carry between the reads cannot corrupt the value. ``rx_forward_discards`` is in
+the transmit block but counts frames received on the port and discarded by
+forwarding. The *Tag* column of the tables says how the offset is established,
+by the rows that follow them.
+
+Receive block, at ``RTL9602C_MIB_RX(p)`` = ``0x032200`` + 128p:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 50 12 8
+
+   * - ``ethtool -S`` name
+     - Macro
+     - Offset
+     - Tag
+   * - ``rx_octets`` (64 bits)
+     - ``RTL9602C_MIB_RX_OCTETS``
+     - ``0x00``
+     - M
+   * - ``rx_crc_errors``
+     - ``RTL9602C_MIB_RX_CRC_ALIGN_ERRORS``
+     - ``0x08``
+     - M
+   * - ``rx_symbol_errors``
+     - ``RTL9602C_MIB_RX_SYMBOL_ERRORS``
+     - ``0x0c``
+     - I
+   * - ``rx_pause``
+     - ``RTL9602C_MIB_RX_PAUSE_FRAMES``
+     - ``0x10``
+     - I
+   * - ``rx_unknown_opcodes``
+     - ``RTL9602C_MIB_RX_UNKNOWN_OPCODES``
+     - ``0x14``
+     - I
+   * - ``rx_fragments``
+     - ``RTL9602C_MIB_RX_FRAGMENTS``
+     - ``0x18``
+     - I
+   * - ``rx_jabbers``
+     - ``RTL9602C_MIB_RX_JABBERS``
+     - ``0x1c``
+     - I
+   * - ``rx_unicast``
+     - ``RTL9602C_MIB_RX_UCAST_PKTS``
+     - ``0x20``
+     - T
+   * - ``rx_drops``
+     - ``RTL9602C_MIB_RX_DROP_EVENTS``
+     - ``0x24``
+     - M
+   * - ``rx_multicast``
+     - ``RTL9602C_MIB_RX_MCAST_PKTS``
+     - ``0x28``
+     - I
+   * - ``rx_broadcast``
+     - ``RTL9602C_MIB_RX_BCAST_PKTS``
+     - ``0x2c``
+     - I
+   * - ``rx_1519_max_octets``
+     - ``RTL9602C_MIB_RX_PKTS_1519_MAX``
+     - ``0x30``
+     - I
+   * - ``rx_undersize``
+     - ``RTL9602C_MIB_RX_UNDERSIZE_PKTS``
+     - ``0x38``
+     - I
+   * - ``rx_oversize``
+     - ``RTL9602C_MIB_RX_OVERSIZE_PKTS``
+     - ``0x3c``
+     - I
+   * - ``rx_64_octets``
+     - ``RTL9602C_MIB_RX_PKTS_64``
+     - ``0x40``
+     - I
+   * - ``rx_65_127_octets``
+     - ``RTL9602C_MIB_RX_PKTS_65_127``
+     - ``0x44``
+     - I
+   * - ``rx_128_255_octets``
+     - ``RTL9602C_MIB_RX_PKTS_128_255``
+     - ``0x48``
+     - I
+   * - ``rx_256_511_octets``
+     - ``RTL9602C_MIB_RX_PKTS_256_511``
+     - ``0x4c``
+     - I
+   * - ``rx_512_1023_octets``
+     - ``RTL9602C_MIB_RX_PKTS_512_1023``
+     - ``0x50``
+     - I
+   * - ``rx_1024_1518_octets``
+     - ``RTL9602C_MIB_RX_PKTS_1024_1518``
+     - ``0x54``
+     - I
+
+Transmit block, at ``RTL9602C_MIB_TX(p)`` = ``0x032000`` + 128p:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 50 12 8
+
+   * - ``ethtool -S`` name
+     - Macro
+     - Offset
+     - Tag
+   * - ``tx_ether_multicast``
+     - ``RTL9602C_MIB_TX_RMON_MCAST_PKTS``
+     - ``0x00``
+     - I
+   * - ``tx_ether_broadcast``
+     - ``RTL9602C_MIB_TX_RMON_BCAST_PKTS``
+     - ``0x04``
+     - I
+   * - ``tx_undersize``
+     - ``RTL9602C_MIB_TX_UNDERSIZE_PKTS``
+     - ``0x08``
+     - I
+   * - ``tx_oversize``
+     - ``RTL9602C_MIB_TX_OVERSIZE_PKTS``
+     - ``0x0c``
+     - I
+   * - ``tx_64_octets``
+     - ``RTL9602C_MIB_TX_PKTS_64``
+     - ``0x10``
+     - I
+   * - ``tx_65_127_octets``
+     - ``RTL9602C_MIB_TX_PKTS_65_127``
+     - ``0x14``
+     - I
+   * - ``tx_128_255_octets``
+     - ``RTL9602C_MIB_TX_PKTS_128_255``
+     - ``0x18``
+     - I
+   * - ``tx_256_511_octets``
+     - ``RTL9602C_MIB_TX_PKTS_256_511``
+     - ``0x1c``
+     - I
+   * - ``tx_512_1023_octets``
+     - ``RTL9602C_MIB_TX_PKTS_512_1023``
+     - ``0x20``
+     - T
+   * - ``tx_1024_1518_octets``
+     - ``RTL9602C_MIB_TX_PKTS_1024_1518``
+     - ``0x24``
+     - I
+   * - ``tx_octets`` (64 bits)
+     - ``RTL9602C_MIB_TX_OCTETS``
+     - ``0x28``
+     - M
+   * - ``tx_single_collisions``
+     - ``RTL9602C_MIB_TX_SINGLE_COLLISIONS``
+     - ``0x30``
+     - I
+   * - ``tx_multiple_collisions``
+     - ``RTL9602C_MIB_TX_MULTIPLE_COLLISIONS``
+     - ``0x34``
+     - I
+   * - ``tx_deferred``
+     - ``RTL9602C_MIB_TX_DEFERRED``
+     - ``0x38``
+     - I
+   * - ``tx_late_collisions``
+     - ``RTL9602C_MIB_TX_LATE_COLLISIONS``
+     - ``0x3c``
+     - I
+   * - ``tx_collisions``
+     - ``RTL9602C_MIB_TX_COLLISIONS``
+     - ``0x40``
+     - I
+   * - ``tx_excessive_collisions``
+     - ``RTL9602C_MIB_TX_EXCESSIVE_COLLISIONS``
+     - ``0x44``
+     - I
+   * - ``tx_pause``
+     - ``RTL9602C_MIB_TX_PAUSE_FRAMES``
+     - ``0x48``
+     - I
+   * - ``tx_discards``
+     - ``RTL9602C_MIB_TX_DISCARDS``
+     - ``0x4c``
+     - T
+   * - ``tx_1519_max_octets``
+     - ``RTL9602C_MIB_TX_PKTS_1519_MAX``
+     - ``0x50``
+     - I
+   * - ``rx_forward_discards``
+     - ``RTL9602C_MIB_TX_FWD_DISCARDS``
+     - ``0x58``
+     - T
+   * - ``tx_unicast``
+     - ``RTL9602C_MIB_TX_UCAST_PKTS``
+     - ``0x5c``
+     - T
+   * - ``tx_multicast``
+     - ``RTL9602C_MIB_TX_MCAST_PKTS``
+     - ``0x60``
+     - I
+   * - ``tx_broadcast``
+     - ``RTL9602C_MIB_TX_BCAST_PKTS``
+     - ``0x64``
+     - I
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Each port has a receive block at ``RTL9602C_MIB_RX(p)`` (``0x032200`` +
+       128p) and a transmit block at ``RTL9602C_MIB_TX(p)`` (``0x032000`` +
+       128p), one 32-bit counter per word, read directly with no latch step.
+       The driver reads all 44 counters of the port on every ``ethtool -S``;
+       the counters of the CPU port appear in the conduit's statistics under
+       DSA's prefix ``s00_p03_``.
+     - T
+     - ``rx_unicast`` and ``tx_unicast`` of ``sfp`` and ``pon`` through
+       ``ethtool -S`` count the frames sent through them in a datapath test;
+       the counters also close the account of frames that arrived, were
+       discarded, went to the CPU and were forwarded in a routing test.
+   * - Offsets that tests depend on: receive ``RTL9602C_MIB_RX_UCAST_PKTS``
+       ``0x20`` (``rx_unicast``); transmit ``RTL9602C_MIB_TX_UCAST_PKTS``
+       ``0x5c`` (``tx_unicast``), ``RTL9602C_MIB_TX_PKTS_512_1023`` ``0x20``
+       (``tx_512_1023_octets``), ``RTL9602C_MIB_TX_DISCARDS`` ``0x4c``
+       (``tx_discards``) and ``RTL9602C_MIB_TX_FWD_DISCARDS`` ``0x58``. The
+       last sits in the transmit block but counts frames received on the port
+       and discarded by the forwarding process, so the driver names it
+       ``rx_forward_discards``.
+     - T
+     - Unicast frames counted on ports 0 and 2 in a datapath test; in a routing
+       test, frames arrived = discarded + sent to the CPU + forwarded closes on
+       ports 0 and 2; in a PPPoE test, the 512 to 1023 byte frames and the
+       discards counted on port 2.
+   * - Offsets measured with single frames: receive
+       ``RTL9602C_MIB_RX_OCTETS`` ``0x00`` (``rx_octets``, low word),
+       ``RTL9602C_MIB_RX_CRC_ALIGN_ERRORS`` ``0x08`` (``rx_crc_errors``) and
+       ``RTL9602C_MIB_RX_DROP_EVENTS`` ``0x24`` (``rx_drops``); transmit
+       ``RTL9602C_MIB_TX_OCTETS`` ``0x28`` (``tx_octets``, low word). Port 3's
+       received octets counted 60 for one 60-byte frame; its CRC/alignment
+       errors and drop events counted 2 and 2 for two frames sent without FCS;
+       port 0's transmitted octets counted 128 for two frames.
+     - M
+     - Counters read after frames sent from the CPU.
+   * - The remaining offsets, the ones tagged I in the tables, have not been
+       checked against known traffic.
+     - I
+     - Send a known burst for each (broadcast, multicast, frames of one size)
+       and compare the ``ethtool -S`` deltas. Load-bearing for anything that
+       reports these counters upward, such as performance monitoring.
+   * - The two octet counters are 64 bits: the low word at the named offset,
+       the high word 4 bytes after it. The driver reads high, low, high and
+       repeats while the high word moved. That the high word is the one at +4
+       has not been observed.
+     - I
+     - Pass more than 4 GiB through a port and compare ``rx_octets`` with
+       frames times size. Load-bearing once a counter passes 4 GiB.
+   * - Two multicast and two broadcast transmit counters exist:
+       ``tx_ether_multicast`` and ``tx_ether_broadcast`` would count what the
+       MAC put on the wire, ``tx_multicast`` and ``tx_broadcast`` what
+       forwarding handed to the port, differing by what the port dropped after
+       the forwarding decision.
+     - I
+     - Congest a port with multicast and compare the two counters. Not
+       load-bearing.
+   * - The counters correspond to the standard objects: ``rx_octets`` and
+       ``tx_octets`` to ifHCInOctets and ifHCOutOctets; ``rx_unicast``,
+       ``rx_multicast``, ``rx_broadcast``, ``tx_unicast``, ``tx_multicast`` and
+       ``tx_broadcast`` to the ifIn and ifOut packet counts; ``tx_discards`` to
+       ifOutDiscards (RFC 2863); ``rx_crc_errors``, ``rx_drops``,
+       ``rx_fragments``, ``rx_jabbers``, ``rx_undersize``, ``rx_oversize``,
+       ``tx_collisions`` and the receive size buckets up to 1518 to the
+       etherStats objects (RFC 2819); ``rx_symbol_errors``, ``rx_pause``,
+       ``tx_pause``, ``rx_unknown_opcodes`` and the single, multiple, late,
+       excessive and deferred counts to the dot3 objects (RFC 3635); and
+       ``rx_forward_discards`` to dot1dTpPortInDiscards (RFC 4188). The
+       transmit size buckets and both 1519-to-maximum counters have no
+       standard object.
+     - P
+     - RFC 2863, RFC 2819, RFC 3635 and RFC 4188, by object name.
+
+Restart, reload and teardown
+============================
+
+A warm restart of the CPU does not reset the switch, and a module reload leaves
+it running with its registers and tables as they were. Only a full chip reset,
+the reset the watchdog performs (*MIPS*), starts it over. The driver therefore
+writes every piece of state it depends on at setup rather than assuming reset
+values, and it does not rely on what the boot loader leaves, which depends on
+the boot loader's environment.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A warm restart of the CPU does not reset the switch: a counter that
+       free-runs in the switch kept counting across a RAM boot (80 s, then 153
+       s after 73 s of wall clock), and only a full chip reset started it over
+       (21 s). A module reload leaves the switch running with its register
+       file intact. Setup therefore writes every piece of state it depends on
+       rather than assuming reset values.
+     - M
+     - The PTP counter read across each (through the driver, the PHC, see the
+       *ptp* page); a DoS check enabled before ``rmmod`` is still enabled
+       after ``insmod`` until setup clears it (see "Setup, in order").
+   * - What the boot loader leaves depends on its environment and is not relied
+       on: ``RTL9602C_SERDES_CTRL`` read ``0x0004801f`` (lane parked) after one
+       boot and ``0x00260016`` (2500BaseX, ``LINK_UP``) after another. The rest
+       of the inherited state is in the rows for the port force words, the
+       fibre PHY control and ``PATCH_DONE``, ``RTL9602C_CPUTAG_CTRL``, the
+       frame length limit, the pending and link detail words of the interrupt
+       block and the header-capture latch (*acl-qos*).
+     - M
+     - Register reads after those boots, with the switch driver not loaded.
+
+Teardown
+--------
+
+``rtl9602c_remove()`` calls ``dsa_unregister_switch()``, and DSA calls
+``rtl9602c_teardown()``, which undoes setup in this order:
+
+1. Unregister the L3 notifiers (address, neighbour and route). Purpose: they can
+   run on any CPU and touch the tables, so they go first. (T)
+2. Tear down the GEM data path. Purpose: the PON device is unregistered with
+   its last child, the OMCI port, and the data path must not outlive it. (T)
+3. Tear down the OMCI channel. (T)
+4. Remove the debugfs directory ``rtl9602c``. (T)
+5. Unregister the PHC. (T)
+6. Destroy the ``frame_capture`` region and unregister the devlink parameters.
+   Purpose: they go before the devlink instance does, so that the next probe
+   does not find their names taken. (T)
+
+The interrupt is undone last, by devres, after ``rtl9602c_remove()`` has
+returned: ``rtl9602c_irq_disable()`` writes ``RTL9602C_IRQ_ENABLE`` = 0, then
+cancels the re-arm work and the GPON worker. The steps are checked by a module
+reload: after ``rmmod`` and ``insmod``, the parameters are there again.
+
+Setup, in order
+===============
+
+DSA calls ``rtl9602c_setup()`` once the switch is registered. Everything the
+driver depends on is written here, because a warm restart or a reload leaves
+the switch as it was (see "Restart, reload and teardown"). The SerDes lane comes
+first, since nothing reaches the host without it. From the GPON report on, a
+part that fails is logged and setup still succeeds: a switch without its
+optics, its PHC, its OMCI channel or its GEM data path still switches frames.
+A step that belongs to another page is named and handed over.
+
+1. Bring up the SerDes lane in the ``sfp_mode`` mode, then apply ``sfp_an``
+   (see "The SerDes lane to the host" and "phylink and the lane parameters";
+   the log line is ``SFP lane up in 2500BaseX`` or ``1000BaseX``). Purpose: the
+   lane first, because nothing else carries a frame without it. (T)
+2. Force the CPU port up at 1000 Mb/s full duplex (see "Forced MAC ability").
+   Purpose: the CPU port comes out of reset with its forced link clear. (T)
+3. Set both CPU tag directions in ``RTL9602C_CPUTAG_CTRL`` (see "The CPU tag,
+   switch side"). Purpose: the source port, the reason and the PON flow reach
+   the receive descriptor, and the switch reads the tag of frames from the CPU.
+   (T)
+4. Empty the L2 table and the NAT tables (*bridging*, *l3-nat*). Purpose: they
+   survive a warm restart. (T)
+5. Run the indirect table self-test (*bridging*). Purpose: check that the
+   table engine reaches the VLAN entries where the driver expects them. A
+   failure is logged and setup continues. (T)
+6. Set up the interrupt (see "Interrupt setup"). (T)
+7. Mark the DSCP map switch-wide, forget the apptrust owner and read the
+   classifier depth (*acl-qos*). (T)
+8. Report the memory self-test (see "Access and identification"). (T)
+9. Switch the DoS checks off, with the flood thresholds at 0 in the registers
+   and in the driver's copy (*acl-qos*). Purpose: no check enabled before the
+   driver loaded survives. (T)
+10. Switch storm control off, free the meters and clear their latches
+    (*acl-qos*). Purpose: a latch left from before would read as a policed drop
+    that never happened. (T)
+11. Write the two L4-port field selectors (*acl-qos*). (T)
+12. Set the reserved-address exemptions from storm control (*acl-qos*). (T)
+13. Switch loop detection off and clear its latches (*acl-qos*). Purpose: a
+    loaded driver must not start sending probes onto a network by itself. (T)
+14. Arm the header capture in mode none (*acl-qos*). Purpose: no capture
+    predates the driver. (T)
+15. Register the devlink parameters and the region (*devlink*). A failure is
+    logged and the switch carries on. (T)
+16. Set standalone forwarding: each port's flood request is set to what reset
+    leaves (unknown unicast, unknown multicast and broadcast flooding), the GEM
+    bridge state is cleared, and the bridge refresh writes isolation, flooding
+    and learning from that state (*bridging*, *PON*). (T)
+17. Bring up the L3/NAT engine and register its notifiers (*l3-nat*). (T)
+18. The GPON report (*PON*), the debugfs views, the I2C master and the optics
+    hwmon device (*PON*), the PHC (*ptp*), the OMCI channel and the GEM data
+    path (*PON*). A failure in any of these is logged and setup still succeeds.
+    (T)
+
+The steps are checked as follows. Step 1 by the SerDes link to the host coming
+up. Steps 2 and 3 by bridged traffic passing both ways, sourced from the host.
+Steps 4 and 5 by VLAN filtering, FDB learning and ageing working, and by the
+board booting to a shell. Steps 6 to 8 by the board booting to a shell and the
+SerDes link recovering after host-side link bounces. Steps 9 to 14 by the ACL
+hit counters, the policer and the storm-control rates matching their settings,
+and by the board booting to a shell. Steps 15 to 17 by bridged traffic passing
+both ways, VLAN filtering and FDB learning working, and a routing and NAT test
+that sees a translated source address on the wire. Step 18 by the board
+booting to a shell, the PTP hardware clock reading and steering, OMCI passing
+both ways over ``/dev/pon0omci0`` and the optics diagnostics reading.
+
+The system-controller enable in front of the PON packet buffer
+==============================================================
+
+The PON MAC and its packet buffer, the part of the switch's window from
+``0xf00000``, sit behind an enable in the system controller. Until
+``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF`` is set, a read there never completes. The
+driver reaches the system controller as a syscon regmap and sets the bit when
+the PON MAC is first built, at the first bring-up of the PON and before the
+first access; it reads nothing in the block before that, and it never clears
+the bit. The first two rows give system controller offsets, not switch ones.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The PON MAC and its packet buffer, the part of the window from
+       ``0xf00000``, answer only after the system controller's
+       ``RTL9602C_SYSCTL_BLOCK_EN`` (``0x63c``) bit
+       ``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF`` (bit 5) is set. Before that a read
+       there never completes and the board needs a power cycle or the
+       watchdog; after it, the same block reads normally. After the boot loader
+       the register reads ``0x10``, the bit clear.
+     - M
+     - Reads in the block hung the board with the bit clear; with the bit set
+       at the boot loader prompt, a read in the block returned. Through the
+       driver, the first line of the ``ponmac`` view
+       (``/sys/kernel/debug/rtl9602c/ponmac``) shows the enable as ``CLOSED``
+       before and ``open`` after ``ip link set pon up``.
+   * - The driver sets ``RTL9602C_SYSCTL_BLOCK_EN_PKTBUF`` through the system
+       controller's regmap before its first access to the block, when the PON
+       MAC is first built (``rtl9602c_ponmac_init()``, at the start of a
+       bring-up of the PON; see the *PON* page), and reads nothing there
+       before.
+     - T
+     - OMCI crosses the packet buffer both ways: OMCI messages pass both ways
+       over ``/dev/pon0omci0``.
+   * - Just before the enable, the driver sets ``RTL9602C_SYSCTL_SOC_STATE``
+       (``0x044``) bit ``RTL9602C_SYSCTL_SOC_STATE_READY`` (bit 0), which reads
+       ``0x35e`` (bit 0 clear) after the boot loader. That the PON MAC needs it
+       is unverified.
+     - I
+     - Leave it clear and see whether the packet buffer still reports itself
+       initialised. Not load-bearing while the driver sets it.
+   * - At probe the driver finds the system controller through the
+       ``realtek,sysctl`` phandle and the buffer through two reserved-memory
+       regions named ``pbo-us`` and ``pbo-ds``, each at least
+       ``RTL9602C_PBO_DRAM`` (1 MiB). A system controller that has not probed
+       yet defers the probe; anything missing leaves the PON MAC unavailable
+       and the switch working.
+     - T
+     - The board boots to a shell, and OMCI passes both ways over
+       ``/dev/pon0omci0``.
+
+Known limitations
+=================
+
+- The largest MTU a user port takes is the conduit's, 1500.
+  ``rtl9602c_port_max_mtu()`` reports 16349, but DSA bounds the MTU of a user
+  port by the ``max_mtu`` of the conduit, which stays at the Ethernet default
+  of 1500, so a larger MTU on ``sfp`` or ``pon`` fails with ``-ERANGE`` (see the
+  known limitations on the *CPU port* page). The switch's own limit, described
+  in "Maximum frame length", is not what stops it.
+- The switch applies one frame length limit to all four ports. It is the
+  largest MTU any port has, plus ``RTL9602C_FRAME_OVERHEAD``, so a port accepts
+  frames up to that length whatever its own MTU is.
+- The driver offers symmetric pause to phylink, but programs no pause result
+  into any MAC.
+- With ``rtl9602c.sfp_mode=1000basex``, the phy-mode of port 0 in the board's
+  device tree is still ``2500base-x``. For a fixed link phylink passes the
+  device tree's phy-mode to ``mac_config`` when the port starts. That differs
+  from the programmed mode, so bringing ``sfp`` up is expected to run the SerDes
+  bring-up again in 2500BaseX, and because every bring-up rewrites
+  ``RTL9602C_SERDES_AN_CTRL_INIT``, the re-run also discards ``sfp_an``. This
+  has not been verified; if it holds, 1000BaseX also needs the phy-mode
+  ``1000base-x`` in the device tree.
+- ``rtl9602c_rmw()`` is a read followed by a write. ``RTL9602C_IRQ_ENABLE`` is
+  changed that way by the interrupt handler, the re-arm work, the learning-limit
+  subscription, the ``loop_detect`` parameter, the PHC's pulse-per-second
+  request and the GPON bring-up, under no lock that they share, so a change
+  made by two of them at the same moment could be lost. This has not been
+  observed.
+- The re-arm work and the GPON worker are initialised by the interrupt setup,
+  and only when the switch node has an interrupt. Without one the driver still
+  probes and switches frames, with the link state polled, but bringing the
+  ``pon`` interface up would schedule a GPON worker that was never
+  initialised. The binding requires the ``interrupts`` property.
+
+Open questions
+==============
+
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the assumptions the driver depends on: the
+driver is correct on this board only if they hold, and a board test must settle
+them. The second list holds the questions to which the code is indifferent: it
+works whichever way they resolve.
+
+Assumptions the driver depends on
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - With ``rtl9602c.sfp_mode=1000basex``, the ``2500base-x`` phy-mode of the
+       device tree makes ``mac_config`` re-run the SerDes bring-up in 2500BaseX
+       when ``sfp`` is brought up, and the re-run discards ``sfp_an`` ("Known
+       limitations").
+     - Booting with ``rtl9602c.sfp_mode=1000basex``, bringing ``sfp`` up and
+       looking for ``SerDes to 2500BaseX`` in the kernel log. If confirmed,
+       1000BaseX also needs the phy-mode ``1000base-x`` in the device tree.
+   * - 1000BaseX works with the analog words used for 2500BaseX ("Bring-up").
+     - Passing traffic over a 1000BaseX link to a host that only offers
+       1000BaseX.
+   * - In-band negotiation works with a host that itself negotiates in band
+       (``rtl9602c.sfp_an=on``, "In-band auto-negotiation").
+     - A host port managed in band: bringing the stick up with ``sfp_an=on``
+       and passing traffic. Load-bearing only for hosts that require in-band
+       negotiation.
+   * - The counter offsets tagged I are what their names say ("Per-port
+       counters").
+     - Sending a known burst for each (broadcast, multicast, frames of one
+       size) and comparing the ``ethtool -S`` deltas.
+   * - The high word of each 64-bit octet counter is at +4 ("Per-port
+       counters").
+     - Passing more than 4 GiB through a port and comparing ``rx_octets`` with
+       frames times size.
+
+Questions the code does not depend on
+-------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether bit 4 of ``RTL9602C_PORT_FORCE_EN`` is the enable of the forced
+       link ("Forced MAC ability"). It matters only between port enable and
+       phylink's link-up.
+     - Setting and clearing the bit alone, with the link value clear, and
+       reading the port's link state.
+   * - Whether the override of ``RTL9602C_SHAPE_2G5_CFG`` lets port 0 carry more
+       than 1 Gb/s ("Forced MAC ability").
+     - A flow above 1 Gb/s from the host through port 0.
+   * - Whether a lane whose peer restarted stays unsynchronised without the
+       link-down resync ("Link-down resync").
+     - Removing the resync and bouncing the host port: ``LINK_UP`` should stay
+       clear.
+   * - Whether writing the analog words to a running lane is harmful
+       ("Bring-up").
+     - Skipping steps 1 and 2 of the bring-up with step 9 in place and watching
+       ``RTL9602C_SERDES_CTRL_LINK_UP``.
+   * - Whether steps 5 and 6 of the bring-up, the fibre PHY out of power-down
+       and ``PATCH_DONE``, are needed ("Bring-up").
+     - Omitting each and bringing the lane up after a full chip reset with a
+       boot loader that does not configure the SerDes.
+   * - Whether ``RTL9602C_CPUTAG_CTRL_PARSE`` is needed ("The CPU tag, switch
+       side"). Setup always sets it.
+     - Clearing the bit and repeating the measurement of the port mask of
+       transmitted frames.
+   * - Whether the 10/100 frame length selector works like the gigabit one
+       ("Maximum frame length"). The driver forces no port below 1000 Mb/s.
+     - Sending frames of the size of the limit through a port forced to 10 or
+       100 Mb/s.
+   * - Whether the pulse-per-second interrupt counts the pulses of the PHC
+       ("The switch interrupt").
+     - Arming the pulse through the PHC and reading ``pulses`` in ``ptpstat``
+       twice, ten seconds apart: it should advance by ten.
+   * - Whether an ACL rule can raise the ACL interrupt ("The switch
+       interrupt").
+     - Producing one; what a rule needs to raise it is on the *acl-qos* page.
+   * - Whether ``tx_ether_multicast`` and ``tx_ether_broadcast`` count what the
+       MAC put on the wire, against ``tx_multicast`` and ``tx_broadcast``
+       counting what forwarding handed to the port ("Per-port counters").
+     - Congesting a port with multicast and comparing the two counters.
+   * - Whether the PON MAC needs ``RTL9602C_SYSCTL_SOC_STATE_READY``
+       ("The system-controller enable in front of the PON packet buffer").
+     - Leaving the bit clear and seeing whether the packet buffer still reports
+       itself initialised.
