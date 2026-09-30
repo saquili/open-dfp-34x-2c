@@ -28,6 +28,7 @@ properties:
       - ingenic,xburst-fpu2.0-mxu2.0
       - ingenic,xburst-mxu1.0
       - ingenic,xburst2-fpu2.1-mxu2.1-smt
+      - lexra,lx5281
       - loongson,gs264
       - mips,m14Kc
       - mips,mips1004Kc
