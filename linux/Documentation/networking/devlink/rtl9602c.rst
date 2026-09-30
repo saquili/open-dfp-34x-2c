@@ -1,0 +1,1000 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+========================
+rtl9602c devlink support
+========================
+
+This document describes the devlink features implemented by the ``rtl9602c``
+device driver, the DSA driver of the switch of the Realtek RTL9602C, the SoC of
+GPON optical network units such as SFP sticks. The switch and its driver are
+described in Documentation/networking/dsa/rtl9602c.rst. This page is what a
+user needs to drive the switch through ``devlink``: how to address the device,
+every driver-specific parameter, the region and the reply of the info command.
+
+Overview
+========
+
+The driver implements these devlink objects and no others:
+
+- 22 driver-specific parameters, all of mode ``runtime``. They configure the
+  malformed-frame (DoS) checks, the four storm-control classes that ``tc``
+  cannot describe, the header capture, loop detection and the ONU's serial
+  number (see "Parameters").
+- One region, ``frame_capture``, that holds a snapshot of the header capture
+  (see "The region frame_capture").
+- The reply to ``devlink dev info``, which names the part and the revision of
+  the GPON MAC (see "Device info").
+
+The driver registers no generic parameters, resources, traps, health reporters
+or shared buffers, and it does not support reload. DSA creates the devlink
+ports of the switch, and the driver adds nothing to them. The speed and the
+in-band negotiation of the SerDes lane to the host are module parameters,
+``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an``, and not devlink parameters;
+Documentation/networking/dsa/rtl9602c.rst describes them.
+
+The hardware behind the parameters is described on these pages, which the
+sections below name again where a parameter uses them:
+
+- Documentation/networking/dsa/rtl9602c-acl-qos.rst: the DoS checks, the meters
+  and storm control, loop detection and the header capture.
+- Documentation/networking/dsa/rtl9602c-bridging.rst: the reserved group
+  addresses that storm control leaves alone.
+- Documentation/networking/dsa/rtl9602c.rst: the switch core, the ports, the
+  identification of the part, setup and reload, and the system controller.
+- Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst: the GPON MAC
+  and what the ONU's serial number is used for.
+- Documentation/networking/pon.rst: the PON class, which reports the serial
+  number in the status of the PON device.
+- Documentation/networking/dsa/rtl9602c-ptp.rst: the PTP clock, which has no
+  devlink object.
+
+The handle
+----------
+
+The devlink instance is the platform device of the ``switch`` node of the
+device tree, compatible ``realtek,rtl9602c-switch``, unit address
+``1b000000``. Its handle is ``platform/1b000000.switch``, and every command on
+this page uses it::
+
+    # devlink dev show
+    platform/1b000000.switch
+
+The platform driver and the module are named ``rtl9602c``, which is the driver
+name in the reply of ``devlink dev info``. The driver creates its parameters
+and its region in ``rtl9602c_setup()``, which DSA calls when the switch is
+registered, and removes them in ``rtl9602c_teardown()``.
+
+The code
+--------
+
+The driver implements three operations of ``struct dsa_switch_ops`` for
+devlink, ``devlink_info_get``, ``devlink_param_get`` and ``devlink_param_set``
+(every name is prefixed ``rtl9602c_``), and creates the region with
+``dsa_devlink_region_create()``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - File
+     - What of this page it holds
+   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
+     - The parameter table ``rtl9602c_devlink_params[]`` and its callbacks
+       ``rtl9602c_devlink_param_get()`` and ``rtl9602c_devlink_param_set()``;
+       ``rtl9602c_devlink_info_get()``; the region
+       ``rtl9602c_hsb_region_ops`` with ``rtl9602c_hsb_snapshot()`` and
+       ``rtl9602c_hsb_arm()``; ``rtl9602c_rldp_set_magic()``; the registration
+       in ``rtl9602c_setup()`` and the removal in ``rtl9602c_teardown()``.
+   * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
+     - The table ``rtl9602c_storm_param[]`` and the functions that get and set
+       the ports and the rate of a storm-control class,
+       ``rtl9602c_storm_ports_get()``, ``rtl9602c_storm_ports_set()``,
+       ``rtl9602c_storm_rate_get()`` and ``rtl9602c_storm_rate_set()``, over
+       the pool of meters.
+   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+     - ``rtl9602c_gpon_sn_set()``, which parses and keeps the serial number.
+   * - ``drivers/net/dsa/realtek/rtl9602c.h``
+     - ``enum rtl9602c_devlink_param_id``; the registers and fields that the
+       parameters write (``RTL9602C_DOS_*``, ``RTL9602C_PKTDBG_*``,
+       ``RTL9602C_LOOPDET_*``, ``RTL9602C_METER_CFG_HI_RATE_MAX``); and the
+       members ``hsb``, ``dos_flood_th`` and ``hsb_region`` of the driver's
+       private structure.
+
+Configuration and device tree
+-----------------------------
+
+``CONFIG_NET_DSA_RTL9602C`` builds everything on this page, as
+Documentation/networking/dsa/rtl9602c.rst describes. Devlink itself is
+``CONFIG_NET_DEVLINK``, which ``CONFIG_NET_DSA`` selects. No device tree
+property configures devlink: the ``switch`` node only gives the handle.
+
+Interfaces to user space
+------------------------
+
+- ``devlink dev show`` and ``devlink dev info platform/1b000000.switch``.
+- ``devlink dev param show`` and ``devlink dev param set`` on the 22
+  parameters.
+- ``devlink region show``, ``new``, ``read``, ``dump`` and ``del`` on
+  ``platform/1b000000.switch/frame_capture``.
+- The kernel log lines that begin ``rtl9602c-switch:``. The ones this page
+  names are ``devlink parameters unavailable; the switch's own features cannot
+  be configured``, ``no devlink region; frames cannot be captured`` and
+  ``<GPON> serial number set``.
+
+How to read the fact tables
+===========================
+
+The parameters are described in tables with the columns *Name*, *Type*, *Mode*
+and *Description*, as on every devlink page. The description gives the range of
+the value, what it controls, whether a read comes from the hardware or from the
+driver's copy, and the error that a bad value gets. After them, and for the
+region and the info reply, fact tables with three columns, *Fact*, *Tag* and
+*Checked by*, say how a behaviour is established. The tag says how. **M**,
+measured on the board (the DFP-34X-2C3): *Checked by* gives the command or
+observation, through the driver's own interfaces (``devlink``, the kernel log,
+``ip``), that shows it. **T**, tested by function: the driver depends on the
+fact, and the named behaviour fails if it is wrong. **P**, public standard:
+*Checked by* names the document and the clause. **I**, inferred, not verified:
+the fact is an assumption, and *Checked by* says what would confirm or refute
+it. The last chapter collects these facts. A row with two tags is established
+in two ways, or in two parts; *Checked by* says which part carries which tag.
+
+Port numbers are the hardware's (0 ``sfp``, 1 not wired, 2 ``pon``, 3 the CPU
+port; see Documentation/networking/dsa/rtl9602c.rst), and "the host" is the
+equipment at the far end of the SFP lane. The behaviours that a tested fact
+depends on are named in words: the board boots to a shell; the ONU reaches O5
+on an OLT; the storm-control rates match their settings.
+
+Parameters
+==========
+
+All 22 parameters are driver-specific, of type u8, u32 or string, and of mode
+``runtime``: a value takes effect at once. There are six for the DoS checks,
+eight for storm control, four for the header capture, three for loop detection
+and one for the ONU's serial number. The driver registers them at setup. If it
+cannot, it logs ``devlink parameters unavailable; the switch's own features
+cannot be configured`` and the switch carries on without them.
+
+Reading and setting
+-------------------
+
+``devlink dev param show`` reads a parameter and ``devlink dev param set``
+writes it. The mode must be given, and only ``runtime`` is offered: a set with
+``driverinit`` or ``permanent`` is refused with ``-EOPNOTSUPP``::
+
+    devlink dev param show platform/1b000000.switch
+    devlink dev param show platform/1b000000.switch name dos_checks
+    devlink dev param set platform/1b000000.switch \
+            name dos_checks value 6 cmode runtime
+
+The second command prints::
+
+    platform/1b000000.switch:
+      name dos_checks type driver-specific
+        values:
+          cmode runtime value 6
+
+Four rules hold for every parameter:
+
+- A value is read when it is asked for, either from the hardware or from the
+  driver's copy of what it last wrote; the tables say which. A read from the
+  hardware shows a change made behind the driver's back. A read from the copy
+  shows what was set.
+- The range of every value is checked in the driver's set callback, because
+  DSA's parameter macro leaves the validate callback empty. A value too wide
+  for its field is refused with ``-ERANGE`` ("Numerical result out of range")
+  and never cut to fit. Devlink itself refuses a value of the wrong type, and
+  a string of 32 characters or more, with ``-EINVAL`` before the driver sees
+  it.
+- A refusal carries an error number and no text: a parameter set has no
+  message channel. The tables give the number of each refusal.
+- A port mask has four bits, bit p for port p: 1 is port 0 (``sfp``), 4 is
+  port 2 (``pon``), 8 is port 3 (the CPU port), and 15 is all of them. Port 1
+  is not wired.
+
+State, defaults and reload
+--------------------------
+
+A warm restart of the CPU and a reload of the module leave the switch running
+with its registers as they were. The driver therefore writes the state that the
+parameters control every time it probes, and the parameters start from the
+defaults that the tables give: the DoS checks off with their thresholds at 0;
+storm control off with every meter free; loop detection off; the header
+capture armed in mode 1, which never captures, with both port masks 15 and
+reason 0; and no serial number. The one exception is ``loop_detect_period``,
+which setup does not write, so it keeps the value it had. Nothing is saved:
+after a reboot or a reload of the module the parameters are back at their
+defaults, and the serial number is empty.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The driver registers 22 parameters, all of mode ``runtime``, at setup.
+     - M
+     - ``devlink dev param show platform/1b000000.switch`` lists them after
+       boot, and every measurement below sets or reads one of them.
+   * - Every range check is made in the set callback, and a value too wide for
+       its field is refused with ``-ERANGE``, not truncated.
+     - M
+     - ``devlink dev param set platform/1b000000.switch name dos_checks value
+       65536 cmode runtime`` and the same with ``name dos_ports value 255``
+       answered "Numerical result out of range".
+   * - A warm restart or a reload leaves the switch running, so setup writes
+       the state that the parameters control: the DoS checks, their port mask
+       and their thresholds to 0 (the driver's copy of the thresholds with
+       them); storm control off, every meter free and every exceeded latch
+       cleared; loop detection off, with its latches cleared; and the capture
+       armed in mode 1 with both port masks 15 and reason 0.
+     - M, T
+     - M: land and blat enabled before ``rmmod`` were still dropping after
+       ``insmod`` until setup wrote the registers, and afterwards no check was
+       enabled. A reset that cleared the storm-control classes and meters but
+       not the exceeded latches left meter 15 reading exceeded with nothing
+       bound to it. The capture latch reads ``0x00201fe0`` (mode 0, both masks
+       ``0xf``, VALID set) after a full chip reset. T: the board boots to a
+       shell with loop detection off, so that a loaded driver does not start
+       sending probes by itself.
+   * - Teardown destroys the region and unregisters the parameters before the
+       devlink instance goes, so that the next probe does not find their names
+       taken.
+     - M
+     - After ``rmmod`` and ``insmod`` the parameters are there again.
+
+DoS checks
+----------
+
+The switch can recognise sixteen shapes of malformed or hostile frames,
+numbered 0 to 15, and drop them or deliver them to the CPU. A check acts on a
+frame only when the frame enters a port set in ``dos_ports`` and the check's
+bit is set in ``dos_checks``. ``dos_actions`` chooses, check by check, between
+dropping the frame and delivering it to the CPU, and the three flood checks
+have a threshold each. The checks, the forwarding reason that each produces and
+the registers are on Documentation/networking/dsa/rtl9602c-acl-qos.rst
+("Malformed-frame (DoS) checks").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``dos_ports``
+     - u32
+     - runtime
+     - The ports whose entering frames the checks judge, as a port mask: 0 to
+       15 (``0xf``). Default 0. Read from ``RTL9602C_DOS_PORT_EN``. A value
+       above 15 is refused with ``-ERANGE``.
+   * - ``dos_checks``
+     - u32
+     - runtime
+     - Enables the checks, bit n for check n: 0 to 65535 (``0xffff``). Bit 1 is
+       land and bit 2 is blat; the other bits are listed in
+       Documentation/networking/dsa/rtl9602c-acl-qos.rst. Default 0. Read from
+       the enable half of ``RTL9602C_DOS_CHECK_CTRL``. A value above 65535 is
+       refused with ``-ERANGE``.
+   * - ``dos_actions``
+     - u32
+     - runtime
+     - What a check does with the frame it stops, bit n for check n: 0 to 65535
+       (``0xffff``). A bit of 0 drops the frame, a bit of 1 delivers it to the
+       CPU instead of forwarding it. Default 0, so every check drops. Read
+       from the action half of ``RTL9602C_DOS_CHECK_CTRL``. A value above
+       65535 is refused with ``-ERANGE``.
+   * - ``dos_synflood_thresh``
+     - u8
+     - runtime
+     - The threshold of check 13, the SYN flood: 0 to 255, a count of matching
+       frames over a hardware window of unknown length. At 0 the check fires
+       on the first matching frames. Default 0. Read from the driver's copy of
+       the last value written; the register is never read. Every u8 value is
+       valid.
+   * - ``dos_finflood_thresh``
+     - u8
+     - runtime
+     - The threshold of check 14, the FIN flood; otherwise as
+       ``dos_synflood_thresh``.
+   * - ``dos_icmpflood_thresh``
+     - u8
+     - runtime
+     - The threshold of check 15, the ICMP flood; otherwise as
+       ``dos_synflood_thresh``.
+
+To judge the frames entering ``sfp`` for land and blat, and to drop the frames
+these checks stop::
+
+    devlink dev param set platform/1b000000.switch \
+            name dos_ports value 1 cmode runtime
+    devlink dev param set platform/1b000000.switch \
+            name dos_checks value 6 cmode runtime
+
+Setting ``dos_actions`` to 6 as well would deliver those frames to the CPU
+instead.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``dos_ports``, ``dos_checks`` and ``dos_actions`` write
+       ``RTL9602C_DOS_PORT_EN`` and the two halves of
+       ``RTL9602C_DOS_CHECK_CTRL``, ``RTL9602C_DOS_CHECK_CTRL_EN`` (bits 15:0)
+       and ``RTL9602C_DOS_CHECK_CTRL_TRAP`` (bits 31:16), and are read back
+       from those registers. Check n has its enable at bit n and its action at
+       bit n + 16; it acts only with both its port bit and its enable set.
+     - M
+     - ``dos_checks`` 2 read back 2 and the register agreed; with
+       ``dos_ports`` 1 and ``dos_checks`` 2, land frames arriving on port 0
+       were caught by the frame capture. One frame offered twice, changing only
+       ``dos_actions``, was captured as delivered to the CPU with a non-empty
+       destination mask at 65535, and as dropped with an empty one at 0. Two
+       checks and a port written, and ``dos_checks`` read back as 6.
+   * - The three thresholds write ``RTL9602C_DOS_SYN_FLOOD_THR``,
+       ``RTL9602C_DOS_FIN_FLOOD_THR`` and ``RTL9602C_DOS_ICMP_FLOOD_THR``, 8
+       bits each. At 0 a flood check fires on the first matching frames.
+     - M
+     - With ``sfp`` bridged, so that frames take the forwarding path, 200 SYN
+       frames were dropped at ``dos_synflood_thresh`` 0, passed at 255 and
+       dropped again at 0.
+   * - The driver never reads the three threshold registers. It keeps the last
+       value written and answers devlink from that copy, and setup zeroes the
+       registers and the copy together. One read of a threshold register
+       stalled the board until the soft-lockup detector reset it, while
+       another read of all three had returned 0, so whether a read is unsafe
+       in general is not settled.
+     - M, I
+     - M: one 32-bit read of the first register through a user-space mapping of
+       the register window never returned and the board reset about 32 s
+       later, while ``devlink dev param show`` returns with the board alive
+       and ``dos_synflood_thresh`` reads back what was set. I: that every read
+       is unsafe; a single read through a driver debug path after a write
+       would show it. Not load-bearing, since nothing reads the registers.
+   * - Check 0, a destination address equal to the source address, has not been
+       seen to fire: such a frame is already dropped by ordinary forwarding
+       before the check matters.
+     - I
+     - Not testable with such a frame. Not load-bearing.
+   * - A flood threshold counts matching frames over a hardware window whose
+       length is unknown.
+     - I
+     - Sweeping the offered rate against a fixed threshold on a quiet link.
+       Not load-bearing.
+
+Storm control
+-------------
+
+Storm control limits the rate of a class of frames entering a port by giving
+the class one of the sixteen shared meters. ``tc`` reaches three classes,
+broadcast, multicast and ARP. Devlink reaches the other four, each with a rate
+in packets per second and a mask of the ports it applies to: unknown unicast,
+unknown multicast, DHCP, and IGMP with MLD. Unknown unicast is unicast to an
+address that the switch has not learned, and unknown multicast is multicast to
+a group that no table holds; the five reserved group addresses of spanning
+tree, pause, the Slow Protocols, 802.1X and LLDP are exempt from the
+unknown-multicast limit. The meters are one pool, shared with the storm-control
+rules of ``tc``. The meters, their unit and the classes are on
+Documentation/networking/dsa/rtl9602c-acl-qos.rst ("Storm control"), and the
+exempt addresses on Documentation/networking/dsa/rtl9602c-bridging.rst.
+
+Set the rate first and the ports second: a port mask is refused while the class
+has no rate. A rate of 0 switches the class off on every port and gives the
+meter back.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``storm_unknown_unicast_ports``
+     - u32
+     - runtime
+     - The ports that limit the unknown-unicast class, as a port mask: 0 to 15
+       (``0xf``). Default 0. Read from the class's enable register. A value
+       above 15 is refused with ``-ERANGE``, and a non-zero mask while the
+       class has no rate with ``-EINVAL``.
+   * - ``storm_unknown_unicast_pps``
+     - u32
+     - runtime
+     - The rate of the unknown-unicast class in packets per second: 0 to
+       524286 (``0x7fffe``). A non-zero rate takes a meter and programs it at
+       once; 0 unbinds every port and gives the meter back. Default 0. Read
+       from the meter that the class owns; a class with no meter reads 0. A
+       rate of 524287 (``RTL9602C_METER_CFG_HI_RATE_MAX``) or more is refused
+       with ``-ERANGE``, and a rate that finds all sixteen meters in use with
+       ``-ENOSPC``.
+   * - ``storm_unknown_multicast_ports``
+     - u32
+     - runtime
+     - The ports that limit the unknown-multicast class; otherwise as
+       ``storm_unknown_unicast_ports``.
+   * - ``storm_unknown_multicast_pps``
+     - u32
+     - runtime
+     - The rate of the unknown-multicast class; otherwise as
+       ``storm_unknown_unicast_pps``.
+   * - ``storm_dhcp_ports``
+     - u32
+     - runtime
+     - The ports that limit the DHCP class; otherwise as
+       ``storm_unknown_unicast_ports``.
+   * - ``storm_dhcp_pps``
+     - u32
+     - runtime
+     - The rate of the DHCP class; otherwise as ``storm_unknown_unicast_pps``.
+   * - ``storm_igmp_mld_ports``
+     - u32
+     - runtime
+     - The ports that limit the IGMP and MLD class; otherwise as
+       ``storm_unknown_unicast_ports``.
+   * - ``storm_igmp_mld_pps``
+     - u32
+     - runtime
+     - The rate of the IGMP and MLD class; otherwise as
+       ``storm_unknown_unicast_pps``.
+
+To limit unknown-unicast frames entering ``sfp`` to 200 packets per second::
+
+    devlink dev param set platform/1b000000.switch \
+            name storm_unknown_unicast_pps value 200 cmode runtime
+    devlink dev param set platform/1b000000.switch \
+            name storm_unknown_unicast_ports value 1 cmode runtime
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Each of the four classes has a rate and a port mask, as in the table
+       above. Reads come from the hardware: the ports from the class's enable
+       register, the rate from the meter that the class owns, a meter at its
+       maximum reading 0. The driver records only which meter a class owns,
+       because a selector of 0 cannot tell meter 0 from none.
+     - M, T
+     - M: ``storm_unknown_unicast_pps`` 200 left the class off until
+       ``storm_unknown_unicast_ports`` 1 turned it on; after the registers
+       were cleared from outside the driver, both parameters read 0. T: the
+       storm-control rates match their settings.
+   * - The unknown-unicast and unknown-multicast classes limit as set.
+     - M
+     - Unknown unicast offered at 322 frames/s against a rate of 200: 202
+       frames/s arrived. Unknown multicast at 1 packet/s: the frames were
+       caught dropped by the frame capture.
+   * - The DHCP class and the IGMP and MLD class limit their own frames at the
+       rate set.
+     - I
+     - They have been configured through devlink and read back, and never
+       offered matching traffic. Each class limiting DHCP server, DHCP client
+       and MLD frames at a set rate would confirm it.
+   * - The DHCP class takes UDP ports 67 and 68 in either direction, and the
+       IGMP class takes MLD as well, which no single flower rule expresses;
+       that is why devlink reaches them.
+     - I
+     - Not load-bearing: it only decides the interface. The classes offered
+       DHCP server, DHCP client and MLD frames would confirm it.
+   * - DHCP uses UDP port 67 at the server and 68 at the client; MLD messages
+       are ICMPv6 messages.
+     - P
+     - RFC 2131, section 4.1; RFC 2710, section 3.
+
+Header capture
+--------------
+
+The header capture freezes one frame: the parser's view of it and the switch's
+decision about it. ``pktdbg_mode`` chooses which frame, ``pktdbg_ingress_ports``
+and ``pktdbg_egress_ports`` restrict it by port, and ``pktdbg_reason`` is the
+forwarding reason that mode 7 waits for. The four make up one setting: setting
+any of them re-arms the capture with all four, which discards the frame it
+held. The frame is read as a snapshot of the region ``frame_capture`` (see "The
+region frame_capture"). The capture is described on
+Documentation/networking/dsa/rtl9602c-acl-qos.rst ("Frame capture").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``pktdbg_mode``
+     - u8
+     - runtime
+     - Which frame the capture holds: 0 any frame; 1 none, the capture never
+       latches; 2 the first dropped frame; 3 the first forwarded frame; 4 the
+       first frame delivered to the CPU; 5 dropped frames; 6 frames delivered
+       to the CPU; 7 frames whose forwarding reason is ``pktdbg_reason``.
+       Modes 3 and 4 have not been exercised. Default 1. Read from the
+       driver's copy. A value above 7 is refused with ``-ERANGE``.
+   * - ``pktdbg_ingress_ports``
+     - u8
+     - runtime
+     - The ingress ports whose frames the capture may latch, as a port mask: 0
+       to 15 (``0xf``). Default 15. Read from the driver's copy. A value above
+       15 is refused with ``-ERANGE``.
+   * - ``pktdbg_egress_ports``
+     - u8
+     - runtime
+     - The egress ports whose frames the capture may latch, as a port mask: 0
+       to 15 (``0xf``). Default 15. Read from the driver's copy. A value above
+       15 is refused with ``-ERANGE``.
+   * - ``pktdbg_reason``
+     - u8
+     - runtime
+     - The forwarding reason that mode 7 waits for: 0 to 255. The other modes
+       ignore it. Default 0. Read from the driver's copy. Every u8 value is
+       valid.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The four parameters are answered from the driver's copy of the armed
+       setting, and any change re-arms the capture: the driver writes
+       ``RTL9602C_PKTDBG_LATCH`` with mode 1 alone, which clears
+       ``RTL9602C_PKTDBG_LATCH_VALID``, and then with the whole setting.
+     - T, M
+     - T: the captures of the rows below were armed this way. M: after valid
+       captures, arming mode 1 made the next snapshot refuse.
+   * - Setup arms mode 1 with both port masks 15 and reason 0, so that no
+       capture predates the driver. After a full chip reset and the boot loader
+       the latch reads ``0x00201fe0``: mode 0, both masks ``0xf``, VALID set.
+     - M
+     - A register read after a full chip reset.
+   * - Mode 1 never captures. Modes 0, 2, 5, 6 and 7 each held a frame of their
+       kind. Modes 3 and 4 have not been exercised.
+     - M, I
+     - M: mode 1 refused snapshots across ten pings; mode 0 latched within 12
+       s; mode 5 caught storm-control and DoS drops; mode 6 caught a DoS frame
+       delivered to the CPU; mode 7 latched on reason 88 and not on 77 under
+       the same traffic; mode 2 held a classifier drop. I: modes 3 and 4;
+       arming each against traffic of one kind would confirm them. Not
+       load-bearing.
+
+Loop detection
+--------------
+
+Loop detection sends probe frames out of the chosen ports at a fixed interval
+and reports a port on which one of its own probes comes back, and when the loop
+has gone. The driver only reports, in the kernel log; deciding what to do about
+a loop is left to the bridge's spanning tree. The probe, its magic, the
+registers and the log lines are on
+Documentation/networking/dsa/rtl9602c-acl-qos.rst ("Loop detection").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``loop_detect``
+     - u8
+     - runtime
+     - Starts loop detection (1) or stops it (0): 0 or 1. Enabling writes the
+       MAC address of the CPU port's conduit into the probe as its magic,
+       unmasks the loop source of the switch's interrupt, and is refused with
+       ``-ENODEV`` when the CPU port has no conduit. Default 0. Read from the
+       enable bit of ``RTL9602C_LOOPDET_CTRL``. A value above 1 is refused with
+       ``-ERANGE``.
+   * - ``loop_detect_ports``
+     - u8
+     - runtime
+     - The ports that send probes, as a port mask: 0 to 15 (``0xf``). Default
+       0. Read from ``RTL9602C_LOOPDET_TX_PORTS``. A value above 15 is refused
+       with ``-ERANGE``.
+   * - ``loop_detect_period``
+     - u32
+     - runtime
+     - The interval between probes in milliseconds: 0 to 65535 (``0xffff``).
+       Setup does not write it: it reads 2000 after a full chip reset, and a
+       reload of the driver keeps the value it had. Read from
+       ``RTL9602C_LOOPDET_PROBE_CFG``. A value above 65535 is refused with
+       ``-ERANGE``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The three parameters write ``RTL9602C_LOOPDET_CTRL_EN``,
+       ``RTL9602C_LOOPDET_TX_PORTS`` and
+       ``RTL9602C_LOOPDET_PROBE_CFG_PERIOD`` (bits 23:8) and are read back from
+       those registers. The period is 2000 after a full chip reset.
+     - M
+     - Set and shown through devlink with a reflector on the host; probes were
+       captured on the host 2.000 s apart at period 2000. The probe
+       configuration word read ``0x0007d008`` after a reset.
+   * - Enabling writes the conduit's MAC address into the magic, the first two
+       octets in ``RTL9602C_LOOPDET_MAGIC_HI`` and the last four in
+       ``RTL9602C_LOOPDET_MAGIC_LO``, so that the magic is unique to the
+       switch.
+     - M
+     - The magic read back equal to the conduit's address.
+   * - A loop and its end are reported in the kernel log, ``port N: loop
+       detected, closing through port M`` and ``port N: loop cleared``, and the
+       driver does nothing else about them.
+     - M
+     - A reflector on the host returned probe frames and produced both lines
+       through the interrupt.
+   * - The far-end port that the first message names is the right one for a
+       loop between two different ports. It has only been seen for a loop that
+       closes through the port it left, port 0 through port 0.
+     - I
+     - Looping two ports to each other. Load-bearing for the far-end port in
+       the log line only.
+
+GPON serial number
+------------------
+
+The ONU presents a serial number to the OLT in activation. The driver has none
+of its own: until ``gpon_serial`` is set, the parameter reads empty, the
+serial-number message is not armed, and bringing the ``pon`` interface up fails
+with ``-ENXIO``. The GPON MAC and the use of the serial number are on
+Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst. The PON class
+reports the same serial number in the status of the PON device
+(Documentation/networking/pon.rst).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``gpon_serial``
+     - string
+     - runtime
+     - The serial number of the ONU: four characters of Vendor_ID followed by
+       eight hexadecimal digits that give the four octets of the vendor-specific
+       serial number, for example ``ABCD12345678``. A value needs at least 12
+       characters. The first four must be printable ASCII (``0x20`` to
+       ``0x7e``) and the next eight hexadecimal digits, in either case;
+       characters after the twelfth are ignored, and anything else is refused
+       with ``-EINVAL``. A set while the ``pon`` interface is up is refused
+       with ``-EBUSY``. A valid value is kept, the kernel log says ``<GPON>
+       serial number set``, and the serial-number message is armed at once.
+       Reads empty until a serial number has been set, then the four characters
+       and the eight digits in upper case, from the driver's copy.
+
+To set the serial number, read it back and bring the interface up::
+
+    devlink dev param set platform/1b000000.switch \
+            name gpon_serial value ABCD12345678 cmode runtime
+    devlink dev param show platform/1b000000.switch name gpon_serial
+    ip link set pon up
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``gpon_serial`` reads empty until set, and otherwise as four characters
+       followed by eight upper-case hexadecimal digits. A set while the PON is
+       up is refused with ``-EBUSY``, because a parameter set has no message
+       channel and the error number carries the reason. A set that is shorter
+       than 12 characters or malformed is refused with ``-EINVAL``. Bringing
+       the ``pon`` interface up without a serial number fails with ``-ENXIO``.
+     - T, M
+     - T: activation needs it set, and the ONU reaches O5. M: the parameter
+       read empty before it was set; ``ip link set pon up`` failed without a
+       serial number; a set while the interface was up, and a malformed value,
+       were refused; a valid value took the ONU to O5.
+   * - A serial number is four octets of Vendor_ID in ASCII followed by four
+       octets of vendor-specific serial number.
+     - P
+     - ITU-T G.984.3, clause 9.2.4.1.
+
+The region frame_capture
+========================
+
+The region ``frame_capture`` holds a snapshot of the header capture: the frame
+that the capture holds, as the parser saw it and as the switch decided about it.
+A snapshot is taken on demand with ``devlink region new``. The capture is armed
+with the ``pktdbg_*`` parameters (see "Header capture"). If the driver cannot
+create the region it logs ``no devlink region; frames cannot be captured`` and
+the switch carries on without it.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 16 16 44
+
+   * - Region
+     - Size
+     - Snapshots
+     - What it holds
+   * - ``frame_capture``
+     - 168 bytes
+     - 1, at most
+     - The control word of the capture, the parser's view of the frame and the
+       switch's verdict on it.
+
+Taking, reading and deleting a snapshot
+---------------------------------------
+
+The region is listed, a snapshot is taken with an id of the caller's choice,
+read whole, dumped and deleted with::
+
+    devlink region show platform/1b000000.switch/frame_capture
+    devlink region new platform/1b000000.switch/frame_capture snapshot 1
+    devlink region read platform/1b000000.switch/frame_capture snapshot 1 \
+            address 0 length 168
+    devlink region dump platform/1b000000.switch/frame_capture snapshot 1
+    devlink region del platform/1b000000.switch/frame_capture snapshot 1
+
+``devlink region show`` prints the size and the snapshots that exist::
+
+    platform/1b000000.switch/frame_capture: size 168 snapshot [] max 1
+
+Without a snapshot id in ``devlink region new`` the kernel chooses one and the
+tool prints it. A snapshot is refused with ``-EAGAIN`` ("Resource temporarily
+unavailable") while the capture holds no frame, with the message ``rtl9602c:
+nothing is latched: arm pktdbg_mode and offer the switch some traffic``, so a
+snapshot always describes a frame. The region keeps one snapshot at a time (see
+"Known limitations").
+
+What a snapshot holds
+---------------------
+
+A snapshot is 42 words (``RTL9602C_PKTDBG_SNAPSHOT_WORDS``), each in the CPU's
+byte order, which is big-endian: the most significant byte of a word comes
+first in a dump. Bit b of the parse or of the verdict is bit b mod 32 of word
+number b / 32, rounded down, of that part.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 26 60
+
+   * - Bytes
+     - Content
+     - Fields
+   * - 0 to 3
+     - The control word, ``RTL9602C_PKTDBG_LATCH`` as it was armed.
+     - Mode (bits 4:2), ingress port mask (8:5), egress port mask (12:9),
+       forwarding reason (20:13) and VALID (21), which is set in every
+       snapshot.
+   * - 4 to 115
+     - The parse, ``RTL9602C_PKTDBG_PARSE(0..27)``: 28 words, the parser's view
+       of the frame.
+     - Bits 13:0 of the parse, in bytes 4 to 7, are the frame length.
+   * - 116 to 167
+     - The verdict, ``RTL9602C_PKTDBG_VERDICT(0..12)``: 13 words, the switch's
+       decision.
+     - Verdict bits 331:324 are the destination port mask, 0 for a dropped
+       frame, and bits 346:339 the forwarding reason. Both are in verdict word
+       10, bytes 156 to 159: the mask in its bits 11:4 and the reason in its
+       bits 26:19.
+
+The forwarding reasons that were measured are 0, an ordinary forward; 64 + n, a
+frame stopped by DoS check n; 88, a drop by storm control; and 228, a
+destination that resolves to the port the frame entered by. The others are
+listed in Documentation/networking/dsa/rtl9602c-acl-qos.rst ("Frame capture").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The region ``frame_capture`` holds one snapshot of 168 bytes: the control
+       word, then 28 parse words and 13 verdict words, each in the CPU's
+       big-endian byte order. A snapshot taken while
+       ``RTL9602C_PKTDBG_LATCH_VALID`` is clear is refused with ``-EAGAIN`` and
+       a message.
+     - M
+     - ``devlink region new platform/1b000000.switch/frame_capture`` answered
+       "Resource temporarily unavailable" on an empty capture. A parse's source
+       address decoded to the sending interface's address in all 48 bits, and
+       its length to 102 for a ping crossing a tagged port.
+   * - The control word reads back as it was armed, with VALID set, in every
+       snapshot.
+     - M
+     - The control word of each capture read back as armed.
+   * - In the verdict, the destination port mask (bits 331:324) is 0 for a
+       dropped frame, and the forwarding reason (bits 346:339) is the field
+       that mode 7 compares. The reasons measured are 0, 64 + n, 88 and 228.
+     - M
+     - A storm drop was captured with mask 0 and reason 88, and latched by
+       reason 88; each DoS check was enabled through devlink, a crafted frame
+       offered from the host, and the drop captured with reason 64 + n; reason
+       228 was isolated with a destination known on the ingress port.
+
+Device info
+===========
+
+``devlink dev info`` names the part and the revision of the GPON MAC. Both are
+read from the hardware each time the reply is asked for::
+
+    # devlink dev info platform/1b000000.switch
+    platform/1b000000.switch:
+      driver rtl9602c
+      versions:
+          fixed:
+            asic.id RTL9602C
+            gpon.mac 0x11110320
+
+The ``driver`` line is devlink's own, from the name of the platform driver. The
+reply has no ``serial_number``, no ``running`` or ``stored`` version and no
+firmware version. The serial number of the ONU is the parameter ``gpon_serial``.
+
+.. list-table:: devlink info versions implemented
+   :header-rows: 1
+   :widths: 14 10 18 58
+
+   * - Name
+     - Type
+     - Example
+     - Description
+   * - ``asic.id``
+     - fixed
+     - ``RTL9602C``
+     - The name of the part, built from the model register
+       ``RTL9602C_CHIP_MODEL``: ``RTL`` and the part number as four
+       hexadecimal digits, then a letter for each of the three letter slots
+       that is not empty (A is 1; a slot above 26 prints as ``?``). The
+       register reads ``0x96021800`` on this chip: 9602, then the third
+       letter, C.
+   * - ``gpon.mac``
+     - fixed
+     - ``0x11110320``
+     - The revision word of the GPON MAC, ``RTL9602C_GPON_REVISION``, as ``0x``
+       and eight hexadecimal digits. The word answers with no light on the
+       fibre and before the PON is brought up. The name is the driver's own:
+       it is not one of the generic names of
+       Documentation/networking/devlink/devlink-info.rst.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_CHIP_MODEL`` (``0x010000``) names the part, and ``devlink dev
+       info`` builds ``asic.id`` from it each time it is asked. An empty letter
+       slot is left out and a slot above 26 is printed as ``?``.
+     - M
+     - The register read ``0x96021800`` at the boot loader prompt and after a
+       full chip reset; through the driver, ``devlink dev info
+       platform/1b000000.switch`` shows ``asic.id RTL9602C``.
+   * - ``gpon.mac`` is the word at ``RTL9602C_GPON_REVISION`` (``0x700010``),
+       read when asked. It reads ``0x11110320`` and answers with no light on
+       the fibre.
+     - M
+     - The word read with the fibre dark; through the driver, the same
+       ``devlink dev info``.
+
+Worked example: why was a frame dropped
+=======================================
+
+This limits unknown multicast to one packet per second on ``sfp``, asks the
+capture for dropped frames, and reads the verdict on a frame that the limit
+dropped. The rate comes first, then the ports, because the ports are refused
+while the class has no rate::
+
+    devlink dev param set platform/1b000000.switch \
+            name storm_unknown_multicast_pps value 1 cmode runtime
+    devlink dev param set platform/1b000000.switch \
+            name storm_unknown_multicast_ports value 1 cmode runtime
+    devlink dev param set platform/1b000000.switch \
+            name pktdbg_mode value 5 cmode runtime
+
+Now the host sends a burst of frames to a multicast group that no table holds,
+for example 01:00:5e:01:02:03. Mode 5 holds a dropped frame, and the snapshot
+names it::
+
+    devlink region new platform/1b000000.switch/frame_capture snapshot 1
+    devlink region read platform/1b000000.switch/frame_capture snapshot 1 \
+            address 0 length 4
+    devlink region read platform/1b000000.switch/frame_capture snapshot 1 \
+            address 156 length 4
+    devlink region del platform/1b000000.switch/frame_capture snapshot 1
+
+The first read returns the control word as armed. For mode 5 and the default
+port masks it is ``0x00201ff4``, so the four bytes are ``00 20 1f f4``. The
+second read returns verdict word 10. For a frame dropped by storm control,
+bits 11:4 of the word, the destination port mask, are 0, and bits 26:19, the
+forwarding reason, are 88 (``0x58``). Another reason means that the capture
+held some other dropped frame. To capture another frame, set any of the
+``pktdbg_*`` parameters again, even to the value it has: that re-arms the
+capture.
+
+Known limitations
+=================
+
+- The region keeps one snapshot. A second ``devlink region new`` is refused
+  with ``-ENOSPC`` until the first has been deleted with ``devlink region
+  del``. The snapshot is kept in memory, and it goes with the region when the
+  driver is unloaded.
+- The region can be read only through a snapshot. ``devlink region read`` and
+  ``dump`` without a snapshot id are refused with ``-EOPNOTSUPP``.
+- The capture holds no frame in mode 1, which is the mode after setup, and
+  after a change of any ``pktdbg_*`` parameter until a frame of the chosen kind
+  arrives: each change re-arms the capture and discards the frame it held. A
+  snapshot taken then is refused.
+- The ``pktdbg_*`` parameters and the flood thresholds answer from the driver's
+  copy of what it last wrote, so they do not show a change made to the
+  registers behind the driver.
+- Nothing set through devlink survives a reboot or a reload of the module. The
+  serial number has to be set again before the ``pon`` interface is brought up,
+  and it cannot be changed while that interface is up.
+- A port mask for a storm-control class is refused until the class has a rate,
+  and setting the rate of a class to 0 also clears its ports.
+- Setting ``loop_detect`` changes the switch's interrupt mask by a read
+  followed by a write, under no lock that the interrupt handler and the other
+  writers of the mask share, so a change made by two of them at the same moment
+  could be lost. This has not been observed. It is stated in full in
+  Documentation/networking/dsa/rtl9602c.rst ("Known limitations").
+
+Open questions
+==============
+
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the assumptions that the driver depends on:
+the driver is correct on this board only if they hold, and a board test must
+settle them. The second list holds the questions to which the code is
+indifferent: it works whichever way they resolve.
+
+Assumptions the driver depends on
+---------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - The DHCP class and the IGMP and MLD class limit their own frames at the
+       rate set, through ``storm_dhcp_pps`` and ``storm_igmp_mld_pps`` ("Storm
+       control").
+     - Offering each class DHCP server, DHCP client and MLD frames under a set
+       rate and counting what arrives.
+
+Questions the code does not depend on
+-------------------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Question
+     - What would settle it
+   * - Whether DoS check 0 ever fires, given that ordinary forwarding already
+       drops a frame whose destination equals its source ("DoS checks").
+     - Nothing can be tested with such a frame.
+   * - The unit of a flood threshold: a frame count over a hardware window of
+       unknown length ("DoS checks").
+     - Sweeping the offered rate against a fixed threshold on a quiet link.
+   * - Whether every read of a flood threshold register is unsafe, or only
+       some ("DoS checks").
+     - A single read through a driver debug path after a write.
+   * - Whether capture modes 3 and 4 hold the first forwarded frame and the
+       first frame delivered to the CPU ("Header capture").
+     - Arming each against traffic of one kind.
+   * - Whether the DHCP class takes UDP ports 67 and 68 in either direction and
+       the IGMP class MLD as well ("Storm control").
+     - Offering the classes DHCP server, DHCP client and MLD frames.
+   * - Whether the far-end port in the loop message is right for a loop between
+       two different ports ("Loop detection").
+     - Looping two ports to each other.

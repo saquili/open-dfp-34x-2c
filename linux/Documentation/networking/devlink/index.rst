@@ -98,6 +98,7 @@ parameters, info versions, and other features it supports.
    octeontx2
    prestera
    qed
+   rtl9602c
    sfc
    ti-cpsw-switch
    zl3073x
