@@ -84,8 +84,10 @@ or ``python3 -m bench selftest``. The whole suite takes under a minute. ``BENCH_
 mutated lines the guard's invariant test tries (400000 by default; a million
 takes about ten seconds).
 
-The top-level ``make ramboot`` and ``make flash BANK=0`` are meant to call
-``python3 -m bench ramboot`` and ``python3 -m bench flash --bank $(BANK)``.
+The top-level ``make ramboot`` and ``make flash IMAGE=<file> TARGET=kernel|rootfs``
+run ``python3 -m bench ramboot`` and ``python3 -m bench flash`` from this
+directory's parent; ``BANK`` (only 0 is accepted) and ``ARGS`` (options of the
+command) are the other variables, and ``BENCH_CONFIG`` names the settings file.
 
 Setting up
 ==========
