@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The Buildroot release the distribution is built with, pinned by hash
+# (docs/adr/0005-distribution-build-buildroot.rst). "buildroot/fetch" reads
+# this file: it takes the tarball from the download directory, or from URL
+# when the directory has none, and refuses it unless the size and SHA256 below
+# match. Moving to another release means changing these lines, and nothing
+# else; the patches in patches/ are applied to whatever release is pinned.
+#
+# The release is Buildroot's long-term-support series 2025.02. Its release
+# manager signs a message that lists this SHA256 (the file named in
+# SIGNATURE, a clear-signed text; the key with the fingerprint below signs it):
+#
+#   gpg --recv-keys <SIGNER>    # or import the key the message names
+#   gpg --verify buildroot-2025.02.18.tar.xz.sign
+#   grep 'SHA256: <SHA256>' buildroot-2025.02.18.tar.xz.sign
+#
+# One KEY=VALUE per line; no quoting, no spaces around the equals sign.
+NAME=buildroot
+VERSION=2025.02.18
+URL=https://buildroot.org/downloads/buildroot-2025.02.18.tar.xz
+SIZE=6043012
+SHA256=e38ad1df6ea0479fff6419a87a64535d02131674d463be154a763ef725b55321
+SIGNATURE=https://buildroot.org/downloads/buildroot-2025.02.18.tar.xz.sign
+SIGNER=18C7DF2819C1733D822D599EA500D6EE9CB0E540

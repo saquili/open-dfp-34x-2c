@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""fetch: the pinned Buildroot release, checked, extracted and patched.
+
+Usage: buildroot/fetch [--dl DIR] [--build DIR] [--pin FILE] [--patches DIR] [-q]
+
+Reads the pin (buildroot/VERSION), finds the release tarball in the download
+directory (--dl, else $BUILDROOT_DL, else build/dl) or fetches it from the
+pin's URL into that directory, and refuses it unless its size and SHA-256 are
+the pinned ones. A tarball that passes is extracted into the build directory
+(--build, else build/buildroot) as <name>-<version>/, and every
+patches/*.patch is applied to it in name order with "patch -p1". The path of
+the finished tree is the only thing printed on standard output.
+
+The work is staged in a scratch directory next to the tree and swapped in at
+the end, so a refused tarball or a patch that does not apply leaves nothing
+behind: no extracted files, no stamp. After a successful run a stamp beside the
+tree records the pinned SHA-256 and the SHA-256 of each patch. A later run
+that finds the same stamp and the tree does nothing, and does not need the
+tarball or the network; a changed pin or a changed, added or removed patch
+makes it redo the work from the tarball.
+
+Exit status: 0 on success, including "nothing to do"; 1 when the tarball or a
+patch was refused or the download failed; 2 when the pin cannot be used or the
+environment lacks a tool (patch).
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+
+try:
+    import lzma
+except ImportError:  # a Python built without liblzma cannot unpack the release
+    lzma = None
+
+PROG = "buildroot/fetch"
+HERE = os.path.dirname(os.path.realpath(__file__))
+REPO = os.path.dirname(HERE)
+
+STAMP_FORMAT = "1"
+REQUIRED_KEYS = ("NAME", "VERSION", "URL", "SIZE", "SHA256", "SIGNER")
+OPTIONAL_KEYS = ("SIGNATURE",)
+CHUNK = 1 << 20
+
+
+class Refused(Exception):
+    """The release or a patch was refused (exit status 1)."""
+
+
+class Unusable(Exception):
+    """The pin or the environment cannot be used (exit status 2)."""
+
+
+@dataclass(frozen=True)
+class Pin:
+    name: str
+    version: str
+    url: str
+    size: int
+    sha256: str
+    signer: str
+
+    @property
+    def tree_name(self) -> str:
+        return "%s-%s" % (self.name, self.version)
+
+    @property
+    def filename(self) -> str:
+        return os.path.basename(urllib.parse.urlsplit(self.url).path)
+
+
+def say(message: str, quiet: bool = False) -> None:
+    if not quiet:
+        sys.stderr.write("%s: %s\n" % (PROG, message))
+
+
+def read_pin(path: str) -> Pin:
+    """The pin file: KEY=VALUE per line, # starts a comment line."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError as error:
+        raise Unusable("cannot read the pin %s: %s" % (path, error.strerror or error))
+    values: dict[str, str] = {}
+    for number, line in enumerate(lines, 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, equals, value = line.partition("=")
+        if not equals or key != key.strip() or value != value.strip():
+            raise Unusable("%s:%d: expected KEY=VALUE with no spaces around the equals sign"
+                           % (path, number))
+        if key not in REQUIRED_KEYS + OPTIONAL_KEYS:
+            raise Unusable("%s:%d: unknown key %s" % (path, number, key))
+        if key in values:
+            raise Unusable("%s:%d: %s is set twice" % (path, number, key))
+        values[key] = value
+    missing = [key for key in REQUIRED_KEYS if not values.get(key)]
+    if missing:
+        raise Unusable("%s: missing %s" % (path, ", ".join(missing)))
+
+    def check(key: str, pattern: str, what: str) -> str:
+        if not re.fullmatch(pattern, values[key]):
+            raise Unusable("%s: %s is not %s: %r" % (path, key, what, values[key]))
+        return values[key]
+
+    check("NAME", r"[a-z][a-z0-9_-]*", "a lower-case name")
+    check("VERSION", r"[0-9A-Za-z][0-9A-Za-z._+-]*", "a version")
+    check("SIZE", r"[1-9][0-9]*", "a number of bytes")
+    check("SHA256", r"[0-9a-f]{64}", "64 lower-case hexadecimal digits")
+    check("SIGNER", r"[0-9A-F]{40}", "a 40-digit key fingerprint")
+    scheme = urllib.parse.urlsplit(values["URL"]).scheme
+    if scheme not in ("https", "file"):
+        raise Unusable("%s: URL must be an https or file URL: %r" % (path, values["URL"]))
+    pin = Pin(values["NAME"], values["VERSION"], values["URL"], int(values["SIZE"]),
+              values["SHA256"], values["SIGNER"])
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", pin.filename):
+        raise Unusable("%s: URL does not end in a plain file name: %r" % (path, values["URL"]))
+    return pin
+
+
+def sha256_of(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def list_patches(directory: str) -> list[tuple[str, str]]:
+    """(name, path) of every *.patch file in the directory, in name order."""
+    try:
+        names = sorted(name for name in os.listdir(directory) if name.endswith(".patch"))
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise Unusable("cannot read the patch directory %s: %s" % (directory, error.strerror))
+    return [(name, os.path.join(directory, name)) for name in names
+            if os.path.isfile(os.path.join(directory, name))]
+
+
+def stamp_text(pin: Pin, patches: list[tuple[str, str]]) -> str:
+    lines = ["format " + STAMP_FORMAT, "release " + pin.tree_name, "sha256 " + pin.sha256]
+    lines += ["patch %s %s" % (name, sha256_of(path)) for name, path in patches]
+    return "\n".join(lines) + "\n"
+
+
+def tarball_problem(path: str, pin: Pin) -> str | None:
+    """Why the file at path is not the pinned release, or None."""
+    size = os.path.getsize(path)
+    if size != pin.size:
+        return "is %d bytes, the pin says %d" % (size, pin.size)
+    digest = sha256_of(path)
+    if digest != pin.sha256:
+        return "has SHA-256 %s, the pin says %s" % (digest, pin.sha256)
+    return None
+
+
+def download(pin: Pin, destination: str, quiet: bool) -> None:
+    """Fetch the pin's URL to destination, which appears only if it is right."""
+    part = destination + ".part"
+    say("fetching %s" % pin.url, quiet)
+    request = urllib.request.Request(pin.url, headers={"User-Agent": "open-dfp-34x-2c-fetch"})
+    digest = hashlib.sha256()
+    received = 0
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response, open(part, "wb") as out:
+            for chunk in iter(lambda: response.read(CHUNK), b""):
+                received += len(chunk)
+                if received > pin.size:
+                    raise Refused("%s is larger than the pinned %d bytes; refusing it"
+                                  % (pin.url, pin.size))
+                digest.update(chunk)
+                out.write(chunk)
+        if received != pin.size:
+            raise Refused("%s sent %d bytes, the pin says %d; refusing it"
+                          % (pin.url, received, pin.size))
+        if digest.hexdigest() != pin.sha256:
+            raise Refused("%s sent SHA-256 %s, the pin says %s; refusing it"
+                          % (pin.url, digest.hexdigest(), pin.sha256))
+        os.replace(part, destination)
+    except (urllib.error.URLError, OSError) as error:
+        raise Refused("cannot fetch %s: %s" % (pin.url, getattr(error, "reason", error)))
+    finally:
+        if os.path.exists(part):
+            os.unlink(part)
+
+
+def obtain(pin: Pin, dl_dir: str, quiet: bool) -> str:
+    """The path of a tarball that is the pinned release, fetched if need be."""
+    path = os.path.join(dl_dir, pin.filename)
+    if os.path.exists(path):
+        problem = tarball_problem(path, pin)
+        if problem:
+            raise Refused("%s %s; refusing it, nothing was extracted" % (path, problem))
+        say("using %s" % path, quiet)
+        return path
+    try:
+        os.makedirs(dl_dir, exist_ok=True)
+    except OSError as error:
+        raise Unusable("cannot create the download directory %s: %s" % (dl_dir, error.strerror))
+    download(pin, path, quiet)
+    return path
+
+
+ARCHIVE_ERRORS = (tarfile.TarError, OSError, EOFError) + ((lzma.LZMAError,) if lzma else ())
+
+
+def extract(tarball: str, stage: str, top: str) -> None:
+    """Unpack the tarball into stage, which must come out as stage/<top>/."""
+    if lzma is None:
+        raise Unusable("this Python has no lzma module, so it cannot unpack %s" % tarball)
+    try:
+        with tarfile.open(tarball, "r:xz") as archive:
+            members = archive.getmembers()
+            for member in members:
+                parts = member.name.split("/")
+                if member.name.startswith("/") or ".." in parts or parts[0] != top:
+                    raise Refused("%s holds the path %r, outside %s/; refusing it"
+                                  % (tarball, member.name, top))
+            # The "tar" filter refuses to write outside stage, also through a link. It
+            # keeps the release's symbolic links as they are: some name absolute paths
+            # on the target (/etc/init.d/...), which nothing here follows.
+            if hasattr(tarfile, "tar_filter"):
+                archive.extractall(stage, members, filter="tar")
+            else:
+                archive.extractall(stage, members)
+    except ARCHIVE_ERRORS as error:
+        raise Refused("%s cannot be unpacked: %s; refusing it" % (tarball, error))
+    if not os.path.isdir(os.path.join(stage, top)):
+        raise Refused("%s holds no %s/ directory" % (tarball, top))
+
+
+def apply_patch(tree: str, name: str, path: str) -> None:
+    """patch -p1 in the tree, exactly: no fuzz, and no question asked."""
+    try:
+        done = subprocess.run(["patch", "-p1", "-F0", "-t", "-d", tree, "-i", os.path.abspath(path)],
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise Unusable("the patch program is not installed (apt-get install patch)")
+    if done.returncode != 0:
+        output = (done.stdout + done.stderr).strip().splitlines()[-12:]
+        raise Refused("patch %s does not apply:\n    %s" % (name, "\n    ".join(output)))
+
+
+def remove(path: str) -> None:
+    if os.path.islink(path) or os.path.isfile(path):
+        os.unlink(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def fetch(pin: Pin, patches: list[tuple[str, str]], dl_dir: str, build_dir: str,
+          quiet: bool) -> str:
+    """Bring build_dir/<name>-<version> to the pinned release plus the patches."""
+    tree = os.path.join(build_dir, pin.tree_name)
+    stamp = tree + ".stamp"
+    want = stamp_text(pin, patches)
+    try:
+        with open(stamp, encoding="utf-8") as handle:
+            current = handle.read()
+    except OSError:
+        current = None
+    if current == want and os.path.isdir(tree):
+        say("%s is up to date" % tree, quiet)
+        return tree
+
+    tarball = obtain(pin, dl_dir, quiet)
+    try:
+        os.makedirs(build_dir, exist_ok=True)
+        stage = tempfile.mkdtemp(prefix="." + pin.tree_name + ".", dir=build_dir)
+    except OSError as error:
+        raise Unusable("cannot create the build directory %s: %s" % (build_dir, error.strerror))
+    try:
+        extract(tarball, stage, pin.tree_name)
+        staged = os.path.join(stage, pin.tree_name)
+        for name, path in patches:
+            apply_patch(staged, name, path)
+            say("applied %s" % name, quiet)
+        remove(stamp)
+        remove(tree)
+        os.rename(staged, tree)
+        with open(stamp + ".new", "w", encoding="utf-8") as handle:
+            handle.write(want)
+        os.replace(stamp + ".new", stamp)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+    say("%s is ready: release %s, %d patch%s"
+        % (tree, pin.version, len(patches), "" if len(patches) == 1 else "es"), quiet)
+    return tree
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog=PROG, description=__doc__.split("\n\n")[0],
+                                     add_help=True)
+    parser.add_argument("--pin", default=os.path.join(HERE, "VERSION"),
+                        help="the pin file (default: buildroot/VERSION)")
+    parser.add_argument("--patches", default=os.path.join(HERE, "patches"),
+                        help="directory of the patches to apply (default: buildroot/patches)")
+    parser.add_argument("--dl", default=os.environ.get("BUILDROOT_DL") or
+                        os.path.join(REPO, "build", "dl"),
+                        help="directory that holds or receives the tarball "
+                             "(default: $BUILDROOT_DL, else build/dl)")
+    parser.add_argument("--build", default=os.path.join(REPO, "build", "buildroot"),
+                        help="directory the tree is extracted into (default: build/buildroot)")
+    parser.add_argument("-q", "--quiet", action="store_true", help="print only errors")
+    args = parser.parse_args(argv)
+    try:
+        pin = read_pin(args.pin)
+        patches = list_patches(args.patches)
+        tree = fetch(pin, patches, args.dl, args.build, args.quiet)
+    except Unusable as error:
+        sys.stderr.write("%s: %s\n" % (PROG, error))
+        return 2
+    except Refused as error:
+        sys.stderr.write("%s: %s\n" % (PROG, error))
+        return 1
+    sys.stdout.write(tree + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
