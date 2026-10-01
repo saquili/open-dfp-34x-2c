@@ -9,7 +9,7 @@
 
 .DEFAULT_GOAL := image
 
-.PHONY: image linux omcid sdk legal-info docs check ramboot flash \
+.PHONY: image linux omcid sdk legal-info docs check ramboot flash buildroot \
         clean distclean help
 
 # The kernel is built out of tree, for MIPS. A Debian host needs the package
@@ -34,6 +34,14 @@ image:
 linux:
 	$(KMAKE) rtl9602c_defconfig
 	$(KMAKE) -j$(JOBS) uImage
+
+# The pinned build system: the release named in buildroot/VERSION, taken from
+# the download directory or fetched, refused unless its size and SHA-256 match
+# the pin, extracted into build/buildroot and patched with buildroot/patches. A
+# second run changes nothing. BUILDROOT_DL names the directory that holds or
+# receives the tarball (default build/dl); ARGS adds options of the script.
+buildroot:
+	buildroot/fetch $(ARGS)
 
 omcid:
 	@echo 'open-dfp-34x-2c: "make omcid" is not implemented yet.'
@@ -60,14 +68,16 @@ docs:
 	@exit 1
 
 # The offline gates: the provenance gates (their own tests, then the tree and
-# the commits since main) and the self-tests of the tools. The instruction-set
-# gate's tests skip without a MIPS objdump.
+# the commits since main) and the self-tests of the tools and of the script
+# that fetches the build system. The instruction-set gate's tests skip without
+# a MIPS objdump.
 check:
 	tools/provenance/check selftest
 	tools/provenance/check all
 	tools/equiv/tests/run
 	python3 -m unittest discover -s tools/bench/tests -t tools
 	tools/isa-gate/tests/run
+	buildroot/tests/run
 
 # The bench: tools/bench is a Python package (3.11 or later, standard library
 # only) run from tools/. A TOML file of settings is named by BENCH_CONFIG;
@@ -102,10 +112,11 @@ distclean:
 	@exit 1
 
 help:
-	@echo 'open-dfp-34x-2c entry points (linux, check, ramboot and flash work;'
-	@echo 'the others are stubs today):'
+	@echo 'open-dfp-34x-2c entry points (linux, buildroot, check, ramboot and'
+	@echo 'flash work; the others are stubs today):'
 	@echo '  make               build the flashable images (default)'
 	@echo '  make linux         build the kernel (uImage)'
+	@echo '  make buildroot     fetch, check and patch the pinned Buildroot'
 	@echo '  make omcid         build the OMCI daemon'
 	@echo '  make sdk           build a relocatable cross toolchain'
 	@echo '  make legal-info    collect the source-and-licence bundle'
