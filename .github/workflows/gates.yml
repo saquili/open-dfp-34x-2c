@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # The offline gates of "make check", plus the self-tests of the equivalence
-# tools, the unit tests of the bench and the licensing check, on every change
-# to any component.
+# tools, the unit tests of the bench and of the instruction-set gate, and the
+# licensing check, on every change to any component.
 
 name: gates
 
@@ -78,6 +78,23 @@ jobs:
         # They need no board, no network and no tmux: the tool runs against a
         # simulated console and a scripted boot loader.
         run: python3 -m unittest discover -s tools/bench/tests -t tools
+
+  isa-gate:
+    runs-on: ubuntu-24.04
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 20
+    steps:
+      - name: Install the tools
+        # The gate reads the instructions of the target binaries with the
+        # cross binutils' objdump; its tests build small MIPS objects.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3 \
+            binutils-mips-linux-gnu
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Self-tests
+        run: tools/isa-gate/tests/run -v
 
   licensing:
     runs-on: ubuntu-24.04
