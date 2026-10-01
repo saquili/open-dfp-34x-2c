@@ -15,6 +15,9 @@ The pages so far:
     The flash layout, the image formats, how a bank is selected, the watchdog.
 ``flashing.rst``
     A RAM boot, writing the scratch bank, one-shot trials, recovery.
+``toolchain.rst``
+    The cross toolchain: compiling for the core, what a program must not do,
+    checking one with the instruction-set gate, and running the test programs.
 
 To come with **WI-20**: building the images, recovery over the serial console,
 bank discipline in one place, and optical and rogue-ONU safety derived from
