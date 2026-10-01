@@ -44,10 +44,12 @@ every commit of the series. The kernel has been started from RAM on the
 stick, where it brings the GPON link up against a laboratory OLT, exchanges
 OMCI frames and passes the laboratory tests of the switch's hardware paths
 (bridging, routing with address translation, PPPoE and shaping). Starting it
-from flash and running on an operator's line are not tested yet. The
-distribution build and the userspace are populated by later work items; each
-top-level directory still waiting for its component carries a short README
-naming it.
+from flash and running on an operator's line are not tested yet. The bench
+for bring-up and flashing (``tools/bench``), the instruction-set gate for
+target binaries (``tools/isa-gate``) and the first pages of the handbook
+(``docs/handbook``) are in place. The distribution build and the userspace are
+populated by later work items; each top-level directory still waiting for its
+component carries a short README naming it.
 
 Building
 ========
