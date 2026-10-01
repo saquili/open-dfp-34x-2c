@@ -12,17 +12,28 @@
 .PHONY: image linux omcid sdk legal-info docs check ramboot flash \
         clean distclean help
 
+# The kernel is built out of tree, for MIPS. A Debian host needs the package
+# gcc-mips-linux-gnu (the compiler the CI uses), u-boot-tools (mkimage) and
+# the usual kernel build tools; name another toolchain with CROSS_COMPILE.
+ARCH           = mips
+CROSS_COMPILE ?= mips-linux-gnu-
+KERNEL_OUT    ?= $(CURDIR)/build/linux
+JOBS          ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+KMAKE          = $(MAKE) -C linux O=$(KERNEL_OUT) ARCH=$(ARCH) \
+                 CROSS_COMPILE=$(CROSS_COMPILE)
+
 image:
 	@echo 'open-dfp-34x-2c: "make" (image) is not implemented yet.'
 	@echo '  Planned: build the kernel and root filesystem images for the board.'
 	@echo '  Arrives with: the distribution build (WI-14).'
 	@exit 1
 
+# The board's configuration and the image the bootloader loads. The kernel is
+# $(KERNEL_OUT)/arch/mips/boot/uImage; the root filesystem arrives with the
+# distribution build (WI-14).
 linux:
-	@echo 'open-dfp-34x-2c: "make linux" is not implemented yet.'
-	@echo '  Planned: build the Linux kernel from linux/.'
-	@echo '  Arrives with: kernel import and series (WI-11 then WI-12).'
-	@exit 1
+	$(KMAKE) rtl9602c_defconfig
+	$(KMAKE) -j$(JOBS) uImage
 
 omcid:
 	@echo 'open-dfp-34x-2c: "make omcid" is not implemented yet.'
@@ -79,9 +90,9 @@ distclean:
 	@exit 1
 
 help:
-	@echo 'open-dfp-34x-2c entry points (all but "make check" are stubs today):'
+	@echo 'open-dfp-34x-2c entry points (all but "make linux" and "make check" are stubs today):'
 	@echo '  make               build the flashable images (default)'
-	@echo '  make linux         build the kernel'
+	@echo '  make linux         build the kernel (uImage)'
 	@echo '  make omcid         build the OMCI daemon'
 	@echo '  make sdk           build a relocatable cross toolchain'
 	@echo '  make legal-info    collect the source-and-licence bundle'
