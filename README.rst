@@ -40,20 +40,26 @@ class, with their device tree bindings and hardware documentation under
 ``linux/Documentation/``. The continuous integration builds the kernel for
 ``tinyconfig`` and for the board's configuration, checks the bindings and the
 board's device tree, builds the documentation and runs ``checkpatch.pl`` over
-every commit of the series. The series has not yet been run on the stick: the
-board tests are pending. The distribution build and the userspace are
-populated by later work items; each top-level directory still waiting for its
-component carries a short README naming it.
+every commit of the series. The kernel has been started from RAM on the
+stick, where it brings the GPON link up against a laboratory OLT, exchanges
+OMCI frames and passes the laboratory tests of the switch's hardware paths
+(bridging, routing with address translation, PPPoE and shaping). Starting it
+from flash and running on an operator's line are not tested yet. The
+distribution build and the userspace are populated by later work items; each
+top-level directory still waiting for its component carries a short README
+naming it.
 
 Building
 ========
 
-The top-level ``Makefile`` defines the entry points. Until the component
-behind a target lands, the target prints what it will do and which work item
-implements it, then exits::
+The top-level ``Makefile`` defines the entry points. ``make linux`` needs a
+MIPS cross compiler (``mips-linux-gnu-gcc`` on Debian, or name yours with
+``CROSS_COMPILE=``) and ``mkimage``. Until the component behind any other
+target lands, the target prints what it will do and which work item implements
+it, then exits::
 
     make               # build the flashable images (default)
-    make linux         # build the kernel
+    make linux         # build the kernel (build/linux/arch/mips/boot/uImage)
     make omcid         # build the OMCI daemon
     make sdk           # build a relocatable cross toolchain
     make legal-info    # collect the source-and-licence bundle for a release
