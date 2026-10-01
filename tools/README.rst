@@ -16,6 +16,8 @@ item:
   across the clean-up steps (**WI-03**).
 * ``isa-gate/`` -- the instruction-set gate that rejects any non-MIPS-I code in
   a target binary (**WI-14**).
+* ``kernel-archive/`` -- the archive of the committed ``linux/`` tree that the
+  distribution build takes its kernel headers from (**WI-14**).
 
 Each subdirectory carries its own README until it is filled.
 

@@ -1,0 +1,85 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# kernel-archive: an archive of the linux/ tree as committed, for the build.
+#
+# Usage: kernel-archive [-o DIR] [REV]
+#
+# Run inside the repository. Writes DIR/linux-<release>-<tree>.tar.xz and prints
+# its path, where <release> is the kernel's own version (VERSION.PATCHLEVEL.
+# SUBLEVEL and EXTRAVERSION of linux/Makefile) and <tree> is the first twelve
+# digits of the id of the linux/ tree in REV (default HEAD). DIR defaults to
+# build/kernel in the repository. The archive holds the files of that tree under
+# linux-<release>/, taken from the commit and not from the working tree, so it
+# is the same on a file system that ignores case and keeps both files of the
+# paths that differ only in case. An archive that is already there is kept: its
+# name says which tree it holds.
+#
+# Exit status: 0 on success, 1 when there is nothing to archive or the archive
+# could not be made.
+
+set -eu
+
+prog=kernel-archive
+die() {
+	echo "$prog: $*" >&2
+	exit 1
+}
+
+out=
+while getopts o: opt; do
+	case $opt in
+	o) out=$OPTARG ;;
+	*) echo "usage: $prog [-o DIR] [REV]" >&2; exit 2 ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -le 1 ] || { echo "usage: $prog [-o DIR] [REV]" >&2; exit 2; }
+rev=${1:-HEAD}
+
+command -v git >/dev/null 2>&1 || die "git is not installed"
+command -v xz >/dev/null 2>&1 || die "xz is not installed (apt-get install xz-utils)"
+top=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+git rev-parse --verify --quiet "$rev^{commit}" >/dev/null || die "$rev is not a commit"
+tree=$(git rev-parse --verify --quiet "$rev:linux" 2>/dev/null) || die "$rev has no linux/ directory"
+[ "$(git cat-file -t "$tree")" = tree ] || die "$rev:linux is not a directory"
+[ -n "$out" ] || out=$top/build/kernel
+
+# The release, from the first lines of linux/Makefile.
+release=$(git show "$rev:linux/Makefile" 2>/dev/null | awk '
+	/^VERSION[ \t]*=/      { v = $3 }
+	/^PATCHLEVEL[ \t]*=/   { p = $3 }
+	/^SUBLEVEL[ \t]*=/     { s = $3 }
+	/^EXTRAVERSION[ \t]*=/ { e = ($3 == "" ? "" : $3) }
+	/^NAME[ \t]*=/         { exit }
+	END { if (v != "" && p != "" && s != "") printf "%s.%s.%s%s", v, p, s, e }')
+[ -n "$release" ] || die "cannot read the kernel version from $rev:linux/Makefile"
+
+id=$(printf '%s' "$tree" | cut -c1-12)
+name=linux-$release-$id.tar.xz
+mkdir -p "$out" || die "cannot create $out"
+out=$(cd "$out" && pwd)
+dest=$out/$name
+
+if [ -f "$dest" ]; then
+	echo "$prog: $dest exists" >&2
+	echo "$dest"
+	exit 0
+fi
+
+# Modification times are those of the commit, and modes are fixed by the umask
+# below, so the same commit gives the same archive wherever it is made.
+when=$(git log -1 --format=%cI "$rev")
+part=$dest.part.$$
+status=$part.status
+trap 'rm -f "$part" "$status"' EXIT
+echo "$prog: archiving $rev:linux ($id) as $name" >&2
+{
+	git -c tar.umask=0022 archive --format=tar --prefix="linux-$release/" \
+		--mtime="$when" "$rev:linux"
+	echo $? >"$status"
+} | xz -T0 -6 >"$part" || die "xz failed"
+[ "$(cat "$status" 2>/dev/null)" = 0 ] || die "git archive failed"
+mv "$part" "$dest"
+echo "$dest"
