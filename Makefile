@@ -65,17 +65,25 @@ check:
 	tools/provenance/check selftest
 	tools/provenance/check all
 
-ramboot:
-	@echo 'open-dfp-34x-2c: "make ramboot" is not implemented yet.'
-	@echo '  Planned: load a trial kernel on the board over the serial bench.'
-	@echo '  Arrives with: bench tooling (WI-15).'
-	@exit 1
+# The bench: tools/bench is a Python package (3.11 or later, standard library
+# only) run from tools/. A TOML file of settings is named by BENCH_CONFIG;
+# ARGS adds options of the command, for example ARGS=--dry-run. See
+# tools/bench/README.rst for the settings and the commands.
+BENCH = cd tools && python3 -m bench
 
+# A trial kernel from RAM over TFTP; writes nothing to flash. IMAGE defaults
+# to the kernel that "make linux" builds.
+ramboot:
+	$(BENCH) ramboot $(ARGS) $(if $(IMAGE),"$(abspath $(IMAGE))")
+
+# The scratch bank only: TARGET is kernel (k0) or rootfs (r0). Any BANK but 0
+# is refused by the bank guard before any work.
 flash:
-	@echo 'open-dfp-34x-2c: "make flash" is not implemented yet.'
-	@echo '  Planned: flash an image to the scratch bank, with the bank guard.'
-	@echo '  Arrives with: bench tooling (WI-15).'
-	@exit 1
+	@test -n "$(IMAGE)" -a -n "$(TARGET)" || { \
+	  echo 'usage: make flash IMAGE=<file> TARGET=kernel|rootfs [BANK=0] [ARGS=...]' >&2; \
+	  exit 2; }
+	$(BENCH) flash $(if $(filter undefined,$(origin BANK)),,--bank "$(BANK)") \
+	  --target "$(TARGET)" $(ARGS) "$(abspath $(IMAGE))"
 
 clean:
 	@echo 'open-dfp-34x-2c: "make clean" is not implemented yet.'
@@ -90,7 +98,8 @@ distclean:
 	@exit 1
 
 help:
-	@echo 'open-dfp-34x-2c entry points (all but "make linux" and "make check" are stubs today):'
+	@echo 'open-dfp-34x-2c entry points (linux, check, ramboot and flash work;'
+	@echo 'the others are stubs today):'
 	@echo '  make               build the flashable images (default)'
 	@echo '  make linux         build the kernel (uImage)'
 	@echo '  make omcid         build the OMCI daemon'
@@ -98,7 +107,8 @@ help:
 	@echo '  make legal-info    collect the source-and-licence bundle'
 	@echo '  make docs          build the documentation'
 	@echo '  make check         run the offline gates'
-	@echo '  make ramboot       boot a trial kernel over the bench'
-	@echo '  make flash BANK=0  flash an image to the scratch bank'
+	@echo '  make ramboot       boot a trial kernel from RAM over the bench'
+	@echo '  make flash IMAGE=F TARGET=kernel|rootfs [BANK=0]'
+	@echo '                     flash an image to the scratch bank'
 	@echo '  make clean         remove build products'
 	@echo '  make distclean     remove build products and downloads'
