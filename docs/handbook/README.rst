@@ -7,10 +7,15 @@ docs/handbook
 
 The device maker's handbook.
 
-Building the images, flashing, recovery over the serial console, bank
-discipline, the boot contract (the image format, load address, command line and
-partition offsets our tooling relies on), the flash layout, and optical and
-rogue-ONU safety derived from ITU-T G.984.3 and from our own measurements.
+The pages so far:
 
-Empty for now. It is populated by **WI-20**, with the board readme and the boot
-contract contributed earlier by **WI-15**.
+``board.rst``
+    The DFP-34X-2C3 board and its interfaces.
+``boot-contract.rst``
+    The flash layout, the image formats, how a bank is selected, the watchdog.
+``flashing.rst``
+    A RAM boot, writing the scratch bank, one-shot trials, recovery.
+
+To come with **WI-20**: building the images, recovery over the serial console,
+bank discipline in one place, and optical and rogue-ONU safety derived from
+ITU-T G.984.3 and from our own measurements.
