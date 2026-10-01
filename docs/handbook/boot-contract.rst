@@ -1,0 +1,527 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+.. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+=================
+The boot contract
+=================
+
+The boot loader (the loader, for short) is a U-Boot of the 2011.12 release; its
+banner says so after every reset. It sits in the ``boot`` partition, together
+with a small first-stage loader that prints ``PRELOADER``, calibrates the memory
+and loads it. The CPU's reset vector runs this partition, and the loader starts
+the kernel. This page states what the loader needs from an image and what it
+leaves behind for the kernel. It is written for a reader who builds images or
+who would replace the loader.
+
+The kernel's side of the contract (how the kernel is entered, what it is
+handed, how it builds its command line and what it finds when it starts) is in
+``linux/Documentation/arch/mips/rtl9602c.rst``, chapter "Boot contract", and is
+not repeated here. The tool that relies on everything below is described in
+``tools/bench/README.rst``.
+
+Numbers typed to the loader are hexadecimal. The loader prints them without a
+prefix, and the console lines on this page show them that way; in running text
+they are written with ``0x``.
+
+The flash
+=========
+
+The flash is 8 MiB (``0x800000`` bytes) of SPI NOR. The loader divides it into
+eight partitions that cover the chip exactly, and the kernel's device tree
+repeats the same offsets and sizes.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 9 12 20 39 20
+
+   * - Partition
+     - Offset
+     - Size
+     - Holds
+     - Written by
+   * - ``boot``
+     - ``0x000000``
+     - 256 KiB (``0x040000``)
+     - The first-stage loader and the boot loader.
+     - Nobody.
+   * - ``env``
+     - ``0x040000``
+     - 8 KiB (``0x002000``)
+     - The boot loader's environment.
+     - The boot loader, by ``saveenv``.
+   * - ``env2``
+     - ``0x042000``
+     - 8 KiB (``0x002000``)
+     - The environment's redundant copy.
+     - The boot loader, by ``saveenv``.
+   * - ``config``
+     - ``0x044000``
+     - 240 KiB (``0x03c000``)
+     - The configuration store of the shipped firmware, a big-endian JFFS2
+       image that includes the device's registration identity. This system
+       does not mount it.
+     - Nobody.
+   * - ``k0``
+     - ``0x080000``
+     - 1328 KiB (``0x14c000``, 1359872 bytes)
+     - Bank 0 kernel: a legacy U-Boot image.
+     - The bench: ``make flash IMAGE=<file> TARGET=kernel``.
+   * - ``r0``
+     - ``0x1cc000``
+     - 2512 KiB (``0x274000``, 2572288 bytes)
+     - Bank 0 root filesystem: a SquashFS image.
+     - The bench: ``make flash IMAGE=<file> TARGET=rootfs``.
+   * - ``k1``
+     - ``0x440000``
+     - 1328 KiB (``0x14c000``)
+     - Bank 1 kernel: the shipped firmware, the fall-back.
+     - Nobody.
+   * - ``r1``
+     - ``0x58c000``
+     - 2512 KiB (``0x274000``)
+     - Bank 1 root filesystem.
+     - Nobody.
+
+"Nobody" means that no tool and no procedure of this handbook writes the
+partition, and that Linux cannot: from Linux the whole flash is a read-only
+mapping. The column describes the policy of the bench, not a protection of the
+chip. The page ``flashing.rst`` gives the reasons.
+
+The partitions appear in Linux as ``mtd0`` to ``mtd7`` in the order of the
+table, and as the block devices 31:0 to 31:7. The order matters: the loader's
+kernel arguments name the root filesystem by number, ``root=31:5`` for ``r0``
+and ``root=31:7`` for ``r1``, so the order of the nodes in the kernel's device
+tree is part of the contract. The device tree marks every partition outside
+bank 0 read-only, so that a flash driver that can write would still never
+write the loader, its environment, the configuration store or the fall-back.
+With the read-only mapping the flags change nothing yet.
+
+The loader's window
+-------------------
+
+The loader maps the whole chip for reading at ``0x94000000`` (KSEG0; the
+uncached alias is ``0xb4000000`` and the physical address ``0x14000000``). A
+bank is booted from this window in place: ``k0`` is at ``0x94080000``, ``r0``
+at ``0x941cc000``, ``k1`` at ``0x94440000`` and ``r1`` at ``0x9458c000``.
+``crc32`` and ``bootm`` read through it. Nothing is ever written through it;
+whether a store there does anything is not known.
+
+The boot partition is visible a second time in the reset-vector window, at
+physical address ``0x1fc00000`` (KSEG1 ``0xbfc00000``). The first-stage loader
+reads the loader from there, and the start of that window is where the CPU's
+reset vector runs.
+
+The loader's names for the layout
+---------------------------------
+
+The loader describes the same layout in variables, in hexadecimal without a
+prefix. The bench compares them with its own table before it writes anything,
+and stops with the variable's name if one differs. Mind the numbering: the
+loader counts the banks from 1, and the rest of this page counts them from 0.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 24 36
+
+   * - Variable
+     - Value
+     - Meaning
+   * - ``fl_boot_sz``
+     - ``40000``
+     - Size of ``boot`` (it starts at 0).
+   * - ``fl_env``, ``fl_env2``, ``fl_env_sz``
+     - ``40000``, ``42000``, ``2000``
+     - The two environment copies and their size.
+   * - ``fl_cfgfs``, ``fl_cfgfs_sz``
+     - ``44000``, ``3c000``
+     - ``config``.
+   * - ``fl_kernel1``, ``fl_kernel1_sz``
+     - ``80000``, ``14c000``
+     - Bank 0 kernel, ``k0``.
+   * - ``fl_rootfs1``, ``fl_rootfs1_sz``
+     - ``1cc000``, ``274000``
+     - Bank 0 root filesystem, ``r0``.
+   * - ``fl_kernel2``, ``fl_kernel2_sz``
+     - ``440000``, ``14c000``
+     - Bank 1 kernel, ``k1``.
+   * - ``fl_rootfs2``, ``fl_rootfs2_sz``
+     - ``58c000``, ``274000``
+     - Bank 1 root filesystem, ``r1``.
+
+``img0_kernel`` and ``img1_kernel`` hold the window addresses of the two
+kernels, ``94080000`` and ``94440000``.
+
+The environment
+---------------
+
+The environment is kept in two copies of 8 KiB, ``env`` and ``env2``. Each copy
+has a CRC32 that is valid over its bytes 5 to 8191, and a flag byte at offset
+4. ``saveenv`` writes the copies alternately: it erases and writes one copy and
+then writes the flag byte of the other. ``Valid environment: 1`` follows a
+write of ``env``, ``Valid environment: 2`` a write of ``env2``. Nothing but
+``saveenv`` changes them.
+
+The image
+=========
+
+The kernel image
+----------------
+
+The loader boots a legacy U-Boot image: a header of 64 bytes, all fields
+big-endian, followed by the data. For this board the data is the raw kernel
+compressed with LZMA. The loader verifies both CRCs and decompresses the data
+itself, so the kernel needs no self-extracting wrapper. ``make linux`` builds
+the image with ``mkimage`` as ``build/linux/arch/mips/boot/uImage``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 8 24 58
+
+   * - Offset
+     - Size
+     - Field
+     - Value for the kernel of this board
+   * - 0
+     - 4
+     - Magic
+     - ``0x27051956``
+   * - 4
+     - 4
+     - Header CRC32
+     - Over the 64 header bytes, with this field taken as zero.
+   * - 8
+     - 4
+     - Creation time
+     - Seconds since 1970 (UTC). ``bootm`` prints it as ``Created:``.
+   * - 12
+     - 4
+     - Data size
+     - The bytes that follow the header.
+   * - 16
+     - 4
+     - Load address
+     - ``0x80100000``
+   * - 20
+     - 4
+     - Entry point
+     - The address of ``kernel_entry``.
+   * - 24
+     - 4
+     - Data CRC32
+     - Over the data.
+   * - 28
+     - 1
+     - Operating system
+     - Linux (5)
+   * - 29
+     - 1
+     - Architecture
+     - MIPS (5)
+   * - 30
+     - 1
+     - Image type
+     - Kernel (2)
+   * - 31
+     - 1
+     - Compression
+     - LZMA (3)
+   * - 32
+     - 32
+     - Name
+     - Text, for example ``Linux-<release>``.
+
+The field values are those of U-Boot's public ``include/image.h``. The bench
+reads the header before it sends anything, and refuses a file whose magic,
+architecture, compression, load address or CRCs are wrong or that is larger
+than its target.
+
+The load address ``0x80100000`` is the KSEG0 address of physical 1 MiB. The
+kernel has to lie above the fixed exception vectors at ``0x80000000`` to
+``0x800003ff``; linked at ``0x80000000`` it stops in ``trap_init()``. After any
+change of the kernel configuration, read the load address from the header of
+the built image: turning on crash dumps, which kexec turns on by default, moves
+it to ``0x84000000``, above this board's memory, and the board configuration
+keeps them off. The kernel page named above says why.
+
+The root filesystem image
+-------------------------
+
+The root filesystem of a bank is a SquashFS image in ``r0`` (or ``r1``), which
+the kernel mounts from the block device that ``root=`` names. The bench checks
+the magic ``hsqs`` at offset 0 and the compression id, a 16-bit little-endian
+value at offset 20, against the set the kernel supports (gzip, 1, and lz4, 5,
+in the current kernel configuration), and refuses a file over 2572288 bytes.
+
+Where an image goes in RAM
+--------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 82
+
+   * - Address
+     - Use
+   * - ``0x80000000``
+     - Staging area for an image that is to be flashed, received by YMODEM or
+       by TFTP. The largest root filesystem image, 2.5 MiB, fits.
+   * - ``0x80100000``
+     - The kernel's load address: where ``bootm`` decompresses it (physical 1
+       MiB).
+   * - ``0x81000000``
+     - Staging area for a RAM-boot image received by TFTP (physical 16 MiB). It
+       may be up to 12 MiB, because the loader keeps its own code in the top of
+       RAM, relocated to ``0x81c00000``.
+
+A kernel can be started from RAM without writing the flash. The loader fetches
+the image by TFTP to ``0x81000000``, checks it, decompresses it to
+``0x80100000`` and enters it::
+
+    tftpboot 0x81000000 uImage
+    bootm 0x81000000
+
+The compressed copy sits at 16 MiB while the decompressed kernel grows from 1
+MiB, so the decompressed kernel has to end below physical ``0x01000000``, which
+leaves 15 MiB. The loader may also cap the decompressed size, at a limit that
+is not known. A development image that carries its user space is about 4 MB
+and decompresses to about 8.1 MB; it does not fit ``k0`` and boots from RAM
+only. The steps around the two commands (the host link, the boot arguments)
+are on the page ``flashing.rst``.
+
+How a bank is chosen
+====================
+
+Which bank a plain reset boots is set in the loader's saved environment. The
+kernel cannot change the choice, because the flash, the environment included,
+is read-only from Linux.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Variable
+     - Meaning
+   * - ``sw_commit``
+     - The committed bank: 0 boots bank 0 (this system), 1 boots bank 1 (the
+       shipped firmware). It is the bank a plain reset boots, and the
+       fall-back after a trial.
+   * - ``sw_tryactive``
+     - The one-shot trial: 2 means none is pending, 0 a trial of bank 0, 1 a
+       trial of bank 1.
+   * - ``sw_active``
+     - The bank that was booted last. The loader writes it.
+   * - ``bootcmd``
+     - Runs ``boot_by_commit`` when ``sw_tryactive`` is 2 and
+       ``boot_by_tryactive`` otherwise.
+   * - ``bootdelay``
+     - The length of the countdown, in ticks. It is 5 as shipped. The tick is
+       taken to be one second.
+   * - ``boot_by_commit``, ``boot_by_tryactive``
+     - The macros that ``bootcmd`` chooses between.
+   * - ``b0``, ``b1``
+     - Boot bank 0 or bank 1 for this boot only. ``run b1`` is the way into the
+       shipped firmware without changing anything.
+   * - ``set_act0``, ``set_act1``
+     - Record the active bank.
+   * - ``en_wdt``
+     - Arms the watchdog (see "The watchdog").
+
+After a reset the loader works as follows:
+
+1. It prints ``Hit any key to stop autoboot:`` and counts ``bootdelay`` ticks
+   down to 0. Any byte it receives stops the countdown, and is consumed: a
+   command typed during the countdown loses its first character.
+2. At the end of the countdown, or when ``boot`` is typed, it runs
+   ``bootcmd``.
+3. With ``sw_tryactive`` at 2 that is ``boot_by_commit``: the committed bank
+   boots.
+4. With any other value it is ``boot_by_tryactive``, which consumes the trial.
+   It sets ``sw_tryactive`` to 2 and ``sw_active`` to the bank, saves the
+   environment, arms the watchdog and boots the bank. The flag is therefore
+   spent before the kernel runs, and the next reset takes the committed bank.
+5. A bank is booted from the loader's window in place: ``94080000`` for bank 0,
+   ``94440000`` for bank 1, with the arguments of that bank (next section).
+
+The end of the countdown is the form measured. That typing ``boot`` at the
+prompt does the same is expected and not yet confirmed on the board.
+
+The fall-back of a trial is the committed bank. With ``sw_commit`` at 1 a
+failed trial costs one reset, and the shipped firmware comes up. With
+``sw_commit`` at 0 the committed bank is bank 0 itself, the bank that has just
+failed, so a failed trial is followed by the same kernel, and the way back is
+the loader prompt and ``run b1``. A trial protects the board only while
+``sw_commit`` names the other bank.
+
+A trial of bank 1 (``sw_tryactive`` at 1) would boot the shipped firmware under
+the watchdog. The bench never arms it.
+
+The kernel command line
+=======================
+
+For bank 0 the loader hands the kernel three arguments:
+
+* ``console=ttyS0,115200``, from the variable ``bootargs_base``;
+* an ``mtdparts=`` table in the loader's own naming of the flash, which this
+  kernel ignores, because its partitions come from its device tree and no
+  command-line partition parser is built;
+* ``root=31:5``, the last words of the variable ``mtdparts0``.
+
+Bank 1's arguments are the same with ``root=31:7`` (the variable ``mtdparts1``),
+and bank 1 is read-only. The macros assemble the arguments into ``bootargs``;
+``rst2dfl_flg`` takes part in the assembly and is not defined, so it expands to
+nothing. The loader passes no device tree: the kernel carries its own.
+
+The kernel puts ``panic=10`` from its device tree in front of the loader's
+arguments, so a panic restarts the board after 10 seconds. That order has not
+yet been read from a boot of the current kernel configuration. The page named
+above describes how the kernel builds the line.
+
+The watchdog
+============
+
+The watchdog is a block of the SoC, driven by the kernel. Its control register
+is at physical address ``0x18003268``, which a loader prompt reaches as
+``0xb8003268``; it reads back what was written.
+
+What a restart leaves counting
+------------------------------
+
+The kernel's restart (``reboot``, SysRq ``b``, a panic with ``panic=10``)
+writes ``0xe7c00000`` to the control register and then jumps to the CPU's reset
+vector. The value enables the watchdog with a deadline of 44.3 seconds and a
+full chip reset as its action. The write is a safety net for the case that the
+jump never reaches the loader.
+
+The count keeps running through the jump, through the loader and into the next
+boot, although the control register then reads 0. Writing 0 to the register
+stops it. The loader does not. The chip therefore resets about 46 seconds
+after a restart (45.9 seconds were measured from arming to the loader's first
+output, and 46.9 and 47.0 seconds after restarts) unless something clears the
+count in time.
+
+Who clears it
+-------------
+
+* The kernel, as the first act of its platform setup. A kernel that is entered
+  therefore survives the count of the restart that started it.
+* A person or the bench at the loader prompt, with ``mw.l b8003268 0``. The
+  bench types this one memory write before it flashes, because the transfer,
+  the erase and the write take longer than the 46 seconds that the count
+  allows.
+* The chip reset itself, which starts everything again.
+
+A RAM boot does not stop the count, and the bench leaves it running on purpose.
+The boot has to reach the kernel within about 45 seconds of the restart. After
+a restart the first transfer sometimes fails, and waiting does not cure it; the
+reset that the count brings does (see "When something goes wrong" on
+``flashing.rst``).
+
+A trial boot
+------------
+
+The one-shot path arms the watchdog before it boots the bank (the macro
+``en_wdt``), so that a failing image costs one reset: the chip resets, and the
+committed bank boots. A committed boot leaves the watchdog disarmed.
+
+The kernel clears the count early in its start and arms its own at the probe of
+the watchdog driver. From then on the kernel feeds the watchdog until user
+space opens ``/dev/watchdog``. Between the clearing and the probe nothing
+watches the boot, and a user space that never opens the watchdog is never reset
+by it. A trial boot of a kernel that hangs in either place is therefore
+expected to recover only by a power cycle. This has not been observed; it
+follows from the order above.
+
+What the loader leaves behind
+=============================
+
+At the moment the kernel is entered:
+
+* UART0 is at 115200 baud, divisor 109.
+* Timer 1 is running, with the control word ``0x11000032``. The kernel neither
+  uses nor stops it, and its interrupt stays disabled.
+* The SerDes lane to the host is off: the mode field of ``RTL9602C_SERDES_CTRL``
+  (offset ``0x000214`` of the switch register file) reads ``0x1f``, and the
+  whole register ``0x0004801f``. It stays off unless the lane macro ran before
+  ``bootm``. The kernel's switch driver brings it up itself.
+* The system controller's packet-buffer enable for the PON MAC is clear: the
+  register at physical ``0x1800063c`` reads ``0x10``.
+* The watchdog is disarmed, unless a restart or a trial boot armed it. A count
+  armed before survives into the kernel, as the section above says.
+
+A restart is a jump to the reset vector, not a reset of the chip. The CPU's
+state, its caches and TLB and every on-chip block keep the state they had; the
+loader initialises what it uses, and the kernel's drivers the rest. Which blocks
+the loader leaves untouched is not established.
+
+Timings
+=======
+
+.. list-table::
+   :header-rows: 1
+   :widths: 56 44
+
+   * - Step
+     - Time
+   * - A restart through the reset vector, to the loader's countdown
+     - 1.81 s (the first-stage banner after about 0.3 s, the ``U-Boot`` banner
+       after about 1.5 s).
+   * - A restart that only the watchdog completes
+     - About 46 s.
+   * - The countdown
+     - ``bootdelay`` ticks, taken to be one second each.
+   * - TFTP transfer and start of an image by the loader
+     - About 4 s for images of 0.8 to 1.2 MB. The images of about 4 MB were not
+       timed apart.
+   * - The kernel's banner to user space
+     - About 2 s.
+
+The times of whole procedures (a RAM boot, a flash) are on the page
+``flashing.rst``.
+
+If you replace the loader
+=========================
+
+What the kernel and the bench rely on, from the sections above:
+
+* The loader runs from the start of ``boot`` when the CPU is at its reset
+  vector. The kernel's restart jumps there and expects the loader to start at
+  once.
+* It boots a legacy U-Boot image with LZMA compression at the image's load
+  address, ``0x80100000``, and enters it at the image's entry point with the
+  arguments in the registers that the kernel page describes. It passes no
+  device tree; the kernel carries its own.
+* It passes the arguments of the bank: ``console=ttyS0,115200`` and
+  ``root=31:5`` for bank 0.
+* It leaves UART0 at 115200 baud, 8N1.
+* A count that the restart armed is still running when the loader starts. A
+  loader that does not stop it has the chip reset about 46 seconds after the
+  restart, unless the kernel clears it first.
+* A loader that uses the network needs the SerDes lane to the host up; the
+  lane macro on ``flashing.rst`` says what the bring-up is.
+* The bench types to the dialogue of U-Boot 2011.12: its prompt, its
+  countdown, its commands and its output. It reads the variables above. With a
+  different loader it needs a different driver.
+
+Open items
+==========
+
+* That the kernel boots from the flash window, with its root filesystem from
+  ``r0`` through ``root=31:5``, has not yet been confirmed on the board with the
+  current tree. The RAM boot is the path that has been run.
+* The order of the kernel command line after ``panic=10`` has not yet been read
+  from a boot of the current configuration.
+* The decompressed kernel is assumed to stay below 15 MiB and below whatever
+  cap the loader has. It has not been tested at the limit.
+* Nothing is written through the loader's flash window, and whether a store
+  there does anything is not known.
+* A bad write to ``boot`` is assumed to be beyond repair from the loader. It
+  has never been tried.
+* The read-only flags of the device tree have not been tested, because no flash
+  driver that can write exists.
+* That a trial boot is not reset by the watchdog when the kernel hangs between
+  the clearing of the count and the probe of the watchdog driver, or when user
+  space never opens the watchdog, has not been observed. A trial boot of a
+  kernel that stops there would show it.
+* That the countdown tick is one second is taken from the figures of the
+  countdown and has not been timed.
+* That ``boot`` typed at the prompt consumes a pending trial exactly as the end
+  of the countdown does has not yet been confirmed on the board.
