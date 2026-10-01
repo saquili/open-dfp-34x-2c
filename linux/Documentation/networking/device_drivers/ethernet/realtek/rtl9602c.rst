@@ -768,8 +768,12 @@ The ring registers
        delivers every frame to the CPU port and the engine drops what it has no
        descriptor for. The switch's side of that pause is not enabled.
      - M
-     - The switch's CPU port counted all 799,712 frames of a flood and discarded
-       none, while the engine dropped the excess (see "Registers").
+     - The switch's CPU port counted all 799,712 frames of a flood from a
+       1 Gbit/s port and discarded none, while the engine dropped the excess
+       (see "Registers"). Frames offered faster than the CPU port takes them,
+       as a burst from the 2.5 Gbit/s SFP port, are discarded in the switch
+       once its queue of about 70 KB is full; the ingress port's
+       ``rx_forward_discards`` counts them.
    * - ``RTL9602C_NIC_RING_CFG`` (``+0x1438``) is written with
        ``RTL9602C_NIC_RING_CFG_INIT`` (``0x32000001``) before the engine is
        started, and with 0 to halt it.

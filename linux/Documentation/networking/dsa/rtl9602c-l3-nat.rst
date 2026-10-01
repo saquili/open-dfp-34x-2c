@@ -850,9 +850,10 @@ bit* is the highest entry bit that stores (see the last row of the facts).
        top bit 16. Both are 1024 buckets of ``RTL9602C_NAPT_WAYS`` (4) ways,
        entry = bucket * 4 + way (see "Outbound NAPT (selector 10)" and "Inbound
        NAPT (selector 9)"). They are written per flow.
-     - T
-     - A routing test: the entries of the reference flow are at the expected
-       words (see "Inbound NAPT (selector 9)").
+     - T, I
+     - T: a routing test reads the outbound entry of the reference flow back at
+       the expected word through ``l3nat``. I: no view prints an inbound
+       entry, so its word is not checked on a running board.
    * - ``_NEIGH6`` (11) holds IPv6 neighbours, 128 rows of 3 words, top bit 79;
        ``_FLOW`` (12) holds five-tuple flows, 256 rows of 4 words, top bit 127.
        Both are reset and zeroed at setup; ``l3nat`` shows the first four rows
@@ -1840,8 +1841,9 @@ below give the steps in order.
      - M
      - A throughput test; a routing test.
    * - The first frames of a flow are the CPU's: netfilter offers the flow on
-       its second packet and the driver's entries land about 20 ms later, so at
-       0.3 ms per frame 4 to 46 of 300 frames went through the CPU.
+       its second packet and the driver's entries land some milliseconds
+       later, so of 300 frames sent 0.3 ms apart 12 to 57 went through the
+       CPU.
      - M
      - The CPU port's counter against the far-side count (a PPPoE test).
 
@@ -2267,12 +2269,14 @@ What the driver takes from a rule:
        and the hardware egress device from ``FLOW_ACTION_REDIRECT``.
      - T
      - A PPPoE test.
-   * - Two conditions outside the driver stop netfilter offering flows at all: a
-       bridge over the ingress or egress port (0 driver calls and ``[OFFLOAD]``
-       with one standing, 38 calls and ``[HW_OFFLOAD]`` without), and a
-       flowtable naming the bare PON port instead of the GEM interface (the CPU
-       cannot send on the bare port, the neighbour never resolves and no rule is
-       built).
+   * - Three conditions outside the driver stop netfilter offering flows at all:
+       a bridge over the ingress or egress port (0 driver calls and
+       ``[OFFLOAD]`` with one standing, 38 calls and ``[HW_OFFLOAD]``
+       without), a flowtable naming the bare PON port instead of the GEM
+       interface (the CPU cannot send on the bare port, the neighbour never
+       resolves and no rule is built), and a host behind the stick that is not
+       a valid neighbour (the flow stays ``[OFFLOAD]`` and the CPU forwards it
+       until the neighbour is valid: 161,185 of 440,712 frames in one run).
      - M
      - Both conditions set and removed in turn, the calls counted in the
        ``<flow>`` debug lines and the state read in the connection tracking
