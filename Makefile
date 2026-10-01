@@ -59,11 +59,15 @@ docs:
 	@echo '  Arrives with: the handbook (WI-20).'
 	@exit 1
 
-# The provenance gates: their own tests, then the tree and the commits since
-# main. The equivalence checks join this target when they land (WI-03).
+# The offline gates: the provenance gates (their own tests, then the tree and
+# the commits since main) and the self-tests of the tools. The instruction-set
+# gate's tests skip without a MIPS objdump.
 check:
 	tools/provenance/check selftest
 	tools/provenance/check all
+	tools/equiv/tests/run
+	python3 -m unittest discover -s tools/bench/tests -t tools
+	tools/isa-gate/tests/run
 
 # The bench: tools/bench is a Python package (3.11 or later, standard library
 # only) run from tools/. A TOML file of settings is named by BENCH_CONFIG;
