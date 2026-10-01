@@ -54,9 +54,11 @@ Building
 
 The top-level ``Makefile`` defines the entry points. ``make linux`` needs a
 MIPS cross compiler (``mips-linux-gnu-gcc`` on Debian, or name yours with
-``CROSS_COMPILE=``) and ``mkimage``. Until the component behind any other
-target lands, the target prints what it will do and which work item implements
-it, then exits::
+``CROSS_COMPILE=``) and ``mkimage``. ``make ramboot`` and ``make flash`` run
+the bench in ``tools/bench`` (Python 3.11 or later; its README describes the
+settings, the commands and the bank guard). Until the component behind any
+other target lands, the target prints what it will do and which work item
+implements it, then exits::
 
     make               # build the flashable images (default)
     make linux         # build the kernel (build/linux/arch/mips/boot/uImage)
@@ -65,8 +67,8 @@ it, then exits::
     make legal-info    # collect the source-and-licence bundle for a release
     make docs          # build the documentation
     make check         # run the offline gates
-    make ramboot       # boot a trial kernel over the bench
-    make flash BANK=0  # flash an image to the scratch bank
+    make ramboot       # boot a trial kernel from RAM over the bench
+    make flash IMAGE=F TARGET=kernel   # flash an image to the scratch bank
     make clean / make distclean
 
 Licensing
