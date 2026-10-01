@@ -25,8 +25,11 @@ BR2_KERNEL_HEADERS_CUSTOM_TARBALL=y
 BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION="file://$(OPEN_DFP_34X_2C_KERNEL_ARCHIVE)"
 BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12=y
 
-# The same output for the same inputs.
+# The same output for the same inputs. The archive tools of the toolchain write
+# no times or owners into the archives they make, so an archive does not change
+# with the minute it was made.
 BR2_REPRODUCIBLE=y
+BR2_BINUTILS_EXTRA_CONFIG_OPTIONS="--enable-deterministic-archives"
 
 # Nothing for the target: no BusyBox, no init system, no root filesystem image.
 # BR2_PACKAGE_BUSYBOX is not set

@@ -52,9 +52,11 @@ uClibc-ng 1.0.59        static and shared libraries, no threads, the stack
 Linux 6.18.48 headers   those of ``linux/`` (see below)
 ======================= ======================================================
 
-``BR2_REPRODUCIBLE`` is on. The root filesystem is off: no BusyBox, no init
-system, no image. Building it takes about four minutes on 18 cores with the
-sources in the download cache.
+``BR2_REPRODUCIBLE`` is on, and binutils is configured with
+``--enable-deterministic-archives``, so that ``ar`` and ``ranlib`` put no time or
+owner into an archive. The root filesystem is off: no BusyBox, no init system, no
+image. Building it takes about four minutes on 18 cores with the sources in the
+download cache.
 
 Building it
 -----------
