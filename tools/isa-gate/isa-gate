@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""isa-gate: fail when a target binary holds an instruction its core cannot run.
+
+Usage: isa-gate [--objdump PROGRAM] [--allow MNEMONIC]... [--archives]
+                [--no-flags] [--limit N] [-q] PATH...
+
+PATH is an ELF file, a static archive, or a directory that is searched for ELF
+files (and for archives with --archives). Every code section is listed by objdump as MIPS I; anything that the MIPS I
+integer instruction set does not hold is a finding, and so is an ELF header
+that names a later architecture. The exit status is 0 when nothing was found,
+1 when something was, and 2 when the gate could not do its work: no
+objdump, an unreadable path, or nothing to scan. A gate that scanned
+nothing has proved nothing, so that is an error and not a pass.
+
+The policy and the reasons for it are in README.rst.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, field
+
+ELF_MAGIC = b"\x7fELF"
+AR_MAGIC = b"!<arch>\n"
+EM_MIPS = 8
+ELFCLASS32 = 1
+ELFDATA2MSB = 2
+
+# EF_MIPS_ARCH, the top four bits of e_flags.
+ARCH_NAMES = {
+    0: "mips1", 1: "mips2", 2: "mips3", 3: "mips4", 4: "mips5", 5: "mips32", 6: "mips64",
+    7: "mips32r2", 8: "mips64r2", 9: "mips32r6", 10: "mips64r6",
+}
+
+# What objdump prints for the MIPS I integer instruction set, with the
+# aliases it uses for the common special cases of those instructions (move,
+# li, nop, b, bal, beqz, bnez, negu, not). Nothing else is allowed: a
+# listing as MIPS I leaves every instruction of a later architecture as
+# ".word", or as a coprocessor access, and neither is in this set.
+ALLOWED = frozenset("""
+add addi addiu addu and andi b bal beq beqz bgez bgezal bgtz blez bltz bltzal bne
+bnez break div divu j jal jalr jr lb lbu lh lhu li lui lw lwl lwr mfhi mflo move
+mthi mtlo mult multu negu nop nor not or ori sb sh sll sllv slt slti sltiu sltu sra
+srav srl srlv sub subu sw swl swr syscall xor xori
+""".split())
+
+_MEMBER = re.compile(r"^(\S.*?):\s+file format\s+(\S+)\s*$")
+_SYMBOL = re.compile(r"^([0-9a-fA-F]+) <(.+)>:\s*$")
+_INSN = re.compile(r"^\s*([0-9a-fA-F]+):\t(\S+)(?:\s+(.*?))?\s*$")
+
+
+class GateError(Exception):
+    """The gate could not do its work (exit status 2)."""
+
+
+@dataclass(frozen=True)
+class Finding:
+    path: str
+    where: str
+    what: str
+
+    def __str__(self) -> str:
+        return "%s: %s: %s" % (self.path, self.where, self.what)
+
+
+@dataclass
+class Report:
+    objects: int = 0
+    instructions: int = 0
+    findings: list[Finding] = field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# What a file is
+# --------------------------------------------------------------------------
+
+def kind_of(path: str) -> str | None:
+    """``elf``, ``archive`` or None for a file that is neither."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(8)
+    except OSError as exc:
+        raise GateError("cannot read %s: %s" % (path, exc.strerror)) from exc
+    if head[:4] == ELF_MAGIC:
+        return "elf"
+    if head == AR_MAGIC:
+        return "archive"
+    return None
+
+
+def elf_flags_finding(data: bytes) -> str | None:
+    """The reason an ELF header does not describe a big-endian MIPS I object, or None."""
+    if len(data) < 52:
+        return "a truncated ELF header"
+    if data[4] != ELFCLASS32 or data[5] != ELFDATA2MSB:
+        return "not a 32-bit big-endian ELF file"
+    machine, = struct.unpack(">H", data[18:20])
+    if machine != EM_MIPS:
+        return "ELF machine %d is not MIPS" % machine
+    flags, = struct.unpack(">I", data[36:40])
+    arch = flags >> 28
+    if arch != 0:
+        return "ELF flags name %s, not mips1" % ARCH_NAMES.get(arch, "architecture %d" % arch)
+    return None
+
+
+def archive_members(data: bytes) -> Iterator[tuple[str, bytes]]:
+    """The members of an ``ar`` archive as (name, contents); the symbol table is skipped."""
+    names = b""
+    pos = len(AR_MAGIC)
+    while pos + 60 <= len(data):
+        header = data[pos:pos + 60]
+        if header[58:60] != b"`\n":
+            raise GateError("a damaged archive member header at offset %d" % pos)
+        name = header[:16].decode("latin-1").strip()
+        try:
+            size = int(header[48:58].decode("latin-1").strip())
+        except ValueError as exc:
+            raise GateError("a damaged archive member size at offset %d" % pos) from exc
+        body = data[pos + 60:pos + 60 + size]
+        pos += 60 + size + (size & 1)
+        if name == "//":
+            names = body
+            continue
+        if name in ("/", "/SYM64/"):
+            continue
+        if name.startswith("/") and name[1:].isdigit():
+            start = int(name[1:])
+            end = names.find(b"/\n", start)
+            name = names[start:end].decode("latin-1") if end >= 0 else name
+        yield name.rstrip("/"), body
+
+
+def flags_findings(path: str, kind: str) -> tuple[int, list[Finding]]:
+    """Check the ELF header of a file, or of every ELF member of an archive."""
+    with open(path, "rb") as handle:
+        data = handle.read()
+    if kind == "elf":
+        reason = elf_flags_finding(data)
+        return 1, [Finding(path, "ELF header", reason)] if reason else []
+    count = 0
+    found: list[Finding] = []
+    for name, body in archive_members(data):
+        if body[:4] != ELF_MAGIC:
+            continue
+        count += 1
+        reason = elf_flags_finding(body)
+        if reason:
+            found.append(Finding(path, "member %s" % name, reason))
+    return count, found
+
+
+# --------------------------------------------------------------------------
+# Instructions
+# --------------------------------------------------------------------------
+
+def listing(path: str, objdump: str) -> Iterator[str]:
+    """The lines of ``objdump -d`` of one file, read as it is produced."""
+    command = [objdump, "-EB", "-m", "mips:3000", "-d", "--no-show-raw-insn", path]
+    with tempfile.TemporaryFile() as errors:
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors,
+                                       text=True, errors="replace")
+        except OSError as exc:
+            raise GateError("cannot run %s: %s" % (objdump, exc.strerror)) from exc
+        assert process.stdout is not None
+        yield from process.stdout
+        if process.wait() != 0:
+            errors.seek(0)
+            message = errors.read().decode("utf-8", "replace").strip()
+            raise GateError("%s failed on %s: %s" % (objdump, path, message or "no message"))
+
+
+def scan_lines(path: str, lines: Iterator[str], allowed: frozenset[str],
+               limit: int | None = None) -> tuple[int, list[Finding]]:
+    """Judge the lines of a listing; return the instruction count and the findings."""
+    member = path
+    symbol = "?"
+    count = 0
+    found: list[Finding] = []
+    for line in lines:
+        line = line.rstrip("\n")
+        text = _MEMBER.match(line)
+        if text:
+            member = text.group(1)
+            continue
+        text = _SYMBOL.match(line)
+        if text:
+            symbol = text.group(2)
+            continue
+        text = _INSN.match(line)
+        if not text:
+            continue
+        count += 1
+        mnemonic = text.group(2)
+        if mnemonic in allowed:
+            continue
+        operands = text.group(3) or ""
+        where = "%s+0x%s" % (symbol, text.group(1))
+        if member != path:
+            where = "%s: %s" % (member, where)
+        found.append(Finding(path, where, ("%s %s" % (mnemonic, operands)).strip()))
+    return count, found
+
+
+def scan_file(path: str, kind: str, objdump: str, allowed: frozenset[str],
+              check_flags: bool) -> Report:
+    report = Report()
+    report.objects, header_findings = flags_findings(path, kind)
+    if check_flags:
+        report.findings += header_findings
+    report.instructions, found = scan_lines(path, listing(path, objdump), allowed)
+    report.findings += found
+    return report
+
+
+def find_files(paths: Sequence[str], archives: bool = False) -> list[tuple[str, str]]:
+    """Every ELF file under the paths, in a stable order.
+
+    A directory yields its ELF files, and its archives only when ``archives`` is
+    set: a static library in a build tree holds members that no binary links, so
+    it is judged where its members end up. A path named on the command line is
+    scanned whatever it is.
+    """
+    found: list[tuple[str, str]] = []
+    for path in paths:
+        if os.path.isdir(path):
+            for root, dirs, names in os.walk(path):
+                dirs.sort()
+                for name in sorted(names):
+                    full = os.path.join(root, name)
+                    if os.path.islink(full) or not os.path.isfile(full):
+                        continue
+                    kind = kind_of(full)
+                    if kind == "elf" or (kind == "archive" and archives):
+                        found.append((full, kind))
+        elif os.path.isfile(path):
+            kind = kind_of(path)
+            if kind is None:
+                raise GateError("%s is neither an ELF file nor an archive" % path)
+            found.append((path, kind))
+        else:
+            raise GateError("no such file or directory: %s" % path)
+    return found
+
+
+def default_objdump(environ: dict[str, str]) -> str:
+    if environ.get("OBJDUMP"):
+        return environ["OBJDUMP"]
+    return environ.get("CROSS_COMPILE", "mips-linux-gnu-") + "objdump"
+
+
+def run(argv: Sequence[str], environ: dict[str, str] | None = None,
+        out=sys.stdout, err=sys.stderr) -> int:
+    parser = argparse.ArgumentParser(
+        prog="isa-gate", description="Fail when a target binary holds an instruction the core "
+        "cannot run.")
+    parser.add_argument("paths", nargs="+", metavar="PATH")
+    parser.add_argument("--objdump", help="the objdump program (default: $OBJDUMP, else "
+                        "${CROSS_COMPILE}objdump, else mips-linux-gnu-objdump)")
+    parser.add_argument("--allow", action="append", default=[], metavar="MNEMONIC",
+                        help="allow one more mnemonic (repeatable)")
+    parser.add_argument("--archives", action="store_true",
+                        help="also scan the static archives found under a directory")
+    parser.add_argument("--no-flags", action="store_true",
+                        help="do not require the ELF headers to say mips1")
+    parser.add_argument("--limit", type=int, default=10, metavar="N",
+                        help="findings printed per file (default 10; the count is exact)")
+    parser.add_argument("-q", "--quiet", action="store_true", help="print only the summary line")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exit_:
+        return exit_.code if isinstance(exit_.code, int) else 2
+    environ = dict(os.environ) if environ is None else environ
+    objdump = args.objdump or default_objdump(environ)
+    allowed = ALLOWED | frozenset(args.allow)
+    try:
+        if shutil.which(objdump) is None and not os.path.isfile(objdump):
+            raise GateError("%s is not installed (--objdump, $OBJDUMP or "
+                            "$CROSS_COMPILE name another)" % objdump)
+        files = find_files(args.paths, args.archives)
+        if not files:
+            raise GateError("no ELF file or archive under %s: a gate that scanned nothing "
+                            "proves nothing" % " ".join(args.paths))
+        total = Report()
+        for path, kind in files:
+            report = scan_file(path, kind, objdump, allowed, not args.no_flags)
+            total.objects += report.objects
+            total.instructions += report.instructions
+            total.findings += report.findings
+            if report.findings and not args.quiet:
+                for finding in report.findings[:args.limit]:
+                    print("isa-gate: %s" % finding, file=out)
+                if len(report.findings) > args.limit:
+                    print("isa-gate: %s: ... and %d more" % (path, len(report.findings) - args.limit),
+                          file=out)
+    except GateError as error:
+        print("isa-gate: %s" % error, file=err)
+        return 2
+    verdict = "ok" if not total.findings else "FAIL"
+    print("isa-gate: %s -- %d files, %d objects, %d instructions, %d findings"
+          % (verdict, len(files), total.objects, total.instructions, len(total.findings)),
+          file=out)
+    return 0 if not total.findings else 1
+
+
+if __name__ == "__main__":
+    sys.exit(run(sys.argv[1:]))
