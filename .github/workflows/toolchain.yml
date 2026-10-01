@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The cross toolchain, built from source by the pinned Buildroot with the
+# toolchain defconfig of br2-external, and checked: a negative control for the
+# instruction-set gate, the test programs built with the toolchain and run under
+# qemu-mips, the gate over every target object the toolchain holds, and a second
+# build in another directory that has to be the same as the first. Two builds
+# take the better part of an hour on a runner, so the workflow runs only when it
+# is started by hand.
+
+name: toolchain
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-24.04
+    # The pinned host build environment: Debian 13, by digest.
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 180
+    steps:
+      - name: Install the tools
+        # The packages Buildroot needs of its host, the cross binutils for the
+        # objdump of the gate, the cross compiler for the negative control and
+        # the user-mode emulator for the test programs.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3 \
+            patch xz-utils make gcc g++ libc6-dev binutils perl bzip2 gzip cpio \
+            unzip rsync file bc findutils gawk wget sed diffutils tar debianutils \
+            binutils-mips-linux-gnu gcc-mips-linux-gnu qemu-user
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: The pinned Buildroot, the kernel archive and the environment
+        # GIT_CEILING_DIRECTORIES keeps Buildroot out of this repository's
+        # history (br2-external/README.rst says why); it applies to the steps
+        # that follow.
+        run: |
+          make buildroot
+          archive=$(tools/kernel-archive/kernel-archive)
+          {
+            echo "OPEN_DFP_34X_2C_KERNEL_ARCHIVE=$archive"
+            echo "BR2_DL_DIR=$PWD/build/dl"
+            echo "GIT_CEILING_DIRECTORIES=$PWD"
+          } >> "$GITHUB_ENV"
+      - name: Build the toolchain
+        run: |
+          start=$(date +%s)
+          make -C "$(buildroot/fetch -q)" O="$PWD/build/toolchain-a" \
+            BR2_EXTERNAL="$PWD/br2-external" toolchain_defconfig
+          make sdk -C build/toolchain-a
+          echo "the first build took $(( $(date +%s) - start )) seconds"
+          ls -l build/toolchain-a/images
+      - name: Unpack the toolchain tarball and relocate it
+        run: |
+          mkdir -p build/unpacked-a
+          tar -xzf build/toolchain-a/images/*.tar.gz -C build/unpacked-a
+          dir=$(echo build/unpacked-a/*/)
+          (cd "$dir" && ./relocate-*.sh)
+          echo "TOOLCHAIN_A=$PWD/${dir%/}" >> "$GITHUB_ENV"
+      - name: What was built
+        run: |
+          t="$TOOLCHAIN_A/bin/mips-buildroot-linux-uclibc"
+          "$t-gcc" --version | head -n 1
+          "$t-ld" --version | head -n 1
+          "$t-gcc" -v 2>&1 | grep -o -e '--with-[a-z0-9-]*=[a-z0-9]*' -e '--without-[a-z]*' | tr '\n' ' '; echo
+          sysroot=$("$t-gcc" -print-sysroot)
+          grep -e LINUX_VERSION_MAJOR -e LINUX_VERSION_PATCHLEVEL -e LINUX_VERSION_SUBLEVEL \
+            "$sysroot/usr/include/linux/version.h"
+          ls "$sysroot"/lib/libuClibc-*.so
+          echo 'int f(int a, int b) { return a / b; }' > /tmp/f.c
+          "$t-gcc" -O2 -c /tmp/f.c -o /tmp/f.o
+          "$t-readelf" -h /tmp/f.o | grep -e Flags -e Data
+          "$t-readelf" -A /tmp/f.o | grep -e ISA -e 'FP ABI'
+      - name: The negative control of the gate
+        # The gate has to be able to fail: a MIPS32 object is refused.
+        run: br2-external/tests/toolchain/negative-control
+      - name: The test programs
+        # Built with the unpacked toolchain, static and dynamic; the gate over
+        # the binaries; run under qemu-mips against their expected output.
+        run: br2-external/tests/toolchain/run "$TOOLCHAIN_A" build/toolchain-tests
+      - name: The instruction-set gate over the toolchain's target objects
+        run: |
+          br2-external/tests/toolchain/target-objects "$TOOLCHAIN_A" > /tmp/target-objects.txt
+          wc -l < /tmp/target-objects.txt
+          xargs -a /tmp/target-objects.txt tools/isa-gate/isa-gate --archives
+      - name: Make room for the second build
+        if: always()
+        run: rm -rf build/toolchain-a/build build/unpacked-a
+      - name: Build the toolchain again, in another directory
+        if: always()
+        run: |
+          start=$(date +%s)
+          make -C "$(buildroot/fetch -q)" O="$PWD/build/toolchain-b" \
+            BR2_EXTERNAL="$PWD/br2-external" toolchain_defconfig
+          make sdk -C build/toolchain-b
+          echo "the second build took $(( $(date +%s) - start )) seconds"
+      - name: The two builds are the same
+        # The directories are named toolchain-a and toolchain-b, which have the
+        # same length: the files record the directory they were built in, and
+        # have to be identical once the one name is replaced by the other and
+        # the values computed from the contents are set aside (compare-trees).
+        if: always()
+        run: |
+          # The comparison can fail: a file that differs in more than the name.
+          mkdir -p build/compare-control/a build/compare-control/b
+          echo 'built in toolchain-a' > build/compare-control/a/file
+          echo 'built in toolchain-b' > build/compare-control/b/file
+          br2-external/tests/toolchain/compare-trees build/compare-control/a \
+            build/compare-control/b toolchain-a toolchain-b
+          echo 'built in toolchain-c' > build/compare-control/b/file
+          if br2-external/tests/toolchain/compare-trees build/compare-control/a \
+              build/compare-control/b toolchain-a toolchain-b; then
+            echo 'the comparison did not notice a difference' >&2
+            exit 1
+          fi
+          br2-external/tests/toolchain/compare-trees build/toolchain-a/host \
+            build/toolchain-b/host toolchain-a toolchain-b
+      - name: The toolchain tarballs
+        if: always()
+        run: |
+          ls -l build/toolchain-a/images build/toolchain-b/images
+          sha256sum build/toolchain-a/images/*.tar.gz build/toolchain-b/images/*.tar.gz

@@ -31,8 +31,33 @@ kernel's bindings).
     have.
 ``equivalence-tools``
     The self-tests of ``tools/equiv``.
+``buildroot-fetch``
+    The self-tests of ``buildroot/fetch`` and of ``tools/kernel-archive``, and
+    then ``make buildroot``: the pinned Buildroot release is fetched from its
+    URL, checked against the pin, and the carried patches are applied to it.
 ``licensing``
     ``reuse lint``, with the REUSE tool pinned.
+
+``toolchain.yml`` -- when started by hand
+=========================================
+
+The cross toolchain, built from source by the pinned Buildroot with
+``br2-external/configs/toolchain_defconfig`` and checked; two builds take the
+better part of an hour, so the workflow does not run on a push. One job, in the
+same pinned container, with these steps in order: the pinned Buildroot and the
+kernel archive (``make buildroot`` and ``tools/kernel-archive``); the first
+build (``make sdk``); the toolchain tarball unpacked and relocated; what was
+built (versions and the compiler's defaults); the negative control of the
+instruction-set gate; the test programs built with the toolchain, passed through
+the gate and run under ``qemu-mips``; the gate over every target object of the
+toolchain; a second build in another directory; and the comparison of the two,
+which have to be identical but for the name of the directory and two values
+computed from the contents (``br2-external/README.rst`` says which). The steps
+after the gate over the toolchain's objects run whatever its result. With the
+toolchain as the defconfig builds it, the gate reports findings in three
+functions of the libraries (``br2-external/README.rst`` lists them), so the job
+ends with that step failed, after the others have passed. See
+``br2-external/README.rst`` for the checks.
 
 ``kernel.yml`` -- on changes to ``linux/``
 ==========================================
@@ -68,6 +93,7 @@ that stops with an error does.
 
 Still to come, each with the work that needs it: the board configuration
 and ``dtbs_check W=1`` in the build matrix, sparse, and the selftests build
-with the kernel series; the OMCI daemon with the userspace; the distribution
-build, the image-size and instruction-set gates and the nightly
-reproducibility build with the distribution.
+with the kernel series; the OMCI daemon with the userspace; the root
+filesystem and the images of the distribution build, the image-size gate and
+the instruction-set gate over the target tree, and the nightly reproducibility
+build of the whole distribution.
