@@ -68,9 +68,9 @@ docs:
 	@exit 1
 
 # The offline gates: the provenance gates (their own tests, then the tree and
-# the commits since main) and the self-tests of the tools and of the script
-# that fetches the build system. The instruction-set gate's tests skip without
-# a MIPS objdump.
+# the commits since main) and the self-tests of the tools, of the script that
+# fetches the build system and of the one that archives the kernel. The
+# instruction-set gate's tests skip without a MIPS objdump.
 check:
 	tools/provenance/check selftest
 	tools/provenance/check all
@@ -78,6 +78,7 @@ check:
 	python3 -m unittest discover -s tools/bench/tests -t tools
 	tools/isa-gate/tests/run
 	buildroot/tests/run
+	tools/kernel-archive/tests/run
 
 # The bench: tools/bench is a Python package (3.11 or later, standard library
 # only) run from tools/. A TOML file of settings is named by BENCH_CONFIG;
