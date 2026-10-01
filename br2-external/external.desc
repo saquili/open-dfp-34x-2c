@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The name of this external tree. Buildroot turns it into the variable
+# BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH, the absolute path of this directory.
+name: OPEN_DFP_34X_2C
+desc: ODI DFP-34X-2C3 GPON ONU stick

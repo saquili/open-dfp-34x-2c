@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The cross toolchain and nothing else: no kernel, no root filesystem. Running
+# make sdk in the Buildroot tree builds it and packs it as a relocatable
+# tarball. See br2-external/README.rst.
+
+# MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
+# variant comes from the patch in buildroot/patches.
+BR2_mips=y
+BR2_mips_1=y
+
+# gcc 14 and binutils 2.44, and uClibc-ng with its C library configuration of
+# this product. No threads: the core has no atomic operations.
+BR2_BINUTILS_VERSION_2_44_X=y
+BR2_GCC_VERSION_14_X=y
+BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y
+BR2_PTHREADS_NONE=y
+BR2_TOOLCHAIN_BUILDROOT_USE_SSP=y
+BR2_UCLIBC_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/uclibc.fragment"
+
+# The kernel headers are those of this repository's kernel (linux/), from the
+# archive that tools/kernel-archive makes.
+BR2_KERNEL_HEADERS_CUSTOM_TARBALL=y
+BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION="file://$(OPEN_DFP_34X_2C_KERNEL_ARCHIVE)"
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12=y
+
+# The same output for the same inputs.
+BR2_REPRODUCIBLE=y
+
+# Nothing for the target: no BusyBox, no init system, no root filesystem image.
+# BR2_PACKAGE_BUSYBOX is not set
+BR2_INIT_NONE=y
+BR2_SYSTEM_BIN_SH_NONE=y
+# BR2_TARGET_GENERIC_GETTY is not set
+# BR2_TARGET_ROOTFS_TAR is not set

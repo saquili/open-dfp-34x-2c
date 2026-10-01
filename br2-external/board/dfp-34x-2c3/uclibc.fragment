@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# uClibc-ng settings for the C library of this product. The build system merges
+# this file over its own uClibc-ng defaults (BR2_UCLIBC_CONFIG_FRAGMENT_FILES in
+# the defconfigs). The architecture, the ABI, soft-float, the shared libraries
+# and the absence of threads are set by the toolchain options of the
+# defconfigs, and the MIPS I variant switches the MIPS prefetch routines off;
+# none of them is repeated here. These are the library features that the
+# userspace of the board needs, written down so that the C library keeps
+# offering them whatever the build system's defaults become.
+
+# The C99 maths functions. Without them libm is not built, and the failure
+# shows at the very end, as a program that cannot link -lm.
+DO_C99_MATH=y
+
+# File-tree walk (<ftw.h>), which iproute2 includes.
+UCLIBC_HAS_FTW=y
+UCLIBC_HAS_NFTW=y
+
+# IPv6 in the library, a different question from IPv6 in the kernel: iproute2
+# includes <netinet/icmp6.h>, which is installed only with this on.
+UCLIBC_HAS_IPV6=y
+
+# fopencookie(), which nftables uses to turn an output buffer into a FILE *.
+UCLIBC_HAS_GLIBC_CUSTOM_STREAMS=y
