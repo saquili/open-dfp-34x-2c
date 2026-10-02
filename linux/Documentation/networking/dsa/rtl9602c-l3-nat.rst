@@ -1787,11 +1787,12 @@ below give the steps in order.
      - Tag
      - Checked by
    * - An upstream frame (LAN host to remote end) reaches the engine addressed
-       to one of this device's MACs, the LAN host's gateway, whose address-table
-       entry on the CPU port carries ``RTL9602C_FDB_W1_ROUTER_MAC`` (see "The
-       address-table entries the engine uses").
-     - T
-     - A routing test.
+       to one of this device's MACs, the LAN host's gateway, whether or not the
+       address table holds an entry for that MAC (see "The address-table
+       entries the engine uses").
+     - M
+     - A routing test, also from a boot straight into router mode with no entry
+       for the stick's MAC in the table.
    * - The engine finds the ingress L3 interface by the destination MAC, needs
        action-2 route rows for the subnets on both sides, finds the flow in the
        outbound bucket, follows the way to the inbound entry, and rewrites the
@@ -1870,16 +1871,17 @@ the *bridging* page ("The layer-2 side of routing"), which also has the steps of
    * - Fact
      - Tag
      - Checked by
-   * - ``RTL9602C_FDB_W1_ROUTER_MAC`` (word 1 bit 29, entry bit 61), on a static
-       entry for one of this device's MACs on the CPU port, hands frames to that
-       address to the L3 engine instead of trapping them to the CPU. The driver
-       sets it on the entries behind the CPU port when the engine comes up, and
-       ``rtl9602c_port_fdb_add()`` sets it on every static CPU-port entry that
-       it adds while ``l34_up``. That this bit is what admits the frames is
-       inferred, not measured; with it set the offload works.
-     - I
-     - Clearing it on the CPU-port entries and repeating the routing test would
-       show whether it is needed.
+   * - ``RTL9602C_FDB_W1_ROUTER_MAC`` (word 1 bit 29, entry bit 61) is not what
+       admits frames to the engine: the engine takes the frames for this
+       device's MACs with no entry for them in the address table. What the bit
+       does is not known. The driver sets it on the entries behind the CPU port
+       when the engine comes up, and ``rtl9602c_port_fdb_add()`` sets it on
+       every static CPU-port entry that it adds while ``l34_up``.
+     - M
+     - Booted straight into router mode, a kernel that places no entry for the
+       stick's own MAC had none in the *bridging* page's ``fdb`` view, and a
+       routing test found its flow in the switch with 20 of 20,000 datagrams
+       through the CPU.
    * - Turning the engine on calls ``rtl9602c_l2_l3lookup_cpu(p, true)`` once,
        from the bring-up: learning off on the CPU port, the learned entries
        behind it deleted, and the router bit set on the entries behind the CPU
@@ -2837,11 +2839,7 @@ Known limitations
   routes fit. When more than 32 routes exist, hardware routing stays off until
   the driver is reloaded.
 - The address-table entries on which the engine depends have limitations of
-  their own, described on the *bridging* page. The bring-up's call of
-  ``rtl9602c_l2_l3lookup_cpu()`` runs before DSA has created the user
-  interfaces, so this device's own addresses get the router bit only through
-  ``rtl9602c_port_fdb_add()``, and the entry that is placed for a next hop stays
-  in the address table after its neighbour goes away.
+  their own, described on the *bridging* page.
 
 Open questions
 ==============
@@ -2955,11 +2953,11 @@ Questions the code does not depend on
        for, and whether its rows are needed ("IPv4 neighbour CAM (selector
        13)").
      - Zeroing the CAM rows and repeating the routing test.
-   * - Whether the router bit on this device's own addresses is what admits
-       frames to the engine ("The address-table entries the engine uses"). The
-       driver sets the bit whichever way this resolves; the *bridging* page
-       lists the same fact among the assumptions of its own function.
-     - Clearing the bit on the CPU-port entries and repeating the routing test.
+   * - What the router bit on this device's own addresses does, since it is
+       not what admits frames to the engine ("The address-table entries the
+       engine uses"). The driver sets the bit whichever way this resolves.
+     - A frame to this device's address in a VLAN in independent learning,
+       with and without the bit, followed in the frame capture.
    * - Whether a next hop's address-table row has to be filed under the
        destination VLAN ("The address-table entries the engine uses"). The
        driver files it there either way.

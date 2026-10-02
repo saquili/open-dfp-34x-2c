@@ -115,7 +115,8 @@ The files that hold the rest of this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``
      - The address table, flush, learning, ageing, spanning-tree state,
        isolation, flooding, bridge membership, VLANs and the PVID, frame length,
-       mirroring, and the address-table entries that the L3 engine depends on.
+       mirroring, the address-table entries that the L3 engine depends on, and
+       the debugfs view ``fdb``.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - The indirect table engine (``rtl9602c_table_op()``,
        ``rtl9602c_table_read()``, ``rtl9602c_table_write()``) and its self-test,
@@ -167,7 +168,7 @@ Configuration
      - The GEM interfaces, which are the bridge ports of the PON port.
        ``CONFIG_NET_DSA_RTL9602C`` selects it.
    * - ``CONFIG_DEBUG_FS``
-     - The views ``l2learn``, ``svlan`` and ``rma``.
+     - The views ``fdb``, ``l2learn``, ``svlan`` and ``rma``.
 
 Device tree
 -----------
@@ -194,8 +195,8 @@ Interfaces to user space
 - ``tc`` rules on ``sfp`` or ``pon``: a flower rule with ``vlan modify`` is a
   VLAN translation, and a matchall rule with a mirred action mirrors a port (see
   "VLAN translation" and "Mirroring").
-- Three read-only debugfs views in ``/sys/kernel/debug/rtl9602c/``, ``l2learn``,
-  ``svlan`` and ``rma`` (see "The read-only views").
+- Four read-only debugfs views in ``/sys/kernel/debug/rtl9602c/``, ``fdb``,
+  ``l2learn``, ``svlan`` and ``rma`` (see "The read-only views").
 - ``ethtool -S`` reports ``rx_forward_discards`` for a port: the frames that the
   switch dropped in forwarding.
 - The kernel log lines of setup that begin ``rtl9602c-switch:``, among them the
@@ -629,17 +630,16 @@ measured about them.
      - M
      - All 1024 hashed slots read word 2 = ``0x00002000``; ``bridge fdb del`` of
        a static entry restored the flooding that it had stopped.
-   * - ``RTL9602C_FDB_W1_ROUTER_MAC``, on an entry for one of this device's own
-       addresses behind the CPU port, makes the switch hand a frame to that
-       address to the L3 engine instead of forwarding it to the CPU port. The
-       driver sets it on those entries while the engine is up (see "The layer-2
-       side of routing").
-     - I
-     - Routing works with the bit set (a routing test sees a translated source
-       address on the wire), but the bit has never been removed from an
-       otherwise working setup: deleting the CPU-port entry and adding it back
-       without the bit, then repeating the routing test, would settle it. The
-       driver depends on it for every routed flow.
+   * - ``RTL9602C_FDB_W1_ROUTER_MAC`` is not what admits a frame to the L3
+       engine: the engine takes the frames for this device's own addresses
+       with no entry for them in the table. What the bit does is not known.
+       The driver sets it on the entries behind the CPU port while the engine
+       is up (see "The layer-2 side of routing").
+     - M
+     - Booted straight into router mode, a kernel that places no entry for the
+       stick's own address had none in the ``fdb`` view, and the routing test
+       still found its flow in the switch, with 20 of 20,000 datagrams through
+       the CPU; the same as with the entry and its bit.
    * - ``RTL9602C_FDB_W2_NEXTHOP`` marks an entry that the L3 engine may use as
        a next hop's destination. Without it the engine resolves a routed frame
        completely and the switch then discards the frame at its ingress port,
@@ -712,12 +712,11 @@ Placing, changing and deleting through the hash
        Where two entries for the same address already existed, a static one and
        one learned from the CPU's own transmissions, a hashed write of that
        address with one bit changed put a third copy at another slot and left
-       both originals as they were. The driver therefore changes an existing
-       entry itself by deleting its key (a hashed write with
-       ``RTL9602C_FDB_W2_VALID`` clear, repeated ``RTL9602C_FDB_HASH_WAYS``
-       times to empty the key) and then adding it once. It does so for the
-       next-hop entries and the entries behind the CPU port (see "The layer-2
-       side of routing"); ``port_fdb_add`` writes once.
+       both originals as they were. The driver therefore deletes every entry of
+       the key first, each by its own words (see the rows below), and then adds
+       the key once. It does so in ``port_fdb_add``, for the next-hop entries
+       and for the entries behind the CPU port (see "The layer-2 side of
+       routing").
      - M
      - This device's own address held slots 364 (learned) and 365 (static), both
        without the bit; the changed copy went to slot 1004; after
@@ -733,19 +732,33 @@ Placing, changing and deleting through the hash
        slots can be full while the table has a thousand free slots.
      - I
      - A fifth address hashing into a full bucket would show HIT clear.
-   * - The hashed search is keyed by address and VID only: the port in the
-       written word does not change which entry it finds. ``port_fdb_del``
-       relies on this and deletes with port 0 whatever port the entry lives
-       behind.
-     - I
-     - A static entry added on the PON port or on the CPU port and removed with
-       ``bridge fdb del``, then a dump, would settle it. ``port_fdb_del``
-       depends on it for every entry that is not behind port 0.
+   * - A hashed delete removes an entry only when the rest of the written word
+       agrees with it: a delete built from the address and VID with port 0 left
+       an entry behind the CPU port in place. The driver therefore deletes an
+       entry by its own words, as the emptying at setup does: it reads the
+       hashed slots by index and writes each entry of the key back through the
+       hash with ``RTL9602C_FDB_W2_VALID`` clear (``rtl9602c_l2_purge()``). A
+       walk of all 1024 slots takes well under 10 ms.
+     - M
+     - A host address added with ``bridge fdb add ... dev omcibr0 self local``
+       went behind the CPU port; ``bridge fdb del`` returned success and the
+       ``fdb`` view still showed the entry while the delete carried port 0, and
+       showed it gone with the delete by the entry's own words. The bridges of
+       earlier runs had left their addresses behind the CPU port the same way.
+   * - A VLAN that no ``port_vlan_add`` wrote, such as a VLAN that only an
+       upper of a port in a VLAN-unaware bridge uses, is learned in shared
+       learning. The switch then keeps a learned entry of an address beside the
+       driver's static entry of the same address and VID, at another slot,
+       because the two are keyed differently.
+     - M
+     - The ``fdb`` view showed the router's address in the management VLAN
+       twice: ``ivl static`` with the next-hop bit at slot 488, and ``svl
+       learned`` at slot 556.
 
 Adding, deleting and dumping entries
 ------------------------------------
 
-``rtl9602c_port_fdb_add()``, in order:
+``rtl9602c_port_fdb_add()``, in order, steps 3 to 7 under ``fdb_lock``:
 
 1. Refuse a multicast address with ``-EINVAL``. Purpose: a group is a member set
    and goes through ``port_mdb_add``. (T)
@@ -753,32 +766,44 @@ Adding, deleting and dumping entries
    bridge, and the switch puts an untagged frame into its ingress port's PVID
    before the lookup (see "VLAN membership, filtering and PVID"), so an entry at
    VID 0 would match nothing. (M)
-3. Build the entry: address, VID, ``RTL9602C_FDB_W1_IVL``,
+3. If a routed next hop's entry holds the key: behind this port, return 0, as
+   that entry is static and sends the address there already; behind another
+   port, return ``-EBUSY`` with the log line ``<address> vlan <v>: a routed
+   next hop holds it behind port <n>``. Purpose: a next hop names its entry by
+   slot, so the entry stays as placed (see "The layer-2 side of routing"). (T)
+4. Delete every other entry of the key, learned or static, behind any port,
+   each by its own words. Purpose: a write of a key already in the table does
+   not always replace it. (M)
+5. Build the entry: address, VID, ``RTL9602C_FDB_W1_IVL``,
    ``RTL9602C_FDB_W1_STATIC``, the port, ``RTL9602C_FDB_W2_AGE_MAX`` and
    ``RTL9602C_FDB_W2_VALID``. Purpose: see "Entry layout". (M)
-4. While the L3 engine is up, set ``RTL9602C_FDB_W1_ROUTER_MAC`` on an entry for
+6. While the L3 engine is up, set ``RTL9602C_FDB_W1_ROUTER_MAC`` on an entry for
    the CPU port. Purpose: such an entry is one of this device's own addresses
    (see "The layer-2 side of routing"), and stamping it here keeps an address
    added later routed. (I)
-5. Write the entry through the hash. A write with HIT clear returns ``-ENOSPC``.
+7. Write the entry through the hash. A write with HIT clear returns ``-ENOSPC``.
    Purpose: the result is only in the status. (T)
 
 ``rtl9602c_port_fdb_del()``, in order:
 
 1. Replace VID 0 with the port's PVID, as for the add. (M)
-2. Build the key with port 0 and ``RTL9602C_FDB_W2_VALID`` clear, and write it
-   through the hash. Purpose: a hashed write with the valid bit clear deletes
-   the entry that the key names, and the port is not part of the key. (M, I)
-
-In step 2 the deletion is M and the port not being part of the key is I (see
-"Placing, changing and deleting through the hash").
+2. Behind the CPU port, leave an address that a user port carries at its PVID.
+   Purpose: it is this device's own address, which the L3 engine goes on
+   using; DSA deletes a bridge's host addresses when the bridge goes, as router
+   mode does. (T)
+3. Under ``fdb_lock``, delete the entries of the key behind the port, each by
+   its own words, but not a next hop's. Purpose: a hashed delete built from
+   the key alone does not reach every entry (see "Placing, changing and
+   deleting through the hash"), and a next hop still names its entry. (M)
 
 ``rtl9602c_port_fdb_dump()``, in order:
 
 1. Read slots 0 to 1023 by index. Purpose: the CAM is not used. (M)
 2. Skip a slot without HIT. Purpose: the valid bit is set in every slot. (M)
-3. Decode address, VID and port, and report the entries behind the port asked
-   about, with the static flag from ``RTL9602C_FDB_W1_STATIC``. (M)
+3. Decode address, VID and port, and report the unicast entries behind the port
+   asked about, with the static flag from ``RTL9602C_FDB_W1_STATIC``, and the
+   groups whose member set holds the port. Purpose: a group's member set lies
+   where a unicast entry keeps its port. (M)
 
 ``rtl9602c_port_mdb_add()`` and ``rtl9602c_port_mdb_del()`` run the same steps
 under ``fdb_lock``, which makes the lookup, the change and the write one
@@ -1867,9 +1892,9 @@ The layer-2 side of routing
 A next hop of the L3 engine does not hold the destination address. It stores an
 index into the address table, and the destination address and the egress port of
 a routed frame come from the entry at that index. The driver therefore places
-address-table entries for the engine. It also hands this device's own addresses
-to the engine, through the router bit. The engine itself is on the *l3-nat*
-page.
+address-table entries for the engine. It also files this device's own
+addresses behind the CPU port, with the router bit while the engine is up. The
+engine itself is on the *l3-nat* page.
 
 .. list-table::
    :header-rows: 1
@@ -1886,10 +1911,10 @@ page.
      - On a freshly booted board the table held two learned entries and none of
        this device's own.
    * - ``RTL9602C_FDB_W1_ROUTER_MAC`` is set only once the L3 engine is up, and
-       ``port_fdb_add`` stamps later CPU-port entries itself while it is: the
-       bit sends a frame to the engine instead of the CPU, so set while the
-       engine is down it would take this device's own traffic, management
-       included, into a block that is not running.
+       ``port_fdb_add`` stamps later CPU-port entries itself while it is, in
+       case the bit sends a frame to the engine: set while the engine is down
+       it would then take this device's own traffic, management included, into
+       a block that is not running.
      - I
      - Stamping with the engine's master enable clear while watching management
        traffic would settle it; the ordering costs nothing if it is false.
@@ -1897,8 +1922,10 @@ page.
        at: a next hop stores an index into this table, and the destination
        address and egress port come from the entry at that index. The far end of
        a routed port is never learned (the port is standalone) and a static
-       entry cannot be added there from user space, so the driver places it: it
-       deletes the key ``RTL9602C_FDB_HASH_WAYS`` times, places a static entry
+       entry cannot be added there from user space, so the driver places it. A
+       next-hop entry of the key already behind the port is used as it is,
+       since another next hop may name its slot; otherwise the driver deletes
+       every entry of the key, each by its own words, places a static entry
        with ``RTL9602C_FDB_W2_NEXTHOP``, returns ``RTL9602C_TBLACC_STAT_INDEX``
        as the slot and logs it at debug level (a line that begins ``<L2 next
        hop>``, which ``echo 'file rtl9602c-l2.c +p' >
@@ -1908,6 +1935,14 @@ page.
      - T
      - A routing test sees translated frames on the wire at the far side of the
        OLT; PPPoE over a routed port passes traffic.
+   * - The L3 code records which entry each next-hop row names, and
+       ``rtl9602c_l2_nexthop_drop()`` deletes an entry once no row names it:
+       when the neighbour goes, when a PPPoE WAN is released or fails to come
+       up, when a row is given another address, and at teardown.
+     - M
+     - The ``fdb`` view showed the next-hop entry of a neighbour on ``sfp``,
+       and none once ``ip neigh del`` had deleted the neighbour, while the
+       entry of the management neighbour, still in use, stayed.
    * - The entry is filed under the VID that the routed frame leaves in, the
        destination VLAN that the engine resolves from the next hop's interface,
        and not under the port's PVID: with independent learning a lookup at one
@@ -1937,20 +1972,31 @@ master enable reads back set (see the *l3-nat* page), in order:
    beside the static one; its age changed between two reads a second apart.
    Every address behind the CPU port is this device's own, so nothing is lost.
    (M)
-2. Delete every learned, valid entry behind the CPU port, logging ``<L2> dropped
-   a learned duplicate of <address> on the CPU port``. Purpose: switching
-   learning off stops the next duplicate, not the one already there (see
-   "Placing, changing and deleting through the hash"). (M)
-3. For each user port that has an interface: delete its own address at its PVID
-   behind the CPU port ``RTL9602C_FDB_HASH_WAYS`` times, then place one static
-   entry with ``RTL9602C_FDB_W1_ROUTER_MAC``, logging ``<L2> <address> vlan <v>
-   is this switch's own address: it gets routed, not trapped to the CPU``, or,
-   with HIT clear, that its frames stay trapped. Purpose: DSA installs no entry
-   for it, and a key must be emptied before it is added. (M)
-4. Walk the hashed slots: delete every valid CPU-port entry whose router bit
-   disagrees, all copies, and place it once with the bit; log ``<L2> <n>
+2. Delete every learned entry behind the CPU port by its own words, logging
+   ``<L2> dropped a learned duplicate of <address> on the CPU port``. Purpose:
+   switching learning off stops the next duplicate, not the one already there
+   (see "Placing, changing and deleting through the hash"). (M)
+3. For each user port that has an interface, ``rtl9602c_l2_own_place()``:
+   delete the other entries of its own address at its PVID, each by its own
+   words, then place one static entry behind the CPU port with
+   ``RTL9602C_FDB_W1_ROUTER_MAC``, logging at debug level ``<L2> <address>
+   vlan <v> is <port>'s own address: it gets routed, not trapped to the CPU``
+   or, with HIT clear, an error that frames for it are flooded. Purpose: DSA
+   installs no entry for a standalone port's address, whose frames would
+   otherwise be flooded as unknown unicast. (M)
+4. Walk the hashed slots: delete every CPU-port entry whose router bit
+   disagrees, by its own words, and place it once with the bit; log ``<L2> <n>
    CPU-port entries now routed by the L3 engine``. Purpose: entries that existed
    before the engine came up. (M)
+
+DSA runs setup before it creates the interfaces, so step 3 finds no port at
+boot. ``port_enable`` therefore runs ``rtl9602c_l2_own_place()`` for a user
+port when the port is opened, and the netdevice notifier runs it when a user
+port's address changes, after ``rtl9602c_l2_own_drop()`` has deleted the old
+address unless another user port carries it. In router mode, booted straight
+into it, the ``fdb`` view showed the stick's own address behind the CPU port
+with the router bit. The routed flow does not depend on the entry: a kernel
+that placed none carried it all the same (see "Entry layout").
 
 After a fresh boot the table held one static entry for this device's address
 behind the CPU port, carrying the router bit, and no other. That the bit is what
@@ -1959,7 +2005,7 @@ admits the frame to the engine is an assumption (see "Entry layout").
 The read-only views
 ===================
 
-The instruments that the checks above name. All three views only read, and they
+The instruments that the checks above name. All four views only read, and they
 exist with ``CONFIG_DEBUG_FS`` in ``/sys/kernel/debug/rtl9602c/``, mode 0400.
 
 .. list-table::
@@ -1968,6 +2014,13 @@ exist with ``CONFIG_DEBUG_FS`` in ``/sys/kernel/debug/rtl9602c/``, mode 0400.
 
    * - View
      - Shows
+   * - ``fdb``
+     - Every occupied slot of the hashed part of the address table, by index:
+       the address, the VID, ``ivl`` or ``svl`` (``RTL9602C_FDB_W1_IVL``),
+       ``static`` or ``learned``, then for a unicast entry ``port`` and ``age``
+       with ``router`` and ``nexthop`` when those bits are set, and for a group
+       ``members`` and ``ext``, its member sets raw. The last line counts the
+       slots in use.
    * - ``l2learn``
      - The first line shows the three flood masks raw (``unknown-uc``,
        ``unknown-mc``, ``bc``), the second ``src ext perm``:
@@ -1999,34 +2052,19 @@ Known limitations
 
 - The switch has one address table, and its entries are keyed by address and VID
   alone: the database that DSA passes to ``port_fdb_add``, ``port_fdb_del``,
-  ``port_mdb_add`` and ``port_mdb_del`` is not used. Bridges of the switch that
-  use the same VID therefore share their addresses.
+  ``port_mdb_add`` and ``port_mdb_del`` is not used. Of the user ports only
+  ``sfp`` can join a bridge (see "Bridge membership"), so two bridges share the
+  table only when the GEM interfaces are bridged apart from ``sfp`` and both
+  bridges use a VID: an address then has one entry for both.
 - The address table holds at most 1024 addresses, because the CAM is never used
   (see "Structure"), and fewer in practice: an address whose bucket of four
   slots is full is refused with ``-ENOSPC`` while other buckets are empty. That
   a hashed write with HIT clear means a full bucket is an assumption.
-- ``port_fdb_add`` writes an entry once through the hash. Where an address
-  already has two entries, for instance a static one and one that the switch
-  learned from the CPU's own transmissions, such a write adds a third copy and
-  leaves the others. The driver's own changes to the next-hop entries and to the
-  entries behind the CPU port delete the key first (see "Placing, changing and
-  deleting through the hash").
-- ``port_fdb_dump`` decodes every occupied slot as a unicast entry. In a
-  multicast group's entry the bits that hold a unicast entry's port hold part of
-  the group's member set, so ``bridge fdb show`` can list the group's address as
-  a static entry behind port 2 when the member set holds port 0 and behind port
-  0 otherwise, whatever the group's members are. Groups exist only in a kernel
-  with bridge IGMP snooping.
-- A next-hop entry that ``rtl9602c_l2_nexthop_place()`` placed stays in the
-  address table when its neighbour goes away, until the next setup empties the
-  table.
-- ``rtl9602c_l2_l3lookup_cpu()`` is called once, from the bring-up of the L3
-  engine in ``rtl9602c_setup()``. DSA runs setup before it creates the user
-  interfaces, so the third step of the function, which places the own address of
-  each user port that has an interface, finds no port at that call, and nothing
-  calls the function again. An address gets an entry with the router bit only
-  when DSA calls ``port_fdb_add`` for it behind the CPU port, and
-  ``port_fdb_add`` then stamps the bit.
+- In a VLAN that the driver never wrote, the switch learns in shared learning
+  while the driver files its static entries for independent learning, so a
+  learned entry and a static one can hold the same address and VID at two slots
+  (see "Placing, changing and deleting through the hash"); the static entry
+  then does not steer the VLAN's frames.
 
 Open questions
 ==============
@@ -2056,20 +2094,11 @@ Assumptions the driver depends on
      - VID 410 sent into the SFP port from the host and captured as 1410 at the
        uplink of an OLT that is a transparent bridge, with the translated
        frame's GEM port seen there, and the reverse.
-   * - The router bit on this device's own address is what hands a frame to the
-       L3 engine ("Entry layout"). Every routed flow rests on it.
-     - Deleting the CPU-port entry and adding it back without the bit, then
-       repeating a routing test.
    * - The spanning-tree state values 0, 1 and 2 are disabled, blocking and
        learning ("Spanning-tree state").
      - ``bridge link set dev sfp state`` blocking, learning and disabled in
        turn, with frames from the host: nothing forwarded in any of the three,
        and the port's learned count rising only in learning.
-   * - The hashed search ignores the port, so ``port_fdb_del`` deletes the
-       entries that are not behind port 0 ("Placing, changing and deleting
-       through the hash").
-     - A static entry added on the PON port or on the CPU port and removed with
-       ``bridge fdb del``, then a dump.
    * - A static entry is not moved by source learning ("Entry layout").
      - A static entry for an address on the PON port, then frames from that
        address into the SFP port and a dump.
@@ -2102,6 +2131,10 @@ Questions the code does not depend on
    * - Whether the status CAM flag is set when a hashed placement lands in the
        CAM ("The indirect table engine").
      - A hashed placement that lands in the CAM.
+   * - What ``RTL9602C_FDB_W1_ROUTER_MAC`` does, since it is not what admits a
+       frame to the L3 engine ("Entry layout").
+     - A frame to this device's address in a VLAN in independent learning, with
+       and without the bit, followed in the frame capture.
    * - Whether bit 21 of ``RTL9602C_FDB_CFG`` keeps the CAM out of frame lookups
        ("Structure").
      - Clearing the bit and looking up an entry that sits in the CAM.

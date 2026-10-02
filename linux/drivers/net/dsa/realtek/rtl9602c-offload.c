@@ -2674,24 +2674,65 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 		rtl9602c_r(p, RTL9602C_L3TBL_RESET));
 }
 
+/*
+ * Record that next-hop row @row names the address-table entry of @mac at @vid,
+ * or, with @mac NULL, that it names none. The entry the row named before is
+ * deleted when no other row names it: rtl9602c_l34_nh_l2_put() deletes an
+ * entry that no row names.
+ */
+static void rtl9602c_l34_nh_l2_put(struct rtl9602c_priv *p,
+				   const unsigned char *mac, u16 vid)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_nh_mac); i++)
+		if (ether_addr_equal(p->l34_nh_mac[i], mac) &&
+		    p->l34_nh_vid[i] == vid)
+			return;
+	if (rtl9602c_l2_nexthop_drop(p, mac, vid))
+		pr_warn("<l3> %pM vlan %u: the next hop's address-table entry was not deleted\n",
+			mac, vid);
+}
+
+static void rtl9602c_l34_nh_l2_set(struct rtl9602c_priv *p, unsigned int row,
+				   const unsigned char *mac, u16 vid)
+{
+	u16 old_vid = p->l34_nh_vid[row];
+	u8 old[ETH_ALEN];
+
+	ether_addr_copy(old, p->l34_nh_mac[row]);
+	if (mac && ether_addr_equal(old, mac) && old_vid == vid)
+		return;
+
+	if (mac)
+		ether_addr_copy(p->l34_nh_mac[row], mac);
+	else
+		eth_zero_addr(p->l34_nh_mac[row]);
+	p->l34_nh_vid[row] = mac ? vid : 0;
+	if (!is_zero_ether_addr(old))
+		rtl9602c_l34_nh_l2_put(p, old, old_vid);
+}
+
 /**
  * rtl9602c_l34_fini() - stop the L3/NAT engine and empty its tables
  * @p: the switch, its L3 notifiers unregistered
  *
  * The undoing of rtl9602c_l34_init() at teardown: this device's own addresses
- * are trapped to the CPU again, the engine's master enable is cleared, and its
- * tables are reset and emptied, so that no flow is forwarded by rows that no
- * driver keeps any more, and a driver bound again finds the engine as its
- * bookkeeping starts.
+ * are trapped to the CPU again, the address-table entries of the next hops are
+ * deleted, the engine's master enable is cleared, and its tables are reset and
+ * emptied, so that no flow is forwarded by rows that no driver keeps any more,
+ * and a driver bound again finds the engine as its bookkeeping starts.
  */
 void rtl9602c_l34_fini(struct rtl9602c_priv *p)
 {
-	unsigned int done, busy;
+	unsigned int done, busy, i;
 
 	mutex_lock(&p->flow_lock);
 	if (p->l34_up)
 		rtl9602c_l2_l3lookup_cpu(p, false);
 	p->l34_up = false;
+	for (i = 0; i < ARRAY_SIZE(p->l34_nh_mac); i++)
+		rtl9602c_l34_nh_l2_set(p, i, NULL, 0);
 	rtl9602c_rmw(p, RTL9602C_L3_GLOBAL_CTRL, RTL9602C_L3_GLOBAL_CTRL_EN, 0);
 	rtl9602c_l34_tables_reset(p, &done, &busy);
 	rtl9602c_nat_clear(p);
@@ -3705,6 +3746,7 @@ static void rtl9602c_l34_wan_release(struct rtl9602c_priv *p, unsigned int w)
 
 	p->l34_netif_ifindex[w] = 0;
 	p->l34_nh_addr[w] = 0;
+	rtl9602c_l34_nh_l2_set(p, w, NULL, 0);
 	pr_debug("<flow> PPPoE WAN %u released\n", w);
 	memset(r, 0, sizeof(*r));
 }
@@ -3777,6 +3819,7 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 	err = rtl9602c_l2_nexthop_place(p, ppp->dmac, port, &vid, &slot);
 	if (err)
 		goto fail;
+	rtl9602c_l34_nh_l2_set(p, w, ppp->dmac, vid);
 
 	/*
 	 * The PPPoE header and the PPP protocol field take 8 octets: at most
@@ -4843,8 +4886,10 @@ static int rtl9602c_l34_neigh_set(struct rtl9602c_priv *p, struct neighbour *n)
 		if (i >= (int)first && !p->l34_nh_addr[i] && row == UINT_MAX)
 			row = i;
 	}
-	if (row == UINT_MAX)
+	if (row == UINT_MAX) {
+		rtl9602c_l34_nh_l2_put(p, n->ha, vid);
 		return -ENOSPC;
+	}
 
 	memset(e, 0, sizeof(e));
 	rtl9602c_flow_put(e, RTL9602C_NEXTHOP_L3IF_IDX, netif);
@@ -4864,14 +4909,15 @@ static int rtl9602c_l34_neigh_set(struct rtl9602c_priv *p, struct neighbour *n)
 		return err;
 
 	p->l34_nh_addr[row] = addr;
+	rtl9602c_l34_nh_l2_set(p, row, n->ha, vid);
 	pr_debug("<l3> %pI4 at %pM on %s is nexthop[%u] -> l3if[%d], L2 slot %u vlan %u\n",
 		 &addr, n->ha, n->dev->name, row, netif, slot, vid);
 	return 0;
 }
 
 /*
- * Zero the next-hop and neighbour rows of @addr; the address-table entry placed
- * for it stays.
+ * Zero the next-hop and neighbour rows of @addr, and delete the address-table
+ * entry placed for it unless another next hop names that entry.
  */
 static void rtl9602c_l34_neigh_del(struct rtl9602c_priv *p, __be32 addr)
 {
@@ -4888,6 +4934,7 @@ static void rtl9602c_l34_neigh_del(struct rtl9602c_priv *p, __be32 addr)
 		rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NEXTHOP, i, e,
 				       nh_words);
 		p->l34_nh_addr[i] = 0;
+		rtl9602c_l34_nh_l2_set(p, i, NULL, 0);
 		return;
 	}
 }
@@ -4987,7 +5034,8 @@ static void rtl9602c_l34_q_drain(struct rtl9602c_priv *p)
  * The netdevice notifier: a device that holds an L3-interface row has the row
  * written again when its MAC address or its MTU changes, with its first IPv4
  * address, so that the engine rewrites routed frames with the device's
- * current MAC address and keeps to its current MTU.
+ * current MAC address and keeps to its current MTU. A user port whose address
+ * changes has its own-address entry moved with it.
  */
 static int rtl9602c_l34_netdev_event(struct notifier_block *nb,
 				     unsigned long event, void *ptr)
@@ -4999,6 +5047,21 @@ static int rtl9602c_l34_netdev_event(struct notifier_block *nb,
 	unsigned int i;
 
 	p = container_of(nb, struct rtl9602c_priv, l34_netdev_nb);
+
+	/* A user port's own address behind the CPU port follows the port. */
+	if (event == NETDEV_PRE_CHANGEADDR || event == NETDEV_CHANGEADDR) {
+		struct dsa_port *dp;
+
+		dsa_switch_for_each_user_port(dp, &p->ds) {
+			if (dp->user != dev)
+				continue;
+			if (event == NETDEV_PRE_CHANGEADDR)
+				rtl9602c_l2_own_drop(p, dp->index);
+			else
+				rtl9602c_l2_own_place(p, dp->index);
+		}
+	}
+
 	if (event != NETDEV_CHANGEMTU && event != NETDEV_CHANGEADDR)
 		return NOTIFY_DONE;
 	if (!p->l34_up)

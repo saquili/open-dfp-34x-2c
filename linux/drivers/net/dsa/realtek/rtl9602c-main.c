@@ -1760,6 +1760,14 @@ static int rtl9602c_port_enable(struct dsa_switch *ds, int port,
 			return err;
 		rtl9602c_gpon_operstate(p);
 	}
+
+	/*
+	 * The port's own address behind the CPU port, so that frames for it
+	 * are not flooded: setup runs before DSA creates the interfaces, so
+	 * this is where a port first has one. A failure is logged there and
+	 * leaves those frames flooded.
+	 */
+	rtl9602c_l2_own_place(p, port);
 	return 0;
 }
 
@@ -2054,6 +2062,7 @@ static void rtl9602c_debugfs_init(struct rtl9602c_priv *p)
 {
 	p->debugfs = debugfs_create_dir("rtl9602c", NULL);
 	rtl9602c_offload_debugfs_init(p);
+	rtl9602c_l2_debugfs_init(p);
 	rtl9602c_gpon_debugfs_init(p);
 	rtl9602c_ponmac_debugfs_init(p);
 	rtl9602c_optics_debugfs_init(p);

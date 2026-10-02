@@ -2328,6 +2328,13 @@ struct rtl9602c_priv {
 	 * have
 	 */
 	__be32 l34_nh_addr[16];
+	/**
+	 * @l34_nh_mac: the address of the address-table entry that each
+	 * next-hop row names, zero for none
+	 */
+	u8 l34_nh_mac[16][ETH_ALEN];
+	/** @l34_nh_vid: the VLAN that entry is filed under */
+	u16 l34_nh_vid[16];
 
 	/** @l34_fib_nb: the route notifier */
 	struct notifier_block l34_fib_nb;
@@ -2687,6 +2694,8 @@ int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg, u8 *val);
 int rtl9602c_i2c_register(struct rtl9602c_priv *p);
 void rtl9602c_l2_clear(struct rtl9602c_priv *p);
 int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on);
+int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port);
+int rtl9602c_l2_own_drop(struct rtl9602c_priv *p, int port);
 int rtl9602c_vlan_set_member(struct rtl9602c_priv *p, u16 vid,
 			     int port, bool member, bool untagged);
 
@@ -2696,6 +2705,8 @@ void rtl9602c_lrn_over_intr_sync(struct rtl9602c_priv *p);
 #define RTL9602C_L2_VID_PVID		0xffff
 int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
 			      int port, u16 *want_vid, unsigned int *slot);
+int rtl9602c_l2_nexthop_drop(struct rtl9602c_priv *p, const unsigned char *mac,
+			     u16 vid);
 void rtl9602c_nat_clear(struct rtl9602c_priv *p);
 void rtl9602c_l34_init(struct rtl9602c_priv *p);
 void rtl9602c_l34_fini(struct rtl9602c_priv *p);
@@ -2708,6 +2719,7 @@ int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p);
 int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p);
 void rtl9602c_meter_free(struct rtl9602c_priv *p, unsigned int meter);
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p);
+void rtl9602c_l2_debugfs_init(struct rtl9602c_priv *p);
 void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p);
 int rtl9602c_port_add_dscp_prio(struct dsa_switch *ds, int port, u8 dscp, u8 prio);
 int rtl9602c_port_bridge_flags(struct dsa_switch *ds, int port,
