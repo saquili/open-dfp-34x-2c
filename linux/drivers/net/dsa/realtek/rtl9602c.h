@@ -884,7 +884,8 @@ enum {
 
 /*
  * Each upstream stream's queue and admission bit; a GEM port's stream is its
- * flow. For a stream from 68 up STREAM_QUEUE() lies past the map.
+ * flow. Streams 0 to RTL9602C_PON_NUM_SID - 1 exist; for a stream from 68 up
+ * STREAM_QUEUE() would lie past the map, and the driver never asks for one.
  */
 #define RTL9602C_PONQ_US_STREAM_QUEUE(s)		(0xf020f8 + 4 * ((s) / 4))
 #define RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(s)	(((s) % 4) * 7)

@@ -113,18 +113,20 @@ int rtl9602c_ponmac_probe(struct rtl9602c_priv *p)
  * (rtl9602c_ponmac_sid_valid()). Called only with the block's gate open: an
  * access with the gate closed stops the board.
  *
- * @sid is not checked against RTL9602C_PON_NUM_SID. The map holds a 7-bit
- * queue number per stream, four streams to a word, so for a stream from 68
- * up the word written lies past the map, among the admission words and the
- * registers after them. The GEM code writes it for a GEM port in any flow,
- * and the GPON MAC has flows up to 127; what such a write does is not
- * verified.
+ * The block has streams 0 to RTL9602C_PON_NUM_SID - 1. The map holds a
+ * 7-bit queue number per stream, four streams to a word, so the word of a
+ * stream from 68 up would lie past the map, among the admission words and
+ * the registers after them: a stream the block does not have is refused.
  */
 void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,
 				    unsigned int queue)
 {
-	unsigned int sh = RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(sid);
+	unsigned int sh;
 
+	if (WARN_ON_ONCE(sid >= RTL9602C_PON_NUM_SID))
+		return;
+
+	sh = RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(sid);
 	rtl9602c_rmw(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid),
 		     RTL9602C_PONQ_US_STREAM_QUEUE_MASK << sh,
 		     (queue & RTL9602C_PONQ_US_STREAM_QUEUE_MASK) << sh);
@@ -747,10 +749,14 @@ static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 		seq_printf(m, "  omci sid    %lu\n",
 			   FIELD_GET(RTL9602C_OMCI_OMCC_CFG_STREAM,
 				     rtl9602c_r(p, RTL9602C_OMCI_OMCC_CFG)));
-		seq_printf(m, "  sid %u       queue %u, %s\n", f,
-			   rtl9602c_ponq_stream_queue_get(p, f),
-			   rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_EN(f)) &
-			   BIT(f % 32) ? "valid" : "invalid");
+		if (f < RTL9602C_PON_NUM_SID)
+			seq_printf(m, "  sid %u       queue %u, %s\n", f,
+				   rtl9602c_ponq_stream_queue_get(p, f),
+				   rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_EN(f)) &
+				   BIT(f % 32) ? "valid" : "invalid");
+		else
+			seq_printf(m, "  sid %u       none: no upstream stream\n",
+				   f);
 		seq_printf(m, "  tcont en    %08x  qmap[16] %08x\n",
 			   rtl9602c_r(p, RTL9602C_PONSCH_TCONT_EN),
 			   rtl9602c_r(p, qmap));

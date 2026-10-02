@@ -136,17 +136,19 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 }
 
 /*
- * Undo rtl9602c_gem_program() for flow @f: the stream is no longer admitted
- * and goes back to the parking queue, the upstream Port-ID and the downstream
- * type are zeroed, and the flow's entry in the Port-ID table is cleared. The
- * queue stays in its T-CONT's map, since queues are never detached. The
- * stream is parked whatever the port's direction, which for a flow from 68 up
- * writes past the stream map (see rtl9602c_ponq_stream_queue_set()).
+ * Undo rtl9602c_gem_program() for flow @f: the stream, when the flow has
+ * one, is no longer admitted and goes back to the parking queue, the
+ * upstream Port-ID and the downstream type are zeroed, and the flow's entry
+ * in the Port-ID table is cleared. The queue stays in its T-CONT's map,
+ * since queues are never detached.
  */
 static void rtl9602c_gem_unprogram(struct rtl9602c_priv *p, unsigned int f)
 {
-	rtl9602c_ponmac_sid_valid(p, f, false);
-	rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_GEM_PARKING_QUEUE);
+	if (f < RTL9602C_PON_NUM_SID) {
+		rtl9602c_ponmac_sid_valid(p, f, false);
+		rtl9602c_ponq_stream_queue_set(p, f,
+					       RTL9602C_GEM_PARKING_QUEUE);
+	}
 	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
 		     RTL9602C_GEM_US_FLOW_CFG_PORTID, 0);
 	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
@@ -161,7 +163,7 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 			    unsigned int *flow, struct netlink_ext_ack *extack)
 {
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
-	unsigned int f;
+	unsigned int f, last;
 	int err = 0;
 
 	/* T-CONT 16 is the OMCC's; GEM ports get T-CONTs 0 to 15. */
@@ -209,16 +211,21 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 
 	/*
 	 * The lowest free flow, never the OMCC's. The GPON MAC has
-	 * RTL9602C_GPON_NUM_FLOW flows, and the PON MAC has streams for flows 0
-	 * to 64 only; taking the lowest first uses flows 0 to 63 before any
-	 * other. A GEM port in flow 65 or above has no stream (see
-	 * rtl9602c_ponq_stream_queue_set()).
+	 * RTL9602C_GPON_NUM_FLOW flows, but the PON MAC has upstream streams
+	 * for flows 0 to RTL9602C_PON_NUM_SID - 1 only, the OMCC's among them:
+	 * a port that sends upstream takes one of those or none.
 	 */
-	for (f = 0; f < RTL9602C_GPON_NUM_FLOW; f++)
+	last = cfg->direction & IFLA_GEM_DIR_UPSTREAM ? RTL9602C_PON_NUM_SID :
+							RTL9602C_GPON_NUM_FLOW;
+	for (f = 0; f < last; f++)
 		if (f != RTL9602C_GPON_OMCC_FLOW && !test_bit(f, p->gem_flows))
 			break;
-	if (f == RTL9602C_GPON_NUM_FLOW) {
-		NL_SET_ERR_MSG_MOD(extack, "Every GEM flow is in use");
+	if (f == last) {
+		if (last == RTL9602C_PON_NUM_SID)
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Every GEM flow with an upstream stream is in use");
+		else
+			NL_SET_ERR_MSG_MOD(extack, "Every GEM flow is in use");
 		err = -ENOSPC;
 		goto out;
 	}
@@ -373,9 +380,8 @@ static void rtl9602c_gem_vlan_del(struct pon_device *pon, unsigned int flow,
  *
  * The flowtable offload asks this before it lets the switch carry a flow out
  * of a GEM interface: the PON MAC must be built, and @flow must be a GEM port
- * that carries upstream traffic on a T-CONT that holds an Alloc-ID. Whether
- * @flow has a stream is not checked; flows from 65 up have none (see
- * rtl9602c_ponq_stream_queue_set()).
+ * that carries upstream traffic on a T-CONT that holds an Alloc-ID. Such a
+ * port has a stream, since rtl9602c_gem_add() gives it a flow that has one.
  *
  * Context: process context; takes gpon_lock.
  * Return: true when all of that holds.
@@ -384,7 +390,7 @@ bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow)
 {
 	bool ready;
 
-	if (flow >= RTL9602C_GPON_NUM_FLOW)
+	if (flow >= RTL9602C_PON_NUM_SID)
 		return false;
 
 	mutex_lock(&p->gpon_lock);

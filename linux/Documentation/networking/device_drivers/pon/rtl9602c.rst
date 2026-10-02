@@ -685,18 +685,18 @@ facts below give what is known of each.
      - OMCI both ways over ``/dev/pon0omci0``, and GEM upstream (see "GEM ports
        as network interfaces").
    * - The GPON MAC has 128 flows (``RTL9602C_GPON_NUM_FLOW``) and the driver
-       registers all 128 with the PON core, but streams exist for 0 to 64 only.
-       The driver takes flows lowest first, skipping 64, so flows 0 to 63 are
-       used first. A GEM port in a flow from 65 to 127 has no stream: its
-       admission is ignored, and for 68 and above the stream-map macro yields
-       addresses from ``0xf0213c`` up, the stream-admission words and the
-       registers after them. The driver writes that map when it programs an
-       upstream port, and when it parks any port, downstream-only ones
-       included, on deletion.
-     - I
-     - Not exercised: at most six GEM ports have been provisioned. Creating 68
-       GEM ports and reading the stream-admission words would show what
-       happens.
+       registers all 128 with the PON core, but streams exist for 0 to 64 only
+       (``RTL9602C_PON_NUM_SID``). The driver takes flows lowest first,
+       skipping 64: a port that sends upstream takes a flow from 0 to 63 or
+       is refused with ``-ENOSPC``, and a downstream-only port takes any flow.
+       The stream map is written for flows below ``RTL9602C_PON_NUM_SID``
+       only; for 68 and above the stream-map macro would yield addresses from
+       ``0xf0213c`` up, the stream-admission words and the registers after
+       them.
+     - T, I
+     - T for the flows taken. Not exercised: at most six GEM ports have been
+       provisioned; creating 64 upstream GEM ports and a 65th would show the
+       refusal.
    * - Queue rates are 18 bits (``RTL9602C_PONSCH_QUEUE_RATE``).
        ``RTL9602C_PONSCH_QUEUE_RATE_MAX`` (``0x3ffff``) as a queue's peak rate
        leaves the queue unshaped at the line's full grant.
@@ -2006,15 +2006,14 @@ Deleting a GEM port
 Known limitations
 =================
 
-- The driver offers more GEM flows than the PON MAC has streams. The GPON MAC
-  has 128 flows, and the driver registers all of them with the PON class, so up
-  to 127 GEM interfaces can be created (flow 64 is the OMCC's). The upstream
-  streams are numbered 0 to 64, and stream 64 is the OMCC's. A new GEM port
-  takes the lowest free flow other than 64, so the first 64 ports, in flows 0
-  to 63, have a stream. A port in a flow from 65 to 127 has none, and its
-  stream is not admitted. For a flow from 68 up, the driver's write of the
-  stream map lands past the map, among the stream-admission words and the
-  registers after them; what that does has not been exercised.
+- At most 64 GEM ports send upstream. The GPON MAC has 128 flows, and the
+  driver registers all of them with the PON class, so up to 127 GEM interfaces
+  can be created (flow 64 is the OMCC's), but the upstream streams are
+  numbered 0 to 64, and stream 64 is the OMCC's. A port that sends upstream
+  takes the lowest free flow from 0 to 63, and the 65th such port is refused
+  with ``-ENOSPC``; a downstream-only port takes the lowest free flow of all,
+  so downstream-only ports use flows that upstream ports could have used
+  first.
 - The driver attaches only queue 0 of a T-CONT's group. Every GEM port on
   T-CONTs 0 to 7 therefore sends through queue 0 and every port on T-CONTs 8 to
   15 through queue 32, and two T-CONTs of one group share a queue that sits in
@@ -2095,10 +2094,10 @@ Assumptions the driver depends on
        numbering of T-CONTs 1 to 15 ("Sizes and numbering").
      - A GEM port on a granted T-CONT from 8 to 15, its stream on queue 32,
        sending upstream.
-   * - That flows 65 to 127 have no stream, and what the driver's write of the
-       stream map does from flow 68 up ("Sizes and numbering", "Known
+   * - That flows 65 to 127 have no stream ("Sizes and numbering", "Known
        limitations").
-     - Creating 68 GEM ports and reading the stream-admission words.
+     - Creating 64 upstream GEM ports and a 65th, and a downstream-only port
+       in a flow from 65 up that receives.
    * - The SRAM sizes and the 128-byte page, the page-count encoding with the
        page-size code, and the pool limits ("Halves, pages and pools").
      - A downstream flood above the switch's egress rate, reading
