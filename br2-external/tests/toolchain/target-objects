@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""target-objects: list the MIPS objects and archives under a directory.
+
+Usage: target-objects DIR
+
+Prints, one path per line, every regular file under DIR that is an ELF object or
+shared library for MIPS, or an archive that holds such objects. The host
+programs of a toolchain's directory (compiler, linker, the helper programs) are
+ELF files of the build machine and are left out; a count of what was listed and
+what was skipped goes to standard error. Symbolic links are not followed, and an
+archive with no object in it, as the empty libraries of a C library are, is not
+listed. The list is what the instruction-set gate is run over:
+
+    target-objects build/toolchain/host | xargs tools/isa-gate/isa-gate --archives
+"""
+
+import os
+import struct
+import sys
+
+EM_MIPS = 8
+ARCHIVE_MAGIC = b"!<arch>\n"
+ARCHIVE_HEADER = 60
+MEMBER_LIMIT = 1 << 22
+
+
+def machine(head):
+    """The machine of an ELF header's first bytes, or None if it is not ELF."""
+    if head[:4] != b"\x7fELF" or len(head) < 20:
+        return None
+    order = ">" if head[5] == 2 else "<"
+    return struct.unpack(order + "H", head[18:20])[0]
+
+
+def archive_machines(path):
+    """The set of machines of the ELF members of an archive."""
+    found = set()
+    with open(path, "rb") as handle:
+        handle.read(len(ARCHIVE_MAGIC))
+        while True:
+            header = handle.read(ARCHIVE_HEADER)
+            if len(header) < ARCHIVE_HEADER:
+                break
+            size = int(header[48:58].decode("ascii").strip() or 0)
+            padded = size + (size & 1)
+            data = handle.read(min(padded, 64))
+            handle.seek(padded - len(data), os.SEEK_CUR)
+            kind = machine(data)
+            if kind is not None:
+                found.add(kind)
+    return found
+
+
+def main(argv):
+    if len(argv) != 2:
+        sys.stderr.write(__doc__.split("\n\n")[1] + "\n")
+        return 2
+    counts = {"target objects": 0, "target archives": 0, "host objects": 0,
+              "host archives": 0, "other files": 0}
+    for directory, _dirs, files in os.walk(argv[1]):
+        for name in sorted(files):
+            path = os.path.join(directory, name)
+            if os.path.islink(path) or not os.path.isfile(path):
+                continue
+            with open(path, "rb") as handle:
+                head = handle.read(64)
+            kind = machine(head)
+            if kind is not None:
+                if kind == EM_MIPS:
+                    counts["target objects"] += 1
+                    print(path)
+                else:
+                    counts["host objects"] += 1
+            elif head[:len(ARCHIVE_MAGIC)] == ARCHIVE_MAGIC:
+                machines = archive_machines(path)
+                if machines == {EM_MIPS}:
+                    counts["target archives"] += 1
+                    print(path)
+                elif machines:
+                    counts["host archives"] += 1
+                else:
+                    counts["other files"] += 1
+            else:
+                counts["other files"] += 1
+    sys.stderr.write("target-objects: %s\n" % ", ".join("%d %s" % (n, k) for k, n in counts.items()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

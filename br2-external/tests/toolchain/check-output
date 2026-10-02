@@ -1,0 +1,37 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# check-output: run the test programs of a directory and compare what they print
+# with expected.txt. It needs nothing but a POSIX shell and sed, so it runs on
+# the board as well as on a build machine.
+#
+# Usage: [RUN_PREFIX=COMMAND] [ROOT=DIR] check-output DIR
+#
+# DIR holds the programs (the "static" or the "dynamic" directory that "run"
+# writes); expected.txt is looked up beside this script. RUN_PREFIX is put before
+# each program: "qemu-mips" on a build machine; on the board, for dynamic
+# programs, "chroot /tmp/root" with the loader and libraries copied to
+# /tmp/root/lib and the programs in a directory below /tmp/root. ROOT names that
+# root, and is taken off the front of each program's path.
+#
+# Exit status: 0 when every program printed what is expected, 1 otherwise.
+
+dir=${1:?usage: check-output DIR}
+here=$(cd "$(dirname "$0")" && pwd)
+fail=0
+for prog in "$dir"/t-*; do
+	name=${prog##*/}
+	path=$prog
+	[ -n "${ROOT:-}" ] && path=${prog#"$ROOT"}
+	want=$(sed -n "/^== $name\$/,/^== /{/^== /d;p;}" "$here/expected.txt")
+	got=$(${RUN_PREFIX:-} "$path" 2>&1)
+	if [ "$got" = "$want" ]; then
+		echo "pass $name"
+	else
+		echo "FAIL $name"
+		echo "$got" | sed 's/^/    /'
+		fail=1
+	fi
+done
+exit $fail

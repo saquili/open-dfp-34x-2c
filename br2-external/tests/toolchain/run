@@ -1,0 +1,104 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# run: build the test programs with a toolchain, check them with the
+# instruction-set gate and run them under qemu-mips.
+#
+# Usage: run [-n] TOOLCHAIN [OUT]
+#
+# TOOLCHAIN is the toolchain's host directory (output/host of the Buildroot
+# build, or an unpacked and relocated toolchain tarball). Every t-*.c is compiled
+# with -O2 twice, static (OUT/static) and dynamic (OUT/dynamic; OUT defaults to
+# build/toolchain-tests in the repository). The gate then scans OUT, and each
+# program runs under qemu-mips, the dynamic ones with the toolchain's sysroot as
+# the root of the dynamic loader's search. The output of each is compared with
+# its section of expected.txt, and the instructions that qemu-mips translated
+# for it (-d in_asm) are searched for the load-linked, store-conditional and sync
+# instructions, which the core does not run: the library code that the program
+# reaches, as well as its own, has to be free of them. -n stops after the gate.
+# t-divzero is not run under qemu-mips, which sends SIGTRAP for the break
+# instruction that a division by zero executes, where the kernel of the board
+# sends SIGFPE.
+#
+# Exit status: 0 when every program was built, passed the gate and printed what
+# is expected; 1 otherwise; 2 on a usage error or a missing tool.
+
+set -u
+
+here=$(cd "$(dirname "$0")" && pwd)
+top=$(cd "$here/../../.." && pwd)
+gate=$top/tools/isa-gate/isa-gate
+run_programs=1
+while getopts n opt; do
+	case $opt in
+	n) run_programs=0 ;;
+	*) echo "usage: run [-n] TOOLCHAIN [OUT]" >&2; exit 2 ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -ge 1 ] && [ $# -le 2 ] || { echo "usage: run [-n] TOOLCHAIN [OUT]" >&2; exit 2; }
+toolchain=$(cd "$1" && pwd) || exit 2
+out=${2:-$top/build/toolchain-tests}
+
+cc=$(ls "$toolchain"/bin/*-linux-uclibc-gcc 2>/dev/null | head -n 1)
+[ -x "$cc" ] || { echo "run: no *-linux-uclibc-gcc in $toolchain/bin" >&2; exit 2; }
+sysroot=$("$cc" -print-sysroot)
+[ -d "$sysroot" ] || { echo "run: the sysroot $sysroot does not exist" >&2; exit 2; }
+if [ "$run_programs" = 1 ]; then
+	command -v qemu-mips >/dev/null 2>&1 || { echo "run: qemu-mips is not installed (apt-get install qemu-user)" >&2; exit 2; }
+fi
+
+expected() {	# the section of expected.txt for program $1
+	sed -n "/^== $1\$/,/^== /{/^== /d;p;}" "$here/expected.txt"
+}
+
+qemu_skip=" t-divzero "
+fail=0
+rm -rf "$out"
+mkdir -p "$out/static" "$out/dynamic" || exit 2
+programs=$(cd "$here" && ls t-*.c | sed 's/\.c$//')
+for p in $programs; do
+	for kind in static dynamic; do
+		flag=
+		[ "$kind" = static ] && flag=-static
+		if ! "$cc" -O2 -Wall -Wextra -Werror $flag -I"$here" -o "$out/$kind/$p" "$here/$p.c" -lm; then
+			echo "FAIL build $kind $p"
+			fail=1
+		fi
+	done
+done
+
+echo "gate: $gate $out"
+"$gate" "$out" || { echo "FAIL the instruction-set gate"; fail=1; }
+
+if [ "$run_programs" = 1 ]; then
+	for p in $programs; do
+		for kind in static dynamic; do
+			[ -x "$out/$kind/$p" ] || continue
+			case $qemu_skip in
+			*" $p "*) echo "skip $kind $p (not run under qemu-mips)"; continue ;;
+			esac
+			trace=$out/$kind/$p.trace
+			if [ "$kind" = static ]; then
+				got=$(qemu-mips -d in_asm -D "$trace" "$out/$kind/$p" 2>&1)
+			else
+				got=$(qemu-mips -d in_asm -D "$trace" -L "$sysroot" "$out/$kind/$p" 2>&1)
+			fi
+			if [ "$got" != "$(expected "$p")" ]; then
+				echo "FAIL $kind $p: unexpected output"
+				echo "$got" | sed 's/^/    /'
+				fail=1
+			elif grep -E -q '^0x[0-9a-f]+:[[:space:]]+(ll|sc|sync)([[:space:]]|$)' "$trace"; then
+				echo "FAIL $kind $p: ll, sc or sync was translated (see $trace)"
+				fail=1
+			else
+				echo "pass $kind $p"
+				rm -f "$trace"
+			fi
+		done
+	done
+fi
+[ "$fail" = 0 ] && echo "run: all programs built, passed the gate and printed what is expected" \
+	|| echo "run: FAILED"
+exit $fail

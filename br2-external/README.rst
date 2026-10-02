@@ -31,6 +31,9 @@ What is here
 ``board/dfp-34x-2c3/uclibc.fragment``
     The uClibc-ng settings that the userspace of the board needs, which the
     defconfig names.
+``tests/toolchain/``
+    The programs and scripts that check a toolchain built from the defconfig
+    (see "Checks on the toolchain").
 
 The toolchain
 =============
@@ -151,3 +154,108 @@ them. It names what the userspace of the board needs the C library to offer: the
 C99 maths functions, ``ftw``, IPv6 in the library, and ``fopencookie``. The stack
 protector is on (``BR2_TOOLCHAIN_BUILDROOT_USE_SSP``), which builds the C library
 itself with it as well.
+
+Checks on the toolchain
+=======================
+
+The checks run on the toolchain in ``build/toolchain/host`` or on an unpacked and
+relocated tarball. They need ``binutils-mips-linux-gnu``, for the ``objdump`` of
+the instruction-set gate, ``qemu-user`` and ``gcc-mips-linux-gnu``.
+
+The instruction-set gate over the toolchain's own objects
+----------------------------------------------------------
+
+``tools/isa-gate`` is run over every object the toolchain holds for the target:
+the start files, the C library as an archive and as a shared library, the
+dynamic loader, libgcc in both forms and the helper programs of the C library.
+``tests/toolchain/target-objects`` lists them by reading the ELF headers, which
+leaves out the programs that run on the build machine::
+
+    br2-external/tests/toolchain/target-objects build/toolchain/host \
+        | xargs tools/isa-gate/isa-gate --archives
+
+For the toolchain this defconfig builds, the list holds 22 files and the gate
+scans 3012 objects, 350588 instructions. It reports 40 findings, all in three
+functions of the libraries:
+
+``__speculation_barrier`` (libgcc.a and libgcc_s.so.1, 10 findings in each file)
+    A ``sync``, written as a data word because MIPS I has none, eight ``ssnop``
+    and a ``jr.hb`` word. gcc 14 builds it for every MIPS target
+    (``LIB1ASMFUNCS`` in ``libgcc/config/mips/t-mips``). A program reaches it
+    through ``__builtin_speculation_safe_value`` only.
+``__cxa_finalize`` (libc.a and libuClibc.so, 3 findings in each file)
+    A compare-and-exchange from uClibc-ng's atomic header: a load-linked and
+    store-conditional pair, which a listing as MIPS I shows as ``lwc0`` and
+    ``swc0``, and a ``sync``. The function runs it for each entry of the
+    exit-handler table that matches the handle it is given, and for every entry
+    when the handle is null; the test programs below register their handlers
+    with ``atexit`` and exit normally, and none of them executes it. uClibc-ng
+    builds the function for every target (``libc/stdlib/Makefile.in``).
+``_test_and_set`` (libc.a and libuClibc.so, 2 findings in each file)
+    A load-linked and store-conditional loop, the function behind
+    ``<sys/tas.h>``; uClibc-ng builds it for every MIPS target
+    (``libc/sysdeps/linux/mips/Makefile.arch``).
+
+No option of gcc or of uClibc-ng leaves these functions out, and the build carries
+no patch for them. A program that links the C library statically takes only the
+objects it refers to, so a static program does not contain them; the test
+programs below, static and dynamic, pass the gate, and none of them executes a
+load-linked, store-conditional or sync instruction. A root filesystem that holds
+the toolchain's shared libraries (the C library, the dynamic loader, libgcc_s)
+does contain them, and fails the gate on the target tree.
+
+The test programs
+-----------------
+
+``tests/toolchain/t-*.c`` are 14 small programs: formatted input and output, the
+allocator, the string and memory functions, ``qsort``, calendar and clock
+functions, ``poll`` and ``select``, sockets that need no network, signals,
+64-bit division, shifts by a run-time count, unaligned loads and stores through
+``memcpy``, exit handlers, soft-float arithmetic and the maths library, and
+integer division by zero (which the compiler checks with ``break``). Each
+checks its own results and prints ``ok <name>``; the values that some print are
+checked against exact arithmetic done outside the programs. ``expected.txt`` holds
+what each prints. ::
+
+    br2-external/tests/toolchain/run build/toolchain/host
+
+builds every program with ``-O2`` and ``-Wall -Wextra -Werror``, static and
+dynamic, into ``build/toolchain-tests``; runs the gate over the 28 binaries; runs
+each of 13 of the programs under ``qemu-mips`` (the dynamic ones with the
+toolchain's sysroot) and compares its output with ``expected.txt``; and searches
+the instructions that ``qemu-mips`` translated for ``ll``, ``sc`` and ``sync``.
+``t-divzero`` is built and checked by the gate, and not run under ``qemu-mips``,
+which raises SIGTRAP for the ``break`` where the kernel of the board raises
+SIGFPE.
+
+To run them on the board, copy the ``static`` directory, and ``check-output`` and
+``expected.txt`` of ``br2-external/tests/toolchain``, to it, and run::
+
+    sh check-output static
+
+The dynamic programs ask for ``/lib/ld-uClibc.so.0`` as their loader and need
+the C library, ``libc.so.0``, beside it: the sysroot's ``lib`` has both and the
+links between them (``readelf -l`` and ``readelf -d`` of a program show the
+names). In a directory that is not the board's root, ``check-output`` can run
+them through ``chroot``::
+
+    mkdir -p /tmp/root/lib /tmp/root/t
+    cp -a lib/* /tmp/root/lib/
+    cp dynamic/t-* /tmp/root/t/
+    ROOT=/tmp/root RUN_PREFIX='chroot /tmp/root' sh check-output /tmp/root/t
+
+``check-output`` needs a POSIX shell and ``sed``; it prints ``pass`` or ``FAIL``
+for each program and exits non-zero if one failed. On a build machine,
+``RUN_PREFIX='qemu-mips'`` runs the static programs and
+``RUN_PREFIX='qemu-mips -L <sysroot>'`` the dynamic ones; ``t-divzero`` fails
+under ``qemu-mips``, as above.
+
+The negative control
+--------------------
+
+``tests/toolchain/negative-control`` compiles four functions with the Debian cross
+compiler for MIPS, whose default is MIPS32 release 2, and requires the gate to
+refuse the object: for its architecture flags, for the load-linked and
+store-conditional pair (``lwc0`` and ``swc0``), and for the instructions that a
+listing as MIPS I leaves as data words (``clz``, ``mul``, ``wsbh`` and
+``sync``). It shows that the gate can fail on code that this core cannot run.

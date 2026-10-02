@@ -1,0 +1,41 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# negative-control: show that the instruction-set gate can fail. It compiles a
+# few lines with the Debian cross compiler for MIPS (gcc-mips-linux-gnu), whose
+# default is MIPS32 release 2, and requires the gate to refuse the object: for its
+# architecture flags, for the load-linked and store-conditional pair (which a
+# listing as MIPS I shows as lwc0 and swc0) and for the instructions of MIPS32
+# that such a listing leaves as ".word" (clz and mul are of the 0x70 group, wsbh
+# of the 0x7c group).
+#
+# Usage: negative-control [PREFIX]
+#
+# PREFIX is the cross compiler's prefix (default mips-linux-gnu-). Exit status: 0
+# when the gate refused the object and named each of these, 1 when it did not, 2
+# when the compiler is missing.
+
+prefix=${1:-mips-linux-gnu-}
+here=$(cd "$(dirname "$0")" && pwd)
+gate=$(cd "$here/../../.." && pwd)/tools/isa-gate/isa-gate
+command -v "${prefix}gcc" >/dev/null 2>&1 || { echo "negative-control: no ${prefix}gcc (apt-get install gcc-mips-linux-gnu)" >&2; exit 2; }
+
+dir=$(mktemp -d) || exit 2
+trap 'rm -rf "$dir"' EXIT
+cat >"$dir/stock.c" <<'SRC'
+unsigned int count(unsigned int x) { return __builtin_clz(x); }
+unsigned int times(unsigned int a, unsigned int b) { return a * b; }
+unsigned int bump(unsigned int *p) { return __sync_fetch_and_add(p, 1); }
+unsigned int swap(unsigned int x) { return __builtin_bswap32(x); }
+SRC
+"${prefix}gcc" -O2 -c -o "$dir/stock.o" "$dir/stock.c" || exit 2
+
+"$gate" "$dir/stock.o" >"$dir/gate.out" 2>&1
+status=$?
+cat "$dir/gate.out"
+[ "$status" = 1 ] || { echo "negative-control: the gate exited $status, expected 1" >&2; exit 1; }
+for what in 'mips32r2' 'lwc0' 'swc0' '\.word 0x70' '\.word 0x7c'; do
+	grep -q "$what" "$dir/gate.out" || { echo "negative-control: the gate did not report $what" >&2; exit 1; }
+done
+echo "negative-control: the gate refused the MIPS32 object, as it must"
