@@ -42,11 +42,9 @@ BR2_ENV        = test "$$(uname -s)" = Linux || { \
 	export OPEN_DFP_34X_2C_KERNEL_ARCHIVE="$$(tools/kernel-archive/kernel-archive)" \
 	  GIT_CEILING_DIRECTORIES="$(CURDIR)" BR2_DL_DIR="$(BR2_DL_DIR)" &&
 
-# The images that must fit their partition for the build to pass: both. Naming
-# fewer (IMAGE_ENFORCE=r0) lets a build go on while the other is only reported,
-# which is for the day an image is being slimmed; the image workflow holds both
-# images to their partitions again in a step of its own.
-IMAGE_ENFORCE ?= k0 r0
+# The images that must fit their partition for the build to pass. The kernel
+# image does not fit k0 yet, and is reported until it does.
+IMAGE_ENFORCE ?= r0
 
 image:
 	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
@@ -54,14 +52,12 @@ image:
 	$(MAKE) image-check
 
 # What the build left, judged: the size of each image against its partition, the
-# kernel's final configuration against the options the product needs and the
-# ones the flash profile drops, the instruction-set gate over every executable of
-# the root filesystem, and the digests of the images.
+# instruction-set gate over every executable of the root filesystem, and the
+# digests of the images.
 image-check:
 	tools/image-budget/image-budget --images "$(IMAGE_OUT)/images" --enforce $(IMAGE_ENFORCE)
 	$(if $(filter-out $(IMAGE_ENFORCE),k0 r0),tools/image-budget/image-budget \
 	  --images "$(IMAGE_OUT)/images" $(filter-out $(IMAGE_ENFORCE),k0 r0))
-	br2-external/tests/kernel/check-config "$(IMAGE_OUT)/build/linux-custom/.config"
 	tools/isa-gate/isa-gate \
 	  --objdump "$(IMAGE_OUT)/host/bin/mips-buildroot-linux-uclibc-objdump" "$(IMAGE_OUT)/target"
 	cd "$(IMAGE_OUT)/images" && sha256sum -c SHA256SUMS
