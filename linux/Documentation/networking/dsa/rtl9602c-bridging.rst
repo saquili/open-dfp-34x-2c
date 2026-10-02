@@ -1330,13 +1330,24 @@ filtering, so the entries are in place when filtering starts.
        {0} with extension 0 0/4; member {3} with extension 0 4/4 (the minimal
        working entry); member {3} alone 0/4; extension 0 alone 0/4.
    * - ``port_vlan_add`` also writes the PVID when the VLAN carries the PVID
-       flag; ``port_vlan_del`` clears membership and leaves the PVID as it is. A
-       failed table access returns the message
+       flag; ``port_vlan_del`` clears membership. A user port whose PVID VLAN is
+       removed, or re-added without the flag, gets back the PVID of reset, 0,
+       which no VLAN entry holds; the CPU port's PVID changes only with the
+       flag. A failed table access returns the message
        ``the VLAN table did not answer``. DSA calls both for the CPU port for
        every VLAN that the host must see, so the driver infers nothing about the
        CPU's membership.
+     - T, I
+     - VLAN filtering, FDB learning and ageing work. That a user port with PVID
+       0 drops untagged frames while filtering is on is not measured.
+   * - VID 0 is never written to the table: ``port_vlan_add`` and
+       ``port_vlan_del`` take it as done. DSA calls them with VID 0 when the
+       8021q core adds VID 0 to the receive filter of a user port, which it
+       does when a port that has receive VLAN filtering comes up; every user
+       port of the switch has it while a bridge on the switch filters VLANs.
      - T
-     - VLAN filtering, FDB learning and ageing work.
+     - What a write of entry 0 does is the last fact of this table; that the
+       driver no longer makes one is read from the code.
    * - ``RTL9602C_VLAN_PVID(p)`` (``0x01300c`` + ``4 * (p / 2)``),
        ``RTL9602C_VLAN_PVID_MASK`` (bits 11:0) at
        ``RTL9602C_VLAN_PVID_SHIFT(p)`` = ``12 * (p mod 2)``: the VID given to an
@@ -1986,19 +1997,6 @@ table and the ``<L2>`` lines of the previous section), and ``ethtool -S`` for
 Known limitations
 =================
 
-- ``port_vlan_add`` and ``port_vlan_del`` do not refuse VID 0. DSA calls them
-  with VID 0 when the 8021q core adds VID 0 to the receive filter of a user
-  port. The core does that when a port that has receive VLAN filtering comes up,
-  and every user port of the switch has it while a bridge on the switch has VLAN
-  filtering on. The driver then writes VLAN table entry 0. A write to that entry
-  was measured to stop the switch forwarding anything to the CPU port, and
-  writing the old word back did not undo it (see "VLAN membership, filtering and
-  PVID"). The measured write was a pattern of the table self-test, not an entry
-  composed by ``port_vlan_add``.
-- ``port_vlan_del``, and ``port_vlan_add`` without the PVID flag, leave a port's
-  PVID register as it is. A port whose PVID VLAN is removed, or whose PVID flag
-  is cleared, keeps giving untagged frames that VID until another VLAN is added
-  to it with the flag.
 - The switch has one address table, and its entries are keyed by address and VID
   alone: the database that DSA passes to ``port_fdb_add``, ``port_fdb_del``,
   ``port_mdb_add`` and ``port_mdb_del`` is not used. Bridges of the switch that

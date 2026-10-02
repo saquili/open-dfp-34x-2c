@@ -939,6 +939,13 @@ static void rtl9602c_port_set_pvid(struct rtl9602c_priv *p, int port, u16 vid)
  *	the port's PVID
  * @extack: for the error message
  *
+ * VID 0 is not a VLAN of the table: the 8021q core adds it to the receive
+ * filter of a port that filters VLANs, and a write of table entry 0 stops
+ * the switch forwarding anything to the CPU port. It is taken as done. A
+ * user port whose PVID is @vlan and which loses the PVID flag gets back the
+ * PVID of reset, 0, which no VLAN entry holds; the CPU port's PVID changes
+ * only with the flag, as DSA gives it.
+ *
  * Return: 0 on success or a negative error code from the table access.
  */
 int rtl9602c_port_vlan_add(struct dsa_switch *ds, int port,
@@ -949,6 +956,9 @@ int rtl9602c_port_vlan_add(struct dsa_switch *ds, int port,
 	bool untagged = vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED;
 	int err;
 
+	if (!vlan->vid)
+		return 0;
+
 	err = rtl9602c_vlan_set_member(p, vlan->vid, port, true, untagged);
 	if (err) {
 		NL_SET_ERR_MSG_MOD(extack, "the VLAN table did not answer");
@@ -957,6 +967,9 @@ int rtl9602c_port_vlan_add(struct dsa_switch *ds, int port,
 
 	if (vlan->flags & BRIDGE_VLAN_INFO_PVID)
 		rtl9602c_port_set_pvid(p, port, vlan->vid);
+	else if (dsa_is_user_port(ds, port) &&
+		 rtl9602c_port_pvid(p, port) == vlan->vid)
+		rtl9602c_port_set_pvid(p, port, 0);
 
 	return 0;
 }
@@ -967,7 +980,9 @@ int rtl9602c_port_vlan_add(struct dsa_switch *ds, int port,
  * @port: the port
  * @vlan: the VLAN
  *
- * The port's PVID stays as it is.
+ * VID 0 is taken as done, as for rtl9602c_port_vlan_add(). A user port whose
+ * PVID was @vlan gets back the PVID of reset, 0, so that its untagged frames
+ * are no longer given a VLAN it has left.
  *
  * Return: 0 on success or a negative error code from the table access.
  */
@@ -975,8 +990,16 @@ int rtl9602c_port_vlan_del(struct dsa_switch *ds, int port,
 			   const struct switchdev_obj_port_vlan *vlan)
 {
 	struct rtl9602c_priv *p = ds->priv;
+	int err;
 
-	return rtl9602c_vlan_set_member(p, vlan->vid, port, false, false);
+	if (!vlan->vid)
+		return 0;
+
+	err = rtl9602c_vlan_set_member(p, vlan->vid, port, false, false);
+	if (!err && dsa_is_user_port(ds, port) &&
+	    rtl9602c_port_pvid(p, port) == vlan->vid)
+		rtl9602c_port_set_pvid(p, port, 0);
+	return err;
 }
 
 static void rtl9602c_port_flood(struct rtl9602c_priv *p, u32 mask_reg,
