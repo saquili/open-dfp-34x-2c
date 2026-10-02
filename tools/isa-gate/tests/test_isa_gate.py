@@ -156,6 +156,22 @@ t.o:     file format elf32-tradbigmips
         self.assertEqual([str(f) for f in found],
                          ["t.o: f+0x8: lwc0 c0_sr,0(a0)", "t.o: f+0xc: .word 0x710d6820"])
 
+    def test_the_offset_is_the_distance_from_the_symbol_not_the_address(self):
+        # A linked object lists absolute addresses; a relocatable object lists section
+        # offsets, so the second function of a section starts above zero in both.
+        text = ("lib.so:     file format elf32-tradbigmips\n\n"
+                "0000b690 <g>:\n   b690:\tnop\n   b698:\tlwc0\tc0_sr,0(a0)\n"
+                "0000b6a0 <h>:\n   b6a0:\tjr\tra\n   b6a8:\t.word\t0x3e00408\n")
+        count, found = gate.scan_lines("lib.so", iter(text.splitlines(True)), gate.ALLOWED)
+        self.assertEqual(count, 4)
+        self.assertEqual([str(f) for f in found],
+                         ["lib.so: g+0x8: lwc0 c0_sr,0(a0)", "lib.so: h+0x8: .word 0x3e00408"])
+
+    def test_the_second_function_of_a_relocatable_object_is_measured_from_its_own_start(self):
+        text = self.TEXT.replace("  18:\tnop", "  18:\tsync")
+        _count, found = gate.scan_lines("t.o", iter(text.splitlines(True)), gate.ALLOWED)
+        self.assertEqual(str(found[-1]), "t.o: g+0x4: sync")
+
     def test_a_member_of_an_archive_is_named(self):
         text = "a.o:     file format elf32-tradbigmips\n\n00000000 <f>:\n   0:\tsync\n"
         _count, found = gate.scan_lines("lib.a", iter(text.splitlines(True)), gate.ALLOWED)

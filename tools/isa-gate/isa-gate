@@ -186,6 +186,7 @@ def scan_lines(path: str, lines: Iterator[str], allowed: frozenset[str],
     """Judge the lines of a listing; return the instruction count and the findings."""
     member = path
     symbol = "?"
+    symbol_at = 0
     count = 0
     found: list[Finding] = []
     for line in lines:
@@ -197,6 +198,7 @@ def scan_lines(path: str, lines: Iterator[str], allowed: frozenset[str],
         text = _SYMBOL.match(line)
         if text:
             symbol = text.group(2)
+            symbol_at = int(text.group(1), 16)
             continue
         text = _INSN.match(line)
         if not text:
@@ -206,7 +208,10 @@ def scan_lines(path: str, lines: Iterator[str], allowed: frozenset[str],
         if mnemonic in allowed:
             continue
         operands = text.group(3) or ""
-        where = "%s+0x%s" % (symbol, text.group(1))
+        # The listing gives the address of the instruction and, on the line of the
+        # symbol, the address of the symbol; the finding names the distance between them.
+        offset = int(text.group(1), 16) - symbol_at
+        where = "%s+0x%x" % (symbol, offset if offset >= 0 else int(text.group(1), 16))
         if member != path:
             where = "%s: %s" % (member, where)
         found.append(Finding(path, where, ("%s %s" % (mnemonic, operands)).strip()))
