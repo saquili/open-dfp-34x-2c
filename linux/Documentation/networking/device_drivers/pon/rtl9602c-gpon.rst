@@ -323,9 +323,10 @@ name the others.
        up``
      - error
      - Bring-up refused with ``-ENXIO``. No ``<GPON>`` tag.
-   * - ``PON MAC not built (err): OMCI will not flow``
-     - warning
-     - The PON MAC failed to build. No ``<GPON>`` tag.
+   * - ``PON MAC not built (err): the PON stays down``
+     - error
+     - The PON MAC failed to build, and the bring-up fails. No ``<GPON>``
+       tag.
    * - ``<GPON> MAC did not leave reset (reset control ...)``
      - error
      - The MAC reset timed out.
@@ -565,9 +566,11 @@ those of the facts that carry each step.
    the CPU but not the GPON MAC. (M)
 2. Build the PON MAC (``rtl9602c_ponmac_init()``, see
    Documentation/networking/device_drivers/pon/rtl9602c.rst). Purpose: every
-   OMCI message crosses it. A failure is logged and bring-up goes on, because
-   activation does not depend on it. That the PON MAC has to be built before
-   step 3 is an assumption. (M for the need, I for the order)
+   OMCI message crosses it. A failure ends the bring-up with its error, the
+   PON staying down: activation does not depend on the PON MAC, but an ONU
+   without it answers no OMCI and the OLT deactivates it. That the PON MAC has
+   to be built before step 3 is an assumption. (M for the need, I for the
+   order)
 3. Put the PON SerDes in GPON mode (``rtl9602c_pon_serdes_gpon()``, see "PON
    SerDes and analog front end"): park it, reset it, enable the burst-enable
    output driver, set GPON mode, override the bit-error indication and force no
@@ -682,9 +685,9 @@ Take-down and the facts of the bring-up
        later after every warm reset (4 of 4); the ONU still reached O5 and no
        OMCI message crossed; ``down`` then ``up``, which sets O1 first, repaired
        it.
-   * - The PON MAC (``rtl9602c_ponmac_init()``) is built next. A failure is
-       logged and bring-up goes on: activation does not depend on it, every OMCI
-       message does.
+   * - The PON MAC (``rtl9602c_ponmac_init()``) is built next, and a failure
+       ends the bring-up: activation does not depend on the PON MAC, but every
+       OMCI message does, and the OLT deactivates an ONU that answers none.
      - M
      - With the PON MAC never built, the ONU reached O5, no OMCI message reached
        the CPU, and the OLT sent Deactivate_ONU-ID about 12 s later.

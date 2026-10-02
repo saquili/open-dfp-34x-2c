@@ -406,8 +406,8 @@ Interfaces to user space
      * - ``no system controller: PON MAC not available``, ``no pbo-us buffer of
          1048576 bytes: PON MAC not available`` (``pbo-ds`` likewise)
        - Probe, when the device tree lacks the system controller or a region.
-     * - ``PON MAC not built (<error>): OMCI will not flow``
-       - A bring-up whose build failed. Activation goes on.
+     * - ``PON MAC not built (<error>): the PON stays down``
+       - A bring-up whose build failed. The interface does not come up.
      * - ``the PON packet buffer's upstream half did not finish initialising in
          50 ms: <status>`` (``downstream`` likewise)
        - The build, when a half does not report
@@ -2051,9 +2051,9 @@ Known limitations
   last four bytes of its MIC.
 - A GEM flow's upstream octet register clears when read, so a tool that reads
   it by address takes octets out of the port's ``pon_tx_octets``.
-- When the PON MAC cannot be built, the ONU is activated all the same and can
-  reach O5 without an OMCI path: no OMCI message crosses and GEM interfaces are
-  refused with ``-ENETDOWN``. Taking ``pon`` down and up builds the block again.
+- When the PON MAC cannot be built, the bring-up fails with the build's error
+  and ``pon`` stays down with the laser off; bringing it up again tries the
+  build again.
 - A read anywhere in the PON MAC's window before the PON MAC is built stops the
   board, and the watchdog may not recover it. The driver never reads it before
   the build, and a tool that reads the window by address has to keep to the

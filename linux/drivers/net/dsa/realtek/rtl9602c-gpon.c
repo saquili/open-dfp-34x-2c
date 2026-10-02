@@ -1674,14 +1674,17 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	rtl9602c_gpon_set_state(p, RTL9602C_ONU_O1_INITIAL);
 
 	/*
-	 * The PON MAC carries every OMCI message but has no part in activation,
-	 * so a failure to build it is logged and bring-up goes on. It is built
-	 * before the SerDes goes to GPON mode; that this order is needed is not
-	 * verified.
+	 * The PON MAC carries every OMCI message. It has no part in activation,
+	 * but an ONU that reaches O5 without it answers no OMCI, and the OLT
+	 * deactivates it (measured on this board), so a failure ends the
+	 * bring-up and the PON stays down. It is built before the SerDes goes
+	 * to GPON mode; that this order is needed is not verified.
 	 */
 	err = rtl9602c_ponmac_init(p);
-	if (err)
-		pr_warn("PON MAC not built (%d): OMCI will not flow\n", err);
+	if (err) {
+		pr_err("PON MAC not built (%d): the PON stays down\n", err);
+		return err;
+	}
 
 	/* The MAC reset completes only once the SerDes is in GPON mode. */
 	rtl9602c_pon_serdes_gpon(p);
@@ -2029,9 +2032,9 @@ int rtl9602c_gpon_password_set(struct rtl9602c_priv *p, const char *s)
  * live session.
  *
  * Context: process context; takes gpon_lock.
- * Return: 0; -ENXIO when no serial number has been set; -ETIMEDOUT when the MAC
- * does not leave reset or its tables cannot be emptied, and the PON then stays
- * down.
+ * Return: 0; -ENXIO when no serial number has been set; the error of the PON
+ * MAC's build; -ETIMEDOUT when the MAC does not leave reset or its tables
+ * cannot be emptied. On an error the PON stays down.
  */
 int rtl9602c_gpon_start(struct rtl9602c_priv *p)
 {
