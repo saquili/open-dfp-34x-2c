@@ -24,17 +24,14 @@ The result is in build/image/images: k0.uImage, the kernel; r0.squashfs, the
 root filesystem; and SHA256SUMS. The build runs Buildroot, which needs the
 packages and the container that docs/handbook/building.rst names, and tells what
 each image is, how big each may be and how big each is. r0.squashfs fits its
-partition, and so does k0.uImage, which is the kernel of the flash profile:
-the board's configuration less seven options that the product does not use. The
-build fails if either image is over its partition.
+partition. k0.uImage does not yet, and the build reports by how much.
 
 The kernel alone, for development, builds with the Debian cross compiler:
 
   $ make linux
 
-The result is build/linux/arch/mips/boot/uImage, the board's complete
-configuration. It is too big for k0 and is for RAM boots. It needs a MIPS cross
-compiler (mips-linux-gnu-gcc, or name yours with CROSS_COMPILE=) and mkimage.
+The result is build/linux/arch/mips/boot/uImage. It needs a MIPS cross compiler
+(mips-linux-gnu-gcc, or name yours with CROSS_COMPILE=) and mkimage.
 
 How to boot a trial kernel
 ==========================
