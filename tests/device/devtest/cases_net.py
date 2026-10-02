@@ -101,6 +101,18 @@ def pond_health(ctx: Context):
     return verdict(code == 200 and json.loads(body) == {"ok": True}, f"HTTP {code} {body}")
 
 
+@case("mgmt.pond-page", "Management", "The status page is served on the host side")
+def pond_page(ctx: Context):
+    command = (f"curl -s -m 15 -D - -o /dev/null "
+               f"{shlex.quote(f'http://{ctx.settings.stick}:8080/')}")
+    head = ctx.bench.text(command, timeout=40).lower()
+    status = head.splitlines()[0] if head else "no answer"
+    ok = " 200" in status and "content-type: text/html" in head
+    return verdict(ok, f"{status.strip()}, "
+                       f"{'html' if 'text/html' in head else 'not html'}, "
+                       f"{'with' if 'content-security-policy' in head else 'without'} a CSP")
+
+
 @case("mgmt.pond-locked", "Management", "Without the token the daemon's API stays locked")
 def pond_locked(ctx: Context):
     code, body = http(ctx, "/api/schema")
