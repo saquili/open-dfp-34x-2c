@@ -1715,8 +1715,9 @@ band b being queue 7 - b, so that band 0, which ``tc`` serves first, is the
 queue that the switch serves first. A band with a quantum of 0 is a strict
 queue; any other band is a weighted queue whose weight is its quantum in
 scheduler tokens. The priomap of the ets becomes the port's priority-to-queue
-map. An ets is accepted at the root of a port, or under the port's tbf; a qdisc
-in a band is not offloaded::
+map. An ets is accepted at the root of a port, or under the port's tbf, by the
+tbf's class (``parent 1:1`` under a tbf ``1:``) or by the tbf itself (``parent
+1:``); a qdisc in a band is not offloaded::
 
     tc qdisc add dev sfp root handle 1: ets bands 2 quanta 660 1980 \
             priomap 0 0 0 0 1 1 1 1
@@ -1786,11 +1787,14 @@ their quanta.
      - ETS behaves as configured: strict and weighted classes share the port as
        the bands and quanta ask.
    * - An ets is accepted at the root, or as the child of the port's followed
-       root tbf; more than eight bands is refused as out of range; a qdisc in a
-       band is not offloaded. The first ets on a port saves the port's
+       root tbf, whose class or handle may name it as the parent; more than
+       eight bands is refused as out of range; a qdisc in a band is not
+       offloaded. The first ets on a port saves the port's
        ``RTL9602C_QOS_PRIO_TO_QUEUE`` word.
      - T
-     - The ETS checks that replace an ets at the root and under a tbf.
+     - The ETS checks that replace an ets at the root and under a tbf. Under a
+       tbf ``1:`` on ``sfp``, ``tc`` reports an ets added with ``parent 1:1``
+       or ``parent 1:`` as offloaded, and ``qos`` shows its map and weights.
    * - Removing the ets that the port follows sets every queue strict at weight
        1, writes 0 to ``RTL9602C_SCHED_WFQ_QUEUES`` and restores the saved
        priority-to-queue word.

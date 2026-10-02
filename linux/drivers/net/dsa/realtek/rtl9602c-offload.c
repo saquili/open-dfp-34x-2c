@@ -1019,8 +1019,12 @@ static int rtl9602c_setup_ets(struct rtl9602c_priv *p, int port,
 		return -EOPNOTSUPP;
 	}
 
+	/*
+	 * Under the tbf, the parent is the tbf's one class (1:1 under a tbf
+	 * 1:), the usual form, or the tbf itself (1:).
+	 */
 	if (qopt->parent != TC_H_ROOT &&
-	    !rtl9602c_qdisc_followed(e->tbf, qopt->parent))
+	    !rtl9602c_qdisc_followed(e->tbf, TC_H_MAJ(qopt->parent)))
 		return -EOPNOTSUPP;
 
 	if (r->bands > RTL9602C_QUEUES) {
