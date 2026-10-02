@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""compare-trees: are two builds of a toolchain the same, apart from where they were made?
+
+Usage: compare-trees DIR_A DIR_B NAME_A NAME_B
+
+DIR_A and DIR_B are the host directories of two builds; each was made in a
+directory whose name differs from the other's by NAME_A and NAME_B, which must
+have the same length (build/toolchain-a and build/toolchain-b). A toolchain
+records the directory it was built in in some of its files, in the paths of its
+programs and in debugging information, so the files are compared after NAME_A
+is replaced by NAME_B in the contents of the first and in the targets of its
+symbolic links. Two values that a file holds are computed from the rest of it and
+change with it: the build ID of an ELF file, a hash that the linker writes into a
+note, and the 16-byte executable_checksum that the compiler proper, cc1, records
+for its precompiled-header and plug-in checks. Both are set aside in both files.
+The two trees have to hold the same files, links and modes, and every file has to
+be identical after that; the count of the files that differed before goes to
+standard output, and what still differs is listed.
+
+Exit status: 0 when the trees are the same in that sense, 1 when they are not,
+2 on a usage error.
+"""
+
+import os
+import stat
+import struct
+import sys
+
+BUILD_ID_NOTE = b".note.gnu.build-id"
+CHECKSUM_SYMBOL = b"executable_checksum"
+
+
+def walk(root):
+    """Relative path -> ("link", target) or ("file", mode, path)."""
+    found = {}
+    for directory, dirs, files in os.walk(root):
+        for name in dirs + files:
+            path = os.path.join(directory, name)
+            rel = os.path.relpath(path, root)
+            if os.path.islink(path):
+                found[rel] = ("link", os.readlink(path))
+            elif os.path.isfile(path):
+                found[rel] = ("file", stat.S_IMODE(os.stat(path).st_mode), path)
+    return found
+
+
+def read(path):
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def elf_sections(data):
+    """(byte order, wide, list of section headers) of an ELF file, or None.
+
+    A header is (name, kind, address, offset, size, link) with the name as an
+    offset into the section name table; a table that cannot be read gives None.
+    """
+    if data[:4] != b"\x7fELF" or data[4] not in (1, 2) or data[5] not in (1, 2):
+        return None
+    wide = data[4] == 2
+    end = "<" if data[5] == 1 else ">"
+    try:
+        if wide:
+            shoff = struct.unpack_from(end + "Q", data, 0x28)[0]
+            shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x3A)
+        else:
+            shoff = struct.unpack_from(end + "I", data, 0x20)[0]
+            shentsize, shnum, shstrndx = struct.unpack_from(end + "HHH", data, 0x2E)
+        if not shoff or not shnum:
+            return None
+        sections = []
+        for index in range(shnum):
+            base = shoff + index * shentsize
+            if wide:
+                name, kind, _flags, addr, offset, size, link = struct.unpack_from(end + "IIQQQQI", data, base)
+            else:
+                name, kind, _flags, addr, offset, size, link = struct.unpack_from(end + "IIIIIII", data, base)
+            sections.append((name, kind, addr, offset, size, link))
+        return end, wide, sections, shstrndx
+    except (struct.error, IndexError):
+        return None
+
+
+def name_at(data, table_offset, name):
+    start = table_offset + name
+    return data[start:data.index(b"\0", start)]
+
+
+def without_derived_data(data):
+    """An ELF file with the bytes zeroed that are computed from the rest of the file.
+
+    Two such are known: the build ID note, and executable_checksum, the 16-byte
+    checksum of its own objects that the compiler proper (cc1) records for its
+    precompiled-header and plug-in checks. Both change when the contents change,
+    and so with the name of the directory the file was built in.
+    """
+    parsed = elf_sections(data)
+    if parsed is None:
+        return data
+    end, wide, sections, shstrndx = parsed
+    out = bytearray(data)
+    try:
+        names_at = sections[shstrndx][3]
+        for name, _kind, _addr, offset, size, link in sections:
+            section_name = name_at(data, names_at, name)
+            if section_name == BUILD_ID_NOTE:
+                namesz, descsz, _type = struct.unpack_from(end + "III", data, offset)
+                desc = offset + 12 + ((namesz + 3) & ~3)
+                out[desc:desc + descsz] = bytes(descsz)
+            elif section_name == b".symtab":
+                strtab_at = sections[link][3]
+                entry = 24 if wide else 16
+                for at in range(offset, offset + size, entry):
+                    if wide:
+                        st_name, _info, _other, _shndx, value, length = struct.unpack_from(
+                            end + "IBBHQQ", data, at)
+                    else:
+                        st_name, value, length, _info, _other, _shndx = struct.unpack_from(
+                            end + "IIIBBH", data, at)
+                    if length and name_at(data, strtab_at, st_name) == CHECKSUM_SYMBOL:
+                        zero_at_address(out, sections, value, length)
+    except (struct.error, IndexError, ValueError):
+        return data
+    return bytes(out)
+
+
+def zero_at_address(out, sections, value, length):
+    """Zero length bytes of the file that are loaded at the address value."""
+    for _name, kind, address, offset, size, _link in sections:
+        if kind != 8 and address and address <= value < address + size:   # 8: no bits in the file
+            start = offset + (value - address)
+            out[start:start + length] = bytes(length)
+            return
+
+
+def main(argv):
+    if len(argv) != 5 or len(argv[3]) != len(argv[4]) or argv[3] == argv[4]:
+        sys.stderr.write(__doc__.split("\n\n")[1] + "\n"
+                         "NAME_A and NAME_B must differ and have the same length.\n")
+        return 2
+    a_root, b_root = argv[1], argv[2]
+    name_a, name_b = argv[3].encode(), argv[4].encode()
+    a, b = walk(a_root), walk(b_root)
+    problems = []
+    for rel in sorted(set(a) - set(b)):
+        problems.append("only in %s: %s" % (a_root, rel))
+    for rel in sorted(set(b) - set(a)):
+        problems.append("only in %s: %s" % (b_root, rel))
+    same_before = same_after = 0
+    for rel in sorted(set(a) & set(b)):
+        x, y = a[rel], b[rel]
+        if x[0] != y[0]:
+            problems.append("a link and a file: " + rel)
+        elif x[0] == "link":
+            if x[1].replace(argv[3], argv[4]) != y[1]:
+                problems.append("links differ: %s -> %s, %s" % (rel, x[1], y[1]))
+        elif x[1] != y[1]:
+            problems.append("modes differ: %s (%o, %o)" % (rel, x[1], y[1]))
+        else:
+            raw_a, raw_b = read(x[2]), read(y[2])
+            if raw_a == raw_b:
+                same_before += 1
+            elif without_derived_data(raw_a.replace(name_a, name_b)) == without_derived_data(raw_b):
+                same_after += 1
+            else:
+                problems.append("contents differ: " + rel)
+    print("compare-trees: %d files identical, %d identical after %s -> %s, %d problems"
+          % (same_before, same_after, argv[3], argv[4], len(problems)))
+    for line in problems:
+        print("  " + line)
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

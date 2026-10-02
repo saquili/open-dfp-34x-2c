@@ -261,3 +261,28 @@ refuse the object: for its architecture flags, for the load-linked and
 store-conditional pair (``lwc0`` and ``swc0``), and for the instructions that a
 listing as MIPS I leaves as data words (``clz``, ``mul``, ``wsbh`` and
 ``sync``). It shows that the gate can fail on code that this core cannot run.
+
+Two builds
+----------
+
+``tests/toolchain/compare-trees`` compares the host directories of two builds
+made in different directories. A toolchain records the directory it was built in
+in some of its files: in the paths that its programs search, and in debugging
+information. The two builds are therefore made in directories whose names differ
+and have the same length (``build/toolchain-a`` and ``build/toolchain-b``), and
+the files of the first are compared with the files of the second after the one
+name is replaced by the other. Two values that a file holds are computed from
+the rest of it and change with it, so they are set aside: the build ID of an ELF
+file, and the 16-byte ``executable_checksum`` that the compiler proper
+(``cc1``) records for its precompiled-header and plug-in checks. The trees have
+to hold the same files, links and modes, and every file has to be identical after
+that::
+
+    br2-external/tests/toolchain/compare-trees build/toolchain-a/host \
+        build/toolchain-b/host toolchain-a toolchain-b
+
+It prints how many files were identical as they were, how many after the
+replacement and the setting aside, and the files that still differ; its exit
+status is non-zero if there is one. The tarballs that ``make sdk`` writes are not
+compared: a tarball holds the modification times of the files as they were
+installed.
