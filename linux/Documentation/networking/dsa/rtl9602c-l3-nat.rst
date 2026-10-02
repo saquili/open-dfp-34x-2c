@@ -1969,13 +1969,15 @@ The address notifier
        writes the netdev's MAC, VLAN (see "L3 interface (selector 3)"), the
        address and the MTU, and puts the address in the external-address table
        with next hop 0, where netfilter's translated source will be looked up; a
-       second address replaces the first in the row. ``DOWN`` rewrites the row
-       with an address that remains, or clears it. Then the route table is
-       committed again, since a directly attached route names the row.
-     - T
+       second address replaces the first in the row. ``DOWN`` gives back the
+       address's external-address row, then rewrites the interface row with an
+       address that remains, or clears it. Then the route table is committed
+       again, since a directly attached route names the row.
+     - T, I
      - A routing test, and the route rows following ``ip route``: ``ip address
        add`` and ``ip address del`` change the ``l3nat`` L3-interface row of the
-       interface.
+       interface. That ``ip address del`` frees the external-address row is read
+       from the code; the ``l3nat`` view after it would show the row empty.
    * - A frame that the switch forwards to the PON port leaves only if a
        classifier entry gave it a GEM stream; the PON MAC drops one without,
        while the switch's own counters count it as sent.
@@ -2155,8 +2157,9 @@ warm restart.
      - The ports a next hop lives behind, which every other user port may reach
        (see "The address-table entries the engine uses").
 
-An external-address row is not freed when its address is removed (see "Known
-limitations").
+An external-address row is freed when its address is removed, so an interface
+that takes many addresses over time, a DHCP client for instance, does not use
+the eight rows up.
 
 The flowtable offload
 =====================
@@ -2810,10 +2813,6 @@ Known limitations
   that only one routed GEM port can be offloaded. Removing the GEM port itself
   forgets the flow but does not reset the count, so the next flow to be claimed
   is never given up either. Reloading the driver clears the count.
-- An external-address row is not freed when its address is removed. The table
-  has 8 rows, so an interface that takes many different addresses over time, a
-  DHCP client for instance, uses them up; a flow that would be translated to an
-  address without a row is declined and stays in software.
 - The L3-interface row of a device is written when an address is added, with the
   device's MAC address and MTU at that moment. A later change of the MAC address
   or of the MTU is not written.

@@ -1102,6 +1102,7 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
 				   struct net_device *dev);
 static struct net_device *rtl9602c_flow_dev_of(struct flow_rule *rule);
 static int rtl9602c_extip_get(struct rtl9602c_priv *p, u32 addr);
+static void rtl9602c_extip_put(struct rtl9602c_priv *p, u32 addr);
 
 /*
  * The source translation of a flowtable rule: the IPv4 source address as a
@@ -3126,9 +3127,9 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
  * runs over a switch port, its L3-interface row, one per device. An address
  * added writes the row with the device's MAC, VLAN, address and MTU, replacing
  * an earlier address, and becomes an external address with next hop 0, where a
- * translated source is looked up. An address removed rewrites the row with one
- * that remains, or clears it; its external-address row stays. A later MTU
- * change is not written.
+ * translated source is looked up. An address removed gives its external-address
+ * row back, and rewrites the interface row with one that remains, or clears it.
+ * A later MTU change is not written.
  */
 static int rtl9602c_l34_inetaddr_event(struct notifier_block *nb,
 				       unsigned long event, void *ptr)
@@ -3166,6 +3167,7 @@ static int rtl9602c_l34_inetaddr_event(struct notifier_block *nb,
 		struct in_device *in_dev = __in_dev_get_rtnl(dev);
 		struct in_ifaddr *other, *keep = NULL;
 
+		rtl9602c_extip_put(p, ntohl(ifa->ifa_address));
 		if (row < 0)
 			goto out;
 
@@ -3262,6 +3264,28 @@ static int rtl9602c_extip_get(struct rtl9602c_priv *p, u32 addr)
 	p->l34_extip[i] = cpu_to_be32(addr);
 	pr_debug("<flow> extaddr[%u] := %pI4, taken for a flow\n", i, &addr);
 	return (int)i;
+}
+
+/*
+ * Give back the external-address row the driver took for @addr, if it took
+ * one: the address is gone, and a flow translated to it is dead with it.
+ */
+static void rtl9602c_extip_put(struct rtl9602c_priv *p, u32 addr)
+{
+	u32 zero[RTL9602C_L3TBL_DATA_WORDS] = {};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++) {
+		if (p->l34_extip[i] != cpu_to_be32(addr))
+			continue;
+		rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR, i,
+				       zero,
+				       rtl9602c_nat_tbl_words
+					       [RTL9602C_L3TBL_CTRL_TABLE_EXTADDR]);
+		p->l34_extip[i] = 0;
+		pr_debug("<flow> extaddr[%u] := free, %pI4 is gone\n", i,
+			 &addr);
+	}
 }
 
 /* The session a flow is pushed into, or -1; only the upstream rule has one. */
