@@ -1,0 +1,202 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!-- SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ONU status</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #fff; --fg: #1d2330; --dim: #5b6475; --line: #dde1e8;
+  --accent: #2457c5; --bad: #b3261e; --good: #1e7a3c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --card: #1b2029; --fg: #e4e8ef; --dim: #98a2b3; --line: #2c3340;
+    --accent: #7aa2ff; --bad: #ff8a80; --good: #7bd88f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--card); }
+header h1 { font-size: 17px; margin: 0; flex: 1 1 auto; }
+header input { font: inherit; padding: 5px 8px; width: 16em; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+button { font: inherit; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--fg); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+main { padding: 12px 16px 32px; max-width: 1200px; margin: 0 auto; }
+h2 { font-size: 15px; margin: 20px 0 8px; color: var(--dim); text-transform: uppercase;
+  letter-spacing: .04em; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; overflow-x: auto; }
+.card h3 { font-size: 14px; margin: 0 0 6px; display: flex; gap: 8px; align-items: baseline; }
+.card h3 small { color: var(--dim); font-weight: normal; }
+table { border-collapse: collapse; width: 100%; }
+td, th { text-align: left; padding: 2px 6px; border-top: 1px solid var(--line);
+  vertical-align: top; font-variant-numeric: tabular-nums; }
+th { color: var(--dim); font-weight: 600; }
+td.k { color: var(--dim); white-space: nowrap; width: 1%; }
+.err { color: var(--bad); }
+.ok { color: var(--good); }
+#state { color: var(--dim); }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">ONU status</h1>
+  <input id="token" type="password" placeholder="token" autocomplete="current-password"
+         aria-label="The token of the status daemon">
+  <button id="connect">Connect</button>
+  <label><input id="auto" type="checkbox" checked> refresh every 5 s</label>
+  <span id="state"></span>
+</header>
+<main id="main"><p>Give the token of this unit and connect.</p></main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let schema = [], timer = null;
+
+function store(key, value) {
+  try { localStorage.setItem(key, value); }
+  catch (e) { /* no storage: the token is asked for again */ }
+}
+function recall(key) {
+  try { return localStorage.getItem(key) || ""; } catch (e) { return ""; }
+}
+
+async function api(path) {
+  const r = await fetch(path, { headers: { Authorization: "Bearer " + $("token").value },
+                               cache: "no-store" });
+  const body = await r.json().catch(() => ({ error: "not JSON", detail: r.statusText }));
+  if (!r.ok) throw new Error((body.error || r.status) + (body.detail ? ": " + body.detail : ""));
+  return body;
+}
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+
+function scalar(v) {
+  if (v === null || v === undefined) return "-";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+/* A value as a table: an object by key, a list of objects by column. */
+function render(v) {
+  if (Array.isArray(v)) {
+    if (!v.length) return el("span", "none");
+    if (v.every((x) => x && typeof x === "object" && !Array.isArray(x))) {
+      const cols = [...new Set(v.flatMap(Object.keys))];
+      const t = el("table"), head = t.insertRow();
+      cols.forEach((c) => head.appendChild(el("th", c)));
+      v.forEach((row) => {
+        const tr = t.insertRow();
+        cols.forEach((c) => tr.insertCell().appendChild(cell(row[c])));
+      });
+      return t;
+    }
+    return el("span", v.map(scalar).join(", "));
+  }
+  if (v && typeof v === "object") {
+    if (v.error) return el("span", v.error + (v.detail ? ": " + v.detail : ""), "err");
+    const t = el("table");
+    Object.entries(v).forEach(([k, x]) => {
+      const tr = t.insertRow();
+      tr.insertCell().appendChild(el("span", k)).parentNode.className = "k";
+      tr.insertCell().appendChild(cell(x));
+    });
+    return t;
+  }
+  return el("span", scalar(v));
+}
+
+function cell(x) {
+  return x && typeof x === "object" ? render(x) : el("span", scalar(x));
+}
+
+function card(item) {
+  const c = el("div", undefined, "card");
+  const h = el("h3", item.label);
+  h.appendChild(el("small", item.id));
+  c.appendChild(h);
+  const body = el("div", "...");
+  body.id = "v-" + item.id;
+  c.appendChild(body);
+  if (item.slow) {
+    body.textContent = "";
+    const b = el("button", "Read");
+    b.onclick = () => one(item.id);
+    body.appendChild(b);
+  }
+  return c;
+}
+
+function show(id, value) {
+  const box = $("v-" + id);
+  if (!box) return;
+  box.replaceChildren(value === null ? el("span", "not on this unit") : render(value));
+}
+
+async function one(id) {
+  try { show(id, (await api("/api/get/" + encodeURIComponent(id))).value); }
+  catch (e) { $("v-" + id).replaceChildren(el("span", e.message, "err")); }
+}
+
+async function refresh() {
+  const ids = schema.filter((i) => i.readable && !i.slow).map((i) => i.id);
+  try {
+    const values = await api("/api/getm?ids=" + ids.join(","));
+    ids.forEach((id) => show(id, values[id]));
+    $("state").textContent = "updated " + new Date().toLocaleTimeString();
+    $("state").className = "ok";
+    if (values.model && values.model.model) $("title").textContent = values.model.model;
+  } catch (e) {
+    $("state").textContent = e.message;
+    $("state").className = "err";
+  }
+}
+
+async function connect() {
+  store("pond-token", $("token").value);
+  try {
+    schema = (await api("/api/schema")).items;
+  } catch (e) {
+    $("main").replaceChildren(el("p", e.message, "err"));
+    return;
+  }
+  const main = $("main");
+  main.replaceChildren();
+  const cats = [...new Set(schema.map((i) => i.cat))];
+  cats.forEach((cat) => {
+    main.appendChild(el("h2", cat));
+    const g = el("div", undefined, "grid");
+    schema.filter((i) => i.cat === cat && i.readable).forEach((i) => g.appendChild(card(i)));
+    main.appendChild(g);
+  });
+  await refresh();
+  arm();
+}
+
+function arm() {
+  clearInterval(timer);
+  timer = $("auto").checked && schema.length ? setInterval(refresh, 5000) : null;
+}
+
+$("connect").onclick = connect;
+$("auto").onchange = arm;
+$("token").addEventListener("keydown", (e) => { if (e.key === "Enter") connect(); });
+$("token").value = recall("pond-token");
+if ($("token").value) connect();
+</script>
+</body>
+</html>

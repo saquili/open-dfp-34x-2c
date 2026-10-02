@@ -12,11 +12,18 @@ the flash with its two firmware banks.
 
 ::
 
-   pond [-l http://ADDRESS:PORT] [-t TOKENFILE]
+   pond [-l http://ADDRESS:PORT] [-t TOKENFILE] [-p PAGE]
 
 ``/api/health`` answers without a token. ``/api/schema``, ``/api/get/ID`` and
 ``/api/getm?ids=A,B`` need the bearer token of the token file
 (``/etc/pond.token`` by default); without the file the API stays locked.
+
+``/`` is the status page, ``www/index.html``, installed as
+``/usr/share/pond/index.html`` (``-p`` names another). It asks for the token,
+keeps it in the browser, and shows every value of the API by category,
+refreshed every five seconds; the slow ones are read on request. It needs
+nothing from outside the device, and the daemon serves it with a content
+security policy that lets it talk to the daemon only.
 
 Building and testing::
 

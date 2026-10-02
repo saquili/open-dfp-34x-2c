@@ -10,7 +10,8 @@
  *   /api/getm?ids=A,B several values at once, slow ones left out
  *
  * Every route but the first needs the bearer token of /etc/pond.token;
- * without the file, the API stays locked.
+ * without the file, the API stays locked. At / it serves the status page,
+ * which asks for the token and reads the API.
  */
 
 #include "prov.h"
@@ -29,6 +30,7 @@
 
 static const char *g_listen = "http://0.0.0.0:8080";
 static const char *g_tokenf = "/etc/pond.token";
+static const char *g_page = "/usr/share/pond/index.html";
 static char g_token[128];
 static volatile sig_atomic_t g_stop;
 
@@ -252,8 +254,25 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		return;
 	}
 
+	if (mg_match(hm->uri, mg_str("/"), NULL) ||
+	    mg_match(hm->uri, mg_str("/index.html"), NULL)) {
+		struct mg_http_serve_opts opts = {
+			.mime_types = "html=text/html; charset=utf-8",
+			.extra_headers =
+				"Cache-Control: no-store\r\n"
+				"X-Content-Type-Options: nosniff\r\n"
+				"Content-Security-Policy: default-src 'none'; "
+				"script-src 'unsafe-inline'; "
+				"style-src 'unsafe-inline'; connect-src 'self'\r\n",
+		};
+
+		mg_http_serve_file(c, hm, g_page, &opts);
+		return;
+	}
+
 	if (!mg_match(hm->uri, mg_str("/api/#"), NULL)) {
-		reply_err(c, 404, "no such route", "this daemon serves /api");
+		reply_err(c, 404, "no such route",
+			  "this daemon serves / and /api");
 		return;
 	}
 
@@ -302,9 +321,11 @@ int main(int argc, char **argv)
 			g_listen = argv[++i];
 		else if (!strcmp(argv[i], "-t") && i + 1 < argc)
 			g_tokenf = argv[++i];
+		else if (!strcmp(argv[i], "-p") && i + 1 < argc)
+			g_page = argv[++i];
 		else {
 			fprintf(stderr,
-				"usage: %s [-l http://addr:port] [-t tokenfile]\n",
+				"usage: %s [-l http://addr:port] [-t tokenfile] [-p page]\n",
 				argv[0]);
 			return 2;
 		}
