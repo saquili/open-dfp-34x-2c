@@ -445,6 +445,8 @@
  */
 #define RTL9602C_GPON_PLOAM_BYTES	13
 #define RTL9602C_GPON_SN_BYTES		8
+/* The password of the Password message, G.984.3 clause 9.2.4.2. */
+#define RTL9602C_GPON_PASSWORD_BYTES	10
 #define RTL9602C_GPON_PLOAM_WORDS	7
 
 /* The events of the PLOAM channel the ploamlog view keeps, and their kinds. */
@@ -614,6 +616,7 @@ enum {
 
 /* Upstream PLOAM message identifiers (ITU-T G.984.3 clause 9.2.4). */
 #define RTL9602C_PLOAM_US_SERIAL_NUMBER_ONU	1
+#define RTL9602C_PLOAM_US_PASSWORD	2
 #define RTL9602C_PLOAM_US_DYING_GASP	3
 #define RTL9602C_PLOAM_US_NO_MESSAGE	4
 #define RTL9602C_PLOAM_US_ACKNOWLEDGE	9
@@ -682,6 +685,7 @@ enum {
 #define RTL9602C_PLOAM_DS_ASSIGN_ONUID	3
 #define RTL9602C_PLOAM_DS_RANGING_TIME	4
 #define RTL9602C_PLOAM_DS_DEACTIVATE_ONUID	5
+#define RTL9602C_PLOAM_DS_REQUEST_PASSWORD	9
 #define RTL9602C_PLOAM_DS_ASSIGN_ALLOCID	10
 #define RTL9602C_PLOAM_DS_CONFIGURE_PORTID	14
 #define RTL9602C_PLOAM_DS_EXTENDED_BURST_LENGTH	20
@@ -2225,6 +2229,10 @@ struct rtl9602c_priv {
 	u8 gpon_sn[RTL9602C_GPON_SN_BYTES];
 	/** @gpon_have_sn: @gpon_sn is set; the PON cannot come up before */
 	bool gpon_have_sn;
+	/** @gpon_password: the password the ONU gives when the OLT asks */
+	u8 gpon_password[RTL9602C_GPON_PASSWORD_BYTES];
+	/** @gpon_have_password: @gpon_password is set */
+	bool gpon_have_password;
 
 	/** @gpon_state: the activation state, an RTL9602C_ONU_O* value */
 	u8 gpon_state;
@@ -2578,6 +2586,8 @@ struct rtl9602c_priv {
  *	milliseconds
  * @RTL9602C_DEVLINK_PARAM_ID_GPON_SERIAL: gpon_serial, the ONU's serial
  *	number
+ * @RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD: gpon_password, the password the
+ *	ONU gives when the OLT asks for it
  */
 enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_BASE = DEVLINK_PARAM_GENERIC_ID_MAX,
@@ -2603,6 +2613,7 @@ enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_LOOPDET_PORTS,
 	RTL9602C_DEVLINK_PARAM_ID_LOOPDET_PERIOD,
 	RTL9602C_DEVLINK_PARAM_ID_GPON_SERIAL,
+	RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
 };
 
 /*
@@ -2774,6 +2785,7 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_priv *p,
 			       struct pon_dev_status *st);
 int rtl9602c_gpon_start(struct rtl9602c_priv *p);
 int rtl9602c_gpon_sn_set(struct rtl9602c_priv *p, const char *s);
+int rtl9602c_gpon_password_set(struct rtl9602c_priv *p, const char *s);
 void rtl9602c_gpon_stop(struct rtl9602c_priv *p);
 int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
 			    u16 port_id);

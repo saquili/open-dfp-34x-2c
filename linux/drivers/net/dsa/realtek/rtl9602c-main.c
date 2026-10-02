@@ -1093,6 +1093,11 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 			 "%.4s%02X%02X%02X%02X", p->gpon_sn, p->gpon_sn[4],
 			 p->gpon_sn[5], p->gpon_sn[6], p->gpon_sn[7]);
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD:
+		/* Whether it is set, never the password itself. */
+		strscpy(ctx->val.vstr, p->gpon_have_password ? "set" : "",
+			sizeof(ctx->val.vstr));
+		return 0;
 	default:
 		break;
 	}
@@ -1131,6 +1136,10 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 		if (p->gpon_up)
 			return -EBUSY;
 		return rtl9602c_gpon_sn_set(p, ctx->val.vstr);
+	case RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD:
+		if (p->gpon_up)
+			return -EBUSY;
+		return rtl9602c_gpon_password_set(p, ctx->val.vstr);
 	case RTL9602C_DEVLINK_PARAM_ID_DOS_PORTS:
 		if (ctx->val.vu32 & ~(u32)RTL9602C_DOS_PORT_EN_MASK)
 			return -ERANGE;
@@ -1327,6 +1336,10 @@ static const struct devlink_param rtl9602c_devlink_params[] = {
 	/* The serial number the ONU presents to the OLT in activation. */
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_GPON_SERIAL,
 				 "gpon_serial", DEVLINK_PARAM_TYPE_STRING,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/* The password the ONU gives the OLT when asked; reads back "set". */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
+				 "gpon_password", DEVLINK_PARAM_TYPE_STRING,
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 };
 

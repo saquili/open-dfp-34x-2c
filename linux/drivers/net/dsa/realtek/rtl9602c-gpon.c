@@ -486,6 +486,7 @@ static void rtl9602c_gpon_set_overhead(struct rtl9602c_priv *p, const u8 *msg)
 static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 				  unsigned int type)
 {
+	u8 shown[RTL9602C_GPON_PLOAM_WORDS * 2];
 	int i;
 
 	mutex_lock(&p->ploam_lock);
@@ -520,7 +521,11 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 	rtl9602c_rmw(p, RTL9602C_PLOAM_TX_CTRL,
 		     RTL9602C_PLOAM_TX_CTRL_PUSH, RTL9602C_PLOAM_TX_CTRL_PUSH);
 
-	rtl9602c_ploam_log(p, RTL9602C_EV_US, msg,
+	/* The ring is readable in debugfs: a password stays out of it. */
+	memcpy(shown, msg, sizeof(shown));
+	if (msg[1] == RTL9602C_PLOAM_US_PASSWORD)
+		memset(&shown[2], 0, RTL9602C_GPON_PASSWORD_BYTES);
+	rtl9602c_ploam_log(p, RTL9602C_EV_US, shown,
 			   (type << 24) |
 			   (rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL) & 0xffffff));
 	mutex_unlock(&p->ploam_lock);
@@ -1230,6 +1235,32 @@ static void rtl9602c_gpon_ploam_ack(struct rtl9602c_priv *p, const u8 *dm)
 }
 
 /*
+ * Answer Request_Password (G.984.3 clause 9.2.3.9) with the Password message
+ * (clause 9.2.4.2) three times, on the normal queue: the ONU-ID, the
+ * identifier, then the ten octets of the password. Without a password set
+ * the request is not answered, and the OLT decides what that means.
+ */
+static void rtl9602c_gpon_password_send(struct rtl9602c_priv *p)
+{
+	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
+	unsigned int i;
+
+	if (!p->gpon_have_password) {
+		dev_warn_ratelimited(p->dev,
+				     "<GPON> the OLT asks for the password, and none is set\n");
+		return;
+	}
+
+	msg[0] = p->gpon_onu_id;
+	msg[1] = RTL9602C_PLOAM_US_PASSWORD;
+	memcpy(&msg[2], p->gpon_password, RTL9602C_GPON_PASSWORD_BYTES);
+	for (i = 0; i < 3; i++)
+		rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
+	memzero_explicit(msg, sizeof(msg));
+	pr_debug("<GPON> password sent\n");
+}
+
+/*
  * Capture the next @entries allocations the MAC matches to this ONU's T-CONTs,
  * two words each in RTL9602C_BWMAP_CAPTURE_DATA(): the control register is
  * zeroed, cleared with the count, then started with it.
@@ -1490,6 +1521,14 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 			 alloc, msg[4]);
 		return;
 	}
+
+	case RTL9602C_PLOAM_DS_REQUEST_PASSWORD:
+		/* Directed, in O5. */
+		if (msg[0] != p->gpon_onu_id ||
+		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		rtl9602c_gpon_password_send(p);
+		return;
 
 	case RTL9602C_PLOAM_DS_CONFIGURE_PORTID: {
 		/*
@@ -1929,6 +1968,51 @@ int rtl9602c_gpon_sn_set(struct rtl9602c_priv *p, const char *s)
 	pr_info("<GPON> serial number set\n");
 
 	rtl9602c_gpon_arm_sn(p);
+	return 0;
+}
+
+/**
+ * rtl9602c_gpon_password_set() - set the password the ONU gives the OLT
+ * @p: the switch
+ * @s: one to ten printable ASCII characters, padded with zero octets to the
+ *     ten of the Password message (G.984.3 clause 9.2.4.2); or "0x" and
+ *     twenty hex digits, the ten octets themselves; or "" to forget it
+ *
+ * The devlink parameter gpon_password sets it, and refuses a change while the
+ * PON is up.
+ *
+ * Return: 0, or -EINVAL for a malformed @s.
+ */
+int rtl9602c_gpon_password_set(struct rtl9602c_priv *p, const char *s)
+{
+	u8 pw[RTL9602C_GPON_PASSWORD_BYTES] = {};
+	size_t len = strlen(s);
+	unsigned int i;
+
+	if (!len) {
+		memzero_explicit(p->gpon_password, sizeof(p->gpon_password));
+		p->gpon_have_password = false;
+		return 0;
+	}
+
+	if (len == 2 + 2 * sizeof(pw) && s[0] == '0' &&
+	    (s[1] == 'x' || s[1] == 'X')) {
+		if (hex2bin(pw, s + 2, sizeof(pw)))
+			return -EINVAL;
+	} else {
+		if (len > sizeof(pw))
+			return -EINVAL;
+		for (i = 0; i < len; i++) {
+			if (s[i] < 0x20 || s[i] > 0x7e)
+				return -EINVAL;
+			pw[i] = s[i];
+		}
+	}
+
+	memcpy(p->gpon_password, pw, sizeof(pw));
+	memzero_explicit(pw, sizeof(pw));
+	p->gpon_have_password = true;
+	pr_info("<GPON> password set\n");
 	return 0;
 }
 

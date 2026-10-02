@@ -674,6 +674,18 @@ reports the same serial number in the status of the PON device
        serial number set``, and the serial-number message is armed at once.
        Reads empty until a serial number has been set, then the four characters
        and the eight digits in upper case, from the driver's copy.
+   * - ``gpon_password``
+     - string
+     - runtime
+     - The password the ONU gives when the OLT asks for it with
+       Request_Password: one to ten printable ASCII characters, padded with
+       zero octets to the ten of the Password message, or ``0x`` followed by
+       twenty hexadecimal digits that give the ten octets themselves. An empty
+       value forgets it. A longer or malformed value is refused with
+       ``-EINVAL``, and a set while the ``pon`` interface is up with
+       ``-EBUSY``. A valid value is kept and the kernel log says ``<GPON>
+       password set``. Reads ``set`` once a password is kept and empty
+       otherwise, never the password itself.
 
 To set the serial number, read it back and bring the interface up::
 
@@ -704,6 +716,15 @@ To set the serial number, read it back and bring the interface up::
        octets of vendor-specific serial number.
      - P
      - ITU-T G.984.3, clause 9.2.4.1.
+   * - ``gpon_password`` reads ``set`` or empty, and takes the same refusals
+       as ``gpon_serial`` for its own forms.
+     - I
+     - Read from the code; not run on the board.
+   * - The Password message carries ten octets of password after the ONU-ID
+       and its identifier, and the ONU sends it three times in answer to
+       Request_Password.
+     - P
+     - ITU-T G.984.3, clause 9.2.3.9 and clause 9.2.4.2.
 
 The region frame_capture
 ========================

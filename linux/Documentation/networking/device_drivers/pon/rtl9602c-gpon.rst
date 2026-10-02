@@ -1245,6 +1245,13 @@ recorded in the ``ploamlog`` ring and dropped.
      - The ONU-ID or all ONUs
      - O4, O5
      - O2.
+   * - Request_Password (9)
+     - The ONU-ID
+     - O5
+     - Three Password messages (2) on the normal queue, with the password of
+       the devlink parameter ``gpon_password``; none, and a rate-limited
+       warning, while no password is set. The ``ploamlog`` ring records them
+       with the password zeroed.
    * - Assign_Alloc-ID (10)
      - The ONU-ID
      - Wherever octet 1 equals the ONU-ID the driver holds: O4 and O5 in
@@ -2598,8 +2605,8 @@ Known limitations
   the length.
 - Every downstream message that the table in "PLOAM receive" does not list is
   recorded and dropped, including some for which G.984.3 requires an answer:
-  Request_Password gets no Password message, and BER Interval,
-  Key_Switching_Time and Encrypted_Port-ID get no Acknowledge. POPUP,
+  BER Interval, Key_Switching_Time and Encrypted_Port-ID get no Acknowledge.
+  POPUP,
   Swift_POPUP, Disable_Serial_Number, Change_Power_Level, Request_Key,
   Ranging_Adjustment, Sleep_Allow, PST and Physical_Equipment_Error are not
   acted on either.
