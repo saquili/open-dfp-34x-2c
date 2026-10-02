@@ -50,7 +50,7 @@ static const struct genl_split_ops pon_nl_ops[] = {
 };
 
 static const struct genl_multicast_group pon_nl_mcgrps[] = {
-	[PON_NLGRP_MONITOR] = { "monitor", },
+	[PON_NLGRP_MONITOR] = { "monitor", .flags = GENL_MCAST_CAP_NET_ADMIN, },
 };
 
 struct genl_family pon_nl_family __ro_after_init = {

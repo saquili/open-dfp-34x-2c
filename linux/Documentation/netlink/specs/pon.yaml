@@ -353,9 +353,8 @@ operations:
       doc: >-
         A change of an ONU's status as its MAC reports it, with the
         attributes of a dev-get reply, sent to the monitor group in the
-        initial network namespace. The group has no permission flag: any
-        process may join it and receive these notifications, serial number
-        included, while dev-get needs CAP_NET_ADMIN.
+        initial network namespace. Joining the group needs CAP_NET_ADMIN,
+        as dev-get does, since the notifications carry the serial number.
       notify: dev-get
       mcgrp: monitor
 
@@ -390,3 +389,4 @@ mcast-groups:
   list:
     -
       name: monitor
+      flags: [ admin-perm ]

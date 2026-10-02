@@ -1058,8 +1058,8 @@ Operations
      - 2
      - Not a request: a notification.
      - The attributes of ``dev-get``.
-     - Membership of the multicast group ``monitor`` (see "Known
-       limitations").
+     - Membership of the multicast group ``monitor``, which needs
+       ``CAP_NET_ADMIN``.
    * - ``tcont-get``, do
      - 3
      - ``id``, ``index``
@@ -1199,10 +1199,13 @@ The family and its permissions
        ``tcont-get`` is a design choice not exercised; a ``tcont-get`` dump
        would exercise it.
    * - ``dev-get`` and ``tcont-get``, the do and the dump of each, need
-       ``CAP_NET_ADMIN`` (``admin-perm``).
+       ``CAP_NET_ADMIN`` (``admin-perm``), and so does joining ``monitor``
+       (``GENL_MCAST_CAP_NET_ADMIN``, which the generator writes for a group
+       with ``admin-perm``): its notifications carry the serial number, the
+       credential the OLT takes the ONU by.
      - I
      - Design choice, not exercised: an unprivileged ``dev-get`` gets
-       ``-EPERM``.
+       ``-EPERM``, and an unprivileged join of ``monitor`` is refused.
    * - ``netnsok``: the family answers in every network namespace. ONUs are not
        per namespace, and notifications go to the initial namespace only.
      - I
@@ -2212,10 +2215,6 @@ Teardown of the RTL9602C driver
 Known limitations
 =================
 
-- The ``monitor`` group has no permission flag. Any process may join it and
-  receive ``dev-change-ntf``, which carries the same attributes as a
-  ``dev-get`` reply, the serial number included, while ``dev-get`` needs
-  ``CAP_NET_ADMIN``. The generator in this tree does not emit group flags.
 - ``num-gem-ports`` is the size of the MAC's flow space: 128 on the RTL9602C.
   At most 127 GEM interfaces can exist there, because ``gem_add`` never gives
   out ``RTL9602C_GPON_OMCC_FLOW`` (64), which carries the OMCC. A daemon that
@@ -2289,12 +2288,10 @@ Assumptions the driver depends on
        the bridge still has it ("Bridging and switchdev offload").
      - Removing a VLAN from one of two GEM interfaces that share it, and
        checking that the traffic on the other continues.
-   * - That letting any process join the ``monitor`` group, and so read the
-       serial number, is acceptable ("Known limitations").
-     - An unprivileged listener joining ``monitor`` across ``ip link set pon
-       down`` and ``up`` would show what it receives.
-   * - That ``tcont-get`` is only used on an ONU with a registered data path
-       ("Known limitations").
+   * - That an unprivileged process cannot join ``monitor``.
+     - An unprivileged listener trying to join ``monitor``.
+   * - That ``tcont-get`` on an ONU without a registered data path answers
+       ``-ENOENT``.
      - A ``tcont-get`` dump on an ONU without a data path.
    * - That a daemon sizing its GEM port entities by ``num-gem-ports`` copes
        with one entity fewer than the advertised number ("Known limitations").
