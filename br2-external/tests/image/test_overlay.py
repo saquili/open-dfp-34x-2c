@@ -22,6 +22,7 @@ BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2
 OVERLAY = os.path.join(BOARD, "overlay")
 RCS = os.path.join(OVERLAY, "etc", "init.d", "rcS")
 INITTAB = os.path.join(OVERLAY, "etc", "inittab")
+NFTABLES = os.path.join(OVERLAY, "etc", "nftables.conf")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 # Words that start a command in the boot script and are not programs.
@@ -30,7 +31,7 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # Programs of the dropbear package and of this tree's packages; every other
 # command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond"}
+PACKAGES = {"omcid", "ponid", "devlink", "pond", "nft"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 
@@ -107,6 +108,26 @@ class BootScript(unittest.TestCase):
 
     def test_a_bench_can_override_the_addresses(self):
         self.assertIn("[ -r /etc/board.conf ] && . /etc/board.conf", read(RCS))
+
+
+class PacketFilter(unittest.TestCase):
+    def test_it_is_loaded_before_any_server_listens(self):
+        text = read(RCS)
+        load = text.index("nft -f /etc/nftables.conf")
+        for server in ("dropbear -s ", "omcid >", "pond >"):
+            self.assertLess(load, text.index(server), server)
+
+    def test_it_starts_from_nothing_and_drops_what_it_does_not_accept(self):
+        text = read(NFTABLES)
+        self.assertIn("\nflush ruleset\n", text)
+        self.assertEqual(len(re.findall(r"hook (?:input|forward) priority filter; policy drop;",
+                                        text)), 2)
+
+    def test_the_host_side_reaches_the_servers_of_the_stick(self):
+        self.assertIn('iifname { "sfp", "mgmt" } tcp dport { 22, 8080 } accept', read(NFTABLES))
+
+    def test_icmpv6_is_accepted_or_ipv6_would_not_work(self):
+        self.assertIn("meta l4proto ipv6-icmp accept", read(NFTABLES))
 
 
 class Inittab(unittest.TestCase):

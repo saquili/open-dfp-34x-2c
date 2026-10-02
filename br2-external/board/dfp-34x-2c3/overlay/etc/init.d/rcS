@@ -47,6 +47,10 @@ mkdir -p /var/log
 
 hostname -F /etc/hostname
 
+# The packet filter, before any link is up and any server listens. Without it
+# the stick accepts everything.
+nft -f /etc/nftables.conf || warn "no packet filter: the stick accepts everything"
+
 # The links. The stick's host side is the interface sfp.
 ip link set lo up
 ip link set sfp up || warn "no interface sfp"
