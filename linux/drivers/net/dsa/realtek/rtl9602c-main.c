@@ -1461,6 +1461,13 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	rtl9602c_w(p, RTL9602C_METER_EXCEEDED, GENMASK(RTL9602C_METER_COUNT - 1, 0));
 
 	/*
+	 * The ACL, the classifier, the priority maps, the policer, the
+	 * scheduler and the shaper as a full chip reset leaves them, before
+	 * the driver writes classifier entries of its own.
+	 */
+	rtl9602c_filter_qos_reset(p);
+
+	/*
 	 * User field selectors 0 and 1 cut the L4 source and destination
 	 * ports out of the IP payload, for ACL rules that match on a port:
 	 * octets 0-1 and 2-3 of a UDP or TCP header (RFC 768,

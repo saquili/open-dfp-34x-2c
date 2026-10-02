@@ -258,12 +258,11 @@ Interfaces to user space
   ``frame_capture``. The *devlink* page lists the parameters.
 - Four debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``cf`` and ``qos``
   (mode 0400), ``qdepth`` and ``hsd`` (mode 0600, because a write changes the
-  hardware). ``qos`` shows, raw, the words that a warm reboot leaves as the
-  previous kernel wrote them: per port the priority-to-queue word, the
-  scheduler's weighted-queue bits, the queue weights, the egress shaper and
-  the ingress policer; then the ACL's port enables and default permits, the
-  classifier's control word, the DSCP map, the port-priority word and the
-  priority-selection weights.
+  hardware). ``qos`` shows, raw, the words that setup returns to their reset
+  values: per port the priority-to-queue word, the scheduler's weighted-queue
+  bits, the queue weights, the egress shaper and the ingress policer; then the
+  ACL's port enables and default permits, the classifier's control word, the
+  DSCP map, the port-priority word and the priority-selection weights.
 - The kernel log lines of these blocks. At setup ``rtl9602c-switch: classifier:
   128 entries usable of 256``; the loop lines ``rtl9602c-switch: port N: loop
   detected, closing through port M`` and ``rtl9602c-switch: port N: loop
@@ -312,8 +311,8 @@ Two properties hold for every block on this page. The blocks that judge frames
 see only the frames that enter a port, so a frame that the CPU sends is outside
 their reach. And the switch keeps the state of every block across a warm reboot
 and a driver reload, so a block holds what the previous kernel or driver left in
-it until something writes it. Setup resets some of the blocks and leaves the
-others (see "Setup for these blocks" and "Known limitations").
+it until something writes it. Setup writes each block that acts on a frame as a
+full chip reset leaves it (see "Setup for these blocks").
 
 .. list-table::
    :header-rows: 1
@@ -341,16 +340,30 @@ others (see "Setup for these blocks" and "Known limitations").
        dropping, across ``rmmod`` and ``insmod``; the per-queue page high-water
        marks of ``qdepth`` survived a warm reboot.
    * - Setup resets the malformed-frame checks, storm control and the meters,
-       loop detection and the header capture, but not the ACL (its rules,
-       templates, port enables and default permits), the classifier table, the
-       priority weights and maps, the ingress policer, or the egress scheduler
-       and shaper. After a warm reboot or a driver reload those keep what was
-       programmed before the driver started, while its bookkeeping starts
-       empty.
+       loop detection and the header capture, and, with
+       ``rtl9602c_filter_qos_reset()``, the ACL, the classifier, the priority
+       maps, the ingress policer and the egress scheduler and shaper, to what
+       a full chip reset leaves: every ACL rule retired with its action
+       classes at ``RTL9602C_ACL_ACT_EN_DEFAULT``, ACL lookup and the default
+       permits off on every port; every classifier entry retired and the
+       verdict for unmatched frames (``RTL9602C_CLS_CTRL`` bits 1:0) at 0;
+       per port the reset's priority-to-queue word (port 0 ``0x00000000``,
+       port 1 ``0x00249000``, port 2 ``0x006d2240``, port 3 ``0x00fac688``),
+       every queue strict at weight 1, the shaper and the policer at their
+       highest rate; the DSCP map, the port-priority word and the
+       priority-selection weights at 0. The ACL templates are left: no rule
+       names one until the driver writes it again.
      - M
-     - After a warm reboot, port 0's ``RTL9602C_QOS_PRIO_TO_QUEUE`` read
-       ``0x00248000``, the value that an ets configured before the reboot had
-       left.
+     - The ``qos`` view read these values after a reset by the watchdog, which
+       is a full chip reset, on a kernel that writes none of them; ``cf`` then
+       listed all 256 entries, the 255 that the driver had not written holding
+       arbitrary words with the valid bit clear. After a warm reboot from a
+       kernel with a tbf and an ets on ``sfp``, a policer on ``pon``, an ACL
+       rule, a VLAN translation and DCB maps in force, ``qos`` read the same
+       values and ``cf`` listed only the entry that the driver wrote after the reboot.
+       Before the reset was added, port 0's ``RTL9602C_QOS_PRIO_TO_QUEUE`` read
+       ``0x00248000`` after a warm reboot, the value that an ets configured
+       before the reboot had left.
 
 The ACL
 =======
@@ -769,20 +782,23 @@ Entries and rules
    * - ``RTL9602C_CLS_CTRL`` bits 1:0 are one field that decides what happens to
        a frame that matches no entry: the value 2 drops it (forwarding reason
        239), in whichever direction has no matching entry; 0, 1 and 3 let it
-       through. Bit 2 changes nothing observed. The driver never writes bits
-       2:0, and the ``cf`` view prints bits 1:0.
+       through. Bit 2 changes nothing observed. Setup writes bits 1:0 to 0 and
+       the driver writes them nowhere else; it never writes bit 2. The ``cf``
+       view prints bits 1:0.
      - M
      - One upstream stream entry installed and the eight values of bits 2:0
        swept under traffic both ways through the PON: the values 2 and 6
        discarded every downstream frame at the PON port (reason 239 in the frame
        capture) and the others passed them; upstream frames passed under all
        eight.
-   * - The value in ``RTL9602C_CLS_CTRL`` bits 1:0 after power-on lets unmatched
-       frames through.
-     - I
-     - The driver depends on it: it never writes the field and installs no
-       downstream entries of its own. Reading ``cf`` straight after a cold
-       power-on, or a routing test from a cold start, would confirm it.
+   * - A full chip reset leaves ``RTL9602C_CLS_CTRL`` bits 1:0 at 0, which lets
+       unmatched frames through, and setup writes 0 there too. The driver
+       installs no downstream entries of its own, so it depends on the value
+       0, not on what power-on or an earlier kernel left.
+     - M
+     - ``cf`` read ``upstream permit 0`` after a reset by the watchdog and
+       after a warm reboot; the sweep in the row above passed frames both ways
+       with the value 0.
    * - Rule word 0: ``RTL9602C_CLS_RULE_UNI`` (bits 2:0) is the port that an
        upstream frame entered by.
      - T
@@ -2217,8 +2233,7 @@ Setup for these blocks
 ``rtl9602c_setup()`` writes these blocks in the order below; the whole of setup
 is on the *main* page ("Setup, in order"), which names each of these steps. A
 warm reboot or a reload leaves the switch as it was, so each step writes the
-state that the driver depends on; the blocks that no step writes are those of
-"Reach and state".
+state that the driver depends on.
 
 1. Unmask the meter and ACL sources of the switch interrupt with the link
    source (``RTL9602C_IRQ_SRC_METER`` and ``RTL9602C_IRQ_SRC_ACL``, in the
@@ -2237,19 +2252,26 @@ state that the driver depends on; the blocks that no step writes are those of
    bits of ``RTL9602C_METER_EXCEEDED``. Purpose: no limit or latched exceed the
    chip held before the driver started survives; a latch left from before would
    read as a policed drop that never happened. (M)
-6. Point field selectors 0 and 1 at the L4 source and destination ports.
+6. Write the ACL, the classifier, the priority maps, the policer, the scheduler
+   and the shaper as a full chip reset leaves them
+   (``rtl9602c_filter_qos_reset()``, with the values of "Reach and state"):
+   every ACL rule and classifier entry retired, ACL lookup and its default
+   permits off, unmatched frames let through, and no limit on any port.
+   Purpose: no rule, entry, map or limit that an earlier kernel wrote stays in
+   force with no record of it in the driver. (M)
+7. Point field selectors 0 and 1 at the L4 source and destination ports.
    Purpose: ACL rules can match a port. (M)
-7. Set ``RTL9602C_RSVDMC_CTRL_STORM_EXEMPT`` on the five control-protocol
+8. Set ``RTL9602C_RSVDMC_CTRL_STORM_EXEMPT`` on the five control-protocol
    addresses, by read-modify-write. Purpose: a flood limit does not police them.
    (M)
-8. Switch loop detection off and clear its latches. Purpose: a loaded driver
+9. Switch loop detection off and clear its latches. Purpose: a loaded driver
    must not start sending probes by itself. (T)
-9. Arm the frame capture in mode none, all four ports both ways, reason 0.
-   Purpose: no capture predates the driver. (M)
-10. Register the devlink parameters and create the ``frame_capture`` region. A
+10. Arm the frame capture in mode none, all four ports both ways, reason 0.
+    Purpose: no capture predates the driver. (M)
+11. Register the devlink parameters and create the ``frame_capture`` region. A
     failure is logged (``devlink parameters unavailable``, ``no devlink
     region``) and setup carries on. (M)
-11. Clear the per-port stream entries and refresh the bridge state, which
+12. Clear the per-port stream entries and refresh the bridge state, which
     rebuilds the stream entries; with no port bridged yet it installs none.
     Purpose: the entries follow the bridge (see "The classifier"). (T)
 
@@ -2258,10 +2280,12 @@ meter is logged and counted in ``/proc/interrupts``. Step 2 by the scheduling
 checks, whose two classes differ only in DSCP. Step 3 by the boot log line. Step
 4 by a check enabled before a reload reading off after it, and step 5 by the
 classes, meters and latches read after a reload and after a full chip reset.
-Step 6 by the port matches that drop their traffic, and step 7 by the frame
-capture in drop mode. Step 8 by the board booting with the block off, step 9 by
-the latch register read after a reset and armed in mode none, and step 10 by the
-parameters and the region being there again after a reload. Step 11 by bridged
+Step 6 by ``qos`` and ``cf`` after a warm reboot from a kernel that had left
+rules, entries, maps and limits in force (see "Reach and state"). Step 7 by the
+port matches that drop their traffic, and step 8 by the frame capture in drop
+mode. Step 9 by the board booting with the block off, step 10 by the latch
+register read after a reset and armed in mode none, and step 11 by the
+parameters and the region being there again after a reload. Step 12 by bridged
 upstream traffic and a routing test, which find the entries in ``cf``.
 
 Measured, not driven
@@ -2312,13 +2336,6 @@ on them. They were measured with register writes made outside the driver.
 Known limitations
 =================
 
-- After a warm reboot or a driver reload, the ACL (its rules, templates, port
-  enables and default permits), the classifier table, the priority weights and
-  maps, the ingress policer, and the egress scheduler and shaper keep what the
-  earlier run programmed, while the driver's own bookkeeping of ``tc`` rules and
-  qdiscs starts empty. A rule, an entry or a limit left that way stays in force
-  until something writes it again; ``tc`` does not list it and the driver has no
-  record of it. A full chip reset returns these blocks to their reset values.
 - A flower rule whose destination address is all ones or the group bit alone, or
   whose EtherType is exactly ARP with no VLAN match, is taken for a
   storm-control rule, and the driver looks at nothing else in it. Its other
@@ -2392,10 +2409,6 @@ Assumptions the driver depends on
    * - The entries from ``RTL9602C_CLS_CTRL_LAYOUT1_START`` up use another rule
        layout, and the driver's depth limit is right ("Entries and rules").
      - A frame test of an entry above the boundary.
-   * - The value of ``RTL9602C_CLS_CTRL`` bits 1:0 after power-on lets unmatched
-       frames through ("Entries and rules").
-     - Reading ``cf`` straight after a cold power-on, or a routing test from a
-       cold start.
    * - The rule's ingress-port bit works for ports 1 to 3 the way it does for
        port 0 ("Rules, templates and lookup"). Rules on ``pon`` rest on it.
      - A drop rule on ``pon`` with frames arriving through the PON.

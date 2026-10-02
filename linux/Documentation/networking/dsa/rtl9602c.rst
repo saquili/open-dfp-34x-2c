@@ -1706,20 +1706,24 @@ A step that belongs to another page is named and handed over.
 10. Switch storm control off, free the meters and clear their latches
     (*acl-qos*). Purpose: a latch left from before would read as a policed drop
     that never happened. (T)
-11. Write the two L4-port field selectors (*acl-qos*). (T)
-12. Set the reserved-address exemptions from storm control (*acl-qos*). (T)
-13. Switch loop detection off and clear its latches (*acl-qos*). Purpose: a
+11. Write the ACL, the classifier, the priority maps, the policer, the
+    scheduler and the shaper as a full chip reset leaves them (*acl-qos*).
+    Purpose: no rule, entry or limit that an earlier kernel wrote stays in
+    force with no record of it in the driver. (M)
+12. Write the two L4-port field selectors (*acl-qos*). (T)
+13. Set the reserved-address exemptions from storm control (*acl-qos*). (T)
+14. Switch loop detection off and clear its latches (*acl-qos*). Purpose: a
     loaded driver must not start sending probes onto a network by itself. (T)
-14. Arm the header capture in mode none (*acl-qos*). Purpose: no capture
+15. Arm the header capture in mode none (*acl-qos*). Purpose: no capture
     predates the driver. (T)
-15. Register the devlink parameters and the region (*devlink*). A failure is
+16. Register the devlink parameters and the region (*devlink*). A failure is
     logged and the switch carries on. (T)
-16. Set standalone forwarding: each port's flood request is set to what reset
+17. Set standalone forwarding: each port's flood request is set to what reset
     leaves (unknown unicast, unknown multicast and broadcast flooding), the GEM
     bridge state is cleared, and the bridge refresh writes isolation, flooding
     and learning from that state (*bridging*, *PON*). (T)
-17. Bring up the L3/NAT engine and register its notifiers (*l3-nat*). (T)
-18. The GPON report (*PON*), the debugfs views, the I2C master and the optics
+18. Bring up the L3/NAT engine and register its notifiers (*l3-nat*). (T)
+19. The GPON report (*PON*), the debugfs views, the I2C master and the optics
     hwmon device (*PON*), the PHC (*ptp*), the OMCI channel and the GEM data
     path (*PON*). A failure in any of these is logged and setup still succeeds.
     (T)
@@ -1728,11 +1732,12 @@ The steps are checked as follows. Step 1 by the SerDes link to the host coming
 up. Steps 2 and 3 by bridged traffic passing both ways, sourced from the host.
 Steps 4 and 5 by VLAN filtering, FDB learning and ageing working, and by the
 board booting to a shell. Steps 6 to 8 by the board booting to a shell and the
-SerDes link recovering after host-side link bounces. Steps 9 to 14 by the ACL
-hit counters, the policer and the storm-control rates matching their settings,
-and by the board booting to a shell. Steps 15 to 17 by bridged traffic passing
+SerDes link recovering after host-side link bounces. Steps 9, 10 and 12 to 15
+by the ACL hit counters, the policer and the storm-control rates matching their
+settings, and by the board booting to a shell; step 11 by the ``qos`` and ``cf``
+views after a warm reboot (*acl-qos*). Steps 16 to 18 by bridged traffic passing
 both ways, VLAN filtering and FDB learning working, and a routing and NAT test
-that sees a translated source address on the wire. Step 18 by the board
+that sees a translated source address on the wire. Step 19 by the board
 booting to a shell, the PTP hardware clock reading and steering, OMCI passing
 both ways over ``/dev/pon0omci0`` and the optics diagnostics reading.
 

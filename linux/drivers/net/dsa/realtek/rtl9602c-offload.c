@@ -822,6 +822,76 @@ static void rtl9602c_egress_shaper(struct rtl9602c_priv *p, int port, u32 rate)
 }
 
 /*
+ * The priority-to-queue word of each port as a full chip reset leaves it,
+ * read in the qos view after a reset by the watchdog: port 0's sends every
+ * priority to queue 0, port 1's priorities 4 to 7 to queue 1, the PON port's
+ * priorities 2n and 2n + 1 to queue n, and the CPU port's priority n to
+ * queue n.
+ */
+static const u32 rtl9602c_prio_queue_reset[RTL9602C_NUM_PORTS] = {
+	0x00000000, 0x00249000, 0x006d2240, 0x00fac688,
+};
+
+/**
+ * rtl9602c_filter_qos_reset() - the ACL, the classifier and QoS as at reset
+ * @p: the switch
+ *
+ * A warm reboot and a driver reload leave these blocks as the previous kernel
+ * wrote them while this driver's bookkeeping starts empty, so setup writes
+ * them as a full chip reset leaves them, which the qos view showed after a
+ * reset by the watchdog: every ACL rule retired with its action classes back
+ * at their default, ACL lookup off on every port with no default permit;
+ * every classifier entry retired and the verdict for a frame no entry
+ * matches back to letting it through; and per port the priority-to-queue
+ * word of the reset, every queue strict at weight 1, and the egress shaper
+ * and the ingress policer at their highest rate. The DSCP map, the
+ * port-priority word and the priority-selection weights read 0 after the
+ * reset and are written 0.
+ *
+ * Context: setup, before the driver writes classifier entries of its own.
+ */
+void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p)
+{
+	u32 zero[RTL9602C_ACL_RULE_WORDS] = {};
+	unsigned int i, port, q;
+
+	for (i = 0; i < RTL9602C_ACL_ENTRIES; i++) {
+		rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
+				     i + RTL9602C_ACL_RULE_ONES_PLANE, zero,
+				     RTL9602C_ACL_RULE_WORDS);
+		rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * i,
+			   RTL9602C_ACL_ACT_EN_DEFAULT);
+	}
+	rtl9602c_w(p, RTL9602C_ACL_PORT_EN, 0);
+	rtl9602c_w(p, RTL9602C_ACL_DEFAULT_PERMIT, 0);
+
+	for (i = 0; i < RTL9602C_CLS_ENTRIES; i++)
+		rtl9602c_cf_invalidate(p, i);
+	rtl9602c_rmw(p, RTL9602C_CLS_CTRL, GENMASK(1, 0), 0);
+
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
+		rtl9602c_w(p, RTL9602C_QOS_PRIO_TO_QUEUE + 4 * port,
+			   rtl9602c_prio_queue_reset[port]);
+		rtl9602c_w(p, RTL9602C_SCHED_WFQ_QUEUES + 4 * port, 0);
+		for (q = 0; q < RTL9602C_QUEUES; q++)
+			rtl9602c_wfq_weight(p, port, q, 1);
+		rtl9602c_egress_shaper(p, port, RTL9602C_SHAPE_PORT_CFG_RATE_MAX);
+		rtl9602c_rmw(p, RTL9602C_POLICE_PORT(port),
+			     RTL9602C_POLICE_PORT_RATE,
+			     FIELD_PREP(RTL9602C_POLICE_PORT_RATE,
+					RTL9602C_POLICE_PORT_RATE_MAX));
+	}
+
+	for (i = 0; i < DIV_ROUND_UP(RTL9602C_QOS_DSCP_COUNT,
+				     RTL9602C_QOS_MAP_PER_WORD); i++)
+		rtl9602c_w(p, RTL9602C_QOS_DSCP_TO_PRIO + 4 * i, 0);
+	rtl9602c_w(p, RTL9602C_QOS_PORT_PRIO, 0);
+	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT, 0);
+	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT + 4, 0);
+	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT_SEL, 0);
+}
+
+/*
  * Each port follows one tbf and one ets, by handle. tc replaces a qdisc under a
  * new handle by creating the new one before destroying the old, so a request
  * naming any other handle than the followed one must change nothing.
@@ -3946,13 +4016,13 @@ static void rtl9602c_l34_flows_release_port(struct rtl9602c_priv *p, int port)
 }
 
 /*
- * qos: the words of the blocks that a warm reboot leaves as the previous
- * kernel wrote them, raw. Per port: the priority-to-queue word, the
- * scheduler's weighted-queue bits, the word that holds queue 0's weight (two
- * ports share it), the three that hold the weights of queues 1 to 7, the
- * egress shaper and the ingress policer. Then the ACL's port enables and
- * default permits, the classifier's control word, the DSCP-to-priority map,
- * the port-priority word and the priority-selection weights.
+ * qos: the words of the blocks that setup returns to their reset values, raw.
+ * Per port: the priority-to-queue word, the scheduler's weighted-queue bits,
+ * the word that holds queue 0's weight (two ports share it), the three that
+ * hold the weights of queues 1 to 7, the egress shaper and the ingress
+ * policer. Then the ACL's port enables and default permits, the classifier's
+ * control word, the DSCP-to-priority map, the port-priority word and the
+ * priority-selection weights.
  */
 static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 {
