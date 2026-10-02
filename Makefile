@@ -52,12 +52,14 @@ image:
 	$(MAKE) image-check
 
 # What the build left, judged: the size of each image against its partition, the
-# instruction-set gate over every executable of the root filesystem, and the
-# digests of the images.
+# kernel's final configuration against the options the product needs and the
+# ones the flash profile drops, the instruction-set gate over every executable of
+# the root filesystem, and the digests of the images.
 image-check:
 	tools/image-budget/image-budget --images "$(IMAGE_OUT)/images" --enforce $(IMAGE_ENFORCE)
 	$(if $(filter-out $(IMAGE_ENFORCE),k0 r0),tools/image-budget/image-budget \
 	  --images "$(IMAGE_OUT)/images" $(filter-out $(IMAGE_ENFORCE),k0 r0))
+	br2-external/tests/kernel/check-config "$(IMAGE_OUT)/build/linux-custom/.config"
 	tools/isa-gate/isa-gate \
 	  --objdump "$(IMAGE_OUT)/host/bin/mips-buildroot-linux-uclibc-objdump" "$(IMAGE_OUT)/target"
 	cd "$(IMAGE_OUT)/images" && sha256sum -c SHA256SUMS
