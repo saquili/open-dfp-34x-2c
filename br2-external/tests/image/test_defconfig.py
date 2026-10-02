@@ -85,7 +85,9 @@ class Kernel(unittest.TestCase):
         path = os.path.join(EXTERNAL, "board", "dfp-34x-2c3", "kernel-flash.fragment")
         with open(path, encoding="utf-8") as handle:
             lines = handle.read().splitlines()
-        self.assertTrue(lines[0].startswith("# SPDX-License-Identifier: GPL-2.0-only"))
+        # The tag is spelled in two pieces: the licensing check reads a tag in any
+        # text file, this one included, as the file's own.
+        self.assertTrue(lines[0].startswith("# SPDX-License-" "Identifier: GPL-2.0-only"))
         unset = re.compile(r"^# CONFIG_[A-Z0-9_]+ is not set$")
         options = [line for line in lines if unset.match(line)]
         self.assertGreaterEqual(len(options), 5)
