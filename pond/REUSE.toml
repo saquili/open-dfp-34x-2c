@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+version = 1
+
+[[annotations]]
+path = "tests/fixtures/**"
+SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
+SPDX-License-Identifier = "GPL-2.0-only"
