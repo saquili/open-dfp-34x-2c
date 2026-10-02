@@ -8,5 +8,6 @@ config BR2_PACKAGE_ONU_UTILS
 	help
 	  The small programs of the ONU, from onu-utils/ in this
 	  repository: ponid, which prints the identity of the unit
-	  from its factory configuration, and pon, which shows the
-	  PON devices and their ONU as the kernel reports them.
+	  from its factory configuration; pon, which shows the PON
+	  devices and their ONU as the kernel reports them; and
+	  onu-mode, which puts the stick in bridge or router mode.

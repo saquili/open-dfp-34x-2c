@@ -17,6 +17,8 @@ endef
 define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/ponid $(TARGET_DIR)/usr/sbin/ponid
 	$(INSTALL) -D -m 0755 $(@D)/build/pon $(TARGET_DIR)/usr/sbin/pon
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mode $(TARGET_DIR)/usr/sbin/onu-mode
+	$(INSTALL) -D -m 0755 $(@D)/scripts/dhcp-wan $(TARGET_DIR)/usr/share/onu/dhcp-wan
 endef
 
 $(eval $(generic-package))

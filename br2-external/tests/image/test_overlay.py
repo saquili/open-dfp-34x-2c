@@ -31,7 +31,7 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # Programs of the dropbear package and of this tree's packages; every other
 # command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond", "nft"}
+PACKAGES = {"omcid", "ponid", "devlink", "pond", "nft", "onu-mode"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 
@@ -136,7 +136,7 @@ class PacketFilter(unittest.TestCase):
     def test_it_is_loaded_before_any_server_listens(self):
         text = read(RCS)
         load = text.index("nft -f /etc/nftables.conf")
-        for server in ("dropbear -s ", "omcid >", "pond >"):
+        for server in ("dropbear -s ", "onu-mode start", "pond >"):
             self.assertLess(load, text.index(server), server)
 
     def test_it_starts_from_nothing_and_drops_what_it_does_not_accept(self):
