@@ -15,6 +15,9 @@ lives under ``linux/Documentation/`` in mainline layout.)
   over the serial console, bank discipline, the boot contract, and optical
   safety. Filled by **WI-20** (with the board readme and the boot contract from
   **WI-15**).
+* ``testing/`` -- the records of the device tests run on the stick: a page per
+  run, with the table of every case, its result and its measured values. In
+  place now.
 
 The handbook is written in reStructuredText and is meant to build with Sphinx,
 alongside the kernel documentation, through ``make docs``.
