@@ -5,8 +5,18 @@
 ADR 0010: Target executables are linked statically
 ======================================================
 
-:Status: Proposed
+:Status: Accepted
 :Date: 2026-10-02
+:Decided-by: the owner, 2026-10-02
+
+.. note::
+
+   In plain words: every program on the stick is one self-contained file that
+   carries the parts of the C library it uses, instead of sharing a library that
+   lives in the image. Each program is a little bigger, and the instruction-set
+   gate can check everything that is shipped, with no list of exceptions. The
+   owner accepted this on 2026-10-02 and left the choice to the recommendation,
+   which is this decision.
 
 Context
 =======

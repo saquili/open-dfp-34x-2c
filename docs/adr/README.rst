@@ -47,4 +47,4 @@ record.
      - Accepted
    * - 0010
      - Target executables are linked statically
-     - Proposed
+     - Accepted

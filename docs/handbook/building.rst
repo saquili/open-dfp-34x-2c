@@ -12,7 +12,7 @@ toolchain is described in ``toolchain.rst``, the flash layout in
 ``flashing.rst``; this page uses all three. The build system and its external
 tree are described in ``buildroot/README.rst`` and ``br2-external/README.rst``,
 and the decision to link every program statically in
-``docs/adr/0010-target-executables-are-linked-statically.rst`` (proposed).
+``docs/adr/0010-target-executables-are-linked-statically.rst``.
 
 What the build makes
 ====================
