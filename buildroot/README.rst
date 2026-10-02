@@ -20,8 +20,9 @@ What is here
 ``VERSION``
     The pin: name, version, URL, size and SHA-256 of the release tarball, and
     the fingerprint of the key that signs it. The release is Buildroot
-    2025.02.18, the last point release of its long-term-support series. Moving
-    to another release means editing this file and nothing else.
+    2025.02.18, a point release of its long-term-support series 2025.02. Moving
+    to another release means editing this file, and the patch if it does not
+    apply to the new one.
 ``fetch``
     The script that makes the pinned release ready to build (below).
 ``patches/``
@@ -35,9 +36,9 @@ Running it
 
 ::
 
-    buildroot/fetch
+    make buildroot
 
-does the following:
+runs ``buildroot/fetch``, which does the following:
 
 #. looks for the tarball named in the pin's URL in the download directory
    (``$BUILDROOT_DL``, else ``build/dl``) and downloads it from the URL when it
@@ -58,8 +59,10 @@ A run that finds a tree and a stamp equal to what the pin and the patches now
 say changes nothing and does not read the tarball or use the network. A changed
 pin, or a patch that is changed, added or removed, makes the next run redo the
 work from the tarball. The only thing printed on standard output is the path of
-the tree. ``-q`` prints errors only; ``--help`` lists the options that name
-another pin, patch directory, download directory or build directory.
+the tree. ``make buildroot ARGS=-q`` prints errors only, and
+``buildroot/fetch --help`` lists the options that name another pin, patch
+directory, download directory or build directory; ``BUILDROOT_DL=<directory>``
+names the directory that holds or receives the tarball.
 
 It needs Python 3.11 or later (standard library only) and ``patch``. On
 Debian::
@@ -126,4 +129,8 @@ apply is named and leaves nothing, that the patches go on in name order, that a
 second run is a no-op that needs neither tarball nor network, that a changed,
 added or removed patch or a changed pin redoes the work, that a path that
 leaves the tree is refused, and that a malformed pin is an error. None uses
-the network.
+the network. They run in ``make check`` and in the ``buildroot-fetch`` job of
+``.github/workflows/gates.yml``, which then runs ``make buildroot`` on the real
+release: it fetches the release from its URL, checks it against the pin and
+applies the carried patch, so that a pin or a patch that changed without the
+other fails there.
