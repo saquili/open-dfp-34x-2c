@@ -83,7 +83,7 @@ class Root(unittest.TestCase):
         with open(BOARD_DEFCONFIG, encoding="utf-8") as handle:
             text = handle.read()
         paths = re.findall(r'\$\(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH\)(/[^" ]+)', text)
-        self.assertGreaterEqual(len(paths), 3)
+        self.assertGreaterEqual(len(paths), 4)
         for path in paths:
             self.assertTrue(os.path.exists(EXTERNAL + path), path)
 
@@ -98,10 +98,12 @@ class Root(unittest.TestCase):
         packages = sorted(k for k, v in board.items()
                           if k.startswith("BR2_PACKAGE_") and v == "y")
         self.assertEqual(packages, ["BR2_PACKAGE_DROPBEAR", "BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS",
-                                    "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12"])
+                                    "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
+                                    "BR2_PACKAGE_HOST_SQUASHFS"])
 
-    def test_the_overlay_is_set(self):
+    def test_the_post_image_script_and_the_overlay_are_set(self):
         board = settings(BOARD_DEFCONFIG)
+        self.assertTrue(board["BR2_ROOTFS_POST_IMAGE_SCRIPT"].endswith('/post-image.sh"'))
         self.assertIn("/board/dfp-34x-2c3/overlay", board["BR2_ROOTFS_OVERLAY"])
 
     def test_a_bench_can_lay_a_second_overlay_over_the_first(self):

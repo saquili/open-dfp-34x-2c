@@ -1,0 +1,79 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# post-image.sh: the two flash images of the stick.
+#
+# Usage: post-image.sh IMAGES_DIR
+#
+# Buildroot runs it last, with the images directory as its argument and these
+# variables in the environment: TARGET_DIR (the root filesystem as it will be
+# packed), HOST_DIR (the tools built for the build machine) and, because the
+# defconfig asks for a reproducible build, SOURCE_DATE_EPOCH. It leaves in the
+# images directory:
+#
+#   k0.uImage    the kernel image that the boot loader loads for bank 0: the
+#                kernel's uImage, unchanged
+#   r0.squashfs  the root filesystem for bank 0, a SquashFS image
+#   SHA256SUMS   the SHA-256 digests of those two files, in the form that
+#                "sha256sum -c" reads
+#
+# The root filesystem image is made here, and not by the build system's own
+# SquashFS target, so that its properties are written down in one place. The
+# kernel reads gzip and lz4; gzip is the smaller. Every file is owned by root
+# and carries the build's time, so that the same tree gives the same image
+# whoever builds it and when; no extended attribute of the build machine's file
+# system gets in; nothing is added for NFS export or to pad the image to a
+# block; and the file with which the build system marks its target directory as
+# not being a root filesystem is left out. docs/handbook/building.rst has the
+# sizes and what to do with the images.
+#
+# MKSQUASHFS names another mksquashfs, which the tests use.
+
+set -eu
+
+die() {
+	echo "post-image: $*" >&2
+	exit 1
+}
+
+[ $# -ge 1 ] || die "usage: post-image.sh IMAGES_DIR"
+images=$1
+target=${TARGET_DIR:?"TARGET_DIR is not set; Buildroot sets it"}
+epoch=${SOURCE_DATE_EPOCH:?"SOURCE_DATE_EPOCH is not set; the defconfig has to ask for a reproducible build"}
+mksquashfs=${MKSQUASHFS:-${HOST_DIR:?"HOST_DIR is not set; Buildroot sets it"}/bin/mksquashfs}
+
+[ -d "$images" ] || die "$images is not a directory"
+[ -d "$target" ] || die "$target is not a directory"
+[ -f "$images/uImage" ] || die "no kernel image $images/uImage"
+[ -x "$mksquashfs" ] || die "no mksquashfs at $mksquashfs"
+
+# Each image is made under a name of its own and moved into place, so that an
+# error never leaves half an image under the name that is flashed.
+rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part"
+trap 'rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part" "$images/SHA256SUMS.part"' EXIT
+
+cp "$images/uImage" "$images/k0.uImage.part"
+mv "$images/k0.uImage.part" "$images/k0.uImage"
+
+# mksquashfs refuses a time on its command line while SOURCE_DATE_EPOCH is set,
+# and with only the variable it keeps the time of a file that is older than
+# the epoch. The time is given on the command line, for every file alike.
+(
+	unset SOURCE_DATE_EPOCH
+	"$mksquashfs" "$target" "$images/r0.squashfs.part" \
+		-noappend -quiet -no-progress -reproducible \
+		-comp gzip -b 64K -nopad -no-xattrs -no-exports \
+		-all-root -root-mode 755 \
+		-all-time "$epoch" -mkfs-time "$epoch" \
+		-e THIS_IS_NOT_YOUR_ROOT_FILESYSTEM
+)
+mv "$images/r0.squashfs.part" "$images/r0.squashfs"
+
+(cd "$images" && sha256sum k0.uImage r0.squashfs) > "$images/SHA256SUMS.part"
+mv "$images/SHA256SUMS.part" "$images/SHA256SUMS"
+
+size() {
+	wc -c < "$1" | tr -d ' '
+}
+echo "post-image: $(size "$images/k0.uImage") bytes in k0.uImage, $(size "$images/r0.squashfs") bytes in r0.squashfs"

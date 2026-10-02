@@ -2,16 +2,17 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # The ODI DFP-34X-2C3: the kernel and the root filesystem, built with the
-# toolchain this file describes. The flash images are made from them by the
-# post-image script of the commit that follows.
+# toolchain this file describes, as the two flash images k0.uImage and
+# r0.squashfs. Running make in the top directory of the repository configures
+# and builds it; docs/handbook/building.rst says how and what it makes.
 #
-# Every executable in the root filesystem is linked statically and the root
-# filesystem holds no shared object. The shared libraries of this toolchain
-# contain three functions with instructions that the core cannot run
-# (br2-external/README.rst, "The instruction-set gate over the toolchain's own
-# objects"), and no option leaves them out; a static program takes only the
-# objects it refers to, and the instruction-set gate passes the whole target
-# tree. docs/adr/0010 records the decision.
+# Every executable in the image is linked statically and the image holds no
+# shared object. The shared libraries of this toolchain contain three
+# functions with instructions that the core cannot run (br2-external/README.rst,
+# "The instruction-set gate over the toolchain's own objects"), and no option
+# leaves them out; a static program takes only the objects it refers to, and
+# the instruction-set gate passes the whole target tree. docs/adr/0010 records
+# the decision.
 
 # MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
 # variant comes from the patch in buildroot/patches.
@@ -73,5 +74,9 @@ BR2_PACKAGE_DROPBEAR=y
 # BR2_PACKAGE_DROPBEAR_CLIENT is not set
 BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
 
-# The build system makes no root filesystem image of its own.
+# The images. The post-image script makes the root filesystem image and names
+# both, so the build system makes no root filesystem image of its own; the tool
+# it uses, mksquashfs, is built for the build machine.
 # BR2_TARGET_ROOTFS_TAR is not set
+BR2_PACKAGE_HOST_SQUASHFS=y
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/post-image.sh"
