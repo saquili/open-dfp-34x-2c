@@ -32,8 +32,13 @@ $(BUILD)/pppoed: $(OBJS)
 $(BUILD)/test_md5: $(BUILD)/tests/test_md5.o $(BUILD)/src/md5.o $(BUILD)/tests/log.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-check: $(BUILD)/test_md5
+$(BUILD)/test_ncp: $(BUILD)/tests/test_ncp.o $(addprefix $(BUILD)/src/,session.o ppp.o disc.o md5.o) \
+		   $(BUILD)/tests/log.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+check: $(BUILD)/test_md5 $(BUILD)/test_ncp
 	$(BUILD)/test_md5
+	$(BUILD)/test_ncp
 
 clean:
 	rm -rf $(BUILD)

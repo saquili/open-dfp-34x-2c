@@ -3,7 +3,8 @@
 
 /*
  * pppoed: a PPPoE client (RFC 2516) with the PPP of RFC 1661 on top: LCP,
- * PAP or CHAP-MD5 (RFC 1334, RFC 1994) and IPCP (RFC 1332). The session
+ * PAP or CHAP-MD5 (RFC 1334, RFC 1994), IPCP (RFC 1332) and IPv6CP (RFC
+ * 5072). The session
  * itself runs in the kernel's PPPoE and PPP drivers; this program runs the
  * discovery and the negotiation, and keeps the link.
  */
@@ -152,6 +153,10 @@ int pppoe_terminate(int fd, const struct pppoe_session *s);
 #define IPCP_OPT_DNS1 129
 #define IPCP_OPT_DNS2 131
 
+/* The IPv6CP option of RFC 5072: the interface identifier, of 8 bytes. */
+#define IPV6CP_OPT_IFACE_ID 1
+#define PPP_IID_LEN 8
+
 /* The CHAP algorithm, and the codes of PAP and of CHAP. */
 #define CHAP_MD5 5
 
@@ -183,6 +188,10 @@ int pppoe_terminate(int fd, const struct pppoe_session *s);
  * @peer_ip: the peer's address
  * @dns1: the first name server, or 0
  * @dns2: the second
+ * @iid_local: our IPv6 interface identifier
+ * @iid_peer: the peer's
+ * @ipv4_up: IPCP is open
+ * @ipv6_up: IPv6CP is open
  * @peer_name: the peer's name
  */
 struct ppp_link {
@@ -197,6 +206,8 @@ struct ppp_link {
 	uint16_t auth;
 	uint8_t chap_alg;
 	uint32_t local_ip, peer_ip, dns1, dns2;
+	uint8_t iid_local[PPP_IID_LEN], iid_peer[PPP_IID_LEN];
+	bool ipv4_up, ipv6_up;
 	char peer_name[64];
 };
 
@@ -210,10 +221,17 @@ int ppp_send(struct ppp_link *l, uint16_t proto, const void *body, size_t len);
 int ppp_recv(struct ppp_link *l, uint16_t *proto, void *buf, size_t bufsz,
 	     int timeout_ms);
 
-/* LCP, then the authentication the peer asks for, then IPCP. */
-int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret);
+/*
+ * LCP, then the authentication the peer asks for, then IPCP and, with
+ * @want_ipv6, IPv6CP.
+ */
+int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
+		  bool want_ipv6);
 
-/* Put the negotiated addresses on the interface, and maybe a default route. */
+/*
+ * Put the negotiated addresses on the interface: the IPv4 address and maybe
+ * a default route, and the IPv6 link-local address.
+ */
 int ppp_ifconfig(struct ppp_link *l, bool defaultroute);
 
 /* Keep the link: answer echo requests until the peer ends it, or @seconds pass. */

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-/* The PPP negotiation: LCP, PAP or CHAP-MD5, IPCP (RFC 1661, 1334, 1994, 1332). */
+/*
+ * The PPP negotiation: LCP, PAP or CHAP-MD5, then IPCP and IPv6CP (RFC 1661,
+ * 1334, 1994, 1332, 5072).
+ */
 
 #include <errno.h>
 #include <fcntl.h>
@@ -235,21 +238,6 @@ static void ipcp_take_nak(struct ppp_link *l, const uint8_t *opts, size_t olen)
 		}
 		off += ol;
 	}
-}
-
-/* Whether the peer's Reject of our IPCP request names the name servers. */
-static bool ipcp_rejects_dns(const uint8_t *opts, size_t olen)
-{
-	for (size_t off = 0; off + 2 <= olen;) {
-		const uint8_t t = opts[off], ol = opts[off + 1];
-
-		if (ol < 2 || off + ol > olen)
-			break;
-		if (t == IPCP_OPT_DNS1 || t == IPCP_OPT_DNS2)
-			return true;
-		off += ol;
-	}
-	return false;
 }
 
 /* Open LCP: our request acknowledged, and the peer's. */
@@ -567,40 +555,279 @@ static int ipcp_answer_req(struct ppp_link *l, uint8_t id, const uint8_t *opts,
 	return cp_send(l, PPP_PROTO_IPCP, CP_CONF_ACK, id, opts, len);
 }
 
-/*
- * Open IPCP. The address and name servers are asked for as zero, and
- * the peer's Nak gives them. IPv6CP is not done, and is rejected.
- */
-static int ipcp_negotiate(struct ppp_link *l)
+static bool iid_is_zero(const uint8_t *iid)
 {
-	bool ours = false, theirs = false, want_dns = true;
-	unsigned int tries = 0;
-	uint8_t id = 0;
+	static const uint8_t zero[PPP_IID_LEN];
 
-	while (tries < MAX_TRIES) {
+	return !memcmp(iid, zero, PPP_IID_LEN);
+}
+
+/* A random interface identifier that is neither zero nor @other. */
+static void iid_draw(uint8_t *iid, const uint8_t *other)
+{
+	do {
+		const uint32_t hi = random_u32(), lo = random_u32();
+
+		for (unsigned int i = 0; i < 4; i++) {
+			iid[i] = (uint8_t)(hi >> (24 - 8 * i));
+			iid[4 + i] = (uint8_t)(lo >> (24 - 8 * i));
+		}
+	} while (iid_is_zero(iid) ||
+		 (other && !memcmp(iid, other, PPP_IID_LEN)));
+}
+
+/*
+ * Answer the peer's IPv6CP request (RFC 5072): take its interface
+ * identifier unless it is zero or ours, which is answered with a Nak that
+ * offers another; reject every other option.
+ *
+ * Return: as lcp_answer_req().
+ */
+static int ipv6cp_answer_req(struct ppp_link *l, uint8_t id,
+			     const uint8_t *opts, size_t len)
+{
+	uint8_t rej[PPP_CTRL_MAX], nak[PPP_CTRL_MAX];
+	size_t rejlen = 0, naklen = 0, off = 0;
+
+	while (off + 2 <= len) {
+		uint8_t type = opts[off];
+		uint8_t olen = opts[off + 1];
+		const uint8_t *val = opts + off + 2;
+
+		if (olen < 2 || off + olen > len)
+			return -EPROTO;
+
+		if (type == IPV6CP_OPT_IFACE_ID && olen == 2 + PPP_IID_LEN) {
+			if (iid_is_zero(val) ||
+			    !memcmp(val, l->iid_local, PPP_IID_LEN)) {
+				uint8_t offer[PPP_IID_LEN];
+
+				iid_draw(offer, l->iid_local);
+				naklen = opt_put(nak, naklen,
+						 IPV6CP_OPT_IFACE_ID, offer,
+						 sizeof(offer));
+			} else {
+				memcpy(l->iid_peer, val, PPP_IID_LEN);
+			}
+		} else {
+			PPPOED_DEBUG("rejecting IPv6CP option %u", type);
+			memcpy(rej + rejlen, opts + off, olen);
+			rejlen += olen;
+		}
+		off += olen;
+	}
+
+	if (rejlen)
+		return cp_send(l, PPP_PROTO_IPV6CP, CP_CONF_REJ, id, rej, rejlen) ?:
+			       1;
+	if (naklen)
+		return cp_send(l, PPP_PROTO_IPV6CP, CP_CONF_NAK, id, nak, naklen) ?:
+			       1;
+	return cp_send(l, PPP_PROTO_IPV6CP, CP_CONF_ACK, id, opts, len);
+}
+
+/*
+ * Take the peer's Nak of our IPv6CP request: the identifier it offers,
+ * unless that is zero or its own.
+ */
+static void ipv6cp_take_nak(struct ppp_link *l, const uint8_t *opts,
+			    size_t olen)
+{
+	for (size_t off = 0; off + 2 <= olen;) {
+		const uint8_t t = opts[off], ol = opts[off + 1];
+
+		if (ol < 2 || off + ol > olen)
+			break;
+		if (t == IPV6CP_OPT_IFACE_ID && ol == 2 + PPP_IID_LEN) {
+			const uint8_t *v = opts + off + 2;
+
+			if (iid_is_zero(v) ||
+			    !memcmp(v, l->iid_peer, PPP_IID_LEN))
+				iid_draw(l->iid_local, l->iid_peer);
+			else
+				memcpy(l->iid_local, v, PPP_IID_LEN);
+		}
+		off += ol;
+	}
+}
+
+/* Whether a Reject names an option of @type. */
+static bool rejects(const uint8_t *opts, size_t olen, uint8_t type,
+		    uint8_t type2)
+{
+	for (size_t off = 0; off + 2 <= olen;) {
+		const uint8_t t = opts[off], ol = opts[off + 1];
+
+		if (ol < 2 || off + ol > olen)
+			break;
+		if (t == type || t == type2)
+			return true;
+		off += ol;
+	}
+	return false;
+}
+
+/**
+ * struct ncp - The state of one network control protocol.
+ * @proto: IPCP or IPv6CP
+ * @name: its name, for the log
+ * @ours: the peer acknowledged our request
+ * @theirs: we acknowledged the peer's
+ * @dead: refused by the peer, given up, or not wanted
+ * @id: the identifier of our request
+ * @tries: how often our request went out without an answer
+ * @sent: when it last went out, in ms, or 0 to send it now
+ */
+struct ncp {
+	uint16_t proto;
+	const char *name;
+	bool ours, theirs, dead;
+	uint8_t id;
+	unsigned int tries;
+	long sent;
+};
+
+static bool ncp_open(const struct ncp *n)
+{
+	return n->ours && n->theirs;
+}
+
+static size_t ncp_request(struct ppp_link *l, const struct ncp *n,
+			  bool want_dns, bool want_iid, uint8_t *body)
+{
+	size_t len = 0;
+
+	if (n->proto == PPP_PROTO_IPV6CP) {
+		if (want_iid)
+			len = opt_put(body, len, IPV6CP_OPT_IFACE_ID,
+				      l->iid_local, PPP_IID_LEN);
+		return len;
+	}
+	len = opt_put32(body, len, IPCP_OPT_ADDRESS, ntohl(l->local_ip));
+	if (want_dns) {
+		len = opt_put32(body, len, IPCP_OPT_DNS1, ntohl(l->dns1));
+		len = opt_put32(body, len, IPCP_OPT_DNS2, ntohl(l->dns2));
+	}
+	return len;
+}
+
+/* Send the requests that are due; give up on one that went unanswered. */
+static void ncp_send_due(struct ppp_link *l, struct ncp *n, bool want_dns,
+			 bool want_iid)
+{
+	uint8_t body[PPP_CTRL_MAX];
+	const long now = pppoed_now_ms();
+	size_t len;
+
+	if (n->dead || n->ours || (n->sent && now - n->sent < RESTART_MS))
+		return;
+	if (n->tries == MAX_TRIES) {
+		PPPOED_WARN("%s: no answer in %u attempts", n->name, MAX_TRIES);
+		n->dead = true;
+		return;
+	}
+	if (!n->id)
+		n->id = next_id();
+	len = ncp_request(l, n, want_dns, want_iid, body);
+	cp_send(l, n->proto, CP_CONF_REQ, n->id, body, len);
+	PPPOED_DEBUG("%s configure-request %u sent, try %u", n->name, n->id,
+		     n->tries + 1);
+	n->tries++;
+	n->sent = now;
+}
+
+/* Our request was refused with a Nak or a Reject: send another at once. */
+static void ncp_again(struct ncp *n)
+{
+	n->id = next_id();
+	n->ours = false;
+	n->tries = 0;
+	n->sent = 0;
+}
+
+/* Answer an LCP packet that comes in the network phase. */
+static int ncp_lcp(struct ppp_link *l, const uint8_t *body, size_t n,
+		   struct ncp *v4, struct ncp *v6)
+{
+	if (body[0] == CP_ECHO_REQ) {
+		echo_reply(l, body[1]);
+	} else if (body[0] == CP_TERM_REQ) {
+		cp_send(l, PPP_PROTO_LCP, CP_TERM_ACK, body[1], NULL, 0);
+		PPPOED_ERR("the peer terminated the link");
+		return -ECONNRESET;
+	} else if (body[0] == CP_PROTO_REJ && n >= CP_HDR_LEN + 2) {
+		const uint16_t proto = pppoe_get16(body + CP_HDR_LEN);
+		struct ncp *dead = proto == v4->proto ? v4 :
+				   proto == v6->proto ? v6 :
+							NULL;
+
+		if (dead && !dead->dead) {
+			PPPOED_INFO("the peer does not do %s", dead->name);
+			dead->dead = true;
+		}
+	}
+	return 0;
+}
+
+/* Refuse a protocol this client does not do (RFC 1661, Protocol-Reject). */
+static void reject_protocol(struct ppp_link *l, uint16_t proto,
+			    const uint8_t *body, size_t n)
+{
+	uint8_t rej[PPP_CTRL_MAX];
+	const size_t len = n < sizeof(rej) - 2 ? n : sizeof(rej) - 2;
+
+	pppoe_put16(rej, proto);
+	memcpy(rej + 2, body, len);
+	cp_send(l, PPP_PROTO_LCP, CP_PROTO_REJ, next_id(), rej, 2 + len);
+	PPPOED_DEBUG("protocol %04x rejected", proto);
+}
+
+/*
+ * Open IPCP and, when @want_ipv6, IPv6CP, side by side. IPCP asks for its
+ * address and name servers as zero, and the peer's Nak gives them; IPv6CP
+ * offers a random interface identifier. Either may be refused by the peer;
+ * the link comes up when one of them is open and the other is open or
+ * dead. IPv6CP gets two restart periods more once IPCP is open.
+ */
+static int ncp_negotiate(struct ppp_link *l, bool want_ipv6)
+{
+	struct ncp v4 = { .proto = PPP_PROTO_IPCP, .name = "IPCP" };
+	struct ncp v6 = { .proto = PPP_PROTO_IPV6CP,
+			  .name = "IPv6CP",
+			  .dead = !want_ipv6 };
+	bool want_dns = true, want_iid = true;
+	long v4_open_at = 0;
+
+	if (want_ipv6)
+		iid_draw(l->iid_local, NULL);
+
+	for (;;) {
 		uint8_t body[PPP_CTRL_MAX];
-		size_t len = 0;
 		uint16_t proto;
+		struct ncp *ncp;
+		long now;
 		int n;
 
-		if (!ours) {
-			len = opt_put32(body, len, IPCP_OPT_ADDRESS,
-					ntohl(l->local_ip));
-			if (want_dns) {
-				len = opt_put32(body, len, IPCP_OPT_DNS1,
-						ntohl(l->dns1));
-				len = opt_put32(body, len, IPCP_OPT_DNS2,
-						ntohl(l->dns2));
-			}
-			if (!id)
-				id = next_id();
-			cp_send(l, PPP_PROTO_IPCP, CP_CONF_REQ, id, body, len);
-			PPPOED_DEBUG("IPCP configure-request %u sent, try %u",
-				     id, tries + 1);
-			tries++;
+		ncp_send_due(l, &v4, want_dns, want_iid);
+		ncp_send_due(l, &v6, want_dns, want_iid);
+
+		now = pppoed_now_ms();
+		if (ncp_open(&v4) && !v4_open_at)
+			v4_open_at = now;
+		if (v4_open_at && !v6.dead && !ncp_open(&v6) &&
+		    now - v4_open_at >= 2 * RESTART_MS) {
+			PPPOED_WARN("IPv6CP did not open with IPCP; IPv4 only");
+			v6.dead = true;
+		}
+		if ((ncp_open(&v4) && (ncp_open(&v6) || v6.dead)) ||
+		    (ncp_open(&v6) && v4.dead))
+			break;
+		if (v4.dead && v6.dead) {
+			PPPOED_ERR("neither IPCP nor IPv6CP came up");
+			return -ETIMEDOUT;
 		}
 
-		n = ppp_recv(l, &proto, body, sizeof(body), RESTART_MS);
+		n = ppp_recv(l, &proto, body, sizeof(body), RESTART_MS / 4);
 		if (n == -ETIMEDOUT)
 			continue;
 		if (n < 0)
@@ -609,31 +836,19 @@ static int ipcp_negotiate(struct ppp_link *l)
 			continue;
 
 		if (proto == PPP_PROTO_LCP) {
-			if (body[0] == CP_ECHO_REQ)
-				echo_reply(l, body[1]);
-			else if (body[0] == CP_TERM_REQ) {
-				cp_send(l, PPP_PROTO_LCP, CP_TERM_ACK, body[1],
-					NULL, 0);
-				PPPOED_ERR(
-					"the peer terminated the link during IPCP");
-				return -ECONNRESET;
-			}
+			n = ncp_lcp(l, body, (size_t)n, &v4, &v6);
+			if (n < 0)
+				return n;
 			continue;
 		}
-		if (proto == PPP_PROTO_IPV6CP) {
-			uint8_t rej[PPP_CTRL_MAX];
-
-			pppoe_put16(rej, PPP_PROTO_IPV6CP);
-			memcpy(rej + 2, body,
-			       (size_t)n < sizeof(rej) - 2 ? (size_t)n :
-							     sizeof(rej) - 2);
-			cp_send(l, PPP_PROTO_LCP, CP_PROTO_REJ, next_id(), rej,
-				2 + (size_t)n);
-			PPPOED_DEBUG("IPv6CP protocol-rejected");
+		if (proto == PPP_PROTO_IPCP) {
+			ncp = &v4;
+		} else if (proto == PPP_PROTO_IPV6CP && want_ipv6) {
+			ncp = &v6;
+		} else {
+			reject_protocol(l, proto, body, (size_t)n);
 			continue;
 		}
-		if (proto != PPP_PROTO_IPCP)
-			continue;
 
 		{
 			uint8_t code = body[0], rid = body[1];
@@ -647,73 +862,82 @@ static int ipcp_negotiate(struct ppp_link *l)
 
 			switch (code) {
 			case CP_CONF_REQ:
-				if (ipcp_answer_req(l, rid, opts, olen) == 0)
-					theirs = true;
+				if (ncp == &v4)
+					n = ipcp_answer_req(l, rid, opts, olen);
+				else
+					n = ipv6cp_answer_req(l, rid, opts,
+							      olen);
+				ncp->theirs = n == 0;
 				break;
 
 			case CP_CONF_ACK:
-				if (rid == id) {
-					ours = true;
-					PPPOED_DEBUG("IPCP configure-ack %u",
-						     rid);
+				if (rid == ncp->id) {
+					ncp->ours = true;
+					PPPOED_DEBUG("%s configure-ack %u",
+						     ncp->name, rid);
 				}
 				break;
 
-			case CP_CONF_NAK: {
-				if (rid != id) {
-					PPPOED_DEBUG(
-						"stale IPCP nak for id %u, waiting on %u",
-						rid, id);
+			case CP_CONF_NAK:
+				if (rid != ncp->id)
 					break;
-				}
-				ipcp_take_nak(l, opts, olen);
-				id = next_id();
-				ours = false;
-				tries = 0;
+				if (ncp == &v4)
+					ipcp_take_nak(l, opts, olen);
+				else
+					ipv6cp_take_nak(l, opts, olen);
+				ncp_again(ncp);
 				break;
-			}
 
-			case CP_CONF_REJ: {
-				if (rid != id) {
-					PPPOED_DEBUG(
-						"stale IPCP reject for id %u, waiting on %u",
-						rid, id);
+			case CP_CONF_REJ:
+				if (rid != ncp->id)
 					break;
-				}
-				if (ipcp_rejects_dns(opts, olen)) {
+				if (ncp == &v4 &&
+				    rejects(opts, olen, IPCP_OPT_DNS1,
+					    IPCP_OPT_DNS2)) {
 					want_dns = false;
 					PPPOED_DEBUG(
 						"the peer gives no name servers");
 				}
-				id = next_id();
-				ours = false;
-				tries = 0;
+				if (ncp == &v6 &&
+				    rejects(opts, olen, IPV6CP_OPT_IFACE_ID,
+					    IPV6CP_OPT_IFACE_ID))
+					want_iid = false;
+				ncp_again(ncp);
 				break;
-			}
+
+			case CP_TERM_REQ:
+				cp_send(l, ncp->proto, CP_TERM_ACK, rid, NULL,
+					0);
+				PPPOED_INFO("the peer closed %s", ncp->name);
+				ncp->dead = true;
+				break;
 
 			default:
-				PPPOED_DEBUG("IPCP code %u ignored", code);
+				PPPOED_DEBUG("%s code %u ignored", ncp->name,
+					     code);
 				break;
 			}
-		}
-
-		if (ours && theirs) {
-			struct in_addr a = { .s_addr = l->local_ip };
-			struct in_addr b = { .s_addr = l->peer_ip };
-			char local[INET_ADDRSTRLEN], peer[INET_ADDRSTRLEN];
-
-			snprintf(local, sizeof(local), "%s", inet_ntoa(a));
-			snprintf(peer, sizeof(peer), "%s", inet_ntoa(b));
-			PPPOED_INFO("IPCP up, %s peer %s", local, peer);
-			return 0;
 		}
 	}
 
-	PPPOED_ERR("IPCP did not come up in %u attempts", MAX_TRIES);
-	return -ETIMEDOUT;
+	l->ipv4_up = ncp_open(&v4);
+	l->ipv6_up = ncp_open(&v6);
+	if (l->ipv4_up) {
+		struct in_addr a = { .s_addr = l->local_ip };
+		struct in_addr b = { .s_addr = l->peer_ip };
+		char local[INET_ADDRSTRLEN], peer[INET_ADDRSTRLEN];
+
+		snprintf(local, sizeof(local), "%s", inet_ntoa(a));
+		snprintf(peer, sizeof(peer), "%s", inet_ntoa(b));
+		PPPOED_INFO("IPCP up, %s peer %s", local, peer);
+	}
+	if (l->ipv6_up)
+		PPPOED_INFO("IPv6CP up");
+	return 0;
 }
 
-int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret)
+int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
+		  bool want_ipv6)
 {
 	int err;
 
@@ -734,5 +958,5 @@ int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret)
 			return err;
 	}
 
-	return ipcp_negotiate(l);
+	return ncp_negotiate(l, want_ipv6);
 }

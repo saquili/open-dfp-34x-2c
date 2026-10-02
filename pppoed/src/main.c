@@ -56,17 +56,31 @@ static int creds_from_file(const char *path, char *user, size_t ulen,
 	return n == 2 ? 0 : -EINVAL;
 }
 
+/* fe80::@iid as text. */
+static void print_link_local(char *out, size_t cap, const uint8_t *iid)
+{
+	struct in6_addr a;
+
+	memset(&a, 0, sizeof(a));
+	a.s6_addr[0] = 0xfe;
+	a.s6_addr[1] = 0x80;
+	memcpy(a.s6_addr + 8, iid, PPP_IID_LEN);
+	if (!inet_ntop(AF_INET6, &a, out, (socklen_t)cap))
+		snprintf(out, cap, "?");
+}
+
 static int print_usage(void)
 {
 	fprintf(stderr,
 		"usage: pppoed up -i IFACE (-f FILE | -u USER -p SECRET) [-s SERVICE]\n"
-		"                 [-D] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
+		"                 [-D] [-4] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
 		"       pppoed discover -i IFACE [-s SERVICE] [-n TRIES] [-t MS] [-T] [-A] [-v]\n"
 		"       pppoed sniff -i IFACE [-t MS] [-e ETHERTYPE]\n"
 		"\n"
-		"  up        open a session: discovery, LCP, authentication, IPCP;\n"
-		"            then put the addresses on the ppp interface and keep the\n"
-		"            link until the peer ends it, or for -k seconds.\n"
+		"  up        open a session: discovery, LCP, authentication, IPCP and\n"
+		"            IPv6CP; then put the addresses on the ppp interface and\n"
+		"            keep the link until the peer ends it, or for -k seconds.\n"
+		"            -4 leaves IPv6 out.\n"
 		"            -f reads \"user secret\" from a file; -u and -p put the\n"
 		"            secret on the command line, where every process sees it.\n"
 		"            -D adds a default route through the link.\n"
@@ -163,12 +177,12 @@ static int cmd_up(int argc, char **argv)
 	const char *ifname = NULL, *service = "", *credfile = NULL;
 	char user[64] = "", secret[256] = "";
 	unsigned int tries = 3, timeout = 3000, keep = 0;
-	bool defaultroute = false;
+	bool defaultroute = false, want_ipv6 = true;
 	struct pppoe_session s;
 	struct ppp_link l;
 	int fd, err, opt;
 
-	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:Dv")) != -1) {
+	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:D4v")) != -1) {
 		switch (opt) {
 		case 'i':
 			ifname = optarg;
@@ -196,6 +210,9 @@ static int cmd_up(int argc, char **argv)
 			break;
 		case 'D':
 			defaultroute = true;
+			break;
+		case '4':
+			want_ipv6 = false;
 			break;
 		case 'v':
 			g_verbose = 1;
@@ -244,7 +261,7 @@ static int cmd_up(int argc, char **argv)
 		return 1;
 	}
 
-	err = ppp_negotiate(&l, user, secret);
+	err = ppp_negotiate(&l, user, secret, want_ipv6);
 	if (err) {
 		PPPOED_ERR("negotiation failed: %s", strerror(-err));
 		ppp_close(&l);
@@ -272,9 +289,18 @@ static int cmd_up(int argc, char **argv)
 		snprintf(sp, sizeof(sp), "%s", inet_ntoa(b));
 		snprintf(s1, sizeof(s1), "%s", inet_ntoa(d1));
 		snprintf(s2, sizeof(s2), "%s", inet_ntoa(d2));
-		printf("up %s local %s peer %s session %u dns %s %s\n",
-		       l.ifname, sl, sp, s.sid, l.dns1 ? s1 : "-",
-		       l.dns2 ? s2 : "-");
+		if (l.ipv4_up)
+			printf("up %s local %s peer %s session %u dns %s %s\n",
+			       l.ifname, sl, sp, s.sid, l.dns1 ? s1 : "-",
+			       l.dns2 ? s2 : "-");
+		if (l.ipv6_up) {
+			char ll[INET6_ADDRSTRLEN], pl[INET6_ADDRSTRLEN];
+
+			print_link_local(ll, sizeof(ll), l.iid_local);
+			print_link_local(pl, sizeof(pl), l.iid_peer);
+			printf("up6 %s local %s peer %s session %u\n", l.ifname,
+			       ll, pl, s.sid);
+		}
 		fflush(stdout);
 	}
 

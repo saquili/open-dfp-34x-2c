@@ -182,13 +182,69 @@ int ppp_recv(struct ppp_link *l, uint16_t *proto, void *buf, size_t bufsz,
 	return (int)n;
 }
 
+/* The kernel's struct in6_ifreq, which the C library does not declare. */
+struct ppp_in6_ifreq {
+	struct in6_addr addr;
+	uint32_t prefixlen;
+	int ifindex;
+};
+
+/* Put fe80::@iid/64, the link-local address, on the interface. */
+static int ifconfig_ipv6(const struct ppp_link *l)
+{
+	struct ppp_in6_ifreq req;
+	int fd, err = 0;
+
+	memset(&req, 0, sizeof(req));
+	req.ifindex = (int)if_nametoindex(l->ifname);
+	if (!req.ifindex)
+		return -errno;
+	req.addr.s6_addr[0] = 0xfe;
+	req.addr.s6_addr[1] = 0x80;
+	memcpy(req.addr.s6_addr + 8, l->iid_local, PPP_IID_LEN);
+	req.prefixlen = 64;
+
+	fd = socket(AF_INET6, SOCK_DGRAM, 0);
+	if (fd < 0)
+		return -errno;
+	if (ioctl(fd, SIOCSIFADDR, &req) < 0)
+		err = -errno;
+	close(fd);
+	return err;
+}
+
+static int ifconfig_ipv4(int fd, struct ifreq *ifr, const struct ppp_link *l)
+{
+	struct sockaddr_in *sin = (struct sockaddr_in *)&ifr->ifr_addr;
+
+	if (!l->local_ip)
+		return -EADDRNOTAVAIL;
+
+	sin->sin_family = AF_INET;
+	sin->sin_addr.s_addr = l->local_ip;
+	if (ioctl(fd, SIOCSIFADDR, ifr) < 0)
+		return -errno;
+
+	if (l->peer_ip) {
+		sin->sin_family = AF_INET;
+		sin->sin_addr.s_addr = l->peer_ip;
+		if (ioctl(fd, SIOCSIFDSTADDR, ifr) < 0)
+			return -errno;
+	}
+
+	sin->sin_family = AF_INET;
+	sin->sin_addr.s_addr = htonl(0xffffffff);
+	if (ioctl(fd, SIOCSIFNETMASK, ifr) < 0)
+		return -errno;
+	return 0;
+}
+
 int ppp_ifconfig(struct ppp_link *l, bool defaultroute)
 {
-	struct sockaddr_in *sin;
 	struct ifreq ifr = { 0 };
 	int fd, err = 0;
 
-	if (!l->local_ip)
+	if (!l->ipv4_up && !l->ipv6_up)
 		return -EADDRNOTAVAIL;
 
 	fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -196,29 +252,10 @@ int ppp_ifconfig(struct ppp_link *l, bool defaultroute)
 		return -errno;
 
 	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", l->ifname);
-	sin = (struct sockaddr_in *)&ifr.ifr_addr;
-	sin->sin_family = AF_INET;
-
-	sin->sin_addr.s_addr = l->local_ip;
-	if (ioctl(fd, SIOCSIFADDR, &ifr) < 0) {
-		err = -errno;
-		goto out;
-	}
-
-	if (l->peer_ip) {
-		sin->sin_family = AF_INET;
-		sin->sin_addr.s_addr = l->peer_ip;
-		if (ioctl(fd, SIOCSIFDSTADDR, &ifr) < 0) {
-			err = -errno;
+	if (l->ipv4_up) {
+		err = ifconfig_ipv4(fd, &ifr, l);
+		if (err)
 			goto out;
-		}
-	}
-
-	sin->sin_family = AF_INET;
-	sin->sin_addr.s_addr = htonl(0xffffffff);
-	if (ioctl(fd, SIOCSIFNETMASK, &ifr) < 0) {
-		err = -errno;
-		goto out;
 	}
 
 	ifr.ifr_mtu = PPPOE_MTU;
@@ -236,7 +273,19 @@ int ppp_ifconfig(struct ppp_link *l, bool defaultroute)
 		goto out;
 	}
 
-	if (defaultroute) {
+	if (l->ipv6_up) {
+		int err6 = ifconfig_ipv6(l);
+
+		if (err6) {
+			PPPOED_WARN("no IPv6 link-local address on %s: %s",
+				    l->ifname, strerror(-err6));
+			l->ipv6_up = false;
+			if (!l->ipv4_up)
+				err = err6;
+		}
+	}
+
+	if (defaultroute && l->ipv4_up) {
 		struct rtentry rt = { 0 };
 		struct sockaddr_in *d = (struct sockaddr_in *)&rt.rt_dst;
 		struct sockaddr_in *m = (struct sockaddr_in *)&rt.rt_genmask;
@@ -320,10 +369,25 @@ int ppp_run(struct ppp_link *l, unsigned int seconds)
 					     code);
 				break;
 			}
-		} else if (proto == PPP_PROTO_IPCP) {
+		} else if (proto == PPP_PROTO_IPCP ||
+			   (proto == PPP_PROTO_IPV6CP && l->ipv6_up)) {
 			PPPOED_DEBUG(
-				"IPCP in the network phase, code %u, ignored",
+				"%s in the network phase, code %u, ignored",
+				proto == PPP_PROTO_IPCP ? "IPCP" : "IPv6CP",
 				body[0]);
+		} else {
+			uint8_t rej[PPP_CTRL_MAX];
+			const size_t len = (size_t)n < sizeof(rej) - 6 ?
+						   (size_t)n :
+						   sizeof(rej) - 6;
+
+			rej[0] = CP_PROTO_REJ;
+			rej[1] = body[1];
+			pppoe_put16(rej + 2, (uint16_t)(len + 6));
+			pppoe_put16(rej + 4, proto);
+			memcpy(rej + 6, body, len);
+			ppp_send(l, PPP_PROTO_LCP, rej, len + 6);
+			PPPOED_DEBUG("protocol %04x rejected", proto);
 		}
 	}
 }
