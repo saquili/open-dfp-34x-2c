@@ -451,10 +451,52 @@ static void rtl9602c_eth_read_addr(void __iomem *base, u8 *addr)
 }
 
 /* Stop the engine, then clear its ring configuration. */
-static void rtl9602c_eth_halt(struct rtl9602c_eth *priv)
+static void rtl9602c_eth_halt(void __iomem *base)
 {
-	writel(0, priv->base + RTL9602C_NIC_DMA_CTRL);
-	writel(0, priv->base + RTL9602C_NIC_RING_CFG);
+	writel(0, base + RTL9602C_NIC_DMA_CTRL);
+	writel(0, base + RTL9602C_NIC_RING_CFG);
+}
+
+/*
+ * Bring the engine to a state of its own, whatever ran before this kernel left
+ * it in. What ran before may have used the engine and left it enabled, with
+ * rings of its own in memory that this kernel now owns: the engine may then
+ * still be working through those rings. Measured on this board, a transmit
+ * test that follows such a start finds its descriptor still held by the engine
+ * (see rtl9602c_eth_selftest()). So the probe stops the engine before it
+ * allocates anything, silences its interrupt, waits out a frame in flight and
+ * acknowledges what is pending; only then are rings set up. The stop is the
+ * same two writes as in "ip link set cpu down", after which the engine takes
+ * its rings: the transmit test at open passes.
+ *
+ * That these writes stop the engine in every state it can be left in, and that
+ * the wait is long enough, are not verified; the wait is far longer than the
+ * transfer of one frame. The registers as found, and the control register after
+ * the stop, are logged.
+ */
+static void rtl9602c_eth_quiesce(struct device *dev, void __iomem *base)
+{
+	u32 ctrl = readl(base + RTL9602C_NIC_DMA_CTRL);
+	u16 status = readw(base + RTL9602C_NIC_IRQ_STAT);
+	u32 tx_base = readl(base + RTL9602C_NIC_TX_RING_BASE);
+	u16 tx_cur = readw(base + RTL9602C_NIC_TX_RING_CUR);
+	u32 rx_base = readl(base + RTL9602C_NIC_RX_RING_BASE);
+	u16 rx_cur = readw(base + RTL9602C_NIC_RX_RING_CUR);
+
+	writew(0, base + RTL9602C_NIC_IRQ_MASK);
+	rtl9602c_eth_halt(base);
+	/*
+	 * The read cannot complete before the writes ahead of it, so the engine
+	 * has been told to stop before the wait begins.
+	 */
+	readl(base + RTL9602C_NIC_DMA_CTRL);
+	usleep_range(1000, 2000);
+	writew(0xffff, base + RTL9602C_NIC_IRQ_STAT);
+
+	dev_info(dev,
+		 "engine found with DMA_CTRL %08x, IRQ_STAT %04x, TX ring %08x at %u, RX ring %08x at %u; stopped, DMA_CTRL %08x\n",
+		 ctrl, status, tx_base, tx_cur, rx_base, rx_cur,
+		 readl(base + RTL9602C_NIC_DMA_CTRL));
 }
 
 /*
@@ -1141,12 +1183,21 @@ static irqreturn_t rtl9602c_eth_irq(int irq, void *data)
 }
 
 /*
- * The transmit test at probe, on rings set up for it alone and freed
- * afterwards; its result is only logged. Measured on this board, the engine
- * keeps the descriptor here on every boot and the test is reported as failed,
- * while the same test at open passes. The switch driver forces the CPU port's
- * link up in its own setup; that the setup has not run yet at this point, and
- * that this is why the test fails, is assumed, not verified.
+ * The transmit test at probe, on rings set up for it alone and freed afterwards;
+ * its result is only logged.
+ *
+ * Before the probe stopped the engine first (rtl9602c_eth_quiesce()), the test
+ * passed or failed with what ran before the kernel. Measured on this board with
+ * the probe at 0.288 s: after a cold start, with no network transfer before it,
+ * the test passed within 4 ms; after the boot loader had received the kernel
+ * over the network, whether the kernel was then started from RAM or written to
+ * the flash and started from there, the engine kept the descriptor through the
+ * whole wait of 400 ms. A kernel with an initial RAM disk, whose probe ran at
+ * 0.416 s after a transfer, passed. The switch driver's setup of the CPU port,
+ * which comes later, is therefore not the cause. What the engine was doing is
+ * not known; the probe logs the registers it finds. With the engine stopped
+ * first the test is meant to pass in every start, which the board has not yet
+ * confirmed.
  */
 static void rtl9602c_eth_selftest(struct net_device *dev)
 {
@@ -1161,7 +1212,7 @@ static void rtl9602c_eth_selftest(struct net_device *dev)
 
 	rtl9602c_eth_start(priv);
 	err = rtl9602c_eth_test_frame(dev);
-	rtl9602c_eth_halt(priv);
+	rtl9602c_eth_halt(priv->base);
 	rtl9602c_eth_free_rings(priv);
 
 	if (err)
@@ -1196,7 +1247,7 @@ static int rtl9602c_eth_open(struct net_device *dev)
 	err = request_irq(priv->irq, rtl9602c_eth_irq, 0, dev->name, priv);
 	if (err) {
 		napi_disable(&priv->napi);
-		rtl9602c_eth_halt(priv);
+		rtl9602c_eth_halt(priv->base);
 		rtl9602c_eth_free_rings(priv);
 		return err;
 	}
@@ -1229,7 +1280,7 @@ static int rtl9602c_eth_stop(struct net_device *dev)
 	writew(0, priv->base + RTL9602C_NIC_IRQ_MASK);
 	free_irq(priv->irq, priv);
 	napi_disable(&priv->napi);
-	rtl9602c_eth_halt(priv);
+	rtl9602c_eth_halt(priv->base);
 	rtl9602c_eth_reap(dev);
 	rtl9602c_eth_free_rings(priv);
 	return 0;
@@ -1641,9 +1692,18 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 {
 	struct net_device *dev;
 	struct rtl9602c_eth *priv;
+	void __iomem *base;
 	u8 addr[ETH_ALEN];
 	unsigned int i;
 	int err;
+
+	base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(base))
+		return dev_err_probe(&pdev->dev, PTR_ERR(base),
+				     "cannot map the CPU port registers\n");
+
+	/* Before anything is allocated: see rtl9602c_eth_quiesce(). */
+	rtl9602c_eth_quiesce(&pdev->dev, base);
 
 	/*
 	 * A transmit queue per switch port (see rtl9602c_eth_select_queue()),
@@ -1667,10 +1727,7 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 	priv->netdev = dev;
 	priv->dev = &pdev->dev;
 	spin_lock_init(&priv->tx_lock);
-	priv->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(priv->base))
-		return dev_err_probe(&pdev->dev, PTR_ERR(priv->base),
-				     "cannot map the CPU port registers\n");
+	priv->base = base;
 
 	priv->irq = platform_get_irq(pdev, 0);
 	if (priv->irq < 0)

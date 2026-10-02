@@ -251,10 +251,13 @@ The engine
 The engine has a register window of its own in the SoC's peripheral area, apart
 from the switch's registers. The registers are big-endian, and on this
 big-endian CPU ``readl()`` and ``writel()`` access them in native order; the
-byte and half-word registers are accessed at their own width. The boot loader
-leaves the engine idle and leaves the unit's MAC address in its address
-registers. The engine's interrupt is source 26 of the SoC interrupt controller,
-which is Linux interrupt 34 (Documentation/arch/mips/rtl9602c.rst).
+byte and half-word registers are accessed at their own width. After a cold start
+the boot loader leaves the engine idle, and it leaves the unit's MAC address in
+the engine's address registers. If the boot loader has used the engine to
+receive an image over the network, it leaves the engine enabled, and the probe
+stops it first (see "Setting the engine up"). The engine's interrupt is source
+26 of the SoC interrupt controller, which is Linux interrupt 34
+(Documentation/arch/mips/rtl9602c.rst).
 
 .. list-table::
    :header-rows: 1
@@ -287,12 +290,23 @@ which is Linux interrupt 34 (Documentation/arch/mips/rtl9602c.rst).
        source was enabled in ``RTL9602C_INTC_EN``; receive is interrupt-driven
        on every boot. The open line of every boot names the Linux interrupt,
        34.
-   * - When Linux starts, the engine is idle: the four ring registers
+   * - After a cold start the engine is idle: the four ring registers
        (``RTL9602C_NIC_TX_RING_BASE``, ``RTL9602C_NIC_TX_RING_CUR``,
        ``RTL9602C_NIC_RX_RING_BASE`` and ``RTL9602C_NIC_RX_RING_CUR``) read 0
        at the boot loader prompt.
      - M
-     - Register read at the boot loader prompt.
+     - Register read at the boot loader prompt after a cold start.
+   * - After the boot loader has received an image over the network (a RAM
+       boot, or a trial boot of an image written to the flash), the engine is
+       not idle when Linux starts: a transmit test on rings of the kernel's own,
+       started 0.288 s into the boot, leaves its descriptor with the engine
+       through the whole wait. After a cold start the same test passes at the
+       same time. What state the engine is in is not known.
+     - M, I
+     - M: the probe's self-test line (``self-test passed`` after a cold start,
+       ``SELF-TEST FAILED`` in the other two starts, before the probe stopped
+       the engine first). I: the registers the probe logs as it finds the
+       engine would show the state (see "Probe").
 
 Registers
 =========
@@ -1820,6 +1834,12 @@ The lines, with the conversions the driver uses:
      - ``cannot map the CPU port registers``, ``no interrupt declared for the
        CPU port`` or ``cannot register the interface``, reported by
        ``dev_err_probe()``
+   * - Probe, the engine as found
+     - ``engine found with DMA_CTRL <w>, IRQ_STAT <h>, TX ring <base> at
+       <index>, RX ring <base> at <index>; stopped, DMA_CTRL <w>``, a device
+       line that carries the device name instead of the prefix. The values
+       before the semicolon are the registers as the probe found them, the last
+       is ``RTL9602C_NIC_DMA_CTRL`` after the stop
    * - Probe, unusable address
      - ``identity registers hold <MAC>, which is not a usable address; using a
        random one``, a device warning that carries the device name instead of
@@ -1863,25 +1883,38 @@ a step tagged I rests on an assumption.
 Probe
 -----
 
-1. Allocate the network device with ``RTL9602C_SW_PORTS`` (4) transmit queues
+1. Map the register window. Purpose: reach the engine. (M)
+2. Stop the engine, before anything is allocated: read ``RTL9602C_NIC_DMA_CTRL``,
+   ``RTL9602C_NIC_IRQ_STAT`` and the four ring registers; write 0 to
+   ``RTL9602C_NIC_IRQ_MASK``; halt the engine as at stop (0 to
+   ``RTL9602C_NIC_DMA_CTRL``, then 0 to ``RTL9602C_NIC_RING_CFG``); read
+   ``RTL9602C_NIC_DMA_CTRL`` back; wait 1 to 2 ms; write ``0xffff`` to
+   ``RTL9602C_NIC_IRQ_STAT``; log the registers as found and the control
+   register after the stop. Purpose: whatever ran before the kernel may have
+   used the engine and left it enabled, with rings of its own in memory that the
+   kernel now owns; the engine is stopped and its status clear before the
+   kernel's own rings are written, which the halt of a stop is known to make it
+   take (the transmit test at open passes after one). (T for the stop, I that it
+   stops every state the engine can be left in)
+3. Allocate the network device with ``RTL9602C_SW_PORTS`` (4) transmit queues
    and one receive queue, name it ``cpu`` and keep dsts (``netif_keep_dst()``).
    Purpose: a queue per switch port carries the destination port, the name
    makes the user ports ``sfp@cpu`` and ``pon@cpu``, and the flow of a GEM
    frame travels in a dst. (M, T)
-2. Map the register window and take the interrupt from the device tree.
-   Purpose: reach the engine and its interrupt line. (M)
-3. Read the MAC address from the engine's address registers. Use it if it is a
+4. Take the interrupt from the device tree. Purpose: reach the engine's
+   interrupt line. (M)
+5. Read the MAC address from the engine's address registers. Use it if it is a
    valid unicast address; otherwise warn and use a random one. Purpose: the
    interface has the unit's own address. (M)
-4. Allocate one ``METADATA_HW_PORT_MUX`` dst per switch port, with ``port_id``
+6. Allocate one ``METADATA_HW_PORT_MUX`` dst per switch port, with ``port_id``
    the port number. Purpose: a received frame gets the dst of its source port.
    (T)
-5. Add the NAPI poll, and create the debugfs directory ``rtl9602c-eth`` with
+7. Add the NAPI poll, and create the debugfs directory ``rtl9602c-eth`` with
    its file ``rxreason``. Purpose: the poll does the receive work, and the
    reasons can be read back. (M)
-6. Register the network device and log the address line. Purpose: DSA attaches
+8. Register the network device and log the address line. Purpose: DSA attaches
    the user ports to a registered conduit. (T)
-7. Run the transmit test on rings set up for it alone and free them again; log
+9. Run the transmit test on rings set up for it alone and free them again; log
    the result. The result does not stop the probe. Purpose: report whether the
    engine takes and returns a descriptor. (M)
 
@@ -1953,10 +1986,11 @@ The test sends one 60-byte broadcast frame from the interface's own address,
 aimed at the SerDes port (word 2 ``RTL9602C_NIC_TXD_CPUTAG_EN |
 RTL9602C_NIC_TXD_PRI_EN``, word 3 ``RTL9602C_NIC_TXD_DST_SFP |
 RTL9602C_NIC_TXD_L34_BYPASS``), kicks the engine, and waits up to 100 times,
-100 to 200 microseconds each, for OWN to clear. On success both driver indices
-step past the descriptor it used, because the engine has moved past it (see
-"The ring registers"). Either way the descriptor is taken back and its buffer
-freed.
+100 to 200 microseconds each, for OWN to clear. The kernel of this board has
+no timer finer than its 4 ms tick, so each wait lasts a tick and the test gives
+up after 400 ms. On success both driver indices step past the descriptor it
+used, because the engine has moved past it (see "The ring registers"). Either
+way the descriptor is taken back and its buffer freed.
 
 .. list-table::
    :header-rows: 1
@@ -1968,17 +2002,31 @@ freed.
    * - At open the transmit test passes on every boot.
      - M
      - The open line of every boot: ``transmit test ok``.
-   * - At probe the same test (rings up, one frame, rings down) fails on every
-       boot: the engine does not release the descriptor.
+   * - At probe, before the probe stopped the engine first, the same test (rings
+       up, one frame, rings down) passed or failed with the way the kernel was
+       started. With the probe at 0.288 s: after a cold start it passed within
+       4 ms; right after the boot loader had received the image over the
+       network it failed, the engine keeping the descriptor through the whole
+       wait of 400 ms, whether the kernel was started from RAM or was written to
+       the flash and started from there. A kernel with an initial RAM disk,
+       whose probe ran at 0.416 s after a transfer, passed.
      - M
-     - The boot log of every boot: ``SELF-TEST FAILED`` at probe, ``transmit
-       test ok`` at open.
-   * - The probe-time failure is because the switch driver has not set up the
-       CPU port yet (it forces the port's link up in its setup, see
-       Documentation/networking/dsa/rtl9602c.rst).
+     - The probe's self-test line in the console log of each start:
+       ``self-test passed`` 4 ms after the probe line of a cold start,
+       ``SELF-TEST FAILED`` 400 ms after it in the other two; ``transmit test
+       ok`` at open in all of them.
+   * - The failure at probe is not caused by the switch driver not having set up
+       the CPU port yet: the switch driver has not run either at the probe of a
+       cold start, which passed.
+     - M
+     - The same console logs.
+   * - The test passes in every start now that the probe stops the engine
+       before it allocates the rings (see "Probe"), whatever the engine was left
+       doing.
      - I
-     - Running the test after the switch driver's setup and seeing it pass would
-       settle it.
+     - The self-test line of a RAM boot and of a trial boot after a transfer,
+       and of a cold start; the ``engine found with`` line of each says what
+       the engine was doing.
 
 Transmitting a data frame
 -------------------------
@@ -2078,11 +2126,12 @@ Known limitations
   protocol byte at offset 14. The switch's loop-detection probes are frames with
   that EtherType. A probe that reached the CPU would lose 16 bytes of its
   payload and gain a timestamp.
-- The transmit test at probe fails on every boot: the kernel log carries
-  ``SELF-TEST FAILED`` from the probe, although the engine transmits and the
-  same test at open passes. The probe-time result is only logged. The cause is
-  assumed to be that the switch driver has not yet set up the CPU port (see
-  "Open questions").
+- The transmit test at probe is meant to pass in every start. Before the probe
+  stopped the engine first, it failed when the boot loader had just used the
+  engine to receive an image, although the engine transmitted and the same test
+  at open passed (see "The transmit test"). The result is only logged. That the
+  stop covers every state the engine can be left in is not verified (see "Open
+  questions").
 - The engine drops frames when it has no receive descriptor free. The CPU's
   receive ceiling is about 24,000 to 25,000 frames/s whatever the frame size,
   and beyond it the excess is counted in ``rx_missed_errors``. The receive
@@ -2152,10 +2201,12 @@ Worth a board test
        configuration and the CPU tag registers").
      - Writing another value to bits 3:0 and reading the source port of an OMCI
        frame.
-   * - Why the transmit test at probe fails on every boot; the assumption is
-       that the switch driver has not yet set up the CPU port ("The transmit
-       test").
-     - Running the test after the switch driver's setup.
+   * - What state the engine is in when the kernel starts after the boot loader
+       has used it to receive an image, and why a transmit test on the
+       kernel's own rings then keeps its descriptor with the engine ("The
+       engine", "The transmit test").
+     - Reading the registers that the probe logs (``engine found with``) in a RAM
+       boot and a trial boot after a transfer, and in a cold start.
 
 About the receive path
 ~~~~~~~~~~~~~~~~~~~~~~
