@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_PPPOED
+	bool "pppoed"
+	help
+	  The PPPoE client of the ONU, from pppoed/ in this repository.

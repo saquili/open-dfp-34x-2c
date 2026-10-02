@@ -9,3 +9,4 @@
 
 source "$BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH/package/omcid/Config.in"
 source "$BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH/package/onu-utils/Config.in"
+source "$BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH/package/pppoed/Config.in"
