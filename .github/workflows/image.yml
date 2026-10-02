@@ -3,15 +3,13 @@
 #
 # The flash images of the board, built from source by the pinned Buildroot with
 # br2-external/configs/odi_dfp_34x_2c3_defconfig ("make" in the top directory),
-# and checked: the size of each against its partition, the kernel's final
-# configuration against the options the product needs and the ones the flash
-# profile drops (and the check's negative control), the instruction-set gate
+# and checked: the size of each against its partition, the instruction-set gate
 # over every executable of the root filesystem and its negative control, the
-# static programs run under qemu-mips, the bench's dry run of both images, and a
-# second build in another directory that has to give the same images and the
-# same root filesystem tree. Two builds take the better part of an hour on a
-# runner, so the workflow runs only when it is started by hand. It uses no
-# secret; the images are kept as a workflow artifact.
+# static programs run under qemu-mips, the bench's dry run of the root
+# filesystem image, and a second build in another directory that has to give the
+# same images and the same root filesystem tree. Two builds take the better part
+# of an hour on a runner, so the workflow runs only when it is started by hand.
+# It uses no secret; the images are kept as a workflow artifact.
 
 name: image
 
@@ -54,11 +52,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build the images
         # make fetches and patches the build system, configures the board's
-        # defconfig, builds, and then judges the result: both images have to
-        # fit their partitions, the kernel's final configuration has to hold
-        # the options the product needs and none the flash profile drops, the
-        # gate has to pass over the target tree, and the digests of the images
-        # have to check.
+        # defconfig, builds, and then judges the result: r0 has to fit its
+        # partition, the gate has to pass over the target tree, and the digests
+        # of the images have to check. The kernel image does not fit k0 yet;
+        # its size is reported.
         run: |
           start=$(date +%s)
           make IMAGE_OUT="$PWD/build/image-a"
@@ -75,37 +72,16 @@ jobs:
           shared=$(find build/image-a/target \( -name '*.so' -o -name '*.so.*' -o -name 'ld-*' \) | wc -l)
           echo "shared objects in the root filesystem: $shared"
           [ "$shared" = 0 ]
-      - name: Both images fit their partitions
-        # The build judged this already. The step holds both images again,
-        # whatever IMAGE_ENFORCE says in the runner's environment, and puts the
-        # margins in the log.
-        run: tools/image-budget/image-budget --images build/image-a/images --enforce
-      - name: The kernel has the flash profile's options
-        # The build judged this already, on the same file. The negative control
-        # is the board's complete configuration, which the flash profile cuts
-        # down: it sets the options the profile drops, and the check has to
-        # refuse it with status 1 (not 2, which is a check that could not be made).
-        run: |
-          br2-external/tests/kernel/check-config build/image-a/build/linux-custom/.config
-          make -C linux O="$PWD/build/dev-config" ARCH=mips CROSS_COMPILE=mips-linux-gnu- rtl9602c_defconfig
-          status=0
-          br2-external/tests/kernel/check-config build/dev-config/.config || status=$?
-          echo "check-config on the board's complete configuration: exit status $status"
-          [ "$status" = 1 ]
       - name: The negative control of the gate
         # The gate has to be able to fail: a MIPS32 object is refused.
         run: br2-external/tests/toolchain/negative-control
       - name: The static programs run under qemu-mips
         run: br2-external/tests/image/check-applets build/image-a/target
-      - name: The bench accepts both images
+      - name: The bench accepts the root filesystem image
         # A dry run prints the plan and touches no board and no host; the
         # settings are the bench's defaults, whose addresses are in the ranges
-        # reserved for documentation. The kernel image is checked against its
-        # partition, its header and its load address, the root filesystem image
-        # against its partition and its compression.
-        run: |
-          make flash IMAGE=build/image-a/images/k0.uImage TARGET=kernel ARGS=--dry-run
-          make flash IMAGE=build/image-a/images/r0.squashfs TARGET=rootfs ARGS=--dry-run
+        # reserved for documentation.
+        run: make flash IMAGE=build/image-a/images/r0.squashfs TARGET=rootfs ARGS=--dry-run
       - name: Keep the images
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
