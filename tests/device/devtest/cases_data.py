@@ -15,8 +15,8 @@ them, since nothing on it takes that EtherType, so none of them goes further.
 What left the bench is read from the sending port's own transmit count, not
 from the sender: a frame the bench host could not send is not one the stick
 lost, and a burst that never left the bench fails as the bench's fault. Some
-drivers refresh those counts from the hardware only every second or so, so
-they are read until they stop moving.
+drivers refresh those counts from the hardware only every few seconds, so
+they are read until they have stood still for longer than that.
 
 The OLT and the stick's switch are learning bridges: until one has seen a
 frame from an address, it floods the frames for that address, to the stick's
@@ -36,7 +36,7 @@ FRAME = 1514           # bytes, without the FCS
 COUNT = 400000         # frames offered per burst
 PRIME = 100            # frames each way before the first measurement
 PRIME_GAP = 0.001      # seconds between them
-STILL = 50             # frames a counter may move in a pause and still be still
+STILL = 200            # frames a counter may move in a pause and still be still
 
 # The sender, run by python3 on the bench host with its arguments: the port,
 # the destination MAC address, the frame size, the count and the gap in
@@ -106,18 +106,22 @@ def burst(ctx: Context, port: str, dst_mac: str, *, count: int = COUNT,
         raise ValueError(f"the sender did not run: {(reply.err or reply.out).strip()!r}")
 
 
-def settle(read, *, pause: float = 0.5, limit: float = 10.0) -> tuple[int, ...]:
-    """Read counters until no one of them moves by more than STILL in a
-    pause, or until limit seconds have passed."""
+def settle(read, *, quiet: float = 4.0, pause: float = 0.5,
+           limit: float = 30.0) -> tuple[int, ...]:
+    """Read counters until none of them has moved by more than STILL for
+    quiet seconds, longer than a driver that refreshes its counts every few
+    seconds leaves them standing, or until limit seconds have passed."""
     last = read()
-    waited = 0.0
-    while waited < limit:
+    still = waited = 0.0
+    while waited < limit and still < quiet:
         time.sleep(pause)
         waited += pause
         now = read()
         if all(abs(b - a) <= STILL for a, b in zip(last, now)):
-            return now
-        last = now
+            still += pause
+        else:
+            still = 0.0
+            last = now
     return last
 
 

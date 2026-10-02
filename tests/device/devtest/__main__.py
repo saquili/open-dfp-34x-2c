@@ -73,7 +73,18 @@ def main(argv: list[str] | None = None) -> int:
     ctx = Context(settings, stick_remote(settings, trail), bench_remote(settings, trail), trail,
                   destructive=args.destructive)
 
+    # What ran, read before the first case: a case may reset the stick onto
+    # another boot, and the tests are the ones loaded now.
     started = datetime.datetime.now(datetime.timezone.utc)
+    header = {
+        "Date": started.strftime("%Y-%m-%d %H:%M UTC"),
+        "Source": f"{git('rev-parse', '--short=12', 'HEAD')}"
+                  + (" with local changes" if git("status", "--porcelain") else ""),
+        "Kernel": redact(ctx.stick.run("uname -rv").out.strip(), settings),
+        "Image": redact(ctx.stick.run(". /etc/os-release && "
+                                      "echo \"$PRETTY_NAME, build ${BUILD_ID:-unknown}\"")
+                        .out.strip(), settings),
+    }
     results = []
     for c in select(args.cases):
         result = run_case(c, ctx)
@@ -82,15 +93,6 @@ def main(argv: list[str] | None = None) -> int:
     print(counts(results))
 
     if args.out:
-        header = {
-            "Date": started.strftime("%Y-%m-%d %H:%M UTC"),
-            "Source": f"{git('rev-parse', '--short=12', 'HEAD')}"
-                      + (" with local changes" if git("status", "--porcelain") else ""),
-            "Kernel": redact(ctx.stick.run("uname -rv").out.strip(), settings),
-            "Image": redact(ctx.stick.run(". /etc/os-release && "
-                                          "echo \"$PRETTY_NAME, build ${BUILD_ID:-unknown}\"")
-                            .out.strip(), settings),
-        }
         title = args.title or f"Device tests of {started:%Y-%m-%d}"
         holder = f"{started:%Y} {copyright_holder()}"
         with open(args.out + ".rst", "w", encoding="utf-8") as handle:
