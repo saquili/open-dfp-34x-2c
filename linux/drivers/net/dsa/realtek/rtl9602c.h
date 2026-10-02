@@ -2526,7 +2526,11 @@ struct rtl9602c_priv {
 		u8		meter;
 		/** @storm.used: the slot holds a rule */
 		bool		used;
+		/** @storm.seq: the order it was added in, from @storm_seq */
+		u32		seq;
 	} storm[RTL9602C_METER_COUNT];
+	/** @storm_seq: the storm-control rules added so far, wrapping */
+	u32 storm_seq;
 
 	/**
 	 * @storm_meter: the meter each class owns for its devlink rate, or -1

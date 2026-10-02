@@ -561,10 +561,10 @@ static void rtl9602c_meter_program(struct rtl9602c_priv *p, unsigned int meter,
 }
 
 /*
- * Point @port's selector for class @cls at @meter, then set or clear the port's
- * bit in the class's enable register. The selector goes first either way: a
- * class being enabled is never live on another class's meter, and a class being
- * removed names meter 0 until its bit is cleared.
+ * Point @port's selector for class @cls at @meter and set the port's bit in the
+ * class's enable register, or clear the bit and point the selector at @meter.
+ * The bit is set last and cleared first, so that the class is never live on a
+ * meter it was not given, meter 0 included.
  */
 static void rtl9602c_storm_bind(struct rtl9602c_priv *p, unsigned int cls,
 				int port, unsigned int meter, bool on)
@@ -572,9 +572,12 @@ static void rtl9602c_storm_bind(struct rtl9602c_priv *p, unsigned int cls,
 	u32 sel = rtl9602c_storm_class[cls].meter;
 	u32 en = rtl9602c_storm_class[cls].ctrl;
 
+	if (!on)
+		rtl9602c_rmw(p, en, BIT(port), 0);
 	rtl9602c_rmw(p, sel, RTL9602C_STORM_METER_SEL_PORT(port),
 		     (u32)meter << (4 * port));
-	rtl9602c_rmw(p, en, BIT(port), on ? BIT(port) : 0);
+	if (on)
+		rtl9602c_rmw(p, en, BIT(port), BIT(port));
 }
 
 /**
@@ -689,7 +692,10 @@ int rtl9602c_storm_ports_set(struct rtl9602c_priv *p, unsigned int cls,
 
 /*
  * Storm control from tc: each flower rule takes a meter of its own, programmed
- * at the rule's packet rate, and enables its class on its port.
+ * at the rule's packet rate, and enables its class on its port. A class has one
+ * meter selector per port, so of several rules for one class and port the one
+ * added last polices. This is what keeps the class on through `tc filter
+ * replace`, which adds the new rule before it removes the old.
  */
 static int rtl9602c_storm_add(struct rtl9602c_priv *p, int port,
 			      unsigned int cls, u64 rate_pkt_ps,
@@ -726,12 +732,37 @@ static int rtl9602c_storm_add(struct rtl9602c_priv *p, int port,
 	p->storm[slot].port = port;
 	p->storm[slot].meter = meter;
 	p->storm[slot].used = true;
+	p->storm[slot].seq = ++p->storm_seq;
 	return 0;
 }
 
+/* The rule for @cls on @port added last, leaving out slot @skip, or -1. */
+static int rtl9602c_storm_latest(struct rtl9602c_priv *p, unsigned int cls,
+				 int port, int skip)
+{
+	int slot, latest = -1;
+
+	for (slot = 0; slot < RTL9602C_METER_COUNT; slot++) {
+		if (slot == skip || !p->storm[slot].used ||
+		    p->storm[slot].cls != cls || p->storm[slot].port != port)
+			continue;
+		if (latest < 0 ||
+		    (s32)(p->storm[slot].seq - p->storm[latest].seq) > 0)
+			latest = slot;
+	}
+	return latest;
+}
+
+/*
+ * Removing the rule that polices its class and port hands the class to the
+ * rule for them added last before it, or switches the class off on the port if
+ * there is none; removing any other rule leaves the binding alone. The meter is
+ * freed after the selector has left it.
+ */
 static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
 {
-	int slot;
+	unsigned int cls;
+	int slot, next, port;
 
 	for (slot = 0; slot < RTL9602C_METER_COUNT; slot++)
 		if (p->storm[slot].used && p->storm[slot].cookie == cookie)
@@ -739,8 +770,16 @@ static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
 	if (slot == RTL9602C_METER_COUNT)
 		return -ENOENT;
 
-	rtl9602c_storm_bind(p, p->storm[slot].cls, p->storm[slot].port,
-			    0, false);
+	cls = p->storm[slot].cls;
+	port = p->storm[slot].port;
+	if (rtl9602c_storm_latest(p, cls, port, -1) == slot) {
+		next = rtl9602c_storm_latest(p, cls, port, slot);
+		if (next >= 0)
+			rtl9602c_storm_bind(p, cls, port, p->storm[next].meter,
+					    true);
+		else
+			rtl9602c_storm_bind(p, cls, port, 0, false);
+	}
 	rtl9602c_meter_free(p, p->storm[slot].meter);
 	p->storm[slot].used = false;
 	return 0;
@@ -750,8 +789,8 @@ static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
  * The storm class a flower rule's destination match names: the broadcast
  * address, all ones, or the multicast group bit alone, the least significant
  * bit of the first octet (IEEE 802.3, 3.2.3). A rule that matches the source
- * address names none. Other keys in the rule are not looked at and do not
- * narrow the class.
+ * address names none. The rule's other keys are checked by
+ * rtl9602c_storm_rule_check().
  */
 static int rtl9602c_storm_class_of(struct flow_rule *rule)
 {
@@ -1864,7 +1903,10 @@ static int rtl9602c_acl_del(struct rtl9602c_priv *p, unsigned long cookie)
 	return -ENOENT;
 }
 
-/* An exact ARP ethertype and no VLAN match; other keys are not looked at. */
+/*
+ * An exact ARP ethertype and no VLAN match names the ARP class; the rule's other
+ * keys are checked by rtl9602c_storm_rule_check().
+ */
 static bool rtl9602c_flower_is_arp(struct flow_rule *rule)
 {
 	struct flow_match_basic basic;
@@ -1877,6 +1919,79 @@ static bool rtl9602c_flower_is_arp(struct flow_rule *rule)
 	flow_rule_match_basic(rule, &basic);
 	return basic.mask->n_proto == htons(0xffff) &&
 	       basic.key->n_proto == htons(ETH_P_ARP);
+}
+
+/*
+ * A storm-control rule polices its whole class on its port, so it matches the
+ * class and nothing else: the destination address of the broadcast and
+ * multicast classes, the EtherType of the ARP class. Its one action polices in
+ * packets a second at one rate, passing what conforms and dropping the rest,
+ * as the meter does.
+ */
+static int rtl9602c_storm_rule_check(struct flow_rule *rule, unsigned int cls,
+				     struct netlink_ext_ack *extack)
+{
+	u64 keys = BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL) |
+		   BIT_ULL(FLOW_DISSECTOR_KEY_BASIC);
+	const struct flow_action_entry *act;
+	struct flow_match_control control;
+	struct flow_match_basic basic;
+
+	if (cls != RTL9602C_STORM_ARP)
+		keys |= BIT_ULL(FLOW_DISSECTOR_KEY_ETH_ADDRS);
+	if (rule->match.dissector->used_keys & ~keys)
+		goto wider;
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CONTROL)) {
+		flow_rule_match_control(rule, &control);
+		if (control.mask->flags)
+			goto wider;
+	}
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_BASIC)) {
+		flow_rule_match_basic(rule, &basic);
+		if (basic.mask->ip_proto ||
+		    (cls != RTL9602C_STORM_ARP && basic.mask->n_proto))
+			goto wider;
+	}
+
+	if (!flow_offload_has_one_action(&rule->action)) {
+		NL_SET_ERR_MSG_MOD(extack, "exactly one action, please");
+		return -EOPNOTSUPP;
+	}
+	act = &rule->action.entries[0];
+	if (act->id != FLOW_ACTION_POLICE) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "a destination-address match is offloaded as storm control, whose only action is `police`");
+		return -EOPNOTSUPP;
+	}
+	if (act->police.rate_bytes_ps) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "these meters count packets; use `police pkts_rate` rather than `rate`");
+		return -EOPNOTSUPP;
+	}
+	if (!act->police.rate_pkt_ps) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "storm control needs a packet rate: `police pkts_rate N pkts_burst M`");
+		return -EOPNOTSUPP;
+	}
+	if (act->police.exceed.act_id != FLOW_ACTION_DROP ||
+	    (act->police.notexceed.act_id != FLOW_ACTION_PIPE &&
+	     act->police.notexceed.act_id != FLOW_ACTION_ACCEPT)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "a meter passes what conforms and drops what exceeds: `conform-exceed drop`");
+		return -EOPNOTSUPP;
+	}
+	if (act->police.peakrate_bytes_ps || act->police.avrate ||
+	    act->police.overhead) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "a meter has one rate, and no peakrate, avrate or overhead");
+		return -EOPNOTSUPP;
+	}
+	return 0;
+
+wider:
+	NL_SET_ERR_MSG_MOD(extack,
+			   "storm control polices a whole class: match the destination address or the ARP EtherType and nothing else");
+	return -EOPNOTSUPP;
 }
 
 /*
@@ -1898,27 +2013,11 @@ static int rtl9602c_flower_replace(struct rtl9602c_priv *p, int port,
 	if (cls_id < 0 && rtl9602c_flower_is_arp(rule))
 		cls_id = RTL9602C_STORM_ARP;
 	if (cls_id >= 0) {
-		if (!flow_offload_has_one_action(&rule->action)) {
-			NL_SET_ERR_MSG_MOD(extack, "exactly one action, please");
-			return -EOPNOTSUPP;
-		}
+		err = rtl9602c_storm_rule_check(rule, (unsigned int)cls_id,
+						extack);
+		if (err)
+			return err;
 		act = &rule->action.entries[0];
-		if (act->id != FLOW_ACTION_POLICE) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "a destination-address match is offloaded as storm control, whose only action is `police`");
-			return -EOPNOTSUPP;
-		}
-
-		if (act->police.rate_bytes_ps) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "these meters count packets; use `police pkts_rate` rather than `rate`");
-			return -EOPNOTSUPP;
-		}
-		if (!act->police.rate_pkt_ps) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "storm control needs a packet rate: `police pkts_rate N pkts_burst M`");
-			return -EOPNOTSUPP;
-		}
 		return rtl9602c_storm_add(p, port, (unsigned int)cls_id,
 					  act->police.rate_pkt_ps,
 					  cls->cookie, extack);
@@ -4026,7 +4125,8 @@ static void rtl9602c_l34_flows_release_port(struct rtl9602c_priv *p, int port)
  * hold the weights of queues 1 to 7, the egress shaper and the ingress
  * policer. Then the ACL's port enables and default permits, the classifier's
  * control word, the DSCP-to-priority map, the port-priority word and the
- * priority-selection weights.
+ * priority-selection weights. Last, storm control: each class's enable and
+ * meter-select words, and the rate word of each of the sixteen meters.
  */
 static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 {
@@ -4061,6 +4161,15 @@ static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 		   rtl9602c_r(p, RTL9602C_QOS_PRIO_WEIGHT),
 		   rtl9602c_r(p, RTL9602C_QOS_PRIO_WEIGHT + 4),
 		   rtl9602c_r(p, RTL9602C_QOS_PRIO_WEIGHT_SEL));
+	for (i = 0; i < RTL9602C_STORM_NCLASS; i++)
+		seq_printf(s, "storm %-17s  enable %08x  meters %08x\n",
+			   rtl9602c_storm_class[i].name,
+			   rtl9602c_r(p, rtl9602c_storm_class[i].ctrl),
+			   rtl9602c_r(p, rtl9602c_storm_class[i].meter));
+	for (i = 0; i < RTL9602C_METER_COUNT; i++)
+		seq_printf(s, "%s%08x%s", i % 8 ? " " : "meter rates ",
+			   rtl9602c_r(p, RTL9602C_METER_CFG_HI(i)),
+			   i % 8 == 7 ? "\n" : "");
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_qos);

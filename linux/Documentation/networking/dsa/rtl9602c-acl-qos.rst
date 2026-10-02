@@ -262,7 +262,9 @@ Interfaces to user space
   values: per port the priority-to-queue word, the scheduler's weighted-queue
   bits, the queue weights, the egress shaper and the ingress policer; then the
   ACL's port enables and default permits, the classifier's control word, the
-  DSCP map, the port-priority word and the priority-selection weights.
+  DSCP map, the port-priority word and the priority-selection weights; last,
+  each storm-control class's enable and meter-select words and the rate word of
+  each of the sixteen meters.
 - The kernel log lines of these blocks. At setup ``rtl9602c-switch: classifier:
   128 entries usable of 256``; the loop lines ``rtl9602c-switch: port N: loop
   detected, closing through port M`` and ``rtl9602c-switch: port N: loop
@@ -1216,17 +1218,34 @@ assumption about the controls after the first are on the *bridging* page,
    * - Through ``tc``: ``flower dst_mac ff:ff:ff:ff:ff:ff`` (full mask) is the
        broadcast class, ``flower dst_mac 01:00:00:00:00:00/01:00:00:00:00:00``
        the multicast class, and ``flower protocol arp`` without a VLAN match the
-       ARP class. The one action must be ``police pkts_rate N`` with no byte
-       rate. Each rule takes its own meter, programmed in packet mode at N (at
-       most ``RTL9602C_METER_CFG_HI_RATE_MAX``) and bound to its class on its
-       port. The burst and the exceed action of ``police`` are not programmed:
-       every meter gets the default bucket. A source-address match, any other
-       destination or mask, or a byte-rate ``police`` is refused.
+       ARP class. The rule matches its class and nothing else, since the class
+       is policed whole: any other key, such as an EtherType beside a
+       destination, an IP protocol, a port or a VLAN, is refused, as are a
+       source-address match and any other destination or mask. The one action
+       must be ``police pkts_rate N``, passing what conforms and dropping what
+       exceeds, with no byte rate, peak rate, average rate or overhead. Each
+       rule takes its own meter, programmed in packet mode at N (at most
+       ``RTL9602C_METER_CFG_HI_RATE_MAX``) and bound to its class on its port.
+       The burst of ``police`` is not programmed: every meter gets the default
+       bucket.
      - M
      - ``tc filter add dev sfp ingress flower skip_sw dst_mac ff:ff:ff:ff:ff:ff
        action police pkts_rate 100 pkts_burst 200 conform-exceed drop`` limited
        broadcast; ``police rate 1mbit`` was refused with ``these meters count
-       packets``.
+       packets``. The same rule with ``protocol ip`` and ``ip_proto udp``, an
+       ARP rule with ``arp_op request``, and one with ``conform-exceed
+       drop/continue`` were refused, and ``qos`` showed no class enabled.
+   * - A class has one meter selector per port, so of several rules for one
+       class and port the one added last polices. Removing it hands the class
+       to the rule added before it, or switches the class off on the port when
+       none is left; removing any other rule leaves the binding alone. ``tc
+       filter replace``, which adds the new rule before it removes the old,
+       therefore leaves the class on, on the new rule's meter.
+     - M
+     - In ``qos``, the broadcast class's selector followed a second rule on
+       ``sfp`` and went back to the first when the second was removed; after a
+       ``tc filter replace`` the class was still enabled, on the meter
+       programmed at the new rate, and the old meter was back at its maximum.
    * - The destination-address shapes of the previous row: the group bit is the
        least significant bit of the first octet, and all ones is the broadcast
        address.
@@ -1269,9 +1288,12 @@ its callers):
 3. Set the port's bit of the class's enable register. Purpose: the class
    polices. (T)
 
-Removal writes the nibble to 0, clears the bit, then resets and returns the
-meter. Steps 1 to 3 are checked by the measurements of the meters and of the
-classes above, and by the storm-control rates matching their settings.
+Removing the rule that polices its class and port binds the rule added before
+it by steps 2 and 3, the bit staying set; with no rule left it clears the bit,
+then writes the nibble to 0, so that the class is never live on meter 0. The
+removed rule's meter is reset and returned last. Steps 1 to 3 are checked by the
+measurements of the meters and of the classes above, and by the storm-control
+rates matching their settings.
 
 The ingress policer
 ===================
@@ -2341,18 +2363,11 @@ Known limitations
 =================
 
 - A flower rule whose destination address is all ones or the group bit alone, or
-  whose EtherType is exactly ARP with no VLAN match, is taken for a
-  storm-control rule, and the driver looks at nothing else in it. Its other
-  keys, such as an IP protocol or a port, are accepted and do not narrow the
-  class. The same three matches cannot make an ACL rule: with any action but
-  ``police`` they are refused, so the broadcast address, the group bit and ARP
-  cannot be dropped or trapped by an ACL rule.
-- The driver keeps one binding for each storm-control class and port. A second
-  rule for a class and port that already has one takes another meter and
-  replaces the binding, and removing either rule unbinds the class from the port
-  whatever the other rule says. ``tc filter replace`` of a storm-control rule
-  adds the new rule before it removes the old one, so afterwards the class is
-  off on that port although the new rule is listed.
+  whose EtherType is exactly ARP with no VLAN match, is a storm-control rule, and
+  with any action but ``police`` it is refused, so the broadcast address, the
+  group bit and ARP cannot be dropped or trapped by an ACL rule.
+- Of several storm-control rules for one class and port only the one added last
+  polices, although ``tc`` lists every one of them as offloaded.
 - The driver puts a new ACL rule in the lowest free entry and does not use the
   priority of the ``tc`` filter, so which of two rules that match the same frame
   decides is not known (see "Open questions").
