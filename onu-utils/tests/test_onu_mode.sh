@@ -86,6 +86,8 @@ check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
 check 'logged "^ip link set gem256 up"'
 check 'logged "^udhcpc -i gem256 "'
 check 'logged "devices = { sfp, gem256 }"'
+check 'logged "flowtable ft {"'
+check 'logged "flow add @ft"'
 check 'logged "oifname \"gem256\" masquerade"'
 check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
 check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
@@ -118,6 +120,34 @@ conf MODE=router WAN_PROTO=static WAN_ADDRESS=203.0.113.2/30 WAN_GATEWAY=203.0.1
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip address add 203.0.113.2/30 dev gem256"'
 check 'logged "^ip route replace default via 203.0.113.1 dev gem256"'
+teardown
+
+echo "a NAT table that nft refuses"
+setup
+printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n[ "$2" = - ] || exit 0\ncat >/dev/null\necho "Error: syntax error" >&2\nexit 1\n' >"$T/bin/nft"
+conf MODE=router WAN_PROTO=static WAN_ADDRESS=203.0.113.2/30 WAN_GATEWAY=203.0.113.1
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^logger -t onu-mode no NAT: nft refused the table: Error: syntax error"'
+teardown
+
+echo "a PPPoE session without name servers"
+setup
+printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
+	'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns - -"' \
+	"$REAL_SLEEP" >"$T/bin/pppoed"
+conf MODE=router WAN_PROTO=pppoe
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "WAN up on ppp0" && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "WAN up on ppp0"'
+check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
+check '"$MODE_SCRIPT" status >/dev/null'
+check '! "$MODE_SCRIPT" status | grep -q "^dns"'
 teardown
 
 echo "from router back to bridge"

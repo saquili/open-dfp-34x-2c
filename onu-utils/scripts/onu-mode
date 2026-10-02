@@ -155,19 +155,20 @@ lan_dhcp() {
 
 # NAT out of the device $2, and the flows between the LAN and the GEM
 # interface $1 offloaded to the switch: netfilter follows a VLAN or a PPPoE
-# session down to the GEM interface.
+# session down to the GEM interface. The flowtable is "ft": "offload" is a
+# word of nft's own, and a table that does not parse is not loaded at all.
 nat_up() {
 	nft delete table inet $TABLE 2>/dev/null
-	nft -f - <<EOF
+	if ! err=$(nft -f - 2>&1 <<EOF
 table inet $TABLE {
-	flowtable offload {
+	flowtable ft {
 		hook ingress priority filter
 		devices = { sfp, $1 }
 		flags offload
 	}
 	chain forward {
 		type filter hook forward priority filter - 1; policy accept;
-		meta l4proto { tcp, udp } flow add @offload
+		meta l4proto { tcp, udp } flow add @ft
 	}
 	chain postrouting {
 		type nat hook postrouting priority srcnat; policy accept;
@@ -175,6 +176,10 @@ table inet $TABLE {
 	}
 }
 EOF
+	); then
+		log "no NAT: nft refused the table: $(echo "$err" | head -1)"
+		return 1
+	fi
 }
 
 # The PPPoE client on $1, started again whenever the link ends. Its "up" line
@@ -184,7 +189,12 @@ pppoe_loop() {
 		pppoed up -i "$1" -f "$CREDS" -D 2>>"$RUN/pppoed.log" |
 			while read -r word dev _ _ _ _ _ _ _ dns1 dns2; do
 				[ "$word" = up ] || continue
-				echo "$dns1 $dns2" | sed 's/ *- *//g' >"$RUN/onu-dns"
+				dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
+				if [ -n "$dns" ]; then
+					echo "$dns" >"$RUN/onu-dns"
+				else
+					rm -f "$RUN/onu-dns"
+				fi
 				log "WAN up on $dev"
 			done
 		sleep 5
@@ -328,6 +338,7 @@ status)
 	[ -r "$RUN/onu-wan" ] && read -r gem wan out <"$RUN/onu-wan" &&
 		echo "wan $wan on $gem, out by $out"
 	[ -s "$RUN/onu-dns" ] && echo "dns $(cat "$RUN/onu-dns")"
+	exit 0
 	;;
 watch)
 	watch
