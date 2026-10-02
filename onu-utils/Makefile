@@ -41,6 +41,7 @@ $(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o
 check: $(BUILD)/test_factory $(BUILD)/test_pondev
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
+	sh tests/test_onu_mode.sh
 
 clean:
 	rm -rf $(BUILD)

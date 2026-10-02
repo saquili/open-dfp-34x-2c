@@ -1,0 +1,26 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# dhcp-wan: what udhcpc runs on the WAN of router mode (onu-mode), with the
+# event as its argument and the lease in its environment: the address, the
+# default route and, for the LAN's DHCP server, the name servers.
+#
+# ONU_ROOT names another root for the files it writes, which the tests use.
+
+RUN=${ONU_ROOT:-}/run
+
+case $1 in
+deconfig)
+	ip address flush dev "$interface"
+	rm -f "$RUN/onu-dns"
+	;;
+bound | renew)
+	ip address flush dev "$interface"
+	ip address add "$ip/${mask:-24}" dev "$interface"
+	[ -n "${router:-}" ] &&
+		ip route replace default via "${router%% *}" dev "$interface"
+	[ -n "${dns:-}" ] && echo "$dns" >"$RUN/onu-dns"
+	;;
+esac
+exit 0

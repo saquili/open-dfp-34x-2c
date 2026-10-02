@@ -1,0 +1,345 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-mode: put the stick in the mode its settings name, bridge or router.
+#
+#   onu-mode start    at boot: take the settings from /etc/onu.conf and apply
+#   onu-mode apply    apply the settings of /run/onu.conf again, after a change
+#   onu-mode stop     stop omcid and take the router down
+#   onu-mode status   the mode in force and, in router mode, the WAN
+#
+# The settings are KEY=value lines in /run/onu.conf, which the status daemon
+# rewrites; /etc/onu.conf has the defaults and says what each key means. The
+# PPPoE user and secret are in /run/onu-pppoe, as "user secret", readable by
+# root only; /etc/onu-pppoe, if a bench's files carry one, seeds it.
+#
+# In bridge mode omcid connects the host link to the PON as the OLT
+# provisions it. In router mode omcid leaves the OLT's bridge out (omcid -r)
+# and the stick routes: the LAN is the host link, sfp, with an address and a
+# DHCP server; the WAN is a GEM port that the OLT provisioned, or a VLAN on
+# it, with an address by PPPoE, DHCP or by hand; and NAT translates what
+# leaves by the WAN, the switch carrying the flows once they are set up. A
+# watcher (onu-mode watch) brings the WAN up when the OLT provisions its GEM
+# port and restarts the PPPoE or DHCP client when it ends.
+#
+# ONU_ROOT names another root for the files it reads and writes, which the
+# tests use.
+
+set -u
+
+ROOT=${ONU_ROOT:-}
+RUN=$ROOT/run
+CONF=$RUN/onu.conf
+CREDS=$RUN/onu-pppoe
+NET=$ROOT/sys/class/net
+FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
+SHARE=$ROOT/usr/share/onu
+TABLE=onu-router
+
+log() {
+	echo "onu-mode: $*" >&2
+	logger -t onu-mode "$*" 2>/dev/null
+	return 0
+}
+
+# The settings: the defaults, then /run/onu.conf. A key that is not one of
+# these and a value with characters no setting has are left out.
+load() {
+	MODE=bridge
+	WAN_GEM=auto
+	WAN_VLAN=
+	WAN_PROTO=dhcp
+	WAN_ADDRESS=
+	WAN_GATEWAY=
+	LAN_ADDRESS=192.168.1.1/24
+	LAN_DHCP=on
+	LAN_DHCP_START=192.168.1.100
+	LAN_DHCP_END=192.168.1.199
+	[ -r "$CONF" ] || return 0
+	while IFS='=' read -r key value; do
+		case $key in
+		MODE | WAN_GEM | WAN_VLAN | WAN_PROTO | WAN_ADDRESS | WAN_GATEWAY | \
+			LAN_ADDRESS | LAN_DHCP | LAN_DHCP_START | LAN_DHCP_END) ;;
+		*) continue ;;
+		esac
+		case $value in
+		*[!A-Za-z0-9./_-]*)
+			log "$key: not a value; the default stays"
+			continue
+			;;
+		esac
+		eval "$key=\$value"
+	done <"$CONF"
+}
+
+# The dotted mask of a prefix length.
+netmask() {
+	bits=$1
+	mask=
+	for octet in 1 2 3 4; do
+		if [ "$bits" -ge 8 ]; then
+			n=255
+			bits=$((bits - 8))
+		else
+			n=$((256 - (1 << (8 - bits))))
+			[ "$bits" -eq 0 ] && n=0
+			bits=0
+		fi
+		mask=$mask${mask:+.}$n
+	done
+	echo "$mask"
+}
+
+pid_of() {
+	[ -r "$RUN/$1.pid" ] && cat "$RUN/$1.pid"
+}
+
+stop_pid() {
+	pid=$(pid_of "$1")
+	[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	rm -f "$RUN/$1.pid"
+}
+
+# omcid, with -r in router mode. Its log goes on in /run/omcid.log.
+omcid_run() {
+	killall omcid 2>/dev/null && sleep 1
+	if [ "$1" = router ]; then
+		omcid -r >>"$RUN/omcid.log" 2>&1 &
+	else
+		omcid >>"$RUN/omcid.log" 2>&1 &
+	fi
+}
+
+# What omcid built in bridge mode: the bridge and the VLAN rules.
+bridge_down() {
+	ip link del omcibr0 2>/dev/null
+	tc qdisc del dev sfp clsact 2>/dev/null
+	tc qdisc del dev pon clsact 2>/dev/null
+	return 0
+}
+
+# The GEM interface of the WAN: gemN for WAN_GEM=N, or with WAN_GEM=auto the
+# one of the lowest Port-ID but 4095, which OLTs give to multicast.
+wan_gem() {
+	if [ "$WAN_GEM" != auto ]; then
+		[ -e "$NET/gem$WAN_GEM" ] && echo "gem$WAN_GEM"
+		return 0
+	fi
+	for id in $(ls "$NET" 2>/dev/null | sed -n 's/^gem\([0-9][0-9]*\)$/\1/p' | sort -n); do
+		[ "$id" = 4095 ] && continue
+		echo "gem$id"
+		return 0
+	done
+}
+
+# The DHCP server of the LAN, with the WAN's name servers when they are known.
+lan_dhcp() {
+	stop_pid udhcpd
+	[ "$LAN_DHCP" = on ] || return 0
+	{
+		echo "interface sfp"
+		echo "start $LAN_DHCP_START"
+		echo "end $LAN_DHCP_END"
+		echo "lease_file $RUN/udhcpd.leases"
+		echo "pidfile $RUN/udhcpd.pid"
+		echo "opt router ${LAN_ADDRESS%/*}"
+		echo "opt subnet $(netmask "${LAN_ADDRESS#*/}")"
+		[ -s "$RUN/onu-dns" ] && echo "opt dns $(cat "$RUN/onu-dns")"
+		echo "opt lease 3600"
+	} >"$RUN/udhcpd.conf"
+	[ -e "$RUN/udhcpd.leases" ] || : >"$RUN/udhcpd.leases"
+	cp "$RUN/onu-dns" "$RUN/udhcpd.dns" 2>/dev/null || rm -f "$RUN/udhcpd.dns"
+	udhcpd "$RUN/udhcpd.conf"
+}
+
+# NAT out of the device $2, and the flows between the LAN and the GEM
+# interface $1 offloaded to the switch: netfilter follows a VLAN or a PPPoE
+# session down to the GEM interface.
+nat_up() {
+	nft delete table inet $TABLE 2>/dev/null
+	nft -f - <<EOF
+table inet $TABLE {
+	flowtable offload {
+		hook ingress priority filter
+		devices = { sfp, $1 }
+		flags offload
+	}
+	chain forward {
+		type filter hook forward priority filter - 1; policy accept;
+		meta l4proto { tcp, udp } flow add @offload
+	}
+	chain postrouting {
+		type nat hook postrouting priority srcnat; policy accept;
+		oifname "$2" masquerade
+	}
+}
+EOF
+}
+
+# The PPPoE client on $1, started again whenever the link ends. Its "up" line
+# gives the name servers for the LAN.
+pppoe_loop() {
+	while :; do
+		pppoed up -i "$1" -f "$CREDS" -D 2>>"$RUN/pppoed.log" |
+			while read -r word dev _ _ _ _ _ _ _ dns1 dns2; do
+				[ "$word" = up ] || continue
+				echo "$dns1 $dns2" | sed 's/ *- *//g' >"$RUN/onu-dns"
+				log "WAN up on $dev"
+			done
+		sleep 5
+	done
+}
+
+# Bring the WAN up on the GEM interface $1.
+wan_up() {
+	gem=$1
+	wan=$gem
+	ip link set "$gem" up
+	if [ -n "$WAN_VLAN" ]; then
+		ip link add link "$gem" name wan type vlan id "$WAN_VLAN"
+		ip link set wan up
+		wan=wan
+	fi
+	out=$wan
+	case $WAN_PROTO in
+	pppoe)
+		pppoe_loop "$wan" &
+		echo $! >"$RUN/pppoe-loop.pid"
+		out=ppp0
+		;;
+	static)
+		ip address add "$WAN_ADDRESS" dev "$wan"
+		ip route replace default via "$WAN_GATEWAY" dev "$wan"
+		;;
+	*)
+		udhcpc -i "$wan" -b -p "$RUN/udhcpc.pid" -s "$SHARE/dhcp-wan"
+		;;
+	esac
+	nat_up "$gem" "$out"
+	echo "$gem $wan $out" >"$RUN/onu-wan"
+	log "WAN on $wan ($WAN_PROTO), GEM port ${gem#gem}"
+}
+
+wan_down() {
+	stop_pid pppoe-loop
+	killall pppoed 2>/dev/null
+	stop_pid udhcpc
+	nft delete table inet $TABLE 2>/dev/null
+	ip link del wan 2>/dev/null
+	rm -f "$RUN/onu-wan" "$RUN/onu-dns"
+	return 0
+}
+
+# One round of the watcher: the WAN follows its GEM port, and the DHCP server
+# follows the name servers.
+tick() {
+	load
+	gem=$(wan_gem)
+	cur=
+	[ -r "$RUN/onu-wan" ] && read -r cur _ <"$RUN/onu-wan"
+	if [ -n "$gem" ] && [ "$gem" != "$cur" ]; then
+		[ -n "$cur" ] && wan_down
+		wan_up "$gem"
+	elif [ -z "$gem" ] && [ -n "$cur" ]; then
+		log "GEM port of the WAN gone"
+		wan_down
+	fi
+	if [ -s "$RUN/onu-dns" ] &&
+		[ "$(cat "$RUN/onu-dns")" != "$(cat "$RUN/udhcpd.dns" 2>/dev/null)" ]; then
+		lan_dhcp
+	fi
+}
+
+watch() {
+	echo $$ >"$RUN/onu-watch.pid"
+	while :; do
+		tick
+		sleep 5
+	done
+}
+
+router_up() {
+	echo 1 >"$FORWARD"
+	ip address add "$LAN_ADDRESS" dev sfp 2>/dev/null
+	lan_dhcp
+	# The tests run the watcher's rounds themselves.
+	[ -n "${ONU_MODE_NO_WATCH:-}" ] || "$0" watch &
+}
+
+router_down() {
+	stop_pid onu-watch
+	wan_down
+	stop_pid udhcpd
+	[ -n "$LAN_ADDRESS" ] && ip address del "$LAN_ADDRESS" dev sfp 2>/dev/null
+	echo 0 >"$FORWARD"
+	return 0
+}
+
+apply() {
+	old=
+	[ -r "$RUN/onu-mode" ] && read -r old <"$RUN/onu-mode"
+	if [ "$old" = router ]; then
+		# Down with the settings it came up with.
+		[ -r "$RUN/onu-mode.conf" ] && CONF=$RUN/onu-mode.conf
+		load
+		router_down
+		CONF=$RUN/onu.conf
+	fi
+	load
+	case $MODE in
+	bridge | router) ;;
+	*)
+		log "mode $MODE is not one: bridge"
+		MODE=bridge
+		;;
+	esac
+	if [ "$old" != "$MODE" ]; then
+		[ "$MODE" = router ] && bridge_down
+		omcid_run "$MODE"
+	fi
+	[ "$MODE" = router ] && router_up
+	echo "$MODE" >"$RUN/onu-mode"
+	cp "$CONF" "$RUN/onu-mode.conf" 2>/dev/null
+	log "$MODE mode"
+}
+
+case ${1:-} in
+start)
+	[ -e "$CONF" ] || cp "$ROOT/etc/onu.conf" "$CONF" 2>/dev/null || : >"$CONF"
+	if [ ! -e "$CREDS" ] && [ -r "$ROOT/etc/onu-pppoe" ]; then
+		(umask 077 && cp "$ROOT/etc/onu-pppoe" "$CREDS")
+	fi
+	apply
+	;;
+apply)
+	apply
+	;;
+stop)
+	load
+	router_down
+	killall omcid 2>/dev/null
+	rm -f "$RUN/onu-mode"
+	;;
+status)
+	mode=
+	[ -r "$RUN/onu-mode" ] && read -r mode <"$RUN/onu-mode"
+	echo "mode ${mode:-none}"
+	[ -r "$RUN/onu-wan" ] && read -r gem wan out <"$RUN/onu-wan" &&
+		echo "wan $wan on $gem, out by $out"
+	[ -s "$RUN/onu-dns" ] && echo "dns $(cat "$RUN/onu-dns")"
+	;;
+watch)
+	watch
+	;;
+tick)
+	tick
+	;;
+netmask)
+	netmask "${2:-0}"
+	;;
+*)
+	echo "usage: onu-mode start|apply|stop|status" >&2
+	exit 2
+	;;
+esac

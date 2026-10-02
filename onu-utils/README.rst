@@ -30,6 +30,24 @@ The small programs of the ONU.
           bandwidth maps             5000000
           T-CONT 0  Alloc-ID 1024
 
+``onu-mode``
+   puts the stick in the mode its settings name (``/run/onu.conf``, seeded from
+   ``/etc/onu.conf``, which says what each key means). In bridge mode omcid
+   connects the host link to the PON as the OLT provisions it. In router mode
+   omcid leaves the OLT's bridge out (``omcid -r``) and the stick routes: the
+   LAN is the host link ``sfp``, with an address and BusyBox's DHCP server;
+   the WAN is a GEM port the OLT provisioned, or a VLAN on it, with an address
+   by PPPoE (pppoed, with the user and secret of ``/run/onu-pppoe``), by DHCP
+   (BusyBox's client, with ``dhcp-wan`` as its script) or by hand; and an
+   nftables table translates what leaves by the WAN and hands the flows to the
+   switch through a flowtable. A watcher brings the WAN up once the OLT has
+   provisioned its GEM port, and starts the PPPoE client again when its link
+   ends::
+
+      onu-mode start      # at boot
+      onu-mode apply      # after /run/onu.conf changed
+      onu-mode status
+
 Building and testing::
 
    make           # build/ponid and build/pon
@@ -38,4 +56,6 @@ Building and testing::
 ``ponid`` needs zlib, ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
-``linux/``). The tests of ``pon`` read and print messages that they build.
+``linux/``). The tests of ``pon`` read and print messages that they build; the
+tests of ``onu-mode`` and ``dhcp-wan`` run them against stand-ins for the
+programs they call, in a scratch root.
