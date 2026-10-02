@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# What the image is. The build system writes a file of the same name that says
+# what built it; this one replaces it.
+NAME="open-dfp-34x-2c"
+ID=open-dfp-34x-2c
+PRETTY_NAME="open-dfp-34x-2c on the ODI DFP-34X-2C3"

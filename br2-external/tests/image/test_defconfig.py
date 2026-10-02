@@ -78,5 +78,41 @@ class Kernel(unittest.TestCase):
         self.assertEqual(board["BR2_LINUX_KERNEL_LZMA"], "y")
 
 
+class Root(unittest.TestCase):
+    def test_the_files_it_names_exist(self):
+        with open(BOARD_DEFCONFIG, encoding="utf-8") as handle:
+            text = handle.read()
+        paths = re.findall(r'\$\(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH\)(/[^" ]+)', text)
+        self.assertGreaterEqual(len(paths), 3)
+        for path in paths:
+            self.assertTrue(os.path.exists(EXTERNAL + path), path)
+
+    def test_it_makes_no_root_filesystem_image_of_its_own(self):
+        board = settings(BOARD_DEFCONFIG)
+        for key in board:
+            if key.startswith("BR2_TARGET_ROOTFS_"):
+                self.assertIsNone(board[key], key)
+
+    def test_busybox_and_dropbear_are_the_only_packages(self):
+        board = settings(BOARD_DEFCONFIG)
+        packages = sorted(k for k, v in board.items()
+                          if k.startswith("BR2_PACKAGE_") and v == "y")
+        self.assertEqual(packages, ["BR2_PACKAGE_DROPBEAR", "BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS",
+                                    "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12"])
+
+    def test_the_overlay_is_set(self):
+        board = settings(BOARD_DEFCONFIG)
+        self.assertIn("/board/dfp-34x-2c3/overlay", board["BR2_ROOTFS_OVERLAY"])
+
+    def test_a_bench_can_lay_a_second_overlay_over_the_first(self):
+        overlay = settings(BOARD_DEFCONFIG)["BR2_ROOTFS_OVERLAY"].strip('"').split()
+        self.assertEqual(len(overlay), 2)
+        self.assertTrue(overlay[0].endswith("/board/dfp-34x-2c3/overlay"))
+        self.assertEqual(overlay[1], "$(OPEN_DFP_34X_2C_LOCAL_OVERLAY)")
+
+    def test_no_init_system_of_the_build_system_is_installed(self):
+        self.assertEqual(settings(BOARD_DEFCONFIG)["BR2_INIT_NONE"], "y")
+
+
 if __name__ == "__main__":
     unittest.main()

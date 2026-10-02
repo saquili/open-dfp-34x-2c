@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# The ODI DFP-34X-2C3: the kernel, built with the toolchain this file describes.
-# Buildroot builds it from the external tree br2-external: the toolchain, then
-# the kernel of linux/ with the board's configuration, as a legacy U-Boot image.
-# The root filesystem and the flash images follow in the commits after this.
+# The ODI DFP-34X-2C3: the kernel and the root filesystem, built with the
+# toolchain this file describes. The flash images are made from them by the
+# post-image script of the commit that follows.
 #
-# Every executable that the toolchain makes for the target is linked
-# statically, and no shared library is built. The shared libraries of this
-# toolchain contain three functions with instructions that the core cannot run
+# Every executable in the root filesystem is linked statically and the root
+# filesystem holds no shared object. The shared libraries of this toolchain
+# contain three functions with instructions that the core cannot run
 # (br2-external/README.rst, "The instruction-set gate over the toolchain's own
 # objects"), and no option leaves them out; a static program takes only the
-# objects it refers to. docs/adr/0010 records the decision.
+# objects it refers to, and the instruction-set gate passes the whole target
+# tree. docs/adr/0010 records the decision.
 
 # MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
 # variant comes from the patch in buildroot/patches.
@@ -57,9 +57,21 @@ BR2_LINUX_KERNEL_DEFCONFIG="rtl9602c"
 BR2_LINUX_KERNEL_UIMAGE=y
 BR2_LINUX_KERNEL_LZMA=y
 
-# Nothing for the target yet: no BusyBox, no init system, no root filesystem.
-# BR2_PACKAGE_BUSYBOX is not set
+# The root filesystem: BusyBox, dropbear and the files of the overlay. The
+# build system installs no init scripts; BusyBox init and the boot script are in
+# the overlay. A second overlay, named in OPEN_DFP_34X_2C_LOCAL_OVERLAY, is laid
+# over the first when the variable is set: the files of one bench (an ssh key,
+# other addresses) that do not belong to the repository.
 BR2_INIT_NONE=y
-BR2_SYSTEM_BIN_SH_NONE=y
 # BR2_TARGET_GENERIC_GETTY is not set
+# BR2_PACKAGE_IFUPDOWN_SCRIPTS is not set
+BR2_TARGET_GENERIC_HOSTNAME="dfp-34x-2c3"
+BR2_TARGET_GENERIC_ISSUE="open-dfp-34x-2c on the ODI DFP-34X-2C3"
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/overlay $(OPEN_DFP_34X_2C_LOCAL_OVERLAY)"
+BR2_PACKAGE_BUSYBOX_CONFIG="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/busybox.config"
+BR2_PACKAGE_DROPBEAR=y
+# BR2_PACKAGE_DROPBEAR_CLIENT is not set
+BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
+
+# The build system makes no root filesystem image of its own.
 # BR2_TARGET_ROOTFS_TAR is not set

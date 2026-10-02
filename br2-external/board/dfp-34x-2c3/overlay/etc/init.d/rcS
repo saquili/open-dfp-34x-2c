@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The boot script of the ODI DFP-34X-2C3 image. BusyBox init runs it once from
+# /etc/inittab, before the console shell starts. It mounts the file systems that
+# the kernel does not, gives the stick its management addresses, starts the ssh
+# server and prints a line that says the board is ready.
+#
+# The root file system is read-only. Everything that is written lives in memory
+# and is gone at the next restart, including the host key of the ssh server,
+# which is made again at every boot.
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+
+# The management addresses are in the ranges that RFC 5737 reserves for
+# documentation. The first is on the host link itself; the second is on a VLAN
+# of that link, so that it is not lost when the link joins a bridge. A bench
+# with other addresses puts them in /etc/board.conf (docs/handbook/building.rst).
+DATA_ADDRESS=192.0.2.2/30
+MGMT_VLAN=4094
+MGMT_ADDRESS=198.51.100.2/30
+[ -r /etc/board.conf ] && . /etc/board.conf
+
+warn() {
+	echo "rcS: $*" >&2
+}
+
+# The file systems. The kernel mounts devtmpfs on /dev itself when it starts
+# the first program; it is mounted here only if that has not happened.
+mount -t proc proc /proc || warn "cannot mount /proc"
+mount -t sysfs sysfs /sys || warn "cannot mount /sys"
+grep -q ' /dev devtmpfs ' /proc/mounts || mount -t devtmpfs devtmpfs /dev || warn "no /dev"
+mkdir -p /dev/pts
+mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts || warn "cannot mount /dev/pts"
+ln -sf /proc/self/fd /dev/fd
+ln -sf /proc/self/fd/0 /dev/stdin
+ln -sf /proc/self/fd/1 /dev/stdout
+ln -sf /proc/self/fd/2 /dev/stderr
+mount -t tmpfs -o mode=1777 tmpfs /tmp || warn "cannot mount /tmp"
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run || warn "cannot mount /run"
+mount -t tmpfs -o mode=0755 tmpfs /var || warn "cannot mount /var"
+ln -s ../run /var/run
+ln -s ../tmp /var/tmp
+mkdir -p /var/log
+
+hostname -F /etc/hostname
+
+# The links. The stick's host side is the interface sfp.
+ip link set lo up
+ip link set sfp up || warn "no interface sfp"
+ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
+ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" || warn "no VLAN $MGMT_VLAN on sfp"
+ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
+ip link set mgmt up || warn "mgmt does not come up"
+
+# The ssh server takes keys only: /root/.ssh/authorized_keys, which an image
+# built with a bench's keys carries and this one does not.
+mkdir -p /run/dropbear
+dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no host key"
+dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid || warn "dropbear did not start"
+
+echo
+echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
+echo "open-dfp-34x-2c: ssh on $DATA_ADDRESS (sfp) and $MGMT_ADDRESS (VLAN $MGMT_VLAN)"
+echo "open-dfp-34x-2c: ready"

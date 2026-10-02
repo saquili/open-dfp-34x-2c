@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# BusyBox init reads this file. The format is <id>:<runlevels>:<action>:<process>;
+# the id names the terminal (empty: the console) and the runlevels are ignored.
+
+# What the boot does is in /etc/init.d/rcS. It runs once and init waits for it.
+::sysinit:/etc/init.d/rcS
+
+# A shell on the console, started again whenever it exits. The dash makes it a
+# login shell with the console as its controlling terminal. There is no login
+# prompt: the console of the stick is a serial line on the bench.
+::respawn:-/bin/sh
+
+# What init does when it is told to restart or halt.
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r
