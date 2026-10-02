@@ -47,6 +47,15 @@ mkdir -p /var/log
 
 hostname -F /etc/hostname
 
+# The system log, in memory: syslogd keeps /run/messages and one older copy, of
+# 64 KiB each, and klogd copies the kernel's messages into it.
+syslogd -O /run/messages -s 64 -b 1 || warn "no system log"
+klogd || warn "the kernel's messages do not reach the system log"
+
+# The watchdog restarts the stick when nothing feeds it for the driver's
+# timeout. The daemon feeds it every ten seconds; a hung system does not.
+watchdog -t 10 /dev/watchdog || warn "nothing feeds the watchdog"
+
 # The packet filter, before any link is up and any server listens. Without it
 # the stick accepts everything.
 nft -f /etc/nftables.conf || warn "no packet filter: the stick accepts everything"

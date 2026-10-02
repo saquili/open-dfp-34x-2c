@@ -76,7 +76,7 @@ class BootScript(unittest.TestCase):
         # needs is out of date: take the applet out of the configuration.
         called = set(commands(read(RCS)))
         for word in ("mount", "mkdir", "ln", "hostname", "ip", "grep", "uname", "dropbear",
-                     "dropbearkey"):
+                     "dropbearkey", "syslogd", "klogd", "watchdog"):
             self.assertIn(word, called)
 
     def test_it_mounts_what_the_kernel_leaves_to_it(self):
@@ -108,6 +108,15 @@ class BootScript(unittest.TestCase):
 
     def test_a_bench_can_override_the_addresses(self):
         self.assertIn("[ -r /etc/board.conf ] && . /etc/board.conf", read(RCS))
+
+
+class Watchdog(unittest.TestCase):
+    def test_the_daemon_feeds_it_well_inside_the_drivers_timeout(self):
+        # The driver's timeout on this board is 44 seconds, as
+        # /sys/class/watchdog/watchdog0/timeout reads.
+        match = re.search(r"^watchdog -t (\d+) /dev/watchdog ", read(RCS), re.M)
+        self.assertIsNotNone(match)
+        self.assertLessEqual(int(match.group(1)), 15)
 
 
 class PacketFilter(unittest.TestCase):
