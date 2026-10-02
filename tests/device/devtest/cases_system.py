@@ -55,17 +55,22 @@ def services(ctx: Context):
 
 
 @case("system.filesystems", "System",
-      "The root file system is read-only; /tmp, /run and /var are in memory")
+      "The root is the image's own, read-only from flash or the initramfs of a RAM boot; "
+      "/tmp, /run and /var are in memory")
 def filesystems(ctx: Context):
     mounts = {}
     for line in ctx.stick.text("cat /proc/mounts").splitlines():
         dev, point, kind, options = line.split()[:4]
         mounts[point] = (kind, options.split(","))
-    root = mounts.get("/", ("?", []))
+    kind, options = mounts.get("/", ("missing", []))
+    if kind == "rootfs":
+        # A RAM boot runs from its initramfs, which lives in memory only.
+        root_ok, root = True, "/ the initramfs of a RAM boot"
+    else:
+        root_ok, root = "ro" in options, f"/ {kind} {'ro' if 'ro' in options else 'rw'}"
     memory = {p: mounts.get(p, ("missing", []))[0] for p in ("/tmp", "/run", "/var")}
-    ok = "ro" in root[1] and all(k == "tmpfs" for k in memory.values())
-    return verdict(ok, f"/ {root[0]} {'ro' if 'ro' in root[1] else 'rw'}; "
-                       + ", ".join(f"{p} {k}" for p, k in memory.items()))
+    ok = root_ok and all(k == "tmpfs" for k in memory.values())
+    return verdict(ok, f"{root}; " + ", ".join(f"{p} {k}" for p, k in memory.items()))
 
 
 @case("system.watchdog", "System", "The watchdog runs, and the daemon of the boot feeds it")

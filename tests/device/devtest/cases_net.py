@@ -144,6 +144,8 @@ def pond_values(ctx: Context):
     if code != 200:
         return failed(f"HTTP {code} {body[:200]}")
     values = json.loads(body)
-    missing = [k for k in ("kernel", "onu", "optics") if not isinstance(values.get(k), dict)]
+    kernel = values.get("kernel")
+    missing = [] if isinstance(kernel, str) and kernel.startswith("Linux version") else ["kernel"]
+    missing += [k for k in ("onu", "optics") if not isinstance(values.get(k), dict)]
     shown = ", ".join(f"{k}: {len(json.dumps(v))} B" for k, v in values.items())
     return verdict(not missing, f"HTTP {code}, {shown}" + (f"; missing {missing}" if missing else ""))

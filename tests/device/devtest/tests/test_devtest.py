@@ -171,6 +171,28 @@ class Cases(unittest.TestCase):
         self.assertEqual(cases_pon.dbm(20), "-17.0 dBm")
         self.assertEqual(cases_pon.dbm(0), "dark")
 
+    def test_the_root_is_read_only_from_flash_or_the_initramfs_of_a_ram_boot(self):
+        memory = "tmpfs /tmp tmpfs rw 0 0\ntmpfs /run tmpfs rw 0 0\ntmpfs /var tmpfs rw 0 0\n"
+        flash = context(stick=[("mounts", 0, "/dev/root / squashfs ro 0 0\n" + memory)])
+        self.assertEqual(cases_system.filesystems(flash).status, PASS)
+        ram = context(stick=[("mounts", 0, "rootfs / rootfs rw 0 0\n" + memory)])
+        outcome = cases_system.filesystems(ram)
+        self.assertEqual((outcome.status, outcome.evidence),
+                         (PASS, "/ the initramfs of a RAM boot; /tmp tmpfs, /run tmpfs, /var tmpfs"))
+        written = context(stick=[("mounts", 0, "/dev/mtdblock5 / jffs2 rw 0 0\n" + memory)])
+        self.assertEqual(cases_system.filesystems(written).status, FAIL)
+        no_tmp = context(stick=[("mounts", 0, "/dev/root / squashfs ro 0 0\n")])
+        self.assertEqual(cases_system.filesystems(no_tmp).status, FAIL)
+
+    def test_the_daemon_reports_the_kernel_as_its_version_line(self):
+        def values(kernel):
+            body = json.dumps({"kernel": kernel, "onu": {"state": "o5"},
+                               "optics": {"vcc_v": 3.3}})
+            return cases_net.pond_values(context(bench=[("curl", 0, body + "\n200")]))
+        self.assertEqual(values("Linux version 6.18.48 (builder)").status, PASS)
+        self.assertEqual(values({"release": "6.18.48"}).status, FAIL)
+        self.assertEqual(values(None).status, FAIL)
+
     def test_the_filter_must_drop_in_both_chains(self):
         two = "policy drop;\npolicy drop;\npolicy accept;\n"
         self.assertEqual(cases_net.filter_loaded(context(stick=[("nft list", 0, two)])).status, PASS)
