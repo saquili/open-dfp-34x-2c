@@ -86,9 +86,10 @@ Configuration
    * - ``CONFIG_NET_DSA_RTL9602C``
      - The RTL9602C switch driver, the only MAC driver in the tree. It selects
        ``PON``.
-   * - ``CONFIG_DEBUG_FS``
+   * - ``CONFIG_PON_OMCI_INJECT``
      - The debugfs directory ``pon`` and the inject file of each OMCI port
-       (see "The inject file").
+       (see "The inject file"). It needs ``CONFIG_DEBUG_FS``, is off by
+       default and off in the board configuration: it is for test images.
    * - ``CONFIG_NET_SWITCHDEV``
      - A frame received on an offloaded GEM interface carries
        ``offload_fwd_mark`` (see "Bridging and switchdev offload").
@@ -164,9 +165,9 @@ Interfaces to user space
   ``pon0omci0``, and the OMCI port has the read-only counters ``rx_messages``,
   ``rx_dropped``, ``tx_messages`` and ``tx_errors`` in its ``statistics``
   directory (see "Counters of the port").
-- debugfs, with ``CONFIG_DEBUG_FS``: ``/sys/kernel/debug/pon/pon0omci0/inject``,
-  which puts a message into the port as if the MAC had received it (see "The
-  inject file").
+- debugfs, with ``CONFIG_PON_OMCI_INJECT``:
+  ``/sys/kernel/debug/pon/pon0omci0/inject``, which puts a message into the
+  port as if the MAC had received it (see "The inject file").
 - ``ethtool -S gemN``: the MAC's counters for a GEM port, when the MAC keeps
   them (see "Statistics of a GEM interface").
 
@@ -283,8 +284,8 @@ Start-up, in order
 
 1. Register the class ``pon``. Purpose: PON devices and OMCI ports are devices
    of this class. (T)
-2. With ``CONFIG_DEBUG_FS``, create the debugfs directory ``pon``. Purpose:
-   each OMCI port gets its inject directory under it. (T)
+2. With ``CONFIG_PON_OMCI_INJECT``, create the debugfs directory ``pon``.
+   Purpose: each OMCI port gets its inject directory under it. (T)
 3. Take a dynamic character major with 256 minors, named ``pon_omci``.
    Purpose: the OMCI ports are the character devices of this region, so the
    class has at most 256 ports. (T)
@@ -573,15 +574,16 @@ sysfs device::
 The inject file
 ---------------
 
-With ``CONFIG_DEBUG_FS`` every OMCI port has a write-only file in debugfs, in a
-directory named after the port. A write holds one OMCI message as pairs of
-hexadecimal digits::
+With ``CONFIG_PON_OMCI_INJECT`` every OMCI port has a write-only file in
+debugfs, in a directory named after the port. A write holds one OMCI message as
+pairs of hexadecimal digits::
 
     # echo "<hex digit pairs>" > /sys/kernel/debug/pon/pon0omci0/inject
 
 A recorded provisioning exchange can be written through it message by message,
-and the daemon answers through the real MAC. The file exists in every kernel
-built with ``CONFIG_DEBUG_FS`` (see "Known limitations").
+and the daemon answers through the real MAC. A process that can write the file
+can make the daemon act as if the OLT had asked for anything, so the option
+that gives the file is off by default and in the board configuration.
 
 .. list-table::
    :header-rows: 1
@@ -590,7 +592,7 @@ built with ``CONFIG_DEBUG_FS`` (see "Known limitations").
    * - Fact
      - Tag
      - Checked by
-   * - With ``CONFIG_DEBUG_FS``, each port has
+   * - With ``CONFIG_PON_OMCI_INJECT``, each port has
        ``/sys/kernel/debug/pon/ponNomci0/inject``, mode 0200. Writing to it
        puts one message into the port as if the MAC had delivered it: the same
        queue, the same counters, the same wake-up. The daemon's answers still
@@ -2228,8 +2230,6 @@ Known limitations
   while the data path still uses it: lookups by network device and by number
   stop finding it, and the data path's later unregistration unregisters it a
   second time. The RTL9602C driver removes the data path first.
-- The inject file is not limited to development builds. It exists in any kernel
-  built with ``CONFIG_DEBUG_FS``, and the board configuration sets that option.
 
 Open questions
 ==============
@@ -2268,10 +2268,10 @@ Assumptions the driver depends on
        error other than ``-ENOLINK``, ``-ENETDOWN`` and ``-EAGAIN`` as the end
        of the channel ("The OMCI channel and poll").
      - Writing to the port before the OLT has configured the OMCC.
-   * - That a shipping image cannot inject OMCI ("The inject file", "Known
-       limitations").
-     - Listing the port's debugfs directory on an image built from the board
-       configuration.
+   * - That an image of the board configuration cannot inject OMCI ("The
+       inject file").
+     - Listing ``/sys/kernel/debug/pon`` on an image built from the board
+       configuration: it is not there.
    * - That the switch has forwarded every frame that arrives with
        ``offload_fwd_mark``, so that none arrives twice ("Transmit and
        receive").

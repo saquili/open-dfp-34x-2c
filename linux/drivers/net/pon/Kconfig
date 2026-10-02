@@ -21,3 +21,17 @@ config PON
 
 	  To compile this as a module, choose M here: the module will be
 	  called pon.
+
+config PON_OMCI_INJECT
+	bool "Inject OMCI messages through debugfs"
+	depends on PON && DEBUG_FS
+	help
+	  Give each OMCI port a debugfs file, pon/ponNomci0/inject. A write
+	  to it puts one OMCI message into the port as if the MAC had received
+	  it from the OLT, so that the management daemon can be tested against
+	  provisioning that the OLT at hand does not send. A process that can
+	  write the file can make the daemon act as if the OLT had asked for
+	  anything, so the option is for test images, not for an ONU in
+	  service.
+
+	  If unsure, say N.

@@ -53,7 +53,7 @@
  * first, so owns_netdev and dev_status must not take RTNL.
  */
 static DEFINE_MUTEX(pon_register_lock);
-#if IS_ENABLED(CONFIG_DEBUG_FS)
+#if IS_ENABLED(CONFIG_PON_OMCI_INJECT)
 /* The debugfs directory "pon", with a directory for each OMCI port. */
 static struct dentry *pon_debugfs;
 #endif
@@ -635,7 +635,7 @@ void pon_omci_port_rx(struct pon_omci_port *port, struct sk_buff *skb)
 }
 EXPORT_SYMBOL_GPL(pon_omci_port_rx);
 
-#if IS_ENABLED(CONFIG_DEBUG_FS)
+#if IS_ENABLED(CONFIG_PON_OMCI_INJECT)
 
 /*
  * The inject file, pon/ponNomci0/inject in debugfs. A write puts one message
@@ -651,7 +651,7 @@ EXPORT_SYMBOL_GPL(pon_omci_port_rx);
  * counts as received, also when it is dropped for want of a reader. It
  * bypasses whatever the MAC gates reception on, such as the activation state
  * or the OMCI channel, so the daemon's answers may still fail with -ENOLINK.
- * The file exists in every kernel built with CONFIG_DEBUG_FS.
+ * The file exists only in a kernel built with CONFIG_PON_OMCI_INJECT.
  */
 static ssize_t pon_omci_inject_write(struct file *file, const char __user *buf,
 				     size_t count, loff_t *ppos)
@@ -983,7 +983,7 @@ static int __init pon_init(void)
 	if (err)
 		return err;
 
-#if IS_ENABLED(CONFIG_DEBUG_FS)
+#if IS_ENABLED(CONFIG_PON_OMCI_INJECT)
 	pon_debugfs = debugfs_create_dir("pon", NULL);
 #endif
 
@@ -1016,7 +1016,7 @@ err_class:
 static void __exit pon_exit(void)
 {
 	pon_gem_exit();
-#if IS_ENABLED(CONFIG_DEBUG_FS)
+#if IS_ENABLED(CONFIG_PON_OMCI_INJECT)
 	debugfs_remove_recursive(pon_debugfs);
 #endif
 	pon_netlink_exit();
