@@ -3946,6 +3946,52 @@ static void rtl9602c_l34_flows_release_port(struct rtl9602c_priv *p, int port)
 }
 
 /*
+ * qos: the words of the blocks that a warm reboot leaves as the previous
+ * kernel wrote them, raw. Per port: the priority-to-queue word, the
+ * scheduler's weighted-queue bits, the word that holds queue 0's weight (two
+ * ports share it), the three that hold the weights of queues 1 to 7, the
+ * egress shaper and the ingress policer. Then the ACL's port enables and
+ * default permits, the classifier's control word, the DSCP-to-priority map,
+ * the port-priority word and the priority-selection weights.
+ */
+static int rtl9602c_qos_show(struct seq_file *s, void *unused)
+{
+	struct rtl9602c_priv *p = s->private;
+	unsigned int port, i;
+
+	seq_puts(s, "port  prio>queue  wfq       q0 weight q1-7 weights             shaper    policer\n");
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
+		u32 w = RTL9602C_SCHED_WEIGHT_Q1_7 + 12 * port;
+
+		seq_printf(s, "%4u  %08x    %08x  %08x  %08x %08x %08x  %08x  %08x\n",
+			   port,
+			   rtl9602c_r(p, RTL9602C_QOS_PRIO_TO_QUEUE + 4 * port),
+			   rtl9602c_r(p, RTL9602C_SCHED_WFQ_QUEUES + 4 * port),
+			   rtl9602c_r(p, RTL9602C_SCHED_WEIGHT_Q0 + 4 * (port / 2)),
+			   rtl9602c_r(p, w), rtl9602c_r(p, w + 4),
+			   rtl9602c_r(p, w + 8),
+			   rtl9602c_r(p, RTL9602C_SHAPE_PORT_CFG + 4 * port),
+			   rtl9602c_r(p, RTL9602C_POLICE_PORT(port)));
+	}
+	seq_printf(s, "acl port enable %08x  default permit %08x\n",
+		   rtl9602c_r(p, RTL9602C_ACL_PORT_EN),
+		   rtl9602c_r(p, RTL9602C_ACL_DEFAULT_PERMIT));
+	seq_printf(s, "cls control %08x\n", rtl9602c_r(p, RTL9602C_CLS_CTRL));
+	seq_puts(s, "dscp>prio");
+	for (i = 0; i < DIV_ROUND_UP(RTL9602C_QOS_DSCP_COUNT,
+				     RTL9602C_QOS_MAP_PER_WORD); i++)
+		seq_printf(s, " %08x",
+			   rtl9602c_r(p, RTL9602C_QOS_DSCP_TO_PRIO + 4 * i));
+	seq_printf(s, "\nport prio %08x  prio weights %08x %08x  select %08x\n",
+		   rtl9602c_r(p, RTL9602C_QOS_PORT_PRIO),
+		   rtl9602c_r(p, RTL9602C_QOS_PRIO_WEIGHT),
+		   rtl9602c_r(p, RTL9602C_QOS_PRIO_WEIGHT + 4),
+		   rtl9602c_r(p, RTL9602C_QOS_PRIO_WEIGHT_SEL));
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(rtl9602c_qos);
+
+/*
  * cf: the usable entry count and the layout boundary; the classifier's control
  * word, with its bits 1:0, which decide the fate of a frame no entry matches (2
  * drops it, the other values let it through); then every entry whose ones plane
@@ -4871,8 +4917,9 @@ void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p)
  * rtl9602c_offload_debugfs_init() - create this file's debugfs views
  * @p: the switch, with its debugfs directory created
  *
- * Creates rma, svlan, l3nat, l3flow, l2learn and cf, mode 0400, and qdepth, hsd
- * and l3capture, mode 0600, since a write to them changes the hardware's state.
+ * Creates rma, svlan, l3nat, l3flow, l2learn, qos and cf, mode 0400, and
+ * qdepth, hsd and l3capture, mode 0600, since a write to them changes the
+ * hardware's state.
  */
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -4890,6 +4937,7 @@ void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_l3flow_fops);
 	debugfs_create_file("l2learn", 0400, p->debugfs, p,
 			    &rtl9602c_l2learn_fops);
+	debugfs_create_file("qos", 0400, p->debugfs, p, &rtl9602c_qos_fops);
 	debugfs_create_file("cf", 0400, p->debugfs, p,
 			    &rtl9602c_cf_fops);
 	debugfs_create_file("l3capture", 0600, p->debugfs, p,

@@ -174,9 +174,9 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The ACL, the classifier entries, the meters, storm control, the ingress
        policer, the scheduler and the shaper, the priority maps, and the debugfs
-       views ``cf``, ``qdepth`` and ``hsd``. The L3/NAT engine of the same file
-       is the *l3-nat* page's, and its views ``rma``, ``svlan`` and ``l2learn``
-       are the *bridging* page's.
+       views ``cf``, ``qos``, ``qdepth`` and ``hsd``. The L3/NAT engine of the
+       same file is the *l3-nat* page's, and its views ``rma``, ``svlan`` and
+       ``l2learn`` are the *bridging* page's.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - The steps of ``rtl9602c_setup()`` that reset or arm these blocks, the
        parts of the interrupt handler for the meters, the ACL and loop
@@ -217,7 +217,7 @@ Configuration
        reads the switch's current maps into the DCB tables when it creates the
        user interfaces.
    * - ``CONFIG_DEBUG_FS``
-     - The views ``cf``, ``qdepth`` and ``hsd``.
+     - The views ``cf``, ``qos``, ``qdepth`` and ``hsd``.
 
 ``rtl9602c_defconfig`` sets all of them.
 
@@ -256,8 +256,14 @@ Interfaces to user space
 - ``devlink`` on the handle ``platform/1b000000.switch``: the parameters
   ``dos_*``, ``storm_*``, ``loop_detect*`` and ``pktdbg_*``, and the region
   ``frame_capture``. The *devlink* page lists the parameters.
-- Three debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``cf`` (mode 0400),
-  ``qdepth`` and ``hsd`` (mode 0600, because a write changes the hardware).
+- Four debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``cf`` and ``qos``
+  (mode 0400), ``qdepth`` and ``hsd`` (mode 0600, because a write changes the
+  hardware). ``qos`` shows, raw, the words that a warm reboot leaves as the
+  previous kernel wrote them: per port the priority-to-queue word, the
+  scheduler's weighted-queue bits, the queue weights, the egress shaper and
+  the ingress policer; then the ACL's port enables and default permits, the
+  classifier's control word, the DSCP map, the port-priority word and the
+  priority-selection weights.
 - The kernel log lines of these blocks. At setup ``rtl9602c-switch: classifier:
   128 entries usable of 256``; the loop lines ``rtl9602c-switch: port N: loop
   detected, closing through port M`` and ``rtl9602c-switch: port N: loop
