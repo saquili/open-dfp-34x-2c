@@ -26,10 +26,11 @@ SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 STUB = """\
 #!/bin/sh
-# Stands in for mksquashfs: records its arguments and whether SOURCE_DATE_EPOCH
-# reached it, and writes a fixed payload.
+# Stands in for mksquashfs: records its arguments, whether SOURCE_DATE_EPOCH
+# reached it and the files it was given to pack, and writes a fixed payload.
 printf '%s\\n' "$@" > "$STUB_ARGS"
 printf '%s\\n' "${SOURCE_DATE_EPOCH-unset}" > "$STUB_ARGS.epoch"
+(cd "$1" && find . | sort) > "$STUB_ARGS.tree"
 [ -z "$STUB_FAIL" ] || exit 3
 cp "$STUB_PAYLOAD" "$2"
 """
@@ -221,6 +222,79 @@ class Refusals(Scratch):
         self.assertEqual({n: self.read(n) for n in self.names()}, before)
 
 
+class BenchFiles(Scratch):
+    """A directory of the files of one bench, and a scratch directory for the copy of the tree."""
+
+    def setUp(self):
+        super().setUp()
+        self.bench = os.path.join(self.root, "bench")
+        os.makedirs(os.path.join(self.bench, "root", ".ssh"))
+        os.makedirs(os.path.join(self.bench, "etc"))
+        with open(os.path.join(self.bench, "root", ".ssh", "authorized_keys"), "w") as handle:
+            handle.write("ssh-ed25519 AAAA test@example\n")
+        with open(os.path.join(self.bench, "etc", "board.conf"), "w") as handle:
+            handle.write("DATA_ADDRESS=203.0.113.2/30\n")
+        self.scratch = os.path.join(self.root, "tmp")
+        os.makedirs(self.scratch)
+
+    def packed(self):
+        with open(self.args_file + ".tree") as handle:
+            return handle.read().split()
+
+    def run_with(self, **override):
+        env = dict(OPEN_DFP_34X_2C_LOCAL_OVERLAY=self.bench, TMPDIR=self.scratch)
+        env.update(override)
+        return self.run_script(**env)
+
+
+class WithAStandInAndALocalOverlay(BenchFiles):
+    """OPEN_DFP_34X_2C_LOCAL_OVERLAY: the files of one bench, laid over a copy of the tree."""
+
+    def test_the_files_of_the_bench_are_packed_with_the_target_tree(self):
+        done = self.run_with()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        tree = self.packed()
+        for path in ("./etc/hostname", "./etc/board.conf", "./root/.ssh/authorized_keys"):
+            self.assertIn(path, tree)
+
+    def test_what_is_packed_is_a_copy_and_the_target_tree_is_not_touched(self):
+        done = self.run_with()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        with open(self.args_file) as handle:
+            packed_from = handle.read().splitlines()[0]
+        self.assertNotEqual(packed_from, self.target)
+        self.assertEqual(sorted(os.listdir(self.target)), ["etc"])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.target, "etc"))), ["hostname"])
+
+    def test_the_next_run_without_the_variable_packs_none_of_them(self):
+        self.run_with()
+        done = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("./root/.ssh/authorized_keys", self.packed())
+        self.assertNotIn("./etc/board.conf", self.packed())
+
+    def test_the_scratch_copy_is_removed(self):
+        self.run_with()
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_the_scratch_copy_is_removed_when_mksquashfs_fails(self):
+        done = self.run_with(STUB_FAIL="1")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(os.listdir(self.scratch), [])
+
+    def test_a_bench_that_is_not_a_directory_is_refused(self):
+        done = self.run_with(OPEN_DFP_34X_2C_LOCAL_OVERLAY=os.path.join(self.root, "none"))
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("is not a directory", done.stderr)
+        self.assertEqual(self.names(), ["uImage"])
+
+    def test_an_empty_variable_is_no_overlay(self):
+        done = self.run_with(OPEN_DFP_34X_2C_LOCAL_OVERLAY="")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        with open(self.args_file) as handle:
+            self.assertEqual(handle.read().splitlines()[0], self.target)
+
+
 def superblock(data):
     """The fields of a SquashFS 4 superblock that the tests read."""
     (magic, inodes, mkfs_time, block_size, fragments, compression, block_log, flags,
@@ -310,6 +384,41 @@ class WithTheRealTool(Scratch):
         for line in lines:
             self.assertIn(" root/root ", line)
             self.assertIn("2025-05-11 21:46", line)
+
+
+@unittest.skipUnless(REAL_MKSQUASHFS and shutil.which("unsquashfs"),
+                     "mksquashfs and unsquashfs are not installed (apt-get install squashfs-tools)")
+class WithTheRealToolAndALocalOverlay(BenchFiles):
+    def listing(self):
+        done = subprocess.run(["unsquashfs", "-ll", os.path.join(self.images, "r0.squashfs")],
+                              capture_output=True, text=True, env=dict(os.environ, TZ="UTC"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def test_the_key_is_in_the_image_of_the_bench_and_not_in_the_next_one(self):
+        plain = self.run_script(mksquashfs=REAL_MKSQUASHFS)
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        before = self.read("r0.squashfs")
+        self.assertNotIn("authorized_keys", self.listing())
+        keyed = self.run_with(MKSQUASHFS=REAL_MKSQUASHFS)
+        self.assertEqual(keyed.returncode, 0, keyed.stderr)
+        listing = self.listing()
+        self.assertRegex(listing, r"-rw-r--r-- root/root +\d+ .* squashfs-root/root/.ssh/authorized_keys")
+        self.assertIn("squashfs-root/etc/board.conf", listing)
+        self.assertNotEqual(self.read("r0.squashfs"), before)
+        again = self.run_script(mksquashfs=REAL_MKSQUASHFS)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.read("r0.squashfs"), before)
+
+    def test_the_mode_of_a_file_of_the_bench_is_kept(self):
+        key = os.path.join(self.bench, "root", ".ssh", "authorized_keys")
+        os.chmod(key, 0o600)
+        os.chmod(os.path.join(self.bench, "root", ".ssh"), 0o700)
+        done = self.run_with(MKSQUASHFS=REAL_MKSQUASHFS)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        listing = self.listing()
+        self.assertRegex(listing, r"-rw------- root/root +\d+ .* squashfs-root/root/.ssh/authorized_keys")
+        self.assertRegex(listing, r"drwx------ root/root +\d+ .* squashfs-root/root/.ssh\n")
 
 
 class TheScriptItself(unittest.TestCase):

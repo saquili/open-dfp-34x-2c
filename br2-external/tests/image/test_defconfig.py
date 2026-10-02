@@ -106,11 +106,16 @@ class Root(unittest.TestCase):
         self.assertTrue(board["BR2_ROOTFS_POST_IMAGE_SCRIPT"].endswith('/post-image.sh"'))
         self.assertIn("/board/dfp-34x-2c3/overlay", board["BR2_ROOTFS_OVERLAY"])
 
-    def test_a_bench_can_lay_a_second_overlay_over_the_first(self):
+    def test_the_files_of_a_bench_are_not_a_second_overlay_of_the_build_system(self):
+        # The build system copies an overlay into the target directory and never
+        # removes what it copied; the post-image script lays the files of a bench
+        # over a copy of the tree instead.
         overlay = settings(BOARD_DEFCONFIG)["BR2_ROOTFS_OVERLAY"].strip('"').split()
-        self.assertEqual(len(overlay), 2)
+        self.assertEqual(len(overlay), 1)
         self.assertTrue(overlay[0].endswith("/board/dfp-34x-2c3/overlay"))
-        self.assertEqual(overlay[1], "$(OPEN_DFP_34X_2C_LOCAL_OVERLAY)")
+        with open(BOARD_DEFCONFIG, encoding="utf-8") as handle:
+            lines = [l for l in handle if not l.startswith("#")]
+        self.assertFalse([l for l in lines if "LOCAL_OVERLAY" in l])
 
     def test_no_init_system_of_the_build_system_is_installed(self):
         self.assertEqual(settings(BOARD_DEFCONFIG)["BR2_INIT_NONE"], "y")

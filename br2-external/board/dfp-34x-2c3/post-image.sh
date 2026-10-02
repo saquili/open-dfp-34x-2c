@@ -28,6 +28,13 @@
 # not being a root filesystem is left out. docs/handbook/building.rst has the
 # sizes and what to do with the images.
 #
+# The files of one bench, an ssh key or other addresses, do not belong in the
+# repository. A directory named by OPEN_DFP_34X_2C_LOCAL_OVERLAY is laid over a
+# copy of the target tree, and the image is made from the copy: the target
+# directory of the build is not touched, so the next build without the variable
+# gives the image without those files. (The build system's own overlays copy
+# their files into the target directory and never remove them.)
+#
 # MKSQUASHFS names another mksquashfs, which the tests use.
 
 set -eu
@@ -43,15 +50,28 @@ target=${TARGET_DIR:?"TARGET_DIR is not set; Buildroot sets it"}
 epoch=${SOURCE_DATE_EPOCH:?"SOURCE_DATE_EPOCH is not set; the defconfig has to ask for a reproducible build"}
 mksquashfs=${MKSQUASHFS:-${HOST_DIR:?"HOST_DIR is not set; Buildroot sets it"}/bin/mksquashfs}
 
+bench=${OPEN_DFP_34X_2C_LOCAL_OVERLAY:-}
+
 [ -d "$images" ] || die "$images is not a directory"
 [ -d "$target" ] || die "$target is not a directory"
 [ -f "$images/uImage" ] || die "no kernel image $images/uImage"
 [ -x "$mksquashfs" ] || die "no mksquashfs at $mksquashfs"
+[ -z "$bench" ] || [ -d "$bench" ] || die "OPEN_DFP_34X_2C_LOCAL_OVERLAY, $bench, is not a directory"
 
 # Each image is made under a name of its own and moved into place, so that an
 # error never leaves half an image under the name that is flashed.
+scratch=
 rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part"
-trap 'rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part" "$images/SHA256SUMS.part"' EXIT
+trap 'rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part" "$images/SHA256SUMS.part"
+	[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
+
+root=$target
+if [ -n "$bench" ]; then
+	scratch=$(mktemp -d "${TMPDIR:-/tmp}/post-image.XXXXXX") || die "cannot make a scratch directory"
+	cp -RPp "$target/." "$scratch/"
+	cp -RPp "$bench/." "$scratch/"
+	root=$scratch
+fi
 
 cp "$images/uImage" "$images/k0.uImage.part"
 mv "$images/k0.uImage.part" "$images/k0.uImage"
@@ -61,7 +81,7 @@ mv "$images/k0.uImage.part" "$images/k0.uImage"
 # the epoch. The time is given on the command line, for every file alike.
 (
 	unset SOURCE_DATE_EPOCH
-	"$mksquashfs" "$target" "$images/r0.squashfs.part" \
+	"$mksquashfs" "$root" "$images/r0.squashfs.part" \
 		-noappend -quiet -no-progress -reproducible \
 		-comp gzip -b 64K -nopad -no-xattrs -no-exports \
 		-all-root -root-mode 755 \
