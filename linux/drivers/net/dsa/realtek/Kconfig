@@ -64,12 +64,11 @@ config RTL9602C_OPTICS_RO
 	  module keeps what is written across a power cycle; byte 127 is
 	  written back as it was found.
 
-	  With this option that sequence returns at once, and the driver
-	  itself writes nothing to the part; the diagnostics it reads through
-	  hwmon and debugfs stay as they are. The option stops only that
-	  sequence: the driver still registers the I2C master as an I2C
-	  adapter, and a client of the adapter, userspace through i2c-dev
-	  included, can still write A0h and A2h.
+	  With this option that sequence returns at once, the driver itself
+	  writes nothing to the part, and the I2C adapter it registers refuses
+	  every write, from userspace through i2c-dev too, so that nothing on
+	  the board can change the module; the diagnostics it reads through
+	  hwmon and debugfs stay as they are.
 
 	  Say Y for an image that must leave the module as it was found. With
 	  the loop running, the modulation current falls and the OLT can find

@@ -17,10 +17,10 @@
  * offers two debugfs views that only read, "a2" and "eeblocks".
  *
  * CONFIG_RTL9602C_OPTICS_RO makes the modulation hold, the driver's only
- * write to the part, return without writing.  The hwmon device and the
- * debugfs views stay as they are, since they only read, and the adapter
- * is not restricted: a client of it, userspace through i2c-dev included,
- * can still write A0h and A2h.
+ * write to the part, return without writing, and the adapter refuse every
+ * write with -EPERM, so that nothing on the board changes the module.  The
+ * hwmon device and the debugfs views stay as they are, since they only
+ * read.
  *
  * The hwmon reads, the debugfs views, the modulation hold and clients of
  * the adapter all drive the same registers, and the hwmon core and the I2C
@@ -170,6 +170,9 @@ static s32 rtl9602c_i2c_smbus_xfer(struct i2c_adapter *adap, u16 addr,
 
 	if (size != I2C_SMBUS_BYTE_DATA)
 		return -EOPNOTSUPP;
+	if (read_write != I2C_SMBUS_READ &&
+	    IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+		return -EPERM;
 
 	mutex_lock(&p->i2c_lock);
 	if (read_write == I2C_SMBUS_READ)

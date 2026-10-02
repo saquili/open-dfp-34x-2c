@@ -69,8 +69,8 @@ Configuration
    * - ``CONFIG_RTL9602C_OPTICS_RO``
      - Bool, "RTL9602C: never write to the optics part"; depends on
        ``NET_DSA_RTL9602C``; off unless set. With it the modulation hold
-       returns at once and the driver itself writes nothing to the laser driver
-       (see "The read-only build").
+       returns at once, the driver itself writes nothing to the laser driver,
+       and the I2C adapter refuses writes (see "The read-only build").
    * - ``CONFIG_I2C``
      - The I2C core, which the optics code registers the master with. The
        Kconfig entry of the switch driver depends on it.
@@ -1064,9 +1064,10 @@ The read-only build
 0 at once, before it writes anything. The driver itself then writes nothing to
 the laser driver: the page select, the bytes 123 to 126 and the configuration
 table stay as the module has them, the automatic loop keeps running, and the
-hold logs nothing. The hwmon device and the ``a2`` and ``eeblocks`` views only
-read, and they are unchanged. What the option leaves open is described under
-"Known limitations".
+hold logs nothing. The I2C adapter refuses every write with ``-EPERM``, so a
+client of it, user space through ``i2c-dev`` included, cannot change the
+module either. The hwmon device and the ``a2`` and ``eeblocks`` views only
+read, and they are unchanged.
 
 .. list-table::
    :header-rows: 1
@@ -1076,13 +1077,12 @@ read, and they are unchanged. What the option leaves open is described under
      - Tag
      - Checked by
    * - With ``CONFIG_RTL9602C_OPTICS_RO`` the modulation hold returns at once,
-       so the driver itself writes nothing to the part; the hwmon reads and the
-       ``a2`` and ``eeblocks`` views are unchanged. The option does not restrict
-       the I2C adapter.
+       so the driver itself writes nothing to the part, and the adapter refuses
+       every write with ``-EPERM``; the hwmon reads and the ``a2`` and
+       ``eeblocks`` views are unchanged.
      - I
-     - Whether user space can reach the adapter depends on
-       ``CONFIG_I2C_CHARDEV``: an image that sets it has a ``/dev/i2c-N`` device
-       for this adapter, and nothing in the option filters what goes through it.
+     - Read from the code; a build with the option and ``i2cset`` on the
+       adapter's ``/dev/i2c-N`` would show the refusal.
        Checking the image's configuration settles it without writing to the
        part. Bears on any image that must leave the module unchanged.
 
@@ -1165,12 +1165,11 @@ Known limitations
   with ``-EAGAIN``. The low byte read between two equal high bytes belongs to a
   sample with that high byte, so the word is one the module held. How often the
   module updates a word during the three transfers is not measured.
-- ``CONFIG_RTL9602C_OPTICS_RO`` stops only the modulation hold. The I2C adapter
-  stays registered and passes every read and write on, and A0h and A2h bytes
-  0-127 take writes without a password and keep them across a power cycle of
-  the module, so a client of the adapter can change the module for good. User
-  space reaches the adapter through ``i2c-dev`` where ``CONFIG_I2C_CHARDEV`` is
-  set.
+- Without ``CONFIG_RTL9602C_OPTICS_RO`` the I2C adapter passes every write on,
+  and A0h and A2h bytes 0-127 take writes without a password and keep them
+  across a power cycle of the module, so a client of the adapter can change the
+  module for good. User space reaches the adapter through ``i2c-dev`` where
+  ``CONFIG_I2C_CHARDEV`` is set.
 - Each PON bring-up writes bytes that the module keeps. Before it has read
   PERSIST, the modulation hold writes ``0xff`` to A2h bytes 123 to 126 and
   ``02h`` to byte 127, and at the end it writes the old value back to byte 127:
