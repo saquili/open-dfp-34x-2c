@@ -7,9 +7,8 @@ Usage: tests/run [-v] [TEST...]
 
 TEST names a module, class or method; without one every test_*.py in the
 directories below tests/ runs: the post-image script, the boot script and the
-defconfig (image/), the check of the kernel's final configuration and the lists
-it holds it to (kernel/) and the comparison of the gate's findings with the list
-of the known ones (toolchain/). The tests need Python 3.11 or later and a POSIX
+defconfig (image/) and the comparison of the gate's findings with the list of
+the known ones (toolchain/). The tests need Python 3.11 or later and a POSIX
 shell. The ones that run mksquashfs and unsquashfs are skipped without them
 (squashfs-tools on Debian). The checks that build and run programs with a
 toolchain are the other scripts here, and run in the toolchain and image jobs.
@@ -20,7 +19,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
-DIRECTORIES = ("image", "kernel", "toolchain")
+DIRECTORIES = ("image", "toolchain")
 
 
 def main(argv):

@@ -48,18 +48,13 @@ BR2_BINUTILS_EXTRA_CONFIG_OPTIONS="--enable-deterministic-archives"
 BR2_OPTIMIZE_S=y
 
 # The kernel is the same tree, from the same archive, built with this
-# toolchain. Its configuration is the board's own, rtl9602c_defconfig, less what
-# the image in the flash can do without: the flash profile, a fragment that the
-# build system merges over the defconfig so that the kernel fits the partition
-# k0 (board/dfp-34x-2c3/kernel-flash.fragment; "make linux" and the RAM boots
-# keep the complete configuration). Its image is the one the boot loader takes:
-# a legacy U-Boot image, LZMA-compressed, loaded at the address the kernel's
-# platform file gives.
+# toolchain. Its configuration is the board's own, rtl9602c_defconfig, and its
+# image the one the boot loader takes: a legacy U-Boot image, LZMA-compressed,
+# loaded at the address the kernel's platform file gives.
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
 BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="file://$(OPEN_DFP_34X_2C_KERNEL_ARCHIVE)"
 BR2_LINUX_KERNEL_DEFCONFIG="rtl9602c"
-BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/kernel-flash.fragment"
 BR2_LINUX_KERNEL_UIMAGE=y
 BR2_LINUX_KERNEL_LZMA=y
 
