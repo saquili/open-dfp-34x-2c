@@ -29,7 +29,7 @@ $(BUILD)/%.o: %.c
 $(BUILD)/ponid: $(BUILD)/src/ponid.o $(BUILD)/src/factory.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
-$(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o
+$(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_factory: $(BUILD)/tests/test_factory.o $(BUILD)/src/factory.o
@@ -38,9 +38,14 @@ $(BUILD)/test_factory: $(BUILD)/tests/test_factory.o $(BUILD)/src/factory.o
 $(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
-check: $(BUILD)/test_factory $(BUILD)/test_pondev
+$(BUILD)/test_genl: $(BUILD)/tests/test_genl.o $(BUILD)/src/genl.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+# test_genl asks the kernel it runs on, through a generic netlink socket.
+check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
+	$(BUILD)/test_genl
 	sh tests/test_onu_mode.sh
 
 clean:

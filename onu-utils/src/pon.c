@@ -20,6 +20,7 @@
 #include <libmnl/libmnl.h>
 #include <linux/genetlink.h>
 
+#include "genl.h"
 #include "pondev.h"
 
 #define MAX_DEVS 8
@@ -36,90 +37,6 @@ struct dump {
 	struct pon_tcont tcont[MAX_TCONTS];
 	size_t ntcont;
 };
-
-static int family_attr(const struct nlattr *a, void *data)
-{
-	struct family *fam = data;
-
-	if (mnl_attr_get_type(a) == CTRL_ATTR_FAMILY_ID &&
-	    mnl_attr_get_payload_len(a) == sizeof(uint16_t)) {
-		fam->id = mnl_attr_get_u16(a);
-	} else if (mnl_attr_get_type(a) == CTRL_ATTR_MCAST_GROUPS) {
-		const struct nlattr *grp, *g;
-
-		mnl_attr_for_each_nested(grp, a) {
-			const char *name = NULL;
-			uint32_t id = 0;
-
-			mnl_attr_for_each_nested(g, grp) {
-				if (mnl_attr_get_type(g) ==
-				    CTRL_ATTR_MCAST_GRP_NAME)
-					name = mnl_attr_get_str(g);
-				else if (mnl_attr_get_type(g) ==
-					 CTRL_ATTR_MCAST_GRP_ID)
-					id = mnl_attr_get_u32(g);
-			}
-			if (name && !strcmp(name, PON_MCGRP_MONITOR))
-				fam->monitor = id;
-		}
-	}
-	return MNL_CB_OK;
-}
-
-static int family_cb(const struct nlmsghdr *nlh, void *data)
-{
-	return mnl_attr_parse(nlh, sizeof(struct genlmsghdr), family_attr,
-			      data) < 0 ?
-		       MNL_CB_ERROR :
-		       MNL_CB_OK;
-}
-
-static struct nlmsghdr *request(char *buf, uint16_t type, uint8_t cmd,
-				uint16_t flags, uint32_t seq)
-{
-	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
-	struct genlmsghdr *g;
-
-	nlh->nlmsg_type = type;
-	nlh->nlmsg_flags = NLM_F_REQUEST | flags;
-	nlh->nlmsg_seq = seq;
-	g = mnl_nlmsg_put_extra_header(nlh, sizeof(*g));
-	g->cmd = cmd;
-	g->version = 1;
-	return nlh;
-}
-
-/* Send one request and run @cb on every message of the answer. */
-static int talk(struct mnl_socket *nl, struct nlmsghdr *nlh, mnl_cb_t cb,
-		void *data)
-{
-	char buf[MNL_SOCKET_BUFFER_SIZE];
-	const uint32_t port = mnl_socket_get_portid(nl);
-	const uint32_t seq = nlh->nlmsg_seq;
-	ssize_t n;
-	int ret;
-
-	if (mnl_socket_sendto(nl, nlh, nlh->nlmsg_len) < 0)
-		return -errno;
-	do {
-		n = mnl_socket_recvfrom(nl, buf, sizeof(buf));
-		if (n < 0)
-			return -errno;
-		ret = mnl_cb_run(buf, (size_t)n, seq, port, cb, data);
-	} while (ret > MNL_CB_STOP);
-	return ret < 0 ? -errno : 0;
-}
-
-static int resolve(struct mnl_socket *nl, struct family *fam)
-{
-	char buf[MNL_SOCKET_BUFFER_SIZE];
-	struct nlmsghdr *nlh =
-		request(buf, GENL_ID_CTRL, CTRL_CMD_GETFAMILY, 0, 1);
-
-	mnl_attr_put_strz(nlh, CTRL_ATTR_FAMILY_NAME, PON_FAMILY_NAME);
-	memset(fam, 0, sizeof(*fam));
-	return talk(nl, nlh, family_cb, fam);
-}
 
 static int dev_cb(const struct nlmsghdr *nlh, void *data)
 {
@@ -151,13 +68,14 @@ static int show(struct mnl_socket *nl, const struct family *fam, bool serial)
 	char buf[MNL_SOCKET_BUFFER_SIZE];
 	int err;
 
-	err = talk(nl, request(buf, fam->id, PON_CMD_DEV_GET, NLM_F_DUMP, 2),
-		   dev_cb, &d);
+	err = genl_talk(nl,
+			genl_request(buf, fam->id, PON_CMD_DEV_GET, NLM_F_DUMP, 2),
+			dev_cb, &d);
 	if (!err)
-		err = talk(nl,
-			   request(buf, fam->id, PON_CMD_TCONT_GET, NLM_F_DUMP,
-				   3),
-			   tcont_cb, &d);
+		err = genl_talk(nl,
+				genl_request(buf, fam->id, PON_CMD_TCONT_GET,
+					     NLM_F_DUMP, 3),
+				tcont_cb, &d);
 	if (err) {
 		fprintf(stderr, "pon: the kernel did not answer: %s\n",
 			strerror(-err));
@@ -255,11 +173,18 @@ int main(int argc, char **argv)
 			strerror(errno));
 		return 1;
 	}
-	err = resolve(nl, &fam);
-	if (err || !fam.id) {
+	memset(&fam, 0, sizeof(fam));
+	err = genl_resolve(nl, PON_FAMILY_NAME, PON_MCGRP_MONITOR, &fam.id,
+			   &fam.monitor);
+	if (err == -ENOENT) {
 		fprintf(stderr,
 			"pon: the kernel has no \"%s\" family: is the PON class built in?\n",
 			PON_FAMILY_NAME);
+	} else if (err) {
+		fprintf(stderr, "pon: the kernel did not answer: %s\n",
+			strerror(-err));
+	}
+	if (err) {
 		mnl_socket_close(nl);
 		return 1;
 	}
