@@ -46,6 +46,7 @@ struct pon_device *pon_device_get_by_id(u32 id);
 struct pon_device *pon_device_get_next(u32 from);
 void pon_device_put(struct pon_device *pon);
 int pon_device_status(struct pon_device *pon, struct pon_dev_status *st);
+int pon_device_tcont(struct pon_device *pon, unsigned int index, u16 *alloc_id);
 
 int pon_netlink_init(void);
 void pon_netlink_exit(void);

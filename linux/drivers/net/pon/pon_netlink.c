@@ -167,16 +167,20 @@ cancel:
 }
 
 /*
- * alloc-id is left out while the T-CONT is idle (-ENOENT). Any other error
- * from tcont_get cancels the message: a get then fails with -EMSGSIZE, and a
- * dump ends at that T-CONT.
+ * alloc-id is left out while the T-CONT is idle (-ENOENT). The MAC is asked
+ * first: -ENODEV when the ONU has no such T-CONT now, or the MAC's error,
+ * comes back without a message; -EMSGSIZE when @msg has no room.
  */
 static int pon_nl_tcont_fill(struct sk_buff *msg, struct pon_device *pon,
 			     unsigned int index, u32 portid, u32 seq, int flags)
 {
-	u16 alloc_id;
+	u16 alloc_id = 0;
 	void *hdr;
 	int err;
+
+	err = pon_device_tcont(pon, index, &alloc_id);
+	if (err && err != -ENOENT)
+		return err;
 
 	hdr = genlmsg_put(msg, portid, seq, &pon_nl_family, flags,
 			  PON_CMD_TCONT_GET);
@@ -184,21 +188,14 @@ static int pon_nl_tcont_fill(struct sk_buff *msg, struct pon_device *pon,
 		return -EMSGSIZE;
 
 	if (nla_put_u32(msg, PON_A_TCONT_ID, pon->id) ||
-	    nla_put_u32(msg, PON_A_TCONT_INDEX, index))
-		goto cancel;
-
-	err = pon->ops->tcont_get(pon, index, &alloc_id);
-	if (!err && nla_put_u32(msg, PON_A_TCONT_ALLOC_ID, alloc_id))
-		goto cancel;
-	if (err && err != -ENOENT)
-		goto cancel;
+	    nla_put_u32(msg, PON_A_TCONT_INDEX, index) ||
+	    (!err && nla_put_u32(msg, PON_A_TCONT_ALLOC_ID, alloc_id))) {
+		genlmsg_cancel(msg, hdr);
+		return -EMSGSIZE;
+	}
 
 	genlmsg_end(msg, hdr);
 	return 0;
-
-cancel:
-	genlmsg_cancel(msg, hdr);
-	return -EMSGSIZE;
 }
 
 /**
@@ -206,13 +203,9 @@ cancel:
  * @skb: the request
  * @info: the request's attributes
  *
- * The MAC's operations are used without the registration lock, and without
- * a check that the ONU has a registered data path: on an ONU that has its
- * OMCI port and no data path, pon->ops is NULL.
- *
  * Return: 0; -EINVAL without id or index; -ENODEV for an unknown ONU;
- * -ENOENT when the MAC has no tcont_get or the index is not below
- * num_tconts; or another negative error code.
+ * -ENOENT when the ONU has no data path, the MAC has no tcont_get or the
+ * index is not below num_tconts; or another negative error code.
  */
 int pon_nl_tcont_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
@@ -232,27 +225,24 @@ int pon_nl_tcont_get_doit(struct sk_buff *skb, struct genl_info *info)
 		return -ENODEV;
 	}
 
-	index = nla_get_u32(info->attrs[PON_A_TCONT_INDEX]);
-	if (!pon->ops->tcont_get || index >= pon->num_tconts) {
-		NL_SET_ERR_MSG_ATTR(info->extack,
-				    info->attrs[PON_A_TCONT_INDEX],
-				    "no such T-CONT on this ONU");
-		pon_device_put(pon);
-		return -ENOENT;
-	}
-
 	msg = genlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (!msg) {
 		pon_device_put(pon);
 		return -ENOMEM;
 	}
 
+	index = nla_get_u32(info->attrs[PON_A_TCONT_INDEX]);
 	err = pon_nl_tcont_fill(msg, pon, index, info->snd_portid,
 				info->snd_seq, 0);
 	pon_device_put(pon);
 	if (err) {
 		nlmsg_free(msg);
-		return err;
+		if (err != -ENODEV)
+			return err;
+		NL_SET_ERR_MSG_ATTR(info->extack,
+				    info->attrs[PON_A_TCONT_INDEX],
+				    "no such T-CONT on this ONU");
+		return -ENOENT;
 	}
 
 	return genlmsg_reply(msg, info);
@@ -264,9 +254,8 @@ int pon_nl_tcont_get_doit(struct sk_buff *skb, struct genl_info *info)
  * @cb: the dump, whose args[0] and args[1] hold the id of the ONU and the
  *	index of the T-CONT to report next
  *
- * ONUs whose MAC has no tcont_get are skipped. As in a get, the MAC's
- * operations are used without the registration lock, and without a check
- * that the ONU has a registered data path.
+ * An ONU without a data path, or whose MAC has no tcont_get or fails it, is
+ * left out from that T-CONT on.
  *
  * Return: the length of @skb; 0 ends the dump.
  */
@@ -275,23 +264,22 @@ int pon_nl_tcont_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 	struct pon_device *pon;
 	u32 id = cb->args[0];
 	unsigned int index = cb->args[1];
+	int err;
 
 	while ((pon = pon_device_get_next(id))) {
-		if (!pon->ops->tcont_get) {
-			id = pon->id + 1;
-			index = 0;
-			pon_device_put(pon);
-			continue;
-		}
 		for (; index < pon->num_tconts; index++) {
-			if (pon_nl_tcont_fill(skb, pon, index,
-					      NETLINK_CB(cb->skb).portid,
-					      cb->nlh->nlmsg_seq, NLM_F_MULTI)) {
+			err = pon_nl_tcont_fill(skb, pon, index,
+						NETLINK_CB(cb->skb).portid,
+						cb->nlh->nlmsg_seq,
+						NLM_F_MULTI);
+			if (err == -EMSGSIZE) {
 				cb->args[0] = pon->id;
 				cb->args[1] = index;
 				pon_device_put(pon);
 				return skb->len;
 			}
+			if (err)
+				break;
 		}
 		id = pon->id + 1;
 		index = 0;

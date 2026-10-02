@@ -1292,15 +1292,17 @@ Dumps
      - I
      - Design choice, not exercised: a dump across a registration.
    * - ``tcont-get`` do fails with ``-EINVAL`` without ``id`` or ``index``,
-       with ``-ENODEV`` for an unknown ONU, and with ``-ENOENT`` when the MAC
-       has no ``tcont_get`` or the index is not below ``num_tconts``.
-       ``alloc-id`` is absent while the T-CONT is idle.
+       with ``-ENODEV`` for an unknown ONU, and with ``-ENOENT`` when the ONU
+       has no data path, the MAC has no ``tcont_get`` or the index is not
+       below ``num_tconts``. ``alloc-id`` is absent while the T-CONT is idle.
+       The MAC is asked under the registration lock, which keeps its data
+       path registered for the call.
      - I
      - Design choice, not exercised: a ``tcont-get`` for index 16 on the
        RTL9602C.
    * - A ``tcont-get`` dump keeps a two-number cursor in ``cb->args``: the
-       ONU's number and the T-CONT's index. ONUs whose MAC has no
-       ``tcont_get`` are skipped.
+       ONU's number and the T-CONT's index. An ONU without a data path, or
+       whose MAC has no ``tcont_get``, is skipped.
      - I
      - Design choice, not exercised: a ``tcont-get`` dump.
 
@@ -1702,9 +1704,9 @@ Status and statistics
        the default Alloc-ID equals the ONU-ID, and ONU-ID 0 is valid.
      - P
      - ITU-T G.984.3 clauses 8.1.3.6.1 and 9.1.1.
-   * - Any other error from ``tcont_get`` cancels that T-CONT's message. A get
-       then fails with ``-EMSGSIZE``, and a dump stops at that index. So a MAC
-       returns only 0 or ``-ENOENT`` for indices below ``num_tconts``.
+   * - Any other error from ``tcont_get`` is the answer of a get, and a dump
+       leaves that ONU's T-CONTs out from that index on. So a MAC returns only
+       0 or ``-ENOENT`` for indices below ``num_tconts``.
      - I
      - Design choice, not exercised: a MAC returning another error for a valid
        index.
@@ -2214,13 +2216,6 @@ Known limitations
   receive ``dev-change-ntf``, which carries the same attributes as a
   ``dev-get`` reply, the serial number included, while ``dev-get`` needs
   ``CAP_NET_ADMIN``. The generator in this tree does not emit group flags.
-- ``tcont-get`` reads the MAC's operations without the registration lock and
-  without checking that a data path is registered. On an ONU that has an OMCI
-  port and no data path, it dereferences a missing operations table. On the
-  RTL9602C such an ONU exists between the creation of the OMCI port and the
-  registration of the data path, both in the setup of the switch driver, and
-  for good if that registration fails. A ``num-gem-ports`` other than 0 in a
-  ``dev-get`` reply shows that a data path is registered.
 - ``num-gem-ports`` is the size of the MAC's flow space: 128 on the RTL9602C.
   At most 127 GEM interfaces can exist there, because ``gem_add`` never gives
   out ``RTL9602C_GPON_OMCC_FLOW`` (64), which carries the OMCC. A daemon that

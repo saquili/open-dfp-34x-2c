@@ -331,6 +331,32 @@ int pon_device_status(struct pon_device *pon, struct pon_dev_status *st)
 	return err;
 }
 
+/**
+ * pon_device_tcont() - ask the MAC for the Alloc-ID of one of its T-CONTs
+ * @pon: the PON device
+ * @index: the T-CONT
+ * @alloc_id: the Alloc-ID, when there is one
+ *
+ * The MAC's tcont_get runs under the registration lock, as dev_status does
+ * in pon_device_status().
+ *
+ * Context: process context; may sleep.
+ * Return: 0; -ENOENT when the T-CONT holds no Alloc-ID; -ENODEV when no data
+ * path is registered, the MAC has no tcont_get, or @index is not below the
+ * T-CONTs it registered; or the MAC's error.
+ */
+int pon_device_tcont(struct pon_device *pon, unsigned int index, u16 *alloc_id)
+{
+	int err = -ENODEV;
+
+	mutex_lock(&pon_register_lock);
+	if (pon->ops && pon->ops->tcont_get && index < pon->num_tconts)
+		err = pon->ops->tcont_get(pon, index, alloc_id);
+	mutex_unlock(&pon_register_lock);
+
+	return err;
+}
+
 struct pon_device *pon_device_register(struct device *parent,
 				       const struct pon_device_ops *ops,
 				       unsigned int num_flows,

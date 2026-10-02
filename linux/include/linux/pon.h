@@ -254,8 +254,9 @@ struct pon_device_ops {
 	 * -ENOENT when that T-CONT is idle. Idle needs an error code because
 	 * 0 is a valid Alloc-ID: the default Alloc-ID equals the ONU-ID, and
 	 * ONU-ID 0 is valid. Any other error fails the report of that T-CONT,
-	 * so only 0 and -ENOENT are expected. Called without the class's
-	 * registration lock; may sleep.
+	 * so only 0 and -ENOENT are expected. Called with the class's
+	 * registration lock held, so the data path stays registered for the
+	 * call; may sleep.
 	 */
 	int (*tcont_get)(struct pon_device *pon, unsigned int index,
 			 u16 *alloc_id);
