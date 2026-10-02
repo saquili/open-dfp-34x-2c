@@ -30,16 +30,23 @@ What the build makes
      - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
        the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
        kernel, LZMA, load address ``0x80100000``.
-     - 1783187 bytes; the partition ``k0`` takes 1359872.
+     - 1783207 bytes; the partition ``k0`` takes 1359872.
    * - ``r0.squashfs``
      - The root filesystem for bank 0: a SquashFS image (gzip, 64 KiB blocks,
        every file owned by root and carrying the same fixed time, no extended
-       attributes) of BusyBox, dropbear and the board's files.
-     - 622859 bytes; the partition ``r0`` takes 2572288.
+       attributes) of BusyBox, dropbear, the programs of the ONU and the
+       board's files.
+     - 3878310 bytes; the partition ``r0`` takes 2572288.
    * - ``SHA256SUMS``
      - The SHA-256 digests of the two images, in the form ``sha256sum -c``
        reads.
      - 154 bytes.
+   * - ``ram.uImage``
+     - Made by ``make ram-image``, not by ``make``: the same kernel with the
+       root filesystem built in as its initial RAM disk, for a start from RAM
+       that needs neither bank (see "Putting the images on the board").
+     - About 5.6 MB, with the files of a bench; the boot loader takes up to
+       12 MiB from RAM.
 
 The images directory also holds ``uImage``, the kernel image as the build system
 leaves it, which ``k0.uImage`` is a copy of.
@@ -56,22 +63,21 @@ Sizes and budgets
      - Budget
      - Margin
    * - ``k0``
-     - 1783187
+     - 1783207
      - 1359872
-     - Over the budget by 423315 bytes.
+     - Over the budget by 423335 bytes.
    * - ``r0``
-     - 622859
+     - 3878310
      - 2572288
-     - 1949429 bytes (75.8 % of the partition).
+     - Over the budget by 1306022 bytes.
 
-The kernel image does not fit ``k0``. The bench refuses it (``is 1783187 bytes,
-more than the 1359872 its destination takes``), so ``k0`` cannot be written until
-the kernel is slimmed. The kernel can still be started from RAM with ``make
-ramboot``, which takes images of up to 12 MiB (``boot-contract.rst``), and a
-kernel started that way finds its root filesystem in ``r0`` as usual. The build
-reports the excess and does not fail on it; it fails on ``r0`` over its budget
-(``IMAGE_ENFORCE``, below). Where the kernel's size is, as measured, is in "The
-kernel's size" below.
+Neither image fits its partition, and the bench refuses to write one that does
+not (``is 1783207 bytes, more than the 1359872 its destination takes``). The
+sizes are settled last: the images are slimmed once everything that the stick
+does is in them and has been tested on the board. Until then the build reports
+both sizes and fails on neither (``IMAGE_ENFORCE``, below), and the stick runs
+``ram.uImage``, started from RAM. Where the kernel's size is, as measured, is in
+"The kernel's size" below.
 
 The numbers are printed by ``tools/image-budget/image-budget``, which ``make``
 runs, and are those of ``make`` on the commit this page was written against, in
@@ -120,14 +126,15 @@ buildroot``), archives the committed ``linux/`` tree
 (``tools/kernel-archive``), configures ``odi_dfp_34x_2c3_defconfig`` in
 ``build/image``, builds, and then judges the result (``make image-check``). With
 the sources in the download directory, a build from a fresh clone takes about
-seven and a half minutes on 12 CPUs (four builds took 444 to 460 seconds). The
-first build downloads the sources of the packages of the defconfig, 13 files of
-41.8 MB together, besides the toolchain's (``br2-external/README.rst``); each is
+eight minutes on 12 CPUs. The first build downloads the sources of the packages
+of the defconfig besides the toolchain's (``br2-external/README.rst``); each is
 checked against the hash that the build system carries, and a file that does not
-match is refused. ``make`` makes the cross toolchain first, with static libraries
-only, then the kernel with it, then BusyBox and dropbear, and the host tools the
-images need (``mksquashfs``, ``mkimage``, the LZMA compressor; ``mksquashfs``
-brings ``cmake`` with it, which takes a minute and a half to build).
+match is refused. The programs of this tree (``omcid``, ``onu-utils``,
+``pppoed``, ``pond``) are built from the working tree, not downloaded. ``make``
+makes the cross toolchain first, with static libraries only, then the kernel
+with it, then the programs of the image, and the host tools the images need
+(``mksquashfs``, ``mkimage``, the LZMA compressor; ``mksquashfs`` brings
+``cmake`` with it, which takes a minute and a half to build).
 
 These variables can be set on the command line or in the environment:
 
@@ -139,7 +146,7 @@ These variables can be set on the command line or in the environment:
     ``build/dl``).
 ``IMAGE_ENFORCE``
     The images that must fit their partition for the build to pass (default
-    ``r0``; set it to ``k0 r0`` when the kernel fits).
+    none: both sizes are reported; ``k0 r0`` once the images are slimmed).
 ``OPEN_DFP_34X_2C_LOCAL_OVERLAY``
     A directory of the files of one bench, laid over the root filesystem image
     (below).
@@ -151,15 +158,15 @@ how to use it.
 What ``make`` judges
 --------------------
 
-#. ``image-budget --enforce r0``: ``r0`` has to fit its partition; ``k0`` is
-   reported.
+#. ``image-budget``: the sizes of ``k0`` and ``r0`` against their partitions,
+   reported, and enforced for the images that ``IMAGE_ENFORCE`` names.
 #. ``isa-gate`` over ``build/image/target``, every executable of the root
    filesystem: none may hold an instruction that the core cannot run
-   (``toolchain.rst``). It reports 2 files, 2 objects, 272578 instructions and
-   no findings. The gate can fail: the negative control of the toolchain tests
-   compiles a stock MIPS32 object, and the gate refuses it for its architecture
-   flags, for the load-linked and store-conditional pair and for the MIPS32
-   instructions (``br2-external/tests/toolchain/negative-control``).
+   (``toolchain.rst``). It reports 25 files, 25 objects, 1722473 instructions
+   and no findings. The gate can fail: the negative control of the toolchain
+   tests compiles a stock MIPS32 object, and the gate refuses it for its
+   architecture flags, for the load-linked and store-conditional pair and for
+   the MIPS32 instructions (``br2-external/tests/toolchain/negative-control``).
 #. ``sha256sum -c SHA256SUMS`` in the images directory.
 
 The root filesystem
@@ -195,6 +202,17 @@ BusyBox 1.37.0, static, 86 applets
 dropbear 2026.93, static
     The ssh server (``dropbear``), its key tool (``dropbearkey``) and the
     server side of ``scp``. It takes keys only.
+The programs of the ONU, from this tree, static
+    ``omcid``, the OMCI daemon, with its tools ``omcitap`` and ``omcivlan``
+    (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
+    from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
+    PPPoE client (``pppoed/README.rst``); ``pond``, the HTTP status daemon
+    (``pond/README.rst``).
+iproute2, ethtool and nftables, static
+    ``ip``, ``tc``, ``bridge`` and ``devlink``, which configure the links, the
+    switch's classifier and the PON driver; ``ethtool``, which reads the
+    counters of the switch's ports and the state of the host link; ``nft``,
+    which loads the packet filter.
 The boot script
     ``/etc/init.d/rcS``, run by BusyBox init at ``sysinit`` (``/etc/inittab``):
 
@@ -202,6 +220,10 @@ The boot script
        and ``/var``, and ``/dev`` too if the kernel has not (it mounts devtmpfs
        itself when it starts the first program);
     #. sets the host name (``dfp-34x-2c3``);
+    #. loads the packet filter, ``/etc/nftables.conf``: it drops what it does
+       not accept, and it accepts ssh and the status daemon from the host side,
+       ICMPv6, the ICMP that path MTU discovery needs, and DHCP; when the stick
+       routes, it forwards what the host side starts and the replies to it;
     #. brings the interface ``sfp`` up with the address ``192.0.2.2/30``, and a
        VLAN interface ``mgmt`` of it (VLAN 4094) with ``198.51.100.2/30``. These
        are the addresses the bench tries (``flashing.rst``, "What you need"); it
@@ -210,6 +232,11 @@ The boot script
        have the VLAN on its interface too;
     #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear -s``
        (keys only);
+    #. reads the identity of the unit into ``/run/onu-identity`` (readable by
+       root only: it holds the PLOAM password), gives the PON driver the
+       serial number through devlink and brings the PON up;
+    #. starts ``omcid``, which answers the OLT, and ``pond``, the status daemon,
+       whose API stays locked without ``/etc/pond.token``;
     #. prints ``open-dfp-34x-2c: ready``.
 
     After it, BusyBox init keeps a shell on the console. There is no login
@@ -229,8 +256,9 @@ Known limitations
   before the system has collected much entropy.
 * No ssh key is in the image, so nobody can log in over ssh until one is put in
   (below). The console is the other way in, and it asks for nothing.
-* There is no firewall, no DHCP client, no PON tool and no OMCI daemon. The
-  daemon arrives as a package of the userspace work item.
+* The status daemon has no token in this image, so its API answers only
+  ``/api/health``; a token is a file of one unit, like the ssh key (below).
+* There is no DHCP client and no DHCP server.
 
 Files of one bench
 ------------------
@@ -256,20 +284,21 @@ image of this page, its digest differs, and it is not to be published.
 The kernel's size
 =================
 
-The kernel image is 1783187 bytes, 423315 over its partition. It was built twice,
-with the toolchain of the build and with the Debian cross compiler that ``make
-linux`` uses. The images are 734 and 738 bytes apart in two builds of the second
-(its banner holds the time and host of the build, so its size varies by a few
-bytes). The two configurations differ in three lines that follow from the compiler
-(its version text, its version number and the test that it can link). The 1063
-compile commands carry the same architecture flags (``-EB``, ``-mabi=32``,
-``-msoft-float``, ``-fno-pic``) but for one: ``-march=r3000`` with the toolchain of
-the build and ``-march=mips1`` with the Debian compiler. The kernel's Makefile
-tries ``r3000`` first, before it adds ``-msoft-float``, and the Debian compiler's
-default floating-point mode refuses it; both mean MIPS I. The linked kernels hold
-1283 and 1284 load-linked and store-conditional pairs, in code that runs only on a
-CPU that is found to have them (``cpu_has_llsc``, which the kernel tests at run
-time). The kernel is therefore not under the instruction-set gate yet
+When this section was measured, the kernel image was 1783187 bytes, 423315 over
+its partition. It was built twice, with the toolchain of the build and with the
+Debian cross compiler that ``make linux`` uses. The images are 734 and 738 bytes
+apart in two builds of the second (its banner holds the time and host of the
+build, so its size varies by a few bytes). The two configurations differ in
+three lines that follow from the compiler (its version text, its version number
+and the test that it can link). The 1063 compile commands carry the same
+architecture flags (``-EB``, ``-mabi=32``, ``-msoft-float``, ``-fno-pic``) but
+for one: ``-march=r3000`` with the toolchain of the build and ``-march=mips1``
+with the Debian compiler. The kernel's Makefile tries ``r3000`` first, before it
+adds ``-msoft-float``, and the Debian compiler's default floating-point mode
+refuses it; both mean MIPS I. The linked kernels hold 1283 and 1284 load-linked
+and store-conditional pairs, in code that runs only on a CPU that is found to
+have them (``cpu_has_llsc``, which the kernel tests at run time). The kernel is
+therefore not under the instruction-set gate yet
 (``tools/isa-gate/README.rst``).
 
 Linked, ``vmlinux`` holds 4571004 bytes of code and read-only data, 1125132 of
@@ -441,8 +470,16 @@ Putting the images on the board
 The bench (``tools/bench``, set up as in ``flashing.rst``) is the only tool that
 writes the flash, and only bank 0.
 
-Start the kernel from RAM, with the root filesystem it finds in ``r0`` (the
-loader gives it ``root=31:5``)::
+Start the kernel from RAM with the root filesystem built in, which needs
+neither bank: ``make ram-image`` makes ``ram.uImage`` from the build (the files
+of ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` included), and::
+
+    make ram-image OPEN_DFP_34X_2C_LOCAL_OVERLAY=$PWD/local
+    make ramboot IMAGE=build/image/images/ram.uImage \
+        ARGS='--ready "open-dfp-34x-2c: ready"'
+
+Or start ``k0.uImage`` from RAM, with the root filesystem it finds in ``r0``
+(the loader gives it ``root=31:5``)::
 
     make ramboot IMAGE=build/image/images/k0.uImage \
         ARGS='--ready "open-dfp-34x-2c: ready"'
@@ -470,18 +507,24 @@ console, which asks for nothing::
     grep ' / ' /proc/mounts  # /dev/root / squashfs ro,...
     busybox --list | wc -l   # 86
     ip addr                  # 192.0.2.2/30 on sfp, 198.51.100.2/30 on mgmt
-    pidof dropbear
+    pidof dropbear omcid pond
+    nft list ruleset         # the packet filter, two chains with policy drop
     cat /etc/issue           # open-dfp-34x-2c on the ODI DFP-34X-2C3
+
+A kernel started from ``ram.uImage`` has no ``VFS: Mounted root`` line: its
+root filesystem is the initial RAM disk, a tmpfs. ``tests/device`` runs the full
+check of a running stick and records it.
 
 Open items
 ==========
 
-* None of the images has been started on the board yet. The kernel of this tree
-  has been started from RAM (``flashing.rst``, "Open items"); a root filesystem
-  of this image has not been mounted by it. The boot script has been run in a
-  scratch namespace with a native BusyBox, and the static programs under
-  ``qemu-mips``; the first run on the board is the test.
+* The image with the programs of the ONU has not been started on the board as a
+  whole yet. ``omcid`` and ``ponid`` of this tree have been run on the board,
+  copied to a running stick: it reached O5 and answered the OLT's MIB upload.
+  The first start of ``ram.uImage`` and a run of ``tests/device`` are the test.
 * Whether the host's link comes up and the addresses answer depends on the host
   side having the matching addresses (``flashing.rst``); the VLAN of the second
   address has to exist on the host's interface too.
-* The kernel has to be slimmed by 423315 bytes before ``k0`` can hold it.
+* The images have to be slimmed before the banks can hold them: ``k0`` by
+  423335 bytes and ``r0`` by 1306022, once everything that the stick does is
+  in them and tested.
