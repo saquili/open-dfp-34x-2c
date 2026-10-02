@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+# The checkpatch findings (default mode, with its line length check) that the style gate lets
+# through: "TYPE REASON" for a whole type, "TYPE /PATTERN/ REASON" for the findings whose line
+# matches PATTERN (an extended regular expression without blanks; "." stands for one). Every run
+# of the gate prints how many findings each entry lets through, and an entry without a reason is
+# an error. Each entry is a debt to pay off, not a rule.
+SPACING /^tests\/test_(client|engine_edges|hw_host)\.c:[0-9]+:.ERROR:SPACING:.space.required.before.the.open.brace/ checkpatch asks for a blank before the brace of a compound literal of array type, (const uint8_t[12]){ 0 }, and clang-format removes it
+DEEP_INDENTATION /^(src\/me\/vlan\.c|src\/omci\/cases\.c|tests\/test_actions\.c|tests\/test_me171\.c):[0-9]+:.WARNING:DEEP_INDENTATION:/ statements nested six deep; the functions need splitting
+LONG_LINE /^(src\/me\/pm\.c|src\/omci\/alarm\.c|tests\/test_(bridge|clock|gem|me_edges|msgtype_matrix|swdl|synctime_stamp)\.c):[0-9]+:.CHECK:LONG_LINE:/ a string that cannot be broken stands in a table row before its closing brace, which checkpatch does not take for a line holding only a string
+OPEN_BRACE /^tests\/test_priority\.c:[0-9]+:.ERROR:OPEN_BRACE:/ the name test_the_caches_do_not_answer_for_each_other holds for_each, which checkpatch takes for a loop macro
+NAKED_SSCANF /^tests\/test_cases\.c:[0-9]+:.WARNING:NAKED_SSCANF:/ the result of sscanf is checked: it is the argument of CHECK_EQ, which checkpatch does not see
+FUNCTION_ARGUMENTS /^tests\/log_capture\.h:[0-9]+:.WARNING:FUNCTION_ARGUMENTS:/ a macro parameter named body, which checkpatch takes for a function declaration without argument names

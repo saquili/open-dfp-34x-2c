@@ -5,19 +5,54 @@
 omcid
 =====
 
-The OMCI management daemon, as a standalone project.
+The OMCI daemon of the ONU: the side of ITU-T G.988 that answers the OLT.
 
-This is the ONU-side management stack for ITU-T G.988: the 48-byte message
-frame and its integrity check, the engine, the management-information store,
-the per-management-entity handlers, and the control socket. It is laid out like
-any standalone protocol daemon (a plain ``Makefile``, ``src/``, ``tests/`` and
-man pages) and it talks to the kernel only through stable interfaces -- the
-OMCI control character device, and the standard networking control paths.
+It holds the management information base, answers each request of the OLT
+in the baseline message format, and programs the data path from what the
+OLT configures: GEM ports, bridges and the VLAN rules of the extended VLAN
+tagging operation. It reports alarms, performance monitoring counts and the
+result of the optical line supervision test. A local control socket lets
+tools read the MIB, follow the frames and see what became of each VLAN rule.
 
-Empty for now. It is populated by:
+Layout
+======
 
-* **WI-16** -- import the engine, frame, store and system layers; relicense to
-  ``GPL-2.0-only``; adopt kernel coding style.
-* **WI-17** -- generate the management-entity model from ITU-T G.988.
-* **WI-18** -- drive the kernel interfaces (the OMCI control device and the
-  switch's VLAN-translation offload) instead of any userspace shim.
+``src/omci/``
+   the message frame, the engine, alarms, notifications, the clock and tests
+``src/mib/``
+   the store of instances and attributes
+``src/me/``
+   the managed entity classes: the class table, the instances the ONU makes
+   itself, MIB upload, table attributes, and the data path (GEM ports,
+   bridges, VLAN rules, performance monitoring)
+``src/hw/``
+   the interface to the hardware, and the host backend that stands in for it
+``src/sys/``
+   logging, the transport of frames and the control socket
+``src/libomcid/`` and ``include/omcid/``
+   the client library of the control socket
+``tools/``
+   command-line tools, the table generator and the gates
+``tests/``
+   the tests
+``data/g988-me-min.tsv``
+   the managed entity classes, from which ``src/me/table.[ch]`` are made
+
+Building and testing
+====================
+
+::
+
+   make                # the daemon and the tools, in build/
+   make check          # the tests
+   make coverage       # the tests, failing unless every line of src/ ran
+   make check-style CLANG_FORMAT=clang-format CHECKPATCH=../linux/scripts/checkpatch.pl
+
+This build runs on the host backend. Frames come on the standard input and
+the answers go to the standard output, so recorded frames can be played
+through the daemon::
+
+   build/omcid -p < frames.bin > answers.bin
+
+The backend for the kernel interfaces of the board, the OMCI port and the
+networking control paths, is the next part to be added.
