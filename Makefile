@@ -42,9 +42,11 @@ BR2_ENV        = test "$$(uname -s)" = Linux || { \
 	export OPEN_DFP_34X_2C_KERNEL_ARCHIVE="$$(tools/kernel-archive/kernel-archive)" \
 	  GIT_CEILING_DIRECTORIES="$(CURDIR)" BR2_DL_DIR="$(BR2_DL_DIR)" &&
 
-# The images that must fit their partition for the build to pass. The kernel
-# image does not fit k0 yet, and is reported until it does.
-IMAGE_ENFORCE ?= r0
+# The images that must fit their partition for the build to pass: both. Naming
+# fewer (IMAGE_ENFORCE=r0) lets a build go on while the other is only reported,
+# which is for the day an image is being slimmed; the image workflow holds both
+# images to their partitions again in a step of its own.
+IMAGE_ENFORCE ?= k0 r0
 
 image:
 	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
