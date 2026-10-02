@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""tree-digest: list a directory tree with the digest of every file.
+
+Usage: tree-digest DIR
+
+Prints one line for each entry below DIR, sorted by path: its type (d for a
+directory, f for a file, l for a symbolic link), its permission bits in octal,
+the size and SHA-256 of a file (a dash for the others), its path relative to DIR
+and, for a link, its target. Owners and times are left out: the root filesystem
+image gives every file the same owner and time, so they are not part of what
+two builds have to agree on. The listings of two trees are the same exactly when
+the trees hold the same files, with the same modes, contents and links:
+
+    tree-digest build/image-a/target > a.txt
+    tree-digest build/image-b/target > b.txt
+    diff a.txt b.txt
+
+Exit status: 0 on success, 2 when DIR is not a directory.
+"""
+
+import hashlib
+import os
+import stat
+import sys
+
+
+def entries(top):
+    """The lines of the listing, in the order of the paths."""
+    lines = []
+    for directory, dirs, files in os.walk(top):
+        for name in dirs + files:
+            path = os.path.join(directory, name)
+            relative = os.path.relpath(path, top)
+            info = os.lstat(path)
+            mode = stat.S_IMODE(info.st_mode)
+            if stat.S_ISLNK(info.st_mode):
+                lines.append((relative, "l %04o - - %s -> %s" % (mode, relative, os.readlink(path))))
+            elif stat.S_ISDIR(info.st_mode):
+                lines.append((relative, "d %04o - - %s" % (mode, relative)))
+            elif stat.S_ISREG(info.st_mode):
+                digest = hashlib.sha256()
+                with open(path, "rb") as handle:
+                    for block in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(block)
+                lines.append((relative, "f %04o %d %s %s" % (mode, info.st_size, digest.hexdigest(),
+                                                              relative)))
+            else:
+                lines.append((relative, "? %04o - - %s" % (mode, relative)))
+    return [line for _path, line in sorted(lines)]
+
+
+def main(argv):
+    if len(argv) != 1 or not os.path.isdir(argv[0]):
+        sys.stderr.write(__doc__.split("\n\n")[0] + "\n")
+        return 2
+    for line in entries(argv[0]):
+        print(line)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

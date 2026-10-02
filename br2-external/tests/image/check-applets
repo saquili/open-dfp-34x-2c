@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""check-applets: run the static programs of the built image under qemu-mips.
+
+Usage: check-applets TARGET_DIR [QEMU]
+
+TARGET_DIR is the root filesystem as the build leaves it (build/image/target).
+QEMU is the user-mode emulator (default qemu-mips). The programs are the board's
+own, static MIPS I, and run on the build machine through the emulator; no file
+of the machine is changed. The checks are:
+
+* BusyBox lists every applet that the boot script and /etc/inittab name, and
+  each of them starts and prints its usage;
+* BusyBox's own shell parses the boot script;
+* a few applets do what they should (a shell evaluates arithmetic, text tools
+  work on a pipe, ``uname`` names the architecture the image is for);
+* dropbear and its key tool report their version and make a host key.
+
+The programs are never given a task that would act on the machine: a mount,
+a reboot or a network change is not run, only the usage of those applets.
+
+Exit status: 0 when every check passed, 1 when one failed, 2 when the emulator or
+the tree is missing.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+from bootscript import commands  # noqa: E402
+
+BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
+BUILTINS = {"export", "echo", "warn", "[", "if", "then", "fi", "do", "done", "case", "esac", ".",
+            "exit", "set", "true", "false", ":"}
+DROPBEAR = {"dropbear", "dropbearkey"}
+FAILED = []
+
+
+def report(ok, what, detail=""):
+    print("%s %s%s" % ("pass" if ok else "FAIL", what, ": " + detail if detail and not ok else ""))
+    if not ok:
+        FAILED.append(what)
+
+
+def main(argv):
+    if len(argv) not in (1, 2):
+        sys.stderr.write(__doc__.split("\n\n")[0] + "\n")
+        return 2
+    target = argv[0]
+    qemu = shutil.which(argv[1] if len(argv) == 2 else "qemu-mips")
+    busybox = os.path.join(target, "bin", "busybox")
+    if qemu is None:
+        sys.stderr.write("check-applets: no qemu-mips (apt-get install qemu-user)\n")
+        return 2
+    if not os.path.isfile(busybox):
+        sys.stderr.write("check-applets: no %s: is %s a target tree?\n" % (busybox, target))
+        return 2
+
+    def run(*args, stdin=None, timeout=120):
+        done = subprocess.run([qemu, *args], input=stdin, capture_output=True, text=True,
+                              timeout=timeout)
+        return done.returncode, done.stdout, done.stderr
+
+    status, out, err = run(busybox, "--list")
+    applets = set(out.split())
+    report(status == 0 and len(applets) > 20, "busybox --list names %d applets" % len(applets), err)
+
+    with open(os.path.join(BOARD, "overlay", "etc", "init.d", "rcS"), encoding="utf-8") as handle:
+        used = sorted(set(commands(handle.read())) - BUILTINS - DROPBEAR)
+    with open(os.path.join(BOARD, "overlay", "etc", "inittab"), encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip() and not line.startswith("#"):
+                match = re.match(r"^[^:]*:[^:]*:[^:]*:-?(/(?:bin|sbin|usr)/\S+)", line)
+                if match:
+                    used.append(os.path.basename(match.group(1)))
+    used = sorted(set(used) | {"init", "reboot"})
+    missing = [name for name in used if name not in applets]
+    report(not missing, "busybox holds the applets the boot script and inittab run (%s)"
+           % " ".join(used), "missing: " + " ".join(missing))
+
+    for name in used:
+        status, out, err = run(busybox, name, "--help")
+        report("Usage:" in out + err and status in (0, 1), "%s --help starts and prints its usage"
+               % name, "status %d, %r" % (status, (out + err)[:80]))
+
+    status, out, err = run(busybox, "sh", "-n", os.path.join(target, "etc", "init.d", "rcS"))
+    report(status == 0, "busybox sh parses /etc/init.d/rcS", err)
+
+    status, out, err = run(busybox, "sh", "-c", "echo $((6 * 7))")
+    report(out.strip() == "42", "busybox sh evaluates arithmetic", out + err)
+    status, out, err = run(busybox, "sed", "s/b/B/", stdin="abc\n")
+    report(out.strip() == "aBc", "busybox sed edits a pipe", out + err)
+    status, out, err = run(busybox, "awk", "BEGIN { print 1 + 1 }")
+    report(out.strip() == "2", "busybox awk computes", out + err)
+    status, out, err = run(busybox, "grep", "-c", "a", stdin="a\nb\na\n")
+    report(out.strip() == "2", "busybox grep counts", out + err)
+    status, out, err = run(busybox, "uname", "-m")
+    report(status == 0 and out.strip().startswith("mips"), "busybox uname -m names the architecture",
+           out + err)
+
+    dropbear = os.path.join(target, "usr", "sbin", "dropbear")
+    status, out, err = run(dropbear, "-V")
+    report(re.search(r"Dropbear v\d", out + err) is not None, "dropbear -V reports its version",
+           out + err)
+    with tempfile.TemporaryDirectory() as tmp:
+        key = os.path.join(tmp, "host_key")
+        status, out, err = run(dropbear, "-V")  # the multi-call program is named by its link below
+        tool = os.path.join(target, "usr", "bin", "dropbearkey")
+        if os.path.islink(tool):
+            # The link points at ../sbin/dropbear; the emulator needs the program and its name.
+            status, out, err = run("-0", "dropbearkey", dropbear, "-t", "ed25519", "-f", key)
+        else:
+            status, out, err = run(tool, "-t", "ed25519", "-f", key)
+        report(status == 0 and os.path.getsize(key) > 0, "dropbearkey makes an ed25519 host key",
+               out + err)
+
+    print("check-applets: %s" % ("every check passed" if not FAILED else
+                                 "%d checks failed" % len(FAILED)))
+    return 1 if FAILED else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
