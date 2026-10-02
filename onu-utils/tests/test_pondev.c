@@ -99,7 +99,7 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	hidden = printed(&d, false);
 	shown = printed(&d, true);
 	CHECK(strstr(hidden, "pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3"));
-	CHECK(strstr(hidden, "alarms none  GEM ports 2  T-CONTs 1"));
+	CHECK(strstr(hidden, "alarms none  GEM ports up to 2  T-CONTs up to 1"));
 	CHECK(strstr(hidden, "serial number set (-s shows it)"));
 	CHECK(!strstr(hidden, "ABCD"));
 	CHECK(strstr(shown, "serial number ABCD12345678"));
@@ -161,6 +161,33 @@ static void test_a_tcont_is_read(void)
 	CHECK(t.dev == 0 && t.index == 1 && t.alloc_id == 1024);
 }
 
+static void test_an_idle_tcont_prints_as_idle(void)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlmsghdr *nlh;
+	struct pon_tcont t;
+	char *text = NULL;
+	size_t len = 0;
+	FILE *f = open_memstream(&text, &len);
+
+	nlh = message(buf, PON_CMD_TCONT_GET);
+	mnl_attr_put_u32(nlh, PON_A_TCONT_ID, 0);
+	mnl_attr_put_u32(nlh, PON_A_TCONT_INDEX, 0);
+	mnl_attr_put_u32(nlh, PON_A_TCONT_ALLOC_ID, 0);
+	CHECK(pon_tcont_parse(nlh, &t) == 0);
+	pon_tcont_print(f, &t);
+
+	nlh = message(buf, PON_CMD_TCONT_GET);
+	mnl_attr_put_u32(nlh, PON_A_TCONT_ID, 0);
+	mnl_attr_put_u32(nlh, PON_A_TCONT_INDEX, 2);
+	CHECK(pon_tcont_parse(nlh, &t) == 0);
+	pon_tcont_print(f, &t);
+	fclose(f);
+
+	CHECK(!strcmp(text, "    T-CONT 0  Alloc-ID 0\n    T-CONT 2  idle\n"));
+	free(text);
+}
+
 int main(void)
 {
 	test_a_full_device_is_read();
@@ -168,6 +195,7 @@ int main(void)
 	test_alarms_and_states_are_named();
 	test_a_malformed_attribute_is_refused();
 	test_a_tcont_is_read();
+	test_an_idle_tcont_prints_as_idle();
 
 	printf("test_pondev: %d checks, %d failed\n", checks, failures);
 	return failures != 0;

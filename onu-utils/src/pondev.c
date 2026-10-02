@@ -218,8 +218,8 @@ void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 	fputs("   ", f);
 	if (has(d, PON_A_DEV_ALARMS))
 		print_alarms(f, d->alarms);
-	print_u32(f, d, PON_A_DEV_NUM_GEM_PORTS, "GEM ports", d->gem_ports);
-	print_u32(f, d, PON_A_DEV_NUM_TCONTS, "T-CONTs", d->tconts);
+	print_u32(f, d, PON_A_DEV_NUM_GEM_PORTS, "GEM ports up to", d->gem_ports);
+	print_u32(f, d, PON_A_DEV_NUM_TCONTS, "T-CONTs up to", d->tconts);
 	if (!has(d, PON_A_DEV_SERIAL_NUMBER)) {
 		fputs("  serial number not set", f);
 	} else if (!serial) {
@@ -241,5 +241,8 @@ void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 
 void pon_tcont_print(FILE *f, const struct pon_tcont *t)
 {
-	fprintf(f, "    T-CONT %u  Alloc-ID %u\n", t->index, t->alloc_id);
+	if (t->have & 1u << PON_A_TCONT_ALLOC_ID)
+		fprintf(f, "    T-CONT %u  Alloc-ID %u\n", t->index, t->alloc_id);
+	else
+		fprintf(f, "    T-CONT %u  idle\n", t->index);
 }
