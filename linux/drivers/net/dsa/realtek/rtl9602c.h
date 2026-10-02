@@ -2445,6 +2445,11 @@ struct rtl9602c_priv {
 
 	/** @i2c: the optics' I2C master as an SMBus adapter */
 	struct i2c_adapter	i2c;
+	/**
+	 * @i2c_lock: held by every user of the optics' I2C master for the
+	 * whole of its sequence of transfers
+	 */
+	struct mutex		i2c_lock;
 	/** @ptp_info: the switch clock as a PHC */
 	struct ptp_clock_info	ptp_info;
 	/** @ptp_clock: the PHC; NULL when none is registered */

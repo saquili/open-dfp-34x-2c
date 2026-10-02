@@ -22,11 +22,12 @@
  * is not restricted: a client of it, userspace through i2c-dev included,
  * can still write A0h and A2h.
  *
- * No lock covers a transfer.  The hwmon reads, the debugfs views, the
- * modulation hold and clients of the adapter all drive the same registers,
- * and the hwmon core and the I2C core each serialize their own callers
- * only, so two users at once could mix their transfers.  This has not been
- * observed.
+ * The hwmon reads, the debugfs views, the modulation hold and clients of
+ * the adapter all drive the same registers, and the hwmon core and the I2C
+ * core each serialize their own callers only.  So every transfer runs under
+ * the switch's i2c_lock, which each of those users holds for its whole
+ * sequence: the modulation hold switches the page of A2h 128-255 and puts
+ * it back, and no other user sees the switched page.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
@@ -107,8 +108,8 @@ static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave)
  * @reg: register address inside the device
  * @val: set to the byte read
  *
- * Busy-waits for up to about a millisecond.  No lock is taken: see the
- * note at the top of this file.
+ * Busy-waits for up to about a millisecond.  Called with p->i2c_lock held:
+ * see the note at the top of this file.
  *
  * Return: 0, -ETIMEDOUT if the transfer does not end, or -ENXIO if the
  * device does not acknowledge.
@@ -119,6 +120,7 @@ int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
 	u32 cmd;
 	int err;
 
+	lockdep_assert_held(&p->i2c_lock);
 	rtl9602c_i2c_setup_slave(p, slave);
 	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, reg);
 
@@ -138,6 +140,7 @@ static int rtl9602c_i2c_write_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
 	u32 cmd;
 	int err;
 
+	lockdep_assert_held(&p->i2c_lock);
 	rtl9602c_i2c_setup_slave(p, slave);
 	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, reg);
 	rtl9602c_w(p, RTL9602C_I2C_TX_DATA, val);
@@ -163,13 +166,18 @@ static s32 rtl9602c_i2c_smbus_xfer(struct i2c_adapter *adap, u16 addr,
 				   union i2c_smbus_data *data)
 {
 	struct rtl9602c_priv *p = i2c_get_adapdata(adap);
+	int err;
 
 	if (size != I2C_SMBUS_BYTE_DATA)
 		return -EOPNOTSUPP;
 
+	mutex_lock(&p->i2c_lock);
 	if (read_write == I2C_SMBUS_READ)
-		return rtl9602c_i2c_read_byte(p, addr, command, &data->byte);
-	return rtl9602c_i2c_write_byte(p, addr, command, data->byte);
+		err = rtl9602c_i2c_read_byte(p, addr, command, &data->byte);
+	else
+		err = rtl9602c_i2c_write_byte(p, addr, command, data->byte);
+	mutex_unlock(&p->i2c_lock);
+	return err;
 }
 
 static u32 rtl9602c_i2c_functionality(struct i2c_adapter *adap)
@@ -308,32 +316,41 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_HWMON)
+#if IS_ENABLED(CONFIG_HWMON) || IS_ENABLED(CONFIG_DEBUG_FS)
 /*
  * Read the diagnostic word @off bytes into A2h 96-105, most significant
- * byte first.  SFF-8472 expects such a field to be read in one two-byte
- * sequence, during which the module does not update it; here the two
- * bytes are separate transfers, so a value that changes between them can
- * come back as the halves of two samples.  How often that happens on this
- * module is not measured.
+ * byte first.  SFF-8472 has such a field read in one two-byte sequence,
+ * during which the module does not update it; the master moves one byte
+ * per transfer, so the high byte is read before and after the low one,
+ * and the word is taken when the two agree.  A low byte read between two
+ * equal high bytes belongs to a sample with that high byte, so the word is
+ * one the module held; a high byte that changed means the module updated
+ * the field meanwhile, and the three reads are made again, up to three
+ * times in all.
  */
 static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int off, u16 *val)
 {
-	u8 hi, lo;
-	int err;
+	const u16 reg = RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_DDM + off;
+	u8 hi, lo, again;
+	int err, tries;
 
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_DDM + off,
-			      &hi);
-	if (err)
-		return err;
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_DDM +
-			      off + 1, &lo);
-	if (err)
-		return err;
-
-	*val = (u16)hi << 8 | lo;
-	return 0;
+	lockdep_assert_held(&p->i2c_lock);
+	for (tries = 0; tries < 3; tries++) {
+		err = rtl9602c_l_read(p, reg, &hi) ?:
+		      rtl9602c_l_read(p, reg + 1, &lo) ?:
+		      rtl9602c_l_read(p, reg, &again);
+		if (err)
+			return err;
+		if (hi == again) {
+			*val = (u16)hi << 8 | lo;
+			return 0;
+		}
+	}
+	return -EAGAIN;
 }
+#endif
+
+#if IS_ENABLED(CONFIG_HWMON)
 
 /*
  * A2h 96-105 hold temperature, supply voltage, bias, transmitted power and
@@ -357,6 +374,7 @@ static int rtl9602c_hwmon_read(struct device *dev,
 	u16 raw;
 	int err;
 
+	guard(mutex)(&p->i2c_lock);
 	switch (type) {
 	case hwmon_temp:
 		err = rtl9602c_l_a2_word(p, 0, &raw);
@@ -469,48 +487,47 @@ int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
 /*
  * The "a2" view: A2h bytes 0-127, each read on its own, then the five
  * diagnostic words in SFF-8472 units, the password bytes 123-126 and the
- * page select, byte 127.  The first failed read ends the view with its
- * error.  It only reads.
+ * page select, byte 127.  A failed read ends the view with its error.  It
+ * only reads.
  */
 static int rtl9602c_a2_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
 	u8 b[0x80];
 	unsigned int i;
-	int err;
+	int err = 0;
+	u16 w[5];
+	int mdeg;
 
-	for (i = 0; i < sizeof(b); i++) {
+	mutex_lock(&p->i2c_lock);
+	for (i = 0; i < sizeof(b) && !err; i++)
 		err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + i, &b[i]);
-		if (err) {
-			seq_printf(s, "A2h read failed at 0x%02x: %d\n", i, err);
-			return 0;
-		}
+	for (i = 0; i < ARRAY_SIZE(w) && !err; i++)
+		err = rtl9602c_l_a2_word(p, 2 * i, &w[i]);
+	mutex_unlock(&p->i2c_lock);
+	if (err) {
+		seq_printf(s, "A2h read failed: %d\n", err);
+		return 0;
 	}
 
 	for (i = 0; i < sizeof(b); i += 16)
 		seq_printf(s, "%02x: %*ph\n", i, 16, b + i);
 
 	/*
-	 * The received power shows whether light reaches the receiver, which
-	 * the GPON MAC's loss of signal cannot tell: that alarm is the same
-	 * for no light and for light the receiver does not recover.  A
-	 * temperature between -1 and 0 degC prints without its minus sign.
+	 * The five words are read again, each in a way that gives a sample the
+	 * module held (rtl9602c_l_a2_word()), so they may be newer than the
+	 * bytes above.  The received power shows whether light reaches the
+	 * receiver, which the GPON MAC's loss of signal cannot tell: that alarm
+	 * is the same for no light and for light the receiver does not recover.
 	 */
-	{
-		s16 temp = get_unaligned_be16(b + RTL9602C_OPTICS_A2_DDM);
-		u16 vcc  = get_unaligned_be16(b + RTL9602C_OPTICS_A2_DDM + 2);
-		u16 bias = get_unaligned_be16(b + RTL9602C_OPTICS_A2_DDM + 4);
-		u16 txp  = get_unaligned_be16(b + RTL9602C_OPTICS_A2_DDM + 6);
-		u16 rxp  = get_unaligned_be16(b + RTL9602C_OPTICS_A2_DDM + 8);
-
-		seq_printf(s, "\ntemperature %d.%02u C\n",
-			   temp / 256, ((temp < 0 ? -temp : temp) % 256) * 100 / 256);
-		seq_printf(s, "vcc         %u.%03u V\n", vcc / 10000, (vcc / 10) % 1000);
-		seq_printf(s, "tx bias     %u uA\n", bias * 2);
-		seq_printf(s, "tx power    %u.%u uW\n", txp / 10, txp % 10);
-		seq_printf(s, "rx power    %u.%u uW   <- light on the fibre\n",
-			   rxp / 10, rxp % 10);
-	}
+	mdeg = DIV_ROUND_CLOSEST((int)(s16)w[0] * 1000, 256);
+	seq_printf(s, "\ntemperature %s%d.%03d C\n", mdeg < 0 ? "-" : "",
+		   abs(mdeg) / 1000, abs(mdeg) % 1000);
+	seq_printf(s, "vcc         %u.%03u V\n", w[1] / 10000, (w[1] / 10) % 1000);
+	seq_printf(s, "tx bias     %u uA\n", w[2] * 2);
+	seq_printf(s, "tx power    %u.%u uW\n", w[3] / 10, w[3] % 10);
+	seq_printf(s, "rx power    %u.%u uW   <- light on the fibre\n",
+		   w[4] / 10, w[4] % 10);
 
 	/*
 	 * SFF-8472 leaves bytes 120-126 to the module maker.  The modulation
@@ -619,14 +636,11 @@ static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p, u8 *tabsel)
  * reach the EEPROM; -EINVAL when the loop does not turn off or MOD_DAC
  * holds no usable value; otherwise the error of a failed transfer.
  */
-int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
+static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 {
 	u8 hi, lo, er, eectl, modmax, tabsel, rb_er;
 	unsigned int dac;
 	int err;
-
-	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
-		return 0;
 
 	err = rtl9602c_gn_t2_open(p, &tabsel);
 	if (err)
@@ -702,6 +716,15 @@ out:
 	return err;
 }
 
+int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
+{
+	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+		return 0;
+
+	guard(mutex)(&p->i2c_lock);
+	return __rtl9602c_optics_hold_modulation(p);
+}
+
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
 /*
@@ -722,6 +745,7 @@ static int rtl9602c_eeblocks_show(struct seq_file *s, void *unused)
 
 	for (slave = 0x50; slave <= 0x53; slave++) {
 		nack = 0;
+		mutex_lock(&p->i2c_lock);
 		for (i = 0; i < sizeof(b); i++) {
 			err = rtl9602c_i2c_read_byte(p, slave, i, &b[i]);
 			if (err) {
@@ -729,6 +753,7 @@ static int rtl9602c_eeblocks_show(struct seq_file *s, void *unused)
 				nack++;
 			}
 		}
+		mutex_unlock(&p->i2c_lock);
 		seq_printf(s, "=== i2c 0x%02x -- image 0x%03x -- %d of 256 did not answer\n",
 			   slave, (slave - 0x50) * 0x100, nack);
 		if (nack == (int)sizeof(b)) {

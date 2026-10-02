@@ -1948,6 +1948,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 
 	p->dev = &pdev->dev;
 	spin_lock_init(&p->irq_enable_lock);
+	mutex_init(&p->i2c_lock);
 	INIT_DELAYED_WORK(&p->intr_rearm, rtl9602c_intr_rearm);
 	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
 	mutex_init(&p->table_lock);

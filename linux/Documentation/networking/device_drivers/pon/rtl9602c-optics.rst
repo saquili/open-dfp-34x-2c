@@ -374,10 +374,16 @@ Offsets are the values of the macros for master 1.
      - T
      - The optics diagnostics read, for reads; for writes, the modulation hold
        reads back what it wrote.
-   * - No lock covers a transfer (see "Known limitations").
+   * - Every user of the master holds the switch's ``i2c_lock`` for its whole
+       sequence of transfers: a hwmon read, the ``a2`` and ``eeblocks`` views,
+       the modulation hold, and each transfer of a client of the adapter. The
+       hwmon core and the I2C core serialise only their own callers, and the
+       modulation hold switches the page of A2h 128-255 and puts it back, which
+       no other user may see.
      - I
-     - Not observed. Reading the hwmon attributes in a loop while reading the
-       ``a2`` view would show mixed or misplaced bytes.
+     - Read from the code; in a kernel with lockdep, the transfer functions
+       assert that the lock is held. Reading the hwmon attributes in a loop
+       while reading the ``a2`` view would show no mixed bytes; not run.
 
 One byte
 --------
@@ -1151,21 +1157,15 @@ directory, which switch teardown removes.
 Known limitations
 =================
 
-- No lock covers a transfer. The hwmon reads, the ``a2`` and ``eeblocks``
-  views, the modulation hold and any client of the I2C adapter all drive the
-  same registers of the master. The hwmon core serialises the reads of the
-  hwmon device and the I2C core serialises the clients of the adapter, each
-  among themselves only, and nothing serialises the other users against them.
-  Two users at once can therefore mix their transfers, one taking the device
-  address, the register address or the byte that the other wrote. This has not
-  been observed.
-- A diagnostic word is read as two transfers. SFF-8472 (Rev 12.4 clause 9.1)
-  requires a multi-byte diagnostic field to be read in one two-byte sequence,
-  during which the module does not update it. The driver reads each value as
-  two one-byte transfers, the most significant byte first, so a value that
-  changes between them can come back as the halves of two samples. How often
-  this module updates a word between the two transfers is not measured. This
-  bears on every hwmon reading and on the five values the ``a2`` view prints.
+- A diagnostic word is read as three one-byte transfers. SFF-8472 (Rev 12.4
+  clause 9.1) has a multi-byte diagnostic field read in one two-byte sequence,
+  during which the module does not update it, and the master moves one byte per
+  transfer. The driver reads the most significant byte, the least significant
+  one and the most significant one again, and takes the word when the two
+  readings of the high byte agree, up to three times; otherwise the read fails
+  with ``-EAGAIN``. The low byte read between two equal high bytes belongs to a
+  sample with that high byte, so the word is one the module held. How often the
+  module updates a word during the three transfers is not measured.
 - ``CONFIG_RTL9602C_OPTICS_RO`` stops only the modulation hold. The I2C adapter
   stays registered and passes every read and write on, and A0h and A2h bytes
   0-127 take writes without a password and keep them across a power cycle of
@@ -1177,8 +1177,6 @@ Known limitations
   ``02h`` to byte 127, and at the end it writes the old value back to byte 127:
   six byte writes. Whether the part skips rewriting a byte that already holds
   the value is not known, so the wear of the EEPROM is unmeasured.
-- The ``a2`` view prints a temperature between -1 and 0 degC without its minus
-  sign.
 - The Kconfig entry of the switch driver, ``NET_DSA_RTL9602C``, neither depends
   on nor selects ``I2C``, although the optics code calls the I2C core:
   ``include/linux/i2c.h`` declares ``devm_i2c_add_adapter()`` only when
