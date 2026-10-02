@@ -21,6 +21,17 @@
 int omcid_run(int argc, char **argv, int rx_fd, int tx_fd,
 	      const char *ctl_path);
 
+struct omci_transport;
+
+/**
+ * omcid_serve() - Serve the OLT on a transport until stopped or the input ends.
+ * @transport: where frames come from and answers go; it is closed on return
+ * @ctl_path: where to create the control socket
+ *
+ * Return: the exit status of the program.
+ */
+int omcid_serve(struct omci_transport *transport, const char *ctl_path);
+
 /**
  * omcid_monotonic_seconds() - The monotonic clock, in seconds.
  *

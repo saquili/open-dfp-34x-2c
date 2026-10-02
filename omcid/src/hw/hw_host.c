@@ -363,7 +363,7 @@ enum omci_status omci_hw_optics(struct omci_hw_optics *out)
 	return g_optic_valid != 0u ? OMCI_OK : OMCI_ERR_HW;
 }
 
-static const struct omci_hw_ops g_host_ops = {
+const struct omci_hw_ops omci_hw_host_ops = {
 	.caps = omci_hw_caps,
 	.source = omci_hw_source,
 	.vlan_apply = omci_hw_vlan_apply,
@@ -373,15 +373,3 @@ static const struct omci_hw_ops g_host_ops = {
 	.counter = omci_hw_counter,
 	.optics = omci_hw_optics,
 };
-
-static const struct omci_hw_ops *g_ops = &g_host_ops;
-
-const struct omci_hw_ops *omci_hw(void)
-{
-	return g_ops;
-}
-
-void omci_hw_ops_set(const struct omci_hw_ops *ops)
-{
-	g_ops = ops != NULL ? ops : &g_host_ops;
-}

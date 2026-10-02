@@ -12,4 +12,6 @@
 
 #define noinline __attribute((__noinline__))
 
+#define __aligned(x) __attribute((__aligned__(x)))
+
 #endif

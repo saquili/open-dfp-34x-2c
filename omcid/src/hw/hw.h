@@ -419,8 +419,15 @@ struct omci_hw_ops {
 	enum omci_status (*optics)(struct omci_hw_optics *out);
 };
 
+/* The host backend, and the backend of the kernel interfaces of the board. */
+extern const struct omci_hw_ops omci_hw_host_ops;
+extern const struct omci_hw_ops omci_hw_kernel_ops;
+
 /**
- * omci_hw() - The backend in use; the host backend until another is set.
+ * omci_hw() - The backend in use.
+ *
+ * Until omci_hw_ops_set() chooses another, the backend of the build: the
+ * host backend in a host build, the kernel backend on the board.
  *
  * Return: the backend.
  */
@@ -428,7 +435,7 @@ __must_check const struct omci_hw_ops *omci_hw(void);
 
 /**
  * omci_hw_ops_set() - Choose the backend.
- * @ops: the backend, or NULL for the host backend
+ * @ops: the backend, or NULL for the backend of the build
  */
 void omci_hw_ops_set(const struct omci_hw_ops *ops);
 

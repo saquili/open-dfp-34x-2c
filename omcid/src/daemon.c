@@ -118,6 +118,18 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 
 	OMCI_INFO("omcid %s starting — %s", OMCID_VERSION, OMCID_PROFILE);
 
+	struct omci_transport_pipe pipe;
+	struct omci_transport transport;
+
+	omci_transport_pipe_init(&pipe, rx_fd, tx_fd, &transport);
+	OMCI_INFO("transport: stdin/stdout");
+	return omcid_serve(&transport, ctl_path);
+}
+
+int omcid_serve(struct omci_transport *transport, const char *ctl_path)
+{
+	g_stop = 0;
+
 	/* SIGINT and SIGTERM stop the loop; a client that goes away raises no SIGPIPE. */
 	struct sigaction sa = { .sa_handler = on_signal };
 
@@ -130,12 +142,6 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 	sigemptyset(&ign.sa_mask);
 	(void)sigaction(SIGPIPE, &ign, NULL);
 
-	struct omci_transport_pipe pipe;
-	struct omci_transport transport;
-
-	omci_transport_pipe_init(&pipe, rx_fd, tx_fd, &transport);
-	OMCI_INFO("transport: stdin/stdout");
-
 	struct omci_mib *mib = NULL;
 	struct omci_engine *eng = NULL;
 	struct omci_ctl *ctl = NULL;
@@ -143,7 +149,7 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 	int status = EXIT_FAILURE;
 
 	struct omci_ctl_counters counters = { 0, 0, 0 };
-	struct tx_bridge bridge = { .transport = &transport,
+	struct tx_bridge bridge = { .transport = transport,
 				    .counters = &counters };
 
 	enum omci_status rc = omci_mib_init(&mib);
@@ -192,8 +198,8 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 	size_t handled = 0;
 	size_t rejected = 0;
 
-	const int frame_fd = transport.ops->rx_fd != NULL ?
-				     transport.ops->rx_fd(transport.ctx) :
+	const int frame_fd = transport->ops->rx_fd != NULL ?
+				     transport->ops->rx_fd(transport->ctx) :
 				     -1;
 
 	while (!g_stop) {
@@ -237,7 +243,7 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 
 		uint8_t frame[OMCI_FRAME_LEN];
 
-		rc = transport.ops->recv(transport.ctx, frame);
+		rc = transport->ops->recv(transport->ctx, frame);
 		if (rc == OMCI_ERR_AGAIN)
 			continue;
 		/* The input has ended. */
@@ -267,6 +273,6 @@ out_engine:
 out_mib:
 	omci_mib_fini(mib);
 out:
-	transport.ops->close(transport.ctx);
+	transport->ops->close(transport->ctx);
 	return status;
 }

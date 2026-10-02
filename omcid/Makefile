@@ -11,6 +11,8 @@
 #                          unless every line of src/ ran
 #   make check-style       clang-format and checkpatch over the sources
 #                          (CLANG_FORMAT= and CHECKPATCH= name the tools)
+#   make board             the daemon and the client tools for the board, on
+#                          the kernel backend, in build-board/board/
 #
 # CROSS_COMPILE= builds for another machine; V=1 shows the commands.
 
@@ -37,6 +39,12 @@ PREFIX_MAP ?= 1
 V          ?= 0
 ifeq ($(origin ARFLAGS),default)
 ARFLAGS := rcsD
+endif
+
+# A build for the board lives in its own directory and has no sanitizers.
+ifeq ($(BOARD),1)
+BUILD    ?= build-board
+SANITIZE := no
 endif
 
 # A coverage build lives in its own directory.
@@ -101,14 +109,15 @@ endif
 override STD  := -std=gnu11
 override WARN := -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes -Wshadow -Wpointer-arith \
                  -Wwrite-strings
-override DEFS := -DOMCID_HW_STUB=1
-override INCS := -Iinclude -Isrc
+override DEFS := $(if $(filter 1,$(BOARD)),,-DOMCID_HW_STUB=1)
+override INCS := -Iinclude -Isrc -Itarget
 
 COMPILE = $(CC) $(STD) $(CPPFLAGS) $(INCS) $(DEFS) $(CFLAGS) $(WARN) $(MAP) $(GROUP_FLAGS) -MMD -MP
 
 # The daemon's core, its client library and its entry point.
 CORE_SRC := \
 	src/daemon.c \
+	src/hw/hw.c \
 	src/hw/hw_host.c \
 	src/me/action.c \
 	src/me/bridge.c \
@@ -136,6 +145,9 @@ CORE_SRC := \
 CLIENT_SRC := src/libomcid/libomcid.c
 
 DAEMON_SRC := src/main.c
+
+# The board's own sources: the kernel backend, the OMCI port, its entry point.
+TARGET_SRC := target/hw_kernel.c target/main.c target/transport_port.c
 
 # The tools: those linked with the core, and those that only talk to the
 # control socket.
@@ -172,6 +184,8 @@ HELPER_SRC  := tests/fault.c
 # or the lists name a file that is not there.
 LISTED_SRC := $(sort $(CORE_SRC) $(CLIENT_SRC) $(DAEMON_SRC))
 FOUND_SRC  := $(sort $(wildcard src/*.c src/*/*.c))
+LISTED_TARGET := $(sort $(TARGET_SRC))
+FOUND_TARGET  := $(sort $(wildcard target/*.c))
 LISTED_TOOLS := $(sort $(foreach t,$(TOOLS_CORE) $(TOOLS_CLIENT),$(tools_src_$(t))))
 FOUND_TOOLS  := $(sort $(wildcard tools/*.c tools/*/*.c))
 LISTED_TESTS := $(sort $(foreach t,$(TESTS),tests/test_$(t).c))
@@ -268,9 +282,10 @@ $(foreach t,$(FAULT_TESTS),$(eval $(BUILD)/test_$(t): LINK_EXTRA := $(WRAP_FLAGS
 # Compare the lists of files with the tree.
 check-lists:
 	@bad=0; \
-	for set in SRC TOOLS TESTS HELPERS CHECKS STYLE; do \
+	for set in SRC TARGET TOOLS TESTS HELPERS CHECKS STYLE; do \
 	    case $$set in \
 	        SRC)     listed='$(LISTED_SRC)';     found='$(FOUND_SRC)' ;; \
+	        TARGET)  listed='$(LISTED_TARGET)';  found='$(FOUND_TARGET)' ;; \
 	        TOOLS)   listed='$(LISTED_TOOLS)';   found='$(FOUND_TOOLS)' ;; \
 	        TESTS)   listed='$(LISTED_TESTS)';   found='$(FOUND_TESTS)' ;; \
 	        HELPERS) listed='$(LISTED_HELPERS)'; found='$(FOUND_HELPERS)' ;; \
@@ -295,7 +310,7 @@ check-gen:
 
 check-style:
 	$(Q)sh $(STYLE_GATE) --clang-format '$(CLANG_FORMAT)' --checkpatch '$(CHECKPATCH)' --open $(STYLE_OPEN) -- \
-	    $$(find include src tests tools -name '*.c' -o -name '*.h' | sort)
+	    $$(find include src target tests tools -name '*.c' -o -name '*.h' | sort)
 
 # Run every test; print the end of the log of each one that fails.
 check: check-gen tests
@@ -322,6 +337,35 @@ coverage: all tests
 	$(Q)$(MAKE) --no-print-directory check BUILD=$(BUILD) COVERAGE=$(COVERAGE)
 	@echo "-- coverage: measuring"
 	$(Q)python3 tools/coverage_gate.py --build $(abspath $(BUILD)) --root $(CURDIR)
+
+# The board: the core without the host backend, as an archive so that only
+# what the programs use is linked, and the kernel backend of target/.
+BOARD_CORE_SRC := $(filter-out src/hw/hw_host.c,$(CORE_SRC))
+BOARD_LIB      := $(BUILD)/libomcid_board.a
+BOARD_PROGRAMS := $(addprefix $(BUILD)/board/,omcid omcitap omcivlan)
+
+.PHONY: board
+ifeq ($(BOARD),1)
+board: $(BOARD_PROGRAMS)
+
+$(BOARD_LIB): $(BOARD_CORE_SRC:%.c=$(OBJ)/%.o)
+	@rm -f $@
+	$(call say,AR,$@)
+	$(Q)$(AR) $(ARFLAGS) $@ $^
+
+$(BUILD)/board/omcid: $(TARGET_SRC:%.c=$(OBJ)/%.o) $(BOARD_LIB)
+	@mkdir -p $(dir $@)
+	$(call say,LD,$@)
+	$(Q)$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(BOARD_LIB) $(LDLIBS)
+
+$(BUILD)/board/omcitap $(BUILD)/board/omcivlan: $(BUILD)/board/%: $(OBJ)/tools/%.o $(CLIENT_LIB)
+	@mkdir -p $(dir $@)
+	$(call say,LD,$@)
+	$(Q)$(CC) $(LDFLAGS) -o $@ $< $(CLIENT_LIB) $(LDLIBS)
+else
+board:
+	$(Q)$(MAKE) --no-print-directory BOARD=1 board
+endif
 
 clean:
 	rm -rf $(BUILD)
