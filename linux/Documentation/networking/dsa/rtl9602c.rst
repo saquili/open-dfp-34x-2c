@@ -683,9 +683,10 @@ with a line-rate override.
        host reporting 2.5 Gb/s full duplex, with the word at ``0x000bffff``.
    * - ``RTL9602C_SHAPE_2G5_CFG_RATE`` is also where the port-0 egress shaper
        puts its rate, so the SerDes bring-up changes the word by
-       read-modify-write: 2500BaseX sets the enable and writes
-       ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL``; any other mode clears the enable
-       only. The word reads ``0x000bffff`` at 2500BaseX, ``0x0003ffff`` after a
+       read-modify-write: 2500BaseX sets the enable and writes half the rate
+       of port 0's shaper, which is ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL`` when
+       no tbf limits the port (see the *acl-qos* page, "The egress shaper");
+       any other mode clears the enable only. The word reads ``0x000bffff`` at 2500BaseX, ``0x0003ffff`` after a
        bring-up in 1000BaseX and ``0x000bffff`` again after returning to
        2500BaseX; a chip the driver has not touched reads ``0x000bffff``.
      - M
@@ -771,9 +772,11 @@ The ten steps of ``rtl9602c_serdes_init()``, in order:
    ``RTL9602C_SERDES_RESET_SEQ``: ``0x10``, ``0x30``, ``0x00``. Purpose: a reset
    pulse for the lane. (T)
 8. Set or clear the 2.5G override for the mode: at 2500BaseX set
-   ``RTL9602C_SHAPE_2G5_CFG_EN`` and write ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL``,
-   in any other mode clear the enable only (see "Forced MAC ability").
-   Purpose: port 0 carries 2.5 Gb/s as a 1000 Mb/s port with the override. (M)
+   ``RTL9602C_SHAPE_2G5_CFG_EN`` and write half the rate of port 0's shaper,
+   ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL`` when no tbf limits the port; in any
+   other mode clear the enable only (see "Forced MAC ability"). Purpose: port 0
+   carries 2.5 Gb/s as a 1000 Mb/s port with the override, and a tbf on it
+   stays in force. (M)
 9. Last, write ``RTL9602C_SERDES_AN_CTRL`` (``0x021808``) with
    ``RTL9602C_SERDES_AN_CTRL_INIT`` (``0x71e0``). Purpose: turn in-band
    auto-negotiation off on the SFP lane; without it the lane transmits and its

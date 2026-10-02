@@ -846,8 +846,8 @@ static void rtl9602c_wfq_weight(struct rtl9602c_priv *p, int port,
  * The port's egress rate, in steps of 1000 bytes a second (8 kbit/s). Port 0
  * enforces it only when RTL9602C_SHAPE_2G5_CFG holds it too, in steps of twice
  * that; that word also holds the SerDes lane's 2.5G enable, hence the
- * read-modify-write. A SerDes bring-up at 2500BASE-X writes the full rate back
- * there, which is taken to undo a limit on port 0; not verified.
+ * read-modify-write. A SerDes bring-up at 2500BASE-X copies the rate of
+ * RTL9602C_SHAPE_PORT_CFG there, so it keeps a limit on port 0.
  */
 static void rtl9602c_egress_shaper(struct rtl9602c_priv *p, int port, u32 rate)
 {
@@ -4167,7 +4167,8 @@ static void rtl9602c_l34_flows_release_port(struct rtl9602c_priv *p, int port)
  * the word that holds queue 0's weight (two ports share it), the three that
  * hold the weights of queues 1 to 7, the egress shaper and the ingress
  * policer. Then the ACL's port enables and default permits, the classifier's
- * control word, the DSCP-to-priority map, the port-priority word and the
+ * control word, port 0's 2.5G override, which holds its shaper's rate as
+ * well, the DSCP-to-priority map, the port-priority word and the
  * priority-selection weights. Last, storm control: each class's enable and
  * meter-select words, and the rate word of each of the sixteen meters.
  */
@@ -4194,6 +4195,8 @@ static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 		   rtl9602c_r(p, RTL9602C_ACL_PORT_EN),
 		   rtl9602c_r(p, RTL9602C_ACL_DEFAULT_PERMIT));
 	seq_printf(s, "cls control %08x\n", rtl9602c_r(p, RTL9602C_CLS_CTRL));
+	seq_printf(s, "port 0 2.5G override %08x\n",
+		   rtl9602c_r(p, RTL9602C_SHAPE_2G5_CFG));
 	seq_puts(s, "dscp>prio");
 	for (i = 0; i < DIV_ROUND_UP(RTL9602C_QOS_DSCP_COUNT,
 				     RTL9602C_QOS_MAP_PER_WORD); i++)

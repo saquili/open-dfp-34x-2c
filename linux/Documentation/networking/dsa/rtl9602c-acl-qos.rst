@@ -261,8 +261,9 @@ Interfaces to user space
   hardware). ``qos`` shows, raw, the words that setup returns to their reset
   values: per port the priority-to-queue word, the scheduler's weighted-queue
   bits, the queue weights, the egress shaper and the ingress policer; then the
-  ACL's port enables and default permits, the classifier's control word, the
-  DSCP map, the port-priority word and the priority-selection weights; last,
+  ACL's port enables and default permits, the classifier's control word, port
+  0's 2.5G override, the DSCP map, the port-priority word and the
+  priority-selection weights; last,
   each storm-control class's enable and meter-select words and the rate word of
   each of the sixteen meters.
 - The kernel log lines of these blocks. At setup ``rtl9602c-switch: classifier:
@@ -1894,14 +1895,16 @@ enable, ``RTL9602C_SHAPE_2G5_CFG_EN`` (bit 19), which the *main* page describes
      - ``RTL9602C_SHAPE_PORT_CFG`` alone at six values from 8 kbit/s to 20
        Mbit/s left the port at its full rate; with both written, 625 (5 Mbit/s)
        gave 5044 kbit/s over 30 s.
-   * - A SerDes bring-up at 2500BASE-X while a tbf holds port 0 writes the full
-       rate back into ``RTL9602C_SHAPE_2G5_CFG_RATE`` and so undoes the port-0
-       limit, while ``RTL9602C_SHAPE_PORT_CFG`` keeps the tbf's rate.
-     - I
-     - It follows from the previous row and from the SerDes bring-up on the
-       *main* page; the bring-up runs again only when phylink changes the
-       interface mode. Changing the SFP port's mode under a tbf and measuring
-       the rate would confirm it.
+   * - A SerDes bring-up at 2500BASE-X writes half the rate of port 0's
+       ``RTL9602C_SHAPE_PORT_CFG_RATE`` into ``RTL9602C_SHAPE_2G5_CFG_RATE``,
+       so a tbf that holds port 0 stays in force; with no tbf that rate is the
+       maximum, whose half is ``RTL9602C_SHAPE_2G5_CFG_RATE_FULL``.
+     - M, I
+     - M: after setup the ``qos`` view read the override as ``000bffff``; with
+       a tbf on ``sfp`` it held half the tbf's rate, and ``000bffff`` again
+       after the tbf was removed. I: the bring-up runs again only when phylink
+       changes the interface mode, which no measurement has done under a
+       tbf.
    * - tbf is accepted at the root only. The rate is the rate in bytes per
        second divided by 1000; 0, or more than the maximum, is refused as out of
        range, and if the qdisc being replaced was followed the port goes back to
@@ -2375,10 +2378,6 @@ Known limitations
   ``cls_flower_stats`` operation), so ``tc -s filter show`` counts no hits for a
   rule that the switch applies. The effect of a rule is seen in the frames that
   arrive and in the frame capture.
-- A SerDes bring-up at 2500BASE-X, which runs again only when phylink changes
-  the interface mode of port 0, writes the full rate back into
-  ``RTL9602C_SHAPE_2G5_CFG_RATE`` and is expected to undo a tbf limit on that
-  port. This has not been verified (see "The egress shaper").
 - A read of the flood-threshold registers of the DoS checks, ``0x026008``,
   ``0x02600c`` and ``0x026010``, by any means other than the driver's, for
   instance through a mapping of the register window, has stalled the board until
@@ -2459,9 +2458,6 @@ Assumptions the driver depends on
    * - Ports 1 to 3 have eight working queues ("Egress queues and the
        scheduler").
      - The scheduling traffic on a second port.
-   * - A 2500BASE-X SerDes bring-up undoes a tbf limit on port 0 ("The egress
-       shaper"). It would be a defect if confirmed.
-     - Changing the SFP port's mode under a tbf and measuring the rate.
    * - The flow-control threshold registers are laid out as named
        ("Flow-control thresholds").
      - Reading the global and PON words after bring-up.

@@ -535,18 +535,23 @@ void rtl9602c_serdes_init(struct rtl9602c_priv *p, u32 sds_mode)
 	 * 2.5 Gb/s cannot be written into a port's forced speed:
 	 * at 2500BaseX, port 0 runs as a 1000 Mb/s port with the 2.5G
 	 * line-rate override on. The port-0 egress shaper keeps its rate in
-	 * the same word, so the word is changed by read-modify-write:
-	 * at 2500BaseX the override is enabled and its rate set to full,
-	 * over any rate a shaper put there; in any other mode only the
-	 * enable is cleared.
+	 * the same word, in steps of twice the shaper's own, so at 2500BaseX
+	 * the override is enabled with the rate of the shaper in force, which
+	 * is the full rate when no tbf limits the port; in any other mode only
+	 * the enable is cleared.
 	 */
-	if (sds_mode == RTL9602C_SERDES_CTRL_MODE_2500BASEX)
+	if (sds_mode == RTL9602C_SERDES_CTRL_MODE_2500BASEX) {
+		u32 rate = FIELD_GET(RTL9602C_SHAPE_PORT_CFG_RATE,
+				     rtl9602c_r(p, RTL9602C_SHAPE_PORT_CFG));
+
 		rtl9602c_rmw(p, RTL9602C_SHAPE_2G5_CFG,
 			     RTL9602C_SHAPE_2G5_CFG_EN | RTL9602C_SHAPE_2G5_CFG_RATE,
-			     RTL9602C_SHAPE_2G5_CFG_EN | RTL9602C_SHAPE_2G5_CFG_RATE_FULL);
-	else
+			     RTL9602C_SHAPE_2G5_CFG_EN |
+			     FIELD_PREP(RTL9602C_SHAPE_2G5_CFG_RATE, rate / 2));
+	} else {
 		rtl9602c_rmw(p, RTL9602C_SHAPE_2G5_CFG,
 			     RTL9602C_SHAPE_2G5_CFG_EN, 0);
+	}
 
 	/*
 	 * Last, in-band auto-negotiation off: without it the lane transmits,
