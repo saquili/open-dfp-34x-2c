@@ -299,8 +299,8 @@ Interfaces to user space
   indications.
 - The kernel log. At setup ``rtl9602c-switch: no PTP clock: <error>`` when the
   registration of the clock fails. The conduit logs
-  ``ptp tag reason <reason>, protocol <byte>`` the first time it sees each
-  reason value in a timestamp tag.
+  ``ptp tag reason <reason>, protocol <byte>: <tag>``, the 16 bytes of the tag
+  in hex, the first time it sees each reason value in a timestamp tag.
 
 How to read the fact tables
 ===========================

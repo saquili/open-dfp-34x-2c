@@ -1065,9 +1065,10 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 				if (!test_and_set_bit(reason,
 						      priv->ptp_reason_seen))
 					eth_info(dev,
-						 "ptp tag reason %u, protocol %u\n",
+						 "ptp tag reason %u, protocol %u: %16phN\n",
 						 reason,
-						 skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET]);
+						 skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET],
+						 skb->data + 2 * ETH_ALEN);
 
 				skb_hwtstamps(skb)->hwtstamp =
 					ktime_set(sec, nsec);

@@ -1868,7 +1868,8 @@ The lines, with the conversions the driver uses:
      - ``pon ctrl tx[<i>] <n> bytes w0 <w0> w2 <w2> w3 <w3> slot <i>:`` and the
        first 16 bytes
    * - A new PTP tag reason
-     - ``ptp tag reason <reason>, protocol <byte>``, once per reason value
+     - ``ptp tag reason <reason>, protocol <byte>: <tag>``, the 16 bytes of
+       the tag in hex, once per reason value
 
 Sequences
 =========
