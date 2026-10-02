@@ -110,6 +110,19 @@ class BootScript(unittest.TestCase):
         self.assertIn("[ -r /etc/board.conf ] && . /etc/board.conf", read(RCS))
 
 
+class Reading(unittest.TestCase):
+    """The reading of a script that the tests above rest on."""
+
+    def test_operators_substitutions_and_tests_start_commands(self):
+        self.assertEqual(commands('a x || b y && c\nd $(e f) | g\n[ -n "$x" ] && h\n'),
+                         ["a", "b", "c", "d", "e", "g", "h"])
+
+    def test_assignments_and_case_patterns_are_not_commands(self):
+        script = ("x=1\ncase $x in\n*[!0-9]*) ;;\n"
+                  "*) [ ${#x} -eq 2 ] && x=0x$x ;;\nesac\ny z\n")
+        self.assertEqual(commands(script), ["case", "esac", "y"])
+
+
 class Watchdog(unittest.TestCase):
     def test_the_daemon_feeds_it_well_inside_the_drivers_timeout(self):
         # The driver's timeout on this board is 44 seconds, as

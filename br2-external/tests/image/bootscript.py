@@ -15,13 +15,18 @@ import re
 def commands(text):
     """The words in command position of a shell script, in order, with repeats."""
     found = []
+    in_case = 0
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        if re.match(r"^esac\b", line):
+            in_case -= 1
         # Cut the line at the operators that start another command.
         for part in re.split(r"\|\||&&|;|\|\s|\$\(|`", line):
             part = part.strip()
+            if in_case:
+                part = re.sub(r"^[^\s()]+\)\s*", "", part)  # a pattern of the case
             part = re.sub(r"^\[ .* \]\s*", "", part)  # a test before an operator
             word = part.split(" ")[0] if part else ""
             if not word or re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", word) or word in ("}", "{"):
@@ -29,4 +34,6 @@ def commands(text):
             if word.endswith("()"):
                 continue
             found.append(word.strip('"'))
+        if re.match(r"^case\s.*\sin$", line):
+            in_case += 1
     return found

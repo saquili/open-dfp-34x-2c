@@ -81,10 +81,21 @@ umask 077
 ponid >/run/onu-identity || warn "no identity in the factory configuration"
 umask 022
 serial=$(grep '^serial=' /run/onu-identity | cut -d= -f2)
+ploam=$(grep '^ploam_password=' /run/onu-identity | cut -d= -f2-)
 dev=$(devlink dev show | head -n 1)
 if [ -n "$serial" ] && [ -n "$dev" ]; then
 	devlink dev param set "$dev" name gpon_serial cmode runtime value "$serial" ||
 		warn "the PON driver did not take the serial number"
+	# The PLOAM password, which the OLT may ask for: twenty hex digits are
+	# its ten octets, and up to ten characters are the password itself.
+	if [ -n "$ploam" ]; then
+		case $ploam in
+		*[!0-9A-Fa-f]*) ;;
+		*) [ ${#ploam} -eq 20 ] && ploam=0x$ploam ;;
+		esac
+		devlink dev param set "$dev" name gpon_password cmode runtime value "$ploam" ||
+			warn "the PON driver did not take the PLOAM password"
+	fi
 	ip link set pon up || warn "the PON does not come up"
 else
 	warn "no serial number: the PON stays down"
