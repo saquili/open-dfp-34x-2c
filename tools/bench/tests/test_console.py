@@ -359,6 +359,111 @@ class Usable(ConsoleCase):
         self.assertTrue(any("probe" in line for line in self.logged))
 
 
+class ProbeOfARepeat(ConsoleCase):
+    """An empty line at the loader prompt runs the loader's last command again.
+
+    A command that prints nothing until it is done, the checksum of a flash
+    window, leaves only the end of the line for seconds, and the probe must not
+    take that for a board that is running something else.
+    """
+
+    CHECKSUM = "CRC32 for 9458c000 ... 946fffff ==> 1a2b3c4d\r\r\n9601D# "
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pane.mode = "newline"
+        self.started = self.clock.now()
+
+    def elapsed(self) -> float:
+        return self.clock.now() - self.started
+
+    def test_the_probe_waits_for_the_prompt_to_come_back(self) -> None:
+        self.transcript.emit("CRC32 for 9458c000 ... 946fffff ==> 1a2b3c4d\r\r\n9601D# ")
+        self.clock.schedule(2.5, lambda: self.transcript.emit(self.CHECKSUM))
+        check = self.console.check_usable()
+        self.assertEqual(check.state, BoardState.LOADER_PROMPT)
+        self.assertEqual(check.text, "\n" + self.CHECKSUM.replace("\r", ""))
+        self.assertGreaterEqual(self.elapsed(), 2.5)
+        self.assertLess(self.elapsed(), 5.0)
+
+    def test_nothing_but_the_one_empty_line_is_typed_while_it_waits(self) -> None:
+        self.transcript.emit("9601D# ")
+        self.clock.schedule(20.0, lambda: self.transcript.emit(self.CHECKSUM))
+        self.assertEqual(self.console.check_usable().state, BoardState.LOADER_PROMPT)
+        self.assertEqual(self.tmux.typed, [b"\r"])
+        self.assertEqual(self.pane.received, b"\r")
+
+    def test_it_waits_thirty_seconds_and_no_longer_for_a_loader_that_stays_silent(self) -> None:
+        self.transcript.emit("9601D# ")
+        check = self.console.check_usable()
+        self.assertEqual(check.state, BoardState.OTHER)
+        self.assertEqual(check.text, "\n")
+        self.assertAlmostEqual(self.elapsed(), 30.0, delta=1.0)
+        self.assertEqual(self.tmux.typed, [b"\r"])
+
+    def test_the_wait_and_its_end_are_in_the_tools_log(self) -> None:
+        self.transcript.emit("9601D# ")
+        self.clock.schedule(2.5, lambda: self.transcript.emit(self.CHECKSUM))
+        self.console.check_usable()
+        text = "\n".join(self.logged)
+        self.assertIn("only the line end came back after the prompt; waiting up to 30 s", text)
+        self.assertIn("the prompt came back after 2.", text)
+
+    def test_a_silent_loader_is_in_the_tools_log_too(self) -> None:
+        self.transcript.emit("9601D# ")
+        self.console.check_usable()
+        self.assertIn("no prompt within 30 s; the answer is judged as it stands", "\n".join(self.logged))
+
+    def test_a_console_that_did_not_show_the_prompt_is_judged_as_soon_as_it_is_quiet(self) -> None:
+        self.transcript.emit("[    3.141592] eth: link is up\r\r\n")
+        check = self.console.check_usable()
+        self.assertEqual(check.state, BoardState.OTHER)
+        self.assertLess(self.elapsed(), 1.0)
+
+    def test_a_prompt_that_something_was_typed_after_is_not_a_prompt(self) -> None:
+        self.transcript.emit("9601D# printenv")
+        self.assertEqual(self.console.check_usable().state, BoardState.OTHER)
+        self.assertLess(self.elapsed(), 1.0)
+
+    def test_the_other_answers_are_judged_at_once_after_the_prompt_too(self) -> None:
+        for mode, state in (("prompt", BoardState.LOADER_PROMPT), ("login", BoardState.LOGIN)):
+            with self.subTest(mode):
+                self.transcript.emit("9601D# ")
+                self.pane.mode = mode
+                before = self.clock.now()
+                self.assertEqual(self.console.check_usable().state, state)
+                self.assertLess(self.clock.now() - before, 1.0)
+
+    def test_a_countdown_after_the_prompt_is_judged_at_once(self) -> None:
+        self.transcript.emit("9601D# ")
+        self.pane.mode = "silent"
+        original = self.pane.receive
+
+        def countdown(data: bytes) -> None:
+            original(data)
+            self.transcript.emit("\r\r\nHit any key to stop autoboot: 599 ")
+
+        self.pane.receive = countdown  # type: ignore[method-assign]
+        self.assertEqual(self.console.check_usable().state, BoardState.COUNTDOWN)
+        self.assertLess(self.elapsed(), 1.0)
+
+    def test_a_bridge_that_drops_meanwhile_is_an_interruption(self) -> None:
+        self.transcript.emit("9601D# ")
+        self.clock.schedule(5.0, lambda: self.transcript.emit(
+            "--- console: the bridge closed the connection at 12:00:00 ---\r\r\n"))
+        with self.assertRaises(ConsoleInterrupted):
+            self.console.check_usable()
+
+    def test_the_loader_prompt_is_what_the_end_of_the_console_shows(self) -> None:
+        for shown, expected in (("", False), ("9601D# ", True), ("x\r\r\n9601D# ", True),
+                                ("9601D# x", False), ("9601D#", False), ("login: ", False)):
+            with self.subTest(shown=shown):
+                with open(self.transcript.path, "wb"):
+                    pass
+                self.transcript.emit(shown)
+                self.assertEqual(con.shows_prompt(self.console), expected)
+
+
 class NeverCaptures(ConsoleCase):
 
     def test_never_captures_pane(self) -> None:

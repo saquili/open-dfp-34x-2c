@@ -15,7 +15,8 @@ Behaviours a test can switch on: a countdown that consumes its first byte
 (always); a board that is deaf to the first bytes of a break-in; characters
 that are dropped, doubled or substituted on their way in; a reset in the
 middle of a command; a bridge marker line in the stream; a stall; a login
-prompt where the loader should be. Input that arrives while the board is
+prompt where the loader should be; an empty line that runs the last typed
+command again, as the loader does. Input that arrives while the board is
 busy is not read: it is recorded in ``lost`` so a test can tell that nothing
 was typed during a write.
 """
@@ -36,6 +37,10 @@ from .simclock import VirtualClock
 from .support import ConsoleCase
 
 EOL = "\r\r\n"
+
+# The commands the loader does not run again on an empty line; it repeats every
+# other one. The list is the part of the loader's table that the tests need.
+NON_REPEATABLE = ("loady", "reset", "saveenv", "setenv")
 
 # From a restart to the first-stage banner, the loader's banner and the
 # countdown, in seconds.
@@ -200,6 +205,9 @@ class SimBoard:
         # behaviours a test switches on
         self.deaf_bytes = 0
         self.input_fault: Callable[[str], str] | None = None
+        self.repeats_last_command = False  # an empty line runs the last typed command again
+        self.last_typed = ""  # the line an empty line would repeat
+        self.repeated: list[str] = []  # the lines that were run again by an empty line
         self.countdown_started: list[float] = []
         self._pending: list[tuple] = []
         self._terminal: str | None = None
@@ -242,6 +250,7 @@ class SimBoard:
         self.restart_times.append(self.clock.now())
         self.mode = Mode.FIRST_STAGE
         self.line = ""
+        self.last_typed = ""  # a loader that starts again remembers no command
         self.on_restart(cause)
         self.emit(EOL + "9601D" + EOL)
         self.at(FIRST_STAGE_BANNER, self._first_stage)
@@ -325,7 +334,12 @@ class SimBoard:
             line, self.line = self.line, ""
             self.emit(EOL)
             if line.strip():
+                name = line.split()[0].partition(".")[0]
+                self.last_typed = "" if name in NON_REPEATABLE else line
                 self.execute(line)
+            elif self.repeats_last_command and self.last_typed:
+                self.repeated.append(self.last_typed)
+                self.execute(self.last_typed)
             else:
                 self.emit(PROMPT)
         elif byte == 0x03:

@@ -151,7 +151,8 @@ class FakeTmux:
 class ScriptedPane:
     """The smallest board: it echoes typed characters and answers Enter by its mode.
 
-    ``prompt`` prints a loader prompt, ``login`` a login prompt, and ``silent``
+    ``prompt`` prints a loader prompt, ``login`` a login prompt, ``newline`` the
+    end of the line alone (a command that is still running) and ``silent``
     nothing at all. ``echo`` maps each typed character to what the board
     echoes, so a test can drop, double or substitute one.
     """
@@ -180,3 +181,5 @@ class ScriptedPane:
             self.transcript.emit("\r\r\n" + self.PROMPT)
         elif self.mode == "login":
             self.transcript.emit("\r\nlogin: ")
+        elif self.mode == "newline":
+            self.transcript.emit("\r\r\n")

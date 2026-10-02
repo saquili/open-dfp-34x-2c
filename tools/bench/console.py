@@ -23,7 +23,11 @@ rebuild the screen.
 
 A silent console proves nothing, since a loader at its prompt prints nothing
 until a key arrives. ``Console.check_usable`` therefore types one empty line
-and classifies what comes back before anything else is typed.
+and classifies what comes back before anything else is typed. The loader runs
+its last repeatable command again on an empty line, and a command that prints
+nothing until it is done (the checksum of a flash window) answers with the line
+end alone for seconds; a console that showed the loader prompt before the line
+is given time for the prompt to come back (``probe_answer``).
 
 Where behaviour is assumed rather than known, the module takes the cautious
 side: a console is used only when tmux reports the pane alive and mirrored, a
@@ -140,6 +144,11 @@ class SystemClock(Clock):
 PROMPT = "9601D# "
 COUNTDOWN = "Hit any key to stop autoboot:"
 INTERRUPT = "<INTERRUPT>"
+
+# How long the probe waits, at most, for a loader that is running its last command
+# again: the checksum of a flash window takes a couple of seconds, and the tool
+# allows a command of that kind 30 seconds (``Loader.crc32``).
+REPEAT_WAIT = 30.0
 
 _MARKER = re.compile(r"--- console: (.+?) at \d\d:\d\d:\d\d ---")
 _MAC = re.compile(r"(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f:-])")
@@ -473,8 +482,9 @@ class Console:
         The session must exist, its pane must be alive and mirrored into the
         transcript, the transcript must be readable, and one empty line must
         draw at least one byte within two seconds. What came back is then
-        classified. Only a loader prompt means a command may be typed; in any
-        other state at most an empty line is sent.
+        classified (see ``probe_answer`` for when the answer is waited for).
+        Only a loader prompt means a command may be typed; in any other state
+        at most an empty line is sent.
         """
         if not self.has_session():
             raise ConsoleUnusable("there is no tmux session %s on the default tmux server"
@@ -487,6 +497,7 @@ class Console:
             raise ConsoleUnusable("the pane of session %s is not mirrored into the "
                                   "transcript (pane_pipe is 0)" % self.config.session)
         mark = self.mark()
+        from_prompt = shows_prompt(self)
         self.press("Enter")
         self.log.event("probe", "empty line")
         try:
@@ -495,8 +506,8 @@ class Console:
         except WaitTimeout as exc:
             raise ConsoleUnusable("the console is silent: no byte within 2 s of an empty "
                                   "line; the bridge or the board may be down") from exc
-        wait_quiet(self, self.clock, settle, 5.0)
-        text = self.since(mark)
+        text = probe_answer(self, self.clock, mark, from_prompt=from_prompt, settle=settle,
+                            log=self.log)
         state = classify(text)
         self.log.event("probe", "state %s" % state.value)
         return ConsoleCheck(state, text, mark)
@@ -609,6 +620,50 @@ def wait_quiet(console: ConsoleLike, clock: Clock, quiet: float, timeout: float)
             raise WaitTimeout("the console to go quiet", now - started,
                               display(console.since(max(current - 300, 0))))
         clock.sleep(console.poll or 0.01)
+
+
+def _prompt_answer(text: str) -> str | None:
+    return "prompt" if text.endswith(PROMPT) else None
+
+
+def shows_prompt(console: ConsoleLike, size: int = 64) -> bool:
+    """Does the end of the console show the loader prompt?"""
+    return console.since(max(console.mark() - size, 0)).endswith(PROMPT)
+
+
+def probe_answer(console: ConsoleLike, clock: Clock, mark: int, *, from_prompt: bool,
+                 settle: float, log: ToolLog | None = None) -> str:
+    """What the console printed after the probe's empty line, once it has settled.
+
+    The answer is what ``since(mark)`` holds after ``settle`` seconds without
+    output. One answer is not taken at that: the loader runs its last
+    repeatable command again on an empty line, and a command that prints
+    nothing until it is done leaves only the line end in those seconds. When
+    the console showed the loader prompt before the line (``from_prompt``) and
+    nothing but white space has come back, the loader is taken to be busy with
+    that repeat, and the probe waits for the prompt, ``REPEAT_WAIT`` seconds at
+    most, typing nothing more. If the prompt does not come, the answer is
+    judged as it stands. Every other answer, and every answer on a console that
+    did not show the prompt before the line, is judged as soon as it is quiet.
+    The wait and its end are in the tool's log.
+    """
+    wait_quiet(console, clock, settle, 5.0)
+    text = console.since(mark)
+    if from_prompt and not text.strip():
+        started = clock.now()
+        if log is not None:
+            log.event("probe", "only the line end came back after the prompt; waiting up to %d s "
+                      "for the prompt" % REPEAT_WAIT)
+        try:
+            wait(console, clock, mark, [_prompt_answer], REPEAT_WAIT,
+                 what="the loader prompt after an empty line")
+            outcome = "the prompt came back after %.1f s" % (clock.now() - started)
+        except WaitTimeout:
+            outcome = "no prompt within %d s; the answer is judged as it stands" % REPEAT_WAIT
+        if log is not None:
+            log.event("probe", outcome)
+        text = console.since(mark)
+    return text
 
 
 def type_line(console: ConsoleLike, clock: Clock, text: str, *,

@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from bench import console as con
-from bench.console import ConsoleUnusable, ToolLog
+from bench.console import BoardState, ConsoleUnusable, ToolLog
 from bench.rawport import RawConsole, SerialPort, TcpPort
 
 from .simclock import VirtualClock
@@ -33,6 +33,63 @@ class FakePort:
 
     def close(self) -> None:
         self.closed = True
+
+
+class TimedPort(FakePort):
+    """A port whose input arrives at virtual times, and that answers an Enter by a script."""
+
+    def __init__(self, clock: VirtualClock) -> None:
+        super().__init__()
+        self.clock = clock
+        self.due: list[tuple[float, bytes]] = []
+        self.on_enter: list[tuple[float, bytes]] = []
+
+    def at(self, delay: float, data: bytes) -> None:
+        self.due.append((self.clock.now() + delay, data))
+        self.due.sort(key=lambda item: item[0])
+
+    def read(self, count: int) -> bytes:
+        if self.due and self.due[0][0] <= self.clock.now():
+            return self.due.pop(0)[1][:count]
+        self.clock.advance(0.05)  # the port's own read timeout is the pause of a wait
+        return b""
+
+    def write(self, data: bytes) -> None:
+        super().write(data)
+        if data == b"\r":
+            for delay, answer in self.on_enter:
+                self.at(delay, answer)
+
+
+class RawConsoleProbe(unittest.TestCase):
+    """The check of a raw console is the tmux console's, including the wait for a repeat."""
+
+    CHECKSUM = b"CRC32 for 9458c000 ... 946fffff ==> 1a2b3c4d\r\r\n9601D# "
+
+    def setUp(self) -> None:
+        self.clock = VirtualClock()
+        self.port = TimedPort(self.clock)
+        self.console = RawConsole(self.port, self.clock)
+        self.port.on_enter = [(0.0, b"\r\r\n"), (2.5, self.CHECKSUM)]
+        self.started = self.clock.now()
+
+    def test_a_prompt_heard_before_the_line_makes_the_probe_wait_for_the_repeat(self) -> None:
+        self.port.at(0.0, self.CHECKSUM)
+        self.console.mark()  # takes in what the board said before
+        check = self.console.check_usable()
+        self.assertEqual(check.state, BoardState.LOADER_PROMPT)
+        self.assertGreaterEqual(self.clock.now() - self.started, 2.5)
+        self.assertEqual(self.port.written, [b"\r"])
+
+    def test_a_connection_that_heard_nothing_before_is_judged_as_soon_as_it_is_quiet(self) -> None:
+        check = self.console.check_usable()
+        self.assertEqual(check.state, BoardState.OTHER)
+        self.assertLess(self.clock.now() - self.started, 1.0)
+
+    def test_a_silent_port_is_unusable(self) -> None:
+        self.port.on_enter = []
+        with self.assertRaises(ConsoleUnusable):
+            self.console.check_usable()
 
 
 class RawConsoleContract(unittest.TestCase):

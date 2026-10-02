@@ -36,7 +36,7 @@ from dataclasses import dataclass
 
 from .console import (COUNTDOWN, INTERRUPT, PROMPT, BenchError, Clock, ConsoleInterrupted,
                       ConsoleLike, ToolLog, UnexpectedState, classify, display, interruption,
-                      pattern, type_line, wait, wait_quiet)
+                      pattern, shows_prompt, type_line, wait, wait_quiet)
 from .guard import Approval, Guard
 
 BURST = 20  # Enters sent with no gap
@@ -128,8 +128,7 @@ class Loader:
 
     def at_prompt(self) -> bool:
         """Does the end of the console show the loader prompt?"""
-        size = self.console.mark()
-        return self.console.since(max(size - 64, 0)).endswith(PROMPT)
+        return shows_prompt(self.console)
 
     def _require_prompt(self) -> None:
         if not self.at_prompt():

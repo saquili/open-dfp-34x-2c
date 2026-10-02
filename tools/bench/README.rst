@@ -57,8 +57,9 @@ before it:
     Configuration and the command line.
 
 ``tests/`` holds the unit tests and what they run against: a virtual clock, a
-tmux double, a scripted board (countdown, prompt, commands, a network, a
-kernel, a watchdog, an 8 MiB flash, a YMODEM receiver) and a command-runner
+tmux double, a scripted board (countdown, prompt, commands, an empty line that
+runs the last command again, a network, a kernel, a watchdog, an 8 MiB flash, a
+YMODEM receiver) and a command-runner
 double that acts as an image host. The scripted board's variables have the
 board's shape, partition tables with parentheses included, and
 ``tests/test_board_environment.py`` runs the guard and the whole of RAM boot
@@ -172,6 +173,19 @@ the console nor the image host.
     shows. ``type LINE [--timeout SECONDS]`` types one line through the guard
     (only at the loader prompt) and waits for the prompt, 30 seconds by default.
     ``client`` runs the pane's process, for the setup above.
+
+Every command that acts on a board starts with the same check: one empty line
+is typed, and what comes back says what the board shows. The loader runs its
+last repeatable command again on an empty line. After a flash that is the
+checksum of the second partition of bank 1, which takes a couple of seconds
+and prints nothing until it is done, so the line end is all that comes back
+for that long. When the console showed the loader prompt just before the line
+and nothing but the line end has come back once it is quiet, the tool waits
+for the prompt to return, 30 seconds at most, and types nothing meanwhile.
+Every other answer, and every answer on a console that did not show the prompt
+before the line, is judged as soon as the console is quiet. A board at the
+loader prompt is then not taken for a running system, which the tool would
+try to restart over ssh and, failing, wait for a person to power-cycle.
 
 ``selftest [--verbose] [--pattern GLOB]``
     Runs the unit tests (``--pattern test_guard*.py`` runs a part).
@@ -389,6 +403,13 @@ the board, the loader and the hosts, and are for the maintainer to confirm:
 * tmux behaviour: the calls ``pipe-pane`` and ``respawn-pane`` on the tmux
   version in use, a key typed during a bridge flap, the pane's start command as
   ``#{pane_start_command}`` reports it;
+* an empty line at the loader prompt: which commands the loader runs again
+  (the simulation repeats all but ``loady``, ``reset``, ``saveenv`` and
+  ``setenv``), how long the checksum of a flash window takes (the simulation
+  takes a megabyte a second, the board a couple of seconds), and that nothing
+  but the end of the line comes back until the command is done; the case is
+  ``bench ramboot`` or ``bench flash`` right after a ``bench flash`` that left
+  the board at the prompt;
 * the first transfer after a restart: that it fails as described, that Ctrl-C
   and ``reset`` behave as expected (``--recovery reset``), and that the watchdog
   reset comes about 47 seconds after the restart; and that ``mw.l b8003268 0``

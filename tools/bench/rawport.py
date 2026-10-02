@@ -27,8 +27,8 @@ import os
 import socket
 from typing import Protocol
 
-from .console import (Clock, ConsoleCheck, ConsoleUnusable, ToolLog, classify, wait,
-                      wait_quiet)
+from .console import (Clock, ConsoleCheck, ConsoleUnusable, ToolLog, classify, probe_answer,
+                      shows_prompt, wait)
 
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 0.1
@@ -169,6 +169,7 @@ class RawConsole:
     def check_usable(self, settle: float = 0.2) -> ConsoleCheck:
         """The same check as the tmux console's: an empty line must draw a byte."""
         mark = self.mark()
+        from_prompt = shows_prompt(self)
         self.press("Enter")
         try:
             wait(self, self.clock, mark, [lambda _text: "byte" if self.mark() > mark else None],
@@ -176,8 +177,9 @@ class RawConsole:
         except Exception as exc:
             raise ConsoleUnusable("the serial console is silent: no byte within 2 s of an "
                                   "empty line") from exc
-        wait_quiet(self, self.clock, settle, 5.0)
-        return ConsoleCheck(classify(self.since(mark)), self.since(mark), mark)
+        text = probe_answer(self, self.clock, mark, from_prompt=from_prompt, settle=settle,
+                            log=self.log)
+        return ConsoleCheck(classify(text), text, mark)
 
     def close(self) -> None:
         if self._open:

@@ -12,7 +12,8 @@ from unittest import mock
 
 from bench import flash as fl
 from bench import guard as guardmod
-from bench.console import (BenchError, Console, ConsoleBusy, ConsoleInterrupted,
+from bench import ramboot as rb
+from bench.console import (BenchError, BoardState, Console, ConsoleBusy, ConsoleInterrupted,
                            UnexpectedState, WaitTimeout)
 from bench.flash import (Bank1Changed, FlashConfig, FlashError, FlashOptions, Interrupted,
                          SignalGate, Stalled)
@@ -21,6 +22,7 @@ from bench.image import ImageError
 from bench.rawport import RawConsole
 from bench.ramboot import MissingVariable
 
+from . import simflash
 from .images import make_squashfs, make_uimage
 from .simflash import BoardPort, FlashBoard, SimFlash, window_offset
 from .simnet import BenchCase
@@ -886,6 +888,57 @@ class Ymodem(FlashCase):
         with self.assertRaises(Exception):
             self.run_flash(target="kernel", via="ymodem", connect=hostile)
         self.assertNothingWritten()
+
+
+class AfterAFlash(FlashCase):
+    """The board stays at the loader prompt after a flash, and its last command is a checksum.
+
+    An empty line makes the loader run its last command again. The flash ends
+    with the checksums of bank 1, and a checksum of 2512 KiB through the flash
+    window takes a couple of seconds on the board and prints nothing until it
+    is done (the board's behaviour is in the README, "What is checked only on
+    the board").
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        patcher = mock.patch.object(simflash, "CRC_BYTES_PER_SECOND", 1_000_000.0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.board.repeats_last_command = True
+
+    def test_the_last_command_of_a_flash_is_the_checksum_of_the_root_filesystem_of_bank_1(self) -> None:
+        self.run_flash(target="kernel")
+        self.assertEqual(self.board.last_typed, "crc32 9458c000 274000")
+        self.assertTrue(self.console.since(max(self.console.mark() - 64, 0)).endswith("9601D# "))
+
+    def test_the_console_check_after_a_flash_finds_the_loader_prompt(self) -> None:
+        self.run_flash(target="kernel")
+        started = self.clock.now()
+        check = self.console.check_usable()
+        self.assertEqual(check.state, BoardState.LOADER_PROMPT)
+        self.assertEqual(self.board.repeated, ["crc32 9458c000 274000"])
+        self.assertIn("==> %08x" % zlib.crc32(self.flash_chip.region("r1")), check.text)
+        self.assertGreater(self.clock.now() - started, 2.0, "the repeat took its time")
+        self.assertLess(self.clock.now() - started, 10.0)
+        self.assertEqual(self.tmux.typed[-1], b"\r")
+
+    def test_a_ram_boot_right_after_a_flash_does_not_take_the_loader_for_a_running_system(self) -> None:
+        self.run_flash(target="kernel")
+        spawned, said = len(self.runner.spawned), len(self.said)
+        rb.ramboot(self.ctx, self.kernel_path, self.boot_config, self.server_source)
+        self.assertEqual(len(self.runner.spawned), spawned, "no ssh was started")
+        self.assertIn("already at the loader prompt", self.said[said:])
+        self.assertFalse([line for line in self.said[said:] if "restarting it" in line])
+        self.assertEqual(self.board.restarts, ["sysrq"], "only the flash restarted the board")
+        self.assertEqual(self.board.kernels_started[-1], "Linux-6.18.48-test")
+        self.assertEqual(self.board.repeated, ["crc32 9458c000 274000"])
+
+    def test_the_flash_after_a_flash_is_not_confused_either(self) -> None:
+        self.run_flash(target="kernel")
+        self.run_flash(target="rootfs")
+        self.assertEqual(self.board.restarts, ["sysrq"])
+        self.assertEqual(self.flash_chip.region("r0")[:len(self.rootfs)], self.rootfs)
 
 
 class SignalGateUnit(unittest.TestCase):
