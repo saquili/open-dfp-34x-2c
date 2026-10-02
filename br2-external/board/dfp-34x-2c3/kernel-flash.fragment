@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The flash profile of the kernel: the board's configuration, less what the
+# image in the flash can do without.
+#
+# The board's own configuration, arch/mips/configs/rtl9602c_defconfig, is the
+# complete one. "make linux" builds it and the RAM boots of the bench start it,
+# and a RAM boot has no size limit. The kernel in the flash has to fit the
+# partition k0, 1359872 bytes, and the complete configuration does not. The
+# build system merges this file over that configuration
+# (BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES in the board's defconfig) and kbuild
+# resolves the dependencies, so each line below is an option the flash profile
+# gives up and nothing else changes.
+#
+# The product is a transparent GPON ONU. Its bridge, the VLAN translation that
+# the switch carries out as flower rules, the PON class with the OMCI device,
+# the optics through hwmon and I2C, the watchdog and the root filesystem all
+# stay; tests/kernel/required-options.txt lists them, each with its reason.
+# What goes is what the product does not use, and what a RAM boot of the
+# complete kernel gives when it is needed. docs/handbook/building.rst has the
+# measured size of each group and the options that were weighed and kept. The
+# build holds the kernel it made to both lists (tests/kernel/check-config): a
+# dropped option that kbuild brings back, or a needed one that disappears,
+# fails it.
+
+# No symbol table. An oops prints addresses and not function names, and
+# /proc/kallsyms is empty. The addresses decode against the System.map of the
+# same build, which is reproducible, and the complete kernel keeps the names.
+# CONFIG_KALLSYMS is not set
+
+# No IPv6. The management network is IPv4 and the stick has no IPv6 address of
+# its own; the bridge forwards IPv6 frames like any other frames.
+# CONFIG_IPV6 is not set
+
+# No netfilter. The product neither routes nor translates addresses, so it has
+# no flow table to offload, and its filtering is the switch's own, flower rules.
+# CONFIG_NETFILTER is not set
+
+# No debugfs and no dynamic debug. They are the views the drivers give a person
+# at a console: the PLOAM log, the tables, the decoded readings of the optics.
+# The product's own interfaces are the PON netlink family, hwmon and the devlink
+# parameters, and a RAM boot of the complete kernel has the views when a person
+# needs them.
+# CONFIG_DEBUG_FS is not set
+# CONFIG_DYNAMIC_DEBUG is not set
+
+# No initial RAM disk. The root filesystem is the SquashFS image in r0, and the
+# kernel has no initramfs of its own.
+# CONFIG_BLK_DEV_INITRD is not set
+
+# No kexec. A kernel started by kexec does not run on this board, so the system
+# call can only cost a power cycle (Documentation/arch/mips/rtl9602c.rst).
+# CONFIG_KEXEC is not set

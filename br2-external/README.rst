@@ -32,6 +32,10 @@ What is here
 ``configs/odi_dfp_34x_2c3_defconfig``
     The board: the same toolchain with static libraries only, the kernel, the
     root filesystem and the two images (see "The board's image").
+``board/dfp-34x-2c3/kernel-flash.fragment``
+    The flash profile of the kernel: the options of the board's complete kernel
+    configuration that the image in the flash gives up, each under its reason
+    (see "The kernel's flash profile"). The board defconfig names it.
 ``board/dfp-34x-2c3/uclibc.fragment``
     The uClibc-ng settings that the userspace of the board needs, which both
     defconfigs name.
@@ -191,8 +195,9 @@ has the commands, the sizes and how to put the images on the board. In short:
   (``BR2_STATIC_LIBS``), so that every program of the image is static and the
   image holds no shared object (ADR 0010).
 * The kernel is the tree of ``linux/``, taken from the archive that serves the
-  headers, configured by ``rtl9602c_defconfig`` and built with this toolchain.
-  The image is the LZMA-compressed legacy U-Boot image the boot loader takes.
+  headers, configured by ``rtl9602c_defconfig`` with the flash profile merged
+  over it (below), and built with this toolchain. The image is the
+  LZMA-compressed legacy U-Boot image the boot loader takes.
 * The root filesystem is BusyBox 1.37.0 (``board/dfp-34x-2c3/busybox.config``),
   dropbear 2026.93, and the files of ``board/dfp-34x-2c3/overlay``. The build
   system installs no init scripts (``BR2_INIT_NONE``): BusyBox init reads the
@@ -217,6 +222,28 @@ target tree, and the digests. ``tests/image/check-applets`` runs the image's
 static programs under ``qemu-mips``, and ``tests/image/tree-digest`` lists a
 target tree for the comparison of two builds; the ``image`` workflow does both
 (``.github/workflows/README.rst``).
+
+The kernel's flash profile
+==========================
+
+The partition ``k0`` is smaller than the kernel that the board's complete
+configuration, ``arch/mips/configs/rtl9602c_defconfig``, builds. That
+configuration stays complete: ``make linux`` builds it, and so do the RAM boots
+of the bench, which have no size limit. The image in the flash is built from the
+same tree with ``board/dfp-34x-2c3/kernel-flash.fragment`` merged over it. The
+build system's ``BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES`` makes it run the
+kernel's ``merge_config.sh`` over the defconfig and then ``make olddefconfig``,
+so kbuild resolves the dependencies: the fragment holds one ``# CONFIG_X is not
+set`` line for each option the flash profile gives up, under the reason, and
+nothing else changes.
+
+The product is a transparent GPON ONU. The bridge with VLAN filtering, the VLAN
+translation that the switch carries out as flower rules, the PON class with the
+OMCI device, the optics through hwmon and I2C, the watchdog and the root
+filesystem all stay; what goes is what the product does not use, and what a RAM
+boot of the complete kernel gives when a person needs it. ``docs/handbook/building.rst``
+has the size of each group, measured by building, the options that were weighed
+and kept, and the two profiles side by side.
 
 Checks on the toolchain
 =======================

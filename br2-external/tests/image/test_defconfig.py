@@ -72,6 +72,35 @@ class Kernel(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(TOP, "linux", "arch", "mips", "configs",
                                                     "rtl9602c_defconfig")))
 
+    def test_the_flash_profile_is_merged_over_the_boards_configuration(self):
+        board = settings(BOARD_DEFCONFIG)
+        self.assertEqual(board["BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES"],
+                         '"$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/kernel-flash.fragment"')
+        self.assertTrue(os.path.isfile(os.path.join(EXTERNAL, "board", "dfp-34x-2c3",
+                                                    "kernel-flash.fragment")))
+        self.assertNotIn("BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG", board)
+        self.assertNotIn("BR2_LINUX_KERNEL_USE_DEFCONFIG", board)
+
+    def test_the_flash_profile_is_a_list_of_dropped_options_each_under_a_reason(self):
+        path = os.path.join(EXTERNAL, "board", "dfp-34x-2c3", "kernel-flash.fragment")
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertTrue(lines[0].startswith("# SPDX-License-Identifier: GPL-2.0-only"))
+        unset = re.compile(r"^# CONFIG_[A-Z0-9_]+ is not set$")
+        options = [line for line in lines if unset.match(line)]
+        self.assertGreaterEqual(len(options), 5)
+        for number, line in enumerate(lines):
+            if line and not line.startswith("#"):
+                self.fail("line %d is not a comment, a blank or a dropped option: %s" % (number + 1, line))
+        for number, line in enumerate(lines):
+            if unset.match(line) and not unset.match(lines[number - 1]):
+                reason = []  # the comment lines right above the first option of a group
+                for above in reversed(lines[:number]):
+                    if not above.startswith("# ") or unset.match(above):
+                        break
+                    reason.append(above)
+                self.assertGreaterEqual(len(" ".join(reason).split()), 10, "no reason above %s" % line)
+
     def test_the_image_is_the_lzma_compressed_uimage_the_boot_loader_takes(self):
         board = settings(BOARD_DEFCONFIG)
         self.assertEqual(board["BR2_LINUX_KERNEL_UIMAGE"], "y")
