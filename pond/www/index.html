@@ -44,6 +44,16 @@ td.k { color: var(--dim); white-space: nowrap; width: 1%; }
 .err { color: var(--bad); }
 .ok { color: var(--good); }
 #state { color: var(--dim); }
+form.settings { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px;
+  margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+form.settings .row { display: contents; }
+form.settings .row[hidden] { display: none; }
+form.settings label { color: var(--dim); align-self: center; }
+form.settings input, form.settings select { font: inherit; padding: 3px 6px; min-width: 0;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+form.settings .wide { grid-column: 1 / -1; margin: 0; }
+form.settings .note { color: var(--dim); font-size: 13px; }
+form.settings button { justify-self: start; }
 </style>
 </head>
 <body>
@@ -69,12 +79,18 @@ function recall(key) {
   try { return localStorage.getItem(key) || ""; } catch (e) { return ""; }
 }
 
-async function api(path) {
-  const r = await fetch(path, { headers: { Authorization: "Bearer " + $("token").value },
-                               cache: "no-store" });
-  const body = await r.json().catch(() => ({ error: "not JSON", detail: r.statusText }));
-  if (!r.ok) throw new Error((body.error || r.status) + (body.detail ? ": " + body.detail : ""));
-  return body;
+/* A GET of the API, or a POST of body. */
+async function api(path, body) {
+  const opts = { headers: { Authorization: "Bearer " + $("token").value }, cache: "no-store" };
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "text/plain";
+    opts.body = body;
+  }
+  const r = await fetch(path, opts);
+  const reply = await r.json().catch(() => ({ error: "not JSON", detail: r.statusText }));
+  if (!r.ok) throw new Error((reply.error || r.status) + (reply.detail ? ": " + reply.detail : ""));
+  return reply;
 }
 
 function el(tag, text, cls) {
@@ -124,6 +140,107 @@ function cell(x) {
   return x && typeof x === "object" ? render(x) : el("span", scalar(x));
 }
 
+/*
+ * The settings of the mode, as onu-mode reads them. A field marked router
+ * matters in router mode only, one marked with a protocol for that protocol
+ * of the WAN only; the form shows a field only where it matters.
+ */
+const FIELDS = [
+  { key: "MODE", label: "Mode", choices: ["bridge", "router"] },
+  { key: "WAN_PROTO", label: "WAN protocol", choices: ["dhcp", "pppoe", "static"], router: true },
+  { key: "WAN_GEM", label: "WAN GEM port", hint: "auto, or a Port-ID", router: true },
+  { key: "WAN_VLAN", label: "WAN VLAN", hint: "none, or 1 to 4094", router: true },
+  { key: "WAN_ADDRESS", label: "WAN address", hint: "a.b.c.d/length", router: true, proto: "static" },
+  { key: "WAN_GATEWAY", label: "WAN gateway", hint: "a.b.c.d", router: true, proto: "static" },
+  { key: "PPPOE_USER", label: "PPPoE user", router: true, proto: "pppoe" },
+  { key: "PPPOE_SECRET", label: "PPPoE secret", router: true, proto: "pppoe" },
+  { key: "LAN_ADDRESS", label: "LAN address", hint: "a.b.c.d/length", router: true },
+  { key: "LAN_DHCP", label: "LAN DHCP server", choices: ["on", "off"], router: true },
+  { key: "LAN_DHCP_START", label: "DHCP range from", hint: "a.b.c.d", router: true },
+  { key: "LAN_DHCP_END", label: "DHCP range to", hint: "a.b.c.d", router: true },
+];
+
+function settingsForm() {
+  const f = el("form", undefined, "settings");
+  f.id = "f-settings";
+  FIELDS.forEach((d) => {
+    const row = el("div", undefined, "row"), label = el("label", d.label);
+    let input;
+    if (d.choices) {
+      input = el("select");
+      d.choices.forEach((c) => input.appendChild(el("option", c)));
+    } else {
+      input = el("input");
+      input.type = "text";
+      input.autocomplete = "off";
+      input.placeholder = d.hint || "";
+      if (d.key === "PPPOE_SECRET") {
+        input.type = "password";
+        input.autocomplete = "new-password";
+      }
+    }
+    input.id = label.htmlFor = "s-" + d.key;
+    input.name = d.key;
+    row.dataset.key = d.key;
+    row.append(label, input);
+    f.appendChild(row);
+  });
+  const go = el("button", "Apply"), state = el("p", "", "wide");
+  go.type = "submit";
+  state.id = "s-state";
+  f.append(el("p", "The settings are held in RAM: the next boot returns to those of the " +
+                   "image. A change of mode restarts omcid, and the data path stops for a " +
+                   "few seconds.", "wide note"), go, state);
+  const edited = () => { f.dataset.dirty = "1"; visibility(f); };
+  f.addEventListener("input", edited);
+  f.addEventListener("change", edited);
+  f.onsubmit = (e) => { e.preventDefault(); applySettings(f); };
+  return f;
+}
+
+function visibility(f) {
+  const mode = f.elements.MODE.value, proto = f.elements.WAN_PROTO.value;
+  f.querySelectorAll(".row").forEach((row) => {
+    const d = FIELDS.find((x) => x.key === row.dataset.key);
+    row.hidden = (d.router && mode !== "router") || (d.proto && d.proto !== proto);
+  });
+}
+
+/* Fill the form from the daemon, unless someone is editing it. */
+function fillSettings(v) {
+  const f = $("f-settings");
+  if (!f || f.dataset.dirty) return;
+  Object.entries(v.settings).forEach(([k, x]) => { if (f.elements[k]) f.elements[k].value = x; });
+  f.elements.PPPOE_USER.value = v.pppoe.user;
+  f.elements.PPPOE_SECRET.value = "";
+  f.elements.PPPOE_SECRET.placeholder = v.pppoe.secret_set ? "set; empty keeps it" : "not set";
+  visibility(f);
+}
+
+async function applySettings(f) {
+  const lines = FIELDS.filter((d) => !d.key.startsWith("PPPOE_"))
+    .map((d) => d.key + "=" + f.elements[d.key].value.trim());
+  if (f.elements.WAN_PROTO.value === "pppoe") {
+    const user = f.elements.PPPOE_USER.value.trim(), secret = f.elements.PPPOE_SECRET.value;
+    if (user) lines.push("PPPOE_USER=" + user);
+    if (secret) lines.push("PPPOE_SECRET=" + secret);
+  }
+  const state = $("s-state");
+  state.className = "wide";
+  state.textContent = "sending...";
+  try {
+    await api("/api/set/settings", lines.join("\n") + "\n");
+    delete f.dataset.dirty;
+    f.elements.PPPOE_SECRET.value = "";
+    state.className = "wide ok";
+    state.textContent = "taken; onu-mode applies it now";
+    setTimeout(() => one("settings"), 2000);
+  } catch (e) {
+    state.className = "wide err";
+    state.textContent = e.message;
+  }
+}
+
 function card(item) {
   const c = el("div", undefined, "card");
   const h = el("h3", item.label);
@@ -138,12 +255,19 @@ function card(item) {
     b.onclick = () => one(item.id);
     body.appendChild(b);
   }
+  if (item.writable && item.id === "settings") c.appendChild(settingsForm());
   return c;
 }
 
 function show(id, value) {
   const box = $("v-" + id);
   if (!box) return;
+  if (id === "settings" && value && value.settings) {
+    /* The settings go to the form; the card shows what is in force. */
+    fillSettings(value);
+    const { settings, pppoe, ...state } = value;
+    value = state;
+  }
   box.replaceChildren(value === null ? el("span", "not on this unit") : render(value));
 }
 

@@ -7,10 +7,14 @@
 #include "providers.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 static int fails;
 static int checks;
@@ -1224,6 +1228,190 @@ static void test_writers(void)
 	      "and does not run past the buffer");
 }
 
+/* A file of the test tree: write it with @mode, or read it whole. */
+static void put(const char *path, const char *text, mode_t mode)
+{
+	char rooted[512];
+	const char *at = prov_path(path, rooted, sizeof(rooted));
+	FILE *f = fopen(at, "w");
+
+	if (f) {
+		fputs(text, f);
+		fclose(f);
+		chmod(at, mode);
+	}
+}
+
+static const char *slurp(const char *path, char *buf, size_t cap)
+{
+	return prov_slurp(path, buf, cap, NULL) ? NULL : buf;
+}
+
+static void pause_10ms(void)
+{
+	const struct timespec ts = { .tv_nsec = 10 * 1000 * 1000 };
+
+	nanosleep(&ts, NULL);
+}
+
+/* The settings once onu-mode's stand-in has ended, waiting up to 5 s. */
+static const char *settled(char *buf, size_t cap)
+{
+	const char *s = "";
+	int err;
+
+	for (int i = 0; i < 500; i++) {
+		s = render(prov_settings, buf, cap, &err);
+		if (strstr(s, "\"applying\":false"))
+			break;
+		pause_10ms();
+	}
+	return s;
+}
+
+/*
+ * onu-mode's stand-in notes that it ran, then waits for run/release, so that
+ * the tests see a change that is still being applied.
+ */
+static const char apply_stub[] =
+	"#!/bin/sh\n"
+	"echo \"$1\" >>\"$POND_ROOT/run/applied\"\n"
+	"i=0\n"
+	"while [ ! -e \"$POND_ROOT/run/release\" ] && [ $i -lt 500 ]; do\n"
+	"\tsleep 0.01\n"
+	"\ti=$((i + 1))\n"
+	"done\n";
+
+static void test_settings(void)
+{
+	static const char *const bad[] = {
+		"FOO=1",
+		"MODE=switch",
+		"MODE=router;reboot",
+		"WAN_VLAN=0",
+		"WAN_VLAN=4095",
+		"WAN_GEM=4096",
+		"WAN_GEM=012",
+		"LAN_ADDRESS=192.0.2.1",
+		"LAN_ADDRESS=192.0.2.1/33",
+		"LAN_ADDRESS=192.0.2.256/24",
+		"WAN_GATEWAY=192.0.2.01",
+		"LAN_DHCP=yes",
+		"PPPOE_USER=two words",
+		"PPPOE_SECRET=",
+		"a line without an equals sign",
+	};
+	char buf[4096], file[512], err[256], what[128], stub[512];
+	const char *s;
+	struct stat st;
+	int rc;
+
+	puts("the settings of the mode, and changes to them");
+
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	setenv("POND_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+
+	s = settled(buf, sizeof(buf));
+	check(strstr(s, "\"MODE\":\"bridge\"") &&
+		      strstr(s, "\"WAN_PROTO\":\"dhcp\""),
+	      "without a file, the settings are onu-mode's defaults");
+	check(strstr(s, "\"secret_set\":false") && strstr(s, "\"mode\":null") &&
+		      strstr(s, "\"wan\":null"),
+	      "no PPPoE secret, and nothing brought up yet");
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		rc = prov_settings_set(bad[i], err, sizeof(err));
+		snprintf(what, sizeof(what), "refused: %s", bad[i]);
+		check(rc == -EINVAL && *err, what);
+	}
+	rc = prov_settings_set("MODE=router\nWAN_PROTO=pppoe\n", err, sizeof(err));
+	check(rc == -EINVAL && strstr(err, "PPPOE_SECRET"),
+	      "PPPoE without a user and a secret is refused");
+	rc = prov_settings_set("LAN_DHCP_START=192.0.2.100\nLAN_DHCP_END=192.0.2.199\n",
+			       err, sizeof(err));
+	check(rc == -EINVAL, "a DHCP range outside the LAN's network is refused");
+	check(!slurp("/run/onu.conf", file, sizeof(file)) &&
+		      !slurp("/run/applied", file, sizeof(file)),
+	      "a refused change writes nothing and applies nothing");
+
+	rc = prov_settings_set("MODE=router\r\nWAN_PROTO=pppoe\r\nWAN_VLAN=410\r\n"
+			       "LAN_ADDRESS=192.0.2.1/24\r\n"
+			       "LAN_DHCP_START=192.0.2.100\r\n"
+			       "LAN_DHCP_END=192.0.2.199\r\n"
+			       "PPPOE_USER=bench\r\nPPPOE_SECRET=not-a-real-one\r\n",
+			       err, sizeof(err));
+	check(rc == 0, "a whole change, with the line ends of a form, is taken");
+	s = slurp("/run/onu.conf", file, sizeof(file));
+	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
+		      strstr(s, "\nLAN_DHCP=on\n"),
+	      "onu.conf has the change and keeps the rest");
+	s = slurp("/run/onu-pppoe", file, sizeof(file));
+	check(s && !strcmp(s, "bench not-a-real-one\n"),
+	      "the PPPoE file has the user and the secret, as pppoed reads them");
+	check(!stat(prov_path("/run/onu-pppoe", file, sizeof(file)), &st) &&
+		      (st.st_mode & 0777) == 0600,
+	      "and only its owner can read it");
+
+	for (int i = 0; i < 500 && !slurp("/run/applied", file, sizeof(file)); i++)
+		pause_10ms();
+	s = slurp("/run/applied", file, sizeof(file));
+	check(s && !strcmp(s, "apply\n"), "the change starts onu-mode apply");
+
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"applying\":true") != NULL,
+	      "the settings say a change is being applied");
+	check(strstr(s, "\"user\":\"bench\"") && strstr(s, "\"secret_set\":true"),
+	      "they give the PPPoE user and that a secret is set");
+	check(!strstr(s, "not-a-real-one"), "but never the secret");
+	rc = prov_settings_set("WAN_VLAN=36", err, sizeof(err));
+	check(rc == -EBUSY, "a change while one is being applied is refused");
+
+	put("/run/release", "", 0644);
+	s = settled(buf, sizeof(buf));
+	check(strstr(s, "\"applying\":false") &&
+		      strstr(s, "\"last_apply_status\":0"),
+	      "once onu-mode has ended, the settings say how it ended");
+
+	rc = prov_settings_set("WAN_PROTO=static\nWAN_ADDRESS=198.51.100.2/24\n"
+			       "WAN_GATEWAY=198.51.100.1\n",
+			       err, sizeof(err));
+	check(rc == 0, "a change of a few settings is taken");
+	s = slurp("/run/onu.conf", file, sizeof(file));
+	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
+		      strstr(s, "\nWAN_PROTO=static\n"),
+	      "and merged with the settings before it");
+	s = slurp("/run/onu-pppoe", file, sizeof(file));
+	check(s && !strcmp(s, "bench not-a-real-one\n"),
+	      "a change without PPPoE leaves the PPPoE file as it was");
+	settled(buf, sizeof(buf));
+
+	rc = prov_settings_set("WAN_GATEWAY=203.0.113.1", err, sizeof(err));
+	check(rc == -EINVAL, "a gateway outside the WAN's network is refused");
+	rc = prov_settings_set("WAN_GATEWAY=198.51.100.2", err, sizeof(err));
+	check(rc == -EINVAL, "a gateway that is the WAN's own address is refused");
+	rc = prov_settings_set("WAN_GATEWAY=", err, sizeof(err));
+	check(rc == -EINVAL, "a static WAN without a gateway is refused");
+	rc = prov_settings_set("LAN_DHCP_START=192.0.2.199\nLAN_DHCP_END=192.0.2.100\n",
+			       err, sizeof(err));
+	check(rc == -EINVAL, "a DHCP range that ends before it starts is refused");
+
+	put("/run/onu-mode", "router\n", 0644);
+	put("/run/onu-wan", "gem1 wan ppp0\n", 0644);
+	put("/run/onu-dns", "198.51.100.53\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"mode\":\"router\"") && strstr(s, "\"out\":\"ppp0\"") &&
+		      strstr(s, "\"dns\":\"198.51.100.53\""),
+	      "the settings carry what onu-mode brought up");
+
+	setenv("POND_APPLY", "/nonexistent/onu-mode", 1);
+	rc = prov_settings_set("LAN_DHCP=off", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && strstr(s, "\"last_apply_status\":127"),
+	      "an onu-mode that cannot run is reported, not hidden");
+	unsetenv("POND_APPLY");
+}
+
 static void test_table(void)
 {
 	const struct prov *p;
@@ -1256,6 +1444,10 @@ static void test_table(void)
 	      "per-GEM-port counters are served now that the MAC's own have a uAPI");
 	check(p && !(p->flags & PROV_SLOW),
 	      "and pollable: two ioctls per gem interface, none at all without one");
+
+	p = prov_find("settings");
+	check(p && prov_present(p) && p->read && p->write,
+	      "the settings of the mode are served, and can be changed");
 
 	check(prov_find("no_such_item") == NULL, "an unknown id finds nothing");
 }
@@ -1299,6 +1491,7 @@ int main(void)
 	test_netlink_onu();
 	test_optics();
 	test_writers();
+	test_settings();
 	test_table();
 	test_failure_paths();
 

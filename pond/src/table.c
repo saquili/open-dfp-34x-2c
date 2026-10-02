@@ -17,6 +17,10 @@ const struct prov pond_provs[] = {
 	{ "model", "System", "Board", prov_model, NULL, 0 },
 	{ "log", "System", "Kernel log", prov_log, NULL, PROV_SLOW },
 
+	{ "settings", "Mode",
+	  "Bridge or router, the WAN and the LAN, held until the next boot",
+	  prov_settings, prov_settings_set, 0 },
+
 	{ "ports", "Data path", "Interfaces: link, speed and CPU-path counts",
 	  prov_ports, NULL, 0 },
 	{ "port_counters", "Data path", "Switch MIB counters for sfp and pon",

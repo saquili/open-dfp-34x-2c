@@ -8,13 +8,15 @@
  *   /api/schema      the list of values
  *   /api/get/ID      one value
  *   /api/getm?ids=A,B several values at once, slow ones left out
+ *   /api/set/ID      a POST: change a value to the body of the request
  *
  * Every route but the first needs the bearer token of /etc/pond.token;
  * without the file, the API stays locked. At / it serves the status page,
- * which asks for the token and reads the API.
+ * which asks for the token, reads the API and changes the settings.
  */
 
 #include "prov.h"
+#include "providers.h"
 
 #include "mongoose.h"
 
@@ -27,6 +29,7 @@
 
 #define POND_VALUE_CAP (64 * 1024)
 #define POND_REPLY_CAP (96 * 1024)
+#define POND_SET_CAP 4096
 
 static const char *g_listen = "http://0.0.0.0:8080";
 static const char *g_tokenf = "/etc/pond.token";
@@ -220,6 +223,49 @@ static void api_getm(struct mg_connection *c, struct mg_str query)
 	reply_json(c, 200, body);
 }
 
+static void api_set(struct mg_connection *c, struct mg_http_message *hm,
+		    struct mg_str id)
+{
+	static char val[POND_SET_CAP];
+	char name[64], err[256] = "";
+	const struct prov *p;
+	int rc;
+
+	if (mg_strcmp(hm->method, mg_str("POST"))) {
+		reply_err(c, 405, "use POST", "a change is a POST of the new value");
+		return;
+	}
+	if (id.len >= sizeof(name)) {
+		reply_err(c, 404, "no such item",
+			  "the name is too long to be one");
+		return;
+	}
+	memcpy(name, id.buf, id.len);
+	name[id.len] = '\0';
+
+	p = prov_find(name);
+	if (!prov_present(p) || !p->write) {
+		reply_err(c, 404, "no such setting", name);
+		return;
+	}
+	if (hm->body.len >= sizeof(val) ||
+	    (hm->body.len && memchr(hm->body.buf, '\0', hm->body.len))) {
+		reply_err(c, 400, name, "the value is too long, or not text");
+		return;
+	}
+	memcpy(val, hm->body.buf, hm->body.len);
+	val[hm->body.len] = '\0';
+
+	rc = p->write(val, err, sizeof(err));
+	explicit_bzero(val, sizeof(val));
+	if (rc) {
+		reply_err(c, rc == -EBUSY ? 409 : rc == -EINVAL ? 400 : 500, name,
+			  *err ? err : strerror(-rc));
+		return;
+	}
+	reply_json(c, 200, "{\"ok\":true}");
+}
+
 /* Whether the request carries the token, compared in constant time. */
 static bool authorised(struct mg_http_message *hm)
 {
@@ -291,6 +337,8 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		api_getm(c, hm->query);
 	else if (mg_match(hm->uri, mg_str("/api/get/*"), caps))
 		api_get(c, caps[0]);
+	else if (mg_match(hm->uri, mg_str("/api/set/*"), caps))
+		api_set(c, hm, caps[0]);
 	else
 		reply_err(c, 404, "no such route", "try /api/schema");
 }
@@ -345,8 +393,10 @@ int main(int argc, char **argv)
 		strlen(g_token) ? "token loaded" :
 				  "NO TOKEN -- the API is locked");
 
-	while (!g_stop)
+	while (!g_stop) {
 		mg_mgr_poll(&mgr, 200);
+		prov_settings_reap();
+	}
 
 	mg_mgr_free(&mgr);
 	return 0;
