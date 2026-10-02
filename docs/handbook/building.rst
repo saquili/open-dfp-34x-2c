@@ -30,13 +30,13 @@ What the build makes
      - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
        the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
        kernel, LZMA, load address ``0x80100000``.
-     - 1783207 bytes; the partition ``k0`` takes 1359872.
+     - 1783748 bytes; the partition ``k0`` takes 1359872.
    * - ``r0.squashfs``
      - The root filesystem for bank 0: a SquashFS image (gzip, 64 KiB blocks,
        every file owned by root and carrying the same fixed time, no extended
        attributes) of BusyBox, dropbear, the programs of the ONU and the
        board's files.
-     - 3878310 bytes; the partition ``r0`` takes 2572288.
+     - 3946279 bytes; the partition ``r0`` takes 2572288.
    * - ``SHA256SUMS``
      - The SHA-256 digests of the two images, in the form ``sha256sum -c``
        reads.
@@ -63,16 +63,16 @@ Sizes and budgets
      - Budget
      - Margin
    * - ``k0``
-     - 1783207
+     - 1783748
      - 1359872
-     - Over the budget by 423335 bytes.
+     - Over the budget by 423876 bytes.
    * - ``r0``
-     - 3878310
+     - 3946279
      - 2572288
-     - Over the budget by 1306022 bytes.
+     - Over the budget by 1373991 bytes.
 
 Neither image fits its partition, and the bench refuses to write one that does
-not (``is 1783207 bytes, more than the 1359872 its destination takes``). The
+not (``is 1783748 bytes, more than the 1359872 its destination takes``). The
 sizes are settled last: the images are slimmed once everything that the stick
 does is in them and has been tested on the board. Until then the build reports
 both sizes and fails on neither (``IMAGE_ENFORCE``, below), and the stick runs
@@ -162,7 +162,7 @@ What ``make`` judges
    reported, and enforced for the images that ``IMAGE_ENFORCE`` names.
 #. ``isa-gate`` over ``build/image/target``, every executable of the root
    filesystem: none may hold an instruction that the core cannot run
-   (``toolchain.rst``). It reports 25 files, 25 objects, 1722473 instructions
+   (``toolchain.rst``). It reports 26 files, 26 objects, 1749347 instructions
    and no findings. The gate can fail: the negative control of the toolchain
    tests compiles a stock MIPS32 object, and the gate refuses it for its
    architecture flags, for the load-linked and store-conditional pair and for
@@ -174,7 +174,7 @@ The root filesystem
 
 The root filesystem is the target directory of the build, packed. It holds:
 
-BusyBox 1.37.0, static, 86 applets
+BusyBox 1.37.0, static, 94 applets
     The ones the boot script and a shell session use, by purpose:
 
     shell and init
@@ -188,8 +188,9 @@ BusyBox 1.37.0, static, 86 applets
     system
         mount umount mountpoint ps top free uptime dmesg kill killall pidof
         sleep date uname hostname id whoami env which tty stty watch time
+        syslogd klogd logger watchdog
     network
-        ip ping netstat nc
+        ip ping netstat nc traceroute traceroute6 arping nslookup
     archives
         tar gzip gunzip zcat
 
@@ -220,6 +221,9 @@ The boot script
        and ``/var``, and ``/dev`` too if the kernel has not (it mounts devtmpfs
        itself when it starts the first program);
     #. sets the host name (``dfp-34x-2c3``);
+    #. starts the system log, ``/run/messages`` and one older copy of 64 KiB
+       each, with the kernel's messages in it, and the watchdog daemon, which
+       feeds the watchdog every ten seconds;
     #. loads the packet filter, ``/etc/nftables.conf``: it drops what it does
        not accept, and it accepts ssh and the status daemon from the host side,
        ICMPv6, the ICMP that path MTU discovery needs, and DHCP; when the stick
@@ -234,7 +238,8 @@ The boot script
        (keys only);
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
        root only: it holds the PLOAM password), gives the PON driver the
-       serial number through devlink and brings the PON up;
+       serial number and the PLOAM password through devlink and brings the PON
+       up;
     #. starts ``omcid``, which answers the OLT, and ``pond``, the status daemon,
        whose API stays locked without ``/etc/pond.token``;
     #. prints ``open-dfp-34x-2c: ready``.
@@ -505,9 +510,9 @@ console, which asks for nothing::
     uname -r                 # 6.18.48
     cat /proc/cmdline        # panic=10, console=ttyS0,115200, ..., root=31:5
     grep ' / ' /proc/mounts  # /dev/root / squashfs ro,...
-    busybox --list | wc -l   # 86
+    busybox --list | wc -l   # 94
     ip addr                  # 192.0.2.2/30 on sfp, 198.51.100.2/30 on mgmt
-    pidof dropbear omcid pond
+    pidof dropbear omcid pond watchdog syslogd
     nft list ruleset         # the packet filter, two chains with policy drop
     cat /etc/issue           # open-dfp-34x-2c on the ODI DFP-34X-2C3
 
@@ -526,5 +531,5 @@ Open items
   side having the matching addresses (``flashing.rst``); the VLAN of the second
   address has to exist on the host's interface too.
 * The images have to be slimmed before the banks can hold them: ``k0`` by
-  423335 bytes and ``r0`` by 1306022, once everything that the stick does is
+  423876 bytes and ``r0`` by 1373991, once everything that the stick does is
   in them and tested.
