@@ -23,4 +23,10 @@ serial numbers, the status daemon's token, the bench's own addresses, and the
 names of the bench host and of the stick. ``tests/device/README.rst`` says how
 to make one.
 
-The runs, the oldest first, follow.
+The runs, the oldest first:
+
+``2026-10-02-run01``
+    The first run of every case on the board: bridge mode, the data path both
+    ways, router mode with a static WAN and with PPPoE and back, and the reset
+    by the watchdog, on the RAM image built from ``run01``, on the lab
+    OLT. 27 of 27 passed.
