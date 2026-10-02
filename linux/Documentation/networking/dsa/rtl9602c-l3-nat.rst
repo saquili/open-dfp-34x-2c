@@ -1968,8 +1968,9 @@ The address notifier
        row per netdev, by ifindex, in the first free of the 16 rows. ``UP``
        writes the netdev's MAC, VLAN (see "L3 interface (selector 3)"), the
        address and the MTU, and puts the address in the external-address table
-       with next hop 0, where netfilter's translated source will be looked up; a
-       second address replaces the first in the row. ``DOWN`` gives back the
+       with the uplink's next hop (see the row below), where netfilter's
+       translated source will be looked up; a second address replaces the
+       first in the row. ``DOWN`` gives back the
        address's external-address row, then rewrites the interface row with an
        address that remains, or clears it. Then the route table is committed
        again, since a directly attached route names the row. A netdevice
@@ -1981,6 +1982,16 @@ The address notifier
        add`` and ``ip address del`` change the ``l3nat`` L3-interface row of the
        interface. That ``ip address del`` frees the external-address row is read
        from the code; the ``l3nat`` view after it would show the row empty.
+   * - The external-address rows of the addresses and of the flows name the
+       uplink's next hop: the next-hop row of the default route's gateway,
+       once its neighbour holds one, else row 0
+       (``rtl9602c_l34_uplink_nh()``). Each commit of the route table, after
+       every route, neighbour and address event, points them again when it
+       changed (``rtl9602c_l34_extip_repoint()``); a PPPoE WAN's row keeps its
+       own next hop.
+     - T
+     - The router-mode cases of ``tests/device``: a static WAN after a PPPoE
+       session, whose concentrator the translated frames went to before.
    * - A frame that the switch forwards to the PON port leaves only if a
        classifier entry gave it a GEM stream; the PON MAC drops one without,
        while the switch's own counters count it as sent.
@@ -2403,7 +2414,7 @@ A WAN record is keyed by the PPP interface's address. A new session on a known
 address rewrites the rows in place. A WAN with no flows is kept, and recycled
 only when a new address needs its index; ``-ENOSPC`` when all seven carry flows.
 On release the external-address row is freed if this path allocated it, and
-otherwise restored with next hop 0.
+otherwise restored with the uplink's next hop.
 
 Hit bitmaps, flow statistics and ageing
 =======================================
@@ -2810,10 +2821,9 @@ How the positions were established:
 Known limitations
 =================
 
-- Next-hop row 0 is given to whichever neighbour on the PON port resolves first
-  while the row is free, and the driver does not check that it is the uplink's
-  gateway. The external-address rows that the address notifier writes name
-  next-hop row 0, so a translated frame leaves towards that neighbour.
+- Until the default route's gateway has a next-hop row, the external-address
+  rows name row 0, which goes to whichever neighbour on the PON port resolves
+  first while it is free.
 - The route table mirrors the main routing table of the initial network
   namespace in 16 rows, and a /0 takes two of them. When the routes need more
   rows, or the namespace has FIB rules, the table is written empty and every

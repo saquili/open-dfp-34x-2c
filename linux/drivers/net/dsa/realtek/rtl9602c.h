@@ -2293,6 +2293,11 @@ struct rtl9602c_priv {
 	/** @l34_pppoe: the PPPoE WANs by row; row 0 is the Ethernet uplink's */
 	struct rtl9602c_pppoe_wan l34_pppoe[8];
 
+	/**
+	 * @l34_extip_nh: the next-hop row the external-address rows of the
+	 * addresses and of the flows name, the uplink's gateway's
+	 */
+	unsigned int l34_extip_nh;
 	/** @l34_us_flow: the GEM flow routed frames leave in, -1 for none */
 	int l34_us_flow;
 	/**

@@ -2745,12 +2745,63 @@ static void rtl9602c_l34_route_encode(struct rtl9602c_priv *p,
 }
 
 /*
+ * The next-hop row by which translated frames leave: the row of the gateway of
+ * the default route, once its neighbour holds one; else row 0, which the first
+ * neighbour on the PON port takes (see rtl9602c_l34_neigh_set()).
+ */
+static unsigned int rtl9602c_l34_uplink_nh(struct rtl9602c_priv *p)
+{
+	unsigned int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_route); i++) {
+		const struct rtl9602c_l34_route *r = &p->l34_route[i];
+
+		if (!r->used || r->prefix || !r->gw || r->linkdown)
+			continue;
+		for (j = 0; j < ARRAY_SIZE(p->l34_nh_addr); j++)
+			if (p->l34_nh_addr[j] == r->gw)
+				return j;
+	}
+	return 0;
+}
+
+static bool rtl9602c_l34_extip_of_wan(struct rtl9602c_priv *p, unsigned int idx)
+{
+	unsigned int w;
+
+	for (w = 1; w < ARRAY_SIZE(p->l34_pppoe); w++)
+		if (p->l34_pppoe[w].extip && p->l34_pppoe[w].extidx == (int)idx)
+			return true;
+	return false;
+}
+
+/*
+ * Point the external-address rows of the addresses and of the flows at the
+ * uplink's next hop, when it changed; a PPPoE WAN's row keeps its own.
+ */
+static void rtl9602c_l34_extip_repoint(struct rtl9602c_priv *p)
+{
+	unsigned int nh = rtl9602c_l34_uplink_nh(p);
+	unsigned int i;
+
+	if (nh == p->l34_extip_nh)
+		return;
+	p->l34_extip_nh = nh;
+	for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++)
+		if (p->l34_extip[i] && !rtl9602c_l34_extip_of_wan(p, i))
+			rtl9602c_l34_extip_set(p, i, p->l34_extip[i], nh);
+	pr_debug("<l3> translated frames leave by next hop %u\n", nh);
+}
+
+/*
  * Rewrite the hardware table, longest prefix first, which is right whether the
  * engine takes the longest matching row or the first valid one; which it takes
  * is not verified. If the routes need more rows than the table has, the shadow
  * has overflowed or the namespace has FIB rules, which the table cannot
  * express, the table is written empty, every destination to the CPU, with one
- * warning. Rows that did not change are not written.
+ * warning. Rows that did not change are not written. The external-address
+ * rows then follow the uplink's next hop, which a route or a neighbour may
+ * have changed.
  */
 static void rtl9602c_l34_route_commit(struct rtl9602c_priv *p)
 {
@@ -2810,6 +2861,9 @@ static void rtl9602c_l34_route_commit(struct rtl9602c_priv *p)
 		pr_debug("<l3> route[%u] = %08x %08x\n", i, hw[i][0],
 			 hw[i][1]);
 	}
+
+	/* The routes and the neighbours change the uplink's gateway too. */
+	rtl9602c_l34_extip_repoint(p);
 }
 
 /*
@@ -3136,9 +3190,10 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
  * The address notifier: the routed flow first; then, for a device that is or
  * runs over a switch port, its L3-interface row, one per device. An address
  * added writes the row with the device's MAC, VLAN, address and MTU, replacing
- * an earlier address, and becomes an external address with next hop 0, where a
- * translated source is looked up. An address removed gives its external-address
- * row back, and rewrites the interface row with one that remains, or clears it.
+ * an earlier address, and becomes an external address with the uplink's next
+ * hop (rtl9602c_l34_uplink_nh()), where a translated source is looked up. An
+ * address removed gives its external-address row back, and rewrites the
+ * interface row with one that remains, or clears it.
  * A later change of the MAC address or the MTU is written by
  * rtl9602c_l34_netdev_event().
  */
@@ -3270,7 +3325,7 @@ static int rtl9602c_extip_get(struct rtl9602c_priv *p, u32 addr)
 	if (i == ARRAY_SIZE(p->l34_extip))
 		return -ENOSPC;
 
-	if (rtl9602c_l34_extip_set(p, i, cpu_to_be32(addr), 0))
+	if (rtl9602c_l34_extip_set(p, i, cpu_to_be32(addr), p->l34_extip_nh))
 		return -EIO;
 	p->l34_extip[i] = cpu_to_be32(addr);
 	pr_debug("<flow> extaddr[%u] := %pI4, taken for a flow\n", i, &addr);
@@ -3418,8 +3473,8 @@ static bool rtl9602c_l34_wan_row_free(struct rtl9602c_priv *p, unsigned int w)
 
 /*
  * Undo WAN @w: its external-address row is freed if this path took it and
- * otherwise given next hop 0 again; its next-hop, L3-interface and session rows
- * are zeroed.
+ * otherwise given the uplink's next hop again; its next-hop, L3-interface and
+ * session rows are zeroed.
  */
 static void rtl9602c_l34_wan_release(struct rtl9602c_priv *p, unsigned int w)
 {
@@ -3435,7 +3490,8 @@ static void rtl9602c_l34_wan_release(struct rtl9602c_priv *p, unsigned int w)
 					       r->extidx, zero, ext_words);
 			p->l34_extip[r->extidx] = 0;
 		} else {
-			rtl9602c_l34_extip_set(p, r->extidx, r->extip, 0);
+			rtl9602c_l34_extip_set(p, r->extidx, r->extip,
+					       p->l34_extip_nh);
 		}
 	}
 	rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NEXTHOP, w, zero, nh_words);
@@ -4511,10 +4567,10 @@ static int rtl9602c_l34_neigh_set(struct rtl9602c_priv *p, struct neighbour *n)
 	/*
 	 * The row already holding the address, else the first free one: from
 	 * row 0 on the PON port, from row 1 elsewhere. The external addresses
-	 * from the address notifier send their frames to next hop 0, so row 0
-	 * must hold the uplink's gateway: with a LAN-side neighbour there the
-	 * switch drops the translated frames at their ingress port (measured on
-	 * this board).
+	 * send their frames to the default route's gateway, and to row 0 until
+	 * that is known, so row 0 is kept for the PON side: with a LAN-side
+	 * neighbour there the switch drops the translated frames at their
+	 * ingress port (measured on this board).
 	 */
 	first = port == RTL9602C_PORT_PON ? 0 : 1;
 	row = UINT_MAX;
