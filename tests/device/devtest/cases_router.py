@@ -146,11 +146,12 @@ def wait_for(ctx: Context, test, limit: float) -> float | None:
 
 
 def namespaces_up(ctx: Context) -> None:
+    """The two namespaces, new. A namespace that is deleted goes away a moment
+    later, its macvlan with it, and a new macvlan with the same address is
+    refused until then: the creation is tried again, up to five times."""
     s = ctx.settings
     script = "; ".join([
         "set -e",
-        "ip netns del devtest-lan 2>/dev/null || true",
-        "ip netns del devtest-wan 2>/dev/null || true",
         "ip netns add devtest-lan",
         "ip netns add devtest-wan",
         f"ip link add devtest-lan0 link {shlex.quote(s.subscriber_port)} address {LAN_MAC} "
@@ -165,8 +166,14 @@ def namespaces_up(ctx: Context) -> None:
         "ip -n devtest-wan link set devtest-wan0 up",
         f"ip -n devtest-lan route add default via {LAN.split('/')[0]}",
     ])
-    reply = bench(ctx, script)
-    if not reply.ok:
+    for attempt in range(5):
+        namespaces_down(ctx)
+        if attempt:
+            time.sleep(1)
+        reply = bench(ctx, script)
+        if reply.ok:
+            break
+    else:
         raise RuntimeError(f"the bench's namespaces: {reply.err.strip() or reply.out.strip()}")
     ctx.memo["namespaces"] = True
     # Each host must reach the stick, and the stick each host, before any
@@ -182,7 +189,10 @@ def namespaces_up(ctx: Context) -> None:
 
 
 def namespaces_down(ctx: Context) -> None:
-    bench(ctx, "ip netns del devtest-lan 2>/dev/null; ip netns del devtest-wan 2>/dev/null; true")
+    """The namespaces gone, and an interface that a failed creation left
+    behind outside them."""
+    bench(ctx, "ip netns del devtest-lan 2>/dev/null; ip netns del devtest-wan 2>/dev/null; "
+               "ip link del devtest-lan0 2>/dev/null; ip link del devtest-wan0 2>/dev/null; true")
     ctx.memo.pop("namespaces", None)
 
 
