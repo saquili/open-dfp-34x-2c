@@ -13,9 +13,10 @@ recipes (including the OMCI daemon), and the post-image script that lays out the
 two partition images the bootloader loads. The kernel comes from ``linux/`` and
 the pinned build system from ``buildroot/``.
 
-So far the tree builds the cross toolchain, and nothing else: the root
-filesystem, the board's configuration and the OMCI daemon package arrive with
-the rest of **WI-14**.
+The tree builds the cross toolchain, and the two flash images of the
+DFP-34X-2C3: the kernel, and a root filesystem of BusyBox, dropbear and a boot
+script (see "The board's image"). The OMCI daemon package arrives with the
+userspace work item.
 
 What is here
 ============
@@ -28,12 +29,33 @@ What is here
     build without the kernel archive described below.
 ``configs/toolchain_defconfig``
     The configuration of the toolchain, and of nothing but the toolchain.
+``configs/odi_dfp_34x_2c3_defconfig``
+    The board: the same toolchain with static libraries only, the kernel, the
+    root filesystem and the two images (see "The board's image").
 ``board/dfp-34x-2c3/uclibc.fragment``
-    The uClibc-ng settings that the userspace of the board needs, which the
-    defconfig names.
+    The uClibc-ng settings that the userspace of the board needs, which both
+    defconfigs name.
+``board/dfp-34x-2c3/busybox.config``
+    The BusyBox configuration of the image: a complete one, with the applets that
+    the boot script and a shell session use.
+``board/dfp-34x-2c3/overlay/``
+    The files laid over the root filesystem: the inittab, the boot script
+    ``etc/init.d/rcS``, the shell profile, the name of the image, and the
+    ``var`` directory that a temporary file system is mounted on.
+``board/dfp-34x-2c3/post-image.sh``
+    The script that leaves ``k0.uImage``, ``r0.squashfs`` and ``SHA256SUMS`` in the
+    images directory.
+``tests/run``
+    The unit tests of the tree (``tests/image`` and ``tests/toolchain``).
+``tests/image/``
+    The tests of the post-image script, the boot script and the defconfig, and
+    the checks that run on a built image: ``check-applets`` runs its static
+    programs under ``qemu-mips`` and ``tree-digest`` lists its files with their
+    digests.
 ``tests/toolchain/``
-    The programs and scripts that check a toolchain built from the defconfig
-    (see "Checks on the toolchain").
+    The programs and scripts that check a toolchain built from the toolchain
+    defconfig (see "Checks on the toolchain"), and the list of the findings of the
+    instruction-set gate in the toolchain's own libraries that are known.
 
 The toolchain
 =============
@@ -54,9 +76,9 @@ Linux 6.18.48 headers   those of ``linux/`` (see below)
 
 ``BR2_REPRODUCIBLE`` is on, and binutils is configured with
 ``--enable-deterministic-archives``, so that ``ar`` and ``ranlib`` put no time or
-owner into an archive. The root filesystem is off: no BusyBox, no init system, no
-image. Building it takes about four minutes on 18 cores with the sources in the
-download cache.
+owner into an archive. This defconfig builds no root filesystem: no BusyBox, no
+init system, no image. Building it takes about four minutes on 18 cores with the
+sources in the download cache.
 
 Building it
 -----------
@@ -157,6 +179,45 @@ C99 maths functions, ``ftw``, IPv6 in the library, and ``fopencookie``. The stac
 protector is on (``BR2_TOOLCHAIN_BUILDROOT_USE_SSP``), which builds the C library
 itself with it as well.
 
+The board's image
+=================
+
+``configs/odi_dfp_34x_2c3_defconfig`` builds the kernel and the root filesystem
+of the stick and leaves the two flash images in ``images/`` of the output
+directory. ``make`` in the top directory does it; ``docs/handbook/building.rst``
+has the commands, the sizes and how to put the images on the board. In short:
+
+* The toolchain is the one above with static libraries only
+  (``BR2_STATIC_LIBS``), so that every program of the image is static and the
+  image holds no shared object (ADR 0010).
+* The kernel is the tree of ``linux/``, taken from the archive that serves the
+  headers, configured by ``rtl9602c_defconfig`` and built with this toolchain.
+  The image is the LZMA-compressed legacy U-Boot image the boot loader takes.
+* The root filesystem is BusyBox 1.37.0 (``board/dfp-34x-2c3/busybox.config``),
+  dropbear 2026.93, and the files of ``board/dfp-34x-2c3/overlay``. The build
+  system installs no init scripts (``BR2_INIT_NONE``): BusyBox init reads the
+  overlay's ``etc/inittab`` and runs its boot script, ``etc/init.d/rcS``.
+  The files that belong to one bench and not to the repository, an ssh key or
+  other management addresses, are in a directory named by
+  ``OPEN_DFP_34X_2C_LOCAL_OVERLAY``; the post-image script lays it over a copy of
+  the target tree, so the target directory keeps none of them.
+* ``board/dfp-34x-2c3/post-image.sh`` makes ``r0.squashfs`` from the target
+  directory with the host ``mksquashfs`` (gzip, every file root-owned and
+  carrying the build's time, no extended attributes), copies the kernel's
+  ``uImage`` to ``k0.uImage`` and writes ``SHA256SUMS``.
+* The build is reproducible: ``BR2_REPRODUCIBLE`` fixes ``SOURCE_DATE_EPOCH``,
+  which the kernel build, ``mkimage`` and the post-image script use for every
+  time they write; the kernel builds as ``buildroot@buildroot``. As for the
+  toolchain, ``GIT_CEILING_DIRECTORIES`` keeps the version of the build system
+  from following the commit.
+
+What the build judges is in the top-level ``Makefile``: the images against their
+partitions (``tools/image-budget``), the instruction-set gate over the whole
+target tree, and the digests. ``tests/image/check-applets`` runs the image's
+static programs under ``qemu-mips``, and ``tests/image/tree-digest`` lists a
+target tree for the comparison of two builds; the ``image`` workflow does both
+(``.github/workflows/README.rst``).
+
 Checks on the toolchain
 =======================
 
@@ -203,8 +264,17 @@ no patch for them. A program that links the C library statically takes only the
 objects it refers to, so a static program does not contain them; the test
 programs below, static and dynamic, pass the gate, and none of them executes a
 load-linked, store-conditional or sync instruction. A root filesystem that holds
-the toolchain's shared libraries (the C library, the dynamic loader, libgcc_s)
-does contain them, and fails the gate on the target tree.
+the toolchain's shared libraries (the C library, libgcc_s) does contain them, and
+fails the gate on the target tree. The image of the board therefore holds static
+programs only (ADR 0010).
+
+``tests/toolchain/known-findings.txt`` lists the findings, for each file, archive
+member and function, with the instructions in the order the gate reports them.
+``compare-findings`` holds the gate's output to the list: the toolchain job
+passes when the findings are exactly the list, and fails when one is new, gone or
+different. On the toolchain this defconfig builds the 40 findings are the 7
+groups of the list. When the toolchain changes on purpose,
+``compare-findings --print-known`` writes the new list from the gate's output.
 
 The test programs
 -----------------
