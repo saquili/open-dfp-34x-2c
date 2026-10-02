@@ -177,6 +177,8 @@
 #define RTL9602C_ETH_P_REALTEK	0x8899
 #define RTL9602C_PTP_TAG_LEN	16
 #define RTL9602C_PTP_TAG_PROTO_OFFSET	14
+/* The protocol byte of a PTP tag: 4 in every tag seen on this board. */
+#define RTL9602C_PTP_TAG_PROTO_PTP	4
 #define RTL9602C_PTP_TAG_REASON_OFFSET	15
 #define RTL9602C_PTP_TAG_SEC_OFFSET	22
 #define RTL9602C_PTP_TAG_NSEC_OFFSET	24
@@ -876,8 +878,9 @@ static int rtl9602c_eth_test_frame(struct net_device *dev)
 /*
  * Offer an OMCI message to the switch driver's handler, with the port it came
  * from. It is offered only with a CPU tag, without which word 3, and so the
- * port, is not written. Returns true if the handler took the frame; otherwise
- * the frame goes on as an ordinary one.
+ * port, is not written. Returns true if the handler took the frame; the
+ * caller drops a message that no handler takes, since it has no Ethernet
+ * header to go up with.
  */
 static bool rtl9602c_eth_rx_ctrl(struct net_device *dev, struct sk_buff *skb,
 				 u32 sts, u32 tag, u32 dest)
@@ -970,10 +973,15 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 			skb_reserve(skb, RTL9602C_NIC_RX_DATA_OFFSET);
 			skb_put(skb, len - RTL9602C_NIC_RX_FCS_LEN);
 
-			/* An OMCI message goes to its handler first. */
-			if ((sts & RTL9602C_NIC_RXD_OMCI) &&
-			    rtl9602c_eth_rx_ctrl(dev, skb, sts, w2, w3))
+			/* An OMCI message goes to its handler, or nowhere. */
+			if (sts & RTL9602C_NIC_RXD_OMCI) {
+				if (!rtl9602c_eth_rx_ctrl(dev, skb, sts, w2,
+							  w3)) {
+					dev->stats.rx_dropped++;
+					dev_kfree_skb_any(skb);
+				}
 				goto rearm;
+			}
 
 			/*
 			 * With DSA, a frame with a CPU tag is counted under its
@@ -1036,18 +1044,18 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 			 * neither DSA nor a PTP stack would find behind the
 			 * tag.
 			 *
-			 * Any frame longer than the tag with 0x8899 at
-			 * offset 12 is taken to carry one; the protocol byte at
-			 * offset 14, 4 in every tag seen on this board, is not
-			 * checked. Other frames use that EtherType too, among
-			 * them the switch's own loop-detection probes, and one
-			 * that reached the CPU would lose 16 bytes of its
-			 * payload and gain a timestamp. That no such frame
-			 * reaches the CPU is assumed, not verified.
+			 * A frame longer than the tag with 0x8899 at offset 12
+			 * and the protocol byte 4 at offset 14, as in every tag
+			 * seen on this board, is taken to carry one. Other
+			 * frames use that EtherType with other protocol bytes,
+			 * among them the switch's own loop-detection probes,
+			 * and go up as they came.
 			 */
 			if (skb->len > RTL9602C_PTP_TAG_LEN &&
 			    get_unaligned_be16(skb->data + 2 * ETH_ALEN) ==
-			    RTL9602C_ETH_P_REALTEK) {
+			    RTL9602C_ETH_P_REALTEK &&
+			    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] ==
+			    RTL9602C_PTP_TAG_PROTO_PTP) {
 				u32 sec = get_unaligned_be16(skb->data +
 							     RTL9602C_PTP_TAG_SEC_OFFSET);
 				u32 nsec = get_unaligned_be32(skb->data +
