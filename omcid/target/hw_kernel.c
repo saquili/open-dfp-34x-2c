@@ -40,6 +40,7 @@
 #include <sys/socket.h>
 
 #include "hw/hw.h"
+#include "hw_kernel.h"
 #include "omcid/array_size.h"
 #include "omcid/attrs.h"
 #include "sys/log.h"
@@ -961,6 +962,29 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 
 static int g_bridge_filtering = -1;
 
+/* Router mode, and whether the log has said what it leaves out. */
+static bool g_router;
+static bool g_router_told;
+
+void omci_hw_kernel_router(bool on)
+{
+	g_router = on;
+}
+
+/* In router mode, say once that the OLT's bridging is not applied. */
+static bool router_skips(const char *what)
+{
+	if (!g_router)
+		return false;
+	if (!g_router_told) {
+		OMCI_INFO(
+			"router mode: the OLT's %s and the rest of its bridging stay out of the hardware",
+			what);
+		g_router_told = true;
+	}
+	return true;
+}
+
 /* Put an interface, up, into the bridge @master. */
 static int rtnl_link_master(int ifindex, int master)
 {
@@ -1129,7 +1153,7 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 	if (n > OMCI_HW_BRIDGE_MAX_PORTS)
 		return OMCI_ERR_NOMEM;
 
-	if (!n)
+	if (!n || router_skips("bridge"))
 		return OMCI_OK;
 
 	err = bridge_ensure(&br);
@@ -1688,6 +1712,8 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 
 	if (rules == NULL && n > 0)
 		return OMCI_ERR_INVAL;
+	if (router_skips("VLAN rules"))
+		return OMCI_OK;
 	if (n > OMCI_HW_VLAN_MAX_RULES)
 		return OMCI_ERR_NOMEM;
 	if (!uni || !pon) {

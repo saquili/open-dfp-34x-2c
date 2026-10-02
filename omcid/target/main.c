@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "daemon.h"
+#include "hw_kernel.h"
 #include "omcid/ctl_proto.h"
 #include "sys/log.h"
 #include "transport_port.h"
@@ -20,10 +21,12 @@
 static void print_help(FILE *f, const char *prog)
 {
 	fprintf(f,
-		"usage: %s [-d DEVICE] [-v]... [-h]\n"
+		"usage: %s [-d DEVICE] [-r] [-v]... [-h]\n"
 		"Answer the OLT on the OMCI port of the ONU.\n"
 		"\n"
 		"  -d DEVICE  the OMCI port (default %s)\n"
+		"  -r         router mode: the OLT's bridge and VLAN rules are not\n"
+		"             applied, and the GEM interfaces stay out of any bridge\n"
 		"  -v         log more; may be given more than once\n"
 		"  -h         show this text\n",
 		prog, OMCI_PORT_DEFAULT);
@@ -35,10 +38,13 @@ int main(int argc, char **argv)
 	int level = OMCI_LOG_INFO;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "d:vh")) != -1) {
+	while ((opt = getopt(argc, argv, "d:rvh")) != -1) {
 		switch (opt) {
 		case 'd':
 			device = optarg;
+			break;
+		case 'r':
+			omci_hw_kernel_router(true);
 			break;
 		case 'v':
 			if (level < OMCI_LOG_TRACE)

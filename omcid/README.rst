@@ -54,5 +54,15 @@ through the daemon::
 
    build/omcid -p < frames.bin > answers.bin
 
-The backend for the kernel interfaces of the board, the OMCI port and the
-networking control paths, is the next part to be added.
+``make board`` builds the daemon for the board, with the backend of the
+board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
+"pon" generic netlink family for the ONU's state and T-CONTs, the "gem" link
+kind for the GEM ports, the bridge ``omcibr0`` with the host link ``sfp``, and
+tc flower rules for the VLAN rules, which the switch carries out::
+
+   omcid [-d DEVICE] [-r] [-v]...
+
+``-r`` is router mode: the stick routes the subscriber's traffic itself. The
+daemon answers the OLT as usual, but leaves the bridge and the VLAN rules that
+the OLT provisions out of the hardware, so the GEM interfaces stay out of any
+bridge and the stick's router uses them.
