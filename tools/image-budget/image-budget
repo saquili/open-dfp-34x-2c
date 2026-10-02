@@ -11,9 +11,8 @@ build/image/images in the repository), or the FILE given with it. For each one
 the tool prints its size, the partition's size and what is left of it, or by
 how much the image is over. An image over its budget is reported and is not an
 error unless --enforce is given, so that a build can go on reporting the size
-of an image that does not fit while it holds the other to its partition
-(image-budget --enforce r0). With --enforce, the images named are held to their
-partitions, and both are when none is named (image-budget --enforce k0 r0).
+of a kernel that does not fit yet while it holds the root filesystem to its
+partition (image-budget --enforce r0).
 
 Exit status: 0 when every image was read (and, with --enforce, fits); 1 when
 --enforce is given and a checked image is over its budget; 2 on a usage error

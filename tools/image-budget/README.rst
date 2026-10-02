@@ -30,12 +30,10 @@ for each::
     r0: 812345 bytes against a budget of 2572288 (2512 KiB): margin 1759943 bytes (68.4% of the partition) (build/image/images/r0.squashfs)
 
 An image of exactly the size of its partition fits, with a margin of 0 bytes.
-An image over its budget is reported and is not an error, so that a build can
-go on reporting the size of an image that does not fit while it holds the other
-to its partition. ``--enforce`` makes it one, for the images named, or for both
-when none is::
+An image over its budget is reported and is not an error, so that the build can
+go on reporting the size of an image that does not fit yet. ``--enforce`` makes
+it one::
 
-    tools/image-budget/image-budget --enforce k0 r0  # fails if either is over
     tools/image-budget/image-budget --enforce r0     # fails if r0 is over
     tools/image-budget/image-budget k0               # reports k0, whatever it is
 
@@ -45,20 +43,6 @@ lines above and a line on standard error that names it; 2 for a usage error and
 for an image that is missing, unreadable, not a file or empty. A check that read
 nothing has proved nothing, so a missing image is an error whether or not
 ``--enforce`` is given.
-
-In the build
-============
-
-``make`` runs ``image-budget --enforce $(IMAGE_ENFORCE)`` on the images it made,
-and ``IMAGE_ENFORCE`` is ``k0 r0`` by default: the build fails when either image
-is over its partition, and prints the margin of each that fits. Naming fewer
-(``make IMAGE_ENFORCE=r0``) lets a build go on while the other image is only
-reported, for the day one is being slimmed. The ``image`` workflow takes no such
-variable and holds both images to their partitions itself
-(``.github/workflows/README.rst``). ``tests/test_makefile.py`` reads the Makefile
-and runs its line of the check on images of the sizes that matter, so a build
-that stopped holding either image fails the self-tests of this tool, which the
-``image-budget`` job runs on every change.
 
 What it does not check
 ======================
@@ -78,7 +62,6 @@ Tests
 
 They check the verdicts at the edges (one byte under, exactly at and one byte
 over the budget), the exit statuses with and without ``--enforce``, the
-selection of one image, a missing, an empty and a misnamed image, that the
-two sizes are those of the flash layout page and of the bench, and that the
-Makefile holds both images to them. They need Python 3.11 or later and nothing
-else.
+selection of one image, a missing, an empty and a misnamed image, and that the
+two sizes are those of the flash layout page and of the bench. They need Python
+3.11 or later and nothing else.
