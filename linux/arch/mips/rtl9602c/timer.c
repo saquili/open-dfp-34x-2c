@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * The tick of the Realtek RTL9602C.
+ * The tick and the clock of the Realtek RTL9602C.
  *
  * MIPS I defines no CP0 Count and Compare registers, and the kernel uses no
  * CP0 counter on this core: the tick comes from general-purpose timer 0 of
  * the SoC, a periodic clockevent that counts the LX bus clock divided by
- * 1000 and expires once per jiffy. There is no one-shot mode and no
- * clocksource, so the kernel runs a periodic tick with jiffies as its clock.
- *
- * The boot loader leaves timer 1 running; the kernel neither uses nor stops
- * it, and its interrupt stays disabled.
+ * 1000 and expires once per jiffy. There is no one-shot mode, so the kernel
+ * runs a periodic tick. Timer 1, which the boot loader leaves running, is
+ * set free-running at 100 MHz and is the clocksource and sched_clock, with
+ * its interrupt disabled.
  */
 
 #include <linux/clockchips.h>
+#include <linux/clocksource.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/sched_clock.h>
 
 #include <asm/time.h>
 
@@ -23,12 +24,16 @@
 
 /*
  * General-purpose timers, 0x10 apart. Per timer: the reload value, in
- * counts per period, then the current count at +0x04 (unused), control and
- * interrupt.
+ * counts per period, then the current count, control and interrupt. The
+ * count runs up from 0 to the reload value and starts again at 0; both are
+ * 28 bits wide, and writing the reload value sets the count to 0.
  */
 #define RTL9602C_TIMER_BASE	(RTL9602C_IOMEM_BASE + 0x3200)
 #define RTL9602C_TIMER_STRIDE		0x10
 #define RTL9602C_TIMER_RELOAD		0x00
+#define  RTL9602C_TIMER_RELOAD_MAX	0x0fffffff
+#define RTL9602C_TIMER_COUNT		0x04
+#define RTL9602C_TIMER_BITS		28
 
 /*
  * Control: EN starts the timer, PERIODIC makes it reload and expire
@@ -43,8 +48,9 @@
 #define  RTL9602C_TIMER_IRQ_EN		BIT(20)
 #define  RTL9602C_TIMER_IRQ_PENDING		BIT(16)
 
-/* Timer 0 drives the tick. */
+/* Timer 0 drives the tick, timer 1 the clock. */
 #define RTL9602C_TIMER_TICK_IDX		0
+#define RTL9602C_TIMER_CLOCK_IDX	1
 
 /*
  * The timers count the LX bus clock divided by RTL9602C_TIMER_DIVISOR,
@@ -55,21 +61,38 @@
 #define RTL9602C_TIMER_DIVISOR		1000
 #define RTL9602C_TIMER_HZ		(RTL9602C_LX_HZ / RTL9602C_TIMER_DIVISOR)
 
+/*
+ * The clock counts the LX bus clock divided by 2, 100 MHz (measured on this
+ * board); a divisor of 1 does not count. Its 28 bits wrap every 2.68 s.
+ */
+#define RTL9602C_TIMER_CLOCK_DIVISOR	2
+#define RTL9602C_TIMER_CLOCK_HZ		(RTL9602C_LX_HZ / RTL9602C_TIMER_CLOCK_DIVISOR)
+
 static void __iomem *timer_base;
+
+static void __iomem *timer_reg(unsigned int idx, unsigned int off)
+{
+	return timer_base + idx * RTL9602C_TIMER_STRIDE + off;
+}
 
 static void __iomem *tick_reg(unsigned int off)
 {
-	return timer_base + RTL9602C_TIMER_TICK_IDX * RTL9602C_TIMER_STRIDE + off;
+	return timer_reg(RTL9602C_TIMER_TICK_IDX, off);
 }
 
 /*
  * Stop counting, then clear an expiry left pending; writing the pending bit
  * alone also clears the interrupt enable.
  */
+static void rtl9602c_timer_stop(unsigned int idx)
+{
+	__raw_writel(0, timer_reg(idx, RTL9602C_TIMER_CTRL));
+	__raw_writel(RTL9602C_TIMER_IRQ_PENDING, timer_reg(idx, RTL9602C_TIMER_IRQ));
+}
+
 static void rtl9602c_tick_stop(void)
 {
-	__raw_writel(0, tick_reg(RTL9602C_TIMER_CTRL));
-	__raw_writel(RTL9602C_TIMER_IRQ_PENDING, tick_reg(RTL9602C_TIMER_IRQ));
+	rtl9602c_timer_stop(RTL9602C_TIMER_TICK_IDX);
 }
 
 /*
@@ -129,16 +152,58 @@ static irqreturn_t rtl9602c_timer_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static u64 notrace rtl9602c_clock_count(void)
+{
+	return __raw_readl(timer_reg(RTL9602C_TIMER_CLOCK_IDX, RTL9602C_TIMER_COUNT));
+}
+
+static u64 rtl9602c_clocksource_read(struct clocksource *cs)
+{
+	return rtl9602c_clock_count();
+}
+
+static struct clocksource rtl9602c_clocksource = {
+	.name	= "rtl9602c-tc1",
+	.rating	= 300,
+	.read	= rtl9602c_clocksource_read,
+	.mask	= CLOCKSOURCE_MASK(RTL9602C_TIMER_BITS),
+	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
+};
+
+/*
+ * Timer 1 free-running from 0 through its whole range, its interrupt off: the
+ * reload value, which also sets the count to 0, then the divisor while the
+ * timer is stopped, and the start last. It then serves as the clocksource and
+ * as sched_clock.
+ */
+static void __init rtl9602c_clock_init(void)
+{
+	unsigned int idx = RTL9602C_TIMER_CLOCK_IDX;
+
+	rtl9602c_timer_stop(idx);
+	__raw_writel(RTL9602C_TIMER_RELOAD_MAX, timer_reg(idx, RTL9602C_TIMER_RELOAD));
+	__raw_writel(RTL9602C_TIMER_CLOCK_DIVISOR, timer_reg(idx, RTL9602C_TIMER_CTRL));
+	__raw_writel(RTL9602C_TIMER_CLOCK_DIVISOR | RTL9602C_TIMER_CTRL_EN |
+		     RTL9602C_TIMER_CTRL_PERIODIC,
+		     timer_reg(idx, RTL9602C_TIMER_CTRL));
+
+	if (clocksource_register_hz(&rtl9602c_clocksource, RTL9602C_TIMER_CLOCK_HZ))
+		pr_err("rtl9602c: cannot register the clocksource\n");
+	sched_clock_register(rtl9602c_clock_count, RTL9602C_TIMER_BITS,
+			     RTL9602C_TIMER_CLOCK_HZ);
+}
+
 /**
- * plat_time_init() - set up the tick
+ * plat_time_init() - set up the tick and the clock
  *
  * Stops timer 0, clearing whatever it was doing before the kernel, and
  * registers it as a clockevent at 200 kHz; the clockevents core then
  * switches it to periodic mode, which starts it. The delta limits, 0x100 to
  * 0xffffff, matter only in one-shot mode, which the device lacks; the
- * counter's width behind 0xffffff is not verified. Requesting the interrupt
+ * counter itself is 28 bits wide. Requesting the interrupt
  * last enables timer 0's source, and with the way to the upper sources
- * already open the tick reaches the CPU.
+ * already open the tick reaches the CPU. Timer 1 becomes the clock before
+ * the tick starts (rtl9602c_clock_init()).
  */
 void __init plat_time_init(void)
 {
@@ -148,6 +213,7 @@ void __init plat_time_init(void)
 	timer_base = (void __iomem *)KSEG1ADDR(RTL9602C_TIMER_BASE);
 
 	rtl9602c_tick_stop();
+	rtl9602c_clock_init();
 
 	rtl9602c_clockevent.cpumask = cpumask_of(0);
 	clockevents_config_and_register(&rtl9602c_clockevent, RTL9602C_TIMER_HZ,

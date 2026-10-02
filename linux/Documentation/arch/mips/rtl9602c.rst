@@ -158,7 +158,7 @@ Where the code is
    * - Platform code
      - ``arch/mips/rtl9602c/setup.c`` (setup, restart, console UART
        registration, write-buffer flush); ``irq.c`` (interrupt controller);
-       ``timer.c`` (tick); ``early_printk.c`` (early console); ``Makefile``;
+       ``timer.c`` (tick and clock); ``early_printk.c`` (early console); ``Makefile``;
        ``Platform`` (load address);
        ``arch/mips/include/asm/mach-rtl9602c/rtl9602c.h``;
        ``arch/mips/Kbuild.platforms``
@@ -296,12 +296,12 @@ The kernel log of every boot names the core::
        ``MIPS_CPU_LLSC``, and a MIPS I core has none of the MIPS32 release 2
        features. Consequences the kernel relies on: atomic operations are made
        by disabling interrupts, never with ``ll`` and ``sc``; the CP0 counter is
-       not used, so the tick comes from the SoC timer (see "Timers and the
-       tick"); the exception base is fixed.
+       not used, so the tick and the clock come from the SoC timers (see
+       "Timers and the tick"); the exception base is fixed.
      - T
-     - The board boots to a shell; ``dmesg`` names ``jiffies`` as the only
-       clocksource and shows ``sched_clock: 32 bits at 250 Hz`` (the
-       jiffies-based one).
+     - The board boots to a shell; ``dmesg`` shows ``Switched to clocksource
+       rtl9602c-tc1`` and ``sched_clock: 28 bits at 100MHz, resolution
+       10ns``.
    * - ``MIPS_CPU_3K_CACHE`` selects the R3000 cache code in
        ``cpu_cache_init()``, where the ``CPU_LEXRA_CACHE`` branch comes first
        (see "Caches"), so it selects nothing there on this platform.
@@ -737,7 +737,7 @@ architecture code calls. In the order in which the kernel reaches them:
    below).
 5. ``cpu_cache_init()`` calls ``lexra_cache_init()`` (see "Caches").
 6. ``arch_init_irq()`` (``irq.c``) sets up the interrupt controller.
-7. ``plat_time_init()`` (``timer.c``) sets up the tick.
+7. ``plat_time_init()`` (``timer.c``) sets up the clock and the tick.
 8. ``rtl9602c_populate_dt()`` (``arch_initcall``) creates the devices of the
    tree.
 9. The drivers probe at ``device_initcall`` time; the watchdog driver arms the
@@ -1068,10 +1068,11 @@ Timers and the tick
 MIPS I defines no CP0 Count and Compare registers, and the kernel uses none on
 this core. The tick comes from general-purpose timer 0 of the SoC, a periodic
 clockevent (``rtl9602c-tc0``) that counts the LX bus clock divided by 1000 and
-expires once per jiffy. There is no one-shot mode and no clocksource, so the
-kernel runs a periodic tick with jiffies as its clock. The boot loader leaves
-timer 1 running; the kernel neither uses nor stops it, and its interrupt stays
-disabled.
+expires once per jiffy. There is no one-shot mode, so the kernel runs a
+periodic tick. The clock comes from timer 1, which the boot loader leaves
+running: the kernel sets it free-running at 100 MHz over its whole 28-bit
+range, with its interrupt disabled, and registers its count as the clocksource
+``rtl9602c-tc1`` and as sched_clock, with a resolution of 10 ns.
 
 .. list-table::
    :header-rows: 1
@@ -1084,8 +1085,8 @@ disabled.
      - ``RTL9602C_TIMER_RELOAD``
      - Counts per period.
    * - ``+0x04``
-     - (current count)
-     - Unused.
+     - ``RTL9602C_TIMER_COUNT``
+     - The count, from 0 up to the reload value; the clock reads timer 1's.
    * - ``+0x08``
      - ``RTL9602C_TIMER_CTRL``
      - Bit 28 ``RTL9602C_TIMER_CTRL_EN`` starts the timer; bit 24
@@ -1109,9 +1110,9 @@ Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
      - Checked by
    * - ``RTL9602C_TIMER_BASE`` (``0x18003200``) holds general-purpose timers
        ``RTL9602C_TIMER_STRIDE`` (``0x10``) apart. Per timer:
-       ``RTL9602C_TIMER_RELOAD`` (``+0x00``, counts per period), a current count
-       at ``+0x04`` (unused), ``RTL9602C_TIMER_CTRL`` (``+0x08``),
-       ``RTL9602C_TIMER_IRQ`` (``+0x0c``).
+       ``RTL9602C_TIMER_RELOAD`` (``+0x00``, counts per period),
+       ``RTL9602C_TIMER_COUNT`` (``+0x04``), ``RTL9602C_TIMER_CTRL``
+       (``+0x08``), ``RTL9602C_TIMER_IRQ`` (``+0x0c``).
      - M
      - At the boot loader prompt timer 1 (``+0x10``) is running with control
        ``0x11000032``; timer 0 driven by hand with the driver's values counts
@@ -1125,8 +1126,24 @@ Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
        reload register ``0x320`` (800).
    * - The width of the divisor field.
      - I
-     - 1000 (10 bits) works; the upper limit is not established. Writing larger
-       divisors and timing the period would show.
+     - 1000 (10 bits) and 2 work, 1 does not count; the upper limit is not
+       established. Writing larger divisors and timing the period would show.
+   * - ``RTL9602C_TIMER_COUNT`` counts up from 0 to the reload value, 28 bits
+       wide like the reload register (``RTL9602C_TIMER_BITS``,
+       ``RTL9602C_TIMER_RELOAD_MAX``); writing the reload register sets the
+       count to 0. The boot loader leaves timer 1 counting with reload
+       ``0x0fffffff``.
+     - M
+     - Through the kernel, on timer 1: all ones written to the reload register
+       read back ``0x0fffffff``; the count read 0 right after it and then rose
+       between reads, 1,998,289 in 20 ms at divisor 2; as the boot loader left
+       it, two reads in a row rose by 2.
+   * - Timer 1 at divisor 2 counts at 100 MHz, the LX bus clock halved, and
+       divides by its divisor exactly: the clock it gives kept time with an
+       outside clock.
+     - M
+     - 1,998,289 counts in a 20 ms delay; over 301.68 s of a host's clock the
+       stick's uptime advanced 301.69 s.
    * - ``RTL9602C_TIMER_IRQ_EN`` (bit 20) lets the timer raise its interrupt;
        ``RTL9602C_TIMER_IRQ_PENDING`` (bit 16) is set on expiry and cleared by
        writing 1 to it.
@@ -1142,11 +1159,11 @@ Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
        four settings matches 2^(25 + prescale) / 200 MHz within 10 ms; 252 tick
        interrupts arrive between two reads of ``/proc/interrupts`` one second
        apart.
-   * - Whether the timer divides by the divisor and the reload value exactly or
-       by one more.
+   * - Whether the timer divides by the reload value exactly or by one more:
+       the tick's period would be 800 or 801 counts.
      - I
-     - A 0.1 % difference; timing a long interval against an outside reference
-       would show.
+     - A 0.1 % difference in the tick rate, which no longer sets the time
+       (the clock does); timing 100,000 ticks against the clock would show.
    * - Timer 0 (``RTL9602C_TIMER_TICK_IDX``) drives the tick; its interrupt is
        source 43 (``RTL9602C_INTC_SRC_TIMER0``, Linux 51), which reaches the CPU
        only through the cascade.
@@ -1158,11 +1175,10 @@ Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
        the clockevents core warns about ``cpu_all_mask``), registered at 200 kHz
        with delta limits ``0x100``-``0xffffff``. The limits only matter in
        one-shot mode. The kernel therefore runs a periodic tick.
-     - M, I
-     - M: with ``cpu_all_mask`` the clockevents core warns; with
-       ``cpumask_of(0)`` it does not. I: the counter's width behind ``0xffffff``
-       is not established; it matters only for a one-shot mode the driver does
-       not have.
+     - M
+     - With ``cpu_all_mask`` the clockevents core warns; with ``cpumask_of(0)``
+       it does not. The counter is 28 bits wide (the rows above), which would
+       matter only for a one-shot mode.
    * - The interrupt handler writes the interrupt register back with the pending
        bit set (keeping the enable), then calls the clockevent handler. It does
        not check the source: ``irq.c`` calls it only when source 43 is pending
@@ -1191,15 +1207,20 @@ Starting the timer
 5. Write the control register with the divisor, ``RTL9602C_TIMER_CTRL_EN`` and
    ``RTL9602C_TIMER_CTRL_PERIODIC``. Purpose: start. (T)
 
-Setting up the tick
-~~~~~~~~~~~~~~~~~~~
+Setting up the clock and the tick
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. ``plat_time_init()`` maps the block and stops timer 0. Purpose: whatever
    timer 0 was doing before the kernel is cleared. (T)
-2. Register the clockevent. Purpose: the clockevents core switches it to
+2. ``rtl9602c_clock_init()``: stop timer 1, write ``RTL9602C_TIMER_RELOAD_MAX``
+   to its reload register, which sets the count to 0, write the divisor 2
+   while it is stopped, then start it periodic with its interrupt off; register
+   ``rtl9602c-tc1`` at 100 MHz, rating 300, and sched_clock over the same 28
+   bits. Purpose: a clock with a resolution of 10 ns instead of a jiffy. (M)
+3. Register the clockevent. Purpose: the clockevents core switches it to
    periodic mode, which starts it with ``RTL9602C_TIMER_HZ / HZ`` counts;
    shutdown stops it. (T)
-3. ``request_irq()`` on Linux interrupt 51 with ``IRQF_TIMER``. Purpose: it
+4. ``request_irq()`` on Linux interrupt 51 with ``IRQF_TIMER``. Purpose: it
    enables source 43; with the cascade already open the tick reaches the CPU.
    (T)
 
@@ -2501,7 +2522,7 @@ The commands of steps 3 and 5::
        growing size until one fails would show.
    * - What the boot loader leaves for the kernel: UART0 at 115200 baud with
        divisor 109; timer 1 running with control ``0x11000032``, which the
-       kernel neither uses nor stops (its interrupt stays disabled); the SerDes
+       kernel sets up again as its clock; the SerDes
        off unless the RAM boot's second step ran; the system controller's PON
        packet-buffer enable clear (``RTL9602C_SYSCTL_BLOCK_EN`` at ``+0x63c``
        reads ``0x10``); the watchdog disarmed unless a restart or a one-shot
@@ -2625,10 +2646,8 @@ About the platform code
      - A per-field sweep with source 12 enabled and a known-good source pending.
    * - The width of the timer's divisor field.
      - Writing larger divisors and timing the period.
-   * - Whether the timer divides by N or N + 1.
-     - Timing a long interval against an outside reference.
-   * - The width of the timer's counter.
-     - Only matters for a one-shot mode the driver does not have.
+   * - Whether the timer divides by its reload value or by one more.
+     - Timing 100,000 ticks against the clock.
    * - Whether halt and power off leave the board spinning quietly.
      - ``halt`` and ``poweroff`` on the board.
    * - Whether anything calls ``mb()`` before ``plat_mem_setup()``.
