@@ -150,7 +150,9 @@ static int rtl9602c_ptp_adjtime(struct ptp_clock_info *info, s64 delta)
 
 /*
  * With no absolute time register, setting the clock is a read followed by
- * a step of the difference.  The time between the two is not compensated.
+ * a step of the difference.  The time between the two passes on the clock
+ * as well, so what is lost is only the time from the caller's read of its
+ * own clock to this read, about 20 us on this board.
  */
 static int rtl9602c_ptp_settime(struct ptp_clock_info *info,
 				const struct timespec64 *ts)

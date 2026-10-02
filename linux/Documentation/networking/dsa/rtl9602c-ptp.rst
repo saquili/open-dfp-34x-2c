@@ -442,11 +442,18 @@ middle value, 2^27, the clock advances one second per second.
      - M
      - The -1.5 s step, the +2 s step and the settime of the neighbouring
        rows, read against ``CLOCK_MONOTONIC``.
-   * - settime is a read followed by a step of the difference; the time that
-       passes between the two is not compensated.
+   * - settime is a latch of the clock followed by a step of the difference,
+       so the time that passes between the two passes on the clock too: what
+       the clock lacks after a settime is only the time from the caller's read
+       of its own clock to the latch. Set to ``CLOCK_REALTIME``, the PHC stayed
+       about 20 microseconds behind it.
      - M
-     - Straight after a settime to 1,000,000 s the PHC read
-       1,000,000.000122 s.
+     - Three settimes from ``CLOCK_REALTIME``, each call taking about 30
+       microseconds, then ``PTP_SYS_OFFSET``: the PHC read 18.6 to 20.5
+       microseconds behind the system clock, and the same 10 s later. With the
+       clock of jiffies, before the system had a finer one, a read straight
+       after a settime had taken the 122 microseconds that elapsed until it for
+       an error of settime.
    * - ``RTL9602C_PTP_CLK_FREQ`` (``0x01b018``), field
        ``RTL9602C_PTP_CLK_FREQ_WORD`` (bits 27:0), reads ``0x8000000`` = 2^27,
        the middle of the field, on a board nothing has adjusted; the driver
@@ -1158,9 +1165,6 @@ Known limitations
   Other frames use that EtherType, among them the switch's loop-detection
   probes; one that reached the CPU would lose 16 bytes and gain a timestamp.
   Only protocol 4 has been seen at the CPU.
-- settime does not compensate the time that passes between its read and its
-  step: the PHC read 122 microseconds past the requested time straight after
-  one (see "The clock").
 
 Open questions
 ==============
