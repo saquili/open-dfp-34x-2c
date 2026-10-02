@@ -30,3 +30,10 @@ The runs, the oldest first:
     ways, router mode with a static WAN and with PPPoE and back, and the reset
     by the watchdog, on the RAM image built from ``run01``, on the lab
     OLT. 27 of 27 passed.
+
+``2026-10-02-run02``
+    The same cases on the RAM image built from ``run02``, which has the
+    fixes that the first run and the router-mode cases found: the WAN of router
+    mode answers the network side, translated frames follow the default
+    route's gateway, and the mode changes without restarting omcid. 27 of 27
+    passed.
