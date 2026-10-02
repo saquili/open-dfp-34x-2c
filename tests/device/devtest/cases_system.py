@@ -68,13 +68,16 @@ def filesystems(ctx: Context):
                        + ", ".join(f"{p} {k}" for p, k in memory.items()))
 
 
-@case("system.watchdog", "System", "The watchdog is there with its timeout")
+@case("system.watchdog", "System", "The watchdog runs, and the daemon of the boot feeds it")
 def watchdog(ctx: Context):
     base = "/sys/class/watchdog/watchdog0"
     identity = ctx.stick.text(f"cat {base}/identity")
     timeout = int(ctx.stick.text(f"cat {base}/timeout"))
     state = ctx.stick.text(f"cat {base}/state")
-    return verdict(timeout > 0, f"{identity}, timeout {timeout} s, {state}")
+    daemon = ctx.stick.run("pidof watchdog").out.strip()
+    return verdict(timeout > 0 and state == "active" and bool(daemon),
+                   f"{identity}, timeout {timeout} s, {state}, "
+                   f"daemon {'pid ' + daemon if daemon else 'not running'}")
 
 
 @case("system.watchdog-reset", "System",
@@ -83,8 +86,9 @@ def watchdog(ctx: Context):
 def watchdog_reset(ctx: Context):
     timeout = int(ctx.stick.text("cat /sys/class/watchdog/watchdog0/timeout"))
     boot = ctx.stick.text("cat /proc/sys/kernel/random/boot_id")
-    # Writing anything but the magic character and closing leaves it armed.
-    ctx.stick.run("echo armed > /dev/watchdog", timeout=10)
+    # The daemon stops feeding it; writing anything but the magic character
+    # and closing leaves it armed.
+    ctx.stick.run("killall watchdog; sleep 1; echo armed > /dev/watchdog", timeout=20)
     start = time.monotonic()
     while time.monotonic() - start < timeout + 120:
         time.sleep(5)
