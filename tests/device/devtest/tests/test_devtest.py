@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import unittest
@@ -126,6 +127,7 @@ PON = """pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3  OMCC 3
    alarms none  GEM ports 2  T-CONTs 1  serial number set (-s shows it)
     PLOAM messages             120
     bandwidth maps             80000
+    bandwidth map CRC errors   0
     T-CONT 0  Alloc-ID 1024
 """
 
@@ -148,6 +150,22 @@ class Cases(unittest.TestCase):
                          "LOS LOF")
         with self.assertRaises(ValueError):
             cases_pon.onu_state("pon  GPON")
+
+    def test_the_downstream_lock_needs_maps_without_errors(self):
+        def outcome(second):
+            ctx = context(stick=[("^pon$", 0, PON)])
+            reads = iter([PON, second])
+            real = cases_pon.pon, cases_pon.time.sleep
+            cases_pon.pon, cases_pon.time.sleep = (lambda _ctx: next(reads)), (lambda _s: None)
+            try:
+                return cases_pon.downstream(ctx)
+            finally:
+                cases_pon.pon, cases_pon.time.sleep = real
+        more = PON.replace("bandwidth maps             80000", "bandwidth maps             88000")
+        self.assertEqual(outcome(more).status, PASS)
+        self.assertEqual(outcome(PON).status, FAIL)
+        errors = more.replace("bandwidth map CRC errors   0", "bandwidth map CRC errors   2")
+        self.assertEqual(outcome(errors).status, FAIL)
 
     def test_activation_reads_the_state(self):
         ctx = context(stick=[("^pon$", 0, PON)])
@@ -216,6 +234,24 @@ class Cases(unittest.TestCase):
 
     def test_the_data_path_is_skipped_without_ports(self):
         self.assertEqual(cases_data.downstream(context()).status, SKIP)
+
+    def test_a_burst_that_never_left_the_bench_is_the_bench_s_fault(self):
+        trail: list[str] = []
+        settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+        stick = Canned("stick", [("dsa/tagging", 0, "cpu\n"), ("statistics", 0, "100\n"),
+                                 ("ethtool", 1, "")], trail)
+        bench = Canned("bench", [("command -v", 0, "/usr/bin/python3\n"),
+                                 ("python3 -", 0, "0.500000\n"),
+                                 ("address", 0, "00:00:5e:00:53:01\n"),
+                                 ("statistics", 0, "100\n")], trail)
+        cases_data.time.sleep, real = (lambda _s: None), cases_data.time.sleep
+        try:
+            outcome = cases_data.downstream(Context(settings, stick, bench, trail))
+        finally:
+            cases_data.time.sleep = real
+        self.assertEqual(outcome.status, FAIL)
+        self.assertEqual(outcome.evidence, "the bench: eth1 sent 0 of 400000 frames")
+        self.assertEqual(sum("python3 -" in c for c in bench.asked), 3)
 
 
 if __name__ == "__main__":

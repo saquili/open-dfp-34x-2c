@@ -38,18 +38,22 @@ def alarms(text: str) -> str:
 
 
 @case("gpon.downstream", "GPON",
-      "Downstream is locked: 8000 bandwidth maps a second and no alarm")
+      "Downstream is locked: bandwidth maps keep being accepted, none with a CRC error, "
+      "and no alarm")
 def downstream(ctx: Context):
+    # The MAC counts the maps it accepts, not every frame's map: the rate
+    # depends on the OLT, so the case asks that it is not zero.
     first = pon(ctx)
     start = time.monotonic()
     time.sleep(2)
     second = pon(ctx)
     maps = r"bandwidth maps\s+(\d+)"
+    crc = r"bandwidth map CRC errors\s+(\d+)"
     rate = (field(second, maps) - field(first, maps)) / (time.monotonic() - start)
+    errors = field(second, crc) - field(first, crc)
     now = alarms(second)
-    # The two reads are a round trip apart, so the rate is close to, not at, 8000.
-    return verdict(7000 < rate < 9000 and now == "none",
-                   f"{rate:.0f} bandwidth maps/s, alarms {now}")
+    return verdict(rate > 0 and errors == 0 and now == "none",
+                   f"{rate:.0f} bandwidth maps/s, {errors} with a CRC error, alarms {now}")
 
 
 @case("gpon.activation", "GPON", "The ONU is in O5, operation")

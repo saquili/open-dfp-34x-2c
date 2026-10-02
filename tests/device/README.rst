@@ -22,7 +22,7 @@ What it needs
   through which ssh reaches the stick (``ssh -J``). For the data path, the bench
   host is also both far ends: one port is the far end of the stick's host link
   (the subscriber side) and one port is behind the OLT (the network side). The
-  data-path cases use the kernel's packet generator (``modprobe pktgen``) and
+  data-path cases send their bursts from a raw socket, with ``python3`` and
   ``sudo`` without a password for it.
 * Python 3.11 or later and an ssh client on the machine that runs the tests;
   ``python3`` and ``curl`` on the bench host.
