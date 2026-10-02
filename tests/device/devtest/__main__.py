@@ -87,7 +87,8 @@ def main(argv: list[str] | None = None) -> int:
             "Source": f"{git('rev-parse', '--short=12', 'HEAD')}"
                       + (" with local changes" if git("status", "--porcelain") else ""),
             "Kernel": redact(ctx.stick.run("uname -rv").out.strip(), settings),
-            "Image": redact(ctx.stick.run(". /etc/os-release && echo $PRETTY_NAME")
+            "Image": redact(ctx.stick.run(". /etc/os-release && "
+                                          "echo \"$PRETTY_NAME, build ${BUILD_ID:-unknown}\"")
                             .out.strip(), settings),
         }
         title = args.title or f"Device tests of {started:%Y-%m-%d}"
