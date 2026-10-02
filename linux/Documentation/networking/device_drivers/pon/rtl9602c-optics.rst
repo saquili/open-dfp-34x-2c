@@ -73,8 +73,7 @@ Configuration
        (see "The read-only build").
    * - ``CONFIG_I2C``
      - The I2C core, which the optics code registers the master with. The
-       Kconfig entry of the switch driver does not depend on it (see "Known
-       limitations").
+       Kconfig entry of the switch driver depends on it.
    * - ``CONFIG_I2C_CHARDEV``
      - The ``/dev/i2c-N`` device files, which give user space the adapter.
    * - ``CONFIG_HWMON``
@@ -1177,11 +1176,6 @@ Known limitations
   ``02h`` to byte 127, and at the end it writes the old value back to byte 127:
   six byte writes. Whether the part skips rewriting a byte that already holds
   the value is not known, so the wear of the EEPROM is unmeasured.
-- The Kconfig entry of the switch driver, ``NET_DSA_RTL9602C``, neither depends
-  on nor selects ``I2C``, although the optics code calls the I2C core:
-  ``include/linux/i2c.h`` declares ``devm_i2c_add_adapter()`` only when
-  ``CONFIG_I2C`` is enabled. A configuration made by hand must enable
-  ``CONFIG_I2C``; ``rtl9602c_defconfig`` does.
 
 Open questions
 ==============

@@ -1151,10 +1151,6 @@ Known limitations
   the seconds and the nanoseconds. ``rtl9602c_defconfig`` does not name the
   clock, but the symbol follows ``CONFIG_ETHERNET``, so a kernel configured
   from the defconfig has the clock and the classification.
-- The driver's Kconfig entry has no dependency on
-  ``PTP_1588_CLOCK_OPTIONAL``. A configuration with PTP support as a module and
-  the driver built in is therefore accepted, and the driver's calls into the
-  PTP core cannot be linked in it.
 - The conduit takes every frame longer than 16 bytes that carries EtherType
   ``0x8899`` at offset 12 for a tagged PTP message, whatever its protocol byte.
   Other frames use that EtherType, among them the switch's loop-detection

@@ -2059,12 +2059,10 @@ Known limitations
   board, and the watchdog may not recover it. The driver never reads it before
   the build, and a tool that reads the window by address has to keep to the
   same rule.
-- The driver's Kconfig entry neither selects nor depends on ``CONFIG_I2C``,
-  which the optics' adapter needs, or on ``CONFIG_HWMON``, which the hwmon
-  device needs. The board's configuration has both, but a configuration
-  without ``CONFIG_I2C`` does not link, and one without ``CONFIG_HWMON``
-  registers no hwmon device; the diagnostics are then read through the ``a2``
-  debugfs view.
+- Without ``CONFIG_HWMON`` the driver registers no hwmon device, and the
+  diagnostics are read through the ``a2`` debugfs view. The driver's Kconfig
+  entry depends on ``I2C``, which the optics' adapter needs, and accepts
+  ``HWMON`` only built in when the driver is.
 
 Open questions
 ==============

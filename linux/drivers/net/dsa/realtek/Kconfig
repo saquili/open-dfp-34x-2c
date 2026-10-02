@@ -79,6 +79,9 @@ config NET_DSA_RTL9602C
 	tristate "Realtek RTL9602C switch"
 	depends on NET_DSA
 	depends on HAS_IOMEM
+	depends on I2C
+	depends on HWMON || HWMON=n
+	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on RTL9602C_ETH || !RTL9602C_ETH
 	select MFD_SYSCON
 	select NET_DSA_TAG_RTL9602C
