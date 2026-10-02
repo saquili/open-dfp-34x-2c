@@ -122,10 +122,11 @@ class Record(unittest.TestCase):
         self.assertIn("... 5 more lines", log([result]))
 
 
-GPON = """top   00000000
-ds    00000000  los 0 lof 0 lom 0 fec 0
-onu   00000005  id 3 state 5
-frame 00080000  superframes (8000/s when locked)
+PON = """pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3  OMCC 3
+   alarms none  GEM ports 2  T-CONTs 1  serial number set (-s shows it)
+    PLOAM messages             120
+    bandwidth maps             80000
+    T-CONT 0  Alloc-ID 1024
 """
 
 
@@ -139,17 +140,21 @@ class Cases(unittest.TestCase):
         bad = context(stick=[("grep -E", 0, "[ 1.0] WARNING: at x\n"), ("wc -l", 0, "312\n")])
         self.assertEqual(cases_system.log(bad).status, FAIL)
 
-    def test_the_gpon_fields_are_read(self):
-        self.assertEqual(cases_pon.gpon_field(GPON, "onu", "state"), 5)
-        self.assertEqual(cases_pon.gpon_field(GPON, "ds", "lof"), 0)
-        self.assertEqual(cases_pon.superframes(GPON), 80000)
+    def test_the_report_of_the_pon_tool_is_read(self):
+        self.assertEqual(cases_pon.onu_state(PON), 5)
+        self.assertEqual(cases_pon.field(PON, r"bandwidth maps\s+(\d+)"), 80000)
+        self.assertEqual(cases_pon.alarms(PON), "none")
+        self.assertEqual(cases_pon.alarms(PON.replace("alarms none", "alarms LOS LOF")),
+                         "LOS LOF")
         with self.assertRaises(ValueError):
-            cases_pon.gpon_field(GPON, "onu", "alloc")
+            cases_pon.onu_state("pon  GPON")
 
     def test_activation_reads_the_state(self):
-        ctx = context(stick=[("/proc/mounts", 0, ""), ("cat .*gpon", 0, GPON)])
+        ctx = context(stick=[("^pon$", 0, PON)])
         outcome = cases_pon.activation(ctx)
         self.assertEqual((outcome.status, outcome.evidence), (PASS, "O5, ONU-ID 3"))
+        ctx = context(stick=[("^pon$", 0, PON.replace("O5 operation", "O3 serial number"))])
+        self.assertEqual(cases_pon.activation(ctx).status, FAIL)
 
     def test_the_gem_ports_must_be_in_the_bridge_with_the_host_link(self):
         links = ("7: gem256@pon: <BROADCAST,UP> mtu 1500\n"

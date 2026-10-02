@@ -11,49 +11,52 @@ import time
 
 from .core import Context, case, failed, passed, verdict
 
-DEBUGFS = "/sys/kernel/debug"
+def pon(ctx: Context) -> str:
+    """What the pon tool reports of the PON device and its ONU."""
+    return ctx.stick.text("pon")
 
 
-def debugfs(ctx: Context, name: str) -> str:
-    if not ctx.memo.get("debugfs"):
-        ctx.stick.run(f"grep -q ' {DEBUGFS} ' /proc/mounts || "
-                      f"mount -t debugfs debugfs {DEBUGFS}", check=True)
-        ctx.memo["debugfs"] = True
-    return ctx.stick.text(f"cat {DEBUGFS}/{name}")
-
-
-def gpon_field(text: str, line: str, field: str) -> int:
-    match = re.search(rf"^{line}\b.*?\b{field} (\d+)", text, re.M)
+def onu_state(text: str) -> int:
+    match = re.search(r"\bO([1-7]) [a-z]", text)
     if not match:
-        raise ValueError(f"no {field} on the {line} line")
+        raise ValueError("no ONU state in the report")
     return int(match.group(1))
 
 
-def superframes(text: str) -> int:
-    match = re.search(r"^frame (\d+)", text, re.M)
+def field(text: str, pattern: str) -> int:
+    match = re.search(pattern, text)
     if not match:
-        raise ValueError("no frame line")
+        raise ValueError(f"no {pattern!r} in the report")
     return int(match.group(1))
 
 
-@case("gpon.downstream", "GPON", "Downstream is locked: 8000 superframes a second, no LOS or LOF")
+def alarms(text: str) -> str:
+    match = re.search(r"\balarms ([A-Za-z0-9 x]+?)(?:  |$)", text, re.M)
+    if not match:
+        raise ValueError("no alarms in the report")
+    return match.group(1).strip()
+
+
+@case("gpon.downstream", "GPON",
+      "Downstream is locked: 8000 bandwidth maps a second and no alarm")
 def downstream(ctx: Context):
-    first = debugfs(ctx, "rtl9602c/gpon")
+    first = pon(ctx)
     start = time.monotonic()
     time.sleep(2)
-    second = debugfs(ctx, "rtl9602c/gpon")
-    rate = (superframes(second) - superframes(first)) / (time.monotonic() - start)
-    los, lof = gpon_field(second, "ds", "los"), gpon_field(second, "ds", "lof")
+    second = pon(ctx)
+    maps = r"bandwidth maps\s+(\d+)"
+    rate = (field(second, maps) - field(first, maps)) / (time.monotonic() - start)
+    now = alarms(second)
     # The two reads are a round trip apart, so the rate is close to, not at, 8000.
-    return verdict(7000 < rate < 9000 and not los and not lof,
-                   f"{rate:.0f} superframes/s, los {los}, lof {lof}")
+    return verdict(7000 < rate < 9000 and now == "none",
+                   f"{rate:.0f} bandwidth maps/s, alarms {now}")
 
 
 @case("gpon.activation", "GPON", "The ONU is in O5, operation")
 def activation(ctx: Context):
-    text = debugfs(ctx, "rtl9602c/gpon")
-    state = gpon_field(text, "onu", "state")
-    onu_id = gpon_field(text, "onu", "id")
+    text = pon(ctx)
+    state = onu_state(text)
+    onu_id = field(text, r"ONU-ID (\d+)")
     return verdict(state == 5, f"O{state}, ONU-ID {onu_id}")
 
 
@@ -61,7 +64,7 @@ def activation(ctx: Context):
 def stable(ctx: Context):
     seen = []
     for _ in range(12):
-        seen.append(gpon_field(debugfs(ctx, "rtl9602c/gpon"), "onu", "state"))
+        seen.append(onu_state(pon(ctx)))
         time.sleep(5)
     left = [s for s in seen if s != 5]
     return verdict(not left, f"{len(seen)} reads 5 s apart: "

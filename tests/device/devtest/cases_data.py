@@ -132,10 +132,10 @@ def downstream(ctx: Context):
 def upstream(ctx: Context):
     if (skip := needs(ctx)):
         return skip
-    from .cases_pon import debugfs, gpon_field
+    from .cases_pon import onu_state, pon
     sent, arrived, cpu, seconds, rate, hw = measure(ctx, ctx.settings.subscriber_port,
                                                     ctx.settings.olt_port, "sfp", "pon")
-    state = gpon_field(debugfs(ctx, "rtl9602c/gpon"), "onu", "state")
+    state = onu_state(pon(ctx))
     if arrived == 0:
         return failed(f"{sent} frames sent, none arrived; ONU O{state}")
     ok = cpu < sent * 0.01 and state == 5
