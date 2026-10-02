@@ -132,8 +132,8 @@ GPIO 13, active high, is the laser driver's disable input is not verified (see
 "TX_DISABLE").
 
 There is no node for the I2C master or for the laser driver. The driver
-registers the adapter with the switch's node, and the devices at ``0x50`` and
-``0x51`` are not described. The GPIO controller, ``gpio@18003300`` (compatible
+registers the adapter without a node, and the devices at ``0x50`` and ``0x51``
+are not described. The GPIO controller, ``gpio@18003300`` (compatible
 ``realtek,rtl9602c-gpio`` and ``realtek,otto-gpio``), and the pad-function
 registers are described in Documentation/arch/mips/rtl9602c.rst.
 
@@ -1179,12 +1179,6 @@ Known limitations
   the value is not known, so the wear of the EEPROM is unmeasured.
 - The ``a2`` view prints a temperature between -1 and 0 degC without its minus
   sign.
-- Registering the adapter logs two error lines at every boot. The adapter takes
-  the switch's device tree node, so the I2C core takes the node's ``ports``
-  child for an I2C device and logs ``of_i2c: modalias failure on`` and
-  ``Failed to create I2C device for`` followed by the path of that node. Neither
-  line concerns the laser driver. The board's device tree and its note on the
-  lines are described in Documentation/arch/mips/rtl9602c.rst.
 - The Kconfig entry of the switch driver, ``NET_DSA_RTL9602C``, neither depends
   on nor selects ``I2C``, although the optics code calls the I2C core:
   ``include/linux/i2c.h`` declares ``devm_i2c_add_adapter()`` only when

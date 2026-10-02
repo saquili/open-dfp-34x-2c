@@ -207,11 +207,12 @@ int rtl9602c_i2c_register(struct rtl9602c_priv *p)
 	p->i2c.algo = &rtl9602c_i2c_algo;
 	p->i2c.dev.parent = p->dev;
 	/*
-	 * The adapter takes the switch's node, so the I2C core also treats the
-	 * node's children as I2C devices; the ports node is not one, and each
-	 * registration logs that no I2C device could be created for it.
+	 * The adapter has no device tree node. The switch's would make the I2C
+	 * core treat the node's children as I2C devices, and the ports node is
+	 * not one: it would log that no I2C device could be created for it. No
+	 * node refers to the adapter, and the devices at 0x50 and 0x51 are not
+	 * described.
 	 */
-	p->i2c.dev.of_node = p->dev->of_node;
 	i2c_set_adapdata(&p->i2c, p);
 	strscpy(p->i2c.name, "rtl9602c i2c", sizeof(p->i2c.name));
 	return devm_i2c_add_adapter(p->dev, &p->i2c);

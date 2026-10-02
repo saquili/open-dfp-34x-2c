@@ -2273,13 +2273,6 @@ the rest are here.
      - T
      - Downstream lock, time to O5 and hold time on an OLT.
 
-.. note::
-
-   The switch driver registers its I2C adapter with the switch's own node, so
-   the I2C core tries to instantiate the node's ``ports`` child as an I2C device
-   and logs ``of_i2c: modalias failure on /soc/switch@1b000000/ports`` and
-   ``Failed to create I2C device`` on every boot.
-
 The switch's ports
 ~~~~~~~~~~~~~~~~~~
 

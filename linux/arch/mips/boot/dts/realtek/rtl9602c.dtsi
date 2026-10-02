@@ -161,11 +161,6 @@
 			/*
 			 * Port 1 exists in the silicon and is left out:
 			 * nothing on this board is known to connect to it.
-			 *
-			 * Note: the switch driver registers its I2C adapter
-			 * with the switch node, so the I2C core also takes
-			 * this node for an I2C device and logs that it cannot
-			 * create one.
 			 */
 			ports {
 				#address-cells = <1>;
