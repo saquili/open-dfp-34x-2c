@@ -3129,7 +3129,8 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
  * an earlier address, and becomes an external address with next hop 0, where a
  * translated source is looked up. An address removed gives its external-address
  * row back, and rewrites the interface row with one that remains, or clears it.
- * A later MTU change is not written.
+ * A later change of the MAC address or the MTU is written by
+ * rtl9602c_l34_netdev_event().
  */
 static int rtl9602c_l34_inetaddr_event(struct notifier_block *nb,
 				       unsigned long event, void *ptr)
@@ -4655,14 +4656,60 @@ static void rtl9602c_l34_q_drain(struct rtl9602c_priv *p)
 	}
 }
 
+/*
+ * The netdevice notifier: a device that holds an L3-interface row has the row
+ * written again when its MAC address or its MTU changes, with its first IPv4
+ * address, so that the engine rewrites routed frames with the device's
+ * current MAC address and keeps to its current MTU.
+ */
+static int rtl9602c_l34_netdev_event(struct notifier_block *nb,
+				     unsigned long event, void *ptr)
+{
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
+	struct rtl9602c_priv *p;
+	const struct in_ifaddr *ifa;
+	struct in_device *in_dev;
+	unsigned int i;
+
+	p = container_of(nb, struct rtl9602c_priv, l34_netdev_nb);
+	if (event != NETDEV_CHANGEMTU && event != NETDEV_CHANGEADDR)
+		return NOTIFY_DONE;
+	if (!p->l34_up)
+		return NOTIFY_DONE;
+
+	in_dev = __in_dev_get_rtnl(dev);
+	ifa = in_dev ? rtnl_dereference(in_dev->ifa_list) : NULL;
+	if (!ifa)
+		return NOTIFY_DONE;
+
+	mutex_lock(&p->flow_lock);
+	for (i = 0; i < ARRAY_SIZE(p->l34_netif_ifindex); i++) {
+		if (p->l34_netif_ifindex[i] != dev->ifindex)
+			continue;
+		if (rtl9602c_l34_netif_set(p, i, dev->dev_addr,
+					   is_vlan_dev(dev) ?
+					   vlan_dev_vlan_id(dev) : 0,
+					   ifa->ifa_address, dev->mtu))
+			pr_warn("<l3> l3if[%u] for %s did not take its new %s\n",
+				i, dev->name,
+				event == NETDEV_CHANGEMTU ? "MTU" : "address");
+		else
+			pr_debug("<l3> %s: l3if[%u] now %pM mtu %u\n",
+				 dev->name, i, dev->dev_addr, dev->mtu);
+	}
+	mutex_unlock(&p->flow_lock);
+	return NOTIFY_DONE;
+}
+
 /**
  * rtl9602c_l34_notifiers_register() - follow addresses, neighbours and routes
  * @p: the switch
  *
- * Registers the address notifier, then the neighbour notifier, then the route
- * notifier: registering that one replays every route the kernel holds, and a
- * route resolves against the rows the other two write. A notifier that fails to
- * register is reported, and the switch comes up without it.
+ * Registers the address notifier and the netdevice notifier, then the
+ * neighbour notifier, then the route notifier: registering that one replays
+ * every route the kernel holds, and a route resolves against the rows the
+ * others write. A notifier that fails to register is reported, and the switch
+ * comes up without it.
  */
 void rtl9602c_l34_notifiers_register(struct rtl9602c_priv *p)
 {
@@ -4674,6 +4721,12 @@ void rtl9602c_l34_notifiers_register(struct rtl9602c_priv *p)
 	if (register_inetaddr_notifier(&p->l34_inetaddr_nb)) {
 		pr_err("no address notifier; L3 interfaces must be written by hand\n");
 		p->l34_inetaddr_nb.notifier_call = NULL;
+	}
+
+	p->l34_netdev_nb.notifier_call = rtl9602c_l34_netdev_event;
+	if (register_netdevice_notifier(&p->l34_netdev_nb)) {
+		pr_err("no netdevice notifier; a changed MAC address or MTU is not written\n");
+		p->l34_netdev_nb.notifier_call = NULL;
 	}
 
 	p->l34_netevent_nb.notifier_call = rtl9602c_l34_netevent;
@@ -4704,6 +4757,8 @@ void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p)
 {
 	if (p->l34_inetaddr_nb.notifier_call)
 		unregister_inetaddr_notifier(&p->l34_inetaddr_nb);
+	if (p->l34_netdev_nb.notifier_call)
+		unregister_netdevice_notifier(&p->l34_netdev_nb);
 	if (p->l34_netevent_nb.notifier_call)
 		unregister_netevent_notifier(&p->l34_netevent_nb);
 	if (p->l34_fib_nb.notifier_call)

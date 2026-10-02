@@ -2302,6 +2302,11 @@ struct rtl9602c_priv {
 	unsigned int l34_us_refs;
 	/** @l34_inetaddr_nb: the IPv4 address notifier */
 	struct notifier_block l34_inetaddr_nb;
+	/**
+	 * @l34_netdev_nb: the netdevice notifier, for the MAC address and the
+	 * MTU of a device that holds an L3-interface row
+	 */
+	struct notifier_block l34_netdev_nb;
 
 	/** @l34_netevent_nb: the neighbour notifier */
 	struct notifier_block l34_netevent_nb;

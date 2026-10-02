@@ -1259,9 +1259,9 @@ row for each netdev, and a PPPoE WAN takes one (see "The address notifier" and
      - T
      - A routing test and a PPPoE test.
    * - ``RTL9602C_L3IF_MTU`` (78:65, 14 bits) is an MTU for the interface. The
-       driver writes the netdev's MTU when the address is added (a later MTU
-       change is not written); for a PPPoE WAN, the egress device's MTU less 8
-       (see "The PPPoE encapsulation path").
+       driver writes the netdev's MTU when the address is added, and again when
+       the MTU changes; for a PPPoE WAN, the egress device's MTU less 8 (see
+       "The PPPoE encapsulation path").
      - M
      - The ``l3nat`` L3-interface row of a PPPoE WAN reads MTU 1492.
    * - Whether and how the engine enforces the row's MTU, for example by handing
@@ -1972,7 +1972,10 @@ The address notifier
        second address replaces the first in the row. ``DOWN`` gives back the
        address's external-address row, then rewrites the interface row with an
        address that remains, or clears it. Then the route table is committed
-       again, since a directly attached route names the row.
+       again, since a directly attached route names the row. A netdevice
+       notifier writes the row again, with the device's first address, when
+       its MAC address or its MTU changes (``NETDEV_CHANGEADDR``,
+       ``NETDEV_CHANGEMTU``).
      - T, I
      - A routing test, and the route rows following ``ip route``: ``ip address
        add`` and ``ip address del`` change the ``l3nat`` L3-interface row of the
@@ -2813,9 +2816,6 @@ Known limitations
   that only one routed GEM port can be offloaded. Removing the GEM port itself
   forgets the flow but does not reset the count, so the next flow to be claimed
   is never given up either. Reloading the driver clears the count.
-- The L3-interface row of a device is written when an address is added, with the
-  device's MAC address and MTU at that moment. A later change of the MAC address
-  or of the MTU is not written.
 - Next-hop row 0 is given to whichever neighbour on the PON port resolves first
   while the row is free, and the driver does not check that it is the uplink's
   gateway. The external-address rows that the address notifier writes name
