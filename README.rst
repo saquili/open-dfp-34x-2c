@@ -43,24 +43,21 @@ board's device tree, builds the documentation and runs ``checkpatch.pl`` over
 every commit of the series. The kernel has been started from RAM on the
 stick, where it brings the GPON link up against a laboratory OLT, exchanges
 OMCI frames and passes the laboratory tests of the switch's hardware paths
-(bridging, routing with address translation, PPPoE and shaping). Running on
-an operator's line is not tested yet. The bench for bring-up and flashing
-(``tools/bench``), the instruction-set gate for
+(bridging, routing with address translation, PPPoE and shaping). Starting it
+from flash and running on an operator's line are not tested yet. The bench
+for bring-up and flashing (``tools/bench``), the instruction-set gate for
 target binaries (``tools/isa-gate``) and the first pages of the handbook
 (``docs/handbook``) are in place. The distribution build makes the two flash
 images of the stick from source: ``buildroot/`` pins the build system and carries
 the patch that adds the MIPS I variant, and ``br2-external/`` builds the cross
 toolchain, the kernel and a root filesystem of BusyBox, dropbear and a boot
 script, every program static, with checks of its own
-(``br2-external/README.rst``, ``docs/handbook/building.rst``). Both images
-fit their partitions, and the build fails if either does not: the kernel in the
-flash is the board's configuration less seven options that the product does not
-use (the flash profile), and the build checks the kernel's final configuration
-against the options the product needs. The images have been written to the
-stick with the bench and start from its flash, from the boot loader's own
-countdown, to a shell and an ssh server. The userspace beyond them, the OMCI
-daemon first, is populated by later work items; each top-level directory still
-waiting for its component carries a short README naming it.
+(``br2-external/README.rst``, ``docs/handbook/building.rst``). The root
+filesystem image fits its partition; the kernel image does not yet, and has to be
+slimmed before it can be written to flash. The images have not been started on the
+board. The userspace beyond them, the OMCI daemon first, is populated by later
+work items; each top-level directory still waiting for its component carries a
+short README naming it.
 
 Building
 ========
