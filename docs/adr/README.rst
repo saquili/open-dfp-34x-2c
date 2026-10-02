@@ -45,3 +45,6 @@ record.
    * - 0009
      - Register macros take the driver's prefix
      - Accepted
+   * - 0010
+     - Target executables are linked statically
+     - Proposed
