@@ -61,9 +61,9 @@ What the driver offers
 - Hardware receive timestamps, in the form the switch provides them: a PTP
   message that the switch sends to the CPU port arrives on the user port it
   came in by, with the time of the clock at the frame as its hardware
-  timestamp. One receive filter is offered,
-  ``HWTSTAMP_FILTER_PTP_V2_EVENT``. A Sync over Ethernet is the only message
-  seen stamped.
+  timestamp. The receive filters are the layer-2 PTP version 2 ones, all
+  answered as ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``. A Sync over Ethernet is the
+  only message seen stamped.
 - No hardware transmit timestamps. The switch produces no departure time for a
   PTP message that the CPU sends.
 - Debugfs views of registers that the driver does not use for timestamping:
@@ -140,7 +140,8 @@ name is prefixed ``rtl9602c_``. DSA calls them for the user ports ``sfp`` and
      - Reports the timestamping capabilities of a port: software transmit and
        receive stamping, hardware receive stamping, raw hardware stamps, the
        PHC index (-1 when no clock is registered), the transmit type off and
-       the receive filters none and ``HWTSTAMP_FILTER_PTP_V2_EVENT``.
+       the receive filters none, ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``,
+       ``_L2_SYNC`` and ``_L2_DELAY_REQ``.
      - "Transmit timestamps"
    * - ``port_hwtstamp_get``
      - Returns the configuration last set on the port. It is all zero, no
@@ -564,7 +565,9 @@ To watch the pulses count (``ptp0`` stands for the index that
    * - The driver enables the source only while the PTP core has PPS enabled
        (request ``PTP_CLK_REQ_PPS``; any other request returns
        ``-EOPNOTSUPP``), since an enabled source with no consumer is one
-       interrupt a second for nothing. Each pulse is counted (``ptpstat``:
+       interrupt a second for nothing. It clears the source's latch before it
+       enables it, so that the first event is the next pulse and not one from
+       while the source was off. Each pulse is counted (``ptpstat``:
        ``pulses``; ``armed`` shows the enable bit), reported with
        ``ptp_clock_event(PTP_CLOCK_PPS)`` and acknowledged by writing its bit
        back to ``RTL9602C_IRQ_PENDING``. The clock declares one PPS source and
@@ -572,7 +575,9 @@ To watch the pulses count (``ptp0`` stands for the index that
        pulse out of the chip.
      - M
      - Six counts in five seconds (the first row), each pulse acknowledged
-       rather than a continuous stream.
+       rather than a continuous stream. With PPS enabled after three seconds
+       off, ``pulses`` did not move at once in five tries of five; without the
+       clearing it rose at once in five of five, from the latched pulse.
    * - The pulse falls on the PTP clock's second boundary and moves with its
        steps and frequency changes; this is what a PPS event means to its
        consumers.
@@ -735,19 +740,25 @@ The filter
    * - Fact
      - Tag
      - Checked by
-   * - The driver offers the receive filter
-       ``HWTSTAMP_FILTER_PTP_V2_EVENT``, reports a request for
-       ``HWTSTAMP_FILTER_ALL``, or for the layer-2 event, Sync or Delay_Req
-       filters (``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``, ``_L2_SYNC`` and
-       ``_L2_DELAY_REQ``), as that filter, and answers any other request
-       except ``HWTSTAMP_FILTER_NONE`` with ``-ERANGE``. The filter promises
-       every event message (IEEE 1588-2008 6.4: Sync, Delay_Req, Pdelay_Req,
-       Pdelay_Resp) over Ethernet and over UDP (Annexes D and E). Only Sync
-       over Ethernet has been seen tagged.
+   * - The driver answers a request for the layer-2 event, Sync or Delay_Req
+       filter (``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``, ``_L2_SYNC`` and
+       ``_L2_DELAY_REQ``) with ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``, takes
+       ``HWTSTAMP_FILTER_NONE``, and refuses any other request, every frame
+       and UDP included, with ``-ERANGE``: a filter may be widened, not
+       narrowed. The filter promises every event message over Ethernet (IEEE
+       1588-2008 6.4: Sync, Delay_Req, Pdelay_Req, Pdelay_Resp; Annex F). Only
+       Sync over Ethernet has been seen tagged.
      - I
-     - Sending each event message over Ethernet, and a Sync over UDP to port
-       319, from the host, and checking ``SO_TIMESTAMPING`` for each, would
-       settle it. Load-bearing for the filter the driver advertises.
+     - Sending each event message over Ethernet from the host and checking
+       ``SO_TIMESTAMPING`` for each would settle it. Load-bearing for the
+       filter the driver advertises.
+   * - The switch tags its PTP messages whatever the filter, so under
+       ``HWTSTAMP_FILTER_NONE`` ``rtl9602c_port_rxtstamp()`` takes the stamp
+       off the frame, and a port that nothing has configured delivers none.
+     - T
+     - Syncs from the host to the PTP group address, received on ``sfp``
+       through a packet socket with ``SO_TIMESTAMPING``, carried no hardware
+       timestamp under the filter none and one under the layer-2 filter.
 
 The receive capture register
 ----------------------------
@@ -1119,19 +1130,18 @@ Known limitations
   it receives but cannot time its own Delay_Req, which the delay
   request-response mechanism needs: it can listen, not synchronise (see
   "Transmit timestamps").
-- The receive filter is answered as follows. A request for
-  ``HWTSTAMP_FILTER_ALL``, or for the layer-2 event, Sync or Delay_Req filter,
-  is accepted and reported back as ``HWTSTAMP_FILTER_PTP_V2_EVENT``. A request
-  for ``HWTSTAMP_FILTER_NONE`` is accepted. Any other request is refused with
-  ``-ERANGE`` and leaves the port's configuration as it was: the PTP version 1
-  filters, the UDP filters (``HWTSTAMP_FILTER_PTP_V2_L4_EVENT`` among them),
-  the any-layer Sync and Delay_Req filters (``HWTSTAMP_FILTER_PTP_V2_SYNC`` and
-  ``HWTSTAMP_FILTER_PTP_V2_DELAY_REQ``) and ``HWTSTAMP_FILTER_NTP_ALL``. The
-  configuration is only recorded: the switch tags every PTP message it sends to
-  the CPU whatever the filter, so a filter of none does not stop the stamping.
-  The filter that is reported promises every event message, over Ethernet and
-  over UDP; only a Sync over Ethernet has been seen tagged (see "Receive
-  timestamps").
+- A PTP message addressed to this device's own MAC address arrives with only
+  the second half of the tag: 8 bytes, two zero bytes, the low 16 bits of the
+  seconds and the nanoseconds, between the source address and the message's
+  EtherType. The conduit does not recognise that, so the frame reaches the
+  stack 8 bytes longer, with EtherType 0, and no PTP stack sees it as PTP. A
+  message to a group address, the PTP one or broadcast, arrives with the whole
+  tag and is stamped. The same held for a message in a VLAN.
+- Only the layer-2 PTP version 2 receive filters are taken, answered as
+  ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``. A request for every frame, for UDP, for
+  PTP version 1 or for NTP is refused with ``-ERANGE`` and leaves the port's
+  configuration as it was. Only a Sync over Ethernet has been seen tagged (see
+  "Receive timestamps").
 - The clock and the completion of receive stamps depend on the kernel
   configuration. Without ``CONFIG_PTP_1588_CLOCK`` no PHC is registered
   (``ethtool -T`` reports no PHC index) and nothing reads the clock. DSA hands
@@ -1151,19 +1161,12 @@ Known limitations
 - settime does not compensate the time that passes between its read and its
   step: the PHC read 122 microseconds past the requested time straight after
   one (see "The clock").
-- Enabling or disabling the once-per-second source is a read-modify-write of
-  ``RTL9602C_IRQ_ENABLE`` that the interrupt handler and its re-arm work also
-  perform, under no lock they share; a change made by two of them at the same
-  moment can be lost. This has not been observed. Because the source is also
-  latched in ``RTL9602C_IRQ_PENDING`` while it is disabled, and the driver
-  does not clear that latch before it enables the source, the first event after
-  enabling can stem from an earlier pulse. This is inferred, not observed.
 
 Open questions
 ==============
 
-These are the facts tagged **I** in the tables above and the one inference of
-"Known limitations", each with what would settle it. The first list holds the
+These are the facts tagged **I** in the tables above, each with what would
+settle it. The first list holds the
 assumptions that the driver depends on: the driver is correct on this board
 only if they hold, and a board test must settle them. The second list holds
 the questions to which the code is indifferent: it works whichever way they
@@ -1246,8 +1249,3 @@ All but the last concern values that only the debugfs views print.
    * - The layout of the software message bytes ("The time-of-day
        transmitter").
      - Writing a known message and capturing the serial line.
-   * - Whether the first event after the once-per-second source is enabled
-       stems from an earlier pulse ("Known limitations").
-     - Enabling PPS after the source has been off for several seconds and
-       reading ``pulses`` in ``ptpstat`` at once: a count of 1 before a full
-       second has passed would show it.

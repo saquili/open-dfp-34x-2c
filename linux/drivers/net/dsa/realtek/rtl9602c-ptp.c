@@ -199,8 +199,11 @@ static int rtl9602c_ptp_adjfine(struct ptp_clock_info *info, long scaled_ppm)
  * second, which the interrupt handler counts and reports as a
  * PTP_CLOCK_PPS event.  The source is enabled only while the PTP core
  * wants PPS events: enabled with no consumer, it is one interrupt a second
- * for nothing.  That the pulse falls on the clock's second boundary and
- * follows its steps and frequency changes is assumed, not verified.
+ * for nothing.  The source latches in RTL9602C_IRQ_PENDING while it is
+ * disabled too, so the latch is cleared before the source is enabled, and
+ * the first event is the next pulse rather than one from before.  That the
+ * pulse falls on the clock's second boundary and follows its steps and
+ * frequency changes is assumed, not verified.
  */
 static int rtl9602c_ptp_enable(struct ptp_clock_info *info,
 			       struct ptp_clock_request *rq, int on)
@@ -210,6 +213,8 @@ static int rtl9602c_ptp_enable(struct ptp_clock_info *info,
 	if (rq->type != PTP_CLK_REQ_PPS)
 		return -EOPNOTSUPP;
 
+	if (on)
+		rtl9602c_w(p, RTL9602C_IRQ_PENDING, RTL9602C_IRQ_SRC_PTP_PPS);
 	rtl9602c_irq_enable(p, on ? 0 : RTL9602C_IRQ_SRC_PTP_PPS,
 			    on ? RTL9602C_IRQ_SRC_PTP_PPS : 0);
 	return 0;
@@ -243,7 +248,9 @@ int rtl9602c_get_ts_info(struct dsa_switch *ds, int port,
 	ts->phc_index = p->ptp_clock ? ptp_clock_index(p->ptp_clock) : -1;
 	ts->tx_types = BIT(HWTSTAMP_TX_OFF);
 	ts->rx_filters = BIT(HWTSTAMP_FILTER_NONE) |
-			 BIT(HWTSTAMP_FILTER_PTP_V2_EVENT);
+			 BIT(HWTSTAMP_FILTER_PTP_V2_L2_EVENT) |
+			 BIT(HWTSTAMP_FILTER_PTP_V2_L2_SYNC) |
+			 BIT(HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ);
 	return 0;
 }
 
@@ -336,7 +343,9 @@ void rtl9602c_ptp_unregister(struct rtl9602c_priv *p)
  * frame.  Nothing but a clock read updates those seconds: with no clock
  * registered, or before the first read, they are 0, and a stamp whose low
  * 16 bits exceed 32,768 is then completed to a negative time.  The choice
- * of window is an assumption, not verified across a window boundary.
+ * of window is an assumption, not verified across a window boundary.  The
+ * switch tags its PTP messages whatever the filter, so on a port whose
+ * receive filter is %HWTSTAMP_FILTER_NONE the stamp is taken off instead.
  *
  * Return: false; the frame is delivered at once.
  */
@@ -351,6 +360,11 @@ bool rtl9602c_port_rxtstamp(struct dsa_switch *ds, int port,
 	/* No tag, no stamp to complete. */
 	if (!hw->hwtstamp)
 		return false;
+
+	if (p->hwtstamp[port].rx_filter == HWTSTAMP_FILTER_NONE) {
+		hw->hwtstamp = 0;
+		return false;
+	}
 
 	ns = ktime_to_ns(hw->hwtstamp);
 	tag_sec = div_u64_rem(ns, NSEC_PER_SEC, &rem) & 0xffff;
@@ -394,7 +408,8 @@ int rtl9602c_port_hwtstamp_get(struct dsa_switch *ds, int port,
  *
  * The switch tags every PTP message it sends to the CPU port whatever the
  * per-port PTP enable and the message actions say, so there is nothing to
- * switch on: the configuration is recorded and no register is written.
+ * switch on: the configuration is recorded and no register is written, and
+ * rtl9602c_port_rxtstamp() takes the stamps off under %HWTSTAMP_FILTER_NONE.
  * Transmit timestamping stays off, as no departure time is produced for a
  * message the CPU sends.
  *
@@ -414,22 +429,24 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 	}
 
 	/*
-	 * Only PTP messages are tagged, so a request for every frame, or for
-	 * one of the layer-2 PTP filters, is answered with the one filter the
-	 * port provides.  That it covers every event message, over Ethernet
-	 * and over UDP, is assumed: it is verified for Sync over Ethernet only.
+	 * Only PTP messages are tagged, and a tagged message over UDP has not
+	 * been seen, so a layer-2 PTP filter is answered with the layer-2
+	 * event filter, which covers the others, and a request for every
+	 * frame or for UDP messages is refused: a filter may be widened, not
+	 * narrowed.  That the layer-2 filter covers every event message is
+	 * assumed: it is verified for Sync only.
 	 */
 	switch (config->rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
 		break;
-	case HWTSTAMP_FILTER_ALL:
-	case HWTSTAMP_FILTER_PTP_V2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_L2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_L2_SYNC:
 	case HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ:
-		config->rx_filter = HWTSTAMP_FILTER_PTP_V2_EVENT;
+		config->rx_filter = HWTSTAMP_FILTER_PTP_V2_L2_EVENT;
 		break;
 	default:
+		NL_SET_ERR_MSG_MOD(extack,
+				   "only PTP version 2 messages over Ethernet are stamped");
 		return -ERANGE;
 	}
 
