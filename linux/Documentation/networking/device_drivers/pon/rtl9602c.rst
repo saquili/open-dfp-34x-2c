@@ -1942,8 +1942,10 @@ upstream GEM port.
    its group. (M)
 2. If the T-CONT's map is empty, set its enable bit. Purpose: the first queue
    switches the T-CONT on. (M)
-3. Drain the queue (next list). A drain that does not end fails the attach.
-   Purpose: the queue is attached empty. (T)
+3. If no T-CONT of the group has the queue in its map, drain it (next list); a
+   drain that does not end fails the attach. A queue already in a map carries
+   other GEM ports' frames and is not drained. Purpose: a new queue is attached
+   empty, and a queue in use loses nothing. (T)
 4. Add the queue to the T-CONT's map. Purpose: the T-CONT schedules it. (T)
 5. Set the queue strict, committed rate 0, peak rate the maximum, weight 1.
    Purpose: it sends as much as the T-CONT is granted. (T)
@@ -2019,9 +2021,7 @@ Known limitations
   T-CONTs 0 to 7 therefore sends through queue 0 and every port on T-CONTs 8 to
   15 through queue 32, and two T-CONTs of one group share a queue that sits in
   both of their maps. Which T-CONT's grants then drain it has not been
-  exercised. Attaching a port drains the queue it uses, which may discard
-  frames that other ports of the group have queued; this has not been exercised
-  with traffic running. Queues are never detached and T-CONTs never disabled
+  exercised. Queues are never detached and T-CONTs never disabled
   after the build, so a deleted port's queue stays in its T-CONT's map until
   the next boot. Only T-CONTs 0 and 16 have carried traffic, so the queue
   numbering of T-CONTs 1 to 15 is not measured.

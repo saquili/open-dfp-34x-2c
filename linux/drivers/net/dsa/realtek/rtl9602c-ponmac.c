@@ -264,13 +264,13 @@ static int rtl9602c_pon_drain(struct rtl9602c_priv *p, unsigned int q)
  * @queue of its group. That numbering is measured on this board for T-CONTs
  * 0 and 16; that the other T-CONTs follow it is not verified.
  *
- * The first queue attached switches the T-CONT on. The queue is drained, so
- * that it is attached empty, then added to the map, made strict and unshaped
- * (rtl9602c_pon_queue_set()), and every stream already pointed at it is
- * admitted. Queues are never detached, nor T-CONTs switched off again. GEM
- * ports whose T-CONTs are in one group share a queue, so the queue may carry
- * other GEM ports' frames when it is drained; what the drain does to them is
- * not verified. Called only with the block's gate open.
+ * The first queue attached switches the T-CONT on. A queue that no T-CONT of
+ * the group has in its map yet is drained, so that it is attached empty; one
+ * already in a map carries other GEM ports' frames and is not drained, since
+ * the drain would discard them. The queue is then added to the map, made
+ * strict and unshaped (rtl9602c_pon_queue_set()), and every stream already
+ * pointed at it is admitted. Queues are never detached, nor T-CONTs switched
+ * off again. Called only with the block's gate open.
  *
  * Return: 0, or -ETIMEDOUT when the drain does not complete; the T-CONT is
  * then switched on and its map left as it was.
@@ -279,7 +279,8 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 			   unsigned int queue)
 {
 	unsigned int pq = RTL9602C_PON_QUEUE(tcont, queue);
-	unsigned int sid;
+	unsigned int first = tcont / 8 * 8, sid, t;
+	bool in_use = false;
 	u32 qmap;
 	int err;
 
@@ -287,9 +288,16 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 	if (!qmap)
 		rtl9602c_rmw(p, RTL9602C_PONSCH_TCONT_EN, 0, BIT(tcont));
 
-	err = rtl9602c_pon_drain(p, pq);
-	if (err)
-		return err;
+	/* The T-CONTs of a group, eight of them, share its 32 queues. */
+	for (t = first; t < first + 8 && t < RTL9602C_PON_NUM_TCONT; t++)
+		if (rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)) & BIT(queue))
+			in_use = true;
+
+	if (!in_use) {
+		err = rtl9602c_pon_drain(p, pq);
+		if (err)
+			return err;
+	}
 
 	rtl9602c_w(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont), qmap | BIT(queue));
 	rtl9602c_pon_queue_set(p, pq, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
