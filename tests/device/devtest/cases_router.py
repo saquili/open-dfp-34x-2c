@@ -12,8 +12,10 @@ network namespaces to the bench host for as long as they run:
 
 Both use the documentation ranges, so they take nothing from the bench's own
 addressing, and fixed MAC addresses, so that the stick, which keeps a
-neighbour's address for a while, finds the same hosts on every run. The far
-end answers UDP itself, inside its namespace, so the bench host's own packet
+neighbour's address for a while, finds the same hosts on every run. Before any
+traffic, each host must reach the stick: the far end by an ARP request of its
+own, which the OLT brings to the stick by the multicast GEM port. The far end
+answers UDP itself, inside its namespace, so the bench host's own packet
 filter is not involved.
 
 PPPoE needs a concentrator on the network side; the bench names the file of its
@@ -45,9 +47,14 @@ FLOW = 20000                     # datagrams in the measured burst of it
 RATE = 4000                      # of them a second
 
 # The far end: a UDP responder in devtest-wan that answers every datagram and
-# writes how many it took and from which sources when its time is up.
+# writes how many it took and from which sources when its time is up. It is
+# started in the background by a sudo that may run commands on a terminal of
+# their own, whose hangup at the command's end would kill it: it ignores the
+# hangup, since it ends by itself. A datagram it cannot answer, from a source
+# it has no route back to, is still counted.
 RESPONDER = """\
-import json, socket, sys, time
+import json, signal, socket, sys, time
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
 port, seconds, out = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.bind(("0.0.0.0", port))
@@ -61,7 +68,10 @@ while time.monotonic() < end:
         continue
     got += 1
     sources.add(peer[0])
-    s.sendto(data, peer)
+    try:
+        s.sendto(data, peer)
+    except OSError:
+        pass
 json.dump({"received": got, "sources": sorted(sources)}, open(out, "w"))
 """
 
@@ -159,6 +169,16 @@ def namespaces_up(ctx: Context) -> None:
     if not reply.ok:
         raise RuntimeError(f"the bench's namespaces: {reply.err.strip() or reply.out.strip()}")
     ctx.memo["namespaces"] = True
+    # Each host must reach the stick, and the stick each host, before any
+    # traffic: a new macvlan takes a moment, and the far end's ping starts
+    # with an ARP request that comes to the stick by the multicast GEM port.
+    wan, lan = WAN.split("/")[0], LAN.split("/")[0]
+    ready = bench(ctx, "for i in 1 2 3 4 5 6 7 8 9 10; do "
+                       f"ip netns exec devtest-wan ping -c 1 -W 1 {wan} >/dev/null && "
+                       f"ip netns exec devtest-lan ping -c 1 -W 1 {lan} >/dev/null && "
+                       "exit 0; sleep 1; done; exit 1", timeout=40)
+    if not ready.ok:
+        raise RuntimeError("the bench's namespaces do not reach the stick")
 
 
 def namespaces_down(ctx: Context) -> None:
