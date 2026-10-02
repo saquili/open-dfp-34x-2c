@@ -158,7 +158,9 @@ attribute-sets:
       -
         name: bwmap-rx
         doc: >-
-          Bandwidth maps received.
+          Bandwidth maps the ONU's MAC accepted. What a MAC accepts is its own,
+          and may be fewer than the map of every 125 us frame; the driver's
+          documentation says what its MAC counts.
         type: uint
       -
         name: bwmap-crc-errors

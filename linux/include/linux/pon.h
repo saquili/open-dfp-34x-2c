@@ -79,7 +79,8 @@ struct pon_gem_config {
  * @ploam_crc_errors: downstream PLOAM messages with a bad CRC, which are
  *		      discarded
  * @ploam_overflows: overflows in receiving downstream PLOAM messages
- * @bwmap_rx: bandwidth maps received
+ * @bwmap_rx: bandwidth maps the MAC accepted, which may be fewer than one
+ *	      in every frame: what a MAC accepts is its own
  * @bwmap_crc_errors: bandwidth map CRC errors, counted per map or per
  *		      allocation structure, since each allocation structure
  *		      carries its own CRC
