@@ -47,9 +47,12 @@ OMCI frames and passes the laboratory tests of the switch's hardware paths
 from flash and running on an operator's line are not tested yet. The bench
 for bring-up and flashing (``tools/bench``), the instruction-set gate for
 target binaries (``tools/isa-gate``) and the first pages of the handbook
-(``docs/handbook``) are in place. The distribution build and the userspace are
-populated by later work items; each top-level directory still waiting for its
-component carries a short README naming it.
+(``docs/handbook``) are in place. The distribution build has begun:
+``buildroot/`` pins the build system and carries the patch that adds the MIPS I
+variant, and ``br2-external/`` builds the cross toolchain from source, with
+checks of its own (``br2-external/README.rst``). The root filesystem, the images
+and the userspace are populated by later work items; each top-level directory
+still waiting for its component carries a short README naming it.
 
 Building
 ========
@@ -58,12 +61,15 @@ The top-level ``Makefile`` defines the entry points. ``make linux`` needs a
 MIPS cross compiler (``mips-linux-gnu-gcc`` on Debian, or name yours with
 ``CROSS_COMPILE=``) and ``mkimage``. ``make ramboot`` and ``make flash`` run
 the bench in ``tools/bench`` (Python 3.11 or later; its README describes the
-settings, the commands and the bank guard). Until the component behind any
-other target lands, the target prints what it will do and which work item
-implements it, then exits::
+settings, the commands and the bank guard). ``make buildroot`` needs Python 3 and
+``patch``; the commands that build the cross toolchain with it are in
+``br2-external/README.rst``. Until the component behind any other target lands,
+the target prints what it will do and which work item implements it, then
+exits::
 
     make               # build the flashable images (default)
     make linux         # build the kernel (build/linux/arch/mips/boot/uImage)
+    make buildroot     # fetch the pinned Buildroot and patch it (build/buildroot)
     make omcid         # build the OMCI daemon
     make sdk           # build a relocatable cross toolchain
     make legal-info    # collect the source-and-licence bundle for a release
