@@ -795,17 +795,15 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_ponmac);
  * GTC counters of the downstream GEM frames, which clear when read. Bits
  * 31:16 of RTL9602C_GTC_DS_GEM_MISMATCH_CNT count frames whose Port-ID the
  * Port-ID table does not hold (measured on this board). Bits 15:0 are taken
- * to count frames whose length disagrees with their header, and
- * RTL9602C_GTC_DS_GEM_NON_IDLE_CNT the frames that are not idle; neither is
- * verified. The latter is the register the GPON MAC's statistics read as
- * RTL9602C_GPON_CNT_GEM_FRAMES.
+ * to count frames whose length disagrees with their header; not verified.
+ * The frames that are not idle are counted in RTL9602C_GPON_CNT_GEM_FRAMES,
+ * which only rtl9602c_gpon_cntr_sync() reads.
  *
  * RTL9602C_GEM_DS_STATS_IDX selects one of sixteen downstream GEM counters,
  * which RTL9602C_GEM_DS_STATS_DATA returns; what each counts, and whether it
  * clears when read, is not verified.
  */
 #define RTL9602C_GTC_DS_GEM_MISMATCH_CNT	0x7011c0
-#define RTL9602C_GTC_DS_GEM_NON_IDLE_CNT	0x7011c4
 #define RTL9602C_GEM_DS_STATS_IDX	0x704064
 #define RTL9602C_GEM_DS_STATS_DATA	0x704068
 
@@ -825,7 +823,8 @@ static void rtl9602c_ponpath_regs(struct seq_file *m, struct rtl9602c_priv *p,
  * ponpath, once the block is built: the counters along the OMCC's path, from
  * the GPON MAC through the packet buffer to the switch's PON and CPU ports.
  * It writes only the selectors of indirect counters, but reading it clears
- * the counters it reads that clear on read.
+ * the counters it reads that clear on read and that nothing else reads; the
+ * GEM frame count it shows is the GPON MAC's total since bring-up.
  */
 static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 {
@@ -884,13 +883,14 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 	}
 
 	/*
-	 * Flow 64's entry in the Port-ID table, read under gpon_lock, which the
-	 * PLOAM path holds while it writes the table. Then the GTC counters:
-	 * reading them here clears them, so what this view takes from
-	 * RTL9602C_GTC_DS_GEM_NON_IDLE_CNT is missing from the GPON MAC's own
-	 * total of GEM frames, which it sums from the same register.
+	 * Flow 64's entry in the Port-ID table and the GEM frames since
+	 * bring-up, both under gpon_lock, which the PLOAM path holds while it
+	 * writes the table and the worker while it sums the counters. Then the
+	 * mismatch counter, which only this view reads: reading it clears it,
+	 * so it shows the frames since the last read.
 	 */
 	{
+		u64 frames;
 		u32 fail;
 		u16 port = 0;
 		bool hit = false;
@@ -898,6 +898,8 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 
 		mutex_lock(&p->gpon_lock);
 		err = rtl9602c_gpon_port_get(p, f, &port, &hit);
+		rtl9602c_gpon_cntr_sync(p);
+		frames = p->gpon_stats.gem_frames;
 		mutex_unlock(&p->gpon_lock);
 		if (err)
 			seq_printf(m, "<GPON> MAC cam[%u]    read timed out\n", f);
@@ -906,9 +908,8 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 				   port, hit ? "hit" : "no hit");
 
 		fail = rtl9602c_r(p, RTL9602C_GTC_DS_GEM_MISMATCH_CNT);
-		seq_printf(m, "<GPON> GTC gem        non-idle %u  port-id mismatch %lu  length mismatch %lu\n",
-			   rtl9602c_r(p, RTL9602C_GTC_DS_GEM_NON_IDLE_CNT),
-			   FIELD_GET(GENMASK(31, 16), fail),
+		seq_printf(m, "<GPON> GTC gem        non-idle %llu  port-id mismatch %lu  length mismatch %lu\n",
+			   frames, FIELD_GET(GENMASK(31, 16), fail),
 			   FIELD_GET(GENMASK(15, 0), fail));
 	}
 	/*

@@ -1719,7 +1719,9 @@ The PON MAC creates three views in the switch's debugfs directory,
 ``/sys/kernel/debug/rtl9602c/``, all of mode 0400: ``ponmac``, ``ponpath`` and
 ``pondp``. None of them writes the hardware apart from the selectors of
 indirect counters, but reading ``ponpath`` clears the counters it reads that
-clear on read. They are safe to read before the PON MAC is built: ``ponpath``
+clear on read and that nothing else reads; its GEM frame count is the GPON
+MAC's total since bring-up. They are safe to read before the PON MAC is built:
+``ponpath``
 and ``pondp`` then print one line and read nothing, and ``ponmac`` reads only
 the system controller, the GPON MAC and the switch::
 
@@ -1773,7 +1775,8 @@ the system controller, the GPON MAC and the switch::
    * - Three views in the switch's debugfs directory, mode 0400: ``ponmac``,
        ``ponpath`` and ``pondp``. None writes the hardware apart from the
        selectors of indirect counters; reading ``ponpath`` clears the counters
-       it reads that clear on read (see the counter rows below).
+       it reads that clear on read and that nothing else reads (see the
+       counter rows below).
      - T
      - A data-path check reads ``ponmac`` on every run; for reads before the
        build, see "The enable in the system controller".
@@ -1794,20 +1797,18 @@ the system controller, the GPON MAC and the switch::
      - It counted every OMCI GEM frame while the table held entries left from
        before a reset, and stopped once the table was emptied.
    * - Bits 15:0 of ``0x7011c0`` count GEM frames whose length disagreed with
-       their header; ``RTL9602C_GTC_DS_GEM_NON_IDLE_CNT``, ``0x7011c4``, counts
-       non-idle downstream GEM frames. The same register ``0x7011c4`` is
-       ``RTL9602C_GPON_CNT_GEM_FRAMES`` in the GPON MAC's statistics: two names
-       for one address.
+       their header; ``RTL9602C_GPON_CNT_GEM_FRAMES``, ``0x7011c4``, counts
+       non-idle downstream GEM frames.
      - I
      - Unmeasured. A downstream burst of a known number of frames on one GEM
        port would confirm ``0x7011c4``.
-   * - Every counter from ``0x701180`` to ``0x7011fc`` clears when read. So a
-       ``ponpath`` read resets ``0x7011c0`` and ``0x7011c4``, and the counts it
-       takes from ``0x7011c4`` are missing from the device's GEM frame total,
-       which the GPON MAC's statistics add up from the same register.
+   * - Every counter from ``0x701180`` to ``0x7011fc`` clears when read. So
+       ``0x7011c4`` has one reader, ``rtl9602c_gpon_cntr_sync()``, which adds
+       it into the GPON MAC's total of GEM frames, and ``ponpath`` brings that
+       total up to date and prints it; a ``ponpath`` read resets ``0x7011c0``,
+       which nothing else reads.
      - M
-     - Measured over that counter range on this chip. The collision with the
-       GPON MAC's total follows from it and has not been measured as such.
+     - Measured over that counter range on this chip.
    * - ``RTL9602C_GEM_DS_STATS_IDX`` (``0x704064``) selects one of sixteen
        downstream GEM counters and ``RTL9602C_GEM_DS_STATS_DATA``
        (``0x704068``) returns it; ``ponpath`` prints all sixteen.
@@ -2048,10 +2049,8 @@ Known limitations
   from every control frame; whether an extended message carries the same four
   has not been observed, and an extended message without them would lose the
   last four bytes of its MIC.
-- Reading the ``ponpath`` view takes counts out of the GPON MAC's own total of
-  downstream GEM frames, because both read the same register and it clears when
-  read. Likewise, any reader of a GEM flow's upstream octet register other than
-  the driver takes octets out of the port's ``pon_tx_octets``.
+- A GEM flow's upstream octet register clears when read, so a tool that reads
+  it by address takes octets out of the port's ``pon_tx_octets``.
 - When the PON MAC cannot be built, the ONU is activated all the same and can
   reach O5 without an OMCI path: no OMCI message crosses and GEM interfaces are
   refused with ``-ENETDOWN``. Taking ``pon`` down and up builds the block again.
@@ -2183,7 +2182,7 @@ Questions the code does not depend on
        settings in the build").
      - The ``ponmac`` view read before and after an exchange of a known number
        of 48-byte messages.
-   * - What the length-mismatch half of ``0x7011c0`` and the non-idle counter
+   * - What the length-mismatch half of ``0x7011c0`` and the GEM frame counter
        ``0x7011c4`` count, and what the sixteen downstream GEM counters and the
        raw counters of the packet buffer are ("The debugfs views").
      - A downstream burst of a known number of frames on one GEM port; reading

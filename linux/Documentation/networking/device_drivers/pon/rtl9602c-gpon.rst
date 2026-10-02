@@ -234,7 +234,8 @@ Where the code is
        ``rtl9602c_ponmac_sid_valid()`` of the PON MAC, and
        ``rtl9602c_l_txdis_gpio()`` and ``rtl9602c_optics_hold_modulation()`` of
        the optics. The ``ponpath`` view of the PON MAC calls
-       ``rtl9602c_gpon_port_get()`` and ``rtl9602c_gpon_flow_cntr()``.
+       ``rtl9602c_gpon_port_get()``, ``rtl9602c_gpon_cntr_sync()`` and
+       ``rtl9602c_gpon_flow_cntr()``.
 
 Locks
 -----
@@ -2295,11 +2296,12 @@ Counters
 
 The GTC counters are registers from ``0x701180`` to ``0x7011fc`` that clear when
 read. ``rtl9602c_gpon_cntr_sync()`` reads them, from the worker every 50 ms and
-before every status report and every read of the ``gpon`` view, and adds them
-into running totals (``struct pon_dev_stats``) that start at zero at each
-bring-up. The PON class report and the ``gpon`` view read the totals, so the two
-agree. The table gives the register behind each total. A second reader of one of
-the registers takes counts out of the totals (see "Known limitations").
+before every status report and every read of the ``gpon`` and ``ponpath``
+views, and adds them into running totals (``struct pon_dev_stats``) that start
+at zero at each bring-up. The PON class report and both views read the totals,
+so they agree. The table gives the register behind each total. A second reader
+of one of the registers, such as a tool that reads them by address, would take
+counts out of the totals.
 
 .. list-table::
    :header-rows: 1
@@ -2628,10 +2630,6 @@ Known limitations
 - There is no power levelling, no REI message and no signal-fail or
   signal-degrade alarm from the BIP count.
 - Nothing in the driver sends the Dying_Gasp message that the MAC holds armed.
-- The total of GEM frames in the statistics misses the frames that the
-  ``ponpath`` view of the PON MAC reads: it reads the same clear-on-read
-  register, ``RTL9602C_GPON_CNT_GEM_FRAMES``, under another name (see
-  Documentation/networking/device_drivers/pon/rtl9602c.rst).
 
 Open questions
 ==============

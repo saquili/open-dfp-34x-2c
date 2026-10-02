@@ -2691,6 +2691,7 @@ int rtl9602c_cls_flower_del(struct dsa_switch *ds, int port, struct flow_cls_off
 			    bool ingress);
 int rtl9602c_get_ts_info(struct dsa_switch *ds, int port, struct kernel_ethtool_ts_info *ts);
 void rtl9602c_gpon_debugfs_init(struct rtl9602c_priv *p);
+void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p);
 void rtl9602c_gpon_report(struct rtl9602c_priv *p);
 void rtl9602c_gpon_work(struct work_struct *w);
 void rtl9602c_gpon_irq(struct rtl9602c_priv *p);

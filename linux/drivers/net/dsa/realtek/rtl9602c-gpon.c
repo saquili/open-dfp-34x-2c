@@ -620,22 +620,25 @@ void rtl9602c_gpon_operstate(struct rtl9602c_priv *p)
 		netif_dormant_on(dp->user);
 }
 
-/*
- * Add the GTC counters into the totals since bring-up, which the gpon view and
- * the PON class report. Every counter from 0x701180 to 0x7011fc clears when
- * read (measured on this board), so this is their one reader and everyone else
- * reads the totals; the ponpath view, though, reads
- * RTL9602C_GPON_CNT_GEM_FRAMES under another name, and what it reads is missing
- * from that total. The worker calls this every RTL9602C_GPON_POLL_MS, well
- * within the 8 s in which the bandwidth-map counter, taken to be 16 bits wide
- * (not verified), wraps at 8000 maps a second. Nothing is read while the PON is
- * down.
+/**
+ * rtl9602c_gpon_cntr_sync() - add the GTC counters into their totals
+ * @p: the switch
+ *
+ * The totals since bring-up are what the gpon and ponpath views and the PON
+ * class report. Every counter from 0x701180 to 0x7011fc clears when read
+ * (measured on this board), so this is the one reader of those it sums, and
+ * everyone else reads the totals, brought up to date by a call. The worker
+ * calls it every RTL9602C_GPON_POLL_MS, well within the 8 s in which the
+ * bandwidth-map counter, taken to be 16 bits wide (not verified), wraps at
+ * 8000 maps a second. Nothing is read while the PON is down.
  *
  * The serial-number request, PLOAM and bandwidth-map counts are measured on
  * this board; the ranging-request, error, overflow, BIP and GEM frame counts
  * are taken to be what their names say, which is not verified.
+ *
+ * Context: gpon_lock held.
  */
-static void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
+void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
 {
 	struct pon_dev_stats *s = &p->gpon_stats;
 	u32 active, ploam_fail, bwm_fail;
