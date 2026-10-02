@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""image-budget: compare the flash images with the partitions they go to.
+
+Usage: image-budget [--enforce] [--images DIR] [NAME[=FILE] ...]
+
+NAME is k0 (the kernel image of bank 0) or r0 (its root filesystem image); with
+none, both are checked. An image is the file named below in DIR (default
+build/image/images in the repository), or the FILE given with it. For each one
+the tool prints its size, the partition's size and what is left of it, or by
+how much the image is over. An image over its budget is reported and is not an
+error unless --enforce is given, so that a build can go on reporting the size
+of a kernel that does not fit yet while it holds the root filesystem to its
+partition (image-budget --enforce r0).
+
+Exit status: 0 when every image was read (and, with --enforce, fits); 1 when
+--enforce is given and a checked image is over its budget; 2 on a usage error
+and when an image is missing, unreadable or empty: a check that read nothing
+has proved nothing.
+"""
+
+import argparse
+import os
+import sys
+
+# The partitions of bank 0, in bytes, as the flash layout of
+# docs/handbook/boot-contract.rst gives them: k0 is 1328 KiB (0x14c000) and r0 is
+# 2512 KiB (0x274000). tools/bench holds the same two numbers; its tests and this
+# tool's tests compare them.
+BUDGETS = {
+    "k0": ("k0.uImage", 0x14C000),
+    "r0": ("r0.squashfs", 0x274000),
+}
+
+TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+DEFAULT_DIR = os.path.join(TOP, "build", "image", "images")
+
+
+class Problem(Exception):
+    """Something that stops the check: a missing image, a bad argument."""
+
+
+def describe(name, size, budget):
+    """The verdict on one image: its size, its budget and the margin or the excess."""
+    head = "%s: %d bytes against a budget of %d (%d KiB)" % (name, size, budget, budget // 1024)
+    if size > budget:
+        return "%s: over the budget by %d bytes" % (head, size - budget)
+    left = budget - size
+    return "%s: margin %d bytes (%.1f%% of the partition)" % (head, left, 100.0 * left / budget)
+
+
+def size_of(path, name):
+    """The size of an image file; a file that is not there or is empty is a problem."""
+    try:
+        size = os.stat(path).st_size
+    except OSError as exc:
+        raise Problem("cannot read the image of %s, %s: %s" % (name, path, exc.strerror)) from exc
+    if not os.path.isfile(path):
+        raise Problem("the image of %s, %s, is not a file" % (name, path))
+    if size == 0:
+        raise Problem("the image of %s, %s, is empty" % (name, path))
+    return size
+
+
+def parse_targets(words, directory):
+    """The images to check, as (name, path) pairs in the order asked for."""
+    wanted = []
+    for word in words or sorted(BUDGETS):
+        name, _, path = word.partition("=")
+        if name not in BUDGETS:
+            raise Problem("%s is not an image to check; the images are %s"
+                          % (name, ", ".join(sorted(BUDGETS))))
+        if any(name == other for other, _ in wanted):
+            raise Problem("%s is named twice" % name)
+        wanted.append((name, path or os.path.join(directory, BUDGETS[name][0])))
+    return wanted
+
+
+def check(words, directory, enforce, out, err):
+    """Check the images named in words; return the exit status."""
+    try:
+        wanted = parse_targets(words, directory)
+        sizes = [(name, path, size_of(path, name)) for name, path in wanted]
+    except Problem as problem:
+        print("image-budget: %s" % problem, file=err)
+        return 2
+    over = []
+    for name, path, size in sizes:
+        budget = BUDGETS[name][1]
+        print("%s (%s)" % (describe(name, size, budget), path), file=out)
+        if size > budget:
+            over.append(name)
+    if over and enforce:
+        print("image-budget: FAIL -- over the budget: %s" % ", ".join(over), file=err)
+        return 1
+    return 0
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(
+        prog="image-budget",
+        description="Compare the flash images with the partitions they go to.",
+        epilog="Exit status: 0 read, and fits when enforced; 1 over the budget with "
+               "--enforce; 2 usage error or an image that cannot be read.")
+    parser.add_argument("--enforce", action="store_true",
+                        help="an image over its budget is a failure (exit status 1)")
+    parser.add_argument("--images", metavar="DIR", default=DEFAULT_DIR,
+                        help="the directory of the images (default: build/image/images)")
+    parser.add_argument("names", nargs="*", metavar="NAME[=FILE]",
+                        help="k0 or r0, optionally with the file to check; default both")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return 2 if exc.code else 0
+    return check(args.names, args.images, args.enforce, sys.stdout, sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

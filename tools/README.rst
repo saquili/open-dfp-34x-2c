@@ -18,6 +18,8 @@ item:
   a target binary (**WI-14**).
 * ``kernel-archive/`` -- the archive of the committed ``linux/`` tree that the
   distribution build takes its kernel headers from (**WI-14**).
+* ``image-budget/`` -- the size check of the two flash images against their
+  partitions (**WI-14**).
 
 Each subdirectory carries its own README until it is filled.
 
