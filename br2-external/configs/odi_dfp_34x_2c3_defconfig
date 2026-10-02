@@ -64,13 +64,15 @@ BR2_LINUX_KERNEL_LZMA=y
 # build system installs no init scripts; BusyBox init and the boot script are in
 # the overlay. The files of one bench (an ssh key, other addresses), which do
 # not belong to the repository, are laid over the image by the post-image script
-# when OPEN_DFP_34X_2C_LOCAL_OVERLAY names a directory of them.
+# when OPEN_DFP_34X_2C_LOCAL_OVERLAY names a directory of them. The post-build
+# script writes the commit the image is built from into /etc/os-release.
 BR2_INIT_NONE=y
 # BR2_TARGET_GENERIC_GETTY is not set
 # BR2_PACKAGE_IFUPDOWN_SCRIPTS is not set
 BR2_TARGET_GENERIC_HOSTNAME="dfp-34x-2c3"
 BR2_TARGET_GENERIC_ISSUE="open-dfp-34x-2c on the ODI DFP-34X-2C3"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/post-build.sh"
 BR2_PACKAGE_BUSYBOX_CONFIG="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/busybox.config"
 BR2_PACKAGE_DROPBEAR=y
 # BR2_PACKAGE_DROPBEAR_CLIENT is not set
