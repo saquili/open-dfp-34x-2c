@@ -16,7 +16,17 @@ the board goes by are explained in docs/handbook/board.rst.
 How to build
 ============
 
-Build the kernel image from the top of the repository:
+Build the two flash images from the top of the repository, on Linux:
+
+  $ make
+
+The result is in build/image/images: k0.uImage, the kernel; r0.squashfs, the
+root filesystem; and SHA256SUMS. The build runs Buildroot, which needs the
+packages and the container that docs/handbook/building.rst names, and tells what
+each image is, how big each may be and how big each is. r0.squashfs fits its
+partition. k0.uImage does not yet, and the build reports by how much.
+
+The kernel alone, for development, builds with the Debian cross compiler:
 
   $ make linux
 
@@ -29,9 +39,12 @@ How to boot a trial kernel
 Nothing is written to the flash. The boot loader fetches the image over TFTP,
 into RAM, and starts it:
 
-  $ make ramboot
+  $ make ramboot IMAGE=build/image/images/k0.uImage \
+      ARGS='--ready "open-dfp-34x-2c: ready"'
 
-IMAGE=<file> names another image. The bench in tools/bench drives the board
+Without IMAGE= it starts the kernel that "make linux" builds. The kernel finds
+its root filesystem in r0, and the root filesystem of the images above prints
+the line that --ready waits for. The bench in tools/bench drives the board
 through its serial console, so the console bridge, the image host and the
 boot loader's saved environment have to be set up once first; see
 docs/handbook/flashing.rst.
@@ -39,13 +52,15 @@ docs/handbook/flashing.rst.
 How to flash bank 0
 ===================
 
-  $ make flash IMAGE=<file> TARGET=kernel
-  $ make flash IMAGE=<file> TARGET=rootfs
+  $ make flash IMAGE=build/image/images/k0.uImage TARGET=kernel
+  $ make flash IMAGE=build/image/images/r0.squashfs TARGET=rootfs
 
 TARGET=kernel writes k0 with a uImage, TARGET=rootfs writes r0 with a SquashFS
 image. The flash is read back and compared by CRC32, and bank 1 is checked to
 be unchanged. ARGS=--arm arms a one-shot trial of bank 0 after the write and
-boots it; read the note on the fall-back in flashing.rst first.
+boots it; read the note on the fall-back in flashing.rst first. The bench refuses
+an image larger than its partition, which k0.uImage is today; start it from RAM
+instead (above).
 
 The banks
 =========
@@ -59,6 +74,7 @@ Documentation
 =============
 
   docs/handbook/board.rst          the board and its interfaces
+  docs/handbook/building.rst       the images: what they are, their sizes, how to build them
   docs/handbook/boot-contract.rst  flash layout, image format, banks, watchdog
   docs/handbook/flashing.rst       RAM boot, flashing, trials, recovery
   tools/bench/README.rst           the bench tool, its settings and refusals
