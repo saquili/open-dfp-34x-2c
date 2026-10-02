@@ -35,6 +35,14 @@ kernel's bindings).
     The self-tests of ``buildroot/fetch`` and of ``tools/kernel-archive``, and
     then ``make buildroot``: the pinned Buildroot release is fetched from its
     URL, checked against the pin, and the carried patches are applied to it.
+``image-budget``
+    The self-tests of ``tools/image-budget``, the size check of the flash images.
+``image-scripts``
+    ``br2-external/tests/run``: the tests of the post-image script (with the real
+    ``mksquashfs``), of the boot script and the inittab, of the board's
+    defconfig, of the listing that compares two root filesystem trees, and of
+    the comparison of the instruction-set gate's findings with the list of the
+    known ones. A skipped test fails the job.
 ``licensing``
     ``reuse lint``, with the REUSE tool pinned.
 
@@ -61,6 +69,26 @@ holds them to a list: it passes when the findings are exactly the list in
 or different, and shows that its comparison can fail by running it against a
 list without one of the functions. See ``br2-external/README.rst`` for the
 checks.
+
+``image.yml`` -- when started by hand
+=====================================
+
+The flash images of the board, built from source with
+``br2-external/configs/odi_dfp_34x_2c3_defconfig`` by ``make`` in the top
+directory, and checked. One job, in the same pinned container, with these steps
+in order: the build (``make``, which also judges the result: ``r0`` has to fit
+its partition, the instruction-set gate has to pass over the whole root
+filesystem tree, and the digests have to check; the size of ``k0`` is reported);
+what was built (the compiler, the image header, the absence of any shared
+object); the negative control of the gate; the static programs run under
+``qemu-mips`` (``br2-external/tests/image/check-applets``); the bench's dry run
+of the root filesystem image (``make flash ... ARGS=--dry-run``, which names no
+board); the images kept as the workflow artifact ``images``; and a second build
+in another directory, with the comparison of the two: the images byte for byte
+and the root filesystem trees by mode, size and digest of every file
+(``br2-external/tests/image/tree-digest``). The steps after the first build run
+whatever its result. Two builds take the better part of an hour, so the workflow
+does not run on a push.
 
 ``kernel.yml`` -- on changes to ``linux/``
 ==========================================
@@ -96,7 +124,6 @@ that stops with an error does.
 
 Still to come, each with the work that needs it: the board configuration
 and ``dtbs_check W=1`` in the build matrix, sparse, and the selftests build
-with the kernel series; the OMCI daemon with the userspace; the root
-filesystem and the images of the distribution build, the image-size gate and
-the instruction-set gate over the target tree, and the nightly reproducibility
-build of the whole distribution.
+with the kernel series; the OMCI daemon with the userspace; the image-size gate
+for ``k0`` (``image.yml`` reports it and enforces ``r0``), and the nightly
+reproducibility build of the whole distribution.

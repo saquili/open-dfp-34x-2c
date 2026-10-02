@@ -3,8 +3,9 @@
 #
 # The offline gates of "make check", plus the self-tests of the equivalence
 # tools, the unit tests of the bench and of the instruction-set gate, the tests
-# of the scripts that fetch the build system and archive the kernel, and the
-# licensing check, on every change to any component.
+# of the scripts that fetch the build system and archive the kernel, the tests
+# of the size check of the images and of the scripts and lists of the
+# distribution, and the licensing check, on every change to any component.
 
 name: gates
 
@@ -121,6 +122,49 @@ jobs:
         # and applies the carried patches to it, so a pin or a patch that
         # changed without the other fails here.
         run: make buildroot
+
+  image-budget:
+    runs-on: ubuntu-24.04
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 20
+    steps:
+      - name: Install the tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Self-tests of the size check of the images
+        # They compare its two numbers with those of the flash layout page and
+        # of the bench, so they read tools/bench and docs/handbook.
+        run: tools/image-budget/tests/run -v
+
+  image-scripts:
+    runs-on: ubuntu-24.04
+    container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
+    timeout-minutes: 20
+    steps:
+      - name: Install the tools
+        # The tests of the post-image script run the real mksquashfs and
+        # unsquashfs, and are skipped without them.
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git python3 \
+            squashfs-tools
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Tests of the image scripts, the boot script and the defconfig
+        # No toolchain is needed: the scripts run against stand-ins and small
+        # trees, the boot script and the defconfig are read, and the list of the
+        # known findings of the toolchain's libraries is compared with gate
+        # output written out by hand. A test that is skipped is a failure here,
+        # so that the ones that need squashfs-tools cannot fall silent.
+        run: |
+          br2-external/tests/run -v 2>&1 | tee /tmp/tests.log
+          if grep -q ' skipped ' /tmp/tests.log; then
+            echo 'a test was skipped' >&2
+            exit 1
+          fi
 
   licensing:
     runs-on: ubuntu-24.04
