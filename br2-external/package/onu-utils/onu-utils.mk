@@ -7,7 +7,7 @@ ONU_UTILS_VERSION = local
 ONU_UTILS_SITE = $(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/../onu-utils
 ONU_UTILS_SITE_METHOD = local
 ONU_UTILS_LICENSE = GPL-2.0-only
-ONU_UTILS_DEPENDENCIES = zlib
+ONU_UTILS_DEPENDENCIES = libmnl zlib
 
 define ONU_UTILS_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) CC="$(TARGET_CC)" \
@@ -16,6 +16,7 @@ endef
 
 define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/ponid $(TARGET_DIR)/usr/sbin/ponid
+	$(INSTALL) -D -m 0755 $(@D)/build/pon $(TARGET_DIR)/usr/sbin/pon
 endef
 
 $(eval $(generic-package))

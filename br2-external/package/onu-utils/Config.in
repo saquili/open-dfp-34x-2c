@@ -3,8 +3,10 @@
 
 config BR2_PACKAGE_ONU_UTILS
 	bool "onu-utils"
+	select BR2_PACKAGE_LIBMNL
 	select BR2_PACKAGE_ZLIB
 	help
 	  The small programs of the ONU, from onu-utils/ in this
 	  repository: ponid, which prints the identity of the unit
-	  from its factory configuration.
+	  from its factory configuration, and pon, which shows the
+	  PON devices and their ONU as the kernel reports them.
