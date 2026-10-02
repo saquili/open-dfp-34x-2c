@@ -3026,7 +3026,10 @@ def print_kernel_mcgrp_src(family, cw):
     for grp in family.mcgrps['list']:
         name = grp['name']
         grp_id = c_upper(f"{family.ident_name}-nlgrp-{name}")
-        cw.p('[' + grp_id + '] = { "' + name + '", },')
+        flags = ''
+        if 'admin-perm' in grp.get('flags', []):
+            flags = ' .flags = GENL_MCAST_CAP_NET_ADMIN,'
+        cw.p('[' + grp_id + '] = { "' + name + '",' + flags + ' },')
     cw.block_end(';')
     cw.nl()
 
