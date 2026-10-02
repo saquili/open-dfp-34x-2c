@@ -16,6 +16,7 @@ endef
 
 define POND_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/pond $(TARGET_DIR)/usr/sbin/pond
+	$(INSTALL) -D -m 0644 $(@D)/www/index.html $(TARGET_DIR)/usr/share/pond/index.html
 endef
 
 $(eval $(generic-package))
