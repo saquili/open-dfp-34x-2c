@@ -101,10 +101,20 @@ stop_pid() {
 	rm -f "$RUN/$1.pid"
 }
 
-# omcid, with -r in router mode. Its log goes on in /run/omcid.log.
+# omcid in the mode $1. A running omcid is told by a signal, SIGUSR1 for
+# router mode and SIGUSR2 for bridge mode: it keeps its MIB, so what the OLT
+# provisioned stays, and programs the data path again from it. One that does
+# not run is started, with -r in router mode; its log goes on in
+# /run/omcid.log.
 omcid_run() {
-	killall omcid 2>/dev/null && sleep 1
-	if [ "$1" = router ]; then
+	if pidof omcid >/dev/null 2>&1; then
+		if [ "$1" = router ]; then
+			killall -USR1 omcid
+		else
+			killall -USR2 omcid
+		fi
+		sleep 1
+	elif [ "$1" = router ]; then
 		omcid -r >>"$RUN/omcid.log" 2>&1 &
 	else
 		omcid >>"$RUN/omcid.log" 2>&1 &
@@ -305,8 +315,8 @@ apply() {
 		;;
 	esac
 	if [ "$old" != "$MODE" ]; then
-		[ "$MODE" = router ] && bridge_down
 		omcid_run "$MODE"
+		[ "$MODE" = router ] && bridge_down
 	fi
 	[ "$MODE" = router ] && router_up
 	echo "$MODE" >"$RUN/onu-mode"

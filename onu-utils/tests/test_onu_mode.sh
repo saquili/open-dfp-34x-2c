@@ -36,9 +36,12 @@ setup() {
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
 	: >"$LOG"
-	for prog in ip tc omcid killall udhcpd udhcpc logger kill; do
+	for prog in ip tc killall udhcpd udhcpc logger kill; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
+	# omcid runs from its first start on, as on the board.
+	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
+	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n[ "$2" = - ] && cat >>"$LOG"\nexit 0\n' >"$T/bin/nft"
 	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
 		'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns 198.51.100.53 -"' \
@@ -122,6 +125,18 @@ check 'logged "^ip address add 203.0.113.2/30 dev gem256"'
 check 'logged "^ip route replace default via 203.0.113.1 dev gem256"'
 teardown
 
+echo "from bridge to router, with omcid running"
+setup
+conf MODE=bridge
+"$MODE_SCRIPT" start 2>/dev/null
+: >"$LOG"
+printf 'MODE=router\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" apply 2>/dev/null
+check 'logged "^killall -USR1 omcid"'
+check '! logged "^omcid"'
+check '[ "$(grep -n "killall -USR1 omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" ]'
+teardown
+
 echo "a NAT table that nft refuses"
 setup
 printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n[ "$2" = - ] || exit 0\ncat >/dev/null\necho "Error: syntax error" >&2\nexit 1\n' >"$T/bin/nft"
@@ -160,7 +175,8 @@ printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
 "$MODE_SCRIPT" apply 2>/dev/null
 check 'logged "^nft delete table inet onu-router"'
 check 'logged "^ip address del 198.51.100.65/24 dev sfp"'
-check 'logged "^omcid $"'
+check 'logged "^killall -USR2 omcid"'
+check '! logged "^omcid"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 teardown
