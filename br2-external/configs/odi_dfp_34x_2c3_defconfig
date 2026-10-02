@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The ODI DFP-34X-2C3: the kernel, built with the toolchain this file describes.
+# Buildroot builds it from the external tree br2-external: the toolchain, then
+# the kernel of linux/ with the board's configuration, as a legacy U-Boot image.
+# The root filesystem and the flash images follow in the commits after this.
+#
+# Every executable that the toolchain makes for the target is linked
+# statically, and no shared library is built. The shared libraries of this
+# toolchain contain three functions with instructions that the core cannot run
+# (br2-external/README.rst, "The instruction-set gate over the toolchain's own
+# objects"), and no option leaves them out; a static program takes only the
+# objects it refers to. docs/adr/0010 records the decision.
+
+# MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
+# variant comes from the patch in buildroot/patches.
+BR2_mips=y
+BR2_mips_1=y
+
+# The toolchain: the same as configs/toolchain_defconfig, but with static
+# libraries only. gcc 14 and binutils 2.44, and uClibc-ng with the C library
+# configuration of this product. No threads: the core has no atomic operations.
+BR2_STATIC_LIBS=y
+BR2_BINUTILS_VERSION_2_44_X=y
+BR2_GCC_VERSION_14_X=y
+BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y
+BR2_PTHREADS_NONE=y
+BR2_TOOLCHAIN_BUILDROOT_USE_SSP=y
+BR2_UCLIBC_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/uclibc.fragment"
+# The C library's utilities (getconf, ldd, ldconfig) are not part of the image.
+# BR2_UCLIBC_INSTALL_UTILS is not set
+
+# The kernel headers of the C library are those of this repository's kernel,
+# from the archive that tools/kernel-archive makes of the committed linux/ tree.
+BR2_KERNEL_HEADERS_CUSTOM_TARBALL=y
+BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION="file://$(OPEN_DFP_34X_2C_KERNEL_ARCHIVE)"
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12=y
+
+# The same output for the same inputs. The archive tools of the toolchain write
+# no times or owners into the archives they make, so an archive does not change
+# with the minute it was made.
+BR2_REPRODUCIBLE=y
+BR2_BINUTILS_EXTRA_CONFIG_OPTIONS="--enable-deterministic-archives"
+
+# Programs are optimised for size, as the kernel is.
+BR2_OPTIMIZE_S=y
+
+# The kernel is the same tree, from the same archive, built with this
+# toolchain. Its configuration is the board's own, rtl9602c_defconfig, and its
+# image the one the boot loader takes: a legacy U-Boot image, LZMA-compressed,
+# loaded at the address the kernel's platform file gives.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
+BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="file://$(OPEN_DFP_34X_2C_KERNEL_ARCHIVE)"
+BR2_LINUX_KERNEL_DEFCONFIG="rtl9602c"
+BR2_LINUX_KERNEL_UIMAGE=y
+BR2_LINUX_KERNEL_LZMA=y
+
+# Nothing for the target yet: no BusyBox, no init system, no root filesystem.
+# BR2_PACKAGE_BUSYBOX is not set
+BR2_INIT_NONE=y
+BR2_SYSTEM_BIN_SH_NONE=y
+# BR2_TARGET_GENERIC_GETTY is not set
+# BR2_TARGET_ROOTFS_TAR is not set
