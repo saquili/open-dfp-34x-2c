@@ -2360,6 +2360,17 @@ the registers takes counts out of the totals (see "Known limitations").
      - One serial-number request per discovery grant in O3; 8094 maps a second
        against 8000 downstream frames, and PLOAM messages counted, in the
        ``gpon`` view.
+   * - In O5 the bandwidth-map count can rise at half the frame rate while the
+       ONU is granted in every frame: on the lab OLT it rose 3998 a second
+       (40,060 in 10.02 s), the ``bwmap`` view's capture held the ONU's grant
+       of 15,417 bytes in every other frame only, and the upstream carried
+       962 Mb/s, which takes that grant in every 125 us frame. What the MAC
+       accepts in O5 is therefore not every map that grants the ONU, and is
+       not known; the count is reported as the MAC keeps it.
+     - M
+     - ``pon`` read twice ten seconds apart, the ``bwmap`` view, and the
+       upstream burst of ``tests/device`` (156,466 frames of 1514 bytes in
+       1.97 s), all in one boot.
    * - Not measured field by field: ``RTL9602C_GPON_CNT_ACTIVATION_RANGING``
        (bits 31:16, ranging requests); ``RTL9602C_GPON_CNT_PLOAM_ERR``
        (``0x7011a0``) with ``RTL9602C_GPON_CNT_PLOAM_ERR_CRC`` (bits 15:0) and
