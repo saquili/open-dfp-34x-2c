@@ -3,14 +3,15 @@
 #
 # Top-level entry points for open-dfp-34x-2c.
 #
-# Until the component a target drives has landed, the target is a stub: it
-# prints what it will do and which work item implements it, then exits
-# non-zero so that nothing mistakes a stub for a finished build.
+# "make" builds the two flash images of the board, and "make sdk" the cross
+# toolchain as a tarball. Until the component a target drives has landed, the
+# target is a stub: it prints what it will do and which work item implements
+# it, then exits non-zero so that nothing mistakes a stub for a finished build.
 
 .DEFAULT_GOAL := image
 
-.PHONY: image linux omcid sdk legal-info docs check ramboot flash buildroot \
-        clean distclean help
+.PHONY: image image-check linux omcid sdk legal-info docs check ramboot flash \
+        buildroot clean distclean help
 
 # The kernel is built out of tree, for MIPS. A Debian host needs the package
 # gcc-mips-linux-gnu (the compiler the CI uses), u-boot-tools (mkimage) and
@@ -22,15 +23,49 @@ JOBS          ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 KMAKE          = $(MAKE) -C linux O=$(KERNEL_OUT) ARCH=$(ARCH) \
                  CROSS_COMPILE=$(CROSS_COMPILE)
 
-image:
-	@echo 'open-dfp-34x-2c: "make" (image) is not implemented yet.'
-	@echo '  Planned: build the kernel and root filesystem images for the board.'
-	@echo '  Arrives with: the distribution build (WI-14).'
-	@exit 1
+# The distribution build: the pinned Buildroot (make buildroot) builds the
+# board's images from br2-external/ in IMAGE_OUT, and its toolchain as a
+# relocatable tarball in TOOLCHAIN_OUT. Buildroot runs on Linux; on another
+# system use the container that docs/handbook/building.rst names. Sources are
+# fetched into BR2_DL_DIR and checked against the hashes the build system
+# carries; BUILDROOT_DL is where the build system's own tarball is. The kernel
+# comes from an archive of the committed linux/ tree (tools/kernel-archive), and
+# GIT_CEILING_DIRECTORIES keeps Buildroot out of this repository's history so
+# that its version string does not change with the commit.
+IMAGE_OUT     ?= $(CURDIR)/build/image
+TOOLCHAIN_OUT ?= $(CURDIR)/build/toolchain
+BR2_DL_DIR    ?= $(CURDIR)/build/dl
+BUILDROOT_DL  ?= $(BR2_DL_DIR)
+BR2_ENV        = test "$$(uname -s)" = Linux || { \
+	  echo 'open-dfp-34x-2c: Buildroot runs on Linux (docs/handbook/building.rst)' >&2; exit 1; }; \
+	br=$$(BUILDROOT_DL="$(BUILDROOT_DL)" buildroot/fetch -q) && \
+	export OPEN_DFP_34X_2C_KERNEL_ARCHIVE="$$(tools/kernel-archive/kernel-archive)" \
+	  GIT_CEILING_DIRECTORIES="$(CURDIR)" BR2_DL_DIR="$(BR2_DL_DIR)" &&
 
-# The board's configuration and the image the bootloader loads. The kernel is
-# $(KERNEL_OUT)/arch/mips/boot/uImage; the root filesystem arrives with the
-# distribution build (WI-14).
+# The images that must fit their partition for the build to pass. The kernel
+# image does not fit k0 yet, and is reported until it does.
+IMAGE_ENFORCE ?= r0
+
+image:
+	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
+	  odi_dfp_34x_2c3_defconfig && make -C "$(IMAGE_OUT)"
+	$(MAKE) image-check
+
+# What the build left, judged: the size of each image against its partition, the
+# instruction-set gate over every executable of the root filesystem, and the
+# digests of the images.
+image-check:
+	tools/image-budget/image-budget --images "$(IMAGE_OUT)/images" --enforce $(IMAGE_ENFORCE)
+	$(if $(filter-out $(IMAGE_ENFORCE),k0 r0),tools/image-budget/image-budget \
+	  --images "$(IMAGE_OUT)/images" $(filter-out $(IMAGE_ENFORCE),k0 r0))
+	tools/isa-gate/isa-gate \
+	  --objdump "$(IMAGE_OUT)/host/bin/mips-buildroot-linux-uclibc-objdump" "$(IMAGE_OUT)/target"
+	cd "$(IMAGE_OUT)/images" && sha256sum -c SHA256SUMS
+
+# The kernel alone, with the Debian cross compiler, for development: the board's
+# configuration and the image the bootloader loads, which is
+# $(KERNEL_OUT)/arch/mips/boot/uImage. "make" builds the kernel with the
+# distribution's own toolchain, together with the root filesystem.
 linux:
 	$(KMAKE) rtl9602c_defconfig
 	$(KMAKE) -j$(JOBS) uImage
@@ -49,11 +84,13 @@ omcid:
 	@echo '  Arrives with: userspace (WI-16).'
 	@exit 1
 
+# The cross toolchain of configs/toolchain_defconfig, with static and shared
+# libraries, packed by the build system as a tarball that can be unpacked
+# anywhere: TOOLCHAIN_OUT/images/*.tar.gz (docs/handbook/toolchain.rst).
 sdk:
-	@echo 'open-dfp-34x-2c: "make sdk" is not implemented yet.'
-	@echo '  Planned: produce a relocatable cross toolchain for developers.'
-	@echo '  Arrives with: the distribution build (WI-14).'
-	@exit 1
+	$(BR2_ENV) make -C "$$br" O="$(TOOLCHAIN_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
+	  toolchain_defconfig && make sdk -C "$(TOOLCHAIN_OUT)" && \
+	  ls -l "$(TOOLCHAIN_OUT)"/images/*.tar.gz
 
 legal-info:
 	@echo 'open-dfp-34x-2c: "make legal-info" is not implemented yet.'
@@ -69,8 +106,10 @@ docs:
 
 # The offline gates: the provenance gates (their own tests, then the tree and
 # the commits since main) and the self-tests of the tools, of the script that
-# fetches the build system and of the one that archives the kernel. The
-# instruction-set gate's tests skip without a MIPS objdump.
+# fetches the build system, of the one that archives the kernel, of the size
+# check of the images and of the scripts and lists of the distribution. The
+# instruction-set gate's tests skip without a MIPS objdump, and the tests of
+# the image script without mksquashfs.
 check:
 	tools/provenance/check selftest
 	tools/provenance/check all
@@ -79,6 +118,8 @@ check:
 	tools/isa-gate/tests/run
 	buildroot/tests/run
 	tools/kernel-archive/tests/run
+	tools/image-budget/tests/run
+	br2-external/tests/run
 
 # The bench: tools/bench is a Python package (3.11 or later, standard library
 # only) run from tools/. A TOML file of settings is named by BENCH_CONFIG;
@@ -113,13 +154,14 @@ distclean:
 	@exit 1
 
 help:
-	@echo 'open-dfp-34x-2c entry points (linux, buildroot, check, ramboot and'
-	@echo 'flash work; the others are stubs today):'
-	@echo '  make               build the flashable images (default)'
-	@echo '  make linux         build the kernel (uImage)'
+	@echo 'open-dfp-34x-2c entry points (make, make sdk, make linux, make buildroot,'
+	@echo 'make check, make ramboot and make flash work; the others are stubs today):'
+	@echo '  make               build the flashable images k0.uImage and r0.squashfs'
+	@echo '                     in build/image/images (default; needs Linux)'
+	@echo '  make linux         build the kernel (uImage) with the Debian cross compiler'
 	@echo '  make buildroot     fetch, check and patch the pinned Buildroot'
 	@echo '  make omcid         build the OMCI daemon'
-	@echo '  make sdk           build a relocatable cross toolchain'
+	@echo '  make sdk           build a relocatable cross toolchain tarball'
 	@echo '  make legal-info    collect the source-and-licence bundle'
 	@echo '  make docs          build the documentation'
 	@echo '  make check         run the offline gates'
