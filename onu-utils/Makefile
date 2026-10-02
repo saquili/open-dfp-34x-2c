@@ -15,24 +15,32 @@ BUILD   ?= build
 override CPPFLAGS += -Isrc
 override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes \
                  -Wshadow -Wpointer-arith -Wwrite-strings
-LDLIBS  += -lz
 
+# pon includes linux/pon.h of this repository's kernel: for a build on the
+# host, point CPPFLAGS at an installation of its headers.
 .PHONY: all check clean
 
-all: $(BUILD)/ponid
+all: $(BUILD)/ponid $(BUILD)/pon
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
 $(BUILD)/ponid: $(BUILD)/src/ponid.o $(BUILD)/src/factory.o
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+
+$(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_factory: $(BUILD)/tests/test_factory.o $(BUILD)/src/factory.o
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
-check: $(BUILD)/test_factory
+$(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+check: $(BUILD)/test_factory $(BUILD)/test_pondev
 	$(BUILD)/test_factory
+	$(BUILD)/test_pondev
 
 clean:
 	rm -rf $(BUILD)

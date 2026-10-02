@@ -15,9 +15,27 @@ The small programs of the ONU.
    which omcid reads, and gives the serial number to the PON driver. Its output
    holds the PLOAM password, a credential of the line: keep it private.
 
+``pon``
+   shows the PON devices of the kernel and their ONU, through the kernel's
+   ``pon`` generic netlink family: the activation state, the ONU-ID, the
+   Alloc-ID and the Port-ID of the OMCI channel that the OLT assigned, the
+   alarms, the GEM ports and T-CONTs, and the counters. The serial number, the
+   credential the OLT takes the line by, is printed only with ``-s``.
+   ``pon monitor`` prints every change the kernel announces, with the time it
+   came, which is how the time to O5 and every fall out of it are seen::
+
+      pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3  OMCC 3
+         alarms none  GEM ports 2  T-CONTs 1  serial number set (-s shows it)
+          PLOAM messages             120
+          bandwidth maps             5000000
+          T-CONT 0  Alloc-ID 1024
+
 Building and testing::
 
-   make           # build/ponid
+   make           # build/ponid and build/pon
    make check     # the tests
 
-The programs need zlib.
+``ponid`` needs zlib, ``pon`` libmnl and the kernel's headers, among them
+``linux/pon.h`` of this repository's kernel; for a build on the host, point
+CPPFLAGS at an installation of those headers (``make headers_install`` in
+``linux/``). The tests of ``pon`` read and print messages that they build.
