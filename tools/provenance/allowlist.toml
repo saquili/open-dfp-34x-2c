@@ -89,3 +89,47 @@ The skeleton commit created the placeholder README of every top-level
 directory at once, founding the component layout that this rule protects. It
 adds nothing but those placeholders and the MAINTAINERS file.
 """
+
+# --- Third-party code carried unchanged -------------------------------------
+
+[[allow]]
+gate = "forbidden-words"
+rules = ["issue-reference", "narrative", "dev-kit", "code-address"]
+paths = ["pond/third_party/mongoose/mongoose.c", "pond/third_party/mongoose/mongoose.h"]
+reason = """
+Mongoose 7.16 by Cesanta Software, carried as it comes under the GPL-2.0 arm
+of its licence. Its comments cite issues of its own public tracker and name
+the platforms it builds for, and its code holds protocol constants that look
+like addresses; none of it is this project's prose or code.
+"""
+
+[[allow]]
+gate = "unit-ids"
+rules = ["ipv4-address", "ipv6-address"]
+paths = ["pond/third_party/mongoose/mongoose.c", "pond/third_party/mongoose/mongoose.h"]
+reason = """
+Mongoose's own defaults and examples: public resolvers and sample addresses
+in its code and comments. They identify no unit of this project.
+"""
+
+[[allow]]
+gate = "denylist"
+rules = ["symbol"]
+paths = ["pond/third_party/mongoose/mongoose.c"]
+reason = """
+Mongoose names the MD5 functions of the public reference implementation in
+a comment; the names are common to many programs.
+"""
+
+[[allow]]
+gate = "binaries"
+rules = ["file-size"]
+paths = ["pond/third_party/mongoose/mongoose.c"]
+provenance = """
+Mongoose 7.16, mongoose.c as released by Cesanta Software, with an SPDX line
+naming the GPL-2.0 arm of its licence added at the top.
+"""
+reason = """
+Mongoose ships as one source file, larger than the cap; it is kept whole so
+that it can be compared with the release.
+"""
