@@ -2296,8 +2296,8 @@ struct rtl9602c_priv {
 	/** @l34_us_flow: the GEM flow routed frames leave in, -1 for none */
 	int l34_us_flow;
 	/**
-	 * @l34_us_refs: the references on @l34_us_flow, taken by the addresses
-	 * on its interfaces
+	 * @l34_us_refs: the references on @l34_us_flow, one for each device
+	 * over it that has an address
 	 */
 	unsigned int l34_us_refs;
 	/** @l34_inetaddr_nb: the IPv4 address notifier */

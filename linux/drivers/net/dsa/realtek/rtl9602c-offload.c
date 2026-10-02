@@ -3052,20 +3052,31 @@ static bool rtl9602c_l34_gem_under(struct net_device *dev, unsigned int *flow)
 	return last && pon_gem_netdev_flow(last, flow);
 }
 
+/* Whether @dev has an IPv4 address other than @ifa. Context: RTNL held. */
+static bool rtl9602c_l34_other_addr(struct net_device *dev,
+				    struct in_ifaddr *ifa)
+{
+	struct in_device *in_dev = __in_dev_get_rtnl(dev);
+	struct in_ifaddr *other;
+
+	if (in_dev)
+		in_dev_for_each_ifa_rtnl(other, in_dev)
+			if (other != ifa)
+				return true;
+	return false;
+}
+
 /*
  * Claim the GEM flow a routed interface sends in as the routed flow, which the
  * ports outside the GEM bridge are given as their stream. One routed flow at a
  * time: an address on a device over another GEM flow claims nothing, with a
- * warning. Each address added takes a reference, and an address removed gives
- * one back only when it was its device's last; the last reference gives the
- * flow up.
+ * warning. Each device over the flow holds one reference, taken with its first
+ * address and given back with its last; the last reference gives the flow up.
  */
 static void rtl9602c_l34_us_update(struct rtl9602c_priv *p,
 				   struct net_device *dev, unsigned long event,
 				   struct in_ifaddr *ifa)
 {
-	struct in_ifaddr *other;
-	struct in_device *in_dev;
 	unsigned int flow;
 	bool gem;
 
@@ -3081,6 +3092,8 @@ static void rtl9602c_l34_us_update(struct rtl9602c_priv *p,
 				dev->name, flow, p->l34_us_flow);
 			return;
 		}
+		if (rtl9602c_l34_other_addr(dev, ifa))
+			return;
 		p->l34_us_refs++;
 		if (p->l34_us_flow == (int)flow)
 			return;
@@ -3093,11 +3106,8 @@ static void rtl9602c_l34_us_update(struct rtl9602c_priv *p,
 
 	if (p->l34_us_flow != (int)flow || !p->l34_us_refs)
 		return;
-	in_dev = __in_dev_get_rtnl(dev);
-	if (in_dev)
-		in_dev_for_each_ifa_rtnl(other, in_dev)
-			if (other != ifa)
-				return;
+	if (rtl9602c_l34_other_addr(dev, ifa))
+		return;
 	if (--p->l34_us_refs)
 		return;
 	p->l34_us_flow = -1;

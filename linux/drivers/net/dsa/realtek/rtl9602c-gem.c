@@ -403,9 +403,9 @@ bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow)
 
 /*
  * The port leaves the bridge first; the PON class may report that only after
- * this call. A routed flow that names the port is forgotten, and the stream
- * entries are rebuilt without it. Then, if the PON MAC is built, the port's
- * hardware is undone.
+ * this call. A routed flow that names the port is forgotten with the
+ * references of the devices over it, and the stream entries are rebuilt
+ * without it. Then, if the PON MAC is built, the port's hardware is undone.
  */
 static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 {
@@ -415,6 +415,7 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 
 	if (p->l34_us_flow == (int)flow) {
 		p->l34_us_flow = -1;
+		p->l34_us_refs = 0;
 		rtl9602c_cf_sid_refresh(p);
 	}
 

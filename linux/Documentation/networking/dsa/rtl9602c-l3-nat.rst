@@ -1992,8 +1992,11 @@ The address notifier
        over one) claims that GEM flow as the routed-frame stream:
        ``rtl9602c_cf_sid_refresh()`` gives each subscriber port outside the GEM
        bridge a classifier entry that assigns the flow. One routed GEM flow at a
-       time; a second is refused with a warning. Removing the only address of
-       that interface gives the flow back.
+       time; a second is refused with a warning. Each device over the flow
+       holds one reference, taken with its first address and given back with
+       its last, whatever number of addresses it had; the last reference gives
+       the flow back, and removing the GEM port forgets the flow with its
+       references.
      - T
      - A routing test and a PPPoE test assert the classifier entry of the
        routed port in ``cf``.
@@ -2807,15 +2810,6 @@ How the positions were established:
 Known limitations
 =================
 
-- The routed GEM flow is held by a count of the addresses that were added on the
-  interfaces running over it. An address that is removed gives one back only
-  when it was its device's last, so a device that had two addresses or more
-  leaves the count above zero when all of them are removed, and the flow stays
-  claimed: the ports outside the GEM bridge keep their stream entry for it, and
-  an address on an interface over another GEM flow is refused with the warning
-  that only one routed GEM port can be offloaded. Removing the GEM port itself
-  forgets the flow but does not reset the count, so the next flow to be claimed
-  is never given up either. Reloading the driver clears the count.
 - Next-hop row 0 is given to whichever neighbour on the PON port resolves first
   while the row is free, and the driver does not check that it is the uplink's
   gateway. The external-address rows that the address notifier writes name
