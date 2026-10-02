@@ -39,6 +39,9 @@ class Settings:
     subscriber_port: str = ""
     pond_token: str = ""
     ssh_options: tuple[str, ...] = ()
+    router: bool = False
+    pppoe_secrets: str = ""
+    bng_service: str = "accel-ppp"
 
 
 @dataclasses.dataclass

@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-from . import cases_system, cases_net, cases_pon, cases_data  # noqa: F401  (they register)
+from . import cases_system, cases_net, cases_pon, cases_data, cases_router  # noqa: F401
 from .access import Settings, bench_remote, redact, stick_remote
 from .core import CASES, FAIL, Context, run_case, select
 from .report import as_json, counts, log, page
@@ -49,6 +49,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="the bench host runs the packet generator without sudo")
     parser.add_argument("--destructive", action="store_true",
                         help="also run the cases that reset the stick")
+    parser.add_argument("--router", action="store_true",
+                        default=os.environ.get("DEVTEST_ROUTER", "") not in ("", "0"),
+                        help="also run the cases that put the stick in router mode (DEVTEST_ROUTER)")
+    parser.add_argument("--pppoe-secrets", default=os.environ.get("DEVTEST_PPPOE_SECRETS", ""),
+                        help="a file on the bench host whose first entry, client and secret, "
+                             "the PPPoE case uses (DEVTEST_PPPOE_SECRETS)")
+    parser.add_argument("--bng-service",
+                        default=os.environ.get("DEVTEST_BNG_SERVICE", "accel-ppp"),
+                        help="the bench host's systemd unit of the PPPoE concentrator")
     parser.add_argument("--out", default="", help="write NAME.rst, NAME.log and NAME.json")
     parser.add_argument("--title", default="", help="the title of the page")
     parser.add_argument("--list", action="store_true", help="list the cases and stop")
@@ -68,7 +77,8 @@ def main(argv: list[str] | None = None) -> int:
             token = handle.read().strip()
     settings = Settings(bench=args.bench, stick=args.stick, bench_sudo=not args.no_sudo,
                         olt_port=args.olt_port, subscriber_port=args.subscriber_port,
-                        pond_token=token)
+                        pond_token=token, router=args.router,
+                        pppoe_secrets=args.pppoe_secrets, bng_service=args.bng_service)
     trail: list[str] = []
     ctx = Context(settings, stick_remote(settings, trail), bench_remote(settings, trail), trail,
                   destructive=args.destructive)

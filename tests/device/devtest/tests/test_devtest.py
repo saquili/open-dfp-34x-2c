@@ -9,7 +9,7 @@ import json
 import re
 import unittest
 
-from devtest import cases_data, cases_net, cases_pon, cases_system
+from devtest import cases_data, cases_net, cases_pon, cases_router, cases_system
 from devtest.access import Reply, Settings, redact
 from devtest.core import FAIL, PASS, SKIP, Case, Context, failed, passed, run_case, select
 from devtest.report import LOG_LINES, as_json, cell, counts, log, page
@@ -285,6 +285,28 @@ class Cases(unittest.TestCase):
             return result
         self.assertEqual(outcome("root@x: Permission denied (publickey).\n").status, PASS)
         self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, FAIL)
+
+    def test_router_mode_runs_only_when_asked_for(self):
+        for fn in (cases_router.static, cases_router.pppoe, cases_router.bridge_again):
+            self.assertEqual(fn(context()).status, SKIP)
+
+    def test_the_pppoe_secret_goes_from_the_bench_s_file_to_the_daemon(self):
+        trail: list[str] = []
+        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
+                                       subscriber_port="eth2", pppoe_secrets="/etc/ppp/secrets")
+        bench = Canned("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200')], trail)
+        stick = Canned("stick", [("onu-mode status", 0, "mode router\nwan gem256 on gem256, "
+                                                        "out by ppp0\n"),
+                                 ("ppp0", 0, "192.0.2.77/32\n"), ("onu-dns", 0, "192.0.2.53\n")],
+                       trail)
+        outcome = cases_router.pppoe(Context(settings, stick, bench, trail))
+        self.assertEqual(outcome.status, PASS)
+        post = next(c for c in bench.asked if "curl" in c)
+        self.assertTrue(post.startswith("sudo -n sh -c "))
+        self.assertIn("/etc/ppp/secrets", post)
+        self.assertIn("MODE=router", post)
+        self.assertEqual(outcome.evidence,
+                         "session up in 0 s; ppp0 192.0.2.77/32; name servers 192.0.2.53")
 
     def test_the_data_path_is_skipped_without_ports(self):
         self.assertEqual(cases_data.downstream(context()).status, SKIP)
