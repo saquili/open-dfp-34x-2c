@@ -18,7 +18,11 @@ The pages so far:
 ``toolchain.rst``
     The cross toolchain: compiling for the core, what a program must not do,
     checking one with the instruction-set gate, and running the test programs.
+``building.rst``
+    Building the two flash images: what each is, its budget and today's margin, the
+    root filesystem, how to build, check and reproduce them, and how to put them
+    on the board.
 
-To come with **WI-20**: building the images, recovery over the serial console,
-bank discipline in one place, and optical and rogue-ONU safety derived from
-ITU-T G.984.3 and from our own measurements.
+To come with **WI-20**: recovery over the serial console, bank discipline in one
+place, and optical and rogue-ONU safety derived from ITU-T G.984.3 and from our
+own measurements.

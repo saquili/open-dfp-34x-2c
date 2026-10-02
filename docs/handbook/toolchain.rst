@@ -67,7 +67,10 @@ refers to. A dynamic program needs the dynamic loader and the C library on the
 board, and those carry three functions that the gate refuses (a speculation
 barrier of libgcc, and an exit-handler compare-and-exchange and a test-and-set of
 uClibc-ng; ``br2-external/README.rst`` lists them and says when a program reaches
-them). For what goes into the root filesystem, link statically.
+them). For what goes into the root filesystem, link statically. The image of the
+board follows this rule: it is built with static libraries only, and the gate runs
+over its whole target tree (``building.rst``,
+``docs/adr/0010-target-executables-are-linked-statically.rst``).
 
 Checking a program
 ==================
