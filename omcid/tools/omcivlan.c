@@ -14,18 +14,20 @@
 static const char *fate_name(uint8_t f)
 {
 	switch (f) {
-	case 0:
+	case OMCI_CTL_VLAN_FATE_PROGRAMMED:
 		return "programmed";
-	case 1:
+	case OMCI_CTL_VLAN_FATE_COLLAPSED:
 		return "collapsed";
-	case 2:
+	case OMCI_CTL_VLAN_FATE_SHADOWED:
 		return "shadowed";
-	case 3:
+	case OMCI_CTL_VLAN_FATE_OVER_BUDGET:
 		return "over-budget";
-	case 4:
+	case OMCI_CTL_VLAN_FATE_UNSUPPORTED:
 		return "unsupported";
-	case 5:
+	case OMCI_CTL_VLAN_FATE_INERT:
 		return "inert";
+	case OMCI_CTL_VLAN_FATE_REFUSED:
+		return "refused";
 	default:
 		return "?";
 	}
@@ -34,22 +36,25 @@ static const char *fate_name(uint8_t f)
 static void note(const struct omcid_vlan_fate_entry *e, char *out, size_t cap)
 {
 	switch (e->fate) {
-	case 1:
+	case OMCI_CTL_VLAN_FATE_COLLAPSED:
 		(void)snprintf(out, cap, "same entry as %u->%u", e->rival_match,
 			       e->rival_net);
 		break;
-	case 2:
+	case OMCI_CTL_VLAN_FATE_SHADOWED:
 		(void)snprintf(out, cap, "lost to %u->%u", e->rival_match,
 			       e->rival_net);
 		break;
-	case 3:
+	case OMCI_CTL_VLAN_FATE_OVER_BUDGET:
 		(void)snprintf(out, cap, "classifier full");
 		break;
-	case 4:
+	case OMCI_CTL_VLAN_FATE_UNSUPPORTED:
 		(void)snprintf(out, cap, "this dataplane cannot express it");
 		break;
-	case 5:
+	case OMCI_CTL_VLAN_FATE_INERT:
 		(void)snprintf(out, cap, "nothing to program");
+		break;
+	case OMCI_CTL_VLAN_FATE_REFUSED:
+		(void)snprintf(out, cap, "the hardware would not take it");
 		break;
 	default:
 		out[0] = '\0';
@@ -106,7 +111,9 @@ int main(int argc, char **argv)
 		printf("0x%04x  %3u  %-11s %5u   ->  %7u   %s\n",
 		       rec[i].instance, rec[i].row, fate_name(rec[i].fate),
 		       rec[i].match_cvid, rec[i].net_vid, why);
-		if (rec[i].fate == 2u || rec[i].fate == 3u)
+		if (rec[i].fate == OMCI_CTL_VLAN_FATE_SHADOWED ||
+		    rec[i].fate == OMCI_CTL_VLAN_FATE_OVER_BUDGET ||
+		    rec[i].fate == OMCI_CTL_VLAN_FATE_REFUSED)
 			lost++;
 	}
 
