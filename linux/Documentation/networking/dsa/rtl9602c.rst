@@ -1038,8 +1038,10 @@ Maximum frame length
 The switch drops a frame longer than its frame length limit. The limit counts a
 whole frame: header, VLAN tags, payload and FCS. The switch has two such
 limits for all four ports, and a selector per port and speed class picks one.
-The driver uses one of them, ``RTL9602C_FRAMELEN_LIMIT0``, and sets it to the
-largest MTU any port has, plus a fixed overhead. The overhead,
+The driver sets ``RTL9602C_FRAMELEN_LIMIT0`` to the largest MTU any port has
+and ``RTL9602C_FRAMELEN_LIMIT1`` to the largest below it, each plus a fixed
+overhead, and points each port at the lower limit that takes its MTU. The
+overhead,
 ``RTL9602C_FRAME_OVERHEAD``, allows for two VLAN tags, a C-tag and an S-tag,
 because translating between them is what the stick is for, and for the 8-byte
 CPU tag, which the switch counts on a frame from the CPU port although the tag
@@ -1056,15 +1058,17 @@ travels in the DMA descriptor.
        ``RTL9602C_FRAMELEN_LIMIT0_BYTES`` (bits 13:0), is the largest frame the
        switch accepts, counted as a whole frame;
        ``RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX`` is ``0x3fff``. The switch has two
-       such limits for all four ports;
+       such limits for all four ports, the second
+       ``RTL9602C_FRAMELEN_LIMIT1`` (``0x011018``), in the same bits;
        ``RTL9602C_FRAMELEN_SEL(p)`` (``0x011008`` + 4p) picks one per port and
        speed class, ``RTL9602C_FRAMELEN_SEL_1000M`` (bit 1) for gigabit and
        ``RTL9602C_FRAMELEN_SEL_10_100M`` (bit 0) for 10/100, a clear bit
-       choosing ``RTL9602C_FRAMELEN_LIMIT0``. Both limits read ``0x3ff0`` and
-       every selector 0 until the driver writes them.
+       choosing ``RTL9602C_FRAMELEN_LIMIT0`` and a set one
+       ``RTL9602C_FRAMELEN_LIMIT1``. Both limits read ``0x3ff0`` and every
+       selector 0 until the driver writes them.
      - M
      - Register reads before the driver writes them; through the driver, the
-       frame sizes that pass (next row).
+       frame sizes that pass (the rows below).
    * - For a frame from the CPU port the switch also counts the 8-byte CPU tag
        (``RTL9602C_CPUTAG_LEN``), although the tag travels in the DMA
        descriptor: a 1522-byte VLAN-tagged frame from the CPU was dropped with
@@ -1077,17 +1081,27 @@ travels in the DMA descriptor.
    * - ``rtl9602c_port_change_mtu()`` keeps each port's requested MTU and
        writes ``RTL9602C_FRAMELEN_LIMIT0`` = the largest of them +
        ``RTL9602C_FRAME_OVERHEAD`` (34: 14 for the header, 4 for the FCS, two
-       4-byte VLAN tags and the 8-byte CPU tag), and points both selectors of
-       the port at ``RTL9602C_FRAMELEN_LIMIT0``. The default MTU of 1500 gives
-       ``0x5fe``. ``rtl9602c_port_max_mtu()`` reports 0x3fff - 34 = 16349; the
-       MTU a user port can take in practice is lower (see "Known
-       limitations"). The ports are forced to 1000 Mb/s, so the gigabit
+       4-byte VLAN tags and the 8-byte CPU tag), and
+       ``RTL9602C_FRAMELEN_LIMIT1`` = the largest MTU below that + 34. Each
+       port's two selectors choose ``RTL9602C_FRAMELEN_LIMIT1`` when its MTU
+       is at most that one, ``RTL9602C_FRAMELEN_LIMIT0`` otherwise; with three
+       different MTUs a port with the smallest gets the middle one's limit.
+       The writes run in an order that never holds a port below its MTU:
+       ``RTL9602C_FRAMELEN_LIMIT0``, the ports that select it,
+       ``RTL9602C_FRAMELEN_LIMIT1``, the ports that select it. The default MTU
+       of 1500 gives ``0x5fe``. ``rtl9602c_port_max_mtu()`` reports 0x3fff -
+       34 = 16349; the MTU a user port can take in practice is lower (see
+       "Known limitations"). The ports are forced to 1000 Mb/s, so the gigabit
        selector is the one in use; that the 10/100 selector works like it has
        not been verified.
-     - T, I
-     - T: full-size replies over the management VLAN pass, and bridged traffic
-       passes both ways, sourced from the host. I: send frames on a port forced
-       to 10 or 100 Mb/s; the driver forces none.
+     - M, T, I
+     - M: with ``sfp`` at MTU 1400 and ``pon`` at 1500, pings of 1378 bytes
+       over the management VLAN passed and pings of 1438 bytes (1460-byte
+       frames) did not, 20 of 20 counted in ``sfp``'s
+       ``rx_forward_discards``; back at 1500 both passed. T: full-size replies
+       over the management VLAN pass, and bridged traffic passes both ways,
+       sourced from the host. I: send frames on a port forced to 10 or 100
+       Mb/s; the driver forces none.
    * - A MAC frame carries 14 octets of addresses and type and 4 of FCS around
        its payload, and each VLAN tag adds 4 octets. Room for two tags is left
        because translating between a C-tag and an S-tag is what the stick is
@@ -1806,9 +1820,9 @@ Known limitations
   of 1500, so a larger MTU on ``sfp`` or ``pon`` fails with ``-ERANGE`` (see the
   known limitations on the *CPU port* page). The switch's own limit, described
   in "Maximum frame length", is not what stops it.
-- The switch applies one frame length limit to all four ports. It is the
-  largest MTU any port has, plus ``RTL9602C_FRAME_OVERHEAD``, so a port accepts
-  frames up to that length whatever its own MTU is.
+- The switch has two frame length limits for four ports, so with three
+  different MTUs a port with the smallest accepts frames up to the middle one's
+  limit (see "Maximum frame length").
 - The driver offers symmetric pause to phylink, but programs no pause result
   into any MAC.
 - With ``rtl9602c.sfp_mode=1000basex``, the phy-mode of port 0 in the board's

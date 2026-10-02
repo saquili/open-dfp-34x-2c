@@ -1417,29 +1417,52 @@ int rtl9602c_port_max_mtu(struct dsa_switch *ds, int port)
  * and, measured on this board, the CPU tag as well, although that travels in
  * the DMA descriptor: the check is made where the CPU port feeds the switch.
  * %RTL9602C_FRAME_OVERHEAD allows for all of them with two VLAN tags, a C-tag
- * and an S-tag. Two length registers cannot give four ports four limits, so
- * %RTL9602C_FRAMELEN_LIMIT0 takes the largest MTU any port has asked for and
- * the port is pointed at it. That the 10/100 Mb/s selector works like the
- * gigabit one is not verified.
+ * and an S-tag. Two length registers serve four ports:
+ * %RTL9602C_FRAMELEN_LIMIT0 takes the largest MTU any port has, and
+ * %RTL9602C_FRAMELEN_LIMIT1 the largest below it, and each port is pointed
+ * at the lower limit that still takes its MTU. With three different MTUs a
+ * port with the smallest gets the middle one's limit. The writes run so that
+ * no port is held below its MTU at any moment: %RTL9602C_FRAMELEN_LIMIT0,
+ * which takes every MTU, then the ports that stay on it or move to it, then
+ * %RTL9602C_FRAMELEN_LIMIT1, which only ports that fit it still select, and
+ * last the ports that move to it. That the 10/100 Mb/s selector works like
+ * the gigabit one is not verified.
  *
  * Return: 0.
  */
 int rtl9602c_port_change_mtu(struct dsa_switch *ds, int port,
 			     int new_mtu)
 {
+	const u32 sel = RTL9602C_FRAMELEN_SEL_1000M | RTL9602C_FRAMELEN_SEL_10_100M;
 	struct rtl9602c_priv *p = ds->priv;
-	unsigned int i, largest = 0;
+	unsigned int i, largest = 0, second = 0;
+	u32 low = 0;
 
 	p->mtu[port] = new_mtu;
 	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
 		largest = max(largest, p->mtu[i]);
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		if (p->mtu[i] < largest)
+			second = max(second, p->mtu[i]);
+	for (i = 0; second && i < RTL9602C_NUM_PORTS; i++)
+		if (p->mtu[i] <= second)
+			low |= BIT(i);
 
 	rtl9602c_rmw(p, RTL9602C_FRAMELEN_LIMIT0, RTL9602C_FRAMELEN_LIMIT0_BYTES,
 		     FIELD_PREP(RTL9602C_FRAMELEN_LIMIT0_BYTES,
 				largest + RTL9602C_FRAME_OVERHEAD));
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		if (!(low & BIT(i)))
+			rtl9602c_rmw(p, RTL9602C_FRAMELEN_SEL(i), sel, 0);
 
-	rtl9602c_rmw(p, RTL9602C_FRAMELEN_SEL(port),
-		     RTL9602C_FRAMELEN_SEL_1000M | RTL9602C_FRAMELEN_SEL_10_100M, 0);
+	if (!low)
+		return 0;
+	rtl9602c_rmw(p, RTL9602C_FRAMELEN_LIMIT1, RTL9602C_FRAMELEN_LIMIT0_BYTES,
+		     FIELD_PREP(RTL9602C_FRAMELEN_LIMIT0_BYTES,
+				second + RTL9602C_FRAME_OVERHEAD));
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		if (low & BIT(i))
+			rtl9602c_rmw(p, RTL9602C_FRAMELEN_SEL(i), sel, sel);
 	return 0;
 }
 

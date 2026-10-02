@@ -1036,13 +1036,14 @@ enum {
 
 /*
  * The longest frame accepted: FRAMELEN_SEL(p) picks one of two limits per
- * speed class, a clear bit LIMIT0; that the 10/100 selector works so is not
- * verified. A frame from the CPU port counts the CPU tag too (measured on
- * this board).
+ * speed class, a clear bit LIMIT0 and a set bit LIMIT1; that the 10/100
+ * selector works so is not verified. A frame from the CPU port counts the
+ * CPU tag too (measured on this board).
  */
 #define RTL9602C_FRAMELEN_SEL(p)		(0x011008 + 4 * (p))
 #define RTL9602C_FRAMELEN_SEL_1000M	BIT(1)
 #define RTL9602C_FRAMELEN_SEL_10_100M	BIT(0)
+#define RTL9602C_FRAMELEN_LIMIT1		0x011018
 #define RTL9602C_FRAMELEN_LIMIT0		0x023034
 #define RTL9602C_FRAMELEN_LIMIT0_BYTES		GENMASK(13, 0)
 #define RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX		0x3fff
@@ -2432,7 +2433,10 @@ struct rtl9602c_priv {
 	/** @cf_sid: each port's port-keyed stream entry, -1 for none */
 	s16 cf_sid[RTL9602C_NUM_PORTS];
 
-	/** @mtu: each port's MTU; the frame-length limit follows the largest */
+	/**
+	 * @mtu: each port's MTU, 0 for a port never given one; the two
+	 * frame-length limits follow the two largest
+	 */
 	unsigned int mtu[RTL9602C_NUM_PORTS];
 
 	/** @sds_mode: the SerDes lane's mode as programmed */
