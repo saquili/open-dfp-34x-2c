@@ -11,7 +11,8 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release go in ``patches/``; there are none yet.
+release are in ``patches/``: one, which adds the MIPS I variant that this core
+needs.
 
 What is here
 ============
@@ -24,7 +25,8 @@ What is here
 ``fetch``
     The script that makes the pinned release ready to build (below).
 ``patches/``
-    The patches applied to the release, in name order.
+    The patches applied to the release, in name order: the MIPS I variant
+    (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -63,6 +65,41 @@ It needs Python 3.11 or later (standard library only) and ``patch``. On
 Debian::
 
     apt-get install python3 patch
+
+The MIPS I patch
+================
+
+Buildroot's MIPS menu offers MIPS32 and later, MIPS IV and MIPS64; a MIPS I entry
+is not there (``grep BR2_mips_ arch/Config.in.mips`` in the unpacked release
+lists the variants). The core of the RTL9602C, a Lexra LX5281, is a big-endian
+MIPS I design: it runs no MIPS32 instruction, has no floating-point unit, and
+although it executes the load-linked instruction it never completes a
+store-conditional, so an atomic sequence retries for ever
+(``tools/isa-gate/README.rst``). Every entry that is offered makes the compiler
+and the C library produce code for a later architecture.
+
+``patches/0001-arch-mips-add-a-MIPS-I-variant.patch`` adds the entry, in 11 hunks
+of 7 files: 35 insertions and 1 deletion (``git apply --stat``). Its header says
+what each hunk is for; in short:
+
+* ``BR2_mips_1`` is the variant, for the big-endian architecture only. It sets
+  the compiler's architecture to ``mips1``, so that gcc is configured with
+  ``--with-arch=mips1`` and everything it builds, libgcc and the C library
+  included, is MIPS I with no flag on a command line. Soft-float is not an
+  option for it.
+* gcc is also configured with ``--with-divide=breaks`` (a division by zero is
+  checked with ``break``; the trap instruction is MIPS II), ``--without-llsc``
+  and ``--without-synci``, so the compiler's defaults agree with the core.
+* The atomic builtins are not claimed (``BR2_TOOLCHAIN_HAS_SYNC_1``, ``_2`` and
+  ``_4`` stay unset), so the packages that depend on them are not offered. The
+  thread libraries of uClibc-ng are not offered either, since both rely on
+  atomic operations; without threads there is no ``BR2_TOOLCHAIN_HAS_ATOMIC``.
+* glibc and musl are not offered; uClibc-ng is the C library of this core. Its
+  MIPS prefetch routines, which use a MIPS IV instruction, are switched off.
+
+C only and no multilib are not part of the patch: Buildroot's defaults already
+build the C compiler alone, with no multilib, and ``BR2_MIPS_SOFT_FLOAT``
+already defaults to on.
 
 Checking the pin
 ================

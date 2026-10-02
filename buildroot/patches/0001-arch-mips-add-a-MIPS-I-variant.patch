@@ -1,0 +1,203 @@
+From: Paweł Phan <szop.hektar_1w@icloud.com>
+Subject: [PATCH] arch/mips: add a MIPS I variant
+
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+Buildroot offers MIPS32 and later for 32-bit MIPS. Add "MIPS I" to the
+target architecture variants: a big-endian core that runs the MIPS I
+integer instruction set and nothing later, has no floating-point unit,
+and has no atomic operations -- a load-linked instruction runs but a
+store-conditional never completes, so an atomic sequence retries for
+ever (tools/isa-gate/README.rst of the distribution describes the core).
+
+arch/Config.in.mips
+ - BR2_mips_1 is the variant. It is for the big-endian architecture only
+   and selects the legacy NaN encoding, which gcc and uClibc-ng take a
+   value for.
+ - BR2_MIPS_SOFT_FLOAT is not offered for it and stays on.
+ - BR2_GCC_TARGET_ARCH is "mips1": gcc is configured with
+   --with-arch=mips1, so the compiler, the assembler it drives, libgcc and
+   the C library all default to MIPS I with no flag on any command line.
+
+toolchain/Config.in
+ - BR2_TOOLCHAIN_HAS_SYNC_1 and BR2_TOOLCHAIN_HAS_SYNC_4 are not set (and
+   BR2_TOOLCHAIN_HAS_SYNC_2 follows the first): the __sync builtins need
+   ll/sc, so the packages that depend on them are not offered.
+
+package/uclibc/Config.in
+ - Neither thread library (NPTL, linuxthreads) is offered. Both rely on
+   atomic operations, so the toolchain has no threads, no libatomic and
+   no BR2_TOOLCHAIN_HAS_ATOMIC.
+
+package/glibc/Config.in, package/musl/Config.in
+ - Neither C library is offered; uClibc-ng is the C library of this core.
+
+package/uclibc/uclibc.mk
+ - The C library is configured without the MIPS prefetch routines (pref
+   is a MIPS IV and MIPS32 instruction).
+
+package/gcc/gcc.mk
+ - gcc is configured with --with-divide=breaks (division by zero is
+   checked with break, as the trap instruction teq is MIPS II),
+   --without-llsc and --without-synci, so that its defaults agree with
+   the core for libgcc and the start files too.
+
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ arch/Config.in.mips      | 15 ++++++++++++++-
+ package/gcc/gcc.mk       |  7 +++++++
+ package/glibc/Config.in  |  1 +
+ package/musl/Config.in   |  1 +
+ package/uclibc/Config.in |  2 ++
+ package/uclibc/uclibc.mk |  8 ++++++++
+ toolchain/Config.in      |  2 ++
+ 7 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/arch/Config.in.mips b/arch/Config.in.mips
+index 29b4180d..46390ebb 100644
+--- a/arch/Config.in.mips
++++ b/arch/Config.in.mips
+@@ -43,6 +43,18 @@ choice
+ 	  64bit capable: mips4, 64, 64r2, 64r3, 64r5, 64r6
+ 	  non-64bit capable: mips4, 32, 32r2, 32r3, 32r5, 32r6
+ 
++config BR2_mips_1
++	bool "MIPS I"
++	depends on BR2_mips
++	select BR2_MIPS_NAN_LEGACY
++	help
++	  The original MIPS instruction set, big endian, for a core
++	  without a floating-point unit. A core of this kind runs no
++	  MIPS32 instruction, and its load-linked/store-conditional
++	  pair never completes, so there are no atomic operations:
++	  threads, the atomic builtins and the glibc and musl C
++	  libraries are not offered.
++
+ config BR2_mips_32
+ 	bool "Generic MIPS32"
+ 	depends on !BR2_ARCH_IS_64
+@@ -163,7 +175,7 @@ config BR2_MIPS_NABI64
+ endchoice
+ 
+ config BR2_MIPS_SOFT_FLOAT
+-	bool "Use soft-float"
++	bool "Use soft-float" if !BR2_mips_1
+ 	default y
+ 	depends on !BR2_mips_octeon3 # hard-float only
+ 	select BR2_SOFT_FLOAT
+@@ -245,6 +257,7 @@ config BR2_ENDIAN
+ 	default "BIG"		if BR2_mips || BR2_mips64
+ 
+ config BR2_GCC_TARGET_ARCH
++	default "mips1"		if BR2_mips_1
+ 	default "mips32"	if BR2_mips_32
+ 	default "mips32r2"	if BR2_mips_32r2
+ 	default "mips32r3"	if BR2_mips_32r3
+diff --git a/package/gcc/gcc.mk b/package/gcc/gcc.mk
+index 834c0a4c..1e71c07e 100644
+--- a/package/gcc/gcc.mk
++++ b/package/gcc/gcc.mk
+@@ -222,6 +222,13 @@ ifneq ($(GCC_TARGET_FP32_MODE),)
+ HOST_GCC_COMMON_CONF_OPTS += --with-fp-32="$(GCC_TARGET_FP32_MODE)"
+ endif
+ 
++# MIPS I has no trap-on-condition instruction (division by zero is checked
++# with break), no ll/sc and no synci: make the compiler's defaults say so,
++# for libgcc and the start files as well as for what it compiles later.
++ifeq ($(BR2_mips_1),y)
++HOST_GCC_COMMON_CONF_OPTS += --with-divide=breaks --without-llsc --without-synci
++endif
++
+ # musl/uClibc-ng does not work with biarch powerpc toolchains, we
+ # need to configure gcc explicitly for 32 Bit for CPU's supporting
+ # 64 Bit and 32 Bit
+diff --git a/package/glibc/Config.in b/package/glibc/Config.in
+index e431eb87..30d9c7ea 100644
+--- a/package/glibc/Config.in
++++ b/package/glibc/Config.in
+@@ -22,6 +22,7 @@ config BR2_PACKAGE_GLIBC_ARCH_SUPPORTS
+ 	default y if BR2_microblaze
+ 	default y if BR2_arcle && BR2_ARC_ATOMIC_EXT && !BR2_arc750d && !BR2_arc770d
+ 	depends on !BR2_POWERPC_CPU_HAS_SPE
++	depends on !BR2_mips_1
+ 	# glibc needs atomic instructions, and does not support
+ 	# single-precision floating point ABIs (ilp32f and lp64f)
+ 	depends on (BR2_RISCV_ISA_RVA && !BR2_RISCV_ABI_ILP32F && !BR2_RISCV_ABI_LP64F) || !BR2_riscv
+diff --git a/package/musl/Config.in b/package/musl/Config.in
+index a6e2af05..c4e59b7e 100644
+--- a/package/musl/Config.in
++++ b/package/musl/Config.in
+@@ -20,6 +20,7 @@ config BR2_PACKAGE_MUSL_ARCH_SUPPORTS
+ 	default y if BR2_sh
+ 	default y if BR2_x86_64
+ 	depends on !BR2_POWERPC_CPU_HAS_SPE # not supported, build breaks
++	depends on !BR2_mips_1 # atomics
+ 	depends on !(BR2_powerpc64 || BR2_powerpc64le) || BR2_POWERPC_CPU_HAS_ALTIVEC
+ 	# sh2 nommu is supported by musl, but we don't have support
+ 	# for it in Buildroot.
+diff --git a/package/uclibc/Config.in b/package/uclibc/Config.in
+index 4c360809..e68a81f4 100644
+--- a/package/uclibc/Config.in
++++ b/package/uclibc/Config.in
+@@ -79,12 +79,14 @@ choice
+ config BR2_PTHREADS_NATIVE
+ 	bool "Native POSIX Threading (NPTL)"
+ 	depends on BR2_USE_MMU || ((BR2_arm || BR2_armeb) && BR2_BINFMT_FDPIC)
++	depends on !BR2_mips_1 # atomics
+ 	select BR2_TOOLCHAIN_HAS_THREADS
+ 	select BR2_TOOLCHAIN_HAS_THREADS_NPTL
+ 
+ config BR2_PTHREADS
+ 	bool "linuxthreads"
+ 	depends on !BR2_aarch64 && !BR2_aarch64_be
++	depends on !BR2_mips_1 # atomics
+ 	select BR2_TOOLCHAIN_HAS_THREADS
+ 
+ config BR2_PTHREADS_NONE
+diff --git a/package/uclibc/uclibc.mk b/package/uclibc/uclibc.mk
+index 0cee1060..1ec5b2fe 100644
+--- a/package/uclibc/uclibc.mk
++++ b/package/uclibc/uclibc.mk
+@@ -171,6 +171,13 @@ define UCLIBC_MIPS_NAN_CONFIG
+ 	$(SED) '/CONFIG_MIPS_NAN_.*/d' $(@D)/.config
+ 	$(call KCONFIG_ENABLE_OPT,$(UCLIBC_MIPS_NAN))
+ endef
++
++# MIPS I has no prefetch instruction
++ifeq ($(BR2_mips_1),y)
++define UCLIBC_MIPS_ISA_CONFIG
++	$(call KCONFIG_DISABLE_OPT,UCLIBC_USE_MIPS_PREFETCH)
++endef
++endif
+ endif # mips
+ 
+ #
+@@ -417,6 +424,7 @@ define UCLIBC_KCONFIG_FIXUP_CMDS
+ 	$(UCLIBC_M68K_BINFMT_FLAT)
+ 	$(UCLIBC_MIPS_ABI_CONFIG)
+ 	$(UCLIBC_MIPS_NAN_CONFIG)
++	$(UCLIBC_MIPS_ISA_CONFIG)
+ 	$(UCLIBC_SH_TYPE_CONFIG)
+ 	$(UCLIBC_SPARC_TYPE_CONFIG)
+ 	$(UCLIBC_POWERPC_TYPE_CONFIG)
+diff --git a/toolchain/Config.in b/toolchain/Config.in
+index 7b354234..77eb7fcd 100644
+--- a/toolchain/Config.in
++++ b/toolchain/Config.in
+@@ -832,6 +832,7 @@ config BR2_TOOLCHAIN_HAS_SYNC_1
+ 	default y
+ 	depends on !BR2_m68k_cf
+ 	depends on !BR2_microblaze
++	depends on !BR2_mips_1
+ 	depends on !BR2_sparc
+ 	depends on !(BR2_arc && !BR2_ARC_ATOMIC_EXT)
+ 
+@@ -843,6 +844,7 @@ config BR2_TOOLCHAIN_HAS_SYNC_4
+ 	bool
+ 	default y
+ 	depends on !BR2_m68k_cf
++	depends on !BR2_mips_1
+ 	depends on !BR2_sparc
+ 	depends on !(BR2_arc && !BR2_ARC_ATOMIC_EXT)
+ 
