@@ -33,7 +33,8 @@ class Toolchain(unittest.TestCase):
     """The board's toolchain is the toolchain defconfig's, with static libraries only."""
 
     SECTION = ("BR2_mips", "BR2_mips_1", "BR2_BINUTILS_VERSION_2_44_X", "BR2_GCC_VERSION_14_X",
-               "BR2_TOOLCHAIN_BUILDROOT_UCLIBC", "BR2_PTHREADS_NONE",
+               "BR2_TOOLCHAIN_BUILDROOT_UCLIBC", "BR2_TOOLCHAIN_BUILDROOT_WCHAR",
+               "BR2_PTHREADS_NONE",
                "BR2_TOOLCHAIN_BUILDROOT_USE_SSP", "BR2_UCLIBC_CONFIG_FRAGMENT_FILES",
                "BR2_KERNEL_HEADERS_CUSTOM_TARBALL", "BR2_KERNEL_HEADERS_CUSTOM_TARBALL_LOCATION",
                "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12", "BR2_REPRODUCIBLE",
@@ -98,10 +99,11 @@ class Root(unittest.TestCase):
         packages = sorted(k for k, v in board.items()
                           if k.startswith("BR2_PACKAGE_") and v == "y")
         self.assertEqual(packages, ["BR2_PACKAGE_DROPBEAR", "BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS",
-                                    "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
+                                    "BR2_PACKAGE_ETHTOOL", "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
                                     "BR2_PACKAGE_HOST_SQUASHFS", "BR2_PACKAGE_IPROUTE2",
-                                    "BR2_PACKAGE_LIBMNL", "BR2_PACKAGE_OMCID",
-                                    "BR2_PACKAGE_ONU_UTILS", "BR2_PACKAGE_POND",
+                                    "BR2_PACKAGE_LIBMNL", "BR2_PACKAGE_NFTABLES",
+                                    "BR2_PACKAGE_OMCID", "BR2_PACKAGE_ONU_UTILS",
+                                    "BR2_PACKAGE_POND",
                                     "BR2_PACKAGE_PPPOED"])
 
     def test_the_post_image_script_and_the_overlay_are_set(self):

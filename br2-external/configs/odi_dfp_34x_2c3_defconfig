@@ -22,10 +22,12 @@ BR2_mips_1=y
 # The toolchain: the same as configs/toolchain_defconfig, but with static
 # libraries only. gcc 14 and binutils 2.44, and uClibc-ng with the C library
 # configuration of this product. No threads: the core has no atomic operations.
+# Wide characters, because the build system offers nftables only with them.
 BR2_STATIC_LIBS=y
 BR2_BINUTILS_VERSION_2_44_X=y
 BR2_GCC_VERSION_14_X=y
 BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_WCHAR=y
 BR2_PTHREADS_NONE=y
 BR2_TOOLCHAIN_BUILDROOT_USE_SSP=y
 BR2_UCLIBC_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/uclibc.fragment"
@@ -79,10 +81,17 @@ BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
 # it uses, mksquashfs, is built for the build machine.
 # BR2_TARGET_ROOTFS_TAR is not set
 BR2_PACKAGE_HOST_SQUASHFS=y
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/post-image.sh"
+
+# The programs of the ONU: the OMCI daemon, the reader of the unit's identity,
+# the PPPoE client and the status daemon of this tree; ip, tc and devlink;
+# ethtool, for the counters of the switch's ports; nft, for the packet filter
+# that the boot script loads.
 BR2_PACKAGE_OMCID=y
 BR2_PACKAGE_ONU_UTILS=y
 BR2_PACKAGE_PPPOED=y
 BR2_PACKAGE_POND=y
 BR2_PACKAGE_IPROUTE2=y
 BR2_PACKAGE_LIBMNL=y
-BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/post-image.sh"
+BR2_PACKAGE_ETHTOOL=y
+BR2_PACKAGE_NFTABLES=y

@@ -11,10 +11,12 @@ BR2_mips=y
 BR2_mips_1=y
 
 # gcc 14 and binutils 2.44, and uClibc-ng with its C library configuration of
-# this product. No threads: the core has no atomic operations.
+# this product. No threads: the core has no atomic operations. Wide
+# characters, which nftables needs.
 BR2_BINUTILS_VERSION_2_44_X=y
 BR2_GCC_VERSION_14_X=y
 BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_WCHAR=y
 BR2_PTHREADS_NONE=y
 BR2_TOOLCHAIN_BUILDROOT_USE_SSP=y
 BR2_UCLIBC_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/uclibc.fragment"
