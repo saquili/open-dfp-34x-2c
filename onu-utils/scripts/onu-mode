@@ -238,14 +238,50 @@ wan_up() {
 	esac
 	nat_up "$gem" "$out"
 	echo "$gem $wan $out" >"$RUN/onu-wan"
+	feeds_sync "$gem"
 	log "WAN on $wan ($WAN_PROTO), GEM port ${gem#gem}"
 }
 
+# The GEM ports that only carry downstream, the multicast one among them,
+# other than the WAN's $1. In bridge mode omcid bridges them with the host
+# link; in router mode what they carry is the WAN's: the OLT sends the network
+# side's broadcasts, an ARP request for the WAN's address among them, by the
+# multicast GEM port, and an answer by that port, which cannot send, is lost.
+# So their frames are handed to the WAN's GEM interface as they come in.
+feeds_sync() {
+	want=$(pon gem 2>/dev/null | awk -v wan="$1" '$1 != wan && $4 == "down" { print $1 }' |
+		sort)
+	have=$(sort "$RUN/onu-feeds" 2>/dev/null)
+	[ "$want" = "$have" ] && return 0
+	feeds_down
+	for port in $want; do
+		tc qdisc add dev "$port" clsact 2>/dev/null
+		tc filter add dev "$port" ingress matchall action mirred ingress redirect \
+			dev "$1" && echo "$port" >>"$RUN/onu-feeds"
+	done
+}
+
+feeds_down() {
+	for port in $(cat "$RUN/onu-feeds" 2>/dev/null); do
+		tc qdisc del dev "$port" clsact 2>/dev/null
+	done
+	rm -f "$RUN/onu-feeds"
+	return 0
+}
+
 wan_down() {
+	wan=
+	[ -r "$RUN/onu-wan" ] && read -r _ wan _ <"$RUN/onu-wan"
 	stop_pid pppoe-loop
 	killall pppoed 2>/dev/null
 	stop_pid udhcpc
 	nft delete table inet $TABLE 2>/dev/null
+	feeds_down
+	# What a static or DHCP WAN put on the interface goes with it.
+	if [ -n "$wan" ]; then
+		ip -4 route flush dev "$wan" 2>/dev/null
+		ip -4 address flush dev "$wan" 2>/dev/null
+	fi
 	ip link del wan 2>/dev/null
 	rm -f "$RUN/onu-wan" "$RUN/onu-dns"
 	return 0
@@ -264,6 +300,8 @@ tick() {
 	elif [ -z "$gem" ] && [ -n "$cur" ]; then
 		log "GEM port of the WAN gone"
 		wan_down
+	elif [ -n "$cur" ]; then
+		feeds_sync "$cur"
 	fi
 	if [ -s "$RUN/onu-dns" ] &&
 		[ "$(cat "$RUN/onu-dns")" != "$(cat "$RUN/udhcpd.dns" 2>/dev/null)" ]; then

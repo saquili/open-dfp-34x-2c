@@ -47,6 +47,9 @@ setup() {
 		'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns 198.51.100.53 -"' \
 		"$REAL_SLEEP" >"$T/bin/pppoed"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/sleep"
+	printf '#!/bin/sh\n[ "$1" = gem ] || exit 1\n%s\n' \
+		'printf "gem4095 port 4095 down multicast\ngem256 port 256 both tcont 0\ngem1024 port 1024 both tcont 1\n"' \
+		>"$T/bin/pon"
 	chmod +x "$T/bin"/*
 	PATH=$T/bin:$PATH
 }
@@ -93,6 +96,8 @@ check 'logged "flowtable ft {"'
 check 'logged "flow add @ft"'
 check 'logged "oifname \"gem256\" masquerade"'
 check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
+check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem256"'
+check '! logged "^tc filter add dev gem1024"'
 check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
 teardown
 
@@ -177,6 +182,9 @@ check 'logged "^nft delete table inet onu-router"'
 check 'logged "^ip address del 198.51.100.65/24 dev sfp"'
 check 'logged "^killall -USR2 omcid"'
 check '! logged "^omcid"'
+check 'logged "^tc qdisc del dev gem4095 clsact"'
+check 'logged "^ip -4 address flush dev gem256"'
+check '[ ! -e "$ONU_ROOT/run/onu-feeds" ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 teardown
