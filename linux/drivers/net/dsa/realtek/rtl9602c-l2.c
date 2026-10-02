@@ -618,8 +618,8 @@ int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
 							  BIT(port));
 	}
 
-	pr_info("<L2 next hop> %pM %s (port %d), vlan %u; forwarding-table -> %u\n",
-		mac, rtl9602c_l2_portname(p, port), port, vid, out.addr);
+	pr_debug("<L2 next hop> %pM %s (port %d), vlan %u; forwarding-table -> %u\n",
+		 mac, rtl9602c_l2_portname(p, port), port, vid, out.addr);
 	return 0;
 }
 

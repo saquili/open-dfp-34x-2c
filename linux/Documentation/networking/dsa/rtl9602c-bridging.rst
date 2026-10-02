@@ -1889,8 +1889,11 @@ page.
        entry cannot be added there from user space, so the driver places it: it
        deletes the key ``RTL9602C_FDB_HASH_WAYS`` times, places a static entry
        with ``RTL9602C_FDB_W2_NEXTHOP``, returns ``RTL9602C_TBLACC_STAT_INDEX``
-       as the slot and logs it (a line that begins ``<L2 next hop>``); HIT clear
-       returns ``-ENOSPC``. A multicast address is refused with ``-EINVAL``.
+       as the slot and logs it at debug level (a line that begins ``<L2 next
+       hop>``, which ``echo 'file rtl9602c-l2.c +p' >
+       /sys/kernel/debug/dynamic_debug/control`` shows in a kernel that has
+       dynamic debug); HIT clear returns ``-ENOSPC``. A multicast address is
+       refused with ``-EINVAL``.
      - T
      - A routing test sees translated frames on the wire at the far side of the
        OLT; PPPoE over a routed port passes traffic.
