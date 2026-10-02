@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import shlex
+import subprocess
 
-from .core import Context, case, failed, passed, skipped, verdict
+from .access import ssh_base
+from .core import Context, case, failed, skipped, verdict
 
 # A TCP connection attempt from the bench host: "refused", "timeout" or
 # "open", and how long it took.
@@ -74,15 +76,29 @@ def filter_drops(ctx: Context):
                        f"unfiltered: {without[0]} in {without[1]:.3f} s; filter restored")
 
 
+def local_run(argv: list[str], timeout: float) -> tuple[int, str]:
+    """Run a command on the machine that runs the tests: exit code, stderr."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              stdin=subprocess.DEVNULL, errors="replace")
+        return done.returncode, done.stderr
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+
+
 @case("net.ssh-keys-only", "Host side", "The ssh server offers keys only, no passwords")
 def ssh_keys_only(ctx: Context):
-    command = ("ssh -o BatchMode=yes -o PubkeyAuthentication=no -o ConnectTimeout=10 "
-               "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-               f"root@{shlex.quote(ctx.settings.stick)} true")
-    reply = ctx.bench.run(command, timeout=40)
-    denied = [l for l in reply.err.splitlines() if "Permission denied" in l]
+    # From the machine that runs the tests, through the bench host, without
+    # offering a key: the refusal names the methods the server offers.
+    argv = ssh_base(ctx.settings) + ["-o", "PubkeyAuthentication=no",
+                                     "-o", "StrictHostKeyChecking=no",
+                                     "-o", "UserKnownHostsFile=/dev/null",
+                                     "-J", ctx.settings.bench, f"root@{ctx.settings.stick}", "true"]
+    code, err = local_run(argv, 60)
+    ctx.log.append(f"local$ {' '.join(argv)}\n{err}[exit {code}]\n")
+    denied = [l for l in err.splitlines() if "Permission denied" in l]
     if not denied:
-        return failed(f"exit {reply.code}: {reply.err.strip() or reply.out.strip()}")
+        return failed(f"exit {code}: {err.strip()}")
     return verdict(denied[0].rstrip(".").endswith("(publickey)"), denied[0])
 
 

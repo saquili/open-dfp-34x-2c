@@ -174,9 +174,16 @@ class Cases(unittest.TestCase):
 
     def test_the_ssh_server_must_offer_keys_only(self):
         def outcome(err):
-            ctx = context()
-            ctx.bench.run = lambda command, **kw: Reply([command], 255, "", err, 0.1)
-            return cases_net.ssh_keys_only(ctx)
+            seen = []
+            real = cases_net.local_run
+            cases_net.local_run = lambda argv, timeout: seen.append(argv) or (255, err)
+            try:
+                result = cases_net.ssh_keys_only(context())
+            finally:
+                cases_net.local_run = real
+            self.assertIn("-J", seen[0])
+            self.assertIn("PubkeyAuthentication=no", seen[0])
+            return result
         self.assertEqual(outcome("root@x: Permission denied (publickey).\n").status, PASS)
         self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, FAIL)
 

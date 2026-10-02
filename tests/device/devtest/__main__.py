@@ -22,6 +22,17 @@ def git(*args: str) -> str:
     return done.stdout.strip()
 
 
+def copyright_holder() -> str:
+    """The holder of the files of this directory, as its README names them."""
+    readme = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "README.rst")
+    with open(readme, encoding="utf-8") as handle:
+        for line in handle:
+            if "SPDX-FileCopyrightText:" in line:
+                return line.split("SPDX-FileCopyrightText:", 1)[1].strip().split(" ", 1)[1]
+    raise SystemExit("devtest: the README names no copyright holder")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="devtest", description=__doc__)
     parser.add_argument("--bench", default=os.environ.get("DEVTEST_BENCH", ""),
@@ -80,9 +91,7 @@ def main(argv: list[str] | None = None) -> int:
                             .out.strip(), settings),
         }
         title = args.title or f"Device tests of {started:%Y-%m-%d}"
-        name = git("config", "user.name") or "the bench"
-        email = git("config", "user.email")
-        holder = f"{started:%Y} {name}" + (f" <{email}>" if email else "")
+        holder = f"{started:%Y} {copyright_holder()}"
         with open(args.out + ".rst", "w", encoding="utf-8") as handle:
             handle.write(page(title, header, results, holder))
         with open(args.out + ".log", "w", encoding="utf-8") as handle:
