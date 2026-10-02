@@ -1469,13 +1469,19 @@ static void rtl9602c_acl_pair(u32 *ones, u32 *zeroes, unsigned int lsb,
 /*
  * Turn ACL lookup on @port on or off, together with its default verdict of
  * permit for frames no rule matches: lookup without that bit drops every such
- * frame. Both bits are written permit first.
+ * frame. So the permit goes on before the lookup and off after it, and no
+ * frame meets a lookup without it.
  */
 static void rtl9602c_acl_port_enable(struct rtl9602c_priv *p, int port,
 				     bool on)
 {
-	rtl9602c_rmw(p, RTL9602C_ACL_DEFAULT_PERMIT, BIT(port), on ? BIT(port) : 0);
-	rtl9602c_rmw(p, RTL9602C_ACL_PORT_EN, BIT(port), on ? BIT(port) : 0);
+	if (on) {
+		rtl9602c_rmw(p, RTL9602C_ACL_DEFAULT_PERMIT, 0, BIT(port));
+		rtl9602c_rmw(p, RTL9602C_ACL_PORT_EN, 0, BIT(port));
+	} else {
+		rtl9602c_rmw(p, RTL9602C_ACL_PORT_EN, BIT(port), 0);
+		rtl9602c_rmw(p, RTL9602C_ACL_DEFAULT_PERMIT, BIT(port), 0);
+	}
 }
 
 /* The slots a rule asks for: field code, value and care of each. */

@@ -488,7 +488,9 @@ The field codes that the driver writes into the template slots:
        verdict for a frame that no rule matches: set permits it, clear drops it.
        Every bit is clear out of reset, so turning lookup on without it drops
        every frame entering the port. The driver sets and clears it together
-       with the port's ``RTL9602C_ACL_PORT_EN`` bit, permit first.
+       with the port's ``RTL9602C_ACL_PORT_EN`` bit: it sets the permit before
+       the lookup and clears it after, so no frame meets the lookup without
+       it.
      - M
      - One EtherType drop rule on port 0: with the bit clear 0 of 100
        non-matching frames arrived (103 with no rule); with it set, 103 arrived
@@ -643,9 +645,9 @@ Removing one, ``rtl9602c_acl_del()``, in order:
    never 0. Purpose: a zero would chain the next entry to this one. (M)
 3. Drop the template's use count. Purpose: a template that no rule uses is free
    again. (M)
-4. If the port has no rule left, clear its ``RTL9602C_ACL_DEFAULT_PERMIT`` and
-   ``RTL9602C_ACL_PORT_EN`` bits, in that order. Purpose: a port without rules
-   needs no lookup. (M)
+4. If the port has no rule left, clear its ``RTL9602C_ACL_PORT_EN`` and
+   ``RTL9602C_ACL_DEFAULT_PERMIT`` bits, in that order. Purpose: a port without
+   rules needs no lookup, and the lookup is off before the permit goes. (M)
 
 The steps are checked as follows. Adding: step 1 by the rules on templates built
 from six different field sets that each matched their traffic; step 2 by the
@@ -2331,9 +2333,6 @@ Known limitations
   ``cls_flower_stats`` operation), so ``tc -s filter show`` counts no hits for a
   rule that the switch applies. The effect of a rule is seen in the frames that
   arrive and in the frame capture.
-- Removing the last ACL rule of a port clears the port's default-permit bit
-  before its lookup-enable bit, so between the two register writes the port
-  drops the frames that no rule matches.
 - A SerDes bring-up at 2500BASE-X, which runs again only when phylink changes
   the interface mode of port 0, writes the full rate back into
   ``RTL9602C_SHAPE_2G5_CFG_RATE`` and is expected to undo a tbf limit on that
