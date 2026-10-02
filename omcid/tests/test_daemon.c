@@ -265,6 +265,68 @@ static void test_signal_stops_the_loop(void)
 	}
 }
 
+static unsigned int g_mode_calls;
+static bool g_mode_router;
+static unsigned int g_bridge_applies;
+
+static void count_mode(bool on)
+{
+	g_mode_calls++;
+	g_mode_router = on;
+}
+
+static enum omci_status count_bridge(const struct omci_hw_bridge_port *ports,
+				     size_t n, struct omci_hw_reject *rejected)
+{
+	g_bridge_applies++;
+	return omci_hw_host_ops.bridge_apply(ports, n, rejected);
+}
+
+/*
+ * SIGUSR1 and SIGUSR2 change the backend's mode and program the data path
+ * again; a backend without a router mode is programmed again all the same.
+ */
+static void test_signals_change_the_mode(void)
+{
+	static const int sigs[] = { SIGUSR1, SIGUSR2, SIGUSR1 };
+	struct omci_hw_ops ops = omci_hw_host_ops;
+
+	ops.set_router = count_mode;
+	ops.bridge_apply = count_bridge;
+	for (unsigned int i = 0; i < ARRAY_SIZE(sigs); i++) {
+		const bool host = i == 2;
+		const char *want = sigs[i] == SIGUSR1 ? "mode: router" :
+							"mode: bridge";
+		struct rig g;
+
+		CHECK(rig_up(&g));
+		g_mode_calls = 0;
+		g_bridge_applies = 0;
+		if (!host)
+			omci_hw_ops_set(&ops);
+		fault_signal(FAULT_POLL, 1, sigs[i]);
+		end_input(&g);
+		CHECK_EQ(run(&g, g.in_r, g_sock, 2, g_argv), EXIT_SUCCESS);
+		omci_hw_ops_set(NULL);
+
+		CHECK_EQ(fault_fired(FAULT_POLL), 1u);
+		CHECK(strstr(g_log, want) != NULL);
+		CHECK_EQ(g_mode_calls, host ? 0u : 1u);
+		CHECK(host || g_mode_router == (sigs[i] == SIGUSR1));
+		CHECK_EQ(g_bridge_applies, host ? 0u : 1u);
+		CHECK(strstr(g_log, "[ERR]") == NULL);
+		rig_down(&g);
+		(void)unlink(g_sock);
+	}
+
+	struct sigaction sa;
+
+	CHECK_EQ(sigaction(SIGUSR1, NULL, &sa), 0);
+	CHECK(sa.sa_handler != SIG_DFL && sa.sa_handler != SIG_IGN);
+	CHECK_EQ(sigaction(SIGUSR2, NULL, &sa), 0);
+	CHECK(sa.sa_handler != SIG_DFL && sa.sa_handler != SIG_IGN);
+}
+
 static void test_poll(void)
 {
 	struct rig g;
@@ -668,6 +730,7 @@ int main(void)
 
 	RUN(test_end_of_input);
 	RUN(test_signal_stops_the_loop);
+	RUN(test_signals_change_the_mode);
 	RUN(test_poll);
 	RUN(test_transport_errors);
 	RUN(test_setup_failures);

@@ -26,7 +26,9 @@ static void print_help(FILE *f, const char *prog)
 		"\n"
 		"  -d DEVICE  the OMCI port (default %s)\n"
 		"  -r         router mode: the OLT's bridge and VLAN rules are not\n"
-		"             applied, and the GEM interfaces stay out of any bridge\n"
+		"             applied, and the GEM interfaces stay out of any bridge;\n"
+		"             SIGUSR1 puts a running daemon in router mode, SIGUSR2\n"
+		"             back in bridge mode\n"
 		"  -v         log more; may be given more than once\n"
 		"  -h         show this text\n",
 		prog, OMCI_PORT_DEFAULT);

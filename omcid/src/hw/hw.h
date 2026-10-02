@@ -400,6 +400,9 @@ void omci_hw_optics_reset(void);
  * @alarms: read the alarms
  * @counter: read a counter of the switch
  * @optics: read the transceiver
+ * @set_router: route instead of bridging (true), or bridge again (false):
+ *	in router mode the bridges and the VLAN rules are not applied; NULL in
+ *	a backend without a router mode
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -417,6 +420,7 @@ struct omci_hw_ops {
 	enum omci_status (*counter)(unsigned int port, unsigned int idx,
 				    uint64_t *out);
 	enum omci_status (*optics)(struct omci_hw_optics *out);
+	void (*set_router)(bool on);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

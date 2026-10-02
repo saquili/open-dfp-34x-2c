@@ -969,6 +969,7 @@ static bool g_router_told;
 void omci_hw_kernel_router(bool on)
 {
 	g_router = on;
+	g_router_told = false;
 }
 
 /* In router mode, say once that the OLT's bridging is not applied. */
@@ -1781,4 +1782,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.alarms = kernel_alarms,
 	.counter = kernel_counter,
 	.optics = kernel_optics,
+	.set_router = omci_hw_kernel_router,
 };

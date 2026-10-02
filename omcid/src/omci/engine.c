@@ -403,6 +403,13 @@ static void handle_mib_reset(struct omci_engine *eng,
 	(void)reprogram_bridge(eng);
 }
 
+void omci_engine_reprogram(struct omci_engine *eng)
+{
+	(void)reprogram_gem(eng);
+	(void)reprogram_bridge(eng);
+	(void)reprogram_vlan(eng);
+}
+
 /* The order of a MIB upload: by class, then by instance. */
 static bool upload_before(uint16_t class_id, uint16_t instance,
 			  const struct upload_row *row)

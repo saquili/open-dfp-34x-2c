@@ -14,7 +14,8 @@
  *
  * In router mode the bridge and the VLAN rules that the OLT provisions are
  * answered as usual but are not applied to the hardware: the GEM interfaces
- * stay out of any bridge, and the router of the stick uses them.
+ * stay out of any bridge, and the router of the stick uses them. It is also
+ * the backend's set_router, which the daemon calls on SIGUSR1 and SIGUSR2.
  */
 void omci_hw_kernel_router(bool on);
 

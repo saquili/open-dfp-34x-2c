@@ -40,10 +40,37 @@
 
 static volatile sig_atomic_t g_stop;
 
+/* A change of mode that a signal asked for, not yet made. */
+enum { MODE_KEPT, MODE_ROUTER, MODE_BRIDGE };
+
+static volatile sig_atomic_t g_mode;
+
 static void on_signal(int sig)
 {
 	(void)sig;
 	g_stop = 1;
+}
+
+static void on_mode(int sig)
+{
+	g_mode = sig == SIGUSR1 ? MODE_ROUTER : MODE_BRIDGE;
+}
+
+/*
+ * SIGUSR1 puts the backend in router mode, SIGUSR2 back in bridge mode. The
+ * MIB stays as the OLT made it, and the data path is programmed again from
+ * it: in router mode the bridges and the VLAN rules stay out of the
+ * hardware, in bridge mode they are applied again.
+ */
+static void change_mode(struct omci_engine *eng)
+{
+	const bool router = g_mode == MODE_ROUTER;
+
+	g_mode = MODE_KEPT;
+	OMCI_INFO("mode: %s", router ? "router" : "bridge");
+	if (omci_hw()->set_router != NULL)
+		omci_hw()->set_router(router);
+	omci_engine_reprogram(eng);
 }
 
 static void print_usage(const char *argv0)
@@ -129,13 +156,23 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 {
 	g_stop = 0;
+	g_mode = MODE_KEPT;
 
-	/* SIGINT and SIGTERM stop the loop; a client that goes away raises no SIGPIPE. */
+	/*
+	 * SIGINT and SIGTERM stop the loop, SIGUSR1 and SIGUSR2 change the mode;
+	 * a client that goes away raises no SIGPIPE.
+	 */
 	struct sigaction sa = { .sa_handler = on_signal };
 
 	sigemptyset(&sa.sa_mask);
 	(void)sigaction(SIGINT, &sa, NULL);
 	(void)sigaction(SIGTERM, &sa, NULL);
+
+	struct sigaction mode = { .sa_handler = on_mode };
+
+	sigemptyset(&mode.sa_mask);
+	(void)sigaction(SIGUSR1, &mode, NULL);
+	(void)sigaction(SIGUSR2, &mode, NULL);
 
 	struct sigaction ign = { .sa_handler = SIG_IGN };
 
@@ -205,6 +242,9 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 	while (!g_stop) {
 		struct pollfd fds[1 + OMCI_CTL_MAX_FDS];
 		nfds_t n = 0;
+
+		if (g_mode != MODE_KEPT)
+			change_mode(eng);
 
 		if (frame_fd >= 0) {
 			fds[n].fd = frame_fd;

@@ -69,6 +69,16 @@ void omci_engine_tap_set(struct omci_engine *eng,
 			 const struct omci_tap_ops *ops, void *ctx);
 
 /**
+ * omci_engine_reprogram() - Program the data path again from the MIB.
+ * @eng: the engine
+ *
+ * The GEM ports, the bridges and the VLAN rules are applied again as the MIB
+ * holds them, as after a change of the backend's mode. What the backend
+ * declines it logs; the MIB does not change.
+ */
+void omci_engine_reprogram(struct omci_engine *eng);
+
+/**
  * omci_engine_tick() - Let time pass.
  * @eng: the engine
  * @now_sec: monotonic time in seconds
