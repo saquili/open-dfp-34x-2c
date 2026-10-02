@@ -3,7 +3,9 @@
 
 /*
  * How a MIB upload reports an instance: its attributes, in order, cut into
- * units that each fit one MIB upload next response (G.988 A.3.16).
+ * units that each fit one MIB upload next response (G.988 A.3.16). Table
+ * attributes are left out, and of a PM entity everything but its control
+ * block (G.988 I.4).
  */
 
 #ifndef OMCI_ME_UPLOAD_H
@@ -39,8 +41,10 @@ struct omci_me_upload_unit {
  * omci_me_upload_includes() - Whether a MIB upload reports a class.
  * @cls: the class
  *
- * Return: false for the OMCI entity (class 287): it holds only table
- * attributes, which a MIB upload never carries (G.988 I.1.3.2).
+ * Return: false for the classes that G.988 leaves out of a MIB upload: the
+ * OMCI entity and the entities that describe the others, the craft
+ * terminal's PPTP, the configuration portals, remote debug, the status of
+ * a Dot1ag MEP and its CCM database, and the general purpose buffer.
  */
 __must_check bool omci_me_upload_includes(const struct omci_me_class *cls);
 

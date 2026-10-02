@@ -14,6 +14,7 @@
 #include "mib/store.h"
 #include "omci/engine.h"
 #include "omci/frame.h"
+#include "omcid/array_size.h"
 
 #include "harness.h"
 #include "model_tsv.h"
@@ -34,6 +35,32 @@ struct want_unit {
 	unsigned int count;
 };
 
+/* The classes that G.988 leaves out of a MIB upload. */
+static bool never_uploaded(uint16_t id)
+{
+	static const uint16_t never[] = { 83u,	149u, 154u, 158u, 287u, 288u,
+					  289u, 303u, 304u, 308u, 317u };
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(never); i++)
+		if (never[i] == id)
+			return true;
+	return false;
+}
+
+/*
+ * Whether a MIB upload reports attribute @a of the class: of a PM entity,
+ * which begins with its interval end time, only the control block.
+ */
+static bool want_reported(const struct tsv_class *c, unsigned int a)
+{
+	if (c->attrs[a - 1].table)
+		return false;
+	if (c->attr_count > 0u &&
+	    strcmp(c->attrs[0].name, "Interval end time") == 0)
+		return a == 2u;
+	return true;
+}
+
 static unsigned int want_units(const struct tsv_class *c, struct want_unit *out,
 			       unsigned int cap)
 {
@@ -43,7 +70,7 @@ static unsigned int want_units(const struct tsv_class *c, struct want_unit *out,
 	for (unsigned int a = 1; a <= c->attr_count; a++) {
 		const struct tsv_attr *t = &c->attrs[a - 1];
 
-		if (t->table)
+		if (!want_reported(c, a))
 			continue;
 		if (u.bytes + t->size > 26u) {
 			if (n < cap)
@@ -123,7 +150,7 @@ static unsigned int expected_units(struct omci_mib *mib,
 	     rc == OMCI_OK; rc = omci_mib_walk_next(mib, &cur)) {
 		const struct tsv_class *c = tsv_class(cur.class_id);
 
-		if (c == NULL || c->id == ME_OMCI)
+		if (c == NULL || never_uploaded(c->id))
 			continue;
 		struct want_unit scratch[8];
 
@@ -146,7 +173,7 @@ static void test_the_units_of_every_class_are_the_packing_of_the_data(void)
 		const unsigned int n = want_units(t, want, 8u);
 
 		CHECK_EQ(omci_me_upload_segments(c), n);
-		CHECK_EQ(omci_me_upload_includes(c), t->id != ME_OMCI);
+		CHECK_EQ(omci_me_upload_includes(c), !never_uploaded(t->id));
 
 		unsigned int covered = 0;
 
@@ -173,7 +200,7 @@ static void test_the_units_of_every_class_are_the_packing_of_the_data(void)
 		unsigned int all = 0;
 
 		for (unsigned int a = 1; a <= t->attr_count; a++)
-			if (!t->attrs[a - 1].table)
+			if (want_reported(t, a))
 				all |= 0x8000u >> (a - 1u);
 		CHECK_EQ(covered, all);
 
@@ -187,6 +214,27 @@ static void test_the_units_of_every_class_are_the_packing_of_the_data(void)
 	CHECK(!omci_me_upload_unit_at(NULL, 0, &unit));
 	CHECK_EQ(omci_me_upload_segments(NULL), 1u);
 	CHECK(!omci_me_upload_includes(NULL));
+}
+
+static void test_a_pm_entity_reports_only_its_control_block(void)
+{
+	static const uint16_t pm[] = { 321u, 322u };
+
+	for (unsigned int i = 0; i < 2u; i++) {
+		const struct omci_me_class *c = omci_me_class_by_id(pm[i]);
+		struct omci_me_upload_unit unit;
+
+		CHECK(c != NULL);
+		if (c == NULL)
+			continue;
+		CHECK(omci_me_upload_includes(c));
+		CHECK_EQ(omci_me_upload_segments(c), 1u);
+		CHECK(omci_me_upload_unit_at(c, 0, &unit));
+		CHECK_EQ(unit.mask, 0x4000u);
+		CHECK_EQ(unit.count, 1u);
+		CHECK_EQ(unit.attrs[0], 2u);
+		CHECK_EQ(unit.bytes, 2u);
+	}
 }
 
 static void test_the_count_is_of_messages_not_of_instances(void)
@@ -348,11 +396,12 @@ static void test_every_class_but_the_omci_entity_appears(void)
 				seen[i] = true;
 	}
 
-	unsigned int classes = 0;
+	unsigned int classes = 0, left_out = 0;
 
 	for (unsigned int i = 0; i < tsv_class_count; i++) {
-		if (tsv_classes[i].id == ME_OMCI) {
+		if (never_uploaded(tsv_classes[i].id)) {
 			CHECK(!seen[i]);
+			left_out++;
 			continue;
 		}
 		if (!seen[i])
@@ -361,7 +410,8 @@ static void test_every_class_but_the_omci_entity_appears(void)
 		CHECK(seen[i]);
 		classes += seen[i] ? 1u : 0u;
 	}
-	CHECK_EQ(classes, tsv_class_count - 1u);
+	CHECK_EQ(left_out, 1u);
+	CHECK_EQ(classes, tsv_class_count - left_out);
 
 	omci_t_down(&fx);
 }
@@ -376,16 +426,30 @@ static void test_the_count_follows_the_mib(void)
 	CHECK_EQ(omci_me_defaults_apply(fx.mib, &caps), OMCI_OK);
 
 	const int before = upload(fx.eng, 0x0500u, false);
-	const struct tsv_class *c = tsv_class(322u);
+	const struct tsv_class *c = NULL;
 	struct want_unit scratch[8];
-	const unsigned int need = want_units(c, scratch, 8u);
+	unsigned int need = 0;
 
+	/* A class the OLT creates whose instance takes more than one unit. */
+	for (unsigned int i = 0; i < tsv_class_count && need < 2u; i++) {
+		if (!tsv_classes[i].by_olt || never_uploaded(tsv_classes[i].id))
+			continue;
+		c = &tsv_classes[i];
+		need = want_units(c, scratch, 8u);
+	}
 	CHECK(need > 1u);
-	CHECK_EQ(omci_mib_create(fx.mib, 322u, 0x0101u), OMCI_OK);
+	if (c == NULL)
+		return;
+	CHECK_EQ(omci_mib_create(fx.mib, c->id, 0x0101u), OMCI_OK);
 	CHECK_EQ(upload(fx.eng, 0x0501u, false), before + (int)need);
 
-	CHECK_EQ(omci_mib_delete(fx.mib, 322u, 0x0101u), OMCI_OK);
+	CHECK_EQ(omci_mib_delete(fx.mib, c->id, 0x0101u), OMCI_OK);
 	CHECK_EQ(upload(fx.eng, 0x0502u, false), before);
+
+	/* A PM entity takes one unit: its control block. */
+	CHECK_EQ(omci_mib_create(fx.mib, 322u, 0x0101u), OMCI_OK);
+	CHECK_EQ(upload(fx.eng, 0x0503u, false), before + 1);
+	CHECK_EQ(omci_mib_delete(fx.mib, 322u, 0x0101u), OMCI_OK);
 
 	omci_t_down(&fx);
 }
@@ -460,6 +524,7 @@ int main(int argc, char **argv)
 	}
 
 	RUN(test_the_units_of_every_class_are_the_packing_of_the_data);
+	RUN(test_a_pm_entity_reports_only_its_control_block);
 	RUN(test_the_count_is_of_messages_not_of_instances);
 	RUN(test_the_whole_upload_describes_the_mib);
 	RUN(test_every_class_but_the_omci_entity_appears);
