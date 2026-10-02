@@ -105,10 +105,14 @@ def run_case(c: Case, ctx: Context) -> Result:
 
 
 def select(ids: list[str] | None) -> list[Case]:
+    """The cases named, or all; the destructive ones last, since a reset of the
+    stick leaves it on another boot for every case after it."""
     if not ids:
-        return list(CASES)
-    chosen = [c for c in CASES if any(c.id == i or c.id.startswith(i + ".") for i in ids)]
-    unknown = [i for i in ids if not any(c.id == i or c.id.startswith(i + ".") for c in CASES)]
-    if unknown:
-        raise SystemExit(f"devtest: no case named {', '.join(unknown)}")
-    return chosen
+        chosen = list(CASES)
+    else:
+        chosen = [c for c in CASES if any(c.id == i or c.id.startswith(i + ".") for i in ids)]
+        unknown = [i for i in ids
+                   if not any(c.id == i or c.id.startswith(i + ".") for c in CASES)]
+        if unknown:
+            raise SystemExit(f"devtest: no case named {', '.join(unknown)}")
+    return sorted(chosen, key=lambda c: c.destructive)

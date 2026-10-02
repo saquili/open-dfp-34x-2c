@@ -13,6 +13,10 @@ from .core import Context, case, failed, passed, verdict
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
 # What the kernel prints when something went wrong in it.
 TROUBLE = r"(BUG:|Oops|WARNING:|Call Trace|Kernel panic|segfault|unhandled|soft lockup|hung_task)"
+# Seconds past the watchdog's timeout in which the stick must have gone, and
+# in which it must be back: the boot loader counts down for up to ten minutes.
+RESET_MARGIN = 15
+RESET_RETURN = 900
 
 
 def kernel_version() -> str:
@@ -95,10 +99,25 @@ def watchdog_reset(ctx: Context):
     # and closing leaves it armed.
     ctx.stick.run("killall watchdog; sleep 1; echo armed > /dev/watchdog", timeout=20)
     start = time.monotonic()
-    while time.monotonic() - start < timeout + 120:
+    gone = None
+    # Gone within the timeout and a margin, then back with a new boot: the
+    # boot loader may count down for minutes before it starts a kernel.
+    while time.monotonic() - start < timeout + RESET_RETURN:
         time.sleep(5)
         reply = ctx.stick.run("cat /proc/sys/kernel/random/boot_id", timeout=10)
-        if reply.ok and reply.out.strip() and reply.out.strip() != boot:
-            return passed(f"timeout {timeout} s; back with a new boot after "
-                          f"{time.monotonic() - start:.0f} s")
-    return failed(f"no new boot within {timeout + 120} s of arming")
+        now = time.monotonic() - start
+        answer = reply.out.strip() if reply.ok else ""
+        if not answer:
+            if gone is None:
+                gone = now
+        elif answer == boot:
+            if now > timeout + RESET_MARGIN:
+                return failed(f"timeout {timeout} s; still answering {now:.0f} s after arming")
+        elif gone is None:
+            return failed(f"timeout {timeout} s; a new boot after {now:.0f} s, "
+                          "without having been seen gone")
+        else:
+            return passed(f"timeout {timeout} s; gone after {gone:.0f} s, back with a new "
+                          f"boot after {now:.0f} s")
+    return failed(f"timeout {timeout} s; gone after {gone:.0f} s, no new boot within "
+                  f"{timeout + RESET_RETURN} s")

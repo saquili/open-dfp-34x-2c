@@ -91,6 +91,12 @@ class Runner(unittest.TestCase):
         with self.assertRaises(SystemExit):
             select(["nothing"])
 
+    def test_the_destructive_cases_come_last(self):
+        everything = select(None)
+        first = next(i for i, c in enumerate(everything) if c.destructive)
+        self.assertTrue(all(c.destructive for c in everything[first:]))
+        self.assertEqual(select(["system"])[-1].id, "system.watchdog-reset")
+
 
 class Record(unittest.TestCase):
     def results(self):
@@ -210,6 +216,46 @@ class Cases(unittest.TestCase):
         self.assertEqual(values("Linux version 6.18.48 (builder)").status, PASS)
         self.assertEqual(values({"release": "6.18.48"}).status, FAIL)
         self.assertEqual(values(None).status, FAIL)
+
+    def test_a_reset_is_the_stick_gone_and_back_with_a_new_boot(self):
+        class Clock:
+            now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += seconds
+
+        class Stick:
+            def __init__(self, boots):
+                self.boots = iter(boots)
+
+            def text(self, command, *, timeout=60.0):
+                return "44" if "timeout" in command else "first"
+
+            def run(self, command, *, timeout=60.0, check=False, stdin=None):
+                if "boot_id" not in command:
+                    return Reply([command], 0, "", "", 0.0)
+                boot = next(self.boots)
+                return Reply([command], 0 if boot else 255, boot or "", "", 0.0)
+
+        def outcome(boots):
+            real = cases_system.time
+            cases_system.time = Clock()
+            try:
+                ctx = context()
+                ctx.stick = Stick(boots)
+                return cases_system.watchdog_reset(ctx)
+            finally:
+                cases_system.time = real
+
+        back = ["first"] * 8 + [None] * 100 + ["second"]
+        self.assertEqual(outcome(back).status, PASS)
+        self.assertEqual(outcome(["first"] * 300).status, FAIL)
+        self.assertEqual(outcome(["first"] * 8 + [None] * 300).status, FAIL)
+        late = ["first"] * 20 + [None] * 10 + ["second"]
+        self.assertEqual(outcome(late).status, FAIL)
 
     def test_the_filter_must_drop_in_both_chains(self):
         two = "policy drop;\npolicy drop;\npolicy accept;\n"
