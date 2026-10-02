@@ -93,13 +93,13 @@ class Root(unittest.TestCase):
             if key.startswith("BR2_TARGET_ROOTFS_"):
                 self.assertIsNone(board[key], key)
 
-    def test_busybox_and_dropbear_are_the_only_packages(self):
+    def test_the_packages_are_the_ones_the_board_needs(self):
         board = settings(BOARD_DEFCONFIG)
         packages = sorted(k for k, v in board.items()
                           if k.startswith("BR2_PACKAGE_") and v == "y")
         self.assertEqual(packages, ["BR2_PACKAGE_DROPBEAR", "BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS",
                                     "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
-                                    "BR2_PACKAGE_HOST_SQUASHFS"])
+                                    "BR2_PACKAGE_HOST_SQUASHFS", "BR2_PACKAGE_OMCID"])
 
     def test_the_post_image_script_and_the_overlay_are_set(self):
         board = settings(BOARD_DEFCONFIG)

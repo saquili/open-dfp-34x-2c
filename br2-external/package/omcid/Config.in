@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_OMCID
+	bool "omcid"
+	help
+	  The OMCI daemon of the ONU, from omcid/ in this repository:
+	  it answers the OLT and programs the data path through the
+	  kernel's interfaces. Installs /usr/sbin/omcid and the tools
+	  omcitap and omcivlan.

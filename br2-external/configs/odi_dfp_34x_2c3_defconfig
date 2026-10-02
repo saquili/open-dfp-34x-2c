@@ -79,4 +79,5 @@ BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
 # it uses, mksquashfs, is built for the build machine.
 # BR2_TARGET_ROOTFS_TAR is not set
 BR2_PACKAGE_HOST_SQUASHFS=y
+BR2_PACKAGE_OMCID=y
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/post-image.sh"

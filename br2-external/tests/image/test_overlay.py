@@ -25,10 +25,12 @@ INITTAB = os.path.join(OVERLAY, "etc", "inittab")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 # Words that start a command in the boot script and are not programs.
-BUILTINS = {"export", "echo", "warn", "[", "if", "then", "fi", "do", "done", "case", "esac",
-            ".", "exit", "set", "true", "false", ":"}
-# Programs of the dropbear package; every other command is a BusyBox applet.
+BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "do", "done",
+            "case", "esac", ".", "exit", "set", "true", "false", ":"}
+# Programs of the dropbear package and of this tree's packages; every other
+# command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
+PACKAGES = {"omcid"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 
@@ -62,7 +64,7 @@ class BootScript(unittest.TestCase):
         symbols = enabled_applets()
         unknown = []
         for word in sorted(set(commands(read(RCS)))):
-            if word in BUILTINS or word in DROPBEAR:
+            if word in BUILTINS or word in DROPBEAR or word in PACKAGES:
                 continue
             if SYMBOL.get(word, word.upper()) not in symbols:
                 unknown.append(word)

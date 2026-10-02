@@ -61,6 +61,13 @@ mkdir -p /run/dropbear
 dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no host key"
 dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid || warn "dropbear did not start"
 
+# The OMCI daemon answers the OLT. Its log is in /run, which is in memory.
+if [ -x /usr/sbin/omcid ]; then
+	omcid >/run/omcid.log 2>&1 &
+else
+	warn "no omcid: nothing answers the OLT"
+fi
+
 echo
 echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
 echo "open-dfp-34x-2c: ssh on $DATA_ADDRESS (sfp) and $MGMT_ADDRESS (VLAN $MGMT_VLAN)"
