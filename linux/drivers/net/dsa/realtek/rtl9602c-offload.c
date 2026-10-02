@@ -2334,7 +2334,7 @@ void rtl9602c_nat_clear(struct rtl9602c_priv *p)
 	}
 
 	if (dirty)
-		pr_info("cleared %u L3/NAT table entr%s left by the previous kernel, in %lld ms\n",
+		pr_info("cleared %u L3/NAT table entr%s, in %lld ms\n",
 			dirty, dirty == 1 ? "y" : "ies",
 			ktime_ms_delta(ktime_get(), t0));
 }
@@ -2402,39 +2402,46 @@ static ssize_t rtl9602c_qdepth_write(struct file *file, const char __user *ubuf,
  * before the enable, are not verified; a strobe does not empty its table,
  * rtl9602c_nat_clear() does.
  */
-void rtl9602c_l34_init(struct rtl9602c_priv *p)
+/*
+ * Strobe the reset of each table engine and return how many there are. A strobe
+ * clears itself; one still set is left and counted in @busy, the others in
+ * @done. Nothing waits for the strobes to finish: that they have by the first
+ * table access is not verified.
+ */
+static unsigned int rtl9602c_l34_tables_reset(struct rtl9602c_priv *p,
+					      unsigned int *done,
+					      unsigned int *busy)
 {
-	static const struct { u32 bit; const char *name; } rst[] = {
-		{ RTL9602C_L3TBL_RESET_ROUTE,     "route"     },
-		{ RTL9602C_L3TBL_RESET_PPPOE,     "pppoe"     },
-		{ RTL9602C_L3TBL_RESET_NEXTHOP,     "nexthop"     },
-		{ RTL9602C_L3TBL_RESET_L3IF,     "l3if"     },
-		{ RTL9602C_L3TBL_RESET_EXTADDR,     "extaddr"     },
-		{ RTL9602C_L3TBL_RESET_NEIGH, "neigh" },
-		{ RTL9602C_L3TBL_RESET_NAPT_IN,  "napt_in"  },
-		{ RTL9602C_L3TBL_RESET_NAPT,   "napt"   },
-		{ RTL9602C_L3TBL_RESET_ROUTE6,   "route6"   },
-		{ RTL9602C_L3TBL_RESET_BIND,     "bind"     },
-		{ RTL9602C_L3TBL_RESET_NEIGH6,     "neigh6"     },
-		{ RTL9602C_L3TBL_RESET_WANTYPE,     "wantype"     },
-		{ RTL9602C_L3TBL_RESET_FLOW,     "flow"     },
+	static const u32 rst[] = {
+		RTL9602C_L3TBL_RESET_ROUTE, RTL9602C_L3TBL_RESET_PPPOE,
+		RTL9602C_L3TBL_RESET_NEXTHOP, RTL9602C_L3TBL_RESET_L3IF,
+		RTL9602C_L3TBL_RESET_EXTADDR, RTL9602C_L3TBL_RESET_NEIGH,
+		RTL9602C_L3TBL_RESET_NAPT_IN, RTL9602C_L3TBL_RESET_NAPT,
+		RTL9602C_L3TBL_RESET_ROUTE6, RTL9602C_L3TBL_RESET_BIND,
+		RTL9602C_L3TBL_RESET_NEIGH6, RTL9602C_L3TBL_RESET_WANTYPE,
+		RTL9602C_L3TBL_RESET_FLOW,
 	};
-	unsigned int i, done = 0, busy = 0;
-	u32 v;
+	unsigned int i;
 
-	/*
-	 * A strobe clears itself; one still set is left and counted as busy.
-	 * Nothing waits for the strobes to finish: that they have by the first
-	 * table access is not verified.
-	 */
+	*done = 0;
+	*busy = 0;
 	for (i = 0; i < ARRAY_SIZE(rst); i++) {
-		if (rtl9602c_r(p, RTL9602C_L3TBL_RESET) & rst[i].bit) {
-			busy++;
+		if (rtl9602c_r(p, RTL9602C_L3TBL_RESET) & rst[i]) {
+			(*busy)++;
 			continue;
 		}
-		rtl9602c_rmw(p, RTL9602C_L3TBL_RESET, 0, rst[i].bit);
-		done++;
+		rtl9602c_rmw(p, RTL9602C_L3TBL_RESET, 0, rst[i]);
+		(*done)++;
 	}
+	return ARRAY_SIZE(rst);
+}
+
+void rtl9602c_l34_init(struct rtl9602c_priv *p)
+{
+	unsigned int done, busy, tables;
+	u32 v;
+
+	tables = rtl9602c_l34_tables_reset(p, &done, &busy);
 
 	/*
 	 * The per-L3-interface counters, which nothing reads; that the bit
@@ -2488,10 +2495,35 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 		rtl9602c_l2_l3lookup_cpu(p, true);
 
 	pr_info("L3: reset %u of %u table engine(s)%s, engine %s (control %08x, reset %08x)\n",
-		done, (unsigned int)ARRAY_SIZE(rst),
+		done, tables,
 		busy ? ", some already resetting" : "",
 		v & RTL9602C_L3_GLOBAL_CTRL_EN ? "ON" : "off", v,
 		rtl9602c_r(p, RTL9602C_L3TBL_RESET));
+}
+
+/**
+ * rtl9602c_l34_fini() - stop the L3/NAT engine and empty its tables
+ * @p: the switch, its L3 notifiers unregistered
+ *
+ * The undoing of rtl9602c_l34_init() at teardown: this device's own addresses
+ * are trapped to the CPU again, the engine's master enable is cleared, and its
+ * tables are reset and emptied, so that no flow is forwarded by rows that no
+ * driver keeps any more, and a driver bound again finds the engine as its
+ * bookkeeping starts.
+ */
+void rtl9602c_l34_fini(struct rtl9602c_priv *p)
+{
+	unsigned int done, busy;
+
+	mutex_lock(&p->flow_lock);
+	if (p->l34_up)
+		rtl9602c_l2_l3lookup_cpu(p, false);
+	p->l34_up = false;
+	rtl9602c_rmw(p, RTL9602C_L3_GLOBAL_CTRL, RTL9602C_L3_GLOBAL_CTRL_EN, 0);
+	rtl9602c_l34_tables_reset(p, &done, &busy);
+	rtl9602c_nat_clear(p);
+	mutex_unlock(&p->flow_lock);
+	pr_info("L3: engine off, %u table engine(s) reset\n", done);
 }
 
 /*

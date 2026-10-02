@@ -132,6 +132,8 @@ address-table entries. Every name is prefixed ``rtl9602c_``.
        registered by ``l34_notifiers_register()`` and unregistered by
        ``l34_notifiers_unregister()``, which ``teardown()`` calls
      - "The notifiers that fill the tables".
+   * - ``l34_fini()``, called from ``teardown()`` after the notifiers
+     - "Bring-up sequence" (its end).
    * - ``port_setup_tc``, its ``TC_SETUP_FT`` case (``setup_ft_block()``); the
        tbf and ets cases are on the *acl-qos* page
      - "The flowtable offload".
@@ -1054,8 +1056,12 @@ assumption that they are needed (see "Open questions").
 At teardown the driver unregisters the three notifiers first, since they can
 fire on any CPU and touch these tables. Then it cancels both work items and
 frees the events still queued, which releases the netdev reference that each
-queued neighbour event holds. Teardown writes neither the engine's enable nor
-its tables.
+queued neighbour event holds. Last, ``rtl9602c_l34_fini()`` undoes the
+bring-up: it traps this device's own addresses to the CPU again
+(``rtl9602c_l2_l3lookup_cpu()`` with ``false``), clears the engine's master
+enable, strobes the table resets and empties the tables with
+``rtl9602c_nat_clear()``, so that no flow is forwarded by rows that no driver
+keeps.
 
 Entry layouts
 =============
@@ -2836,10 +2842,6 @@ Known limitations
   interfaces, so this device's own addresses get the router bit only through
   ``rtl9602c_port_fdb_add()``, and the entry that is placed for a next hop stays
   in the address table after its neighbour goes away.
-- Unloading the driver does not stop the engine. Teardown unregisters the
-  notifiers and writes neither the engine's enable nor its tables, so the engine
-  stays on, with the rows that the notifiers wrote, until the next setup empties
-  the tables or a chip reset does.
 
 Open questions
 ==============

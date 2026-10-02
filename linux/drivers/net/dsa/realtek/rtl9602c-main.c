@@ -1603,6 +1603,7 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 	/* With no interrupt the GPON work is not cancelled by its teardown. */
 	cancel_delayed_work_sync(&p->gpon_work);
 	rtl9602c_l34_notifiers_unregister(p);
+	rtl9602c_l34_fini(p);
 	rtl9602c_gem_teardown(p);
 	rtl9602c_omci_teardown(p);
 	rtl9602c_debugfs_exit(p);

@@ -2694,6 +2694,7 @@ int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
 			      int port, u16 *want_vid, unsigned int *slot);
 void rtl9602c_nat_clear(struct rtl9602c_priv *p);
 void rtl9602c_l34_init(struct rtl9602c_priv *p);
+void rtl9602c_l34_fini(struct rtl9602c_priv *p);
 void rtl9602c_l34_notifiers_register(struct rtl9602c_priv *p);
 void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p);
 int rtl9602c_l_read(struct rtl9602c_priv *p, u16 reg, u8 *val);

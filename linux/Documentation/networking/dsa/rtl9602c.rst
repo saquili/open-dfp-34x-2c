@@ -1653,12 +1653,15 @@ Teardown
 2. Unregister the L3 notifiers (address, neighbour and route). Purpose: they can
    run on any CPU and touch the tables, so they go before anything they touch.
    (T)
-3. Tear down the GEM data path. Purpose: the PON device is unregistered with
+3. Stop the L3/NAT engine: trap this device's own addresses to the CPU again,
+   clear the engine's master enable and empty its tables (*l3-nat*). Purpose: no
+   flow is forwarded by rows that no driver keeps. (T)
+4. Tear down the GEM data path. Purpose: the PON device is unregistered with
    its last child, the OMCI port, and the data path must not outlive it. (T)
-4. Tear down the OMCI channel. (T)
-5. Remove the debugfs directory ``rtl9602c``. (T)
-6. Unregister the PHC. (T)
-7. Destroy the ``frame_capture`` region and unregister the devlink parameters.
+5. Tear down the OMCI channel. (T)
+6. Remove the debugfs directory ``rtl9602c``. (T)
+7. Unregister the PHC. (T)
+8. Destroy the ``frame_capture`` region and unregister the devlink parameters.
    Purpose: they go before the devlink instance does, so that the next probe
    does not find their names taken. (T)
 
