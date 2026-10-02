@@ -50,12 +50,18 @@ What is here
     The script that leaves ``k0.uImage``, ``r0.squashfs`` and ``SHA256SUMS`` in the
     images directory.
 ``tests/run``
-    The unit tests of the tree (``tests/image`` and ``tests/toolchain``).
+    The unit tests of the tree (``tests/image``, ``tests/kernel`` and
+    ``tests/toolchain``).
 ``tests/image/``
     The tests of the post-image script, the boot script and the defconfig, and
     the checks that run on a built image: ``check-applets`` runs its static
     programs under ``qemu-mips`` and ``tree-digest`` lists its files with their
     digests.
+``tests/kernel/``
+    ``check-config``, which holds the kernel's final configuration to what the
+    product needs (``required-options.txt``, an option with its value and its
+    reason on each line) and to the flash profile, and its tests (see "The
+    kernel's flash profile").
 ``tests/toolchain/``
     The programs and scripts that check a toolchain built from the toolchain
     defconfig (see "Checks on the toolchain"), and the list of the findings of the
@@ -241,9 +247,24 @@ The product is a transparent GPON ONU. The bridge with VLAN filtering, the VLAN
 translation that the switch carries out as flower rules, the PON class with the
 OMCI device, the optics through hwmon and I2C, the watchdog and the root
 filesystem all stay; what goes is what the product does not use, and what a RAM
-boot of the complete kernel gives when a person needs it. ``docs/handbook/building.rst``
-has the size of each group, measured by building, the options that were weighed
-and kept, and the two profiles side by side.
+boot of the complete kernel gives when a person needs it.
+``docs/handbook/building.rst`` has the size of each group, measured by building,
+the options that were weighed and kept, and the two profiles side by side.
+
+kbuild has the last word, so the build checks what it made. ``make`` runs
+``tests/kernel/check-config`` on the kernel's final configuration, the
+``.config`` in ``build/image/build/linux-custom``, and it holds that file to two
+lists. ``tests/kernel/required-options.txt`` names each option the product needs,
+the value it must have and the reason; the fragment says what is dropped. An
+option the fragment drops that another option selects, so that it is set again
+whatever the fragment says, fails the build, and so does a needed option that
+disappears with a dependency the fragment removed. The tests of the checker
+(``tests/kernel/test_check_config.py``) run it on small fake configurations, in
+which a missing required option fails and so does a dropped option that is set
+again, and read both lists against the kernel's Kconfig files, so that a
+misspelt name cannot make the check pass by asking about an option that does not
+exist. The ``image`` workflow also runs the checker on the board's complete
+configuration, which it has to refuse.
 
 Checks on the toolchain
 =======================

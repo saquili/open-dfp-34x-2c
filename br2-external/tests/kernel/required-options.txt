@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The options the product needs of the kernel, and why. check-config holds the
+# kernel's final configuration to this list: the file the build leaves after it
+# has merged the flash profile over rtl9602c_defconfig and kbuild has resolved
+# the dependencies. A line is
+#
+#     CONFIG_NAME=VALUE  reason
+#
+# where VALUE is what the option must read in that file (y, m, a number or a
+# string; n means it must not be set) and the reason says what the product
+# does with it. An option that another option selects is listed as well, so
+# that it cannot disappear when the one that selects it does.
+#
+# The product is a transparent GPON ONU: the bridge and the VLAN translation,
+# which is a flower rule that the switch carries out, the PON class with the
+# OMCI device, the optics through hwmon and I2C, the watchdog, and a root
+# filesystem on the flash. What the flash profile drops is not here; that file
+# is board/dfp-34x-2c3/kernel-flash.fragment, and check-config holds the kernel
+# to it as well.
+
+# --- The SoC and the boot ---------------------------------------------------
+CONFIG_RTL9602C=y                 the platform: interrupt controller, timers, clocks, memory map
+CONFIG_CPU_R3000=y                the core is a MIPS I core, which the cache and TLB code selects
+CONFIG_CPU_LEXRA_CACHE=y          the core's own cache operations
+CONFIG_CPU_BIG_ENDIAN=y           the core runs big endian
+CONFIG_32BIT=y                    a 32-bit kernel
+CONFIG_MIPS_FP_SUPPORT=n          the core has no floating-point unit, and user space is soft-float
+CONFIG_USE_OF=y                   the board is described by a device tree
+CONFIG_BUILTIN_DTB=y              the device tree is in the kernel image, which the loader starts alone
+CONFIG_MIPS_CMDLINE_DTB_EXTEND=y  the loader's command line (console, root) extends the bootargs of the device tree
+CONFIG_SERIAL_8250=y              the UART of the console
+CONFIG_SERIAL_8250_CONSOLE=y      the console: the loader's console argument selects it, and the shell is on it
+CONFIG_TTY=y                      the console is a terminal
+CONFIG_UNIX98_PTYS=y              each ssh session needs a pseudo-terminal
+CONFIG_MAGIC_SYSRQ=y              the bench restarts a running board with SysRq b over ssh
+CONFIG_PROC_FS=y                  /proc: BusyBox ps, top, free and mount, and the boot script
+CONFIG_SYSFS=y                    /sys: the network interfaces, the PON class, hwmon and the watchdog
+CONFIG_DEVTMPFS=y                 /dev holds the OMCI device and the watchdog
+CONFIG_DEVTMPFS_MOUNT=y           the kernel mounts /dev before the first program runs
+CONFIG_TMPFS=y                    /tmp, /run and /var of the boot script are tmpfs
+CONFIG_BINFMT_ELF=y               the static programs of the image are ELF executables
+CONFIG_BINFMT_SCRIPT=y            the boot script and shell scripts run as programs
+
+# --- The root filesystem ---------------------------------------------------
+CONFIG_BLOCK=y                    the root filesystem is on a block device
+CONFIG_MTD=y                      the flash is an MTD device
+CONFIG_MTD_OF_PARTS=y             the partitions of the flash come from the device tree
+CONFIG_MTD_BLOCK=y                the root filesystem is mtdblock5, which the loader names as root=31:5
+CONFIG_MTD_ROM=y                  the flash is mapped read-only, and Linux never writes it
+CONFIG_MTD_PHYSMAP=y              the flash is a memory-mapped region
+CONFIG_MTD_PHYSMAP_OF=y           the region is described by the device tree
+CONFIG_SQUASHFS=y                 the root filesystem is a SquashFS image
+CONFIG_SQUASHFS_ZLIB=y            the image the build makes is compressed with gzip
+CONFIG_SQUASHFS_LZ4=y             the bench takes a root filesystem image compressed with LZ4 as well (image.squashfs_compressions)
+
+# --- The switch, the PON and the optics -------------------------------------
+CONFIG_NET=y                      the network stack, on which everything below stands
+CONFIG_NETDEVICES=y               network interfaces and their drivers
+CONFIG_ETHERNET=y                 the Ethernet drivers, among them the CPU port's
+CONFIG_NET_DSA=y                  the switch is a DSA switch: sfp and pon are its user ports
+CONFIG_NET_DSA_RTL9602C=y         the driver of the switch, the GPON MAC, the PON MAC, the OMCI port and the optics
+CONFIG_NET_DSA_TAG_RTL9602C=y     the CPU tag driver, without which the conduit hands DSA no frame
+CONFIG_RTL9602C_ETH=y             the CPU port's DMA engine, the conduit of DSA, over which OMCI and GEM frames cross
+CONFIG_PON=y                      the PON class: the OMCI device /dev/pon0omci0, the GEM interfaces and the pon netlink family
+CONFIG_NET_DEVLINK=y              devlink parameters, region and info of the switch
+CONFIG_PHYLINK=y                  the SerDes lane to the host is a fixed link that phylink reports
+CONFIG_MFD_SYSCON=y               the driver finds the system controller as a regmap
+CONFIG_PTP_1588_CLOCK=y           the switch's IEEE 1588 clock is a PTP hardware clock
+CONFIG_I2C=y                      the optics' I2C adapter; the switch driver does not link without it
+CONFIG_HWMON=y                    the hwmon device of the optics: temperature, voltage, bias current and power
+CONFIG_GPIOLIB=y                  the laser driver's transmit-disable line is a GPIO
+CONFIG_GPIO_REALTEK_OTTO=y        the GPIO controller of that line
+CONFIG_WATCHDOG=y                 the watchdog core
+CONFIG_RTL9602C_WATCHDOG=y        the SoC's watchdog, on which a trial boot falls back
+
+# --- Bridging and the management network ------------------------------------
+CONFIG_BRIDGE=y                   the bridge of the user ports and the GEM interfaces, forwarded by the switch
+CONFIG_BRIDGE_VLAN_FILTERING=y    VLAN filtering and the bridge's VLANs
+CONFIG_VLAN_8021Q=y               VLAN interfaces, among them the management VLAN of the boot script
+CONFIG_INET=y                     IPv4: the management network and the ssh server
+CONFIG_UNIX=y                     local sockets between the programs of the image
+
+# --- Traffic control: the VLAN translation, filtering and shaping the switch carries out
+CONFIG_NET_SCHED=y                traffic control, which the switch's offloads hang on
+CONFIG_NET_SCH_INGRESS=y          the ingress hook the filters attach to
+CONFIG_NET_CLS_ACT=y              actions on classified frames
+CONFIG_NET_CLS_FLOWER=y           the classifier of the VLAN translation (ME 171) and of the ACL rules
+CONFIG_NET_ACT_VLAN=y             the action that rewrites a VLAN tag, the VLAN translation itself
+CONFIG_NET_ACT_GACT=y             drop and trap, the ACL actions
+CONFIG_NET_CLS_MATCHALL=y         the ingress policer and port mirroring
+CONFIG_NET_ACT_POLICE=y           the ingress policer and storm control
+CONFIG_NET_ACT_MIRRED=y           the action of a port mirror
+CONFIG_NET_SCH_TBF=y              the egress shaper of a port
+CONFIG_NET_SCH_ETS=y              the egress scheduler of a port
+
+# --- Kept because there was room ---------------------------------------------
+CONFIG_PACKET=y                   packet sockets, for capture on the stick
+CONFIG_DCB=y                      the switch's default priority, DSCP map and trust order
+CONFIG_PPP=y                      PPP, for a PPPoE session
+CONFIG_PPPOE=y                    PPP over Ethernet
