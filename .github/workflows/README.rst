@@ -55,9 +55,12 @@ which have to be identical but for the name of the directory and two values
 computed from the contents (``br2-external/README.rst`` says which). The steps
 after the gate over the toolchain's objects run whatever its result. With the
 toolchain as the defconfig builds it, the gate reports findings in three
-functions of the libraries (``br2-external/README.rst`` lists them), so the job
-ends with that step failed, after the others have passed. See
-``br2-external/README.rst`` for the checks.
+functions of the libraries (``br2-external/README.rst`` lists them), and the step
+holds them to a list: it passes when the findings are exactly the list in
+``br2-external/tests/toolchain/known-findings.txt``, fails when one is new, gone
+or different, and shows that its comparison can fail by running it against a
+list without one of the functions. See ``br2-external/README.rst`` for the
+checks.
 
 ``kernel.yml`` -- on changes to ``linux/``
 ==========================================

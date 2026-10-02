@@ -4,10 +4,10 @@
 # The cross toolchain, built from source by the pinned Buildroot with the
 # toolchain defconfig of br2-external, and checked: a negative control for the
 # instruction-set gate, the test programs built with the toolchain and run under
-# qemu-mips, the gate over every target object the toolchain holds, and a second
-# build in another directory that has to be the same as the first. Two builds
-# take the better part of an hour on a runner, so the workflow runs only when it
-# is started by hand.
+# qemu-mips, the gate over every target object the toolchain holds (held to the
+# list of the findings that are known), and a second build in another directory
+# that has to be the same as the first. Two builds take the better part of an
+# hour on a runner, so the workflow runs only when it is started by hand.
 
 name: toolchain
 
@@ -96,10 +96,26 @@ jobs:
         # the binaries; run under qemu-mips against their expected output.
         run: br2-external/tests/toolchain/run "$TOOLCHAIN_A" build/toolchain-tests
       - name: The instruction-set gate over the toolchain's target objects
+        # Three functions of the toolchain's libraries hold instructions that
+        # the gate refuses (br2-external/README.rst). The step passes when the
+        # findings are exactly the list in known-findings.txt, and fails when
+        # one is new, gone or different. The comparison is shown to be able to
+        # fail: a list without one of the functions is not the findings.
         run: |
           br2-external/tests/toolchain/target-objects "$TOOLCHAIN_A" > /tmp/target-objects.txt
           wc -l < /tmp/target-objects.txt
-          xargs -a /tmp/target-objects.txt tools/isa-gate/isa-gate --archives
+          gate=0
+          tools/isa-gate/isa-gate --archives --limit 100000 $(cat /tmp/target-objects.txt) \
+            > /tmp/gate.out 2>&1 || gate=$?
+          cat /tmp/gate.out
+          [ "$gate" -le 1 ] || exit "$gate"
+          known=br2-external/tests/toolchain/known-findings.txt
+          br2-external/tests/toolchain/compare-findings "$known" "$TOOLCHAIN_A" /tmp/gate.out
+          grep -v '| _test_and_set |' "$known" > /tmp/fewer-findings.txt
+          control=0
+          br2-external/tests/toolchain/compare-findings /tmp/fewer-findings.txt "$TOOLCHAIN_A" \
+            /tmp/gate.out > /dev/null || control=$?
+          [ "$control" = 1 ] || { echo "the comparison did not see a difference (status $control)" >&2; exit 1; }
       - name: Make room for the second build
         if: always()
         run: rm -rf build/toolchain-a/build build/unpacked-a
