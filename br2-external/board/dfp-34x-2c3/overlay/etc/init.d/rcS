@@ -84,6 +84,12 @@ else
 	warn "no omcid: nothing answers the OLT"
 fi
 
+# The HTTP status daemon. Its API needs the token of /etc/pond.token; an
+# image without the file serves only /api/health.
+if [ -x /usr/sbin/pond ]; then
+	pond >/run/pond.log 2>&1 &
+fi
+
 echo
 echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
 echo "open-dfp-34x-2c: ssh on $DATA_ADDRESS (sfp) and $MGMT_ADDRESS (VLAN $MGMT_VLAN)"

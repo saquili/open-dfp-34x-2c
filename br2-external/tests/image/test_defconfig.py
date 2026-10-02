@@ -101,7 +101,8 @@ class Root(unittest.TestCase):
                                     "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
                                     "BR2_PACKAGE_HOST_SQUASHFS", "BR2_PACKAGE_IPROUTE2",
                                     "BR2_PACKAGE_LIBMNL", "BR2_PACKAGE_OMCID",
-                                    "BR2_PACKAGE_ONU_UTILS", "BR2_PACKAGE_PPPOED"])
+                                    "BR2_PACKAGE_ONU_UTILS", "BR2_PACKAGE_POND",
+                                    "BR2_PACKAGE_PPPOED"])
 
     def test_the_post_image_script_and_the_overlay_are_set(self):
         board = settings(BOARD_DEFCONFIG)

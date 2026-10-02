@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_POND
+	bool "pond"
+	select BR2_PACKAGE_LIBMNL
+	help
+	  The HTTP status daemon of the ONU, from pond/ in this
+	  repository: the state of the device as JSON.
