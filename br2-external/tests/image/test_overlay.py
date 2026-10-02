@@ -26,11 +26,11 @@ SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 # Words that start a command in the boot script and are not programs.
 BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "do", "done",
-            "case", "esac", ".", "exit", "set", "true", "false", ":"}
+            "case", "esac", ".", "exit", "set", "true", "false", ":", "umask"}
 # Programs of the dropbear package and of this tree's packages; every other
 # command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid"}
+PACKAGES = {"omcid", "ponid", "devlink"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 

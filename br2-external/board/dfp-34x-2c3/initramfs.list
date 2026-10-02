@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# What the initramfs of a RAM boot holds beyond the target tree, in the format
+# of the kernel's usr/gen_init_cpio: the console, which the kernel opens before
+# the first program runs, and /init, the program it runs, which is BusyBox init.
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+slink /init /sbin/init 0777 0 0

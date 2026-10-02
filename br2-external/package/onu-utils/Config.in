@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_ONU_UTILS
+	bool "onu-utils"
+	select BR2_PACKAGE_ZLIB
+	help
+	  The small programs of the ONU, from onu-utils/ in this
+	  repository: ponid, which prints the identity of the unit
+	  from its factory configuration.
