@@ -36,13 +36,18 @@ kernel's bindings).
     then ``make buildroot``: the pinned Buildroot release is fetched from its
     URL, checked against the pin, and the carried patches are applied to it.
 ``image-budget``
-    The self-tests of ``tools/image-budget``, the size check of the flash images.
+    The self-tests of ``tools/image-budget``, the size check of the flash
+    images. They include a reading of the top-level ``Makefile``: the build has
+    to hold ``k0`` and ``r0`` both to their partitions, so a change that stops
+    enforcing either fails this job.
 ``image-scripts``
     ``br2-external/tests/run``: the tests of the post-image script (with the real
     ``mksquashfs``), of the boot script and the inittab, of the board's
-    defconfig, of the listing that compares two root filesystem trees, and of
-    the comparison of the instruction-set gate's findings with the list of the
-    known ones. A skipped test fails the job.
+    defconfig, of the kernel's flash profile and the check of its final
+    configuration (against the kernel's own Kconfig files), of the listing that
+    compares two root filesystem trees, and of the comparison of the
+    instruction-set gate's findings with the list of the known ones. A skipped
+    test fails the job.
 ``licensing``
     ``reuse lint``, with the REUSE tool pinned.
 
@@ -76,16 +81,21 @@ checks.
 The flash images of the board, built from source with
 ``br2-external/configs/odi_dfp_34x_2c3_defconfig`` by ``make`` in the top
 directory, and checked. One job, in the same pinned container, with these steps
-in order: the build (``make``, which also judges the result: ``r0`` has to fit
-its partition, the instruction-set gate has to pass over the whole root
-filesystem tree, and the digests have to check; the size of ``k0`` is reported);
-what was built (the compiler, the image header, the absence of any shared
-object); the negative control of the gate; the static programs run under
+in order: the build (``make``, which also judges the result: ``k0`` and ``r0``
+have to fit their partitions, the kernel's final configuration has to hold the
+options the product needs and none that the flash profile drops, the
+instruction-set gate has to pass over the whole root filesystem tree, and the
+digests have to check); what was built (the compiler, the image header, the
+absence of any shared object); both images against their partitions again
+(``tools/image-budget/image-budget --enforce``, whatever ``IMAGE_ENFORCE`` says
+in the environment); the kernel's configuration again, and the check's negative
+control, the board's complete configuration, which the check has to refuse with
+status 1; the negative control of the gate; the static programs run under
 ``qemu-mips`` (``br2-external/tests/image/check-applets``); the bench's dry run
-of the root filesystem image (``make flash ... ARGS=--dry-run``, which names no
-board); the images kept as the workflow artifact ``images``; and a second build
-in another directory, with the comparison of the two: the images byte for byte
-and the root filesystem trees by mode, size and digest of every file
+of both images (``make flash ... ARGS=--dry-run``, which names no board); the
+images kept as the workflow artifact ``images``; and a second build in another
+directory, with the comparison of the two: the images byte for byte and the root
+filesystem trees by mode, size and digest of every file
 (``br2-external/tests/image/tree-digest``). The steps after the first build run
 whatever its result. Two builds take the better part of an hour, so the workflow
 does not run on a push.
@@ -124,6 +134,5 @@ that stops with an error does.
 
 Still to come, each with the work that needs it: the board configuration
 and ``dtbs_check W=1`` in the build matrix, sparse, and the selftests build
-with the kernel series; the OMCI daemon with the userspace; the image-size gate
-for ``k0`` (``image.yml`` reports it and enforces ``r0``), and the nightly
+with the kernel series; the OMCI daemon with the userspace; and the nightly
 reproducibility build of the whole distribution.
