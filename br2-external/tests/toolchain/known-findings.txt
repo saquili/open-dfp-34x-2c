@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The findings of tools/isa-gate in the toolchain's own libraries, as the
+# toolchain job expects them. The gate is run over every target object of the
+# toolchain that configs/toolchain_defconfig builds (br2-external/README.rst,
+# "The instruction-set gate over the toolchain's own objects"), and
+# compare-findings holds what it reports to this list: the job passes when the
+# findings are exactly these, and fails when one is new, gone or different.
+#
+# The three functions are in the libraries of libgcc and of uClibc-ng and are
+# built for every MIPS target. A program that links the C library statically
+# takes only the objects it refers to, so none of them is in a static program,
+# and the image holds only static programs (docs/adr/0010).
+#
+# One line for each file, archive member and function: the number of findings,
+# the file (below the toolchain directory), the archive member (- for a file that
+# is not an archive), the function, and the instructions in the order the gate
+# reports them: the mnemonic of each, and for a word that a listing as MIPS I
+# leaves as data, the word (.word=0xf is sync; .word=0x3e00408 is jr.hb). When
+# the toolchain changes on purpose, "compare-findings --print-known" writes the
+# new list from the gate's output.
+#
+# findings | file | archive member (- for none) | function | instructions
+10 | lib/gcc/mips-buildroot-linux-uclibc/14.4.0/libgcc.a | _speculation_barrier.o | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
+10 | mips-buildroot-linux-uclibc/lib/libgcc_s.so.1 | - | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
+10 | mips-buildroot-linux-uclibc/sysroot/lib/libgcc_s.so.1 | - | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
+3 | mips-buildroot-linux-uclibc/sysroot/lib/libuClibc-1.0.59.so | - | __cxa_finalize | lwc0 swc0 .word=0xf
+2 | mips-buildroot-linux-uclibc/sysroot/lib/libuClibc-1.0.59.so | - | _test_and_set | lwc0 swc0
+3 | mips-buildroot-linux-uclibc/sysroot/usr/lib/libc.a | __cxa_finalize.os | __cxa_finalize | lwc0 swc0 .word=0xf
+2 | mips-buildroot-linux-uclibc/sysroot/usr/lib/libc.a | _test_and_set.os | _test_and_set | lwc0 swc0

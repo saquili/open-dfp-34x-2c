@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""compare-findings: hold the instruction-set gate's findings to a list.
+
+Usage: compare-findings KNOWN ROOT [GATE-OUTPUT]
+       compare-findings --print-known ROOT [GATE-OUTPUT]
+
+GATE-OUTPUT (default: standard input) is what tools/isa-gate/isa-gate printed,
+run with --limit set high enough to print every finding. KNOWN is a list of the
+findings that are expected, in the form of known-findings.txt. ROOT is the
+directory the gate's file names are relative to in KNOWN: it is taken off the
+front of each file name.
+
+The findings are grouped by file, archive member and function, and each group
+is counted and its instructions are listed in order: the mnemonic of each, and
+for a word that the MIPS I listing leaves as data (.word) the word itself,
+because the word says which instruction it is. The offset in the function and
+the registers are left out, so that a rebuilt library with the same code
+compares equal. The list and the findings have to be the same, group for group:
+a group that is new, a group that is gone, or a group whose count or
+instructions differ is a difference.
+
+With --print-known the tool prints the findings in the form of the list instead
+of comparing them, for the day the toolchain changes on purpose: the output is
+the new list, to be read and committed.
+
+Exit status: 0 when the findings are the known ones; 1 when they differ, after
+a description of each difference; 2 when the comparison cannot be made: no
+summary line in the gate's output (the gate did not finish), findings that were
+cut off by its --limit, a count in the summary that is not the number of
+findings printed, a line of a form this tool does not know, or a malformed list.
+"""
+
+import re
+import sys
+
+PREFIX = "isa-gate: "
+SUMMARY = re.compile(r"^isa-gate: (?:ok|FAIL) -- (\d+) files, (\d+) objects, (\d+) instructions, "
+                     r"(\d+) findings$")
+MORE = re.compile(r"^isa-gate: .*: \.\.\. and (\d+) more$")
+# A finding is "file: [member: ]function+0xoffset: instruction", or a header
+# finding, "file: ELF header: reason" / "file: member NAME: reason".
+INSN_ELF = re.compile(r"^(?P<sym>[^\s:]+)\+0x[0-9a-f]+: (?P<insn>.+)$")
+INSN_MEMBER = re.compile(r"^(?P<member>[^:]+): (?P<sym>[^\s:]+)\+0x[0-9a-f]+: (?P<insn>.+)$")
+HEADER_ELF = re.compile(r"^ELF header: (?P<reason>.+)$")
+HEADER_MEMBER = re.compile(r"^member (?P<member>[^:]+): (?P<reason>.+)$")
+
+
+class Cannot(Exception):
+    """The comparison cannot be made."""
+
+
+def instruction(text):
+    """The part of an instruction that says which one it is."""
+    words = text.split()
+    if words[0] == ".word" and len(words) > 1:
+        return ".word=" + words[1]
+    return words[0]
+
+
+def split_path(line):
+    path, sep, rest = line[len(PREFIX):].partition(": ")
+    if not sep:
+        raise Cannot("not a finding: %s" % line)
+    return path, rest
+
+
+def parse_findings(lines, root):
+    """The findings of a gate run as {(file, member, function): [instruction, ...]}."""
+    groups = {}
+    count = 0
+    summary = None
+    prefix = root.rstrip("/") + "/" if root else ""
+    for line in lines:
+        line = line.rstrip("\n")
+        if not line.startswith(PREFIX):
+            continue
+        found = SUMMARY.match(line)
+        if found:
+            if summary is not None:
+                raise Cannot("more than one summary line: the gate was run more than once")
+            summary = int(found.group(4))
+            continue
+        if MORE.match(line):
+            raise Cannot("the gate cut its findings off (%s): run it with a larger --limit" % line)
+        path, rest = split_path(line)
+        if prefix and path.startswith(prefix):
+            path = path[len(prefix):]
+        for pattern, kind in ((INSN_ELF, "elf"), (INSN_MEMBER, "member"), (HEADER_ELF, "hdr"),
+                              (HEADER_MEMBER, "hdr-member")):
+            match = pattern.match(rest)
+            if match:
+                break
+        else:
+            raise Cannot("a line of a form this tool does not know: %s" % line)
+        if kind == "elf":
+            key = (path, "-", match.group("sym"))
+            what = instruction(match.group("insn"))
+        elif kind == "member":
+            key = (path, match.group("member"), match.group("sym"))
+            what = instruction(match.group("insn"))
+        elif kind == "hdr":
+            key = (path, "-", "ELF header")
+            what = match.group("reason")
+        else:
+            key = (path, match.group("member"), "ELF header")
+            what = match.group("reason")
+        groups.setdefault(key, []).append(what.replace(" ", "_"))
+        count += 1
+    if summary is None:
+        raise Cannot("no summary line: the gate's output is incomplete")
+    if summary != count:
+        raise Cannot("the summary says %d findings and %d were printed" % (summary, count))
+    return groups
+
+
+def parse_known(lines):
+    """The expected findings as {(file, member, function): [instruction, ...]}."""
+    groups = {}
+    for number, line in enumerate(lines, 1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        fields = [f.strip() for f in text.split("|")]
+        if len(fields) != 5 or not fields[0].isdigit() or not all(fields[1:4]):
+            raise Cannot("known findings, line %d: expected \"count | file | member | "
+                         "function | instructions\"" % number)
+        key = (fields[1], fields[2], fields[3])
+        what = fields[4].split()
+        if key in groups:
+            raise Cannot("known findings, line %d: %s is listed twice" % (number, " | ".join(key)))
+        if len(what) != int(fields[0]):
+            raise Cannot("known findings, line %d: the count is %s and %d instructions are listed"
+                         % (number, fields[0], len(what)))
+        groups[key] = what
+    if not groups:
+        raise Cannot("the list of known findings is empty")
+    return groups
+
+
+def format_group(key, what):
+    return "%d | %s | %s | %s | %s" % (len(what), key[0], key[1], key[2], " ".join(what))
+
+
+def differences(known, found):
+    """One description for each difference between two sets of groups."""
+    out = []
+    for key in sorted(set(found) - set(known)):
+        out.append("new:     " + format_group(key, found[key]))
+    for key in sorted(set(known) - set(found)):
+        out.append("gone:    " + format_group(key, known[key]))
+    for key in sorted(set(known) & set(found)):
+        if known[key] != found[key]:
+            out.append("changed: %s | %s | %s: known %d (%s), found %d (%s)"
+                       % (key[0], key[1], key[2], len(known[key]), " ".join(known[key]),
+                          len(found[key]), " ".join(found[key])))
+    return out
+
+
+def main(argv, stdin=sys.stdin, out=sys.stdout, err=sys.stderr):
+    if argv and argv[0] == "--print-known":
+        return print_known(argv[1:], stdin, out, err)
+    if len(argv) not in (2, 3):
+        err.write(__doc__.split("\n\n")[0] + "\n")
+        return 2
+    try:
+        with open(argv[0], encoding="utf-8") as handle:
+            known = parse_known(handle.readlines())
+        if len(argv) == 3:
+            with open(argv[2], encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        else:
+            lines = stdin.readlines()
+        found = parse_findings(lines, argv[1])
+    except OSError as exc:
+        err.write("compare-findings: %s: %s\n" % (exc.filename, exc.strerror))
+        return 2
+    except Cannot as exc:
+        err.write("compare-findings: %s\n" % exc)
+        return 2
+    differ = differences(known, found)
+    total = sum(len(v) for v in found.values())
+    if differ:
+        out.write("compare-findings: the findings are not the known ones (%d findings in %d "
+                  "groups found, %d known in %d groups)\n"
+                  % (total, len(found), sum(len(v) for v in known.values()), len(known)))
+        for line in differ:
+            out.write("  " + line + "\n")
+        return 1
+    out.write("compare-findings: the %d findings are the %d groups of the list, and nothing else\n"
+              % (total, len(known)))
+    return 0
+
+
+def print_known(argv, stdin, out, err):
+    if len(argv) not in (1, 2):
+        err.write("usage: compare-findings --print-known ROOT [GATE-OUTPUT]\n")
+        return 2
+    try:
+        if len(argv) == 2:
+            with open(argv[1], encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        else:
+            lines = stdin.readlines()
+        found = parse_findings(lines, argv[0])
+    except OSError as exc:
+        err.write("compare-findings: %s: %s\n" % (exc.filename, exc.strerror))
+        return 2
+    except Cannot as exc:
+        err.write("compare-findings: %s\n" % exc)
+        return 2
+    if not found:
+        err.write("compare-findings: the gate printed no finding: there is nothing to list\n")
+        return 2
+    out.write("# findings | file | archive member (- for none) | function | instructions\n")
+    for key in sorted(found):
+        out.write(format_group(key, found[key]) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
