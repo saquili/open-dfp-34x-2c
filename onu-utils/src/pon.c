@@ -5,7 +5,8 @@
  * pon: show the PON devices of the kernel and their ONU through the "pon"
  * generic netlink family: the activation state, the identifiers the OLT
  * assigned, the alarms, the counters and the T-CONTs. "pon monitor" prints
- * every change the kernel announces, with the time it came.
+ * every change the kernel announces, with the time it came; "pon gem" lists
+ * the GEM interfaces, from the kernel's links.
  */
 
 #include <errno.h>
@@ -19,7 +20,9 @@
 
 #include <libmnl/libmnl.h>
 #include <linux/genetlink.h>
+#include <linux/rtnetlink.h>
 
+#include "gemlink.h"
 #include "genl.h"
 #include "pondev.h"
 
@@ -142,18 +145,65 @@ static int watch_changes(struct mnl_socket *nl, const struct family *fam)
 	}
 }
 
+static int gem_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct gem_link g;
+	int rc = gem_link_parse(nlh, &g);
+
+	(void)data;
+	if (rc < 0)
+		return MNL_CB_ERROR;
+	if (rc)
+		gem_link_print(stdout, &g);
+	return MNL_CB_OK;
+}
+
+/* Every GEM interface, one line each, from a dump of the links. */
+static int show_gems(void)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct mnl_socket *nl = mnl_socket_open(NETLINK_ROUTE);
+	struct nlmsghdr *nlh;
+	struct ifinfomsg *ifm;
+	int err;
+
+	if (!nl || mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0) {
+		fprintf(stderr, "pon: no route netlink: %s\n", strerror(errno));
+		if (nl)
+			mnl_socket_close(nl);
+		return 1;
+	}
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_GETLINK;
+	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	nlh->nlmsg_seq = 1;
+	ifm = mnl_nlmsg_put_extra_header(nlh, sizeof(*ifm));
+	ifm->ifi_family = AF_UNSPEC;
+
+	err = genl_talk(nl, nlh, gem_cb, NULL);
+	mnl_socket_close(nl);
+	if (err) {
+		fprintf(stderr, "pon: the kernel did not list its links: %s\n",
+			strerror(-err));
+		return 1;
+	}
+	return 0;
+}
+
 static int print_usage(void)
 {
 	fprintf(stderr,
 		"usage: pon [-s]       the PON devices, their ONU and T-CONTs;\n"
 		"                      -s also prints the serial number\n"
-		"       pon monitor    every change the kernel announces\n");
+		"       pon monitor    every change the kernel announces\n"
+		"       pon gem        the GEM interfaces: Port-ID, direction,\n"
+		"                      T-CONT, multicast\n");
 	return 2;
 }
 
 int main(int argc, char **argv)
 {
-	bool serial = false, watch = false;
+	bool serial = false, watch = false, gem = false;
 	struct mnl_socket *nl;
 	struct family fam;
 	int i, err;
@@ -163,9 +213,14 @@ int main(int argc, char **argv)
 			serial = true;
 		else if (!strcmp(argv[i], "monitor"))
 			watch = true;
+		else if (!strcmp(argv[i], "gem"))
+			gem = true;
 		else
 			return print_usage();
 	}
+
+	if (gem)
+		return show_gems();
 
 	nl = mnl_socket_open(NETLINK_GENERIC);
 	if (!nl || mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0) {

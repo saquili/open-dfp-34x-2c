@@ -29,13 +29,15 @@ $(BUILD)/%.o: %.c
 $(BUILD)/ponid: $(BUILD)/src/ponid.o $(BUILD)/src/factory.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
-$(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o
+$(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o \
+	       $(BUILD)/src/gemlink.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_factory: $(BUILD)/tests/test_factory.o $(BUILD)/src/factory.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
-$(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o
+$(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o \
+		      $(BUILD)/src/gemlink.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_genl: $(BUILD)/tests/test_genl.o $(BUILD)/src/genl.o

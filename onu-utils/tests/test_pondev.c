@@ -3,6 +3,7 @@
 
 /* Tests of reading and printing the messages of the "pon" family. */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,10 @@
 #include <libmnl/libmnl.h>
 #include <linux/genetlink.h>
 
+#include <linux/if_link.h>
+#include <linux/rtnetlink.h>
+
+#include "gemlink.h"
 #include "pondev.h"
 
 static int checks, failures;
@@ -188,6 +193,90 @@ static void test_an_idle_tcont_prints_as_idle(void)
 	free(text);
 }
 
+static struct nlmsghdr *link_message(char *buf, const char *name,
+				     const char *kind)
+{
+	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
+	struct ifinfomsg *ifm = mnl_nlmsg_put_extra_header(nlh, sizeof(*ifm));
+	struct nlattr *info;
+
+	nlh->nlmsg_type = RTM_NEWLINK;
+	ifm->ifi_family = AF_UNSPEC;
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, name);
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, kind);
+	mnl_attr_nest_end(nlh, info);
+	return nlh;
+}
+
+static char *gem_printed(const struct gem_link *g)
+{
+	char *text = NULL;
+	size_t len = 0;
+	FILE *f = open_memstream(&text, &len);
+
+	gem_link_print(f, g);
+	fclose(f);
+	return text;
+}
+
+static void test_gem_links_are_read(void)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct nlattr *info, *data;
+	struct nlmsghdr *nlh;
+	struct gem_link g;
+	char *text;
+
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_NEWLINK;
+	mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifinfomsg));
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, "gem4095");
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, "gem");
+	data = mnl_attr_nest_start(nlh, IFLA_INFO_DATA);
+	mnl_attr_put_u16(nlh, IFLA_GEM_PORT_ID, 4095);
+	mnl_attr_put_u8(nlh, IFLA_GEM_DIRECTION, IFLA_GEM_DIR_DOWNSTREAM);
+	mnl_attr_put(nlh, IFLA_GEM_MULTICAST, 0, NULL);
+	mnl_attr_nest_end(nlh, data);
+	mnl_attr_nest_end(nlh, info);
+	CHECK(gem_link_parse(nlh, &g) == 1);
+	text = gem_printed(&g);
+	CHECK(!strcmp(text, "gem4095 port 4095 down multicast\n"));
+	free(text);
+
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_NEWLINK;
+	mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifinfomsg));
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, "gem256");
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, "gem");
+	data = mnl_attr_nest_start(nlh, IFLA_INFO_DATA);
+	mnl_attr_put_u16(nlh, IFLA_GEM_PORT_ID, 256);
+	mnl_attr_put_u32(nlh, IFLA_GEM_TCONT, 0);
+	mnl_attr_nest_end(nlh, data);
+	mnl_attr_nest_end(nlh, info);
+	CHECK(gem_link_parse(nlh, &g) == 1);
+	text = gem_printed(&g);
+	CHECK(!strcmp(text, "gem256 port 256 both tcont 0\n"));
+	free(text);
+
+	nlh = link_message(buf, "sfp", "dsa");
+	CHECK(gem_link_parse(nlh, &g) == 0);
+
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_NEWLINK;
+	mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifinfomsg));
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, "gem1");
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, "gem");
+	data = mnl_attr_nest_start(nlh, IFLA_INFO_DATA);
+	mnl_attr_put_u32(nlh, IFLA_GEM_PORT_ID, 1);
+	mnl_attr_nest_end(nlh, data);
+	mnl_attr_nest_end(nlh, info);
+	CHECK(gem_link_parse(nlh, &g) == -EINVAL);
+}
+
 int main(void)
 {
 	test_a_full_device_is_read();
@@ -196,6 +285,7 @@ int main(void)
 	test_a_malformed_attribute_is_refused();
 	test_a_tcont_is_read();
 	test_an_idle_tcont_prints_as_idle();
+	test_gem_links_are_read();
 
 	printf("test_pondev: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
