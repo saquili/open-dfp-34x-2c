@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""python3 -m devtest: run the device tests and write down what they found."""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import os
+import subprocess
+import sys
+
+from . import cases_system, cases_net, cases_pon, cases_data  # noqa: F401  (they register)
+from .access import Settings, bench_remote, redact, stick_remote
+from .core import CASES, FAIL, Context, run_case, select
+from .report import as_json, counts, log, page
+
+
+def git(*args: str) -> str:
+    done = subprocess.run(["git", *args], capture_output=True, text=True,
+                          cwd=os.path.dirname(os.path.abspath(__file__)))
+    return done.stdout.strip()
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="devtest", description=__doc__)
+    parser.add_argument("--bench", default=os.environ.get("DEVTEST_BENCH", ""),
+                        help="the bench host, as ssh knows it (DEVTEST_BENCH)")
+    parser.add_argument("--stick", default=os.environ.get("DEVTEST_STICK", ""),
+                        help="the stick's management address (DEVTEST_STICK)")
+    parser.add_argument("--olt-port", default=os.environ.get("DEVTEST_OLT_PORT", ""),
+                        help="the bench host's port on the network side, behind the OLT")
+    parser.add_argument("--subscriber-port", default=os.environ.get("DEVTEST_SUBSCRIBER_PORT", ""),
+                        help="the bench host's port at the far end of the stick's host link")
+    parser.add_argument("--token-file", default=os.environ.get("DEVTEST_TOKEN_FILE", ""),
+                        help="a file with the status daemon's token")
+    parser.add_argument("--no-sudo", action="store_true",
+                        help="the bench host runs the packet generator without sudo")
+    parser.add_argument("--destructive", action="store_true",
+                        help="also run the cases that reset the stick")
+    parser.add_argument("--out", default="", help="write NAME.rst, NAME.log and NAME.json")
+    parser.add_argument("--title", default="", help="the title of the page")
+    parser.add_argument("--list", action="store_true", help="list the cases and stop")
+    parser.add_argument("cases", nargs="*", help="cases or areas to run (all by default)")
+    args = parser.parse_args(argv)
+
+    if args.list:
+        for c in CASES:
+            print(f"{c.id:24} {c.check}{'  [destructive]' if c.destructive else ''}")
+        return 0
+    if not args.bench or not args.stick:
+        parser.error("--bench and --stick are needed")
+
+    token = ""
+    if args.token_file:
+        with open(args.token_file, encoding="utf-8") as handle:
+            token = handle.read().strip()
+    settings = Settings(bench=args.bench, stick=args.stick, bench_sudo=not args.no_sudo,
+                        olt_port=args.olt_port, subscriber_port=args.subscriber_port,
+                        pond_token=token)
+    trail: list[str] = []
+    ctx = Context(settings, stick_remote(settings, trail), bench_remote(settings, trail), trail,
+                  destructive=args.destructive)
+
+    started = datetime.datetime.now(datetime.timezone.utc)
+    results = []
+    for c in select(args.cases):
+        result = run_case(c, ctx)
+        results.append(result)
+        print(f"{result.status.upper():4}  {result.id:24} {result.evidence}", flush=True)
+    print(counts(results))
+
+    if args.out:
+        header = {
+            "Date": started.strftime("%Y-%m-%d %H:%M UTC"),
+            "Source": f"{git('rev-parse', '--short=12', 'HEAD')}"
+                      + (" with local changes" if git("status", "--porcelain") else ""),
+            "Kernel": redact(ctx.stick.run("uname -rv").out.strip(), settings),
+            "Image": redact(ctx.stick.run(". /etc/os-release && echo $PRETTY_NAME")
+                            .out.strip(), settings),
+        }
+        title = args.title or f"Device tests of {started:%Y-%m-%d}"
+        name = git("config", "user.name") or "the bench"
+        email = git("config", "user.email")
+        holder = f"{started:%Y} {name}" + (f" <{email}>" if email else "")
+        with open(args.out + ".rst", "w", encoding="utf-8") as handle:
+            handle.write(page(title, header, results, holder))
+        with open(args.out + ".log", "w", encoding="utf-8") as handle:
+            handle.write(log(results))
+        with open(args.out + ".json", "w", encoding="utf-8") as handle:
+            handle.write(as_json(header, results))
+        print(f"written {args.out}.rst, .log and .json")
+    return 1 if any(r.status == FAIL for r in results) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

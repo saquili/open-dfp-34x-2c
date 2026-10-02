@@ -5,17 +5,66 @@
 tests/device
 ============
 
-The hardware-in-the-loop test runner.
+The tests that run on the stick itself. Each case checks one function of the
+stick, says so in one sentence, and records the measured values that its
+verdict rests on. A run writes a page with the table of every case and its
+result, the log of every command each case ran, and the same results as JSON.
+The pages of the runs that a change was tested with are kept in
+``docs/testing/``.
 
-This drives the reference regression on the real board through the bench
-tooling: boot to a shell, the watchdog life-cycle, the host link and its
-recovery, bridged throughput both ways, VLAN and forwarding-database behaviour,
-the classifier and shaper counters, the hardware clock, GPON downstream lock
-and time-to-ready, the OMCI channel both ways, and the optics diagnostics and
-laser-safety checks. Results are attached to each change.
+What it needs
+=============
 
-Empty for now. It is populated by **WI-19** (with the kernel selftests that
-live under ``linux/tools/testing/selftests/``).
+* The stick, booted from an image of this tree, with the bench's ssh key in
+  ``/root/.ssh/authorized_keys`` (a local overlay of the bench, see
+  ``docs/handbook/building.rst``).
+* A bench host: a Linux machine that reaches the stick's management address and
+  through which ssh reaches the stick (``ssh -J``). For the data path, the bench
+  host is also both far ends: one port is the far end of the stick's host link
+  (the subscriber side) and one port is behind the OLT (the network side). The
+  data-path cases use the kernel's packet generator (``modprobe pktgen``) and
+  ``sudo`` without a password for it.
+* Python 3.11 or later and an ssh client on the machine that runs the tests;
+  ``python3`` and ``curl`` on the bench host.
 
-Fine-grained functional tests live with their component: kernel selftests in
-``linux/``, and the OMCI daemon's host unit tests in ``omcid/tests/``.
+Running
+=======
+
+From this directory::
+
+    python3 -m devtest --bench BENCH --stick ADDRESS \
+        --olt-port PORT --subscriber-port PORT \
+        --token-file FILE --out ../../docs/testing/NAME
+
+``--list`` lists the cases; naming cases or areas (``gpon``, ``data.upstream``)
+runs only those. The cases that reset the stick run only with
+``--destructive``. Without ``--olt-port`` and ``--subscriber-port`` the
+data-path cases are skipped; without ``--token-file`` so is the case that reads
+values from the status daemon. The settings can also come from the environment:
+``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_OLT_PORT``,
+``DEVTEST_SUBSCRIBER_PORT`` and ``DEVTEST_TOKEN_FILE``.
+
+What a run records leaves out what names one unit or one bench: MAC addresses,
+GPON serial numbers, the token, and the names of the bench host and the stick
+are replaced by ``<mac>``, ``<serial>``, ``<token>``, ``<bench>`` and
+``<stick>``.
+
+Layout
+======
+
+``devtest/access.py``
+    The two remote ends, ssh to them, and the redaction of what is recorded.
+``devtest/core.py``
+    Cases, outcomes and the loop that runs them.
+``devtest/cases_*.py``
+    The cases, by area: the system, the host side and management, the PON side
+    and the optics, the data path.
+``devtest/report.py``
+    The page, the log and the JSON of a run.
+``devtest/tests/``
+    Unit tests, which need no stick: from this directory,
+    ``python3 -m unittest discover -s devtest/tests -t .``.
+
+Finer tests live with their component: the OMCI daemon's in ``omcid/tests/``,
+the other programs' in their ``tests/`` directories, and the kernel's
+selftests under ``linux/tools/testing/selftests/``.
