@@ -260,6 +260,23 @@ int rtl9602c_get_ts_info(struct dsa_switch *ds, int port,
  *
  * Return: 0 or a negative error code.
  */
+/*
+ * The tag of a received PTP message carries the low 16 bits of the seconds,
+ * and rtl9602c_port_rxtstamp() takes the rest from the last read of the
+ * clock. Reading the clock once a minute keeps that read within a minute of
+ * the clock, far inside half the tag's window of 65536 s, whether or not
+ * anything else reads it; the first read comes at registration.
+ */
+#define RTL9602C_PTP_AUX_PERIOD		(60 * HZ)
+
+static long rtl9602c_ptp_aux_work(struct ptp_clock_info *info)
+{
+	struct timespec64 ts;
+
+	rtl9602c_ptp_gettime(info, &ts);
+	return RTL9602C_PTP_AUX_PERIOD;
+}
+
 int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 {
 	mutex_init(&p->ptp_lock);
@@ -276,6 +293,7 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 		.gettime64	= rtl9602c_ptp_gettime,
 		.settime64	= rtl9602c_ptp_settime,
 		.enable		= rtl9602c_ptp_enable,
+		.do_aux_work	= rtl9602c_ptp_aux_work,
 	};
 
 	p->ptp_clock = ptp_clock_register(&p->ptp_info, p->dev);
@@ -285,6 +303,7 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 		p->ptp_clock = NULL;
 		return err;
 	}
+	ptp_schedule_worker(p->ptp_clock, 0);
 	return 0;
 }
 

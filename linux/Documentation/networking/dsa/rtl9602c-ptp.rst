@@ -706,16 +706,15 @@ The steps are checked by the rows below and by those of "The tag".
        seconds of the last clock read (``ptp_sec_seen``, set by every
        ``gettime64``), choosing the 65,536-second window that puts the stamp
        nearest to them (a difference over 32,768 s moves it one window), and
-       delivers the frame at once (it returns false). The result is right only
-       while the PHC has been read within about nine hours of the frame.
-       Nothing else refreshes the value: without a reader of the PHC it stays
-       0, and a tag whose seconds exceed 32,768 is completed to a negative
-       time.
+       delivers the frame at once (it returns false). The result is right
+       while the PHC has been read within about nine hours of the frame. The
+       PHC's auxiliary work (``do_aux_work``) reads the clock at registration
+       and then once a minute, so the seconds are never older than a minute,
+       whether or not a PTP daemon reads the clock.
      - I
-     - The window arithmetic has run only with stamps below 65,536 s. A frame
-       received more than 32,768 s after the last PHC read, or with the
-       clock's low 16 bits of seconds above 32,768 and no reader, would show
-       the failure. Load-bearing whenever no PTP daemon reads the clock.
+     - The window arithmetic has run only with stamps below 65,536 s; the
+       auxiliary work is read from the code. A frame received with the clock's
+       low 16 bits of seconds above 32,768 and no other reader would show it.
    * - The conduit strips every frame longer than 16 bytes that carries
        ``0x8899`` at offset 12, whatever its protocol byte (offset 14),
        although other frames use that EtherType too: the switch's own
@@ -1133,13 +1132,6 @@ Known limitations
   The filter that is reported promises every event message, over Ethernet and
   over UDP; only a Sync over Ethernet has been seen tagged (see "Receive
   timestamps").
-- The seconds of a receive timestamp are completed from the seconds of the last
-  read of the PHC (``gettime64``; ``settime64`` reads too). The stamp is right
-  only while the clock has been read within about nine hours (32,768 s) of the
-  frame. Nothing else refreshes those seconds, a step of the clock and a read
-  through the ``hsd`` view included; until the first read they are 0, and a
-  tag whose seconds exceed 32,768 is then completed to a negative time. Any
-  regular reader of the PHC keeps them fresh.
 - The clock and the completion of receive stamps depend on the kernel
   configuration. Without ``CONFIG_PTP_1588_CLOCK`` no PHC is registered
   (``ethtool -T`` reports no PHC index) and nothing reads the clock. DSA hands
