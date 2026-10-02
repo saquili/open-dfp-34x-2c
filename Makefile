@@ -47,9 +47,21 @@ BR2_ENV        = test "$$(uname -s)" = Linux || { \
 # last stage of the work. Until then the sizes are reported.
 IMAGE_ENFORCE ?=
 
+# The build system builds a package once and keeps it. The kernel and its
+# headers are built again when the archive of linux/ is another one than last
+# time, and the programs of this tree, which it copies from the working tree,
+# are copied and built again at every build.
+LOCAL_PACKAGES = omcid onu-utils pppoed pond
+
 image:
 	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
-	  odi_dfp_34x_2c3_defconfig && make -C "$(IMAGE_OUT)"
+	  odi_dfp_34x_2c3_defconfig && \
+	if [ "$$(cat "$(IMAGE_OUT)/.kernel-archive" 2>/dev/null)" != "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" ]; then \
+	  make -C "$(IMAGE_OUT)" linux-dirclean linux-headers-dirclean && \
+	  echo "$$OPEN_DFP_34X_2C_KERNEL_ARCHIVE" > "$(IMAGE_OUT)/.kernel-archive"; \
+	fi && \
+	rm -rf $(foreach p,$(LOCAL_PACKAGES),"$(IMAGE_OUT)/build/$(p)-local") && \
+	make -C "$(IMAGE_OUT)"
 	$(MAKE) image-check
 
 # What the build left, judged: the size of each image against its partition, the
