@@ -108,8 +108,8 @@ state machine.
    * - Assign_ONU-ID carrying the ONU's serial number
      - O3
      - O4
-     - Writes the ONU-ID, binds the default Alloc-ID into T-CONT 16, arms a
-       bandwidth-map capture and arms TO1 again.
+     - Writes the ONU-ID, binds the default Alloc-ID into T-CONT 16 and arms a
+       bandwidth-map capture; TO1 runs on from O3.
    * - Ranging_Time for the main path, directed
      - O4
      - O5
@@ -1060,7 +1060,9 @@ and then asks for the transition. The transition
 1. Record the new state for the rest of the driver. (M)
 2. Make the ``pon`` interface dormant, or not dormant in O5. (I)
 3. Record the event in the ``ploamlog`` ring. (M)
-4. Arm TO1 in O3 and O4 and disarm it otherwise. (M)
+4. Arm TO1 on entering O3, leave it running on entering O4, and disarm it on
+   entering any other state. (I: read from the code; the time from O3 to O5
+   on the bench is far under TO1)
 5. Write the state into ``RTL9602C_ONU_CTRL``. Purpose: the MAC follows it. (M)
 6. Below O4, if an ONU-ID is held: write 255 into the ONU-ID registers and
    unbind the default Alloc-ID, the Alloc-IDs in T-CONTs 0 to 15 and the OMCC.
@@ -2595,9 +2597,6 @@ Known limitations
 - The bring-up enters O2 without checking LOS or LOF, where G.984.3 leaves O1
   for O2 once both are clear. On a dark fibre the ONU reports O2 with the LOS
   alarm.
-- TO1 is armed on entering O3 and again on entering O4, so that the ONU may
-  spend up to 10 s in each of the two states. G.984.3 starts TO1 once, on
-  entering O3, and bounds the two states together.
 - Extended_Burst_Length is acted on whenever it changes in O3, where G.984.3 has
   the ONU act on it only before its first serial-number request. The upper clamp
   of the computed overhead length is 252 bytes, where G.984.3 allows at most

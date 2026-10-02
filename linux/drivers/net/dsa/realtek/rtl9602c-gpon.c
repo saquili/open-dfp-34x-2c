@@ -781,14 +781,13 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	rtl9602c_ploam_log(p, RTL9602C_EV_STATE, NULL, from);
 
 	/*
-	 * TO1 runs in O3 and O4, and the worker expires it. Armed again on
-	 * entering O4, it allows RTL9602C_GPON_TO1_MS in each of the two
-	 * states, where G.984.3 bounds the time in both together.
+	 * TO1 bounds the serial-number and ranging states together (G.984.3
+	 * clause 10.1): it starts on entering O3, runs on through O4, and the
+	 * worker expires it. Any other state stops it.
 	 */
-	if (state == RTL9602C_ONU_O3_SERIAL_NUMBER ||
-	    state == RTL9602C_ONU_O4_RANGING)
+	if (state == RTL9602C_ONU_O3_SERIAL_NUMBER)
 		p->gpon_to1 = jiffies + msecs_to_jiffies(RTL9602C_GPON_TO1_MS);
-	else
+	else if (state != RTL9602C_ONU_O4_RANGING)
 		p->gpon_to1 = 0;
 
 	rtl9602c_rmw(p, RTL9602C_ONU_CTRL, RTL9602C_ONU_CTRL_STATE,
