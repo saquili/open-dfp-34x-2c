@@ -56,6 +56,14 @@ class Redaction(unittest.TestCase):
         self.assertEqual(redact(text, SETTINGS),
                          "sfp <mac> serial <serial> via <bench> to <stick> Bearer <token>")
 
+    def test_the_bench_s_addresses_are_taken_out(self):
+        text = ("inet 10.11.12.13/30 via 172.16.1.1, doc 192.0.2.1, mask 255.255.255.252, "
+                "any 0.0.0.0, kernel 6.18.48, public 8.8.8.8")
+        self.assertEqual(redact(text), "inet <address>/30 via <address>, doc 192.0.2.1, "
+                                       "mask 255.255.255.252, any 0.0.0.0, kernel 6.18.48, "
+                                       "public <address>")
+        self.assertEqual(redact("ssh 192.0.2.2 ok", SETTINGS), "ssh <stick> ok")
+
     def test_hex_alone_and_short_words_stay(self):
         self.assertEqual(redact("frame 00012345 state 5 ONU-ID 1"), "frame 00012345 state 5 ONU-ID 1")
 

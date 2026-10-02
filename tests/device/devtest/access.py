@@ -17,6 +17,7 @@ stick.
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
 import re
 import shlex
 import subprocess
@@ -53,9 +54,31 @@ class Reply:
         return self.code == 0
 
 
+# An IPv4 address; the documentation ranges, masks and the special addresses
+# name no bench and stay.
+ADDRESS = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w]|\.\d)")
+KEPT = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24",
+                                          "203.0.113.0/24", "0.0.0.0/8", "127.0.0.0/8",
+                                          "224.0.0.0/4", "255.255.255.255/32")]
+
+
+def address(match: re.Match) -> str:
+    try:
+        ip = ipaddress.IPv4Address(match.group(0))
+    except ValueError:
+        return match.group(0)
+    mask = int(ip)
+    if any(ip in net for net in KEPT) or (mask and (mask | (mask - 1)) == 0xffffffff):
+        return match.group(0)
+    return "<address>"
+
+
 def redact(text: str, settings: Settings | None = None) -> str:
     text = MAC.sub("<mac>", text)
     text = SERIAL.sub("<serial>", text)
+    if settings and settings.stick:
+        text = text.replace(settings.stick, "<stick>")
+    text = ADDRESS.sub(address, text)
     if settings:
         for value, name in ((settings.pond_token, "<token>"), (settings.bench, "<bench>"),
                             (settings.stick, "<stick>")):
