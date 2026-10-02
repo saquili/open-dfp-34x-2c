@@ -383,7 +383,7 @@ static bool caps_tconts(struct omci_hw_caps *caps)
 
 	if (n != caps->num_tcont)
 		OMCI_INFO(
-			"caps: the driver reports %u T-CONT(s), the recording had %u",
+			"caps: the driver reports %u T-CONT(s), the board default is %u",
 			n, caps->num_tcont);
 	caps->num_tcont = (uint8_t)n;
 	return true;
