@@ -1282,29 +1282,32 @@ Interrupt setup
 
 ``rtl9602c_irq_setup()``, from ``rtl9602c_setup()``, in order:
 
-1. Initialise the re-arm work and the GPON worker. Purpose: the handler and the
-   GPON code use them. (T)
-2. Write ``RTL9602C_IRQ_ENABLE`` = 0. Purpose: no source asserts the line while
+1. Write ``RTL9602C_IRQ_ENABLE`` = 0. Purpose: no source asserts the line while
    the handler is being put in place. (T)
-3. Clear the event fields of ``RTL9602C_IRQ_LINK_STAT`` (a full chip reset left
+2. Clear the event fields of ``RTL9602C_IRQ_LINK_STAT`` (a full chip reset left
    ``0x03080909`` there). Purpose: link events latched before the driver must
    not assert a line nobody handles. (T)
-4. Request the line as a threaded interrupt with ``IRQF_ONESHOT``, named
+3. Request the line as a threaded interrupt with ``IRQF_ONESHOT``, named
    ``rtl9602c-switch``. Purpose: the handler exists before any source is
    unmasked. (T)
-5. Register the teardown (``rtl9602c_irq_disable()``, run from devres).
+4. Register the teardown (``rtl9602c_irq_disable()``, run from devres).
    Purpose: mask every source and cancel the two work items before the line is
    freed. (T)
-6. Enable LINK, METER and ACL. Purpose: link changes reach phylink at once, and
+5. Enable LINK, METER and ACL. Purpose: link changes reach phylink at once, and
    policed drops and ACL hits are events. (T)
-7. Subscribe the learning limit by rule (``rtl9602c_lrn_over_intr_sync()``).
+6. Subscribe the learning limit by rule (``rtl9602c_lrn_over_intr_sync()``).
    Purpose: the source is on only while a port has a limit somebody set. (T)
 
 The mask goes up only after the handler exists, so that latched events from
 before the driver cannot assert an unhandled line. With no interrupt in the
 device tree, or if the request fails, the driver says so and leaves the link
-state to phylink's once-a-second poll of the fixed links (see "Known
-limitations"). The log line of a successful setup begins
+state to phylink's once-a-second poll of the fixed links. The re-arm work and
+the GPON worker are initialised at probe, whether there is an interrupt or
+not, and the teardown cancels the GPON worker. Every change of
+``RTL9602C_IRQ_ENABLE`` goes through ``rtl9602c_irq_enable()``, which holds a
+spinlock for the read and the write: the interrupt handler, the re-arm work,
+the learning-limit subscription, the ``loop_detect`` parameter, the PHC's
+pulse-per-second request and the GPON bring-up all change it. The log line of a successful setup begins
 ``interrupt 16: link changes, policed drops and acl hits are events now`` and
 ends with ``, and a deliberate learning limit`` when the learning limit is
 subscribed. The steps are checked by the board booting to a shell and the
@@ -1645,14 +1648,17 @@ Teardown
 ``rtl9602c_remove()`` calls ``dsa_unregister_switch()``, and DSA calls
 ``rtl9602c_teardown()``, which undoes setup in this order:
 
-1. Unregister the L3 notifiers (address, neighbour and route). Purpose: they can
-   run on any CPU and touch the tables, so they go first. (T)
-2. Tear down the GEM data path. Purpose: the PON device is unregistered with
+1. Cancel the GPON work. Purpose: on a board without the interrupt nothing else
+   cancels it, and it must not run while the parts it uses go. (T)
+2. Unregister the L3 notifiers (address, neighbour and route). Purpose: they can
+   run on any CPU and touch the tables, so they go before anything they touch.
+   (T)
+3. Tear down the GEM data path. Purpose: the PON device is unregistered with
    its last child, the OMCI port, and the data path must not outlive it. (T)
-3. Tear down the OMCI channel. (T)
-4. Remove the debugfs directory ``rtl9602c``. (T)
-5. Unregister the PHC. (T)
-6. Destroy the ``frame_capture`` region and unregister the devlink parameters.
+4. Tear down the OMCI channel. (T)
+5. Remove the debugfs directory ``rtl9602c``. (T)
+6. Unregister the PHC. (T)
+7. Destroy the ``frame_capture`` region and unregister the devlink parameters.
    Purpose: they go before the devlink instance does, so that the next probe
    does not find their names taken. (T)
 
@@ -1805,17 +1811,6 @@ Known limitations
   ``RTL9602C_SERDES_AN_CTRL_INIT``, the re-run also discards ``sfp_an``. This
   has not been verified; if it holds, 1000BaseX also needs the phy-mode
   ``1000base-x`` in the device tree.
-- ``rtl9602c_rmw()`` is a read followed by a write. ``RTL9602C_IRQ_ENABLE`` is
-  changed that way by the interrupt handler, the re-arm work, the learning-limit
-  subscription, the ``loop_detect`` parameter, the PHC's pulse-per-second
-  request and the GPON bring-up, under no lock that they share, so a change
-  made by two of them at the same moment could be lost. This has not been
-  observed.
-- The re-arm work and the GPON worker are initialised by the interrupt setup,
-  and only when the switch node has an interrupt. Without one the driver still
-  probes and switches frames, with the link state polled, but bringing the
-  ``pon`` interface up would schedule a GPON worker that was never
-  initialised. The binding requires the ``interrupts`` property.
 
 Open questions
 ==============

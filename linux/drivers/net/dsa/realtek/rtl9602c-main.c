@@ -101,6 +101,40 @@ void rtl9602c_rmw(struct rtl9602c_priv *p, u32 off, u32 clr, u32 set)
 }
 
 /**
+ * rtl9602c_irq_enable() - change the sources of the switch interrupt
+ * @p: the switch
+ * @clr: the sources to disable
+ * @set: the sources to enable, after @clr has been cleared
+ *
+ * RTL9602C_IRQ_ENABLE is changed by the interrupt handler, its re-arm work,
+ * the learning-limit subscription, the loop_detect parameter, the PHC's PPS
+ * request and the GPON bring-up. Every change goes through here, under
+ * @p->irq_enable_lock, so that none is lost.
+ *
+ * Context: any context.
+ */
+void rtl9602c_irq_enable(struct rtl9602c_priv *p, u32 clr, u32 set)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&p->irq_enable_lock, flags);
+	rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE, clr, set);
+	spin_unlock_irqrestore(&p->irq_enable_lock, flags);
+}
+
+/* Mask @src until the re-arm work unmasks it, a second from now. */
+static void rtl9602c_irq_rearm_later(struct rtl9602c_priv *p, u32 src)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&p->irq_enable_lock, flags);
+	rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE, src, 0);
+	p->intr_rearm_mask |= src;
+	spin_unlock_irqrestore(&p->irq_enable_lock, flags);
+	schedule_delayed_work(&p->intr_rearm, HZ);
+}
+
+/**
  * rtl9602c_table_op() - run one operation of the indirect table engine
  * @p: the switch
  * @type: the table, an RTL9602C_TBLACC_CMD_TABLE_* value
@@ -675,8 +709,8 @@ void rtl9602c_lrn_over_intr_sync(struct rtl9602c_priv *p)
 
 	if (want)
 		rtl9602c_w(p, RTL9602C_IRQ_LEARN_STAT, RTL9602C_IRQ_LEARN_STAT_LIMIT);
-	rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE, RTL9602C_IRQ_SRC_LEARN_LIMIT,
-		     want ? RTL9602C_IRQ_SRC_LEARN_LIMIT : 0);
+	rtl9602c_irq_enable(p, RTL9602C_IRQ_SRC_LEARN_LIMIT,
+			    want ? RTL9602C_IRQ_SRC_LEARN_LIMIT : 0);
 }
 
 /*
@@ -690,7 +724,13 @@ static void rtl9602c_intr_rearm(struct work_struct *work)
 {
 	struct rtl9602c_priv *p = container_of(to_delayed_work(work),
 					       struct rtl9602c_priv, intr_rearm);
-	u32 mask = xchg(&p->intr_rearm_mask, 0);
+	unsigned long flags;
+	u32 mask;
+
+	spin_lock_irqsave(&p->irq_enable_lock, flags);
+	mask = p->intr_rearm_mask;
+	p->intr_rearm_mask = 0;
+	spin_unlock_irqrestore(&p->irq_enable_lock, flags);
 
 	if (mask & RTL9602C_IRQ_SRC_LEARN_LIMIT) {
 		rtl9602c_lrn_over_intr_sync(p);
@@ -703,7 +743,7 @@ static void rtl9602c_intr_rearm(struct work_struct *work)
 			   RTL9602C_IRQ_LEARN_STAT_LIMIT);
 	if (mask & RTL9602C_IRQ_SRC_ACL)
 		rtl9602c_w(p, RTL9602C_ACL_HIT_STAT, RTL9602C_ACL_HIT_STAT_TMPL);
-	rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE, 0, mask);
+	rtl9602c_irq_enable(p, 0, mask);
 }
 
 /*
@@ -711,12 +751,7 @@ static void rtl9602c_intr_rearm(struct work_struct *work)
  * the one line. RTL9602C_IRQ_PENDING shows a source as pending whether it is
  * enabled or not, so only sources both pending and enabled are handled, and
  * the line stays asserted until a source's pending bit is written.
- *
- * RTL9602C_IRQ_ENABLE is changed by read-modify-write here, in the re-arm
- * work, by the learning-limit subscription, the loop_detect parameter, the
- * PHC's PPS request and the GPON bring-up, under no lock shared between
- * them, so a change made by two of them at the same moment could be lost.
- * Not observed.
+ * RTL9602C_IRQ_ENABLE is changed through rtl9602c_irq_enable() only.
  */
 static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 {
@@ -757,10 +792,8 @@ static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 		u32 hit = rtl9602c_r(p, RTL9602C_ACL_HIT_STAT) &
 			  RTL9602C_ACL_HIT_STAT_TMPL;
 
-		rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE, RTL9602C_IRQ_SRC_ACL, 0);
+		rtl9602c_irq_rearm_later(p, RTL9602C_IRQ_SRC_ACL);
 		rtl9602c_w(p, RTL9602C_ACL_HIT_STAT, RTL9602C_ACL_HIT_STAT_TMPL);
-		p->intr_rearm_mask |= RTL9602C_IRQ_SRC_ACL;
-		schedule_delayed_work(&p->intr_rearm, HZ);
 		dev_warn_ratelimited(p->dev,
 				     "acl templates %#x matched\n", hit);
 	}
@@ -770,14 +803,11 @@ static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 	 * costs a few interrupts rather than one per frame.
 	 */
 	if (pending & RTL9602C_IRQ_SRC_LEARN_LIMIT) {
-		rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE,
-			     RTL9602C_IRQ_SRC_LEARN_LIMIT, 0);
+		rtl9602c_irq_rearm_later(p, RTL9602C_IRQ_SRC_LEARN_LIMIT);
 		rtl9602c_w(p, RTL9602C_IRQ_LEARN_STAT,
 			   RTL9602C_IRQ_LEARN_STAT_LIMIT);
 		dev_warn_ratelimited(p->dev,
 				     "a port reached its address-learning limit\n");
-		p->intr_rearm_mask |= RTL9602C_IRQ_SRC_LEARN_LIMIT;
-		schedule_delayed_work(&p->intr_rearm, HZ);
 	}
 
 	/*
@@ -857,7 +887,7 @@ static void rtl9602c_irq_disable(void *data)
 {
 	struct rtl9602c_priv *p = data;
 
-	rtl9602c_w(p, RTL9602C_IRQ_ENABLE, 0);
+	rtl9602c_irq_enable(p, ~0u, 0);
 	cancel_delayed_work_sync(&p->intr_rearm);
 	cancel_delayed_work_sync(&p->gpon_work);
 }
@@ -869,9 +899,9 @@ static void rtl9602c_irq_disable(void *data)
  * enabled here and the learning limit by rule; the GPON, PPS and loop
  * sources are enabled by the GPON bring-up, the PHC and the loop_detect
  * parameter. Without an interrupt the switch still works, its link state
- * left to phylink's once-a-second poll of the fixed links; the GPON MAC
- * handles its PLOAM messages from this interrupt, and the work items are set
- * up only here.
+ * left to phylink's once-a-second poll of the fixed links, and the GPON MAC,
+ * which handles its PLOAM messages from this interrupt, has only its
+ * periodic work.
  */
 static void rtl9602c_irq_setup(struct rtl9602c_priv *p)
 {
@@ -884,9 +914,7 @@ static void rtl9602c_irq_setup(struct rtl9602c_priv *p)
 		return;
 	}
 
-	INIT_DELAYED_WORK(&p->intr_rearm, rtl9602c_intr_rearm);
-	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
-	rtl9602c_w(p, RTL9602C_IRQ_ENABLE, 0);
+	rtl9602c_irq_enable(p, ~0u, 0);
 	rtl9602c_w(p, RTL9602C_IRQ_LINK_STAT, RTL9602C_IRQ_LINK_STAT_EVENTS);
 
 	err = devm_request_threaded_irq(p->dev, irq, rtl9602c_irq,
@@ -900,9 +928,9 @@ static void rtl9602c_irq_setup(struct rtl9602c_priv *p)
 	if (devm_add_action_or_reset(p->dev, rtl9602c_irq_disable, p))
 		return;
 
-	rtl9602c_w(p, RTL9602C_IRQ_ENABLE,
-		   RTL9602C_IRQ_SRC_LINK | RTL9602C_IRQ_SRC_METER |
-		   RTL9602C_IRQ_SRC_ACL);
+	rtl9602c_irq_enable(p, ~0u,
+			    RTL9602C_IRQ_SRC_LINK | RTL9602C_IRQ_SRC_METER |
+			    RTL9602C_IRQ_SRC_ACL);
 	rtl9602c_lrn_over_intr_sync(p);
 	pr_info("interrupt %d: link changes, policed drops and acl hits are events now%s\n",
 		irq,
@@ -1174,11 +1202,9 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 
 			if (err)
 				return err;
-			rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE,
-				     RTL9602C_IRQ_SRC_LOOP, RTL9602C_IRQ_SRC_LOOP);
+			rtl9602c_irq_enable(p, 0, RTL9602C_IRQ_SRC_LOOP);
 		} else {
-			rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE,
-				     RTL9602C_IRQ_SRC_LOOP, 0);
+			rtl9602c_irq_enable(p, RTL9602C_IRQ_SRC_LOOP, 0);
 		}
 		rtl9602c_rmw(p, RTL9602C_LOOPDET_CTRL, RTL9602C_LOOPDET_CTRL_EN,
 			     ctx->val.vu8 ? RTL9602C_LOOPDET_CTRL_EN : 0);
@@ -1561,6 +1587,8 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 {
 	struct rtl9602c_priv *p = ds->priv;
 
+	/* With no interrupt the GPON work is not cancelled by its teardown. */
+	cancel_delayed_work_sync(&p->gpon_work);
 	rtl9602c_l34_notifiers_unregister(p);
 	rtl9602c_gem_teardown(p);
 	rtl9602c_omci_teardown(p);
@@ -1919,6 +1947,9 @@ static int rtl9602c_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	p->dev = &pdev->dev;
+	spin_lock_init(&p->irq_enable_lock);
+	INIT_DELAYED_WORK(&p->intr_rearm, rtl9602c_intr_rearm);
+	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
 	mutex_init(&p->table_lock);
 	mutex_init(&p->fdb_lock);
 	mutex_init(&p->ploam_lock);

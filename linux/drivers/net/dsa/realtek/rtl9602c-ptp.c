@@ -210,14 +210,8 @@ static int rtl9602c_ptp_enable(struct ptp_clock_info *info,
 	if (rq->type != PTP_CLK_REQ_PPS)
 		return -EOPNOTSUPP;
 
-	/*
-	 * The interrupt handler and its re-arm work modify this register as
-	 * well, under no lock shared with this path, so a change made by both
-	 * at the same moment could be lost.  Not observed.
-	 */
-	rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE,
-		     on ? 0 : RTL9602C_IRQ_SRC_PTP_PPS,
-		     on ? RTL9602C_IRQ_SRC_PTP_PPS : 0);
+	rtl9602c_irq_enable(p, on ? 0 : RTL9602C_IRQ_SRC_PTP_PPS,
+			    on ? RTL9602C_IRQ_SRC_PTP_PPS : 0);
 	return 0;
 }
 

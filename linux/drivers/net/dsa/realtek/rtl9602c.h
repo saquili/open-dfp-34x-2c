@@ -2460,6 +2460,11 @@ struct rtl9602c_priv {
 	struct delayed_work	intr_rearm;
 	/** @intr_rearm_mask: the sources @intr_rearm unmasks */
 	u32			intr_rearm_mask;
+	/**
+	 * @irq_enable_lock: serialises the changes of RTL9602C_IRQ_ENABLE
+	 * and of @intr_rearm_mask (rtl9602c_irq_enable())
+	 */
+	spinlock_t		irq_enable_lock;
 
 	/** @acl_used: the ACL entries in use */
 	DECLARE_BITMAP(acl_used, RTL9602C_ACL_ENTRIES);
@@ -2732,6 +2737,7 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p);
 void rtl9602c_ptp_unregister(struct rtl9602c_priv *p);
 u32 rtl9602c_r(struct rtl9602c_priv *p, u32 off);
 void rtl9602c_rmw(struct rtl9602c_priv *p, u32 off, u32 clr, u32 set);
+void rtl9602c_irq_enable(struct rtl9602c_priv *p, u32 clr, u32 set);
 void rtl9602c_serdes_init(struct rtl9602c_priv *p, u32 sds_mode);
 int rtl9602c_set_ageing_time(struct dsa_switch *ds, unsigned int msecs);
 extern const struct rtl9602c_storm_class_row rtl9602c_storm_class[];

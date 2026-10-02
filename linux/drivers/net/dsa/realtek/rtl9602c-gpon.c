@@ -1884,7 +1884,7 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	rtl9602c_gpon_arm_sn(p);
 
 	/* Last, the GPON source of the switch interrupt; and run the worker. */
-	rtl9602c_rmw(p, RTL9602C_IRQ_ENABLE, 0, RTL9602C_IRQ_SRC_GPON);
+	rtl9602c_irq_enable(p, 0, RTL9602C_IRQ_SRC_GPON);
 	mod_delayed_work(system_wq, &p->gpon_work, 0);
 	return 0;
 }
