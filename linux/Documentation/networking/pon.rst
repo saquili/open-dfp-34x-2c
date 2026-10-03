@@ -1623,10 +1623,13 @@ Registration and lifetime
      - P
      - ITU-T G.988 clause 9.2.2; ITU-T G.984.3 clause 8.1.3.6.1 (the default
        Alloc-ID carries PLOAM and OMCI).
-   * - ``pon_device_unregister()`` first deletes the ONU's GEM interfaces under
-       RTNL. It then clears the operations under the registration lock and
-       frees the flow table. The MAC must have stopped calling
-       ``pon_gem_rx()`` before it calls this.
+   * - ``pon_device_unregister()`` first marks the data path as going, under
+       RTNL and the registration lock, so that the lookup by network device,
+       through which a new GEM interface finds its ONU, no longer finds it;
+       then it deletes the ONU's GEM interfaces under the same RTNL. No GEM
+       interface can be created between that and the end. It then clears the
+       operations under the registration lock and frees the flow table. The
+       MAC must have stopped calling ``pon_gem_rx()`` before it calls this.
      - I
      - Design choice; teardown is not exercised on the board. Unbinding the
        switch driver would exercise it.

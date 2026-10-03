@@ -196,8 +196,9 @@ static void pon_dev_put(struct pon_device *pon)
 }
 
 /*
- * Only a PON device with a registered data path can own a netdev. Called
- * under the registration lock, which keeps pon->ops from changing.
+ * Only a PON device with a registered data path that is not going can own a
+ * netdev. Called under the registration lock, which keeps pon->ops and
+ * pon->unregistering from changing.
  */
 static int pon_dev_netdev_match(struct device *dev, const void *netdev)
 {
@@ -207,7 +208,8 @@ static int pon_dev_netdev_match(struct device *dev, const void *netdev)
 		return 0;
 
 	pon = to_pon_device(dev);
-	return pon->ops && pon->ops->owns_netdev(pon, netdev);
+	return pon->ops && !pon->unregistering &&
+	       pon->ops->owns_netdev(pon, netdev);
 }
 
 /**
@@ -419,13 +421,20 @@ void pon_device_unregister(struct pon_device *pon)
 {
 	/*
 	 * The GEM interfaces go first, under RTNL, which is not taken inside
-	 * the registration lock; the operations are cleared after them.
+	 * the registration lock; the operations are cleared after them. A GEM
+	 * interface is created under RTNL too, and finds its ONU by the
+	 * lookup that the mark set here fails, so none can be created between
+	 * the removal and the clearing.
 	 */
 	rtnl_lock();
+	mutex_lock(&pon_register_lock);
+	pon->unregistering = true;
+	mutex_unlock(&pon_register_lock);
 	pon_gem_remove_all(pon);
 	rtnl_unlock();
 
 	mutex_lock(&pon_register_lock);
+	pon->unregistering = false;
 	pon->ops = NULL;
 	kfree(pon->gem);
 	pon->gem = NULL;

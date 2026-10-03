@@ -26,6 +26,9 @@
  *		the data path registered them; kept when it unregisters
  * @gem: the GEM interface of each flow, or NULL. Written under RTNL, read
  *	 under RCU on the receive path.
+ * @unregistering: the data path is going: lookups by network device no
+ *		   longer find it, so no GEM interface is created on it. Set
+ *		   under RTNL and the registration lock.
  *
  * The MAC's first registration against its device creates the PON device,
  * whichever of its OMCI port and its data path comes first; the second
@@ -39,6 +42,7 @@ struct pon_device {
 	unsigned int num_flows;
 	unsigned int num_tconts;
 	struct net_device __rcu **gem;
+	bool unregistering;
 };
 
 struct pon_device *pon_device_get_by_netdev(const struct net_device *dev);
