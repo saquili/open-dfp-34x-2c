@@ -641,6 +641,46 @@ class Cases(unittest.TestCase):
         self.assertFalse(left)
         self.assertEqual(outcome(held=984.0)[0].status, FAIL)
 
+    def test_the_storm_case_wants_the_first_rule_to_police_and_the_acl_to_drop(self):
+        def outcome(winner):
+            trail: list[str] = []
+            rules: dict[int, str] = {}
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    for part in command.split(";"):
+                        m = re.search(r"tc filter (add|replace|del) dev sfp ingress pref (\d+)"
+                                      r"(?:.* action (police pkts_rate \d+|drop))?", part)
+                        if m and m.group(1) == "del":
+                            rules.pop(int(m.group(2)), None)
+                        elif m:
+                            rules[int(m.group(2))] = m.group(3)
+                    return super().run(command, **kw)
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if kw.get("stdin") == cases_data.STORMED:
+                        if "drop" in rules.values():
+                            count = 0
+                        elif rules:
+                            pref = winner(rules)
+                            count = int(rules[pref].split()[-1]) * 2 + 16
+                        else:
+                            count = 600
+                        return Reply([command], 0, f"{count}\n", "", 0.01)
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("tc ", 0, "")], trail)
+            bench = Bench("bench", [("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            return cases_data.storm(ctx), dict(rules)
+        good, left = outcome(min)
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertEqual(left, {})
+        self.assertEqual(outcome(max)[0].status, FAIL)
+
     def test_the_cpu_limit_case_wants_the_flood_held_the_cpu_kept_and_the_limit_back(self):
         def outcome(took: int, loaded: str = "200.00 201.50"):
             trail: list[str] = []

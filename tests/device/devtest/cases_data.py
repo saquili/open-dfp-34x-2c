@@ -718,6 +718,113 @@ def shaper(ctx: Context):
                        f"{rate2:.0f} Mb/s, CPU saw {cpu2}")
 
 
+# The storm-control case: broadcasts from the host side towards the network
+# side, STORM_COUNT at STORM_RATE frames a second, counted where they leave the
+# PON. Under several police rules on the SFP port the one that tc applies
+# first, the lowest priority value, must hold the class, through a replace of
+# it too; a drop of the same frames is an ACL rule.
+STORM_COUNT = 600
+STORM_RATE = 300       # frames a second
+STORM_SLACK = 40       # frames a meter lets through beyond its rate: its bucket
+
+# Run by python3 on the bench host with SRC RECV DST COUNT RATE: COUNT frames
+# of EtherType 0x88b5 to DST out of SRC at RATE frames a second, RECV put in
+# promiscuous mode meanwhile. It prints how many of them RECV received.
+STORMED = """\
+import socket, struct, sys, threading, time
+src, recv, dst, count, rate = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), float(sys.argv[5])
+mac = lambda text: bytes.fromhex(text.replace(":", ""))
+own = mac(open("/sys/class/net/%s/address" % src).read().strip())
+SOL_PACKET, PACKET_ADD_MEMBERSHIP, PACKET_MR_PROMISC = 263, 1, 1
+rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x88b5))
+rx.bind((recv, 0))
+rx.setsockopt(SOL_PACKET, PACKET_ADD_MEMBERSHIP,
+              struct.pack("iHH8s", socket.if_nametoindex(recv), PACKET_MR_PROMISC, 0, bytes(8)))
+rx.settimeout(0.5)
+seen, stop = [0], []
+def receive():
+    while not stop:
+        try:
+            data, addr = rx.recvfrom(2048)
+        except socket.timeout:
+            continue
+        if addr[2] != socket.PACKET_OUTGOING and data[6:12] == own:
+            seen[0] += 1
+thread = threading.Thread(target=receive)
+thread.start()
+tx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+tx.bind((src, 0))
+frame = mac(dst) + own + b"\\x88\\xb5" + bytes(46)
+start = time.monotonic()
+for i in range(count):
+    tx.send(frame)
+    wait = start + (i + 1) / rate - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+time.sleep(1.5)
+stop.append(1)
+thread.join()
+print(seen[0])
+"""
+
+
+def storm_round(ctx: Context) -> int:
+    """STORM_COUNT broadcasts from the host side; how many left the PON."""
+    s = ctx.settings
+    command = sudo(s, " ".join(shlex.quote(a) for a in (
+        "python3", "-", s.subscriber_port, s.olt_port, "ff:ff:ff:ff:ff:ff", str(STORM_COUNT),
+        str(STORM_RATE))))
+    reply = ctx.bench.run(command, stdin=STORMED, timeout=60)
+    try:
+        return int(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ValueError(f"the probe did not run: {(reply.err or reply.out).strip()!r}")
+
+
+@case("data.storm", "Data path",
+      "Of several police rules on broadcast the one of the lowest priority value holds the "
+      "class, through a replace of it too, and a drop of broadcast is an ACL rule that drops")
+def storm(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    rule = "tc filter {} dev sfp ingress pref {} handle 1 flower skip_sw dst_mac ff:ff:ff:ff:ff:ff "
+    police = "action police pkts_rate {} pkts_burst 100 conform-exceed drop"
+
+    def add(verb, pref, action):
+        reply = ctx.stick.run(rule.format(verb, pref) + action)
+        if not reply.ok:
+            raise ValueError(f"tc refused {action} at {pref}: {(reply.err or reply.out).strip()}")
+
+    seconds = STORM_COUNT / STORM_RATE
+    added = clsact(ctx, ["sfp"])
+    try:
+        free = storm_round(ctx)
+        add("add", 10, police.format(100))
+        low = storm_round(ctx)
+        add("add", 20, police.format(1000))
+        kept = storm_round(ctx)
+        add("replace", 10, police.format(200))
+        replaced = storm_round(ctx)
+        ctx.stick.run("tc filter del dev sfp ingress pref 10; tc filter del dev sfp ingress pref 20")
+        add("add", 30, "action drop")
+        dropped = storm_round(ctx)
+    finally:
+        ctx.stick.run("; ".join(
+            [f"tc filter del dev sfp ingress pref {pref} 2>/dev/null" for pref in (10, 20, 30)] +
+            [f"tc qdisc del dev {dev} clsact" for dev in added] + ["true"]))
+    after = storm_round(ctx)
+
+    def near(count, rate):
+        return rate * seconds <= count <= rate * seconds + STORM_SLACK
+
+    ok = (free >= STORM_COUNT * 0.99 and near(low, 100) and near(kept, 100) and
+          near(replaced, 200) and dropped <= STORM_COUNT * 0.01 and after >= STORM_COUNT * 0.99)
+    return verdict(ok, f"{STORM_COUNT} broadcasts at {STORM_RATE}/s: {free} passed with no rule, "
+                       f"{low} under pref 10 at 100/s, {kept} with pref 20 at 1000/s added, "
+                       f"{replaced} with pref 10 replaced at 200/s; dropped by the ACL, "
+                       f"{dropped} passed; {after} after")
+
 # The CPU-limit case: a flood from the host side to the stick's own address,
 # which the switch hands the CPU, first under the limit that devlink's
 # cpu_rx_pps holds and then, for a shorter time, with the limit lifted, which
