@@ -1129,6 +1129,37 @@ enum {
 #define RTL9602C_FLOOD_UNKNOWN_UCAST	0x01c028
 
 /*
+ * What becomes of a multicast frame that no address-table entry knows, by the
+ * port it came in by, two bits a port: FLOOD sends it by the unknown-multicast
+ * flood mask, as at reset, and DROP drops it. IPv4 and IPv6 frames, as the
+ * switch parses them, take the first two registers, other frames the third.
+ * A reserved group is flooded even where DROP is set (see
+ * RTL9602C_MC_UNKNOWN_CFG). The IPv4 and IPv6 registers were measured on the
+ * PON port; the frame-type register is only written as at reset.
+ */
+#define RTL9602C_MC_UNKNOWN_L2			0x01c010
+#define RTL9602C_MC_UNKNOWN_IP4			0x01c014
+#define RTL9602C_MC_UNKNOWN_IP6			0x01c018
+#define RTL9602C_MC_UNKNOWN_ACT(p)		(GENMASK(1, 0) << (2 * (p)))
+#define RTL9602C_MC_UNKNOWN_ACT_FLOOD		0
+#define RTL9602C_MC_UNKNOWN_ACT_DROP		1
+
+/*
+ * The reserved groups: the IPv4 groups 224.0.0.0/24 and the IPv6 classes
+ * selected here, the link-scope groups ff02::/16 (LINK) and the
+ * solicited-node groups ff02::1:ff00:0/104 (SOLICITED). With RSV4 and RSV6
+ * at RSV_FLOOD, as at reset, these are flooded whatever their port's
+ * RTL9602C_MC_UNKNOWN_IP4 or _IP6 setting says (measured on the PON port).
+ * At reset no IPv6 class is selected.
+ */
+#define RTL9602C_MC_UNKNOWN_CFG			0x01c01c
+#define RTL9602C_MC_UNKNOWN_CFG_RSV6_SOLICITED	BIT(12)
+#define RTL9602C_MC_UNKNOWN_CFG_RSV6_LINK		BIT(8)
+#define RTL9602C_MC_UNKNOWN_CFG_RSV6		GENMASK(6, 5)
+#define RTL9602C_MC_UNKNOWN_CFG_RSV4		GENMASK(4, 3)
+#define RTL9602C_MC_UNKNOWN_CFG_RSV_FLOOD		1
+
+/*
  * Each port's learning limit, the maximum being unlimited and 0 learning off,
  * and the addresses it has learned.
  */
@@ -2477,6 +2508,11 @@ struct rtl9602c_priv {
 	 * applied only while the port has a bridge peer
 	 */
 	unsigned long flood_req[RTL9602C_NUM_PORTS];
+	/**
+	 * @mc_drop: the unregistered multicast the PON port drops, under
+	 * @fdb_lock: BIT(0) for IPv4 and BIT(1) for IPv6
+	 */
+	u8 mc_drop;
 
 	/**
 	 * @l34_netif_ifindex: the device of each L3-interface row by ifindex, 0
@@ -2957,6 +2993,8 @@ int rtl9602c_port_add_dscp_prio(struct dsa_switch *ds, int port, u8 dscp, u8 pri
 int rtl9602c_port_bridge_flags(struct dsa_switch *ds, int port,
 			       struct switchdev_brport_flags flags, struct netlink_ext_ack *extack);
 void rtl9602c_bridge_refresh(struct dsa_switch *ds);
+void rtl9602c_mcast_reset(struct rtl9602c_priv *p);
+void rtl9602c_mcast_refresh(struct rtl9602c_priv *p);
 void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p);
 void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p);
 int rtl9602c_port_bridge_join(struct dsa_switch *ds, int port, struct dsa_bridge bridge,

@@ -1565,6 +1565,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 		p->cf_sid[i] = -1;
 		p->flood_req[i] = BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD;
 	}
+	rtl9602c_mcast_reset(p);
 
 	rtl9602c_bridge_refresh(ds);
 

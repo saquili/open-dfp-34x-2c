@@ -69,7 +69,7 @@ Operations and files
 
 The driver implements these operations of ``struct dsa_switch_ops`` for the
 function, all in ``rtl9602c-l2.c`` except where the table says otherwise, and
-the four bridge operations of the PON class in ``rtl9602c-gem.c``. Every name is
+the five bridge operations of the PON class in ``rtl9602c-gem.c``. Every name is
 prefixed ``rtl9602c_``.
 
 .. list-table::
@@ -103,6 +103,8 @@ prefixed ``rtl9602c_``.
    * - ``gem_bridge_join``, ``gem_bridge_leave``, ``gem_vlan_add``,
        ``gem_vlan_del`` (``rtl9602c-gem.c``, operations of the PON class)
      - "Bridging the GEM ports".
+   * - ``gem_mrouter`` (``rtl9602c-gem.c``, an operation of the PON class)
+     - "Multicast snooping".
 
 The files that hold the rest of this page:
 
@@ -114,9 +116,10 @@ The files that hold the rest of this page:
      - What of this page it holds
    * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``
      - The address table, flush, learning, ageing, spanning-tree state,
-       isolation, flooding, bridge membership, VLANs and the PVID, frame length,
-       mirroring, the address-table entries that the L3 engine depends on, and
-       the debugfs view ``fdb``.
+       isolation, flooding, unregistered multicast (``rtl9602c_mcast_reset()``,
+       ``rtl9602c_mcast_refresh()``), bridge membership, VLANs and the PVID,
+       frame length, mirroring, the address-table entries that the L3 engine
+       depends on, and the debugfs view ``fdb``.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - The indirect table engine (``rtl9602c_table_op()``,
        ``rtl9602c_table_read()``, ``rtl9602c_table_write()``) and its self-test,
@@ -134,8 +137,8 @@ The files that hold the rest of this page:
      - The bridge half of the GEM interfaces.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers and entry layouts of this page, ``struct rtl9602c_lookup``
-       and the state of the driver that it uses (``flood_req``, ``pon_br``,
-       ``l34_nh_ports``).
+       and the state of the driver that it uses (``flood_req``, ``mc_drop``,
+       ``pon_br``, ``l34_nh_ports``).
 
 Configuration
 -------------
@@ -1318,7 +1321,7 @@ Multicast snooping
 
 The bridge snoops IGMP and MLD and hands the groups that its ports join to the
 switch as MDB objects, which become multicast entries of the address table (see
-"Adding, deleting and dumping entries"). Two things make the switch forward
+"Adding, deleting and dumping entries"). Three things make the switch forward
 multicast as the bridge would:
 
 - Every IGMP message, and every MLD query and version 1 report, that enters the
@@ -1331,6 +1334,13 @@ multicast as the bridge would:
 - The PON port is a member of every group in the table, as the side the
   multicast router of a PON sits on: a host's IGMPv1, IGMPv2 or MLDv1 report
   goes to the group's own address.
+- While the bridge sees a multicast router behind a GEM port, the PON port drops
+  the multicast that no host asked for, unregistered multicast, IPv4 and IPv6
+  each by its own routers (``rtl9602c_mcast_refresh()``): once it has seen a
+  querier, a bridge sends such frames only towards router ports. The reserved
+  groups are flooded all the same, as the bridge floods the link-local groups,
+  which it does not snoop. The PON class passes the router state of a GEM port
+  to the driver (``gem_mrouter``, see Documentation/networking/pon.rst).
 
 .. list-table::
    :header-rows: 1
@@ -1356,6 +1366,54 @@ multicast as the bridge would:
        the PON port a member and the ACL rule, 3 of 3 reached the OLT side and 3
        copies the CPU, and the timer started again at 256 s; 3 of 3 MLDv1
        reports did the same.
+   * - ``RTL9602C_MC_UNKNOWN_IP4`` (``0x01c014``) and ``RTL9602C_MC_UNKNOWN_IP6``
+       (``0x01c018``) hold two bits per ingress port: 0 floods unregistered
+       frames by the unknown-multicast flood mask, 1 drops them. Both read 0 at
+       reset, as does ``RTL9602C_MC_UNKNOWN_L2`` (``0x01c010``), which is only
+       written back at setup.
+     - M
+     - With 1 for the PON port, 0 of 20 frames from the PON to 239.2.2.1 and to
+       ff3e::1234 passed, while 20 of 20 to a group in the table and to
+       224.0.0.251 did; 1 for the SFP port changed nothing for frames from the
+       PON.
+   * - ``RTL9602C_MC_UNKNOWN_CFG`` (``0x01c01c``) reads ``0x28`` at reset: the
+       reserved IPv4 groups, 224.0.0.0/24, flooded over a drop, and the reserved
+       IPv6 groups as well, of which no class is selected. The driver selects
+       ``RTL9602C_MC_UNKNOWN_CFG_RSV6_LINK`` (bit 8) and
+       ``RTL9602C_MC_UNKNOWN_CFG_RSV6_SOLICITED`` (bit 12).
+     - M
+     - Dropping unregistered IPv6 from the PON: with both classes, frames to
+       ff02::1, ff02::1:ff00:1 and ff02::fb passed, 20 of 20 each, and frames
+       to ff3e::1234, ff05::2 and ff0e::101 did not; with neither class, none
+       of the six passed.
+   * - A reserved group passes a drop, not a clear bit of the unknown-multicast
+       flood mask, as the bridge floods no link-local group to a port with
+       ``mcast_flood off`` either.
+     - M
+     - With ``mcast_flood off`` on the SFP port, 0 of 20 frames from the PON to
+       224.0.0.251 and to 224.0.0.1 passed.
+   * - The driver follows the bridge's routers: before any query, unregistered
+       multicast is flooded; a query from the OLT side makes the GEM port it
+       came by a router port, and the PON port drops unregistered multicast of
+       that protocol; with snooping turned off, the bridge forgets its routers
+       and the PON port floods again. The kernel log says each change:
+       ``rtl9602c-switch: unregistered multicast from the PON: IPv4 dropped,
+       IPv6 flooded``.
+     - M
+     - An IGMPv2 general query from the OLT side made ``gem4095`` a router
+       port; frames to 239.5.0.1 then passed 0 of 20 times, to 224.0.0.251 and
+       ff02::fb 20 of 20, to a joined group 20 of 20; ``ip link set omcibr0
+       type bridge mcast_snooping 0`` brought 239.5.0.1 back to 20 of 20.
+   * - The bridge passes a port's router state for IPv4 and IPv6 together: it
+       says so when a port becomes a router port for either protocol, and when
+       it stops being one for both. The driver reads the two from the bridge's
+       router lists (``br_multicast_has_router_adjacent()``) on each such
+       report and on each group change, so a router of the second protocol
+       behind a port that is a router port already counts from the next group
+       change.
+     - M
+     - After the IGMPv2 query, an MLD query from the OLT side left IPv6
+       flooded until the MLDv2 join that followed it.
    * - The switch's per-port IGMP and MLD control (``0x01105c`` + 4p, reading
        ``0x400`` at reset) is not used: its five 2-bit fields, written with each
        value, changed nothing measured. Reports of each IGMP version, with and
@@ -2218,9 +2276,15 @@ Known limitations
   that is not IP, to a host address behind the CPU port other than this
   device's own, is flooded to every port, the PON port included: its entry
   carries ``RTL9602C_FDB_W1_ROUTER_MAC`` (see "Entry layout").
+- A multicast router behind the SFP port is not looked for, as DSA passes no
+  user port's router state: while a router sits behind a GEM port, the PON
+  port drops the unregistered multicast that the bridge would send to it (see
+  "Multicast snooping").
 - Every group in the table has the PON port, so what a host on the SFP side
   sends to a group goes towards the OLT even while the bridge sees no router
   there.
+- A router of the second protocol behind a GEM port that is a router port
+  already takes effect at the next group change (see "Multicast snooping").
 
 Open questions
 ==============

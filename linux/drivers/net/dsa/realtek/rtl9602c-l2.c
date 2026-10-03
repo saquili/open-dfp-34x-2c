@@ -527,7 +527,10 @@ int rtl9602c_port_mdb_add(struct dsa_switch *ds, int port,
 			  const struct switchdev_obj_port_mdb *mdb,
 			  struct dsa_db db)
 {
-	return rtl9602c_mdb_edit(ds, port, mdb->addr, mdb->vid, true);
+	int err = rtl9602c_mdb_edit(ds, port, mdb->addr, mdb->vid, true);
+
+	rtl9602c_mcast_refresh(ds->priv);
+	return err;
 }
 
 /**
@@ -546,7 +549,10 @@ int rtl9602c_port_mdb_del(struct dsa_switch *ds, int port,
 			  const struct switchdev_obj_port_mdb *mdb,
 			  struct dsa_db db)
 {
-	return rtl9602c_mdb_edit(ds, port, mdb->addr, mdb->vid, false);
+	int err = rtl9602c_mdb_edit(ds, port, mdb->addr, mdb->vid, false);
+
+	rtl9602c_mcast_refresh(ds->priv);
+	return err;
 }
 
 /**
@@ -1116,6 +1122,91 @@ void rtl9602c_bridge_refresh(struct dsa_switch *ds)
 	 * stream a classifier entry gave it.
 	 */
 	rtl9602c_cf_sid_refresh(p);
+
+	rtl9602c_mcast_refresh(p);
+}
+
+/**
+ * rtl9602c_mcast_reset() - unregistered multicast as a reset leaves it
+ * @p: the switch
+ *
+ * Every port floods the multicast that no address-table entry knows, which a
+ * warm reboot may have left otherwise, and the reserved groups are flooded
+ * even where a port drops the rest. Unlike at reset, the IPv6 link-scope and
+ * solicited-node groups count among them: neighbour discovery and router
+ * advertisements use them (RFC 4861), as link-local IPv4 protocols use
+ * 224.0.0.0/24, and a bridge floods both without snooping them (RFC 4541
+ * section 2.1.2).
+ *
+ * Context: setup, before rtl9602c_bridge_refresh().
+ */
+void rtl9602c_mcast_reset(struct rtl9602c_priv *p)
+{
+	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_L2, 0);
+	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_IP4, 0);
+	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_IP6, 0);
+	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_CFG,
+		   FIELD_PREP(RTL9602C_MC_UNKNOWN_CFG_RSV4,
+			      RTL9602C_MC_UNKNOWN_CFG_RSV_FLOOD) |
+		   FIELD_PREP(RTL9602C_MC_UNKNOWN_CFG_RSV6,
+			      RTL9602C_MC_UNKNOWN_CFG_RSV_FLOOD) |
+		   RTL9602C_MC_UNKNOWN_CFG_RSV6_LINK |
+		   RTL9602C_MC_UNKNOWN_CFG_RSV6_SOLICITED);
+	p->mc_drop = 0;
+}
+
+/**
+ * rtl9602c_mcast_refresh() - follow the multicast routers the bridge sees
+ * @p: the switch
+ *
+ * Once it has seen a querier, a bridge that snoops sends the multicast no host
+ * asked for, unregistered multicast, only towards the ports a multicast router
+ * sits behind; without a querier it floods it. In a PON the router sits behind
+ * a GEM port, so a bridge would send such a frame from the PON side nowhere.
+ * The PON port therefore drops unregistered IPv4 multicast while the bridge of
+ * the SFP port and the GEM interfaces sees an IPv4 router behind a port other
+ * than the SFP port, and IPv6 multicast by the IPv6 routers alike. The reserved
+ * groups are flooded all the same (rtl9602c_mcast_reset()), as the bridge
+ * floods the link-local groups, which it does not snoop. A router behind the
+ * SFP port itself is not looked for: the bridge would send it the unregistered
+ * multicast from the PON side, and the switch then drops it.
+ *
+ * Context: RTNL held; called when bridge membership changes, when a group
+ * changes and when the router state of a GEM port does.
+ */
+void rtl9602c_mcast_refresh(struct rtl9602c_priv *p)
+{
+	struct dsa_port *dp = dsa_to_port(&p->ds, RTL9602C_PORT_SFP);
+	u8 drop = 0;
+
+	if (dp && dp->user && p->pon_br &&
+	    rtl9602c_port_bridge_dev(p, dp) == p->pon_br) {
+		if (br_multicast_has_router_adjacent(dp->user, ETH_P_IP))
+			drop |= BIT(0);
+		if (br_multicast_has_router_adjacent(dp->user, ETH_P_IPV6))
+			drop |= BIT(1);
+	}
+
+	mutex_lock(&p->fdb_lock);
+	if (drop != p->mc_drop) {
+		rtl9602c_rmw(p, RTL9602C_MC_UNKNOWN_IP4,
+			     RTL9602C_MC_UNKNOWN_ACT(RTL9602C_PORT_PON),
+			     FIELD_PREP(RTL9602C_MC_UNKNOWN_ACT(RTL9602C_PORT_PON),
+					drop & BIT(0) ?
+					RTL9602C_MC_UNKNOWN_ACT_DROP :
+					RTL9602C_MC_UNKNOWN_ACT_FLOOD));
+		rtl9602c_rmw(p, RTL9602C_MC_UNKNOWN_IP6,
+			     RTL9602C_MC_UNKNOWN_ACT(RTL9602C_PORT_PON),
+			     FIELD_PREP(RTL9602C_MC_UNKNOWN_ACT(RTL9602C_PORT_PON),
+					drop & BIT(1) ?
+					RTL9602C_MC_UNKNOWN_ACT_DROP :
+					RTL9602C_MC_UNKNOWN_ACT_FLOOD));
+		pr_info("unregistered multicast from the PON: IPv4 %s, IPv6 %s\n",
+			drop & BIT(0) ? "dropped" : "flooded",
+			drop & BIT(1) ? "dropped" : "flooded");
+		p->mc_drop = drop;
+	}
+	mutex_unlock(&p->fdb_lock);
 }
 
 /**

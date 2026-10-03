@@ -384,6 +384,16 @@ static void rtl9602c_gem_vlan_del(struct pon_device *pon, unsigned int flow,
 	rtl9602c_port_vlan_del(&p->ds, RTL9602C_PORT_PON, &vlan);
 }
 
+/*
+ * Whether the bridge sees a multicast router behind a GEM port decides what
+ * the PON port does with unregistered multicast (rtl9602c_mcast_refresh()).
+ */
+static void rtl9602c_gem_mrouter(struct pon_device *pon, unsigned int flow,
+				 bool mrouter)
+{
+	rtl9602c_mcast_refresh(pon_device_get_drvdata(pon));
+}
+
 /**
  * rtl9602c_gem_us_ready() - whether a GEM port's upstream is programmed
  * @p: the switch
@@ -596,6 +606,7 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 	.gem_bridge_leave	= rtl9602c_gem_bridge_leave,
 	.gem_vlan_add		= rtl9602c_gem_vlan_add,
 	.gem_vlan_del		= rtl9602c_gem_vlan_del,
+	.gem_mrouter		= rtl9602c_gem_mrouter,
 	.dev_status		= rtl9602c_pon_dev_status,
 	.gem_stats		= rtl9602c_gem_stats,
 	.tcont_get		= rtl9602c_tcont_get,
