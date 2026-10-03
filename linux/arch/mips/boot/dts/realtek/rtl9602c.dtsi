@@ -89,13 +89,12 @@
 		 *
 		 * Line n is taken to be bit n of a word in the CPU's own
 		 * big-endian order, which the realtek,rtl9602c-gpio entry
-		 * provides; not verified. Note that the generic
-		 * realtek,otto-gpio match assumes a byte-swapped order: a
-		 * kernel that knows only the fallback would drive line 13 on
-		 * bit 21.
+		 * provides; not verified. The generic realtek,otto-gpio match
+		 * assumes a byte-swapped order, which would put line 13 on
+		 * bit 21, so it is not given as a fallback.
 		 */
 		gpio0: gpio@18003300 {
-			compatible = "realtek,rtl9602c-gpio", "realtek,otto-gpio";
+			compatible = "realtek,rtl9602c-gpio";
 			reg = <0x18003300 0x1c>;
 			gpio-controller;
 			#gpio-cells = <2>;

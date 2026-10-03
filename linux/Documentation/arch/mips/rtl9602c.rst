@@ -106,7 +106,7 @@ listed in ``vendor-prefixes.yaml``.
    * - ``realtek,rtl9602c-wdt``
      - ``wdt``
      - ``watchdog/realtek,rtl9602c-wdt.yaml``
-   * - ``realtek,rtl9602c-gpio``, ``realtek,otto-gpio``
+   * - ``realtek,rtl9602c-gpio``
      - ``gpio0``
      - ``gpio/realtek,otto-gpio.yaml``
    * - ``ns16550a``
@@ -1851,15 +1851,15 @@ The GPIO bank
      - I
      - Not load-bearing beyond line 13. The width of the bank is not
        established.
-   * - The node's compatible list is ``realtek,rtl9602c-gpio``,
-       ``realtek,otto-gpio``; the driver has an entry for the first, and its
-       flags apply. ``GPIO_REALTEK_OTTO`` depends on
+   * - The node's compatible is ``realtek,rtl9602c-gpio`` alone, without the
+       ``realtek,otto-gpio`` fallback, whose byte-swapped order does not match
+       the bank; the driver has an entry for it, and its flags apply. ``GPIO_REALTEK_OTTO`` depends on
        ``MACH_REALTEK_RTL || RTL9602C``, so the driver builds for this platform.
      - T
      - The switch driver probes: it takes its TX_DISABLE line from this bank at
        probe, and a missing provider would defer or fail it.
-   * - ``gpio0: gpio@18003300``, ``compatible = "realtek,rtl9602c-gpio",
-       "realtek,otto-gpio"``, ``reg = <0x18003300 0x1c>``, ``gpio-controller``,
+   * - ``gpio0: gpio@18003300``, ``compatible = "realtek,rtl9602c-gpio"``,
+       ``reg = <0x18003300 0x1c>``, ``gpio-controller``,
        ``#gpio-cells = <2>``, ``ngpios = <32>``; no interrupt properties: no
        GPIO interrupt is used on this board.
      - T
