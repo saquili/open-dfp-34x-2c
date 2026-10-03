@@ -590,12 +590,31 @@ measured about them.
        same address adds a second entry; with the bit on the entry alone the
        hashed search finds it but frames stop matching it. With the VLAN in
        independent learning the switch learns entries with this bit set. The
-       driver sets it on every entry that it writes.
+       driver sets it on the entries of a VLAN in independent learning and on
+       every next-hop entry, and leaves it clear on its other entries of a VLAN
+       in shared learning (``rtl9602c_l2_ivl()``).
      - M
      - At one address: VLAN shared, add to slot ``0x15c`` and update to
        ``0x15d``; VLAN independent, add, update and delete all ``0x274``; with
        the bit on the entry only, a static entry stopped steering frames (5 of 5
        flooded again).
+   * - In shared learning an entry is keyed by its address alone. The VID field
+       of a learned entry holds the VLAN of the frame that it was learned from;
+       frames from the same address in another VLAN in shared learning neither
+       add an entry nor change that one.
+     - M
+     - Frames from one address in VLANs 3003 and 3004, neither of them written,
+       left its single entry, learned in VLAN 4094, as it was.
+   * - A static entry keyed by address steers the frames of a VLAN-unaware
+       bridge whose ports have PVID 0, VID 0 being in shared learning: the
+       bridge of the OMCI daemon. Keyed by VID, the same entry steered nothing.
+     - M
+     - A static entry for an address on ``sfp``: 200 frames from the host to
+       that address were dropped as frames to their own ingress port, none
+       reaching the OLT and none the CPU, and 200 from the network side
+       reached the host with none at the CPU. Keyed by VID, as the driver
+       wrote every entry before, the frames from the host were flooded to the
+       PON and the CPU, 200 of 200, as with no entry.
    * - Independent learning keys the filtering database by VID; shared learning
        keys it by a filtering identifier that several VLANs may share.
      - P
@@ -611,10 +630,11 @@ measured about them.
        the static entries stayed and the learned ones aged out.
    * - A static entry is also not moved by source learning when its address is
        seen arriving on another port.
-     - I
-     - A static entry for an address on the PON port, then frames from that
-       address into the SFP port and a dump, would settle it. The driver depends
-       on it for static entries.
+     - M
+     - The static entry of the row above: 200 frames from its address through
+       the PON left it behind ``sfp``, with no second entry, and frames from the
+       host to the address were still dropped. Keyed by VID, the entry stayed
+       too, but the switch learned the address beside it at a second slot.
    * - ``RTL9602C_FDB_W2_AGE`` counts down; zero is aged out. The driver writes
        ``RTL9602C_FDB_W2_AGE_MAX`` (7). A freshly learned entry also starts at 7
        and a written entry counts down like any other, so the age says nothing
@@ -634,12 +654,18 @@ measured about them.
        engine: the engine takes the frames for this device's own addresses
        with no entry for them in the table. What the bit does is not known.
        The driver sets it on the entries behind the CPU port while the engine
-       is up (see "The layer-2 side of routing").
+       is up (see "The layer-2 side of routing"). A frame that is not IP, to
+       an address behind the CPU port that is not one of this device's own, is
+       flooded to every port while its entry carries the bit.
      - M
      - Booted straight into router mode, a kernel that places no entry for the
        stick's own address had none in the ``fdb`` view, and the routing test
        still found its flow in the switch, with 20 of 20,000 datagrams through
-       the CPU; the same as with the entry and its bit.
+       the CPU; the same as with the entry and its bit. A host address added
+       with ``bridge fdb add ... dev omcibr0 self local``, its entry keyed as
+       its VLAN learns and carrying the bit: 200 frames of EtherType ``0x88b5``
+       from the host to it reached the OLT as well as the CPU, while 200 to the
+       stick's own address reached the CPU alone.
    * - ``RTL9602C_FDB_W2_NEXTHOP`` marks an entry that the L3 engine may use as
        a next hop's destination. Without it the engine resolves a routed frame
        completely and the switch then discards the frame at its ingress port,
@@ -747,9 +773,10 @@ Placing, changing and deleting through the hash
        earlier runs had left their addresses behind the CPU port the same way.
    * - A VLAN that no ``port_vlan_add`` wrote, such as a VLAN that only an
        upper of a port in a VLAN-unaware bridge uses, is learned in shared
-       learning. The switch then keeps a learned entry of an address beside the
-       driver's static entry of the same address and VID, at another slot,
-       because the two are keyed differently.
+       learning, and the driver keys its entries there by address too, except a
+       next hop's. The switch then keeps a learned entry of a next hop's address
+       beside the next-hop entry, at another slot, because the two are keyed
+       differently.
      - M
      - The ``fdb`` view showed the router's address in the management VLAN
        twice: ``ivl static`` with the next-hop bit at slot 488, and ``svl
@@ -758,31 +785,40 @@ Placing, changing and deleting through the hash
 Adding, deleting and dumping entries
 ------------------------------------
 
-``rtl9602c_port_fdb_add()``, in order, steps 3 to 7 under ``fdb_lock``:
+``rtl9602c_port_fdb_add()``, in order, steps 3 to 8 under ``fdb_lock``:
 
 1. Refuse a multicast address with ``-EINVAL``. Purpose: a group is a member set
    and goes through ``port_mdb_add``. (T)
 2. Replace VID 0 with the port's PVID. Purpose: DSA passes 0 for a VLAN-unaware
    bridge, and the switch puts an untagged frame into its ingress port's PVID
-   before the lookup (see "VLAN membership, filtering and PVID"), so an entry at
-   VID 0 would match nothing. (M)
-3. If a routed next hop's entry holds the key: behind this port, return 0, as
+   before the lookup (see "VLAN membership, filtering and PVID"). (M)
+3. Read the VLAN's learning mode, ``RTL9602C_VLAN_ENTRY_IVL`` of its entry
+   (``rtl9602c_l2_ivl()``); VID 0 is shared learning without a read, as the
+   driver never touches its entry. Purpose: an entry matches frames only when
+   it is keyed as its VLAN learns (see "Entry layout"). (M)
+4. If a routed next hop's entry holds the key: behind this port, return 0, as
    that entry is static and sends the address there already; behind another
    port, return ``-EBUSY`` with the log line ``<address> vlan <v>: a routed
    next hop holds it behind port <n>``. Purpose: a next hop names its entry by
    slot, so the entry stays as placed (see "The layer-2 side of routing"). (T)
-4. Delete every other entry of the key, learned or static, behind any port,
-   each by its own words. Purpose: a write of a key already in the table does
-   not always replace it. (M)
-5. Build the entry: address, VID, ``RTL9602C_FDB_W1_IVL``,
-   ``RTL9602C_FDB_W1_STATIC``, the port, ``RTL9602C_FDB_W2_AGE_MAX`` and
-   ``RTL9602C_FDB_W2_VALID``. Purpose: see "Entry layout". (M)
-6. While the L3 engine is up, set ``RTL9602C_FDB_W1_ROUTER_MAC`` on an entry for
+5. Delete every other entry of the key, learned or static, behind any port,
+   each by its own words; for an entry keyed by address, every entry of the
+   address keyed by address, whatever VLAN its VID field names. Purpose: a
+   write of a key already in the table does not always replace it. (M)
+6. Build the entry: address, VID, ``RTL9602C_FDB_W1_IVL`` if the VLAN is in
+   independent learning, ``RTL9602C_FDB_W1_STATIC``, the port,
+   ``RTL9602C_FDB_W2_AGE_MAX`` and ``RTL9602C_FDB_W2_VALID``. Purpose: see
+   "Entry layout". (M)
+7. While the L3 engine is up, set ``RTL9602C_FDB_W1_ROUTER_MAC`` on an entry for
    the CPU port. Purpose: such an entry is one of this device's own addresses
    (see "The layer-2 side of routing"), and stamping it here keeps an address
    added later routed. (I)
-7. Write the entry through the hash. A write with HIT clear returns ``-ENOSPC``.
+8. Write the entry through the hash. A write with HIT clear returns ``-ENOSPC``.
    Purpose: the result is only in the status. (T)
+
+Step 5 is measured on an address learned through the PON in VLAN 3003 and then
+made static on ``sfp`` at VID 0, which the bridge offers as ``bridge fdb
+replace``: the learned entry went and the static one took its slot.
 
 ``rtl9602c_port_fdb_del()``, in order:
 
@@ -791,10 +827,12 @@ Adding, deleting and dumping entries
    Purpose: it is this device's own address, which the L3 engine goes on
    using; DSA deletes a bridge's host addresses when the bridge goes, as router
    mode does. (T)
-3. Under ``fdb_lock``, delete the entries of the key behind the port, each by
-   its own words, but not a next hop's. Purpose: a hashed delete built from
-   the key alone does not reach every entry (see "Placing, changing and
-   deleting through the hash"), and a next hop still names its entry. (M)
+3. Under ``fdb_lock``, delete the entries of the address behind the port whose
+   VID field is the VID, keyed either way, each by its own words, but not a
+   next hop's. Purpose: a hashed delete built from the key alone does not reach
+   every entry (see "Placing, changing and deleting through the hash"), an
+   entry placed while its VLAN learned the other way is deleted too, and a
+   next hop still names its entry. (M)
 
 ``rtl9602c_port_fdb_dump()``, in order:
 
@@ -810,11 +848,13 @@ under ``fdb_lock``, which makes the lookup, the change and the write one
 operation: two ports joining at once would otherwise each write back the member
 set that they read before the other. In order:
 
-1. Refuse a unicast address with ``-EINVAL``, and replace VID 0 with the port's
-   PVID as for ``port_fdb_add``. (T)
-2. Look the key up through the hash (address, VID, ``RTL9602C_FDB_W1_IVL``,
-   ``RTL9602C_FDB_W1_STATIC``, word 2 zero). Purpose: the group's current member
-   set. (M)
+1. Refuse a unicast address with ``-EINVAL``, replace VID 0 with the port's
+   PVID and read the VLAN's learning mode, as for ``port_fdb_add``. (T)
+2. Look the key up through the hash (address, VID, ``RTL9602C_FDB_W1_IVL`` if
+   the VLAN is in independent learning, ``RTL9602C_FDB_W1_STATIC``, word 2
+   zero). Purpose: the group's current member set. (M; a group keyed by address
+   is I, since a bridge of this configuration, without multicast snooping,
+   adds no group)
 3. Not found: a delete has nothing to do, and an add starts from an empty set
    and the rebuilt key. Purpose: the data read on a miss are no entry. (T)
 4. Set or clear the port's member bit and, for the CPU port,
@@ -1417,8 +1457,9 @@ call, in order:
 3. For the CPU port, set or clear ``RTL9602C_VLAN_ENTRY_EXT0_MEMBER`` with the
    member bit. Purpose: a frame reaches the CPU only with both bits. (M)
 4. When adding, set ``RTL9602C_VLAN_ENTRY_IVL``; it is never cleared again.
-   Purpose: one learning mode for the whole table, agreeing with the
-   address-table entries, which are all keyed by VID. (M)
+   Purpose: one learning mode for every VLAN that the bridge uses, which the
+   address-table entries of the VLAN follow (``rtl9602c_l2_ivl()``); a VLAN
+   left unwritten, VID 0 among them, stays in shared learning. (M)
 5. Write the entry back by index. (M)
 
 The steps are measured together: a bridge with ``vlan_filtering 1`` and a
@@ -2107,11 +2148,10 @@ Known limitations
   (see "Structure"), and fewer in practice: an address whose bucket of four
   slots is full is refused with ``-ENOSPC`` while other buckets are empty. That
   a hashed write with HIT clear means a full bucket is an assumption.
-- In a VLAN that the driver never wrote, the switch learns in shared learning
-  while the driver files its static entries for independent learning, so a
-  learned entry and a static one can hold the same address and VID at two slots
-  (see "Placing, changing and deleting through the hash"); the static entry
-  then does not steer the VLAN's frames.
+- While the L3 engine is up, which is whenever the driver is bound, a frame
+  that is not IP, to a host address behind the CPU port other than this
+  device's own, is flooded to every port, the PON port included: its entry
+  carries ``RTL9602C_FDB_W1_ROUTER_MAC`` (see "Entry layout").
 
 Open questions
 ==============
@@ -2131,9 +2171,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - A static entry is not moved by source learning ("Entry layout").
-     - A static entry for an address on the PON port, then frames from that
-       address into the SFP port and a dump.
    * - A hashed write that reports HIT clear found its bucket full ("Placing,
        changing and deleting through the hash").
      - A fifth address hashing into a full bucket.

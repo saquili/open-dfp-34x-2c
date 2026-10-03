@@ -88,19 +88,22 @@ static int rtl9602c_l2_place(struct rtl9602c_priv *p, u32 *e,
 }
 
 /*
- * A unicast entry for @addr behind @port. It is keyed by VID (independent
- * learning), which has to agree with the learning bit of the VLAN's own
- * entry for frames to match it. A static entry is left alone by the dynamic
- * flush and does not age out, although its age counts down like any other;
- * it is assumed, not verified, that source learning does not move it either.
+ * A unicast entry for @addr behind @port, filed under @vid. With @ivl it is
+ * keyed by VID (independent learning), otherwise by address alone (shared
+ * learning); frames match it only when that agrees with the learning bit of
+ * the VLAN's own entry (rtl9602c_l2_ivl()). A static entry is left alone by
+ * the dynamic flush and does not age out, although its age counts down like
+ * any other, and source learning does not move it (measured with an entry
+ * keyed by address).
  */
 static void rtl9602c_l2_pack(u32 *e, const unsigned char *addr, u16 vid,
-			     int port, bool is_static)
+			     int port, bool is_static, bool ivl)
 {
 	e[0] = addr[2] << 24 | addr[3] << 16 | addr[4] << 8 | addr[5];
 	e[1] = FIELD_PREP(RTL9602C_FDB_W1_MAC_HI, addr[0] << 8 | addr[1]) |
-	       FIELD_PREP(RTL9602C_FDB_W1_VID, vid) |
-	       RTL9602C_FDB_W1_IVL;
+	       FIELD_PREP(RTL9602C_FDB_W1_VID, vid);
+	if (ivl)
+		e[1] |= RTL9602C_FDB_W1_IVL;
 	if (is_static)
 		e[1] |= RTL9602C_FDB_W1_STATIC;
 	e[2] = FIELD_PREP(RTL9602C_FDB_W2_PORT, port) |
@@ -113,6 +116,33 @@ static u16 rtl9602c_port_pvid(struct rtl9602c_priv *p, int port)
 	u32 v = rtl9602c_r(p, RTL9602C_VLAN_PVID(port));
 
 	return (v >> RTL9602C_VLAN_PVID_SHIFT(port)) & RTL9602C_VLAN_PVID_MASK;
+}
+
+/*
+ * How the switch keys the entries of @vid: by VID if the VLAN's own entry is
+ * in independent learning, which rtl9602c_vlan_set_member() sets when it adds
+ * a member and never clears, and by address alone otherwise, as for every
+ * VLAN that no port_vlan_add wrote. VID 0 is one of those, the PVID of the
+ * ports of a VLAN-unaware bridge whose default PVID is 0; its entry is not
+ * read, as the driver never touches it.
+ *
+ * Return: 0 with @ivl set, or a negative error code from the table access.
+ */
+static int rtl9602c_l2_ivl(struct rtl9602c_priv *p, u16 vid, bool *ivl)
+{
+	u32 entry;
+	int err;
+
+	*ivl = false;
+	if (!vid)
+		return 0;
+
+	err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_VLAN, vid, &entry,
+				  1, NULL);
+	if (err)
+		return err;
+	*ivl = entry & RTL9602C_VLAN_ENTRY_IVL;
+	return 0;
 }
 
 static void rtl9602c_l2_unpack(const u32 *e, unsigned char *addr, u16 *vid,
@@ -156,16 +186,19 @@ enum rtl9602c_l2_which {
 
 /*
  * Delete the unicast entries of @addr at @vid that @which picks, learned or
- * static, behind @port or, when @port is negative, behind any port. The
- * hashed slots are read by index, all 1024 in well under 10 ms, and each entry
- * found is deleted by its own words: neither its port, its router bit nor the
- * way it is keyed follows from the address and VID. Called under fdb_lock.
+ * static, behind @port or, when @port is negative, behind any port; with
+ * @shared, also every entry of @addr keyed by address alone, whatever VLAN
+ * its VID field names, since those all share one key. The hashed slots are
+ * read by index, all 1024 in well under 10 ms, and each entry found is
+ * deleted by its own words: neither its port, its router bit nor the way it
+ * is keyed follows from the address and VID. Called under fdb_lock.
  *
  * Return: the number of entries deleted, or a negative error code from the
  * table access.
  */
 static int rtl9602c_l2_purge(struct rtl9602c_priv *p, const unsigned char *addr,
-			     u16 vid, int port, enum rtl9602c_l2_which which)
+			     u16 vid, bool shared, int port,
+			     enum rtl9602c_l2_which which)
 {
 	u32 e[RTL9602C_FDB_ENTRY_WORDS];
 	unsigned char a[ETH_ALEN];
@@ -183,8 +216,9 @@ static int rtl9602c_l2_purge(struct rtl9602c_priv *p, const unsigned char *addr,
 			continue;
 
 		rtl9602c_l2_unpack(e, a, &evid, &eport);
-		if (evid != vid || !ether_addr_equal(a, addr) ||
-		    (port >= 0 && eport != port))
+		if (!ether_addr_equal(a, addr) || (port >= 0 && eport != port))
+			continue;
+		if (evid != vid && !(shared && !(e[1] & RTL9602C_FDB_W1_IVL)))
 			continue;
 		nh = e[2] & RTL9602C_FDB_W2_NEXTHOP;
 		if ((which == RTL9602C_L2_NOT_NEXTHOP && nh) ||
@@ -260,8 +294,10 @@ static bool rtl9602c_l2_is_own(struct rtl9602c_priv *p,
  *	address and VID alone
  *
  * The switch gives an untagged frame its ingress port's PVID before the
- * address lookup, so an entry filed under VID 0, which DSA passes for a
- * VLAN-unaware bridge, would match nothing.
+ * address lookup, so a VID 0, which DSA passes for a VLAN-unaware bridge,
+ * stands for the port's PVID, and the entry is keyed as that VLAN learns:
+ * by VID in independent learning, by address alone in shared learning,
+ * which is where a PVID of 0 leaves it.
  *
  * Return: 0 on success, -EINVAL for a multicast address, -EBUSY when a routed
  * next hop holds the address behind another port, -ENOSPC when the address's
@@ -275,6 +311,7 @@ int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 	u32 e[RTL9602C_FDB_ENTRY_WORDS];
 	struct rtl9602c_lookup out;
 	int err, nh_port;
+	bool ivl;
 
 	if (is_multicast_ether_addr(addr))
 		return -EINVAL;
@@ -283,6 +320,10 @@ int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 		vid = rtl9602c_port_pvid(p, port);
 
 	mutex_lock(&p->fdb_lock);
+
+	err = rtl9602c_l2_ivl(p, vid, &ivl);
+	if (err)
+		goto out;
 
 	/*
 	 * A routed next hop's entry is static already and stays as placed,
@@ -308,11 +349,11 @@ int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 	 * one entry is left: a write of a key already in the table does not
 	 * always replace it.
 	 */
-	err = rtl9602c_l2_purge(p, addr, vid, -1, RTL9602C_L2_ALL);
+	err = rtl9602c_l2_purge(p, addr, vid, !ivl, -1, RTL9602C_L2_ALL);
 	if (err < 0)
 		goto out;
 
-	rtl9602c_l2_pack(e, addr, vid, port, true);
+	rtl9602c_l2_pack(e, addr, vid, port, true, ivl);
 
 	/*
 	 * An address behind the CPU port is one of this device's own. While
@@ -363,7 +404,8 @@ int rtl9602c_port_fdb_del(struct dsa_switch *ds, int port,
 		return 0;
 
 	mutex_lock(&p->fdb_lock);
-	err = rtl9602c_l2_purge(p, addr, vid, port, RTL9602C_L2_NOT_NEXTHOP);
+	err = rtl9602c_l2_purge(p, addr, vid, false, port,
+				RTL9602C_L2_NOT_NEXTHOP);
 	mutex_unlock(&p->fdb_lock);
 	return err < 0 ? err : 0;
 }
@@ -414,6 +456,7 @@ static int rtl9602c_mdb_edit(struct dsa_switch *ds, int port,
 	struct rtl9602c_priv *p = ds->priv;
 	u32 e[RTL9602C_FDB_ENTRY_WORDS];
 	struct rtl9602c_lookup out;
+	bool ivl;
 	int err;
 
 	if (!is_multicast_ether_addr(addr))
@@ -424,7 +467,11 @@ static int rtl9602c_mdb_edit(struct dsa_switch *ds, int port,
 
 	mutex_lock(&p->fdb_lock);
 
-	rtl9602c_l2_pack(e, addr, vid, 0, true);
+	err = rtl9602c_l2_ivl(p, vid, &ivl);
+	if (err)
+		goto out;
+
+	rtl9602c_l2_pack(e, addr, vid, 0, true, ivl);
 	e[2] = 0;
 
 	err = rtl9602c_l2_lookup(p, e, &out);
@@ -438,7 +485,7 @@ static int rtl9602c_mdb_edit(struct dsa_switch *ds, int port,
 	if (!out.hit) {
 		if (!member)
 			goto out;
-		rtl9602c_l2_pack(e, addr, vid, 0, true);
+		rtl9602c_l2_pack(e, addr, vid, 0, true, ivl);
 		e[2] = 0;
 	}
 
@@ -550,6 +597,7 @@ int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port)
 	struct dsa_port *dp = dsa_to_port(&p->ds, port);
 	u32 k[RTL9602C_FDB_ENTRY_WORDS];
 	struct rtl9602c_lookup out;
+	bool ivl;
 	int err;
 	u16 vid;
 
@@ -558,12 +606,16 @@ int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port)
 	vid = rtl9602c_port_pvid(p, port);
 
 	mutex_lock(&p->fdb_lock);
-	err = rtl9602c_l2_purge(p, dp->user->dev_addr, vid, -1,
+	err = rtl9602c_l2_ivl(p, vid, &ivl);
+	if (err)
+		goto out;
+	err = rtl9602c_l2_purge(p, dp->user->dev_addr, vid, !ivl, -1,
 				RTL9602C_L2_NOT_NEXTHOP);
 	if (err < 0)
 		goto out;
 
-	rtl9602c_l2_pack(k, dp->user->dev_addr, vid, RTL9602C_PORT_CPU, true);
+	rtl9602c_l2_pack(k, dp->user->dev_addr, vid, RTL9602C_PORT_CPU, true,
+			 ivl);
 	k[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
 	err = rtl9602c_l2_place(p, k, &out);
 	if (!err && !out.hit) {
@@ -606,8 +658,8 @@ int rtl9602c_l2_own_drop(struct rtl9602c_priv *p, int port)
 			return 0;
 
 	mutex_lock(&p->fdb_lock);
-	err = rtl9602c_l2_purge(p, dp->user->dev_addr, vid, RTL9602C_PORT_CPU,
-				RTL9602C_L2_NOT_NEXTHOP);
+	err = rtl9602c_l2_purge(p, dp->user->dev_addr, vid, false,
+				RTL9602C_PORT_CPU, RTL9602C_L2_NOT_NEXTHOP);
 	mutex_unlock(&p->fdb_lock);
 	return err < 0 ? err : 0;
 }
@@ -701,7 +753,8 @@ int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on)
 		if (err)
 			goto out;
 		rtl9602c_l2_pack(k, mac, vid, RTL9602C_PORT_CPU,
-				 e[1] & RTL9602C_FDB_W1_STATIC);
+				 e[1] & RTL9602C_FDB_W1_STATIC,
+				 e[1] & RTL9602C_FDB_W1_IVL);
 		if (on)
 			k[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
 		err = rtl9602c_l2_place(p, k, &out);
@@ -751,8 +804,11 @@ static const char *rtl9602c_l2_portname(struct rtl9602c_priv *p, int port)
  * there. Nothing else puts that entry in the table, as a routed port is
  * standalone and learns nothing, so the key is emptied and one static entry
  * is placed with %RTL9602C_FDB_W2_NEXTHOP, without which the switch discards
- * the routed frame at its ingress port. A next-hop entry already there for
- * the same port is used as it is, since another next hop may name its slot.
+ * the routed frame at its ingress port. The entry is keyed by VID whatever
+ * the VLAN's learning mode, so that two next hops of one address in two
+ * VLANs get two entries; the engine names it by its slot, not by a lookup.
+ * A next-hop entry already there for the same port is used as it is, since
+ * another next hop may name its slot.
  * rtl9602c_l2_nexthop_drop() deletes the entry when no next hop names it.
  *
  * The caller files the entry under the VLAN the routed frame leaves in, on
@@ -792,11 +848,11 @@ int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
 		goto placed;
 
 	/* Empty the key, then place it once. */
-	err = rtl9602c_l2_purge(p, mac, vid, -1, RTL9602C_L2_ALL);
+	err = rtl9602c_l2_purge(p, mac, vid, false, -1, RTL9602C_L2_ALL);
 	if (err < 0)
 		goto placed;
 
-	rtl9602c_l2_pack(e, mac, vid, port, true);
+	rtl9602c_l2_pack(e, mac, vid, port, true, true);
 	e[2] |= RTL9602C_FDB_W2_NEXTHOP;
 	err = rtl9602c_l2_place(p, e, &out);
 	if (!err && !out.hit) {
@@ -841,7 +897,7 @@ int rtl9602c_l2_nexthop_drop(struct rtl9602c_priv *p, const unsigned char *mac,
 	int err;
 
 	mutex_lock(&p->fdb_lock);
-	err = rtl9602c_l2_purge(p, mac, vid, -1, RTL9602C_L2_NEXTHOP);
+	err = rtl9602c_l2_purge(p, mac, vid, false, -1, RTL9602C_L2_NEXTHOP);
 	mutex_unlock(&p->fdb_lock);
 	if (err > 0)
 		pr_debug("<L2 next hop> %pM vlan %u: entry deleted\n", mac, vid);
