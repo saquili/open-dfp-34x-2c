@@ -7,7 +7,8 @@
  * (serial number, T-CONTs, GEM ports, alarms). GEM ports are links of kind
  * "gem" stacked on the interface pon, and they join the bridge omcibr0 with
  * the subscriber interface sfp; the switch carries that bridge. VLAN rules
- * are tc flower filters with a vlan action, offloaded to the switch. The
+ * are tc flower filters with a vlan action (modify, push or pop), offloaded
+ * to the switch. The
  * counters come from ethtool and the optical readings from hwmon.
  */
 
@@ -1603,7 +1604,7 @@ static int tc_clsact_ensure(int ifindex)
 	return err == -EEXIST ? 0 : err;
 }
 
-/* Remove the ingress filter of a priority. */
+/* Remove the ingress filter of a priority, whatever its protocol. */
 static int tc_filter_del(int ifindex, unsigned int prio)
 {
 	uint8_t req[NL_HDRLEN + sizeof(struct tcmsg)] __aligned(4);
@@ -1611,7 +1612,7 @@ static int tc_filter_del(int ifindex, unsigned int prio)
 		.tcm_family = AF_UNSPEC,
 		.tcm_ifindex = ifindex,
 		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
-		.tcm_info = tc_info(prio, ETH_P_8021Q),
+		.tcm_info = tc_info(prio, 0),
 	};
 	int err;
 
@@ -1627,22 +1628,34 @@ static int tc_filter_del(int ifindex, unsigned int prio)
 }
 
 /*
- * Add an ingress filter that takes frames tagged @match_vid and gives them
- * @assign_vid, in the switch only (skip_sw).
+ * A VLAN filter: the frames it takes, untagged ones or those with an outer
+ * C-tag of @match_vid, and what its vlan action does to them: TCA_VLAN_ACT_
+ * MODIFY or PUSH writes a C-tag of @vid with priority @pri, or keeps the
+ * frame's priority for OMCI_HW_VLAN_PRI_KEEP; POP takes the C-tag off.
  */
-static int tc_filter_add(int ifindex, unsigned int prio, uint16_t match_vid,
-			 uint16_t assign_vid)
+struct tc_vlan_filter {
+	bool untagged;
+	uint16_t match_vid;
+	int v_action;
+	uint16_t vid;
+	uint8_t pri;
+};
+
+/* Add an ingress filter, in the switch only (skip_sw). */
+static int tc_filter_add(int ifindex, unsigned int prio,
+			 const struct tc_vlan_filter *f)
 {
 	uint8_t req[1024] __aligned(4);
 	struct tcmsg tcm = {
 		.tcm_family = AF_UNSPEC,
 		.tcm_ifindex = ifindex,
 		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
-		.tcm_info = tc_info(prio, ETH_P_8021Q),
+		.tcm_info =
+			tc_info(prio, f->untagged ? ETH_P_ALL : ETH_P_8021Q),
 	};
 	struct tc_vlan parms = {
 		.action = TC_ACT_PIPE,
-		.v_action = TCA_VLAN_ACT_MODIFY,
+		.v_action = f->v_action,
 	};
 	uint32_t flags = TCA_CLS_FLAGS_SKIP_SW;
 	size_t off, opts, acts, act1, aopts;
@@ -1660,15 +1673,19 @@ static int tc_filter_add(int ifindex, unsigned int prio, uint16_t match_vid,
 	opts = off;
 	off += NLA_HDRLEN_;
 
-	{
+	if (f->untagged) {
+		uint8_t none = 0;
+
+		off = nla_put(req, off, TCA_FLOWER_KEY_NUM_OF_VLANS, &none,
+			      sizeof(none));
+	} else {
 		uint16_t proto = htons(ETH_P_8021Q);
 
 		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &proto,
 			      sizeof(proto));
+		off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_ID, &f->match_vid,
+			      sizeof(f->match_vid));
 	}
-
-	off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_ID, &match_vid,
-		      sizeof(match_vid));
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
 
 	acts = off;
@@ -1679,8 +1696,13 @@ static int tc_filter_add(int ifindex, unsigned int prio, uint16_t match_vid,
 	aopts = off;
 	off += NLA_HDRLEN_;
 	off = nla_put(req, off, TCA_VLAN_PARMS, &parms, sizeof(parms));
-	off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_ID, &assign_vid,
-		      sizeof(assign_vid));
+	if (f->v_action != TCA_VLAN_ACT_POP) {
+		off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_ID, &f->vid,
+			      sizeof(f->vid));
+		if (f->pri != OMCI_HW_VLAN_PRI_KEEP)
+			off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_PRIORITY,
+				      &f->pri, sizeof(f->pri));
+	}
 	*(uint16_t *)(req + aopts) = (uint16_t)(off - aopts);
 	*(uint16_t *)(req + aopts + 2) = TCA_ACT_OPTIONS | NLA_F_NESTED;
 	*(uint16_t *)(req + act1) = (uint16_t)(off - act1);
@@ -1696,10 +1718,48 @@ static int tc_filter_add(int ifindex, unsigned int prio, uint16_t match_vid,
 }
 
 /*
- * Replace the VLAN rules: each translation is two filters, one on sfp for
- * the upstream direction and its mirror on pon for the downstream one. The
- * switch driver offloads no push of a second tag, so an S-VID push is refused.
+ * The two filters of a rule: the upstream one on sfp, and on pon the
+ * downstream one that undoes it. A translation is undone by the translation
+ * back, keeping the priority; a C-tag pushed onto an untagged frame by
+ * popping it. An S-VID push is refused: the switch adds an S-tag but cannot
+ * take one off a downstream frame, which it does not see as tagged.
  */
+static bool vlan_filters(const struct omci_hw_vlan_xlate *r,
+			 struct tc_vlan_filter *up, struct tc_vlan_filter *down)
+{
+	switch (r->kind) {
+	case OMCI_HW_VLAN_CVID_XLATE:
+		*up = (struct tc_vlan_filter){
+			.match_vid = r->match_cvid,
+			.v_action = TCA_VLAN_ACT_MODIFY,
+			.vid = r->assign_cvid,
+			.pri = r->assign_pri,
+		};
+		*down = (struct tc_vlan_filter){
+			.match_vid = r->assign_cvid,
+			.v_action = TCA_VLAN_ACT_MODIFY,
+			.vid = r->match_cvid,
+			.pri = OMCI_HW_VLAN_PRI_KEEP,
+		};
+		return true;
+	case OMCI_HW_VLAN_CVID_PUSH:
+		*up = (struct tc_vlan_filter){
+			.untagged = true,
+			.v_action = TCA_VLAN_ACT_PUSH,
+			.vid = r->assign_cvid,
+			.pri = r->assign_pri,
+		};
+		*down = (struct tc_vlan_filter){
+			.match_vid = r->assign_cvid,
+			.v_action = TCA_VLAN_ACT_POP,
+		};
+		return true;
+	default:
+		return false;
+	}
+}
+
+/* Replace the VLAN rules, two filters each (see vlan_filters()). */
 static enum omci_status
 kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		  struct omci_hw_reject *rejected)
@@ -1719,7 +1779,7 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		return OMCI_ERR_NOMEM;
 	if (!uni || !pon) {
 		OMCI_WARN(
-			"vlan: %s or %s is missing; no translation is programmed",
+			"vlan: %s or %s is missing; no VLAN rule is programmed",
 			UNI_IFNAME, PON_IFNAME);
 		return OMCI_ERR_HW;
 	}
@@ -1737,36 +1797,39 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 
 	for (size_t i = 0; i < n; i++) {
 		const unsigned int prio = TC_PRIO_BASE + (unsigned int)i;
+		const struct omci_hw_vlan_xlate *r = &rules[i];
+		struct tc_vlan_filter up, down;
 
-		if (rules[i].kind != OMCI_HW_VLAN_CVID_XLATE) {
+		if (!vlan_filters(r, &up, &down)) {
 			OMCI_WARN(
-				"vlan: rule %zu (C-VID %u) asks for an S-tag, which this offload does not do",
-				i, rules[i].match_cvid);
-			omci_hw_reject_add(rejected, rules[i].match_cvid);
+				"vlan: rule %zu (C-VID %u) adds an S-tag, which the switch cannot take off downstream frames; not programmed",
+				i, r->match_cvid);
+			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
 
-		err = tc_filter_add((int)uni, prio, rules[i].match_cvid,
-				    rules[i].assign_cvid);
+		err = tc_filter_add((int)uni, prio, &up);
 		if (err) {
-			OMCI_WARN("vlan: upstream %u -> %u refused: %s (%s)",
-				  rules[i].match_cvid, rules[i].assign_cvid,
+			OMCI_WARN("vlan: upstream rule %zu refused: %s (%s)", i,
 				  strerror(-err), omci_hw_last_extack());
-			omci_hw_reject_add(rejected, rules[i].match_cvid);
+			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
-		err = tc_filter_add((int)pon, prio, rules[i].assign_cvid,
-				    rules[i].match_cvid);
+		err = tc_filter_add((int)pon, prio, &down);
 		if (err) {
-			OMCI_WARN("vlan: downstream %u -> %u refused: %s (%s)",
-				  rules[i].assign_cvid, rules[i].match_cvid,
-				  strerror(-err), omci_hw_last_extack());
+			OMCI_WARN("vlan: downstream rule %zu refused: %s (%s)",
+				  i, strerror(-err), omci_hw_last_extack());
 			(void)tc_filter_del((int)uni, prio);
-			omci_hw_reject_add(rejected, rules[i].match_cvid);
+			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
-		OMCI_INFO("vlan: C-VID %u <-> %u translated in hardware",
-			  rules[i].match_cvid, rules[i].assign_cvid);
+		if (r->kind == OMCI_HW_VLAN_CVID_PUSH)
+			OMCI_INFO("vlan: untagged <-> C-VID %u in hardware",
+				  r->assign_cvid);
+		else
+			OMCI_INFO(
+				"vlan: C-VID %u <-> %u translated in hardware",
+				r->match_cvid, r->assign_cvid);
 	}
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;

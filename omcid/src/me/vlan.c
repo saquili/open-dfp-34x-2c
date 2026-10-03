@@ -21,13 +21,15 @@
  * Special values of the fields: VID 4096 in a filter matches any VID;
  * priority 15 in a filter means no tag and in a treatment means add none;
  * priority 14 marks a default rule; priority 8 in a filter matches any
- * priority. Removing three tags discards the frame.
+ * priority and in a treatment copies the inner tag's. Removing three tags
+ * discards the frame.
  */
 enum {
 	VLAN_VID_WILDCARD = 4096,
 	VLAN_PRI_NO_TAG = 15,
 	VLAN_PRI_DEFAULT = 14,
 	VLAN_PRI_ANY = 8,
+	VLAN_PRI_COPY_INNER = 8,
 	VLAN_TAGS_REMOVE_0 = 0,
 	VLAN_TAGS_REMOVE_1 = 1,
 	VLAN_TAGS_REMOVE_3 = 3,
@@ -107,7 +109,8 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	if (out == NULL)
 		return false;
 
-	*out = (struct omci_vlan_rule){ .op = OMCI_VLAN_OP_NONE };
+	*out = (struct omci_vlan_rule){ .op = OMCI_VLAN_OP_NONE,
+					.assign_pri = OMCI_HW_VLAN_PRI_KEEP };
 
 	if (row == NULL || len < 16)
 		return false;
@@ -146,6 +149,43 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	    out->filter_inner_pri == VLAN_PRI_DEFAULT)
 		return true;
 
+	/*
+	 * An untagged frame given one tag: neither filter names a tag, nothing
+	 * is removed, and one treatment names the tag. It is a C-tag, with the
+	 * priority the treatment gives; an untagged frame has none to copy.
+	 */
+	if (out->filter_outer_pri == VLAN_PRI_NO_TAG &&
+	    out->filter_inner_pri == VLAN_PRI_NO_TAG &&
+	    out->tags_to_remove == VLAN_TAGS_REMOVE_0 &&
+	    (out->treat_outer_pri == VLAN_PRI_NO_TAG) !=
+		    (out->treat_inner_pri == VLAN_PRI_NO_TAG)) {
+		const bool inner = out->treat_inner_pri != VLAN_PRI_NO_TAG;
+		const unsigned int pri = inner ? out->treat_inner_pri :
+						 out->treat_outer_pri;
+		const unsigned int vid = inner ? out->treat_inner_vid :
+						 out->treat_outer_vid;
+
+		if (out->filter_ethertype != 0u)
+			return refuse(out, OMCI_VLAN_REJECT_ETHERTYPE);
+		if (pri > 7u)
+			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
+		if (!vid_is_programmable(vid))
+			return refuse(out, OMCI_VLAN_REJECT_VID_RANGE);
+
+		out->op = OMCI_VLAN_OP_CVID_PUSH;
+		out->match_cvid = 0u;
+		out->assign_cvid = (uint16_t)vid;
+		out->assign_pri = (uint8_t)pri;
+		return true;
+	}
+
+	/* An untagged frame given two tags is beyond the switch. */
+	if (out->filter_outer_pri == VLAN_PRI_NO_TAG &&
+	    out->filter_inner_pri == VLAN_PRI_NO_TAG &&
+	    out->tags_to_remove == VLAN_TAGS_REMOVE_0 &&
+	    out->treat_outer_pri != VLAN_PRI_NO_TAG)
+		return refuse(out, OMCI_VLAN_REJECT_SHAPE);
+
 	if (out->filter_inner_vid == VLAN_VID_WILDCARD)
 		return true;
 
@@ -156,12 +196,16 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 				   out->treat_inner_pri !=
 					   out->filter_inner_pri;
 
-	/* One tag in, one tag out with a new VID: a C-VID translation. */
+	/*
+	 * One tag in, one tag out with a new VID: a C-VID translation, which
+	 * may give the tag a new priority, though not 0: the offload cannot
+	 * tell a priority of 0 from none and keeps the frame's own.
+	 */
 	if (out->tags_to_remove == VLAN_TAGS_REMOVE_1 &&
 	    !filter_names_a_tag(w0) && filter_names_a_tag(w1) &&
 	    out->treat_outer_pri == VLAN_PRI_NO_TAG &&
 	    out->treat_inner_pri != VLAN_PRI_NO_TAG) {
-		if (inner_remarks)
+		if (inner_remarks && out->treat_inner_pri == 0u)
 			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
 
 		if (out->treat_inner_vid == VLAN_VID_WILDCARD)
@@ -174,6 +218,8 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		out->op = OMCI_VLAN_OP_CVID_XLATE;
 		out->match_cvid = out->filter_inner_vid;
 		out->assign_cvid = out->treat_inner_vid;
+		if (inner_remarks)
+			out->assign_pri = out->treat_inner_pri;
 		return true;
 	}
 
@@ -191,6 +237,19 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		    out->treat_inner_vid != out->filter_inner_vid)
 			return refuse(out, OMCI_VLAN_REJECT_SHAPE);
 
+		/*
+		 * The outer tag's priority: as given, or copied from the inner
+		 * tag, which is the filter's priority when it names one.
+		 */
+		if (out->treat_outer_pri <= 7u)
+			out->assign_pri = out->treat_outer_pri;
+		else if (out->treat_outer_pri != VLAN_PRI_COPY_INNER)
+			return refuse(out, OMCI_VLAN_REJECT_PCP_REMARK);
+		else if (out->filter_inner_pri <= 7u)
+			out->assign_pri = out->filter_inner_pri;
+		else
+			out->assign_pri = OMCI_HW_VLAN_PRI_COPY;
+
 		out->op = OMCI_VLAN_OP_SVID_PUSH;
 		out->match_cvid = out->filter_inner_vid;
 		out->assign_svid = out->treat_outer_vid;
@@ -204,6 +263,26 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		return true;
 
 	return refuse(out, OMCI_VLAN_REJECT_SHAPE);
+}
+
+/* Whether a decoded rule becomes a rule of the hardware. */
+static bool programmable(enum omci_vlan_op op)
+{
+	return op == OMCI_VLAN_OP_CVID_XLATE || op == OMCI_VLAN_OP_SVID_PUSH ||
+	       op == OMCI_VLAN_OP_CVID_PUSH;
+}
+
+/* The hardware rule of a programmable operation. */
+static enum omci_hw_vlan_kind kind_of(enum omci_vlan_op op)
+{
+	switch (op) {
+	case OMCI_VLAN_OP_SVID_PUSH:
+		return OMCI_HW_VLAN_SVID_PUSH;
+	case OMCI_VLAN_OP_CVID_PUSH:
+		return OMCI_HW_VLAN_CVID_PUSH;
+	default:
+		return OMCI_HW_VLAN_CVID_XLATE;
+	}
 }
 
 static uint16_t net_vid_of(const struct omci_hw_vlan_xlate *r)
@@ -391,16 +470,13 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 				(void)omci_vlan_decode(row, sizeof(row), &d);
 
 				if (prefer_in_force) {
-					const bool programmable =
-						(d.op == OMCI_VLAN_OP_CVID_XLATE ||
-						 d.op == OMCI_VLAN_OP_SVID_PUSH);
 					const uint16_t nv =
 						(d.op ==
 						 OMCI_VLAN_OP_SVID_PUSH) ?
 							d.assign_svid :
 							d.assign_cvid;
 
-					if (!programmable) {
+					if (!programmable(d.op)) {
 						if (pass == 0u)
 							continue;
 					} else if ((pass == 0u) !=
@@ -474,13 +550,11 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					continue;
 				}
 
-				rules[n].kind =
-					(d.op == OMCI_VLAN_OP_SVID_PUSH) ?
-						OMCI_HW_VLAN_SVID_PUSH :
-						OMCI_HW_VLAN_CVID_XLATE;
+				rules[n].kind = kind_of(d.op);
 				rules[n].match_cvid = d.match_cvid;
 				rules[n].assign_cvid = d.assign_cvid;
 				rules[n].assign_svid = d.assign_svid;
+				rules[n].assign_pri = d.assign_pri;
 				fate_put(record, cur.instance, i,
 					 OMCI_VLAN_FATE_PROGRAMMED,
 					 d.match_cvid, net_vid, NULL);
@@ -565,7 +639,7 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 		if (omci_hw_reject_has(&rejected, rules[i].match_cvid)) {
 			OMCI_WARN(
 				"me171: the switch would not take C-VID %u -> %u; it is NOT in force",
-				rules[i].match_cvid, rules[i].assign_cvid);
+				rules[i].match_cvid, net_vid_of(&rules[i]));
 			continue;
 		}
 		g_in_force[g_in_force_n++] = rules[i];
@@ -593,7 +667,7 @@ bool omci_vlan_has_room(const struct omci_mib *mib, uint16_t class_id,
 	if (!omci_vlan_decode(row, len, &d))
 		return true;
 
-	if (d.op != OMCI_VLAN_OP_CVID_XLATE && d.op != OMCI_VLAN_OP_SVID_PUSH)
+	if (!programmable(d.op))
 		return true;
 
 	struct omci_hw_vlan_xlate rules[OMCI_HW_VLAN_MAX_RULES];

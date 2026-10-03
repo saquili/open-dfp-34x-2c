@@ -140,24 +140,37 @@ static inline bool omci_hw_reject_has(const struct omci_hw_reject *r,
  * enum omci_hw_vlan_kind - The VLAN rules the hardware carries.
  * @OMCI_HW_VLAN_CVID_XLATE: replace the VID of a single-tagged frame
  * @OMCI_HW_VLAN_SVID_PUSH: add an outer tag
+ * @OMCI_HW_VLAN_CVID_PUSH: give an untagged frame a tag
  */
 enum omci_hw_vlan_kind {
 	OMCI_HW_VLAN_CVID_XLATE = 0,
 	OMCI_HW_VLAN_SVID_PUSH,
+	OMCI_HW_VLAN_CVID_PUSH,
 };
+
+/*
+ * The priority a rule gives the tag it writes, besides 0 to 7: the one the tag
+ * had (KEEP), or for an added outer tag that of the tag behind it (COPY).
+ */
+#define OMCI_HW_VLAN_PRI_KEEP 0xFFu
+#define OMCI_HW_VLAN_PRI_COPY 0xFEu
 
 /**
  * struct omci_hw_vlan_xlate - A VLAN rule, as the subscriber side sees it.
  * @kind: what it does
- * @match_cvid: the VID of the frames it takes from the subscriber side
- * @assign_cvid: the VID they leave with, for a translation
- * @assign_svid: the VID of the added tag, for a push
+ * @match_cvid: the VID of the frames it takes from the subscriber side; 0,
+ *	which no rule's VID can be, for the untagged frames of a C-VID push
+ * @assign_cvid: the VID they leave with, for a translation or a C-VID push
+ * @assign_svid: the VID of the added tag, for an S-VID push
+ * @assign_pri: the priority of the tag the rule writes, 0 to 7,
+ *	%OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
  */
 struct omci_hw_vlan_xlate {
 	enum omci_hw_vlan_kind kind;
 	uint16_t match_cvid;
 	uint16_t assign_cvid;
 	uint16_t assign_svid;
+	uint8_t assign_pri;
 };
 
 /**

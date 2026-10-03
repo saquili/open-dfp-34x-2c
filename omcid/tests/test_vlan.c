@@ -109,6 +109,67 @@ int main(void)
 	CHECK_EQ(r.op, OMCI_VLAN_OP_SVID_PUSH);
 	CHECK_EQ(r.match_cvid, 410u);
 	CHECK_EQ(r.assign_svid, 100u);
+	CHECK_EQ(r.assign_pri, 6u);
+
+	/* An S-VID push copying the inner priority: the filter's, or any. */
+	pack(row, 0xf8000000u, (6u << 28) | (410u << 15),
+	     (0u << 30) | (8u << 16) | (100u << 3), (6u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SVID_PUSH);
+	CHECK_EQ(r.assign_pri, 6u);
+	pack(row, 0xf8000000u, (8u << 28) | (410u << 15),
+	     (0u << 30) | (8u << 16) | (100u << 3), (8u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_SVID_PUSH);
+	CHECK_EQ(r.assign_pri, OMCI_HW_VLAN_PRI_COPY);
+	pack(row, 0xf8000000u, (6u << 28) | (410u << 15),
+	     (0u << 30) | (9u << 16) | (100u << 3), (6u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_PCP_REMARK);
+
+	/* An untagged frame given a C-tag, by the inner or the outer treatment. */
+	pack(row, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+	     (5u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_PUSH);
+	CHECK_EQ(r.match_cvid, 0u);
+	CHECK_EQ(r.assign_cvid, 410u);
+	CHECK_EQ(r.assign_pri, 5u);
+	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (36u << 3),
+	     0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_PUSH);
+	CHECK_EQ(r.assign_cvid, 36u);
+	CHECK_EQ(r.assign_pri, 3u);
+	pack(row, 0xf8000000u, 0xf8000002u, 0x000f0000u,
+	     (5u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_ETHERTYPE);
+	pack(row, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+	     (8u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_PCP_REMARK);
+	pack(row, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+	     (5u << 16) | (5000u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_VID_RANGE);
+	pack(row, 0xf8000000u, 0xf8000000u, (3u << 16) | (36u << 3),
+	     (5u << 16) | (410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
+	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_SHAPE);
+
+	/* A translation that gives the tag a new priority. */
+	pack(row, 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
+	     (6u << 16) | (1410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_CVID_XLATE);
+	CHECK_EQ(r.assign_pri, 6u);
+	pack(row, 0xf8000000u, (6u << 28) | (410u << 15), 0x400f0000u,
+	     (6u << 16) | (1410u << 3));
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.assign_pri, OMCI_HW_VLAN_PRI_KEEP);
 
 	pack(row, 0xf8000000u, (6u << 28) | (410u << 15) | 3u, 0x400f0000u,
 	     (6u << 16) | (1410u << 3));
@@ -388,6 +449,25 @@ int main(void)
 			CHECK_EQ(applied[0].assign_svid, 100u);
 
 			CHECK_EQ(applied[0].assign_cvid, 0u);
+		}
+	}
+
+	clear_rows(mib);
+	{
+		uint8_t push[16];
+
+		pack(push, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+		     (5u << 16) | (410u << 3));
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, push, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 1u);
+		if (omci_hw_vlan_recorded(&applied) == 1u) {
+			CHECK_EQ(applied[0].kind, OMCI_HW_VLAN_CVID_PUSH);
+			CHECK_EQ(applied[0].match_cvid, 0u);
+			CHECK_EQ(applied[0].assign_cvid, 410u);
+			CHECK_EQ(applied[0].assign_pri, 5u);
 		}
 	}
 

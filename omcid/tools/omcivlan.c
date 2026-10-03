@@ -105,12 +105,18 @@ int main(int argc, char **argv)
 	unsigned int lost = 0;
 
 	for (size_t i = 0; i < n; i++) {
-		char why[64];
+		char why[64], match[8];
 
 		note(&rec[i], why, sizeof(why));
-		printf("0x%04x  %3u  %-11s %5u   ->  %7u   %s\n",
+		/* A rule that reaches a network VID from VID 0 takes untagged frames. */
+		if (rec[i].match_cvid == 0u && rec[i].net_vid != 0u)
+			(void)snprintf(match, sizeof(match), "untag");
+		else
+			(void)snprintf(match, sizeof(match), "%u",
+				       rec[i].match_cvid);
+		printf("0x%04x  %3u  %-11s %5s   ->  %7u   %s\n",
 		       rec[i].instance, rec[i].row, fate_name(rec[i].fate),
-		       rec[i].match_cvid, rec[i].net_vid, why);
+		       match, rec[i].net_vid, why);
 		if (rec[i].fate == OMCI_CTL_VLAN_FATE_SHADOWED ||
 		    rec[i].fate == OMCI_CTL_VLAN_FATE_OVER_BUDGET ||
 		    rec[i].fate == OMCI_CTL_VLAN_FATE_REFUSED)

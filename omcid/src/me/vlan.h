@@ -29,6 +29,7 @@
  * @OMCI_VLAN_OP_CVID_XLATE: replace the VID of a single-tagged frame
  * @OMCI_VLAN_OP_SVID_PUSH: add an outer tag in front of the frame's tag
  * @OMCI_VLAN_OP_UNSUPPORTED: something the hardware cannot do
+ * @OMCI_VLAN_OP_CVID_PUSH: give an untagged frame a tag
  */
 enum omci_vlan_op {
 	OMCI_VLAN_OP_NONE = 0,
@@ -38,13 +39,16 @@ enum omci_vlan_op {
 	OMCI_VLAN_OP_SVID_PUSH,
 
 	OMCI_VLAN_OP_UNSUPPORTED,
+
+	OMCI_VLAN_OP_CVID_PUSH,
 };
 
 /**
  * enum omci_vlan_reject - Why a rule cannot be programmed.
  * @OMCI_VLAN_REJECT_NONE: it can
  * @OMCI_VLAN_REJECT_ETHERTYPE: it filters on an Ethertype
- * @OMCI_VLAN_REJECT_PCP_REMARK: it changes the priority of the inner tag
+ * @OMCI_VLAN_REJECT_PCP_REMARK: it sets a priority the hardware cannot set:
+ *	0 in place of another, or one taken from a tag the frame does not have
  * @OMCI_VLAN_REJECT_SHAPE: its combination of filter and treatment has no
  *	counterpart in the hardware
  * @OMCI_VLAN_REJECT_VID_RANGE: a VID outside 1 to 4094
@@ -64,9 +68,12 @@ enum omci_vlan_reject {
  * struct omci_vlan_rule - A decoded rule.
  * @op: what it asks of the hardware
  * @reject: why it cannot be programmed, when @op is unsupported
- * @match_cvid: the VID the rule matches
- * @assign_cvid: the VID that replaces it, for a translation
- * @assign_svid: the VID of the added outer tag, for a push
+ * @match_cvid: the VID the rule matches, 0 for an untagged frame
+ * @assign_cvid: the VID that replaces it, for a translation, or of the tag a
+ *	C-VID push adds
+ * @assign_svid: the VID of the added outer tag, for an S-VID push
+ * @assign_pri: the priority of the tag written, 0 to 7,
+ *	%OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
  * @filter_outer_pri: the fields of the rule, as the row holds them
  * @filter_outer_vid: see @filter_outer_pri
  * @filter_outer_tpid: see @filter_outer_pri
@@ -89,6 +96,7 @@ struct omci_vlan_rule {
 	uint16_t match_cvid;
 	uint16_t assign_cvid;
 	uint16_t assign_svid;
+	uint8_t assign_pri;
 
 	uint8_t filter_outer_pri;
 	uint16_t filter_outer_vid;
