@@ -1784,8 +1784,9 @@ A step that belongs to another page is named and handed over.
 10. Switch storm control off, free the meters and clear their latches
     (*acl-qos*). Purpose: a latch left from before would read as a policed drop
     that never happened. (T)
-11. Write the ACL, the classifier, the priority maps, the policer, the
-    scheduler and the shaper as a full chip reset leaves them (*acl-qos*).
+11. Write the ACL, the classifier, the priority maps, the PCP remark, the
+    policer, the scheduler and the shaper as a full chip reset leaves them
+    (*acl-qos*).
     Purpose: no rule, entry or limit that an earlier kernel wrote stays in
     force with no record of it in the driver. (M)
 12. Limit the frames that the CPU port's queues 0 to 6 hand the CPU to 5000 a

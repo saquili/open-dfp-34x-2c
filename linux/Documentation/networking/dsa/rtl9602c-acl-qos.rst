@@ -158,7 +158,8 @@ function; every name is prefixed ``rtl9602c_``.
      - "The ingress policer".
    * - ``port_get_default_prio``, ``port_set_default_prio``,
        ``port_get_dscp_prio``, ``port_add_dscp_prio``,
-       ``port_del_dscp_prio``, ``port_set_apptrust``, ``port_get_apptrust``
+       ``port_del_dscp_prio``, ``port_set_apptrust``, ``port_get_apptrust``,
+       ``port_set_pcp_rewr``
      - "Priority selection and the DCB maps".
    * - ``devlink_param_get``, ``devlink_param_set``
      - "Malformed-frame (DoS) checks", "Storm control", "The limit on frames to
@@ -1913,6 +1914,11 @@ order in which they are trusted::
     dcb apptrust set dev sfp order pcp dscp
     dcb app add dev sfp dscp-prio 46:5
 
+``dcb rewr add ... prio-pcp`` works the other way: it gives the PCP that a port
+writes into the tagged frames it sends, by their internal priority::
+
+    dcb rewr add dev pon prio-pcp 0:5nd
+
 The DSCP map is switch-wide, and setup tells DSA so
 (``dscp_prio_mapping_is_global``); it serves frames that enter by the PON port
 as well, and the weights are switch-wide too. A frame that the CPU sends carries
@@ -1930,12 +1936,16 @@ the priority-to-queue map turns it into a queue.
        ``RTL9602C_QOS_PRIO_COUNT`` (8), taken from sources (the ingress port,
        the 802.1Q PCP, the DSCP and others that the driver does not use), each
        with a 3-bit weight; weight 0 means the source is not consulted. All
-       weights read 0 out of reset, so every frame is priority 0 until a weight
-       is set.
+       weights read 0 out of reset. An untagged frame is then priority 0, and a
+       tagged one takes the priority of its PCP.
      - M
      - After ``dcb apptrust set dev sfp order pcp dscp`` and ``dcb app add dev
        sfp dscp-prio 46:5``, frames with DSCP 46 were captured with internal
-       priority 5 and the same frames with DSCP 0 with priority 0.
+       priority 5 and the same frames with DSCP 0 with priority 0. With no
+       weight set, tagged frames with PCP 3 and with PCP 0 were remarked by
+       entries 3 and 0 of the remark map, which takes the internal priority
+       (next rows); with the port's default priority at 4, whose weight the
+       driver sets to 1, both by entry 4.
    * - Of several sources that apply to a frame, the one with the heaviest
        weight decides its priority.
      - I
@@ -1995,6 +2005,37 @@ the priority-to-queue map turns it into a queue.
        write it.
      - M
      - A register read after a reset.
+   * - The egress PCP remark: ``RTL9602C_QOS_REMARK_MAP`` (``0x02a05c``), one
+       map for the whole switch, 3 bits per index i at bits 3i + 2 to 3i; per
+       port p, bit p of ``RTL9602C_QOS_REMARK_EN`` (``0x02a058``) turns it on,
+       and bit p of ``RTL9602C_QOS_REMARK_SRC`` (``0x02a06c``) chooses the
+       index: the frame's internal priority (0) or its own PCP (1). A port with
+       the remark on writes the map's PCP into every tagged frame it sends,
+       those that the switch forwards included; an untagged frame stays
+       untagged. All three registers read 0 out of reset; setup writes them 0.
+     - M
+     - Frames tagged VID 100 from the host side towards the OLT and back, 100
+       each way: with every map entry at 5 they left with PCP 5 both ways, the
+       background frames of VLAN 410 too; with entry 0 at 6 and entry 3 at 2,
+       PCP 0 left as 6 and PCP 3 as 2 under either index; with the port's
+       default priority at 4 and entry 4 at 1, both left as 1 with index 0,
+       and as 6 and 2 with index 1. Untagged frames arrived untagged.
+   * - ``port_set_pcp_rewr`` takes the port's rewrite table as DSA hands it,
+       the PCP of each priority that has an entry: it writes the map with
+       those PCPs and, for a priority without an entry, the priority itself;
+       chooses the internal priority as the index; and turns the port's remark
+       on, or off with no entry left. As the map is one, a port is refused
+       with ``-EBUSY`` when another port remarks by another map, and an entry
+       that sets the DEI, which the remark cannot write, with
+       ``-EOPNOTSUPP``.
+     - M
+     - ``dcb rewr add dev pon prio-pcp 0:5nd``: frames of PCP 0 towards the OLT
+       left with 5, those of PCP 3 with 3, and those towards the host were
+       untouched; the qos view read ``pcp remark enable 00000004  map
+       00fac68d``. The same on ``sfp`` remarked the downstream frames too;
+       ``0:6nd`` on ``sfp`` was refused as busy, and ``3:1de`` on ``pon`` as
+       not supported, and neither stayed in the table. With the entries
+       removed, no frame was remarked.
    * - ``RTL9602C_QOS_PRIO_TO_QUEUE`` (``0x01c0b0`` + 4p): per port, eight 3-bit
        entries (priority i at bits 3i + 2 to 3i) naming the egress queue of each
        internal priority. Out of reset port 0 sends every priority to queue 0
@@ -2638,11 +2679,12 @@ state that the driver depends on.
    bits of ``RTL9602C_METER_EXCEEDED``. Purpose: no limit or latched exceed the
    chip held before the driver started survives; a latch left from before would
    read as a policed drop that never happened. (M)
-6. Write the ACL, the classifier, the priority maps, the policer, the scheduler
-   and the shaper as a full chip reset leaves them
+6. Write the ACL, the classifier, the priority maps, the PCP remark, the
+   policer, the scheduler and the shaper as a full chip reset leaves them
    (``rtl9602c_filter_qos_reset()``, with the values of "Reach and state"):
    every ACL rule and classifier entry retired, ACL lookup and its default
-   permits off, unmatched frames let through, and no limit on any port.
+   permits off, unmatched frames let through, no PCP remarked, and no limit on
+   any port.
    Purpose: no rule, entry, map or limit that an earlier kernel wrote stays in
    force with no record of it in the driver. (M)
 7. Bind queues 0 to 6 of the CPU port to the highest meter of its bank at 5000
@@ -2724,20 +2766,17 @@ on them. They were measured with register writes made outside the driver.
      - M
      - After a full chip reset, 20 frames per case from the host, in and out of
        range, each measurement with a control rule that dropped.
-   * - An egress PCP remark exists: a per-port enable at ``0x02a058`` and eight
-       3-bit priority-to-PCP entries at ``0x02a05c``. On this board its effect
-       cannot be observed: a frame that the CPU sends carries its own tag
-       decision in its transmit descriptor, and frames that the switch sends to
-       the CPU arrive untagged.
-     - M
-     - Enabled and mapped (priority 5 to PCP 7): the registers read back as
-       written and no frame changed.
 
 Known limitations
 =================
 
 - Only the ACL's rules report hits, at most 32 of them at a time, and in
   frames only. Rules of storm control and of the classifier report nothing.
+- The PCP remark has one map for the whole switch, so the ports that rewrite
+  PCP must agree on it, and a priority without an entry is written as its own
+  value rather than left as it came. A frame that the CPU sends carries its
+  tag in its transmit descriptor, which the remark has not been seen to
+  change.
 - A read of the flood-threshold registers of the DoS checks, ``0x026008``,
   ``0x02600c`` and ``0x026010``, by any means other than the driver's, for
   instance through a mapping of the register window, has stalled the board until

@@ -1038,8 +1038,9 @@ static const u32 rtl9602c_prio_queue_reset[RTL9602C_NUM_PORTS] = {
  * matches back to letting it through; and per port the priority-to-queue
  * word of the reset, every queue strict at weight 1, no queue under a packet
  * rate, and the egress shaper and the ingress policer at their highest rate.
- * The DSCP map, the port-priority word and the priority-selection weights
- * read 0 after the reset and are written 0.
+ * The DSCP map, the port-priority word, the priority-selection weights and
+ * the PCP remark's enables, map and indexes read 0 after the reset and are
+ * written 0.
  *
  * Context: setup, before the driver writes classifier entries of its own.
  */
@@ -1088,6 +1089,10 @@ void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p)
 	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT, 0);
 	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT + 4, 0);
 	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT_SEL, 0);
+	rtl9602c_w(p, RTL9602C_QOS_REMARK_EN, 0);
+	rtl9602c_w(p, RTL9602C_QOS_REMARK_MAP, 0);
+	rtl9602c_w(p, RTL9602C_QOS_REMARK_SRC, 0);
+	p->rewr_ports = 0;
 }
 
 /**
@@ -3220,6 +3225,54 @@ int rtl9602c_port_get_apptrust(struct dsa_switch *ds, int port, u8 *sel,
 }
 
 /**
+ * rtl9602c_port_set_pcp_rewr() - rewrite the PCP of the frames a port sends
+ * @ds: the switch
+ * @port: the port
+ * @pcp: the PCP for each internal priority, the DEI in bit 3
+ * @mapped: the priorities that have an entry; 0 stops the rewriting
+ *
+ * The port writes the PCP of the frame's internal priority into every tagged
+ * frame it sends; a priority without an entry keeps its own value as PCP. The
+ * map is one for the whole switch, so a port can rewrite only by the map that
+ * the others rewriting use.
+ *
+ * Context: under RTNL, as every DCB operation.
+ *
+ * Return: 0, -EOPNOTSUPP for an entry that sets the DEI, which the switch
+ * cannot write, or -EBUSY when another port rewrites by another map.
+ */
+int rtl9602c_port_set_pcp_rewr(struct dsa_switch *ds, int port,
+			       const u8 *pcp, u8 mapped)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	unsigned int prio;
+	u32 map = 0;
+
+	if (!mapped) {
+		rtl9602c_rmw(p, RTL9602C_QOS_REMARK_EN, BIT(port), 0);
+		p->rewr_ports &= ~BIT(port);
+		return 0;
+	}
+
+	for (prio = 0; prio < IEEE_8021QAZ_MAX_TCS; prio++) {
+		u8 v = mapped & BIT(prio) ? pcp[prio] : prio;
+
+		if (v & ~GENMASK(2, 0))
+			return -EOPNOTSUPP;
+		map |= (u32)v << RTL9602C_QOS_REMARK_MAP_SHIFT(prio);
+	}
+	if ((p->rewr_ports & ~BIT(port)) && map != p->rewr_map)
+		return -EBUSY;
+
+	p->rewr_map = map;
+	rtl9602c_w(p, RTL9602C_QOS_REMARK_MAP, map);
+	rtl9602c_rmw(p, RTL9602C_QOS_REMARK_SRC, BIT(port), 0);
+	rtl9602c_rmw(p, RTL9602C_QOS_REMARK_EN, BIT(port), BIT(port));
+	p->rewr_ports |= BIT(port);
+	return 0;
+}
+
+/**
  * rtl9602c_port_policer_add() - limit the traffic entering a port
  * @ds: the switch
  * @port: the port
@@ -4992,6 +5045,10 @@ static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 	seq_printf(s, "cls control %08x\n", rtl9602c_r(p, RTL9602C_CLS_CTRL));
 	seq_printf(s, "port 0 2.5G override %08x\n",
 		   rtl9602c_r(p, RTL9602C_SHAPE_2G5_CFG));
+	seq_printf(s, "pcp remark enable %08x  map %08x  pcp index %08x\n",
+		   rtl9602c_r(p, RTL9602C_QOS_REMARK_EN),
+		   rtl9602c_r(p, RTL9602C_QOS_REMARK_MAP),
+		   rtl9602c_r(p, RTL9602C_QOS_REMARK_SRC));
 	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
 		seq_printf(s, "port %u queue rate enable %08x  meters %08x\n", i,
 			   rtl9602c_r(p, RTL9602C_QUEUE_RATE_EN(i)),

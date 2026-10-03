@@ -2220,6 +2220,17 @@ struct rtl9602c_field {
 #define RTL9602C_QOS_PRIO_TO_QUEUE	0x01c0b0
 
 /*
+ * The egress PCP remark: one map for the whole switch, 3 bits per index, and
+ * per port, bit p, an enable and the index, the frame's internal priority (0)
+ * or its own PCP (1). A port with the enable set writes the map's PCP into
+ * every tagged frame it sends; an untagged one stays untagged.
+ */
+#define RTL9602C_QOS_REMARK_EN		0x02a058
+#define RTL9602C_QOS_REMARK_MAP	0x02a05c
+#define RTL9602C_QOS_REMARK_MAP_SHIFT(i)	(3 * (i))
+#define RTL9602C_QOS_REMARK_SRC		0x02a06c
+
+/*
  * Priority selection: sources weighted 0 to 7, the heaviest taken to decide
  * (not verified); SEL_IDX names the weight table in force.
  */
@@ -2965,6 +2976,10 @@ struct rtl9602c_priv {
 	int apptrust_n;
 	/** @apptrust_port: the port owning the switch-wide weights, or -1 */
 	int apptrust_port;
+	/** @rewr_ports: the ports that rewrite PCP, sharing @rewr_map */
+	u8 rewr_ports;
+	/** @rewr_map: RTL9602C_QOS_REMARK_MAP as written while a port uses it */
+	u32 rewr_map;
 
 	/** @egress: the qdiscs each port follows */
 	struct rtl9602c_egress egress[RTL9602C_NUM_PORTS];
@@ -3192,6 +3207,7 @@ int rtl9602c_port_pre_bridge_flags(struct dsa_switch *ds, int port,
 bool rtl9602c_port_rxtstamp(struct dsa_switch *ds, int port,
 			    struct sk_buff *skb, unsigned int type);
 int rtl9602c_port_set_apptrust(struct dsa_switch *ds, int port, const u8 *sel, int nsel);
+int rtl9602c_port_set_pcp_rewr(struct dsa_switch *ds, int port, const u8 *pcp, u8 mapped);
 int rtl9602c_port_set_default_prio(struct dsa_switch *ds, int port, u8 prio);
 int rtl9602c_port_setup_tc(struct dsa_switch *ds, int port, enum tc_setup_type type,
 			   void *type_data);

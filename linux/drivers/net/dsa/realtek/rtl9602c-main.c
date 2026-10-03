@@ -2235,6 +2235,7 @@ static const struct dsa_switch_ops rtl9602c_switch_ops = {
 	.port_del_dscp_prio	= rtl9602c_port_del_dscp_prio,
 	.port_set_apptrust	= rtl9602c_port_set_apptrust,
 	.port_get_apptrust	= rtl9602c_port_get_apptrust,
+	.port_set_pcp_rewr	= rtl9602c_port_set_pcp_rewr,
 	.devlink_param_get	= rtl9602c_devlink_param_get,
 	.devlink_param_set	= rtl9602c_devlink_param_set,
 	.phylink_get_caps	= rtl9602c_phylink_get_caps,
