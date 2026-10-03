@@ -2246,8 +2246,9 @@ reset nor the chip reset clears.
      - ``RTL9602C_GEM_DS_PORTID_TBL_RDATA`` (``0x70110c``)
    * - Multicast
      - ``RTL9602C_GEM_DS_MC_TBL_CMD`` (``0x704084``)
-     - None.
-     - None; the command register's VALID bit says whether the entry is in use.
+     - ``0x704088``; the driver writes no entry.
+     - ``0x704090``; the command register's VALID bit says whether the entry is
+       in use.
 
 Reading and writing an entry
 ----------------------------
@@ -2270,8 +2271,9 @@ Reading an entry is ``rtl9602c_gpon_tbl_read()``:
 4. Read VALID (bit 13) from the command register, which says whether the entry
    is in use, and the identifier from the read-data register. (M)
 
-The multicast table is reached the same way by ``rtl9602c_gpon_mc_op()`` with an
-8-bit index and without the data step.
+The multicast table is reached the same way, with an 8-bit index. The driver
+only reads and clears its entries (``rtl9602c_gpon_mc_op()``), without the data
+step.
 
 Binding the OMCC
 ----------------
@@ -2341,6 +2343,16 @@ Facts about the tables
        (``rtl9602c_gpon_mc_op()``).
      - M
      - All 256 entries read in use after a reset.
+   * - A multicast entry is the low 32 bits of a destination MAC address, its
+       octets 2 to 5, written at ``0x704088`` before the write command and read
+       at ``0x704090`` after a read. ``0x70409c`` reads ``0x01005e`` and
+       ``0x7040a0`` reads ``0x3333`` at reset, the leading octets of IPv4 and
+       IPv6 multicast addresses; that they tell the filter which frames are IPv4
+       and IPv6 multicast is not verified.
+     - M
+     - Entry ``0x5e020201`` let frames to 239.2.2.1 (01:00:5e:02:02:01) through
+       an including filter and stopped them at an excluding one, and did the
+       opposite for 239.2.2.2.
    * - The three tables are RAM that neither the watchdog's chip reset nor the
        MAC reset clears. Right after the MAC reset, before anything is written
        into them, ``rtl9602c_gpon_tables_clear()`` clears every entry of each
@@ -2444,6 +2456,20 @@ and reads the per-flow downstream counters.
      - T
      - Downstream GEM frames reach the SFP port, checked with traffic on the
        board; the register read at reset.
+   * - The filter judges only the frames of a flow whose downstream type has
+       ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC``. On such a flow an including filter
+       with an empty table drops every IPv4 and IPv6 multicast frame, the
+       link-local groups 224.0.0.1 and ff02::1 among them, and passes broadcast,
+       with ``RTL9602C_GEM_DS_MC_FILTER_BCAST_PASS``, and multicast of other
+       types. The driver keeps the filter excluding with an empty table and
+       leaves multicast to the switch, whose snooping keeps the link-local
+       groups flowing (see the *bridging* page of the switch, "Multicast
+       snooping").
+     - M
+     - Flow 0 (Port-ID 4095) typed Ethernet alone: 20 of 20 frames each to
+       239.2.2.1, 224.0.0.1 and ff02::1 passed an including filter with an
+       empty table. Typed multicast as well: 0 of 20 of each passed, while 20 of
+       20 broadcasts and 20 of 20 frames to 03:00:00:00:00:01 did.
    * - Per-flow downstream counters (``rtl9602c_gpon_flow_cntr()``): write the
        flow into ``RTL9602C_GEM_DS_CNT_CMD_FLOW`` (bits 6:0 of
        ``RTL9602C_GEM_DS_CNT_CMD``, ``0x701140``), with
@@ -2454,9 +2480,12 @@ and reads the per-flow downstream counters.
      - M
      - A flow carrying 268896 frames upstream showed nothing in the ``gpontbl``
        view.
-   * - That these counters clear when read is not established.
-     - I
-     - Two reads of the ``gpontbl`` view over a steady downstream flow.
+   * - These counters clear when read. The ``gpontbl`` view reads every
+       flow's, the ``ponpath`` view the OMCC flow's, so a view shows what came
+       since the last read of either.
+     - M
+     - Flow 0 showed 865 frames at the first read of ``gpontbl`` and exactly the
+       100 sent since at the second.
 
 Counters
 ========
@@ -3041,8 +3070,6 @@ Questions the code does not depend on
    * - Why stale Port-ID entries kept flow 64 from matching ("Tables: Alloc-ID,
        Port-ID and multicast").
      - Refilling the table with stale entries and binding the OMCC.
-   * - Whether the per-flow downstream counters clear when read ("GEM framing").
-     - Two reads of the ``gpontbl`` view over a steady downstream flow.
    * - What the error, ranging, BIP and GEM frame counter fields count
        ("Counters").
      - A fibre attenuated towards errors, and one ranging count per activation.

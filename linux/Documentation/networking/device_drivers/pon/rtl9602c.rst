@@ -1383,12 +1383,12 @@ Flows, streams and T-CONTs
        frames sent at the OLT side: untagged broadcast, unicast, IPv4 multicast
        and VLAN-tagged broadcast, the tag intact (68 bytes counted for a
        64-byte frame).
-   * - What ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC`` does on its own.
-     - I
-     - With it set the flow passed broadcast, unicast and tagged frames as well
-       as multicast (previous row). The same flow without it, against the
-       downstream multicast filter (the GPON MAC page), would isolate its
-       effect.
+   * - ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC`` puts the flow under the downstream
+       multicast filter (the GPON MAC page); a flow without it is not filtered.
+     - M
+     - Flow 0 (Port-ID 4095) against an including filter with an empty table:
+       typed Ethernet alone it passed frames to 239.2.2.1, 224.0.0.1 and
+       ff02::1, 20 of 20 each; typed multicast as well, none of them.
    * - The upstream half, programmed only when the T-CONT is bound (the
        binding row below): queue index 0 of the T-CONT's group attached (see
        "Attaching a queue to a T-CONT"); ``RTL9602C_GEM_US_FLOW_CFG(f)``
@@ -2159,12 +2159,10 @@ Assumptions the driver depends on
        sends; an upstream flood above the grant, reading the pause counters;
        removing the supply under each dying-gasp polarity; reading the chip
        identity without the key.
-   * - What the multicast type bit of a downstream flow does on its own, that
-       two T-CONTs of one group can share a queue, that a stream left on its old
-       queue after a bring-up does no harm, and that streams chosen by VLAN tell
-       GEM interfaces apart ("GEM ports as network interfaces").
-     - The same flow without the bit, against the downstream multicast filter;
-       two granted T-CONTs in one group, each with an upstream GEM port, reading
+   * - That two T-CONTs of one group can share a queue, that a stream left on
+       its old queue after a bring-up does no harm, and that streams chosen by
+       VLAN tell GEM interfaces apart ("GEM ports as network interfaces").
+     - Two granted T-CONTs in one group, each with an upstream GEM port, reading
        each port's octet count; sending upstream between the bring-up and the
        Assign_Alloc-ID, reading the ingress-discard counter; two upstream GEM
        ports in different VLANs, each on a granted T-CONT, sending in both

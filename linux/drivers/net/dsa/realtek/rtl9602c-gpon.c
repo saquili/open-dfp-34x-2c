@@ -3018,9 +3018,10 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gpon);
  * gpontbl: the GPON MAC's tables as the hardware holds them: the Alloc-ID
  * entries in use, by T-CONT; the Port-ID entries in use, by flow, with the
  * flow's downstream type and upstream Port-ID; and each flow whose downstream
- * frame or byte count is not zero. Those counters count the downstream only,
- * and whether reading them clears them is not verified. Read under gpon_lock,
- * since the PLOAM path writes the tables through the same registers.
+ * frame or byte count is not zero. Those counters count the downstream only
+ * and clear when read, so each read shows what came since the last one, of
+ * this view or, for the OMCC's flow, of ponpath. Read under gpon_lock, since
+ * the PLOAM path writes the tables through the same registers.
  */
 static int rtl9602c_gpontbl_show(struct seq_file *s, void *unused)
 {
