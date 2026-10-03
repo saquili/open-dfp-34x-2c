@@ -2902,6 +2902,8 @@ struct rtl9602c_priv {
 		u8		meter;
 		/** @storm.used: the slot holds a rule */
 		bool		used;
+		/** @storm.prio: its tc priority, lower first */
+		u32		prio;
 		/** @storm.seq: the order it was added in, from @storm_seq */
 		u32		seq;
 	} storm[RTL9602C_METER_COUNT];

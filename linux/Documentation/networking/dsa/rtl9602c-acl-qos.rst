@@ -1431,16 +1431,22 @@ assumption about the controls after the first are on the *bridging* page,
        ARP rule with ``arp_op request``, and one with ``conform-exceed
        drop/continue`` were refused, and ``qos`` showed no class enabled.
    * - A class has one meter selector per port, so of several rules for one
-       class and port the one added last polices. Removing it hands the class
-       to the rule added before it, or switches the class off on the port when
-       none is left; removing any other rule leaves the binding alone. ``tc
-       filter replace``, which adds the new rule before it removes the old,
+       class and port one polices: the one of the lowest priority value, which
+       ``tc`` itself would apply first, and of rules of one priority the one
+       added last. Removing it hands the class to the rule that polices without
+       it, or switches the class off on the port when none is left; removing
+       any other rule leaves the binding alone. ``tc filter replace``, which
+       adds the new rule at the old one's priority before it removes the old,
        therefore leaves the class on, on the new rule's meter.
      - M
-     - In ``qos``, the broadcast class's selector followed a second rule on
-       ``sfp`` and went back to the first when the second was removed; after a
-       ``tc filter replace`` the class was still enabled, on the meter
-       programmed at the new rate, and the old meter was back at its maximum.
+     - Broadcast from the host side, 600 frames at 300 frames/s, counted at the
+       far end of the PON: 216 passed under a rule of priority 10 at 100
+       frames/s, still 216 once one of priority 20 at 1000 was added, 116 once
+       one of priority 5 at 50 was added, 216 again once that was removed, 416
+       after ``tc filter replace`` of the priority-10 rule at 200, and all 600
+       with only the priority-20 rule left. The broadcast class's selector in
+       ``qos`` followed: meter 0, 0, 2, 0, 2 and 1, the class enabled
+       throughout.
    * - The destination-address shapes of the previous row: the group bit is the
        least significant bit of the first octet, and all ones is the broadcast
        address.
@@ -2656,8 +2662,6 @@ Known limitations
   whose EtherType is exactly ARP with no VLAN match, is a storm-control rule, and
   with any action but ``police`` it is refused, so the broadcast address, the
   group bit and ARP cannot be dropped or trapped by an ACL rule.
-- Of several storm-control rules for one class and port only the one added last
-  polices, although ``tc`` lists every one of them as offloaded.
 - The driver reports no statistics for offloaded flower rules (it has no
   ``cls_flower_stats`` operation), so ``tc -s filter show`` counts no hits for a
   rule that the switch applies. The effect of a rule is seen in the frames that

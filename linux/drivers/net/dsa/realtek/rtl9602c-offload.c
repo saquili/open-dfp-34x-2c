@@ -828,15 +828,38 @@ out:
 }
 
 /*
+ * The storm-control rule from tc that polices @cls on @port, leaving out slot
+ * @skip, or -1. A class has one meter selector per port, so one rule of
+ * several polices: the one of the lowest tc priority value, which tc itself
+ * would apply first, and of rules of one priority the one added last, which
+ * keeps the class on through `tc filter replace`, as that adds the new rule
+ * before it removes the old.
+ */
+static int rtl9602c_storm_winner(struct rtl9602c_priv *p, unsigned int cls,
+				 int port, int skip)
+{
+	int slot, best = -1;
+
+	for (slot = 0; slot < RTL9602C_METER_COUNT; slot++) {
+		if (slot == skip || !p->storm[slot].used ||
+		    p->storm[slot].cls != cls || p->storm[slot].port != port)
+			continue;
+		if (best < 0 || p->storm[slot].prio < p->storm[best].prio ||
+		    (p->storm[slot].prio == p->storm[best].prio &&
+		     (s32)(p->storm[slot].seq - p->storm[best].seq) > 0))
+			best = slot;
+	}
+	return best;
+}
+
+/*
  * Storm control from tc: each flower rule takes a meter of its own, programmed
- * at the rule's packet rate, and enables its class on its port. A class has one
- * meter selector per port, so of several rules for one class and port the one
- * added last polices. This is what keeps the class on through `tc filter
- * replace`, which adds the new rule before it removes the old.
+ * at the rule's packet rate, and the class is bound to it on the rule's port
+ * when the rule is the one that polices there (rtl9602c_storm_winner()).
  */
 static int rtl9602c_storm_add(struct rtl9602c_priv *p, int port,
 			      unsigned int cls, u64 rate_pkt_ps,
-			      unsigned long cookie,
+			      unsigned long cookie, u32 prio,
 			      struct netlink_ext_ack *extack)
 {
 	u64 units = rate_pkt_ps;
@@ -865,41 +888,26 @@ static int rtl9602c_storm_add(struct rtl9602c_priv *p, int port,
 	}
 
 	rtl9602c_meter_program(p, (unsigned int)meter, (u32)units);
-	rtl9602c_storm_bind(p, cls, port, (unsigned int)meter, true);
 
 	p->storm[slot].cookie = cookie;
 	p->storm[slot].cls = cls;
 	p->storm[slot].port = port;
 	p->storm[slot].meter = meter;
+	p->storm[slot].prio = prio;
 	p->storm[slot].used = true;
 	p->storm[slot].seq = ++p->storm_seq;
+	if (rtl9602c_storm_winner(p, cls, port, -1) == slot)
+		rtl9602c_storm_bind(p, cls, port, (unsigned int)meter, true);
 out:
 	mutex_unlock(&p->meter_lock);
 	return err;
 }
 
-/* The rule for @cls on @port added last, leaving out slot @skip, or -1. */
-static int rtl9602c_storm_latest(struct rtl9602c_priv *p, unsigned int cls,
-				 int port, int skip)
-{
-	int slot, latest = -1;
-
-	for (slot = 0; slot < RTL9602C_METER_COUNT; slot++) {
-		if (slot == skip || !p->storm[slot].used ||
-		    p->storm[slot].cls != cls || p->storm[slot].port != port)
-			continue;
-		if (latest < 0 ||
-		    (s32)(p->storm[slot].seq - p->storm[latest].seq) > 0)
-			latest = slot;
-	}
-	return latest;
-}
-
 /*
- * Removing the rule that polices its class and port hands the class to the
- * rule for them added last before it, or switches the class off on the port if
- * there is none; removing any other rule leaves the binding alone. The meter is
- * freed after the selector has left it.
+ * Removing the rule that polices its class and port hands the class to the rule
+ * that polices without it, or switches the class off on the port if there is
+ * none; removing any other rule leaves the binding alone. The meter is freed
+ * after the selector has left it.
  */
 static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
 {
@@ -917,8 +925,8 @@ static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
 
 	cls = p->storm[slot].cls;
 	port = p->storm[slot].port;
-	if (rtl9602c_storm_latest(p, cls, port, -1) == slot) {
-		next = rtl9602c_storm_latest(p, cls, port, slot);
+	if (rtl9602c_storm_winner(p, cls, port, -1) == slot) {
+		next = rtl9602c_storm_winner(p, cls, port, slot);
 		if (next >= 0)
 			rtl9602c_storm_bind(p, cls, port, p->storm[next].meter,
 					    true);
@@ -2724,8 +2732,8 @@ static int rtl9602c_flower_replace(struct rtl9602c_priv *p, int port,
 			return err;
 		act = &rule->action.entries[0];
 		return rtl9602c_storm_add(p, port, (unsigned int)cls_id,
-					  act->police.rate_pkt_ps,
-					  cls->cookie, extack);
+					  act->police.rate_pkt_ps, cls->cookie,
+					  cls->common.prio, extack);
 	}
 
 	if (flow_offload_has_one_action(&rule->action)) {
