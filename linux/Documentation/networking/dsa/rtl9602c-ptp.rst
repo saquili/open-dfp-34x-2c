@@ -1237,6 +1237,14 @@ All but the last concern values that only the debugfs views print.
    * - Whether the receive capture register has the layout ``ptpstat`` decodes
        ("The receive capture register").
      - A capture that changes.
+   * - Whether the receive capture register is rather an input: a time that
+       software writes, which an egress action then uses for a message that the
+       CPU sends, together with the word at ``0x01b020``, which may hold a mean
+       path delay. Every egress action was tried with both at zero, and none
+       wrote a time into a message ("Transmit timestamps"). If so, a message
+       could carry its departure time without a transmit stamp to read.
+     - Writing a time into the register and a delay into the word, then a Sync
+       from the CPU under each egress action, captured at the far end.
    * - What the action, identifier, mode and reason fields of the egress
        capture mean ("The egress capture").
      - A PTP frame forwarded out of a wire port under a known action; a
