@@ -104,6 +104,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 
 	if (cfg->multicast)
 		type |= RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC;
+	type |= rtl9602c_gpon_port_aes(p, cfg->port_id);
 
 	if (cfg->direction & IFLA_GEM_DIR_DOWNSTREAM) {
 		err = rtl9602c_gpon_port_bind(p, f, cfg->port_id);

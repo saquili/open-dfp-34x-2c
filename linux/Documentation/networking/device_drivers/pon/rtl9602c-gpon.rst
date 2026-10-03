@@ -408,6 +408,12 @@ name the others.
    * - ``<GPON> <message> is not supported, ignored: ...``
      - info
      - The first message of a type the driver does not act on.
+   * - ``<GPON> key N sent`` or ``<GPON> key N was not taken by the MAC``
+     - info, warning
+     - Request_Key was answered; the second when a key word did not complete.
+   * - ``<GPON> GEM port N encrypted`` or ``no longer encrypted``
+     - info
+     - Encrypted_Port-ID changed the Port-ID's state.
    * - ``<GPON> the OLT deactivated this ONU in O5``
      - info
      - Deactivate_ONU-ID was acted on.
@@ -1375,8 +1381,20 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - Adds the change to the equalization delay, or takes it away with
        octet 3 bit 0 set; a delay below 0, or of 7 upstream frames or more,
        is not applied and is logged.
-   * - Encrypted_Port-ID (8), Request_Key (13), Key_Switching_Time (19),
-       Physical_Equipment_Error (15), Change_Power_Level (16), PST (17),
+   * - Request_Key (13)
+     - The ONU-ID
+     - O5
+     - A new key, sent in Encryption_Key messages and written as the next key
+       (see "FEC and encryption").
+   * - Key_Switching_Time (19)
+     - The ONU-ID or all ONUs
+     - O5
+     - The superframe from which the next key applies; acknowledged.
+   * - Encrypted_Port-ID (8)
+     - The ONU-ID
+     - O4, O5
+     - Decryption on or off for the Port-ID's flow; acknowledged.
+   * - Physical_Equipment_Error (15), Change_Power_Level (16), PST (17),
        Sleep_Allow (24)
      - The ONU-ID or all ONUs
      - None
@@ -1613,8 +1631,8 @@ The ONU sends an upstream PLOAM message (PLOAMu, 13 octets) in an allocation
 whose Flags request it. The MAC has five slots for upstream messages, selected
 in ``RTL9602C_PLOAM_TX_CTRL``: two queues and three templates. The driver writes
 a message of twelve octets into a slot and the MAC adds the CRC. The driver
-sends acknowledgments through the urgent queue, Password and REI messages
-through the normal one, and arms the three templates.
+sends acknowledgments through the urgent queue, Password, Encryption_Key and REI
+messages through the normal one, and arms the three templates.
 
 Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
 
@@ -1642,7 +1660,7 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
    * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL``
      - 0
      - A queue: its messages go out in the ONU's allocations.
-     - Password and REI messages.
+     - Password, Encryption_Key and REI messages.
    * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT``
      - 1
      - A queue, as the normal one.
@@ -2568,9 +2586,28 @@ FEC and encryption
 ==================
 
 G.984.3 lets the OLT switch on forward error correction in both directions, and
-provides encryption of the GEM payload. The driver handles neither beyond one
-detection threshold: what it leaves out is under "Known limitations", and the
-rows here state what the driver does and what is assumed.
+provides encryption of the downstream GEM payload. The driver sets one FEC
+detection threshold and carries the ONU's side of the key exchange: on
+Request_Key it makes a new key, sends it to the OLT and writes it into the MAC
+as the next key; on Key_Switching_Time it writes the superframe from which that
+key applies; on Encrypted_Port-ID it marks the flow bound to that Port-ID for
+decryption. What it leaves out is under "Known limitations", and the rows here
+state what the driver does and what is assumed.
+
+The key is written a 16-bit word at a time (``rtl9602c_gpon_key_write()``),
+under ``gpon_lock``:
+
+1. Write 0, then ``RTL9602C_GPON_AES_KEY_CFG_REQ``, to
+   ``RTL9602C_GPON_AES_KEY_CFG``. Purpose: address the next key, not the
+   active one. (I)
+2. For each word i from 0 to 7: write octets 2i and 2i + 1 of the key, the
+   first in bits 15:8, into ``RTL9602C_GPON_AES_KEY_DATA``; write i into
+   ``RTL9602C_GPON_AES_KEY_WORD``, then i with
+   ``RTL9602C_GPON_AES_KEY_WORD_REQ``; poll
+   ``RTL9602C_GPON_AES_KEY_WORD_DONE`` up to 100 times, 1 us apart. (M for the
+   completion, I for the octet order)
+3. Write 0 into ``RTL9602C_GPON_AES_KEY_DATA``. Purpose: no part of the key
+   stays readable there. (I)
 
 .. list-table::
    :header-rows: 1
@@ -2599,8 +2636,44 @@ rows here state what the driver does and what is assumed.
        FEC flag is only displayed (the ``bwmap`` view).
      - I
      - An OLT that sets Use FEC.
-   * - That no encryption is needed (see "Known limitations"): whether the ONU
-       needs it depends on the OLT, and the test OLT encrypts no Port-ID.
+   * - Request_Key (identifier 13, directed, in O5) is answered with a new
+       random key under the next key index (1 for the first): Encryption_Key
+       messages (identifier 5) on the normal queue, octet 3 the index, octet 4
+       the fragment, 0 for octets 0 to 7 of the key and 1 for octets 8 to 15,
+       then the eight octets, both fragments three times over. The key is then
+       written as the next key and not kept; the ``ploamlog`` ring records the
+       fragments zeroed, and the kernel log ``key N sent``.
+     - M, P
+     - M: a Request_Key injected through ``ploaminject``: six Encryption_Key
+       messages with index 1 and fragments 0, 1, 0, 1, 0, 1, and every word
+       of the key taken by the MAC (no timeout). P: ITU-T G.984.3
+       clause 9.2.3.13 and clause 9.2.4.5.
+   * - Key_Switching_Time (identifier 19, in O5): octets 3 to 6 the superframe
+       counter value, 30 bits, from which the new key applies. The driver
+       writes it into ``RTL9602C_GPON_AES_SWITCH_TIME`` (``0x703014``,
+       ``RTL9602C_GPON_AES_SWITCH_TIME_SF``, bits 29:0) and acknowledges every
+       copy. That the MAC then makes the next key the active one at that
+       superframe is not verified.
+     - M, I
+     - M: an injected Key_Switching_Time for superframe ``0x012345`` was
+       acknowledged and the register read back ``00012345`` (the ``aes`` line
+       of the ``gpon`` view). I: an OLT that encrypts with the new key.
+   * - Encrypted_Port-ID (identifier 8, directed, in O4 and O5): octet 3 bit 0
+       set encrypts the Port-ID, clear stops it; the Port-ID as in
+       Configure_Port-ID. The driver records the Port-ID and sets or clears
+       ``RTL9602C_GEM_DS_FLOW_CFG_AES`` (bit 4 of the flow's
+       ``RTL9602C_GEM_DS_FLOW_CFG``) of the flow bound to it, which then
+       passes its downstream through the active key; a GEM port or OMCC bound
+       later takes the bit with its type. Every copy is acknowledged. The
+       record goes with the ONU-ID.
+     - M
+     - Port-ID 256 marked encrypted by an injected message while the OLT sent
+       it in the clear: 0 of 243,287 downstream frames arrived, against
+       242,150 of 242,150 before; unmarked again, 243,266 of 243,264 (the
+       ``aes`` line counted 1 Port-ID, then 0).
+   * - That the MAC decrypts what an OLT encrypts with the key the driver sent:
+       the octet order of the key words and the counter's start are the
+       MAC's and the OLT's, and no OLT that encrypts has been tried.
      - I
      - An OLT that encrypts a Port-ID.
 
@@ -2702,9 +2775,12 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        the superframe counter; then come the totals of the counters (``cntr``:
        ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
        maps accepted, CRC errors, overflows, non-idle GEM frames, BIP error
-       blocks); last ``rei``, the BER interval in ms (0 while none is set) and
-       the REI messages sent since the ONU entered O5. A read takes the
-       counters and writes no register.
+       blocks); ``rei``, the BER interval in ms (0 while none is set) and the
+       REI messages sent since the ONU entered O5; last ``aes``, the index of
+       the last key sent (0 for none), the superframe of the last
+       Key_Switching_Time with ``RTL9602C_GPON_AES_SWITCH_TIME``, and the
+       Port-IDs encrypted. No key is shown. A read takes the counters and
+       writes no register.
      - T
      - A check with traffic on the board reads the ``onu`` line before and after
        a flood; every debugfs view reads.
@@ -2774,16 +2850,15 @@ Known limitations
   of the computed overhead length is 252 bytes, where G.984.3 allows at most
   128. No type 1 or type 2 preamble is programmed; their bit counts only enter
   the length.
-- Encrypted_Port-ID, Request_Key, Key_Switching_Time, Change_Power_Level, PST,
-  Physical_Equipment_Error and Sleep_Allow are recorded, logged once and not
-  acted on, although G.984.3 requires an answer to some of them: the first and
-  third get no Acknowledge and Request_Key no Encryption_Key. Swift_POPUP, like
-  POPUP, has not been exercised on the board, since it needs the ONU in O6.
-- There is no encryption. The driver programs no key and does not act on
-  Encrypted_Port-ID, Request_Key or Key_Switching_Time, so a Port-ID that the
-  OLT encrypts (128-bit AES in counter mode, ITU-T G.984.3 clause 12) would be
-  delivered as ciphertext. Nothing is set up for upstream FEC, and downstream
-  FEC has only its detection threshold.
+- Change_Power_Level, PST, Physical_Equipment_Error and Sleep_Allow are
+  recorded, logged once and not acted on. Swift_POPUP, like POPUP, has not been
+  exercised on the board, since it needs the ONU in O6.
+- Decryption has been tried only against an OLT that encrypts nothing: the key
+  exchange and the marking of a flow work as far as the driver's side goes,
+  but whether the MAC decrypts what an OLT encrypts with the key sent depends
+  on the key's octet order in the MAC, which is an assumption (see "FEC and
+  encryption"). Nothing is set up for upstream FEC, and downstream FEC has only
+  its detection threshold.
 - There is no power levelling and no signal-fail or signal-degrade alarm from
   the BIP count.
 - Nothing in the driver sends the Dying_Gasp message that the MAC holds armed.

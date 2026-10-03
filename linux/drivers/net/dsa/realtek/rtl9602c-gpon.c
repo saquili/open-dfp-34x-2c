@@ -58,6 +58,7 @@
 #include <linux/of.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/random.h>
 #include <net/dsa.h>
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
@@ -524,10 +525,16 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 	rtl9602c_rmw(p, RTL9602C_PLOAM_TX_CTRL,
 		     RTL9602C_PLOAM_TX_CTRL_PUSH, RTL9602C_PLOAM_TX_CTRL_PUSH);
 
-	/* The ring is readable in debugfs: a password stays out of it. */
+	/*
+	 * The ring is readable in debugfs: a password, or a fragment of a
+	 * key, stays out of it.
+	 */
 	memcpy(shown, msg, sizeof(shown));
 	if (msg[1] == RTL9602C_PLOAM_US_PASSWORD)
 		memset(&shown[2], 0, RTL9602C_GPON_PASSWORD_BYTES);
+	if (msg[1] == RTL9602C_PLOAM_US_ENCRYPTION_KEY)
+		memset(&shown[RTL9602C_PLOAM_KEY_BYTES], 0,
+		       RTL9602C_GPON_AES_FRAG_BYTES);
 	rtl9602c_ploam_log(p, RTL9602C_EV_US, shown,
 			   (type << 24) |
 			   (rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL) & 0xffffff));
@@ -599,6 +606,7 @@ static void rtl9602c_gpon_arm_idle_slots(struct rtl9602c_priv *p)
 
 static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_priv *p);
 static void rtl9602c_gpon_o5_teardown(struct rtl9602c_priv *p);
+static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p);
 
 /**
  * rtl9602c_gpon_operstate() - make the pon interface dormant outside O5
@@ -818,6 +826,7 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	    p->gpon_onu_id != RTL9602C_ONU_ONUID_UNASSIGNED) {
 		p->gpon_onu_id = RTL9602C_ONU_ONUID_UNASSIGNED;
 		p->gpon_rei_every = 0;
+		rtl9602c_gpon_aes_reset(p);
 		rtl9602c_w(p, RTL9602C_ONU_US_ONUID,
 			   FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
 				      RTL9602C_ONU_ONUID_UNASSIGNED));
@@ -959,9 +968,14 @@ static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_priv *p)
 int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
 			    u16 port_id)
 {
-	return rtl9602c_gpon_tbl_op(p, RTL9602C_GEM_DS_PORTID_TBL_CMD,
-				    RTL9602C_GEM_DS_PORTID_TBL_WDATA,
-				    RTL9602C_GPON_TBL_CMD_OP_WRITE, idx, port_id);
+	int err;
+
+	err = rtl9602c_gpon_tbl_op(p, RTL9602C_GEM_DS_PORTID_TBL_CMD,
+				   RTL9602C_GEM_DS_PORTID_TBL_WDATA,
+				   RTL9602C_GPON_TBL_CMD_OP_WRITE, idx, port_id);
+	if (!err)
+		p->gpon_flow_port[idx] = port_id;
+	return err;
 }
 
 /**
@@ -974,9 +988,62 @@ int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
  */
 int rtl9602c_gpon_port_unbind(struct rtl9602c_priv *p, unsigned int idx)
 {
+	p->gpon_flow_port[idx] = RTL9602C_GPON_PORTID_NONE;
 	return rtl9602c_gpon_tbl_op(p, RTL9602C_GEM_DS_PORTID_TBL_CMD,
 				    RTL9602C_GEM_DS_PORTID_TBL_WDATA,
 				    RTL9602C_GPON_TBL_CMD_OP_CLEAR, idx, 0);
+}
+
+/**
+ * rtl9602c_gpon_port_aes() - the decryption bit of a Port-ID's flow
+ * @p: the switch
+ * @port_id: the GEM Port-ID
+ *
+ * Return: RTL9602C_GEM_DS_FLOW_CFG_AES when the OLT has @port_id encrypted
+ * (Encrypted_Port-ID), for the type of the flow bound to it; 0 otherwise.
+ *
+ * Context: gpon_lock held.
+ */
+u32 rtl9602c_gpon_port_aes(struct rtl9602c_priv *p, u16 port_id)
+{
+	lockdep_assert_held(&p->gpon_lock);
+
+	return port_id < RTL9602C_GPON_NUM_PORTID &&
+	       test_bit(port_id, p->gpon_aes_ports) ?
+	       RTL9602C_GEM_DS_FLOW_CFG_AES : 0;
+}
+
+/*
+ * Mark Port-ID @port_id encrypted or not, and set or clear the decryption bit
+ * of every flow bound to it; a flow bound later takes the bit with its type.
+ */
+static void rtl9602c_gpon_port_aes_set(struct rtl9602c_priv *p, u16 port_id,
+				       bool on)
+{
+	unsigned int f;
+
+	if (on)
+		set_bit(port_id, p->gpon_aes_ports);
+	else
+		clear_bit(port_id, p->gpon_aes_ports);
+
+	for (f = 0; f < RTL9602C_GPON_NUM_FLOW; f++)
+		if (p->gpon_flow_port[f] == port_id)
+			rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+				     RTL9602C_GEM_DS_FLOW_CFG_AES,
+				     on ? RTL9602C_GEM_DS_FLOW_CFG_AES : 0);
+}
+
+/* Forget every encrypted Port-ID, and clear the bit of every flow. */
+static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p)
+{
+	unsigned int f;
+
+	bitmap_zero(p->gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
+	for (f = 0; f < RTL9602C_GPON_NUM_FLOW; f++)
+		if (p->gpon_flow_port[f] != RTL9602C_GPON_PORTID_NONE)
+			rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+				     RTL9602C_GEM_DS_FLOW_CFG_AES, 0);
 }
 
 /*
@@ -1175,7 +1242,8 @@ static int rtl9602c_gpon_omcc_bind(struct rtl9602c_priv *p, u16 port_id)
 
 	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
 		     RTL9602C_GEM_DS_FLOW_CFG_TYPE,
-		     RTL9602C_GEM_DS_FLOW_CFG_TYPE_OMCI);
+		     RTL9602C_GEM_DS_FLOW_CFG_TYPE_OMCI |
+		     rtl9602c_gpon_port_aes(p, port_id));
 	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f), RTL9602C_GEM_US_FLOW_CFG_PORTID,
 		     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID, port_id));
 	rtl9602c_ponmac_sid_valid(p, f, true);
@@ -1408,6 +1476,77 @@ static void rtl9602c_gpon_rei_tick(struct rtl9602c_priv *p)
 	p->gpon_rei_seq++;
 	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
 	p->gpon_rei_sent++;
+}
+
+/*
+ * Write @key as the next key of the downstream decryption, which the MAC makes
+ * the active one at the superframe of Key_Switching_Time. Returns 0, or
+ * -ETIMEDOUT when a word is not taken.
+ */
+static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key)
+{
+	unsigned int i, spin;
+
+	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG, 0);
+	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG, RTL9602C_GPON_AES_KEY_CFG_REQ);
+
+	for (i = 0; i < RTL9602C_GPON_AES_KEY_WORDS; i++) {
+		u32 idx = FIELD_PREP(RTL9602C_GPON_AES_KEY_WORD_IDX, i);
+
+		rtl9602c_w(p, RTL9602C_GPON_AES_KEY_DATA,
+			   key[2 * i] << 8 | key[2 * i + 1]);
+		rtl9602c_w(p, RTL9602C_GPON_AES_KEY_WORD, idx);
+		rtl9602c_w(p, RTL9602C_GPON_AES_KEY_WORD,
+			   idx | RTL9602C_GPON_AES_KEY_WORD_REQ);
+		for (spin = 0; spin < 100; spin++) {
+			if (rtl9602c_r(p, RTL9602C_GPON_AES_KEY_WORD) &
+			    RTL9602C_GPON_AES_KEY_WORD_DONE)
+				break;
+			udelay(1);
+		}
+		if (spin == 100)
+			return -ETIMEDOUT;
+	}
+	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_DATA, 0);
+	return 0;
+}
+
+/*
+ * Answer Request_Key (G.984.3 clause 9.2.3.13): a new random key, under the
+ * next index, sent as two Encryption_Key fragments three times over on the
+ * normal queue, and written as the next key. The key is not kept, and the
+ * ploamlog ring holds the fragments zeroed.
+ */
+static void rtl9602c_gpon_key_send(struct rtl9602c_priv *p)
+{
+	u8 key[RTL9602C_GPON_AES_KEY_BYTES];
+	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
+	unsigned int i, frag;
+
+	get_random_bytes(key, sizeof(key));
+	p->gpon_key_index++;
+
+	msg[0] = p->gpon_onu_id;
+	msg[1] = RTL9602C_PLOAM_US_ENCRYPTION_KEY;
+	msg[RTL9602C_PLOAM_KEY_INDEX] = p->gpon_key_index;
+	for (i = 0; i < 3; i++) {
+		for (frag = 0; frag < 2; frag++) {
+			msg[RTL9602C_PLOAM_KEY_FRAG] = frag;
+			memcpy(&msg[RTL9602C_PLOAM_KEY_BYTES],
+			       &key[frag * RTL9602C_GPON_AES_FRAG_BYTES],
+			       RTL9602C_GPON_AES_FRAG_BYTES);
+			rtl9602c_ploam_enqueue(p, msg,
+					       RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
+		}
+	}
+
+	if (rtl9602c_gpon_key_write(p, key))
+		pr_warn("<GPON> key %u was not taken by the MAC\n",
+			p->gpon_key_index);
+	else
+		pr_info("<GPON> key %u sent\n", p->gpon_key_index);
+	memzero_explicit(key, sizeof(key));
+	memzero_explicit(msg, sizeof(msg));
 }
 
 /*
@@ -1779,16 +1918,60 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		return;
 	}
 
-	case RTL9602C_PLOAM_DS_ENCRYPTED_PORTID:
 	case RTL9602C_PLOAM_DS_REQUEST_KEY:
+		/* Directed, in O5. */
+		if (msg[0] != p->gpon_onu_id ||
+		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		rtl9602c_gpon_key_send(p);
+		return;
+
 	case RTL9602C_PLOAM_DS_KEY_SWITCHING_TIME:
+		/*
+		 * Directed or broadcast, in O5: the superframe from which the
+		 * key last sent applies. Every copy is acknowledged.
+		 */
+		if ((msg[0] != p->gpon_onu_id &&
+		     msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED) ||
+		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		p->gpon_key_switch =
+			get_unaligned_be32(&msg[RTL9602C_PLOAM_KEY_SWITCH_TIME]) &
+			RTL9602C_GPON_AES_SWITCH_TIME_SF;
+		rtl9602c_w(p, RTL9602C_GPON_AES_SWITCH_TIME, p->gpon_key_switch);
+		rtl9602c_gpon_ploam_ack(p, msg);
+		return;
+
+	case RTL9602C_PLOAM_DS_ENCRYPTED_PORTID: {
+		/*
+		 * Directed, in O4 and O5: a Port-ID's downstream encrypted or
+		 * not, for the flow bound to it now and any bound later.
+		 * Every copy is acknowledged.
+		 */
+		u16 port = (msg[RTL9602C_PLOAM_ENC_PORT_HI] << 4) |
+			   (msg[RTL9602C_PLOAM_ENC_PORT_LO] >> 4);
+		bool on = msg[RTL9602C_PLOAM_ENC_PORT_CTRL] &
+			  RTL9602C_PLOAM_ENC_PORT_ENCRYPT;
+
+		if (msg[0] != p->gpon_onu_id ||
+		    (p->gpon_state != RTL9602C_ONU_O4_RANGING &&
+		     p->gpon_state != RTL9602C_ONU_O5_OPERATION))
+			return;
+		if (on != test_bit(port, p->gpon_aes_ports))
+			pr_info("<GPON> GEM port %u %s\n", port,
+				on ? "encrypted" : "no longer encrypted");
+		rtl9602c_gpon_port_aes_set(p, port, on);
+		rtl9602c_gpon_ploam_ack(p, msg);
+		return;
+	}
+
 	case RTL9602C_PLOAM_DS_PEE:
 	case RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL:
 	case RTL9602C_PLOAM_DS_PST:
 	case RTL9602C_PLOAM_DS_SLEEP_ALLOW:
 		/*
-		 * Not acted on: encryption, the OLT's equipment errors, power
-		 * levelling, protection switching and power saving. Nothing is
+		 * Not acted on: the OLT's equipment errors, power levelling,
+		 * protection switching and power saving. Nothing is
 		 * acknowledged, so the OLT sees that the ONU did not take
 		 * them. Each is logged once, the first time one comes for this
 		 * ONU.
@@ -2400,12 +2583,17 @@ void rtl9602c_gpon_stop(struct rtl9602c_priv *p)
  * frame, while the downstream is framed and not at all otherwise. Then the
  * counter totals since bring-up, which a read brings up to date, and the REI
  * reports: the BER interval the OLT set, 0 for none, and the reports sent since
- * the ONU entered O5. No register is written.
+ * the ONU entered O5; and the encryption: the index of the last key sent, 0 for
+ * none, the superframe of the last Key_Switching_Time with the register, and
+ * how many Port-IDs the OLT has encrypted. No key is shown, and no register is
+ * written.
  */
 static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
-	unsigned int rei_ms, rei_sent;
+	unsigned int rei_ms, rei_sent, aes_ports;
+	u32 key_switch;
+	u8 key_index;
 	struct pon_dev_stats c;
 	u32 sts, onu, los, sig;
 
@@ -2440,6 +2628,9 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	c = p->gpon_stats;
 	rei_ms = jiffies_to_msecs(p->gpon_rei_every);
 	rei_sent = p->gpon_rei_sent;
+	key_index = p->gpon_key_index;
+	key_switch = p->gpon_key_switch;
+	aes_ports = bitmap_weight(p->gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
 	mutex_unlock(&p->gpon_lock);
 
 	seq_printf(s, "cntr  sn-requests %llu ranging-requests %llu   (totals)\n",
@@ -2451,6 +2642,9 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	seq_printf(s, "gem   %llu non-idle frames, %llu BIP error blocks\n",
 		   c.gem_frames, c.bip_errors);
 	seq_printf(s, "rei   every %u ms, %u sent\n", rei_ms, rei_sent);
+	seq_printf(s, "aes   key %u, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
+		   key_index, key_switch,
+		   rtl9602c_r(p, RTL9602C_GPON_AES_SWITCH_TIME), aes_ports);
 	return 0;
 }
 

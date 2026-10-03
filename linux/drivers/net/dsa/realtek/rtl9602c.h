@@ -626,7 +626,18 @@ enum {
 #define RTL9602C_PLOAM_US_PASSWORD	2
 #define RTL9602C_PLOAM_US_DYING_GASP	3
 #define RTL9602C_PLOAM_US_NO_MESSAGE	4
+#define RTL9602C_PLOAM_US_ENCRYPTION_KEY	5
 #define RTL9602C_PLOAM_US_REI		8
+
+/*
+ * Encryption_Key (G.984.3 clause 9.2.4.5): the key's index, the fragment's, 0
+ * for octets 0 to 7 of the key and 1 for octets 8 to 15, then the fragment.
+ */
+#define RTL9602C_PLOAM_KEY_INDEX		2
+#define RTL9602C_PLOAM_KEY_FRAG		3
+#define RTL9602C_PLOAM_KEY_BYTES		4
+#define RTL9602C_GPON_AES_KEY_BYTES		16
+#define RTL9602C_GPON_AES_FRAG_BYTES		8
 #define RTL9602C_PLOAM_US_ACKNOWLEDGE	9
 
 /*
@@ -747,6 +758,48 @@ enum {
 #define RTL9602C_PLOAM_RANGING_ADJ_DELAY	3
 
 /*
+ * Key_Switching_Time (G.984.3 clause 9.2.3.19): the superframe counter value
+ * from which the new key applies, 30 bits, most significant octet first.
+ */
+#define RTL9602C_PLOAM_KEY_SWITCH_TIME		2
+
+/*
+ * Encrypted_Port-ID (G.984.3 clause 9.2.3.8): ENCRYPT set encrypts the
+ * Port-ID, clear stops it; the Port-ID as in Configure_Port-ID.
+ */
+#define RTL9602C_PLOAM_ENC_PORT_CTRL		2
+#define RTL9602C_PLOAM_ENC_PORT_ENCRYPT		BIT(0)
+#define RTL9602C_PLOAM_ENC_PORT_HI		3
+#define RTL9602C_PLOAM_ENC_PORT_LO		4
+
+/*
+ * The AES key of the downstream decryption (G.984.3 clause 12). The driver
+ * writes the next key: a rising request bit in RTL9602C_GPON_AES_KEY_CFG, with
+ * the active-key bit clear, addresses it, and each of its eight 16-bit words
+ * goes through RTL9602C_GPON_AES_KEY_DATA, written by a rising request bit in
+ * RTL9602C_GPON_AES_KEY_WORD with the word's index, whose done bit says that
+ * the write is complete. The MAC makes the next key the active one at the
+ * superframe in RTL9602C_GPON_AES_SWITCH_TIME. The in-use bit is taken to say
+ * which key is active (not verified).
+ */
+#define RTL9602C_GPON_AES_KEY_CFG		0x703010
+#define RTL9602C_GPON_AES_KEY_CFG_REQ		BIT(15)
+#define RTL9602C_GPON_AES_KEY_CFG_ACTIVE	BIT(14)
+#define RTL9602C_GPON_AES_SWITCH_TIME		0x703014
+#define RTL9602C_GPON_AES_SWITCH_TIME_SF	GENMASK(29, 0)
+#define RTL9602C_GPON_AES_KEY_WORD		0x703020
+#define RTL9602C_GPON_AES_KEY_WORD_REQ		BIT(15)
+#define RTL9602C_GPON_AES_KEY_WORD_DONE		BIT(14)
+#define RTL9602C_GPON_AES_KEY_WORD_IN_USE	BIT(7)
+#define RTL9602C_GPON_AES_KEY_WORD_IDX		GENMASK(2, 0)
+#define RTL9602C_GPON_AES_KEY_DATA		0x703024
+#define RTL9602C_GPON_AES_KEY_WORDS		8
+
+/* The GEM Port-IDs, 12 bits, and the mark of a flow bound to none. */
+#define RTL9602C_GPON_NUM_PORTID		4096
+#define RTL9602C_GPON_PORTID_NONE		0xffff
+
+/*
  * Disable_Serial_Number (G.984.3 clause 9.2.3.6): whether the ONU with the
  * serial number that follows is disabled or enabled again, or every disabled
  * ONU enabled again.
@@ -779,6 +832,12 @@ enum {
 #define RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC		BIT(0)
 #define RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH		BIT(1)
 #define RTL9602C_GEM_DS_FLOW_CFG_TYPE_OMCI		BIT(2)
+
+/*
+ * The flow's downstream is decrypted with the active AES key: the OLT has its
+ * Port-ID encrypted (Encrypted_Port-ID). It is written with the type.
+ */
+#define RTL9602C_GEM_DS_FLOW_CFG_AES		BIT(4)
 
 /* The Port-ID of each flow's upstream GEM frames. */
 #define RTL9602C_GEM_US_FLOW_CFG(f)	(0x706400 + 4 * (f))
@@ -2350,6 +2409,17 @@ struct rtl9602c_priv {
 	u32 gpon_rei_sent;
 	/** @gpon_ploam_ignored: the downstream identifiers already logged */
 	u32 gpon_ploam_ignored;
+	/**
+	 * @gpon_flow_port: the Port-ID each flow is bound to in the Port-ID
+	 * table, or RTL9602C_GPON_PORTID_NONE
+	 */
+	u16 gpon_flow_port[RTL9602C_GPON_NUM_FLOW];
+	/** @gpon_aes_ports: the Port-IDs the OLT has encrypted */
+	DECLARE_BITMAP(gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
+	/** @gpon_key_index: the index of the last key sent, 0 for none */
+	u8 gpon_key_index;
+	/** @gpon_key_switch: the superframe of the last Key_Switching_Time */
+	u32 gpon_key_switch;
 	/** @gpon_work: the GPON worker, run every RTL9602C_GPON_POLL_MS */
 	struct delayed_work gpon_work;
 
@@ -2930,6 +3000,7 @@ void rtl9602c_gpon_stop(struct rtl9602c_priv *p);
 int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
 			    u16 port_id);
 int rtl9602c_gpon_port_unbind(struct rtl9602c_priv *p, unsigned int idx);
+u32 rtl9602c_gpon_port_aes(struct rtl9602c_priv *p, u16 port_id);
 int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 			   unsigned int queue);
 void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,
