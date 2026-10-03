@@ -148,10 +148,11 @@ def needs(ctx: Context):
     return None
 
 
-def measure(ctx: Context, into: str, out_of: str, stick_in: str, stick_out: str):
-    """One burst into the bench port `into`, counted where it left the bench,
-    at the bench port `out_of` and, when the image has ethtool, at the stick's
-    ports on the way."""
+def measure(ctx: Context, into: str, out_of: str, stick_in: str, stick_out: str,
+            count: int = COUNT):
+    """One burst of count frames into the bench port `into`, counted where it
+    left the bench, at the bench port `out_of` and, when the image has
+    ethtool, at the stick's ports on the way."""
     prime(ctx)
     dst = ctx.bench.text(f"cat /sys/class/net/{shlex.quote(out_of)}/address")
     cpu = conduit(ctx)
@@ -164,7 +165,7 @@ def measure(ctx: Context, into: str, out_of: str, stick_in: str, stick_out: str)
                         hardware(ctx, stick_out))
 
     before = counts(settle(bench_counts))
-    seconds = burst(ctx, into, dst)
+    seconds = burst(ctx, into, dst, count=count)
     after = counts(settle(bench_counts))
     sent = after[0] - before[0]
     arrived = after[1] - before[1]
@@ -629,6 +630,92 @@ def mirror(ctx: Context):
                        f"network side to this device and {up} of those from the host side "
                        f"reached the host side; after, {down_after} and {up_after}")
 
+
+# The address-table case: an address of the documentation range (RFC 7042,
+# 2.1.2) that no line carries and the router cases do not use, made static
+# through the bridge.
+FDB_STATIC = "00:00:5e:00:53:10"
+FDB_WAIT = 3.0         # seconds the switch has to follow the bridge
+
+
+def fdb_entry(ctx: Context, dev: str, mac: str, static: bool) -> str:
+    """The switch's own entry for mac on dev, static or learned, as bridge fdb
+    lists it, or ''."""
+    for line in ctx.stick.text(f"bridge fdb show dev {dev}").splitlines():
+        if (line.lower().startswith(mac.lower() + " ") and " self" in line and
+                (" static" in line) == static):
+            return line.strip()
+    return ""
+
+
+def within(check, limit: float = FDB_WAIT, pause: float = 0.25):
+    """check() until it returns something true or limit seconds have passed;
+    its last result."""
+    waited = 0.0
+    while not (result := check()) and waited < limit:
+        time.sleep(pause)
+        waited += pause
+    return result
+
+
+@case("data.fdb", "Data path",
+      "The switch learns each bench port's address behind the port it reaches it by, and a "
+      "static address given to the bridge enters its table and leaves it again")
+def fdb(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    s = ctx.settings
+    sub = ctx.bench.text(f"cat /sys/class/net/{shlex.quote(s.subscriber_port)}/address")
+    net = ctx.bench.text(f"cat /sys/class/net/{shlex.quote(s.olt_port)}/address")
+    on_sfp = fdb_entry(ctx, "sfp", sub, static=False)
+    on_pon = fdb_entry(ctx, "pon", net, static=False)
+    ctx.stick.run(f"bridge fdb add {FDB_STATIC} dev sfp master static")
+    try:
+        added = within(lambda: fdb_entry(ctx, "sfp", FDB_STATIC, static=True))
+    finally:
+        ctx.stick.run(f"bridge fdb del {FDB_STATIC} dev sfp master static")
+    gone = within(lambda: not fdb_entry(ctx, "sfp", FDB_STATIC, static=True))
+    ok = bool(on_sfp and on_pon and added and gone)
+    return verdict(ok, f"host side on sfp: {on_sfp or 'not learned'}; network side on pon: "
+                       f"{on_pon or 'not learned'}; static: {added or 'never there'}, "
+                       f"{'then gone' if gone else 'still there'}")
+
+
+# The shaper case: a tbf on the SFP port, whose egress the switch shapes, under
+# the frames from the network side. The rate is taken over the time the sender
+# ran, while the frames the switch still holds when it stops arrive after it:
+# a longer burst makes them a smaller part of the count.
+SHAPER_MBIT = 200
+SHAPER_TOLERANCE = 0.05
+SHAPER_COUNT = 3 * COUNT
+FULL_MBIT = 900        # the downstream rate without a shaper is about 984 Mb/s
+
+
+@case("data.shaper", "Data path",
+      "A tbf on the SFP port holds the frames from the network side to its rate in hardware, "
+      "and its removal gives the full rate back")
+def shaper(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    s = ctx.settings
+    reply = ctx.stick.run(f"tc qdisc replace dev sfp root handle 1: tbf rate {SHAPER_MBIT}mbit "
+                          "burst 64k latency 50ms")
+    if not reply.ok:
+        return failed(f"tc refused the tbf: {(reply.err or reply.out).strip()}")
+    try:
+        sent, arrived, cpu, rate, _ = measure(ctx, s.olt_port, s.subscriber_port, "pon", "sfp",
+                                              count=SHAPER_COUNT)
+    finally:
+        ctx.stick.run("tc qdisc del dev sfp root 2>/dev/null; true")
+    sent2, arrived2, cpu2, rate2, _ = measure(ctx, s.olt_port, s.subscriber_port, "pon", "sfp")
+    if min(sent, sent2) < COUNT // 100:
+        return failed(f"the bench: {s.olt_port} sent {sent} and {sent2} of {COUNT} frames")
+    ok = (abs(rate - SHAPER_MBIT) <= SHAPER_MBIT * SHAPER_TOLERANCE and rate2 >= FULL_MBIT and
+          cpu < sent * 0.01 and cpu2 < sent2 * 0.01)
+    return verdict(ok, f"tbf {SHAPER_MBIT} Mbit/s: {arrived} of {sent} frames arrived at "
+                       f"{rate:.0f} Mb/s, CPU saw {cpu}; removed: {arrived2} of {sent2} at "
+                       f"{rate2:.0f} Mb/s, CPU saw {cpu2}")
 
 # The multicast case: groups of the organisation-local IPv4 scope (RFC 2365)
 # and of the transient IPv6 range, which no line is expected to carry, and the

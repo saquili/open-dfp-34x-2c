@@ -81,6 +81,47 @@ def filesystems(ctx: Context):
     return verdict(ok, f"{root}; " + ", ".join(f"{p} {k}" for p, k in memory.items()))
 
 
+# Seconds between the two reads of the PTP clock's pulse.
+PPS_WAIT = 4
+
+
+def pps_assert(text: str) -> tuple[float, int]:
+    """The time and the sequence number of a PPS source's last assert event,
+    from its sysfs line "<sec>.<nsec>#<sequence>"."""
+    match = re.fullmatch(r"(\d+)\.(\d{9})#(\d+)", text.strip())
+    if not match:
+        raise ValueError(f"no PPS assert event in {text!r}")
+    return int(match.group(1)) + int(match.group(2)) / 1e9, int(match.group(3))
+
+
+@case("system.phc", "System",
+      "The PTP hardware clock is the ports' timestamping clock, and its pulse comes once a "
+      "second")
+def phc(ctx: Context):
+    info = ctx.stick.text("ethtool -T sfp")
+    match = re.search(r"(?:Hardware timestamp provider index|PTP Hardware Clock):\s*(\d+)", info)
+    if not match:
+        return failed("ethtool -T sfp names no hardware clock")
+    n = int(match.group(1))
+    name = ctx.stick.text(f"cat /sys/class/ptp/ptp{n}/clock_name")
+    caps = [c for c in ("hardware-receive", "hardware-raw-clock") if c in info]
+    pps = ctx.stick.text(f"for d in /sys/class/pps/pps*; do [ \"$(cat $d/name)\" = ptp{n} ] "
+                         "&& echo ${d##*/}; done; true")
+    if not pps:
+        return failed(f"ptp{n} {name}: no PPS source")
+    ctx.stick.run(f"echo 1 > /sys/class/ptp/ptp{n}/pps_enable")
+    try:
+        first = pps_assert(ctx.stick.text(f"sleep 2; cat /sys/class/pps/{pps}/assert"))
+        last = pps_assert(ctx.stick.text(f"sleep {PPS_WAIT}; cat /sys/class/pps/{pps}/assert"))
+    finally:
+        ctx.stick.run(f"echo 0 > /sys/class/ptp/ptp{n}/pps_enable")
+    pulses, seconds = last[1] - first[1], last[0] - first[0]
+    ok = (name == "rtl9602c-ptp" and len(caps) == 2 and abs(pulses - PPS_WAIT) <= 1 and
+          pulses > 0 and abs(seconds - pulses) < 0.1)
+    return verdict(ok, f"ptp{n} {name}, {', '.join(caps) or 'no hardware stamping'}; "
+                       f"{pulses} pulses {seconds:.3f} s apart")
+
+
 @case("system.watchdog", "System", "The watchdog runs, and the daemon of the boot feeds it")
 def watchdog(ctx: Context):
     base = "/sys/class/watchdog/watchdog0"

@@ -554,6 +554,93 @@ class Cases(unittest.TestCase):
         self.assertIn("tc qdisc del dev pon clsact; true", asked[-1])
         self.assertEqual(outcome(copies=False)[0].status, FAIL)
 
+    def test_the_phc_case_counts_one_pulse_a_second(self):
+        def outcome(last: str):
+            trail: list[str] = []
+            asserts = ["100.000000000#1", last]
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    if "/assert" in command:
+                        self.answers[0] = ("/assert", 0, asserts.pop(0) + "\n")
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("/assert", 0, ""),
+                                    ("ethtool -T", 0, "Hardware timestamp provider index: 0\n"
+                                                      "\thardware-receive\n"
+                                                      "\thardware-raw-clock\n"),
+                                    ("clock_name", 0, "rtl9602c-ptp\n"),
+                                    ("pps\\*", 0, "pps0\n"), ("pps_enable", 0, "")], trail)
+            return cases_system.phc(Context(SETTINGS, stick, Canned("bench", [], trail), trail))
+        good = outcome("104.000000100#5")
+        self.assertEqual(good.status, PASS)
+        self.assertIn("4 pulses 4.000 s apart", good.evidence)
+        self.assertEqual(outcome("104.000000100#1").status, FAIL)
+
+    def test_the_fdb_case_wants_learned_addresses_and_the_static_one_in_and_out(self):
+        def outcome(learns: bool, takes_static: bool):
+            trail: list[str] = []
+            table = {"on": False}
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    if "fdb add" in command:
+                        table["on"] = takes_static
+                    if "fdb del" in command:
+                        table["on"] = False
+                    lines = ["00:00:5e:00:53:02 vlan 410 self"] if learns else []
+                    if table["on"]:
+                        lines.append(cases_data.FDB_STATIC + " self static")
+                    self.answers[0] = ("fdb show", 0, "\n".join(lines) + "\n")
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("fdb show", 0, ""), ("bridge fdb", 0, "")], trail)
+            bench = Canned("bench", [("address", 0, "00:00:5e:00:53:02\n"),
+                                     ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            cases_data.time.sleep, real = (lambda _s: None), cases_data.time.sleep
+            try:
+                return cases_data.fdb(ctx)
+            finally:
+                cases_data.time.sleep = real
+        good = outcome(learns=True, takes_static=True)
+        self.assertEqual(good.status, PASS)
+        self.assertIn("then gone", good.evidence)
+        self.assertEqual(outcome(learns=False, takes_static=True).status, FAIL)
+        self.assertEqual(outcome(learns=True, takes_static=False).status, FAIL)
+
+    def test_the_shaper_case_wants_the_rate_held_then_given_back(self):
+        def outcome(held: float):
+            trail: list[str] = []
+            shaped = {"on": False}
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    if "tbf rate" in command:
+                        shaped["on"] = True
+                    if "qdisc del" in command:
+                        shaped["on"] = False
+                    return super().run(command, **kw)
+
+            def measure(ctx, into, out_of, stick_in, stick_out, count=cases_data.COUNT):
+                rate = held if shaped["on"] else 984.0
+                return 400000, int(400000 * rate / 984), 60, rate, ""
+
+            stick = Stick("stick", [("tc ", 0, "")], trail)
+            bench = Canned("bench", [("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            cases_data.measure, real = measure, cases_data.measure
+            try:
+                return cases_data.shaper(Context(settings, stick, bench, trail)), shaped["on"]
+            finally:
+                cases_data.measure = real
+        good, left = outcome(held=203.0)
+        self.assertEqual(good.status, PASS)
+        self.assertFalse(left)
+        self.assertEqual(outcome(held=984.0)[0].status, FAIL)
+
     def test_a_burst_that_never_left_the_bench_is_the_bench_s_fault(self):
         trail: list[str] = []
         settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
