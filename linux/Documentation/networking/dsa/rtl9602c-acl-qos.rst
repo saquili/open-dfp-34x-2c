@@ -2521,22 +2521,25 @@ on them. They were measured with register writes made outside the driver.
    * - A per-queue egress rate exists: per port, a word at ``0x02d86c`` + 4p
        (``RTL9602C_QUEUE_RATE_EN``) with one enable bit per queue and a word at
        ``0x02d87c`` + 4p (``RTL9602C_QUEUE_RATE_METER``) with a 3-bit meter
-       index per queue, binding a queue to one of meters 0 to 7. It limits
-       packets per second, per queue, so it has no form in bytes for ``tc``,
-       and a tbf in an ets band is refused rather than applied to the whole
-       port. Setup writes both words 0 on every port.
+       index per queue, binding a queue to a meter of its port's bank: meters
+       0 to 7 on ports 0 and 2, meters 8 to 15 (index 0 to 7) on ports 1 and
+       3. It limits packets per second, per queue, so it has no form in bytes
+       for ``tc``, and a tbf in an ets band is refused rather than applied to
+       the whole port. Setup writes both words 0 on every port.
      - M
      - Frames from the CPU at the priority of queue 5: 500 packets/s asked, 511
        measured; queue 2 of the same port unaffected at the same time; clearing
        the enable restored the rate.
-   * - The CPU port's queues are not limited by it, so it cannot keep a flood
-       to the CPU below what the CPU's receive engine takes.
+   * - The CPU port's queues are limited the same way, so the limit can keep a
+       flood to the CPU below what the CPU's receive engine takes; the switch
+       drops the excess. The driver does not use it.
      - M
-     - Queues 0 to 6 of port 3 bound to a meter at 100 packets/s, with the
-       enables set: a flood of 272,000 frames/s to the stick's address put
-       324,000 frames into the CPU in 10 s and 2,398,000 into its engine's
-       missed count, as many as with no limit; the flood went through queue 0
-       (``qdepth``).
+     - Queues 0 to 6 of port 3 bound to index 0, meter 8, in packet mode at
+       1,000 packets/s, with the enables set: a flood of 256,000 frames/s to
+       the stick's own address put 10,589 frames into the CPU in 10 s and none
+       into its engine's missed count, where with no limit it put 317,805 and
+       2,282,211. An earlier test that programmed one of meters 0 to 7 and
+       wrote its number as the index saw no limit at all.
    * - The range-checker banks of the ACL: 8 VLAN-ID checkers at ``0x0151cc``
        (one word each: type bits 25:24, upper bound 23:12, lower 11:0), 32
        IP-address checkers at ``0x0151ec`` (five words each), 32 L4-port

@@ -832,11 +832,15 @@ implemented" in the netlink extended ack.
        egress action for Sync at each of its four values, the per-port enable
        on all ports, the destination given or left to the switch's lookup,
        and the PTP multicast destination, no copy came back to the CPU and the
-       egress capture of the frame had its PTP flag set and a zero time. The
+       egress capture of the frame had its PTP flag set and a zero time. Nor
+       did the switch write anything into the message: at the far end its
+       correctionField and originTimestamp read 0 under each action. The
        driver therefore offers only ``HWTSTAMP_TX_OFF`` and answers any other
        ``tx_type`` with ``-ERANGE`` and a message.
      - M
-     - ``hsd``, ``ptpstat`` and the conduit's receive log, for each setting.
+     - ``hsd``, ``ptpstat`` and the conduit's receive log, for each setting;
+       for the fields, three Syncs per action from a packet socket on
+       ``sfp``, captured at the far end.
    * - Without a transmit stamp a port can timestamp the Syncs it receives but
        cannot time its own Delay_Req, which the delay request-response
        mechanism needs: it can listen, not synchronise. ``get_ts_info``
@@ -846,13 +850,18 @@ implemented" in the netlink extended ack.
      - IEEE 1588-2008, 11.3, for the mechanism; the capabilities are the
        driver's own report.
    * - A PTP message arriving from the host goes to the CPU port and to no
-       other port. With the host on port 0 as the only PTP partner, no PTP
-       message left by a wire port, so what the egress actions do to a message
-       the switch forwards out of one is untested.
+       other port. A message that the switch forwards between the PON and SFP
+       ports leaves as it came too: under each egress action for Sync, with
+       the per-port enable on every port, and with the transparent-clock bit
+       of every port set or clear, its correctionField and originTimestamp
+       were unchanged, and no copy came back to the CPU.
      - M
      - The egress capture narrowed to each port in turn caught the Sync only on
        port 3, the CPU port; destination 01-1B-19-00-00-00 (IEEE 1588-2008,
-       Annex F).
+       Annex F). Syncs sent at the OLT side, three or five per setting, and
+       at the subscriber side, captured at the other: the fields read 0, the
+       transmit indication of the egress port set, and the CPU's receive
+       reasons counted only the copies that the bridge sends it anyway.
    * - ``RTL9602C_PTP_TX_STATUS(p)`` = ``0x020024`` + ``0x400`` x p lies in
        the per-port register window that repeats every ``0x400`` bytes; it is
        not a 4-byte array. Bit 0, ``RTL9602C_PTP_TX_STATUS_LATCHED``, sets when
@@ -1153,11 +1162,11 @@ bytes of the software message in message order)::
 Known limitations
 =================
 
-- A port cannot stamp what it sends. A request for any transmit type but
+- No setting has been found under which a port stamps what it sends, or
+  writes a time into it, so a request for any transmit type but
   ``HWTSTAMP_TX_OFF`` is refused with ``-ERANGE``. A port can stamp the Syncs
-  it receives but cannot time its own Delay_Req, which the delay
-  request-response mechanism needs: it can listen, not synchronise (see
-  "Transmit timestamps").
+  it receives but not time its own Delay_Req, which the delay request-response
+  mechanism needs: it can listen, not synchronise (see "Transmit timestamps").
 - A PTP message addressed to this device's own MAC address arrives with only
   the second half of the tag: 8 bytes, two zero bytes, the low 16 bits of the
   seconds and the nanoseconds, between the source address and the message's
