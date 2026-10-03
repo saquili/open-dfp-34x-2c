@@ -248,6 +248,118 @@ def static(ctx: Context):
                        f"{offload} flow(s) in the switch")
 
 
+# The TCP case: a connection from the LAN host to the far end of the WAN that
+# carries TCP_BYTES, which the far end reads to the end and counts.
+TCP_PORT = 5001
+TCP_BYTES = 100 * 1000 * 1000
+
+# The far end of the TCP case: one connection, read to its end, with how many
+# bytes came and from which source written when it closes or its time is up.
+TCP_SINK = """\
+import json, signal, socket, sys, time
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+port, seconds, out = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", port))
+s.listen(1)
+s.settimeout(seconds)
+got, source = 0, ""
+try:
+    conn, peer = s.accept()
+    source = peer[0]
+    conn.settimeout(seconds)
+    while True:
+        data = conn.recv(1 << 16)
+        if not data:
+            break
+        got += len(data)
+except OSError:
+    pass
+json.dump({"received": got, "source": source}, open(out, "w"))
+"""
+
+# The LAN host of the TCP case: TCP_BYTES to the far end in two halves, the
+# connection held idle for TCP_HOLD seconds between them, so that the stick's
+# connection table can be read while the connection is up; a closed connection
+# leaves the switch at once. It writes how many bytes it sent and how long the
+# halves took, without the hold. Started in the background as the far end is.
+TCP_HOLD = 4
+TCP_SOURCE = """\
+import json, signal, socket, sys, time
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+peer, port, total, hold, out = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), sys.argv[5]
+result = {"sent": 0, "seconds": 0.0}
+try:
+    s = socket.create_connection((peer, port), timeout=30)
+    chunk = bytes(1 << 16)
+    for half in (total // 2, total - total // 2):
+        start, left = time.monotonic(), half
+        while left:
+            left -= s.send(chunk[:min(len(chunk), left)])
+        result["sent"] += half
+        result["seconds"] += time.monotonic() - start
+        if half == total // 2:
+            time.sleep(hold)
+    s.shutdown(socket.SHUT_WR)
+    s.recv(1)
+except OSError as exc:
+    result["error"] = str(exc)
+json.dump(result, open(out, "w"))
+"""
+
+
+@case("router.tcp", "Router mode",
+      "With a static WAN, a LAN host's TCP connection leaves translated to the WAN address "
+      "and the switch carries it")
+def tcp(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    if "mode router" not in status(ctx) or not ctx.memo.get("namespaces"):
+        return failed("router mode with a static WAN is not up; router.static runs first")
+    cpu = ctx.stick.text("for i in /sys/class/net/*; do [ -e $i/dsa/tagging ] && "
+                         "echo ${i##*/}; done; true")
+    seconds = 60
+    bench(ctx, "cat > /tmp/devtest-sink.py; "
+               f"ip netns exec devtest-wan python3 /tmp/devtest-sink.py {TCP_PORT} {seconds} "
+               "/tmp/devtest-sink.json > /dev/null 2>&1 & sleep 1", stdin=TCP_SINK)
+    before = int(ctx.stick.text(f"cat /sys/class/net/{cpu}/statistics/rx_packets"))
+    bench(ctx, "cat > /tmp/devtest-source.py; "
+               f"ip netns exec devtest-lan python3 /tmp/devtest-source.py {WAN_PEER} {TCP_PORT} "
+               f"{TCP_BYTES} {TCP_HOLD} /tmp/devtest-source.json > /dev/null 2>&1 &",
+          stdin=TCP_SOURCE)
+    # Read the connection table during the hold, while the connection is up.
+    time.sleep(TCP_HOLD / 2 + 1)
+    offload = ctx.stick.run("grep 'dport=%d' /proc/net/nf_conntrack | grep -c HW_OFFLOAD"
+                            % TCP_PORT).out.strip() or "0"
+    lan = far = ""
+    for _ in range(seconds):
+        lan = bench(ctx, "cat /tmp/devtest-source.json 2>/dev/null").out.strip()
+        far = bench(ctx, "cat /tmp/devtest-sink.json 2>/dev/null").out.strip()
+        if lan and far:
+            break
+        time.sleep(1)
+    after = int(ctx.stick.text(f"cat /sys/class/net/{cpu}/statistics/rx_packets"))
+    bench(ctx, "rm -f /tmp/devtest-sink.json /tmp/devtest-sink.py "
+               "/tmp/devtest-source.json /tmp/devtest-source.py")
+    if not lan:
+        return failed("the LAN host's connection did not end")
+    lan = json.loads(lan)
+    if "error" in lan:
+        return failed(f"the LAN host's connection failed: {lan['error']}")
+    far = json.loads(far or '{"received": 0, "source": ""}')
+    seen = after - before
+    segments = TCP_BYTES // 1448
+    translated = far["source"] == WAN.split("/")[0]
+    ok = (far["received"] == TCP_BYTES and translated and seen < segments * 0.01
+          and offload != "0")
+    rate = far["received"] * 8 / lan["seconds"] / 1e6 if lan["seconds"] else 0
+    return verdict(ok, f"{lan['sent']} bytes sent, {far['received']} received from "
+                       f"{far['source'] or 'nobody'} at {rate:.0f} Mb/s; {seen} frames "
+                       f"through the CPU against some {segments} segments; "
+                       f"{offload} flow(s) in the switch")
+
+
 @case("router.pppoe", "Router mode",
       "With PPPoE, the stick opens a session with the concentrator and gets an address")
 def pppoe(ctx: Context):
