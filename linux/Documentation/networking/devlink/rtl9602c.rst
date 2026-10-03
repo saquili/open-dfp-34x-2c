@@ -240,7 +240,8 @@ defaults, and the serial number is empty.
        sending probes by itself.
    * - Teardown destroys the region and unregisters the parameters before the
        devlink instance goes, so that the next probe does not find their names
-       taken.
+       taken. Parameters whose registration failed at setup are not
+       unregistered.
      - M
      - After ``rmmod`` and ``insmod`` the parameters are there again.
 

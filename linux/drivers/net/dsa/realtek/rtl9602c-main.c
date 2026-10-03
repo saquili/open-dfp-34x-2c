@@ -1550,6 +1550,8 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	if (dsa_devlink_params_register(ds, rtl9602c_devlink_params,
 					ARRAY_SIZE(rtl9602c_devlink_params)))
 		pr_err("devlink parameters unavailable; the switch's own features cannot be configured\n");
+	else
+		p->params_registered = true;
 
 	p->hsb_region = dsa_devlink_region_create(ds, &rtl9602c_hsb_region_ops,
 						  1, RTL9602C_PKTDBG_SNAPSHOT_WORDS *
@@ -1644,8 +1646,10 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 	rtl9602c_ptp_unregister(p);
 	if (p->hsb_region)
 		dsa_devlink_region_destroy(p->hsb_region);
-	dsa_devlink_params_unregister(ds, rtl9602c_devlink_params,
-				      ARRAY_SIZE(rtl9602c_devlink_params));
+	if (p->params_registered)
+		dsa_devlink_params_unregister(ds, rtl9602c_devlink_params,
+					      ARRAY_SIZE(rtl9602c_devlink_params));
+	p->params_registered = false;
 }
 
 /*

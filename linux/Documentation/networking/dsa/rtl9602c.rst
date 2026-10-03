@@ -1736,9 +1736,10 @@ Teardown
 5. Tear down the OMCI channel. (T)
 6. Remove the debugfs directory ``rtl9602c``. (T)
 7. Unregister the PHC. (T)
-8. Destroy the ``frame_capture`` region and unregister the devlink parameters.
-   Purpose: they go before the devlink instance does, so that the next probe
-   does not find their names taken. (T)
+8. Destroy the ``frame_capture`` region and, if setup registered them, the
+   devlink parameters. Purpose: they go before the devlink instance does, so
+   that the next probe does not find their names taken; parameters that were
+   never registered are not unregistered. (T)
 
 The interrupt is undone last, by devres, after ``rtl9602c_remove()`` has
 returned: ``rtl9602c_irq_disable()`` writes ``RTL9602C_IRQ_ENABLE`` = 0, then

@@ -2920,6 +2920,8 @@ struct rtl9602c_priv {
 	u8 dos_flood_th[3];
 	/** @hsb_region: the frame_capture devlink region */
 	struct devlink_region *hsb_region;
+	/** @params_registered: setup registered the devlink parameters */
+	bool params_registered;
 };
 
 /**
