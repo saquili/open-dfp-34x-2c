@@ -60,6 +60,15 @@ The runs, the oldest first:
     handling of frames that look tagged, and with the PPPoE case waiting for
     the bench's end of the session. 30 of 30 passed.
 
+``2026-10-03-run06``
+    The same cases and the new multicast case on the RAM image built from
+    ``run06``, after the MTU of 1508 for PPPoE on the conduit, the GEM
+    interfaces and the PPPoE client (RFC 4638), and the switch's part in the
+    bridge's multicast snooping: IGMP and MLD copied to the CPU, the PON port
+    in every group, the multicast that no host asked for dropped while a
+    router sits behind the PON, and the IPv6 protocol of a flower rule. 31 of
+    31 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
