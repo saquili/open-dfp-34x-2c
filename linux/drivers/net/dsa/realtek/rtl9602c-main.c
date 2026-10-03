@@ -599,12 +599,13 @@ static void rtl9602c_serdes_resync(struct rtl9602c_priv *p)
 
 /*
  * No port has a PHY and nothing is negotiated on port 0's lane, so no MAC
- * learns its link from a partner: the driver forces link, speed and duplex.
- * Every enable in RTL9602C_PORT_FORCE_EN is set, and every forced ability
- * other than these three is written 0.
+ * learns its link from a partner: the driver forces link, speed, duplex and
+ * pause. Every enable in RTL9602C_PORT_FORCE_EN is set, and every forced
+ * ability other than these is written 0.
  */
 static void rtl9602c_force_link(struct rtl9602c_priv *p, int port, bool up,
-				int speed, bool duplex)
+				int speed, bool duplex, bool tx_pause,
+				bool rx_pause)
 {
 	u32 v = FIELD_PREP(RTL9602C_PORT_FORCE_SPEED, speed);
 
@@ -612,6 +613,10 @@ static void rtl9602c_force_link(struct rtl9602c_priv *p, int port, bool up,
 		v |= RTL9602C_PORT_FORCE_DUPLEX;
 	if (up)
 		v |= RTL9602C_PORT_FORCE_LINK;
+	if (tx_pause)
+		v |= RTL9602C_PORT_FORCE_TXPAUSE;
+	if (rx_pause)
+		v |= RTL9602C_PORT_FORCE_RXPAUSE;
 
 	rtl9602c_w(p, RTL9602C_PORT_FORCE_VAL(port), v);
 	rtl9602c_w(p, RTL9602C_PORT_FORCE_EN(port), RTL9602C_PORT_FORCE_EN_ALL);
@@ -1375,10 +1380,11 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 
 	/*
 	 * The CPU port has no PHY and comes out of reset with its forced
-	 * link clear: force it up, at 1000 Mb/s full duplex.
+	 * link clear: force it up, at 1000 Mb/s full duplex, without pause,
+	 * which the CPU port's DMA engine does not take part in.
 	 */
 	rtl9602c_force_link(p, RTL9602C_PORT_CPU, true,
-			    RTL9602C_PORT_FORCE_SPEED_1000, true);
+			    RTL9602C_PORT_FORCE_SPEED_1000, true, false, false);
 
 	/*
 	 * The CPU tag both ways. With INSERT the switch tags every frame it
@@ -1630,8 +1636,9 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 }
 
 /*
- * Symmetric pause is offered, though no pause result is programmed into a
- * MAC.
+ * Symmetric pause is offered. Every port is a fixed link, so phylink resolves
+ * pause from the fixed-link node of the device tree ("pause"), not from
+ * ethtool.
  */
 static void rtl9602c_phylink_get_caps(struct dsa_switch *ds, int port,
 				      struct phylink_config *config)
@@ -1687,9 +1694,9 @@ static void rtl9602c_phylink_fixed_state(struct dsa_switch *ds, int port,
 }
 
 /*
- * Force the port up with the duplex phylink resolved, always at 1000 Mb/s:
- * at 2500BaseX, port 0 runs as a 1000 Mb/s port with the 2.5G override
- * (rtl9602c_serdes_init()). No pause setting is programmed.
+ * Force the port up with the duplex and the pause phylink resolved, always at
+ * 1000 Mb/s: at 2500BaseX, port 0 runs as a 1000 Mb/s port with the 2.5G
+ * override (rtl9602c_serdes_init()).
  */
 static void rtl9602c_mac_link_up(struct phylink_config *config,
 				 struct phy_device *phy, unsigned int mode,
@@ -1700,7 +1707,7 @@ static void rtl9602c_mac_link_up(struct phylink_config *config,
 	struct rtl9602c_priv *p = dp->ds->priv;
 
 	rtl9602c_force_link(p, dp->index, true, RTL9602C_PORT_FORCE_SPEED_1000,
-			    duplex == DUPLEX_FULL);
+			    duplex == DUPLEX_FULL, tx_pause, rx_pause);
 }
 
 /*
@@ -1713,7 +1720,8 @@ static void rtl9602c_mac_link_down(struct phylink_config *config,
 	struct dsa_port *dp = dsa_phylink_to_port(config);
 	struct rtl9602c_priv *p = dp->ds->priv;
 
-	rtl9602c_force_link(p, dp->index, false, RTL9602C_PORT_FORCE_SPEED_1000, true);
+	rtl9602c_force_link(p, dp->index, false, RTL9602C_PORT_FORCE_SPEED_1000,
+			    true, false, false);
 
 	if (dp->index == RTL9602C_PORT_SFP)
 		rtl9602c_serdes_resync(p);

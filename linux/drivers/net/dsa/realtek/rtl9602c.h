@@ -44,6 +44,13 @@
  * verified).
  */
 #define RTL9602C_PORT_FORCE_LINK		BIT(4)
+
+/*
+ * Pause: with RXPAUSE the MAC stops sending while a received pause frame
+ * holds it, with TXPAUSE it sends pause frames when its port's buffer fills.
+ */
+#define RTL9602C_PORT_FORCE_RXPAUSE		BIT(5)
+#define RTL9602C_PORT_FORCE_TXPAUSE		BIT(6)
 #define RTL9602C_PORT_FORCE_EN_ALL	GENMASK(11, 0)
 
 /*

@@ -605,8 +605,8 @@ Forced MAC ability
 ==================
 
 No port has a PHY, and nothing is negotiated on port 0's lane, so no MAC can
-learn its link from a partner. The driver therefore forces the link, speed and
-duplex of every port it brings up, through two registers per port:
+learn its link from a partner. The driver therefore forces the link, speed,
+duplex and pause of every port it brings up, through two registers per port:
 ``RTL9602C_PORT_FORCE_VAL(p)`` holds the ability the MAC is told to use, and
 ``RTL9602C_PORT_FORCE_EN(p)`` says which forced values the MAC uses. Setup
 forces the CPU port up, and phylink's link-up and link-down callbacks force
@@ -625,13 +625,15 @@ with a line-rate override.
    * - ``RTL9602C_PORT_FORCE_VAL(p)`` (``0x000180`` + 4p) is the ability the
        MAC of port p is told to use: ``RTL9602C_PORT_FORCE_SPEED`` (bits 1:0;
        ``RTL9602C_PORT_FORCE_SPEED_1000`` = 2 is 1000 Mb/s),
-       ``RTL9602C_PORT_FORCE_DUPLEX`` (bit 2, full duplex) and
-       ``RTL9602C_PORT_FORCE_LINK`` (bit 4, link up).
+       ``RTL9602C_PORT_FORCE_DUPLEX`` (bit 2, full duplex),
+       ``RTL9602C_PORT_FORCE_LINK`` (bit 4, link up),
+       ``RTL9602C_PORT_FORCE_RXPAUSE`` (bit 5) and
+       ``RTL9602C_PORT_FORCE_TXPAUSE`` (bit 6).
        ``RTL9602C_PORT_FORCE_EN(p)`` (``0x0001b4`` + 4p) says which forced
        values the MAC uses; ``rtl9602c_force_link()`` always writes
        ``RTL9602C_PORT_FORCE_EN_ALL`` (``GENMASK(11, 0)``, every enable of bits
-       11:0). It writes only speed, duplex and link into the value, so every
-       other forced ability is 0.
+       11:0). It writes only speed, duplex, link and pause into the value, so
+       every other forced ability is 0.
      - M
      - Register reads after bring-up: the value words of ports 0 and 3 read
        ``0x16`` (1000 Mb/s, full duplex, link up) and their enable words
@@ -640,11 +642,28 @@ with a line-rate override.
        (in-band negotiation is off, see "The SerDes lane to the host"), so no
        port has a partner to learn its link from and the driver forces the MAC
        of each port it brings up. Setup forces port 3 up at 1000 Mb/s full
-       duplex, and phylink's link-up forces its port up at 1000 Mb/s with the
-       duplex phylink resolved (full on every port here).
+       duplex without pause, and phylink's link-up forces its port up at
+       1000 Mb/s with the duplex and the pause phylink resolved (full duplex on
+       every port here; pause only where the device tree asks for it).
      - T
      - Bridged traffic passes both ways, sourced from the host: frames cross
        between the host and the CPU port both ways.
+   * - With ``RTL9602C_PORT_FORCE_RXPAUSE`` set, the MAC stops sending while
+       a received pause frame holds it; with ``RTL9602C_PORT_FORCE_TXPAUSE``
+       set, it sends pause frames when the frames from its port fill the
+       switch's buffer. A flood to the CPU port makes none: the switch drops
+       it at the CPU port's queue.
+     - M
+     - Port 0 with ``pause`` in its fixed-link node (a test build): pause
+       frames from the host every 2 ms let 713 of 406,268 downstream frames
+       through, against 405,843 without them, and 406,248 of 406,348 with them
+       and the bits clear (the port's ``rx_pause`` counted every one). A burst
+       of 1514-byte frames from the host for 5 s, more than the OLT's grants
+       carry upstream, made the port send 12,752 pause frames, all counted by
+       the host, whose sender slowed to 396,288 frames, of which 396,277
+       arrived and the port discarded none; with the bits clear the sender
+       sent 1,006,209 and the port discarded 610,245 (``rx_forward_discards``).
+       A flood of 280,000 frames/s to the CPU made no pause frame.
    * - After a full chip reset and the boot loader, ports 0 to 2 have both
        force words at 0, and port 3 has ``0x186`` and ``0xfff``: forced to 1000
        Mb/s full duplex with the link bit clear, so the CPU port is down until
@@ -954,7 +973,11 @@ negotiation. Both are applied once, at setup, before phylink starts the port.
      - Tag
      - Checked by
    * - The MAC capabilities are 2500 and 1000 Mb/s full duplex and symmetric
-       pause (see "Known limitations"). Port 0 offers the interfaces
+       pause. Being fixed links, the ports take their pause from the
+       ``pause`` property of their fixed-link node, and phylink refuses a
+       change through ``ethtool -A`` with ``EOPNOTSUPP``; the board's device
+       tree has none, so pause is off (see "Forced MAC ability" and "Known
+       limitations"). Port 0 offers the interfaces
        2500BASE-X and 1000BASE-X; ports 2 and 3 offer INTERNAL. All three are
        fixed links in the device tree, so phylink asks the driver for their
        state (``rtl9602c_phylink_fixed_state()``): port 0 reports full duplex,
@@ -1855,8 +1878,11 @@ Known limitations
 - The switch has two frame length limits for four ports, so with three
   different MTUs a port with the smallest accepts frames up to the middle one's
   limit (see "Maximum frame length").
-- The driver offers symmetric pause to phylink, but programs no pause result
-  into any MAC.
+- Pause on the SerDes port is set only by the device tree: the ports are fixed
+  links, so ``ethtool -A sfp`` fails with ``EOPNOTSUPP``, and the board's
+  device tree leaves pause off. Pause also does not keep a flood to the CPU
+  from being dropped, since the switch drops it at the CPU port's queue
+  without sending pause frames.
 - With ``rtl9602c.sfp_mode=1000basex``, the phy-mode of port 0 in the board's
   device tree is still ``2500base-x``. For a fixed link phylink passes the
   device tree's phy-mode to ``mac_config`` when the port starts. That differs
