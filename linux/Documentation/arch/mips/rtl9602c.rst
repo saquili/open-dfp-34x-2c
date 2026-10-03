@@ -1807,8 +1807,8 @@ GPIO and pad control
 The SoC's GPIO bank is driven by the Otto GPIO driver
 (``drivers/gpio/gpio-realtek-otto.c``, ``CONFIG_GPIO_REALTEK_OTTO``), unchanged
 apart from one match entry for ``realtek,rtl9602c-gpio``. On this board one line
-is used: line 13, taken to be the laser driver's TX_DISABLE input (not verified,
-see the facts below), which the switch driver requests through
+is used: line 13, the laser driver's TX_DISABLE input (see the facts below),
+which the switch driver requests through
 ``tx-disable-gpios`` on the ``switch`` node. Two pad-function registers in the
 switch register window route pins to their functions:
 ``RTL9602C_PADMUX_GPIO_EN`` selects GPIO use per pin, and
@@ -1830,17 +1830,17 @@ The GPIO bank
        makes the line an output), data at ``+0x0c`` (the level driven),
        interrupt status and masks from ``+0x10``. The driver uses direction and
        data only.
-     - I
-     - No access to this bank has been observed to act on a pin. The check that
-       the laser is off before O3 and that TX_DISABLE is honoured settles it.
+     - M
+     - Line 13 driven high stopped the laser and low let it emit again (the
+       last row of this table).
    * - Line N is bit N of a native big-endian 32-bit word, with no byte
        swapping. The RTL9602C entry therefore passes ``GPIO_PORTS_REVERSED``,
        which selects plain ``ioread32()``/``iowrite32()`` access (and, for the
        interrupt masks, two bits per line at bit 2N). The byte-swapped access of
        the generic ``realtek,otto-gpio`` entry would put line 13's value on bit
        21.
-     - I
-     - As above: the TX_DISABLE check.
+     - M
+     - As above: line 13 acts through bit 13 with plain access.
    * - No GPIO line is used as an interrupt on this board: the RTL9602C entry
        passes ``GPIO_INTERRUPTS_DISABLED``, and the device tree gives the bank
        no interrupt.
@@ -1871,12 +1871,12 @@ The GPIO bank
        leaves before anything else runs, and then drives it from the ONU state:
        asserted below O3, released from O3 on. A board whose device tree has no
        such line skips all of this.
-     - I
-     - Half supported: the ONU reaches O5 on an OLT with the line released from
-       O3, so the released level does not block transmission. That the line
-       reaches the laser and that high cuts the light are not established: with
-       burst enable forced, the module's own transmit-power reading must fall to
-       zero while the line is high.
+     - M
+     - With the ONU in O5, the line driven high by hand (a test build): the
+       module's bias and transmitted power fell to 0 within a second and the
+       OLT deactivated the ONU; driven low again, the laser emitted and the ONU
+       returned to O5
+       (Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
 
 Pad control
 -----------
@@ -1890,21 +1890,21 @@ Pad control
      - Checked by
    * - ``RTL9602C_PADMUX_GPIO_EN`` (switch window ``+0x000048``, physical
        ``0x1b000048``): a set bit N routes pad N to its GPIO function.
-     - I
-     - The TX_DISABLE check settles it for pad 13; a run with the bit clear
-       would show whether it is needed at all.
+     - M, I
+     - M: with bit 13 set, line 13 acts on the laser. I: whether the bit is
+       needed at all; a run with the bit clear would show it.
    * - ``RTL9602C_PADMUX_GPIO_EN_TX_DISABLE`` = 13 is both the GPIO line of
        TX_DISABLE and its bit in ``RTL9602C_PADMUX_GPIO_EN``.
-     - I
-     - The TX_DISABLE check.
+     - M
+     - Line 13, with bit 13 set, acts on the laser.
    * - Every time the switch driver drives TX_DISABLE it first sets that bit by
        read-modify-write (only bit 13 changes, and setting it again is
        harmless), then sets the line through gpiolib, because gpiolib owns
        direction and level but not the pad function, which lives in the switch
        window.
      - T
-     - The TX_DISABLE check; the ONU state changes of an activation run this
-       path on every transition.
+     - The laser stops and emits with the line (see "The GPIO bank"); the ONU
+       state changes of an activation run this path on every transition.
    * - Offset ``0x48`` of the switch window has nothing to do with offset
        ``0x48`` of the CPU port block, which is the CPU-tag engine control at
        physical ``0x18012048``.
@@ -2568,18 +2568,9 @@ Assumptions the driver depends on
    * - The placement of the two regions is acceptable to the PON MAC ("DRAM and
        reserved memory").
      - Moving the downstream region and repeating the same checks.
-   * - The GPIO bank is at ``0x18003300`` with direction at ``+0x08`` and data
-       at ``+0x0c`` ("The GPIO bank").
-     - The TX_DISABLE check: with burst enable forced, the module's own
-       transmit-power reading must fall to zero while the line is high.
-   * - Line N of the bank is bit N of a native big-endian word
-       (``GPIO_PORTS_REVERSED``).
-     - The same TX_DISABLE check.
-   * - GPIO 13 is the laser's hard transmit-disable input, active high.
-     - The same TX_DISABLE check.
-   * - Bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` routes pad 13 to its GPIO function.
-     - The same TX_DISABLE check; a run with the bit clear shows whether it is
-       needed at all.
+   * - Bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` is needed to route pad 13 to its
+       GPIO function: with it set the line acts on the laser ("Pad control").
+     - A run with the bit clear.
    * - The decompressed kernel stays below 15 MiB and below whatever cap the
        boot loader has ("RAM boot over TFTP").
      - RAM-boot images of growing size until one fails.

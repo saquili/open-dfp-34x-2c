@@ -147,11 +147,10 @@
 			interrupts = <8>;
 
 			/*
-			 * The hard transmit-disable input of the laser driver,
-			 * taken to be GPIO 13 with high turning the light off;
-			 * not verified. The switch driver requests it asserted
-			 * and releases it only while the PON link needs the
-			 * laser.
+			 * The hard transmit-disable input of the laser driver:
+			 * GPIO 13, high turning the light off (measured). The
+			 * switch driver requests it asserted and releases it
+			 * only while the PON link needs the laser.
 			 */
 			tx-disable-gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
 
