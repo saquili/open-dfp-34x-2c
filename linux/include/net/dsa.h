@@ -960,6 +960,8 @@ struct dsa_switch_ops {
 				     const u8 *sel, int nsel);
 	int	(*port_get_apptrust)(struct dsa_switch *ds, int port, u8 *sel,
 				     int *nsel);
+	int	(*port_set_pcp_rewr)(struct dsa_switch *ds, int port,
+				     const u8 *pcp, u8 mapped);
 
 	/*
 	 * Suspend and resume

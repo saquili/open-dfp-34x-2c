@@ -2448,6 +2448,72 @@ static int __maybe_unused dsa_user_dcbnl_ieee_delapp(struct net_device *dev,
 	}
 }
 
+/* Give the switch the PCP rewrite map of @dev: for each priority with an
+ * entry in the rewrite table, the highest PCP mapped to it, the DEI in bit 3,
+ * and the set of priorities that have one.
+ */
+static int dsa_user_dcbnl_pcp_rewr_apply(struct net_device *dev)
+{
+	struct dcb_rewr_prio_pcp_map map = {};
+	struct dsa_port *dp = dsa_user_to_port(dev);
+	struct dsa_switch *ds = dp->ds;
+	u8 pcp[IEEE_8021QAZ_MAX_TCS] = {};
+	u8 mapped = 0;
+	int prio;
+
+	dcb_getrewr_prio_pcp_mask_map(dev, &map);
+	for (prio = 0; prio < IEEE_8021QAZ_MAX_TCS; prio++) {
+		if (!map.map[prio])
+			continue;
+		pcp[prio] = fls(map.map[prio]) - 1;
+		mapped |= BIT(prio);
+	}
+
+	return ds->ops->port_set_pcp_rewr(ds, dp->index, pcp, mapped);
+}
+
+static int __maybe_unused dsa_user_dcbnl_setrewr(struct net_device *dev,
+						 struct dcb_app *app)
+{
+	struct dsa_port *dp = dsa_user_to_port(dev);
+	struct dsa_switch *ds = dp->ds;
+	int err;
+
+	if (app->selector != DCB_APP_SEL_PCP || !ds->ops->port_set_pcp_rewr)
+		return -EOPNOTSUPP;
+
+	err = dcb_setrewr(dev, app);
+	if (err)
+		return err;
+
+	err = dsa_user_dcbnl_pcp_rewr_apply(dev);
+	if (err)
+		dcb_delrewr(dev, app);
+
+	return err;
+}
+
+static int __maybe_unused dsa_user_dcbnl_delrewr(struct net_device *dev,
+						 struct dcb_app *app)
+{
+	struct dsa_port *dp = dsa_user_to_port(dev);
+	struct dsa_switch *ds = dp->ds;
+	int err;
+
+	if (app->selector != DCB_APP_SEL_PCP || !ds->ops->port_set_pcp_rewr)
+		return -EOPNOTSUPP;
+
+	err = dcb_delrewr(dev, app);
+	if (err)
+		return err;
+
+	err = dsa_user_dcbnl_pcp_rewr_apply(dev);
+	if (err)
+		dcb_setrewr(dev, app);
+
+	return err;
+}
+
 /* Pre-populate the DCB application priority table with the priorities
  * configured during switch setup, which we read from hardware here.
  */
@@ -2541,6 +2607,8 @@ static const struct dcbnl_rtnl_ops __maybe_unused dsa_user_dcbnl_ops = {
 	.ieee_delapp		= dsa_user_dcbnl_ieee_delapp,
 	.dcbnl_setapptrust	= dsa_user_dcbnl_set_apptrust,
 	.dcbnl_getapptrust	= dsa_user_dcbnl_get_apptrust,
+	.dcbnl_setrewr		= dsa_user_dcbnl_setrewr,
+	.dcbnl_delrewr		= dsa_user_dcbnl_delrewr,
 };
 
 static void dsa_user_get_stats64(struct net_device *dev,
