@@ -69,6 +69,15 @@ The runs, the oldest first:
     router sits behind the PON, and the IPv6 protocol of a flower rule. 31 of
     31 passed.
 
+``2026-10-03-run07``
+    The same cases and the new VLAN tag case on the RAM image built from
+    ``run07``, after the switch's tag operations through tc flower: a
+    C-tag pushed onto untagged frames and popped, an S-tag pushed in front of
+    a C-tag or onto an untagged frame, the VID and priority of a tag changed
+    and its priority matched; omcid's extended VLAN rules that push a C-tag
+    onto untagged frames and set tag priorities; and one MIB upload for both
+    OMCI priorities. 32 of 32 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
