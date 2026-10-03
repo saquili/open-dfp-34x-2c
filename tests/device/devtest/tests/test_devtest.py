@@ -330,6 +330,21 @@ class Cases(unittest.TestCase):
         self.assertEqual(outcome("[1460]").status, FAIL)
         self.assertEqual(outcome("[]").status, FAIL)
 
+    def test_a_pppoe_session_s_bench_interface_is_waited_for(self):
+        trail: list[str] = []
+        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
+                                       subscriber_port="eth2", pppoe_secrets="/etc/ppp/secrets")
+        bench = Canned("bench", [("ip -4 -o addr", 0, "")], trail)
+        ctx = Context(settings, Canned("stick", [], trail), bench, trail)
+        cases_router.time.sleep, real = (lambda _s: None), cases_router.time.sleep
+        try:
+            ok, seen = cases_router.pppoe_mss(ctx, "192.0.2.77")
+        finally:
+            cases_router.time.sleep = real
+        self.assertFalse(ok)
+        self.assertEqual(seen, "no PPP interface of the session on the bench after 10 s")
+        self.assertEqual(sum("ip -4 -o addr" in c for c in bench.asked), cases_router.PPP_WAIT)
+
     def test_the_data_path_is_skipped_without_ports(self):
         self.assertEqual(cases_data.downstream(context()).status, SKIP)
 

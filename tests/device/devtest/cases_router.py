@@ -408,15 +408,23 @@ print(json.dumps(seen))
 """
 MSS_PORT = 5555
 PPPOE_MTU = 1492
+PPP_WAIT = 10          # seconds to wait for the bench's end of the session
 
 
 def pppoe_mss(ctx: Context, address: str) -> tuple[bool, str]:
     """Whether the SYNs that a LAN host sends through the session carry an MSS
     that fits the PPPoE MTU, and what was seen; address is the stick's end of
     the session."""
-    iface = bench(ctx, "ip -4 -o addr | awk '$6 == \"%s/32\" {print $2}'" % address).out.strip()
-    if not iface:
-        return False, "no PPP interface of the session on the bench"
+    # The concentrator gives its end of the session the peer address a
+    # moment after the stick's end is up, so the interface is waited for.
+    for _ in range(PPP_WAIT):
+        iface = bench(ctx, "ip -4 -o addr | awk '$6 == \"%s/32\" {print $2}'"
+                      % address).out.strip()
+        if iface:
+            break
+        time.sleep(1)
+    else:
+        return False, f"no PPP interface of the session on the bench after {PPP_WAIT} s"
     reply = bench(ctx, f"python3 - {shlex.quote(iface)} {MSS_PORT}", stdin=MSS_PROBE, timeout=30)
     try:
         seen = json.loads(reply.out.strip().splitlines()[-1])
