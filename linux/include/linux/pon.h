@@ -331,9 +331,8 @@ struct pon_device *pon_device_register(struct device *parent,
  * @pon: the PON device pon_device_register() returned
  *
  * Deletes the ONU's GEM interfaces, then detaches the operations. The MAC
- * must have stopped calling pon_gem_rx() before, and must call this before
- * it removes its OMCI port: in the other order ponN is unregistered while
- * the data path still uses it, and then unregistered a second time.
+ * must have stopped calling pon_gem_rx() before. The data path and the OMCI
+ * port may go in either order: ponN is unregistered with the last of them.
  *
  * Context: process context, RTNL not held.
  */
@@ -410,8 +409,8 @@ struct pon_omci_port *pon_omci_port_create(struct device *parent,
  * Calls the stop operation if the port is open, detaches the operations,
  * wakes readers, who then get -ENODEV, and drops the queued messages. A
  * file that holds the port open stays valid until it is closed. The MAC
- * must have stopped calling pon_omci_port_rx(), and must have unregistered
- * its data path first (see pon_device_unregister()).
+ * must have stopped calling pon_omci_port_rx(). The port and the data path
+ * may go in either order (see pon_device_unregister()).
  *
  * Context: process context; may sleep.
  */

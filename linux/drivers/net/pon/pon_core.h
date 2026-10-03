@@ -29,6 +29,10 @@
  * @unregistering: the data path is going: lookups by network device no
  *		   longer find it, so no GEM interface is created on it. Set
  *		   under RTNL and the registration lock.
+ * @registrations: how many of the MAC's two registrations, its OMCI port and
+ *		   its data path, are in place; each holds a reference to the
+ *		   device, which is unregistered when the last goes, in either
+ *		   order. Under the registration lock.
  *
  * The MAC's first registration against its device creates the PON device,
  * whichever of its OMCI port and its data path comes first; the second
@@ -43,6 +47,7 @@ struct pon_device {
 	unsigned int num_tconts;
 	struct net_device __rcu **gem;
 	bool unregistering;
+	unsigned int registrations;
 };
 
 struct pon_device *pon_device_get_by_netdev(const struct net_device *dev);

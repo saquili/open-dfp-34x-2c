@@ -347,19 +347,14 @@ and its port::
      - T
      - OMCI both ways over ``/dev/pon0omci0``: ``pon0omci0`` sits under
        ``pon0``, and ``pon0`` reports the ``pon`` interface's index (M).
-   * - A put unregisters the PON device when it has no child devices left. The
-       OMCI port is its only child. The data path holds a reference to the
-       device but is not a child.
+   * - The PON device counts the MAC's two registrations, its OMCI port and its
+       data path; each holds a reference to the device, and a put unregisters
+       the device when neither is left. So the two may go in either order:
+       the device stays registered, and found by the lookups, until the last
+       of them goes.
      - I
-     - Design choice, not exercised: removing the OMCI port of a MAC whose
-       data path is still registered.
-   * - A MAC unregisters its data path before it removes its OMCI port. The
-       class relies on that order (see "Known limitations").
-     - I
-     - Design choice, load-bearing for driver removal. The RTL9602C driver
-       uses the safe order (see "The RTL9602C driver and the class"). A MAC
-       that removes its port first, and then unregisters its data path, would
-       show the fault.
+     - Design choice, not exercised: the RTL9602C driver removes its data path
+       first; removing the OMCI port first would exercise the other order.
    * - There are three lookups: by network device, by number, and "lowest
        number at or above a cursor". The lookup by network device asks the
        ``owns_netdev`` of each registered data path, under the registration
@@ -1573,9 +1568,8 @@ registers with the class in two independent steps, both against the same
 
 The two calls return the object or an ``ERR_PTR()``. Either step may come
 first, and a MAC that has no OMCI channel, or no data path, does only the
-other. The MAC undoes the steps in the opposite order:
-``pon_device_unregister()`` for the data path, then ``pon_omci_port_remove()``
-for the port. While registered, the MAC calls into the class from its receive
+other. The MAC undoes the steps with ``pon_device_unregister()`` for the data
+path and ``pon_omci_port_remove()`` for the port, in either order. While registered, the MAC calls into the class from its receive
 path (``pon_gem_rx()`` for a frame of a GEM port and ``pon_omci_port_rx()`` for
 an OMCI message), tells it whether the OMCI channel exists
 (``pon_omci_port_link_set()``) and reports a change of the ONU's status
@@ -1920,8 +1914,6 @@ What the MAC may call, and where:
 The rules that follow, each with the fact table that holds its row:
 
 - ``owns_netdev`` and ``dev_status`` do not take RTNL ("PON devices").
-- A MAC unregisters its data path before it removes its OMCI port ("PON
-  devices").
 - A MAC stops calling ``pon_gem_rx()`` before ``pon_device_unregister()``, and
   ``pon_omci_port_rx()`` before ``pon_omci_port_remove()`` ("The driver
   interface").
@@ -2270,11 +2262,6 @@ Known limitations
   out ``RTL9602C_GPON_OMCC_FLOW`` (64), which carries the OMCC. A daemon that
   sizes its GEM port entities by ``num-gem-ports`` gets ``-ENOSPC`` at the
   128th creation.
-- The class does not enforce the order in which a MAC removes its data path and
-  its OMCI port. A MAC that removes the port first has ``ponN`` unregistered
-  while the data path still uses it: lookups by network device and by number
-  stop finding it, and the data path's later unregistration unregisters it a
-  second time. The RTL9602C driver removes the data path first.
 
 Open questions
 ==============
@@ -2296,11 +2283,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - That a MAC unregisters its data path before it removes its OMCI port
-       ("PON devices", "Known limitations").
-     - Removing the OMCI port first on a MAC whose data path is registered, and
-       then unregistering the data path. The RTL9602C driver uses the safe
-       order.
    * - That ``owns_netdev`` and ``dev_status`` do not take RTNL, so that they
        cannot deadlock against the creation of GEM interfaces ("PON devices").
      - A kernel with lockdep, running a ``dev-get`` dump while the daemon

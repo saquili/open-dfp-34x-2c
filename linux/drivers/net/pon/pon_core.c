@@ -174,23 +174,16 @@ static struct pon_device *pon_dev_get(struct device *parent)
 	return pon;
 }
 
-static int pon_dev_has_child(struct device *dev, void *data)
-{
-	return 1;
-}
-
 /*
- * Drop the reference pon_dev_get() gave, and unregister ponN when it has no
- * child left. The OMCI port is its only child; the data path holds a
- * reference but is not a child. So a MAC must unregister its data path before
- * it removes its OMCI port: in the other order ponN is unregistered while the
- * data path still uses it, and then a second time when the data path goes.
+ * Drop the reference pon_dev_get() gave, and unregister ponN when neither of
+ * the MAC's registrations, its OMCI port and its data path, is left. The two
+ * may go in either order.
  */
 static void pon_dev_put(struct pon_device *pon)
 {
 	lockdep_assert_held(&pon_register_lock);
 
-	if (!device_for_each_child(&pon->dev, NULL, pon_dev_has_child))
+	if (!pon->registrations)
 		device_unregister(&pon->dev);
 	put_device(&pon->dev);
 }
@@ -409,6 +402,7 @@ struct pon_device *pon_device_register(struct device *parent,
 	pon->num_tconts = num_tconts;
 	pon->drvdata = drvdata;
 	pon->ops = ops;
+	pon->registrations++;
 	gem = NULL;
 out:
 	mutex_unlock(&pon_register_lock);
@@ -439,6 +433,7 @@ void pon_device_unregister(struct pon_device *pon)
 	kfree(pon->gem);
 	pon->gem = NULL;
 	pon->num_flows = 0;
+	pon->registrations--;
 	pon_dev_put(pon);
 	mutex_unlock(&pon_register_lock);
 }
@@ -580,8 +575,8 @@ struct pon_omci_port *pon_omci_port_create(struct device *parent,
 		goto out_put;
 	}
 
-	/* ponN now has the port as a child, which keeps it. */
-	put_device(&pon->dev);
+	/* The port keeps the reference pon_dev_get() gave until it goes. */
+	pon->registrations++;
 	mutex_unlock(&pon_register_lock);
 
 	pon_omci_debugfs_init(port);
@@ -619,12 +614,12 @@ void pon_omci_port_remove(struct pon_omci_port *port)
 	skb_queue_purge(&port->rxq);
 
 	/*
-	 * Hold ponN for pon_dev_put(), which unregisters it when the port was
-	 * its last child.
+	 * Drop the port's registration; pon_dev_put() unregisters ponN when
+	 * the data path has gone as well.
 	 */
 	mutex_lock(&pon_register_lock);
-	get_device(parent);
 	device_unregister(&port->dev);
+	to_pon_device(parent)->registrations--;
 	pon_dev_put(to_pon_device(parent));
 	mutex_unlock(&pon_register_lock);
 }
