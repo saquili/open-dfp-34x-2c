@@ -16,10 +16,11 @@ Overview
 
 The driver implements these devlink objects and no others:
 
-- 22 driver-specific parameters, all of mode ``runtime``. They configure the
+- 24 driver-specific parameters, all of mode ``runtime``. They configure the
   malformed-frame (DoS) checks, the four storm-control classes that ``tc``
-  cannot describe, the header capture, loop detection and the ONU's serial
-  number (see "Parameters").
+  cannot describe, the limit on the frames handed to the CPU, the header
+  capture, loop detection, and the ONU's serial number and password (see
+  "Parameters").
 - One region, ``frame_capture``, that holds a snapshot of the header capture
   (see "The region frame_capture").
 - The reply to ``devlink dev info``, which names the part and the revision of
@@ -35,8 +36,9 @@ Documentation/networking/dsa/rtl9602c.rst describes them.
 The hardware behind the parameters is described on these pages, which the
 sections below name again where a parameter uses them:
 
-- Documentation/networking/dsa/rtl9602c-acl-qos.rst: the DoS checks, the meters
-  and storm control, loop detection and the header capture.
+- Documentation/networking/dsa/rtl9602c-acl-qos.rst: the DoS checks, the meters,
+  storm control and the limit on the frames handed to the CPU, loop detection
+  and the header capture.
 - Documentation/networking/dsa/rtl9602c-bridging.rst: the reserved group
   addresses that storm control leaves alone.
 - Documentation/networking/dsa/rtl9602c.rst: the switch core, the ports, the
@@ -112,7 +114,7 @@ Interfaces to user space
 ------------------------
 
 - ``devlink dev show`` and ``devlink dev info platform/1b000000.switch``.
-- ``devlink dev param show`` and ``devlink dev param set`` on the 22
+- ``devlink dev param show`` and ``devlink dev param set`` on the 24
   parameters.
 - ``devlink region show``, ``new``, ``read``, ``dump`` and ``del`` on
   ``platform/1b000000.switch/frame_capture``.
@@ -148,10 +150,11 @@ on an OLT; the storm-control rates match their settings.
 Parameters
 ==========
 
-All 22 parameters are driver-specific, of type u8, u32 or string, and of mode
+All 24 parameters are driver-specific, of type u8, u32 or string, and of mode
 ``runtime``: a value takes effect at once. There are six for the DoS checks,
-eight for storm control, four for the header capture, three for loop detection
-and one for the ONU's serial number. The driver registers them at setup. If it
+eight for storm control, one for the limit on the frames handed to the CPU,
+four for the header capture, three for loop detection and two for the ONU's
+serial number and password. The driver registers them at setup. If it
 cannot, it logs ``devlink parameters unavailable; the switch's own features
 cannot be configured`` and the switch carries on without them.
 
@@ -199,7 +202,8 @@ A warm restart of the CPU and a reload of the module leave the switch running
 with its registers as they were. The driver therefore writes the state that the
 parameters control every time it probes, and the parameters start from the
 defaults that the tables give: the DoS checks off with their thresholds at 0;
-storm control off with every meter free; loop detection off; the header
+storm control off with every meter free; the frames handed to the CPU limited
+to 5000 a second, which takes one meter back; loop detection off; the header
 capture armed in mode 1, which never captures, with both port masks 15 and
 reason 0; and no serial number. The one exception is ``loop_detect_period``,
 which setup does not write, so it keeps the value it had. Nothing is saved:
@@ -213,7 +217,7 @@ defaults, and the serial number is empty.
    * - Fact
      - Tag
      - Checked by
-   * - The driver registers 22 parameters, all of mode ``runtime``, at setup.
+   * - The driver registers 24 parameters, all of mode ``runtime``, at setup.
      - M
      - ``devlink dev param show platform/1b000000.switch`` lists them after
        boot, and every measurement below sets or reads one of them.
@@ -227,17 +231,18 @@ defaults, and the serial number is empty.
        the state that the parameters control: the DoS checks, their port mask
        and their thresholds to 0 (the driver's copy of the thresholds with
        them); storm control off, every meter free and every exceeded latch
-       cleared; loop detection off, with its latches cleared; and the capture
-       armed in mode 1 with both port masks 15 and reason 0.
+       cleared, then the CPU limit at 5000 on one meter; loop detection off,
+       with its latches cleared; and the capture armed in mode 1 with both port
+       masks 15 and reason 0.
      - M, T
      - M: land and blat enabled before ``rmmod`` were still dropping after
        ``insmod`` until setup wrote the registers, and afterwards no check was
        enabled. A reset that cleared the storm-control classes and meters but
        not the exceeded latches left meter 15 reading exceeded with nothing
        bound to it. The capture latch reads ``0x00201fe0`` (mode 0, both masks
-       ``0xf``, VALID set) after a full chip reset. T: the board boots to a
-       shell with loop detection off, so that a loaded driver does not start
-       sending probes by itself.
+       ``0xf``, VALID set) after a full chip reset. ``cpu_rx_pps`` reads 5000
+       after boot. T: the board boots to a shell with loop detection off, so
+       that a loaded driver does not start sending probes by itself.
    * - Teardown destroys the region and unregisters the parameters before the
        devlink instance goes, so that the next probe does not find their names
        taken. Parameters whose registration failed at setup are not
@@ -641,6 +646,62 @@ Documentation/networking/dsa/rtl9602c-acl-qos.rst ("Loop detection").
      - I
      - Looping two ports to each other. Load-bearing for the far-end port in
        the log line only.
+
+The limit on frames to the CPU
+------------------------------
+
+The switch hands the CPU every frame addressed to the stick, trapped or copied
+to it, and a flood of them would take the CPU's time. ``cpu_rx_pps`` bounds the
+frames that the CPU port's queues 0 to 6 hand the CPU together; the switch drops
+the rest. Queue 7, which carries the OMCI messages, is not limited. The meter
+behind it and the measurements that chose 5000 are on
+Documentation/networking/dsa/rtl9602c-acl-qos.rst ("The limit on frames to the
+CPU").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``cpu_rx_pps``
+     - u32
+     - runtime
+     - The frames a second that the CPU port's queues 0 to 6 hand the CPU
+       together: 1 to 524286 (``0x7fffe``), or 0, which lifts the limit.
+       Default 5000. A rate takes a meter of the CPU port's bank, meters 8 to
+       15, and is refused with ``-ENOSPC`` while storm control holds all
+       eight; 0 gives the meter back. Read from the meter, 0 without one. A
+       value of 524287 or above is refused with ``-ERANGE``.
+
+To lift the limit and set it again::
+
+    devlink dev param set platform/1b000000.switch \
+            name cpu_rx_pps value 0 cmode runtime
+    devlink dev param set platform/1b000000.switch \
+            name cpu_rx_pps value 5000 cmode runtime
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``cpu_rx_pps`` reads 5000 after boot and reads back each value set, 0
+       once the limit is lifted, and the CPU takes no more frames than it says.
+     - M
+     - Read after boot and after setting 0, 1000, 2000, 5000, 10000, 15000 and
+       20000, each under a flood to the stick's own address (the figures are
+       on the *acl-qos* page).
+   * - The meter comes from the CPU port's bank, the highest free one, while
+       storm control takes meters from the lowest.
+     - M, I
+     - M: the ``qos`` view showed meter 15 named by all seven queues
+       (``meters 001fffff``). I: the refusal with ``-ENOSPC`` while storm
+       control holds meters 8 to 15 is read from the code.
 
 GPON serial number
 ------------------

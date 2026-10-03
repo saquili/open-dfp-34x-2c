@@ -728,6 +728,106 @@ out:
 }
 
 /*
+ * A meter of @port's bank, which its queues' packet-rate limit can name: the
+ * highest free one, as storm control takes the lowest.
+ */
+static int rtl9602c_meter_alloc_bank(struct rtl9602c_priv *p, int port)
+{
+	unsigned int first = RTL9602C_METER_BANK(port);
+	unsigned int i = first + RTL9602C_METER_BANK_SIZE;
+
+	lockdep_assert_held(&p->meter_lock);
+	while (i-- > first) {
+		if (!test_bit(i, p->meter_used)) {
+			set_bit(i, p->meter_used);
+			return (int)i;
+		}
+	}
+	return -ENOSPC;
+}
+
+/**
+ * rtl9602c_cpu_rate_get() - read the limit on the frames handed to the CPU
+ * @p: the switch
+ *
+ * Read from the meter that the CPU port's queues are bound to.
+ *
+ * Context: takes meter_lock.
+ *
+ * Return: packets a second, or 0 when there is no limit.
+ */
+u32 rtl9602c_cpu_rate_get(struct rtl9602c_priv *p)
+{
+	u32 rate = 0;
+
+	mutex_lock(&p->meter_lock);
+	if (p->cpu_meter >= 0)
+		rate = FIELD_GET(RTL9602C_METER_CFG_HI_RATE,
+				 rtl9602c_r(p, RTL9602C_METER_CFG_HI(p->cpu_meter)));
+	mutex_unlock(&p->meter_lock);
+	return rate;
+}
+
+/**
+ * rtl9602c_cpu_rate_set() - limit the frames the switch hands the CPU
+ * @p: the switch
+ * @rate: packets a second for the queues of %RTL9602C_CPU_RATE_QUEUES
+ *	together, below %RTL9602C_METER_CFG_HI_RATE_MAX, which the caller
+ *	checks; 0 lifts the limit
+ *
+ * The CPU port's queues 0 to 6 count their frames against one meter of the
+ * port's bank in packet mode, so that the switch drops a flood to the CPU at
+ * the CPU port instead of handing it to the conduit, whose receive interrupts
+ * would take the CPU's time before its ring overflowed. Queue 7 is left out:
+ * the OMCI messages travel at internal priority 7, so the limit never holds
+ * back the OLT's management channel. The meter is programmed and named before
+ * the queues are enabled, and the queues are disabled before the meter is
+ * given back.
+ *
+ * Context: takes meter_lock.
+ *
+ * Return: 0, or -ENOSPC when every meter of the CPU port's bank is taken.
+ */
+int rtl9602c_cpu_rate_set(struct rtl9602c_priv *p, u32 rate)
+{
+	int meter, err = 0;
+	unsigned int q;
+	u32 idx = 0;
+
+	mutex_lock(&p->meter_lock);
+	meter = p->cpu_meter;
+	if (!rate) {
+		if (meter < 0)
+			goto out;
+		rtl9602c_w(p, RTL9602C_QUEUE_RATE_EN(RTL9602C_PORT_CPU), 0);
+		rtl9602c_meter_free(p, (unsigned int)meter);
+		p->cpu_meter = -1;
+		goto out;
+	}
+
+	if (meter < 0) {
+		meter = rtl9602c_meter_alloc_bank(p, RTL9602C_PORT_CPU);
+		if (meter < 0) {
+			err = meter;
+			goto out;
+		}
+		p->cpu_meter = meter;
+	}
+
+	rtl9602c_meter_program(p, (unsigned int)meter, rate);
+	for (q = 0; q < RTL9602C_QUEUES; q++)
+		if (RTL9602C_CPU_RATE_QUEUES & BIT(q))
+			idx |= (u32)(meter - RTL9602C_METER_BANK(RTL9602C_PORT_CPU)) <<
+			       RTL9602C_QUEUE_RATE_METER_SHIFT(q);
+	rtl9602c_w(p, RTL9602C_QUEUE_RATE_METER(RTL9602C_PORT_CPU), idx);
+	rtl9602c_w(p, RTL9602C_QUEUE_RATE_EN(RTL9602C_PORT_CPU),
+		   RTL9602C_CPU_RATE_QUEUES);
+out:
+	mutex_unlock(&p->meter_lock);
+	return err;
+}
+
+/*
  * Storm control from tc: each flower rule takes a meter of its own, programmed
  * at the rule's packet rate, and enables its class on its port. A class has one
  * meter selector per port, so of several rules for one class and port the one

@@ -2042,6 +2042,18 @@ struct rtl9602c_field {
  */
 #define RTL9602C_QUEUE_RATE_EN(p)		(0x02d86c + 4 * (p))
 #define RTL9602C_QUEUE_RATE_METER(p)		(0x02d87c + 4 * (p))
+#define RTL9602C_QUEUE_RATE_METER_SHIFT(q)	(3 * (q))
+#define RTL9602C_METER_BANK_SIZE		8
+#define RTL9602C_METER_BANK(port)		(((port) & 1) * RTL9602C_METER_BANK_SIZE)
+
+/*
+ * The limit on the frames the switch hands the CPU (rtl9602c_cpu_rate_set()):
+ * the CPU port's queues that it binds, and its rate at setup in packets a
+ * second. Queue 7 is left out: it carries internal priority 7, which the
+ * switch gives the OMCI messages.
+ */
+#define RTL9602C_CPU_RATE_QUEUES		GENMASK(6, 0)
+#define RTL9602C_CPU_RATE_DEFAULT		5000
 #define RTL9602C_METER_CFG_HI(i)		(0x025004 + 8 * (i))
 #define RTL9602C_METER_CFG_LO(i)		(0x025008 + 8 * (i))
 #define RTL9602C_METER_CFG_HI_RATE		GENMASK(18, 0)
@@ -2866,13 +2878,18 @@ struct rtl9602c_priv {
 	/** @hwtstamp: each port's timestamping configuration, as set */
 	struct kernel_hwtstamp_config hwtstamp[RTL9602C_NUM_PORTS];
 	/**
-	 * @meter_lock: serialises the meters and the storm-control state,
-	 * @meter_used, @storm, @storm_seq and @storm_meter, which tc and
-	 * devlink both change
+	 * @meter_lock: serialises the meters, @meter_used and @cpu_meter, and
+	 * the storm-control state, @storm, @storm_seq and @storm_meter, which
+	 * tc and devlink both change
 	 */
 	struct mutex meter_lock;
 	/** @meter_used: the meters handed out */
 	DECLARE_BITMAP(meter_used, RTL9602C_METER_COUNT);
+	/**
+	 * @cpu_meter: the meter that limits the frames handed to the CPU, or
+	 * -1 (rtl9602c_cpu_rate_set())
+	 */
+	int cpu_meter;
 	/** @storm: storm-control rules from tc, one meter each */
 	struct {
 		/** @storm.cookie: the flower rule's cookie */
@@ -2963,6 +2980,8 @@ struct rtl9602c_priv {
  *	number
  * @RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD: gpon_password, the password the
  *	ONU gives when the OLT asks for it
+ * @RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS: cpu_rx_pps, the packets a second
+ *	the switch hands the CPU
  */
 enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_BASE = DEVLINK_PARAM_GENERIC_ID_MAX,
@@ -2989,6 +3008,7 @@ enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_LOOPDET_PERIOD,
 	RTL9602C_DEVLINK_PARAM_ID_GPON_SERIAL,
 	RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
+	RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
 };
 
 /*
@@ -3150,6 +3170,8 @@ int rtl9602c_storm_param_find(u32 id);
 u32 rtl9602c_storm_ports_get(struct rtl9602c_priv *p, unsigned int cls);
 int rtl9602c_storm_ports_set(struct rtl9602c_priv *p, unsigned int cls, u32 ports);
 u32 rtl9602c_storm_rate_get(struct rtl9602c_priv *p, unsigned int cls);
+u32 rtl9602c_cpu_rate_get(struct rtl9602c_priv *p);
+int rtl9602c_cpu_rate_set(struct rtl9602c_priv *p, u32 rate);
 int rtl9602c_storm_rate_set(struct rtl9602c_priv *p, unsigned int cls, u32 rate);
 int rtl9602c_table_op(struct rtl9602c_priv *p, unsigned int type,
 		      unsigned int method, unsigned int addr, u32 *data,

@@ -1108,6 +1108,9 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 		strscpy(ctx->val.vstr, p->gpon_have_password ? "set" : "",
 			sizeof(ctx->val.vstr));
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS:
+		ctx->val.vu32 = rtl9602c_cpu_rate_get(p);
+		return 0;
 	default:
 		break;
 	}
@@ -1242,6 +1245,11 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 			     FIELD_PREP(RTL9602C_LOOPDET_PROBE_CFG_PERIOD,
 					ctx->val.vu32));
 		return 0;
+	/* 0 lifts the limit; the maximum is a meter's "no limit". */
+	case RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS:
+		if (ctx->val.vu32 >= RTL9602C_METER_CFG_HI_RATE_MAX)
+			return -ERANGE;
+		return rtl9602c_cpu_rate_set(p, ctx->val.vu32);
 	default:
 		break;
 	}
@@ -1273,7 +1281,8 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
  * The driver's devlink parameters, all runtime: the DoS checks; a packet
  * rate and a port mask for each storm-control class tc cannot describe
  * (unknown unicast, unknown multicast, DHCP, IGMP and MLD); the frame
- * capture; loop detection; the ONU's serial number.
+ * capture; loop detection; the ONU's serial number and password; the limit
+ * on the frames the switch hands the CPU.
  */
 static const struct devlink_param rtl9602c_devlink_params[] = {
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_DOS_PORTS,
@@ -1350,6 +1359,9 @@ static const struct devlink_param rtl9602c_devlink_params[] = {
 	/* The password the ONU gives the OLT when asked; reads back "set". */
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
 				 "gpon_password", DEVLINK_PARAM_TYPE_STRING,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
+				 "cpu_rx_pps", DEVLINK_PARAM_TYPE_U32,
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 };
 
@@ -1470,6 +1482,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	bitmap_zero(p->meter_used, RTL9602C_METER_COUNT);
 	for (i = 0; i < ARRAY_SIZE(p->storm_meter); i++)
 		p->storm_meter[i] = -1;
+	p->cpu_meter = -1;
 	rtl9602c_w(p, RTL9602C_METER_EXCEEDED, GENMASK(RTL9602C_METER_COUNT - 1, 0));
 	mutex_unlock(&p->meter_lock);
 
@@ -1479,6 +1492,13 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	 * the driver writes classifier entries of its own.
 	 */
 	rtl9602c_filter_qos_reset(p);
+
+	/*
+	 * A flood to the CPU is held at the switch, at a rate that leaves the
+	 * CPU most of its time (see rtl9602c_cpu_rate_set()).
+	 */
+	if (rtl9602c_cpu_rate_set(p, RTL9602C_CPU_RATE_DEFAULT))
+		pr_err("no meter left for the CPU port: frames to the CPU are not limited\n");
 
 	/* Port mirroring survives a warm restart too: none. */
 	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, 0);

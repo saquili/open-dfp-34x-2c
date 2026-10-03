@@ -11,7 +11,8 @@ Besides forwarding frames, the switch core of the RTL9602C judges, marks,
 counts, queues and paces them. This page describes those blocks and how the
 driver sets each of them up: the ACL and the parser's field selectors; the
 classifier, which translates VLANs and gives frames their GEM stream; the
-sixteen shared meters and the storm control that uses them; the ingress
+sixteen shared meters, the storm control that uses them and the limit on the
+frames handed to the CPU; the ingress
 policer of each port; the malformed-frame (DoS) checks and the loop detection;
 the choice of a frame's internal priority and the DCB maps; the egress queues,
 the scheduler and the shaper of each port; the buffer page accounting and the
@@ -158,8 +159,8 @@ function; every name is prefixed ``rtl9602c_``.
        ``port_del_dscp_prio``, ``port_set_apptrust``, ``port_get_apptrust``
      - "Priority selection and the DCB maps".
    * - ``devlink_param_get``, ``devlink_param_set``
-     - "Malformed-frame (DoS) checks", "Storm control", "Loop detection" and
-       "Frame capture".
+     - "Malformed-frame (DoS) checks", "Storm control", "The limit on frames to
+       the CPU", "Loop detection" and "Frame capture".
    * - ``setup``
      - "Setup for these blocks".
 
@@ -188,7 +189,8 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers and fields of these blocks, the tables of storm classes
        and devlink parameters, and the driver's state for them (``acl``,
-       ``storm``, ``egress``, ``hsb``, ``dos_flood_th``, ``cf_used``).
+       ``storm``, ``meter_used``, ``cpu_meter``, ``egress``, ``hsb``,
+       ``dos_flood_th``, ``cf_used``).
 
 Configuration
 -------------
@@ -1229,10 +1231,13 @@ Meters
 ======
 
 Sixteen meters are shared by everything that limits a rate by packets: the
-storm control of ``tc`` and of devlink. A meter has a rate, a bucket size and a
-unit, and it sets a latching bit when it drops a frame. The driver programs
-every meter that it hands out in packet mode, with the default bucket, because
-byte mode does not police on this chip.
+storm control of ``tc`` and of devlink, and the limit on the frames handed to
+the CPU. A meter has a rate, a bucket size and a unit, and it sets a latching
+bit when it drops a frame. The driver programs every meter that it hands out in
+packet mode, with the default bucket, because byte mode does not police on this
+chip. ``tc`` and devlink reach the meters from different paths, so the pool
+and the state of storm control and of the CPU limit are changed under one
+mutex, ``meter_lock``.
 
 .. list-table::
    :header-rows: 1
@@ -1285,7 +1290,8 @@ byte mode does not police on this chip.
    * - A meter handed back is first reset (rate
        ``RTL9602C_METER_CFG_HI_RATE_MAX``, the default bucket, byte mode) so
        that it limits nothing while it has no owner. The sixteen meters are one
-       pool for the storm control of ``tc`` and of devlink.
+       pool for the storm control of ``tc`` and of devlink and for the CPU
+       limit, which takes the highest free meter of the CPU port's bank.
      - M
      - An ARP limit from ``tc`` on meter 0 and an unknown-unicast limit from
        devlink on meter 1 held at the same time; deleting the rules left no
@@ -2127,6 +2133,85 @@ Programming a tbf, ``rtl9602c_setup_tbf()``, in order:
 The steps are checked by the TBF behaviour: the rate of a port under a tbf, and
 the port unlimited again after the removal.
 
+The limit on frames to the CPU
+==============================
+
+The switch hands the CPU every frame addressed to the stick, trapped to the CPU
+or copied to it, through the egress queues of the CPU port. Each such frame
+costs the CPU its share of the conduit's receive work, so a flood of them takes
+the CPU's time long before the conduit's ring is full. The packet-rate limit of
+the egress queues (see "Measured, not driven") applies to the CPU port as to
+the others, and the driver binds queues 0 to 6 of the CPU port to one meter, so
+that the switch drops what exceeds the limit before it reaches the conduit.
+Queue 7 is left out: the switch gives the OMCI messages internal priority 7,
+which the CPU port's priority map sends to queue 7 (see "Priority selection and
+the DCB maps"), so the limit never holds back the OLT's management channel. The
+rate is the devlink parameter ``cpu_rx_pps``, 5000 frames a second from setup;
+0 lifts the limit (*devlink*).
+
+``rtl9602c_cpu_rate_set()``, in order, under ``meter_lock``:
+
+1. For a rate of 0: clear the CPU port's enables in ``RTL9602C_QUEUE_RATE_EN``,
+   then reset the meter and give it back. Purpose: no queue counts against a
+   meter that has no owner. (T)
+2. Without a meter: take the highest free meter of the CPU port's bank, meters
+   8 to 15, or fail with ``-ENOSPC``. Purpose: a queue's 3-bit index names only
+   a meter of its port's bank, and storm control takes meters from the lowest.
+   (M)
+3. Program the meter in packet mode at the rate, with the default bucket.
+   Purpose: one rate unit is one frame a second (see "Meters"). (M)
+4. Write the meter's index within the bank into the fields of queues 0 to 6 of
+   ``RTL9602C_QUEUE_RATE_METER``, then set their bits in
+   ``RTL9602C_QUEUE_RATE_EN`` (``0x7f``). Purpose: the queues count against the
+   meter, and none is enabled before it names the meter. (M)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The CPU port's queues are limited as those of any port: with queues 0 to
+       6 bound to one meter of the CPU port's bank in packet mode, the CPU
+       takes from a flood the frames that the meter lets through, and the switch
+       drops the rest. The index is relative to the bank: index 0 names meter
+       8.
+     - M
+     - Floods of about 280,000 frames/s from the host to the stick's own
+       address, 10 s each: at ``cpu_rx_pps`` 20000 the CPU took 198,291 frames
+       and its engine missed 2,338; at 5000, 50,478 and 136; with no limit,
+       306,733 and 2,492,686. In the middle of a flood, with the conduit's NAPI
+       deferral on, the CPU took 2047 frames/s at 2000, 5101 to 5134 at 5000
+       and 10191 to 10240 at 10000, its engine missing none. Setup left
+       ``port 3 queue rate enable 0000007f  meters 001fffff`` in the ``qos``
+       view: meter 15 for all seven queues. An earlier test that programmed
+       one of meters 0 to 7 and wrote its number as the index saw no limit.
+   * - The limit leaves the OMCI messages alone.
+     - M
+     - During floods with the limit at 20000 and at 5000 and with no limit,
+       every OMCI message that the PON MAC received, two or three in each 10 s,
+       reached the OMCI port.
+   * - The limit spares the CPU only well below what the CPU can take. A frame
+       costs the CPU 30 to 40 µs even when the conduit takes many in one poll,
+       and about 100 µs when it arrives alone with an interrupt of its own. At
+       20000 frames/s the CPU kept less of its time than with no limit, where
+       the conduit's ring overflows and every poll takes a full batch. Hence
+       the 5000 at setup.
+     - M
+     - A shell loop that takes 1.2 s on a stick at rest, timed during the
+       flood: 3.7 s with no limit, 5.3 s at 20000, 6.8 s at 10000, 2.3 s at 5000
+       and 1.5 s at 2000. With the conduit's NAPI deferral on
+       (``napi_defer_hard_irqs`` 2, as the board's image sets it): 3.7 s with
+       no limit, 5.6 s at 20000, 2.1 s at 10000, 1.6 s at 5000 and 1.4 s at
+       2000. The costs per frame follow from these times and the frames the
+       CPU took in them.
+   * - The limit bounds every frame that queues 0 to 6 hand the CPU, whatever
+       sent it there, so it also bounds what the CPU routes or bridges in
+       software, IPv6 in router mode among it, to 5000 frames a second in all.
+     - I
+     - Follows from the rows above; not measured with routed traffic.
+
 Buffer pages and qdepth
 =======================
 
@@ -2476,19 +2561,23 @@ state that the driver depends on.
    permits off, unmatched frames let through, and no limit on any port.
    Purpose: no rule, entry, map or limit that an earlier kernel wrote stays in
    force with no record of it in the driver. (M)
-7. Point field selectors 0 and 1 at the L4 source and destination ports.
+7. Bind queues 0 to 6 of the CPU port to the highest meter of its bank at 5000
+   frames a second (``rtl9602c_cpu_rate_set()``, see "The limit on frames to
+   the CPU"). A failure is logged (``no meter left for the CPU port``).
+   Purpose: the switch drops a flood to the CPU. (M)
+8. Point field selectors 0 and 1 at the L4 source and destination ports.
    Purpose: ACL rules can match a port. (M)
-8. Set ``RTL9602C_RSVDMC_CTRL_STORM_EXEMPT`` on the five control-protocol
+9. Set ``RTL9602C_RSVDMC_CTRL_STORM_EXEMPT`` on the five control-protocol
    addresses, by read-modify-write. Purpose: a flood limit does not police them.
    (M)
-9. Switch loop detection off and clear its latches. Purpose: a loaded driver
-   must not start sending probes by itself. (T)
-10. Arm the frame capture in mode none, all four ports both ways, reason 0.
+10. Switch loop detection off and clear its latches. Purpose: a loaded driver
+    must not start sending probes by itself. (T)
+11. Arm the frame capture in mode none, all four ports both ways, reason 0.
     Purpose: no capture predates the driver. (M)
-11. Register the devlink parameters and create the ``frame_capture`` region. A
+12. Register the devlink parameters and create the ``frame_capture`` region. A
     failure is logged (``devlink parameters unavailable``, ``no devlink
     region``) and setup carries on. (M)
-12. Clear the per-port stream entries and refresh the bridge state, which
+13. Clear the per-port stream entries and refresh the bridge state, which
     rebuilds the stream entries; with no port bridged yet it installs none.
     Purpose: the entries follow the bridge (see "The classifier"). (T)
 
@@ -2499,11 +2588,12 @@ checks, whose two classes differ only in DSCP. Step 3 by the boot log line. Step
 classes, meters and latches read after a reload and after a full chip reset.
 Step 6 by ``qos`` and ``cf`` after a warm reboot from a kernel that had left
 rules, entries, maps and limits in force (see "Reach and state"). Step 7 by the
-port matches that drop their traffic, and step 8 by the frame capture in drop
-mode. Step 9 by the board booting with the block off, step 10 by the latch
-register read after a reset and armed in mode none, and step 11 by the
-parameters and the region being there again after a reload. Step 12 by bridged
-upstream traffic and a routing test, which find the entries in ``cf``.
+floods of "The limit on frames to the CPU". Step 8 by the port matches that drop
+their traffic, and step 9 by the frame capture in drop mode. Step 10 by the
+board booting with the block off, step 11 by the latch register read after a
+reset and armed in mode none, and step 12 by the parameters and the region
+being there again after a reload. Step 13 by bridged upstream traffic and a
+routing test, which find the entries in ``cf``.
 
 Measured, not driven
 ====================
@@ -2525,21 +2615,13 @@ on them. They were measured with register writes made outside the driver.
        0 to 7 on ports 0 and 2, meters 8 to 15 (index 0 to 7) on ports 1 and
        3. It limits packets per second, per queue, so it has no form in bytes
        for ``tc``, and a tbf in an ets band is refused rather than applied to
-       the whole port. Setup writes both words 0 on every port.
+       the whole port. Setup writes both words 0 on every port; the driver
+       then drives only the CPU port's (see "The limit on frames to the
+       CPU").
      - M
      - Frames from the CPU at the priority of queue 5: 500 packets/s asked, 511
        measured; queue 2 of the same port unaffected at the same time; clearing
        the enable restored the rate.
-   * - The CPU port's queues are limited the same way, so the limit can keep a
-       flood to the CPU below what the CPU's receive engine takes; the switch
-       drops the excess. The driver does not use it.
-     - M
-     - Queues 0 to 6 of port 3 bound to index 0, meter 8, in packet mode at
-       1,000 packets/s, with the enables set: a flood of 256,000 frames/s to
-       the stick's own address put 10,589 frames into the CPU in 10 s and none
-       into its engine's missed count, where with no limit it put 317,805 and
-       2,282,211. An earlier test that programmed one of meters 0 to 7 and
-       wrote its number as the index saw no limit at all.
    * - The range-checker banks of the ACL: 8 VLAN-ID checkers at ``0x0151cc``
        (one word each: type bits 25:24, upper bound 23:12, lower 11:0), 32
        IP-address checkers at ``0x0151ec`` (five words each), 32 L4-port
