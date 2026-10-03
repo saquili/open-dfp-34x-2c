@@ -683,6 +683,27 @@ static int pon_gem_port_obj_del(struct net_device *dev, const void *ctx,
 	return 0;
 }
 
+/*
+ * Whether the bridge sees a multicast router behind an offloaded GEM interface
+ * goes to the MAC: a MAC that forwards in hardware needs it to send the
+ * multicast no host asked for only where the bridge would. Other attributes,
+ * and every attribute of a GEM interface that is not offloaded, get
+ * -EOPNOTSUPP and stay in software.
+ */
+static int pon_gem_port_attr_set(struct net_device *dev, const void *ctx,
+				 const struct switchdev_attr *attr,
+				 struct netlink_ext_ack *extack)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	if (attr->id != SWITCHDEV_ATTR_ID_PORT_MROUTER || !gem->offloaded ||
+	    !gem->pon->ops->gem_mrouter)
+		return -EOPNOTSUPP;
+
+	gem->pon->ops->gem_mrouter(gem->pon, gem->flow, attr->u.mrouter);
+	return 0;
+}
+
 static int pon_gem_switchdev_blocking_event(struct notifier_block *nb,
 					    unsigned long event, void *ptr)
 {
@@ -697,6 +718,10 @@ static int pon_gem_switchdev_blocking_event(struct notifier_block *nb,
 	case SWITCHDEV_PORT_OBJ_DEL:
 		err = switchdev_handle_port_obj_del(dev, ptr, pon_gem_dev_check,
 						    pon_gem_port_obj_del);
+		return notifier_from_errno(err);
+	case SWITCHDEV_PORT_ATTR_SET:
+		err = switchdev_handle_port_attr_set(dev, ptr, pon_gem_dev_check,
+						     pon_gem_port_attr_set);
 		return notifier_from_errno(err);
 	}
 

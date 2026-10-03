@@ -956,10 +956,11 @@ Bridging and switchdev offload
 A GEM interface is a bridge port like any other, and when the MAC can forward
 between its GEM port and the rest of the bridge in hardware, the class offloads
 it. The MAC's part is the optional pair ``gem_bridge_join`` and
-``gem_bridge_leave``, and the optional pair ``gem_vlan_add`` and
-``gem_vlan_del`` for the bridge VLANs (see "The driver interface"). The class's
-part is the switchdev offload of the port and the routing of the bridge's VLAN
-objects, described in the rows below and in "Joining a bridge" under
+``gem_bridge_leave``, the optional pair ``gem_vlan_add`` and ``gem_vlan_del``
+for the bridge VLANs, and the optional ``gem_mrouter`` for the multicast routers
+the bridge sees (see "The driver interface"). The class's part is the switchdev
+offload of the port and the routing of the bridge's VLAN objects and of its
+router state, described in the rows below and in "Joining a bridge" under
 "Sequences".
 
 .. list-table::
@@ -1009,6 +1010,20 @@ objects, described in the rows below and in "Joining a bridge" under
      - Design choice, load-bearing for a bridge with several GEM interfaces:
        removing a VLAN from one of two GEM interfaces that share it must leave
        the traffic on the other going.
+   * - The bridge's view of an offloaded GEM interface as a multicast router
+       port (``SWITCHDEV_ATTR_ID_PORT_MROUTER``), which it takes from the
+       queries it snoops and from the port's ``multicast_router`` setting, goes
+       to ``gem_mrouter``. Other attributes, and every attribute of a GEM
+       interface that is not offloaded, get ``-EOPNOTSUPP`` and stay in
+       software. A MAC that forwards multicast in hardware needs the router
+       state to send the multicast that no host asked for only where the bridge
+       would: in a PON the router sits behind a GEM port.
+     - M
+     - On the RTL9602C, an IGMP general query from the network side made the
+       multicast GEM interface a router port, and the PON port then dropped
+       unregistered IPv4 multicast; turning snooping off made the bridge drop
+       the router port and the PON port flood again (see the switch's
+       *bridging* page, "Multicast snooping").
 
 The pon generic netlink family
 ==============================
@@ -1664,6 +1679,12 @@ The data path operations
      - M
      - With the VLANs passed down, 75 of 150,000 upstream frames reached the
        CPU; without them all did (see "Bridging and switchdev offload").
+   * - ``gem_mrouter(pon, flow, mrouter)`` is optional; RTNL is held. It says
+       that the bridge has started, or stopped, seeing a multicast router behind
+       the GEM port of ``flow``, and comes only while the port is offloaded.
+     - M
+     - The query and the snooping switch-off above (see "Bridging and
+       switchdev offload").
    * - ``pon_gem_rx(pon, flow, skb)`` is called from the MAC's receive path. It
        returns true when the flow has a GEM interface: the frame was
        delivered, or dropped because the interface is down. It returns false
@@ -1832,6 +1853,9 @@ What the class holds when it calls into the MAC, from the kernel-doc of
    * - ``gem_vlan_add``, ``gem_vlan_del``
      - RTNL.
      - ``gem_vlan_add`` only while the port is offloaded.
+   * - ``gem_mrouter``
+     - RTNL.
+     - Only while the port is offloaded.
    * - ``gem_xmit``
      - No lock; bottom halves are disabled.
      - Can run on several CPUs at once. The MAC owns the skb.

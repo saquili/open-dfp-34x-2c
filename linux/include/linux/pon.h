@@ -234,6 +234,14 @@ struct pon_device_ops {
 	 */
 	void (*gem_vlan_del)(struct pon_device *pon, unsigned int flow, u16 vid);
 	/**
+	 * @gem_mrouter: The bridge has started (mrouter true) or stopped
+	 * seeing a multicast router behind the GEM port of flow, from the
+	 * queries it snoops or from the port's multicast_router setting.
+	 * Called with RTNL held, and only while the port is offloaded.
+	 */
+	void (*gem_mrouter)(struct pon_device *pon, unsigned int flow,
+			    bool mrouter);
+	/**
 	 * @dev_status: Fill st with the state of the transmission convergence
 	 * layer: the activation state, the identifiers the OLT assigned, the
 	 * alarms present now and the totals. st arrives set to "nothing
