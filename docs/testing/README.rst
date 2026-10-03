@@ -44,3 +44,10 @@ The runs, the oldest first:
     storm control, the address table and the frame limits, the PTP receive
     filter, the clock on timer 1 and the PON MAC's counters and queues. 27 of
     27 passed.
+
+``2026-10-03-run04``
+    The same cases and the new VLAN translation case on the RAM image built
+    from ``run04``, after the GPON state machine's O6, O7 and TO2, the
+    standard counters, a receive ring of OMCI's own, pause on the SerDes port,
+    BER_Interval and Ranging_Adjustment, the key exchange of encryption, and
+    the fix that makes a VLAN translation translate. 28 of 28 passed.
