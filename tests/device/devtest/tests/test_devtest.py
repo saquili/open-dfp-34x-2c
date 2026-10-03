@@ -397,6 +397,48 @@ class Cases(unittest.TestCase):
         self.assertIn("tc qdisc del dev pon clsact; tc qdisc del dev gem256 clsact; true", asked)
         self.assertEqual(outcome(added_first_decides=True)[0].status, FAIL)
 
+    def test_the_push_pop_case_wants_each_tag_operation_done(self):
+        def outcome(pops: bool):
+            trail: list[str] = []
+            rules: set[str] = set()
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    for dev, text in re.findall(r"tc filter add dev (\w+) ingress pref \d+ (.*)",
+                                                command):
+                        rules.add(f"{dev}:{text}")
+                    if "tc filter del" in command:
+                        rules.clear()
+                    return super().run(command, **kw)
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if "python3 -" not in command:
+                        return super().run(command, **kw)
+                    spec = re.search(r"python3 - \S+ \S+ (\S+) \d+", command).group(1)
+                    up = any("push id 3003" in r for r in rules)
+                    down = pops and any(r.startswith("pon:") and "pop" in r for r in rules)
+                    qinq = any("802.1ad" in r for r in rules)
+                    got = {"u": "c3003p5" if up else "u",
+                           "c3003p5": "u" if down else "c3003p5",
+                           "c3001p1": "s3004p3+c3001p1" if qinq else "c3001p1"}[spec]
+                    self.answers[0] = ("python3 -", 0, json.dumps({got: 200}) + "\n")
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("", 0, "")], trail)
+            bench = Bench("bench", [("python3 -", 0, ""),
+                                    ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            return cases_data.vlan_push_pop(ctx)
+        good = outcome(pops=True)
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertIn("200 of c3001p1 upstream: 200 as s3004p3+c3001p1", good.evidence)
+        bad = outcome(pops=False)
+        self.assertEqual(bad.status, FAIL)
+        self.assertIn("200 of c3003p5 downstream: 200 as c3003p5", bad.evidence)
+
     def test_the_multicast_case_wants_every_report_through_and_unasked_groups_kept_out(self):
         def outcome(reports_to_a_group_pass: bool):
             trail: list[str] = []

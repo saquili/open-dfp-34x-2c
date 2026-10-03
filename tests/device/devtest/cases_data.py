@@ -328,6 +328,136 @@ def vlan_translation(ctx: Context):
                        f"{XLATE_COUNT} of {net}/{pcp} downstream: {tags(down)}")
 
 
+# The tag-operation case: a C-tag pushed onto untagged frames upstream and
+# popped downstream, and an S-tag pushed in front of a C-tag upstream, at VIDs
+# no line is expected to carry and a tc priority of its own.
+PUSH_VID = 3003
+PUSH_PCP = 5
+QINQ_CVID = 3001
+QINQ_SVID = 3004
+QINQ_PCP = 3
+OPS_COUNT = 200
+OPS_PREF = 49040
+
+# Run by python3 on the bench host with SRC DST STACK COUNT: COUNT frames of
+# EtherType 0x88b5 from port SRC to port DST's address, with the tag stack
+# STACK, "u" for none or tags outer first joined by "+", c<vid>p<pcp> for
+# 802.1Q and s<vid>p<pcp> for 802.1ad, a millisecond apart. It prints, as JSON,
+# how many such frames DST received from SRC's address per tag stack, reading
+# a tag the NIC took off from PACKET_AUXDATA.
+STACKS = r"""
+import json, socket, struct, sys, threading, time
+src, dst, spec, count = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+mac = lambda p: bytes.fromhex(open("/sys/class/net/%s/address" % p).read().strip().replace(":", ""))
+TPID, NAME = {"c": 0x8100, "s": 0x88a8}, {0x8100: "c", 0x88a8: "s"}
+def tags(spec):
+    out = []
+    for t in ([] if spec == "u" else spec.split("+")):
+        vid, _, pcp = t[1:].partition("p")
+        out.append(struct.pack(">HH", TPID[t[0]], int(vid) | int(pcp or 0) << 13))
+    return b"".join(out)
+name = lambda tpid, tci: "%s%dp%d" % (NAME.get(tpid, "x"), tci & 0xfff, tci >> 13)
+rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+rx.bind((dst, 0))
+rx.setsockopt(263, 8, 1)
+rx.settimeout(0.5)
+seen, stop = {}, []
+def receive():
+    while not stop:
+        try:
+            data, anc, _, _ = rx.recvmsg(2048, socket.CMSG_SPACE(32))
+        except socket.timeout:
+            continue
+        if data[6:12] != mac(src):
+            continue
+        stack = []
+        for level, kind, value in anc:
+            if level == 263 and kind == 8:
+                st, _, _, _, _, tci, tpid = struct.unpack("IIIHHHH", value[:20])
+                if st & 0x10:
+                    stack.append(name(tpid if st & 0x40 else 0x8100, tci))
+        off = 12
+        while data[off:off + 2] in (b"\x81\x00", b"\x88\xa8"):
+            tpid, tci = struct.unpack(">HH", data[off:off + 4])
+            stack.append(name(tpid, tci))
+            off += 4
+        if data[off:off + 2] == b"\x88\xb5":
+            key = "+".join(stack) or "u"
+            seen[key] = seen.get(key, 0) + 1
+thread = threading.Thread(target=receive)
+thread.start()
+tx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+tx.bind((src, 0))
+frame = mac(dst) + mac(src) + tags(spec) + b"\x88\xb5" + bytes(46)
+for _ in range(count):
+    tx.send(frame)
+    time.sleep(0.001)
+time.sleep(1.5)
+stop.append(1)
+thread.join()
+print(json.dumps(seen))
+"""
+
+
+def stacks(ctx: Context, into: str, out_of: str, spec: str,
+           count: int = OPS_COUNT) -> dict[str, int]:
+    """Send count frames with the tag stack spec into the bench port into;
+    return what the bench port out_of received from it, per tag stack."""
+    command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
+        "python3", "-", into, out_of, spec, str(count))))
+    reply = ctx.bench.run(command, stdin=STACKS, timeout=60)
+    try:
+        return json.loads(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ValueError(f"the probe did not run: {(reply.err or reply.out).strip()!r}")
+
+
+def stack_text(seen: dict[str, int]) -> str:
+    return ", ".join(f"{n} as {k}" for k, n in sorted(seen.items())) or "nothing"
+
+
+@case("data.vlan-push-pop", "Data path",
+      "The switch pushes a C-tag onto untagged frames upstream and pops it from frames "
+      "downstream, and pushes an S-tag in front of a C-tag, with the priorities it is given")
+def vlan_push_pop(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    s = ctx.settings
+    rule = f"tc filter add dev {{}} ingress pref {OPS_PREF} {{}}"
+    drop = "; ".join(f"tc filter del dev {dev} ingress pref {OPS_PREF} 2>/dev/null"
+                     for dev in ("sfp", "pon")) + "; true"
+    added = clsact(ctx, ["sfp", "pon"])
+    try:
+        for dev, text in (
+                ("sfp", "protocol all flower skip_sw num_of_vlans 0 "
+                        f"action vlan push id {PUSH_VID} priority {PUSH_PCP}"),
+                ("pon", f"protocol 802.1Q flower skip_sw vlan_id {PUSH_VID} action vlan pop")):
+            reply = ctx.stick.run(rule.format(dev, text))
+            if not reply.ok:
+                return failed(f"tc refused {text!r} on {dev}: "
+                              f"{(reply.err or reply.out).strip()}")
+        up = stacks(ctx, s.subscriber_port, s.olt_port, "u")
+        down = stacks(ctx, s.olt_port, s.subscriber_port, f"c{PUSH_VID}p{PUSH_PCP}")
+        ctx.stick.run(drop)
+        text = (f"protocol 802.1Q flower skip_sw vlan_id {QINQ_CVID} action vlan push "
+                f"id {QINQ_SVID} priority {QINQ_PCP} protocol 802.1ad")
+        reply = ctx.stick.run(rule.format("sfp", text))
+        if not reply.ok:
+            return failed(f"tc refused {text!r} on sfp: {(reply.err or reply.out).strip()}")
+        qinq = stacks(ctx, s.subscriber_port, s.olt_port, f"c{QINQ_CVID}p1")
+    finally:
+        ctx.stick.run(drop.removesuffix("; true") + "; " +
+                      "".join(f"tc qdisc del dev {dev} clsact; " for dev in added) + "true")
+    want = OPS_COUNT * 0.99
+    pushed = f"c{PUSH_VID}p{PUSH_PCP}"
+    stacked = f"s{QINQ_SVID}p{QINQ_PCP}+c{QINQ_CVID}p1"
+    ok = up.get(pushed, 0) >= want and down.get("u", 0) >= want and qinq.get(stacked, 0) >= want
+    return verdict(ok, f"{OPS_COUNT} untagged frames upstream: {stack_text(up)}; "
+                       f"{OPS_COUNT} of {pushed} downstream: {stack_text(down)}; "
+                       f"{OPS_COUNT} of c{QINQ_CVID}p1 upstream: {stack_text(qinq)}")
+
+
 # The ACL case: frames of the probe's EtherType from the network side, against
 # drop and trap rules on the PON port at two tc priorities of its own. The CPU
 # gets a frame from the PON on the interface of its GEM port, so a software
