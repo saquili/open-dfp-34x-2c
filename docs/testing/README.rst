@@ -104,6 +104,17 @@ The runs, the oldest first:
     view, the order of the optics table's checks, the early console and the
     GPIO bank's compatible. 36 of 36 passed.
 
+``2026-10-04-run11``
+    The same cases and the new cases of the limit on the frames handed to the
+    CPU, the order of storm-control rules and the PCP rewrite, with the ACL
+    case now checking the rules' hit counts and the hardware clock's case
+    reading both pulses in one command, on the RAM image built from
+    ``run11``: the CPU limit with NAPI deferral on the conduit, storm
+    control policed by the rule of the lowest priority value, drops and traps
+    of broadcast, the group bit and ARP as ACL rules, the ACL's hit counts, the
+    CAM of the address table, the half PTP tag of a message to the stick's own
+    address and the PCP rewrite from the DCB rewrite table. 39 of 39 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
