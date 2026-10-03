@@ -2079,8 +2079,8 @@ Probe
    valid unicast address; otherwise warn and use a random one. Purpose: the
    interface has the unit's own address. (M)
 6. Allocate one ``METADATA_HW_PORT_MUX`` dst per switch port, with ``port_id``
-   the port number. Purpose: a received frame gets the dst of its source port.
-   (T)
+   the port number, and have the device free them, at a failed probe and at its
+   removal. Purpose: a received frame gets the dst of its source port. (T)
 7. Add the NAPI poll, and create the debugfs directory ``rtl9602c-eth`` with
    its files ``rxreason`` and ``rings``. Purpose: the poll does the receive
    work, and the reasons and the rings can be read back. (M)

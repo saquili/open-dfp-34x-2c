@@ -2012,6 +2012,16 @@ static void rtl9602c_eth_debugfs_put(void *d)
 	debugfs_remove_recursive(d);
 }
 
+/* The per-port dsts, freed at a failed probe and at the device's removal. */
+static void rtl9602c_eth_meta_free(void *data)
+{
+	struct rtl9602c_eth *priv = data;
+	unsigned int i;
+
+	for (i = 0; i < RTL9602C_SW_PORTS; i++)
+		metadata_dst_free(priv->port_meta[i]);
+}
+
 static int rtl9602c_eth_probe(struct platform_device *pdev)
 {
 	struct net_device *dev;
@@ -2099,6 +2109,10 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 		}
 		priv->port_meta[i]->u.port_info.port_id = i;
 	}
+	err = devm_add_action_or_reset(&pdev->dev, rtl9602c_eth_meta_free,
+				       priv);
+	if (err)
+		return err;
 
 	netif_napi_add(dev, &priv->napi, rtl9602c_eth_poll);
 
