@@ -626,7 +626,16 @@ enum {
 #define RTL9602C_PLOAM_US_PASSWORD	2
 #define RTL9602C_PLOAM_US_DYING_GASP	3
 #define RTL9602C_PLOAM_US_NO_MESSAGE	4
+#define RTL9602C_PLOAM_US_REI		8
 #define RTL9602C_PLOAM_US_ACKNOWLEDGE	9
+
+/*
+ * REI (G.984.3 clause 9.2.4.8): the BIP errors of the last BER interval, most
+ * significant octet first, then a 4-bit sequence number.
+ */
+#define RTL9602C_PLOAM_REI_ERRORS	2
+#define RTL9602C_PLOAM_REI_SEQ		6
+#define RTL9602C_PLOAM_REI_SEQ_MASK	GENMASK(3, 0)
 
 /* The broadcast ONU-ID downstream; no ONU-ID yet upstream. */
 #define RTL9602C_ONU_ONUID_UNASSIGNED	0xff
@@ -704,6 +713,38 @@ enum {
 #define RTL9602C_PLOAM_DS_CONFIGURE_PORTID	14
 #define RTL9602C_PLOAM_DS_EXTENDED_BURST_LENGTH	20
 #define RTL9602C_PLOAM_DS_PONID		21
+
+/*
+ * The downstream messages the driver acts on besides, and those it only logs:
+ * encryption, the OLT's equipment errors, power levelling, protection
+ * switching and power saving.
+ */
+#define RTL9602C_PLOAM_DS_ENCRYPTED_PORTID	8
+#define RTL9602C_PLOAM_DS_REQUEST_KEY		13
+#define RTL9602C_PLOAM_DS_PEE			15
+#define RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL	16
+#define RTL9602C_PLOAM_DS_PST			17
+#define RTL9602C_PLOAM_DS_BER_INTERVAL		18
+#define RTL9602C_PLOAM_DS_KEY_SWITCHING_TIME	19
+#define RTL9602C_PLOAM_DS_SWIFT_POPUP		22
+#define RTL9602C_PLOAM_DS_RANGING_ADJUSTMENT	23
+#define RTL9602C_PLOAM_DS_SLEEP_ALLOW		24
+
+/*
+ * BER_Interval (G.984.3 clause 9.2.3.18): the interval in downstream frames,
+ * most significant octet first; a frame lasts 125 us.
+ */
+#define RTL9602C_PLOAM_BER_INTERVAL		2
+#define RTL9602C_GPON_DS_FRAMES_PER_MS		8
+
+/*
+ * Ranging_Adjustment (G.984.3 clause 9.2.3.23): with DECREASE set the change is
+ * taken from the equalization delay, otherwise added; the change in bits, most
+ * significant octet first.
+ */
+#define RTL9602C_PLOAM_RANGING_ADJ_SIGN		2
+#define RTL9602C_PLOAM_RANGING_ADJ_DECREASE	BIT(0)
+#define RTL9602C_PLOAM_RANGING_ADJ_DELAY	3
 
 /*
  * Disable_Serial_Number (G.984.3 clause 9.2.3.6): whether the ONU with the
@@ -2294,6 +2335,21 @@ struct rtl9602c_priv {
 	unsigned long gpon_to2;
 	/** @gpon_o5_since: when the ONU entered O5, in jiffies */
 	unsigned long gpon_o5_since;
+	/**
+	 * @gpon_rei_every: the BER interval in jiffies; 0 while the OLT has
+	 * set none and no REI is sent
+	 */
+	unsigned long gpon_rei_every;
+	/** @gpon_rei_next: when the next REI is due, in jiffies */
+	unsigned long gpon_rei_next;
+	/** @gpon_rei_bip: the BIP error total when the last REI was sent */
+	u64 gpon_rei_bip;
+	/** @gpon_rei_seq: the sequence number of the next REI */
+	u8 gpon_rei_seq;
+	/** @gpon_rei_sent: the REI messages sent since the ONU entered O5 */
+	u32 gpon_rei_sent;
+	/** @gpon_ploam_ignored: the downstream identifiers already logged */
+	u32 gpon_ploam_ignored;
 	/** @gpon_work: the GPON worker, run every RTL9602C_GPON_POLL_MS */
 	struct delayed_work gpon_work;
 

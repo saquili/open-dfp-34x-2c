@@ -817,6 +817,7 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	     state == RTL9602C_ONU_O7_EMERGENCY_STOP) &&
 	    p->gpon_onu_id != RTL9602C_ONU_ONUID_UNASSIGNED) {
 		p->gpon_onu_id = RTL9602C_ONU_ONUID_UNASSIGNED;
+		p->gpon_rei_every = 0;
 		rtl9602c_w(p, RTL9602C_ONU_US_ONUID,
 			   FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
 				      RTL9602C_ONU_ONUID_UNASSIGNED));
@@ -836,8 +837,10 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	rtl9602c_l_txdis_gpio(p, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
 			      state > RTL9602C_ONU_O5_OPERATION);
 
-	if (state == RTL9602C_ONU_O5_OPERATION)
+	if (state == RTL9602C_ONU_O5_OPERATION) {
 		p->gpon_o5_since = jiffies;
+		p->gpon_rei_sent = 0;
+	}
 	if (from == RTL9602C_ONU_O5_OPERATION) {
 		unsigned int ms = jiffies_to_msecs(jiffies - p->gpon_o5_since);
 
@@ -1271,6 +1274,47 @@ static void rtl9602c_gpon_o5_teardown(struct rtl9602c_priv *p)
 }
 
 /*
+ * Downstream message names by identifier, as G.984.3 clause 9.2.3 and its
+ * annexes give them; 2 and 7 are deprecated.
+ */
+static const char *rtl9602c_ploam_ds_name(u8 id)
+{
+	static const char * const names[] = {
+		[1]  = "Upstream_Overhead",	[2]  = "Serial_number_mask",
+		[3]  = "Assign_ONU-ID",		[4]  = "Ranging_Time",
+		[5]  = "Deactivate_ONU-ID",	[6]  = "Disable_serial_number",
+		[7]  = "Configure_VP/VC",	[8]  = "Encrypted_Port-ID",
+		[9]  = "Request_password",	[10] = "Assign_Alloc-ID",
+		[11] = "No_message",		[12] = "POPUP",
+		[13] = "Request_Key",		[14] = "Configure_Port-ID",
+		[15] = "Physical_Equipment_Error", [16] = "Change_Power_Level",
+		[17] = "PST",			[18] = "BER_Interval",
+		[19] = "Key_switching_time",	[20] = "Extended_Burst_Length",
+		[21] = "PON-ID",		[22] = "Swift_POPUP",
+		[23] = "Ranging_adjustment",	[24] = "Sleep_Allow",
+	};
+
+	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
+}
+
+/*
+ * Upstream message names by identifier, as G.984.3 clause 9.2.4 and its annex E
+ * give them.
+ */
+static const char *rtl9602c_ploam_us_name(u8 id)
+{
+	static const char * const names[] = {
+		[1] = "Serial_Number_ONU",	[2] = "Password",
+		[3] = "Dying_Gasp",		[4] = "No_message",
+		[5] = "Encryption_Key",		[6] = "Physical_Equipment_Error",
+		[7] = "PST",			[8] = "REI",
+		[9] = "Acknowledge",		[10] = "Sleep_Request",
+	};
+
+	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
+}
+
+/*
  * Acknowledge downstream message @dm (G.984.3 clause 9.2.4.9) on the urgent
  * queue: its identifier, then its first nine octets. Unacknowledged,
  * Assign_Alloc-ID and Configure_Port-ID are sent three times and then followed
@@ -1311,6 +1355,59 @@ static void rtl9602c_gpon_password_send(struct rtl9602c_priv *p)
 		rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
 	memzero_explicit(msg, sizeof(msg));
 	pr_debug("<GPON> password sent\n");
+}
+
+/*
+ * Start the REI reports of BER_Interval (G.984.3 clause 9.2.3.18), one every
+ * @frames downstream frames, counting the BIP errors from now; 0 stops them.
+ * The worker sends them (rtl9602c_gpon_rei_tick()), so an interval is kept to
+ * within its period.
+ */
+static void rtl9602c_gpon_rei_start(struct rtl9602c_priv *p, u32 frames)
+{
+	unsigned int ms = frames / RTL9602C_GPON_DS_FRAMES_PER_MS;
+
+	rtl9602c_gpon_cntr_sync(p);
+	p->gpon_rei_bip = p->gpon_stats.bip_errors;
+	p->gpon_rei_seq = 0;
+	p->gpon_rei_every = ms ? max(msecs_to_jiffies(ms), 1UL) : 0;
+	p->gpon_rei_next = jiffies + p->gpon_rei_every;
+	pr_info("<GPON> BER interval %u ms: %s\n", ms,
+		ms ? "an REI every interval" : "no REI");
+}
+
+/*
+ * Send REI (G.984.3 clause 9.2.4.8) once a BER interval has passed, in O5: the
+ * BIP errors since the last one, and the sequence number, which counts the
+ * reports modulo 16. A report that falls more than an interval behind starts
+ * the cadence again from now. Context: gpon_lock held, the counters just
+ * taken.
+ */
+static void rtl9602c_gpon_rei_tick(struct rtl9602c_priv *p)
+{
+	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
+	u64 errors;
+
+	if (!p->gpon_rei_every || p->gpon_state != RTL9602C_ONU_O5_OPERATION ||
+	    time_before(jiffies, p->gpon_rei_next))
+		return;
+
+	p->gpon_rei_next += p->gpon_rei_every;
+	if (time_after_eq(jiffies, p->gpon_rei_next))
+		p->gpon_rei_next = jiffies + p->gpon_rei_every;
+
+	errors = p->gpon_stats.bip_errors - p->gpon_rei_bip;
+	p->gpon_rei_bip = p->gpon_stats.bip_errors;
+
+	msg[0] = p->gpon_onu_id;
+	msg[1] = RTL9602C_PLOAM_US_REI;
+	put_unaligned_be32(min_t(u64, errors, U32_MAX),
+			   &msg[RTL9602C_PLOAM_REI_ERRORS]);
+	msg[RTL9602C_PLOAM_REI_SEQ] = p->gpon_rei_seq &
+				      RTL9602C_PLOAM_REI_SEQ_MASK;
+	p->gpon_rei_seq++;
+	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
+	p->gpon_rei_sent++;
 }
 
 /*
@@ -1626,6 +1723,86 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 					   RTL9602C_ONU_O5_OPERATION);
 		return;
 
+	case RTL9602C_PLOAM_DS_SWIFT_POPUP:
+		/*
+		 * Broadcast, in O6 (G.984.3 clause 9.2.3.22): straight back to
+		 * O5, as a POPUP directed to the ONU does.
+		 */
+		if (p->gpon_state != RTL9602C_ONU_O6_POPUP ||
+		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED)
+			return;
+		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O5_OPERATION);
+		return;
+
+	case RTL9602C_PLOAM_DS_BER_INTERVAL:
+		/*
+		 * Directed or broadcast, in O5: the interval of the REI
+		 * reports. Every copy is acknowledged.
+		 */
+		if ((msg[0] != p->gpon_onu_id &&
+		     msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED) ||
+		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		rtl9602c_gpon_rei_start(p,
+					get_unaligned_be32(&msg[RTL9602C_PLOAM_BER_INTERVAL]));
+		rtl9602c_gpon_ploam_ack(p, msg);
+		return;
+
+	case RTL9602C_PLOAM_DS_RANGING_ADJUSTMENT: {
+		/*
+		 * Directed or broadcast, in O5 (G.984.3 clause 9.2.3.23): a
+		 * change of the equalization delay. A delay that would fall
+		 * below 0, or beyond the 7 frames RTL9602C_RANGING_EQD holds
+		 * less one for the response delay, is not applied.
+		 */
+		u32 delta = get_unaligned_be32(&msg[RTL9602C_PLOAM_RANGING_ADJ_DELAY]);
+		u32 eqd = p->gpon_eqd_delay;
+
+		if ((msg[0] != p->gpon_onu_id &&
+		     msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED) ||
+		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		if (msg[RTL9602C_PLOAM_RANGING_ADJ_SIGN] &
+		    RTL9602C_PLOAM_RANGING_ADJ_DECREASE)
+			eqd = delta <= eqd ? eqd - delta : U32_MAX;
+		else
+			eqd = delta < U32_MAX - eqd ? eqd + delta : U32_MAX;
+		if (eqd >= FIELD_MAX(RTL9602C_RANGING_EQD_FRAMES) *
+			   RTL9602C_GPON_EQD_FRAME_BITS) {
+			pr_warn("<GPON> Ranging_Adjustment out of range, not applied: %12ph\n",
+				msg);
+			return;
+		}
+		pr_info("<GPON> Ranging_Adjustment: eqd %u -> %u\n",
+			p->gpon_eqd_delay, eqd);
+		rtl9602c_gpon_set_eqd(p, eqd);
+		return;
+	}
+
+	case RTL9602C_PLOAM_DS_ENCRYPTED_PORTID:
+	case RTL9602C_PLOAM_DS_REQUEST_KEY:
+	case RTL9602C_PLOAM_DS_KEY_SWITCHING_TIME:
+	case RTL9602C_PLOAM_DS_PEE:
+	case RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL:
+	case RTL9602C_PLOAM_DS_PST:
+	case RTL9602C_PLOAM_DS_SLEEP_ALLOW:
+		/*
+		 * Not acted on: encryption, the OLT's equipment errors, power
+		 * levelling, protection switching and power saving. Nothing is
+		 * acknowledged, so the OLT sees that the ONU did not take
+		 * them. Each is logged once, the first time one comes for this
+		 * ONU.
+		 */
+		if (msg[0] != p->gpon_onu_id &&
+		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED)
+			return;
+		if (!(p->gpon_ploam_ignored & BIT(msg[1]))) {
+			p->gpon_ploam_ignored |= BIT(msg[1]);
+			pr_info("<GPON> %s is not supported, ignored: %12ph\n",
+				rtl9602c_ploam_ds_name(msg[1]), msg);
+		}
+		return;
+
 	case RTL9602C_PLOAM_DS_REQUEST_PASSWORD:
 		/* Directed, in O5. */
 		if (msg[0] != p->gpon_onu_id ||
@@ -1705,6 +1882,7 @@ void rtl9602c_gpon_work(struct work_struct *w)
 	}
 
 	rtl9602c_gpon_cntr_sync(p);
+	rtl9602c_gpon_rei_tick(p);
 
 	rtl9602c_gpon_notify(p);
 	mutex_unlock(&p->gpon_lock);
@@ -2220,12 +2398,14 @@ void rtl9602c_gpon_stop(struct rtl9602c_priv *p)
  * whose meaning is not known (it reads 0 on a framed downstream); and the
  * superframe counter, which advances 8000 times a second, once per 125 us
  * frame, while the downstream is framed and not at all otherwise. Then the
- * counter totals since bring-up, which a read brings up to date. No register is
- * written.
+ * counter totals since bring-up, which a read brings up to date, and the REI
+ * reports: the BER interval the OLT set, 0 for none, and the reports sent since
+ * the ONU entered O5. No register is written.
  */
 static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
+	unsigned int rei_ms, rei_sent;
 	struct pon_dev_stats c;
 	u32 sts, onu, los, sig;
 
@@ -2258,6 +2438,8 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	mutex_lock(&p->gpon_lock);
 	rtl9602c_gpon_cntr_sync(p);
 	c = p->gpon_stats;
+	rei_ms = jiffies_to_msecs(p->gpon_rei_every);
+	rei_sent = p->gpon_rei_sent;
 	mutex_unlock(&p->gpon_lock);
 
 	seq_printf(s, "cntr  sn-requests %llu ranging-requests %llu   (totals)\n",
@@ -2268,49 +2450,10 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 		   c.bwmap_rx, c.bwmap_crc_errors, c.bwmap_overflows);
 	seq_printf(s, "gem   %llu non-idle frames, %llu BIP error blocks\n",
 		   c.gem_frames, c.bip_errors);
+	seq_printf(s, "rei   every %u ms, %u sent\n", rei_ms, rei_sent);
 	return 0;
 }
 
-/*
- * Downstream message names by identifier, as G.984.3 clause 9.2.3 and its
- * annexes give them; 2 and 7 are deprecated.
- */
-static const char *rtl9602c_ploam_ds_name(u8 id)
-{
-	static const char * const names[] = {
-		[1]  = "Upstream_Overhead",	[2]  = "Serial_number_mask",
-		[3]  = "Assign_ONU-ID",		[4]  = "Ranging_Time",
-		[5]  = "Deactivate_ONU-ID",	[6]  = "Disable_serial_number",
-		[7]  = "Configure_VP/VC",	[8]  = "Encrypted_Port-ID",
-		[9]  = "Request_password",	[10] = "Assign_Alloc-ID",
-		[11] = "No_message",		[12] = "POPUP",
-		[13] = "Request_Key",		[14] = "Configure_Port-ID",
-		[15] = "Physical_Equipment_Error", [16] = "Change_Power_Level",
-		[17] = "PST",			[18] = "BER_Interval",
-		[19] = "Key_switching_time",	[20] = "Extended_Burst_Length",
-		[21] = "PON-ID",		[22] = "Swift_POPUP",
-		[23] = "Ranging_adjustment",	[24] = "Sleep_Allow",
-	};
-
-	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
-}
-
-/*
- * Upstream message names by identifier, as G.984.3 clause 9.2.4 and its annex E
- * give them.
- */
-static const char *rtl9602c_ploam_us_name(u8 id)
-{
-	static const char * const names[] = {
-		[1] = "Serial_Number_ONU",	[2] = "Password",
-		[3] = "Dying_Gasp",		[4] = "No_message",
-		[5] = "Encryption_Key",		[6] = "Physical_Equipment_Error",
-		[7] = "PST",			[8] = "REI",
-		[9] = "Acknowledge",		[10] = "Sleep_Request",
-	};
-
-	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
-}
 
 /*
  * ploamlog: the last RTL9602C_PLOAM_LOG_LEN events of the PLOAM channel, oldest

@@ -19,7 +19,7 @@ counters are in the switch's register window, at offsets ``0x700000`` to
 
 The MAC does not run the activation by itself. It takes its activation state
 from a register that the driver writes, and classifies the OLT's grants by that
-state; the driver runs the state machine of G.984.3 from O1 to O5 on the PLOAM
+state; the driver runs the state machine of G.984.3 from O1 to O7 on the PLOAM
 messages that the MAC queues for it. The MAC answers the OLT's serial-number and
 ranging requests by itself, from message templates that the driver arms. G.984.3
 gives the ONU 750 us to act on a PLOAM message, so the driver dispatches PLOAM
@@ -147,6 +147,10 @@ the driver's use of them is described with the state machine.
      - O6
      - O4
      - Releases TX_DISABLE and arms TO1; the OLT ranges the ONU again.
+   * - Swift_POPUP, broadcast
+     - O6
+     - O5
+     - As a directed POPUP.
    * - TO2 expires
      - O6
      - O1
@@ -391,6 +395,19 @@ name the others.
    * - ``<GPON> Ranging_Time raw: ... -- eqd N``
      - info
      - Ranging_Time took the ONU from O4 to O5.
+   * - ``<GPON> BER interval N ms: an REI every interval`` or ``no REI``
+     - info
+     - BER_Interval was acted on.
+   * - ``<GPON> Ranging_Adjustment: eqd A -> B``
+     - info
+     - Ranging_Adjustment changed the equalization delay; the ``EQD`` line
+       follows.
+   * - ``<GPON> Ranging_Adjustment out of range, not applied: ...``
+     - warning
+     - The change would take the delay below 0 or out of the register.
+   * - ``<GPON> <message> is not supported, ignored: ...``
+     - info
+     - The first message of a type the driver does not act on.
    * - ``<GPON> the OLT deactivated this ONU in O5``
      - info
      - Deactivate_ONU-ID was acted on.
@@ -1303,8 +1320,8 @@ The interrupt path, in order:
 6. It writes the source's bit into ``RTL9602C_IRQ_PENDING`` to clear it. (M)
 
 A message is acted on only when its ONU-ID is 255 or the ONU's own, and each
-type needs a state. The table lists what the driver acts on; a type not in it is
-recorded in the ``ploamlog`` ring and dropped.
+type needs a state. The table lists what the driver does with each type; a type
+not in it is recorded in the ``ploamlog`` ring and dropped.
 
 .. list-table::
    :header-rows: 1
@@ -1343,6 +1360,28 @@ recorded in the ``ploamlog`` ring and dropped.
      - The ONU-ID or all ONUs
      - O6
      - Directed: O5. Broadcast: O4.
+   * - Swift_POPUP (22)
+     - All ONUs
+     - O6
+     - O5.
+   * - BER_Interval (18)
+     - The ONU-ID or all ONUs
+     - O5
+     - The interval of the REI reports, from now (see "PLOAM transmit"); 0
+       stops them. Acknowledged.
+   * - Ranging_Adjustment (23)
+     - The ONU-ID or all ONUs
+     - O5
+     - Adds the change to the equalization delay, or takes it away with
+       octet 3 bit 0 set; a delay below 0, or of 7 upstream frames or more,
+       is not applied and is logged.
+   * - Encrypted_Port-ID (8), Request_Key (13), Key_Switching_Time (19),
+       Physical_Equipment_Error (15), Change_Power_Level (16), PST (17),
+       Sleep_Allow (24)
+     - The ONU-ID or all ONUs
+     - None
+     - Not acted on and not acknowledged; each type is logged once, the first
+       time one comes.
    * - Request_Password (9)
      - The ONU-ID
      - O5
@@ -1574,8 +1613,8 @@ The ONU sends an upstream PLOAM message (PLOAMu, 13 octets) in an allocation
 whose Flags request it. The MAC has five slots for upstream messages, selected
 in ``RTL9602C_PLOAM_TX_CTRL``: two queues and three templates. The driver writes
 a message of twelve octets into a slot and the MAC adds the CRC. The driver
-sends only acknowledgments through a queue, the urgent one, and arms the three
-templates; the normal queue is not used.
+sends acknowledgments through the urgent queue, Password and REI messages
+through the normal one, and arms the three templates.
 
 Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
 
@@ -1603,7 +1642,7 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
    * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL``
      - 0
      - A queue: its messages go out in the ONU's allocations.
-     - Nothing.
+     - Password and REI messages.
    * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT``
      - 1
      - A queue, as the normal one.
@@ -1647,6 +1686,21 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
      - M
      - The ``uscntr`` view: 979 transmissions from the templates against 957
        serial-number requests, and none from the queues.
+   * - REI (identifier 8, G.984.3 clause 9.2.4.8): octets 3 to 6 the BIP
+       errors of the last BER interval, most significant first, and the low 4
+       bits of octet 7 a sequence number that counts the reports modulo 16.
+       Once BER_Interval has set an interval, the worker sends one on the
+       normal queue each time the interval has passed, in O5, with the BIP
+       error blocks counted since the last one (``rtl9602c_gpon_rei_tick()``);
+       it keeps the cadence to within its 50 ms period. The interval goes with
+       the ONU-ID, and the OLT sets it again after the next ranging. That the
+       OLT expects error blocks rather than bit errors is an assumption.
+     - M, I
+     - M: BER_Interval of 8000 frames injected through ``ploaminject``: the
+       Acknowledge followed, then an REI with 0 errors at 25.82, 26.83, 27.84,
+       28.79 and 29.80 s, sequence 0 to 4; an interval of 0 stopped them. With
+       BIP errors present the reports have not been observed: the board's
+       fibre gives none.
    * - The data window addresses the slot that was selected last, so data
        written before the slot is selected lands in whichever slot was selected
        before. ``ploam_lock`` serialises the writers.
@@ -2648,7 +2702,9 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        the superframe counter; then come the totals of the counters (``cntr``:
        ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
        maps accepted, CRC errors, overflows, non-idle GEM frames, BIP error
-       blocks). A read takes the counters and writes no register.
+       blocks); last ``rei``, the BER interval in ms (0 while none is set) and
+       the REI messages sent since the ONU entered O5. A read takes the
+       counters and writes no register.
      - T
      - A check with traffic on the board reads the ``onu`` line before and after
        a flood; every debugfs view reads.
@@ -2718,18 +2774,18 @@ Known limitations
   of the computed overhead length is 252 bytes, where G.984.3 allows at most
   128. No type 1 or type 2 preamble is programmed; their bit counts only enter
   the length.
-- Every downstream message that the table in "PLOAM receive" does not list is
-  recorded and dropped, including some for which G.984.3 requires an answer:
-  BER Interval, Key_Switching_Time and Encrypted_Port-ID get no Acknowledge.
-  Swift_POPUP, Change_Power_Level, Request_Key, Ranging_Adjustment,
-  Sleep_Allow, PST and Physical_Equipment_Error are not acted on either.
+- Encrypted_Port-ID, Request_Key, Key_Switching_Time, Change_Power_Level, PST,
+  Physical_Equipment_Error and Sleep_Allow are recorded, logged once and not
+  acted on, although G.984.3 requires an answer to some of them: the first and
+  third get no Acknowledge and Request_Key no Encryption_Key. Swift_POPUP, like
+  POPUP, has not been exercised on the board, since it needs the ONU in O6.
 - There is no encryption. The driver programs no key and does not act on
   Encrypted_Port-ID, Request_Key or Key_Switching_Time, so a Port-ID that the
   OLT encrypts (128-bit AES in counter mode, ITU-T G.984.3 clause 12) would be
   delivered as ciphertext. Nothing is set up for upstream FEC, and downstream
   FEC has only its detection threshold.
-- There is no power levelling, no REI message and no signal-fail or
-  signal-degrade alarm from the BIP count.
+- There is no power levelling and no signal-fail or signal-degrade alarm from
+  the BIP count.
 - Nothing in the driver sends the Dying_Gasp message that the MAC holds armed.
 
 Open questions
