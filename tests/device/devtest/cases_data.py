@@ -329,8 +329,9 @@ def vlan_translation(ctx: Context):
 
 
 # The tag-operation case: a C-tag pushed onto untagged frames upstream and
-# popped downstream, and an S-tag pushed in front of a C-tag upstream, at VIDs
-# no line is expected to carry and a tc priority of its own.
+# popped downstream, and an S-tag pushed in front of a C-tag upstream and
+# popped downstream, at VIDs no line is expected to carry and a tc priority of
+# its own.
 PUSH_VID = 3003
 PUSH_PCP = 5
 QINQ_CVID = 3001
@@ -418,7 +419,8 @@ def stack_text(seen: dict[str, int]) -> str:
 
 @case("data.vlan-push-pop", "Data path",
       "The switch pushes a C-tag onto untagged frames upstream and pops it from frames "
-      "downstream, and pushes an S-tag in front of a C-tag, with the priorities it is given")
+      "downstream, and pushes an S-tag in front of a C-tag upstream and pops it "
+      "downstream, with the priorities it is given")
 def vlan_push_pop(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -440,22 +442,28 @@ def vlan_push_pop(ctx: Context):
         up = stacks(ctx, s.subscriber_port, s.olt_port, "u")
         down = stacks(ctx, s.olt_port, s.subscriber_port, f"c{PUSH_VID}p{PUSH_PCP}")
         ctx.stick.run(drop)
-        text = (f"protocol 802.1Q flower skip_sw vlan_id {QINQ_CVID} action vlan push "
-                f"id {QINQ_SVID} priority {QINQ_PCP} protocol 802.1ad")
-        reply = ctx.stick.run(rule.format("sfp", text))
-        if not reply.ok:
-            return failed(f"tc refused {text!r} on sfp: {(reply.err or reply.out).strip()}")
+        for dev, text in (
+                ("sfp", f"protocol 802.1Q flower skip_sw vlan_id {QINQ_CVID} action vlan push "
+                        f"id {QINQ_SVID} priority {QINQ_PCP} protocol 802.1ad"),
+                ("pon", f"protocol 802.1ad flower skip_sw vlan_id {QINQ_SVID} action vlan pop")):
+            reply = ctx.stick.run(rule.format(dev, text))
+            if not reply.ok:
+                return failed(f"tc refused {text!r} on {dev}: "
+                              f"{(reply.err or reply.out).strip()}")
         qinq = stacks(ctx, s.subscriber_port, s.olt_port, f"c{QINQ_CVID}p1")
+        stacked = f"s{QINQ_SVID}p{QINQ_PCP}+c{QINQ_CVID}p1"
+        unstacked = stacks(ctx, s.olt_port, s.subscriber_port, stacked)
     finally:
         ctx.stick.run(drop.removesuffix("; true") + "; " +
                       "".join(f"tc qdisc del dev {dev} clsact; " for dev in added) + "true")
     want = OPS_COUNT * 0.99
     pushed = f"c{PUSH_VID}p{PUSH_PCP}"
-    stacked = f"s{QINQ_SVID}p{QINQ_PCP}+c{QINQ_CVID}p1"
-    ok = up.get(pushed, 0) >= want and down.get("u", 0) >= want and qinq.get(stacked, 0) >= want
+    ok = (up.get(pushed, 0) >= want and down.get("u", 0) >= want and
+          qinq.get(stacked, 0) >= want and unstacked.get(f"c{QINQ_CVID}p1", 0) >= want)
     return verdict(ok, f"{OPS_COUNT} untagged frames upstream: {stack_text(up)}; "
                        f"{OPS_COUNT} of {pushed} downstream: {stack_text(down)}; "
-                       f"{OPS_COUNT} of c{QINQ_CVID}p1 upstream: {stack_text(qinq)}")
+                       f"{OPS_COUNT} of c{QINQ_CVID}p1 upstream: {stack_text(qinq)}; "
+                       f"{OPS_COUNT} of {stacked} downstream: {stack_text(unstacked)}")
 
 
 # The ACL case: frames of the probe's EtherType from the network side, against

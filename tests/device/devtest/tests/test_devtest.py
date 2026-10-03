@@ -398,7 +398,7 @@ class Cases(unittest.TestCase):
         self.assertEqual(outcome(added_first_decides=True)[0].status, FAIL)
 
     def test_the_push_pop_case_wants_each_tag_operation_done(self):
-        def outcome(pops: bool):
+        def outcome(pops: bool = True, s_pops: bool = True):
             trail: list[str] = []
             rules: set[str] = set()
 
@@ -417,11 +417,15 @@ class Cases(unittest.TestCase):
                         return super().run(command, **kw)
                     spec = re.search(r"python3 - \S+ \S+ (\S+) \d+", command).group(1)
                     up = any("push id 3003" in r for r in rules)
-                    down = pops and any(r.startswith("pon:") and "pop" in r for r in rules)
-                    qinq = any("802.1ad" in r for r in rules)
+                    down = pops and any(r.startswith("pon:protocol 802.1Q") and "pop" in r
+                                        for r in rules)
+                    qinq = any(r.startswith("sfp:") and "802.1ad" in r for r in rules)
+                    unqinq = s_pops and any(r.startswith("pon:protocol 802.1ad") and "pop" in r
+                                            for r in rules)
                     got = {"u": "c3003p5" if up else "u",
                            "c3003p5": "u" if down else "c3003p5",
-                           "c3001p1": "s3004p3+c3001p1" if qinq else "c3001p1"}[spec]
+                           "c3001p1": "s3004p3+c3001p1" if qinq else "c3001p1",
+                           "s3004p3+c3001p1": "c3001p1" if unqinq else "s3004p3+c3001p1"}[spec]
                     self.answers[0] = ("python3 -", 0, json.dumps({got: 200}) + "\n")
                     return super().run(command, **kw)
 
@@ -432,12 +436,17 @@ class Cases(unittest.TestCase):
             ctx = Context(settings, stick, bench, trail)
             ctx.memo["primed"] = True
             return cases_data.vlan_push_pop(ctx)
-        good = outcome(pops=True)
+        good = outcome()
         self.assertEqual(good.status, PASS, good.evidence)
         self.assertIn("200 of c3001p1 upstream: 200 as s3004p3+c3001p1", good.evidence)
+        self.assertIn("200 of s3004p3+c3001p1 downstream: 200 as c3001p1", good.evidence)
         bad = outcome(pops=False)
         self.assertEqual(bad.status, FAIL)
         self.assertIn("200 of c3003p5 downstream: 200 as c3003p5", bad.evidence)
+        stuck = outcome(s_pops=False)
+        self.assertEqual(stuck.status, FAIL)
+        self.assertIn("200 of s3004p3+c3001p1 downstream: 200 as s3004p3+c3001p1",
+                      stuck.evidence)
 
     def test_the_multicast_case_wants_every_report_through_and_unasked_groups_kept_out(self):
         def outcome(reports_to_a_group_pass: bool):
