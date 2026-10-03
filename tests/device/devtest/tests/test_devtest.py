@@ -649,6 +649,40 @@ class Cases(unittest.TestCase):
         self.assertFalse(left)
         self.assertEqual(outcome(held=984.0)[0].status, FAIL)
 
+    def test_the_pcp_rewrite_case_wants_its_priority_rewritten_and_only_while_set(self):
+        def outcome(rewrites: bool):
+            trail: list[str] = []
+            entry = {"on": False}
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    if "dcb rewr add" in command:
+                        entry["on"] = True
+                    if "dcb rewr del" in command:
+                        entry["on"] = False
+                    return super().run(command, **kw)
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if kw.get("stdin") == cases_data.TAGGED:
+                        pcp = int(command.split()[-2].strip("'"))
+                        if entry["on"] and rewrites and pcp == 0:
+                            pcp = cases_data.REWR_PCP
+                        out = '{"%d/%d": 100}' % (cases_data.REWR_VID, pcp)
+                        return Reply([command], 0, out + "\n", "", 0.01)
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("dcb ", 0, "")], trail)
+            bench = Bench("bench", [("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            return cases_data.pcp_rewrite(ctx), entry["on"]
+        good, left = outcome(rewrites=True)
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertFalse(left)
+        self.assertEqual(outcome(rewrites=False)[0].status, FAIL)
+
     def test_the_storm_case_wants_the_first_rule_to_police_and_the_acl_to_drop(self):
         def outcome(winner):
             trail: list[str] = []

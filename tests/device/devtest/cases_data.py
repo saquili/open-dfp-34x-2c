@@ -283,11 +283,12 @@ print(json.dumps(seen))
 
 
 def tagged(ctx: Context, into: str, out_of: str, vid: int,
-           count: int = XLATE_COUNT) -> dict[str, int]:
-    """Send count frames tagged vid, untagged for vid 0, into the bench port
-    into; return what the bench port out_of received from it, per tag."""
+           count: int = XLATE_COUNT, pcp: int = XLATE_PCP) -> dict[str, int]:
+    """Send count frames tagged vid with priority pcp, untagged for vid 0,
+    into the bench port into; return what the bench port out_of received from
+    it, per tag."""
     command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
-        "python3", "-", into, out_of, str(vid), str(XLATE_PCP), str(count))))
+        "python3", "-", into, out_of, str(vid), str(pcp), str(count))))
     reply = ctx.bench.run(command, stdin=TAGGED, timeout=60)
     try:
         return json.loads(reply.out.strip().splitlines()[-1])
@@ -834,6 +835,43 @@ def storm(ctx: Context):
                        f"{low} under pref 10 at 100/s, {kept} with pref 20 at 1000/s added, "
                        f"{replaced} with pref 10 replaced at 200/s; dropped by the ACL, "
                        f"{dropped} passed; {after} after")
+
+# The PCP rewrite case: frames tagged REWR_VID with PCP 0 from the host side,
+# which the PON port forwards to the OLT. A rewrite entry on pon for
+# priority 0 must give them PCP REWR_PCP, and only them: frames of PCP 3, which
+# have no entry, keep their PCP, and with the entry gone PCP 0 stays 0.
+REWR_VID = 100
+REWR_PCP = 5
+REWR_COUNT = 100
+
+
+@case("data.pcp-rewrite", "Data path",
+      "A DCB rewrite entry on pon gives the frames of its priority that it sends the PCP "
+      "of the entry, leaves the PCP of other priorities as it was, and stops with the entry")
+def pcp_rewrite(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    s = ctx.settings
+    entry = f"prio-pcp 0:{REWR_PCP}nd"
+
+    def up(pcp):
+        return tagged(ctx, s.subscriber_port, s.olt_port, REWR_VID, REWR_COUNT, pcp)
+
+    reply = ctx.stick.run(f"dcb rewr add dev pon {entry}")
+    if not reply.ok:
+        return failed(f"dcb refused the entry: {(reply.err or reply.out).strip()}")
+    try:
+        rewritten, other = up(0), up(3)
+    finally:
+        ctx.stick.run(f"dcb rewr del dev pon {entry}")
+    after = up(0)
+    want = REWR_COUNT * 0.99
+    ok = (rewritten.get(f"{REWR_VID}/{REWR_PCP}", 0) >= want and
+          other.get(f"{REWR_VID}/3", 0) >= want and after.get(f"{REWR_VID}/0", 0) >= want)
+    return verdict(ok, f"{REWR_COUNT} frames tagged {REWR_VID} each; under {entry}, PCP 0: "
+                       f"{tags(rewritten)}, PCP 3: {tags(other)}; without it, PCP 0: "
+                       f"{tags(after)}")
 
 # The CPU-limit case: a flood from the host side to the stick's own address,
 # which the switch hands the CPU, first under the limit that devlink's

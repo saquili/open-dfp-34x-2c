@@ -30,9 +30,9 @@ What it needs
   stick's PON port, and a filter that counts the trapped frames on each of its
   GEM interfaces, and removes them again; the mirror case mirrors the PON port
   to the SFP port both ways, the shaper case puts a tbf on the SFP port, the
-  storm case police and drop rules on broadcast on the SFP port, and the
-  address-table case gives the bridge a static address, each removing what it
-  added. The CPU-limit case floods the stick's own address from the
+  storm case police and drop rules on broadcast on the SFP port, the PCP
+  rewrite case a DCB rewrite entry on the PON port, and the address-table case
+  gives the bridge a static address, each removing what it added. The CPU-limit case floods the stick's own address from the
   subscriber side for 10 s, then lifts the limit for 3 s and sets it back; the
   stick answers slowly while the flood lasts. The hardware clock's case
   switches the clock's pulse on for a few seconds and off again.
