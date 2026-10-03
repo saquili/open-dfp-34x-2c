@@ -473,7 +473,11 @@ static void test_no_upload_in_progress(void)
 	omci_t_down(&fx);
 }
 
-static void test_the_channels_are_independent(void)
+/*
+ * One upload at a time (G.988 B.2.3): one started on the high channel takes
+ * the place of the one on the low channel, which reads on in the new one.
+ */
+static void test_one_upload_serves_both_channels(void)
 {
 	struct omci_t_fixture fx;
 	struct omci_hw_caps caps;
@@ -500,18 +504,18 @@ static void test_the_channels_are_independent(void)
 	CHECK(again != NULL);
 	if (again != NULL)
 		CHECK_MEM(&again[8], &keep[8], 32);
+	const uint8_t *last =
+		upload_next(fx.eng, 0x0704u, false, (uint16_t)(high - 1));
+	CHECK(last != NULL);
+	if (last != NULL)
+		CHECK_EQ(be16(&last[8]), 322u);
+
 	const uint8_t *edge =
-		upload_next(fx.eng, 0x0704u, false, (uint16_t)low);
+		upload_next(fx.eng, 0x0705u, true, (uint16_t)high);
 	CHECK(edge != NULL);
 	if (edge != NULL)
 		for (unsigned int k = 8; k < 40u; k++)
 			CHECK_EQ(edge[k], 0u);
-
-	const uint8_t *hi_unit =
-		upload_next(fx.eng, 0x0705u, true, (uint16_t)(high - 1));
-	CHECK(hi_unit != NULL);
-	if (hi_unit != NULL)
-		CHECK_EQ(be16(&hi_unit[8]), 322u);
 
 	omci_t_down(&fx);
 }
@@ -530,7 +534,7 @@ int main(int argc, char **argv)
 	RUN(test_every_class_but_the_omci_entity_appears);
 	RUN(test_the_count_follows_the_mib);
 	RUN(test_no_upload_in_progress);
-	RUN(test_the_channels_are_independent);
+	RUN(test_one_upload_serves_both_channels);
 
 	return OMCI_T_REPORT("test_upload");
 }

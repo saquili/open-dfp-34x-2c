@@ -461,8 +461,12 @@ static void test_a_get_of_two_tables_closes_its_own_channels_walk(void)
 		fixture(&fx);
 		fill_rules(fx.mib, 4u);
 
-		CHECK(get_table(fx.eng, ME171, INST, RULE_ATTR, false) != NULL);
-		CHECK(get_table(fx.eng, ME171, INST, RULE_ATTR, true) != NULL);
+		/*
+		 * The other channel reads another table: a read of the same
+		 * one would go on serving this channel after its own closed.
+		 */
+		CHECK(get_table(fx.eng, ME171, INST, RULE_ATTR, mine) != NULL);
+		CHECK(get_table(fx.eng, ME287, 0u, ME287_ATTR, !mine) != NULL);
 
 		const uint16_t both =
 			(uint16_t)(omci_attr_bit(1u) | omci_attr_bit(2u));
@@ -480,7 +484,7 @@ static void test_a_get_of_two_tables_closes_its_own_channels_walk(void)
 		if (closed != NULL)
 			CHECK_EQ(closed[8], R_PARAM_ERROR);
 		const uint8_t *open =
-			get_next(fx.eng, ME171, INST, RULE_ATTR, 0u, !mine);
+			get_next(fx.eng, ME287, 0u, ME287_ATTR, 0u, !mine);
 		CHECK(open != NULL);
 		if (open != NULL)
 			CHECK_EQ(open[8], RES_DONE);

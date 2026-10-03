@@ -116,7 +116,7 @@ struct resp_cache_entry {
 
 /*
  * The engine. Of each pair, element 0 serves the low-priority channel and
- * element 1 the high-priority one: the two are independent.
+ * element 1 the high-priority one (G.988 B.2.2).
  */
 struct omci_engine {
 	struct omci_mib *mib;
@@ -136,12 +136,18 @@ struct omci_engine {
 
 	struct get_next_transfer get_next[2];
 
+	/*
+	 * The MIB upload, one for both channels: the OLT may not start one on
+	 * a channel while one runs on the other (G.988 B.2.3), and an OLT that
+	 * counts its identifiers into the priority bit sends the commands of
+	 * one upload on both.
+	 */
 	struct {
 		bool active;
 		uint16_t units;
 		size_t row_count;
 		struct upload_row rows[OMCI_MIB_MAX_ROWS];
-	} upload[2];
+	} upload;
 
 	struct omci_clock clock;
 	uint64_t now_sec;
@@ -371,11 +377,9 @@ static void handle_mib_reset(struct omci_engine *eng,
 	omci_wire_fill(eng->resp_cache, 0, sizeof(eng->resp_cache));
 	omci_wire_fill(eng->resp_next, 0, sizeof(eng->resp_next));
 	omci_wire_fill(eng->get_next, 0, sizeof(eng->get_next));
-	for (unsigned int c = 0; c < 2u; c++) {
-		eng->upload[c].active = false;
-		eng->upload[c].units = 0;
-		eng->upload[c].row_count = 0;
-	}
+	eng->upload.active = false;
+	eng->upload.units = 0;
+	eng->upload.row_count = 0;
 
 	omci_pm_forget_all(eng->pm);
 	omci_alarm_reset_sequence(eng->alarm);
@@ -423,9 +427,9 @@ static bool upload_before(uint16_t class_id, uint16_t instance,
  * Freeze the instances a MIB upload reports, and number the upload units
  * that their attributes take.
  */
-static uint16_t upload_snapshot(struct omci_engine *eng, unsigned int ch)
+static uint16_t upload_snapshot(struct omci_engine *eng)
 {
-	__typeof__(eng->upload[0]) *up = &eng->upload[ch];
+	__typeof__(eng->upload) *up = &eng->upload;
 
 	size_t n = 0;
 
@@ -463,10 +467,10 @@ static uint16_t upload_snapshot(struct omci_engine *eng, unsigned int ch)
 
 /* The instance that upload unit @seq belongs to, and the unit's place in it. */
 static const struct upload_row *upload_locate(const struct omci_engine *eng,
-					      unsigned int ch, uint16_t seq,
+					      uint16_t seq,
 					      unsigned int *unit_index)
 {
-	const __typeof__(eng->upload[0]) *up = &eng->upload[ch];
+	const __typeof__(eng->upload) *up = &eng->upload;
 
 	size_t i = up->row_count - 1u;
 
@@ -484,8 +488,8 @@ static void handle_mib_upload(struct omci_engine *eng,
 			      const struct omci_frame *req)
 {
 	const unsigned int ch = req->priority ? 1u : 0u;
-	__typeof__(eng->upload[0]) *up = &eng->upload[ch];
-	const uint16_t units = upload_snapshot(eng, ch);
+	__typeof__(eng->upload) *up = &eng->upload;
+	const uint16_t units = upload_snapshot(eng);
 
 	up->units = units;
 	up->active = units > 0;
@@ -531,8 +535,7 @@ static void handle_mib_upload_next(struct omci_engine *eng,
 		.instance = req->instance,
 	};
 
-	const unsigned int ch = req->priority ? 1u : 0u;
-	const __typeof__(eng->upload[0]) *up = &eng->upload[ch];
+	const __typeof__(eng->upload) *up = &eng->upload;
 
 	unsigned int unit_index = 0;
 	const struct upload_row *row = NULL;
@@ -545,7 +548,7 @@ static void handle_mib_upload_next(struct omci_engine *eng,
 		OMCI_WARN("mib upload next: sequence %u past the %u promised",
 			  seq, up->units);
 	} else {
-		row = upload_locate(eng, ch, seq, &unit_index);
+		row = upload_locate(eng, seq, &unit_index);
 	}
 
 	if (row != NULL) {
@@ -650,15 +653,35 @@ static void table_serialise(const struct omci_engine *eng,
 }
 
 /*
+ * The table read that a Get next of attribute @attr continues: the one the
+ * last Get opened on the request's channel or, failing that, the one on the
+ * other channel, where an OLT that counts its identifiers into the priority
+ * bit opened it.
+ */
+static struct get_next_transfer *get_next_find(struct omci_engine *eng,
+					       const struct omci_frame *req,
+					       uint8_t attr)
+{
+	const unsigned int own = req->priority ? 1u : 0u;
+
+	for (unsigned int i = 0; i < 2u; i++) {
+		struct get_next_transfer *t = &eng->get_next[own ^ i];
+
+		if (t->active && t->class_id == req->class_id &&
+		    t->instance == req->instance && t->attr_no == attr)
+			return t;
+	}
+	return NULL;
+}
+
+/*
  * Get next (G.988 A.3.37, A.3.38): segment @seq of the table attribute that
- * the last Get opened on this channel. A request names one attribute; a
- * table that changed since the Get ends the read.
+ * a Get opened. A request names one attribute; a table that changed since
+ * the Get ends the read.
  */
 static void handle_get_next(struct omci_engine *eng,
 			    const struct omci_frame *req)
 {
-	struct get_next_transfer *t = &eng->get_next[req->priority ? 1 : 0];
-
 	const uint16_t mask = (uint16_t)omci_be16(&req->contents[0]);
 	const uint16_t seq = (uint16_t)omci_be16(&req->contents[2]);
 
@@ -680,8 +703,9 @@ static void handle_get_next(struct omci_engine *eng,
 		return;
 	}
 
-	if (!t->active || attr == 0 || t->class_id != req->class_id ||
-	    t->instance != req->instance || t->attr_no != attr) {
+	struct get_next_transfer *t = get_next_find(eng, req, attr);
+
+	if (t == NULL) {
 		OMCI_DEBUG(
 			"get next: %u/%u attr %u does not match the read in progress",
 			req->class_id, req->instance, attr);

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-/* Tests that the two priority channels are independent. */
+/*
+ * Tests of the two priority channels: what each keeps of its own, and what
+ * an OLT that counts its identifiers into the priority bit carries from one
+ * to the other.
+ */
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -144,18 +148,38 @@ static void test_two_walks_do_not_see_each_other(void)
 	omci_t_down(&fx);
 }
 
-static void test_a_walk_cannot_be_continued_on_the_other_channel(void)
+/*
+ * A read opened on the low channel is continued on the high one, as by an
+ * OLT whose identifier passed 0x7fff, and ends after its last segment there
+ * too.
+ */
+static void test_a_walk_continues_on_the_other_channel(void)
 {
 	struct omci_t_fixture fx;
 
 	CHECK(omci_t_up(&fx));
 	fill_table(fx.mib, 4);
 
-	open_walk(fx.eng, 0x0601u, false);
-	CHECK_EQ(get_next(fx.eng, 0x0602u, false, 0u), 0u);
-	CHECK_EQ(get_next(fx.eng, 0x0603u, true, 1u), 3u);
+	uint8_t want[3][32];
 
-	CHECK_EQ(get_next(fx.eng, 0x0604u, false, 1u), 0u);
+	open_walk(fx.eng, 0x0601u, false);
+	for (uint16_t seq = 0; seq < 3u; seq++) {
+		CHECK_EQ(get_next(fx.eng, (uint16_t)(0x0602u + seq), false,
+				  seq),
+			 0u);
+		memcpy(want[seq], &omci_t_last_tx()[8], 32);
+	}
+
+	open_walk(fx.eng, 0x7FFEu, false);
+	CHECK_EQ(get_next(fx.eng, 0x7FFFu, false, 0u), 0u);
+	CHECK_MEM(&omci_t_last_tx()[8], want[0], 32);
+	CHECK_EQ(get_next(fx.eng, 0x8000u, true, 1u), 0u);
+	CHECK_MEM(&omci_t_last_tx()[8], want[1], 32);
+	CHECK_EQ(get_next(fx.eng, 0x8001u, true, 2u), 0u);
+	CHECK_MEM(&omci_t_last_tx()[8], want[2], 32);
+
+	CHECK_EQ(get_next(fx.eng, 0x8002u, true, 0u), 3u);
+	CHECK_EQ(get_next(fx.eng, 0x0003u, false, 0u), 3u);
 
 	omci_t_down(&fx);
 }
@@ -284,65 +308,93 @@ static void test_every_message_type_answers_on_its_own_channel(void)
 	omci_t_down(&fx);
 }
 
-static void test_two_uploads_do_not_overwrite_each_other(void)
+static uint16_t mib_upload(struct omci_engine *eng, uint16_t tid, bool high)
+{
+	uint8_t req[OMCI_FRAME_LEN];
+
+	if (high)
+		omci_t_build_pri(req, tid, 13u, true, false, ME_ONU_DATA, 0u);
+	else
+		omci_t_build(req, tid, 13u, true, false, ME_ONU_DATA, 0u);
+
+	omci_t_tx_reset();
+	(void)!omci_engine_rx(eng, req);
+	const uint8_t *rsp = omci_t_last_tx();
+	return rsp == NULL ? 0u : (uint16_t)omci_be16(&rsp[8]);
+}
+
+/* Upload next @seq; @out gets the answer's contents. */
+static void upload_next(struct omci_engine *eng, uint16_t tid, bool high,
+			uint16_t seq, uint8_t out[32])
+{
+	uint8_t req[OMCI_FRAME_LEN];
+
+	if (high)
+		omci_t_build_pri(req, tid, 14u, true, false, ME_ONU_DATA, 0u);
+	else
+		omci_t_build(req, tid, 14u, true, false, ME_ONU_DATA, 0u);
+
+	struct omci_frame f;
+	(void)!omci_frame_parse(req, &f);
+	omci_be16_store(&f.contents[0], seq);
+	(void)!omci_frame_build(&f, req);
+
+	omci_t_tx_reset();
+	(void)!omci_engine_rx(eng, req);
+	const uint8_t *rsp = omci_t_last_tx();
+
+	memset(out, 0xEE, 32);
+	if (rsp != NULL)
+		memcpy(out, &rsp[8], 32);
+}
+
+static bool all_zero(const uint8_t *p, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+		if (p[i] != 0u)
+			return false;
+	return true;
+}
+
+/*
+ * An upload started on the low channel is continued on the high one, as by
+ * an OLT whose identifier passed 0x7fff: each unit is the one it was before.
+ */
+static void test_an_upload_continues_on_the_other_channel(void)
 {
 	struct omci_t_fixture fx;
 
 	CHECK(omci_t_up(&fx));
 	fill_table(fx.mib, 2);
-	for (uint16_t i = 0; i < 6u; i++)
+	for (uint16_t i = 0; i < 3u; i++)
 		CHECK_EQ(omci_mib_create(fx.mib, ME171,
 					 (uint16_t)(0x9000u + i)),
 			 OMCI_OK);
 
-	uint8_t req[OMCI_FRAME_LEN];
+	const uint16_t units = mib_upload(fx.eng, 0x0100u, false);
+	uint8_t want[4][32];
 
-	omci_t_build(req, 0x0A10u, 13u, true, false, ME_ONU_DATA, 0u);
-	omci_t_tx_reset();
-	(void)!omci_t_rx(fx.eng, req);
-	CHECK(omci_t_last_tx() != NULL);
-	const uint16_t lo_units =
-		(uint16_t)(((unsigned int)omci_t_last_tx()[8] << 8) |
-			   omci_t_last_tx()[9]);
-	CHECK(lo_units > 0u);
-
-	omci_t_build(req, 0x0A11u, 14u, true, false, ME_ONU_DATA, 0u);
-	omci_be16_store(&req[8], 3u);
-	struct omci_frame ff;
-	(void)!omci_frame_parse(req, &ff);
-	omci_be16_store(&ff.contents[0], 3u);
-	(void)!omci_frame_build(&ff, req);
-	omci_t_tx_reset();
-	CHECK_EQ(omci_t_rx(fx.eng, req), OMCI_OK);
-	CHECK(omci_t_last_tx() != NULL);
-	uint8_t lo_unit3[OMCI_FRAME_LEN];
-
-	memcpy(lo_unit3, omci_t_last_tx(), OMCI_FRAME_LEN);
-
-	for (uint16_t i = 0; i < 4u; i++)
-		CHECK_EQ(omci_mib_create(fx.mib, ME171,
-					 (uint16_t)(0x8000u + i)),
-			 OMCI_OK);
-
-	omci_t_build_pri(req, 0x0A20u, 13u, true, false, ME_ONU_DATA, 0u);
-	(void)!omci_t_rx(fx.eng, req);
-
-	omci_t_build(req, 0x0A13u, 14u, true, false, ME_ONU_DATA, 0u);
-	(void)!omci_frame_parse(req, &ff);
-	omci_be16_store(&ff.contents[0], lo_units);
-	(void)!omci_frame_build(&ff, req);
-	omci_t_tx_reset();
-	CHECK_EQ(omci_t_rx(fx.eng, req), OMCI_OK);
-	CHECK(omci_t_last_tx() != NULL);
-	if (omci_t_last_tx() != NULL) {
-		bool all_zero = true;
-
-		for (unsigned int i = 8; i < 40u; i++)
-			if (omci_t_last_tx()[i] != 0u)
-				all_zero = false;
-		CHECK(all_zero);
+	CHECK(units > 4u);
+	for (uint16_t seq = 0; seq < 4u; seq++) {
+		upload_next(fx.eng, (uint16_t)(0x0101u + seq), false, seq,
+			    want[seq]);
+		CHECK(!all_zero(want[seq], 32));
 	}
-	(void)lo_unit3;
+
+	uint8_t got[32];
+
+	CHECK_EQ(mib_upload(fx.eng, 0x7FFDu, false), units);
+	upload_next(fx.eng, 0x7FFEu, false, 0u, got);
+	CHECK_MEM(got, want[0], 32);
+	upload_next(fx.eng, 0x7FFFu, false, 1u, got);
+	CHECK_MEM(got, want[1], 32);
+	upload_next(fx.eng, 0x8000u, true, 2u, got);
+	CHECK_MEM(got, want[2], 32);
+	upload_next(fx.eng, 0x8001u, true, 3u, got);
+	CHECK_MEM(got, want[3], 32);
+
+	upload_next(fx.eng, 0x8002u, true, units, got);
+	CHECK(all_zero(got, 32));
 
 	omci_t_down(&fx);
 }
@@ -412,11 +464,11 @@ int main(void)
 {
 	RUN(test_the_high_channel_is_answered);
 	RUN(test_two_walks_do_not_see_each_other);
-	RUN(test_a_walk_cannot_be_continued_on_the_other_channel);
+	RUN(test_a_walk_continues_on_the_other_channel);
 	RUN(test_the_caches_do_not_answer_for_each_other);
 	RUN(test_filling_one_cache_leaves_the_other);
 	RUN(test_every_message_type_answers_on_its_own_channel);
-	RUN(test_two_uploads_do_not_overwrite_each_other);
+	RUN(test_an_upload_continues_on_the_other_channel);
 	RUN(test_mib_reset_invalidates_both_channels);
 	return OMCI_T_REPORT("test_priority");
 }
