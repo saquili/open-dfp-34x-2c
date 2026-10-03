@@ -167,6 +167,9 @@ lan_dhcp() {
 # interface $1 offloaded to the switch: netfilter follows a VLAN or a PPPoE
 # session down to the GEM interface. The flowtable is "ft": "offload" is a
 # word of nft's own, and a table that does not parse is not loaded at all.
+# The MSS of every TCP connection that crosses is clamped, in both directions,
+# to what the route's MTU leaves, so that a LAN host's segments fit a PPPoE
+# WAN's 1492 bytes without relying on path MTU discovery.
 nat_up() {
 	nft delete table inet $TABLE 2>/dev/null
 	if ! err=$(nft -f - 2>&1 <<EOF
@@ -178,6 +181,7 @@ table inet $TABLE {
 	}
 	chain forward {
 		type filter hook forward priority filter - 1; policy accept;
+		tcp flags syn tcp option maxseg size set rt mtu
 		meta l4proto { tcp, udp } flow add @ft
 	}
 	chain postrouting {

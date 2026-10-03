@@ -39,8 +39,9 @@ The small programs of the ONU.
    the WAN is a GEM port the OLT provisioned, or a VLAN on it, with an address
    by PPPoE (pppoed, with the user and secret of ``/run/onu-pppoe``), by DHCP
    (BusyBox's client, with ``dhcp-wan`` as its script) or by hand; and an
-   nftables table translates what leaves by the WAN and hands the flows to the
-   switch through a flowtable. A watcher brings the WAN up once the OLT has
+   nftables table translates what leaves by the WAN, clamps the MSS of TCP
+   connections to the route's MTU, and hands the flows to the switch through a
+   flowtable. A watcher brings the WAN up once the OLT has
    provisioned its GEM port, and starts the PPPoE client again when its link
    ends::
 
