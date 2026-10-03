@@ -1441,10 +1441,10 @@ Flows, streams and T-CONTs
    * - After every bring-up the driver programs each GEM port again, because the
        bring-up empties the GPON MAC's tables (the GPON MAC page) and the
        interface outlives it. The PON MAC is not rebuilt, so the stream map and
-       admissions stay as they were. Every T-CONT is unbound at that moment: a
-       bidirectional port gets its downstream half and the "upstream parked"
-       warning while its stream keeps its old queue and admission until the
-       Alloc-ID arrives.
+       admissions are as the bring-up found them. Every T-CONT is unbound at
+       that moment: a bidirectional port gets its downstream half, the
+       "upstream parked" warning and its stream parked, not admitted and on
+       queue 63 as a new port's is, until the Alloc-ID arrives.
      - I
      - What happens to frames sent in that window is not measured. Sending
        upstream through the port between the bring-up and the Assign_Alloc-ID,
@@ -2159,14 +2159,11 @@ Assumptions the driver depends on
        sends; an upstream flood above the grant, reading the pause counters;
        removing the supply under each dying-gasp polarity; reading the chip
        identity without the key.
-   * - That two T-CONTs of one group can share a queue, that a stream left on
-       its old queue after a bring-up does no harm, and that streams chosen by
-       VLAN tell GEM interfaces apart ("GEM ports as network interfaces").
+   * - That two T-CONTs of one group can share a queue, and that streams chosen
+       by VLAN tell GEM interfaces apart ("GEM ports as network interfaces").
      - Two granted T-CONTs in one group, each with an upstream GEM port, reading
-       each port's octet count; sending upstream between the bring-up and the
-       Assign_Alloc-ID, reading the ingress-discard counter; two upstream GEM
-       ports in different VLANs, each on a granted T-CONT, sending in both
-       VLANs.
+       each port's octet count; two upstream GEM ports in different VLANs, each
+       on a granted T-CONT, sending in both VLANs.
    * - That an extended OMCI message arrives with the same four trailing bytes
        ("The OMCI channel"), and that a message received outside O5 must be
        dropped.

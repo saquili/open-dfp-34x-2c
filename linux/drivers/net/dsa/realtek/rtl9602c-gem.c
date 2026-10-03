@@ -82,11 +82,10 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u8 tcont)
  * The upstream half waits for the T-CONT to hold an Alloc-ID: a T-CONT
  * without one is granted nothing, and the switch would discard at the ingress
  * port what the stream's queue cannot take. Until then the port is logged as
- * "upstream parked", while its stream is left as it is: parked and not
- * admitted for a new port, but on its old queue and still admitted when the
- * port is programmed again after a bring-up (rtl9602c_gem_restore()).
- * rtl9602c_gem_tcont_ready() programs the upstream half once the Alloc-ID
- * comes.
+ * "upstream parked" and its stream is parked, not admitted and on the parking
+ * queue, whether the port is new or programmed again after a bring-up
+ * (rtl9602c_gem_restore()). rtl9602c_gem_tcont_ready() programs the upstream
+ * half once the Alloc-ID comes.
  *
  * With the Alloc-ID, queue 0 of the T-CONT's group is attached, the flow is
  * given the Port-ID its upstream GEM headers carry, and the stream is pointed
@@ -96,6 +95,8 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u8 tcont)
  * queue that sits in both T-CONTs' maps. Which T-CONT's grants then drain it
  * is not verified.
  */
+static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f);
+
 static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 				const struct pon_gem_config *cfg)
 {
@@ -116,6 +117,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 
 	if (cfg->direction & IFLA_GEM_DIR_UPSTREAM) {
 		if (!rtl9602c_gem_tcont_bound(p, cfg->tcont)) {
+			rtl9602c_gem_park(p, f);
 			pr_warn("<GEM> port %u: T-CONT %u has no Alloc-ID; upstream parked\n",
 				cfg->port_id, cfg->tcont);
 			return 0;
@@ -143,13 +145,19 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
  * in the Port-ID table is cleared. The queue stays in its T-CONT's map,
  * since queues are never detached.
  */
-static void rtl9602c_gem_unprogram(struct rtl9602c_priv *p, unsigned int f)
+/* Park the stream of flow @f: not admitted, on the parking queue. */
+static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f)
 {
 	if (f < RTL9602C_PON_NUM_SID) {
 		rtl9602c_ponmac_sid_valid(p, f, false);
 		rtl9602c_ponq_stream_queue_set(p, f,
 					       RTL9602C_GEM_PARKING_QUEUE);
 	}
+}
+
+static void rtl9602c_gem_unprogram(struct rtl9602c_priv *p, unsigned int f)
+{
+	rtl9602c_gem_park(p, f);
 	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
 		     RTL9602C_GEM_US_FLOW_CFG_PORTID, 0);
 	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
@@ -453,11 +461,10 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
  * Bring-up empties the GPON MAC's tables, which the GEM ports live in, while
  * their interfaces remain; this programs each port again. None of T-CONTs 0
  * to 15 holds an Alloc-ID at that point, so a port that sends upstream gets
- * only its downstream half and the "upstream parked" warning, and its
- * upstream half follows when the Alloc-ID is assigned again
- * (rtl9602c_gem_tcont_ready()). The PON MAC is not rebuilt, so meanwhile the
- * port's stream keeps its queue and stays admitted; what becomes of frames
- * sent in that window is not verified.
+ * only its downstream half, the "upstream parked" warning and its stream
+ * parked, and its upstream half follows when the Alloc-ID is assigned again
+ * (rtl9602c_gem_tcont_ready()). The PON MAC is not rebuilt, so without the
+ * parking the stream would keep its old queue and admission meanwhile.
  */
 void rtl9602c_gem_restore(struct rtl9602c_priv *p)
 {
