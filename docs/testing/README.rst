@@ -51,3 +51,18 @@ The runs, the oldest first:
     standard counters, a receive ring of OMCI's own, pause on the SerDes port,
     BER_Interval and Ranging_Adjustment, the key exchange of encryption, and
     the fix that makes a VLAN translation translate. 28 of 28 passed.
+
+``2026-10-03-run05``
+    The same cases and the new ACL case on the RAM image built from
+    ``run05``, after the fixes to the bridge's upstream stream when a
+    GEM interface leaves, to the keys of the address entries, to the PHC's
+    frequency adjustment, to the PTP core's range check and to the conduit's
+    handling of frames that look tagged, and with the PPPoE case waiting for
+    the bench's end of the session. 30 of 30 passed.
+
+The series was rebased after the first, the second and the fourth run, before
+any of it was published, so the commits they name are not in the history. The
+same code, as far as the stick and the bench host run it, is at
+``run01``, ``run02`` and ``run04``: the rebase added
+documentation, and for the first run changed test data of the unit tests
+alone.
