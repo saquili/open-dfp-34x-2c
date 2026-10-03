@@ -198,9 +198,9 @@ static const struct i2c_algorithm rtl9602c_i2c_algo = {
  * @p: driver state
  *
  * Enables the master and registers it as the SMBus adapter "rtl9602c i2c".
- * The driver itself reaches the part without going through the adapter,
- * and CONFIG_RTL9602C_OPTICS_RO does not restrict what the adapter's
- * clients send.
+ * The driver itself reaches the part without going through the adapter.
+ * With CONFIG_RTL9602C_OPTICS_RO the adapter refuses every write from its
+ * clients.
  *
  * Return: 0 or a negative error code.
  */
