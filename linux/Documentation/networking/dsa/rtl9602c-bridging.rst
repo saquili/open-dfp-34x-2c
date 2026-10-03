@@ -756,8 +756,17 @@ Placing, changing and deleting through the hash
        then returns ``-ENOSPC`` and logs the address and VID (``<address> vlan
        <v>: its hash bucket is full``): with the CAM unused, a bucket of four
        slots can be full while the table has a thousand free slots.
-     - I
-     - A fifth address hashing into a full bucket would show HIT clear.
+     - M
+     - Five static entries whose addresses hash to bucket 77 (next row): the
+       first four took slots 308 to 311, the fifth was refused with the log
+       line, and once one of the four was deleted the fifth took its slot.
+   * - An entry keyed by address alone goes to the bucket that is the XOR of
+       the six bytes of its address.
+     - M
+     - 110 static entries at VID 0, keyed by address, with random last three
+       bytes: the bucket of each, its slot divided by four, was that XOR for
+       all of them, and the five addresses of the row above, built to share
+       one bucket, landed in it.
    * - A hashed delete removes an entry only when the rest of the written word
        agrees with it: a delete built from the address and VID with port 0 left
        an entry behind the CPU port in place. The driver therefore deletes an
@@ -2146,8 +2155,10 @@ Known limitations
   bridges use a VID: an address then has one entry for both.
 - The address table holds at most 1024 addresses, because the CAM is never used
   (see "Structure"), and fewer in practice: an address whose bucket of four
-  slots is full is refused with ``-ENOSPC`` while other buckets are empty. That
-  a hashed write with HIT clear means a full bucket is an assumption.
+  slots is full is refused with ``-ENOSPC`` while other buckets are empty.
+- DSA writes the address entries that the bridge asks for from a work queue,
+  so ``bridge fdb add`` has returned success by the time an entry is refused,
+  for instance for a full bucket; the refusal is the kernel log line alone.
 - While the L3 engine is up, which is whenever the driver is bound, a frame
   that is not IP, to a host address behind the CPU port other than this
   device's own, is flooded to every port, the PON port included: its entry
@@ -2171,9 +2182,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - A hashed write that reports HIT clear found its bucket full ("Placing,
-       changing and deleting through the hash").
-     - A fifth address hashing into a full bucket.
    * - A multicast group reaches the CPU only with the first extension bit as
        well as the CPU port's member bit ("Entry layout").
      - The bridge itself joining a group, then that group sent from the host
