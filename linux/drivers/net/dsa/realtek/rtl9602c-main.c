@@ -2073,6 +2073,7 @@ static void rtl9602c_mib_work(struct work_struct *w)
 		rtl9602c_mib_fold(p, port);
 		spin_unlock_irqrestore(&p->mib_lock, flags);
 	}
+	rtl9602c_acl_log_fold(p);
 	schedule_delayed_work(&p->mib_work, RTL9602C_MIB_FOLD_S * HZ);
 }
 
@@ -2266,6 +2267,7 @@ static const struct dsa_switch_ops rtl9602c_switch_ops = {
 	.port_fast_age		= rtl9602c_port_fast_age,
 	.cls_flower_add		= rtl9602c_cls_flower_add,
 	.cls_flower_del		= rtl9602c_cls_flower_del,
+	.cls_flower_stats	= rtl9602c_cls_flower_stats,
 	.get_sset_count		= rtl9602c_get_sset_count,
 	.get_strings		= rtl9602c_get_strings,
 	.get_ethtool_stats	= rtl9602c_get_ethtool_stats,

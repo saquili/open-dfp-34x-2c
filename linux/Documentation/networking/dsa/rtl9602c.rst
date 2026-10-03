@@ -1376,7 +1376,8 @@ The counters run free and wrap, so the driver keeps each as a 64-bit total
 (``rtl9602c_mib_fold()``): every read adds the difference since the last one,
 modulo 2^32, and a worker folds every port every ``RTL9602C_MIB_FOLD_S`` (60)
 seconds, within the 19 minutes a counter takes to wrap at the SFP port's 2.5
-Gb/s of frames of minimum size. ``rtl9602c_get_ethtool_stats()`` reports all
+Gb/s of frames of minimum size. The same worker folds the ACL's log counters
+(*acl-qos*, "Hit counts"). ``rtl9602c_get_ethtool_stats()`` reports all
 44 totals of a port on every ``ethtool -S``, under the names of the tables
 below; DSA lists its own ``tx_packets``, ``tx_bytes``, ``rx_packets`` and
 ``rx_bytes`` before them. The two octet counters are 64 bits wide: the driver

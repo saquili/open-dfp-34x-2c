@@ -1829,6 +1829,29 @@ struct rtl9602c_field {
 #define RTL9602C_ACL_ACT_EN_DEFAULT	0x7f
 
 /*
+ * The log class of an action: its type at LOG_LSB, 2 bits, and a counter at
+ * LOG_IDX_LSB, 5 bits. Type LOG_COUNTER counts each frame the rule matches in
+ * log counter LOG_IDX. EN_LOG is the class's bit of RTL9602C_ACL_ACT_EN; the
+ * driver sets it only for a rule with a counter, as the class's other types
+ * police.
+ */
+#define RTL9602C_ACL_ACT_LOG_LSB	35
+#define RTL9602C_ACL_ACT_LOG_IDX_LSB	30
+#define RTL9602C_ACL_ACT_LOG_COUNTER	1
+#define RTL9602C_ACL_ACT_EN_LOG		BIT(3)
+
+/*
+ * The log counters: 32 counters of 32 bits, each counting what an ACL rule's
+ * log class sends it. Bit k of LOG_WIDE joins counters 2k and 2k + 1 into one
+ * of 64 bits, and bit k of LOG_TYPE chooses what they count.
+ */
+#define RTL9602C_LOG_COUNTERS		32
+#define RTL9602C_LOG_CNT(i)		(0x032600 + 4 * (i))
+#define RTL9602C_LOG_WIDE		0x034004
+#define RTL9602C_LOG_TYPE		0x034008
+#define RTL9602C_LOG_TYPE_PACKETS	0
+
+/*
  * The classifier, whose rules are two entries as in the ACL; the lowest
  * matching entry applies. Entries from LAYOUT1_START up are matched with
  * another rule layout, taken to differ from the driver's (not verified), and
@@ -2858,6 +2881,8 @@ struct rtl9602c_priv {
 		u8		port;
 		/** @acl.prio: the tc priority of the rule */
 		u16		prio;
+		/** @acl.log: its log counter, or -1 */
+		s8		log;
 		/**
 		 * @acl.words: the entry as written: the zeros plane, the ones
 		 * plane and the action, so that the rule can be moved
@@ -2865,6 +2890,20 @@ struct rtl9602c_priv {
 		u32		words[2 * RTL9602C_ACL_RULE_WORDS +
 				      RTL9602C_ACL_ACT_WORDS];
 	} acl[RTL9602C_ACL_ENTRIES];
+	/** @acl_log_used: the log counters given to ACL rules */
+	DECLARE_BITMAP(acl_log_used, RTL9602C_LOG_COUNTERS);
+	/**
+	 * @acl_log: each log counter, under @acl_lock: its value at the last
+	 * read, and the frames counted and reported since it was given out
+	 */
+	struct {
+		/** @acl_log.last: the counter at the last read */
+		u32		last;
+		/** @acl_log.total: the frames counted */
+		u64		total;
+		/** @acl_log.reported: the frames reported to tc */
+		u64		reported;
+	} acl_log[RTL9602C_LOG_COUNTERS];
 	/** @acl_tmpl: the field code of each template slot, as written */
 	u8 acl_tmpl[RTL9602C_ACL_TMPL_COUNT][RTL9602C_ACL_TMPL_SLOTS];
 	/** @acl_tmpl_refs: the rules using each template, 0 when free */
@@ -3059,6 +3098,9 @@ struct rtl9602c_storm_param_row { u32 id; u8 cls; bool is_rate; };
 
 int rtl9602c_cls_flower_add(struct dsa_switch *ds, int port, struct flow_cls_offload *cls,
 			    bool ingress);
+int rtl9602c_cls_flower_stats(struct dsa_switch *ds, int port, struct flow_cls_offload *cls,
+			      bool ingress);
+void rtl9602c_acl_log_fold(struct rtl9602c_priv *p);
 int rtl9602c_cls_flower_del(struct dsa_switch *ds, int port, struct flow_cls_offload *cls,
 			    bool ingress);
 int rtl9602c_get_ts_info(struct dsa_switch *ds, int port, struct kernel_ethtool_ts_info *ts);

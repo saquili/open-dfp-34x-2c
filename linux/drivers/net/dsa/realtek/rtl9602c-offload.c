@@ -1057,6 +1057,8 @@ void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p)
 	}
 	rtl9602c_w(p, RTL9602C_ACL_PORT_EN, 0);
 	rtl9602c_w(p, RTL9602C_ACL_DEFAULT_PERMIT, 0);
+	rtl9602c_w(p, RTL9602C_LOG_WIDE, 0);
+	rtl9602c_w(p, RTL9602C_LOG_TYPE, RTL9602C_LOG_TYPE_PACKETS);
 
 	for (i = 0; i < RTL9602C_CLS_ENTRIES; i++)
 		rtl9602c_cf_invalidate(p, i);
@@ -1832,15 +1834,17 @@ static void rtl9602c_acl_push(struct rtl9602c_acl_match *m, u8 sel, u16 val,
 /*
  * Compose rule @w: the template, compared whole; the ingress port bits, of
  * which only @port's is compared; the slots; the valid bit, in the ones plane;
- * and the action. Only the forwarding class is applied:
+ * and the action. The forwarding class is applied:
  * RTL9602C_ACL_ACT_FWD_REDIRECT with no port drops the frame,
  * RTL9602C_ACL_ACT_FWD_TRAP sends it to the CPU, and
- * RTL9602C_ACL_ACT_FWD_MIRROR to the CPU port copies it there.
+ * RTL9602C_ACL_ACT_FWD_MIRROR to the CPU port copies it there. With a log
+ * counter @log, not -1, the log class counts the frame in it.
  */
 static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 				 const u8 *slot_of,
 				 const struct rtl9602c_acl_match *m,
-				 unsigned int fwdact, unsigned int fwd_pmsk)
+				 unsigned int fwdact, unsigned int fwd_pmsk,
+				 int log)
 {
 	u32 *mask = &w[RTL9602C_ACL_W_MASK], *data = &w[RTL9602C_ACL_W_DATA];
 	u32 *act = &w[RTL9602C_ACL_W_ACT];
@@ -1858,6 +1862,25 @@ static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 
 	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_LSB, 2, fwdact);
 	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_PORTS_LSB, 4, fwd_pmsk);
+	if (log >= 0) {
+		rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_LOG_LSB, 2,
+				  RTL9602C_ACL_ACT_LOG_COUNTER);
+		rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_LOG_IDX_LSB, 5, log);
+	}
+}
+
+/*
+ * The action classes of rule @w: forwarding, and the log class when the action
+ * names a log counter.
+ */
+static u32 rtl9602c_acl_act_en(const u32 *w)
+{
+	const u32 *act = &w[RTL9602C_ACL_W_ACT];
+	unsigned int lsb = RTL9602C_ACL_ACT_LOG_LSB;
+
+	if ((act[lsb / 32] >> (lsb % 32)) & GENMASK(1, 0))
+		return RTL9602C_ACL_ACT_EN_FWD | RTL9602C_ACL_ACT_EN_LOG;
+	return RTL9602C_ACL_ACT_EN_FWD;
 }
 
 /*
@@ -1885,7 +1908,7 @@ static int rtl9602c_acl_put(struct rtl9602c_priv *p, unsigned int idx,
 	if (err)
 		return err;
 
-	rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx, RTL9602C_ACL_ACT_EN_FWD);
+	rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx, rtl9602c_acl_act_en(w));
 
 	return rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
 				    idx + RTL9602C_ACL_RULE_ONES_PLANE,
@@ -1954,19 +1977,68 @@ static int rtl9602c_acl_place(struct rtl9602c_priv *p, u16 prio)
 }
 
 /*
+ * A free log counter for a new rule, its count starting from what it reads now,
+ * or -1 when all 32 are taken, and the rule then goes uncounted.
+ */
+static int rtl9602c_acl_log_get(struct rtl9602c_priv *p)
+{
+	unsigned int i;
+
+	lockdep_assert_held(&p->acl_lock);
+	i = find_first_zero_bit(p->acl_log_used, RTL9602C_LOG_COUNTERS);
+	if (i >= RTL9602C_LOG_COUNTERS)
+		return -1;
+	set_bit(i, p->acl_log_used);
+	p->acl_log[i].last = rtl9602c_r(p, RTL9602C_LOG_CNT(i));
+	p->acl_log[i].total = 0;
+	p->acl_log[i].reported = 0;
+	return i;
+}
+
+/* Add what log counter @i counted since its last read to its total. */
+static void rtl9602c_acl_log_read(struct rtl9602c_priv *p, unsigned int i)
+{
+	u32 now = rtl9602c_r(p, RTL9602C_LOG_CNT(i));
+
+	lockdep_assert_held(&p->acl_lock);
+	p->acl_log[i].total += now - p->acl_log[i].last;
+	p->acl_log[i].last = now;
+}
+
+/**
+ * rtl9602c_acl_log_fold() - fold the log counters into the rules' totals
+ * @p: the switch
+ *
+ * A log counter has 32 bits. Folded every minute, as the counter fold does, it
+ * cannot wrap twice between two reads below 71 million frames a second.
+ *
+ * Context: process context; takes acl_lock.
+ */
+void rtl9602c_acl_log_fold(struct rtl9602c_priv *p)
+{
+	unsigned int i;
+
+	mutex_lock(&p->acl_lock);
+	for_each_set_bit(i, p->acl_log_used, RTL9602C_LOG_COUNTERS)
+		rtl9602c_acl_log_read(p, i);
+	mutex_unlock(&p->acl_lock);
+}
+
+/*
  * Write the rule of @m on @port into a new entry, kept in priority order
- * (rtl9602c_acl_place()), and turn on the port's lookup. @extack, if not NULL,
- * gets the reason of a failure.
+ * (rtl9602c_acl_place()), and turn on the port's lookup. With @count, the rule
+ * takes a log counter while one is free. @extack, if not NULL, gets the reason
+ * of a failure.
  */
 static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 			       const struct rtl9602c_acl_match *m, u16 prio,
 			       unsigned long cookie, unsigned int fwdact,
-			       unsigned int fwd_pmsk,
+			       unsigned int fwd_pmsk, bool count,
 			       struct netlink_ext_ack *extack)
 {
 	u8 slot_of[RTL9602C_ACL_TMPL_SLOTS];
 	unsigned int idx;
-	int tmpl, err;
+	int tmpl, log, err;
 
 	lockdep_assert_held(&p->acl_lock);
 
@@ -1988,11 +2060,14 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	}
 	idx = err;
 
+	log = count ? rtl9602c_acl_log_get(p) : -1;
 	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
 	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, m,
-			     fwdact, fwd_pmsk);
+			     fwdact, fwd_pmsk, log);
 	err = rtl9602c_acl_put(p, idx, p->acl[idx].words);
 	if (err) {
+		if (log >= 0)
+			clear_bit(log, p->acl_log_used);
 		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
 		return err;
 	}
@@ -2001,6 +2076,7 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	p->acl[idx].tmpl = tmpl;
 	p->acl[idx].port = port;
 	p->acl[idx].prio = prio;
+	p->acl[idx].log = log;
 	p->acl_tmpl_refs[tmpl]++;
 	set_bit(idx, p->acl_used);
 	rtl9602c_acl_port_enable(p, port, true);
@@ -2170,7 +2246,7 @@ no_addrs:
 	}
 
 	err = rtl9602c_acl_insert(p, port, &m, cls->common.prio, cls->cookie,
-				  fwdact, fwd_pmsk, extack);
+				  fwdact, fwd_pmsk, true, extack);
 out:
 	mutex_unlock(&p->acl_lock);
 	return err;
@@ -2240,12 +2316,12 @@ void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
 					RTL9602C_ACL_SNOOP_PRIO,
 					RTL9602C_ACL_SNOOP_COOKIE(n++),
 					RTL9602C_ACL_ACT_FWD_MIRROR,
-					BIT(RTL9602C_PORT_CPU), NULL) ||
+					BIT(RTL9602C_PORT_CPU), false, NULL) ||
 		    rtl9602c_acl_insert(p, ports[i], &mld,
 					RTL9602C_ACL_SNOOP_PRIO,
 					RTL9602C_ACL_SNOOP_COOKIE(n++),
 					RTL9602C_ACL_ACT_FWD_MIRROR,
-					BIT(RTL9602C_PORT_CPU), NULL))
+					BIT(RTL9602C_PORT_CPU), false, NULL))
 			pr_err("port %d: no ACL rule for IGMP and MLD; the bridge misses reports to groups in the table\n",
 			       ports[i]);
 	}
@@ -2270,6 +2346,8 @@ static int rtl9602c_acl_del(struct rtl9602c_priv *p, unsigned long cookie)
 		err = rtl9602c_acl_retire(p, idx);
 		if (p->acl_tmpl_refs[p->acl[idx].tmpl])
 			p->acl_tmpl_refs[p->acl[idx].tmpl]--;
+		if (p->acl[idx].log >= 0)
+			clear_bit(p->acl[idx].log, p->acl_log_used);
 		clear_bit(idx, p->acl_used);
 
 		for_each_set_bit(other, p->acl_used, RTL9602C_ACL_ENTRIES)
@@ -2817,6 +2895,44 @@ int rtl9602c_cls_flower_add(struct dsa_switch *ds, int port,
 		return -EOPNOTSUPP;
 	}
 	return rtl9602c_flower_replace(p, port, cls);
+}
+
+/**
+ * rtl9602c_cls_flower_stats() - the frames an offloaded flower rule matched
+ * @ds: the switch
+ * @port: unused; the cookie names the rule
+ * @cls: the rule, whose statistics are updated
+ * @ingress: unused
+ *
+ * An ACL rule with a log counter reports the frames it matched since the last
+ * report. The counter counts no bytes, and a rule of storm control or of the
+ * classifier, or one left without a counter, reports nothing.
+ *
+ * Return: 0.
+ */
+int rtl9602c_cls_flower_stats(struct dsa_switch *ds, int port,
+			      struct flow_cls_offload *cls, bool ingress)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	unsigned int idx;
+	u64 pkts = 0;
+	int log;
+
+	mutex_lock(&p->acl_lock);
+	for_each_set_bit(idx, p->acl_used, RTL9602C_ACL_ENTRIES) {
+		log = p->acl[idx].log;
+		if (p->acl[idx].cookie != cls->cookie || log < 0)
+			continue;
+		rtl9602c_acl_log_read(p, log);
+		pkts = p->acl_log[log].total - p->acl_log[log].reported;
+		p->acl_log[log].reported = p->acl_log[log].total;
+		break;
+	}
+	mutex_unlock(&p->acl_lock);
+
+	flow_stats_update(&cls->stats, 0, pkts, 0, 0,
+			  FLOW_ACTION_HW_STATS_IMMEDIATE);
+	return 0;
 }
 
 /**

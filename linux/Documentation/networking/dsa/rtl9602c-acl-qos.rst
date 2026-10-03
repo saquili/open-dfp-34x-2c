@@ -149,6 +149,8 @@ function; every name is prefixed ``rtl9602c_``.
      - Described under
    * - ``cls_flower_add``, ``cls_flower_del``
      - "The ACL", "Storm control" and "The classifier".
+   * - ``cls_flower_stats``
+     - "Hit counts".
    * - ``port_setup_tc`` (tbf and ets; its flowtable offload is the *l3-nat*
        page's)
      - "Egress queues and the scheduler" and "The egress shaper".
@@ -560,12 +562,16 @@ decision is one of them.
      - Checked by
    * - ``RTL9602C_ACL_ACT_EN`` (``0x015048`` + 4i): one word per rule, the
        action classes that the rule's action entry applies;
-       ``RTL9602C_ACL_ACT_EN_FWD`` (bit 4) is the forwarding decision. Every
-       word reads ``RTL9602C_ACL_ACT_EN_DEFAULT`` (``0x7f``) out of reset. The
-       driver writes ``RTL9602C_ACL_ACT_EN_FWD`` alone for a rule, so no class
-       that the rule did not program is applied.
+       ``RTL9602C_ACL_ACT_EN_FWD`` (bit 4) is the forwarding decision and
+       ``RTL9602C_ACL_ACT_EN_LOG`` (bit 3) the log class. Every word reads
+       ``RTL9602C_ACL_ACT_EN_DEFAULT`` (``0x7f``) out of reset. The driver
+       writes ``RTL9602C_ACL_ACT_EN_FWD`` for a rule, with
+       ``RTL9602C_ACL_ACT_EN_LOG`` when the rule has a log counter, so no
+       class that the rule did not program is applied.
      - M
-     - Drop rules written with this word at ``0x10`` drop their traffic.
+     - Drop rules written with this word at ``0x10`` drop their traffic, and
+       drop and trap rules with it at ``0x18`` drop and trap theirs and count
+       them (see "Hit counts").
    * - A zero in ``RTL9602C_ACL_ACT_EN`` chains the entry to the one before it:
        entries n and n + 1 act as one rule that matches only when both patterns
        match, and only entry n's action applies. Any value from ``0x01`` to
@@ -609,13 +615,37 @@ decision is one of them.
        reached the CPU, on the GEM interface of the port they came in on, where
        a software ``tc`` filter counted them. The ``data.acl`` case of
        ``tests/device`` repeats this, the drop and the ordering below.
+   * - The log class: bits 36:35 of the action entry
+       (``RTL9602C_ACL_ACT_LOG_LSB``) hold its type and bits 34:30
+       (``RTL9602C_ACL_ACT_LOG_IDX_LSB``) a counter. Type
+       ``RTL9602C_ACL_ACT_LOG_COUNTER`` (1) counts each frame that the rule
+       decides for in log counter ``RTL9602C_LOG_CNT(i)`` (``0x032600`` +
+       4i), one of ``RTL9602C_LOG_COUNTERS`` (32) of 32 bits. A rule below
+       another that matches the same frame counts nothing.
+     - M
+     - Trap and drop rules on ``pon`` with counters, under untagged frames of
+       EtherType ``0x88b5`` from the network side: see "Hit counts".
+   * - The log class's other types police with a meter, so the driver sets
+       ``RTL9602C_ACL_ACT_EN_LOG`` only with type 1 and a counter.
+     - I
+     - Not measured; a rule with the class on and type 0 would show it.
+   * - Bit k of ``RTL9602C_LOG_TYPE`` (``0x034008``) chooses what counters 2k
+       and 2k + 1 count, ``RTL9602C_LOG_TYPE_PACKETS`` (0) frames; bit k of
+       ``RTL9602C_LOG_WIDE`` (``0x034004``) joins them into one counter of 64
+       bits. Setup writes both words 0: every counter counts frames, in 32
+       bits.
+     - M, I
+     - M: with both words 0 a counter counted 200 for 200 frames of 60 bytes.
+       I: the other value of a type bit, and the joined counters, not
+       measured.
 
 The ACL can raise an interrupt: the source ``RTL9602C_IRQ_SRC_ACL`` of the
 switch interrupt, which setup unmasks, and a latch ``RTL9602C_ACL_HIT_STAT``
 whose field ``RTL9602C_ACL_HIT_STAT_TMPL`` (bits 7:0) has a bit for each
 template. The handler and the latch are described on the *main* page, "The
 switch interrupt". The class word of a rule has a class for the interrupt as
-well as the one for forwarding; the driver enables only the forwarding class.
+well as the ones for forwarding and logging; the driver enables no interrupt
+class.
 
 .. list-table::
    :header-rows: 1
@@ -754,13 +784,17 @@ Writing one rule, ``rtl9602c_acl_replace()``, ``rtl9602c_acl_place()`` and
 3. Write zeros to the ones plane at i + 128, then the zeros plane at i (five
    words). Purpose: the entry cannot match yet, because its valid bit is in
    the ones plane. (M)
-4. Write the action entry at i (three words): the decision and its port mask.
-   (M)
-5. Write ``RTL9602C_ACL_ACT_EN(i)`` = ``RTL9602C_ACL_ACT_EN_FWD``. Purpose:
-   only the forwarding class applies. (M)
-6. Write the ones plane at i + 128, which holds the valid bit. Purpose: it goes
+4. For a rule from ``tc``, take a free log counter, if one is left, and note
+   what it reads. Purpose: the rule's hits are counted from here (see "Hit
+   counts"). (M)
+5. Write the action entry at i (three words): the decision and its port mask,
+   and the log class with the counter. (M)
+6. Write ``RTL9602C_ACL_ACT_EN(i)`` = ``RTL9602C_ACL_ACT_EN_FWD``, with
+   ``RTL9602C_ACL_ACT_EN_LOG`` for a rule with a counter. Purpose: only the
+   classes that the rule programmed apply. (M)
+7. Write the ones plane at i + 128, which holds the valid bit. Purpose: it goes
    last, so that no frame meets a half-written rule. (M)
-7. Set the port's ``RTL9602C_ACL_DEFAULT_PERMIT`` bit, then its
+8. Set the port's ``RTL9602C_ACL_DEFAULT_PERMIT`` bit, then its
    ``RTL9602C_ACL_PORT_EN`` bit. Purpose: lookup without the permit drops every
    frame that no rule matches. (M)
 
@@ -770,21 +804,58 @@ Removing one, ``rtl9602c_acl_del()``, in order:
    the rule stops. (M)
 2. Write ``RTL9602C_ACL_ACT_EN_DEFAULT`` to ``RTL9602C_ACL_ACT_EN(i)``, and
    never 0. Purpose: a zero would chain the next entry to this one. (M)
-3. Drop the template's use count. Purpose: a template that no rule uses is free
-   again. (M)
+3. Drop the template's use count, and give the rule's log counter back.
+   Purpose: a template that no rule uses is free again, and so is a counter.
+   (M)
 4. If the port has no rule left, clear its ``RTL9602C_ACL_PORT_EN`` and
    ``RTL9602C_ACL_DEFAULT_PERMIT`` bits, in that order. Purpose: a port without
    rules needs no lookup, and the lookup is off before the permit goes. (M)
 
 The steps are checked as follows. Adding: step 1 by the rules on templates built
 from six different field sets that each matched their traffic; step 2 by the
-whole index space read through the table engine; steps 3 and 5 by the drop
-measurements, which use this action encoding and this valid bit; step 4 by the
-drop rules that dropped with the class word at ``0x10``; step 6 by the frames
-that arrived with the permit bit set and none with it clear. Removing: step 1 by
-clearing the ones plane stopping a rule; step 2 by the chaining measurement;
-step 3 by 96 rules sharing one template; step 4 by the traffic returning when
-the last filter on port 0 was removed.
+whole index space read through the table engine; steps 3 and 6 by the drop
+measurements, which use this action encoding and this valid bit; steps 4 and 5
+by the counts of "Hit counts", and step 5 also by the drop rules that dropped
+with the class word at ``0x10``; step 7 by the frames that arrived with the
+permit bit set and none with it clear. Removing: step 1 by clearing the ones
+plane stopping a rule; step 2 by the chaining measurement; step 3 by 96 rules
+sharing one template and by a counter counting from zero for a rule added
+again; step 4 by the traffic returning when the last filter on port 0 was
+removed.
+
+Hit counts
+----------
+
+Each rule that ``tc`` offloads to the ACL takes one of the 32 log counters
+while one is free, and the switch counts in it every frame for which the rule
+decides. ``cls_flower_stats``, which ``tc -s filter show`` calls, reports the
+frames counted since the last report; the counters count no bytes, so the bytes
+read 0, as with other switches that count frames only. A rule added while all
+32 are taken works without a count. The driver's own rules (see "Rules of the
+driver's own") take none. A counter of 32 bits would wrap within a minute only
+above 71 million frames a second, and the counter fold, which runs every
+minute (see the *main* page, "Per-port counters"), adds every counter in use to
+its rule's total, so a total never misses a wrap.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A trap or drop rule with a counter counts each frame it decides for, a
+       read reports only what is new, and a rule above it that decides first
+       leaves its count alone. A drop's frames show as dropped too, as ``tc``
+       counts the frames of a drop action.
+     - M
+     - 200 untagged frames of EtherType ``0x88b5`` at a time from the network
+       side, with rules on ``pon``: a trap reported ``Sent 0 bytes 200 pkt``,
+       then 400 after 200 more and still 400 read again with no traffic; a
+       drop, added again in its place, 200 and ``dropped 200``; with a trap of
+       priority 5 added above the drop of 10, 300 more frames gave the trap 300
+       and left the drop at 200. No frame reached the host side while a rule
+       was in place, and 200 did once the rules were gone.
 
 The parser's field selectors
 ============================
@@ -2665,10 +2736,8 @@ on them. They were measured with register writes made outside the driver.
 Known limitations
 =================
 
-- The driver reports no statistics for offloaded flower rules (it has no
-  ``cls_flower_stats`` operation), so ``tc -s filter show`` counts no hits for a
-  rule that the switch applies. The effect of a rule is seen in the frames that
-  arrive and in the frame capture.
+- Only the ACL's rules report hits, at most 32 of them at a time, and in
+  frames only. Rules of storm control and of the classifier report nothing.
 - A read of the flood-threshold registers of the DoS checks, ``0x026008``,
   ``0x02600c`` and ``0x026010``, by any means other than the driver's, for
   instance through a mapping of the register window, has stalled the board until
