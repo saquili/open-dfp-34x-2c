@@ -539,6 +539,97 @@ def acl(ctx: Context):
     return verdict(ok, f"{ACL_COUNT} frames each; " + "; ".join(seen))
 
 
+# The mirror case: what the PON port receives and what it sends, copied to the
+# SFP port at a tc priority of the case's own. The frames from the network side
+# go to the stick's own address, which the switch sends to the CPU alone, and
+# those from the subscriber side to the network-side port's, which leave by the
+# PON: without the mirror, none of them reaches the subscriber side.
+MIRROR_COUNT = 2000
+MIRROR_PREF = 49040
+
+# Run by python3 on the bench host with SRC RECV DST COUNT: COUNT frames of
+# EtherType 0x88b5 from port SRC to the address DST, 0.2 ms apart, below the
+# upstream rate. It prints how many frames from SRC's address port RECV
+# received meanwhile, in promiscuous mode, leaving out what RECV sent itself.
+MIRRORED = """\
+import socket, struct, sys, threading, time
+src, recv, dst, count = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+mac = lambda text: bytes.fromhex(text.replace(":", ""))
+own = mac(open("/sys/class/net/%s/address" % src).read().strip())
+SOL_PACKET, PACKET_ADD_MEMBERSHIP, PACKET_MR_PROMISC = 263, 1, 1
+rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x88b5))
+rx.bind((recv, 0))
+rx.setsockopt(SOL_PACKET, PACKET_ADD_MEMBERSHIP,
+              struct.pack("iHH8s", socket.if_nametoindex(recv), PACKET_MR_PROMISC, 0, bytes(8)))
+rx.settimeout(0.5)
+seen, stop = [0], []
+def receive():
+    while not stop:
+        try:
+            data, addr = rx.recvfrom(2048)
+        except socket.timeout:
+            continue
+        if addr[2] != socket.PACKET_OUTGOING and data[6:12] == own:
+            seen[0] += 1
+thread = threading.Thread(target=receive)
+thread.start()
+tx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+tx.bind((src, 0))
+frame = mac(dst) + own + b"\\x88\\xb5" + bytes(46)
+for _ in range(count):
+    tx.send(frame)
+    time.sleep(0.0002)
+time.sleep(1.5)
+stop.append(1)
+thread.join()
+print(seen[0])
+"""
+
+
+def mirrored(ctx: Context, into: str, dst: str) -> int:
+    """Send MIRROR_COUNT frames into the bench port into, to the address dst;
+    return how many of them the subscriber-side port received."""
+    command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
+        "python3", "-", into, ctx.settings.subscriber_port, dst, str(MIRROR_COUNT))))
+    reply = ctx.bench.run(command, stdin=MIRRORED, timeout=60)
+    try:
+        return int(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ValueError(f"the probe did not run: {(reply.err or reply.out).strip()!r}")
+
+
+@case("data.mirror", "Data path",
+      "A matchall mirror copies to the host side what the PON port receives and what it "
+      "sends, both at once, and nothing once it is removed")
+def mirror(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    s = ctx.settings
+    own = ctx.stick.text("cat /sys/class/net/sfp/address")
+    net = ctx.bench.text(f"cat /sys/class/net/{shlex.quote(s.olt_port)}/address")
+    ways = ("ingress", "egress")
+    added = clsact(ctx, ["pon"])
+    try:
+        for way in ways:
+            reply = ctx.stick.run(f"tc filter add dev pon {way} pref {MIRROR_PREF} matchall "
+                                  "skip_sw action mirred egress mirror dev sfp")
+            if not reply.ok:
+                raise ValueError(f"tc refused the {way} mirror: "
+                                 f"{(reply.err or reply.out).strip()}")
+        down, up = mirrored(ctx, s.olt_port, own), mirrored(ctx, s.subscriber_port, net)
+    finally:
+        ctx.stick.run("; ".join(
+            [f"tc filter del dev pon {way} pref {MIRROR_PREF} 2>/dev/null" for way in ways] +
+            [f"tc qdisc del dev {dev} clsact" for dev in added] + ["true"]))
+    down_after, up_after = mirrored(ctx, s.olt_port, own), mirrored(ctx, s.subscriber_port, net)
+    every, none = MIRROR_COUNT * 0.99, MIRROR_COUNT * 0.01
+    ok = down >= every and up >= every and down_after <= none and up_after <= none
+    return verdict(ok, f"{MIRROR_COUNT} frames each way; mirrored, {down} of those from the "
+                       f"network side to this device and {up} of those from the host side "
+                       f"reached the host side; after, {down_after} and {up_after}")
+
+
 # The multicast case: groups of the organisation-local IPv4 scope (RFC 2365)
 # and of the transient IPv6 range, which no line is expected to carry, and the
 # mDNS group as a link-local one, which a snooping bridge floods unasked.

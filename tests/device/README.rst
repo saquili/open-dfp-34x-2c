@@ -28,7 +28,8 @@ What it needs
   translation between them on the stick, at a tc priority of its own, and
   removes it again. The ACL case likewise installs drop and trap rules on the
   stick's PON port, and a filter that counts the trapped frames on each of its
-  GEM interfaces, and removes them again.
+  GEM interfaces, and removes them again; the mirror case mirrors the PON port
+  to the SFP port both ways, and removes the mirror again.
 * For the router-mode cases: network namespaces and macvlan interfaces on the
   bench host, which gets two namespaces, ``devtest-lan`` and ``devtest-wan``,
   for as long as the cases run. For the PPPoE case also a PPPoE concentrator on
@@ -48,8 +49,9 @@ From this directory::
         --token-file FILE --out ../../docs/testing/NAME
 
 ``--list`` lists the cases; naming cases or areas (``gpon``, ``data.upstream``)
-runs only those. The cases that reset the stick run only with
-``--destructive``, and after all the others; the cases that put the stick in
+runs only those. The kernel log is read after the other cases, so that it
+holds what they made the kernel say. The cases that reset the stick run only
+with ``--destructive``, and after all the others; the cases that put the stick in
 router mode and back run only with ``--router`` (``--pppoe-secrets FILE`` and
 ``--bng-service UNIT``, ``accel-ppp`` by default, for the PPPoE case). Without ``--olt-port`` and ``--subscriber-port`` the
 data-path cases are skipped; without ``--token-file`` so is the case that reads

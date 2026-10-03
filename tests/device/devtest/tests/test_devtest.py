@@ -105,6 +105,12 @@ class Runner(unittest.TestCase):
         self.assertTrue(all(c.destructive for c in everything[first:]))
         self.assertEqual(select(["system"])[-1].id, "system.watchdog-reset")
 
+    def test_the_kernel_log_is_read_after_the_other_cases(self):
+        everything = [c.id for c in select(None) if not c.destructive]
+        self.assertEqual(everything[-1], "system.log")
+        self.assertEqual([c.id for c in select(["system"])][-2:],
+                         ["system.log", "system.watchdog-reset"])
+
 
 class Record(unittest.TestCase):
     def results(self):
@@ -157,6 +163,12 @@ class Cases(unittest.TestCase):
         self.assertEqual(cases_system.log(ok).evidence, "0 of 312 lines")
         bad = context(stick=[("grep -E", 0, "[ 1.0] WARNING: at x\n"), ("wc -l", 0, "312\n")])
         self.assertEqual(cases_system.log(bad).status, FAIL)
+
+    def test_a_switchdev_object_that_a_driver_failed_is_trouble(self):
+        failed_del = ("[  284.1] gem256: Failed to del Host Multicast Database entry "
+                      "(object id=3) with error: -2 (-2).")
+        self.assertRegex(failed_del, cases_system.TROUBLE)
+        self.assertNotRegex("[    0.7] rtl9602c-eth cpu: self-test passed", cases_system.TROUBLE)
 
     def test_the_report_of_the_pon_tool_is_read(self):
         self.assertEqual(cases_pon.onu_state(PON), 5)
@@ -505,6 +517,42 @@ class Cases(unittest.TestCase):
         bad = outcome(reports_to_a_group_pass=False)[0]
         self.assertEqual(bad.status, FAIL)
         self.assertIn("1/3 reports again, timer not restarted", bad.evidence)
+
+    def test_the_mirror_case_wants_copies_both_ways_and_none_after(self):
+        def outcome(copies: bool):
+            trail: list[str] = []
+            rules: set[str] = set()
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    for way in re.findall(r"filter add dev pon (\w+) pref 49040 matchall", command):
+                        rules.add(way)
+                    for way in re.findall(r"filter del dev pon (\w+) pref 49040", command):
+                        rules.discard(way)
+                    return super().run(command, **kw)
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    way = "ingress" if " eth1 eth2 " in command else "egress"
+                    n = cases_data.MIRROR_COUNT if copies and way in rules else 0
+                    self.answers[0] = ("python3 -", 0, f"{n}\n")
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("sfp/address", 0, "00:00:5e:00:53:02\n"), ("tc ", 0, "")],
+                          trail)
+            bench = Bench("bench", [("python3 -", 0, ""), ("address", 0, "00:00:5e:00:53:01\n"),
+                                    ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            return cases_data.mirror(ctx), rules, stick.asked
+        good, left, asked = outcome(copies=True)
+        self.assertEqual(good.status, PASS)
+        self.assertIn("2000 of those from the network side", good.evidence)
+        self.assertIn("after, 0 and 0", good.evidence)
+        self.assertEqual(left, set())
+        self.assertIn("tc qdisc del dev pon clsact; true", asked[-1])
+        self.assertEqual(outcome(copies=False)[0].status, FAIL)
 
     def test_a_burst_that_never_left_the_bench_is_the_bench_s_fault(self):
         trail: list[str] = []

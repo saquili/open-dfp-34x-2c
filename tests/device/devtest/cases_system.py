@@ -11,8 +11,10 @@ import time
 from .core import Context, case, failed, passed, verdict
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
-# What the kernel prints when something went wrong in it.
-TROUBLE = r"(BUG:|Oops|WARNING:|Call Trace|Kernel panic|segfault|unhandled|soft lockup|hung_task)"
+# What the kernel prints when something went wrong in it, and when a driver
+# failed an object that the bridge handed it through switchdev.
+TROUBLE = (r"(BUG:|Oops|WARNING:|Call Trace|Kernel panic|segfault|unhandled|soft lockup|hung_task"
+           r"|Failed to (add|del) .* \(object id=)")
 # Seconds past the watchdog's timeout in which the stick must have gone, and
 # in which it must be back: the boot loader counts down for up to ten minutes.
 RESET_MARGIN = 15
@@ -39,7 +41,9 @@ def kernel(ctx: Context):
     return verdict(release == want, f"uname -r {release} (tree {want}), {build}")
 
 
-@case("system.log", "System", "The kernel log holds no oops, warning, BUG or panic")
+@case("system.log", "System",
+      "After the other cases, the kernel log holds no oops, warning, BUG or panic and no "
+      "switchdev object that a driver failed", last=True)
 def log(ctx: Context):
     lines = ctx.stick.text(f"dmesg | grep -E '{TROUBLE}' || true").splitlines()
     total = ctx.stick.text("dmesg | wc -l")

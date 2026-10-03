@@ -61,16 +61,17 @@ class Case:
     check: str
     run: Callable[[Context], Outcome]
     destructive: bool = False
+    last: bool = False
 
 
 CASES: list[Case] = []
 
 
-def case(id: str, area: str, check: str, *, destructive: bool = False):
+def case(id: str, area: str, check: str, *, destructive: bool = False, last: bool = False):
     def register(fn: Callable[[Context], Outcome]) -> Callable[[Context], Outcome]:
         if any(c.id == id for c in CASES):
             raise ValueError(f"two cases named {id}")
-        CASES.append(Case(id, area, check, fn, destructive))
+        CASES.append(Case(id, area, check, fn, destructive, last))
         return fn
     return register
 
@@ -105,8 +106,9 @@ def run_case(c: Case, ctx: Context) -> Result:
 
 
 def select(ids: list[str] | None) -> list[Case]:
-    """The cases named, or all; the destructive ones last, since a reset of the
-    stick leaves it on another boot for every case after it."""
+    """The cases named, or all; those that look back over the run, such as the
+    kernel log's, after the others, and the destructive ones last of all, since
+    a reset of the stick leaves it on another boot for every case after it."""
     if not ids:
         chosen = list(CASES)
     else:
@@ -115,4 +117,4 @@ def select(ids: list[str] | None) -> list[Case]:
                    if not any(c.id == i or c.id.startswith(i + ".") for c in CASES)]
         if unknown:
             raise SystemExit(f"devtest: no case named {', '.join(unknown)}")
-    return sorted(chosen, key=lambda c: c.destructive)
+    return sorted(chosen, key=lambda c: (c.destructive, c.last))
