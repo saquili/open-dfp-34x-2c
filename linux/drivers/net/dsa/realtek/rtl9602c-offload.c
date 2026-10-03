@@ -2894,25 +2894,20 @@ int rtl9602c_port_set_apptrust(struct dsa_switch *ds, int port,
 	    (p->apptrust_n != nsel || memcmp(p->apptrust, sel, nsel)))
 		return -EOPNOTSUPP;
 
+	/* Every selector is checked before a weight is written. */
+	for (i = 0; i < nsel; i++)
+		if (sel[i] != DCB_APP_SEL_PCP &&
+		    sel[i] != IEEE_8021QAZ_APP_SEL_DSCP)
+			return -EOPNOTSUPP;
+
 	rtl9602c_pri_weight_set(p, RTL9602C_QOS_PRIO_WEIGHT_PCP, 0);
 	rtl9602c_pri_weight_set(p, RTL9602C_QOS_PRIO_WEIGHT_DSCP, 0);
 
-	for (i = 0; i < nsel; i++) {
-		u8 weight = RTL9602C_QOS_PRIO_WEIGHT_MAX - i;
-
-		switch (sel[i]) {
-		case DCB_APP_SEL_PCP:
-			rtl9602c_pri_weight_set(p, RTL9602C_QOS_PRIO_WEIGHT_PCP,
-						weight);
-			break;
-		case IEEE_8021QAZ_APP_SEL_DSCP:
-			rtl9602c_pri_weight_set(p, RTL9602C_QOS_PRIO_WEIGHT_DSCP,
-						weight);
-			break;
-		default:
-			return -EOPNOTSUPP;
-		}
-	}
+	for (i = 0; i < nsel; i++)
+		rtl9602c_pri_weight_set(p, sel[i] == DCB_APP_SEL_PCP ?
+					RTL9602C_QOS_PRIO_WEIGHT_PCP :
+					RTL9602C_QOS_PRIO_WEIGHT_DSCP,
+					RTL9602C_QOS_PRIO_WEIGHT_MAX - i);
 
 	memset(p->apptrust, 0, sizeof(p->apptrust));
 	memcpy(p->apptrust, sel, nsel);
