@@ -1028,6 +1028,7 @@ static bool rtl9602c_eth_rx_ctrl(struct net_device *dev, struct sk_buff *skb,
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
 	unsigned int port = FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, dest);
+	unsigned int len;
 
 	/*
 	 * Acquire, paired with the release in rtl9602c_conduit_ctrl_attach():
@@ -1048,10 +1049,13 @@ static bool rtl9602c_eth_rx_ctrl(struct net_device *dev, struct sk_buff *skb,
 	if (!rx || !(tag & RTL9602C_NIC_RXD_CPUTAG_VALID))
 		return false;
 
+	/* The handler owns @skb once it takes it. */
+	len = skb->len;
 	if (!rx(READ_ONCE(priv->ctrl_ctx), skb, port))
 		return false;
 
 	dev->stats.rx_packets++;
+	dev->stats.rx_bytes += len;
 	return true;
 }
 
@@ -1080,6 +1084,7 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
 	unsigned int why = FIELD_GET(RTL9602C_NIC_RXD_TRAP_REASON, w3);
+	unsigned int len;
 
 	/* An OMCI message goes to its handler, or nowhere. */
 	if (sts & RTL9602C_NIC_RXD_OMCI) {
@@ -1117,10 +1122,13 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 		 */
 		flow_rx = smp_load_acquire(&priv->flow_rx);
 
+		/* The handler owns @skb once it takes it. */
+		len = skb->len;
 		if (flow_rx &&
 		    flow_rx(READ_ONCE(priv->flow_ctx), skb, port,
 			    FIELD_GET(RTL9602C_NIC_RXD_FLOW, w2))) {
 			dev->stats.rx_packets++;
+			dev->stats.rx_bytes += len;
 			return;
 		}
 
@@ -1190,6 +1198,8 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 		skb_pull(skb, RTL9602C_PTP_TAG_LEN);
 	}
 
+	/* The frame's length with its Ethernet header, which the next line pulls. */
+	len = skb->len;
 	skb->protocol = eth_type_trans(skb, dev);
 
 	/*
@@ -1221,7 +1231,7 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 	}
 
 	dev->stats.rx_packets++;
-	dev->stats.rx_bytes += skb->len;
+	dev->stats.rx_bytes += len;
 	netif_receive_skb(skb);
 }
 
@@ -1545,11 +1555,10 @@ static int rtl9602c_eth_stop(struct net_device *dev)
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
 
-	eth_info(dev, "down: rx %lu frames / %lu bytes, tx %lu / %lu; dropped rx %lu tx %lu, tx errors %lu\n",
+	eth_info(dev, "down: rx %lu frames / %lu bytes, tx %lu / %lu; dropped rx %lu tx %lu\n",
 		 dev->stats.rx_packets, dev->stats.rx_bytes,
 		 dev->stats.tx_packets, dev->stats.tx_bytes,
-		 dev->stats.rx_dropped, dev->stats.tx_dropped,
-		 dev->stats.tx_errors);
+		 dev->stats.rx_dropped, dev->stats.tx_dropped);
 
 	netif_tx_disable(dev);
 	writew(0, priv->base + RTL9602C_NIC_IRQ_MASK);

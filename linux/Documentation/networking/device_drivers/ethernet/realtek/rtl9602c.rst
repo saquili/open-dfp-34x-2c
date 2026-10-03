@@ -1920,9 +1920,9 @@ load and locking"). The two sides are read with::
      - For each frame handed to the stack, and for each frame that the OMCI
        handler or the data-frame handler took.
    * - ``rx_bytes``
-     - For each frame handed to the stack, its length after ``eth_type_trans()``
-       has pulled the 14-byte Ethernet header. Frames the handlers took add
-       nothing.
+     - For each frame handed to the stack, its length with the Ethernet header,
+       taken before ``eth_type_trans()`` pulls it; for each frame or message
+       that a handler took, its length as handed over.
    * - ``rx_dropped``
      - A frame for which no replacement buffer could be allocated or mapped. The
        frame is dropped and its own buffer goes back to the descriptor.
@@ -1950,8 +1950,6 @@ load and locking"). The two sides are read with::
        ``RTL9602C_NIC_TX_MAX``. The tag driver also
        counts here the frames it drops on the ``pon`` interface, in that
        interface's statistics.
-   * - ``tx_errors``
-     - Not counted. The totals line at stop prints it.
 
 The frames the switch sent up are also counted per trap reason, in memory, for
 frames that carry a CPU tag, that the OMCI handler did not take, while DSA uses
@@ -2027,7 +2025,7 @@ The lines, with the conversions the driver uses:
        a warning
    * - Stop
      - ``down: rx <frames> frames / <bytes> bytes, tx <frames> / <bytes>;
-       dropped rx <n> tx <n>, tx errors <n>``
+       dropped rx <n> tx <n>``
    * - The first 4 frames, and the first frame from each source port
      - ``<eth rx> port <p> receives on the <ring> ring: <n> bytes from <MAC>,
        proto 0x<type>, cpu-tagged; descriptor <w0> <w2> <w3>``, ``<ring>``
