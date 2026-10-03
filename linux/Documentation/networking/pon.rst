@@ -1325,9 +1325,9 @@ Dumps
    * - A ``dev-get`` dump keeps the number of the next ONU to report in
        ``cb->args[0]``. A dump resumed after a full message never repeats an
        ONU, and an ONU registered during the dump appears if its number is
-       still ahead. The cursor moves past an ONU before its message is built,
-       so an ONU whose message does not fit the part being filled is left out
-       of the dump.
+       still ahead. The cursor moves past an ONU once its message is in the
+       part being filled, so an ONU whose message does not fit is the first of
+       the next part.
      - I
      - Design choice, not exercised: a dump across a registration.
    * - ``tcont-get`` do fails with ``-EINVAL`` without ``id`` or ``index``,
@@ -2265,9 +2265,6 @@ Known limitations
   out ``RTL9602C_GPON_OMCC_FLOW`` (64), which carries the OMCC. A daemon that
   sizes its GEM port entities by ``num-gem-ports`` gets ``-ENOSPC`` at the
   128th creation.
-- A ``dev-get`` dump can leave an ONU out: the cursor moves past an ONU before
-  its message is built, so an ONU whose message does not fit the part of the
-  dump being filled is not carried over to the next part.
 - The class does not enforce the order in which a MAC removes its data path and
   its OMCI port. A MAC that removes the port first has ``ponN`` unregistered
   while the data path still uses it: lookups by network device and by number

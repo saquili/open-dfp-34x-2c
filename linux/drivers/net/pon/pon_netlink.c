@@ -339,10 +339,10 @@ int pon_nl_dev_get_doit(struct sk_buff *skb, struct genl_info *info)
  * @skb: the part of the dump to fill
  * @cb: the dump, whose args[0] holds the lowest id not yet visited
  *
- * The cursor moves past an ONU before its message is built. So a dump never
- * repeats an ONU, and an ONU registered during the dump appears if its id is
- * still ahead; an ONU whose message does not fit in @skb is not carried over
- * to the next part.
+ * The cursor moves past an ONU once its message is in @skb. So a dump never
+ * repeats an ONU, an ONU whose message does not fit in @skb is the first of
+ * the next part, and an ONU registered during the dump appears if its id is
+ * still ahead.
  *
  * Return: the length of @skb while the dump goes on, 0 when it is complete,
  * or a negative error code.
@@ -354,12 +354,13 @@ int pon_nl_dev_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 	int err = 0;
 
 	while ((pon = pon_device_get_next(cb->args[0]))) {
-		cb->args[0] = pon->id + 1;
 		pon_nl_status_get(pon, &st);
 		err = pon_nl_dev_fill(skb, pon, &st,
 				      NETLINK_CB(cb->skb).portid,
 				      cb->nlh->nlmsg_seq, NLM_F_MULTI,
 				      PON_CMD_DEV_GET);
+		if (!err)
+			cb->args[0] = pon->id + 1;
 		pon_device_put(pon);
 		if (err)
 			break;
