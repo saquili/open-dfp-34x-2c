@@ -1079,12 +1079,18 @@ and writes the result by read-modify-write.
      - Every boot; bridged traffic passes both ways, sourced from the host.
    * - ``RTL9602C_STP_PORT_STATE_DISABLED`` (0),
        ``RTL9602C_STP_PORT_STATE_BLOCKING`` (1) and
-       ``RTL9602C_STP_PORT_STATE_LEARNING`` (2) are the other three states.
-     - I
-     - ``bridge link set dev sfp state`` blocking, learning and disabled in
-       turn, with frames from the host: nothing should be forwarded in any of
-       the three, and the port's learned count should rise only in learning. The
-       driver depends on these values for spanning tree.
+       ``RTL9602C_STP_PORT_STATE_LEARNING`` (2) are the other three states:
+       none of them forwards, and of the three only learning learns.
+     - M
+     - ``bridge link set dev sfp state`` disabled, listening (which the driver
+       writes as blocking) and learning, each for 14 s with 200 frames from the
+       host from a source address of their own: none of the frames reached the
+       OLT in any of the three, and only the address sent in learning was in
+       the address table afterwards. In forwarding, before and after, all 200
+       arrived and the address was learned. The bridge's blocking state cannot
+       be held while spanning tree is off, since the bridge moves a blocking
+       port on to forwarding at once (``br_make_forwarding()``), and the frames
+       sent then passed.
    * - The bridge's five states map to the switch's four: disabled to disabled;
        blocking and listening to blocking, since in both a port discards frames
        and learns nothing; learning to learning; forwarding to forwarding. The
@@ -2125,11 +2131,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - The spanning-tree state values 0, 1 and 2 are disabled, blocking and
-       learning ("Spanning-tree state").
-     - ``bridge link set dev sfp state`` blocking, learning and disabled in
-       turn, with frames from the host: nothing forwarded in any of the three,
-       and the port's learned count rising only in learning.
    * - A static entry is not moved by source learning ("Entry layout").
      - A static entry for an address on the PON port, then frames from that
        address into the SFP port and a dump.
