@@ -118,7 +118,9 @@ bool pon_gem_rx(struct pon_device *pon, unsigned int flow, struct sk_buff *skb)
 	 * frame to the other ports of that domain, so that the bridge forwards
 	 * it only to ports outside it. That the switch has done so for every
 	 * such frame, so that none arrives twice, is an assumption, not
-	 * verified.
+	 * verified. A frame that an ACL rule trapped is one that the switch
+	 * has not forwarded, and with the mark the bridge does not either, so
+	 * a trapped frame reaches the host alone.
 	 */
 	skb->offload_fwd_mark = READ_ONCE(gem->offloaded);
 #endif

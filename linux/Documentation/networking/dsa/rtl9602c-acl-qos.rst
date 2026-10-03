@@ -433,9 +433,9 @@ Rules, templates and lookup
        0.
      - M
      - For port 2: a drop rule and a trap rule on ``pon`` for EtherType
-       ``0x88b5`` each kept all 200 frames of it that arrived through the PON
-       from the host side, while the same frames passed with no rule. Ports 1
-       and 3 carry no traffic that could test theirs.
+       ``0x88b5`` each kept all 200 frames of it that came through the PON for
+       the host side, while the same frames reached the host side with no rule.
+       Ports 1 and 3 carry no traffic that could test theirs.
    * - ``RTL9602C_ACL_TMPL_FIELD`` (``0x015008``) holds the templates: slot k of
        template t is a 7-bit field code at bit 7(n mod 4) of word n/4, where n =
        8t + k; bits 31:28 of each word are unused. ``RTL9602C_ACL_TMPL_COUNT``
@@ -562,11 +562,16 @@ decision is one of them.
      - M
      - Every drop measurement above uses this encoding.
    * - ``RTL9602C_ACL_ACT_FWD_TRAP`` (3) sends a matching frame to the CPU
-       instead of forwarding it.
+       instead of forwarding it. A frame from the PON arrives on the GEM
+       interface of its port, which marks it as forwarded by the switch, as it
+       does every frame while it is bridged, so the bridge does not forward it
+       either: a trapped frame reaches the host alone.
      - M
-     - A trap rule on ``pon`` for EtherType ``0x88b5``: of 200 such frames from
-       the host side through the PON none reached the host, and the CPU port
-       took 200 more frames than with no rule.
+     - A trap rule on ``pon`` for EtherType ``0x88b5``: of 200 such frames that
+       came through the PON for the host side none reached it, and all 200
+       reached the CPU, on the GEM interface of the port they came in on, where
+       a software ``tc`` filter counted them. The ``data.acl`` case of
+       ``tests/device`` repeats this, the drop and the ordering below.
 
 The ACL can raise an interrupt: the source ``RTL9602C_IRQ_SRC_ACL`` of the
 switch interrupt, which setup unmasks, and a latch ``RTL9602C_ACL_HIT_STAT``
