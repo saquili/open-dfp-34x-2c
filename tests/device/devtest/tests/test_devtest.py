@@ -372,10 +372,13 @@ class Cases(unittest.TestCase):
             trail: list[str] = []
             rules: list[tuple[int, str]] = []    # (priority, action), in the order added
 
-            def action():
+            def decider():
                 if not rules:
-                    return "pass"
-                return rules[0][1] if added_first_decides else min(rules)[1]
+                    return None
+                return rules[0] if added_first_decides else min(rules)
+
+            def action():
+                return decider()[1] if rules else "pass"
 
             class Stick(Canned):
                 def run(self, command, **kw):
@@ -384,7 +387,11 @@ class Cases(unittest.TestCase):
                         command))
                     for p in re.findall(r"filter del dev pon ingress pref (\d+)", command):
                         rules[:] = [r for r in rules if r[0] != int(p)]
-                    n = 200 if action() == "trap" else 0
+                    hw = re.search(r"tc -s filter show dev pon ingress pref (\d+)", command)
+                    if hw:
+                        n = 200 if decider() and decider()[0] == int(hw.group(1)) else 0
+                    else:
+                        n = 200 if action() == "trap" else 0
                     self.answers[0] = ("tc -s filter show", 0, f"\tSent {n * 60} bytes {n} pkt\n")
                     return super().run(command, **kw)
 
@@ -404,7 +411,8 @@ class Cases(unittest.TestCase):
             return cases_data.acl(ctx), rules, stick.asked
         good, left, asked = outcome(added_first_decides=False)
         self.assertEqual(good.status, PASS)
-        self.assertIn("trap over drop, added last: 0 arrived, 200 to the CPU", good.evidence)
+        self.assertIn("trap over drop, added last: 0 arrived, 200 to the CPU, 0 counted at "
+                      "49020, 200 counted at 49010", good.evidence)
         self.assertEqual(left, [])
         self.assertIn("tc qdisc del dev pon clsact; tc qdisc del dev gem256 clsact; true", asked)
         self.assertEqual(outcome(added_first_decides=True)[0].status, FAIL)

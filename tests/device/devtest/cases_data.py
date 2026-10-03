@@ -477,11 +477,12 @@ ACL_COUNTER = 49030
 
 
 def acl_round(ctx: Context, gems: list[str],
-              rules: list[tuple[int, str]]) -> tuple[int, int]:
+              rules: list[tuple[int, str]]) -> tuple[int, int, dict[int, int]]:
     """Install rules, (priority, action) pairs in the order given, on the PON
     port's ingress for EtherType 0x88b5; send ACL_COUNT such frames from the
     network side to the subscriber side; remove the rules. Returns how many
-    arrived on the subscriber side and how many reached the CPU."""
+    arrived on the subscriber side, how many reached the CPU and the frames
+    each rule's hit count, as tc reports it, says it decided for."""
     s = ctx.settings
     rule = "tc filter {} dev {} ingress pref {} protocol 0x88b5 flower {}"
     for gem in gems:
@@ -495,6 +496,11 @@ def acl_round(ctx: Context, gems: list[str],
         arrived = tagged(ctx, s.olt_port, s.subscriber_port, 0, ACL_COUNT).get("untagged", 0)
         shown = ctx.stick.text("; ".join(
             f"tc -s filter show dev {gem} ingress pref {ACL_COUNTER}" for gem in gems))
+        hits = {}
+        for pref, _ in rules:
+            text = ctx.stick.text(f"tc -s filter show dev pon ingress pref {pref}")
+            found = re.search(r"Sent \d+ bytes (\d+) pkt", text)
+            hits[pref] = int(found.group(1)) if found else -1
     finally:
         ctx.stick.run("; ".join(
             [f"tc filter del dev pon ingress pref {pref} 2>/dev/null" for pref, _ in rules] +
@@ -503,12 +509,13 @@ def acl_round(ctx: Context, gems: list[str],
     counts = re.findall(r"Sent \d+ bytes (\d+) pkt", shown)
     if len(counts) != len(gems):
         raise ValueError(f"no count from a software filter: {shown!r}")
-    return arrived, sum(int(n) for n in counts)
+    return arrived, sum(int(n) for n in counts), hits
 
 
 @case("data.acl", "Data path",
       "ACL rules on the PON port drop frames from the network side or trap them to the CPU, "
-      "the rule of the lower tc priority deciding whichever was added first")
+      "the rule of the lower tc priority deciding whichever was added first, and tc counts "
+      "the frames for the rule that decided")
 def acl(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -532,9 +539,12 @@ def acl(ctx: Context):
     seen, ok = [], True
     try:
         for name, rules, good in rounds:
-            arrived, took = acl_round(ctx, gems, rules)
-            ok = ok and good(arrived, took)
-            seen.append(f"{name}: {arrived} arrived, {took} to the CPU")
+            arrived, took, hits = acl_round(ctx, gems, rules)
+            counted = all((hits[pref] >= every) == (pref == first) and
+                          (hits[pref] >= every or hits[pref] <= none) for pref, _ in rules)
+            ok = ok and good(arrived, took) and counted
+            shown = "".join(f", {hits[pref]} counted at {pref}" for pref, _ in rules)
+            seen.append(f"{name}: {arrived} arrived, {took} to the CPU{shown}")
     finally:
         ctx.stick.run("; ".join([f"tc qdisc del dev {dev} clsact" for dev in added] + ["true"]))
     return verdict(ok, f"{ACL_COUNT} frames each; " + "; ".join(seen))
