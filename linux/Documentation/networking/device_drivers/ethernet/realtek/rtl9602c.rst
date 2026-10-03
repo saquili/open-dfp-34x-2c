@@ -924,6 +924,19 @@ stopping and waking of the transmit queues.
      - M
      - Floods sent from the host side, counted at both ends: the switch's
        CPU-port counter and the frames the driver received.
+   * - A frame costs the CPU 30 to 40 µs when a poll takes it with others, and
+       about 100 µs when it arrives alone: the poll then ends with the rings
+       empty, the interrupt is enabled again, and the next frame raises it. The
+       kernel's NAPI deferral, the interface's ``napi_defer_hard_irqs`` and
+       ``gro_flush_timeout``, polls again instead; the board's image sets two
+       polls 50 µs apart.
+     - M
+     - A shell loop that takes 1.2 s at rest, timed during floods to the
+       stick's own address that the switch held at a rate (the switch driver's
+       ``cpu_rx_pps``): 2.3 s at 5000 frames/s and 6.8 s at 10000; with the
+       deferral, 1.6 s and 2.1 s, for any delay from 50 to 500 µs. With no
+       limit, where the ring overflows and every poll takes a full budget,
+       3.7 s.
    * - With one receive ring for every priority, a flood to the CPU drops OMCI
        messages in the engine like any other frame. On the control ring they
        all arrive.
@@ -2324,7 +2337,10 @@ Known limitations
   (see "Open questions").
 - The engine drops frames when it has no receive descriptor free. The CPU's
   receive ceiling is about 24,000 to 25,000 frames/s whatever the frame size,
-  and beyond it the excess is counted in ``rx_missed_errors``. The receive
+  and beyond it the excess is counted in ``rx_missed_errors``. The switch
+  driver keeps a flood from getting that far: unless its limit is lifted, the
+  CPU port's queues 0 to 6 hand the CPU no more than 5000 frames a second
+  (``cpu_rx_pps``, Documentation/networking/devlink/rtl9602c.rst). The receive
   pause thresholds have no effect, because the switch's side of the pause is
   not enabled. OMCI messages have the control ring to themselves only while
   nothing else is given internal priority 7: a frame the switch is set to give
