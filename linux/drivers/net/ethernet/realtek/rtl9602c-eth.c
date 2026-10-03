@@ -32,6 +32,7 @@
 #include <linux/of.h>
 #include <linux/unaligned.h>
 #include <linux/netdevice.h>
+#include <linux/seq_file.h>
 #include <linux/dsa/rtl9602c.h>
 #include <net/dsa.h>
 #include <net/dst_metadata.h>
@@ -83,11 +84,29 @@
 #define RTL9602C_NIC_RING_CFG	0x1438
 
 /*
- * One 4-bit field per internal priority names the receive ring for that
- * priority; ring 0 is the one at RTL9602C_NIC_RX_RING_BASE. The field layout is
- * assumed, not verified: the driver writes only zero.
+ * The second receive ring's registers, in a block of their own: the bus
+ * address of descriptor 0, the engine's index into the ring, the ring's length
+ * less one, the tail and the free-descriptor thresholds for asserting and
+ * releasing receive pause. The thresholds are taken to be in bits 23:16 and
+ * 7:0, which is not verified: pause is off. The engine is taken to have further
+ * rings in blocks of 16 bytes after this one, which the driver leaves alone.
+ */
+#define RTL9602C_NIC_RX2_RING_BASE	0x1390
+#define RTL9602C_NIC_RX2_RING_CUR	0x1394
+#define RTL9602C_NIC_RX2_RING_LEN	0x1396
+#define RTL9602C_NIC_RX2_RING_TAIL	0x1398
+#define RTL9602C_NIC_RX2_PAUSE_THR	0x139c
+#define RTL9602C_NIC_RX2_PAUSE_ON	GENMASK(23, 16)
+#define RTL9602C_NIC_RX2_PAUSE_OFF	GENMASK(7, 0)
+
+/*
+ * One 4-bit field per internal priority, priority p in bits 4p + 3 to 4p,
+ * names the receive ring for that priority: 0 the ring at
+ * RTL9602C_NIC_RX_RING_BASE and 2 the ring at RTL9602C_NIC_RX2_RING_BASE
+ * (measured on this board).
  */
 #define RTL9602C_NIC_RX_PRI_TO_RING	0x1370
+#define RTL9602C_NIC_RX_PRI_RING(pri, ring)	((u32)(ring) << (4 * (pri)))
 
 /*
  * Values written to whole registers. The driver uses none of their fields
@@ -200,12 +219,13 @@
 
 /*
  * RTL9602C_NIC_IRQ_MASK and RTL9602C_NIC_IRQ_STAT share this layout; a status
- * bit is acknowledged by writing it back as 1. Bit 0 is a frame received and
- * bit 6 a transmit completed, which the driver needs to reap completed
- * descriptors and wake the queues while nothing is being received. The other
- * four are named after what they are taken to mean, which is not verified:
- * every status bit is handled alike, acknowledged and followed by a poll, so
- * nothing depends on their meaning.
+ * bit is acknowledged by writing it back as 1. Bit 0 is a frame received, into
+ * either receive ring (measured on this board), and bit 6 a transmit
+ * completed, which the driver needs to reap completed descriptors and wake the
+ * queues while nothing is being received. The other four are named after what
+ * they are taken to mean, which is not verified: every status bit is handled
+ * alike, acknowledged and followed by a poll, so nothing depends on their
+ * meaning.
  */
 #define RTL9602C_NIC_IRQ_RX_DONE	BIT(0)
 #define RTL9602C_NIC_IRQ_RX_RUNT	BIT(2)
@@ -322,15 +342,35 @@
 #define RTL9602C_TX_RING	32
 
 /*
- * Measured on this board, at 20,000 frames/s a ring of 16 descriptors loses
- * frames and one of 256 does not; the CPU receives at most about
- * 24,000 frames/s, and beyond that the engine drops what it has no descriptor
- * for. OMCI messages share the ring with data, so a flood to the CPU drops them
- * in the engine like any other frame. Only the low byte of the tail is written
- * per frame, so the ring can have no more than 256 descriptors.
+ * Two receive rings: the data ring for internal priorities 0 to 6 and the
+ * control ring for 7, the priority the switch driver gives the OMCI messages it
+ * traps. Measured on this board, the CPU receives at most about 24,000
+ * frames/s, and beyond that the engine drops what it has no descriptor for;
+ * with one ring for every priority, a flood to the CPU dropped OMCI messages in
+ * the engine like any other frame. In a ring of their own they keep free
+ * descriptors whatever the data ring holds, and the poll serves that ring
+ * first.
+ */
+#define RTL9602C_RX_DATA	0
+#define RTL9602C_RX_CTRL	1
+#define RTL9602C_RX_RINGS	2
+
+static const char * const rtl9602c_rx_ring_name[RTL9602C_RX_RINGS] = {
+	[RTL9602C_RX_DATA] = "data",
+	[RTL9602C_RX_CTRL] = "control",
+};
+
+/*
+ * At 20,000 frames/s a data ring of 16 descriptors loses frames and one of 256
+ * does not (measured on this board). Only the low byte of the data ring's tail
+ * is written per frame, so that ring can have no more than 256 descriptors. The
+ * control ring carries OMCI alone unless something else is given priority 7:
+ * at registration some 420 messages in a few seconds, then one every few
+ * seconds.
  */
 #define RTL9602C_RX_RING	256
 static_assert(RTL9602C_RX_RING <= 256);
+#define RTL9602C_RX_CTRL_RING	32
 
 /* The buffer size each receive descriptor advertises to the engine. */
 #define RTL9602C_RX_BUF		0x600
@@ -368,24 +408,34 @@ struct rtl9602c_rx_desc {
 	__be32 dest;
 };
 
+/*
+ * A receive ring: its descriptors and their bus address, each descriptor's
+ * buffer and its mapping, the ring's length, the next descriptor to look at,
+ * and the frames taken from it.
+ */
+struct rtl9602c_rx_ring {
+	struct rtl9602c_rx_desc *desc;
+	dma_addr_t dma;
+	struct sk_buff **skb;
+	dma_addr_t *buf;
+	unsigned int len;
+	unsigned int tail;
+	u32 frames;
+};
+
 struct rtl9602c_eth {
 	struct net_device *netdev;
 	void __iomem *base;
 	struct device *dev;
 
-	/* The two rings; the receive ring's bus address is rx_dma, below. */
+	/* The transmit ring and the receive rings. */
 	struct rtl9602c_tx_desc *tx;
 	dma_addr_t tx_dma;
-	struct rtl9602c_rx_desc *rx;
+	struct rtl9602c_rx_ring rx[RTL9602C_RX_RINGS];
 
 	/* Tagged frames received per trap reason, shown through debugfs. */
 	u32 rx_reason[RTL9602C_RX_REASONS];
 	struct dentry *debugfs;
-	dma_addr_t rx_dma;
-
-	/* Each receive descriptor's buffer and its mapping. */
-	struct sk_buff *rx_skb[RTL9602C_RX_RING];
-	dma_addr_t rx_buf[RTL9602C_RX_RING];
 
 	/*
 	 * The frame each transmit descriptor carries and its mapping; NULL when
@@ -403,8 +453,6 @@ struct rtl9602c_eth {
 	/* Next descriptor to post; oldest descriptor not yet reaped. */
 	unsigned int tx_head;
 	unsigned int tx_tail;
-	/* Next receive descriptor to look at. */
-	unsigned int rx_tail;
 	/* RTL9602C_NIC_RX_NO_DESC_CNT at the last poll. */
 	u16 rx_missed_last;
 
@@ -484,6 +532,8 @@ static void rtl9602c_eth_quiesce(struct device *dev, void __iomem *base)
 	u16 tx_cur = readw(base + RTL9602C_NIC_TX_RING_CUR);
 	u32 rx_base = readl(base + RTL9602C_NIC_RX_RING_BASE);
 	u16 rx_cur = readw(base + RTL9602C_NIC_RX_RING_CUR);
+	u32 rx2_base = readl(base + RTL9602C_NIC_RX2_RING_BASE);
+	u16 rx2_cur = readw(base + RTL9602C_NIC_RX2_RING_CUR);
 
 	writew(0, base + RTL9602C_NIC_IRQ_MASK);
 	rtl9602c_eth_halt(base);
@@ -496,26 +546,30 @@ static void rtl9602c_eth_quiesce(struct device *dev, void __iomem *base)
 	writew(0xffff, base + RTL9602C_NIC_IRQ_STAT);
 
 	dev_info(dev,
-		 "engine found with DMA_CTRL %08x, IRQ_STAT %04x, TX ring %08x at %u, RX ring %08x at %u; stopped, DMA_CTRL %08x\n",
-		 ctrl, status, tx_base, tx_cur, rx_base, rx_cur,
-		 readl(base + RTL9602C_NIC_DMA_CTRL));
+		 "engine found with DMA_CTRL %08x, IRQ_STAT %04x, TX ring %08x at %u, RX rings %08x at %u and %08x at %u; stopped, DMA_CTRL %08x\n",
+		 ctrl, status, tx_base, tx_cur, rx_base, rx_cur, rx2_base,
+		 rx2_cur, readl(base + RTL9602C_NIC_DMA_CTRL));
 }
 
 /*
- * Unmap and free every buffer, then both rings; also unwinds rings that were
+ * Unmap and free every buffer, then the rings; also unwinds rings that were
  * only partly set up.
  */
 static void rtl9602c_eth_free_rings(struct rtl9602c_eth *priv)
 {
-	unsigned int i;
+	unsigned int i, r;
 
-	for (i = 0; i < RTL9602C_RX_RING; i++) {
-		if (!priv->rx_skb[i])
-			continue;
-		dma_unmap_single(priv->dev, priv->rx_buf[i], RTL9602C_RX_ALLOC,
-				 DMA_FROM_DEVICE);
-		dev_kfree_skb(priv->rx_skb[i]);
-		priv->rx_skb[i] = NULL;
+	for (r = 0; r < RTL9602C_RX_RINGS; r++) {
+		struct rtl9602c_rx_ring *ring = &priv->rx[r];
+
+		for (i = 0; i < ring->len; i++) {
+			if (!ring->skb[i])
+				continue;
+			dma_unmap_single(priv->dev, ring->buf[i],
+					 RTL9602C_RX_ALLOC, DMA_FROM_DEVICE);
+			dev_kfree_skb(ring->skb[i]);
+			ring->skb[i] = NULL;
+		}
 	}
 
 	for (i = 0; i < RTL9602C_TX_RING; i++) {
@@ -533,11 +587,14 @@ static void rtl9602c_eth_free_rings(struct rtl9602c_eth *priv)
 				  priv->tx, priv->tx_dma);
 		priv->tx = NULL;
 	}
-	if (priv->rx) {
-		dma_free_coherent(priv->dev,
-				  RTL9602C_RX_RING * sizeof(*priv->rx),
-				  priv->rx, priv->rx_dma);
-		priv->rx = NULL;
+	for (r = 0; r < RTL9602C_RX_RINGS; r++) {
+		struct rtl9602c_rx_ring *ring = &priv->rx[r];
+
+		if (!ring->desc)
+			continue;
+		dma_free_coherent(priv->dev, ring->len * sizeof(*ring->desc),
+				  ring->desc, ring->dma);
+		ring->desc = NULL;
 	}
 }
 
@@ -561,51 +618,53 @@ static struct sk_buff *rtl9602c_eth_rx_alloc(struct net_device *dev,
 }
 
 /*
- * Hand receive descriptor @i to the engine with @skb, mapped at @dma.
+ * Hand descriptor @i of @ring to the engine with @skb, mapped at @dma.
  * Words 2 and 3 are cleared: the engine writes them only for a frame with a CPU
  * tag, and a value left from an earlier frame must not pass for this one's.
  */
-static void rtl9602c_eth_rx_give(struct rtl9602c_eth *priv, unsigned int i,
+static void rtl9602c_eth_rx_give(struct rtl9602c_rx_ring *ring, unsigned int i,
 				 struct sk_buff *skb, dma_addr_t dma)
 {
+	struct rtl9602c_rx_desc *desc = &ring->desc[i];
 	u32 sts = RTL9602C_NIC_DESC_OWN | RTL9602C_RX_BUF;
 
-	if (i == RTL9602C_RX_RING - 1)
+	if (i == ring->len - 1)
 		sts |= RTL9602C_NIC_DESC_RING_END;
 
-	priv->rx_skb[i] = skb;
-	priv->rx_buf[i] = dma;
-	priv->rx[i].tag = 0;
-	priv->rx[i].dest = 0;
-	priv->rx[i].addr = cpu_to_be32(dma);
+	ring->skb[i] = skb;
+	ring->buf[i] = dma;
+	desc->tag = 0;
+	desc->dest = 0;
+	desc->addr = cpu_to_be32(dma);
 	/*
 	 * The address and the cleared words must reach memory before word 0
 	 * hands the descriptor to the engine.
 	 */
 	dma_wmb();
-	priv->rx[i].stslen = cpu_to_be32(sts);
+	desc->stslen = cpu_to_be32(sts);
 }
 
 /*
- * Take the frame out of receive descriptor @i and give the descriptor a new
+ * Take the frame out of descriptor @i of @ring and give the descriptor a new
  * buffer. The new buffer comes first: without one, NULL is returned and the
  * frame stays in its buffer, which the caller gives back to the descriptor, so
  * the ring never holds a descriptor without a buffer.
  */
 static struct sk_buff *rtl9602c_eth_rx_swap(struct net_device *dev,
+					    struct rtl9602c_rx_ring *ring,
 					    unsigned int i)
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
-	struct sk_buff *skb = priv->rx_skb[i], *fresh;
+	struct sk_buff *skb = ring->skb[i], *fresh;
 	dma_addr_t dma;
 
 	fresh = rtl9602c_eth_rx_alloc(dev, &dma);
 	if (!fresh)
 		return NULL;
 
-	dma_unmap_single(priv->dev, priv->rx_buf[i], RTL9602C_RX_ALLOC,
+	dma_unmap_single(priv->dev, ring->buf[i], RTL9602C_RX_ALLOC,
 			 DMA_FROM_DEVICE);
-	rtl9602c_eth_rx_give(priv, i, fresh, dma);
+	rtl9602c_eth_rx_give(ring, i, fresh, dma);
 	return skb;
 }
 
@@ -617,38 +676,46 @@ static struct sk_buff *rtl9602c_eth_rx_swap(struct net_device *dev,
 	pr_err("rtl9602c-eth %s: " fmt, (dev)->name, ##__VA_ARGS__)
 
 /*
- * Allocate both rings, zeroed, and give every receive descriptor a buffer: once
+ * Allocate the rings, zeroed, and give every receive descriptor a buffer: once
  * started, the engine may fill any of them.
  */
 static int rtl9602c_eth_alloc_rings(struct net_device *dev)
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
-	unsigned int i;
+	unsigned int i, r;
 
 	priv->tx = dma_alloc_coherent(priv->dev,
 				      RTL9602C_TX_RING * sizeof(*priv->tx),
 				      &priv->tx_dma, GFP_KERNEL);
-	priv->rx = dma_alloc_coherent(priv->dev,
-				      RTL9602C_RX_RING * sizeof(*priv->rx),
-				      &priv->rx_dma, GFP_KERNEL);
-	if (!priv->tx || !priv->rx)
+	if (!priv->tx)
 		goto fail;
 
 	priv->tx_head = 0;
 	priv->tx_tail = 0;
 	priv->tx[RTL9602C_TX_RING - 1].stslen = cpu_to_be32(RTL9602C_NIC_DESC_RING_END);
 
-	priv->rx_tail = 0;
 	priv->rx_logged = 0;
 	priv->rx_ports_seen = 0;
-	for (i = 0; i < RTL9602C_RX_RING; i++) {
-		struct sk_buff *skb;
-		dma_addr_t dma;
+	for (r = 0; r < RTL9602C_RX_RINGS; r++) {
+		struct rtl9602c_rx_ring *ring = &priv->rx[r];
 
-		skb = rtl9602c_eth_rx_alloc(dev, &dma);
-		if (!skb)
+		ring->desc = dma_alloc_coherent(priv->dev,
+						ring->len * sizeof(*ring->desc),
+						&ring->dma, GFP_KERNEL);
+		if (!ring->desc)
 			goto fail;
-		rtl9602c_eth_rx_give(priv, i, skb, dma);
+
+		ring->tail = 0;
+		ring->frames = 0;
+		for (i = 0; i < ring->len; i++) {
+			struct sk_buff *skb;
+			dma_addr_t dma;
+
+			skb = rtl9602c_eth_rx_alloc(dev, &dma);
+			if (!skb)
+				goto fail;
+			rtl9602c_eth_rx_give(ring, i, skb, dma);
+		}
 	}
 
 	return 0;
@@ -661,6 +728,10 @@ fail:
 /* Program the engine and start it; the rings must be allocated. */
 static void rtl9602c_eth_start(struct rtl9602c_eth *priv)
 {
+	struct rtl9602c_rx_ring *ctrl = &priv->rx[RTL9602C_RX_CTRL];
+	u32 pri_map;
+	u16 cur;
+
 	/*
 	 * The bus address of descriptor 0, as dma_alloc_coherent() returned it,
 	 * with no uncached-alias bits added. RTL9602C_NIC_TX_RING_CUR and
@@ -669,7 +740,7 @@ static void rtl9602c_eth_start(struct rtl9602c_eth *priv)
 	 */
 	writel(priv->tx_dma, priv->base + RTL9602C_NIC_TX_RING_BASE);
 	writew(0, priv->base + RTL9602C_NIC_TX_RING_CUR);
-	writel(priv->rx_dma, priv->base + RTL9602C_NIC_RX_RING_BASE);
+	writel(priv->rx[RTL9602C_RX_DATA].dma, priv->base + RTL9602C_NIC_RX_RING_BASE);
 	writew(0, priv->base + RTL9602C_NIC_RX_RING_CUR);
 
 	/*
@@ -706,6 +777,34 @@ static void rtl9602c_eth_start(struct rtl9602c_eth *priv)
 	writeb(0, priv->base + RTL9602C_NIC_RX_RING_TAIL_HI);
 	writeb(0, priv->base + RTL9602C_NIC_RX_PAUSE_OFF_THR_HI);
 
+	/*
+	 * The control ring: every descriptor the engine's, and pause thresholds
+	 * at the same share of the ring as the data ring's, which have no effect
+	 * while pause is off. Its index cannot be written: measured on this
+	 * board, it keeps the value it had when the engine stopped whatever is
+	 * written to it, 16 or 32 bits wide, so the driver starts where the
+	 * engine is. An index beyond the ring, which only a longer ring left by
+	 * earlier software could leave, would have the engine write past the
+	 * ring; priority 7 then stays on the data ring.
+	 */
+	writel(ctrl->dma, priv->base + RTL9602C_NIC_RX2_RING_BASE);
+	writew(ctrl->len - 1, priv->base + RTL9602C_NIC_RX2_RING_LEN);
+	cur = readw(priv->base + RTL9602C_NIC_RX2_RING_CUR);
+	if (cur < ctrl->len) {
+		ctrl->tail = cur;
+		pri_map = RTL9602C_NIC_RX_PRI_RING(7, 2);
+	} else {
+		eth_warn(priv->netdev,
+			 "control ring index %u is beyond the ring; OMCI shares the data ring\n",
+			 cur);
+		pri_map = 0;
+	}
+	writel((ctrl->tail + ctrl->len - 1) % ctrl->len,
+	       priv->base + RTL9602C_NIC_RX2_RING_TAIL);
+	writel(FIELD_PREP(RTL9602C_NIC_RX2_PAUSE_ON, ctrl->len / 16) |
+	       FIELD_PREP(RTL9602C_NIC_RX2_PAUSE_OFF, ctrl->len * 3 / 16),
+	       priv->base + RTL9602C_NIC_RX2_PAUSE_THR);
+
 	/* What this register does is not known; it is cleared. */
 	writel(0, priv->base + RTL9602C_NIC_REG_13FC);
 
@@ -714,11 +813,8 @@ static void rtl9602c_eth_start(struct rtl9602c_eth *priv)
 	writel(0xffffffff, priv->base + RTL9602C_NIC_MC_HASH_HI);
 
 	writel(RTL9602C_NIC_CFG_RX_FIFO_2K, priv->base + RTL9602C_NIC_CFG);
-	/*
-	 * Every internal priority goes to the one ring served here, 7 included,
-	 * which the switch driver gives the OMCI messages it traps.
-	 */
-	writel(0, priv->base + RTL9602C_NIC_RX_PRI_TO_RING);
+	/* Priority 7 to the control ring, the others to the data ring. */
+	writel(pri_map, priv->base + RTL9602C_NIC_RX_PRI_TO_RING);
 
 	/* No pause between the engine and the switch; other bits are kept. */
 	writeb(readb(priv->base + RTL9602C_NIC_MEDIA_STAT) & ~RTL9602C_NIC_MEDIA_STAT_PAUSE_EN,
@@ -883,7 +979,7 @@ static int rtl9602c_eth_test_frame(struct net_device *dev)
  * header to go up with.
  */
 static bool rtl9602c_eth_rx_ctrl(struct net_device *dev, struct sk_buff *skb,
-				 u32 sts, u32 tag, u32 dest)
+				 unsigned int r, u32 sts, u32 tag, u32 dest)
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
 	unsigned int port = FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, dest);
@@ -898,9 +994,10 @@ static bool rtl9602c_eth_rx_ctrl(struct net_device *dev, struct sk_buff *skb,
 	if (priv->ctrl_logged < RTL9602C_RX_LOG) {
 		priv->ctrl_logged++;
 		eth_info(dev,
-			 "pon ctrl[%u] %u bytes w0 %08x w2 %08x w3 %08x src %u: %*ph\n",
-			 priv->ctrl_logged, skb->len, sts, tag, dest, port,
-			 min_t(int, skb->len, 16), skb->data);
+			 "pon ctrl[%u] on the %s ring, %u bytes w0 %08x w2 %08x w3 %08x src %u: %*ph\n",
+			 priv->ctrl_logged, rtl9602c_rx_ring_name[r], skb->len,
+			 sts, tag, dest, port, min_t(int, skb->len, 16),
+			 skb->data);
 	}
 
 	if (!rx || !(tag & RTL9602C_NIC_RXD_CPUTAG_VALID))
@@ -914,18 +1011,34 @@ static bool rtl9602c_eth_rx_ctrl(struct net_device *dev, struct sk_buff *skb,
 }
 
 /*
- * Receive up to @budget frames, stopping at the first descriptor the engine
- * still owns. A frame is handed on only once its descriptor has a new buffer,
- * and every descriptor processed is given back, its index written to
- * RTL9602C_NIC_RX_RING_TAIL.
+ * Give descriptor @i of ring @r back to the engine by writing its index to the
+ * ring's tail; without this write the ring runs dry and receive stops. The
+ * data ring's tail is a byte of its own, the control ring's a word, written
+ * whole.
  */
-static int rtl9602c_eth_rx(struct net_device *dev, int budget)
+static void rtl9602c_eth_rx_tail(struct rtl9602c_eth *priv, unsigned int r,
+				 unsigned int i)
+{
+	if (r == RTL9602C_RX_DATA)
+		writeb(i, priv->base + RTL9602C_NIC_RX_RING_TAIL);
+	else
+		writel(i, priv->base + RTL9602C_NIC_RX2_RING_TAIL);
+}
+
+/*
+ * Receive up to @budget frames from ring @r, stopping at the first descriptor
+ * the engine still owns. A frame is handed on only once its descriptor has a
+ * new buffer, and every descriptor processed is given back.
+ */
+static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
+	struct rtl9602c_rx_ring *ring = &priv->rx[r];
 	int done = 0;
 
 	while (done < budget) {
-		unsigned int i = priv->rx_tail;
+		struct rtl9602c_rx_desc *desc = &ring->desc[ring->tail];
+		unsigned int i = ring->tail;
 		struct sk_buff *skb = NULL;
 		unsigned int len;
 		u32 sts, w2, w3;
@@ -934,7 +1047,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 		 * The engine clears OWN once the buffer is filled; READ_ONCE
 		 * loads word 0 afresh on every pass.
 		 */
-		sts = be32_to_cpu(READ_ONCE(priv->rx[i].stslen));
+		sts = be32_to_cpu(READ_ONCE(desc->stslen));
 		if (sts & RTL9602C_NIC_DESC_OWN)
 			break;
 
@@ -945,9 +1058,10 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 		 * before the frame is handed on.
 		 */
 		dma_rmb();
-		w2 = be32_to_cpu(priv->rx[i].tag);
-		w3 = be32_to_cpu(priv->rx[i].dest);
+		w2 = be32_to_cpu(desc->tag);
+		w3 = be32_to_cpu(desc->dest);
 		len = sts & RTL9602C_NIC_RXD_LEN;
+		ring->frames++;
 
 		/*
 		 * A frame marked in error, too short, or longer than its buffer
@@ -963,7 +1077,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 			   len > RTL9602C_RX_BUF) {
 			dev->stats.rx_length_errors++;
 		} else {
-			skb = rtl9602c_eth_rx_swap(dev, i);
+			skb = rtl9602c_eth_rx_swap(dev, ring, i);
 			if (!skb) {
 				dev->stats.rx_dropped++;
 				goto rearm;
@@ -975,7 +1089,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 
 			/* An OMCI message goes to its handler, or nowhere. */
 			if (sts & RTL9602C_NIC_RXD_OMCI) {
-				if (!rtl9602c_eth_rx_ctrl(dev, skb, sts, w2,
+				if (!rtl9602c_eth_rx_ctrl(dev, skb, r, sts, w2,
 							  w3)) {
 					dev->stats.rx_dropped++;
 					dev_kfree_skb_any(skb);
@@ -1095,9 +1209,10 @@ static int rtl9602c_eth_rx(struct net_device *dev, int budget)
 				if (priv->rx_logged < RTL9602C_RX_LOG || newport) {
 					priv->rx_logged++;
 					eth_info(dev,
-						 "<eth rx> port %lu receives: %u bytes from %pM, proto 0x%04x, %s; descriptor %08x %08x %08x\n",
+						 "<eth rx> port %lu receives on the %s ring: %u bytes from %pM, proto 0x%04x, %s; descriptor %08x %08x %08x\n",
 						 FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3),
-						 skb->len, eth_hdr(skb)->h_source,
+						 rtl9602c_rx_ring_name[r], skb->len,
+						 eth_hdr(skb)->h_source,
 						 ntohs(skb->protocol),
 						 (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) ?
 						 "cpu-tagged" :
@@ -1117,16 +1232,10 @@ rearm:
 		 * length, or no new buffer): it keeps its own buffer.
 		 */
 		if (!skb)
-			rtl9602c_eth_rx_give(priv, i, priv->rx_skb[i],
-					     priv->rx_buf[i]);
+			rtl9602c_eth_rx_give(ring, i, ring->skb[i], ring->buf[i]);
 
-		/*
-		 * Give descriptor i back to the engine; without this write the
-		 * ring runs dry and receive stops.
-		 */
-		writeb(i, priv->base + RTL9602C_NIC_RX_RING_TAIL);
-
-		priv->rx_tail = (i + 1) % RTL9602C_RX_RING;
+		rtl9602c_eth_rx_tail(priv, r, i);
+		ring->tail = (i + 1) % ring->len;
 		done++;
 	}
 
@@ -1149,7 +1258,8 @@ static void rtl9602c_eth_count_missed(struct net_device *dev)
 }
 
 /*
- * Fold in missed frames, reap transmit completions, then receive. The
+ * Fold in missed frames, reap transmit completions, then receive: the control
+ * ring first, so that a full budget of data cannot hold OMCI back. The
  * interrupts that rtl9602c_eth_irq() masked are unmasked once a poll finishes
  * under budget.
  */
@@ -1160,7 +1270,8 @@ static int rtl9602c_eth_poll(struct napi_struct *napi, int budget)
 
 	rtl9602c_eth_count_missed(dev);
 	rtl9602c_eth_reap(dev);
-	done = rtl9602c_eth_rx(dev, budget);
+	done = rtl9602c_eth_rx(dev, RTL9602C_RX_CTRL, budget);
+	done += rtl9602c_eth_rx(dev, RTL9602C_RX_DATA, budget - done);
 
 	if (done < budget && napi_complete_done(napi, done)) {
 		struct rtl9602c_eth *priv = netdev_priv(dev);
@@ -1692,6 +1803,39 @@ static const struct file_operations rtl9602c_eth_rxreason_fops = {
 	.llseek	= default_llseek,
 };
 
+/*
+ * The rings file: the priority-to-ring map, then per receive ring its length,
+ * the engine's index into it, the driver's, and the frames the driver has taken
+ * from it since the interface came up.
+ */
+static int rtl9602c_eth_rings_show(struct seq_file *m, void *v)
+{
+	struct rtl9602c_eth *priv = m->private;
+	static const unsigned int cur[RTL9602C_RX_RINGS] = {
+		[RTL9602C_RX_DATA] = RTL9602C_NIC_RX_RING_CUR,
+		[RTL9602C_RX_CTRL] = RTL9602C_NIC_RX2_RING_CUR,
+	};
+	unsigned int r;
+
+	seq_printf(m, "priority to ring %08x\n",
+		   readl(priv->base + RTL9602C_NIC_RX_PRI_TO_RING));
+	for (r = 0; r < RTL9602C_RX_RINGS; r++) {
+		const struct rtl9602c_rx_ring *ring = &priv->rx[r];
+
+		/*
+		 * The poll updates the index and the count without a lock;
+		 * READ_ONCE loads each once. A value a frame behind does no
+		 * harm in this view.
+		 */
+		seq_printf(m, "%-7s ring %3u descriptors, engine at %3u, driver at %3u, %u frames\n",
+			   rtl9602c_rx_ring_name[r], ring->len,
+			   readw(priv->base + cur[r]),
+			   READ_ONCE(ring->tail), READ_ONCE(ring->frames));
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(rtl9602c_eth_rings);
+
 static void rtl9602c_eth_debugfs_put(void *d)
 {
 	debugfs_remove_recursive(d);
@@ -1743,6 +1887,20 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, priv->irq,
 				     "no interrupt declared for the CPU port\n");
 
+	/* Each receive descriptor's buffer and its mapping, per ring. */
+	priv->rx[RTL9602C_RX_DATA].len = RTL9602C_RX_RING;
+	priv->rx[RTL9602C_RX_CTRL].len = RTL9602C_RX_CTRL_RING;
+	for (i = 0; i < RTL9602C_RX_RINGS; i++) {
+		struct rtl9602c_rx_ring *ring = &priv->rx[i];
+
+		ring->skb = devm_kcalloc(&pdev->dev, ring->len,
+					 sizeof(*ring->skb), GFP_KERNEL);
+		ring->buf = devm_kcalloc(&pdev->dev, ring->len,
+					 sizeof(*ring->buf), GFP_KERNEL);
+		if (!ring->skb || !ring->buf)
+			return -ENOMEM;
+	}
+
 	rtl9602c_eth_read_addr(priv->base, addr);
 
 	if (is_valid_ether_addr(addr)) {
@@ -1772,7 +1930,10 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 
 	netif_napi_add(dev, &priv->napi, rtl9602c_eth_poll);
 
-	/* rtl9602c-eth/rxreason: the received frames per trap reason. */
+	/*
+	 * rtl9602c-eth/rxreason: the received frames per trap reason;
+	 * rtl9602c-eth/rings: the receive rings.
+	 */
 	priv->debugfs = debugfs_create_dir("rtl9602c-eth", NULL);
 	err = devm_add_action_or_reset(&pdev->dev, rtl9602c_eth_debugfs_put,
 				       priv->debugfs);
@@ -1780,6 +1941,8 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 		return err;
 	debugfs_create_file("rxreason", 0600, priv->debugfs, priv,
 			    &rtl9602c_eth_rxreason_fops);
+	debugfs_create_file("rings", 0400, priv->debugfs, priv,
+			    &rtl9602c_eth_rings_fops);
 
 	err = devm_register_netdev(&pdev->dev, dev);
 	if (err)

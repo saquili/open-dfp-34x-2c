@@ -1246,13 +1246,13 @@ its siblings describe the registers from the switch's side.
        ``RTL9602C_OMCI_TRAP_CFG_PRI`` (bits 2:0), the internal priority the
        switch gives an OMCI frame it traps to the CPU; the build writes 7
        (``RTL9602C_OMCI_TRAP_CFG_PRI_HIGHEST``).
-     - I
-     - Assumption, load-bearing: the driver writes it. The CPU port maps every
-       priority to its one receive ring
-       (Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst),
-       so the priority picks no ring. A downstream flood through the CPU port
-       with the priority at 0 and at 7, counting OMCI answers, would show
-       whether it matters.
+     - M, I
+     - M: every OMCI message arrives on the CPU port's control ring, to which
+       the conduit sends internal priority 7 and nothing else
+       (Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst,
+       its rings file). I: that this register is what gives the messages
+       priority 7; writing another value and reading the rings file would
+       settle it.
    * - ``RTL9602C_PORT_MAC_CFG(p)``, ``0x020004`` + ``0x400`` p:
        ``RTL9602C_PORT_MAC_CFG_RX_PON_CTRL`` (bit 2) lets the port pass PON
        control frames such as OMCI; the build sets it on port 2 (PON) and port 3
@@ -1703,14 +1703,19 @@ the path on the CPU port page
        systems it is a 32-bit CRC as specified in ITU-T I.363.5.
      - P
      - ITU-T G.988 (11/2022) clauses 11.1 and 11.2.7.
-   * - OMCI shares the CPU port's one receive ring with CPU-bound data: under a
-       downstream flood crossing the CPU at 40,000 frames a second an OMCI
-       message was lost before the driver saw it, and the OLT did not repeat it.
-       With the data path forwarded by the switch, OMCI kept answering through a
-       line-rate flood.
+   * - OMCI messages arrive on a receive ring of the CPU port's own, so a flood
+       of frames to the CPU does not drop them. While they shared the one
+       receive ring with CPU-bound data, such a flood dropped them before the
+       driver saw them, and the OLT did not repeat a lost message. With the data
+       path forwarded by the switch, OMCI kept answering through a line-rate
+       flood.
      - M
-     - A downstream flood through the CPU, and the same flood forwarded by the
-       switch, with the OMCI exchange running.
+     - Floods of 272,000 to 282,000 frames a second to the CPU: with one ring 2
+       of 20 messages arrived in 120 s, with the control ring 21 of 21, and 442
+       of 442 during a registration under the flood. Earlier, with one ring, a
+       downstream flood of 40,000 frames a second through the CPU lost a
+       message, and with the same flood forwarded by the switch OMCI kept
+       answering.
 
 The debugfs views
 =================
@@ -2043,10 +2048,11 @@ Known limitations
   interface only. The entries that tell GEM interfaces apart by VLAN have not
   been measured with two upstream GEM ports; the OLT the board was tested
   against grants one data T-CONT.
-- The OMCI messages share the CPU port's one receive ring with CPU-bound data.
-  Under a flood of frames through the CPU an OMCI message can be lost before the
-  driver sees it, and the OLT does not repeat it. The driver removes four bytes
-  from every control frame; whether an extended message carries the same four
+- The OMCI messages have the CPU port's control ring to themselves only while
+  the switch gives no other frame to the CPU internal priority 7; one that it
+  does, through ``dcb apptrust`` and the PCP or DSCP maps or a port's default
+  priority, shares the ring with them. The driver removes four bytes from every
+  control frame; whether an extended message carries the same four
   has not been observed, and an extended message without them would lose the
   last four bytes of its MIC.
 - A GEM flow's upstream octet register clears when read, so a tool that reads

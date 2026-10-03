@@ -638,8 +638,10 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 		rtl9602c_pon_queue_set(p, i, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
 	/*
 	 * The internal priority the switch gives the OMCI frames it traps to
-	 * the CPU. The CPU port has one receive ring for every priority, so
-	 * it chooses no ring; that it matters is not verified.
+	 * the CPU: the conduit takes priority 7 on a receive ring of its own,
+	 * which a flood of data to the CPU cannot fill. The messages arrive
+	 * there; that this register is what gives them the priority is not
+	 * verified.
 	 */
 	rtl9602c_rmw(p, RTL9602C_OMCI_TRAP_CFG, RTL9602C_OMCI_TRAP_CFG_PRI,
 		     FIELD_PREP(RTL9602C_OMCI_TRAP_CFG_PRI,

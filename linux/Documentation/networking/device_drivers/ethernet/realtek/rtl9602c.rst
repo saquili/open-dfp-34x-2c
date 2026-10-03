@@ -11,8 +11,9 @@ The Ethernet switch of the RTL9602C has four ports. Port 0 is the SerDes lane
 to the host, port 1 exists in the silicon and is not wired on this board, port
 2 is the PON port, behind which the GPON MAC sits, and port 3 is the CPU port.
 The CPU port has no MAC behind it: it ends in a DMA engine that moves frames
-between memory and the switch through two descriptor rings, one for transmit
-and one for receive.
+between memory and the switch through descriptor rings: one for transmit, and
+two for receive, the data ring and the control ring, which takes the OMCI
+messages.
 
 Everything that decides where a frame goes travels in the descriptors, as the
 CPU tag, and none of it is in the frame. On transmit the descriptor carries a
@@ -51,7 +52,7 @@ The path of a frame, from the users of the conduit down to the switch::
                                    |
                      cpu (rtl9602c-eth), the conduit
                                    |
-              two descriptor rings, the CPU tag in the descriptors
+             three descriptor rings, the CPU tag in the descriptors
                                    |
                  DMA engine = CPU port = switch port 3
                                    |
@@ -210,6 +211,9 @@ Interfaces to user space
 - ``/sys/kernel/debug/rtl9602c-eth/rxreason``: the frames the switch sent up,
   counted per reason. Reading it lists the non-zero counts and any write
   clears them (see "Statistics").
+- ``/sys/kernel/debug/rtl9602c-eth/rings``: the priority-to-ring map, and per
+  receive ring its length, the engine's index into it, the driver's, and the
+  frames taken from it since the interface came up (see "The rings").
 - ``/proc/interrupts``: the engine's interrupt, source 26 of the SoC interrupt
   controller, is Linux interrupt 34 and is named after the interface::
 
@@ -396,15 +400,37 @@ Register map
    * - ``+0x1370``
      - ``RTL9602C_NIC_RX_PRI_TO_RING``
      - 32
-     - Writes 0.
+     - Writes ``0x20000000``, priority 7 to the control ring; 0 if the control
+       ring's index is beyond the ring. Reads it for the rings file.
+   * - ``+0x1390``
+     - ``RTL9602C_NIC_RX2_RING_BASE``
+     - 32
+     - Writes the bus address of the control ring; reads it at probe.
+   * - ``+0x1394``
+     - ``RTL9602C_NIC_RX2_RING_CUR``
+     - 16
+     - Reads it at probe, at start and for the rings file.
+   * - ``+0x1396``
+     - ``RTL9602C_NIC_RX2_RING_LEN``
+     - 16
+     - Writes 31.
+   * - ``+0x1398``
+     - ``RTL9602C_NIC_RX2_RING_TAIL``
+     - 32
+     - Writes the index before the engine's at start, then the index of each
+       control-ring descriptor it gives back.
+   * - ``+0x139c``
+     - ``RTL9602C_NIC_RX2_PAUSE_THR``
+     - 32
+     - Writes ``0x00020006``.
    * - ``+0x13f0``
      - ``RTL9602C_NIC_RX_RING_BASE``
      - 32
-     - Writes the bus address of the receive ring.
+     - Writes the bus address of the data ring.
    * - ``+0x13f4``
      - ``RTL9602C_NIC_RX_RING_CUR``
      - 16
-     - Writes 0.
+     - Writes 0; reads it for the rings file.
    * - ``+0x13f6``
      - ``RTL9602C_NIC_RX_RING_LEN``
      - 8
@@ -424,8 +450,8 @@ Register map
    * - ``+0x1430``
      - ``RTL9602C_NIC_RX_RING_TAIL``
      - 8
-     - Writes 255 at start, then the index of each receive descriptor it gives
-       back.
+     - Writes 255 at start, then the index of each data-ring descriptor it
+       gives back.
    * - ``+0x1431``
      - ``RTL9602C_NIC_RX_PAUSE_ON_THR``
      - 8
@@ -563,7 +589,7 @@ Media status and configuration
 
 The driver clears two bits of the media status register, so that the engine
 and the switch exchange no pause. It also writes the engine's configuration
-register with one field set, which keeps the ring's receive interrupt in
+register with one field set, which keeps the receive interrupt of both rings in
 ``RTL9602C_NIC_IRQ_STAT``.
 
 .. list-table::
@@ -600,9 +626,11 @@ Priority steering and the missed-frame counter
 ----------------------------------------------
 
 One register of the engine has a field per internal priority that names the
-receive ring for that priority. The driver serves one ring and writes 0 to
-every field. Frames the engine drops because no receive descriptor is free are
-counted in a 16-bit register that wraps quickly under load.
+receive ring for that priority. The driver serves two rings and sends priority
+7, which the switch driver gives the OMCI messages it traps, to the control
+ring, and every other priority to the data ring (see "The rings"). Frames the
+engine drops because no receive descriptor is free are counted in a 16-bit
+register that wraps quickly under load.
 
 .. list-table::
    :header-rows: 1
@@ -612,15 +640,17 @@ counted in a 16-bit register that wraps quickly under load.
      - Tag
      - Checked by
    * - ``RTL9602C_NIC_RX_PRI_TO_RING`` (``+0x1370``) holds eight 4-bit fields,
-       one per internal priority, each naming the receive ring for that
-       priority; 0 is the ring at ``RTL9602C_NIC_RX_RING_BASE``. The driver
-       writes 0, so every priority lands in the one ring it serves, including
-       7, which the switch driver gives the OMCI frames it traps
-       (Documentation/networking/device_drivers/pon/rtl9602c.rst). The layout
-       of the fields beyond "0 everywhere" is an assumption.
-     - T, I
-     - T: OMCI messages and data frames both arrive (OMCI both ways over
-       ``/dev/pon0omci0``; any traffic).
+       priority p in bits 4p + 3 to 4p, each naming the receive ring for that
+       priority: 0 the data ring at ``RTL9602C_NIC_RX_RING_BASE``, 2 the control
+       ring at ``RTL9602C_NIC_RX2_RING_BASE``. The driver writes
+       ``0x20000000``: priority 7, which the switch driver gives the OMCI frames
+       it traps (Documentation/networking/device_drivers/pon/rtl9602c.rst), to
+       the control ring. What the other values name is not established.
+     - M
+     - With ``0x20000000``, each of the 421 OMCI messages of a registration
+       arrived on the control ring and every other frame on the data ring (the
+       rings file, and the logs of the first frames); with 0 in every field,
+       all of them arrived on the one ring.
    * - ``RTL9602C_NIC_REG_13FC`` (``+0x13fc``) is written with 0 when the
        engine is set up. Its function is not established.
      - I
@@ -687,11 +717,14 @@ carries no weight (see "The interrupt and the poll" under "Sequences").
        status bit is acknowledged by writing it back as 1.
      - T
      - Interrupt-driven receive without an interrupt storm, on every boot.
-   * - ``RTL9602C_NIC_IRQ_RX_DONE`` (bit 0): a frame was received into the
-       ring.
+   * - ``RTL9602C_NIC_IRQ_RX_DONE`` (bit 0): a frame was received, into either
+       receive ring.
      - M
      - With frames arriving, receive is interrupt-driven on this bit: 14 frames
-       over a run of 20 pings, none dropped; the same on every boot.
+       over a run of 20 pings, none dropped; the same on every boot. With a
+       frame waiting on the control ring and none on the data ring, the
+       interrupt found the status ``0x0001`` (a test build that logged the
+       rings' state in the interrupt handler).
    * - ``RTL9602C_NIC_IRQ_TX_DONE`` (bit 6): a transmit completed. The driver
        needs it to reap completed descriptors and wake its queues when nothing
        is being received.
@@ -712,16 +745,31 @@ carries no weight (see "The interrupt and the poll" under "Sequences").
 The rings
 =========
 
-The engine has one transmit ring and one receive ring, each an array of
-descriptors in coherent memory (see "Descriptors"). The driver gives the engine
-the bus address of descriptor 0 of each ring, and the engine walks a ring by an
-index of its own, returning to descriptor 0 after the descriptor marked
-``RTL9602C_NIC_DESC_RING_END``. The two sides pass a descriptor to each other
-with the ownership bit of word 0: set, the descriptor is the engine's. The
-engine learns that the transmit ring has work from a kick, a write to
-``RTL9602C_NIC_DMA_CTRL`` with the poll bit set. The receive ring has a tail
+The engine has one transmit ring and, as the driver uses it, two receive rings:
+the data ring, at ``RTL9602C_NIC_RX_RING_BASE``, and the control ring, at
+``RTL9602C_NIC_RX2_RING_BASE``, which takes the frames of internal priority 7
+(see "Priority steering and the missed-frame counter"). Each ring is an array
+of descriptors in coherent memory (see "Descriptors"). The driver gives the
+engine the bus address of descriptor 0 of each ring, and the engine walks a
+ring by an index of its own, returning to descriptor 0 after the descriptor
+marked ``RTL9602C_NIC_DESC_RING_END``. The two sides pass a descriptor to each
+other with the ownership bit of word 0: set, the descriptor is the engine's.
+The engine learns that the transmit ring has work from a kick, a write to
+``RTL9602C_NIC_DMA_CTRL`` with the poll bit set. Each receive ring has a tail
 register that holds the index of the last descriptor handed back to the engine,
 and the driver writes it each time it gives a descriptor back.
+
+The control ring exists so that OMCI keeps free descriptors whatever the data
+ring holds: under a flood to the CPU the data ring is full nearly all the time
+and the engine drops what arrives for it, while the control ring, which nothing
+else fills, still takes every OMCI message. The poll serves the control ring
+first, so a full budget of data cannot hold a message back. The rings file
+in debugfs shows both rings::
+
+    # cat /sys/kernel/debug/rtl9602c-eth/rings
+    priority to ring 20000000
+    data    ring 256 descriptors, engine at  89, driver at  89, 89 frames
+    control ring  32 descriptors, engine at   5, driver at   5, 421 frames
 
 The ring registers
 ------------------
@@ -742,10 +790,12 @@ The ring registers
        transmit test at open).
    * - ``RTL9602C_NIC_TX_RING_CUR`` (``+0x1304``, 16-bit) and
        ``RTL9602C_NIC_RX_RING_CUR`` (``+0x13f4``, 16-bit) are the engine's own
-       indices into the rings; the driver writes 0 to both before starting, so
-       both sides begin at descriptor 0.
-     - T
-     - Transmit and receive work from the first frame after open.
+       indices into the transmit ring and the data ring; the driver writes 0 to
+       both before starting, so both sides begin at descriptor 0.
+     - T, M
+     - T: transmit and receive work from the first frame after open. M:
+       ``ip link set cpu down`` with the data ring's index at 254, then up: the
+       rings file showed engine and driver both at 21 after 21 frames.
    * - The engine keeps its own transmit index and advances it over every
        descriptor it consumes; nothing reconciles it with the driver's indices.
        The driver must post descriptors in exactly the order the engine walks
@@ -788,12 +838,46 @@ The ring registers
        as a burst from the 2.5 Gbit/s SFP port, are discarded in the switch
        once its queue of about 70 KB is full; the ingress port's
        ``rx_forward_discards`` counts them.
+   * - The control ring has a block of registers of its own:
+       ``RTL9602C_NIC_RX2_RING_BASE`` (``+0x1390``) takes the bus address of
+       descriptor 0, ``RTL9602C_NIC_RX2_RING_LEN`` (``+0x1396``, 16-bit) the
+       length minus 1 (31), and ``RTL9602C_NIC_RX2_RING_TAIL`` (``+0x1398``) the
+       index of the last descriptor handed back, written whole.
+     - M
+     - The 32-descriptor ring took 887 OMCI messages in a row, wrapping 27
+       times, with engine and driver at the same index after each check.
+   * - ``RTL9602C_NIC_RX2_RING_CUR`` (``+0x1394``, 16-bit) is the engine's
+       index into the control ring, and cannot be written: it keeps the value
+       it had when the engine stopped. The driver therefore reads it at start,
+       begins there, and writes the index before it to the tail, so every
+       descriptor is the engine's. An index beyond the ring, which only a
+       longer ring left by earlier software could leave, would make the engine
+       write past the ring: the driver then keeps priority 7 on the data ring
+       and warns ``control ring index <n> is beyond the ring; OMCI shares the
+       data ring``.
+     - M
+     - ``ip link set cpu down`` with the index at 4, then up, with 0 written
+       to the index as 16 bits: the engine went on at 4 and 5 while the driver
+       waited at 0, and OMCI stopped. Written as 32 bits together with the
+       length, at 8: the index read back 8. Reading it at start instead: after
+       the same restart at 8, the next registration's 421 messages arrived, and
+       engine and driver ended together at 13. After a reset of the board the
+       index reads 0 (the probe line).
+   * - ``RTL9602C_NIC_RX2_PAUSE_THR`` (``+0x139c``) is written with
+       ``0x00020006``: pause thresholds of 2 and 6 free descriptors, the same
+       share of the ring as the data ring's 16 and 48, taken to be in bits
+       23:16 and 7:0. Pause is off, so they have no effect, and their layout is
+       an assumption.
+     - I
+     - Not load-bearing while pause is off.
    * - ``RTL9602C_NIC_RING_CFG`` (``+0x1438``) is written with
        ``RTL9602C_NIC_RING_CFG_INIT`` (``0x32000001``) before the engine is
-       started, and with 0 to halt it.
-     - T
-     - Transmit and receive work (any traffic); ``ip link set cpu down`` and up
-       again restores both.
+       started, and with 0 to halt it. The control ring needs nothing more in
+       it.
+     - T, M
+     - T: transmit and receive work (any traffic); ``ip link set cpu down``
+       and up again restores both. M: bits 17 and 16, written as 1, read back
+       as 0, and the control ring works with them clear.
    * - ``RTL9602C_NIC_DMA_CTRL`` (``+0x1434``) is written with
        ``RTL9602C_NIC_DMA_CTRL_INIT`` (``0xc059f130``) last, to start the
        engine, and with 0 first, to halt it.
@@ -818,11 +902,11 @@ The ring registers
 Sizes, load and locking
 -----------------------
 
-The receive ring has 256 descriptors (``RTL9602C_RX_RING``) and the transmit
-ring 32 (``RTL9602C_TX_RING``). Receive and OMCI share the one receive ring, and
-data frames and OMCI messages share the one transmit ring under one lock
-(``tx_lock``), which also guards the stopping and waking of the transmit
-queues.
+The data ring has 256 descriptors (``RTL9602C_RX_RING``), the control ring 32
+(``RTL9602C_RX_CTRL_RING``) and the transmit ring 32 (``RTL9602C_TX_RING``).
+OMCI messages arrive on the control ring, and data frames and OMCI messages
+share the one transmit ring under one lock (``tx_lock``), which also guards the
+stopping and waking of the transmit queues.
 
 .. list-table::
    :header-rows: 1
@@ -840,11 +924,23 @@ queues.
      - M
      - Floods sent from the host side, counted at both ends: the switch's
        CPU-port counter and the frames the driver received.
-   * - OMCI shares the one receive ring with data: under a downstream flood to
-       the CPU, OMCI messages are dropped in the engine like any other frame.
+   * - With one receive ring for every priority, a flood to the CPU drops OMCI
+       messages in the engine like any other frame. On the control ring they
+       all arrive.
      - M
-     - During a flood of 40,000 frames/s an OMCI message the OLT sent was
-       missing at the OMCI port.
+     - Floods of 272,000 to 282,000 frames/s from the host to the stick's own
+       address, comparing the OMCI messages the PON MAC received (the
+       ``omci rx`` line of the switch driver's ``ponmac`` file) with those the
+       OMCI port delivered (``rx_messages``). One ring: of 20 messages in 120 s,
+       2 delivered; during a registration under the flood, 432 of 440. Control
+       ring: 21 of 21 in 120 s, and 442 of 442 during a registration under the
+       flood, omcid answering the MIB upload. Each time the CPU took about
+       32,000 frames/s and the engine missed the rest.
+   * - ``RTL9602C_RX_CTRL_RING`` = 32 control-ring descriptors. A registration
+       brings some 420 OMCI messages in a few seconds and the OLT then sends
+       one every few seconds; the poll serves the control ring first.
+     - M
+     - The registration under the flood above, with no message lost.
    * - ``RTL9602C_TX_RING`` = 32 transmit descriptors, one always left unused so
        that head equal to tail means empty. One ring serves every transmit
        queue and the OMCI path under one lock; the queues stop together when it
@@ -1685,8 +1781,10 @@ switch driver's OMCI port passes the message to
 ``rtl9602c_conduit_ctrl_xmit()`` with the PON port and the OMCC's flow. The
 message shares the transmit ring with data frames, leaves at the length given
 (a 48-byte baseline message is not padded to 60) and carries no priority.
-Messages and data share the one receive ring, so a flood of data to the CPU
-drops OMCI messages too (see "Sizes, load and locking"). The four bytes that
+Downstream messages arrive on the control ring, which takes the frames of
+internal priority 7: the OMCI messages, and any other frame the switch is set to
+give priority 7. A flood of data to the CPU therefore does not drop them (see
+"The rings" and "Sizes, load and locking"). The four bytes that
 follow each downstream message, and the flow, T-CONT and Port-ID of the OMCC,
 belong to the PON MAC
 (Documentation/networking/device_drivers/pon/rtl9602c.rst); the OMCI port
@@ -1833,10 +1931,11 @@ The lines, with the conversions the driver uses:
        ``dev_err_probe()``
    * - Probe, the engine as found
      - ``engine found with DMA_CTRL <w>, IRQ_STAT <h>, TX ring <base> at
-       <index>, RX ring <base> at <index>; stopped, DMA_CTRL <w>``, a device
-       line that carries the device name instead of the prefix. The values
-       before the semicolon are the registers as the probe found them, the last
-       is ``RTL9602C_NIC_DMA_CTRL`` after the stop
+       <index>, RX rings <base> at <index> and <base> at <index>; stopped,
+       DMA_CTRL <w>``, a device line that carries the device name instead of
+       the prefix. The values before the semicolon are the registers as the
+       probe found them, the receive rings the data ring's and the control
+       ring's; the last is ``RTL9602C_NIC_DMA_CTRL`` after the stop
    * - Probe, unusable address
      - ``identity registers hold <MAC>, which is not a usable address; using a
        random one``, a device warning that carries the device name instead of
@@ -1851,19 +1950,23 @@ The lines, with the conversions the driver uses:
    * - Open
      - ``up: interrupt <n>, msr <MEDIA_STAT>, config <CFG>; transmit test ok``
        or ``transmit test FAILED -- the engine kept the descriptor``
+   * - Start, the control ring's index beyond the ring
+     - ``control ring index <n> is beyond the ring; OMCI shares the data ring``,
+       a warning
    * - Stop
      - ``down: rx <frames> frames / <bytes> bytes, tx <frames> / <bytes>;
        dropped rx <n> tx <n>, tx errors <n>``
    * - The first 4 frames, and the first frame from each source port
-     - ``<eth rx> port <p> receives: <n> bytes from <MAC>, proto 0x<type>,
-       cpu-tagged; descriptor <w0> <w2> <w3>``; for a frame without a CPU tag
+     - ``<eth rx> port <p> receives on the <ring> ring: <n> bytes from <MAC>,
+       proto 0x<type>, cpu-tagged; descriptor <w0> <w2> <w3>``, ``<ring>``
+       being ``data`` or ``control``; for a frame without a CPU tag
        ``NO CPU TAG, so the source port is a guess`` takes the place of
        ``cpu-tagged`` and the port printed is 0. ``<type>`` is the
        ``skb->protocol`` that ``eth_type_trans()`` returns, which is
        ``ETH_P_XDSA`` (``0x00f8``) while DSA uses the conduit
    * - The first 4 OMCI messages received
-     - ``pon ctrl[<i>] <n> bytes w0 <w0> w2 <w2> w3 <w3> src <p>:`` and the
-       first 16 bytes
+     - ``pon ctrl[<i>] on the <ring> ring, <n> bytes w0 <w0> w2 <w2> w3 <w3>
+       src <p>:`` and the first 16 bytes
    * - The first 4 OMCI messages sent
      - ``pon ctrl tx[<i>] <n> bytes w0 <w0> w2 <w2> w3 <w3> slot <i>:`` and the
        first 16 bytes
@@ -1899,7 +2002,8 @@ Probe
    Purpose: a queue per switch port carries the destination port, the name
    makes the user ports ``sfp@cpu`` and ``pon@cpu``, and the flow of a GEM
    frame travels in a dst. (M, T)
-4. Take the interrupt from the device tree. Purpose: reach the engine's
+4. Take the interrupt from the device tree, and allocate the arrays that hold
+   each receive descriptor's buffer, per ring. Purpose: reach the engine's
    interrupt line. (M)
 5. Read the MAC address from the engine's address registers. Use it if it is a
    valid unicast address; otherwise warn and use a random one. Purpose: the
@@ -1908,8 +2012,8 @@ Probe
    the port number. Purpose: a received frame gets the dst of its source port.
    (T)
 7. Add the NAPI poll, and create the debugfs directory ``rtl9602c-eth`` with
-   its file ``rxreason``. Purpose: the poll does the receive work, and the
-   reasons can be read back. (M)
+   its files ``rxreason`` and ``rings``. Purpose: the poll does the receive
+   work, and the reasons and the rings can be read back. (M)
 8. Register the network device and log the address line. Purpose: DSA attaches
    the user ports to a registered conduit. (T)
 9. Run the transmit test on rings set up for it alone and free them again; log
@@ -1921,12 +2025,13 @@ Setting the engine up
 
 This is done by the open, and by the transmit test at probe, in this order:
 
-1. Allocate both rings and give every receive descriptor a mapped buffer:
+1. Allocate the three rings and give every receive descriptor a mapped buffer:
    ``RTL9602C_NIC_DESC_OWN | 0x600``, and ``RTL9602C_NIC_DESC_RING_END`` on the
-   last. Purpose: the engine may fill any descriptor once it is started. (T)
+   last of each ring. Purpose: the engine may fill any descriptor once it is
+   started. (T)
 2. Write the transmit ring's bus address to ``RTL9602C_NIC_TX_RING_BASE`` and 0
-   to ``RTL9602C_NIC_TX_RING_CUR``; the same for the receive ring. Purpose:
-   both sides start at descriptor 0. (M for the base, T for the index)
+   to ``RTL9602C_NIC_TX_RING_CUR``; the same for the data ring. Purpose: both
+   sides start at descriptor 0. (M)
 3. Write ``0x0f`` to ``RTL9602C_NIC_RX_FILTER``, ``0x0c00`` to
    ``RTL9602C_NIC_TX_CFG`` and ``0x0a`` to ``RTL9602C_NIC_CTRL``. Purpose:
    accept every frame the switch hands over, and a receive format that does not
@@ -1940,20 +2045,28 @@ This is done by the open, and by the transmit test at probe, in this order:
    ``RTL9602C_NIC_RX_PAUSE_OFF_THR_HI``. Purpose: the thresholds, and no high
    part left over from the boot loader. (M for the thresholds, T for the high
    parts)
-6. Write 0 to ``RTL9602C_NIC_REG_13FC``. Purpose: a known value in a register
+6. Write the control ring's bus address to ``RTL9602C_NIC_RX2_RING_BASE`` and
+   31 to ``RTL9602C_NIC_RX2_RING_LEN``; read ``RTL9602C_NIC_RX2_RING_CUR`` and,
+   if it is inside the ring, begin there and choose ``0x20000000`` for the
+   steering, otherwise warn and choose 0; write the index before it to
+   ``RTL9602C_NIC_RX2_RING_TAIL`` and ``0x00020006`` to
+   ``RTL9602C_NIC_RX2_PAUSE_THR``. Purpose: a 32-descriptor control ring, all
+   of it available, from the index the engine keeps. (M; I for the
+   thresholds)
+7. Write 0 to ``RTL9602C_NIC_REG_13FC``. Purpose: a known value in a register
    whose function is not established. (I)
-7. Write all ones to ``RTL9602C_NIC_MC_HASH_LO`` and
+8. Write all ones to ``RTL9602C_NIC_MC_HASH_LO`` and
    ``RTL9602C_NIC_MC_HASH_HI``. Purpose: no multicast group is filtered. (T)
-8. Write ``0x20000000`` to ``RTL9602C_NIC_CFG`` and 0 to
-   ``RTL9602C_NIC_RX_PRI_TO_RING``. Purpose: the receive interrupt stays in
-   ``RTL9602C_NIC_IRQ_STAT``, and every priority goes to the one ring. (M for
-   the configuration, T for the steering)
-9. Clear bits 7 and 6 of ``RTL9602C_NIC_MEDIA_STAT``, keeping the other bits.
-   Purpose: no pause between the engine and the switch. (M)
-10. Write ``0x901eff04`` to ``RTL9602C_NIC_CPUTAG`` and ``0x4072`` to
+9. Write ``0x20000000`` to ``RTL9602C_NIC_CFG``, and the steering chosen in
+   step 6 to ``RTL9602C_NIC_RX_PRI_TO_RING``. Purpose: the receive interrupt
+   of both rings stays in ``RTL9602C_NIC_IRQ_STAT``, and priority 7 goes to the
+   control ring. (M)
+10. Clear bits 7 and 6 of ``RTL9602C_NIC_MEDIA_STAT``, keeping the other
+    bits. Purpose: no pause between the engine and the switch. (M)
+11. Write ``0x901eff04`` to ``RTL9602C_NIC_CPUTAG`` and ``0x4072`` to
     ``RTL9602C_NIC_CPUTAG_SRC``. Purpose: the CPU tag in the descriptors, both
     directions. (T for the tag register, M for the source register)
-11. Write ``0x32000001`` to ``RTL9602C_NIC_RING_CFG``, then ``0xc059f130`` to
+12. Write ``0x32000001`` to ``RTL9602C_NIC_RING_CFG``, then ``0xc059f130`` to
     ``RTL9602C_NIC_DMA_CTRL``. Purpose: configure, then start. (T)
 
 Open
@@ -2054,7 +2167,7 @@ Transmitting a data frame
 Receiving
 ---------
 
-For each descriptor, up to the poll budget:
+For each descriptor of a ring, up to the budget the poll gives it:
 
 1. Stop at the first descriptor with OWN set. Purpose: the engine has not
    filled it yet. (T)
@@ -2077,8 +2190,9 @@ For each descriptor, up to the poll budget:
    reaches the stack as it was sent, with its hardware timestamp. (M)
 9. Hand the frame up with ``eth_type_trans()`` and ``netif_receive_skb()``.
 10. Give the descriptor back, with the new buffer or the old one, and write its
-    index to ``RTL9602C_NIC_RX_RING_TAIL``. Purpose: without the write the ring
-    runs dry. (T)
+    index to the ring's tail, ``RTL9602C_NIC_RX_RING_TAIL`` or
+    ``RTL9602C_NIC_RX2_RING_TAIL``. Purpose: without the write the ring runs
+    dry. (T)
 
 The interrupt and the poll
 --------------------------
@@ -2099,7 +2213,9 @@ The poll:
    16-bit counter wraps quickly under load. (M)
 2. Reap the transmit completions. Purpose: free the sent frames and wake the
    queues. (T)
-3. Receive (above).
+3. Receive (above) from the control ring, up to the budget, then from the data
+   ring with what is left of it. Purpose: a full budget of data cannot hold an
+   OMCI message back. (M)
 4. If it finished under the budget, complete the poll and write
    ``RTL9602C_NIC_IRQ_MASK_RXTX`` to ``RTL9602C_NIC_IRQ_MASK``. Purpose: let the
    causes raise the interrupt again. (T)
@@ -2133,9 +2249,11 @@ Known limitations
   receive ceiling is about 24,000 to 25,000 frames/s whatever the frame size,
   and beyond it the excess is counted in ``rx_missed_errors``. The receive
   pause thresholds have no effect, because the switch's side of the pause is
-  not enabled. OMCI messages share the one receive ring with data, so under a
-  downstream flood to the CPU they are dropped in the engine like any other
-  frame.
+  not enabled. OMCI messages have the control ring to themselves only while
+  nothing else is given internal priority 7: a frame the switch is set to give
+  priority 7 on its way to the CPU, through its priority selection (``dcb
+  apptrust`` with the PCP or DSCP maps, or a port's default priority), shares
+  the control ring with them.
 - The conduit receives no frame longer than 1536 bytes including the FCS, and it
   keeps the Ethernet default of 1500 for its ``max_mtu``. DSA limits the largest
   MTU of the user ports by the conduit's maximum, so a larger MTU on a user port
@@ -2224,10 +2342,14 @@ About the receive path
        mean what their names say ("Receive").
      - Sending a frame with a bad FCS from the host and reading
        ``rx_crc_errors``.
-   * - The layout of the fields of ``RTL9602C_NIC_RX_PRI_TO_RING`` beyond "0
-       everywhere" ("Priority steering and the missed-frame counter").
-     - Nothing settles it while the driver serves one receive ring; steering to
-       a second ring would.
+   * - What the values of ``RTL9602C_NIC_RX_PRI_TO_RING`` other than 0 and 2
+       name, and whether the engine has further receive rings in blocks of 16
+       bytes after the control ring's ("Priority steering and the missed-frame
+       counter").
+     - Setting up a ring in the next block and steering one priority to 3.
+   * - Where the pause thresholds of the control ring are in
+       ``RTL9602C_NIC_RX2_PAUSE_THR`` ("The ring registers").
+     - Enabling pause and reading when the switch holds frames back.
 
 About the transmit path
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -2275,8 +2397,8 @@ About the registers
        ("Registers written whole").
      - Changing one field alone and watching traffic.
    * - What ``RTL9602C_NIC_RX_RING_LEN_HI`` holds ("The ring registers").
-     - Nothing settles it while the ring has 256 descriptors; a longer ring
-       would need it.
+     - Nothing settles it while the data ring has 256 descriptors; a longer
+       ring would need it.
    * - Whether the read of ``RTL9602C_NIC_DMA_CTRL`` before each kick is needed
        ("The ring registers").
      - Kicking without it under load and checking for descriptors taken

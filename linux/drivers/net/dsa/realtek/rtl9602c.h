@@ -786,8 +786,9 @@ enum {
 #define RTL9602C_MIB_OMCI_RX_CRC_ERRORS	0x0329cc
 
 /*
- * The internal priority of the OMCI frames trapped to the CPU; that it
- * matters is not verified.
+ * The internal priority of the OMCI frames trapped to the CPU, which the
+ * conduit takes on a receive ring of its own; that this register is what gives
+ * them the priority is not verified.
  */
 #define RTL9602C_OMCI_TRAP_CFG		0x0111f8
 #define RTL9602C_OMCI_TRAP_CFG_PRI	GENMASK(2, 0)
