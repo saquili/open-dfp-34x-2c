@@ -1647,12 +1647,14 @@ The tag, with offsets from the start of the frame as the switch delivers it:
      - M
      - Frames were tagged with the port's PTP enable on and off and under every
        ingress action; the three bare frames arrived at 60 bytes.
-   * - The conduit takes the tag off: when a frame longer than 16 bytes has
-       EtherType ``0x8899`` at offset 12, it records the timestamp, moves the
-       two addresses forward by 16 bytes and pulls the tag, so the frame reaches
-       the stack as it was sent. It must: a PTP message over Ethernet is
-       recognised by EtherType ``0x88F7``, which neither the DSA core's PTP
-       classification nor any PTP stack would find behind the tag.
+   * - The conduit takes the tag off: when a frame that came up for one of the
+       two PTP trap reasons is longer than 16 bytes and has EtherType
+       ``0x8899`` at offset 12 and the protocol byte 4 at offset 14, it records
+       the timestamp, moves the two addresses forward by 16 bytes and pulls the
+       tag, so the frame reaches the stack as it was sent. It must: a PTP
+       message over Ethernet is recognised by EtherType ``0x88F7``, which
+       neither the DSA core's PTP classification nor any PTP stack would find
+       behind the tag.
      - M
      - The Sync reaches user space as 60 bytes with EtherType ``0x88f7``, three
        frames of three. PTP over Ethernet: IEEE 1588-2008, Annex F.
@@ -2310,10 +2312,11 @@ Stop
 Known limitations
 =================
 
-- The conduit takes a frame longer than 16 bytes with EtherType ``0x8899`` at
-  offset 12 and the protocol byte 4 at offset 14 to carry a PTP timestamp tag,
-  as every tag seen on this board did. A tag with another protocol byte would
-  go up as an ordinary frame, unstamped.
+- The conduit takes a frame that came up for one of the two PTP trap reasons,
+  longer than 16 bytes, with EtherType ``0x8899`` at offset 12 and the protocol
+  byte 4 at offset 14 to carry a PTP timestamp tag, as every tag seen on this
+  board did. A tag with another protocol byte would go up as an ordinary
+  frame, unstamped.
 - The transmit test at probe passes after a RAM boot since the probe stops the
   engine first; before, it failed when the boot loader had just used the engine
   to receive an image (see "The transmit test"). The result is only logged.
