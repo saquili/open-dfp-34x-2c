@@ -94,6 +94,16 @@ The runs, the oldest first:
     stopped at an offloaded GEM interface, and the optics' I2C bus at 100 kHz
     with each diagnostic word read in one transfer. 33 of 33 passed.
 
+``2026-10-03-run10``
+    The same cases and the new cases of the hardware clock, the address table
+    and the shaper, on the RAM image built from ``run10``, after the fixes
+    of the open issues: the PON class's devices, dumps, OMCI reads and
+    unregistration, the conduit's transmit test, counters and dsts, the switch
+    driver's table reads, rule removal, apptrust, clock reads and devlink
+    teardown, the signal-detect limit, the parked upstream streams, the l3flow
+    view, the order of the optics table's checks, the early console and the
+    GPIO bank's compatible. 36 of 36 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
