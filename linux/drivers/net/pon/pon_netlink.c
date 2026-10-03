@@ -374,9 +374,9 @@ void pon_device_notify(struct pon_device *pon, const struct pon_dev_status *st)
 
 	/*
 	 * To the monitor group of the initial network namespace, and only when
-	 * it has listeners. The group has no permission flag: any process may
-	 * join it and receive what a dev-get reply holds, serial number
-	 * included, while dev-get itself needs CAP_NET_ADMIN.
+	 * it has listeners. Joining the group needs CAP_NET_ADMIN, as dev-get
+	 * does, since a notification holds what a dev-get reply holds, serial
+	 * number included.
 	 */
 	if (!genl_has_listeners(&pon_nl_family, &init_net, PON_NLGRP_MONITOR))
 		return;
