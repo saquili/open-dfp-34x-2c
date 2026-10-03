@@ -42,10 +42,12 @@ ACCESS = {
     "R,W,C": "OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE",
 }
 
+# REUSE-IgnoreStart
 SPDX_H = ("/* SPDX-License-Identifier: GPL-2.0-only */\n"
           "/* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */\n")
 SPDX_C = ("// SPDX-License-Identifier: GPL-2.0-only\n"
           "// SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>\n")
+# REUSE-IgnoreEnd
 
 class TableError(Exception):
     pass

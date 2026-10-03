@@ -1,4 +1,5 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: The Linux kernel contributors
 #
 # clang-format configuration file. Intended for clang-format >= 11.
 #
