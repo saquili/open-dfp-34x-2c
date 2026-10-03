@@ -576,18 +576,14 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_a2);
 #define RTL9602C_OPTICS_TBL2_PERSIST_OFF	(BIT(1) | BIT(0))
 
 /*
- * Prepare the configuration table for writing and show it at A2h 128-255:
- * write 0xff to each password byte, keep the page select in @tabsel for
- * the caller to restore, and select page 02h.  If bit 3 or 2 of table byte
- * 0xcc is set, clear both and wait 400 ms; this module reads 0xff there.
- * That the table needs the password bytes or the 0xcc step before it takes
- * a write is not verified.  As A2h bytes 0-127 are kept in the module's
- * EEPROM, every call writes the EEPROM; whether the part skips a byte that
- * already holds the value is not known.
+ * Write 0xff to each password byte, before the configuration table is
+ * shown.  That the table needs it, to be read or written, is not verified.
+ * As A2h bytes 0-127 are kept in the module's EEPROM, every call writes the
+ * EEPROM; whether the part skips a byte that already holds the value is not
+ * known.
  */
-static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p, u8 *tabsel)
+static int rtl9602c_gn_t2_password(struct rtl9602c_priv *p)
 {
-	u8 acc;
 	int err, i;
 
 	for (i = 0; i < 4; i++) {
@@ -596,19 +592,28 @@ static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p, u8 *tabsel)
 		if (err)
 			return err;
 	}
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel) ?:
-	      rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
-	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0xcc, &acc);
-	if (err)
-		return err;
-	if (acc & (BIT(3) | BIT(2))) {
-		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0xcc,
-				       acc & ~(BIT(3) | BIT(2)));
-		if (err)
-			return err;
-		msleep(400);
-	}
 	return 0;
+}
+
+/*
+ * Prepare the shown configuration table for a write: if bit 3 or 2 of
+ * table byte 0xcc is set, clear both and wait 400 ms; this module reads
+ * 0xff there.  That the table needs this before it takes a write is not
+ * verified.
+ */
+static int rtl9602c_gn_t2_prepare(struct rtl9602c_priv *p)
+{
+	u8 acc;
+	int err;
+
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0xcc, &acc);
+	if (err || !(acc & (BIT(3) | BIT(2))))
+		return err;
+	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0xcc,
+			       acc & ~(BIT(3) | BIT(2)));
+	if (!err)
+		msleep(400);
+	return err;
 }
 
 /**
@@ -629,13 +634,13 @@ static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p, u8 *tabsel)
  * The table change stays in registers, kept out of the EEPROM by PERSIST:
  * the loop stays off until the module loses power, across a warm reboot
  * of the SoC too, and a power cycle gives the module its own configuration
- * back.  Opening the table writes the password bytes, the page select and
- * possibly table byte 0xcc before PERSIST is checked, so even a hold that
- * gives up with -EPERM has written A2h bytes 123-127, which the module
- * keeps in its EEPROM, and a write to 0xcc is then copied there too.
- * After the table is open every path writes the page select back as
- * found, without checking that write; an error while opening it returns
- * before that and may leave page 02h selected.
+ * back.  PERSIST is in the table, which the module shows only after the
+ * password bytes and the page select have been written, so a hold that
+ * gives up with -EPERM has written A2h bytes 123-127, which the module keeps
+ * in its EEPROM; table byte 0xcc and the table itself are written only once
+ * PERSIST keeps register changes out of the EEPROM.  Once the page select
+ * has been written, every path writes it back as found, without checking
+ * that write.
  *
  * Context: Process context.  May sleep.
  * Return: 0 when the modulation is held; -EPERM when table writes would
@@ -648,11 +653,14 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 	unsigned int dac;
 	int err;
 
-	err = rtl9602c_gn_t2_open(p, &tabsel);
+	err = rtl9602c_gn_t2_password(p) ?:
+	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
 	if (err)
 		return err;
 
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
+	/* Show the table; from here every path puts the page select back. */
+	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
+	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
 			      &eectl) ?:
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_MOD_LIMIT,
 			      &modmax) ?:
@@ -662,8 +670,8 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 		goto out;
 
 	/*
-	 * Unless both PERSIST_OFF bits are set, the part could copy the table
-	 * write into its EEPROM.
+	 * Unless both PERSIST_OFF bits are set, the part could copy a table
+	 * write into its EEPROM: nothing in the table is written then.
 	 */
 	if ((eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) != RTL9602C_OPTICS_TBL2_PERSIST_OFF) {
 		pr_warn("GN25L95: EEPROM updates are enabled (C7h %02x); modulation left alone rather than written to the EEPROM\n",
@@ -671,6 +679,10 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 		err = -EPERM;
 		goto out;
 	}
+
+	err = rtl9602c_gn_t2_prepare(p);
+	if (err)
+		goto out;
 
 	/*
 	 * Turn the loop off and read ER_CTRL back.  With the loop off, MOD_DAC

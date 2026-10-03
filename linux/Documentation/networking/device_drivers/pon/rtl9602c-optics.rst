@@ -1040,18 +1040,18 @@ first O3. With ``CONFIG_RTL9602C_OPTICS_RO`` it returns at once and writes
 nothing. Its steps:
 
 1. Write ``0xff`` to A2h bytes 123, 124, 125 and 126. Purpose: prepare the table
-   for writing. (I)
+   before it is shown. (I)
 2. Read A2h byte 127 and keep the value; write ``02h`` to it. Purpose: show the
    configuration table at A2h 128-255, and remember the page to restore. (T)
-3. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
-   and wait 400 ms. Purpose: the table takes writes. (I)
-4. Read PERSIST, MOD_LIMIT and ER_CTRL. Purpose: the three values the next steps
+3. Read PERSIST, MOD_LIMIT and ER_CTRL. Purpose: the three values the next steps
    decide on. (T)
-5. If bits 1:0 of PERSIST are not both set, log ``EEPROM updates are enabled``
-   and give up with ``-EPERM``. Purpose: a register write now would be copied
-   into the EEPROM. (M) By then steps 1 to 3 have written A2h bytes 123 to 127,
-   which the module keeps, and possibly ``0xcc``, which is copied when PERSIST
-   allows it.
+4. If bits 1:0 of PERSIST are not both set, log ``EEPROM updates are enabled``
+   and give up with ``-EPERM``. Purpose: a table write now would be copied into
+   the EEPROM, so none is made. (M) By then steps 1 and 2 have written A2h bytes
+   123 to 127, which the module keeps: the table, PERSIST included, is shown
+   only after them.
+5. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
+   and wait 400 ms. Purpose: the table takes writes. (I)
 6. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
    the loop off, and see the value the modulation now runs from. (M)
 7. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
@@ -1062,9 +1062,10 @@ nothing. Its steps:
 8. Log the held modulation. Purpose: show the value the modulation runs from.
    (I)
 9. Write the value kept in step 2 back to byte 127. Purpose: leave the page
-   selection as it was found. This follows steps 4 to 8 whatever their outcome;
-   a transfer that fails in steps 1 to 3 returns before it and can leave
-   ``02h`` in byte 127. (T)
+   selection as it was found. This follows every step after the write of step
+   2, whatever its outcome; only a transfer that fails in step 1 or in the read
+   of step 2 returns before it, when the page select has not been written.
+   (T)
 
 A failed hold is logged by the GPON bring-up (``modulation not held``), and the
 bring-up carries on.
