@@ -372,7 +372,8 @@ Interfaces to user space
   ``/dev/pon0omci0`` and the GEM interfaces exist only when the PON MAC is
   available.
 - The ``gem`` network interfaces of the PON class, created on ``pon`` by
-  management::
+  management, in practice the OMCI daemon through rtnetlink. In ``ip``
+  syntax, for an ``ip`` that knows the kind::
 
     ip link add gem0 link pon type gem port-id 1000 tcont 0
 
