@@ -308,11 +308,11 @@ class Cases(unittest.TestCase):
         self.assertIn("/etc/ppp/secrets", post)
         self.assertIn("MODE=router", post)
         self.assertEqual(outcome.evidence,
-                         "session up in 0 s; ppp0 192.0.2.77/32; name servers 192.0.2.53; "
-                         "MSS not checked without the LAN host of router.static")
+                         "session up in 0 s; ppp0 192.0.2.77/32, MTU 1492; name servers "
+                         "192.0.2.53; MSS not checked without the LAN host of router.static")
 
     def test_a_pppoe_session_must_clamp_the_lan_host_s_mss(self):
-        def outcome(seen):
+        def outcome(seen, mtu=None):
             trail: list[str] = []
             settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
                                            subscriber_port="eth2",
@@ -322,6 +322,7 @@ class Cases(unittest.TestCase):
                                      ("python3 - pppoe0", 0, seen + "\n")], trail)
             stick = Canned("stick", [("onu-mode status", 0, "mode router\nwan gem256 on "
                                                             "gem256, out by ppp0\n"),
+                                     ("ppp0/mtu", 0 if mtu else 1, f"{mtu}\n"),
                                      ("ppp0", 0, "192.0.2.77\n"),
                                      ("onu-dns", 0, "192.0.2.53\n")], trail)
             ctx = Context(settings, stick, bench, trail)
@@ -331,6 +332,10 @@ class Cases(unittest.TestCase):
         self.assertIn("SYN MSS 1452, 1452 through it", outcome("[1452, 1452]").evidence)
         self.assertEqual(outcome("[1460]").status, FAIL)
         self.assertEqual(outcome("[]").status, FAIL)
+        # A concentrator that took PPP-Max-Payload 1500 leaves room for 1460.
+        self.assertEqual(outcome("[1460, 1460]", mtu=1500).status, PASS)
+        self.assertIn("MTU 1500", outcome("[1460, 1460]", mtu=1500).evidence)
+        self.assertEqual(outcome("[1461]", mtu=1500).status, FAIL)
 
     def test_a_pppoe_session_s_bench_interface_is_waited_for(self):
         trail: list[str] = []

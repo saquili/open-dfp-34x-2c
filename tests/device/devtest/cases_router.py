@@ -407,14 +407,14 @@ thread.join()
 print(json.dumps(seen))
 """
 MSS_PORT = 5555
-PPPOE_MTU = 1492
+PPPOE_MTU = 1492       # a session's MTU unless the concentrator agrees to more
 PPP_WAIT = 10          # seconds to wait for the bench's end of the session
 
 
-def pppoe_mss(ctx: Context, address: str) -> tuple[bool, str]:
+def pppoe_mss(ctx: Context, address: str, mtu: int = PPPOE_MTU) -> tuple[bool, str]:
     """Whether the SYNs that a LAN host sends through the session carry an MSS
-    that fits the PPPoE MTU, and what was seen; address is the stick's end of
-    the session."""
+    that fits the session's MTU, and what was seen; address is the stick's end
+    of the session."""
     # The concentrator gives its end of the session the peer address a
     # moment after the stick's end is up, so the interface is waited for.
     for _ in range(PPP_WAIT):
@@ -430,7 +430,7 @@ def pppoe_mss(ctx: Context, address: str) -> tuple[bool, str]:
         seen = json.loads(reply.out.strip().splitlines()[-1])
     except (IndexError, ValueError):
         return False, f"the MSS probe did not run: {(reply.err or reply.out).strip()!r}"
-    fits = bool(seen) and all(m is not None and m <= PPPOE_MTU - 40 for m in seen)
+    fits = bool(seen) and all(m is not None and m <= mtu - 40 for m in seen)
     return fits, f"SYN MSS {', '.join(str(m) for m in seen) or 'none seen'}"
 
 
@@ -467,12 +467,16 @@ def pppoe(ctx: Context):
         log = ctx.stick.run("tail -5 /run/pppoed.log").out.strip()
         return failed(f"no session within 90 s: {status(ctx).strip()!r}; pppoed: {log!r}")
     dns = ctx.stick.run("cat /run/onu-dns 2>/dev/null").out.strip() or "none"
+    # 1492, or up to 1500 when the concentrator took PPP-Max-Payload (RFC 4638).
+    reply = ctx.stick.run("cat /sys/class/net/ppp0/mtu")
+    mtu = int(reply.out) if reply.ok and reply.out.strip().isdigit() else PPPOE_MTU
     if not ctx.memo.get("namespaces"):
-        return passed(f"session up in {took:.0f} s; ppp0 {address}; name servers {dns}; "
-                      "MSS not checked without the LAN host of router.static")
-    fits, mss = pppoe_mss(ctx, address)
-    return verdict(fits, f"session up in {took:.0f} s; ppp0 {address}; name servers {dns}; "
-                         f"{mss} through it")
+        return passed(f"session up in {took:.0f} s; ppp0 {address}, MTU {mtu}; "
+                      f"name servers {dns}; MSS not checked without the LAN host of "
+                      "router.static")
+    fits, mss = pppoe_mss(ctx, address, mtu)
+    return verdict(fits, f"session up in {took:.0f} s; ppp0 {address}, MTU {mtu}; "
+                         f"name servers {dns}; {mss} through it")
 
 
 @case("router.bridge", "Router mode",
