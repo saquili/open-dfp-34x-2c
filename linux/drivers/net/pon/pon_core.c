@@ -153,13 +153,18 @@ static struct pon_device *pon_dev_get(struct device *parent)
 		return ERR_PTR(-ENOMEM);
 	}
 
+	/*
+	 * Initialised before anything can fail, so that put_device() runs the
+	 * release, which frees the id and the device, on every error path.
+	 */
 	pon->id = id;
+	device_initialize(&pon->dev);
 	pon->dev.parent = parent;
 	pon->dev.class = &pon_class;
 	pon->dev.type = &pon_dev_type;
 	err = dev_set_name(&pon->dev, "pon%u", id);
 	if (!err)
-		err = device_register(&pon->dev);
+		err = device_add(&pon->dev);
 	if (err) {
 		put_device(&pon->dev);
 		return ERR_PTR(err);
@@ -543,6 +548,7 @@ struct pon_omci_port *pon_omci_port_create(struct device *parent,
 	skb_queue_head_init(&port->rxq);
 	init_waitqueue_head(&port->waitq);
 
+	device_initialize(&port->dev);
 	port->dev.parent = &pon->dev;
 	port->dev.class = &pon_class;
 	port->dev.type = &pon_omci_port_type;
@@ -555,11 +561,11 @@ struct pon_omci_port *pon_omci_port_create(struct device *parent,
 	 */
 	err = dev_set_name(&port->dev, "pon%uomci0", pon->id);
 	if (!err)
-		err = device_register(&port->dev);
+		err = device_add(&port->dev);
 	if (err) {
 		/*
-		 * Once device_register() has been called, even when it failed,
-		 * the release function frees the minor and the port.
+		 * The device is initialised, so the release function frees the
+		 * minor and the port, whichever step failed.
 		 */
 		put_device(&port->dev);
 		goto out_put;
