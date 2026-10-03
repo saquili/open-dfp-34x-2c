@@ -2493,13 +2493,14 @@ only printed.
      - I
      - A neighbour's CAM row hit by traffic, with two reads of the bitmaps,
        would settle both. Nothing in the driver depends on them.
-   * - That the engine never removes a NAPT entry by itself (no hardware ageing)
-       is not established; entries stayed valid through 54 s of traffic. The
-       driver's slot records assume an entry stays until the driver removes it,
-       and a free-way scan would take an aged-out way as free.
-     - I
-     - Watching an idle but still offloaded flow's entries for several minutes
-       would settle it.
+   * - The engine does not remove a NAPT entry by itself (no hardware ageing):
+       an entry stays until the driver removes it, as the driver's slot
+       records and its free-way scan assume.
+     - M
+     - A UDP flow kept offloaded with netfilter's UDP flowtable timeout raised
+       to 600 s for the test, then idle for 300 s: 2000 datagrams of the flow
+       sent after that passed with 25 frames reaching the CPU, as before the
+       pause.
 
 The debugfs views
 =================
@@ -2882,10 +2883,6 @@ Assumptions the driver depends on
        external port ("The NAPT hashes").
      - Two flows whose external ports fall in one inbound bucket, replies to
        both, each counted at its own LAN host.
-   * - The engine never removes a NAPT entry by itself ("Hit bitmaps, flow
-       statistics and ageing"). The driver's slot records and its free-way scan
-       assume it.
-     - An idle but still offloaded flow's entries watched for several minutes.
    * - Arming the per-frame capture or changing its mode leaves forwarding
        unchanged ("The per-frame capture"). The safety of writing to
        ``l3capture`` rests on it.
