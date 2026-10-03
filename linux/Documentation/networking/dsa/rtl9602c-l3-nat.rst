@@ -1655,12 +1655,13 @@ is sent to.
        the entry are ``0x9d061388`` and ``0x00209c40``.
      - T
      - The routing test asserts the encoder's words for that flow.
-   * - TCP flows: that the protocol bit is 1 for TCP is inferred, not measured,
-       and neither it nor the protocol term of the two hashes has carried a TCP
-       flow.
-     - I
-     - An offloaded TCP stream through the NAT, with the CPU port's counter near
-       zero both ways, would settle it.
+   * - TCP flows: the protocol bit is 1 for TCP, and with it and the protocol
+       term of the two hashes the engine carries a TCP connection both ways.
+     - M
+     - The device suite's ``router.tcp``: 100,000,000 bytes from a LAN host to
+       the far end of a static WAN at 964 Mb/s, received in full from the WAN
+       address, with 60 frames reaching the CPU port against some 69,000
+       segments and the connection marked ``HW_OFFLOAD`` while it was up.
 
 The NAPT hashes
 ===============
@@ -2874,11 +2875,6 @@ Assumptions the driver depends on
        flow in one bucket is carried from way 1 ("Outbound NAPT (selector 10)").
      - Two flows forced into one outbound bucket by the choice of source ports,
        both carried by the engine.
-   * - The protocol bit of an inbound entry is 1 for TCP, and the protocol term
-       of the two hashes is right, so that a TCP flow is carried ("Inbound NAPT
-       (selector 9)"). No TCP flow has been carried by the engine.
-     - An offloaded TCP stream through the NAT, with the CPU port's counter near
-       zero both ways.
    * - The remote digest function is right, and the outbound lookup does not
        compare the field in a way that the function gets wrong ("The NAPT
        hashes").
