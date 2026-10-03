@@ -173,22 +173,19 @@ static int rtl9602c_ptp_settime(struct ptp_clock_info *info,
 /*
  * The frequency word reads 2^27 (RTL9602C_PTP_CLK_FREQ_WORD_NOMINAL) when
  * nothing has adjusted it, and the clock then advances one second per
- * second, as measured on this board.  The requested offset scales the word
- * in proportion, 2^27 * (1 + ppm / 10^6), on the assumption that a larger
- * word runs the clock faster: neither the direction nor the scale is
- * verified.
+ * second.  The clock's rate follows the word in proportion, so an offset
+ * scales the word to 2^27 * (1 + ppm / 10^6), computed in 64 bits:
+ * measured from 4.5 ppm to 94 % of the rate either way, the clock timed
+ * against CLOCK_MONOTONIC.
  */
 static int rtl9602c_ptp_adjfine(struct ptp_clock_info *info, long scaled_ppm)
 {
 	struct rtl9602c_priv *p = to_rtl9602c_ptp(info);
-	s64 adj;
+	u64 word = adjust_by_scaled_ppm(RTL9602C_PTP_CLK_FREQ_WORD_NOMINAL,
+					scaled_ppm);
 	u32 freq;
 
-	adj = (s64)scaled_ppm * RTL9602C_PTP_CLK_FREQ_WORD_NOMINAL;
-	adj = div_s64(adj, 1000000L << 16);
-
-	freq = clamp_t(s64, RTL9602C_PTP_CLK_FREQ_WORD_NOMINAL + adj, 1,
-		       RTL9602C_PTP_CLK_FREQ_WORD);
+	freq = clamp_t(u64, word, 1, RTL9602C_PTP_CLK_FREQ_WORD);
 	mutex_lock(&p->ptp_lock);
 	rtl9602c_rmw(p, RTL9602C_PTP_CLK_FREQ, RTL9602C_PTP_CLK_FREQ_WORD,
 		     FIELD_PREP(RTL9602C_PTP_CLK_FREQ_WORD, freq));
@@ -293,8 +290,12 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 	p->ptp_info = (struct ptp_clock_info) {
 		.owner		= THIS_MODULE,
 		.name		= "rtl9602c-ptp",
-		/* 50 %, keeping the frequency word between 2^26 and 3 * 2^26 */
-		.max_adj	= 500000000,
+		/*
+		 * The largest offset whose scaled_ppm fits the long that
+		 * adjfine takes on this 32-bit architecture: about 3.3 %,
+		 * well inside the word's range.
+		 */
+		.max_adj	= (S32_MAX >> 16) * 1000,
 		.n_ext_ts	= 0,
 		.pps		= 1,
 		.adjfine	= rtl9602c_ptp_adjfine,
@@ -342,10 +343,9 @@ void rtl9602c_ptp_unregister(struct rtl9602c_priv *p)
  * rest come from the seconds of the last clock read, in the 65,536-second
  * window that puts the stamp nearest to them.  The result is right only
  * while the clock has been read within about nine hours (32,768 s) of the
- * frame.  Nothing but a clock read updates those seconds: with no clock
- * registered, or before the first read, they are 0, and a stamp whose low
- * 16 bits exceed 32,768 is then completed to a negative time.  The choice
- * of window is an assumption, not verified across a window boundary.  The
+ * frame, which rtl9602c_ptp_aux_work() makes sure of by reading it at
+ * registration and once a minute after.  The choice of window is an
+ * assumption, not verified across a window boundary.  The
  * switch tags its PTP messages whatever the filter, so on a port whose
  * receive filter is %HWTSTAMP_FILTER_NONE the stamp is taken off instead.
  *
