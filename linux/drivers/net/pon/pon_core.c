@@ -857,7 +857,8 @@ static bool pon_omci_readable(struct pon_omci_port *port)
  * never delivered; a failed copy leaves it queued too. On an empty queue a
  * non-blocking read fails with -EAGAIN, and a blocking one waits for a
  * message or for the removal of the port, after which reads fail with
- * -ENODEV.
+ * -ENODEV. A queue that the loss of the OMCI channel empties between the
+ * wake-up and the dequeue is an empty queue again, not a removed port.
  */
 static ssize_t pon_omci_read(struct file *file, char __user *buf,
 			     size_t count, loff_t *ppos)
@@ -866,7 +867,7 @@ static ssize_t pon_omci_read(struct file *file, char __user *buf,
 	struct sk_buff *skb;
 	ssize_t len;
 
-	if (skb_queue_empty(&port->rxq)) {
+	while (!(skb = skb_dequeue(&port->rxq))) {
 		if (!READ_ONCE(port->ops))
 			return -ENODEV;
 		if (file->f_flags & O_NONBLOCK)
@@ -875,10 +876,6 @@ static ssize_t pon_omci_read(struct file *file, char __user *buf,
 					     pon_omci_readable(port)))
 			return -ERESTARTSYS;
 	}
-
-	skb = skb_dequeue(&port->rxq);
-	if (!skb)
-		return -ENODEV;
 
 	if (count < skb->len) {
 		skb_queue_head(&port->rxq, skb);

@@ -457,7 +457,9 @@ Reading and writing
    * - A read on an empty queue fails with ``-EAGAIN`` under ``O_NONBLOCK``.
        Otherwise it waits interruptibly (``-ERESTARTSYS`` on a signal) for a
        message or for the removal of the port. Once the port has been removed,
-       a read fails with ``-ENODEV``.
+       a read fails with ``-ENODEV``. A queue that the loss of the OMCI
+       channel empties after the reader woke is an empty queue again: the
+       read waits once more, or fails with ``-EAGAIN``.
      - T
      - OMCI both ways over ``/dev/pon0omci0``: the daemon reads non-blocking
        and waits in poll.
