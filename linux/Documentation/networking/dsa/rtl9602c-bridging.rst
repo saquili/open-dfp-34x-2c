@@ -477,23 +477,21 @@ Structure
        hashed search never matches it, and no flush mode reaches it, so it
        stays until power is removed; a warm restart keeps it. Entries do land
        there: multicast groups written while their VLAN was in shared learning
-       did. The driver leaves the CAM off and uses only the hashed slots. Every
-       walk stops at ``RTL9602C_FDB_HASH_ENTRIES`` (1024), and the VLAN setting
-       described under "Entry layout" keeps hashed writes out of the CAM.
+       did. Setup therefore turns the CAM on before it empties the table (see
+       "Emptying the table at setup"), and every walk reads all
+       ``RTL9602C_FDB_ENTRIES`` (1088).
      - M
      - Groups written in shared learning, then targeted by an index write, by
        the hashed search and by all three flush modes. Entries put in the CAM
        by the test of the next row, still there after three RAM boots.
-   * - Bit 21 of ``RTL9602C_FDB_CFG`` turns the CAM off; it reads 1 out of
-       reset (the register reads ``0x00600bb8``), and the driver never writes
-       it. While it is set, a hashed write to a full bucket is not taken, and a
-       hashed lookup does not find an entry in the CAM. With it clear, such a
-       write lands in the CAM and the switch forwards frames by the entry; a
-       hashed lookup with an entry's own words finds it there, and a hashed
-       delete with them removes it. A by-index write is taken under neither
-       setting. Whether frames are forwarded by entries in the CAM while the
-       bit is set, and whether the flush modes reach them while it is clear,
-       is not known.
+   * - ``RTL9602C_FDB_CFG_CAM_OFF``, bit 21 of ``RTL9602C_FDB_CFG``, turns the
+       CAM off; it reads 1 out of reset (the register reads ``0x00600bb8``),
+       and setup clears it. While it is set, a hashed write to a full bucket is
+       not taken, and a hashed lookup does not find an entry in the CAM. With
+       it clear, such a write lands in the CAM and the switch forwards frames
+       by the entry; a hashed lookup with an entry's own words finds it there,
+       and a hashed delete with them removes it. A by-index write is taken
+       under neither setting.
      - M, I
      - M: the reset value read after a watchdog reset with the switch driver
        not loaded, and on a running board. Five static entries whose keys share
@@ -504,8 +502,25 @@ Structure
        hash: with the bit set the lookup missed; with it clear it found the
        entry and, with VALID clear, deleted it (``RTL9602C_TBLACC_STAT_CAM``
        under "The indirect table engine"). With the bit clear, index writes of
-       a deletion and of a new entry left the CAM as it was. I: the forwarding
-       with the bit set, and the flushes.
+       a deletion and of a new entry left the CAM as it was.
+   * - With the CAM on, an address learned while its bucket is full is learned
+       into the CAM, and the CAM's entries, static or learned, work as the
+       hashed ones do: a static one steers frames, a learned one ages out at
+       the bridge's ageing time and goes with a flush of its port's learned
+       entries, and setup's emptying deletes what a warm restart left there.
+     - M
+     - Addresses built to share a bucket (see "Placing, changing and deleting
+       through the hash"). Five static: slots 12 to 15 and entry 1024, no
+       full-bucket log line; 300 frames from the network side to the fifth all
+       reached the host side, and the CPU took 18 frames meanwhile, where a
+       flood would have given it the 300. Five learned from the host side:
+       slots 0 to 3 and entry 1024; at an ageing time of 10 s all five were gone
+       35 s later; learned again, a flush of the SFP port's learned entries
+       (learning off and on) took all five in three runs out of four. The
+       fourth, the first, left the four hashed entries and took the one in the
+       CAM (see "Open questions"). Five static addresses left at a warm restart,
+       the fifth in the CAM: setup logged ``cleared 11 address(es) ...`` and
+       the CAM was empty after it.
    * - ``RTL9602C_FDB_HASH_WAYS`` (4), the number of slots in a bucket, is also
        the number of hashed deletes that the driver issues to empty one key out
        of the table.
@@ -779,14 +794,17 @@ Placing, changing and deleting through the hash
      - T
      - ``port_fdb_add`` succeeds and its entry steers frames; the next hops of
        the L3 engine point at the index that the placement returns.
-   * - A hashed write that finds its bucket full reports HIT clear. The driver
+   * - A hashed write that finds its bucket full lands in the CAM and reports
+       HIT set. One that finds the CAM full too reports HIT clear; the driver
        then returns ``-ENOSPC`` and logs the address and VID (``<address> vlan
-       <v>: its hash bucket is full``): with the CAM unused, a bucket of four
-       slots can be full while the table has a thousand free slots.
-     - M
-     - Five static entries whose addresses hash to bucket 77 (next row): the
-       first four took slots 308 to 311, the fifth was refused with the log
-       line, and once one of the four was deleted the fifth took its slot.
+       <v>: its hash bucket and the CAM are full``).
+     - M, I
+     - M: with the CAM off, five static entries whose addresses hash to bucket
+       77 (next row): the first four took slots 308 to 311, the fifth was
+       refused with the log line, and once one of the four was deleted the
+       fifth took its slot; with the CAM on, the fifth of five took entry 1024
+       with no log line. I: HIT clear with the CAM full too, which no test
+       has filled.
    * - An entry keyed by address alone goes to the bucket that is the XOR of
        the six bytes of its address.
      - M
@@ -872,7 +890,8 @@ replace``: the learned entry went and the static one took its slot.
 
 ``rtl9602c_port_fdb_dump()``, in order:
 
-1. Read slots 0 to 1023 by index. Purpose: the CAM is not used. (M)
+1. Read every entry by index, the CAM's included. Purpose: the dump shows an
+   address that the CAM holds. (M)
 2. Skip a slot without HIT. Purpose: the valid bit is set in every slot. (M)
 3. Decode address, VID and port, and report the unicast entries behind the port
    asked about, with the static flag from ``RTL9602C_FDB_W1_STATIC``, and the
@@ -913,15 +932,17 @@ Emptying the table at setup
    * - Fact
      - Tag
      - Checked by
-   * - The switch keeps its address table across a restart of the SoC. At setup
-       the driver walks the 1024 hashed slots by index and writes every entry
-       that has HIT back through the hash with ``RTL9602C_FDB_W2_VALID`` clear
+   * - The switch keeps its address table across a restart of the SoC, the CAM
+       included. At setup the driver turns the CAM on, so that the hash reaches
+       it, walks all 1088 entries by index and writes every entry that has HIT
+       back through the hash with ``RTL9602C_FDB_W2_VALID`` clear
        (``rtl9602c_l2_clear()``), which deletes exactly that entry, unicast or
        multicast, and logs ``cleared <n> address(es) left in the table by the
        previous kernel``.
      - M
      - A fresh boot from RAM found six entries of the previous kernel:
-       ``cleared 6 address(es) ...``. The log line at setup.
+       ``cleared 6 address(es) ...``. With an entry in the CAM before the
+       restart, none was there after setup (see "Structure").
    * - The flush cannot do this: it selects entries by source port, and a
        multicast entry holds a member set where the source port would be.
      - I
@@ -2436,9 +2457,10 @@ Known limitations
   ``sfp`` can join a bridge (see "Bridge membership"), so two bridges share the
   table only when the GEM interfaces are bridged apart from ``sfp`` and both
   bridges use a VID: an address then has one entry for both.
-- The address table holds at most 1024 addresses, because the CAM is never used
-  (see "Structure"), and fewer in practice: an address whose bucket of four
-  slots is full is refused with ``-ENOSPC`` while other buckets are empty.
+- The address table holds at most 1088 addresses, and fewer in practice: an
+  address whose bucket of four slots is full takes one of the CAM's 64
+  entries, and once those are taken too it is refused with ``-ENOSPC`` while
+  other buckets are empty.
 - DSA writes the address entries that the bridge asks for from a work queue,
   so ``bridge fdb add`` has returned success by the time an entry is refused,
   for instance for a full bucket; the refusal is the kernel log line alone.
@@ -2483,6 +2505,11 @@ Assumptions the driver depends on
        ("Reserved multicast addresses").
      - An exemption test as for ``_00``, for each of ``_01``, ``_02``, ``_03``
        and ``_0E``.
+   * - A flush of a port's learned entries removes all of them; once in four
+       runs, one left four learned hashed entries in place and took only the
+       one in the CAM ("Structure").
+     - The same steps repeated until it happens again, with the flush's
+       registers read around it.
 
 Questions the code does not depend on
 -------------------------------------
@@ -2500,14 +2527,9 @@ Questions the code does not depend on
        frame to the L3 engine ("Entry layout").
      - A frame to this device's address in a VLAN in independent learning, with
        and without the bit, followed in the frame capture.
-   * - Whether frames are forwarded by an entry in the CAM while bit 21 of
-       ``RTL9602C_FDB_CFG`` is set ("Structure").
-     - An entry placed in the CAM with the bit clear, the bit set again, then
-       frames to its address.
-   * - Whether the flush modes reach entries in the CAM while bit 21 of
-       ``RTL9602C_FDB_CFG`` is clear ("Structure").
-     - Each flush mode, with the bit clear, over an entry in the CAM that it
-       should remove.
+   * - Whether the flush modes other than that of a port's learned entries
+       reach the CAM ("Structure").
+     - Each of them over an entry in the CAM that it should remove.
    * - Whether a port flush reaches a multicast entry ("Emptying the table at
        setup").
      - A group whose only member is one port, a port flush of that port, then a

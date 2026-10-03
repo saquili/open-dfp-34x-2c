@@ -41,12 +41,12 @@
  * The address table is used through its hash only: the engine hashes the
  * address and VID of the key in @e and goes to the slot of the bucket the
  * key belongs in, and a read returns the entry found there. A write by index
- * would be accepted and discarded. The CAM after the hashed slots is never
- * used: an entry there cannot be changed, found through the hash or flushed,
- * so every walk stops at RTL9602C_FDB_HASH_ENTRIES, and independent learning
- * on every VLAN in use keeps hashed writes out of it. Every hashed slot reads
- * back with RTL9602C_FDB_W2_VALID set, occupied or not: only the hit flag
- * tells an entry from an empty slot.
+ * would be accepted and discarded. Setup turns the CAM after the hashed slots
+ * on (RTL9602C_FDB_CFG_CAM_OFF clear), and a hashed write whose bucket is
+ * full then lands there, where a hashed lookup or delete with the entry's own
+ * words reaches it; every walk reads it too, up to RTL9602C_FDB_ENTRIES. Every
+ * hashed slot reads back with RTL9602C_FDB_W2_VALID set, occupied or not: only
+ * the hit flag tells an entry from an empty slot.
  *
  * All six tables share the table engine's registers, hence table_lock.
  */
@@ -64,10 +64,10 @@ static int rtl9602c_l2_lookup(struct rtl9602c_priv *p, u32 *e,
 }
 
 /*
- * Put @e in the slot its key hashes to or, with RTL9602C_FDB_W2_VALID clear,
- * delete the entry the key names. A write the table does not take (hit
- * clear) is taken to have found the bucket full, which is not verified; with
- * the CAM unused, a bucket can be full while the table has room.
+ * Put @e in the slot its key hashes to, or in the CAM when that bucket is full,
+ * or, with RTL9602C_FDB_W2_VALID clear, delete the entry the key names. A
+ * write the table does not take (hit clear) is taken to have found the bucket
+ * and the CAM full, which is not verified.
  *
  * A write of a key already in the table does not always replace it and can
  * add another copy. An entry is therefore changed by deleting its key
@@ -207,7 +207,7 @@ static int rtl9602c_l2_purge(struct rtl9602c_priv *p, const unsigned char *addr,
 	bool hit, nh;
 	u16 evid;
 
-	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	for (i = 0; i < RTL9602C_FDB_ENTRIES; i++) {
 		err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
 					  RTL9602C_FDB_ENTRY_WORDS, &hit);
 		if (err)
@@ -251,7 +251,7 @@ static int rtl9602c_l2_nexthop_find(struct rtl9602c_priv *p,
 	bool hit;
 	u16 evid;
 
-	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	for (i = 0; i < RTL9602C_FDB_ENTRIES; i++) {
 		err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
 					  RTL9602C_FDB_ENTRY_WORDS, &hit);
 		if (err)
@@ -301,7 +301,7 @@ static bool rtl9602c_l2_is_own(struct rtl9602c_priv *p,
  *
  * Return: 0 on success, -EINVAL for a multicast address, -EBUSY when a routed
  * next hop holds the address behind another port, -ENOSPC when the address's
- * bucket is full, or a negative error code from the table access.
+ * bucket and the CAM are full, or a negative error code from the table access.
  */
 int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 			  const unsigned char *addr, u16 vid,
@@ -366,7 +366,7 @@ int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 
 	err = rtl9602c_l2_place(p, e, &out);
 	if (!err && !out.hit) {
-		pr_err("%pM vlan %u: its hash bucket is full\n", addr, vid);
+		pr_err("%pM vlan %u: its hash bucket and the CAM are full\n", addr, vid);
 		err = -ENOSPC;
 	}
 out:
@@ -521,7 +521,8 @@ out:
  * @db: unused, as in rtl9602c_port_fdb_add()
  *
  * Return: 0 on success, -EINVAL for a unicast address, -ENOSPC when the
- * group's bucket is full, or a negative error code from the table access.
+ * group's bucket and the CAM are full, or a negative error code from the table
+ * access.
  */
 int rtl9602c_port_mdb_add(struct dsa_switch *ds, int port,
 			  const struct switchdev_obj_port_mdb *mdb,
@@ -559,8 +560,9 @@ int rtl9602c_port_mdb_del(struct dsa_switch *ds, int port,
  * rtl9602c_l2_clear() - empty the address table
  * @p: driver private data
  *
- * The switch keeps its address table across a restart of the SoC. At setup
- * every hashed slot is read by index, and every entry found is written back
+ * The switch keeps its address table across a restart of the SoC, the CAM
+ * included. At setup the CAM is turned on, so that the hash reaches it, every
+ * slot and CAM entry is read by index, and every entry found is written back
  * through the hash with %RTL9602C_FDB_W2_VALID clear, which deletes exactly
  * that entry, unicast or multicast. A port flush is taken not to reach a
  * multicast entry, whose member set lies where the port would be; that is
@@ -573,7 +575,9 @@ void rtl9602c_l2_clear(struct rtl9602c_priv *p)
 	unsigned int i, gone = 0;
 	bool hit;
 
-	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	rtl9602c_rmw(p, RTL9602C_FDB_CFG, RTL9602C_FDB_CFG_CAM_OFF, 0);
+
+	for (i = 0; i < RTL9602C_FDB_ENTRIES; i++) {
 		if (rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
 					RTL9602C_FDB_ENTRY_WORDS, &hit))
 			return;
@@ -607,8 +611,8 @@ static void rtl9602c_port_learning(struct rtl9602c_priv *p, int port, bool on);
  * table (measured). Nothing is placed while the engine is down or before the
  * port has an interface.
  *
- * Return: 0 on success, -ENOSPC when the address's bucket is full, or a
- * negative error code from the table access.
+ * Return: 0 on success, -ENOSPC when the address's bucket and the CAM are full,
+ * or a negative error code from the table access.
  */
 int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port)
 {
@@ -637,7 +641,7 @@ int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port)
 	k[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
 	err = rtl9602c_l2_place(p, k, &out);
 	if (!err && !out.hit) {
-		pr_err("%pM vlan %u: its hash bucket is full, so frames for this device's own address are flooded\n",
+		pr_err("%pM vlan %u: its hash bucket and the CAM are full, so frames for this device's own address are flooded\n",
 		       dp->user->dev_addr, vid);
 		err = -ENOSPC;
 	}
@@ -724,7 +728,7 @@ int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on)
 
 	/* Learning off stops the next duplicate, not those already learned. */
 	mutex_lock(&p->fdb_lock);
-	for (i = 0; on && i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	for (i = 0; on && i < RTL9602C_FDB_ENTRIES; i++) {
 		unsigned char mac[ETH_ALEN];
 
 		err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
@@ -752,7 +756,7 @@ int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on)
 
 	/* Then every CPU-port entry whose router bit disagrees with @on. */
 	mutex_lock(&p->fdb_lock);
-	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	for (i = 0; i < RTL9602C_FDB_ENTRIES; i++) {
 		unsigned char mac[ETH_ALEN];
 		u32 k[RTL9602C_FDB_ENTRY_WORDS];
 
@@ -838,7 +842,8 @@ static const char *rtl9602c_l2_portname(struct rtl9602c_priv *p, int port)
  * the opening while the engine is up.
  *
  * Return: 0 on success, -EINVAL for a multicast address, -ENOSPC when the
- * address's bucket is full, or a negative error code from the table access.
+ * address's bucket and the CAM are full, or a negative error code from the
+ * table access.
  */
 int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
 			      int port, u16 *want_vid, unsigned int *slot)
@@ -874,7 +879,7 @@ int rtl9602c_l2_nexthop_place(struct rtl9602c_priv *p, const unsigned char *mac,
 	e[2] |= RTL9602C_FDB_W2_NEXTHOP;
 	err = rtl9602c_l2_place(p, e, &out);
 	if (!err && !out.hit) {
-		pr_err("%pM vlan %u: its hash bucket is full\n", mac, vid);
+		pr_err("%pM vlan %u: its hash bucket and the CAM are full\n", mac, vid);
 		err = -ENOSPC;
 	}
 	if (!err)
@@ -946,7 +951,7 @@ int rtl9602c_port_fdb_dump(struct dsa_switch *ds, int port,
 	bool hit;
 	u16 vid;
 
-	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	for (i = 0; i < RTL9602C_FDB_ENTRIES; i++) {
 		err = rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
 					  RTL9602C_FDB_ENTRY_WORDS, &hit);
 		if (err)
@@ -1739,7 +1744,7 @@ static int rtl9602c_fdb_show(struct seq_file *s, void *unused)
 	u16 vid;
 
 	seq_puts(s, "slot  address            vid   key  kind     where\n");
-	for (i = 0; i < RTL9602C_FDB_HASH_ENTRIES; i++) {
+	for (i = 0; i < RTL9602C_FDB_ENTRIES; i++) {
 		if (rtl9602c_table_read(p, RTL9602C_TBLACC_CMD_TABLE_FDB, i, e,
 					RTL9602C_FDB_ENTRY_WORDS, &hit))
 			return -EIO;
@@ -1763,8 +1768,8 @@ static int rtl9602c_fdb_show(struct seq_file *s, void *unused)
 					" nexthop" : "");
 		used++;
 	}
-	seq_printf(s, "%u of %u hashed slots in use\n", used,
-		   RTL9602C_FDB_HASH_ENTRIES);
+	seq_printf(s, "%u of %u entries in use, the CAM from %u\n", used,
+		   RTL9602C_FDB_ENTRIES, RTL9602C_FDB_HASH_ENTRIES);
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_fdb);

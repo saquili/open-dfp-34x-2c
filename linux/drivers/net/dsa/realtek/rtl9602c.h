@@ -1180,8 +1180,12 @@ enum {
 #define RTL9602C_FDB_LEARN_LIMIT_ACT_MASK		GENMASK(1, 0)
 #define RTL9602C_FDB_LEARN_LIMIT_ACT_FORWARD	0
 
-/* How long a learned entry lives unrefreshed, for the whole switch. */
+/*
+ * How long a learned entry lives unrefreshed, for the whole switch, and the
+ * CAM's off bit, set out of reset.
+ */
 #define RTL9602C_FDB_CFG		0x017000
+#define RTL9602C_FDB_CFG_CAM_OFF	BIT(21)
 #define RTL9602C_FDB_CFG_AGEING_TIME	GENMASK(20, 0)
 #define RTL9602C_FDB_CFG_AGEING_TIME_UNIT_MS		100
 #define RTL9602C_FDB_CFG_AGEING_TIME_MAX		0x1fffff
@@ -1960,11 +1964,12 @@ struct rtl9602c_field {
 #define RTL9602C_CLS_TMPL_S		1
 
 /*
- * The address table: 1024 hashed entries, four ways to a bucket, then a CAM
- * the driver never uses. Word 0 holds address bits 31:0.
+ * The address table: 1024 hashed entries, four ways to a bucket, then a CAM of
+ * 64 for keys whose bucket is full. Word 0 holds address bits 31:0.
  */
 #define RTL9602C_FDB_ENTRY_WORDS		3
 #define RTL9602C_FDB_HASH_ENTRIES		1024
+#define RTL9602C_FDB_ENTRIES			1088
 #define RTL9602C_FDB_HASH_WAYS		4
 
 /* Word 1: address bits 47:32 and the VID the entry is keyed by. */

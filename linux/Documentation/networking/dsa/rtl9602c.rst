@@ -1768,8 +1768,9 @@ A step that belongs to another page is named and handed over.
    switch side"). Purpose: the source port, the reason and the PON flow reach
    the receive descriptor, and the switch reads the tag of frames from the CPU.
    (T)
-4. Empty the L2 table and the NAT tables (*bridging*, *l3-nat*). Purpose: they
-   survive a warm restart. (T)
+4. Turn the address table's CAM on, then empty the L2 table, the CAM included,
+   and the NAT tables (*bridging*, *l3-nat*). Purpose: they survive a warm
+   restart. (T)
 5. Run the indirect table self-test (*bridging*). Purpose: check that the
    table engine reaches the VLAN entries where the driver expects them. A
    failure is logged and setup continues. (T)
