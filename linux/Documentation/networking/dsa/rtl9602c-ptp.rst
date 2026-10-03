@@ -490,7 +490,8 @@ middle value, 2^27, the clock advances one second per second.
      - T
      - The PTP hardware clock reads and steers.
 
-Reading the time, ``rtl9602c_ptp_gettime()``, in order:
+Reading the time, ``rtl9602c_ptp_now()``, which ``rtl9602c_ptp_gettime()`` and
+the ``hsd`` view call, in order:
 
 1. Take ``ptp_lock``. Purpose: the latch and the reads are one operation. (T)
 2. Set ``RTL9602C_PTP_CLK_CTRL_LATCH`` by read-modify-write. Purpose: capture
@@ -502,8 +503,8 @@ Reading the time, ``rtl9602c_ptp_gettime()``, in order:
 5. Release the lock and keep the seconds in ``ptp_sec_seen``. Purpose: they
    complete the receive stamps (see "Receive timestamps"). (I)
 
-The ``hsd`` view reads the clock with steps 1 to 4 and does not keep the
-seconds, so a read through it does not refresh the seconds that step 5 keeps.
+``ptp_lock`` is initialised at probe, before setup creates any view that reads
+the clock.
 
 Stepping, ``rtl9602c_ptp_adjtime()`` (``rtl9602c_ptp_settime()`` is a read,
 then a step of the difference), in order:
@@ -727,10 +728,10 @@ The steps are checked by the rows below and by those of "The tag".
      - After the strip the Sync reached a packet socket as 60 bytes with
        EtherType ``0x88F7``.
    * - ``rtl9602c_port_rxtstamp()`` completes the 16 bits of seconds from the
-       seconds of the last clock read (``ptp_sec_seen``, set by every
-       ``gettime64``), choosing the 65,536-second window that puts the stamp
-       nearest to them (a difference over 32,768 s moves it one window), and
-       delivers the frame at once (it returns false). The result is right
+       seconds of the last clock read (``ptp_sec_seen``, set by every read
+       through ``rtl9602c_ptp_now()``), choosing the 65,536-second window that
+       puts the stamp nearest to them (a difference over 32,768 s moves it one
+       window), and delivers the frame at once (it returns false). The result is right
        while the PHC has been read within about nine hours of the frame. The
        PHC's auxiliary work (``do_aux_work``) reads the clock at registration
        and then once a minute, so the seconds are never older than a minute,

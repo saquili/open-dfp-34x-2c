@@ -2277,6 +2277,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	spin_lock_init(&p->ploam_log_lock);
 	mutex_init(&p->gpon_lock);
 	mutex_init(&p->acl_lock);
+	mutex_init(&p->ptp_lock);
 	p->reg = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(p->reg))
 		return dev_err_probe(&pdev->dev, PTR_ERR(p->reg),

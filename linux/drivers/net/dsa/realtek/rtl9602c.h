@@ -2799,7 +2799,8 @@ struct rtl9602c_priv {
 
 	/**
 	 * @ptp_lock: makes a clock latch and its reads, or a step and its
-	 * writes, one operation
+	 * writes, one operation; initialised at probe, before any view that
+	 * reads the clock exists
 	 */
 	struct mutex		ptp_lock;
 
@@ -3128,6 +3129,7 @@ int rtl9602c_port_vlan_filtering(struct dsa_switch *ds, int port, bool on,
 				 struct netlink_ext_ack *extack);
 void rtl9602c_ptp_debugfs_init(struct rtl9602c_priv *p);
 u64 rtl9602c_ptp_rd_sec(struct rtl9602c_priv *p, u32 base);
+void rtl9602c_ptp_now(struct rtl9602c_priv *p, struct timespec64 *ts);
 int rtl9602c_ptp_register(struct rtl9602c_priv *p);
 void rtl9602c_ptp_unregister(struct rtl9602c_priv *p);
 u32 rtl9602c_r(struct rtl9602c_priv *p, u32 off);

@@ -71,10 +71,18 @@ static void rtl9602c_ptp_wr_sec(struct rtl9602c_priv *p, u32 base, u64 sec)
 	rtl9602c_w(p, base + 4, lower_32_bits(sec));
 }
 
-static int rtl9602c_ptp_gettime(struct ptp_clock_info *info,
-				struct timespec64 *ts)
+/**
+ * rtl9602c_ptp_now() - read the switch's clock
+ * @p: driver private data
+ * @ts: set to the time
+ *
+ * Every read of the clock goes through here, so that each one keeps the
+ * seconds from which rtl9602c_port_rxtstamp() completes receive stamps.
+ *
+ * Context: process context; takes @p->ptp_lock.
+ */
+void rtl9602c_ptp_now(struct rtl9602c_priv *p, struct timespec64 *ts)
 {
-	struct rtl9602c_priv *p = to_rtl9602c_ptp(info);
 	u32 nsec;
 
 	mutex_lock(&p->ptp_lock);
@@ -97,6 +105,12 @@ static int rtl9602c_ptp_gettime(struct ptp_clock_info *info,
 
 	ts->tv_nsec = FIELD_GET(RTL9602C_PTP_NSEC_TICKS, nsec) *
 		      RTL9602C_PTP_NSEC_TICK_NS;
+}
+
+static int rtl9602c_ptp_gettime(struct ptp_clock_info *info,
+				struct timespec64 *ts)
+{
+	rtl9602c_ptp_now(to_rtl9602c_ptp(info), ts);
 	return 0;
 }
 
@@ -285,8 +299,6 @@ static long rtl9602c_ptp_aux_work(struct ptp_clock_info *info)
 
 int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 {
-	mutex_init(&p->ptp_lock);
-
 	p->ptp_info = (struct ptp_clock_info) {
 		.owner		= THIS_MODULE,
 		.name		= "rtl9602c-ptp",

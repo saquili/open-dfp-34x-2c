@@ -5036,9 +5036,9 @@ static int rtl9602c_hsd_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
 	u32 w[RTL9602C_PKTDBG_DATA_WORDS];
+	struct timespec64 ts;
 	unsigned int i;
-	u32 cfg, nsec;
-	u64 sec;
+	u32 cfg;
 
 	for (i = 0; i < RTL9602C_PKTDBG_DATA_WORDS; i++)
 		w[i] = rtl9602c_r(p, RTL9602C_PKTDBG_DATA(i));
@@ -5065,15 +5065,8 @@ static int rtl9602c_hsd_show(struct seq_file *s, void *unused)
 		   rtl9602c_hsd_field(w, RTL9602C_PKTDBG_PTP_NSEC_LSB,
 				      RTL9602C_PKTDBG_PTP_NSEC_BITS));
 
-	/* Latch the clock and read it, under ptp_lock like every clock read. */
-	mutex_lock(&p->ptp_lock);
-	rtl9602c_rmw(p, RTL9602C_PTP_CLK_CTRL, 0, RTL9602C_PTP_CLK_CTRL_LATCH);
-	sec = rtl9602c_ptp_rd_sec(p, RTL9602C_PTP_CLK_SEC);
-	nsec = rtl9602c_r(p, RTL9602C_PTP_CLK_NSEC);
-	mutex_unlock(&p->ptp_lock);
-	seq_printf(s, "clock    %llu.%09lu\n", sec,
-		   FIELD_GET(RTL9602C_PTP_NSEC_TICKS, nsec) *
-		   RTL9602C_PTP_NSEC_TICK_NS);
+	rtl9602c_ptp_now(p, &ts);
+	seq_printf(s, "clock    %lld.%09ld\n", (s64)ts.tv_sec, ts.tv_nsec);
 	return 0;
 }
 
