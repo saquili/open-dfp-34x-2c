@@ -1478,6 +1478,9 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	 */
 	rtl9602c_filter_qos_reset(p);
 
+	/* Port mirroring survives a warm restart too: none. */
+	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, 0);
+
 	/*
 	 * S-tags recognised on the SFP and PON ports, for the VLAN rules of
 	 * tc flower, with every other frame passing as it came.

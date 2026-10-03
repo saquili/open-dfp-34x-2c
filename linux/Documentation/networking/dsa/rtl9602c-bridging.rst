@@ -125,8 +125,9 @@ The files that hold the rest of this page:
        ``rtl9602c_table_read()``, ``rtl9602c_table_write()``) and its self-test,
        the subscription to the learning-limit alarm
        (``rtl9602c_lrn_over_intr_sync()``), and the parts of
-       ``rtl9602c_setup()`` that empty the address table, exempt reserved
-       addresses from storm control and set the standalone forwarding state.
+       ``rtl9602c_setup()`` that empty the address table, clear port
+       mirroring, exempt reserved addresses from storm control and set the
+       standalone forwarding state.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The VLAN tag operations (``rtl9602c_flower_vlan()``,
        ``rtl9602c_cf_write_xlate()``) and the S-VLAN block they need
@@ -1667,6 +1668,13 @@ direction, so it mirrors both directions together only for the same ports.
        stopped (39 frames received) and those of what it receives went on
        (239,038). An egress rule on ``sfp`` while ``pon``'s ingress was
        mirrored was refused.
+   * - The mirror word survives a warm restart, so setup writes it 0: no source
+       and no direction.
+     - M
+     - ``pon``'s ingress mirrored to ``sfp``, then a RAM boot of a kernel
+       without the write: with no rule in place, 95,900 copies were captured
+       at the host in 1 s. With the write, none: 37 frames received, the
+       other traffic of the link.
 
 For example, copy to the host what the PON port receives::
 
