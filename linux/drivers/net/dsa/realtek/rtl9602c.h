@@ -2758,8 +2758,10 @@ struct rtl9602c_priv {
 
 	/** @mirror_to: the monitor port, while a port is mirrored */
 	int mirror_to;
-	/** @mirror_ingress: the mirrored direction is ingress */
-	bool mirror_ingress;
+	/** @mirror_rx: the ports whose received traffic is mirrored */
+	u8 mirror_rx;
+	/** @mirror_tx: the ports whose sent traffic is mirrored */
+	u8 mirror_tx;
 
 	/** @cf_used: classifier entries in use, translations and streams */
 	DECLARE_BITMAP(cf_used, RTL9602C_CLS_ENTRIES);

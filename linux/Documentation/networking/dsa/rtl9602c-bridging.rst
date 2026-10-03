@@ -1626,10 +1626,10 @@ operations ``port_change_mtu`` and ``port_max_mtu``, are described under
 Mirroring
 =========
 
-A matchall rule with a mirred action on the ingress of a user port asks DSA for
-port mirroring, and DSA calls ``port_mirror_add``. The switch has one monitor
-port and one direction for all its source ports, and the source set names the
-four ports only, so what the CPU sends cannot be mirrored.
+A matchall rule with a mirred action on the ingress or the egress of a user
+port asks DSA for port mirroring, and DSA calls ``port_mirror_add``. The switch
+has one monitor port and one set of source ports, with an enable bit for each
+direction, so it mirrors both directions together only for the same ports.
 
 .. list-table::
    :header-rows: 1
@@ -1639,33 +1639,45 @@ four ports only, so what the CPU sends cannot be mirrored.
      - Tag
      - Checked by
    * - ``RTL9602C_MIRROR_CTRL`` (``0x01c094``):
-       ``RTL9602C_MIRROR_CTRL_SRC_PORTS`` (bits 19:16) are the four ports whose
-       traffic is copied, with no extension half, so what the CPU sends cannot
-       be a source; ``RTL9602C_MIRROR_CTRL_INGRESS`` (bit 4) and
-       ``RTL9602C_MIRROR_CTRL_EGRESS`` (bit 5) are the direction, one bit each
-       for the whole switch; ``RTL9602C_MIRROR_CTRL_DEST_PORT`` (bits 1:0) is
-       the port that sends the copies. Reset value 0.
-     - I
-     - The register holds what the driver writes (next row), but no copy has
-       been seen: the only other user port, ``pon``, sends nothing without a GEM
-       port. A copy counted by the monitor port's transmit counters would settle
-       it. Mirroring is not part of the board's normal configuration.
-   * - ``port_mirror_add`` keeps one monitor port and one direction for the
-       whole switch: a request that names another monitor port is refused with
-       ``-EBUSY``, and one that asks for the other direction with
-       ``-EOPNOTSUPP``, rather than widening the first; source ports accumulate
-       in the mask. ``port_mirror_del`` removes its port, and the last one out
-       clears both direction bits; the monitor field keeps its value, which is
-       inert with no source.
+       ``RTL9602C_MIRROR_CTRL_SRC_PORTS`` (bits 19:16) are the ports whose
+       traffic is copied, one bit per port; ``RTL9602C_MIRROR_CTRL_INGRESS``
+       (bit 4) copies what they receive and ``RTL9602C_MIRROR_CTRL_EGRESS``
+       (bit 5) what they send, each for the whole set;
+       ``RTL9602C_MIRROR_CTRL_DEST_PORT`` (bits 1:0) is the port that sends the
+       copies. The frame itself still goes where it would have gone.
      - M
-     - Mirroring the SFP port's ingress to ``pon`` read ``0x00010012``; a second
-       rule for egress was refused; removing the qdisc left ``0x00000002``.
+     - ``pon`` mirrored to ``sfp``, frames sent for 1 s and counted by the
+       receive counter of the host's interface. From the network side to this
+       device, which go to the CPU alone: 235,047 received for 235,000 sent
+       with ``INGRESS``, and the CPU's count the same as without the rule.
+       From the host to the network side: 217,044 came back for 217,000 sent
+       with ``EGRESS``. With neither, 36 to 63, the other traffic of the link.
+       Mirroring the SFP port's ingress to ``pon`` read ``0x00010012``.
+   * - ``port_mirror_add`` keeps one monitor port and, for each direction, the
+       ports that it mirrors; the source set is their union, and a direction's
+       bit is set while it has a port. A request that names another monitor
+       port is refused with ``-EBUSY``, and one after which the two directions
+       would mirror different ports with ``-EOPNOTSUPP``, as the one source set
+       cannot express that; source ports accumulate. ``port_mirror_del`` takes
+       its port out of its rule's direction; the monitor field keeps its
+       value, which is inert with no source.
+     - M
+     - Both directions of ``pon`` mirrored to ``sfp`` at once, as in the row
+       above; with the egress rule removed, the copies of what ``pon`` sends
+       stopped (39 frames received) and those of what it receives went on
+       (239,038). An egress rule on ``sfp`` while ``pon``'s ingress was
+       mirrored was refused.
 
-For example, mirror what the SFP port receives to ``pon``::
+For example, copy to the host what the PON port receives::
 
-    tc qdisc add dev sfp clsact
-    tc filter add dev sfp ingress matchall skip_sw \
-            action mirred egress mirror dev pon
+    tc qdisc add dev pon clsact
+    tc filter add dev pon ingress matchall skip_sw \
+            action mirred egress mirror dev sfp
+
+and what it sends as well::
+
+    tc filter add dev pon egress matchall skip_sw \
+            action mirred egress mirror dev sfp
 
 The S-VLAN block
 ================
@@ -2503,8 +2515,6 @@ Questions the code does not depend on
    * - What ``RTL9602C_ISOLATE_EXT_HAIRPIN`` does ("Port isolation").
      - Nothing on this board reaches an extension port, so nothing settles it
        here.
-   * - Whether the mirror registers copy what their fields say ("Mirroring").
-     - A copy counted by the monitor port's transmit counters.
    * - What the S-VLAN block's other fields do, and whether a bridge VLAN takes
        the S-tag of its VID off frames leaving by its untagged ports ("The
        S-VLAN block").

@@ -1625,6 +1625,27 @@ int rtl9602c_port_change_mtu(struct dsa_switch *ds, int port,
 	return 0;
 }
 
+/*
+ * The mirror word from the driver's record: the sources are the ports of
+ * either direction, each direction's bit is set while it has a port, and the
+ * monitor field keeps its value, which is inert with no source.
+ */
+static void rtl9602c_mirror_write(struct rtl9602c_priv *p)
+{
+	u32 v = rtl9602c_r(p, RTL9602C_MIRROR_CTRL);
+
+	v &= ~(RTL9602C_MIRROR_CTRL_SRC_PORTS | RTL9602C_MIRROR_CTRL_INGRESS |
+	       RTL9602C_MIRROR_CTRL_EGRESS | RTL9602C_MIRROR_CTRL_DEST_PORT);
+	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_SRC_PORTS,
+			p->mirror_rx | p->mirror_tx);
+	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_DEST_PORT, p->mirror_to);
+	if (p->mirror_rx)
+		v |= RTL9602C_MIRROR_CTRL_INGRESS;
+	if (p->mirror_tx)
+		v |= RTL9602C_MIRROR_CTRL_EGRESS;
+	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, v);
+}
+
 /**
  * rtl9602c_port_mirror_add() - mirror a port's traffic
  * @ds: the switch
@@ -1633,14 +1654,15 @@ int rtl9602c_port_change_mtu(struct dsa_switch *ds, int port,
  * @ingress: true to copy what the port receives, false what it sends
  * @extack: for the error message
  *
- * The switch is taken to have one monitor port and one direction for all its
- * source ports, and a source mask of the four ports only, so that what the
- * CPU sends cannot be mirrored; none of this is verified. A rule naming
- * another monitor port or the other direction is refused rather than
- * widening the first, and source ports accumulate.
+ * The switch has one monitor port and one set of source ports, with an
+ * enable bit for each direction: a port in the set is mirrored in every
+ * direction that is on. A rule is taken while that stays exact, that is
+ * while one direction alone is in use or both mirror the same ports. A rule
+ * naming another monitor port is refused rather than moving the first, and
+ * source ports accumulate.
  *
  * Return: 0, -EBUSY if another monitor port is in use, or -EOPNOTSUPP if the
- * other direction is.
+ * two directions would mirror different ports.
  */
 int rtl9602c_port_mirror_add(struct dsa_switch *ds, int port,
 			     struct dsa_mall_mirror_tc_entry *mirror,
@@ -1648,32 +1670,28 @@ int rtl9602c_port_mirror_add(struct dsa_switch *ds, int port,
 			     struct netlink_ext_ack *extack)
 {
 	struct rtl9602c_priv *p = ds->priv;
-	u32 v = rtl9602c_r(p, RTL9602C_MIRROR_CTRL);
-	u32 mask = FIELD_GET(RTL9602C_MIRROR_CTRL_SRC_PORTS, v);
+	u8 rx = p->mirror_rx, tx = p->mirror_tx;
 
-	if (mask) {
-		if (p->mirror_to != mirror->to_local_port) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "this switch has one monitor port and it is already in use");
-			return -EBUSY;
-		}
-		if (p->mirror_ingress != ingress) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "ingress and egress mirroring are one switch-wide bit each, so both directions cannot be mirrored to different ports");
-			return -EOPNOTSUPP;
-		}
+	if ((rx | tx) && p->mirror_to != mirror->to_local_port) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "this switch has one monitor port and it is already in use");
+		return -EBUSY;
+	}
+
+	if (ingress)
+		rx |= BIT(port);
+	else
+		tx |= BIT(port);
+	if (rx && tx && rx != tx) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "the switch mirrors one set of ports in both directions, so ingress and egress cannot mirror different ports");
+		return -EOPNOTSUPP;
 	}
 
 	p->mirror_to = mirror->to_local_port;
-	p->mirror_ingress = ingress;
-
-	v &= ~(RTL9602C_MIRROR_CTRL_DEST_PORT | RTL9602C_MIRROR_CTRL_INGRESS |
-	       RTL9602C_MIRROR_CTRL_EGRESS);
-	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_DEST_PORT, mirror->to_local_port);
-	v |= ingress ? RTL9602C_MIRROR_CTRL_INGRESS : RTL9602C_MIRROR_CTRL_EGRESS;
-	v &= ~RTL9602C_MIRROR_CTRL_SRC_PORTS;
-	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_SRC_PORTS, mask | BIT(port));
-	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, v);
+	p->mirror_rx = rx;
+	p->mirror_tx = tx;
+	rtl9602c_mirror_write(p);
 
 	mirror->ingress = ingress;
 	return 0;
@@ -1683,25 +1701,21 @@ int rtl9602c_port_mirror_add(struct dsa_switch *ds, int port,
  * rtl9602c_port_mirror_del() - stop mirroring a port
  * @ds: the switch
  * @port: the port
- * @mirror: the rule; unused
+ * @mirror: the rule, for its direction
  *
- * The last source port out clears both directions. The monitor port field
- * keeps its value, inert with no source port.
+ * A direction is switched off with its last port, and the port leaves the
+ * source set when neither direction mirrors it any more.
  */
 void rtl9602c_port_mirror_del(struct dsa_switch *ds, int port,
 			      struct dsa_mall_mirror_tc_entry *mirror)
 {
 	struct rtl9602c_priv *p = ds->priv;
-	u32 v = rtl9602c_r(p, RTL9602C_MIRROR_CTRL);
-	u32 mask = FIELD_GET(RTL9602C_MIRROR_CTRL_SRC_PORTS, v) & ~BIT(port);
 
-	v &= ~RTL9602C_MIRROR_CTRL_SRC_PORTS;
-	v |= FIELD_PREP(RTL9602C_MIRROR_CTRL_SRC_PORTS, mask);
-
-	if (!mask)
-		v &= ~(RTL9602C_MIRROR_CTRL_INGRESS | RTL9602C_MIRROR_CTRL_EGRESS);
-
-	rtl9602c_w(p, RTL9602C_MIRROR_CTRL, v);
+	if (mirror->ingress)
+		p->mirror_rx &= ~BIT(port);
+	else
+		p->mirror_tx &= ~BIT(port);
+	rtl9602c_mirror_write(p);
 }
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
