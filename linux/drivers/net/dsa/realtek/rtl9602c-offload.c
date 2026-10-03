@@ -2304,6 +2304,22 @@ static bool rtl9602c_flower_is_arp(struct flow_rule *rule)
 }
 
 /*
+ * Whether one of the rule's actions polices. Only such a rule on a class's
+ * frames is storm control; a drop or a trap of them is an ACL rule like any
+ * other.
+ */
+static bool rtl9602c_flower_polices(struct flow_rule *rule)
+{
+	const struct flow_action_entry *act;
+	int i;
+
+	flow_action_for_each(i, act, &rule->action)
+		if (act->id == FLOW_ACTION_POLICE)
+			return true;
+	return false;
+}
+
+/*
  * A storm-control rule polices its whole class on its port, so it matches the
  * class and nothing else: the destination address of the broadcast and
  * multicast classes, the EtherType of the ARP class. Its one action polices in
@@ -2336,15 +2352,11 @@ static int rtl9602c_storm_rule_check(struct flow_rule *rule, unsigned int cls,
 	}
 
 	if (!flow_offload_has_one_action(&rule->action)) {
-		NL_SET_ERR_MSG_MOD(extack, "exactly one action, please");
+		NL_SET_ERR_MSG_MOD(extack,
+				   "storm control takes one action, `police`, and nothing beside it");
 		return -EOPNOTSUPP;
 	}
 	act = &rule->action.entries[0];
-	if (act->id != FLOW_ACTION_POLICE) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "a destination-address match is offloaded as storm control, whose only action is `police`");
-		return -EOPNOTSUPP;
-	}
 	if (act->police.rate_bytes_ps) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "these meters count packets; use `police pkts_rate` rather than `rate`");
@@ -2378,8 +2390,9 @@ wider:
 
 /*
  * Each flower rule goes to one block: a broadcast or multicast destination, or
- * ARP, with one police action to storm control; one drop or trap action to the
- * ACL; a VLAN match with its vlan actions to the classifier.
+ * ARP, with one police action to storm control; one drop or trap action, on
+ * those frames too, to the ACL; a VLAN match with its vlan actions to the
+ * classifier.
  */
 /*
  * A tag a VLAN rule names: its DEI is not matched, and its VID and priority
@@ -2725,7 +2738,7 @@ static int rtl9602c_flower_replace(struct rtl9602c_priv *p, int port,
 	cls_id = rtl9602c_storm_class_of(rule);
 	if (cls_id < 0 && rtl9602c_flower_is_arp(rule))
 		cls_id = RTL9602C_STORM_ARP;
-	if (cls_id >= 0) {
+	if (cls_id >= 0 && rtl9602c_flower_polices(rule)) {
 		err = rtl9602c_storm_rule_check(rule, (unsigned int)cls_id,
 						extack);
 		if (err)

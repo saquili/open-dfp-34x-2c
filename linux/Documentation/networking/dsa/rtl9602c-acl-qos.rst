@@ -651,9 +651,11 @@ to an ACL rule.
      - Tag
      - Checked by
    * - A flower rule on ingress whose single action is ``drop`` or ``trap``
-       becomes one ACL rule. Accepted matches: EtherType, IP protocol,
-       destination and source MAC and IPv4 addresses (with masks), and L4 source
-       and destination ports (see "The parser's field selectors"). Each field is
+       becomes one ACL rule, a rule on the broadcast address, the group bit or
+       ARP included; only a ``police`` of those is storm control (see "Storm
+       control"). Accepted matches: EtherType, IP protocol, destination and
+       source MAC and IPv4 addresses (with masks), and L4 source and
+       destination ports (see "The parser's field selectors"). Each field is
        cut into 16-bit slots and a slot whose mask is zero is left out. The IP
        protocol of an IPv6 rule, one with the exact EtherType ``0x86dd``, is
        compared in ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, which holds the
@@ -661,7 +663,11 @@ to an ACL rule.
        other rule compares ``RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO``.
      - M
      - The matches of the field codes above, through ``tc filter ... flower
-       skip_sw ... action drop``.
+       skip_sw ... action drop``. Drops of ``dst_mac ff:ff:ff:ff:ff:ff`` and
+       of ``dst_mac 01:00:00:00:00:00/01:00:00:00:00:00`` on ``sfp`` let none
+       of 600 broadcast and of 600 group-addressed frames from the host side
+       reach the far end of the PON, and a trap of ``protocol arp`` none of
+       600 ARP broadcasts; without the rules all 600 arrived.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress; IPv6 addresses; any
        other key; a rule with no field left (it would drop every frame on the
        port); more than eight slots; an L4 port without an exact IPv4 or IPv6
@@ -1417,8 +1423,9 @@ assumption about the controls after the first are on the *bridging* page,
        is policed whole: any other key, such as an EtherType beside a
        destination, an IP protocol, a port or a VLAN, is refused, as are a
        source-address match and any other destination or mask. The one action
-       must be ``police pkts_rate N``, passing what conforms and dropping what
-       exceeds, with no byte rate, peak rate, average rate or overhead. Each
+       is ``police pkts_rate N``, passing what conforms and dropping what
+       exceeds, with no byte rate, peak rate, average rate or overhead; a rule
+       on the same frames with another action is an ACL rule (see "The ACL"). Each
        rule takes its own meter, programmed in packet mode at N (at most
        ``RTL9602C_METER_CFG_HI_RATE_MAX``) and bound to its class on its port.
        The burst of ``police`` is not programmed: every meter gets the default
@@ -2658,10 +2665,6 @@ on them. They were measured with register writes made outside the driver.
 Known limitations
 =================
 
-- A flower rule whose destination address is all ones or the group bit alone, or
-  whose EtherType is exactly ARP with no VLAN match, is a storm-control rule, and
-  with any action but ``police`` it is refused, so the broadcast address, the
-  group bit and ARP cannot be dropped or trapped by an ACL rule.
 - The driver reports no statistics for offloaded flower rules (it has no
   ``cls_flower_stats`` operation), so ``tc -s filter show`` counts no hits for a
   rule that the switch applies. The effect of a rule is seen in the frames that
