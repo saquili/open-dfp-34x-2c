@@ -1737,7 +1737,10 @@ struct rtl9602c_field {
 
 /*
  * User field selectors: a 16-bit window at OFFSET from ORIGIN, compared as
- * field code RTL9602C_ACL_TMPL_FIELD_USER0 + n.
+ * field code RTL9602C_ACL_TMPL_FIELD_USER0 + n. ORIGIN_IP_PAYLOAD is the
+ * start of the IPv4 or IPv6 payload, behind any IPv6 extension headers
+ * (measured): the window at offset 0 holds a UDP or TCP source port, or the
+ * type and code of an ICMPv6 message.
  */
 #define RTL9602C_FIELDSEL_CFG	0x023144
 #define RTL9602C_FIELDSEL_CFG_OFFSET	GENMASK(10, 3)
@@ -1766,7 +1769,10 @@ struct rtl9602c_field {
 
 /*
  * Template field codes; a MAC address takes three consecutive codes, an IPv4
- * address two.
+ * address two. IPV4_TOS_PROTO holds the IPv4 TOS octet above the protocol,
+ * IPV6_TC_NH the IPv6 traffic class above the protocol of the payload that
+ * follows any extension headers: 58 for an MLD message behind its hop-by-hop
+ * header (measured).
  */
 #define RTL9602C_ACL_TMPL_FIELD_NONE		0x00
 #define RTL9602C_ACL_TMPL_FIELD_DMAC0		0x01
@@ -1775,6 +1781,7 @@ struct rtl9602c_field {
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_SRC0		0x10
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_DST0		0x12
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO	0x14
+#define RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH	0x15
 
 /*
  * The forwarding decision and its port mask: REDIRECT with no port drops the

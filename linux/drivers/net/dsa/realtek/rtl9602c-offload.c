@@ -1794,7 +1794,7 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	struct flow_rule *rule = flow_cls_offload_flow_rule(cls);
 	struct rtl9602c_acl_match m = {};
 	u8 slot_of[RTL9602C_ACL_TMPL_SLOTS];
-	bool ipv4 = false, ipproto = false;
+	bool ipv4 = false, ipv6 = false, ipproto = false;
 	unsigned int idx;
 	int tmpl, err;
 
@@ -1847,11 +1847,17 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 		}
 
 		/*
-		 * The IP protocol is the field's low octet; the TOS octet above
-		 * it is not compared.
+		 * The IP protocol is the field's low octet; the TOS or traffic
+		 * class octet above it is not compared. For IPv6 the field
+		 * holds the protocol behind any extension headers, as the
+		 * flower match does.
 		 */
 		if (basic.mask->ip_proto) {
-			rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO,
+			ipv6 = basic.mask->n_proto == htons(0xffff) &&
+			       basic.key->n_proto == htons(ETH_P_IPV6);
+			rtl9602c_acl_push(&m, ipv6 ?
+					  RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH :
+					  RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO,
 					  basic.key->ip_proto,
 					  basic.mask->ip_proto);
 			ipproto = basic.mask->ip_proto == 0xff;
@@ -1897,9 +1903,9 @@ no_addrs:
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS)) {
 		struct flow_match_ports ports;
 
-		if (!ipv4 || !ipproto) {
+		if (!(ipv4 || ipv6) || !ipproto) {
 			NL_SET_ERR_MSG_MOD(extack,
-					   "an L4 port match needs an exact ethertype of ip and an exact ip_proto: the port window is cut from a fixed offset and would otherwise match bytes in frames that carry no L4 header");
+					   "an L4 port match needs an exact ethertype of ip or ipv6 and an exact ip_proto: the port window is cut from a fixed offset and would otherwise match bytes in frames that carry no L4 header");
 			err = -EOPNOTSUPP;
 			goto out;
 		}

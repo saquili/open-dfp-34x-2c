@@ -485,6 +485,10 @@ The field codes that the driver writes into the template slots:
      - ``RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO``
      - The IP protocol in bits 7:0. Bits 15:8, the TOS octet, are never
        compared by the driver.
+   * - ``0x15``
+     - ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``
+     - In bits 7:0, the protocol of the IPv6 payload behind any extension
+       headers; in bits 15:8, the traffic class, never compared by the driver.
    * - ``0x40`` + n
      - ``RTL9602C_ACL_TMPL_FIELD_USER0`` + n
      - The window of user field selector n (see "The parser's field
@@ -504,6 +508,21 @@ The field codes that the driver writes into the template slots:
        field: ``protocol``, ``ip_proto``, ``dst_mac``, ``src_mac``, ``dst_ip``
        and ``src_ip`` each dropped the target and passed the control, and so did
        ``dst_port`` and ``src_port`` through the field selectors.
+   * - ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH`` holds, for an MLD message, 58
+       (ICMPv6) and not the hop-by-hop header that comes first, and the traffic
+       class 0 above it.
+     - M
+     - MLDv1 reports from the SFP port against the field: 58 in bits 7:0 and 0
+       in bits 15:8 each matched 3 of 3; 0 in bits 7:0 and 58 in bits 15:8
+       matched none.
+   * - A flower ``ip_proto`` of an IPv6 rule is compared in
+       ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, and an IPv6 rule may match an L4
+       port.
+     - M
+     - ``tc filter add dev sfp ingress protocol ipv6 flower skip_sw ip_proto
+       icmpv6 action drop`` dropped 3 of 3 ICMPv6 echo requests and passed 3 of
+       3 UDP frames; ``ip_proto udp dst_port 5001`` dropped the UDP frames and
+       passed the echo requests.
    * - ``RTL9602C_ACL_PORT_EN`` (``0x015040``): one bit per port turns ACL
        lookup on for frames entering that port. Every bit is clear out of reset.
      - M
@@ -617,15 +636,19 @@ to an ACL rule.
        becomes one ACL rule. Accepted matches: EtherType, IP protocol,
        destination and source MAC and IPv4 addresses (with masks), and L4 source
        and destination ports (see "The parser's field selectors"). Each field is
-       cut into 16-bit slots and a slot whose mask is zero is left out.
+       cut into 16-bit slots and a slot whose mask is zero is left out. The IP
+       protocol of an IPv6 rule, one with the exact EtherType ``0x86dd``, is
+       compared in ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, which holds the
+       protocol behind any extension headers as the flower match does; every
+       other rule compares ``RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO``.
      - M
      - The matches of the field codes above, through ``tc filter ... flower
        skip_sw ... action drop``.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress; IPv6 addresses; any
        other key; a rule with no field left (it would drop every frame on the
-       port); more than eight slots; an L4 port without an exact IPv4 EtherType
-       and an exact IP protocol. Refused with ``-ENOSPC``: no template covers
-       the fields and none is free; all 96 entries are in use.
+       port); more than eight slots; an L4 port without an exact IPv4 or IPv6
+       EtherType and an exact IP protocol. Refused with ``-ENOSPC``: no template
+       covers the fields and none is free; all 96 entries are in use.
      - M
      - ``tc filter add dev sfp ingress protocol ip flower skip_sw dst_port 4444
        action drop`` without ``ip_proto`` was refused; the 97th rule was refused
@@ -738,13 +761,22 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
      - ``tc filter add dev sfp ingress protocol ip flower skip_sw ip_proto udp
        dst_port 4444 action drop`` dropped port 4444 and passed 5555;
        ``src_port 33333`` dropped the frames carrying it.
+   * - For an IPv6 packet the IP payload starts behind the extension headers:
+       the window at offset 0 holds an ICMPv6 message's type and code. Origin 5
+       is the start of the IPv6 header.
+     - M
+     - MLDv1 reports, which carry a hop-by-hop header: a selector at IP-payload
+       offset 0 matched the type 131 (``0x8300`` under ``0xff00``) and not the
+       hop-by-hop header's next header (``0x3a00``); at offset 8, nothing
+       matched the type. At origin 5 offset 6, the window held ``0x0001``, the
+       next header 0 and the hop limit 1.
    * - UDP and TCP headers carry the source port in octets 0-1 and the
        destination port in octets 2-3.
      - P
      - RFC 768, "Format"; RFC 9293, section 3.1.
    * - A selector cuts its window whatever the frame carries, including a frame
        with no L4 header, which is why the driver accepts a port match only
-       together with an exact IPv4 EtherType and an exact IP protocol.
+       together with an exact IPv4 or IPv6 EtherType and an exact IP protocol.
      - I
      - Not load-bearing: the driver only refuses more. A port-only rule compared
        against ARP frames with a chosen value at that offset would confirm it.
