@@ -1356,12 +1356,11 @@ and never waits without a bound.
    * - Fact
      - Tag
      - Checked by
-   * - ``RTL9602C_UART_FCR_TX_FIFO_RESET`` = ``UART_FCR_CLEAR_XMIT |
-       UART_FCR_TRIGGER_14`` (``0xc4``). Its FIFO-enable bit (bit 0) is clear.
-       On a 16550, writing FCR with bit 0 clear disables and empties both FIFOs
-       and leaves the other bits unprogrammed, so the write turns the FIFOs off
-       rather than resetting only the transmit FIFO. The 8250 driver reprograms
-       FCR when it takes the port.
+   * - ``RTL9602C_UART_FCR_TX_FIFO_RESET`` = ``UART_FCR_ENABLE_FIFO |
+       UART_FCR_CLEAR_XMIT | UART_FCR_TRIGGER_14`` (``0xc5``). On a 16550 it
+       resets the transmit FIFO and keeps both FIFOs enabled; written with the
+       FIFO-enable bit (bit 0) clear, FCR would disable and empty both FIFOs
+       instead. The 8250 driver reprograms FCR when it takes the port.
      - P, I
      - P: PC16550D data sheet, FIFO control register, bit 0. I: whether the last
        step above ever runs, and whether it frees this UART, is not observed;

@@ -26,13 +26,13 @@
 #define RTL9602C_UART_LSR	0x14
 
 /*
- * Written when the transmitter stays busy. The FIFO-enable bit is clear in
- * this value, and a 16550 written so disables both FIFOs, which empties
- * them, rather than resetting the transmit FIFO alone; the 8250 driver
- * programs FCR again when it takes the port. Whether the write frees a
- * stuck transmitter on this UART is not verified.
+ * Written when the transmitter stays busy: the transmit FIFO is reset, and the
+ * FIFO-enable bit keeps both FIFOs on, which a 16550 written without it turns
+ * off and empties. Whether the write frees a stuck transmitter on this UART is
+ * not verified.
  */
-#define RTL9602C_UART_FCR_TX_FIFO_RESET	(UART_FCR_CLEAR_XMIT | UART_FCR_TRIGGER_14)
+#define RTL9602C_UART_FCR_TX_FIFO_RESET \
+	(UART_FCR_ENABLE_FIFO | UART_FCR_CLEAR_XMIT | UART_FCR_TRIGGER_14)
 
 /* Polls for an empty holding register before giving up; a software bound */
 #define RTL9602C_UART_TX_POLL_MAX	30000
