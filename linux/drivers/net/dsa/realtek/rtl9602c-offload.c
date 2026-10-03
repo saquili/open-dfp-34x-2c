@@ -224,6 +224,7 @@ struct rtl9602c_cf_entry {
 	u32 care;
 	bool downstream;
 	u32 act[3];
+	u8 tmpl;
 };
 
 /*
@@ -262,9 +263,10 @@ static int rtl9602c_cf_program(struct rtl9602c_priv *p, unsigned int idx,
 		   RTL9602C_CLS_ACT_EN_OTHERS |
 		   (e->downstream ? 0 : RTL9602C_CLS_ACT_EN_FLOW));
 
-	/* Template 0, the rule layout composed here. */
+	/* The template that VID and PRI are matched with. */
 	rtl9602c_rmw(p, RTL9602C_CLS_ENTRY_TMPL + 4 * (idx / 32),
-		     BIT(idx % 32), 0);
+		     BIT(idx % 32),
+		     e->tmpl == RTL9602C_CLS_TMPL_S ? BIT(idx % 32) : 0);
 
 	plane[0] = value;
 	plane[1] = RTL9602C_CLS_RULE_VALID;
@@ -295,6 +297,7 @@ static int rtl9602c_cf_write_xlate(struct rtl9602c_priv *p, unsigned int idx)
 		.care		= x->care,
 		.downstream	= rtl9602c_port_is_downstream(x->port),
 		.act		= { x->act[0], x->act[1], x->act[2] },
+		.tmpl		= x->tmpl,
 	};
 	int flow = -1;
 
@@ -941,6 +944,54 @@ void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p)
 	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT, 0);
 	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT + 4, 0);
 	rtl9602c_w(p, RTL9602C_QOS_PRIO_WEIGHT_SEL, 0);
+}
+
+/**
+ * rtl9602c_svlan_setup() - recognise S-tags on the SFP and PON ports
+ * @p: the switch
+ *
+ * The SFP and PON ports become S-VLAN uplink ports, so that the classifier
+ * sees the S-tag of a frame either takes in and a VLAN rule can match and
+ * change it. Every frame without an S-tag joins S-VLAN
+ * RTL9602C_SVLAN_PVID_NONE, of which every port is an untagged member: by an
+ * uplink port through RTL9602C_SVLAN_POLICY_UNTAGGED_JOIN, by the others
+ * through their S-VLAN PVID. So such a frame leaves as it came, and a frame
+ * with an S-tag leaves with it unless a rule changes it, both ways (all
+ * measured). Template RTL9602C_CLS_TMPL_C matches the VID and priority of
+ * the C-tag, as out of reset, and RTL9602C_CLS_TMPL_S those of the S-tag.
+ *
+ * Context: setup, after the table self-test, which leaves the VLAN entry of
+ * RTL9602C_SVLAN_PVID_NONE alone.
+ */
+void rtl9602c_svlan_setup(struct rtl9602c_priv *p)
+{
+	unsigned int port;
+
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
+		rtl9602c_vlan_set_member(p, RTL9602C_SVLAN_PVID_NONE, port,
+					 true, true);
+		rtl9602c_rmw(p, RTL9602C_SVLAN_PVID(port),
+			     RTL9602C_SVLAN_PVID_MASK <<
+			     RTL9602C_SVLAN_PVID_SHIFT(port),
+			     RTL9602C_SVLAN_PVID_NONE <<
+			     RTL9602C_SVLAN_PVID_SHIFT(port));
+	}
+	rtl9602c_rmw(p, RTL9602C_SVLAN_POLICY, RTL9602C_SVLAN_POLICY_UNTAGGED_ACT,
+		     FIELD_PREP(RTL9602C_SVLAN_POLICY_UNTAGGED_ACT,
+				RTL9602C_SVLAN_POLICY_UNTAGGED_JOIN));
+	rtl9602c_w(p, RTL9602C_SVLAN_UPLINK_PORTS,
+		   BIT(RTL9602C_PORT_SFP) | BIT(RTL9602C_PORT_PON));
+
+	rtl9602c_w(p, RTL9602C_CLS_TMPL_CFG(RTL9602C_CLS_TMPL_C),
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_US_VID, RTL9602C_CLS_TMPL_CFG_TAG_C) |
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_US_PRI, RTL9602C_CLS_TMPL_CFG_TAG_C) |
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_DS_VID, RTL9602C_CLS_TMPL_CFG_TAG_C) |
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_DS_PRI, RTL9602C_CLS_TMPL_CFG_TAG_C));
+	rtl9602c_w(p, RTL9602C_CLS_TMPL_CFG(RTL9602C_CLS_TMPL_S),
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_US_VID, RTL9602C_CLS_TMPL_CFG_TAG_S) |
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_US_PRI, RTL9602C_CLS_TMPL_CFG_TAG_S) |
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_DS_VID, RTL9602C_CLS_TMPL_CFG_TAG_S) |
+		   FIELD_PREP(RTL9602C_CLS_TMPL_CFG_DS_PRI, RTL9602C_CLS_TMPL_CFG_TAG_S));
 }
 
 /*
@@ -2186,29 +2237,76 @@ wider:
 /*
  * Each flower rule goes to one block: a broadcast or multicast destination, or
  * ARP, with one police action to storm control; one drop or trap action to the
- * ACL; a VLAN match with one vlan modify to the classifier, as a translation.
+ * ACL; a VLAN match with its vlan actions to the classifier.
  */
 /*
- * The tags a VLAN rule matches, from its flower keys: an untagged frame
- * (num_of_vlans 0), or an outer C-tag (802.1Q) with its VID and priority if
- * the rule names them. The switch recognises an S-tag only on a port in S-VLAN
- * uplink mode, which the driver does not use, as it drops every other frame
- * coming in and gives every frame going out an S-tag (measured); so a frame
- * with an outer 802.1ad tag counts as untagged, and no rule matches an S-tag.
- * Nor can the switch count C-tags, so a rule on the outer C-tag takes no
- * number of tags. Fills @x's match, and @ctag with whether the frame has one.
+ * A tag a VLAN rule names: its DEI is not matched, and its VID and priority
+ * each in full or not at all.
+ */
+static int rtl9602c_flower_tag_check(const struct flow_match_vlan *m,
+				     struct netlink_ext_ack *extack)
+{
+	if (m->mask->vlan_dei) {
+		NL_SET_ERR_MSG_MOD(extack, "the DEI is not matched");
+		return -EOPNOTSUPP;
+	}
+	if (m->mask->vlan_id && m->mask->vlan_id != VLAN_VID_MASK) {
+		NL_SET_ERR_MSG_MOD(extack, "a VLAN id is matched in full or not at all");
+		return -EOPNOTSUPP;
+	}
+	if (m->mask->vlan_priority &&
+	    m->mask->vlan_priority != VLAN_PRIO_MASK >> VLAN_PRIO_SHIFT) {
+		NL_SET_ERR_MSG_MOD(extack, "a priority is matched in full or not at all");
+		return -EOPNOTSUPP;
+	}
+	return 0;
+}
+
+/* The VID and priority of @m that the rule names, into @x's match. */
+static void rtl9602c_flower_tag_fill(const struct flow_match_vlan *m,
+				     struct rtl9602c_cf_xlate *x)
+{
+	if (m->mask->vlan_id) {
+		x->value |= FIELD_PREP(RTL9602C_CLS_RULE_VID, m->key->vlan_id);
+		x->care |= RTL9602C_CLS_RULE_VID;
+	}
+	if (m->mask->vlan_priority) {
+		x->value |= FIELD_PREP(RTL9602C_CLS_RULE_PRI,
+				       m->key->vlan_priority);
+		x->care |= RTL9602C_CLS_RULE_PRI;
+	}
+}
+
+/*
+ * The tags a VLAN rule matches, from its flower keys:
+ *
+ * - an untagged frame, num_of_vlans 0: neither tag;
+ * - an outer C-tag (802.1Q): a C-tag and no S-tag, with the tag's VID and
+ *   priority if the rule names them, from template RTL9602C_CLS_TMPL_C;
+ * - an outer S-tag (802.1ad), which the SFP and PON ports recognise
+ *   (rtl9602c_svlan_setup()): with the S-tag's VID and priority, from
+ *   template RTL9602C_CLS_TMPL_S, or with those of the C-tag behind it,
+ *   cvlan_id and cvlan_prio, from template RTL9602C_CLS_TMPL_C; one entry
+ *   matches the VID and priority of one tag.
+ *
+ * The switch counts no tags, so a rule on a tag takes no number of tags, and
+ * an S-tag rule matches a frame with a C-tag behind the S-tag or without one.
+ * Fills @x's match and template, and @outer with the protocol of the outer
+ * tag, 0 for an untagged frame.
  */
 static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
-				      struct rtl9602c_cf_xlate *x, bool *ctag,
+				      struct rtl9602c_cf_xlate *x, u16 *outer,
 				      struct netlink_ext_ack *extack)
 {
+	struct flow_match_vlan vlan, cvlan;
 	struct flow_match_basic basic;
-	struct flow_match_vlan vlan;
+	int err;
 
 	if (rule->match.dissector->used_keys &
 	    ~(BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_BASIC) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_CVLAN) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_NUM_OF_VLANS))) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "this classifier matches the VLAN tags and nothing else");
@@ -2222,13 +2320,14 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 		return -EOPNOTSUPP;
 	}
 
-	*ctag = flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN);
+	*outer = 0;
+	x->tmpl = RTL9602C_CLS_TMPL_C;
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_NUM_OF_VLANS)) {
 		struct flow_match_num_of_vlans n;
 
 		flow_rule_match_num_of_vlans(rule, &n);
-		if (*ctag || n.mask->num_of_vlans != 0xff ||
-		    n.key->num_of_vlans) {
+		if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN) ||
+		    n.mask->num_of_vlans != 0xff || n.key->num_of_vlans) {
 			NL_SET_ERR_MSG_MOD(extack,
 					   "the switch counts no tags; num_of_vlans 0, alone, matches an untagged frame");
 			return -EOPNOTSUPP;
@@ -2237,45 +2336,86 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 		x->care |= RTL9602C_CLS_RULE_CTAG | RTL9602C_CLS_RULE_STAG;
 		return 0;
 	}
-	if (!*ctag) {
+	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN)) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "name the outer C-tag, or match an untagged frame with num_of_vlans 0");
+				   "name the outer tag, or match an untagged frame with num_of_vlans 0");
 		return -EOPNOTSUPP;
 	}
 
 	flow_rule_match_vlan(rule, &vlan);
-	if (vlan.mask->vlan_tpid != htons(0xffff) ||
-	    vlan.key->vlan_tpid != htons(ETH_P_8021Q)) {
+	err = rtl9602c_flower_tag_check(&vlan, extack);
+	if (err)
+		return err;
+	if (vlan.mask->vlan_tpid != htons(0xffff)) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "only an outer C-tag (802.1Q) is matched; the switch recognises no S-tag on frames coming in");
-		return -EOPNOTSUPP;
-	}
-	if (vlan.mask->vlan_dei || vlan.mask->vlan_eth_type) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "neither the DEI nor what follows the tag is matched");
-		return -EOPNOTSUPP;
-	}
-	if (vlan.mask->vlan_id && vlan.mask->vlan_id != VLAN_VID_MASK) {
-		NL_SET_ERR_MSG_MOD(extack, "a VLAN id is matched in full or not at all");
-		return -EOPNOTSUPP;
-	}
-	if (vlan.mask->vlan_priority &&
-	    vlan.mask->vlan_priority != VLAN_PRIO_MASK >> VLAN_PRIO_SHIFT) {
-		NL_SET_ERR_MSG_MOD(extack, "a priority is matched in full or not at all");
+				   "name the protocol of the outer tag: 802.1Q or 802.1ad");
 		return -EOPNOTSUPP;
 	}
 
-	/* An outer C-tag: a C-tag and no S-tag. */
-	x->value |= RTL9602C_CLS_RULE_CTAG;
-	x->care |= RTL9602C_CLS_RULE_CTAG | RTL9602C_CLS_RULE_STAG;
-	if (vlan.mask->vlan_id) {
-		x->value |= FIELD_PREP(RTL9602C_CLS_RULE_VID, vlan.key->vlan_id);
-		x->care |= RTL9602C_CLS_RULE_VID;
+	if (vlan.key->vlan_tpid == htons(ETH_P_8021Q)) {
+		if (vlan.mask->vlan_eth_type ||
+		    flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CVLAN)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "what follows an outer C-tag is not matched; the switch recognises a second tag only behind an S-tag");
+			return -EOPNOTSUPP;
+		}
+		/* An outer C-tag: a C-tag and no S-tag. */
+		*outer = ETH_P_8021Q;
+		x->value |= RTL9602C_CLS_RULE_CTAG;
+		x->care |= RTL9602C_CLS_RULE_CTAG | RTL9602C_CLS_RULE_STAG;
+		rtl9602c_flower_tag_fill(&vlan, x);
+		return 0;
 	}
-	if (vlan.mask->vlan_priority) {
-		x->value |= FIELD_PREP(RTL9602C_CLS_RULE_PRI,
-				       vlan.key->vlan_priority);
-		x->care |= RTL9602C_CLS_RULE_PRI;
+	if (vlan.key->vlan_tpid != htons(ETH_P_8021AD)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "the outer tag is a C-tag (802.1Q) or an S-tag (802.1ad)");
+		return -EOPNOTSUPP;
+	}
+
+	/* An outer S-tag. */
+	*outer = ETH_P_8021AD;
+	x->value |= RTL9602C_CLS_RULE_STAG;
+	x->care |= RTL9602C_CLS_RULE_STAG;
+	if (vlan.mask->vlan_eth_type &&
+	    vlan.key->vlan_eth_type != htons(ETH_P_8021Q)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "behind an S-tag only a C-tag is matched, not an EtherType");
+		return -EOPNOTSUPP;
+	}
+	/* A C-tag behind the S-tag. */
+	if (vlan.mask->vlan_eth_type) {
+		x->value |= RTL9602C_CLS_RULE_CTAG;
+		x->care |= RTL9602C_CLS_RULE_CTAG;
+	}
+	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_CVLAN)) {
+		x->tmpl = RTL9602C_CLS_TMPL_S;
+		rtl9602c_flower_tag_fill(&vlan, x);
+		return 0;
+	}
+
+	flow_rule_match_cvlan(rule, &cvlan);
+	err = rtl9602c_flower_tag_check(&cvlan, extack);
+	if (err)
+		return err;
+	if (cvlan.mask->vlan_eth_type ||
+	    (cvlan.mask->vlan_tpid &&
+	     (cvlan.mask->vlan_tpid != htons(0xffff) ||
+	      cvlan.key->vlan_tpid != htons(ETH_P_8021Q)))) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "behind an S-tag a C-tag (802.1Q) is matched, and nothing behind that");
+		return -EOPNOTSUPP;
+	}
+	if ((cvlan.mask->vlan_id || cvlan.mask->vlan_priority) &&
+	    (vlan.mask->vlan_id || vlan.mask->vlan_priority)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "a rule matches the VID and priority of one tag: the S-tag's or those of the C-tag behind it");
+		return -EOPNOTSUPP;
+	}
+	if (cvlan.mask->vlan_id || cvlan.mask->vlan_priority) {
+		rtl9602c_flower_tag_fill(&cvlan, x);
+	} else {
+		x->tmpl = RTL9602C_CLS_TMPL_S;
+		rtl9602c_flower_tag_fill(&vlan, x);
 	}
 	return 0;
 }
@@ -2283,15 +2423,18 @@ static int rtl9602c_flower_vlan_match(struct flow_rule *rule,
 /*
  * A VLAN rule of tc flower as one classifier entry, on the ingress of the SFP
  * port for upstream frames, of its own port only, or of the PON port for
- * downstream ones. The match is that of rtl9602c_flower_vlan_match(); the one
- * action is:
+ * downstream ones. The match is that of rtl9602c_flower_vlan_match(); the
+ * actions are:
  *
- * - vlan modify of the outer C-tag: the VID, and the priority unless the action
- *   gives 0, as the action cannot say whether it gives one;
+ * - vlan modify of the outer tag: of a C-tag, its VID, and its priority
+ *   unless the action gives 0, as the action cannot say whether it gives one;
+ *   of an S-tag the same, the tag keeping the S-tag's TPID with protocol
+ *   802.1ad or taking the C-tag's with 802.1Q;
  * - vlan push of a C-tag onto an untagged frame, or of an S-tag (802.1ad, with
- *   the TPID of RTL9602C_SVLAN_TPID_CFG_PRIMARY) in front of an untagged frame
- *   or a C-tag, with the action's VID and priority;
- * - vlan pop of the outer C-tag.
+ *   the TPID of RTL9602C_SVLAN_TPID_CFG_PRIMARY) in front of a frame without
+ *   one, with the action's VID and priority;
+ * - vlan pop of the outer tag, and two vlan pops of an S-tag and the C-tag
+ *   behind it.
  */
 static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 				struct flow_cls_offload *cls)
@@ -2301,10 +2444,10 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 	struct rtl9602c_cf_xlate x = { .out_vid = VLAN_N_VID, .port = port };
 	const struct flow_action_entry *act;
 	unsigned int idx;
-	bool ctag;
+	u16 outer;
 	int err;
 
-	err = rtl9602c_flower_vlan_match(rule, &x, &ctag, extack);
+	err = rtl9602c_flower_vlan_match(rule, &x, &outer, extack);
 	if (err)
 		return err;
 	if (!rtl9602c_port_is_downstream(port)) {
@@ -2312,31 +2455,59 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 		x.care |= RTL9602C_CLS_RULE_UNI;
 	}
 
+	if (outer == ETH_P_8021AD && rule->action.num_entries == 2 &&
+	    rule->action.entries[0].id == FLOW_ACTION_VLAN_POP &&
+	    rule->action.entries[1].id == FLOW_ACTION_VLAN_POP) {
+		/* Both tags off: the S-tag, and the C-tag if there is one. */
+		x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
+				      RTL9602C_CLS_ACT_STAG_POP);
+		x.act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
+				      RTL9602C_CLS_ACT_CTAG_UNTAG);
+		goto place;
+	}
 	if (!flow_offload_has_one_action(&rule->action)) {
-		NL_SET_ERR_MSG_MOD(extack, "exactly one action, please");
+		NL_SET_ERR_MSG_MOD(extack,
+				   "one action, or two vlan pops of an S-tag and the C-tag behind it");
 		return -EOPNOTSUPP;
 	}
 	act = &rule->action.entries[0];
 
 	switch (act->id) {
 	case FLOW_ACTION_VLAN_MANGLE:
-		if (!ctag || act->vlan.proto != htons(ETH_P_8021Q)) {
+		if (outer == ETH_P_8021Q &&
+		    act->vlan.proto == htons(ETH_P_8021Q)) {
+			x.act[1] = RTL9602C_CLS_ACT_CVID_SET |
+				   FIELD_PREP(RTL9602C_CLS_ACT_CVID,
+					      act->vlan.vid) |
+				   FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
+					      RTL9602C_CLS_ACT_CTAG_TAG);
+			if (act->vlan.prio)
+				x.act[1] |= RTL9602C_CLS_ACT_CPRI_SET |
+					    FIELD_PREP(RTL9602C_CLS_ACT_CPRI,
+						       act->vlan.prio);
+		} else if (outer == ETH_P_8021AD &&
+			   (act->vlan.proto == htons(ETH_P_8021AD) ||
+			    act->vlan.proto == htons(ETH_P_8021Q))) {
+			x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
+					      act->vlan.proto == htons(ETH_P_8021AD) ?
+					      RTL9602C_CLS_ACT_STAG_ADD :
+					      RTL9602C_CLS_ACT_STAG_CTPID) |
+				   RTL9602C_CLS_ACT_SVID_SET |
+				   FIELD_PREP(RTL9602C_CLS_ACT_SVID,
+					      act->vlan.vid);
+			if (act->vlan.prio)
+				x.act[0] |= RTL9602C_CLS_ACT_SPRI_SET |
+					    FIELD_PREP(RTL9602C_CLS_ACT_SPRI,
+						       act->vlan.prio);
+		} else {
 			NL_SET_ERR_MSG_MOD(extack,
-					   "vlan modify rewrites an outer C-tag, and keeps it one");
+					   "vlan modify rewrites the outer tag: a C-tag into a C-tag, an S-tag into an S-tag or a C-tag");
 			return -EOPNOTSUPP;
 		}
-		x.act[1] = RTL9602C_CLS_ACT_CVID_SET |
-			   FIELD_PREP(RTL9602C_CLS_ACT_CVID, act->vlan.vid) |
-			   FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
-				      RTL9602C_CLS_ACT_CTAG_TAG);
-		if (act->vlan.prio)
-			x.act[1] |= RTL9602C_CLS_ACT_CPRI_SET |
-				    FIELD_PREP(RTL9602C_CLS_ACT_CPRI,
-					       act->vlan.prio);
 		x.out_vid = act->vlan.vid;
 		break;
 	case FLOW_ACTION_VLAN_PUSH:
-		if (act->vlan.proto == htons(ETH_P_8021Q) && !ctag) {
+		if (act->vlan.proto == htons(ETH_P_8021Q) && !outer) {
 			x.act[1] = RTL9602C_CLS_ACT_CVID_SET |
 				   FIELD_PREP(RTL9602C_CLS_ACT_CVID,
 					      act->vlan.vid) |
@@ -2345,7 +2516,8 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 					      act->vlan.prio) |
 				   FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
 					      RTL9602C_CLS_ACT_CTAG_TAG);
-		} else if (act->vlan.proto == htons(ETH_P_8021AD)) {
+		} else if (act->vlan.proto == htons(ETH_P_8021AD) &&
+			   outer != ETH_P_8021AD) {
 			x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
 					      RTL9602C_CLS_ACT_STAG_ADD) |
 				   RTL9602C_CLS_ACT_SVID_SET |
@@ -2356,19 +2528,23 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 					      act->vlan.prio);
 		} else {
 			NL_SET_ERR_MSG_MOD(extack,
-					   "a C-tag is pushed onto an untagged frame only; push an S-tag in front of a C-tag");
+					   "a C-tag is pushed onto an untagged frame, an S-tag onto a frame without one");
 			return -EOPNOTSUPP;
 		}
 		x.out_vid = act->vlan.vid;
 		break;
 	case FLOW_ACTION_VLAN_POP:
-		if (!ctag) {
+		if (outer == ETH_P_8021AD) {
+			x.act[0] = FIELD_PREP(RTL9602C_CLS_ACT_STAG,
+					      RTL9602C_CLS_ACT_STAG_POP);
+		} else if (outer == ETH_P_8021Q) {
+			x.act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
+					      RTL9602C_CLS_ACT_CTAG_UNTAG);
+		} else {
 			NL_SET_ERR_MSG_MOD(extack,
 					   "an untagged frame has no tag to pop");
 			return -EOPNOTSUPP;
 		}
-		x.act[1] = FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
-				      RTL9602C_CLS_ACT_CTAG_UNTAG);
 		break;
 	default:
 		NL_SET_ERR_MSG_MOD(extack,
@@ -2376,6 +2552,7 @@ static int rtl9602c_flower_vlan(struct rtl9602c_priv *p, int port,
 		return -EOPNOTSUPP;
 	}
 
+place:
 	/* From the bottom of the usable range, below the stream entries. */
 	idx = find_first_zero_bit(p->cf_used, p->cf_entries);
 	if (idx >= p->cf_entries) {
@@ -4572,7 +4749,8 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_qos);
 /*
  * cf: the usable entry count and the layout boundary; the classifier's control
  * word, with its bits 1:0, which decide the fate of a frame no entry matches (2
- * drops it, the other values let it through); then every entry whose ones plane
+ * drops it, the other values let it through); the two templates' sources of
+ * VID and priority (RTL9602C_CLS_TMPL_CFG); then every entry whose ones plane
  * is valid or has a non-zero word 0: the ones plane, the zeros plane, the three
  * action words, the action classes, "+sid" when stream assignment is among
  * them, the template bit and VALID. Each read goes through the table engine,
@@ -4611,9 +4789,12 @@ static int rtl9602c_cf_show(struct seq_file *s, void *unused)
 		   p->cf_entries,
 		   FIELD_GET(RTL9602C_CLS_CTRL_LAYOUT1_START,
 			     rtl9602c_r(p, RTL9602C_CLS_CTRL)));
-	seq_printf(s, "cls cfg %08x  upstream permit %lu\n\n",
+	seq_printf(s, "cls cfg %08x  upstream permit %lu\n",
 		   rtl9602c_r(p, RTL9602C_CLS_CTRL),
 		   rtl9602c_r(p, RTL9602C_CLS_CTRL) & GENMASK(1, 0));
+	seq_printf(s, "templates %08x %08x\n\n",
+		   rtl9602c_r(p, RTL9602C_CLS_TMPL_CFG(RTL9602C_CLS_TMPL_C)),
+		   rtl9602c_r(p, RTL9602C_CLS_TMPL_CFG(RTL9602C_CLS_TMPL_S)));
 
 	for (idx = 0; idx < RTL9602C_CLS_ENTRIES; idx++) {
 		u32 rule[2] = {};
@@ -4785,11 +4966,10 @@ static int rtl9602c_rma_open(struct inode *inode, struct file *file)
 }
 
 /*
- * svlan: the S-VLAN registers, which nothing in the driver writes: the two
+ * svlan: the S-VLAN registers, as rtl9602c_svlan_setup() wrote them: the two
  * TPIDs and the second's enable, the policy fields, each port's S-VID and its
  * uplink and destination-VID bits, and the valid translation entries. The TPID
- * word is 64 bits, its high half at the lower address. What the fields do
- * beyond their names is not verified.
+ * word is 64 bits, its high half at the lower address.
  */
 static int rtl9602c_svlan_show(struct seq_file *s, void *unused)
 {

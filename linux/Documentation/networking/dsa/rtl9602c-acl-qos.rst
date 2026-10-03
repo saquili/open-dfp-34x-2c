@@ -938,30 +938,51 @@ Entries and rules
      - As for the ingress-port key; after ``tc filter del`` of a translation the
        entry no longer shows ``VALID`` in the ``cf`` view.
    * - Rule word 0: ``RTL9602C_CLS_RULE_CTAG`` (bit 3) is set when the frame
-       carries a C-tag and ``RTL9602C_CLS_RULE_VID`` (bits 22:11) holds that
-       tag's VLAN ID.
+       carries a C-tag, at its front or behind an S-tag, and
+       ``RTL9602C_CLS_RULE_VID`` (bits 22:11) holds the VLAN ID of the tag that
+       the entry's template names (``RTL9602C_CLS_TMPL_CFG``, below).
      - M
      - Under a translation of 410 to 1410 on ``sfp`` and of 1410 to 410 on
        ``pon``, 200 frames of C-VID 410 sent into the SFP port left the far side
        of the OLT as 1410, and 200 of C-VID 1410 sent from there left the SFP
        port as 410; frames of the other VID in each direction, and untagged
-       ones, passed unchanged.
-   * - Rule word 0: ``RTL9602C_CLS_RULE_PRI`` (bits 10:8) holds the C-tag's
-       priority.
+       ones, passed unchanged. An entry with the S-tag bit and this bit, both
+       set, matched 100 frames of S-VID 200 in front of C-VID 100 and none of
+       100 of S-VID 200 alone.
+   * - Rule word 0: ``RTL9602C_CLS_RULE_PRI`` (bits 10:8) holds the priority
+       of the same tag.
      - M
      - A translation with ``vlan_prio 5`` in its match translated 100 frames of
-       priority 5 and none of 100 of priority 2.
+       priority 5 and none of 100 of priority 2; an S-tag entry with priority
+       3 took 100 frames of S-VID 200 with priority 3, both ways, and none of
+       100 with priority 5.
    * - Rule word 0: ``RTL9602C_CLS_RULE_STAG`` (bit 4) is set when the frame
        carries an S-tag, which the switch recognises only on a port in S-VLAN
-       uplink mode; ``RTL9602C_CLS_RULE_VID`` and ``RTL9602C_CLS_RULE_PRI`` are
-       then still the C-tag's. The driver puts no port in that mode, so the bit
-       is clear for every frame, and every VLAN entry it writes compares it as
-       0.
+       uplink mode; the driver puts the SFP and PON ports in that mode (see the
+       *bridging* page, "The S-VLAN block"). The driver's entries on an
+       untagged frame or a C-tag compare it as 0.
      - M
-     - With the PON port in S-VLAN uplink mode, an entry with this bit and VID
-       100 matched frames of S-VID 200 in front of C-VID 100, and one with VID
-       200 did not; out of that mode no entry with the bit matched them (see
-       the *bridging* page, "VLAN tag operations").
+     - With the SFP and PON ports in the mode, an entry with this bit and the
+       S-VID 200 matched frames of S-VID 200 alone and in front of C-VID 100,
+       both ways, and none of S-VID 201 or of C-VID 200; one on a C-tag left
+       S-VID 200 in front of its C-VID alone. Out of the mode no entry with the
+       bit matched them (see the *bridging* page, "VLAN tag operations").
+   * - ``RTL9602C_CLS_TMPL_CFG(t)`` (``0x016030`` + 4t, t = 0 or 1): where
+       template t takes the VID and priority of the rule from, upstream
+       (``RTL9602C_CLS_TMPL_CFG_US_VID`` and ``_US_PRI``, bits 1:0 and 3:2)
+       and downstream (``_DS_VID`` and ``_DS_PRI``, bits 5:4 and 7:6):
+       ``RTL9602C_CLS_TMPL_CFG_TAG_C`` (0) the C-tag, also the one behind an
+       S-tag, and ``RTL9602C_CLS_TMPL_CFG_TAG_S`` (1) the S-tag. Both words
+       read 0 out of reset. Setup writes template 0
+       (``RTL9602C_CLS_TMPL_C``) with the C-tag and template 1
+       (``RTL9602C_CLS_TMPL_S``) with the S-tag, both ways.
+     - M
+     - Downstream, an S-tag entry with VID 100 on template 0 matched frames of
+       S-VID 200 in front of C-VID 100, and one with VID 200 did not; on
+       template 1 with ``_DS_VID`` 1 the entry with VID 200 matched them and
+       S-VID 200 alone, and not S-VID 201; with 2 it matched as with 0, and
+       with 3 neither. Upstream, template 1 matched S-VID 200 and its priority
+       3. The ``cf`` view prints both words (``templates``).
    * - Action word 0 in an upstream entry: ``RTL9602C_CLS_ACT_FLOW_SET``
        (bit 23) gives the frame a stream and ``RTL9602C_CLS_ACT_FLOW`` (bits
        30:24) is the stream, the GEM port's flow number (see the *PON* page).
@@ -986,18 +1007,25 @@ Entries and rules
        downstream frames untagged; 0 and 3 delivered them as sent. With the
        priority assigned, 410/5 left as 1410/6, and untagged frames left as 410
        with the priority assigned, 100 of 100.
-   * - Action word 0, the S-tag plane: ``RTL9602C_CLS_ACT_STAG`` (bits 2:0) =
-       ``RTL9602C_CLS_ACT_STAG_ADD`` (1) puts an S-tag with the TPID of
-       ``RTL9602C_SVLAN_TPID_CFG_PRIMARY`` in front of the frame, with the VID
-       of ``RTL9602C_CLS_ACT_SVID`` (bits 14:3) under
+   * - Action word 0, the S-tag plane: ``RTL9602C_CLS_ACT_STAG`` (bits 2:0)
+       says what becomes of the outer tag, with the VID of
+       ``RTL9602C_CLS_ACT_SVID`` (bits 14:3) under
        ``RTL9602C_CLS_ACT_SVID_SET`` (bit 21) and the priority of
        ``RTL9602C_CLS_ACT_SPRI`` (bits 17:15) under ``RTL9602C_CLS_ACT_SPRI_SET``
-       (bit 18); 0 leaves the frame as it is. The value 3 took an S-tag off
-       only on a port in S-VLAN uplink mode.
+       (bit 18): ``RTL9602C_CLS_ACT_STAG_ADD`` (1) puts an S-tag with the TPID
+       of ``RTL9602C_SVLAN_TPID_CFG_PRIMARY`` in front of a frame without one,
+       and rewrites the S-tag of a frame with one;
+       ``RTL9602C_CLS_ACT_STAG_CTPID`` (2) rewrites the S-tag into a tag with
+       the C-tag's TPID, ``0x8100``; ``RTL9602C_CLS_ACT_STAG_POP`` (3) takes
+       the S-tag off; 0 leaves the frame as it is. Of the other values, 4 left
+       the frame alone and 5 did as 1.
      - M
      - Upstream, 100 frames of C-VID 100 and priority 1 left as S-VID 200 with
        priority 3 in front of the C-tag, and untagged frames as S-VID 300 with
-       priority 2.
+       priority 2. Downstream, of S-VID 200 with priority 3 in front of C-VID
+       100 and of 200 alone, with the VID 300 and the priority 4 assigned: 1
+       and 5 delivered S-VID 300 with priority 4, 2 C-VID 300 with priority 4,
+       3 the frames without the S-tag, and 0 and 4 the frames as sent.
    * - ``RTL9602C_CLS_ACT_EN(i)`` (``0x016038`` + 4i): which of entry i's action
        classes apply. The driver writes ``RTL9602C_CLS_ACT_EN_OTHERS`` and
        ``RTL9602C_CLS_ACT_EN_FLOW`` together (``0x3f``) for an upstream entry,
@@ -1012,10 +1040,11 @@ Entries and rules
      - The downstream translation of the C-tag row above applies with
        ``0x1f``.
    * - ``RTL9602C_CLS_ENTRY_TMPL`` (``0x016010`` + 4(i/32), bit i mod 32): the
-       template that entry i is matched with. The driver clears the bit,
-       selecting template 0, the layout of the rule and action words above.
-     - T
-     - As for the ingress-port key.
+       template that entry i is matched with. The driver sets the bit, template
+       1, for an entry on the VID or priority of an S-tag, and clears it,
+       template 0, for every other.
+     - M
+     - The template rows above.
    * - When a frame matches several entries, the classifier acts on the
        lowest-numbered one. The driver depends on it: stream entries are taken
        from the top of the usable range and translations from the bottom, so a
@@ -1060,7 +1089,9 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - The top of the usable range, downwards.
    * - Upstream VLAN rule
      - Upstream; the ingress port; no tag, or a C-tag with the VID and the
-       priority the rule names; no S-tag.
+       priority the rule names and no S-tag, or an S-tag with the VID and the
+       priority of the S-tag or of the C-tag behind it, and that C-tag if the
+       rule names one.
      - The C-tag or S-tag operation of the rule (see "Entries and rules"), and
        the stream of the GEM interface that claims the VID the operation
        writes, or else the one the rule's port's stream entry gives. Classes
@@ -1068,7 +1099,8 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - The bottom of the usable range, upwards.
    * - Downstream VLAN rule
      - Downstream; no tag, or a C-tag with the VID and the priority the rule
-       names; no S-tag.
+       names and no S-tag, or an S-tag with the VID and the priority of the
+       S-tag or of the C-tag behind it, and that C-tag if the rule names one.
      - The C-tag or S-tag operation of the rule. Classes ``0x1f``.
      - The bottom of the usable range, upwards.
 
@@ -1100,7 +1132,7 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        port's upstream octets (the *bridging* page).
    * - A VLAN rule of tc flower (see the *bridging* page, "VLAN tag
        operations") becomes one entry: the tag bits, and the VID and priority
-       the rule names, compared; the direction taken from the port (the PON
+       the rule names, compared on the template of their tag; the direction taken from the port (the PON
        port is downstream, every other port upstream), and for an upstream rule
        the port compared; the tag operation of its action; the action classes
        as in the table above; and the entry taken from the bottom of the usable
@@ -1135,8 +1167,9 @@ Writing one entry, ``rtl9602c_cf_program()``, in order:
    valid, so that no frame meets half of an entry. (T)
 3. Write ``RTL9602C_CLS_ACT_EN(i)``. Purpose: the action classes that apply.
    (T)
-4. Clear entry i's ``RTL9602C_CLS_ENTRY_TMPL`` bit. Purpose: template 0, the
-   layout of the words above. (T)
+4. Set entry i's ``RTL9602C_CLS_ENTRY_TMPL`` bit for template 1, or clear it
+   for template 0. Purpose: the tag whose VID and priority the rule compares.
+   (M)
 5. Write the ones plane at i + ``0x100``: word 0 = value, word 1 =
    ``RTL9602C_CLS_RULE_VALID``. Purpose: the valid bit goes last. (T)
 
@@ -1167,6 +1200,8 @@ engine's lock itself, so the view does not hold it.
    * - ``cls cfg W  upstream permit V``
      - The whole ``RTL9602C_CLS_CTRL`` word, and its bits 1:0, the field that
        decides the fate of a frame that no entry matches.
+   * - ``templates W0 W1``
+     - ``RTL9602C_CLS_TMPL_CFG`` of templates 0 and 1.
    * - one line per entry whose ones plane has ``RTL9602C_CLS_RULE_VALID`` or a
        non-zero word 0
      - The index; ``rule``, the ones plane (two words); ``mask``, the zeros
@@ -2599,10 +2634,6 @@ Questions the code does not depend on
 
    * - Question
      - What would settle it
-   * - Whether ``RTL9602C_CLS_RULE_STAG`` is the S-tag flag, or an 802.1ad frame
-       passes a translation entry because the switch sees no C-tag at its front
-       ("Entries and rules").
-     - The frame capture of an 802.1ad frame from the host.
    * - Whether an ACL rule can raise the ACL interrupt, and whether
        ``RTL9602C_ACL_HIT_STAT_TMPL`` latches which template's rule raised it
        and is cleared by writing ones ("Actions"; the interrupt is also a

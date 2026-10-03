@@ -1479,6 +1479,12 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	rtl9602c_filter_qos_reset(p);
 
 	/*
+	 * S-tags recognised on the SFP and PON ports, for the VLAN rules of
+	 * tc flower, with every other frame passing as it came.
+	 */
+	rtl9602c_svlan_setup(p);
+
+	/*
 	 * User field selectors 0 and 1 cut the L4 source and destination
 	 * ports out of the IP payload, for ACL rules that match on a port:
 	 * octets 0-1 and 2-3 of a UDP or TCP header (RFC 768,

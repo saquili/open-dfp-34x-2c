@@ -129,7 +129,8 @@ The files that hold the rest of this page:
        addresses from storm control and set the standalone forwarding state.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The VLAN tag operations (``rtl9602c_flower_vlan()``,
-       ``rtl9602c_cf_write_xlate()``), the classifier entries that give bridged
+       ``rtl9602c_cf_write_xlate()``) and the S-VLAN block they need
+       (``rtl9602c_svlan_setup()``), the classifier entries that give bridged
        ports a GEM stream (``rtl9602c_cf_sid_refresh()``), the ACL rules that copy
        IGMP and MLD to the CPU (``rtl9602c_acl_snoop_setup()``), and the
        debugfs views ``l2learn``, ``svlan`` and ``rma``.
@@ -1647,17 +1648,21 @@ For example, mirror what the SFP port receives to ``pon``::
     tc filter add dev sfp ingress matchall skip_sw \
             action mirred egress mirror dev pon
 
-The S-VLAN policy block
-=======================
+The S-VLAN block
+================
 
 The switch has registers for S-VLANs (IEEE 802.1ad service tags): the recognised
 tag types, a policy word, an S-VID and two flags for each port, and a table of
-sixteen translations from an S-VID and a port to a C-VID and a priority. Nothing
-in the driver writes this block, and the ``svlan`` view reads it back. Linux
-6.18 gives a DSA driver no S-VLAN request: a switchdev VLAN object carries no
-protocol, and DSA does not pass a bridge's ``vlan_protocol`` on. No classifier
-rule that this driver installs matches an S-tagged frame (see "VLAN
-translation").
+sixteen translations from an S-VID and a port to a C-VID and a priority. An
+S-VLAN's members are those of the VLAN table entry of its VID. Linux 6.18 gives
+a DSA driver no S-VLAN request: a switchdev VLAN object carries no protocol, and
+DSA does not pass a bridge's ``vlan_protocol`` on. The driver uses the block for
+one thing, that the classifier sees S-tags, so that the VLAN rules of tc flower
+can match and change them (see "VLAN tag operations"); it forwards no frame by
+S-VLAN. ``rtl9602c_svlan_setup()``, at setup, puts the SFP and PON ports in
+S-VLAN uplink mode and makes every frame without an S-tag join S-VLAN
+``RTL9602C_SVLAN_PVID_NONE`` (4095), of which every port is an untagged member,
+so that such a frame leaves as it came. The ``svlan`` view reads the block back.
 
 .. list-table::
    :header-rows: 1
@@ -1700,19 +1705,67 @@ translation").
        valid out of reset; the view prints valid entries only.
      - M
      - Register reads after a reset; ``svlan`` lists no entry.
-   * - What the fields of the three rows above do, as their names say: the
-       recognised S-tag TPIDs and the second one's enable; S-VLAN ingress
-       filtering, keeping the received DEI, the fixed S-tag priority, the
-       handling of an uplink frame without an S-tag, the source of an egress
-       S-tag's priority; each port's S-VID, whether it is an S-VLAN uplink,
-       whether its egress VID comes from the destination lookup; a downstream
-       translation from S-VID and port to C-VID and priority. Also that S-VLAN
-       membership comes from the same 4096-entry VLAN table, there being no
-       S-VLAN member table.
+   * - A port in ``RTL9602C_SVLAN_UPLINK_PORTS`` recognises the S-tag of a
+       frame coming in: the frame is in the S-VLAN of the tag, and the
+       classifier sees the tag (``RTL9602C_CLS_RULE_STAG``; see the *acl-qos*
+       page). Of a frame without one, ``RTL9602C_SVLAN_POLICY_UNTAGGED_ACT``
+       decides: 0, the value out of reset, and 1 drop it; 2
+       (``RTL9602C_SVLAN_POLICY_UNTAGGED_JOIN``) puts it in the S-VLAN of the
+       port's ``RTL9602C_SVLAN_PVID``, and so did 3. A frame from a port not in
+       the mode is in the S-VLAN of its port's ``RTL9602C_SVLAN_PVID``, an
+       802.1ad tag at its front counting as data.
+     - M
+     - With the PON port alone in the mode, 100 frames each from the network
+       side: under 0 and 1, untagged and C-tagged frames were lost and frames
+       of S-VID 200, alone or in front of C-VID 100, passed; under 2 and 3 all
+       of them passed. Rules that match an S-tag act on frames taken in by
+       such a port and on no others ("VLAN tag operations").
+   * - A frame leaves a port with an S-tag of the S-VLAN it is in unless the
+       port is in the untagged set of that VID's VLAN table entry, whether or
+       not the port is in S-VLAN uplink mode; the tag a frame came with is kept
+       or taken off the same way.
+     - M
+     - With the PON port alone in the mode and every port's S-VLAN PVID 0,
+       whose VLAN entry the driver never writes: every frame from the SFP port
+       left by the PON port with an S-tag of VID 0 in front of it, an 802.1ad
+       tag it came with included, and every frame without an S-tag from the
+       PON port, under action 2 or 3, left by the SFP port with one; frames of
+       S-VID 200 from the PON port left with their tag. With every PVID 4095
+       and the entry of 4095 untagged on every port, all of them left as they
+       came.
+   * - ``rtl9602c_svlan_setup()`` writes the VLAN entry of
+       ``RTL9602C_SVLAN_PVID_NONE`` with every port a member and untagged
+       (``rtl9602c_vlan_set_member()``), every port's
+       ``RTL9602C_SVLAN_PVID`` to that VID, the action
+       ``RTL9602C_SVLAN_POLICY_UNTAGGED_JOIN``, and the SFP and PON ports
+       into ``RTL9602C_SVLAN_UPLINK_PORTS``. So a frame without an S-tag is in
+       S-VLAN 4095 and leaves as it came, and a frame with one keeps its tag
+       unless a rule changes it. VID 4095 is reserved by IEEE 802.1Q, so no
+       bridge VLAN shares the entry, and the table self-test leaves it alone.
+     - M
+     - Read back through ``svlan``: ``untag 2``, S-VID 4095 on every port and
+       uplink on ports 0 and 2. With no rule, 100 frames each untagged,
+       C-tagged, with an S-tag alone and with one in front of a C-tag crossed
+       both ways unchanged; management over VLAN 4094 on the SFP port, the
+       data path and the device tests ran as before (``docs/testing``).
+   * - VID 4095 is reserved for implementation use and is never assigned to a
+       VLAN.
+     - P
+     - IEEE 802.1Q-2022, clause 9.6, Table 9-2 (reserved VID values).
+   * - The S-VLAN and C-VLAN of a VID share its VLAN table entry, so a bridge
+       VLAN that is untagged on a port also takes the S-tag of that S-VID off
+       frames leaving by that port.
      - I
-     - None of it is driven. An 802.1ad double-tagged frame from the host,
-       captured with the switch's frame capture to see whether the outer tag is
-       parsed as an S-tag, is the first step. Nothing depends on it.
+     - Follows from the row before the driver's setup; not tested with a
+       bridge VLAN.
+   * - What the other fields do, as their names say: the second TPID and its
+       enable; ``RTL9602C_SVLAN_POLICY_INGRESS_FILTER``, keeping the received
+       DEI, the fixed S-tag priority and the source of an egress S-tag's
+       priority; each port's ``RTL9602C_SVLAN_DMAC_VID_SEL``; and the
+       translation table. The driver writes none of them, and they keep their
+       values out of reset.
+     - I
+     - None of it is driven.
 
 Reserved multicast addresses
 ============================
@@ -1885,10 +1938,11 @@ The service that the stick exists for is a single-tag VID translation: in ITU-T
 G.988 terms (clause 9.3.13, the extended VLAN tagging operation configuration
 data), a rule that matches one C-VID and assigns another. The same managed
 entity also gives an untagged frame a tag and takes it off again in the other
-direction, adds an outer tag, and sets a tag's priority. The driver offers these
+direction, puts an S-tag in front of a C-tag and takes it off again (IEEE
+802.1ad), rewrites a tag, and sets a tag's priority. The driver offers these
 operations as tc flower rules on the ingress of a user port, one vlan action
-each, which the OMCI daemon installs, and turns each rule into one entry of the
-classifier. The classifier's entry format and the sequence that programs an
+each or two pops, which the OMCI daemon installs, and turns each rule into one
+entry of the classifier. The classifier's entry format and the sequence that programs an
 entry are on the *acl-qos* page; VLAN membership (``port_vlan_add``) is a
 different block.
 
@@ -1905,6 +1959,14 @@ network side::
     tc filter add dev pon ingress protocol 802.1Q flower skip_sw \
             vlan_id 410 action vlan pop
 
+An S-tag of S-VID 200 and priority 3 put in front of C-VID 100 upstream, and
+taken off again downstream::
+
+    tc filter add dev sfp ingress protocol 802.1Q flower skip_sw \
+            vlan_id 100 action vlan push id 200 priority 3 protocol 802.1ad
+    tc filter add dev pon ingress protocol 802.1ad flower skip_sw \
+            vlan_id 200 action vlan pop
+
 .. list-table::
    :header-rows: 1
    :widths: 58 6 36
@@ -1912,11 +1974,15 @@ network side::
    * - Fact
      - Tag
      - Checked by
-   * - A rule matches an untagged frame (``num_of_vlans 0``), or an outer
-       C-tag (``protocol 802.1Q``) with its VID and its priority if the rule
-       names them, and becomes one classifier entry that compares the C-tag
-       and S-tag bits, the VID and the priority it names, the direction, and
-       for an upstream rule the port it is on.
+   * - A rule matches an untagged frame (``num_of_vlans 0``); an outer C-tag
+       (``protocol 802.1Q``) with its VID and its priority if the rule names
+       them; or an outer S-tag (``protocol 802.1ad``) with the S-tag's VID and
+       priority, or with those of the C-tag behind it (``cvlan_id``,
+       ``cvlan_prio``), and with ``vlan_ethtype 802.1Q`` only if a C-tag is
+       behind it. It becomes one classifier entry that compares the C-tag and
+       S-tag bits, the VID and the priority it names, taken from the tag they
+       belong to by the entry's template, the direction, and for an upstream
+       rule the port it is on.
      - M
      - A translation's entry read back from the classifier's table: action word
        1 = ``0x00042c12`` (C-VID assign, 1410, tag), rule word 0 =
@@ -1925,14 +1991,24 @@ network side::
        With ``vlan_prio 5`` in the match, 100 frames of 410 with priority 5
        were translated and 100 with priority 2 were not. Without ``skip_sw``,
        tc installs a rule that no driver took in software and reports success.
-       Through the driver: debugfs ``rtl9602c/cf``.
-   * - The one action of a rule: ``vlan modify`` of the outer C-tag gives it a
-       new VID, and a new priority unless the action gives 0; ``vlan push`` of
-       a C-tag (802.1Q) gives an untagged frame a C-tag; ``vlan push`` of an
-       S-tag (802.1ad) puts an S-tag, with the TPID of
-       ``RTL9602C_SVLAN_TPID_CFG_PRIMARY`` (``0x88a8``), in front of an
-       untagged frame or a C-tag; ``vlan pop`` takes the outer C-tag off. A
-       push gives the tag the action's VID and priority.
+       Through the driver: debugfs ``rtl9602c/cf``. Of 100 frames each, a pop
+       on S-VID 200 on ``pon`` took the S-tag off 200 in front of C-VID 100
+       and off 200 alone, and left 201 in front of 100 and C-VID 200 as they
+       were; with ``vlan_prio 3`` it took priority 3 and not 5; a pop on
+       ``cvlan_id 100`` took the S-tag off 200 in front of 100 and left 200 in
+       front of 101, and 200 alone; a pop on S-VID 200 with ``vlan_ethtype
+       802.1Q`` took 200 in front of 100 and left 200 alone. The same on
+       ``sfp`` upstream.
+   * - The actions of a rule: ``vlan modify`` of the outer tag gives it a new
+       VID, and a new priority unless the action gives 0, a C-tag staying a
+       C-tag and an S-tag staying an S-tag with ``protocol 802.1ad`` or
+       becoming a C-tag with ``protocol 802.1Q``; ``vlan push`` of a C-tag
+       (802.1Q) gives an untagged frame a C-tag; ``vlan push`` of an S-tag
+       (802.1ad) puts an S-tag, with the TPID of
+       ``RTL9602C_SVLAN_TPID_CFG_PRIMARY`` (``0x88a8``), in front of a frame
+       without one; ``vlan pop`` takes the outer tag off, and two of them on
+       an S-tag the S-tag and the C-tag behind it. A push gives the tag the
+       action's VID and priority.
      - M
      - 100 frames each, through an OLT that is a transparent bridge: untagged
        frames upstream left as C-VID 410 with priority 5, and downstream as 410
@@ -1940,7 +2016,12 @@ network side::
        C-VID 410 downstream, and upstream, lost its tag; C-VID 100 with
        priority 1 upstream left as S-VID 200 with priority 3 in front of it,
        and untagged frames as S-VID 300 with priority 2; ``vlan modify id 1410
-       priority 6`` turned 410 with priority 5 into 1410 with priority 6.
+       priority 6`` turned 410 with priority 5 into 1410 with priority 6. S-VID
+       200 with priority 3 in front of C-VID 100 left downstream as S-VID 300
+       with priority 4 under a modify with ``protocol 802.1ad``, and as C-VID
+       300 with priority 4 in front of 100 with ``protocol 802.1Q``; two pops
+       left it, and 200 alone, untagged; upstream a modify turned S-VID 200
+       with priority 3 into 400 with priority 1.
    * - A ``vlan modify`` that gives priority 0 keeps the frame's priority
        instead: the action reaches the driver without saying whether it gives
        a priority at all, and keeping it is what a modify without one does.
@@ -1951,16 +2032,22 @@ network side::
        acts on ingress); any key but the VLAN tags (with the basic and control
        keys), or an EtherType behind them; a VID or priority with a partial
        mask; a DEI match; ``num_of_vlans`` other than 0, or with a VLAN key; an
-       outer 802.1ad tag; more than one action; any action but ``vlan
+       outer tag that is neither 802.1Q nor 802.1ad, or with no protocol; a
+       second tag behind an outer C-tag, or anything but a C-tag behind an
+       S-tag; the VID or priority of both an S-tag and the C-tag behind it;
+       more than one action, but two pops on an S-tag; any action but ``vlan
        modify``, ``push`` and ``pop`` (a drop or trap goes to the ACL, and
        ``police`` on a destination-address match to storm control, both on the
-       *acl-qos* page); a modify that is not of a C-tag into a C-tag; a C-tag
-       pushed onto a C-tag; a pop of an untagged frame. With no free entry:
+       *acl-qos* page); a modify of an untagged frame, or of a C-tag into
+       anything but a C-tag; a C-tag pushed onto a tagged frame, or an S-tag
+       onto a frame with one; a pop of an untagged frame. With no free entry:
        ``-ENOSPC`` and the message ``the classifier is full``.
      - M
      - ``num_of_vlans 1`` with a VID, a pop with ``num_of_vlans 0``, a C-tag
-       pushed onto a C-tag and a match on an 802.1ad tag were each refused with
-       their message; the other refusals take the same path.
+       pushed onto a C-tag, an S-tag pushed onto an S-tag, two pops on a
+       C-tag, an S-VID with a C-VID, and an IPv4 EtherType behind an S-tag
+       were each refused with their message; the other refusals take the
+       same path.
    * - The direction is the port that the rule is on: a rule on the PON port
        acts on downstream frames, on any other port on upstream frames. The
        direction bit is compared in every entry, so an upstream rule does not
@@ -1984,18 +2071,17 @@ network side::
        as sent. Before the driver set the tag action and the PON enable, the
        same entries changed nothing.
    * - The switch recognises an S-tag only on a port in S-VLAN uplink mode
-       (``RTL9602C_SVLAN_UPLINK_PORTS``), and the driver puts no port in it: in
-       that mode the PON port dropped every downstream frame without an S-tag
-       and gave every upstream frame an S-tag of VID 0. Elsewhere a frame with
-       an outer 802.1ad tag counts as untagged, so no rule matches or pops an
-       S-tag, and a C-tag pushed onto untagged frames lands in front of an
-       S-tag too.
+       (``RTL9602C_SVLAN_UPLINK_PORTS``), and the driver puts the SFP and PON
+       ports in it, with every frame without an S-tag passing as it came (see
+       "The S-VLAN block"). A rule on an untagged frame or on an outer C-tag
+       compares the S-tag bit as 0, so it leaves a frame with an S-tag alone.
      - M
-     - With the PON port in that mode, a pop of the S-tag took it off S+C
-       frames, matching the inner C-VID, while untagged and C-tagged frames
-       from the network side were lost; without it no rule on an S-tag
-       matched, and a push onto untagged frames turned S-VID 200 in front of
-       C-VID 100 into C-VID 410 in front of both, both ways.
+     - With no rule, 100 frames each untagged, C-tagged, with S-VID 200 alone
+       and with 200 in front of C-VID 100 crossed both ways unchanged. A push
+       onto untagged frames left S-VID 200 as it was, both ways, and a pop of
+       C-VID 410 downstream left 200 in front of 410. Before the driver used the
+       mode, no rule matched an S-tag, and such a push turned S-VID 200 in
+       front of C-VID 100 into C-VID 410 in front of both.
    * - Every rule on a C-tag, and every stream entry that matches a VID (see
        "Bridging the GEM ports"), requires the frame to carry a C-tag at its
        front, so a frame with an outer 802.1ad tag matches none of them.
@@ -2004,8 +2090,9 @@ network side::
        ``pon``, 200 frames with an 802.1ad tag (TPID ``0x88a8``, VID 100) in
        front of a C-tag of 3001 crossed upstream untranslated, as did 200 with
        3002 inside downstream; upstream they had their port's stream, whose
-       entry compares no tag. The switch sees no tag on such a frame (row
-       above).
+       entry compares no tag. That was before the driver recognised S-tags,
+       when the switch saw no tag at all on such a frame; now it sees the
+       S-tag, which those entries compare as absent.
    * - Of a frame with two C-tags, a translation rewrites the outer one and
        leaves the inner one as it is.
      - M
@@ -2394,10 +2481,11 @@ Questions the code does not depend on
        here.
    * - Whether the mirror registers copy what their fields say ("Mirroring").
      - A copy counted by the monitor port's transmit counters.
-   * - What the fields of the S-VLAN block do ("The S-VLAN policy block").
-     - An 802.1ad double-tagged frame from the host, captured with the switch's
-       frame capture, to see whether the outer tag is parsed as an S-tag;
-       nothing is driven.
+   * - What the S-VLAN block's other fields do, and whether a bridge VLAN takes
+       the S-tag of its VID off frames leaving by its untagged ports ("The
+       S-VLAN block").
+     - Each field set in turn under frames with and without S-tags, both ways;
+       a bridge VLAN untagged on ``sfp`` and frames of that S-VID downstream.
    * - What the switch's per-port IGMP and MLD control does ("Multicast
        snooping").
      - Its fields set to each value with IGMP and MLD messages from each port,
@@ -2406,10 +2494,6 @@ Questions the code does not depend on
        controls, and the global word, mean ("Reserved multicast addresses").
      - Frames to 01:80:c2:00:00:00 with the action at each value, counted at the
        CPU and at the host.
-   * - Whether an 802.1ad frame, which a translation does not rewrite, is refused
-       by its entry through the S-tag bit or seen with no C-tag at its front
-       ("VLAN tag operations").
-     - The frame capture of such a frame from the host.
    * - Whether the router bit should be set only once the L3 engine is up ("The
        layer-2 side of routing").
      - Stamping it with the engine's master enable clear while watching

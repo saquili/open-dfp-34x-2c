@@ -1851,10 +1851,11 @@ struct rtl9602c_field {
 
 /*
  * Rule word 0: direction, tags, VID, priority and ingress port. CTAG says
- * whether the frame carries a C-tag, whose VID and priority VID and PRI are.
- * STAG says whether it carries an S-tag, which the switch recognises only on a
- * port in S-VLAN uplink mode (RTL9602C_SVLAN_UPLINK_PORTS); VID and PRI are
- * then still the C-tag's (measured).
+ * whether the frame carries a C-tag, at its front or behind an S-tag, and STAG
+ * whether it carries an S-tag, which the switch recognises only on a port in
+ * S-VLAN uplink mode (RTL9602C_SVLAN_UPLINK_PORTS). VID and PRI are those of
+ * the tag that the entry's template takes them from, RTL9602C_CLS_TMPL_CFG
+ * (all measured).
  */
 #define RTL9602C_CLS_RULE_DS		BIT(31)
 #define RTL9602C_CLS_RULE_CTAG	BIT(3)
@@ -1889,15 +1890,19 @@ struct rtl9602c_field {
 #define RTL9602C_CLS_ACT_CTAG_UNTAG	2
 
 /*
- * Action word 0: what becomes of the S-tag, with the VID and priority that ADD
- * gives it (SVID_SET with SVID, SPRI_SET with SPRI): ADD puts an S-tag with the
+ * Action word 0: what becomes of the outer tag, with the VID and priority that
+ * SVID_SET with SVID and SPRI_SET with SPRI give it. ADD puts an S-tag with the
  * S-VLAN block's TPID (RTL9602C_SVLAN_TPID_CFG_PRIMARY, 0x88a8 at reset) in
- * front of the frame, and 0 leaves the frame as it is (both measured). Taking
- * an S-tag off (3) worked only on a port in S-VLAN uplink mode, which the
- * driver does not use.
+ * front of a frame without one, and rewrites the S-tag of a frame with one;
+ * CTPID rewrites a frame's S-tag into a tag with the C-tag's TPID, 0x8100; POP
+ * takes the S-tag off; 0 leaves the frame as it is (all measured, POP and the
+ * rewrites on frames that an uplink port took in). In one test each, 4 left
+ * the frame alone and 5 did as ADD.
  */
 #define RTL9602C_CLS_ACT_STAG		GENMASK(2, 0)
 #define RTL9602C_CLS_ACT_STAG_ADD	1
+#define RTL9602C_CLS_ACT_STAG_CTPID	2
+#define RTL9602C_CLS_ACT_STAG_POP	3
 #define RTL9602C_CLS_ACT_SVID		GENMASK(14, 3)
 #define RTL9602C_CLS_ACT_SPRI		GENMASK(17, 15)
 #define RTL9602C_CLS_ACT_SPRI_SET	BIT(18)
@@ -1912,8 +1917,25 @@ struct rtl9602c_field {
 #define RTL9602C_CLS_ACT_EN_FLOW		BIT(5)
 #define RTL9602C_CLS_ACT_EN_OTHERS	GENMASK(4, 0)
 
-/* One bit per entry, its template; clear is the layout the driver writes. */
+/* One bit per entry, its template, RTL9602C_CLS_TMPL_C or _S. */
 #define RTL9602C_CLS_ENTRY_TMPL	0x016010
+
+/*
+ * Each template's sources of the rule's VID and PRI, upstream and downstream:
+ * TAG_C takes them from the C-tag, the inner tag of a frame with an S-tag,
+ * and TAG_S from the S-tag (both measured; 2 did as TAG_C and 3 matched
+ * nothing, in one test each). Both read 0 out of reset. The driver gives
+ * template RTL9602C_CLS_TMPL_C the C-tag and RTL9602C_CLS_TMPL_S the S-tag.
+ */
+#define RTL9602C_CLS_TMPL_CFG(t)	(0x016030 + 4 * (t))
+#define RTL9602C_CLS_TMPL_CFG_US_VID	GENMASK(1, 0)
+#define RTL9602C_CLS_TMPL_CFG_US_PRI	GENMASK(3, 2)
+#define RTL9602C_CLS_TMPL_CFG_DS_VID	GENMASK(5, 4)
+#define RTL9602C_CLS_TMPL_CFG_DS_PRI	GENMASK(7, 6)
+#define RTL9602C_CLS_TMPL_CFG_TAG_C	0
+#define RTL9602C_CLS_TMPL_CFG_TAG_S	1
+#define RTL9602C_CLS_TMPL_C		0
+#define RTL9602C_CLS_TMPL_S		1
 
 /*
  * The address table: 1024 hashed entries, four ways to a bucket, then a CAM
@@ -2085,16 +2107,37 @@ struct rtl9602c_field {
 #define RTL9602C_RSVDMC_CTRL_VLAN_BYPASS		BIT(1)
 #define RTL9602C_RSVDMC_CTRL_ISOLATE_BYPASS	BIT(0)
 
-/* The S-VLAN block, only read; not verified beyond the names. */
+/*
+ * The S-VLAN block. A port in RTL9602C_SVLAN_UPLINK_PORTS recognises an S-tag
+ * on the frames coming in, which then join the S-VLAN of the tag; a frame
+ * without one is dealt with as RTL9602C_SVLAN_POLICY_UNTAGGED_ACT says. A
+ * frame from any other port joins the port's S-VLAN, RTL9602C_SVLAN_PVID. A
+ * frame leaving by an uplink port carries the S-tag of its S-VLAN unless the
+ * port is in the untagged set of that VID's VLAN table entry, which with the
+ * member set is also the S-VLAN's (all measured). RTL9602C_SVLAN_PVID_NONE is
+ * the S-VLAN the driver gives frames without an S-tag: its entry has every
+ * port a member and untagged, so the block passes them as they came
+ * (measured). It is a VID that IEEE 802.1Q reserves (clause 9.6, Table 9-2),
+ * so no bridge VLAN can share the entry. The other fields are not verified
+ * beyond their names.
+ */
 #define RTL9602C_SVLAN_DMAC_VID_SEL	0x014000
 #define RTL9602C_SVLAN_PVID(p)	(0x014004 + 4 * ((p) / 2))
 #define RTL9602C_SVLAN_PVID_SHIFT(p)	(12 * ((p) % 2))
 #define RTL9602C_SVLAN_PVID_MASK	GENMASK(11, 0)
+#define RTL9602C_SVLAN_PVID_NONE	4095
 #define RTL9602C_SVLAN_POLICY		0x01400c
 #define RTL9602C_SVLAN_POLICY_INGRESS_FILTER	BIT(27)
 #define RTL9602C_SVLAN_POLICY_KEEP_DEI		BIT(21)
 #define RTL9602C_SVLAN_POLICY_PCP		GENMASK(20, 18)
+
+/*
+ * What becomes of a frame without an S-tag that comes in by an uplink port:
+ * with 0, the value out of reset, or 1 it is dropped; with JOIN it joins the
+ * port's S-VLAN, and 3 did the same in one test (all measured).
+ */
 #define RTL9602C_SVLAN_POLICY_UNTAGGED_ACT		GENMASK(3, 2)
+#define RTL9602C_SVLAN_POLICY_UNTAGGED_JOIN		2
 #define RTL9602C_SVLAN_POLICY_PCP_SRC		GENMASK(1, 0)
 #define RTL9602C_SVLAN_UPLINK_PORTS	0x0230c4
 #define RTL9602C_SVLAN_TPID_CFG		0x0230c8
@@ -2727,8 +2770,9 @@ struct rtl9602c_priv {
 	/**
 	 * @cf_xlate: each VLAN rule's entry as composed, without the stream;
 	 * the VLAN whose upstream GEM interface gives an upstream rule its
-	 * stream, VLAN_N_VID for none; and the port the rule is on, so that
-	 * the stream can be chosen again when the streams change
+	 * stream, VLAN_N_VID for none; the port the rule is on, so that the
+	 * stream can be chosen again when the streams change; and its
+	 * template, RTL9602C_CLS_TMPL_C or _S
 	 */
 	struct rtl9602c_cf_xlate {
 		u32 value;
@@ -2736,6 +2780,7 @@ struct rtl9602c_priv {
 		u32 act[3];
 		u16 out_vid;
 		u8 port;
+		u8 tmpl;
 	} cf_xlate[RTL9602C_CLS_ENTRIES];
 
 	/**
@@ -3007,6 +3052,7 @@ void rtl9602c_nat_clear(struct rtl9602c_priv *p);
 void rtl9602c_l34_init(struct rtl9602c_priv *p);
 void rtl9602c_l34_fini(struct rtl9602c_priv *p);
 void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p);
+void rtl9602c_svlan_setup(struct rtl9602c_priv *p);
 void rtl9602c_l34_notifiers_register(struct rtl9602c_priv *p);
 void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p);
 int rtl9602c_l_read(struct rtl9602c_priv *p, u16 reg, u8 *val);
