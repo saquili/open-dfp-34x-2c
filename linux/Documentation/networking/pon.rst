@@ -775,12 +775,15 @@ The interface
      - Checked by
    * - A GEM interface takes the lower interface's MAC address, which is the
        ONU's, and its MTU, both at creation. It does not follow later MTU
-       changes of the lower.
-     - T, I
+       changes of the lower. Its largest MTU is the lower's largest, and a
+       change of its own MTU above the lower's MTU of the moment is refused
+       with ``-ERANGE`` (``pon_gem_change_mtu()``), as for a VLAN device: the
+       GEM port's frames cross the lower.
+     - T, M
      - T: a routed-traffic check, in which frames addressed to the ONU's MAC
-       reach the GEM interface. I: the MTU half is a design choice not
-       exercised; changing the MTU of ``pon`` after the creation would
-       exercise it.
+       reach the GEM interface. M: with ``pon`` at 1500, an MTU of 1508 on
+       ``gem256`` was refused; ``pon`` raised to 1508 left ``gem256`` at 1500,
+       which then took 1508.
    * - Setup: an Ethernet interface with no transmit queue (``IFF_NO_QUEUE``),
        lockless transmit, and per-CPU software counters; it is freed on
        unregistration. The dst and the ONU reference are released by a
@@ -2394,9 +2397,6 @@ About GEM interfaces
    * - Whether each refusal of a creation gives the error and the message
        listed ("Creating and deleting").
      - ``ip link add ... type gem`` with each fault.
-   * - Whether the MTU of a GEM interface stays at the lower's MTU of its
-       creation ("The interface").
-     - Changing the MTU of ``pon`` after the creation.
    * - Whether the error paths of the creation release everything ("The
        interface").
      - Fault injection in ``register_netdevice()`` and in the linking to the

@@ -235,8 +235,25 @@ static int pon_gem_setup_tc(struct net_device *dev, enum tc_setup_type type,
 	return lower->netdev_ops->ndo_setup_tc(lower, type, type_data);
 }
 
+/*
+ * A GEM port's frames cross its lower, so its MTU may not exceed the lower's,
+ * as for a VLAN device; the core has checked the interface's own range.
+ * Called with RTNL held, which keeps the lower in place.
+ */
+static int pon_gem_change_mtu(struct net_device *dev, int new_mtu)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	if (gem->lower && new_mtu > gem->lower->mtu)
+		return -ERANGE;
+
+	WRITE_ONCE(dev->mtu, new_mtu);
+	return 0;
+}
+
 static const struct net_device_ops pon_gem_netdev_ops = {
 	.ndo_open		= pon_gem_open,
+	.ndo_change_mtu		= pon_gem_change_mtu,
 	.ndo_start_xmit		= pon_gem_xmit,
 	.ndo_get_stats64	= dev_get_tstats64,
 	.ndo_set_mac_address	= eth_mac_addr,
@@ -412,10 +429,13 @@ static int pon_gem_newlink(struct net_device *dev,
 
 	/*
 	 * The lower's MAC address, which is the ONU's, and its MTU, both taken
-	 * once: later changes of the lower's MTU are not followed.
+	 * once: later changes of the lower's MTU are not followed. The largest
+	 * MTU is the lower's too, as the GEM port's frames cross it; a change
+	 * above the lower's MTU of the moment is refused (pon_gem_change_mtu()).
 	 */
 	eth_hw_addr_inherit(dev, lower);
 	dev->mtu = lower->mtu;
+	dev->max_mtu = lower->max_mtu;
 
 	err = register_netdevice(dev);
 	if (err)
