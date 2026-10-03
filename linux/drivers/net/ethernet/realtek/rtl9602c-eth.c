@@ -214,6 +214,17 @@
 #define RTL9602C_PTP_TAG_NSEC_OFFSET	24
 
 /*
+ * A PTP message addressed to this device's own address comes up with the
+ * trap reason PTP_OWN and only the last 8 bytes of the tag: two zero bytes,
+ * the low 16 bits of the seconds and the nanoseconds, between the source
+ * address and the message's EtherType or VLAN tag.
+ */
+#define RTL9602C_RX_REASON_PTP_OWN	245
+#define RTL9602C_PTP_HALF_TAG_LEN	8
+#define RTL9602C_PTP_HALF_TAG_SEC_OFFSET	14
+#define RTL9602C_PTP_HALF_TAG_NSEC_OFFSET	16
+
+/*
  * Transmit word 3: the destination port mask, bit n for switch port n. The
  * switch sends the frame out of the port the mask names, and the driver always
  * names exactly one; a zero mask would not drop the frame but leave it to the
@@ -1173,6 +1184,12 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 	 * EtherType with other protocol bytes, among them the
 	 * switch's own loop-detection probes, and go up as they
 	 * came.
+	 *
+	 * A message addressed to this device carries only the
+	 * tag's last 8 bytes, its time, and comes up for
+	 * RTL9602C_RX_REASON_PTP_OWN (measured): the half tag
+	 * is taken off the same way, when it opens with its two
+	 * zero bytes.
 	 */
 	if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
 	    (why == RTL9602C_RX_REASON_PTP ||
@@ -1201,6 +1218,20 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 		memmove(skb->data + RTL9602C_PTP_TAG_LEN,
 			skb->data, 2 * ETH_ALEN);
 		skb_pull(skb, RTL9602C_PTP_TAG_LEN);
+	} else if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
+		   why == RTL9602C_RX_REASON_PTP_OWN &&
+		   skb->len > RTL9602C_PTP_HALF_TAG_LEN + ETH_HLEN &&
+		   !get_unaligned_be16(skb->data + 2 * ETH_ALEN)) {
+		u32 sec = get_unaligned_be16(skb->data +
+					     RTL9602C_PTP_HALF_TAG_SEC_OFFSET);
+		u32 nsec = get_unaligned_be32(skb->data +
+					      RTL9602C_PTP_HALF_TAG_NSEC_OFFSET);
+
+		skb_hwtstamps(skb)->hwtstamp =
+			ktime_set(sec, nsec);
+		memmove(skb->data + RTL9602C_PTP_HALF_TAG_LEN,
+			skb->data, 2 * ETH_ALEN);
+		skb_pull(skb, RTL9602C_PTP_HALF_TAG_LEN);
 	}
 
 	/* The frame's length with its Ethernet header, which the next line pulls. */

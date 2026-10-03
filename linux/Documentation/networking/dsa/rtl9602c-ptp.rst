@@ -705,12 +705,16 @@ A received PTP message, from the conduit's receive path to DSA, in order:
 1. A frame that came up with a CPU tag and the trap reason 240 or 241, longer
    than 16 bytes, with ``0x8899`` at offset 12 and the protocol byte 4 at
    offset 14: read the seconds (offset 22, 16 bits) and the nanoseconds
-   (offset 24, 32 bits), and log the reason byte once per value. Purpose: the
-   tag holds the time of the frame. (M)
+   (offset 24, 32 bits), and log the reason byte once per value. A frame that
+   came up with the trap reason 245 and two zero bytes at offset 12 carries
+   the half tag of a message to this device's own address: read the seconds
+   at offset 14 and the nanoseconds at offset 16. Purpose: the tag holds the
+   time of the frame. (M)
 2. Set the frame's hardware timestamp to those seconds and nanoseconds.
    Purpose: the time travels with the frame. (M)
-3. Move the 12 address bytes 16 bytes forward and pull 16 bytes. Purpose: the
-   frame reaches DSA as it was sent, with its own EtherType at offset 12. (M)
+3. Move the 12 address bytes 16 bytes forward and pull 16 bytes, or 8 bytes
+   for a half tag. Purpose: the frame reaches DSA as it was sent, with its own
+   EtherType at offset 12. (M)
 4. DSA classifies the frame as PTP and calls ``port_rxtstamp``, which
    completes the seconds. Purpose: a stamp with all its seconds. (I)
 
@@ -758,6 +762,20 @@ The steps are checked by the rows below and by those of "The tag".
        checked the reason, each lost 16 bytes and went up with the forged
        time as its hardware stamp. A ``0x8899`` frame with protocol byte
        ``0x23`` from the host did not reach the CPU.
+   * - A PTP message addressed to this device's own address comes up with the
+       trap reason 245 and only the last 8 bytes of the tag between the source
+       address and the message's EtherType, or its VLAN tag: two zero bytes,
+       the low 16 bits of the seconds and the nanoseconds. The conduit takes
+       them off as it takes a whole tag, so the message reaches the stack as
+       sent and stamped. A message to a group address, the PTP one or
+       broadcast, comes up with the whole tag.
+     - M
+     - Five untagged Syncs from the host to the stick's address: each came up
+       with reason 245, 68 bytes long with the half tag at offset 12; once the
+       conduit took it off, 60 bytes with EtherType ``0x88F7`` and a hardware
+       stamp. Five Syncs in VLAN 4094: the half tag before the VLAN tag, reason
+       245, and once taken off, stamped. Before, the frames reached the stack
+       8 bytes longer, with EtherType 0, and no PTP stack saw them.
 
 The filter
 ----------
@@ -1172,13 +1190,6 @@ Known limitations
   ``HWTSTAMP_TX_OFF`` is refused with ``-ERANGE``. A port can stamp the Syncs
   it receives but not time its own Delay_Req, which the delay request-response
   mechanism needs: it can listen, not synchronise (see "Transmit timestamps").
-- A PTP message addressed to this device's own MAC address arrives with only
-  the second half of the tag: 8 bytes, two zero bytes, the low 16 bits of the
-  seconds and the nanoseconds, between the source address and the message's
-  EtherType. The conduit does not recognise that, so the frame reaches the
-  stack 8 bytes longer, with EtherType 0, and no PTP stack sees it as PTP. A
-  message to a group address, the PTP one or broadcast, arrives with the whole
-  tag and is stamped. The same held for a message in a VLAN.
 - Only the layer-2 PTP version 2 receive filters are taken, answered as
   ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``. A request for every frame, for UDP, for
   PTP version 1 or for NTP is refused with ``-ERANGE`` and leaves the port's
