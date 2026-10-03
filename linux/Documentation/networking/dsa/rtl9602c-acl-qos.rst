@@ -431,9 +431,11 @@ Rules, templates and lookup
        to 7; clearing the ones plane stops the rule.
    * - The port bit of the rule entry selects ports 1 to 3 the same way as port
        0.
-     - I
-     - Only port 0 has carried an ACL rule with traffic. A drop rule on ``pon``
-       with frames arriving through the PON would confirm it.
+     - M
+     - For port 2: a drop rule and a trap rule on ``pon`` for EtherType
+       ``0x88b5`` each kept all 200 frames of it that arrived through the PON
+       from the host side, while the same frames passed with no rule. Ports 1
+       and 3 carry no traffic that could test theirs.
    * - ``RTL9602C_ACL_TMPL_FIELD`` (``0x015008``) holds the templates: slot k of
        template t is a 7-bit field code at bit 7(n mod 4) of word n/4, where n =
        8t + k; bits 31:28 of each word are unused. ``RTL9602C_ACL_TMPL_COUNT``
@@ -561,11 +563,10 @@ decision is one of them.
      - Every drop measurement above uses this encoding.
    * - ``RTL9602C_ACL_ACT_FWD_TRAP`` (3) sends a matching frame to the CPU
        instead of forwarding it.
-     - I
-     - The driver offloads ``action trap`` and reads the rule back; on this
-       board every frame entering the SFP port reaches the CPU anyway. A trap
-       rule on a bridged port whose traffic otherwise leaves by another port,
-       counted at both, would confirm it.
+     - M
+     - A trap rule on ``pon`` for EtherType ``0x88b5``: of 200 such frames from
+       the host side through the PON none reached the host, and the CPU port
+       took 200 more frames than with no rule.
 
 The ACL can raise an interrupt: the source ``RTL9602C_IRQ_SRC_ACL`` of the
 switch interrupt, which setup unmasks, and a latch ``RTL9602C_ACL_HIT_STAT``
@@ -632,31 +633,44 @@ to an ACL rule.
      - M
      - 96 EtherType rules on one shared template, each dropping only its own
        EtherType.
-   * - The driver puts a new rule in the lowest free entry and does not use
-       tc's priority, so which of two overlapping rules decides a frame depends
-       on which entry the hardware lets win.
-     - I
-     - Two overlapping rules with different actions, installed in both orders,
-       would show which entry wins.
+   * - Of two rules that match a frame, the one in the lower entry decides.
+       The driver keeps the rules in entries ordered by the priority of their
+       ``tc`` filter, a lower value lower, and a new rule after those of its own
+       value (``rtl9602c_acl_place()``): when no free entry lies where the new
+       rule belongs, the rules above that point move up one entry each into the
+       first free entry above them, the topmost first, so that every rule stays
+       in at least one entry while they move.
+     - M
+     - A drop and a trap rule for the same frames on ``pon``: with entries
+       taken first-free, the rule added first decided whatever its priority;
+       with the entries ordered, the one of priority 10 decided over the one of
+       20 in both orders of adding, for drop over trap and for trap over
+       drop.
 
 Writing and removing a rule
 ---------------------------
 
-Writing one rule, ``rtl9602c_acl_replace()`` and ``rtl9602c_acl_write()``, in
-order:
+Writing one rule, ``rtl9602c_acl_replace()``, ``rtl9602c_acl_place()`` and
+``rtl9602c_acl_put()``, in order:
 
 1. Find or build a template. Purpose: rules that need the same fields share
    one. A new template's eight slots are written one at a time by
    read-modify-write, because a word holds four slots. (M)
-2. Write the zeros plane at index i (five words). Purpose: the entry cannot
-   match yet, because its valid bit is in the ones plane. (M)
-3. Write the action entry at i (three words): the decision and its port mask.
+2. Choose the entry i by the rule's priority, moving the rules of larger
+   priority values up one entry each when no free entry lies where it belongs
+   (see "Rules, templates and lookup"). Each move writes the rule into the
+   entry above as below, and the entry left over is retired. Purpose: the
+   lower entry decides, and tc's lower priority value goes first. (M)
+3. Write zeros to the ones plane at i + 128, then the zeros plane at i (five
+   words). Purpose: the entry cannot match yet, because its valid bit is in
+   the ones plane. (M)
+4. Write the action entry at i (three words): the decision and its port mask.
    (M)
-4. Write ``RTL9602C_ACL_ACT_EN(i)`` = ``RTL9602C_ACL_ACT_EN_FWD``. Purpose:
+5. Write ``RTL9602C_ACL_ACT_EN(i)`` = ``RTL9602C_ACL_ACT_EN_FWD``. Purpose:
    only the forwarding class applies. (M)
-5. Write the ones plane at i + 128, which holds the valid bit. Purpose: it goes
+6. Write the ones plane at i + 128, which holds the valid bit. Purpose: it goes
    last, so that no frame meets a half-written rule. (M)
-6. Set the port's ``RTL9602C_ACL_DEFAULT_PERMIT`` bit, then its
+7. Set the port's ``RTL9602C_ACL_DEFAULT_PERMIT`` bit, then its
    ``RTL9602C_ACL_PORT_EN`` bit. Purpose: lookup without the permit drops every
    frame that no rule matches. (M)
 
@@ -2400,9 +2414,6 @@ Known limitations
   group bit and ARP cannot be dropped or trapped by an ACL rule.
 - Of several storm-control rules for one class and port only the one added last
   polices, although ``tc`` lists every one of them as offloaded.
-- The driver puts a new ACL rule in the lowest free entry and does not use the
-  priority of the ``tc`` filter, so which of two rules that match the same frame
-  decides is not known (see "Open questions").
 - The driver reports no statistics for offloaded flower rules (it has no
   ``cls_flower_stats`` operation), so ``tc -s filter show`` counts no hits for a
   rule that the switch applies. The effect of a rule is seen in the frames that
@@ -2443,17 +2454,6 @@ Assumptions the driver depends on
    * - The entries from ``RTL9602C_CLS_CTRL_LAYOUT1_START`` up use another rule
        layout, and the driver's depth limit is right ("Entries and rules").
      - A frame test of an entry above the boundary.
-   * - The rule's ingress-port bit works for ports 1 to 3 the way it does for
-       port 0 ("Rules, templates and lookup"). Rules on ``pon`` rest on it.
-     - A drop rule on ``pon`` with frames arriving through the PON.
-   * - ``RTL9602C_ACL_ACT_FWD_TRAP`` sends a matching frame to the CPU
-       ("Actions").
-     - A trap rule on a bridged port whose traffic otherwise leaves by another
-       port, counted at both.
-   * - The order in which overlapping ACL rules decide, given that the driver
-       ignores the priority of the ``tc`` filter ("What the driver does with tc
-       flower").
-     - Two overlapping rules with different actions, installed in both orders.
    * - The multicast, ARP, DHCP and IGMP storm-control classes police their own
        frames ("Storm control").
      - Each class offered its own frames at a set rate.

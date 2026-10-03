@@ -2718,6 +2718,14 @@ struct rtl9602c_priv {
 		u8		tmpl;
 		/** @acl.port: the port it is on */
 		u8		port;
+		/** @acl.prio: the tc priority of the rule */
+		u16		prio;
+		/**
+		 * @acl.words: the entry as written: the zeros plane, the ones
+		 * plane and the action, so that the rule can be moved
+		 */
+		u32		words[2 * RTL9602C_ACL_RULE_WORDS +
+				      RTL9602C_ACL_ACT_WORDS];
 	} acl[RTL9602C_ACL_ENTRIES];
 	/** @acl_tmpl: the field code of each template slot, as written */
 	u8 acl_tmpl[RTL9602C_ACL_TMPL_COUNT][RTL9602C_ACL_TMPL_SLOTS];

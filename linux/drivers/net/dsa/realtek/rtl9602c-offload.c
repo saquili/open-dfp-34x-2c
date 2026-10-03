@@ -1525,10 +1525,10 @@ int rtl9602c_port_setup_tc(struct dsa_switch *ds, int port,
  * field each slot holds. Seven templates are used: a rule naming the eighth,
  * which no register holds, matches nothing. The only action class applied is
  * the forwarding decision, drop or trap. Rules judge the frames entering a
- * port, not those the CPU sends out of it; rules on ports other than port 0 are
- * not verified. A new rule takes the lowest free entry and tc's priority is not
- * used, so which of two overlapping rules decides is not known. Setup does not
- * clear the ACL: rules and port enables an earlier kernel left stay in force.
+ * port, not those the CPU sends out of it; rules on ports 0 and 2 are
+ * verified. Of two rules that match a frame the lower entry decides, so the
+ * rules are kept in entries ordered by tc's priority (rtl9602c_acl_place()).
+ * Setup clears the ACL (rtl9602c_filter_qos_reset()).
  */
 
 /*
@@ -1650,25 +1650,26 @@ static void rtl9602c_acl_push(struct rtl9602c_acl_match *m, u8 sel, u16 val,
 	m->n++;
 }
 
+/* Where each part of an entry sits in the words of struct rtl9602c_priv acl[]. */
+#define RTL9602C_ACL_W_MASK	0
+#define RTL9602C_ACL_W_DATA	RTL9602C_ACL_RULE_WORDS
+#define RTL9602C_ACL_W_ACT	(2 * RTL9602C_ACL_RULE_WORDS)
+
 /*
- * Write rule @idx: the template, compared whole; the ingress port bits, of
- * which only @port's is compared; the slots; the valid bit, in the ones plane.
- * The zeros plane goes first, then the action, the action classes and last the
- * ones plane, so that no frame meets a half-written rule. Only the forwarding
- * class is applied: RTL9602C_ACL_ACT_FWD_REDIRECT with no port drops the frame,
- * and RTL9602C_ACL_ACT_FWD_TRAP is taken to send it to the CPU (not verified).
+ * Compose rule @w: the template, compared whole; the ingress port bits, of
+ * which only @port's is compared; the slots; the valid bit, in the ones plane;
+ * and the action. Only the forwarding class is applied:
+ * RTL9602C_ACL_ACT_FWD_REDIRECT with no port drops the frame, and
+ * RTL9602C_ACL_ACT_FWD_TRAP sends it to the CPU.
  */
-static int rtl9602c_acl_write(struct rtl9602c_priv *p, unsigned int idx,
-			      int port, unsigned int tmpl,
-			      const u8 *slot_of,
-			      const struct rtl9602c_acl_match *m,
-			      unsigned int fwdact, unsigned int fwd_pmsk)
+static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
+				 const u8 *slot_of,
+				 const struct rtl9602c_acl_match *m,
+				 unsigned int fwdact, unsigned int fwd_pmsk)
 {
-	u32 data[RTL9602C_ACL_RULE_WORDS] = {};
-	u32 mask[RTL9602C_ACL_RULE_WORDS] = {};
-	u32 act[RTL9602C_ACL_ACT_WORDS] = {};
+	u32 *mask = &w[RTL9602C_ACL_W_MASK], *data = &w[RTL9602C_ACL_W_DATA];
+	u32 *act = &w[RTL9602C_ACL_W_ACT];
 	unsigned int i;
-	int err;
 
 	rtl9602c_acl_pair(data, mask, 0, 3, tmpl, 7);
 	rtl9602c_acl_pair(data, mask, 10, 6, BIT(port), BIT(port));
@@ -1680,23 +1681,101 @@ static int rtl9602c_acl_write(struct rtl9602c_priv *p, unsigned int idx,
 	}
 	rtl9602c_acl_bits(data, RTL9602C_ACL_RULE_VALID_BIT, 1, 1);
 
-	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE, idx, mask,
+	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_LSB, 2, fwdact);
+	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_PORTS_LSB, 4, fwd_pmsk);
+}
+
+/*
+ * Write entry @idx from words @w. The zeros plane goes first, then the action,
+ * the action classes and last the ones plane, so that no frame meets a
+ * half-written rule; an entry in use is retired first.
+ */
+static int rtl9602c_acl_put(struct rtl9602c_priv *p, unsigned int idx,
+			    u32 *w)
+{
+	u32 zero[RTL9602C_ACL_RULE_WORDS] = {};
+	int err;
+
+	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
+				   idx + RTL9602C_ACL_RULE_ONES_PLANE, zero,
 				   RTL9602C_ACL_RULE_WORDS);
 	if (err)
 		return err;
-
-	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_LSB, 2, fwdact);
-	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_PORTS_LSB, 4, fwd_pmsk);
-	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_ACT, idx, act,
-				   RTL9602C_ACL_ACT_WORDS);
+	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE, idx,
+				   &w[RTL9602C_ACL_W_MASK], RTL9602C_ACL_RULE_WORDS);
+	if (err)
+		return err;
+	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_ACT, idx,
+				   &w[RTL9602C_ACL_W_ACT], RTL9602C_ACL_ACT_WORDS);
 	if (err)
 		return err;
 
 	rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx, RTL9602C_ACL_ACT_EN_FWD);
 
 	return rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
-				    idx + RTL9602C_ACL_RULE_ONES_PLANE, data,
-				    RTL9602C_ACL_RULE_WORDS);
+				    idx + RTL9602C_ACL_RULE_ONES_PLANE,
+				    &w[RTL9602C_ACL_W_DATA], RTL9602C_ACL_RULE_WORDS);
+}
+
+/*
+ * Retire entry @idx: its ones plane zeroed, which clears the valid bit, and
+ * its action classes back to their reset value, never 0: a zero chains an
+ * entry to the one before it, so that a rule there would match only together
+ * with this entry's pattern.
+ */
+static int rtl9602c_acl_retire(struct rtl9602c_priv *p, unsigned int idx)
+{
+	u32 zero[RTL9602C_ACL_RULE_WORDS] = {};
+	int err;
+
+	err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
+				   idx + RTL9602C_ACL_RULE_ONES_PLANE, zero,
+				   RTL9602C_ACL_RULE_WORDS);
+	rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx, RTL9602C_ACL_ACT_EN_DEFAULT);
+	return err;
+}
+
+/*
+ * The entry for a new rule of tc priority @prio. Of several matching rules the
+ * lowest entry applies (measured on this board), and tc evaluates the lower
+ * priority value first, so the rules are kept in entries ordered by priority,
+ * a new one after those of its own value: below every rule of a larger value
+ * and above every other. When no free entry lies between them, the rules of
+ * larger values move up one entry each into the first free entry above them,
+ * the topmost first, so that every rule stays in at least one entry
+ * throughout; the entry left over is retired. Returns the entry, -ENOSPC when
+ * the ACL is full, or the table's error.
+ */
+static int rtl9602c_acl_place(struct rtl9602c_priv *p, u16 prio)
+{
+	unsigned int hi = RTL9602C_ACL_ENTRIES, idx, free;
+	int lo = -1, err;
+
+	for_each_set_bit(idx, p->acl_used, RTL9602C_ACL_ENTRIES) {
+		if (p->acl[idx].prio <= prio)
+			lo = idx;
+		else if (hi == RTL9602C_ACL_ENTRIES)
+			hi = idx;
+	}
+
+	idx = find_next_zero_bit(p->acl_used, RTL9602C_ACL_ENTRIES, lo + 1);
+	if (idx < hi)
+		return idx;
+
+	free = find_next_zero_bit(p->acl_used, RTL9602C_ACL_ENTRIES, hi);
+	if (free >= RTL9602C_ACL_ENTRIES)
+		return -ENOSPC;
+
+	for (idx = free; idx > hi; idx--) {
+		err = rtl9602c_acl_put(p, idx, p->acl[idx - 1].words);
+		if (err)
+			return err;
+		p->acl[idx] = p->acl[idx - 1];
+		set_bit(idx, p->acl_used);
+	}
+	clear_bit(hi, p->acl_used);
+	err = rtl9602c_acl_retire(p, hi);
+	return err ? err : hi;
 }
 
 /*
@@ -1865,15 +1944,21 @@ no_addrs:
 		goto out;
 	}
 
-	idx = find_first_zero_bit(p->acl_used, RTL9602C_ACL_ENTRIES);
-	if (idx >= RTL9602C_ACL_ENTRIES) {
+	err = rtl9602c_acl_place(p, cls->common.prio);
+	if (err == -ENOSPC) {
 		NL_SET_ERR_MSG_MOD(extack, "all 96 ACL rules are in use");
-		err = -ENOSPC;
 		goto out;
 	}
+	if (err < 0) {
+		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
+		goto out;
+	}
+	idx = err;
 
-	err = rtl9602c_acl_write(p, idx, port, tmpl, slot_of, &m, fwdact,
-				 fwd_pmsk);
+	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
+	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, &m,
+			     fwdact, fwd_pmsk);
+	err = rtl9602c_acl_put(p, idx, p->acl[idx].words);
 	if (err) {
 		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
 		goto out;
@@ -1882,6 +1967,7 @@ no_addrs:
 	p->acl[idx].cookie = cls->cookie;
 	p->acl[idx].tmpl = tmpl;
 	p->acl[idx].port = port;
+	p->acl[idx].prio = cls->common.prio;
 	p->acl_tmpl_refs[tmpl]++;
 	set_bit(idx, p->acl_used);
 	rtl9602c_acl_port_enable(p, port, true);
@@ -1894,15 +1980,11 @@ out:
 }
 
 /*
- * Remove the rule with @cookie: its ones plane zeroed, which clears the valid
- * bit, and its action classes back to their reset value, never 0: a zero chains
- * an entry to the one before it, so that a rule there would match only together
- * with this entry's pattern. The port's lookup is switched off with its last
- * rule.
+ * Remove the rule with @cookie (see rtl9602c_acl_retire()). The port's lookup
+ * is switched off with its last rule.
  */
 static int rtl9602c_acl_del(struct rtl9602c_priv *p, unsigned long cookie)
 {
-	u32 zero[RTL9602C_ACL_RULE_WORDS] = {};
 	unsigned int idx, other;
 	bool last = true;
 	int err;
@@ -1912,12 +1994,7 @@ static int rtl9602c_acl_del(struct rtl9602c_priv *p, unsigned long cookie)
 		if (p->acl[idx].cookie != cookie)
 			continue;
 
-		err = rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
-					   idx + RTL9602C_ACL_RULE_ONES_PLANE, zero,
-					   RTL9602C_ACL_RULE_WORDS);
-
-		rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx,
-			   RTL9602C_ACL_ACT_EN_DEFAULT);
+		err = rtl9602c_acl_retire(p, idx);
 		if (p->acl_tmpl_refs[p->acl[idx].tmpl])
 			p->acl_tmpl_refs[p->acl[idx].tmpl]--;
 		clear_bit(idx, p->acl_used);
