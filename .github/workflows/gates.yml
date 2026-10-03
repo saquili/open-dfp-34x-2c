@@ -94,7 +94,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git make gcc libc6-dev \
-            python3 perl clang-format gcovr libmnl-dev zlib1g-dev
+            python3 perl clang-format gcovr libmnl-dev zlib1g-dev rsync
           git config --global --add safe.directory '*'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: The user-space headers of this tree's kernel
