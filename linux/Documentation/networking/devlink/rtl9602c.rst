@@ -963,11 +963,6 @@ Known limitations
   and it cannot be changed while that interface is up.
 - A port mask for a storm-control class is refused until the class has a rate,
   and setting the rate of a class to 0 also clears its ports.
-- Setting ``loop_detect`` changes the switch's interrupt mask by a read
-  followed by a write, under no lock that the interrupt handler and the other
-  writers of the mask share, so a change made by two of them at the same moment
-  could be lost. This has not been observed. It is stated in full in
-  Documentation/networking/dsa/rtl9602c.rst ("Known limitations").
 
 Open questions
 ==============

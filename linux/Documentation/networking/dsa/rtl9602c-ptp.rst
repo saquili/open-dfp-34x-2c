@@ -702,10 +702,11 @@ Taking the tag off and completing the seconds
 
 A received PTP message, from the conduit's receive path to DSA, in order:
 
-1. A frame longer than 16 bytes with ``0x8899`` at offset 12: read the seconds
-   (offset 22, 16 bits) and the nanoseconds (offset 24, 32 bits), and log the
-   reason byte once per value. Purpose: the tag holds the time of the frame.
-   (M)
+1. A frame that came up with a CPU tag and the trap reason 240 or 241, longer
+   than 16 bytes, with ``0x8899`` at offset 12 and the protocol byte 4 at
+   offset 14: read the seconds (offset 22, 16 bits) and the nanoseconds
+   (offset 24, 32 bits), and log the reason byte once per value. Purpose: the
+   tag holds the time of the frame. (M)
 2. Set the frame's hardware timestamp to those seconds and nanoseconds.
    Purpose: the time travels with the frame. (M)
 3. Move the 12 address bytes 16 bytes forward and pull 16 bytes. Purpose: the
@@ -1194,11 +1195,6 @@ Known limitations
   the seconds and the nanoseconds. ``rtl9602c_defconfig`` does not name the
   clock, but the symbol follows ``CONFIG_ETHERNET``, so a kernel configured
   from the defconfig has the clock and the classification.
-- The conduit takes every frame longer than 16 bytes that carries EtherType
-  ``0x8899`` at offset 12 for a tagged PTP message, whatever its protocol byte.
-  Other frames use that EtherType, among them the switch's loop-detection
-  probes; one that reached the CPU would lose 16 bytes and gain a timestamp.
-  Only protocol 4 has been seen at the CPU.
 
 Open questions
 ==============
