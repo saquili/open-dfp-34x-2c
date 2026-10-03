@@ -2458,12 +2458,11 @@ only printed.
        a shadow (``l34_trf``) and takes a flow's bit from the shadow.
      - T
      - A routing test, and the statistics row below.
-   * - The ``l3flow`` view reads word 0 of this bitmap, which clears the hit
-       bits of outbound entries 0 to 31 (buckets 0 to 7); a flow there can then
-       read as unused at netfilter's next statistics query.
-     - M
-     - It follows from the first row: the view's read is an ordinary read of
-       word 0.
+   * - The ``l3flow`` view reads word 0 of this bitmap into the shadow, under
+       the lock the statistics take it with, and prints the shadow: a read of
+       the view clears no flow's hit before netfilter's next statistics query.
+     - T
+     - The first row: a read clears the word, which the shadow keeps.
    * - ``RTL9602C_PPPOE_HIT`` (``0x800014``): bits 7:0, one per PPPoE row; bit 3
        came up when frames went through PPPoE row 3.
      - M

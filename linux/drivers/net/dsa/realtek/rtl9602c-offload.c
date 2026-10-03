@@ -5205,10 +5205,11 @@ static const struct file_operations rtl9602c_hsd_fops = {
  * l3flow: the engine's enable and configuration words, the PPPoE hit bits, word
  * 0 of the NAPT hit bitmap, the hit bitmaps of the five-tuple, IPv6 neighbour
  * ("neighbour") and neighbour ("arp") tables, then the per-frame capture's
- * control word, decoded, and its input and output words, raw. Reading word 0 of
- * the NAPT hit bitmap clears it, so a flow in outbound entries 0 to 31 can read
- * as unused at netfilter's next statistics query. Whether reading the other
- * bitmaps clears them is not verified.
+ * control word, decoded, and its input and output words, raw. Reading a word of
+ * the NAPT hit bitmap clears it, so the view folds word 0 into the bits that
+ * netfilter's statistics take (rtl9602c_l34_trf_take()) and prints those: a
+ * read of the view loses no flow's hit. Whether reading the other bitmaps
+ * clears them is not verified.
  */
 static int rtl9602c_l3flow_show(struct seq_file *m, void *unused)
 {
@@ -5224,7 +5225,11 @@ static int rtl9602c_l3flow_show(struct seq_file *m, void *unused)
 		   !!(v & RTL9602C_L3_CFG_FLOW4_EN),
 		   !!(v & RTL9602C_L3_CFG_FLOW6_EN));
 	seq_printf(m, "pppoe hit  %08x\n", rtl9602c_r(p, RTL9602C_PPPOE_HIT));
-	seq_printf(m, "napt hit   %08x\n", rtl9602c_r(p, RTL9602C_NAPT_HIT));
+	mutex_lock(&p->flow_lock);
+	p->l34_trf[0] |= rtl9602c_r(p, RTL9602C_NAPT_HIT);
+	v = p->l34_trf[0];
+	mutex_unlock(&p->flow_lock);
+	seq_printf(m, "napt hit   %08x\n", v);
 
 	seq_puts(m, "\nhit bitmaps, one bit per entry\n");
 	seq_puts(m, "  flow     ");
