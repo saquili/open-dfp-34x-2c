@@ -274,7 +274,10 @@ Interfaces to user space
   ``n_periodic_outputs`` and ``n_pins`` read 0. The character device
   ``/dev/ptp<N>`` serves ``clock_gettime()``, ``clock_settime()`` and
   ``clock_adjtime()`` on the clock (see "The clock"); ``N`` is the index that
-  ``ethtool -T`` reports.
+  ``ethtool -T`` reports. The image's C library, built with 64-bit time, makes
+  these calls through their 64-bit system calls, so the board's kernel needs
+  none of the 32-bit-time calls (``CONFIG_COMPAT_32BIT_TIME`` is off): its
+  ``clock_adjtime()`` set the clock 50 ppm fast and back.
 - The pulse per second. ``PTP_ENABLE_PPS`` on ``/dev/ptp<N>``, or writing 1 to
   ``/sys/class/ptp/ptp<N>/pps_enable``, enables the source. Each pulse is an
   event of the PPS source ``ptp<N>`` of the kernel's PPS subsystem, which
