@@ -1270,12 +1270,16 @@ row for each netdev, and a PPPoE WAN takes one (see "The address notifier" and
        "The PPPoE encapsulation path").
      - M
      - The ``l3nat`` L3-interface row of a PPPoE WAN reads MTU 1492.
-   * - Whether and how the engine enforces the row's MTU, for example by handing
-       an oversized frame to the CPU to be fragmented or answered with an ICMP
-       error, is not established.
-     - I
-     - A 1500-byte packet through an offloaded PPPoE flow (row MTU 1492), with
-       the CPU port's counter and the far side, would settle it.
+   * - The engine enforces the row's MTU: a packet of an offloaded flow that
+       does not fit it goes to the CPU, whose stack deals with it as with any
+       packet too large for the route (a datagram that allows fragmentation is
+       fragmented), and packets that fit stay in the engine.
+     - M
+     - Over a PPPoE WAN (row MTU 1492), with the flow marked ``OFFLOAD``: 2000
+       UDP datagrams of 1500 bytes, fragmentation allowed, reached the
+       concentrator as 4000 fragments of 1492 and 28 bytes, with 2041 frames
+       reaching the CPU; 2000 of 1028 bytes arrived whole with 21 frames
+       reaching the CPU.
    * - ``RTL9602C_L3IF_IP`` (114:83) is the interface's own IPv4 address. Bits
        81:79 and 116:115 store but are written 0.
      - T
@@ -2865,12 +2869,6 @@ Assumptions the driver depends on
        not wait for the strobes.
      - The boot log line ``L3: reset 13 of 13 table engine(s), engine ON
        (control ..., reset ...)`` reading ``reset 00000000`` at every boot.
-   * - The engine enforces the MTU of an L3-interface row, for example by
-       handing an oversized frame to the CPU to be fragmented or answered with
-       an ICMP error ("L3 interface (selector 3)"). The values the driver
-       writes, the netdev's MTU and 1492 for a PPPoE WAN, rely on it.
-     - A 1500-byte packet through an offloaded PPPoE flow (row MTU 1492), with
-       the CPU port's counter and the far side.
    * - The engine searches all four ways of an outbound bucket, so that a second
        flow in one bucket is carried from way 1 ("Outbound NAPT (selector 10)").
      - Two flows forced into one outbound bucket by the choice of source ports,
