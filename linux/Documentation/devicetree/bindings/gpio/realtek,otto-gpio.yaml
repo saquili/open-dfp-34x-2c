@@ -24,14 +24,18 @@ properties:
     pattern: "^gpio@[0-9a-f]+$"
 
   compatible:
-    items:
-      - enum:
-          - realtek,rtl8380-gpio
-          - realtek,rtl8390-gpio
-          - realtek,rtl9300-gpio
-          - realtek,rtl9310-gpio
-          - realtek,rtl9602c-gpio
-      - const: realtek,otto-gpio
+    oneOf:
+      - items:
+          - enum:
+              - realtek,rtl8380-gpio
+              - realtek,rtl8390-gpio
+              - realtek,rtl9300-gpio
+              - realtek,rtl9310-gpio
+          - const: realtek,otto-gpio
+      - description:
+          The RTL9602C bank, whose bit n is line n. The fallback's bit order
+          does not match it, so it has none.
+        const: realtek,rtl9602c-gpio
 
   reg: true
 
