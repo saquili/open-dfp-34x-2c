@@ -1141,6 +1141,10 @@ enum {
 #define RTL9602C_MIB_TX(p)		(0x032000 + 128 * (p))
 #define RTL9602C_MIB_RX(p)		(0x032200 + 128 * (p))
 
+/* The counters the driver reads per port, and how often it folds them. */
+#define RTL9602C_MIB_NUM		44
+#define RTL9602C_MIB_FOLD_S		60
+
 /*
  * Receive block. Checked against known traffic: RX_OCTETS,
  * RX_CRC_ALIGN_ERRORS, RX_UCAST_PKTS and RX_DROP_EVENTS; the other offsets
@@ -2462,6 +2466,15 @@ struct rtl9602c_priv {
 
 	/** @cf_sid: each port's port-keyed stream entry, -1 for none */
 	s16 cf_sid[RTL9602C_NUM_PORTS];
+
+	/** @mib_lock: protects @mib_total and @mib_last */
+	spinlock_t mib_lock;
+	/** @mib_total: each port's counters, as 64-bit totals */
+	u64 mib_total[RTL9602C_NUM_PORTS][RTL9602C_MIB_NUM];
+	/** @mib_last: the 32-bit counters as last read */
+	u32 mib_last[RTL9602C_NUM_PORTS][RTL9602C_MIB_NUM];
+	/** @mib_work: folds every port's counters before one can wrap */
+	struct delayed_work mib_work;
 
 	/**
 	 * @mtu: each port's MTU, 0 for a port never given one; the two

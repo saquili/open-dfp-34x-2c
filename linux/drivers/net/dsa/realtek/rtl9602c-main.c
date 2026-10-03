@@ -1597,6 +1597,8 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	if (err)
 		pr_warn("no GEM data path: %pe\n", ERR_PTR(err));
 
+	/* Fold the port counters into their totals before any can wrap. */
+	schedule_delayed_work(&p->mib_work, RTL9602C_MIB_FOLD_S * HZ);
 	return 0;
 }
 
@@ -1614,6 +1616,7 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 
 	/* With no interrupt the GPON work is not cancelled by its teardown. */
 	cancel_delayed_work_sync(&p->gpon_work);
+	cancel_delayed_work_sync(&p->mib_work);
 	rtl9602c_l34_notifiers_unregister(p);
 	rtl9602c_l34_fini(p);
 	rtl9602c_gem_teardown(p);
@@ -1799,66 +1802,158 @@ static void rtl9602c_port_disable(struct dsa_switch *ds, int port)
  * RFC 3635 and RFC 4188 where there is one; the transmit size buckets and
  * the 1519-to-maximum counters have none.
  */
+/* The counters' indices in rtl9602c_mib[], in its order. */
+enum {
+	RTL9602C_MIBI_RX_OCTETS,
+	RTL9602C_MIBI_RX_UNICAST,
+	RTL9602C_MIBI_RX_MULTICAST,
+	RTL9602C_MIBI_RX_BROADCAST,
+	RTL9602C_MIBI_RX_CRC_ERRORS,
+	RTL9602C_MIBI_RX_DROPS,
+	RTL9602C_MIBI_RX_SYMBOL_ERRORS,
+	RTL9602C_MIBI_RX_PAUSE,
+	RTL9602C_MIBI_RX_UNKNOWN_OPCODES,
+	RTL9602C_MIBI_RX_FRAGMENTS,
+	RTL9602C_MIBI_RX_JABBERS,
+	RTL9602C_MIBI_RX_UNDERSIZE,
+	RTL9602C_MIBI_RX_OVERSIZE,
+	RTL9602C_MIBI_RX_64_OCTETS,
+	RTL9602C_MIBI_RX_65_127_OCTETS,
+	RTL9602C_MIBI_RX_128_255_OCTETS,
+	RTL9602C_MIBI_RX_256_511_OCTETS,
+	RTL9602C_MIBI_RX_512_1023_OCTETS,
+	RTL9602C_MIBI_RX_1024_1518_OCTETS,
+	RTL9602C_MIBI_RX_1519_MAX_OCTETS,
+	RTL9602C_MIBI_RX_FORWARD_DISCARDS,
+	RTL9602C_MIBI_TX_OCTETS,
+	RTL9602C_MIBI_TX_UNICAST,
+	RTL9602C_MIBI_TX_MULTICAST,
+	RTL9602C_MIBI_TX_BROADCAST,
+	RTL9602C_MIBI_TX_DISCARDS,
+	RTL9602C_MIBI_TX_ETHER_MULTICAST,
+	RTL9602C_MIBI_TX_ETHER_BROADCAST,
+	RTL9602C_MIBI_TX_PAUSE,
+	RTL9602C_MIBI_TX_SINGLE_COLLISIONS,
+	RTL9602C_MIBI_TX_MULTIPLE_COLLISIONS,
+	RTL9602C_MIBI_TX_DEFERRED,
+	RTL9602C_MIBI_TX_LATE_COLLISIONS,
+	RTL9602C_MIBI_TX_EXCESSIVE_COLLISIONS,
+	RTL9602C_MIBI_TX_COLLISIONS,
+	RTL9602C_MIBI_TX_UNDERSIZE,
+	RTL9602C_MIBI_TX_OVERSIZE,
+	RTL9602C_MIBI_TX_64_OCTETS,
+	RTL9602C_MIBI_TX_65_127_OCTETS,
+	RTL9602C_MIBI_TX_128_255_OCTETS,
+	RTL9602C_MIBI_TX_256_511_OCTETS,
+	RTL9602C_MIBI_TX_512_1023_OCTETS,
+	RTL9602C_MIBI_TX_1024_1518_OCTETS,
+	RTL9602C_MIBI_TX_1519_MAX_OCTETS,
+};
+
 static const struct {
 	const char *name;
 	bool tx;
 	bool wide;
 	u32 off;
-} rtl9602c_mib[] = {
-	{ "rx_octets",		0, 1, RTL9602C_MIB_RX_OCTETS },
-	{ "rx_unicast",		0, 0, RTL9602C_MIB_RX_UCAST_PKTS },
-	{ "rx_multicast",	0, 0, RTL9602C_MIB_RX_MCAST_PKTS },
-	{ "rx_broadcast",	0, 0, RTL9602C_MIB_RX_BCAST_PKTS },
-	{ "rx_crc_errors",	0, 0, RTL9602C_MIB_RX_CRC_ALIGN_ERRORS },
-	{ "rx_drops",		0, 0, RTL9602C_MIB_RX_DROP_EVENTS },
-	{ "rx_symbol_errors",	0, 0, RTL9602C_MIB_RX_SYMBOL_ERRORS },
-	{ "rx_pause",		0, 0, RTL9602C_MIB_RX_PAUSE_FRAMES },
-	{ "rx_unknown_opcodes",	0, 0, RTL9602C_MIB_RX_UNKNOWN_OPCODES },
-	{ "rx_fragments",	0, 0, RTL9602C_MIB_RX_FRAGMENTS },
-	{ "rx_jabbers",		0, 0, RTL9602C_MIB_RX_JABBERS },
-	{ "rx_undersize",	0, 0, RTL9602C_MIB_RX_UNDERSIZE_PKTS },
-	{ "rx_oversize",	0, 0, RTL9602C_MIB_RX_OVERSIZE_PKTS },
-	{ "rx_64_octets",	0, 0, RTL9602C_MIB_RX_PKTS_64 },
-	{ "rx_65_127_octets",	0, 0, RTL9602C_MIB_RX_PKTS_65_127 },
-	{ "rx_128_255_octets",	0, 0, RTL9602C_MIB_RX_PKTS_128_255 },
-	{ "rx_256_511_octets",	0, 0, RTL9602C_MIB_RX_PKTS_256_511 },
-	{ "rx_512_1023_octets",	0, 0, RTL9602C_MIB_RX_PKTS_512_1023 },
-	{ "rx_1024_1518_octets", 0, 0, RTL9602C_MIB_RX_PKTS_1024_1518 },
-	{ "rx_1519_max_octets",	0, 0, RTL9602C_MIB_RX_PKTS_1519_MAX },
+} rtl9602c_mib[RTL9602C_MIB_NUM] = {
+	[RTL9602C_MIBI_RX_OCTETS] = { "rx_octets", 0, 1,
+		RTL9602C_MIB_RX_OCTETS },
+	[RTL9602C_MIBI_RX_UNICAST] = { "rx_unicast", 0, 0,
+		RTL9602C_MIB_RX_UCAST_PKTS },
+	[RTL9602C_MIBI_RX_MULTICAST] = { "rx_multicast", 0, 0,
+		RTL9602C_MIB_RX_MCAST_PKTS },
+	[RTL9602C_MIBI_RX_BROADCAST] = { "rx_broadcast", 0, 0,
+		RTL9602C_MIB_RX_BCAST_PKTS },
+	[RTL9602C_MIBI_RX_CRC_ERRORS] = { "rx_crc_errors", 0, 0,
+		RTL9602C_MIB_RX_CRC_ALIGN_ERRORS },
+	[RTL9602C_MIBI_RX_DROPS] = { "rx_drops", 0, 0,
+		RTL9602C_MIB_RX_DROP_EVENTS },
+	[RTL9602C_MIBI_RX_SYMBOL_ERRORS] = { "rx_symbol_errors", 0, 0,
+		RTL9602C_MIB_RX_SYMBOL_ERRORS },
+	[RTL9602C_MIBI_RX_PAUSE] = { "rx_pause", 0, 0,
+		RTL9602C_MIB_RX_PAUSE_FRAMES },
+	[RTL9602C_MIBI_RX_UNKNOWN_OPCODES] = { "rx_unknown_opcodes", 0, 0,
+		RTL9602C_MIB_RX_UNKNOWN_OPCODES },
+	[RTL9602C_MIBI_RX_FRAGMENTS] = { "rx_fragments", 0, 0,
+		RTL9602C_MIB_RX_FRAGMENTS },
+	[RTL9602C_MIBI_RX_JABBERS] = { "rx_jabbers", 0, 0,
+		RTL9602C_MIB_RX_JABBERS },
+	[RTL9602C_MIBI_RX_UNDERSIZE] = { "rx_undersize", 0, 0,
+		RTL9602C_MIB_RX_UNDERSIZE_PKTS },
+	[RTL9602C_MIBI_RX_OVERSIZE] = { "rx_oversize", 0, 0,
+		RTL9602C_MIB_RX_OVERSIZE_PKTS },
+	[RTL9602C_MIBI_RX_64_OCTETS] = { "rx_64_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_64 },
+	[RTL9602C_MIBI_RX_65_127_OCTETS] = { "rx_65_127_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_65_127 },
+	[RTL9602C_MIBI_RX_128_255_OCTETS] = { "rx_128_255_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_128_255 },
+	[RTL9602C_MIBI_RX_256_511_OCTETS] = { "rx_256_511_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_256_511 },
+	[RTL9602C_MIBI_RX_512_1023_OCTETS] = { "rx_512_1023_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_512_1023 },
+	[RTL9602C_MIBI_RX_1024_1518_OCTETS] = { "rx_1024_1518_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_1024_1518 },
+	[RTL9602C_MIBI_RX_1519_MAX_OCTETS] = { "rx_1519_max_octets", 0, 0,
+		RTL9602C_MIB_RX_PKTS_1519_MAX },
 	/*
 	 * In the transmit block, but it counts frames received on the port
 	 * and discarded by forwarding (dot1dTpPortInDiscards, RFC 4188).
 	 */
-	{ "rx_forward_discards", 1, 0, RTL9602C_MIB_TX_FWD_DISCARDS },
+	[RTL9602C_MIBI_RX_FORWARD_DISCARDS] = { "rx_forward_discards", 1, 0,
+		RTL9602C_MIB_TX_FWD_DISCARDS },
 
-	{ "tx_octets",		1, 1, RTL9602C_MIB_TX_OCTETS },
-	{ "tx_unicast",		1, 0, RTL9602C_MIB_TX_UCAST_PKTS },
-	{ "tx_multicast",	1, 0, RTL9602C_MIB_TX_MCAST_PKTS },
-	{ "tx_broadcast",	1, 0, RTL9602C_MIB_TX_BCAST_PKTS },
-	{ "tx_discards",	1, 0, RTL9602C_MIB_TX_DISCARDS },
+	[RTL9602C_MIBI_TX_OCTETS] = { "tx_octets", 1, 1,
+		RTL9602C_MIB_TX_OCTETS },
+	[RTL9602C_MIBI_TX_UNICAST] = { "tx_unicast", 1, 0,
+		RTL9602C_MIB_TX_UCAST_PKTS },
+	[RTL9602C_MIBI_TX_MULTICAST] = { "tx_multicast", 1, 0,
+		RTL9602C_MIB_TX_MCAST_PKTS },
+	[RTL9602C_MIBI_TX_BROADCAST] = { "tx_broadcast", 1, 0,
+		RTL9602C_MIB_TX_BCAST_PKTS },
+	[RTL9602C_MIBI_TX_DISCARDS] = { "tx_discards", 1, 0,
+		RTL9602C_MIB_TX_DISCARDS },
 	/*
 	 * Taken to count what the MAC put on the wire, where tx_multicast
 	 * and tx_broadcast count what forwarding handed to the port; not
 	 * verified.
 	 */
-	{ "tx_ether_multicast",	1, 0, RTL9602C_MIB_TX_RMON_MCAST_PKTS },
-	{ "tx_ether_broadcast",	1, 0, RTL9602C_MIB_TX_RMON_BCAST_PKTS },
-	{ "tx_pause",		1, 0, RTL9602C_MIB_TX_PAUSE_FRAMES },
-	{ "tx_single_collisions", 1, 0, RTL9602C_MIB_TX_SINGLE_COLLISIONS },
-	{ "tx_multiple_collisions", 1, 0, RTL9602C_MIB_TX_MULTIPLE_COLLISIONS },
-	{ "tx_deferred",	1, 0, RTL9602C_MIB_TX_DEFERRED },
-	{ "tx_late_collisions",	1, 0, RTL9602C_MIB_TX_LATE_COLLISIONS },
-	{ "tx_excessive_collisions", 1, 0, RTL9602C_MIB_TX_EXCESSIVE_COLLISIONS },
-	{ "tx_collisions",	1, 0, RTL9602C_MIB_TX_COLLISIONS },
-	{ "tx_undersize",	1, 0, RTL9602C_MIB_TX_UNDERSIZE_PKTS },
-	{ "tx_oversize",	1, 0, RTL9602C_MIB_TX_OVERSIZE_PKTS },
-	{ "tx_64_octets",	1, 0, RTL9602C_MIB_TX_PKTS_64 },
-	{ "tx_65_127_octets",	1, 0, RTL9602C_MIB_TX_PKTS_65_127 },
-	{ "tx_128_255_octets",	1, 0, RTL9602C_MIB_TX_PKTS_128_255 },
-	{ "tx_256_511_octets",	1, 0, RTL9602C_MIB_TX_PKTS_256_511 },
-	{ "tx_512_1023_octets",	1, 0, RTL9602C_MIB_TX_PKTS_512_1023 },
-	{ "tx_1024_1518_octets", 1, 0, RTL9602C_MIB_TX_PKTS_1024_1518 },
-	{ "tx_1519_max_octets",	1, 0, RTL9602C_MIB_TX_PKTS_1519_MAX },
+	[RTL9602C_MIBI_TX_ETHER_MULTICAST] = { "tx_ether_multicast", 1, 0,
+		RTL9602C_MIB_TX_RMON_MCAST_PKTS },
+	[RTL9602C_MIBI_TX_ETHER_BROADCAST] = { "tx_ether_broadcast", 1, 0,
+		RTL9602C_MIB_TX_RMON_BCAST_PKTS },
+	[RTL9602C_MIBI_TX_PAUSE] = { "tx_pause", 1, 0,
+		RTL9602C_MIB_TX_PAUSE_FRAMES },
+	[RTL9602C_MIBI_TX_SINGLE_COLLISIONS] = { "tx_single_collisions", 1, 0,
+		RTL9602C_MIB_TX_SINGLE_COLLISIONS },
+	[RTL9602C_MIBI_TX_MULTIPLE_COLLISIONS] = { "tx_multiple_collisions", 1, 0,
+		RTL9602C_MIB_TX_MULTIPLE_COLLISIONS },
+	[RTL9602C_MIBI_TX_DEFERRED] = { "tx_deferred", 1, 0,
+		RTL9602C_MIB_TX_DEFERRED },
+	[RTL9602C_MIBI_TX_LATE_COLLISIONS] = { "tx_late_collisions", 1, 0,
+		RTL9602C_MIB_TX_LATE_COLLISIONS },
+	[RTL9602C_MIBI_TX_EXCESSIVE_COLLISIONS] = { "tx_excessive_collisions", 1, 0,
+		RTL9602C_MIB_TX_EXCESSIVE_COLLISIONS },
+	[RTL9602C_MIBI_TX_COLLISIONS] = { "tx_collisions", 1, 0,
+		RTL9602C_MIB_TX_COLLISIONS },
+	[RTL9602C_MIBI_TX_UNDERSIZE] = { "tx_undersize", 1, 0,
+		RTL9602C_MIB_TX_UNDERSIZE_PKTS },
+	[RTL9602C_MIBI_TX_OVERSIZE] = { "tx_oversize", 1, 0,
+		RTL9602C_MIB_TX_OVERSIZE_PKTS },
+	[RTL9602C_MIBI_TX_64_OCTETS] = { "tx_64_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_64 },
+	[RTL9602C_MIBI_TX_65_127_OCTETS] = { "tx_65_127_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_65_127 },
+	[RTL9602C_MIBI_TX_128_255_OCTETS] = { "tx_128_255_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_128_255 },
+	[RTL9602C_MIBI_TX_256_511_OCTETS] = { "tx_256_511_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_256_511 },
+	[RTL9602C_MIBI_TX_512_1023_OCTETS] = { "tx_512_1023_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_512_1023 },
+	[RTL9602C_MIBI_TX_1024_1518_OCTETS] = { "tx_1024_1518_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_1024_1518 },
+	[RTL9602C_MIBI_TX_1519_MAX_OCTETS] = { "tx_1519_max_octets", 1, 0,
+		RTL9602C_MIB_TX_PKTS_1519_MAX },
 };
 
 /*
@@ -1878,6 +1973,60 @@ static u64 rtl9602c_mib_read(struct rtl9602c_priv *p, u32 addr, bool wide)
 	} while (hi != rtl9602c_r(p, addr + 4));
 
 	return (u64)hi << 32 | lo;
+}
+
+/*
+ * Bring @port's 64-bit totals up to date. A 32-bit counter runs free and
+ * wraps, so its total grows by the difference since the last read, modulo
+ * 2^32; the two 64-bit octet counters are taken as they read. Every reader
+ * folds before it reads, and rtl9602c_mib_work() folds every port every
+ * RTL9602C_MIB_FOLD_S seconds, well within the 19 minutes in which a counter
+ * wraps at the SFP port's 2.5 Gb/s of frames of minimum size. A first fold
+ * takes the counters' values as they stand. Called with mib_lock held.
+ */
+static void rtl9602c_mib_fold(struct rtl9602c_priv *p, int port)
+{
+	unsigned int i;
+
+	for (i = 0; i < RTL9602C_MIB_NUM; i++) {
+		u32 base = rtl9602c_mib[i].tx ? RTL9602C_MIB_TX(port)
+					      : RTL9602C_MIB_RX(port);
+		u64 raw = rtl9602c_mib_read(p, base + rtl9602c_mib[i].off,
+					    rtl9602c_mib[i].wide);
+
+		if (rtl9602c_mib[i].wide) {
+			p->mib_total[port][i] = raw;
+			continue;
+		}
+		p->mib_total[port][i] += (u32)raw - p->mib_last[port][i];
+		p->mib_last[port][i] = raw;
+	}
+}
+
+/* Fold @port's counters and copy their totals into @t. */
+static void rtl9602c_mib_get(struct rtl9602c_priv *p, int port, u64 *t)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&p->mib_lock, flags);
+	rtl9602c_mib_fold(p, port);
+	memcpy(t, p->mib_total[port], sizeof(p->mib_total[port]));
+	spin_unlock_irqrestore(&p->mib_lock, flags);
+}
+
+static void rtl9602c_mib_work(struct work_struct *w)
+{
+	struct rtl9602c_priv *p =
+		container_of(to_delayed_work(w), struct rtl9602c_priv, mib_work);
+	unsigned long flags;
+	int port;
+
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
+		spin_lock_irqsave(&p->mib_lock, flags);
+		rtl9602c_mib_fold(p, port);
+		spin_unlock_irqrestore(&p->mib_lock, flags);
+	}
+	schedule_delayed_work(&p->mib_work, RTL9602C_MIB_FOLD_S * HZ);
 }
 
 static int rtl9602c_get_sset_count(struct dsa_switch *ds, int port, int sset)
@@ -1902,16 +2051,125 @@ static void rtl9602c_get_strings(struct dsa_switch *ds, int port,
 static void rtl9602c_get_ethtool_stats(struct dsa_switch *ds, int port,
 				       uint64_t *data)
 {
-	struct rtl9602c_priv *p = ds->priv;
+	rtl9602c_mib_get(ds->priv, port, data);
+}
+
+/*
+ * The interface statistics from the port's counters, so that they count what
+ * the port carried, bridged traffic included, and not only what crossed the
+ * CPU. Packets are the unicast, multicast and broadcast frames together;
+ * receive errors are the CRC and alignment, symbol and length errors; frames
+ * dropped on receive are those the port dropped and those forwarding
+ * discarded.
+ */
+static void rtl9602c_get_stats64(struct dsa_switch *ds, int port,
+				 struct rtnl_link_stats64 *s)
+{
+	u64 t[RTL9602C_MIB_NUM];
+
+	rtl9602c_mib_get(ds->priv, port, t);
+
+	s->rx_packets = t[RTL9602C_MIBI_RX_UNICAST] +
+			t[RTL9602C_MIBI_RX_MULTICAST] +
+			t[RTL9602C_MIBI_RX_BROADCAST];
+	s->tx_packets = t[RTL9602C_MIBI_TX_UNICAST] +
+			t[RTL9602C_MIBI_TX_MULTICAST] +
+			t[RTL9602C_MIBI_TX_BROADCAST];
+	s->rx_bytes = t[RTL9602C_MIBI_RX_OCTETS];
+	s->tx_bytes = t[RTL9602C_MIBI_TX_OCTETS];
+	s->multicast = t[RTL9602C_MIBI_RX_MULTICAST];
+	s->rx_crc_errors = t[RTL9602C_MIBI_RX_CRC_ERRORS];
+	s->rx_length_errors = t[RTL9602C_MIBI_RX_UNDERSIZE] +
+			      t[RTL9602C_MIBI_RX_OVERSIZE] +
+			      t[RTL9602C_MIBI_RX_FRAGMENTS] +
+			      t[RTL9602C_MIBI_RX_JABBERS];
+	s->rx_frame_errors = t[RTL9602C_MIBI_RX_SYMBOL_ERRORS];
+	s->rx_errors = s->rx_crc_errors + s->rx_length_errors +
+		       s->rx_frame_errors;
+	s->rx_dropped = t[RTL9602C_MIBI_RX_DROPS] +
+			t[RTL9602C_MIBI_RX_FORWARD_DISCARDS];
+	s->tx_dropped = t[RTL9602C_MIBI_TX_DISCARDS];
+	s->collisions = t[RTL9602C_MIBI_TX_COLLISIONS];
+	s->tx_aborted_errors = t[RTL9602C_MIBI_TX_EXCESSIVE_COLLISIONS];
+	s->tx_window_errors = t[RTL9602C_MIBI_TX_LATE_COLLISIONS];
+	s->tx_errors = s->tx_aborted_errors + s->tx_window_errors;
+}
+
+static void rtl9602c_get_pause_stats(struct dsa_switch *ds, int port,
+				     struct ethtool_pause_stats *ps)
+{
+	u64 t[RTL9602C_MIB_NUM];
+
+	rtl9602c_mib_get(ds->priv, port, t);
+	ps->tx_pause_frames = t[RTL9602C_MIBI_TX_PAUSE];
+	ps->rx_pause_frames = t[RTL9602C_MIBI_RX_PAUSE];
+}
+
+/* The size buckets of the counters, the last up to the longest frame. */
+static const struct ethtool_rmon_hist_range rtl9602c_rmon_ranges[] = {
+	{ 0, 64 },
+	{ 65, 127 },
+	{ 128, 255 },
+	{ 256, 511 },
+	{ 512, 1023 },
+	{ 1024, 1518 },
+	{ 1519, RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX },
+	{}
+};
+
+static void rtl9602c_get_rmon_stats(struct dsa_switch *ds, int port,
+				    struct ethtool_rmon_stats *rs,
+				    const struct ethtool_rmon_hist_range **ranges)
+{
+	u64 t[RTL9602C_MIB_NUM];
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(rtl9602c_mib); i++) {
-		u32 base = rtl9602c_mib[i].tx ? RTL9602C_MIB_TX(port)
-					      : RTL9602C_MIB_RX(port);
-
-		data[i] = rtl9602c_mib_read(p, base + rtl9602c_mib[i].off,
-					    rtl9602c_mib[i].wide);
+	rtl9602c_mib_get(ds->priv, port, t);
+	rs->undersize_pkts = t[RTL9602C_MIBI_RX_UNDERSIZE];
+	rs->oversize_pkts = t[RTL9602C_MIBI_RX_OVERSIZE];
+	rs->fragments = t[RTL9602C_MIBI_RX_FRAGMENTS];
+	rs->jabbers = t[RTL9602C_MIBI_RX_JABBERS];
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_rmon_ranges) - 1; i++) {
+		rs->hist[i] = t[RTL9602C_MIBI_RX_64_OCTETS + i];
+		rs->hist_tx[i] = t[RTL9602C_MIBI_TX_64_OCTETS + i];
 	}
+	*ranges = rtl9602c_rmon_ranges;
+}
+
+static void rtl9602c_get_eth_mac_stats(struct dsa_switch *ds, int port,
+				       struct ethtool_eth_mac_stats *ms)
+{
+	u64 t[RTL9602C_MIB_NUM];
+
+	rtl9602c_mib_get(ds->priv, port, t);
+	ms->FramesTransmittedOK = t[RTL9602C_MIBI_TX_UNICAST] +
+				  t[RTL9602C_MIBI_TX_MULTICAST] +
+				  t[RTL9602C_MIBI_TX_BROADCAST];
+	ms->SingleCollisionFrames = t[RTL9602C_MIBI_TX_SINGLE_COLLISIONS];
+	ms->MultipleCollisionFrames = t[RTL9602C_MIBI_TX_MULTIPLE_COLLISIONS];
+	ms->FramesReceivedOK = t[RTL9602C_MIBI_RX_UNICAST] +
+			       t[RTL9602C_MIBI_RX_MULTICAST] +
+			       t[RTL9602C_MIBI_RX_BROADCAST];
+	ms->FrameCheckSequenceErrors = t[RTL9602C_MIBI_RX_CRC_ERRORS];
+	ms->OctetsTransmittedOK = t[RTL9602C_MIBI_TX_OCTETS];
+	ms->FramesWithDeferredXmissions = t[RTL9602C_MIBI_TX_DEFERRED];
+	ms->LateCollisions = t[RTL9602C_MIBI_TX_LATE_COLLISIONS];
+	ms->FramesAbortedDueToXSColls = t[RTL9602C_MIBI_TX_EXCESSIVE_COLLISIONS];
+	ms->OctetsReceivedOK = t[RTL9602C_MIBI_RX_OCTETS];
+	ms->MulticastFramesXmittedOK = t[RTL9602C_MIBI_TX_MULTICAST];
+	ms->BroadcastFramesXmittedOK = t[RTL9602C_MIBI_TX_BROADCAST];
+	ms->MulticastFramesReceivedOK = t[RTL9602C_MIBI_RX_MULTICAST];
+	ms->BroadcastFramesReceivedOK = t[RTL9602C_MIBI_RX_BROADCAST];
+	ms->FrameTooLongErrors = t[RTL9602C_MIBI_RX_OVERSIZE];
+}
+
+static void rtl9602c_get_eth_ctrl_stats(struct dsa_switch *ds, int port,
+					struct ethtool_eth_ctrl_stats *cs)
+{
+	u64 t[RTL9602C_MIB_NUM];
+
+	rtl9602c_mib_get(ds->priv, port, t);
+	cs->UnsupportedOpcodesReceived = t[RTL9602C_MIBI_RX_UNKNOWN_OPCODES];
 }
 
 static const struct dsa_switch_ops rtl9602c_switch_ops = {
@@ -1964,6 +2222,11 @@ static const struct dsa_switch_ops rtl9602c_switch_ops = {
 	.get_sset_count		= rtl9602c_get_sset_count,
 	.get_strings		= rtl9602c_get_strings,
 	.get_ethtool_stats	= rtl9602c_get_ethtool_stats,
+	.get_stats64		= rtl9602c_get_stats64,
+	.get_pause_stats	= rtl9602c_get_pause_stats,
+	.get_rmon_stats		= rtl9602c_get_rmon_stats,
+	.get_eth_mac_stats	= rtl9602c_get_eth_mac_stats,
+	.get_eth_ctrl_stats	= rtl9602c_get_eth_ctrl_stats,
 };
 
 /*
@@ -1985,6 +2248,8 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	mutex_init(&p->i2c_lock);
 	INIT_DELAYED_WORK(&p->intr_rearm, rtl9602c_intr_rearm);
 	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
+	spin_lock_init(&p->mib_lock);
+	INIT_DELAYED_WORK(&p->mib_work, rtl9602c_mib_work);
 	mutex_init(&p->table_lock);
 	mutex_init(&p->fdb_lock);
 	mutex_init(&p->ploam_lock);

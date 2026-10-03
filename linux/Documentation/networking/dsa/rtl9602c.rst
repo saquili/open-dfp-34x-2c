@@ -124,7 +124,9 @@ is prefixed ``rtl9602c_``.
    * - ``rtl9602c-main.c``
      - ``get_tag_protocol``, ``setup``, ``teardown``, ``phylink_get_caps``,
        ``phylink_fixed_state``, ``port_enable``, ``port_disable``,
-       ``get_sset_count``, ``get_strings``, ``get_ethtool_stats``
+       ``get_sset_count``, ``get_strings``, ``get_ethtool_stats``,
+       ``get_stats64``, ``get_pause_stats``, ``get_rmon_stats``,
+       ``get_eth_mac_stats``, ``get_eth_ctrl_stats``
      - This page.
    * - ``rtl9602c-main.c``
      - ``devlink_info_get``, ``devlink_param_get``, ``devlink_param_set``
@@ -387,9 +389,11 @@ Interfaces to user space
   offload, and ``nft`` flowtables for routing and NAT; the pages listed under
   "What the switch offloads" describe what each command becomes in the
   hardware.
-- ``ethtool -S sfp`` and ``ethtool -S pon`` list the 44 counters of the port
-  (see "Per-port counters"). The counters of the CPU port appear in the
-  conduit's statistics under DSA's prefix ``s00_p03_``::
+- ``ethtool -S sfp`` and ``ethtool -S pon`` list the 44 counters of the port,
+  and ``ethtool -S sfp --groups eth-mac eth-ctrl rmon`` and ``ethtool -I -a
+  sfp`` the standard statistics made from them; ``ip -s link show sfp`` counts
+  what the port carried (see "Per-port counters"). The counters of the CPU
+  port appear in the conduit's statistics under DSA's prefix ``s00_p03_``::
 
       ethtool -S cpu | grep s00_p03_
 
@@ -1336,15 +1340,32 @@ Per-port counters
 
 Each port has a receive block and a transmit block of counters in the switch's
 register window, one 32-bit counter per word, read directly with no latch step.
-``rtl9602c_get_ethtool_stats()`` reads all 44 counters of a port on every
-``ethtool -S``, under the names of the tables below; DSA lists its own
-``tx_packets``, ``tx_bytes``, ``rx_packets`` and ``rx_bytes`` before them. The
-two octet counters are 64 bits wide: the driver reads the high word, the low
-word and the high word again, and repeats while the high word moved, so that a
-carry between the reads cannot corrupt the value. ``rx_forward_discards`` is in
-the transmit block but counts frames received on the port and discarded by
-forwarding. The *Tag* column of the tables says how the offset is established,
-by the rows that follow them.
+The counters run free and wrap, so the driver keeps each as a 64-bit total
+(``rtl9602c_mib_fold()``): every read adds the difference since the last one,
+modulo 2^32, and a worker folds every port every ``RTL9602C_MIB_FOLD_S`` (60)
+seconds, within the 19 minutes a counter takes to wrap at the SFP port's 2.5
+Gb/s of frames of minimum size. ``rtl9602c_get_ethtool_stats()`` reports all
+44 totals of a port on every ``ethtool -S``, under the names of the tables
+below; DSA lists its own ``tx_packets``, ``tx_bytes``, ``rx_packets`` and
+``rx_bytes`` before them. The two octet counters are 64 bits wide: the driver
+reads the high word, the low word and the high word again, and repeats while
+the high word moved, so that a carry between the reads cannot corrupt the
+value. ``rx_forward_discards`` is in the transmit block but counts frames
+received on the port and discarded by forwarding. The *Tag* column of the
+tables says how the offset is established, by the rows that follow them.
+
+The same totals make the standard statistics. ``get_stats64`` gives the
+interface statistics that ``ip -s link`` shows, which therefore count what the
+port carried, bridged traffic included, and not only what crossed the CPU:
+packets are the unicast, multicast and broadcast frames together; receive
+errors the CRC and alignment errors, the symbol errors, and as length errors
+the undersize, oversize, fragment and jabber frames; receive drops the port's
+drop events and the forwarding discards; transmit drops ``tx_discards``;
+collisions ``tx_collisions``, with the excessive and the late ones as transmit
+errors. ``get_eth_mac_stats``, ``get_eth_ctrl_stats``, ``get_rmon_stats`` and
+``get_pause_stats`` fill the IEEE 802.3 and RMON groups of ``ethtool -S
+--groups`` and the pause statistics of ``ethtool -I -a``, the RMON size buckets
+being 64 to 1518 bytes in the six ranges of the counters and 1519 to 16383.
 
 Receive block, at ``RTL9602C_MIB_RX(p)`` = ``0x032200`` + 128p:
 
@@ -1553,15 +1574,19 @@ Transmit block, at ``RTL9602C_MIB_TX(p)`` = ``0x032000`` + 128p:
      - Checked by
    * - Each port has a receive block at ``RTL9602C_MIB_RX(p)`` (``0x032200`` +
        128p) and a transmit block at ``RTL9602C_MIB_TX(p)`` (``0x032000`` +
-       128p), one 32-bit counter per word, read directly with no latch step.
-       The driver reads all 44 counters of the port on every ``ethtool -S``;
-       the counters of the CPU port appear in the conduit's statistics under
-       DSA's prefix ``s00_p03_``.
-     - T
-     - ``rx_unicast`` and ``tx_unicast`` of ``sfp`` and ``pon`` through
+       128p), one 32-bit counter per word, read directly with no latch step,
+       and not cleared by a read. The driver folds all 44 counters of the port
+       into its totals on every read; the counters of the CPU port appear in
+       the conduit's statistics under DSA's prefix ``s00_p03_``.
+     - T, M
+     - T: ``rx_unicast`` and ``tx_unicast`` of ``sfp`` and ``pon`` through
        ``ethtool -S`` count the frames sent through them in a datapath test;
        the counters also close the account of frames that arrived, were
-       discarded, went to the CPU and were forwarded in a routing test.
+       discarded, went to the CPU and were forwarded in a routing test. M:
+       ``rx_oversize`` read 1, 2, 3, 4 and 5 across reads minutes apart. After
+       the datapath tests ``ip -s link show sfp`` counted 11,584,961 packets
+       received, as ``eth-mac-FramesReceivedOK`` did, where the CPU had seen
+       a few thousand.
    * - Offsets that tests depend on: receive ``RTL9602C_MIB_RX_UCAST_PKTS``
        ``0x20`` (``rx_unicast``); transmit ``RTL9602C_MIB_TX_UCAST_PKTS``
        ``0x5c`` (``tx_unicast``), ``RTL9602C_MIB_TX_PKTS_512_1023`` ``0x20``
@@ -1665,8 +1690,9 @@ Teardown
 ``rtl9602c_remove()`` calls ``dsa_unregister_switch()``, and DSA calls
 ``rtl9602c_teardown()``, which undoes setup in this order:
 
-1. Cancel the GPON work. Purpose: on a board without the interrupt nothing else
-   cancels it, and it must not run while the parts it uses go. (T)
+1. Cancel the GPON work and the counter fold. Purpose: on a board without the
+   interrupt nothing else cancels the GPON work, and neither must run while the
+   parts they use go. (T)
 2. Unregister the L3 notifiers (address, neighbour and route). Purpose: they can
    run on any CPU and touch the tables, so they go before anything they touch.
    (T)
@@ -1744,6 +1770,8 @@ A step that belongs to another page is named and handed over.
     hwmon device (*PON*), the PHC (*ptp*), the OMCI channel and the GEM data
     path (*PON*). A failure in any of these is logged and setup still succeeds.
     (T)
+20. Start the counter fold (see "Per-port counters"). Purpose: no counter wraps
+    between two folds. (T)
 
 The steps are checked as follows. Step 1 by the SerDes link to the host coming
 up. Steps 2 and 3 by bridged traffic passing both ways, sourced from the host.
@@ -1756,7 +1784,8 @@ views after a warm reboot (*acl-qos*). Steps 16 to 18 by bridged traffic passing
 both ways, VLAN filtering and FDB learning working, and a routing and NAT test
 that sees a translated source address on the wire. Step 19 by the board
 booting to a shell, the PTP hardware clock reading and steering, OMCI passing
-both ways over ``/dev/pon0omci0`` and the optics diagnostics reading.
+both ways over ``/dev/pon0omci0`` and the optics diagnostics reading. Step 20
+by the interface statistics, which count what the ports carried.
 
 The system-controller enable in front of the PON packet buffer
 ==============================================================
