@@ -1024,6 +1024,22 @@ router state, described in the rows below and in "Joining a bridge" under
        unregistered IPv4 multicast; turning snooping off made the bridge drop
        the router port and the PON port flood again (see the switch's
        *bridging* page, "Multicast snooping").
+   * - The groups that the host itself joined, which the bridge hands to each
+       of its ports as ``SWITCHDEV_OBJ_ID_HOST_MDB``, stop at an offloaded GEM
+       interface: the class's switchdev notifier runs ahead of those of the
+       default priority and ends the call chain for them. The switch's own
+       ports in the bridge carry these groups already. A DSA switch cannot see
+       that a GEM interface is offloaded through one of its ports, and counted
+       each GEM interface's copy on its CPU port as a foreign interface's; the
+       bridge replays nothing to a port that joins, so a group that the host
+       had joined before the GEM interfaces were bridged was removed once for
+       each GEM interface more than it was added, and every extra removal
+       logged ``Failed to del Host Multicast Database entry`` with error -2.
+     - M
+     - On the RTL9602C, with two host groups joined before the two GEM
+       interfaces were bridged with ``sfp``: before, four such lines in the
+       kernel log 284 s after boot, when the groups expired; after, the groups
+       were gone by 332 s and the log had none.
 
 The pon generic netlink family
 ==============================

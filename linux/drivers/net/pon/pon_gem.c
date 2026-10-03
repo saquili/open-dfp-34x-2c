@@ -704,6 +704,31 @@ static int pon_gem_port_attr_set(struct net_device *dev, const void *ctx,
 	return 0;
 }
 
+/*
+ * Whether @ptr is a group that the host itself joined, handed to an offloaded
+ * GEM interface. The bridge hands such a group to each of its ports. For an
+ * offloaded GEM interface it stops here, ahead of the other listeners: the
+ * switch's own ports in the bridge carry it already, and a DSA switch, which
+ * cannot see that the GEM interface is offloaded through one of its ports,
+ * takes the GEM interface's copy as that of a foreign interface and counts
+ * it on the CPU port. The bridge replays nothing to a GEM interface that
+ * joins, so a group that the host joined earlier was then taken off the CPU
+ * port once for each GEM interface more than it was put on, and each extra
+ * removal failed with -ENOENT in the kernel log.
+ */
+static bool pon_gem_host_mdb(struct net_device *dev, void *ptr)
+{
+	struct switchdev_notifier_port_obj_info *info = ptr;
+	struct pon_gem *gem;
+
+	if (!pon_gem_dev_check(dev) ||
+	    info->obj->id != SWITCHDEV_OBJ_ID_HOST_MDB)
+		return false;
+
+	gem = netdev_priv(dev);
+	return gem->offloaded;
+}
+
 static int pon_gem_switchdev_blocking_event(struct notifier_block *nb,
 					    unsigned long event, void *ptr)
 {
@@ -712,10 +737,14 @@ static int pon_gem_switchdev_blocking_event(struct notifier_block *nb,
 
 	switch (event) {
 	case SWITCHDEV_PORT_OBJ_ADD:
+		if (pon_gem_host_mdb(dev, ptr))
+			return NOTIFY_STOP;
 		err = switchdev_handle_port_obj_add(dev, ptr, pon_gem_dev_check,
 						    pon_gem_port_obj_add);
 		return notifier_from_errno(err);
 	case SWITCHDEV_PORT_OBJ_DEL:
+		if (pon_gem_host_mdb(dev, ptr))
+			return NOTIFY_STOP;
 		err = switchdev_handle_port_obj_del(dev, ptr, pon_gem_dev_check,
 						    pon_gem_port_obj_del);
 		return notifier_from_errno(err);
@@ -728,8 +757,14 @@ static int pon_gem_switchdev_blocking_event(struct notifier_block *nb,
 	return NOTIFY_DONE;
 }
 
+/*
+ * Ahead of the listeners of the default priority, DSA's among them, so that
+ * the host groups of an offloaded GEM interface stop here (see
+ * pon_gem_host_mdb()).
+ */
 static struct notifier_block pon_gem_switchdev_blocking_notifier = {
 	.notifier_call = pon_gem_switchdev_blocking_event,
+	.priority = 1,
 };
 
 /*
