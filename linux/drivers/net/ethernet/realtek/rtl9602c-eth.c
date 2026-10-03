@@ -118,6 +118,9 @@
 #define RTL9602C_NIC_RX_FILTER_PROMISC	0x0000000f
 #define RTL9602C_NIC_TX_CFG_IPG_3	0x00000c00
 #define RTL9602C_NIC_DMA_CTRL_INIT	0xc059f130
+#define RTL9602C_NIC_DMA_CTRL_TX_JUMBO	BIT(28)
+#define RTL9602C_NIC_TX_CFG_JUMBO	BIT(15)
+#define RTL9602C_NIC_CFG_TX_JUMBO	BIT(16)
 #define RTL9602C_NIC_RING_CFG_INIT	0x32000001
 
 /*
@@ -400,10 +403,13 @@ static_assert(RTL9602C_RX_RING <= 256);
 				 RTL9602C_NIC_RX_FCS_LEN)
 /*
  * The largest MTU leaves room for PPPoE's 8 bytes of headers around a 1500-byte
- * packet (RFC 4638), and no more: the transmit engine stops on long frames,
- * keeping the descriptor its own, and nothing more leaves until the conduit is
- * restarted. One at a time it sent frames of up to 1820 bytes, FCS not
- * counted; back to back, frames of 1751 bytes and more stopped it (measured).
+ * packet (RFC 4638), and no more. In its default mode the transmit engine stops
+ * on long frames, keeping the descriptor its own, and nothing more leaves until
+ * the conduit is restarted: one at a time it sent frames of up to 1820 bytes,
+ * FCS not counted, and back to back frames of 1751 bytes and more stopped it.
+ * Its jumbo mode, RTL9602C_NIC_TX_CFG_JUMBO, RTL9602C_NIC_CFG_TX_JUMBO and
+ * RTL9602C_NIC_DMA_CTRL_TX_JUMBO together, sent frames of up to 8000 bytes back
+ * to back and went on sending (all measured); the driver does not use it.
  * RTL9602C_NIC_TX_MAX is the longest frame that the MTU lets the stack make,
  * with the header and two VLAN tags; the driver drops a longer one.
  */
