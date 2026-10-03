@@ -1850,13 +1850,17 @@ struct rtl9602c_field {
 #define RTL9602C_CLS_CTRL_PON_EN		BIT(3)
 
 /*
- * Rule word 0: direction, tags, VID and ingress port; that CTAG, STAG and
- * VID match frames as named is not verified.
+ * Rule word 0: direction, tags, VID, priority and ingress port. CTAG says
+ * whether the frame carries a C-tag, whose VID and priority VID and PRI are.
+ * STAG says whether it carries an S-tag, which the switch recognises only on a
+ * port in S-VLAN uplink mode (RTL9602C_SVLAN_UPLINK_PORTS); VID and PRI are
+ * then still the C-tag's (measured).
  */
 #define RTL9602C_CLS_RULE_DS		BIT(31)
 #define RTL9602C_CLS_RULE_CTAG	BIT(3)
 #define RTL9602C_CLS_RULE_STAG	BIT(4)
 #define RTL9602C_CLS_RULE_VID			GENMASK(22, 11)
+#define RTL9602C_CLS_RULE_PRI			GENMASK(10, 8)
 #define RTL9602C_CLS_RULE_UNI			GENMASK(2, 0)
 #define RTL9602C_CLS_RULE_VLAN_CARE		(RTL9602C_CLS_RULE_CTAG | \
 					 RTL9602C_CLS_RULE_STAG | \
@@ -1865,9 +1869,14 @@ struct rtl9602c_field {
 /* Rule word 1, in the ones plane. */
 #define RTL9602C_CLS_RULE_VALID		BIT(16)
 
-/* Action word 1: assign the C-VID; not verified. */
+/*
+ * Action word 1: assign the C-VID (CVID_SET with CVID) and the C-tag's
+ * priority (CPRI_SET with CPRI) for the C-tag that TAG writes.
+ */
 #define RTL9602C_CLS_ACT_CVID_SET	BIT(18)
 #define RTL9602C_CLS_ACT_CVID		GENMASK(14, 3)
+#define RTL9602C_CLS_ACT_CPRI_SET	BIT(21)
+#define RTL9602C_CLS_ACT_CPRI		GENMASK(17, 15)
 
 /*
  * Action word 1: what becomes of the C-tag. TAG gives the frame a C-tag with
@@ -1879,7 +1888,22 @@ struct rtl9602c_field {
 #define RTL9602C_CLS_ACT_CTAG_TAG	1
 #define RTL9602C_CLS_ACT_CTAG_UNTAG	2
 
-/* Action word 0: assign the stream, the GEM flow. */
+/*
+ * Action word 0: what becomes of the S-tag, with the VID and priority that ADD
+ * gives it (SVID_SET with SVID, SPRI_SET with SPRI): ADD puts an S-tag with the
+ * S-VLAN block's TPID (RTL9602C_SVLAN_TPID_CFG_PRIMARY, 0x88a8 at reset) in
+ * front of the frame, and 0 leaves the frame as it is (both measured). Taking
+ * an S-tag off (3) worked only on a port in S-VLAN uplink mode, which the
+ * driver does not use.
+ */
+#define RTL9602C_CLS_ACT_STAG		GENMASK(2, 0)
+#define RTL9602C_CLS_ACT_STAG_ADD	1
+#define RTL9602C_CLS_ACT_SVID		GENMASK(14, 3)
+#define RTL9602C_CLS_ACT_SPRI		GENMASK(17, 15)
+#define RTL9602C_CLS_ACT_SPRI_SET	BIT(18)
+#define RTL9602C_CLS_ACT_SVID_SET	BIT(21)
+
+/* Action word 0, upstream only: assign the stream, the GEM flow. */
 #define RTL9602C_CLS_ACT_FLOW_SET	BIT(23)
 #define RTL9602C_CLS_ACT_FLOW		GENMASK(30, 24)
 
@@ -2701,12 +2725,16 @@ struct rtl9602c_priv {
 	 */
 	unsigned long cf_cookie[RTL9602C_CLS_ENTRIES];
 	/**
-	 * @cf_xlate: each translation entry's port and VIDs, so that its
-	 * stream can be chosen again when the streams change
+	 * @cf_xlate: each VLAN rule's entry as composed, without the stream;
+	 * the VLAN whose upstream GEM interface gives an upstream rule its
+	 * stream, VLAN_N_VID for none; and the port the rule is on, so that
+	 * the stream can be chosen again when the streams change
 	 */
 	struct rtl9602c_cf_xlate {
-		u16 match_vid;
-		u16 assign_vid;
+		u32 value;
+		u32 care;
+		u32 act[3];
+		u16 out_vid;
 		u8 port;
 	} cf_xlate[RTL9602C_CLS_ENTRIES];
 

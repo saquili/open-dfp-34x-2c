@@ -99,7 +99,7 @@ prefixed ``rtl9602c_``.
      - "Mirroring".
    * - ``cls_flower_add``, ``cls_flower_del`` (``rtl9602c-offload.c``; the rules
        that drop, trap or police are on the *acl-qos* page)
-     - "VLAN translation".
+     - "VLAN tag operations".
    * - ``gem_bridge_join``, ``gem_bridge_leave``, ``gem_vlan_add``,
        ``gem_vlan_del`` (``rtl9602c-gem.c``, operations of the PON class)
      - "Bridging the GEM ports".
@@ -128,9 +128,9 @@ The files that hold the rest of this page:
        ``rtl9602c_setup()`` that empty the address table, exempt reserved
        addresses from storm control and set the standalone forwarding state.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
-     - VLAN translation (``rtl9602c_flower_replace()``,
-       ``rtl9602c_cf_write()``), the classifier entries that give bridged ports
-       a GEM stream (``rtl9602c_cf_sid_refresh()``), the ACL rules that copy
+     - The VLAN tag operations (``rtl9602c_flower_vlan()``,
+       ``rtl9602c_cf_write_xlate()``), the classifier entries that give bridged
+       ports a GEM stream (``rtl9602c_cf_sid_refresh()``), the ACL rules that copy
        IGMP and MLD to the CPU (``rtl9602c_acl_snoop_setup()``), and the
        debugfs views ``l2learn``, ``svlan`` and ``rma``.
    * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
@@ -165,8 +165,8 @@ Configuration
        that has VLAN filtering (see "Known limitations").
    * - ``CONFIG_NET_SCH_INGRESS``, ``CONFIG_NET_CLS_FLOWER``,
        ``CONFIG_NET_CLS_ACT``, ``CONFIG_NET_ACT_VLAN``
-     - VLAN translation: a flower rule with ``vlan modify`` on the ingress of a
-       user port.
+     - The VLAN tag operations: a flower rule with ``vlan modify``, ``push``
+       or ``pop`` on the ingress of a user port.
    * - ``CONFIG_NET_CLS_MATCHALL``, ``CONFIG_NET_ACT_MIRRED``
      - Port mirroring: a matchall rule with a mirred action.
    * - ``CONFIG_PON``
@@ -197,9 +197,10 @@ Interfaces to user space
   ``bridge fdb`` adds and removes static entries, and ``bridge fdb show`` lists
   the switch's own entries as ``self`` entries. ``bridge mdb`` manages multicast
   groups.
-- ``tc`` rules on ``sfp`` or ``pon``: a flower rule with ``vlan modify`` is a
-  VLAN translation, and a matchall rule with a mirred action mirrors a port (see
-  "VLAN translation" and "Mirroring").
+- ``tc`` rules on ``sfp`` or ``pon``: a flower rule with ``vlan modify``,
+  ``push`` or ``pop`` changes the VLAN tags of the frames it matches, and a
+  matchall rule with a mirred action mirrors a port (see "VLAN tag operations"
+  and "Mirroring").
 - Four read-only debugfs views in ``/sys/kernel/debug/rtl9602c/``, ``fdb``,
   ``l2learn``, ``svlan`` and ``rma`` (see "The read-only views").
 - ``ethtool -S`` reports ``rx_forward_discards`` for a port: the frames that the
@@ -1877,22 +1878,32 @@ so an address is not the register's position in the block.
      - Frames to 01:80:c2:00:00:00 with the action at each value, counted at the
        CPU and at the host, would settle the action. Nothing depends on them.
 
-VLAN translation
-================
+VLAN tag operations
+===================
 
 The service that the stick exists for is a single-tag VID translation: in ITU-T
 G.988 terms (clause 9.3.13, the extended VLAN tagging operation configuration
-data), a rule that matches one C-VID and assigns another. The driver offers it
-as a tc flower rule on the ingress of a user port, which the OMCI daemon
-installs, and turns the rule into one entry of the classifier. The classifier's
-entry format and the sequence that programs an entry are on the *acl-qos* page;
-VLAN membership (``port_vlan_add``) is a different block.
+data), a rule that matches one C-VID and assigns another. The same managed
+entity also gives an untagged frame a tag and takes it off again in the other
+direction, adds an outer tag, and sets a tag's priority. The driver offers these
+operations as tc flower rules on the ingress of a user port, one vlan action
+each, which the OMCI daemon installs, and turns each rule into one entry of the
+classifier. The classifier's entry format and the sequence that programs an
+entry are on the *acl-qos* page; VLAN membership (``port_vlan_add``) is a
+different block.
 
-An example of a translation from VID 410 to VID 1410::
+A translation from VID 410 to VID 1410, a C-tag of VID 410 and priority 5 given to
+untagged frames from the subscriber side, and that tag taken off frames from the
+network side::
 
     tc qdisc add dev sfp clsact
+    tc qdisc add dev pon clsact
     tc filter add dev sfp ingress protocol 802.1Q flower skip_sw \
             vlan_id 410 action vlan modify id 1410
+    tc filter add dev sfp ingress protocol all flower skip_sw \
+            num_of_vlans 0 action vlan push id 410 priority 5
+    tc filter add dev pon ingress protocol 802.1Q flower skip_sw \
+            vlan_id 410 action vlan pop
 
 .. list-table::
    :header-rows: 1
@@ -1901,37 +1912,60 @@ An example of a translation from VID 410 to VID 1410::
    * - Fact
      - Tag
      - Checked by
-   * - A translation is a tc flower rule on a port's ingress, as in the example
-       above. It arrives as ``FLOW_ACTION_VLAN_MANGLE`` and becomes one
-       classifier entry: match a C-tag with that VID, the S-tag's absence and
-       the direction; assign the new C-VID (``RTL9602C_CLS_ACT_CVID_SET`` with
-       ``RTL9602C_CLS_ACT_CVID``) and tag the frame with it
-       (``RTL9602C_CLS_ACT_CTAG_TAG``), with no S-tag operation. The tag's
-       priority bits stay as they came.
+   * - A rule matches an untagged frame (``num_of_vlans 0``), or an outer
+       C-tag (``protocol 802.1Q``) with its VID and its priority if the rule
+       names them, and becomes one classifier entry that compares the C-tag
+       and S-tag bits, the VID and the priority it names, the direction, and
+       for an upstream rule the port it is on.
      - M
-     - The rule read back from the classifier's table: action word 1 =
-       ``0x00042c12`` (C-VID assign, 1410, tag), rule word 0 =
+     - A translation's entry read back from the classifier's table: action word
+       1 = ``0x00042c12`` (C-VID assign, 1410, tag), rule word 0 =
        ``0x000cd008`` on ``sfp`` (C-tag present, VID 410 at bit 11) with bit 31
-       also set for the same rule on ``pon``, rule word 1 = the valid bit;
-       ``tc filter del`` zeroed the rule. Without ``skip_sw``, tc installs a
-       rule that no driver took in software and reports success. Through the
-       driver: debugfs ``rtl9602c/cf``.
-   * - Refused with ``-EOPNOTSUPP`` and a message: egress rules (the classifier
-       acts on ingress); any key but the VLAN (with the basic and control keys);
-       a VID with a partial mask; any priority match (one entry covers every
-       priority); more than one action; any action but ``vlan modify`` (a drop
-       or trap goes to the ACL, and ``police`` on a destination-address match to
-       storm control, both on the *acl-qos* page); ``vlan modify`` of an S-tag.
-       With no free entry: ``-ENOSPC`` and the message
-       ``the classifier is full``.
+       also set for the same rule on ``pon``; ``tc filter del`` zeroed the rule.
+       With ``vlan_prio 5`` in the match, 100 frames of 410 with priority 5
+       were translated and 100 with priority 2 were not. Without ``skip_sw``,
+       tc installs a rule that no driver took in software and reports success.
+       Through the driver: debugfs ``rtl9602c/cf``.
+   * - The one action of a rule: ``vlan modify`` of the outer C-tag gives it a
+       new VID, and a new priority unless the action gives 0; ``vlan push`` of
+       a C-tag (802.1Q) gives an untagged frame a C-tag; ``vlan push`` of an
+       S-tag (802.1ad) puts an S-tag, with the TPID of
+       ``RTL9602C_SVLAN_TPID_CFG_PRIMARY`` (``0x88a8``), in front of an
+       untagged frame or a C-tag; ``vlan pop`` takes the outer C-tag off. A
+       push gives the tag the action's VID and priority.
      - M
-     - The rule of the previous row with ``vlan_prio 3`` was refused with
-       ``skip_sw``; the other refusals take the same path and are checked the
-       same way, one ``tc filter add ... skip_sw`` each.
+     - 100 frames each, through an OLT that is a transparent bridge: untagged
+       frames upstream left as C-VID 410 with priority 5, and downstream as 410
+       with priority 4, while C-tagged frames passed those rules unchanged;
+       C-VID 410 downstream, and upstream, lost its tag; C-VID 100 with
+       priority 1 upstream left as S-VID 200 with priority 3 in front of it,
+       and untagged frames as S-VID 300 with priority 2; ``vlan modify id 1410
+       priority 6`` turned 410 with priority 5 into 1410 with priority 6.
+   * - A ``vlan modify`` that gives priority 0 keeps the frame's priority
+       instead: the action reaches the driver without saying whether it gives
+       a priority at all, and keeping it is what a modify without one does.
+     - I
+     - The flow action's VLAN fields (``struct flow_action_entry``): a VID, a
+       protocol and a priority, and no flag for a priority given.
+   * - Refused with ``-EOPNOTSUPP`` and a message: egress rules (the classifier
+       acts on ingress); any key but the VLAN tags (with the basic and control
+       keys), or an EtherType behind them; a VID or priority with a partial
+       mask; a DEI match; ``num_of_vlans`` other than 0, or with a VLAN key; an
+       outer 802.1ad tag; more than one action; any action but ``vlan
+       modify``, ``push`` and ``pop`` (a drop or trap goes to the ACL, and
+       ``police`` on a destination-address match to storm control, both on the
+       *acl-qos* page); a modify that is not of a C-tag into a C-tag; a C-tag
+       pushed onto a C-tag; a pop of an untagged frame. With no free entry:
+       ``-ENOSPC`` and the message ``the classifier is full``.
+     - M
+     - ``num_of_vlans 1`` with a VID, a pop with ``num_of_vlans 0``, a C-tag
+       pushed onto a C-tag and a match on an 802.1ad tag were each refused with
+       their message; the other refusals take the same path.
    * - The direction is the port that the rule is on: a rule on the PON port
        acts on downstream frames, on any other port on upstream frames. The
-       direction bit is compared in every entry, so an upstream translation does
-       not also rewrite downstream frames that carry the same VID.
+       direction bit is compared in every entry, so an upstream rule does not
+       also act on downstream frames that carry the same VID, and an upstream
+       rule compares the ingress port, so it acts on no other port's frames.
      - M
      - In the test of the next row, with both rules in place, frames of 1410
        sent upstream and of 410 sent downstream crossed unchanged: neither rule
@@ -1949,19 +1983,29 @@ An example of a translation from VID 410 to VID 1410::
        ones crossed unchanged, and with the rules deleted every frame crossed
        as sent. Before the driver set the tag action and the PON enable, the
        same entries changed nothing.
-   * - Every translation, and every stream entry that matches a VID (see
-       "Bridging the GEM ports"), requires the frame to carry no S-tag:
-       ``RTL9602C_CLS_RULE_STAG`` is compared with value 0. An S-tagged frame
-       matches none of them.
-     - M, I
-     - M: under a translation of 3001 to 3002 on ``sfp`` and of 3002 to 3001
-       on ``pon``, 200 frames with an 802.1ad tag (TPID ``0x88a8``, VID 100)
-       in front of a C-tag of 3001 crossed upstream untranslated, as did 200
-       with 3002 inside downstream; upstream they had their port's stream,
-       whose entry compares no tag. I: whether the entries refused them
-       through the S-tag bit, or because the switch saw no C-tag at the front
-       of the frame. Not load-bearing on a line that sends single-tagged
-       frames.
+   * - The switch recognises an S-tag only on a port in S-VLAN uplink mode
+       (``RTL9602C_SVLAN_UPLINK_PORTS``), and the driver puts no port in it: in
+       that mode the PON port dropped every downstream frame without an S-tag
+       and gave every upstream frame an S-tag of VID 0. Elsewhere a frame with
+       an outer 802.1ad tag counts as untagged, so no rule matches or pops an
+       S-tag, and a C-tag pushed onto untagged frames lands in front of an
+       S-tag too.
+     - M
+     - With the PON port in that mode, a pop of the S-tag took it off S+C
+       frames, matching the inner C-VID, while untagged and C-tagged frames
+       from the network side were lost; without it no rule on an S-tag
+       matched, and a push onto untagged frames turned S-VID 200 in front of
+       C-VID 100 into C-VID 410 in front of both, both ways.
+   * - Every rule on a C-tag, and every stream entry that matches a VID (see
+       "Bridging the GEM ports"), requires the frame to carry a C-tag at its
+       front, so a frame with an outer 802.1ad tag matches none of them.
+     - M
+     - Under a translation of 3001 to 3002 on ``sfp`` and of 3002 to 3001 on
+       ``pon``, 200 frames with an 802.1ad tag (TPID ``0x88a8``, VID 100) in
+       front of a C-tag of 3001 crossed upstream untranslated, as did 200 with
+       3002 inside downstream; upstream they had their port's stream, whose
+       entry compares no tag. The switch sees no tag on such a frame (row
+       above).
    * - Of a frame with two C-tags, a translation rewrites the outer one and
        leaves the inner one as it is.
      - M
@@ -1980,14 +2024,14 @@ An example of a translation from VID 410 to VID 1410::
      - The stream entry read back at the top index (see "Bridging the GEM
        ports"); routing tests in which the routed port's stream entry is found
        where the driver put it.
-   * - An upstream translation therefore carries the stream itself: when an
-       upstream GEM interface claims the VID that the rule assigns (see
+   * - An upstream rule therefore carries the stream itself: when an upstream
+       GEM interface claims the VID that the rule's modify or push writes (see
        "Bridging the GEM ports"), the entry also sets
        ``RTL9602C_CLS_ACT_FLOW_SET`` with that interface's flow in
-       ``RTL9602C_CLS_ACT_FLOW``; otherwise it sets the flow that its port's
-       stream entry gives, which the frame would have had untranslated. A
-       translated frame without a stream reaches the PON MAC without a GEM port
-       and is lost. The upstream translations are written again whenever the
+       ``RTL9602C_CLS_ACT_FLOW``; otherwise, and for a pop, it sets the flow
+       that its port's stream entry gives, which the frame would have had
+       without the rule. A frame without a stream reaches the PON MAC without a
+       GEM port and is lost. The upstream rules are written again whenever the
        stream entries change.
      - M
      - With no VLAN claimed, an entry without a stream lost all 200 frames of
@@ -2364,7 +2408,7 @@ Questions the code does not depend on
        CPU and at the host.
    * - Whether an 802.1ad frame, which a translation does not rewrite, is refused
        by its entry through the S-tag bit or seen with no C-tag at its front
-       ("VLAN translation").
+       ("VLAN tag operations").
      - The frame capture of such a frame from the host.
    * - Whether the router bit should be set only once the L3 engine is up ("The
        layer-2 side of routing").

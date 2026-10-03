@@ -26,8 +26,8 @@ The other pages of the port are named by short names on this page:
   integration, the switch interrupt, the order of setup and a code map of the
   whole driver.
 - *bridging*, Documentation/networking/dsa/rtl9602c-bridging.rst: the indirect
-  table engine, the address table, flooding, VLANs, and the VLAN translation
-  and the GEM stream entries as the bridge uses them.
+  table engine, the address table, flooding, VLANs, and the VLAN tag
+  operations and the GEM stream entries as the bridge uses them.
 - *l3-nat*, Documentation/networking/dsa/rtl9602c-l3-nat.rst: the L3/NAT engine
   and the flowtable offload, whose routed flows use the classifier's stream
   entries.
@@ -205,7 +205,7 @@ Configuration
      - The ingress hook (``clsact``) that the filters attach to.
    * - ``CONFIG_NET_CLS_FLOWER``, ``CONFIG_NET_ACT_GACT``
      - ACL rules: a flower rule with ``drop`` or ``trap``. The classifier's
-       VLAN translation additionally needs ``CONFIG_NET_ACT_VLAN``.
+       VLAN tag operations additionally need ``CONFIG_NET_ACT_VLAN``.
    * - ``CONFIG_NET_ACT_POLICE``
      - Storm-control rules and the ingress policer: the ``police`` action.
    * - ``CONFIG_NET_CLS_MATCHALL``
@@ -842,17 +842,18 @@ The classifier has 256 entries, of which the driver uses the lower part (see
 the depth row below). An entry is a rule, an action and a set of action classes.
 A rule keys on the direction of the frame, upstream when it enters by a user
 port and downstream when it enters by the PON port, and, if it asks, on the
-ingress port and on the frame's C-tag and VID. An action assigns the frame a GEM
-stream, the flow number of a GEM port, or a C-VID, and the classes say which
-parts of the action apply. When several entries match a frame the
-lowest-numbered applies.
+ingress port and on the frame's tags, the C-tag's VID and its priority. An
+action assigns the frame a GEM stream, the flow number of a GEM port, or acts on
+its tags, and the classes say which parts of the action apply. When several
+entries match a frame the lowest-numbered applies.
 
 The driver uses the classifier for two things. The first is to give the frames
 that the switch forwards to the PON port their GEM stream, without which they do
-not leave (see the last row of "Entries and rules"). The second is the VLAN
-translation that the stick exists for, a rule that matches one C-VID and assigns
-another. As services they are described on the *bridging* page ("Bridging the
-GEM ports" and "VLAN translation"); this page describes the entries.
+not leave (see the last row of "Entries and rules"). The second is the VLAN tag
+operations: the translation that the stick exists for, a rule that matches one
+C-VID and assigns another, and the rules that push, pop or reprioritise a tag.
+As services they are described on the *bridging* page ("Bridging the GEM ports"
+and "VLAN tag operations"); this page describes the entries.
 
 Entries and rules
 -----------------
@@ -945,15 +946,22 @@ Entries and rules
        of the OLT as 1410, and 200 of C-VID 1410 sent from there left the SFP
        port as 410; frames of the other VID in each direction, and untagged
        ones, passed unchanged.
+   * - Rule word 0: ``RTL9602C_CLS_RULE_PRI`` (bits 10:8) holds the C-tag's
+       priority.
+     - M
+     - A translation with ``vlan_prio 5`` in its match translated 100 frames of
+       priority 5 and none of 100 of priority 2.
    * - Rule word 0: ``RTL9602C_CLS_RULE_STAG`` (bit 4) is set when the frame
-       carries an S-tag. Every VLAN entry that the driver writes compares it as
-       0 (it is in ``RTL9602C_CLS_RULE_VLAN_CARE``), so an S-tagged frame
-       matches none of them.
-     - M, I
-     - M: an 802.1ad frame with a C-tag of the translated VID inside crossed a
-       translation entry untranslated, both ways (see the *bridging* page,
-       "VLAN translation"). I: whether this bit refused it, or the switch saw
-       no C-tag at the front of the frame.
+       carries an S-tag, which the switch recognises only on a port in S-VLAN
+       uplink mode; ``RTL9602C_CLS_RULE_VID`` and ``RTL9602C_CLS_RULE_PRI`` are
+       then still the C-tag's. The driver puts no port in that mode, so the bit
+       is clear for every frame, and every VLAN entry it writes compares it as
+       0.
+     - M
+     - With the PON port in S-VLAN uplink mode, an entry with this bit and VID
+       100 matched frames of S-VID 200 in front of C-VID 100, and one with VID
+       200 did not; out of that mode no entry with the bit matched them (see
+       the *bridging* page, "VLAN tag operations").
    * - Action word 0 in an upstream entry: ``RTL9602C_CLS_ACT_FLOW_SET``
        (bit 23) gives the frame a stream and ``RTL9602C_CLS_ACT_FLOW`` (bits
        30:24) is the stream, the GEM port's flow number (see the *PON* page).
@@ -962,19 +970,34 @@ Entries and rules
      - Bridged traffic from the host, a routing test and PPPoE over a routed
        port reach the far side of an OLT.
    * - Action word 1, the C-tag plane: ``RTL9602C_CLS_ACT_CVID_SET`` (bit 18)
-       assigns the C-VID held in ``RTL9602C_CLS_ACT_CVID`` (bits 14:3), and
-       ``RTL9602C_CLS_ACT_CTAG`` (bits 2:1) says what becomes of the C-tag:
-       ``RTL9602C_CLS_ACT_CTAG_TAG`` (1) gives the frame a C-tag with the
-       assigned VID and keeps its priority bits, ``RTL9602C_CLS_ACT_CTAG_UNTAG``
-       (2) takes the tag off, and with 0 or 3 the frame keeps its tag and VID,
-       the assignment notwithstanding. A translation writes the assignment with
-       ``RTL9602C_CLS_ACT_CTAG_TAG``. Action word 0's S-tag plane stays zero for
-       a single-tag translation.
+       assigns the C-VID held in ``RTL9602C_CLS_ACT_CVID`` (bits 14:3),
+       ``RTL9602C_CLS_ACT_CPRI_SET`` (bit 21) the priority held in
+       ``RTL9602C_CLS_ACT_CPRI`` (bits 17:15), and ``RTL9602C_CLS_ACT_CTAG``
+       (bits 2:1) says what becomes of the C-tag: ``RTL9602C_CLS_ACT_CTAG_TAG``
+       (1) gives the frame a C-tag with the assigned VID, replacing the one it
+       has or adding one to an untagged frame, with the assigned priority or
+       else the one it had; ``RTL9602C_CLS_ACT_CTAG_UNTAG`` (2) takes the tag
+       off; and with 0 or 3 the frame keeps its tag and VID, the assignment
+       notwithstanding.
      - M
      - Frames of C-VID 410 and PCP 5 under an upstream entry assigning 1410,
        and of 1410 under a downstream entry assigning 410, with each value of
        the field: 1 delivered 1410/5 and 410/5, 200 of 200; 2 delivered the
-       downstream frames untagged; 0 and 3 delivered them as sent.
+       downstream frames untagged; 0 and 3 delivered them as sent. With the
+       priority assigned, 410/5 left as 1410/6, and untagged frames left as 410
+       with the priority assigned, 100 of 100.
+   * - Action word 0, the S-tag plane: ``RTL9602C_CLS_ACT_STAG`` (bits 2:0) =
+       ``RTL9602C_CLS_ACT_STAG_ADD`` (1) puts an S-tag with the TPID of
+       ``RTL9602C_SVLAN_TPID_CFG_PRIMARY`` in front of the frame, with the VID
+       of ``RTL9602C_CLS_ACT_SVID`` (bits 14:3) under
+       ``RTL9602C_CLS_ACT_SVID_SET`` (bit 21) and the priority of
+       ``RTL9602C_CLS_ACT_SPRI`` (bits 17:15) under ``RTL9602C_CLS_ACT_SPRI_SET``
+       (bit 18); 0 leaves the frame as it is. The value 3 took an S-tag off
+       only on a port in S-VLAN uplink mode.
+     - M
+     - Upstream, 100 frames of C-VID 100 and priority 1 left as S-VID 200 with
+       priority 3 in front of the C-tag, and untagged frames as S-VID 300 with
+       priority 2.
    * - ``RTL9602C_CLS_ACT_EN(i)`` (``0x016038`` + 4i): which of entry i's action
        classes apply. The driver writes ``RTL9602C_CLS_ACT_EN_OTHERS`` and
        ``RTL9602C_CLS_ACT_EN_FLOW`` together (``0x3f``) for an upstream entry,
@@ -1035,17 +1058,18 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - Upstream; the ingress port; a C-tag with that VID; no S-tag.
      - The stream of that VLAN's GEM interface. Classes ``0x3f``.
      - The top of the usable range, downwards.
-   * - Upstream translation of VID A to B
-     - Upstream; a C-tag with VID A; no S-tag; any ingress port.
-     - ``RTL9602C_CLS_ACT_CVID_SET`` and ``RTL9602C_CLS_ACT_CVID`` = B with
-       ``RTL9602C_CLS_ACT_CTAG_TAG``, and the stream of the GEM interface that
-       claims B, or else the one the rule's port's stream entry gives. Classes
+   * - Upstream VLAN rule
+     - Upstream; the ingress port; no tag, or a C-tag with the VID and the
+       priority the rule names; no S-tag.
+     - The C-tag or S-tag operation of the rule (see "Entries and rules"), and
+       the stream of the GEM interface that claims the VID the operation
+       writes, or else the one the rule's port's stream entry gives. Classes
        ``0x3f``.
      - The bottom of the usable range, upwards.
-   * - Downstream translation of VID A to B
-     - Downstream; a C-tag with VID A; no S-tag.
-     - ``RTL9602C_CLS_ACT_CVID_SET`` and ``RTL9602C_CLS_ACT_CVID`` = B with
-       ``RTL9602C_CLS_ACT_CTAG_TAG``. Classes ``0x1f``.
+   * - Downstream VLAN rule
+     - Downstream; no tag, or a C-tag with the VID and the priority the rule
+       names; no S-tag.
+     - The C-tag or S-tag operation of the rule. Classes ``0x1f``.
      - The bottom of the usable range, upwards.
 
 .. list-table::
@@ -1074,24 +1098,26 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        and the flow is forwarded. M: the per-VLAN entries, with two upstream
        GEM interfaces in two VLANs, each VLAN's frames counted in its own GEM
        port's upstream octets (the *bridging* page).
-   * - A translation, ``tc filter add dev port ingress protocol 802.1Q flower
-       vlan_id A action vlan modify id B``, becomes one entry: C-tag present and
-       VID A compared (the priority is not compared, so one entry covers every
-       PCP), the direction taken from the port (the PON port is downstream,
-       every other port upstream), C-VID B assigned, the action classes as in
-       the table above, and the entry taken from the bottom of the usable range.
-       What the driver refuses is listed on the *bridging* page. An upstream
-       translation also gives its frames a stream: the flow of the upstream GEM
-       interface that is a member of the assigned VLAN B, or else the flow
-       that the stream entry of the rule's port gives, which the frame would
-       have had untranslated. Each change of the stream entries writes the
-       upstream translations again with the stream that now applies.
+   * - A VLAN rule of tc flower (see the *bridging* page, "VLAN tag
+       operations") becomes one entry: the tag bits, and the VID and priority
+       the rule names, compared; the direction taken from the port (the PON
+       port is downstream, every other port upstream), and for an upstream rule
+       the port compared; the tag operation of its action; the action classes
+       as in the table above; and the entry taken from the bottom of the usable
+       range (``rtl9602c_flower_vlan()``). The driver keeps each entry as
+       composed (``cf_xlate``) and writes an upstream rule's stream with it
+       (``rtl9602c_cf_write_xlate()``): the flow of the upstream GEM interface
+       that is a member of the VLAN the rule writes, or else the flow that the
+       stream entry of the rule's port gives, which the frame would have had
+       without the rule. Each change of the stream entries writes the upstream
+       rules again with the stream that now applies.
      - M
-     - The entry read back exactly as the driver composed it; ``vlan_prio`` in
-       the match was refused; ``tc filter del`` zeroed the ones plane. With
-       the GEM interfaces bridged and no VLAN claimed, an upstream translation
-       without a stream lost all 200 frames of its VID, and with the port's
-       stream delivered them translated (see the C-tag rows above).
+     - The entry read back exactly as the driver composed it; ``tc filter del``
+       zeroed the ones plane. With the GEM interfaces bridged and no VLAN
+       claimed, an upstream translation without a stream lost all 200 frames of
+       its VID, and with the port's stream delivered them translated (see the
+       C-tag rows above); the pushes and pops of the *bridging* page reached
+       the OLT side with the port's stream.
    * - The upstream and downstream directions are the only ones the classifier
        sees: a frame from the SFP port to the CPU crosses neither, so a
        translation cannot be observed on it.
