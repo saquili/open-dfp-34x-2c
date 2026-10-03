@@ -159,7 +159,7 @@ Configuration
    * - ``CONFIG_BRIDGE_IGMP_SNOOPING``
      - Multicast snooping and groups: ``bridge mdb``, the calls to
        ``port_mdb_add`` and ``port_mdb_del`` and the ACL rules of "Multicast
-       snooping" need it. ``rtl9602c_defconfig`` leaves it off.
+       snooping" need it. ``rtl9602c_defconfig`` sets it.
    * - ``CONFIG_VLAN_8021Q``
      - VLAN devices. The 8021q core adds VID 0 to the receive filter of a device
        that has VLAN filtering (see "Known limitations").
