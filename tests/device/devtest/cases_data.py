@@ -26,6 +26,7 @@ way, slowly, and every bridge on the way learns both ends.
 
 from __future__ import annotations
 
+import json
 import shlex
 import time
 
@@ -209,3 +210,108 @@ def upstream(ctx: Context):
     return verdict(ok, f"{sent} frames of {FRAME} B left the bench, {arrived} arrived "
                        f"({arrived / sent:.2%}) at {rate:.0f} Mb/s; CPU saw {cpu}; "
                        f"ONU O{state}{hw}")
+
+
+# The translation the VLAN case installs: a pair of VIDs that no line is
+# expected to carry, so that its entries meet none of the OMCI daemon's, and a
+# tc priority of its own, so that it removes only its own filters.
+XLATE_SUB_VID = 3001   # the VLAN on the subscriber side
+XLATE_NET_VID = 3002   # the VLAN on the network side
+XLATE_PCP = 5
+XLATE_COUNT = 200
+XLATE_PREF = 49000
+
+# Run by python3 on the bench host with SRC DST VID PCP COUNT: COUNT frames
+# tagged VID and PCP from port SRC to port DST's address, a millisecond apart.
+# It prints, as JSON, how many DST received from SRC's address per tag,
+# "vid/pcp" or "untagged", reading the tag from the frame or, where the NIC took
+# it off, from PACKET_AUXDATA.
+TAGGED = """\
+import json, socket, struct, sys, threading, time
+src, dst, vid, pcp, count = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+mac = lambda p: bytes.fromhex(open("/sys/class/net/%s/address" % p).read().strip().replace(":", ""))
+SOL_PACKET, PACKET_AUXDATA, TP_STATUS_VLAN_VALID = 263, 8, 0x10
+rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+rx.bind((dst, 0))
+rx.setsockopt(SOL_PACKET, PACKET_AUXDATA, 1)
+rx.settimeout(0.5)
+seen, stop = {}, []
+def receive():
+    while not stop:
+        try:
+            data, anc, _, _ = rx.recvmsg(2048, socket.CMSG_SPACE(32))
+        except socket.timeout:
+            continue
+        if data[6:12] != mac(src):
+            continue
+        tag = None
+        for level, kind, value in anc:
+            if level == SOL_PACKET and kind == PACKET_AUXDATA:
+                status, tci = struct.unpack("I", value[:4])[0], struct.unpack("H", value[16:18])[0]
+                if status & TP_STATUS_VLAN_VALID:
+                    tag = "%d/%d" % (tci & 0xfff, tci >> 13)
+        if tag is None and data[12:14] == b"\\x81\\x00":
+            tci = struct.unpack(">H", data[14:16])[0]
+            tag = "%d/%d" % (tci & 0xfff, tci >> 13)
+        key = tag or "untagged"
+        seen[key] = seen.get(key, 0) + 1
+thread = threading.Thread(target=receive)
+thread.start()
+tx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+tx.bind((src, 0))
+frame = mac(dst) + mac(src) + struct.pack(">HH", 0x8100, vid | pcp << 13) + b"\\x88\\xb5" + bytes(46)
+for _ in range(count):
+    tx.send(frame)
+    time.sleep(0.001)
+time.sleep(1.5)
+stop.append(1)
+thread.join()
+print(json.dumps(seen))
+"""
+
+
+def tagged(ctx: Context, into: str, out_of: str, vid: int) -> dict[str, int]:
+    """Send XLATE_COUNT frames tagged vid into the bench port into; return what
+    the bench port out_of received from it, per tag."""
+    command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
+        "python3", "-", into, out_of, str(vid), str(XLATE_PCP), str(XLATE_COUNT))))
+    reply = ctx.bench.run(command, stdin=TAGGED, timeout=60)
+    try:
+        return json.loads(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ValueError(f"the probe did not run: {(reply.err or reply.out).strip()!r}")
+
+
+def tags(seen: dict[str, int]) -> str:
+    return ", ".join(f"{n} as {tag}" for tag, n in sorted(seen.items())) or "nothing"
+
+
+@case("data.vlan-translation", "Data path",
+      "A C-VID translation in the switch rewrites the VLAN of frames both ways across the PON "
+      "and keeps their priority")
+def vlan_translation(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    s = ctx.settings
+    sub, net, pcp = XLATE_SUB_VID, XLATE_NET_VID, XLATE_PCP
+    ctx.stick.run("tc qdisc add dev sfp clsact 2>/dev/null; "
+                  "tc qdisc add dev pon clsact 2>/dev/null; true")
+    try:
+        for dev, match, assign in (("sfp", sub, net), ("pon", net, sub)):
+            reply = ctx.stick.run(f"tc filter add dev {dev} ingress pref {XLATE_PREF} "
+                                  f"protocol 802.1Q flower skip_sw vlan_id {match} "
+                                  f"action vlan modify id {assign}")
+            if not reply.ok:
+                return failed(f"tc refused {match} -> {assign} on {dev}: "
+                              f"{(reply.err or reply.out).strip()}")
+        up = tagged(ctx, s.subscriber_port, s.olt_port, sub)
+        down = tagged(ctx, s.olt_port, s.subscriber_port, net)
+    finally:
+        ctx.stick.run(f"tc filter del dev sfp ingress pref {XLATE_PREF} 2>/dev/null; "
+                      f"tc filter del dev pon ingress pref {XLATE_PREF} 2>/dev/null; true")
+    want = XLATE_COUNT * 0.99
+    ok = up.get(f"{net}/{pcp}", 0) >= want and down.get(f"{sub}/{pcp}", 0) >= want
+    return verdict(ok, f"{XLATE_COUNT} frames of VLAN {sub}/{pcp} upstream: {tags(up)}; "
+                       f"{XLATE_COUNT} of {net}/{pcp} downstream: {tags(down)}")
+

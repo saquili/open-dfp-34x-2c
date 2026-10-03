@@ -23,7 +23,10 @@ What it needs
   host is also both far ends: one port is the far end of the stick's host link
   (the subscriber side) and one port is behind the OLT (the network side). The
   data-path cases send their bursts from a raw socket, with ``python3`` and
-  ``sudo`` without a password for it.
+  ``sudo`` without a password for it. The VLAN translation case also needs the
+  path through the OLT to carry VLANs 3001 and 3002 both ways; it installs a
+  translation between them on the stick, at a tc priority of its own, and
+  removes it again.
 * For the router-mode cases: network namespaces and macvlan interfaces on the
   bench host, which gets two namespaces, ``devtest-lan`` and ``devtest-wan``,
   for as long as the cases run. For the PPPoE case also a PPPoE concentrator on
