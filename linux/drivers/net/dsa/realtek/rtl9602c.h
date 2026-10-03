@@ -247,10 +247,13 @@
 #define RTL9602C_GTC_DS_PPS_PERIOD	GENMASK(12, 0)
 #define RTL9602C_GTC_DS_PPS_PERIOD_1S	7999
 
-/* Limits on the optics' signal detect against the burst; not verified. */
+/*
+ * Limits on the optics' signal detect against the burst; what they count is
+ * not known. The driver writes the mismatch limit only.
+ */
 #define RTL9602C_GTC_US_SD_THR	0x705188
 #define RTL9602C_GTC_US_SD_THR_MISMATCH	GENMASK(30, 16)
-#define RTL9602C_GTC_US_SD_THR_MISMATCH_DEF	0xa0
+#define RTL9602C_GTC_US_SD_THR_MISMATCH_DEF	0x50
 
 /*
  * The GPON MAC's reset: TRIGGER set, then cleared; DONE once it is over. The
@@ -510,10 +513,6 @@ enum {
  */
 #define RTL9602C_GTC_US_CTRL		0x705014
 #define RTL9602C_GTC_US_CTRL_IND_NORMAL_PLOAM	BIT(10)
-
-/* RTL9602C_GTC_US_SD_THR, written whole; the value is not verified. */
-#define RTL9602C_GTC_US_SD_THR_ALIAS	0x705188
-#define RTL9602C_GTC_US_SD_THR_DEF	0x00504bfa
 
 /*
  * Upstream GTC events, cleared when read; left unread, the latch keeps the

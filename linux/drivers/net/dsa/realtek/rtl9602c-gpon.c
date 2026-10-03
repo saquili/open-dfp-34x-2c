@@ -2237,8 +2237,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 		     FIELD_PREP(RTL9602C_GTC_DS_PPS_OFFSET, 1));
 
 	/*
-	 * The signal-detect mismatch limit at its reset value; the whole
-	 * register is written again below. Not verified.
+	 * The signal-detect mismatch limit, 0x50; the rest of the word keeps
+	 * its reset value. Not verified.
 	 */
 	rtl9602c_rmw(p, RTL9602C_GTC_US_SD_THR,
 		     RTL9602C_GTC_US_SD_THR_MISMATCH,
@@ -2331,12 +2331,6 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 				RTL9602C_GTC_US_LASER_ON_LEAD_DEF) |
 		     FIELD_PREP(RTL9602C_GTC_US_LASER_OFF_LAG,
 				RTL9602C_GTC_US_LASER_OFF_LAG_DEF));
-
-	/*
-	 * The signal-detect limits, the whole word: mismatch 0x50, and 0x4bfa
-	 * in the low half as at reset. Not verified.
-	 */
-	rtl9602c_w(p, RTL9602C_GTC_US_SD_THR_ALIAS, RTL9602C_GTC_US_SD_THR_DEF);
 
 	/*
 	 * Upstream GTC interrupts; which events bits 2, 5 and 7 enable is not

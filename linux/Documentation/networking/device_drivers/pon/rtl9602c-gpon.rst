@@ -657,8 +657,7 @@ those of the facts that carry each step.
 9. Set the burst merge threshold. (I)
 10. Write the response delay under the write key. Purpose: upstream timing. (M)
 11. Write the period of the frame-derived pulse. (I)
-12. Set the signal-detect mismatch limit to its reset value; step 20 writes the
-    whole register. (I)
+12. Set the signal-detect mismatch limit. (I)
 13. Enable the optical LOS input and select its polarity. Purpose: downstream
     lock. (M)
 14. Write the FEC detection threshold. (I)
@@ -669,21 +668,20 @@ those of the facts that carry each step.
 18. Enable the downstream GTC interrupts, then the two sub-blocks at the top
     level. Purpose: PLOAM messages from the interrupt. (T, M)
 19. Write the laser lead and lag. Purpose: burst timing. (M)
-20. Write the signal-detect limits, the whole register. (I)
-21. Enable the upstream GTC interrupts. (M)
-22. Enable the burst power save, in the GTC under the write key and then in the
+20. Enable the upstream GTC interrupts. (M)
+21. Enable the burst power save, in the GTC under the write key and then in the
     GEM framer. (I)
-23. Write the upstream PTI codes. Purpose: GEM data upstream. (T)
-24. Write the upstream control word under the write key. Purpose: the PLOAMu
+22. Write the upstream PTI codes. Purpose: GEM data upstream. (T)
+23. Write the upstream control word under the write key. Purpose: the PLOAMu
     field, the scrambler and the burst-enable polarity. (T)
-25. Write the transmit mode under the write key. Purpose: bursts that start in
+24. Write the transmit mode under the write key. Purpose: bursts that start in
     the previous frame. (M)
-26. Keep only the allocations for this ONU, once more. (M)
-27. Mark the ONU-ID unassigned and set O2. Purpose: wait for Upstream_Overhead.
+25. Keep only the allocations for this ONU, once more. (M)
+26. Mark the ONU-ID unassigned and set O2. Purpose: wait for Upstream_Overhead.
     (P)
-28. Arm the No message, Dying_Gasp and Serial_Number_ONU templates. Purpose:
+27. Arm the No message, Dying_Gasp and Serial_Number_ONU templates. Purpose:
     they are ready before the first discovery grant. (M, P)
-29. Enable the GPON source of the switch interrupt and run the worker at once.
+28. Enable the GPON source of the switch interrupt and run the worker at once.
     Purpose: activation starts, and the first PLOAM message dispatched finds
     every register of the activation path programmed. (T)
 
@@ -2061,14 +2059,12 @@ signal-detect and burst-merge registers that the bring-up writes.
        ``usburst`` view also shows bit 31 of it.
      - I
      - Required: unverified; the registers read as stated at reset.
-   * - ``RTL9602C_GTC_US_SD_THR`` (``0x705188``, also defined as
-       ``RTL9602C_GTC_US_SD_THR_ALIAS``) holds limits on the optics' signal
-       detect against the keyed burst, ``RTL9602C_GTC_US_SD_THR_MISMATCH`` (bits
-       30:16) among them. The driver first sets the mismatch field to
-       ``RTL9602C_GTC_US_SD_THR_MISMATCH_DEF`` (``0xa0``), its reset value, and
-       later writes the whole word ``RTL9602C_GTC_US_SD_THR_DEF``
-       (``0x00504bfa``), which is what stays: mismatch ``0x50``, low half
-       ``0x4bfa``. It reads ``0x00a04bfa`` at reset.
+   * - ``RTL9602C_GTC_US_SD_THR`` (``0x705188``) holds limits on the optics'
+       signal detect against the keyed burst, ``RTL9602C_GTC_US_SD_THR_MISMATCH``
+       (bits 30:16) among them. The driver sets the mismatch field to
+       ``RTL9602C_GTC_US_SD_THR_MISMATCH_DEF`` (``0x50``) and leaves the rest of
+       the word. It reads ``0x00a04bfa`` at reset, and so ``0x00504bfa``
+       after.
      - I
      - Required: unverified; the register read at reset.
    * - ``RTL9602C_GEM_US_BURST_MERGE_THR`` (bits 6:0 of
