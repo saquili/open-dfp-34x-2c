@@ -334,8 +334,8 @@ Offsets are the values of the macros for master 1.
        right either way. Not load-bearing.
    * - ``RTL9602C_I2C_XFER_CFG_BUS_EN`` (bit 21 of ``RTL9602C_I2C_XFER_CFG``)
        must be set, or a transfer runs without driving the bus: it ends without
-       a NACK and every read returns the same byte (``0xff`` at the clock
-       divider the driver writes).
+       a NACK and every read returns the same byte (``0xff`` at a clock divider
+       of 30).
      - M
      - With bit 21 clear every byte of ``0x50`` and ``0x51`` read the same
        constant; with it set they read the module's contents.
@@ -352,13 +352,15 @@ Offsets are the values of the macros for master 1.
        found them.
      - T
      - The optics diagnostics read.
-   * - ``RTL9602C_I2C_XFER_CFG_CLK_DIV`` (bits 9:0) divides the bus clock. The
-       driver writes ``RTL9602C_I2C_XFER_CFG_CLK_DIV_1MHZ`` (30), taken to give
-       31.25 MHz / (30 + 1), about 1 MHz, on SCL.
-     - I
-     - The divider's formula and the resulting rate are not measured; an
-       oscilloscope on SCL would settle them. Not load-bearing: that the part
-       answers at 30 is T (the optics diagnostics read).
+   * - ``RTL9602C_I2C_XFER_CFG_CLK_DIV`` (bits 9:0) sets SCL to 31.25 MHz /
+       (``CLK_DIV`` + 1). The driver writes
+       ``RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ`` (311): 100 kHz, I2C's standard
+       mode. Until it did, it wrote 30, about 1 MHz.
+     - M
+     - 256 one-byte reads of A0h at dividers 30, 77, 311 and 479 took 12.0,
+       29.5, 117.8 and 180.9 ms: 1.47 us for each step of ``CLK_DIV`` + 1, so a
+       read lasts about 46 periods of 31.25 MHz / (``CLK_DIV`` + 1). In 2560
+       reads of A0h no transfer went unacknowledged at 30 or at 311.
    * - ``RTL9602C_I2C_CMD``: ``RTL9602C_I2C_CMD_START`` (bit 0) starts the
        transfer the other registers describe and clears itself;
        ``RTL9602C_I2C_CMD_WRITE`` (bit 1) makes it a write, clear a read;
@@ -393,7 +395,7 @@ Every read and write of the laser driver is one byte, in these steps:
    ``RTL9602C_I2C_XFER_CFG_BUS_EN`` set, ``RTL9602C_I2C_XFER_CFG_DEV_ADDR`` the
    device, both widths 8-bit, ``RTL9602C_I2C_XFER_CFG_CLK_DIV`` 30. Purpose:
    describe the transfer; without BUS_EN the master does not drive the bus. (M
-   for BUS_EN, T for the fields, I for the rate of the divider)
+   for BUS_EN and the divider, T for the other fields)
 2. Write the register address to ``RTL9602C_I2C_SUBADDR``. Purpose: name the
    byte inside the device. (T)
 3. For a write, write the byte to ``RTL9602C_I2C_TX_DATA``. Purpose: the byte
@@ -402,9 +404,9 @@ Every read and write of the laser driver is one byte, in these steps:
    ``RTL9602C_I2C_CMD_START`` with ``RTL9602C_I2C_CMD_WRITE`` for a write.
    Purpose: start the transfer. (M)
 5. Poll ``RTL9602C_I2C_CMD`` until ``RTL9602C_I2C_CMD_BUSY`` is clear: at most
-   1000 polls 1 us apart, else fail with ``-ETIMEDOUT``. Purpose: wait for the
-   transfer. The bound is the driver's; a byte at 1 MHz takes tens of
-   microseconds. (T)
+   2000 polls 1 us apart, else fail with ``-ETIMEDOUT``. Purpose: wait for the
+   transfer. The bound is the driver's; a one-byte read at 100 kHz takes about
+   460 us. (T)
 6. If ``RTL9602C_I2C_CMD_NACK`` is set, fail with ``-ENXIO``. Purpose: the
    device did not acknowledge. (M)
 7. For a read, the byte is the low 8 bits of ``RTL9602C_I2C_RX_DATA``. Purpose:
@@ -1226,9 +1228,6 @@ Questions the code does not depend on
        master").
      - Nothing the driver needs; the read-modify-write is right either way.
        Finding what each other set bit of the word enables would settle it.
-   * - The clock divider: whether the formula 31.25 MHz / (30 + 1) gives the
-       rate of SCL, about 1 MHz ("The I2C master").
-     - An oscilloscope on SCL.
    * - Whether a client can read and write the laser driver through the adapter
        ("The I2C adapter").
      - Reading ``0x50`` through the adapter (i2c-dev, where

@@ -61,15 +61,15 @@
 #include "rtl9602c.h"
 
 /*
- * BUSY is set while a transfer runs.  Poll up to 1000 times, 1 us apart:
- * a byte at about 1 MHz takes tens of microseconds.  The last command word
+ * BUSY is set while a transfer runs.  Poll up to 2000 times, 1 us apart:
+ * a one-byte read at 100 kHz takes about 460 us.  The last command word
  * read, with its NACK bit, is left in @cmd.
  */
 static int rtl9602c_i2c_wait(struct rtl9602c_priv *p, u32 *cmd)
 {
 	int i;
 
-	for (i = 0; i < 1000; i++) {
+	for (i = 0; i < 2000; i++) {
 		*cmd = rtl9602c_r(p, RTL9602C_I2C_CMD);
 		if (!(*cmd & RTL9602C_I2C_CMD_BUSY))
 			return 0;
@@ -82,10 +82,10 @@ static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave)
 {
 	/*
 	 * Describe the next transfer: the 7-bit device address, one
-	 * register-address byte and one data byte, and the SCL divider, taken
-	 * to give about 1 MHz (not verified).  Without BUS_EN the master runs
-	 * the transfer without driving the bus: it ends without NACK and every
-	 * read returns the same byte.  Bits 31:22 are left as they are.
+	 * register-address byte and one data byte, and the SCL divider for
+	 * 100 kHz.  Without BUS_EN the master runs the transfer without
+	 * driving the bus: it ends without NACK and every read returns the
+	 * same byte.  Bits 31:22 are left as they are.
 	 */
 	rtl9602c_rmw(p, RTL9602C_I2C_XFER_CFG,
 		     RTL9602C_I2C_XFER_CFG_BUS_EN | RTL9602C_I2C_XFER_CFG_DEV_ADDR |
@@ -98,7 +98,7 @@ static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave)
 		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_DATA_WIDTH,
 				RTL9602C_I2C_XFER_CFG_WIDTH_8BIT) |
 		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_CLK_DIV,
-				RTL9602C_I2C_XFER_CFG_CLK_DIV_1MHZ));
+				RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ));
 }
 
 /**
@@ -108,7 +108,7 @@ static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave)
  * @reg: register address inside the device
  * @val: set to the byte read
  *
- * Busy-waits for up to about a millisecond.  Called with p->i2c_lock held:
+ * Busy-waits for up to about two milliseconds.  Called with p->i2c_lock held:
  * see the note at the top of this file.
  *
  * Return: 0, -ETIMEDOUT if the transfer does not end, or -ENXIO if the
