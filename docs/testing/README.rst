@@ -37,3 +37,10 @@ The runs, the oldest first:
     mode answers the network side, translated frames follow the default
     route's gateway, and the mode changes without restarting omcid. 27 of 27
     passed.
+
+``2026-10-03-run03``
+    The same cases on the RAM image built from ``run03``, after the
+    driver's resets of the ACL, classifier and QoS at setup, its fixes to
+    storm control, the address table and the frame limits, the PTP receive
+    filter, the clock on timer 1 and the PON MAC's counters and queues. 27 of
+    27 passed.
