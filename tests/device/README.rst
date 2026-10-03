@@ -31,8 +31,10 @@ What it needs
   GEM interfaces, and removes them again; the mirror case mirrors the PON port
   to the SFP port both ways, the shaper case puts a tbf on the SFP port, and
   the address-table case gives the bridge a static address, each removing what
-  it added. The hardware clock's case switches the clock's pulse on for a few
-  seconds and off again.
+  it added. The CPU-limit case floods the stick's own address from the
+  subscriber side for 10 s, then lifts the limit for 3 s and sets it back; the
+  stick answers slowly while the flood lasts. The hardware clock's case
+  switches the clock's pulse on for a few seconds and off again.
 * For the router-mode cases: network namespaces and macvlan interfaces on the
   bench host, which gets two namespaces, ``devtest-lan`` and ``devtest-wan``,
   for as long as the cases run. For the PPPoE case also a PPPoE concentrator on

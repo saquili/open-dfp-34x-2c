@@ -641,6 +641,62 @@ class Cases(unittest.TestCase):
         self.assertFalse(left)
         self.assertEqual(outcome(held=984.0)[0].status, FAIL)
 
+    def test_the_cpu_limit_case_wants_the_flood_held_the_cpu_kept_and_the_limit_back(self):
+        def outcome(took: int, loaded: str = "200.00 201.50"):
+            trail: list[str] = []
+            state = {"limit": 5000, "rx": 1000, "omci": [10, 7]}
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    self.asked.append(command)
+                    out = ""
+                    if "devlink dev show" in command:
+                        out = "platform/1b000000.switch"
+                    elif "param set" in command:
+                        state["limit"] = int(command.split("value ")[1].split()[0])
+                    elif "param show" in command:
+                        out = f"      cmode runtime value {state['limit']}"
+                    elif "sfp/address" in command:
+                        out = "00:00:5e:00:53:01"
+                    elif "dsa/tagging" in command:
+                        out = "cpu"
+                    elif "rx_packets" in command:
+                        out = str(state["rx"])
+                    elif "ponmac" in command:
+                        out = "%d\n%d" % tuple(state["omci"])
+                        state["omci"] = [n + 3 for n in state["omci"]]
+                    elif "cat " + cases_data.CPU_PROBE in command:
+                        out = loaded
+                    elif command == cases_data.CPU_TIMED:
+                        out = "100.00 101.20"
+                    trail.append(f"stick$ {command}\n{out}")
+                    return Reply([command], 0, out, "", 0.01)
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if kw.get("stdin") == cases_data.FLOODER:
+                        seconds = int(re.findall(r"\d+", command)[-1])
+                        state["rx"] += took if seconds == cases_data.CPU_FLOOD else 30000 * seconds
+                        return Reply([command], 0, "2600000\n", "", 0.01)
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [], trail)
+            bench = Bench("bench", [("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            cases_data.time.sleep, real = (lambda _s: None), cases_data.time.sleep
+            try:
+                return cases_data.cpu_limit(ctx), state["limit"]
+            finally:
+                cases_data.time.sleep = real
+        good, limit = outcome(took=50400)
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertEqual(limit, 5000)
+        self.assertIn("the CPU took 50400", good.evidence)
+        self.assertEqual(outcome(took=120000)[0].status, FAIL)
+        self.assertEqual(outcome(took=50400, loaded="200.00 203.00")[0].status, FAIL)
+
     def test_a_burst_that_never_left_the_bench_is_the_bench_s_fault(self):
         trail: list[str] = []
         settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")

@@ -717,6 +717,117 @@ def shaper(ctx: Context):
                        f"{rate:.0f} Mb/s, CPU saw {cpu}; removed: {arrived2} of {sent2} at "
                        f"{rate2:.0f} Mb/s, CPU saw {cpu2}")
 
+
+# The CPU-limit case: a flood from the host side to the stick's own address,
+# which the switch hands the CPU, first under the limit that devlink's
+# cpu_rx_pps holds and then, for a shorter time, with the limit lifted, which
+# shows that the limit is what holds the flood. A shell loop on the stick times
+# what the flood leaves of the CPU. It starts before the flood, in the
+# background, because the flood also fills the bench host's queue towards the
+# stick, and a command sent during it would arrive only after it.
+CPU_FLOOD = 10         # seconds of flood under the limit
+CPU_LIFTED = 3         # seconds of flood with the limit lifted
+CPU_SLACK = 0.1        # how far the CPU's share may stray from the limit
+CPU_SHARE = 0.5        # the share of its time the CPU must keep
+CPU_PROBE = "/tmp/devtest-cpu-loop"
+CPU_TIMED = ('t0=$(cut -d" " -f1 /proc/uptime); i=0; while [ $i -lt 20000 ]; do '
+             'i=$((i+1)); done; t1=$(cut -d" " -f1 /proc/uptime); echo "$t0 $t1"')
+
+# Run by python3 on the bench host with PORT DST SECONDS: minimal frames to DST
+# out of PORT, as fast as one socket sends them, for SECONDS. It prints how
+# many it sent.
+FLOODER = """\
+import socket, sys, time
+port, dst, seconds = sys.argv[1], sys.argv[2], float(sys.argv[3])
+src = open("/sys/class/net/%s/address" % port).read().strip()
+mac = lambda text: bytes.fromhex(text.replace(":", ""))
+frame = mac(dst) + mac(src) + b"\\x88\\xb5" + bytes(46)
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+s.bind((port, 0))
+sent, end = 0, time.monotonic() + seconds
+while time.monotonic() < end:
+    for _ in range(256):
+        try:
+            s.send(frame)
+            sent += 1
+        except OSError:
+            pass
+print(sent)
+"""
+
+
+def flood(ctx: Context, dst: str, seconds: float) -> int:
+    """Flood dst from the subscriber-side port for seconds; return how many
+    frames were sent."""
+    command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
+        "python3", "-", ctx.settings.subscriber_port, dst, str(seconds))))
+    reply = ctx.bench.run(command, stdin=FLOODER, timeout=seconds + 60)
+    try:
+        return int(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ValueError(f"the flooder did not run: {(reply.err or reply.out).strip()!r}")
+
+
+def loop_seconds(text: str) -> float:
+    """The seconds between the two uptimes that CPU_TIMED prints."""
+    start, end = map(float, text.split())
+    return end - start
+
+
+def omci_counts(ctx: Context) -> tuple[int, int]:
+    """The OMCI messages that the PON MAC received and those that reached the
+    OMCI port, so far."""
+    mac, port = ctx.stick.text(
+        "mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; "
+        "sed -n 's/.*omci rx *\\([0-9]*\\) pkts.*/\\1/p' /sys/kernel/debug/rtl9602c/ponmac; "
+        "cat /sys/class/pon/pon0omci0/statistics/rx_messages").split()
+    return int(mac), int(port)
+
+
+@case("data.cpu-limit", "Data path",
+      "A flood to the stick's own address reaches its CPU no faster than cpu_rx_pps says, "
+      "leaves the CPU at least half its time and the OMCI messages whole, and goes through "
+      "once the limit is lifted")
+def cpu_limit(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    param = "devlink dev param {} " + ctx.stick.text("devlink dev show | head -n 1") + \
+        " name cpu_rx_pps"
+    limit = int(re.search(r"value (\d+)", ctx.stick.text(param.format("show"))).group(1))
+    if not limit:
+        return failed("cpu_rx_pps is 0: nothing limits the frames handed to the CPU")
+    own = ctx.stick.text("cat /sys/class/net/sfp/address")
+    cpu = conduit(ctx)
+    rest = loop_seconds(ctx.stick.text(CPU_TIMED))
+    ctx.stick.run(f"rm -f {CPU_PROBE}; (sleep 3; {CPU_TIMED} > {CPU_PROBE}) "
+                  "</dev/null >/dev/null 2>&1 &")
+    omci = omci_counts(ctx)
+    before = stick_counter(ctx, cpu, "rx_packets")
+    sent = flood(ctx, own, CPU_FLOOD)
+    took = stick_counter(ctx, cpu, "rx_packets") - before
+    omci = tuple(b - a for a, b in zip(omci, omci_counts(ctx)))
+    probe = within(lambda: ctx.stick.run(f"cat {CPU_PROBE} 2>/dev/null").out.strip(), limit=30)
+    if not probe:
+        return failed("the loop on the stick did not finish")
+    loaded = loop_seconds(probe)
+    try:
+        ctx.stick.text(param.format("set") + " value 0 cmode runtime")
+        before = stick_counter(ctx, cpu, "rx_packets")
+        flood(ctx, own, CPU_LIFTED)
+        lifted = stick_counter(ctx, cpu, "rx_packets") - before
+    finally:
+        ctx.stick.run(param.format("set") + f" value {limit} cmode runtime")
+    if sent < 4 * limit * CPU_FLOOD:
+        return failed(f"the bench: {sent} frames in {CPU_FLOOD} s, too few to test a limit "
+                      f"of {limit}/s")
+    allowed = limit * CPU_FLOOD
+    ok = (abs(took - allowed) <= allowed * CPU_SLACK and loaded * CPU_SHARE <= rest and
+          omci[1] == omci[0] and lifted >= 2 * limit * CPU_LIFTED)
+    return verdict(ok, f"cpu_rx_pps {limit}: of {sent} frames in {CPU_FLOOD} s the CPU took "
+                       f"{took}; a loop of {rest:.2f} s took {loaded:.2f} s; OMCI {omci[1]} of "
+                       f"{omci[0]} delivered; lifted: {lifted / CPU_LIFTED:.0f} frames/s")
+
 # The multicast case: groups of the organisation-local IPv4 scope (RFC 2365)
 # and of the transient IPv6 range, which no line is expected to carry, and the
 # mDNS group as a link-local one, which a snooping bridge floods unasked.
