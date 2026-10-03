@@ -360,8 +360,75 @@ def tcp(ctx: Context):
                        f"{offload} flow(s) in the switch")
 
 
+# The MSS probe of the PPPoE case, run by python3 on the bench host with the
+# bench's PPP interface of the session and a port: it watches that interface
+# for TCP SYNs to the port while the LAN host opens a connection to the
+# interface's own address, and prints the MSS option of every SYN as JSON. A
+# PPP interface carries IP packets without a link header.
+MSS_PROBE = """\
+import json, socket, struct, subprocess, sys, threading, time
+iface, port = sys.argv[1], int(sys.argv[2])
+addr = subprocess.run(["ip", "-4", "-o", "addr", "show", "dev", iface], capture_output=True,
+                      text=True).stdout.split()[3].split("/")[0]
+rx = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800))
+rx.bind((iface, 0))
+rx.settimeout(0.5)
+seen, stop = [], []
+def watch():
+    while not stop:
+        try:
+            d = rx.recv(2048)
+        except socket.timeout:
+            continue
+        ihl = (d[0] & 0xf) * 4
+        if d[9] != 6:
+            continue
+        tcp = d[ihl:]
+        if struct.unpack(">H", tcp[2:4])[0] != port or not tcp[13] & 0x02:
+            continue
+        opts, mss, i = tcp[20:(tcp[12] >> 4) * 4], None, 0
+        while i < len(opts) and opts[i]:
+            if opts[i] == 1:
+                i += 1
+                continue
+            if opts[i] == 2:
+                mss = struct.unpack(">H", opts[i + 2:i + 4])[0]
+            i += opts[i + 1]
+        seen.append(mss)
+thread = threading.Thread(target=watch)
+thread.start()
+time.sleep(0.5)
+subprocess.run(["ip", "netns", "exec", "devtest-lan", "python3", "-c",
+                "import socket\\ns = socket.socket()\\ns.settimeout(3)\\n"
+                "try:\\n    s.connect((%r, %d))\\nexcept OSError:\\n    pass" % (addr, port)])
+time.sleep(1)
+stop.append(1)
+thread.join()
+print(json.dumps(seen))
+"""
+MSS_PORT = 5555
+PPPOE_MTU = 1492
+
+
+def pppoe_mss(ctx: Context, address: str) -> tuple[bool, str]:
+    """Whether the SYNs that a LAN host sends through the session carry an MSS
+    that fits the PPPoE MTU, and what was seen; address is the stick's end of
+    the session."""
+    iface = bench(ctx, "ip -4 -o addr | awk '$6 == \"%s/32\" {print $2}'" % address).out.strip()
+    if not iface:
+        return False, "no PPP interface of the session on the bench"
+    reply = bench(ctx, f"python3 - {shlex.quote(iface)} {MSS_PORT}", stdin=MSS_PROBE, timeout=30)
+    try:
+        seen = json.loads(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return False, f"the MSS probe did not run: {(reply.err or reply.out).strip()!r}"
+    fits = bool(seen) and all(m is not None and m <= PPPOE_MTU - 40 for m in seen)
+    return fits, f"SYN MSS {', '.join(str(m) for m in seen) or 'none seen'}"
+
+
 @case("router.pppoe", "Router mode",
-      "With PPPoE, the stick opens a session with the concentrator and gets an address")
+      "With PPPoE, the stick opens a session with the concentrator, gets an address, and "
+      "clamps a LAN host's TCP MSS to fit the session")
 def pppoe(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -392,7 +459,12 @@ def pppoe(ctx: Context):
         log = ctx.stick.run("tail -5 /run/pppoed.log").out.strip()
         return failed(f"no session within 90 s: {status(ctx).strip()!r}; pppoed: {log!r}")
     dns = ctx.stick.run("cat /run/onu-dns 2>/dev/null").out.strip() or "none"
-    return passed(f"session up in {took:.0f} s; ppp0 {address}; name servers {dns}")
+    if not ctx.memo.get("namespaces"):
+        return passed(f"session up in {took:.0f} s; ppp0 {address}; name servers {dns}; "
+                      "MSS not checked without the LAN host of router.static")
+    fits, mss = pppoe_mss(ctx, address)
+    return verdict(fits, f"session up in {took:.0f} s; ppp0 {address}; name servers {dns}; "
+                         f"{mss} through it")
 
 
 @case("router.bridge", "Router mode",
