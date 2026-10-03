@@ -27,6 +27,7 @@ way, slowly, and every bridge on the way learns both ends.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import time
 
@@ -212,6 +213,13 @@ def upstream(ctx: Context):
                        f"ONU O{state}{hw}")
 
 
+def clsact(ctx: Context, devs: list[str]) -> list[str]:
+    """Give each of devs on the stick a clsact qdisc; return those that had
+    none, from which the case takes it away again."""
+    return [dev for dev in devs
+            if ctx.stick.run(f"tc qdisc add dev {dev} clsact 2>/dev/null").ok]
+
+
 # The translation the VLAN case installs: a pair of VIDs that no line is
 # expected to carry, so that its entries meet none of the OMCI daemon's, and a
 # tc priority of its own, so that it removes only its own filters.
@@ -221,11 +229,11 @@ XLATE_PCP = 5
 XLATE_COUNT = 200
 XLATE_PREF = 49000
 
-# Run by python3 on the bench host with SRC DST VID PCP COUNT: COUNT frames
-# tagged VID and PCP from port SRC to port DST's address, a millisecond apart.
-# It prints, as JSON, how many DST received from SRC's address per tag,
-# "vid/pcp" or "untagged", reading the tag from the frame or, where the NIC took
-# it off, from PACKET_AUXDATA.
+# Run by python3 on the bench host with SRC DST VID PCP COUNT: COUNT frames of
+# EtherType 0x88b5 tagged VID and PCP, untagged for VID 0, from port SRC to port
+# DST's address, a millisecond apart. It prints, as JSON, how many such frames
+# DST received from SRC's address per tag, "vid/pcp" or "untagged", reading the
+# tag from the frame or, where the NIC took it off, from PACKET_AUXDATA.
 TAGGED = """\
 import json, socket, struct, sys, threading, time
 src, dst, vid, pcp, count = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
@@ -250,16 +258,19 @@ def receive():
                 status, tci = struct.unpack("I", value[:4])[0], struct.unpack("H", value[16:18])[0]
                 if status & TP_STATUS_VLAN_VALID:
                     tag = "%d/%d" % (tci & 0xfff, tci >> 13)
-        if tag is None and data[12:14] == b"\\x81\\x00":
+        if data[12:14] == b"\\x81\\x00":
             tci = struct.unpack(">H", data[14:16])[0]
-            tag = "%d/%d" % (tci & 0xfff, tci >> 13)
+            tag, data = "%d/%d" % (tci & 0xfff, tci >> 13), data[:12] + data[16:]
+        if data[12:14] != b"\\x88\\xb5":
+            continue
         key = tag or "untagged"
         seen[key] = seen.get(key, 0) + 1
 thread = threading.Thread(target=receive)
 thread.start()
 tx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
 tx.bind((src, 0))
-frame = mac(dst) + mac(src) + struct.pack(">HH", 0x8100, vid | pcp << 13) + b"\\x88\\xb5" + bytes(46)
+tag = struct.pack(">HH", 0x8100, vid | pcp << 13) if vid else b""
+frame = mac(dst) + mac(src) + tag + b"\\x88\\xb5" + bytes(46)
 for _ in range(count):
     tx.send(frame)
     time.sleep(0.001)
@@ -270,11 +281,12 @@ print(json.dumps(seen))
 """
 
 
-def tagged(ctx: Context, into: str, out_of: str, vid: int) -> dict[str, int]:
-    """Send XLATE_COUNT frames tagged vid into the bench port into; return what
-    the bench port out_of received from it, per tag."""
+def tagged(ctx: Context, into: str, out_of: str, vid: int,
+           count: int = XLATE_COUNT) -> dict[str, int]:
+    """Send count frames tagged vid, untagged for vid 0, into the bench port
+    into; return what the bench port out_of received from it, per tag."""
     command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
-        "python3", "-", into, out_of, str(vid), str(XLATE_PCP), str(XLATE_COUNT))))
+        "python3", "-", into, out_of, str(vid), str(XLATE_PCP), str(count))))
     reply = ctx.bench.run(command, stdin=TAGGED, timeout=60)
     try:
         return json.loads(reply.out.strip().splitlines()[-1])
@@ -295,8 +307,7 @@ def vlan_translation(ctx: Context):
     prime(ctx)
     s = ctx.settings
     sub, net, pcp = XLATE_SUB_VID, XLATE_NET_VID, XLATE_PCP
-    ctx.stick.run("tc qdisc add dev sfp clsact 2>/dev/null; "
-                  "tc qdisc add dev pon clsact 2>/dev/null; true")
+    added = clsact(ctx, ["sfp", "pon"])
     try:
         for dev, match, assign in (("sfp", sub, net), ("pon", net, sub)):
             reply = ctx.stick.run(f"tc filter add dev {dev} ingress pref {XLATE_PREF} "
@@ -309,9 +320,82 @@ def vlan_translation(ctx: Context):
         down = tagged(ctx, s.olt_port, s.subscriber_port, net)
     finally:
         ctx.stick.run(f"tc filter del dev sfp ingress pref {XLATE_PREF} 2>/dev/null; "
-                      f"tc filter del dev pon ingress pref {XLATE_PREF} 2>/dev/null; true")
+                      f"tc filter del dev pon ingress pref {XLATE_PREF} 2>/dev/null; " +
+                      "".join(f"tc qdisc del dev {dev} clsact; " for dev in added) + "true")
     want = XLATE_COUNT * 0.99
     ok = up.get(f"{net}/{pcp}", 0) >= want and down.get(f"{sub}/{pcp}", 0) >= want
     return verdict(ok, f"{XLATE_COUNT} frames of VLAN {sub}/{pcp} upstream: {tags(up)}; "
                        f"{XLATE_COUNT} of {net}/{pcp} downstream: {tags(down)}")
 
+
+# The ACL case: frames of the probe's EtherType from the network side, against
+# drop and trap rules on the PON port at two tc priorities of its own. The CPU
+# gets a frame from the PON on the interface of its GEM port, so a software
+# filter on each GEM interface counts the frames that reach it.
+ACL_COUNT = 200
+ACL_PREFS = (49010, 49020)
+ACL_COUNTER = 49030
+
+
+def acl_round(ctx: Context, gems: list[str],
+              rules: list[tuple[int, str]]) -> tuple[int, int]:
+    """Install rules, (priority, action) pairs in the order given, on the PON
+    port's ingress for EtherType 0x88b5; send ACL_COUNT such frames from the
+    network side to the subscriber side; remove the rules. Returns how many
+    arrived on the subscriber side and how many reached the CPU."""
+    s = ctx.settings
+    rule = "tc filter {} dev {} ingress pref {} protocol 0x88b5 flower {}"
+    for gem in gems:
+        ctx.stick.run(rule.format("add", gem, ACL_COUNTER, "skip_hw action pass"))
+    try:
+        for pref, action in rules:
+            reply = ctx.stick.run(rule.format("add", "pon", pref, f"skip_sw action {action}"))
+            if not reply.ok:
+                raise ValueError(f"tc refused {action} at {pref}: "
+                                 f"{(reply.err or reply.out).strip()}")
+        arrived = tagged(ctx, s.olt_port, s.subscriber_port, 0, ACL_COUNT).get("untagged", 0)
+        shown = ctx.stick.text("; ".join(
+            f"tc -s filter show dev {gem} ingress pref {ACL_COUNTER}" for gem in gems))
+    finally:
+        ctx.stick.run("; ".join(
+            [f"tc filter del dev pon ingress pref {pref} 2>/dev/null" for pref, _ in rules] +
+            [f"tc filter del dev {gem} ingress pref {ACL_COUNTER} 2>/dev/null" for gem in gems] +
+            ["true"]))
+    counts = re.findall(r"Sent \d+ bytes (\d+) pkt", shown)
+    if len(counts) != len(gems):
+        raise ValueError(f"no count from a software filter: {shown!r}")
+    return arrived, sum(int(n) for n in counts)
+
+
+@case("data.acl", "Data path",
+      "ACL rules on the PON port drop frames from the network side or trap them to the CPU, "
+      "the rule of the lower tc priority deciding whichever was added first")
+def acl(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    gems = ctx.stick.text("cd /sys/class/net && ls -d gem* 2>/dev/null; true").split()
+    if not gems:
+        return failed("no GEM interface on the stick")
+    first, second = ACL_PREFS
+    every, none = ACL_COUNT * 0.99, ACL_COUNT * 0.01
+    forwarded = lambda a, t: a >= every and t <= none
+    trapped = lambda a, t: a <= none and t >= every
+    dropped = lambda a, t: a <= none and t <= none
+    rounds = (
+        ("no rule", [], forwarded),
+        ("trap", [(first, "trap")], trapped),
+        ("drop", [(first, "drop")], dropped),
+        ("trap over drop, added last", [(second, "drop"), (first, "trap")], trapped),
+        ("drop over trap, added last", [(second, "trap"), (first, "drop")], dropped),
+    )
+    added = clsact(ctx, ["pon", *gems])
+    seen, ok = [], True
+    try:
+        for name, rules, good in rounds:
+            arrived, took = acl_round(ctx, gems, rules)
+            ok = ok and good(arrived, took)
+            seen.append(f"{name}: {arrived} arrived, {took} to the CPU")
+    finally:
+        ctx.stick.run("; ".join([f"tc qdisc del dev {dev} clsact" for dev in added] + ["true"]))
+    return verdict(ok, f"{ACL_COUNT} frames each; " + "; ".join(seen))

@@ -26,7 +26,9 @@ What it needs
   ``sudo`` without a password for it. The VLAN translation case also needs the
   path through the OLT to carry VLANs 3001 and 3002 both ways; it installs a
   translation between them on the stick, at a tc priority of its own, and
-  removes it again.
+  removes it again. The ACL case likewise installs drop and trap rules on the
+  stick's PON port, and a filter that counts the trapped frames on each of its
+  GEM interfaces, and removes them again.
 * For the router-mode cases: network namespaces and macvlan interfaces on the
   bench host, which gets two namespaces, ``devtest-lan`` and ``devtest-wan``,
   for as long as the cases run. For the PPPoE case also a PPPoE concentrator on

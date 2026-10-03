@@ -333,6 +333,48 @@ class Cases(unittest.TestCase):
     def test_the_data_path_is_skipped_without_ports(self):
         self.assertEqual(cases_data.downstream(context()).status, SKIP)
 
+    def test_the_acl_case_wants_the_rule_of_the_lower_priority_to_decide(self):
+        def outcome(added_first_decides: bool):
+            trail: list[str] = []
+            rules: list[tuple[int, str]] = []    # (priority, action), in the order added
+
+            def action():
+                if not rules:
+                    return "pass"
+                return rules[0][1] if added_first_decides else min(rules)[1]
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    rules.extend((int(p), a) for p, a in re.findall(
+                        r"dev pon ingress pref (\d+) protocol 0x88b5 flower skip_sw action (\w+)",
+                        command))
+                    for p in re.findall(r"filter del dev pon ingress pref (\d+)", command):
+                        rules[:] = [r for r in rules if r[0] != int(p)]
+                    n = 200 if action() == "trap" else 0
+                    self.answers[0] = ("tc -s filter show", 0, f"\tSent {n * 60} bytes {n} pkt\n")
+                    return super().run(command, **kw)
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    seen = '{"untagged": 200}' if action() == "pass" else "{}"
+                    self.answers[0] = ("python3 -", 0, seen + "\n")
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("tc -s filter show", 0, ""), ("ls -d gem", 0, "gem256\n"),
+                                    ("tc ", 0, "")], trail)
+            bench = Bench("bench", [("python3 -", 0, ""),
+                                    ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            return cases_data.acl(ctx), rules, stick.asked
+        good, left, asked = outcome(added_first_decides=False)
+        self.assertEqual(good.status, PASS)
+        self.assertIn("trap over drop, added last: 0 arrived, 200 to the CPU", good.evidence)
+        self.assertEqual(left, [])
+        self.assertIn("tc qdisc del dev pon clsact; tc qdisc del dev gem256 clsact; true", asked)
+        self.assertEqual(outcome(added_first_decides=True)[0].status, FAIL)
+
     def test_a_burst_that_never_left_the_bench_is_the_bench_s_fault(self):
         trail: list[str] = []
         settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
