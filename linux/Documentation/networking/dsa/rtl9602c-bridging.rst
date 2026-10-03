@@ -359,12 +359,14 @@ with one lock, ``table_lock``.
        holding real addresses set HIT; a hashed add, update and delete of one
        address reported the same index each time. ``bridge fdb show`` lists only
        real hardware entries, because the dump skips a slot without HIT.
-   * - ``RTL9602C_TBLACC_STAT_CAM`` (bit 10) is set when the resulting entry is
-       in the 64-entry CAM and not in a hash bucket. The driver records it and
-       decides nothing on it.
-     - I
-     - A hashed placement that lands in the CAM would show it set. Nothing
-       depends on it.
+   * - ``RTL9602C_TBLACC_STAT_CAM`` (bit 10) is set when the entry that a
+       hashed operation reached is in the 64-entry CAM and not in a hash
+       bucket; ``RTL9602C_TBLACC_STAT_INDEX`` then holds n for entry 1024 + n.
+       The driver records it and decides nothing on it.
+     - M, I
+     - M: with the CAM on (see "Structure"), a hashed lookup and a hashed
+       delete of each of two entries in the CAM, entries 1024 and 1025, set it
+       with index 0 and 1. I: that a hashed placement into the CAM sets it.
    * - ``RTL9602C_TBLACC_WDATA(i)`` (``0x012008`` + 4i) and
        ``RTL9602C_TBLACC_RDATA(i)`` (``0x01201c`` + 4i), i = 0 to 4, carry the
        entry in and out in natural order: word 0 holds entry bits 31:0, word 1
@@ -469,23 +471,40 @@ Structure
      - M
      - A by-index scan of all 1088 entries: empty slots 0 to 3 read address 0,
        slots 4 to 7 address 1, and so on.
-   * - A CAM entry cannot be maintained: a by-index write to it reports HIT and
-       changes nothing, the hashed search never matches it, and no flush mode
-       reaches it, so it stays until power is removed. Entries do land there:
-       multicast groups written while their VLAN was in shared learning did. The
-       driver therefore uses only the hashed slots. Every walk stops at
-       ``RTL9602C_FDB_HASH_ENTRIES`` (1024), and the VLAN setting described
-       under "Entry layout" keeps hashed writes out of the CAM.
+   * - With the CAM off, as out of reset (next row), a CAM entry cannot be
+       maintained: a by-index write to it reports HIT and changes nothing, the
+       hashed search never matches it, and no flush mode reaches it, so it
+       stays until power is removed; a warm restart keeps it. Entries do land
+       there: multicast groups written while their VLAN was in shared learning
+       did. The driver leaves the CAM off and uses only the hashed slots. Every
+       walk stops at ``RTL9602C_FDB_HASH_ENTRIES`` (1024), and the VLAN setting
+       described under "Entry layout" keeps hashed writes out of the CAM.
      - M
      - Groups written in shared learning, then targeted by an index write, by
-       the hashed search and by all three flush modes.
-   * - Bit 21 of ``RTL9602C_FDB_CFG`` reads 1 out of reset (the register reads
-       ``0x00600bb8``) and the driver never writes it. It is taken to keep the
-       CAM out of frame lookups.
-     - I
-     - The reset value was read after a watchdog reset with the switch driver
-       not loaded. Its meaning is unverified, and nothing depends on it beyond
-       the CAM not being used.
+       the hashed search and by all three flush modes. Entries put in the CAM
+       by the test of the next row, still there after three RAM boots.
+   * - Bit 21 of ``RTL9602C_FDB_CFG`` turns the CAM off; it reads 1 out of
+       reset (the register reads ``0x00600bb8``), and the driver never writes
+       it. While it is set, a hashed write to a full bucket is not taken, and a
+       hashed lookup does not find an entry in the CAM. With it clear, such a
+       write lands in the CAM and the switch forwards frames by the entry; a
+       hashed lookup with an entry's own words finds it there, and a hashed
+       delete with them removes it. A by-index write is taken under neither
+       setting. Whether frames are forwarded by entries in the CAM while the
+       bit is set, and whether the flush modes reach them while it is clear,
+       is not known.
+     - M, I
+     - M: the reset value read after a watchdog reset with the switch driver
+       not loaded, and on a running board. Five static entries whose keys share
+       a bucket: with the bit set the fifth was not placed, with it clear it
+       was in the CAM. Frames from the PON side to it, for 1 s, reached the
+       SFP port with 20 copies at the CPU, where an unknown address put 43,000
+       there. An entry's words read by index and written back through the
+       hash: with the bit set the lookup missed; with it clear it found the
+       entry and, with VALID clear, deleted it (``RTL9602C_TBLACC_STAT_CAM``
+       under "The indirect table engine"). With the bit clear, index writes of
+       a deletion and of a new entry left the CAM as it was. I: the forwarding
+       with the bit set, and the flushes.
    * - ``RTL9602C_FDB_HASH_WAYS`` (4), the number of slots in a bucket, is also
        the number of hashed deletes that the driver issues to empty one key out
        of the table.
@@ -2461,9 +2480,14 @@ Questions the code does not depend on
        frame to the L3 engine ("Entry layout").
      - A frame to this device's address in a VLAN in independent learning, with
        and without the bit, followed in the frame capture.
-   * - Whether bit 21 of ``RTL9602C_FDB_CFG`` keeps the CAM out of frame lookups
-       ("Structure").
-     - Clearing the bit and looking up an entry that sits in the CAM.
+   * - Whether frames are forwarded by an entry in the CAM while bit 21 of
+       ``RTL9602C_FDB_CFG`` is set ("Structure").
+     - An entry placed in the CAM with the bit clear, the bit set again, then
+       frames to its address.
+   * - Whether the flush modes reach entries in the CAM while bit 21 of
+       ``RTL9602C_FDB_CFG`` is clear ("Structure").
+     - Each flush mode, with the bit clear, over an entry in the CAM that it
+       should remove.
    * - Whether a port flush reaches a multicast entry ("Emptying the table at
        setup").
      - A group whose only member is one port, a port flush of that port, then a
