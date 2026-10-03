@@ -191,9 +191,10 @@ static void rtl9602c_pon_queue_set(struct rtl9602c_priv *p, unsigned int q,
  * A queue drain is polled back to back for up to RTL9602C_PON_DRN_US, enough
  * for every drain that completes on this board (measured), then every 100 us
  * up to RTL9602C_PON_DRN_SLOW_US, to tell a slow queue from one that does not
- * empty. Both budgets are the driver's choice. The clock advances in 4 ms
- * ticks on this board (HZ 250, and no finer clock source), so a budget ends
- * on a tick, and every duration the driver reports is a multiple of one.
+ * empty. Both budgets are the driver's choice. A sleep between polls lasts
+ * until the next 4 ms tick on this board (HZ 250, and the tick timer has no
+ * one-shot mode), so the slow polls come a tick apart, and a duration the
+ * driver reports, timed in steps of 10 ns, ends at the poll that saw the end.
  */
 #define RTL9602C_PON_DRN_US		10000
 #define RTL9602C_PON_DRN_SLOW_US	500000

@@ -384,9 +384,10 @@ name the others.
    * - ``<GPON> burst length: p B pre-ranging, r after; overhead x/y``
      - info
      - Extended_Burst_Length was acted on in O3.
-   * - ``<GPON> ONU-ID N assigned; O4 T us after the interrupt``
+   * - ``<GPON> ONU-ID N assigned; written T us after the interrupt``
      - info
-     - Assign_ONU-ID was acted on in O3.
+     - Assign_ONU-ID was acted on in O3, its writes done T us after the
+       interrupt.
    * - ``<GPON> Ranging_Time raw: ... -- eqd N``
      - info
      - Ranging_Time took the ONU from O4 to O5.
@@ -1499,12 +1500,13 @@ count from 0, so the offset is the octet number less one):
        (see "Tables: Alloc-ID, Port-ID and multicast"); writes the bandwidth-map
        filter bits (see "The bandwidth map"); sets O4; arms the bandwidth-map
        capture for 16 allocations; and arms the Serial_Number_ONU template
-       again. The kernel log then states the time since the interrupt, which the
-       clock shows only in whole ticks.
+       again. The kernel log then states how long after the interrupt the
+       writes before O4 were done.
      - M
-     - ``ONU-ID 1 assigned; O4 4000 us after the interrupt``: the kernel's only
-       clock source advances in 4 ms ticks, so the figure is one tick and not a
-       measurement of the 750 us.
+     - ``ONU-ID 0 assigned; written 38 us after the interrupt`` at boot, then
+       29 and 33 us in two registrations after ``ip link set pon down`` and up:
+       within the 750 us, timed with the 10 ns clock source
+       (Documentation/arch/mips/rtl9602c.rst).
    * - Ranging_Time (identifier 4, directed): octet 3 bit 0, 0 for the main path
        and 1 for the protection path; octets 4 to 7 the equalization delay in
        bits, most significant first (``RTL9602C_PLOAM_RANGING_TIME_PATH`` 2 with
@@ -2627,7 +2629,8 @@ instance::
     echo ff06ff41424344 0000a001 00 > /sys/kernel/debug/rtl9602c/ploaminject
     echo ff060041424344 0000a001 00 > /sys/kernel/debug/rtl9602c/ploaminject
 
-Times in the ``ploamlog`` view advance in ticks of 4 ms on this board.
+Times in the ``ploamlog`` view come from the kernel's clock, which advances in
+steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
 
 .. list-table::
    :header-rows: 1

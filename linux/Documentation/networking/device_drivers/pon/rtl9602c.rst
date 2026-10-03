@@ -992,11 +992,12 @@ not to complete (see "What a queue drain depends on").
        half and then the downstream half, polling every 10 us up to
        ``RTL9602C_PON_IPRDY_US`` (50,000 us) each, and fails with
        ``-ETIMEDOUT``, naming the half and the status word, if it does not
-       come. The bound is the driver's. The bit came within about one 4 ms
-       step of the clock (see "What a queue drain depends on").
+       come. The bound is the driver's. The bit came by the first or, once, the
+       third tick of the wait (see "What a queue drain depends on").
      - M
-     - The build's "ready in" time read 4,000 us on 132 of 133 logged builds and
-       12,000 us on one.
+     - With the tick as the only clock, the build's "ready in" time read
+       4,000 us on 132 of 133 logged builds and 12,000 us on one; with the
+       10 ns clock it read 1004 us.
    * - With the wait in place no build has reported a slow or failed queue
        drain; with the wait left out, 3 of 44 bring-ups failed the first drain.
      - M
@@ -1169,8 +1170,9 @@ and finishes later; the driver polls the busy bit (see "Draining a queue"
 under "Sequences"). On a cold boot the drain of the OMCC's queue ends before
 the first step of the clock. It does not end while the GPON MAC is still in
 the state that a warm reset left it in, which is why the bring-up takes the ONU
-to O1 before it builds the PON MAC. The driver's clock advances in steps of
-about 4 ms, so the durations that it reports are multiples of one.
+to O1 before it builds the PON MAC. The driver times in steps of 10 ns, but its
+polls sleep until the next 4 ms tick, so a duration that it reports ends at the
+poll that saw the end.
 
 .. list-table::
    :header-rows: 1
@@ -1220,13 +1222,16 @@ about 4 ms, so the durations that it reports are multiples of one.
      - Deleting GEM interfaces leaves the remaining one carrying traffic: a
        routed-traffic check deletes the spare GEM interfaces and the bridge,
        and the remaining interface carries the routed traffic.
-   * - The driver's clock advances in 4 ms steps on this board (HZ 250, and no
-       clock source finer than the tick: the core has no cycle counter,
-       Documentation/arch/mips/rtl9602c.rst), so every time the build reports,
-       the ready time or a slow drain's duration, is a multiple of about 4 ms,
-       and the polling budgets end on a step.
+   * - The driver's clock advances in steps of 10 ns on this board (timer 1,
+       Documentation/arch/mips/rtl9602c.rst), but a sleep between polls lasts
+       until the next 4 ms tick (HZ 250, and the tick timer has no one-shot
+       mode). A time the build reports, the ready time or a slow drain's
+       duration, therefore ends at the first poll after the event, up to a
+       tick late; the budget of the back-to-back drain polls is exact.
      - M
-     - Every ready time in the build's log line is 4,000 or 12,000 us.
+     - With the tick as the only clock, every ready time in the build's log
+       line was 4,000 or 12,000 us; with timer 1 as the clock, 1004 us: the
+       first tick after the wait began.
 
 Switch settings in the build
 ============================

@@ -1394,6 +1394,8 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		    p->gpon_have_sn &&
 		    !memcmp(&msg[RTL9602C_PLOAM_ASSIGN_ONUID_SERIAL], p->gpon_sn,
 			    RTL9602C_GPON_SN_BYTES)) {
+			u64 written;
+
 			p->gpon_onu_id = msg[RTL9602C_PLOAM_ASSIGN_ONUID_ONUID];
 			rtl9602c_w(p, RTL9602C_ONU_US_ONUID,
 				   FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
@@ -1412,6 +1414,13 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 				     RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL |
 				     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID,
 				     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
+
+			/*
+			 * The time of these writes, for the log below: the
+			 * state follows at once, and only then the console
+			 * lines, which take milliseconds each.
+			 */
+			written = ktime_get_ns();
 			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O4_RANGING);
 
 			/*
@@ -1422,14 +1431,13 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 			rtl9602c_gpon_bwm_arm(p, RTL9602C_GPON_BWM_O4_ENTRIES);
 
 			/*
-			 * The clock advances in 4 ms ticks on this board, so
-			 * the time since the interrupt shows a tick, not
-			 * whether the 750 us were met.
+			 * How long after the interrupt the writes were done,
+			 * against the 750 us G.984.3 allows.
 			 */
 			if (p->gpon_from_irq)
-				pr_info("<GPON> ONU-ID %u assigned; O4 %llu us after the interrupt\n",
+				pr_info("<GPON> ONU-ID %u assigned; written %llu us after the interrupt\n",
 					p->gpon_onu_id,
-					div_u64(ktime_get_ns() - p->gpon_irq_ns, NSEC_PER_USEC));
+					div_u64(written - p->gpon_irq_ns, NSEC_PER_USEC));
 			else
 				pr_info("<GPON> ONU-ID %u assigned; seen by the poll, not the IRQ\n",
 					p->gpon_onu_id);
@@ -2310,8 +2318,8 @@ static const char *rtl9602c_ploam_us_name(u8 id)
  * messages; upstream messages written, with their slot and the queue flags, or
  * refused; state changes; changes of the upstream queues' empty flags; and the
  * upstream and downstream interrupt latches. A repeated event shows its count.
- * Times move in 4 ms steps on this board, which has no clock source finer than
- * the tick. The ring is copied under its lock and printed from the copy.
+ * Times come from the kernel's clock, in steps of 10 ns on this board. The
+ * ring is copied under its lock and printed from the copy.
  */
 static int rtl9602c_ploamlog_show(struct seq_file *s, void *unused)
 {
