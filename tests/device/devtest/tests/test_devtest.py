@@ -123,7 +123,9 @@ class Record(unittest.TestCase):
         self.assertIn("   * - ``a.one``", text)
         self.assertIn("     - **FAIL**", text)
         self.assertIn("     - bad \\| worse", text)
+        # REUSE-IgnoreStart
         self.assertTrue(text.startswith(".. SPDX-License-Identifier: GPL-2.0-only\n"))
+        # REUSE-IgnoreEnd
         self.assertEqual(counts(results), "1 passed, 1 failed, 0 skipped, of 2")
 
     def test_the_json_leaves_the_log_out(self):

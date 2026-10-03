@@ -29,9 +29,11 @@ def cell(text: str) -> str:
 
 
 def page(title: str, header: dict[str, str], results: list[Result], copyright: str) -> str:
+    # REUSE-IgnoreStart
     out = [f".. SPDX-License-Identifier: GPL-2.0-only",
            f".. SPDX-FileCopyrightText: {copyright}", "",
            "=" * len(title), title, "=" * len(title), ""]
+    # REUSE-IgnoreEnd
     for key, value in header.items():
         out.append(f":{key}: {cell(value)}")
     out.append(f":Result: {counts(results)}")
