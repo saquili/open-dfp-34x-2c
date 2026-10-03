@@ -111,10 +111,15 @@ def phc(ctx: Context):
         return failed(f"ptp{n} {name}: no PPS source")
     ctx.stick.run(f"echo 1 > /sys/class/ptp/ptp{n}/pps_enable")
     try:
-        first = pps_assert(ctx.stick.text(f"sleep 2; cat /sys/class/pps/{pps}/assert"))
-        last = pps_assert(ctx.stick.text(f"sleep {PPS_WAIT}; cat /sys/class/pps/{pps}/assert"))
+        # Both reads in one command, so that no new connection comes between
+        # them to stretch the wait.
+        reads = ctx.stick.text(f"sleep 2; cat /sys/class/pps/{pps}/assert; "
+                               f"sleep {PPS_WAIT}; cat /sys/class/pps/{pps}/assert").split()
     finally:
         ctx.stick.run(f"echo 0 > /sys/class/ptp/ptp{n}/pps_enable")
+    if len(reads) != 2:
+        return failed(f"ptp{n} {name}: two PPS reads expected, got {reads!r}")
+    first, last = pps_assert(reads[0]), pps_assert(reads[1])
     pulses, seconds = last[1] - first[1], last[0] - first[0]
     ok = (name == "rtl9602c-ptp" and len(caps) == 2 and abs(pulses - PPS_WAIT) <= 1 and
           pulses > 0 and abs(seconds - pulses) < 0.1)

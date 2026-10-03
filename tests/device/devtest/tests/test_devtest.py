@@ -565,12 +565,10 @@ class Cases(unittest.TestCase):
     def test_the_phc_case_counts_one_pulse_a_second(self):
         def outcome(last: str):
             trail: list[str] = []
-            asserts = ["100.000000000#1", last]
-
             class Stick(Canned):
                 def run(self, command, **kw):
                     if "/assert" in command:
-                        self.answers[0] = ("/assert", 0, asserts.pop(0) + "\n")
+                        self.answers[0] = ("/assert", 0, f"100.000000000#1\n{last}\n")
                     return super().run(command, **kw)
 
             stick = Stick("stick", [("/assert", 0, ""),
