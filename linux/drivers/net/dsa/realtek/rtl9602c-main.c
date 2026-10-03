@@ -212,7 +212,7 @@ int rtl9602c_table_op(struct rtl9602c_priv *p, unsigned int type,
  * @addr: the entry's index
  * @data: filled with the entry, word 0 holding its bits 31:0
  * @words: the number of words in @data
- * @hit: if not NULL, set to whether the slot holds an entry; meaningless
+ * @hit: if not NULL, set to whether the slot holds an entry; left as it was
  *	when an error is returned
  *
  * Context: process context; takes table_lock.
@@ -229,7 +229,7 @@ int rtl9602c_table_read(struct rtl9602c_priv *p, unsigned int type,
 	err = rtl9602c_table_op(p, type, RTL9602C_TBLACC_CMD_MODE_INDEX, addr,
 				data, words, false, &out);
 	mutex_unlock(&p->table_lock);
-	if (hit)
+	if (hit && !err)
 		*hit = out.hit;
 	return err;
 }
