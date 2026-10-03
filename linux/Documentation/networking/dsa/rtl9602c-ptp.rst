@@ -727,15 +727,19 @@ The steps are checked by the rows below and by those of "The tag".
      - The window arithmetic has run only with stamps below 65,536 s; the
        auxiliary work is read from the code. A frame received with the clock's
        low 16 bits of seconds above 32,768 and no other reader would show it.
-   * - The conduit strips every frame longer than 16 bytes that carries
-       ``0x8899`` at offset 12, whatever its protocol byte (offset 14),
-       although other frames use that EtherType too: the switch's own
-       loop-detection probes do. Such a frame reaching the CPU would lose 16
-       bytes and gain a timestamp.
-     - I
-     - Only protocol 4 has been seen at the CPU. Sending a ``0x8899`` frame
-       with another protocol byte from the host, and checking what reaches
-       the CPU, would show whether such a frame is cut.
+   * - The conduit takes the tag off only a frame that came up with a CPU tag
+       and one of the two PTP trap reasons, 240 or 241, and that carries
+       ``0x8899`` at offset 12 and the protocol byte 4 at offset 14. Other
+       frames use that EtherType too, the switch's own loop-detection probes
+       among them, and a host can send a frame shaped like a tag; they go up
+       as they came.
+     - M
+     - 100 Syncs from the host came up with trap reason 240 and their stamps.
+       100 frames shaped like a tag with reason byte 119, sent by the host,
+       came up with trap reason 0, flooded like any frame; before the conduit
+       checked the reason, each lost 16 bytes and went up with the forged
+       time as its hardware stamp. A ``0x8899`` frame with protocol byte
+       ``0x23`` from the host did not reach the CPU.
 
 The filter
 ----------
@@ -1206,10 +1210,6 @@ Assumptions the driver depends on
      - A frame received more than 32,768 s after the last PHC read, and one
        received with the clock's low 16 bits of seconds above 32,768 and no
        reader.
-   * - Every frame with ``0x8899`` at offset 12 that reaches the CPU carries a
-       timestamp tag ("Taking the tag off and completing the seconds").
-     - A ``0x8899`` frame with a protocol byte other than 4, sent from the
-       host, and a check of what reaches the CPU.
    * - The advertised receive filter covers every event message and PTP over
        UDP ("The filter"). Only Sync over Ethernet has been seen tagged.
      - Each event message over Ethernet, and a Sync over UDP to port 319, from

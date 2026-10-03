@@ -1551,6 +1551,18 @@ The tag, with offsets from the start of the frame as the switch delivers it:
      - M
      - The kernel log with the switch's ingress action for Sync at "none" (240)
        and at "mirror" (241).
+   * - A frame with a tag comes up with the same reason in its receive
+       descriptor, ``RTL9602C_RX_REASON_PTP`` (240) for a message sent to the
+       CPU, and the driver takes a tag off only a frame with a CPU tag and
+       that reason or ``RTL9602C_RX_REASON_PTP_MIRROR`` (241). A frame that
+       only looks tagged, which a host can send, comes up with the reason of
+       an ordinary frame and goes up as it came.
+     - M, I
+     - M: the ``rxreason`` view counted 100 frames at reason 240 for 100 Syncs
+       from the host, and 100 at reason 0 for 100 frames shaped like a tag
+       from the host; with the check, the second kind reached a packet socket
+       whole, without a hardware stamp. I: the descriptor's reason for a
+       mirrored copy, taken to be 241 like its tag.
    * - Offsets 22 and 23 (``RTL9602C_PTP_TAG_SEC_OFFSET``) are the low 16 bits
        of the seconds of the switch's PTP clock at the moment the switch
        stamped the frame; offsets 24 to 27 (``RTL9602C_PTP_TAG_NSEC_OFFSET``)

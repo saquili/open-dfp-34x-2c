@@ -199,6 +199,13 @@
 /* The protocol byte of a PTP tag: 4 in every tag seen on this board. */
 #define RTL9602C_PTP_TAG_PROTO_PTP	4
 #define RTL9602C_PTP_TAG_REASON_OFFSET	15
+/*
+ * The trap reasons in the receive descriptor of a frame that carries a tag:
+ * a PTP message sent to the CPU, and a copy made by the ingress mirror
+ * action. The tag's reason byte holds the same values.
+ */
+#define RTL9602C_RX_REASON_PTP		240
+#define RTL9602C_RX_REASON_PTP_MIRROR	241
 #define RTL9602C_PTP_TAG_SEC_OFFSET	22
 #define RTL9602C_PTP_TAG_NSEC_OFFSET	24
 
@@ -1040,7 +1047,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 		struct rtl9602c_rx_desc *desc = &ring->desc[ring->tail];
 		unsigned int i = ring->tail;
 		struct sk_buff *skb = NULL;
-		unsigned int len;
+		unsigned int len, why;
 		u32 sts, w2, w3;
 
 		/*
@@ -1061,6 +1068,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 		w2 = be32_to_cpu(desc->tag);
 		w3 = be32_to_cpu(desc->dest);
 		len = sts & RTL9602C_NIC_RXD_LEN;
+		why = FIELD_GET(RTL9602C_NIC_RXD_TRAP_REASON, w3);
 		ring->frames++;
 
 		/*
@@ -1109,8 +1117,6 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 			if (netdev_uses_dsa(dev) && (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID)) {
 				unsigned int port =
 					FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3);
-				unsigned int why =
-					FIELD_GET(RTL9602C_NIC_RXD_TRAP_REASON, w3);
 				rtl9602c_flow_rx_t flow_rx;
 				struct metadata_dst *md = NULL;
 
@@ -1160,12 +1166,19 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 			 *
 			 * A frame longer than the tag with 0x8899 at offset 12
 			 * and the protocol byte 4 at offset 14, as in every tag
-			 * seen on this board, is taken to carry one. Other
-			 * frames use that EtherType with other protocol bytes,
-			 * among them the switch's own loop-detection probes,
-			 * and go up as they came.
+			 * seen on this board, is taken to carry one, but only
+			 * if the switch sent it up for one of the two PTP trap
+			 * reasons: a host can send such a frame itself, and the
+			 * switch then floods it to the CPU with the reason of
+			 * an ordinary frame (measured). Other frames use that
+			 * EtherType with other protocol bytes, among them the
+			 * switch's own loop-detection probes, and go up as they
+			 * came.
 			 */
-			if (skb->len > RTL9602C_PTP_TAG_LEN &&
+			if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
+			    (why == RTL9602C_RX_REASON_PTP ||
+			     why == RTL9602C_RX_REASON_PTP_MIRROR) &&
+			    skb->len > RTL9602C_PTP_TAG_LEN &&
 			    get_unaligned_be16(skb->data + 2 * ETH_ALEN) ==
 			    RTL9602C_ETH_P_REALTEK &&
 			    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] ==
