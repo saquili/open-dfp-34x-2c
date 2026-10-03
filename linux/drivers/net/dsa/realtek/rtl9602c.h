@@ -667,29 +667,47 @@ enum {
 #define RTL9602C_PLOAM_RANGING_TIME_EQD		3
 #define RTL9602C_PLOAM_RANGING_TIME_EQD_LEN		4
 
-/* Activation states (ITU-T G.984.3 clause 10.2.1); O6 and O7 are not used. */
+/* Activation states (ITU-T G.984.3 clause 10.2.1). */
 #define RTL9602C_ONU_O1_INITIAL		1
 #define RTL9602C_ONU_O2_STANDBY		2
 #define RTL9602C_ONU_O3_SERIAL_NUMBER	3
 #define RTL9602C_ONU_O4_RANGING		4
 #define RTL9602C_ONU_O5_OPERATION	5
+#define RTL9602C_ONU_O6_POPUP		6
+#define RTL9602C_ONU_O7_EMERGENCY_STOP	7
 
 /* The period of the GPON worker. */
 #define RTL9602C_GPON_POLL_MS		50
 
-/* TO1, armed on entering O3 and again on entering O4. */
+/* TO1, armed on entering O3, and on entering O4 from O6. */
 #define RTL9602C_GPON_TO1_MS		10000
+
+/* TO2, armed on entering O6: how long the ONU waits there for POPUP. */
+#define RTL9602C_GPON_TO2_MS		100
 
 /* Downstream PLOAM message identifiers (ITU-T G.984.3 clause 9.2.3). */
 #define RTL9602C_PLOAM_DS_UPSTREAM_OVERHEAD	1
 #define RTL9602C_PLOAM_DS_ASSIGN_ONUID	3
 #define RTL9602C_PLOAM_DS_RANGING_TIME	4
 #define RTL9602C_PLOAM_DS_DEACTIVATE_ONUID	5
+#define RTL9602C_PLOAM_DS_DISABLE_SERIAL_NUMBER	6
 #define RTL9602C_PLOAM_DS_REQUEST_PASSWORD	9
 #define RTL9602C_PLOAM_DS_ASSIGN_ALLOCID	10
+#define RTL9602C_PLOAM_DS_POPUP			12
 #define RTL9602C_PLOAM_DS_CONFIGURE_PORTID	14
 #define RTL9602C_PLOAM_DS_EXTENDED_BURST_LENGTH	20
 #define RTL9602C_PLOAM_DS_PONID		21
+
+/*
+ * Disable_Serial_Number (G.984.3 clause 9.2.3.6): whether the ONU with the
+ * serial number that follows is disabled or enabled again, or every disabled
+ * ONU enabled again.
+ */
+#define RTL9602C_PLOAM_DISABLE_SN_CTRL		2
+#define RTL9602C_PLOAM_DISABLE_SN_DISABLE	0xff
+#define RTL9602C_PLOAM_DISABLE_SN_ENABLE_ALL	0x0f
+#define RTL9602C_PLOAM_DISABLE_SN_ENABLE	0x00
+#define RTL9602C_PLOAM_DISABLE_SN_SERIAL	3
 
 /*
  * Extended_Burst_Length (G.984.3 clause 9.2.3.20): the type 3 preamble bytes
@@ -2260,6 +2278,8 @@ struct rtl9602c_priv {
 	bool gpon_up;
 	/** @gpon_to1: when TO1 expires, in jiffies; 0 while it is not armed */
 	unsigned long gpon_to1;
+	/** @gpon_to2: when TO2 expires, in jiffies; 0 while it is not armed */
+	unsigned long gpon_to2;
 	/** @gpon_o5_since: when the ONU entered O5, in jiffies */
 	unsigned long gpon_o5_since;
 	/** @gpon_work: the GPON worker, run every RTL9602C_GPON_POLL_MS */

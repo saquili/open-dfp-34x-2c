@@ -62,12 +62,13 @@ Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
 Activation in brief
 -------------------
 
-The driver implements the states O1 to O5 of ITU-T G.984.3 (clause 10.2.1). A
+The driver implements the states O1 to O7 of ITU-T G.984.3 (clause 10.2.1). A
 normal activation runs as follows; "The activation state machine" has the facts
 of each step.
 
-1. Bring-up leaves the ONU in O2, with TX_DISABLE asserted, the message
-   templates armed and the GPON interrupt source enabled.
+1. Bring-up leaves the ONU in O1, with TX_DISABLE asserted, the message
+   templates armed and the GPON interrupt source enabled, and the ONU moves on
+   to O2 once LOS and LOF have cleared.
 2. The OLT broadcasts Upstream_Overhead. The driver programs the burst overhead
    and the pre-assigned delay from it, releases TX_DISABLE and moves to O3. The
    MAC answers each discovery grant, an allocation to Alloc-ID 254 with the
@@ -84,8 +85,8 @@ of each step.
    15. OMCI messages then cross the PON MAC to ``/dev/pon0omci0``.
 
 The table lists every event that changes the state. TO1 is the timer of G.984.3
-that bounds the time in O3 and O4; the driver's use of it is described with the
-state machine.
+that bounds the time in O3 and O4, and TO2 the one that bounds the time in O6;
+the driver's use of them is described with the state machine.
 
 .. list-table::
    :header-rows: 1
@@ -97,9 +98,23 @@ state machine.
      - What the driver does
    * - ``ip link set pon up``
      - any
-     - O1, then O2
+     - O1
      - Bring-up sets O1, builds and programs everything (see "Bring-up and
-       take-down") and ends in O2 with no ONU-ID.
+       take-down") and ends with no ONU-ID.
+   * - LOS and LOF both clear
+     - O1
+     - O2
+     - Nothing more: the ONU waits for Upstream_Overhead.
+   * - LOS or LOF
+     - O2, O3 or O4
+     - O1
+     - Asserts TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the OMCC
+       if they are held.
+   * - LOS or LOF
+     - O5
+     - O6
+     - Asserts TX_DISABLE and arms TO2; the ONU-ID, the Alloc-IDs and the OMCC
+       stay.
    * - Upstream_Overhead, broadcast
      - O2
      - O3
@@ -121,9 +136,31 @@ state machine.
      - Gives back the ONU-ID, the Alloc-IDs and the OMCC if they are held. The
        next Upstream_Overhead programs everything again.
    * - Deactivate_ONU-ID, directed or broadcast
-     - O4 or O5
+     - O4, O5 or O6
      - O2
      - Gives back the ONU-ID, the Alloc-IDs and the OMCC.
+   * - POPUP, directed
+     - O6
+     - O5
+     - Releases TX_DISABLE; the ranging held stays in force.
+   * - POPUP, broadcast
+     - O6
+     - O4
+     - Releases TX_DISABLE and arms TO1; the OLT ranges the ONU again.
+   * - TO2 expires
+     - O6
+     - O1
+     - Gives back the ONU-ID, the Alloc-IDs and the OMCC, and goes on to O2 at
+       once if LOS and LOF have cleared.
+   * - Disable_Serial_Number disabling this ONU's serial number
+     - any but O7
+     - O7
+     - Asserts TX_DISABLE and gives back the ONU-ID, the Alloc-IDs and the
+       OMCC.
+   * - Disable_Serial_Number enabling this ONU's serial number, or every ONU
+     - O7
+     - O2
+     - Nothing more: the OLT discovers the ONU again.
    * - ``ip link set pon down``
      - any
      - O1
@@ -187,9 +224,9 @@ code depends on these properties of that node.
        interrupt thread dispatches PLOAM messages. The binding requires the
        property.
    * - ``tx-disable-gpios``
-     - Optional. The laser's TX_DISABLE line, which the state machine asserts in
-       O1 and O2 and releases from O3. Without the property every TX_DISABLE
-       step is skipped.
+     - Optional. The laser's TX_DISABLE line, which the state machine releases
+       in O3 to O5 and asserts in every other state. Without the property every
+       TX_DISABLE step is skipped.
    * - ``realtek,sysctl``, ``memory-region``
      - Read at probe for the PON MAC, which the bring-up builds (see
        Documentation/networking/device_drivers/pon/rtl9602c.rst).
@@ -279,7 +316,8 @@ Interfaces to user space
   serial number, and announces changes.
 - Seven debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``gpon``, ``gpontbl``,
   ``ploamlog``, ``bwmap``, ``usburst``, ``uscntr`` and ``gemusintr`` (see "The
-  debugfs views").
+  debugfs views"); with ``CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT``, a test
+  image's option, also the file ``ploaminject``.
 - The kernel log: the lines of this block begin ``rtl9602c-switch: <GPON>`` (see
   "The kernel log").
 
@@ -1064,14 +1102,15 @@ and then asks for the transition. The transition
 1. Record the new state for the rest of the driver. (M)
 2. Make the ``pon`` interface dormant, or not dormant in O5. (I)
 3. Record the event in the ``ploamlog`` ring. (M)
-4. Arm TO1 on entering O3, leave it running on entering O4, and disarm it on
-   entering any other state. (I: read from the code; the time from O3 to O5
-   on the bench is far under TO1)
+4. Arm TO1 on entering O3, and on entering O4 from O6; leave it running on
+   entering O4 from O3, and disarm it on entering any other state. Arm TO2 on
+   entering O6 and disarm it on entering any other state. (I: read from the
+   code; the time from O3 to O5 on the bench is far under TO1)
 5. Write the state into ``RTL9602C_ONU_CTRL``. Purpose: the MAC follows it. (M)
-6. Below O4, if an ONU-ID is held: write 255 into the ONU-ID registers and
-   unbind the default Alloc-ID, the Alloc-IDs in T-CONTs 0 to 15 and the OMCC.
-   Purpose: deactivation discards them. (M)
-7. Drive TX_DISABLE: asserted below O3, released from O3. (T)
+6. Below O4, and in O7, if an ONU-ID is held: write 255 into the ONU-ID
+   registers and unbind the default Alloc-ID, the Alloc-IDs in T-CONTs 0 to 15
+   and the OMCC. Purpose: deactivation and an emergency stop discard them. (M)
+7. Drive TX_DISABLE: released in O3 to O5, asserted in every other state. (M)
 8. Log the transition, and on leaving O5 how long the ONU was in it. Purpose: a
    console line costs about 9 ms, so the log comes after the writes that have to
    meet the 750 us. (M)
@@ -1093,26 +1132,63 @@ The report to the PON class follows the log line
      - P
      - ITU-T G.984.3 clause 10.2.1.
    * - ``RTL9602C_ONU_CTRL`` (``0x701010``): ``RTL9602C_ONU_CTRL_STATE`` (bits
-       3:0) holds the state as the numbers 1 to 5 (``RTL9602C_ONU_O1_INITIAL``,
+       3:0) holds the state as the numbers 1 to 7 (``RTL9602C_ONU_O1_INITIAL``,
        ``RTL9602C_ONU_O2_STANDBY``, ``RTL9602C_ONU_O3_SERIAL_NUMBER``,
-       ``RTL9602C_ONU_O4_RANGING``, ``RTL9602C_ONU_O5_OPERATION``), and
+       ``RTL9602C_ONU_O4_RANGING``, ``RTL9602C_ONU_O5_OPERATION``,
+       ``RTL9602C_ONU_O6_POPUP``, ``RTL9602C_ONU_O7_EMERGENCY_STOP``), and
        ``RTL9602C_ONU_CTRL_ONUID`` (bits 15:8) the ONU-ID, 255 until one is
        assigned. The state is software's: ``rtl9602c_gpon_apply_state()`` writes
        it on every transition and the MAC follows what is written.
      - M
-     - Writing O2 and O3 read back ``0x0000ff02`` and ``0x0000ff03``; the
-       ``onu`` line of the ``gpon`` view prints the register.
+     - Writing O2 and O3 read back ``0x0000ff02`` and ``0x0000ff03``, and O7
+       ``0x0000ff07``; the ``onu`` line of the ``gpon`` view prints the
+       register.
    * - The state gates the MAC's classification of grants: in O1 no grant is
        counted as a serial-number request; in O3 the discovery grants are.
      - M
      - The serial-number request count (``sn-requests`` on the ``cntr`` line of
        the ``gpon`` view) stayed 0 for 100 s in O1 while bandwidth maps arrived
        8000 a second, and counted 8 in 8 s once O3 was written.
-   * - Bring-up ends in O2 with no ONU-ID. Upstream_Overhead, acted on only in
-       O2, takes the ONU to O3 and starts TO1.
-     - P
-     - ITU-T G.984.3 clause 10.2.5.1 a) and Table 10-1; the ONU reaches O5 on an
-       OLT.
+   * - Bring-up ends in O1 with no ONU-ID, and the ONU goes on to O2 once LOS
+       and LOF have cleared. Upstream_Overhead, acted on only in O2, takes the
+       ONU to O3 and starts TO1.
+     - P, M
+     - ITU-T G.984.3 clause 10.2.5.1 a) and Table 10-1; the kernel log shows
+       ``O1 initial -> O2 standby`` once the PON comes up, and the ONU reaches
+       O5 on an OLT.
+   * - The downstream's synchronisation moves the state
+       (``rtl9602c_gpon_ds_sync()``): with LOS or LOF set in
+       ``RTL9602C_GTC_DS_IRQ_STAT``, an ONU in O2, O3 or O4 goes to O1 and one
+       in O5 to O6; with both clear, one in O1 goes to O2; O6 and O7 wait for
+       the OLT. The interrupt acts on a change of either bit at once, and the
+       worker reads the levels every 50 ms, so a missed change is still
+       followed.
+     - P, I
+     - ITU-T G.984.3 clause 10.2. The step from O1 to O2 at bring-up is the
+       row above; the steps on a loss of the downstream have not been taken on
+       the board, which needs the fibre pulled with the ONU in each state.
+   * - O6 keeps the ONU-ID, the Alloc-IDs and the OMCC, with the laser off. A
+       POPUP directed to the ONU takes it back to O5, a broadcast one to O4,
+       where the OLT ranges it again and TO1 runs; when TO2
+       (``RTL9602C_GPON_TO2_MS``, 100 ms) expires first, the ONU goes to O1,
+       giving them back, and on to O2 at once if the downstream is back.
+     - P, I
+     - ITU-T G.984.3 clause 10.2.5.1. Not exercised on the board, which reaches
+       O6 only when the downstream is lost in O5; a POPUP injected in O5 was
+       ignored.
+   * - Disable_Serial_Number with octet 3 at ``0xff`` and the ONU's serial
+       number in octets 4 to 11 takes the ONU to O7 from any state the
+       downstream reaches, laser off and ONU-ID given back; octet 3 at ``0x00``
+       with its serial number, or at ``0x0f`` for every ONU, takes an ONU in O7
+       to O2, from which the OLT discovers it again.
+     - P, M
+     - ITU-T G.984.3 clause 9.2.3.6 and clause 10.2.5.1. Injected through
+       ``ploaminject``: the disable took O5 to O7, the module's bias and
+       transmitted power then reading 0; the enable, and in a second run the
+       enable for every ONU, took O7 to O2, and the OLT ranged and provisioned
+       the ONU again in about 2 s, after which bridged traffic crossed both
+       ways. A disable for another serial number, and Deactivate_ONU-ID in O7,
+       changed nothing.
    * - Assign_ONU-ID carrying the ONU's own serial number, acted on only in O3,
        takes it to O4.
      - P
@@ -1124,19 +1200,21 @@ The report to the PON class follows the log line
      - ITU-T G.984.3 clause 10.2.5.1 d) and Table 10-1; the ONU reaches O5 on an
        OLT.
    * - Deactivate_ONU-ID, directed to the ONU's ONU-ID or broadcast, is acted on
-       in O4 and O5 and takes the ONU to O2.
+       in O4, O5 and O6 and takes the ONU to O2; in O7 it is ignored.
      - P
      - ITU-T G.984.3 clause 10.2.5.1 h); the OLT's Deactivate_ONU-ID after
        unacknowledged messages took the ONU to O2.
-   * - TO1 is armed for ``RTL9602C_GPON_TO1_MS`` (10 s) on entering O3 and armed
-       again on entering O4, and it is disarmed in every other state. The
-       worker, which runs every 50 ms, checks it. On expiry the ONU goes to O2
-       and the next Upstream_Overhead programs everything again.
+   * - TO1 is armed for ``RTL9602C_GPON_TO1_MS`` (10 s) on entering O3, runs on
+       into O4, is armed on entering O4 from O6, and is disarmed in every other
+       state. The worker, which runs every 50 ms, checks it, and TO2 with it. On
+       expiry the ONU goes to O2 and the next Upstream_Overhead programs
+       everything again.
      - M
      - ``TO1 expired in O4; trying again`` in the kernel log, then a new pass
        through O3.
-   * - Whenever the state drops below O4 while an ONU-ID is held (TO1,
-       Deactivate_ONU-ID, the interface going down), the driver writes
+   * - Whenever the state drops below O4 while an ONU-ID is held (TO1, TO2,
+       Deactivate_ONU-ID, a loss of the downstream, the interface going down),
+       or enters O7, the driver writes
        ``RTL9602C_ONU_ONUID_UNASSIGNED`` (255) into ``RTL9602C_ONU_US_ONUID``
        (``0x705010``) and into ``RTL9602C_ONU_CTRL_ONUID``, clears the default
        Alloc-ID's table entry (T-CONT 16) and every T-CONT from 0 to 15 in use,
@@ -1154,15 +1232,17 @@ The report to the PON class follows the log line
      - I
      - A capture of the upstream at the OLT with the register at 255 and at an
        assigned value.
-   * - TX_DISABLE follows the state: it is asserted in O1 and O2 and released
-       from O3 on (``rtl9602c_l_txdis_gpio()``, see
+   * - TX_DISABLE follows the state: it is released in O3 to O5 and asserted in
+       O1, O2, O6 and O7 (``rtl9602c_l_txdis_gpio()``, see
        Documentation/networking/device_drivers/pon/rtl9602c-optics.rst). Only
        the hard block is lifted: the burst enable still confines emission to the
        allocations that the OLT grants.
-     - T
-     - The laser is off before O3. ITU-T G.984.3 clause 10.2.2 (no upstream
-       transmission before O3); clause 9.2.1 and clause 11.1.2
-       (Deactivate_ONU-ID and loss of signal switch the laser off).
+     - M
+     - The laser is off before O3; in O7 the line read high and the module's
+       bias and transmitted power 0, and both came back in O5. ITU-T G.984.3
+       clause 10.2.2 (no upstream transmission before O3); clause 9.2.1 and
+       clause 11.1.2 (Deactivate_ONU-ID and loss of signal switch the laser
+       off).
    * - The PON port's operational state is dormant in every state but O5, and up
        in O5 (``rtl9602c_gpon_operstate()``, on each transition and when the
        port is enabled): up but waiting for an external event, as RFC 2863
@@ -1213,8 +1293,10 @@ The interrupt path, in order:
    "Upstream timing"). Purpose: a latch left unread keeps the source asserted.
    (M)
 4. If ``RTL9602C_GPON_IRQ_GTC_DS`` is set, it reads
-   ``RTL9602C_GTC_DS_IRQ_LATCH``, which clears it, and records any bit other
-   than PLOAM_RX in the ``ploamlog`` ring. (M)
+   ``RTL9602C_GTC_DS_IRQ_LATCH``, which clears it, records any bit other than
+   PLOAM_RX in the ``ploamlog`` ring, and on a change of LOS or LOF moves the
+   state under ``gpon_lock`` (``rtl9602c_gpon_ds_sync()``). (M for the latch,
+   I for the move)
 5. On ``RTL9602C_GTC_DS_IRQ_PLOAM_RX`` it pops and dispatches up to 32 PLOAM
    messages, under ``gpon_lock``. (M)
 6. It writes the source's bit into ``RTL9602C_IRQ_PENDING`` to clear it. (M)
@@ -1249,8 +1331,17 @@ recorded in the ``ploamlog`` ring and dropped.
      - Equalization delay; from O4, O5.
    * - Deactivate_ONU-ID (5)
      - The ONU-ID or all ONUs
-     - O4, O5
+     - O4, O5, O6
      - O2.
+   * - Disable_Serial_Number (6)
+     - All ONUs; octets 4 to 11 must be the ONU's serial number, unless octet 3
+       enables every ONU
+     - Disable: any state but O7. Enable: O7
+     - Disable: O7. Enable: O2.
+   * - POPUP (12)
+     - The ONU-ID or all ONUs
+     - O6
+     - Directed: O5. Broadcast: O4.
    * - Request_Password (9)
      - The ONU-ID
      - O5
@@ -1260,12 +1351,11 @@ recorded in the ``ploamlog`` ring and dropped.
        with the password zeroed.
    * - Assign_Alloc-ID (10)
      - The ONU-ID
-     - Wherever octet 1 equals the ONU-ID the driver holds: O4 and O5 in
-       practice
+     - O4, O5
      - Binds or unbinds an Alloc-ID in a T-CONT; acknowledged.
    * - Configure_Port-ID (14)
      - The ONU-ID
-     - As Assign_Alloc-ID
+     - O4, O5
      - Binds or unbinds the OMCC; acknowledged.
    * - PON-ID (21)
      - All ONUs
@@ -2525,8 +2615,19 @@ The debugfs views
 Seven views are created by ``rtl9602c_gpon_debugfs_init()`` in the switch's
 debugfs directory, ``/sys/kernel/debug/rtl9602c/``. All are mode 0400 but
 ``ploamlog``, which is 0600 because a write to it empties the log. They exist
-only with ``CONFIG_DEBUG_FS``. Times in the ``ploamlog`` view advance in ticks
-of 4 ms on this board.
+only with ``CONFIG_DEBUG_FS``. A test image built with
+``CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT`` also has ``ploaminject``, mode 0200:
+a write of the twelve octets of a downstream PLOAM message before its CRC, in
+hex, spaces allowed, hands the message to the dispatcher as if the OLT had sent
+it, and is refused with ``-ENETDOWN`` while the PON is down. An ONU in service
+must not have it, since a write can stop the ONU or take it off the PON.
+Disabling and enabling an ONU with the serial number ``ABCD0000A001``, for
+instance::
+
+    echo ff06ff41424344 0000a001 00 > /sys/kernel/debug/rtl9602c/ploaminject
+    echo ff060041424344 0000a001 00 > /sys/kernel/debug/rtl9602c/ploaminject
+
+Times in the ``ploamlog`` view advance in ticks of 4 ms on this board.
 
 .. list-table::
    :header-rows: 1
@@ -2606,13 +2707,9 @@ of 4 ms on this board.
 Known limitations
 =================
 
-- The state machine has the states O1 to O5 and the timer TO1. O6 (POPUP), O7
-  (Emergency Stop) and the timer TO2 are not implemented. LOS and LOF are
-  reported as alarms and change no state, where G.984.3 moves an ONU in O2, O3
-  or O4 to O1 on LOS or LOF, and one in O5 to O6, and switches the laser off.
-- The bring-up enters O2 without checking LOS or LOF, where G.984.3 leaves O1
-  for O2 once both are clear. On a dark fibre the ONU reports O2 with the LOS
-  alarm.
+- The steps that a loss of the downstream takes, to O1 and to O6, and the
+  POPUP and TO2 that leave O6, have not been exercised on the board: they need
+  the fibre pulled with the ONU in O5.
 - Extended_Burst_Length is acted on whenever it changes in O3, where G.984.3 has
   the ONU act on it only before its first serial-number request. The upper clamp
   of the computed overhead length is 252 bytes, where G.984.3 allows at most
@@ -2621,10 +2718,8 @@ Known limitations
 - Every downstream message that the table in "PLOAM receive" does not list is
   recorded and dropped, including some for which G.984.3 requires an answer:
   BER Interval, Key_Switching_Time and Encrypted_Port-ID get no Acknowledge.
-  POPUP,
-  Swift_POPUP, Disable_Serial_Number, Change_Power_Level, Request_Key,
-  Ranging_Adjustment, Sleep_Allow, PST and Physical_Equipment_Error are not
-  acted on either.
+  Swift_POPUP, Change_Power_Level, Request_Key, Ranging_Adjustment,
+  Sleep_Allow, PST and Physical_Equipment_Error are not acted on either.
 - There is no encryption. The driver programs no key and does not act on
   Encrypted_Port-ID, Request_Key or Key_Switching_Time, so a Port-ID that the
   OLT encrypts (128-bit AES in counter mode, ITU-T G.984.3 clause 12) would be

@@ -99,3 +99,17 @@ config NET_DSA_RTL9602C
 
 	  Say Y or M on an RTL9602C board. To compile this driver as a module,
 	  choose M here: the module will be called rtl9602c.
+
+config NET_DSA_RTL9602C_PLOAM_INJECT
+	bool "Inject downstream PLOAM messages through debugfs"
+	depends on NET_DSA_RTL9602C && DEBUG_FS
+	help
+	  Give the switch's debugfs directory a file, rtl9602c/ploaminject. A
+	  write of the twelve octets of a downstream PLOAM message, in hex,
+	  hands the message to the activation state machine as if the OLT had
+	  sent it, so that what the OLT at hand never sends, such as
+	  Disable_Serial_Number and POPUP, can be tested. A process that can
+	  write the file can stop the ONU or take it off the PON, so the
+	  option is for test images, not for an ONU in service.
+
+	  If unsure, say N.

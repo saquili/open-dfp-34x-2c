@@ -16,14 +16,16 @@
  * and classifies the OLT's grants by it. PLOAM messages are dispatched from the
  * GPON interrupt, since G.984.3 gives the ONU 750 us to act on one.
  *
- * Of G.984.3's states and timers the driver implements O1 to O5 and TO1, not O6
- * (POPUP), O7 (Emergency Stop) or TO2: LOS and LOF are reported as alarms but
- * change no state, and bring-up enters O2 without waiting for them to clear. It
- * acts on Upstream_Overhead, Extended_Burst_Length, Assign_ONU-ID,
- * Ranging_Time, Deactivate_ONU-ID, Assign_Alloc-ID and Configure_Port-ID, and
- * drops every other downstream message, even where G.984.3 asks for an answer:
- * Request_Password gets no Password message, and BER_Interval,
- * Key_Switching_Time and Encrypted_Port-ID get no Acknowledge. No encryption
+ * The driver implements G.984.3's states O1 to O7 and its timers TO1 and TO2.
+ * LOS or LOF sends an ONU in O2 to O4 back to O1 and one in O5 to O6, where it
+ * keeps its ranging and sends nothing until POPUP or TO2; O1 moves on to O2
+ * once both have cleared. Disable_Serial_Number stops the ONU in O7, laser off,
+ * until it is enabled again. It acts on Upstream_Overhead,
+ * Extended_Burst_Length, Assign_ONU-ID, Ranging_Time, Deactivate_ONU-ID,
+ * Disable_Serial_Number, POPUP, Request_Password, Assign_Alloc-ID and
+ * Configure_Port-ID, and drops every other downstream message, even where
+ * G.984.3 asks for an answer: BER_Interval, Key_Switching_Time and
+ * Encrypted_Port-ID get no Acknowledge. No encryption
  * key is programmed and nothing is set up for upstream FEC; that neither is
  * needed is an assumption, not verified, and a Port-ID an OLT encrypts would
  * arrive as ciphertext. There is no power levelling, no REI message and no
@@ -43,6 +45,7 @@
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/ktime.h>
+#include <linux/ctype.h>
 #include <linux/kernel.h>
 #include <linux/math64.h>
 #include <linux/if_bridge.h>
@@ -772,6 +775,8 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 		[RTL9602C_ONU_O3_SERIAL_NUMBER]	= "O3 serial-number",
 		[RTL9602C_ONU_O4_RANGING]	= "O4 ranging",
 		[RTL9602C_ONU_O5_OPERATION]	= "O5 operation",
+		[RTL9602C_ONU_O6_POPUP]		= "O6 popup",
+		[RTL9602C_ONU_O7_EMERGENCY_STOP] = "O7 emergency stop",
 	};
 	u8 from;
 
@@ -786,24 +791,30 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	/*
 	 * TO1 bounds the serial-number and ranging states together (G.984.3
 	 * clause 10.1): it starts on entering O3, runs on through O4, and the
-	 * worker expires it. Any other state stops it.
+	 * worker expires it; ranging again after a broadcast POPUP starts it
+	 * too. Any other state stops it. TO2 bounds O6 the same way.
 	 */
-	if (state == RTL9602C_ONU_O3_SERIAL_NUMBER)
+	if (state == RTL9602C_ONU_O3_SERIAL_NUMBER ||
+	    (state == RTL9602C_ONU_O4_RANGING && from == RTL9602C_ONU_O6_POPUP))
 		p->gpon_to1 = jiffies + msecs_to_jiffies(RTL9602C_GPON_TO1_MS);
 	else if (state != RTL9602C_ONU_O4_RANGING)
 		p->gpon_to1 = 0;
+	p->gpon_to2 = state == RTL9602C_ONU_O6_POPUP ?
+		      jiffies + msecs_to_jiffies(RTL9602C_GPON_TO2_MS) : 0;
 
 	rtl9602c_rmw(p, RTL9602C_ONU_CTRL, RTL9602C_ONU_CTRL_STATE,
 		     FIELD_PREP(RTL9602C_ONU_CTRL_STATE, state));
 
 	/*
-	 * Below O4 the ONU holds no ONU-ID, and G.984.3 has it discard its
-	 * Alloc-IDs and OMCI Port-ID with it (clause 9.2.1). An ONU-ID left in
+	 * Below O4, and in O7, the ONU holds no ONU-ID, and G.984.3 has it
+	 * discard its Alloc-IDs and OMCI Port-ID with it (clause 9.2.1); O6
+	 * keeps them for a directed POPUP. An ONU-ID left in
 	 * RTL9602C_ONU_US_ONUID keeps discovery from ever succeeding again
 	 * (measured on this board); which upstream field that register feeds is
 	 * not verified.
 	 */
-	if (state < RTL9602C_ONU_O4_RANGING &&
+	if ((state < RTL9602C_ONU_O4_RANGING ||
+	     state == RTL9602C_ONU_O7_EMERGENCY_STOP) &&
 	    p->gpon_onu_id != RTL9602C_ONU_ONUID_UNASSIGNED) {
 		p->gpon_onu_id = RTL9602C_ONU_ONUID_UNASSIGNED;
 		rtl9602c_w(p, RTL9602C_ONU_US_ONUID,
@@ -818,10 +829,12 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	}
 
 	/*
-	 * No light below O3, where an ONU does not transmit; from O3 on, the
-	 * MAC still sends only in the allocations the OLT grants.
+	 * Light only from O3 to O5, where the ONU transmits, and there only in
+	 * the allocations the OLT grants: not below O3, nor in O6, where the
+	 * downstream was lost, nor in O7, where the OLT stopped the ONU.
 	 */
-	rtl9602c_l_txdis_gpio(p, state < RTL9602C_ONU_O3_SERIAL_NUMBER);
+	rtl9602c_l_txdis_gpio(p, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
+			      state > RTL9602C_ONU_O5_OPERATION);
 
 	if (state == RTL9602C_ONU_O5_OPERATION)
 		p->gpon_o5_since = jiffies;
@@ -841,6 +854,44 @@ static void rtl9602c_gpon_set_state(struct rtl9602c_priv *p, u8 state)
 {
 	rtl9602c_gpon_apply_state(p, state);
 	rtl9602c_gpon_notify(p);
+}
+
+/*
+ * Follow the downstream's synchronisation (G.984.3 clause 10.2): with LOS or
+ * LOF present, an ONU in O2 to O4 goes back to O1, and one in O5 to O6, where
+ * it keeps its ranging and sends nothing until POPUP or TO2; with both clear,
+ * one in O1 goes on to O2. O6 and O7 wait for the OLT. The conditions are read
+ * as levels, so a call after a missed change still finds the state right.
+ */
+static void rtl9602c_gpon_ds_sync(struct rtl9602c_priv *p)
+{
+	bool lost;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	if (!p->gpon_up)
+		return;
+
+	lost = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT) &
+	       (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF);
+	switch (p->gpon_state) {
+	case RTL9602C_ONU_O1_INITIAL:
+		if (!lost)
+			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
+		break;
+	case RTL9602C_ONU_O2_STANDBY:
+	case RTL9602C_ONU_O3_SERIAL_NUMBER:
+	case RTL9602C_ONU_O4_RANGING:
+		if (lost)
+			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O1_INITIAL);
+		break;
+	case RTL9602C_ONU_O5_OPERATION:
+		if (lost)
+			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O6_POPUP);
+		break;
+	default:
+		break;
+	}
 }
 
 /*
@@ -1488,13 +1539,14 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 
 	case RTL9602C_PLOAM_DS_DEACTIVATE_ONUID:
 		/*
-		 * Directed or broadcast, in O4 and O5 (G.984.3 clause 9.2.3.5):
+		 * Directed or broadcast, in O4 to O6 (G.984.3 clause 9.2.3.5):
 		 * back to O2, which asserts TX_DISABLE and gives back the
 		 * ONU-ID, the Alloc-IDs and the OMCC. The upstream queue flags
 		 * are recorded as well, to show whether messages were still
 		 * waiting to be sent.
 		 */
-		if (p->gpon_state < RTL9602C_ONU_O4_RANGING)
+		if (p->gpon_state < RTL9602C_ONU_O4_RANGING ||
+		    p->gpon_state == RTL9602C_ONU_O7_EMERGENCY_STOP)
 			return;
 		rtl9602c_ploam_log(p, RTL9602C_EV_USQ, NULL,
 				   rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL));
@@ -1505,14 +1557,17 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 
 	case RTL9602C_PLOAM_DS_ASSIGN_ALLOCID: {
 		/*
-		 * Directed (G.984.3 clause 9.2.3.10): a 12-bit Alloc-ID, bound
-		 * to a T-CONT for type 1, GEM payload, and unbound for
+		 * Directed, in O4 and O5 (G.984.3 clause 9.2.3.10): a 12-bit
+		 * Alloc-ID, bound to a T-CONT for type 1, GEM payload, and
+		 * unbound for
 		 * type 255; other types change nothing. Every copy is
 		 * acknowledged.
 		 */
 		u16 alloc = (msg[2] << 4) | (msg[3] >> 4);
 
-		if (msg[0] != p->gpon_onu_id)
+		if (msg[0] != p->gpon_onu_id ||
+		    (p->gpon_state != RTL9602C_ONU_O4_RANGING &&
+		     p->gpon_state != RTL9602C_ONU_O5_OPERATION))
 			return;
 		if (msg[4] == RTL9602C_PLOAM_ASSIGN_ALLOCID_GEM)
 			rtl9602c_gpon_tcont_add(p, alloc);
@@ -1524,6 +1579,45 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		return;
 	}
 
+	case RTL9602C_PLOAM_DS_DISABLE_SERIAL_NUMBER: {
+		/*
+		 * Broadcast (G.984.3 clause 9.2.3.6). Disable with this ONU's
+		 * serial number: O7, from any state the downstream can reach,
+		 * with the laser off and the ONU-ID given back. Enable with
+		 * this serial number, or enable for every ONU: an ONU in O7
+		 * goes to O2 and is discovered again.
+		 */
+		bool mine = p->gpon_have_sn &&
+			    !memcmp(&msg[RTL9602C_PLOAM_DISABLE_SN_SERIAL],
+				    p->gpon_sn, RTL9602C_GPON_SN_BYTES);
+		u8 ctrl = msg[RTL9602C_PLOAM_DISABLE_SN_CTRL];
+
+		if (ctrl == RTL9602C_PLOAM_DISABLE_SN_DISABLE && mine &&
+		    p->gpon_state != RTL9602C_ONU_O7_EMERGENCY_STOP) {
+			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O7_EMERGENCY_STOP);
+			pr_info("<GPON> the OLT disabled this ONU\n");
+		} else if (p->gpon_state == RTL9602C_ONU_O7_EMERGENCY_STOP &&
+			   (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE_ALL ||
+			    (ctrl == RTL9602C_PLOAM_DISABLE_SN_ENABLE && mine))) {
+			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
+			pr_info("<GPON> the OLT enabled this ONU again\n");
+		}
+		return;
+	}
+
+	case RTL9602C_PLOAM_DS_POPUP:
+		/*
+		 * In O6 (G.984.3 clause 9.2.3.12): a broadcast POPUP sends the
+		 * ONU to O4, to be ranged again with the delay it holds, and one
+		 * directed to it back to O5.
+		 */
+		if (p->gpon_state != RTL9602C_ONU_O6_POPUP)
+			return;
+		rtl9602c_gpon_set_state(p, msg[0] == RTL9602C_ONU_ONUID_UNASSIGNED ?
+					   RTL9602C_ONU_O4_RANGING :
+					   RTL9602C_ONU_O5_OPERATION);
+		return;
+
 	case RTL9602C_PLOAM_DS_REQUEST_PASSWORD:
 		/* Directed, in O5. */
 		if (msg[0] != p->gpon_onu_id ||
@@ -1534,14 +1628,16 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 
 	case RTL9602C_PLOAM_DS_CONFIGURE_PORTID: {
 		/*
-		 * Directed (G.984.3 clause 9.2.3.14): the OMCC's 12-bit
-		 * Port-ID, bound on activation, in place of an earlier one
+		 * Directed, in O4 and O5 (G.984.3 clause 9.2.3.14): the OMCC's
+		 * 12-bit Port-ID, bound on activation, in place of an earlier one
 		 * since an ONU has one OMCI connection, and unbound on
 		 * deactivation. Every copy is acknowledged.
 		 */
 		u16 port = (msg[3] << 4) | (msg[4] >> 4);
 
-		if (msg[0] != p->gpon_onu_id)
+		if (msg[0] != p->gpon_onu_id ||
+		    (p->gpon_state != RTL9602C_ONU_O4_RANGING &&
+		     p->gpon_state != RTL9602C_ONU_O5_OPERATION))
 			return;
 		if (msg[2] & BIT(0))
 			rtl9602c_gpon_omcc_bind(p, port);
@@ -1580,11 +1676,24 @@ void rtl9602c_gpon_work(struct work_struct *w)
 	if (p->ponmac_up)
 		rtl9602c_ploam_log_usq(p);
 
+	/* A change of LOS or LOF that the interrupt did not report. */
+	rtl9602c_gpon_ds_sync(p);
+
 	/* TO1: back to O2, where the next Upstream_Overhead starts over. */
 	if (p->gpon_to1 && time_after(jiffies, p->gpon_to1)) {
 		pr_info("<GPON> TO1 expired in O%u; trying again\n",
 			p->gpon_state);
 		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
+	}
+
+	/*
+	 * TO2: no POPUP came; O1, giving back the ONU-ID, and on to O2 at once
+	 * when the downstream is back.
+	 */
+	if (p->gpon_to2 && time_after(jiffies, p->gpon_to2)) {
+		pr_info("<GPON> TO2 expired in O6\n");
+		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O1_INITIAL);
+		rtl9602c_gpon_ds_sync(p);
 	}
 
 	rtl9602c_gpon_cntr_sync(p);
@@ -1640,10 +1749,19 @@ void rtl9602c_gpon_irq(struct rtl9602c_priv *p)
 	if (!(top & RTL9602C_GPON_IRQ_GTC_DS))
 		return;
 
-	/* Downstream events other than a received PLOAM are only recorded. */
+	/*
+	 * Downstream events other than a received PLOAM are recorded; a change
+	 * of LOS or LOF moves the state at once, since in O5 the laser has to
+	 * go off without waiting for the worker.
+	 */
 	ds = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_LATCH);
 	if (ds & ~RTL9602C_GTC_DS_IRQ_PLOAM_RX)
 		rtl9602c_ploam_log(p, RTL9602C_EV_DS_INTR, NULL, ds);
+	if (ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF)) {
+		mutex_lock(&p->gpon_lock);
+		rtl9602c_gpon_ds_sync(p);
+		mutex_unlock(&p->gpon_lock);
+	}
 	if (!(ds & RTL9602C_GTC_DS_IRQ_PLOAM_RX))
 		return;
 
@@ -1916,12 +2034,12 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 		     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
 
 	/*
-	 * No ONU-ID, and O2, to wait for Upstream_Overhead. G.984.3 leaves O1
-	 * only once LOS and LOF have cleared; bring-up does not check them, so
-	 * on a dark fibre the ONU reports O2 with the LOS alarm.
+	 * No ONU-ID, and O1 until LOS and LOF have cleared, then O2, to wait
+	 * for Upstream_Overhead; on a dark fibre the ONU stays in O1 with the
+	 * LOS alarm, and the worker moves it on once the light comes.
 	 */
 	p->gpon_onu_id = RTL9602C_ONU_ONUID_UNASSIGNED;
-	rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
+	rtl9602c_gpon_ds_sync(p);
 
 	/* The templates, ready before the first discovery grant. */
 	rtl9602c_gpon_arm_idle_slots(p);
@@ -2286,6 +2404,61 @@ static const struct file_operations rtl9602c_ploamlog_fops = {
 	.release = single_release,
 };
 
+#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT)
+/*
+ * ploaminject: one downstream PLOAM message per write, the twelve octets before
+ * its CRC in hex, spaces allowed between them, handed to the dispatcher under
+ * gpon_lock as if the interrupt had popped it, the rest of its buffer zero.
+ * Refused while the PON is down.
+ */
+static ssize_t rtl9602c_ploaminject_write(struct file *file,
+					  const char __user *ubuf,
+					  size_t count, loff_t *ppos)
+{
+	struct rtl9602c_priv *p = file->private_data;
+	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
+	const unsigned int len = RTL9602C_GPON_PLOAM_BYTES - 1;
+	unsigned int n = 0, i;
+	char buf[64];
+	int err = 0;
+
+	if (count >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, count))
+		return -EFAULT;
+	buf[count] = '\0';
+
+	for (i = 0; buf[i]; i++) {
+		int hi, lo;
+
+		if (isspace(buf[i]))
+			continue;
+		hi = hex_to_bin(buf[i]);
+		lo = buf[i + 1] ? hex_to_bin(buf[i + 1]) : -1;
+		if (hi < 0 || lo < 0 || n == len)
+			return -EINVAL;
+		msg[n++] = hi << 4 | lo;
+		i++;
+	}
+	if (n != len)
+		return -EINVAL;
+
+	mutex_lock(&p->gpon_lock);
+	if (p->gpon_up)
+		rtl9602c_gpon_ploam_rx(p, msg);
+	else
+		err = -ENETDOWN;
+	mutex_unlock(&p->gpon_lock);
+	return err ?: count;
+}
+
+static const struct file_operations rtl9602c_ploaminject_fops = {
+	.owner	= THIS_MODULE,
+	.open	= simple_open,
+	.write	= rtl9602c_ploaminject_write,
+};
+#endif
+
 /*
  * One captured allocation. StartTime and StopTime count bytes from the start of
  * the upstream frame, StopTime the last one (G.984.3 clause 8.1.3.6), so the
@@ -2551,8 +2724,9 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gpontbl);
  * rtl9602c_gpon_debugfs_init() - create the GPON MAC's debugfs views
  * @p: the switch, with its debugfs directory created
  *
- * Creates gpontbl, gpon, usburst, gemusintr, bwmap and uscntr, mode 0400, and
- * ploamlog, mode 0600, since a write to it empties the log.
+ * Creates gpontbl, gpon, usburst, gemusintr, bwmap and uscntr, mode 0400,
+ * ploamlog, mode 0600, since a write to it empties the log, and, with
+ * CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT, ploaminject, mode 0200.
  */
 void rtl9602c_gpon_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -2570,6 +2744,10 @@ void rtl9602c_gpon_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_bwmap_fops);
 	debugfs_create_file("uscntr", 0400, p->debugfs, p,
 			    &rtl9602c_uscntr_fops);
+#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT)
+	debugfs_create_file("ploaminject", 0200, p->debugfs, p,
+			    &rtl9602c_ploaminject_fops);
+#endif
 }
 
 #endif
