@@ -1784,10 +1784,21 @@ An example of a translation from VID 410 to VID 1410::
        "Bridging the GEM ports"), requires the frame to carry no S-tag:
        ``RTL9602C_CLS_RULE_STAG`` is compared with value 0. An S-tagged frame
        matches none of them.
-     - I
-     - The compared set is what the driver writes (the read-back of the first
-       row); an 802.1ad frame from the host would show it untranslated. Not
-       load-bearing on a line that sends single-tagged frames.
+     - M, I
+     - M: under a translation of 3001 to 3002 on ``sfp`` and of 3002 to 3001
+       on ``pon``, 200 frames with an 802.1ad tag (TPID ``0x88a8``, VID 100)
+       in front of a C-tag of 3001 crossed upstream untranslated, as did 200
+       with 3002 inside downstream; upstream they had their port's stream,
+       whose entry compares no tag. I: whether the entries refused them
+       through the S-tag bit, or because the switch saw no C-tag at the front
+       of the frame. Not load-bearing on a line that sends single-tagged
+       frames.
+   * - Of a frame with two C-tags, a translation rewrites the outer one and
+       leaves the inner one as it is.
+     - M
+     - Under the same translations, 200 frames tagged 3001 outside 3001 sent
+       upstream arrived as 3002 outside 3001, and 200 tagged 3002 outside 3002
+       sent downstream as 3001 outside 3002.
    * - The classifier applies the lowest-numbered entry that a frame matches.
      - M
      - Against an operator's OLT, a pass-through entry for the same VID at a
@@ -2169,9 +2180,10 @@ Questions the code does not depend on
        controls, and the global word, mean ("Reserved multicast addresses").
      - Frames to 01:80:c2:00:00:00 with the action at each value, counted at the
        CPU and at the host.
-   * - Whether an S-tagged frame matches a translation or a stream entry ("VLAN
-       translation").
-     - An 802.1ad frame from the host, which should come out untranslated.
+   * - Whether an 802.1ad frame, which a translation does not rewrite, is refused
+       by its entry through the S-tag bit or seen with no C-tag at its front
+       ("VLAN translation").
+     - The frame capture of such a frame from the host.
    * - Whether the router bit should be set only once the L3 engine is up ("The
        layer-2 side of routing").
      - Stamping it with the engine's master enable clear while watching

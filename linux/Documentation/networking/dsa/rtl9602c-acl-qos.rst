@@ -863,9 +863,11 @@ Entries and rules
        carries an S-tag. Every VLAN entry that the driver writes compares it as
        0 (it is in ``RTL9602C_CLS_RULE_VLAN_CARE``), so an S-tagged frame
        matches none of them.
-     - I
-     - An S-tagged frame through a translation entry would show whether it is
-       refused.
+     - M, I
+     - M: an 802.1ad frame with a C-tag of the translated VID inside crossed a
+       translation entry untranslated, both ways (see the *bridging* page,
+       "VLAN translation"). I: whether this bit refused it, or the switch saw
+       no C-tag at the front of the frame.
    * - Action word 0 in an upstream entry: ``RTL9602C_CLS_ACT_FLOW_SET``
        (bit 23) gives the frame a stream and ``RTL9602C_CLS_ACT_FLOW`` (bits
        30:24) is the stream, the GEM port's flow number (see the *PON* page).
@@ -2446,10 +2448,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - The S-tag bit of a classifier rule is the S-tag flag, so the VLAN entries
-       that compare it as 0, which match single-tagged frames, refuse S-tagged
-       ones ("Entries and rules").
-     - An S-tagged frame through a translation entry.
    * - Per-VLAN stream entries work for more than one upstream GEM interface,
        and an upstream translation carries the stream of the GEM interface that
        claims its VLAN ("What the driver writes").
@@ -2495,6 +2493,10 @@ Questions the code does not depend on
 
    * - Question
      - What would settle it
+   * - Whether ``RTL9602C_CLS_RULE_STAG`` is the S-tag flag, or an 802.1ad frame
+       passes a translation entry because the switch sees no C-tag at its front
+       ("Entries and rules").
+     - The frame capture of an 802.1ad frame from the host.
    * - Whether an ACL rule can raise the ACL interrupt, and whether
        ``RTL9602C_ACL_HIT_STAT_TMPL`` latches which template's rule raised it
        and is cleared by writing ones ("Actions"; the interrupt is also a
