@@ -452,6 +452,57 @@ int main(void)
 		}
 	}
 
+	/*
+	 * Two S-tags of one S-VID in front of different C-tags share it: the
+	 * C-tag behind tells them apart, and one pop undoes both. An S-tag and
+	 * a C-tag of one VID do not clash either; two C-tags of one VID do.
+	 */
+	clear_rows(mib);
+	{
+		uint8_t s410[16], s36[16], xl40[16];
+
+		pack(s410, 0xf8000000u, (6u << 28) | (410u << 15),
+		     (6u << 16) | (100u << 3), (6u << 16) | (410u << 3));
+		pack(s36, 0xf8000000u, (6u << 28) | (36u << 15),
+		     (6u << 16) | (100u << 3), (6u << 16) | (36u << 3));
+		xlate_row(xl40, 0u, 40u, 100u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, s410, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, s36, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, xl40, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		if (omci_hw_vlan_recorded(&applied) == 3u) {
+			unsigned int s_pushes = 0, xlates = 0;
+
+			for (unsigned int i = 0; i < 3u; i++) {
+				if (applied[i].kind == OMCI_HW_VLAN_SVID_PUSH &&
+				    applied[i].assign_svid == 100u)
+					s_pushes++;
+				if (applied[i].kind ==
+					    OMCI_HW_VLAN_CVID_XLATE &&
+				    applied[i].assign_cvid == 100u)
+					xlates++;
+			}
+			CHECK_EQ(s_pushes, 2u);
+			CHECK_EQ(xlates, 1u);
+		}
+
+		uint8_t xl41[16];
+
+		xlate_row(xl41, 0u, 41u, 100u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, xl41, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+	}
+
 	clear_rows(mib);
 	{
 		uint8_t push[16];

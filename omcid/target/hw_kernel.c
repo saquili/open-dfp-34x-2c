@@ -1628,15 +1628,21 @@ static int tc_filter_del(int ifindex, unsigned int prio)
 }
 
 /*
- * A VLAN filter: the frames it takes, untagged ones or those with an outer
- * C-tag of @match_vid, and what its vlan action does to them: TCA_VLAN_ACT_
- * MODIFY or PUSH writes a C-tag of @vid with priority @pri, or keeps the
- * frame's priority for OMCI_HW_VLAN_PRI_KEEP; POP takes the C-tag off.
+ * A VLAN filter: the frames it takes, untagged ones or those whose outer tag,
+ * of protocol @match_proto (802.1Q for 0), has VID @match_vid and, with
+ * @match_has_pri, priority @match_pri; and what its vlan action does to them:
+ * TCA_VLAN_ACT_MODIFY or PUSH writes a tag of protocol @push_proto (802.1Q
+ * for 0) and VID @vid with priority @pri, or keeps the frame's priority for
+ * OMCI_HW_VLAN_PRI_KEEP; POP takes the outer tag off.
  */
 struct tc_vlan_filter {
 	bool untagged;
+	uint16_t match_proto;
 	uint16_t match_vid;
+	bool match_has_pri;
+	uint8_t match_pri;
 	int v_action;
+	uint16_t push_proto;
 	uint16_t vid;
 	uint8_t pri;
 };
@@ -1646,12 +1652,14 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 			 const struct tc_vlan_filter *f)
 {
 	uint8_t req[1024] __aligned(4);
+	const uint16_t match_proto = f->match_proto ? f->match_proto :
+						      ETH_P_8021Q;
 	struct tcmsg tcm = {
 		.tcm_family = AF_UNSPEC,
 		.tcm_ifindex = ifindex,
 		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
 		.tcm_info =
-			tc_info(prio, f->untagged ? ETH_P_ALL : ETH_P_8021Q),
+			tc_info(prio, f->untagged ? ETH_P_ALL : match_proto),
 	};
 	struct tc_vlan parms = {
 		.action = TC_ACT_PIPE,
@@ -1679,12 +1687,15 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 		off = nla_put(req, off, TCA_FLOWER_KEY_NUM_OF_VLANS, &none,
 			      sizeof(none));
 	} else {
-		uint16_t proto = htons(ETH_P_8021Q);
+		uint16_t proto = htons(match_proto);
 
 		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &proto,
 			      sizeof(proto));
 		off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_ID, &f->match_vid,
 			      sizeof(f->match_vid));
+		if (f->match_has_pri)
+			off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_PRIO,
+				      &f->match_pri, sizeof(f->match_pri));
 	}
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
 
@@ -1699,6 +1710,12 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 	if (f->v_action != TCA_VLAN_ACT_POP) {
 		off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_ID, &f->vid,
 			      sizeof(f->vid));
+		if (f->push_proto) {
+			uint16_t proto = htons(f->push_proto);
+
+			off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_PROTOCOL,
+				      &proto, sizeof(proto));
+		}
 		if (f->pri != OMCI_HW_VLAN_PRI_KEEP)
 			off = nla_put(req, off, TCA_VLAN_PUSH_VLAN_PRIORITY,
 				      &f->pri, sizeof(f->pri));
@@ -1717,19 +1734,25 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 	return rtnl_talk(req, off, NULL, 0, NULL);
 }
 
+/* The most upstream filters a rule takes: one per priority. */
+#define VLAN_UP_MAX 8u
+
 /*
- * The two filters of a rule: the upstream one on sfp, and on pon the
- * downstream one that undoes it. A translation is undone by the translation
- * back, keeping the priority; a C-tag pushed onto an untagged frame by
- * popping it. An S-VID push is refused: the switch adds an S-tag but cannot
- * take one off a downstream frame, which it does not see as tagged.
+ * The filters of a rule: the upstream ones on sfp, and on pon the downstream
+ * one that undoes them. A translation is undone by the translation back,
+ * keeping the priority; a C-tag pushed onto an untagged frame, and an S-tag
+ * pushed in front of a C-tag, by popping the tag. An S-tag that takes the
+ * priority of the C-tag behind it takes one upstream filter per priority, as
+ * a push names the priority it gives. Returns the number of upstream
+ * filters, 0 for a rule of no kind known here.
  */
-static bool vlan_filters(const struct omci_hw_vlan_xlate *r,
-			 struct tc_vlan_filter *up, struct tc_vlan_filter *down)
+static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
+			   struct tc_vlan_filter up[static VLAN_UP_MAX],
+			   struct tc_vlan_filter *down)
 {
 	switch (r->kind) {
 	case OMCI_HW_VLAN_CVID_XLATE:
-		*up = (struct tc_vlan_filter){
+		up[0] = (struct tc_vlan_filter){
 			.match_vid = r->match_cvid,
 			.v_action = TCA_VLAN_ACT_MODIFY,
 			.vid = r->assign_cvid,
@@ -1741,9 +1764,9 @@ static bool vlan_filters(const struct omci_hw_vlan_xlate *r,
 			.vid = r->match_cvid,
 			.pri = OMCI_HW_VLAN_PRI_KEEP,
 		};
-		return true;
+		return 1;
 	case OMCI_HW_VLAN_CVID_PUSH:
-		*up = (struct tc_vlan_filter){
+		up[0] = (struct tc_vlan_filter){
 			.untagged = true,
 			.v_action = TCA_VLAN_ACT_PUSH,
 			.vid = r->assign_cvid,
@@ -1753,13 +1776,34 @@ static bool vlan_filters(const struct omci_hw_vlan_xlate *r,
 			.match_vid = r->assign_cvid,
 			.v_action = TCA_VLAN_ACT_POP,
 		};
-		return true;
+		return 1;
+	case OMCI_HW_VLAN_SVID_PUSH: {
+		const bool copy = r->assign_pri == OMCI_HW_VLAN_PRI_COPY;
+		const size_t n = copy ? VLAN_UP_MAX : 1u;
+
+		for (size_t i = 0; i < n; i++)
+			up[i] = (struct tc_vlan_filter){
+				.match_vid = r->match_cvid,
+				.match_has_pri = copy,
+				.match_pri = (uint8_t)i,
+				.v_action = TCA_VLAN_ACT_PUSH,
+				.push_proto = ETH_P_8021AD,
+				.vid = r->assign_svid,
+				.pri = copy ? (uint8_t)i : r->assign_pri,
+			};
+		*down = (struct tc_vlan_filter){
+			.match_proto = ETH_P_8021AD,
+			.match_vid = r->assign_svid,
+			.v_action = TCA_VLAN_ACT_POP,
+		};
+		return n;
+	}
 	default:
-		return false;
+		return 0;
 	}
 }
 
-/* Replace the VLAN rules, two filters each (see vlan_filters()). */
+/* Replace the VLAN rules, each with its filters (see vlan_filters()). */
 static enum omci_status
 kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		  struct omci_hw_reject *rejected)
@@ -1798,20 +1842,24 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 	for (size_t i = 0; i < n; i++) {
 		const unsigned int prio = TC_PRIO_BASE + (unsigned int)i;
 		const struct omci_hw_vlan_xlate *r = &rules[i];
-		struct tc_vlan_filter up, down;
+		struct tc_vlan_filter up[VLAN_UP_MAX], down;
+		const size_t n_up = vlan_filters(r, up, &down);
 
-		if (!vlan_filters(r, &up, &down)) {
+		if (!n_up) {
 			OMCI_WARN(
-				"vlan: rule %zu (C-VID %u) adds an S-tag, which the switch cannot take off downstream frames; not programmed",
+				"vlan: rule %zu (C-VID %u) is of no kind known here; not programmed",
 				i, r->match_cvid);
 			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
 
-		err = tc_filter_add((int)uni, prio, &up);
+		err = 0;
+		for (size_t k = 0; k < n_up && !err; k++)
+			err = tc_filter_add((int)uni, prio, &up[k]);
 		if (err) {
 			OMCI_WARN("vlan: upstream rule %zu refused: %s (%s)", i,
 				  strerror(-err), omci_hw_last_extack());
+			(void)tc_filter_del((int)uni, prio);
 			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
@@ -1826,6 +1874,10 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		if (r->kind == OMCI_HW_VLAN_CVID_PUSH)
 			OMCI_INFO("vlan: untagged <-> C-VID %u in hardware",
 				  r->assign_cvid);
+		else if (r->kind == OMCI_HW_VLAN_SVID_PUSH)
+			OMCI_INFO(
+				"vlan: C-VID %u <-> S-VID %u in front of it, in hardware",
+				r->match_cvid, r->assign_svid);
 		else
 			OMCI_INFO(
 				"vlan: C-VID %u <-> %u translated in hardware",

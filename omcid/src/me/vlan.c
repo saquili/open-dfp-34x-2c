@@ -292,8 +292,12 @@ static uint16_t net_vid_of(const struct omci_hw_vlan_xlate *r)
 }
 
 /*
- * A new rule against those taken so far: new, the same as one of them, or
- * in conflict because it matches the VID of one or assigns the same VID.
+ * A new rule against those taken so far: new, the same as one of them, or in
+ * conflict with one. Two rules conflict when they match the same VID, or give
+ * frames the same VID toward the network, which one rule downstream could not
+ * undo for both; but not two that put an S-tag of one VID in front of
+ * different C-tags, which the C-tag behind tells apart and one pop undoes, nor
+ * an S-tag and a C-tag of one VID, which their TPIDs tell apart.
  */
 enum slot_verdict {
 	SLOT_NEW,
@@ -303,26 +307,28 @@ enum slot_verdict {
 
 static enum slot_verdict slot_for(const struct omci_hw_vlan_xlate *rules,
 				  size_t n, uint16_t match_cvid,
-				  uint16_t net_vid, size_t *rival)
+				  uint16_t net_vid, bool s_push, size_t *rival)
 {
 	for (size_t k = 0; k < n; k++) {
-		const uint16_t k_net = net_vid_of(&rules[k]);
+		const bool k_s_push = rules[k].kind == OMCI_HW_VLAN_SVID_PUSH;
 		const bool same_match = rules[k].match_cvid == match_cvid;
-		const bool same_assign = k_net == net_vid;
+		const bool same_net = net_vid_of(&rules[k]) == net_vid &&
+				      k_s_push == s_push;
 
-		if (!same_match && !same_assign)
+		if (!same_match && !(same_net && !s_push))
 			continue;
 		if (rival != NULL)
 			*rival = k;
-		return (same_match && same_assign) ? SLOT_DUP : SLOT_CONFLICT;
+		return (same_match && same_net) ? SLOT_DUP : SLOT_CONFLICT;
 	}
 	return SLOT_NEW;
 }
 
 static bool takes_a_new_slot(const struct omci_hw_vlan_xlate *rules, size_t n,
-			     uint16_t match_cvid, uint16_t net_vid)
+			     uint16_t match_cvid, uint16_t net_vid, bool s_push)
 {
-	return slot_for(rules, n, match_cvid, net_vid, NULL) == SLOT_NEW;
+	return slot_for(rules, n, match_cvid, net_vid, s_push, NULL) ==
+	       SLOT_NEW;
 }
 
 /* What the hardware refused, and the rules in force, at the last programming. */
@@ -513,9 +519,9 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						d.assign_cvid;
 
 				size_t rival = 0;
-				const enum slot_verdict v =
-					slot_for(rules, n, d.match_cvid,
-						 net_vid, &rival);
+				const enum slot_verdict v = slot_for(
+					rules, n, d.match_cvid, net_vid,
+					d.op == OMCI_VLAN_OP_SVID_PUSH, &rival);
 
 				if (v != SLOT_NEW) {
 					if (v == SLOT_CONFLICT && warn)
@@ -679,7 +685,8 @@ bool omci_vlan_has_room(const struct omci_mib *mib, uint16_t class_id,
 					 d.assign_svid :
 					 d.assign_cvid;
 
-	if (!takes_a_new_slot(rules, n, d.match_cvid, net_vid))
+	if (!takes_a_new_slot(rules, n, d.match_cvid, net_vid,
+			      d.op == OMCI_VLAN_OP_SVID_PUSH))
 		return true;
 
 	return n < cap;

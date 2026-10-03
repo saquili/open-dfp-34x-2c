@@ -632,14 +632,19 @@ int main(void)
 		CHECK_EQ(omci_hw_vlan_recorded(&applied),
 			 (size_t)OMCI_HW_VLAN_MAX_RULES);
 
-		uint8_t qinq_folds[RULE_BYTES];
+		/*
+		 * An S-tag of the VID that a translation gives a C-tag is a
+		 * rule of its own, the TPIDs telling the two apart, and finds
+		 * no room.
+		 */
+		uint8_t qinq_beside[RULE_BYTES];
 
-		make_rule(qinq_folds, (15u << 28) | (4096u << 15),
+		make_rule(qinq_beside, (15u << 28) | (4096u << 15),
 			  (6u << 28) | (500u << 15),
 			  (0u << 30) | (6u << 16) | (3000u << 3),
 
 			  (6u << 16) | (500u << 3));
-		CHECK_EQ(set_rule_on(eng, INST, 244, qinq_folds), 0u);
+		CHECK_EQ(set_rule_on(eng, INST, 244, qinq_beside), 6u);
 		CHECK_EQ(omci_hw_vlan_recorded(&applied),
 			 (size_t)OMCI_HW_VLAN_MAX_RULES);
 
