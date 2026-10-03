@@ -2230,10 +2230,13 @@ struct rtl9602c_field {
 #define RTL9602C_PADMUX_FUNC_EN_I2C	BIT(13 + RTL9602C_I2C_OPTICS_MASTER)
 
 /*
- * A one-byte register address and one data byte. SCL runs at 31.25 MHz /
+ * A one-byte register address, and one data byte or, with WIDTH_16BIT, two
+ * (2 and 3 move four); a read leaves them in RX_DATA in the order they
+ * came, the first in bits 7:0 (measured). SCL runs at 31.25 MHz /
  * (CLK_DIV + 1) (measured), so 311 gives 100 kHz, I2C's standard mode.
  */
 #define RTL9602C_I2C_XFER_CFG_WIDTH_8BIT	0
+#define RTL9602C_I2C_XFER_CFG_WIDTH_16BIT	1
 #define RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ	311
 
 /*

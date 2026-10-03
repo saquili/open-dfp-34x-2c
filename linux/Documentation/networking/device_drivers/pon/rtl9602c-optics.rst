@@ -19,8 +19,9 @@ keys for each upstream burst.
 The optics have no driver of their own. The code is part of the switch driver,
 ``rtl9602c``, in ``rtl9602c-optics.c``, and it does five things:
 
-- It moves single bytes over the I2C master and registers the master as the
-  SMBus adapter ``rtl9602c i2c``.
+- It moves bytes over the I2C master, one per transfer or the two of a
+  diagnostic word together, and registers the master as the SMBus adapter
+  ``rtl9602c i2c``.
 - It publishes the five measurements of the SFF-8472 diagnostics, which are the
   temperature, the supply voltage, the transmitter bias, the transmitted power
   and the received power, as the hwmon device ``rtl9602c_optics``.
@@ -257,8 +258,8 @@ The I2C master
 
 The SoC has two I2C masters with the same set of registers. The laser driver
 answers on master 1 only, and the driver uses master 1 only
-(``RTL9602C_I2C_OPTICS_MASTER``): the macros below are master 1's. A master
-moves one byte per transfer. The driver describes the transfer in the transfer
+(``RTL9602C_I2C_OPTICS_MASTER``): the macros below are master 1's. A transfer
+moves one, two or four data bytes. The driver describes the transfer in the transfer
 configuration register (the device address, the widths of the register address
 and of the data, and the clock divider), writes the register address and, for a
 write, the byte, starts the transfer with a command, and polls the command
@@ -340,13 +341,19 @@ Offsets are the values of the macros for master 1.
      - With bit 21 clear every byte of ``0x50`` and ``0x51`` read the same
        constant; with it set they read the module's contents.
    * - ``RTL9602C_I2C_XFER_CFG_DEV_ADDR`` (bits 20:14) is the 7-bit device
-       address. ``RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH`` (bits 13:12) and
-       ``RTL9602C_I2C_XFER_CFG_DATA_WIDTH`` (bits 11:10) are written
-       ``RTL9602C_I2C_XFER_CFG_WIDTH_8BIT`` (0): one register-address byte and
-       one data byte per transfer.
-     - T
-     - The optics diagnostics read: the identifier byte and the diagnostic words
-       read back at their SFF-8472 offsets.
+       address. ``RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH`` (bits 13:12) is written
+       ``RTL9602C_I2C_XFER_CFG_WIDTH_8BIT`` (0): one register-address byte.
+       ``RTL9602C_I2C_XFER_CFG_DATA_WIDTH`` (bits 11:10) is the number of data
+       bytes: 0 one, ``RTL9602C_I2C_XFER_CFG_WIDTH_16BIT`` (1) two, 2 and 3
+       four. A read leaves them in ``RTL9602C_I2C_RX_DATA`` in the order they
+       came, the first in bits 7:0. The driver moves two bytes for a
+       diagnostic word and one for everything else.
+     - M, T
+     - M: A0h bytes 0 to 7 read at each width. At 1, ``RX_DATA`` held
+       ``0x0403`` at byte 0, whose bytes are ``03 04``, and a read lasted 9 SCL
+       periods more than at 0; at 2 and at 3, ``0x00010403`` and 27 periods
+       more. The temperature word read in one transfer matched its two bytes
+       read one by one. T: the optics diagnostics read.
    * - The driver writes bits 21:0 of ``RTL9602C_I2C_XFER_CFG`` by
        read-modify-write before every transfer and leaves bits 31:22 as it
        found them.
@@ -409,8 +416,9 @@ Every read and write of the laser driver is one byte, in these steps:
    460 us. (T)
 6. If ``RTL9602C_I2C_CMD_NACK`` is set, fail with ``-ENXIO``. Purpose: the
    device did not acknowledge. (M)
-7. For a read, the byte is the low 8 bits of ``RTL9602C_I2C_RX_DATA``. Purpose:
-   the result. (T)
+7. For a read, the byte is the low 8 bits of ``RTL9602C_I2C_RX_DATA``; for a
+   diagnostic word, bits 7:0 are its most significant byte and bits 15:8 its
+   least significant one. Purpose: the result. (T, M for the word)
 
 The I2C adapter
 ---------------
@@ -1160,15 +1168,6 @@ directory, which switch teardown removes.
 Known limitations
 =================
 
-- A diagnostic word is read as three one-byte transfers. SFF-8472 (Rev 12.4
-  clause 9.1) has a multi-byte diagnostic field read in one two-byte sequence,
-  during which the module does not update it, and the master moves one byte per
-  transfer. The driver reads the most significant byte, the least significant
-  one and the most significant one again, and takes the word when the two
-  readings of the high byte agree, up to three times; otherwise the read fails
-  with ``-EAGAIN``. The low byte read between two equal high bytes belongs to a
-  sample with that high byte, so the word is one the module held. How often the
-  module updates a word during the three transfers is not measured.
 - Without ``CONFIG_RTL9602C_OPTICS_RO`` the I2C adapter passes every write on,
   and A0h and A2h bytes 0-127 take writes without a password and keep them
   across a power cycle of the module, so a client of the adapter can change the

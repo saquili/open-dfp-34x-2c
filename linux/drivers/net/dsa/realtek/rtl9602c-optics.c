@@ -10,11 +10,12 @@
  * runs from the configuration and calibration in its own EEPROM, and the
  * driver writes nothing to it at probe.
  *
- * This file moves single bytes over the master and registers it as an
- * SMBus adapter, publishes the SFF-8472 diagnostics through hwmon, drives
- * the laser's TX_DISABLE line, turns the part's automatic extinction-ratio
- * loop off at every PON bring-up (rtl9602c_optics_hold_modulation()), and
- * offers two debugfs views that only read, "a2" and "eeblocks".
+ * This file moves bytes over the master, one per transfer or the two of a
+ * diagnostic word together, registers it as an SMBus adapter, publishes the
+ * SFF-8472 diagnostics through hwmon, drives the laser's TX_DISABLE line,
+ * turns the part's automatic extinction-ratio loop off at every PON bring-up
+ * (rtl9602c_optics_hold_modulation()), and offers two debugfs views that
+ * only read, "a2" and "eeblocks".
  *
  * CONFIG_RTL9602C_OPTICS_RO makes the modulation hold, the driver's only
  * write to the part, return without writing, and the adapter refuse every
@@ -78,14 +79,15 @@ static int rtl9602c_i2c_wait(struct rtl9602c_priv *p, u32 *cmd)
 	return -ETIMEDOUT;
 }
 
-static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave)
+static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave,
+				     u32 width)
 {
 	/*
 	 * Describe the next transfer: the 7-bit device address, one
-	 * register-address byte and one data byte, and the SCL divider for
-	 * 100 kHz.  Without BUS_EN the master runs the transfer without
-	 * driving the bus: it ends without NACK and every read returns the
-	 * same byte.  Bits 31:22 are left as they are.
+	 * register-address byte, @width for the data bytes, and the SCL
+	 * divider for 100 kHz.  Without BUS_EN the master runs the transfer
+	 * without driving the bus: it ends without NACK and every read
+	 * returns the same byte.  Bits 31:22 are left as they are.
 	 */
 	rtl9602c_rmw(p, RTL9602C_I2C_XFER_CFG,
 		     RTL9602C_I2C_XFER_CFG_BUS_EN | RTL9602C_I2C_XFER_CFG_DEV_ADDR |
@@ -95,8 +97,7 @@ static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave)
 		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_DEV_ADDR, slave) |
 		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH,
 				RTL9602C_I2C_XFER_CFG_WIDTH_8BIT) |
-		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_DATA_WIDTH,
-				RTL9602C_I2C_XFER_CFG_WIDTH_8BIT) |
+		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_DATA_WIDTH, width) |
 		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_CLK_DIV,
 				RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ));
 }
@@ -121,7 +122,7 @@ int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
 	int err;
 
 	lockdep_assert_held(&p->i2c_lock);
-	rtl9602c_i2c_setup_slave(p, slave);
+	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_8BIT);
 	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, reg);
 
 	rtl9602c_w(p, RTL9602C_I2C_CMD, RTL9602C_I2C_CMD_START);
@@ -141,7 +142,7 @@ static int rtl9602c_i2c_write_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
 	int err;
 
 	lockdep_assert_held(&p->i2c_lock);
-	rtl9602c_i2c_setup_slave(p, slave);
+	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_8BIT);
 	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, reg);
 	rtl9602c_w(p, RTL9602C_I2C_TX_DATA, val);
 
@@ -156,9 +157,9 @@ static int rtl9602c_i2c_write_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
 }
 
 /*
- * One register-address byte and one data byte is the only transfer the
- * master is set up for, so the adapter offers SMBus byte data and nothing
- * else.  Access through the adapter is not verified.
+ * The adapter moves one register-address byte and one data byte per
+ * transfer, so it offers SMBus byte data and nothing else.  Access through
+ * the adapter is not verified.
  */
 static s32 rtl9602c_i2c_smbus_xfer(struct i2c_adapter *adap, u16 addr,
 				   unsigned short flags, char read_write,
@@ -324,34 +325,34 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable)
 #if IS_ENABLED(CONFIG_HWMON) || IS_ENABLED(CONFIG_DEBUG_FS)
 /*
  * Read the diagnostic word @off bytes into A2h 96-105, most significant
- * byte first.  SFF-8472 has such a field read in one two-byte sequence,
- * during which the module does not update it; the master moves one byte
- * per transfer, so the high byte is read before and after the low one,
- * and the word is taken when the two agree.  A low byte read between two
- * equal high bytes belongs to a sample with that high byte, so the word is
- * one the module held; a high byte that changed means the module updated
- * the field meanwhile, and the three reads are made again, up to three
- * times in all.
+ * byte first, in one transfer of two bytes: SFF-8472 has such a field read
+ * in one two-byte sequence, during which the module does not update it.
+ * RX_DATA holds the first byte read, the most significant, in bits 7:0.
  */
 static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int off, u16 *val)
 {
-	const u16 reg = RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_DDM + off;
-	u8 hi, lo, again;
-	int err, tries;
+	u32 cmd, rx;
+	u16 slave;
+	u8 sub;
+	int err;
 
 	lockdep_assert_held(&p->i2c_lock);
-	for (tries = 0; tries < 3; tries++) {
-		err = rtl9602c_l_read(p, reg, &hi) ?:
-		      rtl9602c_l_read(p, reg + 1, &lo) ?:
-		      rtl9602c_l_read(p, reg, &again);
-		if (err)
-			return err;
-		if (hi == again) {
-			*val = (u16)hi << 8 | lo;
-			return 0;
-		}
-	}
-	return -EAGAIN;
+	err = rtl9602c_l_addr(RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_DDM + off,
+			      &slave, &sub);
+	if (err)
+		return err;
+	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_16BIT);
+	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, sub);
+
+	rtl9602c_w(p, RTL9602C_I2C_CMD, RTL9602C_I2C_CMD_START);
+	err = rtl9602c_i2c_wait(p, &cmd);
+	if (err)
+		return err;
+	if (cmd & RTL9602C_I2C_CMD_NACK)
+		return -ENXIO;
+	rx = rtl9602c_r(p, RTL9602C_I2C_RX_DATA);
+	*val = (rx & 0xff) << 8 | (rx >> 8 & 0xff);
+	return 0;
 }
 #endif
 
