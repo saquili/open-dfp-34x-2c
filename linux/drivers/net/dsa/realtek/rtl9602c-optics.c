@@ -292,8 +292,9 @@ static int rtl9602c_l_write(struct rtl9602c_priv *p, u16 reg, u8 val)
  * it in every activation state below O3 and releases it from O3 on, where
  * an ONU first transmits (ITU-T G.984.3 10.2); the GPON MAC still keys
  * each burst.  The line is optional: without a tx-disable GPIO in the
- * device tree this does nothing.  That the line reaches the laser's
- * disable input, and that asserting it stops the light, is not verified.
+ * device tree this does nothing.  Asserting it stops the light: in O5 the
+ * module's bias and transmitted power read 0 within a second, and the OLT
+ * deactivated the ONU (measured on this board).
  *
  * The soft TX disable of SFF-8472 (A2h byte 110, bit 6) is not used: A2h
  * bytes 0-127 are kept in the module's EEPROM, so every change would be an
@@ -311,8 +312,9 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable)
 	 * gpiolib owns the line's direction and level but not its pad
 	 * function, which is in the switch register window: give the pad to
 	 * its GPIO function first.  Bit 13 is also the line's GPIO number;
-	 * only that bit changes, and setting it again is harmless.  That this
-	 * bit routes the pad is not verified.
+	 * only that bit changes, and setting it again is harmless.  With the
+	 * bit set the line acts (measured); whether the pad needs it is not
+	 * verified.
 	 */
 	rtl9602c_rmw(p, RTL9602C_PADMUX_GPIO_EN, 0, BIT(RTL9602C_PADMUX_GPIO_EN_TX_DISABLE));
 	gpiod_set_value_cansleep(p->tx_disable, disable);

@@ -126,9 +126,9 @@ driver, with one entry and not required: while the input is asserted the
 transmitter emits no light. ``rtl9602c_probe()`` takes the line with
 ``devm_gpiod_get_optional()`` under the name ``tx-disable``, already driven to
 its asserted level (``GPIOD_OUT_HIGH``), so that nothing lases before the PON
-path allows it. Without the property every TX_DISABLE step is skipped. That
-GPIO 13, active high, is the laser driver's disable input is not verified (see
-"TX_DISABLE").
+path allows it. Without the property every TX_DISABLE step is skipped. GPIO
+13, active high, is the laser driver's disable input: driving it high stops the
+light (measured, see "TX_DISABLE").
 
 There is no node for the I2C master or for the laser driver. The driver
 registers the adapter without a node, and the devices at ``0x50`` and ``0x51``
@@ -807,8 +807,8 @@ TX_DISABLE
 
 The laser has a hard disable input, TX_DISABLE: while it is asserted the
 transmitter emits no light. The device tree gives the line as SoC GPIO 13,
-active high; that this is the laser driver's disable input is not verified, and
-the rows below say what would settle it. The GPON state machine drives the
+active high, and asserting it with the ONU in O5 stopped the light (see the
+rows below). The GPON state machine drives the
 line: asserted in every state below O3, released from O3 on, because an ONU
 first transmits in the Serial-Number state, O3, answering a serial number
 request. Releasing the line does not make the laser emit continuously: the GPON
@@ -844,12 +844,14 @@ Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst.
        ``GPIO_ACTIVE_HIGH``, and the driver requests it at probe as an output
        already asserted, so that nothing lases before the PON path allows it.
        The line is optional: without the property every TX_DISABLE step is
-       skipped.
-     - I
-     - That driving GPIO 13 high stops the light is not measured. With the ONU
-       in O5, asserting the line must stop the OLT hearing the ONU, which
-       settles it. Load-bearing: below O3 it is the only hardware block on the
-       light besides the GPON MAC not keying bursts.
+       skipped. Below O3 it is the only hardware block on the light besides
+       the GPON MAC not keying bursts.
+     - M
+     - With the ONU in O5 and its bursts keyed, the line driven high by hand (a
+       test build): the module's bias fell from 7 mA to 0 and its transmitted
+       power from 1677 uW to 0 within a second, and 3 s later the OLT
+       deactivated the ONU; released, both came back and the ONU was in O5
+       again 1.5 s later (hwmon ``curr1_input`` and ``power1_input``).
    * - With the line released the laser emits.
      - T
      - The ONU reaches O5 on an OLT with the line released from O3 on.
@@ -858,9 +860,9 @@ Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst.
        the pad to its GPIO function; ``RTL9602C_PADMUX_GPIO_EN_TX_DISABLE`` =
        13 is both the GPIO number and the bit. The GPIO controller does not own
        this register.
-     - I
-     - Unverified; load-bearing together with the row above and settled with it
-       (asserting the line in O5 stops the OLT hearing the ONU).
+     - M, I
+     - M: with the bit set, the line acts (the row above). I: whether the pad
+       needs it; a run with the bit clear would show it.
    * - The line follows the GPON activation state: asserted in every state
        below O3 and released from O3 on, because an ONU first transmits in the
        Serial-Number state, O3, answering a serial number request. Releasing it
@@ -1194,18 +1196,11 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - GPIO 13, active high, is the laser's hard disable input, and driving it
-       high stops the light ("TX_DISABLE"). Below O3 it is the only hardware
-       block on the light besides the GPON MAC not keying bursts.
-     - With the ONU in O5, asserting the line must stop the OLT hearing the ONU.
-   * - Bit 13 of ``RTL9602C_PADMUX_GPIO_EN`` routes the pad of GPIO 13 to its
-       GPIO function ("TX_DISABLE"). The driver sets the bit only when it first
-       drives the line, at the first ONU state change after
-       ``ip link set pon up``. If the bit does route the pad, the level
-       requested at probe reaches the pin before that first drive only if the
-       pad is already a GPIO function at reset.
-     - The same test; a run with the bit clear shows whether it is needed at
-       all.
+   * - The level requested at probe reaches the pin before the driver first
+       sets bit 13 of ``RTL9602C_PADMUX_GPIO_EN``, at the first ONU state
+       change after ``ip link set pon up``: that holds only if the pad is a
+       GPIO function at reset, or the bit is not needed ("TX_DISABLE").
+     - A run with the bit clear shows whether it is needed at all.
    * - Nothing serialises a transfer between its users ("Known limitations").
      - Reading the hwmon attributes in a loop while reading the ``a2`` view: it
        would show mixed or misplaced bytes.
