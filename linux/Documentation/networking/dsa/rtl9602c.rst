@@ -1789,39 +1789,52 @@ A step that belongs to another page is named and handed over.
 12. Limit the frames that the CPU port's queues 0 to 6 hand the CPU to 5000 a
     second (*acl-qos*). Purpose: the switch drops a flood to the CPU before it
     takes the CPU's time. (M)
-13. Write the two L4-port field selectors (*acl-qos*). (T)
-14. Set the reserved-address exemptions from storm control (*acl-qos*). (T)
-15. Switch loop detection off and clear its latches (*acl-qos*). Purpose: a
+13. Write the mirror word 0 (*bridging*). Purpose: a mirror that an earlier
+    kernel set would survive a warm restart. (M)
+14. Recognise S-tags on the SFP and PON ports and let every other frame pass as
+    it came (``rtl9602c_svlan_setup()``, *bridging*). Purpose: the VLAN rules
+    of tc flower can match and pop S-tags. (M)
+15. Write the two L4-port field selectors (*acl-qos*). (T)
+16. With bridge multicast snooping in the kernel, add the ACL rules that copy
+    IGMP and MLD from the SFP and PON ports to the CPU
+    (``rtl9602c_acl_snoop_setup()``, *acl-qos*). Purpose: the bridge snoops
+    the reports to groups already in the table, which the switch would
+    otherwise send only to the group's members. (M)
+17. Set the reserved-address exemptions from storm control (*acl-qos*). (T)
+18. Switch loop detection off and clear its latches (*acl-qos*). Purpose: a
     loaded driver must not start sending probes onto a network by itself. (T)
-16. Arm the header capture in mode none (*acl-qos*). Purpose: no capture
+19. Arm the header capture in mode none (*acl-qos*). Purpose: no capture
     predates the driver. (T)
-17. Register the devlink parameters and the region (*devlink*). A failure is
+20. Register the devlink parameters and the region (*devlink*). A failure is
     logged and the switch carries on. (T)
-18. Set standalone forwarding: each port's flood request is set to what reset
+21. Set standalone forwarding: each port's flood request is set to what reset
     leaves (unknown unicast, unknown multicast and broadcast flooding), the GEM
-    bridge state is cleared, and the bridge refresh writes isolation, flooding
-    and learning from that state (*bridging*, *PON*). (T)
-19. Bring up the L3/NAT engine and register its notifiers (*l3-nat*). (T)
-20. The GPON report (*PON*), the debugfs views, the I2C master and the optics
+    bridge state is cleared, unregistered multicast is flooded as after a
+    reset (``rtl9602c_mcast_reset()``), and the bridge refresh writes
+    isolation, flooding and learning from that state (*bridging*, *PON*). (T)
+22. Bring up the L3/NAT engine and register its notifiers (*l3-nat*). (T)
+23. The GPON report (*PON*), the debugfs views, the I2C master and the optics
     hwmon device (*PON*), the PHC (*ptp*), the OMCI channel and the GEM data
     path (*PON*). A failure in any of these is logged and setup still succeeds.
     (T)
-21. Start the counter fold (see "Per-port counters"). Purpose: no counter wraps
+24. Start the counter fold (see "Per-port counters"). Purpose: no counter wraps
     between two folds. (T)
 
 The steps are checked as follows. Step 1 by the SerDes link to the host coming
 up. Steps 2 and 3 by bridged traffic passing both ways, sourced from the host.
 Steps 4 and 5 by VLAN filtering, FDB learning and ageing working, and by the
 board booting to a shell. Steps 6 to 8 by the board booting to a shell and the
-SerDes link recovering after host-side link bounces. Steps 9, 10 and 13 to 16
-by the ACL hit counters, the policer and the storm-control rates matching their
-settings, and by the board booting to a shell; step 11 by the ``qos`` and ``cf``
-views after a warm reboot, and step 12 by the CPU's share of a flood
-(*acl-qos*). Steps 17 to 19 by bridged traffic passing both ways, VLAN
-filtering and FDB learning working, and a routing and NAT test that sees a
-translated source address on the wire. Step 20 by the board booting to a
+SerDes link recovering after host-side link bounces. Steps 9, 10, 15 and 17 to
+19 by the ACL hit counters, the policer and the storm-control rates matching
+their settings, and by the board booting to a shell; step 11 by the ``qos`` and
+``cf`` views after a warm reboot, step 12 by the CPU's share of a flood, and
+step 16 by the bridge's group timers restarting on reports (*acl-qos*). Step 13
+by the mirror word read after a warm restart, and step 14 by S-tags pushed,
+matched and popped (*bridging*). Steps 20 to 22 by bridged traffic passing both
+ways, VLAN filtering and FDB learning working, and a routing and NAT test that
+sees a translated source address on the wire. Step 23 by the board booting to a
 shell, the PTP hardware clock reading and steering, OMCI passing both ways over
-``/dev/pon0omci0`` and the optics diagnostics reading. Step 21 by the interface
+``/dev/pon0omci0`` and the optics diagnostics reading. Step 24 by the interface
 statistics, which count what the ports carried.
 
 The system-controller enable in front of the PON packet buffer

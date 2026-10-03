@@ -2567,17 +2567,21 @@ state that the driver depends on.
    Purpose: the switch drops a flood to the CPU. (M)
 8. Point field selectors 0 and 1 at the L4 source and destination ports.
    Purpose: ACL rules can match a port. (M)
-9. Set ``RTL9602C_RSVDMC_CTRL_STORM_EXEMPT`` on the five control-protocol
-   addresses, by read-modify-write. Purpose: a flood limit does not police them.
-   (M)
-10. Switch loop detection off and clear its latches. Purpose: a loaded driver
+9. With bridge multicast snooping in the kernel, add the four rules that copy
+   IGMP and MLD from the SFP and PON ports to the CPU
+   (``rtl9602c_acl_snoop_setup()``, see "Rules of the driver's own"). A rule
+   that does not fit is logged. Purpose: the bridge snoops every report. (M)
+10. Set ``RTL9602C_RSVDMC_CTRL_STORM_EXEMPT`` on the five control-protocol
+    addresses, by read-modify-write. Purpose: a flood limit does not police
+    them. (M)
+11. Switch loop detection off and clear its latches. Purpose: a loaded driver
     must not start sending probes by itself. (T)
-11. Arm the frame capture in mode none, all four ports both ways, reason 0.
+12. Arm the frame capture in mode none, all four ports both ways, reason 0.
     Purpose: no capture predates the driver. (M)
-12. Register the devlink parameters and create the ``frame_capture`` region. A
+13. Register the devlink parameters and create the ``frame_capture`` region. A
     failure is logged (``devlink parameters unavailable``, ``no devlink
     region``) and setup carries on. (M)
-13. Clear the per-port stream entries and refresh the bridge state, which
+14. Clear the per-port stream entries and refresh the bridge state, which
     rebuilds the stream entries; with no port bridged yet it installs none.
     Purpose: the entries follow the bridge (see "The classifier"). (T)
 
@@ -2589,10 +2593,11 @@ classes, meters and latches read after a reload and after a full chip reset.
 Step 6 by ``qos`` and ``cf`` after a warm reboot from a kernel that had left
 rules, entries, maps and limits in force (see "Reach and state"). Step 7 by the
 floods of "The limit on frames to the CPU". Step 8 by the port matches that drop
-their traffic, and step 9 by the frame capture in drop mode. Step 10 by the
-board booting with the block off, step 11 by the latch register read after a
-reset and armed in mode none, and step 12 by the parameters and the region
-being there again after a reload. Step 13 by bridged upstream traffic and a
+their traffic, step 9 by the bridge's group timers restarting on reports to a
+group in the table, and step 10 by the frame capture in drop mode. Step 11 by
+the board booting with the block off, step 12 by the latch register read after
+a reset and armed in mode none, and step 13 by the parameters and the region
+being there again after a reload. Step 14 by bridged upstream traffic and a
 routing test, which find the entries in ``cf``.
 
 Measured, not driven
