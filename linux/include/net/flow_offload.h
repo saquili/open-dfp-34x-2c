@@ -32,6 +32,10 @@ struct flow_match_vlan {
 	struct flow_dissector_key_vlan *key, *mask;
 };
 
+struct flow_match_num_of_vlans {
+	struct flow_dissector_key_num_of_vlans *key, *mask;
+};
+
 struct flow_match_arp {
 	struct flow_dissector_key_arp *key, *mask;
 };
@@ -106,6 +110,8 @@ void flow_rule_match_vlan(const struct flow_rule *rule,
 			  struct flow_match_vlan *out);
 void flow_rule_match_cvlan(const struct flow_rule *rule,
 			   struct flow_match_vlan *out);
+void flow_rule_match_num_of_vlans(const struct flow_rule *rule,
+				  struct flow_match_num_of_vlans *out);
 void flow_rule_match_arp(const struct flow_rule *rule,
 			 struct flow_match_arp *out);
 void flow_rule_match_ipv4_addrs(const struct flow_rule *rule,

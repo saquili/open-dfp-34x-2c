@@ -97,6 +97,13 @@ void flow_rule_match_cvlan(const struct flow_rule *rule,
 }
 EXPORT_SYMBOL(flow_rule_match_cvlan);
 
+void flow_rule_match_num_of_vlans(const struct flow_rule *rule,
+				  struct flow_match_num_of_vlans *out)
+{
+	FLOW_DISSECTOR_MATCH(rule, FLOW_DISSECTOR_KEY_NUM_OF_VLANS, out);
+}
+EXPORT_SYMBOL(flow_rule_match_num_of_vlans);
+
 void flow_rule_match_arp(const struct flow_rule *rule,
 			 struct flow_match_arp *out)
 {
