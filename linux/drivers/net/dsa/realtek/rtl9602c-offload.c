@@ -882,10 +882,10 @@ static const u32 rtl9602c_prio_queue_reset[RTL9602C_NUM_PORTS] = {
  * at their default, ACL lookup off on every port with no default permit;
  * every classifier entry retired and the verdict for a frame no entry
  * matches back to letting it through; and per port the priority-to-queue
- * word of the reset, every queue strict at weight 1, and the egress shaper
- * and the ingress policer at their highest rate. The DSCP map, the
- * port-priority word and the priority-selection weights read 0 after the
- * reset and are written 0.
+ * word of the reset, every queue strict at weight 1, no queue under a packet
+ * rate, and the egress shaper and the ingress policer at their highest rate.
+ * The DSCP map, the port-priority word and the priority-selection weights
+ * read 0 after the reset and are written 0.
  *
  * Context: setup, before the driver writes classifier entries of its own.
  */
@@ -909,6 +909,8 @@ void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p)
 	rtl9602c_rmw(p, RTL9602C_CLS_CTRL, GENMASK(1, 0), 0);
 
 	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
+		rtl9602c_w(p, RTL9602C_QUEUE_RATE_EN(port), 0);
+		rtl9602c_w(p, RTL9602C_QUEUE_RATE_METER(port), 0);
 		rtl9602c_w(p, RTL9602C_QOS_PRIO_TO_QUEUE + 4 * port,
 			   rtl9602c_prio_queue_reset[port]);
 		rtl9602c_w(p, RTL9602C_SCHED_WFQ_QUEUES + 4 * port, 0);
@@ -4168,9 +4170,10 @@ static void rtl9602c_l34_flows_release_port(struct rtl9602c_priv *p, int port)
  * hold the weights of queues 1 to 7, the egress shaper and the ingress
  * policer. Then the ACL's port enables and default permits, the classifier's
  * control word, port 0's 2.5G override, which holds its shaper's rate as
- * well, the DSCP-to-priority map, the port-priority word and the
- * priority-selection weights. Last, storm control: each class's enable and
- * meter-select words, and the rate word of each of the sixteen meters.
+ * well, each port's per-queue packet-rate enables and meter indices, the
+ * DSCP-to-priority map, the port-priority word and the priority-selection
+ * weights. Last, storm control: each class's enable and meter-select words,
+ * and the rate word of each of the sixteen meters.
  */
 static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 {
@@ -4197,6 +4200,10 @@ static int rtl9602c_qos_show(struct seq_file *s, void *unused)
 	seq_printf(s, "cls control %08x\n", rtl9602c_r(p, RTL9602C_CLS_CTRL));
 	seq_printf(s, "port 0 2.5G override %08x\n",
 		   rtl9602c_r(p, RTL9602C_SHAPE_2G5_CFG));
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		seq_printf(s, "port %u queue rate enable %08x  meters %08x\n", i,
+			   rtl9602c_r(p, RTL9602C_QUEUE_RATE_EN(i)),
+			   rtl9602c_r(p, RTL9602C_QUEUE_RATE_METER(i)));
 	seq_puts(s, "dscp>prio");
 	for (i = 0; i < DIV_ROUND_UP(RTL9602C_QOS_DSCP_COUNT,
 				     RTL9602C_QOS_MAP_PER_WORD); i++)

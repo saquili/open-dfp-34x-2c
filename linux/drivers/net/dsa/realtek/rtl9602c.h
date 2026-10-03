@@ -1798,6 +1798,16 @@ struct rtl9602c_field {
  * limit.
  */
 #define RTL9602C_METER_COUNT			16
+
+/*
+ * The egress packet-rate limit per queue: per port, one enable bit per queue
+ * and a 3-bit meter index per queue, queue q at bits 3q+2:3q, which binds the
+ * queue to one of meters 0 to 7. A queue of a user port counts its frames
+ * against the meter it names; the CPU port's queues do not (both measured on
+ * this board). The driver only resets them.
+ */
+#define RTL9602C_QUEUE_RATE_EN(p)		(0x02d86c + 4 * (p))
+#define RTL9602C_QUEUE_RATE_METER(p)		(0x02d87c + 4 * (p))
 #define RTL9602C_METER_CFG_HI(i)		(0x025004 + 8 * (i))
 #define RTL9602C_METER_CFG_LO(i)		(0x025008 + 8 * (i))
 #define RTL9602C_METER_CFG_HI_RATE		GENMASK(18, 0)

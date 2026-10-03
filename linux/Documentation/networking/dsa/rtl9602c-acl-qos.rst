@@ -262,10 +262,10 @@ Interfaces to user space
   values: per port the priority-to-queue word, the scheduler's weighted-queue
   bits, the queue weights, the egress shaper and the ingress policer; then the
   ACL's port enables and default permits, the classifier's control word, port
-  0's 2.5G override, the DSCP map, the port-priority word and the
-  priority-selection weights; last,
-  each storm-control class's enable and meter-select words and the rate word of
-  each of the sixteen meters.
+  0's 2.5G override, each port's per-queue packet-rate enables and meter
+  indices, the DSCP map, the port-priority word and the priority-selection
+  weights; last, each storm-control class's enable and meter-select words and
+  the rate word of each of the sixteen meters.
 - The kernel log lines of these blocks. At setup ``rtl9602c-switch: classifier:
   128 entries usable of 256``; the loop lines ``rtl9602c-switch: port N: loop
   detected, closing through port M`` and ``rtl9602c-switch: port N: loop
@@ -352,10 +352,10 @@ full chip reset leaves it (see "Setup for these blocks").
        verdict for unmatched frames (``RTL9602C_CLS_CTRL`` bits 1:0) at 0;
        per port the reset's priority-to-queue word (port 0 ``0x00000000``,
        port 1 ``0x00249000``, port 2 ``0x006d2240``, port 3 ``0x00fac688``),
-       every queue strict at weight 1, the shaper and the policer at their
-       highest rate; the DSCP map, the port-priority word and the
-       priority-selection weights at 0. The ACL templates are left: no rule
-       names one until the driver writes it again.
+       every queue strict at weight 1 and under no packet rate, the shaper and
+       the policer at their highest rate; the DSCP map, the port-priority word
+       and the priority-selection weights at 0. The ACL templates are left: no
+       rule names one until the driver writes it again.
      - M
      - The ``qos`` view read these values after a reset by the watchdog, which
        is a full chip reset, on a kernel that writes none of them; ``cf`` then
@@ -2331,15 +2331,24 @@ on them. They were measured with register writes made outside the driver.
      - Tag
      - Checked by
    * - A per-queue egress rate exists: per port, a word at ``0x02d86c`` + 4p
-       with one enable bit per queue and a word at ``0x02d87c`` + 4p with a
-       3-bit meter index per queue, binding a queue to one of meters 0 to 7. It
-       limits packets per second, per queue, so it has no form in bytes for
-       ``tc``, and a tbf in an ets band is refused rather than applied to the
-       whole port.
+       (``RTL9602C_QUEUE_RATE_EN``) with one enable bit per queue and a word at
+       ``0x02d87c`` + 4p (``RTL9602C_QUEUE_RATE_METER``) with a 3-bit meter
+       index per queue, binding a queue to one of meters 0 to 7. It limits
+       packets per second, per queue, so it has no form in bytes for ``tc``,
+       and a tbf in an ets band is refused rather than applied to the whole
+       port. Setup writes both words 0 on every port.
      - M
      - Frames from the CPU at the priority of queue 5: 500 packets/s asked, 511
        measured; queue 2 of the same port unaffected at the same time; clearing
        the enable restored the rate.
+   * - The CPU port's queues are not limited by it, so it cannot keep a flood
+       to the CPU below what the CPU's receive engine takes.
+     - M
+     - Queues 0 to 6 of port 3 bound to a meter at 100 packets/s, with the
+       enables set: a flood of 272,000 frames/s to the stick's address put
+       324,000 frames into the CPU in 10 s and 2,398,000 into its engine's
+       missed count, as many as with no limit; the flood went through queue 0
+       (``qdepth``).
    * - The range-checker banks of the ACL: 8 VLAN-ID checkers at ``0x0151cc``
        (one word each: type bits 25:24, upper bound 23:12, lower 11:0), 32
        IP-address checkers at ``0x0151ec`` (five words each), 32 L4-port
