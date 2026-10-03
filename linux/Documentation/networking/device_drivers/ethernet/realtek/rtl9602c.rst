@@ -1778,8 +1778,9 @@ at a time.
        driver then owns ``skb``; otherwise ``skb`` stays the caller's and the
        error is ``-EINVAL`` (a device that is not the conduit, a port or flow
        out of range, or an empty, oversized or non-linear ``skb``),
-       ``-ENETDOWN`` while the conduit is down, ``-ENOMEM`` if ``skb`` cannot
-       be mapped, or ``-EAGAIN`` while the transmit ring is full.
+       ``-ENETDOWN`` while the conduit is down or its open has not finished,
+       ``-ENOMEM`` if ``skb`` cannot be mapped, or ``-EAGAIN`` while the
+       transmit ring is full.
    * - ``rtl9602c_conduit_flow_attach(dev, rx, ctx)``
      - Attaches the receive handler for data frames; returns as
        ``rtl9602c_conduit_ctrl_attach()`` does.
@@ -2084,11 +2085,12 @@ Probe
 7. Add the NAPI poll, and create the debugfs directory ``rtl9602c-eth`` with
    its files ``rxreason`` and ``rings``. Purpose: the poll does the receive
    work, and the reasons and the rings can be read back. (M)
-8. Register the network device and log the address line. Purpose: DSA attaches
-   the user ports to a registered conduit. (T)
-9. Run the transmit test on rings set up for it alone and free them again; log
+8. Run the transmit test on rings set up for it alone and free them again; log
    the result. The result does not stop the probe. Purpose: report whether the
-   engine takes and returns a descriptor. (M)
+   engine takes and returns a descriptor; before the registration, so that no
+   open, which uses the same descriptor indices, overlaps it. (M)
+9. Register the network device and log the address line. Purpose: DSA attaches
+   the user ports to a registered conduit. (T)
 
 Setting the engine up
 ---------------------
@@ -2157,8 +2159,11 @@ Open
    open. Purpose: the handler is installed before any cause is unmasked. (M)
 7. Write ``RTL9602C_NIC_IRQ_MASK_RXTX`` to ``RTL9602C_NIC_IRQ_MASK``. Purpose:
    from here the causes in the mask raise the interrupt. (T)
-8. Start the transmit queues and log the open line. Purpose: the stack may
-   transmit. (T)
+8. Under the ring lock, let the control transmit path post; then start the
+   transmit queues and log the open line. Purpose: the stack and the OMCI path
+   may transmit, and neither does while the transmit test uses the ring
+   without the lock: the OMCI path finds the interface running from the start
+   of the open, so it waits for this mark instead. (T)
 
 The transmit test
 -----------------
@@ -2201,13 +2206,13 @@ way the descriptor is taken back and its buffer freed.
        cold start, which passed.
      - M
      - The same console logs.
-   * - The test passes in every start now that the probe stops the engine
-       before it allocates the rings (see "Probe"), whatever the engine was left
-       doing.
-     - I
-     - The self-test line of a RAM boot and of a trial boot after a transfer,
-       and of a cold start; the ``engine found with`` line of each says what
-       the engine was doing.
+   * - Now that the probe stops the engine before it allocates the rings (see
+       "Probe"), the test passes after a RAM boot, the start after which it
+       used to fail. That the stop covers every state the engine can be left
+       in is not verified.
+     - M, I
+     - M: the self-test line of RAM boots on 2026-10-03, ``self-test passed:
+       the engine took a frame and returned the descriptor``. I: the rest.
 
 Transmitting a data frame
 -------------------------
@@ -2293,8 +2298,8 @@ The poll:
 Stop
 ----
 
-1. Log the totals, then stop the transmit queues. Purpose: nothing new is
-   posted. (T)
+1. Log the totals, close the ring to the control transmit path under the ring
+   lock, then stop the transmit queues. Purpose: nothing new is posted. (T)
 2. Write 0 to ``RTL9602C_NIC_IRQ_MASK``, free the interrupt and stop the poll.
    Purpose: nothing runs against the rings once the engine is halted. (T)
 3. Write 0 to ``RTL9602C_NIC_DMA_CTRL``, then 0 to ``RTL9602C_NIC_RING_CFG``.
@@ -2309,12 +2314,11 @@ Known limitations
   offset 12 and the protocol byte 4 at offset 14 to carry a PTP timestamp tag,
   as every tag seen on this board did. A tag with another protocol byte would
   go up as an ordinary frame, unstamped.
-- The transmit test at probe is meant to pass in every start. Before the probe
-  stopped the engine first, it failed when the boot loader had just used the
-  engine to receive an image, although the engine transmitted and the same test
-  at open passed (see "The transmit test"). The result is only logged. That the
-  stop covers every state the engine can be left in is not verified (see "Open
-  questions").
+- The transmit test at probe passes after a RAM boot since the probe stops the
+  engine first; before, it failed when the boot loader had just used the engine
+  to receive an image (see "The transmit test"). The result is only logged.
+  That the stop covers every state the engine can be left in is not verified
+  (see "Open questions").
 - The engine drops frames when it has no receive descriptor free. The CPU's
   receive ceiling is about 24,000 to 25,000 frames/s whatever the frame size,
   and beyond it the excess is counted in ``rx_missed_errors``. The receive

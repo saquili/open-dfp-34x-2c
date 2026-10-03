@@ -495,6 +495,11 @@ struct rtl9602c_eth {
 	/* Next descriptor to post; oldest descriptor not yet reaped. */
 	unsigned int tx_head;
 	unsigned int tx_tail;
+	/*
+	 * The control transmit path may post: set at the end of the open,
+	 * after the transmit test, and cleared first at stop, under tx_lock.
+	 */
+	bool tx_ready;
 	/* RTL9602C_NIC_RX_NO_DESC_CNT at the last poll. */
 	u16 rx_missed_last;
 
@@ -1481,8 +1486,9 @@ static irqreturn_t rtl9602c_eth_irq(int irq, void *data)
  * 0.416 s after a transfer, passed. The switch driver's setup of the CPU port,
  * which comes later, is therefore not the cause. What the engine was doing is
  * not known; the probe logs the registers it finds. With the engine stopped
- * first the test is meant to pass in every start, which the board has not yet
- * confirmed.
+ * first the test passes after a RAM boot too (measured). It runs before the
+ * interface is registered, so that no open, which runs the same test on the
+ * same indices, can overlap it.
  */
 static void rtl9602c_eth_selftest(struct net_device *dev)
 {
@@ -1538,6 +1544,11 @@ static int rtl9602c_eth_open(struct net_device *dev)
 	}
 	writew(RTL9602C_NIC_IRQ_MASK_RXTX, priv->base + RTL9602C_NIC_IRQ_MASK);
 
+	/* The test is over: the control path may post from here. */
+	spin_lock_bh(&priv->tx_lock);
+	priv->tx_ready = true;
+	spin_unlock_bh(&priv->tx_lock);
+
 	netif_tx_start_all_queues(dev);
 	eth_info(dev, "up: interrupt %d, msr %02x, config %08x; transmit test %s\n",
 		 priv->irq, readb(priv->base + RTL9602C_NIC_MEDIA_STAT),
@@ -1560,6 +1571,9 @@ static int rtl9602c_eth_stop(struct net_device *dev)
 		 dev->stats.tx_packets, dev->stats.tx_bytes,
 		 dev->stats.rx_dropped, dev->stats.tx_dropped);
 
+	spin_lock_bh(&priv->tx_lock);
+	priv->tx_ready = false;
+	spin_unlock_bh(&priv->tx_lock);
 	netif_tx_disable(dev);
 	writew(0, priv->base + RTL9602C_NIC_IRQ_MASK);
 	free_irq(priv->irq, priv);
@@ -1877,6 +1891,16 @@ int rtl9602c_conduit_ctrl_xmit(struct net_device *dev, struct sk_buff *skb,
 
 	spin_lock_bh(&priv->tx_lock);
 
+	/*
+	 * netif_running() holds from the start of the open, while the open's
+	 * transmit test still uses the ring without the lock.
+	 */
+	if (!priv->tx_ready) {
+		spin_unlock_bh(&priv->tx_lock);
+		dma_unmap_single(priv->dev, dma, skb->len, DMA_TO_DEVICE);
+		return -ENETDOWN;
+	}
+
 	if (!rtl9602c_eth_tx_room(priv)) {
 		spin_unlock_bh(&priv->tx_lock);
 		dma_unmap_single(priv->dev, dma, skb->len, DMA_TO_DEVICE);
@@ -2130,6 +2154,9 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 	debugfs_create_file("rings", 0400, priv->debugfs, priv,
 			    &rtl9602c_eth_rings_fops);
 
+	/* Before the interface is registered, so that no open overlaps it. */
+	rtl9602c_eth_selftest(dev);
+
 	err = devm_register_netdev(&pdev->dev, dev);
 	if (err)
 		return dev_err_probe(&pdev->dev, err,
@@ -2137,8 +2164,6 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 
 	eth_info(dev, "CPU port at %pa, address %pM\n",
 		 &pdev->resource[0].start, dev->dev_addr);
-
-	rtl9602c_eth_selftest(dev);
 	return 0;
 }
 
