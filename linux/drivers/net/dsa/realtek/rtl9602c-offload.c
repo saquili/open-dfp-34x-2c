@@ -2619,11 +2619,18 @@ static int rtl9602c_flower_destroy(struct rtl9602c_priv *p,
 				   struct flow_cls_offload *cls)
 {
 	unsigned int idx;
+	int err;
 
-	if (rtl9602c_storm_del(p, cls->cookie) == 0)
-		return 0;
-	if (rtl9602c_acl_del(p, cls->cookie) == 0)
-		return 0;
+	/*
+	 * -ENOENT says that the rule is not of that kind; any other error is
+	 * that of removing it, and is returned as it is.
+	 */
+	err = rtl9602c_storm_del(p, cls->cookie);
+	if (err != -ENOENT)
+		return err;
+	err = rtl9602c_acl_del(p, cls->cookie);
+	if (err != -ENOENT)
+		return err;
 
 	for_each_set_bit(idx, p->cf_used, RTL9602C_CLS_ENTRIES) {
 		if (p->cf_cookie[idx] != cls->cookie)
