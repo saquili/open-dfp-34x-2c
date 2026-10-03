@@ -1493,6 +1493,9 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 		   FIELD_PREP(RTL9602C_FIELDSEL_CFG_ORIGIN,
 			      RTL9602C_FIELDSEL_CFG_ORIGIN_IP_PAYLOAD));
 
+	/* IGMP and MLD reach the bridge for multicast snooping. */
+	rtl9602c_acl_snoop_setup(p);
+
 	/*
 	 * Take the reserved group addresses of spanning tree, PAUSE, the
 	 * Slow Protocols (LACP), 802.1X and LLDP, 01-80-C2-00-00-00, -01,

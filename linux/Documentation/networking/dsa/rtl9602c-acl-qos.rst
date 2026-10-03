@@ -384,9 +384,11 @@ reached through the indirect table engine (see the *bridging* page, "The
 indirect table engine").
 
 The driver makes an ACL rule of each ``tc`` flower rule on ingress whose one
-action is ``drop`` or ``trap``. It applies only the forwarding class of the
-action: a rule drops a frame or sends it to the CPU. The rules judge frames as
-they enter a port (see "Reach and state").
+action is ``drop`` or ``trap``, and writes four rules of its own, which copy
+IGMP and MLD to the CPU for the bridge's multicast snooping. It applies only
+the forwarding class of the action: a rule drops a frame, sends it to the CPU,
+or sends a copy there. The rules judge frames as they enter a port (see "Reach
+and state").
 
 Rules, templates and lookup
 ---------------------------
@@ -580,6 +582,20 @@ decision is one of them.
        frame; there is no separate drop code.
      - M
      - Every drop measurement above uses this encoding.
+   * - A frame that a rule sends to the CPU, trapped or copied, carries the
+       trap reason 128 plus the rule's entry in its receive descriptor.
+     - M
+     - The ``rxreason`` view of the conduit: 128 from entry 0, 129 from
+       entry 1, 132 from entry 4.
+   * - ``RTL9602C_ACL_ACT_FWD_MIRROR`` (2) with the CPU port's bit alone in the
+       port mask forwards a matching frame as usual and sends a copy to the
+       CPU. A frame that the switch sends to the CPU anyway, flooded for
+       instance, arrives there once.
+     - M
+     - IGMPv2 and MLDv1 reports to a group in the table, whose members are the
+       SFP and the PON port: 3 of 3 reached the OLT side and 3 copies the CPU.
+       IGMPv3 reports, which go to 224.0.0.22 and are flooded, arrived at the
+       CPU once each, by the flood.
    * - ``RTL9602C_ACL_ACT_FWD_TRAP`` (3) sends a matching frame to the CPU
        instead of forwarding it. A frame from the PON arrives on the GEM
        interface of its port, which marks it as forwarded by the switch, as it
@@ -648,7 +664,8 @@ to an ACL rule.
        other key; a rule with no field left (it would drop every frame on the
        port); more than eight slots; an L4 port without an exact IPv4 or IPv6
        EtherType and an exact IP protocol. Refused with ``-ENOSPC``: no template
-       covers the fields and none is free; all 96 entries are in use.
+       covers the fields and none is free; all 96 entries are in use, four of
+       them by the driver's own rules (see "Rules of the driver's own").
      - M
      - ``tc filter add dev sfp ingress protocol ip flower skip_sw dst_port 4444
        action drop`` without ``ip_proto`` was refused; the 97th rule was refused
@@ -674,6 +691,43 @@ to an ACL rule.
        with the entries ordered, the one of priority 10 decided over the one of
        20 in both orders of adding, for drop over trap and for trap over
        drop.
+
+Rules of the driver's own
+-------------------------
+
+With ``CONFIG_BRIDGE_IGMP_SNOOPING`` the driver writes four rules at setup
+(``rtl9602c_acl_snoop_setup()``), so that the bridge sees the IGMP and MLD
+messages it snoops while the switch forwards them (see the *bridging* page,
+"Multicast snooping"): on the SFP port and on the PON port, one for IGMP and
+one for the MLD messages that go to a group's own address.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The IGMP rule compares the EtherType ``0x0800`` and the IP protocol 2;
+       the MLD rule the EtherType ``0x86dd``, the protocol 58 in
+       ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, and in the window of field
+       selector ``RTL9602C_FSEL_SPORT``, the first octet of the ICMPv6 message,
+       the types 130 and 131 (``0x8200`` under the mask ``0xfe00``): the MLD
+       query and the version 1 report. Each rule names all four fields and
+       ignores those it does not compare, so the four share one template. Their
+       action is ``RTL9602C_ACL_ACT_FWD_MIRROR`` to the CPU port.
+     - M
+     - 3 of 3 MLDv1 reports to a group in the table were copied, and none of 3
+       UDP frames and 3 ICMPv6 echo requests to the same group (see
+       "Actions").
+   * - The rules take priority 65535, the largest a ``tc`` filter can have, and
+       the entries after every rule of a smaller priority, so that a ``tc``
+       rule that matches the same messages decides for them. Their cookies are
+       1 to 4, which no ``tc`` rule has: a flower rule's cookie is a kernel
+       address.
+     - I
+     - Design choice; a ``tc`` drop rule for IGMP on the SFP port would be
+       seen to drop the reports instead of the copy.
 
 Writing and removing a rule
 ---------------------------

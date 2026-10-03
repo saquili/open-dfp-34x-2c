@@ -127,8 +127,9 @@ The files that hold the rest of this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - VLAN translation (``rtl9602c_flower_replace()``,
        ``rtl9602c_cf_write()``), the classifier entries that give bridged ports
-       a GEM stream (``rtl9602c_cf_sid_refresh()``), and the debugfs views
-       ``l2learn``, ``svlan`` and ``rma``.
+       a GEM stream (``rtl9602c_cf_sid_refresh()``), the ACL rules that copy
+       IGMP and MLD to the CPU (``rtl9602c_acl_snoop_setup()``), and the
+       debugfs views ``l2learn``, ``svlan`` and ``rma``.
    * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
      - The bridge half of the GEM interfaces.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
@@ -153,8 +154,9 @@ Configuration
    * - ``CONFIG_BRIDGE_VLAN_FILTERING``
      - VLAN filtering and the bridge's VLANs. ``rtl9602c_defconfig`` sets it.
    * - ``CONFIG_BRIDGE_IGMP_SNOOPING``
-     - Multicast groups: ``bridge mdb`` and the calls to ``port_mdb_add`` and
-       ``port_mdb_del`` need it. ``rtl9602c_defconfig`` leaves it off.
+     - Multicast snooping and groups: ``bridge mdb``, the calls to
+       ``port_mdb_add`` and ``port_mdb_del`` and the ACL rules of "Multicast
+       snooping" need it. ``rtl9602c_defconfig`` leaves it off.
    * - ``CONFIG_VLAN_8021Q``
      - VLAN devices. The 8021q core adds VID 0 to the receive filter of a device
        that has VLAN filtering (see "Known limitations").
@@ -1311,6 +1313,59 @@ a frame may leave by. They map one to one onto three bridge port flags:
      - VLAN filtering, FDB learning and ageing work: the bridge sets these four
        flags on a port that joins.
 
+Multicast snooping
+==================
+
+The bridge snoops IGMP and MLD and hands the groups that its ports join to the
+switch as MDB objects, which become multicast entries of the address table (see
+"Adding, deleting and dumping entries"). Two things make the switch forward
+multicast as the bridge would:
+
+- Every IGMP message, and every MLD query and version 1 report, that enters the
+  SFP or the PON port reaches the bridge. The switch forwards the message as
+  usual, so it keeps its VLAN translation and the GEM stream its VLAN takes,
+  and an ACL rule sends a copy to the CPU (``rtl9602c_acl_snoop_setup()``, see
+  the *acl-qos* page, "Rules of the driver's own"). The copy arrives marked as
+  forwarded, so the bridge snoops it and forwards nothing again. The other MLD
+  messages go to ff02::1, ff02::2 or ff02::16, which reach the CPU unasked.
+- The PON port is a member of every group in the table, as the side the
+  multicast router of a PON sits on: a host's IGMPv1, IGMPv2 or MLDv1 report
+  goes to the group's own address.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A multicast entry is found by the destination MAC address for IP
+       multicast too. ``RTL9602C_FDB_CFG`` bit 23 reads 0 at reset, and the
+       driver leaves it.
+     - M
+     - With the SFP port's unknown-multicast flood bit clear, a static group for
+       239.2.2.9 on the SFP port let 20 of 20 frames from the PON through, and
+       0 of 20 frames to 239.2.2.1.
+   * - Without the PON port among a group's members, a report to the group from
+       the SFP port goes nowhere but back. With it, and the ACL copy, each
+       report reaches both the router and the bridge.
+     - M
+     - Of three IGMPv2 reports for a new group, the first reached the OLT side,
+       and the CPU by flooding, which made the bridge add the group; the second
+       and third reached neither, and the bridge's group timer ran down. With
+       the PON port a member and the ACL rule, 3 of 3 reached the OLT side and 3
+       copies the CPU, and the timer started again at 256 s; 3 of 3 MLDv1
+       reports did the same.
+   * - The switch's per-port IGMP and MLD control (``0x01105c`` + 4p, reading
+       ``0x400`` at reset) is not used: its five 2-bit fields, written with each
+       value, changed nothing measured. Reports of each IGMP version, with and
+       without router alert, went on to the OLT side and reached the CPU only
+       by flooding. Clearing bit 10 dropped the port's IGMP reports and
+       multicast data.
+     - M
+     - Three IGMPv2 reports per setting, counted at the OLT side, the trap
+       reasons of the CPU port and the bridge's group timer.
+
 Bridge membership
 =================
 
@@ -2163,6 +2218,9 @@ Known limitations
   that is not IP, to a host address behind the CPU port other than this
   device's own, is flooded to every port, the PON port included: its entry
   carries ``RTL9602C_FDB_W1_ROUTER_MAC`` (see "Entry layout").
+- Every group in the table has the PON port, so what a host on the SFP side
+  sends to a group goes towards the OLT even while the bridge sees no router
+  there.
 
 Open questions
 ==============
@@ -2232,6 +2290,10 @@ Questions the code does not depend on
      - An 802.1ad double-tagged frame from the host, captured with the switch's
        frame capture, to see whether the outer tag is parsed as an S-tag;
        nothing is driven.
+   * - What the switch's per-port IGMP and MLD control does ("Multicast
+       snooping").
+     - Its fields set to each value with IGMP and MLD messages from each port,
+       followed in the frame capture.
    * - What the four actions and the three flags of the reserved-address
        controls, and the global word, mean ("Reserved multicast addresses").
      - Frames to 01:80:c2:00:00:00 with the action at each value, counted at the

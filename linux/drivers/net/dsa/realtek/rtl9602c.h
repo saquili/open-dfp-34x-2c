@@ -1785,12 +1785,15 @@ struct rtl9602c_field {
 
 /*
  * The forwarding decision and its port mask: REDIRECT with no port drops the
- * frame; that TRAP sends it to the CPU is not verified. EN_FWD is the
- * forwarding class of RTL9602C_ACL_ACT_EN, which reads EN_DEFAULT at reset.
+ * frame; MIRROR forwards it as usual and sends a copy to the ports of the
+ * mask, the CPU port's bit alone reaching the CPU; that TRAP sends it to the
+ * CPU is not verified. EN_FWD is the forwarding class of RTL9602C_ACL_ACT_EN,
+ * which reads EN_DEFAULT at reset.
  */
 #define RTL9602C_ACL_ACT_FWD_PORTS_LSB	37
 #define RTL9602C_ACL_ACT_FWD_LSB	41
 #define RTL9602C_ACL_ACT_FWD_REDIRECT	1
+#define RTL9602C_ACL_ACT_FWD_MIRROR	2
 #define RTL9602C_ACL_ACT_FWD_TRAP	3
 #define RTL9602C_ACL_ACT_EN_FWD		BIT(4)
 #define RTL9602C_ACL_ACT_EN_DEFAULT	0x7f
@@ -2954,6 +2957,7 @@ int rtl9602c_port_add_dscp_prio(struct dsa_switch *ds, int port, u8 dscp, u8 pri
 int rtl9602c_port_bridge_flags(struct dsa_switch *ds, int port,
 			       struct switchdev_brport_flags flags, struct netlink_ext_ack *extack);
 void rtl9602c_bridge_refresh(struct dsa_switch *ds);
+void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p);
 void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p);
 int rtl9602c_port_bridge_join(struct dsa_switch *ds, int port, struct dsa_bridge bridge,
 			      bool *tx_fwd_offload, struct netlink_ext_ack *extack);

@@ -1659,8 +1659,9 @@ static void rtl9602c_acl_push(struct rtl9602c_acl_match *m, u8 sel, u16 val,
  * Compose rule @w: the template, compared whole; the ingress port bits, of
  * which only @port's is compared; the slots; the valid bit, in the ones plane;
  * and the action. Only the forwarding class is applied:
- * RTL9602C_ACL_ACT_FWD_REDIRECT with no port drops the frame, and
- * RTL9602C_ACL_ACT_FWD_TRAP sends it to the CPU.
+ * RTL9602C_ACL_ACT_FWD_REDIRECT with no port drops the frame,
+ * RTL9602C_ACL_ACT_FWD_TRAP sends it to the CPU, and
+ * RTL9602C_ACL_ACT_FWD_MIRROR to the CPU port copies it there.
  */
 static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 				 const u8 *slot_of,
@@ -1779,6 +1780,60 @@ static int rtl9602c_acl_place(struct rtl9602c_priv *p, u16 prio)
 }
 
 /*
+ * Write the rule of @m on @port into a new entry, kept in priority order
+ * (rtl9602c_acl_place()), and turn on the port's lookup. @extack, if not NULL,
+ * gets the reason of a failure.
+ */
+static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
+			       const struct rtl9602c_acl_match *m, u16 prio,
+			       unsigned long cookie, unsigned int fwdact,
+			       unsigned int fwd_pmsk,
+			       struct netlink_ext_ack *extack)
+{
+	u8 slot_of[RTL9602C_ACL_TMPL_SLOTS];
+	unsigned int idx;
+	int tmpl, err;
+
+	lockdep_assert_held(&p->acl_lock);
+
+	tmpl = rtl9602c_acl_template(p, m->sel, m->n, slot_of);
+	if (tmpl < 0) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "no template covers these fields and all seven are in use");
+		return tmpl;
+	}
+
+	err = rtl9602c_acl_place(p, prio);
+	if (err == -ENOSPC) {
+		NL_SET_ERR_MSG_MOD(extack, "all 96 ACL rules are in use");
+		return err;
+	}
+	if (err < 0) {
+		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
+		return err;
+	}
+	idx = err;
+
+	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
+	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, m,
+			     fwdact, fwd_pmsk);
+	err = rtl9602c_acl_put(p, idx, p->acl[idx].words);
+	if (err) {
+		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
+		return err;
+	}
+
+	p->acl[idx].cookie = cookie;
+	p->acl[idx].tmpl = tmpl;
+	p->acl[idx].port = port;
+	p->acl[idx].prio = prio;
+	p->acl_tmpl_refs[tmpl]++;
+	set_bit(idx, p->acl_used);
+	rtl9602c_acl_port_enable(p, port, true);
+	return 0;
+}
+
+/*
  * A flower rule whose one action is drop or trap, as one ACL rule. Each field
  * it matches is cut into 16-bit slots, and a slot with a zero mask is left out.
  * L4 ports are compared through the field selectors setup points at the start
@@ -1793,10 +1848,8 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	struct netlink_ext_ack *extack = cls->common.extack;
 	struct flow_rule *rule = flow_cls_offload_flow_rule(cls);
 	struct rtl9602c_acl_match m = {};
-	u8 slot_of[RTL9602C_ACL_TMPL_SLOTS];
 	bool ipv4 = false, ipv6 = false, ipproto = false;
-	unsigned int idx;
-	int tmpl, err;
+	int err;
 
 	if (rule->match.dissector->used_keys &
 	    ~(BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL) |
@@ -1942,47 +1995,87 @@ no_addrs:
 		goto out;
 	}
 
-	tmpl = rtl9602c_acl_template(p, m.sel, m.n, slot_of);
-	if (tmpl < 0) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "no template covers these fields and all seven are in use");
-		err = tmpl;
-		goto out;
-	}
-
-	err = rtl9602c_acl_place(p, cls->common.prio);
-	if (err == -ENOSPC) {
-		NL_SET_ERR_MSG_MOD(extack, "all 96 ACL rules are in use");
-		goto out;
-	}
-	if (err < 0) {
-		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
-		goto out;
-	}
-	idx = err;
-
-	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
-	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, &m,
-			     fwdact, fwd_pmsk);
-	err = rtl9602c_acl_put(p, idx, p->acl[idx].words);
-	if (err) {
-		NL_SET_ERR_MSG_MOD(extack, "the ACL table did not answer");
-		goto out;
-	}
-
-	p->acl[idx].cookie = cls->cookie;
-	p->acl[idx].tmpl = tmpl;
-	p->acl[idx].port = port;
-	p->acl[idx].prio = cls->common.prio;
-	p->acl_tmpl_refs[tmpl]++;
-	set_bit(idx, p->acl_used);
-	rtl9602c_acl_port_enable(p, port, true);
-	mutex_unlock(&p->acl_lock);
-	return 0;
-
+	err = rtl9602c_acl_insert(p, port, &m, cls->common.prio, cls->cookie,
+				  fwdact, fwd_pmsk, extack);
 out:
 	mutex_unlock(&p->acl_lock);
 	return err;
+}
+
+/*
+ * Multicast snooping. The bridge has to see every IGMP and MLD message to
+ * snoop, and a report to a group already in the table goes only to the
+ * group's members. So an IGMP or MLD message entering the SFP or the PON port
+ * goes on as the switch forwards it, with its VLAN translation and in the GEM
+ * stream its VLAN takes, and a copy goes to the CPU
+ * (RTL9602C_ACL_ACT_FWD_MIRROR, measured with IGMPv2 and MLDv1 reports). DSA
+ * and the PON class mark the copy as forwarded, so the bridge snoops it and
+ * forwards nothing again. IGMP is found by its IP protocol. MLD is ICMPv6, of
+ * which the rule takes the two types sent to a group's own address, the query
+ * (130) and the version 1 report (131), through the field selector at the
+ * start of the IP payload; the rest of MLD goes to ff02::1, ff02::2 or ff02::16,
+ * which reach the CPU unasked, and no ping or neighbour discovery message is
+ * copied. The rules take the largest priority, after every tc rule, so that a
+ * tc rule matching these messages decides for them; their cookies are no kernel
+ * address, so no tc rule has one.
+ */
+#define RTL9602C_ACL_SNOOP_PRIO		U16_MAX
+#define RTL9602C_ACL_SNOOP_COOKIE(i)	(1UL + (i))
+
+/**
+ * rtl9602c_acl_snoop_setup() - copy IGMP and MLD to the CPU for snooping
+ * @p: the switch
+ *
+ * Writes the four rules, IGMP and MLD on the SFP and the PON port, with a
+ * kernel that has bridge multicast snooping. Each rule names the EtherType,
+ * the IPv4 protocol, the IPv6 protocol and the ICMPv6 type, ignoring what it
+ * does not compare, so that the four share one template.
+ *
+ * Context: setup, after rtl9602c_filter_qos_reset().
+ */
+void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
+{
+	static const int ports[] = { RTL9602C_PORT_SFP, RTL9602C_PORT_PON };
+	unsigned int i, n = 0;
+
+	if (!IS_ENABLED(CONFIG_BRIDGE_IGMP_SNOOPING))
+		return;
+
+	mutex_lock(&p->acl_lock);
+	for (i = 0; i < ARRAY_SIZE(ports); i++) {
+		struct rtl9602c_acl_match igmp = {}, mld = {};
+
+		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
+				  ETH_P_IP, 0xffff);
+		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO,
+				  IPPROTO_IGMP, 0x00ff);
+		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH, 0, 0);
+		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_USER0 +
+				  RTL9602C_FSEL_SPORT, 0, 0);
+
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
+				  ETH_P_IPV6, 0xffff);
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO, 0, 0);
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH,
+				  IPPROTO_ICMPV6, 0x00ff);
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_USER0 +
+				  RTL9602C_FSEL_SPORT,
+				  ICMPV6_MGM_QUERY << 8, 0xfe00);
+
+		if (rtl9602c_acl_insert(p, ports[i], &igmp,
+					RTL9602C_ACL_SNOOP_PRIO,
+					RTL9602C_ACL_SNOOP_COOKIE(n++),
+					RTL9602C_ACL_ACT_FWD_MIRROR,
+					BIT(RTL9602C_PORT_CPU), NULL) ||
+		    rtl9602c_acl_insert(p, ports[i], &mld,
+					RTL9602C_ACL_SNOOP_PRIO,
+					RTL9602C_ACL_SNOOP_COOKIE(n++),
+					RTL9602C_ACL_ACT_FWD_MIRROR,
+					BIT(RTL9602C_PORT_CPU), NULL))
+			pr_err("port %d: no ACL rule for IGMP and MLD; the bridge misses reports to groups in the table\n",
+			       ports[i]);
+	}
+	mutex_unlock(&p->acl_lock);
 }
 
 /*

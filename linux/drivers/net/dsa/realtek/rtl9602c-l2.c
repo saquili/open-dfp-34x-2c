@@ -413,8 +413,16 @@ int rtl9602c_port_fdb_del(struct dsa_switch *ds, int port,
 /*
  * Add @port to a group's member set or take it out. The CPU port is a member
  * only together with the first extension port, as in the isolation and VLAN
- * masks; for groups this is assumed, not verified. The entry stays valid
- * while any member remains and is deleted with the last.
+ * masks. The entry stays valid while any member remains and is deleted with
+ * the last.
+ *
+ * The PON port is a member of every group in the table, as the side the
+ * multicast router of a PON sits on: a host's IGMPv1, IGMPv2 or MLDv1 report
+ * goes to the group's own address, and with the group in the table but
+ * without the PON port among its members, the switch would send the report
+ * back where it came from and never towards the router (measured with
+ * IGMPv2). DSA never bridges the PON port, so the bit is the driver's alone,
+ * and it never keeps an entry alive by itself.
  */
 static void rtl9602c_mdb_members(u32 *e, int port, bool member)
 {
@@ -432,6 +440,10 @@ static void rtl9602c_mdb_members(u32 *e, int port, bool member)
 		else
 			ext &= ~RTL9602C_FDB_W2_MC_EXT_PORTS_CPU;
 	}
+
+	mbr &= ~BIT(RTL9602C_PORT_PON);
+	if (mbr | ext)
+		mbr |= BIT(RTL9602C_PORT_PON);
 
 	e[2] &= ~(RTL9602C_FDB_W2_MC_PORTS | RTL9602C_FDB_W2_MC_EXT_PORTS);
 	e[2] |= FIELD_PREP(RTL9602C_FDB_W2_MC_PORTS, mbr) |
