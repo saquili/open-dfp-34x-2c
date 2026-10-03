@@ -78,6 +78,14 @@ The runs, the oldest first:
     onto untagged frames and set tag priorities; and one MIB upload for both
     OMCI priorities. 32 of 32 passed.
 
+``2026-10-03-run08``
+    The same cases on the RAM image built from ``run08``, the VLAN tag
+    case now also taking an S-tag off downstream, after the switch's
+    recognition of S-tags on the SFP and PON ports, the VLAN rules that match,
+    rewrite and take off an S-tag, and omcid's extended VLAN rules that put an
+    S-tag in front of a C-tag upstream and take it off downstream. 32 of 32
+    passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
