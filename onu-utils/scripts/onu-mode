@@ -215,6 +215,16 @@ pppoe_loop() {
 	done
 }
 
+# Room for PPPoE's 8 bytes of headers around a 1500-byte packet (RFC 4638) on
+# the PON port, the GEM interface $1 and the WAN interface $2, as far as each
+# takes it: pppoed asks the concentrator for 1500 bytes, and keeps to 1492
+# when the interface has no room or the concentrator does not agree.
+pppoe_mtu() {
+	for dev in pon "$1" "$2"; do
+		ip link set "$dev" mtu 1508 2>/dev/null || return 0
+	done
+}
+
 # Bring the WAN up on the GEM interface $1.
 wan_up() {
 	gem=$1
@@ -228,6 +238,7 @@ wan_up() {
 	out=$wan
 	case $WAN_PROTO in
 	pppoe)
+		pppoe_mtu "$gem" "$wan"
 		pppoe_loop "$wan" &
 		echo $! >"$RUN/pppoe-loop.pid"
 		out=ppp0
@@ -274,8 +285,8 @@ feeds_down() {
 }
 
 wan_down() {
-	wan=
-	[ -r "$RUN/onu-wan" ] && read -r _ wan _ <"$RUN/onu-wan"
+	gem= wan=
+	[ -r "$RUN/onu-wan" ] && read -r gem wan _ <"$RUN/onu-wan"
 	stop_pid pppoe-loop
 	killall pppoed 2>/dev/null
 	stop_pid udhcpc
@@ -287,6 +298,11 @@ wan_down() {
 		ip -4 address flush dev "$wan" 2>/dev/null
 	fi
 	ip link del wan 2>/dev/null
+	# What pppoe_mtu() raised goes back to Ethernet's MTU, the PON port last.
+	if [ -n "$gem" ]; then
+		ip link set "$gem" mtu 1500 2>/dev/null
+		ip link set pon mtu 1500 2>/dev/null
+	fi
 	rm -f "$RUN/onu-wan" "$RUN/onu-dns"
 	return 0
 }

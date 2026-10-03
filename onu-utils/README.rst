@@ -37,7 +37,9 @@ The small programs of the ONU.
    omcid leaves the OLT's bridge out (``omcid -r``) and the stick routes: the
    LAN is the host link ``sfp``, with an address and BusyBox's DHCP server;
    the WAN is a GEM port the OLT provisioned, or a VLAN on it, with an address
-   by PPPoE (pppoed, with the user and secret of ``/run/onu-pppoe``), by DHCP
+   by PPPoE (pppoed, with the user and secret of ``/run/onu-pppoe``; the PON
+   port, the GEM interface and the VLAN get an MTU of 1508 first, so that a
+   concentrator that agrees gives a session of 1500-byte packets, RFC 4638), by DHCP
    (BusyBox's client, with ``dhcp-wan`` as its script) or by hand; and an
    nftables table translates what leaves by the WAN, clamps the MSS of TCP
    connections to the route's MTU, and hands the flows to the switch through a

@@ -110,6 +110,10 @@ echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe" | cut -c1-10)" = "-rw-------" ]'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link add link gem1024 name wan type vlan id 410"'
+check 'logged "^ip link set pon mtu 1508"'
+check 'logged "^ip link set gem1024 mtu 1508"'
+check 'logged "^ip link set wan mtu 1508"'
+check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^pppoed up" "$LOG" | head -1 | cut -d: -f1)" ]'
 check 'logged "oifname \"ppp0\" masquerade"'
 check 'logged "devices = { sfp, gem1024 }"'
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -120,6 +124,9 @@ check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe -D"'
 check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
+"$MODE_SCRIPT" stop 2>/dev/null
+check 'logged "^ip link set gem1024 mtu 1500"'
+check '[ "$(grep -n "ip link set gem1024 mtu 1500" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon mtu 1500" "$LOG" | cut -d: -f1)" ]'
 teardown
 
 echo "router mode, a static WAN"
