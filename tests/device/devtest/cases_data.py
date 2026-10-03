@@ -399,3 +399,188 @@ def acl(ctx: Context):
     finally:
         ctx.stick.run("; ".join([f"tc qdisc del dev {dev} clsact" for dev in added] + ["true"]))
     return verdict(ok, f"{ACL_COUNT} frames each; " + "; ".join(seen))
+
+
+# The multicast case: groups of the organisation-local IPv4 scope (RFC 2365)
+# and of the transient IPv6 range, which no line is expected to carry, and the
+# mDNS group as a link-local one, which a snooping bridge floods unasked.
+MC_COUNT = 200
+MC_REPORTS = 3
+MC_UNASKED = "239.255.77.1"
+MC_JOINED = "239.255.77.2"
+MC_LOCAL = "224.0.0.251"
+MC6_UNASKED = "ff3e::77:1"
+MC6_JOINED = "ff3e::77:2"
+MC_REFRESH = 4         # seconds between a join and the reports that must restart its timer
+
+# Run by python3 on the bench host with SRC DST KIND GROUP COUNT: COUNT frames
+# of KIND for GROUP from port SRC, 2 ms apart, DST put in all-multicast mode
+# meanwhile. It prints, as JSON, how many of them DST received unchanged. KIND
+# is query (an IGMPv2 general query), join and leave (IGMPv2), data (UDP to the
+# group, IPv4 or IPv6), mldquery (an MLDv2 general query), mldjoin2 (an MLDv2
+# report, to ff02::16) or mldjoin1 (an MLDv1 report, to the group).
+MCAST = r"""
+import json, socket, struct, sys, threading, time
+src, dst, kind, group, count = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+mac = lambda p: bytes.fromhex(open("/sys/class/net/%s/address" % p).read().strip().replace(":", ""))
+SRC4, SRC6 = socket.inet_aton("192.0.2.10"), socket.inet_pton(socket.AF_INET6, "fe80::10")
+
+def csum(b):
+    b += b"\0" * (len(b) % 2)
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b))
+    while s >> 16:
+        s = (s & 0xffff) + (s >> 16)
+    return ~s & 0xffff
+
+def mac4(g):
+    a = socket.inet_aton(g)
+    return b"\x01\x00\x5e" + bytes([a[1] & 0x7f]) + a[2:]
+
+def mac6(g):
+    return b"\x33\x33" + socket.inet_pton(socket.AF_INET6, g)[12:]
+
+def ip4(to, proto, payload, ttl=1):
+    ra = b"\x94\x04\x00\x00" if proto == 2 else b""
+    h = struct.pack("!BBHHHBBH4s4s", 0x45 + len(ra) // 4, 0xc0 if ra else 0, 20 + len(ra) + len(payload),
+                    0, 0x4000, ttl, proto, 0, SRC4, socket.inet_aton(to)) + ra
+    return mac4(to) + mac(src) + b"\x08\x00" + h[:10] + struct.pack("!H", csum(h)) + h[12:] + payload
+
+def ip6(to, nxt, payload):
+    d = socket.inet_pton(socket.AF_INET6, to)
+    payload = payload[:2 if nxt == 58 else 6] + struct.pack(
+        "!H", csum(SRC6 + d + struct.pack("!IxxxB", len(payload), nxt) + payload)) + payload[4 if nxt == 58 else 8:]
+    if nxt == 58:
+        body, first, hops = struct.pack("!BB", 58, 0) + b"\x05\x02\x00\x00\x01\x00" + payload, 0, 1
+    else:
+        body, first, hops = payload, nxt, 8
+    return mac6(to) + mac(src) + b"\x86\xdd" + struct.pack("!IHBB16s16s", 6 << 28, len(body), first, hops, SRC6, d) + body
+
+def igmp(t, to, g, mrt=0):
+    m = struct.pack("!BBH4s", t, mrt, 0, socket.inet_aton(g))
+    return ip4(to, 2, m[:2] + struct.pack("!H", csum(m)) + m[4:])
+
+g6 = socket.inet_pton(socket.AF_INET6, group) if ":" in group else b""
+frame = {
+    "query": lambda: igmp(0x11, "224.0.0.1", "0.0.0.0", 10),
+    "join": lambda: igmp(0x16, group, group),
+    "leave": lambda: igmp(0x17, "224.0.0.2", group),
+    "data": lambda: (ip6(group, 17, struct.pack("!HHHH", 5000, 5001, 26, 0) + b"devtest multicast.")
+                     if g6 else ip4(group, 17, struct.pack("!HHHH", 5000, 5001, 26, 0) + b"devtest multicast.", 8)),
+    "mldquery": lambda: ip6("ff02::1", 58, struct.pack("!BBHHH16sBBH", 130, 0, 0, 1000, 0, bytes(16), 2, 125, 0)),
+    "mldjoin2": lambda: ip6("ff02::16", 58, struct.pack("!BBHHHBBH16s", 143, 0, 0, 0, 1, 4, 0, 0, g6)),
+    "mldjoin1": lambda: ip6(group, 58, struct.pack("!BBHHH16s", 131, 0, 0, 0, 0, g6)),
+}[kind]()
+rx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+rx.bind((dst, 0))
+rx.setsockopt(263, 1, struct.pack("iHH8s", socket.if_nametoindex(dst), 2, 0, b""))
+rx.settimeout(0.3)
+got, stop = [0], []
+def receive():
+    while not stop:
+        try:
+            data = rx.recv(2048)
+        except socket.timeout:
+            continue
+        if data[:len(frame)] == frame:
+            got[0] += 1
+thread = threading.Thread(target=receive)
+thread.start()
+time.sleep(0.2)
+tx = socket.socket(socket.AF_PACKET, socket.SOCK_RAW)
+tx.bind((src, 0))
+for _ in range(count):
+    tx.send(frame)
+    time.sleep(0.002)
+time.sleep(1.5)
+stop.append(1)
+thread.join()
+print(json.dumps({"sent": count, "got": got[0]}))
+"""
+
+
+def mcast(ctx: Context, into: str, out_of: str, kind: str, group: str, count: int) -> int:
+    """Send count frames of kind for group into the bench port into; return how
+    many the bench port out_of received unchanged."""
+    command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
+        "python3", "-", into, out_of, kind, group, str(count))))
+    reply = ctx.bench.run(command, stdin=MCAST, timeout=60)
+    try:
+        return int(json.loads(reply.out.strip().splitlines()[-1])["got"])
+    except (IndexError, KeyError, ValueError):
+        raise ValueError(f"the probe did not run: {(reply.err or reply.out).strip()!r}")
+
+
+def group_timer(ctx: Context, group: str) -> float | None:
+    """The bridge's timer of group on sfp, None while the bridge has no such
+    group, and whether the group is offloaded, from bridge -s mdb show."""
+    shown = ctx.stick.text("bridge -s mdb show dev omcibr0 2>/dev/null; true")
+    for line in shown.splitlines():
+        words = line.split()
+        if "sfp" in words and group in words and "offload" in words:
+            try:
+                return float(words[-1])
+            except ValueError:
+                return None
+    return None
+
+
+@case("data.igmp", "Data path",
+      "Multicast snooping: from the network side a group a host joined reaches it and one no "
+      "host asked for does not, the link-local groups pass, and every report reaches the network")
+def igmp(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    s = ctx.settings
+    if ctx.stick.text("cat /sys/class/net/omcibr0/bridge/multicast_snooping 2>/dev/null; true") != "1":
+        return failed("no bridge omcibr0 that snoops multicast")
+
+    def down(kind, group, count=MC_COUNT):
+        return mcast(ctx, s.olt_port, s.subscriber_port, kind, group, count)
+
+    def up(kind, group, count=MC_REPORTS):
+        return mcast(ctx, s.subscriber_port, s.olt_port, kind, group, count)
+
+    try:
+        query = down("query", "0.0.0.0", 1)
+        unasked = down("data", MC_UNASKED)
+        local = down("data", MC_LOCAL)
+        join = up("join", MC_JOINED)
+        first = group_timer(ctx, MC_JOINED)
+        joined = down("data", MC_JOINED)
+        time.sleep(MC_REFRESH)
+        again = up("join", MC_JOINED)
+        later = group_timer(ctx, MC_JOINED)
+        mquery = down("mldquery", "ff02::1", 1)
+        mjoin = up("mldjoin2", MC6_JOINED)
+        unasked6 = down("data", MC6_UNASKED)
+        joined6 = down("data", MC6_JOINED)
+        first6 = group_timer(ctx, MC6_JOINED)
+        time.sleep(MC_REFRESH)
+        again6 = up("mldjoin1", MC6_JOINED)
+        later6 = group_timer(ctx, MC6_JOINED)
+        ctx.stick.run("bridge link set dev sfp fastleave on")
+        leave = up("leave", MC_JOINED, 1)
+        gone = group_timer(ctx, MC_JOINED) is None
+        left = down("data", MC_JOINED)
+    finally:
+        # Snooping off and on again forgets the case's groups and routers.
+        ctx.stick.run("bridge link set dev sfp fastleave off; "
+                      "ip link set omcibr0 type bridge mcast_snooping 0; "
+                      "ip link set omcibr0 type bridge mcast_snooping 1")
+    # A timer the reports restarted reads about what it read after the join;
+    # one they did not has run down by MC_REFRESH seconds and more.
+    every, none = MC_COUNT * 0.99, MC_COUNT * 0.01
+    refreshed = lambda a, b: a is not None and b is not None and b > a - MC_REFRESH / 2
+    ok = (query == 1 and unasked <= none and local >= every and join == MC_REPORTS and
+          first is not None and joined >= every and again == MC_REPORTS and refreshed(first, later) and
+          mquery == 1 and mjoin == MC_REPORTS and unasked6 <= none and joined6 >= every and
+          again6 == MC_REPORTS and refreshed(first6, later6) and leave == 1 and gone and left <= none)
+    timer = lambda a, b: "restarted" if refreshed(a, b) else f"not restarted ({a} s, then {b} s)"
+    return verdict(ok, f"IGMPv2 query {query}/1 to the host side; from the network side, unasked "
+                       f"{unasked}/{MC_COUNT}, {MC_LOCAL} {local}/{MC_COUNT}; join {join}/{MC_REPORTS} "
+                       f"to the network, group {'offloaded' if first is not None else 'missing'}, "
+                       f"its data {joined}/{MC_COUNT}; {again}/{MC_REPORTS} reports again, timer "
+                       f"{timer(first, later)}; MLD query {mquery}/1, MLDv2 join {mjoin}/{MC_REPORTS}, "
+                       f"unasked {unasked6}/{MC_COUNT}, joined {joined6}/{MC_COUNT}, MLDv1 reports "
+                       f"{again6}/{MC_REPORTS}, timer {timer(first6, later6)}; leave {leave}/1, group "
+                       f"{'gone' if gone else 'kept'}, its data {left}/{MC_COUNT}")

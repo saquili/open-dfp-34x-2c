@@ -397,6 +397,64 @@ class Cases(unittest.TestCase):
         self.assertIn("tc qdisc del dev pon clsact; tc qdisc del dev gem256 clsact; true", asked)
         self.assertEqual(outcome(added_first_decides=True)[0].status, FAIL)
 
+    def test_the_multicast_case_wants_every_report_through_and_unasked_groups_kept_out(self):
+        def outcome(reports_to_a_group_pass: bool):
+            trail: list[str] = []
+            groups: dict[str, float] = {}
+            clock = [0.0]
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if "python3 -" not in command:
+                        return super().run(command, **kw)
+                    into, _, kind, group, count = re.search(
+                        r"python3 - (\S+) (\S+) (\S+) (\S+) (\d+)", command).groups()
+                    count = int(count)
+                    up = into == "eth2"
+                    if kind in ("join", "mldjoin2", "mldjoin1"):
+                        got = count if reports_to_a_group_pass or group not in groups else 1
+                        groups[group] = 260.0 + clock[0] if got == count else groups.get(group, 0.0)
+                    elif kind == "leave":
+                        got = count
+                        groups.pop(group, None)
+                    elif kind == "data" and not up:
+                        got = count if group in groups or group.startswith("224.0.0.") else 0
+                    else:
+                        got = count
+                    self.answers[0] = ("python3 -", 0, json.dumps({"sent": count, "got": got}) + "\n")
+                    return super().run(command, **kw)
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    rows = "".join(f"dev omcibr0 port sfp grp {g} temp proto kernel offload "
+                                   f"{t - clock[0]:.2f}\n" for g, t in groups.items())
+                    self.answers[0] = ("bridge -s mdb show", 0, rows)
+                    return super().run(command, **kw)
+
+            stick = Stick("stick", [("bridge -s mdb show", 0, ""),
+                                    ("multicast_snooping", 0, "1\n"), ("", 0, "")], trail)
+            bench = Bench("bench", [("python3 -", 0, ""),
+                                    ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+
+            def sleep(seconds):
+                clock[0] += seconds
+            cases_data.time.sleep, real = sleep, cases_data.time.sleep
+            try:
+                return cases_data.igmp(ctx), stick.asked
+            finally:
+                cases_data.time.sleep = real
+        good, asked = outcome(reports_to_a_group_pass=True)
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertIn("join 3/3 to the network, group offloaded", good.evidence)
+        self.assertIn("timer restarted", good.evidence)
+        self.assertIn("ip link set omcibr0 type bridge mcast_snooping 1", asked[-1])
+        bad = outcome(reports_to_a_group_pass=False)[0]
+        self.assertEqual(bad.status, FAIL)
+        self.assertIn("1/3 reports again, timer not restarted", bad.evidence)
+
     def test_a_burst_that_never_left_the_bench_is_the_bench_s_fault(self):
         trail: list[str] = []
         settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
