@@ -86,6 +86,14 @@ The runs, the oldest first:
     S-tag in front of a C-tag upstream and take it off downstream. 32 of 32
     passed.
 
+``2026-10-03-run09``
+    The same cases and the new mirror case on the RAM image built from
+    ``run09``, the kernel log now read after the other cases and failing
+    on a switchdev object that a driver failed, after port mirroring in both
+    directions at once and its reset at setup, the host's own multicast groups
+    stopped at an offloaded GEM interface, and the optics' I2C bus at 100 kHz
+    with each diagnostic word read in one transfer. 33 of 33 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
