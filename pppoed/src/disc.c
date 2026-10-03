@@ -57,6 +57,10 @@ int pppoe_disc_open(const char *ifname, struct pppoe_session *s,
 		goto fail;
 	memcpy(s->local, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
 
+	if (ioctl(fd, SIOCGIFMTU, &ifr) < 0)
+		goto fail;
+	s->ifmtu = ifr.ifr_mtu > 0xffff ? 0xffff : (uint16_t)ifr.ifr_mtu;
+
 	sll.sll_family = AF_PACKET;
 	sll.sll_protocol = htons(proto);
 	sll.sll_ifindex = (int)s->ifindex;
@@ -130,6 +134,7 @@ struct disc_tags {
 	size_t cookie_len;
 	const uint8_t *relay;
 	size_t relay_len;
+	uint16_t max_payload;
 	char ac_name[64];
 	char error[128];
 	bool have_error;
@@ -166,6 +171,10 @@ static bool tags_parse(const uint8_t *pl, size_t len, struct disc_tags *t)
 		case PPPOE_TAG_RELAY_SESSION:
 			t->relay = val;
 			t->relay_len = tlen;
+			break;
+		case PPPOE_TAG_PPP_MAX_PAYLOAD:
+			if (tlen == 2)
+				t->max_payload = pppoe_get16(val);
 			break;
 		case PPPOE_TAG_AC_NAME:
 			if (tlen < sizeof(t->ac_name)) {
@@ -302,6 +311,30 @@ static int wait_for(int fd, uint8_t code, const struct pppoe_session *s,
 	}
 }
 
+/*
+ * The PPP-Max-Payload to ask for (RFC 4638): what the interface's MTU leaves
+ * after PPPoE's overhead, when that is more than PPPOE_MTU; 0, and no tag,
+ * otherwise.
+ */
+static uint16_t max_payload_wanted(const struct pppoe_session *s)
+{
+	if (s->ifmtu <= PPPOE_MTU + PPPOE_OVERHEAD)
+		return 0;
+	return (uint16_t)(s->ifmtu - PPPOE_OVERHEAD);
+}
+
+/*
+ * The session's largest PPP packet from the PADS: what was asked for, or the
+ * concentrator's PPP-Max-Payload if smaller, when it answered with one above
+ * PPPOE_MTU; PPPOE_MTU when nothing was asked for or it did not agree.
+ */
+static uint16_t max_payload_agreed(uint16_t wanted, uint16_t answered)
+{
+	if (!wanted || answered <= PPPOE_MTU)
+		return PPPOE_MTU;
+	return answered < wanted ? answered : wanted;
+}
+
 int pppoe_discover(int fd, struct pppoe_session *s, const char *service,
 		   unsigned int attempts, unsigned int timeout_ms)
 {
@@ -310,11 +343,15 @@ int pppoe_discover(int fd, struct pppoe_session *s, const char *service,
 	uint8_t tx[PPPOE_FRAME_MAX];
 	uint8_t rx[PPPOE_FRAME_MAX];
 	size_t svc_len = service ? strlen(service) : 0;
+	uint16_t wanted;
+	uint8_t mp[2];
 	unsigned int try;
 
 	if (!s || svc_len >= sizeof(s->service))
 		return -EINVAL;
 	snprintf(s->service, sizeof(s->service), "%s", service ? service : "");
+	wanted = max_payload_wanted(s);
+	pppoe_put16(mp, wanted);
 
 	for (try = 1; try <= attempts; try++) {
 		struct disc_tags tags;
@@ -329,6 +366,9 @@ int pppoe_discover(int fd, struct pppoe_session *s, const char *service,
 			      svc_len);
 		off = tag_put(tx, off, PPPOE_TAG_HOST_UNIQ, g_uniq,
 			      sizeof(g_uniq));
+		if (wanted)
+			off = tag_put(tx, off, PPPOE_TAG_PPP_MAX_PAYLOAD, mp,
+				      sizeof(mp));
 		frame_finish(tx, off);
 
 		err = frame_send(fd, s->ifindex, tx, off);
@@ -369,6 +409,9 @@ int pppoe_discover(int fd, struct pppoe_session *s, const char *service,
 		if (tags.relay)
 			off = tag_put(tx, off, PPPOE_TAG_RELAY_SESSION,
 				      tags.relay, tags.relay_len);
+		if (wanted)
+			off = tag_put(tx, off, PPPOE_TAG_PPP_MAX_PAYLOAD, mp,
+				      sizeof(mp));
 		frame_finish(tx, off);
 
 		err = frame_send(fd, s->ifindex, tx, off);
@@ -399,10 +442,15 @@ int pppoe_discover(int fd, struct pppoe_session *s, const char *service,
 		}
 
 		s->sid = sid;
+		s->max_payload = max_payload_agreed(wanted, tags.max_payload);
 		PPPOED_INFO(
-			"session %u up on %s to %02x:%02x:%02x:%02x:%02x:%02x",
+			"session %u up on %s to %02x:%02x:%02x:%02x:%02x:%02x, PPP packets up to %u bytes",
 			sid, s->ifname, s->peer[0], s->peer[1], s->peer[2],
-			s->peer[3], s->peer[4], s->peer[5]);
+			s->peer[3], s->peer[4], s->peer[5], s->max_payload);
+		if (wanted && s->max_payload == PPPOE_MTU)
+			PPPOED_INFO(
+				"the concentrator did not take PPP-Max-Payload %u (RFC 4638)",
+				wanted);
 		return 0;
 	}
 

@@ -259,7 +259,7 @@ static int lcp_negotiate(struct ppp_link *l)
 			if (want_mru) {
 				uint8_t v[2];
 
-				pppoe_put16(v, PPPOE_MTU);
+				pppoe_put16(v, l->max_payload);
 				len = opt_put(body, len, LCP_OPT_MRU, v,
 					      sizeof(v));
 			}

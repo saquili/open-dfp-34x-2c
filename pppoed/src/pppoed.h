@@ -38,14 +38,20 @@
 #define PPPOE_TAG_AC_COOKIE 0x0104
 #define PPPOE_TAG_VENDOR_SPEC 0x0105
 #define PPPOE_TAG_RELAY_SESSION 0x0110
+/* RFC 4638: the largest PPP payload a side takes, when above 1492. */
+#define PPPOE_TAG_PPP_MAX_PAYLOAD 0x0120
 #define PPPOE_TAG_SERVICE_ERR 0x0201
 #define PPPOE_TAG_AC_SYSTEM_ERR 0x0202
 #define PPPOE_TAG_GENERIC_ERR 0x0203
 
-/* Sizes: an Ethernet payload less the PPPoE header, the MTU of the link. */
+/*
+ * Sizes: an Ethernet payload less the PPPoE header, the MTU of the link, and
+ * what PPPoE adds to a PPP packet, the PPPoE header and the PPP protocol.
+ */
 #define PPPOE_MAX_PAYLOAD 1494
 #define PPPOE_MTU 1492
 #define PPPOE_FRAME_MAX (ETH_HLEN + PPPOE_HDR_LEN + PPPOE_MAX_PAYLOAD)
+#define PPPOE_OVERHEAD 8
 
 #define PPPOE_COOKIE_MAX 64
 
@@ -69,6 +75,10 @@ static inline void pppoe_put16(uint8_t *p, uint16_t v)
  * @service: the service name asked for
  * @ifindex: the index of the interface
  * @ifname: its name
+ * @ifmtu: its MTU
+ * @max_payload: the largest PPP packet of the session: %PPPOE_MTU, or more
+ *		 when the concentrator agreed to the PPP-Max-Payload asked for
+ *		 (RFC 4638); set by pppoe_discover()
  */
 struct pppoe_session {
 	uint16_t sid;
@@ -78,6 +88,8 @@ struct pppoe_session {
 	char service[64];
 	unsigned int ifindex;
 	char ifname[IFNAMSIZ];
+	uint16_t ifmtu;
+	uint16_t max_payload;
 };
 
 /**
@@ -182,6 +194,7 @@ int pppoe_terminate(int fd, const struct pppoe_session *s);
  * @magic: our magic number
  * @peer_magic: the peer's
  * @mru: the peer's MRU
+ * @max_payload: the session's largest PPP packet, which we ask for as our MRU
  * @auth: the authentication protocol the peer asks for, or 0
  * @chap_alg: the CHAP algorithm
  * @local_ip: the address the peer gave us, network order
@@ -203,6 +216,7 @@ struct ppp_link {
 	uint32_t magic;
 	uint32_t peer_magic;
 	uint16_t mru;
+	uint16_t max_payload;
 	uint16_t auth;
 	uint8_t chap_alg;
 	uint32_t local_ip, peer_ip, dns1, dns2;

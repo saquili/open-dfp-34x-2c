@@ -32,6 +32,7 @@ int ppp_open(const struct pppoe_session *s, struct ppp_link *l)
 	l->sk = l->chfd = l->fd = -1;
 	l->unit = -1;
 	l->mru = PPPOE_MTU;
+	l->max_payload = s->max_payload > PPPOE_MTU ? s->max_payload : PPPOE_MTU;
 
 	l->sk = socket(AF_PPPOX, SOCK_STREAM, PX_PROTO_OE);
 	if (l->sk < 0) {
@@ -99,7 +100,7 @@ int ppp_open(const struct pppoe_session *s, struct ppp_link *l)
 	snprintf(l->ifname, sizeof(l->ifname), "ppp%d", l->unit);
 
 	{
-		int mru = PPPOE_MTU;
+		int mru = l->max_payload;
 
 		if (ioctl(l->fd, PPPIOCSMRU, &mru) < 0)
 			PPPOED_WARN("could not set the unit's MRU: %s",
@@ -258,10 +259,11 @@ int ppp_ifconfig(struct ppp_link *l, bool defaultroute)
 			goto out;
 	}
 
-	ifr.ifr_mtu = PPPOE_MTU;
+	/* What the peer takes, within what the session carries. */
+	ifr.ifr_mtu = l->mru < l->max_payload ? l->mru : l->max_payload;
 	if (ioctl(fd, SIOCSIFMTU, &ifr) < 0)
-		PPPOED_WARN("could not set %s MTU to %u: %s", l->ifname,
-			    PPPOE_MTU, strerror(errno));
+		PPPOED_WARN("could not set %s MTU to %d: %s", l->ifname,
+			    ifr.ifr_mtu, strerror(errno));
 
 	if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
 		err = -errno;
