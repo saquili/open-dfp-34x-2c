@@ -2600,8 +2600,9 @@ struct rtl9602c_priv {
 	unsigned int pon_br_members;
 	/**
 	 * @pon_br_us_flow: the flow of the last upstream GEM interface to join
-	 * @pon_br, which bridged frames are given while no VLAN claims one; -1
-	 * for none
+	 * @pon_br, or once it has left of the upstream GEM interface of the
+	 * lowest flow in @pon_br, which bridged frames are given while no VLAN
+	 * claims one; -1 for none
 	 */
 	int pon_br_us_flow;
 

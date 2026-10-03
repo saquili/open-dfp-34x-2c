@@ -980,14 +980,14 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        range downwards. A port for which the classifier has no room is left
        without a stream, with a warning in the kernel log. When upstream GEM
        interfaces claim VLANs, a bridged port gets one entry for each claimed
-       VLAN instead, and a frame in no claimed VLAN gets no stream; that part is
-       not verified (see the *bridging* page, "Bridging the GEM ports").
-     - T, I
+       VLAN instead, and a frame in no claimed VLAN gets no stream (see the
+       *bridging* page, "Bridging the GEM ports").
+     - T, M
      - T: bridged upstream traffic from the host reaches the far side of an OLT;
        in a routing test the routed port's entry is a ``VALID`` line in ``cf``
-       and the flow is forwarded. I: the per-VLAN entries; two upstream GEM
-       interfaces in two VLANs, each VLAN's frames arriving in its own GEM port
-       at the far side of an OLT, would settle them.
+       and the flow is forwarded. M: the per-VLAN entries, with two upstream
+       GEM interfaces in two VLANs, each VLAN's frames counted in its own GEM
+       port's upstream octets (the *bridging* page).
    * - A translation, ``tc filter add dev port ingress protocol 802.1Q flower
        vlan_id A action vlan modify id B``, becomes one entry: C-tag present and
        VID A compared (the priority is not compared, so one entry covers every
@@ -2448,12 +2448,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - Per-VLAN stream entries work for more than one upstream GEM interface,
-       and an upstream translation carries the stream of the GEM interface that
-       claims its VLAN ("What the driver writes").
-     - Two upstream GEM interfaces in two VLANs, each VLAN's frames arriving in
-       its own GEM port at the far side of an OLT: the test of the *bridging*
-       page.
    * - The entries from ``RTL9602C_CLS_CTRL_LAYOUT1_START`` up use another rule
        layout, and the driver's depth limit is right ("Entries and rules").
      - A frame test of an entry above the boundary.

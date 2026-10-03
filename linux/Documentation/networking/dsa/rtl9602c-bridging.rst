@@ -1820,11 +1820,13 @@ An example of a translation from VID 410 to VID 1410::
        translated frame without a stream reaches the PON MAC without a GEM port
        and is lost. The upstream translations are written again whenever the
        stream entries change.
-     - M, I
-     - M: with no VLAN claimed, an entry without a stream lost all 200 frames
-       of its VID, and with the port's stream they arrived translated. I: the
-       flow of a GEM interface that claims the assigned VID, which needs two
-       upstream GEM ports.
+     - M
+     - With no VLAN claimed, an entry without a stream lost all 200 frames of
+       its VID, and with the port's stream they arrived translated. With the
+       two upstream GEM interfaces of "Bridging the GEM ports" claiming 3001
+       and 3002, a translation of 3005 to 3002 named the second interface's
+       flow and one of 3006 to 3001 the first's, and the 200 frames of each
+       were counted in that port's upstream octets.
 
 Bridging the GEM ports
 ======================
@@ -1884,13 +1886,21 @@ class* page).
        VLAN change: while no VLAN is claimed by an upstream GEM interface, one
        entry for each port that matches the ingress port
        (``RTL9602C_CLS_RULE_UNI``) and assigns the bridge's default upstream
-       flow, that of the last upstream GEM interface to join. The entries come
-       from the top of the classifier, downward.
+       flow, that of the last upstream GEM interface to join. When that
+       interface leaves the bridge, the upstream GEM interface of the lowest
+       flow still in it takes its place. The entries come from the top of the
+       classifier, downward.
      - M
      - On a board provisioned by an OLT, the one entry read back at index 127,
        the top of 128 usable, matching ingress port 0 and assigning the upstream
        flow (debugfs ``rtl9602c/cf``); upstream frames from the host arrive at
-       the OLT.
+       the OLT. A second upstream GEM interface (Port-ID 300, made by hand on
+       the same T-CONT) that joined took the entry, and 200 untagged frames
+       from the host were counted in its upstream octets; when it left the
+       bridge, and again when it was deleted while in it, the entry named the
+       first interface's flow again and the frames arrived at the OLT. Before
+       the driver chose another interface, no entry remained once it had left,
+       and every upstream frame from the host was lost.
    * - Once VLANs are claimed, one entry for each port and claimed VLAN instead,
        matching the ingress port and the C-tag's VID and assigning that VLAN's
        flow, with no entry for a VLAN that no upstream GEM interface claims. A
@@ -1898,11 +1908,17 @@ class* page).
        in the same VLAN is refused when the VLAN is added (``-EBUSY``, ``VLAN
        <v> already travels up another GEM interface``), and a GEM interface that
        leaves the bridge gives up the VLANs that it claimed.
-     - I
-     - A line with one upstream GEM interface and no bridge VLAN has been run;
-       two upstream GEM interfaces in two VLANs, each VLAN's frames arriving in
-       its own GEM port at the OLT, would settle it. The driver depends on it
-       for more than one service per bridge.
+     - M
+     - The OLT's GEM interface (Port-ID 256) claiming VLAN 3001 and the second
+       interface of the row above 3002: entries 127 and 126 matched the two
+       VIDs and assigned the two flows. Of 200 frames of each VLAN from the
+       host, those of 3001 were counted in the first port's upstream octets
+       (``pon_tx_octets``, 14,600 more) and arrived at the OLT, those of 3002
+       in the second's (14,600 more) and none in the first's; untagged frames
+       and frames of VLAN 3003 were counted in neither. The OLT forwarded no
+       frame of Port-ID 300, which it had not provisioned. A claim of 3001 for
+       the second interface was refused with the message; when it left the
+       bridge, its entry went and the frames of 3002 got no stream.
    * - A subscriber port outside the GEM bridge (a routed port) gets one entry
        that matches its ingress port and assigns the flow that its routed
        interface is sent in, when an address on a GEM interface makes one (see
@@ -2129,12 +2145,6 @@ Assumptions the driver depends on
        ("Reserved multicast addresses").
      - An exemption test as for ``_00``, for each of ``_01``, ``_02``, ``_03``
        and ``_0E``.
-   * - Per-VLAN upstream streams work for more than one GEM interface in a
-       bridge ("Bridging the GEM ports"), and an upstream translation carries
-       the stream of the GEM interface that claims the VID it assigns ("VLAN
-       translation").
-     - Two upstream GEM interfaces in two VLANs, each VLAN's frames arriving in
-       its own GEM port at the OLT, translated and untranslated.
 
 Questions the code does not depend on
 -------------------------------------

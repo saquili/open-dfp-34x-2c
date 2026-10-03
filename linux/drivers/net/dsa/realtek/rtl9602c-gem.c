@@ -261,7 +261,8 @@ out:
  * rtl9602c_bridge_refresh() then makes the PON port a member of that bridge
  * and rebuilds the classifier entries that give the frames the switch
  * forwards to the PON port their stream; where no VLAN claims a stream, the
- * entries name the flow of the last upstream GEM interface to join.
+ * entries name the flow of the last upstream GEM interface to join, or, once
+ * that one has left, of another (rtl9602c_gem_unbridge()).
  */
 static int rtl9602c_gem_bridge_join(struct pon_device *pon, unsigned int flow,
 				    struct net_device *br,
@@ -288,19 +289,29 @@ static int rtl9602c_gem_bridge_join(struct pon_device *pon, unsigned int flow,
 /*
  * Take @flow out of the bridge. Both gem_bridge_leave and gem_del come here,
  * in either order, and the second finds nothing to do. If @flow was the one
- * the bridge's stream entries name, the bridge has no upstream flow until
- * another upstream GEM interface joins. The flow gives up its VLAN claims
- * here, since the bridge reports a port's VLANs going away only while it is
- * still a bridge port. When the last GEM interface leaves, the addresses the
- * PON port learned are flushed.
+ * the bridge's stream entries name, the upstream GEM interface of the lowest
+ * flow left in the bridge takes its place, so that the bridge's frames keep a
+ * stream while it has one. The flow gives up its VLAN claims here, since the
+ * bridge reports a port's VLANs going away only while it is still a bridge
+ * port. When the last GEM interface leaves, the addresses the PON port
+ * learned are flushed.
  */
 static void rtl9602c_gem_unbridge(struct rtl9602c_priv *p, unsigned int flow)
 {
+	unsigned int f;
+
 	if (!test_and_clear_bit(flow, p->gem_bridged))
 		return;
 
-	if (p->pon_br_us_flow == flow)
+	if (p->pon_br_us_flow == flow) {
 		p->pon_br_us_flow = -1;
+		for_each_set_bit(f, p->gem_bridged, RTL9602C_GPON_NUM_FLOW) {
+			if (p->gem_cfg[f].direction & IFLA_GEM_DIR_UPSTREAM) {
+				p->pon_br_us_flow = f;
+				break;
+			}
+		}
+	}
 
 	for (unsigned int vid = 0; vid < VLAN_N_VID; vid++)
 		if (p->gem_vid_flow[vid] == flow + 1)
@@ -326,8 +337,7 @@ static void rtl9602c_gem_bridge_leave(struct pon_device *pon,
  * VLANs claim flows, the classifier entries that give forwarded frames their
  * stream match the ingress port and the C-VID, so a VLAN can travel up one
  * GEM interface only, and a second upstream GEM interface in a claimed VLAN
- * is refused. That the entries tell GEM interfaces apart by VLAN is not
- * verified.
+ * is refused.
  */
 static int rtl9602c_gem_vlan_add(struct pon_device *pon, unsigned int flow,
 				 u16 vid, u16 flags,

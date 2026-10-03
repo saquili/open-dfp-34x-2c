@@ -421,10 +421,10 @@ static void rtl9602c_cf_sid_release(struct rtl9602c_priv *p)
  * port but the PON port. A port outside the GEM interfaces' bridge gets one
  * entry for the routed flow, the GEM flow routed frames leave in, if one is
  * claimed. A port in that bridge gets one entry for the bridge's upstream flow,
- * that of the last upstream GEM interface to join, while no VLAN claims a GEM
- * flow; otherwise one entry per claimed VLAN, keyed on the C-VID, so that a
- * frame in no claimed VLAN gets no stream. The per-VLAN entries are not
- * verified. A port the classifier has no room for is left without a stream,
+ * that of the last upstream GEM interface to join (or of another, once that
+ * one has left), while no VLAN claims a GEM flow; otherwise one entry per
+ * claimed VLAN, keyed on the C-VID, so that a frame in no claimed VLAN gets
+ * no stream. A port the classifier has no room for is left without a stream,
  * with a warning.
  *
  * Called at setup, on each bridge membership change, on each VLAN change of an
