@@ -348,8 +348,9 @@ full chip reset leaves it (see "Setup for these blocks").
        maps, the ingress policer and the egress scheduler and shaper, to what
        a full chip reset leaves: every ACL rule retired with its action
        classes at ``RTL9602C_ACL_ACT_EN_DEFAULT``, ACL lookup and the default
-       permits off on every port; every classifier entry retired and the
-       verdict for unmatched frames (``RTL9602C_CLS_CTRL`` bits 1:0) at 0;
+       permits off on every port; every classifier entry retired, the
+       verdict for unmatched frames (``RTL9602C_CLS_CTRL`` bits 1:0) at 0 and
+       ``RTL9602C_CLS_CTRL_PON_EN`` set (which the reset leaves clear);
        per port the reset's priority-to-queue word (port 0 ``0x00000000``,
        port 1 ``0x00249000``, port 2 ``0x006d2240``, port 3 ``0x00fac688``),
        every queue strict at weight 1 and under no packet rate, the shaper and
@@ -794,6 +795,17 @@ Entries and rules
        discarded every downstream frame at the PON port (reason 239 in the frame
        capture) and the others passed them; upstream frames passed under all
        eight.
+   * - ``RTL9602C_CLS_CTRL_PON_EN`` (bit 3 of ``RTL9602C_CLS_CTRL``) makes the
+       C-tag actions of the entries apply to the frames that cross the PON
+       port. With it clear an entry still matches and gives its stream, but
+       the frame leaves with the tag it came with. Setup sets it, and nothing
+       clears it; the ``cf`` view prints the word (``cls cfg``).
+     - M
+     - With the bit clear, an upstream translation entry without a stream
+       lost all 200 frames of its VID, and with the port's stream all 200
+       arrived untranslated; with the bit set they arrived translated. Frames
+       of other VIDs, and untagged ones, crossed both ways unchanged with the
+       bit set.
    * - A full chip reset leaves ``RTL9602C_CLS_CTRL`` bits 1:0 at 0, which lets
        unmatched frames through, and setup writes 0 there too. The driver
        installs no downstream entries of its own, so it depends on the value
@@ -822,13 +834,12 @@ Entries and rules
    * - Rule word 0: ``RTL9602C_CLS_RULE_CTAG`` (bit 3) is set when the frame
        carries a C-tag and ``RTL9602C_CLS_RULE_VID`` (bits 22:11) holds that
        tag's VLAN ID.
-     - I
-     - The driver depends on it for VLAN translation and per-VLAN stream
-       entries. The rule words read back as written and equal those read from
-       the classifier of an operator's line on which translation worked, but no
-       frame has been matched on a VID by an entry of this driver. A frame with
-       C-VID A entering the SFP port and leaving the far side of an OLT with
-       C-VID B under a translation entry would confirm it.
+     - M
+     - Under a translation of 410 to 1410 on ``sfp`` and of 1410 to 410 on
+       ``pon``, 200 frames of C-VID 410 sent into the SFP port left the far side
+       of the OLT as 1410, and 200 of C-VID 1410 sent from there left the SFP
+       port as 410; frames of the other VID in each direction, and untagged
+       ones, passed unchanged.
    * - Rule word 0: ``RTL9602C_CLS_RULE_STAG`` (bit 4) is set when the frame
        carries an S-tag. Every VLAN entry that the driver writes compares it as
        0 (it is in ``RTL9602C_CLS_RULE_VLAN_CARE``), so an S-tagged frame
@@ -844,15 +855,19 @@ Entries and rules
      - Bridged traffic from the host, a routing test and PPPoE over a routed
        port reach the far side of an OLT.
    * - Action word 1, the C-tag plane: ``RTL9602C_CLS_ACT_CVID_SET`` (bit 18)
-       assigns the C-VID held in ``RTL9602C_CLS_ACT_CVID`` (bits 14:3); the
-       non-zero C-tag action is itself the operation. Action word 0's S-tag
-       plane stays zero for a single-tag translation.
-     - I
-     - The entry reads back as written. Entries with the same C-VID fields and
-       further action bits set translated on an operator's line; the driver
-       leaves those bits clear, and no frame has been seen translated by its
-       entry. The test of the C-tag row above, in both directions, would confirm
-       it.
+       assigns the C-VID held in ``RTL9602C_CLS_ACT_CVID`` (bits 14:3), and
+       ``RTL9602C_CLS_ACT_CTAG`` (bits 2:1) says what becomes of the C-tag:
+       ``RTL9602C_CLS_ACT_CTAG_TAG`` (1) gives the frame a C-tag with the
+       assigned VID and keeps its priority bits, ``RTL9602C_CLS_ACT_CTAG_UNTAG``
+       (2) takes the tag off, and with 0 or 3 the frame keeps its tag and VID,
+       the assignment notwithstanding. A translation writes the assignment with
+       ``RTL9602C_CLS_ACT_CTAG_TAG``. Action word 0's S-tag plane stays zero for
+       a single-tag translation.
+     - M
+     - Frames of C-VID 410 and PCP 5 under an upstream entry assigning 1410,
+       and of 1410 under a downstream entry assigning 410, with each value of
+       the field: 1 delivered 1410/5 and 410/5, 200 of 200; 2 delivered the
+       downstream frames untagged; 0 and 3 delivered them as sent.
    * - ``RTL9602C_CLS_ACT_EN(i)`` (``0x016038`` + 4i): which of entry i's action
        classes apply. The driver writes ``RTL9602C_CLS_ACT_EN_OTHERS`` and
        ``RTL9602C_CLS_ACT_EN_FLOW`` together (``0x3f``) for an upstream entry,
@@ -863,9 +878,9 @@ Entries and rules
        ``RTL9602C_CLS_ACT_EN_OTHERS`` (bits 4:0) are forwarding, DSCP, priority,
        C-tag and S-tag; the value ``0x1f`` that the driver writes for a
        downstream entry applies its C-tag action.
-     - I
-     - The driver depends on it for downstream translation. The downstream half
-       of the test of the C-tag row above would confirm it.
+     - M
+     - The downstream translation of the C-tag row above applies with
+       ``0x1f``.
    * - ``RTL9602C_CLS_ENTRY_TMPL`` (``0x016010`` + 4(i/32), bit i mod 32): the
        template that entry i is matched with. The driver clears the bit,
        selecting template 0, the layout of the rule and action words above.
@@ -915,13 +930,15 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - The top of the usable range, downwards.
    * - Upstream translation of VID A to B
      - Upstream; a C-tag with VID A; no S-tag; any ingress port.
-     - ``RTL9602C_CLS_ACT_CVID_SET`` and ``RTL9602C_CLS_ACT_CVID`` = B, and the
-       stream of the GEM interface that claims B, if any. Classes ``0x3f``.
+     - ``RTL9602C_CLS_ACT_CVID_SET`` and ``RTL9602C_CLS_ACT_CVID`` = B with
+       ``RTL9602C_CLS_ACT_CTAG_TAG``, and the stream of the GEM interface that
+       claims B, or else the one the rule's port's stream entry gives. Classes
+       ``0x3f``.
      - The bottom of the usable range, upwards.
    * - Downstream translation of VID A to B
      - Downstream; a C-tag with VID A; no S-tag.
-     - ``RTL9602C_CLS_ACT_CVID_SET`` and ``RTL9602C_CLS_ACT_CVID`` = B. Classes
-       ``0x1f``.
+     - ``RTL9602C_CLS_ACT_CVID_SET`` and ``RTL9602C_CLS_ACT_CVID`` = B with
+       ``RTL9602C_CLS_ACT_CTAG_TAG``. Classes ``0x1f``.
      - The bottom of the usable range, upwards.
 
 .. list-table::
@@ -958,13 +975,16 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        the table above, and the entry taken from the bottom of the usable range.
        What the driver refuses is listed on the *bridging* page. An upstream
        translation also gives its frames a stream: the flow of the upstream GEM
-       interface that is a member of the assigned VLAN B, if any.
-     - M, I
-     - M: the entry read back exactly as the driver composed it; ``vlan_prio``
-       in the match was refused; ``tc filter del`` zeroed the ones plane. I:
-       that the entry carries the stream is not verified; it depends on the
-       C-tag and C-VID rows above, and the upstream translation test on the
-       *bridging* page settles it with them.
+       interface that is a member of the assigned VLAN B, or else the flow
+       that the stream entry of the rule's port gives, which the frame would
+       have had untranslated. Each change of the stream entries writes the
+       upstream translations again with the stream that now applies.
+     - M
+     - The entry read back exactly as the driver composed it; ``vlan_prio`` in
+       the match was refused; ``tc filter del`` zeroed the ones plane. With
+       the GEM interfaces bridged and no VLAN claimed, an upstream translation
+       without a stream lost all 200 frames of its VID, and with the port's
+       stream delivered them translated (see the C-tag rows above).
    * - The upstream and downstream directions are the only ones the classifier
        sees: a frame from the SFP port to the CPU crosses neither, so a
        translation cannot be observed on it.
@@ -2410,23 +2430,10 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - The C-tag bit and the VID field of a classifier rule are what their names
-       say ("Entries and rules"). Every VLAN translation and every per-VLAN
-       stream entry rests on them.
-     - A frame with C-VID A entering the SFP port and leaving the far side of an
-       OLT as C-VID B under a translation entry, and the reverse for an entry on
-       ``pon``: the test of the first assumption on the *bridging* page settles
-       this and the next three with it.
    * - The S-tag bit of a classifier rule is the S-tag flag, so the VLAN entries
-       that compare it as 0 match ordinary frames and refuse S-tagged ones
-       ("Entries and rules").
-     - The same test, and an S-tagged frame through a translation entry.
-   * - The C-VID assign action assigns the VID of its field ("Entries and
-       rules").
-     - The same test, in both directions.
-   * - The action classes are what they are taken to be, ``0x1f`` applying the
-       C-tag action of a downstream entry ("Entries and rules").
-     - The downstream half of the same test.
+       that compare it as 0, which match single-tagged frames, refuse S-tagged
+       ones ("Entries and rules").
+     - An S-tagged frame through a translation entry.
    * - Per-VLAN stream entries work for more than one upstream GEM interface,
        and an upstream translation carries the stream of the GEM interface that
        claims its VLAN ("What the driver writes").

@@ -278,7 +278,8 @@ static int rtl9602c_cf_program(struct rtl9602c_priv *p, unsigned int idx,
  * composed; that it translates frames is not verified.
  */
 static int rtl9602c_cf_write(struct rtl9602c_priv *p, unsigned int idx,
-			     bool downstream, u16 match_vid, u16 assign_vid)
+			     bool downstream, u16 match_vid, u16 assign_vid,
+			     int port)
 {
 	struct rtl9602c_cf_entry e = {
 		/* A C-tag with this VID, and no S-tag. */
@@ -287,28 +288,36 @@ static int rtl9602c_cf_write(struct rtl9602c_priv *p, unsigned int idx,
 		.care		= RTL9602C_CLS_RULE_VLAN_CARE,
 		.downstream	= downstream,
 		/*
-		 * Word 1 assigns the C-VID; word 0 holds the S-tag action, none
-		 * here, and the stream.
+		 * Word 1 assigns the C-VID and gives the frame a C-tag with
+		 * it, keeping the priority bits; word 0 holds the S-tag
+		 * action, none here, and the stream.
 		 */
 		.act		= { 0,
 				    RTL9602C_CLS_ACT_CVID_SET |
-				    FIELD_PREP(RTL9602C_CLS_ACT_CVID, assign_vid),
+				    FIELD_PREP(RTL9602C_CLS_ACT_CVID, assign_vid) |
+				    FIELD_PREP(RTL9602C_CLS_ACT_CTAG,
+					       RTL9602C_CLS_ACT_CTAG_TAG),
 				    0 },
 	};
+	int flow = -1;
 
 	/*
 	 * Of several matching entries the lowest applies, and translations sit
 	 * below the stream entries, so an upstream translation names its stream
 	 * itself: the GEM flow of the upstream GEM interface that claims VLAN
-	 * @assign_vid, if any. Not verified.
+	 * @assign_vid, if any, and otherwise the flow the port's own stream
+	 * entry gives, which the frame would have taken untranslated. Without
+	 * a stream the frame reaches the PON MAC without a GEM port and is
+	 * lost (measured on this board).
 	 */
 	if (!downstream && assign_vid < VLAN_N_VID &&
-	    p->gem_vid_flow[assign_vid]) {
-		unsigned int flow = p->gem_vid_flow[assign_vid] - 1u;
-
+	    p->gem_vid_flow[assign_vid])
+		flow = p->gem_vid_flow[assign_vid] - 1u;
+	else if (!downstream && port >= 0 && port < RTL9602C_NUM_PORTS)
+		flow = p->cf_sid_flow[port];
+	if (flow >= 0)
 		e.act[0] |= RTL9602C_CLS_ACT_FLOW_SET |
 			    FIELD_PREP(RTL9602C_CLS_ACT_FLOW, flow);
-	}
 
 	return rtl9602c_cf_program(p, idx, &e);
 }
@@ -398,8 +407,10 @@ static void rtl9602c_cf_sid_release(struct rtl9602c_priv *p)
 	}
 	bitmap_zero(p->cf_sid_owned, RTL9602C_CLS_ENTRIES);
 
-	for (unsigned int i = 0; i < RTL9602C_NUM_PORTS; i++)
+	for (unsigned int i = 0; i < RTL9602C_NUM_PORTS; i++) {
 		p->cf_sid[i] = -1;
+		p->cf_sid_flow[i] = -1;
+	}
 }
 
 /**
@@ -452,6 +463,7 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 				continue;
 			}
 			p->cf_sid[port] = idx;
+			p->cf_sid_flow[port] = p->l34_us_flow;
 			if (rtl9602c_cf_write_sid(p, idx, port, p->l34_us_flow))
 				pr_warn("classifier entry %d was not written\n",
 					idx);
@@ -473,6 +485,7 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 				continue;
 			}
 			p->cf_sid[port] = idx;
+			p->cf_sid_flow[port] = p->pon_br_us_flow;
 			if (rtl9602c_cf_write_sid(p, idx, port,
 						  p->pon_br_us_flow))
 				pr_warn("classifier entry %d was not written\n",
@@ -508,6 +521,21 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 				pr_debug("port %d VLAN %u upstream: stream %u, entry %d\n",
 					 port, vid, flow, idx);
 		}
+	}
+
+	/*
+	 * An upstream translation names its stream itself (see
+	 * rtl9602c_cf_write()), which the streams just computed may have
+	 * changed: write each one again.
+	 */
+	for_each_set_bit(vid, p->cf_used, p->cf_entries) {
+		const struct rtl9602c_cf_xlate *x = &p->cf_xlate[vid];
+
+		if (!p->cf_cookie[vid] || rtl9602c_port_is_downstream(x->port))
+			continue;
+		if (rtl9602c_cf_write(p, vid, false, x->match_vid,
+				      x->assign_vid, x->port))
+			pr_warn("classifier entry %u was not written\n", vid);
 	}
 }
 
@@ -906,7 +934,9 @@ void rtl9602c_filter_qos_reset(struct rtl9602c_priv *p)
 
 	for (i = 0; i < RTL9602C_CLS_ENTRIES; i++)
 		rtl9602c_cf_invalidate(p, i);
-	rtl9602c_rmw(p, RTL9602C_CLS_CTRL, GENMASK(1, 0), 0);
+	rtl9602c_rmw(p, RTL9602C_CLS_CTRL,
+		     GENMASK(1, 0) | RTL9602C_CLS_CTRL_PON_EN,
+		     RTL9602C_CLS_CTRL_PON_EN);
 
 	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
 		rtl9602c_w(p, RTL9602C_QUEUE_RATE_EN(port), 0);
@@ -2085,13 +2115,18 @@ static int rtl9602c_flower_replace(struct rtl9602c_priv *p, int port,
 	}
 
 	err = rtl9602c_cf_write(p, idx, rtl9602c_port_is_downstream(port),
-				vlan.key->vlan_id, act->vlan.vid);
+				vlan.key->vlan_id, act->vlan.vid, port);
 	if (err) {
 		NL_SET_ERR_MSG_MOD(extack, "the classifier did not answer");
 		return err;
 	}
 
 	p->cf_cookie[idx] = cls->cookie;
+	p->cf_xlate[idx] = (struct rtl9602c_cf_xlate){
+		.match_vid = vlan.key->vlan_id,
+		.assign_vid = act->vlan.vid,
+		.port = port,
+	};
 	set_bit(idx, p->cf_used);
 	return 0;
 }

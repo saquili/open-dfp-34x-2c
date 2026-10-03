@@ -1736,10 +1736,12 @@ An example of a translation from VID 410 to VID 1410::
        above. It arrives as ``FLOW_ACTION_VLAN_MANGLE`` and becomes one
        classifier entry: match a C-tag with that VID, the S-tag's absence and
        the direction; assign the new C-VID (``RTL9602C_CLS_ACT_CVID_SET`` with
-       ``RTL9602C_CLS_ACT_CVID``), with no S-tag operation.
+       ``RTL9602C_CLS_ACT_CVID``) and tag the frame with it
+       (``RTL9602C_CLS_ACT_CTAG_TAG``), with no S-tag operation. The tag's
+       priority bits stay as they came.
      - M
      - The rule read back from the classifier's table: action word 1 =
-       ``0x00042c10`` (C-VID assign, 1410), action word 0 = 0, rule word 0 =
+       ``0x00042c12`` (C-VID assign, 1410, tag), rule word 0 =
        ``0x000cd008`` on ``sfp`` (C-tag present, VID 410 at bit 11) with bit 31
        also set for the same rule on ``pon``, rule word 1 = the valid bit;
        ``tc filter del`` zeroed the rule. Without ``skip_sw``, tc installs a
@@ -1761,16 +1763,23 @@ An example of a translation from VID 410 to VID 1410::
        acts on downstream frames, on any other port on upstream frames. The
        direction bit is compared in every entry, so an upstream translation does
        not also rewrite downstream frames that carry the same VID.
-     - I
-     - Part of the check of the translation itself (next row).
+     - M
+     - In the test of the next row, with both rules in place, frames of 1410
+       sent upstream and of 410 sent downstream crossed unchanged: neither rule
+       acted in the other direction.
    * - The translation itself: with the entry as the first row writes it, a
        frame with C-VID 410 entering the SFP port and leaving by the PON port
-       leaves as 1410, and the reverse for a rule on ``pon``.
-     - I
-     - No test has shown it. VID 410 sent into the SFP port from the host and
-       captured as 1410 at the uplink of an OLT that is a transparent bridge,
-       and the reverse, would settle it. Load-bearing: it is the service that
-       the stick exists for.
+       leaves as 1410, and the reverse for a rule on ``pon``. It needs
+       ``RTL9602C_CLS_CTRL_PON_EN``, which setup sets (see the *acl-qos*
+       page).
+     - M
+     - Through an OLT that is a transparent bridge, 200 frames of C-VID 410
+       and PCP 5 sent into the SFP port from the host arrived at the OLT's
+       uplink as 1410 with PCP 5, and 200 of 1410 sent from there arrived at
+       the host as 410; frames of 1410 upstream, of 410 downstream and untagged
+       ones crossed unchanged, and with the rules deleted every frame crossed
+       as sent. Before the driver set the tag action and the PON enable, the
+       same entries changed nothing.
    * - Every translation, and every stream entry that matches a VID (see
        "Bridging the GEM ports"), requires the frame to carry no S-tag:
        ``RTL9602C_CLS_RULE_STAG`` is compared with value 0. An S-tagged frame
@@ -1795,11 +1804,16 @@ An example of a translation from VID 410 to VID 1410::
        upstream GEM interface claims the VID that the rule assigns (see
        "Bridging the GEM ports"), the entry also sets
        ``RTL9602C_CLS_ACT_FLOW_SET`` with that interface's flow in
-       ``RTL9602C_CLS_ACT_FLOW``; otherwise the translated frame would reach the
-       PON MAC without a GEM port.
-     - I
-     - Part of the check of the translation itself, with the translated frame's
-       GEM port seen at the OLT.
+       ``RTL9602C_CLS_ACT_FLOW``; otherwise it sets the flow that its port's
+       stream entry gives, which the frame would have had untranslated. A
+       translated frame without a stream reaches the PON MAC without a GEM port
+       and is lost. The upstream translations are written again whenever the
+       stream entries change.
+     - M, I
+     - M: with no VLAN claimed, an entry without a stream lost all 200 frames
+       of its VID, and with the port's stream they arrived translated. I: the
+       flow of a GEM interface that claims the assigned VID, which needs two
+       upstream GEM ports.
 
 Bridging the GEM ports
 ======================
@@ -2084,16 +2098,6 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - A frame is translated by the classifier entry that the driver writes, in
-       the right direction and in the right GEM port: a frame with C-VID 410
-       entering the SFP port leaves the PON port as 1410, and the reverse for a
-       rule on ``pon``, the direction being the port of the rule and the entry
-       carrying the stream of the upstream GEM interface that claims the
-       assigned VID ("VLAN translation"). This is the service that the stick
-       exists for.
-     - VID 410 sent into the SFP port from the host and captured as 1410 at the
-       uplink of an OLT that is a transparent bridge, with the translated
-       frame's GEM port seen there, and the reverse.
    * - The spanning-tree state values 0, 1 and 2 are disabled, blocking and
        learning ("Spanning-tree state").
      - ``bridge link set dev sfp state`` blocking, learning and disabled in
@@ -2115,9 +2119,11 @@ Assumptions the driver depends on
      - An exemption test as for ``_00``, for each of ``_01``, ``_02``, ``_03``
        and ``_0E``.
    * - Per-VLAN upstream streams work for more than one GEM interface in a
-       bridge ("Bridging the GEM ports").
+       bridge ("Bridging the GEM ports"), and an upstream translation carries
+       the stream of the GEM interface that claims the VID it assigns ("VLAN
+       translation").
      - Two upstream GEM interfaces in two VLANs, each VLAN's frames arriving in
-       its own GEM port at the OLT.
+       its own GEM port at the OLT, translated and untranslated.
 
 Questions the code does not depend on
 -------------------------------------

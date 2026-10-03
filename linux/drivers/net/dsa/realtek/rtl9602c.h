@@ -1802,6 +1802,13 @@ struct rtl9602c_field {
 #define RTL9602C_CLS_CTRL_LAYOUT1_START	GENMASK(12, 5)
 
 /*
+ * The classifier's actions on the C-tag apply to the PON port's frames only
+ * with PON_EN set; without it an entry still assigns a stream, but a frame
+ * leaves with its tag as it came (both measured on this board).
+ */
+#define RTL9602C_CLS_CTRL_PON_EN		BIT(3)
+
+/*
  * Rule word 0: direction, tags, VID and ingress port; that CTAG, STAG and
  * VID match frames as named is not verified.
  */
@@ -1820,6 +1827,16 @@ struct rtl9602c_field {
 /* Action word 1: assign the C-VID; not verified. */
 #define RTL9602C_CLS_ACT_CVID_SET	BIT(18)
 #define RTL9602C_CLS_ACT_CVID		GENMASK(14, 3)
+
+/*
+ * Action word 1: what becomes of the C-tag. TAG gives the frame a C-tag with
+ * the VID that CVID assigns and keeps its priority bits, UNTAG takes the
+ * C-tag off, and with 0 or 3 the frame leaves with the tag it came with, its
+ * VID unchanged even when CVID assigns one (all measured on this board).
+ */
+#define RTL9602C_CLS_ACT_CTAG		GENMASK(2, 1)
+#define RTL9602C_CLS_ACT_CTAG_TAG	1
+#define RTL9602C_CLS_ACT_CTAG_UNTAG	2
 
 /* Action word 0: assign the stream, the GEM flow. */
 #define RTL9602C_CLS_ACT_FLOW_SET	BIT(23)
@@ -2600,6 +2617,11 @@ struct rtl9602c_priv {
 
 	/** @cf_sid: each port's port-keyed stream entry, -1 for none */
 	s16 cf_sid[RTL9602C_NUM_PORTS];
+	/**
+	 * @cf_sid_flow: the flow each port's port-keyed stream entry gives,
+	 * -1 for none
+	 */
+	s16 cf_sid_flow[RTL9602C_NUM_PORTS];
 
 	/** @mib_lock: protects @mib_total and @mib_last */
 	spinlock_t mib_lock;
@@ -2631,6 +2653,15 @@ struct rtl9602c_priv {
 	 * entry
 	 */
 	unsigned long cf_cookie[RTL9602C_CLS_ENTRIES];
+	/**
+	 * @cf_xlate: each translation entry's port and VIDs, so that its
+	 * stream can be chosen again when the streams change
+	 */
+	struct rtl9602c_cf_xlate {
+		u16 match_vid;
+		u16 assign_vid;
+		u8 port;
+	} cf_xlate[RTL9602C_CLS_ENTRIES];
 
 	/**
 	 * @cf_entries: the classifier entries usable with the driver's layout
