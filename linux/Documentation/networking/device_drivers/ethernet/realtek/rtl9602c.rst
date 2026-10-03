@@ -1218,6 +1218,29 @@ from a data frame (see "The OMCI channel").
        the buffer, the frame without its FCS.
      - T
      - Every transmit.
+   * - The engine stops on a long frame: it keeps the descriptor its own, and
+       nothing more leaves until the conduit is closed and opened again. One
+       at a time it sends frames of up to 1820 bytes, FCS not counted; back to
+       back, frames of 1751 bytes and more stop it, and near that length it
+       may stop on a shorter one.
+     - M
+     - Echo replies, one each half second: 1820 bytes went out every time,
+       1821 and more stopped the engine (later small pings unanswered, the
+       counters still). TCP streams of 4 MB from the board, at each MTU: whole
+       at 1500, 1600, 1700, 1725 and 1732 (frames of 1750 bytes), stopped
+       after the first segments at 1733 (1751) and above; 1731 passed once
+       and stopped once.
+   * - The netdev's largest MTU is ``RTL9602C_ETH_MAX_MTU``, 1508: room for
+       PPPoE's 8 bytes of headers around a 1500-byte packet (RFC 4638), well
+       below the frames that stop the engine. ``rtl9602c_eth_start_xmit()``
+       and ``rtl9602c_conduit_ctrl_xmit()`` drop a frame longer than
+       ``RTL9602C_NIC_TX_MAX``, the longest that the MTU lets the stack make
+       with the header and two VLAN tags (1530 bytes), counting it in
+       ``tx_dropped`` for a data frame.
+     - M
+     - ``ip link set sfp mtu 1509`` failed with ``-ERANGE`` and 1508 passed;
+       three TCP streams of 4 MB from the board at an MTU of 1508 went whole;
+       a PPPoE session ran over a GEM interface of MTU 1508.
    * - Word 0: ``RTL9602C_NIC_TXD_ADD_FCS`` (bit 23) makes the engine append the
        4-byte FCS. Without it the switch discards every frame from the CPU as
        a CRC error.
@@ -1333,8 +1356,9 @@ the buffer (``RTL9602C_NIC_RX_DATA_OFFSET``), and the length in word 0 counts
 the frame with its FCS but not those 2 bytes. Words 2 and 3 are written only
 for a frame the switch attached a CPU tag to. The driver reads them once, after
 the engine has released the descriptor, and clears them when it gives the
-descriptor back. A frame marked as an OMCI message has no Ethernet header (see
-"The OMCI channel").
+descriptor back. A frame longer than its buffer comes in several descriptors,
+and the driver copies the pieces into one buffer. A frame marked as an OMCI
+message has no Ethernet header (see "The OMCI channel").
 
 .. list-table::
    :header-rows: 1
@@ -1354,13 +1378,35 @@ descriptor back. A frame marked as an OMCI message has no Ethernet header (see
        checking the bytes past it would settle it.
    * - Word 0: ``RTL9602C_NIC_RXD_LEN`` (bits 11:0) is the received length in
        bytes including the 4-byte FCS (``RTL9602C_NIC_RX_FCS_LEN``); the driver
-       removes the FCS by length. It drops as a length error a frame shorter
-       than 20 bytes by that count (``RTL9602C_NIC_RX_DATA_OFFSET`` +
-       ``ETH_HLEN`` + ``RTL9602C_NIC_RX_FCS_LEN``) or longer than 1536, so the
-       CPU receives no frame longer than 1536 bytes with its FCS.
+       removes the FCS by length. It drops as a length error a frame in one
+       descriptor shorter than 20 bytes by that count
+       (``RTL9602C_NIC_RX_DATA_OFFSET`` + ``ETH_HLEN`` +
+       ``RTL9602C_NIC_RX_FCS_LEN``) or longer than 1536.
      - T
      - Received frames reach the stack at the length that was sent: a 60-byte
        PTP frame arrives as 60 bytes (also measured on the DFP-34X-2C3).
+   * - A frame longer than its buffer arrives in several descriptors: the first
+       with ``RTL9602C_NIC_DESC_FIRST_SEG`` alone and 1534 bytes, the frame from
+       the 2-byte offset; each middle one with neither bit and 1536 bytes, from
+       the start of its buffer; the last with ``RTL9602C_NIC_DESC_LAST_SEG``
+       alone and the rest, FCS included. Only the first carries the CPU tag
+       in words 2 and 3.
+     - M
+     - Frames of 1600, 2000, 3000, 4000, 6000 and 9000 bytes sent to the CPU
+       arrived as 1534 + 70, 1534 + 470, 1534 + 1470, 1534 + 1536 + 934 bytes
+       and so on, adding up to each frame and its FCS; the last piece's words
+       2 and 3 did not hold the frame's CPU tag.
+   * - ``rtl9602c_eth_rx_piece()`` copies the pieces of such a frame into one
+       buffer of the MTU plus ``RTL9602C_RX_OVERHEAD`` (the header, two VLAN
+       tags, a PTP timestamp tag and the FCS), every descriptor keeping its own
+       buffer, and hands the frame on with word 0 and the CPU tag of its first
+       piece. It drops and counts a frame with an error in any piece, one
+       longer than that buffer, a piece without its first, and a frame whose
+       last piece never came before the next first one.
+     - M
+     - Echo requests over the management VLAN, whose frames arrived in two
+       pieces at an MTU of 1798, were answered with their data intact (the
+       sender checks it) up to 1798 bytes of IP.
    * - The engine writes a received frame starting 2 bytes into the buffer
        (``RTL9602C_NIC_RX_DATA_OFFSET``); the 2 bytes are not in the length.
      - T
@@ -1876,8 +1922,9 @@ load and locking"). The two sides are read with::
    * - ``rx_fifo_errors``
      - Those with ``RTL9602C_NIC_RXD_DMA_ERR`` set.
    * - ``rx_length_errors``
-     - A frame shorter than 20 bytes or longer than 1536 by the length in word
-       0.
+     - A frame in one descriptor shorter than 20 bytes or longer than 1536 by
+       the length in word 0; a frame in pieces longer than its buffer or cut
+       short, and a piece without its first.
    * - ``rx_missed_errors``
      - Frames the engine dropped for want of a receive descriptor: on every
        poll the 16-bit difference of ``RTL9602C_NIC_RX_NO_DESC_CNT`` since the
@@ -1887,7 +1934,8 @@ load and locking"). The two sides are read with::
        data frame or an OMCI message, not the transmit test. The bytes are the
        frame's length, padding included, without the FCS.
    * - ``tx_dropped``
-     - A data frame that could not be padded or mapped. The tag driver also
+     - A data frame that could not be padded or mapped, or that is longer than
+       ``RTL9602C_NIC_TX_MAX``. The tag driver also
        counts here the frames it drops on the ``pon`` interface, in that
        interface's statistics.
    * - ``tx_errors``
@@ -2266,11 +2314,11 @@ Known limitations
   priority 7 on its way to the CPU, through its priority selection (``dcb
   apptrust`` with the PCP or DSCP maps, or a port's default priority), shares
   the control ring with them.
-- The conduit receives no frame longer than 1536 bytes including the FCS, and it
-  keeps the Ethernet default of 1500 for its ``max_mtu``. DSA limits the largest
-  MTU of the user ports by the conduit's maximum, so a larger MTU on a user port
-  fails with ``-ERANGE``. The limit the switch itself applies is described in
-  Documentation/networking/dsa/rtl9602c.rst.
+- The largest MTU is 1508, room for PPPoE's 1500-byte packets: the transmit
+  engine stops on long frames (see "Transmit"), so jumbo frames are not offered.
+  DSA limits the largest MTU of the user ports by the conduit's, so a larger
+  MTU on a user port fails with ``-ERANGE``. The limit that the switch itself
+  applies is described in Documentation/networking/dsa/rtl9602c.rst.
 - A frame marked as OMCI that no handler takes is dropped and counted in
   ``rx_dropped``: when no OMCI handler is attached, when the frame carries no
   CPU tag, and when the handler declines it (the switch driver's handler

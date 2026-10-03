@@ -25,6 +25,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/debugfs.h>
 #include <linux/etherdevice.h>
+#include <linux/if_vlan.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
@@ -257,6 +258,8 @@
 #define RTL9602C_NIC_DESC_RING_END	BIT(30)
 #define RTL9602C_NIC_DESC_FIRST_SEG	BIT(29)
 #define RTL9602C_NIC_DESC_LAST_SEG	BIT(28)
+#define RTL9602C_NIC_DESC_SEGS \
+	(RTL9602C_NIC_DESC_FIRST_SEG | RTL9602C_NIC_DESC_LAST_SEG)
 #define RTL9602C_NIC_TXD_LEN	GENMASK(16, 0)
 
 /*
@@ -389,6 +392,23 @@ static_assert(RTL9602C_RX_RING <= 256);
  */
 #define RTL9602C_RX_SLACK	64
 #define RTL9602C_RX_ALLOC	(RTL9602C_RX_BUF + RTL9602C_RX_SLACK)
+/*
+ * A received frame is longer than the MTU by its header, two VLAN tags, a PTP
+ * timestamp tag and the FCS at most.
+ */
+#define RTL9602C_RX_OVERHEAD	(ETH_HLEN + 2 * VLAN_HLEN + RTL9602C_PTP_TAG_LEN + \
+				 RTL9602C_NIC_RX_FCS_LEN)
+/*
+ * The largest MTU leaves room for PPPoE's 8 bytes of headers around a 1500-byte
+ * packet (RFC 4638), and no more: the transmit engine stops on long frames,
+ * keeping the descriptor its own, and nothing more leaves until the conduit is
+ * restarted. One at a time it sent frames of up to 1820 bytes, FCS not
+ * counted; back to back, frames of 1751 bytes and more stopped it (measured).
+ * RTL9602C_NIC_TX_MAX is the longest frame that the MTU lets the stack make,
+ * with the header and two VLAN tags; the driver drops a longer one.
+ */
+#define RTL9602C_ETH_MAX_MTU	(ETH_DATA_LEN + 8)
+#define RTL9602C_NIC_TX_MAX	(RTL9602C_ETH_MAX_MTU + ETH_HLEN + 2 * VLAN_HLEN)
 
 /*
  * Descriptors are big-endian words in coherent memory, which is uncached on
@@ -428,6 +448,15 @@ struct rtl9602c_rx_ring {
 	unsigned int len;
 	unsigned int tail;
 	u32 frames;
+	/*
+	 * A frame arriving in pieces (rtl9602c_eth_rx_piece()): the buffer it
+	 * is gathered in, NULL if none could be had, and word 0 and the CPU-tag
+	 * words of its first descriptor.
+	 */
+	struct sk_buff *head;
+	bool gathering;
+	bool head_bad;
+	u32 head_sts, head_w2, head_w3;
 };
 
 struct rtl9602c_eth {
@@ -577,6 +606,9 @@ static void rtl9602c_eth_free_rings(struct rtl9602c_eth *priv)
 			dev_kfree_skb(ring->skb[i]);
 			ring->skb[i] = NULL;
 		}
+		dev_kfree_skb(ring->head);
+		ring->head = NULL;
+		ring->gathering = false;
 	}
 
 	for (i = 0; i < RTL9602C_TX_RING; i++) {
@@ -1033,9 +1065,249 @@ static void rtl9602c_eth_rx_tail(struct rtl9602c_eth *priv, unsigned int r,
 }
 
 /*
+ * Hand on frame @skb of ring @r, the engine's offset and the FCS taken off,
+ * with word 0 (@sts) and the CPU-tag words (@w2, @w3) of its first
+ * descriptor.
+ */
+static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
+				  struct sk_buff *skb, u32 sts, u32 w2, u32 w3)
+{
+	struct rtl9602c_eth *priv = netdev_priv(dev);
+	unsigned int why = FIELD_GET(RTL9602C_NIC_RXD_TRAP_REASON, w3);
+
+	/* An OMCI message goes to its handler, or nowhere. */
+	if (sts & RTL9602C_NIC_RXD_OMCI) {
+		if (!rtl9602c_eth_rx_ctrl(dev, skb, r, sts, w2,
+					  w3)) {
+			dev->stats.rx_dropped++;
+			dev_kfree_skb_any(skb);
+		}
+		return;
+	}
+
+	/*
+	 * With DSA, a frame with a CPU tag is counted under its
+	 * trap reason and offered to the flow handler. If the
+	 * handler leaves it, the frame gets its source port's
+	 * dst, on which DSA delivers it to the user port
+	 * without calling the tagger. A frame without a CPU tag
+	 * gets no dst, and the tagger drops it, its source port
+	 * being unknown.
+	 */
+	if (netdev_uses_dsa(dev) && (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID)) {
+		unsigned int port =
+			FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3);
+		rtl9602c_flow_rx_t flow_rx;
+		struct metadata_dst *md = NULL;
+
+		priv->rx_reason[why]++;
+
+		/*
+		 * Acquire, paired with the release in
+		 * rtl9602c_conduit_flow_attach(): the context,
+		 * read below with READ_ONCE against the
+		 * WRITE_ONCE there, is then the one stored
+		 * before this handler was published.
+		 */
+		flow_rx = smp_load_acquire(&priv->flow_rx);
+
+		if (flow_rx &&
+		    flow_rx(READ_ONCE(priv->flow_ctx), skb, port,
+			    FIELD_GET(RTL9602C_NIC_RXD_FLOW, w2))) {
+			dev->stats.rx_packets++;
+			return;
+		}
+
+		/*
+		 * A port with no dst leaves the frame to the
+		 * tagger, which drops it.
+		 */
+		if (port < RTL9602C_SW_PORTS)
+			md = priv->port_meta[port];
+		if (md)
+			skb_dst_set_noref(skb, &md->dst);
+	}
+
+	/*
+	 * Take off the timestamp tag of a PTP message (see
+	 * RTL9602C_ETH_P_REALTEK). Its time, the low 16 bits of
+	 * the PTP clock's seconds and the nanoseconds, becomes
+	 * the frame's hardware timestamp; the switch driver
+	 * fills in the upper seconds from its clock. The reason
+	 * byte, 240 for a message sent to the CPU and 241 for a
+	 * copy made by the ingress mirror action (measured on
+	 * this board), is logged once per value and otherwise
+	 * not interpreted. The addresses then move up over the
+	 * tag, so the frame reaches the stack as it was sent: a
+	 * PTP message over Ethernet is recognised by its own
+	 * EtherType, 0x88F7 (IEEE 1588-2008 Annex F), which
+	 * neither DSA nor a PTP stack would find behind the
+	 * tag.
+	 *
+	 * A frame longer than the tag with 0x8899 at offset 12
+	 * and the protocol byte 4 at offset 14, as in every tag
+	 * seen on this board, is taken to carry one, but only
+	 * if the switch sent it up for one of the two PTP trap
+	 * reasons: a host can send such a frame itself, and the
+	 * switch then floods it to the CPU with the reason of
+	 * an ordinary frame (measured). Other frames use that
+	 * EtherType with other protocol bytes, among them the
+	 * switch's own loop-detection probes, and go up as they
+	 * came.
+	 */
+	if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
+	    (why == RTL9602C_RX_REASON_PTP ||
+	     why == RTL9602C_RX_REASON_PTP_MIRROR) &&
+	    skb->len > RTL9602C_PTP_TAG_LEN &&
+	    get_unaligned_be16(skb->data + 2 * ETH_ALEN) ==
+	    RTL9602C_ETH_P_REALTEK &&
+	    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] ==
+	    RTL9602C_PTP_TAG_PROTO_PTP) {
+		u32 sec = get_unaligned_be16(skb->data +
+					     RTL9602C_PTP_TAG_SEC_OFFSET);
+		u32 nsec = get_unaligned_be32(skb->data +
+					      RTL9602C_PTP_TAG_NSEC_OFFSET);
+		u8 reason = skb->data[RTL9602C_PTP_TAG_REASON_OFFSET];
+
+		if (!test_and_set_bit(reason,
+				      priv->ptp_reason_seen))
+			eth_info(dev,
+				 "ptp tag reason %u, protocol %u: %16phN\n",
+				 reason,
+				 skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET],
+				 skb->data + 2 * ETH_ALEN);
+
+		skb_hwtstamps(skb)->hwtstamp =
+			ktime_set(sec, nsec);
+		memmove(skb->data + RTL9602C_PTP_TAG_LEN,
+			skb->data, 2 * ETH_ALEN);
+		skb_pull(skb, RTL9602C_PTP_TAG_LEN);
+	}
+
+	skb->protocol = eth_type_trans(skb, dev);
+
+	/*
+	 * Log the first RTL9602C_RX_LOG frames, and the first
+	 * frame from each source port. A frame without a CPU
+	 * tag has no source port: word 3 stays as the driver
+	 * cleared it, and the port printed is 0.
+	 */
+	{
+		unsigned int src = FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3);
+		bool newport = (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
+			       !(priv->rx_ports_seen & BIT(src));
+
+		if (newport)
+			priv->rx_ports_seen |= BIT(src);
+		if (priv->rx_logged < RTL9602C_RX_LOG || newport) {
+			priv->rx_logged++;
+			eth_info(dev,
+				 "<eth rx> port %lu receives on the %s ring: %u bytes from %pM, proto 0x%04x, %s; descriptor %08x %08x %08x\n",
+				 FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3),
+				 rtl9602c_rx_ring_name[r], skb->len,
+				 eth_hdr(skb)->h_source,
+				 ntohs(skb->protocol),
+				 (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) ?
+				 "cpu-tagged" :
+				 "NO CPU TAG, so the source port is a guess",
+				 sts, w2, w3);
+		}
+	}
+
+	dev->stats.rx_packets++;
+	dev->stats.rx_bytes += skb->len;
+	netif_receive_skb(skb);
+}
+
+/*
+ * A frame longer than its buffer comes in several descriptors, the first with
+ * RTL9602C_NIC_DESC_FIRST_SEG and the last with RTL9602C_NIC_DESC_LAST_SEG,
+ * each holding the bytes in its own buffer: the first from the engine's
+ * 2-byte offset, the others from the start of their buffers, the last with
+ * the FCS; only the first carries the CPU tag (measured). The pieces are
+ * copied into one buffer, sized for the longest frame that the MTU lets
+ * through, and every descriptor keeps its own buffer. A frame with an error
+ * in any piece, one longer than that buffer, and a piece whose first piece
+ * never came are dropped and counted.
+ */
+static void rtl9602c_eth_rx_piece(struct net_device *dev, unsigned int r,
+				  unsigned int i, u32 sts, u32 w2, u32 w3,
+				  unsigned int len)
+{
+	struct rtl9602c_eth *priv = netdev_priv(dev);
+	struct rtl9602c_rx_ring *ring = &priv->rx[r];
+	unsigned int off = 0;
+	struct sk_buff *head;
+
+	if (sts & RTL9602C_NIC_DESC_FIRST_SEG) {
+		/* A frame whose last piece never came is lost. */
+		if (ring->gathering) {
+			dev->stats.rx_length_errors++;
+			dev_kfree_skb_any(ring->head);
+		}
+		ring->gathering = true;
+		ring->head_bad = false;
+		ring->head_sts = sts;
+		ring->head_w2 = w2;
+		ring->head_w3 = w3;
+		ring->head = netdev_alloc_skb_ip_align(dev, dev->mtu +
+						       RTL9602C_RX_OVERHEAD);
+		if (!ring->head)
+			dev->stats.rx_dropped++;
+		off = RTL9602C_NIC_RX_DATA_OFFSET;
+	} else if (!ring->gathering) {
+		dev->stats.rx_length_errors++;
+		return;
+	}
+
+	head = ring->head;
+	if ((sts & (RTL9602C_NIC_RXD_FCS_ERR | RTL9602C_NIC_RXD_DMA_ERR)) &&
+	    !ring->head_bad) {
+		ring->head_bad = true;
+		dev->stats.rx_errors++;
+		if (sts & RTL9602C_NIC_RXD_FCS_ERR)
+			dev->stats.rx_crc_errors++;
+		if (sts & RTL9602C_NIC_RXD_DMA_ERR)
+			dev->stats.rx_fifo_errors++;
+	}
+
+	if (head && !ring->head_bad) {
+		if (len > skb_tailroom(head)) {
+			ring->head_bad = true;
+			dev->stats.rx_length_errors++;
+		} else {
+			dma_sync_single_for_cpu(priv->dev, ring->buf[i],
+						off + len, DMA_FROM_DEVICE);
+			skb_put_data(head, ring->skb[i]->data + off, len);
+			dma_sync_single_for_device(priv->dev, ring->buf[i],
+						   off + len, DMA_FROM_DEVICE);
+		}
+	}
+
+	if (!(sts & RTL9602C_NIC_DESC_LAST_SEG))
+		return;
+
+	ring->gathering = false;
+	ring->head = NULL;
+	if (!head)
+		return;
+	if (ring->head_bad ||
+	    head->len < ETH_HLEN + RTL9602C_NIC_RX_FCS_LEN) {
+		if (!ring->head_bad)
+			dev->stats.rx_length_errors++;
+		dev_kfree_skb_any(head);
+		return;
+	}
+	skb_trim(head, head->len - RTL9602C_NIC_RX_FCS_LEN);
+	rtl9602c_eth_rx_frame(dev, r, head, ring->head_sts, ring->head_w2,
+			      ring->head_w3);
+}
+
+/*
  * Receive up to @budget frames from ring @r, stopping at the first descriptor
- * the engine still owns. A frame is handed on only once its descriptor has a
- * new buffer, and every descriptor processed is given back.
+ * the engine still owns. A frame in one buffer is handed on only once its
+ * descriptor has a new buffer, a frame in several is copied out of them
+ * (rtl9602c_eth_rx_piece()), and every descriptor processed is given back.
  */
 static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 {
@@ -1047,7 +1319,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 		struct rtl9602c_rx_desc *desc = &ring->desc[ring->tail];
 		unsigned int i = ring->tail;
 		struct sk_buff *skb = NULL;
-		unsigned int len, why;
+		unsigned int len;
 		u32 sts, w2, w3;
 
 		/*
@@ -1068,8 +1340,13 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 		w2 = be32_to_cpu(desc->tag);
 		w3 = be32_to_cpu(desc->dest);
 		len = sts & RTL9602C_NIC_RXD_LEN;
-		why = FIELD_GET(RTL9602C_NIC_RXD_TRAP_REASON, w3);
 		ring->frames++;
+
+		/* A frame longer than a buffer comes in pieces. */
+		if ((sts & RTL9602C_NIC_DESC_SEGS) != RTL9602C_NIC_DESC_SEGS) {
+			rtl9602c_eth_rx_piece(dev, r, i, sts, w2, w3, len);
+			goto rearm;
+		}
 
 		/*
 		 * A frame marked in error, too short, or longer than its buffer
@@ -1095,148 +1372,7 @@ static int rtl9602c_eth_rx(struct net_device *dev, unsigned int r, int budget)
 			skb_reserve(skb, RTL9602C_NIC_RX_DATA_OFFSET);
 			skb_put(skb, len - RTL9602C_NIC_RX_FCS_LEN);
 
-			/* An OMCI message goes to its handler, or nowhere. */
-			if (sts & RTL9602C_NIC_RXD_OMCI) {
-				if (!rtl9602c_eth_rx_ctrl(dev, skb, r, sts, w2,
-							  w3)) {
-					dev->stats.rx_dropped++;
-					dev_kfree_skb_any(skb);
-				}
-				goto rearm;
-			}
-
-			/*
-			 * With DSA, a frame with a CPU tag is counted under its
-			 * trap reason and offered to the flow handler. If the
-			 * handler leaves it, the frame gets its source port's
-			 * dst, on which DSA delivers it to the user port
-			 * without calling the tagger. A frame without a CPU tag
-			 * gets no dst, and the tagger drops it, its source port
-			 * being unknown.
-			 */
-			if (netdev_uses_dsa(dev) && (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID)) {
-				unsigned int port =
-					FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3);
-				rtl9602c_flow_rx_t flow_rx;
-				struct metadata_dst *md = NULL;
-
-				priv->rx_reason[why]++;
-
-				/*
-				 * Acquire, paired with the release in
-				 * rtl9602c_conduit_flow_attach(): the context,
-				 * read below with READ_ONCE against the
-				 * WRITE_ONCE there, is then the one stored
-				 * before this handler was published.
-				 */
-				flow_rx = smp_load_acquire(&priv->flow_rx);
-
-				if (flow_rx &&
-				    flow_rx(READ_ONCE(priv->flow_ctx), skb, port,
-					    FIELD_GET(RTL9602C_NIC_RXD_FLOW, w2))) {
-					dev->stats.rx_packets++;
-					goto rearm;
-				}
-
-				/*
-				 * A port with no dst leaves the frame to the
-				 * tagger, which drops it.
-				 */
-				if (port < RTL9602C_SW_PORTS)
-					md = priv->port_meta[port];
-				if (md)
-					skb_dst_set_noref(skb, &md->dst);
-			}
-
-			/*
-			 * Take off the timestamp tag of a PTP message (see
-			 * RTL9602C_ETH_P_REALTEK). Its time, the low 16 bits of
-			 * the PTP clock's seconds and the nanoseconds, becomes
-			 * the frame's hardware timestamp; the switch driver
-			 * fills in the upper seconds from its clock. The reason
-			 * byte, 240 for a message sent to the CPU and 241 for a
-			 * copy made by the ingress mirror action (measured on
-			 * this board), is logged once per value and otherwise
-			 * not interpreted. The addresses then move up over the
-			 * tag, so the frame reaches the stack as it was sent: a
-			 * PTP message over Ethernet is recognised by its own
-			 * EtherType, 0x88F7 (IEEE 1588-2008 Annex F), which
-			 * neither DSA nor a PTP stack would find behind the
-			 * tag.
-			 *
-			 * A frame longer than the tag with 0x8899 at offset 12
-			 * and the protocol byte 4 at offset 14, as in every tag
-			 * seen on this board, is taken to carry one, but only
-			 * if the switch sent it up for one of the two PTP trap
-			 * reasons: a host can send such a frame itself, and the
-			 * switch then floods it to the CPU with the reason of
-			 * an ordinary frame (measured). Other frames use that
-			 * EtherType with other protocol bytes, among them the
-			 * switch's own loop-detection probes, and go up as they
-			 * came.
-			 */
-			if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
-			    (why == RTL9602C_RX_REASON_PTP ||
-			     why == RTL9602C_RX_REASON_PTP_MIRROR) &&
-			    skb->len > RTL9602C_PTP_TAG_LEN &&
-			    get_unaligned_be16(skb->data + 2 * ETH_ALEN) ==
-			    RTL9602C_ETH_P_REALTEK &&
-			    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] ==
-			    RTL9602C_PTP_TAG_PROTO_PTP) {
-				u32 sec = get_unaligned_be16(skb->data +
-							     RTL9602C_PTP_TAG_SEC_OFFSET);
-				u32 nsec = get_unaligned_be32(skb->data +
-							      RTL9602C_PTP_TAG_NSEC_OFFSET);
-				u8 reason = skb->data[RTL9602C_PTP_TAG_REASON_OFFSET];
-
-				if (!test_and_set_bit(reason,
-						      priv->ptp_reason_seen))
-					eth_info(dev,
-						 "ptp tag reason %u, protocol %u: %16phN\n",
-						 reason,
-						 skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET],
-						 skb->data + 2 * ETH_ALEN);
-
-				skb_hwtstamps(skb)->hwtstamp =
-					ktime_set(sec, nsec);
-				memmove(skb->data + RTL9602C_PTP_TAG_LEN,
-					skb->data, 2 * ETH_ALEN);
-				skb_pull(skb, RTL9602C_PTP_TAG_LEN);
-			}
-
-			skb->protocol = eth_type_trans(skb, dev);
-
-			/*
-			 * Log the first RTL9602C_RX_LOG frames, and the first
-			 * frame from each source port. A frame without a CPU
-			 * tag has no source port: word 3 stays as the driver
-			 * cleared it, and the port printed is 0.
-			 */
-			{
-				unsigned int src = FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3);
-				bool newport = (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
-					       !(priv->rx_ports_seen & BIT(src));
-
-				if (newport)
-					priv->rx_ports_seen |= BIT(src);
-				if (priv->rx_logged < RTL9602C_RX_LOG || newport) {
-					priv->rx_logged++;
-					eth_info(dev,
-						 "<eth rx> port %lu receives on the %s ring: %u bytes from %pM, proto 0x%04x, %s; descriptor %08x %08x %08x\n",
-						 FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3),
-						 rtl9602c_rx_ring_name[r], skb->len,
-						 eth_hdr(skb)->h_source,
-						 ntohs(skb->protocol),
-						 (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) ?
-						 "cpu-tagged" :
-						 "NO CPU TAG, so the source port is a guess",
-						 sts, w2, w3);
-				}
-			}
-
-			dev->stats.rx_packets++;
-			dev->stats.rx_bytes += skb->len;
-			netif_receive_skb(skb);
+			rtl9602c_eth_rx_frame(dev, r, skb, sts, w2, w3);
 		}
 
 rearm:
@@ -1436,6 +1572,13 @@ static netdev_tx_t rtl9602c_eth_start_xmit(struct sk_buff *skb,
 
 	if (skb_put_padto(skb, ETH_ZLEN)) {
 		dev->stats.tx_dropped++;
+		return NETDEV_TX_OK;
+	}
+
+	/* A frame the engine cannot send would stop it for every frame after. */
+	if (unlikely(skb->len > RTL9602C_NIC_TX_MAX)) {
+		dev->stats.tx_dropped++;
+		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
 
@@ -1701,7 +1844,7 @@ int rtl9602c_conduit_ctrl_xmit(struct net_device *dev, struct sk_buff *skb,
 		return -EINVAL;
 	if (port >= RTL9602C_SW_PORTS ||
 	    stream > FIELD_MAX(RTL9602C_NIC_TXD_FLOW) ||
-	    !skb->len || skb->len > RTL9602C_NIC_TXD_LEN || skb_is_nonlinear(skb))
+	    !skb->len || skb->len > RTL9602C_NIC_TX_MAX || skb_is_nonlinear(skb))
 		return -EINVAL;
 	if (!netif_running(dev))
 		return -ENETDOWN;
@@ -1882,6 +2025,7 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 
 	SET_NETDEV_DEV(dev, &pdev->dev);
 	dev->netdev_ops = &rtl9602c_eth_netdev_ops;
+	dev->max_mtu = RTL9602C_ETH_MAX_MTU;
 
 	/* Keep dsts: a GEM interface's frame carries its PON flow in one. */
 	netif_keep_dst(dev);
