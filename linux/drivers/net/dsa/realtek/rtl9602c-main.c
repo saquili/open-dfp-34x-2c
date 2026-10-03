@@ -1460,6 +1460,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	 * meter's exceeded latch cleared, since a latch left from before
 	 * would read as a policed drop that never happened.
 	 */
+	mutex_lock(&p->meter_lock);
 	for (i = 0; i < RTL9602C_STORM_NCLASS; i++) {
 		rtl9602c_w(p, rtl9602c_storm_class[i].ctrl, 0);
 		rtl9602c_w(p, rtl9602c_storm_class[i].meter, 0);
@@ -1470,6 +1471,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	for (i = 0; i < ARRAY_SIZE(p->storm_meter); i++)
 		p->storm_meter[i] = -1;
 	rtl9602c_w(p, RTL9602C_METER_EXCEEDED, GENMASK(RTL9602C_METER_COUNT - 1, 0));
+	mutex_unlock(&p->meter_lock);
 
 	/*
 	 * The ACL, the classifier, the priority maps, the policer, the
@@ -2281,6 +2283,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	spin_lock_init(&p->ploam_log_lock);
 	mutex_init(&p->gpon_lock);
 	mutex_init(&p->acl_lock);
+	mutex_init(&p->meter_lock);
 	mutex_init(&p->ptp_lock);
 	p->reg = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(p->reg))

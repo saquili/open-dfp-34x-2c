@@ -2865,6 +2865,12 @@ struct rtl9602c_priv {
 	atomic64_t	ptp_sec_seen;
 	/** @hwtstamp: each port's timestamping configuration, as set */
 	struct kernel_hwtstamp_config hwtstamp[RTL9602C_NUM_PORTS];
+	/**
+	 * @meter_lock: serialises the meters and the storm-control state,
+	 * @meter_used, @storm, @storm_seq and @storm_meter, which tc and
+	 * devlink both change
+	 */
+	struct mutex meter_lock;
 	/** @meter_used: the meters handed out */
 	DECLARE_BITMAP(meter_used, RTL9602C_METER_COUNT);
 	/** @storm: storm-control rules from tc, one meter each */

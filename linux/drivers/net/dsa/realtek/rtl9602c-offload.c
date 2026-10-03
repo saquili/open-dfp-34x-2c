@@ -524,15 +524,17 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 }
 
 /*
- * Meters. Sixteen shared meters serve storm control, from tc and devlink alike.
- * A meter is 64 bits in two words, the high half, which holds the rate, at the
- * lower address. Only packet mode is used: in byte mode a meter does not police
- * (measured on this board).
+ * Meters. Sixteen shared meters serve storm control, from tc and devlink alike,
+ * under meter_lock. A meter is 64 bits in two words, the high half, which
+ * holds the rate, at the lower address. Only packet mode is used: in byte mode
+ * a meter does not police (measured on this board).
  */
 static int rtl9602c_meter_alloc(struct rtl9602c_priv *p)
 {
-	unsigned int i = find_first_zero_bit(p->meter_used, RTL9602C_METER_COUNT);
+	unsigned int i;
 
+	lockdep_assert_held(&p->meter_lock);
+	i = find_first_zero_bit(p->meter_used, RTL9602C_METER_COUNT);
 	if (i >= RTL9602C_METER_COUNT)
 		return -ENOSPC;
 	set_bit(i, p->meter_used);
@@ -546,9 +548,12 @@ static int rtl9602c_meter_alloc(struct rtl9602c_priv *p)
  *
  * The meter is written back to the maximum rate, which never limits, the
  * default bucket and byte mode, so that a meter with no owner limits nothing.
+ *
+ * Context: with meter_lock held.
  */
 void rtl9602c_meter_free(struct rtl9602c_priv *p, unsigned int meter)
 {
+	lockdep_assert_held(&p->meter_lock);
 	rtl9602c_w(p, RTL9602C_METER_CFG_HI(meter), RTL9602C_METER_CFG_HI_RATE_MAX);
 	rtl9602c_w(p, RTL9602C_METER_CFG_LO(meter),
 		   FIELD_PREP(RTL9602C_METER_CFG_LO_BURST,
@@ -616,18 +621,22 @@ u32 rtl9602c_storm_ports_get(struct rtl9602c_priv *p, unsigned int cls)
  * Read from the class's meter. The driver records only which meter each class
  * owns: a selector of 0 cannot tell meter 0 from none.
  *
+ * Context: takes meter_lock.
+ *
  * Return: packets a second, or 0 when the class owns no meter or its meter is
  * at the maximum, which does not limit.
  */
 u32 rtl9602c_storm_rate_get(struct rtl9602c_priv *p, unsigned int cls)
 {
-	int meter = p->storm_meter[cls];
-	u32 rate;
+	u32 rate = 0;
+	int meter;
 
-	if (meter < 0)
-		return 0;
-	rate = FIELD_GET(RTL9602C_METER_CFG_HI_RATE,
-			 rtl9602c_r(p, RTL9602C_METER_CFG_HI(meter)));
+	mutex_lock(&p->meter_lock);
+	meter = p->storm_meter[cls];
+	if (meter >= 0)
+		rate = FIELD_GET(RTL9602C_METER_CFG_HI_RATE,
+				 rtl9602c_r(p, RTL9602C_METER_CFG_HI(meter)));
+	mutex_unlock(&p->meter_lock);
 	return rate == RTL9602C_METER_CFG_HI_RATE_MAX ? 0 : rate;
 }
 
@@ -642,29 +651,35 @@ u32 rtl9602c_storm_rate_get(struct rtl9602c_priv *p, unsigned int cls)
  * port's selector pointed at it; the enable bits stay as they are. Rate 0
  * unbinds every port and gives the meter back.
  *
+ * Context: takes meter_lock.
+ *
  * Return: 0, or -ENOSPC when all sixteen meters are taken.
  */
 int rtl9602c_storm_rate_set(struct rtl9602c_priv *p, unsigned int cls,
 			    u32 rate)
 {
-	int meter = p->storm_meter[cls];
-	u32 ports;
 	unsigned int port;
+	int meter, err = 0;
+	u32 ports;
 
+	mutex_lock(&p->meter_lock);
+	meter = p->storm_meter[cls];
 	if (!rate) {
 		if (meter < 0)
-			return 0;
+			goto out;
 		for (port = 0; port < RTL9602C_NUM_PORTS; port++)
 			rtl9602c_storm_bind(p, cls, port, 0, false);
 		rtl9602c_meter_free(p, (unsigned int)meter);
 		p->storm_meter[cls] = -1;
-		return 0;
+		goto out;
 	}
 
 	if (meter < 0) {
 		meter = rtl9602c_meter_alloc(p);
-		if (meter < 0)
-			return meter;
+		if (meter < 0) {
+			err = meter;
+			goto out;
+		}
 		p->storm_meter[cls] = meter;
 	}
 
@@ -674,7 +689,9 @@ int rtl9602c_storm_rate_set(struct rtl9602c_priv *p, unsigned int cls,
 	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
 		rtl9602c_storm_bind(p, cls, port, (unsigned int)meter,
 				    ports & BIT(port));
-	return 0;
+out:
+	mutex_unlock(&p->meter_lock);
+	return err;
 }
 
 /**
@@ -684,22 +701,30 @@ int rtl9602c_storm_rate_set(struct rtl9602c_priv *p, unsigned int cls,
  * @ports: the port mask, bit n for port n; the caller refuses bits beyond the
  *	four ports
  *
+ * Context: takes meter_lock.
+ *
  * Return: 0, or -EINVAL when @ports is not empty and the class has no rate.
  */
 int rtl9602c_storm_ports_set(struct rtl9602c_priv *p, unsigned int cls,
 			     u32 ports)
 {
-	int meter = p->storm_meter[cls];
 	unsigned int port;
+	int meter, err = 0;
 
-	if (ports && meter < 0)
-		return -EINVAL;
+	mutex_lock(&p->meter_lock);
+	meter = p->storm_meter[cls];
+	if (ports && meter < 0) {
+		err = -EINVAL;
+		goto out;
+	}
 
 	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
 		rtl9602c_storm_bind(p, cls, port,
 				    meter < 0 ? 0 : (unsigned int)meter,
 				    ports & BIT(port));
-	return 0;
+out:
+	mutex_unlock(&p->meter_lock);
+	return err;
 }
 
 /*
@@ -715,25 +740,28 @@ static int rtl9602c_storm_add(struct rtl9602c_priv *p, int port,
 			      struct netlink_ext_ack *extack)
 {
 	u64 units = rate_pkt_ps;
-	int meter, slot;
+	int meter, slot, err = 0;
 
 	/* A rate beyond the field is no limit, as the maximum is. */
 	if (units > RTL9602C_METER_CFG_HI_RATE_MAX)
 		units = RTL9602C_METER_CFG_HI_RATE_MAX;
 
+	mutex_lock(&p->meter_lock);
 	for (slot = 0; slot < RTL9602C_METER_COUNT; slot++)
 		if (!p->storm[slot].used)
 			break;
 	if (slot == RTL9602C_METER_COUNT) {
 		NL_SET_ERR_MSG_MOD(extack, "no room for another storm rule");
-		return -ENOSPC;
+		err = -ENOSPC;
+		goto out;
 	}
 
 	meter = rtl9602c_meter_alloc(p);
 	if (meter < 0) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "every one of the sixteen shared meters is in use");
-		return meter;
+		err = meter;
+		goto out;
 	}
 
 	rtl9602c_meter_program(p, (unsigned int)meter, (u32)units);
@@ -745,7 +773,9 @@ static int rtl9602c_storm_add(struct rtl9602c_priv *p, int port,
 	p->storm[slot].meter = meter;
 	p->storm[slot].used = true;
 	p->storm[slot].seq = ++p->storm_seq;
-	return 0;
+out:
+	mutex_unlock(&p->meter_lock);
+	return err;
 }
 
 /* The rule for @cls on @port added last, leaving out slot @skip, or -1. */
@@ -776,11 +806,14 @@ static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
 	unsigned int cls;
 	int slot, next, port;
 
+	mutex_lock(&p->meter_lock);
 	for (slot = 0; slot < RTL9602C_METER_COUNT; slot++)
 		if (p->storm[slot].used && p->storm[slot].cookie == cookie)
 			break;
-	if (slot == RTL9602C_METER_COUNT)
+	if (slot == RTL9602C_METER_COUNT) {
+		mutex_unlock(&p->meter_lock);
 		return -ENOENT;
+	}
 
 	cls = p->storm[slot].cls;
 	port = p->storm[slot].port;
@@ -794,6 +827,7 @@ static int rtl9602c_storm_del(struct rtl9602c_priv *p, unsigned long cookie)
 	}
 	rtl9602c_meter_free(p, p->storm[slot].meter);
 	p->storm[slot].used = false;
+	mutex_unlock(&p->meter_lock);
 	return 0;
 }
 
