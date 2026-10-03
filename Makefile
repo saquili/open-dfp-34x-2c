@@ -81,7 +81,9 @@ image-check:
 # flash: $(IMAGE_OUT)/images/ram.uImage, for "make ramboot". It takes the
 # target tree of "make image", with the files of OPEN_DFP_34X_2C_LOCAL_OVERLAY
 # laid over a copy, and builds the board's kernel configuration with the
-# image's own cross compiler in RAM_OUT.
+# image's own cross compiler in RAM_OUT. OPEN_DFP_34X_2C_RAM_KCONFIG, options
+# for scripts/config such as "--enable NET_DSA_RTL9602C_PLOAM_INJECT", changes
+# that configuration for a test image.
 RAM_OUT ?= $(CURDIR)/build/ram
 RAM_MAKE = $(MAKE) -C linux O="$(RAM_OUT)/kernel" ARCH=$(ARCH) \
 	   CROSS_COMPILE="$(IMAGE_OUT)/host/bin/mips-buildroot-linux-uclibc-"
@@ -96,6 +98,7 @@ ram-image:
 	linux/scripts/config --file "$(RAM_OUT)/kernel/.config" \
 	  --set-str INITRAMFS_SOURCE "$(RAM_OUT)/root $(CURDIR)/br2-external/board/dfp-34x-2c3/initramfs.list" \
 	  --set-val INITRAMFS_ROOT_UID 0 --set-val INITRAMFS_ROOT_GID 0
+	$(if $(OPEN_DFP_34X_2C_RAM_KCONFIG),linux/scripts/config --file "$(RAM_OUT)/kernel/.config" $(OPEN_DFP_34X_2C_RAM_KCONFIG))
 	$(RAM_MAKE) olddefconfig
 	$(RAM_MAKE) -j$(JOBS) uImage
 	cp "$(RAM_OUT)/kernel/arch/mips/boot/uImage" "$(IMAGE_OUT)/images/ram.uImage"
