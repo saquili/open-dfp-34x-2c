@@ -158,7 +158,7 @@ name is prefixed ``rtl9602c_``. DSA calls them for the user ports ``sfp`` and
      - "Receive timestamps"
 
 The PHC is a ``struct ptp_clock_info`` with the name ``rtl9602c-ptp``,
-``max_adj`` 500,000,000 (parts per billion), ``n_ext_ts`` 0 and ``pps`` 1.
+``max_adj`` 32,767,000 (parts per billion), ``n_ext_ts`` 0 and ``pps`` 1.
 Its callbacks are these functions of ``rtl9602c-ptp.c``.
 
 .. list-table::
@@ -269,7 +269,7 @@ Interfaces to user space
 ------------------------
 
 - The PTP hardware clock. ``/sys/class/ptp/ptp<N>/clock_name`` reads
-  ``rtl9602c-ptp``, ``max_adjustment`` reads 500000000 (parts per billion),
+  ``rtl9602c-ptp``, ``max_adjustment`` reads 32767000 (parts per billion),
   ``pps_available`` reads 1, and ``n_alarms``, ``n_external_timestamps``,
   ``n_periodic_outputs`` and ``n_pins`` read 0. The character device
   ``/dev/ptp<N>`` serves ``clock_gettime()``, ``clock_settime()`` and
@@ -461,18 +461,27 @@ middle value, 2^27, the clock advances one second per second.
        the clock advances one second per second (see the seconds row above).
      - M
      - The register read on a freshly powered board.
-   * - The frequency model is the driver's own: ``adjfine`` writes the word
-       ``2^27 + 2^27 * scaled_ppm / (10^6 * 2^16)``, where ``scaled_ppm`` is
-       the requested offset in parts per million with a 16-bit fraction,
-       clamped to 1 ... ``0x0fffffff``. It takes a larger word to run the
-       clock faster, in proportion. ``max_adj`` is 500,000,000 ppb, which keeps
-       the word between 2^26 and 3 x 2^26, well inside the field.
-     - I
-     - Neither the direction nor the proportion is measured. Setting a known
-       frequency offset through the PHC (``clock_adjtime()`` with
-       ``ADJ_FREQUENCY``) and timing the PHC against ``CLOCK_MONOTONIC`` over
-       minutes, at two offsets of each sign, would settle it. Load-bearing for
-       any servo (``ptp4l``, ``phc2sys``) that steers this clock.
+   * - The clock's rate follows the frequency word in proportion: a larger
+       word runs it faster, and a word of ``2^27 * (1 + x)`` runs it at
+       ``1 + x`` times its rate. ``adjfine`` writes
+       ``adjust_by_scaled_ppm(2^27, scaled_ppm)``, where ``scaled_ppm`` is the
+       requested offset in parts per million with a 16-bit fraction, computed
+       in 64 bits and clamped to 1 ... ``0x0fffffff``.
+     - M
+     - The PHC timed against ``CLOCK_MONOTONIC`` for 20 s at each offset:
+       asked 100, 1000, 10,000 and 32,000 ppm either way, it ran within 0.15
+       ppm of each; at 0 within 0.07 ppm. Before the driver computed the word
+       in 64 bits, a 32-bit overflow made every word 58.96 times as far off
+       nominal as asked, and those words, up to 94 % of the rate off, fitted
+       the same proportion.
+   * - ``max_adj`` is 32,767,000 ppb, the largest offset whose ``scaled_ppm``
+       fits the ``long`` that ``adjfine`` takes on this 32-bit architecture.
+       The PTP core refuses a larger request with ``-ERANGE``.
+     - M
+     - Asked 32,000 ppm, the clock ran 31,999.97 ppm fast; asked 40,000 ppm
+       either way, ``clock_adjtime()`` failed with "Numerical result out of
+       range". Before the core checked that the request fits a ``long``,
+       +40,000 ppm was cut to 32 bits and set the clock 25,536 ppm slow.
    * - Reading the time is a latch command followed by three reads, and a step
        is three writes followed by a command. ``ptp_lock`` serialises
        ``gettime64``, ``adjtime``, ``adjfine`` and the clock read of the
@@ -588,17 +597,20 @@ To watch the pulses count (``ptp0`` stands for the index that
    * - The pulse falls on the PTP clock's second boundary and moves with its
        steps and frequency changes; this is what a PPS event means to its
        consumers.
-     - I
-     - Not measured. Reading the PHC in the handler across a step would settle
-       it: the pulses should follow the step and fall at .000000000 of the
-       PHC. Load-bearing for PPS consumers.
-   * - The enable is a read-modify-write of ``RTL9602C_IRQ_ENABLE``, which the
-       interrupt handler and its re-arm work also modify, with no lock shared
-       between them; a change made by one of them at the same moment can be
-       lost.
-     - I
-     - Not observed. Toggling PPS while a masked source is being re-armed,
-       then reading ``armed`` in ``ptpstat``, would show it.
+     - M
+     - The PPS source's system timestamps, turned into PHC time with
+       ``PTP_SYS_OFFSET``: each pulse fell 7 to 16 us after a second of the
+       PHC, the time to the handler. After a step of +0.3 s the next pulse
+       came 0.7 s after the last, after one of -0.65 s 0.65 s after it, each
+       again on a second of the PHC; with the clock 3.2 % fast the pulses came
+       every 0.969 s.
+   * - The enable goes through ``rtl9602c_irq_enable()``, which changes
+       ``RTL9602C_IRQ_ENABLE`` under ``irq_enable_lock``, as the interrupt
+       handler, its re-arm work and the other users of the register do (see
+       the *main* page, "The switch interrupt"), so no change is lost.
+     - T
+     - The PPS measurements above enable and disable the source this way; the
+       lock is read from the code.
 
 Receive timestamps
 ==================
@@ -723,10 +735,11 @@ The steps are checked by the rows below and by those of "The tag".
        PHC's auxiliary work (``do_aux_work``) reads the clock at registration
        and then once a minute, so the seconds are never older than a minute,
        whether or not a PTP daemon reads the clock.
-     - I
-     - The window arithmetic has run only with stamps below 65,536 s; the
-       auxiliary work is read from the code. A frame received with the clock's
-       low 16 bits of seconds above 32,768 and no other reader would show it.
+     - M
+     - With the PHC set to 65,530 s, 24 Syncs from the host half a second
+       apart were stamped 65,532.76 to 65,544.27 s, without a jump where the
+       tag's seconds went from 65,535 to 0; the auxiliary work is read from
+       the code.
    * - The conduit takes the tag off only a frame that came up with a CPU tag
        and one of the two PTP trap reasons, 240 or 241, and that carries
        ``0x8899`` at offset 12 and the protocol byte 4 at offset 14. Other
@@ -757,11 +770,15 @@ The filter
        ``HWTSTAMP_FILTER_NONE``, and refuses any other request, every frame
        and UDP included, with ``-ERANGE``: a filter may be widened, not
        narrowed. The filter promises every event message over Ethernet (IEEE
-       1588-2008 6.4: Sync, Delay_Req, Pdelay_Req, Pdelay_Resp; Annex F). Only
-       Sync over Ethernet has been seen tagged.
-     - I
-     - Sending each event message over Ethernet from the host and checking
-       ``SO_TIMESTAMPING`` for each would settle it. Load-bearing for the
+       1588-2008 6.4: Sync, Delay_Req, Pdelay_Req, Pdelay_Resp; Annex F). The
+       switch stamps the general messages over Ethernet as well, and no PTP
+       message over UDP.
+     - M
+     - Three of each message type over Ethernet from the host, Sync,
+       Delay_Req, Pdelay_Req, Pdelay_Resp, Follow_Up, Delay_Resp,
+       Pdelay_Resp_Follow_Up and Announce, all reached a packet socket on
+       ``sfp`` with a hardware stamp, 0.2 s apart as sent; three Syncs over
+       UDP to port 319 reached it without one. Load-bearing for the
        filter the driver advertises.
    * - The switch tags its PTP messages whatever the filter, so under
        ``HWTSTAMP_FILTER_NONE`` ``rtl9602c_port_rxtstamp()`` takes the stamp
@@ -1183,37 +1200,8 @@ resolve.
 Assumptions the driver depends on
 ---------------------------------
 
-.. list-table::
-   :header-rows: 1
-   :widths: 58 42
-
-   * - Assumption
-     - What would settle it
-   * - A larger frequency word runs the clock faster, in proportion to the
-       word ("The clock"). Every frequency adjustment, and so any servo that
-       steers the clock, rests on it.
-     - A known frequency offset set through the PHC and the PHC timed against
-       ``CLOCK_MONOTONIC`` over minutes, at two offsets of each sign.
-   * - The pulse of the once-per-second source falls on the PTP clock's second
-       boundary and moves with its steps and frequency changes ("The
-       once-per-second interrupt"). PPS consumers rely on it.
-     - Reading the PHC in the handler across a step: the pulses should follow
-       the step and fall at .000000000 of the PHC.
-   * - The interrupt enable is changed by an unlocked read-modify-write that
-       the interrupt handler also performs ("The once-per-second interrupt").
-     - Toggling PPS while a masked source is being re-armed, then reading
-       ``armed`` in ``ptpstat``.
-   * - Completing the tag's 16 bits of seconds from the seconds of the last
-       clock read gives the right stamp ("Taking the tag off and completing
-       the seconds"). It is wrong when nothing has read the PHC for more than
-       about nine hours.
-     - A frame received more than 32,768 s after the last PHC read, and one
-       received with the clock's low 16 bits of seconds above 32,768 and no
-       reader.
-   * - The advertised receive filter covers every event message and PTP over
-       UDP ("The filter"). Only Sync over Ethernet has been seen tagged.
-     - Each event message over Ethernet, and a Sync over UDP to port 319, from
-       the host, with ``SO_TIMESTAMPING`` checked for each.
+None is left open: each has been measured on this board (see the tables
+above).
 
 Questions the code does not depend on
 -------------------------------------
