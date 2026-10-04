@@ -1515,12 +1515,17 @@ Flows, streams and T-CONTs
        its 200. With both T-CONTs on queue 0, as before, the same 200 frames
        went out in T-CONT 0's allocations: 14,778 octets on the port of
        T-CONT 1.
-   * - A GEM T-CONT is bound when the GPON MAC holds an Alloc-ID for it, once
-       the OLT has assigned one with Assign_Alloc-ID, a PLOAM message and not
-       OMCI; T-CONT 16 holds the default Alloc-ID from the start. An assigned
-       Alloc-ID goes to the lowest GEM T-CONT that is idle; a ninth beside eight
-       bound ones is refused with "no idle T-CONT". OMCI may create a GEM port
-       first; the two arrive in either order.
+   * - A GEM T-CONT is bound when the GPON MAC holds an Alloc-ID for it; T-CONT
+       16 holds the default Alloc-ID from the start. The OLT assigns an
+       Alloc-ID to the ONU with Assign_Alloc-ID, a PLOAM message, and maps it to
+       a T-CONT through the OMCC, which management passes on with tcont-set
+       (``rtl9602c_gpon_tcont_map()``). ``rtl9602c_gpon_tcont_sync()`` binds a
+       T-CONT mapped to an assigned Alloc-ID to it, and an assigned Alloc-ID
+       that no mapping names to a T-CONT that no mapping names: the one holding
+       it already, else the lowest free one, so that traffic flows before the
+       mappings come, or without them. An Alloc-ID left with no T-CONT is
+       logged, "no idle T-CONT". OMCI may create a GEM port first; the
+       messages arrive in any order.
      - P
      - ITU-T G.984.3 (01/2014) clause 5.5.3 (the default Alloc-ID is implicit;
        others are assigned by Assign_Alloc-ID type 1 and removed by type 255)
@@ -1657,7 +1662,8 @@ Status and offload
      - T
      - Routed-traffic checks of the flowtable offload through a GEM interface.
    * - The pon family's T-CONT query reports the Alloc-ID the driver recorded
-       for GEM T-CONT 0 to 7, or none. It answers from the driver's record rather
+       as bound to GEM T-CONT 0 to 7, or none; a mapping still waiting for its
+       Alloc-ID's assignment does not show. It answers from the driver's record rather
        than the GPON MAC's Alloc-ID table, because the table keeps what it held
        through a reset and so tells what was written, not what the OLT still
        assigns.
@@ -2177,7 +2183,10 @@ Known limitations
   so downstream-only ports use flows that upstream ports could have used
   first.
 - GEM ports get eight T-CONTs, so an OLT that assigns more than eight
-  Alloc-IDs beside the default one finds the ninth refused ("no idle T-CONT").
+  Alloc-IDs beside the default one finds the ninth without a T-CONT ("no idle
+  T-CONT"). The default Alloc-ID cannot serve a GEM T-CONT: T-CONT 16 holds it
+  for the OMCC, and a mapping to it is refused with ``-EOPNOTSUPP``, although
+  G.988 allows it.
   Queues are never detached and T-CONTs never disabled after the build, so a
   deleted port's queue stays in its T-CONT's map until the next boot. The queue
   numbering is measured for T-CONTs 0, 1 and 16 only.

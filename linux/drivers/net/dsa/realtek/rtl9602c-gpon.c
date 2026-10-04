@@ -1313,6 +1313,7 @@ static int rtl9602c_gpon_tables_clear(struct rtl9602c_priv *p)
 	}
 
 	p->gpon_tcont_used = 0;
+	bitmap_zero(p->gpon_assigned, RTL9602C_GPON_NUM_ALLOC);
 	WRITE_ONCE(p->gpon_omcc_bound, false);
 	if (p->omci_port)
 		pon_omci_port_link_set(p->omci_port, false);
@@ -1377,56 +1378,189 @@ static void rtl9602c_gpon_omcc_unbind(struct rtl9602c_priv *p)
 	rtl9602c_ponmac_sid_valid(p, f, false);
 }
 
+/* The Alloc-ID GEM T-CONT @n holds, RTL9602C_GPON_ALLOC_NONE for none. */
+static u16 rtl9602c_gpon_tcont_holds(struct rtl9602c_priv *p, unsigned int n)
+{
+	unsigned int t = rtl9602c_gem_tcont(n);
+
+	return p->gpon_tcont_used & BIT(t) ? p->gpon_alloc[t] :
+					     RTL9602C_GPON_ALLOC_NONE;
+}
+
+/* Whether management mapped a GEM T-CONT to Alloc-ID @alloc. */
+static bool rtl9602c_gpon_alloc_mapped(struct rtl9602c_priv *p, u16 alloc)
+{
+	unsigned int n;
+
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++)
+		if (p->gpon_tcont_map[n] == alloc)
+			return true;
+	return false;
+}
+
 /*
- * Bind Alloc-ID @alloc into the lowest idle T-CONT of those the GEM ports use
- * (rtl9602c_gem_tcont()), unless a T-CONT holds it already, as it does for
- * the repeated copies of an Assign_Alloc-ID. The driver keeps its own record
- * of what each T-CONT holds, since the table keeps its entries through a
- * reset and so tells what was written, not what the OLT still assigns. The
- * GEM ports on the T-CONT then get their upstream.
+ * Bind the GEM T-CONTs to the Alloc-IDs the OLT assigned with
+ * Assign_Alloc-ID. A T-CONT that management mapped to an assigned Alloc-ID
+ * gets it, as the OLT maps T-CONTs through the OMCC (G.984.3 clause 5.5.4).
+ * An assigned Alloc-ID that no mapping names goes to a T-CONT that no mapping
+ * names: the one that holds it already, else the lowest that is free, so that
+ * upstream traffic flows before the mappings come, or without them. Bindings
+ * that change are cleared before any is written, so that no Alloc-ID sits in
+ * two entries; the GEM ports of each T-CONT that gains an Alloc-ID then get
+ * their upstream (rtl9602c_gem_tcont_ready()). The driver keeps its own
+ * record of what each T-CONT holds, since the table keeps its entries through
+ * a reset and so tells what was written, not what the OLT still assigns.
+ */
+static void rtl9602c_gpon_tcont_sync(struct rtl9602c_priv *p)
+{
+	u16 want[RTL9602C_GEM_NUM_TCONT];
+	unsigned long alloc;
+	unsigned int n, m, t;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
+		u16 a = p->gpon_tcont_map[n];
+
+		want[n] = a != RTL9602C_GPON_ALLOC_NONE &&
+			  test_bit(a, p->gpon_assigned) ? a :
+							 RTL9602C_GPON_ALLOC_NONE;
+	}
+
+	for_each_set_bit(alloc, p->gpon_assigned, RTL9602C_GPON_NUM_ALLOC) {
+		if (rtl9602c_gpon_alloc_mapped(p, alloc))
+			continue;
+		m = RTL9602C_GEM_NUM_TCONT;
+		for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
+			if (p->gpon_tcont_map[n] != RTL9602C_GPON_ALLOC_NONE ||
+			    want[n] != RTL9602C_GPON_ALLOC_NONE)
+				continue;
+			if (rtl9602c_gpon_tcont_holds(p, n) == alloc) {
+				m = n;
+				break;
+			}
+			if (m == RTL9602C_GEM_NUM_TCONT)
+				m = n;
+		}
+		if (m < RTL9602C_GEM_NUM_TCONT)
+			want[m] = alloc;
+	}
+
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
+		u16 have = rtl9602c_gpon_tcont_holds(p, n);
+
+		if (have == RTL9602C_GPON_ALLOC_NONE || have == want[n])
+			continue;
+		t = rtl9602c_gem_tcont(n);
+		rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
+				     RTL9602C_ALLOCID_TBL_WDATA,
+				     RTL9602C_GPON_TBL_CMD_OP_CLEAR, t, 0);
+		p->gpon_tcont_used &= ~BIT(t);
+		pr_debug("<GPON> Alloc-ID %u out of T-CONT %u\n", have, t);
+	}
+
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
+		if (want[n] == RTL9602C_GPON_ALLOC_NONE ||
+		    rtl9602c_gpon_tcont_holds(p, n) == want[n])
+			continue;
+		t = rtl9602c_gem_tcont(n);
+		if (rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
+					 RTL9602C_ALLOCID_TBL_WDATA,
+					 RTL9602C_GPON_TBL_CMD_OP_WRITE, t,
+					 want[n])) {
+			pr_warn("<GPON> T-CONT %u bind did not complete\n", t);
+			continue;
+		}
+		p->gpon_alloc[t] = want[n];
+		p->gpon_tcont_used |= BIT(t);
+		pr_debug("<GPON> Alloc-ID %u in T-CONT %u (GEM T-CONT %u)\n",
+			 want[n], t, n);
+		rtl9602c_gem_tcont_ready(p, n);
+	}
+}
+
+/* Whether a GEM T-CONT holds Alloc-ID @alloc. */
+static bool rtl9602c_gpon_alloc_bound(struct rtl9602c_priv *p, u16 alloc)
+{
+	unsigned int n;
+
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++)
+		if (rtl9602c_gpon_tcont_holds(p, n) == alloc)
+			return true;
+	return false;
+}
+
+/*
+ * The OLT assigned Alloc-ID @alloc to this ONU: bind it where the mappings
+ * say (rtl9602c_gpon_tcont_sync()). The repeated copies of an
+ * Assign_Alloc-ID change nothing.
  */
 static void rtl9602c_gpon_tcont_add(struct rtl9602c_priv *p, u16 alloc)
 {
-	unsigned int n, t;
-
-	for (t = 0; t < RTL9602C_GPON_DEFAULT_TCONT_IDX; t++)
-		if ((p->gpon_tcont_used & BIT(t)) && p->gpon_alloc[t] == alloc)
-			return;
-	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++)
-		if (!(p->gpon_tcont_used & BIT(rtl9602c_gem_tcont(n))))
-			break;
-	if (n == RTL9602C_GEM_NUM_TCONT) {
+	if (test_and_set_bit(alloc, p->gpon_assigned))
+		return;
+	rtl9602c_gpon_tcont_sync(p);
+	if (!rtl9602c_gpon_alloc_bound(p, alloc) &&
+	    !rtl9602c_gpon_alloc_mapped(p, alloc))
 		pr_warn("<GPON> no idle T-CONT for Alloc-ID %u\n", alloc);
-		return;
-	}
-	t = rtl9602c_gem_tcont(n);
-	if (rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
-				 RTL9602C_ALLOCID_TBL_WDATA,
-				 RTL9602C_GPON_TBL_CMD_OP_WRITE, t, alloc)) {
-		pr_warn("<GPON> T-CONT %u bind did not complete\n", t);
-		return;
-	}
-	p->gpon_alloc[t] = alloc;
-	p->gpon_tcont_used |= BIT(t);
-	pr_debug("<GPON> Alloc-ID %u in T-CONT %u (GEM T-CONT %u)\n", alloc,
-		 t, n);
-
-	rtl9602c_gem_tcont_ready(p, n);
 }
 
-/* Unbind Alloc-ID @alloc from every T-CONT from 0 to 15 that holds it. */
+/* The OLT took Alloc-ID @alloc back: unbind it. */
 static void rtl9602c_gpon_tcont_del(struct rtl9602c_priv *p, u16 alloc)
 {
-	unsigned int i;
+	if (test_and_clear_bit(alloc, p->gpon_assigned))
+		rtl9602c_gpon_tcont_sync(p);
+}
 
-	for (i = 0; i < RTL9602C_GPON_DEFAULT_TCONT_IDX; i++) {
-		if (!(p->gpon_tcont_used & BIT(i)) || p->gpon_alloc[i] != alloc)
-			continue;
-		rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
-				     RTL9602C_ALLOCID_TBL_WDATA,
-				     RTL9602C_GPON_TBL_CMD_OP_CLEAR, i, 0);
-		p->gpon_tcont_used &= ~BIT(i);
+/**
+ * rtl9602c_gpon_tcont_map() - map a GEM T-CONT to an Alloc-ID, or unmap it
+ * @p: the switch
+ * @n: the GEM T-CONT, below RTL9602C_GEM_NUM_TCONT
+ * @alloc: the Alloc-ID, or RTL9602C_GPON_ALLOC_NONE to unmap the T-CONT
+ * @extack: where a refusal is explained
+ *
+ * The mapping management makes through the OMCC (G.984.3 clause 5.5.4). An
+ * Alloc-ID serves at most one user traffic T-CONT, so one that another
+ * T-CONT is mapped to is refused; and the default Alloc-ID is refused, since
+ * T-CONT 16 holds it for the OMCC. While the PON is up the bindings follow at
+ * once (rtl9602c_gpon_tcont_sync()); otherwise the mapping waits for the
+ * Alloc-IDs of the next activation.
+ *
+ * Context: takes gpon_lock.
+ * Return: 0, -EBUSY or -EOPNOTSUPP.
+ */
+int rtl9602c_gpon_tcont_map(struct rtl9602c_priv *p, unsigned int n, u16 alloc,
+			    struct netlink_ext_ack *extack)
+{
+	unsigned int m;
+	int err = 0;
+
+	mutex_lock(&p->gpon_lock);
+	if (alloc != RTL9602C_GPON_ALLOC_NONE) {
+		if (p->gpon_onu_id != RTL9602C_ONU_ONUID_UNASSIGNED &&
+		    alloc == p->gpon_onu_id) {
+			NL_SET_ERR_MSG_FMT_MOD(extack,
+					       "Alloc-ID %u is the default, the OMCC's in T-CONT 16",
+					       alloc);
+			err = -EOPNOTSUPP;
+			goto out;
+		}
+		for (m = 0; m < RTL9602C_GEM_NUM_TCONT; m++) {
+			if (m != n && p->gpon_tcont_map[m] == alloc) {
+				NL_SET_ERR_MSG_FMT_MOD(extack,
+						       "Alloc-ID %u is mapped to T-CONT %u",
+						       alloc, m);
+				err = -EBUSY;
+				goto out;
+			}
+		}
 	}
+	p->gpon_tcont_map[n] = alloc;
+	if (p->gpon_up)
+		rtl9602c_gpon_tcont_sync(p);
+out:
+	mutex_unlock(&p->gpon_lock);
+	return err;
 }
 
 /*
@@ -1443,6 +1577,7 @@ static void rtl9602c_gpon_o5_teardown(struct rtl9602c_priv *p)
 					     RTL9602C_ALLOCID_TBL_WDATA,
 					     RTL9602C_GPON_TBL_CMD_OP_CLEAR, i, 0);
 	p->gpon_tcont_used = 0;
+	bitmap_zero(p->gpon_assigned, RTL9602C_GPON_NUM_ALLOC);
 	if (p->gpon_omcc_bound)
 		rtl9602c_gpon_omcc_unbind(p);
 }
@@ -2784,13 +2919,15 @@ void rtl9602c_gpon_stop(struct rtl9602c_priv *p)
  * reports: the BER interval the OLT set, 0 for none, and the reports sent since
  * the ONU entered O5; and the encryption: the index of the last key sent, 0 for
  * none, the superframe of the last Key_Switching_Time with the register, and
- * how many Port-IDs the OLT has encrypted. No key is shown, and no register is
- * written.
+ * how many Port-IDs the OLT has encrypted. Last each GEM T-CONT as n=B/M, B
+ * the Alloc-ID it holds and M the one management mapped it to, "-" for none.
+ * No key is shown, and no register is written.
  */
 static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
-	unsigned int rei_ms, rei_sent, aes_ports;
+	u16 bound[RTL9602C_GEM_NUM_TCONT], map[RTL9602C_GEM_NUM_TCONT];
+	unsigned int rei_ms, rei_sent, aes_ports, n;
 	u32 key_switch;
 	u8 key_index;
 	struct pon_dev_stats c;
@@ -2830,6 +2967,10 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	key_index = p->gpon_key_index;
 	key_switch = p->gpon_key_switch;
 	aes_ports = bitmap_weight(p->gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
+		bound[n] = rtl9602c_gpon_tcont_holds(p, n);
+		map[n] = p->gpon_tcont_map[n];
+	}
 	mutex_unlock(&p->gpon_lock);
 
 	seq_printf(s, "cntr  sn-requests %llu ranging-requests %llu   (totals)\n",
@@ -2844,6 +2985,19 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	seq_printf(s, "aes   key %u, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
 		   key_index, key_switch,
 		   rtl9602c_r(p, RTL9602C_GPON_AES_SWITCH_TIME), aes_ports);
+	seq_puts(s, "tcont");
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
+		seq_printf(s, " %u=", n);
+		if (bound[n] == RTL9602C_GPON_ALLOC_NONE)
+			seq_puts(s, "-");
+		else
+			seq_printf(s, "%u", bound[n]);
+		if (map[n] == RTL9602C_GPON_ALLOC_NONE)
+			seq_puts(s, "/-");
+		else
+			seq_printf(s, "/%u", map[n]);
+	}
+	seq_puts(s, "   (bound/mapped)\n");
 	return 0;
 }
 

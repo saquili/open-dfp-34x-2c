@@ -816,6 +816,20 @@ static int rtl9602c_tcont_get(struct pon_device *pon, unsigned int index,
 	return err;
 }
 
+/* The OMCC's mapping of a T-CONT to an Alloc-ID (rtl9602c_gpon_tcont_map()). */
+static int rtl9602c_tcont_set(struct pon_device *pon, unsigned int index,
+			      int alloc_id, struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+
+	if (index >= RTL9602C_GEM_NUM_TCONT)
+		return -ENOENT;
+	return rtl9602c_gpon_tcont_map(p, index,
+				       alloc_id < 0 ? RTL9602C_GPON_ALLOC_NONE :
+						      (u16)alloc_id,
+				       extack);
+}
+
 static const struct pon_device_ops rtl9602c_pon_ops = {
 	.owns_netdev		= rtl9602c_gem_owns_netdev,
 	.gem_add		= rtl9602c_gem_add,
@@ -830,6 +844,7 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 	.dev_status		= rtl9602c_pon_dev_status,
 	.gem_stats		= rtl9602c_gem_stats,
 	.tcont_get		= rtl9602c_tcont_get,
+	.tcont_set		= rtl9602c_tcont_set,
 };
 
 /*

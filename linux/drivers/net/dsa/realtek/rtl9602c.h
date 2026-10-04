@@ -415,6 +415,10 @@
 /* The T-CONT of the default Alloc-ID, which carries PLOAM and the OMCC. */
 #define RTL9602C_GPON_DEFAULT_TCONT_IDX	16
 
+/* The 12-bit Alloc-IDs (G.984.3 clause 5.5.3), and "none" in a mapping. */
+#define RTL9602C_GPON_NUM_ALLOC		4096
+#define RTL9602C_GPON_ALLOC_NONE	0xffff
+
 /*
  * Bandwidth-map capture of the next COUNT allocations matched to this ONU's
  * T-CONTs, two words each; the fields of STAT are not known.
@@ -2580,6 +2584,14 @@ struct rtl9602c_priv {
 	 * driver's own record, as the table keeps its entries through a reset
 	 */
 	unsigned long gpon_tcont_used;
+	/**
+	 * @gpon_tcont_map: the Alloc-ID management mapped each GEM T-CONT to
+	 * (tcont_set), RTL9602C_GPON_ALLOC_NONE for none; kept across
+	 * bring-ups, as the OMCI MIB is
+	 */
+	u16 gpon_tcont_map[RTL9602C_GEM_NUM_TCONT];
+	/** @gpon_assigned: the Alloc-IDs the OLT assigned with Assign_Alloc-ID */
+	DECLARE_BITMAP(gpon_assigned, RTL9602C_GPON_NUM_ALLOC);
 	/** @gpon_omcc_bound: the OMCC has a Port-ID (Configure_Port-ID) */
 	bool gpon_omcc_bound;
 
@@ -3405,6 +3417,8 @@ int rtl9602c_gem_setup(struct rtl9602c_priv *p);
 void rtl9602c_gem_teardown(struct rtl9602c_priv *p);
 void rtl9602c_gem_restore(struct rtl9602c_priv *p);
 void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u32 tcont);
+int rtl9602c_gpon_tcont_map(struct rtl9602c_priv *p, unsigned int n, u16 alloc,
+			    struct netlink_ext_ack *extack);
 bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow);
 int rtl9602c_gpon_port_get(struct rtl9602c_priv *p, unsigned int flow,
 			   u16 *port_id, bool *valid);

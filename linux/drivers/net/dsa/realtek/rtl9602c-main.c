@@ -2335,6 +2335,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 				       sizeof(*p->gem_vid_flow), GFP_KERNEL);
 	if (!p->gem_vid_flow)
 		return -ENOMEM;
+	memset(p->gpon_tcont_map, 0xff, sizeof(p->gpon_tcont_map));
 
 	p->dev = &pdev->dev;
 	spin_lock_init(&p->irq_enable_lock);

@@ -1448,7 +1448,8 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
    * - Assign_Alloc-ID (10)
      - The ONU-ID
      - O4, O5
-     - Binds or unbinds an Alloc-ID in a T-CONT; acknowledged.
+     - Assigns an Alloc-ID to the ONU or takes it back, which binds or
+       unbinds it where the T-CONT mappings say; acknowledged.
    * - Configure_Port-ID (14)
      - The ONU-ID
      - O4, O5
@@ -2301,10 +2302,11 @@ Tables: Alloc-ID, Port-ID and multicast
 Three tables in the GPON MAC map identifiers to the driver's numbers. The
 Alloc-ID table has one entry for each of 32 T-CONTs
 (``RTL9602C_GPON_NUM_TCONT``) and holds the Alloc-ID whose allocations that
-T-CONT takes. The driver uses entries 0 to 15 for the Alloc-IDs that
-Assign_Alloc-ID gives the ONU and entry 16 (``RTL9602C_GPON_DEFAULT_TCONT_IDX``)
-for the default Alloc-ID, which carries the upstream PLOAM messages and the
-OMCC. The Port-ID table has one entry for each of 128 flows
+T-CONT takes. The driver uses entries 0 to 3 and 8 to 11, the eight T-CONTs
+of the GEM ports (``rtl9602c_gem_tcont()``), for the Alloc-IDs that
+Assign_Alloc-ID gives the ONU, and entry 16
+(``RTL9602C_GPON_DEFAULT_TCONT_IDX``) for the default Alloc-ID, which carries
+the upstream PLOAM messages and the OMCC. The Port-ID table has one entry for each of 128 flows
 (``RTL9602C_GPON_NUM_FLOW``) and holds the GEM Port-ID that the MAC takes from
 the downstream into that flow: the ONU's GEM port filter. Flow 64
 (``RTL9602C_GPON_OMCC_FLOW``) is the OMCC's, and the GEM port code never gives
@@ -2455,17 +2457,29 @@ Facts about the tables
      - T
      - The ONU reaches O5 on an OLT and OMCI messages pass both ways; ITU-T
        G.984.3 clause 5.5.3 and clause 5.5.4.
-   * - An Alloc-ID of Assign_Alloc-ID type 1 goes into the lowest T-CONT from 0
-       to 15 not in use; one already bound is not bound again (the OLT sends
-       three copies); with none free the driver warns. The GEM port code is then
-       told (``rtl9602c_gem_tcont_ready()``, see
-       Documentation/networking/device_drivers/pon/rtl9602c.rst). Type 255
-       clears every T-CONT holding that Alloc-ID. The driver's own record, not a
-       table read, answers what each T-CONT holds (see "Reporting: the PON class
-       and devlink").
-     - M
-     - The PON class report lists Alloc-ID 257; a GEM port on the T-CONT holding
-       it sends upstream (a routed flow leaves by that GEM port).
+   * - An Alloc-ID of Assign_Alloc-ID type 1 joins the assigned ones
+       (``gpon_assigned``), type 255 leaves them, and the bindings follow
+       (``rtl9602c_gpon_tcont_sync()``): a GEM T-CONT that management mapped to
+       an assigned Alloc-ID through the OMCC (tcont-set) holds it, and an
+       assigned Alloc-ID that no mapping names goes to an unmapped GEM T-CONT,
+       the one holding it already, else the lowest free one, with a warning
+       when there is none. The repeated copies of the message (the OLT sends
+       three) change nothing. The GEM port code is told of each T-CONT that
+       gains an Alloc-ID (``rtl9602c_gem_tcont_ready()``, see
+       Documentation/networking/device_drivers/pon/rtl9602c.rst). The driver's
+       own record, not a table read, answers what each T-CONT holds (see
+       "Reporting: the PON class and devlink"). The mappings outlive a
+       deactivation, as the OMCI MIB does; the assignments do not.
+     - M, P
+     - M: the PON class report lists Alloc-ID 257; a GEM port on the T-CONT
+       holding it sends upstream (a routed flow leaves by that GEM port). With
+       omcid mapping T-CONT 0 to the OLT's Alloc-ID 256 and Assign_Alloc-ID for
+       300 injected: 300 went to T-CONT 1; mapped to T-CONT 3, it moved there;
+       unmapped, it stayed on T-CONT 3; mapped to T-CONT 5, it moved there;
+       taken back and assigned again, it came back to T-CONT 5; T-CONT 0 held
+       256 throughout, and a mapping of another T-CONT to 256 was refused. P:
+       ITU-T G.984.3 clause 5.5.4, the T-CONTs mapped to Alloc-IDs through the
+       OMCC.
    * - ``RTL9602C_GEM_DS_FLOW_CFG(f)`` (``0x701400`` + 4f):
        ``RTL9602C_GEM_DS_FLOW_CFG_TYPE`` (bits 4:0) says what a downstream flow
        carries, ``RTL9602C_GEM_DS_FLOW_CFG_TYPE_MC`` (bit 0) multicast,
@@ -2890,11 +2904,13 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
        maps accepted, CRC errors, overflows, non-idle GEM frames, BIP error
        blocks); ``rei``, the BER interval in ms (0 while none is set) and the
-       REI messages sent since the ONU entered O5; last ``aes``, the index of
+       REI messages sent since the ONU entered O5; ``aes``, the index of
        the last key sent (0 for none), the superframe of the last
        Key_Switching_Time with ``RTL9602C_GPON_AES_SWITCH_TIME``, and the
-       Port-IDs encrypted. No key is shown. A read takes the counters and
-       writes no register.
+       Port-IDs encrypted; last ``tcont``, each GEM T-CONT as ``n=B/M``, ``B``
+       the Alloc-ID it holds and ``M`` the one management mapped it to, ``-``
+       for none. No key is shown. A read takes the counters and writes no
+       register.
      - T
      - A check with traffic on the board reads the ``onu`` line before and after
        a flood; every debugfs view reads.
