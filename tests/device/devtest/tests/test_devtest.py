@@ -219,6 +219,23 @@ class Cases(unittest.TestCase):
                          "no T-CONT mapped")
         self.assertEqual(outcome("aes   key 0\n").status, FAIL)
 
+    def test_alarms_needs_the_power_level_and_no_alarm(self):
+        line2 = "     alarms none  GEM ports up to 128  power level high  serial number set\n"
+
+        def outcome(pon, log):
+            return cases_pon.omci_alarms(context(stick=[("^pon$", 0, pon),
+                                                        ("omcid.log", 0, log)]))
+        good = outcome(PON + line2, "")
+        self.assertEqual((good.status, good.evidence), (PASS, "power level high; no alarm"))
+        bad = outcome(PON + line2,
+                      "[INF] alarm.c:1: alarm: signal degrade declared (threshold 10^-9)\n"
+                      "[INF] engine.c:2: alarm: notifying 263/32769, alarms 10 00, sequence 1\n")
+        self.assertEqual((bad.status, bad.evidence),
+                         (FAIL, "power level high; 2 alarm(s), the last: notifying 263/32769, "
+                                "alarms 10 00, sequence 1"))
+        self.assertEqual(outcome(PON, "").evidence, "no power level reported; no alarm")
+        self.assertEqual(outcome(PON, "").status, FAIL)
+
     def test_activation_reads_the_state(self):
         ctx = context(stick=[("^pon$", 0, PON)])
         outcome = cases_pon.activation(ctx)

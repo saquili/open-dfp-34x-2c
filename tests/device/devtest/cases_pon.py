@@ -121,6 +121,18 @@ def tcont_map(ctx: Context):
     return verdict(ok, shown or "no T-CONT mapped")
 
 
+@case("omci.alarms", "OMCI",
+      "omcid raises no alarm on the clean line, with the power level the kernel reports")
+def omci_alarms(ctx: Context):
+    level = re.search(r"power level (\w+)", ctx.stick.run("pon").out)
+    lines = ctx.stick.run("grep 'alarm:' /run/omcid.log").out.splitlines()
+    raised = [line.split("alarm: ", 1)[1] for line in lines
+              if "declared" in line or "notifying" in line]
+    shown = f"power level {level.group(1)}" if level else "no power level reported"
+    shown += f"; {len(raised)} alarm(s), the last: {raised[-1]}" if raised else "; no alarm"
+    return verdict(level is not None and not raised, shown)
+
+
 def hwmon(ctx: Context, name: str) -> str:
     for path in ctx.stick.text("ls -d /sys/class/hwmon/hwmon*").split():
         if ctx.stick.run(f"cat {path}/name").out.strip() == name:
@@ -133,22 +145,26 @@ def dbm(microwatts: int) -> str:
 
 
 @case("optics.diagnostics", "Optics",
-      "Temperature, supply, bias and both optical powers read within range")
+      "Temperature, supply, bias and both optical powers read within the module's warning thresholds")
 def diagnostics(ctx: Context):
     base = hwmon(ctx, "rtl9602c_optics")
-    raw = ctx.stick.text(f"cd {base} && for f in *_input; do echo $f $(cat $f) "
-                         f"$(cat ${{f%_input}}_label 2>/dev/null); done")
-    values, labels = {}, {}
+    raw = ctx.stick.text(f"cd {base} && for f in *_input; do c=${{f%_input}}; "
+                         f"echo $c $(cat $f) $(cat ${{c}}_min) $(cat ${{c}}_max) "
+                         f"$(cat ${{c}}_label 2>/dev/null); done")
+    values, low, high, labels = {}, {}, {}, {}
     for line in raw.splitlines():
-        name, value, *label = line.split()
-        values[name] = int(value)
+        name, value, lo, hi, *label = line.split()
+        values[name], low[name], high[name] = int(value), int(lo), int(hi)
         labels[name] = " ".join(label)
-    temp = values["temp1_input"] / 1000
-    vcc = values["in0_input"] / 1000
-    bias = values["curr1_input"]
-    tx, rx = values["power1_input"], values["power2_input"]
-    ok = -10 < temp < 85 and 3.0 < vcc < 3.6 and 0 < bias < 100 and tx > 0 and rx > 0
+    outside = [name for name in values if not low[name] <= values[name] <= high[name]]
+    temp = values["temp1"] / 1000
+    vcc = values["in0"] / 1000
+    bias = values["curr1"]
+    tx, rx = values["power1"], values["power2"]
     shown = (f"{temp:.1f} °C, {vcc:.2f} V, bias {bias} mA, "
-             f"{labels.get('power1_input') or 'power1'} {dbm(tx)}, "
-             f"{labels.get('power2_input') or 'power2'} {dbm(rx)}")
-    return verdict(ok, shown)
+             f"{labels.get('power1') or 'power1'} {dbm(tx)}, "
+             f"{labels.get('power2') or 'power2'} {dbm(rx)}")
+    if outside:
+        shown += "; outside the warning thresholds: " + ", ".join(
+            f"{name} {values[name]} not in {low[name]}..{high[name]}" for name in outside)
+    return verdict(len(values) == 5 and not outside and tx > 0 and rx > 0, shown)
