@@ -220,6 +220,17 @@ enum omci_hw_gem_dir {
  * @direction: an &enum omci_hw_gem_dir
  * @tcont: the T-CONT that carries it upstream, from 0
  * @multicast: whether it carries multicast downstream
+ * @pbits: the IEEE 802.1p priorities of its VLANs' upstream frames it takes,
+ *	bit p for priority p; 0xff for all
+ * @queue: its upstream queue in the T-CONT, 0 the highest priority
+ * @weight: 0 to schedule the queue by strict priority, else its weight
+ * @cir: the committed rate of its upstream traffic, in bytes per second; 0
+ *	for none
+ * @pir: the peak rate of its upstream traffic, in bytes per second; 0 for no
+ *	limit
+ *
+ * The last five apply to a port that carries traffic upstream; a port that
+ * does not has 0xff and zeros.
  */
 struct omci_hw_gem_port {
 	uint16_t port_id;
@@ -227,6 +238,11 @@ struct omci_hw_gem_port {
 	uint8_t tcont;
 
 	bool multicast;
+	uint8_t pbits;
+	uint8_t queue;
+	uint8_t weight;
+	uint32_t cir;
+	uint32_t pir;
 };
 
 /**

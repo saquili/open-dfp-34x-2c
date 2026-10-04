@@ -68,8 +68,8 @@
  * The board, in the terms of G.988: an Ethernet UNI in slot 1 (plug-in
  * type 47, 10/100/1000 Ethernet), the PON side in slot 0x80 (type 248,
  * GPON 2488/1244), eight T-CONTs unless the driver says otherwise, one
- * queue per IEEE 802.1p priority, and OMCC version 0xA3: ITU-T G.988,
- * baseline message set only.
+ * queue per IEEE 802.1p priority on each T-CONT unless the driver says
+ * otherwise, and OMCC version 0xA3: ITU-T G.988, baseline message set only.
  */
 #define UNI_INSTANCE 0x0101u
 #define PON_CARDHOLDER 0x0180u
@@ -392,6 +392,30 @@ static bool caps_tconts(struct omci_hw_caps *caps)
 }
 
 /*
+ * The upstream queues of each T-CONT, from the driver, which the priority
+ * queues the ONU makes for each T-CONT follow; the board default without it.
+ */
+static void caps_tcont_queues(struct omci_hw_caps *caps)
+{
+	struct pon_dev_attrs a;
+	uint8_t buf[4096] __aligned(4);
+	uint32_t n;
+
+	if (pon_dev_get(&a, buf, sizeof(buf)) != 0 ||
+	    !a.val[PON_A_DEV_NUM_TCONT_QUEUES])
+		return;
+
+	n = pon_attr_u32(&a, PON_A_DEV_NUM_TCONT_QUEUES, 0);
+	if (!n || n > UINT8_MAX)
+		return;
+	if (n != caps->num_priq_per_tcont)
+		OMCI_INFO(
+			"caps: the driver reports %u queue(s) per T-CONT, the board default is %u",
+			n, caps->num_priq_per_tcont);
+	caps->num_priq_per_tcont = (uint8_t)n;
+}
+
+/*
  * The serial number, from the driver, which the OLT knows the ONU by; the
  * identity file is the fallback.
  */
@@ -508,6 +532,7 @@ static enum omci_status kernel_caps(struct omci_hw_caps *out)
 
 	board_caps(out);
 	tconts = caps_tconts(out);
+	caps_tcont_queues(out);
 	caps_gem_ports(out);
 	ip_host_mac(out);
 
@@ -552,6 +577,11 @@ struct gem_present {
 	uint8_t tcont;
 	int ifindex;
 	bool multicast;
+	uint8_t pbits;
+	uint8_t queue;
+	uint8_t weight;
+	uint32_t cir;
+	uint32_t pir;
 };
 
 /* The reason the kernel gave for the last refusal. */
@@ -701,10 +731,30 @@ static size_t nla_put(uint8_t *buf, size_t off, uint16_t type, const void *val,
 	return off + NL_ALIGN(NLA_HDRLEN_ + len);
 }
 
-/* The attributes of a GEM link: its port identifier, direction and T-CONT. */
+/* An unsigned attribute of four or eight bytes, as NLA_UINT sends it. */
+static uint32_t nla_uint32(const uint8_t *v, uint16_t len)
+{
+	uint64_t v64 = 0;
+	uint32_t v32 = 0;
+
+	if (len == 8) {
+		memcpy(&v64, v, sizeof(v64));
+		return v64 > UINT32_MAX ? UINT32_MAX : (uint32_t)v64;
+	}
+	if (len == 4)
+		memcpy(&v32, v, sizeof(v32));
+	return v32;
+}
+
+/*
+ * The attributes of a GEM link: its port identifier, direction and T-CONT,
+ * and the upstream attributes, which the kernel reports for a port that
+ * carries traffic upstream.
+ */
 static void gem_info_data(const uint8_t *d, const uint8_t *end,
 			  struct gem_present *g)
 {
+	g->pbits = 0xffu;
 	while (d + NLA_HDRLEN_ <= end) {
 		uint16_t dlen = *(const uint16_t *)d;
 		uint16_t dtype = *(const uint16_t *)(d + 2) & 0x3fff;
@@ -724,6 +774,16 @@ static void gem_info_data(const uint8_t *d, const uint8_t *end,
 		}
 		if (dtype == IFLA_GEM_MULTICAST)
 			g->multicast = true;
+		if (dtype == IFLA_GEM_PBITS && dlen >= NLA_HDRLEN_ + 1)
+			g->pbits = dv[0];
+		if (dtype == IFLA_GEM_QUEUE && dlen >= NLA_HDRLEN_ + 1)
+			g->queue = dv[0];
+		if (dtype == IFLA_GEM_WEIGHT && dlen >= NLA_HDRLEN_ + 1)
+			g->weight = dv[0];
+		if (dtype == IFLA_GEM_CIR)
+			g->cir = nla_uint32(dv, (uint16_t)(dlen - NLA_HDRLEN_));
+		if (dtype == IFLA_GEM_PIR)
+			g->pir = nla_uint32(dv, (uint16_t)(dlen - NLA_HDRLEN_));
 		d += NL_ALIGN(dlen);
 	}
 }
@@ -825,12 +885,80 @@ static int gem_delete(int ifindex)
 	return rtnl_talk(req, sizeof(req), NULL, 0, NULL);
 }
 
-/* Create a GEM interface on @lower, up, with the port's direction and T-CONT. */
+/* The upstream attributes of port @g into @data at @dlen. Return: the new length. */
+static size_t gem_upstream_put(uint8_t *data, size_t dlen,
+			       const struct omci_hw_gem_port *g)
+{
+	dlen = nla_put(data, dlen, IFLA_GEM_PBITS, &g->pbits, sizeof(g->pbits));
+	dlen = nla_put(data, dlen, IFLA_GEM_QUEUE, &g->queue, sizeof(g->queue));
+	dlen = nla_put(data, dlen, IFLA_GEM_WEIGHT, &g->weight,
+		       sizeof(g->weight));
+	dlen = nla_put(data, dlen, IFLA_GEM_CIR, &g->cir, sizeof(g->cir));
+	return nla_put(data, dlen, IFLA_GEM_PIR, &g->pir, sizeof(g->pir));
+}
+
+/* Whether link @have already has port @g's upstream attributes. */
+static bool gem_upstream_same(const struct gem_present *have,
+			      const struct omci_hw_gem_port *g)
+{
+	if (g->direction == OMCI_HW_GEM_DIR_DOWNSTREAM)
+		return true;
+	return have->pbits == g->pbits && have->queue == g->queue &&
+	       have->weight == g->weight && have->cir == g->cir &&
+	       have->pir == g->pir;
+}
+
+/* The link information of kind "gem" with @data, into @info. Return: its length. */
+static size_t gem_link_info_put(uint8_t *info, const uint8_t *data, size_t dlen)
+{
+	size_t ilen = nla_put(info, 0, IFLA_INFO_KIND, "gem", sizeof("gem"));
+
+	*(uint16_t *)(info + ilen) = (uint16_t)(NLA_HDRLEN_ + dlen);
+	*(uint16_t *)(info + ilen + 2) = IFLA_INFO_DATA | NLA_F_NESTED;
+	memcpy(info + ilen + NLA_HDRLEN_, data, dlen);
+	return ilen + NL_ALIGN(NLA_HDRLEN_ + dlen);
+}
+
+/*
+ * Give GEM interface @ifindex port @g's upstream attributes, through the
+ * link's changelink, which changes them without taking the port down.
+ */
+static int gem_change(int ifindex, const struct omci_hw_gem_port *g)
+{
+	uint8_t req[256] __aligned(4);
+	uint8_t data[64] __aligned(4);
+	uint8_t info[128] __aligned(4);
+	struct ifinfomsg ifi = { .ifi_family = AF_UNSPEC,
+				 .ifi_index = ifindex };
+	size_t dlen, ilen, off;
+
+	dlen = gem_upstream_put(data, 0, g);
+	ilen = gem_link_info_put(info, data, dlen);
+
+	memset(req, 0, sizeof(req));
+	*(uint16_t *)&req[4] = RTM_NEWLINK;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK;
+	*(uint32_t *)&req[8] = 4;
+	memcpy(req + NL_HDRLEN, &ifi, sizeof(ifi));
+	off = NL_HDRLEN + sizeof(ifi);
+	*(uint16_t *)(req + off) = (uint16_t)(NLA_HDRLEN_ + ilen);
+	*(uint16_t *)(req + off + 2) = IFLA_LINKINFO | NLA_F_NESTED;
+	memcpy(req + off + NLA_HDRLEN_, info, ilen);
+	off += NL_ALIGN(NLA_HDRLEN_ + ilen);
+
+	*(uint32_t *)&req[0] = (uint32_t)off;
+	return rtnl_talk(req, off, NULL, 0, NULL);
+}
+
+/*
+ * Create a GEM interface on @lower, up, with the port's direction and T-CONT,
+ * and the upstream attributes of a port that carries traffic upstream.
+ */
 static int gem_create(const struct omci_hw_gem_port *g, int lower)
 {
 	uint8_t req[512] __aligned(4);
-	uint8_t data[64] __aligned(4);
-	uint8_t info[128] __aligned(4);
+	uint8_t data[96] __aligned(4);
+	uint8_t info[160] __aligned(4);
 	char name[IFNAMSIZ];
 	struct ifinfomsg ifi = { .ifi_family = AF_UNSPEC };
 	uint32_t tcont = g->tcont;
@@ -842,17 +970,15 @@ static int gem_create(const struct omci_hw_gem_port *g, int lower)
 		       sizeof(g->port_id));
 	dlen = nla_put(data, dlen, IFLA_GEM_DIRECTION, &g->direction,
 		       sizeof(g->direction));
-	if (g->direction != OMCI_HW_GEM_DIR_DOWNSTREAM)
+	if (g->direction != OMCI_HW_GEM_DIR_DOWNSTREAM) {
 		dlen = nla_put(data, dlen, IFLA_GEM_TCONT, &tcont,
 			       sizeof(tcont));
+		dlen = gem_upstream_put(data, dlen, g);
+	}
 	if (g->multicast && g->direction == OMCI_HW_GEM_DIR_DOWNSTREAM)
 		dlen = nla_put(data, dlen, IFLA_GEM_MULTICAST, NULL, 0);
 
-	ilen = nla_put(info, ilen, IFLA_INFO_KIND, "gem", sizeof("gem"));
-	*(uint16_t *)(info + ilen) = (uint16_t)(NLA_HDRLEN_ + dlen);
-	*(uint16_t *)(info + ilen + 2) = IFLA_INFO_DATA | NLA_F_NESTED;
-	memcpy(info + ilen + NLA_HDRLEN_, data, dlen);
-	ilen += NL_ALIGN(NLA_HDRLEN_ + dlen);
+	ilen = gem_link_info_put(info, data, dlen);
 
 	memset(req, 0, sizeof(req));
 	*(uint16_t *)&req[4] = RTM_NEWLINK;
@@ -878,7 +1004,10 @@ static int gem_create(const struct omci_hw_gem_port *g, int lower)
 
 /*
  * Make the GEM interfaces those of @ports: an interface that matches a port
- * stays, the others go, and the missing ones are made.
+ * stays, given the port's upstream attributes where they differ; the others
+ * go, and the missing ones are made. An interface the kernel will not give
+ * new upstream attributes keeps its old ones, and its port counts as
+ * rejected.
  */
 static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 					 size_t n,
@@ -912,10 +1041,29 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 		for (size_t j = 0; j < nhave; j++) {
 			if (have[j].port_id != ports[i].port_id)
 				continue;
-			if (have[j].direction == ports[i].direction &&
-			    have[j].tcont == ports[i].tcont &&
-			    have[j].multicast == ports[i].multicast)
-				keep[j] = true;
+			if (have[j].direction != ports[i].direction ||
+			    have[j].tcont != ports[i].tcont ||
+			    have[j].multicast != ports[i].multicast)
+				continue;
+			keep[j] = true;
+			if (gem_upstream_same(&have[j], &ports[i]))
+				continue;
+			err = gem_change(have[j].ifindex, &ports[i]);
+			if (err) {
+				OMCI_WARN(
+					"gem: the kernel refused Port-ID %u priorities %#04x, queue %u, weight %u, rates %u/%u: %s (%s)",
+					ports[i].port_id, ports[i].pbits,
+					ports[i].queue, ports[i].weight,
+					ports[i].cir, ports[i].pir,
+					strerror(-err), omci_hw_last_extack());
+				omci_hw_reject_add(rejected, ports[i].port_id);
+				continue;
+			}
+			OMCI_INFO(
+				"gem: Port-ID %u now takes priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s",
+				ports[i].port_id, ports[i].pbits,
+				ports[i].queue, ports[i].weight, ports[i].cir,
+				ports[i].pir);
 		}
 	}
 
@@ -949,10 +1097,12 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 			omci_hw_reject_add(rejected, ports[i].port_id);
 			continue;
 		}
-		OMCI_INFO("gem: Port-ID %u up as " GEM_NAME_FMT
-			  " (direction %u, T-CONT %u)",
-			  ports[i].port_id, ports[i].port_id,
-			  ports[i].direction, ports[i].tcont);
+		OMCI_INFO(
+			"gem: Port-ID %u up as " GEM_NAME_FMT
+			" (direction %u, T-CONT %u, priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s)",
+			ports[i].port_id, ports[i].port_id, ports[i].direction,
+			ports[i].tcont, ports[i].pbits, ports[i].queue,
+			ports[i].weight, ports[i].cir, ports[i].pir);
 	}
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;

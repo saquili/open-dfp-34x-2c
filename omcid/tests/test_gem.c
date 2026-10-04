@@ -76,6 +76,39 @@ static void gem_create(struct omci_mib *mib, uint16_t instance,
 		 OMCI_OK);
 }
 
+/* Set attribute @attr of @cls instance @inst to the @size-byte big-endian @v. */
+static void attr_put(struct omci_mib *mib, uint16_t cls, uint16_t inst,
+		     uint8_t attr, uint32_t v, size_t size)
+{
+	uint8_t buf[4];
+
+	for (size_t i = 0; i < size; i++)
+		buf[i] = (uint8_t)(v >> (8u * (size - 1u - i)));
+	CHECK_EQ(omci_mib_attr_set(mib, cls, inst, attr, buf, size), OMCI_OK);
+}
+
+/* A priority queue's related port: its T-CONT and its priority there. */
+static uint32_t related(uint16_t tcont, uint16_t prio)
+{
+	return (uint32_t)tcont << 16 | prio;
+}
+
+/* The port of Port-ID @port_id as the last programming gave it, or NULL. */
+static const struct omci_hw_gem_port *programmed(struct omci_mib *mib,
+						 uint16_t port_id)
+{
+	const struct omci_hw_gem_port *ap = NULL;
+	unsigned int refused = 0;
+	size_t n;
+
+	(void)!omci_gem_program(mib, &refused);
+	n = omci_hw_gem_recorded(&ap);
+	for (size_t i = 0; i < n; i++)
+		if (ap[i].port_id == port_id)
+			return &ap[i];
+	return NULL;
+}
+
 static int index_of(const struct omci_hw_gem_port *p, size_t n,
 		    uint16_t port_id)
 {
@@ -280,6 +313,172 @@ int main(void)
 		CHECK(!omci_gem_instance_rejected(0x0116u));
 		printf("    a Port-ID this daemon refuses is reported against its own instance too\n");
 		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_CLASS_ID, 0x0301u),
+			 OMCI_OK);
+	}
+
+	{
+		/*
+		 * The synthetic ONU has two queues per T-CONT: T-CONT 0x8001's
+		 * are 0x8002 (priority 0) and 0x8003 (priority 1), its traffic
+		 * scheduler is 0x8001.
+		 */
+		const struct omci_hw_gem_port *g;
+		char log[512];
+
+		gem_create(mib, 0x0500u, 500u, 0x8001u, 3u);
+		gem_create(mib, 0x0501u, 501u, 0x8001u, 1u);
+		gem_create(mib, 0x0503u, 503u, 0x0000u, 2u);
+
+		g = programmed(mib, 500u);
+		CHECK(g != NULL);
+		if (g != NULL) {
+			CHECK_EQ(g->pbits, 0xffu);
+			CHECK_EQ(g->queue, 0u);
+			CHECK_EQ(g->weight, 0u);
+			CHECK_EQ(g->cir, 0u);
+			CHECK_EQ(g->pir, 0u);
+		}
+		printf("    a port without a priority queue, descriptor or mapper takes every priority, queue 0, no weight, no rates\n");
+
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TM_US,
+			 0x8003u, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->queue == 1u && g->weight == 0u);
+		printf("    the queue is the priority of the queue the traffic management pointer names, strict under a strict scheduler\n");
+
+		attr_put(mib, OMCI_GEM_SCHED_CLASS_ID, 0x8001u,
+			 OMCI_GEM_SCHED_ATTR_POLICY, OMCI_GEM_POLICY_WRR, 1);
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8003u,
+			 OMCI_GEM_PRIQ_ATTR_WEIGHT, 0u, 1);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->weight == 1u);
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8003u,
+			 OMCI_GEM_PRIQ_ATTR_WEIGHT, 9u, 1);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->weight == 9u);
+		printf("    under a weighted round robin scheduler the queue's weight comes along, 0 taken as 1\n");
+
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8003u,
+			 OMCI_GEM_PRIQ_ATTR_SCHEDULER, 0u, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->weight == 0u);
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8001u,
+			 OMCI_GEM_TCONT_ATTR_POLICY, OMCI_GEM_POLICY_WRR, 1);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->weight == 9u);
+		printf("    a queue without a scheduler takes the T-CONT's policy\n");
+
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8003u,
+			 OMCI_GEM_PRIQ_ATTR_RELATED_PORT,
+			 related(0x8001u, 0x0fffu), 4);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->queue == 1u);
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8003u,
+			 OMCI_GEM_PRIQ_ATTR_RELATED_PORT, related(0x8001u, 1u),
+			 4);
+		printf("    a priority beyond the T-CONT's queues takes its last queue\n");
+
+		omci_log_level_set(OMCI_LOG_WARN);
+		OMCI_T_CAPTURE_LOG(log, {
+			attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u,
+				 OMCI_GEM_ATTR_TM_US, 0x8000u, 2);
+			g = programmed(mib, 500u);
+		});
+		omci_log_level_set(OMCI_LOG_ERR);
+		CHECK(g != NULL && g->queue == 0u);
+		CHECK_EQ(
+			omci_t_log_count(
+				log,
+				"me268: instance 0x0500 sends through priority queue 0x8000, which belongs to 0x8000 and not to its T-CONT 0x8001; the queue's priority is kept"),
+			1u);
+		printf("    a queue of another T-CONT is named in the log, its priority kept\n");
+
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8002u,
+			 OMCI_GEM_PRIQ_ATTR_RELATED_PORT, related(0x80ffu, 1u),
+			 4);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TM_US,
+			 0x8002u, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->queue == 0u);
+		attr_put(mib, OMCI_GEM_PRIQ_CLASS_ID, 0x8002u,
+			 OMCI_GEM_PRIQ_ATTR_RELATED_PORT, related(0x8001u, 0u),
+			 4);
+		printf("    a queue of a T-CONT with no queues of its own gives queue 0\n");
+
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TM_US,
+			 0x8003u, 2);
+		attr_put(mib, OMCI_GEM_ONUG_CLASS_ID, 0u,
+			 OMCI_GEM_ONUG_ATTR_TM_OPTION,
+			 OMCI_GEM_TM_RATE_CONTROLLED, 1);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->queue == 0u && g->weight == 0u);
+		attr_put(mib, OMCI_GEM_ONUG_CLASS_ID, 0u,
+			 OMCI_GEM_ONUG_ATTR_TM_OPTION, 0u, 1);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->queue == 1u && g->weight == 9u);
+		printf("    a rate-controlled ONU's pointer names the T-CONT, never a queue\n");
+
+		CHECK_EQ(omci_mib_create(mib, OMCI_GEM_TD_CLASS_ID, 0x0001u),
+			 OMCI_OK);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0001u,
+			 OMCI_GEM_TD_ATTR_CIR, 1000000u, 4);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0001u,
+			 OMCI_GEM_TD_ATTR_PIR, 2000000u, 4);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TD_US,
+			 0x0001u, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->cir == 1000000u && g->pir == 2000000u);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0001u,
+			 OMCI_GEM_TD_ATTR_PIR, 500000u, 4);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->cir == 1000000u && g->pir == 1000000u);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TD_US,
+			 0xffffu, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->cir == 0u && g->pir == 0u);
+		printf("    the rates come from the traffic descriptor, a peak rate below the committed one raised to it\n");
+
+		CHECK_EQ(omci_mib_create(mib, OMCI_GEM_IW_CLASS_ID, 0x0600u),
+			 OMCI_OK);
+		attr_put(mib, OMCI_GEM_IW_CLASS_ID, 0x0600u,
+			 OMCI_GEM_IW_ATTR_CTP, 0x0500u, 2);
+		CHECK_EQ(omci_mib_create(mib, OMCI_GEM_IW_CLASS_ID, 0x0601u),
+			 OMCI_OK);
+		attr_put(mib, OMCI_GEM_IW_CLASS_ID, 0x0601u,
+			 OMCI_GEM_IW_ATTR_CTP, 0x0501u, 2);
+		CHECK_EQ(omci_mib_create(mib, OMCI_GEM_MAPPER_CLASS_ID,
+					 0x0700u),
+			 OMCI_OK);
+		for (uint8_t b = 0; b < 8u; b++)
+			attr_put(mib, OMCI_GEM_MAPPER_CLASS_ID, 0x0700u,
+				 (uint8_t)(OMCI_GEM_MAPPER_ATTR_PBIT0 + b),
+				 b < 4u	 ? 0x0600u :
+				 b == 4u ? 0x0699u :
+				 b == 5u ? 0xffffu :
+					   0x0601u,
+				 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->pbits == 0x0fu);
+		g = programmed(mib, 501u);
+		CHECK(g != NULL && g->pbits == 0xc0u);
+		g = programmed(mib, 503u);
+		CHECK(g != NULL && g->pbits == 0xffu && g->queue == 0u);
+		printf("    a port takes the priorities a mapper sends it; a port no mapper names takes all\n");
+
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_MAPPER_CLASS_ID,
+					 0x0700u),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_IW_CLASS_ID, 0x0600u),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_IW_CLASS_ID, 0x0601u),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_TD_CLASS_ID, 0x0001u),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_CLASS_ID, 0x0500u),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_CLASS_ID, 0x0501u),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_delete(mib, OMCI_GEM_CLASS_ID, 0x0503u),
 			 OMCI_OK);
 	}
 

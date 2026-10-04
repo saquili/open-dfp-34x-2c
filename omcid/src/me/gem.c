@@ -20,6 +20,9 @@
 /* A GEM header carries a port identifier of twelve bits. */
 #define GEM_PORT_ID_MAX 4095u
 
+/* The instance bit of an upstream priority queue (G.988 9.2.10). */
+#define GEM_PRIQ_UPSTREAM 0x8000u
+
 static struct omci_hw_gem_port g_last[OMCI_HW_GEM_MAX_PORTS];
 static size_t g_last_n;
 
@@ -32,26 +35,172 @@ static void bad_add(uint16_t instance)
 		g_bad[g_bad_n++] = instance;
 }
 
+/* An attribute of @class_id as a big-endian number of @size bytes, 0 when absent. */
+static uint32_t attr_of(const struct omci_mib *mib, uint16_t class_id,
+			uint16_t instance, uint8_t attr, size_t size)
+{
+	uint8_t buf[4] = { 0 };
+	uint32_t v = 0;
+	size_t len = 0;
+
+	(void)!omci_mib_attr_get(mib, class_id, instance, attr, buf, size,
+				 &len);
+	for (size_t i = 0; i < size; i++)
+		v = v << 8 | buf[i];
+	return v;
+}
+
 static uint16_t attr_u16(const struct omci_mib *mib, uint16_t instance,
 			 uint8_t attr)
 {
-	uint8_t buf[2] = { 0, 0 };
-	size_t len = 0;
-
-	(void)!omci_mib_attr_get(mib, OMCI_GEM_CLASS_ID, instance, attr, buf,
-				 sizeof(buf), &len);
-	return (uint16_t)((uint16_t)buf[0] << 8 | buf[1]);
+	return (uint16_t)attr_of(mib, OMCI_GEM_CLASS_ID, instance, attr, 2);
 }
 
 static uint8_t attr_u8(const struct omci_mib *mib, uint16_t instance,
 		       uint8_t attr)
 {
-	uint8_t buf[1] = { 0 };
-	size_t len = 0;
+	return (uint8_t)attr_of(mib, OMCI_GEM_CLASS_ID, instance, attr, 1);
+}
 
-	(void)!omci_mib_attr_get(mib, OMCI_GEM_CLASS_ID, instance, attr, buf,
-				 sizeof(buf), &len);
-	return buf[0];
+/* A pointer that names no instance: 0 or 0xFFFF, as the bridges read them. */
+static bool null_pointer(uint16_t ptr)
+{
+	return ptr == 0 || ptr == 0xffffu;
+}
+
+/*
+ * The upstream priority queues of T-CONT @tcont: those the ONU made for it,
+ * which its related port names, at least one.
+ */
+static uint8_t tcont_queues(const struct omci_mib *mib, uint16_t tcont)
+{
+	struct omci_mib_cursor cur;
+	unsigned int n = 0;
+	enum omci_status rc;
+
+	for (rc = omci_mib_walk_first(mib, &cur); rc == OMCI_OK;
+	     rc = omci_mib_walk_next(mib, &cur))
+		if (cur.class_id == OMCI_GEM_PRIQ_CLASS_ID &&
+		    (cur.instance & GEM_PRIQ_UPSTREAM) &&
+		    attr_of(mib, OMCI_GEM_PRIQ_CLASS_ID, cur.instance,
+			    OMCI_GEM_PRIQ_ATTR_RELATED_PORT,
+			    4) >> 16 ==
+			    tcont)
+			n++;
+	return n ? (uint8_t)(n > UINT8_MAX ? UINT8_MAX : n) : 1u;
+}
+
+/*
+ * The queue and weight of port @p, of instance @instance on T-CONT @tcont,
+ * from the priority queue its traffic management pointer @tm names: the
+ * queue's priority within its T-CONT, 0 the highest and at most the T-CONT's
+ * last queue, and the queue's weight, at least 1, when the queue's traffic
+ * scheduler, or the T-CONT when the queue has none, has the weighted round
+ * robin policy. A pointer that names no upstream priority queue leaves queue
+ * 0 and strict priority, and so does any pointer of a rate-controlled ONU, whose
+ * pointer names the T-CONT (G.988 9.2.3), an instance number a priority
+ * queue may have too.
+ */
+static void gem_queue(const struct omci_mib *mib, uint16_t instance,
+		      uint16_t tm, uint16_t tcont, struct omci_hw_gem_port *p)
+{
+	uint32_t related;
+	uint16_t owner, prio, sched;
+	uint8_t queues, policy;
+
+	if (attr_of(mib, OMCI_GEM_ONUG_CLASS_ID, 0,
+		    OMCI_GEM_ONUG_ATTR_TM_OPTION,
+		    1) == OMCI_GEM_TM_RATE_CONTROLLED ||
+	    null_pointer(tm) || !(tm & GEM_PRIQ_UPSTREAM) ||
+	    !omci_mib_exists(mib, OMCI_GEM_PRIQ_CLASS_ID, tm))
+		return;
+
+	related = attr_of(mib, OMCI_GEM_PRIQ_CLASS_ID, tm,
+			  OMCI_GEM_PRIQ_ATTR_RELATED_PORT, 4);
+	owner = (uint16_t)(related >> 16);
+	prio = (uint16_t)related;
+	if (owner != tcont)
+		OMCI_WARN(
+			"me268: instance %#06x sends through priority queue %#06x, which belongs to %#06x and not to its T-CONT %#06x; the queue's priority is kept",
+			instance, tm, owner, tcont);
+	queues = tcont_queues(mib, owner);
+	p->queue = prio < queues ? (uint8_t)prio : (uint8_t)(queues - 1u);
+
+	sched = (uint16_t)attr_of(mib, OMCI_GEM_PRIQ_CLASS_ID, tm,
+				  OMCI_GEM_PRIQ_ATTR_SCHEDULER, 2);
+	if (!null_pointer(sched) &&
+	    omci_mib_exists(mib, OMCI_GEM_SCHED_CLASS_ID, sched))
+		policy = (uint8_t)attr_of(mib, OMCI_GEM_SCHED_CLASS_ID, sched,
+					  OMCI_GEM_SCHED_ATTR_POLICY, 1);
+	else
+		policy = (uint8_t)attr_of(mib, OMCI_GEM_TCONT_CLASS_ID, tcont,
+					  OMCI_GEM_TCONT_ATTR_POLICY, 1);
+	if (policy == OMCI_GEM_POLICY_WRR) {
+		const uint8_t w =
+			(uint8_t)attr_of(mib, OMCI_GEM_PRIQ_CLASS_ID, tm,
+					 OMCI_GEM_PRIQ_ATTR_WEIGHT, 1);
+
+		p->weight = w ? w : 1u;
+	}
+}
+
+/*
+ * The rates of port @p from the traffic descriptor @td names, in bytes per
+ * second; none without one. G.988 uses the pointer for a rate-controlled ONU
+ * and one controlled by both priority and rate (9.2.3); an OLT that points a
+ * priority-controlled ONU's port at a descriptor still means its rates, so
+ * they are taken whatever the option. A peak rate below the committed rate is
+ * raised to it, since the committed rate is the one the OLT counts on.
+ */
+static void gem_rates(const struct omci_mib *mib, uint16_t td,
+		      struct omci_hw_gem_port *p)
+{
+	if (null_pointer(td) || !omci_mib_exists(mib, OMCI_GEM_TD_CLASS_ID, td))
+		return;
+
+	p->cir =
+		attr_of(mib, OMCI_GEM_TD_CLASS_ID, td, OMCI_GEM_TD_ATTR_CIR, 4);
+	p->pir =
+		attr_of(mib, OMCI_GEM_TD_CLASS_ID, td, OMCI_GEM_TD_ATTR_PIR, 4);
+	if (p->pir && p->pir < p->cir) {
+		OMCI_DEBUG(
+			"me280: instance %#06x has a peak rate below its committed rate; the committed rate is taken for both",
+			td);
+		p->pir = p->cir;
+	}
+}
+
+/*
+ * The priorities the IEEE 802.1p mappers of the MIB send to GEM port network
+ * CTP @instance, through the GEM interworking termination points their
+ * priorities point at; all eight when no mapper leads to it.
+ */
+static uint8_t gem_pbits(const struct omci_mib *mib, uint16_t instance)
+{
+	struct omci_mib_cursor cur;
+	bool mapped = false;
+	uint8_t pbits = 0;
+	enum omci_status rc;
+
+	for (rc = omci_mib_walk_first(mib, &cur); rc == OMCI_OK;
+	     rc = omci_mib_walk_next(mib, &cur)) {
+		if (cur.class_id != OMCI_GEM_MAPPER_CLASS_ID)
+			continue;
+		for (uint8_t b = 0; b < 8u; b++) {
+			const uint16_t iw = (uint16_t)attr_of(
+				mib, OMCI_GEM_MAPPER_CLASS_ID, cur.instance,
+				(uint8_t)(OMCI_GEM_MAPPER_ATTR_PBIT0 + b), 2);
+
+			if (null_pointer(iw) ||
+			    attr_of(mib, OMCI_GEM_IW_CLASS_ID, iw,
+				    OMCI_GEM_IW_ATTR_CTP, 2) != instance ||
+			    !omci_mib_exists(mib, OMCI_GEM_IW_CLASS_ID, iw))
+				continue;
+			pbits |= (uint8_t)(1u << b);
+			mapped = true;
+		}
+	}
+	return mapped ? pbits : 0xffu;
 }
 
 /*
@@ -70,7 +219,7 @@ static size_t gather(const struct omci_mib *mib, struct omci_hw_gem_port *out,
 
 	for (rc = omci_mib_walk_first(mib, &cur); rc == OMCI_OK;
 	     rc = omci_mib_walk_next(mib, &cur)) {
-		struct omci_hw_gem_port p = { 0 };
+		struct omci_hw_gem_port p = { .pbits = 0xffu };
 		uint16_t port_id = 0;
 		uint16_t tcont = GEM_TCONT_NONE_A;
 		uint8_t dir = 0;
@@ -125,6 +274,15 @@ static size_t gather(const struct omci_mib *mib, struct omci_hw_gem_port *out,
 				continue;
 			}
 			p.tcont = (uint8_t)(tcont - GEM_TCONT_BASE);
+			gem_queue(mib, cur.instance,
+				  attr_u16(mib, cur.instance,
+					   OMCI_GEM_ATTR_TM_US),
+				  tcont, &p);
+			gem_rates(mib,
+				  attr_u16(mib, cur.instance,
+					   OMCI_GEM_ATTR_TD_US),
+				  &p);
+			p.pbits = gem_pbits(mib, cur.instance);
 			/* A port that only carries traffic downstream needs no T-CONT. */
 		} else if (tcont != GEM_TCONT_NONE_A &&
 			   tcont != GEM_TCONT_NONE_B) {

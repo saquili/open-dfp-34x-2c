@@ -18,14 +18,48 @@
 #include "omcid/attrs.h"
 #include "omcid/status.h"
 
-/* The attributes of class 268 that define a port, and the T-CONT class. */
+/*
+ * The attributes of class 268 that define a port and its upstream traffic,
+ * and those of the classes they point at: the T-CONT, the priority queue,
+ * the traffic scheduler and the traffic descriptor (G.988 9.2.2, 9.2.10 to
+ * 9.2.12), and the IEEE 802.1p mapper and GEM interworking termination
+ * point that give a port its priorities (9.3.10, 9.2.4).
+ */
 enum {
 	OMCI_GEM_CLASS_ID = 268,
 	OMCI_GEM_ATTR_PORT_ID = 1,
 	OMCI_GEM_ATTR_TCONT = 2,
 	OMCI_GEM_ATTR_DIRECTION = 3,
+	OMCI_GEM_ATTR_TM_US = 4,
+	OMCI_GEM_ATTR_TD_US = 5,
 
 	OMCI_GEM_TCONT_CLASS_ID = 262,
+	OMCI_GEM_TCONT_ATTR_POLICY = 3,
+
+	OMCI_GEM_PRIQ_CLASS_ID = 277,
+	OMCI_GEM_PRIQ_ATTR_RELATED_PORT = 6,
+	OMCI_GEM_PRIQ_ATTR_SCHEDULER = 7,
+	OMCI_GEM_PRIQ_ATTR_WEIGHT = 8,
+
+	OMCI_GEM_SCHED_CLASS_ID = 278,
+	OMCI_GEM_SCHED_ATTR_POLICY = 3,
+
+	OMCI_GEM_TD_CLASS_ID = 280,
+	OMCI_GEM_TD_ATTR_CIR = 1,
+	OMCI_GEM_TD_ATTR_PIR = 2,
+
+	OMCI_GEM_MAPPER_CLASS_ID = 130,
+	OMCI_GEM_MAPPER_ATTR_PBIT0 = 2,
+	OMCI_GEM_IW_CLASS_ID = 266,
+	OMCI_GEM_IW_ATTR_CTP = 1,
+
+	/* The ONU-G's traffic management option, and its rate-controlled value. */
+	OMCI_GEM_ONUG_CLASS_ID = 256,
+	OMCI_GEM_ONUG_ATTR_TM_OPTION = 4,
+	OMCI_GEM_TM_RATE_CONTROLLED = 1,
+
+	/* The policy of a T-CONT or a traffic scheduler. */
+	OMCI_GEM_POLICY_WRR = 2,
 };
 
 /**
@@ -37,6 +71,14 @@ enum {
  * bits, its direction is not one the standard defines, it carries traffic
  * upstream without pointing at a T-CONT of the ONU, or another instance
  * has the same port identifier.
+ *
+ * A port that carries traffic upstream takes its queue from the priority
+ * queue its traffic management pointer names, the queue's priority within
+ * the T-CONT, and a weight from that queue when the queue's scheduler, or
+ * else its T-CONT, has the weighted round robin policy; its rates from the
+ * traffic descriptor its descriptor pointer names; and its priorities from
+ * the IEEE 802.1p mappers whose priorities lead to it, all eight when none
+ * does.
  *
  * Return: the status of the hardware.
  */

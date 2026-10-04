@@ -117,9 +117,7 @@ test_a_mapper_whose_two_ports_the_device_refuses_is_one_refused_instance(
 	CHECK_EQ(refused, 0u);
 	CHECK(omci_bridge_instance_rejected(0x0501u));
 	CHECK(!omci_bridge_instance_rejected(0x0502u));
-	CHECK(strstr(g_log,
-		     "me130: mapper 0x0401 sorts 2 priorities into 2 GEM ports") !=
-	      NULL);
+	CHECK(strstr(g_log, "me130: mapper 0x0401") == NULL);
 }
 
 static void

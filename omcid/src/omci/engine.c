@@ -305,6 +305,10 @@ enum {
 	ME_MCAST_GEM_IW_TP = 281,
 
 	ME_GEM_PORT_NET_CTP = 268,
+	ME_TCONT = 262,
+	ME_PRIORITY_QUEUE = 277,
+	ME_TRAFFIC_SCHED = 278,
+	ME_TRAFFIC_DESCRIPTOR = 280,
 
 	ME171_RULE_ATTR = 6,
 };
@@ -318,6 +322,18 @@ static enum omci_status reprogram_vlan(struct omci_engine *eng)
 static enum omci_status reprogram_gem(struct omci_engine *eng)
 {
 	return omci_gem_program(eng->mib, NULL);
+}
+
+/*
+ * True for a class whose instances shape the GEM ports: the ports
+ * themselves, and what gives them their queue, weight, rates and priorities.
+ */
+static bool class_shapes_gem(uint16_t class_id)
+{
+	return class_id == ME_GEM_PORT_NET_CTP || class_id == ME_TCONT ||
+	       class_id == ME_PRIORITY_QUEUE || class_id == ME_TRAFFIC_SCHED ||
+	       class_id == ME_TRAFFIC_DESCRIPTOR ||
+	       class_id == ME_8021P_MAPPER || class_id == ME_GEM_IW_TP;
 }
 
 /* True for a class whose instances make up a bridge or the GEM ports behind it. */
@@ -792,7 +808,7 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 
 	enum omci_status gem = OMCI_OK, bridge = OMCI_OK;
 
-	if (req->class_id == ME_GEM_PORT_NET_CTP)
+	if (class_shapes_gem(req->class_id))
 		gem = reprogram_gem(eng);
 	if (class_builds_bridge(req->class_id))
 		bridge = reprogram_bridge(eng);
@@ -816,7 +832,7 @@ static void handle_delete(struct omci_engine *eng, const struct omci_frame *req)
 
 	if (rc == OMCI_OK && req->class_id == ME_EXT_VLAN_TAG_OPER)
 		vlan = reprogram_vlan(eng);
-	if (rc == OMCI_OK && req->class_id == ME_GEM_PORT_NET_CTP)
+	if (rc == OMCI_OK && class_shapes_gem(req->class_id))
 		gem = reprogram_gem(eng);
 	if (rc == OMCI_OK && class_builds_bridge(req->class_id))
 		bridge = reprogram_bridge(eng);
@@ -875,7 +891,7 @@ static enum omci_status set_one(struct omci_engine *eng,
 
 		enum omci_status gem = OMCI_OK, bridge = OMCI_OK;
 
-		if (req->class_id == ME_GEM_PORT_NET_CTP)
+		if (class_shapes_gem(req->class_id))
 			gem = reprogram_gem(eng);
 		if (class_builds_bridge(req->class_id))
 			bridge = reprogram_bridge(eng);

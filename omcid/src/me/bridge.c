@@ -74,8 +74,10 @@ static void add_port_id(uint16_t *ids, uint8_t *n, uint16_t id)
 }
 
 /*
- * The GEM ports a network-side bridge port leads to. The switch bridges
- * them all together: a mapper's choice by priority does not survive.
+ * The GEM ports a network-side bridge port leads to. The ports a mapper
+ * leads to are bridge ports each, with the bridge port's VLANs; which of
+ * them a VLAN's frame goes up is the mapper's choice by priority, which
+ * each GEM port carries as the priorities it takes (gem.h).
  *
  * Return: their number, 0 when none can be found.
  */
@@ -107,8 +109,6 @@ static uint8_t resolve_gem_ports(const struct omci_mib *mib, uint16_t instance,
 	}
 
 	case OMCI_BRIDGE_TP_MAPPER: {
-		unsigned int found = 0;
-
 		for (uint8_t b = 0; b < OMCI_BRIDGE_MAPPER_PBITS; b++) {
 			uint16_t iw = 0;
 			uint16_t id = 0;
@@ -129,14 +129,8 @@ static uint8_t resolve_gem_ports(const struct omci_mib *mib, uint16_t instance,
 					tp_ptr, b, iw);
 				continue;
 			}
-			found++;
 			add_port_id(ids, &n, id);
 		}
-
-		if (n > 1)
-			OMCI_WARN(
-				"me130: mapper %#06x sorts %u priorities into %u GEM ports; this ONU bridges them together and the p-bit does not choose",
-				tp_ptr, found, n);
 		return n;
 	}
 
