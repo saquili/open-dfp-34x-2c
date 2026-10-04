@@ -122,6 +122,18 @@ The runs, the oldest first:
     ``run12``: the SerDes lane to the host finding the host's setting
     itself. 40 of 40 passed.
 
+``2026-10-04-run13``
+    The same cases on the RAM image built from ``run13``:
+    Extended_Burst_Length taken only before the first serial-number request,
+    the burst overhead clamped at 128 bytes with the type 1 and type 2
+    preambles, the PEE alarm, the PST answer, the declared transmit power
+    level, power levelling and Dying_Gasp before a restart. The watchdog
+    reset is back in 83 s, the loader now counting 5 s. 39 of 40 passed:
+    ``omci.channel`` found one OMCI message dropped, which went with the
+    OMCI channel when the OLT deactivated the ONU 18 s into its first O5
+    session, before the run began; the kernel log shows the deactivation and
+    the ONU back in O5 2 s later.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
