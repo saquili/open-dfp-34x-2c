@@ -44,12 +44,14 @@ struct pon_omci_port;
  *	 0 for none
  * @pir: the peak rate of the port's upstream traffic, bytes per second; 0
  *	 for no limit but the T-CONT's grants
+ * @pbits: the IEEE 802.1p priorities of the upstream frames the port takes
+ *	   from its VLANs, bit p for priority p; 0xff for all
  *
  * The class has checked the combination: a multicast port is downstream
  * only, a port that carries upstream traffic has a T-CONT, @queue is below
  * the queues per T-CONT the MAC registered, @cir is not above a @pir that
- * limits, and a port that carries no upstream traffic has the scheduling
- * defaults (all 0). Several GEM ports may share one T-CONT, and one queue
+ * limits, and a port that carries no upstream traffic has the upstream
+ * defaults (@pbits 0xff, the others 0). Several GEM ports may share one T-CONT, and one queue
  * of it; the rates of the ports that share a queue add up. The MAC checks
  * @tcont against the T-CONTs it has, and refuses what it cannot do.
  */
@@ -62,6 +64,7 @@ struct pon_gem_config {
 	u8 weight;
 	u64 cir;
 	u64 pir;
+	u8 pbits;
 };
 
 /**
@@ -202,11 +205,11 @@ struct pon_device_ops {
 		       unsigned int *flow, struct netlink_ext_ack *extack);
 	/**
 	 * @gem_change: Apply cfg to the GEM port of flow. cfg differs from the
-	 * port's configuration only in its upstream scheduling (queue,
+	 * port's configuration only in its upstream attributes (pbits, queue,
 	 * weight, cir and pir), and the class has checked it as for gem_add.
 	 * Refuse what the MAC cannot do with a message in extack, leaving the
 	 * port as it was. Called with RTNL held. Without it, a GEM port's
-	 * scheduling stays as the port was created.
+	 * upstream attributes stay as the port was created.
 	 */
 	int (*gem_change)(struct pon_device *pon, unsigned int flow,
 			  const struct pon_gem_config *cfg,
@@ -253,11 +256,13 @@ struct pon_device_ops {
 	int (*gem_vlan_add)(struct pon_device *pon, unsigned int flow, u16 vid,
 			    u16 flags, struct netlink_ext_ack *extack);
 	/**
-	 * @gem_vlan_del: Remove bridge VLAN vid from the GEM port of flow.
-	 * Called with RTNL held, and not while another GEM interface of the
-	 * same bridge still has vid.
+	 * @gem_vlan_del: Remove bridge VLAN vid from the GEM port of flow;
+	 * last says that no other GEM interface of the same bridge still has
+	 * vid, so that a MAC that holds VLAN membership once for all of its
+	 * GEM ports can drop the VLAN then. Called with RTNL held.
 	 */
-	void (*gem_vlan_del)(struct pon_device *pon, unsigned int flow, u16 vid);
+	void (*gem_vlan_del)(struct pon_device *pon, unsigned int flow, u16 vid,
+			     bool last);
 	/**
 	 * @gem_mrouter: The bridge has started (mrouter true) or stopped
 	 * seeing a multicast router behind the GEM port of flow, from the

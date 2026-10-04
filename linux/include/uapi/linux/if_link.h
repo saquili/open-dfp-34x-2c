@@ -2042,9 +2042,16 @@ enum ifla_gem_direction {
  *	IFLA_GEM_DIR_DOWNSTREAM: a multicast GEM port carries downstream
  *	traffic only (ITU-T G.988 clause 9.2.5).
  *
- * The upstream scheduling of a port that carries upstream traffic, which a
- * port of another direction may not be given. Each may also be changed on
- * an existing link; the attributes above may not.
+ * The upstream attributes of a port that carries upstream traffic, which a
+ * port of another direction may not be given: which of its VLANs' frames it
+ * takes, and how it is scheduled. Each may also be changed on an existing
+ * link; the attributes above may not.
+ *
+ * IFLA_GEM_PBITS: u8, the IEEE 802.1p priorities of the upstream frames the
+ *	port takes from the VLANs it carries, bit p for priority p; all eight
+ *	if absent. The GEM ports that carry one VLAN upstream take disjoint
+ *	priorities of it, as the GEM ports behind an IEEE 802.1p mapper do
+ *	(ITU-T G.988 clause 9.3.10).
  *
  * IFLA_GEM_QUEUE: u8, the port's upstream queue in its T-CONT, 0 the
  *	highest priority and below the num-tcont-queues the "pon" family
@@ -2073,6 +2080,7 @@ enum {
 	IFLA_GEM_WEIGHT,
 	IFLA_GEM_CIR,
 	IFLA_GEM_PIR,
+	IFLA_GEM_PBITS,
 	__IFLA_GEM_MAX,
 };
 

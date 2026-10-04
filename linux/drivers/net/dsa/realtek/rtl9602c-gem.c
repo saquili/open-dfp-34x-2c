@@ -255,6 +255,13 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 		return -ERANGE;
 	}
 
+	/* A VLAN's frames go up one GEM port, whatever their priority. */
+	if (cfg->pbits != 0xff) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "GEM ports taking some priorities only are not supported");
+		return -EOPNOTSUPP;
+	}
+
 	mutex_lock(&p->gpon_lock);
 
 	/* GEM ports need the PON MAC, which a bring-up of the PON builds. */
@@ -450,15 +457,18 @@ static int rtl9602c_gem_vlan_add(struct pon_device *pon, unsigned int flow,
 }
 
 /*
- * The PON class calls this only once no other GEM interface of the bridge
- * has @vid, so the PON port leaves the VLAN.
+ * Once no other GEM interface of the bridge has @vid (@last), the PON port
+ * leaves the VLAN, and the flow gives up its claim on it: no other upstream
+ * GEM interface can be in a VLAN a flow claims.
  */
 static void rtl9602c_gem_vlan_del(struct pon_device *pon, unsigned int flow,
-				  u16 vid)
+				  u16 vid, bool last)
 {
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
 	struct switchdev_obj_port_vlan vlan = { .vid = vid };
 
+	if (!last)
+		return;
 	if (vid < VLAN_N_VID && p->gem_vid_flow[vid] == flow + 1) {
 		p->gem_vid_flow[vid] = 0;
 		rtl9602c_cf_sid_refresh(p);
@@ -553,6 +563,12 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 	mutex_lock(&p->gpon_lock);
 	if (WARN_ON(!test_bit(flow, p->gem_flows))) {
 		err = -ENOENT;
+		goto out;
+	}
+	if (cfg->pbits != 0xff) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "GEM ports taking some priorities only are not supported");
+		err = -EOPNOTSUPP;
 		goto out;
 	}
 

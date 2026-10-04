@@ -318,8 +318,9 @@ static void pon_gem_setup(struct net_device *dev)
  * ANI), 2 downstream (ANI to UNI) or 3 both. IFLA_GEM_TCONT: a T-CONT index,
  * from 0 and below the ONU's num-tconts; the MAC refuses one it does not
  * have. IFLA_GEM_QUEUE is checked against the MAC's queues per T-CONT
- * (pon_gem_parse_sched()); IFLA_GEM_WEIGHT is a priority queue's weight,
- * one byte (ITU-T G.988 clause 9.2.10); the rates are bytes per second.
+ * (pon_gem_parse_upstream()); IFLA_GEM_WEIGHT is a priority queue's weight,
+ * one byte (ITU-T G.988 clause 9.2.10); the rates are bytes per second;
+ * IFLA_GEM_PBITS has a bit for each of the eight IEEE 802.1p priorities.
  */
 static const struct nla_policy pon_gem_policy[IFLA_GEM_MAX + 1] = {
 	[IFLA_GEM_PORT_ID]	= NLA_POLICY_MAX(NLA_U16, 4095),
@@ -332,11 +333,13 @@ static const struct nla_policy pon_gem_policy[IFLA_GEM_MAX + 1] = {
 	[IFLA_GEM_WEIGHT]	= { .type = NLA_U8 },
 	[IFLA_GEM_CIR]		= { .type = NLA_UINT },
 	[IFLA_GEM_PIR]		= { .type = NLA_UINT },
+	[IFLA_GEM_PBITS]	= NLA_POLICY_MIN(NLA_U8, 1),
 };
 
-/* The attributes of a GEM port's upstream scheduling. */
-static const int pon_gem_sched_attrs[] = {
-	IFLA_GEM_QUEUE, IFLA_GEM_WEIGHT, IFLA_GEM_CIR, IFLA_GEM_PIR,
+/* The upstream attributes of a GEM port: what it takes, how it is scheduled. */
+static const int pon_gem_upstream_attrs[] = {
+	IFLA_GEM_PBITS, IFLA_GEM_QUEUE, IFLA_GEM_WEIGHT, IFLA_GEM_CIR,
+	IFLA_GEM_PIR,
 };
 
 static int pon_gem_parse(struct pon_gem_config *cfg, struct nlattr **data,
@@ -351,6 +354,7 @@ static int pon_gem_parse(struct pon_gem_config *cfg, struct nlattr **data,
 	cfg->direction = nla_get_u8_default(data[IFLA_GEM_DIRECTION],
 					    IFLA_GEM_DIR_BOTH);
 	cfg->multicast = nla_get_flag(data[IFLA_GEM_MULTICAST]);
+	cfg->pbits = 0xff;
 
 	/*
 	 * A multicast GEM port carries downstream traffic only: the ONU
@@ -380,15 +384,16 @@ static int pon_gem_parse(struct pon_gem_config *cfg, struct nlattr **data,
 }
 
 /*
- * Apply the upstream scheduling in @data to @cfg, which holds the defaults
- * for a new port and the port's own scheduling for a change, so that what
+ * Apply the upstream attributes in @data to @cfg, which holds the defaults
+ * for a new port and the port's own attributes for a change, so that what
  * @data leaves out stays as it was. Only a port that carries upstream traffic
- * is scheduled upstream; its queue is one of the T-CONT's, and a committed
+ * has upstream attributes; its queue is one of the T-CONT's, and a committed
  * rate above a peak rate that limits cannot be kept.
  */
-static int pon_gem_parse_sched(const struct pon_device *pon,
-			       struct pon_gem_config *cfg, struct nlattr **data,
-			       struct netlink_ext_ack *extack)
+static int pon_gem_parse_upstream(const struct pon_device *pon,
+				  struct pon_gem_config *cfg,
+				  struct nlattr **data,
+				  struct netlink_ext_ack *extack)
 {
 	unsigned int i;
 
@@ -396,16 +401,18 @@ static int pon_gem_parse_sched(const struct pon_device *pon,
 		return 0;
 
 	if (!(cfg->direction & IFLA_GEM_DIR_UPSTREAM)) {
-		for (i = 0; i < ARRAY_SIZE(pon_gem_sched_attrs); i++) {
-			if (!data[pon_gem_sched_attrs[i]])
+		for (i = 0; i < ARRAY_SIZE(pon_gem_upstream_attrs); i++) {
+			if (!data[pon_gem_upstream_attrs[i]])
 				continue;
-			NL_SET_ERR_MSG_ATTR(extack, data[pon_gem_sched_attrs[i]],
-					    "A GEM port that carries no upstream traffic has no upstream scheduling");
+			NL_SET_ERR_MSG_ATTR(extack,
+					    data[pon_gem_upstream_attrs[i]],
+					    "A GEM port that carries no upstream traffic has no upstream attributes");
 			return -EINVAL;
 		}
 		return 0;
 	}
 
+	cfg->pbits = nla_get_u8_default(data[IFLA_GEM_PBITS], cfg->pbits);
 	cfg->queue = nla_get_u8_default(data[IFLA_GEM_QUEUE], cfg->queue);
 	cfg->weight = nla_get_u8_default(data[IFLA_GEM_WEIGHT], cfg->weight);
 	if (data[IFLA_GEM_CIR])
@@ -461,7 +468,7 @@ static int pon_gem_newlink(struct net_device *dev,
 		return -EOPNOTSUPP;
 	}
 
-	err = pon_gem_parse_sched(gem->pon, &gem->cfg, params->data, extack);
+	err = pon_gem_parse_upstream(gem->pon, &gem->cfg, params->data, extack);
 	if (err)
 		goto err_free;
 
@@ -546,7 +553,7 @@ static void pon_gem_dellink(struct net_device *dev, struct list_head *head)
 }
 
 /*
- * Only the scheduling attributes may change, so every other attribute in
+ * Only the upstream attributes may change, so every other attribute in
  * @data must say what the port already has. IFLA_GEM_MULTICAST, a flag, can
  * only be given, so it may come only for a multicast port.
  */
@@ -576,21 +583,22 @@ static int pon_gem_changelink(struct net_device *dev, struct nlattr *tb[],
 		bad = data[IFLA_GEM_MULTICAST];
 	if (bad) {
 		NL_SET_ERR_MSG_ATTR(extack, bad,
-				    "Only a GEM port's upstream scheduling can change; delete the port and create it again");
+				    "Only a GEM port's upstream attributes can change; delete the port and create it again");
 		return -EOPNOTSUPP;
 	}
 
-	err = pon_gem_parse_sched(gem->pon, &cfg, data, extack);
+	err = pon_gem_parse_upstream(gem->pon, &cfg, data, extack);
 	if (err)
 		return err;
 
-	if (cfg.queue == gem->cfg.queue && cfg.weight == gem->cfg.weight &&
-	    cfg.cir == gem->cfg.cir && cfg.pir == gem->cfg.pir)
+	if (cfg.pbits == gem->cfg.pbits && cfg.queue == gem->cfg.queue &&
+	    cfg.weight == gem->cfg.weight && cfg.cir == gem->cfg.cir &&
+	    cfg.pir == gem->cfg.pir)
 		return 0;
 
 	if (!gem->pon->ops->gem_change) {
 		NL_SET_ERR_MSG(extack,
-			       "The MAC cannot change a GEM port's upstream scheduling");
+			       "The MAC cannot change a GEM port's upstream attributes");
 		return -EOPNOTSUPP;
 	}
 
@@ -608,7 +616,7 @@ static size_t pon_gem_get_size(const struct net_device *dev)
 	       nla_total_size(sizeof(u8)) +
 	       nla_total_size(sizeof(u32)) +
 	       nla_total_size(0) +
-	       2 * nla_total_size(sizeof(u8)) +
+	       3 * nla_total_size(sizeof(u8)) +
 	       2 * nla_total_size(sizeof(u64));
 }
 
@@ -626,7 +634,8 @@ static int pon_gem_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	     nla_put_u8(skb, IFLA_GEM_QUEUE, cfg->queue) ||
 	     nla_put_u8(skb, IFLA_GEM_WEIGHT, cfg->weight) ||
 	     nla_put_uint(skb, IFLA_GEM_CIR, cfg->cir) ||
-	     nla_put_uint(skb, IFLA_GEM_PIR, cfg->pir)))
+	     nla_put_uint(skb, IFLA_GEM_PIR, cfg->pir) ||
+	     nla_put_u8(skb, IFLA_GEM_PBITS, cfg->pbits)))
 		return -EMSGSIZE;
 
 	if (cfg->multicast && nla_put_flag(skb, IFLA_GEM_MULTICAST))
@@ -643,7 +652,7 @@ static struct net *pon_gem_get_link_net(const struct net_device *dev)
 }
 
 /*
- * changelink changes the upstream scheduling only: a Port-ID or T-CONT
+ * changelink changes the upstream attributes only: a Port-ID or T-CONT
  * changed under traffic would move a subscriber's frames to another service
  * with nothing torn down, so a GEM port whose Port-ID, direction or T-CONT
  * changes is deleted and created again.
@@ -747,8 +756,8 @@ static bool pon_gem_dev_check(const struct net_device *dev)
 /*
  * Whether another GEM interface of bridge @br has VLAN @vid. A MAC may hold
  * VLAN membership once for all of its GEM ports, as a switch with a single
- * PON port does, so a VLAN is taken out of the MAC only when no GEM interface
- * of the bridge has it any more.
+ * PON port does, so gem_vlan_del says whether the VLAN's last GEM interface
+ * of the bridge is the one that leaves it.
  */
 static bool pon_gem_vlan_shared(const struct pon_gem *gem,
 				const struct net_device *br, u16 vid)
@@ -807,8 +816,8 @@ static int pon_gem_port_obj_del(struct net_device *dev, const void *ctx,
 
 	vlan = SWITCHDEV_OBJ_PORT_VLAN(obj);
 	br = netdev_master_upper_dev_get(dev);
-	if (!br || !pon_gem_vlan_shared(gem, br, vlan->vid))
-		gem->pon->ops->gem_vlan_del(gem->pon, gem->flow, vlan->vid);
+	gem->pon->ops->gem_vlan_del(gem->pon, gem->flow, vlan->vid,
+				    !br || !pon_gem_vlan_shared(gem, br, vlan->vid));
 	return 0;
 }
 

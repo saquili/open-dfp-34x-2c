@@ -2159,6 +2159,9 @@ Known limitations
   Queues are never detached and T-CONTs never disabled after the build, so a
   deleted port's queue stays in its T-CONT's map until the next boot. The queue
   numbering is measured for T-CONTs 0, 1 and 16 only.
+- A VLAN's upstream frames go up one GEM port, whatever their priority:
+  ``gem_add`` and ``gem_change`` refuse a port that takes some priorities only
+  (``-EOPNOTSUPP``).
 - The rates and weights a queue is given are approximations: rates go in
   units of 1024 bytes per second, a weight of 1 shares less exactly than
   larger ones, and the ports that share a queue share one limit, the sum of

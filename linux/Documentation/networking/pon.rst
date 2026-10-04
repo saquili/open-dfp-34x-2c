@@ -694,6 +694,11 @@ Attributes
      - uint
      - The peak rate of the port's upstream traffic, in bytes per second. 0,
        the default, for no limit but the T-CONT's grants.
+   * - ``IFLA_GEM_PBITS``
+     - 9
+     - u8
+     - The IEEE 802.1p priorities of the upstream frames the port takes from
+       its VLANs, bit p for priority p, at least one. All eight if absent.
 
 .. list-table::
    :header-rows: 1
@@ -741,25 +746,28 @@ Attributes
        allowed by ITU-T G.984.3 clause 8.3.1.
    * - The attribute numbers are ABI: ``IFLA_GEM_PORT_ID`` 1,
        ``IFLA_GEM_DIRECTION`` 2, ``IFLA_GEM_TCONT`` 3, ``IFLA_GEM_MULTICAST``
-       4, ``IFLA_GEM_QUEUE`` 5, ``IFLA_GEM_WEIGHT`` 6, ``IFLA_GEM_CIR`` 7 and
-       ``IFLA_GEM_PIR`` 8. ``enum ifla_gem_direction`` is
-       ``IFLA_GEM_DIR_UPSTREAM`` 1, ``IFLA_GEM_DIR_DOWNSTREAM`` 2 and
-       ``IFLA_GEM_DIR_BOTH`` 3.
+       4, ``IFLA_GEM_QUEUE`` 5, ``IFLA_GEM_WEIGHT`` 6, ``IFLA_GEM_CIR`` 7,
+       ``IFLA_GEM_PIR`` 8 and ``IFLA_GEM_PBITS`` 9. ``enum
+       ifla_gem_direction`` is ``IFLA_GEM_DIR_UPSTREAM`` 1,
+       ``IFLA_GEM_DIR_DOWNSTREAM`` 2 and ``IFLA_GEM_DIR_BOTH`` 3.
      - T, I
      - T for 1 to 4: the recorded exchange, in which the daemon builds its
-       requests with these numbers. I for 5 to 8: not yet sent by the daemon.
+       requests with these numbers. I for 5 to 9: not yet sent by the daemon.
 
-Upstream scheduling
--------------------
+Upstream traffic
+----------------
 
-A port that carries upstream traffic is scheduled in its T-CONT: it sends
-through one of the T-CONT's queues, and the queues share the OLT's grants to
-the T-CONT. ``IFLA_GEM_QUEUE`` names the queue, ``IFLA_GEM_WEIGHT`` makes it a
-strict or a weighted one, and ``IFLA_GEM_CIR`` and ``IFLA_GEM_PIR`` give the
-port's traffic a committed and a peak rate. In ``ip`` syntax, for an ``ip``
-that knows the kind::
+A port that carries upstream traffic takes frames from the VLANs it carries
+in its bridge, and is scheduled in its T-CONT. ``IFLA_GEM_PBITS`` says which
+priorities of its VLANs' frames it takes, so that the GEM ports of one VLAN can
+divide them, as the GEM ports behind an IEEE 802.1p mapper do (ITU-T G.988
+clause 9.3.10). The port sends through one of the T-CONT's queues, and the
+queues share the OLT's grants to the T-CONT: ``IFLA_GEM_QUEUE`` names the
+queue, ``IFLA_GEM_WEIGHT`` makes it a strict or a weighted one, and
+``IFLA_GEM_CIR`` and ``IFLA_GEM_PIR`` give the port's traffic a committed and a
+peak rate. In ``ip`` syntax, for an ``ip`` that knows the kind::
 
-    ip link set gemN type gem queue 3 weight 0 cir 1250000 pir 12500000
+    ip link set gemN type gem pbits 0x30 queue 3 weight 0 cir 1250000 pir 12500000
 
 The model follows the ONU's upstream traffic management of ITU-T G.988: a
 priority queue per T-CONT and priority (clause 9.2.10), the T-CONT's policy,
@@ -773,6 +781,16 @@ traffic descriptor (clause 9.2.12).
    * - Fact
      - Tag
      - Checked by
+   * - The upstream GEM ports of one bridge that carry one VLAN take disjoint
+       priorities of its frames; a GEM port that would take a priority another
+       one of the VLAN holds is refused by the MAC, in ``gem_vlan_add`` or
+       ``gem_change``. A frame of a priority no GEM port of its VLAN takes
+       goes up none, as a priority that a mapper points nowhere is discarded.
+       ``IFLA_GEM_PBITS`` is at least 1 (``-ERANGE`` otherwise), so that each
+       upstream port takes some priority of each of its VLANs.
+     - P, I
+     - P for the mapper, ITU-T G.988 clause 9.3.10; I for the class's
+       contract.
    * - A T-CONT serves the committed rates of its queues first. What remains
        of its grant goes to its strict queues in order of priority, 0 the
        highest, and what they leave to its weighted queues in proportion to
@@ -805,12 +823,12 @@ traffic descriptor (clause 9.2.12).
      - P for the unit and the 0, ITU-T G.988 clause 9.2.12. T for the refusal:
        a committed rate of 2000 with a peak rate of 1000.
    * - A port that carries no upstream traffic may not be given any of the
-       four (``-EINVAL``), and reports none; an upstream port reports all four,
-       its defaults included.
+       five upstream attributes (``-EINVAL``), and reports none; an upstream
+       port reports all five, its defaults included.
      - T, I
      - T for the refusal: a downstream-only port with queue 1. I for the
        reports, not read back.
-   * - The four may change on an existing link, through ``changelink``, which
+   * - The five may change on an existing link, through ``changelink``, which
        hands the MAC the whole new configuration in ``gem_change``. A change
        that leaves them as they are calls nothing. Without ``gem_change`` a
        change is refused with ``-EOPNOTSUPP``, and so is a change, in the same
@@ -828,8 +846,8 @@ Creating and deleting
 Creation is an ``RTM_NEWLINK`` and deletion an ``RTM_DELLINK``, both with RTNL
 held (see "Creating a GEM interface" and "Deleting a GEM interface" under
 "Sequences"). A GEM interface is also deleted when its lower interface is
-unregistered. The link kind's ``changelink`` changes the upstream scheduling
-only (see "Upstream scheduling"): a GEM port whose Port-ID, direction or T-CONT
+unregistered. The link kind's ``changelink`` changes the upstream attributes
+only (see "Upstream traffic"): a GEM port whose Port-ID, direction or T-CONT
 changes is deleted and created again.
 
 .. list-table::
@@ -853,8 +871,8 @@ changes is deleted and created again.
        ``IFLA_LINK`` (``-EINVAL``); an unknown link (``-ENODEV``); no Port-ID
        (``-EINVAL``); multicast without downstream only (``-EINVAL``);
        upstream without a T-CONT (``-EINVAL``); a link that carries no ONU's
-       traffic (``-EOPNOTSUPP``); upstream scheduling that the class refuses
-       (see "Upstream scheduling"); and whatever the MAC's ``gem_add``
+       traffic (``-EOPNOTSUPP``); upstream attributes that the class refuses
+       (see "Upstream traffic"); and whatever the MAC's ``gem_add``
        refuses.
        A flow that the MAC returns at or above ``num_flows`` (with a warning),
        or a flow that already has a GEM interface, gives ``-EEXIST``, and the
@@ -1782,14 +1800,14 @@ The data path operations
        an extack message, what the MAC cannot do. RTNL is held.
      - T
      - The recorded exchange: six created, none refused.
-   * - ``gem_change(pon, flow, cfg, extack)``, optional, applies a new upstream
-       scheduling to the GEM port of ``flow``: ``cfg`` differs from the port's
-       configuration in ``queue``, ``weight``, ``cir`` or ``pir`` only, and
-       the class has checked it as for ``gem_add``. The MAC refuses, with an
-       extack message, what it cannot do, and leaves the port as it was. RTNL
-       is held.
+   * - ``gem_change(pon, flow, cfg, extack)``, optional, applies new upstream
+       attributes to the GEM port of ``flow``: ``cfg`` differs from the port's
+       configuration in ``pbits``, ``queue``, ``weight``, ``cir`` or ``pir``
+       only, and the class has checked it as for ``gem_add``. The MAC refuses,
+       with an extack message, what it cannot do, and leaves the port as it
+       was. RTNL is held.
      - I
-     - Design choice (see "Upstream scheduling").
+     - Design choice (see "Upstream traffic").
    * - ``gem_del(pon, flow)`` removes the port; RTNL is held. When a bridged
        GEM interface is deleted, ``gem_bridge_leave`` for the same flow arrives
        after ``gem_del``, from the bridge's own unregistration handling. So a
@@ -1816,11 +1834,13 @@ The data path operations
      - T
      - Bridged traffic passes both ways, sourced from the host.
    * - ``gem_vlan_add(pon, flow, vid, flags, extack)`` and
-       ``gem_vlan_del(pon, flow, vid)`` are an optional pair; RTNL is held.
-       They carry the bridge VLANs of an offloaded GEM port. ``flags`` are the
-       bridge's ``BRIDGE_VLAN_INFO_PVID`` and ``BRIDGE_VLAN_INFO_UNTAGGED``.
-       ``gem_vlan_del`` is not called while another GEM interface of the same
-       bridge still has the VID.
+       ``gem_vlan_del(pon, flow, vid, last)`` are an optional pair; RTNL is
+       held. They carry the bridge VLANs of an offloaded GEM port. ``flags``
+       are the bridge's ``BRIDGE_VLAN_INFO_PVID`` and
+       ``BRIDGE_VLAN_INFO_UNTAGGED``. ``last`` says that no other GEM interface
+       of the same bridge still has the VID, so that a MAC that holds VLAN
+       membership once for all its GEM ports drops the VLAN only then, while
+       one that chooses a GEM port per VLAN and priority hears of each port.
      - M
      - With the VLANs passed down, 75 of 150,000 upstream frames reached the
        CPU; without them all did (see "Bridging and switchdev offload").
@@ -2117,8 +2137,9 @@ GEM ports
      - Tag
      - Checked by
    * - ``gem_add`` refuses: an upstream port on a T-CONT of 8 or above
-       (``-ERANGE``); a PON MAC that is not up yet (``-ENETDOWN``); the OMCC's
-       Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
+       (``-ERANGE``); a port that takes some priorities only
+       (``-EOPNOTSUPP``); a PON MAC that is not up yet (``-ENETDOWN``); the
+       OMCC's Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
        (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
        port network CTPs with one Port-ID; this MAC does not. The flow is the
        lowest free one other than ``RTL9602C_GPON_OMCC_FLOW`` (64).
@@ -2126,7 +2147,7 @@ GEM ports
      - Design choice, not exercised: ``ip link add ... type gem`` with each
        fault.
    * - The driver schedules as the class's model says ("Upstream
-       scheduling"): each GEM T-CONT has eight queues, the higher-numbered
+       traffic"): each GEM T-CONT has eight queues, the higher-numbered
        hardware queue going first, so priority 0 takes the highest; committed
        rates first, then strict queues, then weighted ones. ``gem_change``
        moves a port to its new queue and sets the queues' weights and rates
