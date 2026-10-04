@@ -115,6 +115,13 @@ The runs, the oldest first:
     CAM of the address table, the half PTP tag of a message to the stick's own
     address and the PCP rewrite from the DCB rewrite table. 39 of 39 passed.
 
+``2026-10-04-run12``
+    The same cases and the new case of the host link's search, which takes the
+    bench host's port to 1000BaseX with in-band negotiation and back and runs
+    before the watchdog's reset, on the RAM image built from
+    ``run12``: the SerDes lane to the host finding the host's setting
+    itself. 40 of 40 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
