@@ -168,6 +168,15 @@ The runs, the oldest first:
     work upstream only. 43 of 43 passed; of two priorities in one VLAN, the
     translation of one rewrote that priority's frames alone.
 
+``2026-10-04-run18``
+    The same cases on the RAM image built from ``run18``, after the
+    driver's count of BIP errors in bits, its ACL rules that match an ICMP
+    type and those that only count, and the multicast of omcid: the OLT's
+    multicast policy over the groups the bridge snoops, the subscriber's IGMP
+    and MLD sent upstream under it, the profile's downstream tag, the further
+    multicast GEM ports and the lost groups. The lab OLT provisions no
+    multicast policy, so the cases ran without one. 43 of 43 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
