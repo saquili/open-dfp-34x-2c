@@ -150,6 +150,16 @@ The runs, the oldest first:
     order of the PLOAM messages. 41 of 41 passed; T-CONT 0 held the OLT's
     Alloc-ID, mapped to it.
 
+``2026-10-04-run16``
+    The same cases and the new ``omci.alarms`` on the RAM image built from
+    ``run16``: omcid notifies the OLT of the alarms of the ANI-G,
+    signal fail and degrade judged from the BIP errors and the optical alarms
+    from the readings of the transceiver, and keeps its optical levels; the
+    kernel reports the thresholds of the optics and the transmit power level,
+    and ``optics.diagnostics`` judges each reading against the module's own
+    warning thresholds. 42 of 42 passed; omcid raised no alarm on the clean
+    line, at power level high.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
