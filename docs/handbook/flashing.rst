@@ -208,7 +208,9 @@ what each of them means.
      - Must read 2 before a flash. Sets it to 0 to arm a trial and to 2 to
        cancel one, and never to 1.
    * - ``bootdelay``
-     - Reads it.
+     - Reads it. Sets it, only when asked through ``console type``, to a
+       whole number of seconds from 5 to 600: the break-in is made for a
+       countdown of five ticks.
    * - ``bootcmd`` and the macros behind it
      - Reads their text and checks the whole chain before it types ``boot``.
    * - ``b0``
@@ -581,6 +583,15 @@ decides what a failure costs.
 With the console at the loader prompt, ``python3 -m bench console type
 'printenv sw_commit'`` prints the committed bank. The tool states the fall-back
 bank when it arms.
+
+A board whose countdown was set to 600 seconds waits that long after every
+reset, where a shipped board counts 5. It gets its countdown back to 5 seconds
+with::
+
+    python3 -m bench console type --restart 'setenv bootdelay 5' saveenv
+
+``--restart`` restarts a running board and breaks in first, and the two lines
+are judged in one session, so the ``saveenv`` follows the ``setenv`` it saves.
 
 Arming happens only after the flash was read back as the file, bank 1 was
 checked, and ``sw_tryactive`` read 2 at the start. The tool then sets
