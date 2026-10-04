@@ -77,9 +77,11 @@ def stable(ctx: Context):
 
 @case("omci.channel", "OMCI", "OMCI messages flow both ways and none is dropped")
 def channel(ctx: Context):
+    # rx_discarded counts the messages an OLT's ending of the OMCI channel
+    # took with it, which is no fault of the stick; it is reported, not judged.
     base = "/sys/class/pon/pon0omci0/statistics"
     values = {}
-    for name in ("rx_messages", "rx_dropped", "tx_messages", "tx_errors"):
+    for name in ("rx_messages", "rx_dropped", "rx_discarded", "tx_messages", "tx_errors"):
         values[name] = int(ctx.stick.text(f"cat {base}/{name}"))
     ok = (values["rx_messages"] > 0 and values["tx_messages"] > 0
           and values["rx_dropped"] == 0 and values["tx_errors"] == 0)

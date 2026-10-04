@@ -195,6 +195,17 @@ class Cases(unittest.TestCase):
         errors = more.replace("bandwidth map CRC errors   0", "bandwidth map CRC errors   2")
         self.assertEqual(outcome(errors).status, FAIL)
 
+    def test_the_omci_channel_forgives_what_the_olt_s_end_of_the_channel_took(self):
+        def outcome(dropped, discarded):
+            return cases_pon.channel(context(stick=[
+                ("rx_messages", 0, "563\n"), ("rx_dropped", 0, f"{dropped}\n"),
+                ("rx_discarded", 0, f"{discarded}\n"), ("tx_messages", 0, "588\n"),
+                ("tx_errors", 0, "0\n")]))
+        good = outcome(0, 1)
+        self.assertEqual(good.status, PASS)
+        self.assertIn("rx_discarded 1", good.evidence)
+        self.assertEqual(outcome(1, 0).status, FAIL)
+
     def test_activation_reads_the_state(self):
         ctx = context(stick=[("^pon$", 0, PON)])
         outcome = cases_pon.activation(ctx)
