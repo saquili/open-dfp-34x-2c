@@ -748,7 +748,7 @@ void rtl9602c_gpon_operstate(struct rtl9602c_priv *p)
 void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
 {
 	struct pon_dev_stats *s = &p->gpon_stats;
-	u32 active, ploam_fail, bwm_fail;
+	u32 active, ploam_fail, bwm_fail, ds, frame, frames;
 
 	lockdep_assert_held(&p->gpon_lock);
 
@@ -772,6 +772,24 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
 	s->gem_frames += rtl9602c_r(p, RTL9602C_GPON_CNT_GEM_FRAMES);
 	s->bip_errors += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_BITS);
 	p->gpon_bip_blocks += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_BLOCKS);
+
+	s->fec_corrected_bytes += rtl9602c_r(p, RTL9602C_GPON_CNT_FEC_BYTES);
+	s->fec_corrected_codewords +=
+		rtl9602c_r(p, RTL9602C_GPON_CNT_FEC_CODEWORDS);
+	s->fec_uncorrectable_codewords +=
+		rtl9602c_r(p, RTL9602C_GPON_CNT_FEC_UNCORRECTABLE);
+
+	ds = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
+	frame = FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
+			  rtl9602c_r(p, RTL9602C_GTC_DS_SUPERFRAME));
+	frames = (frame - p->gpon_fec_frame) &
+		 FIELD_MAX(RTL9602C_GTC_DS_SUPERFRAME_CNT);
+	if (p->gpon_fec_frame_valid && (ds & RTL9602C_GTC_DS_IRQ_FEC) &&
+	    !(ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF)) &&
+	    frames <= RTL9602C_GPON_FEC_MAX_FRAMES)
+		s->fec_codewords += frames * RTL9602C_GPON_FEC_CODEWORDS;
+	p->gpon_fec_frame = frame;
+	p->gpon_fec_frame_valid = true;
 }
 
 /**
@@ -2884,6 +2902,7 @@ int rtl9602c_gpon_start(struct rtl9602c_priv *p)
 
 	memset(&p->gpon_stats, 0, sizeof(p->gpon_stats));
 	p->gpon_bip_blocks = 0;
+	p->gpon_fec_frame_valid = false;
 
 	err = rtl9602c_gpon_bringup(p);
 	if (!err) {

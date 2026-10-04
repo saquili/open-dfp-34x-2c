@@ -372,6 +372,27 @@
 #define RTL9602C_GPON_CNT_BIP_BITS	0x701184
 
 /*
+ * The downstream FEC counts (G.984.3 clause 13.1.3): the bytes and the
+ * codewords FEC corrected, and the codewords it could not correct. Taken to
+ * count what their names say, which is not verified: the test OLT sends no
+ * FEC, and they read 0.
+ */
+#define RTL9602C_GPON_CNT_FEC_BYTES		0x70118c
+#define RTL9602C_GPON_CNT_FEC_CODEWORDS		0x701190
+#define RTL9602C_GPON_CNT_FEC_UNCORRECTABLE	0x701194
+
+/*
+ * The codewords of a downstream frame that carries FEC: 152 of 255 bytes and
+ * a shortened last one of 120 (G.984.3 clause 13.2.1). The driver counts the
+ * codewords received as this many a frame, the frames as the advance of the
+ * superframe count, while the downstream carries FEC and is locked; a step
+ * of more than RTL9602C_GPON_FEC_MAX_FRAMES between two reads, as when the
+ * downstream is found again, counts nothing.
+ */
+#define RTL9602C_GPON_FEC_CODEWORDS		153
+#define RTL9602C_GPON_FEC_MAX_FRAMES		8000
+
+/*
  * The downstream PLOAM queue: EMPTY while nothing waits, POP to remove the
  * head message, which the data words hold two octets each, the earlier in
  * bits 15:8.
@@ -2710,6 +2731,10 @@ struct rtl9602c_priv {
 	struct pon_dev_stats gpon_stats;
 	/** @gpon_bip_blocks: the frames whose BIP disagreed, likewise */
 	u64 gpon_bip_blocks;
+	/** @gpon_fec_frame: the superframe count at the last read */
+	u32 gpon_fec_frame;
+	/** @gpon_fec_frame_valid: whether @gpon_fec_frame holds a read */
+	bool gpon_fec_frame_valid;
 
 	/** @gpon_status: the status last reported, counters zeroed */
 	struct pon_dev_status gpon_status;

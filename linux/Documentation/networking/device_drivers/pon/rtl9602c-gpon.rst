@@ -2687,6 +2687,20 @@ counts out of the totals.
    * - ``bip_errors``
      - ``RTL9602C_GPON_CNT_BIP_BITS`` (``0x701184``)
      - The whole word.
+   * - ``fec_corrected_bytes``
+     - ``RTL9602C_GPON_CNT_FEC_BYTES`` (``0x70118c``)
+     - The whole word.
+   * - ``fec_corrected_codewords``
+     - ``RTL9602C_GPON_CNT_FEC_CODEWORDS`` (``0x701190``)
+     - The whole word.
+   * - ``fec_uncorrectable_codewords``
+     - ``RTL9602C_GPON_CNT_FEC_UNCORRECTABLE`` (``0x701194``)
+     - The whole word.
+   * - ``fec_codewords``
+     - None: derived from ``RTL9602C_GTC_DS_SUPERFRAME`` (``0x701048``) and
+       ``RTL9602C_GTC_DS_IRQ_STAT`` (``0x701008``).
+     - ``RTL9602C_GTC_DS_SUPERFRAME_CNT`` (bits 29:0) and
+       ``RTL9602C_GTC_DS_IRQ_FEC`` (bit 2).
 
 .. list-table::
    :header-rows: 1
@@ -2742,6 +2756,26 @@ counts out of the totals.
        the ``gpon`` view showed one frame and 2 or 4 bits (2 twice, 4 seven
        times), and the netlink report the same bits; 30 s more of O5 added
        none.
+   * - The downstream FEC counts (G.984.3 clause 13.1.3):
+       ``RTL9602C_GPON_CNT_FEC_BYTES`` (``0x70118c``) the bytes FEC corrected,
+       ``RTL9602C_GPON_CNT_FEC_CODEWORDS`` (``0x701190``) the codewords it
+       corrected, ``RTL9602C_GPON_CNT_FEC_UNCORRECTABLE`` (``0x701194``) the
+       codewords it could not correct.
+     - I
+     - Assumption, not verified: they read 0 on the lab OLT, which sends no
+       FEC. An OLT with downstream FEC on and a fibre attenuated towards errors
+       would settle it.
+   * - ``fec_codewords``, the codewords received, has no register of its own.
+       A downstream frame that carries FEC holds 153 codewords (152 of 255
+       bytes and a shortened last one, G.984.3 clause 13.2.1), so each sync
+       adds 153 for every frame the superframe count advanced since the last
+       one, if ``RTL9602C_GTC_DS_IRQ_FEC`` is set and neither LOS nor LOF is;
+       an advance of more than 8000 frames (one second), as when the
+       downstream is found again, adds nothing. The FEC state is taken at the
+       sync, so frames around a change of it count by the state that follows.
+     - I
+     - Design choice. An OLT with downstream FEC on would show the count rising
+       1,224,000 a second; on the lab OLT it stays 0.
    * - ``rtl9602c_gpon_cntr_sync()`` reads these registers: from the worker
        every 50 ms and before every report, only while the PON is up, adding
        into running totals (``struct pon_dev_stats``) that start at zero at each
@@ -3054,7 +3088,7 @@ Known limitations
   but whether the MAC decrypts what an OLT encrypts with the key sent depends
   on the key's octet order in the MAC, which is an assumption (see "FEC and
   encryption"). Nothing is set up for upstream FEC, and downstream FEC has only
-  its detection threshold.
+  its detection threshold and its counters.
 - The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
   errors in bits, and the OMCI daemon judges both from them.
 - Transmit power levelling follows Change_Power_Level in O4 and O5 only: the
@@ -3212,6 +3246,9 @@ Assumptions the driver depends on
    * - That a downstream FEC detection threshold of 0 is right ("FEC and
        encryption").
      - An OLT with downstream FEC on.
+   * - That ``0x70118c``, ``0x701190`` and ``0x701194`` count the bytes and
+       codewords FEC corrected and the codewords it could not ("Counters").
+     - An OLT with downstream FEC on, and a fibre attenuated towards errors.
    * - That no upstream FEC is needed ("FEC and encryption", "Known
        limitations").
      - An OLT that sets Use FEC.
