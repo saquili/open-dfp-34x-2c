@@ -141,7 +141,7 @@ def watchdog(ctx: Context):
 
 @case("system.watchdog-reset", "System",
       "An armed watchdog that nobody feeds resets the stick within its timeout",
-      destructive=True)
+      destructive=True, last=True)
 def watchdog_reset(ctx: Context):
     timeout = int(ctx.stick.text("cat /sys/class/watchdog/watchdog0/timeout"))
     boot = ctx.stick.text("cat /proc/sys/kernel/random/boot_id")

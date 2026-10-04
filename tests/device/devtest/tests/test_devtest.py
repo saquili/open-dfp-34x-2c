@@ -647,6 +647,68 @@ class Cases(unittest.TestCase):
         self.assertFalse(left)
         self.assertEqual(outcome(held=984.0)[0].status, FAIL)
 
+    def test_the_host_link_search_wants_both_speeds_and_gives_the_port_back(self):
+        class Clock:
+            now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += seconds
+
+        def outcome(finds: bool):
+            trail: list[str] = []
+            port = {"speed": "2500", "an": "off", "managed": True, "kept": None}
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if "systemd-run" in command:
+                        return super().run(command, **kw)
+                    for part in command.split(";"):
+                        set_to = re.search(r"ethtool -s eth2 speed (\d+) duplex full autoneg (on|off)",
+                                           part)
+                        if set_to:
+                            port["speed"], port["an"] = set_to.groups()
+                        if "managed no" in part:
+                            port["managed"] = False
+                        if "managed yes" in part:
+                            port["managed"], port["kept"] = True, (port["speed"], port["an"])
+                    if command.startswith("nmcli -t"):
+                        return Reply([command], 0, "eth2:connected\n", "", 0.01)
+                    if re.search(r"ethtool eth2\b", command):
+                        out = (f"\tSpeed: {port['speed']}Mb/s\n\tAuto-negotiation: {port['an']}\n"
+                               "\tLink detected: yes\n")
+                        return Reply([command], 0, out, "", 0.01)
+                    return super().run(command, **kw)
+
+            class Stick(Canned):
+                def run(self, command, **kw):
+                    if "sfp/speed" in command:
+                        speed = port["speed"] if finds else "2500"
+                        return Reply([command], 0, speed + "\n", "", 0.01)
+                    return super().run(command, **kw)
+
+            bench = Bench("bench", [], trail)
+            stick = Stick("stick", [], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            cases_net.time, real = Clock(), cases_net.time
+            try:
+                return cases_net.host_link_search(Context(settings, stick, bench, trail)), port, \
+                    bench.asked
+            finally:
+                cases_net.time = real
+        good, port, asked = outcome(finds=True)
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertTrue(port["managed"])
+        self.assertEqual(port["kept"], ("2500", "off"))
+        self.assertTrue(any("systemd-run" in c for c in asked))
+        self.assertTrue(any("systemctl stop devtest-host-link.timer" in c for c in asked))
+        bad, port, _ = outcome(finds=False)
+        self.assertEqual(bad.status, FAIL)
+        self.assertTrue(port["managed"])
+        self.assertEqual(port["kept"], ("2500", "off"))
+
     def test_the_pcp_rewrite_case_wants_its_priority_rewritten_and_only_while_set(self):
         def outcome(rewrites: bool):
             trail: list[str] = []

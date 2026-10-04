@@ -7,10 +7,12 @@ machine sees them."""
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
+import time
 
-from .access import ssh_base
+from .access import ssh_base, sudo
 from .core import Context, case, failed, skipped, verdict
 
 # A TCP connection attempt from the bench host: "refused", "timeout" or
@@ -43,6 +45,74 @@ def host_link(ctx: Context):
     state = ctx.stick.text("cat /sys/class/net/sfp/operstate")
     speed = ctx.stick.run("cat /sys/class/net/sfp/speed").out.strip() or "?"
     return verdict(state == "up", f"sfp {state}, {speed} Mb/s")
+
+
+# The host-link search: the bench host's subscriber-side port goes from
+# 2500BaseX without negotiation to 1000BaseX with in-band negotiation and back,
+# and each time the stick must find the setting, its management answering
+# again with sfp at the new speed. A network manager that holds the port lets
+# it go for the change and takes it back, which brings its own settings back.
+# The port is first set back to the speed and negotiation it had: whenever the
+# link goes, NetworkManager puts back the settings the port had when it took
+# the port (a port taken back at 1000BaseX with negotiation was left with
+# negotiation on after the stick's next reset, and the stick's next kernel
+# found no link; measured). Before anything changes, the bench host arms a
+# restore of its own, so that the port goes back even if the case dies
+# halfway. The management path rides this link, so the case is destructive.
+SEARCH_WAIT = 30.0     # seconds for the link and the stick to come back
+SEARCH_RESTORE = 1800  # seconds after which the bench host restores its port
+SEARCH_UNIT = "devtest-host-link"
+
+
+def search_back(ctx: Context, port: str, want: str) -> tuple[float, str]:
+    """Wait until the bench port has a link and the stick answers with sfp at
+    the speed wanted; return how long that took and the speed that sfp last
+    reported, or "none"."""
+    start, speed = time.monotonic(), "none"
+    while time.monotonic() - start < SEARCH_WAIT:
+        link = ctx.bench.run(sudo(ctx.settings, f"ethtool {shlex.quote(port)}")).out
+        if "Link detected: yes" in link:
+            reply = ctx.stick.run("cat /sys/class/net/sfp/speed", timeout=10)
+            if reply.ok and reply.out.strip():
+                speed = reply.out.strip()
+                if speed == want:
+                    break
+        time.sleep(1)
+    return time.monotonic() - start, speed
+
+
+@case("net.host-link-search", "Host side",
+      "The host link finds the host's setting as the host moves from 2500BaseX to 1000BaseX "
+      "with in-band negotiation and back", destructive=True)
+def host_link_search(ctx: Context):
+    s = ctx.settings
+    if not s.subscriber_port:
+        return skipped("the settings name no subscriber-side port")
+    port = shlex.quote(s.subscriber_port)
+    now = ctx.bench.run(sudo(s, f"ethtool {port}")).out
+    speed = re.search(r"Speed: (\d+)Mb/s", now)
+    neg = re.search(r"Auto-negotiation: (on|off)", now)
+    if not speed or not neg:
+        return skipped(f"{s.subscriber_port} reports no speed or no negotiation setting")
+    managed = f"{s.subscriber_port}:connected" in ctx.bench.run(
+        "nmcli -t -f DEVICE,STATE device 2>/dev/null").out
+    back = f"ethtool -s {port} speed {speed[1]} duplex full autoneg {neg[1]}"
+    if managed:
+        back += f"; nmcli device set {port} managed yes; nmcli device connect {port}"
+    ctx.bench.run(sudo(s, f"systemd-run --on-active={SEARCH_RESTORE} --unit={SEARCH_UNIT} "
+                          f"/bin/sh -c {shlex.quote(back)}"))
+    try:
+        if managed:
+            ctx.bench.run(sudo(s, f"nmcli device set {port} managed no"))
+        ctx.bench.run(sudo(s, f"ethtool -s {port} speed 1000 duplex full autoneg on"))
+        slow, slow_speed = search_back(ctx, s.subscriber_port, "1000")
+    finally:
+        ctx.bench.run(sudo(s, back + "; true"))
+        fast, fast_speed = search_back(ctx, s.subscriber_port, "2500")
+        ctx.bench.run(sudo(s, f"systemctl stop {SEARCH_UNIT}.timer 2>/dev/null; true"))
+    ok = slow_speed == "1000" and fast_speed == "2500"
+    return verdict(ok, f"1000BaseX with negotiation: back after {slow:.1f} s, sfp {slow_speed} Mb/s; "
+                       f"2500BaseX: back after {fast:.1f} s, sfp {fast_speed} Mb/s")
 
 
 @case("net.mgmt-vlan", "Host side", "The management address answers on its VLAN of the host link")

@@ -32,10 +32,23 @@ What it needs
   to the SFP port both ways, the shaper case puts a tbf on the SFP port, the
   storm case police and drop rules on broadcast on the SFP port, the PCP
   rewrite case a DCB rewrite entry on the PON port, and the address-table case
-  gives the bridge a static address, each removing what it added. The CPU-limit case floods the stick's own address from the
-  subscriber side for 10 s, then lifts the limit for 3 s and sets it back; the
-  stick answers slowly while the flood lasts. The hardware clock's case
-  switches the clock's pulse on for a few seconds and off again.
+  gives the bridge a static address, each removing what it added. The
+  CPU-limit case floods the stick's own address from the subscriber side for
+  10 s, then lifts the limit for 3 s and sets it back; the stick answers slowly
+  while the flood lasts. The hardware clock's case switches the clock's pulse
+  on for a few seconds and off again.
+* The host-link search changes the subscriber-side port itself, which it takes
+  to run 2500BaseX without negotiation: it sets the port to 1000BaseX with
+  in-band negotiation and back to the speed and negotiation it had, with
+  ``ethtool``, and when NetworkManager holds the port, it lets NetworkManager
+  go of the port for the change and gives the port back to it only then, since
+  NetworkManager puts back the settings it found whenever the link goes.
+  NetworkManager's own settings then come back too. Before any change it
+  arms a systemd timer, ``devtest-host-link``, that puts the port back after
+  30 minutes should the case die halfway, and stops the timer at the end. This
+  needs ``sudo`` without a password for ``ethtool``, ``nmcli``,
+  ``systemd-run`` and ``systemctl``. The stick's management rides the link, so
+  the stick is out of reach for a few seconds each time.
 * For the router-mode cases: network namespaces and macvlan interfaces on the
   bench host, which gets two namespaces, ``devtest-lan`` and ``devtest-wan``,
   for as long as the cases run. For the PPPoE case also a PPPoE concentrator on
@@ -56,12 +69,14 @@ From this directory::
 
 ``--list`` lists the cases; naming cases or areas (``gpon``, ``data.upstream``)
 runs only those. The kernel log is read after the other cases, so that it
-holds what they made the kernel say. The cases that reset the stick run only
-with ``--destructive``, and after all the others; the cases that put the stick in
-router mode and back run only with ``--router`` (``--pppoe-secrets FILE`` and
-``--bng-service UNIT``, ``accel-ppp`` by default, for the PPPoE case). Without ``--olt-port`` and ``--subscriber-port`` the
-data-path cases are skipped; without ``--token-file`` so is the case that reads
-values from the status daemon. The settings can also come from the environment:
+holds what they made the kernel say. The cases that reset the stick or take
+its host link down run only with ``--destructive``, and after all the others;
+the cases that put the stick in router mode and back run only with
+``--router`` (``--pppoe-secrets FILE`` and ``--bng-service UNIT``,
+``accel-ppp`` by default, for the PPPoE case). Without ``--olt-port`` and
+``--subscriber-port`` the data-path cases are skipped; without
+``--token-file`` so is the case that reads values from the status daemon. The
+settings can also come from the environment:
 ``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_OLT_PORT``,
 ``DEVTEST_SUBSCRIBER_PORT`` and ``DEVTEST_TOKEN_FILE``.
 
