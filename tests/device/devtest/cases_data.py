@@ -330,6 +330,41 @@ def vlan_translation(ctx: Context):
                        f"{XLATE_COUNT} of {net}/{pcp} downstream: {tags(down)}")
 
 
+# The priority case: a translation of the subscriber VLAN's frames of one
+# priority only, which the OMCI daemon programs for an ME 171 rule whose
+# filter names a priority.
+PRI_MATCHED = 5
+PRI_OTHER = 3
+
+
+@case("data.vlan-priority", "Data path",
+      "A translation of one priority rewrites the VLAN of that priority's frames alone")
+def vlan_priority(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    prime(ctx)
+    s = ctx.settings
+    sub, net = XLATE_SUB_VID, XLATE_NET_VID
+    added = clsact(ctx, ["sfp"])
+    try:
+        reply = ctx.stick.run(f"tc filter add dev sfp ingress pref {XLATE_PREF} "
+                              f"protocol 802.1Q flower skip_sw vlan_id {sub} "
+                              f"vlan_prio {PRI_MATCHED} action vlan modify id {net}")
+        if not reply.ok:
+            return failed(f"tc refused {sub} priority {PRI_MATCHED} -> {net}: "
+                          f"{(reply.err or reply.out).strip()}")
+        hit = tagged(ctx, s.subscriber_port, s.olt_port, sub, pcp=PRI_MATCHED)
+        miss = tagged(ctx, s.subscriber_port, s.olt_port, sub, pcp=PRI_OTHER)
+    finally:
+        ctx.stick.run(f"tc filter del dev sfp ingress pref {XLATE_PREF} 2>/dev/null; " +
+                      "".join(f"tc qdisc del dev {dev} clsact; " for dev in added) + "true")
+    want = XLATE_COUNT * 0.99
+    ok = (hit.get(f"{net}/{PRI_MATCHED}", 0) >= want and
+          miss.get(f"{sub}/{PRI_OTHER}", 0) >= want)
+    return verdict(ok, f"{XLATE_COUNT} frames of VLAN {sub}/{PRI_MATCHED}: {tags(hit)}; "
+                       f"{XLATE_COUNT} of {sub}/{PRI_OTHER}: {tags(miss)}")
+
+
 # The tag-operation case: a C-tag pushed onto untagged frames upstream and
 # popped downstream, and an S-tag pushed in front of a C-tag upstream and
 # popped downstream, at VIDs no line is expected to carry and a tc priority of
