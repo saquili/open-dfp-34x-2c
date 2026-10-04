@@ -2159,10 +2159,10 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 /*
  * A flower rule whose one action is drop or trap, as one ACL rule. Each field
  * it matches is cut into 16-bit slots, and a slot with a zero mask is left out.
- * L4 ports are compared through the field selectors setup points at the start
- * of the IP payload, which are taken to cut their window whatever the frame
- * carries (not verified): a port match is taken only with an exact IPv4
- * ethertype and IP protocol.
+ * L4 ports, and an ICMP or ICMPv6 type and code, are compared through the
+ * field selectors setup points at the start of the IP payload, which are taken
+ * to cut their window whatever the frame carries (not verified): such a match
+ * is taken only with an exact IPv4 or IPv6 ethertype and IP protocol.
  */
 static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 				struct flow_cls_offload *cls,
@@ -2180,9 +2180,10 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ETH_ADDRS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV4_ADDRS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
-	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS))) {
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP))) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "this ACL matches addresses, ethertype, IP protocol, IPv4 addresses and L4 ports");
+				   "this ACL matches addresses, ethertype, IP protocol, IPv4 addresses, L4 ports and ICMP types");
 		return -EOPNOTSUPP;
 	}
 
@@ -2300,6 +2301,31 @@ no_addrs:
 					  RTL9602C_FSEL_DPORT,
 					  ntohs(ports.key->dst),
 					  ntohs(ports.mask->dst));
+	}
+
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ICMP)) {
+		struct flow_match_icmp icmp;
+
+		if (!(ipv4 || ipv6) || !ipproto) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "an ICMP type match needs an exact ethertype of ip or ipv6 and an exact ip_proto, for the same reason as a port match");
+			err = -EOPNOTSUPP;
+			goto out;
+		}
+
+		flow_rule_match_icmp(rule, &icmp);
+		/*
+		 * The type and code are the first two octets of the IP
+		 * payload, behind any IPv6 extension headers: the window of
+		 * the source port's field selector.
+		 */
+		if (icmp.mask->type || icmp.mask->code)
+			rtl9602c_acl_push(&m,
+					  RTL9602C_ACL_TMPL_FIELD_USER0 +
+					  RTL9602C_FSEL_SPORT,
+					  icmp.key->type << 8 | icmp.key->code,
+					  icmp.mask->type << 8 |
+					  icmp.mask->code);
 	}
 
 	if (!m.n) {

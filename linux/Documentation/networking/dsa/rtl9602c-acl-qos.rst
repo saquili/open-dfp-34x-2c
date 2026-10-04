@@ -685,8 +685,9 @@ to an ACL rule.
        becomes one ACL rule, a rule on the broadcast address, the group bit or
        ARP included; only a ``police`` of those is storm control (see "Storm
        control"). Accepted matches: EtherType, IP protocol, destination and
-       source MAC and IPv4 addresses (with masks), and L4 source and
-       destination ports (see "The parser's field selectors"). Each field is
+       source MAC and IPv4 addresses (with masks), L4 source and destination
+       ports, and the type and code of ICMP and ICMPv6 (see "The parser's
+       field selectors"). Each field is
        cut into 16-bit slots and a slot whose mask is zero is left out. The IP
        protocol of an IPv6 rule, one with the exact EtherType ``0x86dd``, is
        compared in ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, which holds the
@@ -701,8 +702,9 @@ to an ACL rule.
        600 ARP broadcasts; without the rules all 600 arrived.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress; IPv6 addresses; any
        other key; a rule with no field left (it would drop every frame on the
-       port); more than eight slots; an L4 port without an exact IPv4 or IPv6
-       EtherType and an exact IP protocol. Refused with ``-ENOSPC``: no template
+       port); more than eight slots; an L4 port or an ICMP type without an
+       exact IPv4 or IPv6 EtherType and an exact IP protocol. Refused with
+       ``-ENOSPC``: no template
        covers the fields and none is free; all 96 entries are in use, four of
        them by the driver's own rules (see "Rules of the driver's own").
      - M
@@ -895,6 +897,16 @@ of a UDP or TCP header, at the start of the IP payload, and never changes them.
      - ``tc filter add dev sfp ingress protocol ip flower skip_sw ip_proto udp
        dst_port 4444 action drop`` dropped port 4444 and passed 5555;
        ``src_port 33333`` dropped the frames carrying it.
+   * - A flower ``type`` and ``code`` of ICMP or ICMPv6 become field code
+       ``0x40``, the window of ``RTL9602C_FSEL_SPORT``, with the type in the
+       high octet and the code in the low one, each under its own mask.
+     - M
+     - On ``sfp``, ``flower skip_sw ip_proto icmpv6 type 143 action trap`` and
+       ``type 131``, with ``ip_proto 2`` for IGMP: of 3 MLDv2, 3 MLDv1 and 3
+       IGMPv2 reports for new groups none reached the OLT side, the bridge
+       snooped all three groups from the trapped copies, and 3 of 3 ICMPv6 echo
+       requests (type 128) to a group passed; without the rules all reports
+       passed.
    * - For an IPv6 packet the IP payload starts behind the extension headers:
        the window at offset 0 holds an ICMPv6 message's type and code. Origin 5
        is the start of the IPv6 header.
