@@ -360,8 +360,16 @@
 #define RTL9602C_GPON_CNT_BWMAP_ERR	0x7011a4
 #define RTL9602C_GPON_CNT_BWMAP_ERR_OVERFLOW	GENMASK(31, 16)
 #define RTL9602C_GPON_CNT_BWMAP_ERR_CRC	GENMASK(15, 0)
-#define RTL9602C_GPON_CNT_BIP_ERR	0x701180
 #define RTL9602C_GPON_CNT_GEM_FRAMES	0x7011c4
+
+/*
+ * The downstream BIP errors, in two counters: BLOCKS counts the frames whose
+ * BIP disagreed, BITS the parity bits that differed, which is what G.984.3
+ * accumulates as ERR (clause 11.2.2). Measured on this board: the first
+ * frame after each bring-up counted as one block and 2 or 4 bits.
+ */
+#define RTL9602C_GPON_CNT_BIP_BLOCKS	0x701180
+#define RTL9602C_GPON_CNT_BIP_BITS	0x701184
 
 /*
  * The downstream PLOAM queue: EMPTY while nothing waits, POP to remove the
@@ -2677,6 +2685,8 @@ struct rtl9602c_priv {
 
 	/** @gpon_stats: the GTC counters' totals since the PON came up */
 	struct pon_dev_stats gpon_stats;
+	/** @gpon_bip_blocks: the frames whose BIP disagreed, likewise */
+	u64 gpon_bip_blocks;
 
 	/** @gpon_status: the status last reported, counters zeroed */
 	struct pon_dev_status gpon_status;

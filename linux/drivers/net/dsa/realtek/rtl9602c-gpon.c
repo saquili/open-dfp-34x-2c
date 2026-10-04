@@ -738,9 +738,10 @@ void rtl9602c_gpon_operstate(struct rtl9602c_priv *p)
  * bandwidth-map counter, taken to be 16 bits wide (not verified), wraps at
  * 8000 maps a second. Nothing is read while the PON is down.
  *
- * The serial-number request, PLOAM and bandwidth-map counts are measured on
- * this board; the ranging-request, error, overflow, BIP and GEM frame counts
- * are taken to be what their names say, which is not verified.
+ * The serial-number request, PLOAM, bandwidth-map and BIP counts are measured
+ * on this board; the ranging-request, error, overflow and GEM frame counts are
+ * taken to be what their names say, which is not verified. The BIP errors
+ * reported are the bits, G.984.3's ERR; the frames are kept for the gpon view.
  *
  * Context: gpon_lock held.
  */
@@ -769,7 +770,8 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
 	s->bwmap_overflows += FIELD_GET(RTL9602C_GPON_CNT_BWMAP_ERR_OVERFLOW, bwm_fail);
 
 	s->gem_frames += rtl9602c_r(p, RTL9602C_GPON_CNT_GEM_FRAMES);
-	s->bip_errors += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_ERR);
+	s->bip_errors += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_BITS);
+	p->gpon_bip_blocks += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_BLOCKS);
 }
 
 /**
@@ -2876,6 +2878,7 @@ int rtl9602c_gpon_start(struct rtl9602c_priv *p)
 	}
 
 	memset(&p->gpon_stats, 0, sizeof(p->gpon_stats));
+	p->gpon_bip_blocks = 0;
 
 	err = rtl9602c_gpon_bringup(p);
 	if (!err) {
@@ -2935,6 +2938,7 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	u32 key_switch;
 	u8 key_index;
 	struct pon_dev_stats c;
+	u64 bip_blocks;
 	u32 sts, onu, los, sig;
 
 	sts = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
@@ -2966,6 +2970,7 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	mutex_lock(&p->gpon_lock);
 	rtl9602c_gpon_cntr_sync(p);
 	c = p->gpon_stats;
+	bip_blocks = p->gpon_bip_blocks;
 	rei_ms = jiffies_to_msecs(p->gpon_rei_every);
 	rei_sent = p->gpon_rei_sent;
 	key_index = p->gpon_key_index;
@@ -2983,8 +2988,8 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 		   c.ploam_rx, c.ploam_crc_errors, c.ploam_overflows);
 	seq_printf(s, "bwmap %llu accepted, %llu crc err, %llu overflow\n",
 		   c.bwmap_rx, c.bwmap_crc_errors, c.bwmap_overflows);
-	seq_printf(s, "gem   %llu non-idle frames, %llu BIP error blocks\n",
-		   c.gem_frames, c.bip_errors);
+	seq_printf(s, "gem   %llu non-idle frames, BIP errors %llu bits in %llu frames\n",
+		   c.gem_frames, c.bip_errors, bip_blocks);
 	seq_printf(s, "rei   every %u ms, %u sent\n", rei_ms, rei_sent);
 	seq_printf(s, "aes   key %u, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
 		   key_index, key_switch,

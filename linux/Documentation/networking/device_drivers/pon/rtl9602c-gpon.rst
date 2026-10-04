@@ -1763,16 +1763,17 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
        bits of octet 7 a sequence number that counts the reports modulo 16.
        Once BER_Interval has set an interval, the worker sends one on the
        normal queue each time the interval has passed, in O5, with the BIP
-       error blocks counted since the last one (``rtl9602c_gpon_rei_tick()``);
-       it keeps the cadence to within its 50 ms period. The interval goes with
-       the ONU-ID, and the OLT sets it again after the next ranging. That the
-       OLT expects error blocks rather than bit errors is an assumption.
-     - M, I
+       errors counted since the last one, in bits as G.984.3 clause 11.2.2
+       counts them (``rtl9602c_gpon_rei_tick()``); it keeps the cadence to
+       within its 50 ms period. The interval goes with the ONU-ID, and the OLT
+       sets it again after the next ranging.
+     - M, P
      - M: BER_Interval of 8000 frames injected through ``ploaminject``: the
        Acknowledge followed, then an REI with 0 errors at 25.82, 26.83, 27.84,
        28.79 and 29.80 s, sequence 0 to 4; an interval of 0 stopped them. With
        BIP errors present the reports have not been observed: the board's
-       fibre gives none.
+       fibre gives none in O5. P: the count in bits, ITU-T G.984.3 clause
+       11.2.2.
    * - The data window addresses the slot that was selected last, so data
        written before the slot is selected lands in whichever slot was selected
        before. ``ploam_lock`` serialises the writers.
@@ -2632,7 +2633,7 @@ counts out of the totals.
      - ``RTL9602C_GPON_CNT_GEM_FRAMES`` (``0x7011c4``)
      - The whole word.
    * - ``bip_errors``
-     - ``RTL9602C_GPON_CNT_BIP_ERR`` (``0x701180``)
+     - ``RTL9602C_GPON_CNT_BIP_BITS`` (``0x701184``)
      - The whole word.
 
 .. list-table::
@@ -2674,13 +2675,21 @@ counts out of the totals.
        ``RTL9602C_GPON_CNT_BWMAP_ERR`` (``0x7011a4``) with
        ``RTL9602C_GPON_CNT_BWMAP_ERR_CRC`` and
        ``RTL9602C_GPON_CNT_BWMAP_ERR_OVERFLOW`` at the same positions;
-       ``RTL9602C_GPON_CNT_BIP_ERR`` (``0x701180``), downstream blocks whose
-       8-bit BIP failed; ``RTL9602C_GPON_CNT_GEM_FRAMES`` (``0x7011c4``),
-       non-idle downstream GEM frames.
+       ``RTL9602C_GPON_CNT_GEM_FRAMES`` (``0x7011c4``), non-idle downstream GEM
+       frames.
      - I
      - The ranging count reading 1 after each activation; a fibre attenuated
-       towards errors for the CRC and BIP counts. ITU-T G.984.3 clause 8.1.3.4
-       for the BIP.
+       towards errors for the CRC counts.
+   * - The downstream BIP (G.984.3 clause 8.1.3.4) is counted twice:
+       ``RTL9602C_GPON_CNT_BIP_BLOCKS`` (``0x701180``) counts the frames whose
+       BIP disagreed and ``RTL9602C_GPON_CNT_BIP_BITS`` (``0x701184``) the
+       parity bits that differed, which is G.984.3's ERR (clause 11.2.2).
+       ``bip_errors`` is the bits; the frames are kept for the ``gpon`` view.
+     - M
+     - A boot and eight cycles of the PON down and up: after each return to O5
+       the ``gpon`` view showed one frame and 2 or 4 bits (2 twice, 4 seven
+       times), and the netlink report the same bits; 30 s more of O5 added
+       none.
    * - ``rtl9602c_gpon_cntr_sync()`` reads these registers: from the worker
        every 50 ms and before every report, only while the PON is up, adding
        into running totals (``struct pon_dev_stats``) that start at zero at each
@@ -2688,8 +2697,9 @@ counts out of the totals.
        read the totals.
      - M
      - Two reads five seconds apart gave 711266 then 751736 maps and 685 then
-       715 PLOAM messages, one PLOAM CRC error and one BIP error block since
-       bring-up, the same in the ``gpon`` view and in the netlink report.
+       715 PLOAM messages and one PLOAM CRC error since bring-up, the same in
+       the ``gpon`` view and in the netlink report; the BIP errors likewise,
+       4 bits in both.
    * - The bandwidth-map counter is 16 bits wide, so at 8000 maps a second it
        must be read within 8 s; the 50 ms period leaves that margin.
      - I
@@ -2903,15 +2913,15 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        (``signok``, 1 is present) and its sync bit (``lecsync``); ``frame`` is
        the superframe counter; then come the totals of the counters (``cntr``:
        ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
-       maps accepted, CRC errors, overflows, non-idle GEM frames, BIP error
-       blocks); ``rei``, the BER interval in ms (0 while none is set) and the
-       REI messages sent since the ONU entered O5; ``aes``, the index of
-       the last key sent (0 for none), the superframe of the last
-       Key_Switching_Time with ``RTL9602C_GPON_AES_SWITCH_TIME``, and the
-       Port-IDs encrypted; last ``tcont``, each GEM T-CONT as ``n=B/M``, ``B``
-       the Alloc-ID it holds and ``M`` the one management mapped it to, ``-``
-       for none. No key is shown. A read takes the counters and writes no
-       register.
+       maps accepted, CRC errors, overflows, non-idle GEM frames, the BIP
+       errors in bits and the frames they were in); ``rei``, the BER interval
+       in ms (0 while none is set) and the REI messages sent since the ONU
+       entered O5; ``aes``, the index of the last key sent (0 for none), the
+       superframe of the last Key_Switching_Time with
+       ``RTL9602C_GPON_AES_SWITCH_TIME``, and the Port-IDs encrypted; last
+       ``tcont``, each GEM T-CONT as ``n=B/M``, ``B`` the Alloc-ID it holds and
+       ``M`` the one management mapped it to, ``-`` for none. No key is shown.
+       A read takes the counters and writes no register.
      - T
      - A check with traffic on the board reads the ``onu`` line before and after
        a flood; every debugfs view reads.
@@ -2993,9 +3003,7 @@ Known limitations
   encryption"). Nothing is set up for upstream FEC, and downstream FEC has only
   its detection threshold.
 - The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
-  count, and the OMCI daemon judges both from it, taking each counted error as
-  one bit in error. Whether the MAC counts bits or blocks is not verified;
-  counted blocks would keep a rate above about 3 x 10^-6 from being seen.
+  errors in bits, and the OMCI daemon judges both from them.
 - Transmit power levelling follows Change_Power_Level in O4 and O5 only: the
   default level mode of Upstream_Overhead and the ONU's own levelling after
   unanswered serial-number requests (G.984.3 clause 10.5.1) are not done, since
@@ -3184,7 +3192,7 @@ Questions the code does not depend on
    * - Why stale Port-ID entries kept flow 64 from matching ("Tables: Alloc-ID,
        Port-ID and multicast").
      - Refilling the table with stale entries and binding the OMCC.
-   * - What the error, ranging, BIP and GEM frame counter fields count
+   * - What the error, ranging and GEM frame counter fields count
        ("Counters").
      - A fibre attenuated towards errors, and one ranging count per activation.
    * - What the unmeasured upstream counters count, and whether reading clears
