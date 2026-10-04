@@ -8,8 +8,12 @@
 #include <string.h>
 
 #include "me/bridge.h"
+#include "me/gem.h"
 #include "omcid/array_size.h"
 #include "sys/log.h"
+
+/* The GEM ports one bridge port leads to at most: a mapper's eight, or a multicast port's. */
+#define PORT_GEMS OMCI_GEM_MCAST_PORTS
 
 static struct omci_hw_bridge_port g_last[OMCI_HW_BRIDGE_MAX_PORTS];
 static size_t g_last_n;
@@ -70,7 +74,8 @@ static void add_port_id(uint16_t *ids, uint8_t *n, uint16_t id)
 	for (uint8_t i = 0; i < *n; i++)
 		if (ids[i] == id)
 			return;
-	ids[(*n)++] = id;
+	if (*n < PORT_GEMS)
+		ids[(*n)++] = id;
 }
 
 /*
@@ -105,6 +110,15 @@ static uint8_t resolve_gem_ports(const struct omci_mib *mib, uint16_t instance,
 			return 0;
 		}
 		add_port_id(ids, &n, id);
+		/* The further multicast GEM ports its address tables name. */
+		if (tp_type == OMCI_BRIDGE_TP_MCAST_GEM) {
+			uint16_t more[OMCI_GEM_MCAST_PORTS];
+			const size_t k = omci_gem_mcast_ports(mib, tp_ptr, more,
+							      ARRAY_SIZE(more));
+
+			for (size_t i = 0; i < k; i++)
+				add_port_id(ids, &n, more[i]);
+		}
 		return n;
 	}
 
@@ -198,7 +212,7 @@ static size_t gather(const struct omci_mib *mib,
 
 	for (rc = omci_mib_walk_first(mib, &cur); rc == OMCI_OK;
 	     rc = omci_mib_walk_next(mib, &cur)) {
-		uint16_t ids[OMCI_BRIDGE_MAPPER_PBITS] = { 0 };
+		uint16_t ids[PORT_GEMS] = { 0 };
 		uint16_t vlan[OMCI_HW_BRIDGE_MAX_VLANS] = { 0 };
 		uint16_t bridge = 0, tp_ptr = 0;
 		uint8_t tp_type = 0, nids = 0, nvlan = 0;

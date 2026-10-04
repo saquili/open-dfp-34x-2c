@@ -384,14 +384,17 @@ static enum omci_status reprogram_gem(struct omci_engine *eng)
 
 /*
  * True for a class whose instances shape the GEM ports: the ports
- * themselves, and what gives them their queue, weight, rates and priorities.
+ * themselves, what gives them their queue, weight, rates and priorities,
+ * and the multicast termination points, which make ports multicast and name
+ * further ones.
  */
 static bool class_shapes_gem(uint16_t class_id)
 {
 	return class_id == ME_GEM_PORT_NET_CTP || class_id == ME_TCONT ||
 	       class_id == ME_PRIORITY_QUEUE || class_id == ME_TRAFFIC_SCHED ||
 	       class_id == ME_TRAFFIC_DESCRIPTOR ||
-	       class_id == ME_8021P_MAPPER || class_id == ME_GEM_IW_TP;
+	       class_id == ME_8021P_MAPPER || class_id == ME_GEM_IW_TP ||
+	       class_id == ME_MCAST_GEM_IW_TP;
 }
 
 /* True for a class whose instances make up a bridge or the GEM ports behind it. */
@@ -1067,6 +1070,10 @@ static enum omci_status set_one(struct omci_engine *eng,
 
 		if (rc == OMCI_DECLINED)
 			rc = OMCI_OK;
+		if (rc == OMCI_OK && req->class_id == ME_MCAST_GEM_IW_TP) {
+			(void)reprogram_gem(eng);
+			(void)reprogram_bridge(eng);
+		}
 
 		if (rc == OMCI_OK &&
 		    is_vlan_rule_table(req->class_id, attr_no)) {
@@ -1101,6 +1108,12 @@ static enum omci_status set_one(struct omci_engine *eng,
 	const enum omci_status rc = omci_mib_table_put(
 		eng->mib, req->class_id, req->instance, attr_no, value, a->size,
 		policy.key_len, policy.order);
+
+	/* A row of a multicast address table can name a further GEM port. */
+	if (rc == OMCI_OK && req->class_id == ME_MCAST_GEM_IW_TP) {
+		(void)reprogram_gem(eng);
+		(void)reprogram_bridge(eng);
+	}
 
 	if (rc == OMCI_OK && is_vlan_rule_table(req->class_id, attr_no)) {
 		const enum omci_status applied = omci_vlan_program(

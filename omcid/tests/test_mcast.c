@@ -10,7 +10,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "hw/hw.h"
 #include "mcast/acl.h"
+#include "me/bridge.h"
+#include "me/defaults.h"
+#include "me/gem.h"
 #include "me/tables.h"
 #include "me/values.h"
 #include "mib/store.h"
@@ -830,6 +834,152 @@ static void test_the_onu_keeps_the_time_left_of_a_preview_group(void)
 	down(&fx);
 }
 
+/* ---- Further multicast GEM ports ------------------------------------ */
+
+static void mib_u(struct omci_mib *mib, uint16_t cls, uint16_t inst,
+		  uint8_t attr, uint32_t v, size_t size)
+{
+	uint8_t b[4];
+
+	for (size_t i = 0; i < size; i++)
+		b[i] = (uint8_t)(v >> (8u * (size - 1u - i)));
+	CHECK_EQ(omci_mib_attr_set_by_olt(mib, cls, inst, attr, b, size),
+		 OMCI_OK);
+}
+
+static void ctp_of(struct omci_mib *mib, uint16_t inst, uint16_t port,
+		   uint16_t tcont, uint8_t dir)
+{
+	CHECK_EQ(omci_mib_create(mib, 268u, inst), OMCI_OK);
+	mib_u(mib, 268u, inst, 1, port, 2);
+	mib_u(mib, 268u, inst, 2, tcont, 2);
+	mib_u(mib, 268u, inst, 3, dir, 1);
+}
+
+/* A row of a multicast address table: IPv4, or with @v6 IPv6. */
+static void mc_row(struct omci_mib *mib, uint16_t inst, bool v6, uint16_t port,
+		   uint16_t key)
+{
+	uint8_t row[24] = { 0 };
+
+	put16(row, port);
+	put16(&row[2], key);
+	put32(&row[4], IP4(239, 0, 0, 1));
+	put32(&row[8], IP4(239, 0, 0, 9));
+	CHECK_EQ(omci_mib_table_put(mib, 281u, inst, v6 ? 10u : 9u, row,
+				    v6 ? 24u : 12u, 4, OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+}
+
+static const struct omci_hw_gem_port *gem_of(uint16_t port_id)
+{
+	const struct omci_hw_gem_port *g;
+	const size_t n = omci_hw_gem_recorded(&g);
+
+	for (size_t i = 0; i < n; i++)
+		if (g[i].port_id == port_id)
+			return &g[i];
+	return NULL;
+}
+
+static bool bridged(uint16_t port_id)
+{
+	const struct omci_hw_bridge_port *b;
+	const size_t n = omci_hw_bridge_recorded(&b);
+
+	for (size_t i = 0; i < n; i++)
+		if (b[i].port_id == port_id)
+			return true;
+	return false;
+}
+
+static void test_further_multicast_gem_ports(void)
+{
+	struct omci_mib *mib = NULL;
+	struct omci_hw_caps caps;
+	const struct omci_hw_gem_port *g;
+	uint16_t ids[4];
+	unsigned int refused = 0;
+
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+
+	/* GEM port 4095 downstream behind ME 281, 300 both ways behind another. */
+	ctp_of(mib, 0x0001, 4095, 0, 2);
+	ctp_of(mib, 0x0002, 300, 0x8000, 3);
+	CHECK_EQ(omci_mib_create(mib, 281u, 0x0004), OMCI_OK);
+	mib_u(mib, 281u, 0x0004, 1, 0x0001, 2);
+	CHECK_EQ(omci_mib_create(mib, 281u, 0x0005), OMCI_OK);
+	mib_u(mib, 281u, 0x0005, 1, 0x0002, 2);
+	/* The tables name 4095 again, 4094 and 4093, and one past twelve bits. */
+	mc_row(mib, 0x0004, false, 4095, 0);
+	mc_row(mib, 0x0004, false, 4094, 1);
+	mc_row(mib, 0x0004, true, 4093, 0);
+	mc_row(mib, 0x0004, true, 4094, 1);
+	mc_row(mib, 0x0004, false, 5000, 2);
+	CHECK_EQ(omci_gem_mcast_ports(mib, 0x0004, ids, ARRAY_SIZE(ids)), 3u);
+	CHECK_EQ(ids[0], 4095u);
+	CHECK_EQ(ids[1], 4094u);
+	CHECK_EQ(ids[2], 4093u);
+	CHECK_EQ(omci_gem_mcast_ports(mib, 0x0004, ids, 2), 2u);
+
+	CHECK_EQ(omci_gem_program(mib, &refused), OMCI_OK);
+	g = gem_of(4095);
+	CHECK(g != NULL && g->multicast);
+	g = gem_of(300);
+	CHECK(g != NULL && !g->multicast);
+	g = gem_of(4094);
+	CHECK(g != NULL && g->multicast &&
+	      g->direction == OMCI_HW_GEM_DIR_DOWNSTREAM);
+	CHECK(gem_of(4093) != NULL);
+	CHECK(gem_of(5000) == NULL);
+
+	/* The bridge port of the termination point takes them all. */
+	CHECK_EQ(omci_mib_create(mib, 47u, 0x0301), OMCI_OK);
+	mib_u(mib, 47u, 0x0301, OMCI_BRIDGE_PORT_ATTR_TPTYPE,
+	      OMCI_BRIDGE_TP_MCAST_GEM, 1);
+	mib_u(mib, 47u, 0x0301, OMCI_BRIDGE_PORT_ATTR_TPPTR, 0x0004, 2);
+	(void)!omci_bridge_program(mib, &refused);
+	CHECK(bridged(4095) && bridged(4094) && bridged(4093));
+
+	/* More ports than the MAC carries, and than a bridge port holds. */
+	for (uint16_t k = 0; k < 16u; k++) {
+		mc_row(mib, 0x0004, false, (uint16_t)(3000u + k),
+		       (uint16_t)(10u + k));
+		mc_row(mib, 0x0004, true, (uint16_t)(3100u + k),
+		       (uint16_t)(10u + k));
+	}
+	CHECK_EQ(omci_gem_program(mib, &refused), OMCI_OK);
+	CHECK(refused > 0u);
+	CHECK_EQ(omci_hw_gem_recorded(&g), OMCI_HW_GEM_MAX_PORTS);
+	(void)!omci_bridge_program(mib, &refused);
+	omci_mib_fini(mib);
+}
+
+static void test_a_multicast_address_row_programs_the_ports(void)
+{
+	struct fixture fx;
+	uint8_t row[12] = { 0 };
+	uint8_t create[12] = { 0 };
+
+	up(&fx);
+	ctp_of(fx.t.mib, 0x0001, 4095, 0, 2);
+	put16(create, 0x0001);
+	CHECK_EQ(result_of(drive(fx.t.eng, MT_CREATE, 281u, 0x0004, create,
+				 sizeof(create))),
+		 R_OK);
+	put16(row, 4090);
+	put32(&row[4], IP4(239, 0, 0, 1));
+	put32(&row[8], IP4(239, 0, 0, 9));
+	CHECK_EQ(set_attr(fx.t.eng, 281u, 0x0004, 9u, row, sizeof(row)), R_OK);
+	CHECK(gem_of(4090) != NULL);
+	memset(&row[4], 0, 8);
+	CHECK_EQ(set_attr(fx.t.eng, 281u, 0x0004, 9u, row, sizeof(row)), R_OK);
+	CHECK(gem_of(4090) == NULL);
+	down(&fx);
+}
+
 int main(void)
 {
 	RUN(test_create_refuses_values_the_attributes_do_not_take);
@@ -841,5 +991,7 @@ int main(void)
 	RUN(test_service_packages_are_read_in_key_order);
 	RUN(test_preview_groups_are_read_with_both_parts);
 	RUN(test_the_onu_keeps_the_time_left_of_a_preview_group);
+	RUN(test_further_multicast_gem_ports);
+	RUN(test_a_multicast_address_row_programs_the_ports);
 	return OMCI_T_REPORT("test_mcast");
 }

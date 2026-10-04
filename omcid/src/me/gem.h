@@ -61,7 +61,34 @@ enum {
 
 	/* The policy of a T-CONT or a traffic scheduler. */
 	OMCI_GEM_POLICY_WRR = 2,
+
+	/* The multicast GEM interworking termination point and its tables. */
+	OMCI_GEM_MCIW_CLASS_ID = 281,
+	OMCI_GEM_MCIW_ATTR_CTP = 1,
+	OMCI_GEM_MCIW_ATTR_IPV4 = 9,
+	OMCI_GEM_MCIW_ATTR_IPV6 = 10,
 };
+
+/* The GEM ports the address tables of one multicast termination point name at most. */
+#define OMCI_GEM_MCAST_PORTS 32u
+
+/**
+ * omci_gem_mcast_ports() - The GEM ports the address tables of a multicast
+ *	GEM interworking termination point name.
+ * @mib: the MIB
+ * @instance: the instance of class 281
+ * @ids: their port identifiers, each once, in the order the rows come
+ * @cap: room in @ids
+ *
+ * Each row of the IPv4 and IPv6 multicast address tables names the GEM port
+ * that carries its range of groups; a port other than the one of the
+ * termination point's own CTP is a further multicast GEM port, which needs
+ * no CTP of its own (G.988 9.2.5).
+ *
+ * Return: how many were written.
+ */
+size_t omci_gem_mcast_ports(const struct omci_mib *mib, uint16_t instance,
+			    uint16_t *ids, size_t cap);
 
 /**
  * omci_gem_program() - Program the PON MAC with every GEM port of the MIB.
@@ -79,6 +106,10 @@ enum {
  * bits, its direction is not one the standard defines, it carries traffic
  * upstream without pointing at a T-CONT of the ONU, or another instance
  * has the same port identifier.
+ *
+ * A port behind a multicast GEM interworking termination point that
+ * carries traffic downstream only is a multicast port, and so is each port
+ * that the termination point's address tables name besides (G.988 9.2.5).
  *
  * A port that carries traffic upstream takes its queue from the priority
  * queue its traffic management pointer names, the queue's priority within

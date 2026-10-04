@@ -213,6 +213,95 @@ static uint8_t gem_pbits(const struct omci_mib *mib, uint16_t instance)
 	return mapped ? pbits : 0xffu;
 }
 
+size_t omci_gem_mcast_ports(const struct omci_mib *mib, uint16_t instance,
+			    uint16_t *ids, size_t cap)
+{
+	static const uint8_t tables[] = { OMCI_GEM_MCIW_ATTR_IPV4,
+					  OMCI_GEM_MCIW_ATTR_IPV6 };
+	size_t n = 0;
+
+	for (size_t t = 0; t < sizeof(tables); t++) {
+		const size_t rows = omci_mib_table_count(
+			mib, OMCI_GEM_MCIW_CLASS_ID, instance, tables[t]);
+
+		for (size_t r = 0; r < rows; r++) {
+			uint8_t row[OMCI_MIB_TABLE_ENTRY_MAX] = { 0 };
+			uint16_t id;
+			bool dup = false;
+
+			(void)!omci_mib_table_get(mib, OMCI_GEM_MCIW_CLASS_ID,
+						  instance, tables[t], r, row,
+						  sizeof(row));
+			id = (uint16_t)(row[0] << 8 | row[1]);
+			for (size_t i = 0; i < n; i++)
+				dup = dup || ids[i] == id;
+			if (!dup && id <= GEM_PORT_ID_MAX && n < cap)
+				ids[n++] = id;
+		}
+	}
+	return n;
+}
+
+/* Whether a multicast GEM interworking termination point points at CTP @instance. */
+static bool multicast_ctp(const struct omci_mib *mib, uint16_t instance)
+{
+	struct omci_mib_cursor cur;
+
+	for (enum omci_status rc = omci_mib_walk_first(mib, &cur);
+	     rc == OMCI_OK; rc = omci_mib_walk_next(mib, &cur))
+		if (cur.class_id == OMCI_GEM_MCIW_CLASS_ID &&
+		    attr_of(mib, OMCI_GEM_MCIW_CLASS_ID, cur.instance,
+			    OMCI_GEM_MCIW_ATTR_CTP, 2) == instance)
+			return true;
+	return false;
+}
+
+/*
+ * The further multicast GEM ports, those the address tables name besides
+ * the ports of their CTPs, into @out after the @n there are; each counts as
+ * the instance of its termination point. Return: the new number.
+ */
+static size_t gather_mcast(const struct omci_mib *mib,
+			   struct omci_hw_gem_port *out, uint16_t *inst_out,
+			   size_t n, size_t cap, unsigned int *bad)
+{
+	struct omci_mib_cursor cur;
+
+	for (enum omci_status rc = omci_mib_walk_first(mib, &cur);
+	     rc == OMCI_OK; rc = omci_mib_walk_next(mib, &cur)) {
+		uint16_t ids[OMCI_GEM_MCAST_PORTS];
+		size_t k;
+
+		if (cur.class_id != OMCI_GEM_MCIW_CLASS_ID)
+			continue;
+		k = omci_gem_mcast_ports(mib, cur.instance, ids,
+					 ARRAY_SIZE(ids));
+		for (size_t i = 0; i < k; i++) {
+			bool dup = false;
+
+			for (size_t j = 0; j < n; j++)
+				dup = dup || out[j].port_id == ids[i];
+			if (dup)
+				continue;
+			if (n >= cap) {
+				OMCI_WARN(
+					"me281: more than %zu GEM ports — Port-ID %u of instance %#06x is NOT programmed",
+					cap, ids[i], cur.instance);
+				(*bad)++;
+				continue;
+			}
+			out[n] = (struct omci_hw_gem_port){
+				.port_id = ids[i],
+				.direction = OMCI_HW_GEM_DIR_DOWNSTREAM,
+				.multicast = true,
+				.pbits = 0xffu,
+			};
+			inst_out[n++] = cur.instance;
+		}
+	}
+	return n;
+}
+
 /*
  * Collect the valid GEM ports of the MIB into @out, with the instance of
  * each in @inst_out; the others are counted in @bad_out and remembered.
@@ -324,10 +413,13 @@ static size_t gather(const struct omci_mib *mib, struct omci_hw_gem_port *out,
 
 		p.port_id = port_id;
 		p.direction = dir;
+		p.multicast = dir == OMCI_HW_GEM_DIR_DOWNSTREAM &&
+			      multicast_ctp(mib, cur.instance);
 		inst_out[n] = cur.instance;
 		out[n++] = p;
 	}
 
+	n = gather_mcast(mib, out, inst_out, n, cap, &bad);
 	if (bad_out != NULL)
 		*bad_out = bad;
 	return n;
