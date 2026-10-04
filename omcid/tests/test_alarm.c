@@ -572,20 +572,28 @@ static unsigned int get_all_alarms_next(struct omci_engine *eng, uint16_t tci,
 	return rsp != NULL ? ((unsigned int)rsp[8] << 8 | rsp[9]) : 0xFFFFu;
 }
 
+/* The thresholds of the ANI-G as the ONU starts with them. */
+static const struct omci_alarm_thresholds DEFAULTS = {
+	.sf = 5u,
+	.sd = 9u,
+	.optical = { 0xFFu, 0xFFu, 0x81u, 0x81u },
+};
+
 static void test_the_rate_is_judged_from_the_receiver(void)
 {
 	struct omci_alarm *al = NULL;
 
 	CHECK_EQ(omci_alarm_init(&al), OMCI_OK);
 	hw_all_clear();
-	CHECK_EQ(omci_alarm_judge(NULL, 0u, 5u, 9u), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_alarm_judge(NULL, 0u, &DEFAULTS), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_alarm_judge(al, 0u, NULL), OMCI_ERR_INVAL);
 
 	/* Eleven quiet seconds, then 25 errors: 10^-9 over 10 s. */
 	omci_hw_pon_force(true, true, 0u);
 	for (unsigned int s = 0; s <= 10u; s++)
-		CHECK_EQ(omci_alarm_judge(al, s, 5u, 9u), OMCI_OK);
+		CHECK_EQ(omci_alarm_judge(al, s, &DEFAULTS), OMCI_OK);
 	omci_hw_pon_force(true, true, 25u);
-	CHECK_EQ(omci_alarm_judge(al, 11u, 5u, 9u), OMCI_OK);
+	CHECK_EQ(omci_alarm_judge(al, 11u, &DEFAULTS), OMCI_OK);
 
 	struct omci_alarm_entry e;
 
@@ -597,7 +605,7 @@ static void test_the_rate_is_judged_from_the_receiver(void)
 
 	/* A read that fails leaves no rate to judge: both clear. */
 	omci_hw_pon_fail_next(true);
-	CHECK_EQ(omci_alarm_judge(al, 12u, 5u, 9u), OMCI_ERR_HW);
+	CHECK_EQ(omci_alarm_judge(al, 12u, &DEFAULTS), OMCI_ERR_HW);
 	omci_hw_pon_fail_next(false);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
 	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
@@ -605,24 +613,24 @@ static void test_the_rate_is_judged_from_the_receiver(void)
 	/* So does a receiver that has no count, or is not in operation. */
 	omci_hw_pon_force(true, true, 0u);
 	for (unsigned int s = 13u; s <= 24u; s++)
-		CHECK_EQ(omci_alarm_judge(al, s, 5u, 9u), OMCI_OK);
+		CHECK_EQ(omci_alarm_judge(al, s, &DEFAULTS), OMCI_OK);
 	omci_hw_pon_force(true, true, 30000u);
-	CHECK_EQ(omci_alarm_judge(al, 25u, 5u, 9u), OMCI_OK);
+	CHECK_EQ(omci_alarm_judge(al, 25u, &DEFAULTS), OMCI_OK);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
 	CHECK(omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
 	omci_hw_pon_force(true, false, 30000u);
-	CHECK_EQ(omci_alarm_judge(al, 26u, 5u, 9u), OMCI_OK);
+	CHECK_EQ(omci_alarm_judge(al, 26u, &DEFAULTS), OMCI_OK);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
 	CHECK(!omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
 	omci_hw_pon_force(false, true, 30000u);
-	CHECK_EQ(omci_alarm_judge(al, 27u, 5u, 9u), OMCI_OK);
+	CHECK_EQ(omci_alarm_judge(al, 27u, &DEFAULTS), OMCI_OK);
 
 	/* A backend that cannot tell the state of the receiver. */
 	struct omci_hw_ops blind = omci_hw_host_ops;
 
 	blind.pon = NULL;
 	omci_hw_ops_set(&blind);
-	CHECK_EQ(omci_alarm_judge(al, 28u, 5u, 9u), OMCI_ERR_HW);
+	CHECK_EQ(omci_alarm_judge(al, 28u, &DEFAULTS), OMCI_ERR_HW);
 	omci_hw_ops_set(NULL);
 
 	omci_hw_pon_force(false, false, 0u);
@@ -1018,6 +1026,176 @@ static void test_a_set_out_of_range_is_refused(void)
 	omci_t_down(&fx);
 }
 
+/* An optical level attribute of the ANI-G. */
+static int16_t ani_g_level(struct omci_mib *mib, uint8_t attr)
+{
+	uint8_t v[2] = { 0xEEu, 0xEEu };
+
+	CHECK_EQ(omci_mib_attr_get(mib, ME_ANI_G, ANI_G_INSTANCE, attr, v,
+				   sizeof(v), NULL),
+		 OMCI_OK);
+	return (int16_t)(uint16_t)((unsigned int)v[0] << 8 | v[1]);
+}
+
+#define ANI_G_RX_LEVEL 10u
+#define ANI_G_RX_LOW 11u
+#define ANI_G_TX_LEVEL 14u
+
+static void test_the_ani_g_reports_its_optical_levels(void)
+{
+	hw_all_clear();
+	omci_hw_optics_reset();
+	omci_hw_optics_limits_reset();
+	omci_hw_pon_force(true, false, 0u);
+
+	struct omci_t_fixture fx;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	omci_engine_tick(fx.eng, 300u);
+	CHECK_EQ(ani_g_level(fx.mib, ANI_G_RX_LEVEL), omci_optical_level(34u));
+	CHECK_EQ(ani_g_level(fx.mib, ANI_G_TX_LEVEL),
+		 omci_optical_level(16412u));
+
+	/* No light gives the lowest level. */
+	omci_hw_optics_force(OMCI_HW_OPTIC_RX_POWER, true, 0u);
+	omci_engine_tick(fx.eng, 301u);
+	CHECK_EQ(ani_g_level(fx.mib, ANI_G_RX_LEVEL), OMCI_OPTICAL_LEVEL_NONE);
+
+	/* A reading that is missing leaves the level as it was. */
+	omci_hw_optics_force(OMCI_HW_OPTIC_RX_POWER, false, 50u);
+	omci_engine_tick(fx.eng, 302u);
+	CHECK_EQ(ani_g_level(fx.mib, ANI_G_RX_LEVEL), OMCI_OPTICAL_LEVEL_NONE);
+
+	omci_t_down(&fx);
+	omci_hw_optics_reset();
+	omci_hw_pon_force(false, false, 0u);
+	hw_all_clear();
+}
+
+static void test_optical_alarms_are_notified(void)
+{
+	hw_all_clear();
+	omci_hw_optics_reset();
+	omci_hw_optics_limits_reset();
+	omci_hw_pon_force(true, false, 0u);
+	omci_hw_pon_level_force(true, 2u);
+
+	struct omci_t_fixture fx;
+	const uint8_t *f = NULL;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	omci_engine_tick(fx.eng, 400u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	/* 500 uW, under the transceiver's 891 uW at the highest level. */
+	omci_hw_optics_force(OMCI_HW_OPTIC_TX_POWER, true, 5000u);
+	omci_engine_tick(fx.eng, 401u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL)
+		CHECK(bit_of(&f[8], 4));
+
+	/* A level lower, the limit is 3 dB lower: 520 uW is inside it. */
+	omci_hw_pon_level_force(true, 1u);
+	omci_hw_optics_force(OMCI_HW_OPTIC_TX_POWER, true, 5200u);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 402u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL)
+		CHECK(!bit_of(&f[8], 4));
+
+	/* The OLT's lower optical threshold of -20 dBm: 3.4 uW is under it. */
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0F01u, ME_ANI_G, ANI_G_INSTANCE,
+			    ANI_G_RX_LOW, 40u),
+		 RESULT_OK);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 403u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL)
+		CHECK(bit_of(&f[8], 0));
+
+	/* 120 mA of bias, over the transceiver's 100 mA. */
+	omci_hw_optics_force(OMCI_HW_OPTIC_BIAS, true, 60000u);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 404u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL) {
+		CHECK(bit_of(&f[8], 0));
+		CHECK(bit_of(&f[8], 6));
+	}
+
+	omci_t_down(&fx);
+	omci_hw_optics_reset();
+	omci_hw_pon_level_force(false, 0u);
+	omci_hw_pon_force(false, false, 0u);
+	hw_all_clear();
+}
+
+static void test_the_transceivers_thresholds_are_read_once_had(void)
+{
+	struct omci_alarm *al = NULL;
+	struct omci_alarm_entry e;
+	int16_t rx = 7, tx = 7;
+
+	CHECK_EQ(omci_alarm_init(&al), OMCI_OK);
+	hw_all_clear();
+	omci_hw_optics_reset();
+	CHECK_EQ(omci_alarm_levels(al, &rx, &tx), 0u);
+	CHECK_EQ(rx, 7);
+	CHECK_EQ(omci_alarm_levels(NULL, &rx, &tx), 0u);
+	CHECK_EQ(omci_alarm_levels(al, NULL, &tx), 0u);
+	CHECK_EQ(omci_alarm_levels(al, &rx, NULL), 0u);
+
+	/* 0.5 uW in: under 1 uW, once the transceiver gives its thresholds. */
+	omci_hw_optics_force(OMCI_HW_OPTIC_RX_POWER, true, 5u);
+	for (unsigned int i = 0; i < (unsigned int)OMCI_HW_LIMIT_COUNT; i++)
+		omci_hw_optics_limit_force((enum omci_hw_limit)i, false, 0u);
+	CHECK_EQ(omci_alarm_judge(al, 1u, &DEFAULTS), OMCI_OK);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
+
+	/* A backend without them. */
+	struct omci_hw_ops plain = omci_hw_host_ops;
+
+	plain.optics_limits = NULL;
+	omci_hw_ops_set(&plain);
+	CHECK_EQ(omci_alarm_judge(al, 2u, &DEFAULTS), OMCI_OK);
+	omci_hw_ops_set(NULL);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
+
+	omci_hw_optics_limits_reset();
+	CHECK_EQ(omci_alarm_judge(al, 3u, &DEFAULTS), OMCI_OK);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
+	CHECK(omci_alarm_snapshot_get(al, 0, &e));
+	CHECK(bit_of(e.bitmap, 0));
+	CHECK_EQ(omci_alarm_levels(al, &rx, &tx),
+		 OMCI_ALARM_LEVEL_RX | OMCI_ALARM_LEVEL_TX);
+	CHECK_EQ(rx, omci_optical_level(5u));
+
+	/* Kept once had: thresholds that go missing later change nothing. */
+	omci_hw_optics_limit_force(OMCI_HW_LIMIT_RX_LOW, false, 0u);
+	CHECK_EQ(omci_alarm_judge(al, 4u, &DEFAULTS), OMCI_OK);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+
+	/* A transceiver that answers nothing leaves the alarms as they were. */
+	for (unsigned int i = 0; i < (unsigned int)OMCI_HW_OPTIC_COUNT; i++)
+		omci_hw_optics_force((enum omci_hw_optic)i, false, 0u);
+	CHECK_EQ(omci_alarm_judge(al, 5u, &DEFAULTS), OMCI_OK);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+
+	omci_hw_optics_reset();
+	omci_hw_optics_limits_reset();
+	hw_all_clear();
+	omci_alarm_fini(al);
+}
+
 int main(void)
 {
 	RUN(test_a_raised_alarm_reaches_the_bitmap);
@@ -1045,5 +1223,8 @@ int main(void)
 	RUN(test_get_all_alarms_restarts_the_sequence);
 	RUN(test_an_idle_alarm_upload_ends);
 	RUN(test_a_set_out_of_range_is_refused);
+	RUN(test_the_ani_g_reports_its_optical_levels);
+	RUN(test_optical_alarms_are_notified);
+	RUN(test_the_transceivers_thresholds_are_read_once_had);
 	return OMCI_T_REPORT("test_alarm");
 }

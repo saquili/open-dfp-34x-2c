@@ -1524,9 +1524,9 @@ static bool nla_uint64(const uint8_t *v, uint16_t len, uint64_t *out)
 }
 
 /*
- * The state of the PON receiver: whether the ONU is in operation, and the
- * BIP errors of the downstream among the counters, which the driver reports
- * only while the PON is up.
+ * The state of the PON receiver: whether the ONU is in operation, the level
+ * the transmitter is at, and the BIP errors of the downstream among the
+ * counters, which the driver reports only while the PON is up.
  */
 static enum omci_status kernel_pon(struct omci_hw_pon *out)
 {
@@ -1543,6 +1543,11 @@ static enum omci_status kernel_pon(struct omci_hw_pon *out)
 
 	out->operating = pon_attr_u32(&a, PON_A_DEV_ONU_STATE, 0) ==
 			 PON_ONU_STATE_O5;
+	if (a.val[PON_A_DEV_POWER_LEVEL]) {
+		out->power_level =
+			(uint8_t)pon_attr_u32(&a, PON_A_DEV_POWER_LEVEL, 0);
+		out->power_level_valid = true;
+	}
 
 	p = a.val[PON_A_DEV_STATS];
 	end = p ? p + a.len[PON_A_DEV_STATS] : NULL;
@@ -1868,6 +1873,45 @@ static enum omci_status kernel_optics(struct omci_hw_optics *out)
 	}
 
 	return got ? OMCI_OK : OMCI_ERR_HW;
+}
+
+/*
+ * The alarm thresholds of the optics the daemon judges by, in hwmon units
+ * (milliamperes, microwatts), turned into those of SFF-8472: the alarm
+ * thresholds are the crit and lcrit attributes.
+ */
+static enum omci_status kernel_optics_limits(struct omci_hw_optics_limits *out)
+{
+	static const struct {
+		enum omci_hw_limit which;
+		const char *file;
+		long long scale;
+	} LIMITS[] = {
+		{ OMCI_HW_LIMIT_BIAS_HIGH, "curr1_crit", 500 },
+		{ OMCI_HW_LIMIT_TX_LOW, "power1_lcrit", 10 },
+		{ OMCI_HW_LIMIT_TX_HIGH, "power1_crit", 10 },
+		{ OMCI_HW_LIMIT_RX_LOW, "power2_lcrit", 10 },
+		{ OMCI_HW_LIMIT_RX_HIGH, "power2_crit", 10 },
+	};
+	char dir[160];
+	long long v;
+	unsigned int i;
+
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	memset(out, 0, sizeof(*out));
+
+	if (!hwmon_path(dir, sizeof(dir)))
+		return OMCI_ERR_HW;
+
+	for (i = 0; i < ARRAY_SIZE(LIMITS); i++) {
+		if (!hwmon_value(dir, LIMITS[i].file, &v) || v < 0 ||
+		    v * LIMITS[i].scale > UINT16_MAX)
+			continue;
+		out->value[LIMITS[i].which] = (uint16_t)(v * LIMITS[i].scale);
+		out->valid |= (uint8_t)(1u << LIMITS[i].which);
+	}
+	return out->valid ? OMCI_OK : OMCI_ERR_HW;
 }
 
 /* The priorities of the VLAN filters, one per rule. */
@@ -2202,5 +2246,6 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.pon = kernel_pon,
 	.counter = kernel_counter,
 	.optics = kernel_optics,
+	.optics_limits = kernel_optics_limits,
 	.set_router = omci_hw_kernel_router,
 };

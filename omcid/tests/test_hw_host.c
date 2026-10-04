@@ -46,6 +46,43 @@ test_a_forced_reading_before_any_read_starts_from_the_recorded_stick(void)
 	CHECK_EQ(o.valid, 0x1fu);
 }
 
+static void
+test_a_forced_threshold_before_any_read_starts_from_the_defaults(void)
+{
+	omci_hw_optics_limit_force(OMCI_HW_LIMIT_RX_LOW, true, 20u);
+
+	struct omci_hw_optics_limits l;
+
+	CHECK_EQ(omci_hw_optics_limits(&l), OMCI_OK);
+	CHECK_EQ(l.value[OMCI_HW_LIMIT_RX_LOW], 20u);
+	CHECK_EQ(l.value[OMCI_HW_LIMIT_BIAS_HIGH], 50000u);
+	CHECK_EQ(l.valid, 0x1fu);
+
+	for (int i = 0; i < OMCI_HW_LIMIT_COUNT; i++)
+		omci_hw_optics_limit_force((enum omci_hw_limit)i, false, 0u);
+	CHECK_EQ(omci_hw_optics_limits(&l), OMCI_ERR_HW);
+	CHECK_EQ(l.valid, 0u);
+
+	omci_hw_optics_limit_force((enum omci_hw_limit)99, true, 5u);
+	CHECK_EQ(omci_hw_optics_limits(&l), OMCI_ERR_HW);
+	CHECK_EQ(omci_hw_optics_limits(NULL), OMCI_ERR_INVAL);
+
+	omci_hw_optics_limits_reset();
+	CHECK_EQ(omci_hw_optics_limits(&l), OMCI_OK);
+	CHECK_EQ(l.value[OMCI_HW_LIMIT_RX_LOW], 10u);
+}
+
+static void test_the_receiver_level_is_forced(void)
+{
+	struct omci_hw_pon p;
+
+	omci_hw_pon_level_force(true, 1u);
+	CHECK_EQ(omci_hw_pon(&p), OMCI_OK);
+	CHECK(p.power_level_valid);
+	CHECK_EQ(p.power_level, 1u);
+	omci_hw_pon_level_force(false, 0u);
+}
+
 static void test_the_capabilities_need_somewhere_to_go(void)
 {
 	struct omci_hw_caps caps;
@@ -260,6 +297,8 @@ static void test_a_list_of_refusals_keeps_each_id_once_and_stops_when_full(void)
 int main(void)
 {
 	test_a_forced_reading_before_any_read_starts_from_the_recorded_stick();
+	RUN(test_a_forced_threshold_before_any_read_starts_from_the_defaults);
+	RUN(test_the_receiver_level_is_forced);
 	RUN(test_the_capabilities_need_somewhere_to_go);
 	RUN(test_the_host_device_says_all_of_what_it_is);
 	RUN(test_a_set_that_is_refused_leaves_the_last_good_set_recorded);

@@ -355,6 +355,12 @@ void omci_hw_pon_fail_next(bool fail)
 	g_pon_fail = fail;
 }
 
+void omci_hw_pon_level_force(bool valid, uint8_t level)
+{
+	g_pon.power_level_valid = valid;
+	g_pon.power_level = level;
+}
+
 #define STUB_PORTS 8u
 #define STUB_CTRS 80u
 static uint64_t g_ctr[STUB_PORTS][STUB_CTRS];
@@ -444,6 +450,57 @@ enum omci_status omci_hw_optics(struct omci_hw_optics *out)
 	return g_optic_valid != 0u ? OMCI_OK : OMCI_ERR_HW;
 }
 
+/*
+ * The thresholds of the synthetic transceiver: those of a module for a
+ * class B+ ONU, which its readings sit within.
+ */
+static const uint16_t g_limit_default[OMCI_HW_LIMIT_COUNT] = {
+	[OMCI_HW_LIMIT_BIAS_HIGH] = 50000u, [OMCI_HW_LIMIT_TX_LOW] = 8912u,
+	[OMCI_HW_LIMIT_TX_HIGH] = 39810u,   [OMCI_HW_LIMIT_RX_LOW] = 10u,
+	[OMCI_HW_LIMIT_RX_HIGH] = 1995u,
+};
+
+static uint16_t g_limit[OMCI_HW_LIMIT_COUNT];
+static uint8_t g_limit_valid;
+static bool g_limit_init;
+
+void omci_hw_optics_limits_reset(void)
+{
+	for (unsigned int i = 0; i < (unsigned int)OMCI_HW_LIMIT_COUNT; i++)
+		g_limit[i] = g_limit_default[i];
+	g_limit_valid =
+		(uint8_t)((1u << (unsigned int)OMCI_HW_LIMIT_COUNT) - 1u);
+	g_limit_init = true;
+}
+
+void omci_hw_optics_limit_force(enum omci_hw_limit which, bool present,
+				uint16_t raw)
+{
+	if ((unsigned int)which >= (unsigned int)OMCI_HW_LIMIT_COUNT)
+		return;
+	if (!g_limit_init)
+		omci_hw_optics_limits_reset();
+
+	g_limit[which] = raw;
+	if (present)
+		g_limit_valid |= (uint8_t)(1u << (unsigned int)which);
+	else
+		g_limit_valid &= (uint8_t)~(1u << (unsigned int)which);
+}
+
+enum omci_status omci_hw_optics_limits(struct omci_hw_optics_limits *out)
+{
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	if (!g_limit_init)
+		omci_hw_optics_limits_reset();
+
+	for (unsigned int i = 0; i < (unsigned int)OMCI_HW_LIMIT_COUNT; i++)
+		out->value[i] = g_limit[i];
+	out->valid = g_limit_valid;
+	return g_limit_valid != 0u ? OMCI_OK : OMCI_ERR_HW;
+}
+
 const struct omci_hw_ops omci_hw_host_ops = {
 	.caps = omci_hw_caps,
 	.source = omci_hw_source,
@@ -455,4 +512,5 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.pon = omci_hw_pon,
 	.counter = omci_hw_counter,
 	.optics = omci_hw_optics,
+	.optics_limits = omci_hw_optics_limits,
 };

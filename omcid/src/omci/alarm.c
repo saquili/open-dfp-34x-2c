@@ -10,6 +10,7 @@
 #include "hw/hw.h"
 #include "omci/alarm.h"
 #include "omci/ber.h"
+#include "omci/optical.h"
 #include "omcid/byteorder.h"
 #include "omci/frame.h"
 #include "sys/log.h"
@@ -33,11 +34,29 @@
  * upstream that transmits too long or out of turn is detected by the OLT;
  * no alarm the ONU reports stands for them.
  */
+/* The alarms the daemon judges itself from the transceiver's readings. */
+enum {
+	ALARM_RX_LOW = OMCI_HW_ALARM_COUNT,
+	ALARM_RX_HIGH,
+	ALARM_TX_LOW,
+	ALARM_TX_HIGH,
+	ALARM_BIAS_HIGH,
+	ALARM_COUNT,
+};
+
+static_assert(ALARM_COUNT <= 32, "every alarm has a bit of the mask");
+
+/*
+ * The optical alarms (G.988 9.2.1): low and high received optical power,
+ * bits 0 and 1, the first also standing for loss of signal; low and high
+ * transmit optical power, bits 4 and 5; and the laser bias current over
+ * its limit, bit 6.
+ */
 static const struct {
 	uint16_t class_id;
 	uint16_t instance;
 	uint8_t bit;
-} g_map[OMCI_HW_ALARM_COUNT] = {
+} g_map[ALARM_COUNT] = {
 	[OMCI_HW_ALARM_LOS] = { ME_ANI_G, ANI_G_INSTANCE, 0u },
 	[OMCI_HW_ALARM_LOF] = { 0u, 0u, NO_OMCI_BIT },
 	[OMCI_HW_ALARM_LOM] = { 0u, 0u, NO_OMCI_BIT },
@@ -45,6 +64,11 @@ static const struct {
 	[OMCI_HW_ALARM_SD] = { ME_ANI_G, ANI_G_INSTANCE, 3u },
 	[OMCI_HW_ALARM_TX_TOO_LONG] = { 0u, 0u, NO_OMCI_BIT },
 	[OMCI_HW_ALARM_TX_MISMATCH] = { 0u, 0u, NO_OMCI_BIT },
+	[ALARM_RX_LOW] = { ME_ANI_G, ANI_G_INSTANCE, 0u },
+	[ALARM_RX_HIGH] = { ME_ANI_G, ANI_G_INSTANCE, 1u },
+	[ALARM_TX_LOW] = { ME_ANI_G, ANI_G_INSTANCE, 4u },
+	[ALARM_TX_HIGH] = { ME_ANI_G, ANI_G_INSTANCE, 5u },
+	[ALARM_BIAS_HIGH] = { ME_ANI_G, ANI_G_INSTANCE, 6u },
 };
 
 /*
@@ -61,8 +85,9 @@ struct entity_state {
 
 /*
  * The alarm state: the entities, the copy Get all alarms froze, the sequence
- * number of the next notification, and the rate of BIP errors with the
- * alarms judged from it, as bits of enum omci_hw_alarm.
+ * number of the next notification, the rate of BIP errors, the optical
+ * alarms and the transceiver's thresholds and levels, and the alarms judged
+ * from them, as bits of the conditions of g_map.
  */
 struct omci_alarm {
 	struct entity_state live[OMCI_ALARM_MAX_ENTITIES];
@@ -71,14 +96,17 @@ struct omci_alarm {
 	uint16_t snap_n;
 	uint8_t seq;
 	struct omci_ber ber;
+	struct omci_optical optical;
+	struct omci_hw_optics_limits own;
+	bool own_read;
+	int16_t rx_level;
+	int16_t tx_level;
+	uint8_t levels;
 	uint32_t judged;
 };
 
 static struct omci_alarm g_alarm;
 static bool g_alarm_taken;
-
-static_assert((unsigned int)OMCI_HW_ALARM_COUNT <= OMCI_ALARM_MAX_ENTITIES,
-	      "every alarm can have its own entity");
 
 /* The place of an entity's state, or -1 when it has none. */
 static int entity_index(const struct omci_alarm *al, uint16_t class_id,
@@ -138,34 +166,110 @@ void omci_alarm_fini(struct omci_alarm *al)
 	g_alarm_taken = false;
 }
 
-enum omci_status omci_alarm_judge(struct omci_alarm *al, uint64_t now_sec,
-				  uint8_t sf, uint8_t sd)
+/* Log what an alarm judged here became. */
+static void say(bool was, bool is, const char *what)
 {
-	if (al == NULL)
+	if (was != is)
+		OMCI_INFO("alarm: %s %s", what, is ? "declared" : "cleared");
+}
+
+/* Signal fail and degrade, from the BIP errors of the receiver. */
+static void judge_ber(struct omci_alarm *al, uint64_t now_sec,
+		      const struct omci_hw_pon *pon, bool read,
+		      const struct omci_alarm_thresholds *t)
+{
+	const bool was_sf = al->ber.sf, was_sd = al->ber.sd;
+
+	if (!read || !pon->operating || !pon->bip_valid) {
+		omci_ber_reset(&al->ber);
+	} else {
+		omci_ber_sample(&al->ber, now_sec, pon->bip_errors);
+		omci_ber_judge(&al->ber, t->sf, t->sd);
+	}
+
+	if (al->ber.sf != was_sf)
+		OMCI_INFO("alarm: signal fail %s (threshold 10^-%u)",
+			  al->ber.sf ? "declared" : "cleared", t->sf);
+	if (al->ber.sd != was_sd)
+		OMCI_INFO("alarm: signal degrade %s (threshold 10^-%u)",
+			  al->ber.sd ? "declared" : "cleared", t->sd);
+}
+
+/* The optical alarms and levels, from the readings of the transceiver. */
+static void judge_optics(struct omci_alarm *al, const struct omci_hw_pon *pon,
+			 bool read, const struct omci_alarm_thresholds *t)
+{
+	const struct omci_hw_ops *hw = omci_hw();
+
+	if (!al->own_read && hw->optics_limits != NULL &&
+	    hw->optics_limits(&al->own) == OMCI_OK)
+		al->own_read = true;
+
+	struct omci_hw_optics o;
+
+	if (hw->optics(&o) != OMCI_OK)
+		return;
+
+	struct omci_optical_limits lim;
+	const struct omci_optical was = al->optical;
+
+	omci_optical_limits(&t->optical, al->own_read ? &al->own : NULL,
+			    read ? pon : NULL, &lim);
+	omci_optical_judge(&al->optical, &o, &lim, read && pon->operating);
+
+	say(was.rx_low, al->optical.rx_low, "low received optical power");
+	say(was.rx_high, al->optical.rx_high, "high received optical power");
+	say(was.tx_low, al->optical.tx_low, "low transmit optical power");
+	say(was.tx_high, al->optical.tx_high, "high transmit optical power");
+	say(was.bias_high, al->optical.bias_high, "laser bias current");
+
+	if ((o.valid & (1u << OMCI_HW_OPTIC_RX_POWER)) != 0u) {
+		al->rx_level = omci_optical_level(o.rx_power);
+		al->levels |= OMCI_ALARM_LEVEL_RX;
+	}
+	if ((o.valid & (1u << OMCI_HW_OPTIC_TX_POWER)) != 0u) {
+		al->tx_level = omci_optical_level(o.tx_power);
+		al->levels |= OMCI_ALARM_LEVEL_TX;
+	}
+}
+
+static uint32_t bit_if(bool on, unsigned int condition)
+{
+	return on ? 1u << condition : 0u;
+}
+
+enum omci_status omci_alarm_judge(struct omci_alarm *al, uint64_t now_sec,
+				  const struct omci_alarm_thresholds *t)
+{
+	if (al == NULL || t == NULL)
 		return OMCI_ERR_INVAL;
 
 	struct omci_hw_pon pon = { 0 };
 	const enum omci_status rc =
 		omci_hw()->pon != NULL ? omci_hw()->pon(&pon) : OMCI_ERR_HW;
-	const bool was_sf = al->ber.sf, was_sd = al->ber.sd;
 
-	if (rc != OMCI_OK || !pon.operating || !pon.bip_valid) {
-		omci_ber_reset(&al->ber);
-	} else {
-		omci_ber_sample(&al->ber, now_sec, pon.bip_errors);
-		omci_ber_judge(&al->ber, sf, sd);
-	}
+	judge_ber(al, now_sec, &pon, rc == OMCI_OK, t);
+	judge_optics(al, &pon, rc == OMCI_OK, t);
 
-	if (al->ber.sf != was_sf)
-		OMCI_INFO("alarm: signal fail %s (threshold 10^-%u)",
-			  al->ber.sf ? "declared" : "cleared", sf);
-	if (al->ber.sd != was_sd)
-		OMCI_INFO("alarm: signal degrade %s (threshold 10^-%u)",
-			  al->ber.sd ? "declared" : "cleared", sd);
-
-	al->judged = (al->ber.sf ? 1u << OMCI_HW_ALARM_SF : 0u) |
-		     (al->ber.sd ? 1u << OMCI_HW_ALARM_SD : 0u);
+	al->judged = bit_if(al->ber.sf, OMCI_HW_ALARM_SF) |
+		     bit_if(al->ber.sd, OMCI_HW_ALARM_SD) |
+		     bit_if(al->optical.rx_low, ALARM_RX_LOW) |
+		     bit_if(al->optical.rx_high, ALARM_RX_HIGH) |
+		     bit_if(al->optical.tx_low, ALARM_TX_LOW) |
+		     bit_if(al->optical.tx_high, ALARM_TX_HIGH) |
+		     bit_if(al->optical.bias_high, ALARM_BIAS_HIGH);
 	return rc;
+}
+
+uint8_t omci_alarm_levels(const struct omci_alarm *al, int16_t *rx, int16_t *tx)
+{
+	if (al == NULL || rx == NULL || tx == NULL)
+		return 0u;
+	if ((al->levels & OMCI_ALARM_LEVEL_RX) != 0u)
+		*rx = al->rx_level;
+	if ((al->levels & OMCI_ALARM_LEVEL_TX) != 0u)
+		*tx = al->tx_level;
+	return al->levels;
 }
 
 enum omci_status omci_alarm_poll(struct omci_alarm *al, bool *changed)
@@ -185,7 +289,7 @@ enum omci_status omci_alarm_poll(struct omci_alarm *al, bool *changed)
 	uint8_t next[OMCI_ALARM_MAX_ENTITIES][OMCI_ALARM_BITMAP_LEN];
 
 	memset(next, 0, sizeof(next));
-	for (unsigned int a = 0; a < (unsigned int)OMCI_HW_ALARM_COUNT; a++) {
+	for (unsigned int a = 0; a < (unsigned int)ALARM_COUNT; a++) {
 		if (g_map[a].bit == NO_OMCI_BIT || (mask & (1u << a)) == 0u)
 			continue;
 

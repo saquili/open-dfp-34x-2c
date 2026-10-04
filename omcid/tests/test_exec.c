@@ -81,6 +81,19 @@ static bool child_read(struct child *c, uint8_t *buf, size_t n)
 	return true;
 }
 
+/*
+ * An alarm notification or attribute value change the daemon sent on its
+ * own: it judges its alarms once a second, so these come when they come,
+ * between the answers, and the engine in the test, which is not ticked,
+ * has none to compare them with.
+ */
+static bool autonomous(const uint8_t *f)
+{
+	const uint8_t mt = f[2] & 0x1Fu;
+
+	return (f[2] & 0x20u) == 0u && (mt == 16u || mt == 17u);
+}
+
 static bool child_write(struct child *c, const uint8_t *buf, size_t n)
 {
 	return write(c->in, buf, n) == (ssize_t)n;
@@ -257,6 +270,13 @@ int main(int argc, char **argv)
 		memcpy(startup, omci_t_tx.frame, (size_t)n0 * OMCI_FRAME_LEN);
 		CHECK(n0 > 0u);
 
+		/*
+		 * The daemon judges its alarms, and reads the optical levels of
+		 * the ANI-G, before it answers the first frame: so does the
+		 * engine here, from the same host backend.
+		 */
+		omci_engine_tick(fx.eng, 1u);
+
 		char *const plain[] = { (char *)bin, (char *)"-p", NULL };
 		struct child c;
 
@@ -307,8 +327,15 @@ int main(int argc, char **argv)
 				sent++;
 				for (unsigned int f = 0; f < k; f++) {
 					uint8_t got[OMCI_FRAME_LEN];
+					bool read;
 
-					if (!child_read(&c, got, sizeof(got))) {
+					while ((read = child_read(
+							&c, got,
+							sizeof(got))) &&
+					       autonomous(got) &&
+					       !autonomous(omci_t_tx.frame[f]))
+						answers++;
+					if (!read) {
 						in_step = false;
 						break;
 					}
@@ -323,11 +350,18 @@ int main(int argc, char **argv)
 		CHECK(sent > 3000u);
 		CHECK_EQ(mismatched, 0u);
 
-		uint8_t rest[OMCI_FRAME_LEN];
+		uint8_t rest[64 * OMCI_FRAME_LEN];
 		size_t rest_n = 0;
 		const int status =
 			child_finish(&c, rest, sizeof(rest), &rest_n);
-		silent_wrong = rest_n;
+
+		for (size_t at = 0; at < rest_n; at += OMCI_FRAME_LEN) {
+			if (at + OMCI_FRAME_LEN <= rest_n &&
+			    autonomous(&rest[at]))
+				answers++;
+			else
+				silent_wrong++;
+		}
 		CHECK_EQ(silent_wrong, 0u);
 		CHECK(WIFEXITED(status));
 		CHECK_EQ(WEXITSTATUS(status), 0);

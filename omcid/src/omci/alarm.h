@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "omci/frame.h"
+#include "omci/optical.h"
 #include "omcid/attrs.h"
 #include "omcid/status.h"
 
@@ -40,6 +41,22 @@ struct omci_alarm_entry {
 	uint8_t bitmap[OMCI_ALARM_BITMAP_LEN];
 };
 
+/**
+ * struct omci_alarm_thresholds - The thresholds of the ANI-G (G.988 9.2.1).
+ * @sf: signal fail, the k of a rate of 10^-k
+ * @sd: signal degrade, likewise
+ * @optical: the thresholds of the optical powers
+ */
+struct omci_alarm_thresholds {
+	uint8_t sf;
+	uint8_t sd;
+	struct omci_optical_thresholds optical;
+};
+
+/* What omci_alarm_levels() has: the received and the transmitted level. */
+#define OMCI_ALARM_LEVEL_RX 0x1u
+#define OMCI_ALARM_LEVEL_TX 0x2u
+
 struct omci_alarm;
 
 /**
@@ -56,23 +73,38 @@ __must_check enum omci_status omci_alarm_init(struct omci_alarm **out);
 void omci_alarm_fini(struct omci_alarm *al);
 
 /**
- * omci_alarm_judge() - Judge the bit error rate of the downstream.
+ * omci_alarm_judge() - Judge the alarms the hardware does not raise itself.
  * @al: the state
  * @now_sec: the time, in seconds of a clock that never goes back
- * @sf: the signal fail threshold of the ANI-G, the k of a rate of 10^-k
- * @sd: the signal degrade threshold of the ANI-G, likewise
+ * @t: the thresholds of the ANI-G
  *
  * Takes the count of BIP errors of the receiver and declares or clears
- * signal fail and signal degrade (omci_ber_judge()), which the next
- * omci_alarm_poll() reports. While the ONU is not in operation, or the
- * count is not to be had, there is no rate to judge: the history is
- * dropped and both clear.
+ * signal fail and signal degrade (omci_ber_judge()): while the ONU is not
+ * in operation, or the count is not to be had, there is no rate to judge,
+ * the history is dropped and both clear. Then takes the readings of the
+ * transceiver and judges the optical alarms (omci_optical_judge()) against
+ * the limits the thresholds and the transceiver's own give, reading those
+ * of the transceiver until it has them once. The next omci_alarm_poll()
+ * reports what was declared.
  *
- * Return: %OMCI_OK, %OMCI_ERR_INVAL, or the failure of the read.
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL, or the failure of the read of the
+ * receiver.
  */
-__must_check enum omci_status omci_alarm_judge(struct omci_alarm *al,
-					       uint64_t now_sec, uint8_t sf,
-					       uint8_t sd);
+__must_check enum omci_status
+omci_alarm_judge(struct omci_alarm *al, uint64_t now_sec,
+		 const struct omci_alarm_thresholds *t);
+
+/**
+ * omci_alarm_levels() - The optical levels the last judgement read.
+ * @al: the state
+ * @rx: the received level, in units of 0.002 dB referred to 1 mW
+ * @tx: the transmitted level, likewise
+ *
+ * Return: OMCI_ALARM_LEVEL_RX and OMCI_ALARM_LEVEL_TX for the levels that
+ * were read; the others are left as they were.
+ */
+__must_check uint8_t omci_alarm_levels(const struct omci_alarm *al, int16_t *rx,
+				       int16_t *tx);
 
 /**
  * omci_alarm_poll() - Read the alarms of the hardware.

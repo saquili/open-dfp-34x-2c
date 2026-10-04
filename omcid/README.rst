@@ -10,18 +10,19 @@ The OMCI daemon of the ONU: the side of ITU-T G.988 that answers the OLT.
 It holds the management information base, answers each request of the OLT
 in the baseline message format, and programs the data path from what the
 OLT configures: GEM ports, bridges and the VLAN rules of the extended VLAN
-tagging operation. It notifies the OLT of alarms, signal fail and degrade
-among them, which it judges from the BIP errors of the downstream, and
-reports performance monitoring counts and the result of the optical line
-supervision test. A local control socket lets tools read the MIB, follow the
+tagging operation. It notifies the OLT of alarms, among them those it
+judges itself: signal fail and degrade from the BIP errors of the
+downstream, and the optical alarms from the readings of the transceiver,
+whose levels it keeps in the ANI-G. It reports performance monitoring
+counts and the result of the optical line supervision test. A local control socket lets tools read the MIB, follow the
 frames and see what became of each VLAN rule.
 
 Layout
 ======
 
 ``src/omci/``
-   the message frame, the engine, alarms and the bit error rate they are
-   judged by, notifications, the clock and tests
+   the message frame, the engine, alarms and the bit error rate and optical
+   readings they are judged by, notifications, the clock and tests
 ``src/mib/``
    the store of instances and attributes
 ``src/me/``

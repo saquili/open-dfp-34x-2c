@@ -382,11 +382,16 @@ void omci_hw_alarm_fail_next(bool fail);
  *	each taken as one bit in error
  * @operating: the ONU is in operation, the state O5
  * @bip_valid: @bip_errors was read
+ * @power_level: the level the transmitter is at, as Serial_Number_ONU
+ *	codes it (G.984.3 9.2.4.1): 2 high, 1 medium, 0 low
+ * @power_level_valid: @power_level was read
  */
 struct omci_hw_pon {
 	uint64_t bip_errors;
 	bool operating;
 	bool bip_valid;
+	uint8_t power_level;
+	bool power_level_valid;
 };
 
 /**
@@ -401,6 +406,8 @@ __must_check enum omci_status omci_hw_pon(struct omci_hw_pon *out);
 
 /* Test hooks of the host backend for the PON receiver. */
 void omci_hw_pon_force(bool operating, bool bip_valid, uint64_t bip_errors);
+
+void omci_hw_pon_level_force(bool valid, uint8_t level);
 
 void omci_hw_pon_fail_next(bool fail);
 #endif
@@ -477,6 +484,54 @@ void omci_hw_optics_reset(void);
 #endif
 
 /**
+ * enum omci_hw_limit - The alarm thresholds of the transceiver.
+ * @OMCI_HW_LIMIT_BIAS_HIGH: laser bias current, high
+ * @OMCI_HW_LIMIT_TX_LOW: transmitted optical power, low
+ * @OMCI_HW_LIMIT_TX_HIGH: transmitted optical power, high
+ * @OMCI_HW_LIMIT_RX_LOW: received optical power, low
+ * @OMCI_HW_LIMIT_RX_HIGH: received optical power, high
+ * @OMCI_HW_LIMIT_COUNT: the number of thresholds
+ */
+enum omci_hw_limit {
+	OMCI_HW_LIMIT_BIAS_HIGH = 0,
+	OMCI_HW_LIMIT_TX_LOW,
+	OMCI_HW_LIMIT_TX_HIGH,
+	OMCI_HW_LIMIT_RX_LOW,
+	OMCI_HW_LIMIT_RX_HIGH,
+	OMCI_HW_LIMIT_COUNT,
+};
+
+/**
+ * struct omci_hw_optics_limits - The transceiver's own alarm thresholds.
+ * @value: each threshold, in the unit of its reading in struct
+ *	omci_hw_optics (2 uA, 0.1 uW)
+ * @valid: bit N set when &enum omci_hw_limit N was read
+ */
+struct omci_hw_optics_limits {
+	uint16_t value[OMCI_HW_LIMIT_COUNT];
+	uint8_t valid;
+};
+
+/**
+ * omci_hw_optics_limits() - Read the thresholds of the transceiver (host
+ *	backend).
+ * @out: the thresholds
+ *
+ * Return: %OMCI_OK, or the failure of the read.
+ */
+__must_check enum omci_status
+omci_hw_optics_limits(struct omci_hw_optics_limits *out);
+
+#if defined(OMCID_HW_STUB)
+
+/* Test hooks of the host backend for the thresholds of the transceiver. */
+void omci_hw_optics_limit_force(enum omci_hw_limit which, bool present,
+				uint16_t raw);
+
+void omci_hw_optics_limits_reset(void);
+#endif
+
+/**
  * struct omci_hw_ops - A backend.
  * @caps: what the device has
  * @source: the backend's name
@@ -489,6 +544,8 @@ void omci_hw_optics_reset(void);
  * @pon: read the state of the PON receiver
  * @counter: read a counter of the switch
  * @optics: read the transceiver
+ * @optics_limits: read the transceiver's thresholds; NULL in a backend
+ *	without them
  * @set_router: route instead of bridging (true), or bridge again (false):
  *	in router mode the bridges and the VLAN rules are not applied; NULL in
  *	a backend without a router mode
@@ -512,6 +569,7 @@ struct omci_hw_ops {
 	enum omci_status (*counter)(unsigned int port, unsigned int idx,
 				    uint64_t *out);
 	enum omci_status (*optics)(struct omci_hw_optics *out);
+	enum omci_status (*optics_limits)(struct omci_hw_optics_limits *out);
 	void (*set_router)(bool on);
 };
 

@@ -81,11 +81,20 @@ struct get_next_transfer {
 	uint32_t generation;
 };
 
-/* The attributes of the ANI-G the alarms are judged by (G.988 9.2.1). */
+/*
+ * The attributes of the ANI-G the alarms are judged by, and those that
+ * report the optical levels (G.988 9.2.1).
+ */
 #define ANI_G_SF 6u
 #define ANI_G_SD 7u
 #define ANI_G_ARC 8u
 #define ANI_G_ARC_INTERVAL 9u
+#define ANI_G_RX_LEVEL 10u
+#define ANI_G_RX_LOW 11u
+#define ANI_G_RX_HIGH 12u
+#define ANI_G_TX_LEVEL 14u
+#define ANI_G_TX_LOW 15u
+#define ANI_G_TX_HIGH 16u
 
 /*
  * The entities under alarm-reporting control (G.988 A.1.4.3), with the
@@ -1292,17 +1301,49 @@ static void arc_tick(struct omci_engine *eng)
 	}
 }
 
+/* Keep an optical level of the ANI-G as the transceiver last read it. */
+static void ani_g_level(struct omci_engine *eng, uint8_t attr, int16_t level)
+{
+	uint8_t v[2];
+
+	omci_be16_store(v, (uint16_t)level);
+	(void)!omci_mib_attr_set(eng->mib, OMCI_ALARM_ANI_G,
+				 OMCI_ALARM_ANI_G_INSTANCE, attr, v, sizeof(v));
+}
+
 /*
- * Once a second: judge the bit error rate, read the alarms, apply
+ * Once a second: judge the alarms the hardware does not raise, and keep
+ * the optical levels of the ANI-G current; read the alarms, apply
  * alarm-reporting control, and notify the OLT of each entity whose alarms
  * changed (G.988 A.1.4). Only an entity the MIB holds is notified.
  */
 static void alarms_tick(struct omci_engine *eng)
 {
-	const uint8_t sf = ani_g_u8(eng, ANI_G_SF, OMCI_BER_SF_DEFAULT);
-	const uint8_t sd = ani_g_u8(eng, ANI_G_SD, OMCI_BER_SD_DEFAULT);
+	const struct omci_alarm_thresholds t = {
+		.sf = ani_g_u8(eng, ANI_G_SF, OMCI_BER_SF_DEFAULT),
+		.sd = ani_g_u8(eng, ANI_G_SD, OMCI_BER_SD_DEFAULT),
+		.optical = {
+			.rx_low = ani_g_u8(eng, ANI_G_RX_LOW,
+					   OMCI_OPTICAL_RX_POLICY),
+			.rx_high = ani_g_u8(eng, ANI_G_RX_HIGH,
+					    OMCI_OPTICAL_RX_POLICY),
+			.tx_low = ani_g_u8(eng, ANI_G_TX_LOW,
+					   OMCI_OPTICAL_TX_POLICY),
+			.tx_high = ani_g_u8(eng, ANI_G_TX_HIGH,
+					    OMCI_OPTICAL_TX_POLICY),
+		},
+	};
+	int16_t rx = 0, tx = 0;
 
-	(void)!omci_alarm_judge(eng->alarm, eng->now_sec, sf, sd);
+	(void)!omci_alarm_judge(eng->alarm, eng->now_sec, &t);
+
+	const uint8_t levels = omci_alarm_levels(eng->alarm, &rx, &tx);
+
+	if ((levels & OMCI_ALARM_LEVEL_RX) != 0u)
+		ani_g_level(eng, ANI_G_RX_LEVEL, rx);
+	if ((levels & OMCI_ALARM_LEVEL_TX) != 0u)
+		ani_g_level(eng, ANI_G_TX_LEVEL, tx);
+
 	if (omci_alarm_poll(eng->alarm, NULL) != OMCI_OK) {
 		OMCI_DEBUG("alarm: the hardware did not answer");
 		return;
