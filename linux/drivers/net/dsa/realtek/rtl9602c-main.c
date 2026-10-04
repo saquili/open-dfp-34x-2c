@@ -411,70 +411,64 @@ static int rtl9602c_devlink_info_get(struct dsa_switch *ds,
 }
 
 /*
- * The speed of the SerDes lane is the host's choice: some host ports
- * offer 2500BaseX and 1000BaseX, others only 1000BaseX, and nothing on the
- * lane tells the stick which. So it is a module parameter,
- * rtl9602c.sfp_mode, rather than a device-tree property. rtl9602c.sfp_an
- * sets the lane's in-band auto-negotiation (IEEE 802.3 clause 37), which the
- * bring-up turns off, as a host that does not negotiate in band needs; "on"
- * is meant for a host that does, and has not been tried against one.
- *
- * Both are applied once, at setup, before phylink starts the port. A later
- * bring-up of the lane replaces them: rtl9602c_mac_config() runs one when
- * phylink's interface maps to another mode than the one programmed, and
- * every bring-up rewrites the auto-negotiation word. For a fixed link
- * phylink passes the device tree's phy-mode when the port starts, so
- * sfp_mode=1000basex with a phy-mode of 2500base-x is expected to end
- * in 2500BaseX, and without sfp_an; not verified.
+ * The SerDes lane to the host runs as the host chooses, and nothing on the lane
+ * says which: a host port that takes 2500BaseX sends it without in-band
+ * auto-negotiation (IEEE 802.3 clause 37), and one that takes only 1000BaseX
+ * commonly negotiates in band, and sometimes does not. So while the lane's
+ * receiver has not synchronised, rtl9602c_sds_work() tries the settings of
+ * rtl9602c_sds_tries[] in turn and keeps the first one that synchronises.
+ * rtl9602c.sfp_mode and rtl9602c.sfp_an narrow the settings tried to one
+ * speed or one choice of negotiation; with both set, the lane keeps the one
+ * setting left.
  */
-static char *sfp_mode = "2500basex";
+static char *sfp_mode = "auto";
 module_param(sfp_mode, charp, 0444);
-MODULE_PARM_DESC(sfp_mode, "SFP lane speed at probe: 2500basex (default) or 1000basex");
+MODULE_PARM_DESC(sfp_mode, "SFP lane speed: auto (default), 2500basex or 1000basex");
 
-static char *sfp_an = "keep";
+static char *sfp_an = "auto";
 module_param(sfp_an, charp, 0444);
-MODULE_PARM_DESC(sfp_an, "SFP lane in-band auto-negotiation: keep (default), on or off");
+MODULE_PARM_DESC(sfp_an, "SFP lane in-band auto-negotiation: auto (default), on or off");
 
-/*
- * RTL9602C_SERDES_AN_CTRL_FORCE holds one bit per lane of the SerDes block;
- * set, it forces the lane's negotiation result, which turns in-band
- * negotiation off. After the change the lane's restart bit is pulsed. A
- * change reaches a running link only when the lane is next parked and
- * restarted, as a link down and up does; the pulse alone does not apply it
- * (measured on this board).
- */
-static void rtl9602c_sfp_an_param(struct rtl9602c_priv *p)
+/* The lane settings, in the order they are tried. */
+static const struct {
+	u32 mode;
+	bool an;
+	const char *name;
+} rtl9602c_sds_tries[] = {
+	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, false, "2500BaseX" },
+	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, true,
+	  "1000BaseX with in-band negotiation" },
+	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, false, "1000BaseX" },
+};
+
+/* How long one setting is given to synchronise, and how often it is checked. */
+#define RTL9602C_SDS_TRY_MS	1000
+
+/* The settings that sfp_mode and sfp_an leave to be tried, one bit each. */
+static u8 rtl9602c_sds_params(void)
 {
-	unsigned int lane = BIT(RTL9602C_SERDES_LANE_SFP);
-	u32 frc;
+	bool any_mode = !strcmp(sfp_mode, "auto"), any_an = !strcmp(sfp_an, "auto");
+	u8 tries = 0;
+	unsigned int i;
 
-	if (!strcmp(sfp_an, "keep"))
-		return;
-	if (strcmp(sfp_an, "on") && strcmp(sfp_an, "off")) {
-		pr_warn("sfp_an=\"%s\" is not on, off or keep; leaving it alone\n",
-			sfp_an);
-		return;
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++) {
+		u32 mode = rtl9602c_sds_tries[i].mode;
+		bool an = rtl9602c_sds_tries[i].an;
+
+		if (!any_mode &&
+		    !(mode == RTL9602C_SERDES_CTRL_MODE_2500BASEX ?
+		      !strcmp(sfp_mode, "2500basex") : !strcmp(sfp_mode, "1000basex")))
+			continue;
+		if (!any_an && strcmp(sfp_an, an ? "on" : "off"))
+			continue;
+		tries |= BIT(i);
 	}
-
-	frc = FIELD_GET(RTL9602C_SERDES_AN_CTRL_FORCE,
-			rtl9602c_r(p, RTL9602C_SERDES_AN_CTRL));
-	frc = !strcmp(sfp_an, "on") ? (frc & ~lane) : (frc | lane);
-	rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL, RTL9602C_SERDES_AN_CTRL_FORCE,
-		     FIELD_PREP(RTL9602C_SERDES_AN_CTRL_FORCE, frc));
-	rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL, RTL9602C_SERDES_AN_CTRL_RESTART,
-		     FIELD_PREP(RTL9602C_SERDES_AN_CTRL_RESTART, lane));
-	rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL, RTL9602C_SERDES_AN_CTRL_RESTART, 0);
-	pr_info("SFP lane in-band auto-negotiation %s\n", sfp_an);
-}
-
-static u32 rtl9602c_sfp_mode_param(struct rtl9602c_priv *p)
-{
-	if (!strcmp(sfp_mode, "1000basex"))
-		return RTL9602C_SERDES_CTRL_MODE_1000BASEX;
-	if (strcmp(sfp_mode, "2500basex"))
-		pr_warn("sfp_mode=\"%s\" is not a speed this driver has; using 2500basex\n",
-			sfp_mode);
-	return RTL9602C_SERDES_CTRL_MODE_2500BASEX;
+	if (!tries) {
+		pr_warn("sfp_mode=\"%s\" sfp_an=\"%s\" leave no lane setting; trying them all\n",
+			sfp_mode, sfp_an);
+		tries = GENMASK(ARRAY_SIZE(rtl9602c_sds_tries) - 1, 0);
+	}
+	return tries;
 }
 
 /**
@@ -489,11 +483,11 @@ static u32 rtl9602c_sfp_mode_param(struct rtl9602c_priv *p)
  * analog settings are taken to act as the lane comes out of park and
  * reset, and are written only while it is parked; not verified.
  *
- * 1000BaseX gets the analog values of 2500BaseX. No frame has crossed a
- * 1000BaseX link yet, so whether it needs other values is not verified.
+ * 1000BaseX gets the analog values of 2500BaseX, and traffic crosses a
+ * 1000BaseX link with them (measured on this board).
  *
- * The sequence takes the link down, so rtl9602c_mac_config() runs it only
- * when the mode changes.
+ * The sequence takes the link down, so it runs only when the lane's setting
+ * changes (rtl9602c_sds_set()).
  */
 void rtl9602c_serdes_init(struct rtl9602c_priv *p, u32 sds_mode)
 {
@@ -563,19 +557,6 @@ void rtl9602c_serdes_init(struct rtl9602c_priv *p, u32 sds_mode)
 	p->sds_mode = sds_mode;
 }
 
-/* The lane's mode for a phylink interface; 0 for one the lane does not run. */
-static u32 rtl9602c_sds_mode_for(phy_interface_t interface)
-{
-	switch (interface) {
-	case PHY_INTERFACE_MODE_2500BASEX:
-		return RTL9602C_SERDES_CTRL_MODE_2500BASEX;
-	case PHY_INTERFACE_MODE_1000BASEX:
-		return RTL9602C_SERDES_CTRL_MODE_1000BASEX;
-	default:
-		return 0;
-	}
-}
-
 /*
  * Re-latch the lane in its programmed mode: stop its clock, park it, wait,
  * then write back the saved control word with the clock running, and give
@@ -595,6 +576,66 @@ static void rtl9602c_serdes_resync(struct rtl9602c_priv *p)
 	msleep(20);
 	rtl9602c_w(p, RTL9602C_SERDES_CTRL, saved & ~RTL9602C_SERDES_CTRL_CLK_STOP);
 	msleep(50);
+}
+
+/*
+ * Bring the lane up with setting @try of rtl9602c_sds_tries[]. In-band
+ * negotiation, which the bring-up turns off, is turned on by clearing the
+ * lane's FORCE bit and pulsing its restart, and reaches the lane with a
+ * re-latch. Under sds_lock; sleeps.
+ */
+static void rtl9602c_sds_set(struct rtl9602c_priv *p, unsigned int try)
+{
+	unsigned int lane = BIT(RTL9602C_SERDES_LANE_SFP);
+
+	lockdep_assert_held(&p->sds_lock);
+	rtl9602c_serdes_init(p, rtl9602c_sds_tries[try].mode);
+	if (rtl9602c_sds_tries[try].an) {
+		rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL,
+			     FIELD_PREP(RTL9602C_SERDES_AN_CTRL_FORCE, lane), 0);
+		rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL,
+			     RTL9602C_SERDES_AN_CTRL_RESTART,
+			     FIELD_PREP(RTL9602C_SERDES_AN_CTRL_RESTART, lane));
+		rtl9602c_rmw(p, RTL9602C_SERDES_AN_CTRL,
+			     RTL9602C_SERDES_AN_CTRL_RESTART, 0);
+		rtl9602c_serdes_resync(p);
+	}
+	p->sds_an = rtl9602c_sds_tries[try].an;
+	p->sds_try = try;
+}
+
+/*
+ * Once a second: while the lane's receiver has synchronised, nothing to do;
+ * when it has just lost the host, wait one more period in the same setting,
+ * as the host may be restarting its end; otherwise go on to the next setting
+ * that may be tried.
+ */
+static void rtl9602c_sds_work(struct work_struct *w)
+{
+	struct rtl9602c_priv *p =
+		container_of(to_delayed_work(w), struct rtl9602c_priv, sds_work);
+	unsigned int try;
+	bool up;
+
+	mutex_lock(&p->sds_lock);
+	up = rtl9602c_r(p, RTL9602C_SERDES_CTRL) & RTL9602C_SERDES_CTRL_LINK_UP;
+	if (up && !p->sds_found) {
+		p->sds_found = true;
+		pr_info("SFP lane up in %s\n", rtl9602c_sds_tries[p->sds_try].name);
+	} else if (!up && p->sds_found) {
+		p->sds_found = false;
+		pr_info("SFP lane lost the host\n");
+	} else if (!up) {
+		try = p->sds_try;
+		do {
+			try = (try + 1) % ARRAY_SIZE(rtl9602c_sds_tries);
+		} while (!(p->sds_tries & BIT(try)));
+		if (try != p->sds_try)
+			rtl9602c_sds_set(p, try);
+	}
+	mutex_unlock(&p->sds_lock);
+	schedule_delayed_work(&p->sds_work,
+			      msecs_to_jiffies(RTL9602C_SDS_TRY_MS));
 }
 
 /*
@@ -1380,15 +1421,18 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	u32 bist;
 	int err;
 
-	{
-		/* sfp_mode, then sfp_an, which the bring-up would overwrite. */
-		u32 want = rtl9602c_sfp_mode_param(p);
-
-		rtl9602c_serdes_init(p, want);
-		pr_info("SFP lane up in %s\n",
-			want == RTL9602C_SERDES_CTRL_MODE_2500BASEX ? "2500BaseX" : "1000BaseX");
-		rtl9602c_sfp_an_param(p);
-	}
+	/*
+	 * The lane in the first setting that may be tried; the work tries the
+	 * others until one synchronises, unless the parameters leave one.
+	 */
+	p->sds_tries = rtl9602c_sds_params();
+	p->sds_found = false;
+	mutex_lock(&p->sds_lock);
+	rtl9602c_sds_set(p, __ffs(p->sds_tries));
+	mutex_unlock(&p->sds_lock);
+	pr_info("SFP lane in %s%s\n", rtl9602c_sds_tries[p->sds_try].name,
+		hweight8(p->sds_tries) > 1 ? ", looking for the host's setting" : "");
+	schedule_delayed_work(&p->sds_work, msecs_to_jiffies(RTL9602C_SDS_TRY_MS));
 
 	/*
 	 * The CPU port has no PHY and comes out of reset with its forced
@@ -1660,6 +1704,7 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 	/* With no interrupt the GPON work is not cancelled by its teardown. */
 	cancel_delayed_work_sync(&p->gpon_work);
 	cancel_delayed_work_sync(&p->mib_work);
+	cancel_delayed_work_sync(&p->sds_work);
 	rtl9602c_l34_notifiers_unregister(p);
 	rtl9602c_l34_fini(p);
 	rtl9602c_gem_teardown(p);
@@ -1762,30 +1807,23 @@ static void rtl9602c_mac_link_down(struct phylink_config *config,
 	rtl9602c_force_link(p, dp->index, false, RTL9602C_PORT_FORCE_SPEED_1000,
 			    true, false, false);
 
-	if (dp->index == RTL9602C_PORT_SFP)
+	if (dp->index == RTL9602C_PORT_SFP) {
+		mutex_lock(&p->sds_lock);
 		rtl9602c_serdes_resync(p);
+		mutex_unlock(&p->sds_lock);
+	}
 }
 
 /*
- * Only port 0 has a mode to set. Its bring-up takes the link down, so it
- * runs only when phylink's interface maps to another mode than the one
- * programmed. For a fixed link phylink passes the device tree's phy-mode
- * when the port starts, which can differ from sfp_mode.
+ * Nothing to configure. The CPU and PON ports have no mode, and the lane's
+ * setting is the driver's to find (rtl9602c_sds_work()): the interface that
+ * phylink passes is the device tree's phy-mode, which says nothing about the
+ * host, and following it would undo the setting found.
  */
 static void rtl9602c_mac_config(struct phylink_config *config,
 				unsigned int mode,
 				const struct phylink_link_state *state)
 {
-	struct dsa_port *dp = dsa_phylink_to_port(config);
-	struct rtl9602c_priv *p = dp->ds->priv;
-	u32 want = rtl9602c_sds_mode_for(state->interface);
-
-	if (dp->index != RTL9602C_PORT_SFP || !want || want == p->sds_mode)
-		return;
-
-	pr_info("SerDes to %s\n",
-		want == RTL9602C_SERDES_CTRL_MODE_2500BASEX ? "2500BaseX" : "1000BaseX");
-	rtl9602c_serdes_init(p, want);
 }
 
 static const struct phylink_mac_ops rtl9602c_phylink_mac_ops = {
@@ -2300,6 +2338,8 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
 	spin_lock_init(&p->mib_lock);
 	INIT_DELAYED_WORK(&p->mib_work, rtl9602c_mib_work);
+	mutex_init(&p->sds_lock);
+	INIT_DELAYED_WORK(&p->sds_work, rtl9602c_sds_work);
 	mutex_init(&p->table_lock);
 	mutex_init(&p->fdb_lock);
 	mutex_init(&p->ploam_lock);

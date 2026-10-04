@@ -28,10 +28,11 @@ The driver implements these devlink objects and no others:
 
 The driver registers no generic parameters, resources, traps, health reporters
 or shared buffers, and it does not support reload. DSA creates the devlink
-ports of the switch, and the driver adds nothing to them. The speed and the
-in-band negotiation of the SerDes lane to the host are module parameters,
-``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an``, and not devlink parameters;
-Documentation/networking/dsa/rtl9602c.rst describes them.
+ports of the switch, and the driver adds nothing to them. The SerDes lane to
+the host finds the host's speed and in-band negotiation itself; the module
+parameters ``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an``, not devlink
+parameters, narrow what it tries, as Documentation/networking/dsa/rtl9602c.rst
+describes.
 
 The hardware behind the parameters is described on these pages, which the
 sections below name again where a parameter uses them:

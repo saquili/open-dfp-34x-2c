@@ -398,7 +398,7 @@ Interfaces to user space
       ethtool -S cpu | grep s00_p03_
 
 - ``devlink`` on the handle ``platform/1b000000.switch``: ``devlink dev info``,
-  the 22 driver parameters (``devlink dev param``) and the region
+  the 24 driver parameters (``devlink dev param``) and the region
   ``frame_capture`` (``devlink region``). ``devlink dev info`` also shows the
   identification of the part (see "Access and identification"); the rest is on
   the *devlink* page.
@@ -856,11 +856,10 @@ Three things about the bring-up are assumptions:
      - Tag
      - Checked by
    * - 1000BaseX uses the same seven analog words as 2500BaseX; only the mode
-       differs. No frame has crossed a 1000BaseX link with this driver, so
-       whether 1000BaseX needs other analog values is open.
-     - I
-     - Pass traffic over a 1000BaseX link to a host that only offers
-       1000BaseX. Load-bearing for such hosts.
+       differs, and traffic crosses a 1000BaseX link with them.
+     - M
+     - The bench host's port in 1000BaseX with in-band negotiation: the stick
+       answered ssh over the lane in each of three runs.
    * - The analog words take effect as the lane comes out of park and reset,
        which is why they are written only while the lane is parked. Whether
        writing them to a running lane is harmful has not been isolated: the
@@ -892,8 +891,8 @@ In-band auto-negotiation
        (``RTL9602C_SERDES_LANE_SFP`` = 0); set for a lane, it means that the
        lane's negotiation result is forced, that is, in-band negotiation is off.
        ``RTL9602C_SERDES_AN_CTRL_RESTART`` (bits 3:0) is written 0 by the
-       bring-up and pulsed on bit 0 by ``sfp_an``; a pulse alone does not
-       change a live link. ``RTL9602C_SERDES_AN_CTRL_INIT`` has FORCE = 0b01
+       bring-up and pulsed on bit 0 for a setting with in-band negotiation; a
+       pulse alone does not change a live link. ``RTL9602C_SERDES_AN_CTRL_INIT`` has FORCE = 0b01
        and RESTART = 0; its other bits are written as they stand in that value.
      - M
      - FORCE bit 8 is the one-bit difference between the unconfigured and the
@@ -913,12 +912,12 @@ In-band auto-negotiation
      - Without a bounce the old behaviour persisted and a repeat in reversed
        order disagreed; with ``ip link set sfp down`` and ``ip link set sfp
        up`` between cells, 5 of 5 each way.
-   * - In-band negotiation with a host that itself negotiates in band has never
-       been tried. It is what ``rtl9602c.sfp_an=on`` is for.
-     - I
-     - A host port managed in band: bring the stick up with ``sfp_an=on`` and
-       pass traffic. Load-bearing only for hosts that require in-band
-       negotiation.
+   * - With a host that negotiates in band at 1000BaseX, the lane with in-band
+       negotiation on synchronises and the host sees the link; with it off,
+       neither.
+     - M
+     - The bench host's port in 1000BaseX with negotiation, against the lane
+       in 1000BaseX with and without it; ssh over the link with it on.
 
 Link-down resync
 ----------------
@@ -960,10 +959,30 @@ phylink and the lane parameters
 All three ports are fixed links in the device tree, so phylink does not learn a
 state from a PHY: it asks the driver for the state of each port once a second,
 and at once when the interrupt reports a link change. The link of port 0 is the
-receiver of its SerDes lane, not the carrier the host sees. The speed of the
-lane is the host's choice, so it is a module parameter, ``sfp_mode``, and not a
-device tree property; a second parameter, ``sfp_an``, sets the lane's in-band
-negotiation. Both are applied once, at setup, before phylink starts the port.
+receiver of its SerDes lane, not the carrier the host sees.
+
+The lane runs as the host chooses, and nothing on it says which: a host port
+that takes 2500BaseX sends it without in-band negotiation, and one that takes
+only 1000BaseX commonly negotiates in band (IEEE 802.3 clause 37), and
+sometimes does not. So the driver looks for the host's setting itself. Setup
+brings the lane up in the first of three settings, 2500BaseX, then 1000BaseX
+with in-band negotiation, then 1000BaseX without (``rtl9602c_sds_tries[]``),
+and a work item, ``rtl9602c_sds_work()``, checks the lane once a second
+(``RTL9602C_SDS_TRY_MS``), under ``sds_lock``:
+
+1. The receiver has synchronised: keep the setting, logging ``SFP lane up in
+   <setting>`` the first time. Purpose: a found setting stays. (M)
+2. It has just lost the host: wait one more second in the same setting,
+   logging ``SFP lane lost the host``. Purpose: a host restarting its end comes
+   back in the setting it had. (M)
+3. Otherwise bring the lane up in the next setting that may be tried. A setting
+   with in-band negotiation clears the lane's FORCE bit after the bring-up,
+   pulses its restart and re-latches the lane. Purpose: the host's setting is
+   found within the three seconds the settings take. (M)
+
+The module parameters ``sfp_mode`` and ``sfp_an`` narrow the settings tried.
+phylink's ``mac_config`` leaves the lane alone: the interface it passes is the
+device tree's ``phy-mode``, which says nothing about the host.
 
 .. list-table::
    :header-rows: 1
@@ -996,35 +1015,44 @@ negotiation. Both are applied once, at setup, before phylink starts the port.
      - M
      - The kernel log of the stick after setting the lane to 1000BaseX at run
        time.
-   * - ``mac_config`` (``rtl9602c_mac_config()``) re-runs the whole bring-up
-       only for port 0, and only when phylink's interface maps to a mode
-       (2500BASEX to 22, 1000BASEX to 4) other than the programmed one, logging
-       ``SerDes to 2500BaseX`` or ``SerDes to 1000BaseX``. The sequence takes
-       the link down, so a no-op must not run it.
+   * - ``RTL9602C_SERDES_CTRL_LINK_UP`` tells a setting that matches the
+       host's from one that does not: with the lane in 1000BaseX against a host
+       sending 2500BaseX, or without negotiation against a host that
+       negotiates in band, it stays clear and the host sees no link; with the
+       setting the host runs, it sets.
+     - M
+     - The bench host's port in 2500BaseX without negotiation and in 1000BaseX
+       with it, against each setting of the lane, the bit and the host's link
+       read for each pair.
+   * - The search finds both settings that the bench host runs, and keeps
+       finding them as the host changes: with the host taken from 2500BaseX to
+       1000BaseX with in-band negotiation, the stick logged ``SFP lane lost the
+       host`` and then ``SFP lane up in 1000BaseX with in-band negotiation``,
+       reported 1000 Mb/s and answered ssh, the host seeing the link 1.9 to 3.1
+       s after its change; taken back, ``SFP lane up in 2500BaseX``, 2500 Mb/s,
+       ssh and the ONU in O5 again. Traffic passes in both settings.
+     - M
+     - Three runs, each way, with the host's port taken off its network manager
+       for the change; the stick's management traffic rides the lane.
+   * - ``mac_config`` (``rtl9602c_mac_config()``) does nothing. For port 0
+       phylink passes the device tree's ``phy-mode``, ``2500base-x``, whenever
+       the port starts; following it would take a lane found in 1000BaseX
+       back to 2500BaseX.
+     - M
+     - With the host in 1000BaseX and the lane found there, ``ip link set sfp
+       down`` and ``up``: phylink logged ``configuring for fixed/2500base-x
+       link mode``, and the link came back at ``1Gbps/Full`` with the host's
+       link up throughout the search.
+   * - ``sfp_mode`` is a read-only string parameter: ``auto``, the default, or
+       ``2500basex`` or ``1000basex``, which keep the search to the settings of
+       that speed; ``sfp_an``, likewise, ``auto``, ``on`` or ``off``, keeps it
+       to the settings with or without in-band negotiation. With one setting
+       left the lane stays in it. A pair that leaves none logs a warning and
+       means ``auto`` for both. Setup logs ``SFP lane in <setting>``, followed
+       by ``, looking for the host's setting`` while more than one is left.
      - T
-     - The SerDes link to the host comes up and stays up: no flap on link
-       events.
-   * - ``sfp_mode`` is a read-only string parameter: ``2500basex``, the
-       default, or ``1000basex``; anything else logs a warning and means
-       ``2500basex``. Setup programs this mode (log ``SFP lane up in ...``,
-       with ``2500BaseX`` or ``1000BaseX``) before phylink starts the port. It
-       is a parameter and not a device tree property because the host decides
-       the speed and nothing on the lane tells the stick which: one host port
-       offers 2500BaseX and 1000BaseX, another only 1000BaseX.
-     - T
-     - The board boots to a shell and the SerDes link to the host comes up with
-       the default. The offers of the two host ports were read from the hosts.
-   * - ``sfp_an`` is a read-only string parameter: ``keep``, the default,
-       leaves ``RTL9602C_SERDES_AN_CTRL`` as the bring-up wrote it; ``on``
-       clears the SFP lane's FORCE bit (in-band negotiation on); ``off`` sets
-       it; anything else logs a warning and changes nothing. After changing
-       FORCE the driver sets and then clears the SFP lane's RESTART bit, and
-       logs ``SFP lane in-band auto-negotiation on`` or ``off``. It is applied
-       once, at setup, after the bring-up.
-     - T
-     - The board boots to a shell and the SerDes link comes up with ``keep``.
-       The effect of ``on`` has not been tried against a host that negotiates in
-       band (see "Open questions").
+     - The board boots to a shell with the defaults and finds the host's
+       setting. The narrowed sets are read from the code.
 
 The CPU tag, switch side
 ========================
@@ -1758,10 +1786,11 @@ part that fails is logged and setup still succeeds: a switch without its
 optics, its PHC, its OMCI channel or its GEM data path still switches frames.
 A step that belongs to another page is named and handed over.
 
-1. Bring up the SerDes lane in the ``sfp_mode`` mode, then apply ``sfp_an``
-   (see "The SerDes lane to the host" and "phylink and the lane parameters";
-   the log line is ``SFP lane up in 2500BaseX`` or ``1000BaseX``). Purpose: the
-   lane first, because nothing else carries a frame without it. (T)
+1. Bring up the SerDes lane in the first setting that ``sfp_mode`` and
+   ``sfp_an`` leave, and start the work that looks for the host's setting (see
+   "The SerDes lane to the host" and "phylink and the lane parameters"; the log
+   line is ``SFP lane in 2500BaseX, looking for the host's setting``). Purpose:
+   the lane first, because nothing else carries a frame without it. (T)
 2. Force the CPU port up at 1000 Mb/s full duplex (see "Forced MAC ability").
    Purpose: the CPU port comes out of reset with its forced link clear. (T)
 3. Set both CPU tag directions in ``RTL9602C_CPUTAG_CTRL`` (see "The CPU tag,
@@ -1914,14 +1943,11 @@ Known limitations
   device tree leaves pause off. Pause also does not keep a flood to the CPU
   from being dropped, since the switch drops it at the CPU port's queue
   without sending pause frames.
-- With ``rtl9602c.sfp_mode=1000basex``, the phy-mode of port 0 in the board's
-  device tree is still ``2500base-x``. For a fixed link phylink passes the
-  device tree's phy-mode to ``mac_config`` when the port starts. That differs
-  from the programmed mode, so bringing ``sfp`` up is expected to run the SerDes
-  bring-up again in 2500BaseX, and because every bring-up rewrites
-  ``RTL9602C_SERDES_AN_CTRL_INIT``, the re-run also discards ``sfp_an``. This
-  has not been verified; if it holds, 1000BaseX also needs the phy-mode
-  ``1000base-x`` in the device tree.
+- The lane finds a host's setting by trying three in turn, a second each, so it
+  takes up to three seconds after the host has changed or come back, and while
+  no host is there the lane changes setting every second. Of the three,
+  1000BaseX without in-band negotiation has not been seen to link: the bench
+  host cannot run it.
 
 Open questions
 ==============
@@ -1941,21 +1967,9 @@ Assumptions the driver depends on
 
    * - Assumption
      - What would settle it
-   * - With ``rtl9602c.sfp_mode=1000basex``, the ``2500base-x`` phy-mode of the
-       device tree makes ``mac_config`` re-run the SerDes bring-up in 2500BaseX
-       when ``sfp`` is brought up, and the re-run discards ``sfp_an`` ("Known
-       limitations").
-     - Booting with ``rtl9602c.sfp_mode=1000basex``, bringing ``sfp`` up and
-       looking for ``SerDes to 2500BaseX`` in the kernel log. If confirmed,
-       1000BaseX also needs the phy-mode ``1000base-x`` in the device tree.
-   * - 1000BaseX works with the analog words used for 2500BaseX ("Bring-up").
-     - Passing traffic over a 1000BaseX link to a host that only offers
-       1000BaseX.
-   * - In-band negotiation works with a host that itself negotiates in band
-       (``rtl9602c.sfp_an=on``, "In-band auto-negotiation").
-     - A host port managed in band: bringing the stick up with ``sfp_an=on``
-       and passing traffic. Load-bearing only for hosts that require in-band
-       negotiation.
+   * - A host that runs 1000BaseX without in-band negotiation links with the
+       lane's third setting ("phylink and the lane parameters").
+     - Such a host port, and the stick's log naming the setting found.
    * - The counter offsets tagged I are what their names say ("Per-port
        counters").
      - Sending a known burst for each (broadcast, multicast, frames of one

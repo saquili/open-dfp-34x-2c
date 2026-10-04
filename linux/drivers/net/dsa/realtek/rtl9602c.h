@@ -2808,6 +2808,18 @@ struct rtl9602c_priv {
 
 	/** @sds_mode: the SerDes lane's mode as programmed */
 	u32 sds_mode;
+	/** @sds_an: the lane negotiates in band */
+	bool sds_an;
+	/** @sds_found: the lane's receiver has synchronised with the host */
+	bool sds_found;
+	/** @sds_try: the entry of the lane settings in force */
+	u8 sds_try;
+	/** @sds_tries: the lane settings that may be tried, one bit each */
+	u8 sds_tries;
+	/** @sds_lock: serialises the bring-ups and re-latches of the lane */
+	struct mutex sds_lock;
+	/** @sds_work: tries the lane settings until one synchronises */
+	struct delayed_work sds_work;
 
 	/** @mirror_to: the monitor port, while a port is mirrored */
 	int mirror_to;
