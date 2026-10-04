@@ -13,6 +13,8 @@
 #include "omci/engine.h"
 #include "omci/frame.h"
 
+#include "me/values.h"
+
 #include "harness.h"
 #include "model_tsv.h"
 
@@ -79,6 +81,11 @@ static void pattern(uint8_t *dst, const struct tsv_class *t, unsigned int n,
 		dst[k] = (uint8_t)(1u + ((t->id * 31u + n * 17u + k * 3u +
 					  salt * 59u) %
 					 200u));
+	/* An attribute with a range takes the next value it allows. */
+	for (unsigned int step = 1;
+	     step < 256u && !omci_me_value_allowed(t->id, (uint8_t)n, dst);
+	     step++)
+		dst[0] = (uint8_t)(dst[0] + 1u);
 }
 
 static size_t create_payload(const struct tsv_class *t, unsigned int salt,

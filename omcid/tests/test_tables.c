@@ -312,7 +312,8 @@ static void test_the_stored_tables_fold_rows_by_their_key(void)
 			if (!a->table ||
 			    !omci_me_table_policy(t->id, (uint8_t)n, &policy))
 				continue;
-			if (t->id == 171u && n == 6u)
+			if ((t->id == 171u && n == 6u) ||
+			    policy.ctrl != OMCI_ME_TABLE_CTRL_NONE)
 				continue;
 			tested++;
 
@@ -396,7 +397,7 @@ static void test_the_stored_tables_fold_rows_by_their_key(void)
 			       policy.del_len != 0u ? "by marker" : "none",
 			       policy.max_entries);
 		}
-	CHECK_EQ(tested, 7u);
+	CHECK_EQ(tested, 3u);
 
 	omci_t_down(&fx);
 }

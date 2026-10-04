@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 #include "hw/hw.h"
+#include "mcast/acl.h"
 #include "me/action.h"
 #include "me/table.h"
 #include "me/tables.h"
@@ -28,12 +29,27 @@ enum {
 	  .max_entries = (rows) }
 
 /*
+ * A table whose rows start with a table control field, kept in arrival
+ * order: up to @rows row parts, the last part @last.
+ */
+#define CTRL_ROWS(kind, last, rows)          \
+	{ .key_len = OMCI_ME_TABLE_CTRL_LEN, \
+	  .order = OMCI_MIB_TABLE_LAST,      \
+	  .max_entries = (rows),             \
+	  .ctrl = (kind),                    \
+	  .max_part = (last) }
+
+/*
  * The policies. A rule of the extended VLAN tagging operation table (class
  * 171, attribute 6) is known by its eight filter bytes and removed by a row
  * whose eight treatment bytes are all ones; it may hold as many rules as
  * the hardware classifier can. The multicast address tables of class 281
  * are known by their first four bytes and remove a row whose address
- * fields are all zero. The others keep whole rows.
+ * fields are all zero. The access control lists of the multicast operations
+ * profile (class 309) have rows of three parts, and the allowed preview
+ * groups of the multicast subscriber config info (class 310) rows of two;
+ * its service packages have one; a table control field leads each part. The
+ * others keep whole rows.
  */
 static const struct {
 	uint16_t class_id;
@@ -68,10 +84,14 @@ static const struct {
 	    .order = OMCI_MIB_TABLE_LAST,
 	    .max_entries = 16 } },
 
-	{ ME_MCAST_OPS_PROFILE, 7, WHOLE_ROW(24, 16) },
-	{ ME_MCAST_OPS_PROFILE, 8, WHOLE_ROW(24, 16) },
-	{ ME_MCAST_SUBSCRIBER, 6, WHOLE_ROW(20, 16) },
-	{ ME_MCAST_SUBSCRIBER, 7, WHOLE_ROW(22, 16) },
+	{ ME_MCAST_OPS_PROFILE, 7,
+	  CTRL_ROWS(OMCI_ME_TABLE_CTRL_PARTS, 2u, OMCI_MCAST_ACL_ROWS) },
+	{ ME_MCAST_OPS_PROFILE, 8,
+	  CTRL_ROWS(OMCI_ME_TABLE_CTRL_PARTS, 2u, OMCI_MCAST_ACL_ROWS) },
+	{ ME_MCAST_SUBSCRIBER, 6,
+	  CTRL_ROWS(OMCI_ME_TABLE_CTRL_KEY, 0u, OMCI_MCAST_SUBSCRIBER_ROWS) },
+	{ ME_MCAST_SUBSCRIBER, 7,
+	  CTRL_ROWS(OMCI_ME_TABLE_CTRL_PARTS, 1u, OMCI_MCAST_SUBSCRIBER_ROWS) },
 };
 
 bool omci_me_table_policy(uint16_t class_id, uint8_t attr_no,
@@ -104,6 +124,133 @@ bool omci_me_table_is_delete(const struct omci_me_table_policy *policy,
 		if (e[policy->del_offset + i] != policy->del_value)
 			return false;
 	return true;
+}
+
+/*
+ * A table control field: in its first byte the operation (bits 7 and 6), the
+ * row part (bits 5 to 3, in a table with parts) and the two high bits of the
+ * row key (bits 1 and 0); the second byte holds the rest of the key. The bits
+ * between are reserved, or the test bit of the extended format.
+ */
+enum {
+	CTRL_OP_SHIFT = 6,
+	CTRL_PART_SHIFT = 3,
+	CTRL_PART_MASK = 0x7,
+	CTRL_KEY_HIGH = 0x3,
+};
+
+void omci_me_table_op_set(uint8_t *row, enum omci_me_table_op op)
+{
+	row[0] = (uint8_t)((row[0] & ~(0x3u << CTRL_OP_SHIFT)) |
+			   (unsigned int)op << CTRL_OP_SHIFT);
+}
+
+void omci_me_table_row_id(const struct omci_me_table_policy *policy,
+			  const uint8_t *row, struct omci_me_table_row_id *out)
+{
+	out->op = (enum omci_me_table_op)(row[0] >> CTRL_OP_SHIFT);
+	out->part = policy->ctrl == OMCI_ME_TABLE_CTRL_PARTS ?
+			    (uint8_t)((row[0] >> CTRL_PART_SHIFT) &
+				      CTRL_PART_MASK) :
+			    0u;
+	out->key = (uint16_t)((row[0] & CTRL_KEY_HIGH) << 8 | row[1]);
+}
+
+/*
+ * The key a row part is stored under: its row part and row key, the other
+ * bits clear, so that a Get Next reads the operation and the test bit as 0.
+ */
+static void stored_key(uint8_t part, uint16_t key,
+		       uint8_t out[static OMCI_ME_TABLE_CTRL_LEN])
+{
+	out[0] = (uint8_t)(part << CTRL_PART_SHIFT | key >> 8);
+	out[1] = (uint8_t)key;
+}
+
+static bool holds_key(const struct omci_mib *mib, uint16_t class_id,
+		      uint16_t instance, uint8_t attr_no, const uint8_t *key)
+{
+	const size_t n = omci_mib_table_count(mib, class_id, instance, attr_no);
+
+	for (size_t i = 0; i < n; i++) {
+		uint8_t have[OMCI_MIB_TABLE_ENTRY_MAX] = { 0 };
+
+		(void)!omci_mib_table_get(mib, class_id, instance, attr_no, i,
+					  have, sizeof(have));
+		if (omci_wire_equal(have, key, OMCI_ME_TABLE_CTRL_LEN))
+			return true;
+	}
+	return false;
+}
+
+/* Remove every part of the row with @key; a part that is not there is no fault. */
+static enum omci_status delete_row(struct omci_mib *mib, uint16_t class_id,
+				   uint16_t instance, uint8_t attr_no,
+				   const struct omci_me_table_policy *policy,
+				   uint16_t key)
+{
+	for (uint8_t part = 0; part <= policy->max_part; part++) {
+		uint8_t k[OMCI_ME_TABLE_CTRL_LEN];
+
+		stored_key(part, key, k);
+		const enum omci_status rc = omci_mib_table_remove(
+			mib, class_id, instance, attr_no, k, sizeof(k));
+
+		if (rc != OMCI_OK && rc != OMCI_DECLINED)
+			return rc;
+	}
+	return OMCI_OK;
+}
+
+/* Remove every row, the first each time, as many times as there are rows. */
+static enum omci_status clear_rows(struct omci_mib *mib, uint16_t class_id,
+				   uint16_t instance, uint8_t attr_no)
+{
+	for (size_t n = omci_mib_table_count(mib, class_id, instance, attr_no);
+	     n > 0; n--) {
+		uint8_t first[OMCI_MIB_TABLE_ENTRY_MAX] = { 0 };
+
+		(void)!omci_mib_table_get(mib, class_id, instance, attr_no, 0,
+					  first, sizeof(first));
+		(void)!omci_mib_table_remove(mib, class_id, instance, attr_no,
+					     first, OMCI_ME_TABLE_CTRL_LEN);
+	}
+	return OMCI_OK;
+}
+
+enum omci_status
+omci_me_table_ctrl_set(struct omci_mib *mib, uint16_t class_id,
+		       uint16_t instance, uint8_t attr_no,
+		       const struct omci_me_table_policy *policy,
+		       const uint8_t *row, size_t len)
+{
+	uint8_t stored[OMCI_MIB_TABLE_ENTRY_MAX];
+	struct omci_me_table_row_id id;
+
+	if (mib == NULL || policy == NULL || row == NULL ||
+	    len < OMCI_ME_TABLE_CTRL_LEN || len > sizeof(stored))
+		return OMCI_ERR_INVAL;
+
+	omci_me_table_row_id(policy, row, &id);
+	if (id.op == OMCI_ME_TABLE_OP_DELETE)
+		return delete_row(mib, class_id, instance, attr_no, policy,
+				  id.key);
+	if (id.op == OMCI_ME_TABLE_OP_CLEAR)
+		return clear_rows(mib, class_id, instance, attr_no);
+	if (id.op != OMCI_ME_TABLE_OP_WRITE || id.part > policy->max_part)
+		return OMCI_DECLINED;
+
+	omci_wire_copy(stored, row, len);
+	stored_key(id.part, id.key, stored);
+
+	if (policy->max_entries != 0 &&
+	    omci_mib_table_count(mib, class_id, instance, attr_no) >=
+		    policy->max_entries &&
+	    !holds_key(mib, class_id, instance, attr_no, stored))
+		return OMCI_ERR_NOMEM;
+
+	return omci_mib_table_put(mib, class_id, instance, attr_no, stored, len,
+				  OMCI_ME_TABLE_CTRL_LEN, policy->order);
 }
 
 /* The two tables of the OMCI entity, class 287 (G.988 9.12.8). */

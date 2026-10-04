@@ -112,7 +112,7 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		{ OMCI_CASE_MUTATE, 36864u, 0x7ce87501u },
 		{ OMCI_CASE_MSGTYPE, 256u, 0x7b94fe45u },
 		{ OMCI_CASE_MTCLASS, 896u, 0x321cec05u },
-		{ OMCI_CASE_REACH, 9314u, 0x16846caau },
+		{ OMCI_CASE_REACH, 9314u, 0x9c0451c9u },
 		{ OMCI_CASE_POPULATED, 552u, 0x0f358d18u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(pin); k++) {
@@ -151,7 +151,7 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 	CHECK(populated());
 	omci_case_prepare(OMCI_CASE_REACH, g_mib);
 	omci_case_prepare(OMCI_CASE_POPULATED, g_mib);
-	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x16846caau);
+	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x9c0451c9u);
 	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0x0f358d18u);
 	omci_mib_fini(g_mib);
 }
@@ -168,10 +168,10 @@ static void test_a_second_preparation_leaves_nothing_of_the_first(void)
 		uint32_t cases;
 		uint32_t digest;
 	} without[] = {
-		{ 5u, 2u, 9290u, 0x5734d0b2u },
-		{ 256u, 1u, 9305u, 0xb3871ce7u },
-		{ 263u, 1u, 9300u, 0x3d907fd4u },
-		{ 2u, 1u, 9310u, 0x073fad5cu },
+		{ 5u, 2u, 9290u, 0x82dd33e5u },
+		{ 256u, 1u, 9305u, 0x0ad15f14u },
+		{ 263u, 1u, 9300u, 0xdc35ee53u },
+		{ 2u, 1u, 9310u, 0x77a38edfu },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(without); k++) {
 		CHECK(populated());

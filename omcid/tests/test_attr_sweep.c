@@ -537,6 +537,20 @@ static void test_set_by_create_values_land_where_the_table_says(void)
 
 		for (size_t k = 0; k < sizeof(body); k++)
 			body[k] = (uint8_t)(0x10u + k);
+		/* An attribute with a range takes the next value it allows. */
+		for (unsigned int n = 1, at = 0; n <= t->attr_count; n++) {
+			const struct tsv_attr *a = &t->attrs[n - 1];
+
+			if (!a->create)
+				continue;
+			for (unsigned int step = 1;
+			     step < 256u &&
+			     !omci_me_value_allowed(t->id, (uint8_t)n,
+						    &body[at]);
+			     step++)
+				body[at] = (uint8_t)(body[at] + 1u);
+			at += a->size;
+		}
 
 		unsigned int avc_before = 0;
 		const uint8_t *rsp = drive(fx.eng, next_tid(), MT_CREATE, t->id,

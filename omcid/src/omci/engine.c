@@ -11,6 +11,7 @@
 #include <stdbool.h>
 
 #include "hw/hw.h"
+#include "mcast/acl.h"
 #include "me/action.h"
 #include "me/defaults.h"
 #include "me/bridge.h"
@@ -842,7 +843,9 @@ static void handle_get_next(struct omci_engine *eng,
 
 /*
  * Create (G.988 A.3.1, A.3.2). The contents carry the set-by-create
- * attributes, in attribute order.
+ * attributes, in attribute order. One with a value it does not take fails
+ * the Create, the instance is not made, and the answer names the attributes
+ * in its execution mask.
  */
 static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 {
@@ -854,6 +857,7 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 	}
 
 	const struct omci_me_class *cls = omci_me_class_by_id(req->class_id);
+	uint16_t refused = 0;
 	size_t off = 0;
 
 	for (uint8_t n = 1; n <= cls->attr_count; n++) {
@@ -862,10 +866,25 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 		if (a == NULL || (a->access & OMCI_ME_ACC_SET_BY_CREATE) == 0)
 			continue;
 
+		if (!omci_me_value_allowed(req->class_id, n,
+					   &req->contents[off]))
+			refused |= omci_attr_bit(n);
 		(void)!omci_mib_attr_set_by_olt(eng->mib, req->class_id,
 						req->instance, n,
 						&req->contents[off], a->size);
 		off += a->size;
+	}
+
+	if (refused != 0u) {
+		const uint8_t mask[2] = { (uint8_t)(refused >> 8),
+					  (uint8_t)refused };
+
+		OMCI_WARN(
+			"create: %u/%u: attributes %#06x take no such value — refused",
+			req->class_id, req->instance, refused);
+		(void)!omci_mib_delete(eng->mib, req->class_id, req->instance);
+		reply(eng, req, RESULT_PARAM_ERROR, mask, sizeof(mask));
+		return;
 	}
 
 	enum omci_status gem = OMCI_OK, bridge = OMCI_OK;
@@ -936,6 +955,37 @@ static bool is_vlan_rule_table(uint16_t class_id, uint8_t attr_no)
 }
 
 /*
+ * Set a row part of a table with a table control field. The ONU refuses a
+ * row of a dynamic access control list that would overlap another, and
+ * keeps the time left of an allowed preview group itself, ending the row
+ * when a shorter duration leaves none (G.988 9.3.27, 9.3.28).
+ */
+static enum omci_status
+set_ctrl_row(struct omci_engine *eng, const struct omci_frame *req,
+	     uint8_t attr_no, const struct omci_me_attr *a,
+	     const struct omci_me_table_policy *policy, const uint8_t *value)
+{
+	uint8_t row[OMCI_MIB_TABLE_ENTRY_MAX];
+
+	omci_wire_copy(row, value, a->size);
+	if (req->class_id == OMCI_MCAST_PROFILE &&
+	    attr_no == OMCI_MCAST_PROFILE_DYNAMIC_ACL &&
+	    omci_mcast_acl_conflicts(eng->mib, req->instance, row, a->size)) {
+		OMCI_WARN(
+			"set: %u/%u a row of the dynamic access control list overlaps another, or its range ends before it starts — refused",
+			req->class_id, req->instance);
+		return OMCI_DECLINED;
+	}
+	if (req->class_id == OMCI_MCAST_SUBSCRIBER &&
+	    attr_no == OMCI_MCAST_SUBSCRIBER_PREVIEW &&
+	    !omci_mcast_preview_written(eng->mib, req->instance, row, a->size))
+		omci_me_table_op_set(row, OMCI_ME_TABLE_OP_DELETE);
+
+	return omci_me_table_ctrl_set(eng->mib, req->class_id, req->instance,
+				      attr_no, policy, row, a->size);
+}
+
+/*
  * Set one attribute. A table attribute takes one row per Set: the class's
  * table policy says whether it adds, replaces (same key) or removes a row.
  */
@@ -968,6 +1018,9 @@ static enum omci_status set_one(struct omci_engine *eng,
 		return data_path_status(req->class_id, req->instance, gem,
 					bridge);
 	}
+
+	if (policy.ctrl != OMCI_ME_TABLE_CTRL_NONE)
+		return set_ctrl_row(eng, req, attr_no, a, &policy, value);
 
 	if (omci_me_table_is_delete(&policy, value, a->size)) {
 		enum omci_status rc = omci_mib_table_remove(

@@ -606,11 +606,19 @@ static void reach_creates(struct mset *s)
 		uint8_t body[32] = { 0 };
 		size_t n = 0;
 
+		/* Zeros, or the first value an attribute with a range takes. */
 		for (uint8_t attr = 1; attr <= cls->attr_count; attr++) {
 			const struct omci_me_attr *a =
 				omci_me_attr_get(cls, attr);
-			if ((a->access & OMCI_ME_ACC_SET_BY_CREATE) != 0u)
-				n += a->size;
+			if ((a->access & OMCI_ME_ACC_SET_BY_CREATE) == 0u)
+				continue;
+			for (unsigned int step = 1;
+			     step < 256u &&
+			     !omci_me_value_allowed(cls->class_id, attr,
+						    &body[n]);
+			     step++)
+				body[n] = (uint8_t)step;
+			n += a->size;
 		}
 		madd(s, true, MT_CREATE, cls->class_id, 0x7C01u, body, n,
 		     K_CREATE, 0, 0);

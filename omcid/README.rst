@@ -29,6 +29,9 @@ Layout
    the managed entity classes: the class table, the instances the ONU makes
    itself, MIB upload, table attributes, the values an attribute takes, and
    the data path (GEM ports, bridges, VLAN rules, performance monitoring)
+``src/mcast/``
+   multicast: the tables of the multicast operations profile and of the
+   multicast subscriber config info, read into whole rows
 ``src/hw/``
    the interface to the hardware, and the host backend that stands in for it
 ``src/sys/``
