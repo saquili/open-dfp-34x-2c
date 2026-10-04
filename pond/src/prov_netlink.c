@@ -244,6 +244,7 @@ struct genlmsghdr {
 #define PON_ALARM_LOS 1
 #define PON_ALARM_LOF 2
 #define PON_ALARM_LOM 4
+#define PON_ALARM_PEE 8
 #endif
 
 static_assert(sizeof(struct nlmsghdr) == 16,
@@ -327,7 +328,8 @@ static_assert(PON_CMD_DEV_GET == 1 && PON_CMD_DEV_CHANGE_NTF == 2 &&
 static_assert(PON_TYPE_GPON == 1 && PON_ONU_STATE_O1 == 1 &&
 		      PON_ONU_STATE_O7 == 7,
 	      "pon enumerations start at one");
-static_assert(PON_ALARM_LOS == 1 && PON_ALARM_LOF == 2 && PON_ALARM_LOM == 4,
+static_assert(PON_ALARM_LOS == 1 && PON_ALARM_LOF == 2 && PON_ALARM_LOM == 4 &&
+		      PON_ALARM_PEE == 8,
 	      "pon alarm bits");
 
 #define NL_HDRLEN 16
@@ -1337,6 +1339,7 @@ static void pon_pv_alarms(struct prov_buf *out, uint32_t alarms)
 		{ PON_ALARM_LOS, "los" },
 		{ PON_ALARM_LOF, "lof" },
 		{ PON_ALARM_LOM, "lom" },
+		{ PON_ALARM_PEE, "pee" },
 	};
 	bool first = true;
 	unsigned int i;

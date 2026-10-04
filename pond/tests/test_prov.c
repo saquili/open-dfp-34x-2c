@@ -1119,7 +1119,7 @@ static void test_netlink_onu(void)
 	nlb_u32(&dev, T_PON_A_DEV_IFINDEX, 4);
 	nlb_u32(&dev, T_PON_A_DEV_TYPE, 1);
 	nlb_u32(&dev, T_PON_A_DEV_ONU_STATE, 3);
-	nlb_u32(&dev, T_PON_A_DEV_ALARMS, 3);
+	nlb_u32(&dev, T_PON_A_DEV_ALARMS, 11);
 	nlb_attr(&dev, T_PON_A_DEV_SERIAL_NUMBER, sn, sizeof(sn));
 	nlb_msg_end(&dev);
 
@@ -1133,7 +1133,7 @@ static void test_netlink_onu(void)
 	check(strstr(s, "\"omcc_port_id\":null") != NULL,
 	      "and an unconfigured OMCC is null and never Port-ID 0");
 	check(strstr(s, "\"alloc_ids\":[]") != NULL, "with no allocations");
-	check(strstr(s, "\"alarms\":[\"los\",\"lof\"]") != NULL,
+	check(strstr(s, "\"alarms\":[\"los\",\"lof\",\"pee\"]") != NULL,
 	      "the alarm bits are named individually");
 
 	memset(&dev, 0, sizeof(dev));
