@@ -624,6 +624,16 @@ enum {
 #define RTL9602C_GPON_US_CNTR_COUNT	8
 
 /*
+ * Change_Power_Level (ITU-T G.984.3 clause 9.2.3.16): octet 3 says to increase
+ * the transmitted power, to decrease it, or neither.
+ */
+#define RTL9602C_PLOAM_CPL_IND			2
+#define RTL9602C_PLOAM_CPL_IND_MASK		GENMASK(1, 0)
+#define RTL9602C_PLOAM_CPL_IND_INCREASE	2
+#define RTL9602C_PLOAM_CPL_IND_DECREASE	1
+#define RTL9602C_GPON_POWER_MODE_MAX		2
+
+/*
  * The PEE alarm clears when no Physical_Equipment_Error has come for this long
  * (ITU-T G.984.3 clause 11.1.2).
  */
@@ -2628,6 +2638,12 @@ struct rtl9602c_priv {
 	/** @gpon_pst_seen: a PST has been answered since the ONU entered O5 */
 	bool gpon_pst_seen;
 	/**
+	 * @gpon_power_mode: the transmit power level mode the ONU is to send
+	 * at, 0 normal to 2 (ITU-T G.984.2 clause 8.3.2); the optics follow it
+	 * in optics_level_work, and Serial_Number_ONU declares it
+	 */
+	u8 gpon_power_mode;
+	/**
 	 * @gpon_flow_port: the Port-ID each flow is bound to in the Port-ID
 	 * table, or RTL9602C_GPON_PORTID_NONE
 	 */
@@ -2915,6 +2931,29 @@ struct rtl9602c_priv {
 	 * whole of its sequence of transfers
 	 */
 	struct mutex		i2c_lock;
+	/**
+	 * @optics_apcset0: the power control's set point the module came
+	 * with, that of transmit power level mode 0; under i2c_lock
+	 */
+	u8			optics_apcset0;
+	/** @optics_mod0: the modulation DAC the module came with */
+	u16			optics_mod0;
+	/** @optics_ref: @optics_apcset0 and @optics_mod0 are known */
+	bool			optics_ref;
+	/**
+	 * @optics_mode: the transmit power level mode the optics are set to:
+	 * 0 normal, 1 normal - 3 dB, 2 normal - 6 dB
+	 */
+	u8			optics_mode;
+	/**
+	 * @optics_p0: the transmitted power at mode 0 in 0.1 uW, measured
+	 * when a lower mode is first set; 0 while not measured
+	 */
+	u16			optics_p0;
+	/** @optics_level_work: sets the optics to @gpon_power_mode */
+	struct work_struct	optics_level_work;
+	/** @optics_reboot_nb: puts level mode 0 back before a restart */
+	struct notifier_block	optics_reboot_nb;
 	/** @ptp_info: the switch clock as a PHC */
 	struct ptp_clock_info	ptp_info;
 	/** @ptp_clock: the PHC; NULL when none is registered */
@@ -3207,6 +3246,10 @@ void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p);
 int rtl9602c_l_read(struct rtl9602c_priv *p, u16 reg, u8 *val);
 int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable);
 int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p);
+void rtl9602c_optics_level_work(struct work_struct *work);
+int rtl9602c_optics_level_register(struct rtl9602c_priv *p);
+void rtl9602c_gpon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
+				 int err);
 int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p);
 void rtl9602c_meter_free(struct rtl9602c_priv *p, unsigned int meter);
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p);

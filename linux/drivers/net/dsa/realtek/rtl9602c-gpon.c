@@ -566,9 +566,10 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
  * Arm the Serial_Number_ONU template (G.984.3 clause 9.2.4.1), which the MAC
  * sends by itself in answer to every serial-number request: no ONU-ID yet, the
  * serial number, GEM transport supported and the transmit power level the ONU
- * sends at, high, that of level mode 0. The random delay is left 0; that the
- * MAC inserts one and writes it into the message is an assumption, not
- * verified. Nothing is armed until a serial number is set.
+ * sends at, high for level mode 0 and lower by one for each mode below. The
+ * random delay is left 0; that the MAC inserts one and writes it into the
+ * message is an assumption, not verified. Nothing is armed until a serial
+ * number is set.
  */
 static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
 {
@@ -583,9 +584,35 @@ static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
 
 	msg[RTL9602C_PLOAM_SN_ONU_FLAGS] = RTL9602C_PLOAM_SN_ONU_GEM |
 		FIELD_PREP(RTL9602C_PLOAM_SN_ONU_POWER_LEVEL,
-			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH);
+			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH - p->gpon_power_mode);
 
 	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_SN_ONU);
+}
+
+/**
+ * rtl9602c_gpon_power_applied() - take what the optics set
+ * @p: the switch
+ * @asked: the transmit power level mode optics_level_work set out to set
+ * @mode: the mode the optics are at now
+ * @err: 0, or why @asked was not set
+ *
+ * On a failure the ONU stays at @mode, unless a newer mode has been asked
+ * for meanwhile, which the next run of the work sets; the failure is logged.
+ * The Serial_Number_ONU template is armed again with the mode.
+ *
+ * Context: process context; takes gpon_lock.
+ */
+void rtl9602c_gpon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
+				 int err)
+{
+	mutex_lock(&p->gpon_lock);
+	if (err && p->gpon_power_mode == asked) {
+		pr_warn("<GPON> transmit power level mode %u not set (%d); the ONU stays at mode %u\n",
+			asked, err, mode);
+		p->gpon_power_mode = mode;
+	}
+	rtl9602c_gpon_arm_sn(p);
+	mutex_unlock(&p->gpon_lock);
 }
 
 /*
@@ -1638,6 +1665,14 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		if (p->gpon_state != RTL9602C_ONU_O2_STANDBY)
 			return;
 		rtl9602c_gpon_set_overhead(p, msg);
+		/*
+		 * Every activation starts at transmit power level mode 0, which
+		 * the optics go back to if an earlier session left them lower;
+		 * the default mode the OLT names here needs the power measured
+		 * in bursts, which come often only from O4 on.
+		 */
+		p->gpon_power_mode = 0;
+		queue_work(system_wq, &p->optics_level_work);
 		rtl9602c_gpon_arm_sn(p);
 		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O3_SERIAL_NUMBER);
 		return;
@@ -2040,15 +2075,41 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		return;
 	}
 
-	case RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL:
+	case RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL: {
+		/*
+		 * Directed or broadcast, in O4 and O5 (G.984.3 clause 9.2.3.16
+		 * and clause 10.5.2): one transmit power level mode up or down,
+		 * within 0 to 2, which optics_level_work then sets; '00' and
+		 * '11' ask for nothing, and neither does a step past either end.
+		 */
+		u8 ind = msg[RTL9602C_PLOAM_CPL_IND] & RTL9602C_PLOAM_CPL_IND_MASK;
+		u8 mode = p->gpon_power_mode;
+
+		if (p->gpon_state != RTL9602C_ONU_O4_RANGING &&
+		    p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		if (ind == RTL9602C_PLOAM_CPL_IND_INCREASE && mode)
+			mode--;
+		else if (ind == RTL9602C_PLOAM_CPL_IND_DECREASE &&
+			 mode < RTL9602C_GPON_POWER_MODE_MAX)
+			mode++;
+		pr_info("<GPON> Change_Power_Level %s: transmit power level mode %u -> %u\n",
+			ind == RTL9602C_PLOAM_CPL_IND_INCREASE ? "up" :
+			ind == RTL9602C_PLOAM_CPL_IND_DECREASE ? "down" : "neither",
+			p->gpon_power_mode, mode);
+		if (mode == p->gpon_power_mode)
+			return;
+		p->gpon_power_mode = mode;
+		queue_work(system_wq, &p->optics_level_work);
+		return;
+	}
+
 	case RTL9602C_PLOAM_DS_SLEEP_ALLOW:
 		/*
-		 * Not acted on: power levelling, and power saving, which an ONU
-		 * ignores unless OMCI has enabled its power management (G.984.3
-		 * Annex E.2.1), as no OMCI entity of this ONU offers any. Nothing
-		 * is acknowledged, so the OLT sees that the ONU did not take
-		 * them. Each is logged once, the first time one comes for this
-		 * ONU.
+		 * Not acted on: power saving, which an ONU ignores unless OMCI
+		 * has enabled its power management (G.984.3 Annex E.2.1), as no
+		 * OMCI entity of this ONU offers any. Nothing is acknowledged.
+		 * It is logged once, the first time one comes for this ONU.
 		 */
 		if (msg[0] != p->gpon_onu_id &&
 		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED)
@@ -2279,10 +2340,12 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	rtl9602c_gem_restore(p);
 
 	/*
-	 * Hold the optics' modulation before the laser is first released in O3.
-	 * A failure is logged and bring-up goes on; whether activation needs
-	 * the hold is not verified.
+	 * Hold the optics' modulation before the laser is first released in O3;
+	 * the hold also puts transmit power level mode 0 back. A failure is
+	 * logged and bring-up goes on; whether activation needs the hold is not
+	 * verified.
 	 */
+	p->gpon_power_mode = 0;
 	err = rtl9602c_optics_hold_modulation(p);
 	if (err)
 		pr_warn("GN25L95: modulation not held (%d)\n", err);

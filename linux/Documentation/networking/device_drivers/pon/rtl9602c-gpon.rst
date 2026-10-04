@@ -1420,13 +1420,24 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
        The first PST in O5, and each change of its octets, is logged. An
        injected PST with line 1, K1 ``aa`` and K2 ``bb`` was answered with
        ``00 07 01 aa bb`` on the normal queue (the ``ploamlog`` ring).
-   * - Change_Power_Level (16), Sleep_Allow (24)
+   * - Change_Power_Level (16)
+     - The ONU-ID or all ONUs
+     - O4, O5
+     - One transmit power level mode up ('10') or down ('01'), within modes 0
+       to 2, which the optics then set (see "Transmit power levelling" in
+       Documentation/networking/device_drivers/pon/rtl9602c-optics.rst); '00',
+       '11' and a step past either end change nothing. Each is logged; none is
+       acknowledged, as G.984.3 asks for no acknowledgment (clause 9.2.3.16
+       and clause 10.5.2). Injected in O5, down twice and up twice, they took
+       Serial_Number_ONU's flags octet through ``05``, ``04``, ``05`` and
+       ``06`` with the power.
+   * - Sleep_Allow (24)
      - The ONU-ID or all ONUs
      - None
-     - Not acted on and not acknowledged; each type is logged once, the first
-       time one comes. Sleep_Allow is ignored as G.984.3 has an ONU do whose
-       power management OMCI has not enabled (Annex E.2.1): no OMCI entity of
-       this ONU offers any.
+     - Not acted on and not acknowledged; logged once, the first time one
+       comes. It is ignored as G.984.3 has an ONU do whose power management
+       OMCI has not enabled (Annex E.2.1): no OMCI entity of this ONU offers
+       any.
    * - Request_Password (9)
      - The ONU-ID
      - O5
@@ -1548,9 +1559,12 @@ count from 0, so the offset is the octet number less one):
        equalization delay to the pre-assigned delay when e is set and to 0
        otherwise, so that a zero delay named by the OLT is used as zero (see
        "Upstream timing"); and keeps the message for the length computation and
-       zeroes both stored type 3 lengths. The Serial_Number_ONU template is then
-       armed again and the state becomes O3. Every field of the message is
-       logged.
+       zeroes both stored type 3 lengths. Every activation starts at transmit
+       power level mode 0: the optics go back to it if an earlier session left
+       them lower, and the default mode the flags octet names is not taken,
+       since the optics measure the power only in bursts, which come often only
+       from O4 on. The Serial_Number_ONU template is then armed again and the
+       state becomes O3. Every field of the message is logged.
      - T
      - The ONU reaches O5 on an OLT; the test OLT's flags octet is ``0x20``: e
        set with a zero delay.
@@ -1799,10 +1813,11 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
        11 zero, and octet 12 (``RTL9602C_PLOAM_SN_ONU_FLAGS`` 11) ``0x06``: G,
        GEM transport supported (``RTL9602C_PLOAM_SN_ONU_GEM``, bit 2), and TT,
        the transmit power level the ONU sends at
-       (``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL``, bits 1:0) =
-       ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH`` (2, high), that of level
-       mode 0. It is armed at bring-up, on Upstream_Overhead, on Assign_ONU-ID
-       and when a serial number is set, and not at all while none is set.
+       (``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL``, bits 1:0):
+       ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH`` (2, high) less the level
+       mode, so 2 at mode 0. It is armed at bring-up, on Upstream_Overhead, on
+       Assign_ONU-ID, when a serial number is set and when the optics have set
+       a level, and not at all while no serial number is set.
      - P
      - ITU-T G.984.3 clause 9.2.4.1; the ONU reaches O5 on an OLT.
    * - The random delay of the serial-number response (0 to 48 us, new for each
@@ -2936,9 +2951,8 @@ Known limitations
   remainder sent as the type 3 pattern. The test OLT asks for neither. That
   Extended_Burst_Length is ignored after the first serial-number request has
   not been seen on the board, since the test OLT assigns the ONU-ID at once.
-- Change_Power_Level and Sleep_Allow are recorded, logged once and not acted
-  on. Swift_POPUP, like POPUP, has not been exercised on the board, since it
-  needs the ONU in O6. The test OLT sends no Physical_Equipment_Error and no
+- Sleep_Allow is recorded, logged once and not acted on. Swift_POPUP, like
+  POPUP, has not been exercised on the board, since it needs the ONU in O6. The test OLT sends no Physical_Equipment_Error and no
   PST, so the PEE alarm and the PST answer have been exercised only with
   injected messages.
 - Decryption has been tried only against an OLT that encrypts nothing: the key
@@ -2947,8 +2961,12 @@ Known limitations
   on the key's octet order in the MAC, which is an assumption (see "FEC and
   encryption"). Nothing is set up for upstream FEC, and downstream FEC has only
   its detection threshold.
-- There is no power levelling and no signal-fail or signal-degrade alarm from
-  the BIP count.
+- There is no signal-fail or signal-degrade alarm from the BIP count.
+- Transmit power levelling follows Change_Power_Level in O4 and O5 only: the
+  default level mode of Upstream_Overhead and the ONU's own levelling after
+  unanswered serial-number requests (G.984.3 clause 10.5.1) are not done, since
+  the optics measure the power only in bursts. The test OLT sends no
+  Change_Power_Level, so the levels have been set only by injected messages.
 - Nothing in the driver sends the Dying_Gasp message that the MAC holds armed.
 
 Open questions

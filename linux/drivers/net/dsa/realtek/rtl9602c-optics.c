@@ -55,6 +55,7 @@
 #include <linux/of.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/reboot.h>
 #include <net/dsa.h>
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
@@ -322,7 +323,6 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_HWMON) || IS_ENABLED(CONFIG_DEBUG_FS)
 /*
  * Read the diagnostic word @off bytes into A2h 96-105, most significant
  * byte first, in one transfer of two bytes: SFF-8472 has such a field read
@@ -354,7 +354,6 @@ static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int off, u16 *va
 	*val = (rx & 0xff) << 8 | (rx >> 8 & 0xff);
 	return 0;
 }
-#endif
 
 #if IS_ENABLED(CONFIG_HWMON)
 
@@ -570,7 +569,9 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_a2);
 #define RTL9602C_OPTICS_TBL2_ER_CTRL	0xa5
 #define RTL9602C_OPTICS_TBL2_ER_CTRL_AUTO		BIT(0)
 #define RTL9602C_OPTICS_TBL2_ER_CTRL_MOD_RANGE	GENMASK(3, 2)
+#define RTL9602C_OPTICS_TBL2_APCSET		0xa8
 #define RTL9602C_OPTICS_TBL2_MOD_DAC		0xab
+#define RTL9602C_OPTICS_TBL2_MOD_DAC_FIELD	GENMASK(15, 6)
 #define RTL9602C_OPTICS_TBL2_MOD_LIMIT		0xaf
 #define RTL9602C_OPTICS_TBL2_PERSIST	0xc7
 #define RTL9602C_OPTICS_TBL2_PERSIST_OFF	(BIT(1) | BIT(0))
@@ -614,6 +615,253 @@ static int rtl9602c_gn_t2_prepare(struct rtl9602c_priv *p)
 	if (!err)
 		msleep(400);
 	return err;
+}
+
+/*
+ * Transmit power levelling (ITU-T G.984.2 clause 8.3.2): level mode 0 is the
+ * power the module came with, modes 1 and 2 are 3 dB and 6 dB below it.  The
+ * power control loop holds the power at which the monitor photodiode reaches
+ * the set point, moving the bias, so a lower level takes a lower set point
+ * and, for the light to keep its shape, a modulation lower by the same
+ * factor; with the modulation held, the bias reaches its floor about 1.5 dB
+ * down and the power stops following the set point (measured on this
+ * board).  So the modulation is scaled first, by 2^-mode, and the set point
+ * is then moved one step at a time, never above the module's own, until the
+ * transmitted power has crossed 2^-mode times the power measured at mode 0.
+ * The module measures the power of the bursts, which come often only from
+ * O4 on, so a lower level is set only there.
+ *
+ * Going down, the scaled modulation first makes the loop hold the power with
+ * more bias, about 21 mA at mode 2 here, which the set point then lowers;
+ * going up, the modulation first lets the bias fall.  Either way the set
+ * point moves last.
+ */
+#define RTL9602C_OPTICS_LEVEL_MODES	3
+/* The power is read this long after each change. */
+#define RTL9602C_OPTICS_LEVEL_SETTLE_MS	20
+/* A change that needs more bias than this, in 2 uA, is given up. */
+#define RTL9602C_OPTICS_LEVEL_BIAS_MAX	(40000 / 2)
+
+/* The transmitted power and the bias, read RTL9602C_OPTICS_LEVEL_SETTLE_MS on. */
+static int rtl9602c_optics_tx_bias(struct rtl9602c_priv *p, u16 *tx, u16 *bias)
+{
+	msleep(RTL9602C_OPTICS_LEVEL_SETTLE_MS);
+	return rtl9602c_l_a2_word(p, 6, tx) ?: rtl9602c_l_a2_word(p, 4, bias);
+}
+
+/*
+ * Write MOD_DAC and read it back.  The register takes its two bytes together
+ * when the less significant is written, the more significant one waiting
+ * until then: written alone, it reads back unchanged (measured on this
+ * board).  So the more significant byte goes first, and the modulation steps
+ * from the old value to the new with nothing in between.
+ */
+static int rtl9602c_optics_put_mod(struct rtl9602c_priv *p, u16 mod)
+{
+	const u16 reg = RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_MOD_DAC;
+	u8 hi, lo;
+	int err;
+
+	err = rtl9602c_l_write(p, reg, mod >> 8) ?:
+	      rtl9602c_l_write(p, reg + 1, mod & 0xff) ?:
+	      rtl9602c_l_read(p, reg, &hi) ?:
+	      rtl9602c_l_read(p, reg + 1, &lo);
+	if (!err && ((hi << 8) | lo) != mod)
+		err = -EIO;
+	return err;
+}
+
+/*
+ * Set level mode @mode, with the configuration table shown and ready for
+ * writes.  Mode 0 is the module's own modulation and set point, written in
+ * that order.  A lower mode needs the module's settings known and the laser
+ * sending bursts: the power at mode 0 is measured when the optics are still
+ * at mode 0, and a power of 0 there gives -ENODATA.  A set point that would
+ * pass the module's own, a power that falls to 0 or a bias above
+ * RTL9602C_OPTICS_LEVEL_BIAS_MAX gives -ERANGE; the caller then puts mode 0
+ * back.
+ */
+static int rtl9602c_optics_level_set(struct rtl9602c_priv *p, unsigned int mode)
+{
+	const u16 apc_reg = RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_APCSET;
+	u16 dac = FIELD_GET(RTL9602C_OPTICS_TBL2_MOD_DAC_FIELD, p->optics_mod0);
+	u16 mod, tx, bias, target;
+	int apc, step, i, err;
+	u8 cur;
+
+	if (!mode)
+		return rtl9602c_optics_put_mod(p, p->optics_mod0) ?:
+		       rtl9602c_l_write(p, apc_reg, p->optics_apcset0);
+
+	if (!p->optics_mode) {
+		err = rtl9602c_optics_tx_bias(p, &tx, &bias);
+		if (err)
+			return err;
+		if (!tx)
+			return -ENODATA;
+		p->optics_p0 = tx;
+	}
+	if (!p->optics_p0)
+		return -ENODATA;
+	target = p->optics_p0 >> mode;
+
+	mod = (p->optics_mod0 & ~RTL9602C_OPTICS_TBL2_MOD_DAC_FIELD) |
+	      FIELD_PREP(RTL9602C_OPTICS_TBL2_MOD_DAC_FIELD, dac >> mode);
+	err = rtl9602c_optics_put_mod(p, mod) ?:
+	      rtl9602c_l_read(p, apc_reg, &cur) ?:
+	      rtl9602c_optics_tx_bias(p, &tx, &bias);
+	if (err)
+		return err;
+
+	apc = cur;
+	step = tx > target ? -1 : 1;
+	for (i = 0; i <= U8_MAX; i++) {
+		if (!tx || bias > RTL9602C_OPTICS_LEVEL_BIAS_MAX)
+			return -ERANGE;
+		if (step < 0 ? tx <= target : tx >= target)
+			return 0;
+		apc += step;
+		if (apc < 0 || apc > p->optics_apcset0)
+			return -ERANGE;
+		err = rtl9602c_l_write(p, apc_reg, apc) ?:
+		      rtl9602c_optics_tx_bias(p, &tx, &bias);
+		if (err)
+			return err;
+	}
+	return -ERANGE;
+}
+
+/*
+ * Put level mode 0 back before an orderly restart, power-off or halt: the
+ * module keeps its registers across a warm reboot of the SoC, and the next
+ * kernel takes the settings it finds for the module's own.  A reset that
+ * runs no notifier, such as the watchdog's, leaves a lower level in place
+ * until the module loses power.
+ */
+static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long action,
+				  void *data)
+{
+	struct rtl9602c_priv *p = container_of(nb, struct rtl9602c_priv,
+					       optics_reboot_nb);
+	u8 tabsel, eectl;
+	int err;
+
+	mutex_lock(&p->i2c_lock);
+	if (!p->optics_ref || !p->optics_mode) {
+		mutex_unlock(&p->i2c_lock);
+		return NOTIFY_DONE;
+	}
+	err = rtl9602c_gn_t2_password(p) ?:
+	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	if (!err) {
+		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
+		      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
+				      &eectl);
+		if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) ==
+			    RTL9602C_OPTICS_TBL2_PERSIST_OFF)
+			err = rtl9602c_gn_t2_prepare(p) ?:
+			      rtl9602c_optics_level_set(p, 0);
+		rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+	}
+	if (!err)
+		p->optics_mode = 0;
+	mutex_unlock(&p->i2c_lock);
+	pr_info("GN25L95: transmit power %s level mode 0 before the restart\n",
+		err ? "not put back at" : "back at");
+	return NOTIFY_DONE;
+}
+
+/**
+ * rtl9602c_optics_level_register() - prepare transmit power levelling
+ * @p: driver state
+ *
+ * Sets up the work that sets the levels and the notifier that puts level
+ * mode 0 back before a restart.
+ *
+ * Return: 0, or the error of registering the notifier.
+ */
+int rtl9602c_optics_level_register(struct rtl9602c_priv *p)
+{
+	INIT_WORK(&p->optics_level_work, rtl9602c_optics_level_work);
+	p->optics_reboot_nb.notifier_call = rtl9602c_optics_reboot;
+	return devm_register_reboot_notifier(p->dev, &p->optics_reboot_nb);
+}
+
+/**
+ * rtl9602c_optics_level_work() - set the optics to the ONU's power level
+ * @work: &rtl9602c_priv.optics_level_work
+ *
+ * Takes the level mode the GPON code asks for and sets it under i2c_lock,
+ * with the configuration table shown and its writes kept out of the EEPROM
+ * as in the modulation hold; a failure puts mode 0 back.  The GPON code is
+ * then told what was set.  Nothing is written with CONFIG_RTL9602C_OPTICS_RO
+ * or before the first modulation hold has kept the module's own settings.
+ *
+ * Context: Process context.  May sleep for about a second.
+ */
+void rtl9602c_optics_level_work(struct work_struct *work)
+{
+	struct rtl9602c_priv *p = container_of(work, struct rtl9602c_priv,
+					       optics_level_work);
+	u8 tabsel, eectl, mode, asked;
+	u16 tx = 0, bias = 0;
+	int err;
+
+	mutex_lock(&p->gpon_lock);
+	asked = p->gpon_power_mode;
+	mutex_unlock(&p->gpon_lock);
+	mode = asked;
+
+	mutex_lock(&p->i2c_lock);
+	if (mode == p->optics_mode) {
+		mutex_unlock(&p->i2c_lock);
+		return;
+	}
+	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_ref ||
+	    mode >= RTL9602C_OPTICS_LEVEL_MODES) {
+		err = -EOPNOTSUPP;
+		goto told;
+	}
+
+	err = rtl9602c_gn_t2_password(p) ?:
+	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	if (err)
+		goto told;
+	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
+	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
+			      &eectl);
+	if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) !=
+		    RTL9602C_OPTICS_TBL2_PERSIST_OFF)
+		err = -EPERM;
+	if (!err)
+		err = rtl9602c_gn_t2_prepare(p);
+	if (!err) {
+		err = rtl9602c_optics_level_set(p, mode);
+		if (!err) {
+			p->optics_mode = mode;
+		} else if (rtl9602c_optics_level_set(p, 0)) {
+			/*
+			 * Neither the mode nor mode 0: the optics are at no
+			 * known level, which the next run and the next hold
+			 * both try to leave.
+			 */
+			pr_err("GN25L95: transmit power level not restored to mode 0\n");
+			p->optics_mode = U8_MAX;
+		} else {
+			p->optics_mode = 0;
+		}
+	}
+	rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+	if (!err)
+		rtl9602c_optics_tx_bias(p, &tx, &bias);
+told:
+	mode = p->optics_mode < RTL9602C_OPTICS_LEVEL_MODES ? p->optics_mode : 0;
+	mutex_unlock(&p->i2c_lock);
+
+	if (!err)
+		pr_info("GN25L95: transmit power level mode %u: %u.%u uW, bias %u.%02u mA\n",
+			mode, tx / 10, tx % 10, bias / 500, bias % 500 / 5);
+	rtl9602c_gpon_power_applied(p, asked, mode, err);
 }
 
 /**
@@ -685,6 +933,18 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 		goto out;
 
 	/*
+	 * A transmit power level set in an earlier session is undone first,
+	 * back to the module's own modulation and set point.
+	 */
+	if (p->optics_ref && p->optics_mode) {
+		err = rtl9602c_optics_level_set(p, 0);
+		if (err)
+			goto out;
+		p->optics_mode = 0;
+		pr_info("GN25L95: transmit power back at level mode 0\n");
+	}
+
+	/*
 	 * Turn the loop off and read ER_CTRL back.  With the loop off, MOD_DAC
 	 * reads the value the module loaded at power-up, which the modulation
 	 * now runs from (measured on this board).
@@ -713,6 +973,24 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 			hi, lo, modmax, rb_er);
 		err = -EINVAL;
 		goto out;
+	}
+
+	/*
+	 * The first hold since probe keeps the modulation and the power
+	 * control's set point as the module has them, the settings of level
+	 * mode 0 that every lower level is made from and that every session
+	 * starts at.
+	 */
+	if (!p->optics_ref) {
+		u8 apc;
+
+		err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_APCSET,
+				      &apc);
+		if (err)
+			goto out;
+		p->optics_apcset0 = apc;
+		p->optics_mod0 = (hi << 8) | lo;
+		p->optics_ref = true;
 	}
 
 	/*

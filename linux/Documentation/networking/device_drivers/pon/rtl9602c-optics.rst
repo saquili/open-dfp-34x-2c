@@ -154,7 +154,9 @@ Where the code is
        (``rtl9602c_optics_hwmon_register()``), the modulation hold
        (``rtl9602c_optics_hold_modulation()``) with the
        ``RTL9602C_OPTICS_TBL2_*`` macros of the configuration table it writes,
-       and the debugfs views (``rtl9602c_optics_debugfs_init()``).
+       the transmit power levels (``rtl9602c_optics_level_register()``,
+       ``rtl9602c_optics_level_work()``), and the debugfs views
+       (``rtl9602c_optics_debugfs_init()``).
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers of the I2C master and of the pad functions
        (``RTL9602C_I2C_*``, ``RTL9602C_PADMUX_*``), the byte numbers of the
@@ -162,13 +164,15 @@ Where the code is
        ``i2c`` of ``struct rtl9602c_priv``, and the prototypes of the calls
        above.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
-     - ``rtl9602c_probe()`` takes the ``tx-disable`` line. ``rtl9602c_setup()``
-       creates the debugfs directory with the optics views, registers the I2C
-       adapter and then the hwmon device (see "Setup, in order").
+     - ``rtl9602c_probe()`` takes the ``tx-disable`` line and prepares the
+       transmit power levels. ``rtl9602c_setup()`` creates the debugfs
+       directory with the optics views, registers the I2C adapter and then the
+       hwmon device (see "Setup, in order").
    * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
      - ``rtl9602c_gpon_apply_state()`` drives TX_DISABLE at every change of the
-       ONU state, and ``rtl9602c_gpon_bringup()`` calls the modulation hold
-       after the MAC reset.
+       ONU state, ``rtl9602c_gpon_bringup()`` calls the modulation hold after
+       the MAC reset, and Change_Power_Level and Upstream_Overhead ask for
+       transmit power levels.
    * - ``drivers/net/dsa/realtek/Kconfig``, ``Makefile``
      - ``CONFIG_RTL9602C_OPTICS_RO`` and the list of objects of ``rtl9602c.o``.
    * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``
@@ -1052,23 +1056,160 @@ nothing. Its steps:
    only after them.
 5. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
    and wait 400 ms. Purpose: the table takes writes. (I)
-6. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
+6. If a lower transmit power level is set, put the module's own modulation and
+   set point back (see "Transmit power levelling") and log ``transmit power
+   back at level mode 0``. Purpose: every session starts at mode 0. (T)
+7. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
    the loop off, and see the value the modulation now runs from. (M)
-7. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
+8. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
    and the high byte of MOD_DAC exceeds it: write ER_CTRL back as it was, so
    that the loop keeps running, log ``modulation DAC seed ... is unusable`` and
    give up with ``-EINVAL``. Purpose: do not leave the modulation at a value
    that cannot be right. (I)
-8. Log the held modulation. Purpose: show the value the modulation runs from.
-   (I)
-9. Write the value kept in step 2 back to byte 127. Purpose: leave the page
-   selection as it was found. This follows every step after the write of step
-   2, whatever its outcome; only a transfer that fails in step 1 or in the read
-   of step 2 returns before it, when the page select has not been written.
-   (T)
+9. At the first hold since probe, read the set point (``0xa8``) and keep it
+   with MOD_DAC as the settings of transmit power level mode 0. Purpose: the
+   lower levels are made from them, and mode 0 puts them back. (M)
+10. Log the held modulation. Purpose: show the value the modulation runs from.
+    (I)
+11. Write the value kept in step 2 back to byte 127. Purpose: leave the page
+    selection as it was found. This follows every step after the write of
+    step 2, whatever its outcome; only a transfer that fails in step 1 or in
+    the read of step 2 returns before it, when the page select has not been
+    written. (T)
 
 A failed hold is logged by the GPON bring-up (``modulation not held``), and the
 bring-up carries on.
+
+Transmit power levelling
+========================
+
+ITU-T G.984.2 gives the ONU's transmitter three power levels, the level modes:
+0, normal, and 1 and 2, 3 dB and 6 dB below it. The OLT moves an ONU between
+them with Change_Power_Level (see
+Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst). The driver
+makes level mode 0 the power the module came with and sets the lower modes
+from it, in the configuration table of "The modulation hold", shown and kept
+out of the EEPROM in the same way.
+
+The part's power control loop moves the bias until the monitor photodiode
+reaches a set point, so the transmitted power follows the set point while the
+bias has room. With the modulation held it has little: the bias reaches its
+floor about 1.5 dB down. So a lower level takes a lower modulation too, scaled
+by the same factor, and then a lower set point.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 22 60
+
+   * - A2h byte
+     - Register
+     - What the driver does with it
+   * - ``0xa8``
+     - ``RTL9602C_OPTICS_TBL2_APCSET``
+     - The power control's set point. Keeps the module's own value at the
+       first hold since probe; writes lower values for modes 1 and 2, never a
+       higher one, and the module's own back for mode 0.
+   * - ``0xab``, ``0xac``
+     - ``RTL9602C_OPTICS_TBL2_MOD_DAC``
+     - The modulation DAC. Keeps the module's own value, read with the
+       automatic loop off, at the first hold since probe; writes it with its
+       DAC field, bits 15:6 (``RTL9602C_OPTICS_TBL2_MOD_DAC_FIELD``), halved
+       for mode 1 and quartered for mode 2, and the module's own back for mode
+       0.
+   * - 100-101 and 102-103
+     - (diagnostics)
+     - The bias and the transmitted power, read
+       ``RTL9602C_OPTICS_LEVEL_SETTLE_MS`` (20 ms) after each change.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The ONU's output power has three modes: mode 0, normal, within the
+       mean launched power of the ODN class; mode 1, 3 dB below; mode 2, 6 dB
+       below. The step need not be exactly 3 dB as long as the power lies
+       within the new mode's range.
+     - P
+     - ITU-T G.984.2 clause 8.3.2 and Appendix II.
+   * - Byte ``0xa8`` is the power control's set point. With the modulation
+       held, the set point at ``ab`` (the module's own) gave 1667 uW at a bias
+       of 7.1 mA; ``90`` gave 1217 uW with the bias at its floor, 0.77 mA;
+       ``78`` and ``60`` gave 645 uW; at ``55`` the laser went out (bias and
+       power 0) and the OLT lost the ONU, which was back in O5 once the set
+       point was ``ab`` again (1697 uW). Bytes ``0xa9`` and ``0xaa`` change by
+       themselves: ``0f 80``, then ``10 00`` and ``10 80`` with nothing
+       written.
+     - M
+     - The table and the diagnostics read back after each write, on an OLT.
+   * - With the set point at ``78`` and the modulation lowered, the loop holds
+       the set point's power with more bias: MOD_DAC ``1fc0`` gave a bias of
+       4.7 mA and 552 uW, ``17c0`` 9.65 mA and 549 uW.
+     - M
+     - The same reads.
+   * - MOD_DAC takes its two bytes together when the less significant one,
+       ``0xac``, is written: ``5f`` written to ``0xab`` alone read back as the
+       old ``2f``, and the pair read ``5f 80`` once ``80`` was written to
+       ``0xac``. The driver writes ``0xab`` first.
+     - M
+     - The table read back after each byte.
+   * - Change_Power_Level injected in O5 took the transmitted power from 1672
+       uW to 823 uW at mode 1 (3.1 dB down, bias 9 mA) and 423 uW at mode 2
+       (6.0 dB down, bias 10 mA), and back up to 833 uW and 1697 uW, with the
+       ONU in O5 throughout; a step past either end changed nothing, and the
+       PON taken down and up from mode 2 came back at mode 0, at 1672 uW.
+     - T
+     - The hwmon readings after each injected message, on an OLT.
+   * - That the extinction ratio stays as it is at modes 1 and 2: scaling the
+       modulation with the power keeps it while the light grows linearly with
+       the current above the laser's threshold, which is not verified.
+     - I
+     - The eye of the transmitted light at each mode, with an optical
+       instrument.
+   * - The module keeps its registers across a warm reboot of the SoC, and the
+       next kernel takes the settings it finds for the module's own: booted
+       with the optics at mode 2, a kernel logged ``modulation held at 19.8 mA
+       (modulation DAC 2f80, ...)``. Before an orderly restart, power-off or
+       halt the driver puts mode 0 back; a reset that runs no notifier, such
+       as the watchdog's, leaves the lower level until the module loses power.
+     - M
+     - The hold's log after a warm reboot from mode 2 without the notifier;
+       with it, ``reboot`` at mode 2 logged ``transmit power back at level
+       mode 0 before the restart``, and the next kernel held the modulation at
+       39.0 mA (``5f80``) and sent 1661 uW.
+
+Setting a level (``rtl9602c_optics_level_work()``, queued by the GPON code):
+
+1. Take the mode the GPON code asks for; if the optics are already at it,
+   stop. Purpose: one work item serves every request. (T)
+2. With ``CONFIG_RTL9602C_OPTICS_RO``, or before a hold has kept the module's
+   own settings, give up with ``-EOPNOTSUPP``. Purpose: nothing is written
+   that could not be put back. (I)
+3. Show the table and check PERSIST as the hold does, giving up with
+   ``-EPERM`` when register changes would reach the EEPROM; clear the bits of
+   byte ``0xcc``. Purpose: the writes stay in registers. (M)
+4. For mode 0, write the module's modulation and then its set point. (M)
+5. For a lower mode, read the transmitted power while the optics are still at
+   mode 0: the module measures the bursts, so the power read is that of mode 0
+   (no power read gives ``-ENODATA``). The target is that power divided by 2
+   for mode 1 and by 4 for mode 2. Purpose: the level is made from this
+   module's own power. (T)
+6. Write the scaled modulation. Purpose: going down, the loop then holds the
+   power with more bias, which the set point lowers next; going up, the bias
+   falls first. (M)
+7. Move the set point one step at a time towards the target, reading the
+   power and the bias after each, until the power crosses the target. A set
+   point above the module's own, a power of 0 or a bias above
+   ``RTL9602C_OPTICS_LEVEL_BIAS_MAX`` (40 mA) gives ``-ERANGE``. Purpose: the
+   power lands at the level without the laser going out. (T)
+8. On a failure, put mode 0 back; when even that fails, log it and count the
+   optics at no known level, which the next request and the next hold try to
+   leave. (I)
+9. Write the page select back, log the level with the power and the bias, and
+   tell the GPON code what was set, which declares it in Serial_Number_ONU.
+   (T)
 
 The read-only build
 ===================
@@ -1079,8 +1220,9 @@ the laser driver: the page select, the bytes 123 to 126 and the configuration
 table stay as the module has them, the automatic loop keeps running, and the
 hold logs nothing. The I2C adapter refuses every write with ``-EPERM``, so a
 client of it, user space through ``i2c-dev`` included, cannot change the
-module either. The hwmon device and the ``a2`` and ``eeblocks`` views only
-read, and they are unchanged.
+module either. No transmit power level is set: a request for one gives
+``-EOPNOTSUPP``, and the ONU stays at level mode 0. The hwmon device and the
+``a2`` and ``eeblocks`` views only read, and they are unchanged.
 
 .. list-table::
    :header-rows: 1
@@ -1135,6 +1277,16 @@ device.
      - ``GN25L95: modulation not held (<error>)``, from the GPON bring-up. When
        the hold gave up for a reason of its own, the two rows above, this line
        follows the line of that reason.
+   * - Bring-up, a lower power level was set
+     - ``GN25L95: transmit power back at level mode 0``
+   * - A power level was set
+     - ``GN25L95: transmit power level mode <n>: <uW>.<d> uW, bias <mA>.<dd>
+       mA``
+   * - Neither the level asked for nor mode 0 could be set
+     - ``GN25L95: transmit power level not restored to mode 0``
+   * - Before a restart, a lower level was set
+     - ``GN25L95: transmit power back at level mode 0 before the restart``, or
+       ``not put back at`` in place of ``back at`` when it failed.
 
 Setup, in order
 ===============
@@ -1161,6 +1313,10 @@ end of a step is the tag of the fact the step rests on (see the tables above).
    modulation hold (see "The modulation hold"). Purpose: the modulation runs
    from the value the module loads at power-up. (M)
 
+At probe the driver also sets up the work that sets power levels and registers
+the notifier that puts level mode 0 back before a restart
+(``rtl9602c_optics_level_register()``; a failure fails the probe).
+
 The adapter and the hwmon device are device-managed
 (``devm_i2c_add_adapter()`` and ``devm_hwmon_device_register_with_info()``) and
 go with the switch's platform device. The debugfs views go with the debugfs
@@ -1174,6 +1330,11 @@ Known limitations
   across a power cycle of the module, so a client of the adapter can change the
   module for good. User space reaches the adapter through ``i2c-dev`` where
   ``CONFIG_I2C_CHARDEV`` is set.
+- A watchdog reset, or any reset that runs no restart notifier, with the
+  transmit power at level mode 1 or 2 leaves the module there, and the next
+  kernel takes that level for the module's own until the module loses power
+  (see "Transmit power levelling"). The extinction ratio at the lower levels
+  is not measured.
 - Each PON bring-up writes bytes that the module keeps. Before it has read
   PERSIST, the modulation hold writes ``0xff`` to A2h bytes 123 to 126 and
   ``02h`` to byte 127, and at the end it writes the old value back to byte 127:
@@ -1210,6 +1371,10 @@ Assumptions the driver depends on
        limitations").
      - Reading the received-power word in a tight loop while the level changes,
        looking for jumps of about 256 counts.
+   * - That the extinction ratio stays as it is at transmit power level modes
+       1 and 2 ("Transmit power levelling").
+     - The eye of the transmitted light at each mode, with an optical
+       instrument.
    * - The read-only build still exposes a writable adapter ("The read-only
        build").
      - Checking the image's configuration for ``CONFIG_I2C_CHARDEV`` settles

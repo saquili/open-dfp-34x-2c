@@ -1705,6 +1705,7 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 	cancel_delayed_work_sync(&p->gpon_work);
 	cancel_delayed_work_sync(&p->mib_work);
 	cancel_delayed_work_sync(&p->sds_work);
+	cancel_work_sync(&p->optics_level_work);
 	rtl9602c_l34_notifiers_unregister(p);
 	rtl9602c_l34_fini(p);
 	rtl9602c_gem_teardown(p);
@@ -2368,6 +2369,11 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	if (IS_ERR(p->tx_disable))
 		return dev_err_probe(&pdev->dev, PTR_ERR(p->tx_disable),
 				     "cannot get the laser tx-disable gpio\n");
+
+	err = rtl9602c_optics_level_register(p);
+	if (err)
+		return dev_err_probe(&pdev->dev, err,
+				     "cannot register the transmit power restore\n");
 
 	p->ds.dev = &pdev->dev;
 	p->ds.num_ports = RTL9602C_NUM_PORTS;
