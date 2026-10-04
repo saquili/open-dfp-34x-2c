@@ -10,10 +10,12 @@
 #include "me/action.h"
 #include "me/layout.h"
 #include "me/table.h"
+#include "me/values.h"
 #include "mib/store.h"
 #include "omci/attrmask.h"
 #include "omci/engine.h"
 #include "omci/frame.h"
+#include "omcid/array_size.h"
 
 #include "harness.h"
 #include "model_tsv.h"
@@ -351,6 +353,14 @@ static void test_every_writable_attribute_is_written_and_not_announced(void)
 			body[1] = (uint8_t)(bit & 0xffu);
 			for (size_t k = 0; k < a->size; k++)
 				body[2 + k] = (uint8_t)(now[k] ^ 0x5Au);
+
+			/* An attribute with a range takes the next it allows. */
+			for (unsigned int step = 1;
+			     step < 256u &&
+			     !omci_me_value_allowed(t->id, (uint8_t)n,
+						    &body[2]);
+			     step++)
+				body[2] = (uint8_t)(now[0] + step);
 
 			unsigned int avc_before = 0;
 			const uint8_t *rsp = drive(fx.eng, next_tid(), MT_SET,

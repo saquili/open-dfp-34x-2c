@@ -45,7 +45,7 @@ int main(void)
 		return 1;
 	}
 
-	const uint16_t n = omci_alarm_snapshot(al);
+	const uint16_t n = omci_alarm_snapshot(al, false);
 
 	printf("\nOMCI: %u alarmed entit%s (= the GetAllAlarms count)\n", n,
 	       n == 1 ? "y" : "ies");

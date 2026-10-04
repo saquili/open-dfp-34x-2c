@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "hw/hw.h"
+#include "me/defaults.h"
 #include "mib/store.h"
 #include "omci/alarm.h"
 #include "omci/engine.h"
@@ -47,7 +48,7 @@ static void test_a_raised_alarm_reaches_the_bitmap(void)
 
 	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_OK);
 	CHECK(changed);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	struct omci_alarm_entry e;
 
@@ -73,7 +74,7 @@ static void test_an_alarm_that_clears_is_a_change_too(void)
 
 	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_OK);
 	CHECK(changed);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_OK);
 	CHECK(!changed);
@@ -81,7 +82,7 @@ static void test_an_alarm_that_clears_is_a_change_too(void)
 	omci_hw_alarm_force(OMCI_HW_ALARM_SF, false);
 	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_OK);
 	CHECK(changed);
-	CHECK_EQ(omci_alarm_snapshot(al), 0u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
 
 	omci_alarm_fini(al);
 }
@@ -104,7 +105,7 @@ static void test_each_mapped_alarm_lands_on_its_own_bit(void)
 		hw_all_clear();
 		omci_hw_alarm_force(mapped[i].hw, true);
 		CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
-		CHECK_EQ(omci_alarm_snapshot(al), 1u);
+		CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 		struct omci_alarm_entry e;
 
@@ -132,7 +133,7 @@ static void test_unmapped_conditions_raise_nothing(void)
 		omci_hw_alarm_force(unmapped[i], true);
 
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
-	CHECK_EQ(omci_alarm_snapshot(al), 0u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
 	omci_alarm_fini(al);
 }
 
@@ -145,7 +146,7 @@ static void test_every_condition_at_once(void)
 		omci_hw_alarm_force((enum omci_hw_alarm)a, true);
 
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	struct omci_alarm_entry e;
 
@@ -174,7 +175,7 @@ static void test_the_notification_frame(void)
 
 	struct omci_alarm_entry changed_list[4];
 
-	CHECK_EQ(omci_alarm_changed(al, changed_list, 4), 1u);
+	CHECK_EQ(omci_alarm_take_changes(al, changed_list, 4), 1u);
 
 	uint8_t wire[OMCI_FRAME_LEN];
 
@@ -218,7 +219,7 @@ static void test_the_snapshot_is_frozen(void)
 	hw_all_clear();
 	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, false);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
@@ -228,7 +229,7 @@ static void test_the_snapshot_is_frozen(void)
 	CHECK(omci_alarm_snapshot_get(al, 0, &e));
 	CHECK(bit_of(e.bitmap, 0));
 
-	CHECK_EQ(omci_alarm_snapshot(al), 0u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
 
 	omci_alarm_fini(al);
 }
@@ -241,7 +242,7 @@ static void test_reading_past_the_end(void)
 	hw_all_clear();
 	omci_hw_alarm_force(OMCI_HW_ALARM_SF, true);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	struct omci_alarm_entry e;
 
@@ -299,6 +300,7 @@ static void test_through_the_engine(void)
 static void test_the_seam_refuses_bad_arguments(void)
 {
 	CHECK_EQ(omci_hw_alarms(NULL), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_hw_pon(NULL), OMCI_ERR_INVAL);
 
 	uint64_t v = 12345u;
 
@@ -322,12 +324,12 @@ static void test_the_seam_refuses_bad_arguments(void)
 	omci_hw_counter_force(999u, 0u, 1u);
 
 	CHECK_EQ(omci_alarm_poll(NULL, NULL), OMCI_ERR_INVAL);
-	CHECK_EQ(omci_alarm_snapshot(NULL), 0u);
+	CHECK_EQ(omci_alarm_snapshot(NULL, false), 0u);
 	CHECK_EQ(omci_alarm_sequence(NULL), 0u);
 	struct omci_alarm_entry e;
 
 	CHECK(!omci_alarm_snapshot_get(NULL, 0, &e));
-	CHECK_EQ(omci_alarm_changed(NULL, &e, 1), 0u);
+	CHECK_EQ(omci_alarm_take_changes(NULL, &e, 1), 0u);
 	omci_alarm_reset_sequence(NULL);
 	CHECK_EQ(omci_alarm_init(NULL), OMCI_ERR_INVAL);
 	omci_alarm_fini(NULL);
@@ -403,14 +405,14 @@ static void test_a_failed_read_keeps_the_last_known_state(void)
 	hw_all_clear();
 	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
 	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	omci_hw_alarm_fail_next(true);
 	bool changed = true;
 
 	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_ERR_HW);
 	CHECK(!changed);
-	CHECK_EQ(omci_alarm_snapshot(al), 1u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
 
 	struct omci_alarm_entry e;
 
@@ -462,6 +464,560 @@ static void test_the_engine_answers_when_the_driver_is_silent(void)
 	hw_all_clear();
 }
 
+/* The ANI-G attributes the alarms are judged by. */
+#define ANI_G_SF 6u
+#define ANI_G_SD 7u
+#define ANI_G_ARC 8u
+#define ANI_G_ARC_INTERVAL 9u
+
+#define MT_SET 8u
+#define MT_GET_ALL_ALARMS 11u
+#define MT_GET_ALL_ALARMS_N 12u
+#define MT_ALARM 16u
+#define MT_AVC 17u
+
+#define RESULT_OK 0u
+#define RESULT_PARAM_ERROR 3u
+
+static bool fixture_with_defaults(struct omci_t_fixture *fx)
+{
+	struct omci_hw_caps caps;
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	if (!omci_t_up(fx))
+		return false;
+	CHECK_EQ(omci_me_defaults_apply(fx->mib, &caps), OMCI_OK);
+	omci_t_tx_reset();
+	return true;
+}
+
+/* The frames sent of message type @mt, and the last of them. */
+static unsigned int sent_of(uint8_t mt, const uint8_t **last)
+{
+	unsigned int n = 0;
+
+	if (last != NULL)
+		*last = NULL;
+	for (unsigned int i = 0; i < omci_t_tx.n && i < OMCI_T_MAX_TX; i++) {
+		if ((omci_t_tx.frame[i][2] & 0x1Fu) != mt)
+			continue;
+		n++;
+		if (last != NULL)
+			*last = omci_t_tx.frame[i];
+	}
+	return n;
+}
+
+/* Set a one-byte attribute as the OLT does: the result of the answer. */
+static unsigned int olt_set_u8(struct omci_engine *eng, uint16_t tci,
+			       uint16_t cls, uint16_t inst, uint8_t attr,
+			       uint8_t v)
+{
+	uint8_t req[OMCI_FRAME_LEN];
+	const uint16_t mask = (uint16_t)(0x8000u >> (attr - 1u));
+
+	omci_t_build(req, tci, MT_SET, true, false, cls, inst);
+	req[8] = (uint8_t)(mask >> 8);
+	req[9] = (uint8_t)mask;
+	req[10] = v;
+	omci_t_tx_reset();
+	CHECK_EQ(omci_t_rx(eng, req), OMCI_OK);
+
+	const uint8_t *rsp = omci_t_last_tx();
+
+	return rsp != NULL ? rsp[8] : 0xFFu;
+}
+
+static uint8_t mib_u8(struct omci_mib *mib, uint16_t cls, uint16_t inst,
+		      uint8_t attr)
+{
+	uint8_t v = 0xEEu;
+
+	CHECK_EQ(omci_mib_attr_get(mib, cls, inst, attr, &v, 1u, NULL),
+		 OMCI_OK);
+	return v;
+}
+
+/* Get all alarms, with its retrieval mode: the count it answers. */
+static unsigned int get_all_alarms(struct omci_engine *eng, uint16_t tci,
+				   uint8_t mode)
+{
+	uint8_t req[OMCI_FRAME_LEN];
+
+	omci_t_build(req, tci, MT_GET_ALL_ALARMS, true, false, ME_ONU_DATA, 0u);
+	req[8] = mode;
+	omci_t_tx_reset();
+	CHECK_EQ(omci_t_rx(eng, req), OMCI_OK);
+
+	const uint8_t *rsp = omci_t_last_tx();
+
+	return rsp != NULL ? ((unsigned int)rsp[8] << 8 | rsp[9]) : 0xFFFFu;
+}
+
+/* Get all alarms next: the class of the entity it answers, 0 for none. */
+static unsigned int get_all_alarms_next(struct omci_engine *eng, uint16_t tci,
+					uint16_t seq)
+{
+	uint8_t req[OMCI_FRAME_LEN];
+
+	omci_t_build(req, tci, MT_GET_ALL_ALARMS_N, true, false, ME_ONU_DATA,
+		     0u);
+	req[8] = (uint8_t)(seq >> 8);
+	req[9] = (uint8_t)seq;
+	omci_t_tx_reset();
+	CHECK_EQ(omci_t_rx(eng, req), OMCI_OK);
+
+	const uint8_t *rsp = omci_t_last_tx();
+
+	return rsp != NULL ? ((unsigned int)rsp[8] << 8 | rsp[9]) : 0xFFFFu;
+}
+
+static void test_the_rate_is_judged_from_the_receiver(void)
+{
+	struct omci_alarm *al = NULL;
+
+	CHECK_EQ(omci_alarm_init(&al), OMCI_OK);
+	hw_all_clear();
+	CHECK_EQ(omci_alarm_judge(NULL, 0u, 5u, 9u), OMCI_ERR_INVAL);
+
+	/* Eleven quiet seconds, then 25 errors: 10^-9 over 10 s. */
+	omci_hw_pon_force(true, true, 0u);
+	for (unsigned int s = 0; s <= 10u; s++)
+		CHECK_EQ(omci_alarm_judge(al, s, 5u, 9u), OMCI_OK);
+	omci_hw_pon_force(true, true, 25u);
+	CHECK_EQ(omci_alarm_judge(al, 11u, 5u, 9u), OMCI_OK);
+
+	struct omci_alarm_entry e;
+
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
+	CHECK(omci_alarm_snapshot_get(al, 0, &e));
+	CHECK(!bit_of(e.bitmap, 2));
+	CHECK(bit_of(e.bitmap, 3));
+
+	/* A read that fails leaves no rate to judge: both clear. */
+	omci_hw_pon_fail_next(true);
+	CHECK_EQ(omci_alarm_judge(al, 12u, 5u, 9u), OMCI_ERR_HW);
+	omci_hw_pon_fail_next(false);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
+
+	/* So does a receiver that has no count, or is not in operation. */
+	omci_hw_pon_force(true, true, 0u);
+	for (unsigned int s = 13u; s <= 24u; s++)
+		CHECK_EQ(omci_alarm_judge(al, s, 5u, 9u), OMCI_OK);
+	omci_hw_pon_force(true, true, 30000u);
+	CHECK_EQ(omci_alarm_judge(al, 25u, 5u, 9u), OMCI_OK);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+	omci_hw_pon_force(true, false, 30000u);
+	CHECK_EQ(omci_alarm_judge(al, 26u, 5u, 9u), OMCI_OK);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(!omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+	omci_hw_pon_force(false, true, 30000u);
+	CHECK_EQ(omci_alarm_judge(al, 27u, 5u, 9u), OMCI_OK);
+
+	/* A backend that cannot tell the state of the receiver. */
+	struct omci_hw_ops blind = omci_hw_host_ops;
+
+	blind.pon = NULL;
+	omci_hw_ops_set(&blind);
+	CHECK_EQ(omci_alarm_judge(al, 28u, 5u, 9u), OMCI_ERR_HW);
+	omci_hw_ops_set(NULL);
+
+	omci_hw_pon_force(false, false, 0u);
+	omci_alarm_fini(al);
+}
+
+static void test_suppressed_alarms_are_kept_but_not_told(void)
+{
+	struct omci_alarm *al = NULL;
+	struct omci_alarm_entry e[4];
+
+	CHECK_EQ(omci_alarm_init(&al), OMCI_OK);
+	hw_all_clear();
+
+	CHECK(!omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+	CHECK(!omci_alarm_standing(NULL, ME_ANI_G, ANI_G_INSTANCE));
+	omci_alarm_suppress(NULL, ME_ANI_G, ANI_G_INSTANCE, true);
+	omci_alarm_suppress(al, ME_ANI_G, ANI_G_INSTANCE, false);
+	omci_alarm_suppress(al, ME_ANI_G, ANI_G_INSTANCE, true);
+
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+	CHECK(!omci_alarm_standing(al, 11u, 0x0101u));
+	CHECK_EQ(omci_alarm_take_changes(al, e, 4), 0u);
+
+	/* Get all alarms has it, unless asked for the others only. */
+	CHECK_EQ(omci_alarm_snapshot(al, true), 0u);
+	CHECK_EQ(omci_alarm_snapshot(al, false), 1u);
+
+	/* What the snapshot gave, the OLT knows: nothing more to tell. */
+	omci_alarm_suppress(al, ME_ANI_G, ANI_G_INSTANCE, false);
+	CHECK_EQ(omci_alarm_take_changes(al, e, 4), 0u);
+	CHECK_EQ(omci_alarm_snapshot(al, true), 1u);
+
+	/* Left out of a snapshot, it is clear to the OLT, and told once free. */
+	omci_alarm_suppress(al, ME_ANI_G, ANI_G_INSTANCE, true);
+	CHECK_EQ(omci_alarm_snapshot(al, true), 0u);
+	omci_alarm_suppress(al, ME_ANI_G, ANI_G_INSTANCE, false);
+	CHECK_EQ(omci_alarm_take_changes(al, e, 0), 0u);
+	CHECK_EQ(omci_alarm_take_changes(al, e, 4), 1u);
+	CHECK(bit_of(e[0].bitmap, 0));
+	CHECK_EQ(omci_alarm_take_changes(al, e, 4), 0u);
+	CHECK_EQ(omci_alarm_take_changes(NULL, e, 4), 0u);
+	CHECK_EQ(omci_alarm_take_changes(al, NULL, 4), 0u);
+
+	omci_alarm_snapshot_drop(al);
+	CHECK(!omci_alarm_snapshot_get(al, 0, &e[0]));
+	omci_alarm_snapshot_drop(NULL);
+
+	hw_all_clear();
+	omci_alarm_fini(al);
+}
+
+static void test_no_room_for_another_entity(void)
+{
+	struct omci_alarm *al = NULL;
+
+	CHECK_EQ(omci_alarm_init(&al), OMCI_OK);
+	hw_all_clear();
+
+	for (unsigned int i = 0; i < OMCI_ALARM_MAX_ENTITIES; i++)
+		omci_alarm_suppress(al, (uint16_t)(1000u + i), 1u, true);
+	omci_alarm_suppress(al, 2000u, 1u, true);
+
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(!omci_alarm_standing(al, ME_ANI_G, ANI_G_INSTANCE));
+	CHECK_EQ(omci_alarm_snapshot(al, false), 0u);
+
+	hw_all_clear();
+	omci_alarm_fini(al);
+}
+
+static void test_the_tick_notifies_each_change(void)
+{
+	hw_all_clear();
+	omci_hw_pon_force(false, false, 0u);
+
+	struct omci_t_fixture fx;
+	const uint8_t *f = NULL;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	omci_engine_tick(fx.eng, 100u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	/* Read once a second: not again within the same one. */
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 100u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	omci_engine_tick(fx.eng, 101u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	CHECK(f != NULL);
+	if (f != NULL) {
+		CHECK_EQ(((unsigned int)f[4] << 8) | f[5], ME_ANI_G);
+		CHECK_EQ(((unsigned int)f[6] << 8) | f[7], ANI_G_INSTANCE);
+		CHECK(bit_of(&f[8], 0));
+		CHECK_EQ(f[8 + 31], 1u);
+	}
+
+	omci_engine_tick(fx.eng, 102u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 1u);
+
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, false);
+	omci_engine_tick(fx.eng, 103u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 2u);
+	if (f != NULL) {
+		CHECK(!bit_of(&f[8], 0));
+		CHECK_EQ(f[8 + 31], 2u);
+	}
+
+	/* A hardware that does not answer leaves the alarms as they were. */
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_hw_alarm_fail_next(true);
+	omci_engine_tick(fx.eng, 104u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 2u);
+	omci_hw_alarm_fail_next(false);
+
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_an_entity_the_mib_lacks_is_not_notified(void)
+{
+	hw_all_clear();
+
+	struct omci_t_fixture fx;
+
+	if (!omci_t_up(&fx))
+		return;
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 5u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_the_tick_judges_the_bit_error_rate(void)
+{
+	hw_all_clear();
+	omci_hw_pon_force(true, true, 0u);
+
+	struct omci_t_fixture fx;
+	const uint8_t *f = NULL;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	for (unsigned int s = 0; s <= 10u; s++)
+		omci_engine_tick(fx.eng, 1000u + s);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	/* 30000 errors in a second: past 10^-5 and 10^-9. */
+	omci_hw_pon_force(true, true, 30000u);
+	omci_engine_tick(fx.eng, 1011u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL) {
+		CHECK(!bit_of(&f[8], 0));
+		CHECK(bit_of(&f[8], 2));
+		CHECK(bit_of(&f[8], 3));
+	}
+
+	/*
+	 * The OLT raises the signal fail threshold to 10^-3: 30000 errors a
+	 * second are below a tenth of it, and signal fail clears.
+	 */
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0901u, ME_ANI_G, ANI_G_INSTANCE, ANI_G_SF,
+			    3u),
+		 RESULT_OK);
+	omci_t_tx_reset();
+	omci_hw_pon_force(true, true, 60000u);
+	omci_engine_tick(fx.eng, 1012u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL) {
+		CHECK(!bit_of(&f[8], 2));
+		CHECK(bit_of(&f[8], 3));
+	}
+
+	/* Out of operation there is no rate: signal degrade clears too. */
+	omci_t_tx_reset();
+	omci_hw_pon_force(false, false, 0u);
+	omci_engine_tick(fx.eng, 1013u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL)
+		CHECK(!bit_of(&f[8], 3));
+
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_alarm_reporting_control_ends_by_itself(void)
+{
+	hw_all_clear();
+	omci_hw_pon_force(false, false, 0u);
+
+	struct omci_t_fixture fx;
+	const uint8_t *f = NULL;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0A01u, ME_ANI_G, ANI_G_INSTANCE,
+			    ANI_G_ARC_INTERVAL, 1u),
+		 RESULT_OK);
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0A02u, ME_ANI_G, ANI_G_INSTANCE,
+			    ANI_G_ARC, 1u),
+		 RESULT_OK);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 500u);
+
+	/* Under control: kept, not notified. */
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 501u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	/* Get all alarms reports it, unless asked for the others only. */
+	CHECK_EQ(get_all_alarms(fx.eng, 0x0A03u, 0u), 1u);
+	CHECK_EQ(get_all_alarms(fx.eng, 0x0A04u, 1u), 0u);
+
+	/* A minute after the alarm last stood, the control ends. */
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, false);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 502u);
+	omci_engine_tick(fx.eng, 560u);
+	CHECK_EQ(sent_of(MT_AVC, NULL), 0u);
+	CHECK_EQ(mib_u8(fx.mib, ME_ANI_G, ANI_G_INSTANCE, ANI_G_ARC), 1u);
+
+	omci_engine_tick(fx.eng, 561u);
+	CHECK_EQ(sent_of(MT_AVC, &f), 1u);
+	if (f != NULL) {
+		CHECK_EQ(f[8], 0x01u);
+		CHECK_EQ(f[9], 0x00u);
+		CHECK_EQ(f[10], 0u);
+	}
+	CHECK_EQ(mib_u8(fx.mib, ME_ANI_G, ANI_G_INSTANCE, ANI_G_ARC), 0u);
+
+	/* The OLT holds it clear, as it is: nothing to notify. */
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	/* Reporting has resumed. */
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 562u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 1u);
+
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_alarm_reporting_control_the_olt_ends(void)
+{
+	hw_all_clear();
+	omci_hw_pon_force(false, false, 0u);
+
+	struct omci_t_fixture fx;
+	const uint8_t *f = NULL;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	/* An interval of 255 never ends. */
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0B01u, ME_ANI_G, ANI_G_INSTANCE,
+			    ANI_G_ARC_INTERVAL, 255u),
+		 RESULT_OK);
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0B02u, ME_ANI_G, ANI_G_INSTANCE,
+			    ANI_G_ARC, 1u),
+		 RESULT_OK);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 700u);
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 701u);
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, false);
+	omci_engine_tick(fx.eng, 702u);
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 702u + 255u * 60u + 100u);
+	CHECK_EQ(sent_of(MT_AVC, NULL), 0u);
+	CHECK_EQ(sent_of(MT_ALARM, NULL), 0u);
+
+	/* The OLT ends it: the alarm it never heard of is notified. */
+	CHECK_EQ(olt_set_u8(fx.eng, 0x0B03u, ME_ANI_G, ANI_G_INSTANCE,
+			    ANI_G_ARC, 0u),
+		 RESULT_OK);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 702u + 255u * 60u + 101u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL)
+		CHECK(bit_of(&f[8], 0));
+
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_get_all_alarms_restarts_the_sequence(void)
+{
+	hw_all_clear();
+	omci_hw_pon_force(false, false, 0u);
+
+	struct omci_t_fixture fx;
+	const uint8_t *f = NULL;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 10u);
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, false);
+	omci_engine_tick(fx.eng, 11u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 2u);
+	if (f != NULL)
+		CHECK_EQ(f[8 + 31], 2u);
+
+	CHECK_EQ(get_all_alarms(fx.eng, 0x0C01u, 0u), 0u);
+
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_t_tx_reset();
+	omci_engine_tick(fx.eng, 12u);
+	CHECK_EQ(sent_of(MT_ALARM, &f), 1u);
+	if (f != NULL)
+		CHECK_EQ(f[8 + 31], 1u);
+
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_an_idle_alarm_upload_ends(void)
+{
+	hw_all_clear();
+	omci_hw_pon_force(false, false, 0u);
+
+	struct omci_t_fixture fx;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	omci_hw_alarm_force(OMCI_HW_ALARM_LOS, true);
+	omci_engine_tick(fx.eng, 100u);
+	CHECK_EQ(get_all_alarms(fx.eng, 0x0D01u, 0u), 1u);
+
+	/* A minute between commands is allowed ... */
+	omci_engine_tick(fx.eng, 160u);
+	CHECK_EQ(get_all_alarms_next(fx.eng, 0x0D02u, 0u), ME_ANI_G);
+	omci_engine_tick(fx.eng, 220u);
+	CHECK_EQ(get_all_alarms_next(fx.eng, 0x0D03u, 0u), ME_ANI_G);
+
+	/* ... more ends the upload. */
+	omci_engine_tick(fx.eng, 281u);
+	CHECK_EQ(get_all_alarms_next(fx.eng, 0x0D04u, 0u), 0u);
+
+	omci_t_down(&fx);
+	hw_all_clear();
+}
+
+static void test_a_set_out_of_range_is_refused(void)
+{
+	struct omci_t_fixture fx;
+
+	if (!fixture_with_defaults(&fx))
+		return;
+
+	static const struct {
+		uint8_t attr;
+		uint8_t value;
+		uint8_t result;
+	} sets[] = {
+		{ ANI_G_SF, 2u, RESULT_PARAM_ERROR },
+		{ ANI_G_SF, 9u, RESULT_PARAM_ERROR },
+		{ ANI_G_SF, 3u, RESULT_OK },
+		{ ANI_G_SF, 8u, RESULT_OK },
+		{ ANI_G_SD, 3u, RESULT_PARAM_ERROR },
+		{ ANI_G_SD, 11u, RESULT_PARAM_ERROR },
+		{ ANI_G_SD, 4u, RESULT_OK },
+		{ ANI_G_SD, 10u, RESULT_OK },
+		{ ANI_G_ARC, 2u, RESULT_PARAM_ERROR },
+		{ ANI_G_ARC, 1u, RESULT_OK },
+		{ ANI_G_ARC, 0u, RESULT_OK },
+		{ ANI_G_ARC_INTERVAL, 200u, RESULT_OK },
+	};
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(sets); i++) {
+		const uint8_t before =
+			mib_u8(fx.mib, ME_ANI_G, ANI_G_INSTANCE, sets[i].attr);
+
+		CHECK_EQ(olt_set_u8(fx.eng, (uint16_t)(0x0E01u + i), ME_ANI_G,
+				    ANI_G_INSTANCE, sets[i].attr,
+				    sets[i].value),
+			 sets[i].result);
+		CHECK_EQ(mib_u8(fx.mib, ME_ANI_G, ANI_G_INSTANCE, sets[i].attr),
+			 sets[i].result == RESULT_OK ? sets[i].value : before);
+	}
+
+	omci_t_down(&fx);
+}
+
 int main(void)
 {
 	RUN(test_a_raised_alarm_reaches_the_bitmap);
@@ -478,5 +1034,16 @@ int main(void)
 	RUN(test_only_one_alarm_plane);
 	RUN(test_a_failed_read_keeps_the_last_known_state);
 	RUN(test_the_engine_answers_when_the_driver_is_silent);
+	RUN(test_the_rate_is_judged_from_the_receiver);
+	RUN(test_suppressed_alarms_are_kept_but_not_told);
+	RUN(test_no_room_for_another_entity);
+	RUN(test_the_tick_notifies_each_change);
+	RUN(test_an_entity_the_mib_lacks_is_not_notified);
+	RUN(test_the_tick_judges_the_bit_error_rate);
+	RUN(test_alarm_reporting_control_ends_by_itself);
+	RUN(test_alarm_reporting_control_the_olt_ends);
+	RUN(test_get_all_alarms_restarts_the_sequence);
+	RUN(test_an_idle_alarm_upload_ends);
+	RUN(test_a_set_out_of_range_is_refused);
 	return OMCI_T_REPORT("test_alarm");
 }

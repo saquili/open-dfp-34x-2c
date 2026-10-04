@@ -113,7 +113,7 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		{ OMCI_CASE_MSGTYPE, 256u, 0x7b94fe45u },
 		{ OMCI_CASE_MTCLASS, 896u, 0x321cec05u },
 		{ OMCI_CASE_REACH, 9314u, 0x16846caau },
-		{ OMCI_CASE_POPULATED, 554u, 0xc812b150u },
+		{ OMCI_CASE_POPULATED, 554u, 0x4f81d991u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(pin); k++) {
 		CHECK_EQ(omci_case_count(pin[k].axis), pin[k].cases);
@@ -152,7 +152,7 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 	omci_case_prepare(OMCI_CASE_REACH, g_mib);
 	omci_case_prepare(OMCI_CASE_POPULATED, g_mib);
 	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x16846caau);
-	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0xc812b150u);
+	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0x4f81d991u);
 	omci_mib_fini(g_mib);
 }
 
@@ -324,9 +324,9 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 	CHECK_EQ(answered, n);
 
 	CHECK_EQ(no_result_byte, 70u);
-	CHECK_EQ(results[0], 715u);
+	CHECK_EQ(results[0], 711u);
 	CHECK_EQ(results[2], 92u);
-	CHECK_EQ(results[3], 8399u);
+	CHECK_EQ(results[3], 8403u);
 	CHECK_EQ(results[4], 3u);
 	CHECK_EQ(results[5], 3u);
 	CHECK_EQ(results[9], 32u);

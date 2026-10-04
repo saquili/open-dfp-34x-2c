@@ -328,6 +328,33 @@ void omci_hw_alarm_force(enum omci_hw_alarm alarm, bool asserted)
 		g_alarm_mask &= ~(1u << (unsigned int)alarm);
 }
 
+static struct omci_hw_pon g_pon;
+static bool g_pon_fail;
+
+enum omci_status omci_hw_pon(struct omci_hw_pon *out)
+{
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	if (g_pon_fail) {
+		omci_wire_fill(out, 0, sizeof(*out));
+		return OMCI_ERR_HW;
+	}
+	*out = g_pon;
+	return OMCI_OK;
+}
+
+void omci_hw_pon_force(bool operating, bool bip_valid, uint64_t bip_errors)
+{
+	g_pon.operating = operating;
+	g_pon.bip_valid = bip_valid;
+	g_pon.bip_errors = bip_errors;
+}
+
+void omci_hw_pon_fail_next(bool fail)
+{
+	g_pon_fail = fail;
+}
+
 #define STUB_PORTS 8u
 #define STUB_CTRS 80u
 static uint64_t g_ctr[STUB_PORTS][STUB_CTRS];
@@ -425,6 +452,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.tcont_apply = omci_hw_tcont_apply,
 	.bridge_apply = omci_hw_bridge_apply,
 	.alarms = omci_hw_alarms,
+	.pon = omci_hw_pon,
 	.counter = omci_hw_counter,
 	.optics = omci_hw_optics,
 };

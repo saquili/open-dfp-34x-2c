@@ -24,6 +24,10 @@
 /* The most entities that can carry an alarm at the same time. */
 #define OMCI_ALARM_MAX_ENTITIES 8u
 
+/* The ANI-G, which carries the alarms of the PON side, and its one instance. */
+#define OMCI_ALARM_ANI_G 263u
+#define OMCI_ALARM_ANI_G_INSTANCE 0x8001u
+
 /**
  * struct omci_alarm_entry - The alarms of one entity.
  * @class_id: the class
@@ -52,9 +56,30 @@ __must_check enum omci_status omci_alarm_init(struct omci_alarm **out);
 void omci_alarm_fini(struct omci_alarm *al);
 
 /**
+ * omci_alarm_judge() - Judge the bit error rate of the downstream.
+ * @al: the state
+ * @now_sec: the time, in seconds of a clock that never goes back
+ * @sf: the signal fail threshold of the ANI-G, the k of a rate of 10^-k
+ * @sd: the signal degrade threshold of the ANI-G, likewise
+ *
+ * Takes the count of BIP errors of the receiver and declares or clears
+ * signal fail and signal degrade (omci_ber_judge()), which the next
+ * omci_alarm_poll() reports. While the ONU is not in operation, or the
+ * count is not to be had, there is no rate to judge: the history is
+ * dropped and both clear.
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL, or the failure of the read.
+ */
+__must_check enum omci_status omci_alarm_judge(struct omci_alarm *al,
+					       uint64_t now_sec, uint8_t sf,
+					       uint8_t sd);
+
+/**
  * omci_alarm_poll() - Read the alarms of the hardware.
  * @al: the state
  * @changed: set when any bitmap changed since the last poll; may be NULL
+ *
+ * The alarms omci_alarm_judge() declared are reported with them.
  *
  * Return: %OMCI_OK, %OMCI_ERR_INVAL, or the failure of the hardware read,
  * which leaves the state as it was.
@@ -63,13 +88,46 @@ __must_check enum omci_status omci_alarm_poll(struct omci_alarm *al,
 					      bool *changed);
 
 /**
+ * omci_alarm_suppress() - Hold back the notifications of an entity, or not.
+ * @al: the state
+ * @class_id: the class
+ * @instance: the instance
+ * @suppressed: true while the entity is under alarm-reporting control
+ *	(G.988 A.1.4.3): its alarms are kept, and reported by Get all alarms
+ *	unless the OLT asks for the others only, but not notified
+ */
+void omci_alarm_suppress(struct omci_alarm *al, uint16_t class_id,
+			 uint16_t instance, bool suppressed);
+
+/**
+ * omci_alarm_standing() - Whether an alarm of an entity stands.
+ * @al: the state
+ * @class_id: the class
+ * @instance: the instance
+ *
+ * Return: true when any alarm of the entity stands.
+ */
+__must_check bool omci_alarm_standing(const struct omci_alarm *al,
+				      uint16_t class_id, uint16_t instance);
+
+/**
  * omci_alarm_snapshot() - Freeze the standing alarms for Get all alarms.
  * @al: the state
+ * @skip_suppressed: leave out the entities under alarm-reporting control
+ *
+ * What is frozen is what the OLT knows from then on: an entity left out is
+ * clear to it, and a later change is notified against that.
  *
  * Return: the number of entities with an alarm, which is the number of
  * Get all alarms next commands the OLT may send.
  */
-uint16_t omci_alarm_snapshot(struct omci_alarm *al);
+uint16_t omci_alarm_snapshot(struct omci_alarm *al, bool skip_suppressed);
+
+/**
+ * omci_alarm_snapshot_drop() - Discard the frozen alarms.
+ * @al: the state, or NULL
+ */
+void omci_alarm_snapshot_drop(struct omci_alarm *al);
 
 /**
  * omci_alarm_snapshot_get() - One entity of the frozen alarms.
@@ -94,15 +152,19 @@ void omci_alarm_build_notification(struct omci_alarm *al,
 				   uint8_t out[static OMCI_FRAME_LEN]);
 
 /**
- * omci_alarm_changed() - The entities whose alarms changed at the last poll.
+ * omci_alarm_take_changes() - The entities whose alarms the OLT has not heard.
  * @al: the state
  * @out: the entities
  * @cap: room in @out
  *
+ * Each entity not under alarm-reporting control whose alarms differ from
+ * what the OLT was last told, by a notification or a Get all alarms, is
+ * written once, and counted as told.
+ *
  * Return: how many were written.
  */
-size_t omci_alarm_changed(const struct omci_alarm *al,
-			  struct omci_alarm_entry *out, size_t cap);
+size_t omci_alarm_take_changes(struct omci_alarm *al,
+			       struct omci_alarm_entry *out, size_t cap);
 
 /**
  * omci_alarm_reset_sequence() - Start the alarm sequence number again at 1.

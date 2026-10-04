@@ -18,12 +18,15 @@
 #include "me/table.h"
 #include "me/tables.h"
 #include "me/upload.h"
+#include "me/values.h"
 #include "me/vlan.h"
 #include "omci/attrmask.h"
+#include "omcid/array_size.h"
 #include "omcid/byteorder.h"
 #include "omcid/ctl_proto.h"
 #include "me/pm.h"
 #include "omci/alarm.h"
+#include "omci/ber.h"
 #include "omci/clock.h"
 #include "omci/engine.h"
 #include "omci/notify.h"
@@ -77,6 +80,35 @@ struct get_next_transfer {
 	/* the table generation of the MIB when the read opened */
 	uint32_t generation;
 };
+
+/* The attributes of the ANI-G the alarms are judged by (G.988 9.2.1). */
+#define ANI_G_SF 6u
+#define ANI_G_SD 7u
+#define ANI_G_ARC 8u
+#define ANI_G_ARC_INTERVAL 9u
+
+/*
+ * The entities under alarm-reporting control (G.988 A.1.4.3), with the
+ * attribute that turns it on and the one that gives its interval.
+ */
+static const struct {
+	uint16_t class_id;
+	uint16_t instance;
+	uint8_t arc;
+	uint8_t interval;
+} g_arc[] = {
+	{ OMCI_ALARM_ANI_G, OMCI_ALARM_ANI_G_INSTANCE, ANI_G_ARC,
+	  ANI_G_ARC_INTERVAL },
+};
+
+/* An ARC interval that never ends. */
+#define ARC_FOREVER 255u
+
+/*
+ * The time the OLT may leave between the commands of an alarm upload
+ * before the ONU takes it as ended (G.988 A.1.4.2).
+ */
+#define ALARM_UPLOAD_IDLE_SEC 60u
 
 /* The result codes of a response (G.988 A.1.1). */
 enum omci_result {
@@ -151,6 +183,20 @@ struct omci_engine {
 
 	struct omci_clock clock;
 	uint64_t now_sec;
+
+	/*
+	 * The alarms: the second they were last judged, the time of the last
+	 * command of the alarm upload, and for each entity of g_arc whether its
+	 * alarm-reporting control is on and since when it has been trouble
+	 * free.
+	 */
+	bool alarms_judged;
+	uint64_t alarm_sec;
+	uint64_t alarm_upload_sec;
+	struct {
+		bool on;
+		uint64_t since;
+	} arc[ARRAY_SIZE(g_arc)];
 };
 
 static struct omci_engine g_engine;
@@ -887,6 +933,14 @@ static enum omci_status set_one(struct omci_engine *eng,
 {
 	struct omci_me_table_policy policy;
 
+	if (!omci_me_value_allowed(req->class_id, attr_no, value)) {
+		OMCI_WARN(
+			"set: %u/%u attribute %u (%s) does not take %u — refused",
+			req->class_id, req->instance, attr_no, a->name,
+			value[0]);
+		return OMCI_DECLINED;
+	}
+
 	if (!omci_me_table_policy(req->class_id, attr_no, &policy)) {
 		(void)!omci_mib_attr_set_by_olt(eng->mib, req->class_id,
 						req->instance, attr_no, value,
@@ -1179,6 +1233,103 @@ static void handle_get_inner(struct omci_engine *eng,
 	reply(eng, req, RESULT_OK, body, off);
 }
 
+/* A one-byte attribute of the ANI-G, or @absent. */
+static uint8_t ani_g_u8(const struct omci_engine *eng, uint8_t attr,
+			uint8_t absent)
+{
+	uint8_t v = absent;
+
+	(void)!omci_mib_attr_get(eng->mib, OMCI_ALARM_ANI_G,
+				 OMCI_ALARM_ANI_G_INSTANCE, attr, &v, sizeof(v),
+				 NULL);
+	return v;
+}
+
+/*
+ * Alarm-reporting control (G.988 A.1.4.3). While the OLT has it on, the
+ * alarms of the entity are kept but not notified. It ends by itself once
+ * the entity has been trouble free for the interval, in minutes, which an
+ * alarm starts again; the ONU then turns it off and says so with an
+ * attribute value change. An interval of 255 never ends.
+ */
+static void arc_tick(struct omci_engine *eng)
+{
+	for (size_t i = 0; i < ARRAY_SIZE(g_arc); i++) {
+		const uint16_t cls = g_arc[i].class_id;
+		const uint16_t inst = g_arc[i].instance;
+		uint8_t on = 0, minutes = 0;
+
+		(void)!omci_mib_attr_get(eng->mib, cls, inst, g_arc[i].arc, &on,
+					 sizeof(on), NULL);
+		(void)!omci_mib_attr_get(eng->mib, cls, inst, g_arc[i].interval,
+					 &minutes, sizeof(minutes), NULL);
+
+		if (on != 1u) {
+			eng->arc[i].on = false;
+			omci_alarm_suppress(eng->alarm, cls, inst, false);
+			continue;
+		}
+
+		if (!eng->arc[i].on ||
+		    omci_alarm_standing(eng->alarm, cls, inst))
+			eng->arc[i].since = eng->now_sec;
+		eng->arc[i].on = true;
+		omci_alarm_suppress(eng->alarm, cls, inst, true);
+
+		if (minutes == ARC_FOREVER ||
+		    eng->now_sec - eng->arc[i].since < (uint64_t)minutes * 60u)
+			continue;
+
+		const uint8_t off = 0;
+
+		OMCI_INFO(
+			"alarm: %u/%u trouble free for %u min — reporting resumes",
+			cls, inst, minutes);
+		(void)!omci_mib_attr_set(eng->mib, cls, inst, g_arc[i].arc,
+					 &off, sizeof(off));
+		eng->arc[i].on = false;
+		omci_alarm_suppress(eng->alarm, cls, inst, false);
+	}
+}
+
+/*
+ * Once a second: judge the bit error rate, read the alarms, apply
+ * alarm-reporting control, and notify the OLT of each entity whose alarms
+ * changed (G.988 A.1.4). Only an entity the MIB holds is notified.
+ */
+static void alarms_tick(struct omci_engine *eng)
+{
+	const uint8_t sf = ani_g_u8(eng, ANI_G_SF, OMCI_BER_SF_DEFAULT);
+	const uint8_t sd = ani_g_u8(eng, ANI_G_SD, OMCI_BER_SD_DEFAULT);
+
+	(void)!omci_alarm_judge(eng->alarm, eng->now_sec, sf, sd);
+	if (omci_alarm_poll(eng->alarm, NULL) != OMCI_OK) {
+		OMCI_DEBUG("alarm: the hardware did not answer");
+		return;
+	}
+	arc_tick(eng);
+
+	struct omci_alarm_entry changed[OMCI_ALARM_MAX_ENTITIES];
+	const size_t n = omci_alarm_take_changes(eng->alarm, changed,
+						 ARRAY_SIZE(changed));
+
+	for (size_t i = 0; i < n; i++) {
+		if (!omci_mib_exists(eng->mib, changed[i].class_id,
+				     changed[i].instance))
+			continue;
+
+		uint8_t frame[OMCI_FRAME_LEN];
+
+		OMCI_INFO(
+			"alarm: notifying %u/%u, alarms %02x %02x, sequence %u",
+			changed[i].class_id, changed[i].instance,
+			changed[i].bitmap[0], changed[i].bitmap[1],
+			omci_alarm_sequence(eng->alarm));
+		omci_alarm_build_notification(eng->alarm, &changed[i], frame);
+		transmit(eng, frame);
+	}
+}
+
 /*
  * Get all alarms (G.988 A.3.9, A.3.10): read the alarms, freeze them, and
  * answer the number of Get all alarms next commands they take.
@@ -1197,14 +1348,22 @@ static void handle_get_all_alarms(struct omci_engine *eng,
 		.instance = req->instance,
 	};
 
-	bool changed = false;
+	/*
+	 * The alarm sequence number starts again, and with the retrieval mode
+	 * at 1 the entities under alarm-reporting control are left out
+	 * (G.988 A.1.4.2).
+	 */
+	const bool skip_suppressed = req->contents[0] == 1u;
 
-	if (omci_alarm_poll(eng->alarm, &changed) != OMCI_OK)
+	omci_alarm_reset_sequence(eng->alarm);
+
+	if (omci_alarm_poll(eng->alarm, NULL) != OMCI_OK)
 		OMCI_WARN(
 			"get-all-alarms: hardware read failed; answering from the last known state");
 
-	const uint16_t count = omci_alarm_snapshot(eng->alarm);
+	const uint16_t count = omci_alarm_snapshot(eng->alarm, skip_suppressed);
 
+	eng->alarm_upload_sec = eng->now_sec;
 	omci_be16_store(&rsp.contents[0], count);
 
 	uint8_t frame[OMCI_FRAME_LEN];
@@ -1221,6 +1380,12 @@ void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec)
 
 	omci_pm_set_wall(eng->pm, omci_clock_now(&eng->clock, now_sec));
 	(void)omci_pm_tick(eng->pm, now_sec);
+
+	if (!eng->alarms_judged || now_sec != eng->alarm_sec) {
+		eng->alarms_judged = true;
+		eng->alarm_sec = now_sec;
+		alarms_tick(eng);
+	}
 }
 
 static void handle_get(struct omci_engine *eng, const struct omci_frame *req)
@@ -1263,6 +1428,11 @@ static void handle_get_all_alarms_next(struct omci_engine *eng,
 	};
 
 	const uint16_t seq = (uint16_t)omci_be16(&req->contents[0]);
+
+	/* An upload left idle for a minute has ended (G.988 A.1.4.2). */
+	if (eng->now_sec - eng->alarm_upload_sec > ALARM_UPLOAD_IDLE_SEC)
+		omci_alarm_snapshot_drop(eng->alarm);
+	eng->alarm_upload_sec = eng->now_sec;
 
 	struct omci_alarm_entry entry;
 

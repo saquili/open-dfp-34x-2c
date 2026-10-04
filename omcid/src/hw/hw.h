@@ -4,7 +4,8 @@
 /*
  * The daemon's view of the hardware: what the device has, and the few
  * things the daemon asks of it: VLAN rules, GEM ports and bridges to
- * program, alarms, counters and optical readings to read. A backend fills
+ * program, alarms, counters, the state of the PON receiver and optical
+ * readings to read. A backend fills
  * in struct omci_hw_ops; the functions declared here are the host backend,
  * which tests use.
  */
@@ -376,6 +377,35 @@ void omci_hw_alarm_fail_next(bool fail);
 #endif
 
 /**
+ * struct omci_hw_pon - The state of the PON receiver.
+ * @bip_errors: the downstream BIP errors counted since the receiver came up,
+ *	each taken as one bit in error
+ * @operating: the ONU is in operation, the state O5
+ * @bip_valid: @bip_errors was read
+ */
+struct omci_hw_pon {
+	uint64_t bip_errors;
+	bool operating;
+	bool bip_valid;
+};
+
+/**
+ * omci_hw_pon() - Read the state of the PON receiver (host backend).
+ * @out: the state
+ *
+ * Return: %OMCI_OK, or the failure of the read.
+ */
+__must_check enum omci_status omci_hw_pon(struct omci_hw_pon *out);
+
+#if defined(OMCID_HW_STUB)
+
+/* Test hooks of the host backend for the PON receiver. */
+void omci_hw_pon_force(bool operating, bool bip_valid, uint64_t bip_errors);
+
+void omci_hw_pon_fail_next(bool fail);
+#endif
+
+/**
  * omci_hw_counter() - Read a counter of the switch (host backend).
  * @port: the switch port
  * @idx: the counter, in the order the switch keeps them
@@ -456,6 +486,7 @@ void omci_hw_optics_reset(void);
  *	hardware binds the Alloc-IDs itself
  * @bridge_apply: replace the bridges
  * @alarms: read the alarms
+ * @pon: read the state of the PON receiver
  * @counter: read a counter of the switch
  * @optics: read the transceiver
  * @set_router: route instead of bridging (true), or bridge again (false):
@@ -477,6 +508,7 @@ struct omci_hw_ops {
 					 size_t n,
 					 struct omci_hw_reject *rejected);
 	enum omci_status (*alarms)(uint32_t *mask);
+	enum omci_status (*pon)(struct omci_hw_pon *out);
 	enum omci_status (*counter)(unsigned int port, unsigned int idx,
 				    uint64_t *out);
 	enum omci_status (*optics)(struct omci_hw_optics *out);

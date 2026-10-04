@@ -9,6 +9,7 @@
 
 #include "me/table.h"
 #include "me/upload.h"
+#include "me/values.h"
 #include "mib/store.h"
 #include "omci/attrmask.h"
 #include "omcid/array_size.h"
@@ -517,6 +518,21 @@ static bool value_writable(const struct omci_me_attr *a)
 	       !omci_me_attr_is_table(a) && a->size <= 30u;
 }
 
+/*
+ * A value for a Set that a Get then reads back: the present value with
+ * bits flipped, or, for an attribute that does not take that, the next
+ * value after the present one that it takes.
+ */
+static void other_value(uint16_t cls, uint8_t attr, const uint8_t *cur,
+			size_t size, uint8_t *out)
+{
+	for (size_t i = 0; i < size; i++)
+		out[i] = (uint8_t)(cur[i] ^ 0x5Au);
+	for (unsigned int step = 1;
+	     step < 256u && !omci_me_value_allowed(cls, attr, out); step++)
+		out[0] = (uint8_t)(cur[0] + step);
+}
+
 static void current(const struct omci_mib *mib, unsigned int k, uint8_t attr,
 		    uint8_t cur[static 64])
 {
@@ -849,8 +865,8 @@ static void populated_prepare(const struct omci_mib *mib)
 
 			body[0] = (uint8_t)(bit >> 8);
 			body[1] = (uint8_t)bit;
-			for (size_t i = 0; i < a->size; i++)
-				body[2 + i] = (uint8_t)(cur[i] ^ 0x5Au);
+			other_value(g_minst[k].cls, attr, cur, a->size,
+				    &body[2]);
 			madd(s, true, MT_SET, g_minst[k].cls, g_minst[k].id,
 			     body, 2u + a->size, K_SETGET_SET, attr, 0);
 			madd(s, true, MT_GET, g_minst[k].cls, g_minst[k].id,

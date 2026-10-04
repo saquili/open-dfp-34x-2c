@@ -21,6 +21,7 @@ enum {
 	C_GEM,
 	C_BRIDGE,
 	C_ALARMS,
+	C_PON,
 	C_COUNTER,
 	C_OPTICS,
 	C_COUNT
@@ -62,6 +63,11 @@ static enum omci_status spy_alarms(uint32_t *mask)
 	g_calls[C_ALARMS]++;
 	return g_host->alarms(mask);
 }
+static enum omci_status spy_pon(struct omci_hw_pon *out)
+{
+	g_calls[C_PON]++;
+	return g_host->pon(out);
+}
 static enum omci_status spy_counter(unsigned int port, unsigned int idx,
 				    uint64_t *out)
 {
@@ -81,6 +87,7 @@ static const struct omci_hw_ops g_spy = {
 	.gem_apply = spy_gem,
 	.bridge_apply = spy_bridge,
 	.alarms = spy_alarms,
+	.pon = spy_pon,
 	.counter = spy_counter,
 	.optics = spy_optics,
 };
@@ -126,6 +133,7 @@ static void test_the_table_is_complete_and_is_the_host_backends(void)
 	CHECK(t->gem_apply != NULL);
 	CHECK(t->bridge_apply != NULL);
 	CHECK(t->alarms != NULL);
+	CHECK(t->pon != NULL);
 	CHECK(t->counter != NULL);
 	CHECK(t->optics != NULL);
 
@@ -163,6 +171,9 @@ static void test_every_kind_of_request_reaches_the_table(void)
 
 	request(fx.eng, 0x0A03u, 11u, 2u, 0u, 0u);
 	CHECK(g_calls[C_ALARMS] >= 1u);
+
+	omci_engine_tick(fx.eng, 1u);
+	CHECK(g_calls[C_PON] >= 1u);
 
 	request(fx.eng, 0x0A04u, 4u, 322u, 0x0101u, 0u);
 	request(fx.eng, 0x0A05u, 9u, 322u, 0x0101u, 0x40u);

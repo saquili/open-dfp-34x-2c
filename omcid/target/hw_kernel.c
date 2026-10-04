@@ -1476,7 +1476,8 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 
 /*
  * The alarms of the PON device. The driver reports loss of signal, of frame
- * and of the message channel; signal fail and degrade it does not report.
+ * and of the message channel; signal fail and degrade it does not report,
+ * and the daemon judges them from the BIP errors (kernel_pon()).
  */
 static enum omci_status kernel_alarms(uint32_t *mask)
 {
@@ -1503,6 +1504,60 @@ static enum omci_status kernel_alarms(uint32_t *mask)
 	if (alarms & PON_ALARM_LOM)
 		*mask |= 1u << OMCI_HW_ALARM_LOM;
 
+	return OMCI_OK;
+}
+
+/* An unsigned attribute of four or eight bytes, in full. */
+static bool nla_uint64(const uint8_t *v, uint16_t len, uint64_t *out)
+{
+	uint32_t v32;
+
+	if (len == 8) {
+		memcpy(out, v, sizeof(*out));
+		return true;
+	}
+	if (len != 4)
+		return false;
+	memcpy(&v32, v, sizeof(v32));
+	*out = v32;
+	return true;
+}
+
+/*
+ * The state of the PON receiver: whether the ONU is in operation, and the
+ * BIP errors of the downstream among the counters, which the driver reports
+ * only while the PON is up.
+ */
+static enum omci_status kernel_pon(struct omci_hw_pon *out)
+{
+	struct pon_dev_attrs a;
+	uint8_t buf[4096] __aligned(4);
+	const uint8_t *p, *end;
+
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	memset(out, 0, sizeof(*out));
+
+	if (pon_dev_get(&a, buf, sizeof(buf)))
+		return OMCI_ERR_HW;
+
+	out->operating = pon_attr_u32(&a, PON_A_DEV_ONU_STATE, 0) ==
+			 PON_ONU_STATE_O5;
+
+	p = a.val[PON_A_DEV_STATS];
+	end = p ? p + a.len[PON_A_DEV_STATS] : NULL;
+	while (p && p + NLA_HDRLEN_ <= end) {
+		uint16_t alen = *(const uint16_t *)p;
+		uint16_t atype = *(const uint16_t *)(p + 2) & 0x3fff;
+
+		if (alen < NLA_HDRLEN_ || p + alen > end)
+			break;
+		if (atype == PON_A_DEV_STATS_BIP_ERRORS)
+			out->bip_valid = nla_uint64(p + NLA_HDRLEN_,
+						    alen - NLA_HDRLEN_,
+						    &out->bip_errors);
+		p += NL_ALIGN(alen);
+	}
 	return OMCI_OK;
 }
 
@@ -2144,6 +2199,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.tcont_apply = kernel_tcont_apply,
 	.bridge_apply = kernel_bridge_apply,
 	.alarms = kernel_alarms,
+	.pon = kernel_pon,
 	.counter = kernel_counter,
 	.optics = kernel_optics,
 	.set_router = omci_hw_kernel_router,
