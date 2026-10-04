@@ -67,6 +67,7 @@ int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d)
 		[PON_A_DEV_NUM_GEM_PORTS] = &d->gem_ports,
 		[PON_A_DEV_NUM_TCONTS] = &d->tconts,
 		[PON_A_DEV_NUM_TCONT_QUEUES] = &d->tcont_queues,
+		[PON_A_DEV_POWER_LEVEL] = &d->power_level,
 	};
 	const struct nlattr *a;
 
@@ -162,6 +163,20 @@ static void print_u32(FILE *f, const struct pon_dev *d, unsigned int attr,
 		fprintf(f, "  %s %u", label, v);
 }
 
+static const char *power_level_name(uint32_t level)
+{
+	switch (level) {
+	case PON_POWER_LEVEL_LOW:
+		return "low";
+	case PON_POWER_LEVEL_MEDIUM:
+		return "medium";
+	case PON_POWER_LEVEL_HIGH:
+		return "high";
+	default:
+		return "unknown";
+	}
+}
+
 static void print_alarms(FILE *f, uint32_t alarms)
 {
 	fputs("  alarms", f);
@@ -226,6 +241,8 @@ void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 	print_u32(f, d, PON_A_DEV_NUM_TCONTS, "T-CONTs up to", d->tconts);
 	print_u32(f, d, PON_A_DEV_NUM_TCONT_QUEUES, "queues each",
 		  d->tcont_queues);
+	if (has(d, PON_A_DEV_POWER_LEVEL))
+		fprintf(f, "  power level %s", power_level_name(d->power_level));
 	if (!has(d, PON_A_DEV_SERIAL_NUMBER)) {
 		fputs("  serial number not set", f);
 	} else if (!serial) {

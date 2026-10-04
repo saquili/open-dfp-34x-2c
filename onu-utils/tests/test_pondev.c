@@ -17,6 +17,8 @@
 #include "gemlink.h"
 #include "pondev.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 static int checks, failures;
 
 #define CHECK(cond)                                                      \
@@ -65,6 +67,7 @@ static struct nlmsghdr *full_dev(char *buf)
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_GEM_PORTS, 2);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_TCONTS, 1);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_TCONT_QUEUES, 8);
+	mnl_attr_put_u32(nlh, PON_A_DEV_POWER_LEVEL, PON_POWER_LEVEL_MEDIUM);
 	return nlh;
 }
 
@@ -95,6 +98,10 @@ static void test_a_full_device_is_read(void)
 	CHECK(d.have & (1u << PON_A_DEV_SERIAL_NUMBER));
 }
 
+/* The second line of the full device, after its alarms. */
+static const char CAPACITIES[] =
+	"alarms none  GEM ports up to 2  T-CONTs up to 1  queues each 8  power level medium";
+
 static void test_the_serial_number_is_printed_only_when_asked(void)
 {
 	char buf[MNL_SOCKET_BUFFER_SIZE];
@@ -105,7 +112,7 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	hidden = printed(&d, false);
 	shown = printed(&d, true);
 	CHECK(strstr(hidden, "pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3"));
-	CHECK(strstr(hidden, "alarms none  GEM ports up to 2  T-CONTs up to 1  queues each 8"));
+	CHECK(strstr(hidden, CAPACITIES));
 	CHECK(strstr(hidden, "serial number set (-s shows it)"));
 	CHECK(!strstr(hidden, "ABCD"));
 	CHECK(strstr(shown, "serial number ABCD12345678"));
@@ -114,6 +121,31 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	CHECK(!strstr(hidden, "GEM frames"));
 	free(hidden);
 	free(shown);
+}
+
+static void test_power_levels_are_named(void)
+{
+	static const struct {
+		uint32_t level;
+		const char *name;
+	} levels[] = {
+		{ PON_POWER_LEVEL_LOW, "power level low" },
+		{ PON_POWER_LEVEL_HIGH, "power level high" },
+		{ 7, "power level unknown" },
+	};
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(levels); i++) {
+		char buf[MNL_SOCKET_BUFFER_SIZE];
+		struct nlmsghdr *nlh = message(buf, PON_CMD_DEV_CHANGE_NTF);
+		struct pon_dev d;
+		char *text;
+
+		mnl_attr_put_u32(nlh, PON_A_DEV_POWER_LEVEL, levels[i].level);
+		CHECK(pon_dev_parse(nlh, &d) == 0);
+		text = printed(&d, false);
+		CHECK(strstr(text, levels[i].name));
+		free(text);
+	}
 }
 
 static void test_alarms_and_states_are_named(void)
@@ -348,6 +380,7 @@ int main(void)
 	test_a_full_device_is_read();
 	test_the_serial_number_is_printed_only_when_asked();
 	test_alarms_and_states_are_named();
+	test_power_levels_are_named();
 	test_a_malformed_attribute_is_refused();
 	test_a_tcont_is_read();
 	test_an_idle_tcont_prints_as_idle();
