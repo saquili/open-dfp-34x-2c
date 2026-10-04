@@ -160,6 +160,14 @@ The runs, the oldest first:
     warning thresholds. 42 of 42 passed; omcid raised no alarm on the clean
     line, at power level high.
 
+``2026-10-04-run17``
+    The same cases and the new ``data.vlan-priority`` on the RAM image built
+    from ``run17``: omcid matches the filter priority of the rules of
+    an extended VLAN tagging operation, takes the rules in the order of their
+    filters and lets a later rule that gives the same tag to other frames
+    work upstream only. 43 of 43 passed; of two priorities in one VLAN, the
+    translation of one rewrote that priority's frames alone.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
