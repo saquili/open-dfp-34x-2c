@@ -32,11 +32,11 @@
 
 /*
  * Queue 63, where the build points every GEM stream, not admitted, and where
- * deleting a GEM port points its stream again. No T-CONT the driver switches
- * on has it in its map, since a T-CONT only ever attaches the queue of its
- * own index in its group, 0 to 7 (RTL9602C_PON_TCONT_QUEUE()), and the build
- * empties the maps of T-CONTs 0 to 15, so frames on a parked stream are never
- * scheduled.
+ * deleting a GEM port points its stream again. It is also the highest queue
+ * of the last T-CONT the GEM ports use (rtl9602c_gem_tcont_qbit()): what keeps
+ * a parked stream's frames off the fibre is that the stream is not admitted,
+ * since a stream that is not admitted sends nothing even when its queue is
+ * scheduled (measured on this board).
  */
 #define RTL9602C_GEM_PARKING_QUEUE	RTL9602C_PON_QUEUE(15, 31)
 
@@ -56,21 +56,17 @@ static bool rtl9602c_gem_owns_netdev(struct pon_device *pon,
 }
 
 /*
- * Whether the GPON MAC holds an Alloc-ID for @tcont. T-CONT 16 always counts
- * as holding one: it takes the default Alloc-ID, which is assigned with the
- * ONU-ID (ITU-T G.984.3 clause 5.5.3). T-CONTs 0 to 15 hold one once the OLT
- * has assigned it with Assign_Alloc-ID, a PLOAM message, which may come
- * before or after the OMCI that creates a GEM port on the T-CONT.
+ * Whether the GPON MAC holds an Alloc-ID for the PON class's T-CONT @tcont.
+ * It holds one once the OLT has assigned it with Assign_Alloc-ID, a PLOAM
+ * message, which may come before or after the OMCI that creates a GEM port
+ * on the T-CONT.
  */
-static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u8 tcont)
+static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u32 tcont)
 {
 	lockdep_assert_held(&p->gpon_lock);
 
-	if (tcont == RTL9602C_GPON_DEFAULT_TCONT_IDX)
-		return true;
-	if (tcont >= RTL9602C_GPON_DEFAULT_TCONT_IDX)
-		return false;
-	return !!(p->gpon_tcont_used & BIT(tcont));
+	return tcont < RTL9602C_GEM_NUM_TCONT &&
+	       (p->gpon_tcont_used & BIT(rtl9602c_gem_tcont(tcont)));
 }
 
 /*
@@ -88,11 +84,10 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u8 tcont)
  * (rtl9602c_gem_restore()). rtl9602c_gem_tcont_ready() programs the upstream
  * half once the Alloc-ID comes.
  *
- * With the Alloc-ID, the T-CONT's own queue, the one of its place in its
- * group (RTL9602C_PON_TCONT_QUEUE()), is attached, the flow is given the
- * Port-ID its upstream GEM headers carry, and the stream is pointed at that
- * queue and admitted: every GEM port of a T-CONT sends through that one
- * queue.
+ * With the Alloc-ID, the T-CONT's queue of the highest priority is attached
+ * (rtl9602c_gem_tcont_qbit()), the flow is given the Port-ID its upstream
+ * GEM headers carry, and the stream is pointed at that queue and admitted:
+ * every GEM port of a T-CONT sends through that one queue.
  */
 static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f);
 
@@ -100,7 +95,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 				const struct pon_gem_config *cfg)
 {
 	u32 type = RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH;
-	unsigned int q;
+	unsigned int t, q;
 	int err;
 
 	if (cfg->multicast)
@@ -123,8 +118,9 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 			return 0;
 		}
 
-		q = RTL9602C_PON_TCONT_QUEUE(cfg->tcont);
-		err = rtl9602c_pon_queue_add(p, cfg->tcont, q);
+		t = rtl9602c_gem_tcont(cfg->tcont);
+		q = rtl9602c_gem_tcont_qbit(cfg->tcont, 0);
+		err = rtl9602c_pon_queue_add(p, t, q);
 		if (err)
 			return err;
 
@@ -132,7 +128,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 			     RTL9602C_GEM_US_FLOW_CFG_PORTID,
 			     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID,
 					cfg->port_id));
-		rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(cfg->tcont, q));
+		rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(t, q));
 		rtl9602c_ponmac_sid_valid(p, f, true);
 	}
 
@@ -176,13 +172,11 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	unsigned int f, last;
 	int err = 0;
 
-	/* T-CONT 16 is the OMCC's; GEM ports get T-CONTs 0 to 15. */
 	if ((cfg->direction & IFLA_GEM_DIR_UPSTREAM) &&
-	    cfg->tcont >= RTL9602C_GPON_DEFAULT_TCONT_IDX) {
+	    cfg->tcont >= RTL9602C_GEM_NUM_TCONT) {
 		NL_SET_ERR_MSG_FMT_MOD(extack,
 				       "No T-CONT %u: traffic uses T-CONTs 0 to %u",
-				       cfg->tcont,
-				       RTL9602C_GPON_DEFAULT_TCONT_IDX - 1);
+				       cfg->tcont, RTL9602C_GEM_NUM_TCONT - 1);
 		return -ERANGE;
 	}
 
@@ -480,7 +474,7 @@ void rtl9602c_gem_restore(struct rtl9602c_priv *p)
 /**
  * rtl9602c_gem_tcont_ready() - start the upstream of the GEM ports on a T-CONT
  * @p: the switch
- * @tcont: the T-CONT that has just been given an Alloc-ID
+ * @tcont: the PON class's T-CONT that has just been given an Alloc-ID
  *
  * Called when Assign_Alloc-ID binds an Alloc-ID to @tcont. Programs every
  * upstream GEM port on @tcont again, now with its upstream half, and logs
@@ -489,7 +483,7 @@ void rtl9602c_gem_restore(struct rtl9602c_priv *p)
  *
  * Context: gpon_lock held.
  */
-void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u8 tcont)
+void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u32 tcont)
 {
 	unsigned int f;
 
@@ -590,14 +584,15 @@ static int rtl9602c_tcont_get(struct pon_device *pon, unsigned int index,
 			      u16 *alloc_id)
 {
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	unsigned int t = rtl9602c_gem_tcont(index);
 	int err = -ENOENT;
 
-	if (index >= RTL9602C_GPON_DEFAULT_TCONT_IDX)
+	if (index >= RTL9602C_GEM_NUM_TCONT)
 		return -ERANGE;
 
 	mutex_lock(&p->gpon_lock);
-	if (p->gpon_tcont_used & BIT(index)) {
-		*alloc_id = p->gpon_alloc[index];
+	if (p->gpon_tcont_used & BIT(t)) {
+		*alloc_id = p->gpon_alloc[t];
 		err = 0;
 	}
 	mutex_unlock(&p->gpon_lock);
@@ -642,8 +637,8 @@ static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
  *
  * Registers the switch as the ONU behind its PON port, with all
  * RTL9602C_GPON_NUM_FLOW flows of the GPON MAC, although the OMCC's is never
- * given to a GEM port, and RTL9602C_GPON_DEFAULT_TCONT_IDX T-CONTs: the
- * scheduler has one more, which the OMCC keeps. Then attaches the receive
+ * given to a GEM port, and the RTL9602C_GEM_NUM_TCONT T-CONTs the GEM ports
+ * use: the scheduler's T-CONT 16 is the OMCC's. Then attaches the receive
  * handler for data frames to the conduit. Nothing is registered without the
  * PON MAC's system controller and buffers, or without a conduit.
  *
@@ -661,7 +656,7 @@ int rtl9602c_gem_setup(struct rtl9602c_priv *p)
 
 	pon = pon_device_register(p->dev, &rtl9602c_pon_ops,
 				  RTL9602C_GPON_NUM_FLOW,
-				  RTL9602C_GPON_DEFAULT_TCONT_IDX, p);
+				  RTL9602C_GEM_NUM_TCONT, p);
 	if (IS_ERR(pon))
 		return PTR_ERR(pon);
 	/* The handler delivers through p->pon, so it is set first. */

@@ -617,11 +617,18 @@ facts below give what is known of each.
    * - Upstream queues
      - 65 (0 to 64)
      - ``RTL9602C_PON_NUM_QUEUE``
-     - Queue 64 is the OMCC's; queue 63 is where unused streams park.
+     - Queue 64 is the OMCC's, 0 to 63 the GEM T-CONTs'; unused streams point
+       at queue 63, not admitted.
    * - T-CONTs of the scheduler
      - 17 (0 to 16)
      - ``RTL9602C_PON_NUM_TCONT``
-     - T-CONTs 0 to 15 are offered to GEM ports, T-CONT 16 is the OMCC's.
+     - T-CONTs 0 to 3 and 8 to 11 are the eight offered to GEM ports, T-CONT
+       16 is the OMCC's.
+   * - GEM T-CONTs, the PON class's T-CONT indices
+     - 8 (0 to 7)
+     - ``RTL9602C_GEM_NUM_TCONT``
+     - GEM T-CONT n is the scheduler's T-CONT ``rtl9602c_gem_tcont(n)``, 8 x
+       (n / 4) + n % 4, with eight queues (``RTL9602C_GEM_TCONT_QUEUES``).
    * - T-CONT entries of the GPON MAC's Alloc-ID table
      - 32
      - ``RTL9602C_GPON_NUM_TCONT``
@@ -629,7 +636,9 @@ facts below give what is known of each.
    * - A T-CONT's queue q
      - 32 x (t / 8) + q
      - ``RTL9602C_PON_QUEUE(t, q)``
-     - Only q = 0 is attached for GEM ports.
+     - GEM T-CONT n's queue of priority k, 0 the highest, is map bit
+       ``rtl9602c_gem_tcont_qbit(n, k)``, 8 x (n % 4) + 7 - k; only k = 0 is
+       attached.
    * - Page of the packet buffer
      - 128 bytes
      - ``RTL9602C_PBO_PAGE``
@@ -679,12 +688,15 @@ facts below give what is known of each.
        the OLT allocated to the default Alloc-ID only, resolved to T-CONT 16,
        and OMCI crossed.
    * - The driver keeps T-CONT 16 (``RTL9602C_GPON_DEFAULT_TCONT_IDX``) and its
-       queue 64 for the OMCC and offers T-CONTs 0 to 15 to GEM ports. Stream 64
-       (``RTL9602C_GPON_OMCC_FLOW``) is the OMCC's; a GEM port's stream is its
-       GPON MAC flow number.
+       queue 64 for the OMCC. GEM ports get eight T-CONTs, the first four of
+       each group, so that each has eight of its group's 32 queues, one per
+       IEEE 802.1p priority: GEM T-CONT n, the PON class's index, is T-CONT 8 x
+       (n / 4) + n % 4 of the scheduler and of the GPON MAC's Alloc-ID table
+       (``rtl9602c_gem_tcont()``). Stream 64 (``RTL9602C_GPON_OMCC_FLOW``) is the
+       OMCC's; a GEM port's stream is its GPON MAC flow number.
      - T
-     - OMCI both ways over ``/dev/pon0omci0``, and GEM upstream (see "GEM ports
-       as network interfaces").
+     - OMCI both ways over ``/dev/pon0omci0``, and GEM upstream on GEM T-CONT 0
+       (see "GEM ports as network interfaces").
    * - The GPON MAC has 128 flows (``RTL9602C_GPON_NUM_FLOW``) and the driver
        registers all 128 with the PON core, but streams exist for 0 to 64 only
        (``RTL9602C_PON_NUM_SID``). The driver takes flows lowest first,
@@ -1032,15 +1044,19 @@ The chain from a frame to the fibre, and the numbers the driver gives it::
     queue q   --(bit in the map of T-CONT t)--> T-CONT t, if enabled
     T-CONT t  --(allocations of its Alloc-ID)-> GPON MAC, then the fibre
 
-    GEM port:  stream f --> queue 32 x (t / 8) + t % 8 --> T-CONT t, t = 0 to 15
+    GEM port:  stream f --> queue 32 x (n / 4) + 8 x (n % 4) + 7
+               --> T-CONT 8 x (n / 4) + n % 4, for GEM T-CONT n = 0 to 7
     OMCC:      stream 64 --> queue 64 --> T-CONT 16
-    unused:    streams 0 to 63 --> queue 63, not admitted, in no T-CONT's map
+    unused:    streams 0 to 63 --> queue 63, not admitted
 
 The build points the streams that no GEM port uses, 0 to 63, at queue 63 and
-does not admit them. No T-CONT that the driver enables has queue 63 in its map,
-so the frames of a parked stream are never scheduled. A stream starts parked,
-and a deleted GEM port's stream is parked again. Stream 64, the OMCC's, is
-pointed at queue 64, which the build attaches to T-CONT 16.
+does not admit them. A stream that is not admitted sends nothing, even when its
+queue is in an enabled T-CONT's map, so a parked stream's frames never reach
+the fibre, although queue 63 is the highest queue of GEM T-CONT 7. A stream
+starts parked, and a deleted GEM port's stream is parked again. Attaching a
+queue admits no stream; each stream that sends is admitted by its owner.
+Stream 64, the OMCC's, is pointed at queue 64, which the build attaches to
+T-CONT 16.
 
 .. list-table::
    :header-rows: 1
@@ -1060,10 +1076,15 @@ pointed at queue 64, which the build attaches to T-CONT 16.
        (the numbering row under "Sizes and numbering"). The stream line of the
        ``ponmac`` view reads stream 64's entry.
    * - ``RTL9602C_PONQ_US_STREAM_EN(s)``, ``0xf0213c`` + 4 (s / 32), one bit
-       per stream, admits the stream's frames to its queue.
-     - T
+       per stream, admits the stream's frames to its queue. A stream that is
+       not admitted sends nothing, even with its queue attached and scheduled.
+     - M
      - OMCI upstream and GEM upstream run with the stream admitted; the stream
-       line of the ``ponmac`` view reads stream 64's bit.
+       line of the ``ponmac`` view reads stream 64's bit. Two GEM ports on GEM
+       T-CONT 0, each in a queue of its own and each offered 1.2 Gbit/s: with
+       one port's stream not admitted, its upstream octets stayed at 0 over 8
+       s while the other port sent 658 Mbit/s. (Admitted, both streams sent:
+       the scheduling rows below.)
    * - A frame the switch forwards to port 2 without a stream is dropped in the
        PON MAC. The switch counts it as sent on port 2, with no discard, and
        nothing the driver reads counts the drop.
@@ -1122,11 +1143,19 @@ pointed at queue 64, which the build attaches to T-CONT 16.
        ``RTL9602C_PONSCH_QUEUE_RATE_MAX``, weight 1.
      - T
      - The peak rate: the rate row under "Sizes and numbering".
-   * - What strict, a committed rate of 0 and weight 1 do. With one queue per
+   * - Among the strict queues of a T-CONT, the higher queue number goes
+       first: a loaded queue of a lower number sends only what the higher ones
+       leave of the grant.
+     - M
+     - Two GEM ports on GEM T-CONT 0 in queues 0 and 1, both strict and
+       unshaped, each offered 1.2 Gbit/s against a grant of about 963 Mbit/s:
+       the port in queue 1 sent 945 Mbit/s and the one in queue 0 19; with the
+       ports' queues swapped, 962 and 3. With both in queue 0 they shared it,
+       498 and 468.
+   * - What a committed rate of 0 and weight 1 do. With one loaded queue per
        T-CONT they choose nothing.
      - I
-     - Assumption, load-bearing: the driver writes these values. Two loaded
-       queues in one T-CONT would show the scheduler's behaviour.
+     - Assumption, load-bearing: the driver writes these values.
    * - ``RTL9602C_PONSCH_TCONT_EN``, ``0xf023e4``, one enable bit per T-CONT;
        ``RTL9602C_PONSCH_TCONT_QUEUES(t)``, ``0xf023a0`` + 4t, the queues the
        T-CONT schedules (the numbering row under "Sizes and numbering"). A
@@ -1321,7 +1350,7 @@ GEM ports as network interfaces
 ===============================
 
 The switch driver registers the ONU behind its PON port with the PON class,
-with 128 flows and 16 T-CONTs, and management creates one ``gem`` interface on
+with 128 flows and 8 T-CONTs, and management creates one ``gem`` interface on
 ``pon`` for each GEM port (Documentation/networking/pon.rst). A GEM interface
 is one flow of the GPON MAC: the flow holds the port's Port-ID in the GPON
 MAC's Port-ID table and the type of its downstream traffic, and it is the
@@ -1337,7 +1366,7 @@ the OMCC's goes to the GEM interface of that flow. In a bridge, the switch
 forwards between the GEM ports and the bridge's other ports itself, treating
 every GEM port as its one PON port.
 
-The class lists what ``gem_add`` refuses (an upstream port on a T-CONT of 16 or
+The class lists what ``gem_add`` refuses (an upstream port on a T-CONT of 8 or
 above, a PON MAC that is not built, a Port-ID already in use, no free flow); the
 facts below give what the driver programs.
 
@@ -1352,9 +1381,10 @@ Flows, streams and T-CONTs
      - Tag
      - Checked by
    * - The switch registers with the PON core as the ONU its port 2 belongs to,
-       with 128 flows and 16 T-CONTs (0 to 15; 16 is the OMCC's), when the block
-       has its system controller and buffers and the CPU port has a conduit. A
-       GEM interface sits on the ``pon`` interface, DSA port 2.
+       with 128 flows and the 8 GEM T-CONTs (``RTL9602C_GEM_NUM_TCONT``; the
+       scheduler's T-CONT 16 is the OMCC's), when the block has its system
+       controller and buffers and the CPU port has a conduit. A GEM interface
+       sits on the ``pon`` interface, DSA port 2.
      - T
      - GEM interfaces created on ``pon`` carry traffic (the transmit and
        receive rows below).
@@ -1390,21 +1420,20 @@ Flows, streams and T-CONTs
        typed Ethernet alone it passed frames to 239.2.2.1, 224.0.0.1 and
        ff02::1, 20 of 20 each; typed multicast as well, none of them.
    * - The upstream half, programmed only when the T-CONT is bound (the
-       binding row below): the queue of the T-CONT's own index in its group,
-       ``RTL9602C_PON_TCONT_QUEUE(t)`` (t % 8), attached (see "Attaching a
-       queue to a T-CONT"); ``RTL9602C_GEM_US_FLOW_CFG(f)``
-       (``0x706400`` + 4f), ``RTL9602C_GEM_US_FLOW_CFG_PORTID`` (bits 11:0) =
-       the Port-ID the flow's GEM headers carry (a Port-ID is 12 bits, ITU-T
-       G.984.3 clause 8.3.1); the stream pointed at ``RTL9602C_PON_QUEUE(t,
-       t % 8)``; then admitted.
+       binding row below): GEM T-CONT n's queue of the highest priority, map
+       bit ``rtl9602c_gem_tcont_qbit(n, 0)`` of T-CONT ``rtl9602c_gem_tcont(n)``,
+       attached (see "Attaching a queue to a T-CONT");
+       ``RTL9602C_GEM_US_FLOW_CFG(f)`` (``0x706400`` + 4f),
+       ``RTL9602C_GEM_US_FLOW_CFG_PORTID`` (bits 11:0) = the Port-ID the flow's
+       GEM headers carry (a Port-ID is 12 bits, ITU-T G.984.3 clause 8.3.1);
+       the stream pointed at that queue; then admitted.
      - M
      - 40 of 40 frames sent through a bidirectional port on T-CONT 0 reached the
        far end of the OLT intact and once each.
-   * - Each T-CONT's GEM ports send through a queue of the T-CONT's own, index
-       t % 8 of its group, so no two T-CONTs of a group share one. A queue
-       shared between two T-CONTs' maps is drained by either T-CONT's
-       allocations, so the frames of one T-CONT went out under the other's
-       Alloc-ID.
+   * - Each T-CONT's GEM ports send through queues of the T-CONT's own, so no
+       two T-CONTs of a group share one. A queue shared between two T-CONTs'
+       maps is drained by either T-CONT's allocations, so the frames of one
+       T-CONT went out under the other's Alloc-ID.
      - M
      - With the OLT's Alloc-ID on T-CONT 0 and an injected one, which the OLT
        does not grant, on T-CONT 1, 200 frames on a GEM port of T-CONT 1 left
@@ -1412,10 +1441,12 @@ Flows, streams and T-CONTs
        its 200. With both T-CONTs on queue 0, as before, the same 200 frames
        went out in T-CONT 0's allocations: 14,778 octets on the port of
        T-CONT 1.
-   * - The driver's T-CONT t is bound when the GPON MAC holds an Alloc-ID for
-       it: T-CONT 16 always (the default Alloc-ID), T-CONTs 0 to 15 once the OLT
-       has assigned an Alloc-ID with Assign_Alloc-ID, a PLOAM message and not
-       OMCI. OMCI may create a GEM port first; the two arrive in either order.
+   * - A GEM T-CONT is bound when the GPON MAC holds an Alloc-ID for it, once
+       the OLT has assigned one with Assign_Alloc-ID, a PLOAM message and not
+       OMCI; T-CONT 16 holds the default Alloc-ID from the start. An assigned
+       Alloc-ID goes to the lowest GEM T-CONT that is idle; a ninth beside eight
+       bound ones is refused with "no idle T-CONT". OMCI may create a GEM port
+       first; the two arrive in either order.
      - P
      - ITU-T G.984.3 (01/2014) clause 5.5.3 (the default Alloc-ID is implicit;
        others are assigned by Assign_Alloc-ID type 1 and removed by type 255)
@@ -1434,15 +1465,15 @@ Flows, streams and T-CONTs
        upstream started. A routed-traffic run of thirteen cases passed on a
        clean boot.
    * - ``RTL9602C_GEM_PARKING_QUEUE`` is queue 63, ``RTL9602C_PON_QUEUE(15,
-       31)``. No T-CONT the driver enables has it in its map (a T-CONT
-       attaches only the queue of its own index in its group, 0 to 7, and the
-       build empties the maps of T-CONTs 0 to 15), so a parked stream's frames
-       are never scheduled. The build parks
-       streams 0 to 63 unadmitted, so a new port's stream starts parked, and
-       deleting a port parks it again.
+       31)``, which is also GEM T-CONT 7's queue of the highest priority. A
+       parked stream is not admitted, and a stream that is not admitted sends
+       nothing even when its queue is scheduled, so a parked stream's frames
+       never reach the fibre; attaching queue 63 admits none of them. The build
+       parks streams 0 to 63 unadmitted, so a new port's stream starts parked,
+       and deleting a port parks it again.
      - M
      - The stream-map read-back of "Upstream streams, queues and T-CONTs":
-       streams 1 to 3 at 63 after the build.
+       streams 1 to 3 at 63 after the build; the admission row there.
    * - After every bring-up the driver programs each GEM port again, because the
        bring-up empties the GPON MAC's tables (the GPON MAC page) and the
        interface outlives it. The PON MAC is not rebuilt, so the stream map and
@@ -1552,7 +1583,7 @@ Status and offload
      - T
      - Routed-traffic checks of the flowtable offload through a GEM interface.
    * - The pon family's T-CONT query reports the Alloc-ID the driver recorded
-       for T-CONT 0 to 15, or none. It answers from the driver's record rather
+       for GEM T-CONT 0 to 7, or none. It answers from the driver's record rather
        than the GPON MAC's Alloc-ID table, because the table keeps what it held
        through a reset and so tells what was written, not what the OLT still
        assigns.
@@ -1896,7 +1927,7 @@ SerDes is switched to GPON mode.
    (I)
 7. For T-CONTs 0 to 15, clear the enable bit and empty the map; leave T-CONT 16
    as found. Purpose: no T-CONT schedules a queue that the driver has not
-   attached, and the parking queue stays unscheduled. (T)
+   attached. (T)
 8. Set the peak-rate drop. Purpose: what exceeds a queue's peak rate is dropped.
    (I)
 9. For every queue, 0 to 64, set strict priority, committed rate 0, peak rate
@@ -1968,8 +1999,11 @@ upstream GEM port.
 4. Add the queue to the T-CONT's map. Purpose: the T-CONT schedules it. (T)
 5. Set the queue strict, committed rate 0, peak rate the maximum, weight 1.
    Purpose: it sends as much as the T-CONT is granted. (T)
-6. Admit every stream whose entry already points at the queue. Purpose: frames
-   that were waiting for the queue now enter it. (T)
+
+No stream is admitted here. The streams pointed at the queue may be parked
+ones, since queue 63 is a GEM T-CONT's queue too, and each stream that sends is
+admitted by its owner: the OMCC's by the build, a GEM port's when its upstream
+is programmed.
 
 Draining a queue
 ----------------
@@ -2006,9 +2040,10 @@ each bring-up, and for the ports of a T-CONT when an Alloc-ID is bound to it.
    "upstream parked" and stop here. Purpose: a T-CONT without an Alloc-ID is
    granted nothing, and its queue would lose the frames at the switch's ingress.
    (P, M)
-3. Attach the queue of the T-CONT's own index in its group, t % 8 (see
-   "Attaching a queue to a T-CONT"). Purpose: the queue the stream will name
-   is scheduled, by this T-CONT's allocations alone. (M)
+3. Attach GEM T-CONT n's queue of the highest priority, map bit 8 x (n % 4) +
+   7 of T-CONT 8 x (n / 4) + n % 4 (see "Attaching a queue to a T-CONT").
+   Purpose: the queue the stream will name is scheduled, by this T-CONT's
+   allocations alone. (M)
 4. Write the port's Port-ID into the flow's upstream configuration. Purpose:
    the GPON MAC puts it in the headers of the port's upstream frames. (M)
 5. Point the flow's stream at the queue and admit it. Purpose: the port's frames
@@ -2037,10 +2072,13 @@ Known limitations
   with ``-ENOSPC``; a downstream-only port takes the lowest free flow of all,
   so downstream-only ports use flows that upstream ports could have used
   first.
-- Each T-CONT has one queue, so the GEM ports of one T-CONT share it and no
-  priority orders them. Queues are never detached and T-CONTs never disabled
-  after the build, so a deleted port's queue stays in its T-CONT's map until
-  the next boot. The queue numbering is measured for T-CONTs 0, 1 and 16 only.
+- GEM ports get eight T-CONTs, so an OLT that assigns more than eight
+  Alloc-IDs beside the default one finds the ninth refused ("no idle T-CONT").
+  Each GEM T-CONT has eight queues, but only the one of the highest priority is
+  used, so the GEM ports of one T-CONT share it and no priority orders them.
+  Queues are never detached and T-CONTs never disabled after the build, so a
+  deleted port's queue stays in its T-CONT's map until the next boot. The queue
+  numbering is measured for T-CONTs 0, 1 and 16 only.
 - Every queue is strict priority with committed rate 0 and the maximum peak
   rate, so a T-CONT sends what the OLT grants it and the driver offers no rate
   limit, priority or weighting between GEM ports on the PON side. The unit of
@@ -2106,8 +2144,9 @@ Assumptions the driver depends on
    * - The counts of T-CONTs, queues and streams beyond the ones used, the
        packing of entry arrays other than the stream map, and the queue
        numbering of T-CONTs 1 to 15 ("Sizes and numbering").
-     - A GEM port on a granted T-CONT from 8 to 15, its stream on queue 32,
-       sending upstream.
+     - A GEM port on a granted GEM T-CONT from 4 to 7 (scheduler T-CONTs 8 to
+       11), its stream on that T-CONT's queue in the upper group, sending
+       upstream.
    * - That flows 65 to 127 have no stream ("Sizes and numbering", "Known
        limitations").
      - Creating 64 upstream GEM ports and a 65th, and a downstream-only port

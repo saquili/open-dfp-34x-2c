@@ -1997,7 +1997,7 @@ GEM ports
    * - Fact
      - Tag
      - Checked by
-   * - ``gem_add`` refuses: an upstream port on a T-CONT of 16 or above
+   * - ``gem_add`` refuses: an upstream port on a T-CONT of 8 or above
        (``-ERANGE``); a PON MAC that is not up yet (``-ENETDOWN``); the OMCC's
        Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
        (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
@@ -2168,7 +2168,7 @@ Setup of the RTL9602C driver
 2. The switch driver creates its OMCI port, which creates ``pon0`` and
    ``pon0omci0``, and attaches its control-frame handler to the conduit.
    Purpose: OMCI messages have somewhere to go. (T)
-3. It registers its data path on ``pon0`` (128 flows, 16 T-CONTs) and attaches
+3. It registers its data path on ``pon0`` (128 flows, 8 T-CONTs) and attaches
    its flow handler to the conduit. Purpose: GEM interfaces can be created and
    received frames delivered. (T)
 4. ``ip link set pon up`` brings the PON up, and the ONU walks O1 to O5.

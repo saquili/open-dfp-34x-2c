@@ -132,13 +132,6 @@ void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,
 		     (queue & RTL9602C_PONQ_US_STREAM_QUEUE_MASK) << sh);
 }
 
-static unsigned int rtl9602c_ponq_stream_queue_get(struct rtl9602c_priv *p,
-						   unsigned int sid)
-{
-	return (rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid)) >>
-		RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(sid)) & RTL9602C_PONQ_US_STREAM_QUEUE_MASK;
-}
-
 /* Admit stream @sid's frames to its queue, or stop admitting them. */
 static void rtl9602c_ponq_stream_enable(struct rtl9602c_priv *p, unsigned int sid,
 					bool valid)
@@ -268,9 +261,11 @@ static int rtl9602c_pon_drain(struct rtl9602c_priv *p, unsigned int q)
  * The first queue attached switches the T-CONT on. A queue that no T-CONT of
  * the group has in its map yet is drained, so that it is attached empty; one
  * already in a map carries other GEM ports' frames and is not drained, since
- * the drain would discard them. The queue is then added to the map, made
- * strict and unshaped (rtl9602c_pon_queue_set()), and every stream already
- * pointed at it is admitted. Queues are never detached, nor T-CONTs switched
+ * the drain would discard them. The queue is then added to the map and made
+ * strict and unshaped (rtl9602c_pon_queue_set()). No stream is admitted here:
+ * the streams pointed at the queue may be parked ones, since queue 63 is a GEM
+ * T-CONT's queue too (rtl9602c_gem_tcont_qbit()), and each stream that sends
+ * is admitted by its owner. Queues are never detached, nor T-CONTs switched
  * off again. Called only with the block's gate open.
  *
  * Return: 0, or -ETIMEDOUT when the drain does not complete; the T-CONT is
@@ -280,7 +275,7 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 			   unsigned int queue)
 {
 	unsigned int pq = RTL9602C_PON_QUEUE(tcont, queue);
-	unsigned int first = tcont / 8 * 8, sid, t;
+	unsigned int first = tcont / 8 * 8, t;
 	bool in_use = false;
 	u32 qmap;
 	int err;
@@ -302,11 +297,6 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 
 	rtl9602c_w(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont), qmap | BIT(queue));
 	rtl9602c_pon_queue_set(p, pq, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
-
-	for (sid = 0; sid < RTL9602C_PON_NUM_SID; sid++)
-		if (rtl9602c_ponq_stream_queue_get(p, sid) == pq)
-			rtl9602c_ponq_stream_enable(p, sid, true);
-
 	return 0;
 }
 
@@ -623,8 +613,8 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 		     FIELD_PREP(RTL9602C_PONSCH_GRANT_THR_RUNT, 5));
 	/*
 	 * Switch T-CONTs 0 to 15 off and empty their maps, so that no T-CONT
-	 * schedules a queue the driver has not attached, the parking queue of
-	 * the GEM ports among them. T-CONT 16, the OMCC's, is left as it is.
+	 * schedules a queue the driver has not attached. T-CONT 16, the
+	 * OMCC's, is left as it is.
 	 */
 	for (i = 0; i < RTL9602C_PON_NUM_TCONT - 1; i++) {
 		rtl9602c_rmw(p, RTL9602C_PONSCH_TCONT_EN, BIT(i), 0);
@@ -649,12 +639,13 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 				RTL9602C_OMCI_TRAP_CFG_PRI_HIGHEST));
 
 	/*
-	 * Streams 0 to 63 are for GEM ports: each is parked on queue 63,
-	 * which no T-CONT the driver switches on has in its map, and not
-	 * admitted until its GEM port's upstream is programmed. Stream 64,
-	 * the OMCC's, goes to queue 64 and is admitted, and it is named to
-	 * the PON MAC as the OMCC's stream; that the upstream OMCC needs the
-	 * naming is not verified.
+	 * Streams 0 to 63 are for GEM ports: each is parked, pointed at queue
+	 * 63 and not admitted, until its GEM port's upstream is programmed. A
+	 * stream that is not admitted sends nothing, even when its queue is
+	 * scheduled (measured on this board). Stream 64, the OMCC's, goes to
+	 * queue 64 and is admitted, and it is named to the PON MAC as the
+	 * OMCC's stream; that the upstream OMCC needs the naming is not
+	 * verified.
 	 */
 	for (i = 0; i < RTL9602C_PON_NUM_SID - 1; i++) {
 		rtl9602c_ponq_stream_queue_set(p, i, RTL9602C_PON_QUEUE(15, 31));
@@ -702,13 +693,14 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	/*
 	 * The GPON MAC grants the allocations of the default Alloc-ID, which
 	 * carry the OMCC (ITU-T G.984.3 clause 14.1), to T-CONT 16 (measured
-	 * on this board). Attaching queue 64 there drains it and admits
-	 * stream 64; the stream is then pointed at the queue once more.
+	 * on this board). Attaching queue 64 there drains it; stream 64 is
+	 * then pointed at the queue and admitted once more.
 	 */
 	err = rtl9602c_pon_queue_add(p, RTL9602C_GPON_DEFAULT_TCONT_IDX, 0);
 	if (err)
 		return err;
 	rtl9602c_ponq_stream_queue_set(p, RTL9602C_GPON_OMCC_FLOW, omcc_q);
+	rtl9602c_ponq_stream_enable(p, RTL9602C_GPON_OMCC_FLOW, true);
 
 	p->ponmac_up = true;
 	pr_info("PON MAC built: chip rev %u, OMCC in T-CONT %u queue %u, buffers at %pa and %pa, ready in %lld us\n",
@@ -719,6 +711,14 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 }
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
+
+/* The queue stream @sid points at. */
+static unsigned int rtl9602c_ponq_stream_queue_get(struct rtl9602c_priv *p,
+						   unsigned int sid)
+{
+	return (rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid)) >>
+		RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(sid)) & RTL9602C_PONQ_US_STREAM_QUEUE_MASK;
+}
 
 /*
  * ponmac: the OMCC's path in the order a message crosses it. First the gate

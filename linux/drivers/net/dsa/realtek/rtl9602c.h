@@ -1130,11 +1130,28 @@ enum {
 #define RTL9602C_PON_QUEUE(t, q)	(32 * ((t) / 8) + (q))
 
 /*
- * The index, within its group, of the queue a T-CONT's GEM ports send through:
- * the T-CONT's own place in the group, so that each of a group's eight T-CONTs
- * has a queue of its own; T-CONT 16 takes index 0, queue 64.
+ * The T-CONTs GEM ports use and their queues. A group of eight T-CONTs draws
+ * on 32 queues, so the driver uses the first four T-CONTs of each group,
+ * with eight queues each, one per IEEE 802.1p priority: the PON class's
+ * T-CONT n, 0 to RTL9602C_GEM_NUM_TCONT - 1, is the scheduler's and the
+ * GPON MAC's T-CONT rtl9602c_gem_tcont(n), and its queue of priority k, 0
+ * the highest, is bit rtl9602c_gem_tcont_qbit(n, k) of that T-CONT's map.
+ * Among a T-CONT's strict queues the higher queue number goes first
+ * (measured on this board), so priority 0 takes the T-CONT's highest bit.
  */
-#define RTL9602C_PON_TCONT_QUEUE(t)	((t) % 8)
+#define RTL9602C_GEM_NUM_TCONT		8
+#define RTL9602C_GEM_TCONT_QUEUES	8
+
+static inline unsigned int rtl9602c_gem_tcont(unsigned int n)
+{
+	return 8 * (n / 4) + n % 4;
+}
+
+static inline unsigned int rtl9602c_gem_tcont_qbit(unsigned int n,
+						   unsigned int k)
+{
+	return RTL9602C_GEM_TCONT_QUEUES * (n % 4 + 1) - 1 - k;
+}
 #define RTL9602C_PONSCH_QUEUE_RATE_MAX		0x3ffff
 
 /* The page size, each half's SRAM (not verified) and its DRAM region. */
@@ -3384,7 +3401,7 @@ void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,
 int rtl9602c_gem_setup(struct rtl9602c_priv *p);
 void rtl9602c_gem_teardown(struct rtl9602c_priv *p);
 void rtl9602c_gem_restore(struct rtl9602c_priv *p);
-void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u8 tcont);
+void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u32 tcont);
 bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow);
 int rtl9602c_gpon_port_get(struct rtl9602c_priv *p, unsigned int flow,
 			   u16 *port_id, bool *valid);

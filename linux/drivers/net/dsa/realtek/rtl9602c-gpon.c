@@ -1378,36 +1378,40 @@ static void rtl9602c_gpon_omcc_unbind(struct rtl9602c_priv *p)
 }
 
 /*
- * Bind Alloc-ID @alloc into the lowest free T-CONT from 0 to 15, unless a
- * T-CONT holds it already, as it does for the repeated copies of an
- * Assign_Alloc-ID. The driver keeps its own record of what each T-CONT holds,
- * since the table keeps its entries through a reset and so tells what was
- * written, not what the OLT still assigns. The GEM ports on the T-CONT then get
- * their upstream.
+ * Bind Alloc-ID @alloc into the lowest idle T-CONT of those the GEM ports use
+ * (rtl9602c_gem_tcont()), unless a T-CONT holds it already, as it does for
+ * the repeated copies of an Assign_Alloc-ID. The driver keeps its own record
+ * of what each T-CONT holds, since the table keeps its entries through a
+ * reset and so tells what was written, not what the OLT still assigns. The
+ * GEM ports on the T-CONT then get their upstream.
  */
 static void rtl9602c_gpon_tcont_add(struct rtl9602c_priv *p, u16 alloc)
 {
-	unsigned int i;
+	unsigned int n, t;
 
-	for (i = 0; i < RTL9602C_GPON_DEFAULT_TCONT_IDX; i++)
-		if ((p->gpon_tcont_used & BIT(i)) && p->gpon_alloc[i] == alloc)
+	for (t = 0; t < RTL9602C_GPON_DEFAULT_TCONT_IDX; t++)
+		if ((p->gpon_tcont_used & BIT(t)) && p->gpon_alloc[t] == alloc)
 			return;
-	i = ffz(p->gpon_tcont_used);
-	if (i >= RTL9602C_GPON_DEFAULT_TCONT_IDX) {
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++)
+		if (!(p->gpon_tcont_used & BIT(rtl9602c_gem_tcont(n))))
+			break;
+	if (n == RTL9602C_GEM_NUM_TCONT) {
 		pr_warn("<GPON> no idle T-CONT for Alloc-ID %u\n", alloc);
 		return;
 	}
+	t = rtl9602c_gem_tcont(n);
 	if (rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
 				 RTL9602C_ALLOCID_TBL_WDATA,
-				 RTL9602C_GPON_TBL_CMD_OP_WRITE, i, alloc)) {
-		pr_warn("<GPON> T-CONT %u bind did not complete\n", i);
+				 RTL9602C_GPON_TBL_CMD_OP_WRITE, t, alloc)) {
+		pr_warn("<GPON> T-CONT %u bind did not complete\n", t);
 		return;
 	}
-	p->gpon_alloc[i] = alloc;
-	p->gpon_tcont_used |= BIT(i);
-	pr_debug("<GPON> Alloc-ID %u in T-CONT %u\n", alloc, i);
+	p->gpon_alloc[t] = alloc;
+	p->gpon_tcont_used |= BIT(t);
+	pr_debug("<GPON> Alloc-ID %u in T-CONT %u (GEM T-CONT %u)\n", alloc,
+		 t, n);
 
-	rtl9602c_gem_tcont_ready(p, i);
+	rtl9602c_gem_tcont_ready(p, n);
 }
 
 /* Unbind Alloc-ID @alloc from every T-CONT from 0 to 15 that holds it. */
