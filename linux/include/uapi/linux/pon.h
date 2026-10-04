@@ -68,11 +68,16 @@ enum pon_onu_state {
  *   lists loss of PLOAM only among the OLT's alarms, but a condition some MACs
  *   report; that a MAC's flag means exactly this is an assumption, not
  *   verified.
+ * @PON_ALARM_PEE: Physical equipment error: the OLT has said with
+ *   Physical_Equipment_Error that it cannot send GEM frames or OMCC frames.
+ *   Raised by each such message and cleared when none has come for 3 s (ITU-T
+ *   G.984.3 clause 11.1.2).
  */
 enum pon_alarm {
 	PON_ALARM_LOS = 1,
 	PON_ALARM_LOF = 2,
 	PON_ALARM_LOM = 4,
+	PON_ALARM_PEE = 8,
 };
 
 enum {

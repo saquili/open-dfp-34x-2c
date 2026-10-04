@@ -1434,8 +1434,8 @@ Alarms
 ------
 
 ``alarms`` is a set of flags, ``enum pon_alarm``: ``PON_ALARM_LOS`` (1),
-``PON_ALARM_LOF`` (2) and ``PON_ALARM_LOM`` (4). The flags say what is wrong
-now, not what happened.
+``PON_ALARM_LOF`` (2), ``PON_ALARM_LOM`` (4) and ``PON_ALARM_PEE`` (8). The
+flags say what is wrong now, not what happened.
 
 .. list-table::
    :header-rows: 1
@@ -1459,6 +1459,12 @@ now, not what happened.
        own definition says (see
        Documentation/networking/device_drivers/pon/rtl9602c.rst). The ONU-side
        and OLT-side lists are in ITU-T G.984.3 clauses 11.1.1 and 11.1.2.
+   * - ``alarm`` flag ``pee`` (8), physical equipment error: the OLT has said
+       with Physical_Equipment_Error, about once a second while it lasts, that
+       it cannot send GEM frames or OMCC frames. Each message raises the flag,
+       and it clears when none has come for 3 s.
+     - P
+     - ITU-T G.984.3 clause 9.2.3.15 and clause 11.1.2.
 
 Identifiers
 -----------

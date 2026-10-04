@@ -111,6 +111,13 @@ definitions:
           lists loss of PLOAM only among the OLT's alarms, but a condition
           some MACs report; that a MAC's flag means exactly this is an
           assumption, not verified.
+      -
+        name: pee
+        doc: >-
+          Physical equipment error: the OLT has said with
+          Physical_Equipment_Error that it cannot send GEM frames or OMCC
+          frames. Raised by each such message and cleared when none has come
+          for 3 s (ITU-T G.984.3 clause 11.1.2).
 
 attribute-sets:
   -
