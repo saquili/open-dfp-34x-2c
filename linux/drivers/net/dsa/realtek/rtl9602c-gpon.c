@@ -2941,12 +2941,13 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gemusintr);
  * usburst: the upstream burst settings, read back: the laser lead and lag; the
  * upstream control word; burst power save in the GTC, and in the GEM framer
  * with its window and bit 31, shown as tx-disable but not verified; the burst
- * overhead's repeat index and length; and the small-StartTime and suppression
- * bits.
+ * overhead's repeat index and length, and its bytes; and the small-StartTime
+ * and suppression bits.
  */
 static int rtl9602c_usburst_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
+	unsigned int i;
 	u32 laser = rtl9602c_r(p, RTL9602C_GTC_US_LASER);
 	u32 cfg = rtl9602c_r(p, RTL9602C_GTC_US_CTRL);
 	u32 ps = rtl9602c_r(p, RTL9602C_GTC_US_POWERSAVE);
@@ -2967,6 +2968,11 @@ static int rtl9602c_usburst_show(struct seq_file *s, void *unused)
 	seq_printf(s, "burst ovh     %08x  repeat %lu  length %lu\n", boh,
 		   FIELD_GET(RTL9602C_BURST_CFG_REPEAT_IDX, boh),
 		   FIELD_GET(RTL9602C_BURST_CFG_LEN, boh));
+	seq_puts(s, "burst bytes  ");
+	for (i = 0; i < RTL9602C_GPON_BOH_BYTES; i++)
+		seq_printf(s, " %02lx", FIELD_GET(RTL9602C_BURST_DATA_BYTE,
+						  rtl9602c_r(p, RTL9602C_BURST_DATA(i))));
+	seq_putc(s, '\n');
 	seq_printf(s, "tx mode       %08x  small-sstart %u  suppress-off %u\n",
 		   proc, !!(proc & RTL9602C_GTC_US_TX_MODE_SMALL_SSTART),
 		   !!(proc & RTL9602C_GTC_US_TX_MODE_SUPPRESS_DIS));

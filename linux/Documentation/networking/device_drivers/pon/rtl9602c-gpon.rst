@@ -2855,7 +2855,8 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
    * - ``usburst`` (0400): ``RTL9602C_GTC_US_LASER`` (lead, lag),
        ``RTL9602C_GTC_US_CTRL``, ``RTL9602C_GTC_US_POWERSAVE`` (on or off),
        ``RTL9602C_GEM_US_POWERSAVE`` (bit 31, lag, lead), ``RTL9602C_BURST_CFG``
-       (index, length) and ``RTL9602C_GTC_US_TX_MODE`` (its two bits).
+       (index, length), the twelve bytes of ``RTL9602C_BURST_DATA(i)`` and
+       ``RTL9602C_GTC_US_TX_MODE`` (its two bits).
      - T
      - Every debugfs view reads.
    * - ``uscntr`` (0400): writes each index 0 to 7 into
