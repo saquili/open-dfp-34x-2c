@@ -388,7 +388,7 @@ void omci_hw_alarm_fail_next(bool fail);
 /**
  * struct omci_hw_pon - The state of the PON receiver.
  * @bip_errors: the downstream BIP errors counted since the receiver came up,
- *	each taken as one bit in error
+ *	in bits
  * @operating: the ONU is in operation, the state O5
  * @bip_valid: @bip_errors was read
  * @power_level: the level the transmitter is at, as Serial_Number_ONU
@@ -540,6 +540,138 @@ void omci_hw_optics_limit_force(enum omci_hw_limit which, bool present,
 void omci_hw_optics_limits_reset(void);
 #endif
 
+/*
+ * The groups of the subscriber side a backend lists at once, the longest
+ * IGMP or MLD message it hands over, and the size of an address: IPv6, or
+ * IPv4 in the IPv4-mapped form ::ffff:a.b.c.d.
+ */
+#define OMCI_HW_MCAST_MAX_GROUPS 64u
+#define OMCI_HW_MCAST_FRAME_MAX 512u
+#define OMCI_HW_MCAST_ADDR_LEN 16u
+
+/**
+ * struct omci_hw_mcast_group - A multicast group the bridge forwards to the
+ *	subscriber side.
+ * @vid: its VLAN: of a group the bridge holds, the one it holds the group
+ *	in, 0 when it filters no VLAN; of a static group to add, the one that
+ *	carries the group downstream, which a bridge that filters no VLAN does
+ *	without
+ * @group: the group
+ * @source: its source, all zero for every source
+ * @permanent: a static group, which no join or leave ends
+ */
+struct omci_hw_mcast_group {
+	uint16_t vid;
+	uint8_t group[OMCI_HW_MCAST_ADDR_LEN];
+	uint8_t source[OMCI_HW_MCAST_ADDR_LEN];
+	bool permanent;
+};
+
+/**
+ * struct omci_hw_mcast_port - How the bridge snoops the subscriber side.
+ * @fast_leave: a leave ends the group at once, without a query after it
+ * @robustness: the robustness variable (RFC 3376 8.1); 0 for the bridge's
+ *	own, 2
+ * @query_interval: the time between general queries, in seconds; 0 for the
+ *	bridge's own, 125
+ * @query_response: the most time to answer a general query, in units of
+ *	0.1 s; 0 for the bridge's own, 100
+ * @last_member: the most time to answer a group's query, in units of
+ *	0.1 s; 0 for the bridge's own, 10
+ */
+struct omci_hw_mcast_port {
+	bool fast_leave;
+	uint8_t robustness;
+	uint32_t query_interval;
+	uint32_t query_response;
+	uint32_t last_member;
+};
+
+/**
+ * struct omci_hw_mcast_frame - An IGMP or MLD message of the subscriber side.
+ * @tagged: the receive path took a VLAN tag off the frame
+ * @tci: that tag
+ * @len: the bytes in @data
+ * @data: the frame from its destination address, cut at
+ *	%OMCI_HW_MCAST_FRAME_MAX bytes
+ */
+struct omci_hw_mcast_frame {
+	bool tagged;
+	uint16_t tci;
+	uint16_t len;
+	uint8_t data[OMCI_HW_MCAST_FRAME_MAX];
+};
+
+/**
+ * omci_hw_mcast_port() - Set how the bridge snoops (host backend).
+ * @cfg: the settings
+ *
+ * Return: %OMCI_OK, or %OMCI_ERR_INVAL without @cfg.
+ */
+__must_check enum omci_status
+omci_hw_mcast_port(const struct omci_hw_mcast_port *cfg);
+
+/**
+ * omci_hw_mcast_groups() - List the groups of the subscriber side (host
+ *	backend).
+ * @out: the groups
+ * @cap: room in @out
+ * @n: how many were written
+ *
+ * Return: %OMCI_OK, or the failure of the read.
+ */
+__must_check enum omci_status
+omci_hw_mcast_groups(struct omci_hw_mcast_group *out, size_t cap, size_t *n);
+
+/**
+ * omci_hw_mcast_group_add() - Add a static group (host backend).
+ * @g: the group
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_NOMEM when the groups are full, or the
+ * failure of the change.
+ */
+__must_check enum omci_status
+omci_hw_mcast_group_add(const struct omci_hw_mcast_group *g);
+
+/**
+ * omci_hw_mcast_group_del() - Remove a group, static or not (host backend).
+ * @g: the group, by its VLAN, group and source
+ *
+ * Return: %OMCI_OK, %OMCI_DECLINED for a group that is not there, or the
+ * failure of the change.
+ */
+__must_check enum omci_status
+omci_hw_mcast_group_del(const struct omci_hw_mcast_group *g);
+
+/**
+ * omci_hw_mcast_frame() - Take the next IGMP or MLD message (host backend).
+ * @out: the message
+ *
+ * Return: %OMCI_OK with one, %OMCI_DECLINED when none waits.
+ */
+__must_check enum omci_status
+omci_hw_mcast_frame(struct omci_hw_mcast_frame *out);
+
+#if defined(OMCID_HW_STUB)
+
+/*
+ * Test hooks of the host backend for multicast: a group the bridge snoops,
+ * joined or left; a message from the subscriber side to hand over; what the
+ * port was last set to, and how often; failures of the next list, add and
+ * delete; and an empty start.
+ */
+void omci_hw_mcast_snoop(const struct omci_hw_mcast_group *g, bool join);
+
+void omci_hw_mcast_send(const uint8_t *frame, size_t len, bool tagged,
+			uint16_t tci);
+
+unsigned int omci_hw_mcast_port_recorded(struct omci_hw_mcast_port *out);
+
+void omci_hw_mcast_fail_next(bool list, bool add, bool del);
+
+void omci_hw_mcast_reset(void);
+#endif
+
 /**
  * struct omci_hw_ops - A backend.
  * @caps: what the device has
@@ -558,6 +690,15 @@ void omci_hw_optics_limits_reset(void);
  * @set_router: route instead of bridging (true), or bridge again (false):
  *	in router mode the bridges and the VLAN rules are not applied; NULL in
  *	a backend without a router mode
+ * @mcast_port: set how the bridge snoops the subscriber side; NULL in a
+ *	backend without multicast, which then has none of the mcast_
+ *	operations
+ * @mcast_groups: list the groups the bridge forwards to the subscriber side
+ * @mcast_group_add: add a static group
+ * @mcast_group_del: remove a group
+ * @mcast_fd: a descriptor that becomes readable when a group changes or a
+ *	message comes, or -1 for none: the daemon then looks once a second
+ * @mcast_frame: take the next IGMP or MLD message of the subscriber side
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -580,6 +721,13 @@ struct omci_hw_ops {
 	enum omci_status (*optics)(struct omci_hw_optics *out);
 	enum omci_status (*optics_limits)(struct omci_hw_optics_limits *out);
 	void (*set_router)(bool on);
+	enum omci_status (*mcast_port)(const struct omci_hw_mcast_port *cfg);
+	enum omci_status (*mcast_groups)(struct omci_hw_mcast_group *out,
+					 size_t cap, size_t *n);
+	enum omci_status (*mcast_group_add)(const struct omci_hw_mcast_group *g);
+	enum omci_status (*mcast_group_del)(const struct omci_hw_mcast_group *g);
+	int (*mcast_fd)(void);
+	enum omci_status (*mcast_frame)(struct omci_hw_mcast_frame *out);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

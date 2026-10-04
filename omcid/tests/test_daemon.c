@@ -333,6 +333,44 @@ static void test_signals_change_the_mode(void)
 	CHECK(sa.sa_handler != SIG_DFL && sa.sa_handler != SIG_IGN);
 }
 
+static int g_mcast_pipe[2] = { -1, -1 };
+static unsigned int g_mcast_reads;
+
+static int pipe_mcast_fd(void)
+{
+	return g_mcast_pipe[0];
+}
+
+static enum omci_status count_mcast_frame(struct omci_hw_mcast_frame *out)
+{
+	g_mcast_reads++;
+	return omci_hw_mcast_frame(out);
+}
+
+/* The multicast agent's descriptor is waited on, and served when readable. */
+static void test_the_multicast_descriptor_is_served(void)
+{
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct rig g;
+
+	CHECK_EQ(pipe(g_mcast_pipe), 0);
+	CHECK_EQ(write(g_mcast_pipe[1], "x", 1), 1);
+	ops.mcast_fd = pipe_mcast_fd;
+	ops.mcast_frame = count_mcast_frame;
+	CHECK(rig_up(&g));
+	g_mcast_reads = 0;
+	omci_hw_ops_set(&ops);
+	end_input(&g);
+	CHECK_EQ(run(&g, g.in_r, g_sock, 2, g_argv), EXIT_SUCCESS);
+	omci_hw_ops_set(NULL);
+	CHECK(g_mcast_reads >= 2u);
+	CHECK(strstr(g_log, "[ERR]") == NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+	(void)close(g_mcast_pipe[0]);
+	(void)close(g_mcast_pipe[1]);
+}
+
 static void test_poll(void)
 {
 	struct rig g;
@@ -737,6 +775,7 @@ int main(void)
 	RUN(test_end_of_input);
 	RUN(test_signal_stops_the_loop);
 	RUN(test_signals_change_the_mode);
+	RUN(test_the_multicast_descriptor_is_served);
 	RUN(test_poll);
 	RUN(test_transport_errors);
 	RUN(test_setup_failures);

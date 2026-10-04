@@ -7,6 +7,7 @@
 
 #include "hw/hw.h"
 #include "mcast/acl.h"
+#include "mcast/agent.h"
 #include "me/action.h"
 #include "me/table.h"
 #include "me/tables.h"
@@ -350,8 +351,10 @@ static const struct omci_me_table_source empty_source = { .count = no_rows,
 							  .entry = no_row };
 
 /*
- * The tables made on demand: the two of the OMCI entity, and the lists of
- * multicast groups, lost and active, which stay empty.
+ * The tables made on demand: the two of the OMCI entity, the active group
+ * lists of the multicast subscriber monitor, and the lost groups list of the
+ * multicast operations profile, which stays empty: the ONU cannot tell
+ * whether a group's stream flows.
  */
 static const struct {
 	uint16_t class_id;
@@ -361,8 +364,8 @@ static const struct {
 	{ ME_OMCI, ATTR_ME_TYPES, &me_list_source },
 	{ ME_OMCI, ATTR_MSG_TYPES, &msg_list_source },
 	{ ME_MCAST_OPS_PROFILE, 9, &empty_source },
-	{ ME_MCAST_MONITOR, 5, &empty_source },
-	{ ME_MCAST_MONITOR, 6, &empty_source },
+	{ ME_MCAST_MONITOR, 5, &omci_mcast_ipv4_groups },
+	{ ME_MCAST_MONITOR, 6, &omci_mcast_ipv6_groups },
 };
 
 bool omci_me_table_rendered(uint16_t class_id, uint8_t attr_no,

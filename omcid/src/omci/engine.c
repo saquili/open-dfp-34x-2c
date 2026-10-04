@@ -12,6 +12,7 @@
 
 #include "hw/hw.h"
 #include "mcast/acl.h"
+#include "mcast/agent.h"
 #include "me/action.h"
 #include "me/defaults.h"
 #include "me/bridge.h"
@@ -164,6 +165,7 @@ struct omci_engine {
 	struct omci_mib *mib;
 	struct omci_alarm *alarm;
 	struct omci_pm *pm;
+	struct omci_mcast *mcast;
 	const struct omci_tx_ops *tx;
 	void *tx_ctx;
 
@@ -407,6 +409,25 @@ static enum omci_status reprogram_bridge(struct omci_engine *eng)
 }
 
 /*
+ * True for a class whose instances make up the multicast policy of the
+ * subscriber side: the multicast classes, and the bridge ports and mappers
+ * they are linked to.
+ */
+static bool class_shapes_mcast(uint16_t class_id)
+{
+	return class_id == OMCI_MCAST_PROFILE ||
+	       class_id == OMCI_MCAST_SUBSCRIBER ||
+	       class_id == OMCI_MCAST_MONITOR ||
+	       class_id == ME_MAC_BRIDGE_PORT || class_id == ME_8021P_MAPPER;
+}
+
+static void reprogram_mcast(struct omci_engine *eng, uint16_t class_id)
+{
+	if (class_shapes_mcast(class_id))
+		omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
+}
+
+/*
  * A data-path program that declines part of a set-up fails the request
  * only when the declined instance is the one the request configures.
  */
@@ -484,6 +505,7 @@ static void handle_mib_reset(struct omci_engine *eng,
 
 	(void)reprogram_gem(eng);
 	(void)reprogram_bridge(eng);
+	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
 }
 
 void omci_engine_reprogram(struct omci_engine *eng)
@@ -491,6 +513,19 @@ void omci_engine_reprogram(struct omci_engine *eng)
 	(void)reprogram_gem(eng);
 	(void)reprogram_bridge(eng);
 	(void)reprogram_vlan(eng);
+	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
+}
+
+int omci_engine_mcast_fd(const struct omci_engine *eng)
+{
+	(void)eng;
+	return omci_hw()->mcast_fd != NULL ? omci_hw()->mcast_fd() : -1;
+}
+
+void omci_engine_mcast_service(struct omci_engine *eng)
+{
+	if (eng != NULL)
+		omci_mcast_service(eng->mcast, eng->mib, eng->now_sec);
 }
 
 /* The order of a MIB upload: by class, then by instance. */
@@ -893,6 +928,7 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 		gem = reprogram_gem(eng);
 	if (class_builds_bridge(req->class_id))
 		bridge = reprogram_bridge(eng);
+	reprogram_mcast(eng, req->class_id);
 
 	reply(eng, req,
 	      result_for(data_path_status(req->class_id, req->instance, gem,
@@ -917,6 +953,8 @@ static void handle_delete(struct omci_engine *eng, const struct omci_frame *req)
 		gem = reprogram_gem(eng);
 	if (rc == OMCI_OK && class_builds_bridge(req->class_id))
 		bridge = reprogram_bridge(eng);
+	if (rc == OMCI_OK)
+		reprogram_mcast(eng, req->class_id);
 
 	enum omci_status answer = rc;
 
@@ -1154,6 +1192,7 @@ static void handle_set(struct omci_engine *eng, const struct omci_frame *req)
 		if (omci_me_attr_get(cls, attr) == NULL)
 			unsupported |= bit;
 	}
+	reprogram_mcast(eng, req->class_id);
 
 	if (message_level != 0u) {
 		reply(eng, req, message_level, NULL, 0);
@@ -1487,6 +1526,7 @@ void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec)
 		eng->alarms_judged = true;
 		eng->alarm_sec = now_sec;
 		alarms_tick(eng);
+		omci_mcast_tick(eng->mcast, eng->mib, now_sec);
 	}
 }
 
@@ -1624,6 +1664,13 @@ enum omci_status omci_engine_init(struct omci_engine **out,
 		return rc;
 	}
 
+	rc = omci_mcast_init(&g_engine.mcast);
+	if (rc != OMCI_OK) {
+		omci_pm_fini(g_engine.pm);
+		omci_alarm_fini(g_engine.alarm);
+		return rc;
+	}
+
 	g_engine_taken = true;
 	g_engine.mib = mib;
 	g_engine.tx = tx;
@@ -1649,6 +1696,7 @@ void omci_engine_fini(struct omci_engine *eng)
 	if (eng == NULL)
 		return;
 	omci_mib_notify_set(eng->mib, NULL, NULL);
+	omci_mcast_fini(eng->mcast);
 	omci_pm_fini(eng->pm);
 	omci_alarm_fini(eng->alarm);
 	eng->mib = NULL;

@@ -501,6 +501,163 @@ enum omci_status omci_hw_optics_limits(struct omci_hw_optics_limits *out)
 	return g_limit_valid != 0u ? OMCI_OK : OMCI_ERR_HW;
 }
 
+/*
+ * Multicast: the groups the bridge forwards to the subscriber side, the
+ * messages waiting to be handed over, and what the port was set to.
+ */
+#define MCAST_QUEUE 8u
+
+static struct omci_hw_mcast_group g_mc[OMCI_HW_MCAST_MAX_GROUPS];
+static size_t g_mc_n;
+static struct omci_hw_mcast_port g_mc_port;
+static unsigned int g_mc_port_set;
+static bool g_mc_fail_list, g_mc_fail_add, g_mc_fail_del;
+static struct omci_hw_mcast_frame g_mc_q[MCAST_QUEUE];
+static size_t g_mc_q_head, g_mc_q_n;
+
+void omci_hw_mcast_reset(void)
+{
+	omci_wire_fill(g_mc, 0, sizeof(g_mc));
+	g_mc_n = 0;
+	omci_wire_fill(&g_mc_port, 0, sizeof(g_mc_port));
+	g_mc_port_set = 0;
+	g_mc_fail_list = false;
+	g_mc_fail_add = false;
+	g_mc_fail_del = false;
+	g_mc_q_head = 0;
+	g_mc_q_n = 0;
+}
+
+void omci_hw_mcast_fail_next(bool list, bool add, bool del)
+{
+	g_mc_fail_list = list;
+	g_mc_fail_add = add;
+	g_mc_fail_del = del;
+}
+
+/* The place of a group, by its VLAN, group and source; g_mc_n when absent. */
+static size_t mcast_find(const struct omci_hw_mcast_group *g)
+{
+	size_t i = 0;
+
+	while (i < g_mc_n &&
+	       (g_mc[i].vid != g->vid ||
+		!omci_wire_equal(g_mc[i].group, g->group, sizeof(g->group)) ||
+		!omci_wire_equal(g_mc[i].source, g->source, sizeof(g->source))))
+		i++;
+	return i;
+}
+
+static void mcast_remove(size_t i)
+{
+	for (; i + 1u < g_mc_n; i++)
+		g_mc[i] = g_mc[i + 1u];
+	g_mc_n--;
+}
+
+void omci_hw_mcast_snoop(const struct omci_hw_mcast_group *g, bool join)
+{
+	const size_t i = mcast_find(g);
+
+	if (join && i == g_mc_n && g_mc_n < OMCI_HW_MCAST_MAX_GROUPS) {
+		g_mc[g_mc_n] = *g;
+		g_mc[g_mc_n++].permanent = false;
+	}
+	if (!join && i < g_mc_n && !g_mc[i].permanent)
+		mcast_remove(i);
+}
+
+void omci_hw_mcast_send(const uint8_t *frame, size_t len, bool tagged,
+			uint16_t tci)
+{
+	struct omci_hw_mcast_frame *f;
+
+	if (g_mc_q_n == MCAST_QUEUE)
+		return;
+	f = &g_mc_q[(g_mc_q_head + g_mc_q_n++) % MCAST_QUEUE];
+	if (len > sizeof(f->data))
+		len = sizeof(f->data);
+	f->tagged = tagged;
+	f->tci = tci;
+	f->len = (uint16_t)len;
+	omci_wire_copy(f->data, frame, len);
+}
+
+unsigned int omci_hw_mcast_port_recorded(struct omci_hw_mcast_port *out)
+{
+	if (out != NULL)
+		*out = g_mc_port;
+	return g_mc_port_set;
+}
+
+enum omci_status omci_hw_mcast_port(const struct omci_hw_mcast_port *cfg)
+{
+	if (cfg == NULL)
+		return OMCI_ERR_INVAL;
+	g_mc_port = *cfg;
+	g_mc_port_set++;
+	return OMCI_OK;
+}
+
+enum omci_status omci_hw_mcast_groups(struct omci_hw_mcast_group *out,
+				      size_t cap, size_t *n)
+{
+	size_t k = 0;
+
+	if (g_mc_fail_list) {
+		g_mc_fail_list = false;
+		return OMCI_ERR_HW;
+	}
+	for (; k < g_mc_n && k < cap; k++)
+		out[k] = g_mc[k];
+	*n = k;
+	return OMCI_OK;
+}
+
+enum omci_status omci_hw_mcast_group_add(const struct omci_hw_mcast_group *g)
+{
+	if (g_mc_fail_add) {
+		g_mc_fail_add = false;
+		return OMCI_ERR_HW;
+	}
+	if (mcast_find(g) < g_mc_n)
+		return OMCI_OK;
+	if (g_mc_n == OMCI_HW_MCAST_MAX_GROUPS)
+		return OMCI_ERR_NOMEM;
+	g_mc[g_mc_n++] = *g;
+	return OMCI_OK;
+}
+
+enum omci_status omci_hw_mcast_group_del(const struct omci_hw_mcast_group *g)
+{
+	const size_t i = mcast_find(g);
+
+	if (g_mc_fail_del) {
+		g_mc_fail_del = false;
+		return OMCI_ERR_HW;
+	}
+	if (i == g_mc_n)
+		return OMCI_DECLINED;
+	mcast_remove(i);
+	return OMCI_OK;
+}
+
+enum omci_status omci_hw_mcast_frame(struct omci_hw_mcast_frame *out)
+{
+	if (g_mc_q_n == 0)
+		return OMCI_DECLINED;
+	*out = g_mc_q[g_mc_q_head];
+	g_mc_q_head = (g_mc_q_head + 1u) % MCAST_QUEUE;
+	g_mc_q_n--;
+	return OMCI_OK;
+}
+
+/* The host backend has no descriptor: the daemon looks once a second. */
+static int host_mcast_fd(void)
+{
+	return -1;
+}
+
 const struct omci_hw_ops omci_hw_host_ops = {
 	.caps = omci_hw_caps,
 	.source = omci_hw_source,
@@ -513,4 +670,10 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.counter = omci_hw_counter,
 	.optics = omci_hw_optics,
 	.optics_limits = omci_hw_optics_limits,
+	.mcast_port = omci_hw_mcast_port,
+	.mcast_groups = omci_hw_mcast_groups,
+	.mcast_group_add = omci_hw_mcast_group_add,
+	.mcast_group_del = omci_hw_mcast_group_del,
+	.mcast_fd = host_mcast_fd,
+	.mcast_frame = omci_hw_mcast_frame,
 };

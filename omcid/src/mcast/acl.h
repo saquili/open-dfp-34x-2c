@@ -271,4 +271,17 @@ __must_check bool omci_mcast_preview_written(const struct omci_mib *mib,
 					     uint16_t subscriber, uint8_t *row,
 					     size_t len);
 
+/**
+ * omci_mcast_preview_count_down() - Let a minute of the allowed preview
+ *	groups pass.
+ * @mib: the MIB
+ * @subscriber: the instance of the multicast subscriber config info
+ *
+ * Takes a minute off the time left of each row with a duration, and ends a
+ * row whose time runs out (G.988 9.3.28).
+ *
+ * Return: true when a row ended.
+ */
+bool omci_mcast_preview_count_down(struct omci_mib *mib, uint16_t subscriber);
+
 #endif

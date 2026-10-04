@@ -354,3 +354,37 @@ bool omci_mcast_preview_written(const struct omci_mib *mib, uint16_t subscriber,
 	omci_be16_store(&row[OMCI_MCAST_PREVIEW_TIME_LEFT], (unsigned int)left);
 	return true;
 }
+
+bool omci_mcast_preview_count_down(struct omci_mib *mib, uint16_t subscriber)
+{
+	struct omci_me_table_policy policy;
+	struct parts parts[OMCI_MCAST_ACL_ROWS + 1];
+	const size_t n = gather(mib, OMCI_MCAST_SUBSCRIBER, subscriber,
+				OMCI_MCAST_SUBSCRIBER_PREVIEW, NULL, 0, parts);
+	bool ended = false;
+
+	(void)!omci_me_table_policy(OMCI_MCAST_SUBSCRIBER,
+				    OMCI_MCAST_SUBSCRIBER_PREVIEW, &policy);
+	for (size_t i = 0; i < n; i++) {
+		uint8_t *p1 = parts[i].part[1];
+		unsigned int left;
+
+		if (!(parts[i].have & 0x2u) ||
+		    omci_be16(&p1[OMCI_MCAST_PREVIEW_DURATION]) == 0u)
+			continue;
+		left = omci_be16(&p1[OMCI_MCAST_PREVIEW_TIME_LEFT]);
+		if (left <= 1u) {
+			omci_me_table_op_set(p1, OMCI_ME_TABLE_OP_DELETE);
+			ended = true;
+		} else {
+			omci_be16_store(&p1[OMCI_MCAST_PREVIEW_TIME_LEFT],
+					left - 1u);
+			omci_me_table_op_set(p1, OMCI_ME_TABLE_OP_WRITE);
+		}
+		(void)!omci_me_table_ctrl_set(mib, OMCI_MCAST_SUBSCRIBER,
+					      subscriber,
+					      OMCI_MCAST_SUBSCRIBER_PREVIEW,
+					      &policy, p1, PART_LEN - 2u);
+	}
+	return ended;
+}

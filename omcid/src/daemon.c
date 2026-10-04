@@ -240,7 +240,7 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 				     -1;
 
 	while (!g_stop) {
-		struct pollfd fds[1 + OMCI_CTL_MAX_FDS];
+		struct pollfd fds[2 + OMCI_CTL_MAX_FDS];
 		nfds_t n = 0;
 
 		if (g_mode != MODE_KEPT)
@@ -248,6 +248,17 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (frame_fd >= 0) {
 			fds[n].fd = frame_fd;
+			fds[n].events = POLLIN;
+			fds[n].revents = 0;
+			n++;
+		}
+
+		/* The multicast agent's descriptor, when the backend has one. */
+		const int mcast_fd = omci_engine_mcast_fd(eng);
+		const nfds_t mcast_at = n;
+
+		if (mcast_fd >= 0) {
+			fds[n].fd = mcast_fd;
 			fds[n].events = POLLIN;
 			fds[n].revents = 0;
 			n++;
@@ -274,6 +285,9 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (rc_poll == 0)
 			continue;
+
+		if (mcast_fd >= 0 && (fds[mcast_at].revents & POLLIN))
+			omci_engine_mcast_service(eng);
 
 		omci_ctl_service(ctl, &fds[ctl_first], n - ctl_first);
 

@@ -294,6 +294,76 @@ static void test_a_list_of_refusals_keeps_each_id_once_and_stops_when_full(void)
 	CHECK(omci_hw_reject_has(&r, 5));
 }
 
+static void test_the_multicast_bridge_keeps_its_groups(void)
+{
+	struct omci_hw_mcast_group g = { .vid = 7 }, out[2];
+	struct omci_hw_mcast_frame f;
+	struct omci_hw_mcast_port port = { .fast_leave = true };
+	uint8_t frame[600];
+	size_t n = 0;
+
+	omci_hw_mcast_reset();
+	CHECK_EQ(omci_hw_mcast_port(NULL), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_hw_mcast_port(&port), OMCI_OK);
+	port.fast_leave = false;
+	CHECK_EQ(omci_hw_mcast_port_recorded(&port), 1u);
+	CHECK(port.fast_leave);
+
+	/* Snooped groups come and go; a static one stays. */
+	g.group[15] = 1u;
+	omci_hw_mcast_snoop(&g, true);
+	omci_hw_mcast_snoop(&g, true);
+	g.group[15] = 2u;
+	g.permanent = true;
+	CHECK_EQ(omci_hw_mcast_group_add(&g), OMCI_OK);
+	CHECK_EQ(omci_hw_mcast_group_add(&g), OMCI_OK);
+	omci_hw_mcast_snoop(&g, false);
+	CHECK_EQ(omci_hw_mcast_groups(out, 1, &n), OMCI_OK);
+	CHECK_EQ(n, 1u);
+	CHECK_EQ(omci_hw_mcast_groups(out, 2, &n), OMCI_OK);
+	CHECK_EQ(n, 2u);
+	CHECK(!out[0].permanent && out[1].permanent);
+	g.group[15] = 1u;
+	omci_hw_mcast_snoop(&g, false);
+	CHECK_EQ(omci_hw_mcast_groups(out, 2, &n), OMCI_OK);
+	CHECK_EQ(n, 1u);
+	CHECK_EQ(omci_hw_mcast_group_del(&g), OMCI_DECLINED);
+
+	/* Full: no more groups, snooped or added. */
+	for (unsigned int i = 0; i < OMCI_HW_MCAST_MAX_GROUPS; i++) {
+		g.group[14] = (uint8_t)i;
+		omci_hw_mcast_snoop(&g, true);
+	}
+	g.group[14] = 0xeeu;
+	CHECK_EQ(omci_hw_mcast_group_add(&g), OMCI_ERR_NOMEM);
+
+	/* Failures, each once. */
+	omci_hw_mcast_fail_next(true, true, true);
+	CHECK_EQ(omci_hw_mcast_groups(out, 2, &n), OMCI_ERR_HW);
+	CHECK_EQ(omci_hw_mcast_groups(out, 2, &n), OMCI_OK);
+	CHECK_EQ(omci_hw_mcast_group_add(&g), OMCI_ERR_HW);
+	CHECK_EQ(omci_hw_mcast_group_del(&g), OMCI_ERR_HW);
+	CHECK_EQ(omci_hw_mcast_group_del(&g), OMCI_DECLINED);
+
+	/* Messages: eight wait, in order; a long one is cut. */
+	memset(frame, 0x5a, sizeof(frame));
+	for (unsigned int i = 0; i < 9u; i++) {
+		frame[0] = (uint8_t)i;
+		omci_hw_mcast_send(frame, i == 0u ? sizeof(frame) : 64u,
+				   i == 1u, 0x0123u);
+	}
+	for (unsigned int i = 0; i < 8u; i++) {
+		CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_OK);
+		CHECK_EQ(f.data[0], i);
+		CHECK_EQ(f.len, i == 0u ? OMCI_HW_MCAST_FRAME_MAX : 64u);
+		CHECK_EQ(f.tagged, i == 1u);
+	}
+	CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_DECLINED);
+	omci_hw_mcast_reset();
+	CHECK_EQ(omci_hw_mcast_groups(out, 2, &n), OMCI_OK);
+	CHECK_EQ(n, 0u);
+}
+
 int main(void)
 {
 	test_a_forced_reading_before_any_read_starts_from_the_recorded_stick();
@@ -304,5 +374,6 @@ int main(void)
 	RUN(test_a_set_that_is_refused_leaves_the_last_good_set_recorded);
 	RUN(test_a_refusal_that_is_asked_for_is_given_once);
 	RUN(test_a_list_of_refusals_keeps_each_id_once_and_stops_when_full);
+	RUN(test_the_multicast_bridge_keeps_its_groups);
 	return OMCI_T_REPORT("test_hw_host");
 }

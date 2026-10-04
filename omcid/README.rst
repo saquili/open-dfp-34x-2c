@@ -14,8 +14,13 @@ tagging operation. It notifies the OLT of alarms, among them those it
 judges itself: signal fail and degrade from the BIP errors of the
 downstream, and the optical alarms from the readings of the transceiver,
 whose levels it keeps in the ANI-G. It reports performance monitoring
-counts and the result of the optical line supervision test. A local control socket lets tools read the MIB, follow the
-frames and see what became of each VLAN rule.
+counts and the result of the optical line supervision test. It holds the
+groups that the bridge snoops on the subscriber side to the OLT's multicast
+policy: the groups each profile allows, in full or for preview, the most
+groups and bandwidth, immediate leave and the IGMP timers, and static
+groups; and it reports the active groups and the join counts. A local
+control socket lets tools read the MIB, follow the frames and see what
+became of each VLAN rule.
 
 Layout
 ======
@@ -31,7 +36,10 @@ Layout
    the data path (GEM ports, bridges, VLAN rules, performance monitoring)
 ``src/mcast/``
    multicast: the tables of the multicast operations profile and of the
-   multicast subscriber config info, read into whole rows
+   multicast subscriber config info, read into whole rows; the IGMP and MLD
+   messages of the subscriber, taken apart; and the agent that holds the
+   bridge's snooped groups to the OLT's policy and keeps the multicast
+   subscriber monitor
 ``src/hw/``
    the interface to the hardware, and the host backend that stands in for it
 ``src/sys/``

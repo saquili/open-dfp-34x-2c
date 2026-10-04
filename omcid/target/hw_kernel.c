@@ -24,7 +24,9 @@
 #include <unistd.h>
 
 #include <linux/ethtool.h>
+#include <linux/filter.h>
 #include <linux/genetlink.h>
+#include <linux/if_packet.h>
 #include <arpa/inet.h>
 #include <linux/if_bridge.h>
 #include <linux/if_ether.h>
@@ -37,6 +39,7 @@
 #include <linux/pon.h>
 #include <linux/sockios.h>
 #include <net/if.h>
+#include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
@@ -2249,6 +2252,501 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 }
 
 /* The kernel backend. */
+/*
+ * Multicast. The bridge snoops IGMP and MLD and keeps the groups it forwards
+ * to sfp in its MDB, which the agent reads (RTM_GETMDB), changes
+ * (RTM_NEWMDB, RTM_DELMDB) and hears change (RTNLGRP_MDB). The subscriber's
+ * messages come up a packet socket on sfp through a filter that lets IGMP
+ * and the MLD behind a hop-by-hop header through, untagged or under one or
+ * two tags. One epoll descriptor stands for both sockets. In router mode
+ * sfp is no bridge port: there is nothing to read or change.
+ */
+static int g_mc_epoll = -1;
+static int g_mc_events = -1;
+static int g_mc_packets = -1;
+static bool g_mc_tried;
+
+/* The bridge's timers are in hundredths of a second (USER_HZ). */
+#define CENTI_PER_SEC 100u
+
+static int mcast_packet_socket(void)
+{
+	static const struct sock_filter code[] = {
+		/* X: the bytes of tags before the EtherType */
+		BPF_STMT(BPF_LDX | BPF_W | BPF_IMM, 0),
+		BPF_STMT(BPF_LD | BPF_H | BPF_IND, 12),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETH_P_8021Q, 1, 0),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETH_P_8021AD, 0, 6),
+		BPF_STMT(BPF_LDX | BPF_W | BPF_IMM, 4),
+		BPF_STMT(BPF_LD | BPF_H | BPF_IND, 12),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETH_P_8021Q, 1, 0),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETH_P_8021AD, 0, 2),
+		BPF_STMT(BPF_LDX | BPF_W | BPF_IMM, 8),
+		BPF_STMT(BPF_LD | BPF_H | BPF_IND, 12),
+		/* IPv4 with the protocol IGMP */
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETH_P_IP, 0, 2),
+		BPF_STMT(BPF_LD | BPF_B | BPF_IND, 14 + 9),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, IPPROTO_IGMP, 3, 4),
+		/* IPv6 with a hop-by-hop header first */
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, ETH_P_IPV6, 0, 3),
+		BPF_STMT(BPF_LD | BPF_B | BPF_IND, 14 + 6),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, IPPROTO_HOPOPTS, 0, 1),
+		BPF_STMT(BPF_RET | BPF_K, 0xffff),
+		BPF_STMT(BPF_RET | BPF_K, 0),
+	};
+	const struct sock_fprog prog = {
+		.len = ARRAY_SIZE(code),
+		.filter = (struct sock_filter *)code,
+	};
+	struct sockaddr_ll sll = {
+		.sll_family = AF_PACKET,
+		.sll_protocol = htons(ETH_P_ALL),
+		.sll_ifindex = (int)if_nametoindex(UNI_IFNAME),
+	};
+	int on = 1;
+	int fd, err;
+
+	if (!sll.sll_ifindex)
+		return -ENODEV;
+	/* No frame comes before the filter is on and the socket bound. */
+	fd = socket(AF_PACKET, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return -errno;
+	if (setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, &prog, sizeof(prog)) <
+		    0 ||
+	    setsockopt(fd, SOL_PACKET, PACKET_AUXDATA, &on, sizeof(on)) < 0 ||
+	    bind(fd, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+		err = -errno;
+		close(fd);
+		return err;
+	}
+	return fd;
+}
+
+static int mcast_event_socket(void)
+{
+	struct sockaddr_nl sa = {
+		.nl_family = AF_NETLINK,
+		.nl_groups = 1u << (RTNLGRP_MDB - 1),
+	};
+	int fd, err;
+
+	fd = socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC,
+		    NETLINK_ROUTE);
+	if (fd < 0)
+		return -errno;
+	if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		err = -errno;
+		close(fd);
+		return err;
+	}
+	return fd;
+}
+
+/* The descriptor of both sockets, made once; -1 when they cannot be made. */
+static int kernel_mcast_fd(void)
+{
+	struct epoll_event ev = { .events = EPOLLIN };
+	int err;
+
+	if (g_mc_tried)
+		return g_mc_epoll;
+	g_mc_tried = true;
+
+	g_mc_packets = mcast_packet_socket();
+	g_mc_events = mcast_event_socket();
+	g_mc_epoll = epoll_create1(EPOLL_CLOEXEC);
+	if (g_mc_packets < 0 || g_mc_events < 0 || g_mc_epoll < 0) {
+		err = g_mc_packets < 0 ? g_mc_packets :
+		      g_mc_events < 0  ? g_mc_events :
+					 -errno;
+		OMCI_WARN(
+			"mcast: no messages of %s or changes of the bridge's groups to wait on (%s); looking once a second",
+			UNI_IFNAME, strerror(-err));
+		if (g_mc_epoll >= 0)
+			close(g_mc_epoll);
+		g_mc_epoll = -1;
+		return -1;
+	}
+	ev.data.fd = g_mc_packets;
+	(void)epoll_ctl(g_mc_epoll, EPOLL_CTL_ADD, g_mc_packets, &ev);
+	ev.data.fd = g_mc_events;
+	(void)epoll_ctl(g_mc_epoll, EPOLL_CTL_ADD, g_mc_events, &ev);
+	OMCI_INFO(
+		"mcast: reading the IGMP and MLD messages of %s and the groups of %s",
+		UNI_IFNAME, BRIDGE_IFNAME);
+	return g_mc_epoll;
+}
+
+/*
+ * The next message from the subscriber side: one that sfp received, not one
+ * the stick sent out of it, with the tag the receive path took off.
+ */
+static enum omci_status kernel_mcast_frame(struct omci_hw_mcast_frame *out)
+{
+	uint8_t ctl[CMSG_SPACE(sizeof(struct tpacket_auxdata))] __aligned(8);
+
+	if (g_mc_packets < 0)
+		return OMCI_DECLINED;
+	for (;;) {
+		struct sockaddr_ll from = { 0 };
+		struct iovec iov = { .iov_base = out->data,
+				     .iov_len = sizeof(out->data) };
+		struct msghdr msg = {
+			.msg_name = &from,
+			.msg_namelen = sizeof(from),
+			.msg_iov = &iov,
+			.msg_iovlen = 1,
+			.msg_control = ctl,
+			.msg_controllen = sizeof(ctl),
+		};
+		struct cmsghdr *c;
+		const ssize_t n = recvmsg(g_mc_packets, &msg, 0);
+
+		if (n < 0)
+			return OMCI_DECLINED;
+		if (from.sll_pkttype == PACKET_OUTGOING || g_router)
+			continue;
+		out->len = (uint16_t)n;
+		out->tagged = false;
+		for (c = CMSG_FIRSTHDR(&msg); c != NULL;
+		     c = CMSG_NXTHDR(&msg, c)) {
+			struct tpacket_auxdata aux;
+
+			if (c->cmsg_level != SOL_PACKET ||
+			    c->cmsg_type != PACKET_AUXDATA)
+				continue;
+			memcpy(&aux, CMSG_DATA(c), sizeof(aux));
+			if (aux.tp_status & TP_STATUS_VLAN_VALID) {
+				out->tagged = true;
+				out->tci = aux.tp_vlan_tci;
+			}
+		}
+		return OMCI_OK;
+	}
+}
+
+/* An address of the bridge's MDB, IPv4 or IPv6, as the agent keeps them. */
+static void mdb_addr(uint8_t out[static OMCI_HW_MCAST_ADDR_LEN], const void *in,
+		     bool v6)
+{
+	memset(out, 0, OMCI_HW_MCAST_ADDR_LEN);
+	if (v6) {
+		memcpy(out, in, OMCI_HW_MCAST_ADDR_LEN);
+		return;
+	}
+	out[10] = 0xffu;
+	out[11] = 0xffu;
+	memcpy(&out[12], in, 4);
+}
+
+/*
+ * One MDBA_MDB_ENTRY_INFO: a struct br_mdb_entry, then the entry's own
+ * attributes, the source among them for a group from one source.
+ */
+static void mdb_entry(const uint8_t *p, uint16_t len, int uni,
+		      struct omci_hw_mcast_group *out, size_t cap, size_t *n)
+{
+	struct br_mdb_entry e;
+	const uint8_t *a, *end = p + len;
+	struct omci_hw_mcast_group g = { .vid = 0 };
+	bool v6;
+
+	if (len < sizeof(e))
+		return;
+	memcpy(&e, p, sizeof(e));
+	if ((int)e.ifindex != uni || (e.flags & MDB_FLAGS_BLOCKED) ||
+	    (e.addr.proto != htons(ETH_P_IP) &&
+	     e.addr.proto != htons(ETH_P_IPV6)))
+		return;
+	v6 = e.addr.proto == htons(ETH_P_IPV6);
+	mdb_addr(g.group,
+		 v6 ? (const void *)&e.addr.u.ip6 : (const void *)&e.addr.u.ip4,
+		 v6);
+	g.vid = e.vid;
+	g.permanent = e.state == MDB_PERMANENT;
+
+	for (a = p + NL_ALIGN(sizeof(e)); a + NLA_HDRLEN_ <= end;) {
+		const uint16_t alen = *(const uint16_t *)a;
+		const uint16_t atype = *(const uint16_t *)(a + 2) & 0x3fff;
+
+		if (alen < NLA_HDRLEN_ || a + alen > end)
+			break;
+		if (atype == MDBA_MDB_EATTR_SOURCE &&
+		    alen == NLA_HDRLEN_ + (v6 ? 16u : 4u))
+			mdb_addr(g.source, a + NLA_HDRLEN_, v6);
+		a += NL_ALIGN(alen);
+	}
+	if (*n < cap)
+		out[(*n)++] = g;
+}
+
+/* Walk the nested attributes of @type in [p, end), calling @fn on each. */
+static void nla_each(const uint8_t *p, const uint8_t *end, uint16_t type,
+		     void (*fn)(const uint8_t *, uint16_t, void *), void *ctx)
+{
+	while (p + NLA_HDRLEN_ <= end) {
+		const uint16_t alen = *(const uint16_t *)p;
+		const uint16_t atype = *(const uint16_t *)(p + 2) & 0x3fff;
+
+		if (alen < NLA_HDRLEN_ || p + alen > end)
+			return;
+		if (atype == type)
+			fn(p + NLA_HDRLEN_, (uint16_t)(alen - NLA_HDRLEN_),
+			   ctx);
+		p += NL_ALIGN(alen);
+	}
+}
+
+struct mdb_walk {
+	int uni;
+	struct omci_hw_mcast_group *out;
+	size_t cap;
+	size_t n;
+};
+
+static void mdb_on_info(const uint8_t *p, uint16_t len, void *ctx)
+{
+	struct mdb_walk *w = ctx;
+
+	mdb_entry(p, len, w->uni, w->out, w->cap, &w->n);
+}
+
+static void mdb_on_entry(const uint8_t *p, uint16_t len, void *ctx)
+{
+	nla_each(p, p + len, MDBA_MDB_ENTRY_INFO, mdb_on_info, ctx);
+}
+
+static void mdb_on_mdb(const uint8_t *p, uint16_t len, void *ctx)
+{
+	nla_each(p, p + len, MDBA_MDB_ENTRY, mdb_on_entry, ctx);
+}
+
+static enum omci_status kernel_mcast_groups(struct omci_hw_mcast_group *out,
+					    size_t cap, size_t *n)
+{
+	static uint8_t rsp[65536] __aligned(4);
+	uint8_t req[NL_HDRLEN + NL_ALIGN(sizeof(struct br_port_msg))] __aligned(
+		4);
+	struct br_port_msg bpm = { .family = AF_BRIDGE };
+	struct mdb_walk w = { .out = out, .cap = cap };
+	uint8_t drain[4096] __aligned(4);
+	size_t got = 0;
+	int err;
+
+	*n = 0;
+	while (g_mc_events >= 0 &&
+	       recv(g_mc_events, drain, sizeof(drain), MSG_DONTWAIT) > 0)
+		;
+	if (g_router)
+		return OMCI_OK;
+	bpm.ifindex = if_nametoindex(BRIDGE_IFNAME);
+	w.uni = (int)if_nametoindex(UNI_IFNAME);
+	if (!bpm.ifindex || !w.uni)
+		return OMCI_OK;
+
+	memset(req, 0, sizeof(req));
+	*(uint32_t *)&req[0] = sizeof(req);
+	*(uint16_t *)&req[4] = RTM_GETMDB;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_DUMP;
+	*(uint32_t *)&req[8] = 20;
+	memcpy(req + NL_HDRLEN, &bpm, sizeof(bpm));
+	err = rtnl_talk(req, sizeof(req), rsp, sizeof(rsp), &got);
+	if (err) {
+		OMCI_WARN("mcast: the groups of %s could not be read: %s",
+			  BRIDGE_IFNAME, strerror(-err));
+		return OMCI_ERR_HW;
+	}
+	for (size_t off = 0; off + NL_HDRLEN <= got;) {
+		const uint32_t mlen = *(const uint32_t *)(rsp + off);
+		const uint16_t type = *(const uint16_t *)(rsp + off + 4);
+		const uint8_t *body = rsp + off + NL_HDRLEN +
+				      NL_ALIGN(sizeof(struct br_port_msg));
+
+		/* A dump answers with RTM_GETMDB, a change with RTM_NEWMDB. */
+		if ((type == RTM_GETMDB || type == RTM_NEWMDB) &&
+		    body <= rsp + off + mlen)
+			nla_each(body, rsp + off + mlen, MDBA_MDB, mdb_on_mdb,
+				 &w);
+		off += NL_ALIGN(mlen);
+	}
+	*n = w.n;
+	return OMCI_OK;
+}
+
+/* Add a static group to sfp, or remove a group, static or snooped. */
+static enum omci_status mdb_change(const struct omci_hw_mcast_group *g,
+				   bool add)
+{
+	static const uint8_t none[OMCI_HW_MCAST_ADDR_LEN];
+	uint8_t req[256] __aligned(4);
+	struct br_port_msg bpm = { .family = AF_BRIDGE };
+	struct br_mdb_entry e;
+	const bool v6 = !(g->group[10] == 0xffu && g->group[11] == 0xffu &&
+			  !memcmp(g->group, none, 10));
+	size_t off;
+	int err;
+
+	if (g_router)
+		return OMCI_OK;
+	memset(&e, 0, sizeof(e));
+	bpm.ifindex = if_nametoindex(BRIDGE_IFNAME);
+	e.ifindex = if_nametoindex(UNI_IFNAME);
+	if (!bpm.ifindex || !e.ifindex)
+		return OMCI_ERR_HW;
+	e.state = MDB_PERMANENT;
+	e.vid = g_bridge_filtering == 1 ? g->vid : 0;
+	e.addr.proto = htons(v6 ? ETH_P_IPV6 : ETH_P_IP);
+	if (v6)
+		memcpy(&e.addr.u.ip6, g->group, 16);
+	else
+		memcpy(&e.addr.u.ip4, &g->group[12], 4);
+
+	memset(req, 0, sizeof(req));
+	*(uint16_t *)&req[4] = add ? RTM_NEWMDB : RTM_DELMDB;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK |
+			       (add ? NLM_F_CREATE | NLM_F_REPLACE : 0);
+	*(uint32_t *)&req[8] = 21;
+	memcpy(req + NL_HDRLEN, &bpm, sizeof(bpm));
+	off = NL_HDRLEN + NL_ALIGN(sizeof(bpm));
+	off = nla_put(req, off, MDBA_SET_ENTRY, &e, sizeof(e));
+	if (memcmp(g->source, none, sizeof(none)) != 0) {
+		const size_t nest = off;
+
+		off = nla_put(req, off + NLA_HDRLEN_, MDBE_ATTR_SOURCE,
+			      v6 ? g->source : &g->source[12], v6 ? 16 : 4);
+		*(uint16_t *)(req + nest) = (uint16_t)(off - nest);
+		*(uint16_t *)(req + nest + 2) = MDBA_SET_ENTRY_ATTRS |
+						NLA_F_NESTED;
+	}
+	*(uint32_t *)&req[0] = (uint32_t)off;
+
+	err = rtnl_talk(req, off, NULL, 0, NULL);
+	if (err == -ENOENT && !add)
+		return OMCI_DECLINED;
+	if (err) {
+		OMCI_WARN("mcast: %s would not %s a group: %s (%s)",
+			  BRIDGE_IFNAME, add ? "add" : "remove", strerror(-err),
+			  omci_hw_last_extack());
+		return OMCI_ERR_HW;
+	}
+	return OMCI_OK;
+}
+
+static enum omci_status
+kernel_mcast_group_add(const struct omci_hw_mcast_group *g)
+{
+	return mdb_change(g, true);
+}
+
+static enum omci_status
+kernel_mcast_group_del(const struct omci_hw_mcast_group *g)
+{
+	return mdb_change(g, false);
+}
+
+/*
+ * The leave of sfp, and the bridge's timers from the profile's IGMP
+ * settings, 0 for the default of RFC 3376: a robustness of 2, a query each
+ * 125 s, 10 s to answer it, 1 s to answer a group's query. A group lives
+ * robustness times the query interval and the answer time (RFC 3376 8.4).
+ */
+static enum omci_status kernel_mcast_port(const struct omci_hw_mcast_port *cfg)
+{
+	const uint32_t rob = cfg->robustness ? cfg->robustness : 2u;
+	const uint64_t query =
+		(uint64_t)(cfg->query_interval ? cfg->query_interval : 125u) *
+		CENTI_PER_SEC;
+	const uint64_t answer =
+		(uint64_t)(cfg->query_response ? cfg->query_response : 100u) *
+		(CENTI_PER_SEC / 10u);
+	const uint64_t last =
+		(uint64_t)(cfg->last_member ? cfg->last_member : 10u) *
+		(CENTI_PER_SEC / 10u);
+	const uint64_t member = rob * query + answer;
+	const uint64_t querier = rob * query + answer / 2u;
+	const uint8_t fast = cfg->fast_leave ? 1u : 0u;
+	uint8_t req[384] __aligned(4);
+	uint8_t data[160] __aligned(4);
+	uint8_t info[192] __aligned(4);
+	struct ifinfomsg ifi = { .ifi_family = AF_BRIDGE };
+	size_t off, nest, dlen = 0, ilen = 0;
+	int br, uni, err;
+
+	if (g_router)
+		return OMCI_OK;
+	br = (int)if_nametoindex(BRIDGE_IFNAME);
+	uni = (int)if_nametoindex(UNI_IFNAME);
+	if (!br || !uni) {
+		OMCI_DEBUG("mcast: no %s with %s yet", BRIDGE_IFNAME,
+			   UNI_IFNAME);
+		return OMCI_ERR_HW;
+	}
+
+	/* The leave of the port. */
+	memset(req, 0, sizeof(req));
+	ifi.ifi_index = uni;
+	*(uint16_t *)&req[4] = RTM_SETLINK;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK;
+	*(uint32_t *)&req[8] = 22;
+	memcpy(req + NL_HDRLEN, &ifi, sizeof(ifi));
+	off = NL_HDRLEN + sizeof(ifi);
+	nest = off;
+	off = nla_put(req, off + NLA_HDRLEN_, IFLA_BRPORT_FAST_LEAVE, &fast,
+		      sizeof(fast));
+	*(uint16_t *)(req + nest) = (uint16_t)(off - nest);
+	*(uint16_t *)(req + nest + 2) = IFLA_PROTINFO | NLA_F_NESTED;
+	*(uint32_t *)&req[0] = (uint32_t)off;
+	err = rtnl_talk(req, off, NULL, 0, NULL);
+	if (err) {
+		OMCI_WARN("mcast: the leave of %s could not be set: %s (%s)",
+			  UNI_IFNAME, strerror(-err), omci_hw_last_extack());
+		return OMCI_ERR_HW;
+	}
+
+	/* The bridge's timers. */
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_LAST_MEMBER_CNT, &rob,
+		       sizeof(rob));
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_STARTUP_QUERY_CNT, &rob,
+		       sizeof(rob));
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_QUERY_INTVL, &query,
+		       sizeof(query));
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_QUERY_RESPONSE_INTVL, &answer,
+		       sizeof(answer));
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_LAST_MEMBER_INTVL, &last,
+		       sizeof(last));
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_MEMBERSHIP_INTVL, &member,
+		       sizeof(member));
+	dlen = nla_put(data, dlen, IFLA_BR_MCAST_QUERIER_INTVL, &querier,
+		       sizeof(querier));
+	ilen = nla_put(info, ilen, IFLA_INFO_KIND, "bridge", sizeof("bridge"));
+	*(uint16_t *)(info + ilen) = (uint16_t)(NLA_HDRLEN_ + dlen);
+	*(uint16_t *)(info + ilen + 2) = IFLA_INFO_DATA | NLA_F_NESTED;
+	memcpy(info + ilen + NLA_HDRLEN_, data, dlen);
+	ilen += NL_ALIGN(NLA_HDRLEN_ + dlen);
+
+	memset(req, 0, sizeof(req));
+	ifi.ifi_family = AF_UNSPEC;
+	ifi.ifi_index = br;
+	*(uint16_t *)&req[4] = RTM_NEWLINK;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK;
+	*(uint32_t *)&req[8] = 23;
+	memcpy(req + NL_HDRLEN, &ifi, sizeof(ifi));
+	off = NL_HDRLEN + sizeof(ifi);
+	*(uint16_t *)(req + off) = (uint16_t)(NLA_HDRLEN_ + ilen);
+	*(uint16_t *)(req + off + 2) = IFLA_LINKINFO | NLA_F_NESTED;
+	memcpy(req + off + NLA_HDRLEN_, info, ilen);
+	off += NL_ALIGN(NLA_HDRLEN_ + ilen);
+	*(uint32_t *)&req[0] = (uint32_t)off;
+	err = rtnl_talk(req, off, NULL, 0, NULL);
+	if (err) {
+		OMCI_WARN("mcast: the timers of %s could not be set: %s (%s)",
+			  BRIDGE_IFNAME, strerror(-err), omci_hw_last_extack());
+		return OMCI_ERR_HW;
+	}
+	return OMCI_OK;
+}
+
 const struct omci_hw_ops omci_hw_kernel_ops = {
 	.caps = kernel_caps,
 	.source = kernel_source,
@@ -2262,4 +2760,10 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.optics = kernel_optics,
 	.optics_limits = kernel_optics_limits,
 	.set_router = omci_hw_kernel_router,
+	.mcast_port = kernel_mcast_port,
+	.mcast_groups = kernel_mcast_groups,
+	.mcast_group_add = kernel_mcast_group_add,
+	.mcast_group_del = kernel_mcast_group_del,
+	.mcast_fd = kernel_mcast_fd,
+	.mcast_frame = kernel_mcast_frame,
 };

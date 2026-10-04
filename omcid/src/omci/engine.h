@@ -79,6 +79,22 @@ void omci_engine_tap_set(struct omci_engine *eng,
 void omci_engine_reprogram(struct omci_engine *eng);
 
 /**
+ * omci_engine_mcast_fd() - The descriptor the multicast agent waits on.
+ * @eng: the engine
+ *
+ * Return: a descriptor that becomes readable when the subscriber side's
+ * multicast changes, or -1 for none: the agent then looks once a second.
+ */
+__must_check int omci_engine_mcast_fd(const struct omci_engine *eng);
+
+/**
+ * omci_engine_mcast_service() - Let the multicast agent answer what the
+ *	subscriber side did.
+ * @eng: the engine, or NULL
+ */
+void omci_engine_mcast_service(struct omci_engine *eng);
+
+/**
  * omci_engine_tick() - Let time pass.
  * @eng: the engine
  * @now_sec: monotonic time in seconds
