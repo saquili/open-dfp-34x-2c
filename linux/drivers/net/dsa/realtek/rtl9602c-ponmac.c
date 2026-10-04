@@ -157,27 +157,38 @@ void rtl9602c_ponmac_sid_valid(struct rtl9602c_priv *p, unsigned int sid,
 		rtl9602c_ponq_stream_enable(p, sid, valid);
 }
 
-/*
- * Set queue @q to strict priority, committed rate @cir, peak rate @pir and
- * weight 1. The driver passes a committed rate of 0 and the peak rate
- * RTL9602C_PONSCH_QUEUE_RATE_MAX, which leaves the queue unshaped: it sends
- * as much as its T-CONT is granted (measured on this board). The unit of the
- * rates is not known. With one queue per T-CONT, strict priority, the
- * committed rate and the weight choose nothing; what they do between queues
- * of one T-CONT is not verified.
+/**
+ * rtl9602c_pon_queue_set() - set an upstream queue's scheduling
+ * @p: the switch
+ * @q: the queue, as RTL9602C_PON_QUEUE() numbers them
+ * @weight: 0 for strict priority; otherwise the queue's weight, up to
+ *	    RTL9602C_PONSCH_QUEUE_WEIGHT_MASK
+ * @cir: the committed rate, in RTL9602C_PONSCH_QUEUE_RATE units
+ * @pir: the peak rate, in the same units; RTL9602C_PONSCH_QUEUE_RATE_MAX
+ *	 leaves the queue unshaped, sending as much as its T-CONT is granted
+ *
+ * What the settings do, all measured on this board with two loaded queues
+ * of one T-CONT: a T-CONT serves the committed rates of its queues first,
+ * then its strict queues, the higher queue number first, then its weighted
+ * queues in proportion to their weights; a queue sends nothing above its
+ * peak rate while RTL9602C_PONSCH_CFG_PIR_DROP is set. A rate unit is 1024
+ * bytes per second of frames counted with their FCS. A strict queue's
+ * weight word is written 1.
  */
-static void rtl9602c_pon_queue_set(struct rtl9602c_priv *p, unsigned int q,
-				   u32 cir, u32 pir)
+void rtl9602c_pon_queue_set(struct rtl9602c_priv *p, unsigned int q,
+			    unsigned int weight, u32 cir, u32 pir)
 {
 	unsigned int sh = RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT(q);
 
-	rtl9602c_rmw(p, RTL9602C_PONSCH_QUEUE_WFQ(q), BIT(q % 32), 0);
+	rtl9602c_rmw(p, RTL9602C_PONSCH_QUEUE_WFQ(q), BIT(q % 32),
+		     weight ? BIT(q % 32) : 0);
 	rtl9602c_w(p, RTL9602C_PONSCH_QUEUE_CIR(q),
 		   FIELD_PREP(RTL9602C_PONSCH_QUEUE_RATE, cir));
 	rtl9602c_w(p, RTL9602C_PONSCH_QUEUE_PIR(q),
 		   FIELD_PREP(RTL9602C_PONSCH_QUEUE_RATE, pir));
 	rtl9602c_rmw(p, RTL9602C_PONSCH_QUEUE_WEIGHT(q),
-		     RTL9602C_PONSCH_QUEUE_WEIGHT_MASK << sh, 1 << sh);
+		     RTL9602C_PONSCH_QUEUE_WEIGHT_MASK << sh,
+		     (weight ? weight : 1) << sh);
 }
 
 /*
@@ -259,10 +270,11 @@ static int rtl9602c_pon_drain(struct rtl9602c_priv *p, unsigned int q)
  * 0 and 16; that the other T-CONTs follow it is not verified.
  *
  * The first queue attached switches the T-CONT on. A queue that no T-CONT of
- * the group has in its map yet is drained, so that it is attached empty; one
- * already in a map carries other GEM ports' frames and is not drained, since
- * the drain would discard them. The queue is then added to the map and made
- * strict and unshaped (rtl9602c_pon_queue_set()). No stream is admitted here:
+ * the group has in its map yet is drained, so that it is attached empty, and
+ * made strict and unshaped (rtl9602c_pon_queue_set()); one already in a map
+ * carries other GEM ports' frames, so it is neither drained, which would
+ * discard them, nor set again. The queue is then added to the map. No
+ * stream is admitted here:
  * the streams pointed at the queue may be parked ones, since queue 63 is a GEM
  * T-CONT's queue too (rtl9602c_gem_tcont_qbit()), and each stream that sends
  * is admitted by its owner. Queues are never detached, nor T-CONTs switched
@@ -293,10 +305,11 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 		err = rtl9602c_pon_drain(p, pq);
 		if (err)
 			return err;
+		rtl9602c_pon_queue_set(p, pq, 0, 0,
+				       RTL9602C_PONSCH_QUEUE_RATE_MAX);
 	}
 
 	rtl9602c_w(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont), qmap | BIT(queue));
-	rtl9602c_pon_queue_set(p, pq, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
 	return 0;
 }
 
@@ -621,12 +634,16 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 		rtl9602c_w(p, RTL9602C_PONSCH_TCONT_QUEUES(i), 0);
 	}
 	/*
-	 * Drop what exceeds a queue's peak rate; with every peak rate at the
-	 * maximum it cannot act. Not verified.
+	 * Make a queue's peak rate a limit. With the bit set, a queue sends
+	 * nothing above its peak rate, and dropping the excess takes from the
+	 * grant of the T-CONT's other queues only when the queue is offered
+	 * far more than its peak rate; with it clear, a queue goes over its
+	 * peak rate whenever its T-CONT's other queues leave the grant unused
+	 * (all measured on this board, see rtl9602c.rst).
 	 */
 	rtl9602c_rmw(p, RTL9602C_PONSCH_CFG, 0, RTL9602C_PONSCH_CFG_PIR_DROP);
 	for (i = 0; i < RTL9602C_PON_NUM_QUEUE; i++)
-		rtl9602c_pon_queue_set(p, i, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
+		rtl9602c_pon_queue_set(p, i, 0, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
 	/*
 	 * The internal priority the switch gives the OMCI frames it traps to
 	 * the CPU: the conduit takes priority 7 on a receive ring of its own,
@@ -712,6 +729,25 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
+/* One queue's scheduling as rtl9602c_pon_queue_set() writes it, rates raw. */
+static void rtl9602c_queue_show(struct seq_file *m, struct rtl9602c_priv *p,
+				unsigned int q)
+{
+	u32 weight = (rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_WEIGHT(q)) >>
+		      RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT(q)) &
+		     RTL9602C_PONSCH_QUEUE_WEIGHT_MASK;
+
+	if (rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_WFQ(q)) & BIT(q % 32))
+		seq_printf(m, "    queue %-2u  weight %-4u", q, weight);
+	else
+		seq_printf(m, "    queue %-2u  strict     ", q);
+	seq_printf(m, "  cir %05lx  pir %05lx\n",
+		   FIELD_GET(RTL9602C_PONSCH_QUEUE_RATE,
+			     rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_CIR(q))),
+		   FIELD_GET(RTL9602C_PONSCH_QUEUE_RATE,
+			     rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_PIR(q))));
+}
+
 /* The queue stream @sid points at. */
 static unsigned int rtl9602c_ponq_stream_queue_get(struct rtl9602c_priv *p,
 						   unsigned int sid)
@@ -772,11 +808,21 @@ static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 		seq_printf(m, "  tcont en    %08x  qmap[16] %08x\n",
 			   rtl9602c_r(p, RTL9602C_PONSCH_TCONT_EN),
 			   rtl9602c_r(p, qmap));
-		/* The maps of T-CONTs 0 to 15 in use, and the streams admitted. */
-		for (t = 0; t < RTL9602C_GPON_DEFAULT_TCONT_IDX; t++)
-			if (rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)))
-				seq_printf(m, "  qmap[%2u]    %08x\n", t,
-					   rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)));
+		/*
+		 * The maps of T-CONTs 0 to 15 in use, each queue in them with
+		 * its scheduling, and the streams admitted.
+		 */
+		for (t = 0; t < RTL9602C_GPON_DEFAULT_TCONT_IDX; t++) {
+			unsigned long map;
+			unsigned int b;
+
+			map = rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t));
+			if (!map)
+				continue;
+			seq_printf(m, "  qmap[%2u]    %08lx\n", t, map);
+			for_each_set_bit(b, &map, 32)
+				rtl9602c_queue_show(m, p, RTL9602C_PON_QUEUE(t, b));
+		}
 		for (s = 0; s < RTL9602C_GPON_OMCC_FLOW; s++)
 			if (rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_EN(s)) & BIT(s % 32))
 				seq_printf(m, "  sid %-2u      queue %u, valid\n", s,

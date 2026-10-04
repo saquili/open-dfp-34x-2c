@@ -84,18 +84,104 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u32 tcont)
  * (rtl9602c_gem_restore()). rtl9602c_gem_tcont_ready() programs the upstream
  * half once the Alloc-ID comes.
  *
- * With the Alloc-ID, the T-CONT's queue of the highest priority is attached
- * (rtl9602c_gem_tcont_qbit()), the flow is given the Port-ID its upstream
- * GEM headers carry, and the stream is pointed at that queue and admitted:
- * every GEM port of a T-CONT sends through that one queue.
+ * With the Alloc-ID, the upstream half follows (rtl9602c_gem_us_program()).
  */
 static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f);
+
+/*
+ * The unit of the queue rate fields: 1024 bytes per second of frames counted
+ * with their FCS, with the token clock the build sets (measured on this
+ * board).
+ */
+#define RTL9602C_GEM_RATE_UNIT		1024
+
+/*
+ * A GEM port's weight w goes into the queue's 10-bit field as 4w: two queues
+ * weighted 1 and 3 shared 29 % to 71 %, while 4 and 12 shared 25.4 % to
+ * 74.6 % (measured on this board).
+ */
+#define RTL9602C_GEM_WEIGHT_SCALE	4
+
+/*
+ * Set the scheduling of the queue of priority @queue of GEM T-CONT @tcont
+ * from every upstream GEM port that sends through it: weighted, by the
+ * largest weight among them, if one of them has a weight; their committed
+ * rates added up; their peak rates added up, or no limit if one of them has
+ * none. A committed rate is rounded up to whole units and a peak rate down,
+ * to one unit at least; both are kept within the field, and the committed
+ * rate within the peak rate. A queue that no GEM port sends through is made
+ * strict and unshaped again.
+ */
+static void rtl9602c_gem_queue_sched(struct rtl9602c_priv *p, u32 tcont,
+				     u8 queue)
+{
+	unsigned int f, weight = 0;
+	u64 cir = 0, pir = 0, units;
+	bool limited = true;
+	u32 cir_u, pir_u;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	for_each_set_bit(f, p->gem_flows, RTL9602C_PON_NUM_SID) {
+		const struct pon_gem_config *c = &p->gem_cfg[f];
+
+		if (!(c->direction & IFLA_GEM_DIR_UPSTREAM) ||
+		    c->tcont != tcont || c->queue != queue)
+			continue;
+		weight = max_t(unsigned int, weight, c->weight);
+		if (check_add_overflow(cir, c->cir, &cir))
+			cir = U64_MAX;
+		if (!c->pir)
+			limited = false;
+		else if (check_add_overflow(pir, c->pir, &pir))
+			pir = U64_MAX;
+	}
+
+	pir_u = RTL9602C_PONSCH_QUEUE_RATE_MAX;
+	if (limited && pir)
+		pir_u = clamp_t(u64, pir / RTL9602C_GEM_RATE_UNIT, 1,
+				RTL9602C_PONSCH_QUEUE_RATE_MAX);
+	units = cir / RTL9602C_GEM_RATE_UNIT + !!(cir % RTL9602C_GEM_RATE_UNIT);
+	cir_u = min_t(u64, units, pir_u);
+
+	rtl9602c_pon_queue_set(p, RTL9602C_PON_QUEUE(rtl9602c_gem_tcont(tcont),
+						     rtl9602c_gem_tcont_qbit(tcont, queue)),
+			       weight * RTL9602C_GEM_WEIGHT_SCALE, cir_u, pir_u);
+}
+
+/*
+ * The upstream half of flow @f, for a GEM port on a T-CONT that holds an
+ * Alloc-ID: the port's queue of its T-CONT is attached
+ * (rtl9602c_gem_tcont_qbit()), the flow is given the Port-ID its upstream
+ * GEM headers carry, the stream is pointed at the queue and admitted, and
+ * the queue is scheduled for the GEM ports that send through it, @cfg's
+ * port among them (rtl9602c_gem_queue_sched()): the caller has recorded
+ * @cfg as the flow's configuration.
+ */
+static int rtl9602c_gem_us_program(struct rtl9602c_priv *p, unsigned int f,
+				   const struct pon_gem_config *cfg)
+{
+	unsigned int t = rtl9602c_gem_tcont(cfg->tcont);
+	unsigned int q = rtl9602c_gem_tcont_qbit(cfg->tcont, cfg->queue);
+	int err;
+
+	err = rtl9602c_pon_queue_add(p, t, q);
+	if (err)
+		return err;
+
+	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
+		     RTL9602C_GEM_US_FLOW_CFG_PORTID,
+		     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID, cfg->port_id));
+	rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(t, q));
+	rtl9602c_ponmac_sid_valid(p, f, true);
+	rtl9602c_gem_queue_sched(p, cfg->tcont, cfg->queue);
+	return 0;
+}
 
 static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 				const struct pon_gem_config *cfg)
 {
 	u32 type = RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH;
-	unsigned int t, q;
 	int err;
 
 	if (cfg->multicast)
@@ -118,18 +204,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 			return 0;
 		}
 
-		t = rtl9602c_gem_tcont(cfg->tcont);
-		q = rtl9602c_gem_tcont_qbit(cfg->tcont, 0);
-		err = rtl9602c_pon_queue_add(p, t, q);
-		if (err)
-			return err;
-
-		rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
-			     RTL9602C_GEM_US_FLOW_CFG_PORTID,
-			     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID,
-					cfg->port_id));
-		rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(t, q));
-		rtl9602c_ponmac_sid_valid(p, f, true);
+		return rtl9602c_gem_us_program(p, f, cfg);
 	}
 
 	return 0;
@@ -178,13 +253,6 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 				       "No T-CONT %u: traffic uses T-CONTs 0 to %u",
 				       cfg->tcont, RTL9602C_GEM_NUM_TCONT - 1);
 		return -ERANGE;
-	}
-
-	/* Every queue is strict and unshaped (rtl9602c_pon_queue_set()). */
-	if (cfg->weight || cfg->cir || cfg->pir) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "Upstream weights and rates are not supported");
-		return -EOPNOTSUPP;
 	}
 
 	mutex_lock(&p->gpon_lock);
@@ -241,8 +309,15 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 		goto out;
 	}
 
+	/*
+	 * Recorded first, so that the scheduling of the port's queue counts
+	 * the port (rtl9602c_gem_queue_sched()).
+	 */
+	p->gem_cfg[f] = *cfg;
+	set_bit(f, p->gem_flows);
 	err = rtl9602c_gem_program(p, f, cfg);
 	if (err) {
+		clear_bit(f, p->gem_flows);
 		rtl9602c_gem_unprogram(p, f);
 		NL_SET_ERR_MSG_MOD(extack, "The MAC did not take the GEM port");
 		goto out;
@@ -255,9 +330,6 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	 */
 	rtl9602c_gem_cntr_sync(p, f);
 	p->gem_tx_octets[f] = 0;
-
-	p->gem_cfg[f] = *cfg;
-	set_bit(f, p->gem_flows);
 	*flow = f;
 	pr_debug("GEM port %u in flow %u\n", cfg->port_id, f);
 out:
@@ -436,11 +508,13 @@ bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow)
  * The port leaves the bridge first; the PON class may report that only after
  * this call. A routed flow that names the port is forgotten with the
  * references of the devices over it, and the stream entries are rebuilt
- * without it. Then, if the PON MAC is built, the port's hardware is undone.
+ * without it. Then, if the PON MAC is built, the port's hardware is undone,
+ * and the queue it sent through is scheduled for the GEM ports left in it.
  */
 static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 {
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	const struct pon_gem_config *cfg = &p->gem_cfg[flow];
 
 	rtl9602c_gem_unbridge(p, flow);
 
@@ -451,9 +525,54 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 	}
 
 	mutex_lock(&p->gpon_lock);
-	if (test_and_clear_bit(flow, p->gem_flows) && p->ponmac_up)
+	if (test_and_clear_bit(flow, p->gem_flows) && p->ponmac_up) {
 		rtl9602c_gem_unprogram(p, flow);
+		if ((cfg->direction & IFLA_GEM_DIR_UPSTREAM) &&
+		    rtl9602c_gem_tcont_bound(p, cfg->tcont))
+			rtl9602c_gem_queue_sched(p, cfg->tcont, cfg->queue);
+	}
 	mutex_unlock(&p->gpon_lock);
+}
+
+/*
+ * A new upstream scheduling for a GEM port: the configuration is recorded,
+ * and while the port's upstream is programmed, the upstream half is
+ * programmed again for it, which moves the stream to a new queue when the
+ * queue changes, and the old queue is scheduled for the ports left in it.
+ * Frames already in the old queue still leave in the T-CONT's grants. When
+ * the new queue cannot be attached, the old configuration is put back.
+ */
+static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
+			       const struct pon_gem_config *cfg,
+			       struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct pon_gem_config old;
+	int err = 0;
+
+	mutex_lock(&p->gpon_lock);
+	if (WARN_ON(!test_bit(flow, p->gem_flows))) {
+		err = -ENOENT;
+		goto out;
+	}
+
+	old = p->gem_cfg[flow];
+	p->gem_cfg[flow] = *cfg;
+	if (!p->ponmac_up || !rtl9602c_gem_tcont_bound(p, cfg->tcont))
+		goto out;
+
+	err = rtl9602c_gem_us_program(p, flow, cfg);
+	if (err) {
+		p->gem_cfg[flow] = old;
+		NL_SET_ERR_MSG_MOD(extack,
+				   "The MAC could not attach the new queue");
+		goto out;
+	}
+	if (old.queue != cfg->queue)
+		rtl9602c_gem_queue_sched(p, old.tcont, old.queue);
+out:
+	mutex_unlock(&p->gpon_lock);
+	return err;
 }
 
 /**
@@ -610,6 +729,7 @@ static int rtl9602c_tcont_get(struct pon_device *pon, unsigned int index,
 static const struct pon_device_ops rtl9602c_pon_ops = {
 	.owns_netdev		= rtl9602c_gem_owns_netdev,
 	.gem_add		= rtl9602c_gem_add,
+	.gem_change		= rtl9602c_gem_change,
 	.gem_del		= rtl9602c_gem_del,
 	.gem_xmit		= rtl9602c_gem_xmit,
 	.gem_bridge_join	= rtl9602c_gem_bridge_join,
@@ -645,7 +765,7 @@ static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
  * Registers the switch as the ONU behind its PON port, with all
  * RTL9602C_GPON_NUM_FLOW flows of the GPON MAC, although the OMCC's is never
  * given to a GEM port, and the RTL9602C_GEM_NUM_TCONT T-CONTs the GEM ports
- * use, each with the one queue a GEM port can name: the scheduler's T-CONT 16
+ * use, with RTL9602C_GEM_TCONT_QUEUES queues each: the scheduler's T-CONT 16
  * is the OMCC's. Then attaches the receive handler for data frames to the
  * conduit. Nothing is registered without the
  * PON MAC's system controller and buffers, or without a conduit.
@@ -664,7 +784,8 @@ int rtl9602c_gem_setup(struct rtl9602c_priv *p)
 
 	pon = pon_device_register(p->dev, &rtl9602c_pon_ops,
 				  RTL9602C_GPON_NUM_FLOW,
-				  RTL9602C_GEM_NUM_TCONT, 1, p);
+				  RTL9602C_GEM_NUM_TCONT,
+				  RTL9602C_GEM_TCONT_QUEUES, p);
 	if (IS_ERR(pon))
 		return PTR_ERR(pon);
 	/* The handler delivers through p->pon, so it is set first. */

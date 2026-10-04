@@ -2117,15 +2117,23 @@ GEM ports
      - Tag
      - Checked by
    * - ``gem_add`` refuses: an upstream port on a T-CONT of 8 or above
-       (``-ERANGE``); a weight or a rate (``-EOPNOTSUPP``), since every queue
-       is strict and unshaped; a PON MAC that is not up yet (``-ENETDOWN``);
-       the OMCC's Port-ID (``-EEXIST``); a Port-ID that already has a GEM
-       interface (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
+       (``-ERANGE``); a PON MAC that is not up yet (``-ENETDOWN``); the OMCC's
+       Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
+       (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
        port network CTPs with one Port-ID; this MAC does not. The flow is the
        lowest free one other than ``RTL9602C_GPON_OMCC_FLOW`` (64).
      - I
      - Design choice, not exercised: ``ip link add ... type gem`` with each
        fault.
+   * - The driver schedules as the class's model says ("Upstream
+       scheduling"): each GEM T-CONT has eight queues, the higher-numbered
+       hardware queue going first, so priority 0 takes the highest; committed
+       rates first, then strict queues, then weighted ones. ``gem_change``
+       moves a port to its new queue and sets the queues' weights and rates
+       again.
+     - M
+     - Two loaded queues of one T-CONT on the board (the driver's page,
+       "Upstream streams, queues and T-CONTs").
    * - ``gem_add`` programs the downstream half at once. It programs the
        upstream half only when the T-CONT has an Alloc-ID; until then the
        upstream is parked with a warning, and it starts when Assign_Alloc-ID
@@ -2288,7 +2296,7 @@ Setup of the RTL9602C driver
 2. The switch driver creates its OMCI port, which creates ``pon0`` and
    ``pon0omci0``, and attaches its control-frame handler to the conduit.
    Purpose: OMCI messages have somewhere to go. (T)
-3. It registers its data path on ``pon0`` (128 flows, 8 T-CONTs of one queue)
+3. It registers its data path on ``pon0`` (128 flows, 8 T-CONTs of 8 queues)
    and attaches its flow handler to the conduit. Purpose: GEM interfaces can be
    created and received frames delivered. (T)
 4. ``ip link set pon up`` brings the PON up, and the ONU walks O1 to O5.

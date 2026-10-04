@@ -3394,6 +3394,8 @@ int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
 			    u16 port_id);
 int rtl9602c_gpon_port_unbind(struct rtl9602c_priv *p, unsigned int idx);
 u32 rtl9602c_gpon_port_aes(struct rtl9602c_priv *p, u16 port_id);
+void rtl9602c_pon_queue_set(struct rtl9602c_priv *p, unsigned int q,
+			    unsigned int weight, u32 cir, u32 pir);
 int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 			   unsigned int queue);
 void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,

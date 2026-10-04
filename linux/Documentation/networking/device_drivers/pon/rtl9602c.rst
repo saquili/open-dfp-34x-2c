@@ -637,8 +637,8 @@ facts below give what is known of each.
      - 32 x (t / 8) + q
      - ``RTL9602C_PON_QUEUE(t, q)``
      - GEM T-CONT n's queue of priority k, 0 the highest, is map bit
-       ``rtl9602c_gem_tcont_qbit(n, k)``, 8 x (n % 4) + 7 - k; only k = 0 is
-       attached.
+       ``rtl9602c_gem_tcont_qbit(n, k)``, 8 x (n % 4) + 7 - k; k is the GEM
+       port's ``IFLA_GEM_QUEUE``.
    * - Page of the packet buffer
      - 128 bytes
      - ``RTL9602C_PBO_PAGE``
@@ -718,10 +718,17 @@ facts below give what is known of each.
        ``0x3ffff``: the switch-bridged upstream delivered 988.2 Mbit/s, the
        limit of the test, against a grant of 15,417 bytes per 125 us frame,
        about 987 Mbit/s.
-   * - The unit of the rate fields.
-     - I
-     - Unused: the driver writes only 0 and the maximum. A peak rate below the
-       maximum against a flood above it would give the unit.
+   * - The unit of the rate fields is 1024 bytes per second
+       (``RTL9602C_GEM_RATE_UNIT``), counting each frame with its FCS, with the
+       token clock the build sets.
+     - M
+     - One GEM port, its queue's peak rate set below the grant, offered 1.2
+       Gbit/s; the frames that reached the far end, counted over bursts of 2
+       and 8 s, the difference cancelling the queue's backlog: peak rate
+       ``0x4000`` gave 8,194.8 and ``0x1000`` 8,191.4 bit/s per unit with
+       1,514-byte frames, and ``0x1000`` gave 8,196.7 bit/s per unit with
+       60-byte frames, each counted with its 4-byte FCS. Counted with the
+       5-byte GEM header as well, the small frames would give 8,837.
    * - Entry arrays pack floor(32 / width) entries into a word, the
        lowest-numbered entry in the lowest bits: 7-bit stream-to-queue entries
        four to a word, 10-bit weights three, 2-bit downstream queue entries
@@ -1034,9 +1041,11 @@ its frames into the queue; a frame of a stream that is not admitted is not
 queued. A queue reaches the fibre through a T-CONT: each T-CONT has a map, a
 bitmap over the queues of its group, and an enable bit, and the scheduler sends
 the queues in the map of an enabled T-CONT in the allocations that the OLT
-grants to the T-CONT's Alloc-ID. Each queue has its own scheduling settings,
-which the driver sets to strict priority, committed rate 0, peak rate the
-maximum and weight 1, so that a queue sends as much as its T-CONT is granted.
+grants to the T-CONT's Alloc-ID. Each queue has its own scheduling settings: a
+strict or a weighted queue, with a weight, and a committed and a peak rate. A
+queue the driver attaches starts strict and unshaped, sending as much as its
+T-CONT is granted, and a GEM T-CONT's queue then takes the scheduling of the
+GEM ports that send through it (see "GEM ports as network interfaces").
 
 The chain from a frame to the fibre, and the numbers the driver gives it::
 
@@ -1138,11 +1147,11 @@ T-CONT 16.
        peak rates in ``RTL9602C_PONSCH_QUEUE_RATE``;
        ``RTL9602C_PONSCH_QUEUE_WEIGHT(q)``, ``0xf023f8`` + 4 (q / 3), a 10-bit
        weight at bit 10 (q % 3) (``RTL9602C_PONSCH_QUEUE_WEIGHT_MASK``,
-       ``RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT``). The driver sets every queue it
-       touches strict, committed rate 0, peak rate
-       ``RTL9602C_PONSCH_QUEUE_RATE_MAX``, weight 1.
-     - T
-     - The peak rate: the rate row under "Sizes and numbering".
+       ``RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT``). ``rtl9602c_pon_queue_set()``
+       writes all four; a strict queue's weight is written 1.
+     - M
+     - The rows below, each with the bit or field written through these
+       addresses; the queue lines of the ``ponmac`` view read them back.
    * - Among the strict queues of a T-CONT, the higher queue number goes
        first: a loaded queue of a lower number sends only what the higher ones
        leave of the grant.
@@ -1152,10 +1161,41 @@ T-CONT 16.
        the port in queue 1 sent 945 Mbit/s and the one in queue 0 19; with the
        ports' queues swapped, 962 and 3. With both in queue 0 they shared it,
        498 and 468.
-   * - What a committed rate of 0 and weight 1 do. With one loaded queue per
-       T-CONT they choose nothing.
-     - I
-     - Assumption, load-bearing: the driver writes these values.
+   * - The strict queues of a T-CONT go before its weighted queues, whatever
+       their numbers.
+     - M
+     - The two ports of the row above, one queue strict and the other
+       weighted: the strict one sent 962 Mbit/s against 4 with the strict
+       queue numbered 0, and 956 against 9 with it numbered 1.
+   * - The weighted queues of a T-CONT share what the strict ones leave in
+       proportion to their weights, more exactly from a weight of 4 up.
+     - M
+     - The same two ports, both queues weighted: 1 and 3 shared 29.3 % to
+       70.7 %, 3 and 1 71.1 % to 28.9 %, 1 and 1 50.0 % to 50.0 %, 4 and 12
+       25.4 % to 74.6 %, 100 and 300 26.4 % to 73.6 %, 250 and 750 25.6 % to
+       74.4 %, and 341 and 1023 25.9 % to 74.1 %.
+   * - A T-CONT serves the committed rates of its queues first, a strict queue
+       of the lowest priority included; what remains goes by priority and
+       weight.
+     - M
+     - The same two ports: both weighted 1, queue 1 with a committed rate of
+       ``0x8000`` (268 Mbit/s): 615 and 350 Mbit/s, where serving the
+       committed rate first and halving the rest gives 616 and 349; both
+       weighted 1 with committed rates ``0x2000`` and ``0x8000``: 383 and 583
+       against 381 and 582; both strict, the lower queue with a committed rate
+       of ``0x8000``: it sent 273 Mbit/s and the higher one the remaining 692.
+   * - A queue sends nothing above its peak rate while
+       ``RTL9602C_PONSCH_CFG_PIR_DROP`` is set, and what the other queues of
+       its T-CONT could send loses little to it unless it is offered far more
+       than its peak rate. With the bit clear, the peak rate holds only while
+       the T-CONT's other queues use the rest of the grant.
+     - M
+     - The same two ports, the higher strict queue's peak rate ``0x4000`` (134
+       Mbit/s), with the bit set: offered about 300 Mbit/s, it sent 136 and
+       the other queue 826, 962 in all; offered about 600, 136 and 790; offered
+       1.2 Gbit/s, 136 and 529, 664 in all. With the bit clear: 138 and 827
+       with both loaded, but a queue alone with that peak rate sent 961
+       Mbit/s.
    * - ``RTL9602C_PONSCH_TCONT_EN``, ``0xf023e4``, one enable bit per T-CONT;
        ``RTL9602C_PONSCH_TCONT_QUEUES(t)``, ``0xf023a0`` + 4t, the queues the
        T-CONT schedules (the numbering row under "Sizes and numbering"). A
@@ -1169,15 +1209,18 @@ T-CONT 16.
        = ``0x6e`` and ``RTL9602C_PONSCH_TOKEN_CLK_TOKENS`` (bits 15:8) =
        ``0x95``. It is the build's first write into the block.
      - I
-     - Assumption, load-bearing: the driver writes it. With every peak rate at
-       the maximum nothing measured depends on it; a limited peak rate would.
+     - Assumption, load-bearing: the driver writes it, and the unit of the
+       rate fields (the row under "Sizes and numbering") was measured with
+       these values. What each field does is not measured.
    * - ``RTL9602C_PONSCH_CIR_FORCE_EN`` (``0xf02170``) and
        ``RTL9602C_PONSCH_CIR_FORCE_VAL`` (``0xf02174``), per-bit forcing of the
        committed-rate state: the build writes ``0xffffffff`` to both, whole
-       words, bits no field is known for included.
-     - I
-     - Assumption, load-bearing: the driver writes them. Removing the writes
-       and repeating the OMCI exchange would show whether they matter.
+       words, bits no field is known for included. They read back
+       ``0x0001ffff``, 17 bits, as many as there are T-CONTs.
+     - M, I
+     - M for the read-back, and for this: with both cleared, then the value
+       word too, the lower strict queue's committed rate in the row above still
+       gave it 272 Mbit/s. I for what they force.
    * - ``RTL9602C_PONSCH_GRANT_THR``, ``0xf02150``: thresholds on the remainder
        of a grant, ``RTL9602C_PONSCH_GRANT_THR_LAST`` (bits 29:16) and
        ``RTL9602C_PONSCH_GRANT_THR_RUNT`` (bits 13:0), both 5.
@@ -1185,12 +1228,13 @@ T-CONT 16.
      - Assumption, load-bearing: the driver writes them; their effect is
        unmeasured.
    * - ``RTL9602C_PONSCH_CFG``, ``0xf02194``: ``RTL9602C_PONSCH_CFG_PIR_DROP``
-       (bit 18) drops what exceeds a queue's peak rate. The build sets it, and
-       clears it again on chip revision 1.
-     - I
-     - Assumption, load-bearing: the driver writes it. With the peak rate at the
-       maximum it cannot act. Revision 1 has not been seen (see "Switch
-       settings in the build").
+       (bit 18) makes a queue's peak rate a limit (the peak-rate row above).
+       The build sets it, and clears it again on chip revision 1. The word
+       reads ``0x00066000`` after the build; with bit 17 clear the peak-rate
+       runs gave the same, with bit 14 clear the other queue lost more.
+     - M, I
+     - M on this board's revision 2 (the peak-rate row above). I for revision
+       1, which has not been seen (see "Switch settings in the build").
 
 What a queue drain depends on
 -----------------------------
@@ -1420,16 +1464,46 @@ Flows, streams and T-CONTs
        typed Ethernet alone it passed frames to 239.2.2.1, 224.0.0.1 and
        ff02::1, 20 of 20 each; typed multicast as well, none of them.
    * - The upstream half, programmed only when the T-CONT is bound (the
-       binding row below): GEM T-CONT n's queue of the highest priority, map
-       bit ``rtl9602c_gem_tcont_qbit(n, 0)`` of T-CONT ``rtl9602c_gem_tcont(n)``,
-       attached (see "Attaching a queue to a T-CONT");
-       ``RTL9602C_GEM_US_FLOW_CFG(f)`` (``0x706400`` + 4f),
+       binding row below): GEM T-CONT n's queue of the port's priority k
+       (``IFLA_GEM_QUEUE``), map bit ``rtl9602c_gem_tcont_qbit(n, k)`` of T-CONT
+       ``rtl9602c_gem_tcont(n)``, attached (see "Attaching a queue to a
+       T-CONT"); ``RTL9602C_GEM_US_FLOW_CFG(f)`` (``0x706400`` + 4f),
        ``RTL9602C_GEM_US_FLOW_CFG_PORTID`` (bits 11:0) = the Port-ID the flow's
        GEM headers carry (a Port-ID is 12 bits, ITU-T G.984.3 clause 8.3.1);
-       the stream pointed at that queue; then admitted.
+       the stream pointed at that queue; then admitted; then the queue
+       scheduled (the next row).
      - M
      - 40 of 40 frames sent through a bidirectional port on T-CONT 0 reached the
        far end of the OLT intact and once each.
+   * - A GEM T-CONT's queue is scheduled for the upstream GEM ports that send
+       through it (``rtl9602c_gem_queue_sched()``), each time one of them is
+       programmed, changed or deleted: weighted, by the largest weight among
+       them times 4 (``RTL9602C_GEM_WEIGHT_SCALE``), when one has a weight, and
+       strict otherwise; their committed rates added up and rounded up to the
+       unit; their peak rates added up and rounded down, to one unit at least,
+       unless one of them has none, which leaves the queue unshaped. Rates are
+       kept within ``RTL9602C_PONSCH_QUEUE_RATE_MAX``, a committed rate within
+       the peak rate. A queue no GEM port sends through any more is strict and
+       unshaped again.
+     - M
+     - Through the link attributes, with the OLT's port and a second one on
+       GEM T-CONT 0, each offered 1.2 Gbit/s: priorities 0 and 1 went to queues
+       7 and 6 and sent 960 and 6 Mbit/s; weights 3 and 1 became 12 and 4 and
+       shared 74.5 % to 25.5 %; a peak rate of 16 MiB/s became ``0x4000``, 136
+       Mbit/s, the other port sending 823; a committed rate of 32 MiB/s became
+       ``0x8000`` and gave the lower-priority port 273 Mbit/s. Deleting the
+       only port of queue 7 left it strict and unshaped (the queue lines of the
+       ``ponmac`` view).
+   * - A change of a port's scheduling (``gem_change``) programs the upstream
+       half again with it while the T-CONT is bound: a new queue is attached
+       and the stream moved to it, and the old queue is scheduled for the ports
+       left in it, while the frames already in it leave in the T-CONT's
+       grants. If the new queue cannot be attached, the old configuration is
+       kept.
+     - T, I
+     - T: the changes of the row above, between runs, each followed by the
+       stream lines of the ``ponmac`` view. I for a change under traffic and
+       for a failed attach.
    * - Each T-CONT's GEM ports send through queues of the T-CONT's own, so no
        two T-CONTs of a group share one. A queue shared between two T-CONTs'
        maps is drained by either T-CONT's allocations, so the frames of one
@@ -1793,7 +1867,9 @@ the system controller, the GPON MAC and the switch::
        stream 64's queue and whether it is ``valid`` (admitted); ``tcont en``,
        the T-CONT enable word, and ``qmap[16]``, T-CONT 16's map; a
        ``qmap[t]`` line for each of T-CONTs 0 to 15 whose map is not empty,
-       and a ``sid`` line with the queue for each of streams 0 to 63 that is
+       followed by a ``queue`` line for each queue in it, with ``strict`` or
+       ``weight`` and the register's weight, and the raw ``cir`` and ``pir``;
+       a ``sid`` line with the queue for each of streams 0 to 63 that is
        admitted; then a line
        for each half, ``us`` and ``ds``, with ``ctl`` (the control word),
        ``ready`` (``RTL9602C_PKTBUF_STAT_INIT_DONE``), ``base`` (the DRAM base),
@@ -2040,14 +2116,17 @@ each bring-up, and for the ports of a T-CONT when an Alloc-ID is bound to it.
    "upstream parked" and stop here. Purpose: a T-CONT without an Alloc-ID is
    granted nothing, and its queue would lose the frames at the switch's ingress.
    (P, M)
-3. Attach GEM T-CONT n's queue of the highest priority, map bit 8 x (n % 4) +
-   7 of T-CONT 8 x (n / 4) + n % 4 (see "Attaching a queue to a T-CONT").
+3. Attach GEM T-CONT n's queue of the port's priority k, map bit 8 x (n % 4) +
+   7 - k of T-CONT 8 x (n / 4) + n % 4 (see "Attaching a queue to a T-CONT").
    Purpose: the queue the stream will name is scheduled, by this T-CONT's
-   allocations alone. (M)
+   allocations alone, above the T-CONT's queues of lower priority. (M)
 4. Write the port's Port-ID into the flow's upstream configuration. Purpose:
    the GPON MAC puts it in the headers of the port's upstream frames. (M)
 5. Point the flow's stream at the queue and admit it. Purpose: the port's frames
    reach its T-CONT. (M)
+6. Schedule the queue for the GEM ports that send through it, this one
+   included. Purpose: the queue's weight and rates are those of its ports. (M
+   for what the settings do, I for the sharing)
 
 Deleting a GEM port
 -------------------
@@ -2060,6 +2139,9 @@ Deleting a GEM port
    zero the flow's upstream Port-ID and downstream type, and clear its Port-ID
    table entry. The queue stays in its T-CONT's map. Purpose: the flow is free,
    and its stream is parked. (T)
+4. If the port sent upstream on a bound T-CONT, schedule its queue for the
+   ports left in it. Purpose: a deleted port's weight and rates go with it.
+   (I)
 
 Known limitations
 =================
@@ -2074,17 +2156,18 @@ Known limitations
   first.
 - GEM ports get eight T-CONTs, so an OLT that assigns more than eight
   Alloc-IDs beside the default one finds the ninth refused ("no idle T-CONT").
-  Each GEM T-CONT has eight queues, but only the one of the highest priority is
-  used, so the GEM ports of one T-CONT share it and no priority orders them.
   Queues are never detached and T-CONTs never disabled after the build, so a
   deleted port's queue stays in its T-CONT's map until the next boot. The queue
   numbering is measured for T-CONTs 0, 1 and 16 only.
-- Every queue is strict priority with committed rate 0 and the maximum peak
-  rate, so a T-CONT sends what the OLT grants it and the driver offers no rate
-  limit, priority or weighting between GEM ports on the PON side: it registers
-  one queue per T-CONT with the PON class, and ``gem_add`` refuses a GEM port
-  with a weight or a rate (``-EOPNOTSUPP``). The unit of the rate fields is not
-  known.
+- The rates and weights a queue is given are approximations: rates go in
+  units of 1024 bytes per second, a weight of 1 shares less exactly than
+  larger ones, and the ports that share a queue share one limit, the sum of
+  their rates, and one weight, the largest, rather than each keeping its own.
+  A queue offered far more than its peak rate takes from the grant of its
+  T-CONT's other queues: at 1.2 Gbit/s offered to a queue of 134 Mbit/s, the
+  T-CONT sent 664 Mbit/s in all instead of 963. On chip revision 1 the driver
+  clears ``RTL9602C_PONSCH_CFG_PIR_DROP``, so there a peak rate holds only
+  while the other queues use the rest of the grant.
 - Some losses are not counted. A frame that the switch forwards to the PON port
   without a stream is dropped in the PON MAC while the switch counts it as sent,
   and upstream frames offered above the grant are lost with no counter that the
