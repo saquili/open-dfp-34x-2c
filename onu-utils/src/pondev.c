@@ -214,11 +214,17 @@ static void print_stats(FILE *f, const struct pon_dev *d)
 		{ PON_A_DEV_STATS_BWMAP_OVERFLOWS, "bandwidth map overflows" },
 		{ PON_A_DEV_STATS_GEM_FRAMES, "GEM frames" },
 		{ PON_A_DEV_STATS_BIP_ERRORS, "BIP errors" },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_BYTES, "FEC corrected bytes" },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_CODEWORDS,
+		  "FEC corrected codewords" },
+		{ PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS,
+		  "FEC uncorrectable codewords" },
+		{ PON_A_DEV_STATS_FEC_CODEWORDS, "FEC codewords" },
 	};
 
 	for (size_t i = 0; i < ARRAY_SIZE(counter); i++)
 		if (d->stats_have & (1u << counter[i].attr))
-			fprintf(f, "    %-26s %llu\n", counter[i].label,
+			fprintf(f, "    %-28s %llu\n", counter[i].label,
 				(unsigned long long)d->stats[counter[i].attr]);
 }
 

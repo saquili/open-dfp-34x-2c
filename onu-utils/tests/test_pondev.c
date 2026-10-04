@@ -62,6 +62,7 @@ static struct nlmsghdr *full_dev(char *buf)
 	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_PLOAM_RX, 120);
 	mnl_attr_put_u64(nlh, PON_A_DEV_STATS_BWMAP_RX, 5000000000ull);
 	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_BIP_ERRORS, 0);
+	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS, 7);
 	mnl_attr_nest_end(nlh, stats);
 	mnl_attr_put(nlh, PON_A_DEV_SERIAL_NUMBER, sizeof(serial), serial);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_GEM_PORTS, 2);
@@ -94,6 +95,7 @@ static void test_a_full_device_is_read(void)
 	CHECK(d.stats[PON_A_DEV_STATS_PLOAM_RX] == 120);
 	CHECK(d.stats[PON_A_DEV_STATS_BWMAP_RX] == 5000000000ull);
 	CHECK(d.stats_have & (1u << PON_A_DEV_STATS_BIP_ERRORS));
+	CHECK(d.stats[PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS] == 7);
 	CHECK(!(d.stats_have & (1u << PON_A_DEV_STATS_GEM_FRAMES)));
 	CHECK(d.have & (1u << PON_A_DEV_SERIAL_NUMBER));
 }
@@ -118,6 +120,7 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	CHECK(strstr(shown, "serial number ABCD12345678"));
 	CHECK(strstr(hidden, "bandwidth maps"));
 	CHECK(strstr(hidden, "5000000000"));
+	CHECK(strstr(hidden, "FEC uncorrectable codewords  7"));
 	CHECK(!strstr(hidden, "GEM frames"));
 	free(hidden);
 	free(shown);
