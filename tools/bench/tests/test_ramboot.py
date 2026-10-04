@@ -464,6 +464,12 @@ class Pieces(RamBootCase):
             rb.watch_transfer(self.ctx, 0, 100, self.config)
         self.assertFalse(caught.exception.reset_seen)
 
+    def test_the_loaders_backspace_before_the_marks(self) -> None:
+        self.transcript.emit("Loading: *\x08T T T ")
+        with self.assertRaises(AttemptFailed) as caught:
+            rb.watch_transfer(self.ctx, 0, 100, self.config)
+        self.assertFalse(caught.exception.reset_seen)
+
     def test_a_hash_mark_means_the_transfer_is_alive(self) -> None:
         self.transcript.emit("Loading: *T T #####\r\r\n  ###\r\nT T T")
         with self.assertRaises(WaitTimeout):

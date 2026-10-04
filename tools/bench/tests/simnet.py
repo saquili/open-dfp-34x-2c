@@ -86,17 +86,17 @@ class NetModel(BoardModel):
                    or (first_attempt and board.fail_first_after_sysrq
                        and board.restart_cause == "sysrq"))
         if failing:
-            self.say("Loading: *")
+            self.say("Loading: *\b")
             self.block(board.start_tmarks)
             return 1
         data = board.tftp_files.get(name)
         if data is None:
-            self.say("Loading: *")
+            self.say("Loading: *\b")
             self.print("TFTP error: 'no such file' (1)")
             self.print("Not retrying...")
             return 1
         marks = -(-(len(data) // BLOCK + 1) // 10)
-        self.say("Loading: *")
+        self.say("Loading: *\b")
         remaining, column = marks, 1
         total = 0.3 + len(data) / 1e6
         while remaining > 0:

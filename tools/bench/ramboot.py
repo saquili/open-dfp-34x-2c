@@ -52,7 +52,8 @@ KERNEL_ADDRESS = 0x81000000
 _PRELOADER = re.compile(r"(?m)^PRELOADER")
 _DONE = re.compile(r"Bytes transferred = (\d+) \(([0-9a-fA-F]+) hex\)")
 _TFTP_ERROR = re.compile(r"TFTP error: '([^']*)' \((\d+)\)")
-_LOADING = re.compile(r"Loading: \*([#T \n]*)")
+# The loader backs over its "*" before the first mark.
+_LOADING = re.compile(r"Loading: \*([#T \r\n\x08]*)")
 _STARTED = re.compile(r"Starting kernel \.\.\.")
 _BANNER = re.compile(r"Linux version")
 _BOOTM_FAILED = re.compile(r"ERROR: can't get kernel image|Wrong Image Format|Bad Data CRC"
