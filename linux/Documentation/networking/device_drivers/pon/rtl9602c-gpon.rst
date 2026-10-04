@@ -1066,6 +1066,16 @@ detects a signal.
        (``PON_ALARM_LOM`` in ``include/uapi/linux/pon.h``).
      - I
      - A downstream with frames and a corrupted PLOAM channel.
+   * - The PEE alarm (``PON_ALARM_PEE``) is the driver's own: every
+       Physical_Equipment_Error raises it, with a warning, ``the OLT reports a
+       physical equipment error``, when it was not raised; the worker clears it
+       once none has come for ``RTL9602C_GPON_PEE_MS`` (3 s), saying ``the
+       OLT's physical equipment error has cleared``; and O1 clears it. Each
+       change is sent to the PON class.
+     - T
+     - Physical_Equipment_Error injected once a second for 5 s in O5: ``PEE``
+       among the alarms of ``pon`` from the first, still 2 s after the last,
+       gone 3 s after it.
    * - ``RTL9602C_GTC_DS_PPS`` (``0x70126c``): the driver writes
        ``RTL9602C_GTC_DS_PPS_PERIOD`` (bits 12:0) =
        ``RTL9602C_GTC_DS_PPS_PERIOD_1S`` (7999: a pulse every 8000 downstream
@@ -1395,8 +1405,12 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - The ONU-ID
      - O4, O5
      - Decryption on or off for the Port-ID's flow; acknowledged.
-   * - Physical_Equipment_Error (15), Change_Power_Level (16), PST (17),
-       Sleep_Allow (24)
+   * - Physical_Equipment_Error (15)
+     - All ONUs
+     - Any
+     - Raises the PEE alarm, which clears 3 s after the last one (see
+       "Reporting: the PON class and devlink").
+   * - Change_Power_Level (16), PST (17), Sleep_Allow (24)
      - The ONU-ID or all ONUs
      - None
      - Not acted on and not acknowledged; each type is logged once, the first
@@ -2761,9 +2775,10 @@ serial number that the ONU presents to the OLT is the devlink parameter
        (``RTL9602C_PORT_PON``); and, only while the PON is up, the state (the
        driver's numbers 1 to 5 equal the class's O1 to O5), the ONU-ID unless it
        is 255, the OMCC Port-ID when bound, the Alloc-IDs of T-CONTs 0 to 15 in
-       use, the totals of the counters, and LOS, LOF and LOM from
-       ``RTL9602C_GTC_DS_IRQ_STAT``. With the PON down there is no state, no
-       alarm and no counter: an absent value, not a zero.
+       use, the totals of the counters, LOS, LOF and LOM from
+       ``RTL9602C_GTC_DS_IRQ_STAT``, and the driver's PEE alarm. With the PON
+       down there is no state, no alarm and no counter: an absent value, not a
+       zero.
      - M
      - The PON class report in O5 on an OLT: state O5, ONU-ID 1, Alloc-ID 257,
        OMCC Port-ID 1, no alarms, agreeing with the ``gpon`` view.
@@ -2908,9 +2923,10 @@ Known limitations
   remainder sent as the type 3 pattern. The test OLT asks for neither. That
   Extended_Burst_Length is ignored after the first serial-number request has
   not been seen on the board, since the test OLT assigns the ONU-ID at once.
-- Change_Power_Level, PST, Physical_Equipment_Error and Sleep_Allow are
-  recorded, logged once and not acted on. Swift_POPUP, like POPUP, has not been
-  exercised on the board, since it needs the ONU in O6.
+- Change_Power_Level, PST and Sleep_Allow are recorded, logged once and not
+  acted on. Swift_POPUP, like POPUP, has not been exercised on the board, since
+  it needs the ONU in O6. The test OLT sends no Physical_Equipment_Error, so
+  the PEE alarm has been raised only by injected messages.
 - Decryption has been tried only against an OLT that encrypts nothing: the key
   exchange and the marking of a flow work as far as the driver's side goes,
   but whether the MAC decrypts what an OLT encrypts with the key sent depends

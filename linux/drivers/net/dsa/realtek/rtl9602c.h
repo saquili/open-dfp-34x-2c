@@ -620,6 +620,12 @@ enum {
 #define RTL9602C_GPON_CNT_US_DATA	0x705148
 #define RTL9602C_GPON_US_CNTR_COUNT	8
 
+/*
+ * The PEE alarm clears when no Physical_Equipment_Error has come for this long
+ * (ITU-T G.984.3 clause 11.1.2).
+ */
+#define RTL9602C_GPON_PEE_MS		3000
+
 /* Upstream PLOAM message identifiers (ITU-T G.984.3 clause 9.2.4). */
 #define RTL9602C_PLOAM_US_SERIAL_NUMBER_ONU	1
 #define RTL9602C_PLOAM_US_PASSWORD	2
@@ -2598,6 +2604,13 @@ struct rtl9602c_priv {
 	u32 gpon_rei_sent;
 	/** @gpon_ploam_ignored: the downstream identifiers already logged */
 	u32 gpon_ploam_ignored;
+	/**
+	 * @gpon_pee: the OLT reported a physical equipment error, and the PEE
+	 * alarm is raised
+	 */
+	bool gpon_pee;
+	/** @gpon_pee_last: when the last Physical_Equipment_Error came */
+	unsigned long gpon_pee_last;
 	/**
 	 * @gpon_flow_port: the Port-ID each flow is bound to in the Port-ID
 	 * table, or RTL9602C_GPON_PORTID_NONE

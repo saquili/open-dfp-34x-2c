@@ -713,7 +713,8 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
  * The alarms are the levels in RTL9602C_GTC_DS_IRQ_STAT, the conditions present
  * now: loss of signal, loss of frame, and the MAC's LOM bit, reported as loss
  * of PLOAM although what that bit detects is not verified. The FEC bit there
- * says that the downstream carries FEC and is no alarm.
+ * says that the downstream carries FEC and is no alarm. The PEE alarm is the
+ * driver's own, raised by Physical_Equipment_Error.
  *
  * Context: gpon_lock held.
  */
@@ -760,6 +761,8 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_priv *p,
 		st->alarms |= PON_ALARM_LOF;
 	if (i & RTL9602C_GTC_DS_IRQ_LOM)
 		st->alarms |= PON_ALARM_LOM;
+	if (p->gpon_pee)
+		st->alarms |= PON_ALARM_PEE;
 }
 
 /*
@@ -870,6 +873,9 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 		p->gpon_o5_since = jiffies;
 		p->gpon_rei_sent = 0;
 	}
+	/* In O1 there is no downstream, so nothing that keeps PEE raised. */
+	if (state == RTL9602C_ONU_O1_INITIAL)
+		p->gpon_pee = false;
 	if (from == RTL9602C_ONU_O5_OPERATION) {
 		unsigned int ms = jiffies_to_msecs(jiffies - p->gpon_o5_since);
 
@@ -1992,15 +1998,28 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 	}
 
 	case RTL9602C_PLOAM_DS_PEE:
+		/*
+		 * Broadcast, about once a second while the OLT cannot send GEM
+		 * frames or OMCC frames (G.984.3 clause 9.2.3.15): the PEE alarm
+		 * is raised, and the worker clears it once none has come for 3 s
+		 * (clause 11.1.2).
+		 */
+		p->gpon_pee_last = jiffies;
+		if (!p->gpon_pee) {
+			p->gpon_pee = true;
+			pr_warn("<GPON> the OLT reports a physical equipment error\n");
+			rtl9602c_gpon_notify(p);
+		}
+		return;
+
 	case RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL:
 	case RTL9602C_PLOAM_DS_PST:
 	case RTL9602C_PLOAM_DS_SLEEP_ALLOW:
 		/*
-		 * Not acted on: the OLT's equipment errors, power levelling,
-		 * protection switching and power saving. Nothing is
-		 * acknowledged, so the OLT sees that the ONU did not take
-		 * them. Each is logged once, the first time one comes for this
-		 * ONU.
+		 * Not acted on: power levelling, protection switching and power
+		 * saving. Nothing is acknowledged, so the OLT sees that the ONU
+		 * did not take them. Each is logged once, the first time one
+		 * comes for this ONU.
 		 */
 		if (msg[0] != p->gpon_onu_id &&
 		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED)
@@ -2092,6 +2111,13 @@ void rtl9602c_gpon_work(struct work_struct *w)
 
 	rtl9602c_gpon_cntr_sync(p);
 	rtl9602c_gpon_rei_tick(p);
+
+	/* PEE clears once no Physical_Equipment_Error has come for 3 s. */
+	if (p->gpon_pee &&
+	    time_after(jiffies, p->gpon_pee_last + msecs_to_jiffies(RTL9602C_GPON_PEE_MS))) {
+		p->gpon_pee = false;
+		pr_info("<GPON> the OLT's physical equipment error has cleared\n");
+	}
 
 	rtl9602c_gpon_notify(p);
 	mutex_unlock(&p->gpon_lock);
