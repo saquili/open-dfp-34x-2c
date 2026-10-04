@@ -6,7 +6,9 @@ For lines made by mutating the verdict tables' lines, whatever the guard
 allows must, when the permissive model of the loader executes it, change no
 flash byte outside ``k0`` and ``r0``, store nothing into the flash windows,
 start no arbitrary code, and change no environment variable except the ones
-the loader and the allowed macros set themselves. The environments include
+the loader and the allowed macros set themselves, and ``bootdelay`` to a
+countdown of 5 to 600 seconds, which the break-in still catches. The
+environments include
 hostile ones: a changed layout, values that hold a second command, nested
 variables, macros that erase protected regions, and a boot chain with an
 extra erase on the branch that runs. Each hostile variant is made twice, on
@@ -44,6 +46,12 @@ R0 = (0x1CC000, 0x440000)
 APERTURE = [(low + base, high + base) for base in (0, 0x80000000, 0xA0000000)
             for low, high in ((0x14000000, 0x15000000), (0x1FC00000, 0x20000000))]
 SELF_SET = {"sw_tryactive", "sw_active", "bootargs", "filesize", "fileaddr"}
+
+
+def countdown(value: str | None) -> bool:
+    """A bootdelay the break-in catches: whole seconds, plain decimal, 5 to 600."""
+    return value is not None and value.isascii() and value.isdigit() and value[0] != "0" \
+        and 5 <= int(value) <= 600
 
 
 SHAPES = (vectors.BOOT_BASE, vectors.E6)  # simple tables, then the board's
@@ -124,7 +132,8 @@ def seed_cases() -> list[tuple[str, dict[str, str]]]:
     macro_lines = ("run ramboot", "run sdsup", "run b0", "run yu", "run upb", "run b1",
                    "run erase_env", "run upk1", "run yk", "boot", "boot", "bootm 94080000",
                    "saveenv", "setenv sw_tryactive 0", "setenv sw_tryactive 2",
-                   "setenv sw_commit 0", "setenv sw_active 1", "sf update 80000000 80000 100",
+                   "setenv sw_commit 0", "setenv sw_active 1", "setenv bootdelay 5",
+                   "setenv bootdelay 600", "sf update 80000000 80000 100",
                    "erase 94080000 +14c000", "erase 94440000 +1000", "cp.b 80000000 94440000 100",
                    "mw.l 94440000 0", "mw.b bfc00000 0", "go 94080000", "loop", "mm.l 94440000",
                    "nm.w b4440000", "crc32 94440000 4 b4440000", "sf erase ${x} ${z}",
@@ -247,8 +256,11 @@ def violations(model: LoaderModel, original: dict[str, str], commit: bool) -> li
             found.append("go")
     allowed = SELF_SET | ({"sw_commit"} if commit else set())
     for name in set(original) | set(model.env):
-        if original.get(name) != model.env.get(name) and name not in allowed:
-            found.append("variable %s changed" % name)
+        if original.get(name) == model.env.get(name) or name in allowed:
+            continue
+        if name == "bootdelay" and countdown(model.env.get(name)):
+            continue
+        found.append("variable %s changed" % name)
     return found
 
 
@@ -442,6 +454,11 @@ class GuardInvariant(unittest.TestCase):
 
         self.control("off by one", [mock.patch.object(guard, "check_range", lenient)],
                      expect="erase")
+
+    def test_negative_control_with_any_countdown_accepted(self) -> None:
+        self.control("any countdown",
+                     [mock.patch.object(guard, "_is_countdown", lambda words: len(words) == 1)],
+                     expect="variable bootdelay")
 
     def test_negative_control_with_parentheses_accepted_in_every_macro_part(self) -> None:
         def anywhere(text: str, variables, bootargs: bool) -> str:

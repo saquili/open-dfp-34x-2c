@@ -168,11 +168,17 @@ the console nor the image host.
     and the allowance; ``stop [--remove-rule]``; ``run`` serves in the
     foreground on this machine.
 
-``console check|type LINE|client``
+``console check|type LINE...|client``
     ``check`` decides whether the console is usable and says what the board
-    shows. ``type LINE [--timeout SECONDS]`` types one line through the guard
-    (only at the loader prompt) and waits for the prompt, 30 seconds by default.
-    ``client`` runs the pane's process, for the setup above.
+    shows. ``type LINE... [--timeout SECONDS] [--restart]`` types the lines
+    through the guard, in order and in one session, so that a ``saveenv`` is
+    judged by the ``setenv`` before it, and waits for the prompt after each, 30
+    seconds by default. It types only at the loader prompt: a board that shows
+    anything else is refused, unless ``--restart`` is given, which first
+    restarts the board over ssh and breaks in, as ``ramboot`` does (or waits
+    for a person to power-cycle it). ``type --restart 'setenv bootdelay 5'
+    saveenv`` shortens the countdown. ``client`` runs the pane's process, for
+    the setup above.
 
 Every command that acts on a board starts with the same check: one empty line
 is typed, and what comes back says what the board shows. The loader runs its
@@ -361,7 +367,9 @@ sends nothing.
 * **Session rules.** ``saveenv`` only after a ``setenv`` the guard allowed;
   ``sw_tryactive`` only to 0 or 2 (a trial of bank 1 is never armed and ``boot``
   is refused while one is pending); ``sw_commit`` only to 0, and only on an
-  explicit ``--commit``; no other variable is ever set.
+  explicit ``--commit``; ``bootdelay`` only to a whole number of seconds from 5
+  to 600, written in plain decimal, since the break-in is made for a countdown
+  of five ticks; no other variable is ever set.
 * **A write is never interrupted.** Nothing is typed while ``loady``,
   ``sf erase`` or ``sf write`` runs; a signal is held until the command is done;
   a console that stalls for 30 seconds mid-write ends the run, says the

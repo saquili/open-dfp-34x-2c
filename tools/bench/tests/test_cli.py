@@ -471,6 +471,39 @@ class ConsoleCommands(CliCase):
         self.assertEqual(self.run_cli("console", "type", "printenv sw_commit"), 0)
         self.assertEqual(self.out.getvalue().strip(), "sw_commit=0")
 
+    def test_type_runs_its_lines_in_one_guard_session(self) -> None:
+        self.board.at_prompt()
+        status = self.run_cli("console", "type", "setenv bootdelay 5", "saveenv", "printenv bootdelay")
+        self.assertEqual(status, 0, self.err.getvalue())
+        self.assertIn("bootdelay=5", self.out.getvalue())
+        self.assertEqual(self.board.model.env["bootdelay"], "5")
+        self.assertEqual(self.run_cli("console", "type", "saveenv"), 3)
+        self.assertIn("refused [state]", self.err.getvalue())
+
+    def test_type_stops_at_the_first_refused_line(self) -> None:
+        self.board.at_prompt()
+        executed = list(self.board.executed)
+        self.assertEqual(self.run_cli("console", "type", "setenv bootdelay 0", "saveenv"), 3)
+        self.assertEqual(self.board.executed, executed)
+        self.assertEqual(self.board.model.env["bootdelay"], "600")
+
+    def test_type_with_restart_breaks_in_first(self) -> None:
+        self.board.show_login()
+        self.assertEqual(self.run_cli("console", "type", "--restart", "printenv sw_commit"), 0,
+                         self.err.getvalue())
+        self.assertIn("sw_commit=0", self.out.getvalue())
+        self.assertIn("restarted and broke in", self.out.getvalue())
+
+    def test_a_countdown_of_five_saved_by_type_still_lets_ramboot_break_in(self) -> None:
+        self.board.at_prompt()
+        self.assertEqual(self.run_cli("console", "type", "setenv bootdelay 5", "saveenv"), 0,
+                         self.err.getvalue())
+        self.board.show_login()
+        mark = self.transcript.size()
+        self.assertEqual(self.run_cli("ramboot", self.kernel_path), 0, self.err.getvalue())
+        self.assertIn("Hit any key to stop autoboot:  5", self.transcript.text()[mark:])
+        self.assertEqual(self.board.kernels_started, ["Linux-6.18.48-test"])
+
     def test_the_environment_dump_is_printed_without_the_mac_address(self) -> None:
         self.board.at_prompt()
         self.assertEqual(self.run_cli("console", "type", "printenv"), 0)

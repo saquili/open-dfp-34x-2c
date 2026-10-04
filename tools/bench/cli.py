@@ -133,9 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
     console = sub.add_parser("console", help="check or use the shared console")
     actions = console.add_subparsers(dest="action", metavar="ACTION", required=True)
     actions.add_parser("check", help="is the console usable, and what does the board show")
-    typed = actions.add_parser("type", help="type one line through the guard")
-    typed.add_argument("line", metavar="LINE")
+    typed = actions.add_parser("type", help="type lines through the guard, in one session")
+    typed.add_argument("lines", nargs="+", metavar="LINE")
     typed.add_argument("--timeout", type=float, default=30.0, metavar="SECONDS")
+    typed.add_argument("--restart", action="store_true",
+                       help="restart the board and break in first, unless it is at the prompt")
     actions.add_parser("client", help="run the process of the tmux pane")
 
     selftest = sub.add_parser("selftest", help="run the unit tests")
@@ -388,14 +390,18 @@ def cmd_console(args: argparse.Namespace, svc: Services) -> int:
         with console.exclusive("console type"):
             check = console.check_usable()
             if check.state is not BoardState.LOADER_PROMPT:
-                raise UnexpectedState("the console shows: %s, not the loader prompt; nothing "
-                                      "was typed" % check.state.value)
-            try:
-                result = bench.loader.command(args.line, timeout=args.timeout)
-            except WaitTimeout as exc:
-                print("bench: %s" % exc, file=svc.err())
-                return EXIT_TIMEOUT
-        print(redact(result.output), file=svc.out())  # the environment holds a MAC address
+                if not args.restart:
+                    raise UnexpectedState("the console shows: %s, not the loader prompt; nothing "
+                                          "was typed" % check.state.value)
+                _say(svc, rambootmod.reach_loader_prompt(bench.ctx, settings.ramboot))
+            # One guard session: a saveenv is judged by the setenv before it.
+            for line in args.lines:
+                try:
+                    result = bench.loader.command(line, timeout=args.timeout)
+                except WaitTimeout as exc:
+                    print("bench: %s" % exc, file=svc.err())
+                    return EXIT_TIMEOUT
+                print(redact(result.output), file=svc.out())  # the environment holds a MAC
         return EXIT_OK
 
 

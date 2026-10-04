@@ -210,6 +210,7 @@ _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _REFERENCE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
 _PRINTABLE_OR_TAB = re.compile(r"[\t\x20-\x7e]*")
 _FILE_NAME = re.compile(r"[A-Za-z0-9._-]{1,%d}" % MAX_NAME)
+_DECIMAL = re.compile(r"[1-9][0-9]{0,2}")
 _BARE_QUOTES = frozenset("`'\"\\")
 _SEPARATORS = frozenset(";&|(){}<>$")
 _WORD_SPLIT = re.compile(r"[ \t]+")
@@ -390,6 +391,11 @@ class Approval:
     name: str
 
 
+# The countdown that bootdelay may be set to, in seconds: from the five ticks
+# the break-in is made for to the six hundred the board came with.
+BOOTDELAY_MIN = 5
+BOOTDELAY_MAX = 600
+
 # Macros that may be run, and variables that may only be set in the forms
 # the guard allows.
 RUN_MACROS = frozenset({"ramboot", "sdsup", "b0"})
@@ -437,12 +443,19 @@ def _form_boot(words: list[str], variables: Mapping[str, str], session: Session)
         raise Refusal(BANK1_TRIAL, "sw_tryactive reads 1")
 
 
+def _is_countdown(words: list[str]) -> bool:
+    """One value, a whole number of seconds in plain decimal that the break-in still catches."""
+    return len(words) == 1 and _DECIMAL.fullmatch(words[0]) is not None and \
+        BOOTDELAY_MIN <= int(words[0]) <= BOOTDELAY_MAX
+
+
 def _form_setenv(words: list[str], variables: Mapping[str, str], session: Session) -> None:
     if len(words) < 2:
         raise Refusal(NOT_ALLOWED, "setenv without a name")
     name = words[1]
     allowed = (words[2:] in (["0"], ["2"]) and name == "sw_tryactive") or \
-              (session.commit and words[2:] == ["0"] and name == "sw_commit")
+              (session.commit and words[2:] == ["0"] and name == "sw_commit") or \
+              (name == "bootdelay" and _is_countdown(words[2:]))
     if allowed:
         session.pending.append((name, words[2]))
         return

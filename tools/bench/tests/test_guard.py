@@ -324,6 +324,25 @@ class Details(unittest.TestCase):
             self.check("setenv sw_commit 2", session=session)
         self.assertEqual(caught.exception.code, "protected-variable")
 
+    def test_bootdelay_only_to_a_countdown_the_break_in_catches(self) -> None:
+        session = Session()
+        for value in ("5", "10", "600"):
+            with self.subTest(value=value):
+                self.check("setenv bootdelay " + value, session=session)
+        self.assertEqual([value for _, value in session.pending], ["5", "10", "600"])
+        self.check("saveenv", session=session)
+        for line in ("setenv bootdelay 0", "setenv bootdelay 4", "setenv bootdelay 601",
+                     "setenv bootdelay -1", "setenv bootdelay 05", "setenv bootdelay 0x5",
+                     "setenv bootdelay 5s", "setenv bootdelay 1000", "setenv bootdelay",
+                     "setenv bootdelay 5 5", "setenv bootdelay ${x}"):
+            with self.subTest(line=line), self.assertRaises(Refusal) as caught:
+                self.check(line, {"x": "0"})
+            self.assertEqual((caught.exception.code, caught.exception.detail),
+                             ("protected-variable", "bootdelay"))
+        with self.assertRaises(Refusal) as caught:
+            self.check("setenv bootdelay 5", read_only=True)
+        self.assertEqual(caught.exception.code, "not-allowed")
+
     def test_read_only_console_refuses_writes(self) -> None:
         for line in ("", "printenv", "printenv x", "version", "crc32 80000000 10",
                      "crc32 94440000 14c000"):
