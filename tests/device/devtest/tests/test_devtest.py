@@ -206,6 +206,19 @@ class Cases(unittest.TestCase):
         self.assertIn("rx_discarded 1", good.evidence)
         self.assertEqual(outcome(1, 0).status, FAIL)
 
+    def test_a_mapped_t_cont_must_hold_its_alloc_id(self):
+        def outcome(line):
+            return cases_pon.tcont_map(context(stick=[("mountpoint", 0, ""),
+                                                       ("gpon", 0, line)]))
+        good = outcome("tcont 0=256/256 1=300/- 2=-/- 3=-/400   (bound/mapped)\n")
+        self.assertEqual((good.status, good.evidence),
+                         (FAIL, "T-CONT 0 holds 256, mapped to 256, T-CONT 3 holds -, mapped to 400"))
+        good = outcome("tcont 0=256/256 1=300/- 2=-/-   (bound/mapped)\n")
+        self.assertEqual((good.status, good.evidence), (PASS, "T-CONT 0 holds 256, mapped to 256"))
+        self.assertEqual(outcome("tcont 0=-/- 1=300/-   (bound/mapped)\n").evidence,
+                         "no T-CONT mapped")
+        self.assertEqual(outcome("aes   key 0\n").status, FAIL)
+
     def test_activation_reads_the_state(self):
         ctx = context(stick=[("^pon$", 0, PON)])
         outcome = cases_pon.activation(ctx)

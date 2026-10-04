@@ -107,6 +107,20 @@ def gem_bridge(ctx: Context):
     return verdict(ok, f"{len(gems)} GEM interface(s); omcibr0 holds {' '.join(ports) or 'nothing'}")
 
 
+@case("omci.tcont-map", "OMCI",
+      "Each T-CONT the OLT mapped to an Alloc-ID through OMCI holds that Alloc-ID")
+def tcont_map(ctx: Context):
+    ctx.stick.run("mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug")
+    line = ctx.stick.run("grep '^tcont' /sys/kernel/debug/rtl9602c/gpon").out
+    tconts = re.findall(r"(\d+)=(\S+)/(\S+)", line)
+    if not tconts:
+        return failed("the gpon view shows no T-CONTs")
+    mapped = [(n, bound, alloc) for n, bound, alloc in tconts if alloc != "-"]
+    ok = bool(mapped) and all(bound == alloc for _, bound, alloc in mapped)
+    shown = ", ".join(f"T-CONT {n} holds {bound}, mapped to {alloc}" for n, bound, alloc in mapped)
+    return verdict(ok, shown or "no T-CONT mapped")
+
+
 def hwmon(ctx: Context, name: str) -> str:
     for path in ctx.stick.text("ls -d /sys/class/hwmon/hwmon*").split():
         if ctx.stick.run(f"cat {path}/name").out.strip() == name:
