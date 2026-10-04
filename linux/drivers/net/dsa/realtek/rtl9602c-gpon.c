@@ -58,6 +58,7 @@
 #include <linux/of.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/reboot.h>
 #include <linux/random.h>
 #include <net/dsa.h>
 #include <net/flow_offload.h>
@@ -587,6 +588,55 @@ static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
 			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH - p->gpon_power_mode);
 
 	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_SN_ONU);
+}
+
+/*
+ * Send Dying_Gasp before an orderly restart, power-off or halt, while the ONU
+ * holds an ONU-ID and sends, in O4 and O5: G.984.3 has the ONU send it, at
+ * least three times, when it is about to change its powering conditions, so
+ * that the OLT does not report the loss of the ONU that follows (clause 9.2.2
+ * and clause 9.2.4.3). Each copy goes on the urgent queue and is given
+ * RTL9602C_GPON_DG_WAIT_MS to leave it, in the ONU's next allocation that
+ * carries a PLOAM message; the copies sent are logged.
+ */
+static int rtl9602c_gpon_reboot(struct notifier_block *nb, unsigned long action,
+				void *data)
+{
+	struct rtl9602c_priv *p = container_of(nb, struct rtl9602c_priv,
+					       gpon_reboot_nb);
+	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
+	unsigned int sent = 0;
+	u32 ctrl;
+
+	mutex_lock(&p->gpon_lock);
+	if (p->gpon_up && (p->gpon_state == RTL9602C_ONU_O4_RANGING ||
+			   p->gpon_state == RTL9602C_ONU_O5_OPERATION)) {
+		msg[0] = p->gpon_onu_id;
+		msg[1] = RTL9602C_PLOAM_US_DYING_GASP;
+		while (sent < RTL9602C_GPON_DG_COPIES &&
+		       !rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT) &&
+		       !read_poll_timeout(rtl9602c_r, ctrl,
+					  ctrl & RTL9602C_PLOAM_TX_CTRL_URGENT_EMPTY,
+					  USEC_PER_MSEC, RTL9602C_GPON_DG_WAIT_MS * USEC_PER_MSEC,
+					  false, p, RTL9602C_PLOAM_TX_CTRL))
+			sent++;
+		pr_info("<GPON> Dying_Gasp sent %u of %u times before the restart\n",
+			sent, RTL9602C_GPON_DG_COPIES);
+	}
+	mutex_unlock(&p->gpon_lock);
+	return NOTIFY_DONE;
+}
+
+/**
+ * rtl9602c_gpon_reboot_register() - send Dying_Gasp before every restart
+ * @p: the switch
+ *
+ * Return: 0, or the error of registering the notifier.
+ */
+int rtl9602c_gpon_reboot_register(struct rtl9602c_priv *p)
+{
+	p->gpon_reboot_nb.notifier_call = rtl9602c_gpon_reboot;
+	return devm_register_reboot_notifier(p->dev, &p->gpon_reboot_nb);
 }
 
 /**

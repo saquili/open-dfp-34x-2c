@@ -634,6 +634,13 @@ enum {
 #define RTL9602C_GPON_POWER_MODE_MAX		2
 
 /*
+ * Dying_Gasp (ITU-T G.984.3 clause 9.2.4.3) is sent at least this many times,
+ * each copy given this long to leave the urgent queue.
+ */
+#define RTL9602C_GPON_DG_COPIES		3
+#define RTL9602C_GPON_DG_WAIT_MS		50
+
+/*
  * The PEE alarm clears when no Physical_Equipment_Error has come for this long
  * (ITU-T G.984.3 clause 11.1.2).
  */
@@ -2954,6 +2961,8 @@ struct rtl9602c_priv {
 	struct work_struct	optics_level_work;
 	/** @optics_reboot_nb: puts level mode 0 back before a restart */
 	struct notifier_block	optics_reboot_nb;
+	/** @gpon_reboot_nb: sends Dying_Gasp before a restart */
+	struct notifier_block	gpon_reboot_nb;
 	/** @ptp_info: the switch clock as a PHC */
 	struct ptp_clock_info	ptp_info;
 	/** @ptp_clock: the PHC; NULL when none is registered */
@@ -3248,6 +3257,7 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable);
 int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p);
 void rtl9602c_optics_level_work(struct work_struct *work);
 int rtl9602c_optics_level_register(struct rtl9602c_priv *p);
+int rtl9602c_gpon_reboot_register(struct rtl9602c_priv *p);
 void rtl9602c_gpon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
 				 int err);
 int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p);

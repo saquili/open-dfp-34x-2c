@@ -2374,6 +2374,10 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	if (err)
 		return dev_err_probe(&pdev->dev, err,
 				     "cannot register the transmit power restore\n");
+	err = rtl9602c_gpon_reboot_register(p);
+	if (err)
+		return dev_err_probe(&pdev->dev, err,
+				     "cannot register the dying gasp\n");
 
 	p->ds.dev = &pdev->dev;
 	p->ds.num_ports = RTL9602C_NUM_PORTS;

@@ -1717,7 +1717,7 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
    * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT``
      - 1
      - A queue, as the normal one.
-     - Acknowledge messages.
+     - Acknowledge messages, and Dying_Gasp before a restart.
    * - ``RTL9602C_PLOAM_TX_CTRL_SLOT_DYING_GASP``
      - 5
      - A template that the MAC sends by itself.
@@ -1799,6 +1799,20 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
      - I
      - That a write into a full queue overwrites its tail is unverified; the
        refusal has never fired.
+   * - Before an orderly restart, power-off or halt, while the ONU is in O4 or
+       O5, a reboot notifier sends Dying_Gasp (the ONU-ID, 3, zero) on the
+       urgent queue, at most ``RTL9602C_GPON_DG_COPIES`` (3) times, each copy
+       given ``RTL9602C_GPON_DG_WAIT_MS`` (50 ms) to leave the queue, and stops
+       at the first that does not; it logs ``Dying_Gasp sent <n> of 3 times
+       before the restart``. G.984.3 has the ONU send it at least three times
+       when it is about to change its powering conditions, so that the OLT
+       does not report the loss of the ONU that follows.
+     - M
+     - ITU-T G.984.3 clause 9.2.2 and clause 9.2.4.3. ``reboot`` in O5 logged
+       ``sent 1 of 3``: the test OLT gives the ONU no allocation after the
+       first copy. Sent without a restart, a copy left the queue in 0.56 ms,
+       the next two waited 2 s in vain, and the OLT deactivated the ONU and
+       activated it again about 4 s later.
    * - At bring-up the driver arms the No message template (octet 1 255, octet 2
        4, the rest zero) and then the Dying_Gasp template (255, 3, zero). Every
        allocation that asks for a PLOAMu carries a message, so the No message
@@ -2967,7 +2981,12 @@ Known limitations
   unanswered serial-number requests (G.984.3 clause 10.5.1) are not done, since
   the optics measure the power only in bursts. The test OLT sends no
   Change_Power_Level, so the levels have been set only by injected messages.
-- Nothing in the driver sends the Dying_Gasp message that the MAC holds armed.
+- Dying_Gasp is sent before an orderly restart, and on the test OLT only its
+  first copy leaves (see "PLOAM transmit"). What makes the MAC send the
+  Dying_Gasp template it holds armed, and whether the supply-loss interrupt
+  needs handling, are not known: the driver does not enable that interrupt,
+  whose bit reads clear in operation, and testing either needs a controlled
+  drop of the supply.
 
 Open questions
 ==============
@@ -3157,7 +3176,10 @@ Questions the code does not depend on
    * - What the ten bits of the upstream GEM framer's latch detect, and whether
        reading it clears it ("The debugfs views").
      - Two reads in a row under upstream traffic.
-   * - What makes the MAC send the Dying_Gasp template it holds ("PLOAM
-       transmit", "Known limitations").
-     - The dying-gasp input asserted with the ONU in O5 (see
+   * - What makes the MAC send the Dying_Gasp template it holds, and whether
+       it puts the ONU-ID in place of the template's 255 ("PLOAM transmit",
+       "Known limitations"). Bit 13 of ``RTL9602C_IRQ_PENDING``, taken to be
+       the supply-loss interrupt, read clear in operation with
+       ``RTL9602C_DGASP_CFG`` at ``0x000d000c``.
+     - A controlled drop of the supply with the ONU in O5 (see
        Documentation/networking/device_drivers/pon/rtl9602c.rst).
