@@ -192,11 +192,12 @@ Interfaces to user space
       /sys/class/hwmon/hwmon0/name
 
   The attributes are ``temp1_input``, ``in0_input``, ``curr1_input``,
-  ``power1_input`` and ``power2_input``, each with a ``_label`` file, all
-  read-only (mode ``0444``). Their units are those of the hwmon interface:
-  millidegree Celsius, millivolt, milliampere and microwatt (see
-  "Diagnostics"). Reading a value takes two one-byte transfers on the I2C
-  master; reading a label takes none.
+  ``power1_input`` and ``power2_input``, each with a ``_label`` file and the
+  four thresholds ``_lcrit``, ``_min``, ``_max`` and ``_crit``, all read-only
+  (mode ``0444``). Their units are those of the hwmon interface: millidegree
+  Celsius, millivolt, milliampere and microwatt (see "Diagnostics"). Reading
+  a value or a threshold takes one two-byte transfer on the I2C master;
+  reading a label takes none.
 - The I2C adapter ``rtl9602c i2c``, whose name is in
   ``/sys/class/i2c-adapter/i2c-N/name``. It offers SMBus byte-data transfers
   only (see "The I2C adapter"). With ``CONFIG_I2C_CHARDEV`` it has a file
@@ -568,7 +569,7 @@ What the driver reads and writes of the part:
      - The ``eeblocks`` view.
      - Nothing in the driver.
    * - ``0x51`` (A2h), bytes 0-127
-     - The ``a2`` view; the hwmon device reads bytes 96-105 only.
+     - The ``a2`` view; the hwmon device reads bytes 0-39 and 96-105 only.
      - The modulation hold: ``0xff`` to bytes 123-126, ``02h`` to byte 127, and
        byte 127 again to restore it.
    * - ``0x51`` (A2h), bytes 128-255
@@ -585,8 +586,9 @@ Diagnostics
 
 A2h bytes 96 to 105 hold five 16-bit measurements, most significant byte first.
 The module reports them in the units SFF-8472 gives an internally calibrated
-module, and the driver applies no calibration. The driver reads each value as
-two one-byte transfers, the most significant byte first. The hwmon device
+module, and the driver applies no calibration. The driver reads each value in
+one transfer of two bytes, the most significant byte first, during which the
+module does not update it, as SFF-8472 has a measurement read. The hwmon device
 converts each value to the unit of the hwmon interface for its type
 (``Documentation/ABI/testing/sysfs-class-hwmon``), as ``drivers/net/phy/sfp.c``
 does, rounded to the nearest; the ``a2`` view prints the values in the SFF-8472
@@ -705,11 +707,42 @@ To read the five measurements, in the directory of the device::
 It prints one line per measurement: the label and the value in the hwmon unit
 of the table in "Diagnostics".
 
-The device has no limit or alarm attributes: the driver does not interpret the
-threshold and flag bytes of SFF-8472, and they are visible only in the hex dump
-of the ``a2`` view. The device is registered once, at setup: if the temperature
-word cannot be read then, there is no hwmon device until the switch is set up
-again.
+A2h bytes 0 to 39 hold the module's thresholds for the five measurements, in
+the same units: for each in the order of the measurements, four 16-bit words,
+the high alarm, low alarm, high warning and low warning thresholds. The device
+reports them as ``drivers/net/phy/sfp.c`` reports those of the modules it
+manages: the alarm thresholds as ``_crit`` and ``_lcrit``, the warning
+thresholds as ``_max`` and ``_min``, converted as the measurements are. It has
+no ``_alarm`` attributes: the flag bytes 112 to 117, where a module says which
+threshold a measurement has crossed, are not read, and they are visible only
+in the hex dump of the ``a2`` view.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A2h bytes 0-39 (``RTL9602C_OPTICS_A2_LIMIT``) hold four 16-bit
+       thresholds per measurement, most significant byte first, in the order
+       temperature, supply voltage, bias, transmitted power, received power:
+       high alarm, low alarm, high warning, low warning.
+     - P
+     - SFF-8472 Rev 12.4, its table of the alarm and warning thresholds of
+       A2h.
+   * - The module fitted here holds: temperature 100, -40, 90 and -20 degC;
+       supply voltage 3.6, 3.0, 3.5 and 3.1 V; bias 100, 1, 90 and 1 mA;
+       transmitted power 3981, 891, 3548 and 1000 uW (+6.0, -0.5, +5.5 and
+       0 dBm); received power 199.5, 1.0, 158.5 and 1.3 uW (-7.0, -30.0, -8.0
+       and -28.9 dBm). Its measurements in O5 sit within the warning
+       thresholds.
+     - M
+     - The ``a2`` view in O5 on an OLT: 46 degC, 3.209 V, 6.4 mA, 1671.5 uW
+       and 3.0 uW.
+
+The device is registered once, at setup: if the temperature word cannot be
+read then, there is no hwmon device until the switch is set up again.
 
 The debugfs views
 -----------------

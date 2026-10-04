@@ -324,12 +324,12 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable)
 }
 
 /*
- * Read the diagnostic word @off bytes into A2h 96-105, most significant
- * byte first, in one transfer of two bytes: SFF-8472 has such a field read
- * in one two-byte sequence, during which the module does not update it.
- * RX_DATA holds the first byte read, the most significant, in bits 7:0.
+ * Read the word at A2h byte @a2, most significant byte first, in one
+ * transfer of two bytes: SFF-8472 has a diagnostic read in one two-byte
+ * sequence, during which the module does not update it.  RX_DATA holds the
+ * first byte read, the most significant, in bits 7:0.
  */
-static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int off, u16 *val)
+static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int a2, u16 *val)
 {
 	u32 cmd, rx;
 	u16 slave;
@@ -337,8 +337,7 @@ static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int off, u16 *va
 	int err;
 
 	lockdep_assert_held(&p->i2c_lock);
-	err = rtl9602c_l_addr(RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_DDM + off,
-			      &slave, &sub);
+	err = rtl9602c_l_addr(RTL9602C_OPTICS_A2_BASE + a2, &slave, &sub);
 	if (err)
 		return err;
 	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_16BIT);
@@ -368,6 +367,11 @@ static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int off, u16 *va
  * (measured on this board), so both readings agree.  Bias and transmitted
  * power read 0 while the laser does not emit, as below O3.
  *
+ * The thresholds come from A2h 0-39, in the same units, and are reported
+ * as sfp.c reports them: the alarm thresholds as crit and lcrit, the
+ * warning thresholds as max and min.  The module fitted here holds values
+ * there that its own readings sit well within (measured on this board).
+ *
  * A value is computed even when its read fails; the error returned keeps
  * the hwmon core from using it.
  */
@@ -376,31 +380,64 @@ static int rtl9602c_hwmon_read(struct device *dev,
 			       int channel, long *val)
 {
 	struct rtl9602c_priv *p = dev_get_drvdata(dev);
+	enum rtl9602c_optics_ddm ddm;
+	unsigned int a2;
+	int limit;
 	u16 raw;
 	int err;
 
-	guard(mutex)(&p->i2c_lock);
 	switch (type) {
 	case hwmon_temp:
-		err = rtl9602c_l_a2_word(p, 0, &raw);
-		*val = DIV_ROUND_CLOSEST((long)(s16)raw * 1000, 256);
+		ddm = RTL9602C_OPTICS_TEMP;
+		limit = attr == hwmon_temp_crit ? RTL9602C_OPTICS_HIGH_ALARM :
+			attr == hwmon_temp_lcrit ? RTL9602C_OPTICS_LOW_ALARM :
+			attr == hwmon_temp_max ? RTL9602C_OPTICS_HIGH_WARN :
+			attr == hwmon_temp_min ? RTL9602C_OPTICS_LOW_WARN : -1;
 		break;
 	case hwmon_in:
-		err = rtl9602c_l_a2_word(p, 2, &raw);
-		*val = DIV_ROUND_CLOSEST((long)raw, 10);
+		ddm = RTL9602C_OPTICS_VCC;
+		limit = attr == hwmon_in_crit ? RTL9602C_OPTICS_HIGH_ALARM :
+			attr == hwmon_in_lcrit ? RTL9602C_OPTICS_LOW_ALARM :
+			attr == hwmon_in_max ? RTL9602C_OPTICS_HIGH_WARN :
+			attr == hwmon_in_min ? RTL9602C_OPTICS_LOW_WARN : -1;
 		break;
 	case hwmon_curr:
-		err = rtl9602c_l_a2_word(p, 4, &raw);
-		*val = DIV_ROUND_CLOSEST((long)raw, 500);
+		ddm = RTL9602C_OPTICS_BIAS;
+		limit = attr == hwmon_curr_crit ? RTL9602C_OPTICS_HIGH_ALARM :
+			attr == hwmon_curr_lcrit ? RTL9602C_OPTICS_LOW_ALARM :
+			attr == hwmon_curr_max ? RTL9602C_OPTICS_HIGH_WARN :
+			attr == hwmon_curr_min ? RTL9602C_OPTICS_LOW_WARN : -1;
 		break;
 	case hwmon_power:
-		err = rtl9602c_l_a2_word(p, channel ? 8 : 6, &raw);
-		*val = DIV_ROUND_CLOSEST((long)raw, 10);
+		ddm = channel ? RTL9602C_OPTICS_RX : RTL9602C_OPTICS_TX;
+		limit = attr == hwmon_power_crit ? RTL9602C_OPTICS_HIGH_ALARM :
+			attr == hwmon_power_lcrit ? RTL9602C_OPTICS_LOW_ALARM :
+			attr == hwmon_power_max ? RTL9602C_OPTICS_HIGH_WARN :
+			attr == hwmon_power_min ? RTL9602C_OPTICS_LOW_WARN : -1;
 		break;
 	default:
 		return -EOPNOTSUPP;
 	}
 
+	a2 = limit < 0 ? RTL9602C_OPTICS_A2_WORD(ddm) :
+			 RTL9602C_OPTICS_A2_LIMIT(ddm, limit);
+	scoped_guard(mutex, &p->i2c_lock)
+		err = rtl9602c_l_a2_word(p, a2, &raw);
+
+	switch (ddm) {
+	case RTL9602C_OPTICS_TEMP:
+		*val = DIV_ROUND_CLOSEST((long)(s16)raw * 1000, 256);
+		break;
+	case RTL9602C_OPTICS_VCC:
+		*val = DIV_ROUND_CLOSEST((long)raw, 10);
+		break;
+	case RTL9602C_OPTICS_BIAS:
+		*val = DIV_ROUND_CLOSEST((long)raw, 500);
+		break;
+	default:
+		*val = DIV_ROUND_CLOSEST((long)raw, 10);
+		break;
+	}
 	return err;
 }
 
@@ -434,13 +471,26 @@ static umode_t rtl9602c_hwmon_is_visible(const void *data,
 	return 0444;
 }
 
-/* temp1, in0, curr1, power1 (transmitted) and power2 (received) */
+/*
+ * temp1, in0, curr1, power1 (transmitted) and power2 (received), each with
+ * its four thresholds
+ */
 static const struct hwmon_channel_info * const rtl9602c_hwmon_info[] = {
-	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_LABEL),
-	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT | HWMON_I_LABEL),
-	HWMON_CHANNEL_INFO(curr, HWMON_C_INPUT | HWMON_C_LABEL),
-	HWMON_CHANNEL_INFO(power, HWMON_P_INPUT | HWMON_P_LABEL,
-			   HWMON_P_INPUT | HWMON_P_LABEL),
+	HWMON_CHANNEL_INFO(temp, HWMON_T_INPUT | HWMON_T_LABEL |
+			   HWMON_T_MIN | HWMON_T_MAX |
+			   HWMON_T_LCRIT | HWMON_T_CRIT),
+	HWMON_CHANNEL_INFO(in, HWMON_I_INPUT | HWMON_I_LABEL |
+			   HWMON_I_MIN | HWMON_I_MAX |
+			   HWMON_I_LCRIT | HWMON_I_CRIT),
+	HWMON_CHANNEL_INFO(curr, HWMON_C_INPUT | HWMON_C_LABEL |
+			   HWMON_C_MIN | HWMON_C_MAX |
+			   HWMON_C_LCRIT | HWMON_C_CRIT),
+	HWMON_CHANNEL_INFO(power, HWMON_P_INPUT | HWMON_P_LABEL |
+			   HWMON_P_MIN | HWMON_P_MAX |
+			   HWMON_P_LCRIT | HWMON_P_CRIT,
+			   HWMON_P_INPUT | HWMON_P_LABEL |
+			   HWMON_P_MIN | HWMON_P_MAX |
+			   HWMON_P_LCRIT | HWMON_P_CRIT),
 	NULL,
 };
 
@@ -471,7 +521,9 @@ int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
 	u16 probe;
 	int err;
 
-	err = rtl9602c_l_a2_word(p, 0, &probe);
+	scoped_guard(mutex, &p->i2c_lock)
+		err = rtl9602c_l_a2_word(p, RTL9602C_OPTICS_A2_WORD(RTL9602C_OPTICS_TEMP),
+					 &probe);
 	if (err)
 		return err;
 
@@ -508,7 +560,7 @@ static int rtl9602c_a2_show(struct seq_file *s, void *unused)
 	for (i = 0; i < sizeof(b) && !err; i++)
 		err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + i, &b[i]);
 	for (i = 0; i < ARRAY_SIZE(w) && !err; i++)
-		err = rtl9602c_l_a2_word(p, 2 * i, &w[i]);
+		err = rtl9602c_l_a2_word(p, RTL9602C_OPTICS_A2_WORD(i), &w[i]);
 	mutex_unlock(&p->i2c_lock);
 	if (err) {
 		seq_printf(s, "A2h read failed: %d\n", err);
@@ -646,7 +698,8 @@ static int rtl9602c_gn_t2_prepare(struct rtl9602c_priv *p)
 static int rtl9602c_optics_tx_bias(struct rtl9602c_priv *p, u16 *tx, u16 *bias)
 {
 	msleep(RTL9602C_OPTICS_LEVEL_SETTLE_MS);
-	return rtl9602c_l_a2_word(p, 6, tx) ?: rtl9602c_l_a2_word(p, 4, bias);
+	return rtl9602c_l_a2_word(p, RTL9602C_OPTICS_A2_WORD(RTL9602C_OPTICS_TX), tx) ?:
+	       rtl9602c_l_a2_word(p, RTL9602C_OPTICS_A2_WORD(RTL9602C_OPTICS_BIAS), bias);
 }
 
 /*

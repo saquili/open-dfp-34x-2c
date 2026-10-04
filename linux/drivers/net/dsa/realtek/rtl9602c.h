@@ -2359,11 +2359,46 @@ struct rtl9602c_field {
 
 /*
  * The optics' SFF-8472 bytes as the driver numbers them, A2h from A2_BASE:
- * the diagnostics, and bytes 123 to 126, left to the module maker.
+ * the thresholds, the diagnostics, and bytes 123 to 126, left to the
+ * module maker.  Each of the five diagnostics, numbered as in enum
+ * rtl9602c_optics_ddm, has a word in A2h 96-105 and four in A2h 0-39: its
+ * high alarm, low alarm, high warning and low warning thresholds.
  */
 #define RTL9602C_OPTICS_A2_BASE		0x100
+#define RTL9602C_OPTICS_A2_LIMIT(ddm, limit)	(8 * (ddm) + 2 * (limit))
 #define RTL9602C_OPTICS_A2_DDM		0x60
+#define RTL9602C_OPTICS_A2_WORD(ddm)		(RTL9602C_OPTICS_A2_DDM + 2 * (ddm))
 #define RTL9602C_OPTICS_A2_PASSWORD		0x7b
+
+/**
+ * enum rtl9602c_optics_ddm - the diagnostics of SFF-8472, in A2h order
+ * @RTL9602C_OPTICS_TEMP: temperature, signed, 1/256 degC
+ * @RTL9602C_OPTICS_VCC: supply voltage, 100 uV
+ * @RTL9602C_OPTICS_BIAS: laser bias current, 2 uA
+ * @RTL9602C_OPTICS_TX: transmitted optical power, 0.1 uW
+ * @RTL9602C_OPTICS_RX: received optical power, 0.1 uW
+ */
+enum rtl9602c_optics_ddm {
+	RTL9602C_OPTICS_TEMP,
+	RTL9602C_OPTICS_VCC,
+	RTL9602C_OPTICS_BIAS,
+	RTL9602C_OPTICS_TX,
+	RTL9602C_OPTICS_RX,
+};
+
+/**
+ * enum rtl9602c_optics_limit - the thresholds of a diagnostic, in A2h order
+ * @RTL9602C_OPTICS_HIGH_ALARM: high alarm
+ * @RTL9602C_OPTICS_LOW_ALARM: low alarm
+ * @RTL9602C_OPTICS_HIGH_WARN: high warning
+ * @RTL9602C_OPTICS_LOW_WARN: low warning
+ */
+enum rtl9602c_optics_limit {
+	RTL9602C_OPTICS_HIGH_ALARM,
+	RTL9602C_OPTICS_LOW_ALARM,
+	RTL9602C_OPTICS_HIGH_WARN,
+	RTL9602C_OPTICS_LOW_WARN,
+};
 
 /*
  * A set bit routes its pad to the GPIO function; bit 13 is TX_DISABLE's.
