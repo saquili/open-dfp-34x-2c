@@ -855,7 +855,8 @@ static void populated_prepare(const struct omci_mib *mib)
 		for (uint8_t attr = 1; attr <= cls->attr_count; attr++) {
 			const struct omci_me_attr *a =
 				omci_me_attr_get(cls, attr);
-			if (!value_writable(a))
+			if (!value_writable(a) ||
+			    !omci_me_value_kept(g_minst[k].cls, attr))
 				continue;
 			uint8_t cur[64];
 

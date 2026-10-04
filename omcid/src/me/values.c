@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-/* The values an attribute takes, where it does not take them all. */
+/*
+ * The values an attribute takes, where it does not take them all, and the
+ * attributes the ONU changes on its own.
+ */
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -34,4 +37,9 @@ bool omci_me_value_allowed(uint16_t class_id, uint8_t attr_no,
 			return value[0] >= g_ranges[i].min &&
 			       value[0] <= g_ranges[i].max;
 	return true;
+}
+
+bool omci_me_value_kept(uint16_t class_id, uint8_t attr_no)
+{
+	return !(class_id == 263u && attr_no == 8u);
 }

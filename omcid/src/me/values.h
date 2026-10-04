@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
 
-/* The attributes that take only some of the values their size can hold. */
+/*
+ * The attributes that take only some of the values their size can hold,
+ * and those whose value the ONU changes on its own.
+ */
 
 #ifndef OMCI_ME_VALUES_H
 #define OMCI_ME_VALUES_H
@@ -22,5 +25,16 @@
  */
 __must_check bool omci_me_value_allowed(uint16_t class_id, uint8_t attr_no,
 					const uint8_t *value);
+
+/**
+ * omci_me_value_kept() - Whether an attribute keeps the value the OLT sets.
+ * @class_id: the class
+ * @attr_no: the attribute
+ *
+ * Return: false for an attribute the ONU changes on its own, which a Get
+ * after a Set may find changed: alarm-reporting control, which ends by
+ * itself (G.988 A.1.4.3).
+ */
+__must_check bool omci_me_value_kept(uint16_t class_id, uint8_t attr_no);
 
 #endif
