@@ -473,9 +473,9 @@ enum {
 
 /*
  * The overhead that opens each upstream burst: its length in bytes, and its
- * bytes in BURST_DATA(), the preamble pattern and then the delimiter.
- * REPEAT_IDX, the last pattern byte, is taken to be the byte repeated to make
- * up the length (not verified).
+ * bytes in BURST_DATA(), the preamble and then the delimiter. REPEAT_IDX, the
+ * last preamble byte, is taken to be the byte repeated to make up the length
+ * (not verified).
  */
 #define RTL9602C_BURST_CFG	0x705054
 #define RTL9602C_BURST_CFG_REPEAT_IDX	GENMASK(11, 8)
@@ -653,9 +653,14 @@ enum {
 /* The serial number's offset in Serial_Number_ONU. */
 #define RTL9602C_PLOAM_SN_ONU_SERIAL		2
 
-/* One overhead byte in each of the burst data registers. */
+/*
+ * One overhead byte in each of the burst data registers, and the bytes of the
+ * type 1 (all ones) and type 2 (all zeros) preambles.
+ */
 #define RTL9602C_BURST_DATA_BYTE		GENMASK(7, 0)
 #define RTL9602C_GPON_BOH_BYTES		12
+#define RTL9602C_PREAMBLE_TYPE1		0xff
+#define RTL9602C_PREAMBLE_TYPE2		0x00
 
 /*
  * Upstream_Overhead (ITU-T G.984.3 clause 9.2.3.1). PRE_EQD_EN, in the flags

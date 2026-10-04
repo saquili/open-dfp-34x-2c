@@ -1834,11 +1834,10 @@ which the ONU sends no light, the preamble and the delimiter, and then the burst
 header. The OLT dictates the preamble and the delimiter in Upstream_Overhead and
 Extended_Burst_Length, and the MAC sends them immediately before the byte that
 StartTime points at. The driver programs the overhead in two places:
-``RTL9602C_BURST_DATA(i)`` holds the overhead bytes, the type 3 preamble pattern
-and then the delimiter, and ``RTL9602C_BURST_CFG`` holds the overhead's length
-in bytes and a repeat index, which is taken to name the byte that the MAC
-repeats to make up the length. The length is the one thing that changes with the
-state.
+``RTL9602C_BURST_DATA(i)`` holds the overhead bytes, the preamble and then the
+delimiter, and ``RTL9602C_BURST_CFG`` holds the overhead's length in bytes and a
+repeat index, which is taken to name the byte that the MAC repeats to make up
+the length. The length is the one thing that changes with the state.
 
 .. list-table::
    :header-rows: 1
@@ -1882,11 +1881,21 @@ state.
        2.
    * - ``RTL9602C_BURST_DATA(i)`` (``0x705080`` + 4i, i from 0 to 11:
        ``RTL9602C_GPON_BOH_BYTES``) each hold one overhead byte in
-       ``RTL9602C_BURST_DATA_BYTE`` (bits 7:0). The driver writes nine bytes of
-       the type 3 pattern and then the three delimiter octets.
+       ``RTL9602C_BURST_DATA_BYTE`` (bits 7:0). The driver writes nine preamble
+       bytes in the order of G.984.2, then the three delimiter octets: as many
+       bytes as the guard counts in the length (at most four), which carry the
+       type 3 pattern; the type 1 preamble's whole bytes,
+       ``RTL9602C_PREAMBLE_TYPE1`` (``0xff``); the type 2 preamble's,
+       ``RTL9602C_PREAMBLE_TYPE2`` (``0x00``); and the type 3 pattern for the
+       rest. The last preamble byte, at the repeat index, always carries the
+       pattern, so with a 32-bit guard at most four bytes are left for the type
+       1 and type 2 preambles; what does not fit is cut, and the length still
+       counts it.
      - M
-     - Read back as nine ``aa`` then ``ab 59 83``, the test OLT's pattern and
-       delimiter.
+     - Read back in the ``usburst`` view as nine ``aa`` then ``ab 59 83`` with
+       the test OLT's values (type 1 and type 2 zero), and as ``aa aa aa aa ff
+       ff 00 00 aa ab 59 83`` after an injected Upstream_Overhead with 16 bits
+       of each.
    * - ``RTL9602C_BURST_CFG`` (``0x705054``): ``RTL9602C_BURST_CFG_LEN`` (bits
        7:0) is the overhead length in bytes; ``RTL9602C_BURST_CFG_REPEAT_IDX``
        (bits 11:8) is written ``RTL9602C_BURST_CFG_REPEAT_IDX_DEF`` (8), the
@@ -1927,11 +1936,18 @@ state.
      - M
      - The kernel log lines ``burst: ...``, ``Upstream_Overhead raw: ...`` and
        ``burst length: ...``.
-   * - That the type 1 (all ones) and type 2 (all zeros) preambles, which are
-       not programmed (see "Known limitations"), are not needed: the test OLT
-       sends zero for both, and an OLT that asks for them is untested.
+   * - The OLT decodes the bursts with type 1 and type 2 bytes in the
+       preamble: after an injected Upstream_Overhead with 16 bits of each, the
+       ONU reached O5 and OMCI passed both ways.
+     - T
+     - The ONU reaching O5 after the injection on the test OLT, which ignores
+       the preamble's content as long as the delimiter is found.
+   * - That the MAC sends the bytes before the repeat index once, at the start
+       of the overhead, so that the type 1 and type 2 bytes open the preamble
+       as G.984.2 orders it, is inferred from the index's value.
      - I
-     - An OLT with non-zero type 1 or type 2 counts.
+     - An OLT that checks the type 1 and type 2 preambles, or a capture of the
+       upstream light.
    * - The guard is counted into the length only up to 32 bits; that the length
        counts the guard at all rests on the lengths of the rows above reaching
        O5.
@@ -2887,10 +2903,11 @@ Known limitations
 - The steps that a loss of the downstream takes, to O1 and to O6, and the
   POPUP and TO2 that leave O6, have not been exercised on the board: they need
   the fibre pulled with the ONU in O5.
-- No type 1 or type 2 preamble is programmed; their bit counts only enter the
-  length. That Extended_Burst_Length is ignored after the first serial-number
-  request has not been seen on the board, since the test OLT assigns the
-  ONU-ID at once.
+- The type 1 and type 2 preambles are sent in whole bytes, and with a 32-bit
+  guard at most four bytes of them; a longer count is cut short and its
+  remainder sent as the type 3 pattern. The test OLT asks for neither. That
+  Extended_Burst_Length is ignored after the first serial-number request has
+  not been seen on the board, since the test OLT assigns the ONU-ID at once.
 - Change_Power_Level, PST, Physical_Equipment_Error and Sleep_Allow are
   recorded, logged once and not acted on. Swift_POPUP, like POPUP, has not been
   exercised on the board, since it needs the ONU in O6.
@@ -3006,9 +3023,10 @@ Assumptions the driver depends on
    * - That the repeat index of the burst overhead names the byte that is
        stretched into the preamble ("The burst overhead").
      - Another index, with the OLT's delineation of the bursts as the witness.
-   * - That type 1 and type 2 preambles are not needed ("The burst overhead",
-       "Known limitations").
-     - An OLT that asks for them.
+   * - That the MAC sends the bytes before the repeat index once, at the start
+       of the overhead, so that the type 1 and type 2 preambles come first
+       ("The burst overhead").
+     - An OLT that checks them, or a capture of the upstream light.
    * - That the overhead length counts the guard, up to 32 bits ("The burst
        overhead").
      - An OLT with a guard longer than 32 bits.

@@ -416,14 +416,18 @@ static void rtl9602c_gpon_set_boh(struct rtl9602c_priv *p, u8 len)
 
 /*
  * Take the burst overhead and the delay from Upstream_Overhead (G.984.3
- * clause 9.2.3.1). The overhead bytes are nine of the type 3 preamble pattern
- * and the three delimiter octets. No type 1 (all ones) or type 2 (all zeros)
- * preamble is programmed: their bit counts only enter the length, and an OLT
- * that asks for them is untested. The length starts at
- * RTL9602C_BURST_CFG_PRERANGED, 12 bytes, with which the OLT decodes the
- * serial-number bursts (measured on this board). Extended_Burst_Length and
- * Ranging_Time replace it; without Extended_Burst_Length it stays 12 bytes in
- * every state, since the stored type 3 lengths are zeroed here.
+ * clause 9.2.3.1). The nine preamble bytes follow the order of G.984.2: as
+ * many bytes as the guard counts in the length, which carry the type 3
+ * pattern as before, then the type 1 preamble (all ones) and the type 2
+ * preamble (all zeros) in whole bytes, then the type 3 pattern; then come the
+ * three delimiter octets. At least the last preamble byte, the one at the
+ * repeat index, stays the pattern, so a type 1 or type 2 count too long for
+ * the nine bytes is cut short; the length still counts it, and the repeated
+ * pattern fills it. The length starts at RTL9602C_BURST_CFG_PRERANGED, 12
+ * bytes, with which the OLT decodes the serial-number bursts (measured on this
+ * board). Extended_Burst_Length and Ranging_Time replace it; without
+ * Extended_Burst_Length it stays 12 bytes in every state, since the stored
+ * type 3 lengths are zeroed here.
  *
  * The number of extra serial-number transmissions, which G.984.3 deprecates
  * (00), goes into RTL9602C_GTC_DS_CTRL_EXTRA_SN. The equalization delay starts
@@ -433,16 +437,25 @@ static void rtl9602c_gpon_set_boh(struct rtl9602c_priv *p, u8 len)
  */
 static void rtl9602c_gpon_set_overhead(struct rtl9602c_priv *p, const u8 *msg)
 {
+	const unsigned int pre = RTL9602C_GPON_BOH_BYTES - RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN;
 	u8 boh[RTL9602C_GPON_BOH_BYTES];
-	unsigned int pre, i;
+	unsigned int guard, ones, zeros, i;
 	u32 eqd;
 
-	pre = RTL9602C_GPON_BOH_BYTES - RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN;
-	if (pre > RTL9602C_GPON_BOH_BYTES - RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN)
-		pre = RTL9602C_GPON_BOH_BYTES - RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN;
+	guard = min_t(unsigned int, msg[RTL9602C_PLOAM_OVERHEAD_GUARD_BITS], 32) / 8;
+	ones = min_t(unsigned int, msg[RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS] / 8,
+		     pre - 1 - guard);
+	zeros = min_t(unsigned int, msg[RTL9602C_PLOAM_OVERHEAD_TYPE2_BITS] / 8,
+		      pre - 1 - guard - ones);
 
-	for (i = 0; i < pre; i++)
-		boh[i] = msg[RTL9602C_PLOAM_OVERHEAD_TYPE3_PATTERN];
+	for (i = 0; i < pre; i++) {
+		if (i >= guard && i < guard + ones)
+			boh[i] = RTL9602C_PREAMBLE_TYPE1;
+		else if (i >= guard + ones && i < guard + ones + zeros)
+			boh[i] = RTL9602C_PREAMBLE_TYPE2;
+		else
+			boh[i] = msg[RTL9602C_PLOAM_OVERHEAD_TYPE3_PATTERN];
+	}
 	for (i = 0; i < RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN; i++)
 		boh[pre + i] = msg[RTL9602C_PLOAM_OVERHEAD_DELIMITER + i];
 
