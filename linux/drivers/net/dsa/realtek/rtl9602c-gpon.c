@@ -2358,8 +2358,9 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
  * nothing; activation cannot rely on it, since a message dispatched this late
  * misses the ranging request that follows Assign_ONU-ID (measured on this
  * board). Once the PON MAC is built it records changes of the upstream PLOAM
- * queues. It expires TO1, takes the counters, and sends the PON class the ONU's
- * status when that has changed.
+ * queues. It expires TO1, takes the counters, every RTL9602C_GEM_CNTR_POLLS
+ * runs the GEM ports' too, and sends the PON class the ONU's status when that
+ * has changed.
  */
 void rtl9602c_gpon_work(struct work_struct *w)
 {
@@ -2395,6 +2396,10 @@ void rtl9602c_gpon_work(struct work_struct *w)
 	}
 
 	rtl9602c_gpon_cntr_sync(p);
+	if (++p->gem_cntr_polls >= RTL9602C_GEM_CNTR_POLLS) {
+		p->gem_cntr_polls = 0;
+		rtl9602c_gem_cntr_sync_all(p);
+	}
 	rtl9602c_gpon_rei_tick(p);
 
 	/* PEE clears once no Physical_Equipment_Error has come for 3 s. */
@@ -3385,16 +3390,15 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gpon);
 /*
  * gpontbl: the GPON MAC's tables as the hardware holds them: the Alloc-ID
  * entries in use, by T-CONT; the Port-ID entries in use, by flow, with the
- * flow's downstream type and upstream Port-ID; and each flow whose downstream
- * frame or byte count is not zero. Those counters count the downstream only
- * and clear when read, so each read shows what came since the last one, of
- * this view or, for the OMCC's flow, of ponpath. Read under gpon_lock, since
- * the PLOAM path writes the tables through the same registers.
+ * flow's downstream type and upstream Port-ID; and the totals of each GEM
+ * port's counters, which the counters, cleared when read, are first added
+ * into. Read under gpon_lock, since the PLOAM path writes the tables through
+ * the same registers.
  */
 static int rtl9602c_gpontbl_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
-	unsigned int f, moved = 0;
+	unsigned int f;
 	bool hit;
 	u16 v;
 
@@ -3417,18 +3421,12 @@ static int rtl9602c_gpontbl_show(struct seq_file *s, void *unused)
 				     rtl9602c_r(p, RTL9602C_GEM_US_FLOW_CFG(f))));
 	}
 
-	seq_puts(s, "DOWNSTREAM GEM counters that moved (flow: frames, bytes)\n");
-	for (f = 0; f < RTL9602C_GPON_NUM_FLOW; f++) {
-		u32 frames = rtl9602c_gpon_flow_cntr(p, f, false);
-		u32 bytes = rtl9602c_gpon_flow_cntr(p, f, true);
-
-		if (frames || bytes) {
-			seq_printf(s, "  %3u: %u %u\n", f, frames, bytes);
-			moved++;
-		}
-	}
-	if (!moved)
-		seq_puts(s, "  none -- and this says nothing about upstream\n");
+	seq_puts(s, "GEM ports (flow: received frames, octets; sent frames, octets)\n");
+	rtl9602c_gem_cntr_sync_all(p);
+	for_each_set_bit(f, p->gem_flows, RTL9602C_GPON_NUM_FLOW)
+		seq_printf(s, "  %3u: %llu %llu; %llu %llu\n", f,
+			   p->gem_rx_frames[f], p->gem_rx_octets[f],
+			   p->gem_tx_frames[f], p->gem_tx_octets[f]);
 	mutex_unlock(&p->gpon_lock);
 	return 0;
 }

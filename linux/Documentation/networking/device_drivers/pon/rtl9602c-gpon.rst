@@ -2612,12 +2612,31 @@ and reads the per-flow downstream counters.
      - M
      - A flow carrying 268896 frames upstream showed nothing in the ``gpontbl``
        view.
-   * - These counters clear when read. The ``gpontbl`` view reads every
-       flow's, the ``ponpath`` view the OMCC flow's, so a view shows what came
-       since the last read of either.
+   * - These counters clear when read.
      - M
-     - Flow 0 showed 865 frames at the first read of ``gpontbl`` and exactly the
-       100 sent since at the second.
+     - Flow 0 showed 865 frames at a first read and exactly the 100 sent since
+       at the second.
+   * - The frame counter counts GEM frames, a fragment as one, and the byte
+       counter the payload, the Ethernet frame with its FCS, without the GEM
+       header.
+     - M
+     - 20000 frames of 1514 bytes from the network side to a GEM port's flow:
+       20692 frames, as the OLT split 692 of them, and 30361345 bytes, 1518 for
+       each frame and 1345 of other traffic, the same 1345 as in a run of 10000
+       frames that counted 10552 frames and 15181345 bytes.
+   * - After power-up the counters of the flows hold noise; the first read
+       empties them. The driver reads a GEM port's flow when it creates the
+       port and starts the port's totals at zero.
+     - M
+     - The first read after a boot showed counts on many unused flows, up to
+       3775172030, and the next read none.
+   * - The driver adds a GEM port's counters into the port's totals
+       (``rtl9602c_gem_cntr_sync()``, in the PON MAC page's "The GEM port
+       counts") and is their only reader for GEM ports: the ``gpontbl`` view
+       shows the totals. The ``ponpath`` view reads the OMCC flow's, which no
+       GEM port has.
+     - T
+     - The view's totals followed the frames sent, read after read.
 
 Counters
 ========
@@ -2960,8 +2979,9 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        a flood; every debugfs view reads.
    * - ``gpontbl`` (0400): the Alloc-ID entries in use (T-CONT and Alloc-ID),
        the Port-ID entries in use with the flow's type and upstream Port-ID, and
-       each flow whose downstream GEM counters are non-zero. It reads through
-       the table protocol under ``gpon_lock``.
+       each GEM port's totals of received frames and octets and of sent frames
+       and octets, its counters added in first. It reads through the table
+       protocol under ``gpon_lock``.
      - M
      - The residue after a reset (see "Tables: Alloc-ID, Port-ID and multicast")
        and the per-flow counters (see "GEM framing") were read with it.

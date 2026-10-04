@@ -412,7 +412,9 @@
 
 /*
  * Per-flow downstream GEM counters: the flow into CMD, with BYTES for bytes,
- * then DATA once DONE. Whether a read clears them is not verified.
+ * then DATA once DONE. Each counts what the flow received, 32 bits, cleared
+ * when read: the GEM frames, a fragment counting as one, and the bytes of
+ * their payloads, the Ethernet frames with their FCS (measured on this board).
  */
 #define RTL9602C_GEM_DS_CNT_CMD	0x701140
 #define RTL9602C_GEM_DS_CNT_CMD_DONE	BIT(15)
@@ -757,6 +759,13 @@ enum {
 /* The period of the GPON worker. */
 #define RTL9602C_GPON_POLL_MS		50
 
+/*
+ * The GEM ports' counters are added into their totals every this many runs of
+ * the worker, 5 s: the downstream byte counter, 32 bits, wraps in 13.8 s at the
+ * 2.48832 Gbit/s of the downstream.
+ */
+#define RTL9602C_GEM_CNTR_POLLS		100
+
 /* TO1, armed on entering O3, and on entering O4 from O6. */
 #define RTL9602C_GPON_TO1_MS		10000
 
@@ -899,6 +908,18 @@ enum {
  * (measured on this board).
  */
 #define RTL9602C_GEM_US_FLOW_BYTES(f)	(0x706800 + 8 * (f))
+
+/*
+ * Each flow's upstream frame count, through an indirect port: the flow into
+ * SEL, with ETH set for the Ethernet frames instead of the GEM frames, then
+ * DATA once DONE. 32 bits, cleared when read; a fragment counts as one GEM
+ * frame (measured on this board).
+ */
+#define RTL9602C_GEM_US_FLOW_CNT_SEL		0x706048
+#define RTL9602C_GEM_US_FLOW_CNT_SEL_FLOW	GENMASK(6, 0)
+#define RTL9602C_GEM_US_FLOW_CNT_SEL_ETH	BIT(7)
+#define RTL9602C_GEM_US_FLOW_CNT_SEL_DONE	BIT(15)
+#define RTL9602C_GEM_US_FLOW_CNT_DATA		0x70604c
 
 /* Fields of RTL9602C_GEM_US_FLOW_CFG() and RTL9602C_GEM_DS_FLOW_CFG(). */
 #define RTL9602C_GEM_US_FLOW_CFG_PORTID		GENMASK(11, 0)
@@ -2903,6 +2924,14 @@ struct rtl9602c_priv {
 	 * as the counter clears when read
 	 */
 	u64 gem_tx_octets[RTL9602C_GPON_NUM_FLOW];
+	/** @gem_tx_frames: the GEM frames each GEM port has sent upstream */
+	u64 gem_tx_frames[RTL9602C_GPON_NUM_FLOW];
+	/** @gem_rx_frames: the GEM frames each GEM port has received */
+	u64 gem_rx_frames[RTL9602C_GPON_NUM_FLOW];
+	/** @gem_rx_octets: the payload octets each GEM port has received */
+	u64 gem_rx_octets[RTL9602C_GPON_NUM_FLOW];
+	/** @gem_cntr_polls: the worker's runs since the totals were last taken */
+	unsigned int gem_cntr_polls;
 	/** @gpon_omcc_port: the OMCC's Port-ID while @gpon_omcc_bound */
 	u16 gpon_omcc_port;
 
@@ -3471,5 +3500,6 @@ int rtl9602c_gpon_port_get(struct rtl9602c_priv *p, unsigned int flow,
 			   u16 *port_id, bool *valid);
 u32 rtl9602c_gpon_flow_cntr(struct rtl9602c_priv *p, unsigned int flow,
 			    bool bytes);
+void rtl9602c_gem_cntr_sync_all(struct rtl9602c_priv *p);
 
 #endif /* _RTL9602C_H */

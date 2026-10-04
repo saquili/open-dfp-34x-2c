@@ -377,8 +377,9 @@ Interfaces to user space
 
     ip link add gem0 link pon type gem port-id 1000 tcont 0
 
-  ``ethtool -S gem0`` shows ``pon_tx_octets``, the octets the port has sent
-  upstream (see "GEM ports as network interfaces").
+  ``ethtool -S gem0`` shows the port's counts: ``pon_tx_octets`` and
+  ``pon_tx_frames``, what it has sent upstream, and ``pon_rx_frames`` and
+  ``pon_rx_octets``, what it has received (see "The GEM port counts").
 - debugfs, in the directory ``/sys/kernel/debug/rtl9602c/``, which every block
   of the driver adds its views to. This page describes ``ponmac``, ``ponpath``
   and ``pondp`` (see "The debugfs views"). The GPON MAC creates ``gpon``,
@@ -1597,11 +1598,19 @@ Transmit and receive
      - M
      - The 80 frames of the downstream row above.
 
-The upstream octet count
-------------------------
+The GEM port counts
+-------------------
 
-Each flow has a 64-bit count of the octets it has sent upstream. The driver
-reads it to give each GEM interface the ethtool statistic ``pon_tx_octets``.
+Each flow has a 64-bit count of the octets it has sent upstream and a count of
+the GEM frames it has sent; the GPON MAC counts the frames and the payload
+octets each flow receives (see the *gpon* page, "GEM framing"). Every one of
+them clears when read, so the driver adds them into totals for each GEM port
+(``rtl9602c_gem_cntr_sync()``), when the port is created, whenever the PON
+class asks for the port's statistics, and from the GPON worker every
+``RTL9602C_GEM_CNTR_POLLS`` (100) runs, 5 s, within the 13.8 s in which the
+32-bit downstream octet count wraps at the downstream's full rate. Each GEM
+interface gives the totals as the ethtool statistics ``pon_tx_octets``,
+``pon_tx_frames``, ``pon_rx_frames`` and ``pon_rx_octets``.
 
 .. list-table::
    :header-rows: 1
@@ -1644,6 +1653,31 @@ reads it to give each GEM interface the ethtool statistic ``pon_tx_octets``.
      - T
      - The GEM-port figure of the row on whole GEM frames above was read as
        that statistic.
+   * - ``RTL9602C_GEM_US_FLOW_CNT_SEL`` (``0x706048``): write the flow into
+       ``RTL9602C_GEM_US_FLOW_CNT_SEL_FLOW`` (bits 6:0), with
+       ``RTL9602C_GEM_US_FLOW_CNT_SEL_ETH`` (bit 7) for the Ethernet frames
+       rather than the GEM frames, poll ``RTL9602C_GEM_US_FLOW_CNT_SEL_DONE``
+       (bit 15), and read ``RTL9602C_GEM_US_FLOW_CNT_DATA`` (``0x70604c``):
+       the frames the flow sent upstream, 32 bits, cleared when read. A
+       fragment counts as one GEM frame. Done was set at the first poll.
+     - M
+     - 1000 frames of 1514 bytes sent through a GEM port: 1007 in either count,
+       seven of other traffic, and an immediate second read 0; the port's
+       octet count grew by 1523497, 1523 for each frame, the GEM header and
+       the frame with its FCS, and 497 for the seven. The first read after a
+       boot returned noise, as the octet count does after a warm reset.
+   * - The driver reads the GEM frame count only, into ``pon_tx_frames``; the
+       Ethernet frame count is left to wrap unread.
+     - T
+     - ``pon_tx_frames`` followed the frames sent: 10024 for 10000 frames of
+       1514 bytes, all of which reached the OLT side, with ``pon_tx_octets``
+       15231506, 1523 for each.
+   * - The totals keep every count across the driver's reads.
+     - M
+     - 600000 frames of 1514 bytes sent down to a GEM port over 15 s, across
+       three of the worker's reads, added 910805131 to ``pon_rx_octets``, 1518
+       for each frame and the rest other traffic; the switch passed 600073
+       frames out of the UNI.
 
 Status and offload
 ------------------
@@ -2227,8 +2261,8 @@ Known limitations
   control frame; whether an extended message carries the same four
   has not been observed, and an extended message without them would lose the
   last four bytes of its MIC.
-- A GEM flow's upstream octet register clears when read, so a tool that reads
-  it by address takes octets out of the port's ``pon_tx_octets``.
+- A GEM flow's counters clear when read, so a tool that reads one by address
+  takes counts out of the port's totals.
 - When the PON MAC cannot be built, the bring-up fails with the build's error
   and ``pon`` stays down with the laser off; bringing it up again tries the
   build again.

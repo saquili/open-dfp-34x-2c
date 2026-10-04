@@ -324,12 +324,15 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	}
 
 	/*
-	 * The flow's upstream octet counter keeps its count across a warm reset
-	 * (measured on this board): this read empties it, and the port's total
-	 * starts at zero.
+	 * The flow's counters keep their counts across a warm reset and hold
+	 * noise after power-up (measured on this board): this read empties
+	 * them, and the port's totals start at zero.
 	 */
 	rtl9602c_gem_cntr_sync(p, f);
 	p->gem_tx_octets[f] = 0;
+	p->gem_tx_frames[f] = 0;
+	p->gem_rx_frames[f] = 0;
+	p->gem_rx_octets[f] = 0;
 	*flow = f;
 	pr_debug("GEM port %u in flow %u\n", cfg->port_id, f);
 out:
@@ -754,16 +757,35 @@ static int rtl9602c_pon_dev_status(struct pon_device *pon,
 	return 0;
 }
 
+/* Read flow @f's upstream GEM frame count, -ETIMEDOUT after 1 ms without it. */
+static int rtl9602c_gem_us_frames(struct rtl9602c_priv *p, unsigned int f,
+				  u32 *count)
+{
+	u32 v;
+
+	rtl9602c_w(p, RTL9602C_GEM_US_FLOW_CNT_SEL,
+		   FIELD_PREP(RTL9602C_GEM_US_FLOW_CNT_SEL_FLOW, f));
+	if (read_poll_timeout(rtl9602c_r, v,
+			      v & RTL9602C_GEM_US_FLOW_CNT_SEL_DONE, 0, 1000,
+			      false, p, RTL9602C_GEM_US_FLOW_CNT_SEL))
+		return -ETIMEDOUT;
+	*count = rtl9602c_r(p, RTL9602C_GEM_US_FLOW_CNT_DATA);
+	return 0;
+}
+
 /*
- * Add flow @f's upstream octets to its GEM port's total. The counter is 64
- * bits, the low word at the lower address; it counts every GEM frame whole,
- * the 5-byte GEM header included, and clears when read (all measured on this
- * board). So the total is kept here, and nothing else may read the counter
- * of a GEM port's flow: any other read would take octets out of the total.
+ * Add flow @f's counters to its GEM port's totals. Each counter clears when
+ * read (all measured on this board), so the totals are kept here, and nothing
+ * else may read the counters of a GEM port's flow: any other read would take
+ * counts out of the totals. The upstream octet counter is 64 bits, the low
+ * word at the lower address, and counts every GEM frame whole, the 5-byte GEM
+ * header included; the others are 32 bits, and the downstream octets are
+ * payload, the Ethernet frames with their FCS. A count the MAC does not give
+ * within 1 ms is left for the next time.
  */
 static void rtl9602c_gem_cntr_sync(struct rtl9602c_priv *p, unsigned int f)
 {
-	u32 lo, hi;
+	u32 lo, hi, v;
 
 	lockdep_assert_held(&p->gpon_lock);
 
@@ -773,6 +795,32 @@ static void rtl9602c_gem_cntr_sync(struct rtl9602c_priv *p, unsigned int f)
 	lo = rtl9602c_r(p, RTL9602C_GEM_US_FLOW_BYTES(f));
 	hi = rtl9602c_r(p, RTL9602C_GEM_US_FLOW_BYTES(f) + 4);
 	p->gem_tx_octets[f] += (u64)hi << 32 | lo;
+
+	if (!rtl9602c_gem_us_frames(p, f, &v))
+		p->gem_tx_frames[f] += v;
+	v = rtl9602c_gpon_flow_cntr(p, f, false);
+	if (v != U32_MAX)
+		p->gem_rx_frames[f] += v;
+	v = rtl9602c_gpon_flow_cntr(p, f, true);
+	if (v != U32_MAX)
+		p->gem_rx_octets[f] += v;
+}
+
+/**
+ * rtl9602c_gem_cntr_sync_all() - add every GEM port's counters to its totals
+ * @p: the switch
+ *
+ * The GPON worker calls this every RTL9602C_GEM_CNTR_POLLS runs, before a
+ * counter can wrap, and the gpontbl view before it shows the totals.
+ *
+ * Context: gpon_lock held.
+ */
+void rtl9602c_gem_cntr_sync_all(struct rtl9602c_priv *p)
+{
+	unsigned int f;
+
+	for_each_set_bit(f, p->gem_flows, RTL9602C_GPON_NUM_FLOW)
+		rtl9602c_gem_cntr_sync(p, f);
 }
 
 static int rtl9602c_gem_stats(struct pon_device *pon, unsigned int flow,
@@ -786,6 +834,9 @@ static int rtl9602c_gem_stats(struct pon_device *pon, unsigned int flow,
 	mutex_lock(&p->gpon_lock);
 	rtl9602c_gem_cntr_sync(p, flow);
 	st->tx_octets = p->gem_tx_octets[flow];
+	st->tx_frames = p->gem_tx_frames[flow];
+	st->rx_frames = p->gem_rx_frames[flow];
+	st->rx_octets = p->gem_rx_octets[flow];
 	mutex_unlock(&p->gpon_lock);
 
 	return 0;
