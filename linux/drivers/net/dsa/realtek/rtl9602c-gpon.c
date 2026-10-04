@@ -565,12 +565,10 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 /*
  * Arm the Serial_Number_ONU template (G.984.3 clause 9.2.4.1), which the MAC
  * sends by itself in answer to every serial-number request: no ONU-ID yet, the
- * serial number, GEM transport supported and transmit power level mode 1,
- * medium. The mode is declared whatever Upstream_Overhead asks for; whether it
- * should follow the OLT's is not verified, and the ONU reaches O5 with it. The
- * random delay is left 0; that the MAC inserts one and writes it into the
- * message is an assumption, not verified. Nothing is armed until a serial
- * number is set.
+ * serial number, GEM transport supported and the transmit power level the ONU
+ * sends at, high, that of level mode 0. The random delay is left 0; that the
+ * MAC inserts one and writes it into the message is an assumption, not
+ * verified. Nothing is armed until a serial number is set.
  */
 static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
 {
@@ -585,7 +583,7 @@ static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
 
 	msg[RTL9602C_PLOAM_SN_ONU_FLAGS] = RTL9602C_PLOAM_SN_ONU_GEM |
 		FIELD_PREP(RTL9602C_PLOAM_SN_ONU_POWER_LEVEL,
-			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_DEF);
+			   RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH);
 
 	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_SN_ONU);
 }

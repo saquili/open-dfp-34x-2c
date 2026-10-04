@@ -595,10 +595,13 @@ enum {
 /*
  * Octet 12 of Serial_Number_ONU (ITU-T G.984.3 clause 9.2.4.1), at offset
  * RTL9602C_PLOAM_SN_ONU_FLAGS; message offsets count from octet 1 as 0.
+ * POWER_LEVEL, TT, is the transmit power level the ONU sends at: 2 high, 1
+ * medium, 0 low, the reverse of the level modes of Upstream_Overhead, where 0
+ * is normal, the highest.
  */
 #define RTL9602C_PLOAM_SN_ONU_GEM		BIT(2)
 #define RTL9602C_PLOAM_SN_ONU_POWER_LEVEL	GENMASK(1, 0)
-#define RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_DEF	1
+#define RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH	2
 #define RTL9602C_PLOAM_SN_ONU_FLAGS		11
 
 /* The data window of the selected slot. */

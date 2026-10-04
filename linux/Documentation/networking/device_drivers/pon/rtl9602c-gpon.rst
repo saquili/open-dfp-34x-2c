@@ -1796,12 +1796,13 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
    * - The Serial_Number_ONU template (``rtl9602c_gpon_arm_sn()``): octet 1 255,
        octet 2 1, octets 3 to 10 the serial number
        (``RTL9602C_PLOAM_SN_ONU_SERIAL`` 2, ``RTL9602C_GPON_SN_BYTES`` 8), octet
-       11 zero, and octet 12 (``RTL9602C_PLOAM_SN_ONU_FLAGS`` 11) ``0x05``: G,
+       11 zero, and octet 12 (``RTL9602C_PLOAM_SN_ONU_FLAGS`` 11) ``0x06``: G,
        GEM transport supported (``RTL9602C_PLOAM_SN_ONU_GEM``, bit 2), and TT,
-       the transmit power level mode (``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL``,
-       bits 1:0) = ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_DEF`` (1, medium). It is
-       armed at bring-up, on Upstream_Overhead, on Assign_ONU-ID and when a
-       serial number is set, and not at all while none is set.
+       the transmit power level the ONU sends at
+       (``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL``, bits 1:0) =
+       ``RTL9602C_PLOAM_SN_ONU_POWER_LEVEL_HIGH`` (2, high), that of level
+       mode 0. It is armed at bring-up, on Upstream_Overhead, on Assign_ONU-ID
+       and when a serial number is set, and not at all while none is set.
      - P
      - ITU-T G.984.3 clause 9.2.4.1; the ONU reaches O5 on an OLT.
    * - The random delay of the serial-number response (0 to 48 us, new for each
@@ -1810,13 +1811,13 @@ Writing a message (``rtl9602c_ploam_enqueue()``), under ``ploam_lock``:
      - I
      - ITU-T G.984.3 clause 10.4.2.1; a capture of the serial-number responses
        at the OLT, or the spread of their arrival across discovery attempts.
-   * - TT is declared 1 (medium) whatever power level mode Upstream_Overhead
-       gives; the test OLT gives mode 0, normal, which is the highest (the two
-       codings run in opposite directions). Whether TT should follow that mode
-       is unverified; the ONU reaches O5 with 1.
-     - I
-     - ITU-T G.984.3 clause 9.2.3.1 note 4, clause 9.2.4.1 note 2 and
-       clause 10.5.1; an OLT that checks the mode.
+   * - TT says the level the ONU sends at, in the reverse of the coding of
+       Upstream_Overhead's level modes: mode 0, normal, the highest, is TT 2,
+       high. The ONU sends at mode 0, and the ONU reaches O5 on the test OLT,
+       which gives mode 0, with TT 2.
+     - T
+     - ITU-T G.984.3 clause 9.2.3.1 note 4 and clause 9.2.4.1 note 2; the ONU
+       reaching O5 with the template.
    * - The template is written again, unchanged, on entering O4; whether that is
        needed is unverified.
      - I
@@ -3039,9 +3040,6 @@ Assumptions the driver depends on
    * - That the MAC inserts the serial-number response's random delay ("PLOAM
        transmit").
      - The spread of the responses' arrival at the OLT.
-   * - That declaring transmit power level mode 1 whatever the OLT's mode does
-       no harm ("PLOAM transmit").
-     - ITU-T G.984.3 clause 10.5.1, and an OLT that checks the mode.
    * - That arming the Serial_Number_ONU template again on entering O4 is needed
        ("PLOAM transmit").
      - Removing it and checking that the ONU reaches O5 on an OLT.
