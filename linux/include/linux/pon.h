@@ -107,6 +107,13 @@ struct pon_gem_config {
  * @bip_errors: errors of the downstream bit-interleaved parity (BIP,
  *		G.984.3 clause 8.1.3.4), counted as the bits that differed,
  *		which is G.984.3's ERR (clause 11.2.2)
+ * @fec_corrected_bytes: downstream bytes that FEC corrected (G.984.3
+ *			 clause 13.1.3)
+ * @fec_corrected_codewords: downstream codewords that FEC corrected
+ * @fec_uncorrectable_codewords: downstream codewords with more errors than
+ *				 FEC corrects
+ * @fec_codewords: downstream codewords received while the downstream
+ *		   carried FEC, all of them decoded
  *
  * Totals since the MAC was brought up, not register values: a MAC whose
  * counters clear when read adds them up, so that every reader sees the same
@@ -125,6 +132,10 @@ struct pon_dev_stats {
 	u64 bwmap_overflows;
 	u64 gem_frames;
 	u64 bip_errors;
+	u64 fec_corrected_bytes;
+	u64 fec_corrected_codewords;
+	u64 fec_uncorrectable_codewords;
+	u64 fec_codewords;
 };
 
 /**

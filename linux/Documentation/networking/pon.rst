@@ -1304,10 +1304,12 @@ Attributes of the dev object
      - While the MAC transmits at a level the OLT can change: 0 low,
        1 medium, 2 high, as Serial_Number_ONU carries it.
 
-The ``dev-stats`` nest holds ten counters numbered from 1 in this order:
+The ``dev-stats`` nest holds fourteen counters numbered from 1 in this order:
 ``sn-requests``, ``ranging-requests``, ``ploam-rx``, ``ploam-crc-errors``,
 ``ploam-overflows``, ``bwmap-rx``, ``bwmap-crc-errors``, ``bwmap-overflows``,
-``gem-frames`` and ``bip-errors``. The tcont object has ``id`` (1), the ONU's
+``gem-frames``, ``bip-errors``, ``fec-corrected-bytes``,
+``fec-corrected-codewords``, ``fec-uncorrectable-codewords`` and
+``fec-codewords``. The tcont object has ``id`` (1), the ONU's
 number, ``index`` (2), the T-CONT's index, and ``alloc-id`` (3), the Alloc-ID
 bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
 ``PON_A_TCONT_*`` in ``include/uapi/linux/pon.h``; the commands are
@@ -1334,8 +1336,10 @@ bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
        announces the serial number the driver holds.
    * - The ``stats`` counters are ``sn-requests``, ``ranging-requests``,
        ``ploam-rx``, ``ploam-crc-errors``, ``ploam-overflows``, ``bwmap-rx``,
-       ``bwmap-crc-errors``, ``bwmap-overflows``, ``gem-frames`` and
-       ``bip-errors``, numbered from 1 in that order (ABI).
+       ``bwmap-crc-errors``, ``bwmap-overflows``, ``gem-frames``,
+       ``bip-errors``, ``fec-corrected-bytes``, ``fec-corrected-codewords``,
+       ``fec-uncorrectable-codewords`` and ``fec-codewords``, numbered from 1
+       in that order (ABI).
      - I
      - Design choice; no check on the board reads the nest. A ``dev-get`` with
        ``stats`` decoded against the header would.
@@ -1707,10 +1711,23 @@ Counters
        accumulates as ERR for the bit error rate, and what REI reports.
      - P
      - ITU-T G.984.3 clause 11.2.2.
+   * - The four ``fec-*`` counters are the downstream FEC statistics G.984.3
+       asks of a receiver: the bytes and the codewords FEC corrected, the
+       codewords it could not correct, and all the codewords it decoded. The
+       fifth statistic there, the seconds with an uncorrectable codeword, is
+       not a counter of the MAC: a reader that samples the uncorrectable count
+       each second derives it.
+     - P
+     - ITU-T G.984.3 clause 13.1.3.
+   * - The FEC counters stay at 0 while the downstream carries no FEC: the ONU
+       decodes nothing until the downstream frames say they carry it.
+     - P
+     - ITU-T G.984.3 clause 13.2.3.2.
    * - What a MAC counts is otherwise its own definition. ``bwmap-crc-errors``
        may count whole maps, or allocation structures, each of which carries
        its own CRC. ``gem-frames`` means GEM frames that carried something, not
-       idle frames.
+       idle frames. ``fec-codewords`` may be counted by the MAC, or derived by
+       its driver from the frames received while the downstream carried FEC.
      - I
      - Assumption about the MAC, not verified: the RTL9602C's definitions are
        on the page of its driver. The allocation CRC is ITU-T G.984.3 clause
@@ -2728,8 +2745,8 @@ About the family and its values
        counters do ("Counters").
      - The RTL9602C's counters clear on read; a second reader would show the
        totals.
-   * - Whether a MAC counts ``bwmap-crc-errors`` and ``gem-frames`` as
-       described ("Counters").
+   * - Whether a MAC counts ``bwmap-crc-errors``, ``gem-frames`` and the
+       ``fec-*`` counters as described ("Counters").
      - The definitions on the page of the MAC.
 
 About the RTL9602C driver

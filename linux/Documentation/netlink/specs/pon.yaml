@@ -212,6 +212,28 @@ attribute-sets:
           ITU-T G.984.3 clause 8.1.3.4), counted as the bits that differed,
           which is G.984.3's ERR (clause 11.2.2).
         type: uint
+      -
+        name: fec-corrected-bytes
+        doc: >-
+          Downstream bytes that forward error correction (FEC) corrected
+          (ITU-T G.984.3 clause 13.1.3).
+        type: uint
+      -
+        name: fec-corrected-codewords
+        doc: >-
+          Downstream codewords that FEC corrected.
+        type: uint
+      -
+        name: fec-uncorrectable-codewords
+        doc: >-
+          Downstream codewords with more errors than FEC corrects.
+        type: uint
+      -
+        name: fec-codewords
+        doc: >-
+          Downstream codewords received while the downstream carried FEC,
+          all of them decoded. 0 while it carries none.
+        type: uint
   -
     name: dev
     doc: >-

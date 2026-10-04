@@ -81,6 +81,14 @@ static int pon_nl_stats_fill(struct sk_buff *msg,
 		  offsetof(struct pon_dev_stats, gem_frames) },
 		{ PON_A_DEV_STATS_BIP_ERRORS,
 		  offsetof(struct pon_dev_stats, bip_errors) },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_BYTES,
+		  offsetof(struct pon_dev_stats, fec_corrected_bytes) },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_CODEWORDS,
+		  offsetof(struct pon_dev_stats, fec_corrected_codewords) },
+		{ PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS,
+		  offsetof(struct pon_dev_stats, fec_uncorrectable_codewords) },
+		{ PON_A_DEV_STATS_FEC_CODEWORDS,
+		  offsetof(struct pon_dev_stats, fec_codewords) },
 	};
 	struct nlattr *nest;
 	unsigned int i;
