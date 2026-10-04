@@ -163,8 +163,8 @@ Interfaces to user space
 
 - sysfs: the class directory ``/sys/class/pon`` holds ``pon0`` and
   ``pon0omci0``, and the OMCI port has the read-only counters ``rx_messages``,
-  ``rx_dropped``, ``tx_messages`` and ``tx_errors`` in its ``statistics``
-  directory (see "Counters of the port").
+  ``rx_dropped``, ``rx_discarded``, ``tx_messages`` and ``tx_errors`` in its
+  ``statistics`` directory (see "Counters of the port").
 - debugfs, with ``CONFIG_PON_OMCI_INJECT``:
   ``/sys/kernel/debug/pon/pon0omci0/inject``, which puts a message into the
   port as if the MAC had received it (see "The inject file").
@@ -522,17 +522,19 @@ The OMCI channel and poll
      - I
      - Assumption about the OLT, not verified: a reader that stops reading
        during an OLT exchange would fill the queue.
-   * - When the channel goes down, what is still queued is dropped and counted
-       in ``rx_dropped``. Those requests belonged to an association that
-       ended: Deactivate_ONU-ID discards the OMCI Port-ID.
-     - I
-     - Design choice, not exercised: ``ip link set pon down`` with messages
-       queued. The reason is ITU-T G.984.3 clause 9.2.1.
+   * - When the channel goes down, what is still queued is discarded and
+       counted in ``rx_discarded``, apart from the messages a missing or slow
+       reader loses. Those requests belonged to an association that ended:
+       Deactivate_ONU-ID discards the OMCI Port-ID.
+     - M
+     - ITU-T G.984.3 clause 9.2.1. An OLT that deactivated the ONU 18 s into
+       its first O5 session took one queued message with the channel, then
+       counted with the reader's losses (docs/testing/2026-10-04-run13).
 
 Counters of the port
 --------------------
 
-The port keeps four counters, read-only in the ``statistics`` group of its
+The port keeps five counters, read-only in the ``statistics`` group of its
 sysfs device::
 
     # cat /sys/class/pon/pon0omci0/statistics/rx_messages
@@ -546,8 +548,10 @@ sysfs device::
    * - ``rx_messages``
      - Messages queued for the reader.
    * - ``rx_dropped``
-     - Messages dropped because the port was closed, the reader was 64
-       messages behind, or the OMCI channel went down.
+     - Messages dropped because the port was closed or the reader was 64
+       messages behind.
+   * - ``rx_discarded``
+     - Messages still waiting for the reader when the OMCI channel went down.
    * - ``tx_messages``
      - Messages the MAC accepted.
    * - ``tx_errors``
@@ -561,12 +565,13 @@ sysfs device::
      - Tag
      - Checked by
    * - The port has the read-only sysfs statistics ``rx_messages`` (queued for
-       the reader), ``rx_dropped`` (port closed, reader too slow, or channel
-       gone), ``tx_messages`` (accepted by the MAC) and ``tx_errors`` (refused
-       by the MAC), in its ``statistics`` group.
-     - I
-     - Design choice; no check reads them. Reading them before and after an
-       OMCI exchange would.
+       the reader), ``rx_dropped`` (port closed or reader too slow),
+       ``rx_discarded`` (channel gone with messages queued), ``tx_messages``
+       (accepted by the MAC) and ``tx_errors`` (refused by the MAC), in its
+       ``statistics`` group.
+     - T
+     - The device tests read them after the OMCI exchanges of a boot
+       (``omci.channel``).
 
 The inject file
 ---------------

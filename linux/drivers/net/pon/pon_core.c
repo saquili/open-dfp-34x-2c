@@ -77,8 +77,10 @@ static const struct class pon_class = {
  * @waitq: where readers and poll wait for a message, a change of @link or
  *	   the removal of the port
  * @rx_messages: messages queued for the reader
- * @rx_dropped: messages dropped because nobody held the port open, the reader
- *		was too far behind, or the OMCI channel went down
+ * @rx_dropped: messages dropped because nobody held the port open or the
+ *		reader was too far behind
+ * @rx_discarded: messages still waiting for the reader when the OMCI channel
+ *		  went down
  * @tx_messages: messages the MAC accepted
  * @tx_errors: messages the MAC refused
  * @debugfs: the port's debugfs directory, which holds its inject file
@@ -97,6 +99,7 @@ struct pon_omci_port {
 	wait_queue_head_t waitq;
 	atomic_long_t rx_messages;
 	atomic_long_t rx_dropped;
+	atomic_long_t rx_discarded;
 	atomic_long_t tx_messages;
 	atomic_long_t tx_errors;
 	struct dentry *debugfs;
@@ -465,6 +468,14 @@ static ssize_t rx_dropped_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(rx_dropped);
 
+static ssize_t rx_discarded_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%ld\n",
+			  atomic_long_read(&to_pon_omci_port(dev)->rx_discarded));
+}
+static DEVICE_ATTR_RO(rx_discarded);
+
 static ssize_t tx_messages_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
@@ -484,6 +495,7 @@ static DEVICE_ATTR_RO(tx_errors);
 static struct attribute *pon_omci_port_stat_attrs[] = {
 	&dev_attr_rx_messages.attr,
 	&dev_attr_rx_dropped.attr,
+	&dev_attr_rx_discarded.attr,
 	&dev_attr_tx_messages.attr,
 	&dev_attr_tx_errors.attr,
 	NULL
@@ -757,11 +769,12 @@ void pon_omci_port_link_set(struct pon_omci_port *port, bool up)
 	/*
 	 * The requests still queued belong to an OMCI channel that has ended,
 	 * as Deactivate_ONU-ID discards the OMCI Port-ID (ITU-T G.984.3
-	 * clause 9.2.1): drop and count them.
+	 * clause 9.2.1): discard them, counted apart from the messages lost to
+	 * a missing or slow reader.
 	 */
 	if (!up) {
 		while ((skb = skb_dequeue(&port->rxq))) {
-			atomic_long_inc(&port->rx_dropped);
+			atomic_long_inc(&port->rx_discarded);
 			kfree_skb(skb);
 		}
 	}
