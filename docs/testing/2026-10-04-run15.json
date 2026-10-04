@@ -1,0 +1,338 @@
+{
+  "header": {
+    "Date": "2026-10-04 13:44 UTC",
+    "Source": "run15",
+    "Kernel": "6.18.48 #133 Sun Oct  4 13:42:38 UTC 2026",
+    "Image": "open-dfp-34x-2c on the ODI DFP-34X-2C3, build run15"
+  },
+  "results": [
+    {
+      "id": "system.kernel",
+      "area": "System",
+      "check": "The stick runs the kernel of this tree",
+      "status": "pass",
+      "evidence": "uname -r 6.18.48 (tree 6.18.48), #133 Sun Oct  4 13:42:38 UTC 2026",
+      "seconds": 2.76
+    },
+    {
+      "id": "system.services",
+      "area": "System",
+      "check": "The boot started the ssh server, omcid and pond",
+      "status": "pass",
+      "evidence": "dropbear pid 106 62, omcid pid 79, pond pid 82",
+      "seconds": 4.05
+    },
+    {
+      "id": "system.filesystems",
+      "area": "System",
+      "check": "The root is the image's own, read-only from flash or the initramfs of a RAM boot; /tmp, /run and /var are in memory",
+      "status": "pass",
+      "evidence": "/ the initramfs of a RAM boot; /tmp tmpfs, /run tmpfs, /var tmpfs",
+      "seconds": 1.33
+    },
+    {
+      "id": "system.phc",
+      "area": "System",
+      "check": "The PTP hardware clock is the ports' timestamping clock, and its pulse comes once a second",
+      "status": "pass",
+      "evidence": "ptp0 rtl9602c-ptp, hardware-receive, hardware-raw-clock; 4 pulses 4.000 s apart",
+      "seconds": 14.21
+    },
+    {
+      "id": "system.watchdog",
+      "area": "System",
+      "check": "The watchdog runs, and the daemon of the boot feeds it",
+      "status": "pass",
+      "evidence": "RTL9602C watchdog, timeout 44 s, active, daemon pid 51",
+      "seconds": 5.48
+    },
+    {
+      "id": "net.host-link",
+      "area": "Host side",
+      "check": "The host link sfp is up at its speed",
+      "status": "pass",
+      "evidence": "sfp up, 2500 Mb/s",
+      "seconds": 2.69
+    },
+    {
+      "id": "net.mgmt-vlan",
+      "area": "Host side",
+      "check": "The management address answers on its VLAN of the host link",
+      "status": "pass",
+      "evidence": "mgmt: VLAN 4094 on sfp; this run reaches the stick through it",
+      "seconds": 1.31
+    },
+    {
+      "id": "net.filter-loaded",
+      "area": "Host side",
+      "check": "The packet filter is loaded, dropping by default",
+      "status": "pass",
+      "evidence": "2 chains with policy drop (input, forward), 21 lines",
+      "seconds": 1.46
+    },
+    {
+      "id": "net.filter-drops",
+      "area": "Host side",
+      "check": "A port nobody listens on is dropped with the filter and refused without it",
+      "status": "pass",
+      "evidence": "filtered: timeout after 3.00 s; unfiltered: refused in 0.001 s; filter restored",
+      "seconds": 8.6
+    },
+    {
+      "id": "net.ssh-keys-only",
+      "area": "Host side",
+      "check": "The ssh server offers keys only, no passwords",
+      "status": "pass",
+      "evidence": "root@<stick>: Permission denied (publickey).",
+      "seconds": 1.02
+    },
+    {
+      "id": "mgmt.pond-health",
+      "area": "Management",
+      "check": "The status daemon answers on the host side",
+      "status": "pass",
+      "evidence": "HTTP 200 {\"ok\":true}",
+      "seconds": 0.57
+    },
+    {
+      "id": "mgmt.pond-page",
+      "area": "Management",
+      "check": "The status page is served on the host side",
+      "status": "pass",
+      "evidence": "http/1.1 200 ok, html, with a CSP",
+      "seconds": 0.56
+    },
+    {
+      "id": "mgmt.pond-locked",
+      "area": "Management",
+      "check": "Without the token the daemon's API stays locked",
+      "status": "pass",
+      "evidence": "HTTP 401 unauthorised",
+      "seconds": 0.63
+    },
+    {
+      "id": "mgmt.pond-values",
+      "area": "Management",
+      "check": "With the token the daemon reports the kernel, the ONU and the optics",
+      "status": "pass",
+      "evidence": "HTTP 200, kernel: 177 B, onu: 410 B, optics: 94 B",
+      "seconds": 0.65
+    },
+    {
+      "id": "gpon.downstream",
+      "area": "GPON",
+      "check": "Downstream is locked: bandwidth maps keep being accepted, none with a CRC error, and no alarm",
+      "status": "pass",
+      "evidence": "3998 bandwidth maps/s, 0 with a CRC error, alarms none",
+      "seconds": 4.74
+    },
+    {
+      "id": "gpon.activation",
+      "area": "GPON",
+      "check": "The ONU is in O5, operation",
+      "status": "pass",
+      "evidence": "O5, ONU-ID 0",
+      "seconds": 1.42
+    },
+    {
+      "id": "gpon.stable",
+      "area": "GPON",
+      "check": "The ONU stays in O5 for a minute",
+      "status": "pass",
+      "evidence": "12 reads 5 s apart: all O5",
+      "seconds": 77.3
+    },
+    {
+      "id": "omci.channel",
+      "area": "OMCI",
+      "check": "OMCI messages flow both ways and none is dropped",
+      "status": "pass",
+      "evidence": "rx_messages 303, rx_dropped 0, rx_discarded 0, tx_messages 329, tx_errors 0",
+      "seconds": 6.85
+    },
+    {
+      "id": "omci.mib-upload",
+      "area": "OMCI",
+      "check": "omcid answered the OLT's MIB upload",
+      "status": "pass",
+      "evidence": "2 upload(s), last: 198 units over 102 instances (channel 0)",
+      "seconds": 1.35
+    },
+    {
+      "id": "omci.gem-bridge",
+      "area": "OMCI",
+      "check": "The GEM ports the OLT created are interfaces, bridged with the host link",
+      "status": "pass",
+      "evidence": "2 GEM interface(s); omcibr0 holds gem256 gem4095 sfp",
+      "seconds": 2.8
+    },
+    {
+      "id": "omci.tcont-map",
+      "area": "OMCI",
+      "check": "Each T-CONT the OLT mapped to an Alloc-ID through OMCI holds that Alloc-ID",
+      "status": "pass",
+      "evidence": "T-CONT 0 holds 256, mapped to 256",
+      "seconds": 2.97
+    },
+    {
+      "id": "optics.diagnostics",
+      "area": "Optics",
+      "check": "Temperature, supply, bias and both optical powers read within range",
+      "status": "pass",
+      "evidence": "50.2 \u00b0C, 3.21 V, bias 8 mA, TX_power 2.2 dBm, RX_power -25.2 dBm",
+      "seconds": 4.17
+    },
+    {
+      "id": "data.downstream",
+      "area": "Data path",
+      "check": "A burst from the network side crosses the OLT, the PON and the switch to the host side in hardware",
+      "status": "pass",
+      "evidence": "157622 frames of 1514 B left the bench, 157665 arrived (100.03%) at 981 Mb/s; CPU saw 62; switch: pon took 157617, sfp sent 157671",
+      "seconds": 47.4
+    },
+    {
+      "id": "data.upstream",
+      "area": "Data path",
+      "check": "A burst from the host side, above the upstream rate, leaves by the PON in hardware and the ONU stays in O5",
+      "status": "pass",
+      "evidence": "400096 frames of 1514 B left the bench, 156960 arrived (39.23%) at 963 Mb/s; CPU saw 63; ONU O5; switch: sfp took 400094, pon sent 156942",
+      "seconds": 42.93
+    },
+    {
+      "id": "data.vlan-translation",
+      "area": "Data path",
+      "check": "A C-VID translation in the switch rewrites the VLAN of frames both ways across the PON and keeps their priority",
+      "status": "pass",
+      "evidence": "200 frames of VLAN 3001/5 upstream: 200 as 3002/5; 200 of 3002/5 downstream: 200 as 3001/5",
+      "seconds": 12.91
+    },
+    {
+      "id": "data.vlan-push-pop",
+      "area": "Data path",
+      "check": "The switch pushes a C-tag onto untagged frames upstream and pops it from frames downstream, and pushes an S-tag in front of a C-tag upstream and pops it downstream, with the priorities it is given",
+      "status": "pass",
+      "evidence": "200 untagged frames upstream: 200 as c3003p5; 200 of c3003p5 downstream: 200 as u; 200 of c3001p1 upstream: 200 as s3004p3+c3001p1; 200 of s3004p3+c3001p1 downstream: 200 as c3001p1",
+      "seconds": 22.2
+    },
+    {
+      "id": "data.acl",
+      "area": "Data path",
+      "check": "ACL rules on the PON port drop frames from the network side or trap them to the CPU, the rule of the lower tc priority deciding whichever was added first, and tc counts the frames for the rule that decided",
+      "status": "pass",
+      "evidence": "200 frames each; no rule: 200 arrived, 0 to the CPU; trap: 0 arrived, 200 to the CPU, 200 counted at 49010; drop: 0 arrived, 0 to the CPU, 200 counted at 49010; trap over drop, added last: 0 arrived, 200 to the CPU, 0 counted at 49020, 200 counted at 49010; drop over trap, added last: 0 arrived, 0 to the CPU, 0 counted at 49020, 200 counted at 49010",
+      "seconds": 65.96
+    },
+    {
+      "id": "data.mirror",
+      "area": "Data path",
+      "check": "A matchall mirror copies to the host side what the PON port receives and what it sends, both at once, and nothing once it is removed",
+      "status": "pass",
+      "evidence": "2000 frames each way; mirrored, 2000 of those from the network side to this device and 2000 of those from the host side reached the host side; after, 0 and 0",
+      "seconds": 20.66
+    },
+    {
+      "id": "data.fdb",
+      "area": "Data path",
+      "check": "The switch learns each bench port's address behind the port it reaches it by, and a static address given to the bridge enters its table and leaves it again",
+      "status": "pass",
+      "evidence": "host side on sfp: <mac> vlan 4094 self; network side on pon: <mac> self; static: <mac> self static, then gone",
+      "seconds": 10.16
+    },
+    {
+      "id": "data.shaper",
+      "area": "Data path",
+      "check": "A tbf on the SFP port holds the frames from the network side to its rate in hardware, and its removal gives the full rate back",
+      "status": "pass",
+      "evidence": "tbf 200 Mbit/s: 101402 of 484120 frames arrived at 206 Mb/s, CPU saw 60; removed: 157048 of 156991 at 986 Mb/s, CPU saw 67",
+      "seconds": 95.62
+    },
+    {
+      "id": "data.storm",
+      "area": "Data path",
+      "check": "Of several police rules on broadcast the one of the lowest priority value holds the class, through a replace of it too, and a drop of broadcast is an ACL rule that drops",
+      "status": "pass",
+      "evidence": "600 broadcasts at 300/s: 600 passed with no rule, 216 under pref 10 at 100/s, 216 with pref 20 at 1000/s added, 416 with pref 10 replaced at 200/s; dropped by the ACL, 0 passed; 600 after",
+      "seconds": 38.16
+    },
+    {
+      "id": "data.pcp-rewrite",
+      "area": "Data path",
+      "check": "A DCB rewrite entry on pon gives the frames of its priority that it sends the PCP of the entry, leaves the PCP of other priorities as it was, and stops with the entry",
+      "status": "pass",
+      "evidence": "100 frames tagged 100 each; under prio-pcp 0:5nd, PCP 0: 100 as 100/5, PCP 3: 100 as 100/3; without it, PCP 0: 100 as 100/0",
+      "seconds": 11.16
+    },
+    {
+      "id": "data.cpu-limit",
+      "area": "Data path",
+      "check": "A flood to the stick's own address reaches its CPU no faster than cpu_rx_pps says, leaves the CPU at least half its time and the OMCI messages whole, and goes through once the limit is lifted",
+      "status": "pass",
+      "evidence": "cpu_rx_pps 5000: of 2620160 frames in 10 s the CPU took 50443; a loop of 1.28 s took 1.51 s; OMCI 3 of 3 delivered; lifted: 31505 frames/s",
+      "seconds": 37.22
+    },
+    {
+      "id": "data.igmp",
+      "area": "Data path",
+      "check": "Multicast snooping: from the network side a group a host joined reaches it and one no host asked for does not, the link-local groups pass, and every report reaches the network",
+      "status": "pass",
+      "evidence": "IGMPv2 query 1/1 to the host side; from the network side, unasked 0/200, 224.0.0.251 200/200; join 3/3 to the network, group offloaded, its data 200/200; 3/3 reports again, timer restarted; MLD query 1/1, MLDv2 join 3/3, unasked 0/200, joined 200/200, MLDv1 reports 3/3, timer restarted; leave 1/1, group gone, its data 0/200",
+      "seconds": 56.39
+    },
+    {
+      "id": "router.static",
+      "area": "Router mode",
+      "check": "With a static WAN, a LAN host's UDP flow leaves translated to the WAN address and the switch carries it",
+      "status": "pass",
+      "evidence": "WAN up in 2 s; 1000 datagrams to start the flow, 41 through the CPU; then 20000 sent and 20000 answered, 27 through the CPU; 21000 of 21000 arrived from 203.0.113.2; 1 flow(s) in the switch",
+      "seconds": 35.93
+    },
+    {
+      "id": "router.tcp",
+      "area": "Router mode",
+      "check": "With a static WAN, a LAN host's TCP connection leaves translated to the WAN address and the switch carries it",
+      "status": "pass",
+      "evidence": "100000000 bytes sent, 100000000 received from 203.0.113.2 at 960 Mb/s; 58 frames through the CPU against some 69060 segments; 1 flow(s) in the switch",
+      "seconds": 19.04
+    },
+    {
+      "id": "router.pppoe",
+      "area": "Router mode",
+      "check": "With PPPoE, the stick opens a session with the concentrator, gets an address, and clamps a LAN host's TCP MSS to fit the session",
+      "status": "pass",
+      "evidence": "session up in 5 s; ppp0 <address>, MTU 1492; name servers none; SYN MSS 1452, 1452, 1452 through it",
+      "seconds": 15.18
+    },
+    {
+      "id": "router.bridge",
+      "area": "Router mode",
+      "check": "Back in bridge mode, the GEM ports are bridged with the host link again",
+      "status": "pass",
+      "evidence": "bridge mode after 1 s; omcibr0 holds gem256 gem4095 sfp after 1 s more",
+      "seconds": 4.11
+    },
+    {
+      "id": "system.log",
+      "area": "System",
+      "check": "After the other cases, the kernel log holds no oops, warning, BUG or panic and no switchdev object that a driver failed",
+      "status": "pass",
+      "evidence": "0 of 207 lines",
+      "seconds": 2.79
+    },
+    {
+      "id": "net.host-link-search",
+      "area": "Host side",
+      "check": "The host link finds the host's setting as the host moves from 2500BaseX to 1000BaseX with in-band negotiation and back",
+      "status": "pass",
+      "evidence": "1000BaseX with negotiation: back after 3.7 s, sfp 1000 Mb/s; 2500BaseX: back after 3.1 s, sfp 2500 Mb/s",
+      "seconds": 13.88
+    },
+    {
+      "id": "system.watchdog-reset",
+      "area": "System",
+      "check": "An armed watchdog that nobody feeds resets the stick within its timeout",
+      "status": "pass",
+      "evidence": "timeout 44 s; gone after 47 s, back with a new boot after 84 s",
+      "seconds": 88.61
+    }
+  ]
+}

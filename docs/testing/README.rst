@@ -143,6 +143,13 @@ The runs, the oldest first:
     mappers of the MIB. 40 of 40 passed; the upstream burst left at 963
     Mbit/s through the T-CONT's queue of the highest priority.
 
+``2026-10-04-run15``
+    The same cases and the new ``omci.tcont-map`` on the RAM image built from
+    ``run15``: the T-CONTs bound to the Alloc-IDs that the OLT maps
+    through OMCI, which omcid passes on with tcont-set, rather than in the
+    order of the PLOAM messages. 41 of 41 passed; T-CONT 0 held the OLT's
+    Alloc-ID, mapped to it.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
