@@ -2331,6 +2331,10 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	p = devm_kzalloc(&pdev->dev, sizeof(*p), GFP_KERNEL);
 	if (!p)
 		return -ENOMEM;
+	p->gem_vid_flow = devm_kcalloc(&pdev->dev, VLAN_N_VID,
+				       sizeof(*p->gem_vid_flow), GFP_KERNEL);
+	if (!p->gem_vid_flow)
+		return -ENOMEM;
 
 	p->dev = &pdev->dev;
 	spin_lock_init(&p->irq_enable_lock);

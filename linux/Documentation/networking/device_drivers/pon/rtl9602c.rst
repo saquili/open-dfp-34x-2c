@@ -1703,18 +1703,40 @@ Documentation/networking/dsa/rtl9602c-bridging.rst).
        throughput run: the bridged path carries 910 Mbit/s down and 988 up while
        the CPU port moves by a few hundred frames at most in twelve seconds.
    * - Where VLANs claim streams, the entries are keyed on the ingress port and
-       the C-VID. An upstream GEM interface claims the VLANs the bridge gives
-       it; a second upstream interface in a VLAN already claimed is refused
-       (``-EBUSY``), since no entry could tell the two apart. An interface
-       leaving the bridge gives up its claims itself, since the bridge reports a
-       port's VLANs going away only while it is still a bridge port.
+       the C-VID. An upstream GEM interface claims the frames of the VLANs the
+       bridge gives it, those of its priorities (``IFLA_GEM_PBITS``), in
+       ``gem_vid_flow``, a row of eight flows per VID. An interface leaving the
+       bridge gives up its claims itself, since the bridge reports a port's
+       VLANs going away only while it is still a bridge port.
+     - M
+     - The OLT's GEM port claiming VLAN 3001 and a second one VLAN 3002, both on
+       GEM T-CONT 0 and offered both VLANs at once: each port's octet count
+       followed its own VLAN's frames through every scheduling run of
+       "Upstream streams, queues and T-CONTs".
+   * - Several upstream GEM interfaces may claim one VLAN with disjoint
+       priorities; one that would take a priority another holds is refused
+       (``-EBUSY``, in ``gem_vlan_add`` or ``gem_change``), since no entry
+       could tell the two apart. A VLAN whose priorities one flow holds gets
+       one entry keyed on the C-VID; a divided VLAN gets one per claimed
+       priority, keyed on the C-VID and ``RTL9602C_CLS_RULE_PRI``, the C-tag's
+       priority. A frame of a priority no flow claims gets no stream.
+     - M
+     - The OLT's GEM port with priorities 0 to 3 and a second one with 4 to 7,
+       both in VLAN 3001 on GEM T-CONT 0, offered 1.2 Gbit/s of VLAN 3001 at a
+       time: priority 1 went up the first port alone, 968 Mbit/s, and priority
+       5 up the second, 968; priorities 2 and 6 together, 459 and 508. A
+       second port asking for priorities 3 and 4 was refused, in
+       ``gem_vlan_add`` and in ``gem_change``, "VLAN 3001 priority 3 already
+       travels up another GEM interface". With the first port down to
+       priorities 0 and 1, priority 2 went up neither; and once the second
+       port left the VLAN, its priority 5 went up neither.
+   * - An upstream VLAN rule names the flow that claims its frames: those of
+       the VLAN they leave in, of the priority the rule writes or else the one
+       it matches. A rule into a divided VLAN that keeps a priority it does not
+       match takes the flow of priority 0, with a warning: one entry cannot
+       choose among several flows.
      - I
-     - Assumption, load-bearing for more than one service per bridge. Upstream
-       traffic through several GEM ports told apart by VLAN has not been
-       measured: the OLT the board was tested against grants one data T-CONT
-       and provisions no VLAN filter. A provisioning with two upstream GEM ports
-       in different VLANs, each on a granted T-CONT, sending in both VLANs and
-       reading each port's octet count, would settle it.
+     - The driver's choice; not exercised.
 
 The OMCI channel
 ================
@@ -2159,9 +2181,13 @@ Known limitations
   Queues are never detached and T-CONTs never disabled after the build, so a
   deleted port's queue stays in its T-CONT's map until the next boot. The queue
   numbering is measured for T-CONTs 0, 1 and 16 only.
-- A VLAN's upstream frames go up one GEM port, whatever their priority:
-  ``gem_add`` and ``gem_change`` refuse a port that takes some priorities only
-  (``-EOPNOTSUPP``).
+- A VLAN rule (tc flower, offloaded to the classifier) that sends frames into
+  a VLAN whose priorities several GEM ports divide, and that keeps a priority
+  it neither matches nor writes, puts all its frames on the GEM port of
+  priority 0. Management that wants each priority on its own GEM port gives
+  such a rule one copy per priority, each matching it. Frames the CPU sends
+  into such a VLAN go up every GEM port of the VLAN the software bridge floods
+  them to.
 - The rates and weights a queue is given are approximations: rates go in
   units of 1024 bytes per second, a weight of 1 shares less exactly than
   larger ones, and the ports that share a queue share one limit, the sum of

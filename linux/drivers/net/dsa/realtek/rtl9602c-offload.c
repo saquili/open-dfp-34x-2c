@@ -280,14 +280,54 @@ static bool rtl9602c_port_is_downstream(int port)
 }
 
 /*
+ * The GEM flow that claims the frames VLAN rule @x sends upstream: those of
+ * the VLAN they leave in, of the priority they leave with when the GEM
+ * interfaces of that VLAN divide its priorities. That priority is the one the
+ * rule writes, or else the one it matches; a rule that keeps a priority it
+ * does not match is given the flow of priority 0, with a warning, since one
+ * entry cannot choose among several flows. Return the flow; -1 when no GEM
+ * interface claims the VLAN; -2 when none claims the priority, so that the
+ * frames get no stream, as those of a priority an IEEE 802.1p mapper sends
+ * nowhere are discarded.
+ */
+static int rtl9602c_cf_xlate_flow(struct rtl9602c_priv *p,
+				  const struct rtl9602c_cf_xlate *x)
+{
+	const u8 *row;
+	int pcp;
+
+	if (x->out_vid >= VLAN_N_VID)
+		return -1;
+	row = p->gem_vid_flow[x->out_vid];
+	if (!memchr_inv(row, 0, 8))
+		return -1;
+	if (!memchr_inv(row, row[0], 8))
+		return row[0] - 1;
+
+	if (x->act[1] & RTL9602C_CLS_ACT_CPRI_SET) {
+		pcp = FIELD_GET(RTL9602C_CLS_ACT_CPRI, x->act[1]);
+	} else if (x->act[0] & RTL9602C_CLS_ACT_SPRI_SET) {
+		pcp = FIELD_GET(RTL9602C_CLS_ACT_SPRI, x->act[0]);
+	} else if ((x->care & RTL9602C_CLS_RULE_PRI) == RTL9602C_CLS_RULE_PRI) {
+		pcp = FIELD_GET(RTL9602C_CLS_RULE_PRI, x->value);
+	} else {
+		pr_warn_ratelimited("VLAN %u is divided among GEM ports by priority, and a rule into it keeps any priority: its frames take the GEM port of priority 0\n",
+				    x->out_vid);
+		pcp = 0;
+	}
+	return row[pcp] ? row[pcp] - 1 : -2;
+}
+
+/*
  * Write VLAN rule @idx as p->cf_xlate[@idx] records it (see
  * rtl9602c_flower_vlan()), with the stream of an upstream rule. Of several
  * matching entries the lowest applies, and the VLAN rules sit below the stream
- * entries, so an upstream rule names its stream itself: the GEM flow of the
- * upstream GEM interface that claims the VLAN the frame leaves in, if any, and
- * otherwise the flow its port's own stream entry gives, which the frame would
- * have taken without the rule. Without a stream the frame reaches the PON MAC
- * without a GEM port and is lost (measured on this board).
+ * entries, so an upstream rule names its stream itself: the GEM flow that
+ * claims the frames it sends upstream (rtl9602c_cf_xlate_flow()), if a GEM
+ * interface claims their VLAN, and otherwise the flow its port's own stream
+ * entry gives, which the frame would have taken without the rule. Without a
+ * stream the frame reaches the PON MAC without a GEM port and is lost
+ * (measured on this board).
  */
 static int rtl9602c_cf_write_xlate(struct rtl9602c_priv *p, unsigned int idx)
 {
@@ -301,11 +341,11 @@ static int rtl9602c_cf_write_xlate(struct rtl9602c_priv *p, unsigned int idx)
 	};
 	int flow = -1;
 
-	if (!e.downstream && x->out_vid < VLAN_N_VID &&
-	    p->gem_vid_flow[x->out_vid])
-		flow = p->gem_vid_flow[x->out_vid] - 1u;
-	else if (!e.downstream && x->port < RTL9602C_NUM_PORTS)
-		flow = p->cf_sid_flow[x->port];
+	if (!e.downstream) {
+		flow = rtl9602c_cf_xlate_flow(p, x);
+		if (flow == -1 && x->port < RTL9602C_NUM_PORTS)
+			flow = p->cf_sid_flow[x->port];
+	}
 	if (flow >= 0)
 		e.act[0] |= RTL9602C_CLS_ACT_FLOW_SET |
 			    FIELD_PREP(RTL9602C_CLS_ACT_FLOW, flow);
@@ -344,11 +384,12 @@ static int rtl9602c_cf_write_sid(struct rtl9602c_priv *p, unsigned int idx,
 }
 
 /*
- * Frames entering by @port with a C-tag of VID @vid; matching on the VID is not
- * verified.
+ * Frames entering by @port with a C-tag of VID @vid and, unless @pcp is
+ * negative, of priority @pcp; matching on the VID is not verified.
  */
 static int rtl9602c_cf_write_sid_vlan(struct rtl9602c_priv *p, unsigned int idx,
-				      int port, u16 vid, unsigned int flow)
+				      int port, u16 vid, int pcp,
+				      unsigned int flow)
 {
 	struct rtl9602c_cf_entry e = {
 		.value	= FIELD_PREP(RTL9602C_CLS_RULE_UNI, port) |
@@ -359,6 +400,10 @@ static int rtl9602c_cf_write_sid_vlan(struct rtl9602c_priv *p, unsigned int idx,
 			    FIELD_PREP(RTL9602C_CLS_ACT_FLOW, flow), 0, 0 },
 	};
 
+	if (pcp >= 0) {
+		e.value |= FIELD_PREP(RTL9602C_CLS_RULE_PRI, pcp);
+		e.care |= RTL9602C_CLS_RULE_PRI;
+	}
 	return rtl9602c_cf_program(p, idx, &e);
 }
 
@@ -399,6 +444,40 @@ static void rtl9602c_cf_sid_release(struct rtl9602c_priv *p)
 	}
 }
 
+/*
+ * The stream entries of port @port for VID @vid, whose priorities' flows plus
+ * one @row holds: one keyed on the C-VID when one flow claims every priority,
+ * else one keyed on the C-VID and the priority for each claimed priority.
+ * Return -ENOSPC when the classifier is full, with a warning.
+ */
+static int rtl9602c_cf_sid_vlan(struct rtl9602c_priv *p, int port, u16 vid,
+				const u8 *row)
+{
+	bool whole = !memchr_inv(row, row[0], 8);
+	int pcp, idx;
+
+	for (pcp = whole ? -1 : 0; pcp < 8; pcp++) {
+		unsigned int flow = row[pcp < 0 ? 0 : pcp];
+
+		if (!flow)
+			continue;
+		idx = rtl9602c_cf_sid_alloc(p);
+		if (idx < 0) {
+			pr_warn("classifier full: port %d VLAN %u gets no GEM port upstream\n",
+				port, vid);
+			return -ENOSPC;
+		}
+		if (rtl9602c_cf_write_sid_vlan(p, idx, port, vid, pcp, flow - 1))
+			pr_warn("classifier entry %d was not written\n", idx);
+		else
+			pr_debug("port %d VLAN %u priority %d upstream: stream %u, entry %d\n",
+				 port, vid, pcp, flow - 1, idx);
+		if (whole)
+			break;
+	}
+	return 0;
+}
+
 /**
  * rtl9602c_cf_sid_refresh() - rebuild the classifier's stream entries
  * @p: the switch
@@ -409,9 +488,11 @@ static void rtl9602c_cf_sid_release(struct rtl9602c_priv *p)
  * claimed. A port in that bridge gets one entry for the bridge's upstream flow,
  * that of the last upstream GEM interface to join (or of another, once that
  * one has left), while no VLAN claims a GEM flow; otherwise one entry per
- * claimed VLAN, keyed on the C-VID, so that a frame in no claimed VLAN gets
- * no stream. A port the classifier has no room for is left without a stream,
- * with a warning.
+ * claimed VLAN, keyed on the C-VID, or, for a VLAN whose priorities several
+ * GEM flows divide, one per claimed priority, keyed on the C-VID and the
+ * C-tag's priority; a frame in no claimed VLAN, or of a priority no flow
+ * claims, gets no stream. A port the classifier has no room for is left
+ * without a stream, with a warning.
  *
  * Called at setup, on each bridge membership change, on each VLAN change of an
  * upstream GEM interface and on each change of the routed flow.
@@ -425,7 +506,7 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 	rtl9602c_cf_sid_release(p);
 
 	for (vid = 0; vid < VLAN_N_VID; vid++)
-		if (p->gem_vid_flow[vid])
+		if (memchr_inv(p->gem_vid_flow[vid], 0, 8))
 			claimed++;
 
 	dsa_switch_for_each_user_port(dp, &p->ds) {
@@ -483,29 +564,16 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 		}
 
 		/*
-		 * Otherwise one entry per claimed VLAN; gem_vid_flow[] holds a
-		 * VLAN's GEM flow plus one.
+		 * Otherwise entries per claimed VLAN; gem_vid_flow[] holds the
+		 * GEM flow plus one of each of a VLAN's priorities.
 		 */
 		for (vid = 0; vid < VLAN_N_VID; vid++) {
-			unsigned int flow;
+			const u8 *row = p->gem_vid_flow[vid];
 
-			if (!p->gem_vid_flow[vid])
+			if (!memchr_inv(row, 0, 8))
 				continue;
-			flow = p->gem_vid_flow[vid] - 1u;
-
-			idx = rtl9602c_cf_sid_alloc(p);
-			if (idx < 0) {
-				pr_warn("classifier full: port %d VLAN %u gets no GEM port upstream\n",
-					port, vid);
+			if (rtl9602c_cf_sid_vlan(p, port, (u16)vid, row))
 				break;
-			}
-			if (rtl9602c_cf_write_sid_vlan(p, idx, port, (u16)vid,
-						       flow))
-				pr_warn("classifier entry %d was not written\n",
-					idx);
-			else
-				pr_debug("port %d VLAN %u upstream: stream %u, entry %d\n",
-					 port, vid, flow, idx);
 		}
 	}
 

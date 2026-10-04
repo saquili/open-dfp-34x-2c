@@ -788,9 +788,10 @@ traffic descriptor (clause 9.2.12).
        goes up none, as a priority that a mapper points nowhere is discarded.
        ``IFLA_GEM_PBITS`` is at least 1 (``-ERANGE`` otherwise), so that each
        upstream port takes some priority of each of its VLANs.
-     - P, I
-     - P for the mapper, ITU-T G.988 clause 9.3.10; I for the class's
-       contract.
+     - P, T
+     - P for the mapper, ITU-T G.988 clause 9.3.10. T on the RTL9602C: a
+       priority mask of 0 was refused, "integer out of range", and a port
+       asking for a priority another port of its VLAN held was refused.
    * - A T-CONT serves the committed rates of its queues first. What remains
        of its grant goes to its strict queues in order of priority, 0 the
        highest, and what they leave to its weighted queues in proportion to
@@ -2137,15 +2138,20 @@ GEM ports
      - Tag
      - Checked by
    * - ``gem_add`` refuses: an upstream port on a T-CONT of 8 or above
-       (``-ERANGE``); a port that takes some priorities only
-       (``-EOPNOTSUPP``); a PON MAC that is not up yet (``-ENETDOWN``); the
-       OMCC's Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
+       (``-ERANGE``); a PON MAC that is not up yet (``-ENETDOWN``); the OMCC's
+       Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
        (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
        port network CTPs with one Port-ID; this MAC does not. The flow is the
        lowest free one other than ``RTL9602C_GPON_OMCC_FLOW`` (64).
      - I
      - Design choice, not exercised: ``ip link add ... type gem`` with each
        fault.
+   * - The driver takes the frames of a VLAN for each GEM port by priority, as
+       the class's model says ("Upstream traffic"), with a classifier entry
+       per claimed priority of a divided VLAN.
+     - M
+     - Two GEM ports dividing VLAN 3001's priorities, each priority's frames
+       going up its own port (the driver's page, "Bridges and VLANs").
    * - The driver schedules as the class's model says ("Upstream
        traffic"): each GEM T-CONT has eight queues, the higher-numbered
        hardware queue going first, so priority 0 takes the highest; committed

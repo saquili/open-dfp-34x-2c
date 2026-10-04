@@ -255,13 +255,6 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 		return -ERANGE;
 	}
 
-	/* A VLAN's frames go up one GEM port, whatever their priority. */
-	if (cfg->pbits != 0xff) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "GEM ports taking some priorities only are not supported");
-		return -EOPNOTSUPP;
-	}
-
 	mutex_lock(&p->gpon_lock);
 
 	/* GEM ports need the PON MAC, which a bring-up of the PON builds. */
@@ -376,6 +369,53 @@ static int rtl9602c_gem_bridge_join(struct pon_device *pon, unsigned int flow,
 }
 
 /*
+ * Claim the frames of VID @vid with the IEEE 802.1p priorities in @pbits for
+ * @flow, and give up the flow's claims on the VID's other priorities; refuse
+ * when another flow holds one of @pbits. gem_vid_flow holds a claim as the
+ * flow plus one, 0 for none.
+ */
+static int rtl9602c_gem_vid_claim(struct rtl9602c_priv *p, unsigned int flow,
+				  u16 vid, u8 pbits,
+				  struct netlink_ext_ack *extack)
+{
+	u8 *row = p->gem_vid_flow[vid];
+	unsigned int pcp;
+
+	for (pcp = 0; pcp < 8; pcp++) {
+		if (!(pbits & BIT(pcp)) || !row[pcp] || row[pcp] == flow + 1)
+			continue;
+		NL_SET_ERR_MSG_FMT_MOD(extack,
+				       "VLAN %u priority %u already travels up another GEM interface",
+				       vid, pcp);
+		return -EBUSY;
+	}
+	for (pcp = 0; pcp < 8; pcp++) {
+		if (pbits & BIT(pcp))
+			row[pcp] = flow + 1;
+		else if (row[pcp] == flow + 1)
+			row[pcp] = 0;
+	}
+	return 0;
+}
+
+/* Give up @flow's claims on VID @vid; return whether it had any. */
+static bool rtl9602c_gem_vid_release(struct rtl9602c_priv *p,
+				     unsigned int flow, u16 vid)
+{
+	u8 *row = p->gem_vid_flow[vid];
+	bool had = false;
+	unsigned int pcp;
+
+	for (pcp = 0; pcp < 8; pcp++) {
+		if (row[pcp] != flow + 1)
+			continue;
+		row[pcp] = 0;
+		had = true;
+	}
+	return had;
+}
+
+/*
  * Take @flow out of the bridge. Both gem_bridge_leave and gem_del come here,
  * in either order, and the second finds nothing to do. If @flow was the one
  * the bridge's stream entries name, the upstream GEM interface of the lowest
@@ -403,8 +443,7 @@ static void rtl9602c_gem_unbridge(struct rtl9602c_priv *p, unsigned int flow)
 	}
 
 	for (unsigned int vid = 0; vid < VLAN_N_VID; vid++)
-		if (p->gem_vid_flow[vid] == flow + 1)
-			p->gem_vid_flow[vid] = 0;
+		rtl9602c_gem_vid_release(p, flow, vid);
 	if (!--p->pon_br_members)
 		p->pon_br = NULL;
 	rtl9602c_bridge_refresh(&p->ds);
@@ -421,12 +460,15 @@ static void rtl9602c_gem_bridge_leave(struct pon_device *pon,
 
 /*
  * The switch keeps VLAN membership per port, so a bridged GEM interface's
- * VLANs are the PON port's. An upstream GEM interface also claims each of its
- * VLANs for its flow (gem_vid_flow holds the flow plus one, 0 for none): once
- * VLANs claim flows, the classifier entries that give forwarded frames their
- * stream match the ingress port and the C-VID, so a VLAN can travel up one
- * GEM interface only, and a second upstream GEM interface in a claimed VLAN
- * is refused.
+ * VLANs are the PON port's. An upstream GEM interface also claims the frames
+ * of each of its VLANs with its IEEE 802.1p priorities for its flow
+ * (rtl9602c_gem_vid_claim()): once VLANs claim flows, the classifier entries
+ * that give forwarded frames their stream match the ingress port, the C-VID
+ * and, where the GEM interfaces of a VLAN divide its priorities, the C-tag's
+ * priority. So upstream GEM interfaces may share a VLAN only with disjoint
+ * priorities, and one that would take a priority another holds is refused.
+ * The claim is made first, so that a refusal leaves the PON port's VLANs as
+ * they were.
  */
 static int rtl9602c_gem_vlan_add(struct pon_device *pon, unsigned int flow,
 				 u16 vid, u16 flags,
@@ -434,32 +476,33 @@ static int rtl9602c_gem_vlan_add(struct pon_device *pon, unsigned int flow,
 {
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
 	struct switchdev_obj_port_vlan vlan = { .vid = vid, .flags = flags };
-	bool upstream = p->gem_cfg[flow].direction & IFLA_GEM_DIR_UPSTREAM;
+	const struct pon_gem_config *cfg = &p->gem_cfg[flow];
+	bool upstream = cfg->direction & IFLA_GEM_DIR_UPSTREAM;
+	u8 had[8];
 	int err;
 
-	if (upstream && vid < VLAN_N_VID && p->gem_vid_flow[vid] &&
-	    p->gem_vid_flow[vid] != flow + 1) {
-		NL_SET_ERR_MSG_FMT_MOD(extack,
-				       "VLAN %u already travels up another GEM interface",
-				       vid);
-		return -EBUSY;
+	if (upstream && vid < VLAN_N_VID) {
+		memcpy(had, p->gem_vid_flow[vid], sizeof(had));
+		err = rtl9602c_gem_vid_claim(p, flow, vid, cfg->pbits, extack);
+		if (err)
+			return err;
 	}
 
 	err = rtl9602c_port_vlan_add(&p->ds, RTL9602C_PORT_PON, &vlan, extack);
-	if (err)
+	if (err) {
+		if (upstream && vid < VLAN_N_VID)
+			memcpy(p->gem_vid_flow[vid], had, sizeof(had));
 		return err;
-
-	if (upstream && vid < VLAN_N_VID) {
-		p->gem_vid_flow[vid] = (u8)(flow + 1);
-		rtl9602c_cf_sid_refresh(p);
 	}
+
+	if (upstream && vid < VLAN_N_VID)
+		rtl9602c_cf_sid_refresh(p);
 	return 0;
 }
 
 /*
- * Once no other GEM interface of the bridge has @vid (@last), the PON port
- * leaves the VLAN, and the flow gives up its claim on it: no other upstream
- * GEM interface can be in a VLAN a flow claims.
+ * The flow gives up its claims on @vid; the PON port leaves the VLAN once no
+ * GEM interface of the bridge has it (@last).
  */
 static void rtl9602c_gem_vlan_del(struct pon_device *pon, unsigned int flow,
 				  u16 vid, bool last)
@@ -467,13 +510,43 @@ static void rtl9602c_gem_vlan_del(struct pon_device *pon, unsigned int flow,
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
 	struct switchdev_obj_port_vlan vlan = { .vid = vid };
 
-	if (!last)
-		return;
-	if (vid < VLAN_N_VID && p->gem_vid_flow[vid] == flow + 1) {
-		p->gem_vid_flow[vid] = 0;
+	if (vid < VLAN_N_VID && rtl9602c_gem_vid_release(p, flow, vid))
 		rtl9602c_cf_sid_refresh(p);
+	if (last)
+		rtl9602c_port_vlan_del(&p->ds, RTL9602C_PORT_PON, &vlan);
+}
+
+/*
+ * The flow's claims on every VID it claims, taken again with new priorities
+ * @pbits; refused, leaving every claim as it was, when another flow holds one
+ * of them in one of those VLANs.
+ */
+static int rtl9602c_gem_pbits_change(struct rtl9602c_priv *p,
+				     unsigned int flow, u8 pbits,
+				     struct netlink_ext_ack *extack)
+{
+	unsigned int vid, pcp;
+
+	for (vid = 0; vid < VLAN_N_VID; vid++) {
+		const u8 *row = p->gem_vid_flow[vid];
+
+		if (!memchr(row, flow + 1, 8))
+			continue;
+		for (pcp = 0; pcp < 8; pcp++) {
+			if (!(pbits & BIT(pcp)) || !row[pcp] ||
+			    row[pcp] == flow + 1)
+				continue;
+			NL_SET_ERR_MSG_FMT_MOD(extack,
+					       "VLAN %u priority %u already travels up another GEM interface",
+					       vid, pcp);
+			return -EBUSY;
+		}
 	}
-	rtl9602c_port_vlan_del(&p->ds, RTL9602C_PORT_PON, &vlan);
+	for (vid = 0; vid < VLAN_N_VID; vid++)
+		if (memchr(p->gem_vid_flow[vid], flow + 1, 8))
+			rtl9602c_gem_vid_claim(p, flow, vid, pbits, NULL);
+	rtl9602c_cf_sid_refresh(p);
+	return 0;
 }
 
 /*
@@ -545,34 +618,33 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 }
 
 /*
- * A new upstream scheduling for a GEM port: the configuration is recorded,
- * and while the port's upstream is programmed, the upstream half is
- * programmed again for it, which moves the stream to a new queue when the
- * queue changes, and the old queue is scheduled for the ports left in it.
- * Frames already in the old queue still leave in the T-CONT's grants. When
- * the new queue cannot be attached, the old configuration is put back.
+ * New upstream attributes for a GEM port. New priorities take the flow's
+ * VLAN claims again first (rtl9602c_gem_pbits_change()), under RTNL as the
+ * bridge's VLAN changes are. Then the configuration is recorded, and while
+ * the port's upstream is programmed, the upstream half is programmed again
+ * for it, which moves the stream to a new queue when the queue changes, and
+ * the old queue is scheduled for the ports left in it. Frames already in the
+ * old queue still leave in the T-CONT's grants. When the new queue cannot be
+ * attached, the old configuration and claims are put back.
  */
 static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 			       const struct pon_gem_config *cfg,
 			       struct netlink_ext_ack *extack)
 {
 	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
-	struct pon_gem_config old;
+	struct pon_gem_config old = p->gem_cfg[flow];
 	int err = 0;
 
-	mutex_lock(&p->gpon_lock);
-	if (WARN_ON(!test_bit(flow, p->gem_flows))) {
-		err = -ENOENT;
-		goto out;
-	}
-	if (cfg->pbits != 0xff) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "GEM ports taking some priorities only are not supported");
-		err = -EOPNOTSUPP;
-		goto out;
+	if (WARN_ON(!test_bit(flow, p->gem_flows)))
+		return -ENOENT;
+
+	if (cfg->pbits != old.pbits) {
+		err = rtl9602c_gem_pbits_change(p, flow, cfg->pbits, extack);
+		if (err)
+			return err;
 	}
 
-	old = p->gem_cfg[flow];
+	mutex_lock(&p->gpon_lock);
 	p->gem_cfg[flow] = *cfg;
 	if (!p->ponmac_up || !rtl9602c_gem_tcont_bound(p, cfg->tcont))
 		goto out;
@@ -588,6 +660,8 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 		rtl9602c_gem_queue_sched(p, old.tcont, old.queue);
 out:
 	mutex_unlock(&p->gpon_lock);
+	if (err && cfg->pbits != old.pbits)
+		rtl9602c_gem_pbits_change(p, flow, old.pbits, NULL);
 	return err;
 }
 

@@ -2860,10 +2860,11 @@ struct rtl9602c_priv {
 	int pon_br_us_flow;
 
 	/**
-	 * @gem_vid_flow: per VID, the flow plus one of the upstream GEM
-	 * interface that claims it; 0 for none
+	 * @gem_vid_flow: per VID and IEEE 802.1p priority, the flow plus one
+	 * of the upstream GEM interface that claims the VID's frames of that
+	 * priority; 0 for none. VLAN_N_VID rows of eight, allocated at probe.
 	 */
-	u8 gem_vid_flow[VLAN_N_VID];
+	u8 (*gem_vid_flow)[8];
 	/** @cf_sid_owned: the classifier entries that hold stream entries */
 	DECLARE_BITMAP(cf_sid_owned, RTL9602C_CLS_ENTRIES);
 	/** @gem_bridged: the flows whose GEM interfaces are in @pon_br */
