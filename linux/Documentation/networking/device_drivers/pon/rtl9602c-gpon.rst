@@ -1271,10 +1271,15 @@ The report to the PON class follows the log line
        allocations that the OLT grants.
      - M
      - The laser is off before O3; in O7 the line read high and the module's
-       bias and transmitted power 0, and both came back in O5. ITU-T G.984.3
-       clause 10.2.2 (no upstream transmission before O3); clause 9.2.1 and
-       clause 11.1.2 (Deactivate_ONU-ID and loss of signal switch the laser
-       off).
+       bias and transmitted power 0, and both came back in O5. The module
+       measures those only in a burst, so a test build forced the laser driver
+       on through the module's own configuration table: in O5 its indication
+       of light (table 2 ``0xb7`` bits 7 and 5) rose within 10 ms, and asserting
+       TX_DISABLE cleared it with the driver still forced on; in O7, after an
+       injected Disable_Serial_Number, it stayed clear in all 130 reads, 10 ms
+       apart, through a second forced on and after. ITU-T G.984.3 clause 10.2.2 (no upstream transmission
+       before O3); clause 9.2.1 and clause 11.1.2 (Deactivate_ONU-ID and loss of
+       signal switch the laser off).
    * - The PON port's operational state is dormant in every state but O5, and up
        in O5 (``rtl9602c_gpon_operstate()``, on each transition and when the
        port is enabled): up but waiting for an external event, as RFC 2863
@@ -2073,11 +2078,16 @@ signal-detect and burst-merge registers that the bring-up writes.
        against it in O5, and logs each write (``EQD: ...``).
      - P
      - ITU-T G.984.3 clause 10.4.2.1, clause 10.4.3.1 and clause 10.4.4.
-   * - On the test OLT the assigned equalization delay is about 97300 bits. It
-       took one of two values 128 bits apart from one activation to the next;
-       the source of the step was not identified.
+   * - On the test OLT the assigned equalization delay is about 97280 bits. It
+       is the same on every activation within a boot and moves by a few bits
+       from one boot to the next; it does not step between activations.
      - M
-     - The ``EQD:`` line of the kernel log across activations.
+     - The ``EQD:`` line of the kernel log: 43 activations in one boot, each
+       started by an injected broadcast Deactivate_ONU-ID and back in O5 within
+       1.0 to 1.6 s, all at 97286; five more restarts at 97287, 97281, 97280,
+       97279 and 97282, each over five activations; and four boots after the
+       module was taken out of its cage and put back, at 97279, 97284, 97283
+       and 97279, each over four activations.
    * - ``RTL9602C_GTC_US_LASER`` (``0x70504c``):
        ``RTL9602C_GTC_US_LASER_ON_LEAD`` (bits 13:8, how early the laser is
        keyed before a burst) = ``RTL9602C_GTC_US_LASER_ON_LEAD_DEF`` (``0x20``);
@@ -2092,6 +2102,16 @@ signal-detect and burst-merge registers that the bring-up writes.
      - I
      - ITU-T G.984.2 Table I.2 bounds the transmitter's enable and disable times
        at 16 bits; the ONU reaches O5 on an OLT with other values.
+   * - On the test PON, a second unit of this model, whose bursts follow this
+       ONU's in every upstream frame, lost no upstream frame while this ONU
+       sent, idle or flat out.
+     - M
+     - Frames of 1514 B from each unit's host side, counted where they left
+       the OLT: 120000 at 2000 a second from each unit at once, all arrived
+       from both; 120000 from the second unit with this ONU disabled (O7), all
+       arrived; 60000 from the second unit at 2000 a second while this ONU was
+       offered more than its upstream carries, all arrived. The second unit
+       stayed in O5 with no alarm.
    * - ``RTL9602C_GTC_US_IRQ_LATCH`` (``0x705000``) latches upstream GTC events
        and clears when read: ``RTL9602C_GTC_US_IRQ_SD_MISMATCH`` (bit 9), taken
        to mean that the optics' signal detect disagreed with the keyed burst;
@@ -2105,7 +2125,20 @@ signal-detect and burst-merge registers that the bring-up writes.
      - In O5 a latch left unread kept the source asserted, the interrupt thread
        re-entered without end and the watchdog reset the board; bits 8 and 9
        were never set under this driver.
-   * - What bits 8 and 9 detect, and which events bits 2, 5 and 7 of the enable
+   * - Bits 8 and 9 stay clear with the laser on outside the bursts: a test
+       build forced the laser driver on through the module's own configuration
+       table for 50 ms, 500 ms and 2 s in O5, and neither bit was set in reads
+       of the latch every 10 ms, though the module showed the light; bit 10 was
+       set at every read, before and after as well. So on this board the MAC's
+       check of the optics' signal detect against the burst reports nothing,
+       and the driver cannot tell a laser stuck on by itself.
+     - M
+     - The forced runs above; the module's indication of light, table 2
+       ``0xb7`` bits 7 and 5, read every 10 ms: set throughout each forced
+       run, and in normal O5, under the test OLT's allocation of 15417 of the
+       19440 bytes of every upstream frame, set in runs of up to 24 reads.
+   * - What bits 8 and 9 detect where the optics' signal detect reaches the
+       MAC, what bit 10 reports, and which events bits 2, 5 and 7 of the enable
        select, are not established.
      - I
      - A burst keyed with the laser disabled (bit 9).
@@ -3009,6 +3042,15 @@ Known limitations
   unanswered serial-number requests (G.984.3 clause 10.5.1) are not done, since
   the optics measure the power only in bursts. The test OLT sends no
   Change_Power_Level, so the levels have been set only by injected messages.
+- A laser that stays on by itself is not detected: the MAC's check of the
+  optics' signal detect against the burst reports nothing on this board, and
+  the module's own indication of light also rises in normal operation, for up
+  to about 240 ms at a time under an allocation of most of each upstream frame,
+  so it cannot tell a stuck laser from a busy one (see "Upstream timing"). An
+  ONU that sends out of turn is left to the OLT, which disables it; in O7
+  TX_DISABLE keeps the laser dark even with its driver forced on.
+- A disabled ONU stays in O7 only until it restarts: G.984.3 has the disabled
+  state survive a power-off, and the driver keeps no state across a restart.
 - Dying_Gasp is sent before an orderly restart, and on the test OLT only its
   first copy leaves (see "PLOAM transmit"). What makes the MAC send the
   Dying_Gasp template it holds armed, and whether the supply-loss interrupt
@@ -3183,9 +3225,11 @@ Questions the code does not depend on
    * - That the response delay realises the ONU response time ("Upstream
        timing").
      - Ranging with other values and comparing the delay the OLT assigns.
-   * - What the upstream signal-detect bits and the enable bits select
-       ("Upstream timing").
-     - A burst keyed with the laser disabled.
+   * - What the upstream signal-detect bits detect where the optics' signal
+       detect reaches the MAC, what bit 10 reports, and what the enable bits
+       select ("Upstream timing").
+     - A board that brings the signal detect to the MAC, and a burst keyed with
+       the laser disabled.
    * - What the capture fields other than the T-CONT, PLOAMu, valid, StartTime
        and StopTime hold ("The bandwidth map").
      - An OLT granting FEC or DBRu, or several allocations in one burst.
