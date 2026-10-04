@@ -2825,16 +2825,17 @@ serial number that the ONU presents to the OLT is the devlink parameter
      - Checked by
    * - The PON device, registered by the GEM port code (see
        Documentation/networking/device_drivers/pon/rtl9602c.rst) with 128 flows
-       and 16 T-CONTs (the seventeenth being the OMCC's), takes its status from
+       and 8 T-CONTs of 8 queues each, takes its status from
        ``rtl9602c_gpon_fill_status()`` under ``gpon_lock``: type GPON; the
        serial number when set; the ifindex of the PON port
        (``RTL9602C_PORT_PON``); and, only while the PON is up, the state (the
        driver's numbers 1 to 5 equal the class's O1 to O5), the ONU-ID unless it
        is 255, the OMCC Port-ID when bound, the Alloc-IDs of T-CONTs 0 to 15 in
-       use, the totals of the counters, LOS, LOF and LOM from
+       use, the totals of the counters, the transmit power level (high less the
+       level mode, as Serial_Number_ONU carries it), LOS, LOF and LOM from
        ``RTL9602C_GTC_DS_IRQ_STAT``, and the driver's PEE alarm. With the PON
-       down there is no state, no alarm and no counter: an absent value, not a
-       zero.
+       down there is no state, no level, no alarm and no counter: an absent
+       value, not a zero.
      - M
      - The PON class report in O5 on an OLT: state O5, ONU-ID 1, Alloc-ID 257,
        OMCC Port-ID 1, no alarms, agreeing with the ``gpon`` view.

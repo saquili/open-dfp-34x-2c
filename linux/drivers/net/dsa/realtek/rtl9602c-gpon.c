@@ -783,7 +783,8 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
  * activation state, whose numbers 1 to 5 are the class's O1 to O5; the ONU-ID
  * unless unassigned; the OMCC's Port-ID while it is bound; the Alloc-IDs of
  * T-CONTs 0 to 15 in use, the default Alloc-ID not among them; the counter
- * totals, brought up to date; and the alarms.
+ * totals, brought up to date; the transmit power level, the one
+ * Serial_Number_ONU carries; and the alarms.
  *
  * The alarms are the levels in RTL9602C_GTC_DS_IRQ_STAT, the conditions present
  * now: loss of signal, loss of frame, and the MAC's LOM bit, reported as loss
@@ -827,6 +828,9 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_priv *p,
 	rtl9602c_gpon_cntr_sync(p);
 	st->stats = p->gpon_stats;
 	st->have_stats = true;
+
+	st->power_level = PON_POWER_LEVEL_HIGH - p->gpon_power_mode;
+	st->have_power_level = true;
 
 	i = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
 	st->have_alarms = true;
