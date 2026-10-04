@@ -174,7 +174,10 @@ static void print_alarms(FILE *f, uint32_t alarms)
 		fputs(" LOF", f);
 	if (alarms & PON_ALARM_LOM)
 		fputs(" LOM", f);
-	if (alarms & ~(uint32_t)(PON_ALARM_LOS | PON_ALARM_LOF | PON_ALARM_LOM))
+	if (alarms & PON_ALARM_PEE)
+		fputs(" PEE", f);
+	if (alarms & ~(uint32_t)(PON_ALARM_LOS | PON_ALARM_LOF | PON_ALARM_LOM |
+				 PON_ALARM_PEE))
 		fprintf(f, " 0x%x", alarms);
 }
 

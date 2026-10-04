@@ -132,6 +132,14 @@ static void test_alarms_and_states_are_named(void)
 	CHECK(!strstr(text, "ONU-ID"));
 	free(text);
 
+	nlh = message(buf, PON_CMD_DEV_CHANGE_NTF);
+	mnl_attr_put_u32(nlh, PON_A_DEV_ONU_STATE, PON_ONU_STATE_O5);
+	mnl_attr_put_u32(nlh, PON_A_DEV_ALARMS, PON_ALARM_PEE | 0x40);
+	CHECK(pon_dev_parse(nlh, &d) == 0);
+	text = printed(&d, false);
+	CHECK(strstr(text, "alarms PEE 0x48"));
+	free(text);
+
 	CHECK(!strcmp(pon_state_name(PON_ONU_STATE_O7), "O7 emergency stop"));
 	CHECK(!strcmp(pon_state_name(0), "unknown"));
 	CHECK(!strcmp(pon_state_name(99), "unknown"));
