@@ -2992,7 +2992,10 @@ Known limitations
   on the key's octet order in the MAC, which is an assumption (see "FEC and
   encryption"). Nothing is set up for upstream FEC, and downstream FEC has only
   its detection threshold.
-- There is no signal-fail or signal-degrade alarm from the BIP count.
+- The driver raises no signal-fail or signal-degrade alarm: it reports the BIP
+  count, and the OMCI daemon judges both from it, taking each counted error as
+  one bit in error. Whether the MAC counts bits or blocks is not verified;
+  counted blocks would keep a rate above about 3 x 10^-6 from being seen.
 - Transmit power levelling follows Change_Power_Level in O4 and O5 only: the
   default level mode of Upstream_Overhead and the ONU's own levelling after
   unanswered serial-number requests (G.984.3 clause 10.5.1) are not done, since
