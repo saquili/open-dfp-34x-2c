@@ -134,6 +134,15 @@ The runs, the oldest first:
     session, before the run began; the kernel log shows the deactivation and
     the ONU back in O5 2 s later.
 
+``2026-10-04-run14``
+    The same cases on the RAM image built from ``run14``: the OMCI
+    messages a channel's end discards counted apart, each GEM T-CONT with
+    eight queues of its own, and the upstream attributes of a GEM link
+    (priorities, queue, weight and rates), which omcid now takes from the
+    priority queues, traffic schedulers, traffic descriptors and IEEE 802.1p
+    mappers of the MIB. 40 of 40 passed; the upstream burst left at 963
+    Mbit/s through the T-CONT's queue of the highest priority.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
