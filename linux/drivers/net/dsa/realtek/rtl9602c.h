@@ -1128,6 +1128,13 @@ enum {
 #define RTL9602C_PON_NUM_QUEUE		65
 #define RTL9602C_PON_NUM_SID		65
 #define RTL9602C_PON_QUEUE(t, q)	(32 * ((t) / 8) + (q))
+
+/*
+ * The index, within its group, of the queue a T-CONT's GEM ports send through:
+ * the T-CONT's own place in the group, so that each of a group's eight T-CONTs
+ * has a queue of its own; T-CONT 16 takes index 0, queue 64.
+ */
+#define RTL9602C_PON_TCONT_QUEUE(t)	((t) % 8)
 #define RTL9602C_PONSCH_QUEUE_RATE_MAX		0x3ffff
 
 /* The page size, each half's SRAM (not verified) and its DRAM region. */

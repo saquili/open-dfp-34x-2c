@@ -33,9 +33,10 @@
 /*
  * Queue 63, where the build points every GEM stream, not admitted, and where
  * deleting a GEM port points its stream again. No T-CONT the driver switches
- * on has it in its map, since only queue 0 of a T-CONT's group is ever
- * attached and the build empties the maps of T-CONTs 0 to 15, so frames on a
- * parked stream are never scheduled.
+ * on has it in its map, since a T-CONT only ever attaches the queue of its
+ * own index in its group, 0 to 7 (RTL9602C_PON_TCONT_QUEUE()), and the build
+ * empties the maps of T-CONTs 0 to 15, so frames on a parked stream are never
+ * scheduled.
  */
 #define RTL9602C_GEM_PARKING_QUEUE	RTL9602C_PON_QUEUE(15, 31)
 
@@ -87,13 +88,11 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u8 tcont)
  * (rtl9602c_gem_restore()). rtl9602c_gem_tcont_ready() programs the upstream
  * half once the Alloc-ID comes.
  *
- * With the Alloc-ID, queue 0 of the T-CONT's group is attached, the flow is
- * given the Port-ID its upstream GEM headers carry, and the stream is pointed
- * at that queue and admitted. Only queue 0 of a group is used, so every GEM
- * port on T-CONTs 0 to 7 sends through queue 0 and every one on T-CONTs 8 to
- * 15 through queue 32: the GEM ports of two T-CONTs of one group share a
- * queue that sits in both T-CONTs' maps. Which T-CONT's grants then drain it
- * is not verified.
+ * With the Alloc-ID, the T-CONT's own queue, the one of its place in its
+ * group (RTL9602C_PON_TCONT_QUEUE()), is attached, the flow is given the
+ * Port-ID its upstream GEM headers carry, and the stream is pointed at that
+ * queue and admitted: every GEM port of a T-CONT sends through that one
+ * queue.
  */
 static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f);
 
@@ -101,6 +100,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 				const struct pon_gem_config *cfg)
 {
 	u32 type = RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH;
+	unsigned int q;
 	int err;
 
 	if (cfg->multicast)
@@ -123,7 +123,8 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 			return 0;
 		}
 
-		err = rtl9602c_pon_queue_add(p, cfg->tcont, 0);
+		q = RTL9602C_PON_TCONT_QUEUE(cfg->tcont);
+		err = rtl9602c_pon_queue_add(p, cfg->tcont, q);
 		if (err)
 			return err;
 
@@ -131,7 +132,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 			     RTL9602C_GEM_US_FLOW_CFG_PORTID,
 			     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID,
 					cfg->port_id));
-		rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(cfg->tcont, 0));
+		rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(cfg->tcont, q));
 		rtl9602c_ponmac_sid_valid(p, f, true);
 	}
 

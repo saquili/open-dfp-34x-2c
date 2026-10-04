@@ -726,7 +726,8 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
  * upstream Port-ID words for flow 64; until the GPON MAC has been taken out
  * of reset, they read as a fixed pattern, which is harmless. Once the block
  * is built: the OMCC's stream, its queue and admission, the T-CONT enables
- * and T-CONT 16's map, and for each half the control word, readiness, DRAM
+ * and T-CONT 16's map, the maps of T-CONTs 0 to 15 in use and the queues of
+ * the streams admitted, and for each half the control word, readiness, DRAM
  * base, pool in use and DMA control word. The upstream pool holds three
  * descriptors when idle and one more for each message waiting (measured on
  * this board). Last the switch: the OMCI trap priority, the words holding
@@ -737,7 +738,7 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 {
 	struct rtl9602c_priv *p = m->private;
-	unsigned int f = RTL9602C_GPON_OMCC_FLOW, d;
+	unsigned int f = RTL9602C_GPON_OMCC_FLOW, d, t, s;
 	u32 qmap = RTL9602C_PONSCH_TCONT_QUEUES(RTL9602C_GPON_DEFAULT_TCONT_IDX);
 	u32 v = 0;
 
@@ -771,6 +772,15 @@ static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 		seq_printf(m, "  tcont en    %08x  qmap[16] %08x\n",
 			   rtl9602c_r(p, RTL9602C_PONSCH_TCONT_EN),
 			   rtl9602c_r(p, qmap));
+		/* The maps of T-CONTs 0 to 15 in use, and the streams admitted. */
+		for (t = 0; t < RTL9602C_GPON_DEFAULT_TCONT_IDX; t++)
+			if (rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)))
+				seq_printf(m, "  qmap[%2u]    %08x\n", t,
+					   rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)));
+		for (s = 0; s < RTL9602C_GPON_OMCC_FLOW; s++)
+			if (rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_EN(s)) & BIT(s % 32))
+				seq_printf(m, "  sid %-2u      queue %u, valid\n", s,
+					   rtl9602c_ponq_stream_queue_get(p, s));
 		for (d = 0; d < 2; d++)
 			seq_printf(m,
 				   "  %s          ctl %08x  ready %u  base %08x  usage %08x  io %08x\n",

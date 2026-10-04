@@ -721,10 +721,11 @@ facts below give what is known of each.
    * - The same numbering for the other T-CONTs: T-CONTs 1 to 7 draw on queues 0
        to 31, T-CONTs 8 to 15 on queues 32 to 63, each map bit q naming queue q
        of the group.
-     - I
-     - Not measured: only T-CONTs 0 and 16 have carried traffic. A GEM port on
-       a granted T-CONT from 8 to 15, its stream on queue 32, would confirm
-       the upper group.
+     - M, I
+     - M for T-CONT 1: with bit 1 in its map, the frames of a stream on queue
+       1 waited for T-CONT 1's allocations and went out in none of T-CONT 0's
+       (see the row on each T-CONT's queue under "GEM ports"). I for the upper
+       group: a GEM port on a granted T-CONT from 8 to 15 would confirm it.
 
 The packet buffer
 =================
@@ -1031,7 +1032,7 @@ The chain from a frame to the fibre, and the numbers the driver gives it::
     queue q   --(bit in the map of T-CONT t)--> T-CONT t, if enabled
     T-CONT t  --(allocations of its Alloc-ID)-> GPON MAC, then the fibre
 
-    GEM port:  stream f --> queue 32 x (t / 8) --> T-CONT t, t = 0 to 15
+    GEM port:  stream f --> queue 32 x (t / 8) + t % 8 --> T-CONT t, t = 0 to 15
     OMCC:      stream 64 --> queue 64 --> T-CONT 16
     unused:    streams 0 to 63 --> queue 63, not admitted, in no T-CONT's map
 
@@ -1196,16 +1197,15 @@ poll that saw the end.
      - A drain with the GPON MAC held in O1 against one in O5, each with a known
        number of frames queued, would say more.
    * - A drain issued while other streams keep feeding the queue. The driver
-       drains a queue every time an upstream GEM port is attached to it, and
-       GEM ports of one T-CONT group share a queue (see "GEM ports as network
-       interfaces"), so an attach can drain a queue carrying other ports'
+       drains a queue only when no T-CONT's map holds it yet, and the GEM
+       ports of one T-CONT share its queue (see "GEM ports as network
+       interfaces"), so an attach drains no queue that carries other ports'
        traffic.
      - I
-     - Assumption, load-bearing for a second GEM port on a group that is
-       already sending. Not exercised with traffic running. Attaching a second
-       GEM port to a group during an upstream flood of the first, reading the
-       first port's octet count, would show whether the drain completes and what
-       it discards.
+     - Not load-bearing: a T-CONT's own queue is drained only before its
+       first GEM port, and a queue in a map is never drained. Draining a queue
+       during an upstream flood into it would show whether the drain completes
+       and what it discards.
    * - With the build not waiting for ``RTL9602C_PKTBUF_STAT_INIT_DONE``, the
        first drain failed on 3 of 44 bring-ups, the drain register reading
        ``0x00000205`` each time (start taken, busy set). In one failure the busy
@@ -1390,24 +1390,28 @@ Flows, streams and T-CONTs
        typed Ethernet alone it passed frames to 239.2.2.1, 224.0.0.1 and
        ff02::1, 20 of 20 each; typed multicast as well, none of them.
    * - The upstream half, programmed only when the T-CONT is bound (the
-       binding row below): queue index 0 of the T-CONT's group attached (see
-       "Attaching a queue to a T-CONT"); ``RTL9602C_GEM_US_FLOW_CFG(f)``
+       binding row below): the queue of the T-CONT's own index in its group,
+       ``RTL9602C_PON_TCONT_QUEUE(t)`` (t % 8), attached (see "Attaching a
+       queue to a T-CONT"); ``RTL9602C_GEM_US_FLOW_CFG(f)``
        (``0x706400`` + 4f), ``RTL9602C_GEM_US_FLOW_CFG_PORTID`` (bits 11:0) =
        the Port-ID the flow's GEM headers carry (a Port-ID is 12 bits, ITU-T
        G.984.3 clause 8.3.1); the stream pointed at ``RTL9602C_PON_QUEUE(t,
-       0)``; then admitted.
+       t % 8)``; then admitted.
      - M
      - 40 of 40 frames sent through a bidirectional port on T-CONT 0 reached the
        far end of the OLT intact and once each.
-   * - Every GEM port on T-CONTs 0 to 7 uses queue 0, and every one on T-CONTs 8
-       to 15 queue 32, because the driver attaches only index 0 of a group. With
-       more than one granted T-CONT in a group, their ports share one queue,
-       which then sits in several T-CONTs' maps.
-     - I
-     - Not exercised: the OLT the board was tested against assigns one data
-       Alloc-ID. Two granted T-CONTs in one group, each with an upstream GEM
-       port, reading each port's octet count against its T-CONT's grants, would
-       show whether either T-CONT's grants drain the shared queue.
+   * - Each T-CONT's GEM ports send through a queue of the T-CONT's own, index
+       t % 8 of its group, so no two T-CONTs of a group share one. A queue
+       shared between two T-CONTs' maps is drained by either T-CONT's
+       allocations, so the frames of one T-CONT went out under the other's
+       Alloc-ID.
+     - M
+     - With the OLT's Alloc-ID on T-CONT 0 and an injected one, which the OLT
+       does not grant, on T-CONT 1, 200 frames on a GEM port of T-CONT 1 left
+       nothing, its upstream octets staying at 0, while T-CONT 0's port carried
+       its 200. With both T-CONTs on queue 0, as before, the same 200 frames
+       went out in T-CONT 0's allocations: 14,778 octets on the port of
+       T-CONT 1.
    * - The driver's T-CONT t is bound when the GPON MAC holds an Alloc-ID for
        it: T-CONT 16 always (the default Alloc-ID), T-CONTs 0 to 15 once the OLT
        has assigned an Alloc-ID with Assign_Alloc-ID, a PLOAM message and not
@@ -1430,9 +1434,10 @@ Flows, streams and T-CONTs
        upstream started. A routed-traffic run of thirteen cases passed on a
        clean boot.
    * - ``RTL9602C_GEM_PARKING_QUEUE`` is queue 63, ``RTL9602C_PON_QUEUE(15,
-       31)``. No T-CONT the driver enables has it in its map (only index 0 of a
-       group is ever attached, and the build empties the maps of T-CONTs 0 to
-       15), so a parked stream's frames are never scheduled. The build parks
+       31)``. No T-CONT the driver enables has it in its map (a T-CONT
+       attaches only the queue of its own index in its group, 0 to 7, and the
+       build empties the maps of T-CONTs 0 to 15), so a parked stream's frames
+       are never scheduled. The build parks
        streams 0 to 63 unadmitted, so a new port's stream starts parked, and
        deleting a port parks it again.
      - M
@@ -1755,7 +1760,10 @@ the system controller, the GPON MAC and the switch::
    * - ``ponmac``, PON MAC
      - Once built only: ``omci sid``, the OMCC's stream register; ``sid 64``,
        stream 64's queue and whether it is ``valid`` (admitted); ``tcont en``,
-       the T-CONT enable word, and ``qmap[16]``, T-CONT 16's map; then a line
+       the T-CONT enable word, and ``qmap[16]``, T-CONT 16's map; a
+       ``qmap[t]`` line for each of T-CONTs 0 to 15 whose map is not empty,
+       and a ``sid`` line with the queue for each of streams 0 to 63 that is
+       admitted; then a line
        for each half, ``us`` and ``ds``, with ``ctl`` (the control word),
        ``ready`` (``RTL9602C_PKTBUF_STAT_INIT_DONE``), ``base`` (the DRAM base),
        ``usage`` (the pool in use) and ``io`` (the DMA control word).
@@ -1998,8 +2006,9 @@ each bring-up, and for the ports of a T-CONT when an Alloc-ID is bound to it.
    "upstream parked" and stop here. Purpose: a T-CONT without an Alloc-ID is
    granted nothing, and its queue would lose the frames at the switch's ingress.
    (P, M)
-3. Attach queue 0 of the T-CONT's group (see "Attaching a queue to a T-CONT").
-   Purpose: the queue the stream will name is scheduled. (T)
+3. Attach the queue of the T-CONT's own index in its group, t % 8 (see
+   "Attaching a queue to a T-CONT"). Purpose: the queue the stream will name
+   is scheduled, by this T-CONT's allocations alone. (M)
 4. Write the port's Port-ID into the flow's upstream configuration. Purpose:
    the GPON MAC puts it in the headers of the port's upstream frames. (M)
 5. Point the flow's stream at the queue and admit it. Purpose: the port's frames
@@ -2028,14 +2037,10 @@ Known limitations
   with ``-ENOSPC``; a downstream-only port takes the lowest free flow of all,
   so downstream-only ports use flows that upstream ports could have used
   first.
-- The driver attaches only queue 0 of a T-CONT's group. Every GEM port on
-  T-CONTs 0 to 7 therefore sends through queue 0 and every port on T-CONTs 8 to
-  15 through queue 32, and two T-CONTs of one group share a queue that sits in
-  both of their maps. Which T-CONT's grants then drain it has not been
-  exercised. Queues are never detached and T-CONTs never disabled
+- Each T-CONT has one queue, so the GEM ports of one T-CONT share it and no
+  priority orders them. Queues are never detached and T-CONTs never disabled
   after the build, so a deleted port's queue stays in its T-CONT's map until
-  the next boot. Only T-CONTs 0 and 16 have carried traffic, so the queue
-  numbering of T-CONTs 1 to 15 is not measured.
+  the next boot. The queue numbering is measured for T-CONTs 0, 1 and 16 only.
 - Every queue is strict priority with committed rate 0 and the maximum peak
   rate, so a T-CONT sends what the OLT grants it and the driver offers no rate
   limit, priority or weighting between GEM ports on the PON side. The unit of
@@ -2159,11 +2164,10 @@ Assumptions the driver depends on
        sends; an upstream flood above the grant, reading the pause counters;
        removing the supply under each dying-gasp polarity; reading the chip
        identity without the key.
-   * - That two T-CONTs of one group can share a queue, and that streams chosen
-       by VLAN tell GEM interfaces apart ("GEM ports as network interfaces").
-     - Two granted T-CONTs in one group, each with an upstream GEM port, reading
-       each port's octet count; two upstream GEM ports in different VLANs, each
-       on a granted T-CONT, sending in both VLANs.
+   * - That streams chosen by VLAN tell GEM interfaces apart on granted
+       T-CONTs ("GEM ports as network interfaces").
+     - Two upstream GEM ports in different VLANs, each on a granted T-CONT,
+       sending in both VLANs.
    * - That an extended OMCI message arrives with the same four trailing bytes
        ("The OMCI channel"), and that a message received outside O5 must be
        dropped.
