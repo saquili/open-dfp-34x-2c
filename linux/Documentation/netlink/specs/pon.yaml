@@ -118,6 +118,24 @@ definitions:
           Physical_Equipment_Error that it cannot send GEM frames or OMCC
           frames. Raised by each such message and cleared when none has come
           for 3 s (ITU-T G.984.3 clause 11.1.2).
+  -
+    type: enum
+    name: power-level
+    doc: >-
+      The transmit power level of an ONU, as it reports it in
+      Serial_Number_ONU (ITU-T G.984.3 clause 9.2.4.1). The OLT moves it a
+      level at a time with Change_Power_Level; each level is a launch power
+      about 3 dB apart from the next.
+    entries:
+      -
+        name: low
+        doc: The lowest level.
+      -
+        name: medium
+        doc: The middle level.
+      -
+        name: high
+        doc: The highest level, the one the ONU starts at.
 
 attribute-sets:
   -
@@ -306,6 +324,13 @@ attribute-sets:
           queue managed entity (clause 9.2.10). 0 until a data path is
           registered; the value stays when the data path unregisters.
         type: u32
+      -
+        name: power-level
+        doc: >-
+          The transmit power level, while the MAC transmits at one of the
+          levels the OLT can change.
+        type: u32
+        enum: power-level
   -
     name: tcont
     doc: >-
@@ -367,6 +392,7 @@ operations:
             - num-gem-ports
             - num-tconts
             - num-tcont-queues
+            - power-level
 
       dump:
         reply: *dev-attrs

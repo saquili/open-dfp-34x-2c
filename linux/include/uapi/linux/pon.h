@@ -80,6 +80,21 @@ enum pon_alarm {
 	PON_ALARM_PEE = 8,
 };
 
+/**
+ * enum pon_power_level - The transmit power level of an ONU, as it reports it
+ *   in Serial_Number_ONU (ITU-T G.984.3 clause 9.2.4.1). The OLT moves it a
+ *   level at a time with Change_Power_Level; each level is a launch power
+ *   about 3 dB apart from the next.
+ * @PON_POWER_LEVEL_LOW: The lowest level.
+ * @PON_POWER_LEVEL_MEDIUM: The middle level.
+ * @PON_POWER_LEVEL_HIGH: The highest level, the one the ONU starts at.
+ */
+enum pon_power_level {
+	PON_POWER_LEVEL_LOW,
+	PON_POWER_LEVEL_MEDIUM,
+	PON_POWER_LEVEL_HIGH,
+};
+
 enum {
 	PON_A_DEV_STATS_SN_REQUESTS = 1,
 	PON_A_DEV_STATS_RANGING_REQUESTS,
@@ -110,6 +125,7 @@ enum {
 	PON_A_DEV_NUM_GEM_PORTS,
 	PON_A_DEV_NUM_TCONTS,
 	PON_A_DEV_NUM_TCONT_QUEUES,
+	PON_A_DEV_POWER_LEVEL,
 
 	__PON_A_DEV_MAX,
 	PON_A_DEV_MAX = (__PON_A_DEV_MAX - 1)

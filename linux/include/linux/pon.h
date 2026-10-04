@@ -146,6 +146,9 @@ struct pon_dev_stats {
  * @num_alloc_ids: how many entries of @alloc_id are used
  * @stats: the totals; valid with @have_stats
  * @have_stats: @stats is filled in
+ * @power_level: the transmit power level, a PON_POWER_LEVEL_* value; valid
+ *		 with @have_power_level
+ * @have_power_level: @power_level is set
  *
  * What is not known stays "nothing known": @onu_id and @omcc_port_id -1,
  * everything else 0. The class hands the structure to
@@ -167,6 +170,8 @@ struct pon_dev_status {
 	unsigned int num_alloc_ids;
 	struct pon_dev_stats stats;
 	bool have_stats;
+	u32 power_level;
+	bool have_power_level;
 };
 
 /**

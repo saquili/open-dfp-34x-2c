@@ -146,6 +146,9 @@ static int pon_nl_dev_fill(struct sk_buff *msg, struct pon_device *pon,
 	    nla_put(msg, PON_A_DEV_SERIAL_NUMBER, sizeof(st->serial_number),
 		    st->serial_number))
 		goto cancel;
+	if (st->have_power_level &&
+	    nla_put_u32(msg, PON_A_DEV_POWER_LEVEL, st->power_level))
+		goto cancel;
 
 	/*
 	 * The capacities are always sent, as the data path registered them.

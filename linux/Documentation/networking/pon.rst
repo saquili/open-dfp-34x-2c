@@ -1295,6 +1295,11 @@ Attributes of the dev object
      - 13
      - u32
      - Always. The upstream queues of each of those T-CONTs.
+   * - ``power-level``
+     - 14
+     - u32, ``power-level``
+     - While the MAC transmits at a level the OLT can change: 0 low,
+       1 medium, 2 high, as Serial_Number_ONU carries it.
 
 The ``dev-stats`` nest holds ten counters numbered from 1 in this order:
 ``sn-requests``, ``ranging-requests``, ``ploam-rx``, ``ploam-crc-errors``,
@@ -1317,9 +1322,10 @@ bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
        interface the GEM ports stack on), ``type``, ``onu-state``, ``onu-id``,
        ``alloc-id`` (repeated), ``omcc-port-id``, ``alarms``, ``stats`` (a
        nest), ``serial-number`` (binary, exactly 8 bytes), ``num-gem-ports``,
-       ``num-tconts`` and ``num-tcont-queues``. Their numbers, and the command
-       numbers (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3,
-       ``tcont-set`` 4), are ABI.
+       ``num-tconts``, ``num-tcont-queues`` and ``power-level``. Their
+       numbers, the values of ``power-level``, and the command numbers
+       (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3, ``tcont-set``
+       4), are ABI.
      - M
      - The daemon reads the serial number and the alarms by these numbers and
        announces the serial number the driver holds.
@@ -1445,6 +1451,15 @@ claim a MAC in reset cannot make. The counters are the exception: inside the
      - Design choice, not exercised: the daemon reads ``num-tconts`` when it
        starts and builds its T-CONT entities from it; a changed count would
        show in its MIB upload.
+   * - ``power-level`` is sent while the MAC transmits at one of the levels
+       the OLT sets with Change_Power_Level, coded as the power level of
+       Serial_Number_ONU: 2 high, 1 medium, 0 low (ITU-T G.984.3
+       clause 9.2.4.1). A daemon judges the transmitted power against limits
+       that follow the level, as the transmit power alarms of the ANI-G
+       (managed entity 263) need; each level is about 3 dB from the next.
+     - I
+     - Design choice. The 3 dB is the step this driver measures (see the
+       driver's page).
 
 Dumps
 -----
