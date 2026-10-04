@@ -1700,15 +1700,18 @@ Counters
        discarded. BIP is the bit-interleaved parity of the downstream frame.
      - P
      - ITU-T G.984.3 clause 10.2.4 (Table 10-1), clause 9.1.4, clause 8.1.3.4.
-   * - What a MAC counts is its own definition. ``bip-errors`` may count blocks
-       whose BIP disagreed, or differing bits (G.984.3's ERR accumulates bits).
-       ``bwmap-crc-errors`` may count whole maps, or allocation structures,
-       each of which carries its own CRC. ``gem-frames`` means GEM frames that
-       carried something, not idle frames.
+   * - ``bip-errors`` counts the bits that differed, which is what G.984.3
+       accumulates as ERR for the bit error rate, and what REI reports.
+     - P
+     - ITU-T G.984.3 clause 11.2.2.
+   * - What a MAC counts is otherwise its own definition. ``bwmap-crc-errors``
+       may count whole maps, or allocation structures, each of which carries
+       its own CRC. ``gem-frames`` means GEM frames that carried something, not
+       idle frames.
      - I
      - Assumption about the MAC, not verified: the RTL9602C's definitions are
-       on the page of its driver. The BIP rule is ITU-T G.984.3 clause 11.2.2;
-       the allocation CRC is clause 8.1.3.6.5.
+       on the page of its driver. The allocation CRC is ITU-T G.984.3 clause
+       8.1.3.6.5.
 
 T-CONTs
 -------
@@ -2723,8 +2726,8 @@ About the family and its values
        counters do ("Counters").
      - The RTL9602C's counters clear on read; a second reader would show the
        totals.
-   * - Whether a MAC counts ``bip-errors``, ``bwmap-crc-errors`` and
-       ``gem-frames`` as described ("Counters").
+   * - Whether a MAC counts ``bwmap-crc-errors`` and ``gem-frames`` as
+       described ("Counters").
      - The definitions on the page of the MAC.
 
 About the RTL9602C driver

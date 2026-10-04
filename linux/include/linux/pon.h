@@ -105,9 +105,8 @@ struct pon_gem_config {
  * @gem_frames: downstream GEM frames that carried something; idle frames
  *		are not counted
  * @bip_errors: errors of the downstream bit-interleaved parity (BIP,
- *		G.984.3 clause 8.1.3.4), counted as blocks whose BIP
- *		disagreed or as the bits that differed, as G.984.3's ERR
- *		does (clause 11.2.2)
+ *		G.984.3 clause 8.1.3.4), counted as the bits that differed,
+ *		which is G.984.3's ERR (clause 11.2.2)
  *
  * Totals since the MAC was brought up, not register values: a MAC whose
  * counters clear when read adds them up, so that every reader sees the same

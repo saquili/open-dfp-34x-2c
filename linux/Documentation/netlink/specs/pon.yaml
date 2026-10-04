@@ -209,9 +209,8 @@ attribute-sets:
         name: bip-errors
         doc: >-
           Errors of the downstream bit-interleaved parity (BIP,
-          ITU-T G.984.3 clause 8.1.3.4), counted as blocks whose BIP
-          disagreed or as the bits that differed, as G.984.3's ERR does
-          (clause 11.2.2).
+          ITU-T G.984.3 clause 8.1.3.4), counted as the bits that differed,
+          which is G.984.3's ERR (clause 11.2.2).
         type: uint
   -
     name: dev
