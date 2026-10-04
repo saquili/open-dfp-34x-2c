@@ -230,6 +230,10 @@ struct genlmsghdr {
 #define PON_A_DEV_STATS_BWMAP_OVERFLOWS 8
 #define PON_A_DEV_STATS_GEM_FRAMES 9
 #define PON_A_DEV_STATS_BIP_ERRORS 10
+#define PON_A_DEV_STATS_FEC_CORRECTED_BYTES 11
+#define PON_A_DEV_STATS_FEC_CORRECTED_CODEWORDS 12
+#define PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS 13
+#define PON_A_DEV_STATS_FEC_CODEWORDS 14
 
 #define PON_CMD_DEV_GET 1
 
@@ -319,7 +323,8 @@ static_assert(PON_A_TCONT_ID == 1 && PON_A_TCONT_INDEX == 2 &&
 static_assert(PON_A_DEV_STATS_SN_REQUESTS == 1 &&
 		      PON_A_DEV_STATS_PLOAM_RX == 3 &&
 		      PON_A_DEV_STATS_BWMAP_RX == 6 &&
-		      PON_A_DEV_STATS_BIP_ERRORS == 10,
+		      PON_A_DEV_STATS_BIP_ERRORS == 10 &&
+		      PON_A_DEV_STATS_FEC_CODEWORDS == 14,
 	      "the pon stats nest");
 
 static_assert(PON_CMD_DEV_GET == 1 && PON_CMD_DEV_CHANGE_NTF == 2 &&
@@ -1379,6 +1384,12 @@ static void pon_pv_stats(struct prov_buf *out, const char *p, size_t len)
 		{ PON_A_DEV_STATS_BWMAP_OVERFLOWS, "bwmap_overflows" },
 		{ PON_A_DEV_STATS_GEM_FRAMES, "gem_frames" },
 		{ PON_A_DEV_STATS_BIP_ERRORS, "bip_errors" },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_BYTES, "fec_corrected_bytes" },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_CODEWORDS,
+		  "fec_corrected_codewords" },
+		{ PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS,
+		  "fec_uncorrectable_codewords" },
+		{ PON_A_DEV_STATS_FEC_CODEWORDS, "fec_codewords" },
 	};
 	struct nl_attrs a;
 	unsigned int i;

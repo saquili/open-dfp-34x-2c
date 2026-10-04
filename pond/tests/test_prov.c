@@ -277,6 +277,7 @@ static void test_bank_rules(void)
 #define T_PON_A_DEV_STATS_PLOAM_RX 3
 #define T_PON_A_DEV_STATS_BWMAP_RX 6
 #define T_PON_A_DEV_STATS_BIP_ERRORS 10
+#define T_PON_A_DEV_STATS_FEC_CODEWORDS 14
 #define T_PON_CMD_DEV_GET 1
 #define T_PON_FAMILY_ID 25
 
@@ -1078,6 +1079,7 @@ static void test_netlink_onu(void)
 	nlb_u32(&dev, T_PON_A_DEV_STATS_PLOAM_RX, 624);
 	nlb_u64(&dev, T_PON_A_DEV_STATS_BWMAP_RX, 4300000000ULL);
 	nlb_u32(&dev, T_PON_A_DEV_STATS_BIP_ERRORS, 0);
+	nlb_u64(&dev, T_PON_A_DEV_STATS_FEC_CODEWORDS, 1224000ULL);
 	nlb_nest_end(&dev);
 	nlb_attr(&dev, T_PON_A_DEV_SERIAL_NUMBER, sn, sizeof(sn));
 	nlb_msg_end(&dev);
@@ -1110,6 +1112,10 @@ static void test_netlink_onu(void)
 	      "a counter of zero is a measurement and is reported as one");
 	check(strstr(s, "\"ploam_overflows\":null") != NULL,
 	      "while a counter the MAC does not keep is null, not zero");
+	check(strstr(s, "\"fec_codewords\":1224000") != NULL,
+	      "the FEC counts follow the BIP errors");
+	check(strstr(s, "\"fec_corrected_bytes\":null") != NULL,
+	      "each under its own name");
 	check(well_formed(s), "the object is balanced");
 
 	memset(&dev, 0, sizeof(dev));
