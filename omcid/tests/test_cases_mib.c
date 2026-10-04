@@ -108,11 +108,11 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		uint32_t cases;
 		uint32_t digest;
 	} pin[] = {
-		{ OMCI_CASE_ENVELOPE, 1626u, 0xa82f2a2au },
+		{ OMCI_CASE_ENVELOPE, 1627u, 0xf2ba5f4cu },
 		{ OMCI_CASE_MUTATE, 36864u, 0x7ce87501u },
 		{ OMCI_CASE_MSGTYPE, 256u, 0x7b94fe45u },
 		{ OMCI_CASE_MTCLASS, 896u, 0x321cec05u },
-		{ OMCI_CASE_REACH, 9312u, 0xc03d9f94u },
+		{ OMCI_CASE_REACH, 9314u, 0x16846caau },
 		{ OMCI_CASE_POPULATED, 554u, 0xc812b150u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(pin); k++) {
@@ -130,11 +130,11 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		enum omci_case_axis axis;
 		uint32_t digest;
 	} label_pin[] = {
-		{ OMCI_CASE_ENVELOPE, 0xa7afc8f8u },
+		{ OMCI_CASE_ENVELOPE, 0xa787a27au },
 		{ OMCI_CASE_MUTATE, 0xaceb5285u },
 		{ OMCI_CASE_MSGTYPE, 0xb6b6d2f5u },
 		{ OMCI_CASE_MTCLASS, 0x26e548e5u },
-		{ OMCI_CASE_REACH, 0xac70c40du },
+		{ OMCI_CASE_REACH, 0xd1abab7cu },
 		{ OMCI_CASE_POPULATED, 0xfadd1c1eu },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(label_pin); k++) {
@@ -151,7 +151,7 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 	CHECK(populated());
 	omci_case_prepare(OMCI_CASE_REACH, g_mib);
 	omci_case_prepare(OMCI_CASE_POPULATED, g_mib);
-	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0xc03d9f94u);
+	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x16846caau);
 	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0xc812b150u);
 	omci_mib_fini(g_mib);
 }
@@ -168,10 +168,10 @@ static void test_a_second_preparation_leaves_nothing_of_the_first(void)
 		uint32_t cases;
 		uint32_t digest;
 	} without[] = {
-		{ 5u, 2u, 9288u, 0x50ca8600u },
-		{ 256u, 1u, 9303u, 0xe4aa1e54u },
-		{ 263u, 1u, 9298u, 0xa2218a66u },
-		{ 2u, 1u, 9308u, 0xf4bdc53eu },
+		{ 5u, 2u, 9290u, 0x5734d0b2u },
+		{ 256u, 1u, 9305u, 0xb3871ce7u },
+		{ 263u, 1u, 9300u, 0x3d907fd4u },
+		{ 2u, 1u, 9310u, 0x073fad5cu },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(without); k++) {
 		CHECK(populated());
@@ -277,10 +277,10 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 		const char *family;
 		unsigned int n;
 	} families[] = {
-		{ "create", 15 }, { "get", 36 },	{ "mibreset", 1 },
+		{ "create", 16 }, { "get", 36 },	{ "mibreset", 1 },
 		{ "set", 224 },	  { "setagain", 5 },	{ "setback", 5 },
 		{ "swdl", 35 },	  { "synctime", 8820 }, { "table", 39 },
-		{ "test", 62 },	  { "upload", 70 },
+		{ "test", 63 },	  { "upload", 70 },
 	};
 	unsigned int tally[11] = { 0 };
 	unsigned int total_families = 0;
@@ -324,8 +324,8 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 	CHECK_EQ(answered, n);
 
 	CHECK_EQ(no_result_byte, 70u);
-	CHECK_EQ(results[0], 714u);
-	CHECK_EQ(results[2], 91u);
+	CHECK_EQ(results[0], 715u);
+	CHECK_EQ(results[2], 92u);
 	CHECK_EQ(results[3], 8399u);
 	CHECK_EQ(results[4], 3u);
 	CHECK_EQ(results[5], 3u);

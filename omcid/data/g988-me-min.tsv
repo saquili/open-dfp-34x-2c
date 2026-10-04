@@ -37,6 +37,7 @@
 #class	272	GAL Ethernet profile	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.2.7
 #class	277	Priority queue	ONU	8,9	0:Block loss	-	most significant bit the direction (1 upstream, 0 downstream), 15 low bits the queue number; downstream 0 to 0x7FFF, upstream 0x8000 to 0xFFFF	g988:9.2.10
 #class	278	Traffic scheduler	ONU	8,9	-	-	first byte the slot of the circuit pack (0xFF when none), second byte the scheduler number 0 to 0xFF	g988:9.2.11
+#class	280	Traffic descriptor	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.2.12
 #class	281	Multicast GEM interworking termination point	OLT	4,6,8,9,26,29	0:Deprecated	6	set by create; 0xFFFF is reserved	g988:9.2.5
 #class	287	OMCI	ONU	9,26	-	-	single instance, number 0	g988:9.12.8
 #class	309	Multicast operations profile	OLT	4,6,8,9,26,29	-	-	set by create; 0 and 0xFFFF are reserved	-
@@ -249,6 +250,14 @@
 278	Traffic scheduler	2	Traffic scheduler pointer	2	R	mandatory	no	g988:9.2.11
 278	Traffic scheduler	3	Policy	1	R,W	mandatory	no	g988:9.2.11
 278	Traffic scheduler	4	Priority/weight	1	R,W	mandatory	no	g988:9.2.11
+280	Traffic descriptor	1	CIR	4	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	2	PIR	4	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	3	CBS	4	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	4	PBS	4	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	5	Colour mode	1	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	6	Ingress colour marking	1	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	7	Egress colour marking	1	R,W,C	optional	no	g988:9.2.12
+280	Traffic descriptor	8	Meter type	1	R,C	optional	no	g988:9.2.12
 281	Multicast GEM interworking termination point	1	GEM port network CTP connectivity pointer	2	R,W,C	mandatory	no	g988:9.2.5
 281	Multicast GEM interworking termination point	2	Interworking option	1	R,W,C	mandatory	no	g988:9.2.5
 281	Multicast GEM interworking termination point	3	Service profile pointer	2	R,W,C	mandatory	no	g988:9.2.5

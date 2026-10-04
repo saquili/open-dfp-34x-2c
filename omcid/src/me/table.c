@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * f81fe811a6254aec51771cdbfd630b875724e68813c4a550d5dcf398bc1c8611
- * 29 classes, 278 attributes.
+ * eb527ec96478c7d1fd887b0f9190d2905452bdb55522c48ae2b37b97e5d6319c
+ * 30 classes, 286 attributes.
  */
 
 #include "me/table.h"
@@ -528,6 +528,33 @@ static const struct omci_me_attr attrs_class_278[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
 };
 
+/* Class 280: Traffic descriptor */
+static const struct omci_me_attr attrs_class_280[] = {
+	{ "CIR", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 1 */
+	{ "PIR", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 2 */
+	{ "CBS", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 3 */
+	{ "PBS", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 4 */
+	{ "Colour mode", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 5 */
+	{ "Ingress colour marking", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 6 */
+	{ "Egress colour marking", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 7 */
+	{ "Meter type", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 8 */
+};
+
 /* Class 281: Multicast GEM interworking termination point */
 static const struct omci_me_attr attrs_class_281[] = {
 	{ "GEM port network CTP connectivity pointer", 2,
@@ -940,6 +967,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 4,
 		.attrs = attrs_class_278,
+	},
+	{
+		.class_id = 280,
+		.name = "Traffic descriptor",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 8,
+		.attrs = attrs_class_280,
 	},
 	{
 		.class_id = 281,
