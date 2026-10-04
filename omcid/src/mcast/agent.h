@@ -7,12 +7,15 @@
  * the subscriber sends and which groups the bridge forwards, takes back each
  * group the policy does not allow, sets the bridge's leave and timers, keeps
  * the static groups, and keeps the counts and the active groups that the
- * OLT reads from the multicast subscriber monitor.
+ * OLT reads from the multicast subscriber monitor. It counts the downstream
+ * frames of the groups the bridge forwards and lists those whose stream
+ * stopped in the lost groups of their profile.
  */
 
 #ifndef OMCI_MCAST_AGENT_H
 #define OMCI_MCAST_AGENT_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "me/tables.h"
@@ -21,6 +24,9 @@
 #include "omcid/status.h"
 
 struct omci_mcast;
+
+/* The lost multicast group alarm of the multicast operations profile. */
+#define OMCI_MCAST_ALARM_LOST 0u
 
 /**
  * omci_mcast_init() - Set up the agent; one per process.
@@ -72,7 +78,8 @@ void omci_mcast_service(struct omci_mcast *m, struct omci_mib *mib,
  *
  * Ends the previews whose time is up, starts the preview counts again a day
  * after they began, counts the allowed preview groups down a minute at a
- * time, and services.
+ * time, and services; then reads the downstream frames of each group the
+ * bridge forwards, a group that had none for a while being lost.
  */
 void omci_mcast_tick(struct omci_mcast *m, struct omci_mib *mib,
 		     uint64_t now_sec);
@@ -83,5 +90,24 @@ void omci_mcast_tick(struct omci_mcast *m, struct omci_mib *mib,
  */
 extern const struct omci_me_table_source omci_mcast_ipv4_groups;
 extern const struct omci_me_table_source omci_mcast_ipv6_groups;
+
+/*
+ * The lost groups list of a multicast operations profile (G.988 9.3.27):
+ * the groups of its dynamic access control list that the bridge forwards
+ * but whose stream stopped.
+ */
+extern const struct omci_me_table_source omci_mcast_lost_groups;
+
+/**
+ * omci_mcast_lost_profiles() - The multicast operations profiles with a lost
+ *	group, whose lost multicast group alarm stands.
+ * @m: the agent, or NULL
+ * @out: their instances
+ * @cap: room in @out
+ *
+ * Return: how many were written.
+ */
+size_t omci_mcast_lost_profiles(const struct omci_mcast *m, uint16_t *out,
+				size_t cap);
 
 #endif

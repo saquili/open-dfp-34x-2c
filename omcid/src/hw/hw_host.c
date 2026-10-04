@@ -523,6 +523,12 @@ static bool g_mc_fail_send;
 static struct omci_hw_mcast_ds g_mc_ds[OMCI_HW_MCAST_DS_MAX];
 static size_t g_mc_ds_n;
 static bool g_mc_fail_ds;
+static struct {
+	uint8_t group[OMCI_HW_MCAST_ADDR_LEN];
+	uint64_t frames;
+} g_mc_watch[OMCI_HW_MCAST_WATCH_MAX];
+static size_t g_mc_watch_n;
+static bool g_mc_fail_watch, g_mc_fail_seen;
 
 void omci_hw_mcast_reset(void)
 {
@@ -539,6 +545,75 @@ void omci_hw_mcast_reset(void)
 	g_mc_fail_send = false;
 	g_mc_ds_n = 0;
 	g_mc_fail_ds = false;
+	g_mc_watch_n = 0;
+	g_mc_fail_watch = false;
+	g_mc_fail_seen = false;
+}
+
+void omci_hw_mcast_watch_fail_next(bool watch, bool seen)
+{
+	g_mc_fail_watch = watch;
+	g_mc_fail_seen = seen;
+}
+
+/* The place of a counted group; g_mc_watch_n when it is not counted. */
+static size_t watch_find(const uint8_t *group)
+{
+	size_t i = 0;
+
+	while (i < g_mc_watch_n && !omci_wire_equal(g_mc_watch[i].group, group,
+						    OMCI_HW_MCAST_ADDR_LEN))
+		i++;
+	return i;
+}
+
+void omci_hw_mcast_flow(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
+			uint64_t frames)
+{
+	const size_t i = watch_find(group);
+
+	if (i < g_mc_watch_n)
+		g_mc_watch[i].frames = frames;
+}
+
+enum omci_status
+omci_hw_mcast_watch(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN], bool on)
+{
+	const size_t i = watch_find(group);
+
+	if (g_mc_fail_watch) {
+		g_mc_fail_watch = false;
+		return OMCI_ERR_HW;
+	}
+	if (!on) {
+		if (i < g_mc_watch_n)
+			g_mc_watch[i] = g_mc_watch[--g_mc_watch_n];
+		return OMCI_OK;
+	}
+	if (i < g_mc_watch_n)
+		return OMCI_OK;
+	if (g_mc_watch_n == OMCI_HW_MCAST_WATCH_MAX)
+		return OMCI_ERR_NOMEM;
+	omci_wire_copy(g_mc_watch[g_mc_watch_n].group, group,
+		       OMCI_HW_MCAST_ADDR_LEN);
+	g_mc_watch[g_mc_watch_n++].frames = 0;
+	return OMCI_OK;
+}
+
+enum omci_status
+omci_hw_mcast_seen(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
+		   uint64_t *frames)
+{
+	const size_t i = watch_find(group);
+
+	if (g_mc_fail_seen) {
+		g_mc_fail_seen = false;
+		return OMCI_ERR_HW;
+	}
+	if (i == g_mc_watch_n)
+		return OMCI_DECLINED;
+	*frames = g_mc_watch[i].frames;
+	return OMCI_OK;
 }
 
 void omci_hw_mcast_ds_fail_next(void)
@@ -753,4 +828,6 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.mcast_frame = omci_hw_mcast_frame,
 	.mcast_send = omci_hw_mcast_send,
 	.mcast_ds = omci_hw_mcast_ds,
+	.mcast_watch = omci_hw_mcast_watch,
+	.mcast_seen = omci_hw_mcast_seen,
 };

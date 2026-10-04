@@ -1434,12 +1434,16 @@ static void keep_levels(struct omci_engine *eng)
 
 /*
  * Once a second: judge the alarms the hardware does not raise, and keep
- * the optical levels of the ANI-G current; read the alarms, apply
- * alarm-reporting control, and notify the OLT of each entity whose alarms
- * changed (G.988 A.1.4). Only an entity the MIB holds is notified.
+ * the optical levels of the ANI-G current; take the lost multicast group
+ * alarms of the multicast operations profiles from the multicast agent;
+ * read the alarms, apply alarm-reporting control, and notify the OLT of
+ * each entity whose alarms changed (G.988 A.1.4). Only an entity the MIB
+ * holds is notified.
  */
 static void alarms_tick(struct omci_engine *eng)
 {
+	uint16_t lost[OMCI_ALARM_MAX_ENTITIES];
+
 	const struct omci_alarm_thresholds t = {
 		.sf = ani_g_u8(eng, ANI_G_SF, OMCI_BER_SF_DEFAULT),
 		.sd = ani_g_u8(eng, ANI_G_SD, OMCI_BER_SD_DEFAULT),
@@ -1456,6 +1460,9 @@ static void alarms_tick(struct omci_engine *eng)
 	};
 	(void)!omci_alarm_judge(eng->alarm, eng->now_sec, &t);
 	keep_levels(eng);
+	omci_alarm_raised(
+		eng->alarm, OMCI_MCAST_PROFILE, OMCI_MCAST_ALARM_LOST, lost,
+		omci_mcast_lost_profiles(eng->mcast, lost, ARRAY_SIZE(lost)));
 
 	if (omci_alarm_poll(eng->alarm, NULL) != OMCI_OK) {
 		OMCI_DEBUG("alarm: the hardware did not answer");

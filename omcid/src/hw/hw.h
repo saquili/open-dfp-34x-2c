@@ -652,6 +652,35 @@ struct omci_hw_mcast_ds {
 __must_check enum omci_status
 omci_hw_mcast_ds(const struct omci_hw_mcast_ds *rules, size_t n);
 
+/* The groups whose downstream frames a backend counts at once. */
+#define OMCI_HW_MCAST_WATCH_MAX 16u
+
+/**
+ * omci_hw_mcast_watch() - Count the downstream frames of a group, or stop
+ *	(host backend).
+ * @group: the group
+ * @on: count (true) or stop
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_NOMEM when no counter is free, or the
+ * failure of the change.
+ */
+__must_check enum omci_status
+omci_hw_mcast_watch(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
+		    bool on);
+
+/**
+ * omci_hw_mcast_seen() - The downstream frames of a counted group so far
+ *	(host backend).
+ * @group: the group
+ * @frames: how many came
+ *
+ * Return: %OMCI_OK, %OMCI_DECLINED for a group not counted, or the failure
+ * of the read.
+ */
+__must_check enum omci_status
+omci_hw_mcast_seen(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
+		   uint64_t *frames);
+
 /**
  * omci_hw_mcast_port() - Set how the bridge snoops (host backend).
  * @cfg: the settings
@@ -737,6 +766,11 @@ void omci_hw_mcast_send_fail_next(void);
 
 void omci_hw_mcast_ds_fail_next(void);
 
+void omci_hw_mcast_flow(const uint8_t group[static OMCI_HW_MCAST_ADDR_LEN],
+			uint64_t frames);
+
+void omci_hw_mcast_watch_fail_next(bool watch, bool seen);
+
 size_t omci_hw_mcast_ds_recorded(const struct omci_hw_mcast_ds **out);
 
 size_t omci_hw_mcast_sent(size_t index, uint16_t *port_id, uint8_t *frame,
@@ -777,6 +811,9 @@ void omci_hw_mcast_reset(void);
  *	switch
  * @mcast_ds: replace the downstream tags of the multicast VLANs; NULL in a
  *	backend without them
+ * @mcast_watch: count the downstream frames of a group, or stop; NULL in a
+ *	backend that cannot, where no group is ever lost
+ * @mcast_seen: the downstream frames of a counted group so far
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -810,6 +847,8 @@ struct omci_hw_ops {
 				       size_t len);
 	enum omci_status (*mcast_ds)(const struct omci_hw_mcast_ds *rules,
 				     size_t n);
+	enum omci_status (*mcast_watch)(const uint8_t *group, bool on);
+	enum omci_status (*mcast_seen)(const uint8_t *group, uint64_t *frames);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

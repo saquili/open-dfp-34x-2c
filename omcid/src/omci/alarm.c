@@ -86,8 +86,9 @@ struct entity_state {
 /*
  * The alarm state: the entities, the copy Get all alarms froze, the sequence
  * number of the next notification, the rate of BIP errors, the optical
- * alarms and the transceiver's thresholds and levels, and the alarms judged
- * from them, as bits of the conditions of g_map.
+ * alarms and the transceiver's thresholds and levels, the alarms judged
+ * from them, as bits of the conditions of g_map, and the alarms raised
+ * outside them, each an entity and a bit.
  */
 struct omci_alarm {
 	struct entity_state live[OMCI_ALARM_MAX_ENTITIES];
@@ -103,6 +104,12 @@ struct omci_alarm {
 	int16_t tx_level;
 	uint8_t levels;
 	uint32_t judged;
+	struct {
+		uint16_t class_id;
+		uint16_t instance;
+		uint8_t bit;
+	} raised[OMCI_ALARM_MAX_ENTITIES];
+	uint8_t raised_n;
 };
 
 static struct omci_alarm g_alarm;
@@ -142,6 +149,14 @@ static struct entity_state *entity_for(struct omci_alarm *al, uint16_t class_id,
 static void bitmap_set(uint8_t *map, uint8_t n)
 {
 	map[n / 8u] |= (uint8_t)(0x80u >> (n % 8u));
+}
+
+static bool bitmap_any(const uint8_t *map)
+{
+	for (unsigned int i = 0; i < OMCI_ALARM_BITMAP_LEN; i++)
+		if (map[i] != 0)
+			return true;
+	return false;
 }
 
 enum omci_status omci_alarm_init(struct omci_alarm **out)
@@ -289,6 +304,13 @@ enum omci_status omci_alarm_poll(struct omci_alarm *al, bool *changed)
 	uint8_t next[OMCI_ALARM_MAX_ENTITIES][OMCI_ALARM_BITMAP_LEN];
 
 	memset(next, 0, sizeof(next));
+	for (unsigned int r = 0; r < al->raised_n; r++) {
+		const struct entity_state *e = entity_for(
+			al, al->raised[r].class_id, al->raised[r].instance);
+
+		if (e != NULL)
+			bitmap_set(next[e - al->live], al->raised[r].bit);
+	}
 	for (unsigned int a = 0; a < (unsigned int)ALARM_COUNT; a++) {
 		if (g_map[a].bit == NO_OMCI_BIT || (mask & (1u << a)) == 0u)
 			continue;
@@ -310,9 +332,42 @@ enum omci_status omci_alarm_poll(struct omci_alarm *al, bool *changed)
 		any = true;
 	}
 
+	/*
+	 * An entity with no alarm, none told and no alarm-reporting control is
+	 * forgotten, and its place serves another.
+	 */
+	for (unsigned int i = al->live_n; i-- > 0;) {
+		const struct entity_state *s = &al->live[i];
+
+		if (bitmap_any(s->bitmap) || bitmap_any(s->told) ||
+		    s->suppressed)
+			continue;
+		memmove(&al->live[i], &al->live[i + 1u],
+			(al->live_n - i - 1u) * sizeof(al->live[0]));
+		al->live_n--;
+	}
+
 	if (changed != NULL)
 		*changed = any;
 	return OMCI_OK;
+}
+
+void omci_alarm_raised(struct omci_alarm *al, uint16_t class_id, uint8_t bit,
+		       const uint16_t *instances, size_t n)
+{
+	if (al == NULL)
+		return;
+	for (unsigned int i = al->raised_n; i-- > 0;)
+		if (al->raised[i].class_id == class_id &&
+		    al->raised[i].bit == bit)
+			al->raised[i] = al->raised[--al->raised_n];
+	for (size_t k = 0; k < n && al->raised_n < OMCI_ALARM_MAX_ENTITIES;
+	     k++) {
+		al->raised[al->raised_n].class_id = class_id;
+		al->raised[al->raised_n].instance = instances[k];
+		al->raised[al->raised_n].bit = bit;
+		al->raised_n++;
+	}
 }
 
 void omci_alarm_suppress(struct omci_alarm *al, uint16_t class_id,
@@ -333,14 +388,6 @@ void omci_alarm_suppress(struct omci_alarm *al, uint16_t class_id,
 
 	if (e != NULL)
 		e->suppressed = true;
-}
-
-static bool bitmap_any(const uint8_t *map)
-{
-	for (unsigned int i = 0; i < OMCI_ALARM_BITMAP_LEN; i++)
-		if (map[i] != 0)
-			return true;
-	return false;
 }
 
 bool omci_alarm_standing(const struct omci_alarm *al, uint16_t class_id,

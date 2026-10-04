@@ -376,6 +376,44 @@ static void test_the_multicast_bridge_keeps_its_groups(void)
 	CHECK_EQ(n, 0u);
 }
 
+static void test_the_frames_of_a_group_are_counted(void)
+{
+	uint8_t g[OMCI_HW_MCAST_ADDR_LEN] = { 0 };
+	uint64_t frames = 9;
+
+	omci_hw_mcast_reset();
+	CHECK_EQ(omci_hw_mcast_seen(g, &frames), OMCI_DECLINED);
+	omci_hw_mcast_flow(g, 5);
+	CHECK_EQ(omci_hw_mcast_watch(g, false), OMCI_OK);
+
+	/* Counted once however often asked, from zero. */
+	CHECK_EQ(omci_hw_mcast_watch(g, true), OMCI_OK);
+	CHECK_EQ(omci_hw_mcast_watch(g, true), OMCI_OK);
+	CHECK_EQ(omci_hw_mcast_seen(g, &frames), OMCI_OK);
+	CHECK_EQ(frames, 0u);
+	omci_hw_mcast_flow(g, 5);
+	CHECK_EQ(omci_hw_mcast_seen(g, &frames), OMCI_OK);
+	CHECK_EQ(frames, 5u);
+
+	/* No more groups than there are counters. */
+	for (unsigned int i = 1; i < OMCI_HW_MCAST_WATCH_MAX; i++) {
+		g[15] = (uint8_t)i;
+		CHECK_EQ(omci_hw_mcast_watch(g, true), OMCI_OK);
+	}
+	g[15] = 0xffu;
+	CHECK_EQ(omci_hw_mcast_watch(g, true), OMCI_ERR_NOMEM);
+	g[15] = 0;
+	CHECK_EQ(omci_hw_mcast_watch(g, false), OMCI_OK);
+	CHECK_EQ(omci_hw_mcast_seen(g, &frames), OMCI_DECLINED);
+
+	/* A failure asked for is given once, by each call. */
+	omci_hw_mcast_watch_fail_next(true, true);
+	CHECK_EQ(omci_hw_mcast_watch(g, true), OMCI_ERR_HW);
+	CHECK_EQ(omci_hw_mcast_seen(g, &frames), OMCI_ERR_HW);
+	CHECK_EQ(omci_hw_mcast_seen(g, &frames), OMCI_DECLINED);
+	omci_hw_mcast_reset();
+}
+
 int main(void)
 {
 	test_a_forced_reading_before_any_read_starts_from_the_recorded_stick();
@@ -387,5 +425,6 @@ int main(void)
 	RUN(test_a_refusal_that_is_asked_for_is_given_once);
 	RUN(test_a_list_of_refusals_keeps_each_id_once_and_stops_when_full);
 	RUN(test_the_multicast_bridge_keeps_its_groups);
+	RUN(test_the_frames_of_a_group_are_counted);
 	return OMCI_T_REPORT("test_hw_host");
 }

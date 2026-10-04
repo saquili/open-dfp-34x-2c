@@ -21,9 +21,10 @@ groups and bandwidth, immediate leave and the IGMP timers, and static
 groups; under such a policy it sends the subscriber's IGMP and MLD
 upstream itself, a refused join held back, with the profile's tag and
 rate, and gives multicast the profile's downstream tag; and it reports
-the active groups and the join counts. A local
-control socket lets tools read the MIB, follow the frames and see what
-became of each VLAN rule.
+the active groups and the join counts, and the groups whose stream
+stopped, with the lost multicast group alarm. A local control socket lets
+tools read the MIB, follow the frames and see what became of each VLAN
+rule.
 
 Layout
 ======
@@ -41,8 +42,9 @@ Layout
    multicast: the tables of the multicast operations profile and of the
    multicast subscriber config info, read into whole rows; the IGMP and MLD
    messages of the subscriber, taken apart; and the agent that holds the
-   bridge's snooped groups to the OLT's policy and keeps the multicast
-   subscriber monitor
+   bridge's snooped groups to the OLT's policy, keeps the multicast
+   subscriber monitor and counts the groups' downstream frames to tell the
+   lost ones
 ``src/hw/``
    the interface to the hardware, and the host backend that stands in for it
 ``src/sys/``
@@ -76,7 +78,8 @@ through the daemon::
 board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
 "pon" generic netlink family for the ONU's state and T-CONTs, the "gem" link
 kind for the GEM ports, the bridge ``omcibr0`` with the host link ``sfp``, and
-tc flower rules for the VLAN rules, which the switch carries out::
+tc flower rules for the VLAN rules and the multicast traps, tags and counts,
+which the switch carries out::
 
    omcid [-d DEVICE] [-r] [-v]...
 

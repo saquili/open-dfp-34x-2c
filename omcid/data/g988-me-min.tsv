@@ -40,7 +40,7 @@
 #class	280	Traffic descriptor	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.2.12
 #class	281	Multicast GEM interworking termination point	OLT	4,6,8,9,26,29	0:Deprecated	6	set by create; 0xFFFF is reserved	g988:9.2.5
 #class	287	OMCI	ONU	9,26	-	-	single instance, number 0	g988:9.12.8
-#class	309	Multicast operations profile	OLT	4,6,8,9,26,29	-	-	set by create; 0 and 0xFFFF are reserved	-
+#class	309	Multicast operations profile	OLT	4,6,8,9,26,29	0:Lost multicast group	-	set by create; 0 and 0xFFFF are reserved	g988:9.3.27
 #class	310	Multicast subscriber config info	OLT	4,6,8,9,26,29	-	-	set by create; the same value as the bridge port or mapper instance it is linked to (implicit link)	g988:9.3.28
 #class	311	Multicast subscriber monitor	OLT	4,6,8,9,26	-	-	set by create; the same value as the bridge port or mapper instance it is linked to (implicit link)	g988:9.3.29
 #class	321	Ethernet frame performance monitoring history data downstream	OLT	4,6,8,9,28	0:Drop events;1:CRC errored packets;2:Undersize packets;3:Oversize packets	-	set by create; the same value as the MAC bridge port configuration data instance it monitors (implicit link)	g988:9.3.31 (as 9.3.30)

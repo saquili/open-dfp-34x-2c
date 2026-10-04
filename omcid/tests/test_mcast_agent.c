@@ -1620,6 +1620,206 @@ static void test_the_downstream_tag_of_multicast(void)
 	down();
 }
 
+/* The downstream frames of a group so far, as the backend counts them. */
+static void flow(uint32_t group, uint64_t frames)
+{
+	uint8_t g[16];
+
+	a4(g, group);
+	omci_hw_mcast_flow(g, frames);
+}
+
+/* Whether the backend counts the frames of a group. */
+static bool counted(uint32_t group)
+{
+	uint64_t frames = 0;
+	uint8_t g[16];
+
+	a4(g, group);
+	return omci_hw_mcast_seen(g, &frames) == OMCI_OK;
+}
+
+/* Let @sec seconds go by, a tick each. */
+static void pass(unsigned int sec)
+{
+	while (sec-- > 0)
+		omci_mcast_tick(g_m, g_mib, ++g_now);
+}
+
+static size_t lost(uint16_t profile)
+{
+	return omci_mcast_lost_groups.count(profile);
+}
+
+static void test_lost_groups(void)
+{
+	uint16_t prof[4];
+	uint8_t row[16];
+
+	up();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 420);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* A group the bridge forwards is counted from the next second. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK(!counted(IP4(239, 1, 1, 5)));
+	pass(1);
+	CHECK(counted(IP4(239, 1, 1, 5)));
+
+	/* A read that fails changes nothing; frames came, then stop for ten seconds. */
+	omci_hw_mcast_watch_fail_next(false, true);
+	flow(IP4(239, 1, 1, 5), 100);
+	pass(1);
+	pass(9);
+	CHECK_EQ(lost(PROFILE), 0u);
+	pass(2);
+	CHECK_EQ(lost(PROFILE), 1u);
+	CHECK(omci_mcast_lost_groups.entry(PROFILE, 0, row, sizeof(row)));
+	CHECK_EQ(row[0] << 8 | row[1], 420);
+	CHECK_EQ(be32_at(&row[2]), 0u);
+	CHECK_EQ(be32_at(&row[6]), IP4(239, 1, 1, 5));
+	CHECK(!omci_mcast_lost_groups.entry(PROFILE, 0, row, 9));
+	CHECK(!omci_mcast_lost_groups.entry(PROFILE, 1, row, sizeof(row)));
+	CHECK_EQ(lost(PROFILE_B), 0u);
+	CHECK_EQ(omci_mcast_lost_profiles(g_m, prof, ARRAY_SIZE(prof)), 1u);
+	CHECK_EQ(prof[0], PROFILE);
+	CHECK_EQ(omci_mcast_lost_profiles(NULL, prof, ARRAY_SIZE(prof)), 0u);
+
+	/* A second client of the group, a second group lost: a row each, the profile once. */
+	join(IP4(10, 0, 0, 3), IP4(239, 1, 1, 5), -1);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 6), -1);
+	pass(11);
+	CHECK_EQ(lost(PROFILE), 2u);
+	CHECK_EQ(omci_mcast_lost_profiles(g_m, prof, ARRAY_SIZE(prof)), 1u);
+
+	/* Frames again: the group flows. */
+	flow(IP4(239, 1, 1, 5), 150);
+	pass(1);
+	CHECK_EQ(lost(PROFILE), 1u);
+
+	/* The bridge lets a group go: it is no longer counted, once the backend agrees. */
+	snoop(IP4(239, 1, 1, 6), 0, false);
+	omci_hw_mcast_watch_fail_next(true, false);
+	pass(1);
+	CHECK(counted(IP4(239, 1, 1, 6)));
+	CHECK_EQ(lost(PROFILE), 0u);
+	pass(1);
+	CHECK(!counted(IP4(239, 1, 1, 6)));
+
+	/* A group the backend cannot count yet is counted when it can. */
+	omci_hw_mcast_watch_fail_next(true, false);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 7), -1);
+	pass(1);
+	CHECK(!counted(IP4(239, 1, 1, 7)));
+	pass(1);
+	CHECK(counted(IP4(239, 1, 1, 7)));
+
+	/* No more groups are counted than the backend has room for. */
+	for (unsigned int i = 10; i < 25u; i++)
+		join(IP4(10, 0, 0, 2), IP4(239, 1, 1, i), -1);
+	pass(1);
+	CHECK(counted(IP4(239, 1, 1, 23)));
+	CHECK(!counted(IP4(239, 1, 1, 24)));
+	snoop(IP4(239, 1, 1, 10), 0, false);
+	pass(1);
+	CHECK(counted(IP4(239, 1, 1, 24)));
+
+	/* A backend that cannot count is left alone. */
+	{
+		struct omci_hw_ops ops = omci_hw_host_ops;
+
+		ops.mcast_seen = NULL;
+		omci_hw_ops_set(&ops);
+		snoop(IP4(239, 1, 1, 11), 0, false);
+		pass(1);
+		omci_hw_ops_set(NULL);
+		CHECK(counted(IP4(239, 1, 1, 11)));
+	}
+
+	/* Without a policy, no group is counted. */
+	CHECK_EQ(omci_mib_delete(g_mib, 310, PORT), OMCI_OK);
+	omci_mcast_program(g_m, g_mib, g_now);
+	pass(1);
+	CHECK(!counted(IP4(239, 1, 1, 5)));
+	CHECK_EQ(lost(PROFILE), 0u);
+	down();
+	CHECK_EQ(lost(PROFILE), 0u);
+}
+
+static void test_what_is_counted_for_lost_groups(void)
+{
+	up();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 5, 0, 0), IP4(239, 5, 0, 63), 0, 0);
+	preview_of(PROFILE, 1, 300, 0, 0, 0);
+	allowed(1, IP4(239, 6, 0, 1), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* A group for preview is in the profile's list; an allowed preview group in none is not. */
+	join(IP4(10, 0, 0, 2), IP4(239, 5, 0, 1), -1);
+	join(IP4(10, 0, 0, 2), IP4(239, 6, 0, 1), -1);
+	CHECK(held(IP4(239, 6, 0, 1)));
+	pass(1);
+	CHECK(counted(IP4(239, 5, 0, 1)));
+	CHECK(!counted(IP4(239, 6, 0, 1)));
+	pass(10);
+	CHECK_EQ(lost(PROFILE), 1u);
+	down();
+}
+
+/* The lost multicast group alarms of the profile sent, and whether the last stood. */
+static unsigned int lost_alarms(bool *stood)
+{
+	unsigned int n = 0;
+
+	for (unsigned int i = 0; i < omci_t_tx.n && i < OMCI_T_MAX_TX; i++) {
+		const uint8_t *f = omci_t_tx.frame[i];
+
+		if ((f[2] & 0x1fu) != 16u || (f[4] << 8 | f[5]) != 309 ||
+		    (f[6] << 8 | f[7]) != PROFILE)
+			continue;
+		n++;
+		*stood = (f[8] & 0x80u) != 0u;
+	}
+	return n;
+}
+
+static void test_the_lost_group_alarm(void)
+{
+	struct omci_t_fixture fx;
+	bool stood = false;
+	uint8_t f[128];
+
+	omci_hw_mcast_reset();
+	CHECK(omci_t_up(&fx));
+	g_mib = fx.mib;
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_engine_reprogram(fx.eng);
+	send(f, igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	snoop(IP4(239, 1, 1, 5), 0, true);
+	omci_engine_mcast_service(fx.eng);
+
+	/* Counted from the first second, lost at the eleventh, notified the next. */
+	for (uint64_t t = 2000; t < 2011u; t++)
+		omci_engine_tick(fx.eng, t);
+	CHECK_EQ(lost_alarms(&stood), 0u);
+	omci_engine_tick(fx.eng, 2011);
+	CHECK_EQ(lost_alarms(&stood), 1u);
+	CHECK(stood);
+
+	/* Frames again: the alarm clears. */
+	flow(IP4(239, 1, 1, 5), 10);
+	omci_engine_tick(fx.eng, 2012);
+	omci_engine_tick(fx.eng, 2013);
+	CHECK_EQ(lost_alarms(&stood), 2u);
+	CHECK(!stood);
+	omci_t_down(&fx);
+	g_mib = NULL;
+	omci_hw_mcast_reset();
+}
+
 static void test_one_agent_at_a_time(void)
 {
 	struct omci_mcast *m = NULL, *other = NULL;
@@ -1671,6 +1871,9 @@ int main(void)
 	RUN(test_the_vlan_rules_tag_the_messages);
 	RUN(test_the_gem_port_of_a_message);
 	RUN(test_the_downstream_tag_of_multicast);
+	RUN(test_lost_groups);
+	RUN(test_what_is_counted_for_lost_groups);
+	RUN(test_the_lost_group_alarm);
 	RUN(test_one_agent_at_a_time);
 	return OMCI_T_REPORT("test_mcast_agent");
 }

@@ -705,6 +705,49 @@ static void test_no_room_for_another_entity(void)
 	omci_alarm_fini(al);
 }
 
+static void test_alarms_raised_outside_the_hardware(void)
+{
+	static const uint16_t two[] = { 0x0201u, 0x0202u };
+	struct omci_alarm_entry e[OMCI_ALARM_MAX_ENTITIES];
+	struct omci_alarm *al = NULL;
+	const uint16_t last = 1000u + OMCI_ALARM_MAX_ENTITIES - 1u;
+	bool changed = false;
+
+	CHECK_EQ(omci_alarm_init(&al), OMCI_OK);
+	hw_all_clear();
+	omci_alarm_raised(NULL, 309u, 0u, two, 2);
+
+	/* Two instances of a class under alarm 0, then one. */
+	omci_alarm_raised(al, 309u, 0u, two, 2);
+	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_OK);
+	CHECK(changed);
+	CHECK(omci_alarm_standing(al, 309u, 0x0201u));
+	CHECK(omci_alarm_standing(al, 309u, 0x0202u));
+	CHECK_EQ(omci_alarm_take_changes(al, e, ARRAY_SIZE(e)), 2u);
+	CHECK(bit_of(e[0].bitmap, 0));
+	omci_alarm_raised(al, 309u, 0u, &two[1], 1);
+	CHECK_EQ(omci_alarm_poll(al, &changed), OMCI_OK);
+	CHECK(changed);
+	CHECK(!omci_alarm_standing(al, 309u, 0x0201u));
+	CHECK(omci_alarm_standing(al, 309u, 0x0202u));
+	CHECK_EQ(omci_alarm_take_changes(al, e, ARRAY_SIZE(e)), 1u);
+	CHECK_EQ(e[0].instance, 0x0201u);
+	CHECK(!bit_of(e[0].bitmap, 0));
+
+	/* Cleared and told, the entities make room: as many others fit as ever. */
+	omci_alarm_raised(al, 309u, 0u, NULL, 0);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK_EQ(omci_alarm_take_changes(al, e, ARRAY_SIZE(e)), 1u);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	for (unsigned int i = 0; i < OMCI_ALARM_MAX_ENTITIES; i++)
+		omci_alarm_suppress(al, (uint16_t)(1000u + i), 1u, true);
+	omci_alarm_raised(al, last, 0u, (const uint16_t[]){ 1u }, 1);
+	CHECK_EQ(omci_alarm_poll(al, NULL), OMCI_OK);
+	CHECK(omci_alarm_standing(al, last, 1u));
+
+	omci_alarm_fini(al);
+}
+
 static void test_the_tick_notifies_each_change(void)
 {
 	hw_all_clear();
@@ -1215,6 +1258,7 @@ int main(void)
 	RUN(test_the_rate_is_judged_from_the_receiver);
 	RUN(test_suppressed_alarms_are_kept_but_not_told);
 	RUN(test_no_room_for_another_entity);
+	RUN(test_alarms_raised_outside_the_hardware);
 	RUN(test_the_tick_notifies_each_change);
 	RUN(test_an_entity_the_mib_lacks_is_not_notified);
 	RUN(test_the_tick_judges_the_bit_error_rate);

@@ -37,8 +37,17 @@
 /* The most messages one service reads. */
 #define FRAMES_PER_SERVICE 64u
 
-/* The sizes of the rows of the active group lists (G.988 9.3.29). */
-enum { ROW_V4 = 24, ROW_V6 = 58 };
+/*
+ * The seconds a group the bridge forwards may go without a frame downstream
+ * before it is lost.
+ */
+#define LOST_SEC 10u
+
+/*
+ * The sizes of the rows of the active group lists (G.988 9.3.29) and of the
+ * lost groups list (9.3.27).
+ */
+enum { ROW_V4 = 24, ROW_V6 = 58, ROW_LOST = 10 };
 
 /* The VLAN of a join: known when it came in a message. */
 struct asker {
@@ -80,6 +89,17 @@ struct count {
 	uint64_t reset_at;
 };
 
+/*
+ * A group whose downstream frames the backend counts: the count last read,
+ * when it last grew or the counting began, and whether the group is lost.
+ */
+struct watch {
+	uint8_t group[ADDR];
+	uint64_t frames;
+	uint64_t since;
+	bool lost;
+};
+
 struct omci_mcast {
 	struct omci_mib *mib;
 	uint64_t now;
@@ -112,6 +132,11 @@ struct omci_mcast {
 	struct omci_hw_mcast_ds ds[OMCI_HW_MCAST_DS_MAX];
 	size_t n_ds;
 	bool ds_set;
+
+	/* The groups counted, and whether a group could not be. */
+	struct watch watches[OMCI_HW_MCAST_WATCH_MAX];
+	size_t n_watches;
+	bool watch_short;
 };
 
 static struct omci_mcast g_mcast;
@@ -1262,6 +1287,135 @@ static void recheck(struct omci_mcast *m)
 	}
 }
 
+/*
+ * The profile whose dynamic access control list has the row that takes an
+ * active group, found as judge() finds it, and the VLAN that the row
+ * carries the group in downstream. False when no such row takes it: a
+ * group without a policy, or an allowed preview group in no package's list.
+ */
+static bool row_of(const struct omci_mcast *m, const struct active *x,
+		   uint16_t *profile, uint16_t *vlan)
+{
+	struct omci_mcast_acl_row row;
+	struct candidates c;
+	uint16_t sub;
+	size_t k;
+
+	if (!subscriber(m->mib, &sub))
+		return false;
+	candidates_of(m->mib, sub, &x->asker, &c);
+	k = find_row(m->mib, &c, x->group, x->source, false, &row);
+	if (k == c.n)
+		k = find_row(m->mib, &c, x->group, x->source, true, &row);
+	if (k == c.n)
+		return false;
+	*profile = c.pkg[k].profile;
+	*vlan = row.vlan;
+	return true;
+}
+
+/* The count of a group; NULL when it is not counted. */
+static const struct watch *watch_of(const struct omci_mcast *m,
+				    const uint8_t *g)
+{
+	for (size_t i = 0; i < m->n_watches; i++)
+		if (memcmp(m->watches[i].group, g, ADDR) == 0)
+			return &m->watches[i];
+	return NULL;
+}
+
+static bool group_lost(const struct omci_mcast *m, const uint8_t *g)
+{
+	const struct watch *w = watch_of(m, g);
+
+	return w != NULL && w->lost;
+}
+
+/*
+ * Whether a group is to be counted: the bridge forwards it for an active
+ * entry that a row of a dynamic access control list took.
+ */
+static bool wanted(const struct omci_mcast *m, const uint8_t *g)
+{
+	uint16_t p, v;
+
+	for (size_t i = 0; i < m->n_active; i++)
+		if (m->active[i].held &&
+		    memcmp(m->active[i].group, g, ADDR) == 0 &&
+		    row_of(m, &m->active[i], &p, &v))
+			return true;
+	return false;
+}
+
+/* Note whether a counted group is lost, and say when that changes. */
+static void set_lost(struct watch *w, bool lost)
+{
+	char text[40];
+
+	if (w->lost == lost)
+		return;
+	w->lost = lost;
+	addr_text(w->group, text);
+	if (lost)
+		OMCI_INFO("mcast: %s lost: no frame downstream for %u s", text,
+			  LOST_SEC);
+	else
+		OMCI_INFO("mcast: %s flows again", text);
+}
+
+/*
+ * Count the downstream frames of the groups to be counted, as many as the
+ * backend can, and judge a group lost when none came for LOST_SEC (G.988
+ * 9.3.27). A backend that cannot count loses no group.
+ */
+static void watch(struct omci_mcast *m)
+{
+	const struct omci_hw_ops *hw = omci_hw();
+	bool short_now = false;
+
+	if (hw->mcast_watch == NULL || hw->mcast_seen == NULL)
+		return;
+	for (size_t i = m->n_watches; i-- > 0;)
+		if (!wanted(m, m->watches[i].group) &&
+		    hw->mcast_watch(m->watches[i].group, false) == OMCI_OK)
+			m->watches[i] = m->watches[--m->n_watches];
+	for (size_t i = 0; i < m->n_active; i++) {
+		const uint8_t *g = m->active[i].group;
+		struct watch *w;
+
+		if (watch_of(m, g) != NULL || !wanted(m, g))
+			continue;
+		if (m->n_watches == OMCI_HW_MCAST_WATCH_MAX ||
+		    hw->mcast_watch(g, true) != OMCI_OK) {
+			short_now = true;
+			continue;
+		}
+		w = &m->watches[m->n_watches++];
+		memcpy(w->group, g, ADDR);
+		w->frames = 0;
+		w->since = m->now;
+		w->lost = false;
+	}
+	if (short_now && !m->watch_short)
+		OMCI_WARN(
+			"mcast: a group cannot be counted; whether its stream flows is not known");
+	m->watch_short = short_now;
+	for (size_t i = 0; i < m->n_watches; i++) {
+		struct watch *w = &m->watches[i];
+		uint64_t frames = 0;
+
+		if (hw->mcast_seen(w->group, &frames) != OMCI_OK)
+			continue;
+		if (frames != w->frames) {
+			w->frames = frames;
+			w->since = m->now;
+			set_lost(w, false);
+		} else if (m->now - w->since >= LOST_SEC) {
+			set_lost(w, true);
+		}
+	}
+}
+
 static bool ready(struct omci_mcast *m, struct omci_mib *mib, uint64_t now_sec)
 {
 	if (m == NULL || omci_hw()->mcast_port == NULL)
@@ -1335,6 +1489,7 @@ void omci_mcast_tick(struct omci_mcast *m, struct omci_mib *mib,
 			recheck(m);
 	}
 	omci_mcast_service(m, mib, now_sec);
+	watch(m);
 }
 
 enum omci_status omci_mcast_init(struct omci_mcast **out)
@@ -1448,3 +1603,90 @@ const struct omci_me_table_source omci_mcast_ipv6_groups = {
 	.count = v6_count,
 	.entry = v6_entry,
 };
+
+/*
+ * The lost group @index of a profile: each group and source of the active
+ * list once, whose group is lost and whose row is in the profile's dynamic
+ * access control list; *@vlan the VLAN of the row.
+ */
+static const struct active *lost_at(uint16_t profile, size_t index,
+				    size_t *count, uint16_t *vlan)
+{
+	const struct omci_mcast *m = &g_mcast;
+	const bool live = g_mcast_taken && m->mib != NULL;
+	const struct active *found = NULL;
+	size_t n = 0;
+
+	for (size_t i = 0; live && i < m->n_active; i++) {
+		const struct active *x = &m->active[i];
+		bool first = true;
+		uint16_t p, v;
+
+		for (size_t j = 0; j < i; j++)
+			first = first && !same_channel(&m->active[j], x->group,
+						       x->source);
+		if (!first || !group_lost(m, x->group) ||
+		    !row_of(m, x, &p, &v) || p != profile)
+			continue;
+		if (n++ == index) {
+			found = x;
+			*vlan = v;
+		}
+	}
+	*count = n;
+	return found;
+}
+
+static size_t lost_count(uint16_t instance)
+{
+	uint16_t vlan;
+	size_t n;
+
+	(void)lost_at(instance, SIZE_MAX, &n, &vlan);
+	return n;
+}
+
+/*
+ * A row of the lost groups list (G.988 9.3.27): the VLAN, 0 for none; the
+ * last four bytes of the source, 0 for any, and of the group.
+ */
+static bool lost_entry(uint16_t instance, size_t index, void *out, size_t cap)
+{
+	uint16_t vlan = 0;
+	size_t n;
+	const struct active *x = lost_at(instance, index, &n, &vlan);
+	uint8_t *p = out;
+
+	if (x == NULL || cap < ROW_LOST)
+		return false;
+	omci_be16_store(p, vlan >= 1u && vlan <= 4095u ? vlan : 0u);
+	memcpy(&p[2], &x->source[12], 4);
+	memcpy(&p[6], &x->group[12], 4);
+	return true;
+}
+
+const struct omci_me_table_source omci_mcast_lost_groups = {
+	.count = lost_count,
+	.entry = lost_entry,
+};
+
+size_t omci_mcast_lost_profiles(const struct omci_mcast *m, uint16_t *out,
+				size_t cap)
+{
+	size_t n = 0;
+
+	for (size_t i = 0; m != NULL && m->mib != NULL && i < m->n_active;
+	     i++) {
+		bool dup = false;
+		uint16_t p, v;
+
+		if (!group_lost(m, m->active[i].group) ||
+		    !row_of(m, &m->active[i], &p, &v))
+			continue;
+		for (size_t k = 0; k < n; k++)
+			dup = dup || out[k] == p;
+		if (!dup && n < cap)
+			out[n++] = p;
+	}
+	return n;
+}

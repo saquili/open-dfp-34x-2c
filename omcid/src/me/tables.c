@@ -323,22 +323,6 @@ static bool msg_list_entry(uint16_t instance, size_t index, void *out,
 	return false;
 }
 
-/* A table that stays empty: the device does not track what it would list. */
-static size_t no_rows(uint16_t instance)
-{
-	(void)instance;
-	return 0;
-}
-
-static bool no_row(uint16_t instance, size_t index, void *out, size_t cap)
-{
-	(void)instance;
-	(void)index;
-	(void)out;
-	(void)cap;
-	return false;
-}
-
 static const struct omci_me_table_source me_list_source = {
 	.count = me_list_count,
 	.entry = me_list_entry
@@ -347,14 +331,11 @@ static const struct omci_me_table_source msg_list_source = {
 	.count = msg_list_count,
 	.entry = msg_list_entry
 };
-static const struct omci_me_table_source empty_source = { .count = no_rows,
-							  .entry = no_row };
 
 /*
  * The tables made on demand: the two of the OMCI entity, the active group
  * lists of the multicast subscriber monitor, and the lost groups list of the
- * multicast operations profile, which stays empty: the ONU cannot tell
- * whether a group's stream flows.
+ * multicast operations profile.
  */
 static const struct {
 	uint16_t class_id;
@@ -363,7 +344,7 @@ static const struct {
 } rendered[] = {
 	{ ME_OMCI, ATTR_ME_TYPES, &me_list_source },
 	{ ME_OMCI, ATTR_MSG_TYPES, &msg_list_source },
-	{ ME_MCAST_OPS_PROFILE, 9, &empty_source },
+	{ ME_MCAST_OPS_PROFILE, 9, &omci_mcast_lost_groups },
 	{ ME_MCAST_MONITOR, 5, &omci_mcast_ipv4_groups },
 	{ ME_MCAST_MONITOR, 6, &omci_mcast_ipv6_groups },
 };

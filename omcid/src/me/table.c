@@ -7,7 +7,7 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * eb527ec96478c7d1fd887b0f9190d2905452bdb55522c48ae2b37b97e5d6319c
+ * c1fbc5e3696e61b3c0e9ca4e81719756d05c793148dddede76d987af254d1662
  * 30 classes, 286 attributes.
  */
 
@@ -1004,7 +1004,7 @@ const struct omci_me_class omci_me_classes[] = {
 		.creator = OMCI_ME_CREATED_BY_OLT,
 		/* Create, Delete, Set, Get, Get Next, Set Table */
 		.actions = 0x24000350u,
-		.alarms = 0x00000000u,
+		.alarms = 0x00000001u,
 		.attr_count = 16,
 		.attrs = attrs_class_309,
 	},

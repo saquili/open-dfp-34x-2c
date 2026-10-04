@@ -120,6 +120,21 @@ __must_check enum omci_status omci_alarm_poll(struct omci_alarm *al,
 					      bool *changed);
 
 /**
+ * omci_alarm_raised() - Set the entities of a class that stand under an
+ *	alarm the daemon judges outside the hardware's.
+ * @al: the state
+ * @class_id: the class
+ * @bit: the alarm's number
+ * @instances: the instances under it; it clears for every other
+ * @n: how many
+ *
+ * The next omci_alarm_poll() reports them with the others; at most
+ * %OMCI_ALARM_MAX_ENTITIES are raised at once.
+ */
+void omci_alarm_raised(struct omci_alarm *al, uint16_t class_id, uint8_t bit,
+		       const uint16_t *instances, size_t n);
+
+/**
  * omci_alarm_suppress() - Hold back the notifications of an entity, or not.
  * @al: the state
  * @class_id: the class

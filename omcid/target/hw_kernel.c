@@ -25,6 +25,7 @@
 
 #include <linux/ethtool.h>
 #include <linux/filter.h>
+#include <linux/gen_stats.h>
 #include <linux/genetlink.h>
 #include <linux/if_packet.h>
 #include <arpa/inet.h>
@@ -2296,19 +2297,38 @@ static int g_mc_trap = -1;
 static int g_mc_trap_err;
 static int g_mc_tx = -1;
 
-/* Add a flower rule on sfp's ingress, in the switch only, that traps to the CPU. */
-static int tc_trap_add(int ifindex, unsigned int prio, uint16_t proto,
-		       uint8_t ip_proto, int icmp_type)
+/*
+ * A flower rule of one gact action, @action: the frames of protocol @proto;
+ * with @ip_proto, of that IP protocol; with an @icmp_type not negative, of
+ * that ICMPv6 type; with @dmac, to that MAC address; with @dip, to that
+ * IPv4 address. @handle 0 lets the kernel choose it.
+ */
+struct tc_gact_rule {
+	uint16_t proto;
+	uint8_t ip_proto;
+	int icmp_type;
+	const uint8_t *dmac;
+	const uint8_t *dip;
+	int action;
+	uint32_t handle;
+};
+
+/* Add a flower rule of one gact action on an ingress, in the switch only. */
+static int tc_gact_add(int ifindex, unsigned int prio,
+		       const struct tc_gact_rule *r)
 {
+	static const uint8_t all[ETH_ALEN] = { 0xff, 0xff, 0xff,
+					       0xff, 0xff, 0xff };
 	uint8_t req[512] __aligned(4);
 	struct tcmsg tcm = {
 		.tcm_family = AF_UNSPEC,
 		.tcm_ifindex = ifindex,
+		.tcm_handle = r->handle,
 		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
-		.tcm_info = tc_info(prio, proto),
+		.tcm_info = tc_info(prio, r->proto),
 	};
-	struct tc_gact gact = { .action = TC_ACT_TRAP };
-	const uint16_t eth = htons(proto);
+	struct tc_gact gact = { .action = r->action };
+	const uint16_t eth = htons(r->proto);
 	uint32_t flags = TCA_CLS_FLAGS_SKIP_SW;
 	size_t off, opts, acts, act1, aopts;
 
@@ -2324,15 +2344,26 @@ static int tc_trap_add(int ifindex, unsigned int prio, uint16_t proto,
 	opts = off;
 	off += NLA_HDRLEN_;
 	off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &eth, sizeof(eth));
-	off = nla_put(req, off, TCA_FLOWER_KEY_IP_PROTO, &ip_proto,
-		      sizeof(ip_proto));
-	if (icmp_type >= 0) {
-		const uint8_t type = (uint8_t)icmp_type, mask = 0xffu;
+	if (r->ip_proto)
+		off = nla_put(req, off, TCA_FLOWER_KEY_IP_PROTO, &r->ip_proto,
+			      sizeof(r->ip_proto));
+	if (r->icmp_type >= 0) {
+		const uint8_t type = (uint8_t)r->icmp_type, mask = 0xffu;
 
 		off = nla_put(req, off, TCA_FLOWER_KEY_ICMPV6_TYPE, &type,
 			      sizeof(type));
 		off = nla_put(req, off, TCA_FLOWER_KEY_ICMPV6_TYPE_MASK, &mask,
 			      sizeof(mask));
+	}
+	if (r->dmac) {
+		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_DST, r->dmac,
+			      ETH_ALEN);
+		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_DST_MASK, all,
+			      ETH_ALEN);
+	}
+	if (r->dip) {
+		off = nla_put(req, off, TCA_FLOWER_KEY_IPV4_DST, r->dip, 4);
+		off = nla_put(req, off, TCA_FLOWER_KEY_IPV4_DST_MASK, all, 4);
 	}
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
 
@@ -2367,10 +2398,16 @@ static int mcast_traps(int uni, bool on)
 	if (!on)
 		return 0;
 	err = tc_clsact_ensure(uni);
-	for (size_t i = 0; i < ARRAY_SIZE(g_traps) && !err; i++)
-		err = tc_trap_add(uni, TRAP_PRIO + (unsigned int)i,
-				  g_traps[i].proto, g_traps[i].ip_proto,
-				  g_traps[i].icmp_type);
+	for (size_t i = 0; i < ARRAY_SIZE(g_traps) && !err; i++) {
+		const struct tc_gact_rule r = {
+			.proto = g_traps[i].proto,
+			.ip_proto = g_traps[i].ip_proto,
+			.icmp_type = g_traps[i].icmp_type,
+			.action = TC_ACT_TRAP,
+		};
+
+		err = tc_gact_add(uni, TRAP_PRIO + (unsigned int)i, &r);
+	}
 	if (err)
 		(void)mcast_traps(uni, false);
 	return err;
@@ -2428,6 +2465,213 @@ static enum omci_status kernel_mcast_ds(const struct omci_hw_mcast_ds *rules,
 				omci_hw_last_extack());
 	}
 	return err ? OMCI_ERR_HW : OMCI_OK;
+}
+
+/*
+ * The downstream frames of the groups the agent counts: a flower rule each
+ * on pon's ingress, with priorities from WATCH_PRIO and a handle of its
+ * own, that passes the frames and only counts them. An IPv4 group is taken
+ * by its address; an IPv6 group by the MAC address it maps to (RFC 2464),
+ * as the switch compares no IPv6 address.
+ */
+#define WATCH_PRIO 300u
+#define WATCH_HANDLE 1u
+static struct {
+	bool used;
+	uint8_t group[OMCI_HW_MCAST_ADDR_LEN];
+} g_mc_watch[OMCI_HW_MCAST_WATCH_MAX];
+/* Whether what an earlier run left was cleared; the last failure, said once. */
+static bool g_mc_watch_clear;
+static int g_mc_watch_err;
+
+/* Whether an address is IPv4, in the IPv4-mapped form. */
+static bool mapped_v4(const uint8_t *a)
+{
+	static const uint8_t prefix[12] = { 0, 0, 0, 0, 0,    0,
+					    0, 0, 0, 0, 0xff, 0xff };
+
+	return memcmp(a, prefix, sizeof(prefix)) == 0;
+}
+
+/* The counting rule of a group; OMCI_HW_MCAST_WATCH_MAX when there is none. */
+static size_t watch_slot(const uint8_t *group)
+{
+	size_t i = 0;
+
+	while (i < OMCI_HW_MCAST_WATCH_MAX &&
+	       (!g_mc_watch[i].used ||
+		memcmp(g_mc_watch[i].group, group, OMCI_HW_MCAST_ADDR_LEN)))
+		i++;
+	return i;
+}
+
+/* The payload of the first attribute of @type in [p, end); NULL when there is none. */
+static const uint8_t *nla_find(const uint8_t *p, const uint8_t *end,
+			       uint16_t type, uint16_t *len)
+{
+	while (p + NLA_HDRLEN_ <= end) {
+		const uint16_t alen = *(const uint16_t *)p;
+		const uint16_t atype = *(const uint16_t *)(p + 2) & 0x3fff;
+
+		if (alen < NLA_HDRLEN_ || p + alen > end)
+			return NULL;
+		if (atype == type) {
+			*len = (uint16_t)(alen - NLA_HDRLEN_);
+			return p + NLA_HDRLEN_;
+		}
+		p += NL_ALIGN(alen);
+	}
+	return NULL;
+}
+
+/*
+ * The frames the counting rule of priority @prio has passed: the counts of
+ * its action, which the kernel brings up to date from the switch as it
+ * answers.
+ */
+static int tc_watch_frames(int ifindex, unsigned int prio, uint16_t proto,
+			   uint64_t *frames)
+{
+	static uint8_t rsp[4096] __aligned(4);
+	uint8_t req[NL_HDRLEN + sizeof(struct tcmsg) + 16] __aligned(4);
+	struct tcmsg tcm = {
+		.tcm_family = AF_UNSPEC,
+		.tcm_ifindex = ifindex,
+		.tcm_handle = WATCH_HANDLE,
+		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
+		.tcm_info = tc_info(prio, proto),
+	};
+	const uint8_t *a, *end, *pkt64;
+	struct gnet_stats_basic basic;
+	size_t got = 0, off;
+	uint16_t len = 0, len64 = 0;
+	int err;
+
+	memset(req, 0, sizeof(req));
+	*(uint16_t *)&req[4] = RTM_GETTFILTER;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST;
+	*(uint32_t *)&req[8] = 25;
+	memcpy(req + NL_HDRLEN, &tcm, sizeof(tcm));
+	off = nla_put(req, NL_HDRLEN + sizeof(tcm), TCA_KIND, "flower",
+		      sizeof("flower"));
+	*(uint32_t *)&req[0] = (uint32_t)off;
+	err = rtnl_talk(req, off, rsp, sizeof(rsp), &got);
+	if (err)
+		return err;
+	if (got < NL_HDRLEN + sizeof(tcm) ||
+	    *(const uint16_t *)(rsp + 4) != RTM_NEWTFILTER)
+		return -EPROTO;
+
+	/* The options, their actions, the first action, its counts. */
+	end = rsp + *(const uint32_t *)rsp;
+	a = nla_find(rsp + NL_HDRLEN + sizeof(tcm), end, TCA_OPTIONS, &len);
+	if (a)
+		a = nla_find(a, a + len, TCA_FLOWER_ACT, &len);
+	if (a)
+		a = nla_find(a, a + len, 1, &len);
+	if (a)
+		a = nla_find(a, a + len, TCA_ACT_STATS, &len);
+	if (!a)
+		return -EPROTO;
+
+	/* A count past 32 bits comes in an attribute of its own. */
+	end = a + len;
+	pkt64 = nla_find(a, end, TCA_STATS_PKT64, &len64);
+	a = nla_find(a, end, TCA_STATS_BASIC, &len);
+	if (!a || len < sizeof(basic))
+		return -EPROTO;
+	memcpy(&basic, a, sizeof(basic));
+	*frames = basic.packets;
+	if (pkt64 && len64 == sizeof(*frames))
+		memcpy(frames, pkt64, sizeof(*frames));
+	return 0;
+}
+
+static enum omci_status kernel_mcast_watch(const uint8_t *group, bool on)
+{
+	const int pon = (int)if_nametoindex(PON_IFNAME);
+	size_t i = watch_slot(group);
+	int err;
+
+	if (!pon)
+		return OMCI_ERR_HW;
+	if (!g_mc_watch_clear) {
+		for (unsigned int k = 0; k < OMCI_HW_MCAST_WATCH_MAX; k++)
+			(void)tc_filter_del(pon, WATCH_PRIO + k);
+		g_mc_watch_clear = true;
+	}
+	if (!on) {
+		if (i == OMCI_HW_MCAST_WATCH_MAX)
+			return OMCI_OK;
+		err = tc_filter_del(pon, WATCH_PRIO + (unsigned int)i);
+		if (err) {
+			OMCI_DEBUG("mcast: a counting rule stays: %s",
+				   strerror(-err));
+			return OMCI_ERR_HW;
+		}
+		g_mc_watch[i].used = false;
+		return OMCI_OK;
+	}
+	if (i < OMCI_HW_MCAST_WATCH_MAX)
+		return OMCI_OK;
+	i = 0;
+	while (i < OMCI_HW_MCAST_WATCH_MAX && g_mc_watch[i].used)
+		i++;
+	if (i == OMCI_HW_MCAST_WATCH_MAX)
+		return OMCI_ERR_NOMEM;
+
+	{
+		const bool v4 = mapped_v4(group);
+		const uint8_t dmac[ETH_ALEN] = { 0x33,	    0x33,
+						 group[12], group[13],
+						 group[14], group[15] };
+		const struct tc_gact_rule r = {
+			.proto = v4 ? ETH_P_IP : ETH_P_IPV6,
+			.icmp_type = -1,
+			.dmac = v4 ? NULL : dmac,
+			.dip = v4 ? &group[12] : NULL,
+			.action = TC_ACT_OK,
+			.handle = WATCH_HANDLE,
+		};
+
+		err = tc_clsact_ensure(pon);
+		if (!err)
+			err = tc_gact_add(pon, WATCH_PRIO + (unsigned int)i,
+					  &r);
+	}
+	if (err) {
+		if (err != g_mc_watch_err)
+			OMCI_WARN(
+				"mcast: the frames of a group cannot be counted: %s (%s)",
+				strerror(-err), omci_hw_last_extack());
+		g_mc_watch_err = err;
+		return OMCI_ERR_HW;
+	}
+	g_mc_watch_err = 0;
+	g_mc_watch[i].used = true;
+	memcpy(g_mc_watch[i].group, group, OMCI_HW_MCAST_ADDR_LEN);
+	return OMCI_OK;
+}
+
+static enum omci_status kernel_mcast_seen(const uint8_t *group,
+					  uint64_t *frames)
+{
+	const int pon = (int)if_nametoindex(PON_IFNAME);
+	const size_t i = watch_slot(group);
+	int err;
+
+	if (i == OMCI_HW_MCAST_WATCH_MAX)
+		return OMCI_DECLINED;
+	if (!pon)
+		return OMCI_ERR_HW;
+	err = tc_watch_frames(pon, WATCH_PRIO + (unsigned int)i,
+			      mapped_v4(group) ? ETH_P_IP : ETH_P_IPV6, frames);
+	if (err) {
+		OMCI_DEBUG("mcast: the count of a group could not be read: %s",
+			   strerror(-err));
+		return OMCI_ERR_HW;
+	}
+	return OMCI_OK;
 }
 
 /* Send a message upstream through the interface of a GEM port. */
@@ -2975,4 +3219,6 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_frame = kernel_mcast_frame,
 	.mcast_send = kernel_mcast_send,
 	.mcast_ds = kernel_mcast_ds,
+	.mcast_watch = kernel_mcast_watch,
+	.mcast_seen = kernel_mcast_seen,
 };
