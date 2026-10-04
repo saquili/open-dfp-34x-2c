@@ -175,10 +175,20 @@ struct pon_dev_status {
 
 /**
  * struct pon_gem_stats - a GEM port's counters, as the MAC counts them
- * @tx_octets: total octets the MAC sent upstream on the port
+ * @tx_octets: the octets of the GEM frames the MAC sent upstream on the port,
+ *	their headers included
+ * @tx_frames: the GEM frames the MAC sent upstream on the port, a fragment
+ *	counting as one
+ * @rx_frames: the GEM frames the MAC received on the port, a fragment counting
+ *	as one
+ * @rx_octets: the payload octets of the GEM frames the MAC received on the
+ *	port, their headers left out
  */
 struct pon_gem_stats {
 	u64 tx_octets;
+	u64 tx_frames;
+	u64 rx_frames;
+	u64 rx_octets;
 };
 
 /**

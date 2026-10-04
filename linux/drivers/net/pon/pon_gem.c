@@ -162,10 +162,16 @@ static int pon_gem_get_iflink(const struct net_device *dev)
  * own counters of the GEM port are ethtool statistics under their own names,
  * present only when the MAC has gem_stats:
  *
- * pon_tx_octets: the octets the MAC sent upstream on the GEM port.
+ * pon_tx_octets: the octets of the GEM frames sent upstream, headers included;
+ * pon_tx_frames: the GEM frames sent upstream, a fragment counting as one;
+ * pon_rx_frames: the GEM frames received, a fragment counting as one;
+ * pon_rx_octets: the payload octets of the GEM frames received.
  */
 static const char pon_gem_stat_strings[][ETH_GSTRING_LEN] = {
 	"pon_tx_octets",
+	"pon_tx_frames",
+	"pon_rx_frames",
+	"pon_rx_octets",
 };
 
 static int pon_gem_get_sset_count(struct net_device *dev, int sset)
@@ -203,6 +209,9 @@ static void pon_gem_get_ethtool_stats(struct net_device *dev,
 		return;
 
 	data[0] = st.tx_octets;
+	data[1] = st.tx_frames;
+	data[2] = st.rx_frames;
+	data[3] = st.rx_octets;
 }
 
 static const struct ethtool_ops pon_gem_ethtool_ops = {

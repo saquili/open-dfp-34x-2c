@@ -1018,12 +1018,15 @@ Statistics of a GEM interface
      - Design choice: ``ip -s link show gemN`` during a bridged burst shows a
        handful of frames.
    * - The MAC's own per-port counters are ethtool statistics under their own
-       names. ``pon_tx_octets`` is the octets the port sent upstream, as the
-       MAC counted them, and is present only when the MAC implements
-       ``gem_stats``; otherwise the set is empty. Downstream per-flow counters
-       are absent, not zero, until they are measured.
+       names, present only when the MAC implements ``gem_stats``; otherwise the
+       set is empty. ``pon_tx_octets``: the octets of the GEM frames the port
+       sent upstream, their headers included. ``pon_tx_frames``: the GEM frames
+       it sent, a fragment counting as one. ``pon_rx_frames``: the GEM frames
+       it received, a fragment counting as one. ``pon_rx_octets``: the payload
+       octets of the GEM frames it received, their headers left out. These are
+       the counts a GEM port network CTP's performance monitoring asks for.
      - I
-     - Design choice, not exercised: ``ethtool -S gemN``.
+     - Design choice; what the MAC counts is on the MAC's page.
 
 tc and flowtable offload
 ------------------------
@@ -2656,11 +2659,10 @@ About GEM interfaces
    * - Whether the interface statistics of a bridged GEM interface show only
        the frames the CPU handled ("Statistics of a GEM interface").
      - ``ip -s link show gemN`` during a bridged burst.
-   * - Whether ``ethtool -S gemN`` lists ``pon_tx_octets`` only when the MAC has
-       ``gem_stats``, and how the counter behaves across a burst ("Statistics
-       of a GEM interface", "T-CONTs and counters").
-     - ``ethtool -S gemN`` on a MAC with and without the operation, and across
-       an upstream burst.
+   * - Whether ``ethtool -S gemN`` lists the four counters only when the MAC
+       has ``gem_stats`` ("Statistics of a GEM interface", "T-CONTs and
+       counters").
+     - ``ethtool -S gemN`` on a MAC with and without the operation.
    * - Whether deleting a GEM interface stops receive reaching it, leaves no
        port in the MAC, and, for a bridged interface, undoes the offload and
        calls ``gem_bridge_leave`` after ``gem_del`` ("Deleting a GEM
