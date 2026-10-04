@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "me/vlan.h"
 #include "hw/hw.h"
@@ -93,6 +94,15 @@ const char *omci_vlan_reject_name(enum omci_vlan_reject r)
 	default:
 		return "?";
 	}
+}
+
+/* A rule whose filter names the priority of the tag takes only that one. */
+static void match_priority(struct omci_vlan_rule *out)
+{
+	if (out->filter_inner_pri > 7u)
+		return;
+	out->match_has_pri = true;
+	out->match_pri = out->filter_inner_pri;
 }
 
 /* Mark a rule as one the hardware cannot carry. */
@@ -220,6 +230,7 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		out->assign_cvid = out->treat_inner_vid;
 		if (inner_remarks)
 			out->assign_pri = out->treat_inner_pri;
+		match_priority(out);
 		return true;
 	}
 
@@ -253,6 +264,7 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 		out->op = OMCI_VLAN_OP_SVID_PUSH;
 		out->match_cvid = out->filter_inner_vid;
 		out->assign_svid = out->treat_outer_vid;
+		match_priority(out);
 		return true;
 	}
 
@@ -291,44 +303,84 @@ static uint16_t net_vid_of(const struct omci_hw_vlan_xlate *r)
 						     r->assign_cvid;
 }
 
+/* The hardware rule of a decoded rule. */
+static struct omci_hw_vlan_xlate hw_rule_of(const struct omci_vlan_rule *d)
+{
+	return (struct omci_hw_vlan_xlate){
+		.kind = kind_of(d->op),
+		.match_cvid = d->match_cvid,
+		.assign_cvid = d->assign_cvid,
+		.assign_svid = d->assign_svid,
+		.assign_pri = d->assign_pri,
+		.match_has_pri = d->match_has_pri,
+		.match_pri = d->match_pri,
+	};
+}
+
+/* Whether two rules take the same frames: one VID, and one priority or any. */
+static bool same_match(const struct omci_hw_vlan_xlate *a,
+		       const struct omci_hw_vlan_xlate *b)
+{
+	return a->match_cvid == b->match_cvid &&
+	       a->match_has_pri == b->match_has_pri &&
+	       (!a->match_has_pri || a->match_pri == b->match_pri);
+}
+
+/* Whether an earlier rule takes every frame a later one would. */
+static bool covers(const struct omci_hw_vlan_xlate *earlier,
+		   const struct omci_hw_vlan_xlate *later)
+{
+	return earlier->match_cvid == later->match_cvid &&
+	       (!earlier->match_has_pri ||
+		(later->match_has_pri &&
+		 earlier->match_pri == later->match_pri));
+}
+
+/* Whether two rules give frames the same tag toward the network. */
+static bool same_net(const struct omci_hw_vlan_xlate *a,
+		     const struct omci_hw_vlan_xlate *b)
+{
+	return net_vid_of(a) == net_vid_of(b) &&
+	       (a->kind == OMCI_HW_VLAN_SVID_PUSH) ==
+		       (b->kind == OMCI_HW_VLAN_SVID_PUSH);
+}
+
 /*
- * A new rule against those taken so far: new, the same as one of them, or in
- * conflict with one. Two rules conflict when they match the same VID, or give
- * frames the same VID toward the network, which one rule downstream could not
- * undo for both; but not two that put an S-tag of one VID in front of
- * different C-tags, which the C-tag behind tells apart and one pop undoes, nor
- * an S-tag and a C-tag of one VID, which their TPIDs tell apart.
+ * A new rule against those taken so far, which come before it in list
+ * order: a rule that matches first takes the frame (G.988 9.3.13). An
+ * earlier rule that takes all of the new rule's frames leaves it nothing:
+ * the new one is a duplicate when it gives them the same network tag, and
+ * shadowed when not. An earlier rule that gives frames the same network tag
+ * from other frames makes the new one a many-to-one mapping: it works
+ * upstream, and the way back downstream is the earlier rule's.
  */
 enum slot_verdict {
 	SLOT_NEW,
+	SLOT_UP_ONLY,
 	SLOT_DUP,
 	SLOT_CONFLICT,
 };
 
 static enum slot_verdict slot_for(const struct omci_hw_vlan_xlate *rules,
-				  size_t n, uint16_t match_cvid,
-				  uint16_t net_vid, bool s_push, size_t *rival)
+				  size_t n, const struct omci_hw_vlan_xlate *r,
+				  size_t *rival)
 {
+	enum slot_verdict v = SLOT_NEW;
+
 	for (size_t k = 0; k < n; k++) {
-		const bool k_s_push = rules[k].kind == OMCI_HW_VLAN_SVID_PUSH;
-		const bool same_match = rules[k].match_cvid == match_cvid;
-		const bool same_net = net_vid_of(&rules[k]) == net_vid &&
-				      k_s_push == s_push;
-
-		if (!same_match && !(same_net && !s_push))
-			continue;
-		if (rival != NULL)
-			*rival = k;
-		return (same_match && same_net) ? SLOT_DUP : SLOT_CONFLICT;
+		if (covers(&rules[k], r)) {
+			if (rival != NULL)
+				*rival = k;
+			return same_net(&rules[k], r) ? SLOT_DUP :
+							SLOT_CONFLICT;
+		}
+		if (v == SLOT_NEW && same_net(&rules[k], r)) {
+			if (rival != NULL)
+				*rival = k;
+			v = SLOT_UP_ONLY;
+		}
 	}
-	return SLOT_NEW;
-}
-
-static bool takes_a_new_slot(const struct omci_hw_vlan_xlate *rules, size_t n,
-			     uint16_t match_cvid, uint16_t net_vid, bool s_push)
-{
-	return slot_for(rules, n, match_cvid, net_vid, s_push, NULL) ==
-	       SLOT_NEW;
+	return v;
 }
 
 /* What the hardware refused, and the rules in force, at the last programming. */
@@ -342,11 +394,11 @@ static size_t g_last_plain;
 static size_t g_last_preferred;
 static unsigned int g_yielded;
 
-static bool was_in_force(uint16_t match_cvid, uint16_t net_vid)
+static bool was_in_force(const struct omci_hw_vlan_xlate *r)
 {
 	for (size_t i = 0; i < g_in_force_n; i++)
-		if (g_in_force[i].match_cvid == match_cvid &&
-		    net_vid_of(&g_in_force[i]) == net_vid)
+		if (same_match(&g_in_force[i], r) &&
+		    same_net(&g_in_force[i], r))
 			return true;
 	return false;
 }
@@ -427,8 +479,53 @@ static void fate_put(bool record, uint16_t instance, size_t row,
 	r->rival_net = rival != NULL ? net_vid_of(rival) : 0u;
 }
 
+/* A row of a rule table, and its place in the table. */
+struct listed_row {
+	uint8_t bytes[16];
+	size_t index;
+};
+
+/* Put @r among the @n rows of @out, which are in list order. */
+static void insert_listed(struct listed_row *out, size_t n,
+			  const struct listed_row *r)
+{
+	size_t at = n;
+
+	while (at > 0 && memcmp(out[at - 1].bytes, r->bytes, 8) > 0) {
+		out[at] = out[at - 1];
+		at--;
+	}
+	out[at] = *r;
+}
+
 /*
- * Collect the programmable rules of every instance, in MIB order, into
+ * The rows of an instance's rule table in list order, which sorts them on
+ * their first eight bytes, the filter (G.988 9.3.13), whatever order the OLT
+ * set them in.
+ *
+ * Return: their number.
+ */
+static size_t rows_in_list_order(const struct omci_mib *mib, uint16_t class_id,
+				 uint16_t instance, uint8_t attr_no,
+				 struct listed_row *out, size_t cap)
+{
+	const size_t count =
+		omci_mib_table_count(mib, class_id, instance, attr_no);
+	size_t n = 0;
+
+	for (size_t i = 0; i < count && n < cap; i++) {
+		struct listed_row r = { .index = i };
+
+		if (omci_mib_table_get(mib, class_id, instance, attr_no, i,
+				       r.bytes, sizeof(r.bytes)) == OMCI_OK)
+			insert_listed(out, n++, &r);
+	}
+	return n;
+}
+
+/*
+ * Collect the programmable rules of every instance, in MIB order and each
+ * instance's rules in list order, into
  * @rules. With @prefer_in_force, a first pass takes the rules that were in
  * force and a second one the rest. @warn logs the rules left out and
  * @record keeps their fates.
@@ -460,34 +557,28 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 			if (cur.class_id != class_id)
 				continue;
 
-			const size_t count = omci_mib_table_count(
-				mib, class_id, cur.instance, attr_no);
+			static struct listed_row listed[OMCI_MIB_TABLE_ENTRIES];
+			const size_t count = rows_in_list_order(
+				mib, class_id, cur.instance, attr_no, listed,
+				ARRAY_SIZE(listed));
 
-			for (size_t i = 0; i < count; i++) {
+			for (size_t j = 0; j < count; j++) {
+				const size_t i = listed[j].index;
 				uint8_t row[16];
 
-				if (omci_mib_table_get(mib, class_id,
-						       cur.instance, attr_no, i,
-						       row,
-						       sizeof(row)) != OMCI_OK)
-					continue;
+				memcpy(row, listed[j].bytes, sizeof(row));
 
 				struct omci_vlan_rule d;
 				(void)omci_vlan_decode(row, sizeof(row), &d);
 
-				if (prefer_in_force) {
-					const uint16_t nv =
-						(d.op ==
-						 OMCI_VLAN_OP_SVID_PUSH) ?
-							d.assign_svid :
-							d.assign_cvid;
+				struct omci_hw_vlan_xlate cand = hw_rule_of(&d);
 
+				if (prefer_in_force) {
 					if (!programmable(d.op)) {
 						if (pass == 0u)
 							continue;
 					} else if ((pass == 0u) !=
-						   was_in_force(d.match_cvid,
-								nv)) {
+						   was_in_force(&cand)) {
 						continue;
 					}
 				}
@@ -519,11 +610,10 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 						d.assign_cvid;
 
 				size_t rival = 0;
-				const enum slot_verdict v = slot_for(
-					rules, n, d.match_cvid, net_vid,
-					d.op == OMCI_VLAN_OP_SVID_PUSH, &rival);
+				const enum slot_verdict v =
+					slot_for(rules, n, &cand, &rival);
 
-				if (v != SLOT_NEW) {
+				if (v == SLOT_DUP || v == SLOT_CONFLICT) {
 					if (v == SLOT_CONFLICT && warn)
 						OMCI_WARN(
 							"me171: C-VID %u<->%u conflicts with the existing %u<->%u rule (a VID would match two entries in one direction); ignoring it",
@@ -556,11 +646,18 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 					continue;
 				}
 
-				rules[n].kind = kind_of(d.op);
-				rules[n].match_cvid = d.match_cvid;
-				rules[n].assign_cvid = d.assign_cvid;
-				rules[n].assign_svid = d.assign_svid;
-				rules[n].assign_pri = d.assign_pri;
+				if (v == SLOT_UP_ONLY) {
+					cand.up_only = true;
+					if (warn)
+						OMCI_INFO(
+							"me171: C-VID %u<->%u works upstream only; the way back is that of the %u<->%u rule before it",
+							d.match_cvid, net_vid,
+							rules[rival].match_cvid,
+							net_vid_of(
+								&rules[rival]));
+				}
+
+				rules[n] = cand;
 				fate_put(record, cur.instance, i,
 					 OMCI_VLAN_FATE_PROGRAMMED,
 					 d.match_cvid, net_vid, NULL);
@@ -681,12 +778,10 @@ bool omci_vlan_has_room(const struct omci_mib *mib, uint16_t class_id,
 	const size_t n = gather(mib, class_id, attr_no, rules, cap, NULL, false,
 				false, false, NULL);
 
-	const uint16_t net_vid = (d.op == OMCI_VLAN_OP_SVID_PUSH) ?
-					 d.assign_svid :
-					 d.assign_cvid;
+	const struct omci_hw_vlan_xlate cand = hw_rule_of(&d);
+	const enum slot_verdict v = slot_for(rules, n, &cand, NULL);
 
-	if (!takes_a_new_slot(rules, n, d.match_cvid, net_vid,
-			      d.op == OMCI_VLAN_OP_SVID_PUSH))
+	if (v == SLOT_DUP || v == SLOT_CONFLICT)
 		return true;
 
 	return n < cap;

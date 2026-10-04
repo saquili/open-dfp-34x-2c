@@ -74,6 +74,9 @@ enum omci_vlan_reject {
  * @assign_svid: the VID of the added outer tag, for an S-VID push
  * @assign_pri: the priority of the tag written, 0 to 7,
  *	%OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
+ * @match_has_pri: the rule takes only the frames whose tag has priority
+ *	@match_pri, which its filter names
+ * @match_pri: that priority, 0 to 7
  * @filter_outer_pri: the fields of the rule, as the row holds them
  * @filter_outer_vid: see @filter_outer_pri
  * @filter_outer_tpid: see @filter_outer_pri
@@ -97,6 +100,8 @@ struct omci_vlan_rule {
 	uint16_t assign_cvid;
 	uint16_t assign_svid;
 	uint8_t assign_pri;
+	bool match_has_pri;
+	uint8_t match_pri;
 
 	uint8_t filter_outer_pri;
 	uint16_t filter_outer_vid;

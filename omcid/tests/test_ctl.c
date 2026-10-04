@@ -41,15 +41,20 @@ static const struct omci_ctl_counters g_counters = { .handled = 7,
 						     .rejected = 2,
 						     .answered = 9 };
 
-static bool put_rule(uint16_t inst, uint32_t pri, uint32_t match,
+/*
+ * A translation of the frames of one VID and any priority. @tag goes into
+ * the filter's TPID field, which the hardware does not match: rows that
+ * differ only in it are different rows of one rule.
+ */
+static bool put_rule(uint16_t inst, uint32_t tag, uint32_t match,
 		     uint32_t assign)
 {
 	uint8_t r[16];
 	const uint32_t w[4] = {
 		0xf8000000u,
-		(pri << 28) | (match << 15) | (5u << 12),
+		(8u << 28) | (match << 15) | ((tag & 7u) << 12),
 		0x400f0000u,
-		(pri << 16) | (assign << 3) | 2u,
+		(8u << 16) | (assign << 3) | 2u,
 	};
 	for (int k = 0; k < 4; k++) {
 		r[k * 4 + 0] = (uint8_t)(w[k] >> 24);
@@ -815,29 +820,34 @@ static void test_client_library(void)
 		CHECK_EQ(over, 16u);
 		CHECK(total > 3u * OMCI_CTL_VLAN_PAGE_MAX);
 
+		/*
+		 * Instance 0x101 in list order, sorted on the filter: the rows
+		 * of VID 410 by their TPID field, 0, 3, 5, 6, then VID 499.
+		 */
+		static const uint8_t listed[5] = { 2u, 4u, 1u, 0u, 3u };
+
 		CHECK_EQ(rec[0].fate, OMCI_CTL_VLAN_FATE_PROGRAMMED);
 		CHECK_EQ(rec[0].match_cvid, 410u);
 		CHECK_EQ(rec[0].net_vid, 1410u);
-		CHECK_EQ(rec[1].fate, OMCI_CTL_VLAN_FATE_COLLAPSED);
+
+		CHECK_EQ(rec[1].fate, OMCI_CTL_VLAN_FATE_SHADOWED);
+		CHECK_EQ(rec[1].match_cvid, 410u);
+		CHECK_EQ(rec[1].net_vid, 1900u);
+		CHECK_EQ(rec[1].rival_match, 410u);
+		CHECK_EQ(rec[1].rival_net, 1410u);
+
 		CHECK_EQ(rec[2].fate, OMCI_CTL_VLAN_FATE_COLLAPSED);
+		CHECK_EQ(rec[3].fate, OMCI_CTL_VLAN_FATE_COLLAPSED);
 
-		CHECK_EQ(rec[3].fate, OMCI_CTL_VLAN_FATE_SHADOWED);
-		CHECK_EQ(rec[3].match_cvid, 499u);
-		CHECK_EQ(rec[3].net_vid, 1410u);
-		CHECK_EQ(rec[3].rival_match, 410u);
-		CHECK_EQ(rec[3].rival_net, 1410u);
-
-		CHECK_EQ(rec[4].fate, OMCI_CTL_VLAN_FATE_SHADOWED);
-		CHECK_EQ(rec[4].match_cvid, 410u);
-		CHECK_EQ(rec[4].net_vid, 1900u);
-		CHECK_EQ(rec[4].rival_match, 410u);
-		CHECK_EQ(rec[4].rival_net, 1410u);
+		CHECK_EQ(rec[4].fate, OMCI_CTL_VLAN_FATE_PROGRAMMED);
+		CHECK_EQ(rec[4].match_cvid, 499u);
+		CHECK_EQ(rec[4].net_vid, 1410u);
 
 		unsigned int seen_0101 = 0, seen_0102 = 0;
 
 		for (size_t i = 0; i < nf; i++) {
 			if (rec[i].instance == 0x101u) {
-				CHECK_EQ(rec[i].row, (uint8_t)seen_0101);
+				CHECK_EQ(rec[i].row, listed[seen_0101]);
 				seen_0101++;
 			} else {
 				CHECK_EQ(rec[i].instance, 0x102u);

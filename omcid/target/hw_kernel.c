@@ -2088,10 +2088,11 @@ static int tc_filter_add(int ifindex, unsigned int prio,
  * The filters of a rule: the upstream ones on sfp, and on pon the downstream
  * one that undoes them. A translation is undone by the translation back,
  * keeping the priority; a C-tag pushed onto an untagged frame, and an S-tag
- * pushed in front of a C-tag, by popping the tag. An S-tag that takes the
- * priority of the C-tag behind it takes one upstream filter per priority, as
- * a push names the priority it gives. Returns the number of upstream
- * filters, 0 for a rule of no kind known here.
+ * pushed in front of a C-tag, by popping the tag. A rule that takes one
+ * priority matches it upstream; an S-tag that takes the priority of the
+ * C-tag behind it from frames of any priority takes one upstream filter per
+ * priority, as a push names the priority it gives. Returns the number of
+ * upstream filters, 0 for a rule of no kind known here.
  */
 static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 			   struct tc_vlan_filter up[static VLAN_UP_MAX],
@@ -2101,6 +2102,8 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 	case OMCI_HW_VLAN_CVID_XLATE:
 		up[0] = (struct tc_vlan_filter){
 			.match_vid = r->match_cvid,
+			.match_has_pri = r->match_has_pri,
+			.match_pri = r->match_pri,
 			.v_action = TCA_VLAN_ACT_MODIFY,
 			.vid = r->assign_cvid,
 			.pri = r->assign_pri,
@@ -2126,18 +2129,22 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 		return 1;
 	case OMCI_HW_VLAN_SVID_PUSH: {
 		const bool copy = r->assign_pri == OMCI_HW_VLAN_PRI_COPY;
-		const size_t n = copy ? VLAN_UP_MAX : 1u;
+		const size_t n = copy && !r->match_has_pri ? VLAN_UP_MAX : 1u;
 
-		for (size_t i = 0; i < n; i++)
+		for (size_t i = 0; i < n; i++) {
+			const uint8_t pri = r->match_has_pri ? r->match_pri :
+							       (uint8_t)i;
+
 			up[i] = (struct tc_vlan_filter){
 				.match_vid = r->match_cvid,
-				.match_has_pri = copy,
-				.match_pri = (uint8_t)i,
+				.match_has_pri = copy || r->match_has_pri,
+				.match_pri = pri,
 				.v_action = TCA_VLAN_ACT_PUSH,
 				.push_proto = ETH_P_8021AD,
 				.vid = r->assign_svid,
-				.pri = copy ? (uint8_t)i : r->assign_pri,
+				.pri = copy ? pri : r->assign_pri,
 			};
+		}
 		*down = (struct tc_vlan_filter){
 			.match_proto = ETH_P_8021AD,
 			.match_vid = r->assign_svid,
@@ -2210,7 +2217,7 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
-		err = tc_filter_add((int)pon, prio, &down);
+		err = r->up_only ? 0 : tc_filter_add((int)pon, prio, &down);
 		if (err) {
 			OMCI_WARN("vlan: downstream rule %zu refused: %s (%s)",
 				  i, strerror(-err), omci_hw_last_extack());
@@ -2218,17 +2225,24 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
+		char pri[16] = "";
+
+		if (r->match_has_pri)
+			snprintf(pri, sizeof(pri), " priority %u",
+				 r->match_pri);
 		if (r->kind == OMCI_HW_VLAN_CVID_PUSH)
 			OMCI_INFO("vlan: untagged <-> C-VID %u in hardware",
 				  r->assign_cvid);
 		else if (r->kind == OMCI_HW_VLAN_SVID_PUSH)
 			OMCI_INFO(
-				"vlan: C-VID %u <-> S-VID %u in front of it, in hardware",
-				r->match_cvid, r->assign_svid);
+				"vlan: C-VID %u%s <-> S-VID %u in front of it, in hardware%s",
+				r->match_cvid, pri, r->assign_svid,
+				r->up_only ? ", upstream only" : "");
 		else
 			OMCI_INFO(
-				"vlan: C-VID %u <-> %u translated in hardware",
-				r->match_cvid, r->assign_cvid);
+				"vlan: C-VID %u%s <-> %u translated in hardware%s",
+				r->match_cvid, pri, r->assign_cvid,
+				r->up_only ? ", upstream only" : "");
 	}
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;

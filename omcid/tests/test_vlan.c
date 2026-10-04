@@ -28,11 +28,16 @@ static void pack(uint8_t row[16], uint32_t w0, uint32_t w1, uint32_t w2,
 	}
 }
 
-static void xlate_row(uint8_t row[16], unsigned int pri, unsigned int match,
+/*
+ * A translation of the frames of one VID and any priority, which keeps the
+ * priority. @tag goes into the filter's TPID field, which the hardware does
+ * not match: rows that differ only in it are different rows of one rule.
+ */
+static void xlate_row(uint8_t row[16], unsigned int tag, unsigned int match,
 		      unsigned int assign)
 {
-	pack(row, 0xf8000000u, (pri << 28) | (match << 15), 0x400f0000u,
-	     (pri << 16) | (assign << 3));
+	pack(row, 0xf8000000u, (8u << 28) | (match << 15) | ((tag & 7u) << 12),
+	     0x400f0000u, (8u << 16) | (assign << 3));
 }
 
 static void passthru_row(uint8_t row[16], unsigned int pri, unsigned int match)
@@ -339,13 +344,22 @@ int main(void)
 
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 
+	/*
+	 * The three rows translate the frames of priorities 6, 5 and 0 alone,
+	 * in list order 0, 5, 6; the first gives the way back for all three.
+	 */
 	const struct omci_hw_vlan_xlate *applied = NULL;
 	const size_t napplied = omci_hw_vlan_recorded(&applied);
+	static const uint8_t prios[3] = { 0u, 5u, 6u };
 
-	CHECK_EQ(napplied, 1u);
-	if (napplied >= 1) {
-		CHECK_EQ(applied[0].match_cvid, 410u);
-		CHECK_EQ(applied[0].assign_cvid, 1410u);
+	CHECK_EQ(napplied, 3u);
+	for (size_t i = 0; i < napplied && i < 3u; i++) {
+		CHECK_EQ(applied[i].match_cvid, 410u);
+		CHECK_EQ(applied[i].assign_cvid, 1410u);
+		CHECK(applied[i].match_has_pri);
+		CHECK_EQ(applied[i].match_pri, prios[i]);
+		CHECK_EQ(applied[i].assign_pri, OMCI_HW_VLAN_PRI_KEEP);
+		CHECK_EQ(applied[i].up_only, i > 0u);
 	}
 
 	CHECK_EQ(omci_mib_table_remove(mib, 171u, 0x101u, 6u, r2, 8), OMCI_OK);
@@ -407,10 +421,11 @@ int main(void)
 	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, xl, 16, 8,
 				    OMCI_MIB_TABLE_LAST),
 		 OMCI_OK);
+	/* List order decides, sorted on the filter, not the order of the Sets. */
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
 	CHECK_EQ(omci_hw_vlan_recorded(&applied), 1u);
 	if (omci_hw_vlan_recorded(&applied) == 1u)
-		CHECK_EQ(applied[0].assign_cvid, 2000u);
+		CHECK_EQ(applied[0].assign_cvid, 1410u);
 
 	clear_rows(mib);
 	xlate_row(xl, 0u, 410u, 1410u);
@@ -421,11 +436,19 @@ int main(void)
 	CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, xl2, 16, 8,
 				    OMCI_MIB_TABLE_LAST),
 		 OMCI_OK);
+	/*
+	 * Two VIDs to one: both are translated upstream, and the way back is
+	 * the first rule's (G.988 9.3.13, many-to-one mappings).
+	 */
 	CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
-	CHECK_EQ(omci_hw_vlan_recorded(&applied), 1u);
-	if (omci_hw_vlan_recorded(&applied) == 1u) {
+	CHECK_EQ(omci_hw_vlan_recorded(&applied), 2u);
+	if (omci_hw_vlan_recorded(&applied) == 2u) {
 		CHECK_EQ(applied[0].match_cvid, 410u);
 		CHECK_EQ(applied[0].assign_cvid, 1410u);
+		CHECK(!applied[0].up_only);
+		CHECK_EQ(applied[1].match_cvid, 411u);
+		CHECK_EQ(applied[1].assign_cvid, 1410u);
+		CHECK(applied[1].up_only);
 	}
 
 	clear_rows(mib);
@@ -495,12 +518,17 @@ int main(void)
 
 		uint8_t xl41[16];
 
+		/* A second C-VID to C-VID 100 works upstream only. */
 		xlate_row(xl41, 0u, 41u, 100u);
 		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, xl41, 16, 8,
 					    OMCI_MIB_TABLE_LAST),
 			 OMCI_OK);
 		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
-		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 4u);
+		if (omci_hw_vlan_recorded(&applied) == 4u) {
+			CHECK_EQ(applied[3].match_cvid, 41u);
+			CHECK(applied[3].up_only);
+		}
 	}
 
 	clear_rows(mib);
@@ -712,27 +740,34 @@ int main(void)
 			CHECK_EQ(said, 1u);
 		}
 
+		/*
+		 * In list order, sorted on the filter: the unsupported row of
+		 * priority 2 first, then the four rows of VID 410 by their TPID
+		 * field, 0, 4, 5, 6, and last the row that names no tag.
+		 */
+		static const uint8_t listed[6] = { 5u, 2u, 3u, 1u, 0u, 4u };
+
 		CHECK_EQ(omci_vlan_fates(&f, &over), 6u);
 		CHECK_EQ(over, 0u);
 		CHECK(f != NULL);
 		if (f != NULL && omci_vlan_fates(NULL, NULL) == 6u) {
-			CHECK_EQ(f[0].fate, (uint8_t)OMCI_VLAN_FATE_PROGRAMMED);
-			CHECK_EQ(f[0].match_cvid, 410u);
-			CHECK_EQ(f[0].net_vid, 1410u);
-
-			CHECK_EQ(f[1].fate, (uint8_t)OMCI_VLAN_FATE_COLLAPSED);
-			CHECK_EQ(f[2].fate, (uint8_t)OMCI_VLAN_FATE_COLLAPSED);
-
-			CHECK_EQ(f[3].fate, (uint8_t)OMCI_VLAN_FATE_SHADOWED);
-			CHECK_EQ(f[3].net_vid, 1900u);
-			CHECK_EQ(f[3].rival_match, 410u);
-			CHECK_EQ(f[3].rival_net, 1410u);
-
-			CHECK_EQ(f[4].fate, (uint8_t)OMCI_VLAN_FATE_INERT);
-			CHECK_EQ(f[5].fate,
+			CHECK_EQ(f[0].fate,
 				 (uint8_t)OMCI_VLAN_FATE_UNSUPPORTED);
 
-			for (size_t i = 4; i < 6u; i++) {
+			CHECK_EQ(f[1].fate, (uint8_t)OMCI_VLAN_FATE_PROGRAMMED);
+			CHECK_EQ(f[1].match_cvid, 410u);
+			CHECK_EQ(f[1].net_vid, 1410u);
+
+			CHECK_EQ(f[2].fate, (uint8_t)OMCI_VLAN_FATE_SHADOWED);
+			CHECK_EQ(f[2].net_vid, 1900u);
+			CHECK_EQ(f[2].rival_match, 410u);
+			CHECK_EQ(f[2].rival_net, 1410u);
+
+			CHECK_EQ(f[3].fate, (uint8_t)OMCI_VLAN_FATE_COLLAPSED);
+			CHECK_EQ(f[4].fate, (uint8_t)OMCI_VLAN_FATE_COLLAPSED);
+			CHECK_EQ(f[5].fate, (uint8_t)OMCI_VLAN_FATE_INERT);
+
+			for (size_t i = 0; i < 6u; i += 5u) {
 				CHECK_EQ(f[i].net_vid, 0u);
 				CHECK_EQ(f[i].rival_match, 0u);
 				CHECK_EQ(f[i].rival_net, 0u);
@@ -740,7 +775,7 @@ int main(void)
 
 			for (size_t i = 0; i < 6u; i++) {
 				CHECK_EQ(f[i].instance, 0x101u);
-				CHECK_EQ(f[i].row, (uint8_t)i);
+				CHECK_EQ(f[i].row, listed[i]);
 			}
 		}
 		CHECK(strcmp(omci_vlan_fate_name(OMCI_VLAN_FATE_SHADOWED),
@@ -758,7 +793,7 @@ int main(void)
 		CHECK_EQ(omci_vlan_fates(&f, &over), 6u);
 		CHECK_EQ(over, 0u);
 		if (f != NULL && omci_vlan_fates(NULL, NULL) == 6u)
-			CHECK_EQ(f[3].fate, (uint8_t)OMCI_VLAN_FATE_SHADOWED);
+			CHECK_EQ(f[2].fate, (uint8_t)OMCI_VLAN_FATE_SHADOWED);
 
 		printf("    every ME 171 row's fate is retrievable, and a dry run does not disturb it\n");
 	}
@@ -782,7 +817,7 @@ int main(void)
 		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, rr, 16, 8,
 					    OMCI_MIB_TABLE_LAST),
 			 OMCI_OK);
-		xlate_row(rr, 0u, 99u, 1030u);
+		xlate_row(rr, 1u, 30u, 1999u);
 		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, rr, 16, 8,
 					    OMCI_MIB_TABLE_LAST),
 			 OMCI_OK);
@@ -796,8 +831,8 @@ int main(void)
 		CHECK_EQ(over, 0u);
 		if (f != NULL && omci_vlan_fates(NULL, NULL) == 4u) {
 			CHECK_EQ(f[3].fate, (uint8_t)OMCI_VLAN_FATE_SHADOWED);
-			CHECK_EQ(f[3].match_cvid, 99u);
-			CHECK_EQ(f[3].net_vid, 1030u);
+			CHECK_EQ(f[3].match_cvid, 30u);
+			CHECK_EQ(f[3].net_vid, 1999u);
 			CHECK_EQ(f[3].rival_match, 30u);
 			CHECK_EQ(f[3].rival_net, 1030u);
 		}
@@ -1080,17 +1115,70 @@ int main(void)
 				CHECK_EQ(f[i].fate,
 					 (uint8_t)OMCI_VLAN_FATE_PROGRAMMED);
 			}
+			/* The translation sorts before the row that names no tag. */
 			CHECK_EQ(f[OMCI_HW_VLAN_MAX_RULES].instance, 0x101u);
 			CHECK_EQ(f[OMCI_HW_VLAN_MAX_RULES].fate,
-				 (uint8_t)OMCI_VLAN_FATE_INERT);
+				 (uint8_t)OMCI_VLAN_FATE_OVER_BUDGET);
+			CHECK_EQ(f[OMCI_HW_VLAN_MAX_RULES].match_cvid, 410u);
 			CHECK_EQ(f[OMCI_HW_VLAN_MAX_RULES + 1u].instance,
 				 0x101u);
 			CHECK_EQ(f[OMCI_HW_VLAN_MAX_RULES + 1u].fate,
-				 (uint8_t)OMCI_VLAN_FATE_OVER_BUDGET);
-			CHECK_EQ(f[OMCI_HW_VLAN_MAX_RULES + 1u].match_cvid,
-				 410u);
+				 (uint8_t)OMCI_VLAN_FATE_INERT);
 		}
 		printf("    a row that translates nothing is listed after the translations that were in force\n");
+
+		/*
+		 * Taking the rule in force first can cost rules: a translation
+		 * of VID 5 for any priority, in force, shadows those of VID 5
+		 * for priorities 0 and 1, which list order takes before it.
+		 * When that programs fewer rules than list order would, list
+		 * order wins.
+		 */
+		clear_rows(mib);
+		CHECK_EQ(omci_mib_delete(mib, 171u, 0x102u), OMCI_OK);
+
+		uint8_t y[16];
+		unsigned int yielded_before = 0, yielded_after = 0;
+
+		xlate_row(y, 0u, 5u, 100u);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, y, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		(void)omci_vlan_last_reconcile(&yielded_before, NULL);
+
+		for (unsigned int p = 0; p < 2u; p++) {
+			pack(y, 0xf8000000u, (p << 28) | (5u << 15),
+			     0x400f0000u, (8u << 16) | ((200u + p) << 3));
+			CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, y,
+						    16, 8, OMCI_MIB_TABLE_LAST),
+				 OMCI_OK);
+		}
+		for (unsigned int k = 0; k < 14u; k++) {
+			xlate_row(y, 0u, 20u + k, 1020u + k);
+			CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, y,
+						    16, 8, OMCI_MIB_TABLE_LAST),
+				 OMCI_OK);
+		}
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+
+		size_t preferred = 0;
+		const size_t plain =
+			omci_vlan_last_reconcile(&yielded_after, &preferred);
+
+		CHECK_EQ(yielded_after, yielded_before + 1u);
+		CHECK_EQ(plain, (size_t)OMCI_HW_VLAN_MAX_RULES);
+		CHECK_EQ(preferred, (size_t)OMCI_HW_VLAN_MAX_RULES - 1u);
+		CHECK_EQ(omci_hw_vlan_recorded(&ap4),
+			 (size_t)OMCI_HW_VLAN_MAX_RULES);
+		if (omci_hw_vlan_recorded(&ap4) == OMCI_HW_VLAN_MAX_RULES) {
+			CHECK(ap4[0].match_has_pri && ap4[0].match_pri == 0u);
+			CHECK(ap4[1].match_has_pri && ap4[1].match_pri == 1u);
+			CHECK_EQ(ap4[2].match_cvid, 5u);
+			CHECK(!ap4[2].match_has_pri);
+		}
+		printf("    in-force rules that would shadow more than they keep give way to list order\n");
+		CHECK_EQ(omci_mib_create(mib, 171u, 0x102u), OMCI_OK);
 
 		clear_rows(mib);
 		while (omci_mib_table_count(mib, 171u, 0x102u, 6u) > 0) {

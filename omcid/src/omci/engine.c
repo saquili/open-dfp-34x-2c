@@ -438,10 +438,13 @@ static enum omci_status data_path_status(uint16_t class_id, uint16_t instance,
 	return b;
 }
 
+static void keep_levels(struct omci_engine *eng);
+
 /*
  * MIB reset (G.988 A.3.17, A.3.18). The answer goes first. Then every read
  * in progress ends, the MIB is rebuilt from the instances the ONU creates
- * itself, and the hardware is brought back to that state.
+ * itself, with the optical levels last read, and the hardware is brought
+ * back to that state.
  */
 static void handle_mib_reset(struct omci_engine *eng,
 			     const struct omci_frame *req)
@@ -467,6 +470,7 @@ static void handle_mib_reset(struct omci_engine *eng,
 	if (rc == OMCI_OK) {
 		omci_mib_notify_mute(eng->mib, true);
 		rc = omci_me_defaults_apply(eng->mib, &caps);
+		keep_levels(eng);
 		omci_mib_notify_mute(eng->mib, false);
 	}
 	if (rc != OMCI_OK)
@@ -1311,6 +1315,18 @@ static void ani_g_level(struct omci_engine *eng, uint8_t attr, int16_t level)
 				 OMCI_ALARM_ANI_G_INSTANCE, attr, v, sizeof(v));
 }
 
+/* Put the optical levels last read into the ANI-G. */
+static void keep_levels(struct omci_engine *eng)
+{
+	int16_t rx = 0, tx = 0;
+	const uint8_t levels = omci_alarm_levels(eng->alarm, &rx, &tx);
+
+	if ((levels & OMCI_ALARM_LEVEL_RX) != 0u)
+		ani_g_level(eng, ANI_G_RX_LEVEL, rx);
+	if ((levels & OMCI_ALARM_LEVEL_TX) != 0u)
+		ani_g_level(eng, ANI_G_TX_LEVEL, tx);
+}
+
 /*
  * Once a second: judge the alarms the hardware does not raise, and keep
  * the optical levels of the ANI-G current; read the alarms, apply
@@ -1333,16 +1349,8 @@ static void alarms_tick(struct omci_engine *eng)
 					    OMCI_OPTICAL_TX_POLICY),
 		},
 	};
-	int16_t rx = 0, tx = 0;
-
 	(void)!omci_alarm_judge(eng->alarm, eng->now_sec, &t);
-
-	const uint8_t levels = omci_alarm_levels(eng->alarm, &rx, &tx);
-
-	if ((levels & OMCI_ALARM_LEVEL_RX) != 0u)
-		ani_g_level(eng, ANI_G_RX_LEVEL, rx);
-	if ((levels & OMCI_ALARM_LEVEL_TX) != 0u)
-		ani_g_level(eng, ANI_G_TX_LEVEL, tx);
+	keep_levels(eng);
 
 	if (omci_alarm_poll(eng->alarm, NULL) != OMCI_OK) {
 		OMCI_DEBUG("alarm: the hardware did not answer");

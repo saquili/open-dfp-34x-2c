@@ -165,6 +165,12 @@ enum omci_hw_vlan_kind {
  * @assign_svid: the VID of the added tag, for an S-VID push
  * @assign_pri: the priority of the tag the rule writes, 0 to 7,
  *	%OMCI_HW_VLAN_PRI_KEEP or %OMCI_HW_VLAN_PRI_COPY
+ * @match_has_pri: the rule takes only the tagged frames of priority
+ *	@match_pri; without it, those of any priority
+ * @match_pri: that priority, 0 to 7
+ * @up_only: the rule works upstream only: an earlier rule gives frames the
+ *	same tag toward the network, and the way back downstream is that
+ *	rule's (G.988 9.3.13, many-to-one mappings)
  */
 struct omci_hw_vlan_xlate {
 	enum omci_hw_vlan_kind kind;
@@ -172,6 +178,9 @@ struct omci_hw_vlan_xlate {
 	uint16_t assign_cvid;
 	uint16_t assign_svid;
 	uint8_t assign_pri;
+	bool match_has_pri;
+	uint8_t match_pri;
+	bool up_only;
 };
 
 /**

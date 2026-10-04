@@ -90,6 +90,12 @@ static void reference(unsigned int n)
 	CHECK(omci_t_up(&fx));
 	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
 	CHECK_EQ(omci_me_defaults_apply(fx.mib, &caps), OMCI_OK);
+
+	/*
+	 * The daemon judges its alarms and reads the optical levels before
+	 * it answers the first frame: so does the engine here.
+	 */
+	omci_engine_tick(fx.eng, 1u);
 	g_ref_n = 0;
 	ref_append();
 	g_ref_startup = g_ref_n;

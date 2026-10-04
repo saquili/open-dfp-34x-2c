@@ -165,16 +165,33 @@ static void make_plain_delete(uint8_t out[RULE_BYTES], unsigned int pri,
 	make_xlate_delete_tpid(out, pri, match_vid, 0u);
 }
 
-static bool only_xlate(uint16_t match_cvid, uint16_t assign_cvid)
+/*
+ * Whether the hardware holds exactly the translations of VID 410 that @to
+ * gives: for each priority p, @to[p] the VID its frames go to, 0 for none.
+ * A rule that names a priority takes the frames of that priority alone.
+ */
+static bool xlates_410(const uint16_t to[8])
 {
 	const struct omci_hw_vlan_xlate *applied = NULL;
+	const size_t n = omci_hw_vlan_recorded(&applied);
+	size_t want = 0;
+	unsigned int seen = 0;
 
-	if (omci_hw_vlan_recorded(&applied) != 1u || applied == NULL)
-		return false;
-	return applied[0].kind == OMCI_HW_VLAN_CVID_XLATE &&
-	       applied[0].assign_svid == 0u &&
-	       applied[0].match_cvid == match_cvid &&
-	       applied[0].assign_cvid == assign_cvid;
+	for (unsigned int p = 0; p < 8u; p++)
+		want += to[p] != 0u;
+	if (n != want || applied == NULL)
+		return n == want;
+	for (size_t i = 0; i < n; i++) {
+		const struct omci_hw_vlan_xlate *r = &applied[i];
+
+		if (r->kind != OMCI_HW_VLAN_CVID_XLATE ||
+		    r->match_cvid != 410u || !r->match_has_pri ||
+		    r->match_pri > 7u || to[r->match_pri] != r->assign_cvid ||
+		    (seen & (1u << r->match_pri)) != 0u)
+			return false;
+		seen |= 1u << r->match_pri;
+	}
+	return true;
 }
 
 static void reset_instance(struct omci_engine *eng, struct omci_mib *mib,
@@ -601,7 +618,7 @@ int main(void)
 
 		uint8_t dup[RULE_BYTES];
 
-		make_xlate(dup, 3u, 300u, 3000u);
+		make_live_xlate(dup, 0u, 300u, 3000u);
 		CHECK_EQ(set_rule_on(eng, INST, 240, dup), 0u);
 		CHECK_EQ(omci_hw_vlan_recorded(&applied),
 			 (size_t)OMCI_HW_VLAN_MAX_RULES);
@@ -669,35 +686,56 @@ int main(void)
 		make_xlate_delete(d5, 5u, 410u);
 		make_xlate_delete(d0, 0u, 410u);
 
+		static const uint16_t old_all[8] = {
+			[0] = 1410u, [5] = 1410u, [6] = 1410u
+		};
+		static const uint16_t new_all[8] = {
+			[0] = 1601u, [5] = 1601u, [6] = 1601u
+		};
+
 		reset_instance(eng, mib, 300);
 		CHECK_EQ(set_rule(eng, 301, r6), 0u);
 		CHECK_EQ(set_rule(eng, 302, r5), 0u);
 		CHECK_EQ(set_rule(eng, 303, r0), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 3u);
-		CHECK(only_xlate(410u, 1410u));
-		printf("    three p-bit rows carrying one translation are one classifier entry\n");
+		CHECK(xlates_410(old_all));
+		printf("    three p-bit rows are three translations, one per priority\n");
+
+		static const uint16_t r1_6[8] = {
+			[0] = 1410u, [5] = 1410u, [6] = 1601u
+		};
+		static const uint16_t r1_5[8] = {
+			[0] = 1410u, [5] = 1601u, [6] = 1601u
+		};
 
 		CHECK_EQ(set_rule(eng, 311, n6), 0u);
-		CHECK(only_xlate(410u, 1601u));
+		CHECK(xlates_410(r1_6));
 		CHECK_EQ(set_rule(eng, 312, n5), 0u);
-		CHECK(only_xlate(410u, 1601u));
+		CHECK(xlates_410(r1_5));
 		CHECK_EQ(set_rule(eng, 313, n0), 0u);
-		CHECK(only_xlate(410u, 1601u));
+		CHECK(xlates_410(new_all));
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 3u);
-		printf("    route 1, rewrite in walk order: converges on the first Set\n");
+		printf("    route 1, rewrite in walk order: each priority follows its own row\n");
+
+		static const uint16_t r2_0[8] = {
+			[0] = 1601u, [5] = 1410u, [6] = 1410u
+		};
+		static const uint16_t r2_5[8] = {
+			[0] = 1601u, [5] = 1601u, [6] = 1410u
+		};
 
 		reset_instance(eng, mib, 320);
 		CHECK_EQ(set_rule(eng, 321, r6), 0u);
 		CHECK_EQ(set_rule(eng, 322, r5), 0u);
 		CHECK_EQ(set_rule(eng, 323, r0), 0u);
 		CHECK_EQ(set_rule(eng, 324, n0), 0u);
-		CHECK(only_xlate(410u, 1410u));
+		CHECK(xlates_410(r2_0));
 		CHECK_EQ(set_rule(eng, 325, n5), 0u);
-		CHECK(only_xlate(410u, 1410u));
+		CHECK(xlates_410(r2_5));
 		CHECK_EQ(set_rule(eng, 326, n6), 0u);
-		CHECK(only_xlate(410u, 1601u));
+		CHECK(xlates_410(new_all));
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 3u);
-		printf("    route 2, rewrite in reverse: converges only on the last Set\n");
+		printf("    route 2, rewrite in reverse: each priority follows its own row\n");
 
 		reset_instance(eng, mib, 330);
 		CHECK_EQ(set_rule(eng, 331, r6), 0u);
@@ -706,16 +744,21 @@ int main(void)
 
 		uint8_t n3[RULE_BYTES];
 
+		static const uint16_t r3_add[8] = {
+			[0] = 1410u, [3] = 1601u, [5] = 1410u, [6] = 1410u
+		};
+		static const uint16_t r3_end[8] = { [3] = 1601u };
+
 		make_live_xlate(n3, 3u, 410u, 1601u);
 		CHECK_EQ(set_rule(eng, 334, n3), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 4u);
-		CHECK(only_xlate(410u, 1410u));
+		CHECK(xlates_410(r3_add));
 
 		CHECK_EQ(set_rule(eng, 335, d6), 0u);
 		CHECK_EQ(set_rule(eng, 336, d5), 0u);
 		CHECK_EQ(set_rule(eng, 337, d0), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 1u);
-		CHECK(only_xlate(410u, 1601u));
+		CHECK(xlates_410(r3_end));
 		printf("    route 3, add-new-then-delete-old: ends on the new translation, not empty\n");
 
 		reset_instance(eng, mib, 340);
@@ -723,23 +766,29 @@ int main(void)
 		CHECK_EQ(set_rule(eng, 342, r5), 0u);
 		CHECK_EQ(set_rule(eng, 343, r0), 0u);
 
+		static const uint16_t r4_d6[8] = { [0] = 1410u, [5] = 1410u };
+		static const uint16_t r4_d5[8] = { [0] = 1410u, [6] = 1601u };
+		static const uint16_t r4_d0[8] = { [5] = 1601u, [6] = 1601u };
+
 		CHECK_EQ(set_rule(eng, 344, d6), 0u);
+		CHECK(xlates_410(r4_d6));
 		CHECK_EQ(set_rule(eng, 345, n6), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 3u);
-		CHECK(only_xlate(410u, 1410u));
+		CHECK(xlates_410(r1_6));
 
 		CHECK_EQ(set_rule(eng, 346, d5), 0u);
+		CHECK(xlates_410(r4_d5));
 		CHECK_EQ(set_rule(eng, 347, n5), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 3u);
-		CHECK(only_xlate(410u, 1410u));
+		CHECK(xlates_410(r1_5));
 
 		CHECK_EQ(set_rule(eng, 348, d0), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 2u);
-		CHECK(only_xlate(410u, 1601u));
+		CHECK(xlates_410(r4_d0));
 		CHECK_EQ(set_rule(eng, 349, n0), 0u);
 		CHECK_EQ(omci_mib_table_count(mib, ME171, INST, RULE_DESC), 3u);
-		CHECK(only_xlate(410u, 1601u));
-		printf("    route 4, delete-and-re-add per p-bit: re-points on the delete, ends with 3 rows\n");
+		CHECK(xlates_410(new_all));
+		printf("    route 4, delete-and-re-add per p-bit: each delete takes its priority, ends with 3 rows\n");
 
 		reset_instance(eng, mib, 350);
 	}
@@ -763,28 +812,30 @@ int main(void)
 		CHECK_EQ(omci_hw_vlan_recorded(&applied),
 			 (size_t)OMCI_HW_VLAN_MAX_RULES);
 
+		/*
+		 * A rule that gives the VID another rule gives is a many-to-one
+		 * mapping, which needs an entry of its own upstream: a full
+		 * classifier refuses it at the Set.
+		 */
 		make_xlate(r, 0u, 777u, 1301u);
-		CHECK_EQ(set_rule(eng, 421, r), 0u);
+		CHECK_EQ(set_rule(eng, 421, r), 6u);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied),
+			 (size_t)OMCI_HW_VLAN_MAX_RULES);
 
-		unsigned int shadowed = 0, over_budget = 0;
-		size_t nf = omci_vlan_fates(&f, &over);
-
-		for (size_t i = 0; i < nf; i++) {
-			if (f[i].fate == (uint8_t)OMCI_VLAN_FATE_SHADOWED)
-				shadowed++;
-			if (f[i].fate == (uint8_t)OMCI_VLAN_FATE_OVER_BUDGET)
-				over_budget++;
-		}
-		CHECK_EQ(shadowed, 1u);
-		CHECK_EQ(over_budget, 0u);
-
-		make_xlate(r, 0u, 301u, 1555u);
-		CHECK_EQ(set_rule(eng, 422, r), 0u);
+		/*
+		 * In the MIB all the same, as more rules than room can be after
+		 * a restart: the newcomer finds no room, not the rule in force
+		 * of the other instance.
+		 */
+		CHECK_EQ(omci_mib_table_put(mib, ME171, INST, RULE_DESC, r,
+					    RULE_BYTES, 8, OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		(void)!omci_vlan_program(mib, ME171, RULE_DESC, NULL);
 
 		unsigned int victim_instance = 0, victim_match = 0,
-			     c_programmed = 0;
-		over_budget = 0;
-		nf = omci_vlan_fates(&f, &over);
+			     c_programmed = 0, over_budget = 0;
+		size_t nf = omci_vlan_fates(&f, &over);
+
 		for (size_t i = 0; i < nf; i++) {
 			if (f[i].fate == (uint8_t)OMCI_VLAN_FATE_OVER_BUDGET) {
 				over_budget++;
@@ -797,36 +848,20 @@ int main(void)
 		}
 		CHECK_EQ(over, 0u);
 		CHECK_EQ(over_budget, 1u);
-
 		CHECK_EQ(victim_instance, INST);
 		CHECK_EQ(victim_match, 777u);
-
 		CHECK_EQ(c_programmed, 1u);
-		CHECK_EQ(omci_mib_table_count(mib, ME171, INST_C, RULE_DESC),
-			 1u);
-		unsigned int repointed = 0;
-
-		for (size_t i = 0; i < nf; i++)
-			if (f[i].fate == (uint8_t)OMCI_VLAN_FATE_PROGRAMMED &&
-			    f[i].match_cvid == 301u && f[i].net_vid == 1555u)
-				repointed++;
-		CHECK_EQ(repointed, 1u);
 
 		const size_t napplied = omci_hw_vlan_recorded(&applied);
 
 		CHECK_EQ(napplied, (size_t)OMCI_HW_VLAN_MAX_RULES);
 		if (napplied == (size_t)OMCI_HW_VLAN_MAX_RULES) {
-			unsigned int found = 0, unexpected = 0, saw_777 = 0;
+			unsigned int found = 0, unexpected = 0;
 
 			for (size_t i = 0; i < napplied; i++) {
 				const uint16_t m = applied[i].match_cvid,
 					       v = applied[i].assign_cvid;
-				if (m == 777u)
-					saw_777++;
-				else if (m == 301u && v == 1555u)
-					found++;
-				else if (m >= 302u && m <= 315u &&
-					 v == m + 1000u)
+				if (m >= 301u && m <= 315u && v == m + 1000u)
 					found++;
 				else if (m == 999u && v == 1999u)
 					found++;
@@ -835,13 +870,11 @@ int main(void)
 			}
 			CHECK_EQ(found, 16u);
 			CHECK_EQ(unexpected, 0u);
-			CHECK_EQ(saw_777, 0u);
 		}
 		printf("    shape 2: the newcomer is dropped, not the rule in force of the other instance\n");
 
 		omci_vlan_forget_in_force();
-		CHECK_EQ(omci_vlan_program(mib, ME171, RULE_DESC, NULL),
-			 OMCI_OK);
+		(void)!omci_vlan_program(mib, ME171, RULE_DESC, NULL);
 
 		unsigned int after_reboot_victim = 0;
 
@@ -932,8 +965,16 @@ int main(void)
 		CHECK_EQ(omci_hw_vlan_recorded(&applied),
 			 (size_t)OMCI_HW_VLAN_MAX_RULES);
 
-		make_xlate(r, 0u, 80u, 1050u);
-		CHECK_EQ(set_rule_on(eng, INST_C2, tid++, r), 0u);
+		/*
+		 * 40 -> 1050 is a many-to-one mapping beside 50 -> 1050, which a
+		 * full classifier refuses at the Set; it is put in the MIB as a
+		 * restart could leave it. 50 -> 1090 is shadowed by 50 -> 1050.
+		 */
+		make_xlate(r, 0u, 40u, 1050u);
+		CHECK_EQ(set_rule_on(eng, INST_C2, tid++, r), 6u);
+		CHECK_EQ(omci_mib_table_put(mib, ME171, INST_C2, RULE_DESC, r,
+					    RULE_BYTES, 8, OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
 		make_xlate(r, 0u, 50u, 1090u);
 		CHECK_EQ(set_rule_on(eng, INST_C2, tid++, r), 0u);
 		CHECK_EQ(omci_hw_vlan_recorded(&applied),
@@ -942,14 +983,14 @@ int main(void)
 		make_plain_delete(r, 0u, 50u);
 		CHECK_EQ(set_rule(eng, tid++, r), 0u);
 
-		unsigned int live_80 = 0, live_50_1090 = 0, over_80 = 0,
+		unsigned int live_40 = 0, live_50_1090 = 0, over_40 = 0,
 			     over_50_1090 = 0;
 		const size_t napplied = omci_hw_vlan_recorded(&applied);
 
 		for (size_t i = 0; i < napplied; i++) {
-			if (applied[i].match_cvid == 80u &&
+			if (applied[i].match_cvid == 40u &&
 			    applied[i].assign_cvid == 1050u)
-				live_80++;
+				live_40++;
 			if (applied[i].match_cvid == 50u &&
 			    applied[i].assign_cvid == 1090u)
 				live_50_1090++;
@@ -959,16 +1000,16 @@ int main(void)
 		for (size_t i = 0; i < nf; i++) {
 			if (f[i].fate != (uint8_t)OMCI_VLAN_FATE_OVER_BUDGET)
 				continue;
-			if (f[i].match_cvid == 80u && f[i].net_vid == 1050u)
-				over_80++;
+			if (f[i].match_cvid == 40u && f[i].net_vid == 1050u)
+				over_40++;
 			if (f[i].match_cvid == 50u && f[i].net_vid == 1090u)
 				over_50_1090++;
 		}
 
 		CHECK_EQ(napplied, (size_t)OMCI_HW_VLAN_MAX_RULES);
-		CHECK_EQ(live_80, 1u);
+		CHECK_EQ(live_40, 1u);
 		CHECK_EQ(live_50_1090, 0u);
-		CHECK_EQ(over_80, 0u);
+		CHECK_EQ(over_40, 0u);
 		CHECK_EQ(over_50_1090, 1u);
 		printf("    a deleted rule's match VID does not protect a translation that never ran\n");
 
@@ -1029,12 +1070,18 @@ int main(void)
 						r, 0u, mvid,
 						((seed >> 18) & 1u) ? 5u : 0u);
 				else if (kind == 0u)
+					/*
+					 * S-VIDs from 3000 on, apart from the
+					 * C-VIDs the translations give, so that
+					 * a VID pair names one rule in the
+					 * fates, which do not say S or C.
+					 */
 					make_rule(
 						r, (15u << 28) | (4096u << 15),
 						(0u << 28) | (mvid << 15) |
 							(5u << 12),
 						(0u << 30) | (0u << 16) |
-							(nvid << 3),
+							((nvid + 2000u) << 3),
 						(0u << 16) | (mvid << 3) | 2u);
 				else if (kind == 1u)
 					make_rule(
@@ -1045,9 +1092,27 @@ int main(void)
 						(0u << 16) | (nvid << 3) | 2u);
 				else
 					make_xlate(r, 0u, mvid, nvid);
-				(void)set_rule_on(
-					eng, inst[pick],
-					(uint16_t)(600u + (step % 900u)), r);
+
+				/*
+				 * A quarter of the rows go into the MIB without
+				 * the Set's check for room, as a restart can
+				 * leave more rules than room: the reconcile then
+				 * has to choose.
+				 */
+				if (!kill && ((seed >> 27) & 3u) == 0u) {
+					(void)!omci_mib_table_put(
+						mib, ME171, inst[pick],
+						RULE_DESC, r, RULE_BYTES, 8,
+						OMCI_MIB_TABLE_LAST);
+					(void)!omci_vlan_program(
+						mib, ME171, RULE_DESC, NULL);
+				} else {
+					(void)set_rule_on(
+						eng, inst[pick],
+						(uint16_t)(600u +
+							   (step % 900u)),
+						r);
+				}
 
 				const struct omci_vlan_fate_rec *f = NULL;
 				unsigned int over = 0;
