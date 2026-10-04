@@ -6,7 +6,8 @@
  * generic netlink family: the activation state, the identifiers the OLT
  * assigned, the alarms, the counters and the T-CONTs. "pon monitor" prints
  * every change the kernel announces, with the time it came; "pon gem" lists
- * the GEM interfaces, from the kernel's links.
+ * the GEM interfaces, from the kernel's links, with the upstream priorities,
+ * queue, weight and rates of those that carry traffic upstream.
  */
 
 #include <errno.h>
@@ -197,7 +198,8 @@ static int print_usage(void)
 		"                      -s also prints the serial number\n"
 		"       pon monitor    every change the kernel announces\n"
 		"       pon gem        the GEM interfaces: Port-ID, direction,\n"
-		"                      T-CONT, multicast\n");
+		"                      T-CONT, multicast, and upstream the\n"
+		"                      priorities, queue, weight and rates\n");
 	return 2;
 }
 

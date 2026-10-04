@@ -64,6 +64,7 @@ static struct nlmsghdr *full_dev(char *buf)
 	mnl_attr_put(nlh, PON_A_DEV_SERIAL_NUMBER, sizeof(serial), serial);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_GEM_PORTS, 2);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_TCONTS, 1);
+	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_TCONT_QUEUES, 8);
 	return nlh;
 }
 
@@ -104,7 +105,7 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	hidden = printed(&d, false);
 	shown = printed(&d, true);
 	CHECK(strstr(hidden, "pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3"));
-	CHECK(strstr(hidden, "alarms none  GEM ports up to 2  T-CONTs up to 1"));
+	CHECK(strstr(hidden, "alarms none  GEM ports up to 2  T-CONTs up to 1  queues each 8"));
 	CHECK(strstr(hidden, "serial number set (-s shows it)"));
 	CHECK(!strstr(hidden, "ABCD"));
 	CHECK(strstr(shown, "serial number ABCD12345678"));
@@ -230,6 +231,8 @@ static char *gem_printed(const struct gem_link *g)
 
 static void test_gem_links_are_read(void)
 {
+	static const char want300[] =
+		"gem300 port 300 up tcont 1 pbits 0xf0 queue 2 weight 3 cir 1 pir 5000000000\n";
 	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct nlattr *info, *data;
 	struct nlmsghdr *nlh;
@@ -268,6 +271,61 @@ static void test_gem_links_are_read(void)
 	text = gem_printed(&g);
 	CHECK(!strcmp(text, "gem256 port 256 both tcont 0\n"));
 	free(text);
+
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_NEWLINK;
+	mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifinfomsg));
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, "gem300");
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, "gem");
+	data = mnl_attr_nest_start(nlh, IFLA_INFO_DATA);
+	mnl_attr_put_u16(nlh, IFLA_GEM_PORT_ID, 300);
+	mnl_attr_put_u8(nlh, IFLA_GEM_DIRECTION, IFLA_GEM_DIR_UPSTREAM);
+	mnl_attr_put_u32(nlh, IFLA_GEM_TCONT, 1);
+	mnl_attr_put_u8(nlh, IFLA_GEM_PBITS, 0xf0);
+	mnl_attr_put_u8(nlh, IFLA_GEM_QUEUE, 2);
+	mnl_attr_put_u8(nlh, IFLA_GEM_WEIGHT, 3);
+	mnl_attr_put_u32(nlh, IFLA_GEM_CIR, 1);
+	mnl_attr_put_u64(nlh, IFLA_GEM_PIR, 5000000000ULL);
+	mnl_attr_nest_end(nlh, data);
+	mnl_attr_nest_end(nlh, info);
+	CHECK(gem_link_parse(nlh, &g) == 1);
+	text = gem_printed(&g);
+	CHECK(!strcmp(text, want300));
+	free(text);
+
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_NEWLINK;
+	mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifinfomsg));
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, "gem257");
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, "gem");
+	data = mnl_attr_nest_start(nlh, IFLA_INFO_DATA);
+	mnl_attr_put_u16(nlh, IFLA_GEM_PORT_ID, 257);
+	mnl_attr_put_u32(nlh, IFLA_GEM_TCONT, 0);
+	mnl_attr_put_u8(nlh, IFLA_GEM_PBITS, 0xff);
+	mnl_attr_put_u8(nlh, IFLA_GEM_QUEUE, 0);
+	mnl_attr_put_u8(nlh, IFLA_GEM_WEIGHT, 0);
+	mnl_attr_put_u32(nlh, IFLA_GEM_CIR, 0);
+	mnl_attr_put_u32(nlh, IFLA_GEM_PIR, 0);
+	mnl_attr_nest_end(nlh, data);
+	mnl_attr_nest_end(nlh, info);
+	CHECK(gem_link_parse(nlh, &g) == 1);
+	text = gem_printed(&g);
+	CHECK(!strcmp(text, "gem257 port 257 both tcont 0 queue 0 strict\n"));
+	free(text);
+
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_NEWLINK;
+	mnl_nlmsg_put_extra_header(nlh, sizeof(struct ifinfomsg));
+	mnl_attr_put_strz(nlh, IFLA_IFNAME, "gem2");
+	info = mnl_attr_nest_start(nlh, IFLA_LINKINFO);
+	mnl_attr_put_strz(nlh, IFLA_INFO_KIND, "gem");
+	data = mnl_attr_nest_start(nlh, IFLA_INFO_DATA);
+	mnl_attr_put_u16(nlh, IFLA_GEM_CIR, 2);
+	mnl_attr_nest_end(nlh, data);
+	mnl_attr_nest_end(nlh, info);
+	CHECK(gem_link_parse(nlh, &g) == -EINVAL);
 
 	nlh = link_message(buf, "sfp", "dsa");
 	CHECK(gem_link_parse(nlh, &g) == 0);

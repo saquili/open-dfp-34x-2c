@@ -66,6 +66,7 @@ int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d)
 		[PON_A_DEV_ALARMS] = &d->alarms,
 		[PON_A_DEV_NUM_GEM_PORTS] = &d->gem_ports,
 		[PON_A_DEV_NUM_TCONTS] = &d->tconts,
+		[PON_A_DEV_NUM_TCONT_QUEUES] = &d->tcont_queues,
 	};
 	const struct nlattr *a;
 
@@ -223,6 +224,8 @@ void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 		print_alarms(f, d->alarms);
 	print_u32(f, d, PON_A_DEV_NUM_GEM_PORTS, "GEM ports up to", d->gem_ports);
 	print_u32(f, d, PON_A_DEV_NUM_TCONTS, "T-CONTs up to", d->tconts);
+	print_u32(f, d, PON_A_DEV_NUM_TCONT_QUEUES, "queues each",
+		  d->tcont_queues);
 	if (!has(d, PON_A_DEV_SERIAL_NUMBER)) {
 		fputs("  serial number not set", f);
 	} else if (!serial) {
