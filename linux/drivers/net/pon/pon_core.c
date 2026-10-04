@@ -363,13 +363,14 @@ int pon_device_tcont(struct pon_device *pon, unsigned int index, u16 *alloc_id)
 struct pon_device *pon_device_register(struct device *parent,
 				       const struct pon_device_ops *ops,
 				       unsigned int num_flows,
-				       unsigned int num_tconts, void *drvdata)
+				       unsigned int num_tconts,
+				       unsigned int num_queues, void *drvdata)
 {
 	struct net_device __rcu **gem;
 	struct pon_device *pon;
 
 	if (!ops || !ops->owns_netdev || !ops->gem_add || !ops->gem_del ||
-	    !ops->gem_xmit || !num_flows)
+	    !ops->gem_xmit || !num_flows || !num_queues)
 		return ERR_PTR(-EINVAL);
 
 	/*
@@ -403,6 +404,7 @@ struct pon_device *pon_device_register(struct device *parent,
 	pon->gem = gem;
 	pon->num_flows = num_flows;
 	pon->num_tconts = num_tconts;
+	pon->num_queues = num_queues;
 	pon->drvdata = drvdata;
 	pon->ops = ops;
 	pon->registrations++;

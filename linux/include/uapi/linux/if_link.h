@@ -2041,6 +2041,27 @@ enum ifla_gem_direction {
  * IFLA_GEM_MULTICAST: flag, a multicast GEM port. Allowed only with
  *	IFLA_GEM_DIR_DOWNSTREAM: a multicast GEM port carries downstream
  *	traffic only (ITU-T G.988 clause 9.2.5).
+ *
+ * The upstream scheduling of a port that carries upstream traffic, which a
+ * port of another direction may not be given. Each may also be changed on
+ * an existing link; the attributes above may not.
+ *
+ * IFLA_GEM_QUEUE: u8, the port's upstream queue in its T-CONT, 0 the
+ *	highest priority and below the num-tcont-queues the "pon" family
+ *	reports; 0 if absent. The GEM ports of a T-CONT that name the same
+ *	queue share it.
+ * IFLA_GEM_WEIGHT: u8, 0 to schedule the queue by strict priority, the
+ *	default; 1 to 255 to give it that weight among the T-CONT's weighted
+ *	queues, as the weight of a priority queue (ITU-T G.988 clause
+ *	9.2.10). A T-CONT serves the committed rates of its queues first,
+ *	then its strict queues in order of priority, then its weighted queues
+ *	in proportion to their weights.
+ * IFLA_GEM_CIR: uint, the committed information rate of the port's
+ *	upstream traffic in bytes per second; 0, the default, for none.
+ * IFLA_GEM_PIR: uint, the peak information rate in bytes per second,
+ *	above which the port's upstream frames are dropped; 0, the default,
+ *	for no limit but the T-CONT's grants. Not below IFLA_GEM_CIR. The
+ *	rates of the ports that share a queue add up.
  */
 enum {
 	IFLA_GEM_UNSPEC,
@@ -2048,6 +2069,10 @@ enum {
 	IFLA_GEM_DIRECTION,
 	IFLA_GEM_TCONT,
 	IFLA_GEM_MULTICAST,
+	IFLA_GEM_QUEUE,
+	IFLA_GEM_WEIGHT,
+	IFLA_GEM_CIR,
+	IFLA_GEM_PIR,
 	__IFLA_GEM_MAX,
 };
 

@@ -148,14 +148,15 @@ static int pon_nl_dev_fill(struct sk_buff *msg, struct pon_device *pon,
 		goto cancel;
 
 	/*
-	 * The two capacities are always sent, as the data path registered
-	 * them. num-gem-ports is num_flows, the size of the MAC's flow space,
-	 * which may include flows the MAC never gives to a GEM interface. Both
-	 * are 0 until a data path registers; once it has unregistered,
-	 * num_flows is 0 again and num_tconts keeps its value.
+	 * The capacities are always sent, as the data path registered them.
+	 * num-gem-ports is num_flows, the size of the MAC's flow space, which
+	 * may include flows the MAC never gives to a GEM interface. All are 0
+	 * until a data path registers; once it has unregistered, num_flows is
+	 * 0 again and the other two keep their values.
 	 */
 	if (nla_put_u32(msg, PON_A_DEV_NUM_GEM_PORTS, pon->num_flows) ||
-	    nla_put_u32(msg, PON_A_DEV_NUM_TCONTS, pon->num_tconts))
+	    nla_put_u32(msg, PON_A_DEV_NUM_TCONTS, pon->num_tconts) ||
+	    nla_put_u32(msg, PON_A_DEV_NUM_TCONT_QUEUES, pon->num_queues))
 		goto cancel;
 
 	genlmsg_end(msg, hdr);

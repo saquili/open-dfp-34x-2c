@@ -24,6 +24,8 @@
  *	       data path is registered
  * @num_tconts: the T-CONTs the ONU can be given for subscriber traffic, as
  *		the data path registered them; kept when it unregisters
+ * @num_queues: the upstream queues of each of those T-CONTs, as the data
+ *		path registered them; kept when it unregisters
  * @gem: the GEM interface of each flow, or NULL. Written under RTNL, read
  *	 under RCU on the receive path.
  * @unregistering: the data path is going: lookups by network device no
@@ -45,6 +47,7 @@ struct pon_device {
 	void *drvdata;
 	unsigned int num_flows;
 	unsigned int num_tconts;
+	unsigned int num_queues;
 	struct net_device __rcu **gem;
 	bool unregistering;
 	unsigned int registrations;

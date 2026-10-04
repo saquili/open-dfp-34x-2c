@@ -2081,8 +2081,10 @@ Known limitations
   numbering is measured for T-CONTs 0, 1 and 16 only.
 - Every queue is strict priority with committed rate 0 and the maximum peak
   rate, so a T-CONT sends what the OLT grants it and the driver offers no rate
-  limit, priority or weighting between GEM ports on the PON side. The unit of
-  the rate fields is not known.
+  limit, priority or weighting between GEM ports on the PON side: it registers
+  one queue per T-CONT with the PON class, and ``gem_add`` refuses a GEM port
+  with a weight or a rate (``-EOPNOTSUPP``). The unit of the rate fields is not
+  known.
 - Some losses are not counted. A frame that the switch forwards to the PON port
   without a stream is dropped in the PON MAC while the switch counts it as sent,
   and upstream frames offered above the grant are lost with no counter that the

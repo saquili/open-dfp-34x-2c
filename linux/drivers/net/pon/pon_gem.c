@@ -317,7 +317,9 @@ static void pon_gem_setup(struct net_device *dev)
  * of the GEM port network CTP (ITU-T G.988 clause 9.2.3), 1 upstream (UNI to
  * ANI), 2 downstream (ANI to UNI) or 3 both. IFLA_GEM_TCONT: a T-CONT index,
  * from 0 and below the ONU's num-tconts; the MAC refuses one it does not
- * have.
+ * have. IFLA_GEM_QUEUE is checked against the MAC's queues per T-CONT
+ * (pon_gem_parse_sched()); IFLA_GEM_WEIGHT is a priority queue's weight,
+ * one byte (ITU-T G.988 clause 9.2.10); the rates are bytes per second.
  */
 static const struct nla_policy pon_gem_policy[IFLA_GEM_MAX + 1] = {
 	[IFLA_GEM_PORT_ID]	= NLA_POLICY_MAX(NLA_U16, 4095),
@@ -326,6 +328,15 @@ static const struct nla_policy pon_gem_policy[IFLA_GEM_MAX + 1] = {
 						   IFLA_GEM_DIR_BOTH),
 	[IFLA_GEM_TCONT]	= { .type = NLA_U32 },
 	[IFLA_GEM_MULTICAST]	= { .type = NLA_FLAG },
+	[IFLA_GEM_QUEUE]	= { .type = NLA_U8 },
+	[IFLA_GEM_WEIGHT]	= { .type = NLA_U8 },
+	[IFLA_GEM_CIR]		= { .type = NLA_UINT },
+	[IFLA_GEM_PIR]		= { .type = NLA_UINT },
+};
+
+/* The attributes of a GEM port's upstream scheduling. */
+static const int pon_gem_sched_attrs[] = {
+	IFLA_GEM_QUEUE, IFLA_GEM_WEIGHT, IFLA_GEM_CIR, IFLA_GEM_PIR,
 };
 
 static int pon_gem_parse(struct pon_gem_config *cfg, struct nlattr **data,
@@ -368,6 +379,54 @@ static int pon_gem_parse(struct pon_gem_config *cfg, struct nlattr **data,
 	return 0;
 }
 
+/*
+ * Apply the upstream scheduling in @data to @cfg, which holds the defaults
+ * for a new port and the port's own scheduling for a change, so that what
+ * @data leaves out stays as it was. Only a port that carries upstream traffic
+ * is scheduled upstream; its queue is one of the T-CONT's, and a committed
+ * rate above a peak rate that limits cannot be kept.
+ */
+static int pon_gem_parse_sched(const struct pon_device *pon,
+			       struct pon_gem_config *cfg, struct nlattr **data,
+			       struct netlink_ext_ack *extack)
+{
+	unsigned int i;
+
+	if (!data)
+		return 0;
+
+	if (!(cfg->direction & IFLA_GEM_DIR_UPSTREAM)) {
+		for (i = 0; i < ARRAY_SIZE(pon_gem_sched_attrs); i++) {
+			if (!data[pon_gem_sched_attrs[i]])
+				continue;
+			NL_SET_ERR_MSG_ATTR(extack, data[pon_gem_sched_attrs[i]],
+					    "A GEM port that carries no upstream traffic has no upstream scheduling");
+			return -EINVAL;
+		}
+		return 0;
+	}
+
+	cfg->queue = nla_get_u8_default(data[IFLA_GEM_QUEUE], cfg->queue);
+	cfg->weight = nla_get_u8_default(data[IFLA_GEM_WEIGHT], cfg->weight);
+	if (data[IFLA_GEM_CIR])
+		cfg->cir = nla_get_uint(data[IFLA_GEM_CIR]);
+	if (data[IFLA_GEM_PIR])
+		cfg->pir = nla_get_uint(data[IFLA_GEM_PIR]);
+
+	if (cfg->queue >= pon->num_queues) {
+		NL_SET_ERR_MSG_ATTR_FMT(extack, data[IFLA_GEM_QUEUE],
+					"No queue %u: a T-CONT has queues 0 to %u",
+					cfg->queue, pon->num_queues - 1);
+		return -ERANGE;
+	}
+	if (cfg->pir && cfg->cir > cfg->pir) {
+		NL_SET_ERR_MSG(extack,
+			       "The committed rate is above the peak rate");
+		return -EINVAL;
+	}
+	return 0;
+}
+
 static int pon_gem_newlink(struct net_device *dev,
 			   struct rtnl_newlink_params *params,
 			   struct netlink_ext_ack *extack)
@@ -401,6 +460,10 @@ static int pon_gem_newlink(struct net_device *dev,
 				    "Link does not carry an ONU's traffic");
 		return -EOPNOTSUPP;
 	}
+
+	err = pon_gem_parse_sched(gem->pon, &gem->cfg, params->data, extack);
+	if (err)
+		goto err_free;
 
 	gem->md = metadata_dst_alloc(0, METADATA_HW_PORT_MUX, GFP_KERNEL);
 	if (!gem->md) {
@@ -482,27 +545,91 @@ static void pon_gem_dellink(struct net_device *dev, struct list_head *head)
 	gem->pon->ops->gem_del(gem->pon, gem->flow);
 }
 
+/*
+ * Only the scheduling attributes may change, so every other attribute in
+ * @data must say what the port already has. IFLA_GEM_MULTICAST, a flag, can
+ * only be given, so it may come only for a multicast port.
+ */
+static int pon_gem_changelink(struct net_device *dev, struct nlattr *tb[],
+			      struct nlattr *data[],
+			      struct netlink_ext_ack *extack)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+	struct pon_gem_config cfg = gem->cfg;
+	struct nlattr *bad = NULL;
+	int err;
+
+	if (!data)
+		return 0;
+
+	if (data[IFLA_GEM_PORT_ID] &&
+	    nla_get_u16(data[IFLA_GEM_PORT_ID]) != cfg.port_id)
+		bad = data[IFLA_GEM_PORT_ID];
+	else if (data[IFLA_GEM_DIRECTION] &&
+		 nla_get_u8(data[IFLA_GEM_DIRECTION]) != cfg.direction)
+		bad = data[IFLA_GEM_DIRECTION];
+	else if (data[IFLA_GEM_TCONT] &&
+		 (!(cfg.direction & IFLA_GEM_DIR_UPSTREAM) ||
+		  nla_get_u32(data[IFLA_GEM_TCONT]) != cfg.tcont))
+		bad = data[IFLA_GEM_TCONT];
+	else if (data[IFLA_GEM_MULTICAST] && !cfg.multicast)
+		bad = data[IFLA_GEM_MULTICAST];
+	if (bad) {
+		NL_SET_ERR_MSG_ATTR(extack, bad,
+				    "Only a GEM port's upstream scheduling can change; delete the port and create it again");
+		return -EOPNOTSUPP;
+	}
+
+	err = pon_gem_parse_sched(gem->pon, &cfg, data, extack);
+	if (err)
+		return err;
+
+	if (cfg.queue == gem->cfg.queue && cfg.weight == gem->cfg.weight &&
+	    cfg.cir == gem->cfg.cir && cfg.pir == gem->cfg.pir)
+		return 0;
+
+	if (!gem->pon->ops->gem_change) {
+		NL_SET_ERR_MSG(extack,
+			       "The MAC cannot change a GEM port's upstream scheduling");
+		return -EOPNOTSUPP;
+	}
+
+	err = gem->pon->ops->gem_change(gem->pon, gem->flow, &cfg, extack);
+	if (err)
+		return err;
+
+	gem->cfg = cfg;
+	return 0;
+}
+
 static size_t pon_gem_get_size(const struct net_device *dev)
 {
 	return nla_total_size(sizeof(u16)) +
 	       nla_total_size(sizeof(u8)) +
 	       nla_total_size(sizeof(u32)) +
-	       nla_total_size(0);
+	       nla_total_size(0) +
+	       2 * nla_total_size(sizeof(u8)) +
+	       2 * nla_total_size(sizeof(u64));
 }
 
 static int pon_gem_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
 	const struct pon_gem *gem = netdev_priv(dev);
+	const struct pon_gem_config *cfg = &gem->cfg;
 
-	if (nla_put_u16(skb, IFLA_GEM_PORT_ID, gem->cfg.port_id) ||
-	    nla_put_u8(skb, IFLA_GEM_DIRECTION, gem->cfg.direction))
+	if (nla_put_u16(skb, IFLA_GEM_PORT_ID, cfg->port_id) ||
+	    nla_put_u8(skb, IFLA_GEM_DIRECTION, cfg->direction))
 		return -EMSGSIZE;
 
-	if ((gem->cfg.direction & IFLA_GEM_DIR_UPSTREAM) &&
-	    nla_put_u32(skb, IFLA_GEM_TCONT, gem->cfg.tcont))
+	if ((cfg->direction & IFLA_GEM_DIR_UPSTREAM) &&
+	    (nla_put_u32(skb, IFLA_GEM_TCONT, cfg->tcont) ||
+	     nla_put_u8(skb, IFLA_GEM_QUEUE, cfg->queue) ||
+	     nla_put_u8(skb, IFLA_GEM_WEIGHT, cfg->weight) ||
+	     nla_put_uint(skb, IFLA_GEM_CIR, cfg->cir) ||
+	     nla_put_uint(skb, IFLA_GEM_PIR, cfg->pir)))
 		return -EMSGSIZE;
 
-	if (gem->cfg.multicast && nla_put_flag(skb, IFLA_GEM_MULTICAST))
+	if (cfg->multicast && nla_put_flag(skb, IFLA_GEM_MULTICAST))
 		return -EMSGSIZE;
 
 	return 0;
@@ -516,9 +643,10 @@ static struct net *pon_gem_get_link_net(const struct net_device *dev)
 }
 
 /*
- * No changelink: a Port-ID or T-CONT changed under traffic would move a
- * subscriber's frames to another service with nothing torn down. A changed
- * GEM port is deleted and created again.
+ * changelink changes the upstream scheduling only: a Port-ID or T-CONT
+ * changed under traffic would move a subscriber's frames to another service
+ * with nothing torn down, so a GEM port whose Port-ID, direction or T-CONT
+ * changes is deleted and created again.
  */
 static struct rtnl_link_ops pon_gem_link_ops __read_mostly = {
 	.kind		= "gem",
@@ -527,6 +655,7 @@ static struct rtnl_link_ops pon_gem_link_ops __read_mostly = {
 	.maxtype	= IFLA_GEM_MAX,
 	.policy		= pon_gem_policy,
 	.newlink	= pon_gem_newlink,
+	.changelink	= pon_gem_changelink,
 	.dellink	= pon_gem_dellink,
 	.get_size	= pon_gem_get_size,
 	.fill_info	= pon_gem_fill_info,

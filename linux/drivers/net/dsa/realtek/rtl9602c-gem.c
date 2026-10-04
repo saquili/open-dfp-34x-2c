@@ -180,6 +180,13 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 		return -ERANGE;
 	}
 
+	/* Every queue is strict and unshaped (rtl9602c_pon_queue_set()). */
+	if (cfg->weight || cfg->cir || cfg->pir) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Upstream weights and rates are not supported");
+		return -EOPNOTSUPP;
+	}
+
 	mutex_lock(&p->gpon_lock);
 
 	/* GEM ports need the PON MAC, which a bring-up of the PON builds. */
@@ -638,8 +645,9 @@ static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
  * Registers the switch as the ONU behind its PON port, with all
  * RTL9602C_GPON_NUM_FLOW flows of the GPON MAC, although the OMCC's is never
  * given to a GEM port, and the RTL9602C_GEM_NUM_TCONT T-CONTs the GEM ports
- * use: the scheduler's T-CONT 16 is the OMCC's. Then attaches the receive
- * handler for data frames to the conduit. Nothing is registered without the
+ * use, each with the one queue a GEM port can name: the scheduler's T-CONT 16
+ * is the OMCC's. Then attaches the receive handler for data frames to the
+ * conduit. Nothing is registered without the
  * PON MAC's system controller and buffers, or without a conduit.
  *
  * Return: 0, also when nothing is registered, or a negative error code, with
@@ -656,7 +664,7 @@ int rtl9602c_gem_setup(struct rtl9602c_priv *p)
 
 	pon = pon_device_register(p->dev, &rtl9602c_pon_ops,
 				  RTL9602C_GPON_NUM_FLOW,
-				  RTL9602C_GEM_NUM_TCONT, p);
+				  RTL9602C_GEM_NUM_TCONT, 1, p);
 	if (IS_ERR(pon))
 		return PTR_ERR(pon);
 	/* The handler delivers through p->pon, so it is set first. */

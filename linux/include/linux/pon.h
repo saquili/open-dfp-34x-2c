@@ -37,17 +37,31 @@ struct pon_omci_port;
  * @tcont: index of the T-CONT that schedules the port's upstream traffic;
  *	   meaningful only when @direction includes upstream
  * @multicast: the port is a multicast GEM port, and so downstream only
+ * @queue: the port's upstream queue in @tcont, 0 the highest priority
+ * @weight: 0 to schedule @queue by strict priority, otherwise its weight
+ *	    among the T-CONT's weighted queues, 1 to 255
+ * @cir: the committed rate of the port's upstream traffic, bytes per second;
+ *	 0 for none
+ * @pir: the peak rate of the port's upstream traffic, bytes per second; 0
+ *	 for no limit but the T-CONT's grants
  *
  * The class has checked the combination: a multicast port is downstream
- * only, and a port that carries upstream traffic has a T-CONT. Several GEM
- * ports may share one T-CONT. The MAC checks @tcont against the T-CONTs it
- * has, and refuses what it cannot do.
+ * only, a port that carries upstream traffic has a T-CONT, @queue is below
+ * the queues per T-CONT the MAC registered, @cir is not above a @pir that
+ * limits, and a port that carries no upstream traffic has the scheduling
+ * defaults (all 0). Several GEM ports may share one T-CONT, and one queue
+ * of it; the rates of the ports that share a queue add up. The MAC checks
+ * @tcont against the T-CONTs it has, and refuses what it cannot do.
  */
 struct pon_gem_config {
 	u16 port_id;
 	u8 direction;
 	u32 tcont;
 	bool multicast;
+	u8 queue;
+	u8 weight;
+	u64 cir;
+	u64 pir;
 };
 
 /**
@@ -187,6 +201,17 @@ struct pon_device_ops {
 	int (*gem_add)(struct pon_device *pon, const struct pon_gem_config *cfg,
 		       unsigned int *flow, struct netlink_ext_ack *extack);
 	/**
+	 * @gem_change: Apply cfg to the GEM port of flow. cfg differs from the
+	 * port's configuration only in its upstream scheduling (queue,
+	 * weight, cir and pir), and the class has checked it as for gem_add.
+	 * Refuse what the MAC cannot do with a message in extack, leaving the
+	 * port as it was. Called with RTNL held. Without it, a GEM port's
+	 * scheduling stays as the port was created.
+	 */
+	int (*gem_change)(struct pon_device *pon, unsigned int flow,
+			  const struct pon_gem_config *cfg,
+			  struct netlink_ext_ack *extack);
+	/**
 	 * @gem_del: Remove the GEM port of flow. Called with RTNL held. When
 	 * a bridged GEM interface is deleted, gem_del comes first and
 	 * gem_bridge_leave for the same flow follows, when the bridge lets
@@ -305,6 +330,8 @@ struct pon_omci_port_ops {
  * @num_flows: the size of the MAC's flow space; every flow @ops->gem_add
  *	       hands back is below it
  * @num_tconts: the T-CONTs the ONU can be given for subscriber traffic
+ * @num_queues: the upstream queues of each of those T-CONTs, at least 1;
+ *		every &pon_gem_config.queue is below it
  * @drvdata: the MAC's private data, for pon_device_get_drvdata()
  *
  * Attaches the data path to the PON device of @parent, creating ponN when
@@ -318,14 +345,15 @@ struct pon_omci_port_ops {
  *
  * Context: process context; may sleep.
  * Return: the PON device, or an ERR_PTR(): -EINVAL when a required
- * operation is missing, @num_flows is 0, or an optional pair is half given;
- * -EBUSY when @parent already has a data path; -EOPNOTSUPP without
- * CONFIG_PON.
+ * operation is missing, @num_flows or @num_queues is 0, or an optional pair
+ * is half given; -EBUSY when @parent already has a data path; -EOPNOTSUPP
+ * without CONFIG_PON.
  */
 struct pon_device *pon_device_register(struct device *parent,
 				       const struct pon_device_ops *ops,
 				       unsigned int num_flows,
-				       unsigned int num_tconts, void *drvdata);
+				       unsigned int num_tconts,
+				       unsigned int num_queues, void *drvdata);
 /**
  * pon_device_unregister() - unregister a MAC's data path
  * @pon: the PON device pon_device_register() returned
@@ -452,7 +480,7 @@ void *pon_omci_port_get_drvdata(struct pon_omci_port *port);
 static inline struct pon_device *
 pon_device_register(struct device *parent, const struct pon_device_ops *ops,
 		    unsigned int num_flows, unsigned int num_tconts,
-		    void *drvdata)
+		    unsigned int num_queues, void *drvdata)
 {
 	return ERR_PTR(-EOPNOTSUPP);
 }

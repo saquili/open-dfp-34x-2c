@@ -674,6 +674,26 @@ Attributes
      - 4
      - flag
      - A multicast GEM port. Allowed only with ``IFLA_GEM_DIR_DOWNSTREAM``.
+   * - ``IFLA_GEM_QUEUE``
+     - 5
+     - u8
+     - The port's upstream queue in its T-CONT, 0 the highest priority and
+       below the ``num-tcont-queues`` the family reports. 0 if absent.
+   * - ``IFLA_GEM_WEIGHT``
+     - 6
+     - u8
+     - 0, the default, for a strict-priority queue; 1 to 255, the queue's
+       weight among the T-CONT's weighted queues.
+   * - ``IFLA_GEM_CIR``
+     - 7
+     - uint
+     - The committed rate of the port's upstream traffic, in bytes per second.
+       0, the default, for none.
+   * - ``IFLA_GEM_PIR``
+     - 8
+     - uint
+     - The peak rate of the port's upstream traffic, in bytes per second. 0,
+       the default, for no limit but the T-CONT's grants.
 
 .. list-table::
    :header-rows: 1
@@ -720,22 +740,31 @@ Attributes
      - The recorded exchange: two GEM interfaces on T-CONT 2. Sharing is
        allowed by ITU-T G.984.3 clause 8.3.1.
    * - The attribute numbers are ABI: ``IFLA_GEM_PORT_ID`` 1,
-       ``IFLA_GEM_DIRECTION`` 2, ``IFLA_GEM_TCONT`` 3 and
-       ``IFLA_GEM_MULTICAST`` 4. ``enum ifla_gem_direction`` is
+       ``IFLA_GEM_DIRECTION`` 2, ``IFLA_GEM_TCONT`` 3, ``IFLA_GEM_MULTICAST``
+       4, ``IFLA_GEM_QUEUE`` 5, ``IFLA_GEM_WEIGHT`` 6, ``IFLA_GEM_CIR`` 7 and
+       ``IFLA_GEM_PIR`` 8. ``enum ifla_gem_direction`` is
        ``IFLA_GEM_DIR_UPSTREAM`` 1, ``IFLA_GEM_DIR_DOWNSTREAM`` 2 and
        ``IFLA_GEM_DIR_BOTH`` 3.
-     - T
-     - The recorded exchange: the daemon builds its requests with these
-       numbers.
+     - T, I
+     - T for 1 to 4: the recorded exchange, in which the daemon builds its
+       requests with these numbers. I for 5 to 8: not yet sent by the daemon.
 
-Creating and deleting
----------------------
+Upstream scheduling
+-------------------
 
-Creation is an ``RTM_NEWLINK`` and deletion an ``RTM_DELLINK``, both with RTNL
-held (see "Creating a GEM interface" and "Deleting a GEM interface" under
-"Sequences"). A GEM interface is also deleted when its lower interface is
-unregistered. The link kind has no ``changelink``: a GEM port whose attributes
-change is deleted and created again.
+A port that carries upstream traffic is scheduled in its T-CONT: it sends
+through one of the T-CONT's queues, and the queues share the OLT's grants to
+the T-CONT. ``IFLA_GEM_QUEUE`` names the queue, ``IFLA_GEM_WEIGHT`` makes it a
+strict or a weighted one, and ``IFLA_GEM_CIR`` and ``IFLA_GEM_PIR`` give the
+port's traffic a committed and a peak rate. In ``ip`` syntax, for an ``ip``
+that knows the kind::
+
+    ip link set gemN type gem queue 3 weight 0 cir 1250000 pir 12500000
+
+The model follows the ONU's upstream traffic management of ITU-T G.988: a
+priority queue per T-CONT and priority (clause 9.2.10), the T-CONT's policy,
+strict priority or weighted round robin (clause 9.2.2), and the rates of a
+traffic descriptor (clause 9.2.12).
 
 .. list-table::
    :header-rows: 1
@@ -744,9 +773,76 @@ change is deleted and created again.
    * - Fact
      - Tag
      - Checked by
-   * - The link kind has no ``changelink``. A Port-ID or T-CONT changed under
-       traffic would move a subscriber's frames to another service with
-       nothing torn down, so a changed port is deleted and created again.
+   * - A T-CONT serves the committed rates of its queues first. What remains
+       of its grant goes to its strict queues in order of priority, 0 the
+       highest, and what they leave to its weighted queues in proportion to
+       their weights. A queue sends nothing above its peak rate. A MAC that
+       cannot schedule this way refuses the attributes it cannot honour in
+       ``gem_add`` and ``gem_change``.
+     - I
+     - The class's model; whether a MAC follows it is on the MAC's page. ITU-T
+       G.988 clauses 9.2.2 and 9.2.10 give strict priority and weighted round
+       robin as a T-CONT's policies.
+   * - The queue is a T-CONT index's queue, 0 to ``num-tcont-queues`` less
+       one; the class refuses a higher one with ``-ERANGE``. GEM ports of one
+       T-CONT that name the same queue share it, and the rates of the ports
+       that share a queue add up.
+     - T
+     - On the RTL9602C, with 8 queues per T-CONT: queue 8 was refused, "No
+       queue 8: a T-CONT has queues 0 to 7"; two loaded ports in queue 0
+       shared it, 504 and 461 Mbit/s.
+   * - The weight is one byte, as a priority queue's weight (ITU-T G.988
+       clause 9.2.10); 0 stands for strict priority.
+     - P
+     - ITU-T G.988 clause 9.2.10.
+   * - The rates are in bytes per second, as a traffic descriptor's committed
+       and peak information rates (ITU-T G.988 clause 9.2.12). Both are
+       ``NLA_UINT``: four bytes or eight. 0 means no committed rate and no
+       peak rate, as a traffic descriptor's peak rate of 0 leaves the ONU's own
+       policy. A committed rate above a peak rate that is not 0 is refused
+       with ``-EINVAL``.
+     - P, T
+     - P for the unit and the 0, ITU-T G.988 clause 9.2.12. T for the refusal:
+       a committed rate of 2000 with a peak rate of 1000.
+   * - A port that carries no upstream traffic may not be given any of the
+       four (``-EINVAL``), and reports none; an upstream port reports all four,
+       its defaults included.
+     - T, I
+     - T for the refusal: a downstream-only port with queue 1. I for the
+       reports, not read back.
+   * - The four may change on an existing link, through ``changelink``, which
+       hands the MAC the whole new configuration in ``gem_change``. A change
+       that leaves them as they are calls nothing. Without ``gem_change`` a
+       change is refused with ``-EOPNOTSUPP``, and so is a change, in the same
+       request, of the Port-ID, the direction, the T-CONT or the multicast
+       flag, which only deleting and creating the port again can make.
+     - T, I
+     - T on the RTL9602C: changes moved two loaded ports between queues and
+       gave them weights, a peak rate and a committed rate, each followed by
+       the traffic (the driver's page); a change to the queue a port already
+       had succeeded. I for the refusals of a change, not exercised.
+
+Creating and deleting
+---------------------
+
+Creation is an ``RTM_NEWLINK`` and deletion an ``RTM_DELLINK``, both with RTNL
+held (see "Creating a GEM interface" and "Deleting a GEM interface" under
+"Sequences"). A GEM interface is also deleted when its lower interface is
+unregistered. The link kind's ``changelink`` changes the upstream scheduling
+only (see "Upstream scheduling"): a GEM port whose Port-ID, direction or T-CONT
+changes is deleted and created again.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``changelink`` changes no Port-ID, direction or T-CONT. A Port-ID or
+       T-CONT changed under traffic would move a subscriber's frames to
+       another service with nothing torn down, so such a port is deleted and
+       created again.
        G.988 sets the CTP's Port-ID, T-CONT pointer and direction at creation
        but also lets the OLT write them later (clause 9.2.3), so the daemon
        turns every such write into a re-creation.
@@ -757,7 +853,9 @@ change is deleted and created again.
        ``IFLA_LINK`` (``-EINVAL``); an unknown link (``-ENODEV``); no Port-ID
        (``-EINVAL``); multicast without downstream only (``-EINVAL``);
        upstream without a T-CONT (``-EINVAL``); a link that carries no ONU's
-       traffic (``-EOPNOTSUPP``); and whatever the MAC's ``gem_add`` refuses.
+       traffic (``-EOPNOTSUPP``); upstream scheduling that the class refuses
+       (see "Upstream scheduling"); and whatever the MAC's ``gem_add``
+       refuses.
        A flow that the MAC returns at or above ``num_flows`` (with a warning),
        or a flow that already has a GEM interface, gives ``-EEXIST``, and the
        MAC's port is removed again.
@@ -1169,6 +1267,10 @@ Attributes of the dev object
      - 12
      - u32
      - Always. The T-CONTs the ONU can be given for subscriber traffic.
+   * - ``num-tcont-queues``
+     - 13
+     - u32
+     - Always. The upstream queues of each of those T-CONTs.
 
 The ``dev-stats`` nest holds ten counters numbered from 1 in this order:
 ``sn-requests``, ``ranging-requests``, ``ploam-rx``, ``ploam-crc-errors``,
@@ -1190,9 +1292,9 @@ bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
    * - The ``dev`` attributes are ``id`` (the N of ``ponN``), ``ifindex`` (the
        interface the GEM ports stack on), ``type``, ``onu-state``, ``onu-id``,
        ``alloc-id`` (repeated), ``omcc-port-id``, ``alarms``, ``stats`` (a
-       nest), ``serial-number`` (binary, exactly 8 bytes), ``num-gem-ports``
-       and ``num-tconts``. Their numbers, and the command numbers (``dev-get``
-       1, ``dev-change-ntf`` 2, ``tcont-get`` 3), are ABI.
+       nest), ``serial-number`` (binary, exactly 8 bytes), ``num-gem-ports``,
+       ``num-tconts`` and ``num-tcont-queues``. Their numbers, and the command
+       numbers (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3), are ABI.
      - M
      - The daemon reads the serial number and the alarms by these numbers and
        announces the serial number the driver holds.
@@ -1300,15 +1402,17 @@ claim a MAC in reset cannot make. The counters are the exception: inside the
        and a reader must accept both widths.
      - I
      - Design choice, not exercised: a counter passing 2^32.
-   * - ``num-gem-ports`` and ``num-tconts`` are always sent. They say what the
-       hardware can hold, taken from the registration (``num_flows``,
-       ``num_tconts``); a MAC that keeps flows for itself offers fewer GEM
-       interfaces than ``num-gem-ports`` (see "Known limitations"). A daemon
-       can then refuse an OLT's request for a GEM port network CTP (managed
-       entity 268) or a T-CONT (managed entity 262) beyond the hardware before
-       half a service is built. Both are 0 before a data path is registered.
-       After unregistration ``num-gem-ports`` returns to 0 but ``num-tconts``
-       keeps its last value.
+   * - ``num-gem-ports``, ``num-tconts`` and ``num-tcont-queues`` are always
+       sent. They say what the hardware can hold, taken from the registration
+       (``num_flows``, ``num_tconts``, ``num_queues``); a MAC that keeps flows
+       for itself offers fewer GEM interfaces than ``num-gem-ports`` (see
+       "Known limitations"). A daemon can then refuse an OLT's request for a
+       GEM port network CTP (managed entity 268) or a T-CONT (managed entity
+       262) beyond the hardware before half a service is built, and create a
+       priority queue (managed entity 277) for each queue of each T-CONT. All
+       are 0 before a data path is registered. After unregistration
+       ``num-gem-ports`` returns to 0 but the other two keep their last
+       values.
      - I
      - Design choice, not exercised: the daemon reads ``num-tconts`` when it
        starts and builds its T-CONT entities from it; a changed count would
@@ -1572,7 +1676,8 @@ registers with the class in two independent steps, both against the same
 
 1. ``pon_omci_port_create(parent, ops, drvdata)`` creates the OMCI control
    port, with the operations of ``struct pon_omci_port_ops``.
-2. ``pon_device_register(parent, ops, num_flows, num_tconts, drvdata)``
+2. ``pon_device_register(parent, ops, num_flows, num_tconts, num_queues,
+   drvdata)``
    registers the data path, with the operations of ``struct pon_device_ops``.
    From then on management can create GEM interfaces on the network interface
    that ``owns_netdev`` claims.
@@ -1606,10 +1711,11 @@ Registration and lifetime
    * - Fact
      - Tag
      - Checked by
-   * - ``pon_device_register(parent, ops, num_flows, num_tconts, drvdata)``
-       registers a MAC's data path. It returns ``-EINVAL`` when
+   * - ``pon_device_register(parent, ops, num_flows, num_tconts, num_queues,
+       drvdata)`` registers a MAC's data path. It returns ``-EINVAL`` when
        ``owns_netdev``, ``gem_add``, ``gem_del`` or ``gem_xmit`` is missing,
-       when ``num_flows`` is 0, or when an optional pair is half given: a MAC
+       when ``num_flows`` or ``num_queues`` is 0, or when an optional pair is
+       half given: a MAC
        that joins a bridge has to be able to leave it, and a MAC that takes a
        VLAN has to be able to drop it. A second data path on the same parent
        is ``-EBUSY``.
@@ -1628,6 +1734,11 @@ Registration and lifetime
      - P
      - ITU-T G.988 clause 9.2.2; ITU-T G.984.3 clause 8.1.3.6.1 (the default
        Alloc-ID carries PLOAM and OMCI).
+   * - ``num_queues`` counts the upstream queues of each of those T-CONTs,
+       the same for all; the class checks ``IFLA_GEM_QUEUE`` against it and
+       reports it as ``num-tcont-queues``.
+     - I
+     - Design choice, not exercised by the daemon yet.
    * - ``pon_device_unregister()`` first marks the data path as going, under
        RTNL and the registration lock, so that the lookup by network device,
        through which a new GEM interface finds its ONU, no longer finds it;
@@ -1671,6 +1782,14 @@ The data path operations
        an extack message, what the MAC cannot do. RTNL is held.
      - T
      - The recorded exchange: six created, none refused.
+   * - ``gem_change(pon, flow, cfg, extack)``, optional, applies a new upstream
+       scheduling to the GEM port of ``flow``: ``cfg`` differs from the port's
+       configuration in ``queue``, ``weight``, ``cir`` or ``pir`` only, and
+       the class has checked it as for ``gem_add``. The MAC refuses, with an
+       extack message, what it cannot do, and leaves the port as it was. RTNL
+       is held.
+     - I
+     - Design choice (see "Upstream scheduling").
    * - ``gem_del(pon, flow)`` removes the port; RTNL is held. When a bridged
        GEM interface is deleted, ``gem_bridge_leave`` for the same flow arrives
        after ``gem_del``, from the bridge's own unregistration handling. So a
@@ -1870,7 +1989,7 @@ What the class holds when it calls into the MAC, from the kernel-doc of
    * - ``owns_netdev``
      - RTNL and the registration lock.
      - Must not take RTNL.
-   * - ``gem_add``, ``gem_del``
+   * - ``gem_add``, ``gem_change``, ``gem_del``
      - RTNL.
      - ``gem_del`` can come before ``gem_bridge_leave`` of the same flow.
    * - ``gem_bridge_join``, ``gem_bridge_leave``
@@ -1998,9 +2117,10 @@ GEM ports
      - Tag
      - Checked by
    * - ``gem_add`` refuses: an upstream port on a T-CONT of 8 or above
-       (``-ERANGE``); a PON MAC that is not up yet (``-ENETDOWN``); the OMCC's
-       Port-ID (``-EEXIST``); a Port-ID that already has a GEM interface
-       (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
+       (``-ERANGE``); a weight or a rate (``-EOPNOTSUPP``), since every queue
+       is strict and unshaped; a PON MAC that is not up yet (``-ENETDOWN``);
+       the OMCC's Port-ID (``-EEXIST``); a Port-ID that already has a GEM
+       interface (``-EEXIST``); no free flow (``-ENOSPC``). G.988 allows several GEM
        port network CTPs with one Port-ID; this MAC does not. The flow is the
        lowest free one other than ``RTL9602C_GPON_OMCC_FLOW`` (64).
      - I
@@ -2168,9 +2288,9 @@ Setup of the RTL9602C driver
 2. The switch driver creates its OMCI port, which creates ``pon0`` and
    ``pon0omci0``, and attaches its control-frame handler to the conduit.
    Purpose: OMCI messages have somewhere to go. (T)
-3. It registers its data path on ``pon0`` (128 flows, 8 T-CONTs) and attaches
-   its flow handler to the conduit. Purpose: GEM interfaces can be created and
-   received frames delivered. (T)
+3. It registers its data path on ``pon0`` (128 flows, 8 T-CONTs of one queue)
+   and attaches its flow handler to the conduit. Purpose: GEM interfaces can be
+   created and received frames delivered. (T)
 4. ``ip link set pon up`` brings the PON up, and the ONU walks O1 to O5.
    Purpose: the OLT can activate the ONU. (T: the downstream locks, and the ONU
    reaches O5 and holds it on an OLT)

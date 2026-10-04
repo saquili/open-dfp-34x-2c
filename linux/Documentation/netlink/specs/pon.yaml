@@ -297,6 +297,15 @@ attribute-sets:
           stay outside all of them. 0 until a data path is registered; the
           value stays when the data path unregisters.
         type: u32
+      -
+        name: num-tcont-queues
+        doc: >-
+          The upstream queues of each of those T-CONTs, as the data path
+          registered them; the queue that IFLA_GEM_QUEUE names is below it,
+          0 the highest priority. ITU-T G.988 models each as a priority
+          queue managed entity (clause 9.2.10). 0 until a data path is
+          registered; the value stays when the data path unregisters.
+        type: u32
   -
     name: tcont
     doc: >-
@@ -329,8 +338,8 @@ operations:
       doc: >-
         Get one ONU by id, or dump every ONU. A report starts from nothing
         known and takes what the MAC reports; an ONU whose MAC gives no
-        status, or fails to, is reported with id, num-gem-ports and
-        num-tconts only. A get without id fails with EINVAL, and one for an
+        status, or fails to, is reported with id, num-gem-ports, num-tconts
+        and num-tcont-queues only. A get without id fails with EINVAL, and one for an
         unknown id with ENODEV.
       attribute-set: dev
       flags: [admin-perm]
@@ -353,6 +362,7 @@ operations:
             - serial-number
             - num-gem-ports
             - num-tconts
+            - num-tcont-queues
 
       dump:
         reply: *dev-attrs
