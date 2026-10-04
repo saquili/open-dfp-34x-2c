@@ -165,13 +165,14 @@
 				#size-cells = <0>;
 
 				/*
-				 * The SerDes lane to the host: no PHY and no
-				 * in-band status, so a fixed link, whose real
-				 * state the switch driver reports to phylink.
-				 * phylink passes this phy-mode to the driver
-				 * when the port starts, so a lane run at
-				 * 1000BASE-X (rtl9602c.sfp_mode=1000basex) may
-				 * need "1000base-x" here too; not verified.
+				 * The SerDes lane to the host: no PHY, so a
+				 * fixed link, whose real state the switch
+				 * driver reports to phylink. The driver finds
+				 * the host's setting of the lane itself,
+				 * 2500BASE-X or 1000BASE-X, with in-band
+				 * negotiation or without, and reports the
+				 * speed of the setting found; it does not take
+				 * the setting from this phy-mode.
 				 * With "pause" in the fixed link the port sends
 				 * and honours pause frames; without it, as
 				 * here, it does neither.
