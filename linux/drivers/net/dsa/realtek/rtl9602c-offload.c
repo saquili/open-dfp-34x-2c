@@ -1772,11 +1772,12 @@ int rtl9602c_port_setup_tc(struct dsa_switch *ds, int port,
  * The ACL: 96 ternary rules in the table engine. A rule compares its template
  * number, the ingress port and eight 16-bit slots, and its template says which
  * field each slot holds. Seven templates are used: a rule naming the eighth,
- * which no register holds, matches nothing. The only action class applied is
- * the forwarding decision, drop or trap. Rules judge the frames entering a
- * port, not those the CPU sends out of it; rules on ports 0 and 2 are
- * verified. Of two rules that match a frame the lower entry decides, so the
- * rules are kept in entries ordered by tc's priority (rtl9602c_acl_place()).
+ * which no register holds, matches nothing. The action classes applied are
+ * the forwarding decision, drop or trap, and the log counter, which a rule
+ * that passes takes alone. Rules judge the frames entering a port, not those
+ * the CPU sends out of it; rules on ports 0 and 2 are verified. Of two rules
+ * that match a frame the lower entry decides each class it has, so the rules
+ * are kept in entries ordered by tc's priority (rtl9602c_acl_place()).
  * Setup clears the ACL (rtl9602c_filter_qos_reset()).
  */
 
@@ -1943,17 +1944,22 @@ static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 }
 
 /*
- * The action classes of rule @w: forwarding, and the log class when the action
- * names a log counter.
+ * The action classes of rule @w: forwarding when the action decides it, and
+ * the log class when the action names a log counter. A rule with neither is
+ * never written: classes of 0 would chain its entry to the one before.
  */
 static u32 rtl9602c_acl_act_en(const u32 *w)
 {
 	const u32 *act = &w[RTL9602C_ACL_W_ACT];
-	unsigned int lsb = RTL9602C_ACL_ACT_LOG_LSB;
+	unsigned int log = RTL9602C_ACL_ACT_LOG_LSB;
+	unsigned int fwd = RTL9602C_ACL_ACT_FWD_LSB;
+	u32 en = 0;
 
-	if ((act[lsb / 32] >> (lsb % 32)) & GENMASK(1, 0))
-		return RTL9602C_ACL_ACT_EN_FWD | RTL9602C_ACL_ACT_EN_LOG;
-	return RTL9602C_ACL_ACT_EN_FWD;
+	if ((act[fwd / 32] >> (fwd % 32)) & GENMASK(1, 0))
+		en |= RTL9602C_ACL_ACT_EN_FWD;
+	if ((act[log / 32] >> (log % 32)) & GENMASK(1, 0))
+		en |= RTL9602C_ACL_ACT_EN_LOG;
+	return en;
 }
 
 /*
@@ -2134,6 +2140,11 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	idx = err;
 
 	log = count ? rtl9602c_acl_log_get(p) : -1;
+	if (fwdact == RTL9602C_ACL_ACT_FWD_NONE && log < 0) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "a rule that passes only counts, and all 32 log counters are in use");
+		return -ENOSPC;
+	}
 	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
 	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, m,
 			     fwdact, fwd_pmsk, log);
@@ -2157,7 +2168,8 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 }
 
 /*
- * A flower rule whose one action is drop or trap, as one ACL rule. Each field
+ * A flower rule whose one action is drop, trap or pass, as one ACL rule; a rule
+ * that passes decides nothing and only counts its frames. Each field
  * it matches is cut into 16-bit slots, and a slot with a zero mask is left out.
  * L4 ports, and an ICMP or ICMPv6 type and code, are compared through the
  * field selectors setup points at the start of the IP payload, which are taken
@@ -2567,9 +2579,9 @@ wider:
 
 /*
  * Each flower rule goes to one block: a broadcast or multicast destination, or
- * ARP, with one police action to storm control; one drop or trap action, on
- * those frames too, to the ACL; a VLAN match with its vlan actions to the
- * classifier.
+ * ARP, with one police action to storm control; one drop, trap or pass
+ * action, on those frames too, to the ACL; a VLAN match with its vlan actions
+ * to the classifier.
  */
 /*
  * A tag a VLAN rule names: its DEI is not matched, and its VID and priority
@@ -2935,6 +2947,10 @@ static int rtl9602c_flower_replace(struct rtl9602c_priv *p, int port,
 		if (act->id == FLOW_ACTION_TRAP)
 			return rtl9602c_acl_replace(p, port, cls,
 						    RTL9602C_ACL_ACT_FWD_TRAP,
+						    0);
+		if (act->id == FLOW_ACTION_ACCEPT)
+			return rtl9602c_acl_replace(p, port, cls,
+						    RTL9602C_ACL_ACT_FWD_NONE,
 						    0);
 	}
 

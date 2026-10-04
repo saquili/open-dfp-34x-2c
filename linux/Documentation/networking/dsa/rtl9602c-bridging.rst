@@ -2096,9 +2096,9 @@ taken off again downstream::
        second tag behind an outer C-tag, or anything but a C-tag behind an
        S-tag; the VID or priority of both an S-tag and the C-tag behind it;
        more than one action, but two pops on an S-tag; any action but ``vlan
-       modify``, ``push`` and ``pop`` (a drop or trap goes to the ACL, and
-       ``police`` on a destination-address match to storm control, both on the
-       *acl-qos* page); a modify of an untagged frame, or of a C-tag into
+       modify``, ``push`` and ``pop`` (a drop, trap or pass goes to the ACL,
+       and ``police`` on a destination-address match to storm control, both on
+       the *acl-qos* page); a modify of an untagged frame, or of a C-tag into
        anything but a C-tag; a C-tag pushed onto a tagged frame, or an S-tag
        onto a frame with one; a pop of an untagged frame. With no free entry:
        ``-ENOSPC`` and the message ``the classifier is full``.

@@ -165,14 +165,15 @@ Each item names the page that describes it.
   membership, the S-VLAN and port mirroring (*bridging*). The GEM interfaces of
   the PON class are bridge ports too, and the switch forwards between them and
   the bridge's other ports itself.
-- Filtering and quality of service. ``tc`` flower rules that drop or trap
-  become ACL rules, a rule that rewrites a C-VID a classifier entry, and a rule
-  that polices broadcast, multicast or ARP by packet rate storm control; a
-  matchall police is the port's ingress policer, ``tc`` tbf and ets set the
-  egress shaper and scheduler of a port, and DCB sets the default priority, the
-  DSCP map and the trust order of PCP and DSCP (*acl-qos*). The DoS checks, the
-  storm-control classes that ``tc`` cannot describe, loop detection and the
-  header-capture latch belong to the same page.
+- Filtering and quality of service. ``tc`` flower rules that drop, trap or
+  pass and count become ACL rules, a rule that rewrites a C-VID a classifier
+  entry, and a rule that polices broadcast, multicast or ARP by packet rate
+  storm control; a matchall police is the port's ingress policer, ``tc`` tbf
+  and ets set the egress shaper and scheduler of a port, and DCB sets the
+  default priority, the DSCP map and the trust order of PCP and DSCP
+  (*acl-qos*). The DoS checks, the storm-control classes that ``tc`` cannot
+  describe, loop detection and the header-capture latch belong to the same
+  page.
 - Routing and NAT. The L3/NAT engine translates the source address and port of
   IPv4 TCP and UDP flows and forwards them, and their replies, without the CPU;
   its tables follow the kernel's address, neighbour and route notifiers, and

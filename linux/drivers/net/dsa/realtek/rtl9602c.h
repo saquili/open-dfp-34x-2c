@@ -1898,10 +1898,12 @@ struct rtl9602c_field {
  * frame; MIRROR forwards it as usual and sends a copy to the ports of the
  * mask, the CPU port's bit alone reaching the CPU; that TRAP sends it to the
  * CPU is not verified. EN_FWD is the forwarding class of RTL9602C_ACL_ACT_EN,
- * which reads EN_DEFAULT at reset.
+ * which reads EN_DEFAULT at reset. NONE, with EN_FWD clear, decides nothing:
+ * a rule with it only counts.
  */
 #define RTL9602C_ACL_ACT_FWD_PORTS_LSB	37
 #define RTL9602C_ACL_ACT_FWD_LSB	41
+#define RTL9602C_ACL_ACT_FWD_NONE	0
 #define RTL9602C_ACL_ACT_FWD_REDIRECT	1
 #define RTL9602C_ACL_ACT_FWD_MIRROR	2
 #define RTL9602C_ACL_ACT_FWD_TRAP	3

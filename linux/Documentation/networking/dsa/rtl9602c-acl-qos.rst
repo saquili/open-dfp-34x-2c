@@ -63,7 +63,7 @@ thresholds and instruments.
      - Described under
    * - ACL
      - Frames entering a port.
-     - A ``tc`` flower rule with ``drop`` or ``trap``.
+     - A ``tc`` flower rule with ``drop``, ``trap`` or ``pass``.
      - "The ACL"
    * - Classifier
      - Frames entering a port, by direction.
@@ -118,7 +118,8 @@ How the driver reaches the blocks
 Four things carry the function:
 
 - A flower rule on the ingress of a user port goes to one block, by what it
-  matches and what it does. One ``drop`` or ``trap`` action makes an ACL rule.
+  matches and what it does. One ``drop``, ``trap`` or ``pass`` action makes an
+  ACL rule.
   A destination address of all ones or of the group bit alone, or an exact ARP
   EtherType with no VLAN match, together with one ``police`` action, makes a
   storm-control rule. A VLAN match with one ``vlan modify`` action makes a
@@ -209,7 +210,8 @@ Configuration
    * - ``CONFIG_NET_SCH_INGRESS``, ``CONFIG_NET_CLS_ACT``
      - The ingress hook (``clsact``) that the filters attach to.
    * - ``CONFIG_NET_CLS_FLOWER``, ``CONFIG_NET_ACT_GACT``
-     - ACL rules: a flower rule with ``drop`` or ``trap``. The classifier's
+     - ACL rules: a flower rule with ``drop``, ``trap`` or ``pass``. The
+       classifier's
        VLAN tag operations additionally need ``CONFIG_NET_ACT_VLAN``.
    * - ``CONFIG_NET_ACT_POLICE``
      - Storm-control rules and the ingress policer: the ``police`` action.
@@ -389,11 +391,12 @@ reached through the indirect table engine (see the *bridging* page, "The
 indirect table engine").
 
 The driver makes an ACL rule of each ``tc`` flower rule on ingress whose one
-action is ``drop`` or ``trap``, and writes four rules of its own, which copy
-IGMP and MLD to the CPU for the bridge's multicast snooping. It applies only
-the forwarding class of the action: a rule drops a frame, sends it to the CPU,
-or sends a copy there. The rules judge frames as they enter a port (see "Reach
-and state").
+action is ``drop``, ``trap`` or ``pass``, and writes four rules of its own,
+which copy IGMP and MLD to the CPU for the bridge's multicast snooping. It
+applies only the forwarding class of the action: a rule drops a frame, sends it
+to the CPU, or sends a copy there; a rule that passes decides nothing and only
+counts the frames it matches (see "Hit counts"). The rules judge frames as they
+enter a port (see "Reach and state").
 
 Rules, templates and lookup
 ---------------------------
@@ -566,9 +569,10 @@ decision is one of them.
        ``RTL9602C_ACL_ACT_EN_FWD`` (bit 4) is the forwarding decision and
        ``RTL9602C_ACL_ACT_EN_LOG`` (bit 3) the log class. Every word reads
        ``RTL9602C_ACL_ACT_EN_DEFAULT`` (``0x7f``) out of reset. The driver
-       writes ``RTL9602C_ACL_ACT_EN_FWD`` for a rule, with
-       ``RTL9602C_ACL_ACT_EN_LOG`` when the rule has a log counter, so no
-       class that the rule did not program is applied.
+       writes ``RTL9602C_ACL_ACT_EN_FWD`` for a rule that drops or traps, and
+       ``RTL9602C_ACL_ACT_EN_LOG`` for a rule with a log counter, so no class
+       that the rule did not program is applied; a rule that passes has
+       ``RTL9602C_ACL_ACT_EN_LOG`` alone.
      - M
      - Drop rules written with this word at ``0x10`` drop their traffic, and
        drop and trap rules with it at ``0x18`` drop and trap theirs and count
@@ -626,6 +630,18 @@ decision is one of them.
      - M
      - Trap and drop rules on ``pon`` with counters, under untagged frames of
        EtherType ``0x88b5`` from the network side: see "Hit counts".
+   * - Each class is decided by the lowest matching entry that has it: a rule
+       with ``RTL9602C_ACL_ACT_EN_LOG`` alone counts a frame and leaves its
+       forwarding to the switch, or to the next matching rule with
+       ``RTL9602C_ACL_ACT_EN_FWD``, whose own counter then counts nothing.
+     - M
+     - UDP frames to 239.5.0.9 from the network side, 20 at a time, to a group
+       the host side had joined, with rules on ``pon`` that match the
+       destination address: a rule that passes let 20 of 20 through and
+       counted 20; with a drop rule of a larger priority value added, none
+       arrived, the pass rule counted 20 more and the drop rule none; with the
+       drop rule moved to a smaller value, none arrived, the drop rule counted
+       20 and the pass rule nothing more.
    * - The log class's other types police with a meter, so the driver sets
        ``RTL9602C_ACL_ACT_EN_LOG`` only with type 1 and a counter.
      - I
@@ -681,10 +697,10 @@ to an ACL rule.
    * - Fact
      - Tag
      - Checked by
-   * - A flower rule on ingress whose single action is ``drop`` or ``trap``
-       becomes one ACL rule, a rule on the broadcast address, the group bit or
-       ARP included; only a ``police`` of those is storm control (see "Storm
-       control"). Accepted matches: EtherType, IP protocol, destination and
+   * - A flower rule on ingress whose single action is ``drop``, ``trap`` or
+       ``pass`` becomes one ACL rule, a rule on the broadcast address, the
+       group bit or ARP included; only a ``police`` of those is storm control
+       (see "Storm control"). Accepted matches: EtherType, IP protocol, destination and
        source MAC and IPv4 addresses (with masks), L4 source and destination
        ports, and the type and code of ICMP and ICMPv6 (see "The parser's
        field selectors"). Each field is
@@ -706,7 +722,8 @@ to an ACL rule.
        exact IPv4 or IPv6 EtherType and an exact IP protocol. Refused with
        ``-ENOSPC``: no template
        covers the fields and none is free; all 96 entries are in use, four of
-       them by the driver's own rules (see "Rules of the driver's own").
+       them by the driver's own rules (see "Rules of the driver's own"); a
+       rule that passes when all 32 log counters are taken.
      - M
      - ``tc filter add dev sfp ingress protocol ip flower skip_sw dst_port 4444
        action drop`` without ``ip_proto`` was refused; the 97th rule was refused
@@ -834,8 +851,9 @@ while one is free, and the switch counts in it every frame for which the rule
 decides. ``cls_flower_stats``, which ``tc -s filter show`` calls, reports the
 frames counted since the last report; the counters count no bytes, so the bytes
 read 0, as with other switches that count frames only. A rule added while all
-32 are taken works without a count. The driver's own rules (see "Rules of the
-driver's own") take none. A counter of 32 bits would wrap within a minute only
+32 are taken works without a count, but a rule that passes, which does nothing
+else, is refused. The driver's own rules (see "Rules of the driver's own") take
+none. A counter of 32 bits would wrap within a minute only
 above 71 million frames a second, and the counter fold, which runs every
 minute (see the *main* page, "Per-port counters"), adds every counter in use to
 its rule's total, so a total never misses a wrap.
@@ -859,6 +877,15 @@ its rule's total, so a total never misses a wrap.
        priority 5 added above the drop of 10, 300 more frames gave the trap 300
        and left the drop at 200. No frame reached the host side while a rule
        was in place, and 200 did once the rules were gone.
+   * - A rule that passes counts the frames it matches while they go on as
+       before, tagged frames by the fields behind the tag: an IPv4 rule on the
+       destination address, an IPv6 rule on the destination MAC address.
+     - M
+     - Rules on ``pon`` for groups the host side had joined: ``protocol ip
+       flower skip_sw dst_ip 239.5.0.20 action pass`` reported ``Sent 0 bytes
+       300 pkt`` for 300 frames in VLAN 420, all of which arrived; ``protocol
+       ipv6 flower skip_sw dst_mac 33:33:00:05:00:20 action pass`` 300 for 300
+       frames to ff3e::5:20 in VLAN 420, all of which arrived.
 
 The parser's field selectors
 ============================
