@@ -872,6 +872,7 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	if (state == RTL9602C_ONU_O5_OPERATION) {
 		p->gpon_o5_since = jiffies;
 		p->gpon_rei_sent = 0;
+		p->gpon_pst_seen = false;
 	}
 	/* In O1 there is no downstream, so nothing that keeps PEE raised. */
 	if (state == RTL9602C_ONU_O1_INITIAL)
@@ -2012,14 +2013,44 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		}
 		return;
 
+	case RTL9602C_PLOAM_DS_PST: {
+		/*
+		 * Directed or broadcast, about once a second, in O5 (G.984.3
+		 * clause 9.2.3.17): the OLT's line number and the K1 and K2
+		 * bytes of its protection switching. Each is answered with the
+		 * ONU's own PST (clause 9.2.4.7) carrying the same three octets
+		 * on the normal queue, so that the OLT finds no link mismatch:
+		 * the ONU has one line and no protection switching to act on.
+		 * The first PST in O5, and every change, is logged.
+		 */
+		u8 pst[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
+		const u8 *got = &msg[RTL9602C_PLOAM_PST_LINE];
+
+		if (p->gpon_state != RTL9602C_ONU_O5_OPERATION)
+			return;
+		pst[0] = p->gpon_onu_id;
+		pst[1] = RTL9602C_PLOAM_US_PST;
+		memcpy(&pst[RTL9602C_PLOAM_PST_LINE], got, RTL9602C_PLOAM_PST_BYTES);
+		rtl9602c_ploam_enqueue(p, pst, RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
+		if (!p->gpon_pst_seen ||
+		    memcmp(p->gpon_pst, got, RTL9602C_PLOAM_PST_BYTES)) {
+			memcpy(p->gpon_pst, got, RTL9602C_PLOAM_PST_BYTES);
+			p->gpon_pst_seen = true;
+			pr_info("<GPON> PST: line %u, K1 %02x, K2 %02x; answered in kind\n",
+				got[0], got[1], got[2]);
+		}
+		return;
+	}
+
 	case RTL9602C_PLOAM_DS_CHANGE_POWER_LEVEL:
-	case RTL9602C_PLOAM_DS_PST:
 	case RTL9602C_PLOAM_DS_SLEEP_ALLOW:
 		/*
-		 * Not acted on: power levelling, protection switching and power
-		 * saving. Nothing is acknowledged, so the OLT sees that the ONU
-		 * did not take them. Each is logged once, the first time one
-		 * comes for this ONU.
+		 * Not acted on: power levelling, and power saving, which an ONU
+		 * ignores unless OMCI has enabled its power management (G.984.3
+		 * Annex E.2.1), as no OMCI entity of this ONU offers any. Nothing
+		 * is acknowledged, so the OLT sees that the ONU did not take
+		 * them. Each is logged once, the first time one comes for this
+		 * ONU.
 		 */
 		if (msg[0] != p->gpon_onu_id &&
 		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED)

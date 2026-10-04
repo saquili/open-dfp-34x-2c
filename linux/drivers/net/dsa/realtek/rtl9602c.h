@@ -632,7 +632,16 @@ enum {
 #define RTL9602C_PLOAM_US_DYING_GASP	3
 #define RTL9602C_PLOAM_US_NO_MESSAGE	4
 #define RTL9602C_PLOAM_US_ENCRYPTION_KEY	5
+#define RTL9602C_PLOAM_US_PST		7
 #define RTL9602C_PLOAM_US_REI		8
+
+/*
+ * PST, downstream and upstream alike (G.984.3 clause 9.2.3.17 and
+ * clause 9.2.4.7): the line number, then the K1 and K2 bytes of protection
+ * switching.
+ */
+#define RTL9602C_PLOAM_PST_LINE		2
+#define RTL9602C_PLOAM_PST_BYTES		3
 
 /*
  * Encryption_Key (G.984.3 clause 9.2.4.5): the key's index, the fragment's, 0
@@ -2611,6 +2620,10 @@ struct rtl9602c_priv {
 	bool gpon_pee;
 	/** @gpon_pee_last: when the last Physical_Equipment_Error came */
 	unsigned long gpon_pee_last;
+	/** @gpon_pst: the line number, K1 and K2 of the last PST answered */
+	u8 gpon_pst[RTL9602C_PLOAM_PST_BYTES];
+	/** @gpon_pst_seen: a PST has been answered since the ONU entered O5 */
+	bool gpon_pst_seen;
 	/**
 	 * @gpon_flow_port: the Port-ID each flow is bound to in the Port-ID
 	 * table, or RTL9602C_GPON_PORTID_NONE

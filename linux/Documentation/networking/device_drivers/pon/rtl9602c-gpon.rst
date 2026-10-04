@@ -1410,11 +1410,23 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - Any
      - Raises the PEE alarm, which clears 3 s after the last one (see
        "Reporting: the PON class and devlink").
-   * - Change_Power_Level (16), PST (17), Sleep_Allow (24)
+   * - PST (17)
+     - The ONU-ID or all ONUs
+     - O5
+     - Answered with the ONU's own PST (7) on the normal queue, carrying the
+       same line number, K1 and K2: the ONU has one line and no protection
+       switching, and the same octets keep the OLT from finding a link
+       mismatch (G.984.3 clause 9.2.3.17, clause 9.2.4.7 and clause 11.1.2).
+       The first PST in O5, and each change of its octets, is logged. An
+       injected PST with line 1, K1 ``aa`` and K2 ``bb`` was answered with
+       ``00 07 01 aa bb`` on the normal queue (the ``ploamlog`` ring).
+   * - Change_Power_Level (16), Sleep_Allow (24)
      - The ONU-ID or all ONUs
      - None
      - Not acted on and not acknowledged; each type is logged once, the first
-       time one comes.
+       time one comes. Sleep_Allow is ignored as G.984.3 has an ONU do whose
+       power management OMCI has not enabled (Annex E.2.1): no OMCI entity of
+       this ONU offers any.
    * - Request_Password (9)
      - The ONU-ID
      - O5
@@ -2923,10 +2935,11 @@ Known limitations
   remainder sent as the type 3 pattern. The test OLT asks for neither. That
   Extended_Burst_Length is ignored after the first serial-number request has
   not been seen on the board, since the test OLT assigns the ONU-ID at once.
-- Change_Power_Level, PST and Sleep_Allow are recorded, logged once and not
-  acted on. Swift_POPUP, like POPUP, has not been exercised on the board, since
-  it needs the ONU in O6. The test OLT sends no Physical_Equipment_Error, so
-  the PEE alarm has been raised only by injected messages.
+- Change_Power_Level and Sleep_Allow are recorded, logged once and not acted
+  on. Swift_POPUP, like POPUP, has not been exercised on the board, since it
+  needs the ONU in O6. The test OLT sends no Physical_Equipment_Error and no
+  PST, so the PEE alarm and the PST answer have been exercised only with
+  injected messages.
 - Decryption has been tried only against an OLT that encrypts nothing: the key
   exchange and the marking of a flow work as far as the driver's side goes,
   but whether the MAC decrypts what an OLT encrypts with the key sent depends
