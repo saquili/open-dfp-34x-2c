@@ -15,7 +15,11 @@
 #include "mcast/acl.h"
 #include "mcast/agent.h"
 #include "mcast/report.h"
+#include "me/bridge.h"
+#include "me/defaults.h"
+#include "me/gem.h"
 #include "me/tables.h"
+#include "me/vlan.h"
 #include "mib/store.h"
 #include "omci/attrmask.h"
 #include "omci/engine.h"
@@ -66,6 +70,10 @@ static void a4(uint8_t out[16], uint32_t v)
 
 /* ---- Messages ------------------------------------------------------- */
 
+/* The priority of the tag eth() writes, and its TPID. */
+static unsigned int g_pcp = 5;
+static unsigned int g_tpid = 0x8100u;
+
 /* The Ethernet header, with a tag when @vid is not negative; the offset after it. */
 static size_t eth(uint8_t *f, int vid, unsigned int type)
 {
@@ -75,8 +83,8 @@ static size_t eth(uint8_t *f, int vid, unsigned int type)
 
 	memcpy(f, mac, sizeof(mac));
 	if (vid >= 0) {
-		put16(&f[at], 0x8100u);
-		put16(&f[at + 2], (5u << 13) | (unsigned int)vid);
+		put16(&f[at], g_tpid);
+		put16(&f[at + 2], (g_pcp << 13) | (unsigned int)vid);
 		at += 4;
 	}
 	put16(&f[at], type);
@@ -495,7 +503,7 @@ static void snoop(uint32_t group, uint32_t source, bool join)
 
 static void send(const uint8_t *f, size_t n)
 {
-	omci_hw_mcast_send(f, n, false, 0);
+	omci_hw_mcast_receive(f, n, false, 0);
 }
 
 /* A client joins with IGMPv2, the bridge snoops it, the agent answers. */
@@ -1064,6 +1072,419 @@ static void test_what_the_bridge_refuses(void)
 	down();
 }
 
+/* ---- Messages upstream ---------------------------------------------- */
+
+static void ctp(uint16_t inst, uint16_t port_id, uint16_t tcont, uint8_t dir)
+{
+	me(268, inst);
+	set_n(268, inst, OMCI_GEM_ATTR_PORT_ID, port_id, 2);
+	set_n(268, inst, OMCI_GEM_ATTR_TCONT, tcont, 2);
+	set_n(268, inst, OMCI_GEM_ATTR_DIRECTION, dir, 1);
+	me(266, inst);
+	set_n(266, inst, OMCI_GEM_IW_ATTR_CTP, inst, 2);
+}
+
+static void net_port(uint16_t inst, uint8_t tp_type, uint16_t tp_ptr,
+		     uint16_t vid)
+{
+	me(47, inst);
+	set_n(47, inst, 3, tp_type, 1);
+	set_n(47, inst, 4, tp_ptr, 2);
+	if (vid != 0u) {
+		uint8_t table[24] = { 0 };
+
+		put16(table, vid);
+		me(84, inst);
+		CHECK_EQ(omci_mib_attr_set_by_olt(g_mib, 84, inst,
+						  OMCI_BRIDGE_VLAN_ATTR_TABLE,
+						  table, sizeof(table)),
+			 OMCI_OK);
+		set_n(84, inst, OMCI_BRIDGE_VLAN_ATTR_COUNT, 1, 1);
+	}
+}
+
+/* The instances the ONU makes itself, the T-CONTs among them; first, as they reset the MIB. */
+static void onu(void)
+{
+	struct omci_hw_caps caps;
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(g_mib, &caps), OMCI_OK);
+}
+
+/*
+ * The network side, in the UNI's bridge: GEM port 256 both ways with @vid
+ * (0 for every VLAN), and GEM port 4000 downstream only.
+ */
+static void network(uint16_t vid)
+{
+	ctp(0x0001, 256, 0x8000, 3);
+	net_port(0x0201, 5, 0x0001, vid);
+	ctp(0x0002, 4000, 0, 2);
+	net_port(0x0202, 5, 0x0002, 0);
+	(void)!omci_gem_program(g_mib, NULL);
+	(void)!omci_bridge_program(g_mib, NULL);
+}
+
+/* The last message sent upstream but @back, its GEM port and length. */
+static size_t sent(size_t back, uint16_t *port, uint8_t *f)
+{
+	*port = 0;
+	return omci_hw_mcast_sent(back, port, f, 600);
+}
+
+static size_t sent_count(void)
+{
+	uint8_t f[600];
+	uint16_t port;
+	size_t n = 0;
+
+	while (n < 8u && sent(n, &port, f) != 0u)
+		n++;
+	return n;
+}
+
+/* A message of the subscriber's, as the switch traps it, with no group to snoop. */
+static void hear(const uint8_t *f, size_t n)
+{
+	send(f, n);
+	omci_mcast_service(g_m, g_mib, g_now);
+}
+
+static void test_messages_go_upstream_under_a_policy(void)
+{
+	static const uint8_t client6[16] = { 0xfe, 0x80, 0, 0, 0, 0, 0, 0,
+					     0,	   0,	 0, 0, 0, 0, 0, 2 };
+	static const uint8_t group6[16] = {
+		0xff, 0x3e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x12, 0x34
+	};
+	struct omci_hw_mcast_port port;
+	uint8_t f[256], out[600];
+	uint16_t gem;
+	size_t n;
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	(void)omci_hw_mcast_port_recorded(&port);
+	CHECK(port.trap);
+
+	/* An allowed join goes up GEM port 256 as it came. */
+	n = igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5));
+	hear(f, n);
+	CHECK_EQ(sent(0, &gem, out), n);
+	CHECK_EQ(gem, 256u);
+	CHECK_MEM(out, f, n);
+	CHECK_EQ(sent_count(), 1u);
+
+	/* A refused one does not, unless the profile forwards it. */
+	hear(f, igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 2, 2, 2)));
+	CHECK_EQ(sent_count(), 1u);
+	set_n(309, PROFILE, 15, 1, 1);
+	hear(f, igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 2, 2, 2)));
+	CHECK_EQ(sent_count(), 2u);
+	set_n(309, PROFILE, 15, 0, 1);
+
+	/* A leave goes up; a query of the subscriber side does not. */
+	hear(f, igmp(f, -1, 0x17u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), 3u);
+	hear(f, igmp(f, -1, 0x11u, IP4(10, 0, 0, 2), IP4(224, 0, 0, 1)));
+	CHECK_EQ(sent_count(), 3u);
+
+	/* IGMPv3 with the profile at version 3, then 2; MLD is not IGMP. */
+	n = igmp3(f, -1, IP4(10, 0, 0, 2), 4u, IP4(239, 1, 1, 6), 0, 0);
+	hear(f, n);
+	CHECK_EQ(sent_count(), 4u);
+	set_n(309, PROFILE, 1, 2, 1);
+	hear(f, n);
+	CHECK_EQ(sent_count(), 4u);
+	hear(f, igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 6)));
+	CHECK_EQ(sent_count(), 5u);
+	hear(f, mld(f, -1, 143u, client6, group6, 3u));
+	CHECK_EQ(sent_count(), 6u);
+	/* At MLD version 1, an MLDv2 report is dropped, and IGMP is free. */
+	set_n(309, PROFILE, 1, 16, 1);
+	hear(f, mld(f, -1, 143u, client6, group6, 3u));
+	CHECK_EQ(sent_count(), 6u);
+	hear(f, igmp3(f, -1, IP4(10, 0, 0, 2), 4u, IP4(239, 1, 1, 6), 0, 0));
+	CHECK_EQ(sent_count(), 7u);
+
+	/* Without a policy the switch forwards them: no trap, nothing sent. */
+	CHECK_EQ(omci_mib_delete(g_mib, 310, PORT), OMCI_OK);
+	omci_mcast_program(g_m, g_mib, g_now);
+	(void)omci_hw_mcast_port_recorded(&port);
+	CHECK(!port.trap);
+	hear(f, igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 7)));
+	CHECK_EQ(sent_count(), 7u);
+	down();
+}
+
+static void test_a_backend_that_cannot_send_leaves_the_messages_alone(void)
+{
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct omci_hw_mcast_port port;
+
+	up();
+	side(true);
+	ops.mcast_send = NULL;
+	omci_hw_ops_set(&ops);
+	omci_mcast_program(g_m, g_mib, g_now);
+	omci_hw_ops_set(NULL);
+	(void)omci_hw_mcast_port_recorded(&port);
+	CHECK(!port.trap);
+	down();
+}
+
+static void test_the_rate_of_messages_upstream(void)
+{
+	uint8_t f[256];
+	size_t n;
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	set_n(309, PROFILE, 6, 2, 4);
+	omci_mcast_program(g_m, g_mib, g_now);
+	n = igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5));
+	hear(f, n);
+	hear(f, n);
+	hear(f, n);
+	CHECK_EQ(sent_count(), 2u);
+	g_now += 1;
+	hear(f, n);
+	CHECK_EQ(sent_count(), 3u);
+	down();
+}
+
+/* The outer tag of a sent frame: its TPID and TCI. */
+static void tag_at(const uint8_t *f, size_t at, unsigned int *tpid,
+		   unsigned int *tci)
+{
+	*tpid = (unsigned int)f[at] << 8 | f[at + 1u];
+	*tci = (unsigned int)f[at + 2u] << 8 | f[at + 3u];
+}
+
+/* Join 239.1.1.5 in a frame tagged @vid (-1 untagged); the frame sent, its length. */
+static size_t join_up(int vid, uint8_t *out)
+{
+	uint8_t f[256];
+	uint16_t gem;
+
+	hear(f, igmp(f, vid, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	return sent(0, &gem, out);
+}
+
+static void test_the_upstream_igmp_tag_control(void)
+{
+	unsigned int tpid, tci;
+	uint8_t out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	set_n(309, PROFILE, 4, (3u << 13) | 420u, 2);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* 1: a tag added, in front of any other. */
+	set_n(309, PROFILE, 5, 1, 1);
+	CHECK_EQ(join_up(-1, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((3u << 13) | 420u));
+	CHECK_EQ(join_up(410, out), 54u);
+	tag_at(out, 16, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 410u));
+
+	/* 2: the outer tag replaced, or one added. */
+	set_n(309, PROFILE, 5, 2, 1);
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (3u << 13) | 420u);
+	CHECK_EQ(join_up(-1, out), 50u);
+
+	/* 3: the VID replaced, the priority kept; or a tag added. */
+	set_n(309, PROFILE, 5, 3, 1);
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (5u << 13) | 420u);
+	CHECK_EQ(join_up(-1, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (3u << 13) | 420u);
+
+	/* 0, no rules: a tag the receive path took off is put back. */
+	set_n(309, PROFILE, 5, 0, 1);
+	{
+		uint8_t f[256];
+		uint16_t gem;
+		const size_t n =
+			igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5));
+
+		omci_hw_mcast_receive(f, n, true, (2u << 13) | 77u);
+		omci_mcast_service(g_m, g_mib, g_now);
+		CHECK_EQ(sent(0, &gem, out), n + 4u);
+		tag_at(out, 12, &tpid, &tci);
+		CHECK(tpid == 0x8100u && tci == ((2u << 13) | 77u));
+	}
+	down();
+}
+
+/* Replace the rules of the extended VLAN tagging operation by @n rows. */
+static void rules(const uint32_t (*rows)[4], size_t n)
+{
+	(void)!omci_mib_delete(g_mib, 171, 0x0101);
+	me(171, 0x0101);
+	for (size_t i = 0; i < n; i++) {
+		uint8_t row[16];
+
+		for (unsigned int w = 0; w < 4u; w++)
+			put32(&row[4 * w], rows[i][w]);
+		CHECK_EQ(omci_mib_table_put(g_mib, 171, 0x0101, 6, row, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+	}
+	(void)!omci_vlan_program(g_mib, 171, 6, NULL);
+}
+
+static void test_the_vlan_rules_tag_the_messages(void)
+{
+	static const uint32_t xlate[][4] = {
+		/* C-VID 410, any priority, to 1410, the priority kept */
+		{ 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
+		  (8u << 16) | (1410u << 3) },
+		/* C-VID 100, priority 6, to 200 at priority 6 */
+		{ 0xf8000000u, (6u << 28) | (100u << 15), 0x400f0000u,
+		  (6u << 16) | (200u << 3) },
+	};
+	static const uint32_t push[][4] = {
+		/* untagged: C-VID 36 at priority 4 */
+		{ 0xf8000000u, 0xf8000000u, 0x000f0000u,
+		  (4u << 16) | (36u << 3) },
+		/* C-VID 410: an S-tag of VID 100 that copies the priority */
+		{ 0xf8000000u, (8u << 28) | (410u << 15),
+		  (8u << 16) | (100u << 3), (8u << 16) | (410u << 3) },
+		/* C-VID 37 at priority 6: an S-tag of VID 101 at priority 2 */
+		{ 0xf8000000u, (6u << 28) | (37u << 15),
+		  (2u << 16) | (101u << 3), (6u << 16) | (37u << 3) },
+	};
+	unsigned int tpid, tci;
+	uint8_t out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	rules(xlate, ARRAY_SIZE(xlate));
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (5u << 13) | 1410u);
+	g_pcp = 6;
+	CHECK_EQ(join_up(100, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (6u << 13) | 200u);
+	g_pcp = 5;
+	CHECK_EQ(join_up(100, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (5u << 13) | 100u);
+	/* An outer S-tag is no C-tag the rules take. */
+	g_tpid = 0x88a8u;
+	CHECK_EQ(join_up(410, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x88a8u && tci == ((5u << 13) | 410u));
+	g_tpid = 0x8100u;
+
+	rules(push, ARRAY_SIZE(push));
+	CHECK_EQ(join_up(-1, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((4u << 13) | 36u));
+	CHECK_EQ(join_up(410, out), 54u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x88a8u && tci == ((5u << 13) | 100u));
+	tag_at(out, 16, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 410u));
+	g_pcp = 6;
+	CHECK_EQ(join_up(37, out), 54u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x88a8u && tci == ((2u << 13) | 101u));
+	g_pcp = 5;
+	CHECK_EQ(join_up(38, out), 50u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK_EQ(tci, (5u << 13) | 38u);
+	rules(push, 0);
+	down();
+}
+
+static void test_the_gem_port_of_a_message(void)
+{
+	static const uint32_t xlate[][4] = {
+		{ 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
+		  (8u << 16) | (1410u << 3) },
+	};
+	uint8_t out[600];
+	uint16_t gem;
+
+	up();
+	onu();
+	side(true);
+	network(1410);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* GEM port 256 carries VLAN 1410 only. */
+	CHECK_EQ(join_up(-1, out), 0u);
+	rules(xlate, ARRAY_SIZE(xlate));
+	CHECK_EQ(join_up(410, out), 50u);
+	CHECK_EQ(sent(0, &gem, out), 50u);
+	CHECK_EQ(gem, 256u);
+
+	/* Behind a mapper: priorities 0 to 3 to GEM port 256, 4 to 7 to 300. */
+	ctp(0x0011, 300, 0x8001, 3);
+	me(130, 0x0301);
+	for (unsigned int b = 0; b < 8u; b++)
+		set_n(130, 0x0301, (uint8_t)(2u + b),
+		      b < 4u ? 0x0001u : 0x0011u, 2);
+	net_port(0x0203, 3, 0x0301, 1410);
+	(void)!omci_gem_program(g_mib, NULL);
+	(void)!omci_bridge_program(g_mib, NULL);
+	(void)join_up(410, out);
+	(void)sent(0, &gem, out);
+	CHECK_EQ(gem, 300u);
+	g_pcp = 1;
+	(void)join_up(410, out);
+	(void)sent(0, &gem, out);
+	CHECK_EQ(gem, 256u);
+	g_pcp = 5;
+
+	/* A send that fails is noted. */
+	omci_hw_mcast_send_fail_next();
+	const size_t before = sent_count();
+
+	(void)join_up(410, out);
+	CHECK_EQ(sent_count(), before);
+
+	/* Without the UNI in a bridge nothing goes up; with it last, it does. */
+	CHECK_EQ(omci_mib_delete(g_mib, 47, PORT), OMCI_OK);
+	(void)!omci_bridge_program(g_mib, NULL);
+	(void)join_up(410, out);
+	CHECK_EQ(sent_count(), before);
+	me(47, PORT);
+	set_n(47, PORT, 3, 1, 1);
+	(void)!omci_bridge_program(g_mib, NULL);
+	(void)join_up(410, out);
+	(void)sent(0, &gem, out);
+	CHECK_EQ(gem, 300u);
+	rules(xlate, 0);
+	down();
+}
+
 static void test_one_agent_at_a_time(void)
 {
 	struct omci_mcast *m = NULL, *other = NULL;
@@ -1108,6 +1529,12 @@ int main(void)
 	RUN(test_leaves);
 	RUN(test_linking_to_the_subscriber_side);
 	RUN(test_what_the_bridge_refuses);
+	RUN(test_messages_go_upstream_under_a_policy);
+	RUN(test_a_backend_that_cannot_send_leaves_the_messages_alone);
+	RUN(test_the_rate_of_messages_upstream);
+	RUN(test_the_upstream_igmp_tag_control);
+	RUN(test_the_vlan_rules_tag_the_messages);
+	RUN(test_the_gem_port_of_a_message);
 	RUN(test_one_agent_at_a_time);
 	return OMCI_T_REPORT("test_mcast_agent");
 }

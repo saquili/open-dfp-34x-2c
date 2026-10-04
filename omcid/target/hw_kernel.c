@@ -34,6 +34,7 @@
 #include <linux/pkt_cls.h>
 #include <linux/pkt_sched.h>
 #include <linux/rtnetlink.h>
+#include <linux/tc_act/tc_gact.h>
 #include <linux/tc_act/tc_vlan.h>
 #include <linux/netlink.h>
 #include <linux/pon.h>
@@ -2269,6 +2270,139 @@ static bool g_mc_tried;
 /* The bridge's timers are in hundredths of a second (USER_HZ). */
 #define CENTI_PER_SEC 100u
 
+/*
+ * The traps of the subscriber side's IGMP and MLD, while the agent sends
+ * them upstream itself: IGMP, and the MLD query (130), version 1 report
+ * (131) and done (132) and version 2 report (143), each a flower rule on sfp
+ * with priorities from TRAP_PRIO, before the VLAN rules (tc_vlan_apply).
+ */
+#define TRAP_PRIO 100u
+static const struct {
+	uint16_t proto;
+	uint8_t ip_proto;
+	int icmp_type;
+} g_traps[] = {
+	{ ETH_P_IP, IPPROTO_IGMP, -1 },
+	{ ETH_P_IPV6, IPPROTO_ICMPV6, 130 },
+	{ ETH_P_IPV6, IPPROTO_ICMPV6, 131 },
+	{ ETH_P_IPV6, IPPROTO_ICMPV6, 132 },
+	{ ETH_P_IPV6, IPPROTO_ICMPV6, 143 },
+};
+/*
+ * Whether the traps are on: -1 until the first setting, which also clears
+ * what an earlier run left; and the last failure to set them, said once.
+ */
+static int g_mc_trap = -1;
+static int g_mc_trap_err;
+static int g_mc_tx = -1;
+
+/* Add a flower rule on sfp's ingress, in the switch only, that traps to the CPU. */
+static int tc_trap_add(int ifindex, unsigned int prio, uint16_t proto,
+		       uint8_t ip_proto, int icmp_type)
+{
+	uint8_t req[512] __aligned(4);
+	struct tcmsg tcm = {
+		.tcm_family = AF_UNSPEC,
+		.tcm_ifindex = ifindex,
+		.tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS),
+		.tcm_info = tc_info(prio, proto),
+	};
+	struct tc_gact gact = { .action = TC_ACT_TRAP };
+	const uint16_t eth = htons(proto);
+	uint32_t flags = TCA_CLS_FLAGS_SKIP_SW;
+	size_t off, opts, acts, act1, aopts;
+
+	memset(req, 0, sizeof(req));
+	*(uint16_t *)&req[4] = RTM_NEWTFILTER;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE |
+			       NLM_F_EXCL;
+	*(uint32_t *)&req[8] = 24;
+	memcpy(req + NL_HDRLEN, &tcm, sizeof(tcm));
+	off = NL_HDRLEN + sizeof(tcm);
+	off = nla_put(req, off, TCA_KIND, "flower", sizeof("flower"));
+
+	opts = off;
+	off += NLA_HDRLEN_;
+	off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &eth, sizeof(eth));
+	off = nla_put(req, off, TCA_FLOWER_KEY_IP_PROTO, &ip_proto,
+		      sizeof(ip_proto));
+	if (icmp_type >= 0) {
+		const uint8_t type = (uint8_t)icmp_type, mask = 0xffu;
+
+		off = nla_put(req, off, TCA_FLOWER_KEY_ICMPV6_TYPE, &type,
+			      sizeof(type));
+		off = nla_put(req, off, TCA_FLOWER_KEY_ICMPV6_TYPE_MASK, &mask,
+			      sizeof(mask));
+	}
+	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
+
+	acts = off;
+	off += NLA_HDRLEN_;
+	act1 = off;
+	off += NLA_HDRLEN_;
+	off = nla_put(req, off, TCA_ACT_KIND, "gact", sizeof("gact"));
+	aopts = off;
+	off += NLA_HDRLEN_;
+	off = nla_put(req, off, TCA_GACT_PARMS, &gact, sizeof(gact));
+	*(uint16_t *)(req + aopts) = (uint16_t)(off - aopts);
+	*(uint16_t *)(req + aopts + 2) = TCA_ACT_OPTIONS | NLA_F_NESTED;
+	*(uint16_t *)(req + act1) = (uint16_t)(off - act1);
+	*(uint16_t *)(req + act1 + 2) = 1 | NLA_F_NESTED;
+	*(uint16_t *)(req + acts) = (uint16_t)(off - acts);
+	*(uint16_t *)(req + acts + 2) = TCA_FLOWER_ACT | NLA_F_NESTED;
+	*(uint16_t *)(req + opts) = (uint16_t)(off - opts);
+	*(uint16_t *)(req + opts + 2) = TCA_OPTIONS | NLA_F_NESTED;
+
+	*(uint32_t *)&req[0] = (uint32_t)off;
+	return rtnl_talk(req, off, NULL, 0, NULL);
+}
+
+/* Put the traps on sfp, or take them off; on a failure none is left. */
+static int mcast_traps(int uni, bool on)
+{
+	int err = 0;
+
+	for (size_t i = 0; i < ARRAY_SIZE(g_traps); i++)
+		(void)tc_filter_del(uni, TRAP_PRIO + (unsigned int)i);
+	if (!on)
+		return 0;
+	err = tc_clsact_ensure(uni);
+	for (size_t i = 0; i < ARRAY_SIZE(g_traps) && !err; i++)
+		err = tc_trap_add(uni, TRAP_PRIO + (unsigned int)i,
+				  g_traps[i].proto, g_traps[i].ip_proto,
+				  g_traps[i].icmp_type);
+	if (err)
+		(void)mcast_traps(uni, false);
+	return err;
+}
+
+/* Send a message upstream through the interface of a GEM port. */
+static enum omci_status kernel_mcast_send(uint16_t port_id,
+					  const uint8_t *frame, size_t len)
+{
+	struct sockaddr_ll sll = {
+		.sll_family = AF_PACKET,
+		.sll_halen = ETH_ALEN,
+	};
+	char name[IFNAMSIZ];
+
+	if (g_mc_tx < 0)
+		g_mc_tx = socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, 0);
+	snprintf(name, sizeof(name), GEM_NAME_FMT, port_id);
+	sll.sll_ifindex = (int)if_nametoindex(name);
+	if (g_mc_tx < 0 || !sll.sll_ifindex || len < ETH_HLEN)
+		return OMCI_ERR_HW;
+	memcpy(sll.sll_addr, frame, ETH_ALEN);
+	memcpy(&sll.sll_protocol, &frame[2 * ETH_ALEN], 2);
+	if (sendto(g_mc_tx, frame, len, 0, (struct sockaddr *)&sll,
+		   sizeof(sll)) != (ssize_t)len) {
+		OMCI_DEBUG("mcast: %s would not send: %s", name,
+			   strerror(errno));
+		return OMCI_ERR_HW;
+	}
+	return OMCI_OK;
+}
+
 static int mcast_packet_socket(void)
 {
 	static const struct sock_filter code[] = {
@@ -2673,10 +2807,29 @@ static enum omci_status kernel_mcast_port(const struct omci_hw_mcast_port *cfg)
 	size_t off, nest, dlen = 0, ilen = 0;
 	int br, uni, err;
 
+	uni = (int)if_nametoindex(UNI_IFNAME);
+	/* In router mode sfp is no bridge port, and nothing is trapped. */
+	if (uni && g_mc_trap != (int)(cfg->trap && !g_router)) {
+		err = mcast_traps(uni, cfg->trap && !g_router);
+		if (err) {
+			if (err != g_mc_trap_err)
+				OMCI_WARN(
+					"mcast: the traps of IGMP and MLD on %s could not be set: %s (%s)",
+					UNI_IFNAME, strerror(-err),
+					omci_hw_last_extack());
+			g_mc_trap_err = err;
+			return OMCI_ERR_HW;
+		}
+		g_mc_trap_err = 0;
+		g_mc_trap = (int)(cfg->trap && !g_router);
+		OMCI_INFO("mcast: the IGMP and MLD of %s go %s", UNI_IFNAME,
+			  g_mc_trap ?
+				  "to the agent, which sends them upstream" :
+				  "upstream through the switch");
+	}
 	if (g_router)
 		return OMCI_OK;
 	br = (int)if_nametoindex(BRIDGE_IFNAME);
-	uni = (int)if_nametoindex(UNI_IFNAME);
 	if (!br || !uni) {
 		OMCI_DEBUG("mcast: no %s with %s yet", BRIDGE_IFNAME,
 			   UNI_IFNAME);
@@ -2766,4 +2919,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_group_del = kernel_mcast_group_del,
 	.mcast_fd = kernel_mcast_fd,
 	.mcast_frame = kernel_mcast_frame,
+	.mcast_send = kernel_mcast_send,
 };

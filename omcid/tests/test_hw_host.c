@@ -349,8 +349,8 @@ static void test_the_multicast_bridge_keeps_its_groups(void)
 	memset(frame, 0x5a, sizeof(frame));
 	for (unsigned int i = 0; i < 9u; i++) {
 		frame[0] = (uint8_t)i;
-		omci_hw_mcast_send(frame, i == 0u ? sizeof(frame) : 64u,
-				   i == 1u, 0x0123u);
+		omci_hw_mcast_receive(frame, i == 0u ? sizeof(frame) : 64u,
+				      i == 1u, 0x0123u);
 	}
 	for (unsigned int i = 0; i < 8u; i++) {
 		CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_OK);
@@ -359,6 +359,10 @@ static void test_the_multicast_bridge_keeps_its_groups(void)
 		CHECK_EQ(f.tagged, i == 1u);
 	}
 	CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_DECLINED);
+
+	/* A message upstream longer than a frame is refused. */
+	CHECK_EQ(omci_hw_mcast_send(256u, frame, sizeof(frame)),
+		 OMCI_ERR_INVAL);
 	omci_hw_mcast_reset();
 	CHECK_EQ(omci_hw_mcast_groups(out, 2, &n), OMCI_OK);
 	CHECK_EQ(n, 0u);

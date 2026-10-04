@@ -266,6 +266,15 @@ size_t omci_vlan_fates(const struct omci_vlan_fate_rec **out,
 		       unsigned int *overflow);
 
 /**
+ * omci_vlan_in_force() - The rules in force, in the order the hardware
+ *	takes them: a frame is changed by the first that matches it.
+ * @out: the rules
+ *
+ * Return: how many there are.
+ */
+size_t omci_vlan_in_force(const struct omci_hw_vlan_xlate **out);
+
+/**
  * omci_vlan_forget_in_force() - Forget which rules are in force, as after a MIB reset.
  */
 void omci_vlan_forget_in_force(void);

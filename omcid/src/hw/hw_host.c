@@ -514,6 +514,12 @@ static unsigned int g_mc_port_set;
 static bool g_mc_fail_list, g_mc_fail_add, g_mc_fail_del;
 static struct omci_hw_mcast_frame g_mc_q[MCAST_QUEUE];
 static size_t g_mc_q_head, g_mc_q_n;
+static struct {
+	uint16_t port_id;
+	struct omci_hw_mcast_frame f;
+} g_mc_sent[MCAST_QUEUE];
+static size_t g_mc_sent_n;
+static bool g_mc_fail_send;
 
 void omci_hw_mcast_reset(void)
 {
@@ -526,6 +532,44 @@ void omci_hw_mcast_reset(void)
 	g_mc_fail_del = false;
 	g_mc_q_head = 0;
 	g_mc_q_n = 0;
+	g_mc_sent_n = 0;
+	g_mc_fail_send = false;
+}
+
+void omci_hw_mcast_send_fail_next(void)
+{
+	g_mc_fail_send = true;
+}
+
+enum omci_status omci_hw_mcast_send(uint16_t port_id, const uint8_t *frame,
+				    size_t len)
+{
+	struct omci_hw_mcast_frame *f;
+
+	if (len > sizeof(f->data))
+		return OMCI_ERR_INVAL;
+	if (g_mc_fail_send) {
+		g_mc_fail_send = false;
+		return OMCI_ERR_HW;
+	}
+	g_mc_sent[g_mc_sent_n % MCAST_QUEUE].port_id = port_id;
+	f = &g_mc_sent[g_mc_sent_n++ % MCAST_QUEUE].f;
+	f->len = (uint16_t)len;
+	omci_wire_copy(f->data, frame, len);
+	return OMCI_OK;
+}
+
+size_t omci_hw_mcast_sent(size_t index, uint16_t *port_id, uint8_t *frame,
+			  size_t cap)
+{
+	const struct omci_hw_mcast_frame *f;
+
+	if (index >= g_mc_sent_n || index >= MCAST_QUEUE)
+		return 0;
+	*port_id = g_mc_sent[(g_mc_sent_n - 1u - index) % MCAST_QUEUE].port_id;
+	f = &g_mc_sent[(g_mc_sent_n - 1u - index) % MCAST_QUEUE].f;
+	omci_wire_copy(frame, f->data, f->len < cap ? f->len : cap);
+	return f->len;
 }
 
 void omci_hw_mcast_fail_next(bool list, bool add, bool del)
@@ -567,8 +611,8 @@ void omci_hw_mcast_snoop(const struct omci_hw_mcast_group *g, bool join)
 		mcast_remove(i);
 }
 
-void omci_hw_mcast_send(const uint8_t *frame, size_t len, bool tagged,
-			uint16_t tci)
+void omci_hw_mcast_receive(const uint8_t *frame, size_t len, bool tagged,
+			   uint16_t tci)
 {
 	struct omci_hw_mcast_frame *f;
 
@@ -676,4 +720,5 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.mcast_group_del = omci_hw_mcast_group_del,
 	.mcast_fd = host_mcast_fd,
 	.mcast_frame = omci_hw_mcast_frame,
+	.mcast_send = omci_hw_mcast_send,
 };

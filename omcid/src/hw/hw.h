@@ -578,6 +578,10 @@ struct omci_hw_mcast_group {
  *	0.1 s; 0 for the bridge's own, 100
  * @last_member: the most time to answer a group's query, in units of
  *	0.1 s; 0 for the bridge's own, 10
+ * @trap: the IGMP and MLD messages of the subscriber side go to the CPU
+ *	only, which the bridge snoops but does not forward, for the agent
+ *	to send upstream itself (mcast_send); otherwise the switch forwards
+ *	them and the CPU sees a copy
  */
 struct omci_hw_mcast_port {
 	bool fast_leave;
@@ -585,6 +589,7 @@ struct omci_hw_mcast_port {
 	uint32_t query_interval;
 	uint32_t query_response;
 	uint32_t last_member;
+	bool trap;
 };
 
 /**
@@ -652,22 +657,41 @@ omci_hw_mcast_group_del(const struct omci_hw_mcast_group *g);
 __must_check enum omci_status
 omci_hw_mcast_frame(struct omci_hw_mcast_frame *out);
 
+/**
+ * omci_hw_mcast_send() - Send an IGMP or MLD message upstream (host
+ *	backend).
+ * @port_id: the GEM port that carries it
+ * @frame: the frame, from its destination address, with its tags
+ * @len: its length
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL for a frame that is too long, or the
+ * failure of the send.
+ */
+__must_check enum omci_status
+omci_hw_mcast_send(uint16_t port_id, const uint8_t *frame, size_t len);
+
 #if defined(OMCID_HW_STUB)
 
 /*
  * Test hooks of the host backend for multicast: a group the bridge snoops,
  * joined or left; a message from the subscriber side to hand over; what the
- * port was last set to, and how often; failures of the next list, add and
- * delete; and an empty start.
+ * port was last set to, and how often; failures of the next list, add,
+ * delete and send; the messages sent upstream, the last first, with their
+ * GEM port (0 for none); and an empty start.
  */
 void omci_hw_mcast_snoop(const struct omci_hw_mcast_group *g, bool join);
 
-void omci_hw_mcast_send(const uint8_t *frame, size_t len, bool tagged,
-			uint16_t tci);
+void omci_hw_mcast_receive(const uint8_t *frame, size_t len, bool tagged,
+			   uint16_t tci);
 
 unsigned int omci_hw_mcast_port_recorded(struct omci_hw_mcast_port *out);
 
 void omci_hw_mcast_fail_next(bool list, bool add, bool del);
+
+void omci_hw_mcast_send_fail_next(void);
+
+size_t omci_hw_mcast_sent(size_t index, uint16_t *port_id, uint8_t *frame,
+			  size_t cap);
 
 void omci_hw_mcast_reset(void);
 #endif
@@ -699,6 +723,9 @@ void omci_hw_mcast_reset(void);
  * @mcast_fd: a descriptor that becomes readable when a group changes or a
  *	message comes, or -1 for none: the daemon then looks once a second
  * @mcast_frame: take the next IGMP or MLD message of the subscriber side
+ * @mcast_send: send an IGMP or MLD message upstream through a GEM port;
+ *	NULL in a backend that cannot, whose agent leaves the messages to the
+ *	switch
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -728,6 +755,8 @@ struct omci_hw_ops {
 	enum omci_status (*mcast_group_del)(const struct omci_hw_mcast_group *g);
 	int (*mcast_fd)(void);
 	enum omci_status (*mcast_frame)(struct omci_hw_mcast_frame *out);
+	enum omci_status (*mcast_send)(uint16_t port_id, const uint8_t *frame,
+				       size_t len);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

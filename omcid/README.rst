@@ -18,7 +18,9 @@ counts and the result of the optical line supervision test. It holds the
 groups that the bridge snoops on the subscriber side to the OLT's multicast
 policy: the groups each profile allows, in full or for preview, the most
 groups and bandwidth, immediate leave and the IGMP timers, and static
-groups; and it reports the active groups and the join counts. A local
+groups; under such a policy it sends the subscriber's IGMP and MLD
+upstream itself, a refused join held back, with the profile's tag and
+rate; and it reports the active groups and the join counts. A local
 control socket lets tools read the MIB, follow the frames and see what
 became of each VLAN rule.
 

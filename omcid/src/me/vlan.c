@@ -751,6 +751,12 @@ enum omci_status omci_vlan_program(const struct omci_mib *mib,
 	return applied;
 }
 
+size_t omci_vlan_in_force(const struct omci_hw_vlan_xlate **out)
+{
+	*out = g_in_force;
+	return g_in_force_n;
+}
+
 bool omci_vlan_row_refused(const uint8_t *row, size_t len)
 {
 	struct omci_vlan_rule d;

@@ -13,6 +13,8 @@
 #include "mcast/agent.h"
 #include "mcast/report.h"
 #include "me/bridge.h"
+#include "me/gem.h"
+#include "me/vlan.h"
 #include "omcid/array_size.h"
 #include "omcid/byteorder.h"
 #include "sys/log.h"
@@ -97,6 +99,14 @@ struct omci_mcast {
 
 	/* The active entries the limits count: all, or while rechecking those before. */
 	size_t upto;
+
+	/*
+	 * Whether the switch traps the subscriber's IGMP and MLD for the agent
+	 * to send upstream, and the messages sent in the current second.
+	 */
+	bool forwarding;
+	uint64_t rate_sec;
+	uint32_t rate_used;
 };
 
 static struct omci_mcast g_mcast;
@@ -616,13 +626,54 @@ static void addr_text(const uint8_t *a, char out[static 40])
 	}
 }
 
-/* Count and note each record of a message of the subscriber side. */
-static void heard(struct omci_mcast *m, const struct omci_mcast_report *r)
+/*
+ * The profile whose settings the bridge port and the messages upstream
+ * take: of the first service package, or the profile pointer's. False
+ * without a subscriber or profile.
+ */
+static bool port_profile(const struct omci_mib *mib, uint16_t *out);
+
+/*
+ * Whether a message's version is one the profile takes: IGMP up to the
+ * profile's IGMP version, MLD up to its MLD version (G.988 9.3.27); a
+ * profile of the other protocol leaves it free.
+ */
+static bool version_taken(const struct omci_mcast *m,
+			  const struct omci_mcast_report *r)
+{
+	uint16_t p;
+	uint32_t v;
+
+	if (!port_profile(m->mib, &p))
+		return true;
+	v = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+		    OMCI_MCAST_PROFILE_IGMP_VERSION, 1);
+	if ((v >= 16u) != (r->version >= 16u))
+		return true;
+	return r->version <= v;
+}
+
+/*
+ * Count and note each record of a message of the subscriber side. Return:
+ * whether the message goes upstream: one that leaves a group or has a join
+ * that was allowed; one whose joins were all refused only when the profile
+ * forwards an unauthorized join request (G.988 9.3.27); none of a version
+ * the profile does not take.
+ */
+static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r)
 {
 	const struct asker a = { .known = true,
 				 .tagged = r->tagged,
 				 .vid = r->vid };
+	bool joined = false, refused = false, left = false;
+	uint16_t p;
 
+	if (!version_taken(m, r)) {
+		OMCI_INFO(
+			"mcast: a message of version %u, which the profile does not take, dropped",
+			(unsigned int)r->version);
+		return false;
+	}
 	for (uint8_t i = 0; i < r->n; i++) {
 		const struct omci_mcast_record *rec = &r->rec[i];
 		bool renew = false;
@@ -632,6 +683,7 @@ static void heard(struct omci_mcast *m, const struct omci_mcast_report *r)
 
 		if (!rec->join) {
 			leave(m, rec->group, rec->source, r->client);
+			left = true;
 			continue;
 		}
 		note_vlan(m, rec->group, rec->source, &a);
@@ -646,11 +698,178 @@ static void heard(struct omci_mcast *m, const struct omci_mcast_report *r)
 			addr_text(rec->group, text);
 			OMCI_INFO("mcast: join of %s refused: %s", text,
 				  g_verdict[v]);
+			refused = true;
 			continue;
 		}
 		monitors(m->mib, OMCI_MCAST_MONITOR_JOINS, 1, false);
 		(void)admit(m, rec->group, rec->source, r->client, &a, &gr);
+		joined = true;
 	}
+	return left || joined ||
+	       (refused && port_profile(m->mib, &p) &&
+		attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+			OMCI_MCAST_PROFILE_UNAUTHORIZED, 1) != 0u);
+}
+
+/* The outer tag of a frame: its TPID, or 0 for an untagged frame, and its TCI. */
+static unsigned int outer_tag(const uint8_t *f, unsigned int *tci)
+{
+	const unsigned int tpid = omci_be16(&f[12]);
+
+	if (tpid != 0x8100u && tpid != 0x88a8u)
+		return 0;
+	*tci = omci_be16(&f[14]);
+	return tpid;
+}
+
+/* Put a tag of @tpid and @tci in front of the others; the new length. */
+static size_t push_tag(uint8_t *f, size_t len, unsigned int tpid,
+		       unsigned int tci)
+{
+	memmove(&f[16], &f[12], len - 12u);
+	omci_be16_store(&f[12], tpid);
+	omci_be16_store(&f[14], tci);
+	return len + 4u;
+}
+
+/*
+ * The upstream tag the extended VLAN tagging operation gives a frame: the
+ * first rule in force that matches it, as the switch takes them, or none.
+ */
+static size_t tag_by_rules(uint8_t *f, size_t len)
+{
+	const struct omci_hw_vlan_xlate *r;
+	const size_t n = omci_vlan_in_force(&r);
+	unsigned int tci = 0;
+	const bool ctag = outer_tag(f, &tci) == 0x8100u;
+	const unsigned int vid = tci & 0x0fffu, pcp = tci >> 13;
+
+	for (size_t i = 0; i < n; i++) {
+		const unsigned int pri =
+			r[i].assign_pri <= 7u ? r[i].assign_pri : pcp;
+
+		if (r[i].kind == OMCI_HW_VLAN_CVID_PUSH) {
+			if (outer_tag(f, &tci) != 0u)
+				continue;
+			return push_tag(
+				f, len, 0x8100u,
+				(r[i].assign_pri <= 7u ? r[i].assign_pri : 0u)
+						<< 13 |
+					r[i].assign_cvid);
+		}
+		if (!ctag || vid != r[i].match_cvid ||
+		    (r[i].match_has_pri && pcp != r[i].match_pri))
+			continue;
+		if (r[i].kind == OMCI_HW_VLAN_CVID_XLATE) {
+			omci_be16_store(&f[14], pri << 13 | (tci & 0x1000u) |
+							r[i].assign_cvid);
+			return len;
+		}
+		return push_tag(f, len, 0x88a8u, pri << 13 | r[i].assign_svid);
+	}
+	return len;
+}
+
+/*
+ * The frame that goes upstream: the tag the receive path took off put back,
+ * then the upstream IGMP tag control of the profile (G.988 9.3.27): 0 the
+ * extended VLAN tagging operation's rules, 1 a tag added, 2 the outer tag
+ * replaced, 3 its VID replaced; with no tag to replace, one is added.
+ */
+static size_t upstream_frame(const struct omci_mcast *m,
+			     const struct omci_hw_mcast_frame *f, uint8_t *out)
+{
+	size_t len = f->len;
+	unsigned int control = 0, tci = 0, have = 0;
+	uint16_t p;
+
+	memcpy(out, f->data, len);
+	if (f->tagged)
+		len = push_tag(out, len, 0x8100u, f->tci);
+	if (port_profile(m->mib, &p)) {
+		control = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+				  OMCI_MCAST_PROFILE_US_TAG_CONTROL, 1);
+		tci = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+			      OMCI_MCAST_PROFILE_US_TCI, 2);
+	}
+	if (control == 0u)
+		return tag_by_rules(out, len);
+	if (control == 1u || outer_tag(out, &have) == 0u)
+		return push_tag(out, len, 0x8100u, tci);
+	if (control == 3u)
+		tci = (have & 0xf000u) | (tci & 0x0fffu);
+	omci_be16_store(&out[14], tci);
+	return len;
+}
+
+/*
+ * The GEM port a frame goes up: of the UNI's bridge, one that carries the
+ * frame's VLAN, or every VLAN, upstream, and takes its priority, as the
+ * switch and the mapper choose (gem.h, bridge.h). False without one.
+ */
+static bool gem_for(const uint8_t *f, uint16_t *out)
+{
+	const struct omci_hw_bridge_port *bp;
+	const struct omci_hw_gem_port *gp;
+	const size_t nb = omci_bridge_last(&bp), ng = omci_gem_last(&gp);
+	unsigned int tci = 0;
+	const bool tagged = outer_tag(f, &tci) != 0u;
+	const uint16_t vid = (uint16_t)(tci & 0x0fffu);
+	const unsigned int pcp = tagged ? tci >> 13 : 0u;
+	size_t uni = 0;
+
+	while (uni < nb && bp[uni].port_id != OMCI_HW_BRIDGE_UNI)
+		uni++;
+	for (size_t i = 0; i < nb && uni < nb; i++) {
+		bool vlan = bp[i].num_vlan == 0u;
+
+		if (bp[i].bridge != bp[uni].bridge || i == uni)
+			continue;
+		for (uint8_t v = 0; v < bp[i].num_vlan; v++)
+			vlan = vlan || (tagged && bp[i].vlan[v] == vid);
+		for (size_t j = 0; j < ng && vlan; j++)
+			if (gp[j].port_id == bp[i].port_id &&
+			    !gp[j].multicast &&
+			    (gp[j].direction & OMCI_HW_GEM_DIR_UPSTREAM) &&
+			    (gp[j].pbits & (1u << pcp))) {
+				*out = gp[j].port_id;
+				return true;
+			}
+	}
+	return false;
+}
+
+/*
+ * Send a message upstream, within the profile's upstream IGMP rate, in
+ * messages a second (G.988 9.3.27): those over it are dropped.
+ */
+static void forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f)
+{
+	uint8_t out[OMCI_HW_MCAST_FRAME_MAX + 8u];
+	uint32_t rate = 0;
+	uint16_t p, port;
+	size_t len;
+
+	if (port_profile(m->mib, &p))
+		rate = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+			       OMCI_MCAST_PROFILE_US_RATE, 4);
+	if (m->rate_sec != m->now) {
+		m->rate_sec = m->now;
+		m->rate_used = 0;
+	}
+	if (rate != 0u && m->rate_used >= rate)
+		return;
+	m->rate_used++;
+
+	len = upstream_frame(m, f, out);
+	if (!gem_for(out, &port)) {
+		OMCI_WARN(
+			"mcast: no GEM port carries the message upstream; dropped");
+		return;
+	}
+	if (omci_hw()->mcast_send(port, out, len) != OMCI_OK)
+		OMCI_WARN("mcast: a message to GEM port %u could not be sent",
+			  (unsigned int)port);
 }
 
 /* End a group and source: out of the bridge and the active list. */
@@ -744,11 +963,6 @@ static void look(struct omci_mcast *m)
 	}
 }
 
-/*
- * The profile whose settings the bridge port takes: of the first service
- * package, or the profile pointer's. False without a subscriber or
- * profile.
- */
 static bool port_profile(const struct omci_mib *mib, uint16_t *out)
 {
 	const struct asker any = { .known = false };
@@ -771,6 +985,8 @@ static void set_port(struct omci_mcast *m)
 	struct omci_hw_mcast_port cfg = { .fast_leave = false };
 	uint16_t p;
 
+	/* The agent forwards the messages under a policy it can send them for. */
+	cfg.trap = omci_hw()->mcast_send != NULL && subscriber(m->mib, &p);
 	if (port_profile(m->mib, &p)) {
 		cfg.fast_leave = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
 					 OMCI_MCAST_PROFILE_IMMEDIATE_LEAVE,
@@ -794,6 +1010,7 @@ static void set_port(struct omci_mcast *m)
 		m->port_set = false;
 		return;
 	}
+	m->forwarding = cfg.trap;
 	if (m->port_set && memcmp(&cfg, &m->port, sizeof(cfg)) == 0)
 		return;
 	m->port = cfg;
@@ -926,13 +1143,19 @@ void omci_mcast_service(struct omci_mcast *m, struct omci_mib *mib,
 
 	if (!ready(m, mib, now_sec))
 		return;
+	/*
+	 * A message the switch trapped goes upstream only if the agent sends
+	 * it: a query from the subscriber side, or what is not taken apart,
+	 * never does.
+	 */
 	for (unsigned int k = 0;
 	     k < FRAMES_PER_SERVICE && omci_hw()->mcast_frame(&f) == OMCI_OK;
 	     k++)
 		if (omci_mcast_report_parse(f.data, f.len, f.tci, f.tagged,
 					    &r) &&
-		    r.kind != OMCI_MCAST_KIND_OTHER)
-			heard(m, &r);
+		    r.kind != OMCI_MCAST_KIND_OTHER && heard(m, &r) &&
+		    m->forwarding)
+			forward(m, &f);
 	look(m);
 	report_bandwidth(m);
 }
