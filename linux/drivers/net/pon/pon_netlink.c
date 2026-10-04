@@ -250,6 +250,41 @@ int pon_nl_tcont_get_doit(struct sk_buff *skb, struct genl_info *info)
 }
 
 /**
+ * pon_nl_tcont_set_doit() - map one T-CONT to an Alloc-ID, or unmap it
+ * @skb: the request
+ * @info: the request's attributes
+ *
+ * Return: 0; -EINVAL without id or index; -ENODEV for an unknown ONU, or one
+ * without a data path; -EOPNOTSUPP when the MAC does not map T-CONTs;
+ * -ENOENT for an index not below num_tconts; -EBUSY when another T-CONT is
+ * mapped to the Alloc-ID; or another negative error code.
+ */
+int pon_nl_tcont_set_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct nlattr *alloc = info->attrs[PON_A_TCONT_ALLOC_ID];
+	struct pon_device *pon;
+	int err;
+
+	if (GENL_REQ_ATTR_CHECK(info, PON_A_TCONT_ID) ||
+	    GENL_REQ_ATTR_CHECK(info, PON_A_TCONT_INDEX))
+		return -EINVAL;
+
+	pon = pon_device_get_by_id(nla_get_u32(info->attrs[PON_A_TCONT_ID]));
+	if (!pon) {
+		NL_SET_ERR_MSG_ATTR(info->extack, info->attrs[PON_A_TCONT_ID],
+				    "no ONU with that id");
+		return -ENODEV;
+	}
+
+	err = pon_device_tcont_set(pon,
+				   nla_get_u32(info->attrs[PON_A_TCONT_INDEX]),
+				   alloc ? (int)nla_get_u32(alloc) : -1,
+				   info->extack);
+	pon_device_put(pon);
+	return err;
+}
+
+/**
  * pon_nl_tcont_get_dumpit() - dump every T-CONT of every ONU
  * @skb: the part of the dump to fill
  * @cb: the dump, whose args[0] and args[1] hold the id of the ONU and the

@@ -1225,6 +1225,11 @@ Operations
      - Nothing.
      - One message for each T-CONT of each ONU.
      - ``CAP_NET_ADMIN``
+   * - ``tcont-set``, do
+     - 4
+     - ``id``, ``index``, and ``alloc-id`` to map, none to unmap
+     - Nothing but the acknowledgment.
+     - ``CAP_NET_ADMIN``
 
 Attributes of the dev object
 ----------------------------
@@ -1313,7 +1318,8 @@ bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
        ``alloc-id`` (repeated), ``omcc-port-id``, ``alarms``, ``stats`` (a
        nest), ``serial-number`` (binary, exactly 8 bytes), ``num-gem-ports``,
        ``num-tconts`` and ``num-tcont-queues``. Their numbers, and the command
-       numbers (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3), are ABI.
+       numbers (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3,
+       ``tcont-set`` 4), are ABI.
      - M
      - The daemon reads the serial number and the alarms by these numbers and
        announces the serial number the driver holds.
@@ -1345,14 +1351,17 @@ The family and its permissions
        (``dev-get``; see "Status, alarms and notifications").
    * - The objects are registered by the MAC driver, as in the kernel's DPLL
        family: user space reads them and is told of changes, but cannot create
-       any. There is no set operation, because the kernel runs the convergence
-       layer and user space only observes it.
+       any. The kernel runs the convergence layer, so the one set operation,
+       ``tcont-set``, writes what management owns and the convergence layer
+       does not: which T-CONT an Alloc-ID serves, a mapping the OLT makes
+       through the OMCC (ITU-T G.984.3 clause 5.5.4).
      - I
      - Design choice; the operation table has no ``set``.
    * - The operations are ``dev-get`` (do needs ``id``; dump returns every
        ONU), ``tcont-get`` (do needs ``id`` and ``index``; dump returns every
-       T-CONT of every ONU), and the notification ``dev-change-ntf`` on the
-       multicast group ``monitor``.
+       T-CONT of every ONU), ``tcont-set`` (do only, with ``id``, ``index``
+       and an optional ``alloc-id``), and the notification ``dev-change-ntf``
+       on the multicast group ``monitor``.
      - M, I
      - M: a ``dev-get`` dump and ``dev-change-ntf`` on the board. I:
        ``tcont-get`` is a design choice not exercised; a ``tcont-get`` dump
@@ -1469,6 +1478,26 @@ Dumps
        whose MAC has no ``tcont_get``, is skipped.
      - I
      - Design choice, not exercised: a ``tcont-get`` dump.
+   * - ``tcont-set`` maps T-CONT ``index`` to ``alloc-id``, 0 to 4095 (the
+       policy refuses more with ``-ERANGE``), or unmaps it without
+       ``alloc-id``. It fails with ``-EINVAL`` without ``id`` or ``index``,
+       with ``-ENODEV`` for an unknown ONU or one without a data path, with
+       ``-EOPNOTSUPP`` when the MAC has no ``tcont_set``, with ``-ENOENT``
+       when the index is not below ``num_tconts``, and with ``-EBUSY`` when
+       another T-CONT is mapped to the Alloc-ID, each with an extack message.
+       The MAC is called under the registration lock.
+     - T
+     - On the RTL9602C: Alloc-ID 5000, "integer out of range"; T-CONT 8, "no
+       such T-CONT on this ONU"; an Alloc-ID mapped to T-CONT 0, "Alloc-ID 256
+       is mapped to T-CONT 0"; the default Alloc-ID, refused by the driver
+       (its page).
+   * - An Alloc-ID serves at most one user traffic T-CONT; the ONU rejects a
+       second mapping. Mapping a T-CONT to an Alloc-ID makes it carry user
+       traffic once the OLT has also assigned the Alloc-ID with
+       Assign_Alloc-ID. G.988 lets the default Alloc-ID serve a user traffic
+       T-CONT too.
+     - P
+     - ITU-T G.984.3 clause 5.5.4; ITU-T G.988 clause 9.2.2.
 
 Notifications
 -------------
@@ -1905,6 +1934,18 @@ Status and statistics
      - I
      - Design choice, not exercised: a MAC returning another error for a valid
        index.
+   * - ``tcont_set(pon, index, alloc_id, extack)`` is optional and may sleep.
+       It maps T-CONT ``index``, below ``num_tconts``, to ``alloc_id``, 0 to
+       4095, or unmaps it for a negative ``alloc_id``; the MAC binds the T-CONT
+       to the Alloc-ID once the Alloc-ID is assigned too. It returns 0,
+       ``-EBUSY`` when another T-CONT is mapped to ``alloc_id``, or another
+       error, each refusal with a message in ``extack``, and leaves the
+       mappings as they were on an error. The class itself refuses, with its
+       own message, an ONU without a data path, a MAC without the operation
+       and an index not below ``num_tconts``.
+     - P, I
+     - P for the one-to-one mapping, ITU-T G.984.3 clause 5.5.4. I for the
+       contract.
    * - ``pon_device_notify(pon, st)`` reports a change with the status the MAC
        has just built. The class does not call back into the MAC, so the MAC
        may call it under the lock the change was made under. It allocates with
@@ -2031,9 +2072,9 @@ What the class holds when it calls into the MAC, from the kernel-doc of
    * - ``gem_stats``
      - No lock of the class.
      - May sleep.
-   * - ``tcont_get``
-     - No lock of the class; not the registration lock.
-     - May sleep.
+   * - ``tcont_get``, ``tcont_set``
+     - The registration lock.
+     - May sleep. Must not take RTNL.
    * - ``start``, ``stop`` of the OMCI port
      - The port lock.
      - ``start`` at open; ``stop`` at close and at the removal of an open port.

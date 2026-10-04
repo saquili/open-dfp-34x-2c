@@ -360,6 +360,44 @@ int pon_device_tcont(struct pon_device *pon, unsigned int index, u16 *alloc_id)
 	return err;
 }
 
+/**
+ * pon_device_tcont_set() - map one of the MAC's T-CONTs to an Alloc-ID
+ * @pon: the PON device
+ * @index: the T-CONT
+ * @alloc_id: the Alloc-ID, 0 to 4095, or a negative number to unmap it
+ * @extack: where a refusal is explained
+ *
+ * The MAC's tcont_set runs under the registration lock, as tcont_get does in
+ * pon_device_tcont().
+ *
+ * Context: process context; may sleep.
+ * Return: 0; -ENODEV when no data path is registered; -EOPNOTSUPP when the
+ * MAC has no tcont_set; -ENOENT when @index is not below the T-CONTs it
+ * registered; or the MAC's error.
+ */
+int pon_device_tcont_set(struct pon_device *pon, unsigned int index,
+			 int alloc_id, struct netlink_ext_ack *extack)
+{
+	int err;
+
+	mutex_lock(&pon_register_lock);
+	if (!pon->ops) {
+		NL_SET_ERR_MSG(extack, "the ONU has no data path");
+		err = -ENODEV;
+	} else if (!pon->ops->tcont_set) {
+		NL_SET_ERR_MSG(extack, "the MAC does not map T-CONTs");
+		err = -EOPNOTSUPP;
+	} else if (index >= pon->num_tconts) {
+		NL_SET_ERR_MSG(extack, "no such T-CONT on this ONU");
+		err = -ENOENT;
+	} else {
+		err = pon->ops->tcont_set(pon, index, alloc_id, extack);
+	}
+	mutex_unlock(&pon_register_lock);
+
+	return err;
+}
+
 struct pon_device *pon_device_register(struct device *parent,
 				       const struct pon_device_ops *ops,
 				       unsigned int num_flows,

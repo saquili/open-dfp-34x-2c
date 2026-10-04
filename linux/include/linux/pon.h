@@ -299,6 +299,19 @@ struct pon_device_ops {
 	 */
 	int (*tcont_get)(struct pon_device *pon, unsigned int index,
 			 u16 *alloc_id);
+	/**
+	 * @tcont_set: Map T-CONT index, below the num_tconts given at
+	 * registration, to Alloc-ID alloc_id, 0 to 4095, or unmap it when
+	 * alloc_id is negative, as the OLT does through the OMCC (ITU-T
+	 * G.984.3 clause 5.5.4). Bind the T-CONT to the Alloc-ID once the OLT
+	 * has assigned the Alloc-ID to the ONU too. Return 0, -EBUSY when
+	 * another T-CONT is mapped to alloc_id, or another negative error
+	 * code with a message in extack, leaving the mappings as they were.
+	 * Called with the class's registration lock held; may sleep.
+	 * Optional: without it, tcont-set fails with -EOPNOTSUPP.
+	 */
+	int (*tcont_set)(struct pon_device *pon, unsigned int index,
+			 int alloc_id, struct netlink_ext_ack *extack);
 };
 
 /**

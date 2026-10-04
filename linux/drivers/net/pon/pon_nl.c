@@ -21,6 +21,13 @@ static const struct nla_policy pon_tcont_get_nl_policy[PON_A_TCONT_INDEX + 1] = 
 	[PON_A_TCONT_INDEX] = { .type = NLA_U32, },
 };
 
+/* PON_CMD_TCONT_SET - do */
+static const struct nla_policy pon_tcont_set_nl_policy[PON_A_TCONT_ALLOC_ID + 1] = {
+	[PON_A_TCONT_ID] = { .type = NLA_U32, },
+	[PON_A_TCONT_INDEX] = { .type = NLA_U32, },
+	[PON_A_TCONT_ALLOC_ID] = NLA_POLICY_MAX(NLA_U32, 4095),
+};
+
 /* Ops table for pon */
 static const struct genl_split_ops pon_nl_ops[] = {
 	{
@@ -46,6 +53,13 @@ static const struct genl_split_ops pon_nl_ops[] = {
 		.cmd	= PON_CMD_TCONT_GET,
 		.dumpit	= pon_nl_tcont_get_dumpit,
 		.flags	= GENL_ADMIN_PERM | GENL_CMD_CAP_DUMP,
+	},
+	{
+		.cmd		= PON_CMD_TCONT_SET,
+		.doit		= pon_nl_tcont_set_doit,
+		.policy		= pon_tcont_set_nl_policy,
+		.maxattr	= PON_A_TCONT_ALLOC_ID,
+		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
 	},
 };
 

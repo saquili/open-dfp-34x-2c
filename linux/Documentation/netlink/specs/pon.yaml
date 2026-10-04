@@ -329,8 +329,12 @@ attribute-sets:
         name: alloc-id
         doc: >-
           The Alloc-ID bound to the T-CONT. Absent while the T-CONT is idle,
-          since 0 is a valid Alloc-ID: the default Alloc-ID of ONU-ID 0.
+          since 0 is a valid Alloc-ID: the default Alloc-ID of ONU-ID 0. In
+          tcont-set, the Alloc-ID the T-CONT is mapped to, absent to unmap
+          it.
         type: u32
+        checks:
+          max: 4095
 operations:
   list:
     -
@@ -403,6 +407,32 @@ operations:
 
       dump:
         reply: *tcont-attrs
+
+    -
+      name: tcont-set
+      doc: >-
+        Map one T-CONT of an ONU, by id and index, to the Alloc-ID given, or
+        unmap it when alloc-id is absent, as the OLT does through the OMCC
+        with the Alloc-ID attribute of the T-CONT managed entity (ITU-T
+        G.984.3 clause 5.5.4, ITU-T G.988 clause 9.2.2). The MAC binds the
+        T-CONT to the Alloc-ID once the OLT has also assigned that Alloc-ID
+        to the ONU with Assign_Alloc-ID, and it may bind an assigned
+        Alloc-ID that no mapping names to a T-CONT that no mapping names,
+        so that upstream traffic flows before or without the mappings. Fails
+        with EINVAL without id or index, with ENODEV for an unknown ONU, with
+        EOPNOTSUPP when the MAC does not map T-CONTs, with ENOENT when it has
+        no T-CONT of that index, and with EBUSY when another T-CONT is
+        mapped to the Alloc-ID, since an Alloc-ID serves at most one user
+        traffic T-CONT.
+      attribute-set: tcont
+      flags: [admin-perm]
+
+      do:
+        request:
+          attributes:
+            - id
+            - index
+            - alloc-id
 
 mcast-groups:
   list:
