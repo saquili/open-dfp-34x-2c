@@ -489,11 +489,11 @@ enum {
 #define RTL9602C_BURST_CFG_PRERANGED	0x080c
 
 /*
- * The 96 bits ITU-T G.984.2 gives the 1.24416 Gbit/s upstream; LEN_MAX lies
- * above the 128-byte maximum of G.984.3.
+ * The 96 bits ITU-T G.984.2 gives the 1.24416 Gbit/s upstream, and the 128
+ * bytes ITU-T G.984.3 allows for the whole burst mode overhead.
  */
 #define RTL9602C_BURST_CFG_LEN_DEF	(96 / 8)
-#define RTL9602C_BURST_CFG_LEN_MAX	252
+#define RTL9602C_BURST_CFG_LEN_MAX	128
 #define RTL9602C_BURST_CFG_REPEAT_IDX_DEF	8
 
 /*

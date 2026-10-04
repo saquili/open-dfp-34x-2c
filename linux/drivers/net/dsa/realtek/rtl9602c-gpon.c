@@ -367,32 +367,38 @@ static void rtl9602c_gpon_set_eqd(struct rtl9602c_priv *p, u32 delay)
 }
 
 /*
+ * The burst overhead in bytes that the stored Upstream_Overhead and a type 3
+ * preamble of @type3 bytes ask for: the guard bits, of which at most 32 count,
+ * the type 3 preamble, the three delimiter octets and the type 1 and type 2
+ * preamble bits.
+ */
+static unsigned int rtl9602c_gpon_boh_bytes(struct rtl9602c_priv *p, u8 type3)
+{
+	const u8 *ovh = p->gpon_overhead;
+
+	return min_t(unsigned int, ovh[RTL9602C_PLOAM_OVERHEAD_GUARD_BITS], 32) / 8 +
+	       type3 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN +
+	       (ovh[RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS] +
+		ovh[RTL9602C_PLOAM_OVERHEAD_TYPE2_BITS]) / 8;
+}
+
+/*
  * The burst overhead in bytes, as RTL9602C_BURST_CFG_LEN takes it, for a type 3
- * preamble of @type3 bytes: the guard bits, of which at most 32 count, the
- * type 3 preamble, the three delimiter octets and the type 1 and type 2
- * preamble bits of the stored Upstream_Overhead, clamped between
- * RTL9602C_BURST_CFG_LEN_DEF and RTL9602C_BURST_CFG_LEN_MAX. Without a type 3
- * length it is RTL9602C_BURST_CFG_LEN_DEF, 12 bytes, the 96 bits of burst
- * overhead G.984.2 gives for the 1.24416 Gbit/s upstream.
+ * preamble of @type3 bytes: rtl9602c_gpon_boh_bytes() clamped between
+ * RTL9602C_BURST_CFG_LEN_DEF and RTL9602C_BURST_CFG_LEN_MAX, the 128 bytes
+ * G.984.3 allows. Without a type 3 length it is RTL9602C_BURST_CFG_LEN_DEF, 12
+ * bytes, the 96 bits of burst overhead G.984.2 gives for the 1.24416 Gbit/s
+ * upstream.
  *
  * The ONU reaches O5 with the lengths this gives. That the guard belongs in the
- * length, and only up to 32 bits, is not verified, and the upper clamp lies
- * above the 128 bytes G.984.3 allows.
+ * length, and only up to 32 bits, is not verified.
  */
 static u8 rtl9602c_gpon_boh_len(struct rtl9602c_priv *p, u8 type3)
 {
-	const u8 *ovh = p->gpon_overhead;
-	unsigned int len;
-
 	if (!type3)
 		return RTL9602C_BURST_CFG_LEN_DEF;
-	len = min_t(unsigned int, ovh[RTL9602C_PLOAM_OVERHEAD_GUARD_BITS], 32) / 8 +
-	      type3 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN +
-	      (ovh[RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS] +
-	       ovh[RTL9602C_PLOAM_OVERHEAD_TYPE2_BITS]) / 8;
-
-	return clamp_t(unsigned int, len, RTL9602C_BURST_CFG_LEN_DEF,
-		       RTL9602C_BURST_CFG_LEN_MAX);
+	return clamp_t(unsigned int, rtl9602c_gpon_boh_bytes(p, type3),
+		       RTL9602C_BURST_CFG_LEN_DEF, RTL9602C_BURST_CFG_LEN_MAX);
 }
 
 /*
@@ -1774,6 +1780,12 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		p->gpon_ebl_seen = true;
 		p->gpon_t3_preranged = msg[RTL9602C_PLOAM_EXT_BURST_LEN_PRERANGED];
 		p->gpon_t3_ranged = msg[RTL9602C_PLOAM_EXT_BURST_LEN_RANGED];
+		if (rtl9602c_gpon_boh_bytes(p, p->gpon_t3_preranged) >
+		    RTL9602C_BURST_CFG_LEN_MAX ||
+		    rtl9602c_gpon_boh_bytes(p, p->gpon_t3_ranged) >
+		    RTL9602C_BURST_CFG_LEN_MAX)
+			pr_warn("<GPON> the OLT asks for more burst overhead than the %u bytes G.984.3 allows, which are sent\n",
+				RTL9602C_BURST_CFG_LEN_MAX);
 		boh = rtl9602c_gpon_boh_len(p, p->gpon_t3_preranged);
 		rtl9602c_gpon_set_boh(p, boh);
 		pr_info("<GPON> burst length: %u B pre-ranging, %u after; overhead %u/%u (%12ph)\n",

@@ -1904,7 +1904,9 @@ state.
        the row above); otherwise the guard bits (at most 32) divided by 8, plus
        the type 3 bytes, plus 3 for the delimiter, plus the type 1 and type 2
        bits divided by 8, clamped between 12 and ``RTL9602C_BURST_CFG_LEN_MAX``
-       (252).
+       (128, the most G.984.3 allows). When Extended_Burst_Length asks for
+       more, the driver warns: ``the OLT asks for more burst overhead than the
+       128 bytes G.984.3 allows, which are sent``.
      - T
      - The ONU reaches O5 on an OLT with 103 and 63 bytes, from the test OLT's
        values.
@@ -1930,8 +1932,7 @@ state.
        sends zero for both, and an OLT that asks for them is untested.
      - I
      - An OLT with non-zero type 1 or type 2 counts.
-   * - The upper clamp of the length is 252 bytes (see "Known limitations"); the
-       guard is counted into the length only up to 32 bits; that the length
+   * - The guard is counted into the length only up to 32 bits; that the length
        counts the guard at all rests on the lengths of the rows above reaching
        O5.
      - I
@@ -2886,11 +2887,10 @@ Known limitations
 - The steps that a loss of the downstream takes, to O1 and to O6, and the
   POPUP and TO2 that leave O6, have not been exercised on the board: they need
   the fibre pulled with the ONU in O5.
-- The upper clamp of the computed overhead length is 252 bytes, where G.984.3
-  allows at most 128. No type 1 or type 2 preamble is programmed; their bit
-  counts only enter the length. That Extended_Burst_Length is ignored after the
-  first serial-number request has not been seen on the board, since the test
-  OLT assigns the ONU-ID at once.
+- No type 1 or type 2 preamble is programmed; their bit counts only enter the
+  length. That Extended_Burst_Length is ignored after the first serial-number
+  request has not been seen on the board, since the test OLT assigns the
+  ONU-ID at once.
 - Change_Power_Level, PST, Physical_Equipment_Error and Sleep_Allow are
   recorded, logged once and not acted on. Swift_POPUP, like POPUP, has not been
   exercised on the board, since it needs the ONU in O6.
@@ -3009,8 +3009,8 @@ Assumptions the driver depends on
    * - That type 1 and type 2 preambles are not needed ("The burst overhead",
        "Known limitations").
      - An OLT that asks for them.
-   * - That the overhead length counts the guard, up to 32 bits, and the clamp
-       at 252 bytes does no harm ("The burst overhead", "Known limitations").
+   * - That the overhead length counts the guard, up to 32 bits ("The burst
+       overhead").
      - An OLT with a guard longer than 32 bits.
    * - The unit of the laser lead and lag, and that the lead is needed
        ("Upstream timing").
