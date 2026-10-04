@@ -1485,6 +1485,141 @@ static void test_the_gem_port_of_a_message(void)
 	down();
 }
 
+/* The downstream tag set for VLAN @vid, or NULL. */
+static const struct omci_hw_mcast_ds *ds_of(uint16_t vid, size_t *n)
+{
+	const struct omci_hw_mcast_ds *r;
+
+	*n = omci_hw_mcast_ds_recorded(&r);
+	for (size_t i = 0; i < *n; i++)
+		if (r[i].vid == vid)
+			return &r[i];
+	return NULL;
+}
+
+/* Set the profile's downstream IGMP and multicast TCI and program again. */
+static void ds_control(uint16_t profile, unsigned int control, unsigned int tci)
+{
+	set_n(309, profile, 16, (uint32_t)(control << 16 | tci), 3);
+	omci_mcast_program(g_m, g_mib, g_now);
+}
+
+static void test_the_downstream_tag_of_multicast(void)
+{
+	static const uint32_t xlate[][4] = {
+		/* C-VID 410 to 420: VLAN 420 carries unicast too */
+		{ 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
+		  (8u << 16) | (420u << 3) },
+	};
+	const struct omci_hw_mcast_ds *d;
+	uint8_t row[20];
+	size_t n;
+
+	up();
+	onu();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 9), 0, 420);
+	acl(PROFILE, 7, 2, 0, IP4(239, 1, 2, 0), IP4(239, 1, 2, 9), 0, 420);
+	acl(PROFILE, 7, 3, 0, IP4(239, 1, 3, 0), IP4(239, 1, 3, 9), 0, 0);
+	acl(PROFILE, 7, 4, 0, IP4(239, 1, 4, 0), IP4(239, 1, 4, 9), 0, 4097);
+	acl(PROFILE, 8, 1, 0, IP4(239, 2, 1, 1), IP4(239, 2, 1, 1), 0, 421);
+	omci_mcast_program(g_m, g_mib, g_now);
+	(void)ds_of(420, &n);
+	CHECK_EQ(n, 0u);
+
+	/* 1: the tag comes off, in each VLAN once; untagged and any-VLAN rows have none. */
+	ds_control(PROFILE, 1, 0);
+	d = ds_of(420, &n);
+	CHECK_EQ(n, 2u);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_STRIP);
+	CHECK(ds_of(421, &n) != NULL);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* 2 to 4: added, written over, the VID written over. */
+	ds_control(PROFILE, 2, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_ADD &&
+	      d->tci == ((4u << 13) | 100u));
+	ds_control(PROFILE, 3, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_REPLACE);
+	ds_control(PROFILE, 4, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_REPLACE_VID);
+
+	/* 5 to 7 without packages: the attribute's tag. */
+	ds_control(PROFILE, 6, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_REPLACE &&
+	      d->tci == ((4u << 13) | 100u));
+
+	/* With a package of VID 200: its VID, the attribute's priority. */
+	memset(row, 0, sizeof(row));
+	row[0] = 0x40u;
+	row[1] = 1u;
+	put16(&row[2], 200u);
+	put16(&row[10], PROFILE);
+	table_row(310, PORT, 6, row, sizeof(row));
+	ds_control(PROFILE, 5, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_ADD &&
+	      d->tci == ((4u << 13) | 200u));
+	/* Of untagged joins: 5 adds the attribute's tag, 6 and 7 strip. */
+	put16(&row[2], OMCI_MCAST_VID_UNTAGGED);
+	table_row(310, PORT, 6, row, sizeof(row));
+	ds_control(PROFILE, 5, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_ADD &&
+	      d->tci == ((4u << 13) | 100u));
+	ds_control(PROFILE, 7, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_STRIP);
+	/* Of any tagged, or unspecified: the attribute's tag. */
+	put16(&row[2], OMCI_MCAST_VID_TAGGED);
+	table_row(310, PORT, 6, row, sizeof(row));
+	ds_control(PROFILE, 7, (4u << 13) | 100u);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_REPLACE_VID &&
+	      d->tci == ((4u << 13) | 100u));
+
+	/* A VLAN that unicast takes too keeps the VLAN rules' tag. */
+	rules(xlate, ARRAY_SIZE(xlate));
+	ds_control(PROFILE, 1, 0);
+	CHECK(ds_of(420, &n) == NULL);
+	CHECK_EQ(n, 1u);
+	rules(xlate, 0);
+
+	/* No more than eight VLANs. */
+	for (unsigned int k = 10; k < 20u; k++)
+		acl(PROFILE, 7, k, 0, IP4(239, 3, k, 0), IP4(239, 3, k, 9), 0,
+		    900u + k);
+	omci_mcast_program(g_m, g_mib, g_now);
+	(void)ds_of(420, &n);
+	CHECK_EQ(n, OMCI_HW_MCAST_DS_MAX);
+
+	/* A change the backend refuses is tried again. */
+	omci_hw_mcast_ds_fail_next();
+	ds_control(PROFILE, 3, 0);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_STRIP);
+	omci_mcast_program(g_m, g_mib, g_now);
+	d = ds_of(420, &n);
+	CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_REPLACE);
+
+	/* A backend without downstream tags is left alone. */
+	{
+		struct omci_hw_ops ops = omci_hw_host_ops;
+
+		ops.mcast_ds = NULL;
+		omci_hw_ops_set(&ops);
+		ds_control(PROFILE, 1, 0);
+		omci_hw_ops_set(NULL);
+		d = ds_of(420, &n);
+		CHECK(d != NULL && d->action == OMCI_HW_MCAST_DS_REPLACE);
+	}
+	down();
+}
+
 static void test_one_agent_at_a_time(void)
 {
 	struct omci_mcast *m = NULL, *other = NULL;
@@ -1535,6 +1670,7 @@ int main(void)
 	RUN(test_the_upstream_igmp_tag_control);
 	RUN(test_the_vlan_rules_tag_the_messages);
 	RUN(test_the_gem_port_of_a_message);
+	RUN(test_the_downstream_tag_of_multicast);
 	RUN(test_one_agent_at_a_time);
 	return OMCI_T_REPORT("test_mcast_agent");
 }

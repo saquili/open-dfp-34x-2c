@@ -20,7 +20,8 @@ policy: the groups each profile allows, in full or for preview, the most
 groups and bandwidth, immediate leave and the IGMP timers, and static
 groups; under such a policy it sends the subscriber's IGMP and MLD
 upstream itself, a refused join held back, with the profile's tag and
-rate; and it reports the active groups and the join counts. A local
+rate, and gives multicast the profile's downstream tag; and it reports
+the active groups and the join counts. A local
 control socket lets tools read the MIB, follow the frames and see what
 became of each VLAN rule.
 

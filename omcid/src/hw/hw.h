@@ -608,6 +608,51 @@ struct omci_hw_mcast_frame {
 };
 
 /**
+ * enum omci_hw_mcast_ds_action - What the downstream IGMP and multicast TCI
+ *	of a profile (G.988 9.3.27) does to the frames of a multicast VLAN.
+ * @OMCI_HW_MCAST_DS_STRIP: the outer tag comes off
+ * @OMCI_HW_MCAST_DS_ADD: a tag goes on in front, an S-tag (802.1ad) as the
+ *	switch adds one in front of a C-tag
+ * @OMCI_HW_MCAST_DS_REPLACE: the outer tag is written over
+ * @OMCI_HW_MCAST_DS_REPLACE_VID: the outer tag's VID is written over, its
+ *	priority kept
+ */
+enum omci_hw_mcast_ds_action {
+	OMCI_HW_MCAST_DS_STRIP = 1,
+	OMCI_HW_MCAST_DS_ADD,
+	OMCI_HW_MCAST_DS_REPLACE,
+	OMCI_HW_MCAST_DS_REPLACE_VID,
+};
+
+/* The multicast VLANs that can have a downstream tag at once. */
+#define OMCI_HW_MCAST_DS_MAX 8u
+
+/**
+ * struct omci_hw_mcast_ds - The downstream tag of a multicast VLAN.
+ * @vid: the VLAN the groups come down in, a C-tag of 1 to 4094
+ * @action: an &enum omci_hw_mcast_ds_action
+ * @tci: the tag added or written; of %OMCI_HW_MCAST_DS_REPLACE_VID the VID
+ *	alone counts
+ */
+struct omci_hw_mcast_ds {
+	uint16_t vid;
+	uint8_t action;
+	uint16_t tci;
+};
+
+/**
+ * omci_hw_mcast_ds() - Replace the downstream tags of the multicast VLANs
+ *	(host backend).
+ * @rules: the complete set
+ * @n: how many, at most %OMCI_HW_MCAST_DS_MAX
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_NOMEM for too many, or the failure of the
+ * change.
+ */
+__must_check enum omci_status
+omci_hw_mcast_ds(const struct omci_hw_mcast_ds *rules, size_t n);
+
+/**
  * omci_hw_mcast_port() - Set how the bridge snoops (host backend).
  * @cfg: the settings
  *
@@ -690,6 +735,10 @@ void omci_hw_mcast_fail_next(bool list, bool add, bool del);
 
 void omci_hw_mcast_send_fail_next(void);
 
+void omci_hw_mcast_ds_fail_next(void);
+
+size_t omci_hw_mcast_ds_recorded(const struct omci_hw_mcast_ds **out);
+
 size_t omci_hw_mcast_sent(size_t index, uint16_t *port_id, uint8_t *frame,
 			  size_t cap);
 
@@ -726,6 +775,8 @@ void omci_hw_mcast_reset(void);
  * @mcast_send: send an IGMP or MLD message upstream through a GEM port;
  *	NULL in a backend that cannot, whose agent leaves the messages to the
  *	switch
+ * @mcast_ds: replace the downstream tags of the multicast VLANs; NULL in a
+ *	backend without them
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -757,6 +808,8 @@ struct omci_hw_ops {
 	enum omci_status (*mcast_frame)(struct omci_hw_mcast_frame *out);
 	enum omci_status (*mcast_send)(uint16_t port_id, const uint8_t *frame,
 				       size_t len);
+	enum omci_status (*mcast_ds)(const struct omci_hw_mcast_ds *rules,
+				     size_t n);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

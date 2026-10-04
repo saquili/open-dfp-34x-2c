@@ -107,6 +107,11 @@ struct omci_mcast {
 	bool forwarding;
 	uint64_t rate_sec;
 	uint32_t rate_used;
+
+	/* The downstream tags of the multicast VLANs last set. */
+	struct omci_hw_mcast_ds ds[OMCI_HW_MCAST_DS_MAX];
+	size_t n_ds;
+	bool ds_set;
 };
 
 static struct omci_mcast g_mcast;
@@ -1093,6 +1098,137 @@ static void set_statics(struct omci_mcast *m)
 	m->n_statics = n;
 }
 
+/* Whether an extended VLAN tagging rule in force gives unicast frames VLAN @vid. */
+static bool unicast_vlan(uint16_t vid)
+{
+	const struct omci_hw_vlan_xlate *r;
+	const size_t n = omci_vlan_in_force(&r);
+
+	for (size_t i = 0; i < n; i++)
+		if ((r[i].kind == OMCI_HW_VLAN_SVID_PUSH ?
+			     r[i].assign_svid :
+			     r[i].assign_cvid) == vid)
+			return true;
+	return false;
+}
+
+/*
+ * The downstream tag a profile's downstream IGMP and multicast TCI gives
+ * (G.988 9.3.27): @tci its three bytes, @pkg_vid the VID (UNI) of the
+ * service package. Types 5 to 7 take the package's VID, and with an
+ * untagged one strip the tag, but add the attribute's tag; with an
+ * unspecified one they take the attribute's tag. False for type 0.
+ */
+static bool ds_tag(const uint8_t *tci, uint16_t pkg_vid,
+		   struct omci_hw_mcast_ds *out)
+{
+	static const uint8_t base[8] = { 0,
+					 OMCI_HW_MCAST_DS_STRIP,
+					 OMCI_HW_MCAST_DS_ADD,
+					 OMCI_HW_MCAST_DS_REPLACE,
+					 OMCI_HW_MCAST_DS_REPLACE_VID,
+					 OMCI_HW_MCAST_DS_ADD,
+					 OMCI_HW_MCAST_DS_REPLACE,
+					 OMCI_HW_MCAST_DS_REPLACE_VID };
+	const unsigned int control = tci[0] & 7u;
+	const unsigned int own = omci_be16(&tci[1]);
+
+	if (control == 0u)
+		return false;
+	out->action = base[control];
+	out->tci = (uint16_t)own;
+	if (control < 5u || pkg_vid == OMCI_MCAST_VID_ANY ||
+	    pkg_vid == OMCI_MCAST_VID_TAGGED)
+		return true;
+	if (pkg_vid == OMCI_MCAST_VID_UNTAGGED) {
+		if (control != 5u)
+			out->action = OMCI_HW_MCAST_DS_STRIP;
+		return true;
+	}
+	out->tci = (uint16_t)((own & 0xf000u) | pkg_vid);
+	return true;
+}
+
+/*
+ * The downstream tags of the multicast VLANs: for each VLAN a row of a
+ * profile's access control lists names, that profile's downstream IGMP and
+ * multicast TCI. The switch tells multicast from unicast by the VLAN alone,
+ * so a VLAN that the extended VLAN tagging rules also give unicast frames,
+ * and rows of untagged groups or of any VLAN, keep the rules' treatment.
+ */
+static void set_ds(struct omci_mcast *m)
+{
+	const struct asker any = { .known = false };
+	struct omci_hw_mcast_ds want[OMCI_HW_MCAST_DS_MAX];
+	struct omci_mcast_acl_row rows[OMCI_MCAST_ACL_ROWS];
+	struct candidates c = { .n = 0 };
+	size_t n = 0;
+	uint16_t sub;
+
+	if (omci_hw()->mcast_ds == NULL)
+		return;
+	if (subscriber(m->mib, &sub))
+		candidates_of(m->mib, sub, &any, &c);
+	for (size_t k = 0; k < c.n; k++) {
+		uint8_t tci[3] = { 0 };
+		struct omci_hw_mcast_ds d;
+		size_t len = 0;
+
+		(void)!omci_mib_attr_get(m->mib, OMCI_MCAST_PROFILE,
+					 c.pkg[k].profile,
+					 OMCI_MCAST_PROFILE_DS_TCI, tci,
+					 sizeof(tci), &len);
+		if (!ds_tag(tci,
+			    c.pkg[k].key == NO_PACKAGE ? OMCI_MCAST_VID_ANY :
+							 c.pkg[k].vid,
+			    &d))
+			continue;
+		for (uint8_t attr = OMCI_MCAST_PROFILE_DYNAMIC_ACL;
+		     attr <= OMCI_MCAST_PROFILE_STATIC_ACL; attr++) {
+			const size_t nr = omci_mcast_acl_read(m->mib,
+							      c.pkg[k].profile,
+							      attr, rows,
+							      ARRAY_SIZE(rows));
+
+			for (size_t r = 0; r < nr; r++) {
+				bool dup = false;
+
+				for (size_t i = 0; i < n; i++)
+					dup = dup ||
+					      want[i].vid == rows[r].vlan;
+				if (dup || rows[r].vlan < 1u ||
+				    rows[r].vlan > 4094u)
+					continue;
+				if (unicast_vlan(rows[r].vlan)) {
+					OMCI_WARN(
+						"mcast: VLAN %u carries unicast too; its multicast keeps the VLAN rules' downstream tag",
+						(unsigned int)rows[r].vlan);
+					continue;
+				}
+				if (n == OMCI_HW_MCAST_DS_MAX)
+					continue;
+				d.vid = rows[r].vlan;
+				want[n++] = d;
+			}
+		}
+	}
+	if (m->ds_set && n == m->n_ds &&
+	    memcmp(want, m->ds, n * sizeof(want[0])) == 0)
+		return;
+	if (omci_hw()->mcast_ds(want, n) != OMCI_OK) {
+		OMCI_WARN(
+			"mcast: the downstream tags of the multicast VLANs could not be set");
+		m->ds_set = false;
+		return;
+	}
+	memcpy(m->ds, want, n * sizeof(want[0]));
+	m->n_ds = n;
+	m->ds_set = true;
+	OMCI_INFO(
+		"mcast: %zu multicast VLAN(s) with a downstream tag of their own",
+		n);
+}
+
 /*
  * Judge every active group again, in the order they came, each against the
  * limits with those before it: as a new group, but a preview under way goes
@@ -1167,6 +1303,7 @@ void omci_mcast_program(struct omci_mcast *m, struct omci_mib *mib,
 		return;
 	set_port(m);
 	set_statics(m);
+	set_ds(m);
 	recheck(m);
 	omci_mcast_service(m, mib, now_sec);
 }

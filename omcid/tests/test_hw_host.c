@@ -360,6 +360,14 @@ static void test_the_multicast_bridge_keeps_its_groups(void)
 	}
 	CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_DECLINED);
 
+	/* More downstream tags than the backend holds are refused. */
+	{
+		struct omci_hw_mcast_ds ds[OMCI_HW_MCAST_DS_MAX + 1u] = { 0 };
+
+		CHECK_EQ(omci_hw_mcast_ds(ds, OMCI_HW_MCAST_DS_MAX + 1u),
+			 OMCI_ERR_NOMEM);
+	}
+
 	/* A message upstream longer than a frame is refused. */
 	CHECK_EQ(omci_hw_mcast_send(256u, frame, sizeof(frame)),
 		 OMCI_ERR_INVAL);

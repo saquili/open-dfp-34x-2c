@@ -2376,6 +2376,60 @@ static int mcast_traps(int uni, bool on)
 	return err;
 }
 
+/*
+ * The downstream tags of the multicast VLANs: a flower rule each on pon's
+ * ingress, with priorities from DS_PRIO, whose VLAN no VLAN rule shares.
+ */
+#define DS_PRIO 200u
+
+static enum omci_status kernel_mcast_ds(const struct omci_hw_mcast_ds *rules,
+					size_t n)
+{
+	const int pon = (int)if_nametoindex(PON_IFNAME);
+	int err = 0;
+
+	if (n > OMCI_HW_MCAST_DS_MAX)
+		return OMCI_ERR_NOMEM;
+	if (!pon)
+		return OMCI_ERR_HW;
+	for (unsigned int i = 0; i < OMCI_HW_MCAST_DS_MAX; i++)
+		(void)tc_filter_del(pon, DS_PRIO + i);
+	if (n == 0 || router_skips("multicast tags"))
+		return OMCI_OK;
+	err = tc_clsact_ensure(pon);
+	for (size_t i = 0; i < n && !err; i++) {
+		struct tc_vlan_filter f = {
+			.match_vid = rules[i].vid,
+			.vid = rules[i].tci & 0x0fffu,
+			.pri = (uint8_t)(rules[i].tci >> 13),
+		};
+
+		switch (rules[i].action) {
+		case OMCI_HW_MCAST_DS_STRIP:
+			f.v_action = TCA_VLAN_ACT_POP;
+			break;
+		case OMCI_HW_MCAST_DS_ADD:
+			f.v_action = TCA_VLAN_ACT_PUSH;
+			f.push_proto = ETH_P_8021AD;
+			break;
+		case OMCI_HW_MCAST_DS_REPLACE_VID:
+			f.pri = OMCI_HW_VLAN_PRI_KEEP;
+			f.v_action = TCA_VLAN_ACT_MODIFY;
+			break;
+		default:
+			f.v_action = TCA_VLAN_ACT_MODIFY;
+			break;
+		}
+		err = tc_filter_add(pon, DS_PRIO + (unsigned int)i, &f);
+		if (err)
+			OMCI_WARN(
+				"mcast: the downstream tag of VLAN %u: %s (%s)",
+				(unsigned int)rules[i].vid, strerror(-err),
+				omci_hw_last_extack());
+	}
+	return err ? OMCI_ERR_HW : OMCI_OK;
+}
+
 /* Send a message upstream through the interface of a GEM port. */
 static enum omci_status kernel_mcast_send(uint16_t port_id,
 					  const uint8_t *frame, size_t len)
@@ -2920,4 +2974,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_fd = kernel_mcast_fd,
 	.mcast_frame = kernel_mcast_frame,
 	.mcast_send = kernel_mcast_send,
+	.mcast_ds = kernel_mcast_ds,
 };

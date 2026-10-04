@@ -520,6 +520,9 @@ static struct {
 } g_mc_sent[MCAST_QUEUE];
 static size_t g_mc_sent_n;
 static bool g_mc_fail_send;
+static struct omci_hw_mcast_ds g_mc_ds[OMCI_HW_MCAST_DS_MAX];
+static size_t g_mc_ds_n;
+static bool g_mc_fail_ds;
 
 void omci_hw_mcast_reset(void)
 {
@@ -534,6 +537,34 @@ void omci_hw_mcast_reset(void)
 	g_mc_q_n = 0;
 	g_mc_sent_n = 0;
 	g_mc_fail_send = false;
+	g_mc_ds_n = 0;
+	g_mc_fail_ds = false;
+}
+
+void omci_hw_mcast_ds_fail_next(void)
+{
+	g_mc_fail_ds = true;
+}
+
+enum omci_status omci_hw_mcast_ds(const struct omci_hw_mcast_ds *rules,
+				  size_t n)
+{
+	if (n > OMCI_HW_MCAST_DS_MAX)
+		return OMCI_ERR_NOMEM;
+	if (g_mc_fail_ds) {
+		g_mc_fail_ds = false;
+		return OMCI_ERR_HW;
+	}
+	for (size_t i = 0; i < n; i++)
+		g_mc_ds[i] = rules[i];
+	g_mc_ds_n = n;
+	return OMCI_OK;
+}
+
+size_t omci_hw_mcast_ds_recorded(const struct omci_hw_mcast_ds **out)
+{
+	*out = g_mc_ds;
+	return g_mc_ds_n;
 }
 
 void omci_hw_mcast_send_fail_next(void)
@@ -721,4 +752,5 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.mcast_fd = host_mcast_fd,
 	.mcast_frame = omci_hw_mcast_frame,
 	.mcast_send = omci_hw_mcast_send,
+	.mcast_ds = omci_hw_mcast_ds,
 };
