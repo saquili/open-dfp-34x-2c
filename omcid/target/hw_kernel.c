@@ -1108,6 +1108,104 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
 }
 
+/*
+ * The T-CONTs' Alloc-IDs as the kernel last took them; unknown until the
+ * first mapping, so that a daemon that starts again tells the kernel all.
+ */
+static uint16_t g_tcont_sent[OMCI_HW_TCONT_MAX];
+static bool g_tcont_known;
+
+/*
+ * Map T-CONT @index of the PON device @dev to @alloc, or unmap it for
+ * %OMCI_HW_ALLOC_NONE, with a tcont-set request. Return: 0, or a negative
+ * errno.
+ */
+static int tcont_set(uint32_t dev, uint32_t index, uint16_t alloc)
+{
+	uint8_t attrs[48] __aligned(4);
+	uint8_t rsp[512] __aligned(4);
+	uint32_t a = alloc;
+	uint16_t family = 0;
+	size_t alen = 0, rlen = 0;
+	int err;
+
+	err = pon_family_id(&family);
+	if (err)
+		return err;
+	alen = nla_put(attrs, alen, PON_A_TCONT_ID, &dev, sizeof(dev));
+	alen = nla_put(attrs, alen, PON_A_TCONT_INDEX, &index, sizeof(index));
+	if (alloc != OMCI_HW_ALLOC_NONE)
+		alen = nla_put(attrs, alen, PON_A_TCONT_ALLOC_ID, &a,
+			       sizeof(a));
+	return nl_request(family, PON_CMD_TCONT_SET, attrs, alen, NLM_F_ACK,
+			  rsp, sizeof(rsp), &rlen);
+}
+
+/*
+ * Map the T-CONTs to their Alloc-IDs, telling the kernel only the mappings
+ * that change. The T-CONTs that give up an Alloc-ID are unmapped first, so
+ * that the kernel never sees one Alloc-ID on two T-CONTs; the first time,
+ * when what the kernel holds is not known, every T-CONT is. A T-CONT the
+ * kernel will not map is rejected. A kernel without tcont-set binds the
+ * Alloc-IDs itself, which is taken as done.
+ */
+static enum omci_status kernel_tcont_apply(const uint16_t *alloc, size_t n,
+					   struct omci_hw_reject *rejected)
+{
+	struct pon_dev_attrs a;
+	uint8_t buf[4096] __aligned(4);
+	uint32_t dev;
+	int err;
+
+	if (rejected != NULL)
+		memset(rejected, 0, sizeof(*rejected));
+	if (alloc == NULL && n > 0)
+		return OMCI_ERR_INVAL;
+	if (n > OMCI_HW_TCONT_MAX)
+		return OMCI_ERR_NOMEM;
+	if (pon_dev_get(&a, buf, sizeof(buf)) != 0)
+		return OMCI_ERR_HW;
+	dev = pon_attr_u32(&a, PON_A_DEV_ID, 0);
+
+	for (size_t i = 0; i < n; i++) {
+		if (g_tcont_known && (g_tcont_sent[i] == OMCI_HW_ALLOC_NONE ||
+				      g_tcont_sent[i] == alloc[i]))
+			continue;
+		err = tcont_set(dev, (uint32_t)i, OMCI_HW_ALLOC_NONE);
+		if (err == -EOPNOTSUPP) {
+			OMCI_INFO(
+				"tcont: the kernel does not map T-CONTs; it binds the Alloc-IDs itself");
+			return OMCI_OK;
+		}
+		if (err) {
+			OMCI_WARN(
+				"tcont: the kernel did not unmap T-CONT %zu: %s",
+				i, strerror(-err));
+			omci_hw_reject_add(rejected, (uint16_t)i);
+			continue;
+		}
+		g_tcont_sent[i] = OMCI_HW_ALLOC_NONE;
+	}
+	g_tcont_known = true;
+
+	for (size_t i = 0; i < n; i++) {
+		if (alloc[i] == OMCI_HW_ALLOC_NONE ||
+		    g_tcont_sent[i] == alloc[i])
+			continue;
+		err = tcont_set(dev, (uint32_t)i, alloc[i]);
+		if (err) {
+			OMCI_WARN(
+				"tcont: the kernel refused T-CONT %zu Alloc-ID %u: %s",
+				i, alloc[i], strerror(-err));
+			omci_hw_reject_add(rejected, (uint16_t)i);
+			continue;
+		}
+		OMCI_INFO("tcont: T-CONT %zu takes Alloc-ID %u", i, alloc[i]);
+		g_tcont_sent[i] = alloc[i];
+	}
+	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
+}
+
 /* The bridge of the OMCI configuration, and whether it filters VLANs (-1: unknown). */
 #define BRIDGE_IFNAME "omcibr0"
 
@@ -2043,6 +2141,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.source = kernel_source,
 	.vlan_apply = kernel_vlan_apply,
 	.gem_apply = kernel_gem_apply,
+	.tcont_apply = kernel_tcont_apply,
 	.bridge_apply = kernel_bridge_apply,
 	.alarms = kernel_alarms,
 	.counter = kernel_counter,

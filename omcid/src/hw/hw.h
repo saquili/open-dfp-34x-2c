@@ -267,6 +267,33 @@ void omci_hw_gem_fail_next(void);
 void omci_hw_gem_reject_next(uint16_t port_id);
 #endif
 
+/* The T-CONTs a mapping names at most, and a T-CONT no Alloc-ID serves. */
+#define OMCI_HW_TCONT_MAX 32u
+#define OMCI_HW_ALLOC_NONE 0xffffu
+
+/**
+ * omci_hw_tcont_apply() - Map the T-CONTs to Alloc-IDs (host backend).
+ * @alloc: the Alloc-ID of each T-CONT, from T-CONT 0; %OMCI_HW_ALLOC_NONE
+ *	for a T-CONT no Alloc-ID serves
+ * @n: how many T-CONTs, at most %OMCI_HW_TCONT_MAX
+ * @rejected: the T-CONTs the hardware refused, by index
+ *
+ * Return: as omci_hw_vlan_apply().
+ */
+__must_check enum omci_status
+omci_hw_tcont_apply(const uint16_t *alloc, size_t n,
+		    struct omci_hw_reject *rejected);
+
+#if defined(OMCID_HW_STUB)
+
+/* Test hooks of the host backend for T-CONTs. */
+size_t omci_hw_tcont_recorded(const uint16_t **out);
+
+void omci_hw_tcont_fail_next(void);
+
+void omci_hw_tcont_reject_next(uint16_t index);
+#endif
+
 /* The bridge ports, and the VIDs each may carry. */
 #define OMCI_HW_BRIDGE_MAX_PORTS 16u
 #define OMCI_HW_BRIDGE_MAX_VLANS 12u
@@ -425,6 +452,8 @@ void omci_hw_optics_reset(void);
  * @source: the backend's name
  * @vlan_apply: replace the VLAN rules
  * @gem_apply: replace the GEM ports
+ * @tcont_apply: map the T-CONTs to Alloc-IDs; NULL in a backend whose
+ *	hardware binds the Alloc-IDs itself
  * @bridge_apply: replace the bridges
  * @alarms: read the alarms
  * @counter: read a counter of the switch
@@ -442,6 +471,8 @@ struct omci_hw_ops {
 	enum omci_status (*gem_apply)(const struct omci_hw_gem_port *ports,
 				      size_t n,
 				      struct omci_hw_reject *rejected);
+	enum omci_status (*tcont_apply)(const uint16_t *alloc, size_t n,
+					struct omci_hw_reject *rejected);
 	enum omci_status (*bridge_apply)(const struct omci_hw_bridge_port *ports,
 					 size_t n,
 					 struct omci_hw_reject *rejected);

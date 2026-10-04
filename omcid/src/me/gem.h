@@ -34,6 +34,7 @@ enum {
 	OMCI_GEM_ATTR_TD_US = 5,
 
 	OMCI_GEM_TCONT_CLASS_ID = 262,
+	OMCI_GEM_TCONT_ATTR_ALLOC = 1,
 	OMCI_GEM_TCONT_ATTR_POLICY = 3,
 
 	OMCI_GEM_PRIQ_CLASS_ID = 277,
@@ -67,6 +68,13 @@ enum {
  * @mib: the MIB
  * @refused: the number of instances left out; may be NULL
  *
+ * The T-CONTs are mapped first, each to the Alloc-ID its T-CONT instance
+ * names (G.984.3 5.5.4): none for the values that mark one the OLT has not
+ * set, 0x00FF and 0xFFFF, or one above twelve bits. An Alloc-ID serves at
+ * most one user traffic T-CONT and the ONU rejects the second mapping, so of
+ * two instances that name one Alloc-ID, the one whose mapping is in force
+ * keeps it, or else the lower, and the other is refused and maps nothing.
+ *
  * An instance is left out when its port identifier does not fit twelve
  * bits, its direction is not one the standard defines, it carries traffic
  * upstream without pointing at a T-CONT of the ONU, or another instance
@@ -92,6 +100,15 @@ __must_check enum omci_status omci_gem_program(const struct omci_mib *mib,
  * Return: true when it did, or when the hardware refused its port.
  */
 __must_check bool omci_gem_instance_rejected(uint16_t instance);
+
+/**
+ * omci_tcont_instance_rejected() - Whether the last programming refused a T-CONT.
+ * @instance: the instance of class 262
+ *
+ * Return: true when its Alloc-ID was another instance's or the hardware
+ * refused it.
+ */
+__must_check bool omci_tcont_instance_rejected(uint16_t instance);
 
 /**
  * omci_gem_last() - The ports of the last programming.

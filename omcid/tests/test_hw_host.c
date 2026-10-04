@@ -145,6 +145,13 @@ static void test_a_set_that_is_refused_leaves_the_last_good_set_recorded(void)
 	CHECK_EQ(omci_hw_gem_apply(NULL, 1, NULL), OMCI_ERR_INVAL);
 	CHECK_EQ(omci_hw_gem_apply(g, OMCI_HW_GEM_MAX_PORTS + 1u, NULL),
 		 OMCI_ERR_NOMEM);
+	{
+		uint16_t t[OMCI_HW_TCONT_MAX + 1u] = { 0 };
+
+		CHECK_EQ(omci_hw_tcont_apply(NULL, 1, NULL), OMCI_ERR_INVAL);
+		CHECK_EQ(omci_hw_tcont_apply(t, OMCI_HW_TCONT_MAX + 1u, NULL),
+			 OMCI_ERR_NOMEM);
+	}
 	CHECK_EQ(omci_hw_bridge_apply(NULL, 1, NULL), OMCI_ERR_INVAL);
 	CHECK_EQ(omci_hw_bridge_apply(b, OMCI_HW_BRIDGE_MAX_PORTS + 1u, NULL),
 		 OMCI_ERR_NOMEM);

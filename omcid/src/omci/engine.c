@@ -369,6 +369,9 @@ static enum omci_status data_path_status(uint16_t class_id, uint16_t instance,
 	const enum omci_status g =
 		class_id == ME_GEM_PORT_NET_CTP ?
 			about_this(gem, omci_gem_instance_rejected(instance)) :
+		class_id == ME_TCONT ?
+			about_this(gem,
+				   omci_tcont_instance_rejected(instance)) :
 			OMCI_OK;
 	const enum omci_status b =
 		about_this(bridge, omci_bridge_instance_rejected(instance));

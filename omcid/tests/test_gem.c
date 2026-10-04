@@ -58,6 +58,37 @@ static uint8_t create_gem(struct omci_engine *eng, uint16_t inst,
 	return tx_frames[tx_n - 1][8];
 }
 
+/*
+ * A Set of a T-CONT's Alloc-ID through the engine; the result byte. Each Set
+ * has a transaction identifier of its own, since the engine answers a
+ * repeated one from its cache.
+ */
+static uint8_t set_tcont_alloc(struct omci_engine *eng, uint16_t inst,
+			       uint16_t alloc)
+{
+	static uint16_t tci = 0x7000u;
+	struct omci_frame f = {
+		.tci = tci++,
+		.msg_type = 8,
+		.ar = true,
+		.device_id = OMCI_DEVICE_ID_BASELINE,
+		.class_id = OMCI_GEM_TCONT_CLASS_ID,
+		.instance = inst,
+	};
+	uint8_t wire[OMCI_FRAME_LEN];
+
+	f.contents[0] = 0x80u;
+	f.contents[2] = (uint8_t)(alloc >> 8);
+	f.contents[3] = (uint8_t)alloc;
+	(void)!omci_frame_build(&f, wire);
+
+	tx_n = 0;
+	if (omci_engine_rx(eng, wire) != OMCI_OK || tx_n == 0)
+		return 0xff;
+
+	return tx_frames[tx_n - 1][8];
+}
+
 static void gem_create(struct omci_mib *mib, uint16_t instance,
 		       uint16_t port_id, uint16_t tcont, uint8_t dir)
 {
@@ -482,6 +513,92 @@ int main(void)
 			 OMCI_OK);
 	}
 
+	{
+		/* The synthetic ONU's four T-CONTs, 0x8000 to 0x8003. */
+		const uint16_t *tc = NULL;
+		char log[512];
+		enum omci_status rc;
+		size_t tn;
+
+		(void)!omci_gem_program(mib, &refused);
+		tn = omci_hw_tcont_recorded(&tc);
+		CHECK_EQ(tn, 4u);
+		for (size_t k = 0; k < tn; k++)
+			CHECK_EQ(tc[k], OMCI_HW_ALLOC_NONE);
+		printf("    every T-CONT the OLT has not set maps nothing\n");
+
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8000u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x0100u, 2);
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8001u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x00ffu, 2);
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8002u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x1000u, 2);
+		(void)!omci_gem_program(mib, &refused);
+		tn = omci_hw_tcont_recorded(&tc);
+		CHECK(tn == 4u && tc[0] == 0x0100u &&
+		      tc[1] == OMCI_HW_ALLOC_NONE &&
+		      tc[2] == OMCI_HW_ALLOC_NONE &&
+		      tc[3] == OMCI_HW_ALLOC_NONE);
+		printf("    a T-CONT maps the Alloc-ID its instance names; 0x00FF and values beyond twelve bits map nothing\n");
+
+		omci_log_level_set(OMCI_LOG_WARN);
+		OMCI_T_CAPTURE_LOG(log, {
+			attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8003u,
+				 OMCI_GEM_TCONT_ATTR_ALLOC, 0x0100u, 2);
+			rc = omci_gem_program(mib, &refused);
+		});
+		omci_log_level_set(OMCI_LOG_ERR);
+		CHECK_EQ(rc, OMCI_DECLINED);
+		CHECK(omci_tcont_instance_rejected(0x8003u));
+		CHECK(!omci_tcont_instance_rejected(0x8000u));
+		tn = omci_hw_tcont_recorded(&tc);
+		CHECK(tc[0] == 0x0100u && tc[3] == OMCI_HW_ALLOC_NONE);
+		CHECK_EQ(
+			omci_t_log_count(
+				log,
+				"me262: instance 0x8003 asks for Alloc-ID 256, which instance 0x8000 has; refused"),
+			1u);
+		printf("    a T-CONT asking for an Alloc-ID another one holds is refused, the holder keeps it\n");
+
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8003u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0xffffu, 2);
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8001u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x0200u, 2);
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8002u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x0200u, 2);
+		rc = omci_gem_program(mib, &refused);
+		tn = omci_hw_tcont_recorded(&tc);
+		CHECK_EQ(rc, OMCI_DECLINED);
+		CHECK(omci_tcont_instance_rejected(0x8002u));
+		CHECK(tc[1] == 0x0200u && tc[2] == OMCI_HW_ALLOC_NONE);
+		printf("    of two new mappings to one Alloc-ID, the lower T-CONT keeps it\n");
+
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8002u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0xffffu, 2);
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8000u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x0200u, 2);
+		rc = omci_gem_program(mib, &refused);
+		tn = omci_hw_tcont_recorded(&tc);
+		CHECK_EQ(rc, OMCI_DECLINED);
+		CHECK(omci_tcont_instance_rejected(0x8000u));
+		CHECK(tc[0] == OMCI_HW_ALLOC_NONE && tc[1] == 0x0200u);
+		printf("    a lower T-CONT asking for an Alloc-ID a higher one holds is the one refused\n");
+
+		attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, 0x8000u,
+			 OMCI_GEM_TCONT_ATTR_ALLOC, 0x0100u, 2);
+		omci_hw_tcont_reject_next(0u);
+		CHECK_EQ(omci_gem_program(mib, &refused), OMCI_DECLINED);
+		CHECK(omci_tcont_instance_rejected(0x8000u));
+		omci_hw_tcont_fail_next();
+		CHECK_EQ(omci_gem_program(mib, &refused), OMCI_ERR_HW);
+		printf("    a T-CONT the MAC refuses is its instance's refusal; a failing MAC fails the programming\n");
+
+		for (uint16_t t = 0x8000u; t <= 0x8003u; t++)
+			attr_put(mib, OMCI_GEM_TCONT_CLASS_ID, t,
+				 OMCI_GEM_TCONT_ATTR_ALLOC, 0xffffu, 2);
+		CHECK_EQ(omci_gem_program(mib, &refused), OMCI_OK);
+	}
+
 	omci_mib_fini(mib);
 
 	{
@@ -508,6 +625,11 @@ int main(void)
 		omci_hw_gem_fail_next();
 		CHECK_EQ(create_gem(eng, 0x0404u, 404u, 0x8000u, 3u), 1u);
 		printf("    a reconcile that could not run at all is processing error instead\n");
+
+		CHECK_EQ(set_tcont_alloc(eng, 0x8000u, 0x0100u), 0u);
+		CHECK_EQ(set_tcont_alloc(eng, 0x8001u, 0x0100u), 3u);
+		CHECK_EQ(set_tcont_alloc(eng, 0x8001u, 0x0101u), 0u);
+		printf("    a Set mapping a second T-CONT to an Alloc-ID is answered parameter error\n");
 
 		omci_engine_fini(eng);
 		omci_mib_fini(emib);

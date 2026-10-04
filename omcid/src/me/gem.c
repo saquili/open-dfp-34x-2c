@@ -23,8 +23,18 @@
 /* The instance bit of an upstream priority queue (G.988 9.2.10). */
 #define GEM_PRIQ_UPSTREAM 0x8000u
 
+/* The values of a T-CONT's Alloc-ID that map it: twelve bits, but 0x00FF. */
+#define GEM_ALLOC_UNSET 0x00ffu
+#define GEM_ALLOC_MAX 4095u
+
 static struct omci_hw_gem_port g_last[OMCI_HW_GEM_MAX_PORTS];
 static size_t g_last_n;
+
+/* The T-CONTs' Alloc-IDs in force, and the T-CONT instances refused. */
+static uint16_t g_tcont_last[OMCI_HW_TCONT_MAX];
+static size_t g_tcont_last_n;
+static uint16_t g_tcont_bad[OMCI_HW_TCONT_MAX];
+static uint8_t g_tcont_bad_n;
 
 static uint16_t g_bad[OMCI_HW_GEM_MAX_PORTS * 2];
 static uint8_t g_bad_n;
@@ -323,9 +333,101 @@ static size_t gather(const struct omci_mib *mib, struct omci_hw_gem_port *out,
 	return n;
 }
 
+static void tcont_bad_add(uint16_t instance)
+{
+	if (g_tcont_bad_n < ARRAY_SIZE(g_tcont_bad))
+		g_tcont_bad[g_tcont_bad_n++] = instance;
+}
+
+/* The Alloc-ID each T-CONT instance names, into @alloc. Return: how many T-CONTs. */
+static size_t tcont_gather(const struct omci_mib *mib, uint16_t *alloc)
+{
+	struct omci_mib_cursor cur;
+	enum omci_status rc;
+	size_t n = 0;
+
+	for (size_t i = 0; i < OMCI_HW_TCONT_MAX; i++)
+		alloc[i] = OMCI_HW_ALLOC_NONE;
+	for (rc = omci_mib_walk_first(mib, &cur); rc == OMCI_OK;
+	     rc = omci_mib_walk_next(mib, &cur)) {
+		size_t idx;
+		uint16_t a;
+
+		if (cur.class_id != OMCI_GEM_TCONT_CLASS_ID ||
+		    cur.instance < GEM_TCONT_BASE ||
+		    cur.instance - GEM_TCONT_BASE >= OMCI_HW_TCONT_MAX)
+			continue;
+		idx = cur.instance - GEM_TCONT_BASE;
+		a = (uint16_t)attr_of(mib, OMCI_GEM_TCONT_CLASS_ID,
+				      cur.instance, OMCI_GEM_TCONT_ATTR_ALLOC,
+				      2);
+		alloc[idx] = (a == GEM_ALLOC_UNSET || a > GEM_ALLOC_MAX) ?
+				     (uint16_t)OMCI_HW_ALLOC_NONE :
+				     a;
+		if (idx >= n)
+			n = idx + 1;
+	}
+	return n;
+}
+
+/* Whether T-CONT @idx is mapped to @alloc in force. */
+static bool tcont_in_force(size_t idx, uint16_t alloc)
+{
+	return idx < g_tcont_last_n && g_tcont_last[idx] == alloc;
+}
+
+/* The T-CONTs' mapping (omci_gem_program()). Return: as the hardware's. */
+static enum omci_status tcont_program(const struct omci_mib *mib)
+{
+	uint16_t alloc[OMCI_HW_TCONT_MAX];
+	struct omci_hw_reject rejected = { 0 };
+	bool refused = false;
+	enum omci_status rc;
+	size_t n;
+
+	g_tcont_bad_n = 0;
+	if (omci_hw()->tcont_apply == NULL)
+		return OMCI_OK;
+	n = tcont_gather(mib, alloc);
+
+	for (size_t i = 0; i < n; i++) {
+		for (size_t j = i + 1; j < n && alloc[i] != OMCI_HW_ALLOC_NONE;
+		     j++) {
+			const size_t lose = tcont_in_force(j, alloc[j]) ? i : j;
+
+			if (alloc[j] != alloc[i])
+				continue;
+			OMCI_WARN(
+				"me262: instance %#06zx asks for Alloc-ID %u, which instance %#06zx has; refused",
+				GEM_TCONT_BASE + lose, alloc[lose],
+				GEM_TCONT_BASE + (lose == i ? j : i));
+			tcont_bad_add((uint16_t)(GEM_TCONT_BASE + lose));
+			alloc[lose] = OMCI_HW_ALLOC_NONE;
+			refused = true;
+		}
+	}
+
+	rc = omci_hw()->tcont_apply(alloc, n, &rejected);
+	for (size_t i = 0; i < n; i++)
+		if (omci_hw_reject_has(&rejected, (uint16_t)i))
+			tcont_bad_add((uint16_t)(GEM_TCONT_BASE + i));
+	if (rc != OMCI_OK && rc != OMCI_DECLINED) {
+		OMCI_WARN("me262: the MAC refused the T-CONTs' Alloc-IDs: %s",
+			  omci_status_str(rc));
+		return rc;
+	}
+
+	for (size_t i = 0; i < n; i++)
+		g_tcont_last[i] = alloc[i];
+	g_tcont_last_n = n;
+	return refused ? OMCI_DECLINED : rc;
+}
+
 enum omci_status omci_gem_program(const struct omci_mib *mib,
 				  unsigned int *refused)
 {
+	const enum omci_status tc = tcont_program(mib);
+
 	struct omci_hw_gem_port ports[OMCI_HW_GEM_MAX_PORTS];
 	uint16_t inst[OMCI_HW_GEM_MAX_PORTS] = { 0 };
 	struct omci_hw_reject rejected = { 0 };
@@ -359,7 +461,18 @@ enum omci_status omci_gem_program(const struct omci_mib *mib,
 	OMCI_DEBUG(
 		"me268: %zu GEM port(s) programmed, %u refused, %u rejected by the MAC",
 		n, bad, rejected.n);
-	return rc;
+	/* The GEM ports' status is OK or a refusal here; the T-CONTs' may be worse. */
+	if (tc != OMCI_OK && tc != OMCI_DECLINED)
+		return tc;
+	return rc == OMCI_DECLINED ? rc : tc;
+}
+
+bool omci_tcont_instance_rejected(uint16_t instance)
+{
+	for (uint8_t i = 0; i < g_tcont_bad_n; i++)
+		if (g_tcont_bad[i] == instance)
+			return true;
+	return false;
 }
 
 bool omci_gem_instance_rejected(uint16_t instance)

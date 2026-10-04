@@ -168,6 +168,60 @@ enum omci_status omci_hw_gem_apply(const struct omci_hw_gem_port *ports,
 	return OMCI_OK;
 }
 
+static uint16_t g_tcont[OMCI_HW_TCONT_MAX];
+static size_t g_tcont_n;
+static bool g_tcont_fail_next;
+
+static uint16_t g_tcont_reject_index;
+static bool g_tcont_reject_next;
+
+void omci_hw_tcont_fail_next(void)
+{
+	g_tcont_fail_next = true;
+}
+
+void omci_hw_tcont_reject_next(uint16_t index)
+{
+	g_tcont_reject_index = index;
+	g_tcont_reject_next = true;
+}
+
+enum omci_status omci_hw_tcont_apply(const uint16_t *alloc, size_t n,
+				     struct omci_hw_reject *rejected)
+{
+	if (rejected != NULL)
+		*rejected = (struct omci_hw_reject){ 0 };
+
+	if (alloc == NULL && n > 0)
+		return OMCI_ERR_INVAL;
+
+	if (g_tcont_fail_next) {
+		g_tcont_fail_next = false;
+		return OMCI_ERR_HW;
+	}
+
+	if (n > OMCI_HW_TCONT_MAX)
+		return OMCI_ERR_NOMEM;
+
+	for (size_t i = 0; i < n; i++)
+		g_tcont[i] = alloc[i];
+	g_tcont_n = n;
+
+	if (g_tcont_reject_next && g_tcont_reject_index < n) {
+		g_tcont_reject_next = false;
+		omci_hw_reject_add(rejected, g_tcont_reject_index);
+		return OMCI_DECLINED;
+	}
+	return OMCI_OK;
+}
+
+size_t omci_hw_tcont_recorded(const uint16_t **out)
+{
+	if (out != NULL)
+		*out = g_tcont;
+	return g_tcont_n;
+}
+
 static struct omci_hw_bridge_port g_br[OMCI_HW_BRIDGE_MAX_PORTS];
 static size_t g_br_n;
 static bool g_br_fail_next;
@@ -368,6 +422,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.source = omci_hw_source,
 	.vlan_apply = omci_hw_vlan_apply,
 	.gem_apply = omci_hw_gem_apply,
+	.tcont_apply = omci_hw_tcont_apply,
 	.bridge_apply = omci_hw_bridge_apply,
 	.alarms = omci_hw_alarms,
 	.counter = omci_hw_counter,
