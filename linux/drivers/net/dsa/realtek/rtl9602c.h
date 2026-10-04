@@ -2544,6 +2544,11 @@ struct rtl9602c_priv {
 	 * @gpon_ebl_seen: Extended_Burst_Length came after Upstream_Overhead
 	 */
 	bool gpon_ebl_seen;
+	/**
+	 * @gpon_sn_seen: a serial-number request was taken in O3, after which
+	 * Extended_Burst_Length is no longer acted on
+	 */
+	bool gpon_sn_seen;
 
 	/** @gpon_sn: the ONU's serial number */
 	u8 gpon_sn[RTL9602C_GPON_SN_BYTES];

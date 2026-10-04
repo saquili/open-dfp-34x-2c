@@ -1317,8 +1317,11 @@ The interrupt path, in order:
 4. If ``RTL9602C_GPON_IRQ_GTC_DS`` is set, it reads
    ``RTL9602C_GTC_DS_IRQ_LATCH``, which clears it, records any bit other than
    PLOAM_RX in the ``ploamlog`` ring, and on a change of LOS or LOF moves the
-   state under ``gpon_lock`` (``rtl9602c_gpon_ds_sync()``). (M for the latch,
-   I for the move)
+   state under ``gpon_lock`` (``rtl9602c_gpon_ds_sync()``). On SN_REQ in O3 it
+   notes, under the same lock, that a serial-number request has come, which
+   ends the taking of Extended_Burst_Length. Purpose: the note is made before
+   any message of the same interrupt is dispatched. (M for the latch, I for
+   the move)
 5. On ``RTL9602C_GTC_DS_IRQ_PLOAM_RX`` it pops and dispatches up to 32 PLOAM
    messages, under ``gpon_lock``. (M)
 6. It writes the source's bit into ``RTL9602C_IRQ_PENDING`` to clear it. (M)
@@ -1533,14 +1536,26 @@ count from 0, so the offset is the octet number less one):
        serial-number request.
      - P
      - ITU-T G.984.3 clause 9.2.3.20 and clause 10.2.5.1 b).
-   * - The driver acts on it when it is broadcast and the state is O3: a copy
+   * - The driver acts on it when it is broadcast, the state is O3 and no
+       serial-number request has come in O3 (SN_REQ in
+       ``RTL9602C_GTC_DS_IRQ_LATCH``, noted by the interrupt thread): a copy
        with the values already stored is ignored; otherwise both lengths are
        stored, the pre-ranged overhead length is applied at once (see "The burst
        overhead"), the ranged one is kept for Ranging_Time, and the change is
-       logged.
+       logged. Upstream_Overhead, which starts O3, clears the note.
      - T
      - The ONU reaches O5 on an OLT; on the test OLT the log line reads ``burst
        length: 96 B pre-ranging, 56 after; overhead 103/63``.
+   * - The test OLT sends Extended_Burst_Length 32 ms after the
+       Upstream_Overhead that starts O3, 6 ms into O3, and repeats it; its
+       first serial-number request comes about a second later, followed at
+       once by Assign_ONU-ID. So the message
+       is acted on before the first request, and O3 holds no time after one in
+       which a changed message could be ignored.
+     - M
+     - The ``ploamlog`` ring of an activation: Upstream_Overhead at 232.552 s,
+       O3 at 232.578 s, Extended_Burst_Length at 232.584 s and five times more,
+       the latch ``00008100`` (SN_REQ) at 233.5786 s, O4 at 233.5787 s.
    * - Assign_ONU-ID (identifier 3, broadcast): octet 3 the ONU-ID, octets 4 to
        11 the serial number of the ONU it is for
        (``RTL9602C_PLOAM_ASSIGN_ONUID_ONUID`` 2,
@@ -2870,11 +2885,11 @@ Known limitations
 - The steps that a loss of the downstream takes, to O1 and to O6, and the
   POPUP and TO2 that leave O6, have not been exercised on the board: they need
   the fibre pulled with the ONU in O5.
-- Extended_Burst_Length is acted on whenever it changes in O3, where G.984.3 has
-  the ONU act on it only before its first serial-number request. The upper clamp
-  of the computed overhead length is 252 bytes, where G.984.3 allows at most
-  128. No type 1 or type 2 preamble is programmed; their bit counts only enter
-  the length.
+- The upper clamp of the computed overhead length is 252 bytes, where G.984.3
+  allows at most 128. No type 1 or type 2 preamble is programmed; their bit
+  counts only enter the length. That Extended_Burst_Length is ignored after the
+  first serial-number request has not been seen on the board, since the test
+  OLT assigns the ONU-ID at once.
 - Change_Power_Level, PST, Physical_Equipment_Error and Sleep_Allow are
   recorded, logged once and not acted on. Swift_POPUP, like POPUP, has not been
   exercised on the board, since it needs the ONU in O6.

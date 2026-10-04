@@ -465,6 +465,7 @@ static void rtl9602c_gpon_set_overhead(struct rtl9602c_priv *p, const u8 *msg)
 	p->gpon_t3_preranged = 0;
 	p->gpon_t3_ranged = 0;
 	p->gpon_ebl_seen = false;
+	p->gpon_sn_seen = false;
 
 	pr_info("<GPON> burst: guard %u, t1 %u, t2 %u, pat %02x, delim %02x%02x%02x, eqd %u\n",
 		msg[RTL9602C_PLOAM_OVERHEAD_GUARD_BITS], msg[RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS],
@@ -1756,15 +1757,15 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 
 	case RTL9602C_PLOAM_DS_EXTENDED_BURST_LENGTH:
 		/*
-		 * Broadcast, in O3 (G.984.3 clause 9.2.3.20): the type 3
-		 * preamble lengths before and after ranging. The first applies
-		 * at once, the second at Ranging_Time; a copy that repeats the
-		 * stored lengths is ignored. G.984.3 has the ONU act on the
-		 * message only before its first serial-number request; the
-		 * driver takes a change at any time in O3.
+		 * Broadcast, in O3 before the first serial-number request
+		 * (G.984.3 clause 9.2.3.20): the type 3 preamble lengths before
+		 * and after ranging. The first applies at once, the second at
+		 * Ranging_Time; a copy that repeats the stored lengths is
+		 * ignored, and so is the message once the interrupt has seen a
+		 * serial-number request in O3.
 		 */
 		if (p->gpon_state != RTL9602C_ONU_O3_SERIAL_NUMBER ||
-		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED)
+		    msg[0] != RTL9602C_ONU_ONUID_UNASSIGNED || p->gpon_sn_seen)
 			return;
 		if (p->gpon_ebl_seen &&
 		    msg[RTL9602C_PLOAM_EXT_BURST_LEN_PRERANGED] == p->gpon_t3_preranged &&
@@ -2121,14 +2122,21 @@ void rtl9602c_gpon_irq(struct rtl9602c_priv *p)
 	/*
 	 * Downstream events other than a received PLOAM are recorded; a change
 	 * of LOS or LOF moves the state at once, since in O5 the laser has to
-	 * go off without waiting for the worker.
+	 * go off without waiting for the worker. A serial-number request in O3
+	 * ends the taking of Extended_Burst_Length, before any message popped
+	 * below is dispatched.
 	 */
 	ds = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_LATCH);
 	if (ds & ~RTL9602C_GTC_DS_IRQ_PLOAM_RX)
 		rtl9602c_ploam_log(p, RTL9602C_EV_DS_INTR, NULL, ds);
-	if (ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF)) {
+	if (ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF |
+		  RTL9602C_GTC_DS_IRQ_SN_REQ)) {
 		mutex_lock(&p->gpon_lock);
-		rtl9602c_gpon_ds_sync(p);
+		if ((ds & RTL9602C_GTC_DS_IRQ_SN_REQ) &&
+		    p->gpon_state == RTL9602C_ONU_O3_SERIAL_NUMBER)
+			p->gpon_sn_seen = true;
+		if (ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF))
+			rtl9602c_gpon_ds_sync(p);
 		mutex_unlock(&p->gpon_lock);
 	}
 	if (!(ds & RTL9602C_GTC_DS_IRQ_PLOAM_RX))
