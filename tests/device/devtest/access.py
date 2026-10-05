@@ -77,12 +77,30 @@ def address(match: re.Match) -> str:
     return "<address>"
 
 
+# An IPv6 address; a link-local one holds its interface's MAC address. The
+# documentation prefix, multicast, the loopback and the unspecified address
+# name no unit and stay.
+ADDRESS6 = re.compile(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:.])")
+KEPT6 = [ipaddress.ip_network(n) for n in ("2001:db8::/32", "ff00::/8")]
+
+
+def address6(match: re.Match) -> str:
+    try:
+        ip = ipaddress.IPv6Address(match.group(0))
+    except ValueError:
+        return match.group(0)
+    if ip.is_loopback or ip.is_unspecified or any(ip in net for net in KEPT6):
+        return match.group(0)
+    return "<address6>"
+
+
 def redact(text: str, settings: Settings | None = None) -> str:
     text = MAC.sub("<mac>", text)
     text = SERIAL.sub("<serial>", text)
     if settings and settings.stick:
         text = text.replace(settings.stick, "<stick>")
     text = ADDRESS.sub(address, text)
+    text = ADDRESS6.sub(address6, text)
     if settings:
         for value, name in ((settings.pond_token, "<token>"), (settings.bench, "<bench>"),
                             (settings.stick, "<stick>")):

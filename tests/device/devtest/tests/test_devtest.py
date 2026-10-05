@@ -64,6 +64,14 @@ class Redaction(unittest.TestCase):
                                        "public <address>")
         self.assertEqual(redact("ssh 192.0.2.2 ok", SETTINGS), "ssh <stick> ok")
 
+    def test_ipv6_addresses_but_the_documentation_ones_are_taken_out(self):
+        # A link-local address holds its interface's MAC address.
+        text = ("sfp inet6 fe80::200:5eff:fe00:5301/64 scope link, global 2001:4860:4860::8888, "
+                "doc 2001:db8::2, lo ::1/128, all nodes ff02::1, any ::, at 18:15:44")
+        self.assertEqual(redact(text), "sfp inet6 <address6>/64 scope link, global <address6>, "
+                                       "doc 2001:db8::2, lo ::1/128, all nodes ff02::1, any ::, "
+                                       "at 18:15:44")
+
     def test_hex_alone_and_short_words_stay(self):
         self.assertEqual(redact("frame 00012345 state 5 ONU-ID 1"), "frame 00012345 state 5 ONU-ID 1")
 
