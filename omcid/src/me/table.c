@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * a9e1427ba1389d650371b76f7fdeaeaabf23e28a5c1bffa8d6a7b7a7d350bcd4
- * 39 classes, 372 attributes.
+ * 36c58856043baf764fa1084f0fd1bc81f0e6f223795ae0a2fea0ea9124080702
+ * 51 classes, 443 attributes.
  */
 
 #include "me/table.h"
@@ -225,6 +225,18 @@ static const struct omci_me_attr attrs_class_47[] = {
 	  0 }, /* 14 */
 };
 
+/* Class 49: MAC bridge port filter table data */
+static const struct omci_me_attr attrs_class_49[] = {
+	{ "MAC filter table", 8, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE }, /* 1 */
+};
+
+/* Class 50: MAC bridge port bridge table data */
+static const struct omci_me_attr attrs_class_50[] = {
+	{ "Bridge table", 8, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE }, /* 1 */
+};
+
 /* Class 52: MAC bridge port performance monitoring history data */
 static const struct omci_me_attr attrs_class_52[] = {
 	{ "Interval end time", 1, OMCI_ME_ACC_READ,
@@ -242,6 +254,56 @@ static const struct omci_me_attr attrs_class_52[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
 	{ "Received and discarded counter", 4, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
+/* Class 78: VLAN tagging operation configuration data */
+static const struct omci_me_attr attrs_class_78[] = {
+	{ "Upstream VLAN tagging operation mode", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Upstream VLAN tag TCI value", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Downstream VLAN tagging operation mode", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Association type", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 4 */
+	{ "Associated ME pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 5 */
+};
+
+/* Class 79: MAC bridge port filter preassign table */
+static const struct omci_me_attr attrs_class_79[] = {
+	{ "IPv4 multicast filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "IPv6 multicast filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "IPv4 broadcast filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "RARP filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "IPX filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "NetBEUI filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "AppleTalk filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Bridge management information filtering", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "ARP filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 9 */
+	{ "PPPoE broadcast filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
+};
+
+/* Class 83: Physical path termination point LCT UNI */
+static const struct omci_me_attr attrs_class_83[] = {
+	{ "Administrative state", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
 };
 
 /* Class 84: VLAN tagging filter data */
@@ -352,6 +414,81 @@ static const struct omci_me_attr attrs_class_134[] = {
 	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 15 */
 	{ "Relay agent options", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  OMCI_ME_ATTR_AVC }, /* 16 */
+};
+
+/* Class 136: TCP/UDP config data */
+static const struct omci_me_attr attrs_class_136[] = {
+	{ "Port ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Protocol", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "TOS/diffserv field", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "IP host pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+};
+
+/* Class 137: Network address */
+static const struct omci_me_attr attrs_class_137[] = {
+	{ "Security pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Address pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+};
+
+/* Class 148: Authentication security method */
+static const struct omci_me_attr attrs_class_148[] = {
+	{ "Validation scheme", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Username 1", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Password", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Realm", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Username 2", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 5 */
+};
+
+/* Class 157: Large string */
+static const struct omci_me_attr attrs_class_157[] = {
+	{ "Number of parts", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 1 */
+	{ "Part 1", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 2 */
+	{ "Part 2", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 3 */
+	{ "Part 3", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 4 */
+	{ "Part 4", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 5 */
+	{ "Part 5", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 6 */
+	{ "Part 6", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 7 */
+	{ "Part 7", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 8 */
+	{ "Part 8", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 9 */
+	{ "Part 9", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 10 */
+	{ "Part 10", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 11 */
+	{ "Part 11", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 12 */
+	{ "Part 12", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 13 */
+	{ "Part 13", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 14 */
+	{ "Part 14", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 15 */
+	{ "Part 15", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 16 */
 };
 
 /* Class 171: Extended VLAN tagging operation configuration data */
@@ -739,6 +876,47 @@ static const struct omci_me_attr attrs_class_296[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
 };
 
+/* Class 298: Dot1 rate limiter */
+static const struct omci_me_attr attrs_class_298[] = {
+	{ "Parent ME pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "TP type", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Upstream unicast flood rate pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 3 */
+	{ "Upstream broadcast rate pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 4 */
+	{ "Upstream multicast payload rate pointer", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  0 }, /* 5 */
+};
+
+/* Class 307: Octet string */
+static const struct omci_me_attr attrs_class_307[] = {
+	{ "Length", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Part 1", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Part 2", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 3 */
+	{ "Part 3", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 4 */
+	{ "Part 4", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 5 */
+	{ "Part 5", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 6 */
+	{ "Part 6", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 7 */
+	{ "Part 7", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 8 */
+	{ "Part 8", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 9 */
+	{ "Part 9", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 10 */
+	{ "Part 10", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 11 */
+	{ "Part 11", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 12 */
+	{ "Part 12", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 13 */
+	{ "Part 13", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 14 */
+	{ "Part 14", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 15 */
+	{ "Part 15", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 16 */
+};
+
 /* Class 309: Multicast operations profile */
 static const struct omci_me_attr attrs_class_309[] = {
 	{ "IGMP version", 1,
@@ -912,6 +1090,19 @@ static const struct omci_me_attr attrs_class_322[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
 };
 
+/* Class 329: Virtual Ethernet interface point */
+static const struct omci_me_attr attrs_class_329[] = {
+	{ "Administrative state", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Operational state", 1, OMCI_ME_ACC_READ, OMCI_ME_ATTR_AVC }, /* 2 */
+	{ "Interdomain name", 25, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 3 */
+	{ "TCP/UDP pointer", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	  0 }, /* 4 */
+	{ "IANA assigned port", 2, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+};
+
 /* Class 334: Ethernet frame extended PM */
 static const struct omci_me_attr attrs_class_334[] = {
 	{ "Interval end time", 1, OMCI_ME_ACC_READ,
@@ -1046,6 +1237,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_47,
 	},
 	{
+		.class_id = 49,
+		.name = "MAC bridge port filter table data",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get, Get Next, Set Table */
+		.actions = 0x24000300u,
+		.alarms = 0x00000000u,
+		.attr_count = 1,
+		.attrs = attrs_class_49,
+	},
+	{
+		.class_id = 50,
+		.name = "MAC bridge port bridge table data",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Get, Get Next */
+		.actions = 0x04000200u,
+		.alarms = 0x00000000u,
+		.attr_count = 1,
+		.attrs = attrs_class_50,
+	},
+	{
 		.class_id = 52,
 		.name = "MAC bridge port performance monitoring history data",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -1054,6 +1265,36 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000016u,
 		.attr_count = 7,
 		.attrs = attrs_class_52,
+	},
+	{
+		.class_id = 78,
+		.name = "VLAN tagging operation configuration data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 5,
+		.attrs = attrs_class_78,
+	},
+	{
+		.class_id = 79,
+		.name = "MAC bridge port filter preassign table",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get */
+		.actions = 0x00000300u,
+		.alarms = 0x00000000u,
+		.attr_count = 10,
+		.attrs = attrs_class_79,
+	},
+	{
+		.class_id = 83,
+		.name = "Physical path termination point LCT UNI",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get */
+		.actions = 0x00000300u,
+		.alarms = 0x00000000u,
+		.attr_count = 1,
+		.attrs = attrs_class_83,
 	},
 	{
 		.class_id = 84,
@@ -1104,6 +1345,46 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 16,
 		.attrs = attrs_class_134,
+	},
+	{
+		.class_id = 136,
+		.name = "TCP/UDP config data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 4,
+		.attrs = attrs_class_136,
+	},
+	{
+		.class_id = 137,
+		.name = "Network address",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 2,
+		.attrs = attrs_class_137,
+	},
+	{
+		.class_id = 148,
+		.name = "Authentication security method",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 5,
+		.attrs = attrs_class_148,
+	},
+	{
+		.class_id = 157,
+		.name = "Large string",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 16,
+		.attrs = attrs_class_157,
 	},
 	{
 		.class_id = 171,
@@ -1276,6 +1557,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_296,
 	},
 	{
+		.class_id = 298,
+		.name = "Dot1 rate limiter",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 5,
+		.attrs = attrs_class_298,
+	},
+	{
+		.class_id = 307,
+		.name = "Octet string",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 16,
+		.attrs = attrs_class_307,
+	},
+	{
 		.class_id = 309,
 		.name = "Multicast operations profile",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -1334,6 +1635,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x0000000fu,
 		.attr_count = 16,
 		.attrs = attrs_class_322,
+	},
+	{
+		.class_id = 329,
+		.name = "Virtual Ethernet interface point",
+		.creator = OMCI_ME_CREATED_BY_ONU,
+		/* Set, Get */
+		.actions = 0x00000300u,
+		.alarms = 0x00000001u,
+		.attr_count = 5,
+		.attrs = attrs_class_329,
 	},
 	{
 		.class_id = 334,

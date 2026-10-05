@@ -23,12 +23,21 @@
 #class	24	Ethernet performance monitoring history data	OLT	4,6,8,9,28	0:FCS errors;1:Excessive collision counter;2:Late collision counter;3:Frames too long;4:Buffer overflows on receive;5:Buffer overflows on transmit;6:Single collision frame counter;7:Multiple collisions frame counter;8:SQE counter;9:Deferred transmission counter;10:Internal MAC transmit error counter;11:Carrier sense error counter;12:Alignment error counter;13:Internal MAC receive error counter	-	set by create; the same value as the PPTP Ethernet UNI it monitors (implicit link)	g988:9.5.2
 #class	45	MAC bridge service profile	OLT	4,6,8,9	-	-	set by create; first byte the slot (0 in an integrated ONU), second byte the bridge group	g988:9.3.1
 #class	47	MAC bridge port configuration data	OLT	4,6,8,9	0:Port blocking	-	set by create; unique number	g988:9.3.4
+#class	49	MAC bridge port filter table data	ONU	8,9,26,29	-	-	the same value as the MAC bridge port configuration data instance, made and removed with it by the ONU (implicit link)	g988:9.3.6
+#class	50	MAC bridge port bridge table data	ONU	9,26	-	-	the same value as the MAC bridge port configuration data instance, made and removed with it by the ONU (implicit link)	g988:9.3.8
 #class	52	MAC bridge port performance monitoring history data	OLT	4,6,8,9,28	1:Delay exceeded discard;2:MTU exceeded discard;4:Received and discarded	-	set by create; the same value as the MAC bridge port configuration data instance it monitors (implicit link)	g988:9.3.9
+#class	78	VLAN tagging operation configuration data	OLT	4,6,8,9	-	-	set by create; the same value as the entity it tags, unless the association type names another (implicit link)	g988:9.3.12
+#class	79	MAC bridge port filter preassign table	ONU	8,9	-	-	the same value as the MAC bridge port configuration data instance, made and removed with it by the ONU (implicit link)	g988:9.3.7
+#class	83	Physical path termination point LCT UNI	ONU	8,9	-	-	first byte the slot, second byte the port; one instance, number 0	g988:9.13.3
 #class	84	VLAN tagging filter data	OLT	4,6,8,9	-	-	set by create; the same value as the bridge port instance it filters (implicit link)	g988:9.3.11
 #class	89	Ethernet performance monitoring history data 2	OLT	4,6,8,9,28	0:PPPoE filtered frame counter	-	set by create; the same value as the PPTP Ethernet UNI it monitors (implicit link)	g988:9.5.3
 #class	130	IEEE 802.1p mapper service profile	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.3.10
 #class	131	OLT-G	ONU	8,9	-	-	single instance, number 0	g988:9.12.2
 #class	134	IP host config data	ONU	8,9,18	-	9,10,11,12,13,14,15,16	one instance for each independent IPv4 stack of the ONU, numbered from 0 upwards as a recommendation; IPv4 and IPv6 host config data instances have separate ids	-
+#class	136	TCP/UDP config data	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.4.3
+#class	137	Network address	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.12.3
+#class	148	Authentication security method	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.12.4
+#class	157	Large string	OLT	4,6,8,9	-	1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16	set by create; unique number	g988:9.12.5
 #class	171	Extended VLAN tagging operation configuration data	OLT	4,6,8,9,26,29	-	-	set by create; unique number	g988:9.3.13
 #class	256	ONU-G	ONU	8,9,18,24,25	0:Equipment alarm;1:Powering alarm;2:Battery missing;3:Battery failure;4:Battery low;5:Physical intrusion;6:ONU self-test failure;7:Dying gasp;8:Temperature yellow;9:Temperature red;10:Voltage yellow;11:Voltage red;12:ONU manual power off;13:Inv-Image;14:PSE overload yellow;15:PSE overload red	8,10,11	single instance, number 0	g988:9.1.1
 #class	257	ONU2-G	ONU	8,9	-	2	single instance, number 0	g988:9.1.2
@@ -46,12 +55,15 @@
 #class	281	Multicast GEM interworking termination point	OLT	4,6,8,9,26,29	0:Deprecated	6	set by create; 0xFFFF is reserved	g988:9.2.5
 #class	287	OMCI	ONU	9,26	-	-	single instance, number 0	g988:9.12.8
 #class	296	Ethernet performance monitoring history data 3	OLT	4,6,8,9,28	0:Drop events;1:Undersize packets;2:Fragments;3:Jabbers	-	set by create; the same value as the PPTP Ethernet UNI it monitors (implicit link)	g988:9.5.4
+#class	298	Dot1 rate limiter	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.3.18
+#class	307	Octet string	OLT	4,6,8,9	-	-	set by create; unique number	g988:9.12.11
 #class	309	Multicast operations profile	OLT	4,6,8,9,26,29	0:Lost multicast group	-	set by create; 0 and 0xFFFF are reserved	g988:9.3.27
 #class	310	Multicast subscriber config info	OLT	4,6,8,9,26,29	-	-	set by create; the same value as the bridge port or mapper instance it is linked to (implicit link)	g988:9.3.28
 #class	311	Multicast subscriber monitor	OLT	4,6,8,9,26	-	-	set by create; the same value as the bridge port or mapper instance it is linked to (implicit link)	g988:9.3.29
 #class	312	FEC performance monitoring history data	OLT	4,6,8,9,28	0:Corrected bytes;1:Corrected code words;2:Uncorrectable code words;4:FEC seconds	-	set by create; the same value as the ANI-G it monitors (implicit link)	g988:9.2.9
 #class	321	Ethernet frame performance monitoring history data downstream	OLT	4,6,8,9,28	0:Drop events;1:CRC errored packets;2:Undersize packets;3:Oversize packets	-	set by create; the same value as the MAC bridge port configuration data instance it monitors (implicit link)	g988:9.3.31 (as 9.3.30)
 #class	322	Ethernet frame performance monitoring history data upstream	OLT	4,6,8,9,28	0:Drop events;1:CRC errored packets;2:Undersize packets;3:Oversize packets	-	set by create; the same value as the MAC bridge port configuration data instance it monitors (implicit link)	g988:9.3.30
+#class	329	Virtual Ethernet interface point	ONU	8,9	0:Connecting function fail	2	first byte the slot, second byte the port	g988:9.5.5
 #class	334	Ethernet frame extended PM	OLT	4,6,8,9,28	1:Drop events;2:CRC errored frames;3:Undersize frames;4:Oversize frames	-	set by create; unique number, from 1 by preference; the control block names the entity monitored	g988:9.3.32
 #class	341	GEM port network CTP performance monitoring history data	OLT	4,6,8,9,28	1:Encryption key errors	-	set by create; the same value as the GEM port network CTP it monitors (implicit link)	g988:9.2.13
 2	ONU data	1	MIB data sync	1	R,W	mandatory	no	g988:9.1.3
@@ -139,6 +151,8 @@
 47	MAC bridge port configuration data	12	Inbound TD pointer	2	R,W	optional	no	g988:9.3.4
 47	MAC bridge port configuration data	13	MAC learning depth	1	R,W,C	optional	no	g988:9.3.4
 47	MAC bridge port configuration data	14	LASP ID pointer	2	R,W,C	optional	no	g988:9.3.4
+49	MAC bridge port filter table data	1	MAC filter table	8	R,W	mandatory	yes	g988:9.3.6
+50	MAC bridge port bridge table data	1	Bridge table	8	R	mandatory	yes	g988:9.3.8
 52	MAC bridge port performance monitoring history data	1	Interval end time	1	R	mandatory	no	g988:9.3.9
 52	MAC bridge port performance monitoring history data	2	Threshold data 1/2 ID	2	R,W,C	mandatory	no	g988:9.3.9
 52	MAC bridge port performance monitoring history data	3	Forwarded frame counter	4	R	mandatory	no	g988:9.3.9
@@ -146,6 +160,22 @@
 52	MAC bridge port performance monitoring history data	5	MTU exceeded discard counter	4	R	mandatory	no	g988:9.3.9
 52	MAC bridge port performance monitoring history data	6	Received frame counter	4	R	mandatory	no	g988:9.3.9
 52	MAC bridge port performance monitoring history data	7	Received and discarded counter	4	R	mandatory	no	g988:9.3.9
+78	VLAN tagging operation configuration data	1	Upstream VLAN tagging operation mode	1	R,W,C	mandatory	no	g988:9.3.12
+78	VLAN tagging operation configuration data	2	Upstream VLAN tag TCI value	2	R,W,C	mandatory	no	g988:9.3.12
+78	VLAN tagging operation configuration data	3	Downstream VLAN tagging operation mode	1	R,W,C	mandatory	no	g988:9.3.12
+78	VLAN tagging operation configuration data	4	Association type	1	R,W,C	optional	no	g988:9.3.12
+78	VLAN tagging operation configuration data	5	Associated ME pointer	2	R,W,C	optional	no	g988:9.3.12
+79	MAC bridge port filter preassign table	1	IPv4 multicast filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	2	IPv6 multicast filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	3	IPv4 broadcast filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	4	RARP filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	5	IPX filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	6	NetBEUI filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	7	AppleTalk filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	8	Bridge management information filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	9	ARP filtering	1	R,W	mandatory	no	g988:9.3.7
+79	MAC bridge port filter preassign table	10	PPPoE broadcast filtering	1	R,W	mandatory	no	g988:9.3.7
+83	Physical path termination point LCT UNI	1	Administrative state	1	R,W	mandatory	no	g988:9.13.3
 84	VLAN tagging filter data	1	VLAN filter list	24	R,W,C	mandatory	no	g988:9.3.11
 84	VLAN tagging filter data	2	Forward operation	1	R,W,C	mandatory	no	g988:9.3.11
 84	VLAN tagging filter data	3	Number of entries	1	R,W,C	mandatory	no	g988:9.3.11
@@ -185,6 +215,33 @@
 134	IP host config data	14	Domain name	25	R	mandatory	no	g988:9.4.1
 134	IP host config data	15	Host name	25	R	mandatory	no	g988:9.4.1
 134	IP host config data	16	Relay agent options	2	R,W	optional	no	g988:9.4.1
+136	TCP/UDP config data	1	Port ID	2	R,W,C	mandatory	no	g988:9.4.3
+136	TCP/UDP config data	2	Protocol	1	R,W,C	mandatory	no	g988:9.4.3
+136	TCP/UDP config data	3	TOS/diffserv field	1	R,W,C	mandatory	no	g988:9.4.3
+136	TCP/UDP config data	4	IP host pointer	2	R,W,C	mandatory	no	g988:9.4.3
+137	Network address	1	Security pointer	2	R,W,C	mandatory	no	g988:9.12.3
+137	Network address	2	Address pointer	2	R,W,C	mandatory	no	g988:9.12.3
+148	Authentication security method	1	Validation scheme	1	R,W	mandatory	no	g988:9.12.4
+148	Authentication security method	2	Username 1	25	R,W	mandatory	no	g988:9.12.4
+148	Authentication security method	3	Password	25	R,W	mandatory	no	g988:9.12.4
+148	Authentication security method	4	Realm	25	R,W	mandatory	no	g988:9.12.4
+148	Authentication security method	5	Username 2	25	R,W	optional	no	g988:9.12.4
+157	Large string	1	Number of parts	1	R,W	mandatory	no	g988:9.12.5
+157	Large string	2	Part 1	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	3	Part 2	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	4	Part 3	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	5	Part 4	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	6	Part 5	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	7	Part 6	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	8	Part 7	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	9	Part 8	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	10	Part 9	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	11	Part 10	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	12	Part 11	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	13	Part 12	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	14	Part 13	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	15	Part 14	25	R,W	mandatory	no	g988:9.12.5
+157	Large string	16	Part 15	25	R,W	mandatory	no	g988:9.12.5
 171	Extended VLAN tagging operation configuration data	1	Association type	1	R,W,C	mandatory	no	g988:9.3.13
 171	Extended VLAN tagging operation configuration data	2	Received frame VLAN tagging operation table max size	2	R	mandatory	no	g988:9.3.13
 171	Extended VLAN tagging operation configuration data	3	Input TPID	2	R,W	mandatory	no	g988:9.3.13
@@ -335,6 +392,27 @@
 296	Ethernet performance monitoring history data 3	14	Packets 256 to 511 octets	4	R	mandatory	no	g988:9.5.4
 296	Ethernet performance monitoring history data 3	15	Packets 512 to 1023 octets	4	R	mandatory	no	g988:9.5.4
 296	Ethernet performance monitoring history data 3	16	Packets 1024 to 1518 octets	4	R	mandatory	no	g988:9.5.4
+298	Dot1 rate limiter	1	Parent ME pointer	2	R,W,C	mandatory	no	g988:9.3.18
+298	Dot1 rate limiter	2	TP type	1	R,W,C	mandatory	no	g988:9.3.18
+298	Dot1 rate limiter	3	Upstream unicast flood rate pointer	2	R,W,C	optional	no	g988:9.3.18
+298	Dot1 rate limiter	4	Upstream broadcast rate pointer	2	R,W,C	optional	no	g988:9.3.18
+298	Dot1 rate limiter	5	Upstream multicast payload rate pointer	2	R,W,C	optional	no	g988:9.3.18
+307	Octet string	1	Length	2	R,W	mandatory	no	g988:9.12.11
+307	Octet string	2	Part 1	25	R,W	mandatory	no	g988:9.12.11
+307	Octet string	3	Part 2	25	R,W	optional	no	g988:9.12.11
+307	Octet string	4	Part 3	25	R,W	optional	no	g988:9.12.11
+307	Octet string	5	Part 4	25	R,W	optional	no	g988:9.12.11
+307	Octet string	6	Part 5	25	R,W	optional	no	g988:9.12.11
+307	Octet string	7	Part 6	25	R,W	optional	no	g988:9.12.11
+307	Octet string	8	Part 7	25	R,W	optional	no	g988:9.12.11
+307	Octet string	9	Part 8	25	R,W	optional	no	g988:9.12.11
+307	Octet string	10	Part 9	25	R,W	optional	no	g988:9.12.11
+307	Octet string	11	Part 10	25	R,W	optional	no	g988:9.12.11
+307	Octet string	12	Part 11	25	R,W	optional	no	g988:9.12.11
+307	Octet string	13	Part 12	25	R,W	optional	no	g988:9.12.11
+307	Octet string	14	Part 13	25	R,W	optional	no	g988:9.12.11
+307	Octet string	15	Part 14	25	R,W	optional	no	g988:9.12.11
+307	Octet string	16	Part 15	25	R,W	optional	no	g988:9.12.11
 309	Multicast operations profile	1	IGMP version	1	R,W,C	mandatory	no	g988:9.3.27
 309	Multicast operations profile	2	IGMP function	1	R,W,C	mandatory	no	g988:9.3.27
 309	Multicast operations profile	3	Immediate leave	1	R,W,C	mandatory	no	g988:9.3.27
@@ -403,6 +481,11 @@
 322	Ethernet frame performance monitoring history data upstream	14	Packets 256 to 511 octets	4	R	mandatory	no	g988:9.3.30
 322	Ethernet frame performance monitoring history data upstream	15	Packets 512 to 1023 octets	4	R	mandatory	no	g988:9.3.30
 322	Ethernet frame performance monitoring history data upstream	16	Packets 1024 to 1518 octets	4	R	mandatory	no	g988:9.3.30
+329	Virtual Ethernet interface point	1	Administrative state	1	R,W	mandatory	no	g988:9.5.5
+329	Virtual Ethernet interface point	2	Operational state	1	R	optional	no	g988:9.5.5
+329	Virtual Ethernet interface point	3	Interdomain name	25	R,W	optional	no	g988:9.5.5
+329	Virtual Ethernet interface point	4	TCP/UDP pointer	2	R,W	optional	no	g988:9.5.5
+329	Virtual Ethernet interface point	5	IANA assigned port	2	R	mandatory	no	g988:9.5.5
 334	Ethernet frame extended PM	1	Interval end time	1	R	mandatory	no	g988:9.3.32
 334	Ethernet frame extended PM	2	Control block	16	R,W,C	mandatory	no	g988:9.3.32
 334	Ethernet frame extended PM	3	Drop events	4	R	mandatory	no	g988:9.3.32

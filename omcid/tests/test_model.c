@@ -17,7 +17,7 @@
 static void test_the_classes_are_the_data_classes(void)
 {
 	CHECK_EQ(omci_me_class_count, (size_t)tsv_class_count);
-	CHECK_EQ(tsv_class_count, 39u);
+	CHECK_EQ(tsv_class_count, 51u);
 
 	unsigned int attrs = 0;
 
@@ -46,7 +46,7 @@ static void test_the_classes_are_the_data_classes(void)
 			CHECK_EQ(omci_me_action_allowed(t->id, mt),
 				 (t->actions & (1u << mt)) != 0u);
 	}
-	CHECK_EQ(attrs, 372u);
+	CHECK_EQ(attrs, 443u);
 	printf("  %u classes, %u attributes\n", tsv_class_count, attrs);
 }
 
@@ -118,8 +118,8 @@ static void test_the_thirteen_tables(void)
 		if (here > 0u)
 			CHECK((tsv_classes[i].actions & (1u << 26)) != 0u);
 	}
-	CHECK_EQ(tables, 13u);
-	CHECK_EQ(classes, 6u);
+	CHECK_EQ(tables, 15u);
+	CHECK_EQ(classes, 8u);
 }
 
 static void
@@ -159,7 +159,7 @@ static void test_the_classes_are_in_ascending_order_and_nothing_else_is_in(void)
 		      omci_me_classes[i].class_id);
 
 	static const uint16_t absent[] = { 0,	   1,	   3,	   23,
-					   50,	   158,	   329,	   335,
+					   51,	   158,	   330,	   335,
 					   3000,   0x8000, 0xea60, 0xfffd,
 					   0xfffe, 0xffff };
 	for (size_t i = 0; i < ARRAY_SIZE(absent); i++) {

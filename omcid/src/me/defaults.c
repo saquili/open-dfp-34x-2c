@@ -23,6 +23,7 @@ enum {
 	ME_CIRCUIT_PACK = 6,
 	ME_SOFTWARE_IMAGE = 7,
 	ME_PPTP_ETH_UNI = 11,
+	ME_PPTP_LCT_UNI = 83,
 	ME_OLT_G = 131,
 	ME_IP_HOST = 134,
 	ME_ONU_G = 256,
@@ -33,10 +34,20 @@ enum {
 	ME_PRIORITY_QUEUE = 277,
 	ME_TRAFFIC_SCHED = 278,
 	ME_OMCI = 287,
+	ME_VEIP = 329,
 };
 
 /* The slot of the PON side: T-CONTs, schedulers and upstream queues are 0x80nn. */
 #define PON_SLOT 0x80u
+
+/*
+ * The VEIP, the hand-off to the router of the stick (G.988 9.5.5): port 1 of
+ * slot 6, whose integrated cardholder holds a plug-in unit of type 48, VEIP.
+ */
+#define VEIP_SLOT 6u
+#define VEIP_PLUGIN_TYPE 48u
+#define VEIP_INSTANCE ((uint16_t)(VEIP_SLOT << 8 | 1u))
+#define VEIP_CARDHOLDER ((uint16_t)(0x0100u | VEIP_SLOT))
 
 /* No Alloc-ID yet; and the size given to every queue. */
 #define ALLOC_ID_UNASSIGNED 0xffffu
@@ -402,6 +413,47 @@ static void make_ip_host(struct build *b, const struct omci_hw_caps *caps,
 	finish(b);
 }
 
+/*
+ * The VEIP's slot: its cardholder and circuit pack, of one port, and the
+ * VEIP, locked as G.988 suggests of a default (A.1.6), disabled until the
+ * engine finds the router behind it, with a blank interdomain name and no
+ * IANA assigned port.
+ */
+static void make_veip(struct build *b, const struct omci_hw_caps *caps)
+{
+	begin(b, ME_CARDHOLDER, VEIP_CARDHOLDER);
+	put_u8(b, 1, VEIP_PLUGIN_TYPE);
+	put_blank(b, 4);
+	put_blank(b, 5);
+	finish(b);
+
+	begin(b, ME_CIRCUIT_PACK, VEIP_CARDHOLDER);
+	put_u8(b, 1, VEIP_PLUGIN_TYPE);
+	put_u8(b, 2, 1u);
+	put(b, 3, caps->identity.serial, sizeof(caps->identity.serial));
+	put_text(b, 4, caps->identity.version, 0);
+	put_text(b, 5, caps->identity.vendor_id, 0);
+	put_blank(b, 9);
+	finish(b);
+
+	begin(b, ME_VEIP, VEIP_INSTANCE);
+	put_u8(b, 1, 1u);
+	put_u8(b, 2, 1u);
+	put_u16(b, 5, 0xffffu);
+	finish(b);
+}
+
+/*
+ * The LCT UNI, which stands for the debug access to the stick through its
+ * subscriber port and IP stack (G.988 9.13.3): one, unlocked.
+ */
+static void make_lct_uni(struct build *b)
+{
+	begin(b, ME_PPTP_LCT_UNI, 0);
+	put_u8(b, 1, 0u);
+	finish(b);
+}
+
 enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 					const struct omci_hw_caps *caps)
 {
@@ -430,6 +482,8 @@ enum omci_status omci_me_defaults_apply(struct omci_mib *mib,
 		make_software_image(&b, caps, n);
 	for (unsigned int n = 0; n < caps->ip_host_count; n++)
 		make_ip_host(&b, caps, n);
+	make_veip(&b, caps);
+	make_lct_uni(&b);
 	make_omci(&b);
 
 	omci_mib_notify_suspend(mib, false);

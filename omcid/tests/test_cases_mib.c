@@ -9,6 +9,7 @@
 
 #include "hw/hw.h"
 #include "me/defaults.h"
+#include "me/layout.h"
 #include "me/table.h"
 #include "mib/store.h"
 #include "omci/attrmask.h"
@@ -108,12 +109,12 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		uint32_t cases;
 		uint32_t digest;
 	} pin[] = {
-		{ OMCI_CASE_ENVELOPE, 1636u, 0xb050e31au },
+		{ OMCI_CASE_ENVELOPE, 1648u, 0xf681c3f7u },
 		{ OMCI_CASE_MUTATE, 36864u, 0x7ce87501u },
 		{ OMCI_CASE_MSGTYPE, 256u, 0x7b94fe45u },
 		{ OMCI_CASE_MTCLASS, 896u, 0x321cec05u },
-		{ OMCI_CASE_REACH, 9332u, 0x6719f75eu },
-		{ OMCI_CASE_POPULATED, 552u, 0x0f358d18u },
+		{ OMCI_CASE_REACH, 9384u, 0x39687bcfu },
+		{ OMCI_CASE_POPULATED, 594u, 0x01c008f8u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(pin); k++) {
 		CHECK_EQ(omci_case_count(pin[k].axis), pin[k].cases);
@@ -130,12 +131,12 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 		enum omci_case_axis axis;
 		uint32_t digest;
 	} label_pin[] = {
-		{ OMCI_CASE_ENVELOPE, 0xbb5df9c0u },
+		{ OMCI_CASE_ENVELOPE, 0x61c58bcau },
 		{ OMCI_CASE_MUTATE, 0xaceb5285u },
 		{ OMCI_CASE_MSGTYPE, 0xb6b6d2f5u },
 		{ OMCI_CASE_MTCLASS, 0x26e548e5u },
-		{ OMCI_CASE_REACH, 0x9367a489u },
-		{ OMCI_CASE_POPULATED, 0xf7160e6eu },
+		{ OMCI_CASE_REACH, 0xcfe9e1c2u },
+		{ OMCI_CASE_POPULATED, 0xbd32334du },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(label_pin); k++) {
 		const uint32_t d = label_digest(label_pin[k].axis);
@@ -151,8 +152,8 @@ static void test_every_axis_is_what_it_was_when_it_was_pinned(void)
 	CHECK(populated());
 	omci_case_prepare(OMCI_CASE_REACH, g_mib);
 	omci_case_prepare(OMCI_CASE_POPULATED, g_mib);
-	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x6719f75eu);
-	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0x0f358d18u);
+	CHECK_EQ(axis_digest(OMCI_CASE_REACH), 0x39687bcfu);
+	CHECK_EQ(axis_digest(OMCI_CASE_POPULATED), 0x01c008f8u);
 	omci_mib_fini(g_mib);
 }
 
@@ -168,10 +169,10 @@ static void test_a_second_preparation_leaves_nothing_of_the_first(void)
 		uint32_t cases;
 		uint32_t digest;
 	} without[] = {
-		{ 5u, 2u, 9308u, 0xd579cdf2u },
-		{ 256u, 1u, 9323u, 0xee16b013u },
-		{ 263u, 1u, 9318u, 0xf7a24a59u },
-		{ 2u, 1u, 9328u, 0xc9f3fc99u },
+		{ 5u, 3u, 9348u, 0x6373a11du },
+		{ 256u, 1u, 9375u, 0xde71b689u },
+		{ 263u, 1u, 9370u, 0x252621ceu },
+		{ 2u, 1u, 9380u, 0x181e6a56u },
 	};
 	for (size_t k = 0; k < ARRAY_SIZE(without); k++) {
 		CHECK(populated());
@@ -277,10 +278,10 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 		const char *family;
 		unsigned int n;
 	} families[] = {
-		{ "create", 25 }, { "get", 36 },	{ "mibreset", 1 },
-		{ "set", 224 },	  { "setagain", 5 },	{ "setback", 5 },
+		{ "create", 32 }, { "get", 40 },	{ "mibreset", 1 },
+		{ "set", 238 },	  { "setagain", 6 },	{ "setback", 6 },
 		{ "swdl", 35 },	  { "synctime", 8820 }, { "table", 39 },
-		{ "test", 72 },	  { "upload", 70 },
+		{ "test", 88 },	  { "upload", 79 },
 	};
 	unsigned int tally[11] = { 0 };
 	unsigned int total_families = 0;
@@ -323,13 +324,13 @@ test_reach_has_the_families_it_was_counted_with_and_is_answered_as_it_was(void)
 	CHECK_EQ(total_families, n);
 	CHECK_EQ(answered, n);
 
-	CHECK_EQ(no_result_byte, 70u);
-	CHECK_EQ(results[0], 732u);
-	CHECK_EQ(results[2], 101u);
+	CHECK_EQ(no_result_byte, 79u);
+	CHECK_EQ(results[0], 755u);
+	CHECK_EQ(results[2], 117u);
 	CHECK_EQ(results[3], 8391u);
-	CHECK_EQ(results[4], 2u);
-	CHECK_EQ(results[5], 4u);
-	CHECK_EQ(results[9], 32u);
+	CHECK_EQ(results[4], 1u);
+	CHECK_EQ(results[5], 5u);
+	CHECK_EQ(results[9], 36u);
 	CHECK_EQ(results[1] + results[6] + results[7] + results[8], 0u);
 }
 
@@ -415,7 +416,7 @@ static void test_populated_asks_for_what_the_model_holds_and_gets_it_back(void)
 	omci_engine_fini(eng);
 	omci_mib_fini(g_mib);
 
-	CHECK_EQ(getall, 33u);
+	CHECK_EQ(getall, 37u);
 	CHECK_EQ(getall_ok, getall_full);
 	CHECK(getall_ok > 0u && getall_ok < getall);
 	CHECK(getpart >= getall);
@@ -587,6 +588,7 @@ static void test_the_pieces_of_a_get_are_the_fewest_that_fit(void)
 	CHECK_EQ(getall_wrong, 0u);
 }
 
+/* Fill the MIB with one class until its rows or its arena run out. */
 static void fill(uint16_t class_id)
 {
 	char log[256];
@@ -596,38 +598,53 @@ static void fill(uint16_t class_id)
 		     omci_mib_create(g_mib, class_id, inst) == OMCI_OK; inst++)
 			;
 	});
-	CHECK(strstr(log, "mib full: 512 rows") != NULL);
+	CHECK(strstr(log, "mib full: 512 rows") != NULL ||
+	      strstr(log, "mib arena full") != NULL);
+}
+
+/*
+ * The class whose instances, as many as the MIB holds, have the most
+ * writable attributes among them: the most cases a full MIB can ask for.
+ */
+static uint16_t busiest_class(void)
+{
+	uint16_t busiest = 0;
+	unsigned long most = 0;
+
+	for (size_t k = 0; k < omci_me_class_count; k++) {
+		const struct omci_me_class *c = &omci_me_classes[k];
+		const size_t row = omci_me_row_size(c);
+		unsigned long fit = OMCI_MIB_MAX_ROWS, writable = 0;
+
+		if (row > 0u && OMCI_MIB_ARENA_BYTES / row < fit)
+			fit = OMCI_MIB_ARENA_BYTES / row;
+		for (uint8_t attr = 1; attr <= c->attr_count; attr++)
+			if ((omci_me_attr_get(c, attr)->access &
+			     OMCI_ME_ACC_WRITE) != 0u)
+				writable++;
+		if (fit * writable > most) {
+			most = fit * writable;
+			busiest = c->class_id;
+		}
+	}
+	return busiest;
 }
 
 static void test_a_mib_filled_to_its_capacity_fits_the_arrays(void)
 {
-	uint16_t busiest = 0;
-	unsigned int most = 0;
+	const uint16_t busiest = busiest_class();
 
-	for (size_t k = 0; k < omci_me_class_count; k++) {
-		unsigned int writable = 0;
-
-		for (uint8_t attr = 1; attr <= omci_me_classes[k].attr_count;
-		     attr++)
-			if ((omci_me_attr_get(&omci_me_classes[k], attr)->access &
-			     OMCI_ME_ACC_WRITE) != 0u)
-				writable++;
-		if (writable > most) {
-			most = writable;
-			busiest = omci_me_classes[k].class_id;
-		}
-	}
 	CHECK(busiest != 0u);
 
 	CHECK(populated());
 	fill(busiest);
-	CHECK_EQ(omci_mib_count(g_mib), (size_t)OMCI_MIB_MAX_ROWS);
+	CHECK(omci_mib_count(g_mib) > 256u);
 	omci_case_prepare(OMCI_CASE_REACH, g_mib);
 	omci_case_prepare(OMCI_CASE_POPULATED, g_mib);
-	CHECK(omci_case_count(OMCI_CASE_REACH) > 9312u);
+	CHECK(omci_case_count(OMCI_CASE_REACH) > 9384u);
 	CHECK(omci_case_count(OMCI_CASE_REACH) <=
 	      omci_case_capacity(OMCI_CASE_REACH));
-	CHECK(omci_case_count(OMCI_CASE_POPULATED) > 552u);
+	CHECK(omci_case_count(OMCI_CASE_POPULATED) > 594u);
 	CHECK(omci_case_count(OMCI_CASE_POPULATED) <=
 	      omci_case_capacity(OMCI_CASE_POPULATED));
 	omci_mib_fini(g_mib);

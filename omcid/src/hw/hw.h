@@ -548,6 +548,51 @@ void omci_hw_optics_reset(void);
 #endif
 
 /**
+ * struct omci_hw_fdb - An address the switch forwards by.
+ * @mac: the address
+ * @ani: it is on the PON side, rather than on the UNI
+ * @dynamic: the switch learned it, rather than had it set
+ */
+struct omci_hw_fdb {
+	uint8_t mac[6];
+	bool ani;
+	bool dynamic;
+};
+
+/* The most addresses read at once. */
+#define OMCI_HW_FDB_MAX 64u
+
+/**
+ * omci_hw_fdb() - The addresses the switch forwards by (host backend).
+ * @out: the addresses, each once for its side
+ * @cap: room in @out
+ * @n: how many were written
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL, or the failure of the read.
+ */
+__must_check enum omci_status omci_hw_fdb(struct omci_hw_fdb *out, size_t cap,
+					  size_t *n);
+
+#if defined(OMCID_HW_STUB)
+/* Test hooks of the host backend for its addresses. */
+void omci_hw_fdb_force(const struct omci_hw_fdb *entries, size_t n);
+
+void omci_hw_fdb_fail_next(bool fail);
+#endif
+
+/**
+ * omci_hw_routing() - Whether the host backend routes (host backend).
+ *
+ * Return: what omci_hw_routing_force() last set; false at first.
+ */
+__must_check bool omci_hw_routing(void);
+
+#if defined(OMCID_HW_STUB)
+/* Test hook of the host backend for its router mode. */
+void omci_hw_routing_force(bool routing);
+#endif
+
+/**
  * enum omci_hw_limit - The alarm thresholds of the transceiver.
  * @OMCI_HW_LIMIT_BIAS_HIGH: laser bias current, high
  * @OMCI_HW_LIMIT_TX_LOW: transmitted optical power, low
@@ -853,6 +898,10 @@ void omci_hw_mcast_reset(void);
  * @set_router: route instead of bridging (true), or bridge again (false):
  *	in router mode the bridges and the VLAN rules are not applied; NULL in
  *	a backend without a router mode
+ * @routing: whether the backend routes, which makes the router of the stick
+ *	the domain behind the VEIP; NULL in a backend without a router mode
+ * @fdb: read the addresses the switch forwards by; NULL in a backend that
+ *	cannot
  * @mcast_port: set how the bridge snoops the subscriber side; NULL in a
  *	backend without multicast, which then has none of the mcast_
  *	operations
@@ -894,6 +943,8 @@ struct omci_hw_ops {
 	enum omci_status (*optics)(struct omci_hw_optics *out);
 	enum omci_status (*optics_limits)(struct omci_hw_optics_limits *out);
 	void (*set_router)(bool on);
+	bool (*routing)(void);
+	enum omci_status (*fdb)(struct omci_hw_fdb *out, size_t cap, size_t *n);
 	enum omci_status (*mcast_port)(const struct omci_hw_mcast_port *cfg);
 	enum omci_status (*mcast_groups)(struct omci_hw_mcast_group *out,
 					 size_t cap, size_t *n);

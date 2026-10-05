@@ -16,6 +16,7 @@
 #include "me/action.h"
 #include "me/defaults.h"
 #include "me/bridge.h"
+#include "me/fdb.h"
 #include "me/gem.h"
 #include "me/table.h"
 #include "me/tables.h"
@@ -357,6 +358,13 @@ enum {
 
 	ME_MAC_BRIDGE = 45,
 	ME_MAC_BRIDGE_PORT = 47,
+	ME_BRIDGE_PORT_FILTER = 49,
+	ME_BRIDGE_PORT_TABLE = 50,
+	ME_BRIDGE_PORT_PREASSIGN = 79,
+	ME_VEIP = 329,
+	VEIP_OPER_STATE = 2,
+	VEIP_ENABLED = 0,
+	VEIP_DISABLED = 1,
 	ME_VLAN_TAG_FILTER = 84,
 	ME_8021P_MAPPER = 130,
 	ME_GEM_IW_TP = 266,
@@ -884,6 +892,27 @@ static void handle_get_next(struct omci_engine *eng,
  * the Create, the instance is not made, and the answer names the attributes
  * in its execution mask.
  */
+/*
+ * The tables the ONU keeps for each bridge port: its MAC filter table, its
+ * bridge table and its filter preassign table (G.988 9.3.6 to 9.3.8), made
+ * with the port and removed with it.
+ */
+static void bridge_port_tables(struct omci_engine *eng, uint16_t instance,
+			       bool made)
+{
+	static const uint16_t tables[] = {
+		ME_BRIDGE_PORT_FILTER,
+		ME_BRIDGE_PORT_TABLE,
+		ME_BRIDGE_PORT_PREASSIGN,
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(tables); i++)
+		if (made)
+			(void)!omci_mib_create(eng->mib, tables[i], instance);
+		else
+			(void)!omci_mib_delete(eng->mib, tables[i], instance);
+}
+
 static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 {
 	enum omci_status rc =
@@ -926,6 +955,8 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 
 	enum omci_status gem = OMCI_OK, bridge = OMCI_OK;
 
+	if (req->class_id == ME_MAC_BRIDGE_PORT)
+		bridge_port_tables(eng, req->instance, true);
 	if (class_shapes_gem(req->class_id))
 		gem = reprogram_gem(eng);
 	if (class_builds_bridge(req->class_id))
@@ -947,6 +978,8 @@ static void handle_delete(struct omci_engine *eng, const struct omci_frame *req)
 
 	if (rc == OMCI_OK)
 		omci_pm_forget(eng->pm, req->class_id, req->instance);
+	if (rc == OMCI_OK && req->class_id == ME_MAC_BRIDGE_PORT)
+		bridge_port_tables(eng, req->instance, false);
 
 	enum omci_status gem = OMCI_OK, bridge = OMCI_OK, vlan = OMCI_OK;
 
@@ -1551,6 +1584,35 @@ static void handle_get_all_alarms(struct omci_engine *eng,
 	transmit(eng, frame);
 }
 
+/*
+ * The operational state of each VEIP: enabled while the stick routes, the
+ * router being the domain behind it, and disabled while it bridges (G.988
+ * 9.5.5). A change is announced.
+ */
+static void keep_veip(struct omci_engine *eng)
+{
+	const uint8_t state = omci_hw()->routing != NULL &&
+					      omci_hw()->routing() ?
+				      VEIP_ENABLED :
+				      VEIP_DISABLED;
+	struct omci_mib_cursor cur;
+
+	for (enum omci_status rc = omci_mib_walk_first(eng->mib, &cur);
+	     rc == OMCI_OK; rc = omci_mib_walk_next(eng->mib, &cur)) {
+		uint8_t now = 0xffu;
+		size_t len = 0;
+
+		if (cur.class_id != ME_VEIP ||
+		    (omci_mib_attr_get(eng->mib, ME_VEIP, cur.instance,
+				       VEIP_OPER_STATE, &now, 1u,
+				       &len) == OMCI_OK &&
+		     now == state))
+			continue;
+		(void)!omci_mib_attr_set(eng->mib, ME_VEIP, cur.instance,
+					 VEIP_OPER_STATE, &state, 1u);
+	}
+}
+
 void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec)
 {
 	if (eng == NULL)
@@ -1564,6 +1626,7 @@ void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec)
 		eng->alarms_judged = true;
 		eng->alarm_sec = now_sec;
 		alarms_tick(eng);
+		keep_veip(eng);
 		omci_mcast_tick(eng->mcast, eng->mib, now_sec);
 	}
 }
@@ -1721,6 +1784,7 @@ enum omci_status omci_engine_init(struct omci_engine **out,
 		return rc;
 	}
 
+	omci_fdb_bind(mib);
 	rc = omci_mcast_init(&g_engine.mcast);
 	if (rc != OMCI_OK) {
 		omci_pm_fini(g_engine.pm);
@@ -1753,6 +1817,7 @@ void omci_engine_fini(struct omci_engine *eng)
 	if (eng == NULL)
 		return;
 	omci_mib_notify_set(eng->mib, NULL, NULL);
+	omci_fdb_bind(NULL);
 	omci_mcast_fini(eng->mcast);
 	omci_pm_fini(eng->pm);
 	omci_alarm_fini(eng->alarm);

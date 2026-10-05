@@ -9,12 +9,15 @@
 #include "mcast/acl.h"
 #include "mcast/agent.h"
 #include "me/action.h"
+#include "me/fdb.h"
 #include "me/table.h"
 #include "me/tables.h"
 #include "omcid/array_size.h"
 #include "sys/wire.h"
 
 enum {
+	ME_BRIDGE_PORT_FILTER = 49,
+	ME_BRIDGE_PORT_TABLE = 50,
 	ME_EXT_VLAN_TAG_OPER = 171,
 	ME_MCAST_GEM_IW_TP = 281,
 	ME_OMCI = 287,
@@ -50,7 +53,9 @@ enum {
  * profile (class 309) have rows of three parts, and the allowed preview
  * groups of the multicast subscriber config info (class 310) rows of two;
  * its service packages have one; a table control field leads each part. The
- * others keep whole rows.
+ * MAC filter table of a bridge port (class 49) is known by its entry number,
+ * and holds as many addresses as the port is given rules for. The others
+ * keep whole rows.
  */
 static const struct {
 	uint16_t class_id;
@@ -93,6 +98,13 @@ static const struct {
 	  CTRL_ROWS(OMCI_ME_TABLE_CTRL_KEY, 0u, OMCI_MCAST_SUBSCRIBER_ROWS) },
 	{ ME_MCAST_SUBSCRIBER, 7,
 	  CTRL_ROWS(OMCI_ME_TABLE_CTRL_PARTS, 1u, OMCI_MCAST_SUBSCRIBER_ROWS) },
+
+	{ ME_BRIDGE_PORT_FILTER,
+	  1,
+	  { .key_len = 1,
+	    .order = OMCI_MIB_TABLE_LAST,
+	    .max_entries = OMCI_ME_MAC_FILTER_ROWS,
+	    .ctrl = OMCI_ME_TABLE_CTRL_ENTRY } },
 };
 
 bool omci_me_table_policy(uint16_t class_id, uint8_t attr_no,
@@ -169,7 +181,8 @@ static void stored_key(uint8_t part, uint16_t key,
 }
 
 static bool holds_key(const struct omci_mib *mib, uint16_t class_id,
-		      uint16_t instance, uint8_t attr_no, const uint8_t *key)
+		      uint16_t instance, uint8_t attr_no, const uint8_t *key,
+		      size_t key_len)
 {
 	const size_t n = omci_mib_table_count(mib, class_id, instance, attr_no);
 
@@ -178,7 +191,7 @@ static bool holds_key(const struct omci_mib *mib, uint16_t class_id,
 
 		(void)!omci_mib_table_get(mib, class_id, instance, attr_no, i,
 					  have, sizeof(have));
-		if (omci_wire_equal(have, key, OMCI_ME_TABLE_CTRL_LEN))
+		if (omci_wire_equal(have, key, key_len))
 			return true;
 	}
 	return false;
@@ -219,6 +232,44 @@ static enum omci_status clear_rows(struct omci_mib *mib, uint16_t class_id,
 	return OMCI_OK;
 }
 
+/* The two high bits of the second byte of a row known by its entry number. */
+enum {
+	ENTRY_OP_SHIFT = 6,
+	ENTRY_REMOVE = 0,
+	ENTRY_ADD = 1,
+	ENTRY_CLEAR = 2,
+};
+
+/*
+ * A Set of a row known by its entry number (OMCI_ME_TABLE_CTRL_ENTRY): it is
+ * added, or replaces the row of its number; removed, which is no fault when
+ * the row is not there; or the whole table is cleared.
+ */
+static enum omci_status entry_set(struct omci_mib *mib, uint16_t class_id,
+				  uint16_t instance, uint8_t attr_no,
+				  const struct omci_me_table_policy *policy,
+				  const uint8_t *row, size_t len)
+{
+	const unsigned int op = row[1] >> ENTRY_OP_SHIFT;
+
+	if (op == ENTRY_CLEAR)
+		return clear_rows(mib, class_id, instance, attr_no);
+	if (op == ENTRY_REMOVE) {
+		const enum omci_status rc = omci_mib_table_remove(
+			mib, class_id, instance, attr_no, row, 1u);
+
+		return rc == OMCI_DECLINED ? OMCI_OK : rc;
+	}
+	if (op != ENTRY_ADD)
+		return OMCI_DECLINED;
+	if (omci_mib_table_count(mib, class_id, instance, attr_no) >=
+		    policy->max_entries &&
+	    !holds_key(mib, class_id, instance, attr_no, row, 1u))
+		return OMCI_ERR_NOMEM;
+	return omci_mib_table_put(mib, class_id, instance, attr_no, row, len,
+				  1u, policy->order);
+}
+
 enum omci_status
 omci_me_table_ctrl_set(struct omci_mib *mib, uint16_t class_id,
 		       uint16_t instance, uint8_t attr_no,
@@ -231,6 +282,10 @@ omci_me_table_ctrl_set(struct omci_mib *mib, uint16_t class_id,
 	if (mib == NULL || policy == NULL || row == NULL ||
 	    len < OMCI_ME_TABLE_CTRL_LEN || len > sizeof(stored))
 		return OMCI_ERR_INVAL;
+
+	if (policy->ctrl == OMCI_ME_TABLE_CTRL_ENTRY)
+		return entry_set(mib, class_id, instance, attr_no, policy, row,
+				 len);
 
 	omci_me_table_row_id(policy, row, &id);
 	if (id.op == OMCI_ME_TABLE_OP_DELETE)
@@ -247,7 +302,8 @@ omci_me_table_ctrl_set(struct omci_mib *mib, uint16_t class_id,
 	if (policy->max_entries != 0 &&
 	    omci_mib_table_count(mib, class_id, instance, attr_no) >=
 		    policy->max_entries &&
-	    !holds_key(mib, class_id, instance, attr_no, stored))
+	    !holds_key(mib, class_id, instance, attr_no, stored,
+		       OMCI_ME_TABLE_CTRL_LEN))
 		return OMCI_ERR_NOMEM;
 
 	return omci_mib_table_put(mib, class_id, instance, attr_no, stored, len,
@@ -334,8 +390,8 @@ static const struct omci_me_table_source msg_list_source = {
 
 /*
  * The tables made on demand: the two of the OMCI entity, the active group
- * lists of the multicast subscriber monitor, and the lost groups list of the
- * multicast operations profile.
+ * lists of the multicast subscriber monitor, the lost groups list of the
+ * multicast operations profile, and the bridge table of a bridge port.
  */
 static const struct {
 	uint16_t class_id;
@@ -347,6 +403,7 @@ static const struct {
 	{ ME_MCAST_OPS_PROFILE, 9, &omci_mcast_lost_groups },
 	{ ME_MCAST_MONITOR, 5, &omci_mcast_ipv4_groups },
 	{ ME_MCAST_MONITOR, 6, &omci_mcast_ipv6_groups },
+	{ ME_BRIDGE_PORT_TABLE, 1, &omci_fdb_bridge_table },
 };
 
 bool omci_me_table_rendered(uint16_t class_id, uint8_t attr_no,

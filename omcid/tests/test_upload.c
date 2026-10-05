@@ -152,9 +152,9 @@ static unsigned int expected_units(struct omci_mib *mib,
 
 		if (c == NULL || never_uploaded(c->id))
 			continue;
-		struct want_unit scratch[8];
+		struct want_unit scratch[16];
 
-		units += want_units(c, scratch, 8u);
+		units += want_units(c, scratch, 16u);
 		(*instances)++;
 	}
 	return units;
@@ -165,19 +165,19 @@ static void test_the_units_of_every_class_are_the_packing_of_the_data(void)
 	for (unsigned int i = 0; i < tsv_class_count; i++) {
 		const struct tsv_class *t = &tsv_classes[i];
 		const struct omci_me_class *c = omci_me_class_by_id(t->id);
-		struct want_unit want[8];
+		struct want_unit want[16];
 
 		CHECK(c != NULL);
 		if (c == NULL)
 			continue;
-		const unsigned int n = want_units(t, want, 8u);
+		const unsigned int n = want_units(t, want, 16u);
 
 		CHECK_EQ(omci_me_upload_segments(c), n);
 		CHECK_EQ(omci_me_upload_includes(c), !never_uploaded(t->id));
 
 		unsigned int covered = 0;
 
-		for (unsigned int u = 0; u < n && u < 8u; u++) {
+		for (unsigned int u = 0; u < n && u < 16u; u++) {
 			struct omci_me_upload_unit unit;
 
 			CHECK(omci_me_upload_unit_at(c, u, &unit));
@@ -242,8 +242,9 @@ static void test_the_count_is_of_messages_not_of_instances(void)
 	unsigned int wide = 0, single = 0;
 
 	for (unsigned int i = 0; i < tsv_class_count; i++) {
-		struct want_unit scratch[8];
-		const unsigned int n = want_units(&tsv_classes[i], scratch, 8u);
+		struct want_unit scratch[16];
+		const unsigned int n =
+			want_units(&tsv_classes[i], scratch, 16u);
 
 		if (n > 1u)
 			wide++;
@@ -367,7 +368,11 @@ static void test_the_whole_upload_describes_the_mib(void)
 	omci_t_down(&fx);
 }
 
-static void test_every_class_but_the_omci_entity_appears(void)
+/* The classes the ONU makes with each bridge port (G.988 9.3.6 to 9.3.8). */
+static const uint16_t g_port_tables[] = { 49u, 50u, 79u };
+
+/* Every class appears, but the OMCI entity and the LCT UNI (G.988 9.13.3). */
+static void test_every_class_but_two_appears(void)
 {
 	struct omci_t_fixture fx;
 	struct omci_hw_caps caps;
@@ -382,6 +387,10 @@ static void test_every_class_but_the_omci_entity_appears(void)
 			CHECK_EQ(omci_mib_create(fx.mib, tsv_classes[i].id,
 						 0x0abcu),
 				 OMCI_OK);
+	/* The tables the ONU makes with the bridge port. */
+	for (unsigned int i = 0; i < ARRAY_SIZE(g_port_tables); i++)
+		CHECK_EQ(omci_mib_create(fx.mib, g_port_tables[i], 0x0abcu),
+			 OMCI_OK);
 
 	const int got = upload(fx.eng, 0x0300u, false);
 
@@ -410,7 +419,7 @@ static void test_every_class_but_the_omci_entity_appears(void)
 		CHECK(seen[i]);
 		classes += seen[i] ? 1u : 0u;
 	}
-	CHECK_EQ(left_out, 1u);
+	CHECK_EQ(left_out, 2u);
 	CHECK_EQ(classes, tsv_class_count - left_out);
 
 	omci_t_down(&fx);
@@ -427,7 +436,7 @@ static void test_the_count_follows_the_mib(void)
 
 	const int before = upload(fx.eng, 0x0500u, false);
 	const struct tsv_class *c = NULL;
-	struct want_unit scratch[8];
+	struct want_unit scratch[16];
 	unsigned int need = 0;
 
 	/* A class the OLT creates whose instance takes more than one unit. */
@@ -435,7 +444,7 @@ static void test_the_count_follows_the_mib(void)
 		if (!tsv_classes[i].by_olt || never_uploaded(tsv_classes[i].id))
 			continue;
 		c = &tsv_classes[i];
-		need = want_units(c, scratch, 8u);
+		need = want_units(c, scratch, 16u);
 	}
 	CHECK(need > 1u);
 	if (c == NULL)
@@ -494,7 +503,7 @@ static void test_one_upload_serves_both_channels(void)
 	if (first != NULL)
 		memcpy(keep, first, sizeof(keep));
 
-	CHECK_EQ(omci_mib_create(fx.mib, 322u, 0x0101u), OMCI_OK);
+	CHECK_EQ(omci_mib_create(fx.mib, 341u, 0x0101u), OMCI_OK);
 	const int high = upload(fx.eng, 0x0702u, true);
 
 	CHECK(high > low);
@@ -508,7 +517,7 @@ static void test_one_upload_serves_both_channels(void)
 		upload_next(fx.eng, 0x0704u, false, (uint16_t)(high - 1));
 	CHECK(last != NULL);
 	if (last != NULL)
-		CHECK_EQ(be16(&last[8]), 322u);
+		CHECK_EQ(be16(&last[8]), 341u);
 
 	const uint8_t *edge =
 		upload_next(fx.eng, 0x0705u, true, (uint16_t)high);
@@ -531,7 +540,7 @@ int main(int argc, char **argv)
 	RUN(test_a_pm_entity_reports_only_its_control_block);
 	RUN(test_the_count_is_of_messages_not_of_instances);
 	RUN(test_the_whole_upload_describes_the_mib);
-	RUN(test_every_class_but_the_omci_entity_appears);
+	RUN(test_every_class_but_two_appears);
 	RUN(test_the_count_follows_the_mib);
 	RUN(test_no_upload_in_progress);
 	RUN(test_one_upload_serves_both_channels);

@@ -14,7 +14,7 @@
 
 #include "omcid/array_size.h"
 
-#define TSV_MAX_CLASSES 40u
+#define TSV_MAX_CLASSES 64u
 #define TSV_MAX_ATTRS 16u
 
 struct tsv_attr {

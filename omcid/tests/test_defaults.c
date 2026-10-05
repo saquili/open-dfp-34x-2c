@@ -88,15 +88,17 @@ static void test_the_instances_are_the_ones_the_onu_creates(void)
 		const struct tsv_class *t = &tsv_classes[c];
 		const unsigned int n = instances_of(mib, t->id);
 
-		if (t->by_olt)
+		/* The ONU makes the tables of a bridge port with the port. */
+		if (t->by_olt || t->id == 49u || t->id == 50u || t->id == 79u)
 			CHECK_EQ(n, 0u);
 		else
 			CHECK(n > 0u);
 	}
 
+	/* A cardholder and a circuit pack for each port, and for the VEIP. */
 	CHECK_EQ(instances_of(mib, 2u), 1u);
-	CHECK_EQ(instances_of(mib, 5u), (unsigned int)caps.port_count);
-	CHECK_EQ(instances_of(mib, 6u), (unsigned int)caps.port_count);
+	CHECK_EQ(instances_of(mib, 5u), (unsigned int)caps.port_count + 1u);
+	CHECK_EQ(instances_of(mib, 6u), (unsigned int)caps.port_count + 1u);
 	CHECK_EQ(instances_of(mib, 7u), 2u);
 	CHECK_EQ(instances_of(mib, 11u), unis);
 	CHECK_EQ(instances_of(mib, 131u), 1u);

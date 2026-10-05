@@ -17,7 +17,9 @@ whose levels it keeps in the ANI-G. It counts the performance monitoring
 of the Ethernet UNI, the bridge ports, the GEM ports and the downstream FEC
 in fifteen-minute intervals, which Synchronize time places, and raises the
 threshold crossing alerts that the threshold data ask for. It reports the
-result of the optical line supervision test. It holds the
+result of the optical line supervision test, the addresses the switch
+forwards by in the bridge table of each bridge port, and through the VEIP
+whether the stick routes. It holds the
 groups that the bridge snoops on the subscriber side to the OLT's multicast
 policy: the groups each profile allows, in full or for preview, the most
 groups and bandwidth, immediate leave and the IGMP timers, and static

@@ -216,7 +216,7 @@ static void test_end_of_input(void)
 	CHECK(strstr(g_log, "omcid 0.1.0 starting") != NULL);
 	CHECK(strstr(g_log, "transport: stdin/stdout") != NULL);
 	CHECK(strstr(g_log, "hw: synthetic ONU") != NULL);
-	CHECK(strstr(g_log, "mib ready: 33 instances") != NULL);
+	CHECK(strstr(g_log, "mib ready: 37 instances") != NULL);
 	char want[128 + sizeof(g_sock)];
 	(void)snprintf(want, sizeof(want), "ctl: listening on %s", g_sock);
 	CHECK(strstr(g_log, want) != NULL);

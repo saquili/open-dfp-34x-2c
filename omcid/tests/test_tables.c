@@ -190,8 +190,8 @@ static void test_every_table_is_stored_or_rendered(void)
 			other += !table && (is_rendered || is_stored) ? 1u : 0u;
 		}
 	printf("  %u stored, %u rendered\n", stored, rendered);
-	CHECK_EQ(stored, 8u);
-	CHECK_EQ(rendered, 5u);
+	CHECK_EQ(stored, 9u);
+	CHECK_EQ(rendered, 6u);
 	CHECK_EQ(other, 0u);
 
 	CHECK(!omci_me_table_rendered(287u, 1u, NULL));

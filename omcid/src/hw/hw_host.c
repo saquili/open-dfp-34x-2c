@@ -398,6 +398,46 @@ enum omci_status omci_hw_port_counters(unsigned int port,
 	return OMCI_OK;
 }
 
+static struct omci_hw_fdb g_fdb[OMCI_HW_FDB_MAX];
+static size_t g_fdb_n;
+static bool g_fdb_fail;
+
+enum omci_status omci_hw_fdb(struct omci_hw_fdb *out, size_t cap, size_t *n)
+{
+	if (out == NULL || n == NULL)
+		return OMCI_ERR_INVAL;
+	*n = 0;
+	if (g_fdb_fail)
+		return OMCI_ERR_HW;
+	for (size_t i = 0; i < g_fdb_n && i < cap; i++)
+		out[(*n)++] = g_fdb[i];
+	return OMCI_OK;
+}
+
+void omci_hw_fdb_force(const struct omci_hw_fdb *entries, size_t n)
+{
+	g_fdb_n = 0;
+	for (size_t i = 0; i < n && i < OMCI_HW_FDB_MAX; i++)
+		g_fdb[g_fdb_n++] = entries[i];
+}
+
+void omci_hw_fdb_fail_next(bool fail)
+{
+	g_fdb_fail = fail;
+}
+
+static bool g_routing;
+
+bool omci_hw_routing(void)
+{
+	return g_routing;
+}
+
+void omci_hw_routing_force(bool routing)
+{
+	g_routing = routing;
+}
+
 void omci_hw_counter_force(unsigned int port, unsigned int idx, uint64_t value)
 {
 	if (port < STUB_PORTS && idx < STUB_CTRS)
@@ -880,6 +920,8 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.pon = omci_hw_pon,
 	.port_counters = omci_hw_port_counters,
 	.gem_counts = omci_hw_gem_counts,
+	.routing = omci_hw_routing,
+	.fdb = omci_hw_fdb,
 	.optics = omci_hw_optics,
 	.optics_limits = omci_hw_optics_limits,
 	.mcast_port = omci_hw_mcast_port,

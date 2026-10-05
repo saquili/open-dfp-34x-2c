@@ -26,11 +26,15 @@
  * @OMCI_ME_TABLE_CTRL_PARTS: the same, with the row part in the three bits
  *	below the two high ones: a row is up to @max_part + 1 parts with one
  *	row key (G.988 9.3.27)
+ * @OMCI_ME_TABLE_CTRL_ENTRY: the first byte is the row's entry number, its
+ *	key, and the two high bits of the second add the row (01), remove it
+ *	(00) or clear the table (10) (G.988 9.3.6)
  */
 enum omci_me_table_ctrl {
 	OMCI_ME_TABLE_CTRL_NONE = 0,
 	OMCI_ME_TABLE_CTRL_KEY,
 	OMCI_ME_TABLE_CTRL_PARTS,
+	OMCI_ME_TABLE_CTRL_ENTRY,
 };
 
 /**
@@ -64,6 +68,9 @@ struct omci_me_table_policy {
 
 /* The size of a table control field, which is the key of its table. */
 #define OMCI_ME_TABLE_CTRL_LEN 2u
+
+/* The most addresses the MAC filter table of a bridge port holds. */
+#define OMCI_ME_MAC_FILTER_ROWS 16u
 
 /**
  * enum omci_me_table_op - What a row with a table control field asks for.

@@ -155,8 +155,8 @@ static void test_every_message_type_to_every_class(void)
 
 static void test_classes_the_daemon_does_not_hold(void)
 {
-	static const uint16_t unknown[] = { 0,	    1,	    3,	   23,	 50,
-					    158,    329,    335,   3000, 0x8000,
+	static const uint16_t unknown[] = { 0,	    1,	    3,	   23,	 51,
+					    158,    330,    335,   3000, 0x8000,
 					    0xea60, 0xfffd, 0xffff };
 	struct omci_t_fixture fx;
 
@@ -226,7 +226,7 @@ static void test_set_table_is_in_the_data_and_not_in_the_baseline_set(void)
 	for (unsigned int c = 0; c < tsv_class_count; c++)
 		if ((tsv_classes[c].actions & (1u << 29)) != 0u)
 			classes++;
-	CHECK_EQ(classes, 4u);
+	CHECK_EQ(classes, 5u);
 
 	struct omci_t_fixture fx;
 

@@ -386,9 +386,10 @@ static void test_replies(void)
 	CHECK_EQ(n, 0u);
 	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_LIST, 5, 0, 0, pay, sizeof(pay), &n),
 		 OMCI_CTL_OK);
-	CHECK_EQ(n, 4u);
+	CHECK_EQ(n, 6u);
 	CHECK_EQ(omci_be16(&pay[0]), 0x101u);
 	CHECK_EQ(omci_be16(&pay[2]), 0x180u);
+	CHECK_EQ(omci_be16(&pay[4]), 0x106u);
 
 	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_GET, 256, 0, 0, pay, sizeof(pay), &n),
 		 OMCI_CTL_OK);
@@ -764,7 +765,7 @@ static void test_client_library(void)
 	size_t n = 0;
 
 	CHECK_EQ(omcid_me_list(conn, 5, inst, 32, &n), 0);
-	CHECK_EQ(n, 2u);
+	CHECK_EQ(n, 3u);
 
 	uint8_t row[OMCI_CTL_PAYLOAD_MAX];
 	size_t got = 0;

@@ -1226,6 +1226,87 @@ void omci_hw_kernel_router(bool on)
 	g_router_told = false;
 }
 
+static bool kernel_routing(void)
+{
+	return g_router;
+}
+
+/* Whether an address is already among those read, for the same side. */
+static bool fdb_has(const struct omci_hw_fdb *out, size_t n, const uint8_t *mac,
+		    bool ani)
+{
+	for (size_t i = 0; i < n; i++)
+		if (out[i].ani == ani && !memcmp(out[i].mac, mac, 6))
+			return true;
+	return false;
+}
+
+/*
+ * The addresses the switch forwards by: the entries its driver gives as its
+ * own (NTF_SELF) for the UNI and for the PON side, once for each side; the
+ * bridge's own entries are left out. A static entry is reported with
+ * NUD_NOARP or NUD_PERMANENT.
+ */
+static enum omci_status kernel_fdb(struct omci_hw_fdb *out, size_t cap,
+				   size_t *n)
+{
+	static uint8_t rsp[65536] __aligned(4);
+	uint8_t req[NL_HDRLEN + NL_ALIGN(sizeof(struct ndmsg))] __aligned(4);
+	struct ndmsg ndm = { .ndm_family = AF_BRIDGE };
+	const int uni = (int)if_nametoindex(UNI_IFNAME);
+	const int pon = (int)if_nametoindex(PON_IFNAME);
+	size_t got = 0;
+
+	if (out == NULL || n == NULL)
+		return OMCI_ERR_INVAL;
+	*n = 0;
+
+	memset(req, 0, sizeof(req));
+	*(uint32_t *)&req[0] = sizeof(req);
+	*(uint16_t *)&req[4] = RTM_GETNEIGH;
+	*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_DUMP;
+	*(uint32_t *)&req[8] = 21;
+	memcpy(req + NL_HDRLEN, &ndm, sizeof(ndm));
+	if (rtnl_talk(req, sizeof(req), rsp, sizeof(rsp), &got))
+		return OMCI_ERR_HW;
+
+	for (size_t off = 0; off + NL_HDRLEN <= got;) {
+		const uint32_t mlen = *(const uint32_t *)(rsp + off);
+		const struct ndmsg *m = (const void *)(rsp + off + NL_HDRLEN);
+		const uint8_t *a = rsp + off + NL_HDRLEN + NL_ALIGN(sizeof(*m));
+		const uint8_t *end = rsp + off + mlen;
+
+		if (mlen < NL_HDRLEN + sizeof(*m))
+			break;
+		off += NL_ALIGN(mlen);
+		if (*(const uint16_t *)(rsp + off - NL_ALIGN(mlen) + 4) !=
+			    RTM_NEWNEIGH ||
+		    !(m->ndm_flags & NTF_SELF) ||
+		    (m->ndm_ifindex != uni && m->ndm_ifindex != pon))
+			continue;
+		while (a + NLA_HDRLEN_ <= end) {
+			const uint16_t alen = *(const uint16_t *)a;
+			const uint16_t atype = *(const uint16_t *)(a + 2);
+			const bool ani = m->ndm_ifindex == pon;
+
+			if (alen < NLA_HDRLEN_ || a + alen > end)
+				break;
+			if (atype == NDA_LLADDR && alen == NLA_HDRLEN_ + 6 &&
+			    *n < cap &&
+			    !fdb_has(out, *n, a + NLA_HDRLEN_, ani)) {
+				memcpy(out[*n].mac, a + NLA_HDRLEN_, 6);
+				out[*n].ani = ani;
+				out[*n].dynamic =
+					!(m->ndm_state &
+					  (NUD_NOARP | NUD_PERMANENT));
+				(*n)++;
+			}
+			a += NL_ALIGN(alen);
+		}
+	}
+	return OMCI_OK;
+}
+
 /* In router mode, say once that the OLT's bridging is not applied. */
 static bool router_skips(const char *what)
 {
@@ -3267,6 +3348,8 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.optics = kernel_optics,
 	.optics_limits = kernel_optics_limits,
 	.set_router = omci_hw_kernel_router,
+	.routing = kernel_routing,
+	.fdb = kernel_fdb,
 	.mcast_port = kernel_mcast_port,
 	.mcast_groups = kernel_mcast_groups,
 	.mcast_group_add = kernel_mcast_group_add,
