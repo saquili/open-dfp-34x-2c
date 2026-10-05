@@ -1231,6 +1231,27 @@ static enum omci_status kernel_tcont_apply(const uint16_t *alloc, size_t n,
 
 static int g_bridge_filtering = -1;
 
+/*
+ * The bridge ports and the translations of the VLAN rules last programmed,
+ * so that a change of either completes the VLANs of the ports (see
+ * bridge_vlans_complete()), and the VLANs given to ports besides the
+ * OLT's, each said once.
+ */
+static struct omci_hw_bridge_port g_br_ports[OMCI_HW_BRIDGE_MAX_PORTS];
+static size_t g_br_n;
+static struct omci_hw_vlan_xlate g_br_xlate[OMCI_HW_VLAN_MAX_RULES];
+static size_t g_br_xlate_n;
+
+#define BR_VIDS_MAX                                            \
+	(OMCI_HW_BRIDGE_MAX_PORTS * OMCI_HW_BRIDGE_MAX_VLANS + \
+	 OMCI_HW_VLAN_MAX_RULES)
+
+static struct {
+	uint16_t port_id;
+	uint16_t vid;
+} g_br_extra[OMCI_HW_BRIDGE_MAX_PORTS * BR_VIDS_MAX];
+static size_t g_br_extra_n;
+
 /* Router mode, and whether the log has said what it leaves out. */
 static bool g_router;
 static bool g_router_told;
@@ -1407,6 +1428,7 @@ static int bridge_ensure(int *ifindex)
 		return err;
 
 	g_bridge_filtering = 0;
+	g_br_extra_n = 0;
 
 	*ifindex = (int)if_nametoindex(BRIDGE_IFNAME);
 	return *ifindex ? 0 : -ENODEV;
@@ -1484,6 +1506,127 @@ static unsigned int bridge_port_ifindex(const struct omci_hw_bridge_port *p)
 	return if_nametoindex(name);
 }
 
+static bool vid_in(const uint16_t *vids, size_t n, uint16_t vid)
+{
+	for (size_t i = 0; i < n; i++)
+		if (vids[i] == vid)
+			return true;
+	return false;
+}
+
+/* Add @vid to a set of VIDs; true when it was not in it and fitted. */
+static bool vid_put(uint16_t *vids, size_t *n, size_t cap, uint16_t vid)
+{
+	if (vid_in(vids, *n, vid) || *n >= cap)
+		return false;
+	vids[(*n)++] = vid;
+	return true;
+}
+
+static bool br_extra_has(uint16_t port_id, uint16_t vid)
+{
+	for (size_t i = 0; i < g_br_extra_n; i++)
+		if (g_br_extra[i].port_id == port_id &&
+		    g_br_extra[i].vid == vid)
+			return true;
+	return false;
+}
+
+/*
+ * Complete the VLANs of the bridge ports while the bridge filters VLANs.
+ * A port the OLT gave no VLAN filter, the UNI as a rule, takes every frame,
+ * so it carries every VLAN of the other ports. And a translation changes a
+ * frame's VID as it enters, upstream at sfp and downstream at pon, while the
+ * switch forwards the frame by the VID it arrived with (measured on an
+ * operator's line, 2026-10-05): a port that carries one VID of a
+ * translation carries the other as well, or the bridge stops its frames in
+ * one direction or both. A rule that pushes a tag adds nothing here.
+ */
+static void bridge_vlans_complete(void)
+{
+	uint16_t all[BR_VIDS_MAX];
+	size_t n_all = 0;
+
+	if (g_bridge_filtering != 1)
+		return;
+
+	for (size_t i = 0; i < g_br_n; i++)
+		for (uint8_t v = 0; v < g_br_ports[i].num_vlan; v++)
+			(void)vid_put(all, &n_all, ARRAY_SIZE(all),
+				      g_br_ports[i].vlan[v]);
+
+	for (size_t i = 0; i < g_br_n; i++) {
+		const struct omci_hw_bridge_port *p = &g_br_ports[i];
+		const unsigned int ifindex = bridge_port_ifindex(p);
+		uint16_t want[BR_VIDS_MAX];
+		size_t n_want = 0;
+
+		if (!ifindex)
+			continue;
+		if (p->num_vlan)
+			for (uint8_t v = 0; v < p->num_vlan; v++)
+				(void)vid_put(want, &n_want, ARRAY_SIZE(want),
+					      p->vlan[v]);
+		else
+			for (size_t v = 0; v < n_all; v++)
+				(void)vid_put(want, &n_want, ARRAY_SIZE(want),
+					      all[v]);
+
+		/* Each pass can only add; one per rule reaches every chain. */
+		for (size_t pass = 0; pass <= g_br_xlate_n; pass++) {
+			bool grew = false;
+
+			for (size_t r = 0; r < g_br_xlate_n; r++) {
+				const uint16_t sub = g_br_xlate[r].match_cvid;
+				const uint16_t net = g_br_xlate[r].assign_cvid;
+
+				if (vid_in(want, n_want, sub))
+					grew |= vid_put(want, &n_want,
+							ARRAY_SIZE(want), net);
+				else if (vid_in(want, n_want, net))
+					grew |= vid_put(want, &n_want,
+							ARRAY_SIZE(want), sub);
+			}
+			if (!grew)
+				break;
+		}
+
+		for (size_t v = 0; v < n_want; v++) {
+			const uint16_t vid = want[v];
+			int err;
+
+			if (vid_in(p->vlan, p->num_vlan, vid) ||
+			    br_extra_has(p->port_id, vid))
+				continue;
+			err = bridge_vlan((int)ifindex, vid, true);
+			if (err) {
+				OMCI_WARN(
+					"bridge: VLAN %u on %s %u, which its frames need, refused: %s (%s)",
+					vid,
+					p->port_id == OMCI_HW_BRIDGE_UNI ?
+						"the UNI, port" :
+						"Port-ID",
+					p->port_id, strerror(-err),
+					omci_hw_last_extack());
+				continue;
+			}
+			if (g_br_extra_n < ARRAY_SIZE(g_br_extra)) {
+				g_br_extra[g_br_extra_n].port_id = p->port_id;
+				g_br_extra[g_br_extra_n].vid = vid;
+				g_br_extra_n++;
+			}
+			if (p->port_id == OMCI_HW_BRIDGE_UNI)
+				OMCI_INFO(
+					"bridge: the UNI carries VLAN %u too, as a port without a filter of its own",
+					vid);
+			else
+				OMCI_INFO(
+					"bridge: Port-ID %u carries VLAN %u too, the other VID of a translation",
+					p->port_id, vid);
+		}
+	}
+}
+
 /*
  * Put the ports into the bridge with their VIDs. VLAN filtering is on as
  * soon as one port has a VID list; with none, every frame is forwarded. A
@@ -1504,7 +1647,11 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 	if (n > OMCI_HW_BRIDGE_MAX_PORTS)
 		return OMCI_ERR_NOMEM;
 
-	if (!n || router_skips("bridge"))
+	if (!n) {
+		g_br_n = 0;
+		return OMCI_OK;
+	}
+	if (router_skips("bridge"))
 		return OMCI_OK;
 
 	err = bridge_ensure(&br);
@@ -1571,6 +1718,10 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 				  ports[i].port_id, ports[i].vlan[v]);
 		}
 	}
+
+	memcpy(g_br_ports, ports, n * sizeof(*ports));
+	g_br_n = n;
+	bridge_vlans_complete();
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
 }
@@ -2320,6 +2471,8 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 {
 	unsigned int uni = if_nametoindex(UNI_IFNAME);
 	unsigned int pon = if_nametoindex(PON_IFNAME);
+	struct omci_hw_vlan_xlate xlate[OMCI_HW_VLAN_MAX_RULES];
+	size_t n_xlate = 0;
 	int err;
 
 	if (rejected != NULL)
@@ -2381,6 +2534,9 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 			omci_hw_reject_add(rejected, r->match_cvid);
 			continue;
 		}
+		if (r->kind == OMCI_HW_VLAN_CVID_XLATE)
+			xlate[n_xlate++] = *r;
+
 		char pri[16] = "";
 
 		if (r->match_has_pri)
@@ -2400,6 +2556,10 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 				r->match_cvid, pri, r->assign_cvid,
 				r->up_only ? ", upstream only" : "");
 	}
+
+	memcpy(g_br_xlate, xlate, n_xlate * sizeof(*xlate));
+	g_br_xlate_n = n_xlate;
+	bridge_vlans_complete();
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
 }
