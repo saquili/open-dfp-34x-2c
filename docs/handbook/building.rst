@@ -228,6 +228,11 @@ The boot script
        not accept, and it accepts ssh and the status daemon from the host side,
        ICMPv6, the ICMP that path MTU discovery needs, and DHCP; when the stick
        routes, it forwards what the host side starts and the replies to it;
+    #. turns IPv6 off on the PON port, on the CPU port and on every interface
+       made after that, the bridge and the GEM interfaces of ``omcid`` among
+       them (the host side keeps it), and has ARP answer only for an address
+       of the interface it is asked on: the stick has no address on the PON
+       side, sends nothing of its own to the OLT and answers nothing from it;
     #. brings the interface ``sfp`` up with the address ``192.0.2.2/30``, and a
        VLAN interface ``mgmt`` of it (VLAN 4094) with ``198.51.100.2/30``. These
        are the addresses the bench tries (``flashing.rst``, "What you need"); it
@@ -240,7 +245,8 @@ The boot script
     #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear -s``
        (keys only);
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
-       root only: it holds the PLOAM password), gives the PON driver the
+       root only: it holds the PLOAM password), with the versions that
+       ``/etc/board.conf`` may name (below), gives the PON driver the
        serial number and the PLOAM password through devlink and brings the PON
        up;
     #. starts ``omcid``, which answers the OLT, and ``pond``, the status daemon,
@@ -288,6 +294,14 @@ are in the script). On a finished build this runs the last step only, a few
 seconds, and it does not change the target directory: the next ``make`` without
 the variable gives the plain image again. The image with a key in it is not the
 image of this page, its digest differs, and it is not to be published.
+
+``/etc/board.conf`` may also set ``OMCI_SW_VERSION`` and ``OMCI_PACK_VERSION``,
+the versions that the two software images and the circuit packs report to the
+OLT, up to 14 characters, for a unit that is to show the OLT what the firmware
+it came with showed. With the first, both images report it and both are valid;
+without it the images report the release of the running kernel and only the
+committed one is valid. Without the second the circuit packs report the unit's
+version.
 
 The kernel's size
 =================
