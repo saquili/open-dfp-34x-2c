@@ -1518,7 +1518,7 @@ Receive block, at ``RTL9602C_MIB_RX(p)`` = ``0x032200`` + 128p:
    * - ``rx_1024_1518_octets``
      - ``RTL9602C_MIB_RX_PKTS_1024_1518``
      - ``0x54``
-     - I
+     - M
 
 Transmit block, at ``RTL9602C_MIB_TX(p)`` = ``0x032000`` + 128p:
 
@@ -1569,7 +1569,7 @@ Transmit block, at ``RTL9602C_MIB_TX(p)`` = ``0x032000`` + 128p:
    * - ``tx_1024_1518_octets``
      - ``RTL9602C_MIB_TX_PKTS_1024_1518``
      - ``0x24``
-     - I
+     - M
    * - ``tx_octets`` (64 bits)
      - ``RTL9602C_MIB_TX_OCTETS``
      - ``0x28``
@@ -1672,6 +1672,22 @@ Transmit block, at ``RTL9602C_MIB_TX(p)`` = ``0x032000`` + 128p:
        port 0's transmitted octets counted 128 for two frames.
      - M
      - Counters read after frames sent from the CPU.
+   * - Offsets measured with bursts: ``RTL9602C_MIB_RX_PKTS_1024_1518``
+       ``0x54`` (``rx_1024_1518_octets``) and
+       ``RTL9602C_MIB_TX_PKTS_1024_1518`` ``0x24`` (``tx_1024_1518_octets``).
+     - M
+     - 1,000 frames of 1,518 bytes on the wire through the stick each way: the
+       receive bucket of port 0 and the transmit bucket of port 2 counted
+       1,000 for those sent up, the receive bucket of port 2 and the transmit
+       bucket of port 0 1,000 for those sent down.
+   * - A frame the switch drops because the port it would leave by has no
+       room is counted where it came in, in ``rx_forward_discards``;
+       ``tx_discards`` of the port it would have left by does not count it.
+     - M
+     - 200,000 frames of 1,514 bytes sent into port 0 in one second, all bound
+       for the PON side: port 0 counted 200,029 received, other traffic
+       included, port 2 sent 81,274 and port 0 counted 113,959 forwarding
+       discards; neither port counted a transmit discard or a drop event.
    * - The remaining offsets, the ones tagged I in the tables, have not been
        checked against known traffic.
      - I
