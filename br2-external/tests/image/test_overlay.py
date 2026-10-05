@@ -22,7 +22,6 @@ BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2
 OVERLAY = os.path.join(BOARD, "overlay")
 RCS = os.path.join(OVERLAY, "etc", "init.d", "rcS")
 INITTAB = os.path.join(OVERLAY, "etc", "inittab")
-NFTABLES = os.path.join(OVERLAY, "etc", "nftables.conf")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 # Words that start a command in the boot script and are not programs.
@@ -31,7 +30,7 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # Programs of the dropbear package and of this tree's packages; every other
 # command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond", "nft", "onu-mode", "tc"}
+PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-mode", "tc"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 
@@ -142,24 +141,30 @@ class Watchdog(unittest.TestCase):
         self.assertLessEqual(int(match.group(1)), 15)
 
 
-class PacketFilter(unittest.TestCase):
-    def test_it_is_loaded_before_any_server_listens(self):
+class ServersOnTheHostSide(unittest.TestCase):
+    """The stick has no packet filter: its servers listen on the host side alone."""
+
+    def test_there_is_no_packet_filter(self):
+        self.assertNotIn("nft", commands(read(RCS)))
+        self.assertFalse(os.path.exists(os.path.join(OVERLAY, "etc", "nftables.conf")))
+
+    def test_the_two_addresses_are_those_of_the_host_side(self):
         text = read(RCS)
-        load = text.index("nft -f /etc/nftables.conf")
-        for server in ("dropbear -s ", "onu-mode start", "pond >"):
-            self.assertLess(load, text.index(server), server)
+        self.assertIn("\ndata=${DATA_ADDRESS%/*}\n", text)
+        self.assertIn("\nmgmt=${MGMT_ADDRESS%/*}\n", text)
 
-    def test_it_starts_from_nothing_and_drops_what_it_does_not_accept(self):
-        text = read(NFTABLES)
-        self.assertIn("\nflush ruleset\n", text)
-        self.assertEqual(len(re.findall(r"hook (?:input|forward) priority filter; policy drop;",
-                                        text)), 2)
+    def test_ssh_listens_on_the_two_addresses_of_the_host_side(self):
+        self.assertRegex(read(RCS), r'\ndropbear -s [^\n]* -p "\$data:22" -p "\$mgmt:22" \|\|\n')
 
-    def test_the_host_side_reaches_the_servers_of_the_stick(self):
-        self.assertIn('iifname { "sfp", "mgmt" } tcp dport { 22, 8080 } accept', read(NFTABLES))
+    def test_the_status_daemon_listens_on_the_same_two(self):
+        self.assertRegex(read(RCS), r'\n\tpond -l "http://\$data:8080" -l "http://\$mgmt:8080" >')
 
-    def test_icmpv6_is_accepted_or_ipv6_would_not_work(self):
-        self.assertIn("meta l4proto ipv6-icmp accept", read(NFTABLES))
+    def test_the_addresses_are_there_before_a_server_listens(self):
+        text = read(RCS)
+        last = max(text.index('ip address add "$DATA_ADDRESS"'),
+                   text.index('ip address add "$MGMT_ADDRESS"'))
+        for server in ("dropbear -s ", "pond -l "):
+            self.assertLess(last, text.index(server), server)
 
 
 class QuietTowardsThePon(unittest.TestCase):

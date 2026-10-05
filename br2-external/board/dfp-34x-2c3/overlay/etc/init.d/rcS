@@ -56,10 +56,6 @@ klogd || warn "the kernel's messages do not reach the system log"
 # timeout. The daemon feeds it every ten seconds; a hung system does not.
 watchdog -t 10 /dev/watchdog || warn "nothing feeds the watchdog"
 
-# The packet filter, before any link is up and any server listens. Without it
-# the stick accepts everything.
-nft -f /etc/nftables.conf || warn "no packet filter: the stick accepts everything"
-
 # The CPU port's interface, cpu, would otherwise take each frame that arrives
 # alone with an interrupt of its own. Polling again, up to twice, 50 us apart,
 # before its interrupt is enabled again takes the frames that arrive meanwhile
@@ -105,11 +101,17 @@ tc qdisc add dev pon clsact &&
 	tc filter add dev pon ingress $mgmt_tag action drop ||
 	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
 
-# The ssh server takes keys only: /root/.ssh/authorized_keys, which an image
-# built with a bench's keys carries and this one does not.
+# The servers listen on the two addresses of the host side and nowhere else:
+# the stick has no packet filter, and nothing on the PON side, nor on the WAN
+# of router mode, is to reach them. The ssh server takes keys only:
+# /root/.ssh/authorized_keys, which an image built with a bench's keys carries
+# and this one does not.
+data=${DATA_ADDRESS%/*}
+mgmt=${MGMT_ADDRESS%/*}
 mkdir -p /run/dropbear
 dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no host key"
-dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid || warn "dropbear did not start"
+dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid -p "$data:22" -p "$mgmt:22" ||
+	warn "dropbear did not start"
 
 # The identity of the unit, from its factory configuration: omcid reads it,
 # and the PON driver takes the serial number before the PON comes up. The
@@ -151,10 +153,11 @@ else
 	warn "no omcid: nothing answers the OLT"
 fi
 
-# The HTTP status daemon. Its API needs the token of /etc/pond.token; an
-# image without the file serves only /api/health.
+# The HTTP status daemon, on the host side's addresses like the ssh server.
+# Its API needs the token of /etc/pond.token; an image without the file serves
+# only /api/health.
 if [ -x /usr/sbin/pond ]; then
-	pond >/run/pond.log 2>&1 &
+	pond -l "http://$data:8080" -l "http://$mgmt:8080" >/run/pond.log 2>&1 &
 fi
 
 echo
