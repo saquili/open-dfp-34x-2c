@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import re
@@ -41,6 +42,16 @@ class Canned:
 
     def text(self, command, *, timeout=60.0):
         return self.run(command, timeout=timeout, check=True).out.strip()
+
+
+@contextlib.contextmanager
+def unheld():
+    """Run the router-mode cases although they are held, to test their logic."""
+    held, cases_router.HELD = cases_router.HELD, None
+    try:
+        yield
+    finally:
+        cases_router.HELD = held
 
 
 def context(stick=(), bench=()) -> Context:
@@ -411,8 +422,17 @@ class Cases(unittest.TestCase):
         self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, FAIL)
 
     def test_router_mode_runs_only_when_asked_for(self):
+        with unheld():
+            for fn in (cases_router.static, cases_router.pppoe, cases_router.bridge_again):
+                self.assertEqual(fn(context()).status, SKIP)
+
+    def test_router_mode_is_held_while_it_translates_nothing(self):
+        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
+                                       subscriber_port="eth2", pond_token="t")
         for fn in (cases_router.static, cases_router.pppoe, cases_router.bridge_again):
-            self.assertEqual(fn(context()).status, SKIP)
+            outcome = fn(Context(settings, Canned("stick", [], []), Canned("bench", [], []), []))
+            self.assertEqual(outcome.status, SKIP)
+            self.assertEqual(outcome.evidence, cases_router.HELD)
 
     def test_the_pppoe_secret_goes_from_the_bench_s_file_to_the_daemon(self):
         trail: list[str] = []
@@ -423,7 +443,8 @@ class Cases(unittest.TestCase):
                                                         "out by ppp0\n"),
                                  ("ppp0", 0, "192.0.2.77/32\n"), ("onu-dns", 0, "192.0.2.53\n")],
                        trail)
-        outcome = cases_router.pppoe(Context(settings, stick, bench, trail))
+        with unheld():
+            outcome = cases_router.pppoe(Context(settings, stick, bench, trail))
         self.assertEqual(outcome.status, PASS)
         post = next(c for c in bench.asked if "curl" in c)
         self.assertTrue(post.startswith("sudo -n sh -c "))
@@ -449,7 +470,8 @@ class Cases(unittest.TestCase):
                                      ("onu-dns", 0, "192.0.2.53\n")], trail)
             ctx = Context(settings, stick, bench, trail)
             ctx.memo["namespaces"] = True
-            return cases_router.pppoe(ctx)
+            with unheld():
+                return cases_router.pppoe(ctx)
         self.assertEqual(outcome("[1452, 1452]").status, PASS)
         self.assertIn("SYN MSS 1452, 1452 through it", outcome("[1452, 1452]").evidence)
         self.assertEqual(outcome("[1460]").status, FAIL)

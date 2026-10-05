@@ -73,7 +73,8 @@ holds what they made the kernel say. The cases that reset the stick or take
 its host link down run only with ``--destructive``, and after all the others;
 the cases that put the stick in router mode and back run only with
 ``--router`` (``--pppoe-secrets FILE`` and ``--bng-service UNIT``,
-``accel-ppp`` by default, for the PPPoE case). Without ``--olt-port`` and
+``accel-ppp`` by default, for the PPPoE case); they are held for now, as they
+measure the router mode of NAT, which the stick no longer has. Without ``--olt-port`` and
 ``--subscriber-port`` the data-path cases are skipped; without
 ``--token-file`` so is the case that reads values from the status daemon. A
 case that resets the stick waits for the boot loader to count down, which can

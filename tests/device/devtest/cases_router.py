@@ -108,8 +108,18 @@ def bench(ctx: Context, command: str, *, stdin: str | None = None, timeout: floa
     return ctx.bench.run(sudo(ctx.settings, command), stdin=stdin, timeout=timeout)
 
 
+# The cases measure router mode as it was, with NAT: masquerade, the MSS clamp
+# and the flows that the switch carried for it. The stick translates no
+# address any more and is to pass the router behind it the WAN's own address
+# instead; the cases are held until they measure that.
+HELD = ("router mode translates no address now; these cases measure NAT and "
+        "return with the passthrough of the WAN's address")
+
+
 def needs(ctx: Context):
     s = ctx.settings
+    if HELD:
+        return skipped(HELD)
     if not s.router:
         return skipped("router mode not asked for (--router)")
     if not (s.olt_port and s.subscriber_port and s.pond_token):
