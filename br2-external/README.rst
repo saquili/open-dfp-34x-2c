@@ -202,7 +202,7 @@ has the commands, the sizes and how to put the images on the board. In short:
   ``OPEN_DFP_34X_2C_LOCAL_OVERLAY``; the post-image script lays it over a copy of
   the target tree, so the target directory keeps none of them.
 * ``board/dfp-34x-2c3/post-image.sh`` makes ``r0.squashfs`` from the target
-  directory with the host ``mksquashfs`` (gzip, every file root-owned and
+  directory with the host ``mksquashfs`` (xz, every file root-owned and
   carrying the build's time, no extended attributes), copies the kernel's
   ``uImage`` to ``k0.uImage`` and writes ``SHA256SUMS``.
 * The build is reproducible: ``BR2_REPRODUCIBLE`` fixes ``SOURCE_DATE_EPOCH``,

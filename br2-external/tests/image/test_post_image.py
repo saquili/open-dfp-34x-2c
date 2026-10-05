@@ -114,7 +114,7 @@ class WithAStandIn(Scratch):
         for flag in ("-noappend", "-reproducible", "-nopad", "-no-xattrs", "-no-exports",
                      "-all-root"):
             self.assertIn(flag, rest)
-        for flag, value in (("-comp", "gzip"), ("-b", "64K"), ("-all-time", EPOCH),
+        for flag, value in (("-comp", "xz"), ("-b", "64K"), ("-all-time", EPOCH),
                             ("-mkfs-time", EPOCH), ("-root-mode", "755")):
             self.assertEqual(rest[rest.index(flag) + 1], value, flag)
 
@@ -125,11 +125,11 @@ class WithAStandIn(Scratch):
         self.assertEqual(args[args.index("-e") + 1], "THIS_IS_NOT_YOUR_ROOT_FILESYSTEM")
 
     def test_the_compression_is_one_the_kernel_reads(self):
-        # docs/handbook/boot-contract.rst: gzip (1) and lz4 (5).
+        # docs/handbook/boot-contract.rst: xz (4).
         self.run_script()
         with open(self.args_file) as handle:
             args = handle.read().splitlines()
-        self.assertIn(args[args.index("-comp") + 1], ("gzip", "lz4"))
+        self.assertEqual(args[args.index("-comp") + 1], "xz")
 
     def test_mksquashfs_does_not_see_the_variable_it_refuses_beside_a_time(self):
         self.run_script()
@@ -340,7 +340,7 @@ class WithTheRealTool(Scratch):
         sb = superblock(data)
         self.assertEqual(sb["magic"], 0x73717368)  # "hsqs"
         self.assertEqual((sb["major"], sb["minor"]), (4, 0))
-        self.assertEqual(sb["compression"], 1)  # gzip, which the kernel reads
+        self.assertEqual(sb["compression"], 4)  # xz, which the kernel reads
         self.assertEqual(sb["block_size"], 65536)
         self.assertEqual(sb["mkfs_time"], int(EPOCH))
         self.assertTrue(sb["flags"] & NO_XATTRS)

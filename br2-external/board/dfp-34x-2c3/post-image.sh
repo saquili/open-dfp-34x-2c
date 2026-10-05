@@ -19,8 +19,9 @@
 #                "sha256sum -c" reads
 #
 # The root filesystem image is made here, and not by the build system's own
-# SquashFS target, so that its properties are written down in one place. The
-# kernel reads gzip and lz4; gzip is the smaller. Every file is owned by root
+# SquashFS target, so that its properties are written down in one place. It is
+# compressed with xz, the smallest of the formats the kernel reads, in blocks
+# of 64 KiB, which the kernel unpacks one at a time. Every file is owned by root
 # and carries the build's time, so that the same tree gives the same image
 # whoever builds it and when; no extended attribute of the build machine's file
 # system gets in; nothing is added for NFS export or to pad the image to a
@@ -83,7 +84,7 @@ mv "$images/k0.uImage.part" "$images/k0.uImage"
 	unset SOURCE_DATE_EPOCH
 	"$mksquashfs" "$root" "$images/r0.squashfs.part" \
 		-noappend -quiet -no-progress -reproducible \
-		-comp gzip -b 64K -nopad -no-xattrs -no-exports \
+		-comp xz -b 64K -nopad -no-xattrs -no-exports \
 		-all-root -root-mode 755 \
 		-all-time "$epoch" -mkfs-time "$epoch" \
 		-e THIS_IS_NOT_YOUR_ROOT_FILESYSTEM
