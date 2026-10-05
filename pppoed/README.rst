@@ -37,13 +37,15 @@ packets from a concentrator that agrees, and 1492 from one that does not. LCP
 asks for that size as the MRU, and the interface ``pppN`` takes the peer's MRU
 within it as its MTU.
 
-IPv4 takes the address and the name servers that the peer gives. IPv6CP
-(RFC 5072) agrees on the two interface identifiers, offering a random one,
-and puts the link-local address on the interface; the global address and the
-delegated prefix come after, from the router advertisements and DHCPv6, which
-are not pppoed's. Either family may be refused by the peer and the link comes
-up with the other; once IPCP is open, IPv6CP has two restart periods, six
-seconds, to open too.
+IPv4 takes the address and the name servers that the peer gives. IPv6CP (RFC
+5072) agrees on the two interface identifiers, offering a random one, and puts
+the link-local address on the interface, letting it carry IPv6 first: a system
+that keeps IPv6 off the interfaces made after its start, as the stick does on
+its PON side, keeps it off ``pppN`` too. The global address and the delegated
+prefix come after, from the router advertisements and DHCPv6, which are not
+pppoed's. Either family may be refused by the peer and the link comes up with
+the other; once IPCP is open, IPv6CP has two restart periods, six seconds, to
+open too.
 
 The tests run the negotiation against a peer in a child process, at the
 other end of a socket pair: both families, a peer that refuses our

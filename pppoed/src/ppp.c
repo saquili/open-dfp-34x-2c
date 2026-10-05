@@ -190,11 +190,39 @@ struct ppp_in6_ifreq {
 	int ifindex;
 };
 
+/*
+ * Let the interface carry IPv6: a system that keeps IPv6 off on interfaces
+ * made after its start (net.ipv6.conf.default.disable_ipv6) keeps it off on
+ * the ppp unit too, and then no address can go on it. IPv6CP has opened, so
+ * this link is to carry IPv6. Return: 0, or a negative errno.
+ */
+static int ipv6_allow(const char *ifname)
+{
+	char path[64];
+	int fd, err = 0;
+
+	snprintf(path, sizeof(path), "/proc/sys/net/ipv6/conf/%s/disable_ipv6",
+		 ifname);
+	fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+	if (write(fd, "0", 1) != 1)
+		err = -errno;
+	close(fd);
+	return err;
+}
+
 /* Put fe80::@iid/64, the link-local address, on the interface. */
 static int ifconfig_ipv6(const struct ppp_link *l)
 {
 	struct ppp_in6_ifreq req;
-	int fd, err = 0;
+	int fd, err;
+
+	err = ipv6_allow(l->ifname);
+	if (err)
+		PPPOED_WARN("IPv6 may stay off on %s: %s", l->ifname,
+			    strerror(-err));
+	err = 0;
 
 	memset(&req, 0, sizeof(req));
 	req.ifindex = (int)if_nametoindex(l->ifname);
