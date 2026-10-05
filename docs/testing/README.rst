@@ -195,6 +195,21 @@ The runs, the oldest first:
     off the PON, and omcid carries out the filters of the bridge ports. The lab
     OLT sets no filter, so the cases ran without one. 44 of 44 passed.
 
+``2026-10-05-run21``
+    The same cases and the new case of the PON side's silence on the RAM image
+    built from ``run21``, after the boot script keeps the stick quiet
+    towards the PON, omcid takes the versions a bench names and reports an
+    unmapped T-CONT as the original did, gives the bridge ports the VLANs a
+    translation and a port without a filter need, and discards the tagged
+    frames that no VLAN rule takes. The lab OLT sets no VLAN filter, so the
+    last two had nothing to do. 43 of 45 passed, and both failures lay with
+    the bench: its ssh client shared the connection of the earlier cases with
+    the probe that offers no key, which so got in; and since the bench host's
+    restart its sender reaches about 420 Mb/s, under the 900 Mb/s the shaper
+    case wants of the stream without a shaper, while every frame passed and
+    the shaper held 200 Mb/s at 205. The reset case passed after the loader's
+    countdown was stopped at the console and the image was RAM-booted by hand.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
