@@ -217,6 +217,13 @@ static void make_cardholder(struct build *b, const struct omci_hw_port *p)
  * and a blank equipment ID; on the PON side, the numbers of T-CONT buffers,
  * priority queues and traffic schedulers.
  */
+/* The version a circuit pack reports: its own when the backend names one. */
+static const char *pack_version(const struct omci_hw_caps *caps)
+{
+	return caps->identity.pack_version[0] ? caps->identity.pack_version :
+						caps->identity.version;
+}
+
 static void make_circuit_pack(struct build *b, const struct omci_hw_caps *caps,
 			      const struct omci_hw_port *p)
 {
@@ -226,7 +233,7 @@ static void make_circuit_pack(struct build *b, const struct omci_hw_caps *caps,
 	put_u8(b, 1, p->plugin_type);
 	put_u8(b, 2, pon ? 1u : caps->uni_port_count);
 	put(b, 3, caps->identity.serial, sizeof(caps->identity.serial));
-	put_text(b, 4, caps->identity.version, 0);
+	put_text(b, 4, pack_version(caps), 0);
 	put_text(b, 5, caps->identity.vendor_id, 0);
 
 	put_blank(b, 9);
@@ -391,7 +398,8 @@ static void make_downstream_queues(struct build *b,
 
 /*
  * Software image @n: its version; the committed image is reported as
- * committed, active and valid, the other one as none of these.
+ * committed, active and valid, the other one as valid when the backend says
+ * it holds valid software, and as neither committed nor active.
  */
 static void make_software_image(struct build *b,
 				const struct omci_hw_caps *caps, unsigned int n)
@@ -402,7 +410,7 @@ static void make_software_image(struct build *b,
 	put_text(b, 1, caps->identity.sw_version[n], 0);
 	put_u8(b, 2, running ? 1u : 0u);
 	put_u8(b, 3, running ? 1u : 0u);
-	put_u8(b, 4, running ? 1u : 0u);
+	put_u8(b, 4, running || (caps->sw_valid_images >> n & 1u) ? 1u : 0u);
 
 	finish(b);
 }
@@ -436,7 +444,7 @@ static void make_veip(struct build *b, const struct omci_hw_caps *caps)
 	put_u8(b, 1, VEIP_PLUGIN_TYPE);
 	put_u8(b, 2, 1u);
 	put(b, 3, caps->identity.serial, sizeof(caps->identity.serial));
-	put_text(b, 4, caps->identity.version, 0);
+	put_text(b, 4, pack_version(caps), 0);
 	put_text(b, 5, caps->identity.vendor_id, 0);
 	put_blank(b, 9);
 	finish(b);

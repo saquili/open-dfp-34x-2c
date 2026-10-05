@@ -301,7 +301,10 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 	caps.identity.tm_option = 1u;
 	caps.identity.omcc_version = 0xb3u;
 	caps.identity.vendor_product_code = 4242u;
+	snprintf(caps.identity.pack_version, sizeof(caps.identity.pack_version),
+		 "%s", "seam-pack");
 	caps.sw_committed_image = 1u;
+	caps.sw_valid_images = 0u;
 	caps.num_tcont = 3u;
 	caps.num_priq_per_tcont = 5u;
 	caps.num_priq_per_port = 3u;
@@ -327,6 +330,10 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 	CHECK(text_is(mib, 7u, 1u, 1u, "seam-sw-1", 0));
 	CHECK_EQ(read_u(mib, 7u, 1u, 2u), 1u);
 	CHECK_EQ(read_u(mib, 7u, 0u, 2u), 0u);
+	CHECK_EQ(read_u(mib, 7u, 1u, 4u), 1u);
+	CHECK_EQ(read_u(mib, 7u, 0u, 4u), 0u);
+	CHECK(text_is(mib, 6u, caps.ports[0].cardholder, 4u, "seam-pack", 0));
+	CHECK(text_is(mib, 6u, caps.ports[1].cardholder, 4u, "seam-pack", 0));
 	CHECK_EQ(instances_of(mib, 262u), 3u);
 	CHECK_EQ(instances_of(mib, 278u), 3u);
 	CHECK_EQ(instances_of(mib, 134u), 2u);
@@ -338,6 +345,27 @@ static void test_the_identity_the_seam_gives_is_the_identity_the_mib_holds(void)
 	CHECK_EQ(omci_me_defaults_apply(NULL, &caps), OMCI_ERR_INVAL);
 	CHECK_EQ(omci_me_defaults_apply(mib, NULL), OMCI_ERR_INVAL);
 
+	omci_mib_fini(mib);
+}
+
+static void test_an_image_the_backend_calls_valid_is_valid_but_not_running(void)
+{
+	struct omci_hw_caps caps;
+	struct omci_mib *mib = NULL;
+
+	CHECK_EQ(omci_hw_caps(&caps), OMCI_OK);
+	CHECK_EQ(caps.sw_valid_images, 1u << caps.sw_committed_image);
+	caps.sw_valid_images = 3u;
+	CHECK_EQ(omci_mib_init(&mib), OMCI_OK);
+	CHECK_EQ(omci_me_defaults_apply(mib, &caps), OMCI_OK);
+
+	for (unsigned int n = 0; n < 2u; n++) {
+		const unsigned int running = n == caps.sw_committed_image;
+
+		CHECK_EQ(read_u(mib, 7u, n, 2u), running);
+		CHECK_EQ(read_u(mib, 7u, n, 3u), running);
+		CHECK_EQ(read_u(mib, 7u, n, 4u), 1u);
+	}
 	omci_mib_fini(mib);
 }
 
@@ -478,6 +506,7 @@ int main(int argc, char **argv)
 	RUN(test_the_identifiers_follow_the_rules_of_the_standard);
 	RUN(test_the_values_the_sheet_states);
 	RUN(test_the_identity_the_seam_gives_is_the_identity_the_mib_holds);
+	RUN(test_an_image_the_backend_calls_valid_is_valid_but_not_running);
 	RUN(test_the_population_is_repeatable);
 	RUN(test_an_instance_is_announced_once_and_whole);
 	RUN(test_a_mib_reset_rebuilds_the_same_mib);

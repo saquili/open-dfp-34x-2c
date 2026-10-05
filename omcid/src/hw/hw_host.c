@@ -34,6 +34,7 @@ static void synthetic_caps(struct omci_hw_caps *out)
 	out->ani_instance = 0x8001;
 	out->ip_host_count = 1;
 	out->sw_committed_image = 0;
+	out->sw_valid_images = 1;
 	out->num_gem_ports = 32;
 
 	omci_wire_copy(out->identity.vendor_id, "ZZZZ", 5);

@@ -55,7 +55,9 @@
  * The identity of the ONU, written at boot from the unit's own data: one
  * "key=value" per line, with the keys vendor_id, version, equipment_id,
  * tm_option, omcc_version, vendor_product_code and serial (four letters
- * and eight hexadecimal digits).
+ * and eight hexadecimal digits), and optionally sw_version and
+ * pack_version, the versions the software images and the circuit packs
+ * report.
  */
 #define IDENTITY_PATH "/run/onu-identity"
 
@@ -454,16 +456,27 @@ static void identity_serial(struct omci_hw_caps *caps)
 	}
 }
 
-/* The version of the software images: the release of the running kernel. */
+/*
+ * The version of the software images. The identity file may name one
+ * (sw_version), which both images then report, both valid: so a unit shows
+ * an OLT what the firmware it came with showed. Otherwise it is the release
+ * of the running kernel, and only the committed image is valid.
+ */
 static void identity_software(struct omci_hw_caps *caps)
 {
 	char version[sizeof(caps->identity.sw_version[0])] = "";
-	FILE *f = fopen("/proc/sys/kernel/osrelease", "re");
 
-	if (f) {
-		if (fgets(version, sizeof(version), f))
-			version[strcspn(version, "\n")] = '\0';
-		fclose(f);
+	caps->sw_valid_images = (uint8_t)(1u << caps->sw_committed_image);
+	if (identity_copy("sw_version", version, sizeof(version))) {
+		caps->sw_valid_images = 3u;
+	} else {
+		FILE *f = fopen("/proc/sys/kernel/osrelease", "re");
+
+		if (f) {
+			if (fgets(version, sizeof(version), f))
+				version[strcspn(version, "\n")] = '\0';
+			fclose(f);
+		}
 	}
 	if (!version[0])
 		return;
@@ -547,6 +560,8 @@ static enum omci_status kernel_caps(struct omci_hw_caps *out)
 			       sizeof(out->identity.version));
 	ident |= identity_copy("equipment_id", out->identity.equipment_id,
 			       sizeof(out->identity.equipment_id));
+	(void)identity_copy("pack_version", out->identity.pack_version,
+			    sizeof(out->identity.pack_version));
 	if (identity_number("tm_option", &n))
 		out->identity.tm_option = (uint8_t)n;
 	if (identity_number("omcc_version", &n))

@@ -40,10 +40,13 @@ struct omci_hw_port {
  * @ani_instance: the instance of the ANI-G
  * @ip_host_count: the IP hosts
  * @sw_committed_image: the software image that is committed (0 or 1)
+ * @sw_valid_images: the software images that hold valid software, bit n
+ *	for image n; the committed image is valid whatever it says
  * @num_gem_ports: the GEM ports the PON MAC can carry
  * @identity: the identity of the ONU: vendor ID, version, serial number,
  *	traffic management option, equipment ID, OMCC version,
- *	vendor product code, versions of the two software images, MAC address
+ *	vendor product code, versions of the two software images, version of
+ *	the circuit packs (the ONU's version when empty), MAC address
  * @num_tcont: the T-CONTs
  * @num_priq_per_tcont: the upstream priority queues of each T-CONT
  * @num_priq_per_port: the downstream priority queues of each UNI
@@ -56,12 +59,14 @@ struct omci_hw_caps {
 	uint16_t ani_instance;
 	uint8_t ip_host_count;
 	uint8_t sw_committed_image;
+	uint8_t sw_valid_images;
 
 	uint16_t num_gem_ports;
 
 	struct {
 		char vendor_id[5];
 		char version[15];
+		char pack_version[15];
 
 		uint8_t serial[8];
 		uint8_t tm_option;
