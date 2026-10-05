@@ -1,0 +1,237 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+.. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+==========================
+Device tests of 2026-10-05
+==========================
+
+:Date: 2026-10-05 08:17 UTC
+:Source: run19
+:Kernel: 6.18.48 #158 Mon Oct 5 08:17:06 UTC 2026
+:Image: open-dfp-34x-2c on the ODI DFP-34X-2C3, build run19
+:Result: 43 passed, 0 failed, 0 skipped, of 43
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 10 32 7 33
+
+   * - Case
+     - Area
+     - What is checked
+     - Result
+     - Evidence
+   * - ``system.kernel``
+     - System
+     - The stick runs the kernel of this tree
+     - **PASS**
+     - uname -r 6.18.48 (tree 6.18.48), #158 Mon Oct 5 08:17:06 UTC 2026
+   * - ``system.services``
+     - System
+     - The boot started the ssh server, omcid and pond
+     - **PASS**
+     - dropbear pid 104 62, omcid pid 79, pond pid 82
+   * - ``system.filesystems``
+     - System
+     - The root is the image's own, read-only from flash or the initramfs of a RAM boot; /tmp, /run and /var are in memory
+     - **PASS**
+     - / the initramfs of a RAM boot; /tmp tmpfs, /run tmpfs, /var tmpfs
+   * - ``system.phc``
+     - System
+     - The PTP hardware clock is the ports' timestamping clock, and its pulse comes once a second
+     - **PASS**
+     - ptp0 rtl9602c-ptp, hardware-receive, hardware-raw-clock; 4 pulses 4.000 s apart
+   * - ``system.watchdog``
+     - System
+     - The watchdog runs, and the daemon of the boot feeds it
+     - **PASS**
+     - RTL9602C watchdog, timeout 44 s, active, daemon pid 51
+   * - ``net.host-link``
+     - Host side
+     - The host link sfp is up at its speed
+     - **PASS**
+     - sfp up, 2500 Mb/s
+   * - ``net.mgmt-vlan``
+     - Host side
+     - The management address answers on its VLAN of the host link
+     - **PASS**
+     - mgmt: VLAN 4094 on sfp; this run reaches the stick through it
+   * - ``net.filter-loaded``
+     - Host side
+     - The packet filter is loaded, dropping by default
+     - **PASS**
+     - 2 chains with policy drop (input, forward), 21 lines
+   * - ``net.filter-drops``
+     - Host side
+     - A port nobody listens on is dropped with the filter and refused without it
+     - **PASS**
+     - filtered: timeout after 3.00 s; unfiltered: refused in 0.001 s; filter restored
+   * - ``net.ssh-keys-only``
+     - Host side
+     - The ssh server offers keys only, no passwords
+     - **PASS**
+     - root@<stick>: Permission denied (publickey).
+   * - ``mgmt.pond-health``
+     - Management
+     - The status daemon answers on the host side
+     - **PASS**
+     - HTTP 200 {"ok":true}
+   * - ``mgmt.pond-page``
+     - Management
+     - The status page is served on the host side
+     - **PASS**
+     - http/1.1 200 ok, html, with a CSP
+   * - ``mgmt.pond-locked``
+     - Management
+     - Without the token the daemon's API stays locked
+     - **PASS**
+     - HTTP 401 unauthorised
+   * - ``mgmt.pond-values``
+     - Management
+     - With the token the daemon reports the kernel, the ONU and the optics
+     - **PASS**
+     - HTTP 200, kernel: 177 B, onu: 520 B, optics: 94 B
+   * - ``gpon.downstream``
+     - GPON
+     - Downstream is locked: bandwidth maps keep being accepted, none with a CRC error, and no alarm
+     - **PASS**
+     - 4006 bandwidth maps/s, 0 with a CRC error, alarms none
+   * - ``gpon.activation``
+     - GPON
+     - The ONU is in O5, operation
+     - **PASS**
+     - O5, ONU-ID 0
+   * - ``gpon.stable``
+     - GPON
+     - The ONU stays in O5 for a minute
+     - **PASS**
+     - 12 reads 5 s apart: all O5
+   * - ``omci.channel``
+     - OMCI
+     - OMCI messages flow both ways and none is dropped
+     - **PASS**
+     - rx\_messages 309, rx\_dropped 0, rx\_discarded 0, tx\_messages 334, tx\_errors 0
+   * - ``omci.mib-upload``
+     - OMCI
+     - omcid answered the OLT's MIB upload
+     - **PASS**
+     - 2 upload(s), last: 207 units over 105 instances (channel 1)
+   * - ``omci.gem-bridge``
+     - OMCI
+     - The GEM ports the OLT created are interfaces, bridged with the host link
+     - **PASS**
+     - 2 GEM interface(s); omcibr0 holds gem256 gem4095 sfp
+   * - ``omci.tcont-map``
+     - OMCI
+     - Each T-CONT the OLT mapped to an Alloc-ID through OMCI holds that Alloc-ID
+     - **PASS**
+     - T-CONT 0 holds 256, mapped to 256
+   * - ``omci.alarms``
+     - OMCI
+     - omcid raises no alarm on the clean line, with the power level the kernel reports
+     - **PASS**
+     - power level high; no alarm
+   * - ``optics.diagnostics``
+     - Optics
+     - Temperature, supply, bias and both optical powers read within the module's warning thresholds
+     - **PASS**
+     - 49.5 °C, 3.21 V, bias 7 mA, TX\_power 2.2 dBm, RX\_power -25.2 dBm
+   * - ``data.downstream``
+     - Data path
+     - A burst from the network side crosses the OLT, the PON and the switch to the host side in hardware
+     - **PASS**
+     - 158594 frames of 1514 B left the bench, 158648 arrived (100.03%) at 982 Mb/s; CPU saw 65; switch: pon took 158587, sfp sent 158651
+   * - ``data.upstream``
+     - Data path
+     - A burst from the host side, above the upstream rate, leaves by the PON in hardware and the ONU stays in O5
+     - **PASS**
+     - 400100 frames of 1514 B left the bench, 157765 arrived (39.43%) at 963 Mb/s; CPU saw 63; ONU O5; switch: sfp took 400092, pon sent 157754
+   * - ``data.vlan-translation``
+     - Data path
+     - A C-VID translation in the switch rewrites the VLAN of frames both ways across the PON and keeps their priority
+     - **PASS**
+     - 200 frames of VLAN 3001/5 upstream: 200 as 3002/5; 200 of 3002/5 downstream: 200 as 3001/5
+   * - ``data.vlan-priority``
+     - Data path
+     - A translation of one priority rewrites the VLAN of that priority's frames alone
+     - **PASS**
+     - 200 frames of VLAN 3001/5: 200 as 3002/5; 200 of 3001/3: 200 as 3001/3
+   * - ``data.vlan-push-pop``
+     - Data path
+     - The switch pushes a C-tag onto untagged frames upstream and pops it from frames downstream, and pushes an S-tag in front of a C-tag upstream and pops it downstream, with the priorities it is given
+     - **PASS**
+     - 200 untagged frames upstream: 200 as c3003p5; 200 of c3003p5 downstream: 200 as u; 200 of c3001p1 upstream: 200 as s3004p3+c3001p1; 200 of s3004p3+c3001p1 downstream: 200 as c3001p1
+   * - ``data.acl``
+     - Data path
+     - ACL rules on the PON port drop frames from the network side or trap them to the CPU, the rule of the lower tc priority deciding whichever was added first, and tc counts the frames for the rule that decided
+     - **PASS**
+     - 200 frames each; no rule: 200 arrived, 0 to the CPU; trap: 0 arrived, 200 to the CPU, 200 counted at 49010; drop: 0 arrived, 0 to the CPU, 200 counted at 49010; trap over drop, added last: 0 arrived, 200 to the CPU, 0 counted at 49020, 200 counted at 49010; drop over trap, added last: 0 arrived, 0 to the CPU, 0 counted at 49020, 200 counted at 49010
+   * - ``data.mirror``
+     - Data path
+     - A matchall mirror copies to the host side what the PON port receives and what it sends, both at once, and nothing once it is removed
+     - **PASS**
+     - 2000 frames each way; mirrored, 2000 of those from the network side to this device and 2000 of those from the host side reached the host side; after, 0 and 0
+   * - ``data.fdb``
+     - Data path
+     - The switch learns each bench port's address behind the port it reaches it by, and a static address given to the bridge enters its table and leaves it again
+     - **PASS**
+     - host side on sfp: <mac> vlan 4094 self; network side on pon: <mac> vlan 410 self; static: <mac> self static, then gone
+   * - ``data.shaper``
+     - Data path
+     - A tbf on the SFP port holds the frames from the network side to its rate in hardware, and its removal gives the full rate back
+     - **PASS**
+     - tbf 200 Mbit/s: 100175 of 477716 frames arrived at 206 Mb/s, CPU saw 68; removed: 159205 of 159148 at 985 Mb/s, CPU saw 70
+   * - ``data.storm``
+     - Data path
+     - Of several police rules on broadcast the one of the lowest priority value holds the class, through a replace of it too, and a drop of broadcast is an ACL rule that drops
+     - **PASS**
+     - 600 broadcasts at 300/s: 600 passed with no rule, 216 under pref 10 at 100/s, 216 with pref 20 at 1000/s added, 416 with pref 10 replaced at 200/s; dropped by the ACL, 0 passed; 600 after
+   * - ``data.pcp-rewrite``
+     - Data path
+     - A DCB rewrite entry on pon gives the frames of its priority that it sends the PCP of the entry, leaves the PCP of other priorities as it was, and stops with the entry
+     - **PASS**
+     - 100 frames tagged 100 each; under prio-pcp 0:5nd, PCP 0: 100 as 100/5, PCP 3: 100 as 100/3; without it, PCP 0: 100 as 100/0
+   * - ``data.cpu-limit``
+     - Data path
+     - A flood to the stick's own address reaches its CPU no faster than cpu\_rx\_pps says, leaves the CPU at least half its time and the OMCI messages whole, and goes through once the limit is lifted
+     - **PASS**
+     - cpu\_rx\_pps 5000: of 2622208 frames in 10 s the CPU took 50415; a loop of 1.23 s took 1.51 s; OMCI 2 of 2 delivered; lifted: 28170 frames/s
+   * - ``data.igmp``
+     - Data path
+     - Multicast snooping: from the network side a group a host joined reaches it and one no host asked for does not, the link-local groups pass, and every report reaches the network
+     - **PASS**
+     - IGMPv2 query 1/1 to the host side; from the network side, unasked 0/200, 224.0.0.251 200/200; join 3/3 to the network, group offloaded, its data 200/200; 3/3 reports again, timer restarted; MLD query 1/1, MLDv2 join 3/3, unasked 0/200, joined 200/200, MLDv1 reports 3/3, timer restarted; leave 1/1, group gone, its data 0/200
+   * - ``router.static``
+     - Router mode
+     - With a static WAN, a LAN host's UDP flow leaves translated to the WAN address and the switch carries it
+     - **PASS**
+     - WAN up in 2 s; 1000 datagrams to start the flow, 31 through the CPU; then 20000 sent and 20000 answered, 28 through the CPU; 21000 of 21000 arrived from 203.0.113.2; 1 flow(s) in the switch
+   * - ``router.tcp``
+     - Router mode
+     - With a static WAN, a LAN host's TCP connection leaves translated to the WAN address and the switch carries it
+     - **PASS**
+     - 100000000 bytes sent, 100000000 received from 203.0.113.2 at 932 Mb/s; 55 frames through the CPU against some 69060 segments; 1 flow(s) in the switch
+   * - ``router.pppoe``
+     - Router mode
+     - With PPPoE, the stick opens a session with the concentrator, gets an address, and clamps a LAN host's TCP MSS to fit the session
+     - **PASS**
+     - session up in 5 s; ppp0 <address>, MTU 1492; name servers none; SYN MSS 1452, 1452, 1452 through it
+   * - ``router.bridge``
+     - Router mode
+     - Back in bridge mode, the GEM ports are bridged with the host link again
+     - **PASS**
+     - bridge mode after 1 s; omcibr0 holds gem256 gem4095 sfp after 1 s more
+   * - ``system.log``
+     - System
+     - After the other cases, the kernel log holds no oops, warning, BUG or panic and no switchdev object that a driver failed
+     - **PASS**
+     - 0 of 207 lines
+   * - ``net.host-link-search``
+     - Host side
+     - The host link finds the host's setting as the host moves from 2500BaseX to 1000BaseX with in-band negotiation and back
+     - **PASS**
+     - 1000BaseX with negotiation: back after 3.7 s, sfp 1000 Mb/s; 2500BaseX: back after 2.1 s, sfp 2500 Mb/s
+   * - ``system.watchdog-reset``
+     - System
+     - An armed watchdog that nobody feeds resets the stick within its timeout
+     - **PASS**
+     - timeout 44 s; gone after 48 s, back with a new boot after 84 s

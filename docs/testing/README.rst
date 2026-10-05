@@ -177,6 +177,16 @@ The runs, the oldest first:
     multicast GEM ports and the lost groups. The lab OLT provisions no
     multicast policy, so the cases ran without one. 43 of 43 passed.
 
+``2026-10-05-run19``
+    The same cases on the RAM image built from ``run19``, after the
+    driver's counts of each GEM port's frames and octets and of the downstream
+    FEC corrections, the performance monitoring of omcid (the history data of
+    the Ethernet UNI, the bridge ports, the GEM ports and FEC, the extended
+    PM, threshold crossing alerts and Synchronize time), the standard classes
+    the stick lacked (the VEIP, the LCT UNI, and the filter and bridge tables
+    of each bridge port), and the driver's hold of the key switch for a new
+    key and clearing of the keys when an activation ends. 43 of 43 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
