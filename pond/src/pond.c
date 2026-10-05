@@ -31,7 +31,13 @@
 #define POND_REPLY_CAP (96 * 1024)
 #define POND_SET_CAP 4096
 
-static const char *g_listen = "http://0.0.0.0:8080";
+/*
+ * The addresses the daemon listens on, one per -l; with none, every address
+ * of the stick.
+ */
+#define POND_LISTEN_MAX 4
+static const char *g_listen[POND_LISTEN_MAX];
+static int g_nlisten;
 static const char *g_tokenf = "/etc/pond.token";
 static const char *g_page = "/usr/share/pond/index.html";
 static char g_token[128];
@@ -362,18 +368,20 @@ static void load_token(void)
 int main(int argc, char **argv)
 {
 	struct mg_mgr mgr;
+	int listening = 0;
 	int i;
 
 	for (i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-l") && i + 1 < argc)
-			g_listen = argv[++i];
+		if (!strcmp(argv[i], "-l") && i + 1 < argc &&
+		    g_nlisten < POND_LISTEN_MAX)
+			g_listen[g_nlisten++] = argv[++i];
 		else if (!strcmp(argv[i], "-t") && i + 1 < argc)
 			g_tokenf = argv[++i];
 		else if (!strcmp(argv[i], "-p") && i + 1 < argc)
 			g_page = argv[++i];
 		else {
 			fprintf(stderr,
-				"usage: %s [-l http://addr:port] [-t tokenfile] [-p page]\n",
+				"usage: %s [-l http://addr:port]... [-t tokenfile] [-p page]\n",
 				argv[0]);
 			return 2;
 		}
@@ -383,13 +391,27 @@ int main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 	signal(SIGPIPE, SIG_IGN);
 
+	if (!g_nlisten)
+		g_listen[g_nlisten++] = "http://0.0.0.0:8080";
+
 	load_token();
 	mg_mgr_init(&mgr);
-	if (!mg_http_listen(&mgr, g_listen, handler, NULL)) {
-		fprintf(stderr, "pond: cannot listen on %s\n", g_listen);
-		return 1;
+	/*
+	 * An address that is missing costs only its own listener: the others
+	 * still serve, and only when none does is there no daemon.
+	 */
+	for (i = 0; i < g_nlisten; i++) {
+		if (!mg_http_listen(&mgr, g_listen[i], handler, NULL)) {
+			fprintf(stderr, "pond: cannot listen on %s\n",
+				g_listen[i]);
+			continue;
+		}
+		fprintf(stderr, "pond: listening on %s\n", g_listen[i]);
+		listening++;
 	}
-	fprintf(stderr, "pond: listening on %s, %s\n", g_listen,
+	if (!listening)
+		return 1;
+	fprintf(stderr, "pond: %s\n",
 		strlen(g_token) ? "token loaded" :
 				  "NO TOKEN -- the API is locked");
 

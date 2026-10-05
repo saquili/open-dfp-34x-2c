@@ -13,7 +13,11 @@ stick's mode, bridge or router.
 
 ::
 
-   pond [-l http://ADDRESS:PORT] [-t TOKENFILE] [-p PAGE]
+   pond [-l http://ADDRESS:PORT]... [-t TOKENFILE] [-p PAGE]
+
+Each ``-l`` adds an address to listen on, up to four; with none, the daemon
+listens on port 8080 of every address. An address it cannot listen on is
+reported and left out, and the daemon ends only when it listens on none.
 
 ``/api/health`` answers without a token. ``/api/schema``, ``/api/get/ID``,
 ``/api/getm?ids=A,B`` and ``/api/set/ID`` need the bearer token of the token
