@@ -81,7 +81,9 @@ image-check:
 # flash: $(IMAGE_OUT)/images/ram.uImage, for "make ramboot". It takes the
 # target tree of "make image", with the files of OPEN_DFP_34X_2C_LOCAL_OVERLAY
 # laid over a copy, and builds the board's kernel configuration with the
-# image's own cross compiler in RAM_OUT. OPEN_DFP_34X_2C_RAM_KCONFIG, options
+# image's own cross compiler in RAM_OUT. That configuration leaves out the
+# initial RAM disk, which the kernel in the flash does not use, so the RAM
+# kernel switches it on. OPEN_DFP_34X_2C_RAM_KCONFIG, options
 # for scripts/config such as "--enable NET_DSA_RTL9602C_PLOAM_INJECT", changes
 # that configuration for a test image.
 RAM_OUT ?= $(CURDIR)/build/ram
@@ -95,7 +97,7 @@ ram-image:
 	$(if $(OPEN_DFP_34X_2C_LOCAL_OVERLAY),cp -a "$(OPEN_DFP_34X_2C_LOCAL_OVERLAY)/." "$(RAM_OUT)/root/")
 	rm -f "$(RAM_OUT)/root/THIS_IS_NOT_YOUR_ROOT_FILESYSTEM"
 	$(RAM_MAKE) rtl9602c_defconfig
-	linux/scripts/config --file "$(RAM_OUT)/kernel/.config" \
+	linux/scripts/config --file "$(RAM_OUT)/kernel/.config" --enable BLK_DEV_INITRD \
 	  --set-str INITRAMFS_SOURCE "$(RAM_OUT)/root $(CURDIR)/br2-external/board/dfp-34x-2c3/initramfs.list" \
 	  --set-val INITRAMFS_ROOT_UID 0 --set-val INITRAMFS_ROOT_GID 0
 	$(if $(OPEN_DFP_34X_2C_RAM_KCONFIG),linux/scripts/config --file "$(RAM_OUT)/kernel/.config" $(OPEN_DFP_34X_2C_RAM_KCONFIG))
