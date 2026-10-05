@@ -60,5 +60,6 @@ bool omci_me_value_allowed(uint16_t class_id, uint8_t attr_no,
 
 bool omci_me_value_kept(uint16_t class_id, uint8_t attr_no)
 {
-	return !(class_id == 263u && attr_no == 8u);
+	return !(class_id == 263u && attr_no == 8u) &&
+	       !(class_id == 334u && attr_no == 2u);
 }

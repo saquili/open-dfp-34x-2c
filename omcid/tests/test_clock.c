@@ -186,6 +186,26 @@ static void test_the_clock_refuses_impossible_stamps(void)
 	}
 }
 
+static const uint8_t *reply_of(void)
+{
+	static const uint8_t none[OMCI_FRAME_LEN] = { 0xFFu };
+	const uint8_t *rsp = omci_t_last_tx();
+
+	CHECK(rsp != NULL);
+	return rsp != NULL ? rsp : none;
+}
+
+static uint8_t end_time(struct omci_t_fixture *fx)
+{
+	uint8_t v = 0xEEu;
+
+	read_pm(fx->eng);
+	CHECK_EQ(omci_mib_attr_get(fx->mib, ME_ETH_PM_UP, PM_INSTANCE, 1u, &v,
+				   1u, NULL),
+		 OMCI_OK);
+	return v;
+}
+
 static void test_sync_time_is_acknowledged(void)
 {
 	struct omci_t_fixture fx;
@@ -197,13 +217,51 @@ static void test_sync_time_is_acknowledged(void)
 		 OMCI_OK);
 	CHECK_EQ(omci_t_tx.n, 1u);
 
-	const uint8_t *rsp = omci_t_last_tx();
+	const uint8_t *rsp = reply_of();
 
-	CHECK(rsp != NULL);
 	CHECK_EQ(rsp[2] & 0x1Fu, MT_SYNC_TIME);
 	CHECK((rsp[2] & 0x20u) != 0u);
 	CHECK_EQ(rsp[8], 0u);
-	CHECK_EQ(rsp[9], 0u);
+	/* The date and the boundary were both set (G.988 A.3.34). */
+	CHECK_EQ(rsp[9], 1u);
+
+	omci_t_down(&fx);
+}
+
+static void test_a_sync_without_a_date_sets_only_the_boundary(void)
+{
+	struct omci_t_fixture fx;
+
+	CHECK(omci_t_up(&fx));
+	make_pm_entity(fx.eng);
+	omci_engine_tick(fx.eng, 1000u);
+
+	/* Nothing at all: the interval starts now. */
+	omci_t_tx_reset();
+	CHECK_EQ(send_sync(fx.eng, 0x0130u, 0u, 0u, 0u, 0u, 0u, 0u), OMCI_OK);
+	CHECK_EQ(reply_of()[8], 0u);
+	CHECK_EQ(reply_of()[9], 0u);
+	omci_engine_tick(fx.eng, 1899u);
+	CHECK_EQ(end_time(&fx), 0u);
+	omci_engine_tick(fx.eng, 1900u);
+	CHECK_EQ(end_time(&fx), 1u);
+
+	/* A time of day alone places the boundary: 00:20:00 is 300 s past it. */
+	omci_t_tx_reset();
+	CHECK_EQ(send_sync(fx.eng, 0x0131u, 0u, 0u, 0u, 0u, 20u, 0u), OMCI_OK);
+	CHECK_EQ(reply_of()[8], 0u);
+	CHECK_EQ(reply_of()[9], 0u);
+	CHECK_EQ(end_time(&fx), 0u);
+	omci_engine_tick(fx.eng, 1900u + 599u);
+	CHECK_EQ(end_time(&fx), 0u);
+	omci_engine_tick(fx.eng, 1900u + 600u);
+	CHECK_EQ(end_time(&fx), 1u);
+
+	/* A time of day that does not exist is refused like a date. */
+	omci_t_tx_reset();
+	CHECK_EQ(send_sync(fx.eng, 0x0132u, 0u, 0u, 0u, 24u, 0u, 0u), OMCI_OK);
+	CHECK_EQ(reply_of()[8], 3u);
+	CHECK_EQ(end_time(&fx), 1u);
 
 	omci_t_down(&fx);
 }
@@ -214,182 +272,84 @@ static void test_an_impossible_stamp_is_refused_and_not_applied(void)
 
 	CHECK(omci_t_up(&fx));
 	make_pm_entity(fx.eng);
+	omci_engine_tick(fx.eng, 1000u);
+	omci_engine_tick(fx.eng, 1900u);
 	omci_t_tx_reset();
 
 	CHECK_EQ(send_sync(fx.eng, 0x0102u, 2026u, 0u, 15u, 12u, 0u, 0u),
 		 OMCI_OK);
 	CHECK_EQ(omci_t_tx.n, 1u);
+	CHECK_EQ(reply_of()[8], 3u);
 
-	const uint8_t *rsp = omci_t_last_tx();
-
-	CHECK(rsp != NULL);
-	CHECK_EQ(rsp[8], 3u);
-
-	read_pm(fx.eng);
-	uint8_t end_time = 0xFFu;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &end_time, 1u, NULL),
-		 OMCI_OK);
-	CHECK_EQ(end_time, 0u);
+	/* The intervals go on as they were. */
+	CHECK_EQ(end_time(&fx), 1u);
 
 	omci_t_down(&fx);
 }
 
-static void test_a_get_sees_the_interval_the_olt_is_counting(void)
+static void test_a_sync_numbers_the_intervals_from_zero(void)
 {
 	struct omci_t_fixture fx;
 
 	CHECK(omci_t_up(&fx));
 	make_pm_entity(fx.eng);
 
-	read_pm(fx.eng);
-	uint8_t before = 0xFFu;
+	omci_engine_tick(fx.eng, 1000u);
+	CHECK_EQ(end_time(&fx), 0u);
+	omci_engine_tick(fx.eng, 1900u);
+	CHECK_EQ(end_time(&fx), 1u);
 
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &before, 1u, NULL),
-		 OMCI_OK);
-	CHECK_EQ(before, 0u);
-
-	omci_t_tx_reset();
+	/* 12:34:56 is 296 s into its quarter hour: 604 s are left of it. */
 	CHECK_EQ(send_sync(fx.eng, 0x0103u, 2026u, 8u, 15u, 12u, 34u, 56u),
 		 OMCI_OK);
-	CHECK_EQ(omci_t_tx.frame[0][8], 0u);
-
-	read_pm(fx.eng);
-	uint8_t after = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &after, 1u, NULL),
-		 OMCI_OK);
-
-	const uint64_t wall =
-		(uint64_t)20680 * 86400u + 12u * 3600u + 34u * 60u + 56u;
-	const uint8_t expect = (uint8_t)((wall / 900u) & 0xffu);
-
-	if (after != expect)
-		printf("    interval end time %u, want %u (wall %lu)\n", after,
-		       expect, (unsigned long)wall);
-	CHECK_EQ(after, expect);
-	CHECK(after != before);
+	CHECK_EQ(end_time(&fx), 0u);
+	omci_engine_tick(fx.eng, 1900u + 603u);
+	CHECK_EQ(end_time(&fx), 0u);
+	omci_engine_tick(fx.eng, 1900u + 604u);
+	CHECK_EQ(end_time(&fx), 1u);
+	omci_engine_tick(fx.eng, 1900u + 604u + 900u);
+	CHECK_EQ(end_time(&fx), 2u);
 
 	omci_t_down(&fx);
 }
 
-static void test_a_mib_reset_forgets_the_time(void)
+static void test_a_mib_reset_keeps_the_intervals(void)
 {
 	struct omci_t_fixture fx;
 
 	CHECK(omci_t_up(&fx));
 	make_pm_entity(fx.eng);
-
-	CHECK_EQ(send_sync(fx.eng, 0x0105u, 2026u, 8u, 15u, 12u, 34u, 56u),
-		 OMCI_OK);
-	read_pm(fx.eng);
-
-	uint8_t synced = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &synced, 1u, NULL),
-		 OMCI_OK);
-	CHECK(synced != 0u);
+	omci_engine_tick(fx.eng, 1000u);
+	omci_engine_tick(fx.eng, 1900u);
 
 	uint8_t wire[OMCI_FRAME_LEN];
 
 	omci_t_build(wire, 0x0107u, 15u, true, false, 2u, 0u);
 	CHECK_EQ(omci_t_rx(fx.eng, wire), OMCI_OK);
-
 	make_pm_entity(fx.eng);
 
-	omci_engine_tick(fx.eng, 1000u);
-	read_pm(fx.eng);
-
-	uint8_t after_reset = 0xFFu;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &after_reset, 1u, NULL),
-		 OMCI_OK);
-	CHECK_EQ(after_reset, 0u);
+	/* G.988 I.4 leaves this open; the ONU keeps one clock for all. */
+	CHECK_EQ(end_time(&fx), 1u);
 
 	omci_t_down(&fx);
 }
 
-static void test_a_window_that_ends_advances_the_number_by_one(void)
+static void test_every_sync_starts_the_numbering_again(void)
 {
 	struct omci_t_fixture fx;
 
 	CHECK(omci_t_up(&fx));
 	make_pm_entity(fx.eng);
-
 	omci_engine_tick(fx.eng, 1000u);
-	CHECK_EQ(send_sync(fx.eng, 0x0110u, 2026u, 8u, 15u, 12u, 34u, 56u),
-		 OMCI_OK);
-
-	read_pm(fx.eng);
-	uint8_t first = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &first, 1u, NULL),
-		 OMCI_OK);
-
-	omci_engine_tick(fx.eng, 1000u + 901u);
-
-	read_pm(fx.eng);
-	uint8_t second = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &second, 1u, NULL),
-		 OMCI_OK);
-
-	CHECK_EQ(second, (uint8_t)(first + 1u));
-
-	omci_engine_tick(fx.eng, 1000u + 902u);
-	read_pm(fx.eng);
-	uint8_t third = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &third, 1u, NULL),
-		 OMCI_OK);
-	CHECK_EQ(third, second);
-
-	omci_t_down(&fx);
-}
-
-static void test_resyncing_inside_a_window_changes_nothing(void)
-{
-	struct omci_t_fixture fx;
-
-	CHECK(omci_t_up(&fx));
-	make_pm_entity(fx.eng);
 
 	CHECK_EQ(send_sync(fx.eng, 0x0120u, 2026u, 8u, 15u, 12u, 34u, 56u),
 		 OMCI_OK);
-	read_pm(fx.eng);
-	uint8_t before = 0u;
+	omci_engine_tick(fx.eng, 1000u + 604u);
+	CHECK_EQ(end_time(&fx), 1u);
 
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &before, 1u, NULL),
+	CHECK_EQ(send_sync(fx.eng, 0x0121u, 2026u, 8u, 15u, 12u, 45u, 0u),
 		 OMCI_OK);
-
-	CHECK_EQ(send_sync(fx.eng, 0x0121u, 2026u, 8u, 15u, 12u, 38u, 56u),
-		 OMCI_OK);
-	read_pm(fx.eng);
-	uint8_t after = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &after, 1u, NULL),
-		 OMCI_OK);
-	CHECK_EQ(after, before);
-
-	CHECK_EQ(send_sync(fx.eng, 0x0122u, 2026u, 8u, 15u, 12u, 49u, 56u),
-		 OMCI_OK);
-	read_pm(fx.eng);
-	uint8_t crossed = 0u;
-
-	CHECK_EQ(omci_mib_attr_get(fx.mib, ME_ETH_PM_UP, PM_INSTANCE, 1u,
-				   &crossed, 1u, NULL),
-		 OMCI_OK);
-	CHECK_EQ(crossed, (uint8_t)(before + 1u));
+	CHECK_EQ(end_time(&fx), 0u);
 
 	omci_t_down(&fx);
 }
@@ -401,11 +361,11 @@ int main(void)
 	RUN(test_the_clock_refuses_impossible_stamps);
 
 	RUN(test_sync_time_is_acknowledged);
+	RUN(test_a_sync_without_a_date_sets_only_the_boundary);
 	RUN(test_an_impossible_stamp_is_refused_and_not_applied);
-	RUN(test_a_get_sees_the_interval_the_olt_is_counting);
-	RUN(test_a_mib_reset_forgets_the_time);
-	RUN(test_a_window_that_ends_advances_the_number_by_one);
-	RUN(test_resyncing_inside_a_window_changes_nothing);
+	RUN(test_a_sync_numbers_the_intervals_from_zero);
+	RUN(test_a_mib_reset_keeps_the_intervals);
+	RUN(test_every_sync_starts_the_numbering_again);
 
 	return OMCI_T_REPORT("clock");
 }

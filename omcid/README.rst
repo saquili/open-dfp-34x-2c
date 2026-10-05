@@ -13,8 +13,11 @@ OLT configures: GEM ports, bridges and the VLAN rules of the extended VLAN
 tagging operation. It notifies the OLT of alarms, among them those it
 judges itself: signal fail and degrade from the BIP errors of the
 downstream, and the optical alarms from the readings of the transceiver,
-whose levels it keeps in the ANI-G. It reports performance monitoring
-counts and the result of the optical line supervision test. It holds the
+whose levels it keeps in the ANI-G. It counts the performance monitoring
+of the Ethernet UNI, the bridge ports, the GEM ports and the downstream FEC
+in fifteen-minute intervals, which Synchronize time places, and raises the
+threshold crossing alerts that the threshold data ask for. It reports the
+result of the optical line supervision test. It holds the
 groups that the bridge snoops on the subscriber side to the OLT's multicast
 policy: the groups each profile allows, in full or for preview, the most
 groups and bandwidth, immediate leave and the IGMP timers, and static
@@ -76,10 +79,11 @@ through the daemon::
 
 ``make board`` builds the daemon for the board, with the backend of the
 board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
-"pon" generic netlink family for the ONU's state and T-CONTs, the "gem" link
-kind for the GEM ports, the bridge ``omcibr0`` with the host link ``sfp``, and
-tc flower rules for the VLAN rules and the multicast traps, tags and counts,
-which the switch carries out::
+"pon" generic netlink family for the ONU's state, T-CONTs and FEC counts, the
+"gem" link kind for the GEM ports, the ethtool statistics of the switch ports
+and the GEM ports for the performance monitoring, the bridge ``omcibr0`` with
+the host link ``sfp``, and tc flower rules for the VLAN rules and the
+multicast traps, tags and counts, which the switch carries out::
 
    omcid [-d DEVICE] [-r] [-v]...
 

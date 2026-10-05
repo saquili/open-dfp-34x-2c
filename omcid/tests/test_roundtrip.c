@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "me/pm.h"
 #include "me/table.h"
 #include "mib/store.h"
 #include "omci/attrmask.h"
@@ -124,9 +125,23 @@ static void expect_attr(struct omci_engine *eng, const struct tsv_class *t,
 	CHECK_MEM(&rsp[11], want, t->attrs[n - 1].size);
 }
 
+/* The counts of a PM entity are measured, and not compared. */
 static bool performance_monitoring(const struct tsv_class *t)
 {
-	return t->id == 321u || t->id == 322u;
+	return omci_pm_owns(t->id);
+}
+
+/*
+ * What an attribute written with a pattern reads back: the pattern, but
+ * for the clear bit of the extended PM's control block, an action that
+ * reads 0 again (G.988 9.3.32).
+ */
+static void read_back(uint8_t *dst, const struct tsv_class *t, unsigned int n,
+		      unsigned int salt)
+{
+	pattern(dst, t, n, salt);
+	if (t->id == 334u && n == 2u)
+		dst[6] &= 0x7Fu;
 }
 
 static void round_trip(struct omci_engine *eng, const struct tsv_class *t)
@@ -155,7 +170,7 @@ static void round_trip(struct omci_engine *eng, const struct tsv_class *t)
 		if (a->table || (performance_monitoring(t) && !a->create))
 			continue;
 		if (a->create)
-			pattern(want, t, n, 1u);
+			read_back(want, t, n, 1u);
 		else
 			memcpy(want, zero, sizeof(want));
 		expect_attr(eng, t, INSTANCE, n, want, "created");
@@ -208,7 +223,7 @@ static void round_trip(struct omci_engine *eng, const struct tsv_class *t)
 			if (rsp != NULL)
 				CHECK_EQ(rsp[8], R_OK);
 		}
-		pattern(want, t, n, 2u);
+		read_back(want, t, n, 2u);
 		expect_attr(eng, t, INSTANCE, n, want, "set");
 	}
 
@@ -271,7 +286,7 @@ static void round_trip(struct omci_engine *eng, const struct tsv_class *t)
 		if (a->table || (performance_monitoring(t) && !a->create))
 			continue;
 		if (a->create)
-			pattern(want, t, n, 3u);
+			read_back(want, t, n, 3u);
 		else
 			memcpy(want, zero, sizeof(want));
 		expect_attr(eng, t, INSTANCE, n, want, "recreated");
@@ -302,7 +317,7 @@ static void test_every_class_that_lists_create_round_trips(void)
 		classes++;
 	}
 	printf("  %u classes round-tripped\n", classes);
-	CHECK_EQ(classes, 16u);
+	CHECK_EQ(classes, 25u);
 
 	omci_t_down(&fx);
 }

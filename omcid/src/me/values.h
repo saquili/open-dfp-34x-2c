@@ -33,7 +33,9 @@ __must_check bool omci_me_value_allowed(uint16_t class_id, uint8_t attr_no,
  *
  * Return: false for an attribute the ONU changes on its own, which a Get
  * after a Set may find changed: alarm-reporting control, which ends by
- * itself (G.988 A.1.4.3).
+ * itself (G.988 A.1.4.3), and the control block of the Ethernet frame
+ * extended PM, whose clear bit is an action that reads 0 again (G.988
+ * 9.3.32).
  */
 __must_check bool omci_me_value_kept(uint16_t class_id, uint8_t attr_no);
 

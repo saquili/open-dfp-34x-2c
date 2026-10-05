@@ -67,21 +67,21 @@ int main(void)
 
 	omci_alarm_fini(al);
 
+	static uint64_t c[OMCI_HW_PORT_COUNTERS];
+
 	printf("\nwhich switch ports answer at all (ifInOctets, idx 0):\n");
 	for (unsigned int port = 0; port < 8u; port++) {
-		uint64_t v = 0;
-		const enum omci_status pr = omci_hw()->counter(port, 0u, &v);
+		const enum omci_status pr = omci_hw()->port_counters(port, c);
 
 		printf("  port %u: %s", port, pr == OMCI_OK ? "ok" : "REFUSED");
 		if (pr == OMCI_OK)
-			printf("  ifInOctets=%llu", (unsigned long long)v);
+			printf("  ifInOctets=%llu", (unsigned long long)c[0]);
 		printf("\n");
 	}
 
-	const unsigned int uni = omci_pm_port_of(322u, 0x0101u);
+	const unsigned int uni = 0u;
 
-	printf("\ncounters on the UNI port (%u), as the PM mapping resolves it:\n",
-	       uni);
+	printf("\ncounters on the UNI port (%u):\n", uni);
 	static const struct {
 		const char *name;
 		unsigned int idx;
@@ -96,16 +96,16 @@ int main(void)
 		{ "etherStatsTxPkts64Octets", 45 },
 	};
 	unsigned int read_ok = 0;
+	const bool ok = omci_hw()->port_counters(uni, c) == OMCI_OK;
 
 	for (unsigned int i = 0; i < ARRAY_SIZE(probe); i++) {
-		uint64_t v = 0;
-
-		if (omci_hw()->counter(uni, probe[i].idx, &v) != OMCI_OK) {
+		if (!ok) {
 			printf("  %-26s READ FAILED\n", probe[i].name);
 			continue;
 		}
 		read_ok++;
-		printf("  %-26s %llu\n", probe[i].name, (unsigned long long)v);
+		printf("  %-26s %llu\n", probe[i].name,
+		       (unsigned long long)c[probe[i].idx]);
 	}
 	printf("  %u/%u counters read\n", read_ok,
 	       (unsigned int)(ARRAY_SIZE(probe)));

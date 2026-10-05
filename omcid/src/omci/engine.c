@@ -487,7 +487,6 @@ static void handle_mib_reset(struct omci_engine *eng,
 	omci_alarm_reset_sequence(eng->alarm);
 
 	omci_clock_forget(&eng->clock);
-	omci_pm_set_wall(eng->pm, 0);
 
 	struct omci_hw_caps caps;
 	enum omci_status rc = omci_hw()->caps(&caps);
@@ -932,6 +931,7 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 	if (class_builds_bridge(req->class_id))
 		bridge = reprogram_bridge(eng);
 	reprogram_mcast(eng, req->class_id);
+	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	reply(eng, req,
 	      result_for(data_path_status(req->class_id, req->instance, gem,
@@ -1206,6 +1206,7 @@ static void handle_set(struct omci_engine *eng, const struct omci_frame *req)
 			unsupported |= bit;
 	}
 	reprogram_mcast(eng, req->class_id);
+	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	if (message_level != 0u) {
 		reply(eng, req, message_level, NULL, 0);
@@ -1433,12 +1434,29 @@ static void keep_levels(struct omci_engine *eng)
 }
 
 /*
+ * The threshold crossing alerts of the performance monitoring, which are
+ * reported as alarms of the PM entities (G.988 I.4).
+ */
+static void pm_alerts(struct omci_engine *eng)
+{
+	uint16_t inst[OMCI_ALARM_MAX_RAISED];
+	uint16_t cls;
+
+	for (size_t i = 0; (cls = omci_pm_class_at(i)) != 0u; i++)
+		for (uint8_t bit = 0; bit < OMCI_PM_TCA_BITS; bit++)
+			omci_alarm_raised(eng->alarm, cls, bit, inst,
+					  omci_pm_tca(eng->pm, cls, bit, inst,
+						      ARRAY_SIZE(inst)));
+}
+
+/*
  * Once a second: judge the alarms the hardware does not raise, and keep
  * the optical levels of the ANI-G current; take the lost multicast group
- * alarms of the multicast operations profiles from the multicast agent;
- * read the alarms, apply alarm-reporting control, and notify the OLT of
- * each entity whose alarms changed (G.988 A.1.4). Only an entity the MIB
- * holds is notified.
+ * alarms of the multicast operations profiles from the multicast agent and
+ * the threshold crossing alerts from the performance monitoring; read the
+ * alarms, apply alarm-reporting control, and notify the OLT of each entity
+ * whose alarms changed (G.988 A.1.4). Only an entity the MIB holds is
+ * notified.
  */
 static void alarms_tick(struct omci_engine *eng)
 {
@@ -1463,6 +1481,7 @@ static void alarms_tick(struct omci_engine *eng)
 	omci_alarm_raised(
 		eng->alarm, OMCI_MCAST_PROFILE, OMCI_MCAST_ALARM_LOST, lost,
 		omci_mcast_lost_profiles(eng->mcast, lost, ARRAY_SIZE(lost)));
+	pm_alerts(eng);
 
 	if (omci_alarm_poll(eng->alarm, NULL) != OMCI_OK) {
 		OMCI_DEBUG("alarm: the hardware did not answer");
@@ -1539,7 +1558,6 @@ void omci_engine_tick(struct omci_engine *eng, uint64_t now_sec)
 
 	eng->now_sec = now_sec;
 
-	omci_pm_set_wall(eng->pm, omci_clock_now(&eng->clock, now_sec));
 	(void)omci_pm_tick(eng->pm, now_sec);
 
 	if (!eng->alarms_judged || now_sec != eng->alarm_sec) {
@@ -1610,9 +1628,18 @@ static void handle_get_all_alarms_next(struct omci_engine *eng,
 	transmit(eng, frame);
 }
 
+/* What the success of Synchronize time says was set (G.988 A.3.34). */
+#define SYNC_TICK_SET 0u
+#define SYNC_DATE_AND_TICK_SET 1u
+
 /*
- * Synchronize time (G.988 A.3.33, A.3.34). A date that does not exist is
- * refused with a parameter error and leaves the clock unset.
+ * Synchronize time (G.988 A.3.33, A.3.34): the performance monitoring
+ * starts again, its intervals ending on the quarter hours of the time the
+ * OLT gives, or fifteen minutes from now when it gives none. With a date
+ * the clock is set too; without one, the year, month and day 0, only the
+ * time of day places the boundary. A date that does not exist, or a time
+ * of day that does not, is refused with a parameter error and changes
+ * nothing.
  */
 static void handle_sync_time(struct omci_engine *eng,
 			     const struct omci_frame *req)
@@ -1623,26 +1650,36 @@ static void handle_sync_time(struct omci_engine *eng,
 	const uint8_t hour = req->contents[4];
 	const uint8_t minute = req->contents[5];
 	const uint8_t second = req->contents[6];
+	const bool dated = year != 0u || month != 0u || day != 0u;
+	unsigned int offset;
+	uint8_t success;
 
-	if (omci_clock_sync(&eng->clock, year, month, day, hour, minute, second,
-			    eng->now_sec)) {
+	if (dated && omci_clock_sync(&eng->clock, year, month, day, hour,
+				     minute, second, eng->now_sec)) {
 		OMCI_INFO(
 			"sync-time: clock set to %04u-%02u-%02u %02u:%02u:%02u UTC",
 			year, month, day, hour, minute, second);
-
-		omci_pm_resync(eng->pm,
-			       omci_clock_now(&eng->clock, eng->now_sec));
+		offset = (unsigned int)(omci_clock_now(&eng->clock,
+						       eng->now_sec) %
+					OMCI_PM_INTERVAL_SEC);
+		success = SYNC_DATE_AND_TICK_SET;
+	} else if (!dated && hour <= 23u && minute <= 59u && second <= 60u) {
+		OMCI_INFO("sync-time: no date; time of day %02u:%02u:%02u",
+			  hour, minute, second);
+		offset = ((unsigned int)hour * 3600u +
+			  (unsigned int)minute * 60u + second) %
+			 OMCI_PM_INTERVAL_SEC;
+		success = SYNC_TICK_SET;
 	} else {
 		OMCI_WARN(
-			"sync-time: %04u-%02u-%02u %02u:%02u:%02u is not a real instant — refused, clock left unset",
+			"sync-time: %04u-%02u-%02u %02u:%02u:%02u is not a real instant — refused",
 			year, month, day, hour, minute, second);
 		reply(eng, req, RESULT_PARAM_ERROR, NULL, 0);
 		return;
 	}
 
-	const uint8_t success_results = 0u;
-
-	reply(eng, req, RESULT_OK, &success_results, sizeof(success_results));
+	omci_pm_synchronize(eng->pm, eng->now_sec, offset);
+	reply(eng, req, RESULT_OK, &success, sizeof(success));
 }
 
 /* Test (G.988 A.3.21, A.3.22): answer, then send the test result (A.3.39). */

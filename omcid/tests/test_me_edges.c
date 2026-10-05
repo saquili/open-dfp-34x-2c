@@ -359,21 +359,23 @@ static void test_the_tracking_slots_run_out_honestly(struct omci_mib *mib)
 {
 	struct omci_pm *pm = NULL;
 
+	const uint16_t over = OMCI_PM_MAX_INSTANCES;
+
 	CHECK_EQ(omci_pm_init(&pm, mib), OMCI_OK);
-	for (uint16_t i = 0; i < 17u; i++)
+	for (uint16_t i = 0; i <= over; i++)
 		CHECK_EQ(omci_mib_create(mib, 321u, i), OMCI_OK);
 
-	for (uint16_t i = 0; i < 16u; i++)
+	for (uint16_t i = 0; i < over; i++)
 		CHECK_EQ(omci_pm_refresh(pm, 321u, i, true), OMCI_OK);
 	omci_log_level_set(OMCI_LOG_WARN);
 	OMCI_T_CAPTURE_LOG(g_log, {
-		CHECK_EQ(omci_pm_refresh(pm, 321u, 16u, true), OMCI_ERR_NOMEM);
+		CHECK_EQ(omci_pm_refresh(pm, 321u, over, true), OMCI_ERR_NOMEM);
 	});
 	omci_log_level_set(OMCI_LOG_ERR);
-	CHECK(strstr(g_log, "pm: no room to track 321/16") != NULL);
+	CHECK(strstr(g_log, "pm: no room to count 321/64") != NULL);
 
 	omci_pm_forget(pm, 321u, 3u);
-	CHECK_EQ(omci_pm_refresh(pm, 321u, 16u, true), OMCI_OK);
+	CHECK_EQ(omci_pm_refresh(pm, 321u, over, true), OMCI_OK);
 	omci_pm_fini(pm);
 }
 

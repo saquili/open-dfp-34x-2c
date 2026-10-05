@@ -155,8 +155,8 @@ static void test_every_message_type_to_every_class(void)
 
 static void test_classes_the_daemon_does_not_hold(void)
 {
-	static const uint16_t unknown[] = { 0,	    1,	    3,	   24,	 50,
-					    158,    329,    334,   3000, 0x8000,
+	static const uint16_t unknown[] = { 0,	    1,	    3,	   23,	 50,
+					    158,    329,    335,   3000, 0x8000,
 					    0xea60, 0xfffd, 0xffff };
 	struct omci_t_fixture fx;
 

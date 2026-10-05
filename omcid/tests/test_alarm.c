@@ -302,19 +302,25 @@ static void test_the_seam_refuses_bad_arguments(void)
 	CHECK_EQ(omci_hw_alarms(NULL), OMCI_ERR_INVAL);
 	CHECK_EQ(omci_hw_pon(NULL), OMCI_ERR_INVAL);
 
-	uint64_t v = 12345u;
+	uint64_t v[OMCI_HW_PORT_COUNTERS];
 
-	CHECK_EQ(omci_hw_counter(0, 0, NULL), OMCI_ERR_INVAL);
-	CHECK_EQ(omci_hw_counter(999u, 0, &v), OMCI_ERR_INVAL);
-	CHECK_EQ(v, 0u);
-	CHECK_EQ(omci_hw_counter(0, 9999u, &v), OMCI_ERR_INVAL);
+	v[0] = 12345u;
+	CHECK_EQ(omci_hw_port_counters(0, NULL), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_hw_port_counters(999u, v), OMCI_ERR_INVAL);
+	CHECK_EQ(v[0], 0u);
 
 	omci_hw_counter_force(2u, 5u, 0x1122334455667788ull);
-	CHECK_EQ(omci_hw_counter(2u, 5u, &v), OMCI_OK);
-	CHECK(v == 0x1122334455667788ull);
-	CHECK_EQ(omci_hw_counter(2u, 6u, &v), OMCI_OK);
-	CHECK_EQ(v, 0u);
+	omci_hw_counter_force(2u, 9999u, 1u);
+	CHECK_EQ(omci_hw_port_counters(2u, v), OMCI_OK);
+	CHECK(v[5] == 0x1122334455667788ull);
+	CHECK_EQ(v[6], 0u);
 	omci_hw_counter_force(2u, 5u, 0u);
+
+	struct omci_hw_gem_counts g = { .tx_frames = 1u, .rx_payload = 2u };
+
+	CHECK_EQ(omci_hw_gem_counts(7u, NULL), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_hw_gem_counts(7u, &g), OMCI_ERR_HW);
+	CHECK_EQ(g.tx_frames, 0u);
 
 	omci_hw_alarm_force((enum omci_hw_alarm)99, true);
 	uint32_t mask = 0xFFu;

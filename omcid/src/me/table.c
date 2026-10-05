@@ -7,8 +7,8 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * c1fbc5e3696e61b3c0e9ca4e81719756d05c793148dddede76d987af254d1662
- * 30 classes, 286 attributes.
+ * a9e1427ba1389d650371b76f7fdeaeaabf23e28a5c1bffa8d6a7b7a7d350bcd4
+ * 39 classes, 372 attributes.
  */
 
 #include "me/table.h"
@@ -114,6 +114,41 @@ static const struct omci_me_attr attrs_class_11[] = {
 	  0 }, /* 15 */
 };
 
+/* Class 24: Ethernet performance monitoring history data */
+static const struct omci_me_attr attrs_class_24[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "FCS errors", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Excessive collision counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Late collision counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Frames too long", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Buffer overflows on receive", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Buffer overflows on transmit", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Single collision frame counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 9 */
+	{ "Multiple collisions frame counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
+	{ "SQE counter", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 11 */
+	{ "Deferred transmission counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 12 */
+	{ "Internal MAC transmit error counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 13 */
+	{ "Carrier sense error counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 14 */
+	{ "Alignment error counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 15 */
+	{ "Internal MAC receive error counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
+};
+
 /* Class 45: MAC bridge service profile */
 static const struct omci_me_attr attrs_class_45[] = {
 	{ "Spanning tree ind", 1,
@@ -190,6 +225,25 @@ static const struct omci_me_attr attrs_class_47[] = {
 	  0 }, /* 14 */
 };
 
+/* Class 52: MAC bridge port performance monitoring history data */
+static const struct omci_me_attr attrs_class_52[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Forwarded frame counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Delay exceeded discard counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "MTU exceeded discard counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Received frame counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Received and discarded counter", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
 /* Class 84: VLAN tagging filter data */
 static const struct omci_me_attr attrs_class_84[] = {
 	{ "VLAN filter list", 24,
@@ -200,6 +254,17 @@ static const struct omci_me_attr attrs_class_84[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
 	{ "Number of entries", 1,
 	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+};
+
+/* Class 89: Ethernet performance monitoring history data 2 */
+static const struct omci_me_attr attrs_class_89[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "PPPoE filtered frame counter", 4, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
 };
 
@@ -478,6 +543,56 @@ static const struct omci_me_attr attrs_class_272[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
 };
 
+/* Class 273: Threshold data 1 */
+static const struct omci_me_attr attrs_class_273[] = {
+	{ "Threshold value 1", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold value 2", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Threshold value 3", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Threshold value 4", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Threshold value 5", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Threshold value 6", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Threshold value 7", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
+/* Class 274: Threshold data 2 */
+static const struct omci_me_attr attrs_class_274[] = {
+	{ "Threshold value 8", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold value 9", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Threshold value 10", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Threshold value 11", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Threshold value 12", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Threshold value 13", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Threshold value 14", 4,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
 /* Class 277: Priority queue */
 static const struct omci_me_attr attrs_class_277[] = {
 	{ "Queue configuration option", 1, OMCI_ME_ACC_READ,
@@ -592,6 +707,38 @@ static const struct omci_me_attr attrs_class_287[] = {
 	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE }, /* 2 */
 };
 
+/* Class 296: Ethernet performance monitoring history data 3 */
+static const struct omci_me_attr attrs_class_296[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Drop events", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Octets", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Packets", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Broadcast packets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Multicast packets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "Undersize packets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Fragments", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 9 */
+	{ "Jabbers", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 10 */
+	{ "Packets 64 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 11 */
+	{ "Packets 65 to 127 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 12 */
+	{ "Packets 128 to 255 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 13 */
+	{ "Packets 256 to 511 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 14 */
+	{ "Packets 512 to 1023 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 15 */
+	{ "Packets 1024 to 1518 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
+};
+
 /* Class 309: Multicast operations profile */
 static const struct omci_me_attr attrs_class_309[] = {
 	{ "IGMP version", 1,
@@ -679,6 +826,24 @@ static const struct omci_me_attr attrs_class_311[] = {
 	  OMCI_ME_ATTR_TABLE }, /* 6 */
 };
 
+/* Class 312: FEC performance monitoring history data */
+static const struct omci_me_attr attrs_class_312[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Corrected bytes", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Corrected code words", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Uncorrectable code words", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Total code words", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "FEC seconds", 2, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 7 */
+};
+
 /* Class 321: Ethernet frame performance monitoring history data downstream */
 static const struct omci_me_attr attrs_class_321[] = {
 	{ "Interval end time", 1, OMCI_ME_ACC_READ,
@@ -747,6 +912,58 @@ static const struct omci_me_attr attrs_class_322[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
 };
 
+/* Class 334: Ethernet frame extended PM */
+static const struct omci_me_attr attrs_class_334[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Control block", 16,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Drop events", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Octets", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Frames", 4, OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Broadcast frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Multicast frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 7 */
+	{ "CRC errored frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	{ "Undersize frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 9 */
+	{ "Oversize frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
+	{ "Frames 64 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 11 */
+	{ "Frames 65 to 127 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 12 */
+	{ "Frames 128 to 255 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 13 */
+	{ "Frames 256 to 511 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 14 */
+	{ "Frames 512 to 1023 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 15 */
+	{ "Frames 1024 to 1518 octets", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 16 */
+};
+
+/* Class 341: GEM port network CTP performance monitoring history data */
+static const struct omci_me_attr attrs_class_341[] = {
+	{ "Interval end time", 1, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
+	{ "Threshold data 1/2 ID", 2,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
+	  OMCI_ME_ATTR_MANDATORY }, /* 2 */
+	{ "Transmitted GEM frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
+	{ "Received GEM frames", 4, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
+	{ "Received payload bytes", 8, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Transmitted payload bytes", 8, OMCI_ME_ACC_READ,
+	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
+	{ "Encryption key errors", 4, OMCI_ME_ACC_READ, 0 }, /* 7 */
+};
+
 const struct omci_me_class omci_me_classes[] = {
 	{
 		.class_id = 2,
@@ -799,6 +1016,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_11,
 	},
 	{
+		.class_id = 24,
+		.name = "Ethernet performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00003fffu,
+		.attr_count = 16,
+		.attrs = attrs_class_24,
+	},
+	{
 		.class_id = 45,
 		.name = "MAC bridge service profile",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -819,6 +1046,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_47,
 	},
 	{
+		.class_id = 52,
+		.name = "MAC bridge port performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00000016u,
+		.attr_count = 7,
+		.attrs = attrs_class_52,
+	},
+	{
 		.class_id = 84,
 		.name = "VLAN tagging filter data",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -827,6 +1064,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x00000000u,
 		.attr_count = 3,
 		.attrs = attrs_class_84,
+	},
+	{
+		.class_id = 89,
+		.name = "Ethernet performance monitoring history data 2",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00000001u,
+		.attr_count = 3,
+		.attrs = attrs_class_89,
 	},
 	{
 		.class_id = 130,
@@ -949,6 +1196,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_272,
 	},
 	{
+		.class_id = 273,
+		.name = "Threshold data 1",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 7,
+		.attrs = attrs_class_273,
+	},
+	{
+		.class_id = 274,
+		.name = "Threshold data 2",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get */
+		.actions = 0x00000350u,
+		.alarms = 0x00000000u,
+		.attr_count = 7,
+		.attrs = attrs_class_274,
+	},
+	{
 		.class_id = 277,
 		.name = "Priority queue",
 		.creator = OMCI_ME_CREATED_BY_ONU,
@@ -999,6 +1266,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_287,
 	},
 	{
+		.class_id = 296,
+		.name = "Ethernet performance monitoring history data 3",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000000fu,
+		.attr_count = 16,
+		.attrs = attrs_class_296,
+	},
+	{
 		.class_id = 309,
 		.name = "Multicast operations profile",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -1029,6 +1306,16 @@ const struct omci_me_class omci_me_classes[] = {
 		.attrs = attrs_class_311,
 	},
 	{
+		.class_id = 312,
+		.name = "FEC performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00000017u,
+		.attr_count = 7,
+		.attrs = attrs_class_312,
+	},
+	{
 		.class_id = 321,
 		.name = "Ethernet frame performance monitoring history data downstream",
 		.creator = OMCI_ME_CREATED_BY_OLT,
@@ -1047,6 +1334,26 @@ const struct omci_me_class omci_me_classes[] = {
 		.alarms = 0x0000000fu,
 		.attr_count = 16,
 		.attrs = attrs_class_322,
+	},
+	{
+		.class_id = 334,
+		.name = "Ethernet frame extended PM",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x0000001eu,
+		.attr_count = 16,
+		.attrs = attrs_class_334,
+	},
+	{
+		.class_id = 341,
+		.name = "GEM port network CTP performance monitoring history data",
+		.creator = OMCI_ME_CREATED_BY_OLT,
+		/* Create, Delete, Set, Get, Get Current Data */
+		.actions = 0x10000350u,
+		.alarms = 0x00000002u,
+		.attr_count = 7,
+		.attrs = attrs_class_341,
 	},
 };
 

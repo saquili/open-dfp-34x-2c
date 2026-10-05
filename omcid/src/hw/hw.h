@@ -389,16 +389,29 @@ void omci_hw_alarm_fail_next(bool fail);
  * struct omci_hw_pon - The state of the PON receiver.
  * @bip_errors: the downstream BIP errors counted since the receiver came up,
  *	in bits
+ * @fec_corrected_bytes: the downstream bytes FEC corrected since the
+ *	receiver came up
+ * @fec_corrected_codewords: the downstream codewords FEC corrected, likewise
+ * @fec_uncorrectable_codewords: the downstream codewords FEC could not
+ *	correct, likewise
+ * @fec_codewords: the downstream codewords received while the downstream
+ *	carried FEC, likewise
  * @operating: the ONU is in operation, the state O5
  * @bip_valid: @bip_errors was read
+ * @fec_valid: the four FEC counts were read
  * @power_level: the level the transmitter is at, as Serial_Number_ONU
  *	codes it (G.984.3 9.2.4.1): 2 high, 1 medium, 0 low
  * @power_level_valid: @power_level was read
  */
 struct omci_hw_pon {
 	uint64_t bip_errors;
+	uint64_t fec_corrected_bytes;
+	uint64_t fec_corrected_codewords;
+	uint64_t fec_uncorrectable_codewords;
+	uint64_t fec_codewords;
 	bool operating;
 	bool bip_valid;
+	bool fec_valid;
 	uint8_t power_level;
 	bool power_level_valid;
 };
@@ -418,19 +431,27 @@ void omci_hw_pon_force(bool operating, bool bip_valid, uint64_t bip_errors);
 
 void omci_hw_pon_level_force(bool valid, uint8_t level);
 
+void omci_hw_pon_fec_force(bool valid, uint64_t corrected_bytes,
+			   uint64_t corrected_codewords,
+			   uint64_t uncorrectable_codewords,
+			   uint64_t codewords);
+
 void omci_hw_pon_fail_next(bool fail);
 #endif
 
+/* The counters of a switch port, numbered in the order the switch keeps them. */
+#define OMCI_HW_PORT_COUNTERS 70u
+
 /**
- * omci_hw_counter() - Read a counter of the switch (host backend).
+ * omci_hw_port_counters() - Read every counter of a switch port (host
+ *	backend).
  * @port: the switch port
- * @idx: the counter, in the order the switch keeps them
- * @out: its value
+ * @out: the counters, by their number; one the switch does not keep is 0
  *
  * Return: %OMCI_OK, or the failure of the read.
  */
-__must_check enum omci_status omci_hw_counter(unsigned int port,
-					      unsigned int idx, uint64_t *out);
+__must_check enum omci_status
+omci_hw_port_counters(unsigned int port, uint64_t out[OMCI_HW_PORT_COUNTERS]);
 
 #if defined(OMCID_HW_STUB)
 
@@ -438,6 +459,40 @@ __must_check enum omci_status omci_hw_counter(unsigned int port,
 void omci_hw_counter_force(unsigned int port, unsigned int idx, uint64_t value);
 
 void omci_hw_counter_fail_next(bool fail);
+#endif
+
+/**
+ * struct omci_hw_gem_counts - What a GEM port has counted since it was made.
+ * @tx_frames: the GEM frames it sent, a fragment counting as one
+ * @rx_frames: the GEM frames it received, likewise
+ * @tx_payload: the payload bytes it sent, the GEM headers left out
+ * @rx_payload: the payload bytes it received, likewise
+ */
+struct omci_hw_gem_counts {
+	uint64_t tx_frames;
+	uint64_t rx_frames;
+	uint64_t tx_payload;
+	uint64_t rx_payload;
+};
+
+/**
+ * omci_hw_gem_counts() - Read the counts of a GEM port (host backend).
+ * @port_id: the GEM port
+ * @out: its counts
+ *
+ * Return: %OMCI_OK; %OMCI_ERR_HW when there is no such port or it could not
+ * be read.
+ */
+__must_check enum omci_status
+omci_hw_gem_counts(uint16_t port_id, struct omci_hw_gem_counts *out);
+
+#if defined(OMCID_HW_STUB)
+
+/* Test hooks of the host backend for the counts of the GEM ports. */
+void omci_hw_gem_counts_force(uint16_t port_id,
+			      const struct omci_hw_gem_counts *counts);
+
+void omci_hw_gem_counts_reset(void);
 #endif
 
 /**
@@ -790,7 +845,8 @@ void omci_hw_mcast_reset(void);
  * @bridge_apply: replace the bridges
  * @alarms: read the alarms
  * @pon: read the state of the PON receiver
- * @counter: read a counter of the switch
+ * @port_counters: read every counter of a switch port
+ * @gem_counts: read the counts of a GEM port; NULL in a backend without them
  * @optics: read the transceiver
  * @optics_limits: read the transceiver's thresholds; NULL in a backend
  *	without them
@@ -831,8 +887,10 @@ struct omci_hw_ops {
 					 struct omci_hw_reject *rejected);
 	enum omci_status (*alarms)(uint32_t *mask);
 	enum omci_status (*pon)(struct omci_hw_pon *out);
-	enum omci_status (*counter)(unsigned int port, unsigned int idx,
-				    uint64_t *out);
+	enum omci_status (*port_counters)(unsigned int port,
+					  uint64_t out[OMCI_HW_PORT_COUNTERS]);
+	enum omci_status (*gem_counts)(uint16_t port_id,
+				       struct omci_hw_gem_counts *out);
 	enum omci_status (*optics)(struct omci_hw_optics *out);
 	enum omci_status (*optics_limits)(struct omci_hw_optics_limits *out);
 	void (*set_router)(bool on);

@@ -361,6 +361,17 @@ void omci_hw_pon_level_force(bool valid, uint8_t level)
 	g_pon.power_level = level;
 }
 
+void omci_hw_pon_fec_force(bool valid, uint64_t corrected_bytes,
+			   uint64_t corrected_codewords,
+			   uint64_t uncorrectable_codewords, uint64_t codewords)
+{
+	g_pon.fec_valid = valid;
+	g_pon.fec_corrected_bytes = corrected_bytes;
+	g_pon.fec_corrected_codewords = corrected_codewords;
+	g_pon.fec_uncorrectable_codewords = uncorrectable_codewords;
+	g_pon.fec_codewords = codewords;
+}
+
 #define STUB_PORTS 8u
 #define STUB_CTRS 80u
 static uint64_t g_ctr[STUB_PORTS][STUB_CTRS];
@@ -372,17 +383,18 @@ void omci_hw_counter_fail_next(bool fail)
 	g_ctr_fail = fail;
 }
 
-enum omci_status omci_hw_counter(unsigned int port, unsigned int idx,
-				 uint64_t *out)
+enum omci_status omci_hw_port_counters(unsigned int port,
+				       uint64_t out[OMCI_HW_PORT_COUNTERS])
 {
 	if (out == NULL)
 		return OMCI_ERR_INVAL;
-	*out = 0;
+	omci_wire_fill(out, 0, OMCI_HW_PORT_COUNTERS * sizeof(out[0]));
 	if (g_ctr_fail)
 		return OMCI_ERR_HW;
-	if (port >= STUB_PORTS || idx >= STUB_CTRS)
+	if (port >= STUB_PORTS)
 		return OMCI_ERR_INVAL;
-	*out = g_ctr[port][idx];
+	for (unsigned int i = 0; i < OMCI_HW_PORT_COUNTERS; i++)
+		out[i] = g_ctr[port][i];
 	return OMCI_OK;
 }
 
@@ -390,6 +402,55 @@ void omci_hw_counter_force(unsigned int port, unsigned int idx, uint64_t value)
 {
 	if (port < STUB_PORTS && idx < STUB_CTRS)
 		g_ctr[port][idx] = value;
+}
+
+/* The GEM ports the host backend counts for, by Port-ID. */
+#define STUB_GEM_COUNTS 8u
+
+static struct {
+	bool used;
+	uint16_t port_id;
+	struct omci_hw_gem_counts counts;
+} g_gem_counts[STUB_GEM_COUNTS];
+
+enum omci_status omci_hw_gem_counts(uint16_t port_id,
+				    struct omci_hw_gem_counts *out)
+{
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	omci_wire_fill(out, 0, sizeof(*out));
+	for (unsigned int i = 0; i < STUB_GEM_COUNTS; i++)
+		if (g_gem_counts[i].used &&
+		    g_gem_counts[i].port_id == port_id) {
+			*out = g_gem_counts[i].counts;
+			return OMCI_OK;
+		}
+	return OMCI_ERR_HW;
+}
+
+void omci_hw_gem_counts_force(uint16_t port_id,
+			      const struct omci_hw_gem_counts *counts)
+{
+	unsigned int i, free_at = STUB_GEM_COUNTS;
+
+	for (i = 0; i < STUB_GEM_COUNTS; i++) {
+		if (g_gem_counts[i].used && g_gem_counts[i].port_id == port_id)
+			break;
+		if (!g_gem_counts[i].used && free_at == STUB_GEM_COUNTS)
+			free_at = i;
+	}
+	if (i == STUB_GEM_COUNTS)
+		i = free_at;
+	if (i == STUB_GEM_COUNTS)
+		return;
+	g_gem_counts[i].used = true;
+	g_gem_counts[i].port_id = port_id;
+	g_gem_counts[i].counts = *counts;
+}
+
+void omci_hw_gem_counts_reset(void)
+{
+	omci_wire_fill(g_gem_counts, 0, sizeof(g_gem_counts));
 }
 
 #define STUB_OPTIC_TEMPERATURE 12405u
@@ -817,7 +878,8 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.bridge_apply = omci_hw_bridge_apply,
 	.alarms = omci_hw_alarms,
 	.pon = omci_hw_pon,
-	.counter = omci_hw_counter,
+	.port_counters = omci_hw_port_counters,
+	.gem_counts = omci_hw_gem_counts,
 	.optics = omci_hw_optics,
 	.optics_limits = omci_hw_optics_limits,
 	.mcast_port = omci_hw_mcast_port,

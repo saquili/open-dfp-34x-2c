@@ -23,7 +23,10 @@
 #define OMCI_ALARM_BITMAP_LEN 28u
 
 /* The most entities that can carry an alarm at the same time. */
-#define OMCI_ALARM_MAX_ENTITIES 8u
+#define OMCI_ALARM_MAX_ENTITIES 32u
+
+/* The most entities raised by omci_alarm_raised() at the same time. */
+#define OMCI_ALARM_MAX_RAISED 64u
 
 /* The ANI-G, which carries the alarms of the PON side, and its one instance. */
 #define OMCI_ALARM_ANI_G 263u
@@ -129,7 +132,8 @@ __must_check enum omci_status omci_alarm_poll(struct omci_alarm *al,
  * @n: how many
  *
  * The next omci_alarm_poll() reports them with the others; at most
- * %OMCI_ALARM_MAX_ENTITIES are raised at once.
+ * %OMCI_ALARM_MAX_RAISED are raised at once, and the entities beyond
+ * %OMCI_ALARM_MAX_ENTITIES are not reported.
  */
 void omci_alarm_raised(struct omci_alarm *al, uint16_t class_id, uint8_t bit,
 		       const uint16_t *instances, size_t n);

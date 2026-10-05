@@ -1538,10 +1538,25 @@ static enum omci_status kernel_pon(struct omci_hw_pon *out)
 	struct pon_dev_attrs a;
 	uint8_t buf[4096] __aligned(4);
 	const uint8_t *p, *end;
+	unsigned int i, fec_have = 0;
 
 	if (out == NULL)
 		return OMCI_ERR_INVAL;
 	memset(out, 0, sizeof(*out));
+
+	/* The four counts of the downstream FEC, all or none. */
+	const struct {
+		uint16_t type;
+		uint64_t *out;
+	} fec[] = {
+		{ PON_A_DEV_STATS_FEC_CORRECTED_BYTES,
+		  &out->fec_corrected_bytes },
+		{ PON_A_DEV_STATS_FEC_CORRECTED_CODEWORDS,
+		  &out->fec_corrected_codewords },
+		{ PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS,
+		  &out->fec_uncorrectable_codewords },
+		{ PON_A_DEV_STATS_FEC_CODEWORDS, &out->fec_codewords },
+	};
 
 	if (pon_dev_get(&a, buf, sizeof(buf)))
 		return OMCI_ERR_HW;
@@ -1566,8 +1581,14 @@ static enum omci_status kernel_pon(struct omci_hw_pon *out)
 			out->bip_valid = nla_uint64(p + NLA_HDRLEN_,
 						    alen - NLA_HDRLEN_,
 						    &out->bip_errors);
+		for (i = 0; i < ARRAY_SIZE(fec); i++)
+			if (atype == fec[i].type &&
+			    nla_uint64(p + NLA_HDRLEN_, alen - NLA_HDRLEN_,
+				       fec[i].out))
+				fec_have |= 1u << i;
 		p += NL_ALIGN(alen);
 	}
+	out->fec_valid = fec_have == (1u << ARRAY_SIZE(fec)) - 1u;
 	return OMCI_OK;
 }
 
@@ -1625,7 +1646,6 @@ static const struct {
 
 /* The statistics of the last interface read: names and values. */
 struct counter_cache {
-	unsigned int port;
 	bool valid;
 	unsigned int n;
 	struct ethtool_gstrings *strings;
@@ -1675,10 +1695,9 @@ static void counter_cache_drop(void)
 	g_ctr.valid = false;
 }
 
-/* Read every statistic of a port's interface, names and values. */
-static int counter_cache_load(unsigned int port)
+/* Read every statistic of an interface, names and values. */
+static int counter_cache_load(const char *ifname)
 {
-	const char *ifname = port_ifname(port);
 	struct ethtool_sset_info info_hdr;
 	struct {
 		struct ethtool_sset_info hdr;
@@ -1729,31 +1748,15 @@ static int counter_cache_load(unsigned int port)
 		return err;
 	}
 
-	g_ctr.port = port;
 	g_ctr.n = n;
 	g_ctr.valid = true;
 	return 0;
 }
 
-/* Read one counter: every call reads the statistics afresh. */
-static enum omci_status kernel_counter(unsigned int port, unsigned int idx,
-				       uint64_t *out)
+/* The value of the statistic of the last interface read with a name. */
+static bool counter_named(const char *name, uint64_t *out)
 {
-	const char *name = NULL;
 	unsigned int i;
-
-	if (out == NULL)
-		return OMCI_ERR_INVAL;
-	*out = 0;
-
-	for (i = 0; i < ARRAY_SIZE(COUNTERS); i++)
-		if (COUNTERS[i].idx == idx)
-			name = COUNTERS[i].name;
-	if (!name)
-		return OMCI_ERR_INVAL;
-
-	if (counter_cache_load(port))
-		return OMCI_ERR_HW;
 
 	for (i = 0; i < g_ctr.n; i++) {
 		const char *s = (const char *)g_ctr.strings->data +
@@ -1762,9 +1765,61 @@ static enum omci_status kernel_counter(unsigned int port, unsigned int idx,
 		if (strncmp(s, name, ETH_GSTRING_LEN))
 			continue;
 		*out = g_ctr.stats->data[i];
-		return OMCI_OK;
+		return true;
 	}
-	return OMCI_ERR_HW;
+	return false;
+}
+
+/* Read every counter of a port at once: the statistics are read afresh. */
+static enum omci_status
+kernel_port_counters(unsigned int port, uint64_t out[OMCI_HW_PORT_COUNTERS])
+{
+	unsigned int i;
+
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	memset(out, 0, OMCI_HW_PORT_COUNTERS * sizeof(out[0]));
+
+	if (counter_cache_load(port_ifname(port)))
+		return OMCI_ERR_HW;
+
+	for (i = 0; i < ARRAY_SIZE(COUNTERS); i++)
+		if (COUNTERS[i].idx < OMCI_HW_PORT_COUNTERS &&
+		    !counter_named(COUNTERS[i].name, &out[COUNTERS[i].idx]))
+			return OMCI_ERR_HW;
+	return OMCI_OK;
+}
+
+/* The bytes of the GEM header, which the count of octets sent includes. */
+#define GEM_HEADER_BYTES 5u
+
+/*
+ * The counts of a GEM port, the ethtool statistics of its interface. The
+ * octets sent count every GEM frame whole, its header included, and the
+ * octets received the payload alone (Documentation/networking/pon.rst).
+ */
+static enum omci_status kernel_gem_counts(uint16_t port_id,
+					  struct omci_hw_gem_counts *out)
+{
+	char name[IFNAMSIZ];
+	uint64_t tx_octets = 0;
+
+	if (out == NULL)
+		return OMCI_ERR_INVAL;
+	memset(out, 0, sizeof(*out));
+
+	snprintf(name, sizeof(name), GEM_NAME_FMT, port_id);
+	if (counter_cache_load(name))
+		return OMCI_ERR_HW;
+	if (!counter_named("pon_tx_octets", &tx_octets) ||
+	    !counter_named("pon_tx_frames", &out->tx_frames) ||
+	    !counter_named("pon_rx_frames", &out->rx_frames) ||
+	    !counter_named("pon_rx_octets", &out->rx_payload))
+		return OMCI_ERR_HW;
+
+	if (tx_octets > out->tx_frames * GEM_HEADER_BYTES)
+		out->tx_payload = tx_octets - out->tx_frames * GEM_HEADER_BYTES;
+	return OMCI_OK;
 }
 
 /* The hwmon device of the optics. */
@@ -3207,7 +3262,8 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.bridge_apply = kernel_bridge_apply,
 	.alarms = kernel_alarms,
 	.pon = kernel_pon,
-	.counter = kernel_counter,
+	.port_counters = kernel_port_counters,
+	.gem_counts = kernel_gem_counts,
 	.optics = kernel_optics,
 	.optics_limits = kernel_optics_limits,
 	.set_router = omci_hw_kernel_router,

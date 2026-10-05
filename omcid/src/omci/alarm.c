@@ -108,7 +108,7 @@ struct omci_alarm {
 		uint16_t class_id;
 		uint16_t instance;
 		uint8_t bit;
-	} raised[OMCI_ALARM_MAX_ENTITIES];
+	} raised[OMCI_ALARM_MAX_RAISED];
 	uint8_t raised_n;
 };
 
@@ -361,8 +361,7 @@ void omci_alarm_raised(struct omci_alarm *al, uint16_t class_id, uint8_t bit,
 		if (al->raised[i].class_id == class_id &&
 		    al->raised[i].bit == bit)
 			al->raised[i] = al->raised[--al->raised_n];
-	for (size_t k = 0; k < n && al->raised_n < OMCI_ALARM_MAX_ENTITIES;
-	     k++) {
+	for (size_t k = 0; k < n && al->raised_n < OMCI_ALARM_MAX_RAISED; k++) {
 		al->raised[al->raised_n].class_id = class_id;
 		al->raised[al->raised_n].instance = instances[k];
 		al->raised[al->raised_n].bit = bit;
