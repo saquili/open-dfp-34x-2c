@@ -52,9 +52,10 @@ the configuration of the board. The settings of it that this page relies on:
    * - ``# CONFIG_MIPS_FP_SUPPORT is not set``
      - The kernel has no floating-point support, and the CPU probe does not
        touch coprocessor 1.
-   * - ``CONFIG_KEXEC=y``, ``# CONFIG_CRASH_DUMP is not set``
-     - kexec builds (it does not start a new kernel on the board).
-       ``CRASH_DUMP`` stays off because it would move the load address.
+   * - ``# CONFIG_KEXEC is not set``
+     - kexec builds for the platform but does not start a new kernel on the
+       board (see "kexec"), so the board's configuration leaves it out, and with
+       it ``CRASH_DUMP``, which would move the load address.
    * - ``CONFIG_MTD_ROM=y``, ``CONFIG_MTD_PHYSMAP_OF=y``, ``CONFIG_MTD_BLOCK=y``
      - The flash window as a read-only MTD device and its partitions as MTD and
        block devices.
