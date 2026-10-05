@@ -233,7 +233,10 @@ The boot script
        are the addresses the bench tries (``flashing.rst``, "What you need"); it
        tries the second first, because that one answers whether or not a bridge
        has been built on the link (``tools/bench/README.rst``). The host has to
-       have the VLAN on its interface too;
+       have the VLAN on its interface too. No frame of that VLAN crosses the
+       PON in either direction: the switch sends those that come in on ``sfp``
+       to the CPU alone, and drops those that come in on ``pon``, so the
+       network behind the OLT neither sees the management link nor reaches it;
     #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear -s``
        (keys only);
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
