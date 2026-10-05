@@ -2167,6 +2167,72 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	return 0;
 }
 
+static int rtl9602c_flower_tag_check(const struct flow_match_vlan *m,
+				     struct netlink_ext_ack *extack);
+
+/*
+ * A C-tag an ACL rule names: 802.1Q, a VID from 1 to 4094 and the priority if
+ * the rule names it, into @m. A frame without a C-tag reads 0 in the field, so
+ * VID 0 would take untagged frames too. The rule matches the tag and the
+ * addresses only: what the other fields hold for a tagged frame is not
+ * verified.
+ */
+static int rtl9602c_acl_ctag(struct flow_rule *rule,
+			     struct rtl9602c_acl_match *m,
+			     struct netlink_ext_ack *extack)
+{
+	struct flow_match_vlan vlan;
+	u16 val, care;
+	int err;
+
+	if (rule->match.dissector->used_keys &
+	    ~(BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_BASIC) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_ETH_ADDRS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN))) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "an ACL rule on a C-tag matches the tag and the addresses only");
+		return -EOPNOTSUPP;
+	}
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_BASIC)) {
+		struct flow_match_basic basic;
+
+		flow_rule_match_basic(rule, &basic);
+		if (basic.mask->n_proto || basic.mask->ip_proto) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "an ACL rule on a C-tag matches the tag and the addresses only");
+			return -EOPNOTSUPP;
+		}
+	}
+
+	flow_rule_match_vlan(rule, &vlan);
+	err = rtl9602c_flower_tag_check(&vlan, extack);
+	if (err)
+		return err;
+	if (vlan.mask->vlan_tpid != htons(0xffff) ||
+	    vlan.key->vlan_tpid != htons(ETH_P_8021Q) ||
+	    vlan.mask->vlan_eth_type) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "an ACL rule matches one 802.1Q tag, and not what follows it");
+		return -EOPNOTSUPP;
+	}
+	if (vlan.mask->vlan_id != VLAN_VID_MASK || !vlan.key->vlan_id ||
+	    vlan.key->vlan_id == VLAN_VID_MASK) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "an ACL rule names a VID from 1 to 4094: a frame without a C-tag reads VID 0");
+		return -EOPNOTSUPP;
+	}
+
+	val = vlan.key->vlan_id;
+	care = VLAN_VID_MASK;
+	if (vlan.mask->vlan_priority) {
+		val |= vlan.key->vlan_priority << VLAN_PRIO_SHIFT;
+		care |= VLAN_PRIO_MASK;
+	}
+	rtl9602c_acl_push(m, RTL9602C_ACL_TMPL_FIELD_CTAG, val, care);
+	return 0;
+}
+
 /*
  * A flower rule whose one action is drop, trap or pass, as one ACL rule; a rule
  * that passes decides nothing and only counts its frames. Each field
@@ -2193,10 +2259,17 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV4_ADDRS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP))) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "this ACL matches addresses, ethertype, IP protocol, IPv4 addresses, L4 ports and ICMP types");
+				   "this ACL matches addresses, a C-tag, ethertype, IP protocol, IPv4 addresses, L4 ports and ICMP types");
 		return -EOPNOTSUPP;
+	}
+
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN)) {
+		err = rtl9602c_acl_ctag(rule, &m, extack);
+		if (err)
+			return err;
 	}
 
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ETH_ADDRS)) {

@@ -444,10 +444,10 @@ Rules, templates and lookup
      - M
      - 100 frames each way per case. A drop on ``sfp`` for EtherType
        ``0x88b5`` kept every frame from the host side and none from the PON; a
-       drop on ``pon`` the reverse. When the driver compared only the bit of
-       the rule's own port, a drop on VLAN 3005, on ``sfp`` or on ``pon`` (in
-       a test build), kept the frames of both ways. Ports 1 and 3 carry no
-       traffic that could test theirs.
+       drop on ``pon`` the reverse; so did drops on the C-tag 3005. When the
+       driver compared only the bit of the rule's own port, a drop on VLAN
+       3005, on ``sfp`` or on ``pon`` (in a test build), kept the frames of
+       both ways. Ports 1 and 3 carry no traffic that could test theirs.
    * - ``RTL9602C_ACL_TMPL_FIELD`` (``0x015008``) holds the templates: slot k of
        template t is a 7-bit field code at bit 7(n mod 4) of word n/4, where n =
        8t + k; bits 31:28 of each word are unused. ``RTL9602C_ACL_TMPL_COUNT``
@@ -487,6 +487,10 @@ The field codes that the driver writes into the template slots:
    * - ``0x07``
      - ``RTL9602C_ACL_TMPL_FIELD_ETHERTYPE``
      - The EtherType.
+   * - ``0x09``
+     - ``RTL9602C_ACL_TMPL_FIELD_CTAG``
+     - The C-tag: the VID in bits 11:0 and the priority in bits 15:13, all 0
+       for a frame without a C-tag.
    * - ``0x10``, ``0x11``
      - ``RTL9602C_ACL_TMPL_FIELD_IPV4_SRC0`` + 0 and 1
      - The IPv4 source address, bits 15:0 and 31:16.
@@ -520,6 +524,14 @@ The field codes that the driver writes into the template slots:
        field: ``protocol``, ``ip_proto``, ``dst_mac``, ``src_mac``, ``dst_ip``
        and ``src_ip`` each dropped the target and passed the control, and so did
        ``dst_port`` and ``src_port`` through the field selectors.
+   * - ``RTL9602C_ACL_TMPL_FIELD_CTAG`` holds the C-tag's VID in bits 11:0 and
+       its priority in bits 15:13, and 0 for a frame without a C-tag.
+     - M
+     - Count-only rules on ``sfp``, frames from the host side: the VID 4094
+       matched 50 broadcasts of VLAN 4094 and the VID 4093 none; the VID 410
+       matched 50 of VLAN 410, also with priority 0 named, and none with
+       priority 5; the VID 0 matched 100 untagged frames, the VIDs 1 and 4095
+       none. Of the codes 7 to 15, only 9 matched VLAN 4094.
    * - ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH`` holds, for an MLD message, 58
        (ICMPv6) and not the hop-by-hop header that comes first, and the traffic
        class 0 above it.
@@ -705,7 +717,9 @@ to an ACL rule.
        (see "Storm control"). Accepted matches: EtherType, IP protocol, destination and
        source MAC and IPv4 addresses (with masks), L4 source and destination
        ports, and the type and code of ICMP and ICMPv6 (see "The parser's
-       field selectors"). Each field is
+       field selectors"); or an 802.1Q tag, its VID from 1 to 4094 and its
+       priority if named, with the MAC addresses and nothing else, since what
+       the other fields hold for a tagged frame is not verified. Each field is
        cut into 16-bit slots and a slot whose mask is zero is left out. The IP
        protocol of an IPv6 rule, one with the exact EtherType ``0x86dd``, is
        compared in ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, which holds the
@@ -721,7 +735,9 @@ to an ACL rule.
    * - Refused with ``-EOPNOTSUPP`` and a message: egress; IPv6 addresses; any
        other key; a rule with no field left (it would drop every frame on the
        port); more than eight slots; an L4 port or an ICMP type without an
-       exact IPv4 or IPv6 EtherType and an exact IP protocol. Refused with
+       exact IPv4 or IPv6 EtherType and an exact IP protocol; a tag rule on VID
+       0 (an untagged frame reads 0), on an 802.1ad tag, on what follows the
+       tag, or with any field but the addresses. Refused with
        ``-ENOSPC``: no template
        covers the fields and none is free; all 96 entries are in use, four of
        them by the driver's own rules (see "Rules of the driver's own"); a
@@ -729,7 +745,8 @@ to an ACL rule.
      - M
      - ``tc filter add dev sfp ingress protocol ip flower skip_sw dst_port 4444
        action drop`` without ``ip_proto`` was refused; the 97th rule was refused
-       with ``all 96 ACL rules are in use``.
+       with ``all 96 ACL rules are in use``; ``vlan_id 0``, ``protocol 802.1AD``
+       and ``vlan_ethtype ipv4`` were refused, each with its message.
    * - Templates are shared: a rule takes the first template in use whose slots
        include each of its fields, in any slot (the rule masks the others), else
        the first unused template, whose eight slots it writes (the unused ones

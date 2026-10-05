@@ -1925,7 +1925,9 @@ struct rtl9602c_field {
 
 /*
  * Template field codes; a MAC address takes three consecutive codes, an IPv4
- * address two. IPV4_TOS_PROTO holds the IPv4 TOS octet above the protocol,
+ * address two. CTAG holds the C-tag's VID in bits 11:0 and its priority in
+ * bits 15:13, and 0 for a frame without a C-tag. IPV4_TOS_PROTO holds the
+ * IPv4 TOS octet above the protocol,
  * IPV6_TC_NH the IPv6 traffic class above the protocol of the payload that
  * follows any extension headers: 58 for an MLD message behind its hop-by-hop
  * header (measured).
@@ -1934,6 +1936,7 @@ struct rtl9602c_field {
 #define RTL9602C_ACL_TMPL_FIELD_DMAC0		0x01
 #define RTL9602C_ACL_TMPL_FIELD_SMAC0		0x04
 #define RTL9602C_ACL_TMPL_FIELD_ETHERTYPE	0x07
+#define RTL9602C_ACL_TMPL_FIELD_CTAG		0x09
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_SRC0		0x10
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_DST0		0x12
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO	0x14
