@@ -509,6 +509,41 @@ class Cases(unittest.TestCase):
         self.assertIn("200 of s3004p3+c3001p1 downstream: 200 as s3004p3+c3001p1",
                       stuck.evidence)
 
+    def test_the_mgmt_case_wants_its_vlan_kept_from_the_pon_and_another_through(self):
+        def outcome(isolated: bool = True, carried: bool = True):
+            trail: list[str] = []
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if "python3 -" not in command:
+                        return super().run(command, **kw)
+                    spec = re.search(r"python3 - \S+ \S+ (\S+) \d+", command).group(1)
+                    if spec == "c4094":
+                        got = {} if isolated else {"c4094p0": 200}
+                    else:
+                        got = {"c3005p0": 200} if carried else {}
+                    self.answers[0] = ("python3 -", 0, json.dumps(got) + "\n")
+                    return super().run(command, **kw)
+
+            config = ("VLAN Dev name | VLAN ID\nName-Type: VLAN_NAME_TYPE_RAW_PLUS_VID_NO_PAD\n"
+                      "mgmt           | 4094  | sfp\n")
+            stick = Canned("stick", [("vlan/config", 0, config)], trail)
+            bench = Bench("bench", [("python3 -", 0, ""),
+                                    ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            ctx = Context(settings, stick, bench, trail)
+            ctx.memo["primed"] = True
+            return cases_data.mgmt_isolation(ctx)
+        good = outcome()
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertIn("200 of VLAN 4094 upstream: nothing, downstream: nothing", good.evidence)
+        leaking = outcome(isolated=False)
+        self.assertEqual(leaking.status, FAIL)
+        self.assertIn("upstream: 200 as c4094p0", leaking.evidence)
+        blocked = outcome(carried=False)
+        self.assertEqual(blocked.status, FAIL)
+        self.assertIn("200 of VLAN 3005 upstream: nothing", blocked.evidence)
+
     def test_the_multicast_case_wants_every_report_through_and_unasked_groups_kept_out(self):
         def outcome(reports_to_a_group_pass: bool):
             trail: list[str] = []

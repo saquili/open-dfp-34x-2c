@@ -503,6 +503,44 @@ def vlan_push_pop(ctx: Context):
                        f"{OPS_COUNT} of {stacked} downstream: {stack_text(unstacked)}")
 
 
+# The management VLAN of the boot script: no frame of it may cross the PON, so
+# that the network behind the OLT neither sees the management link nor reaches
+# it. Frames of another VLAN, which the lab OLT carries, cross both ways as the
+# control.
+MGMT_CONTROL_VID = 3005
+
+
+def mgmt_vlan(ctx: Context) -> int | None:
+    """The VID of the stick's management VLAN interface, mgmt, or None."""
+    reply = ctx.stick.run("cat /proc/net/vlan/config")
+    found = re.search(r"^mgmt\s*\|\s*(\d+)\s*\|", reply.out, re.M)
+    return int(found.group(1)) if found else None
+
+
+@case("data.mgmt-isolation", "Data path",
+      "No frame of the management VLAN crosses the PON in either direction, while the "
+      "frames of another VLAN cross both ways")
+def mgmt_isolation(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    vid = mgmt_vlan(ctx)
+    if vid is None:
+        return failed("the stick has no management VLAN interface mgmt")
+    prime(ctx)
+    s = ctx.settings
+    mgmt, other = f"c{vid}", f"c{MGMT_CONTROL_VID}"
+    up = stacks(ctx, s.subscriber_port, s.olt_port, mgmt)
+    down = stacks(ctx, s.olt_port, s.subscriber_port, mgmt)
+    other_up = stacks(ctx, s.subscriber_port, s.olt_port, other)
+    other_down = stacks(ctx, s.olt_port, s.subscriber_port, other)
+    want = OPS_COUNT * 0.99
+    ok = (not up and not down and other_up.get(f"{other}p0", 0) >= want and
+          other_down.get(f"{other}p0", 0) >= want)
+    return verdict(ok, f"{OPS_COUNT} of VLAN {vid} upstream: {stack_text(up)}, downstream: "
+                       f"{stack_text(down)}; {OPS_COUNT} of VLAN {MGMT_CONTROL_VID} upstream: "
+                       f"{stack_text(other_up)}, downstream: {stack_text(other_down)}")
+
+
 # The ACL case: frames of the probe's EtherType from the network side, against
 # drop and trap rules on the PON port at two tc priorities of its own. The CPU
 # gets a frame from the PON on the interface of its GEM port, so a software
