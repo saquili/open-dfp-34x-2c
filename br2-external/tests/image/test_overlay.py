@@ -152,6 +152,33 @@ class PacketFilter(unittest.TestCase):
         self.assertIn("meta l4proto ipv6-icmp accept", read(NFTABLES))
 
 
+class QuietTowardsThePon(unittest.TestCase):
+    """Nothing of the stick's own leaves by the PON, and nothing from it is answered."""
+
+    def test_the_pon_side_has_no_ipv6_before_the_pon_comes_up(self):
+        text = read(RCS)
+        for conf in ("default", "cpu", "pon"):
+            line = f"echo 1 >/proc/sys/net/ipv6/conf/{conf}/disable_ipv6"
+            with self.subTest(conf=conf):
+                self.assertIn(line, text)
+                # "default" covers the bridge and the GEM interfaces that
+                # omcid makes, so it must be in force before omcid starts.
+                for later in ("ip link set pon up", "onu-mode start"):
+                    self.assertLess(text.index(line), text.index(later), later)
+
+    def test_the_host_side_keeps_ipv6(self):
+        text = read(RCS)
+        self.assertNotIn("conf/sfp/disable_ipv6", text)
+        made = text.index('name mgmt type vlan id "$MGMT_VLAN"')
+        self.assertLess(made, text.index("echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6"))
+
+    def test_arp_answers_only_on_the_interface_of_the_address(self):
+        text = read(RCS)
+        self.assertIn("echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore", text)
+        self.assertIn("echo 2 >/proc/sys/net/ipv4/conf/all/arp_announce", text)
+        self.assertLess(text.index("arp_ignore"), text.index("ip link set sfp up"))
+
+
 class Inittab(unittest.TestCase):
     ACTIONS = {"sysinit", "wait", "once", "respawn", "askfirst", "shutdown", "restart",
                "ctrlaltdel"}
