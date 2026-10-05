@@ -4,7 +4,7 @@
 #
 # Tests of scripts/onu-mode and scripts/dhcp-wan, against stand-ins for the
 # programs they run, in a scratch root: each stand-in writes its name and its
-# arguments to a log, and nft also what it reads.
+# arguments to a log.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -42,7 +42,9 @@ setup() {
 	# omcid runs from its first start on, as on the board.
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
-	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n[ "$2" = - ] && cat >>"$LOG"\nexit 0\n' >"$T/bin/nft"
+	# nft stays a stand-in, so that a call to it would show in the log: the
+	# stick has no packet filter, and onu-mode must not need one.
+	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
 	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
 		'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns 198.51.100.53 -"' \
 		"$REAL_SLEEP" >"$T/bin/pppoed"
@@ -91,12 +93,8 @@ check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link set gem256 up"'
 check 'logged "^udhcpc -i gem256 "'
-check 'logged "devices = { sfp, gem256 }"'
-check 'logged "flowtable ft {"'
-check 'logged "flow add @ft"'
-check 'logged "tcp flags syn tcp option maxseg size set rt mtu"'
-check 'logged "oifname \"gem256\" masquerade"'
 check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
+check '! logged "^nft"'
 check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem256"'
 check '! logged "^tc filter add dev gem1024"'
 check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
@@ -114,8 +112,6 @@ check 'logged "^ip link set pon mtu 1508"'
 check 'logged "^ip link set gem1024 mtu 1508"'
 check 'logged "^ip link set wan mtu 1508"'
 check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^pppoed up" "$LOG" | head -1 | cut -d: -f1)" ]'
-check 'logged "oifname \"ppp0\" masquerade"'
-check 'logged "devices = { sfp, gem1024 }"'
 for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ -s "$ONU_ROOT/run/onu-dns" ] && break
 	"$REAL_SLEEP" 0.2
@@ -150,15 +146,6 @@ check '! logged "^omcid"'
 check '[ "$(grep -n "killall -USR1 omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" ]'
 teardown
 
-echo "a NAT table that nft refuses"
-setup
-printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n[ "$2" = - ] || exit 0\ncat >/dev/null\necho "Error: syntax error" >&2\nexit 1\n' >"$T/bin/nft"
-conf MODE=router WAN_PROTO=static WAN_ADDRESS=203.0.113.2/30 WAN_GATEWAY=203.0.113.1
-"$MODE_SCRIPT" start 2>/dev/null
-"$MODE_SCRIPT" tick 2>/dev/null
-check 'logged "^logger -t onu-mode no NAT: nft refused the table: Error: syntax error"'
-teardown
-
 echo "a PPPoE session without name servers"
 setup
 printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
@@ -186,7 +173,7 @@ conf MODE=router LAN_ADDRESS=198.51.100.65/24
 : >"$LOG"
 printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
 "$MODE_SCRIPT" apply 2>/dev/null
-check 'logged "^nft delete table inet onu-router"'
+check '! logged "^nft"'
 check 'logged "^ip address del 198.51.100.65/24 dev sfp"'
 check 'logged "^killall -USR2 omcid"'
 check '! logged "^omcid"'

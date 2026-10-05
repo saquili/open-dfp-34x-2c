@@ -18,10 +18,11 @@
 # provisions it. In router mode omcid leaves the OLT's bridge out (omcid -r)
 # and the stick routes: the LAN is the host link, sfp, with an address and a
 # DHCP server; the WAN is a GEM port that the OLT provisioned, or a VLAN on
-# it, with an address by PPPoE, DHCP or by hand; and NAT translates what
-# leaves by the WAN, the switch carrying the flows once they are set up. A
-# watcher (onu-mode watch) brings the WAN up when the OLT provisions its GEM
-# port and restarts the PPPoE or DHCP client when it ends.
+# it, with an address by PPPoE, DHCP or by hand. The stick translates no
+# address: a host on the LAN reaches beyond the WAN with an address that the
+# network behind the WAN routes back to the stick. A watcher (onu-mode watch)
+# brings the WAN up when the OLT provisions its GEM port and restarts the PPPoE
+# or DHCP client when it ends.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -35,7 +36,6 @@ CREDS=$RUN/onu-pppoe
 NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 SHARE=$ROOT/usr/share/onu
-TABLE=onu-router
 
 log() {
 	echo "onu-mode: $*" >&2
@@ -163,39 +163,6 @@ lan_dhcp() {
 	udhcpd "$RUN/udhcpd.conf"
 }
 
-# NAT out of the device $2, and the flows between the LAN and the GEM
-# interface $1 offloaded to the switch: netfilter follows a VLAN or a PPPoE
-# session down to the GEM interface. The flowtable is "ft": "offload" is a
-# word of nft's own, and a table that does not parse is not loaded at all.
-# The MSS of every TCP connection that crosses is clamped, in both directions,
-# to what the route's MTU leaves, so that a LAN host's segments fit a PPPoE
-# WAN's 1492 bytes without relying on path MTU discovery.
-nat_up() {
-	nft delete table inet $TABLE 2>/dev/null
-	if ! err=$(nft -f - 2>&1 <<EOF
-table inet $TABLE {
-	flowtable ft {
-		hook ingress priority filter
-		devices = { sfp, $1 }
-		flags offload
-	}
-	chain forward {
-		type filter hook forward priority filter - 1; policy accept;
-		tcp flags syn tcp option maxseg size set rt mtu
-		meta l4proto { tcp, udp } flow add @ft
-	}
-	chain postrouting {
-		type nat hook postrouting priority srcnat; policy accept;
-		oifname "$2" masquerade
-	}
-}
-EOF
-	); then
-		log "no NAT: nft refused the table: $(echo "$err" | head -1)"
-		return 1
-	fi
-}
-
 # The PPPoE client on $1, started again whenever the link ends. Its "up" line
 # gives the name servers for the LAN.
 pppoe_loop() {
@@ -251,7 +218,6 @@ wan_up() {
 		udhcpc -i "$wan" -b -p "$RUN/udhcpc.pid" -s "$SHARE/dhcp-wan"
 		;;
 	esac
-	nat_up "$gem" "$out"
 	echo "$gem $wan $out" >"$RUN/onu-wan"
 	feeds_sync "$gem"
 	log "WAN on $wan ($WAN_PROTO), GEM port ${gem#gem}"
@@ -290,7 +256,6 @@ wan_down() {
 	stop_pid pppoe-loop
 	killall pppoed 2>/dev/null
 	stop_pid udhcpc
-	nft delete table inet $TABLE 2>/dev/null
 	feeds_down
 	# What a static or DHCP WAN put on the interface goes with it.
 	if [ -n "$wan" ]; then
