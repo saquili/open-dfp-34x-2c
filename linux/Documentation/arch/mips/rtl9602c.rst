@@ -2000,12 +2000,12 @@ with, kept as the fallback).
      - yes
    * - ``k0``
      - ``0x080000``
-     - 1328 KiB (``0x14c000``)
+     - 1856 KiB (``0x1d0000``)
      - Bank 0 kernel, where this system is installed.
      - no
    * - ``r0``
-     - ``0x1cc000``
-     - 2512 KiB (``0x274000``)
+     - ``0x250000``
+     - 1984 KiB (``0x1f0000``)
      - Bank 0 root filesystem.
      - no
    * - ``k1``
@@ -2052,11 +2052,17 @@ with, kept as the fallback).
        node; that check has not yet run on this tree.
    * - The partitions (``partitions``, ``compatible = "fixed-partitions"``) are
        the boot loader's own layout, offsets and sizes as its environment lists
-       them. The eight cover the chip exactly (``0x58c000`` + ``0x274000`` =
+       them, except bank 0: the shipped firmware splits its 3840 KiB as 1328 KiB
+       of kernel and 2512 KiB of root filesystem, and this system as 1856 KiB
+       and 1984 KiB, because its kernel does not fit 1328 KiB. On a board that
+       runs this system the environment lists the same split (the bench's boot
+       contract). The eight cover the chip exactly (``0x58c000`` + ``0x274000`` =
        ``0x800000``).
-     - M
-     - The boot loader's environment, printed at its prompt: the same offsets
-       and sizes.
+     - M, T
+     - M: the boot loader's environment, printed at its prompt: the same offsets
+       and sizes for everything but bank 0. T: bank 0 as this system splits it is
+       what the environment lists after the bench has set it, and the board
+       boots from it (the check has not yet run on this tree).
    * - Numbering: the partitions register in tree order as mtd0 to mtd7, block
        devices 31:0 to 31:7. The boot loader's arguments name the root
        filesystem by number: ``root=31:5`` (``r0``) for bank 0, ``root=31:7``

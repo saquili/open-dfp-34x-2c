@@ -88,7 +88,13 @@
 		bank-width = <2>;
 
 		/*
-		 * The boot loader's own layout, which covers the whole chip.
+		 * The boot loader's own layout, which covers the whole chip,
+		 * except that bank 0 is split as this system needs: its kernel
+		 * takes 1856 KiB and its root filesystem 1984 KiB, where the
+		 * shipped firmware split the same 3840 KiB as 1328 KiB and
+		 * 2512 KiB. The boot loader's environment lists the same split
+		 * on a board that runs this system.
+		 *
 		 * The partitions register in this order as mtd0 to mtd7,
 		 * block devices 31:0 to 31:7, and the boot loader names the
 		 * root filesystem by number (root=31:5 for bank 0, root=31:7
@@ -138,12 +144,12 @@
 			/* Bank 0: this system's kernel and root filesystem */
 			partition@80000 {
 				label = "k0";
-				reg = <0x080000 0x14c000>;
+				reg = <0x080000 0x1d0000>;
 			};
 
-			partition@1cc000 {
+			partition@250000 {
 				label = "r0";
-				reg = <0x1cc000 0x274000>;
+				reg = <0x250000 0x1f0000>;
 			};
 
 			/* Bank 1: the shipped firmware, the fallback */
