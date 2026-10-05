@@ -90,7 +90,7 @@ const char *omci_vlan_reject_name(enum omci_vlan_reject r)
 	case OMCI_VLAN_REJECT_VID_RANGE:
 		return "VID outside 1..4094";
 	case OMCI_VLAN_REJECT_DISCARD:
-		return "discard rule; no drop primitive exists";
+		return "discard of the frames of a VID; not carried";
 	default:
 		return "?";
 	}
@@ -147,12 +147,17 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 	out->treat_inner_tpid = (uint8_t)treat_tpid(w3);
 
 	/*
-	 * The hardware has no way to drop a frame: a discard is accepted only when
-	 * it names no tag, which leaves nothing to program.
+	 * A discard of the frames of one VID is not carried. A discard that
+	 * names no tag is accepted; of those, the default rule of the
+	 * single-tagged frames drops what no other rule takes, and the others
+	 * leave nothing to program.
 	 */
 	if (out->tags_to_remove == VLAN_TAGS_REMOVE_3) {
 		if (filter_names_a_tag(w0) || filter_names_a_tag(w1))
 			return refuse(out, OMCI_VLAN_REJECT_DISCARD);
+		if (out->filter_outer_pri == VLAN_PRI_NO_TAG &&
+		    out->filter_inner_pri == VLAN_PRI_DEFAULT)
+			out->op = OMCI_VLAN_OP_DISCARD_TAGGED;
 		return true;
 	}
 	if (out->filter_outer_pri == VLAN_PRI_DEFAULT ||
@@ -281,7 +286,8 @@ bool omci_vlan_decode(const uint8_t *row, size_t len,
 static bool programmable(enum omci_vlan_op op)
 {
 	return op == OMCI_VLAN_OP_CVID_XLATE || op == OMCI_VLAN_OP_SVID_PUSH ||
-	       op == OMCI_VLAN_OP_CVID_PUSH;
+	       op == OMCI_VLAN_OP_CVID_PUSH ||
+	       op == OMCI_VLAN_OP_DISCARD_TAGGED;
 }
 
 /* The hardware rule of a programmable operation. */
@@ -292,6 +298,8 @@ static enum omci_hw_vlan_kind kind_of(enum omci_vlan_op op)
 		return OMCI_HW_VLAN_SVID_PUSH;
 	case OMCI_VLAN_OP_CVID_PUSH:
 		return OMCI_HW_VLAN_CVID_PUSH;
+	case OMCI_VLAN_OP_DISCARD_TAGGED:
+		return OMCI_HW_VLAN_DISCARD_TAGGED;
 	default:
 		return OMCI_HW_VLAN_CVID_XLATE;
 	}
@@ -317,11 +325,22 @@ static struct omci_hw_vlan_xlate hw_rule_of(const struct omci_vlan_rule *d)
 	};
 }
 
+/*
+ * Whether two rules are of the same family: a discard of what no rule takes
+ * matches no VID, and shares frames and tags with no rule but another one.
+ */
+static bool same_family(const struct omci_hw_vlan_xlate *a,
+			const struct omci_hw_vlan_xlate *b)
+{
+	return (a->kind == OMCI_HW_VLAN_DISCARD_TAGGED) ==
+	       (b->kind == OMCI_HW_VLAN_DISCARD_TAGGED);
+}
+
 /* Whether two rules take the same frames: one VID, and one priority or any. */
 static bool same_match(const struct omci_hw_vlan_xlate *a,
 		       const struct omci_hw_vlan_xlate *b)
 {
-	return a->match_cvid == b->match_cvid &&
+	return same_family(a, b) && a->match_cvid == b->match_cvid &&
 	       a->match_has_pri == b->match_has_pri &&
 	       (!a->match_has_pri || a->match_pri == b->match_pri);
 }
@@ -330,7 +349,8 @@ static bool same_match(const struct omci_hw_vlan_xlate *a,
 static bool covers(const struct omci_hw_vlan_xlate *earlier,
 		   const struct omci_hw_vlan_xlate *later)
 {
-	return earlier->match_cvid == later->match_cvid &&
+	return same_family(earlier, later) &&
+	       earlier->match_cvid == later->match_cvid &&
 	       (!earlier->match_has_pri ||
 		(later->match_has_pri &&
 		 earlier->match_pri == later->match_pri));
@@ -340,7 +360,7 @@ static bool covers(const struct omci_hw_vlan_xlate *earlier,
 static bool same_net(const struct omci_hw_vlan_xlate *a,
 		     const struct omci_hw_vlan_xlate *b)
 {
-	return net_vid_of(a) == net_vid_of(b) &&
+	return same_family(a, b) && net_vid_of(a) == net_vid_of(b) &&
 	       (a->kind == OMCI_HW_VLAN_SVID_PUSH) ==
 		       (b->kind == OMCI_HW_VLAN_SVID_PUSH);
 }

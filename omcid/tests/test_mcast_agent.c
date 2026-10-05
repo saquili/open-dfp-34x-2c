@@ -1422,6 +1422,45 @@ static void test_the_vlan_rules_tag_the_messages(void)
 	down();
 }
 
+/*
+ * Rules whose default discards the single-tagged frames no rule takes, as an
+ * operator's OLT sets them: a message in a VLAN no rule takes from the
+ * subscriber goes nowhere, even a VLAN of the network side; one a rule takes
+ * goes up as the rule tags it.
+ */
+static void test_the_vlan_rules_discard_messages_they_do_not_take(void)
+{
+	static const uint32_t strict[][4] = {
+		/* C-VID 410, any priority, to 1410, the priority kept */
+		{ 0xf8000000u, (8u << 28) | (410u << 15), 0x400f0000u,
+		  (8u << 16) | (1410u << 3) },
+		/* the default of the single-tagged frames: discard */
+		{ 0xf8000000u, 0xe8000000u, 0xc00f0000u, 0x000f8000u },
+	};
+	unsigned int tpid, tci;
+	uint8_t f[256], out[600];
+
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+	rules(strict, ARRAY_SIZE(strict));
+
+	hear(f, igmp(f, 1410, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), 0u);
+	hear(f, igmp(f, 100, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), 0u);
+
+	CHECK_EQ(join_up(410, out), 50u);
+	CHECK_EQ(sent_count(), 1u);
+	tag_at(out, 12, &tpid, &tci);
+	CHECK(tpid == 0x8100u && tci == ((5u << 13) | 1410u));
+	rules(strict, 0);
+	down();
+}
+
 static void test_the_gem_port_of_a_message(void)
 {
 	static const uint32_t xlate[][4] = {
@@ -1869,6 +1908,7 @@ int main(void)
 	RUN(test_the_rate_of_messages_upstream);
 	RUN(test_the_upstream_igmp_tag_control);
 	RUN(test_the_vlan_rules_tag_the_messages);
+	RUN(test_the_vlan_rules_discard_messages_they_do_not_take);
 	RUN(test_the_gem_port_of_a_message);
 	RUN(test_the_downstream_tag_of_multicast);
 	RUN(test_lost_groups);

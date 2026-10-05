@@ -765,6 +765,8 @@ static size_t push_tag(uint8_t *f, size_t len, unsigned int tpid,
 /*
  * The upstream tag the extended VLAN tagging operation gives a frame: the
  * first rule in force that matches it, as the switch takes them, or none.
+ * Returns the frame's new length, or 0 for a tagged frame that no rule
+ * takes while the rules discard such frames.
  */
 static size_t tag_by_rules(uint8_t *f, size_t len)
 {
@@ -773,11 +775,16 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 	unsigned int tci = 0;
 	const bool ctag = outer_tag(f, &tci) == 0x8100u;
 	const unsigned int vid = tci & 0x0fffu, pcp = tci >> 13;
+	bool discard = false;
 
 	for (size_t i = 0; i < n; i++) {
 		const unsigned int pri =
 			r[i].assign_pri <= 7u ? r[i].assign_pri : pcp;
 
+		if (r[i].kind == OMCI_HW_VLAN_DISCARD_TAGGED) {
+			discard = true;
+			continue;
+		}
 		if (r[i].kind == OMCI_HW_VLAN_CVID_PUSH) {
 			if (outer_tag(f, &tci) != 0u)
 				continue;
@@ -797,7 +804,7 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
 		}
 		return push_tag(f, len, 0x88a8u, pri << 13 | r[i].assign_svid);
 	}
-	return len;
+	return ctag && discard ? 0u : len;
 }
 
 /*
@@ -805,6 +812,7 @@ static size_t tag_by_rules(uint8_t *f, size_t len)
  * then the upstream IGMP tag control of the profile (G.988 9.3.27): 0 the
  * extended VLAN tagging operation's rules, 1 a tag added, 2 the outer tag
  * replaced, 3 its VID replaced; with no tag to replace, one is added.
+ * Returns its length, 0 when the rules discard it.
  */
 static size_t upstream_frame(const struct omci_mcast *m,
 			     const struct omci_hw_mcast_frame *f, uint8_t *out)
@@ -880,6 +888,12 @@ static void forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f)
 	uint16_t p, port;
 	size_t len;
 
+	len = upstream_frame(m, f, out);
+	if (len == 0u) {
+		OMCI_DEBUG(
+			"mcast: the VLAN rules discard a message in a VLAN they do not take");
+		return;
+	}
 	if (port_profile(m->mib, &p))
 		rate = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
 			       OMCI_MCAST_PROFILE_US_RATE, 4);
@@ -891,7 +905,6 @@ static void forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f)
 		return;
 	m->rate_used++;
 
-	len = upstream_frame(m, f, out);
 	if (!gem_for(out, &port)) {
 		OMCI_WARN(
 			"mcast: no GEM port carries the message upstream; dropped");

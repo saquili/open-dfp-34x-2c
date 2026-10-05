@@ -288,6 +288,21 @@ int main(void)
 	CHECK_EQ(r.op, OMCI_VLAN_OP_UNSUPPORTED);
 	CHECK_EQ(r.reject, OMCI_VLAN_REJECT_VID_RANGE);
 
+	/*
+	 * The default rules that discard, as an operator's OLT sets all three:
+	 * that of the single-tagged frames drops what no other rule takes; those
+	 * of the double-tagged and the untagged frames leave nothing to program.
+	 */
+	pack(row, 0xf8000000u, 0xe8000000u, 0xc00f0000u, 0x000f8000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_DISCARD_TAGGED);
+	pack(row, 0xe8000000u, 0xe8000000u, 0xc00f0000u, 0x000f8000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_NONE);
+	pack(row, 0xf8000000u, 0xf8000000u, 0xc00f0000u, 0x000f0000u);
+	CHECK(omci_vlan_decode(row, 16, &r));
+	CHECK_EQ(r.op, OMCI_VLAN_OP_NONE);
+
 	{
 		static const struct {
 			unsigned int match, assign;
@@ -369,6 +384,49 @@ int main(void)
 	CHECK_EQ(omci_hw_vlan_recorded(&applied), 0u);
 
 	uint8_t xl[16], pt[16], xl2[16];
+
+	/*
+	 * A default rule that discards the single-tagged frames no rule takes
+	 * is programmed in its place in list order. It matches no VID, and a
+	 * push onto untagged frames, which matches none either, neither takes
+	 * its place nor gives it up; of two such defaults, one is programmed.
+	 */
+	{
+		uint8_t dflt[16], dflt2[16], push[16];
+
+		clear_rows(mib);
+		xlate_row(xl, 0u, 410u, 1410u);
+		pack(dflt, 0xf8000000u, 0xe8000000u, 0xc00f0000u, 0x000f8000u);
+		pack(dflt2, 0xf8000000u, 0xe8001000u, 0xc00f0000u, 0x000f8000u);
+		pack(push, 0xf8000000u, 0xf8000000u, 0x000f0000u,
+		     (5u << 16) | (36u << 3));
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, push, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, dflt, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, xl, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		if (omci_hw_vlan_recorded(&applied) == 3u) {
+			CHECK_EQ(applied[0].kind, OMCI_HW_VLAN_CVID_XLATE);
+			CHECK_EQ(applied[1].kind, OMCI_HW_VLAN_DISCARD_TAGGED);
+			CHECK_EQ(applied[1].match_cvid, 0u);
+			CHECK_EQ(applied[2].kind, OMCI_HW_VLAN_CVID_PUSH);
+			CHECK_EQ(applied[2].assign_cvid, 36u);
+		}
+
+		CHECK_EQ(omci_mib_table_put(mib, 171u, 0x101u, 6u, dflt2, 16, 8,
+					    OMCI_MIB_TABLE_LAST),
+			 OMCI_OK);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+		CHECK_EQ(omci_hw_vlan_recorded(&applied), 3u);
+		clear_rows(mib);
+		CHECK_EQ(omci_vlan_program(mib, 171u, 6u, NULL), OMCI_OK);
+	}
 
 	clear_rows(mib);
 	xlate_row(xl, 0u, 410u, 1410u);

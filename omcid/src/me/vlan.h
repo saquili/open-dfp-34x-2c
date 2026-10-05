@@ -30,6 +30,8 @@
  * @OMCI_VLAN_OP_SVID_PUSH: add an outer tag in front of the frame's tag
  * @OMCI_VLAN_OP_UNSUPPORTED: something the hardware cannot do
  * @OMCI_VLAN_OP_CVID_PUSH: give an untagged frame a tag
+ * @OMCI_VLAN_OP_DISCARD_TAGGED: drop the single-tagged frames that no other
+ *	rule takes: the default rule of such frames, when it discards them
  */
 enum omci_vlan_op {
 	OMCI_VLAN_OP_NONE = 0,
@@ -41,6 +43,8 @@ enum omci_vlan_op {
 	OMCI_VLAN_OP_UNSUPPORTED,
 
 	OMCI_VLAN_OP_CVID_PUSH,
+
+	OMCI_VLAN_OP_DISCARD_TAGGED,
 };
 
 /**

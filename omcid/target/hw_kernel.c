@@ -1252,6 +1252,17 @@ static struct {
 } g_br_extra[OMCI_HW_BRIDGE_MAX_PORTS * BR_VIDS_MAX];
 static size_t g_br_extra_n;
 
+/*
+ * Whether the VLAN rules discard the single-tagged frames that no rule
+ * takes, and the subscriber's VIDs of the rules in force that take tagged
+ * frames.
+ */
+static bool g_br_discard;
+static uint16_t g_br_sub[OMCI_HW_VLAN_MAX_RULES];
+static size_t g_br_sub_n;
+
+static void uni_discard_sync(const uint16_t *vids, size_t n);
+
 /* Router mode, and whether the log has said what it leaves out. */
 static bool g_router;
 static bool g_router_told;
@@ -1541,14 +1552,23 @@ static bool br_extra_has(uint16_t port_id, uint16_t vid)
  * operator's line, 2026-10-05): a port that carries one VID of a
  * translation carries the other as well, or the bridge stops its frames in
  * one direction or both. A rule that pushes a tag adds nothing here.
+ *
+ * While the rules discard the single-tagged frames no rule takes, the VIDs
+ * the UNI carries that no rule takes from the subscriber, which it carries
+ * for the way down only, are dropped as they come in from the subscriber
+ * (uni_discard_sync()). Without VLAN filtering there is no such set, and
+ * nothing is dropped.
  */
 static void bridge_vlans_complete(void)
 {
 	uint16_t all[BR_VIDS_MAX];
-	size_t n_all = 0;
+	uint16_t drop[BR_VIDS_MAX];
+	size_t n_all = 0, n_drop = 0;
 
-	if (g_bridge_filtering != 1)
+	if (g_bridge_filtering != 1) {
+		uni_discard_sync(NULL, 0);
 		return;
+	}
 
 	for (size_t i = 0; i < g_br_n; i++)
 		for (uint8_t v = 0; v < g_br_ports[i].num_vlan; v++)
@@ -1591,6 +1611,13 @@ static void bridge_vlans_complete(void)
 				break;
 		}
 
+		if (p->port_id == OMCI_HW_BRIDGE_UNI && g_br_discard)
+			for (size_t v = 0; v < n_want; v++)
+				if (!vid_in(g_br_sub, g_br_sub_n, want[v]))
+					(void)vid_put(drop, &n_drop,
+						      ARRAY_SIZE(drop),
+						      want[v]);
+
 		for (size_t v = 0; v < n_want; v++) {
 			const uint16_t vid = want[v];
 			int err;
@@ -1625,6 +1652,8 @@ static void bridge_vlans_complete(void)
 					p->port_id, vid);
 		}
 	}
+
+	uni_discard_sync(drop, n_drop);
 }
 
 /*
@@ -2472,7 +2501,9 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 	unsigned int uni = if_nametoindex(UNI_IFNAME);
 	unsigned int pon = if_nametoindex(PON_IFNAME);
 	struct omci_hw_vlan_xlate xlate[OMCI_HW_VLAN_MAX_RULES];
-	size_t n_xlate = 0;
+	uint16_t sub[OMCI_HW_VLAN_MAX_RULES];
+	size_t n_xlate = 0, n_sub = 0;
+	bool discard = false;
 	int err;
 
 	if (rejected != NULL)
@@ -2506,6 +2537,13 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		const unsigned int prio = TC_PRIO_BASE + (unsigned int)i;
 		const struct omci_hw_vlan_xlate *r = &rules[i];
 		struct tc_vlan_filter up[VLAN_UP_MAX], down;
+
+		/* No filter of its own: what it drops follows from the others. */
+		if (r->kind == OMCI_HW_VLAN_DISCARD_TAGGED) {
+			discard = true;
+			continue;
+		}
+
 		const size_t n_up = vlan_filters(r, up, &down);
 
 		if (!n_up) {
@@ -2536,6 +2574,8 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		}
 		if (r->kind == OMCI_HW_VLAN_CVID_XLATE)
 			xlate[n_xlate++] = *r;
+		if (r->kind != OMCI_HW_VLAN_CVID_PUSH)
+			sub[n_sub++] = r->match_cvid;
 
 		char pri[16] = "";
 
@@ -2559,6 +2599,9 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 
 	memcpy(g_br_xlate, xlate, n_xlate * sizeof(*xlate));
 	g_br_xlate_n = n_xlate;
+	memcpy(g_br_sub, sub, n_sub * sizeof(*sub));
+	g_br_sub_n = n_sub;
+	g_br_discard = discard;
 	bridge_vlans_complete();
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
@@ -2613,7 +2656,8 @@ static int g_mc_tx = -1;
  * ETH_P_ALL for every EtherType; with @ip_proto, of that IP protocol; with an
  * @icmp_type not negative, of that ICMPv6 type; with @dmac, to that MAC
  * address, compared where @dmask has ones (all of it without @dmask); with
- * @smac, from that address under @smask; with @dip, to that IPv4 address.
+ * @smac, from that address under @smask; with @dip, to that IPv4 address;
+ * with @vid, of that VID, for @proto ETH_P_8021Q.
  * @handle 0 lets the kernel choose it.
  */
 struct tc_gact_rule {
@@ -2625,6 +2669,7 @@ struct tc_gact_rule {
 	const uint8_t *smac;
 	const uint8_t *smask;
 	const uint8_t *dip;
+	uint16_t vid;
 	int action;
 	uint32_t handle;
 };
@@ -2689,6 +2734,9 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 		off = nla_put(req, off, TCA_FLOWER_KEY_IPV4_DST, r->dip, 4);
 		off = nla_put(req, off, TCA_FLOWER_KEY_IPV4_DST_MASK, all, 4);
 	}
+	if (r->vid)
+		off = nla_put(req, off, TCA_FLOWER_KEY_VLAN_ID, &r->vid,
+			      sizeof(r->vid));
 	off = nla_put(req, off, TCA_FLOWER_FLAGS, &flags, sizeof(flags));
 
 	acts = off;
@@ -2735,6 +2783,64 @@ static int mcast_traps(int uni, bool on)
 	if (err)
 		(void)mcast_traps(uni, false);
 	return err;
+}
+
+/*
+ * The frames the subscriber sends in a VLAN the UNI carries for the way down
+ * only, which the VLAN rules discard as frames no rule takes: a flower rule
+ * each on sfp's ingress, with priorities from DISCARD_PRIO, ahead of the
+ * traps of IGMP and MLD and of the bridge port filters, as the VLAN rules
+ * take a frame first at the UNI. The rules change only when the VIDs do.
+ */
+#define DISCARD_PRIO 50u
+#define DISCARD_MAX 16u
+
+static uint16_t g_uni_drop[DISCARD_MAX];
+static size_t g_uni_drop_n;
+
+static void uni_discard_sync(const uint16_t *vids, size_t n)
+{
+	const int uni = (int)if_nametoindex(UNI_IFNAME);
+	bool same = n == g_uni_drop_n;
+	int err;
+
+	for (size_t i = 0; same && i < n; i++)
+		same = vid_in(g_uni_drop, g_uni_drop_n, vids[i]);
+	if (same || !uni)
+		return;
+
+	for (unsigned int i = 0; i < DISCARD_MAX; i++)
+		(void)tc_filter_del(uni, DISCARD_PRIO + i);
+	g_uni_drop_n = 0;
+	if (!n)
+		return;
+	if (n > DISCARD_MAX) {
+		OMCI_WARN(
+			"vlan: %zu VLANs to drop from the subscriber; the first %u are",
+			n, DISCARD_MAX);
+		n = DISCARD_MAX;
+	}
+	err = tc_clsact_ensure(uni);
+	for (size_t i = 0; i < n && !err; i++) {
+		const struct tc_gact_rule r = {
+			.proto = ETH_P_8021Q,
+			.icmp_type = -1,
+			.vid = vids[i],
+			.action = TC_ACT_SHOT,
+		};
+
+		err = tc_gact_add(uni, DISCARD_PRIO + (unsigned int)i, &r);
+		if (err)
+			break;
+		g_uni_drop[g_uni_drop_n++] = vids[i];
+		OMCI_INFO(
+			"vlan: the subscriber's frames of VLAN %u are dropped: no rule takes them, and the rules discard what they do not take",
+			vids[i]);
+	}
+	if (err)
+		OMCI_WARN(
+			"vlan: frames of VLANs no rule takes still pass from the subscriber: %s (%s)",
+			strerror(-err), omci_hw_last_extack());
 }
 
 /*

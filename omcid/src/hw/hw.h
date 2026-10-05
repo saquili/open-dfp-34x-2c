@@ -147,11 +147,14 @@ static inline bool omci_hw_reject_has(const struct omci_hw_reject *r,
  * @OMCI_HW_VLAN_CVID_XLATE: replace the VID of a single-tagged frame
  * @OMCI_HW_VLAN_SVID_PUSH: add an outer tag
  * @OMCI_HW_VLAN_CVID_PUSH: give an untagged frame a tag
+ * @OMCI_HW_VLAN_DISCARD_TAGGED: drop the single-tagged frames from the
+ *	subscriber side that no other rule takes; it matches no VID itself
  */
 enum omci_hw_vlan_kind {
 	OMCI_HW_VLAN_CVID_XLATE = 0,
 	OMCI_HW_VLAN_SVID_PUSH,
 	OMCI_HW_VLAN_CVID_PUSH,
+	OMCI_HW_VLAN_DISCARD_TAGGED,
 };
 
 /*
