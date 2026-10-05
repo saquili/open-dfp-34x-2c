@@ -2140,11 +2140,6 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	idx = err;
 
 	log = count ? rtl9602c_acl_log_get(p) : -1;
-	if (fwdact == RTL9602C_ACL_ACT_FWD_NONE && log < 0) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "a rule that passes only counts, and all 32 log counters are in use");
-		return -ENOSPC;
-	}
 	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
 	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, m,
 			     fwdact, fwd_pmsk, log);
@@ -2235,7 +2230,9 @@ static int rtl9602c_acl_ctag(struct flow_rule *rule,
 
 /*
  * A flower rule whose one action is drop, trap or pass, as one ACL rule; a rule
- * that passes decides nothing and only counts its frames. Each field
+ * that passes mirrors its frames to no port, so that they go on as the switch
+ * forwards them and no rule of lower priority decides for them, as a pass ends
+ * the classification in software. Each field
  * it matches is cut into 16-bit slots, and a slot with a zero mask is left out.
  * L4 ports, and an ICMP or ICMPv6 type and code, are compared through the
  * field selectors setup points at the start of the IP payload, which are taken
@@ -3023,7 +3020,7 @@ static int rtl9602c_flower_replace(struct rtl9602c_priv *p, int port,
 						    0);
 		if (act->id == FLOW_ACTION_ACCEPT)
 			return rtl9602c_acl_replace(p, port, cls,
-						    RTL9602C_ACL_ACT_FWD_NONE,
+						    RTL9602C_ACL_ACT_FWD_MIRROR,
 						    0);
 	}
 
