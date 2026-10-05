@@ -2803,11 +2803,22 @@ counts out of the totals.
      - M
      - The ``uscntr`` view: index 2 counted 8 for 8 messages pushed to a queue;
        indexes 0 and 3 counted 979 each for 957 serial-number requests.
-   * - Index 1 (``dbru``, DBRu sent) and index 4 (``gem-bytes``, GEM bytes sent)
-       are named in the ``uscntr`` view but not measured, indexes 5 to 7 are
-       unnamed, and whether reading clears them is not established.
+   * - Reading an index clears it. Index 4 (``gem-bytes``) counts the GEM
+       bytes of every allocation, idle GEM frames included, and indexes 5 to
+       7 read the same as index 4.
+     - M
+     - Three readings 1 s apart in O5, the OLT granting the T-CONT 15417
+       bytes in every other frame and no upstream traffic: each reading held
+       one second's counts (index 3 about 4085), and index 4 advanced by
+       62929557, about 15405 bytes for each of the 4085 allocations.
+   * - The upstream counters seem to be pairs of 16-bit counts: in O5 index 0
+       read the same count in both halves (``0x0ff60ff6``), index 1 in the upper
+       half (``0x0ff50000``) and index 3 in the lower (``0x00000ff5``). What the
+       upper halves count, and whether index 1 (``dbru``) counts DBRu sent, are
+       not established; the view prints the whole words.
      - I
-     - Readings in O5 under upstream traffic.
+     - Readings while the OLT asks for DBRu, and during serial-number
+       acquisition.
 
 FEC and encryption
 ==================
@@ -3006,10 +3017,12 @@ serial number that the ONU presents to the OLT is the devlink parameter
        O5 with the Alloc-ID and the OMCC.
    * - The PON class's T-CONT query is answered from the driver's record of
        T-CONTs 0 to 15: the Alloc-ID, ``-ENOENT`` when idle, ``-ERANGE`` from 16
-       on.
-     - I
-     - The class's ``tcont-get`` in O5, which nothing has issued yet, should
-       name Alloc-ID 257 at the T-CONT that the driver chose for it.
+       on. The class asks only below the 8 T-CONTs it was registered with, so
+       ``-ERANGE`` is not reached through it.
+     - M
+     - The ``pon`` tool's dump of ``tcont-get`` in O5: T-CONT 0 with Alloc-ID
+       256, the T-CONT that the ``gpon`` view showed bound to it
+       (``0=256/256``), and T-CONTs 1 to 7 idle.
    * - The devlink parameter ``gpon_serial`` (string, runtime): it reads empty
        until set, then four characters and eight upper-case hexadecimal digits.
        Setting takes at least 12 characters, the first four printable ASCII
