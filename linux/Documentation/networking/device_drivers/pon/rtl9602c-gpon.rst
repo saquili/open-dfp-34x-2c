@@ -411,6 +411,10 @@ name the others.
    * - ``<GPON> key N sent`` or ``<GPON> key N was not taken by the MAC``
      - info, warning
      - Request_Key was answered; the second when a key word did not complete.
+   * - ``<GPON> the keys were not cleared``
+     - warning
+     - At bring-up or when the ONU gave up its ONU-ID, a word of the zero keys
+       did not complete.
    * - ``<GPON> GEM port N encrypted`` or ``no longer encrypted``
      - info
      - Encrypted_Port-ID changed the Port-ID's state.
@@ -2814,30 +2818,32 @@ detection threshold and carries the ONU's side of the key exchange: on
 Request_Key it makes a new key, sends it to the OLT and writes it into the MAC
 as the next key, holding back a switch set up for the key before; on
 Key_Switching_Time it writes the superframe from which that key applies; on
-Encrypted_Port-ID it marks the flow bound to that Port-ID for decryption. What
-it leaves out is under "Known limitations", and the rows here state what the
+Encrypted_Port-ID it marks the flow bound to that Port-ID for decryption. It
+zeroes both keys at bring-up and when the ONU gives up its ONU-ID. What it
+leaves out is under "Known limitations", and the rows here state what the
 driver does and what is assumed.
 
-The key is written a 16-bit word at a time (``rtl9602c_gpon_key_write()``),
-under ``gpon_lock``:
+The MAC holds two keys, the active one and the next one. A key is written a
+16-bit word at a time (``rtl9602c_gpon_key_write()``), under ``gpon_lock``:
 
-1. Write 0, then ``RTL9602C_GPON_AES_KEY_CFG_REQ``, to
-   ``RTL9602C_GPON_AES_KEY_CFG``. Purpose: address the next key, not the
-   active one. (I)
+1. Write ``RTL9602C_GPON_AES_KEY_CFG_ACTIVE`` (bit 14), set for the active key
+   and clear for the next one, then the same with
+   ``RTL9602C_GPON_AES_KEY_CFG_REQ``, to ``RTL9602C_GPON_AES_KEY_CFG``.
+   Purpose: address the key. (M)
 2. For each word i from 0 to 7: write octets 2i and 2i + 1 of the key, the
    first in bits 15:8, into ``RTL9602C_GPON_AES_KEY_DATA``; write i into
    ``RTL9602C_GPON_AES_KEY_WORD``, then i with
    ``RTL9602C_GPON_AES_KEY_WORD_REQ``; poll
    ``RTL9602C_GPON_AES_KEY_WORD_DONE`` up to 100 times, 1 us apart. (M for the
    completion, I for the octet order)
-3. Write 0 into ``RTL9602C_GPON_AES_KEY_DATA``. Purpose: no part of the key
-   stays readable there. (I)
 
 The MAC makes the next key the active one when the superframe counter equals
 ``RTL9602C_GPON_AES_SWITCH_TIME``. Before a new key is written,
 ``rtl9602c_gpon_key_hold()`` writes there the superframe just passed, which the
 30-bit counter reaches again only after about 37 hours, so that the new key is
 not switched to at a superframe that the OLT chose for the key before it.
+``rtl9602c_gpon_key_clear()`` holds the switch the same way and writes zero
+into the next key, then into the active key.
 
 .. list-table::
    :header-rows: 1
@@ -2905,6 +2911,13 @@ not switched to at a superframe that the OLT chose for the key before it.
      - Read after each write of a test build and around switches (the row
        above): 1 at reset, 1 after the active key, 0 after a next key, 1
        after the switch, and 1 after the active key over a waiting next key.
+   * - ``RTL9602C_GPON_AES_KEY_DATA`` reads back the last word written into a
+       key, and a write of 0 there afterwards does not change what it reads;
+       the driver writes nothing there after a key.
+     - M
+     - After a test key ending in ``4f 3c`` it read ``0x4f3c``, after one
+       ending in ``0e 0f`` ``0x0e0f`` (each followed by a write of 0), and 0
+       after the zero keys; before any key, ``0x69a0``.
    * - Request_Key after an acknowledged Key_Switching_Time and before the
        switch: the new key replaces the next key, and the superframe chosen
        for the old one is dropped with it (``rtl9602c_gpon_key_hold()`` before
@@ -2914,6 +2927,15 @@ not switched to at a superframe that the OLT chose for the key before it.
        Key_Switching_Time for superframe 82056983 and before it: the switch
        time read the superframe just passed, and 5 s later, past 82056983,
        the new key still waited; a Key_Switching_Time for it then switched it.
+   * - Both keys are zeroed, the next one first, with the switch held, when
+       the MAC is brought up and when the ONU gives up its ONU-ID; the
+       superframe of the last Key_Switching_Time reads 0 after that.
+     - M
+     - At bring-up and with ``pon`` taken down (O1, ONU-ID 255): no warning,
+       the ``aes`` line without ``waiting``, the switch time the superframe
+       just passed and the superframe of the last Key_Switching_Time 0; O5
+       again 2 s after ``pon`` came up. That the words are zero: the data
+       register read 0 after zero keys written by a test build.
    * - Encrypted_Port-ID (identifier 8, directed, in O4 and O5): octet 3 bit 0
        set encrypts the Port-ID, clear stops it; the Port-ID as in
        Configure_Port-ID. The driver records the Port-ID and sets or clears

@@ -702,6 +702,7 @@ static void rtl9602c_gpon_arm_idle_slots(struct rtl9602c_priv *p)
 static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_priv *p);
 static void rtl9602c_gpon_o5_teardown(struct rtl9602c_priv *p);
 static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p);
+static void rtl9602c_gpon_key_clear(struct rtl9602c_priv *p);
 
 /**
  * rtl9602c_gpon_operstate() - make the pon interface dormant outside O5
@@ -1160,7 +1161,10 @@ static void rtl9602c_gpon_port_aes_set(struct rtl9602c_priv *p, u16 port_id,
 				     on ? RTL9602C_GEM_DS_FLOW_CFG_AES : 0);
 }
 
-/* Forget every encrypted Port-ID, and clear the bit of every flow. */
+/*
+ * Forget every encrypted Port-ID, clear the bit of every flow, and clear the
+ * keys, so that none outlives the activation it was made for.
+ */
 static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p)
 {
 	unsigned int f;
@@ -1170,6 +1174,8 @@ static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p)
 		if (p->gpon_flow_port[f] != RTL9602C_GPON_PORTID_NONE)
 			rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
 				     RTL9602C_GEM_DS_FLOW_CFG_AES, 0);
+	rtl9602c_gpon_key_clear(p);
+	p->gpon_key_switch = 0;
 }
 
 /*
@@ -1745,15 +1751,18 @@ static void rtl9602c_gpon_rei_tick(struct rtl9602c_priv *p)
 
 /*
  * Write @key as the next key of the downstream decryption, which the MAC makes
- * the active one at the superframe of Key_Switching_Time. Returns 0, or
- * -ETIMEDOUT when a word is not taken.
+ * the active one at the superframe of Key_Switching_Time, or with @active as
+ * the active key at once. Returns 0, or -ETIMEDOUT when a word is not taken.
  */
-static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key)
+static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key,
+				   bool active)
 {
+	u32 cfg = active ? RTL9602C_GPON_AES_KEY_CFG_ACTIVE : 0;
 	unsigned int i, spin;
 
-	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG, 0);
-	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG, RTL9602C_GPON_AES_KEY_CFG_REQ);
+	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG, cfg);
+	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG,
+		   cfg | RTL9602C_GPON_AES_KEY_CFG_REQ);
 
 	for (i = 0; i < RTL9602C_GPON_AES_KEY_WORDS; i++) {
 		u32 idx = FIELD_PREP(RTL9602C_GPON_AES_KEY_WORD_IDX, i);
@@ -1772,7 +1781,6 @@ static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key)
 		if (spin == 100)
 			return -ETIMEDOUT;
 	}
-	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_DATA, 0);
 	return 0;
 }
 
@@ -1788,6 +1796,17 @@ static void rtl9602c_gpon_key_hold(struct rtl9602c_priv *p)
 
 	rtl9602c_w(p, RTL9602C_GPON_AES_SWITCH_TIME,
 		   (now - 1) & RTL9602C_GPON_AES_SWITCH_TIME_SF);
+}
+
+/* Zero both keys, with no switch pending. */
+static void rtl9602c_gpon_key_clear(struct rtl9602c_priv *p)
+{
+	static const u8 zero[RTL9602C_GPON_AES_KEY_BYTES];
+
+	rtl9602c_gpon_key_hold(p);
+	if (rtl9602c_gpon_key_write(p, zero, false) ||
+	    rtl9602c_gpon_key_write(p, zero, true))
+		pr_warn("<GPON> the keys were not cleared\n");
 }
 
 /*
@@ -1822,7 +1841,7 @@ static void rtl9602c_gpon_key_send(struct rtl9602c_priv *p)
 	}
 
 	rtl9602c_gpon_key_hold(p);
-	if (rtl9602c_gpon_key_write(p, key))
+	if (rtl9602c_gpon_key_write(p, key, false))
 		pr_warn("<GPON> key %u was not taken by the MAC\n",
 			p->gpon_key_index);
 	else
@@ -2894,9 +2913,9 @@ int rtl9602c_gpon_password_set(struct rtl9602c_priv *p, const char *s)
  *
  * Called when the pon interface is opened. Brings the GPON MAC up, building the
  * PON MAC first if it is not built yet, and leaves the ONU in O2 waiting for
- * Upstream_Overhead; the counter totals start again from zero. A PON that is up
- * already is left alone, since a second bring-up would reset the MAC under a
- * live session.
+ * Upstream_Overhead; the counter totals start again from zero, and both AES
+ * keys are zeroed. A PON that is up already is left alone, since a second
+ * bring-up would reset the MAC under a live session.
  *
  * Context: process context; takes gpon_lock.
  * Return: 0; -ENXIO when no serial number has been set; the error of the PON
@@ -2923,6 +2942,7 @@ int rtl9602c_gpon_start(struct rtl9602c_priv *p)
 
 	err = rtl9602c_gpon_bringup(p);
 	if (!err) {
+		rtl9602c_gpon_key_clear(p);
 		p->gpon_up = true;
 		pr_info("<GPON> MAC brought up\n");
 	}

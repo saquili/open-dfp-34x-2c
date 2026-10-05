@@ -854,14 +854,15 @@ enum {
 #define RTL9602C_PLOAM_ENC_PORT_LO		4
 
 /*
- * The AES key of the downstream decryption (G.984.3 clause 12). The driver
- * writes the next key: a rising request bit in RTL9602C_GPON_AES_KEY_CFG, with
- * the active-key bit clear, addresses it, and each of its eight 16-bit words
- * goes through RTL9602C_GPON_AES_KEY_DATA, written by a rising request bit in
- * RTL9602C_GPON_AES_KEY_WORD with the word's index, whose done bit says that
- * the write is complete. The MAC makes the next key the active one at the
- * superframe in RTL9602C_GPON_AES_SWITCH_TIME, when the superframe counter
- * equals it and only then, so a superframe already passed waits for the
+ * The AES keys of the downstream decryption (G.984.3 clause 12), the next one
+ * and the active one. A rising request bit in RTL9602C_GPON_AES_KEY_CFG
+ * addresses the next key, or the active key with the active-key bit set; each
+ * of its eight 16-bit words then goes through RTL9602C_GPON_AES_KEY_DATA,
+ * written by a rising request bit in RTL9602C_GPON_AES_KEY_WORD with the word's
+ * index, whose done bit says that the write is complete. The data register
+ * reads back the last word written. The MAC makes the next key the active one
+ * at the superframe in RTL9602C_GPON_AES_SWITCH_TIME, when the superframe
+ * counter equals it and only then, so a superframe already passed waits for the
  * counter to come round. The switched bit reads 0 from the write of a next key
  * until the MAC has switched to it, and 1 after the switch or a write of the
  * active key.
@@ -2791,7 +2792,10 @@ struct rtl9602c_priv {
 	DECLARE_BITMAP(gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
 	/** @gpon_key_index: the index of the last key sent, 0 for none */
 	u8 gpon_key_index;
-	/** @gpon_key_switch: the superframe of the last Key_Switching_Time */
+	/**
+	 * @gpon_key_switch: the superframe of the last Key_Switching_Time, 0
+	 * after a deactivation
+	 */
 	u32 gpon_key_switch;
 	/** @gpon_work: the GPON worker, run every RTL9602C_GPON_POLL_MS */
 	struct delayed_work gpon_work;
