@@ -169,3 +169,15 @@ The test of a record's redaction gives it addresses outside the documentation
 ranges, a private one of each kind and a public resolver, which the redaction
 must take out; they name no unit and no bench. This entry names them too.
 """
+
+[[allow]]
+gate = "unit-ids"
+rules = ["ipv6-address"]
+paths = ["tests/device/devtest/tests/test_devtest.py", "tools/provenance/allowlist.toml"]
+values = ["fe80::200:5eff:fe00:5301", "2001:4860:4860::8888"]
+reason = """
+The test of a record's redaction gives it IPv6 addresses outside the
+documentation prefix, a link-local one made from a documentation MAC address
+and a public resolver's, which the redaction must take out; they name no unit
+and no bench. This entry names them too.
+"""
