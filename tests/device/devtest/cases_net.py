@@ -159,8 +159,11 @@ def local_run(argv: list[str], timeout: float) -> tuple[int, str]:
 @case("net.ssh-keys-only", "Host side", "The ssh server offers keys only, no passwords")
 def ssh_keys_only(ctx: Context):
     # From the machine that runs the tests, through the bench host, without
-    # offering a key: the refusal names the methods the server offers.
-    argv = ssh_base(ctx.settings) + ["-o", "PubkeyAuthentication=no",
+    # offering a key: the refusal names the methods the server offers. A
+    # connection of its own, as one shared with the cases before it is
+    # already logged in.
+    argv = ssh_base(ctx.settings) + ["-o", "ControlMaster=no", "-o", "ControlPath=none",
+                                     "-o", "PubkeyAuthentication=no",
                                      "-o", "StrictHostKeyChecking=no",
                                      "-o", "UserKnownHostsFile=/dev/null",
                                      "-J", ctx.settings.bench, f"root@{ctx.settings.stick}", "true"]

@@ -337,6 +337,9 @@ class Cases(unittest.TestCase):
                 cases_net.local_run = real
             self.assertIn("-J", seen[0])
             self.assertIn("PubkeyAuthentication=no", seen[0])
+            # Its own connection: one shared with the other cases is logged in.
+            self.assertIn("ControlMaster=no", seen[0])
+            self.assertIn("ControlPath=none", seen[0])
             return result
         self.assertEqual(outcome("root@x: Permission denied (publickey).\n").status, PASS)
         self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, FAIL)
