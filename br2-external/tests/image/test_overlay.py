@@ -31,7 +31,7 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # Programs of the dropbear package and of this tree's packages; every other
 # command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond", "nft", "onu-mode"}
+PACKAGES = {"omcid", "ponid", "devlink", "pond", "nft", "onu-mode", "tc"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 

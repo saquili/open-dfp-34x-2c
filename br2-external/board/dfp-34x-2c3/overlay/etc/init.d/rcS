@@ -77,6 +77,18 @@ ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" || warn "no VLAN $MGMT_
 ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
 ip link set mgmt up || warn "mgmt does not come up"
 
+# The management VLAN stays between the host side and the stick, so that the
+# network behind the PON never sees it and never reaches it: on sfp's ingress
+# the switch sends its frames to the CPU alone, which keeps them from the PON,
+# and on pon's ingress it drops them.
+mgmt_tag="pref 1 protocol 802.1Q flower skip_sw vlan_id $MGMT_VLAN"
+tc qdisc add dev sfp clsact &&
+	tc filter add dev sfp ingress $mgmt_tag action trap ||
+	warn "frames of VLAN $MGMT_VLAN can go out to the PON"
+tc qdisc add dev pon clsact &&
+	tc filter add dev pon ingress $mgmt_tag action drop ||
+	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
+
 # The ssh server takes keys only: /root/.ssh/authorized_keys, which an image
 # built with a bench's keys carries and this one does not.
 mkdir -p /run/dropbear
