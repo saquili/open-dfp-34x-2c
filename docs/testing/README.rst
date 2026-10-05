@@ -187,6 +187,14 @@ The runs, the oldest first:
     of each bridge port), and the driver's hold of the key switch for a new
     key and clearing of the keys when an activation ends. 43 of 43 passed.
 
+``2026-10-05-run20``
+    The same cases and the new case of the management VLAN on the RAM image
+    built from ``run20``, after the driver's ACL binds each rule to its
+    own port, matches a C-tag and the EtherType of a PPPoE session and lets a
+    passing rule decide its frames, the boot script keeps the management VLAN
+    off the PON, and omcid carries out the filters of the bridge ports. The lab
+    OLT sets no filter, so the cases ran without one. 44 of 44 passed.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
