@@ -99,7 +99,7 @@ class Root(unittest.TestCase):
         packages = sorted(k for k, v in board.items()
                           if k.startswith("BR2_PACKAGE_") and v == "y")
         self.assertEqual(packages, ["BR2_PACKAGE_DROPBEAR", "BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS",
-                                    "BR2_PACKAGE_ETHTOOL", "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
+                                    "BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12",
                                     "BR2_PACKAGE_HOST_SQUASHFS", "BR2_PACKAGE_IPROUTE2",
                                     "BR2_PACKAGE_LIBMNL",
                                     "BR2_PACKAGE_OMCID", "BR2_PACKAGE_ONU_UTILS",

@@ -70,6 +70,18 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(self.read().count("BUILD_ID="), 1)
         self.assertTrue(self.read().endswith("BUILD_ID=0123456789ab\n"))
 
+    def test_the_programs_of_iproute2_the_stick_does_not_run_go(self):
+        sbin = os.path.join(self.target, "sbin")
+        os.makedirs(sbin)
+        kept = ("ip", "tc", "bridge", "devlink")
+        gone = ("ctstat", "dcb", "genl", "ifstat", "lnstat", "nstat", "rdma", "routel",
+                "rtacct", "rtmon", "rtstat", "ss", "tipc", "vdpa")
+        for prog in kept + gone:
+            with open(os.path.join(sbin, prog), "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\n")
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(sorted(os.listdir(sbin)), sorted(kept))
+
     def test_without_the_file_it_fails(self):
         os.remove(self.release)
         done = self.run_script()
