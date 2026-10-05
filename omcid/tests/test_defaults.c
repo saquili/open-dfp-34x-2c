@@ -228,7 +228,7 @@ static void test_the_values_the_sheet_states(void)
 	for (unsigned int n = 0; n < caps.num_tcont; n++) {
 		const uint16_t id = (uint16_t)(0x8000u | n);
 
-		CHECK_EQ(read_u(mib, 262u, id, 1u), 0xffffu);
+		CHECK_EQ(read_u(mib, 262u, id, 1u), 0x00ffu);
 		CHECK_EQ(read_u(mib, 262u, id, 2u), 1u);
 		CHECK(read_u(mib, 262u, id, 3u) <= 2u);
 		CHECK_EQ(read_u(mib, 278u, id, 1u), id);

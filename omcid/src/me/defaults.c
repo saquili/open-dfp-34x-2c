@@ -49,8 +49,13 @@ enum {
 #define VEIP_INSTANCE ((uint16_t)(VEIP_SLOT << 8 | 1u))
 #define VEIP_CARDHOLDER ((uint16_t)(0x0100u | VEIP_SLOT))
 
-/* No Alloc-ID yet; and the size given to every queue. */
-#define ALLOC_ID_UNASSIGNED 0xffffu
+/*
+ * No Alloc-ID yet: 0x00FF, the first of the two values that G.988 9.2.2 gives
+ * the T-CONT of a G-PON ONU before the OLT maps it. 0xFFFF, the other, is the
+ * only one of the later PONs, and an OLT of G-PON need not take it as free.
+ * And the size given to every queue.
+ */
+#define ALLOC_ID_UNASSIGNED 0x00ffu
 #define QUEUE_SIZE 0x0400u
 
 /* An instance being built; the first failure stops the rest. */
