@@ -860,8 +860,11 @@ enum {
  * goes through RTL9602C_GPON_AES_KEY_DATA, written by a rising request bit in
  * RTL9602C_GPON_AES_KEY_WORD with the word's index, whose done bit says that
  * the write is complete. The MAC makes the next key the active one at the
- * superframe in RTL9602C_GPON_AES_SWITCH_TIME. The in-use bit is taken to say
- * which key is active (not verified).
+ * superframe in RTL9602C_GPON_AES_SWITCH_TIME, when the superframe counter
+ * equals it and only then, so a superframe already passed waits for the
+ * counter to come round. The switched bit reads 0 from the write of a next key
+ * until the MAC has switched to it, and 1 after the switch or a write of the
+ * active key.
  */
 #define RTL9602C_GPON_AES_KEY_CFG		0x703010
 #define RTL9602C_GPON_AES_KEY_CFG_REQ		BIT(15)
@@ -871,7 +874,7 @@ enum {
 #define RTL9602C_GPON_AES_KEY_WORD		0x703020
 #define RTL9602C_GPON_AES_KEY_WORD_REQ		BIT(15)
 #define RTL9602C_GPON_AES_KEY_WORD_DONE		BIT(14)
-#define RTL9602C_GPON_AES_KEY_WORD_IN_USE	BIT(7)
+#define RTL9602C_GPON_AES_KEY_WORD_SWITCHED	BIT(7)
 #define RTL9602C_GPON_AES_KEY_WORD_IDX		GENMASK(2, 0)
 #define RTL9602C_GPON_AES_KEY_DATA		0x703024
 #define RTL9602C_GPON_AES_KEY_WORDS		8

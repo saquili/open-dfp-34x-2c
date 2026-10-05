@@ -1777,10 +1777,26 @@ static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key)
 }
 
 /*
+ * Keep the next key from becoming the active one until a Key_Switching_Time
+ * names its superframe: the switch time becomes the superframe just passed,
+ * which the counter reaches again only after about 37 hours.
+ */
+static void rtl9602c_gpon_key_hold(struct rtl9602c_priv *p)
+{
+	u32 now = FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
+			    rtl9602c_r(p, RTL9602C_GTC_DS_SUPERFRAME));
+
+	rtl9602c_w(p, RTL9602C_GPON_AES_SWITCH_TIME,
+		   (now - 1) & RTL9602C_GPON_AES_SWITCH_TIME_SF);
+}
+
+/*
  * Answer Request_Key (G.984.3 clause 9.2.3.13): a new random key, under the
  * next index, sent as two Encryption_Key fragments three times over on the
- * normal queue, and written as the next key. The key is not kept, and the
- * ploamlog ring holds the fragments zeroed.
+ * normal queue, and written as the next key. A superframe that an earlier
+ * Key_Switching_Time chose goes with the key it was for (clause 12.4), so the
+ * switch is held until the OLT names one for the new key. The key is not kept,
+ * and the ploamlog ring holds the fragments zeroed.
  */
 static void rtl9602c_gpon_key_send(struct rtl9602c_priv *p)
 {
@@ -1805,6 +1821,7 @@ static void rtl9602c_gpon_key_send(struct rtl9602c_priv *p)
 		}
 	}
 
+	rtl9602c_gpon_key_hold(p);
 	if (rtl9602c_gpon_key_write(p, key))
 		pr_warn("<GPON> key %u was not taken by the MAC\n",
 			p->gpon_key_index);
@@ -2949,10 +2966,11 @@ void rtl9602c_gpon_stop(struct rtl9602c_priv *p)
  * counter totals since bring-up, which a read brings up to date, and the REI
  * reports: the BER interval the OLT set, 0 for none, and the reports sent since
  * the ONU entered O5; and the encryption: the index of the last key sent, 0 for
- * none, the superframe of the last Key_Switching_Time with the register, and
- * how many Port-IDs the OLT has encrypted. Last each GEM T-CONT as n=B/M, B
- * the Alloc-ID it holds and M the one management mapped it to, "-" for none.
- * No key is shown, and no register is written.
+ * none, "waiting" while the MAC has not yet switched to it, the superframe of
+ * the last Key_Switching_Time with the register, and how many Port-IDs the OLT
+ * has encrypted. Last each GEM T-CONT as n=B/M, B the Alloc-ID it holds and M
+ * the one management mapped it to, "-" for none. No key is shown, and no
+ * register is written.
  */
 static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 {
@@ -3015,9 +3033,12 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	seq_printf(s, "gem   %llu non-idle frames, BIP errors %llu bits in %llu frames\n",
 		   c.gem_frames, c.bip_errors, bip_blocks);
 	seq_printf(s, "rei   every %u ms, %u sent\n", rei_ms, rei_sent);
-	seq_printf(s, "aes   key %u, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
-		   key_index, key_switch,
-		   rtl9602c_r(p, RTL9602C_GPON_AES_SWITCH_TIME), aes_ports);
+	seq_printf(s, "aes   key %u%s, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
+		   key_index,
+		   rtl9602c_r(p, RTL9602C_GPON_AES_KEY_WORD) &
+		   RTL9602C_GPON_AES_KEY_WORD_SWITCHED ? "" : " waiting",
+		   key_switch, rtl9602c_r(p, RTL9602C_GPON_AES_SWITCH_TIME),
+		   aes_ports);
 	seq_puts(s, "tcont");
 	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
 		seq_printf(s, " %u=", n);

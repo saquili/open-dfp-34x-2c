@@ -2812,10 +2812,11 @@ G.984.3 lets the OLT switch on forward error correction in both directions, and
 provides encryption of the downstream GEM payload. The driver sets one FEC
 detection threshold and carries the ONU's side of the key exchange: on
 Request_Key it makes a new key, sends it to the OLT and writes it into the MAC
-as the next key; on Key_Switching_Time it writes the superframe from which that
-key applies; on Encrypted_Port-ID it marks the flow bound to that Port-ID for
-decryption. What it leaves out is under "Known limitations", and the rows here
-state what the driver does and what is assumed.
+as the next key, holding back a switch set up for the key before; on
+Key_Switching_Time it writes the superframe from which that key applies; on
+Encrypted_Port-ID it marks the flow bound to that Port-ID for decryption. What
+it leaves out is under "Known limitations", and the rows here state what the
+driver does and what is assumed.
 
 The key is written a 16-bit word at a time (``rtl9602c_gpon_key_write()``),
 under ``gpon_lock``:
@@ -2831,6 +2832,12 @@ under ``gpon_lock``:
    completion, I for the octet order)
 3. Write 0 into ``RTL9602C_GPON_AES_KEY_DATA``. Purpose: no part of the key
    stays readable there. (I)
+
+The MAC makes the next key the active one when the superframe counter equals
+``RTL9602C_GPON_AES_SWITCH_TIME``. Before a new key is written,
+``rtl9602c_gpon_key_hold()`` writes there the superframe just passed, which the
+30-bit counter reaches again only after about 37 hours, so that the new key is
+not switched to at a superframe that the OLT chose for the key before it.
 
 .. list-table::
    :header-rows: 1
@@ -2875,12 +2882,38 @@ under ``gpon_lock``:
        counter value, 30 bits, from which the new key applies. The driver
        writes it into ``RTL9602C_GPON_AES_SWITCH_TIME`` (``0x703014``,
        ``RTL9602C_GPON_AES_SWITCH_TIME_SF``, bits 29:0) and acknowledges every
-       copy. That the MAC then makes the next key the active one at that
-       superframe is not verified.
-     - M, I
-     - M: an injected Key_Switching_Time for superframe ``0x012345`` was
+       copy.
+     - M
+     - An injected Key_Switching_Time for superframe ``0x012345`` was
        acknowledged and the register read back ``00012345`` (the ``aes`` line
-       of the ``gpon`` view). I: an OLT that encrypts with the new key.
+       of the ``gpon`` view).
+   * - The MAC makes the next key the active one when the superframe counter
+       (the ``frame`` line of the ``gpon`` view) equals
+       ``RTL9602C_GPON_AES_SWITCH_TIME``, and only then: a superframe already
+       passed waits for the counter to come round.
+     - M
+     - With a next key written by a test build, the switched bit read 0; for
+       a Key_Switching_Time injected for superframe 78263320 it read 0 at
+       superframe 78263096 and 1 at 78263340, read back to back; for one
+       injected for 8000 superframes in the past it read 0 for 3 s.
+   * - ``RTL9602C_GPON_AES_KEY_WORD_SWITCHED`` (bit 7 of
+       ``RTL9602C_GPON_AES_KEY_WORD``) reads 0 from the write of a next key
+       until the MAC has switched to it, and 1 after the switch and after a
+       write of the active key, even over a next key that waits. The ``aes``
+       line of the ``gpon`` view shows ``waiting`` while it reads 0.
+     - M
+     - Read after each write of a test build and around switches (the row
+       above): 1 at reset, 1 after the active key, 0 after a next key, 1
+       after the switch, and 1 after the active key over a waiting next key.
+   * - Request_Key after an acknowledged Key_Switching_Time and before the
+       switch: the new key replaces the next key, and the superframe chosen
+       for the old one is dropped with it (``rtl9602c_gpon_key_hold()`` before
+       the new key is written).
+     - P, M
+     - P: ITU-T G.984.3 clause 12.4. M: Request_Key injected after a
+       Key_Switching_Time for superframe 82056983 and before it: the switch
+       time read the superframe just passed, and 5 s later, past 82056983,
+       the new key still waited; a Key_Switching_Time for it then switched it.
    * - Encrypted_Port-ID (identifier 8, directed, in O4 and O5): octet 3 bit 0
        set encrypts the Port-ID, clear stops it; the Port-ID as in
        Configure_Port-ID. The driver records the Port-ID and sets or clears
@@ -3002,7 +3035,8 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        maps accepted, CRC errors, overflows, non-idle GEM frames, the BIP
        errors in bits and the frames they were in); ``rei``, the BER interval
        in ms (0 while none is set) and the REI messages sent since the ONU
-       entered O5; ``aes``, the index of the last key sent (0 for none), the
+       entered O5; ``aes``, the index of the last key sent (0 for none),
+       ``waiting`` while the MAC has not switched to the next key, the
        superframe of the last Key_Switching_Time with
        ``RTL9602C_GPON_AES_SWITCH_TIME``, and the Port-IDs encrypted; last
        ``tcont``, each GEM T-CONT as ``n=B/M``, ``B`` the Alloc-ID it holds and
