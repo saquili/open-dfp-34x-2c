@@ -541,6 +541,165 @@ def mgmt_isolation(ctx: Context):
                        f"{stack_text(other_up)}, downstream: {stack_text(other_down)}")
 
 
+# The stick's silence towards the PON: it has no address there, so it answers
+# nothing that comes from the network side, and nothing of its own leaves by
+# the PON. The bench asks from the network side, untagged, for the management
+# address by ARP and pings all IPv6 nodes of the link; software filters on the
+# stick's GEM interfaces count the questions that reach its CPU, which a zero
+# needs as its control. The same questions from the subscriber side, in the
+# management VLAN, are answered: the control that the probe and the stick's
+# answers work.
+SILENCE_COUNT = 10
+SILENCE_PREF = 49040
+
+# Run by python3 on the bench host with PORT VID ADDRESS STICK COUNT: COUNT
+# times, an ARP request for ADDRESS and an ICMPv6 echo request from the port's
+# own link-local address to all nodes (ff02::1), tagged VID, untagged for VID
+# 0, a fifth of a second apart. It joins its solicited-node group and answers
+# a neighbour solicitation for its address, which the bench need not hold,
+# so that an echo can be answered.
+# It prints, as JSON, what came back to PORT from the MAC address STICK alone,
+# whatever its tag (another ONU on the PON may answer too): ARP replies for
+# ADDRESS, echo replies, and neighbour solicitations for its address.
+SILENCE = """\
+import json, socket, struct, sys, threading, time
+port, vid, address, stick, count = (sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4],
+                                    int(sys.argv[5]))
+src = bytes.fromhex(open("/sys/class/net/%s/address" % port).read().strip().replace(":", ""))
+peer = bytes.fromhex(stick.replace(":", ""))
+own = b"\\xfe\\x80" + bytes(6) + bytes([src[0] ^ 2]) + src[1:3] + b"\\xff\\xfe" + src[3:6]
+target = socket.inet_aton(address)
+tag = struct.pack(">HH", 0x8100, vid) if vid else b""
+s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+s.bind((port, 0))
+s.settimeout(0.3)
+# The solicitations for its address go to its solicited-node group, which
+# the port filters out unless the socket joins it.
+s.setsockopt(263, 1, struct.pack("iHH8s", socket.if_nametoindex(port), 0, 6,
+                                 b"\\x33\\x33\\xff" + own[13:16]))
+seen = {"arp": 0, "echo6": 0, "ns": 0}
+stop = []
+def checksum(b):
+    b += b"\\0" * (len(b) % 2)
+    total = sum(struct.unpack(">%dH" % (len(b) // 2), b))
+    while total >> 16:
+        total = (total & 0xffff) + (total >> 16)
+    return ~total & 0xffff
+def icmp6(dst_mac, dst, body):
+    body = body[:2] + struct.pack(">H", checksum(own + dst + struct.pack(">I", len(body)) +
+                                                b"\\0\\0\\0\\x3a" + body)) + body[4:]
+    return (dst_mac + src + tag + b"\\x86\\xdd" +
+            struct.pack(">IHBB", 0x60000000, len(body), 58, 255) + own + dst + body)
+def receive():
+    while not stop:
+        try:
+            data = s.recv(2048)
+        except socket.timeout:
+            continue
+        if data[6:12] != peer:
+            continue
+        off = 12
+        while data[off:off + 2] in (b"\\x81\\x00", b"\\x88\\xa8"):
+            off += 4
+        kind, body = data[off:off + 2], data[off + 2:]
+        if kind == b"\\x08\\x06" and body[6:8] == b"\\x00\\x02" and body[14:18] == target:
+            seen["arp"] += 1
+        elif kind == b"\\x86\\xdd" and len(body) > 41 and body[6] == 58:
+            if body[40] == 129:
+                seen["echo6"] += 1
+            elif body[40] == 135 and body[48:64] == own:
+                seen["ns"] += 1
+                advert = (struct.pack(">BBHI", 136, 0, 0, 0x60000000) + own +
+                          b"\\x02\\x01" + src)
+                s.send(icmp6(data[6:12], body[8:24], advert))
+thread = threading.Thread(target=receive, daemon=True)
+thread.start()
+arp = (b"\\xff" * 6 + src + tag + b"\\x08\\x06" + struct.pack(">HHBBH", 1, 0x0800, 6, 4, 1) +
+       src + socket.inet_aton("192.0.2.254") + bytes(6) + target)
+arp += bytes(max(0, 60 - len(arp)))
+nodes = bytes.fromhex("ff020000000000000000000000000001")
+echo = icmp6(b"\\x33\\x33\\x00\\x00\\x00\\x01", nodes,
+             struct.pack(">BBHHH", 128, 0, 0, 0x5eed, 1) + b"silence")
+for _ in range(count):
+    s.send(arp)
+    s.send(echo)
+    time.sleep(0.2)
+time.sleep(1.5)
+stop.append(1)
+thread.join()
+print(json.dumps(seen))
+"""
+
+
+def silence_probe(ctx: Context, port: str, vid: int, address: str,
+                  stick: str) -> dict[str, int]:
+    command = sudo(ctx.settings, " ".join(shlex.quote(a) for a in (
+        "python3", "-", port, str(vid), address, stick, str(SILENCE_COUNT))))
+    reply = ctx.bench.run(command, stdin=SILENCE, timeout=60)
+    try:
+        return json.loads(reply.out.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        raise ValueError(f"the probe did not run: {(reply.err or reply.out).strip()!r}")
+
+
+@case("data.pon-silence", "Data path",
+      "The stick keeps IPv6 off its PON side and answers neither ARP for its management "
+      "address nor an IPv6 ping of all nodes from the network side, though the questions "
+      "reach its CPU; from the subscriber side, in the management VLAN, it answers both")
+def pon_silence(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    vid = mgmt_vlan(ctx)
+    found = re.search(r"inet (\d+(?:\.\d+){3})/", ctx.stick.run("ip -4 -o addr show dev mgmt").out)
+    if vid is None or not found:
+        return failed("the stick has no management VLAN interface mgmt with an address")
+    address = found.group(1)
+    mac = ctx.stick.text("cat /sys/class/net/mgmt/address")
+    gems = ctx.stick.text("cd /sys/class/net && ls -d gem* 2>/dev/null; true").split()
+    if not gems:
+        return failed("no GEM interface on the stick")
+    pon_side = [dev for dev in ("pon", "cpu", "omcibr0", *gems)
+                if ctx.stick.run(f"[ -e /sys/class/net/{dev} ]").ok]
+    ipv6_on = [dev for dev in pon_side
+               if ctx.stick.text(f"cat /proc/sys/net/ipv6/conf/{dev}/disable_ipv6") != "1"]
+    with_address = sorted({line.split()[1] for line in
+                           ctx.stick.text("ip -6 -o addr show; true").splitlines()
+                           if len(line.split()) > 1 and line.split()[1] in pon_side})
+    arp_ignore = ctx.stick.text("cat /proc/sys/net/ipv4/conf/all/arp_ignore")
+    rule = "tc filter {} dev {} ingress pref {} {}"
+    counters = (("protocol ipv6 flower skip_hw dst_ip ff02::1 ip_proto icmpv6 type 128 "
+                 "action pass"),
+                f"protocol arp flower skip_hw arp_tip {address} action pass")
+    added = clsact(ctx, gems)
+    try:
+        for gem in gems:
+            for k, text in enumerate(counters):
+                reply = ctx.stick.run(rule.format("add", gem, SILENCE_PREF + k, text))
+                if not reply.ok:
+                    return failed(f"tc refused {text!r} on {gem}: "
+                                  f"{(reply.err or reply.out).strip()}")
+        network = silence_probe(ctx, ctx.settings.olt_port, 0, address, mac)
+        shown = ctx.stick.text("; ".join(f"tc -s filter show dev {gem} ingress pref "
+                                         f"{SILENCE_PREF + k}"
+                                         for gem in gems for k in range(len(counters))))
+    finally:
+        ctx.stick.run("; ".join(
+            [rule.format("del", gem, SILENCE_PREF + k, "2>/dev/null")
+             for gem in gems for k in range(len(counters))] +
+            [f"tc qdisc del dev {dev} clsact" for dev in added] + ["true"]))
+    host = silence_probe(ctx, ctx.settings.subscriber_port, vid, address, mac)
+    took = sum(int(n) for n in re.findall(r"Sent \d+ bytes (\d+) pkt", shown))
+    ok = (not ipv6_on and not with_address and arp_ignore == "1" and
+          not any(network.values()) and took >= SILENCE_COUNT and
+          host["arp"] >= SILENCE_COUNT * 0.9 and host["echo6"] >= SILENCE_COUNT * 0.9)
+    return verdict(ok, f"IPv6 on {', '.join(ipv6_on) or 'none'} of {', '.join(pon_side)}; "
+                       f"IPv6 addresses on {', '.join(with_address) or 'none'}; arp_ignore "
+                       f"{arp_ignore}; {SILENCE_COUNT} ARP requests and IPv6 pings from the "
+                       f"network side: {took} reached the CPU, answered {network['arp']} ARP, "
+                       f"{network['echo6']} echo, {network['ns']} solicitation; from the "
+                       f"subscriber side in VLAN {vid}: {host['arp']} ARP, {host['echo6']} echo")
+
+
 # The ACL case: frames of the probe's EtherType from the network side, against
 # drop and trap rules on the PON port at two tc priorities of its own. The CPU
 # gets a frame from the PON on the interface of its GEM port, so a software

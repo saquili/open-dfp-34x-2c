@@ -544,6 +544,49 @@ class Cases(unittest.TestCase):
         self.assertEqual(blocked.status, FAIL)
         self.assertIn("200 of VLAN 3005 upstream: nothing", blocked.evidence)
 
+    def test_the_silence_case_wants_nothing_answered_from_the_pon_and_the_host_answered(self):
+        def outcome(ipv6: str = "1", answered: int = 0, reached: int = 5, host: int = 10):
+            trail: list[str] = []
+
+            class Bench(Canned):
+                def run(self, command, **kw):
+                    if "python3 -" not in command:
+                        return super().run(command, **kw)
+                    port = re.search(r"python3 - (\S+) ", command).group(1)
+                    got = ({"arp": answered, "echo6": 0, "ns": 0} if port == "eth1" else
+                           {"arp": host, "echo6": host, "ns": 0})
+                    self.answers[0] = ("python3 -", 0, json.dumps(got) + "\n")
+                    return super().run(command, **kw)
+
+            config = ("VLAN Dev name | VLAN ID\nName-Type: VLAN_NAME_TYPE_RAW_PLUS_VID_NO_PAD\n"
+                      "mgmt           | 4094  | sfp\n")
+            shown = f"filter protocol ipv6 pref 49040\n Sent 900 bytes {reached} pkt\n"
+            stick = Canned("stick", [
+                ("vlan/config", 0, config),
+                ("addr show dev mgmt", 0, "5: mgmt    inet 198.51.100.2/30 scope global mgmt\n"),
+                ("mgmt/address", 0, "00:00:5e:00:53:02\n"),
+                ("ls -d gem", 0, "gem256\ngem4095\n"),
+                (r"^\[ -e ", 0, ""),
+                ("disable_ipv6", 0, ipv6 + "\n"),
+                ("ip -6 -o addr", 0, "2: sfp    inet6 fe80::1/64 scope link\n"),
+                ("arp_ignore", 0, "1\n"),
+                ("tc -s filter show", 0, shown * 4),
+                ("^tc ", 0, ""),
+            ], trail)
+            bench = Bench("bench", [("python3 -", 0, ""),
+                                    ("command -v", 0, "/usr/bin/python3\n")], trail)
+            settings = dataclasses.replace(SETTINGS, olt_port="eth1", subscriber_port="eth2")
+            return cases_data.pon_silence(Context(settings, stick, bench, trail))
+        good = outcome()
+        self.assertEqual(good.status, PASS, good.evidence)
+        self.assertIn("20 reached the CPU, answered 0 ARP", good.evidence)
+        self.assertIn("in VLAN 4094: 10 ARP, 10 echo", good.evidence)
+        self.assertEqual(outcome(ipv6="0").status, FAIL)
+        self.assertEqual(outcome(answered=1).status, FAIL)
+        # A zero answer is worth nothing if the questions never reached the CPU.
+        self.assertEqual(outcome(reached=0).status, FAIL)
+        self.assertEqual(outcome(host=0).status, FAIL)
+
     def test_the_multicast_case_wants_every_report_through_and_unasked_groups_kept_out(self):
         def outcome(reports_to_a_group_pass: bool):
             trail: list[str] = []
