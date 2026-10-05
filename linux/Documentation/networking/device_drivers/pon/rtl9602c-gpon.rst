@@ -2951,9 +2951,16 @@ into the next key, then into the active key.
        ``aes`` line counted 1 Port-ID, then 0).
    * - That the MAC decrypts what an OLT encrypts with the key the driver sent:
        the octet order of the key words and the counter's start are the
-       MAC's and the OLT's, and no OLT that encrypts has been tried.
+       MAC's and the OLT's, and no OLT that encrypts has been tried. Frames
+       that a Port-ID marked encrypted carries in the clear cannot be read on
+       the board: the decryption leaves their FCS wrong, and the switch drops
+       them.
      - I
-     - An OLT that encrypts a Port-ID.
+     - An OLT that encrypts a Port-ID. With Port-ID 4095 marked encrypted
+       while the OLT sent it in the clear, 20 of 20 test frames were counted
+       in ``rx_crc_errors`` of the ``pon`` port, with
+       ``RTL9602C_GEM_DS_MC_FILTER_FCS_CHECK`` set and, in a test build,
+       clear; none reached the CPU.
 
 Reporting: the PON class and devlink
 ====================================
