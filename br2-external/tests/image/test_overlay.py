@@ -109,6 +109,16 @@ class BootScript(unittest.TestCase):
     def test_a_bench_can_override_the_addresses(self):
         self.assertIn("[ -r /etc/board.conf ] && . /etc/board.conf", read(RCS))
 
+    def test_a_bench_can_name_the_versions_the_olt_reads(self):
+        text = read(RCS)
+        start, end = text.index("ponid >/run/onu-identity"), text.index("umask 022")
+        for key, name in (("sw_version", "OMCI_SW_VERSION"),
+                          ("pack_version", "OMCI_PACK_VERSION")):
+            with self.subTest(key=key):
+                line = f'echo "{key}=${name}" >>/run/onu-identity'
+                self.assertIn(line, text)
+                self.assertTrue(start < text.index(line) < end)
+
 
 class Reading(unittest.TestCase):
     """The reading of a script that the tests above rest on."""

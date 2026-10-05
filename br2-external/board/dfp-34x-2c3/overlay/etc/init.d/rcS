@@ -116,6 +116,11 @@ dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid || warn "dropbear did
 # file holds the PLOAM password, so only root may read it.
 umask 077
 ponid >/run/onu-identity || warn "no identity in the factory configuration"
+# A bench may name the versions that the software images and the circuit
+# packs report to the OLT, so that a unit shows what the firmware it came
+# with showed; without them omcid reports its own.
+[ -n "${OMCI_SW_VERSION:-}" ] && echo "sw_version=$OMCI_SW_VERSION" >>/run/onu-identity
+[ -n "${OMCI_PACK_VERSION:-}" ] && echo "pack_version=$OMCI_PACK_VERSION" >>/run/onu-identity
 umask 022
 serial=$(grep '^serial=' /run/onu-identity | cut -d= -f2)
 ploam=$(grep '^ploam_password=' /run/onu-identity | cut -d= -f2-)
