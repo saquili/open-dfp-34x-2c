@@ -434,18 +434,20 @@ Rules, templates and lookup
        slots from ``RTL9602C_ACL_RULE_SLOT0_LSB`` (16), slot k at bits 16k + 31
        to 16k + 16; the valid bit at ``RTL9602C_ACL_RULE_VALID_BIT`` (144), set
        in the ones plane. All eight slots compare. The driver compares all three
-       template bits and, of the port bits, only its rule's own port.
+       template bits and all six port bits, its rule's port set and the others
+       clear; compared alone, the bit of the rule's own port kept no port out.
      - M
      - After a full chip reset, rules on port 0: an EtherType match placed alone
        in slot k drops its target and passes a control frame for every k from 0
        to 7; clearing the ones plane stops the rule.
-   * - The port bit of the rule entry selects ports 1 to 3 the same way as port
-       0.
+   * - A rule acts on the frames that come in on its own port and on no other.
      - M
-     - For port 2: a drop rule and a trap rule on ``pon`` for EtherType
-       ``0x88b5`` each kept all 200 frames of it that came through the PON for
-       the host side, while the same frames reached the host side with no rule.
-       Ports 1 and 3 carry no traffic that could test theirs.
+     - 100 frames each way per case. A drop on ``sfp`` for EtherType
+       ``0x88b5`` kept every frame from the host side and none from the PON; a
+       drop on ``pon`` the reverse. When the driver compared only the bit of
+       the rule's own port, a drop on VLAN 3005, on ``sfp`` or on ``pon`` (in
+       a test build), kept the frames of both ways. Ports 1 and 3 carry no
+       traffic that could test theirs.
    * - ``RTL9602C_ACL_TMPL_FIELD`` (``0x015008``) holds the templates: slot k of
        template t is a 7-bit field code at bit 7(n mod 4) of word n/4, where n =
        8t + k; bits 31:28 of each word are unused. ``RTL9602C_ACL_TMPL_COUNT``

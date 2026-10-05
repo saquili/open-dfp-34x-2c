@@ -1925,7 +1925,7 @@ static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 	unsigned int i;
 
 	rtl9602c_acl_pair(data, mask, 0, 3, tmpl, 7);
-	rtl9602c_acl_pair(data, mask, 10, 6, BIT(port), BIT(port));
+	rtl9602c_acl_pair(data, mask, 10, 6, BIT(port), GENMASK(5, 0));
 
 	for (i = 0; i < m->n; i++) {
 		unsigned int lsb = RTL9602C_ACL_RULE_SLOT0_LSB + 16 * slot_of[i];
