@@ -658,6 +658,14 @@ decision is one of them.
        arrived, the counting rule counted 20 more and the drop rule none; with
        the drop rule moved to a smaller value, none arrived, the drop rule
        counted 20 and the counting rule nothing more.
+   * - A rule on ``protocol 0x8864``, the EtherType of a PPPoE session, compares
+       ``RTL9602C_ACL_TMPL_FIELD_ETHERTYPE``, which holds it behind a C-tag
+       too.
+     - M
+     - Passes on ``sfp`` for EtherTypes ``0x8863`` and ``0x8864`` ahead of drops
+       of every other frame: of 20 frames from the host side each, those of
+       ``0x8864`` in VLAN 410 and of ``0x8863`` untagged all crossed, and none
+       of ``0x88b5``, untagged or in VLAN 410, nor of ARP.
    * - A rule that passes decides the forwarding of the frames it matches:
        ``RTL9602C_ACL_ACT_FWD_MIRROR`` with no port in its mask forwards them
        as the switch would, and no rule of lower priority drops them; a rule
@@ -730,9 +738,11 @@ to an ACL rule.
        (see "Storm control"). Accepted matches: EtherType, IP protocol, destination and
        source MAC and IPv4 addresses (with masks), L4 source and destination
        ports, and the type and code of ICMP and ICMPv6 (see "The parser's
-       field selectors"); or an 802.1Q tag, its VID from 1 to 4094 and its
-       priority if named, with the MAC addresses and nothing else, since what
-       the other fields hold for a tagged frame is not verified. Each field is
+       field selectors"); the EtherType of a PPPoE session, which flower
+       carries in its PPPoE key rather than as the EtherType, compared as the
+       EtherType; or an 802.1Q tag, its VID from 1 to 4094 and its priority if
+       named, with the MAC addresses and nothing else, since what the other
+       fields hold for a tagged frame is not verified. Each field is
        cut into 16-bit slots and a slot whose mask is zero is left out. The IP
        protocol of an IPv6 rule, one with the exact EtherType ``0x86dd``, is
        compared in ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, which holds the
@@ -750,7 +760,8 @@ to an ACL rule.
        port); more than eight slots; an L4 port or an ICMP type without an
        exact IPv4 or IPv6 EtherType and an exact IP protocol; a tag rule on VID
        0 (an untagged frame reads 0), on an 802.1ad tag, on what follows the
-       tag, or with any field but the addresses. Refused with
+       tag, or with any field but the addresses; a PPPoE session's number or
+       PPP protocol. Refused with
        ``-ENOSPC``: no template
        covers the fields and none is free; all 96 entries are in use, four of
        them by the driver's own rules (see "Rules of the driver's own").

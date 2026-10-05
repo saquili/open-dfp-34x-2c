@@ -2257,10 +2257,30 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 	      BIT_ULL(FLOW_DISSECTOR_KEY_IPV6_ADDRS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_PORTS) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_VLAN) |
+	      BIT_ULL(FLOW_DISSECTOR_KEY_PPPOE) |
 	      BIT_ULL(FLOW_DISSECTOR_KEY_ICMP))) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "this ACL matches addresses, a C-tag, ethertype, IP protocol, IPv4 addresses, L4 ports and ICMP types");
 		return -EOPNOTSUPP;
+	}
+
+	/*
+	 * A rule on the EtherType of a PPPoE session carries it as the type of
+	 * the PPPoE key, the basic EtherType left out; the session and the PPP
+	 * protocol behind it are not matched.
+	 */
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PPPOE)) {
+		struct flow_match_pppoe pppoe;
+
+		flow_rule_match_pppoe(rule, &pppoe);
+		if (pppoe.mask->session_id || pppoe.mask->ppp_proto) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "a PPPoE rule matches the EtherType of the session alone");
+			return -EOPNOTSUPP;
+		}
+		rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
+				  ntohs(pppoe.key->type),
+				  ntohs(pppoe.mask->type));
 	}
 
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_VLAN)) {
