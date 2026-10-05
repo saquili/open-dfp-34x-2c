@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import time
 
 from .core import Context, case, failed, passed, verdict
@@ -19,6 +20,19 @@ TROUBLE = (r"(BUG:|Oops|WARNING:|Call Trace|Kernel panic|segfault|unhandled|soft
 # in which it must be back: the boot loader counts down for up to ten minutes.
 RESET_MARGIN = 15
 RESET_RETURN = 900
+# Seconds the bench's reload command may take: a RAM boot, with its retries.
+RELOAD_TIMEOUT = 600
+
+
+def reload_stick(command: str) -> tuple[int, str]:
+    """Run the bench's reload command here: its exit code and its last line."""
+    try:
+        done = subprocess.run(command, shell=True, capture_output=True, text=True,
+                              timeout=RELOAD_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired:
+        return 124, f"no end within {RELOAD_TIMEOUT} s"
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    return done.returncode, lines[-1] if lines else ""
 
 
 def kernel_version() -> str:
@@ -150,8 +164,10 @@ def watchdog_reset(ctx: Context):
     ctx.stick.run("killall watchdog; sleep 1; echo armed > /dev/watchdog", timeout=20)
     start = time.monotonic()
     gone = None
+    how = ""
     # Gone within the timeout and a margin, then back with a new boot: the
-    # boot loader may count down for minutes before it starts a kernel.
+    # boot loader may count down for minutes before it starts a kernel, unless
+    # the bench's reload command brings the stick back as soon as it is gone.
     while time.monotonic() - start < timeout + RESET_RETURN:
         time.sleep(5)
         reply = ctx.stick.run("cat /proc/sys/kernel/random/boot_id", timeout=10)
@@ -160,6 +176,12 @@ def watchdog_reset(ctx: Context):
         if not answer:
             if gone is None:
                 gone = now
+                if ctx.settings.reload:
+                    code, last = reload_stick(ctx.settings.reload)
+                    ctx.log.append(f"local$ the reload command\n{last}\n[exit {code}]\n")
+                    how = (", brought back by the reload command" if code == 0 else
+                           f", by the loader's countdown: the reload command failed "
+                           f"(exit {code})")
         elif answer == boot:
             if now > timeout + RESET_MARGIN:
                 return failed(f"timeout {timeout} s; still answering {now:.0f} s after arming")
@@ -168,6 +190,6 @@ def watchdog_reset(ctx: Context):
                           "without having been seen gone")
         else:
             return passed(f"timeout {timeout} s; gone after {gone:.0f} s, back with a new "
-                          f"boot after {now:.0f} s")
+                          f"boot after {now:.0f} s{how}")
     return failed(f"timeout {timeout} s; gone after {gone:.0f} s, no new boot within "
                   f"{timeout + RESET_RETURN} s")

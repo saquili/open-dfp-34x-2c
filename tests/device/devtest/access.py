@@ -42,6 +42,7 @@ class Settings:
     router: bool = False
     pppoe_secrets: str = ""
     bng_service: str = "accel-ppp"
+    reload: str = ""
 
 
 @dataclasses.dataclass

@@ -58,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bng-service",
                         default=os.environ.get("DEVTEST_BNG_SERVICE", "accel-ppp"),
                         help="the bench host's systemd unit of the PPPoE concentrator")
+    parser.add_argument("--reload", default=os.environ.get("DEVTEST_RELOAD", ""),
+                        help="a command, run here, that brings the stick back right after a "
+                             "case resets it, such as a RAM boot that breaks into the "
+                             "loader's countdown (DEVTEST_RELOAD); without one, the case waits "
+                             "for the loader")
     parser.add_argument("--out", default="", help="write NAME.rst, NAME.log and NAME.json")
     parser.add_argument("--title", default="", help="the title of the page")
     parser.add_argument("--list", action="store_true", help="list the cases and stop")
@@ -78,7 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings(bench=args.bench, stick=args.stick, bench_sudo=not args.no_sudo,
                         olt_port=args.olt_port, subscriber_port=args.subscriber_port,
                         pond_token=token, router=args.router,
-                        pppoe_secrets=args.pppoe_secrets, bng_service=args.bng_service)
+                        pppoe_secrets=args.pppoe_secrets, bng_service=args.bng_service,
+                        reload=args.reload)
     trail: list[str] = []
     ctx = Context(settings, stick_remote(settings, trail), bench_remote(settings, trail), trail,
                   destructive=args.destructive)

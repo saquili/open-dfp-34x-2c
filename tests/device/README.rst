@@ -75,10 +75,14 @@ the cases that put the stick in router mode and back run only with
 ``--router`` (``--pppoe-secrets FILE`` and ``--bng-service UNIT``,
 ``accel-ppp`` by default, for the PPPoE case). Without ``--olt-port`` and
 ``--subscriber-port`` the data-path cases are skipped; without
-``--token-file`` so is the case that reads values from the status daemon. The
-settings can also come from the environment:
+``--token-file`` so is the case that reads values from the status daemon. A
+case that resets the stick waits for the boot loader to count down, which can
+take minutes; ``--reload COMMAND`` names a command, run on the machine that
+runs the tests as soon as the stick is gone, that brings it back at once, such
+as the bench tool's RAM boot of the image under test, which breaks into the
+countdown (``tools/bench``). The settings can also come from the environment:
 ``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_OLT_PORT``,
-``DEVTEST_SUBSCRIBER_PORT`` and ``DEVTEST_TOKEN_FILE``.
+``DEVTEST_SUBSCRIBER_PORT``, ``DEVTEST_TOKEN_FILE`` and ``DEVTEST_RELOAD``.
 
 What a run records leaves out what names one unit or one bench: MAC addresses,
 GPON serial numbers, the token, and the names of the bench host and the stick

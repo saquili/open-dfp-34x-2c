@@ -320,6 +320,64 @@ class Cases(unittest.TestCase):
         late = ["first"] * 20 + [None] * 10 + ["second"]
         self.assertEqual(outcome(late).status, FAIL)
 
+    def test_a_reload_command_brings_the_stick_back_once_it_is_gone(self):
+        class Clock:
+            now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += seconds
+
+        class Stick:
+            def __init__(self, boots):
+                self.boots = iter(boots)
+
+            def text(self, command, *, timeout=60.0):
+                return "44" if "timeout" in command else "first"
+
+            def run(self, command, *, timeout=60.0, check=False, stdin=None):
+                if "boot_id" not in command:
+                    return Reply([command], 0, "", "", 0.0)
+                boot = next(self.boots)
+                return Reply([command], 0 if boot else 255, boot or "", "", 0.0)
+
+        def outcome(code):
+            calls = []
+            real = cases_system.time, cases_system.reload_stick
+            cases_system.time = Clock()
+            cases_system.reload_stick = lambda command: (calls.append(command) or
+                                                         (code, "ramboot ok"))
+            try:
+                ctx = context()
+                ctx.settings = dataclasses.replace(SETTINGS, reload="bring it back")
+                ctx.stick = Stick(["first"] * 8 + [None] * 3 + ["second"])
+                return cases_system.watchdog_reset(ctx), calls, ctx.log
+            finally:
+                cases_system.time, cases_system.reload_stick = real
+
+        result, calls, trail = outcome(0)
+        self.assertEqual(result.status, PASS)
+        self.assertEqual(calls, ["bring it back"])
+        self.assertIn("brought back by the reload command", result.evidence)
+        self.assertIn("local$ the reload command\nramboot ok\n[exit 0]\n", trail)
+        result, calls, _trail = outcome(2)
+        self.assertEqual(result.status, PASS)
+        self.assertIn("the reload command failed (exit 2)", result.evidence)
+
+    def test_the_reload_command_runs_here_and_gives_its_last_line(self):
+        self.assertEqual(cases_system.reload_stick("echo one; echo two"), (0, "two"))
+        self.assertEqual(cases_system.reload_stick("echo gone >&2; exit 3"), (3, "gone"))
+        self.assertEqual(cases_system.reload_stick("true"), (0, ""))
+        real = cases_system.RELOAD_TIMEOUT
+        cases_system.RELOAD_TIMEOUT = 0.2
+        try:
+            self.assertEqual(cases_system.reload_stick("exec sleep 5"),
+                             (124, "no end within 0.2 s"))
+        finally:
+            cases_system.RELOAD_TIMEOUT = real
+
     def test_the_filter_must_drop_in_both_chains(self):
         two = "policy drop;\npolicy drop;\npolicy accept;\n"
         self.assertEqual(cases_net.filter_loaded(context(stick=[("nft list", 0, two)])).status, PASS)
