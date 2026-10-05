@@ -2434,16 +2434,21 @@ static int g_mc_trap_err;
 static int g_mc_tx = -1;
 
 /*
- * A flower rule of one gact action, @action: the frames of protocol @proto;
- * with @ip_proto, of that IP protocol; with an @icmp_type not negative, of
- * that ICMPv6 type; with @dmac, to that MAC address; with @dip, to that
- * IPv4 address. @handle 0 lets the kernel choose it.
+ * A flower rule of one gact action, @action: the frames of protocol @proto,
+ * ETH_P_ALL for every EtherType; with @ip_proto, of that IP protocol; with an
+ * @icmp_type not negative, of that ICMPv6 type; with @dmac, to that MAC
+ * address, compared where @dmask has ones (all of it without @dmask); with
+ * @smac, from that address under @smask; with @dip, to that IPv4 address.
+ * @handle 0 lets the kernel choose it.
  */
 struct tc_gact_rule {
 	uint16_t proto;
 	uint8_t ip_proto;
 	int icmp_type;
 	const uint8_t *dmac;
+	const uint8_t *dmask;
+	const uint8_t *smac;
+	const uint8_t *smask;
 	const uint8_t *dip;
 	int action;
 	uint32_t handle;
@@ -2479,7 +2484,9 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 
 	opts = off;
 	off += NLA_HDRLEN_;
-	off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &eth, sizeof(eth));
+	if (r->proto != ETH_P_ALL)
+		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_TYPE, &eth,
+			      sizeof(eth));
 	if (r->ip_proto)
 		off = nla_put(req, off, TCA_FLOWER_KEY_IP_PROTO, &r->ip_proto,
 			      sizeof(r->ip_proto));
@@ -2494,7 +2501,13 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 	if (r->dmac) {
 		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_DST, r->dmac,
 			      ETH_ALEN);
-		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_DST_MASK, all,
+		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_DST_MASK,
+			      r->dmask ? r->dmask : all, ETH_ALEN);
+	}
+	if (r->smac) {
+		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_SRC, r->smac,
+			      ETH_ALEN);
+		off = nla_put(req, off, TCA_FLOWER_KEY_ETH_SRC_MASK, r->smask,
 			      ETH_ALEN);
 	}
 	if (r->dip) {
@@ -2547,6 +2560,66 @@ static int mcast_traps(int uni, bool on)
 	if (err)
 		(void)mcast_traps(uni, false);
 	return err;
+}
+
+/*
+ * The bridge port filters: a flower rule each, on sfp's ingress for the frames
+ * that go upstream and on pon's for those that go downstream, with priorities
+ * from FILTER_PRIO in the order given. They come after the traps of IGMP and
+ * MLD, so that the agent still takes those, and before the counting rules of
+ * the multicast groups, so that a filter drops a group's frames.
+ */
+#define FILTER_PRIO 240u
+
+static bool mac_any(const uint8_t *mask)
+{
+	for (size_t i = 0; i < ETH_ALEN; i++)
+		if (mask[i])
+			return true;
+	return false;
+}
+
+static enum omci_status kernel_filter_apply(const struct omci_hw_filter *rules,
+					    size_t n)
+{
+	const int uni = (int)if_nametoindex(UNI_IFNAME);
+	const int pon = (int)if_nametoindex(PON_IFNAME);
+	unsigned int up = 0, down = 0;
+	int err = 0;
+
+	if (n > OMCI_HW_FILTER_MAX)
+		return OMCI_ERR_NOMEM;
+	if (!uni || !pon)
+		return OMCI_ERR_HW;
+	for (unsigned int i = 0; i < OMCI_HW_FILTER_MAX; i++) {
+		(void)tc_filter_del(uni, FILTER_PRIO + i);
+		(void)tc_filter_del(pon, FILTER_PRIO + i);
+	}
+	if (n == 0 || router_skips("bridge port filters"))
+		return OMCI_OK;
+	err = tc_clsact_ensure(uni);
+	if (!err)
+		err = tc_clsact_ensure(pon);
+	for (size_t i = 0; i < n && !err; i++) {
+		const struct omci_hw_filter *f = &rules[i];
+		const struct tc_gact_rule r = {
+			.proto = f->ethertype ? f->ethertype : ETH_P_ALL,
+			.icmp_type = -1,
+			.dmac = mac_any(f->dmask) ? f->dmac : NULL,
+			.dmask = f->dmask,
+			.smac = mac_any(f->smask) ? f->smac : NULL,
+			.smask = f->smask,
+			.action = f->pass ? TC_ACT_OK : TC_ACT_SHOT,
+		};
+
+		err = tc_gact_add(f->upstream ? uni : pon,
+				  FILTER_PRIO + (f->upstream ? up++ : down++),
+				  &r);
+		if (err)
+			OMCI_WARN("filter: rule %zu: %s (%s)", i,
+				  strerror(-err), omci_hw_last_extack());
+	}
+	return err ? OMCI_ERR_HW : OMCI_OK;
 }
 
 /*
@@ -3358,6 +3431,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_frame = kernel_mcast_frame,
 	.mcast_send = kernel_mcast_send,
 	.mcast_ds = kernel_mcast_ds,
+	.filter_apply = kernel_filter_apply,
 	.mcast_watch = kernel_mcast_watch,
 	.mcast_seen = kernel_mcast_seen,
 };

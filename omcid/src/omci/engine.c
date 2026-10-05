@@ -17,6 +17,7 @@
 #include "me/defaults.h"
 #include "me/bridge.h"
 #include "me/fdb.h"
+#include "me/filter.h"
 #include "me/gem.h"
 #include "me/table.h"
 #include "me/tables.h"
@@ -356,6 +357,7 @@ static uint8_t result_for(enum omci_status rc)
 enum {
 	ME_EXT_VLAN_TAG_OPER = 171,
 
+	ME_PPTP_ETH_UNI = 11,
 	ME_MAC_BRIDGE = 45,
 	ME_MAC_BRIDGE_PORT = 47,
 	ME_BRIDGE_PORT_FILTER = 49,
@@ -439,6 +441,24 @@ static void reprogram_mcast(struct omci_engine *eng, uint16_t class_id)
 }
 
 /*
+ * The classes whose instances make the bridge port filters (me/filter.h). A
+ * filter the switch does not take is kept and said in the log, and the
+ * request that set it is answered as done.
+ */
+static bool class_shapes_filters(uint16_t class_id)
+{
+	return class_id == ME_PPTP_ETH_UNI || class_id == ME_MAC_BRIDGE_PORT ||
+	       class_id == ME_BRIDGE_PORT_FILTER ||
+	       class_id == ME_BRIDGE_PORT_PREASSIGN;
+}
+
+static void reprogram_filters(struct omci_engine *eng, uint16_t class_id)
+{
+	if (class_shapes_filters(class_id))
+		(void)omci_filter_apply(eng->mib);
+}
+
+/*
  * A data-path program that declines part of a set-up fails the request
  * only when the declined instance is the one the request configures.
  */
@@ -516,6 +536,8 @@ static void handle_mib_reset(struct omci_engine *eng,
 	(void)reprogram_gem(eng);
 	(void)reprogram_bridge(eng);
 	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
+	omci_filter_forget();
+	(void)omci_filter_apply(eng->mib);
 }
 
 void omci_engine_reprogram(struct omci_engine *eng)
@@ -524,6 +546,8 @@ void omci_engine_reprogram(struct omci_engine *eng)
 	(void)reprogram_bridge(eng);
 	(void)reprogram_vlan(eng);
 	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
+	omci_filter_forget();
+	(void)omci_filter_apply(eng->mib);
 }
 
 int omci_engine_mcast_fd(const struct omci_engine *eng)
@@ -962,6 +986,7 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 	if (class_builds_bridge(req->class_id))
 		bridge = reprogram_bridge(eng);
 	reprogram_mcast(eng, req->class_id);
+	reprogram_filters(eng, req->class_id);
 	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	reply(eng, req,
@@ -991,6 +1016,8 @@ static void handle_delete(struct omci_engine *eng, const struct omci_frame *req)
 		bridge = reprogram_bridge(eng);
 	if (rc == OMCI_OK)
 		reprogram_mcast(eng, req->class_id);
+	if (rc == OMCI_OK)
+		reprogram_filters(eng, req->class_id);
 
 	enum omci_status answer = rc;
 
@@ -1239,6 +1266,7 @@ static void handle_set(struct omci_engine *eng, const struct omci_frame *req)
 			unsupported |= bit;
 	}
 	reprogram_mcast(eng, req->class_id);
+	reprogram_filters(eng, req->class_id);
 	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	if (message_level != 0u) {

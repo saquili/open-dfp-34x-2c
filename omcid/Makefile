@@ -126,6 +126,7 @@ CORE_SRC := \
 	src/me/bridge.c \
 	src/me/defaults.c \
 	src/me/fdb.c \
+	src/me/filter.c \
 	src/me/gem.c \
 	src/me/layout.c \
 	src/me/pm.c \
@@ -169,7 +170,7 @@ tools_src_omci_ctl_probe  := tools/deploy/omci_ctl_probe.c
 
 # The tests, and what some of them take as argument: the data table or the
 # daemon itself.
-TESTS := actions alarm attr_sweep avc_origin ber bridge cases cases_mib checks client clock ctl ctl_mode daemon defaults edges engine_edges exec frame gem getnext \
+TESTS := actions alarm attr_sweep avc_origin ber bridge cases cases_mib checks client clock ctl ctl_mode daemon defaults edges engine_edges exec filter frame gem getnext \
          hw_host hw_ops mcast mcast_agent me171 me_edges mib_data_sync mib_store mibreset_reply model msgtype_matrix msgtypes multibit optical pm pipe priority \
          roundtrip std_classes swdl synctime_stamp tables tap test_instance testresult upload vlan
 CLIENT_TESTS := client ctl

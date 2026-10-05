@@ -743,6 +743,36 @@ size_t omci_hw_mcast_ds_recorded(const struct omci_hw_mcast_ds **out)
 	return g_mc_ds_n;
 }
 
+static struct omci_hw_filter g_filters[OMCI_HW_FILTER_MAX];
+static size_t g_filter_n;
+static bool g_filter_fail;
+
+void omci_hw_filter_fail_next(void)
+{
+	g_filter_fail = true;
+}
+
+enum omci_status omci_hw_filter_apply(const struct omci_hw_filter *rules,
+				      size_t n)
+{
+	if (n > OMCI_HW_FILTER_MAX)
+		return OMCI_ERR_NOMEM;
+	if (g_filter_fail) {
+		g_filter_fail = false;
+		return OMCI_ERR_HW;
+	}
+	for (size_t i = 0; i < n; i++)
+		g_filters[i] = rules[i];
+	g_filter_n = n;
+	return OMCI_OK;
+}
+
+size_t omci_hw_filter_recorded(const struct omci_hw_filter **out)
+{
+	*out = g_filters;
+	return g_filter_n;
+}
+
 void omci_hw_mcast_send_fail_next(void)
 {
 	g_mc_fail_send = true;
@@ -934,4 +964,5 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.mcast_ds = omci_hw_mcast_ds,
 	.mcast_watch = omci_hw_mcast_watch,
 	.mcast_seen = omci_hw_mcast_seen,
+	.filter_apply = omci_hw_filter_apply,
 };

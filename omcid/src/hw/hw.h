@@ -879,6 +879,57 @@ size_t omci_hw_mcast_sent(size_t index, uint16_t *port_id, uint8_t *frame,
 void omci_hw_mcast_reset(void);
 #endif
 
+/* The rules of the bridge port filters a backend holds at once. */
+#define OMCI_HW_FILTER_MAX 48u
+
+/**
+ * struct omci_hw_filter - A rule of the bridge port filters.
+ * @upstream: for the frames that come in on the UNI, which go to the PON;
+ *	false for those that come in on the PON
+ * @pass: let the frames through, ahead of the rules that drop; false to
+ *	drop them
+ * @dmac: the destination address, compared where @dmask has ones
+ * @dmask: the bits of @dmac compared
+ * @smac: the source address, compared where @smask has ones
+ * @smask: the bits of @smac compared
+ * @ethertype: the EtherType, 0 for any
+ *
+ * A backend keeps the rules in the order given: an earlier rule decides
+ * before a later one.
+ */
+struct omci_hw_filter {
+	bool upstream;
+	bool pass;
+	uint8_t dmac[6];
+	uint8_t dmask[6];
+	uint8_t smac[6];
+	uint8_t smask[6];
+	uint16_t ethertype;
+};
+
+/**
+ * omci_hw_filter_apply() - Replace the rules of the bridge port filters
+ *	(host backend).
+ * @rules: the complete set, in order
+ * @n: how many, at most %OMCI_HW_FILTER_MAX
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_NOMEM for too many, or the failure of the
+ * change.
+ */
+__must_check enum omci_status
+omci_hw_filter_apply(const struct omci_hw_filter *rules, size_t n);
+
+#if defined(OMCID_HW_STUB)
+
+/*
+ * Test hooks of the host backend for the filters: a failure of the next
+ * change, and the rules last set.
+ */
+void omci_hw_filter_fail_next(void);
+
+size_t omci_hw_filter_recorded(const struct omci_hw_filter **out);
+#endif
+
 /**
  * struct omci_hw_ops - A backend.
  * @caps: what the device has
@@ -919,6 +970,8 @@ void omci_hw_mcast_reset(void);
  * @mcast_watch: count the downstream frames of a group, or stop; NULL in a
  *	backend that cannot, where no group is ever lost
  * @mcast_seen: the downstream frames of a counted group so far
+ * @filter_apply: replace the rules of the bridge port filters; NULL in a
+ *	backend without them, where the filters are only kept
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -958,6 +1011,8 @@ struct omci_hw_ops {
 				     size_t n);
 	enum omci_status (*mcast_watch)(const uint8_t *group, bool on);
 	enum omci_status (*mcast_seen)(const uint8_t *group, uint64_t *frames);
+	enum omci_status (*filter_apply)(const struct omci_hw_filter *rules,
+					 size_t n);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */
