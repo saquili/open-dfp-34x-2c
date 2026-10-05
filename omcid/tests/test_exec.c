@@ -197,6 +197,7 @@ int main(int argc, char **argv)
 		CHECK(strstr(err, says) != NULL);
 		CHECK(strstr(err, "-p  frames come on the standard input") !=
 		      NULL);
+		CHECK(strstr(err, "-t  hold the clock at second N") != NULL);
 		CHECK(strstr(err, "starting") == NULL);
 
 		char *const bad[] = { (char *)bin, (char *)"-p", (char *)"-z",
@@ -207,6 +208,25 @@ int main(int argc, char **argv)
 		CHECK(strstr(err, "omcid: unknown argument '-z'") != NULL);
 		CHECK(strstr(err, says) != NULL);
 		CHECK(strstr(err, "starting") == NULL);
+
+		/* -t with no second after it, a sign, a unit, too many digits. */
+		static const char *const seconds[] = { NULL, "-1", "5s",
+						       "99999999999999999999" };
+
+		for (size_t i = 0; i < ARRAY_SIZE(seconds); i++) {
+			char *const held[] = { (char *)bin, (char *)"-p",
+					       (char *)"-t", (char *)seconds[i],
+					       NULL };
+
+			status = run_plain(bin, held, &out_n, err, sizeof(err));
+			CHECK(WIFEXITED(status));
+			CHECK_EQ(WEXITSTATUS(status), 1);
+			CHECK(strstr(err,
+				     "omcid: -t takes a number of seconds") !=
+			      NULL);
+			CHECK(strstr(err, says) != NULL);
+			CHECK(strstr(err, "starting") == NULL);
+		}
 
 		char *const plain[] = { (char *)bin, (char *)"-p", NULL };
 
@@ -273,11 +293,15 @@ int main(int argc, char **argv)
 		/*
 		 * The daemon judges its alarms, and reads the optical levels of
 		 * the ANI-G, before it answers the first frame: so does the
-		 * engine here, from the same host backend.
+		 * engine here, from the same host backend. Time then stands
+		 * still for both: a second that passed between two frames
+		 * would have the daemon judge again (an ANI-G threshold that a
+		 * frame set raises an alarm the engine never saw).
 		 */
 		omci_engine_tick(fx.eng, 1u);
 
-		char *const plain[] = { (char *)bin, (char *)"-p", NULL };
+		char *const plain[] = { (char *)bin, (char *)"-p", (char *)"-t",
+					(char *)"1", NULL };
 		struct child c;
 
 		CHECK(child_start(&c, bin, plain));

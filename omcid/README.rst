@@ -83,6 +83,13 @@ through the daemon::
 
    build/omcid -p < frames.bin > answers.bin
 
+The daemon reads the clock between the frames, so a second that passes there
+has it judge the alarms again, sample the counters and advance its timers,
+and the answers can depend on how fast the frames come. ``-t N`` holds the
+clock at second N, and the same frames then give the same answers::
+
+   build/omcid -p -t 1 < frames.bin > answers.bin
+
 ``make board`` builds the daemon for the board, with the backend of the
 board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
 "pon" generic netlink family for the ONU's state, T-CONTs and FEC counts, the

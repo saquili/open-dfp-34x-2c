@@ -187,11 +187,20 @@ static int run(struct rig *g, int rx_fd, const char *sock, int argc,
 
 static char *g_argv[] = { (char *)"omcid", (char *)"-p", NULL };
 
+/*
+ * The frames whose answers are compared with the reference: the daemon's
+ * clock holds at the second the reference engine was given, so that no
+ * second passing between two frames has it judge again what the reference
+ * judged once.
+ */
+static char *g_argv_held[] = { (char *)"omcid", (char *)"-p", (char *)"-t",
+			       (char *)"1", NULL };
+
 static int run_frames(struct rig *g, unsigned int n, const char *sock)
 {
 	feed(g, n);
 	end_input(g);
-	return run(g, g->in_r, sock, 2, g_argv);
+	return run(g, g->in_r, sock, 4, g_argv_held);
 }
 
 static void check_output(struct rig *g)
@@ -750,11 +759,23 @@ static void test_clock(void)
 
 	struct rig g;
 
+	/* The loop reads the clock before each frame, and goes on without it. */
 	CHECK(rig_up(&g));
 	reference(N_FRAMES);
 	fault_fail_from(FAULT_CLOCK_GETTIME, 1, EINVAL);
-	CHECK_EQ(run_frames(&g, N_FRAMES, g_sock), EXIT_SUCCESS);
+	feed(&g, N_FRAMES);
+	end_input(&g);
+	CHECK_EQ(run(&g, g.in_r, g_sock, 2, g_argv), EXIT_SUCCESS);
 	CHECK(fault_fired(FAULT_CLOCK_GETTIME) > N_FRAMES);
+	check_output(&g);
+	rig_down(&g);
+	(void)unlink(g_sock);
+
+	/* A clock held with -t is never read. */
+	CHECK(rig_up(&g));
+	fault_fail_from(FAULT_CLOCK_GETTIME, 1, EINVAL);
+	CHECK_EQ(run_frames(&g, N_FRAMES, g_sock), EXIT_SUCCESS);
+	CHECK_EQ(fault_fired(FAULT_CLOCK_GETTIME), 0u);
 	check_output(&g);
 	rig_down(&g);
 	(void)unlink(g_sock);

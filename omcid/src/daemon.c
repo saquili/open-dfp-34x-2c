@@ -78,10 +78,12 @@ static void print_usage(const char *argv0)
 	fprintf(stderr,
 		"omcid " OMCID_VERSION " - the OMCI daemon of the ONU\n"
 		"\n"
-		"usage: %s [-v] [-p] [-h]\n"
+		"usage: %s [-v] [-p] [-t N] [-h]\n"
 		"  -v  log more; may be given more than once\n"
 		"  -p  frames come on the standard input and answers go to the\n"
 		"      standard output (the default of this build)\n"
+		"  -t  hold the clock at second N, so that the same frames give\n"
+		"      the same answers however fast they come\n"
 		"  -h  show this text\n"
 		"\n"
 		"Log lines go to the standard error, so recorded frames can be\n"
@@ -119,11 +121,42 @@ uint64_t omcid_monotonic_seconds(void)
 	return (uint64_t)ts.tv_sec;
 }
 
+/*
+ * The time the engine is given: the monotonic clock, or the second that -t
+ * holds it at. A replay reads the clock between its frames, and a second
+ * that passes there has the alarms judged again, the counters sampled and
+ * the timers advanced; a held clock leaves the answers to the frames alone.
+ */
+static bool g_clock_held;
+static uint64_t g_clock_at;
+
+static uint64_t clock_now(void)
+{
+	return g_clock_held ? g_clock_at : omcid_monotonic_seconds();
+}
+
+/* A number of seconds in decimal digits, and nothing else. */
+static bool parse_seconds(const char *s, uint64_t *out)
+{
+	char *end;
+
+	if (s[0] < '0' || s[0] > '9')
+		return false;
+	errno = 0;
+	const unsigned long long v = strtoull(s, &end, 10);
+
+	if (errno != 0 || *end != '\0')
+		return false;
+	*out = (uint64_t)v;
+	return true;
+}
+
 int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 {
 	int verbosity = OMCI_LOG_INFO;
 
 	g_stop = 0;
+	g_clock_held = false;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-h") == 0) {
@@ -132,6 +165,18 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 		}
 		if (strcmp(argv[i], "-p") == 0)
 			continue;
+		if (strcmp(argv[i], "-t") == 0) {
+			if (i + 1 == argc ||
+			    !parse_seconds(argv[i + 1], &g_clock_at)) {
+				fprintf(stderr,
+					"omcid: -t takes a number of seconds\n");
+				print_usage(argv[0]);
+				return EXIT_FAILURE;
+			}
+			g_clock_held = true;
+			i++;
+			continue;
+		}
 		if (strcmp(argv[i], "-v") == 0) {
 			if (verbosity < OMCI_LOG_TRACE)
 				verbosity++;
@@ -281,7 +326,7 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 			goto out_engine;
 		}
 
-		omci_engine_tick(eng, omcid_monotonic_seconds());
+		omci_engine_tick(eng, clock_now());
 
 		if (rc_poll == 0)
 			continue;
