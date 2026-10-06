@@ -92,8 +92,10 @@
 		 * except that bank 0 is split as this system needs: its kernel
 		 * takes 1856 KiB and its root filesystem 1984 KiB, where the
 		 * shipped firmware split the same 3840 KiB as 1328 KiB and
-		 * 2512 KiB. The boot loader's environment lists the same split
-		 * on a board that runs this system.
+		 * 2512 KiB. The boot loader keeps naming the shipped split in
+		 * its environment, which it rebuilds at every start, and needs
+		 * nothing of this one: it starts the kernel at the start of k0,
+		 * the same in both, and root=31:5 names r0 by number.
 		 *
 		 * The partitions register in this order as mtd0 to mtd7,
 		 * block devices 31:0 to 31:7, and the boot loader names the

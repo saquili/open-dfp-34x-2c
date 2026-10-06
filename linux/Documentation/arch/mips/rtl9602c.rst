@@ -2054,15 +2054,19 @@ with, kept as the fallback).
        the boot loader's own layout, offsets and sizes as its environment lists
        them, except bank 0: the shipped firmware splits its 3840 KiB as 1328 KiB
        of kernel and 2512 KiB of root filesystem, and this system as 1856 KiB
-       and 1984 KiB, because its kernel does not fit 1328 KiB. On a board that
-       runs this system the environment lists the same split (the bench's boot
-       contract). The eight cover the chip exactly (``0x58c000`` + ``0x274000`` =
-       ``0x800000``).
-     - M, T
-     - M: the boot loader's environment, printed at its prompt: the same offsets
-       and sizes for everything but bank 0. T: bank 0 as this system splits it is
-       what the environment lists after the bench has set it, and the board
-       boots from it (the check has not yet run on this tree).
+       and 1984 KiB, because its kernel does not fit 1328 KiB. The boot loader
+       keeps naming the shipped split: it rebuilds its layout variables and its
+       partition table from the first-stage loader's flash table at every start.
+       It needs nothing of this split, as it starts the kernel at the start of
+       ``k0``, the same in both. The eight cover the chip exactly (``0x58c000``
+       + ``0x274000`` = ``0x800000``).
+     - M
+     - The boot loader's environment, printed at its prompt: the same offsets
+       and sizes for everything but bank 0, which it names as shipped even after
+       its variables were set to this split and saved (they read as shipped
+       after the next start). The board boots this tree from the flash with
+       ``k0`` and ``r0`` at this split: ``/proc/mtd`` lists them so, and the
+       root filesystem mounts from ``r0`` as 31:5.
    * - Numbering: the partitions register in tree order as mtd0 to mtd7, block
        devices 31:0 to 31:7. The boot loader's arguments name the root
        filesystem by number: ``root=31:5`` (``r0``) for bank 0, ``root=31:7``
