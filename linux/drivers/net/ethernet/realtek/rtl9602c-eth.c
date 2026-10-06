@@ -33,6 +33,8 @@
 #include <linux/of.h>
 #include <linux/unaligned.h>
 #include <linux/netdevice.h>
+#include <linux/notifier.h>
+#include <linux/panic_notifier.h>
 #include <linux/seq_file.h>
 #include <linux/dsa/rtl9602c.h>
 #include <net/dsa.h>
@@ -537,6 +539,9 @@ struct rtl9602c_eth {
 	unsigned int ctrl_tx_logged;
 	rtl9602c_flow_rx_t flow_rx;
 	void *flow_ctx;
+
+	/* Stops the engine on a panic: see rtl9602c_eth_stop_dma(). */
+	struct notifier_block panic_nb;
 };
 
 /*
@@ -607,6 +612,48 @@ static void rtl9602c_eth_quiesce(struct device *dev, void __iomem *base)
 		 "engine found with DMA_CTRL %08x, IRQ_STAT %04x, TX ring %08x at %u, RX rings %08x at %u and %08x at %u; stopped, DMA_CTRL %08x\n",
 		 ctrl, status, tx_base, tx_cur, rx_base, rx_cur, rx2_base,
 		 rx2_cur, readl(base + RTL9602C_NIC_DMA_CTRL));
+}
+
+/*
+ * Stop the engine as the system goes down. A restart on this board is a jump
+ * to the reset vector, not a reset of the chip, so an engine left running goes
+ * on receiving into this kernel's rings while the boot loader and the next
+ * kernel start, in memory that is the next kernel's by then; the quiesce of
+ * the next probe comes too late. Measured on this board: after "reboot" of a
+ * running stick, four of eight boots from the flash lost their first
+ * processes, the boot script among them, whenever the boot loader had not
+ * used its own network driver in between. The orderly shutdown stops the
+ * engine, and so does a panic, which restarts without one; SysRq b, which
+ * restarts at once, does not.
+ */
+static void rtl9602c_eth_stop_dma(struct rtl9602c_eth *priv)
+{
+	writew(0, priv->base + RTL9602C_NIC_IRQ_MASK);
+	rtl9602c_eth_halt(priv->base);
+	/* The read cannot complete before the writes ahead of it. */
+	readl(priv->base + RTL9602C_NIC_DMA_CTRL);
+}
+
+static void rtl9602c_eth_shutdown(struct platform_device *pdev)
+{
+	struct net_device *dev = platform_get_drvdata(pdev);
+
+	if (dev)
+		rtl9602c_eth_stop_dma(netdev_priv(dev));
+}
+
+static int rtl9602c_eth_panic(struct notifier_block *nb, unsigned long event,
+			      void *data)
+{
+	rtl9602c_eth_stop_dma(container_of(nb, struct rtl9602c_eth, panic_nb));
+	return NOTIFY_DONE;
+}
+
+static void rtl9602c_eth_panic_put(void *data)
+{
+	struct rtl9602c_eth *priv = data;
+
+	atomic_notifier_chain_unregister(&panic_notifier_list, &priv->panic_nb);
 }
 
 /*
@@ -2118,6 +2165,13 @@ static int rtl9602c_eth_probe(struct platform_device *pdev)
 	priv->dev = &pdev->dev;
 	spin_lock_init(&priv->tx_lock);
 	priv->base = base;
+	platform_set_drvdata(pdev, dev);
+
+	priv->panic_nb.notifier_call = rtl9602c_eth_panic;
+	atomic_notifier_chain_register(&panic_notifier_list, &priv->panic_nb);
+	err = devm_add_action_or_reset(&pdev->dev, rtl9602c_eth_panic_put, priv);
+	if (err)
+		return err;
 
 	priv->irq = platform_get_irq(pdev, 0);
 	if (priv->irq < 0)
@@ -2205,7 +2259,8 @@ static const struct of_device_id rtl9602c_eth_of_match[] = {
 MODULE_DEVICE_TABLE(of, rtl9602c_eth_of_match);
 
 static struct platform_driver rtl9602c_eth_driver = {
-	.probe	= rtl9602c_eth_probe,
+	.probe		= rtl9602c_eth_probe,
+	.shutdown	= rtl9602c_eth_shutdown,
 	.driver	= {
 		.name		= "rtl9602c-eth",
 		.of_match_table	= rtl9602c_eth_of_match,
