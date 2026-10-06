@@ -65,27 +65,16 @@
 };
 
 /*
- * The switch finds the packet-buffer areas by name and needs each to be at
- * least 1 MiB. Without both of them, or without realtek,sysctl, it is meant
- * to work as a switch with the PON MAC off; not verified.
+ * The 8 MiB SPI NOR flash, through the SoC's SPI controller, which can
+ * erase and program it. The SoC's read-only window onto the same chip at
+ * 0x14000000 is left unused: the two must not drive the chip at once.
  */
-&switch {
-	memory-region = <&pbo_us>, <&pbo_ds>;
-	memory-region-names = "pbo-us", "pbo-ds";
-};
+&spi {
+	status = "okay";
 
-/ {
-	/*
-	 * The SPI NOR flash, which the SoC maps whole at 0x14000000 for
-	 * reading. mtd-rom probes as map_rom, a read-only mapping: nothing in
-	 * the flash can be written from Linux, whatever the partitions' flags
-	 * say. The window is read 16 bits at a time, which needs
-	 * MTD_MAP_BANK_WIDTH_2.
-	 */
-	flash@14000000 {
-		compatible = "mtd-rom";
-		reg = <0x14000000 0x800000>;
-		bank-width = <2>;
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
 
 		/*
 		 * The boot loader's own layout, which covers the whole chip,
@@ -102,11 +91,11 @@
 		 * root filesystem by number (root=31:5 for bank 0, root=31:7
 		 * for bank 1): the order is part of the boot contract.
 		 *
-		 * read-only marks everything outside bank 0, where this system
-		 * is installed, so that a writable flash driver could never
-		 * write the boot loader, its environment, the configuration
-		 * store or the fallback bank. That is not verified, as no such
-		 * driver exists yet.
+		 * Only the configuration store is writable. The boot loader,
+		 * its environment and both banks are read-only, so that
+		 * nothing this system runs can overwrite the system itself,
+		 * the fallback or what starts them. The chip erases in 4 KiB
+		 * sectors, and every partition starts and ends on one.
 		 */
 		partitions {
 			compatible = "fixed-partitions";
@@ -134,24 +123,25 @@
 			};
 
 			/*
-			 * The configuration store of the firmware the board
-			 * shipped with, a JFFS2 image; not mounted here.
+			 * The configuration store: what the board keeps across
+			 * updates of its system.
 			 */
 			partition@44000 {
 				label = "config";
 				reg = <0x044000 0x03c000>;
-				read-only;
 			};
 
 			/* Bank 0: this system's kernel and root filesystem */
 			partition@80000 {
 				label = "k0";
 				reg = <0x080000 0x1d0000>;
+				read-only;
 			};
 
 			partition@250000 {
 				label = "r0";
 				reg = <0x250000 0x1f0000>;
+				read-only;
 			};
 
 			/* Bank 1: the shipped firmware, the fallback */
@@ -168,4 +158,14 @@
 			};
 		};
 	};
+};
+
+/*
+ * The switch finds the packet-buffer areas by name and needs each to be at
+ * least 1 MiB. Without both of them, or without realtek,sysctl, it is meant
+ * to work as a switch with the PON MAC off; not verified.
+ */
+&switch {
+	memory-region = <&pbo_us>, <&pbo_ds>;
+	memory-region-names = "pbo-us", "pbo-ds";
 };

@@ -126,9 +126,9 @@ listed in ``vendor-prefixes.yaml``.
    * - ``realtek,rtl9602c-switch``
      - ``switch``
      - ``net/dsa/realtek,rtl9602c-switch.yaml``
-   * - ``mtd-rom``
-     - ``flash@14000000``
-     - ``mtd/mtd-physmap.yaml``
+   * - ``jedec,spi-nor``
+     - ``flash@0``
+     - ``mtd/jedec,spi-nor.yaml``
    * - ``fixed-partitions``
      - ``partitions``
      - ``mtd/partitions/fixed-partitions.yaml``
@@ -186,9 +186,9 @@ Where the code is
      - ``NET_DSA_RTL9602C``
      - ``switch``
    * - Flash
-     - ``drivers/mtd/maps/physmap-core.c``; ``drivers/mtd/chips/map_rom.c``
-     - ``MTD_PHYSMAP_OF``, ``MTD_ROM``, ``MTD_BLOCK``
-     - ``flash@14000000``, ``partitions``
+     - ``drivers/spi/spi-realtek-rtl.c``; ``drivers/mtd/spi-nor/``
+     - ``SPI_REALTEK_RTL``, ``MTD_SPI_NOR``, ``MTD_BLOCK``
+     - ``spi``, ``flash@0``, ``partitions``
    * - Device trees
      - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``,
        ``Makefile``
@@ -652,9 +652,9 @@ the last column.
      - ``memory@0``
      - Board DFP-34X-2C3
    * - ``0x14000000``-``0x147fffff``
-     - SPI NOR flash, read-only
-     - ``flash@14000000``
-     - Flash window and partitions
+     - SPI NOR flash, read-only window; Linux does not use it
+     - (none)
+     - Flash and partitions
    * - ``0x18000000``-``0x18000fff``
      - System controller
      - ``sysctl``
@@ -662,7 +662,7 @@ the last column.
    * - ``0x18001200``-``0x180012ff``
      - SPI flash controller
      - ``spi``
-     - Flash window and partitions
+     - Flash and partitions
    * - ``0x18002000``-``0x180020ff``
      - UART0 (console)
      - ``uart0``
@@ -1967,17 +1967,19 @@ I2C master enable, before the adapter is registered
 1. Set ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
    read-modify-write. Purpose: without it the master ignores every command. (M)
 
-Flash window and partitions
-===========================
+Flash and partitions
+====================
 
-The SoC maps the whole 8 MiB SPI NOR flash into physical memory at
-``0x14000000``-``0x147fffff`` for reading. The tree describes it as
-``flash@14000000`` with ``compatible = "mtd-rom"``, which the physmap driver
-probes as ``map_rom``, a read-only mapping: nothing in the flash can be written
-from Linux. Its partitions are the boot loader's own layout. The kernel and the
-root filesystem of two banks sit in ``k0`` and ``r0`` (bank 0, where this system
-is installed) and ``k1`` and ``r1`` (bank 1, the firmware the board shipped
-with, kept as the fallback).
+The board's flash is an 8 MiB SPI NOR chip on the SoC's SPI controller. The SoC
+also maps the whole chip into physical memory at ``0x14000000``-``0x147fffff``
+for reading, and the boot loader starts a kernel from that window in place.
+Linux leaves the window unused and reaches the chip through the controller,
+which can erase and program it: the tree describes the chip as ``flash@0``, with
+``compatible = "jedec,spi-nor"``, on ``spi``. Its partitions are the boot
+loader's own layout. The kernel and the root filesystem of two banks sit in
+``k0`` and ``r0`` (bank 0, where this system is installed) and ``k1`` and ``r1``
+(bank 1, the firmware the board shipped with, kept as the fallback). Only the
+configuration store, ``config``, is writable.
 
 .. list-table::
    :header-rows: 1
@@ -2006,19 +2008,20 @@ with, kept as the fallback).
    * - ``config``
      - ``0x044000``
      - 240 KiB (``0x03c000``)
-     - The configuration store of the shipped firmware, a big-endian JFFS2
-       image; this system does not mount it.
-     - yes
+     - The configuration store: what the board keeps across updates of its
+       system. Until this system writes its own store there, it holds the
+       shipped firmware's, a big-endian JFFS2 image this system does not mount.
+     - no
    * - ``k0``
      - ``0x080000``
      - 1856 KiB (``0x1d0000``)
      - Bank 0 kernel, where this system is installed.
-     - no
+     - yes
    * - ``r0``
      - ``0x250000``
      - 1984 KiB (``0x1f0000``)
      - Bank 0 root filesystem.
-     - no
+     - yes
    * - ``k1``
      - ``0x440000``
      - 1328 KiB (``0x14c000``)
@@ -2038,7 +2041,8 @@ with, kept as the fallback).
      - Tag
      - Checked by
    * - 8 MiB of SPI NOR flash, JEDEC ID C2 20 17 (manufacturer C2: Macronix; a
-       64 Mbit part), which the SoC maps whole into physical memory at
+       64 Mbit part, which the SPI NOR layer names ``mx25l6405d``), which the
+       SoC maps whole into physical memory at
        ``0x14000000``-``0x147fffff`` for reading. The boot loader starts the
        kernel of a bank from this window (see "Boot contract").
      - M, P
@@ -2046,21 +2050,30 @@ with, kept as the fallback).
        memory-mapped mode; read through the window: a jump instruction at offset
        0 (the boot loader), the image magic ``0x27051956`` at ``0x080000`` and
        at ``0x440000`` (the two kernels), erased bytes at the end; byte and word
-       reads both work, cached and uncached. P: JEDEC JEP106 (manufacturer
+       reads both work, cached and uncached. Read through the SPI controller,
+       ``jedec_id`` and ``partname`` in ``/sys/bus/spi/devices/spi0.0/spi-nor/``
+       are ``c22017`` and ``mx25l6405d``. P: JEDEC JEP106 (manufacturer
        code).
-   * - ``flash@14000000``, at the root of the tree: ``compatible = "mtd-rom"``,
-       which the physmap driver probes as ``map_rom``, a read-only mapping:
-       every partition's ``type`` in ``/sys/class/mtd/`` reads ``rom``, and
-       nothing in the flash can be written from Linux, whatever the partitions'
-       flags say. ``reg = <0x14000000 0x800000>`` is the whole chip.
-       ``bank-width = <2>``: ``map_rom`` reads the window 16 bits at a time
-       (``MTD_MAP_BANK_WIDTH_2`` must be built).
-     - M, T
-     - M: with the flash registered through a platform device that uses the same
-       ``map_rom`` probe, the squashfs root in ``r0`` mounts and runs through it
-       at bank width 2, and ``type`` reads ``rom`` for all eight partitions. T:
-       the board boots to a shell with the same mapping through the ``mtd-rom``
-       node; that check has not yet run on this tree.
+   * - ``spi`` (``spi@18001200``, ``realtek,rtl9602c-spi``) is the SPI flash
+       controller of the RTL838x, with the registers and bits that
+       ``spi-realtek-rtl`` drives: configuration at ``0x00``, control and status
+       at ``0x08``, data at ``0x0c``. The window and the controller drive the
+       same chip, and Linux uses only the controller.
+     - M, I
+     - M: through the controller the eight partitions read with the same MD5
+       sums as through the window; one 4 KiB sector of ``config`` erased (it
+       reads back as ``0xff``), programmed with a pattern and restored read back
+       as written each time, with the other partitions' MD5 sums unchanged;
+       reading ``r0``, 1984 KiB, takes 1.1 s; a restart after the controller was
+       used reaches the boot loader, which reads the window. I: that nothing
+       reads the window while the controller drives the chip.
+   * - ``flash@0``, ``compatible = "jedec,spi-nor"``: the SPI NOR layer finds
+       the chip by its ID and erases it in 4 KiB sectors, on which every
+       partition starts and ends. ``type`` in ``/sys/class/mtd/`` reads
+       ``nor``.
+     - M
+     - ``/proc/mtd`` lists an erase size of ``0x1000`` for every partition;
+       the boot loader, too, erases its environment in 4 KiB steps.
    * - The partitions (``partitions``, ``compatible = "fixed-partitions"``) are
        the boot loader's own layout, offsets and sizes as its environment lists
        them, except bank 0: the shipped firmware splits its 3840 KiB as 1328 KiB
@@ -2083,10 +2096,12 @@ with, kept as the fallback).
        filesystem by number: ``root=31:5`` (``r0``) for bank 0, ``root=31:7``
        (``r1``) for bank 1. The order of the nodes is therefore part of the boot
        contract.
-     - T
-     - The board boots to a shell with its root from ``r0`` (the check has not
-       yet run on this tree); with the same numbering the log shows ``VFS:
-       Mounted root (squashfs filesystem) readonly on device 31:5``.
+     - M, T
+     - M: ``/proc/mtd`` lists them in that order, all on ``spi0.0``. T: the
+       board boots to a shell with its root from ``r0`` through the controller
+       (the check has not yet run: the controller was tested from a RAM boot);
+       through the window the log showed ``VFS: Mounted root (squashfs
+       filesystem) readonly on device 31:5``.
    * - What the partitions hold: ``boot`` is what the CPU's reset vector runs;
        ``env`` holds the boot loader's settings; ``config`` is JFFS2
        (big-endian, zlib-compressed files); ``k1`` starts with a legacy U-Boot
@@ -2094,15 +2109,14 @@ with, kept as the fallback).
      - M
      - Every reset reaches the boot loader; ``config`` read with ``dd`` and
        walked as JFFS2; ``k1``'s header read and its magic checked.
-   * - ``read-only`` marks every partition outside bank 0, so that a writable
-       flash driver could never write the boot loader, its environment, the
-       configuration store or the fallback bank; bank 0 stays writable because
-       this system is installed there. With ``map_rom`` nothing is writable
-       today, so the flags change nothing yet.
-     - I
-     - Untested until a writable flash driver exists; a write to a marked
-       partition must then fail.
-   * - ``k0`` bounds a kernel installed in bank 0 to 1 359 872 bytes. The
+   * - ``read-only`` marks every partition but ``config``: the boot loader, its
+       environment and both banks cannot be written from the running system,
+       and the configuration store can.
+     - M
+     - ``flags`` in ``/sys/class/mtd/`` reads ``0xc00`` (``MTD_WRITEABLE``) for
+       ``config`` and ``0x800`` for the others; opening ``/dev/mtd0`` or
+       ``/dev/mtd4`` for writing fails with ``EACCES``.
+   * - ``k0`` bounds a kernel installed in bank 0 to 1 900 544 bytes. The
        development image, which carries its user space, is larger and boots only
        from RAM (see "RAM boot over TFTP").
      - M
@@ -2479,8 +2493,8 @@ starts.
        committed bank, and a one-shot mode that arms the watchdog before booting
        so that a failing image costs one reset. A flash boot loads the image
        from the flash window in place (KSEG0 ``0x94080000`` for bank 0). The
-       kernel cannot change the choice: the flash, the environment included, is
-       read-only from Linux.
+       kernel does not change the choice: the environment's partitions are
+       read-only in the tree.
      - M
      - The boot loader's environment, read at its prompt and from the ``env``
        partition.
@@ -2595,11 +2609,10 @@ Assumptions the driver depends on
    * - The decompressed kernel stays below 15 MiB and below whatever cap the
        boot loader has ("RAM boot over TFTP").
      - RAM-boot images of growing size until one fails.
-   * - The flash reads through the ``mtd-rom`` node as it does through a
-       platform device with the same ``map_rom`` probe ("Flash window and
-       partitions"). This is a check not yet run on this tree rather than a
-       tagged assumption.
-     - Booting to a shell with the root in ``r0`` through the node.
+   * - The root filesystem mounts from ``r0`` through the SPI controller as it
+       did through the window ("Flash and partitions"). This is a check not yet
+       run on this tree rather than a tagged assumption.
+     - Booting from the flash to a shell with the root in ``r0``.
 
 Questions the code does not depend on
 -------------------------------------
