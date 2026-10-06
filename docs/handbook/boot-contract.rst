@@ -28,7 +28,11 @@ The flash
 
 The flash is 8 MiB (``0x800000`` bytes) of SPI NOR. The loader divides it into
 eight partitions that cover the chip exactly, and the kernel's device tree
-repeats the same offsets and sizes.
+repeats the same offsets and sizes, except that this system splits bank 0 its
+own way: the shipped firmware gives its kernel 1328 KiB and its root filesystem
+2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and 1984 KiB.
+The loader knows nothing of this split, and needs nothing of it (see "Bank 0's
+split and the loader").
 
 .. list-table::
    :header-rows: 1
@@ -63,12 +67,12 @@ repeats the same offsets and sizes.
      - Nobody.
    * - ``k0``
      - ``0x080000``
-     - 1328 KiB (``0x14c000``, 1359872 bytes)
+     - 1856 KiB (``0x1d0000``, 1900544 bytes)
      - Bank 0 kernel: a legacy U-Boot image.
      - The bench: ``make flash IMAGE=<file> TARGET=kernel``.
    * - ``r0``
-     - ``0x1cc000``
-     - 2512 KiB (``0x274000``, 2572288 bytes)
+     - ``0x250000``
+     - 1984 KiB (``0x1f0000``, 2031616 bytes)
      - Bank 0 root filesystem: a SquashFS image.
      - The bench: ``make flash IMAGE=<file> TARGET=rootfs``.
    * - ``k1``
@@ -102,7 +106,7 @@ The loader's window
 The loader maps the whole chip for reading at ``0x94000000`` (KSEG0; the
 uncached alias is ``0xb4000000`` and the physical address ``0x14000000``). A
 bank is booted from this window in place: ``k0`` is at ``0x94080000``, ``r0``
-at ``0x941cc000``, ``k1`` at ``0x94440000`` and ``r1`` at ``0x9458c000``.
+at ``0x94250000``, ``k1`` at ``0x94440000`` and ``r1`` at ``0x9458c000``.
 ``crc32`` and ``bootm`` read through it. Nothing is ever written through it;
 whether a store there does anything is not known.
 
@@ -137,10 +141,12 @@ loader counts the banks from 1, and the rest of this page counts them from 0.
      - ``config``.
    * - ``fl_kernel1``, ``fl_kernel1_sz``
      - ``80000``, ``14c000``
-     - Bank 0 kernel, ``k0``.
+     - Bank 0 kernel as the shipped firmware splits the bank; ``k0`` of this
+       system is ``1d0000`` long.
    * - ``fl_rootfs1``, ``fl_rootfs1_sz``
      - ``1cc000``, ``274000``
-     - Bank 0 root filesystem, ``r0``.
+     - Bank 0 root filesystem as the shipped firmware splits the bank; ``r0`` of
+       this system is ``1f0000`` long at ``250000``.
    * - ``fl_kernel2``, ``fl_kernel2_sz``
      - ``440000``, ``14c000``
      - Bank 1 kernel, ``k1``.
@@ -150,6 +156,28 @@ loader counts the banks from 1, and the rest of this page counts them from 0.
 
 ``img0_kernel`` and ``img1_kernel`` hold the window addresses of the two
 kernels, ``94080000`` and ``94440000``.
+
+Bank 0's split and the loader
+-----------------------------
+
+The loader rebuilds its layout variables, ``mtdparts0``, ``mtdparts1`` and
+``bootargs`` from the first-stage loader's flash table at every start: a
+``setenv`` of them lasts until the next reset, even when it is saved. Measured
+on the board: after the split of this system was set and saved, the next start
+read ``fl_kernel1_sz`` as ``14c000`` again, and the kernel's command line
+carried the shipped table. So the loader keeps naming the shipped split, and
+this system's split is the kernel's device tree and the bench's table alone.
+
+Nothing of the split needs the loader: ``bootm`` starts the kernel at the start
+of ``k0``, the same in both splits, and takes the image's length from its
+header; the kernel ignores the loader's partition table (see "The kernel
+command line"), and ``root=31:5`` names ``r0`` by its number. The bench
+compares the loader's names with the shipped split, as a check that the board
+is the one it expects, and writes by its own table. The shipped firmware's own
+macros that write a bank (``upk``, ``upr``, ``yk``, ``yr``) do take the loader's
+names: on a board that runs this system they would write a root filesystem
+over the end of the kernel. The bench's guard runs none of them. The images
+that were in bank 0 before the split do not fit it: flash both.
 
 The environment
 ---------------
@@ -249,8 +277,8 @@ The root filesystem image
 The root filesystem of a bank is a SquashFS image in ``r0`` (or ``r1``), which
 the kernel mounts from the block device that ``root=`` names. The bench checks
 the magic ``hsqs`` at offset 0 and the compression id, a 16-bit little-endian
-value at offset 20, against the set the kernel supports (gzip, 1, and lz4, 5,
-in the current kernel configuration), and refuses a file over 2572288 bytes.
+value at offset 20, against the set the kernel supports (xz, 4, in the current
+kernel configuration), and refuses a file over 2031616 bytes.
 
 Where an image goes in RAM
 --------------------------
@@ -263,7 +291,7 @@ Where an image goes in RAM
      - Use
    * - ``0x80000000``
      - Staging area for an image that is to be flashed, received by YMODEM or
-       by TFTP. The largest root filesystem image, 2.5 MiB, fits.
+       by TFTP. The largest root filesystem image, 1.9 MiB, fits.
    * - ``0x80100000``
      - The kernel's load address: where ``bootm`` decompresses it (physical 1
        MiB).

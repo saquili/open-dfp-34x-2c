@@ -487,8 +487,9 @@ values left out; the countdown is that of a board whose ``bootdelay`` is 600)::
 Write bank 0
 ============
 
-``k0`` takes a legacy U-Boot image of at most 1359872 bytes, and ``r0`` a
-SquashFS image of at most 2572288 bytes; ``boot-contract.rst`` describes both.
+``k0`` takes a legacy U-Boot image of at most 1900544 bytes, and ``r0`` a
+SquashFS image of at most 2031616 bytes; ``boot-contract.rst`` describes both,
+and how a board gets bank 0's split before its first write.
 The tool checks the file against its target before it touches the board.
 
 1. See the plan::
@@ -533,8 +534,8 @@ The lines it types for the erase, the write and the check have this form (the
 sizes are those of an example image of 390170 bytes, ``5f41a`` in hexadecimal,
 and the percentages in between are left out)::
 
-    9601D# sf erase 80000 +14c000
-    Erasing 1359872 B from 00080000... 100% ~ 001cbfff/1359872 B
+    9601D# sf erase 80000 +1d0000
+    Erasing 1900544 B from 00080000... 100% ~ 0024ffff/1900544 B
     9601D# sf write 80000000 80000 5f41a
     Writing 390170 B from 80000000 to 00080000... 100% ~ 000df419/390170 B
     9601D# crc32 94080000 5f41a
@@ -673,8 +674,8 @@ How long each step takes
    * - Waiting for the watchdog's reset after a failed first transfer
      - About 46 s after the restart.
    * - YMODEM at 115200 baud
-     - 123 s for 1239420 bytes, so about 255 s for the largest ``r0`` image.
-   * - ``sf erase`` of 1328 KiB or 2512 KiB, ``sf write``, ``saveenv``,
+     - 123 s for 1239420 bytes, so about 200 s for the largest ``r0`` image.
+   * - ``sf erase`` of a partition of bank 0, ``sf write``, ``saveenv``,
        ``crc32`` through the window
      - Not recorded. The tool waits for the loader's progress lines, treats 30
        s without a new byte as a stall, and allows 15 s for ``saveenv`` and 30
