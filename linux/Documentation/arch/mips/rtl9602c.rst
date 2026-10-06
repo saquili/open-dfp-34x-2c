@@ -2095,12 +2095,11 @@ configuration store, ``config``, is writable.
        filesystem by number: ``root=31:5`` (``r0``) for bank 0, ``root=31:7``
        (``r1``) for bank 1. The order of the nodes is therefore part of the boot
        contract.
-     - M, T
-     - M: ``/proc/mtd`` lists them in that order, all on ``spi0.0``. T: the
-       board boots to a shell with its root from ``r0`` through the controller
-       (the check has not yet run: the controller was tested from a RAM boot);
-       through the window the log showed ``VFS: Mounted root (squashfs
-       filesystem) readonly on device 31:5``.
+     - M
+     - ``/proc/mtd`` lists them in that order, all on ``spi0.0``, and the board
+       boots from the flash with its root from ``r0`` through the controller:
+       ``VFS: Mounted root (squashfs filesystem) readonly on device 31:5``, at
+       a reset from the loader's prompt and at a restart from Linux.
    * - What the partitions hold: ``boot`` is what the CPU's reset vector runs;
        ``env`` holds the boot loader's settings; ``config`` is JFFS2
        (big-endian, zlib-compressed files); ``k1`` starts with a legacy U-Boot
@@ -2608,10 +2607,6 @@ Assumptions the driver depends on
    * - The decompressed kernel stays below 15 MiB and below whatever cap the
        boot loader has ("RAM boot over TFTP").
      - RAM-boot images of growing size until one fails.
-   * - The root filesystem mounts from ``r0`` through the SPI controller as it
-       did through the window ("Flash and partitions"). This is a check not yet
-       run on this tree rather than a tagged assumption.
-     - Booting from the flash to a shell with the root in ``r0``.
 
 Questions the code does not depend on
 -------------------------------------
