@@ -1,0 +1,168 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-store: the stick's configuration store, kept by onucfg in the flash
+# partition "config", and the files the running system reads.
+#
+#   onu-store load      at boot: the identity, the settings and the PPPoE
+#                       account from the store into /run/onu-identity,
+#                       /run/onu.conf and /run/onu-pppoe
+#   onu-store save      the settings of /run/onu.conf and the account of
+#                       /run/onu-pppoe into the store, in one write
+#   onu-store migrate   the same, with the identity of the shipped firmware's
+#                       configuration (ponid) taken into the store
+#
+# A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
+# the name in lower case; PPPOE_USER and PPPOE_SECRET are the line
+# "user secret" of /run/onu-pppoe; every other key is a line of /run/onu.conf.
+#
+# Until the store holds an identity, the identity is the one ponid reads from
+# the shipped firmware's configuration, which shares the partition. The first
+# write of the store overwrites the start of that configuration, so a save
+# that finds no identity in the store takes ponid's into the same write: the
+# unit never loses its identity to its first saved setting.
+#
+# ONU_ROOT names another root for the files it reads and writes, and
+# ONU_STORE another store (a file), which the tests use.
+
+set -u
+
+ROOT=${ONU_ROOT:-}
+RUN=$ROOT/run
+CONF=$RUN/onu.conf
+CREDS=$RUN/onu-pppoe
+IDENTITY=$RUN/onu-identity
+
+log() {
+	echo "onu-store: $*" >&2
+	logger -t onu-store "$*" 2>/dev/null
+	return 0
+}
+
+# The store: ONU_STORE, else the character device of the partition "config".
+store() {
+	if [ -n "${ONU_STORE:-}" ]; then
+		echo "$ONU_STORE"
+		return 0
+	fi
+	dev=$(awk '$4 == "\"config\"" { sub(":", "", $1); print $1 }' \
+		"$ROOT/proc/mtd" 2>/dev/null)
+	[ -n "$dev" ] || return 1
+	echo "/dev/$dev"
+}
+
+# The store's KEY=VALUE lines; nothing for an empty store.
+contents() {
+	onucfg --store "$STORE" list
+}
+
+has_identity() {
+	contents | grep -q '^ID_'
+}
+
+# The identity ponid reads, as ID_ keys.
+factory_identity() {
+	ponid | awk '{
+		i = index($0, "=")
+		if (i > 1)
+			print "ID_" toupper(substr($0, 1, i - 1)) "=" substr($0, i + 1)
+	}'
+}
+
+# The settings and the account in force, as keys of the store.
+settings() {
+	if [ -r "$CONF" ]; then
+		grep '^[A-Z][A-Z0-9_]*=' "$CONF" | grep -v -e '^ID_' -e '^PPPOE_'
+	fi
+	if [ -r "$CREDS" ]; then
+		read -r user secret <"$CREDS"
+		if [ -n "${user:-}" ]; then
+			echo "PPPOE_USER=$user"
+			echo "PPPOE_SECRET=${secret:-}"
+		fi
+	fi
+}
+
+load() {
+	list=$(contents) || {
+		log "the store cannot be read"
+		list=
+	}
+	umask 077
+	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS.new"
+	printf '%s\n' "$list" | awk -v id="$IDENTITY.new" -v conf="$CONF.new" \
+		-v creds="$CREDS.new" '
+		{
+			i = index($0, "=")
+			if (i < 2)
+				next
+			k = substr($0, 1, i - 1)
+			v = substr($0, i + 1)
+		}
+		k ~ /^ID_/ { print tolower(substr(k, 4)) "=" v > id; next }
+		k == "PPPOE_USER" { user = v; next }
+		k == "PPPOE_SECRET" { secret = v; next }
+		{ print k "=" v > conf }
+		END { if (user != "") print user " " secret > creds }'
+	[ -e "$CONF.new" ] && chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
+	[ -e "$CREDS.new" ] && mv "$CREDS.new" "$CREDS"
+	if [ -s "$IDENTITY.new" ]; then
+		mv "$IDENTITY.new" "$IDENTITY"
+		return 0
+	fi
+	rm -f "$IDENTITY.new"
+	# No identity in the store yet: the shipped firmware's.
+	ponid >"$IDENTITY"
+}
+
+save() {
+	need_identity=$1
+	ids=
+	if ! has_identity; then
+		ids=$(factory_identity)
+		if [ -z "$ids" ] && [ "$need_identity" = yes ]; then
+			log "no identity in the shipped firmware's configuration"
+			return 1
+		fi
+	fi
+	{
+		[ -n "$ids" ] && printf '%s\n' "$ids"
+		settings
+	} | onucfg --store "$STORE" import || return 1
+	# What the store gives back is what was meant to go in.
+	if [ -n "$ids" ]; then
+		printf '%s\n' "$ids" | while IFS= read -r line; do
+			contents | grep -q -x -F -e "$line" || {
+				log "the store does not hold ${line%%=*}"
+				return 1
+			}
+		done || return 1
+	fi
+	return 0
+}
+
+STORE=$(store) || {
+	log "no partition \"config\""
+	exit 1
+}
+
+case ${1:-} in
+load)
+	load
+	;;
+save)
+	save no
+	;;
+migrate)
+	if has_identity; then
+		log "the store already holds an identity"
+		exit 0
+	fi
+	save yes
+	;;
+*)
+	echo "usage: onu-store load|save|migrate" >&2
+	exit 2
+	;;
+esac

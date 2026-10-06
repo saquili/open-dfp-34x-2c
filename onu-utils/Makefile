@@ -51,12 +51,13 @@ $(BUILD)/test_cfgstore: $(BUILD)/tests/test_cfgstore.o $(BUILD)/src/cfgstore.o
 
 # test_genl asks the kernel it runs on, through a generic netlink socket.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
-	$(BUILD)/test_cfgstore
+	$(BUILD)/test_cfgstore $(BUILD)/onucfg
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
 	$(BUILD)/test_cfgstore
 	sh tests/test_onu_mode.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_store.sh
 
 clean:
 	rm -rf $(BUILD)

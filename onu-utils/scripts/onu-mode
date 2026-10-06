@@ -6,7 +6,8 @@
 # passthrough.
 #
 #   onu-mode start    at boot: take the settings from /etc/onu.conf and apply
-#   onu-mode apply    apply the settings of /run/onu.conf again, after a change
+#   onu-mode apply    apply the settings of /run/onu.conf again, after a change,
+#                     and keep them in the configuration store (onu-store)
 #   onu-mode stop     stop omcid and take the router down
 #   onu-mode status   the mode in force and, in router or passthrough mode,
 #                     the WAN
@@ -14,7 +15,8 @@
 # The settings are KEY=value lines in /run/onu.conf, which the status daemon
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
 # PPPoE user and secret are in /run/onu-pppoe, as "user secret", readable by
-# root only; /etc/onu-pppoe, if a bench's files carry one, seeds it.
+# root only; /etc/onu-pppoe, if a bench's files carry one, seeds it. At boot,
+# onu-store has put the saved ones in both files before onu-mode starts.
 #
 # In bridge mode omcid connects the host link to the PON as the OLT
 # provisions it. In router mode omcid leaves the OLT's bridge out (omcid -r)
@@ -472,6 +474,9 @@ start)
 	apply
 	;;
 apply)
+	if command -v onu-store >/dev/null; then
+		onu-store save || log "the settings are applied but not saved"
+	fi
 	apply
 	;;
 stop)

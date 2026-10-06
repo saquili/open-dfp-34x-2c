@@ -36,7 +36,7 @@ setup() {
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
 	: >"$LOG"
-	for prog in ip tc killall udhcpd udhcpc logger kill; do
+	for prog in ip tc killall udhcpd udhcpc logger kill onu-store; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# omcid runs from its first start on, as on the board.
@@ -73,6 +73,8 @@ check 'logged "^omcid $"'
 check '! logged "omcid -r"'
 check '! logged "^nft"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
+# A boot applies what the store gave and saves nothing.
+check '! logged "^onu-store"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 teardown
 
@@ -144,6 +146,8 @@ printf 'MODE=router\n' >"$ONU_ROOT/run/onu.conf"
 check 'logged "^killall -USR1 omcid"'
 check '! logged "^omcid"'
 check '[ "$(grep -n "killall -USR1 omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" ]'
+# A change is kept in the store before it is applied.
+check '[ "$(grep -n "^onu-store save" "$LOG" | cut -d: -f1)" = 1 ]'
 teardown
 
 echo "a PPPoE session without name servers"

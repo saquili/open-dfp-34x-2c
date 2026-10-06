@@ -11,9 +11,35 @@ The small programs of the ONU.
    prints the identity of the unit (serial number, vendor ID, version,
    equipment ID, PLOAM password and the values of the ONU-G and ONU2-G that
    G.988 has the ONU report) from its factory configuration, the JFFS2 file
-   system in the partition ``config``. At boot it fills ``/run/onu-identity``,
-   which omcid reads, and gives the serial number to the PON driver. Its output
-   holds the PLOAM password, a credential of the line: keep it private.
+   system in the partition ``config``. Until the configuration store holds an
+   identity, it is the one ``onu-store`` puts in ``/run/onu-identity`` at boot,
+   which omcid reads and which gives the serial number to the PON driver, and
+   the one the store's first write takes in. Its output holds the PLOAM
+   password, a credential of the line: keep it private.
+
+``onucfg``
+   reads and changes the configuration store: the partition ``config`` split
+   into two slots, each a header and ``KEY=VALUE`` lines. A change writes the
+   slot that is not current and then makes it current, so that a power loss in
+   the middle leaves the old configuration whole; a change that changes nothing
+   writes nothing::
+
+      onucfg --store /dev/mtd3 list
+      onucfg --store /dev/mtd3 get KEY
+      onucfg --store /dev/mtd3 set KEY VALUE
+      onucfg --store /dev/mtd3 unset KEY
+      onucfg --store /dev/mtd3 import <lines     # every KEY=VALUE, one write
+
+``onu-store``
+   keeps the unit's identity (keys ``ID_*``), its settings (the keys of
+   ``/run/onu.conf``) and its PPPoE account (``PPPOE_USER``,
+   ``PPPOE_SECRET``) in the store. ``onu-store load`` puts them in the files
+   the running system reads, at boot; ``onu-store save`` writes the settings
+   and the account in force back, which ``onu-mode apply`` does. The store
+   shares the partition with the shipped firmware's configuration, and its
+   first write overwrites the start of it: so the first save takes the
+   identity ``ponid`` reads into the same write, and ``onu-store migrate`` does
+   that alone, refusing when there is no identity to take.
 
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's
@@ -57,17 +83,19 @@ The small programs of the ONU.
    ends::
 
       onu-mode start      # at boot
-      onu-mode apply      # after /run/onu.conf changed
+      onu-mode apply      # after /run/onu.conf changed; saves it too
       onu-mode status
 
 Building and testing::
 
-   make           # build/ponid and build/pon
+   make           # build/ponid, build/pon and build/onucfg
    make check     # the tests
 
-``ponid`` needs zlib, ``pon`` libmnl and the kernel's headers, among them
+``ponid`` and ``onucfg`` need zlib, ``onucfg`` the kernel's MTD header
+``mtd/mtd-user.h``, ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the
 tests of ``onu-mode`` and ``dhcp-wan`` run them against stand-ins for the
-programs they call, in a scratch root.
+programs they call, in a scratch root, and those of ``onu-store`` run it with
+``build/onucfg`` on a store in a file.
