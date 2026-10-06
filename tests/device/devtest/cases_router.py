@@ -108,17 +108,17 @@ def bench(ctx: Context, command: str, *, stdin: str | None = None, timeout: floa
     return ctx.bench.run(sudo(ctx.settings, command), stdin=stdin, timeout=timeout)
 
 
-# The cases measure router mode as it was, with NAT: masquerade, the MSS clamp
-# and the flows that the switch carried for it. The stick translates no
-# address any more and is to pass the router behind it the WAN's own address
-# instead; the cases are held until they measure that.
-HELD = ("router mode translates no address now; these cases measure NAT and "
-        "return with the passthrough of the WAN's address")
+# Three cases measure router mode as it was, with NAT: masquerade, the MSS
+# clamp and the flows that the switch carried for it. The stick translates no
+# address any more and passes the router behind it the WAN's own address
+# instead, which router.passthrough measures; the NAT cases are held.
+HELD = ("router mode translates no address now; this case measures NAT, and "
+        "router.passthrough the address handed on")
 
 
-def needs(ctx: Context):
+def needs(ctx: Context, *, nat: bool = False):
     s = ctx.settings
-    if HELD:
+    if nat and HELD:
         return skipped(HELD)
     if not s.router:
         return skipped("router mode not asked for (--router)")
@@ -202,7 +202,8 @@ def namespaces_down(ctx: Context) -> None:
     """The namespaces gone, and an interface that a failed creation left
     behind outside them."""
     bench(ctx, "ip netns del devtest-lan 2>/dev/null; ip netns del devtest-wan 2>/dev/null; "
-               "ip link del devtest-lan0 2>/dev/null; ip link del devtest-wan0 2>/dev/null; true")
+               "ip link del devtest-lan0 2>/dev/null; ip link del devtest-wan0 2>/dev/null; "
+               f"ip link del {PASS_HOST} 2>/dev/null; true")
     ctx.memo.pop("namespaces", None)
 
 
@@ -210,7 +211,7 @@ def namespaces_down(ctx: Context) -> None:
       "With a static WAN, a LAN host's UDP flow leaves translated to the WAN address and "
       "the switch carries it")
 def static(ctx: Context):
-    if (skip := needs(ctx)):
+    if (skip := needs(ctx, nat=True)):
         return skip
     code, body = set_mode(ctx, "MODE=router\nWAN_PROTO=static\nWAN_VLAN=\n"
                                f"WAN_ADDRESS={WAN}\nWAN_GATEWAY={WAN_PEER}\n"
@@ -323,7 +324,7 @@ json.dump(result, open(out, "w"))
       "With a static WAN, a LAN host's TCP connection leaves translated to the WAN address "
       "and the switch carries it")
 def tcp(ctx: Context):
-    if (skip := needs(ctx)):
+    if (skip := needs(ctx, nat=True)):
         return skip
     if "mode router" not in status(ctx) or not ctx.memo.get("namespaces"):
         return failed("router mode with a static WAN is not up; router.static runs first")
@@ -448,7 +449,7 @@ def pppoe_mss(ctx: Context, address: str, mtu: int = PPPOE_MTU) -> tuple[bool, s
       "With PPPoE, the stick opens a session with the concentrator, gets an address, and "
       "clamps a LAN host's TCP MSS to fit the session")
 def pppoe(ctx: Context):
-    if (skip := needs(ctx)):
+    if (skip := needs(ctx, nat=True)):
         return skip
     s = ctx.settings
     if not s.pppoe_secrets:
@@ -487,6 +488,135 @@ def pppoe(ctx: Context):
     fits, mss = pppoe_mss(ctx, address, mtu)
     return verdict(fits, f"session up in {took:.0f} s; ppp0 {address}, MTU {mtu}; "
                          f"name servers {dns}; {mss} through it")
+
+
+# Passthrough: the stick terminates the PPPoE session itself and leases the
+# session's address to the host behind it, on a VLAN of the host link, and the
+# switch routes that host's frames both ways, translating nothing and keeping
+# no state per flow. The host is a VLAN device of the bench in devtest-lan;
+# the far end is the bench's end of the session, and a second source is the
+# bench's own address towards the stick, which the host never sends to.
+PASS_LAN_VLAN = 37                   # the stick's LAN link, a VLAN on the host link
+PASS_WAN_VLAN = 410                   # a VLAN the bench's concentrator listens in
+PASS_WAN_MAC = "00:00:5e:00:53:03"   # the MAC address the session runs from
+PASS_GATEWAY = "169.254.0.1"         # the stick's address on the LAN link
+PASS_HOST = "devtest-pt0"            # the host's VLAN device
+PASS_COUNT = 2000                    # datagrams in each burst
+PASS_RATE = 1500                     # of them a second, under the CPU port's limit
+
+# A burst of datagrams from one address to another at a steady rate.
+BURST = """\
+import socket, sys, time
+src, dst, port, count, rate = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5])
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind((src, 0))
+start = time.monotonic()
+for i in range(count):
+    while time.monotonic() < start + i / rate:
+        time.sleep(0.0002)
+    s.sendto(bytes(512), (dst, port))
+"""
+
+
+@case("router.passthrough", "Router mode",
+      "In passthrough mode the stick opens a PPPoE session and leases its address to the host "
+      "behind it, and the switch routes the host's datagrams both ways, also those from a "
+      "source the host never sent to")
+def passthrough(ctx: Context):
+    if (skip := needs(ctx)):
+        return skip
+    s = ctx.settings
+    if not s.pppoe_secrets:
+        return skipped("the settings name no file of PPPoE secrets on the bench (--pppoe-secrets)")
+    if s.bng_service and not bench(ctx, f"systemctl is-active --quiet {s.bng_service}").ok:
+        if not bench(ctx, f"systemctl start {s.bng_service}").ok:
+            return failed(f"the bench could not start {s.bng_service}")
+        ctx.memo["bng_started"] = True
+    secrets = shlex.quote(s.pppoe_secrets)
+    first = ("awk '$1 !~ /^#/ && NF >= 3 { gsub(/\"/, \"\"); "
+             "print \"PPPOE_USER=\" $1; print \"PPPOE_SECRET=\" $3; exit }' " + secrets)
+    code, body = set_mode(ctx, f"MODE=passthrough\nWAN_PROTO=pppoe\nWAN_VLAN={PASS_WAN_VLAN}\n"
+                               f"WAN_MAC={PASS_WAN_MAC}\nLAN_VLAN={PASS_LAN_VLAN}\n"
+                               f"PASS_GATEWAY={PASS_GATEWAY}\n", body_from=first)
+    if code != 200:
+        return failed(f"the daemon refused the settings: HTTP {code} {body}")
+    # The session is up when its address is handed on.
+    start = time.monotonic()
+    address = ""
+    while time.monotonic() - start < 90 and not address:
+        address = ctx.stick.run("cat /run/onu-pass 2>/dev/null").out.strip()
+        if not address:
+            time.sleep(2)
+    took = time.monotonic() - start
+    if not address:
+        log = ctx.stick.run("tail -5 /run/pppoed.log").out.strip()
+        return failed(f"no session within 90 s: {status(ctx).strip()!r}; pppoed: {log!r}")
+
+    # The host takes the address as its lease would give it: the /32, the
+    # stick's address on-link, the default route through it.
+    namespaces_down(ctx)
+    host = bench(ctx, "; ".join([
+        "set -e",
+        "ip netns add devtest-lan",
+        f"ip link add link {shlex.quote(s.subscriber_port)} name {PASS_HOST} type vlan "
+        f"id {PASS_LAN_VLAN}",
+        f"ip link set {PASS_HOST} netns devtest-lan",
+        f"ip -n devtest-lan address add {address}/32 dev {PASS_HOST}",
+        f"ip -n devtest-lan link set {PASS_HOST} up",
+        f"ip -n devtest-lan route add {PASS_GATEWAY} dev {PASS_HOST} scope link",
+        f"ip -n devtest-lan route add default via {PASS_GATEWAY} dev {PASS_HOST}",
+        "for i in 1 2 3 4 5 6 7 8 9 10; do "
+        f"ip netns exec devtest-lan ping -c 1 -W 1 {PASS_GATEWAY} >/dev/null && exit 0; "
+        "sleep 1; done; exit 1"]), timeout=60)
+    ctx.memo["namespaces"] = True
+    if not host.ok:
+        return failed(f"the host behind the stick does not reach it: {host.err.strip()!r}")
+    # The bench's end of the session: the PPP interface whose peer is the
+    # address, and its own address.
+    end = []
+    for _ in range(PPP_WAIT):
+        end = bench(ctx, "ip -4 -o addr | awk '$6 == \"%s/32\" {print $2, $4}'"
+                    % address).out.split()
+        if len(end) == 2:
+            break
+        time.sleep(1)
+    else:
+        return failed(f"no PPP interface of the session on the bench after {PPP_WAIT} s")
+    iface, far = end
+    other = bench(ctx, f"ip -4 -o route get {shlex.quote(s.stick)} | "
+                       "sed -n 's/.* src \\([0-9.]*\\).*/\\1/p'").out.strip()
+    cpu = ctx.stick.text("for i in /sys/class/net/*; do [ -e $i/dsa/tagging ] && "
+                         "echo ${i##*/}; done; true")
+
+    def burst(src: str, dst: str, netns: str, counter: str) -> tuple[int, int]:
+        """Datagrams arrived at the counter, and frames that reached the CPU."""
+        before = int(ctx.stick.text(f"cat /sys/class/net/{cpu}/statistics/rx_packets"))
+        got = int(bench(ctx, counter).out.strip() or 0)
+        run = f"ip netns exec {netns} python3" if netns else "python3"
+        bench(ctx, f"{run} - {src} {dst} {PORT} {PASS_COUNT} {PASS_RATE}", stdin=BURST,
+              timeout=PASS_COUNT / PASS_RATE + 30)
+        time.sleep(1)
+        got = int(bench(ctx, counter).out.strip() or 0) - got
+        after = int(ctx.stick.text(f"cat /sys/class/net/{cpu}/statistics/rx_packets"))
+        return got, after - before
+
+    at_host = f"ip netns exec devtest-lan cat /sys/class/net/{PASS_HOST}/statistics/rx_packets"
+    at_far = f"cat /sys/class/net/{shlex.quote(iface)}/statistics/rx_packets"
+    down, down_cpu = burst(far, address, "", at_host)
+    up, up_cpu = burst(address, far, "devtest-lan", at_far)
+    alien, alien_cpu = burst(other, address, "", at_host) if other else (0, 0)
+    # Every datagram must arrive, but for the losses of the path through the
+    # OLT, and the CPU port count only its background and the frames of the
+    # case's own ssh commands, a few dozen; the CPU's path would count every
+    # datagram.
+    whole = PASS_COUNT * 0.99
+    quiet = PASS_COUNT * 0.05
+    ok = (down >= whole and up >= whole and alien >= whole and bool(other)
+          and max(down_cpu, up_cpu, alien_cpu) < quiet)
+    return verdict(ok, f"session up in {took:.0f} s, {address} handed on; of {PASS_COUNT} "
+                       f"datagrams at {PASS_RATE}/s: to the host {down}, CPU {down_cpu}; "
+                       f"from it {up}, CPU {up_cpu}; to it from {other or 'no other source'} "
+                       f"{alien}, CPU {alien_cpu}")
 
 
 @case("router.bridge", "Router mode",

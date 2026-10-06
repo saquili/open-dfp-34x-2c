@@ -9,6 +9,7 @@ import dataclasses
 import json
 import re
 import unittest
+import unittest.mock
 
 from devtest import cases_data, cases_net, cases_pon, cases_router, cases_system
 from devtest.access import Reply, Settings, redact
@@ -42,6 +43,23 @@ class Canned:
 
     def text(self, command, *, timeout=60.0):
         return self.run(command, timeout=timeout, check=True).out.strip()
+
+
+class Sequenced(Canned):
+    """A Canned whose answer may be a list: each match takes the next item."""
+
+    def run(self, command, *, timeout=60.0, check=False, stdin=None):
+        for i, (pattern, code, out) in enumerate(self.answers):
+            if re.search(pattern, command) and isinstance(out, list):
+                self.answers[i] = (pattern, code, out[1:] or out)
+                saved, self.answers = self.answers, [(pattern, code, out[0])]
+                try:
+                    return super().run(command, timeout=timeout, check=check, stdin=stdin)
+                finally:
+                    self.answers = saved
+            if re.search(pattern, command):
+                break
+        return super().run(command, timeout=timeout, check=check, stdin=stdin)
 
 
 @contextlib.contextmanager
@@ -426,13 +444,50 @@ class Cases(unittest.TestCase):
             for fn in (cases_router.static, cases_router.pppoe, cases_router.bridge_again):
                 self.assertEqual(fn(context()).status, SKIP)
 
-    def test_router_mode_is_held_while_it_translates_nothing(self):
+    def test_router_mode_of_nat_is_held_while_it_translates_nothing(self):
         settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
                                        subscriber_port="eth2", pond_token="t")
-        for fn in (cases_router.static, cases_router.pppoe, cases_router.bridge_again):
+        for fn in (cases_router.static, cases_router.tcp, cases_router.pppoe):
             outcome = fn(Context(settings, Canned("stick", [], []), Canned("bench", [], []), []))
             self.assertEqual(outcome.status, SKIP)
             self.assertEqual(outcome.evidence, cases_router.HELD)
+        outcome = cases_router.passthrough(Context(settings, Canned("stick", [], []),
+                                                   Canned("bench", [], []), []))
+        self.assertEqual(outcome.status, SKIP)
+        self.assertIn("--pppoe-secrets", outcome.evidence)
+
+    def passthrough(self, cpu: list[str]):
+        """router.passthrough against canned ends: the counters of the host,
+        the bench's end of the session and the host again move by 2,000,
+        1,990 and 2,000, and the CPU port's by the steps of cpu."""
+        trail: list[str] = []
+        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
+                                       subscriber_port="eth2", pond_token="t",
+                                       pppoe_secrets="/etc/ppp/secrets")
+        bench = Sequenced("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200'),
+                                    ("ip netns add", 0, ""),
+                                    ("ip -4 -o addr", 0, "ppp0 192.0.2.1\n"),
+                                    ("route get", 0, "198.51.100.7\n"),
+                                    ("rx_packets", 0, ["100", "2100", "50", "2040",
+                                                       "2100", "4100"]),
+                                    ("python3 -", 0, "")], trail)
+        stick = Sequenced("stick", [("onu-pass", 0, "192.0.2.77\n"),
+                                    ("dsa/tagging", 0, "cpu\n"),
+                                    ("rx_packets", 0, cpu)], trail)
+        with unittest.mock.patch.object(cases_router.time, "sleep", lambda seconds: None):
+            return cases_router.passthrough(Context(settings, stick, bench, trail)), bench
+
+    def test_passthrough_passes_when_the_switch_carries_every_datagram(self):
+        outcome, bench = self.passthrough(["10", "30", "30", "50", "50", "70"])
+        self.assertEqual(outcome.status, PASS, outcome.evidence)
+        post = next(c for c in bench.asked if "curl" in c)
+        self.assertTrue(post.startswith("sudo -n sh -c "))
+        self.assertIn("/etc/ppp/secrets", post)
+        self.assertIn("MODE=passthrough", post)
+
+    def test_passthrough_fails_when_the_cpu_carries_them(self):
+        outcome, _ = self.passthrough(["10", "2010", "2010", "4010", "4010", "6010"])
+        self.assertEqual(outcome.status, FAIL)
 
     def test_the_pppoe_secret_goes_from_the_bench_s_file_to_the_daemon(self):
         trail: list[str] = []
