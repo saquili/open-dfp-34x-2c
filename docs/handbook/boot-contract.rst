@@ -61,10 +61,11 @@ split and the loader").
    * - ``config``
      - ``0x044000``
      - 240 KiB (``0x03c000``)
-     - The configuration store of the shipped firmware, a big-endian JFFS2
-       image that includes the device's registration identity. This system
-       does not mount it.
-     - Nobody.
+     - The configuration store: what the board keeps across updates of its
+       system. Until this system writes its own store there, it holds the
+       shipped firmware's, a big-endian JFFS2 image that includes the
+       device's registration identity, which this system does not mount.
+     - Linux, the one partition it may write; nothing writes it yet.
    * - ``k0``
      - ``0x080000``
      - 1856 KiB (``0x1d0000``, 1900544 bytes)
@@ -87,18 +88,18 @@ split and the loader").
      - Nobody.
 
 "Nobody" means that no tool and no procedure of this handbook writes the
-partition, and that Linux cannot: from Linux the whole flash is a read-only
-mapping. The column describes the policy of the bench, not a protection of the
-chip. The page ``flashing.rst`` gives the reasons.
+partition, and that Linux cannot: the kernel's device tree marks it read-only,
+and the flash driver refuses to open it for writing. The column describes the
+policy of the bench and of the device tree, not a protection of the chip. The
+page ``flashing.rst`` gives the reasons.
 
 The partitions appear in Linux as ``mtd0`` to ``mtd7`` in the order of the
 table, and as the block devices 31:0 to 31:7. The order matters: the loader's
 kernel arguments name the root filesystem by number, ``root=31:5`` for ``r0``
 and ``root=31:7`` for ``r1``, so the order of the nodes in the kernel's device
-tree is part of the contract. The device tree marks every partition outside
-bank 0 read-only, so that a flash driver that can write would still never
-write the loader, its environment, the configuration store or the fall-back.
-With the read-only mapping the flags change nothing yet.
+tree is part of the contract. The device tree marks every partition but
+``config`` read-only: from Linux, the loader, its environment and both banks
+cannot be written, and the configuration store can.
 
 The loader's window
 -------------------
@@ -319,8 +320,8 @@ How a bank is chosen
 ====================
 
 Which bank a plain reset boots is set in the loader's saved environment. The
-kernel cannot change the choice, because the flash, the environment included,
-is read-only from Linux.
+kernel cannot change the choice, because the environment's partitions are
+read-only from Linux.
 
 .. list-table::
    :header-rows: 1

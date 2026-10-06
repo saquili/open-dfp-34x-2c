@@ -38,8 +38,8 @@ At a glance
      - 32 MiB of DRAM, one bank at physical address 0 (DDR2, as the boot
        loader reports it).
    * - Flash
-     - 8 MiB of SPI NOR (JEDEC ID C2 20 17), mapped for reading at physical
-       address ``0x14000000``.
+     - 8 MiB of SPI NOR (JEDEC ID C2 20 17) on the SoC's SPI controller, also
+       mapped for reading at physical address ``0x14000000``.
    * - Host side
      - The SFP edge connector: a SerDes lane of the switch (port 0) running
        2500BASE-X. Linux interface ``sfp``.
@@ -83,13 +83,14 @@ segment the data cache answers for addresses where there is no memory. Seen
 through KSEG1, a word written at physical ``0x01fffff0`` reads back, and a word
 written at ``0x02000000``, the first address past the memory, does not.
 
-The flash is a Macronix part of 64 Mbit (JEDEC manufacturer code C2). The SoC
-maps the whole chip into physical memory at ``0x14000000`` to ``0x147fffff``,
-for reading only. The boot loader starts a kernel from that window in place,
-and Linux sees the same window as a read-only mapping: nothing in the flash can
-be written from Linux. The chip holds the boot loader, its environment, a
-configuration store and two banks, each with a kernel and a root filesystem.
-The layout is on the page ``boot-contract.rst``.
+The flash is a Macronix part of 64 Mbit (JEDEC manufacturer code C2) on the
+SoC's SPI controller. The SoC also maps the whole chip into physical memory at
+``0x14000000`` to ``0x147fffff``, for reading only, and the boot loader starts
+a kernel from that window in place. Linux reaches the chip through the
+controller, which erases and programs it in 4 KiB sectors. The chip holds the
+boot loader, its environment, a configuration store and two banks, each with a
+kernel and a root filesystem; of these, Linux can write only the configuration
+store. The layout is on the page ``boot-contract.rst``.
 
 The host side
 =============
