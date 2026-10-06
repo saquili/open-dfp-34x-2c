@@ -352,6 +352,13 @@ is read-only from Linux.
      - Record the active bank.
    * - ``en_wdt``
      - Arms the watchdog (see "The watchdog").
+   * - ``mupgrade_en``
+     - 1 as shipped: when the countdown ends, the loader first listens on the
+       host link for a firmware image sent to it by multicast, and writes what
+       it receives. Nothing asks who sends it. 0 switches the listener off; the
+       bench's board runs with 0. The listener also sets up the loader's
+       network on the way, which used to hide the restart fault described under
+       "What the loader leaves behind".
 
 After a reset the loader works as follows:
 
@@ -478,7 +485,14 @@ At the moment the kernel is entered:
 A restart is a jump to the reset vector, not a reset of the chip. The CPU's
 state, its caches and TLB and every on-chip block keep the state they had; the
 loader initialises what it uses, and the kernel's drivers the rest. Which blocks
-the loader leaves untouched is not established.
+the loader leaves untouched is not established, but one is known: the CPU
+port's DMA engine. Left running, it goes on receiving into the rings of the
+kernel that is going away, in memory that the next kernel owns by then; on the
+board, about half of the boots from the flash that followed a ``reboot`` lost
+their first processes, the boot script among them. The kernel stops the engine
+before the jump on an orderly shutdown and on a panic. SysRq ``b`` restarts
+without stopping it; in six such restarts on the board the next boot was not
+harmed, which does not make it safe.
 
 Timings
 =======
@@ -532,9 +546,6 @@ What the kernel and the bench rely on, from the sections above:
 Open items
 ==========
 
-* That the kernel boots from the flash window, with its root filesystem from
-  ``r0`` through ``root=31:5``, has not yet been confirmed on the board with the
-  current tree. The RAM boot is the path that has been run.
 * The order of the kernel command line after ``panic=10`` has not yet been read
   from a boot of the current configuration.
 * The decompressed kernel is assumed to stay below 15 MiB and below whatever
