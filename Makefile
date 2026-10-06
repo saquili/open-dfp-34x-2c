@@ -42,10 +42,10 @@ BR2_ENV        = test "$$(uname -s)" = Linux || { \
 	export OPEN_DFP_34X_2C_KERNEL_ARCHIVE="$$(tools/kernel-archive/kernel-archive)" \
 	  GIT_CEILING_DIRECTORIES="$(CURDIR)" BR2_DL_DIR="$(BR2_DL_DIR)" &&
 
-# The images that must fit their partition for the build to pass. None does for
-# now: the software is being completed, and fitting it into the flash is the
-# last stage of the work. Until then the sizes are reported.
-IMAGE_ENFORCE ?=
+# The images that must fit their partition for the build to pass: both, since
+# bank 0 is split for this system and the images were slimmed to fit it. An
+# empty value reports the sizes and fails on neither.
+IMAGE_ENFORCE ?= k0 r0
 
 # The build system builds a package once and keeps it. The kernel and its
 # headers are built again when the archive of linux/ is another one than last
