@@ -60,9 +60,8 @@ the configuration of the board. The settings of it that this page relies on:
      - The SoC's SPI controller and the flash on it as an MTD device that can be
        erased and programmed, in 4 KiB sectors (``MTD_SPI_NOR_USE_4K_SECTORS``,
        on by default).
-   * - ``CONFIG_MTD_ROM=y``, ``CONFIG_MTD_PHYSMAP_OF=y``, ``CONFIG_MTD_BLOCK=y``
-     - The flash window as a read-only MTD device and its partitions as MTD and
-       block devices.
+   * - ``CONFIG_MTD_BLOCK=y``
+     - The flash's partitions as block devices, for the root filesystem.
    * - ``CONFIG_SERIAL_8250=y``, ``CONFIG_SERIAL_8250_CONSOLE=y``
      - The 8250 core drives the console UART, whose port the platform code
        registers.
