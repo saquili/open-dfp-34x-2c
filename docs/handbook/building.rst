@@ -30,13 +30,13 @@ What the build makes
      - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
        the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
        kernel, LZMA, load address ``0x80100000``.
-     - 1783748 bytes; the partition ``k0`` takes 1359872.
+     - 1616597 bytes; the partition ``k0`` takes 1900544.
    * - ``r0.squashfs``
-     - The root filesystem for bank 0: a SquashFS image (gzip, 64 KiB blocks,
+     - The root filesystem for bank 0: a SquashFS image (xz, 64 KiB blocks,
        every file owned by root and carrying the same fixed time, no extended
        attributes) of BusyBox, dropbear, the programs of the ONU and the
        board's files.
-     - 3946279 bytes; the partition ``r0`` takes 2572288.
+     - 1694616 bytes; the partition ``r0`` takes 2031616.
    * - ``SHA256SUMS``
      - The SHA-256 digests of the two images, in the form ``sha256sum -c``
        reads.
@@ -45,7 +45,7 @@ What the build makes
      - Made by ``make ram-image``, not by ``make``: the same kernel with the
        root filesystem built in as its initial RAM disk, for a start from RAM
        that needs neither bank (see "Putting the images on the board").
-     - About 5.6 MB, with the files of a bench; the boot loader takes up to
+     - About 3.7 MB, with the files of a bench; the boot loader takes up to
        12 MiB from RAM.
 
 The images directory also holds ``uImage``, the kernel image as the build system
@@ -63,21 +63,20 @@ Sizes and budgets
      - Budget
      - Margin
    * - ``k0``
-     - 1783748
-     - 1359872
-     - Over the budget by 423876 bytes.
+     - 1616597
+     - 1900544
+     - 283947 bytes (14.9% of the partition).
    * - ``r0``
-     - 3946279
-     - 2572288
-     - Over the budget by 1373991 bytes.
+     - 1694616
+     - 2031616
+     - 337000 bytes (16.6% of the partition).
 
-Neither image fits its partition, and the bench refuses to write one that does
-not (``is 1783748 bytes, more than the 1359872 its destination takes``). The
-sizes are settled last: the images are slimmed once everything that the stick
-does is in them and has been tested on the board. Until then the build reports
-both sizes and fails on neither (``IMAGE_ENFORCE``, below), and the stick runs
-``ram.uImage``, started from RAM. Where the kernel's size is, as measured, is in
-"The kernel's size" below.
+Both images fit, and the build fails when one stops fitting (``IMAGE_ENFORCE``,
+below). They fit because bank 0 is split for this system, 1856 KiB of kernel
+and 1984 KiB of root filesystem where the shipped firmware had 1328 KiB and
+2512 KiB (``boot-contract.rst``), and because the kernel and the root filesystem
+leave out what the stick does not use ("The kernel's size" below, and "The root
+filesystem").
 
 The numbers are printed by ``tools/image-budget/image-budget``, which ``make``
 runs, and are those of ``make`` on the commit this page was written against, in
@@ -146,7 +145,7 @@ These variables can be set on the command line or in the environment:
     ``build/dl``).
 ``IMAGE_ENFORCE``
     The images that must fit their partition for the build to pass (default
-    none: both sizes are reported; ``k0 r0`` once the images are slimmed).
+    ``k0 r0``; empty, the sizes are reported and fail nothing).
 ``OPEN_DFP_34X_2C_LOCAL_OVERLAY``
     A directory of the files of one bench, laid over the root filesystem image
     (below).
@@ -209,11 +208,11 @@ The programs of the ONU, from this tree, static
     from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
     PPPoE client (``pppoed/README.rst``); ``pond``, the HTTP status daemon
     (``pond/README.rst``).
-iproute2, ethtool and nftables, static
-    ``ip``, ``tc``, ``bridge`` and ``devlink``, which configure the links, the
-    switch's classifier and the PON driver; ``ethtool``, which reads the
-    counters of the switch's ports and the state of the host link; ``nft``,
-    which loads the packet filter.
+iproute2, static
+    ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
+    classifier and the PON driver, and ``bridge``, which shows the bridge's
+    VLANs. The post-build script takes the other programs of the package out
+    (``br2-external/board/dfp-34x-2c3/post-build.sh``).
 The boot script
     ``/etc/init.d/rcS``, run by BusyBox init at ``sysinit`` (``/etc/inittab``):
 
@@ -224,10 +223,6 @@ The boot script
     #. starts the system log, ``/run/messages`` and one older copy of 64 KiB
        each, with the kernel's messages in it, and the watchdog daemon, which
        feeds the watchdog every ten seconds;
-    #. loads the packet filter, ``/etc/nftables.conf``: it drops what it does
-       not accept, and it accepts ssh and the status daemon from the host side,
-       ICMPv6, the ICMP that path MTU discovery needs, and DHCP; when the stick
-       routes, it forwards what the host side starts and the replies to it;
     #. turns IPv6 off on the PON port, on the CPU port and on every interface
        made after that, the bridge and the GEM interfaces of ``omcid`` among
        them (the host side keeps it), and has ARP answer only for an address
@@ -243,14 +238,17 @@ The boot script
        to the CPU alone, and drops those that come in on ``pon``, so the
        network behind the OLT neither sees the management link nor reaches it;
     #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear -s``
-       (keys only);
+       (keys only) on the two addresses above and nowhere else: the stick has no
+       packet filter, so its servers keep off the PON side by where they
+       listen;
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
        root only: it holds the PLOAM password), with the versions that
        ``/etc/board.conf`` may name (below), gives the PON driver the
        serial number and the PLOAM password through devlink and brings the PON
        up;
     #. starts ``omcid``, which answers the OLT, and ``pond``, the status daemon,
-       whose API stays locked without ``/etc/pond.token``;
+       on the same two addresses, whose API stays locked without
+       ``/etc/pond.token``;
     #. prints ``open-dfp-34x-2c: ready``.
 
     After it, BusyBox init keeps a shell on the console. There is no login
@@ -456,10 +454,14 @@ and together:
      - -535556
      - fits k0 by 111518 bytes
 
-The features that the board's hardware paths use (netfilter's flow table for
-the routing offload, queueing disciplines and classifiers for shaping and VLAN
-translation, IPv6) are in the list, so which groups to give up is a decision
-for the work that slims the kernel; the numbers above are what each costs.
+The measurements above are against the shipped split of bank 0, whose ``k0``
+took 1359872 bytes. The board's configuration now leaves out netfilter (the
+stick translates no address and keeps no packet filter: a router behind it does
+both), the initial RAM disk and kexec, and smaller parts that the board does not
+use, which the configuration's history names; it keeps IPv6, the symbol table,
+debugfs and dynamic debug, through which a problem on the operator's line is
+read. The kernel image is 1616597 bytes, and bank 0 as this system splits it
+gives the kernel 1856 KiB (``boot-contract.rst``).
 
 Reproducibility
 ===============
@@ -530,7 +532,7 @@ console, which asks for nothing::
     busybox --list | wc -l   # 94
     ip addr                  # 192.0.2.2/30 on sfp, 198.51.100.2/30 on mgmt
     pidof dropbear omcid pond watchdog syslogd
-    nft list ruleset         # the packet filter, two chains with policy drop
+    netstat -ltn             # ssh and the status daemon, on the two addresses only
     cat /etc/issue           # open-dfp-34x-2c on the ODI DFP-34X-2C3
 
 A kernel started from ``ram.uImage`` has no ``VFS: Mounted root`` line: its
@@ -547,6 +549,7 @@ Open items
 * Whether the host's link comes up and the addresses answer depends on the host
   side having the matching addresses (``flashing.rst``); the VLAN of the second
   address has to exist on the host's interface too.
-* The images have to be slimmed before the banks can hold them: ``k0`` by
-  423876 bytes and ``r0`` by 1373991, once everything that the stick does is
-  in them and tested.
+* The images were started from the flash on one board, the bench's: the boot
+  from bank 0 reaches the boot script's ready line in about 16 seconds after
+  the loader's reset, the PON reaches O5 and ``omcid`` answers the OLT. Other
+  boards of the same kind have not been tried.
