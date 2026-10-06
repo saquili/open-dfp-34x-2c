@@ -8,12 +8,15 @@
  *   onucfg [--store PATH] list           print every KEY=VALUE line
  *   onucfg [--store PATH] set KEY VALUE  set KEY, keeping the store whole
  *   onucfg [--store PATH] unset KEY      remove KEY
+ *   onucfg [--store PATH] import         set every KEY=VALUE line of the
+ *                                        standard input, in one write
  *
  * The store is a file or an MTD character device; --store or ONUCFG_STORE
  * names it, and --size gives the size of a store that does not exist yet. A
  * change writes the slot that is not current, then the store carries the new
  * one, so a power loss in the middle keeps the old configuration (see
- * cfgstore.h). On an MTD device the slot's erase blocks are erased first.
+ * cfgstore.h). On an MTD device the slot's erase blocks are erased first. A
+ * change that leaves the configuration as it was writes nothing.
  */
 
 #include <errno.h>
@@ -44,9 +47,9 @@ static int fail(const char *what)
 
 /*
  * Write @len bytes of @buf to the store at @off. On an MTD device the erase
- * blocks the write falls in are erased first; @off and @len are a whole slot,
- * which the caller has laid on erase-block boundaries. On a file the bytes are
- * written in place.
+ * blocks the write falls in are erased first; @off is the start of a slot,
+ * which the slot layout puts on an erase-block boundary. On a file the bytes
+ * are written in place.
  */
 static int write_region(int fd, bool mtd, size_t erase, size_t off,
 			const uint8_t *buf, size_t len)
@@ -65,6 +68,44 @@ static int write_region(int fd, bool mtd, size_t erase, size_t off,
 	if (pwrite(fd, buf, len, (off_t)off) != (ssize_t)len)
 		return -1;
 	return 0;
+}
+
+/*
+ * Set the KEY=VALUE lines of @in in @payload. An empty line is skipped; any
+ * other line without a valid key, or that does not fit, fails the whole
+ * import before anything is written.
+ */
+static int import_lines(FILE *in, char *payload, size_t cap)
+{
+	char *line = NULL;
+	size_t linecap = 0;
+	ssize_t n;
+	int err = 0;
+
+	while ((n = getline(&line, &linecap, in)) > 0) {
+		char *eq;
+
+		if (line[n - 1] == '\n')
+			line[--n] = '\0';
+		if (n == 0)
+			continue;
+		eq = strchr(line, '=');
+		if (!eq) {
+			fprintf(stderr, "onucfg: import: not KEY=VALUE: %s\n",
+				line);
+			err = -EINVAL;
+			break;
+		}
+		*eq = '\0';
+		err = cfg_set(payload, cap, line, eq + 1);
+		if (err) {
+			fprintf(stderr, "onucfg: import %s: %s\n", line,
+				strerror(-err));
+			break;
+		}
+	}
+	free(line);
+	return err;
 }
 
 int main(int argc, char **argv)
@@ -99,18 +140,20 @@ int main(int argc, char **argv)
 	const char *verb = nargs > 0 ? argv[optind] : NULL;
 	const char *key = nargs > 1 ? argv[optind + 1] : NULL;
 	const char *value = nargs > 2 ? argv[optind + 2] : NULL;
-	bool writing = verb && (!strcmp(verb, "set") || !strcmp(verb, "unset"));
+	bool writing = verb && (!strcmp(verb, "set") || !strcmp(verb, "unset") ||
+				!strcmp(verb, "import"));
 
 	if (!verb ||
 	    (!strcmp(verb, "get") && nargs != 2) ||
 	    (!strcmp(verb, "set") && nargs != 3) ||
 	    (!strcmp(verb, "unset") && nargs != 2) ||
 	    (!strcmp(verb, "list") && nargs != 1) ||
+	    (!strcmp(verb, "import") && nargs != 1) ||
 	    (strcmp(verb, "get") && strcmp(verb, "set") && strcmp(verb, "unset") &&
-	     strcmp(verb, "list"))) {
+	     strcmp(verb, "list") && strcmp(verb, "import"))) {
 		fprintf(stderr,
 			"usage: onucfg [--store PATH] [--size N] "
-			"get KEY | list | set KEY VALUE | unset KEY\n");
+			"get KEY | list | set KEY VALUE | unset KEY | import\n");
 		return 2;
 	}
 
@@ -175,12 +218,17 @@ int main(int argc, char **argv)
 
 	uint32_t seq = 0;
 	int slot = -1;
+	/* What the store holds now, to tell whether a change changes anything. */
+	char *before = NULL;
 	int err = cfg_load(region, region_len, payload, cap, NULL, &seq, &slot);
 
 	if (err && err != -ENOENT) {
 		fprintf(stderr, "onucfg: %s: %s\n", store, strerror(-err));
 		goto out_fail;
 	}
+
+	if (err == 0 && writing)
+		before = strdup(payload);
 
 	int rc = 0;
 
@@ -201,11 +249,15 @@ int main(int argc, char **argv)
 				strerror(-err));
 			goto out_fail;
 		}
+	} else if (!strcmp(verb, "import")) {
+		err = import_lines(stdin, payload, cap);
+		if (err)
+			goto out_fail;
 	} else { /* unset */
 		cfg_unset(payload, key);
 	}
 
-	if (writing) {
+	if (writing && !(before && !strcmp(before, payload))) {
 		size_t off, len;
 
 		err = cfg_store(region, region_len, slot, seq, payload,
@@ -221,12 +273,14 @@ int main(int argc, char **argv)
 		}
 	}
 
+	free(before);
 	free(region);
 	free(payload);
 	close(fd);
 	return rc;
 
 out_fail:
+	free(before);
 	free(region);
 	free(payload);
 	close(fd);
