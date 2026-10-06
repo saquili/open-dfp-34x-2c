@@ -30,14 +30,22 @@ value it changes: the settings of onu-mode (see ``onu-utils``), whose body is
 ``/run/onu.conf`` and, for PPPoE, ``/run/onu-pppoe`` for root only, then starts
 ``onu-mode apply``; it refuses another change, with 409, until that has ended.
 A read of ``settings`` gives the settings, the PPPoE user and whether a secret
-is set, never the secret, and what onu-mode brought up. The settings live in
-``/run``, so a boot returns to those of the image.
+is set, never the secret, what onu-mode brought up, and what became of the
+settings in the configuration store (``store``: ``loaded``, ``defaults``,
+``saved``, ``failed`` or ``none``, as ``onu-store`` records it). ``onu-mode
+apply`` saves them there, so they outlive a restart.
 
 ``/`` is the status page, ``www/index.html``, installed as
 ``/usr/share/pond/index.html`` (``-p`` names another). It asks for the token,
-keeps it in the browser, and shows every value of the API by category,
-refreshed every five seconds; the slow ones are read on request. A form under
-the settings changes them. It needs
+keeps it for the session or, if asked to, in the browser, and refreshes every
+five seconds. It leads with the state of the line in words: the fibre (PON
+state, received and transmitted light in dBm, alarms), the internet (the
+session and, in passthrough mode, the address handed to the router), the link
+to the router, and the device (build, bank, uptime, whether the settings are
+saved in flash). Under them, the traffic of the PON port from the switch's own
+counters, with ten minutes of history and how many frames of it the processor
+sees; then a form for the settings, grouped by what they are for; then, folded,
+every value of the API as a table, the slow ones read on request. It needs
 nothing from outside the device, and the daemon serves it with a content
 security policy that lets it talk to the daemon only.
 
