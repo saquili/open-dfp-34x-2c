@@ -14,6 +14,7 @@ keeps it.
 
    pppoed up -i IFACE -f FILE [-D]    # FILE holds "user secret"
    pppoed up -i IFACE -f FILE -4      # without IPv6
+   pppoed up -i IFACE -f FILE -D -P   # the IPv4 address for a host behind
    pppoed discover -i IFACE           # the discovery alone
    pppoed sniff -i IFACE              # print frames, send nothing
 
@@ -37,7 +38,10 @@ packets from a concentrator that agrees, and 1492 from one that does not. LCP
 asks for that size as the MRU, and the interface ``pppN`` takes the peer's MRU
 within it as its MTU.
 
-IPv4 takes the address and the name servers that the peer gives. IPv6CP (RFC
+IPv4 takes the address and the name servers that the peer gives. With ``-P``
+the address goes on no interface here: the ``up`` line names it, for a host
+behind this one to take, and a default route that ``-D`` asks for goes
+through the link all the same. IPv6CP (RFC
 5072) agrees on the two interface identifiers, offering a random one, and puts
 the link-local address on the interface, letting it carry IPv6 first: a system
 that keeps IPv6 off the interfaces made after its start, as the stick does on

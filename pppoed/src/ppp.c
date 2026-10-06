@@ -268,7 +268,7 @@ static int ifconfig_ipv4(int fd, struct ifreq *ifr, const struct ppp_link *l)
 	return 0;
 }
 
-int ppp_ifconfig(struct ppp_link *l, bool defaultroute)
+int ppp_ifconfig(struct ppp_link *l, bool defaultroute, bool pass_on)
 {
 	struct ifreq ifr = { 0 };
 	int fd, err = 0;
@@ -281,7 +281,7 @@ int ppp_ifconfig(struct ppp_link *l, bool defaultroute)
 		return -errno;
 
 	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", l->ifname);
-	if (l->ipv4_up) {
+	if (l->ipv4_up && !pass_on) {
 		err = ifconfig_ipv4(fd, &ifr, l);
 		if (err)
 			goto out;

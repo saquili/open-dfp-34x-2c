@@ -73,7 +73,7 @@ static int print_usage(void)
 {
 	fprintf(stderr,
 		"usage: pppoed up -i IFACE (-f FILE | -u USER -p SECRET) [-s SERVICE]\n"
-		"                 [-D] [-4] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
+		"                 [-D] [-P] [-4] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
 		"       pppoed discover -i IFACE [-s SERVICE] [-n TRIES] [-t MS] [-T] [-A] [-v]\n"
 		"       pppoed sniff -i IFACE [-t MS] [-e ETHERTYPE]\n"
 		"\n"
@@ -84,6 +84,8 @@ static int print_usage(void)
 		"            -f reads \"user secret\" from a file; -u and -p put the\n"
 		"            secret on the command line, where every process sees it.\n"
 		"            -D adds a default route through the link.\n"
+		"            -P passes the IPv4 address on: it goes on no interface\n"
+		"            here, for a host behind this one to take.\n"
 		"  discover  run the discovery alone and print the session; -T ends\n"
 		"            the session with a PADT, -A listens to every ethertype.\n"
 		"  sniff     print the frames seen on an interface; nothing is sent.\n");
@@ -177,12 +179,12 @@ static int cmd_up(int argc, char **argv)
 	const char *ifname = NULL, *service = "", *credfile = NULL;
 	char user[64] = "", secret[256] = "";
 	unsigned int tries = 3, timeout = 3000, keep = 0;
-	bool defaultroute = false, want_ipv6 = true;
+	bool defaultroute = false, pass_on = false, want_ipv6 = true;
 	struct pppoe_session s;
 	struct ppp_link l;
 	int fd, err, opt;
 
-	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:D4v")) != -1) {
+	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DP4v")) != -1) {
 		switch (opt) {
 		case 'i':
 			ifname = optarg;
@@ -210,6 +212,9 @@ static int cmd_up(int argc, char **argv)
 			break;
 		case 'D':
 			defaultroute = true;
+			break;
+		case 'P':
+			pass_on = true;
 			break;
 		case '4':
 			want_ipv6 = false;
@@ -269,7 +274,7 @@ static int cmd_up(int argc, char **argv)
 		return 1;
 	}
 
-	err = ppp_ifconfig(&l, defaultroute);
+	err = ppp_ifconfig(&l, defaultroute, pass_on);
 	if (err) {
 		PPPOED_ERR("cannot configure %s: %s", l.ifname, strerror(-err));
 		ppp_close(&l);

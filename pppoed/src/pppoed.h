@@ -244,9 +244,11 @@ int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
 
 /*
  * Put the negotiated addresses on the interface: the IPv4 address and maybe
- * a default route, and the IPv6 link-local address.
+ * a default route, and the IPv6 link-local address. With @pass_on the IPv4
+ * address goes on no interface, for a host behind this one to take; the
+ * default route still goes through the link.
  */
-int ppp_ifconfig(struct ppp_link *l, bool defaultroute);
+int ppp_ifconfig(struct ppp_link *l, bool defaultroute, bool pass_on);
 
 /* Keep the link: answer echo requests until the peer ends it, or @seconds pass. */
 int ppp_run(struct ppp_link *l, unsigned int seconds);
