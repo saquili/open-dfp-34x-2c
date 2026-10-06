@@ -14,10 +14,14 @@
  *
  * The L3/NAT engine translates the source address and port of IPv4 TCP and UDP
  * flows (NAPT, RFC 2663) and forwards them, and their replies, without the CPU,
- * over Ethernet or a PPPoE session. Its interface, neighbour, next-hop, route
- * and external-address tables follow the kernel's address, neighbour and route
- * notifiers, and each flow that netfilter's flowtable offload hands over gets
- * one outbound and one inbound NAPT entry.
+ * over Ethernet or a PPPoE session. It also routes, translating nothing, the
+ * frames of hosts that the network beyond the WAN routes back to this device:
+ * the router behind a stick that hands it the address of its PPPoE session,
+ * for one. Its interface, neighbour, next-hop, route and external-address
+ * tables follow the kernel's address, neighbour and route notifiers, a default
+ * route through a PPPoE session makes the session's rows, and each flow that
+ * netfilter's flowtable offload hands over gets one outbound and one inbound
+ * NAPT entry.
  *
  * Debugfs views at the end show these blocks, the queue depths, address
  * learning, the reserved multicast addresses, the S-VLAN registers and the
@@ -43,6 +47,7 @@
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/math64.h>
+#include <linux/if_arp.h>
 #include <linux/if_bridge.h>
 #include <linux/etherdevice.h>
 #include <linux/if_vlan.h>
@@ -1497,6 +1502,7 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
 static struct net_device *rtl9602c_flow_dev_of(struct flow_rule *rule);
 static int rtl9602c_extip_get(struct rtl9602c_priv *p, u32 addr);
 static void rtl9602c_extip_put(struct rtl9602c_priv *p, u32 addr);
+static bool rtl9602c_l34_route_wan_sync(struct rtl9602c_priv *p);
 
 /*
  * The source translation of a flowtable rule: the IPv4 source address as a
@@ -3893,8 +3899,9 @@ static int rtl9602c_l34_netif_clear(struct rtl9602c_priv *p, unsigned int idx)
 }
 
 /*
- * External-address row @idx: @addr, shared by NAPT flows, whose frames leave by
- * next-hop row @nh.
+ * External-address row @idx: @addr, whose frames leave by next-hop row @nh;
+ * shared by NAPT flows, or, in a one-to-one row, a routed host's, mapped to
+ * itself so that its frames keep their addresses.
  */
 static int rtl9602c_l34_extip_set(struct rtl9602c_priv *p, unsigned int idx,
 				  __be32 addr, unsigned int nh)
@@ -3908,7 +3915,14 @@ static int rtl9602c_l34_extip_set(struct rtl9602c_priv *p, unsigned int idx,
 
 	rtl9602c_flow_put(e, RTL9602C_EXTADDR_IP, be32_to_cpu(addr));
 	rtl9602c_flow_put(e, RTL9602C_EXTADDR_VALID, 1);
-	rtl9602c_flow_put(e, RTL9602C_EXTADDR_MODE, RTL9602C_EXTADDR_MODE_NAPT);
+	if (p->l34_extip_mode[idx] == RTL9602C_EXTADDR_MODE_ONE_TO_ONE) {
+		rtl9602c_flow_put(e, RTL9602C_EXTADDR_INT_IP, be32_to_cpu(addr));
+		rtl9602c_flow_put(e, RTL9602C_EXTADDR_MODE,
+				  RTL9602C_EXTADDR_MODE_ONE_TO_ONE);
+	} else {
+		rtl9602c_flow_put(e, RTL9602C_EXTADDR_MODE,
+				  RTL9602C_EXTADDR_MODE_NAPT);
+	}
 	rtl9602c_flow_put(e, RTL9602C_EXTADDR_NEXTHOP_IDX, nh);
 	return rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR, idx, e,
 				      extip_words);
@@ -3998,9 +4012,40 @@ static void rtl9602c_l34_route_encode(struct rtl9602c_priv *p,
 	if (r->linkdown)
 		return;
 
+	/*
+	 * Through the PPP device of the WAN the default route made: its
+	 * next-hop row, which encapsulates.
+	 */
+	if (!r->gw && p->l34_route_wan > 0 &&
+	    r->ifindex == p->l34_pppoe[p->l34_route_wan].ifindex) {
+		rtl9602c_flow_put(e, RTL9602C_ROUTE_ACTION,
+				  RTL9602C_ROUTE_ACTION_NEXTHOP);
+		rtl9602c_flow_put(e, RTL9602C_ROUTE_NEXTHOP_IDX,
+				  p->l34_route_wan);
+		return;
+	}
+
 	netif = rtl9602c_l34_netif_row(p, r->ifindex);
 	if (netif < 0)
 		return;
+
+	/*
+	 * An on-link host route to a neighbour that holds a next-hop row: that
+	 * row, which names the neighbour's address-table entry and interface
+	 * row, rather than a search of the neighbour table.
+	 */
+	if (!r->gw && r->prefix == 32) {
+		for (i = 0; i < ARRAY_SIZE(p->l34_nh_addr); i++) {
+			if (p->l34_nh_addr[i] != r->dst)
+				continue;
+			rtl9602c_flow_put(e, RTL9602C_ROUTE_ACTION,
+					  RTL9602C_ROUTE_ACTION_NEXTHOP);
+			rtl9602c_flow_put(e, RTL9602C_ROUTE_NEXTHOP_IDX, i);
+			if (r->port >= 0 && r->port != RTL9602C_PORT_PON)
+				rtl9602c_flow_put(e, RTL9602C_ROUTE_INTERNAL, 1);
+			return;
+		}
+	}
 
 	if (!r->gw) {
 		/* On-link: the prefix is attached to the interface row. */
@@ -4038,13 +4083,18 @@ static void rtl9602c_l34_route_encode(struct rtl9602c_priv *p,
 }
 
 /*
- * The next-hop row by which translated frames leave: the row of the gateway of
- * the default route, once its neighbour holds one; else row 0, which the first
- * neighbour on the PON port takes (see rtl9602c_l34_neigh_set()).
+ * The next-hop row by which translated and routed frames leave: the row of the
+ * PPPoE WAN of the default route, if it goes through one; else the row of the
+ * gateway of the default route, once its neighbour holds one; else row 0,
+ * which the first neighbour on the PON port takes (see
+ * rtl9602c_l34_neigh_set()).
  */
 static unsigned int rtl9602c_l34_uplink_nh(struct rtl9602c_priv *p)
 {
 	unsigned int i, j;
+
+	if (p->l34_route_wan > 0)
+		return p->l34_route_wan;
 
 	for (i = 0; i < ARRAY_SIZE(p->l34_route); i++) {
 		const struct rtl9602c_l34_route *r = &p->l34_route[i];
@@ -4087,6 +4137,115 @@ static void rtl9602c_l34_extip_repoint(struct rtl9602c_priv *p)
 }
 
 /*
+ * Routed hosts. A host route on the LAN side, through no gateway to an address
+ * on a switch port other than the PON port, names a host that the network
+ * beyond the WAN routes back to this device: the router behind a stick that
+ * hands it the address of its PPPoE session, for one. Its frames need no
+ * translation, and a one-to-one external-address row mapping its address to
+ * itself has the engine route them in hardware both ways, with no state per
+ * flow: out by the uplink's next hop, and in, whoever sends them, by its host
+ * route. A host is routed only while the uplink is known: a PPPoE WAN of the
+ * default route, or a default route through a gateway whose neighbour holds a
+ * row.
+ */
+static bool rtl9602c_l34_routed_host(const struct rtl9602c_l34_route *r)
+{
+	return r->used && r->prefix == 32 && !r->gw && !r->flags &&
+	       !r->linkdown && r->port >= 0 && r->port != RTL9602C_PORT_PON;
+}
+
+static bool rtl9602c_l34_uplink_known(struct rtl9602c_priv *p)
+{
+	unsigned int i, j;
+
+	if (p->l34_route_wan > 0)
+		return true;
+	for (i = 0; i < ARRAY_SIZE(p->l34_route); i++) {
+		const struct rtl9602c_l34_route *r = &p->l34_route[i];
+
+		if (!r->used || r->prefix || !r->gw || r->linkdown)
+			continue;
+		for (j = 0; j < ARRAY_SIZE(p->l34_nh_addr); j++)
+			if (p->l34_nh_addr[j] == r->gw)
+				return true;
+	}
+	return false;
+}
+
+/*
+ * Give each routed host a row and free the rows of hosts no longer routed. A
+ * host that finds no free row stays with the CPU, which is said once.
+ */
+static void rtl9602c_l34_routed_sync(struct rtl9602c_priv *p)
+{
+	unsigned int ext_words =
+		rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_EXTADDR];
+	u32 zero[RTL9602C_L3TBL_DATA_WORDS] = {};
+	bool uplink = rtl9602c_l34_uplink_known(p);
+	unsigned int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++) {
+		bool keep = false;
+
+		if (p->l34_extip_mode[i] != RTL9602C_EXTADDR_MODE_ONE_TO_ONE)
+			continue;
+		for (j = 0; uplink && j < ARRAY_SIZE(p->l34_route); j++)
+			if (rtl9602c_l34_routed_host(&p->l34_route[j]) &&
+			    p->l34_route[j].dst == p->l34_extip[i])
+				keep = true;
+		if (keep)
+			continue;
+		rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR, i,
+				       zero, ext_words);
+		pr_debug("<l3> extaddr[%u] := free, %pI4 is not routed any more\n",
+			 i, &p->l34_extip[i]);
+		p->l34_extip[i] = 0;
+		p->l34_extip_mode[i] = RTL9602C_EXTADDR_MODE_NAPT;
+	}
+	if (!uplink)
+		return;
+
+	for (j = 0; j < ARRAY_SIZE(p->l34_route); j++) {
+		const struct rtl9602c_l34_route *r = &p->l34_route[j];
+		unsigned int free = UINT_MAX, nh;
+		bool has = false;
+
+		if (!rtl9602c_l34_routed_host(r))
+			continue;
+		for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++) {
+			bool routed = p->l34_extip_mode[i] ==
+				      RTL9602C_EXTADDR_MODE_ONE_TO_ONE;
+
+			if (routed && p->l34_extip[i] == r->dst)
+				has = true;
+			else if (!p->l34_extip[i] && free == UINT_MAX)
+				free = i;
+		}
+		if (has)
+			continue;
+		if (free == UINT_MAX) {
+			if (!p->l34_routed_warned)
+				pr_warn("<l3> no external-address row left for %pI4; it is routed by the CPU\n",
+					&r->dst);
+			p->l34_routed_warned = true;
+			continue;
+		}
+
+		nh = rtl9602c_l34_uplink_nh(p);
+		p->l34_extip_mode[free] = RTL9602C_EXTADDR_MODE_ONE_TO_ONE;
+		if (rtl9602c_l34_extip_set(p, free, r->dst, nh)) {
+			p->l34_extip_mode[free] = RTL9602C_EXTADDR_MODE_NAPT;
+			pr_warn("<l3> extaddr[%u] for %pI4 did not take\n", free,
+				&r->dst);
+			continue;
+		}
+		p->l34_extip[free] = r->dst;
+		pr_debug("<l3> %pI4 is routed: extaddr[%u], next hop %u\n",
+			 &r->dst, free, nh);
+	}
+}
+
+/*
  * Rewrite the hardware table, longest prefix first, which is right whether the
  * engine takes the longest matching row or the first valid one; which it takes
  * is not verified. If the routes need more rows than the table has, the shadow
@@ -4094,7 +4253,7 @@ static void rtl9602c_l34_extip_repoint(struct rtl9602c_priv *p)
  * express, the table is written empty, every destination to the CPU, with one
  * warning. Rows that did not change are not written. The external-address
  * rows then follow the uplink's next hop, which a route or a neighbour may
- * have changed.
+ * have changed, and the routed hosts follow the routes.
  */
 static void rtl9602c_l34_route_commit(struct rtl9602c_priv *p)
 {
@@ -4157,6 +4316,7 @@ static void rtl9602c_l34_route_commit(struct rtl9602c_priv *p)
 
 	/* The routes and the neighbours change the uplink's gateway too. */
 	rtl9602c_l34_extip_repoint(p);
+	rtl9602c_l34_routed_sync(p);
 }
 
 /*
@@ -4201,7 +4361,8 @@ commit:
 /*
  * The route notifier can be called under rcu_read_lock(), and the table writes
  * sleep: the callback copies out what a row needs and queues it, and a work
- * item applies the queue under flow_lock.
+ * item applies the queue under RTNL, which following a PPP device's path
+ * needs, and flow_lock, then brings the WAN of the default route up to date.
  */
 static void rtl9602c_l34_fib_work(struct work_struct *work)
 {
@@ -4219,13 +4380,17 @@ static void rtl9602c_l34_fib_work(struct work_struct *work)
 		if (!ev)
 			return;
 
+		rtnl_lock();
 		mutex_lock(&p->flow_lock);
 		if (ev->nh)
 			rtl9602c_l34_nh_state(p, ev->route.ifindex,
 					      ev->route.gw, !ev->add);
 		else
 			rtl9602c_l34_route_set(p, &ev->route, ev->add);
+		if (rtl9602c_l34_route_wan_sync(p))
+			rtl9602c_l34_route_commit(p);
 		mutex_unlock(&p->flow_lock);
+		rtnl_unlock();
 		kfree(ev);
 	}
 }
@@ -4642,6 +4807,7 @@ static void rtl9602c_extip_put(struct rtl9602c_priv *p, u32 addr)
 				       rtl9602c_nat_tbl_words
 					       [RTL9602C_L3TBL_CTRL_TABLE_EXTADDR]);
 		p->l34_extip[i] = 0;
+		p->l34_extip_mode[i] = RTL9602C_EXTADDR_MODE_NAPT;
 		pr_debug("<flow> extaddr[%u] := free, %pI4 is gone\n", i,
 			 &addr);
 	}
@@ -4735,6 +4901,7 @@ static void rtl9602c_l34_wan_forget_extip(struct rtl9602c_priv *p, int idx)
 	rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR, idx, zero,
 			       rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_EXTADDR]);
 	p->l34_extip[idx] = 0;
+	p->l34_extip_mode[idx] = RTL9602C_EXTADDR_MODE_NAPT;
 }
 
 /*
@@ -4782,6 +4949,7 @@ static void rtl9602c_l34_wan_release(struct rtl9602c_priv *p, unsigned int w)
 			rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR,
 					       r->extidx, zero, ext_words);
 			p->l34_extip[r->extidx] = 0;
+			p->l34_extip_mode[r->extidx] = RTL9602C_EXTADDR_MODE_NAPT;
 		} else {
 			rtl9602c_l34_extip_set(p, r->extidx, r->extip,
 					       p->l34_extip_nh);
@@ -4908,6 +5076,191 @@ fail:
 	pr_debug("<flow> PPPoE WAN %d did not come up: %d\n", w, err);
 	rtl9602c_l34_wan_release(p, w);
 	return err;
+}
+
+/* The WAN of the default route gives back its reference on the routed flow. */
+static void rtl9602c_l34_route_wan_us_put(struct rtl9602c_priv *p)
+{
+	if (!p->l34_route_wan_us)
+		return;
+	p->l34_route_wan_us = false;
+	if (p->l34_us_refs && --p->l34_us_refs)
+		return;
+	p->l34_us_flow = -1;
+	rtl9602c_cf_sid_refresh(p);
+}
+
+/*
+ * What the WAN of a default route through PPP device @dev needs, in @want: the
+ * session, the concentrator's MAC address, the device the session runs over,
+ * which gives the MAC address its frames leave from and their VLAN, and the
+ * GEM flow, in @flow, of the GEM interface at the bottom. All of it comes from
+ * the device's forward path, and a path that does not end in a GEM interface
+ * of this switch gives nothing. Returns whether @want was filled. Context:
+ * RTNL held.
+ */
+static bool rtl9602c_l34_ppp_path(struct rtl9602c_priv *p,
+				  struct net_device *dev,
+				  struct rtl9602c_pppoe_wan *want,
+				  unsigned int *flow)
+{
+	static const u8 nowhere[ETH_ALEN];
+	struct net_device_path_stack stack;
+	const struct net_device_path *ppp;
+	const struct net_device *lower, *last;
+	struct net_device *gem;
+	bool ok = false;
+
+	if (dev->type != ARPHRD_PPP)
+		return false;
+
+	rcu_read_lock();
+	if (dev_fill_forward_path(dev, nowhere, &stack) < 0 ||
+	    stack.num_paths < 2)
+		goto out;
+	ppp = &stack.path[0];
+	lower = stack.path[1].dev;
+	last = stack.path[stack.num_paths - 1].dev;
+	if (ppp->type != DEV_PATH_PPPOE || !lower || !last ||
+	    !pon_gem_netdev_flow(last, flow))
+		goto out;
+	gem = __dev_get_by_index(dev_net(dev), last->ifindex);
+	if (!gem || rtl9602c_l34_port_of(p, gem) != RTL9602C_PORT_PON)
+		goto out;
+
+	want->ifindex = dev->ifindex;
+	want->sid = ppp->encap.id;
+	ether_addr_copy(want->dmac, ppp->encap.h_dest);
+	ether_addr_copy(want->smac, lower->dev_addr);
+	want->vid = is_vlan_dev(lower) ? vlan_dev_vlan_id(lower) : 0;
+	want->mtu = dev->mtu;
+	want->port = RTL9602C_PORT_PON;
+	want->extidx = -1;
+	ok = true;
+out:
+	rcu_read_unlock();
+	return ok;
+}
+
+/*
+ * The WAN of the default route. A default route through a PPP device whose
+ * session runs over a GEM interface, in a VLAN or not, has the engine
+ * encapsulate the frames it routes there, as rtl9602c_l34_wan_get() does for
+ * a flow's frames, but without an external address of its own: the device may
+ * have no address, its session's address handed on to a host behind. Its rows:
+ * the session; an address-table entry for the concentrator's MAC on the PON
+ * port, in the session's VLAN; the L3-interface row, with the MAC address and
+ * the VLAN of the device the session runs over, the PPP device's MTU and no
+ * address, which the engine does not need to carry a routed host's frames
+ * either way (measured); and the next hop, encapsulating, naming the three.
+ * The WAN also takes a reference on the GEM flow the session leaves in, as the
+ * routed flow, which gives the ports outside the GEM bridge their stream. It
+ * is written again when any of that changes and released when the route goes.
+ * Returns whether the WAN changed, the routes then to be committed again.
+ * Context: RTNL and flow_lock held.
+ */
+static bool rtl9602c_l34_route_wan_sync(struct rtl9602c_priv *p)
+{
+	unsigned int nh_words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_NEXTHOP];
+	struct rtl9602c_pppoe_wan want = {}, *r = NULL;
+	u32 e[RTL9602C_L3TBL_DATA_WORDS] = {};
+	unsigned int i, flow = 0, slot;
+	struct net_device *dev = NULL;
+	bool found = false;
+	int w, err;
+	u16 vid;
+
+	ASSERT_RTNL();
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_route); i++) {
+		const struct rtl9602c_l34_route *rt = &p->l34_route[i];
+
+		if (rt->used && !rt->prefix && !rt->gw && !rt->flags &&
+		    !rt->linkdown && rt->port < 0) {
+			dev = __dev_get_by_index(&init_net, rt->ifindex);
+			break;
+		}
+	}
+	if (dev)
+		found = rtl9602c_l34_ppp_path(p, dev, &want, &flow);
+
+	if (p->l34_route_wan > 0) {
+		r = &p->l34_pppoe[p->l34_route_wan];
+		if (found && r->ifindex == want.ifindex && r->sid == want.sid &&
+		    r->vid == want.vid && r->mtu == want.mtu &&
+		    ether_addr_equal(r->dmac, want.dmac) &&
+		    ether_addr_equal(r->smac, want.smac))
+			return false;
+		rtl9602c_l34_wan_release(p, p->l34_route_wan);
+		p->l34_route_wan = 0;
+	}
+	if (!found) {
+		rtl9602c_l34_route_wan_us_put(p);
+		return r;
+	}
+
+	w = rtl9602c_l34_wan_alloc(p);
+	if (w < 0) {
+		pr_warn("<l3> no PPPoE WAN row left for %s; its frames go through the CPU\n",
+			dev->name);
+		rtl9602c_l34_route_wan_us_put(p);
+		return r;
+	}
+
+	err = rtl9602c_l34_pppoe_set(p, w, want.sid);
+	if (err)
+		goto fail;
+
+	vid = want.vid;
+	err = rtl9602c_l2_nexthop_place(p, want.dmac, RTL9602C_PORT_PON, &vid,
+					&slot);
+	if (err)
+		goto fail;
+	rtl9602c_l34_nh_l2_set(p, w, want.dmac, vid);
+
+	err = rtl9602c_l34_netif_set(p, w, want.smac, want.vid, 0, want.mtu);
+	if (err)
+		goto fail;
+
+	rtl9602c_flow_put(e, RTL9602C_NEXTHOP_ENCAP, RTL9602C_NEXTHOP_ENCAP_PPPOE);
+	rtl9602c_flow_put(e, RTL9602C_NEXTHOP_L3IF_IDX, w);
+	rtl9602c_flow_put(e, RTL9602C_NEXTHOP_PPPOE_IDX, w);
+	rtl9602c_flow_put(e, RTL9602C_NEXTHOP_L2_IDX, slot);
+	err = rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_NEXTHOP, w, e,
+				     nh_words);
+	if (err)
+		goto fail;
+
+	p->l34_netif_ifindex[w] = -1;
+	p->l34_nh_addr[w] = RTL9602C_NH_HELD_BY_PPPOE;
+	p->l34_pppoe[w] = want;
+	p->l34_route_wan = w;
+
+	if (p->l34_route_wan_us && p->l34_us_flow != (int)flow)
+		rtl9602c_l34_route_wan_us_put(p);
+	if (!p->l34_route_wan_us) {
+		if (p->l34_us_flow < 0 || p->l34_us_flow == (int)flow) {
+			p->l34_us_refs++;
+			p->l34_route_wan_us = true;
+			if (p->l34_us_flow != (int)flow) {
+				p->l34_us_flow = flow;
+				rtl9602c_cf_sid_refresh(p);
+			}
+		} else {
+			pr_warn("<l3> %s leaves by GEM flow %u, but flow %d is routed already; its frames get no stream\n",
+				dev->name, flow, p->l34_us_flow);
+		}
+	}
+
+	pr_debug("<l3> PPPoE WAN %d of the default route: %s session %u to %pM, vlan %u mtu %u, L2 slot %u, GEM flow %u\n",
+		 w, dev->name, want.sid, want.dmac, want.vid, want.mtu, slot, flow);
+	return true;
+
+fail:
+	pr_warn("<l3> the PPPoE WAN of %s did not come up: %d\n", dev->name, err);
+	rtl9602c_l34_wan_release(p, w);
+	rtl9602c_l34_route_wan_us_put(p);
+	return true;
 }
 
 /*

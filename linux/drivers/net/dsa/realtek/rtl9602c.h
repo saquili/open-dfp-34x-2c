@@ -1673,11 +1673,22 @@ struct rtl9602c_field {
 #define RTL9602C_NAPT_IN_VALID		RTL9602C_FIELD(84, 2)
 #define RTL9602C_NAPT_IN_VALID_ACTIVE		2
 
-/* External-address entry: a translated source and the next hop it leaves by. */
+/*
+ * External-address entry: a translated source and the next hop it leaves by.
+ * In one-to-one mode the entry maps the external address to INT_IP, with no
+ * state per flow. Holding a host's address as both, it has the engine route
+ * that host's frames in hardware both ways without translating them: from
+ * the host out by NEXTHOP_IDX, and to the host, unsolicited ones from the WAN
+ * as well, by its route. Mode 2 carries only the frames from the host; those
+ * to it from the WAN go to the CPU (both measured on this board, over a PPPoE
+ * WAN).
+ */
+#define RTL9602C_EXTADDR_INT_IP		RTL9602C_FIELD(0, 32)
 #define RTL9602C_EXTADDR_IP		RTL9602C_FIELD(32, 32)
 #define RTL9602C_EXTADDR_VALID		RTL9602C_FIELD(64, 1)
 #define RTL9602C_EXTADDR_MODE		RTL9602C_FIELD(65, 2)
 #define RTL9602C_EXTADDR_MODE_NAPT	0
+#define RTL9602C_EXTADDR_MODE_ONE_TO_ONE	1
 #define RTL9602C_EXTADDR_NEXTHOP_IDX		RTL9602C_FIELD(67, 4)
 
 /* Neighbour entry; what the engine uses it for is not verified. */
@@ -2559,13 +2570,19 @@ struct rtl9602c_l34_fib_ev {
 
 /**
  * struct rtl9602c_pppoe_wan - a PPPoE WAN of the L3/NAT engine
- * @extip: the PPP interface's address, which keys the WAN; 0 when free
+ * @extip: the PPP interface's address, which keys a WAN made for flows; 0 when
+ *	free, and for the WAN of the default route
  * @refs: the flows using it
  * @sid: its PPPoE session
  * @port: the switch port the session leaves by
  * @extidx: its external-address row
  * @took_extip: that row was taken for the WAN and is freed with it
  * @dmac: the concentrator's MAC address
+ * @ifindex: the PPP device, for the WAN of the default route; 0 for a WAN made
+ *	for flows
+ * @vid: the VLAN the session runs in, 0 for none
+ * @smac: the MAC address the session's frames leave from
+ * @mtu: the PPP device's MTU
  *
  * Its index w in rtl9602c_priv.l34_pppoe, 1 to 7, is also its row in the
  * L3-interface, next-hop and PPPoE session tables.
@@ -2578,6 +2595,10 @@ struct rtl9602c_pppoe_wan {
 	int		extidx;
 	bool		took_extip;
 	u8		dmac[ETH_ALEN];
+	int		ifindex;
+	u16		vid;
+	u8		smac[ETH_ALEN];
+	unsigned int	mtu;
 };
 
 /**
@@ -2843,9 +2864,23 @@ struct rtl9602c_priv {
 	int l34_netif_ifindex[16];
 	/** @l34_extip: each external-address row's address, 0 when free */
 	__be32 l34_extip[8];
+	/**
+	 * @l34_extip_mode: each external-address row's mode,
+	 * %RTL9602C_EXTADDR_MODE_ONE_TO_ONE for a routed host's row
+	 */
+	u8 l34_extip_mode[8];
 
 	/** @l34_pppoe: the PPPoE WANs by row; row 0 is the Ethernet uplink's */
 	struct rtl9602c_pppoe_wan l34_pppoe[8];
+	/**
+	 * @l34_route_wan: the PPPoE WAN the default route leaves by, 0 for
+	 * none
+	 */
+	int l34_route_wan;
+	/** @l34_route_wan_us: that WAN holds a reference on @l34_us_flow */
+	bool l34_route_wan_us;
+	/** @l34_routed_warned: a routed host found no row, and it was said */
+	bool l34_routed_warned;
 
 	/**
 	 * @l34_extip_nh: the next-hop row the external-address rows of the
@@ -2856,7 +2891,7 @@ struct rtl9602c_priv {
 	int l34_us_flow;
 	/**
 	 * @l34_us_refs: the references on @l34_us_flow, one for each device
-	 * over it that has an address
+	 * over it that has an address and one for the WAN of the default route
 	 */
 	unsigned int l34_us_refs;
 	/** @l34_inetaddr_nb: the IPv4 address notifier */
