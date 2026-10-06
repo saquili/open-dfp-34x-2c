@@ -61,6 +61,7 @@ check '[ $rc -eq 0 ]'
 check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
 check '[ ! -e "$ONU_ROOT/run/onu.conf" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-pppoe" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = defaults ]'
 teardown
 
 echo "the first save takes the identity into the store with the settings"
@@ -75,6 +76,7 @@ check 'stored MODE=passthrough'
 check 'stored WAN_VLAN=410'
 check 'stored PPPOE_USER=user@example.net'
 check 'stored PPPOE_SECRET=s3cret'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = saved ]'
 teardown
 
 echo "load gives back what was saved, the identity no longer from ponid"
@@ -91,6 +93,7 @@ check '[ "$(cat "$ONU_ROOT/run/onu-pppoe")" = "user@example.net s3cret" ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu.conf" | cut -c1-10)" = -rw-r--r-- ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = loaded ]'
 teardown
 
 echo "a later save keeps the identity and changes the settings"
@@ -134,6 +137,7 @@ cp "$ONU_STORE" "$T/before"
 run migrate
 check '[ $rc -ne 0 ]'
 check 'cmp -s "$ONU_STORE" "$T/before"'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = failed ]'
 rm -f "$T/ponid.fail"
 run migrate
 check '[ $rc -eq 0 ]'

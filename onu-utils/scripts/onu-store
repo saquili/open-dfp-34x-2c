@@ -23,6 +23,10 @@
 # that finds no identity in the store takes ponid's into the same write: the
 # unit never loses its identity to its first saved setting.
 #
+# What became of the settings is the word in /run/onu-store, for the status
+# daemon: "loaded" when load found settings in the store, "defaults" when it
+# found none, "saved" or "failed" after a save, "none" without a store.
+#
 # ONU_ROOT names another root for the files it reads and writes, and
 # ONU_STORE another store (a file), which the tests use.
 
@@ -33,6 +37,11 @@ RUN=$ROOT/run
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
 IDENTITY=$RUN/onu-identity
+STATE=$RUN/onu-store
+
+state() {
+	(umask 022 && echo "$1" >"$STATE")
+}
 
 log() {
 	echo "onu-store: $*" >&2
@@ -105,7 +114,12 @@ load() {
 		k == "PPPOE_SECRET" { secret = v; next }
 		{ print k "=" v > conf }
 		END { if (user != "") print user " " secret > creds }'
-	[ -e "$CONF.new" ] && chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
+	if [ -e "$CONF.new" ]; then
+		chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
+		state loaded
+	else
+		state defaults
+	fi
 	[ -e "$CREDS.new" ] && mv "$CREDS.new" "$CREDS"
 	if [ -s "$IDENTITY.new" ]; then
 		mv "$IDENTITY.new" "$IDENTITY"
@@ -144,6 +158,7 @@ save() {
 
 STORE=$(store) || {
 	log "no partition \"config\""
+	state none
 	exit 1
 }
 
@@ -152,14 +167,24 @@ load)
 	load
 	;;
 save)
-	save no
+	if save no; then
+		state saved
+	else
+		state failed
+		exit 1
+	fi
 	;;
 migrate)
 	if has_identity; then
 		log "the store already holds an identity"
 		exit 0
 	fi
-	save yes
+	if save yes; then
+		state saved
+	else
+		state failed
+		exit 1
+	fi
 	;;
 *)
 	echo "usage: onu-store load|save|migrate" >&2

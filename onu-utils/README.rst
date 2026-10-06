@@ -39,7 +39,9 @@ The small programs of the ONU.
    shares the partition with the shipped firmware's configuration, and its
    first write overwrites the start of it: so the first save takes the
    identity ``ponid`` reads into the same write, and ``onu-store migrate`` does
-   that alone, refusing when there is no identity to take.
+   that alone, refusing when there is no identity to take. What became of the
+   settings is one word in ``/run/onu-store`` (``loaded``, ``defaults``,
+   ``saved``, ``failed``, ``none``), which the status daemon shows.
 
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's
