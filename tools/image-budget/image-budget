@@ -25,12 +25,12 @@ import os
 import sys
 
 # The partitions of bank 0, in bytes, as the flash layout of
-# docs/handbook/boot-contract.rst gives them: k0 is 1328 KiB (0x14c000) and r0 is
-# 2512 KiB (0x274000). tools/bench holds the same two numbers; its tests and this
+# docs/handbook/boot-contract.rst gives them: k0 is 1856 KiB (0x1d0000) and r0 is
+# 1984 KiB (0x1f0000). tools/bench holds the same two numbers; its tests and this
 # tool's tests compare them.
 BUDGETS = {
-    "k0": ("k0.uImage", 0x14C000),
-    "r0": ("r0.squashfs", 0x274000),
+    "k0": ("k0.uImage", 0x1D0000),
+    "r0": ("r0.squashfs", 0x1F0000),
 }
 
 TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))

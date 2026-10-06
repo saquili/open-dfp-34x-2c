@@ -126,8 +126,8 @@ PARTITIONS = (
     Partition("env", 0x040000, 0x002000, False),
     Partition("env2", 0x042000, 0x002000, False),
     Partition("config", 0x044000, 0x03C000, False),
-    Partition("k0", 0x080000, 0x14C000, True),
-    Partition("r0", 0x1CC000, 0x274000, True),
+    Partition("k0", 0x080000, 0x1D0000, True),
+    Partition("r0", 0x250000, 0x1F0000, True),
     Partition("k1", 0x440000, 0x14C000, False),
     Partition("r1", 0x58C000, 0x274000, False),
 )
@@ -161,7 +161,11 @@ KERNEL_ADDRESS = 0x81000000
 RUN_BOOT_ADDRESSES = frozenset({0x80000000, 0x81000000, 0x94080000, 0xB4080000})
 CHAIN_BOOT_ADDRESSES = RUN_BOOT_ADDRESSES | {0x94440000, 0xB4440000}
 
-# Layout the board's environment must agree with before any write.
+# The loader's names for the layout, which the board's environment must read
+# before any write: a check that the board is the one this table is for. The
+# loader rebuilds them from its first-stage flash table at every start, so they
+# keep the shipped firmware's split of bank 0; this system's split is
+# PARTITIONS, by which the tool writes.
 LAYOUT_VARIABLES = {
     "fl_boot_sz": 0x40000,
     "fl_env": 0x40000,

@@ -9,8 +9,8 @@ The size check of the flash images.
 
 The kernel and the root filesystem of bank 0 each have a partition of fixed
 size (``docs/handbook/boot-contract.rst``): ``k0`` takes the kernel image,
-1328 KiB (1359872 bytes), and ``r0`` the root filesystem image, 2512 KiB
-(2572288 bytes). ``image-budget`` compares the two images that the build leaves
+1856 KiB (1900544 bytes), and ``r0`` the root filesystem image, 1984 KiB
+(2031616 bytes). ``image-budget`` compares the two images that the build leaves
 with those sizes and prints what is left of each partition, or by how much an
 image is over.
 
@@ -26,8 +26,8 @@ Usage
 ``make`` leaves them), or the ``FILE`` given after the name. It prints one line
 for each::
 
-    k0: 2543210 bytes against a budget of 1359872 (1328 KiB): over the budget by 1183338 bytes (build/image/images/k0.uImage)
-    r0: 812345 bytes against a budget of 2572288 (2512 KiB): margin 1759943 bytes (68.4% of the partition) (build/image/images/r0.squashfs)
+    k0: 2543210 bytes against a budget of 1900544 (1856 KiB): over the budget by 642666 bytes (build/image/images/k0.uImage)
+    r0: 812345 bytes against a budget of 2031616 (1984 KiB): margin 1219271 bytes (60.0% of the partition) (build/image/images/r0.squashfs)
 
 An image of exactly the size of its partition fits, with a margin of 0 bytes.
 An image over its budget is reported and is not an error, so that the build can

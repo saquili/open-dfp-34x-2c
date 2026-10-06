@@ -63,7 +63,7 @@ SCHEMA: dict[str, tuple[type, object]] = {
     "board.loader_netmask": (str, "255.255.255.252"),
     "image.kernel_name": (str, "uImage"),
     "image.rootfs_name": (str, "rootfs"),
-    "image.squashfs_compressions": (list, [image.SQUASHFS_GZIP, image.SQUASHFS_LZ4]),
+    "image.squashfs_compressions": (list, [image.SQUASHFS_XZ]),
     "boot.ready_pattern": (str, "login:"),
     "boot.ready_limit": (float, 60.0),
     "boot.recovery": (str, "fuse"),

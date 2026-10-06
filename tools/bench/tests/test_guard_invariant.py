@@ -41,8 +41,8 @@ SEED = 20261001
 ITERATIONS = int(os.environ.get("BENCH_MUTATIONS", "400000"))
 
 # The invariant is stated here, independently of the guard's own tables.
-K0 = (0x80000, 0x1CC000)
-R0 = (0x1CC000, 0x440000)
+K0 = (0x80000, 0x250000)
+R0 = (0x250000, 0x440000)
 APERTURE = [(low + base, high + base) for base in (0, 0x80000000, 0xA0000000)
             for low, high in ((0x14000000, 0x15000000), (0x1FC00000, 0x20000000))]
 SELF_SET = {"sw_tryactive", "sw_active", "bootargs", "filesize", "fileaddr"}
@@ -59,8 +59,8 @@ MACROS = dict(
     yu="sf erase 0 +40000", upb="sf erase 0 +40000; sf write 80000000 0 40000",
     upe="erase 94000000 +40000", erase_env="sf erase 40000 +4000",
     erase_cfgfs="sf erase 44000 +3c000", upk1="sf erase 440000 +14c000",
-    upr1="sf erase 58c000 +274000", yk="sf erase 80000 +14c000; loady 80000000",
-    yr="sf erase 1cc000 +274000", upt="sf update 80000000 0 800000")
+    upr1="sf erase 58c000 +274000", yk="sf erase 80000 +1d0000; loady 80000000",
+    yr="sf erase 250000 +1f0000", upt="sf update 80000000 0 800000")
 
 
 def hostile(base: dict[str, str]) -> list[dict[str, str]]:
@@ -134,7 +134,7 @@ def seed_cases() -> list[tuple[str, dict[str, str]]]:
                    "saveenv", "setenv sw_tryactive 0", "setenv sw_tryactive 2",
                    "setenv sw_commit 0", "setenv sw_active 1", "setenv bootdelay 5",
                    "setenv bootdelay 600", "sf update 80000000 80000 100",
-                   "erase 94080000 +14c000", "erase 94440000 +1000", "cp.b 80000000 94440000 100",
+                   "erase 94080000 +1d0000", "erase 94440000 +1000", "cp.b 80000000 94440000 100",
                    "mw.l 94440000 0", "mw.b bfc00000 0", "go 94080000", "loop", "mm.l 94440000",
                    "nm.w b4440000", "crc32 94440000 4 b4440000", "sf erase ${x} ${z}",
                    "sf erase ${x} +${y}", "sf write 80000000 ${x} ${y}")
@@ -205,7 +205,8 @@ def mutate(rng: random.Random, line: str, other: str, names: list[str]) -> str:
 
 # Values around every partition edge, the chip's end and the 32-bit limits.
 EDGES = [0, 0x1000, 0x2000, 0x3C000, 0x3FFFF, 0x40000, 0x41FFF, 0x42000, 0x43FFF, 0x44000,
-         0x7FFFF, 0x80000, 0x14C000, 0x1CBFFF, 0x1CC000, 0x274000, 0x43FFFF, 0x440000,
+         0x7FFFF, 0x80000, 0x14C000, 0x1CBFFF, 0x1CC000, 0x1D0000, 0x1F0000, 0x24FFFF,
+         0x250000, 0x274000, 0x43FFFF, 0x440000,
          0x58BFFF, 0x58C000, 0x7FFFFF, 0x800000, 0xFFFFFFFF, 0x100000000, 0x100080000]
 WINDOW_EDGES = [0x13FFFFFF, 0x14000000, 0x14440000, 0x14FFFFFF, 0x15000000, 0x1FBFFFFF,
                 0x1FC00000, 0x1FFFFFFF, 0x20000000, 0x80000000, 0x81000000, 0xB8003268]

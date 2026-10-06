@@ -31,12 +31,13 @@ COMPRESSION_LZMA = 3
 LOAD_ADDRESS = 0x80100000
 _HEADER = struct.Struct(">IIIIIIIBBBB32s")
 
-K0_SIZE = 1359872
-R0_SIZE = 2572288
+K0_SIZE = 1900544
+R0_SIZE = 2031616
 RAM_BOOT_LIMIT = 12 << 20
 
 SQUASHFS_MAGIC = b"hsqs"
 SQUASHFS_GZIP = 1
+SQUASHFS_XZ = 4
 SQUASHFS_LZ4 = 5
 
 
@@ -101,7 +102,7 @@ class RootFs:
     crc32: int
 
 
-def check_squashfs(data: bytes, compressions: tuple[int, ...] = (SQUASHFS_GZIP, SQUASHFS_LZ4),
+def check_squashfs(data: bytes, compressions: tuple[int, ...] = (SQUASHFS_XZ,),
                    limit: int = R0_SIZE, *, what: str = "the image") -> RootFs:
     """Check a SquashFS image: magic, a compression the kernel supports, and size."""
     if len(data) < 24 or data[:4] != SQUASHFS_MAGIC:

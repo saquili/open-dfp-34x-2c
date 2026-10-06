@@ -71,9 +71,9 @@ class CliCase(BenchCase):
 class GuardCheck(CliCase):
 
     def test_allowed_and_refused_lines(self) -> None:
-        status = self.run_cli("guard-check", "sf erase 80000 +14c000", "")
+        status = self.run_cli("guard-check", "sf erase 80000 +1d0000", "")
         self.assertEqual(status, 0)
-        self.assertEqual(self.out.getvalue(), "allow: sf erase 80000 +14c000\nallow: \n")
+        self.assertEqual(self.out.getvalue(), "allow: sf erase 80000 +1d0000\nallow: \n")
         status = self.run_cli("guard-check", "sf erase 440000 +14c000")
         self.assertEqual(status, 3)
         self.assertEqual(self.err.getvalue(), "refused [protected-range] k1: sf erase 440000 +14c000\n")
@@ -100,9 +100,9 @@ class GuardCheck(CliCase):
 
     def test_variables_and_macros_can_be_given(self) -> None:
         status = self.run_cli("guard-check", "--var", "fl_kernel1=80000", "--var",
-                              "fl_kernel1_sz=14c000", "sf erase ${fl_kernel1} +${fl_kernel1_sz}")
+                              "fl_kernel1_sz=1d0000", "sf erase ${fl_kernel1} +${fl_kernel1_sz}")
         self.assertEqual(status, 0)
-        self.assertEqual(self.out.getvalue(), "allow: sf erase 80000 +14c000\n")
+        self.assertEqual(self.out.getvalue(), "allow: sf erase 80000 +1d0000\n")
         status = self.run_cli("guard-check", "--var", "sdsup=mw.l 94440000 0", "run sdsup")
         self.assertEqual(status, 3)
         self.assertIn("[flash-aperture]", self.err.getvalue())
@@ -552,7 +552,7 @@ class Settings(TempDirTestCase):
         self.assertEqual((settings.ramboot.expect_ipaddr, settings.ramboot.expect_serverip,
                           settings.ramboot.expect_netmask),
                          ("192.0.2.2", "192.0.2.1", "255.255.255.252"))
-        self.assertEqual(settings.flash.squashfs_compressions, (1, 5))
+        self.assertEqual(settings.flash.squashfs_compressions, (4,))
         self.assertEqual((settings.ramboot.ready_pattern, settings.ramboot.ready_limit), ("login:", 60.0))
         self.assertEqual(settings.log_path, "")
 
@@ -617,8 +617,8 @@ class Subprocess(unittest.TestCase):
                               capture_output=True, text=True, timeout=60)
 
     def test_the_guard_through_the_module_entry_point(self) -> None:
-        good = self.run_bench("guard-check", "sf erase 80000 +14c000")
-        self.assertEqual((good.returncode, good.stdout), (0, "allow: sf erase 80000 +14c000\n"))
+        good = self.run_bench("guard-check", "sf erase 80000 +1d0000")
+        self.assertEqual((good.returncode, good.stdout), (0, "allow: sf erase 80000 +1d0000\n"))
         bad = self.run_bench("guard-check", "sf erase 440000 +14c000")
         self.assertEqual(bad.returncode, 3)
         self.assertEqual(bad.stderr, "refused [protected-range] k1: sf erase 440000 +14c000\n")
@@ -644,7 +644,7 @@ class Subprocess(unittest.TestCase):
             self.assertIn("would type: run ramboot", result.stdout)
             result = self.run_bench("flash", "--target", "kernel", "--dry-run", path)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("would type: sf erase 80000 +14c000", result.stdout)
+            self.assertIn("would type: sf erase 80000 +1d0000", result.stdout)
 
 
 class TempDir:

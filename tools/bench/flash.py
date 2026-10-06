@@ -122,7 +122,7 @@ class FlashConfig:
 
     kernel_name: str = "uImage"  # served names
     rootfs_name: str = "rootfs"
-    squashfs_compressions: tuple[int, ...] = (image.SQUASHFS_GZIP, image.SQUASHFS_LZ4)
+    squashfs_compressions: tuple[int, ...] = (image.SQUASHFS_XZ,)
     stall_limit: float = STALL
     boot: RamBootConfig = field(default_factory=RamBootConfig)
     ymodem_over_bridge: bool = False  # an explicit opt-in: not validated on a bridge

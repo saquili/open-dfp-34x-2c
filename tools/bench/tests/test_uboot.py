@@ -290,10 +290,10 @@ class Typing(LoaderCase):
 
     def test_echo_mismatch_never_executes(self) -> None:
         """A character lost, doubled or changed on its way in cancels the line."""
-        line = "sf erase 80000 +14c000"
-        faults = {"dropped": lambda ch: "" if ch == "c" else ch,
-                  "doubled": lambda ch: ch * 2 if ch == "4" else ch,
-                  "substituted": lambda ch: "d" if ch == "c" else ch}
+        line = "sf erase 80000 +1d0000"
+        faults = {"dropped": lambda ch: "" if ch == "d" else ch,
+                  "doubled": lambda ch: ch * 2 if ch == "1" else ch,
+                  "substituted": lambda ch: "c" if ch == "d" else ch}
         for name, fault in faults.items():
             with self.subTest(name):
                 executed = list(self.board.executed)

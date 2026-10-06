@@ -221,7 +221,8 @@ recovery is made per run.
 
 A flash, in order: the file is checked for its partition and its CRC-32 taken;
 the loader prompt is reached; the layout variables (``fl_*`` and the two kernel
-window addresses) must equal the tool's table and ``sw_tryactive`` must read 2;
+window addresses) must read as the loader names the board's layout, which keeps
+the shipped split of bank 0, and ``sw_tryactive`` must read 2;
 the CRC-32 of bank 1 is recorded through the loader's flash window; the image
 reaches RAM at ``0x80000000`` by TFTP (``run sdsup`` first) or by YMODEM, and its
 CRC-32 there must equal the host's; the watchdog is stopped (``mw.l b8003268 0``),
@@ -308,7 +309,7 @@ documentation ranges. Unknown keys and values of the wrong type are errors.
    * - ``image.rootfs_name``
      - ``rootfs``: the served name of the root filesystem
    * - ``image.squashfs_compressions``
-     - ``[1, 5]``: the SquashFS compression ids the kernel takes
+     - ``[4]``: the SquashFS compression ids the kernel takes (xz)
    * - ``boot.ready_pattern``
      - ``login:``: the image's ready marker, a regular expression
    * - ``boot.ready_limit``

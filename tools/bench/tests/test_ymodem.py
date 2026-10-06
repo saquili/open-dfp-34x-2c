@@ -165,7 +165,7 @@ class Transfers(unittest.TestCase):
         self.assertEqual(report.blocks, 1211)
         self.assertGreater(report.seconds, 100.0)
         self.assertLess(report.seconds, 130.0)
-        biggest = self.rng.randbytes(2572288)
+        biggest = self.rng.randbytes(2031616)
         self.assertLess(self.send(self.port(), biggest).seconds, 260.0)
 
     def test_nothing_to_send_is_an_error(self) -> None:

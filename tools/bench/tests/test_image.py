@@ -65,7 +65,7 @@ class KernelImage(unittest.TestCase):
         image.check_uimage(exact, image.K0_SIZE)
         with self.assertRaises(ImageError) as caught:
             image.check_uimage(make_uimage(image.K0_SIZE - image.HEADER_SIZE + 1), image.K0_SIZE)
-        self.assertIn("1359873", str(caught.exception))
+        self.assertIn("1900545", str(caught.exception))
         image.check_uimage(make_uimage(100), image.RAM_BOOT_LIMIT)
         self.assertEqual(image.RAM_BOOT_LIMIT, 12 * 1024 * 1024)
 
@@ -82,12 +82,12 @@ class RootFs(unittest.TestCase):
 
     def test_squashfs_checks(self) -> None:
         info = image.check_squashfs(make_squashfs(4096))
-        self.assertEqual((info.length, info.compression), (4096, 1))
-        image.check_squashfs(make_squashfs(4096, compression=image.SQUASHFS_LZ4))
+        self.assertEqual((info.length, info.compression), (4096, 4))
         cases = {
             "no magic": (b"xxxx" + bytes(100), "hsqs"),
             "empty": (b"", "hsqs"),
-            "xz": (make_squashfs(4096, compression=4), "compression 4"),
+            "gzip": (make_squashfs(4096, compression=1), "compression 1"),
+            "lz4": (make_squashfs(4096, compression=5), "compression 5"),
             "lzo": (make_squashfs(4096, compression=3), "compression 3"),
         }
         for label, (data, words) in cases.items():
@@ -96,16 +96,16 @@ class RootFs(unittest.TestCase):
             self.assertIn(words, str(caught.exception))
 
     def test_the_accepted_compressions_come_from_the_caller(self) -> None:
-        data = make_squashfs(4096, compression=4)
-        self.assertEqual(image.check_squashfs(data, compressions=(4,)).compression, 4)
+        data = make_squashfs(4096, compression=1)
+        self.assertEqual(image.check_squashfs(data, compressions=(1,)).compression, 1)
         with self.assertRaises(ImageError):
-            image.check_squashfs(make_squashfs(4096), compressions=(4,))
+            image.check_squashfs(make_squashfs(4096), compressions=(1,))
 
     def test_the_size_limit_is_the_partitions(self) -> None:
         image.check_squashfs(make_squashfs(image.R0_SIZE))
         with self.assertRaises(ImageError) as caught:
             image.check_squashfs(make_squashfs(image.R0_SIZE + 1))
-        self.assertIn("2572289", str(caught.exception))
+        self.assertIn("2031617", str(caught.exception))
 
 
 class Files(TempDirTestCase):

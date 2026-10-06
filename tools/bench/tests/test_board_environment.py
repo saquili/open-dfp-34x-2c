@@ -44,7 +44,7 @@ class BoardShape(unittest.TestCase):
         for name, root in (("mtdparts0", "root=31:5"), ("mtdparts1", "root=31:7")):
             table = vectors.BOARD[name]
             self.assertIn("256K(boot)", table)
-            self.assertIn("1328K(k0)ro", table)
+            self.assertIn("1856K(k0)ro", table)
             self.assertTrue(table.endswith(root), name)
         self.assertNotIn("rst2dfl_flg", vectors.BOARD)
         self.assertEqual(vectors.BOARD["sdsup"].count("mw.l"), 5)

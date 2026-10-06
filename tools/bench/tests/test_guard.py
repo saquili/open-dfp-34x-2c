@@ -170,8 +170,8 @@ class FlashMap(unittest.TestCase):
             position = part.end
         self.assertEqual(position, guard.FLASH_SIZE)
         self.assertEqual([p.name for p in guard.WRITABLE], ["k0", "r0"])
-        self.assertEqual(guard.BY_NAME["k0"].size, 1359872)
-        self.assertEqual(guard.BY_NAME["r0"].size, 2572288)
+        self.assertEqual(guard.BY_NAME["k0"].size, 1900544)
+        self.assertEqual(guard.BY_NAME["r0"].size, 2031616)
         self.assertEqual(guard.window_address(guard.BY_NAME["k1"].start), 0x94440000)
 
     def test_the_aperture_in_every_spelling(self) -> None:
@@ -190,7 +190,7 @@ class FlashMap(unittest.TestCase):
             ((0x80000, 0), "zero length"),
             ((0x7FFFFF, 2), "beyond"),
             ((0x7F000, 0x2000), "config"),  # touches config and k0: config is protected
-            ((0x1CB000, 0x2000), "bank0-span"),
+            ((0x24F000, 0x2000), "bank0-span"),
             ((0x43FFFF, 2), "k1"),
             ((0x0, 0x800000), "boot"),
         ]
@@ -198,8 +198,8 @@ class FlashMap(unittest.TestCase):
             with self.subTest(offset=offset, length=length), self.assertRaises(Refusal) as caught:
                 guard.check_range(offset, length)
             self.assertEqual(caught.exception.detail, detail)
-        self.assertEqual(guard.check_range(0x80000, 0x14C000).name, "k0")
-        self.assertEqual(guard.check_range(0x1CC000, 0x274000).name, "r0")
+        self.assertEqual(guard.check_range(0x80000, 0x1D0000).name, "k0")
+        self.assertEqual(guard.check_range(0x250000, 0x1F0000).name, "r0")
         self.assertEqual(guard.check_range(0x43F000, 0x1000).name, "r0")
         self.assertEqual(guard.check_range(0x80000, 1).name, "k0")
 
@@ -349,7 +349,7 @@ class Details(unittest.TestCase):
             with self.subTest(line=line):
                 self.check(line, read_only=True)
         for line in ("reset", "boot", "run ramboot", "setenv sw_tryactive 0", "saveenv",
-                     "mw.l b8003268 0", "loady 80000000", "sf erase 80000 +14c000",
+                     "mw.l b8003268 0", "loady 80000000", "sf erase 80000 +1d0000",
                      "tftpboot 80000000 uImage"):
             with self.subTest(line=line), self.assertRaises(Refusal) as caught:
                 self.check(line, read_only=True)
@@ -418,7 +418,7 @@ class PreflightDetails(unittest.TestCase):
 
     def test_a_partition_table_with_parentheses_is_data_in_the_kernel_arguments(self) -> None:
         tables = ("256K(boot)", "a(b)", "(", ")", ")(", "x(sf erase 0 +40000)",
-                  vectors.MTDPARTS_BANK0, "1328K(k0)ro,2512K(r0)ro root=31:5")
+                  vectors.MTDPARTS_BANK0, "1856K(k0)ro,1984K(r0)ro root=31:5")
         for text in tables:
             with self.subTest(text=text):
                 env = self.env(mtdparts0=text, mtdparts1=text)
@@ -503,7 +503,7 @@ class PreflightDetails(unittest.TestCase):
     def test_typed_lines_keep_the_full_refusal(self) -> None:
         board = dict(vectors.E6)
         for line in ("printenv ${mtdparts0}", "setenv bootargs ${mtdparts0}", "run (ramboot)",
-                     "sf erase 80000 +14c000 (", "boot ()", "crc32 80000000 (10)"):
+                     "sf erase 80000 +1d0000 (", "boot ()", "crc32 80000000 (10)"):
             with self.subTest(line=line), self.assertRaises(Refusal) as caught:
                 guard.check_line(line, board, Session())
             self.assertEqual(caught.exception.code, "syntax")
@@ -698,9 +698,6 @@ class Layout(unittest.TestCase):
                  ("fl_cfgfs", guard.BY_NAME["config"].start),
                  ("fl_cfgfs_sz", guard.BY_NAME["config"].size),
                  ("fl_kernel1", guard.BY_NAME["k0"].start),
-                 ("fl_kernel1_sz", guard.BY_NAME["k0"].size),
-                 ("fl_rootfs1", guard.BY_NAME["r0"].start),
-                 ("fl_rootfs1_sz", guard.BY_NAME["r0"].size),
                  ("fl_kernel2", guard.BY_NAME["k1"].start),
                  ("fl_kernel2_sz", guard.BY_NAME["k1"].size),
                  ("fl_rootfs2", guard.BY_NAME["r1"].start),
@@ -709,7 +706,14 @@ class Layout(unittest.TestCase):
                  ("img1_kernel", guard.window_address(guard.BY_NAME["k1"].start)))
         for name, value in pairs:
             self.assertEqual(table[name], value, name)
-        self.assertEqual(len(table), len(pairs))
+        # Bank 0 as the loader names it is the shipped split, which covers the
+        # same bytes as this system's and ends where it does.
+        self.assertEqual((table["fl_kernel1_sz"], table["fl_rootfs1"], table["fl_rootfs1_sz"]),
+                         (0x14C000, 0x1CC000, 0x274000))
+        self.assertEqual(table["fl_kernel1_sz"] + table["fl_rootfs1_sz"],
+                         guard.BY_NAME["k0"].size + guard.BY_NAME["r0"].size)
+        self.assertEqual(table["fl_rootfs1"] + table["fl_rootfs1_sz"], guard.BY_NAME["r0"].end)
+        self.assertEqual(len(table), len(pairs) + 3)
         for name, text in vectors.E1.items():
             if name in table:
                 self.assertEqual(int(text, 16), table[name], name)

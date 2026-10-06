@@ -68,7 +68,7 @@ BOOT_BASE = dict(RUN_BASE, mtdparts1="bank1 root=31:7", bootcmd=BOOTCMD,
 # E6, the board's shape: the base environment and the chain, with partition
 # tables as the kernel takes them (they hold parentheses and ``=``).
 MTDPARTS_BANK0 = ("mtdparts=spi_nor:256K(boot),8K(env),8K(env2),240K(config),"
-                  "1328K(k0)ro,2512K(r0)ro,1328K(k1),2512K(r1) root=31:5")
+                  "1856K(k0)ro,1984K(r0)ro,1328K(k1),2512K(r1) root=31:5")
 MTDPARTS_BANK1 = MTDPARTS_BANK0[:-len("root=31:5")] + "root=31:7"
 E6 = dict(BOOT_BASE, mtdparts0=MTDPARTS_BANK0, mtdparts1=MTDPARTS_BANK1)
 
@@ -125,10 +125,10 @@ LINE_VECTORS: tuple[LineVector, ...] = (
     _allow(4, "setenv sw_tryactive 0"),
     _allow(5, "mw.l b8003268 0"),
     _allow(6, "loady 80000000"),
-    _allow(7, "sf erase 80000 +14c000"),
-    _allow(8, "sf erase 1cc000 +274000"),
+    _allow(7, "sf erase 80000 +1d0000"),
+    _allow(8, "sf erase 250000 +1f0000"),
     _allow(9, "sf write 80000000 80000 5f41a"),
-    _allow(10, "sf write 80000000 1cc000 274000"),
+    _allow(10, "sf write 80000000 250000 1f0000"),
     _allow(11, "crc32 94440000 14c000"),
     _allow(12, "tftpboot 80000000 uImage"),
     _allow(13, "run ramboot"),
@@ -136,11 +136,11 @@ LINE_VECTORS: tuple[LineVector, ...] = (
     _allow(15, "boot", "E1"),
     # spellings of allowed lines
     _allow(16, "mw.l 0xB8003268 0x0"),
-    _allow(17, "sf   erase  0x00080000\t+0x14c000"),
-    _allow(18, "sf erase 0X80000 +14C000"),
+    _allow(17, "sf   erase  0x00080000\t+0x1d0000"),
+    _allow(18, "sf erase 0X80000 +1D0000"),
     _allow(19, "crc32 bfc00000 40000"),
     _allow(20, "sf erase 43f000 +1000"),
-    _refuse(21, "sf erase 1cb000 +2000", PR, "bank0-span"),
+    _refuse(21, "sf erase 24f000 +2000", PR, "bank0-span"),
     # the other bank, directly
     _refuse(22, "sf erase 440000 +14c000", PR, "k1"),
     _refuse(23, "sf erase 58c000 +274000", PR, "r1"),
@@ -157,7 +157,7 @@ LINE_VECTORS: tuple[LineVector, ...] = (
     # ranges that cross a boundary
     _refuse(33, "sf erase 7f000 +2000", PR, "config"),
     _refuse(34, "sf erase 43f000 +1001", PR, "k1"),
-    _refuse(35, "sf erase 1cc000 +274001", PR, "k1"),
+    _refuse(35, "sf erase 250000 +1f0001", PR, "k1"),
     _refuse(36, "sf write 80000000 7ffff 2", PR, "config"),
     _refuse(37, "sf write 80000000 43ffff 2", PR, "k1"),
     # numbers that try to fool a parser
@@ -175,7 +175,7 @@ LINE_VECTORS: tuple[LineVector, ...] = (
     _refuse(49, "sf erase 80000 + 14c000", NA),
     _refuse(50, "sf erase 8_0000 +1000", SY),
     _refuse(51, "sf erase 0440000 +14c000", PR, "k1"),
-    _refuse(52, "sf erase 80000 +14c000 440000", NA),
+    _refuse(52, "sf erase 80000 +1d0000 440000", NA),
     _refuse(53, "sf write 81000000 80000 100", NA),
     # spellings of commands
     _refuse(54, "SF ERASE 440000 +14c000", NA),
@@ -187,8 +187,8 @@ LINE_VECTORS: tuple[LineVector, ...] = (
     _refuse(60, "erase 94440000 +14c000", NA),
     _refuse(61, "protect off all", NA),
     # several commands on one line
-    _refuse(62, "sf erase 80000 +14c000; sf erase 440000 +14c000", SY),
-    _refuse(63, "sf erase 80000 +14c000 && sf erase 0 +40000", SY),
+    _refuse(62, "sf erase 80000 +1d0000; sf erase 440000 +14c000", SY),
+    _refuse(63, "sf erase 80000 +1d0000 && sf erase 0 +40000", SY),
     _refuse(64, "printenv || sf erase 0 +40000", SY),
     _refuse(65, "printenv `sf erase 0 +40000`", SY),
     _refuse(66, "printenv $(sf erase 0 +40000)", SY),

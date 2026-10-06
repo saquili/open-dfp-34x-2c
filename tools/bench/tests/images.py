@@ -33,7 +33,7 @@ def make_uimage(size: int = 4096, *, name: str = "Linux-test", created: int = CR
     return bytes(header) + data
 
 
-def make_squashfs(length: int = 8192, compression: int = image.SQUASHFS_GZIP,
+def make_squashfs(length: int = 8192, compression: int = image.SQUASHFS_XZ,
                   seed: int = 2) -> bytes:
     """A root filesystem image: the magic, a compression id at offset 20, and filler."""
     rng = random.Random(seed)

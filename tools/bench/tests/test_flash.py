@@ -73,7 +73,7 @@ class SimulatedFlash(BenchCase):
     def test_protected_regions_and_outside_operations_are_reported(self) -> None:
         flash = SimFlash()
         before = flash.snapshot()
-        flash.erase(0x80000, 0x14C000)
+        flash.erase(0x80000, 0x1D0000)
         flash.write(0x80000, b"\x00" * 10)
         self.assertEqual(flash.protected_unchanged(before), [])
         self.assertEqual(flash.operations_outside_bank_0(), [])
@@ -93,16 +93,16 @@ class Plan(BenchCase):
             "printenv", "crc32 94440000 14c000", "crc32 9458c000 274000",
             "run sdsup", "tftpboot 80000000 uImage", "crc32 80000000 5f41a",
             "mw.l b8003268 0",
-            "sf erase 80000 +14c000", "sf write 80000000 80000 5f41a", "crc32 94080000 5f41a",
+            "sf erase 80000 +1d0000", "sf write 80000000 80000 5f41a", "crc32 94080000 5f41a",
             "crc32 94440000 14c000", "crc32 9458c000 274000"])
 
     def test_the_root_filesystem_by_ymodem_with_a_trial(self) -> None:
-        steps = fl.plan("rootfs", 0x274000, "ymodem", arm=True, commit=True)
+        steps = fl.plan("rootfs", 0x1F0000, "ymodem", arm=True, commit=True)
         self.assertEqual(fl.plan_lines(steps), [
             "printenv", "crc32 94440000 14c000", "crc32 9458c000 274000",
-            "mw.l b8003268 0", "loady 80000000", "crc32 80000000 274000",
-            "sf erase 1cc000 +274000", "sf write 80000000 1cc000 274000",
-            "crc32 941cc000 274000", "crc32 94440000 14c000", "crc32 9458c000 274000",
+            "mw.l b8003268 0", "loady 80000000", "crc32 80000000 1f0000",
+            "sf erase 250000 +1f0000", "sf write 80000000 250000 1f0000",
+            "crc32 94250000 1f0000", "crc32 94440000 14c000", "crc32 9458c000 274000",
             "setenv sw_commit 0", "setenv sw_tryactive 0", "saveenv",
             "printenv sw_commit", "printenv sw_tryactive", "boot"])
 
@@ -130,9 +130,9 @@ class Plan(BenchCase):
 
     def test_the_line_builders_use_the_tools_table(self) -> None:
         k0, r0 = guardmod.BY_NAME["k0"], guardmod.BY_NAME["r0"]
-        self.assertEqual(fl.erase_line(k0), "sf erase 80000 +14c000")
-        self.assertEqual(fl.erase_line(r0), "sf erase 1cc000 +274000")
-        self.assertEqual(fl.write_line(r0, 0x1234), "sf write 80000000 1cc000 1234")
+        self.assertEqual(fl.erase_line(k0), "sf erase 80000 +1d0000")
+        self.assertEqual(fl.erase_line(r0), "sf erase 250000 +1f0000")
+        self.assertEqual(fl.write_line(r0, 0x1234), "sf write 80000000 250000 1234")
         self.assertEqual(fl.flash_crc_line(k0, 0x5F41A), "crc32 94080000 5f41a")
         self.assertEqual(fl.bank1_lines(), ["crc32 94440000 14c000", "crc32 9458c000 274000"])
 
@@ -211,7 +211,7 @@ class Kernel(FlashCase):
         k0 = self.flash_chip.region("k0")
         self.assertEqual(k0[:len(self.kernel_image)], self.kernel_image)
         self.assertEqual(set(k0[len(self.kernel_image):]), {0xFF}, "the partition was erased")
-        self.assertEqual(self.flash_chip.log, [("erase", 0x80000, 0x14C000),
+        self.assertEqual(self.flash_chip.log, [("erase", 0x80000, 0x1D0000),
                                                ("write", 0x80000, len(self.kernel_image))])
         self.assertBank0Only()
         self.assertEqual((result.partition, result.length, result.crc32),
@@ -262,14 +262,14 @@ class Kernel(FlashCase):
 
     def test_an_image_larger_than_its_partition_is_refused(self) -> None:
         big = os.path.join(self.tmp, "big")
-        self.write(big, make_uimage(1359872 - 64 + 1))
+        self.write(big, make_uimage(1900544 - 64 + 1))
         with self.assertRaises(ImageError) as caught:
             self.run_flash(big, target="kernel")
-        self.assertIn("1359873", str(caught.exception))
+        self.assertIn("1900545", str(caught.exception))
         self.assertEqual(self.tmux.calls, [])
 
     def test_a_kernel_of_exactly_the_partition_size_is_written_whole(self) -> None:
-        exact = make_uimage(1359872 - 64, name="Linux-full")
+        exact = make_uimage(1900544 - 64, name="Linux-full")
         path = os.path.join(self.tmp, "exact")
         self.write(path, exact)
         self.board.tftp_files["uImage"] = exact
@@ -285,8 +285,8 @@ class RootFs(FlashCase):
         r0 = self.flash_chip.region("r0")
         self.assertEqual(r0[:len(self.rootfs)], self.rootfs)
         self.assertEqual(set(r0[len(self.rootfs):]), {0xFF})
-        self.assertEqual(self.flash_chip.log, [("erase", 0x1CC000, 0x274000),
-                                               ("write", 0x1CC000, len(self.rootfs))])
+        self.assertEqual(self.flash_chip.log, [("erase", 0x250000, 0x1F0000),
+                                               ("write", 0x250000, len(self.rootfs))])
         self.assertBank0Only()
         self.assertEqual(self.flash_chip.region("k0"), self.before["k0"], "the kernel is untouched")
         self.assertEqual(result.partition, "r0")
@@ -296,17 +296,17 @@ class RootFs(FlashCase):
         self.assertEqual(self.board.restarts, ["sysrq"], "the long erase outlived the fuse")
 
     def test_a_squashfs_with_a_compression_the_kernel_lacks_is_refused(self) -> None:
-        path = os.path.join(self.tmp, "xz")
-        self.write(path, make_squashfs(4000, compression=4))
+        path = os.path.join(self.tmp, "gzip")
+        self.write(path, make_squashfs(4000, compression=1))
         with self.assertRaises(ImageError):
             self.run_flash(path, target="rootfs")
-        self.config.squashfs_compressions = (4,)
-        self.board.tftp_files["rootfs"] = make_squashfs(4000, compression=4)
+        self.config.squashfs_compressions = (1,)
+        self.board.tftp_files["rootfs"] = make_squashfs(4000, compression=1)
         self.run_flash(path, target="rootfs")
         self.assertEqual(self.flash_chip.region("r0")[:4], b"hsqs")
 
     def test_the_largest_root_filesystem_is_written_whole(self) -> None:
-        big = make_squashfs(2572288, seed=8)
+        big = make_squashfs(2031616, seed=8)
         path = os.path.join(self.tmp, "big")
         self.write(path, big)
         self.board.tftp_files["rootfs"] = big
@@ -691,7 +691,7 @@ class Failures(FlashCase):
         with self.assertRaises(Interrupted) as caught:
             self.run_flash(target="kernel")
         self.assertIn("the erase of k0", str(caught.exception))
-        self.assertEqual(self.flash_chip.log, [("erase", 0x80000, 0x14C000)])
+        self.assertEqual(self.flash_chip.log, [("erase", 0x80000, 0x1D0000)])
         self.assertEqual(bytes(self.board.lost_busy), b"")
         self.assertEqual(set(self.flash_chip.region("k0")), {0xFF}, "erased and not written")
 
@@ -705,7 +705,7 @@ class Failures(FlashCase):
         self.board.fail_first_after_sysrq = True
         result = self.run_flash(target="kernel")
         self.assertEqual(self.board.restarts, ["sysrq", "fuse"])
-        self.assertEqual(self.flash_chip.log, [("erase", 0x80000, 0x14C000),
+        self.assertEqual(self.flash_chip.log, [("erase", 0x80000, 0x1D0000),
                                                ("write", 0x80000, len(self.kernel_image))])
         self.assertEqual(result.partition, "k0")
         self.assertBank0Only()

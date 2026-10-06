@@ -26,8 +26,8 @@ budget = importlib.util.module_from_spec(_spec)
 sys.modules["image_budget"] = budget
 _loader.exec_module(budget)
 
-K0 = 1359872
-R0 = 2572288
+K0 = 1900544
+R0 = 2031616
 
 
 def make_image(directory, name, size):
@@ -47,8 +47,8 @@ class Budgets(unittest.TestCase):
     def test_the_partitions_are_those_of_the_flash_layout(self):
         self.assertEqual(budget.BUDGETS["k0"][1], K0)
         self.assertEqual(budget.BUDGETS["r0"][1], R0)
-        self.assertEqual(K0, 1328 * 1024)
-        self.assertEqual(R0, 2512 * 1024)
+        self.assertEqual(K0, 1856 * 1024)
+        self.assertEqual(R0, 1984 * 1024)
 
     def test_the_names_of_the_images_are_those_the_build_leaves(self):
         self.assertEqual(budget.BUDGETS["k0"][0], "k0.uImage")
@@ -69,21 +69,21 @@ class Budgets(unittest.TestCase):
             self.skipTest("the handbook is not part of this checkout")
         with open(page, encoding="utf-8") as handle:
             text = handle.read()
-        for needle in ("1328 KiB (``0x14c000``, 1359872 bytes)",
-                       "2512 KiB (``0x274000``, 2572288 bytes)"):
+        for needle in ("1856 KiB (``0x1d0000``, 1900544 bytes)",
+                       "1984 KiB (``0x1f0000``, 2031616 bytes)"):
             self.assertIn(needle, text)
 
 
 class Verdicts(unittest.TestCase):
     def test_an_image_that_fits_reports_its_margin(self):
         self.assertEqual(budget.describe("r0", 812345, R0),
-                         "r0: 812345 bytes against a budget of 2572288 (2512 KiB): "
-                         "margin 1759943 bytes (68.4% of the partition)")
+                         "r0: 812345 bytes against a budget of 2031616 (1984 KiB): "
+                         "margin 1219271 bytes (60.0% of the partition)")
 
     def test_an_image_that_is_over_reports_the_excess(self):
         self.assertEqual(budget.describe("k0", 2543210, K0),
-                         "k0: 2543210 bytes against a budget of 1359872 (1328 KiB): "
-                         "over the budget by 1183338 bytes")
+                         "k0: 2543210 bytes against a budget of 1900544 (1856 KiB): "
+                         "over the budget by 642666 bytes")
 
     def test_an_image_of_exactly_the_budget_fits_with_no_margin(self):
         self.assertIn("margin 0 bytes (0.0% of the partition)", budget.describe("k0", K0, K0))
@@ -123,7 +123,7 @@ class Checking(unittest.TestCase):
         status, out, err = self.check([])
         self.assertEqual((status, err), (0, ""))
         self.assertIn("over the budget by 1183338 bytes", out)
-        self.assertIn("margin 1759943 bytes", out)
+        self.assertIn("margin 1219271 bytes", out)
 
     def test_enforce_makes_an_image_over_its_budget_a_failure(self):
         make_image(self.dir, "k0.uImage", K0 + 1)
