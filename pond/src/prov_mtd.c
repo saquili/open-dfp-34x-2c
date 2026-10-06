@@ -46,6 +46,16 @@ struct mtd_table {
 	unsigned int n;
 };
 
+/* The flash's size: the partitions cover the whole chip. */
+static unsigned long long mtd_chip_size(const struct mtd_table *t)
+{
+	unsigned long long size = 0;
+
+	for (unsigned int i = 0; i < t->n; i++)
+		size += t->p[i].size;
+	return size;
+}
+
 static int mtd_table_read(struct mtd_table *t)
 {
 	char text[4096];
@@ -670,12 +680,15 @@ int prov_banks(struct prov_buf *out)
 	pv_key(out, "erasesize_reported_b");
 	pv_num(out, (long long)t.p[0].erasesize);
 	pv_comma(out);
+	/*
+	 * A read-only mapping (map_rom) reports the whole chip as its
+	 * erasesize and erases nothing; a flash driver reports its sector.
+	 */
 	pv_key(out, "erase_block_b");
-	pv_null(out);
-	pv_comma(out);
-	pv_key(out, "erase_block_why");
-	pv_str(out, "map_rom has no erase at all, so the erasesize it reports "
-		    "is the whole chip and is not this flash's sector size");
+	if (t.n && t.p[0].erasesize < mtd_chip_size(&t))
+		pv_num(out, (long long)t.p[0].erasesize);
+	else
+		pv_null(out);
 	pv_close(out, '}');
 
 	pv_comma(out);
