@@ -4,6 +4,7 @@
 /* The commands of pppoed: up, discover and sniff. */
 
 #include <errno.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -170,9 +171,18 @@ static int cmd_discover(int argc, char **argv)
 	return 0;
 }
 
+static void on_stop(int sig)
+{
+	(void)sig;
+	pppoed_stop = 1;
+}
+
 /*
  * Open a session and keep it. The MD5 test runs first: a wrong digest
- * would look like a wrong secret to the peer.
+ * would look like a wrong secret to the peer. SIGTERM, SIGINT and SIGHUP end
+ * the session as a peer expects, with an LCP Terminate-Request and a PADT, so
+ * that the concentrator frees it at once instead of after its echo timeout;
+ * a session that does not come up after its discovery gets a PADT too.
  */
 static int cmd_up(int argc, char **argv)
 {
@@ -180,9 +190,15 @@ static int cmd_up(int argc, char **argv)
 	char user[64] = "", secret[256] = "";
 	unsigned int tries = 3, timeout = 3000, keep = 0;
 	bool defaultroute = false, pass_on = false, want_ipv6 = true;
+	struct sigaction sa = { .sa_handler = on_stop };
 	struct pppoe_session s;
 	struct ppp_link l;
 	int fd, err, opt;
+
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGHUP, &sa, NULL);
 
 	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DP4v")) != -1) {
 		switch (opt) {
@@ -262,6 +278,7 @@ static int cmd_up(int argc, char **argv)
 	if (err) {
 		PPPOED_ERR("cannot take the session to the kernel: %s",
 			   strerror(-err));
+		pppoe_terminate(fd, &s);
 		close(fd);
 		return 1;
 	}
@@ -270,6 +287,7 @@ static int cmd_up(int argc, char **argv)
 	if (err) {
 		PPPOED_ERR("negotiation failed: %s", strerror(-err));
 		ppp_close(&l);
+		pppoe_terminate(fd, &s);
 		close(fd);
 		return 1;
 	}
@@ -277,7 +295,9 @@ static int cmd_up(int argc, char **argv)
 	err = ppp_ifconfig(&l, defaultroute, pass_on);
 	if (err) {
 		PPPOED_ERR("cannot configure %s: %s", l.ifname, strerror(-err));
+		ppp_terminate(&l);
 		ppp_close(&l);
+		pppoe_terminate(fd, &s);
 		close(fd);
 		return 1;
 	}
@@ -310,7 +330,9 @@ static int cmd_up(int argc, char **argv)
 	}
 
 	err = ppp_run(&l, keep);
-	if (err && err != -EINTR)
+	if (err == -EINTR)
+		PPPOED_INFO("stopping: the session ends");
+	else if (err)
 		PPPOED_WARN("the link ended: %s", strerror(-err));
 
 	ppp_terminate(&l);

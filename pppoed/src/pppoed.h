@@ -12,6 +12,7 @@
 #ifndef PPPOED_H
 #define PPPOED_H
 
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -250,7 +251,16 @@ int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
  */
 int ppp_ifconfig(struct ppp_link *l, bool defaultroute, bool pass_on);
 
-/* Keep the link: answer echo requests until the peer ends it, or @seconds pass. */
+/*
+ * Set by a signal that asks pppoed to stop: ppp_run() then returns -EINTR, and
+ * the link ends as a peer expects, with an LCP Terminate-Request and a PADT.
+ */
+extern volatile sig_atomic_t pppoed_stop;
+
+/*
+ * Keep the link: answer echo requests until the peer ends it, @seconds pass
+ * or pppoed_stop is set.
+ */
 int ppp_run(struct ppp_link *l, unsigned int seconds);
 
 /* Ask the peer to end the link. */

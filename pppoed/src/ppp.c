@@ -336,6 +336,8 @@ out:
 	return err;
 }
 
+volatile sig_atomic_t pppoed_stop;
+
 int ppp_run(struct ppp_link *l, unsigned int seconds)
 {
 	uint8_t body[PPP_CTRL_MAX];
@@ -345,6 +347,8 @@ int ppp_run(struct ppp_link *l, unsigned int seconds)
 		uint16_t proto;
 		int n;
 
+		if (pppoed_stop)
+			return -EINTR;
 		if (seconds && elapsed >= seconds * 1000UL)
 			return 0;
 

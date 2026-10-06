@@ -51,7 +51,12 @@ pppoed's. Either family may be refused by the peer and the link comes up with
 the other; once IPCP is open, IPv6CP has two restart periods, six seconds, to
 open too.
 
+SIGTERM, SIGINT and SIGHUP end a session as a peer expects: an LCP
+Terminate-Request, then a PADT, so that the concentrator frees the session
+at once rather than after its echo timeout; a session that does not come up
+after its discovery gets a PADT too.
+
 The tests run the negotiation against a peer in a child process, at the
 other end of a socket pair: both families, a peer that refuses our
 identifier, a peer that offers none, a peer without IPv6, a client without
-IPv6, and a peer without IPv4.
+IPv6, a peer without IPv4, and a client told to stop.

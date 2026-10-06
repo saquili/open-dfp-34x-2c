@@ -39,6 +39,7 @@ enum scenario {
 	NO_IPV6, /* the peer protocol-rejects IPv6CP */
 	IPV4_ONLY, /* the client does not want IPv6 */
 	IPV6_ONLY, /* the peer protocol-rejects IPCP */
+	STOPPED, /* both open, then the client is told to stop */
 };
 
 static const uint8_t PEER_IID[PPP_IID_LEN] = { 2, 0, 0, 0, 0, 0, 0, 1 };
@@ -84,7 +85,7 @@ static void peer(int fd, enum scenario sc)
 	static const uint8_t lcp_req[] = { LCP_OPT_MAGIC, 6,	0x11,
 					   0x22,	  0x33, 0x44 };
 	static const uint8_t ipcp_req[] = { IPCP_OPT_ADDRESS, 6, 192, 0, 2, 1 };
-	bool lcp_open = false, ncp_started = false;
+	bool lcp_open = false, ncp_started = false, saw_term = false;
 	bool saw_v6_reject = false, naked_iid = false, sent_zero = false;
 
 	peer_send(fd, PPP_PROTO_LCP, CP_CONF_REQ, 1, lcp_req, sizeof(lcp_req));
@@ -110,7 +111,10 @@ static void peer(int fd, enum scenario sc)
 			if (code == CP_CONF_REQ)
 				peer_send(fd, proto, CP_CONF_ACK, id, opts,
 					  olen);
-			else if (code == CP_CONF_ACK)
+			else if (code == CP_TERM_REQ) {
+				peer_send(fd, proto, CP_TERM_ACK, id, NULL, 0);
+				saw_term = true;
+			} else if (code == CP_CONF_ACK)
 				lcp_open = true;
 			else if (code == CP_PROTO_REJ &&
 				 pppoe_get16(opts) == PPP_PROTO_IPV6CP)
@@ -190,6 +194,8 @@ static void peer(int fd, enum scenario sc)
 		_exit(17);
 	if (sc == ZERO_PEER_IID && !sent_zero)
 		_exit(18);
+	if (sc == STOPPED && !saw_term)
+		_exit(19);
 	_exit(0);
 }
 
@@ -213,6 +219,12 @@ static int run(enum scenario sc, struct ppp_link *l)
 	l->fd = sv[0];
 	l->magic = 0x55667788;
 	err = ppp_negotiate(l, "", "", sc != IPV4_ONLY);
+	if (sc == STOPPED && !err) {
+		pppoed_stop = 1;
+		err = ppp_run(l, 5) == -EINTR ? 0 : -EPROTO;
+		ppp_terminate(l);
+		pppoed_stop = 0;
+	}
 	close(sv[0]);
 	waitpid(pid, &status, 0);
 	if (!WIFEXITED(status) || WEXITSTATUS(status)) {
@@ -255,6 +267,9 @@ int main(void)
 
 	CHECK(run(IPV6_ONLY, &l) == 0);
 	CHECK(!l.ipv4_up && l.ipv6_up);
+
+	/* Told to stop, the client leaves the link at once and terminates it. */
+	CHECK(run(STOPPED, &l) == 0);
 
 	printf("test_ncp: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
