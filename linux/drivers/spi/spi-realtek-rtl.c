@@ -140,10 +140,12 @@ static void init_hw(struct rtspi *rtspi)
 	writel(value, REG(RTL_SPI_SFCR));
 
 	value = readl(REG(RTL_SPI_SFCSR));
-	/* Permanently disable CS1, since it's never used */
-	value |= RTL_SPI_SFCSR_CSB1;
-	/* Select CS0 for use */
-	value &= RTL_SPI_SFCSR_CS;
+	/*
+	 * Start with CS0 deasserted and permanently disable CS1, since it's
+	 * never used. The chip select bit is left as the boot loader set it
+	 * for the flash it booted from.
+	 */
+	value |= RTL_SPI_SFCSR_CSB0 | RTL_SPI_SFCSR_CSB1;
 	writel(value, REG(RTL_SPI_SFCSR));
 }
 
