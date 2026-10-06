@@ -113,11 +113,13 @@ dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no hos
 dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid -p "$data:22" -p "$mgmt:22" ||
 	warn "dropbear did not start"
 
-# The identity of the unit, from its factory configuration: omcid reads it,
-# and the PON driver takes the serial number before the PON comes up. The
-# file holds the PLOAM password, so only root may read it.
+# The identity of the unit, its saved settings and its PPPoE account, from
+# the configuration store; the identity from the shipped firmware's
+# configuration until the store holds one. omcid reads the identity, and the
+# PON driver takes the serial number before the PON comes up. The file holds
+# the PLOAM password, so only root may read it.
 umask 077
-ponid >/run/onu-identity || warn "no identity in the factory configuration"
+onu-store load || warn "no identity in the configuration store or the factory configuration"
 # A bench may name the versions that the software images and the circuit
 # packs report to the OLT, so that a unit shows what the firmware it came
 # with showed; without them omcid reports its own.
