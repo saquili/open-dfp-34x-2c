@@ -101,6 +101,9 @@ listed in ``vendor-prefixes.yaml``.
    * - ``realtek,rtl9602c-sysctl``, ``syscon``
      - ``sysctl``
      - ``mfd/syscon.yaml``
+   * - ``realtek,rtl9602c-spi``
+     - ``spi``
+     - ``spi/realtek,rtl-spi.yaml``
    * - ``realtek,rtl9602c-intc``
      - ``intc``
      - ``interrupt-controller/realtek,rtl9602c-intc.yaml``
@@ -652,6 +655,10 @@ the last column.
      - System controller
      - ``sysctl``
      - Board DFP-34X-2C3
+   * - ``0x18001200``-``0x180012ff``
+     - SPI flash controller
+     - ``spi``
+     - Flash window and partitions
    * - ``0x18002000``-``0x180020ff``
      - UART0 (console)
      - ``uart0``

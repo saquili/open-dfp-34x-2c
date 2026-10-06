@@ -53,6 +53,20 @@
 			reg = <0x18000000 0x1000>;
 		};
 
+		/*
+		 * The controller of the SPI NOR flash the board boots from,
+		 * the RTL838x one. The SoC also maps the flash for reading at
+		 * 0x14000000; that window and this controller drive the same
+		 * chip, so only one of them may be in use.
+		 */
+		spi: spi@18001200 {
+			compatible = "realtek,rtl9602c-spi";
+			reg = <0x18001200 0x100>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+
 		/* Three registers: keepalive, interrupt status and control */
 		wdt: watchdog@18003260 {
 			compatible = "realtek,rtl9602c-wdt";
