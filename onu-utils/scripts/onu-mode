@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-mode: put the stick in the mode its settings name, bridge or router.
+# onu-mode: put the stick in the mode its settings name, bridge, router or
+# passthrough.
 #
 #   onu-mode start    at boot: take the settings from /etc/onu.conf and apply
 #   onu-mode apply    apply the settings of /run/onu.conf again, after a change
 #   onu-mode stop     stop omcid and take the router down
-#   onu-mode status   the mode in force and, in router mode, the WAN
+#   onu-mode status   the mode in force and, in router or passthrough mode,
+#                     the WAN
 #
 # The settings are KEY=value lines in /run/onu.conf, which the status daemon
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
@@ -23,6 +25,12 @@
 # network behind the WAN routes back to the stick. A watcher (onu-mode watch)
 # brings the WAN up when the OLT provisions its GEM port and restarts the PPPoE
 # or DHCP client when it ends.
+#
+# Passthrough mode is router mode with the address of the WAN's PPPoE session
+# handed on: it goes on no interface of the stick's, and the one host on the
+# LAN link, the router behind the stick, takes it by DHCP, as a /32 with
+# PASS_GATEWAY, the stick's address on that link, as its gateway. The LAN link
+# is a VLAN on the host link (LAN_VLAN), or the host link itself.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -56,21 +64,28 @@ load() {
 	LAN_DHCP=on
 	LAN_DHCP_START=192.168.1.100
 	LAN_DHCP_END=192.168.1.199
+	LAN_VLAN=
+	PASS_GATEWAY=169.254.0.1
+	WAN_MAC=
 	[ -r "$CONF" ] || return 0
 	while IFS='=' read -r key value; do
 		case $key in
 		MODE | WAN_GEM | WAN_VLAN | WAN_PROTO | WAN_ADDRESS | WAN_GATEWAY | \
-			LAN_ADDRESS | LAN_DHCP | LAN_DHCP_START | LAN_DHCP_END) ;;
+			LAN_ADDRESS | LAN_DHCP | LAN_DHCP_START | LAN_DHCP_END | \
+			LAN_VLAN | PASS_GATEWAY | WAN_MAC) ;;
 		*) continue ;;
 		esac
 		case $value in
-		*[!A-Za-z0-9./_-]*)
+		*[!A-Za-z0-9./:_-]*)
 			log "$key: not a value; the default stays"
 			continue
 			;;
 		esac
 		eval "$key=\$value"
 	done <"$CONF"
+	# Passthrough hands on the address of a PPPoE session.
+	[ "$MODE" = passthrough ] && WAN_PROTO=pppoe
+	return 0
 }
 
 # The dotted mask of a prefix length.
@@ -101,23 +116,23 @@ stop_pid() {
 	rm -f "$RUN/$1.pid"
 }
 
-# omcid in the mode $1. A running omcid is told by a signal, SIGUSR1 for
-# router mode and SIGUSR2 for bridge mode: it keeps its MIB, so what the OLT
-# provisioned stays, and programs the data path again from it. One that does
-# not run is started, with -r in router mode; its log goes on in
-# /run/omcid.log.
+# omcid in the mode $1. A running omcid is told by a signal, SIGUSR2 for
+# bridge mode and SIGUSR1 for the others, where the stick routes: it keeps its
+# MIB, so what the OLT provisioned stays, and programs the data path again
+# from it. One that does not run is started, with -r where the stick routes;
+# its log goes on in /run/omcid.log.
 omcid_run() {
 	if pidof omcid >/dev/null 2>&1; then
-		if [ "$1" = router ]; then
-			killall -USR1 omcid
-		else
+		if [ "$1" = bridge ]; then
 			killall -USR2 omcid
+		else
+			killall -USR1 omcid
 		fi
 		sleep 1
-	elif [ "$1" = router ]; then
-		omcid -r >>"$RUN/omcid.log" 2>&1 &
-	else
+	elif [ "$1" = bridge ]; then
 		omcid >>"$RUN/omcid.log" 2>&1 &
+	else
+		omcid -r >>"$RUN/omcid.log" 2>&1 &
 	fi
 }
 
@@ -163,12 +178,23 @@ lan_dhcp() {
 	udhcpd "$RUN/udhcpd.conf"
 }
 
+# One run of the PPPoE client on $1; in passthrough mode for IPv4 alone, with
+# its address passed on.
+pppoe_client() {
+	if [ "$MODE" = passthrough ]; then
+		pppoed up -i "$1" -f "$CREDS" -D -4 -P
+	else
+		pppoed up -i "$1" -f "$CREDS" -D
+	fi
+}
+
 # The PPPoE client on $1, started again whenever the link ends. Its "up" line
-# gives the name servers for the LAN.
+# gives the name servers for the LAN and, in passthrough mode, the address
+# that the router takes, until the link ends.
 pppoe_loop() {
 	while :; do
-		pppoed up -i "$1" -f "$CREDS" -D 2>>"$RUN/pppoed.log" |
-			while read -r word dev _ _ _ _ _ _ _ dns1 dns2; do
+		pppoe_client "$1" 2>>"$RUN/pppoed.log" |
+			while read -r word dev _ addr _ _ _ _ _ dns1 dns2; do
 				[ "$word" = up ] || continue
 				dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
 				if [ -n "$dns" ]; then
@@ -176,10 +202,56 @@ pppoe_loop() {
 				else
 					rm -f "$RUN/onu-dns"
 				fi
+				[ "$MODE" = passthrough ] && pass_lease "$addr" "$dev"
 				log "WAN up on $dev"
 			done
+		[ "$MODE" = passthrough ] && pass_lease_down
 		sleep 5
 	done
+}
+
+# The address $1 of the PPPoE session on $2 handed on: a host route to it on
+# the LAN link, and a DHCP server that leases it alone, as a /32 with the
+# stick as the gateway, the session's name servers and its MTU. A lease runs
+# for a minute: the router asks again before it ends, so it finds a new
+# address of a new session that soon.
+pass_lease() {
+	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
+	[ -n "$lan" ] || return 0
+	stop_pid udhcpd
+	[ "$(cat "$RUN/onu-pass" 2>/dev/null)" = "$1" ] || rm -f "$RUN/udhcpd.leases"
+	ip route replace "$1" dev "$lan"
+	mtu=$(cat "$NET/$2/mtu" 2>/dev/null)
+	{
+		echo "interface $lan"
+		echo "start $1"
+		echo "end $1"
+		echo "max_leases 1"
+		echo "lease_file $RUN/udhcpd.leases"
+		echo "pidfile $RUN/udhcpd.pid"
+		echo "opt subnet 255.255.255.255"
+		echo "opt router $PASS_GATEWAY"
+		echo "opt staticroutes $PASS_GATEWAY/32 0.0.0.0, 0.0.0.0/0 $PASS_GATEWAY"
+		[ -s "$RUN/onu-dns" ] && echo "opt dns $(cat "$RUN/onu-dns")"
+		[ -n "$mtu" ] && echo "opt mtu $mtu"
+		echo "opt lease 60"
+	} >"$RUN/udhcpd.conf"
+	[ -e "$RUN/udhcpd.leases" ] || : >"$RUN/udhcpd.leases"
+	echo "$1" >"$RUN/onu-pass"
+	udhcpd "$RUN/udhcpd.conf"
+	log "the session's address goes to the router on $lan"
+}
+
+# The handed address taken back, when its session ends.
+pass_lease_down() {
+	addr=$(cat "$RUN/onu-pass" 2>/dev/null)
+	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
+	stop_pid udhcpd
+	if [ -n "$addr" ] && [ -n "$lan" ]; then
+		ip route del "$addr" dev "$lan" 2>/dev/null
+	fi
+	rm -f "$RUN/onu-pass"
+	return 0
 }
 
 # Room for PPPoE's 8 bytes of headers around a 1500-byte packet (RFC 4638) on
@@ -199,9 +271,13 @@ wan_up() {
 	ip link set "$gem" up
 	if [ -n "$WAN_VLAN" ]; then
 		ip link add link "$gem" name wan type vlan id "$WAN_VLAN"
-		ip link set wan up
 		wan=wan
 	fi
+	if [ -n "$WAN_MAC" ]; then
+		ip link set "$wan" address "$WAN_MAC" ||
+			log "the WAN did not take its MAC address"
+	fi
+	[ "$wan" = wan ] && ip link set wan up
 	out=$wan
 	case $WAN_PROTO in
 	pppoe)
@@ -288,7 +364,7 @@ tick() {
 	elif [ -n "$cur" ]; then
 		feeds_sync "$cur"
 	fi
-	if [ -s "$RUN/onu-dns" ] &&
+	if [ "$MODE" = router ] && [ -s "$RUN/onu-dns" ] &&
 		[ "$(cat "$RUN/onu-dns")" != "$(cat "$RUN/udhcpd.dns" 2>/dev/null)" ]; then
 		lan_dhcp
 	fi
@@ -319,29 +395,69 @@ router_down() {
 	return 0
 }
 
+# Passthrough mode: the LAN link, a VLAN on the host link or the host link
+# itself, with the stick's address on it; the session's address comes later.
+pass_up() {
+	echo 1 >"$FORWARD"
+	lan=sfp
+	if [ -n "$LAN_VLAN" ]; then
+		ip link add link sfp name lan type vlan id "$LAN_VLAN"
+		ip link set lan up
+		lan=lan
+	fi
+	ip address add "$PASS_GATEWAY/32" dev "$lan"
+	echo "$lan" >"$RUN/onu-lan"
+	[ -n "${ONU_MODE_NO_WATCH:-}" ] || "$0" watch &
+}
+
+pass_down() {
+	stop_pid onu-watch
+	wan_down
+	pass_lease_down
+	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
+	[ -n "$lan" ] && ip address del "$PASS_GATEWAY/32" dev "$lan" 2>/dev/null
+	ip link del lan 2>/dev/null
+	rm -f "$RUN/onu-lan"
+	echo 0 >"$FORWARD"
+	return 0
+}
+
 apply() {
 	old=
 	[ -r "$RUN/onu-mode" ] && read -r old <"$RUN/onu-mode"
-	if [ "$old" = router ]; then
+	if [ "$old" = router ] || [ "$old" = passthrough ]; then
 		# Down with the settings it came up with.
 		[ -r "$RUN/onu-mode.conf" ] && CONF=$RUN/onu-mode.conf
 		load
-		router_down
+		if [ "$old" = router ]; then
+			router_down
+		else
+			pass_down
+		fi
 		CONF=$RUN/onu.conf
 	fi
 	load
 	case $MODE in
-	bridge | router) ;;
+	bridge | router | passthrough) ;;
 	*)
 		log "mode $MODE is not one: bridge"
 		MODE=bridge
 		;;
 	esac
+	# omcid routes in both modes where the stick routes.
 	if [ "$old" != "$MODE" ]; then
-		omcid_run "$MODE"
-		[ "$MODE" = router ] && bridge_down
+		case $old:$MODE in
+		router:passthrough | passthrough:router) ;;
+		*)
+			omcid_run "$MODE"
+			[ "$MODE" != bridge ] && bridge_down
+			;;
+		esac
 	fi
-	[ "$MODE" = router ] && router_up
+	case $MODE in
+	router) router_up ;;
+	passthrough) pass_up ;;
+	esac
 	echo "$MODE" >"$RUN/onu-mode"
 	cp "$CONF" "$RUN/onu-mode.conf" 2>/dev/null
 	log "$MODE mode"
@@ -360,7 +476,13 @@ apply)
 	;;
 stop)
 	load
-	router_down
+	mode=
+	[ -r "$RUN/onu-mode" ] && read -r mode <"$RUN/onu-mode"
+	if [ "$mode" = passthrough ]; then
+		pass_down
+	else
+		router_down
+	fi
 	killall omcid 2>/dev/null
 	rm -f "$RUN/onu-mode"
 	;;
@@ -371,6 +493,8 @@ status)
 	[ -r "$RUN/onu-wan" ] && read -r gem wan out <"$RUN/onu-wan" &&
 		echo "wan $wan on $gem, out by $out"
 	[ -s "$RUN/onu-dns" ] && echo "dns $(cat "$RUN/onu-dns")"
+	[ -s "$RUN/onu-pass" ] &&
+		echo "pass $(cat "$RUN/onu-pass") on $(cat "$RUN/onu-lan" 2>/dev/null)"
 	exit 0
 	;;
 watch)

@@ -45,6 +45,15 @@ The small programs of the ONU.
    the WAN with an address that the network behind the WAN routes back to the
    stick. A watcher brings the WAN up once the OLT has
    provisioned its GEM port, and starts the PPPoE client again when its link
+   ends. Passthrough mode is router mode with the WAN's PPPoE session opened
+   by the stick and its IPv4 address handed on (``pppoed -P``): the address
+   goes on no interface of the stick's, and the router behind the stick takes
+   it from BusyBox's DHCP server on the link between them (a VLAN on ``sfp``,
+   ``LAN_VLAN``, or ``sfp`` itself), as a /32 whose gateway is the stick's
+   address on that link (``PASS_GATEWAY``), given as a classless static route
+   too (RFC 3442), with the session's name servers and MTU and leases of a
+   minute, so that the router finds the address of a new session within one.
+   The stick routes the address there with a host route, until the session
    ends::
 
       onu-mode start      # at boot

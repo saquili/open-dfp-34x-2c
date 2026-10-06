@@ -184,6 +184,76 @@ check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 teardown
 
+echo "passthrough mode, PPPoE in a VLAN, the LAN link in another"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+echo 1492 >"$ONU_ROOT/sys/class/net/ppp0/mtu"
+conf MODE=passthrough WAN_PROTO=dhcp WAN_VLAN=410 LAN_VLAN=36 \
+	PASS_GATEWAY=192.0.2.254 WAN_MAC=00:00:5e:00:53:01
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+check 'logged "^omcid -r"'
+check 'logged "^ip link del omcibr0"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
+check 'logged "^ip link add link sfp name lan type vlan id 36"'
+check 'logged "^ip address add 192.0.2.254/32 dev lan"'
+check '! logged "^udhcpd"'
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link set wan address 00:00:5e:00:53:01"'
+check '[ "$(grep -n "ip link set wan address" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^ip link set wan up" "$LOG" | cut -d: -f1)" ]'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/onu-pass" ] && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe -D -4 -P"'
+check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
+check 'logged "^ip route replace 192.0.2.2 dev lan"'
+check 'grep -q "^interface lan" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^start 192.0.2.2" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^end 192.0.2.2" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt subnet 255.255.255.255" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt router 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt staticroutes 192.0.2.254/32 0.0.0.0, 0.0.0.0/0 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd.conf"'
+check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
+check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan"'
+# The stand-in session ends after two seconds: the address goes with it.
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+	logged "^ip route del 192.0.2.2 dev lan" && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^ip route del 192.0.2.2 dev lan"'
+teardown
+
+echo "from router to passthrough, omcid left as it is"
+setup
+conf MODE=router LAN_ADDRESS=198.51.100.1/24 LAN_DHCP=off
+"$MODE_SCRIPT" start 2>/dev/null
+: >"$LOG"
+printf 'MODE=passthrough\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" apply 2>/dev/null
+check '! logged "^killall -USR"'
+check '! logged "^omcid"'
+check 'logged "^ip address del 198.51.100.1/24 dev sfp"'
+check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
+teardown
+
+echo "from passthrough back to bridge"
+setup
+conf MODE=passthrough LAN_VLAN=36
+"$MODE_SCRIPT" start 2>/dev/null
+: >"$LOG"
+printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" apply 2>/dev/null
+check 'logged "^ip address del 169.254.0.1/32 dev lan"'
+check 'logged "^ip link del lan"'
+check 'logged "^killall -USR2 omcid"'
+check '[ ! -e "$ONU_ROOT/run/onu-lan" ]'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
+teardown
+
 echo "settings that are not values"
 setup
 printf 'MODE=router;reboot\nWAN_VLAN=$(reboot)\nOTHER=x\n' >"$ONU_ROOT/etc/onu.conf"
