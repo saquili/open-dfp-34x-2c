@@ -56,6 +56,10 @@ the configuration of the board. The settings of it that this page relies on:
      - kexec builds for the platform but does not start a new kernel on the
        board (see "kexec"), so the board's configuration leaves it out, and with
        it ``CRASH_DUMP``, which would move the load address.
+   * - ``CONFIG_SPI=y``, ``CONFIG_SPI_REALTEK_RTL=y``, ``CONFIG_MTD_SPI_NOR=y``
+     - The SoC's SPI controller and the flash on it as an MTD device that can be
+       erased and programmed, in 4 KiB sectors (``MTD_SPI_NOR_USE_4K_SECTORS``,
+       on by default).
    * - ``CONFIG_MTD_ROM=y``, ``CONFIG_MTD_PHYSMAP_OF=y``, ``CONFIG_MTD_BLOCK=y``
      - The flash window as a read-only MTD device and its partitions as MTD and
        block devices.
