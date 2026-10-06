@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The settings of the stick's mode, bridge or router: KEY=value lines in
- * /run/onu.conf, which onu-mode applies, and the PPPoE user and secret in
- * /run/onu-pppoe, as "user secret", readable by root only.
+ * The settings of the stick's mode, bridge, router or passthrough: KEY=value
+ * lines in /run/onu.conf, which onu-mode applies, and the PPPoE user and
+ * secret in /run/onu-pppoe, as "user secret", readable by root only.
  *
  * A read gives the settings, the PPPoE user and whether a secret is set,
  * never the secret, and what onu-mode last brought up. A write takes
@@ -47,6 +47,7 @@ enum kind {
 	K_ADDR,
 	K_ADDR_OPT,
 	K_ONOFF,
+	K_MAC_OPT,
 };
 
 /* The keys of /run/onu.conf, as onu-mode reads them, and their defaults. */
@@ -57,10 +58,13 @@ enum key {
 	WAN_PROTO,
 	WAN_ADDRESS,
 	WAN_GATEWAY,
+	WAN_MAC,
 	LAN_ADDRESS,
 	LAN_DHCP,
 	LAN_DHCP_START,
 	LAN_DHCP_END,
+	LAN_VLAN,
+	PASS_GATEWAY,
 	NKEYS
 };
 
@@ -75,10 +79,13 @@ static const struct {
 	[WAN_PROTO] = { "WAN_PROTO", K_PROTO, "dhcp" },
 	[WAN_ADDRESS] = { "WAN_ADDRESS", K_PREFIX_OPT, "" },
 	[WAN_GATEWAY] = { "WAN_GATEWAY", K_ADDR_OPT, "" },
+	[WAN_MAC] = { "WAN_MAC", K_MAC_OPT, "" },
 	[LAN_ADDRESS] = { "LAN_ADDRESS", K_PREFIX, "192.168.1.1/24" },
 	[LAN_DHCP] = { "LAN_DHCP", K_ONOFF, "on" },
 	[LAN_DHCP_START] = { "LAN_DHCP_START", K_ADDR, "192.168.1.100" },
 	[LAN_DHCP_END] = { "LAN_DHCP_END", K_ADDR, "192.168.1.199" },
+	[LAN_VLAN] = { "LAN_VLAN", K_VLAN, "" },
+	[PASS_GATEWAY] = { "PASS_GATEWAY", K_ADDR, "169.254.0.1" },
 };
 
 struct settings {
@@ -149,11 +156,37 @@ static bool prefix(const char *s, uint32_t *ip, uint32_t *mask)
 	return true;
 }
 
+/*
+ * xx:xx:xx:xx:xx:xx, in hexadecimal, an address one station may send from:
+ * neither a group address nor all zeros.
+ */
+static bool mac(const char *s)
+{
+	unsigned long first = 0;
+	bool zero = true;
+
+	if (strlen(s) != 17)
+		return false;
+	for (int i = 0; i < 17; i++) {
+		if (i % 3 == 2) {
+			if (s[i] != ':')
+				return false;
+		} else if (!strchr("0123456789abcdefABCDEF", s[i])) {
+			return false;
+		} else if (s[i] != '0') {
+			zero = false;
+		}
+	}
+	first = strtoul(s, NULL, 16);
+	return !zero && !(first & 1);
+}
+
 static bool valid(enum kind kind, const char *v)
 {
 	switch (kind) {
 	case K_MODE:
-		return !strcmp(v, "bridge") || !strcmp(v, "router");
+		return !strcmp(v, "bridge") || !strcmp(v, "router") ||
+		       !strcmp(v, "passthrough");
 	case K_PROTO:
 		return !strcmp(v, "pppoe") || !strcmp(v, "dhcp") ||
 		       !strcmp(v, "static");
@@ -171,6 +204,8 @@ static bool valid(enum kind kind, const char *v)
 		return !*v || ipv4(v, NULL);
 	case K_ONOFF:
 		return !strcmp(v, "on") || !strcmp(v, "off");
+	case K_MAC_OPT:
+		return !*v || mac(v);
 	}
 	return false;
 }
@@ -243,6 +278,19 @@ static bool coherent(const struct settings *s, char *err, size_t errcap)
 		if ((gw & mask) != (ip & mask) || gw == ip) {
 			snprintf(err, errcap,
 				 "WAN_GATEWAY is not another address of WAN_ADDRESS's network");
+			return false;
+		}
+	}
+	if (!strcmp(s->val[MODE], "passthrough")) {
+		if (strcmp(s->val[WAN_PROTO], "pppoe")) {
+			snprintf(err, errcap,
+				 "passthrough hands on a PPPoE session's address: WAN_PROTO=pppoe");
+			return false;
+		}
+		ipv4(s->val[PASS_GATEWAY], &gw);
+		if (!gw || gw == 0xffffffffu || gw >> 24 == 127 || gw >> 28 == 14) {
+			snprintf(err, errcap,
+				 "PASS_GATEWAY is not an address a station can have");
 			return false;
 		}
 	}
@@ -398,6 +446,26 @@ int prov_settings(struct prov_buf *out)
 		pv_str(out, line);
 	else
 		pv_null(out);
+	pv_comma(out);
+
+	/* In passthrough mode, the address handed to the router, and where. */
+	pv_key(out, "pass");
+	if (!prov_read_line("/run/onu-pass", line, sizeof(line))) {
+		char lan[32];
+
+		pv_open(out, '{');
+		pv_key(out, "address");
+		pv_str(out, line);
+		pv_comma(out);
+		pv_key(out, "lan");
+		if (!prov_read_line("/run/onu-lan", lan, sizeof(lan)))
+			pv_str(out, lan);
+		else
+			pv_null(out);
+		pv_close(out, '}');
+	} else {
+		pv_null(out);
+	}
 	pv_comma(out);
 
 	pv_key(out, "applying");

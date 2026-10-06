@@ -1303,6 +1303,13 @@ static void test_settings(void)
 		"LAN_ADDRESS=192.0.2.256/24",
 		"WAN_GATEWAY=192.0.2.01",
 		"LAN_DHCP=yes",
+		"MODE=passthru",
+		"WAN_MAC=01:00:5e:00:00:01",
+		"WAN_MAC=00:00:00:00:00:00",
+		"WAN_MAC=00:00:5e:00:53",
+		"WAN_MAC=00-00-5e-00-53-01",
+		"LAN_VLAN=4095",
+		"PASS_GATEWAY=169.254.0",
 		"PPPOE_USER=two words",
 		"PPPOE_SECRET=",
 		"a line without an equals sign",
@@ -1402,13 +1409,36 @@ static void test_settings(void)
 			       err, sizeof(err));
 	check(rc == -EINVAL, "a DHCP range that ends before it starts is refused");
 
+	rc = prov_settings_set("MODE=passthrough\n", err, sizeof(err));
+	check(rc == -EINVAL && strstr(err, "WAN_PROTO=pppoe"),
+	      "passthrough with a WAN that is not PPPoE is refused");
+	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nPASS_GATEWAY=127.0.0.1\n",
+			       err, sizeof(err));
+	check(rc == -EINVAL && strstr(err, "PASS_GATEWAY"),
+	      "a passthrough gateway no station can have is refused");
+	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nLAN_VLAN=410\n"
+			       "WAN_MAC=00:00:5e:00:53:01\n",
+			       err, sizeof(err));
+	check(rc == 0, "passthrough over PPPoE, its link to the router in a VLAN, is taken");
+	s = slurp("/run/onu.conf", file, sizeof(file));
+	check(s && strstr(s, "\nMODE=passthrough\n") && strstr(s, "\nLAN_VLAN=410\n") &&
+		      strstr(s, "\nPASS_GATEWAY=169.254.0.1\n") &&
+		      strstr(s, "\nWAN_MAC=00:00:5e:00:53:01\n"),
+	      "onu.conf has the passthrough settings, the gateway its default");
+	settled(buf, sizeof(buf));
+
 	put("/run/onu-mode", "router\n", 0644);
 	put("/run/onu-wan", "gem1 wan ppp0\n", 0644);
 	put("/run/onu-dns", "198.51.100.53\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"mode\":\"router\"") && strstr(s, "\"out\":\"ppp0\"") &&
-		      strstr(s, "\"dns\":\"198.51.100.53\""),
+		      strstr(s, "\"dns\":\"198.51.100.53\"") && strstr(s, "\"pass\":null"),
 	      "the settings carry what onu-mode brought up");
+	put("/run/onu-pass", "192.0.2.2\n", 0644);
+	put("/run/onu-lan", "lan\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"pass\":{\"address\":\"192.0.2.2\",\"lan\":\"lan\"}") != NULL,
+	      "and in passthrough mode the address handed to the router");
 
 	setenv("POND_APPLY", "/nonexistent/onu-mode", 1);
 	rc = prov_settings_set("LAN_DHCP=off", err, sizeof(err));

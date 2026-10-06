@@ -141,24 +141,34 @@ function cell(x) {
 }
 
 /*
- * The settings of the mode, as onu-mode reads them. A field marked router
- * matters in router mode only, one marked with a protocol for that protocol
- * of the WAN only; the form shows a field only where it matters.
+ * The settings of the mode, as onu-mode reads them. A field names the modes
+ * it matters in, and one marked with a protocol matters for that protocol of
+ * the WAN only, which is PPPoE in passthrough mode; the form shows a field
+ * only where it matters.
  */
+const ROUTED = ["router", "passthrough"];
 const FIELDS = [
-  { key: "MODE", label: "Mode", choices: ["bridge", "router"] },
-  { key: "WAN_PROTO", label: "WAN protocol", choices: ["dhcp", "pppoe", "static"], router: true },
-  { key: "WAN_GEM", label: "WAN GEM port", hint: "auto, or a Port-ID", router: true },
-  { key: "WAN_VLAN", label: "WAN VLAN", hint: "none, or 1 to 4094", router: true },
-  { key: "WAN_ADDRESS", label: "WAN address", hint: "a.b.c.d/length", router: true, proto: "static" },
-  { key: "WAN_GATEWAY", label: "WAN gateway", hint: "a.b.c.d", router: true, proto: "static" },
-  { key: "PPPOE_USER", label: "PPPoE user", router: true, proto: "pppoe" },
-  { key: "PPPOE_SECRET", label: "PPPoE secret", router: true, proto: "pppoe" },
-  { key: "LAN_ADDRESS", label: "LAN address", hint: "a.b.c.d/length", router: true },
-  { key: "LAN_DHCP", label: "LAN DHCP server", choices: ["on", "off"], router: true },
-  { key: "LAN_DHCP_START", label: "DHCP range from", hint: "a.b.c.d", router: true },
-  { key: "LAN_DHCP_END", label: "DHCP range to", hint: "a.b.c.d", router: true },
+  { key: "MODE", label: "Mode", choices: ["bridge", "router", "passthrough"] },
+  { key: "WAN_PROTO", label: "WAN protocol", choices: ["dhcp", "pppoe", "static"], modes: ["router"] },
+  { key: "WAN_GEM", label: "WAN GEM port", hint: "auto, or a Port-ID", modes: ROUTED },
+  { key: "WAN_VLAN", label: "WAN VLAN", hint: "none, or 1 to 4094", modes: ROUTED },
+  { key: "WAN_ADDRESS", label: "WAN address", hint: "a.b.c.d/length", modes: ["router"], proto: "static" },
+  { key: "WAN_GATEWAY", label: "WAN gateway", hint: "a.b.c.d", modes: ["router"], proto: "static" },
+  { key: "WAN_MAC", label: "WAN MAC address", hint: "none, or xx:xx:xx:xx:xx:xx", modes: ROUTED },
+  { key: "PPPOE_USER", label: "PPPoE user", modes: ROUTED, proto: "pppoe" },
+  { key: "PPPOE_SECRET", label: "PPPoE secret", modes: ROUTED, proto: "pppoe" },
+  { key: "LAN_ADDRESS", label: "LAN address", hint: "a.b.c.d/length", modes: ["router"] },
+  { key: "LAN_DHCP", label: "LAN DHCP server", choices: ["on", "off"], modes: ["router"] },
+  { key: "LAN_DHCP_START", label: "DHCP range from", hint: "a.b.c.d", modes: ["router"] },
+  { key: "LAN_DHCP_END", label: "DHCP range to", hint: "a.b.c.d", modes: ["router"] },
+  { key: "LAN_VLAN", label: "Router link VLAN", hint: "none, or 1 to 4094", modes: ["passthrough"] },
+  { key: "PASS_GATEWAY", label: "Router's gateway", hint: "a.b.c.d", modes: ["passthrough"] },
 ];
+
+/* The WAN's protocol as onu-mode takes it: PPPoE in passthrough mode. */
+function wanProto(f) {
+  return f.elements.MODE.value === "passthrough" ? "pppoe" : f.elements.WAN_PROTO.value;
+}
 
 function settingsForm() {
   const f = el("form", undefined, "settings");
@@ -199,10 +209,10 @@ function settingsForm() {
 }
 
 function visibility(f) {
-  const mode = f.elements.MODE.value, proto = f.elements.WAN_PROTO.value;
+  const mode = f.elements.MODE.value, proto = wanProto(f);
   f.querySelectorAll(".row").forEach((row) => {
     const d = FIELDS.find((x) => x.key === row.dataset.key);
-    row.hidden = (d.router && mode !== "router") || (d.proto && d.proto !== proto);
+    row.hidden = (d.modes && !d.modes.includes(mode)) || (d.proto && d.proto !== proto);
   });
 }
 
@@ -218,9 +228,10 @@ function fillSettings(v) {
 }
 
 async function applySettings(f) {
-  const lines = FIELDS.filter((d) => !d.key.startsWith("PPPOE_"))
+  const lines = FIELDS.filter((d) => !d.key.startsWith("PPPOE_") && d.key !== "WAN_PROTO")
     .map((d) => d.key + "=" + f.elements[d.key].value.trim());
-  if (f.elements.WAN_PROTO.value === "pppoe") {
+  lines.push("WAN_PROTO=" + wanProto(f));
+  if (wanProto(f) === "pppoe") {
     const user = f.elements.PPPOE_USER.value.trim(), secret = f.elements.PPPOE_SECRET.value;
     if (user) lines.push("PPPOE_USER=" + user);
     if (secret) lines.push("PPPOE_SECRET=" + secret);
