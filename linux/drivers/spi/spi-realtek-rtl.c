@@ -192,6 +192,7 @@ static const struct of_device_id realtek_rtl_spi_of_ids[] = {
 	{ .compatible = "realtek,rtl8391-spi" },
 	{ .compatible = "realtek,rtl8392-spi" },
 	{ .compatible = "realtek,rtl8393-spi" },
+	{ .compatible = "realtek,rtl9602c-spi" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, realtek_rtl_spi_of_ids);

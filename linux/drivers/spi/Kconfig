@@ -891,13 +891,13 @@ config SPI_PXA2XX_PCI
 	def_tristate SPI_PXA2XX && PCI && COMMON_CLK
 
 config SPI_REALTEK_RTL
-	tristate "Realtek RTL838x/RTL839x SPI controller"
-	depends on MACH_REALTEK_RTL || COMPILE_TEST
+	tristate "Realtek RTL838x/RTL839x/RTL9602C SPI controller"
+	depends on MACH_REALTEK_RTL || RTL9602C || COMPILE_TEST
 	default MACH_REALTEK_RTL
 	help
 	  This enables support for the SPI controller of the Realtek
-	  RTL838x and RTL839x SoCs, which drives the SPI NOR flash the
-	  SoC boots from. The CPU moves every byte through the
+	  RTL838x, RTL839x and RTL9602C SoCs, which drives the SPI NOR
+	  flash the SoC boots from. The CPU moves every byte through the
 	  controller's data register, one to four bytes at a time.
 
 config SPI_REALTEK_SNAND
