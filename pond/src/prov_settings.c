@@ -7,7 +7,10 @@
  * secret in /run/onu-pppoe, as "user secret", readable by root only.
  *
  * A read gives the settings, the PPPoE user and whether a secret is set,
- * never the secret, and what onu-mode last brought up. A write takes
+ * never the secret, what onu-mode last brought up and what became of the
+ * settings in the configuration store, which onu-store records in
+ * /run/onu-store: "loaded" at boot, "defaults" when the store held none,
+ * "saved" or "failed" after a change, "none" without a store. A write takes
  * KEY=value lines, checks every value and the settings as a whole, writes
  * both files and starts "onu-mode apply" without waiting for it; until it
  * ends, a write is refused. POND_APPLY names another program to start, for
@@ -466,6 +469,13 @@ int prov_settings(struct prov_buf *out)
 	} else {
 		pv_null(out);
 	}
+	pv_comma(out);
+
+	pv_key(out, "store");
+	if (!prov_read_line("/run/onu-store", line, sizeof(line)))
+		pv_str(out, line);
+	else
+		pv_null(out);
 	pv_comma(out);
 
 	pv_key(out, "applying");

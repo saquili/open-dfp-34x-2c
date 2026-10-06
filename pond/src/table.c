@@ -18,7 +18,8 @@ const struct prov pond_provs[] = {
 	{ "log", "System", "Kernel log", prov_log, NULL, PROV_SLOW },
 
 	{ "settings", "Mode",
-	  "Bridge or router, the WAN and the LAN, held until the next boot",
+	  "Bridge, router or passthrough, the WAN and the LAN, kept in the "
+	  "configuration store",
 	  prov_settings, prov_settings_set, 0 },
 
 	{ "ports", "Data path", "Interfaces: link, speed and CPU-path counts",

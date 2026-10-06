@@ -126,10 +126,10 @@ static void test_banks(void)
 	check(strstr(s, "\"name\":\"r1\",\"mtd\":7") != NULL,
 	      "the whole table is read, down to the last partition");
 
-	check(strstr(s, "\"erasesize_reported_b\":8388608") != NULL,
+	check(strstr(s, "\"erasesize_reported_b\":4096") != NULL,
 	      "the erasesize the driver reports is carried under its own name");
-	check(strstr(s, "\"erase_block_b\":null") != NULL,
-	      "and the real erase block is null, not the whole chip");
+	check(strstr(s, "\"erase_block_b\":4096") != NULL,
+	      "and, being smaller than the chip, is the erase block");
 	check(strstr(s, "\"size_src\":\"/proc/mtd\"") != NULL,
 	      "the value says where the sizes came from");
 
@@ -1439,6 +1439,12 @@ static void test_settings(void)
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"pass\":{\"address\":\"192.0.2.2\",\"lan\":\"lan\"}") != NULL,
 	      "and in passthrough mode the address handed to the router");
+	check(strstr(s, "\"store\":null") != NULL,
+	      "without a word from onu-store, the store's state is unknown");
+	put("/run/onu-store", "saved\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"store\":\"saved\"") != NULL,
+	      "and with one, what became of the settings in the store");
 
 	setenv("POND_APPLY", "/nonexistent/onu-mode", 1);
 	rc = prov_settings_set("LAN_DHCP=off", err, sizeof(err));
