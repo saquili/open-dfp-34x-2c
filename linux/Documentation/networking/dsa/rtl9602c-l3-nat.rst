@@ -12,9 +12,12 @@ engine: a second table engine that recognises a frame addressed to one of the
 router's own interfaces, translates the source address and port of an IPv4 TCP
 or UDP flow (network address and port translation, NAPT, RFC 2663), and
 forwards the frame to its next hop without the CPU. Replies are translated back
-the same way. The engine speeds up translated flows and nothing else: a routed
-frame that has no NAPT entry goes to the CPU whatever the route table says, and
-IPv6 traffic stays on the software path.
+the same way. It also routes, translating nothing and keeping no state per
+flow, the frames of a host that the network beyond the WAN routes back to the
+stick, both ways: the router behind a stick that hands it the address of its
+PPPoE session, for one. Any other routed frame that has no NAPT entry goes to
+the CPU whatever the route table says, and IPv6 traffic stays on the software
+path.
 
 The engine sits between the two sides of the stick. The SFP port (port 0) faces
 the subscriber's network and the PON port (port 2) the operator's, and the
@@ -25,10 +28,12 @@ The driver brings the engine up at setup, fills its interface, next-hop,
 neighbour, route and external-address tables from the kernel's address,
 neighbour and route notifiers, and writes one outbound and one inbound NAPT
 entry for each flow that netfilter's flowtable offload hands it. A PPPoE WAN
-adds a session table and an encapsulating next hop. This page describes the
-engine's registers and tables, the order of its bring-up, what each notifier
-writes, the flowtable offload, the PPPoE path, the hit bitmaps that keep an
-offloaded flow alive, and the debugfs views that show the engine. The
+adds a session table and an encapsulating next hop; a default route through a
+PPPoE session makes one, and a routed host gets an external-address row of its
+own. This page describes the engine's registers and tables, the order of its
+bring-up, what each notifier writes, the flowtable offload, the PPPoE path, the
+routed hosts, the hit bitmaps that keep an offloaded flow alive, and the
+debugfs views that show the engine. The
 address-table entries that the engine depends on are described from the
 engine's side only; the entries themselves are on the *bridging* page.
 
@@ -249,7 +254,10 @@ Interfaces to user space
 - ``ip address``, ``ip route`` and ``ip neigh``: the engine's tables follow
   them through the notifiers. A VLAN device above ``sfp`` or a GEM interface
   gets an L3-interface row with its VLAN ID, and a flow that leaves by the ppp
-  device of a PPPoE client on a GEM interface gets a PPPoE WAN.
+  device of a PPPoE client on a GEM interface gets a PPPoE WAN, as does a
+  default route through that device. A /32 host route on a LAN-side device,
+  with no gateway, makes the host a routed host (see "Routed hosts and the WAN
+  of the default route").
 - Three debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``l3nat`` and
   ``l3flow`` (mode 0400), which show the engine's registers and tables, and
   ``l3capture`` (mode 0600), which reads and arms the engine's per-frame
@@ -321,7 +329,13 @@ interface. It passes when the concentrator receives PPPoE frames with the
 session ID that the driver wrote and UDP checksums that verify. A *throughput
 test* sends a flow through the engine at the rate of the test setup, NAT and NAT
 over PPPoE, each way, and reads the CPU port's counter beside the rate at the
-far side.
+far side. A *passthrough test* has the stick terminate a PPPoE session over a
+GEM interface, in a VLAN, as its default route, and a host behind the SFP port
+hold the session's address, with a /32 host route to it on the stick: UDP at
+1,500 datagrams a second, under the CPU port's limit, goes from the host to the
+concentrator's side and the other way, also from a source the host never sent
+to. It passes when the far side receives every datagram and the CPU port counts
+only its background, 5 to 8 frames a run.
 
 The engine's registers
 ======================
@@ -1161,7 +1175,16 @@ notifier").
      - M
      - The ``l3nat`` route rows; the routing test asserts ``0x1bd`` in the low
        nine bits of the LAN row.
-   * - What the engine does with ``INTERNAL`` is not established.
+   * - What the engine does with ``INTERNAL`` is established for one case: a
+       frame from the WAN to a host whose /32 row is action 3 and which has no
+       external-address row is dropped with the bit set and goes to the CPU,
+       forwarding reason 16, with it clear; with a one-to-one row for the host
+       and the bit set, the engine routes it. The driver sets the bit on a
+       routed host's row; the one-to-one row was not tried with it clear.
+     - M
+     - A passthrough test with the route row written by hand through a
+       temporary table-write knob; the frame capture on the PON port.
+   * - What ``INTERNAL`` does on a translated flow's rows is not established.
      - I
      - Clearing it on the LAN row and repeating the routing test would show it.
    * - More rows read back: ``0x000002ff`` (/32, valid, action 3, next hop 1)
@@ -1425,7 +1448,9 @@ External address (selector 4)
 An external-address row is an address that a translated source can become, with
 the next hop that frames translated to it leave by. It has 3 words and the table
 8 rows. The address notifier writes a row for each address of a router
-interface, and a PPPoE WAN points its row at its own next hop.
+interface, a PPPoE WAN points its row at its own next hop, and a routed host
+gets a one-to-one row that maps its address to itself (see "Routed hosts and
+the WAN of the default route").
 
 .. list-table::
    :header-rows: 1
@@ -1435,8 +1460,8 @@ interface, and a PPPoE WAN points its row at its own next hop.
      - Macro
      - Meaning
    * - 31:0
-     - none
-     - Stores; written 0.
+     - ``RTL9602C_EXTADDR_INT_IP``
+     - The internal address of a one-to-one row; written 0 in a NAPT row.
    * - 63:32
      - ``RTL9602C_EXTADDR_IP``
      - The address that a translated source becomes.
@@ -1446,7 +1471,9 @@ interface, and a PPPoE WAN points its row at its own next hop.
    * - 66:65
      - ``RTL9602C_EXTADDR_MODE``
      - The kind of translation; the driver writes
-       ``RTL9602C_EXTADDR_MODE_NAPT`` (0), an address shared by NAPT flows.
+       ``RTL9602C_EXTADDR_MODE_NAPT`` (0), an address shared by NAPT flows,
+       and ``RTL9602C_EXTADDR_MODE_ONE_TO_ONE`` (1), one address mapped to
+       another, for a routed host.
    * - 70:67
      - ``RTL9602C_EXTADDR_NEXTHOP_IDX``
      - The next-hop row that a frame translated to this address leaves by.
@@ -1469,9 +1496,32 @@ interface, and a PPPoE WAN points its row at its own next hop.
        address on the wire.
    * - ``RTL9602C_EXTADDR_MODE`` (66:65) is the kind of translation the address
        serves; the driver writes ``RTL9602C_EXTADDR_MODE_NAPT`` (0), an address
-       shared by NAPT flows. The other values are not used.
+       shared by NAPT flows.
      - T
      - A routing test.
+   * - Mode 1 (``RTL9602C_EXTADDR_MODE_ONE_TO_ONE``) with
+       ``RTL9602C_EXTADDR_INT_IP`` and ``RTL9602C_EXTADDR_IP`` both a host's
+       address carries that host's frames both ways in hardware, with no NAPT
+       entry: those from the host leave by ``RTL9602C_EXTADDR_NEXTHOP_IDX``,
+       and those to it from the WAN, from any source, go by the host's route.
+       The third word reads back ``0x0000001b`` (valid, mode 1, next hop 3).
+     - M
+     - A passthrough test, 2,000 datagrams each way and 2,000 from another
+       source, every one at the far side, the CPU port moving by 5 to 7.
+   * - Mode 2, with both addresses the host's, carries only the frames from the
+       host: of 2,000 to the host from the WAN, all 2,000 reached the CPU, CPU
+       reason 16, which forwarded them, while 2,000 from the host went by the
+       engine, the CPU port moving by its background of 5. The same frames to
+       the host went to the CPU with forwarding reason 16 when the host's
+       route row had ``RTL9602C_ROUTE_INTERNAL`` clear and there was no row,
+       and were dropped (destination port mask 0, reason 0) with the bit set
+       and no row. In all three cases the switch's verdict on the frame showed
+       no new destination MAC address, which a routed frame shows: the engine
+       did not route it.
+     - M
+     - A passthrough test with the row and the route row written by hand
+       through a temporary table-write knob; the frame capture on the PON port
+       (``pktdbg_mode`` 0, 2 and 7, reason 16) for the verdict words.
    * - ``RTL9602C_EXTADDR_NEXTHOP_IDX`` (70:67) is the next-hop row that a frame
        translated to this address leaves by. A row with next hop 3 sent its
        flows out through next-hop row 3, encapsulated, and nowhere else; its
@@ -1489,7 +1539,8 @@ interface, and a PPPoE WAN points its row at its own next hop.
      - Five runs alternating the occupant of row 0 on one boot; the switch's
        frame capture latching reason 228 in the runs with the LAN-side
        neighbour.
-   * - Bits 31:0 and 74:71 store but are written 0.
+   * - Bits 31:0 and 74:71 store; bits 74:71 are written 0, and bits 31:0 are
+       0 in a NAPT row.
      - M
      - The walking one of "Tables, selectors and geometry".
 
@@ -2082,6 +2133,12 @@ The encoding of a route into a row:
 
    * - Route
      - Row
+   * - Directly attached, through the PPP device of the WAN of the default
+       route
+     - Action 3 with the WAN's next-hop row, which encapsulates.
+   * - Directly attached /32 to an address that a next-hop row holds
+     - Action 3 with that next-hop row, and ``RTL9602C_ROUTE_INTERNAL`` when
+       the egress port is a switch port other than the PON port.
    * - Directly attached, on a device with an L3-interface row
      - Action 2 with that interface row, and ``RTL9602C_ROUTE_INTERNAL`` when
        the egress port is a switch port other than the PON port.
@@ -2428,6 +2485,100 @@ address rewrites the rows in place. A WAN with no flows is kept, and recycled
 only when a new address needs its index; ``-ENOSPC`` when all seven carry flows.
 On release the external-address row is freed if this path allocated it, and
 otherwise restored with the uplink's next hop.
+
+Routed hosts and the WAN of the default route
+=============================================
+
+A stick can terminate the PPPoE session itself and hand the session's address
+to a router behind it, which translates and filters on its own (passthrough).
+The router's frames need no translation, and the
+engine carries them both ways with no state per flow, so a frame from the WAN
+reaches the router whether or not the router sent anything first.
+
+*The WAN of the default route.* A default route through a PPP device whose
+session runs over a GEM interface, in a VLAN or not, makes a PPPoE WAN with no
+external address: the PPP device may have no address at all, the session's
+being handed on. Its rows come from the device's forward path
+(``dev_fill_forward_path()``): the session ID and the concentrator's MAC from
+the ``DEV_PATH_PPPOE`` step, the MAC address and VLAN of the device the session
+runs over from the step below it, and the GEM flow from the GEM interface at
+the bottom. ``rtl9602c_l34_route_wan_sync()`` runs after every route event,
+under RTNL, which following the path needs, and ``flow_lock``, in order:
+
+1. Find the default route: prefix 0, no gateway, on a device that is not a
+   switch port, and follow its device's path. A path that does not end in a
+   GEM interface of this switch makes no WAN, and an existing one is released.
+   (T)
+2. If the WAN exists and its device, session, VLAN, MTU and both MAC addresses
+   agree, leave it; otherwise release it. (T)
+3. Take a free index w and write PPPoE row w: the session. (T)
+4. Place an address-table entry for the concentrator's MAC on the PON port, in
+   the session's VLAN, with ``RTL9602C_FDB_W2_NEXTHOP`` set. (T)
+5. Write L3-interface row w: the MAC address and VLAN of the device the
+   session runs over, no address, and the PPP device's MTU. (M)
+6. Write next-hop row w: PPPoE, interface w, session row w and the
+   address-table slot. (T)
+7. Take a reference on the GEM flow that the session leaves in as the routed
+   flow, which gives frames from ports outside the GEM bridge their stream.
+   (T)
+
+The routes through the PPP device then become action 3 with next-hop row w, and
+w is the uplink's next hop that the external-address rows point at.
+
+*Routed hosts.* A /32 host route with no gateway, on a device over a switch
+port other than the PON port, names a host that the network beyond the WAN
+routes back to this device. While the uplink is known, the WAN of the default
+route or a default route through a gateway whose neighbour holds a next-hop
+row, ``rtl9602c_l34_routed_sync()`` gives each such host a one-to-one
+external-address row that holds the host's address as both addresses and
+points at the uplink's next hop. It frees the row when the host route or the
+uplink goes, and a host that finds no free row is routed by the CPU, which a
+warning says once. The host route itself becomes action 3 with the next-hop row
+of the host's neighbour, internal.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A default route through a PPP device on a GEM interface, in a VLAN, made
+       its WAN: the kernel log reads ``<l3> PPPoE WAN 3 of the default route:
+       ppp0 session 64 to <concentrator>, vlan <vid> mtu 1492, L2 slot 700, GEM
+       flow 1``, and the WAN's L3-interface row holds the session device's VLAN
+       and MAC address with MTU 1492.
+     - M
+     - A passthrough test; the kernel log and the ``l3nat`` rows.
+   * - A routed host's frames go through the engine both ways, as the mode-1
+       fact of "External address (selector 4)" gives: every datagram of a
+       passthrough test arrived, the CPU port counting only its background.
+     - M
+     - A passthrough test, on a fresh boot with nothing written by hand: the
+       third word of the host's external-address row reads ``0x0000001b``.
+   * - The WAN's L3-interface row needs no address: the host's frames went both
+       ways through the engine with the row's address 0 and with the host's
+       address in it.
+     - M
+     - A passthrough test with each address, the row written by hand through a
+       temporary table-write knob for one of them.
+   * - Through the engine, a router holding the session's address behind the
+       SFP port at 2500BASE-X and the concentrator beyond an OLT at 1 Gbit/s:
+       TCP with four streams 920 Mbit/s up and 933 Mbit/s down, one stream 673
+       up and 885 down, UDP 934 Mbit/s down of 950 offered. The CPU was 98%
+       idle and its port took 8 frames in each 20 s run.
+     - M
+     - iperf3 between the router and the concentrator's side, ``/proc/stat``
+       and the CPU port's frame counter around each run.
+   * - Upstream, 0.5 to 0.7 % of the frames did not reach the concentrator, at
+       100 to 15,000 frames a second and 64 to 1,400 octets, while the PON
+       port's GEM flow counted every frame as sent (20,000 of 20,000, and
+       19,862 at the concentrator): the loss is outside the engine and the PON
+       MAC, and it lowers one TCP stream's rate up.
+     - M
+     - The sent-frame counter of the GEM flow (``gpontbl``) beside the
+       concentrator's receive counter, and the stick's port counters
+       (``ip -s link``) showing 20,000 frames out of the PON port.
 
 Hit bitmaps, flow statistics and ageing
 =======================================
