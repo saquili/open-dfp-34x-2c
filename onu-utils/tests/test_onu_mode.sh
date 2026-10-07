@@ -47,9 +47,11 @@ setup() {
 	printf '#!/bin/sh\necho "tc $*" >>"$LOG"\n[ "$1 $2" = "filter show" ] || exit 0\n%s\n' \
 		'printf "filter protocol 802.1Q pref 1 flower chain 0 \nfilter protocol 802.1Q pref 1 flower chain 0 handle 0x1 \nfilter protocol all pref 1000 flower chain 0 \nfilter protocol all pref 1000 flower chain 0 handle 0x1 \nfilter protocol 802.1Q pref 1001 flower chain 0 \n"' \
 		>"$T/bin/tc"
-	# ip makes the interfaces it is told to add, as the kernel would.
-	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n%s\n' \
-		'[ "$1 $2 $3 $4 $6" = "link add link name type" ] && mkdir -p "$ONU_ROOT/sys/class/net/$5"; exit 0' \
+	# ip makes the interfaces it is told to add, and takes away those it is
+	# told to delete, as the kernel would.
+	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n%s\n%s\n' \
+		'[ "$1 $2 $3 $5" = "link add link name" ] && mkdir -p "$ONU_ROOT/sys/class/net/$6"' \
+		'[ "$1 $2" = "link del" ] && rm -rf "$ONU_ROOT/sys/class/net/$3"; exit 0' \
 		>"$T/bin/ip"
 	# omcid runs from its first start on, as on the board.
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
@@ -304,6 +306,27 @@ check '[ ! -e "$ONU_ROOT/run/pppoed2.pid" ]'
 check '[ ! -e "$ONU_ROOT/run/dhcp6d2.pid" ]'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 0 ]'
+teardown
+
+echo "two sessions follow their GEM port when the OLT replaces it"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv6
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+# The OLT provisions again: GEM port 256 goes, and the kernel takes wan410
+# with it; the sessions move to the GEM port there is now.
+rm -r "$ONU_ROOT/sys/class/net/gem256" "$ONU_ROOT/sys/class/net/wan410"
+printf '#!/bin/sh\n[ "$1" = gem ] || exit 1\n%s\n' \
+	'printf "gem4095 port 4095 down multicast\ngem1024 port 1024 both tcont 1\n"' \
+	>"$T/bin/pon"
+: >"$LOG"
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link add link gem1024 name wan410 type vlan id 410"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/2/gem")" = gem1024 ]'
 teardown
 
 echo "a session in no VLAN runs on the GEM interface, on the GEM port named"
