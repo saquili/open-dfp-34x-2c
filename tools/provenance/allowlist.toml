@@ -94,6 +94,17 @@ adds nothing but those placeholders and the MAINTAINERS file.
 
 [[allow]]
 gate = "forbidden-words"
+rules = ["code-address"]
+paths = ["onu-utils/src/sha256.c"]
+match = "0x80deb1f[e]"
+reason = """
+A round constant of SHA-256, the fractional part of the cube root of a prime
+as FIPS 180-4 lists it, which only looks like a kernel-segment address. The
+pattern spells the constant so that this file does not hold it.
+"""
+
+[[allow]]
+gate = "forbidden-words"
 rules = ["issue-reference", "narrative", "dev-kit", "code-address"]
 paths = ["pond/third_party/mongoose/mongoose.c", "pond/third_party/mongoose/mongoose.h"]
 reason = """
