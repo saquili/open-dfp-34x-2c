@@ -1384,8 +1384,10 @@ static void nl_link_addresses(struct prov_buf *out, int32_t index,
 		if ((int32_t)ifa.ifa_index != index)
 			continue;
 		nl_attrs_parse(&a, pay + sizeof(ifa), paylen - sizeof(ifa));
-		/* IFA_LOCAL is the interface's own; IFA_ADDRESS, on a
-		 * point-to-point link, the peer's. IPv6 sends only the latter. */
+		/*
+		 * IFA_LOCAL is the interface's own; IFA_ADDRESS, on a
+		 * point-to-point link, the peer's. IPv6 sends only the latter.
+		 */
 		which = nl_has(&a, IFA_LOCAL) ? IFA_LOCAL : IFA_ADDRESS;
 		if (!nl_has(&a, which))
 			continue;
@@ -1685,8 +1687,10 @@ int prov_nl_neighbours(const char *links, size_t llen, const char *neigh,
 		if (nd.ndm_family != NL_AF_INET && nd.ndm_family != NL_AF_INET6)
 			continue;
 		nl_attrs_parse(&a, pay + sizeof(nd), paylen - sizeof(nd));
-		/* A neighbour that never answered, or a multicast mapping, says
-		 * nothing about who is on the line. */
+		/*
+		 * A neighbour that never answered, or a multicast mapping, says
+		 * nothing about who is on the line.
+		 */
 		if (!nl_has(&a, NDA_DST) || (nd.ndm_state & NUD_NOARP))
 			continue;
 
