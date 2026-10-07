@@ -9,9 +9,10 @@
 
 import { delay, HttpResponse, http } from "msw";
 import type { Identity, Session, Settings } from "../api/types";
-import { BANKS, BRIDGE, LIVE, NETWORK, TC_RULES } from "./fixture";
+import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
 
 let adminSecret = "admin";
+const firmware = structuredClone(FIRMWARE);
 let signedIn: Session | null = null;
 let offline = false;
 const started = Date.now();
@@ -240,6 +241,61 @@ export const handlers = [
     if (b.PLOAM) identity.ploam_set = true;
     settings.store = "saved";
     return HttpResponse.json({ id: "identity", ok: true });
+  }),
+
+  http.get("*/api/get/firmware", async () => {
+    await delay(200);
+    return (
+      away() ?? (signedIn ? HttpResponse.json({ id: "firmware", value: firmware }) : unauthorized())
+    );
+  }),
+
+  /* An upload: a file of the update's magic is written into the other bank. */
+  http.post("*/api/firmware/upload", async ({ request }) => {
+    if (!signedIn) return unauthorized();
+    const body = new Uint8Array(await request.arrayBuffer());
+    const target = 1 - (firmware.running ?? 0);
+    firmware.update = {
+      ...firmware.update,
+      state: "writing",
+      received_b: body.length,
+      expected_b: body.length,
+    };
+    await delay(3000);
+    if (String.fromCharCode(...body.slice(0, 4)) !== "ONUF") {
+      firmware.update = {
+        ...firmware.update,
+        state: "failed",
+        message: "not an update file, or a damaged one",
+      };
+      return HttpResponse.json(
+        { error: "not written", detail: firmware.update.message },
+        { status: 400 },
+      );
+    }
+    const version = new TextDecoder().decode(body.slice(96, 160)).replace(/\0+$/, "") || "unknown";
+    const written = firmware.banks[target];
+    if (written) Object.assign(written, { state: "valid", version, time: Date.now() / 1000 });
+    firmware.update = { ...firmware.update, state: "done", bank: target, version, message: null };
+    return HttpResponse.json({ ok: true, detail: version });
+  }),
+
+  http.post("*/api/firmware/try", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const text = await request.text();
+    firmware.next = text === "" ? 1 - (firmware.running ?? 0) : Number(text);
+    return HttpResponse.json({ ok: true, detail: "the stick restarts into the bank once" });
+  }),
+
+  http.get("*/api/firmware/download", async () => {
+    if (!signedIn) return unauthorized();
+    return new HttpResponse(new Uint8Array([0x4f, 0x4e, 0x55, 0x46]), {
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="buchos-gpon-325213d07776.bin"',
+      },
+    });
   }),
 
   http.post("*/api/system/restart", async () => {

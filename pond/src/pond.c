@@ -14,6 +14,10 @@
  *   /api/getm?ids=A,B  several values at once, slow ones left out
  *   /api/set/ID        a POST: change a value to the body of the request
  *   /api/system/restart a POST: restart the stick
+ *   /api/firmware/upload   a POST of an update file: into the other bank
+ *   /api/firmware/download the running bank as an update file
+ *   /api/firmware/try      a POST: start a bank once, by a restart
+ *                          (firmware.c)
  *
  * Every other route of /api needs a session (auth.h) or the bearer token of
  * /etc/pond.token, for scripts. A change made in a session must carry the
@@ -24,6 +28,7 @@
  */
 
 #include "auth.h"
+#include "firmware.h"
 #include "prov.h"
 #include "providers.h"
 
@@ -491,11 +496,42 @@ static void serve_web(struct mg_connection *c, struct mg_http_message *hm)
 	mg_http_serve_file(c, hm, path, &opts);
 }
 
+/*
+ * Whether an upload whose headers are in may go on: a session or the token,
+ * X-Pond on a session's change, and a password of the person's own. Otherwise
+ * it answers, and the connection closes rather than take the body.
+ */
+static bool upload_admitted(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char sid[AUTH_ID_LEN + 1];
+	bool session;
+
+	cookie_session(hm, sid);
+	session = auth_session(sid, time(NULL));
+	if (!session && !authorised(hm))
+		reply_err(c, 401, "unauthorised", "sign in, or present a bearer token");
+	else if (session && !mg_http_get_header(hm, "X-Pond"))
+		reply_err(c, 403, "refused", "a change needs the X-Pond header");
+	else if (session && auth_default_password())
+		reply_err(c, 403, "must_change", "set a password of your own first");
+	else
+		return true;
+	c->is_draining = 1;
+	return false;
+}
+
 static void handler(struct mg_connection *c, int ev, void *ev_data)
 {
 	struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 	struct mg_str caps[2];
 
+	/* An upload is taken as its headers come, before its body. */
+	if (ev == MG_EV_HTTP_HDRS) {
+		if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL) &&
+		    !mg_strcmp(hm->method, mg_str("POST")) && upload_admitted(c, hm))
+			firmware_upload(c, hm);
+		return;
+	}
 	if (ev != MG_EV_HTTP_MSG)
 		return;
 
@@ -563,6 +599,15 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 			api_restart(c);
 		else
 			reply_err(c, 405, "use POST", "restart with a POST");
+	} else if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL)) {
+		reply_err(c, 405, "use POST", "upload an update file with a POST");
+	} else if (mg_match(hm->uri, mg_str("/api/firmware/download"), NULL)) {
+		firmware_download(c);
+	} else if (mg_match(hm->uri, mg_str("/api/firmware/try"), NULL)) {
+		if (!post)
+			reply_err(c, 405, "use POST", "start a bank with a POST");
+		else if (firmware_try(c, hm))
+			g_restart_at = time(NULL) + 1;
 	} else if (mg_match(hm->uri, mg_str("/api/schema"), NULL))
 		api_schema(c);
 	else if (mg_match(hm->uri, mg_str("/api/getm"), NULL))
@@ -655,6 +700,7 @@ int main(int argc, char **argv)
 		mg_mgr_poll(&mgr, 200);
 		prov_settings_reap();
 		prov_identity_reap();
+		firmware_poll();
 		restart_when_due();
 	}
 

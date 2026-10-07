@@ -8,8 +8,8 @@
  */
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lines, request } from "./client";
-import type { Banks, Bridge, Identity, Network, TcRules } from "./types";
+import { ApiError, lines, OfflineError, request } from "./client";
+import type { Banks, Bridge, Firmware, Identity, Network, TcRules } from "./types";
 
 interface Value<T> {
   id: string;
@@ -54,6 +54,59 @@ export const useIdentityChange = () => useChange("identity", [["identity"], ["li
 
 export function useRestart() {
   return useMutation({ mutationFn: () => request<{ ok: boolean }>("/api/system/restart", {}) });
+}
+
+/* The banks: read often while an upload runs, rarely otherwise. */
+export const firmwareQuery = queryOptions({
+  queryKey: ["firmware"],
+  queryFn: async () => (await request<Value<Firmware>>("/api/get/firmware")).value,
+  refetchInterval: (query) => {
+    const state = query.state.data?.update.state;
+    return state === "receiving" || state === "writing" ? 2_000 : 30_000;
+  },
+});
+
+export function useFirmware() {
+  return useQuery(firmwareQuery);
+}
+
+/** Start a bank once, the other one without @bank: pond arms it and restarts. */
+export function useTryBank() {
+  return useMutation({
+    mutationFn: (bank?: number) =>
+      request<{ ok: boolean }>("/api/firmware/try", bank === undefined ? "" : String(bank)),
+  });
+}
+
+/*
+ * Send an update file. The body goes up as it is, with no time limit: the
+ * stick writes it into the flash as it comes, then checks it, some 40 s in
+ * all; the progress counts what has left the browser.
+ */
+export function uploadFirmware(
+  file: Blob,
+  onProgress: (sent: number, total: number) => void,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/firmware/upload");
+    xhr.setRequestHeader("X-Pond", "1");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => onProgress(e.loaded, e.total || file.size);
+    xhr.onload = () => {
+      let reply: { ok?: boolean; error?: string; detail?: string } = {};
+      try {
+        reply = JSON.parse(xhr.responseText);
+      } catch {
+        /* an answer that is not JSON is told by its status */
+      }
+      if (xhr.status === 200 && reply.ok) resolve(reply.detail ?? "");
+      else reject(new ApiError(xhr.status, reply.error ?? xhr.statusText, reply.detail));
+    };
+    /* A connection cut short: what became of the upload is in the firmware value. */
+    xhr.onerror = () => reject(new OfflineError());
+    xhr.send(file);
+  });
 }
 
 /*

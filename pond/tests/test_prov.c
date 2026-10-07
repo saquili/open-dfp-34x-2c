@@ -1797,6 +1797,43 @@ static void test_panel_values(void)
 	unsetenv("POND_REIDENTIFY");
 }
 
+/* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
+static const char update_stub[] =
+	"#!/bin/sh\n"
+	"[ \"$1\" = status ] || exit 2\n"
+	"printf 'RUNNING=1\\nCOMMITTED=0\\nNEXT=0\\nTRIAL=1\\n'\n"
+	"printf 'BANK0_STATE=valid\\nBANK0_VERSION=0123456789ab\\nBANK0_TIME=1759000000\\n'\n"
+	"printf 'BANK0_KERNEL_SIZE=1900544\\nBANK0_ROOTFS_SIZE=2031616\\n'\n"
+	"printf 'BANK1_STATE=valid\\nBANK1_VERSION=7c5fba548abc\\nBANK1_TIME=1759800000\\n'\n"
+	"printf 'BANK1_KERNEL_SIZE=1900544\\nBANK1_ROOTFS_SIZE=2031616\\n'\n";
+
+static void test_firmware(void)
+{
+	char buf[2048], stub[512];
+	const char *s;
+	int err;
+
+	puts("the banks and the updates");
+
+	put("/update-stub", update_stub, 0755);
+	setenv("POND_ONU_UPDATE", prov_path("/update-stub", stub, sizeof(stub)), 1);
+	s = render(prov_firmware, buf, sizeof(buf), &err);
+	check(!err && strstr(s, "\"running\":1,\"committed\":0,\"next\":0,\"trial\":1,"
+				"\"failed\":null"),
+	      "the running bank, the committed one, the next start and the trial");
+	check(strstr(s, "{\"bank\":1,\"state\":\"valid\",\"version\":\"7c5fba548abc\","
+			"\"time\":1759800000,\"kernel_size_b\":1900544,"
+			"\"rootfs_size_b\":2031616}") != NULL,
+	      "each bank, with its version, time and sizes");
+	check(strstr(s, "\"update\":{\"state\":\"idle\",\"received_b\":0") != NULL,
+	      "no update under way");
+
+	setenv("POND_ONU_UPDATE", "/nonexistent/onu-update", 1);
+	s = render(prov_firmware, buf, sizeof(buf), &err);
+	check(err == -EIO, "an onu-update that cannot run is an error, not empty banks");
+	unsetenv("POND_ONU_UPDATE");
+}
+
 static void test_table(void)
 {
 	const struct prov *p;
@@ -1878,6 +1915,7 @@ int main(void)
 	test_optics();
 	test_writers();
 	test_settings();
+	test_firmware();
 	test_panel_values();
 	test_table();
 	test_failure_paths();

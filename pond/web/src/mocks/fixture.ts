@@ -6,7 +6,7 @@
  * replaced by a documentation value. The mocks start from it.
  */
 
-import type { Banks, Bridge, Link, Live, Network, TcRules } from "../api/types";
+import type { Banks, Bridge, Firmware, Link, Live, Network, TcRules } from "../api/types";
 
 export const LIVE: Live = {
   uptime: {
@@ -437,6 +437,33 @@ export const LIVE: Live = {
   },
 };
 
+export const FIRMWARE: Firmware = {
+  running: 0,
+  committed: 0,
+  next: 0,
+  trial: null,
+  failed: null,
+  banks: [
+    {
+      bank: 0,
+      state: "valid",
+      version: "325213d07776",
+      time: 1789067700,
+      kernel_size_b: 1900544,
+      rootfs_size_b: 2031616,
+    },
+    {
+      bank: 1,
+      state: "valid",
+      version: "29abb293a1c4",
+      time: 1789060000,
+      kernel_size_b: 1900544,
+      rootfs_size_b: 2031616,
+    },
+  ],
+  update: { state: "idle", received_b: 0, expected_b: 0, bank: null, version: null, message: null },
+};
+
 export const BANKS: Banks = {
   partitions: [
     {
@@ -453,7 +480,7 @@ export const BANKS: Banks = {
       size_b: 8192,
       type: "norflash",
       type_code: 3,
-      writable: false,
+      writable: true,
     },
     {
       name: "env2",
@@ -461,7 +488,7 @@ export const BANKS: Banks = {
       size_b: 8192,
       type: "norflash",
       type_code: 3,
-      writable: false,
+      writable: true,
     },
     {
       name: "config",
@@ -477,7 +504,7 @@ export const BANKS: Banks = {
       size_b: 1900544,
       type: "norflash",
       type_code: 3,
-      writable: false,
+      writable: true,
     },
     {
       name: "r0",
@@ -485,23 +512,23 @@ export const BANKS: Banks = {
       size_b: 2031616,
       type: "norflash",
       type_code: 3,
-      writable: false,
+      writable: true,
     },
     {
       name: "k1",
       mtd: 6,
-      size_b: 1359872,
+      size_b: 1900544,
       type: "norflash",
       type_code: 3,
-      writable: false,
+      writable: true,
     },
     {
       name: "r1",
       mtd: 7,
-      size_b: 2572288,
+      size_b: 2031616,
       type: "norflash",
       type_code: 3,
-      writable: false,
+      writable: true,
     },
   ],
   selection: {

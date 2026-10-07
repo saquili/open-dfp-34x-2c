@@ -190,6 +190,38 @@ export interface Banks {
   rootfs: { root: string; mtd: number | null; partition: string | null; bank: number | null };
 }
 
+/** A bank of the flash as onu-update tells it. */
+export interface FirmwareBank {
+  bank: number;
+  /** valid, incomplete (a write cut short) or empty */
+  state: string | null;
+  version: string | null;
+  /** the time of its kernel image, in seconds since 1970 */
+  time: number | null;
+  kernel_size_b: number | null;
+  rootfs_size_b: number | null;
+}
+
+/** The two banks, the starts, and an upload under way (pond's value "firmware"). */
+export interface Firmware {
+  running: number | null;
+  committed: number | null;
+  next: number | null;
+  /** the bank that runs on trial, not committed yet */
+  trial: number | null;
+  /** a bank whose trial did not come up */
+  failed: number | null;
+  banks: FirmwareBank[];
+  update: {
+    state: "idle" | "receiving" | "writing" | "done" | "failed";
+    received_b: number;
+    expected_b: number;
+    bank: number | null;
+    version: string | null;
+    message: string | null;
+  };
+}
+
 /** The values the panel polls together, every few seconds. */
 export interface Live {
   uptime: Uptime;

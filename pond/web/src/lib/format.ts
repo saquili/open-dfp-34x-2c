@@ -96,6 +96,11 @@ export function clock(t: number, lang: Lang, seconds = false): string {
   }).format(t);
 }
 
+/** The day of a moment given in seconds since 1970. */
+export function day(seconds: number, lang: Lang): string {
+  return new Intl.DateTimeFormat(lang, { dateStyle: "medium" }).format(seconds * 1000);
+}
+
 /** A share as a whole percent. */
 export function percent(share: number, lang: Lang): string {
   return new Intl.NumberFormat(lang, { style: "percent", maximumFractionDigits: 0 }).format(share);

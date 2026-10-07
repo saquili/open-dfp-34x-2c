@@ -50,6 +50,18 @@ password must change; ``POST /api/auth/logout`` ends the session; ``POST
 /api/set/ID`` read and change values; ``POST /api/system/restart`` restarts the
 stick a second after it answers.
 
+The updates go through ``onu-update`` (``docs/handbook/updating.rst``). The
+value ``firmware`` is its status: which bank runs and which starts next, a trial
+under way or one that failed, each bank's state, version, time and sizes, and an
+upload under way. ``POST /api/firmware/upload`` takes an update file as the
+body, with a Content-Length of at most 4 MiB: once its headers are in, the
+connection leaves the HTTP parser and the body streams into ``onu-update write
+-``, the connection pausing while the pipe is full; the answer comes once the
+bank was written and read back. One upload runs at a time. ``GET
+/api/firmware/download`` streams the running bank as an update file, in chunks.
+``POST /api/firmware/try`` arms a start of the bank in the body, ``0`` or ``1``,
+or of the other bank with an empty body, and restarts.
+
 ``/api/set/ID`` takes ``KEY=VALUE`` lines:
 
 * ``settings``: the settings of onu-mode (see ``onu-utils``), the keys of

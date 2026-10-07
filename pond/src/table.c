@@ -48,6 +48,9 @@ const struct prov pond_provs[] = {
 	{ "banks", "Flash",
 	  "Partitions, the U-Boot environment and the two firmware banks",
 	  prov_banks, NULL, PROV_SLOW },
+	{ "firmware", "Flash",
+	  "The two banks, the one that runs, the next start and an update",
+	  prov_firmware, NULL, PROV_VOLATILE },
 
 	{ "onu", "GPON", "Activation state, identifiers and alarms", prov_onu,
 	  NULL, 0 },
