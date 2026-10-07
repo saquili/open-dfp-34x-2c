@@ -501,22 +501,24 @@ The configuration word
      - Checked by
    * - ``RTL9602C_L3_CFG`` (``0x800010``) reads ``0x64000020`` in the reset
        state: ``RTL9602C_L3_CFG_FLOW4_EN`` (bit 30) and
-       ``RTL9602C_L3_CFG_FLOW6_EN`` (bit 29) set, ``RTL9602C_L3_CFG_NAT_MODE``
-       (bits 11:10) 0, ``RTL9602C_L3_CFG_L3IF_LOOKUP`` (bits 9:8) 0.
+       ``RTL9602C_L3_CFG_FLOW6_EN`` (bit 29) set, ``RTL9602C_L3_CFG_TTL_DEC``
+       (bit 12) clear, ``RTL9602C_L3_CFG_NAT_MODE`` (bits 11:10) 0,
+       ``RTL9602C_L3_CFG_L3IF_LOOKUP`` (bits 9:8) 0.
      - M
      - A read after a full chip reset with the driver not loaded.
    * - Setup sets ``RTL9602C_L3_CFG_NAT_MODE`` to
        ``RTL9602C_L3_CFG_NAT_MODE_NAPT`` (3) and ``RTL9602C_L3_CFG_L3IF_LOOKUP``
        to ``RTL9602C_L3_CFG_L3IF_LOOKUP_MAC`` (2) in one read-modify-write,
-       before the global enable; the register then reads ``0x64000e20``. With
-       both at 0 the engine gave up frames addressed to the router (CPU reason
-       5); with both set (changed together) and the tables in place it
-       translated them.
+       before the global enable, and sets ``TTL_DEC`` and ``FLOW6_EN`` in the
+       same write; the register then reads ``0x64001e20``. With ``NAT_MODE``
+       and ``L3IF_LOOKUP`` at 0 the engine gave up frames addressed to the
+       router (CPU reason 5); with both set (changed together) and the tables
+       in place it translated them.
      - T
      - A routing test reads both values back after setup and needs them for
        the flow to be carried. By hand: CPU reason 5 with both at 0, and the
        translated verdict in the output descriptor of the per-frame capture with
-       the values set. ``l3flow`` prints ``l3 cfg     64000e20``.
+       the values set. ``l3flow`` prints ``l3 cfg     64001e20``.
    * - With ``L3IF_LOOKUP`` set to 2 the engine matches arriving frames to the
        L3-interface rows that the driver writes, each built around a netdev's
        MAC with an exact mask (see "L3 interface (selector 3)").
@@ -567,8 +569,24 @@ The configuration word
      - M
      - iperf3 through a routed host's PPPoE session, 910 Mb/s up and 884 Mb/s
        down, the CPU port moving by 5 and 6, with the bit clear.
+   * - ``TTL_DEC``: with it set the engine decrements the TTL of the IPv4
+       frames and the hop limit of the IPv6 frames that it routes, and hands a
+       frame that arrives with 1 to the CPU, whose stack answers it with an
+       ICMP time-exceeded message (RFC 1812, RFC 8200). With it clear the
+       engine forwards them unchanged, a TTL of 1 included. Setup sets it; a
+       routed flow is carried as fast with it as without.
+     - M
+     - Echo requests through a routed host's sessions, both families: TTL and
+       hop limit 64 at both ends with the bit clear, 63 with it set; with TTL 1,
+       the reply of the far end with it clear, "Time to live exceeded" and
+       "Hop limit" from the stick with it set. iperf3 alternated four times,
+       842 to 897 Mb/s either way.
+   * - That a translated flow is carried with ``TTL_DEC`` set is not measured:
+       the stick has translated no address since the bit came in.
+     - I
+     - The routing test of a translated flow with the bit set.
    * - Setting bits 31, 23, 12 and 4 of the word together, ``FLOW6_EN`` set,
-       left every IPv6 frame going to the CPU. What those bits do is not
+       left every IPv6 frame going to the CPU. What bits 31, 23 and 4 do is not
        established.
      - M
      - The word written by hand (``0xe4801e30``), 1,000 echo requests: the CPU
@@ -2910,7 +2928,7 @@ line::
 
     # cat /sys/kernel/debug/rtl9602c/l3nat
     aux ctrl 000000f5
-    l3 cfg   64000e20  flow4 1  flow6 1
+    l3 cfg   64001e20  flow4 1  flow6 1
 
     flow (table 12, 4 words)
       [0] 00000000 00000000 00000000 00000000
@@ -2921,7 +2939,7 @@ line::
 
     # cat /sys/kernel/debug/rtl9602c/l3flow
     global     00000005  engine ON
-    l3 cfg     64000e20  flow4 1  flow6 1
+    l3 cfg     64001e20  flow4 1  flow6 1
     ...
 
 .. list-table::
@@ -3287,6 +3305,9 @@ Assumptions the driver depends on
        external port ("The NAPT hashes").
      - Two flows whose external ports fall in one inbound bucket, replies to
        both, each counted at its own LAN host.
+   * - A translated flow is still carried with ``TTL_DEC`` set ("The
+       configuration word"). Setup sets it for every routed frame.
+     - The routing test of a translated flow, with the CPU port's counter.
    * - Arming the per-frame capture or changing its mode leaves forwarding
        unchanged ("The per-frame capture"). The safety of writing to
        ``l3capture`` rests on it.
