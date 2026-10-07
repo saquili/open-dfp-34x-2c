@@ -1,0 +1,110 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-trial: after a start from a bank that the boot loader was told to try,
+# see that the system came up, and keep the bank; if it did not come up in
+# time, restart, and the boot loader starts the committed bank again.
+#
+# Usage: onu-trial ADDRESS
+#
+# The boot script runs it in the background as its last step; ADDRESS is the
+# host link's address, where the status daemon listens. A start from the
+# committed bank, or from memory, is no trial, and it does nothing.
+#
+# The system is up when omcid runs, the status daemon answers on ADDRESS, and
+# the PON is in O5, operation, unless the receiver has no light (alarm LOS):
+# without a fiber the PON says nothing about the new system. All three hold
+# for a person to manage the stick and for the operator to see it. Then
+# "onu-update commit" makes the running bank the one the boot loader starts.
+# When they do not hold within TRIAL_LIMIT seconds (300), onu-trial restarts
+# the stick, and the boot loader, which set sw_tryactive back to 2 before it
+# started the tried bank, starts the committed one. A system that hangs
+# before is restarted by the watchdog, which the boot loader armed for the
+# trial, to the same end.
+#
+# What it found is in /run/onu-trial, one word: trial, committed or failed.
+# ONU_ROOT, when set, is put in front of /run, for the tests; TRIAL_STEP
+# (5) is the seconds between two looks.
+
+set -u
+RUN=${ONU_ROOT:-}/run
+LIMIT=${TRIAL_LIMIT:-300}
+STEP=${TRIAL_STEP:-5}
+address=${1:?usage: onu-trial ADDRESS}
+
+log() {
+	logger -t onu-trial "$*" 2>/dev/null
+	echo "onu-trial: $*" >&2
+}
+
+state() {
+	echo "$1" >"$RUN/onu-trial"
+}
+
+# The value of KEY in onu-update's status.
+field() {
+	echo "$status" | sed -n "s/^$1=//p"
+}
+
+# Whether the status daemon answers its health request within 5 s; nc of
+# BusyBox has no time limit of its own.
+pond_answers() {
+	reply=$RUN/onu-trial.reply
+	: >"$reply"
+	(printf 'GET /api/health HTTP/1.0\r\n\r\n' | nc "$address" 8080 >"$reply" 2>/dev/null) &
+	probe=$!
+	for _ in 1 2 3 4 5; do
+		kill -0 "$probe" 2>/dev/null || break
+		sleep 1
+	done
+	kill "$probe" 2>/dev/null
+	wait "$probe" 2>/dev/null
+	grep -q '"ok":true' "$reply"
+}
+
+# Whether the PON is in O5, or has no light to judge by.
+pon_ready() {
+	pon >"$RUN/onu-trial.pon" 2>/dev/null || return 1
+	grep -q ' O5 ' "$RUN/onu-trial.pon" && return 0
+	grep 'alarms' "$RUN/onu-trial.pon" | grep -q 'LOS'
+}
+
+# What is not up yet, or nothing when all of it is.
+missing() {
+	pidof omcid >/dev/null 2>&1 || { echo "omcid does not run"; return; }
+	pond_answers || { echo "the status daemon does not answer"; return; }
+	pon_ready || { echo "the PON is not in O5"; return; }
+}
+
+status=$(onu-update status 2>/dev/null) || exit 0
+running=$(field RUNNING)
+committed=$(field COMMITTED)
+case $running in
+0 | 1) ;;
+*) exit 0 ;;
+esac
+[ "$running" != "$committed" ] || exit 0
+
+state trial
+log "bank $running runs on trial, bank $committed is committed"
+waited=0
+while :; do
+	why=$(missing)
+	if [ -z "$why" ]; then
+		if onu-update commit >/dev/null; then
+			state committed
+			log "bank $running is up after $waited s and committed"
+			exit 0
+		fi
+		why="the commit failed"
+	fi
+	[ "$waited" -lt "$LIMIT" ] || break
+	sleep "$STEP"
+	waited=$((waited + STEP))
+done
+
+state failed
+log "bank $running is not up after $waited s ($why); restarting into bank $committed"
+sync
+reboot
