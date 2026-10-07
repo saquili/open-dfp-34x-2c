@@ -151,9 +151,8 @@ int main(int argc, char **argv)
 	    (!strcmp(verb, "import") && nargs != 1) ||
 	    (strcmp(verb, "get") && strcmp(verb, "set") && strcmp(verb, "unset") &&
 	     strcmp(verb, "list") && strcmp(verb, "import"))) {
-		fprintf(stderr,
-			"usage: onucfg [--store PATH] [--size N] "
-			"get KEY | list | set KEY VALUE | unset KEY | import\n");
+		fputs("usage: onucfg [--store PATH] [--size N] get KEY | list |\n"
+		      "              set KEY VALUE | unset KEY | import\n", stderr);
 		return 2;
 	}
 

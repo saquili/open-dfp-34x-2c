@@ -45,8 +45,10 @@ static void erase(uint8_t *region)
 	memset(region, 0xff, REGION);
 }
 
-/* cfg_store a payload and copy only its reported bytes into the region, as a
- * caller carrying one slot to the flash would. */
+/*
+ * cfg_store a payload and copy only its reported bytes into the region, as a
+ * caller carrying one slot to the flash would.
+ */
 static int save(uint8_t *region, int slot, uint32_t seq, const char *payload)
 {
 	uint8_t one[REGION];
@@ -216,8 +218,10 @@ static void test_torn_write_keeps_the_old(void)
 	cfg_load(region, REGION, payload, sizeof(payload), NULL, &seq, &slot);
 	CHECK(slot == 0 && seq == 1);
 
-	/* A write to slot 1 that a power loss cut: its payload is not whole,
-	 * so its checksum fails and the reader keeps slot 0. */
+	/*
+	 * A write to slot 1 that a power loss cut: its payload is not whole,
+	 * so its checksum fails and the reader keeps slot 0.
+	 */
 	save(region, slot, seq, "N=half\n");
 	region[REGION / 2 + CFG_HEADER + 1] ^= 0xff;
 	CHECK(cfg_load(region, REGION, payload, sizeof(payload), NULL, &seq,
