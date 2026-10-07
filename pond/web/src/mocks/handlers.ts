@@ -140,23 +140,73 @@ export const handlers = [
     return away() ?? (signedIn ? HttpResponse.json({ id: "banks", value: BANKS }) : unauthorized());
   }),
 
-  http.post("*/api/set/pppoe", async ({ request }) => {
+  /* A session: added to the first free number, changed by ID, removed by USER=. */
+  http.post("*/api/set/session", async ({ request }) => {
     await delay(500);
     if (!signedIn) return unauthorized();
-    const body = Object.fromEntries(
-      (await request.text())
-        .split("\n")
-        .filter(Boolean)
-        .map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
-    );
-    if (body.USER !== undefined) settings.pppoe.user = body.USER;
-    if (body.SECRET) settings.pppoe.secret_set = true;
-    if (body.USER === "") settings.pppoe.secret_set = false;
-    if (body.VLAN !== undefined) settings.settings.WAN_VLAN = body.VLAN;
-    if (body.MAC !== undefined) settings.settings.WAN_MAC = body.MAC;
+    const body = kv(await request.text());
+    const list = settings.sessions;
+    let id = body.ID ? Number(body.ID) : 0;
+    if (!id) {
+      for (let n = 1; n <= 7 && !id; n++) if (!list.some((x) => x.id === n)) id = n;
+      if (!id || !body.USER)
+        return HttpResponse.json(
+          {
+            error: "refused",
+            detail: id ? "a new session needs USER" : "all 7 sessions are taken",
+          },
+          { status: 400 },
+        );
+    }
+    let x = list.find((y) => y.id === id);
+    if (body.USER === "") {
+      settings.sessions = list.filter((y) => y.id !== id);
+    } else {
+      if (!x) {
+        if (!body.SECRET)
+          return HttpResponse.json(
+            { error: "refused", detail: `session ${id}: an account needs a secret` },
+            { status: 400 },
+          );
+        x = {
+          id,
+          user: "",
+          secret_set: false,
+          gem: "auto",
+          vlan: "",
+          mac: "",
+          family: "both",
+          hands_on: false,
+          dev: null,
+          gem_dev: null,
+          ppp: null,
+          ipv4: null,
+          ipv6: null,
+        };
+        list.push(x);
+        list.sort((a, z) => a.id - z.id);
+      }
+      if (body.USER) x.user = body.USER;
+      if (body.SECRET) x.secret_set = true;
+      if (body.VLAN !== undefined) x.vlan = body.VLAN;
+      if (body.MAC !== undefined) x.mac = body.MAC;
+      if (body.FAMILY === "ipv4" || body.FAMILY === "ipv6" || body.FAMILY === "both")
+        x.family = body.FAMILY;
+      /* The stand-in stick brings a session up at once, in the VLAN given. */
+      x.dev = x.vlan ? `wan${x.vlan}` : "gem257";
+      x.gem_dev = "gem257";
+      x.ppp = `ppp${x.id - 1}`;
+      x.ipv4 = x.family === "ipv6" ? null : "203.0.113.24";
+      x.ipv6 = x.family === "ipv4" ? null : "fe80::2";
+    }
+    const first = settings.sessions.find((y) => y.family !== "ipv6");
+    for (const y of settings.sessions) y.hands_on = y === first;
+    if (!first) settings.pass = null;
+    else settings.pass = { address: "203.0.113.24", lan: "lan" };
+    settings.mode = settings.sessions.length ? "passthrough" : "bridge";
     settings.store = "saved";
     settings.last_apply_status = 0;
-    return HttpResponse.json({ id: "pppoe", ok: true });
+    return HttpResponse.json({ id: "session", ok: true });
   }),
 
   http.get("*/api/get/identity", async () => {

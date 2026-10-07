@@ -72,7 +72,8 @@ const globalV4 = (l: Link) => l.addresses.some((a) => a.family === "ipv4" && !a.
 export function roleOf(link: Link, live: Live | undefined): Role {
   const s = live?.settings;
   if (link.kind === "ppp") return "session";
-  if (s?.wan && link.name === s.wan.dev) return "wan";
+  if (s?.sessions?.some((x) => x.dev === link.name) || (s?.wan && link.name === s.wan.dev))
+    return "wan";
   if (s?.pass?.lan && link.name === s.pass.lan) return "handover";
   if (link.master) return "bridged";
   if (link.kind === "gem") return "channel";
@@ -86,9 +87,12 @@ export function switchView(net: Network | undefined, live: Live | undefined): Sw
   const ports = links.filter((l) => l.kind === "dsa");
   const conduit = links.find((l) => l.name === ports[0]?.lower) ?? null;
 
-  /* The PPP link runs over the WAN VLAN, though no netlink attribute says so. */
+  /* A PPP link runs over its session's VLAN, though no netlink attribute says so. */
   const over = (l: Link) =>
-    l.kind === "ppp" ? (s?.wan && l.name === s.wan.out ? s.wan.dev : null) : l.lower;
+    l.kind === "ppp"
+      ? (s?.sessions?.find((x) => x.ppp === l.name)?.dev ??
+        (s?.wan && l.name === s.wan.out ? s.wan.dev : null))
+      : l.lower;
 
   const tree = (parent: string): IfaceView[] =>
     links
@@ -106,11 +110,16 @@ export function switchView(net: Network | undefined, live: Live | undefined): Sw
       return { link, members, spans: sides.has("host") && sides.has("operator") };
     });
 
-  const wan = s?.wan ? links.find((l) => l.name === s.wan?.dev) : undefined;
+  const main = s?.sessions?.find((x) => x.hands_on);
+  const wan = main ? links.find((l) => l.name === main.dev) : undefined;
   const lan = s?.pass?.lan ? links.find((l) => l.name === s.pass?.lan) : undefined;
   const routed =
-    s?.pass && s.wan
-      ? { lanVlan: lan?.vlan ?? null, wanVlan: wan?.vlan ?? null, gem: wan?.lower ?? null }
+    s?.pass && main
+      ? {
+          lanVlan: lan?.vlan ?? null,
+          wanVlan: wan?.vlan ?? null,
+          gem: main.gem_dev ?? wan?.lower ?? null,
+        }
       : null;
 
   return {

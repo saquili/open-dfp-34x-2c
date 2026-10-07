@@ -30,7 +30,7 @@ describe("what the switch is doing", () => {
     const pon = v.ports[1];
     const gem257 = pon?.ifaces.find((i) => i.link.name === "gem257");
     expect(gem257?.role).toBe("channel");
-    expect(gem257?.children.map((c) => [c.link.name, c.role])).toEqual([["wan", "wan"]]);
+    expect(gem257?.children.map((c) => [c.link.name, c.role])).toEqual([["wan410", "wan"]]);
     expect(gem257?.children[0]?.children.map((c) => [c.link.name, c.role])).toEqual([
       ["ppp0", "session"],
     ]);
@@ -79,7 +79,7 @@ describe("what the switch is doing", () => {
   });
 
   it("follows a VLAN down to the port it ends up on", () => {
-    expect(sideOf(NETWORK.links, "wan")).toBe("operator");
+    expect(sideOf(NETWORK.links, "wan410")).toBe("operator");
     expect(sideOf(NETWORK.links, "mgmt")).toBe("host");
     expect(sideOf(NETWORK.links, "ppp0")).toBe(null);
   });

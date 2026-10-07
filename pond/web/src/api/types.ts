@@ -133,10 +133,32 @@ export interface Optics {
   rx_power_uw: number;
 }
 
+export type Family = "ipv4" | "ipv6" | "both";
+
+/** A PPPoE session of the stick's own, and what onu-mode brought up for it. */
+export interface SessionInfo {
+  id: number;
+  user: string;
+  secret_set: boolean;
+  /** The GEM port's Port-ID, or "auto". */
+  gem: string;
+  vlan: string;
+  mac: string;
+  family: Family;
+  /** The session whose IPv4 address goes to the host. */
+  hands_on: boolean;
+  dev: string | null;
+  gem_dev: string | null;
+  ppp: string | null;
+  ipv4: string | null;
+  ipv6: string | null;
+}
+
 export interface Settings {
   settings: Record<string, string>;
-  pppoe: { user: string; secret_set: boolean };
+  sessions: SessionInfo[];
   mode: string | null;
+  /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;
   dns: string | null;
   pass: { address: string; lan: string | null } | null;

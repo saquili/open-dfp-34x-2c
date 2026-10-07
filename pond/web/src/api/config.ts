@@ -48,7 +48,7 @@ function useChange(id: string, refresh: string[][]) {
   });
 }
 
-export const usePppoeChange = () => useChange("pppoe", [["live"]]);
+export const useSessionChange = () => useChange("session", [["live"]]);
 export const useLinkChange = () => useChange("link", [["live"]]);
 export const useIdentityChange = () => useChange("identity", [["identity"], ["live"]]);
 

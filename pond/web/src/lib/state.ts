@@ -6,7 +6,7 @@
  * of the link to the host. Pages show these; they never read raw keys.
  */
 
-import type { GemPort, Live, Port } from "../api/types";
+import type { Family, GemPort, Live, Port } from "../api/types";
 import type { Lang } from "../i18n";
 import { dbm } from "./format";
 
@@ -80,33 +80,72 @@ export function fibre(live: Live | undefined): FibreView {
   };
 }
 
+/** The most PPPoE sessions the stick holds, as many as the switch has rows for. */
+export const MAX_SESSIONS = 7;
+
 export interface SessionView {
-  /** An account is set: the stick holds a PPPoE session. */
-  configured: boolean;
-  up: boolean;
+  id: number;
   user: string;
   secretSet: boolean;
+  vlan: string;
+  mac: string;
+  gem: string;
+  family: Family;
+  handsOn: boolean;
+  /** pppoed brought the link up. */
+  up: boolean;
+  ipv4: string | null;
+  ipv6: string | null;
+  dev: string | null;
+  gemDev: string | null;
+  ppp: string | null;
+}
+
+export function sessions(live: Live | undefined): SessionView[] {
+  return (live?.settings?.sessions ?? []).map((x) => ({
+    id: x.id,
+    user: x.user,
+    secretSet: x.secret_set,
+    vlan: x.vlan,
+    mac: x.mac,
+    gem: x.gem,
+    family: x.family,
+    handsOn: x.hands_on,
+    up: x.ppp != null,
+    ipv4: x.ipv4,
+    ipv6: x.ipv6,
+    dev: x.dev,
+    gemDev: x.gem_dev,
+    ppp: x.ppp,
+  }));
+}
+
+/** The stick's sessions in sum: what the host gets from them. */
+export interface InternetView {
+  /** The stick has accounts: it holds PPPoE sessions. */
+  configured: boolean;
+  /** Every session is up, and the address handed on is out. */
+  up: boolean;
+  count: number;
+  /** The session that hands its IPv4 address to the host. */
+  main: SessionView | null;
   /** The public address handed to the host. */
   address: string | null;
   dns: string[];
-  vlan: string;
-  mac: string;
 }
 
-export function session(live: Live | undefined): SessionView {
+export function session(live: Live | undefined): InternetView {
   const s = live?.settings;
-  const user = s?.pppoe.user ?? "";
-  const configured = user !== "";
-  const up = configured && !!s?.wan?.out?.startsWith("ppp") && !!s?.pass;
+  const all = sessions(live);
+  const main = all.find((x) => x.handsOn) ?? all[0] ?? null;
+  const up = all.length > 0 && all.every((x) => x.up) && (!main?.handsOn || !!s?.pass);
   return {
-    configured,
+    configured: all.length > 0,
     up,
-    user,
-    secretSet: s?.pppoe.secret_set ?? false,
-    address: up ? (s?.pass?.address ?? null) : null,
+    count: all.length,
+    main,
+    address: main?.handsOn && main.up ? (s?.pass?.address ?? null) : null,
     dns: s?.dns ? s.dns.split(/\s+/).filter(Boolean) : [],
-    vlan: s?.settings.WAN_VLAN ?? "",
-    mac: s?.settings.WAN_MAC ?? "",
   };
 }
 
@@ -121,27 +160,30 @@ export interface GemView {
   /** The OLT's upstream allocation, for a channel that sends. */
   allocId: number | null;
   use: GemUse;
-  /** The session's VLAN, for a channel that carries it. */
+  /** The VLANs of the sessions it carries. */
   vlan: string;
   /** The bridge, for a channel bridged to the SFP port. */
   bridge: string | null;
 }
 
 export function gems(live: Live | undefined): GemView[] {
-  const s = live?.settings;
+  const all = sessions(live);
   return (live?.gem_ports ?? [])
     .slice()
     .sort((a, z) => a.port_id - z.port_id)
-    .map((gem) => ({
-      gem,
-      allocId:
-        gem.tcont == null
-          ? null
-          : (live?.tconts?.find((x) => x.index === gem.tcont)?.alloc_id ?? null),
-      use: s?.wan?.gem === gem.name ? "session" : gem.master ? "bridged" : "ends",
-      vlan: s?.settings.WAN_VLAN ?? "",
-      bridge: gem.master,
-    }));
+    .map((gem) => {
+      const on = all.filter((x) => x.gemDev === gem.name);
+      return {
+        gem,
+        allocId:
+          gem.tcont == null
+            ? null
+            : (live?.tconts?.find((x) => x.index === gem.tcont)?.alloc_id ?? null),
+        use: on.length ? "session" : gem.master ? "bridged" : "ends",
+        vlan: [...new Set(on.map((x) => x.vlan))].join(", "),
+        bridge: gem.master,
+      };
+    });
 }
 
 export function port(live: Live | undefined, name: string): Port | undefined {
