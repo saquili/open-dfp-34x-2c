@@ -15,10 +15,11 @@ import { type ApiError, OfflineError } from "../api/client";
 import { usePppoeChange } from "../api/config";
 import { useLive } from "../api/live";
 import { Field, SaveState } from "../components/Field";
+import { useGemText } from "../components/Gem";
 import { Badge, Card, Facts, Figure, PageTitle } from "../components/ui";
 import { useI18n } from "../i18n";
 import { mac, upTo, vlan, z } from "../lib/schemas";
-import { type SessionView, session } from "../lib/state";
+import { gems, type SessionView, session } from "../lib/state";
 
 function AccountForm({ s }: { s: SessionView }) {
   const { t } = useI18n();
@@ -126,7 +127,8 @@ export function Internet() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const s = session(live);
-  const gems = (live?.gem_ports ?? []).slice().sort((a, z) => a.port_id - z.port_id);
+  const channels = gems(live);
+  const gem = useGemText();
 
   const badge = s.configured ? (
     <Badge tone={s.up ? "good" : "warn"}>{s.up ? t("internet.up") : t("internet.down")}</Badge>
@@ -162,21 +164,21 @@ export function Internet() {
       <Card title={t("internet.bridged")} className="mt-4">
         <p className="text-sm text-base-content/70">{t("internet.bridgedHint")}</p>
         <ul className="grid gap-2 sm:grid-cols-2">
-          {gems.map((g) => (
+          {channels.map((v) => (
             <li
-              key={g.name}
-              className="flex items-center gap-3 rounded-box border border-base-300 px-3 py-2"
+              key={v.gem.name}
+              className="grid gap-0.5 rounded-box border border-base-300 px-3 py-2"
             >
-              <span className="tabular font-medium">GEM {g.port_id}</span>
-              <span className="text-sm text-base-content/70">
-                {g.multicast
-                  ? t("fibre.multicast")
-                  : g.direction === "both"
-                    ? t("fibre.both")
-                    : g.direction === "downstream"
-                      ? t("fibre.downstream")
-                      : t("fibre.upstream")}
+              <span className="flex items-baseline gap-3">
+                <span className="tabular font-medium">GEM {v.gem.port_id}</span>
+                <span className="text-sm text-base-content/70">{gem.direction(v.gem)}</span>
+                {v.allocId != null && (
+                  <span className="tabular ml-auto text-xs text-base-content/55">
+                    Alloc-ID {v.allocId}
+                  </span>
+                )}
               </span>
+              <span className="text-sm">{gem.use(v)}</span>
             </li>
           ))}
         </ul>

@@ -6,7 +6,7 @@
  * of the link to the router. Pages show these; they never read raw keys.
  */
 
-import type { Live, Port } from "../api/types";
+import type { GemPort, Live, Port } from "../api/types";
 import type { Lang } from "../i18n";
 import { dbm } from "./format";
 
@@ -108,6 +108,40 @@ export function session(live: Live | undefined): SessionView {
     vlan: s?.settings.WAN_VLAN ?? "",
     mac: s?.settings.WAN_MAC ?? "",
   };
+}
+
+/**
+ * What the stick does with a channel: carries its own PPPoE session on it,
+ * bridges it at L2 to the SFP port, or ends it on itself.
+ */
+export type GemUse = "session" | "bridged" | "ends";
+
+export interface GemView {
+  gem: GemPort;
+  /** The OLT's upstream allocation, for a channel that sends. */
+  allocId: number | null;
+  use: GemUse;
+  /** The session's VLAN, for a channel that carries it. */
+  vlan: string;
+  /** The bridge, for a channel bridged to the SFP port. */
+  bridge: string | null;
+}
+
+export function gems(live: Live | undefined): GemView[] {
+  const s = live?.settings;
+  return (live?.gem_ports ?? [])
+    .slice()
+    .sort((a, z) => a.port_id - z.port_id)
+    .map((gem) => ({
+      gem,
+      allocId:
+        gem.tcont == null
+          ? null
+          : (live?.tconts?.find((x) => x.index === gem.tcont)?.alloc_id ?? null),
+      use: s?.wan?.gem === gem.name ? "session" : gem.master ? "bridged" : "ends",
+      vlan: s?.settings.WAN_VLAN ?? "",
+      bridge: gem.master,
+    }));
 }
 
 export function port(live: Live | undefined, name: string): Port | undefined {

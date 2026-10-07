@@ -15,11 +15,12 @@ import { useIdentity, useIdentityChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { Identity } from "../api/types";
 import { Field, SaveState } from "../components/Field";
+import { useGemText } from "../components/Gem";
 import { Badge, Card, Facts, Figure, PageTitle } from "../components/ui";
 import { useI18n } from "../i18n";
 import { bytes, dbmText, decimal, integer } from "../lib/format";
 import { upTo, z } from "../lib/schemas";
-import { fibre, LIGHT_TONE, RX_MAX_DBM, RX_MIN_DBM, RX_WEAK_DBM } from "../lib/state";
+import { fibre, gems, LIGHT_TONE, RX_MAX_DBM, RX_MIN_DBM, RX_WEAK_DBM } from "../lib/state";
 
 /**
  * Where the received light sits: the receiver's working range, its weak end
@@ -169,17 +170,9 @@ export function Fibre() {
   const f = fibre(live);
   const onu = live?.onu;
   const optics = live?.optics;
-  const gems = (live?.gem_ports ?? []).slice().sort((a, z) => a.port_id - z.port_id);
+  const channels = gems(live);
   const tconts = (live?.tconts ?? []).filter((x) => x.alloc_id != null);
-
-  const direction = (d: string, multicast: boolean) =>
-    multicast
-      ? t("fibre.multicast")
-      : d === "both"
-        ? t("fibre.both")
-        : d === "downstream"
-          ? t("fibre.downstream")
-          : t("fibre.upstream");
+  const gem = useGemText();
 
   return (
     <>
@@ -265,17 +258,22 @@ export function Fibre() {
                   <tr>
                     <th>{t("fibre.channel")}</th>
                     <th>{t("fibre.direction")}</th>
+                    <th>{t("fibre.allocId")}</th>
+                    <th>{t("fibre.use")}</th>
                     <th className="text-right">{t("fibre.received")}</th>
                     <th className="text-right">{t("fibre.sent")}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {gems.map((g) => {
+                  {channels.map((v) => {
+                    const g = v.gem;
                     const c = live?.gem_counters?.[g.name];
                     return (
                       <tr key={g.name}>
                         <td className="tabular">GEM {g.port_id}</td>
-                        <td>{direction(g.direction, g.multicast)}</td>
+                        <td>{gem.direction(g)}</td>
+                        <td className="tabular">{v.allocId ?? "–"}</td>
+                        <td>{gem.use(v)}</td>
                         <td className="tabular text-right">{bytes(c?.pon_rx_octets, lang)}</td>
                         <td className="tabular text-right">{bytes(c?.pon_tx_octets, lang)}</td>
                       </tr>

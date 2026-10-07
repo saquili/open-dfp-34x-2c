@@ -117,7 +117,10 @@ export function AppShell({ children }: { children?: ReactNode }) {
             <Menu className="size-5" />
           </label>
           <div className="min-w-0 flex-1">
-            <div className="truncate font-semibold">{model ?? t("app.product")}</div>
+            <div className="truncate">
+              <span className="font-semibold">{t("app.product")}</span>
+              {model && <span className="text-sm text-base-content/60"> · {model}</span>}
+            </div>
           </div>
           <Connection />
           <div className="dropdown dropdown-end">

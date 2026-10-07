@@ -27,12 +27,14 @@ import { useI18n } from "../i18n";
 import { bitrate, dbmText, integer } from "../lib/format";
 import {
   fibre as fibreView,
+  gems as gemViews,
   LIGHT_TONE,
   linkSpeed,
   routerLink,
   session as sessionView,
   type Tone,
 } from "../lib/state";
+import { useGemText } from "./Gem";
 
 type Box = { x: number; y: number; w: number; h: number };
 type Pt = { x: number; y: number };
@@ -218,8 +220,9 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
   const link = routerLink(live);
   const go = (to: string) => () => navigate({ to });
 
-  const gems = (live?.gem_ports ?? []).slice().sort((a, z) => a.port_id - z.port_id);
-  const shown = gems.slice(0, 4);
+  const channels = gemViews(live);
+  const shown = channels.slice(0, 4);
+  const gem = useGemText();
   const down = (v?: number) => `↓ ${bitrate(v, lang)}`;
   const up = (v?: number) => `↑ ${bitrate(v, lang)}`;
 
@@ -372,7 +375,8 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           tip={t("diagram.olt")}
         />
 
-        {shown.map((g, i) => {
+        {shown.map((v, i) => {
+          const g = v.gem;
           const y = L.gems.y + i * (L.gems.h + 6);
           const kind = g.multicast
             ? t("diagram.multicast")
@@ -391,7 +395,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
               onKeyDown={(e) => e.key === "Enter" && navigate({ to: "/fibre" })}
               className="cursor-pointer outline-none"
             >
-              <title>{`${t("diagram.gem", { id: g.port_id })} · ${kind}`}</title>
+              <title>{`${t("diagram.gem", { id: g.port_id })} · ${gem.direction(g)} · ${gem.use(v)}`}</title>
               <rect
                 x={L.gems.x}
                 y={y}
@@ -411,13 +415,13 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
             </g>
           );
         })}
-        {gems.length > shown.length && (
+        {channels.length > shown.length && (
           <text
             x={L.gems.x + 12}
             y={L.gems.y + shown.length * (L.gems.h + 6) + 14}
             className="fill-current text-[12px] opacity-70"
           >
-            +{gems.length - shown.length}
+            +{channels.length - shown.length}
           </text>
         )}
       </svg>
