@@ -37,10 +37,17 @@ What the build makes
        attributes) of BusyBox, dropbear, the programs of the ONU and the
        board's files.
      - 1694616 bytes; the partition ``r0`` takes 2031616.
+   * - ``update.bin``
+     - The two images in one update file, which the stick's ``onu-update``
+       writes into the bank it did not start from (``updating.rst``): a header
+       with the board, the version and the build's time, the two images, and
+       their SHA-256.
+     - The two images and 288 bytes; 3608572 bytes for the images of
+       ``d54057dbe6da``.
    * - ``SHA256SUMS``
-     - The SHA-256 digests of the two images, in the form ``sha256sum -c``
-       reads.
-     - 154 bytes.
+     - The SHA-256 digests of the two images and the update file, in the form
+       ``sha256sum -c`` reads.
+     - 231 bytes.
    * - ``ram.uImage``
      - Made by ``make ram-image``, not by ``make``: the same kernel with the
        root filesystem built in as its initial RAM disk, for a start from RAM

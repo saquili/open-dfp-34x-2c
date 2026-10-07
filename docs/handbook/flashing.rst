@@ -7,16 +7,19 @@ Flashing and trial boots
 
 This page takes you from a stick on the desk to a kernel of your own running on
 it: first started from RAM, then written to bank 0 and started once as a trial,
-with the shipped firmware in bank 1 as the way back. Everything goes through the
+with whatever bank 1 holds as the way back: the shipped firmware on a stick as
+shipped. Once this system runs, it updates itself into the other bank
+(``updating.rst``); this page remains for the first installation and for a
+recovery. Everything goes through the
 bench tool in ``tools/bench``, started from the top-level ``Makefile``. The
 tool's README, ``tools/bench/README.rst``, is the reference for its commands,
 options, settings and refusals. This page does not repeat them; it says where
 it relies on them.
 
 Read "Rules that keep the board safe" at the end before the first write. In
-short: only bank 0 is ever written. The boot loader, the configuration store
-and bank 1 never are, and the loader's environment is changed only through the
-loader's own ``saveenv``.
+short: the bench writes bank 0 only. The boot loader, the configuration store
+and bank 1 it never writes, and it changes the loader's environment only through
+the loader's own ``saveenv``.
 
 What you need
 =============
@@ -637,17 +640,20 @@ differ. You can read them yourself. With the console at the loader prompt::
     python3 -m bench console type 'crc32 94440000 14c000'
     python3 -m bench console type 'crc32 9458c000 274000'
 
-The first is ``k1``, the second ``r1``. From Linux, ``k1`` and ``r1`` are
-``/dev/mtd6ro`` and ``/dev/mtd7ro``. Give the read an explicit block count,
-because without it the read does not see the end of the file and hangs::
+The first is the loader's ``k1``, the second its ``r1``, in the shipped split;
+together they cover the bank. From Linux, ``k1`` and ``r1`` are
+``/dev/mtd6ro`` and ``/dev/mtd7ro``, in this system's split. Give the read an
+explicit block count, because without it the read does not see the end of the
+file and hangs::
 
-    dd if=/dev/mtd6ro bs=4096 count=332 | md5sum
-    dd if=/dev/mtd7ro bs=4096 count=628 | md5sum
+    dd if=/dev/mtd6ro bs=4096 count=464 | md5sum
+    dd if=/dev/mtd7ro bs=4096 count=496 | md5sum
 
 The first is ``k1`` and the second ``r1``. Take both values once, before the
 first write, and keep them: the tool proves that a run left bank 1 as it found
-it, and your own record proves that bank 1 is still what the board shipped
-with.
+it, and your own record proves that bank 1 is still what it was. On a stick as
+shipped that is the shipped firmware, which the first update of this system
+overwrites (``updating.rst``).
 
 How long each step takes
 ========================
@@ -780,9 +786,10 @@ A power cycle is also the way out of the failures that nothing else recovers.
 Rules that keep the board safe
 ==============================
 
-* **Bank 1 is never written.** It holds the shipped firmware, the way back to
-  a board that works when bank 0 does not boot. The tool checks, before and
-  after every write, that bank 1 reads back unchanged.
+* **The bench never writes bank 1.** It holds the way back to a board that
+  works when bank 0 does not boot: the shipped firmware, or this system once it
+  has updated itself. The tool checks, before and after every write, that bank 1
+  reads back unchanged.
 * **The boot loader is never written.** The CPU's reset vector runs it. If it
   were damaged, nothing could start, and nothing at the loader's prompt could
   repair it; it is assumed that only a programmer on the flash chip could. This

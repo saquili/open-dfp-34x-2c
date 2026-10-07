@@ -28,11 +28,11 @@ The flash
 
 The flash is 8 MiB (``0x800000`` bytes) of SPI NOR. The loader divides it into
 eight partitions that cover the chip exactly, and the kernel's device tree
-repeats the same offsets and sizes, except that this system splits bank 0 its
-own way: the shipped firmware gives its kernel 1328 KiB and its root filesystem
-2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and 1984 KiB.
-The loader knows nothing of this split, and needs nothing of it (see "Bank 0's
-split and the loader").
+repeats the same offsets and sizes, except that this system splits both banks
+its own way: the shipped firmware gives its kernel 1328 KiB and its root
+filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
+1984 KiB. The loader knows nothing of this split, and needs nothing of it (see
+"The banks' split and the loader").
 
 .. list-table::
    :header-rows: 1
@@ -52,12 +52,13 @@ split and the loader").
      - ``0x040000``
      - 8 KiB (``0x002000``)
      - The boot loader's environment.
-     - The boot loader, by ``saveenv``.
+     - The boot loader, by ``saveenv``; ``onu-update`` the same way
+       (``updating.rst``).
    * - ``env2``
      - ``0x042000``
      - 8 KiB (``0x002000``)
      - The environment's redundant copy.
-     - The boot loader, by ``saveenv``.
+     - The boot loader, by ``saveenv``; ``onu-update`` the same way.
    * - ``config``
      - ``0x044000``
      - 240 KiB (``0x03c000``)
@@ -65,41 +66,45 @@ split and the loader").
        system. Until this system writes its own store there, it holds the
        shipped firmware's, a big-endian JFFS2 image that includes the
        device's registration identity, which this system does not mount.
-     - Linux, the one partition it may write; nothing writes it yet.
+     - Linux: ``onu-store``.
    * - ``k0``
      - ``0x080000``
      - 1856 KiB (``0x1d0000``, 1900544 bytes)
      - Bank 0 kernel: a legacy U-Boot image.
-     - The bench: ``make flash IMAGE=<file> TARGET=kernel``.
+     - The bench: ``make flash IMAGE=<file> TARGET=kernel``; ``onu-update``
+       while bank 1 runs.
    * - ``r0``
      - ``0x250000``
      - 1984 KiB (``0x1f0000``, 2031616 bytes)
      - Bank 0 root filesystem: a SquashFS image.
-     - The bench: ``make flash IMAGE=<file> TARGET=rootfs``.
+     - The bench: ``make flash IMAGE=<file> TARGET=rootfs``; ``onu-update``
+       while bank 1 runs.
    * - ``k1``
      - ``0x440000``
-     - 1328 KiB (``0x14c000``)
-     - Bank 1 kernel: the shipped firmware, the fall-back.
-     - Nobody.
+     - 1856 KiB (``0x1d0000``, 1900544 bytes)
+     - Bank 1 kernel. On a stick as shipped, the shipped firmware's, in its own
+       split, until the first update.
+     - ``onu-update`` while bank 0 runs.
    * - ``r1``
-     - ``0x58c000``
-     - 2512 KiB (``0x274000``)
+     - ``0x610000``
+     - 1984 KiB (``0x1f0000``, 2031616 bytes)
      - Bank 1 root filesystem.
-     - Nobody.
+     - ``onu-update`` while bank 0 runs.
 
 "Nobody" means that no tool and no procedure of this handbook writes the
 partition, and that Linux cannot: the kernel's device tree marks it read-only,
 and the flash driver refuses to open it for writing. The column describes the
 policy of the bench and of the device tree, not a protection of the chip. The
-page ``flashing.rst`` gives the reasons.
+page ``flashing.rst`` gives the reasons. ``onu-update`` never writes the bank
+that runs (``updating.rst``).
 
 The partitions appear in Linux as ``mtd0`` to ``mtd7`` in the order of the
 table, and as the block devices 31:0 to 31:7. The order matters: the loader's
 kernel arguments name the root filesystem by number, ``root=31:5`` for ``r0``
 and ``root=31:7`` for ``r1``, so the order of the nodes in the kernel's device
-tree is part of the contract. The device tree marks every partition but
-``config`` read-only: from Linux, the loader, its environment and both banks
-cannot be written, and the configuration store can.
+tree is part of the contract. The device tree marks ``boot`` read-only: from
+Linux the loader cannot be written, and its environment, the configuration
+store and both banks can.
 
 The loader's window
 -------------------
@@ -107,7 +112,7 @@ The loader's window
 The loader maps the whole chip for reading at ``0x94000000`` (KSEG0; the
 uncached alias is ``0xb4000000`` and the physical address ``0x14000000``). A
 bank is booted from this window in place: ``k0`` is at ``0x94080000``, ``r0``
-at ``0x94250000``, ``k1`` at ``0x94440000`` and ``r1`` at ``0x9458c000``.
+at ``0x94250000``, ``k1`` at ``0x94440000`` and ``r1`` at ``0x94610000``.
 ``crc32`` and ``bootm`` read through it. Nothing is ever written through it;
 whether a store there does anything is not known.
 
@@ -150,16 +155,18 @@ loader counts the banks from 1, and the rest of this page counts them from 0.
        this system is ``1f0000`` long at ``250000``.
    * - ``fl_kernel2``, ``fl_kernel2_sz``
      - ``440000``, ``14c000``
-     - Bank 1 kernel, ``k1``.
+     - Bank 1 kernel as the shipped firmware splits the bank; ``k1`` of this
+       system is ``1d0000`` long.
    * - ``fl_rootfs2``, ``fl_rootfs2_sz``
      - ``58c000``, ``274000``
-     - Bank 1 root filesystem, ``r1``.
+     - Bank 1 root filesystem as the shipped firmware splits the bank; ``r1`` of
+       this system is ``1f0000`` long at ``610000``.
 
 ``img0_kernel`` and ``img1_kernel`` hold the window addresses of the two
 kernels, ``94080000`` and ``94440000``.
 
-Bank 0's split and the loader
------------------------------
+The banks' split and the loader
+-------------------------------
 
 The loader rebuilds its layout variables, ``mtdparts0``, ``mtdparts1`` and
 ``bootargs`` from the first-stage loader's flash table at every start: a
@@ -170,9 +177,11 @@ carried the shipped table. So the loader keeps naming the shipped split, and
 this system's split is the kernel's device tree and the bench's table alone.
 
 Nothing of the split needs the loader: ``bootm`` starts the kernel at the start
-of ``k0``, the same in both splits, and takes the image's length from its
-header; the kernel ignores the loader's partition table (see "The kernel
-command line"), and ``root=31:5`` names ``r0`` by its number. The bench
+of ``k0`` or ``k1``, the same in both splits, and takes the image's length from
+its header; the kernel ignores the loader's partition table (see "The kernel
+command line"), and ``root=31:5`` or ``root=31:7`` names ``r0`` or ``r1`` by its
+number. Measured for bank 1 as well: a trial start booted the kernel at
+``94440000`` and mounted the root filesystem from 31:7 at ``0x610000``. The bench
 compares the loader's names with the shipped split, as a check that the board
 is the one it expects, and writes by its own table. The shipped firmware's own
 macros that write a bank (``upk``, ``upr``, ``yk``, ``yr``) do take the loader's
@@ -187,8 +196,10 @@ The environment is kept in two copies of 8 KiB, ``env`` and ``env2``. Each copy
 has a CRC32 that is valid over its bytes 5 to 8191, and a flag byte at offset
 4. ``saveenv`` writes the copies alternately: it erases and writes one copy and
 then writes the flag byte of the other. ``Valid environment: 1`` follows a
-write of ``env``, ``Valid environment: 2`` a write of ``env2``. Nothing but
-``saveenv`` changes them.
+write of ``env``, ``Valid environment: 2`` a write of ``env2``. The copy written
+last carries flag 1, the other 0; of two copies whose CRC checks out the loader
+takes the one flagged 1, and of two equal flags ``env2``. From Linux,
+``onu-update`` saves the same way (``updating.rst``).
 
 The image
 =========
@@ -319,9 +330,8 @@ are on the page ``flashing.rst``.
 How a bank is chosen
 ====================
 
-Which bank a plain reset boots is set in the loader's saved environment. The
-kernel cannot change the choice, because the environment's partitions are
-read-only from Linux.
+Which bank a plain reset boots is set in the loader's saved environment.
+``onu-update`` changes it from Linux, as the loader saves it (``updating.rst``).
 
 .. list-table::
    :header-rows: 1
@@ -330,8 +340,7 @@ read-only from Linux.
    * - Variable
      - Meaning
    * - ``sw_commit``
-     - The committed bank: 0 boots bank 0 (this system), 1 boots bank 1 (the
-       shipped firmware). It is the bank a plain reset boots, and the
+     - The committed bank, 0 or 1. It is the bank a plain reset boots, and the
        fall-back after a trial.
    * - ``sw_tryactive``
      - The one-shot trial: 2 means none is pending, 0 a trial of bank 0, 1 a
@@ -347,8 +356,7 @@ read-only from Linux.
    * - ``boot_by_commit``, ``boot_by_tryactive``
      - The macros that ``bootcmd`` chooses between.
    * - ``b0``, ``b1``
-     - Boot bank 0 or bank 1 for this boot only. ``run b1`` is the way into the
-       shipped firmware without changing anything.
+     - Boot bank 0 or bank 1 for this boot only, changing nothing.
    * - ``set_act0``, ``set_act1``
      - Record the active bank.
    * - ``en_wdt``
@@ -380,15 +388,14 @@ After a reset the loader works as follows:
 The end of the countdown is the form measured. That typing ``boot`` at the
 prompt does the same is expected and not yet confirmed on the board.
 
-The fall-back of a trial is the committed bank. With ``sw_commit`` at 1 a
-failed trial costs one reset, and the shipped firmware comes up. With
-``sw_commit`` at 0 the committed bank is bank 0 itself, the bank that has just
-failed, so a failed trial is followed by the same kernel, and the way back is
-the loader prompt and ``run b1``. A trial protects the board only while
-``sw_commit`` names the other bank.
-
-A trial of bank 1 (``sw_tryactive`` at 1) would boot the shipped firmware under
-the watchdog. The bench never arms it.
+The fall-back of a trial is the committed bank. A trial protects the board only
+while ``sw_commit`` names the other bank, as it does for an update
+(``updating.rst``): a failed trial then costs one reset. With ``sw_commit``
+naming the tried bank itself, a failed trial is followed by the same kernel,
+and the way back is the loader prompt and ``run b0`` or ``run b1``. Measured
+with ``sw_commit`` naming the other bank: a tried system that panicked, and a
+tried kernel that the loader could not unpack, which the watchdog armed by
+``en_wdt`` reset, were both followed by the committed bank.
 
 The kernel command line
 =======================
@@ -401,8 +408,8 @@ For bank 0 the loader hands the kernel three arguments:
   command-line partition parser is built;
 * ``root=31:5``, the last words of the variable ``mtdparts0``.
 
-Bank 1's arguments are the same with ``root=31:7`` (the variable ``mtdparts1``),
-and bank 1 is read-only. The macros assemble the arguments into ``bootargs``;
+Bank 1's arguments are the same with ``root=31:7`` (the variable
+``mtdparts1``). The macros assemble the arguments into ``bootargs``;
 ``rst2dfl_flg`` takes part in the assembly and is not defined, so it expands to
 nothing. The loader passes no device tree: the kernel carries its own.
 
