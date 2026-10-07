@@ -118,8 +118,11 @@ check 'logged "^ip link set gem256 up"'
 check 'logged "^udhcpc -i gem256 "'
 check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
 check '! logged "^nft"'
+# Every other GEM port hands its frames on, the downstream-only one and one
+# that also sends, as an IEEE 802.1p mapper's GEM port of other priorities.
 check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem256"'
-check '! logged "^tc filter add dev gem1024"'
+check 'logged "^tc filter add dev gem1024 ingress matchall action mirred ingress redirect dev gem256"'
+check '! logged "^tc filter add dev gem256 "'
 check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
 teardown
 
@@ -141,6 +144,10 @@ done
 check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^pppoed up" "$LOG" | head -1 | cut -d: -f1)" ]'
 check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe1 -D"'
 check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
+# The WAN in a VLAN takes the frames of that VLAN alone from the other ports.
+check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 410 action mirred ingress redirect dev gem1024"'
+check 'logged "^tc filter add dev gem256 ingress protocol 802.1Q flower vlan_id 410 action mirred ingress redirect dev gem1024"'
+check '! logged "matchall"'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
 "$MODE_SCRIPT" stop 2>/dev/null
@@ -399,8 +406,11 @@ check '! logged "^killall -USR1"'
 check '[ "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" -lt "$(grep -n "killall -USR2 omcid" "$LOG" | cut -d: -f1)" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
 "$MODE_SCRIPT" tick 2>/dev/null
-# The downstream ports hand on the frames of the session's VLAN alone.
+# The other ports hand on the frames of the session's VLAN alone, and the
+# session's own port none.
 check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
+check 'logged "^tc filter add dev gem1024 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
+check '! logged "^tc qdisc add dev gem256 "'
 check '! logged "matchall"'
 # A second session in another VLAN: omcid builds its bridge again without both.
 : >"$LOG"

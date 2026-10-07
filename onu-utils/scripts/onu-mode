@@ -513,40 +513,56 @@ wan_up() {
 		;;
 	esac
 	echo "$gem $wan $out" >"$RUN/onu-wan"
-	feeds_sync "$gem"
+	feeds_sync "$gem" ${WAN_VLAN:+"$WAN_VLAN:$gem"}
 	log "WAN on $wan ($WAN_PROTO), GEM port ${gem#gem}"
 }
 
-# The GEM ports that only carry downstream, the multicast one among them,
-# other than the WAN's $1. In bridge mode omcid bridges them with the host
-# link; in router mode what they carry is the WAN's: the OLT sends the network
-# side's broadcasts, an ARP request for the WAN's address among them, by the
-# multicast GEM port, and an answer by that port, which cannot send, is lost.
-# So their frames are handed to the WAN's GEM interface as they come in. Beside
-# the OLT's bridge, which carries those ports' other VLANs, only the frames of
-# the sessions' VLANs are: feeds_sync TO [VID:GEM...] hands every frame to the
-# GEM interface TO, or, with pairs, the frames of each VID to its GEM
-# interface.
+# The GEM ports other than the WAN's $1. In bridge mode omcid bridges them with
+# the host link; where the stick routes, what they carry in the WAN's VLAN is
+# the WAN's. The OLT sends the network side's broadcasts, an ARP request for
+# the WAN's address among them, by the multicast GEM port, and an answer by
+# that port, which cannot send, is lost. And where the GEM ports of an IEEE
+# 802.1p mapper divide a VLAN's priorities, the OLT sends the WAN's frames down
+# by more than one of them: an operator's sent the PPPoE discovery and control
+# frames by the GEM port of priorities 6 and 7 while the session sent by that
+# of priority 0, and the session never came up (measured). So the frames of
+# every other GEM port are handed to the WAN's GEM interface as they come in:
+# feeds_sync TO [VID:GEM...] hands every frame to the GEM interface TO, or,
+# with pairs, only the frames of each VID to its GEM interface, and leaves the
+# rest to the OLT's bridge, or to nobody: the same operator sent a television
+# channel by the multicast GEM port, 7 Mb/s that no one had asked for
+# (measured), which the WAN has no use for. The frames the switch routes in
+# hardware never reach these rules.
 feeds_sync() {
 	to=$1
 	shift
-	ports=$(pon gem 2>/dev/null | awk -v wan="$to" '$1 != wan && $4 == "down" { print $1 }' |
-		sort)
+	ports=$(pon gem 2>/dev/null | awk -v wan="$to" '$1 != wan { print $1 }' | sort)
 	key=$(echo "$to" $ports "$@")
 	[ "$key" = "$(cat "$RUN/onu-feeds.key" 2>/dev/null)" ] && return 0
 	feeds_down
 	for port in $ports; do
-		tc qdisc add dev "$port" clsact 2>/dev/null
 		if [ $# -eq 0 ]; then
-			tc filter add dev "$port" ingress matchall action mirred ingress \
-				redirect dev "$to"
+			rules=":$to"
 		else
+			rules=
 			for pair; do
-				tc filter add dev "$port" ingress protocol 802.1Q flower \
-					vlan_id "${pair%%:*}" action mirred ingress redirect \
-					dev "${pair#*:}"
+				# A session's own GEM port keeps its frames.
+				[ "${pair#*:}" = "$port" ] || rules="$rules $pair"
 			done
-		fi && echo "$port" >>"$RUN/onu-feeds"
+			[ -n "$rules" ] || continue
+		fi
+		tc qdisc add dev "$port" clsact 2>/dev/null
+		echo "$port" >>"$RUN/onu-feeds"
+		for rule in $rules; do
+			if [ -z "${rule%%:*}" ]; then
+				tc filter add dev "$port" ingress matchall action mirred \
+					ingress redirect dev "${rule#*:}"
+			else
+				tc filter add dev "$port" ingress protocol 802.1Q flower \
+					vlan_id "${rule%%:*}" action mirred ingress redirect \
+					dev "${rule#*:}"
+			fi
+		done
 	done
 	echo "$key" >"$RUN/onu-feeds.key"
 }
@@ -754,7 +770,7 @@ tick() {
 		log "GEM port of the WAN gone"
 		wan_down
 	elif [ -n "$cur" ]; then
-		feeds_sync "$cur"
+		feeds_sync "$cur" ${WAN_VLAN:+"$WAN_VLAN:$cur"}
 	fi
 	if [ "$MODE" = router ] && [ -s "$RUN/onu-dns" ] &&
 		[ "$(cat "$RUN/onu-dns")" != "$(cat "$RUN/udhcpd.dns" 2>/dev/null)" ]; then
