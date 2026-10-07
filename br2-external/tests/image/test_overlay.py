@@ -30,7 +30,7 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # Programs of the dropbear package and of this tree's packages; every other
 # command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-mode", "tc"}
+PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-mode", "onu-store", "tc"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 
@@ -110,7 +110,7 @@ class BootScript(unittest.TestCase):
 
     def test_a_bench_can_name_the_versions_the_olt_reads(self):
         text = read(RCS)
-        start, end = text.index("ponid >/run/onu-identity"), text.index("umask 022")
+        start, end = text.index("onu-store load"), text.index("umask 022")
         for key, name in (("sw_version", "OMCI_SW_VERSION"),
                           ("pack_version", "OMCI_PACK_VERSION")):
             with self.subTest(key=key):
@@ -177,8 +177,9 @@ class QuietTowardsThePon(unittest.TestCase):
             with self.subTest(conf=conf):
                 self.assertIn(line, text)
                 # "default" covers the bridge and the GEM interfaces that
-                # omcid makes, so it must be in force before omcid starts.
-                for later in ("ip link set pon up", "onu-mode start"):
+                # omcid makes, so it must be in force before omcid starts;
+                # "onu-mode identity" is what brings the PON up.
+                for later in ("onu-mode identity", "onu-mode start"):
                     self.assertLess(text.index(line), text.index(later), later)
 
     def test_the_host_side_keeps_ipv6(self):
