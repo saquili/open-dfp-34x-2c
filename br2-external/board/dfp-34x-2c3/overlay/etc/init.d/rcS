@@ -144,6 +144,12 @@ if [ -x /usr/sbin/pond ]; then
 	pond -l "http://$data:8080" -l "http://$mgmt:8080" >/run/pond.log 2>&1 &
 fi
 
+# After a start from a bank that the boot loader was told to try once,
+# onu-trial makes it the bank the loader starts when the system is up, and
+# restarts into the committed bank when it is not; any other start it leaves
+# alone.
+onu-trial "$data" >/run/onu-trial.log 2>&1 &
+
 echo
 echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
 echo "open-dfp-34x-2c: ssh on $DATA_ADDRESS (sfp) and $MGMT_ADDRESS (VLAN $MGMT_VLAN)"
