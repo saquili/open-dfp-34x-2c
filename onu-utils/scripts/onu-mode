@@ -26,10 +26,14 @@
 #
 # There is no mode to choose. Without a PPPoE account, omcid connects the host
 # link to the PON as the OLT provisions it (bridge). With one or more, the
-# stick holds the sessions itself (passthrough): omcid leaves the OLT's bridge
-# out (omcid -r), and each session runs on a GEM port that the OLT
-# provisioned, or on a VLAN on it, with the settings SESSIONn_GEM,
-# SESSIONn_VLAN, SESSIONn_MAC and SESSIONn_FAMILY (ipv4, ipv6 or both).
+# stick holds the sessions itself (passthrough), and each session runs on a
+# GEM port that the OLT provisioned, or on a VLAN on it, with the settings
+# SESSIONn_GEM, SESSIONn_VLAN, SESSIONn_MAC and SESSIONn_FAMILY (ipv4, ipv6
+# or both). Beside sessions in VLANs omcid still bridges the rest of what the
+# OLT provisions, such as television and telephone, and leaves out the
+# sessions' VLANs, which it reads from /run/onu-held-vlans; beside a session
+# untagged on its GEM port, which holds the whole port, omcid leaves the OLT's
+# bridge out (omcid -r).
 # Sessions in one VLAN share its interface, wanVID, and the MAC of the first.
 # The first session that carries IPv4 hands its address on, and its name
 # servers; the others keep theirs on the stick. The first that carries IPv6
@@ -221,6 +225,61 @@ omcid_run() {
 	else
 		omcid -r >>"$RUN/omcid.log" 2>&1 &
 	fi
+}
+
+# The VLANs the sessions hold, by their VID on the PON side, one a line; none,
+# with status 1, when a session runs untagged on its GEM port.
+held_vlans() {
+	out=
+	for n in $(sessions); do
+		v=$(setting "$n" VLAN)
+		[ -n "$v" ] || return 1
+		out="$out $v"
+	done
+	echo $out | tr ' ' '\n' | sort -un
+}
+
+# What omcid is to do in the mode $MODE: "bridge", the OLT's bridge whole;
+# "held VID...", the OLT's bridge without the VLANs the sessions hold;
+# "router", without the OLT's bridge, in the bench's router mode and beside a
+# session that holds a whole GEM port.
+omcid_want() {
+	case $MODE in
+	bridge) echo bridge ;;
+	router) echo router ;;
+	*)
+		if held=$(held_vlans); then
+			echo held $held
+		else
+			echo router
+		fi
+		;;
+	esac
+}
+
+# Bring omcid to $1, as omcid_want() gives it, from what it was told last.
+# omcid reads the held VLANs from /run/onu-held-vlans; for them its bridge is
+# taken down first, so that it builds it again without what it leaves out
+# now. Back to the whole bridge it adds what it left out.
+omcid_sync() {
+	[ "$1" = "$(cat "$RUN/onu-omcid" 2>/dev/null)" ] && return 0
+	case $1 in
+	held\ *)
+		echo "${1#held }" | tr ' ' '\n' >"$RUN/onu-held-vlans"
+		bridge_down
+		omcid_run bridge
+		;;
+	bridge)
+		rm -f "$RUN/onu-held-vlans"
+		omcid_run bridge
+		;;
+	*)
+		rm -f "$RUN/onu-held-vlans"
+		omcid_run router
+		bridge_down
+		;;
+	esac
+	echo "$1" >"$RUN/onu-omcid"
 }
 
 # What omcid built in bridge mode: the bridge and its VLAN rules, the filters
@@ -446,25 +505,40 @@ wan_up() {
 # link; in router mode what they carry is the WAN's: the OLT sends the network
 # side's broadcasts, an ARP request for the WAN's address among them, by the
 # multicast GEM port, and an answer by that port, which cannot send, is lost.
-# So their frames are handed to the WAN's GEM interface as they come in.
+# So their frames are handed to the WAN's GEM interface as they come in. Beside
+# the OLT's bridge, which carries those ports' other VLANs, only the frames of
+# the sessions' VLANs are: feeds_sync TO [VID:GEM...] hands every frame to the
+# GEM interface TO, or, with pairs, the frames of each VID to its GEM
+# interface.
 feeds_sync() {
-	want=$(pon gem 2>/dev/null | awk -v wan="$1" '$1 != wan && $4 == "down" { print $1 }' |
+	to=$1
+	shift
+	ports=$(pon gem 2>/dev/null | awk -v wan="$to" '$1 != wan && $4 == "down" { print $1 }' |
 		sort)
-	have=$(sort "$RUN/onu-feeds" 2>/dev/null)
-	[ "$want" = "$have" ] && return 0
+	key=$(echo "$to" $ports "$@")
+	[ "$key" = "$(cat "$RUN/onu-feeds.key" 2>/dev/null)" ] && return 0
 	feeds_down
-	for port in $want; do
+	for port in $ports; do
 		tc qdisc add dev "$port" clsact 2>/dev/null
-		tc filter add dev "$port" ingress matchall action mirred ingress redirect \
-			dev "$1" && echo "$port" >>"$RUN/onu-feeds"
+		if [ $# -eq 0 ]; then
+			tc filter add dev "$port" ingress matchall action mirred ingress \
+				redirect dev "$to"
+		else
+			for pair; do
+				tc filter add dev "$port" ingress protocol 802.1Q flower \
+					vlan_id "${pair%%:*}" action mirred ingress redirect \
+					dev "${pair#*:}"
+			done
+		fi && echo "$port" >>"$RUN/onu-feeds"
 	done
+	echo "$key" >"$RUN/onu-feeds.key"
 }
 
 feeds_down() {
 	for port in $(cat "$RUN/onu-feeds" 2>/dev/null); do
 		tc qdisc del dev "$port" clsact 2>/dev/null
 	done
-	rm -f "$RUN/onu-feeds"
+	rm -f "$RUN/onu-feeds" "$RUN/onu-feeds.key"
 	return 0
 }
 
@@ -622,10 +696,18 @@ sessions_tick() {
 		n=$((n + 1))
 	done
 	first=$(cat "$SESSIONS"/*/gem 2>/dev/null | head -n 1)
-	if [ -n "$first" ]; then
-		feeds_sync "$first"
-	else
+	if [ -z "$first" ]; then
 		feeds_down
+	elif held_vlans >/dev/null; then
+		pairs=
+		for d in "$SESSIONS"/*; do
+			[ -r "$d/gem" ] || continue
+			read -r g <"$d/gem"
+			pairs="$pairs $(setting "${d##*/}" VLAN):$g"
+		done
+		feeds_sync "$first" $(echo $pairs | tr ' ' '\n' | sort -u)
+	else
+		feeds_sync "$first"
 	fi
 }
 
@@ -741,10 +823,13 @@ identity() {
 reidentify() {
 	ip link set pon down
 	identity || return 1
-	mode=
-	[ -r "$RUN/onu-mode" ] && read -r mode <"$RUN/onu-mode"
+	want=
+	[ -r "$RUN/onu-omcid" ] && read -r want _ <"$RUN/onu-omcid"
 	killall omcid 2>/dev/null
-	omcid_run "${mode:-bridge}"
+	case $want in
+	router) omcid_run router ;;
+	*) omcid_run bridge ;;
+	esac
 	log "registering again"
 }
 
@@ -772,16 +857,7 @@ apply() {
 			MODE=bridge
 		fi
 	fi
-	# omcid routes in both modes where the stick routes.
-	if [ "$old" != "$MODE" ]; then
-		case $old:$MODE in
-		router:passthrough | passthrough:router) ;;
-		*)
-			omcid_run "$MODE"
-			[ "$MODE" != bridge ] && bridge_down
-			;;
-		esac
-	fi
+	omcid_sync "$(omcid_want)"
 	echo "$MODE" >"$RUN/onu-mode"
 	case $MODE in
 	router) router_up ;;
@@ -815,7 +891,7 @@ stop)
 		router_down
 	fi
 	killall omcid 2>/dev/null
-	rm -f "$RUN/onu-mode"
+	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans"
 	;;
 identity)
 	identity

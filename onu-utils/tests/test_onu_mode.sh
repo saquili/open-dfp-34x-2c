@@ -216,7 +216,10 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=36 \
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
-check 'logged "^omcid -r"'
+# omcid bridges the rest of what the OLT provisions, without the session's VLAN.
+check 'logged "^omcid $"'
+check '! logged "omcid -r"'
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 check 'logged "^ip link del omcibr0"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
 check 'logged "^ip link add link sfp name lan type vlan id 36"'
@@ -312,6 +315,11 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^pppoed up -i gem1024 -f $ONU_ROOT/run/onu-pppoe1 -D -P"'
 check '! logged "type vlan id"'
+# The session holds the whole GEM port: omcid leaves the OLT's bridge out, and
+# every frame of the downstream ports goes to the session's GEM interface.
+check 'logged "^omcid -r"'
+check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
+check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem1024"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check 'logged "^ip link set gem1024 mtu 1500"'
 check 'logged "^ip link set pon mtu 1500"'
@@ -355,6 +363,35 @@ check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 teardown
 
+echo "an account in a VLAN beside a running omcid: its bridge stays, without that VLAN"
+setup
+conf MODE=bridge
+"$MODE_SCRIPT" start 2>/dev/null
+: >"$LOG"
+printf 'SESSION1_VLAN=1410\n' >"$ONU_ROOT/run/onu.conf"
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" apply 2>/dev/null
+check 'logged "^killall -USR2 omcid"'
+check '! logged "^killall -USR1"'
+check '[ "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" -lt "$(grep -n "killall -USR2 omcid" "$LOG" | cut -d: -f1)" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
+"$MODE_SCRIPT" tick 2>/dev/null
+# The downstream ports hand on the frames of the session's VLAN alone.
+check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
+check '! logged "matchall"'
+# A second session in another VLAN: omcid builds its bridge again without both.
+: >"$LOG"
+printf 'SESSION1_VLAN=1410\nSESSION2_VLAN=410\n' >"$ONU_ROOT/run/onu.conf"
+echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" apply 2>/dev/null
+check 'logged "^killall -USR2 omcid"'
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans" | tr "\n" " ")" = "410 1410 " ]'
+# The same sessions again: omcid is left as it is.
+: >"$LOG"
+"$MODE_SCRIPT" apply 2>/dev/null
+check '! logged "omcid"'
+teardown
+
 echo "the account removed: from passthrough back to bridge"
 setup
 conf LAN_VLAN=36
@@ -366,6 +403,7 @@ rm "$ONU_ROOT/run/onu-pppoe1"
 check 'logged "^ip address del 169.254.0.1/32 dev lan"'
 check 'logged "^ip link del lan"'
 check 'logged "^killall -USR2 omcid"'
+check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-lan" ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 teardown

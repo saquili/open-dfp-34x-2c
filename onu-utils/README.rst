@@ -94,9 +94,15 @@ The small programs of the ONU.
    mode to choose. Without a PPPoE account omcid connects the host link to the
    PON as the OLT provisions it. With accounts, the stick holds up to seven
    PPPoE sessions itself, each with the user and secret of
-   ``/run/onu-pppoeN``: omcid leaves the OLT's bridge out (``omcid -r``), and
-   each session runs on a GEM port the OLT provisioned, or on a VLAN on it
-   (``wanVID``, shared by the sessions in that VLAN), with its families: IPv4,
+   ``/run/onu-pppoeN``, and each session runs on a GEM port the OLT
+   provisioned, or on a VLAN on it (``wanVID``, shared by the sessions in that
+   VLAN). omcid goes on bridging the rest of what the OLT provisions, such as
+   television and telephone, without the sessions' VLANs, which onu-mode
+   writes to ``/run/onu-held-vlans`` before it has omcid build its bridge
+   again; the frames of those VLANs that come down the downstream-only GEM
+   ports go to the sessions' GEM interfaces. A session untagged on its GEM
+   port holds the whole port, and omcid then leaves the OLT's bridge out
+   (``omcid -r``). Each session has its families: IPv4,
    IPv6 or both (``pppoed -4`` or ``-6``), as an operator that gives IPv6 on a
    session of its own asks. The PON port, the GEM interface and the VLAN get
    an MTU of 1508 first, so that a concentrator that agrees gives a session of
