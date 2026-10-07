@@ -31,7 +31,10 @@
 # SESSIONn_GEM, SESSIONn_VLAN, SESSIONn_MAC and SESSIONn_FAMILY (ipv4, ipv6
 # or both). Beside sessions in VLANs omcid still bridges the rest of what the
 # OLT provisions, such as television and telephone, and leaves out the
-# sessions' VLANs, which it reads from /run/onu-held-vlans; beside a session
+# sessions' VLANs, which it reads from /run/onu-held-vlans. A session's VLAN
+# may be the subscriber's VID of a translation the OLT provisions, the VID a
+# router behind the stick would use: the session then runs in the VID it
+# leads into, as omcid publishes it (/run/omcid-xlate). Beside a session
 # untagged on its GEM port, which holds the whole port, omcid leaves the OLT's
 # bridge out (omcid -r).
 # Sessions in one VLAN share its interface, wanVID, and the MAC of the first.
@@ -136,6 +139,17 @@ setting() {
 	eval "echo \"\${SESSION$1_$2}\""
 }
 
+# The VLAN session $1 runs in on the PON side: its VLAN, or, where the OLT
+# translates that VLAN of the subscriber's side, the VLAN the translation
+# leads into, as omcid publishes them in /run/omcid-xlate ("SUB NET" lines).
+# A session can so be given the VLAN a router behind the stick would use.
+session_vlan() {
+	v=$(setting "$1" VLAN)
+	[ -n "$v" ] || return 0
+	net=$(awk -v v="$v" '$1 == v { print $2; exit }' "$RUN/omcid-xlate" 2>/dev/null)
+	echo "${net:-$v}"
+}
+
 # The sessions that have an account, by number.
 sessions() {
 	n=1
@@ -232,7 +246,7 @@ omcid_run() {
 held_vlans() {
 	out=
 	for n in $(sessions); do
-		v=$(setting "$n" VLAN)
+		v=$(session_vlan "$n")
 		[ -n "$v" ] || return 1
 		out="$out $v"
 	done
@@ -247,14 +261,17 @@ omcid_want() {
 	case $MODE in
 	bridge) echo bridge ;;
 	router) echo router ;;
-	*)
-		if held=$(held_vlans); then
-			echo held $held
-		else
-			echo router
-		fi
-		;;
+	*) held_want ;;
 	esac
+}
+
+# What omcid is to do beside the sessions (see omcid_want()).
+held_want() {
+	if held=$(held_vlans); then
+		echo held $held
+	else
+		echo router
+	fi
 }
 
 # Bring omcid to $1, as omcid_want() gives it, from what it was told last.
@@ -567,7 +584,7 @@ wan_down() {
 # The interface of session $1 on the GEM interface $2: the GEM interface
 # itself, or wanVID for a VLAN.
 session_dev() {
-	vlan=$(setting "$1" VLAN)
+	vlan=$(session_vlan "$1")
 	if [ -n "$vlan" ]; then
 		echo "wan$vlan"
 	else
@@ -594,7 +611,7 @@ session_up() {
 	if ! dev_shared "$n" "$dev"; then
 		ip link set "$gem" up
 		if [ "$dev" != "$gem" ]; then
-			ip link add link "$gem" name "$dev" type vlan id "$(setting "$n" VLAN)"
+			ip link add link "$gem" name "$dev" type vlan id "$(session_vlan "$n")"
 		fi
 		mac=$(setting "$n" MAC)
 		if [ -n "$mac" ]; then
@@ -674,14 +691,19 @@ sessions_down() {
 # and a session without its account any more goes.
 sessions_tick() {
 	want=" $(sessions | tr '\n' ' ')"
+	# The OLT's translations may have come since: omcid leaves the
+	# sessions' VLANs out as they now are, before the sessions move.
+	omcid_sync "$(held_want)"
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
-		cur=
+		cur= dev=
 		[ -r "$SESSIONS/$n/gem" ] && read -r cur <"$SESSIONS/$n/gem"
+		[ -r "$SESSIONS/$n/dev" ] && read -r dev <"$SESSIONS/$n/dev"
 		case $want in
 		*" $n "*)
 			gem=$(gem_of "$(setting "$n" GEM)")
-			if [ -n "$gem" ] && [ "$gem" != "$cur" ]; then
+			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
+				[ "$(session_dev "$n" "$gem")" != "$dev" ]; }; then
 				[ -n "$cur" ] && session_down "$n"
 				session_up "$n" "$gem"
 			elif [ -z "$gem" ] && [ -n "$cur" ]; then
@@ -703,7 +725,7 @@ sessions_tick() {
 		for d in "$SESSIONS"/*; do
 			[ -r "$d/gem" ] || continue
 			read -r g <"$d/gem"
-			pairs="$pairs $(setting "${d##*/}" VLAN):$g"
+			pairs="$pairs $(session_vlan "${d##*/}"):$g"
 		done
 		feeds_sync "$first" $(echo $pairs | tr ' ' '\n' | sort -u)
 	else

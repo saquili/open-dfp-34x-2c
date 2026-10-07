@@ -392,6 +392,32 @@ check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans" | tr "\n" " ")" = "410 1410 " ]'
 check '! logged "omcid"'
 teardown
 
+echo "a session in the router's VLAN runs in the VLAN the OLT translates it into"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+# Before the OLT's translations the session runs in the VLAN it was given.
+check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
+: >"$LOG"
+printf '410 1410\n420 1430\n' >"$ONU_ROOT/run/omcid-xlate"
+"$MODE_SCRIPT" tick 2>/dev/null
+# With them, omcid leaves 1410 out, and the session moves into it.
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
+check 'logged "^killall -USR2 omcid"'
+check 'logged "^ip link del wan410"'
+check 'logged "^ip link add link gem256 name wan1410 type vlan id 1410"'
+check 'logged "^pppoed up -i wan1410 "'
+check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
+# The next round changes nothing.
+: >"$LOG"
+"$MODE_SCRIPT" tick 2>/dev/null
+check '! logged "omcid"'
+check '! logged "^ip link"'
+teardown
+
 echo "the account removed: from passthrough back to bridge"
 setup
 conf LAN_VLAN=36
