@@ -20,7 +20,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 # host, point CPPFLAGS at an installation of its headers.
 .PHONY: all check clean
 
-all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onucfg
+all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onucfg $(BUILD)/onu-update
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -34,6 +34,14 @@ $(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o \
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/onucfg: $(BUILD)/src/onucfg.o $(BUILD)/src/cfgstore.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+
+$(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
+		     $(BUILD)/src/update.o $(BUILD)/src/sha256.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+
+$(BUILD)/test_update: $(BUILD)/tests/test_update.o $(BUILD)/src/bootenv.o \
+		      $(BUILD)/src/update.o $(BUILD)/src/sha256.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
 $(BUILD)/test_factory: $(BUILD)/tests/test_factory.o $(BUILD)/src/factory.o
@@ -51,11 +59,13 @@ $(BUILD)/test_cfgstore: $(BUILD)/tests/test_cfgstore.o $(BUILD)/src/cfgstore.o
 
 # test_genl asks the kernel it runs on, through a generic netlink socket.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
-	$(BUILD)/test_cfgstore $(BUILD)/onucfg
+	$(BUILD)/test_cfgstore $(BUILD)/onucfg $(BUILD)/test_update $(BUILD)/onu-update
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
 	$(BUILD)/test_cfgstore
+	$(BUILD)/test_update
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	sh tests/test_onu_mode.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_store.sh
 
