@@ -117,7 +117,9 @@ check 'logged "^udhcpc -i gem256 "'
 check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
 check '! logged "^nft"'
 check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem256"'
-check '! logged "^tc filter add dev gem1024"'
+# The other GEM port that sends upstream feeds the WAN as well: an OLT may
+# send the WAN's frames down by any GEM port of its VLAN.
+check 'logged "^tc filter add dev gem1024 ingress matchall action mirred ingress redirect dev gem256"'
 check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
 teardown
 
