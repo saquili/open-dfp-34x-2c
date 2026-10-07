@@ -9,7 +9,7 @@
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lines, request } from "./client";
-import type { Banks, Identity } from "./types";
+import type { Banks, Bridge, Identity, Network, TcRules } from "./types";
 
 interface Value<T> {
   id: string;
@@ -55,3 +55,20 @@ export const useIdentityChange = () => useChange("identity", [["identity"], ["li
 export function useRestart() {
   return useMutation({ mutationFn: () => request<{ ok: boolean }>("/api/system/restart", {}) });
 }
+
+/*
+ * The switch view's values: read only while the view is open, and less
+ * often than the live figures, since the stick is slow to gather them.
+ */
+const SWITCH_POLL_MS = 10_000;
+
+const switchQuery = <T>(id: string) =>
+  queryOptions({
+    queryKey: ["switch", id],
+    queryFn: async () => (await request<Value<T>>(`/api/get/${id}`)).value,
+    refetchInterval: SWITCH_POLL_MS,
+  });
+
+export const useNetwork = () => useQuery(switchQuery<Network>("network"));
+export const useBridge = () => useQuery(switchQuery<Bridge>("bridge"));
+export const useTcRules = () => useQuery(switchQuery<TcRules>("tc_rules"));

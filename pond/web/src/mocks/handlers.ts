@@ -9,7 +9,7 @@
 
 import { delay, HttpResponse, http } from "msw";
 import type { Identity, Session, Settings } from "../api/types";
-import { BANKS, LIVE } from "./fixture";
+import { BANKS, BRIDGE, LIVE, NETWORK, TC_RULES } from "./fixture";
 
 let adminSecret = "admin";
 let signedIn: Session | null = null;
@@ -121,6 +121,19 @@ export const handlers = [
     await delay(120);
     return away() ?? (signedIn ? HttpResponse.json(live()) : unauthorized());
   }),
+
+  ...(
+    [
+      ["network", NETWORK],
+      ["bridge", BRIDGE],
+      ["tc_rules", TC_RULES],
+    ] as const
+  ).map(([id, value]) =>
+    http.get(`*/api/get/${id}`, async () => {
+      await delay(300);
+      return away() ?? (signedIn ? HttpResponse.json({ id, value }) : unauthorized());
+    }),
+  ),
 
   http.get("*/api/get/banks", async () => {
     await delay(400);

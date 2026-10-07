@@ -27,6 +27,7 @@ import { Internet } from "./pages/Internet";
 import { Overview } from "./pages/Overview";
 import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
+import { Switch } from "./pages/Switch";
 import { System } from "./pages/System";
 
 interface Context {
@@ -116,12 +117,13 @@ const sfpPage = createRoute({
   path: "/sfp",
   component: SfpPage,
 });
+const switchPage = createRoute({ getParentRoute: () => app, path: "/switch", component: Switch });
 const system = createRoute({ getParentRoute: () => app, path: "/system", component: System });
 
 const tree = root.addChildren([
   signIn,
   forcedPassword,
-  app.addChildren([overview, fibre, internet, sfpPage, system]),
+  app.addChildren([overview, fibre, internet, sfpPage, switchPage, system]),
 ]);
 
 export function makeRouter(queryClient: QueryClient) {

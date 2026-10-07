@@ -217,3 +217,115 @@ export interface Identity {
   tm_option: string;
   source: "store" | "factory" | null;
 }
+
+export interface LinkAddress {
+  family: "ipv4" | "ipv6";
+  address: string;
+  link_local: boolean;
+}
+
+/** One network interface: a switch port, a VLAN, a GEM port, a bridge, a PPP link. */
+export interface Link {
+  name: string;
+  ifindex: number;
+  /** "dsa" for a switch port, "vlan", "gem", "bridge", "ppp"; null for the CPU port. */
+  kind: string | null;
+  /** The device it runs over: a VLAN's port, a switch port's conduit. */
+  lower: string | null;
+  vlan: number | null;
+  master: string | null;
+  operstate: "up" | "down" | "unknown";
+  admin_up: boolean;
+  mtu: number | null;
+  mac: string | null;
+  addresses: LinkAddress[];
+}
+
+export interface Route {
+  family: "ipv4" | "ipv6";
+  /** "default", or an address with its prefix length. */
+  destination: string;
+  gateway: string | null;
+  dev: string | null;
+  protocol: "kernel" | "static" | "ra" | "dhcp" | "other";
+  metric: number;
+  offloaded: boolean;
+}
+
+export interface Neighbour {
+  family: "ipv4" | "ipv6";
+  address: string;
+  mac: string | null;
+  dev: string | null;
+  state: "permanent" | "static" | "reachable" | "stale" | "incomplete" | "failed" | "none";
+}
+
+export interface Network {
+  links: Link[];
+  routes: Route[];
+  neighbours: Neighbour[];
+}
+
+export interface FdbEntry {
+  dev: string | null;
+  ifindex: number;
+  addr: string | null;
+  vlan: number | null;
+  master: string | null;
+  state: "permanent" | "static" | "stale" | "reachable" | "none";
+  learned: boolean;
+  self: boolean;
+  offloaded: boolean;
+  ext_learned: boolean;
+  sticky: boolean;
+}
+
+export interface BridgeVlan {
+  dev: string;
+  vlan: number;
+  pvid: boolean;
+  egress_untagged: boolean;
+  range_begin: boolean;
+  range_end: boolean;
+}
+
+export interface Bridge {
+  fdb: FdbEntry[];
+  vlans: BridgeVlan[];
+}
+
+export interface TcAction {
+  kind: string;
+  order?: number;
+  options_decoded?: boolean;
+  vlan_action?: "pop" | "push" | "modify" | "pop_eth" | "push_eth" | "unknown";
+  vlan_id?: number | null;
+  vlan_prio?: number | null;
+}
+
+export interface TcRule {
+  handle: number;
+  priority: number;
+  ethertype: number;
+  kind: string;
+  chain: number | null;
+  match?: Partial<{
+    indev: string;
+    eth_dst: string;
+    eth_src: string;
+    ethertype: number;
+    ip_proto: number;
+    ipv4_src: string;
+    ipv4_src_mask: string;
+    ipv4_dst: string;
+    ipv4_dst_mask: string;
+    vlan_id: number;
+    vlan_prio: number | null;
+    vlan_ethtype: number;
+  }>;
+  actions?: TcAction[];
+  offload?: { skip_sw: boolean; skip_hw: boolean; in_hw: boolean; not_in_hw: boolean };
+}
+
+/** The rules on each port's way in: a list, or why it could not be read. */
+export type TcRules = Record<string, { ingress: TcRule[] } | { error: string }>;

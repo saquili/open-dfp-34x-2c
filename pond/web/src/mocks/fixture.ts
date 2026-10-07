@@ -6,7 +6,7 @@
  * replaced by a documentation value. The mocks start from it.
  */
 
-import type { Banks, Live } from "../api/types";
+import type { Banks, Bridge, Link, Live, Network, TcRules } from "../api/types";
 
 export const LIVE: Live = {
   uptime: {
@@ -525,3 +525,149 @@ export const BANKS: Banks = {
     bank: 0,
   },
 };
+
+const STICK_MAC = "00:00:5e:00:53:01";
+const HOST_MAC = "00:00:5e:00:53:02";
+
+function link(name: string, ifindex: number, rest: Partial<Link>): Link {
+  return {
+    name,
+    ifindex,
+    kind: null,
+    lower: null,
+    vlan: null,
+    master: null,
+    operstate: "up",
+    admin_up: true,
+    mtu: 1500,
+    mac: STICK_MAC,
+    addresses: [],
+    ...rest,
+  };
+}
+
+/* The stick as it runs with its own session: no bridge, VLANs on each port. */
+export const NETWORK: Network = {
+  links: [
+    link("lo", 1, { operstate: "unknown", mtu: 65536, mac: "00:00:00:00:00:00" }),
+    link("cpu", 2, { operstate: "unknown", mtu: 1508 }),
+    link("sfp", 3, {
+      kind: "dsa",
+      lower: "cpu",
+      addresses: [
+        { family: "ipv4", address: "192.0.2.254/30", link_local: false },
+        { family: "ipv6", address: "2001:db8::1/64", link_local: true },
+      ],
+    }),
+    link("pon", 4, { kind: "dsa", lower: "cpu", mtu: 1508 }),
+    link("mgmt", 5, {
+      kind: "vlan",
+      lower: "sfp",
+      vlan: 4094,
+      addresses: [{ family: "ipv4", address: "192.0.2.250/30", link_local: false }],
+    }),
+    link("lan", 6, {
+      kind: "vlan",
+      lower: "sfp",
+      vlan: 36,
+      addresses: [{ family: "ipv4", address: "169.254.0.1/32", link_local: false }],
+    }),
+    link("gem4095", 8, { kind: "gem", lower: "pon", operstate: "unknown" }),
+    link("gem257", 9, { kind: "gem", lower: "pon", operstate: "unknown", mtu: 1508 }),
+    link("wan", 10, { kind: "vlan", lower: "gem257", vlan: 410, mtu: 1508 }),
+    link("ppp0", 11, { kind: "ppp", operstate: "unknown", mtu: 1492, mac: null }),
+  ],
+  routes: [
+    {
+      family: "ipv4",
+      destination: "default",
+      gateway: null,
+      dev: "ppp0",
+      protocol: "static",
+      metric: 0,
+      offloaded: false,
+    },
+    {
+      family: "ipv4",
+      destination: "192.0.2.252/30",
+      gateway: null,
+      dev: "sfp",
+      protocol: "kernel",
+      metric: 0,
+      offloaded: false,
+    },
+    {
+      family: "ipv4",
+      destination: "192.0.2.248/30",
+      gateway: null,
+      dev: "mgmt",
+      protocol: "kernel",
+      metric: 0,
+      offloaded: false,
+    },
+    {
+      family: "ipv4",
+      destination: "203.0.113.24/32",
+      gateway: null,
+      dev: "lan",
+      protocol: "static",
+      metric: 0,
+      offloaded: false,
+    },
+    {
+      family: "ipv6",
+      destination: "fe80::/64",
+      gateway: null,
+      dev: "sfp",
+      protocol: "kernel",
+      metric: 256,
+      offloaded: false,
+    },
+  ],
+  neighbours: [
+    {
+      family: "ipv4",
+      address: "192.0.2.249",
+      mac: HOST_MAC,
+      dev: "mgmt",
+      state: "reachable",
+    },
+    {
+      family: "ipv4",
+      address: "203.0.113.24",
+      mac: HOST_MAC,
+      dev: "lan",
+      state: "stale",
+    },
+  ],
+};
+
+const fdb = (dev: string, ifindex: number, addr: string, rest: Partial<Bridge["fdb"][0]>) => ({
+  dev,
+  ifindex,
+  addr,
+  vlan: null,
+  master: null,
+  state: "permanent" as const,
+  learned: false,
+  self: true,
+  offloaded: false,
+  ext_learned: false,
+  sticky: false,
+  ...rest,
+});
+
+export const BRIDGE: Bridge = {
+  fdb: [
+    fdb("cpu", 2, "33:33:00:00:00:01", {}),
+    fdb("cpu", 2, "01:00:5e:00:00:01", {}),
+    fdb("sfp", 3, HOST_MAC, { vlan: 4094, state: "static" }),
+    fdb("sfp", 3, HOST_MAC, { vlan: 4094, state: "reachable", learned: true }),
+    fdb("sfp", 3, HOST_MAC, { vlan: 36, state: "static" }),
+    fdb("pon", 4, "00:00:5e:00:53:03", { vlan: 410, state: "static" }),
+    fdb("gem257", 9, STICK_MAC, {}),
+  ],
+  vlans: [],
+};
+
+export const TC_RULES: TcRules = { sfp: { ingress: [] }, pon: { ingress: [] } };
