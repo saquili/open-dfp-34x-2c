@@ -7,3 +7,10 @@ version = 1
 path = "tests/fixtures/**"
 SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
 SPDX-License-Identifier = "GPL-2.0-only"
+
+# The panel's JSON files (the package list, its lock, the TypeScript and Biome
+# settings) cannot carry a comment.
+[[annotations]]
+path = ["web/package.json", "web/package-lock.json", "web/tsconfig.json", "web/biome.json"]
+SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
+SPDX-License-Identifier = "GPL-2.0-only"

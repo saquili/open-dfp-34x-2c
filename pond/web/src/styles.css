@@ -1,0 +1,97 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
+
+/*
+ * Classes come from src/ alone: a build outside git (Buildroot's) has no
+ * .gitignore to keep node_modules out of Tailwind's search.
+ */
+@import "tailwindcss" source(".");
+
+@plugin "daisyui" {
+  themes: false;
+}
+
+/* The panel's two themes; the system's colour scheme picks one. */
+@plugin "daisyui/theme" {
+  name: "onu-light";
+  default: true;
+  color-scheme: light;
+  --color-base-100: oklch(99% 0.003 250);
+  --color-base-200: oklch(96.5% 0.006 250);
+  --color-base-300: oklch(91% 0.01 250);
+  --color-base-content: oklch(25% 0.03 260);
+  --color-primary: oklch(50% 0.17 262);
+  --color-primary-content: oklch(98% 0.01 262);
+  --color-secondary: oklch(58% 0.14 45);
+  --color-secondary-content: oklch(98% 0.01 45);
+  --color-accent: oklch(62% 0.12 190);
+  --color-accent-content: oklch(98% 0.01 190);
+  --color-neutral: oklch(35% 0.03 260);
+  --color-neutral-content: oklch(97% 0.005 260);
+  --color-info: oklch(60% 0.13 240);
+  --color-info-content: oklch(98% 0.01 240);
+  --color-success: oklch(55% 0.13 150);
+  --color-success-content: oklch(98% 0.01 150);
+  --color-warning: oklch(72% 0.15 75);
+  --color-warning-content: oklch(25% 0.05 75);
+  --color-error: oklch(55% 0.19 25);
+  --color-error-content: oklch(98% 0.01 25);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.85rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@plugin "daisyui/theme" {
+  name: "onu-dark";
+  prefersdark: true;
+  color-scheme: dark;
+  --color-base-100: oklch(22% 0.015 260);
+  --color-base-200: oklch(19% 0.014 260);
+  --color-base-300: oklch(30% 0.018 260);
+  --color-base-content: oklch(92% 0.01 260);
+  --color-primary: oklch(72% 0.13 262);
+  --color-primary-content: oklch(20% 0.04 262);
+  --color-secondary: oklch(75% 0.12 50);
+  --color-secondary-content: oklch(22% 0.04 50);
+  --color-accent: oklch(75% 0.1 190);
+  --color-accent-content: oklch(20% 0.03 190);
+  --color-neutral: oklch(32% 0.02 260);
+  --color-neutral-content: oklch(92% 0.01 260);
+  --color-info: oklch(74% 0.11 240);
+  --color-info-content: oklch(20% 0.03 240);
+  --color-success: oklch(76% 0.13 150);
+  --color-success-content: oklch(20% 0.04 150);
+  --color-warning: oklch(82% 0.13 80);
+  --color-warning-content: oklch(22% 0.04 80);
+  --color-error: oklch(72% 0.15 25);
+  --color-error-content: oklch(20% 0.04 25);
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.85rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@theme {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-down: var(--color-primary);
+  --color-up: var(--color-secondary);
+}
+
+html,
+body {
+  @apply bg-base-200 text-base-content antialiased;
+}
+
+/* Figures that change line up and do not jitter. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
