@@ -153,11 +153,16 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertIn("\ndata=${DATA_ADDRESS%/*}\n", text)
         self.assertIn("\nmgmt=${MGMT_ADDRESS%/*}\n", text)
 
-    def test_ssh_listens_on_the_two_addresses_of_the_host_side(self):
-        self.assertRegex(read(RCS), r'\ndropbear -s [^\n]* -p "\$data:22" -p "\$mgmt:22" \|\|\n')
+    def test_ssh_listens_on_the_vlan_and_on_the_host_link_when_it_has_an_address(self):
+        self.assertRegex(read(RCS), r'\ndropbear -s [^\n]* -p "\$mgmt:22" \$\{data:\+-p "\$data:22"\} \|\|\n')
 
-    def test_the_status_daemon_listens_on_the_same_two(self):
-        self.assertRegex(read(RCS), r'\n\tpond -l "http://\$data:8080" -l "http://\$mgmt:8080" >')
+    def test_the_status_daemon_listens_on_the_same(self):
+        self.assertRegex(read(RCS), r'\n\tpond -l "http://\$mgmt:8080" \$\{data:\+-l "http://\$data:8080"\} >')
+
+    def test_the_host_link_may_have_no_address(self):
+        text = read(RCS)
+        self.assertIn('if [ -n "$DATA_ADDRESS" ]; then\n\tip address add "$DATA_ADDRESS" dev sfp', text)
+        self.assertIn('onu-trial "${data:-$mgmt}"', text)
 
     def test_the_addresses_are_there_before_a_server_listens(self):
         text = read(RCS)

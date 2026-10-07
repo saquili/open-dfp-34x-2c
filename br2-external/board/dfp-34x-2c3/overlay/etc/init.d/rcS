@@ -16,8 +16,12 @@ export PATH
 
 # The management addresses are in the ranges that RFC 5737 reserves for
 # documentation. The first is on the host link itself; the second is on a VLAN
-# of that link, so that it is not lost when the link joins a bridge. A bench
-# with other addresses puts them in /etc/board.conf (docs/handbook/building.rst).
+# of that link of its own, which the switch keeps from the PON both ways and
+# which works whether the link is bridged or not, as the first does not. A
+# bench with other addresses puts them in /etc/board.conf
+# (docs/handbook/building.rst); an empty DATA_ADDRESS leaves the stick without
+# an address on the subscriber's data path, managed by its VLAN alone, as an
+# operator's ONT has none there.
 DATA_ADDRESS=192.0.2.2/30
 MGMT_VLAN=4094
 MGMT_ADDRESS=198.51.100.2/30
@@ -83,7 +87,9 @@ echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore &&
 # The links. The stick's host side is the interface sfp.
 ip link set lo up
 ip link set sfp up || warn "no interface sfp"
-ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
+if [ -n "$DATA_ADDRESS" ]; then
+	ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
+fi
 ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" || warn "no VLAN $MGMT_VLAN on sfp"
 echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6 || warn "no IPv6 on mgmt"
 ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
@@ -101,7 +107,7 @@ tc qdisc add dev pon clsact &&
 	tc filter add dev pon ingress $mgmt_tag action drop ||
 	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
 
-# The servers listen on the two addresses of the host side and nowhere else:
+# The servers listen on the addresses of the host side and nowhere else:
 # the stick has no packet filter, and nothing on the PON side, nor on the WAN
 # of router mode, is to reach them. The ssh server takes keys only:
 # /root/.ssh/authorized_keys, which an image built with a bench's keys carries
@@ -110,7 +116,7 @@ data=${DATA_ADDRESS%/*}
 mgmt=${MGMT_ADDRESS%/*}
 mkdir -p /run/dropbear
 dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no host key"
-dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid -p "$data:22" -p "$mgmt:22" ||
+dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid -p "$mgmt:22" ${data:+-p "$data:22"} ||
 	warn "dropbear did not start"
 
 # The identity of the unit, its saved settings and its PPPoE account, from
@@ -141,16 +147,16 @@ fi
 # server. People sign in to the panel with a password; scripts may present the
 # token of /etc/pond.token, which an image without the file does not accept.
 if [ -x /usr/sbin/pond ]; then
-	pond -l "http://$data:8080" -l "http://$mgmt:8080" >/run/pond.log 2>&1 &
+	pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} >/run/pond.log 2>&1 &
 fi
 
 # After a start from a bank that the boot loader was told to try once,
 # onu-trial makes it the bank the loader starts when the system is up, and
 # restarts into the committed bank when it is not; any other start it leaves
 # alone.
-onu-trial "$data" >/run/onu-trial.log 2>&1 &
+onu-trial "${data:-$mgmt}" >/run/onu-trial.log 2>&1 &
 
 echo
 echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
-echo "open-dfp-34x-2c: ssh on $DATA_ADDRESS (sfp) and $MGMT_ADDRESS (VLAN $MGMT_VLAN)"
+echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN)${data:+ and $DATA_ADDRESS (sfp)}"
 echo "open-dfp-34x-2c: ready"
