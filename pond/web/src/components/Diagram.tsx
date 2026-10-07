@@ -2,22 +2,22 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The path of the traffic through the stick, drawn: the router, the SFP
+ * The path of the traffic through the stick, drawn: the host, the SFP
  * port, the switch with the processor beside it, the GPON MAC with the
  * channels the OLT set up, the fibre and the OLT. A line grows with the
  * traffic it carries and is labelled with it; a part is coloured by its
  * state, and a click on it opens its page. Below a phone's width the drawing
- * turns upright, the operator at the top and the router at the bottom.
+ * turns upright, the operator at the top and the host at the bottom.
  */
 
 import { useNavigate } from "@tanstack/react-router";
 import {
   Cpu,
   Globe,
+  Server as HostIcon,
   type LucideIcon,
   Network,
   Radio,
-  Router as RouterIcon,
   ServerCog,
 } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
@@ -28,9 +28,9 @@ import { bitrate, dbmText, integer } from "../lib/format";
 import {
   fibre as fibreView,
   gems as gemViews,
+  hostLink,
   LIGHT_TONE,
   linkSpeed,
-  routerLink,
   session as sessionView,
   type Tone,
 } from "../lib/state";
@@ -39,7 +39,7 @@ import { useGemText } from "./Gem";
 type Box = { x: number; y: number; w: number; h: number };
 type Pt = { x: number; y: number };
 type Seg = readonly [Pt, Pt];
-type Part = "router" | "sfp" | "switch" | "cpu" | "ponmac" | "olt";
+type Part = "host" | "sfp" | "switch" | "cpu" | "ponmac" | "olt";
 
 interface Layout {
   view: [number, number];
@@ -47,11 +47,11 @@ interface Layout {
   gems: Box;
 }
 
-/* The gaps that carry labels (router-SFP, MAC-OLT) are wide enough for a rate. */
+/* The gaps that carry labels (host-SFP, MAC-OLT) are wide enough for a rate. */
 const WIDE: Layout = {
   view: [1100, 290],
   box: {
-    router: { x: 8, y: 40, w: 150, h: 84 },
+    host: { x: 8, y: 40, w: 150, h: 84 },
     sfp: { x: 278, y: 40, w: 140, h: 84 },
     switch: { x: 488, y: 40, w: 140, h: 84 },
     cpu: { x: 488, y: 196, w: 140, h: 84 },
@@ -69,7 +69,7 @@ const TALL: Layout = {
     switch: { x: 20, y: 334, w: 190, h: 72 },
     cpu: { x: 228, y: 334, w: 122, h: 72 },
     sfp: { x: 20, y: 496, w: 190, h: 72 },
-    router: { x: 20, y: 658, w: 190, h: 72 },
+    host: { x: 20, y: 658, w: 190, h: 72 },
   },
   gems: { x: 228, y: 172, w: 122, h: 24 },
 };
@@ -217,7 +217,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
 
   const f = fibreView(live);
   const s = sessionView(live);
-  const link = routerLink(live);
+  const link = hostLink(live);
   const go = (to: string) => () => navigate({ to });
 
   const channels = gemViews(live);
@@ -232,7 +232,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
   const top = (x: Box) => ({ x: x.x + x.w / 2, y: x.y });
   const bottom = (x: Box) => ({ x: x.x + x.w / 2, y: x.y + x.h });
 
-  const routerSfp: Seg = tall ? [top(b.router), bottom(b.sfp)] : [right(b.router), left(b.sfp)];
+  const hostSfp: Seg = tall ? [top(b.host), bottom(b.sfp)] : [right(b.host), left(b.sfp)];
   const sfpSwitch: Seg = tall ? [top(b.sfp), bottom(b.switch)] : [right(b.sfp), left(b.switch)];
   const switchPon: Seg = tall
     ? [top(b.switch), bottom(b.ponmac)]
@@ -242,7 +242,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
 
   const mid = ([a, z]: Seg) => ({ x: (a.x + z.x) / 2, y: (a.y + z.y) / 2 });
   const fibreMid = mid(ponOlt);
-  const linkMid = mid(routerSfp);
+  const linkMid = mid(hostSfp);
 
   return (
     <div ref={wrap} className="w-full">
@@ -253,11 +253,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
         role="group"
         aria-label={t("diagram.title")}
       >
-        <Edge
-          from={routerSfp[0]}
-          to={routerSfp[1]}
-          bps={(rate?.lanDown ?? 0) + (rate?.lanUp ?? 0)}
-        />
+        <Edge from={hostSfp[0]} to={hostSfp[1]} bps={(rate?.lanDown ?? 0) + (rate?.lanUp ?? 0)} />
         <Edge
           from={sfpSwitch[0]}
           to={sfpSwitch[1]}
@@ -315,9 +311,9 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
         )}
 
         <Node
-          box={b.router}
-          icon={RouterIcon}
-          title={t("diagram.router")}
+          box={b.host}
+          icon={HostIcon}
+          title={t("diagram.host")}
           sub={
             s.up && s.address
               ? s.address
@@ -326,8 +322,8 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
                 : t("overview.noLink")
           }
           tone={link.up ? "good" : "bad"}
-          onOpen={go("/router")}
-          tip={t("diagram.router")}
+          onOpen={go("/sfp")}
+          tip={t("diagram.host")}
         />
         <Node
           box={b.sfp}
@@ -335,7 +331,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           title={t("diagram.sfp")}
           sub={link.up ? (linkSpeed(link.speedMbit, lang) ?? "") : t("overview.noLink")}
           tone={link.up ? "good" : "bad"}
-          onOpen={go("/router")}
+          onOpen={go("/sfp")}
           tip={t("diagram.sfp")}
         />
         <Node

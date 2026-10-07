@@ -4,7 +4,7 @@
 /* The first page: is it working, how the traffic flows, how much of it. */
 
 import { Link } from "@tanstack/react-router";
-import { Activity, ChevronRight, Cpu, Globe, Router } from "lucide-react";
+import { Activity, ChevronRight, Cpu, EthernetPort, Globe } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLive, useTraffic } from "../api/live";
 import { Diagram } from "../components/Diagram";
@@ -12,7 +12,7 @@ import { TrafficChart } from "../components/TrafficChart";
 import { Badge, Card, Figure, PageTitle } from "../components/ui";
 import { useI18n } from "../i18n";
 import { bitrate, dbmText, duration, integer } from "../lib/format";
-import { fibre, LIGHT_TONE, linkSpeed, memory, routerLink, session, type Tone } from "../lib/state";
+import { fibre, hostLink, LIGHT_TONE, linkSpeed, memory, session, type Tone } from "../lib/state";
 
 function Tile({
   to,
@@ -53,7 +53,7 @@ export function Overview() {
 
   const f = fibre(live);
   const s = session(live);
-  const link = routerLink(live);
+  const link = hostLink(live);
   const mem = memory(live);
 
   const hardware = now && now.wanDown + now.wanUp > 20e6 && now.cpuFrames < 200;
@@ -102,13 +102,11 @@ export function Overview() {
         </Tile>
 
         <Tile
-          to="/router"
-          icon={<Router className="size-4" />}
-          title={t("overview.router")}
+          to="/sfp"
+          icon={<EthernetPort className="size-4" />}
+          title={t("overview.sfp")}
           badge={
-            <Badge tone={link.up ? "good" : "bad"}>
-              {link.up ? t("router.up") : t("router.down")}
-            </Badge>
+            <Badge tone={link.up ? "good" : "bad"}>{link.up ? t("sfp.up") : t("sfp.down")}</Badge>
           }
         >
           <Figure

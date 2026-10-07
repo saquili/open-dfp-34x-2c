@@ -25,7 +25,7 @@ import { useI18n } from "./i18n";
 import { Fibre } from "./pages/Fibre";
 import { Internet } from "./pages/Internet";
 import { Overview } from "./pages/Overview";
-import { RouterPage } from "./pages/RouterPage";
+import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
 import { System } from "./pages/System";
 
@@ -111,17 +111,17 @@ const app = createRoute({
 const overview = createRoute({ getParentRoute: () => app, path: "/", component: Overview });
 const fibre = createRoute({ getParentRoute: () => app, path: "/fibre", component: Fibre });
 const internet = createRoute({ getParentRoute: () => app, path: "/internet", component: Internet });
-const routerPage = createRoute({
+const sfpPage = createRoute({
   getParentRoute: () => app,
-  path: "/router",
-  component: RouterPage,
+  path: "/sfp",
+  component: SfpPage,
 });
 const system = createRoute({ getParentRoute: () => app, path: "/system", component: System });
 
 const tree = root.addChildren([
   signIn,
   forcedPassword,
-  app.addChildren([overview, fibre, internet, routerPage, system]),
+  app.addChildren([overview, fibre, internet, sfpPage, system]),
 ]);
 
 export function makeRouter(queryClient: QueryClient) {

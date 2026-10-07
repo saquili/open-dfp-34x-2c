@@ -14,7 +14,7 @@ export const pl: Dictionary = {
     overview: "Przegląd",
     fibre: "Światłowód",
     internet: "Internet",
-    router: "Port SFP",
+    sfp: "Port SFP",
     system: "System",
     signOut: "Wyloguj",
     changePassword: "Zmień hasło",
@@ -69,7 +69,7 @@ export const pl: Dictionary = {
     title: "Przegląd",
     fibre: "Światłowód",
     internet: "Internet",
-    router: "Port SFP",
+    sfp: "Port SFP",
     device: "Stick",
     received: "Światło odbierane",
     publicAddress: "Adres publiczny",
@@ -91,7 +91,7 @@ export const pl: Dictionary = {
   diagram: {
     title: "Jak płynie ruch",
     hint: "Kliknij element, aby zobaczyć szczegóły i ustawienia.",
-    router: "Host",
+    host: "Host",
     sfp: "Port SFP",
     switch: "Przełącznik",
     cpu: "Procesor",
@@ -202,7 +202,7 @@ export const pl: Dictionary = {
     bridged: "Kanały od OLT",
     bridgedHint: "Kanały GEM, które zestawił OLT, i to, co stick z nimi robi.",
   },
-  router: {
+  sfp: {
     title: "Port SFP",
     link: "Łącze SFP z urządzeniem hosta",
     speed: "Prędkość",
@@ -222,8 +222,8 @@ export const pl: Dictionary = {
     lease: "Adres urządzenia hosta",
     noLease: "Nie przekazano",
     traffic: "Ruch na porcie SFP",
-    toRouter: "Do hosta (w dół)",
-    fromRouter: "Od hosta (w górę)",
+    toHost: "Do hosta (w dół)",
+    fromHost: "Od hosta (w górę)",
   },
   system: {
     title: "System",

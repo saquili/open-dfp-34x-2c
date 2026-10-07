@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The link to the router: whether it is up and how fast, the traffic on it,
- * and how the router gets the public address when the stick holds the
- * session.
+ * The SFP port, towards the host: whether it is up and how fast, the
+ * traffic on it, and how the host gets the public address when the stick
+ * holds the session.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -19,7 +19,7 @@ import { Badge, Card, Facts, Figure, PageTitle } from "../components/ui";
 import { useI18n } from "../i18n";
 import { bitrate } from "../lib/format";
 import { ipv4, vlan, z } from "../lib/schemas";
-import { type LinkView, linkSpeed, port, routerLink, session } from "../lib/state";
+import { hostLink, type LinkView, linkSpeed, port, session } from "../lib/state";
 
 function HandoverForm({ link }: { link: LinkView }) {
   const { t } = useI18n();
@@ -61,15 +61,15 @@ function HandoverForm({ link }: { link: LinkView }) {
     >
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
-          label={t("router.vlan")}
-          hint={t("router.vlanHint")}
+          label={t("sfp.vlan")}
+          hint={t("sfp.vlanHint")}
           inputMode="numeric"
           error={errors.vlan?.message}
           {...form.register("vlan")}
         />
         <Field
-          label={t("router.gateway")}
-          hint={t("router.gatewayHint")}
+          label={t("sfp.gateway")}
+          hint={t("sfp.gatewayHint")}
           error={errors.gateway?.message}
           {...form.register("gateway")}
         />
@@ -89,54 +89,50 @@ function HandoverForm({ link }: { link: LinkView }) {
   );
 }
 
-export function RouterPage() {
+export function SfpPage() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const traffic = useTraffic();
   const now = traffic.at(-1);
-  const link = routerLink(live);
+  const link = hostLink(live);
   const s = session(live);
   const sfp = port(live, "sfp");
 
   return (
     <>
-      <PageTitle>{t("router.title")}</PageTitle>
+      <PageTitle>{t("sfp.title")}</PageTitle>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card
-          title={t("router.link")}
+          title={t("sfp.link")}
           action={
-            <Badge tone={link.up ? "good" : "bad"}>
-              {link.up ? t("router.up") : t("router.down")}
-            </Badge>
+            <Badge tone={link.up ? "good" : "bad"}>{link.up ? t("sfp.up") : t("sfp.down")}</Badge>
           }
         >
-          <Figure value={linkSpeed(link.speedMbit, lang) ?? "–"} caption={t("router.speed")} />
+          <Figure value={linkSpeed(link.speedMbit, lang) ?? "–"} caption={t("sfp.speed")} />
           <Facts
             rows={[
-              [t("router.state"), link.up ? t("router.up") : t("router.down")],
+              [t("sfp.state"), link.up ? t("sfp.up") : t("sfp.down")],
               sfp && [
-                t("router.stickMac"),
+                t("sfp.stickMac"),
                 <span key="m" className="font-mono text-xs">
                   {sfp.mac}
                 </span>,
               ],
-              sfp && [t("router.mtu"), sfp.mtu],
+              sfp && [t("sfp.mtu"), sfp.mtu],
             ]}
           />
         </Card>
-        <Card title={t("router.handover")}>
-          <p className="text-sm text-base-content/70">{t("router.handoverHint")}</p>
-          <Facts
-            rows={[[t("router.lease"), s.up && link.lease ? link.lease : t("router.noLease")]]}
-          />
+        <Card title={t("sfp.handover")}>
+          <p className="text-sm text-base-content/70">{t("sfp.handoverHint")}</p>
+          <Facts rows={[[t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")]]} />
           <HandoverForm link={link} />
         </Card>
       </div>
-      <Card title={t("router.traffic")} className="mt-4">
+      <Card title={t("sfp.traffic")} className="mt-4">
         <div className="grid gap-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-1">
-            <Figure value={bitrate(now?.lanDown, lang)} caption={`↓ ${t("router.toRouter")}`} />
-            <Figure value={bitrate(now?.lanUp, lang)} caption={`↑ ${t("router.fromRouter")}`} />
+            <Figure value={bitrate(now?.lanDown, lang)} caption={`↓ ${t("sfp.toHost")}`} />
+            <Figure value={bitrate(now?.lanUp, lang)} caption={`↑ ${t("sfp.fromHost")}`} />
           </div>
           <TrafficChart data={traffic} down={(r) => r.lanDown} up={(r) => r.lanUp} />
         </div>

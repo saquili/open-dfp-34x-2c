@@ -12,7 +12,7 @@ export const en = {
     overview: "Overview",
     fibre: "Fibre",
     internet: "Internet",
-    router: "SFP port",
+    sfp: "SFP port",
     system: "System",
     signOut: "Sign out",
     changePassword: "Change password",
@@ -67,7 +67,7 @@ export const en = {
     title: "Overview",
     fibre: "Fibre",
     internet: "Internet",
-    router: "SFP port",
+    sfp: "SFP port",
     device: "Stick",
     received: "Received light",
     publicAddress: "Public address",
@@ -89,7 +89,7 @@ export const en = {
   diagram: {
     title: "How the traffic flows",
     hint: "Click a part to see its details and settings.",
-    router: "Host",
+    host: "Host",
     sfp: "SFP port",
     switch: "Switch",
     cpu: "Processor",
@@ -200,7 +200,7 @@ export const en = {
     bridged: "The OLT's channels",
     bridgedHint: "The GEM channels the OLT set up, and what the stick does with each.",
   },
-  router: {
+  sfp: {
     title: "SFP port",
     link: "SFP link to the host",
     speed: "Speed",
@@ -219,8 +219,8 @@ export const en = {
     lease: "Address the host has",
     noLease: "Not handed out",
     traffic: "Traffic on the SFP port",
-    toRouter: "To the host (down)",
-    fromRouter: "From the host (up)",
+    toHost: "To the host (down)",
+    fromHost: "From the host (up)",
   },
   system: {
     title: "System",

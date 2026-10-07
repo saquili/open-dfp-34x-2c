@@ -3,7 +3,7 @@
 
 /*
  * What the figures mean: the state of the fibre, of the stick's own session,
- * of the link to the router. Pages show these; they never read raw keys.
+ * of the link to the host. Pages show these; they never read raw keys.
  */
 
 import type { GemPort, Live, Port } from "../api/types";
@@ -86,7 +86,7 @@ export interface SessionView {
   up: boolean;
   user: string;
   secretSet: boolean;
-  /** The public address handed to the router. */
+  /** The public address handed to the host. */
   address: string | null;
   dns: string[];
   vlan: string;
@@ -156,7 +156,7 @@ export interface LinkView {
   lease: string | null;
 }
 
-export function routerLink(live: Live | undefined): LinkView {
+export function hostLink(live: Live | undefined): LinkView {
   const sfp = port(live, "sfp");
   const s = live?.settings;
   return {

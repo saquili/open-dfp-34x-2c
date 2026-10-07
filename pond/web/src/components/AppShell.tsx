@@ -11,12 +11,12 @@ import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-route
 import {
   Activity,
   Cable,
+  EthernetPort,
   Globe,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
-  Router,
   Settings2,
   WifiOff,
 } from "lucide-react";
@@ -31,7 +31,7 @@ const NAV: { to: string; key: Key; icon: ReactNode }[] = [
   { to: "/", key: "nav.overview", icon: <LayoutDashboard className="size-4" /> },
   { to: "/fibre", key: "nav.fibre", icon: <Activity className="size-4" /> },
   { to: "/internet", key: "nav.internet", icon: <Globe className="size-4" /> },
-  { to: "/router", key: "nav.router", icon: <Router className="size-4" /> },
+  { to: "/sfp", key: "nav.sfp", icon: <EthernetPort className="size-4" /> },
   { to: "/system", key: "nav.system", icon: <Settings2 className="size-4" /> },
 ];
 
