@@ -603,12 +603,15 @@ dev_shared() {
 }
 
 # Session $1 up on the GEM interface $2: its interface, made for the first
-# session on it, room for PPPoE's headers, and its client.
+# session on it, or again when it is gone (the kernel takes a VLAN interface
+# away with the GEM interface under it, which an OLT's new provisioning
+# replaces, before the other sessions on it have moved), room for PPPoE's
+# headers, and its client.
 session_up() {
 	n=$1 gem=$2
 	dev=$(session_dev "$n" "$gem")
 	fam=$(family "$n")
-	if ! dev_shared "$n" "$dev"; then
+	if ! dev_shared "$n" "$dev" || [ ! -e "$NET/$dev" ]; then
 		ip link set "$gem" up
 		if [ "$dev" != "$gem" ]; then
 			ip link add link "$gem" name "$dev" type vlan id "$(session_vlan "$n")"
