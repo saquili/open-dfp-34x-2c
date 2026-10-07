@@ -214,7 +214,8 @@ Interfaces to user space
   armed when the driver probes, and the kernel feeds it until the device is
   opened.
 - ``/sys/class/mtd/mtd0`` to ``mtd7`` and the block devices 31:0 to 31:7: the
-  flash partitions, read-only whatever their flags say.
+  flash partitions, the boot loader's read-only and the others writable (see
+  "Flash and partitions").
 - A gpiolib chip of 32 lines; line 13 is requested by the switch driver as
   TX_DISABLE.
 - ``reboot``, ``halt`` and ``poweroff``: reboot restarts through the CPU's reset
@@ -1976,9 +1977,9 @@ Linux leaves the window unused and reaches the chip through the controller,
 which can erase and program it: the tree describes the chip as ``flash@0``, with
 ``compatible = "jedec,spi-nor"``, on ``spi``. Its partitions are the boot
 loader's own layout. The kernel and the root filesystem of two banks sit in
-``k0`` and ``r0`` (bank 0, where this system is installed) and ``k1`` and ``r1``
-(bank 1, the firmware the board shipped with, kept as the fallback). Only the
-configuration store, ``config``, is writable.
+``k0`` and ``r0`` (bank 0) and ``k1`` and ``r1`` (bank 1), and either holds this
+system: an update goes into the bank the system did not start from. Only the
+boot loader, ``boot``, is read-only.
 
 .. list-table::
    :header-rows: 1
@@ -1998,12 +1999,12 @@ configuration store, ``config``, is writable.
      - ``0x040000``
      - 8 KiB (``0x002000``)
      - The boot loader's environment.
-     - yes
+     - no
    * - ``env2``
      - ``0x042000``
      - 8 KiB (``0x002000``)
      - Its redundant copy.
-     - yes
+     - no
    * - ``config``
      - ``0x044000``
      - 240 KiB (``0x03c000``)
@@ -2014,23 +2015,23 @@ configuration store, ``config``, is writable.
    * - ``k0``
      - ``0x080000``
      - 1856 KiB (``0x1d0000``)
-     - Bank 0 kernel, where this system is installed.
-     - yes
+     - Bank 0 kernel.
+     - no
    * - ``r0``
      - ``0x250000``
      - 1984 KiB (``0x1f0000``)
      - Bank 0 root filesystem.
-     - yes
+     - no
    * - ``k1``
      - ``0x440000``
-     - 1328 KiB (``0x14c000``)
-     - Bank 1 kernel: the shipped firmware, the fallback.
-     - yes
+     - 1856 KiB (``0x1d0000``)
+     - Bank 1 kernel.
+     - no
    * - ``r1``
-     - ``0x58c000``
-     - 2512 KiB (``0x274000``)
+     - ``0x610000``
+     - 1984 KiB (``0x1f0000``)
      - Bank 1 root filesystem.
-     - yes
+     - no
 
 .. list-table::
    :header-rows: 1
@@ -2075,21 +2076,21 @@ configuration store, ``config``, is writable.
        the boot loader, too, erases its environment in 4 KiB steps.
    * - The partitions (``partitions``, ``compatible = "fixed-partitions"``) are
        the boot loader's own layout, offsets and sizes as its environment lists
-       them, except bank 0: the shipped firmware splits its 3840 KiB as 1328 KiB
-       of kernel and 2512 KiB of root filesystem, and this system as 1856 KiB
-       and 1984 KiB, because its kernel does not fit 1328 KiB. The boot loader
-       keeps naming the shipped split: it rebuilds its layout variables and its
-       partition table from the first-stage loader's flash table at every start.
-       It needs nothing of this split, as it starts the kernel at the start of
-       ``k0``, the same in both. The eight cover the chip exactly (``0x58c000``
-       + ``0x274000`` = ``0x800000``).
+       them, except the banks: the shipped firmware splits a bank's 3840 KiB as
+       1328 KiB of kernel and 2512 KiB of root filesystem, and this system as
+       1856 KiB and 1984 KiB, because its kernel does not fit 1328 KiB. The boot
+       loader keeps naming the shipped split: it rebuilds its layout variables
+       and its partition table from the first-stage loader's flash table at
+       every start. It needs nothing of this split, as it starts the kernel at
+       the start of ``k0`` or ``k1``, the same in both. The eight cover the chip
+       exactly (``0x610000`` + ``0x1f0000`` = ``0x800000``).
      - M
      - The boot loader's environment, printed at its prompt: the same offsets
-       and sizes for everything but bank 0, which it names as shipped even after
-       its variables were set to this split and saved (they read as shipped
-       after the next start). The board boots this tree from the flash with
-       ``k0`` and ``r0`` at this split: ``/proc/mtd`` lists them so, and the
-       root filesystem mounts from ``r0`` as 31:5.
+       and sizes for everything but the banks, which it names as shipped even
+       after its variables were set to this split and saved (they read as
+       shipped after the next start). The board boots this tree from either
+       bank at this split: ``/proc/mtd`` lists them so, and the root filesystem
+       mounts from ``r0`` as 31:5 and from ``r1`` as 31:7.
    * - Numbering: the partitions register in tree order as mtd0 to mtd7, block
        devices 31:0 to 31:7. The boot loader's arguments name the root
        filesystem by number: ``root=31:5`` (``r0``) for bank 0, ``root=31:7``
@@ -2107,16 +2108,19 @@ configuration store, ``config``, is writable.
      - M
      - Every reset reaches the boot loader; ``config`` read with ``dd`` and
        walked as JFFS2; ``k1``'s header read and its magic checked.
-   * - ``read-only`` marks every partition but ``config``: the boot loader, its
-       environment and both banks cannot be written from the running system,
-       and the configuration store can.
+   * - ``read-only`` marks ``boot`` alone: the boot loader cannot be written
+       from the running system, and its environment, the configuration store
+       and both banks can. The updater, ``onu-update``, never writes the bank
+       the system started from, which it tells by ``root=``; that rule is the
+       updater's, not the kernel's.
      - M
-     - ``flags`` in ``/sys/class/mtd/`` reads ``0xc00`` (``MTD_WRITEABLE``) for
-       ``config`` and ``0x800`` for the others; opening ``/dev/mtd0`` or
-       ``/dev/mtd4`` for writing fails with ``EACCES``.
-   * - ``k0`` bounds a kernel installed in bank 0 to 1 900 544 bytes. The
-       development image, which carries its user space, is larger and boots only
-       from RAM (see "RAM boot over TFTP").
+     - ``flags`` in ``/sys/class/mtd/`` reads ``0x800`` for ``boot`` and
+       ``0xc00`` (``MTD_WRITEABLE``) for the other seven; opening ``/dev/mtd0``
+       for writing fails with ``EACCES``, and ``/dev/mtd1`` and ``/dev/mtd6``
+       open.
+   * - ``k0`` and ``k1`` bound a kernel installed in a bank to 1 900 544 bytes.
+       The development image, which carries its user space, is larger and boots
+       only from RAM (see "RAM boot over TFTP").
      - M
      - The uImage's size against the partition's; the boot loader's
        ``Bytes transferred =`` line during a RAM boot.
@@ -2482,20 +2486,22 @@ starts.
        an ``mtdparts=`` table for the boot loader's own flash naming, which this
        kernel ignores (the partitions come from the tree and no command-line
        partition parser is built), and ``root=31:5``; bank 1's are the same with
-       ``root=31:7``, and bank 1 is read-only.
+       ``root=31:7``.
      - M, I
      - M: the boot loader's arguments, every boot, in ``Kernel command line:``
-       and in the boot loader's environment. I: their order after ``panic=10``;
-       see the row on ``chosen``.
+       and in the boot loader's environment; a start of bank 1 mounted its root
+       filesystem as 31:7. I: their order after ``panic=10``; see the row on
+       ``chosen``.
    * - Which bank a plain reset boots is set in the boot loader's environment: a
        committed bank, and a one-shot mode that arms the watchdog before booting
        so that a failing image costs one reset. A flash boot loads the image
-       from the flash window in place (KSEG0 ``0x94080000`` for bank 0). The
-       kernel does not change the choice: the environment's partitions are
-       read-only in the tree.
+       from the flash window in place (KSEG0 ``0x94080000`` for bank 0,
+       ``0x94440000`` for bank 1). The kernel itself does not change the
+       choice; user space does, through the writable ``env`` and ``env2``.
      - M
      - The boot loader's environment, read at its prompt and from the ``env``
-       partition.
+       partition; a one-shot start of bank 1 armed from Linux booted the image
+       at ``0x94440000``.
    * - The kernel's first act in ``plat_mem_setup()`` clears the watchdog, which
        also ends a one-shot boot's watchdog; from the watchdog driver's probe
        on, the kernel feeds the watchdog until user space opens it. A one-shot
@@ -2732,8 +2738,6 @@ About the board and the boot contract
      - What would settle it
    * - Whether anything connects to switch port 1.
      - None needed.
-   * - Whether the ``read-only`` flags protect the partitions.
-     - A write through a writable flash driver, once one exists.
    * - Whether the switch runs without the PON MAC when the reserved regions or
        the system controller are missing.
      - Booting a tree without them.
