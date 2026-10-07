@@ -51,7 +51,7 @@ stored() {
 
 settings() {
 	printf '%s\n' MODE=passthrough WAN_VLAN=410 >"$ONU_ROOT/run/onu.conf"
-	echo "user@example.net s3cret" >"$ONU_ROOT/run/onu-pppoe"
+	echo "user@example.net s3cret" >"$ONU_ROOT/run/onu-pppoe1"
 }
 
 echo "an empty store: the identity is the shipped firmware's"
@@ -60,7 +60,7 @@ run load
 check '[ $rc -eq 0 ]'
 check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
 check '[ ! -e "$ONU_ROOT/run/onu.conf" ]'
-check '[ ! -e "$ONU_ROOT/run/onu-pppoe" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-pppoe1" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = defaults ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = factory ]'
 teardown
@@ -75,8 +75,10 @@ check 'stored ID_PLOAM_PASSWORD=00112233445566778899'
 check 'stored ID_MODEL=TEST-1'
 check 'stored MODE=passthrough'
 check 'stored WAN_VLAN=410'
-check 'stored PPPOE_USER=user@example.net'
-check 'stored PPPOE_SECRET=s3cret'
+check 'stored PPPOE1_USER=user@example.net'
+check 'stored PPPOE1_SECRET=s3cret'
+check '! stored PPPOE2_USER='
+check '! stored PPPOE_USER='
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = saved ]'
 teardown
 
@@ -84,15 +86,15 @@ echo "load gives back what was saved, the identity no longer from ponid"
 setup
 settings
 run save
-rm -f "$ONU_ROOT/run/onu.conf" "$ONU_ROOT/run/onu-pppoe"
+rm -f "$ONU_ROOT/run/onu.conf" "$ONU_ROOT/run/onu-pppoe1"
 : >"$T/ponid.fail"
 run load
 check '[ $rc -eq 0 ]'
 check '[ "$(sort "$ONU_ROOT/run/onu-identity" | tr "\n" " ")" = "model=TEST-1 ploam_password=00112233445566778899 serial=XXXXXXXXXXXX " ]'
 check '[ "$(cat "$ONU_ROOT/run/onu.conf" | tr "\n" " ")" = "MODE=passthrough WAN_VLAN=410 " ]'
-check '[ "$(cat "$ONU_ROOT/run/onu-pppoe")" = "user@example.net s3cret" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user@example.net s3cret" ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
-check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe" | cut -c1-10)" = -rw------- ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe1" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu.conf" | cut -c1-10)" = -rw-r--r-- ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = loaded ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = store ]'
@@ -165,15 +167,51 @@ echo "a removed account leaves the store, and does not come back at boot"
 setup
 settings
 run save
-rm -f "$ONU_ROOT/run/onu-pppoe"
+rm -f "$ONU_ROOT/run/onu-pppoe1"
 run save
 check '[ $rc -eq 0 ]'
-check 'stored PPPOE_USER='
-check '! stored PPPOE_USER=user@example.net'
+check 'stored PPPOE1_USER='
+check '! stored PPPOE1_USER=user@example.net'
 rm -f "$ONU_ROOT/run/onu.conf"
 run load
-check '[ ! -e "$ONU_ROOT/run/onu-pppoe" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-pppoe1" ]'
 check 'grep -q -x MODE=passthrough "$ONU_ROOT/run/onu.conf"'
+teardown
+
+echo "two sessions' accounts: each to its own file for root, and one removed"
+setup
+settings
+echo "user@example.net/ipv6 s3cret6" >"$ONU_ROOT/run/onu-pppoe2"
+printf '%s\n' SESSION1_FAMILY=ipv4 SESSION2_FAMILY=ipv6 >>"$ONU_ROOT/run/onu.conf"
+run save
+check 'stored PPPOE2_USER=user@example.net/ipv6'
+check 'stored PPPOE2_SECRET=s3cret6'
+check 'stored SESSION2_FAMILY=ipv6'
+rm -f "$ONU_ROOT/run/onu-pppoe1" "$ONU_ROOT/run/onu-pppoe2"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe2")" = "user@example.net/ipv6 s3cret6" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe2" | cut -c1-10)" = -rw------- ]'
+rm -f "$ONU_ROOT/run/onu-pppoe2"
+run save
+check 'stored PPPOE2_USER='
+check 'stored PPPOE1_USER=user@example.net'
+teardown
+
+echo "the single account of before becomes the first session's"
+setup
+printf '%s\n' ID_SERIAL=XXXXXXXXXXXX PPPOE_USER=user@example.net PPPOE_SECRET=s3cret \
+	MODE=passthrough | onucfg --store "$ONU_STORE" import
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user@example.net s3cret" ]'
+check '! grep -q PPPOE "$ONU_ROOT/run/onu.conf"'
+run save
+check 'stored PPPOE1_USER=user@example.net'
+check 'stored PPPOE1_SECRET=s3cret'
+check 'stored PPPOE_USER='
+check '! stored PPPOE_USER=user@example.net'
+rm -f "$ONU_ROOT/run/onu-pppoe1"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user@example.net s3cret" ]'
 teardown
 
 echo "the sign-in's hash goes to the store and to a file for root"

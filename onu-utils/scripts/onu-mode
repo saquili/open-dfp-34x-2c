@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-mode: put the stick in the mode its settings name, bridge, router or
-# passthrough.
+# onu-mode: put the stick's data path in the shape its settings give: the
+# OLT's bridge, or the stick's own PPPoE sessions with their addresses handed
+# on, or, on a bench, a router.
 #
 #   onu-mode start    at boot: take the settings from /etc/onu.conf and apply
 #   onu-mode apply    apply the settings of /run/onu.conf again, after a change,
@@ -13,14 +14,27 @@
 #                     password of /run/onu-identity and bring the PON up
 #   onu-mode reidentify  take the PON down, give it the identity of
 #                     /run/onu-identity, and register with the OLT again
-#   onu-mode status   the mode in force and, in router or passthrough mode,
-#                     the WAN
+#   onu-mode status   the shape in force, the WAN or the sessions, and the
+#                     address handed on
 #
 # The settings are KEY=value lines in /run/onu.conf, which the status daemon
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
-# PPPoE user and secret are in /run/onu-pppoe, as "user secret", readable by
-# root only; /etc/onu-pppoe, if a bench's files carry one, seeds it. At boot,
-# onu-store has put the saved ones in both files before onu-mode starts.
+# account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN, as "user
+# secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
+# one, seeds the first. At boot, onu-store has put the saved ones in these
+# files before onu-mode starts.
+#
+# There is no mode to choose. Without a PPPoE account, omcid connects the host
+# link to the PON as the OLT provisions it (bridge). With one or more, the
+# stick holds the sessions itself (passthrough): omcid leaves the OLT's bridge
+# out (omcid -r), and each session runs on a GEM port that the OLT
+# provisioned, or on a VLAN on it, with the settings SESSIONn_GEM,
+# SESSIONn_VLAN, SESSIONn_MAC and SESSIONn_FAMILY (ipv4, ipv6 or both).
+# Sessions in one VLAN share its interface, wanVID, and the MAC of the first.
+# The first session that carries IPv4 hands its address on, and its name
+# servers; the others keep theirs on the stick. What a session has is in the
+# directory /run/session/N: gem, dev and family, and once it is up ppp, ipv4
+# and ipv6. MODE=router, kept for the bench, is the one setting of a shape.
 #
 # In bridge mode omcid connects the host link to the PON as the OLT
 # provisions it. In router mode omcid leaves the OLT's bridge out (omcid -r)
@@ -32,11 +46,11 @@
 # brings the WAN up when the OLT provisions its GEM port and restarts the PPPoE
 # or DHCP client when it ends.
 #
-# Passthrough mode is router mode with the address of the WAN's PPPoE session
-# handed on: it goes on no interface of the stick's, and the one host on the
-# LAN link, the router behind the stick, takes it by DHCP, as a /32 with
-# PASS_GATEWAY, the stick's address on that link, as its gateway. The LAN link
-# is a VLAN on the host link (LAN_VLAN), or the host link itself.
+# In passthrough, the address handed on goes on no interface of the stick's,
+# and the one host on the LAN link, the router behind the stick, takes it by
+# DHCP, as a /32 with PASS_GATEWAY, the stick's address on that link, as its
+# gateway. The LAN link is a VLAN on the host link (LAN_VLAN), or the host
+# link itself.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -46,8 +60,9 @@ set -u
 ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
 CONF=$RUN/onu.conf
-CREDS=$RUN/onu-pppoe
 IDENTITY=$RUN/onu-identity
+SESSIONS=$RUN/session
+MAX_SESSIONS=7
 NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 SHARE=$ROOT/usr/share/onu
@@ -74,12 +89,29 @@ load() {
 	LAN_VLAN=
 	PASS_GATEWAY=169.254.0.1
 	WAN_MAC=
-	[ -r "$CONF" ] || return 0
+	n=1
+	while [ $n -le $MAX_SESSIONS ]; do
+		eval "SESSION${n}_GEM= SESSION${n}_VLAN= SESSION${n}_MAC= SESSION${n}_FAMILY="
+		n=$((n + 1))
+	done
+	if [ -r "$CONF" ]; then
+		load_file
+	fi
+	# The single session of before: its settings were the WAN's.
+	[ -n "$SESSION1_GEM" ] || SESSION1_GEM=$WAN_GEM
+	[ -n "$SESSION1_VLAN" ] || SESSION1_VLAN=$WAN_VLAN
+	[ -n "$SESSION1_MAC" ] || SESSION1_MAC=$WAN_MAC
+	return 0
+}
+
+load_file() {
 	while IFS='=' read -r key value; do
 		case $key in
 		MODE | WAN_GEM | WAN_VLAN | WAN_PROTO | WAN_ADDRESS | WAN_GATEWAY | \
 			LAN_ADDRESS | LAN_DHCP | LAN_DHCP_START | LAN_DHCP_END | \
 			LAN_VLAN | PASS_GATEWAY | WAN_MAC) ;;
+		SESSION[1-7]_GEM | SESSION[1-7]_VLAN | SESSION[1-7]_MAC | \
+			SESSION[1-7]_FAMILY) ;;
 		*) continue ;;
 		esac
 		case $value in
@@ -90,9 +122,41 @@ load() {
 		esac
 		eval "$key=\$value"
 	done <"$CONF"
-	# Passthrough hands on the address of a PPPoE session.
-	[ "$MODE" = passthrough ] && WAN_PROTO=pppoe
-	return 0
+}
+
+# Setting $2 of session $1.
+setting() {
+	eval "echo \"\${SESSION$1_$2}\""
+}
+
+# The sessions that have an account, by number.
+sessions() {
+	n=1
+	while [ $n -le $MAX_SESSIONS ]; do
+		[ -s "$RUN/onu-pppoe$n" ] && echo $n
+		n=$((n + 1))
+	done
+}
+
+# The family of session $1: ipv4, ipv6 or both.
+family() {
+	f=$(setting "$1" FAMILY)
+	case $f in
+	ipv4 | ipv6 | both) echo "$f" ;;
+	*) echo both ;;
+	esac
+}
+
+# The session that hands its IPv4 address on: the first that carries IPv4.
+pass_session() {
+	for n in $(sessions); do
+		case $(family "$n") in
+		ipv4 | both)
+			echo "$n"
+			return 0
+			;;
+		esac
+	done
 }
 
 # The dotted mask of a prefix length.
@@ -151,11 +215,11 @@ bridge_down() {
 	return 0
 }
 
-# The GEM interface of the WAN: gemN for WAN_GEM=N, or with WAN_GEM=auto the
-# one of the lowest Port-ID but 4095, which OLTs give to multicast.
-wan_gem() {
-	if [ "$WAN_GEM" != auto ]; then
-		[ -e "$NET/gem$WAN_GEM" ] && echo "gem$WAN_GEM"
+# The GEM interface for the setting $1: gemN for N, or for auto (or nothing)
+# the one of the lowest Port-ID but 4095, which OLTs give to multicast.
+gem_of() {
+	if [ -n "$1" ] && [ "$1" != auto ]; then
+		[ -e "$NET/gem$1" ] && echo "gem$1"
 		return 0
 	fi
 	for id in $(ls "$NET" 2>/dev/null | sed -n 's/^gem\([0-9][0-9]*\)$/\1/p' | sort -n); do
@@ -163,6 +227,10 @@ wan_gem() {
 		echo "gem$id"
 		return 0
 	done
+}
+
+wan_gem() {
+	gem_of "$WAN_GEM"
 }
 
 # The DHCP server of the LAN, with the WAN's name servers when they are known.
@@ -185,34 +253,59 @@ lan_dhcp() {
 	udhcpd "$RUN/udhcpd.conf"
 }
 
-# One run of the PPPoE client on $1; in passthrough mode for IPv4 alone, with
-# its address passed on.
+# One run of pppoed for session $1 on $2, with the options $3; its process id
+# goes to /run/pppoedN.pid, for session_down().
 pppoe_client() {
-	if [ "$MODE" = passthrough ]; then
-		pppoed up -i "$1" -f "$CREDS" -D -4 -P
+	# $3 is a list of options, split on purpose.
+	sh -c 'echo $$ >"$0"; exec "$@"' "$RUN/pppoed$1.pid" \
+		pppoed up -i "$2" -f "$RUN/onu-pppoe$1" $3
+}
+
+# What session $1 has: the fact $2 with the value $3, or none without one.
+note() {
+	[ -d "$SESSIONS/$1" ] || return 0
+	if [ -n "${3:-}" ]; then
+		echo "$3" >"$SESSIONS/$1/$2"
 	else
-		pppoed up -i "$1" -f "$CREDS" -D
+		rm -f "$SESSIONS/$1/$2"
 	fi
 }
 
-# The PPPoE client on $1, started again whenever the link ends. Its "up" line
-# gives the name servers for the LAN and, in passthrough mode, the address
-# that the router takes, until the link ends.
+# The PPPoE client of session $1 on $2, with the options $3, started again
+# whenever the link ends. In the role $4, "pass", its "up" line gives the
+# name servers and the address the router takes, until the link ends; in
+# "primary" the name servers alone.
 pppoe_loop() {
 	while :; do
-		pppoe_client "$1" 2>>"$RUN/pppoed.log" |
+		pppoe_client "$1" "$2" "$3" 2>>"$RUN/pppoed.log" |
 			while read -r word dev _ addr _ _ _ _ _ dns1 dns2; do
-				[ "$word" = up ] || continue
-				dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
-				if [ -n "$dns" ]; then
-					echo "$dns" >"$RUN/onu-dns"
-				else
-					rm -f "$RUN/onu-dns"
+				case $word in
+				up6)
+					note "$1" ppp "$dev"
+					note "$1" ipv6 "$addr"
+					log "session $1: IPv6 up on $dev"
+					continue
+					;;
+				up) ;;
+				*) continue ;;
+				esac
+				note "$1" ppp "$dev"
+				note "$1" ipv4 "$addr"
+				if [ "$4" != none ]; then
+					dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
+					if [ -n "$dns" ]; then
+						echo "$dns" >"$RUN/onu-dns"
+					else
+						rm -f "$RUN/onu-dns"
+					fi
 				fi
-				[ "$MODE" = passthrough ] && pass_lease "$addr" "$dev"
-				log "WAN up on $dev"
+				[ "$4" = pass ] && pass_lease "$addr" "$dev"
+				log "session $1: IPv4 up on $dev"
 			done
-		[ "$MODE" = passthrough ] && pass_lease_down
+		note "$1" ppp
+		note "$1" ipv4
+		note "$1" ipv6
+		[ "$4" = pass ] && pass_lease_down
 		sleep 5
 	done
 }
@@ -266,8 +359,8 @@ pass_lease_down() {
 # takes it: pppoed asks the concentrator for 1500 bytes, and keeps to 1492
 # when the interface has no room or the concentrator does not agree.
 pppoe_mtu() {
-	for dev in pon "$1" "$2"; do
-		ip link set "$dev" mtu 1508 2>/dev/null || return 0
+	for mtu_dev in pon "$1" "$2"; do
+		ip link set "$mtu_dev" mtu 1508 2>/dev/null || return 0
 	done
 }
 
@@ -289,8 +382,8 @@ wan_up() {
 	case $WAN_PROTO in
 	pppoe)
 		pppoe_mtu "$gem" "$wan"
-		pppoe_loop "$wan" &
-		echo $! >"$RUN/pppoe-loop.pid"
+		pppoe_loop 1 "$wan" -D primary &
+		echo $! >"$RUN/pppoe-loop1.pid"
 		out=ppp0
 		;;
 	static)
@@ -336,8 +429,8 @@ feeds_down() {
 wan_down() {
 	gem= wan=
 	[ -r "$RUN/onu-wan" ] && read -r gem wan _ <"$RUN/onu-wan"
-	stop_pid pppoe-loop
-	killall pppoed 2>/dev/null
+	stop_pid pppoe-loop1
+	stop_pid pppoed1
 	stop_pid udhcpc
 	feeds_down
 	# What a static or DHCP WAN put on the interface goes with it.
@@ -355,10 +448,150 @@ wan_down() {
 	return 0
 }
 
-# One round of the watcher: the WAN follows its GEM port, and the DHCP server
-# follows the name servers.
+# The interface of session $1 on the GEM interface $2: the GEM interface
+# itself, or wanVID for a VLAN.
+session_dev() {
+	vlan=$(setting "$1" VLAN)
+	if [ -n "$vlan" ]; then
+		echo "wan$vlan"
+	else
+		echo "$2"
+	fi
+}
+
+# Whether a running session other than $1 is on the interface $2.
+dev_shared() {
+	for d in "$SESSIONS"/*/dev; do
+		[ -r "$d" ] || continue
+		[ "$d" = "$SESSIONS/$1/dev" ] && continue
+		[ "$(cat "$d")" = "$2" ] && return 0
+	done
+	return 1
+}
+
+# Session $1 up on the GEM interface $2: its interface, made for the first
+# session on it, room for PPPoE's headers, and its client.
+session_up() {
+	n=$1 gem=$2
+	dev=$(session_dev "$n" "$gem")
+	fam=$(family "$n")
+	if ! dev_shared "$n" "$dev"; then
+		ip link set "$gem" up
+		if [ "$dev" != "$gem" ]; then
+			ip link add link "$gem" name "$dev" type vlan id "$(setting "$n" VLAN)"
+		fi
+		mac=$(setting "$n" MAC)
+		if [ -n "$mac" ]; then
+			ip link set "$dev" address "$mac" ||
+				log "session $n: the interface did not take its MAC address"
+		fi
+		[ "$dev" != "$gem" ] && ip link set "$dev" up
+		pppoe_mtu "$gem" "$dev"
+	fi
+	mkdir -p "$SESSIONS/$n"
+	echo "$gem" >"$SESSIONS/$n/gem"
+	echo "$dev" >"$SESSIONS/$n/dev"
+	echo "$fam" >"$SESSIONS/$n/family"
+	opts= role=none
+	case $fam in
+	ipv4) opts=-4 ;;
+	ipv6) opts=-6 ;;
+	esac
+	if [ "$n" = "$(pass_session)" ]; then
+		opts="-D $opts -P"
+		role=pass
+		echo "$n" >"$RUN/onu-pass-session"
+	fi
+	pppoe_loop "$n" "$dev" "$opts" "$role" &
+	echo $! >"$RUN/pppoe-loop$n.pid"
+	log "session $n on $dev ($fam), GEM port ${gem#gem}"
+}
+
+# Whether a running session other than $1 is on the GEM interface $2.
+gem_shared() {
+	for g in "$SESSIONS"/*/gem; do
+		[ -r "$g" ] || continue
+		[ "$g" = "$SESSIONS/$1/gem" ] && continue
+		[ "$(cat "$g")" = "$2" ] && return 0
+	done
+	return 1
+}
+
+# Session $1 down: its client, which ends the session with the concentrator,
+# and its interface when no other session is on it. Its names are its own:
+# the watcher's round holds the GEM port it goes up on next.
+session_down() {
+	[ -r "$SESSIONS/$1/dev" ] || return 0
+	read -r down_dev <"$SESSIONS/$1/dev"
+	read -r down_gem <"$SESSIONS/$1/gem"
+	stop_pid "pppoe-loop$1"
+	stop_pid "pppoed$1"
+	if [ "$1" = "$(cat "$RUN/onu-pass-session" 2>/dev/null)" ]; then
+		pass_lease_down
+		rm -f "$RUN/onu-pass-session"
+	fi
+	if ! dev_shared "$1" "$down_dev"; then
+		[ "$down_dev" != "$down_gem" ] && ip link del "$down_dev" 2>/dev/null
+		# What pppoe_mtu() raised goes back to Ethernet's MTU, the PON port
+		# last, once no session is on the GEM port.
+		gem_shared "$1" "$down_gem" || ip link set "$down_gem" mtu 1500 2>/dev/null
+	fi
+	rm -rf "${SESSIONS:?}/$1"
+	[ -n "$(ls "$SESSIONS" 2>/dev/null)" ] || ip link set pon mtu 1500 2>/dev/null
+	log "session $1 down"
+	return 0
+}
+
+sessions_down() {
+	for d in "$SESSIONS"/*; do
+		[ -d "$d" ] && session_down "${d##*/}"
+	done
+	feeds_down
+	rm -f "$RUN/onu-dns"
+	return 0
+}
+
+# One round of the watcher in passthrough: each session follows its GEM port,
+# and a session without its account any more goes.
+sessions_tick() {
+	want=" $(sessions | tr '\n' ' ')"
+	n=1
+	while [ $n -le $MAX_SESSIONS ]; do
+		cur=
+		[ -r "$SESSIONS/$n/gem" ] && read -r cur <"$SESSIONS/$n/gem"
+		case $want in
+		*" $n "*)
+			gem=$(gem_of "$(setting "$n" GEM)")
+			if [ -n "$gem" ] && [ "$gem" != "$cur" ]; then
+				[ -n "$cur" ] && session_down "$n"
+				session_up "$n" "$gem"
+			elif [ -z "$gem" ] && [ -n "$cur" ]; then
+				log "session $n: its GEM port is gone"
+				session_down "$n"
+			fi
+			;;
+		*)
+			[ -n "$cur" ] && session_down "$n"
+			;;
+		esac
+		n=$((n + 1))
+	done
+	first=$(cat "$SESSIONS"/*/gem 2>/dev/null | head -n 1)
+	if [ -n "$first" ]; then
+		feeds_sync "$first"
+	else
+		feeds_down
+	fi
+}
+
+# One round of the watcher: in router mode the WAN follows its GEM port, and
+# the DHCP server follows the name servers; in passthrough the sessions.
 tick() {
 	load
+	if [ "$(cat "$RUN/onu-mode" 2>/dev/null)" = passthrough ]; then
+		sessions_tick
+		return 0
+	fi
 	gem=$(wan_gem)
 	cur=
 	[ -r "$RUN/onu-wan" ] && read -r cur _ <"$RUN/onu-wan"
@@ -419,8 +652,9 @@ pass_up() {
 
 pass_down() {
 	stop_pid onu-watch
-	wan_down
+	sessions_down
 	pass_lease_down
+	rm -f "$RUN/onu-pass-session"
 	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
 	[ -n "$lan" ] && ip address del "$PASS_GATEWAY/32" dev "$lan" 2>/dev/null
 	ip link del lan 2>/dev/null
@@ -479,13 +713,15 @@ apply() {
 		CONF=$RUN/onu.conf
 	fi
 	load
-	case $MODE in
-	bridge | router | passthrough) ;;
-	*)
-		log "mode $MODE is not one: bridge"
-		MODE=bridge
-		;;
-	esac
+	# Only the bench's router is chosen; otherwise an account makes the
+	# stick hold its sessions, and none leaves the OLT's bridge.
+	if [ "$MODE" != router ]; then
+		if [ -n "$(sessions)" ]; then
+			MODE=passthrough
+		else
+			MODE=bridge
+		fi
+	fi
 	# omcid routes in both modes where the stick routes.
 	if [ "$old" != "$MODE" ]; then
 		case $old:$MODE in
@@ -496,11 +732,11 @@ apply() {
 			;;
 		esac
 	fi
+	echo "$MODE" >"$RUN/onu-mode"
 	case $MODE in
 	router) router_up ;;
 	passthrough) pass_up ;;
 	esac
-	echo "$MODE" >"$RUN/onu-mode"
 	cp "$CONF" "$RUN/onu-mode.conf" 2>/dev/null
 	log "$MODE mode"
 }
@@ -508,8 +744,8 @@ apply() {
 case ${1:-} in
 start)
 	[ -e "$CONF" ] || cp "$ROOT/etc/onu.conf" "$CONF" 2>/dev/null || : >"$CONF"
-	if [ ! -e "$CREDS" ] && [ -r "$ROOT/etc/onu-pppoe" ]; then
-		(umask 077 && cp "$ROOT/etc/onu-pppoe" "$CREDS")
+	if [ -z "$(sessions)" ] && [ -r "$ROOT/etc/onu-pppoe" ]; then
+		(umask 077 && cp "$ROOT/etc/onu-pppoe" "$RUN/onu-pppoe1")
 	fi
 	apply
 	;;
@@ -543,6 +779,13 @@ status)
 	echo "mode ${mode:-none}"
 	[ -r "$RUN/onu-wan" ] && read -r gem wan out <"$RUN/onu-wan" &&
 		echo "wan $wan on $gem, out by $out"
+	for d in "$SESSIONS"/*; do
+		[ -r "$d/dev" ] || continue
+		line="session ${d##*/} on $(cat "$d/dev") ($(cat "$d/family"))"
+		[ -r "$d/ppp" ] && line="$line, up on $(cat "$d/ppp")"
+		[ -r "$d/ipv4" ] && line="$line, $(cat "$d/ipv4")"
+		echo "$line"
+	done
 	[ -s "$RUN/onu-dns" ] && echo "dns $(cat "$RUN/onu-dns")"
 	[ -s "$RUN/onu-pass" ] &&
 		echo "pass $(cat "$RUN/onu-pass") on $(cat "$RUN/onu-lan" 2>/dev/null)"
@@ -558,7 +801,7 @@ netmask)
 	netmask "${2:-0}"
 	;;
 *)
-	echo "usage: onu-mode start|apply|stop|status" >&2
+	echo "usage: onu-mode start|apply|stop|identity|reidentify|status" >&2
 	exit 2
 	;;
 esac

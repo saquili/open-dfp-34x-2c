@@ -66,30 +66,34 @@ The small programs of the ONU.
           T-CONT 0  Alloc-ID 1024
 
 ``onu-mode``
-   puts the stick in the mode its settings name (``/run/onu.conf``, seeded from
-   ``/etc/onu.conf``, which says what each key means). In bridge mode omcid
-   connects the host link to the PON as the OLT provisions it. In router mode
-   omcid leaves the OLT's bridge out (``omcid -r``) and the stick routes: the
-   LAN is the host link ``sfp``, with an address and BusyBox's DHCP server;
-   the WAN is a GEM port the OLT provisioned, or a VLAN on it, with an address
-   by PPPoE (pppoed, with the user and secret of ``/run/onu-pppoe``; the PON
-   port, the GEM interface and the VLAN get an MTU of 1508 first, so that a
-   concentrator that agrees gives a session of 1500-byte packets, RFC 4638), by DHCP
-   (BusyBox's client, with ``dhcp-wan`` as its script) or by hand. The stick
-   translates no address and has no packet filter: a LAN host reaches beyond
-   the WAN with an address that the network behind the WAN routes back to the
-   stick. A watcher brings the WAN up once the OLT has
-   provisioned its GEM port, and starts the PPPoE client again when its link
-   ends. Passthrough mode is router mode with the WAN's PPPoE session opened
-   by the stick and its IPv4 address handed on (``pppoed -P``): the address
-   goes on no interface of the stick's, and the router behind the stick takes
-   it from BusyBox's DHCP server on the link between them (a VLAN on ``sfp``,
-   ``LAN_VLAN``, or ``sfp`` itself), as a /32 whose gateway is the stick's
-   address on that link (``PASS_GATEWAY``), given as a classless static route
-   too (RFC 3442), with the session's name servers and MTU and leases of a
-   minute, so that the router finds the address of a new session within one.
-   The stick routes the address there with a host route, until the session
-   ends::
+   gives the stick's data path the shape its settings give (``/run/onu.conf``,
+   seeded from ``/etc/onu.conf``, which says what each key means); there is no
+   mode to choose. Without a PPPoE account omcid connects the host link to the
+   PON as the OLT provisions it. With accounts, the stick holds up to seven
+   PPPoE sessions itself, each with the user and secret of
+   ``/run/onu-pppoeN``: omcid leaves the OLT's bridge out (``omcid -r``), and
+   each session runs on a GEM port the OLT provisioned, or on a VLAN on it
+   (``wanVID``, shared by the sessions in that VLAN), with its families: IPv4,
+   IPv6 or both (``pppoed -4`` or ``-6``), as an operator that gives IPv6 on a
+   session of its own asks. The PON port, the GEM interface and the VLAN get
+   an MTU of 1508 first, so that a concentrator that agrees gives a session of
+   1500-byte packets (RFC 4638). The first session that carries IPv4 hands its
+   address on (``pppoed -P``): the address goes on no interface of the
+   stick's, and the router behind the stick takes it from BusyBox's DHCP
+   server on the link between them (a VLAN on ``sfp``, ``LAN_VLAN``, or
+   ``sfp`` itself), as a /32 whose gateway is the stick's address on that
+   link (``PASS_GATEWAY``), given as a classless static route too (RFC 3442),
+   with the session's name servers and MTU and leases of a minute, so that
+   the router finds the address of a new session within one. The stick routes
+   the address there with a host route, until the session ends. A watcher
+   brings each session up once the OLT has provisioned its GEM port, and
+   starts its client again when its link ends; what a session has is in
+   ``/run/session/N``. For the bench, ``MODE=router`` makes the stick route
+   instead: the LAN is the host link ``sfp``, with an address and BusyBox's
+   DHCP server; the WAN is a GEM port or a VLAN on it, with an address by
+   PPPoE (session 1's account), by DHCP (BusyBox's client, with ``dhcp-wan``
+   as its script) or by hand. The stick translates no address and has no
+   packet filter::
 
       onu-mode start      # at boot
       onu-mode apply      # after /run/onu.conf changed; saves it too

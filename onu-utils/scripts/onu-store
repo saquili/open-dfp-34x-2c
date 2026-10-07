@@ -6,10 +6,10 @@
 # partition "config", and the files the running system reads.
 #
 #   onu-store load      at boot: the identity, the settings and the PPPoE
-#                       account from the store into /run/onu-identity,
-#                       /run/onu.conf and /run/onu-pppoe
-#   onu-store save      the settings of /run/onu.conf and the account of
-#                       /run/onu-pppoe into the store, in one write
+#                       accounts from the store into /run/onu-identity,
+#                       /run/onu.conf and /run/onu-pppoeN
+#   onu-store save      the settings of /run/onu.conf and the accounts of
+#                       /run/onu-pppoeN into the store, in one write
 #   onu-store migrate   the same, with the identity of the shipped firmware's
 #                       configuration (ponid) taken into the store
 #   onu-store identity  the identity of the KEY=VALUE lines of the standard
@@ -19,8 +19,10 @@
 #                       into /run/onu-auth
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
-# the name in lower case; PPPOE_USER and PPPOE_SECRET are the line
-# "user secret" of /run/onu-pppoe, which an empty PPPOE_USER leaves out;
+# the name in lower case; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
+# 7, are the line "user secret" of /run/onu-pppoeN, which an empty PPPOEn_USER
+# leaves out (PPPOE_USER and PPPOE_SECRET, the single account of before, are
+# the first session's);
 # AUTH_HASH is the content of /run/onu-auth, for the status daemon's sign-in;
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
@@ -44,6 +46,7 @@ ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
+MAX_SESSIONS=7
 IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
 SOURCE=$RUN/onu-identity-source
@@ -89,17 +92,31 @@ factory_identity() {
 	}'
 }
 
-# The settings and the account in force, as keys of the store.
+# The settings and the accounts in force, as keys of the store.
 settings() {
 	if [ -r "$CONF" ]; then
-		grep '^[A-Z][A-Z0-9_]*=' "$CONF" | grep -v -e '^ID_' -e '^PPPOE_' -e '^AUTH_'
+		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
+			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_'
 	fi
-	user=
-	secret=
-	[ -r "$CREDS" ] && read -r user secret <"$CREDS"
-	# No account in force removes the stored one: it would come back at boot.
-	echo "PPPOE_USER=${user:-}"
-	echo "PPPOE_SECRET=${secret:-}"
+	stored=$(contents 2>/dev/null)
+	n=1
+	while [ $n -le $MAX_SESSIONS ]; do
+		user=
+		secret=
+		[ -r "$CREDS$n" ] && read -r user secret <"$CREDS$n"
+		# No account in force removes the stored one: it would come back
+		# at boot.
+		if [ -n "$user" ] || printf '%s\n' "$stored" | grep -q "^PPPOE${n}_USER=."; then
+			echo "PPPOE${n}_USER=${user:-}"
+			echo "PPPOE${n}_SECRET=${secret:-}"
+		fi
+		n=$((n + 1))
+	done
+	# The single account of before is the first session's now.
+	if printf '%s\n' "$stored" | grep -q '^PPPOE_USER=.'; then
+		echo "PPPOE_USER="
+		echo "PPPOE_SECRET="
+	fi
 }
 
 load() {
@@ -108,9 +125,9 @@ load() {
 		list=
 	}
 	umask 077
-	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS.new" "$AUTH.new"
+	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS"*.new "$AUTH.new"
 	printf '%s\n' "$list" | awk -v id="$IDENTITY.new" -v conf="$CONF.new" \
-		-v creds="$CREDS.new" -v auth="$AUTH.new" '
+		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -120,17 +137,29 @@ load() {
 		}
 		k ~ /^ID_/ { print tolower(substr(k, 4)) "=" v > id; next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
-		k == "PPPOE_USER" { user = v; next }
-		k == "PPPOE_SECRET" { secret = v; next }
+		k == "PPPOE_USER" { old_user = v; next }
+		k == "PPPOE_SECRET" { old_secret = v; next }
+		k ~ /^PPPOE[1-9]_USER$/ { user[substr(k, 6, 1)] = v; next }
+		k ~ /^PPPOE[1-9]_SECRET$/ { secret[substr(k, 6, 1)] = v; next }
 		{ print k "=" v > conf }
-		END { if (user != "") print user " " secret > creds }'
+		END {
+			if (user[1] == "" && old_user != "") {
+				user[1] = old_user
+				secret[1] = old_secret
+			}
+			for (n = 1; n <= max; n++)
+				if (user[n] != "")
+					print user[n] " " secret[n] > (creds n ".new")
+		}'
 	if [ -e "$CONF.new" ]; then
 		chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
 		state loaded
 	else
 		state defaults
 	fi
-	[ -e "$CREDS.new" ] && mv "$CREDS.new" "$CREDS"
+	for new in "$CREDS"*.new; do
+		[ -e "$new" ] && mv "$new" "${new%.new}"
+	done
 	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
 	if [ -s "$IDENTITY.new" ]; then
 		mv "$IDENTITY.new" "$IDENTITY"

@@ -36,9 +36,13 @@ setup() {
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
 	: >"$LOG"
-	for prog in ip tc killall udhcpd udhcpc logger kill onu-store; do
+	for prog in tc killall udhcpd udhcpc logger kill onu-store; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
+	# ip makes the interfaces it is told to add, as the kernel would.
+	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n%s\n' \
+		'[ "$1 $2 $3 $4 $6" = "link add link name type" ] && mkdir -p "$ONU_ROOT/sys/class/net/$5"; exit 0' \
+		>"$T/bin/ip"
 	# omcid runs from its first start on, as on the board.
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
@@ -47,8 +51,10 @@ setup() {
 	# nft stays a stand-in, so that a call to it would show in the log: the
 	# stick has no packet filter, and onu-mode must not need one.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
-	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
-		'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns 198.51.100.53 -"' \
+	# pppoed opens IPv4, or IPv6 alone when told -6, and keeps it two seconds.
+	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\n%s 2\n' \
+		'*" -6 "*) echo "up6 ppp1 local fe80::2 peer fe80::1 session 18" ;;' \
+		'*) echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns 198.51.100.53 -" ;;' \
 		"$REAL_SLEEP" >"$T/bin/pppoed"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/sleep"
 	printf '#!/bin/sh\n[ "$1" = gem ] || exit 1\n%s\n' \
@@ -109,18 +115,18 @@ setup
 conf MODE=router WAN_PROTO=pppoe WAN_VLAN=410 WAN_GEM=1024
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
-check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe" | cut -c1-10)" = "-rw-------" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe1" | cut -c1-10)" = "-rw-------" ]'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link add link gem1024 name wan type vlan id 410"'
 check 'logged "^ip link set pon mtu 1508"'
 check 'logged "^ip link set gem1024 mtu 1508"'
 check 'logged "^ip link set wan mtu 1508"'
-check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^pppoed up" "$LOG" | head -1 | cut -d: -f1)" ]'
 for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ -s "$ONU_ROOT/run/onu-dns" ] && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe -D"'
+check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^pppoed up" "$LOG" | head -1 | cut -d: -f1)" ]'
+check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe1 -D"'
 check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
@@ -162,10 +168,10 @@ echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "WAN up on ppp0" && break
+	logged "IPv4 up on ppp0" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "WAN up on ppp0"'
+check 'logged "IPv4 up on ppp0"'
 check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
 check '"$MODE_SCRIPT" status >/dev/null'
 check '! "$MODE_SCRIPT" status | grep -q "^dns"'
@@ -190,14 +196,15 @@ check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 teardown
 
-echo "passthrough mode, PPPoE in a VLAN, the LAN link in another"
+echo "an account: the stick holds the session, in a VLAN, the LAN link in another"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
 echo 1492 >"$ONU_ROOT/sys/class/net/ppp0/mtu"
-conf MODE=passthrough WAN_PROTO=dhcp WAN_VLAN=410 LAN_VLAN=36 \
-	PASS_GATEWAY=192.0.2.254 WAN_MAC=00:00:5e:00:53:01
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=36 \
+	PASS_GATEWAY=192.0.2.254 SESSION1_MAC=00:00:5e:00:53:01
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 check 'logged "^omcid -r"'
 check 'logged "^ip link del omcibr0"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
@@ -205,13 +212,20 @@ check 'logged "^ip link add link sfp name lan type vlan id 36"'
 check 'logged "^ip address add 192.0.2.254/32 dev lan"'
 check '! logged "^udhcpd"'
 "$MODE_SCRIPT" tick 2>/dev/null
-check 'logged "^ip link set wan address 00:00:5e:00:53:01"'
-check '[ "$(grep -n "ip link set wan address" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^ip link set wan up" "$LOG" | cut -d: -f1)" ]'
+check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+check 'logged "^ip link set wan410 address 00:00:5e:00:53:01"'
+check '[ "$(grep -n "ip link set wan410 address" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^ip link set wan410 up" "$LOG" | cut -d: -f1)" ]'
+check 'logged "^ip link set wan410 mtu 1508"'
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/onu-pass" ] && break
+	[ -s "$ONU_ROOT/run/onu-pass" ] && logged "^udhcpd" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe -D -4 -P"'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/dev")" = wan410 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/ipv4")" = 192.0.2.2 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/ppp")" = ppp0 ]'
+check '[ -s "$ONU_ROOT/run/pppoed1.pid" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
 check 'logged "^ip route replace 192.0.2.2 dev lan"'
 check 'grep -q "^interface lan" "$ONU_ROOT/run/udhcpd.conf"'
@@ -224,12 +238,83 @@ check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd.conf"'
 check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
 check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan"'
+check '"$MODE_SCRIPT" status | grep -q "^session 1 on wan410 (ipv4), up on ppp0, 192.0.2.2"'
 # The stand-in session ends after two seconds: the address goes with it.
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 	logged "^ip route del 192.0.2.2 dev lan" && break
 	"$REAL_SLEEP" 0.2
 done
 check 'logged "^ip route del 192.0.2.2 dev lan"'
+"$MODE_SCRIPT" stop 2>/dev/null
+check '[ ! -e "$ONU_ROOT/run/session/1" ]'
+check 'logged "^ip link del wan410"'
+teardown
+
+echo "two sessions in one VLAN: IPv4 handed on, IPv6 on the stick"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv6 \
+	LAN_VLAN=36
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/session/2/ipv6" ] && [ -s "$ONU_ROOT/run/onu-pass" ] && break
+	"$REAL_SLEEP" 0.2
+done
+check '[ "$(grep -c "^ip link add link gem256 name wan410" "$LOG")" = 1 ]'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -6$"'
+check '[ "$(cat "$ONU_ROOT/run/session/2/ipv6")" = fe80::2 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/2/ppp")" = ppp1 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/2/family")" = ipv6 ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-pass-session")" = 1 ]'
+# The IPv6 account goes: its session ends, the VLAN stays for the other.
+: >"$LOG"
+rm "$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" tick 2>/dev/null
+check '[ ! -e "$ONU_ROOT/run/session/2" ]'
+check '[ -e "$ONU_ROOT/run/session/1" ]'
+check '! logged "^ip link del wan410"'
+check '! logged "^ip link set pon mtu 1500"'
+check '[ ! -e "$ONU_ROOT/run/pppoed2.pid" ]'
+teardown
+
+echo "a session in no VLAN runs on the GEM interface, on the GEM port named"
+setup
+conf SESSION1_GEM=1024 SESSION1_FAMILY=both
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^pppoed up -i gem1024 -f $ONU_ROOT/run/onu-pppoe1 -D -P"'
+check '! logged "type vlan id"'
+"$MODE_SCRIPT" stop 2>/dev/null
+check 'logged "^ip link set gem1024 mtu 1500"'
+check 'logged "^ip link set pon mtu 1500"'
+check '[ ! -e "$ONU_ROOT/run/session/1" ]'
+teardown
+
+echo "the settings of before: the WAN's VLAN and MAC are the first session's"
+setup
+conf MODE=passthrough WAN_VLAN=410 WAN_MAC=00:00:5e:00:53:01
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+check 'logged "^ip link set wan410 address 00:00:5e:00:53:01"'
+teardown
+
+echo "without an account there is no session: the OLT's bridge"
+setup
+conf MODE=passthrough SESSION1_VLAN=410
+"$MODE_SCRIPT" start 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "^omcid" && break
+	"$REAL_SLEEP" 0.2
+done
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
+check 'logged "^omcid $"'
 teardown
 
 echo "from router to passthrough, omcid left as it is"
@@ -237,7 +322,8 @@ setup
 conf MODE=router LAN_ADDRESS=198.51.100.1/24 LAN_DHCP=off
 "$MODE_SCRIPT" start 2>/dev/null
 : >"$LOG"
-printf 'MODE=passthrough\n' >"$ONU_ROOT/run/onu.conf"
+printf 'MODE=\n' >"$ONU_ROOT/run/onu.conf"
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" apply 2>/dev/null
 check '! logged "^killall -USR"'
 check '! logged "^omcid"'
@@ -246,12 +332,13 @@ check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 teardown
 
-echo "from passthrough back to bridge"
+echo "the account removed: from passthrough back to bridge"
 setup
-conf MODE=passthrough LAN_VLAN=36
+conf LAN_VLAN=36
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 : >"$LOG"
-printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
+rm "$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" apply 2>/dev/null
 check 'logged "^ip address del 169.254.0.1/32 dev lan"'
 check 'logged "^ip link del lan"'
