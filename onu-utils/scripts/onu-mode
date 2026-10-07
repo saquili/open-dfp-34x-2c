@@ -223,11 +223,20 @@ omcid_run() {
 	fi
 }
 
-# What omcid built in bridge mode: the bridge and the VLAN rules.
+# What omcid built in bridge mode: the bridge and its VLAN rules, the filters
+# from priority 1000 up on the ingress of sfp and pon. The filters of the
+# management VLAN, which the boot put at priority 1 of the same qdiscs, stay:
+# they keep that VLAN off the PON in every mode.
 bridge_down() {
 	ip link del omcibr0 2>/dev/null
-	tc qdisc del dev sfp clsact 2>/dev/null
-	tc qdisc del dev pon clsact 2>/dev/null
+	for dev in sfp pon; do
+		for pref in $(tc filter show dev "$dev" ingress 2>/dev/null |
+			awk '{ for (i = 1; i < NF; i++)
+				if ($i == "pref" && $(i + 1) >= 1000) print $(i + 1) }' |
+			sort -u); do
+			tc filter del dev "$dev" ingress pref "$pref" 2>/dev/null
+		done
+	done
 	return 0
 }
 

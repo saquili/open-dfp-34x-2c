@@ -39,9 +39,14 @@ setup() {
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding"
 	echo 1 >"$ONU_ROOT/proc/sys/net/ipv6/conf/lan/disable_ipv6"
 	: >"$LOG"
-	for prog in tc killall udhcpd udhcpc logger kill onu-store dhcp6d; do
+	for prog in killall udhcpd udhcpc logger kill onu-store dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
+	# tc shows, on the ingress of sfp and pon, the boot's filter of the
+	# management VLAN at priority 1 and two of omcid's VLAN rules.
+	printf '#!/bin/sh\necho "tc $*" >>"$LOG"\n[ "$1 $2" = "filter show" ] || exit 0\n%s\n' \
+		'printf "filter protocol 802.1Q pref 1 flower chain 0 \nfilter protocol 802.1Q pref 1 flower chain 0 handle 0x1 \nfilter protocol all pref 1000 flower chain 0 \nfilter protocol all pref 1000 flower chain 0 handle 0x1 \nfilter protocol 802.1Q pref 1001 flower chain 0 \n"' \
+		>"$T/bin/tc"
 	# ip makes the interfaces it is told to add, as the kernel would.
 	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n%s\n' \
 		'[ "$1 $2 $3 $4 $6" = "link add link name type" ] && mkdir -p "$ONU_ROOT/sys/class/net/$5"; exit 0' \
@@ -95,7 +100,10 @@ conf MODE=router WAN_PROTO=dhcp LAN_ADDRESS=198.51.100.1/24 \
 	LAN_DHCP_START=198.51.100.10 LAN_DHCP_END=198.51.100.20
 "$MODE_SCRIPT" start 2>/dev/null
 check 'logged "^ip link del omcibr0"'
-check 'logged "^tc qdisc del dev sfp clsact"'
+check 'logged "^tc filter del dev sfp ingress pref 1000"'
+check 'logged "^tc filter del dev pon ingress pref 1001"'
+check '! logged "^tc filter del dev [a-z]* ingress pref 1$"'
+check '! logged "^tc qdisc del dev \(sfp\|pon\) clsact"'
 check 'logged "^omcid -r"'
 check 'logged "^ip address add 198.51.100.1/24 dev sfp"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
