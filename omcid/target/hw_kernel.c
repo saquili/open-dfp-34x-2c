@@ -888,8 +888,8 @@ static size_t gem_present(struct gem_present *out, size_t cap, int lower)
 	return n;
 }
 
-/* Remove a GEM interface. */
-static int gem_delete(int ifindex)
+/* Remove an interface: a GEM interface, or the bridge. */
+static int link_delete(int ifindex)
 {
 	uint8_t req[NL_HDRLEN + sizeof(struct ifinfomsg)] __aligned(4);
 	struct ifinfomsg ifi = { .ifi_family = AF_UNSPEC,
@@ -1090,7 +1090,7 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 	for (size_t j = 0; j < nhave; j++) {
 		if (keep[j])
 			continue;
-		err = gem_delete(have[j].ifindex);
+		err = link_delete(have[j].ifindex);
 		if (err) {
 			OMCI_WARN("gem: could not remove Port-ID %u: %s",
 				  have[j].port_id, strerror(-err));
@@ -1267,10 +1267,42 @@ static void uni_discard_sync(const uint16_t *vids, size_t n);
 static bool g_router;
 static bool g_router_told;
 
+/*
+ * The VLANs the stick's own sessions hold, by the VID they have on the PON
+ * side: one VID a line in HELD_PATH, which onu-mode writes before it has the
+ * data path programmed again (SIGUSR2). The OLT's VLAN rules into those
+ * VLANs, and its bridge ports that carry nothing else, stay out of the
+ * hardware, so that the VLANs' frames reach the sessions and no frame of the
+ * subscriber's crosses into them; the rest of what the OLT provisions is
+ * bridged as before. A bridge that filters no VLAN would carry the sessions'
+ * VLANs too, and the host link's VLAN the sessions hand their addresses on
+ * in: while the stick holds VLANs, such a bridge stays out of the hardware
+ * altogether, as in router mode (g_held_unbridged).
+ */
+#define HELD_PATH "/run/onu-held-vlans"
+#define HELD_MAX 8u
+
+static uint16_t g_held[HELD_MAX];
+static size_t g_held_n;
+static bool g_held_unbridged;
+static bool g_held_told;
+
+/*
+ * Whether the bridge's going out of the hardware or coming back for the held
+ * VLANs has changed what of the MIB applies: the OLT creates the bridge
+ * ports before their VLAN filters, and the VLAN rules and the multicast
+ * settings that came while the bridge was out were not applied. The daemon
+ * then programs the whole data path again (kernel_reprogram_due()).
+ */
+static bool g_reprogram_due;
+
+static void bridge_remove(void);
+
 void omci_hw_kernel_router(bool on)
 {
 	g_router = on;
 	g_router_told = false;
+	g_held_told = false;
 }
 
 static bool kernel_routing(void)
@@ -1354,18 +1386,34 @@ static enum omci_status kernel_fdb(struct omci_hw_fdb *out, size_t cap,
 	return OMCI_OK;
 }
 
-/* In router mode, say once that the OLT's bridging is not applied. */
+/* Whether the bridge stays out of the hardware: in router mode, or for held VLANs. */
+static bool bridge_out(void)
+{
+	return g_router || g_held_unbridged;
+}
+
+/* Without the bridge, say once that the OLT's bridging is not applied. */
 static bool router_skips(const char *what)
 {
-	if (!g_router)
-		return false;
-	if (!g_router_told) {
-		OMCI_INFO(
-			"router mode: the OLT's %s and the rest of its bridging stay out of the hardware",
-			what);
-		g_router_told = true;
+	if (g_router) {
+		if (!g_router_told) {
+			OMCI_INFO(
+				"router mode: the OLT's %s and the rest of its bridging stay out of the hardware",
+				what);
+			g_router_told = true;
+		}
+		return true;
 	}
-	return true;
+	if (g_held_unbridged) {
+		if (!g_held_told) {
+			OMCI_INFO(
+				"held: the OLT's bridge filters no VLAN and would carry the sessions' VLANs; its %s and the rest of its bridging stay out of the hardware",
+				what);
+			g_held_told = true;
+		}
+		return true;
+	}
+	return false;
 }
 
 /* Put an interface, up, into the bridge @master. */
@@ -1534,6 +1582,74 @@ static bool vid_put(uint16_t *vids, size_t *n, size_t cap, uint16_t vid)
 	return true;
 }
 
+/* Read the held VLANs again (HELD_PATH); the log says when they change. */
+static void held_load(void)
+{
+	uint16_t vids[HELD_MAX];
+	char list[HELD_MAX * 6] = "";
+	unsigned int vid;
+	size_t n = 0, len = 0;
+	FILE *f = fopen(HELD_PATH, "re");
+
+	if (f) {
+		while (n < HELD_MAX && fscanf(f, "%u", &vid) == 1)
+			if (vid >= 1 && vid <= 4094)
+				(void)vid_put(vids, &n, HELD_MAX,
+					      (uint16_t)vid);
+		fclose(f);
+	}
+	if (n == g_held_n && !memcmp(vids, g_held, n * sizeof(*vids)))
+		return;
+	memcpy(g_held, vids, n * sizeof(*vids));
+	g_held_n = n;
+	g_held_told = false;
+	if (!n) {
+		g_held_unbridged = false;
+		OMCI_INFO(
+			"held: the stick's sessions hold no VLAN; the OLT's bridging applies whole");
+		return;
+	}
+	for (size_t i = 0; i < n && len < sizeof(list); i++)
+		len += (size_t)snprintf(list + len, sizeof(list) - len, "%s%u",
+					i ? ", " : "", vids[i]);
+	OMCI_INFO(
+		"held: the stick's sessions hold VLAN %s of the PON side; the OLT's rules into them and its ports of nothing else stay out of the hardware",
+		list);
+}
+
+static bool held(uint16_t vid)
+{
+	return vid_in(g_held, g_held_n, vid);
+}
+
+/*
+ * The bridge ports without the held VLANs, in @out: a port that had VLANs
+ * and has none left, which carries a held VLAN alone, is left out. Returns
+ * how many are left.
+ */
+static size_t held_strip(const struct omci_hw_bridge_port *ports, size_t n,
+			 struct omci_hw_bridge_port *out)
+{
+	size_t kept = 0;
+
+	for (size_t i = 0; i < n; i++) {
+		struct omci_hw_bridge_port q = ports[i];
+
+		q.num_vlan = 0;
+		for (uint8_t v = 0; v < ports[i].num_vlan; v++)
+			if (!held(ports[i].vlan[v]))
+				q.vlan[q.num_vlan++] = ports[i].vlan[v];
+		if (ports[i].num_vlan && !q.num_vlan) {
+			OMCI_INFO(
+				"bridge: Port-ID %u carries held VLANs alone and stays out of the bridge",
+				ports[i].port_id);
+			continue;
+		}
+		out[kept++] = q;
+	}
+	return kept;
+}
+
 static bool br_extra_has(uint16_t port_id, uint16_t vid)
 {
 	for (size_t i = 0; i < g_br_extra_n; i++)
@@ -1556,8 +1672,14 @@ static bool br_extra_has(uint16_t port_id, uint16_t vid)
  * While the rules discard the single-tagged frames no rule takes, the VIDs
  * the UNI carries that no rule takes from the subscriber, which it carries
  * for the way down only, are dropped as they come in from the subscriber
- * (uni_discard_sync()). Without VLAN filtering there is no such set, and
- * nothing is dropped.
+ * (uni_discard_sync()). So are the VLANs the stick's sessions hold: the
+ * switch forwards a frame by the members of its VLAN, not by the port it came
+ * in by, and the PON port is a member of the sessions' VLANs, so that the
+ * subscriber's frames tagged with one went out on the fibre (measured on this
+ * board, 100 of 100). The subscriber's VIDs of the rules left out need no
+ * such rule: no bridge port carries them any more, and the host link's own
+ * VLAN, which may be one of them, takes the frames the stick routes. Without
+ * VLAN filtering there is no such set, and nothing is dropped.
  */
 static void bridge_vlans_complete(void)
 {
@@ -1617,6 +1739,10 @@ static void bridge_vlans_complete(void)
 					(void)vid_put(drop, &n_drop,
 						      ARRAY_SIZE(drop),
 						      want[v]);
+		if (p->port_id == OMCI_HW_BRIDGE_UNI)
+			for (size_t v = 0; v < g_held_n; v++)
+				(void)vid_put(drop, &n_drop, ARRAY_SIZE(drop),
+					      g_held[v]);
 
 		for (size_t v = 0; v < n_want; v++) {
 			const uint16_t vid = want[v];
@@ -1679,6 +1805,27 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 	if (!n) {
 		g_br_n = 0;
 		return OMCI_OK;
+	}
+	held_load();
+	{
+		static struct omci_hw_bridge_port kept[OMCI_HW_BRIDGE_MAX_PORTS];
+		bool unbridged = false;
+
+		if (g_held_n) {
+			n = held_strip(ports, n, kept);
+			ports = kept;
+			unbridged = true;
+			for (size_t i = 0; i < n; i++)
+				if (ports[i].num_vlan)
+					unbridged = false;
+		}
+		if (unbridged != g_held_unbridged) {
+			g_held_unbridged = unbridged;
+			g_held_told = false;
+			g_reprogram_due = true;
+			if (unbridged)
+				bridge_remove();
+		}
 	}
 	if (router_skips("bridge"))
 		return OMCI_OK;
@@ -2511,6 +2658,7 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 
 	if (rules == NULL && n > 0)
 		return OMCI_ERR_INVAL;
+	held_load();
 	if (router_skips("VLAN rules"))
 		return OMCI_OK;
 	if (n > OMCI_HW_VLAN_MAX_RULES)
@@ -2541,6 +2689,17 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		/* No filter of its own: what it drops follows from the others. */
 		if (r->kind == OMCI_HW_VLAN_DISCARD_TAGGED) {
 			discard = true;
+			continue;
+		}
+
+		const uint16_t net = r->kind == OMCI_HW_VLAN_SVID_PUSH ?
+					     r->assign_svid :
+					     r->assign_cvid;
+
+		if (held(net)) {
+			OMCI_INFO(
+				"vlan: rule %zu (C-VID %u) leads into held VLAN %u and stays out of the hardware",
+				i, r->match_cvid, net);
 			continue;
 		}
 
@@ -2605,6 +2764,42 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 	bridge_vlans_complete();
 
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
+}
+
+/*
+ * The bridge out of the hardware, for the held VLANs: the bridge itself, the
+ * VLAN rules and the drops at the UNI. The traps of IGMP and MLD, the
+ * multicast tags and the bridge port filters follow when the data path is
+ * programmed again.
+ */
+static void bridge_remove(void)
+{
+	const int br = (int)if_nametoindex(BRIDGE_IFNAME);
+	const int uni = (int)if_nametoindex(UNI_IFNAME);
+	const int pon = (int)if_nametoindex(PON_IFNAME);
+
+	for (unsigned int prio = TC_PRIO_BASE; prio < TC_PRIO_LAST; prio++) {
+		if (uni)
+			(void)tc_filter_del(uni, prio);
+		if (pon)
+			(void)tc_filter_del(pon, prio);
+	}
+	uni_discard_sync(NULL, 0);
+	if (br && link_delete(br))
+		OMCI_WARN("bridge: %s could not be removed", BRIDGE_IFNAME);
+	g_br_n = 0;
+	g_br_xlate_n = 0;
+	g_br_sub_n = 0;
+	g_br_extra_n = 0;
+	g_bridge_filtering = -1;
+}
+
+static bool kernel_reprogram_due(void)
+{
+	const bool due = g_reprogram_due;
+
+	g_reprogram_due = false;
+	return due;
 }
 
 /* The kernel backend. */
@@ -3327,7 +3522,7 @@ static enum omci_status kernel_mcast_frame(struct omci_hw_mcast_frame *out)
 
 		if (n < 0)
 			return OMCI_DECLINED;
-		if (from.sll_pkttype == PACKET_OUTGOING || g_router)
+		if (from.sll_pkttype == PACKET_OUTGOING || bridge_out())
 			continue;
 		out->len = (uint16_t)n;
 		out->tagged = false;
@@ -3460,7 +3655,7 @@ static enum omci_status kernel_mcast_groups(struct omci_hw_mcast_group *out,
 	while (g_mc_events >= 0 &&
 	       recv(g_mc_events, drain, sizeof(drain), MSG_DONTWAIT) > 0)
 		;
-	if (g_router)
+	if (bridge_out())
 		return OMCI_OK;
 	bpm.ifindex = if_nametoindex(BRIDGE_IFNAME);
 	w.uni = (int)if_nametoindex(UNI_IFNAME);
@@ -3509,7 +3704,7 @@ static enum omci_status mdb_change(const struct omci_hw_mcast_group *g,
 	size_t off;
 	int err;
 
-	if (g_router)
+	if (bridge_out())
 		return OMCI_OK;
 	memset(&e, 0, sizeof(e));
 	bpm.ifindex = if_nametoindex(BRIDGE_IFNAME);
@@ -3596,9 +3791,9 @@ static enum omci_status kernel_mcast_port(const struct omci_hw_mcast_port *cfg)
 	int br, uni, err;
 
 	uni = (int)if_nametoindex(UNI_IFNAME);
-	/* In router mode sfp is no bridge port, and nothing is trapped. */
-	if (uni && g_mc_trap != (int)(cfg->trap && !g_router)) {
-		err = mcast_traps(uni, cfg->trap && !g_router);
+	/* Without the bridge sfp is no bridge port, and nothing is trapped. */
+	if (uni && g_mc_trap != (int)(cfg->trap && !bridge_out())) {
+		err = mcast_traps(uni, cfg->trap && !bridge_out());
 		if (err) {
 			if (err != g_mc_trap_err)
 				OMCI_WARN(
@@ -3609,13 +3804,13 @@ static enum omci_status kernel_mcast_port(const struct omci_hw_mcast_port *cfg)
 			return OMCI_ERR_HW;
 		}
 		g_mc_trap_err = 0;
-		g_mc_trap = (int)(cfg->trap && !g_router);
+		g_mc_trap = (int)(cfg->trap && !bridge_out());
 		OMCI_INFO("mcast: the IGMP and MLD of %s go %s", UNI_IFNAME,
 			  g_mc_trap ?
 				  "to the agent, which sends them upstream" :
 				  "upstream through the switch");
 	}
-	if (g_router)
+	if (bridge_out())
 		return OMCI_OK;
 	br = (int)if_nametoindex(BRIDGE_IFNAME);
 	if (!br || !uni) {
@@ -3703,6 +3898,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.optics_limits = kernel_optics_limits,
 	.set_router = omci_hw_kernel_router,
 	.routing = kernel_routing,
+	.reprogram_due = kernel_reprogram_due,
 	.fdb = kernel_fdb,
 	.mcast_port = kernel_mcast_port,
 	.mcast_groups = kernel_mcast_groups,

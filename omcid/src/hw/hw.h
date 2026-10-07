@@ -959,6 +959,9 @@ size_t omci_hw_filter_recorded(const struct omci_hw_filter **out);
  *	a backend without a router mode
  * @routing: whether the backend routes, which makes the router of the stick
  *	the domain behind the VEIP; NULL in a backend without a router mode
+ * @reprogram_due: whether the backend has changed what of the MIB it applies,
+ *	so that the data path is to be programmed again from the MIB; a read
+ *	clears it. NULL in a backend that never changes it
  * @fdb: read the addresses the switch forwards by; NULL in a backend that
  *	cannot
  * @mcast_port: set how the bridge snoops the subscriber side; NULL in a
@@ -1005,6 +1008,7 @@ struct omci_hw_ops {
 	enum omci_status (*optics_limits)(struct omci_hw_optics_limits *out);
 	void (*set_router)(bool on);
 	bool (*routing)(void);
+	bool (*reprogram_due)(void);
 	enum omci_status (*fdb)(struct omci_hw_fdb *out, size_t cap, size_t *n);
 	enum omci_status (*mcast_port)(const struct omci_hw_mcast_port *cfg);
 	enum omci_status (*mcast_groups)(struct omci_hw_mcast_group *out,

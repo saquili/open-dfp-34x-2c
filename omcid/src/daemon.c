@@ -290,6 +290,12 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (g_mode != MODE_KEPT)
 			change_mode(eng);
+		if (omci_hw()->reprogram_due != NULL &&
+		    omci_hw()->reprogram_due()) {
+			OMCI_INFO(
+				"the data path is programmed again from the MIB");
+			omci_engine_reprogram(eng);
+		}
 
 		if (frame_fd >= 0) {
 			fds[n].fd = frame_fd;

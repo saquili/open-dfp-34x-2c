@@ -105,3 +105,14 @@ switch carries out::
 daemon answers the OLT as usual, but leaves the bridge and the VLAN rules that
 the OLT provisions out of the hardware, so the GEM interfaces stay out of any
 bridge and the stick's router uses them.
+
+Beside the stick's own PPPoE sessions the daemon bridges what the OLT
+provisions but the sessions' VLANs, which ``onu-mode`` writes, by their VID on
+the PON side, one per line, to ``/run/onu-held-vlans`` before it sends SIGUSR2.
+The VLAN rules into those VLANs stay out of the hardware, and so does a bridge
+port that carries nothing else, such as the GEM ports of an Internet service
+whose PPPoE the stick holds; the subscriber's frames of those VLANs are
+dropped as they come in on ``sfp``. Television and telephone go on crossing
+the bridge. A bridge that
+filters no VLAN would carry the sessions' VLANs too, and the stick then leaves
+it out altogether, as in router mode.

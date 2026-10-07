@@ -342,6 +342,41 @@ static void test_signals_change_the_mode(void)
 	CHECK(sa.sa_handler != SIG_DFL && sa.sa_handler != SIG_IGN);
 }
 
+static unsigned int g_due_calls;
+
+static bool due_once(void)
+{
+	return g_due_calls++ == 0;
+}
+
+/*
+ * A backend that has changed what of the MIB it applies has the data path
+ * programmed again, once for each time it says so.
+ */
+static void test_the_backend_asks_for_programming_again(void)
+{
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct rig g;
+
+	ops.reprogram_due = due_once;
+	ops.bridge_apply = count_bridge;
+	CHECK(rig_up(&g));
+	g_due_calls = 0;
+	g_bridge_applies = 0;
+	omci_hw_ops_set(&ops);
+	end_input(&g);
+	CHECK_EQ(run(&g, g.in_r, g_sock, 2, g_argv), EXIT_SUCCESS);
+	omci_hw_ops_set(NULL);
+
+	CHECK(g_due_calls >= 1u);
+	CHECK_EQ(g_bridge_applies, 1u);
+	CHECK(strstr(g_log, "the data path is programmed again from the MIB") !=
+	      NULL);
+	CHECK(strstr(g_log, "[ERR]") == NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+}
+
 static int g_mcast_pipe[2] = { -1, -1 };
 static unsigned int g_mcast_reads;
 
@@ -796,6 +831,7 @@ int main(void)
 	RUN(test_end_of_input);
 	RUN(test_signal_stops_the_loop);
 	RUN(test_signals_change_the_mode);
+	RUN(test_the_backend_asks_for_programming_again);
 	RUN(test_the_multicast_descriptor_is_served);
 	RUN(test_poll);
 	RUN(test_transport_errors);
