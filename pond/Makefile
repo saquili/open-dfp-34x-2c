@@ -55,7 +55,7 @@ $(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o 
 		    $(BUILD)/mongoose.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-check: $(BUILD)/test_prov $(BUILD)/test_auth
+check: all $(BUILD)/test_prov $(BUILD)/test_auth
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
 	POND_ROOT=$(abspath $(BUILD))/fixtures $(BUILD)/test_prov
