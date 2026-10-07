@@ -129,7 +129,8 @@ eight minutes on 12 CPUs. The first build downloads the sources of the packages
 of the defconfig besides the toolchain's (``br2-external/README.rst``); each is
 checked against the hash that the build system carries, and a file that does not
 match is refused. The programs of this tree (``omcid``, ``onu-utils``,
-``pppoed``, ``pond``) are built from the working tree, not downloaded. ``make``
+``pppoed``, ``dhcp6d``, ``pond``) are built from the working tree, not
+downloaded. ``make``
 makes the cross toolchain first, with static libraries only, then the kernel
 with it, then the programs of the image, and the host tools the images need
 (``mksquashfs``, ``mkimage``, the LZMA compressor; ``mksquashfs`` brings
@@ -206,8 +207,9 @@ The programs of the ONU, from this tree, static
     ``omcid``, the OMCI daemon, with its tools ``omcitap`` and ``omcivlan``
     (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
     from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
-    PPPoE client (``pppoed/README.rst``); ``pond``, the HTTP status daemon
-    (``pond/README.rst``).
+    PPPoE client (``pppoed/README.rst``); ``dhcp6d``, which hands a session's
+    delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
+    HTTP status daemon (``pond/README.rst``).
 iproute2, static
     ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
     classifier and the PON driver, and ``bridge``, which shows the bridge's
