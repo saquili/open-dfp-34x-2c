@@ -294,8 +294,8 @@ static int nd_socket(const char *ifname)
 	return fd;
 }
 
-static void send_to(int fd, const uint8_t *buf, size_t len, const char *addr,
-		    const uint8_t *addr16, uint16_t port, unsigned int idx)
+static int send_to(int fd, const uint8_t *buf, size_t len, const char *addr,
+		   const uint8_t *addr16, uint16_t port, unsigned int idx)
 {
 	struct sockaddr_in6 to = { .sin6_family = AF_INET6, .sin6_port = htons(port),
 				   .sin6_scope_id = idx };
@@ -304,8 +304,12 @@ static void send_to(int fd, const uint8_t *buf, size_t len, const char *addr,
 		memcpy(&to.sin6_addr, addr16, 16);
 	else
 		inet_pton(AF_INET6, addr, &to.sin6_addr);
-	if (sendto(fd, buf, len, 0, (struct sockaddr *)&to, sizeof(to)) < 0)
+	if (sendto(fd, buf, len, 0, (struct sockaddr *)&to, sizeof(to)) >= 0)
+		return 0;
+	/* A link-local address still being checked (DAD) cannot send yet. */
+	if (errno != EADDRNOTAVAIL)
 		DHCP6D_WARN("send: %s", strerror(errno));
+	return -errno;
 }
 
 /* The daemon's state across the loop. */
@@ -431,8 +435,11 @@ static void ra_send(struct daemon *d, int64_t now)
 	d->ra.ndns = d->server.ndns;
 	d->ra.dns_lifetime = 3 * RA_INTERVAL_MAX / 1000;
 	n = ra_build(&d->ra, buf, sizeof(buf));
-	if (n)
-		send_to(d->rsock, buf, n, "ff02::1", NULL, 0, d->lan_idx);
+	if (n && send_to(d->rsock, buf, n, "ff02::1", NULL, 0, d->lan_idx) == -EADDRNOTAVAIL) {
+		/* The link's address is not usable yet: again in a second. */
+		d->ra_next = now + 1000;
+		return;
+	}
 	DHCP6D_DEBUG("router advertisement, lifetime %u s", d->ra.lifetime);
 	d->ra_last = now;
 	if (d->ra_burst) {
