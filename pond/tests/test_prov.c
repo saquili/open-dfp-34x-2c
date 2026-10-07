@@ -1540,12 +1540,12 @@ static void test_settings(void)
 	setenv("POND_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
 
 	s = settled(buf, sizeof(buf));
-	check(strstr(s, "\"MODE\":\"bridge\"") &&
+	check(strstr(s, "\"MODE\":\"\"") &&
 		      strstr(s, "\"WAN_PROTO\":\"dhcp\""),
 	      "without a file, the settings are onu-mode's defaults");
-	check(strstr(s, "\"secret_set\":false") && strstr(s, "\"mode\":null") &&
+	check(strstr(s, "\"sessions\":[]") && strstr(s, "\"mode\":null") &&
 		      strstr(s, "\"wan\":null"),
-	      "no PPPoE secret, and nothing brought up yet");
+	      "no session, and nothing brought up yet");
 
 	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
 		rc = prov_settings_set(bad[i], err, sizeof(err));
@@ -1553,8 +1553,15 @@ static void test_settings(void)
 		check(rc == -EINVAL && *err, what);
 	}
 	rc = prov_settings_set("MODE=router\nWAN_PROTO=pppoe\n", err, sizeof(err));
-	check(rc == -EINVAL && strstr(err, "PPPOE_SECRET"),
+	check(rc == -EINVAL && strstr(err, "PPPOE1_SECRET"),
 	      "PPPoE without a user and a secret is refused");
+	rc = prov_settings_set("PPPOE2_USER=bench\n", err, sizeof(err));
+	check(rc == -EINVAL && strstr(err, "PPPOE2_SECRET"),
+	      "an account without a secret is refused");
+	rc = prov_settings_set("SESSION8_VLAN=410\n", err, sizeof(err));
+	check(rc == -EINVAL, "a session past the seventh is refused");
+	rc = prov_settings_set("SESSION1_FAMILY=ipx\n", err, sizeof(err));
+	check(rc == -EINVAL, "a family that is not one is refused");
 	rc = prov_settings_set("LAN_DHCP_START=192.0.2.100\nLAN_DHCP_END=192.0.2.199\n",
 			       err, sizeof(err));
 	check(rc == -EINVAL, "a DHCP range outside the LAN's network is refused");
@@ -1573,10 +1580,10 @@ static void test_settings(void)
 	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
 		      strstr(s, "\nLAN_DHCP=on\n"),
 	      "onu.conf has the change and keeps the rest");
-	s = slurp("/run/onu-pppoe", file, sizeof(file));
+	s = slurp("/run/onu-pppoe1", file, sizeof(file));
 	check(s && !strcmp(s, "bench not-a-real-one\n"),
-	      "the PPPoE file has the user and the secret, as pppoed reads them");
-	check(!stat(prov_path("/run/onu-pppoe", file, sizeof(file)), &st) &&
+	      "the first session's file has the user and the secret, as pppoed reads them");
+	check(!stat(prov_path("/run/onu-pppoe1", file, sizeof(file)), &st) &&
 		      (st.st_mode & 0777) == 0600,
 	      "and only its owner can read it");
 
@@ -1588,8 +1595,8 @@ static void test_settings(void)
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"applying\":true") != NULL,
 	      "the settings say a change is being applied");
-	check(strstr(s, "\"user\":\"bench\"") && strstr(s, "\"secret_set\":true"),
-	      "they give the PPPoE user and that a secret is set");
+	check(strstr(s, "\"sessions\":[{\"id\":1,\"user\":\"bench\",\"secret_set\":true,") != NULL,
+	      "they give the session's user and that a secret is set");
 	check(!strstr(s, "not-a-real-one"), "but never the secret");
 	rc = prov_settings_set("WAN_VLAN=36", err, sizeof(err));
 	check(rc == -EBUSY, "a change while one is being applied is refused");
@@ -1608,7 +1615,7 @@ static void test_settings(void)
 	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
 		      strstr(s, "\nWAN_PROTO=static\n"),
 	      "and merged with the settings before it");
-	s = slurp("/run/onu-pppoe", file, sizeof(file));
+	s = slurp("/run/onu-pppoe1", file, sizeof(file));
 	check(s && !strcmp(s, "bench not-a-real-one\n"),
 	      "a change without PPPoE leaves the PPPoE file as it was");
 	settled(buf, sizeof(buf));
@@ -1623,9 +1630,6 @@ static void test_settings(void)
 			       err, sizeof(err));
 	check(rc == -EINVAL, "a DHCP range that ends before it starts is refused");
 
-	rc = prov_settings_set("MODE=passthrough\n", err, sizeof(err));
-	check(rc == -EINVAL && strstr(err, "WAN_PROTO=pppoe"),
-	      "passthrough with a WAN that is not PPPoE is refused");
 	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nPASS_GATEWAY=127.0.0.1\n",
 			       err, sizeof(err));
 	check(rc == -EINVAL && strstr(err, "PASS_GATEWAY"),
@@ -1652,7 +1656,17 @@ static void test_settings(void)
 	put("/run/onu-lan", "lan\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"pass\":{\"address\":\"192.0.2.2\",\"lan\":\"lan\"}") != NULL,
-	      "and in passthrough mode the address handed to the router");
+	      "and the address a session handed to the router");
+	mkdir(prov_path("/run/session", file, sizeof(file)), 0755);
+	mkdir(prov_path("/run/session/1", file, sizeof(file)), 0755);
+	put("/run/session/1/dev", "wan410\n", 0644);
+	put("/run/session/1/gem", "gem1\n", 0644);
+	put("/run/session/1/ppp", "ppp0\n", 0644);
+	put("/run/session/1/ipv4", "192.0.2.2\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"hands_on\":true,\"dev\":\"wan410\",\"gem_dev\":\"gem1\","
+			"\"ppp\":\"ppp0\",\"ipv4\":\"192.0.2.2\",\"ipv6\":null") != NULL,
+	      "a session carries what onu-mode brought up for it");
 	check(strstr(s, "\"store\":null") != NULL,
 	      "without a word from onu-store, the store's state is unknown");
 	put("/run/onu-store", "saved\n", 0644);
@@ -1718,21 +1732,53 @@ static void test_panel_values(void)
 		pause_10ms();
 	}
 
-	rc = prov_pppoe_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\n", err,
-			    sizeof(err));
+	/* The sessions start from a stick without settings or accounts. */
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		char path[32];
+
+		snprintf(path, sizeof(path), "/run/onu-pppoe%d", n);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
+	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\n"
+			      "FAMILY=ipv4\nMAC=00:00:5e:00:53:01\n",
+			      err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && file_has("/run/onu.conf", "MODE=passthrough") &&
-		      file_has("/run/onu.conf", "WAN_PROTO=pppoe") &&
-		      file_has("/run/onu.conf", "WAN_VLAN=410") &&
-		      file_has("/run/onu-pppoe", "user@example.net example-secret"),
-	      "an account makes the stick hold the session, in the operator's VLAN");
-	check(prov_pppoe_set("VLAN=5000", err, sizeof(err)) == -EINVAL,
+	check(rc == 0 && file_has("/run/onu.conf", "MODE=\n") &&
+		      file_has("/run/onu.conf", "SESSION1_VLAN=410") &&
+		      file_has("/run/onu.conf", "SESSION1_FAMILY=ipv4") &&
+		      file_has("/run/onu-pppoe1", "user@example.net example-secret"),
+	      "an account makes the stick hold a session, in the operator's VLAN");
+	rc = prov_session_set("USER=user@example.net/ipv6\nSECRET=example-secret\n"
+			      "VLAN=410\nFAMILY=ipv6\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION2_FAMILY=ipv6") &&
+		      file_has("/run/onu-pppoe2", "user@example.net/ipv6 example-secret"),
+	      "a second account takes the first free session");
+	check(strstr(s, "\"id\":1,") && strstr(s, "\"id\":2,") &&
+		      strstr(s, "\"family\":\"ipv6\",\"hands_on\":false"),
+	      "both are served, and the IPv6 one hands no address on");
+	check(prov_session_set("ID=2\nMAC=00:00:5e:00:53:02\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "one MAC address"),
+	      "two sessions in one VLAN that would send from two MAC addresses are refused");
+	check(prov_session_set("ID=1\nVLAN=5000\n", err, sizeof(err)) == -EINVAL,
 	      "a VLAN out of range is refused");
-	rc = prov_pppoe_set("USER=\n", err, sizeof(err));
+	check(prov_session_set("ID=3\nVLAN=36\n", err, sizeof(err)) == -EINVAL,
+	      "a change to a session without an account is refused");
+	check(prov_session_set("VLAN=36\n", err, sizeof(err)) == -EINVAL,
+	      "a new session without a user is refused");
+	rc = prov_session_set("ID=2\nUSER=\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && file_has("/run/onu.conf", "MODE=bridge") &&
-		      stat(prov_path("/run/onu-pppoe", file, sizeof(file)), &st) != 0,
-	      "removing it leaves the session to the router and forgets the account");
+	check(rc == 0 && !file_has("/run/onu.conf", "SESSION2_") &&
+		      stat(prov_path("/run/onu-pppoe2", file, sizeof(file)), &st) != 0 &&
+		      file_has("/run/onu-pppoe1", "user@example.net"),
+	      "removing a session forgets its account and its settings, and keeps the other");
+	rc = prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && strstr(s, "\"sessions\":[]") &&
+		      stat(prov_path("/run/onu-pppoe1", file, sizeof(file)), &st) != 0,
+	      "without accounts there are no sessions: the router dials through the stick");
 
 	rc = prov_link_set("VLAN=36\nGATEWAY=169.254.0.1\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));

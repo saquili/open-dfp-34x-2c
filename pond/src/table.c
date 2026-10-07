@@ -19,11 +19,12 @@ const struct prov pond_provs[] = {
 
 	{ "identity", "GPON", "How the stick introduces itself to the OLT",
 	  prov_identity, prov_identity_set, 0 },
-	{ "pppoe", "Mode", "The stick's own PPPoE account", NULL, prov_pppoe_set, 0 },
+	{ "session", "Mode", "A PPPoE session of the stick's own: add, change or remove",
+	  NULL, prov_session_set, 0 },
 	{ "link", "Mode", "How the router gets the address", NULL, prov_link_set, 0 },
 	{ "settings", "Mode",
-	  "Bridge, router or passthrough, the WAN and the LAN, kept in the "
-	  "configuration store",
+	  "The data path: the sessions, the link to the router and the "
+	  "bench's router mode, kept in the configuration store",
 	  prov_settings, prov_settings_set, 0 },
 
 	{ "ports", "Data path", "Interfaces: link, speed and CPU-path counts",

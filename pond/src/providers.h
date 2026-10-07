@@ -47,7 +47,7 @@ int prov_rootfs_bank(const char *part);
 int prov_settings(struct prov_buf *out);
 int prov_settings_set(const char *val, char *err, size_t errcap);
 void prov_settings_reap(void);
-int prov_pppoe_set(const char *val, char *err, size_t errcap);
+int prov_session_set(const char *val, char *err, size_t errcap);
 int prov_link_set(const char *val, char *err, size_t errcap);
 int prov_identity(struct prov_buf *out);
 int prov_identity_set(const char *val, char *err, size_t errcap);

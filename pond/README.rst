@@ -53,19 +53,22 @@ stick a second after it answers.
 ``/api/set/ID`` takes ``KEY=VALUE`` lines:
 
 * ``settings``: the settings of onu-mode (see ``onu-utils``), the keys of
-  ``/run/onu.conf`` and ``PPPOE_USER`` and ``PPPOE_SECRET``. pond checks every
-  value and the settings as a whole, writes ``/run/onu.conf`` and, for PPPoE,
-  ``/run/onu-pppoe`` for root only, then starts ``onu-mode apply``, which also
-  saves them in the store; it refuses another change, with 409, until that has
-  ended. A read gives the settings, the PPPoE user and whether a secret is set,
-  never the secret, what onu-mode brought up, and what became of the settings
-  in the store (``store``: ``loaded``, ``defaults``, ``saved``, ``failed`` or
-  ``none``).
-* ``pppoe``: the stick's own PPPoE account, ``USER``, ``SECRET`` (empty keeps
-  it), ``VLAN`` and ``MAC``. With an account the stick holds the session and
-  hands its address to the router; ``USER=`` removes it and leaves the session
-  to the router. The panel names no mode: until onu-mode works without them,
-  an account means passthrough mode and none means bridge mode.
+  ``/run/onu.conf`` (``SESSIONn_GEM``, ``_VLAN``, ``_MAC`` and ``_FAMILY``
+  among them) and the accounts, ``PPPOEn_USER`` and ``PPPOEn_SECRET`` for the
+  sessions 1 to 7. pond checks every value and the settings as a whole, writes
+  ``/run/onu.conf`` and each account's ``/run/onu-pppoeN`` for root only, then
+  starts ``onu-mode apply``, which also saves them in the store; it refuses
+  another change, with 409, until that has ended. A read gives the settings,
+  each session with its user and whether a secret is set, never the secret,
+  and what onu-mode brought up for it (``/run/session/N``), the address handed
+  on, and what became of the settings in the store (``store``: ``loaded``,
+  ``defaults``, ``saved``, ``failed`` or ``none``).
+* ``session``: a PPPoE session of the stick's own: ``ID`` (none for the first
+  free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``
+  and ``FAMILY`` (``ipv4``, ``ipv6`` or ``both``). With an account the stick
+  holds the session, and the first that carries IPv4 hands its address to the
+  router; ``USER=`` removes it. The panel names no mode: without accounts the
+  router dials through the stick.
 * ``link``: how the router gets the address, ``VLAN`` and ``GATEWAY``.
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
