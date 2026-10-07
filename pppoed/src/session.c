@@ -6,6 +6,7 @@
  * 1334, 1994, 1332, 5072).
  */
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -240,11 +241,19 @@ static void ipcp_take_nak(struct ppp_link *l, const uint8_t *opts, size_t olen)
 	}
 }
 
-/* Open LCP: our request acknowledged, and the peer's. */
+/*
+ * Open LCP: our request acknowledged, and the peer's. Our request goes out
+ * when the restart timer runs out and after a refusal, never because a frame
+ * came in: a peer whose LCP is open takes a second Configure-Request as the
+ * start of a new negotiation (RFC 1661, state Opened), and a concentrator of
+ * an operator's ended the session at that, 10 ms after it had sent its CHAP
+ * challenge (measured).
+ */
 static int lcp_negotiate(struct ppp_link *l)
 {
 	bool ours = false, theirs = false, want_mru = true, want_magic = true;
 	unsigned int tries = 0;
+	long due = pppoed_now_ms();
 	uint8_t id = 0;
 
 	l->magic = random_u32();
@@ -253,9 +262,10 @@ static int lcp_negotiate(struct ppp_link *l)
 		uint8_t body[PPP_CTRL_MAX];
 		size_t len = 0;
 		uint16_t proto;
+		long wait;
 		int n;
 
-		if (!ours) {
+		if (!ours && pppoed_now_ms() >= due) {
 			if (want_mru) {
 				uint8_t v[2];
 
@@ -272,11 +282,18 @@ static int lcp_negotiate(struct ppp_link *l)
 			PPPOED_DEBUG("LCP configure-request %u sent, try %u",
 				     id, tries + 1);
 			tries++;
+			due = pppoed_now_ms() + RESTART_MS;
 		}
 
-		n = ppp_recv(l, &proto, body, sizeof(body), RESTART_MS);
-		if (n == -ETIMEDOUT)
+		wait = ours ? RESTART_MS : due - pppoed_now_ms();
+		n = ppp_recv(l, &proto, body, sizeof(body),
+			     wait > 0 ? (int)wait : 0);
+		if (n == -ETIMEDOUT) {
+			/* Waiting on the peer's request alone counts too. */
+			if (ours)
+				tries++;
 			continue;
+		}
 		if (n < 0)
 			return n;
 		if (n < CP_HDR_LEN)
@@ -328,6 +345,7 @@ static int lcp_negotiate(struct ppp_link *l)
 				id = next_id();
 				ours = false;
 				tries = 0;
+				due = pppoed_now_ms();
 				break;
 			}
 
@@ -369,6 +387,40 @@ static int lcp_negotiate(struct ppp_link *l)
 	return -ETIMEDOUT;
 }
 
+/*
+ * An LCP frame while the peer authenticates us: an Echo-Request is answered;
+ * a Terminate-Request, the way a peer ends a link it does not accept, is
+ * acknowledged and reported with the reason it carries; anything else is
+ * passed over. Returns 0 to go on, or -ECONNRESET for a terminated link.
+ */
+static int auth_lcp(struct ppp_link *l, const uint8_t *in, int n,
+		    const char *stage)
+{
+	uint16_t flen = pppoe_get16(in + 2);
+	char why[96] = "";
+	size_t len = 0;
+
+	if (in[0] == CP_ECHO_REQ) {
+		echo_reply(l, in[1]);
+		return 0;
+	}
+	if (in[0] != CP_TERM_REQ) {
+		PPPOED_DEBUG("LCP code %u passed over during %s", in[0], stage);
+		return 0;
+	}
+	if (flen > CP_HDR_LEN && flen <= (size_t)n)
+		len = flen - CP_HDR_LEN;
+	if (len > sizeof(why) - 1)
+		len = sizeof(why) - 1;
+	for (size_t i = 0; i < len; i++)
+		why[i] = isprint(in[CP_HDR_LEN + i]) ? (char)in[CP_HDR_LEN + i] :
+						       '.';
+	cp_send(l, PPP_PROTO_LCP, CP_TERM_ACK, in[1], NULL, 0);
+	PPPOED_ERR("the peer terminated the link during %s%s%s", stage,
+		   why[0] ? ": " : "", why);
+	return -ECONNRESET;
+}
+
 static int pap_authenticate(struct ppp_link *l, const char *user,
 			    const char *secret)
 {
@@ -403,8 +455,11 @@ static int pap_authenticate(struct ppp_link *l, const char *user,
 		if (n < CP_HDR_LEN)
 			continue;
 
-		if (proto == PPP_PROTO_LCP && in[0] == CP_ECHO_REQ) {
-			echo_reply(l, in[1]);
+		if (proto == PPP_PROTO_LCP) {
+			int r = auth_lcp(l, in, n, "PAP");
+
+			if (r)
+				return r;
 			continue;
 		}
 		if (proto != PPP_PROTO_PAP)
@@ -451,13 +506,18 @@ static int chap_authenticate(struct ppp_link *l, const char *user,
 			waited += RESTART_MS;
 			continue;
 		}
+		if (n == -ENOTCONN)
+			PPPOED_ERR("the concentrator ended the session during CHAP, with no answer to it");
 		if (n < 0)
 			return n;
 		if (n < CP_HDR_LEN)
 			continue;
 
-		if (proto == PPP_PROTO_LCP && in[0] == CP_ECHO_REQ) {
-			echo_reply(l, in[1]);
+		if (proto == PPP_PROTO_LCP) {
+			int r = auth_lcp(l, in, n, "CHAP");
+
+			if (r)
+				return r;
 			continue;
 		}
 		if (proto != PPP_PROTO_CHAP)
