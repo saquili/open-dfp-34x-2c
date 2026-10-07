@@ -39,7 +39,7 @@ $(BUILD)/test_ncp: $(BUILD)/tests/test_ncp.o $(addprefix $(BUILD)/src/,session.o
 $(BUILD)/test_disc: $(BUILD)/tests/test_disc.o $(BUILD)/tests/log.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-check: $(BUILD)/test_md5 $(BUILD)/test_ncp $(BUILD)/test_disc
+check: all $(BUILD)/test_md5 $(BUILD)/test_ncp $(BUILD)/test_disc
 	$(BUILD)/test_md5
 	$(BUILD)/test_ncp
 	$(BUILD)/test_disc
