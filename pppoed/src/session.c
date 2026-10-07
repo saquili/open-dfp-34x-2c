@@ -783,15 +783,18 @@ static void reject_protocol(struct ppp_link *l, uint16_t proto,
 }
 
 /*
- * Open IPCP and, when @want_ipv6, IPv6CP, side by side. IPCP asks for its
- * address and name servers as zero, and the peer's Nak gives them; IPv6CP
- * offers a random interface identifier. Either may be refused by the peer;
- * the link comes up when one of them is open and the other is open or
- * dead. IPv6CP gets two restart periods more once IPCP is open.
+ * Open IPCP when @want_ipv4 and IPv6CP when @want_ipv6, side by side. IPCP
+ * asks for its address and name servers as zero, and the peer's Nak gives
+ * them; IPv6CP offers a random interface identifier. Either may be refused
+ * by the peer; the link comes up when one of them is open and the other is
+ * open or dead. IPv6CP gets two restart periods more once IPCP is open. A
+ * protocol that is not wanted is rejected when the peer asks for it.
  */
-static int ncp_negotiate(struct ppp_link *l, bool want_ipv6)
+static int ncp_negotiate(struct ppp_link *l, bool want_ipv4, bool want_ipv6)
 {
-	struct ncp v4 = { .proto = PPP_PROTO_IPCP, .name = "IPCP" };
+	struct ncp v4 = { .proto = PPP_PROTO_IPCP,
+			  .name = "IPCP",
+			  .dead = !want_ipv4 };
 	struct ncp v6 = { .proto = PPP_PROTO_IPV6CP,
 			  .name = "IPv6CP",
 			  .dead = !want_ipv6 };
@@ -841,7 +844,7 @@ static int ncp_negotiate(struct ppp_link *l, bool want_ipv6)
 				return n;
 			continue;
 		}
-		if (proto == PPP_PROTO_IPCP) {
+		if (proto == PPP_PROTO_IPCP && want_ipv4) {
 			ncp = &v4;
 		} else if (proto == PPP_PROTO_IPV6CP && want_ipv6) {
 			ncp = &v6;
@@ -937,7 +940,7 @@ static int ncp_negotiate(struct ppp_link *l, bool want_ipv6)
 }
 
 int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
-		  bool want_ipv6)
+		  bool want_ipv4, bool want_ipv6)
 {
 	int err;
 
@@ -958,5 +961,5 @@ int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
 			return err;
 	}
 
-	return ncp_negotiate(l, want_ipv6);
+	return ncp_negotiate(l, want_ipv4, want_ipv6);
 }

@@ -74,14 +74,14 @@ static int print_usage(void)
 {
 	fprintf(stderr,
 		"usage: pppoed up -i IFACE (-f FILE | -u USER -p SECRET) [-s SERVICE]\n"
-		"                 [-D] [-P] [-4] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
+		"                 [-D] [-P] [-4 | -6] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
 		"       pppoed discover -i IFACE [-s SERVICE] [-n TRIES] [-t MS] [-T] [-A] [-v]\n"
 		"       pppoed sniff -i IFACE [-t MS] [-e ETHERTYPE]\n"
 		"\n"
 		"  up        open a session: discovery, LCP, authentication, IPCP and\n"
 		"            IPv6CP; then put the addresses on the ppp interface and\n"
 		"            keep the link until the peer ends it, or for -k seconds.\n"
-		"            -4 leaves IPv6 out.\n"
+		"            -4 leaves IPv6 out, -6 leaves IPv4 out.\n"
 		"            -f reads \"user secret\" from a file; -u and -p put the\n"
 		"            secret on the command line, where every process sees it.\n"
 		"            -D adds a default route through the link.\n"
@@ -189,7 +189,8 @@ static int cmd_up(int argc, char **argv)
 	const char *ifname = NULL, *service = "", *credfile = NULL;
 	char user[64] = "", secret[256] = "";
 	unsigned int tries = 3, timeout = 3000, keep = 0;
-	bool defaultroute = false, pass_on = false, want_ipv6 = true;
+	bool defaultroute = false, pass_on = false;
+	bool want_ipv4 = true, want_ipv6 = true;
 	struct sigaction sa = { .sa_handler = on_stop };
 	struct pppoe_session s;
 	struct ppp_link l;
@@ -200,7 +201,7 @@ static int cmd_up(int argc, char **argv)
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL);
 
-	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DP4v")) != -1) {
+	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DP46v")) != -1) {
 		switch (opt) {
 		case 'i':
 			ifname = optarg;
@@ -235,6 +236,9 @@ static int cmd_up(int argc, char **argv)
 		case '4':
 			want_ipv6 = false;
 			break;
+		case '6':
+			want_ipv4 = false;
+			break;
 		case 'v':
 			g_verbose = 1;
 			break;
@@ -242,7 +246,7 @@ static int cmd_up(int argc, char **argv)
 			return print_usage();
 		}
 	}
-	if (!ifname || !tries || !timeout)
+	if (!ifname || !tries || !timeout || (!want_ipv4 && !want_ipv6))
 		return print_usage();
 
 	if (credfile) {
@@ -283,7 +287,7 @@ static int cmd_up(int argc, char **argv)
 		return 1;
 	}
 
-	err = ppp_negotiate(&l, user, secret, want_ipv6);
+	err = ppp_negotiate(&l, user, secret, want_ipv4, want_ipv6);
 	if (err) {
 		PPPOED_ERR("negotiation failed: %s", strerror(-err));
 		ppp_close(&l);

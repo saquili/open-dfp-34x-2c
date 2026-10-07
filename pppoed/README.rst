@@ -14,6 +14,7 @@ keeps it.
 
    pppoed up -i IFACE -f FILE [-D]    # FILE holds "user secret"
    pppoed up -i IFACE -f FILE -4      # without IPv6
+   pppoed up -i IFACE -f FILE -6      # without IPv4
    pppoed up -i IFACE -f FILE -D -P   # the IPv4 address for a host behind
    pppoed discover -i IFACE           # the discovery alone
    pppoed sniff -i IFACE              # print frames, send nothing
@@ -49,7 +50,9 @@ its PON side, keeps it off ``pppN`` too. The global address and the delegated
 prefix come after, from the router advertisements and DHCPv6, which are not
 pppoed's. Either family may be refused by the peer and the link comes up with
 the other; once IPCP is open, IPv6CP has two restart periods, six seconds, to
-open too.
+open too. ``-4`` and ``-6`` leave a family out: pppoed does not ask for it and
+refuses the peer's request with a Protocol-Reject, as for an operator that
+gives IPv4 and IPv6 on two sessions of one line.
 
 SIGTERM, SIGINT and SIGHUP end a session as a peer expects: an LCP
 Terminate-Request, then a PADT, so that the concentrator frees the session
@@ -59,4 +62,4 @@ after its discovery gets a PADT too.
 The tests run the negotiation against a peer in a child process, at the
 other end of a socket pair: both families, a peer that refuses our
 identifier, a peer that offers none, a peer without IPv6, a client without
-IPv6, a peer without IPv4, and a client told to stop.
+IPv6, a peer without IPv4, a client without IPv4, and a client told to stop.

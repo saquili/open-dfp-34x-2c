@@ -237,11 +237,11 @@ int ppp_recv(struct ppp_link *l, uint16_t *proto, void *buf, size_t bufsz,
 	     int timeout_ms);
 
 /*
- * LCP, then the authentication the peer asks for, then IPCP and, with
- * @want_ipv6, IPv6CP.
+ * LCP, then the authentication the peer asks for, then IPCP with @want_ipv4
+ * and IPv6CP with @want_ipv6.
  */
 int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
-		  bool want_ipv6);
+		  bool want_ipv4, bool want_ipv6);
 
 /*
  * Put the negotiated addresses on the interface: the IPv4 address and maybe

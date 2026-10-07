@@ -39,6 +39,7 @@ enum scenario {
 	NO_IPV6, /* the peer protocol-rejects IPv6CP */
 	IPV4_ONLY, /* the client does not want IPv6 */
 	IPV6_ONLY, /* the peer protocol-rejects IPCP */
+	NO_IPV4_WANTED, /* the client does not want IPv4 */
 	STOPPED, /* both open, then the client is told to stop */
 };
 
@@ -87,6 +88,7 @@ static void peer(int fd, enum scenario sc)
 	static const uint8_t ipcp_req[] = { IPCP_OPT_ADDRESS, 6, 192, 0, 2, 1 };
 	bool lcp_open = false, ncp_started = false, saw_term = false;
 	bool saw_v6_reject = false, naked_iid = false, sent_zero = false;
+	bool saw_v4_reject = false;
 
 	peer_send(fd, PPP_PROTO_LCP, CP_CONF_REQ, 1, lcp_req, sizeof(lcp_req));
 	for (;;) {
@@ -119,7 +121,12 @@ static void peer(int fd, enum scenario sc)
 			else if (code == CP_PROTO_REJ &&
 				 pppoe_get16(opts) == PPP_PROTO_IPV6CP)
 				saw_v6_reject = true;
+			else if (code == CP_PROTO_REJ &&
+				 pppoe_get16(opts) == PPP_PROTO_IPCP)
+				saw_v4_reject = true;
 		} else if (proto == PPP_PROTO_IPCP && code == CP_CONF_REQ) {
+			if (sc == NO_IPV4_WANTED)
+				_exit(20);
 			if (sc == IPV6_ONLY) {
 				uint8_t rej[PPP_CTRL_MAX];
 
@@ -192,6 +199,8 @@ static void peer(int fd, enum scenario sc)
 	}
 	if (sc == IPV4_ONLY && !saw_v6_reject)
 		_exit(17);
+	if (sc == NO_IPV4_WANTED && !saw_v4_reject)
+		_exit(21);
 	if (sc == ZERO_PEER_IID && !sent_zero)
 		_exit(18);
 	if (sc == STOPPED && !saw_term)
@@ -218,7 +227,7 @@ static int run(enum scenario sc, struct ppp_link *l)
 	l->chfd = -1;
 	l->fd = sv[0];
 	l->magic = 0x55667788;
-	err = ppp_negotiate(l, "", "", sc != IPV4_ONLY);
+	err = ppp_negotiate(l, "", "", sc != NO_IPV4_WANTED, sc != IPV4_ONLY);
 	if (sc == STOPPED && !err) {
 		pppoed_stop = 1;
 		err = ppp_run(l, 5) == -EINTR ? 0 : -EPROTO;
@@ -266,6 +275,10 @@ int main(void)
 	CHECK(l.ipv4_up && !l.ipv6_up);
 
 	CHECK(run(IPV6_ONLY, &l) == 0);
+	CHECK(!l.ipv4_up && l.ipv6_up);
+
+	/* Asked for IPv6 alone, the client sends no IPCP and refuses the peer's. */
+	CHECK(run(NO_IPV4_WANTED, &l) == 0);
 	CHECK(!l.ipv4_up && l.ipv6_up);
 
 	/* Told to stop, the client leaves the link at once and terminates it. */
