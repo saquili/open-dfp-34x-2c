@@ -50,6 +50,29 @@ The small programs of the ONU.
    removed account does not come back at the next boot. Where the identity in
    force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
 
+``onu-update``
+   the two banks of the flash and the updates that go into them
+   (``docs/handbook/updating.rst``)::
+
+      onu-update status          # which bank runs, which starts next, each bank
+      onu-update check FILE      # check an update file, writing nothing
+      onu-update write FILE      # into the bank that does not run, read back
+      onu-update read [BANK]     # a bank as an update file, on the output
+      onu-update try [BANK]      # start a bank once, the other by default
+      onu-update commit          # keep the running bank
+      onu-update env [KEY | KEY=VALUE]...   # the boot loader's environment
+
+   FILE ``-`` is the standard input, so an update streams in without being held
+   whole. The running bank, told by ``root=``, is never written; after a start
+   from RAM, ``write`` needs the bank named. The update file's layout is in
+   ``src/update.h``, the environment's in ``src/bootenv.h``.
+
+``onu-trial``
+   run last by the boot script with the host link's address: after a start of
+   a bank on trial, it commits the bank once omcid runs, the status daemon
+   answers and the PON is in O5 (or has no light), and restarts into the
+   committed bank when that does not happen within 300 s.
+
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's
    ``pon`` generic netlink family: the activation state, the ONU-ID, the
@@ -111,14 +134,17 @@ The small programs of the ONU.
 
 Building and testing::
 
-   make           # build/ponid, build/pon and build/onucfg
+   make           # build/ponid, build/pon, build/onucfg and build/onu-update
    make check     # the tests
 
-``ponid`` and ``onucfg`` need zlib, ``onucfg`` the kernel's MTD header
+``ponid``, ``onucfg`` and ``onu-update`` need zlib, ``onucfg`` and
+``onu-update`` the kernel's MTD header
 ``mtd/mtd-user.h``, ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the
 tests of ``onu-mode`` and ``dhcp-wan`` run them against stand-ins for the
 programs they call, in a scratch root, and those of ``onu-store`` run it with
-``build/onucfg`` on a store in a file.
+``build/onucfg`` on a store in a file. ``onu-update`` is tested on a flash
+made of files under ``ONU_ROOT``, with update files packed by the image build's
+``mkupdate.py``, which needs python3; ``onu-trial`` against stand-ins.
