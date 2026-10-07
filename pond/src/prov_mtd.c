@@ -278,7 +278,8 @@ static const struct env_copy *env_live(const struct env_copy *a,
 		return b;
 	if (b->flag == 255 && a->flag == 0)
 		return a;
-	return b->flag > a->flag ? b : a;
+	/* The higher flag, and of two equal ones the second copy, as the loader. */
+	return a->flag > b->flag ? a : b;
 }
 
 struct env_diff {
