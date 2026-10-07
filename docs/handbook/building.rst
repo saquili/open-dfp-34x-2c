@@ -297,7 +297,10 @@ filesystem tree before it packs ``r0.squashfs``::
 
 ``/etc/board.conf`` is read by the boot script and may set ``DATA_ADDRESS``,
 ``MGMT_VLAN`` and ``MGMT_ADDRESS`` (the value above is an example; the defaults
-are in the script). On a finished build this runs the last step only, a few
+are in the script). An empty ``DATA_ADDRESS`` leaves the host link itself
+without an address: the stick is then managed on its VLAN alone, which the
+switch keeps from the PON both ways, and has no address on the subscriber's
+data path, as an operator's ONT has none. On a finished build this runs the last step only, a few
 seconds, and it does not change the target directory: the next ``make`` without
 the variable gives the plain image again. The image with a key in it is not the
 image of this page, its digest differs, and it is not to be published.
