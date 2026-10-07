@@ -3695,10 +3695,13 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 
 	/*
 	 * NAPT, and frames matched to interface rows by MAC, taken to be their
-	 * destination MAC (not verified). Changing other fields as well turns
-	 * a translated flow's verdict into one for the CPU (measured on this
-	 * board). FLOW6_EN is set: IPv6 goes to the CPU until
-	 * rtl9602c_l34_route6_commit() carries an IPv6 route.
+	 * destination MAC (not verified). A router decrements the TTL or hop
+	 * limit of what it forwards, and leaves a frame that arrives with 1 to
+	 * the CPU, which answers it (RFC 1812, RFC 8200): TTL_DEC. FLOW6_EN is
+	 * set: IPv6 goes to the CPU until rtl9602c_l34_route6_commit() carries
+	 * an IPv6 route. Other fields are left: a whole-word write that changed
+	 * more turned a translated flow's verdict into one for the CPU
+	 * (measured on this board).
 	 */
 	rtl9602c_rmw(p, RTL9602C_L3_CFG,
 		     RTL9602C_L3_CFG_NAT_MODE | RTL9602C_L3_CFG_L3IF_LOOKUP,
@@ -3706,7 +3709,7 @@ void rtl9602c_l34_init(struct rtl9602c_priv *p)
 				RTL9602C_L3_CFG_NAT_MODE_NAPT) |
 		     FIELD_PREP(RTL9602C_L3_CFG_L3IF_LOOKUP,
 				RTL9602C_L3_CFG_L3IF_LOOKUP_MAC) |
-		     RTL9602C_L3_CFG_FLOW6_EN);
+		     RTL9602C_L3_CFG_TTL_DEC | RTL9602C_L3_CFG_FLOW6_EN);
 
 	/*
 	 * The engine's master enable, read-modify-write to keep bit 2. With it

@@ -1523,15 +1523,19 @@ static inline unsigned int rtl9602c_gem_tcont_qbit(unsigned int n,
 
 /*
  * The engine's configuration. L3IF_LOOKUP_MAC is taken to match frames to
- * the interface rows by destination MAC (not verified). Changing more than
- * NAT_MODE, L3IF_LOOKUP and FLOW6_EN sends translated flows to the CPU
- * (measured on this board). With FLOW6_EN set and the five-tuple table empty,
- * every IPv6 frame the engine takes goes to the CPU (reason 16); with it
- * clear, the engine routes IPv6 by the IPv6 route rows (measured).
+ * the interface rows by destination MAC (not verified). A whole-word write
+ * that changed more than NAT_MODE and L3IF_LOOKUP sent translated flows to
+ * the CPU (measured on this board). With FLOW6_EN set and the five-tuple
+ * table empty, every IPv6 frame the engine takes goes to the CPU (reason
+ * 16); with it clear, the engine routes IPv6 by the IPv6 route rows. With
+ * TTL_DEC set the engine decrements the TTL or hop limit of the frames it
+ * routes and hands one that arrives with 1 to the CPU; clear, it forwards
+ * them unchanged (both measured).
  */
 #define RTL9602C_L3_CFG			0x800010
 #define RTL9602C_L3_CFG_FLOW4_EN		BIT(30)
 #define RTL9602C_L3_CFG_FLOW6_EN		BIT(29)
+#define RTL9602C_L3_CFG_TTL_DEC		BIT(12)
 #define RTL9602C_L3_CFG_NAT_MODE		GENMASK(11, 10)
 #define RTL9602C_L3_CFG_NAT_MODE_NAPT			3
 #define RTL9602C_L3_CFG_L3IF_LOOKUP		GENMASK(9, 8)
