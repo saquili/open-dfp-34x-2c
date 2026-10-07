@@ -1524,8 +1524,10 @@ static inline unsigned int rtl9602c_gem_tcont_qbit(unsigned int n,
 /*
  * The engine's configuration. L3IF_LOOKUP_MAC is taken to match frames to
  * the interface rows by destination MAC (not verified). Changing more than
- * NAT_MODE and L3IF_LOOKUP sends translated flows to the CPU (measured on
- * this board).
+ * NAT_MODE, L3IF_LOOKUP and FLOW6_EN sends translated flows to the CPU
+ * (measured on this board). With FLOW6_EN set and the five-tuple table empty,
+ * every IPv6 frame the engine takes goes to the CPU (reason 16); with it
+ * clear, the engine routes IPv6 by the IPv6 route rows (measured).
  */
 #define RTL9602C_L3_CFG			0x800010
 #define RTL9602C_L3_CFG_FLOW4_EN		BIT(30)
@@ -1640,6 +1642,21 @@ struct rtl9602c_field {
 #define RTL9602C_ROUTE_ACTION_DROP	1
 #define RTL9602C_ROUTE_ACTION_NEIGH		2
 #define RTL9602C_ROUTE_ACTION_NEXTHOP		3
+
+/*
+ * IPv6 route entry: as the IPv4 one, with a 128-bit destination, its high
+ * word last, and a prefix length that is the length itself. RT2WAN is set
+ * on a row whose frames leave by the WAN. Action 0 hands the frame to the
+ * CPU. The layout and the actions are not verified beyond what routes
+ * through the default route and a gateway on the LAN need.
+ */
+#define RTL9602C_ROUTE6_DST(w)		RTL9602C_FIELD(32 * (w), 32)
+#define RTL9602C_ROUTE6_DST_LEN		RTL9602C_FIELD(128, 8)
+#define RTL9602C_ROUTE6_L3IF_IDX	RTL9602C_FIELD(136, 4)
+#define RTL9602C_ROUTE6_NEXTHOP_IDX	RTL9602C_FIELD(136, 4)
+#define RTL9602C_ROUTE6_ACTION		RTL9602C_FIELD(140, 2)
+#define RTL9602C_ROUTE6_VALID		RTL9602C_FIELD(142, 1)
+#define RTL9602C_ROUTE6_RT2WAN		RTL9602C_FIELD(143, 1)
 
 /* L3-interface entry; how the engine applies MTU is not verified. */
 #define RTL9602C_L3IF_VALID		RTL9602C_FIELD(0, 1)
@@ -2512,6 +2529,8 @@ struct rtl9602c_lookup {
  * @list: its place in rtl9602c_priv.l34_neigh_q
  * @dev: the neighbour's device, held until the event is applied
  * @addr: the neighbour's IPv4 address
+ * @addr6: the neighbour's IPv6 address, for an IPv6 neighbour
+ * @v6: an IPv6 neighbour
  * @add: the neighbour was in a valid state
  *
  * The neighbour notifier can run in softirq, and the table writes sleep, so
@@ -2521,6 +2540,8 @@ struct rtl9602c_l34_neigh_ev {
 	struct list_head	list;
 	struct net_device	*dev;
 	__be32			addr;
+	struct in6_addr		addr6;
+	bool			v6;
 	bool			add;
 };
 
@@ -2552,9 +2573,33 @@ struct rtl9602c_l34_route {
 };
 
 /**
+ * struct rtl9602c_l34_route6 - an IPv6 route in the shadow of the routing table
+ * @dst: the destination prefix
+ * @gw: the gateway, the unspecified address for an on-link route
+ * @ifindex: the device of the nexthop
+ * @port: the switch port of that device, or -1
+ * @prefix: the prefix length
+ * @flags: %RTL9602C_L34_RT_CPU or %RTL9602C_L34_RT_DROP
+ * @linkdown: the nexthop is dead or without carrier
+ * @used: the slot holds a route
+ */
+struct rtl9602c_l34_route6 {
+	struct in6_addr	dst;
+	struct in6_addr	gw;
+	int		ifindex;
+	s8		port;
+	u8		prefix;
+	u8		flags;
+	bool		linkdown;
+	bool		used;
+};
+
+/**
  * struct rtl9602c_l34_fib_ev - a route event queued for the work item
  * @list: its place in rtl9602c_priv.l34_fib_q
  * @route: what the row needs, copied out in the notifier
+ * @route6: the same, for an IPv6 route
+ * @v6: an IPv6 route, in @route6
  * @add: the route was added or replaced, or the nexthop became usable
  * @nh: a nexthop event: @route holds only its device and gateway
  *
@@ -2564,6 +2609,8 @@ struct rtl9602c_l34_route {
 struct rtl9602c_l34_fib_ev {
 	struct list_head		list;
 	struct rtl9602c_l34_route	route;
+	struct rtl9602c_l34_route6	route6;
+	bool				v6;
 	bool				add;
 	bool				nh;
 };
@@ -2879,6 +2926,13 @@ struct rtl9602c_priv {
 	int l34_route_wan;
 	/** @l34_route_wan_us: that WAN holds a reference on @l34_us_flow */
 	bool l34_route_wan_us;
+	/**
+	 * @l34_route6_wan: the PPPoE WAN the IPv6 default route leaves by, 0
+	 * for none; an operator may give IPv6 on a session of its own
+	 */
+	int l34_route6_wan;
+	/** @l34_route6_wan_us: that WAN holds a reference on @l34_us_flow */
+	bool l34_route6_wan_us;
 	/** @l34_routed_warned: a routed host found no row, and it was said */
 	bool l34_routed_warned;
 
@@ -2918,6 +2972,11 @@ struct rtl9602c_priv {
 	 */
 	__be32 l34_nh_addr[16];
 	/**
+	 * @l34_nh_addr6: the IPv6 neighbour address of each next-hop row, the
+	 * unspecified address for a row it does not hold
+	 */
+	struct in6_addr l34_nh_addr6[16];
+	/**
 	 * @l34_nh_mac: the address of the address-table entry that each
 	 * next-hop row names, zero for none
 	 */
@@ -2950,6 +3009,14 @@ struct rtl9602c_priv {
 	 * has been given
 	 */
 	bool l34_route_warned;
+	/** @l34_route6: the shadow of the IPv6 routing table */
+	struct rtl9602c_l34_route6 l34_route6[32];
+	/** @l34_route6_hw: the IPv6 route rows last written */
+	u32 l34_route6_hw[8][5];
+	/** @l34_route6_over: as @l34_route_over, for IPv6 */
+	bool l34_route6_over;
+	/** @l34_route6_warned: as @l34_route_warned, for IPv6 */
+	bool l34_route6_warned;
 
 	/**
 	 * @flow_lock: serialises the L3/NAT bookkeeping: rows, routes, flows
