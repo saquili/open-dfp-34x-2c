@@ -15,7 +15,11 @@
 #   k0.uImage    the kernel image that the boot loader loads for bank 0: the
 #                kernel's uImage, unchanged
 #   r0.squashfs  the root filesystem for bank 0, a SquashFS image
-#   SHA256SUMS   the SHA-256 digests of those two files, in the form that
+#   update.bin   the two in one update file, which the stick's onu-update
+#                writes into the bank it did not start from: made by
+#                mkupdate.py, with the board, the version (BUILD_ID of the
+#                image's /etc/os-release) and the build's time in its header
+#   SHA256SUMS   the SHA-256 digests of those three files, in the form that
 #                "sha256sum -c" reads
 #
 # The root filesystem image is made here, and not by the build system's own
@@ -36,7 +40,8 @@
 # gives the image without those files. (The build system's own overlays copy
 # their files into the target directory and never remove them.)
 #
-# MKSQUASHFS names another mksquashfs, which the tests use.
+# MKSQUASHFS names another mksquashfs, which the tests use; PYTHON the Python
+# that runs mkupdate.py (python3).
 
 set -eu
 
@@ -50,6 +55,9 @@ images=$1
 target=${TARGET_DIR:?"TARGET_DIR is not set; Buildroot sets it"}
 epoch=${SOURCE_DATE_EPOCH:?"SOURCE_DATE_EPOCH is not set; the defconfig has to ask for a reproducible build"}
 mksquashfs=${MKSQUASHFS:-${HOST_DIR:?"HOST_DIR is not set; Buildroot sets it"}/bin/mksquashfs}
+
+python=${PYTHON:-python3}
+board=odi,dfp-34x-2c3
 
 bench=${OPEN_DFP_34X_2C_LOCAL_OVERLAY:-}
 
@@ -91,10 +99,18 @@ mv "$images/k0.uImage.part" "$images/k0.uImage"
 )
 mv "$images/r0.squashfs.part" "$images/r0.squashfs"
 
-(cd "$images" && sha256sum k0.uImage r0.squashfs) > "$images/SHA256SUMS.part"
+# The version is the one the image names itself by; mkupdate.py writes its
+# output under a name of its own and moves it into place.
+version=$(sed -n 's/^BUILD_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
+[ -n "$version" ] || die "no BUILD_ID in $root/etc/os-release"
+"$python" "$(dirname "$0")/mkupdate.py" --board "$board" --version "$version" \
+	--time "$epoch" "$images/k0.uImage" "$images/r0.squashfs" "$images/update.bin" ||
+	die "mkupdate.py failed"
+
+(cd "$images" && sha256sum k0.uImage r0.squashfs update.bin) > "$images/SHA256SUMS.part"
 mv "$images/SHA256SUMS.part" "$images/SHA256SUMS"
 
 size() {
 	wc -c < "$1" | tr -d ' '
 }
-echo "post-image: $(size "$images/k0.uImage") bytes in k0.uImage, $(size "$images/r0.squashfs") bytes in r0.squashfs"
+echo "post-image: $(size "$images/k0.uImage") bytes in k0.uImage, $(size "$images/r0.squashfs") bytes in r0.squashfs, $(size "$images/update.bin") bytes in update.bin"

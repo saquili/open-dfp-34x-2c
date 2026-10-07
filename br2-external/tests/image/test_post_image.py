@@ -16,6 +16,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+import zlib
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
@@ -49,6 +50,8 @@ class Scratch(unittest.TestCase):
         os.makedirs(os.path.join(self.target, "etc"))
         with open(os.path.join(self.target, "etc", "hostname"), "w") as handle:
             handle.write("board\n")
+        with open(os.path.join(self.target, "etc", "os-release"), "w") as handle:
+            handle.write("NAME=test\nBUILD_ID=0123456789ab\n")
         self.kernel = b"\x27\x05\x19\x56 a kernel image\n" * 5
         with open(os.path.join(self.images, "uImage"), "wb") as handle:
             handle.write(self.kernel)
@@ -79,10 +82,36 @@ class Scratch(unittest.TestCase):
 
 
 class WithAStandIn(Scratch):
-    def test_it_leaves_the_two_images_and_their_digests(self):
+    def test_it_leaves_the_two_images_the_update_file_and_their_digests(self):
         done = self.run_script()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.names(), ["SHA256SUMS", "k0.uImage", "r0.squashfs", "uImage"])
+        self.assertEqual(self.names(),
+                         ["SHA256SUMS", "k0.uImage", "r0.squashfs", "uImage", "update.bin"])
+
+    def test_the_update_file_carries_the_two_images(self):
+        self.run_script()
+        data = self.read("update.bin")
+        kernel, rootfs = self.read("k0.uImage"), self.read("r0.squashfs")
+        head = data[:256]
+        self.assertEqual(head[:4], b"ONUF")
+        fmt, hlen, klen, rlen, flags, time = struct.unpack(">IIIIIQ", head[4:32])
+        self.assertEqual((fmt, hlen, klen, rlen, flags, time),
+                         (1, 256, len(kernel), len(rootfs), 0, int(EPOCH)))
+        self.assertEqual(head[32:96].rstrip(b"\0"), b"odi,dfp-34x-2c3")
+        self.assertEqual(head[96:160].rstrip(b"\0"), b"0123456789ab")
+        self.assertEqual(head[160:252], bytes(92))
+        self.assertEqual(struct.unpack(">I", head[252:])[0], zlib.crc32(head[:252]))
+        self.assertEqual(data[256:256 + len(kernel)], kernel)
+        self.assertEqual(data[256 + len(kernel):-32], rootfs)
+        self.assertEqual(data[-32:], hashlib.sha256(data[:-32]).digest())
+
+    def test_no_build_id_no_update_file(self):
+        os.remove(os.path.join(self.target, "etc", "os-release"))
+        done = self.run_script()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("BUILD_ID", done.stderr)
+        self.assertNotIn("update.bin", self.names())
+        self.assertNotIn("SHA256SUMS", self.names())
 
     def test_the_kernel_image_is_the_kernels_unchanged(self):
         self.run_script()
@@ -96,7 +125,7 @@ class WithAStandIn(Scratch):
     def test_the_digests_are_those_sha256sum_reads(self):
         self.run_script()
         want = []
-        for name in ("k0.uImage", "r0.squashfs"):
+        for name in ("k0.uImage", "r0.squashfs", "update.bin"):
             want.append("%s  %s" % (hashlib.sha256(self.read(name)).hexdigest(), name))
         self.assertEqual(self.read("SHA256SUMS", "r").splitlines(), want)
         if shutil.which("sha256sum"):
@@ -264,7 +293,8 @@ class WithAStandInAndALocalOverlay(BenchFiles):
             packed_from = handle.read().splitlines()[0]
         self.assertNotEqual(packed_from, self.target)
         self.assertEqual(sorted(os.listdir(self.target)), ["etc"])
-        self.assertEqual(sorted(os.listdir(os.path.join(self.target, "etc"))), ["hostname"])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.target, "etc"))),
+                         ["hostname", "os-release"])
 
     def test_the_next_run_without_the_variable_packs_none_of_them(self):
         self.run_with()
@@ -331,6 +361,11 @@ class WithTheRealTool(Scratch):
         shutil.rmtree(self.target)
         os.makedirs(self.target)
         self.make_tree(self.target, names, mtime)
+        # The update file needs the version the image names itself by.
+        os.makedirs(os.path.join(self.target, "etc"))
+        with open(os.path.join(self.target, "etc", "os-release"), "w") as handle:
+            handle.write("BUILD_ID=0123456789ab\n")
+        os.utime(os.path.join(self.target, "etc", "os-release"), (mtime, mtime))
         done = self.run_script(mksquashfs=REAL_MKSQUASHFS)
         self.assertEqual(done.returncode, 0, done.stderr)
         return self.read("r0.squashfs")
