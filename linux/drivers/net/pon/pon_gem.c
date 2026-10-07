@@ -20,6 +20,7 @@
 #include <linux/ethtool.h>
 #include <linux/if_bridge.h>
 #include <linux/if_link.h>
+#include <linux/if_vlan.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <net/dst_metadata.h>
@@ -260,6 +261,36 @@ static int pon_gem_change_mtu(struct net_device *dev, int new_mtu)
 	return 0;
 }
 
+/*
+ * A VLAN device over a GEM interface sends and receives through the lower,
+ * and a switch behind the lower may forward by VLAN membership, as one does
+ * while a bridge filters VLANs: the GEM interface hands the VIDs of its VLAN
+ * devices on to the lower's VLAN filter, as a VLAN filter of its own, so that
+ * the lower's port stays a member of their VLANs. The lower counts the
+ * references of every GEM interface. A VLAN that the GEM interfaces of a
+ * bridge also carry is the lower's through the switchdev objects of the
+ * bridge as well, and is not expected here: a VLAN either reaches the host
+ * through a VLAN device or crosses the bridge. Called with RTNL held, which
+ * keeps the lower in place.
+ */
+static int pon_gem_vlan_rx_add_vid(struct net_device *dev, __be16 proto,
+				   u16 vid)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	return gem->lower ? vlan_vid_add(gem->lower, proto, vid) : 0;
+}
+
+static int pon_gem_vlan_rx_kill_vid(struct net_device *dev, __be16 proto,
+				    u16 vid)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	if (gem->lower)
+		vlan_vid_del(gem->lower, proto, vid);
+	return 0;
+}
+
 static const struct net_device_ops pon_gem_netdev_ops = {
 	.ndo_open		= pon_gem_open,
 	.ndo_change_mtu		= pon_gem_change_mtu,
@@ -269,6 +300,8 @@ static const struct net_device_ops pon_gem_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_get_iflink		= pon_gem_get_iflink,
 	.ndo_setup_tc		= pon_gem_setup_tc,
+	.ndo_vlan_rx_add_vid	= pon_gem_vlan_rx_add_vid,
+	.ndo_vlan_rx_kill_vid	= pon_gem_vlan_rx_kill_vid,
 };
 
 bool pon_gem_netdev_flow(const struct net_device *dev, unsigned int *flow)
@@ -304,7 +337,8 @@ static void pon_gem_free(struct net_device *dev)
 
 /*
  * An Ethernet interface without a transmit queue, with lockless transmit
- * (gem_xmit may run on several CPUs at once) and per-CPU software counters,
+ * (gem_xmit may run on several CPUs at once), a VLAN filter that it hands on
+ * to the lower (pon_gem_vlan_rx_add_vid()) and per-CPU software counters,
  * freed on unregistration.
  */
 static void pon_gem_setup(struct net_device *dev)
@@ -316,6 +350,7 @@ static void pon_gem_setup(struct net_device *dev)
 	dev->needs_free_netdev = true;
 
 	dev->priv_flags |= IFF_NO_QUEUE;
+	dev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
 	dev->lltx = true;
 	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
 }

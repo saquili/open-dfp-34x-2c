@@ -636,6 +636,18 @@ Port-ID and the T-CONT index::
 
     ip link add gemN link pon type gem port-id P tcont T
 
+A VLAN interface may stack on a GEM interface, as a PPPoE session the ONU
+holds itself does on the GEM port of an Internet service. The GEM interface
+has a VLAN filter (``NETIF_F_HW_VLAN_CTAG_FILTER``) that hands each VID of its
+VLAN interfaces on to the lower's (``vlan_vid_add()``), which counts the
+references of every GEM interface: the lower's switch port then stays a member
+of those VLANs, which a switch that forwards by VLAN membership needs, as one
+does while a bridge filters VLANs (on the RTL9602C, the *bridging* page of the
+DSA driver). A VLAN that the GEM interfaces of a bridge carry reaches the lower
+through the bridge's switchdev objects instead; a VLAN is meant to take one of
+the two ways, either to the host through a VLAN interface or across the
+bridge.
+
 The MAC creates the port behind the interface in ``gem_add``, which chooses the
 *flow*, the MAC's own number for the GEM port. The interface sends a frame by
 calling ``gem_xmit`` with the flow in a ``METADATA_HW_PORT_MUX`` dst, and the
