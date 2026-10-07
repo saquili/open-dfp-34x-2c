@@ -38,6 +38,9 @@ setup() {
 	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all" "$ONU_ROOT/proc/sys/net/ipv6/conf/lan"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding"
 	echo 1 >"$ONU_ROOT/proc/sys/net/ipv6/conf/lan/disable_ipv6"
+	mkdir -p "$ONU_ROOT/proc/sys/net/ipv4/conf/lan" "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp"
+	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/lan/rp_filter"
+	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter"
 	: >"$LOG"
 	for prog in killall udhcpd udhcpc logger kill onu-store dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
@@ -233,6 +236,9 @@ check 'logged "^ip link del omcibr0"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
 check 'logged "^ip link add link sfp name lan type vlan id 36"'
 check 'logged "^ip address add 192.0.2.254/32 dev lan"'
+# The LAN link forwards only the handed address's packets (BCP 38).
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan/rp_filter")" = 1 ]'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 check '! logged "^udhcpd"'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
@@ -391,6 +397,13 @@ check '! logged "^omcid"'
 check 'logged "^ip address del 198.51.100.1/24 dev sfp"'
 check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
+# The host link itself is the LAN link: it checks the sources, until the
+# stick leaves passthrough with the account.
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 1 ]'
+rm "$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" apply 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 teardown
 
 echo "an account in a VLAN beside a running omcid: its bridge stays, without that VLAN"

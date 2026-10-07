@@ -118,7 +118,9 @@ The small programs of the ONU.
    link (``PASS_GATEWAY``), given as a classless static route too (RFC 3442),
    with the session's name servers and MTU and leases of a minute, so that
    the router finds the address of a new session within one. The stick routes
-   the address there with a host route, until the session ends. The first
+   the address there with a host route, until the session ends, and forwards
+   from the link only what comes from that address, by a strict reverse-path
+   check (BCP 38). The first
    session that carries IPv6 hands its delegated prefix on in the same way,
    through ``dhcp6d`` (see ``dhcp6d/README.rst``), once its IPv6 is up: the
    link to the router gets IPv6, and the stick forwards it. A watcher

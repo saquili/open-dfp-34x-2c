@@ -75,6 +75,7 @@ NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
 IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
+IPV4_CONF=$ROOT/proc/sys/net/ipv4/conf
 SHARE=$ROOT/usr/share/onu
 
 log() {
@@ -809,6 +810,12 @@ router_down() {
 
 # Passthrough mode: the LAN link, a VLAN on the host link or the host link
 # itself, with the stick's address on it; the session's address comes later.
+# The link forwards only what comes from the address it hands on (BCP 38): a
+# strict reverse-path check drops a packet whose source the stick would not
+# route back by the link. Without it, packets of any source that reached the
+# stick's MAC on the link went out into the session (measured: about half of
+# 1000, the rest cut by the limit on the frames to the CPU). The switch routes
+# only the handed address's own packets in hardware.
 pass_up() {
 	echo 1 >"$FORWARD"
 	lan=sfp
@@ -817,6 +824,7 @@ pass_up() {
 		ip link set lan up
 		lan=lan
 	fi
+	echo 1 >"$IPV4_CONF/$lan/rp_filter"
 	ip address add "$PASS_GATEWAY/32" dev "$lan"
 	echo "$lan" >"$RUN/onu-lan"
 	[ -n "${ONU_MODE_NO_WATCH:-}" ] || "$0" watch &
@@ -829,6 +837,7 @@ pass_down() {
 	rm -f "$RUN/onu-pass-session"
 	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
 	[ -n "$lan" ] && ip address del "$PASS_GATEWAY/32" dev "$lan" 2>/dev/null
+	[ "$lan" = sfp ] && echo 0 >"$IPV4_CONF/sfp/rp_filter"
 	ip link del lan 2>/dev/null
 	rm -f "$RUN/onu-lan"
 	echo 0 >"$FORWARD"
