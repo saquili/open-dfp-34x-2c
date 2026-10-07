@@ -8,7 +8,8 @@
  * and the flash holds one copy.
  *
  * "vite" proxies /api to a stick (POND_TARGET, the router's proxy by
- * default); "vite --mode mock" answers /api from the dev server itself with
+ * default; with POND_TOKEN it presents that bearer token, so the panel shows
+ * the stick without a sign-in); "vite --mode mock" answers /api from the dev server itself with
  * the mock stick of src/mocks, for work without one. The mocks run in the
  * server, not in a service worker, so they work in any browser and for any
  * client, and nothing of them reaches a build.
@@ -18,8 +19,8 @@ import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import tailwindcss from "@tailwindcss/vite";
 import preact from "@preact/preset-vite";
+import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
 
 /* Replace every file of the output with its gzip-compressed copy. */
@@ -75,7 +76,9 @@ function mockApi(): Plugin {
         if (!response) return next();
         if (response.type === "error") return req.socket.destroy();
         res.statusCode = response.status;
-        response.headers.forEach((v, k) => res.setHeader(k, v));
+        response.headers.forEach((v, k) => {
+          res.setHeader(k, v);
+        });
         res.end(Buffer.from(await response.arrayBuffer()));
       });
     },
@@ -98,6 +101,10 @@ export default defineConfig(({ mode }) => ({
               target: process.env.POND_TARGET ?? "https://stick.invalid",
               changeOrigin: true,
               secure: true,
+              /* With POND_TOKEN, the proxy signs in with the stick's bearer token. */
+              headers: process.env.POND_TOKEN
+                ? { Authorization: `Bearer ${process.env.POND_TOKEN}` }
+                : undefined,
             },
           },
   },
