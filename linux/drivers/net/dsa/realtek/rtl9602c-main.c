@@ -2147,7 +2147,11 @@ static void rtl9602c_get_ethtool_stats(struct dsa_switch *ds, int port,
  * CPU. Packets are the unicast, multicast and broadcast frames together;
  * receive errors are the CRC and alignment, symbol and length errors; frames
  * dropped on receive are those the port dropped and those forwarding
- * discarded.
+ * discarded. The oversize counter is no length error: as RFC 2819's
+ * etherStatsOversizePkts it counts every good frame longer than 1518 bytes,
+ * and a full-sized frame with a VLAN tag is one. On an operator's line the
+ * PON port counted 21.9 million of them among 26 million frames, PPPoE in a
+ * VLAN, all forwarded, with one CRC error (measured).
  */
 static void rtl9602c_get_stats64(struct dsa_switch *ds, int port,
 				 struct rtnl_link_stats64 *s)
@@ -2167,7 +2171,6 @@ static void rtl9602c_get_stats64(struct dsa_switch *ds, int port,
 	s->multicast = t[RTL9602C_MIBI_RX_MULTICAST];
 	s->rx_crc_errors = t[RTL9602C_MIBI_RX_CRC_ERRORS];
 	s->rx_length_errors = t[RTL9602C_MIBI_RX_UNDERSIZE] +
-			      t[RTL9602C_MIBI_RX_OVERSIZE] +
 			      t[RTL9602C_MIBI_RX_FRAGMENTS] +
 			      t[RTL9602C_MIBI_RX_JABBERS];
 	s->rx_frame_errors = t[RTL9602C_MIBI_RX_SYMBOL_ERRORS];

@@ -1421,10 +1421,14 @@ interface statistics that ``ip -s link`` shows, which therefore count what the
 port carried, bridged traffic included, and not only what crossed the CPU:
 packets are the unicast, multicast and broadcast frames together; receive
 errors the CRC and alignment errors, the symbol errors, and as length errors
-the undersize, oversize, fragment and jabber frames; receive drops the port's
-drop events and the forwarding discards; transmit drops ``tx_discards``;
-collisions ``tx_collisions``, with the excessive and the late ones as transmit
-errors. ``get_eth_mac_stats``, ``get_eth_ctrl_stats``, ``get_rmon_stats`` and
+the undersize, fragment and jabber frames; receive drops the port's drop
+events and the forwarding discards. The oversize frames are no error: the
+counter, RFC 2819's etherStatsOversizePkts, takes every good frame longer than
+1518 bytes, and a full-sized frame with a VLAN tag is one. On an operator's
+line the PON port counted 21.9 million of them among 26 million frames, PPPoE
+in a VLAN, all forwarded, with one CRC error (measured). Transmit drops are
+``tx_discards``, collisions ``tx_collisions``, with the excessive and the late
+ones as transmit errors. ``get_eth_mac_stats``, ``get_eth_ctrl_stats``, ``get_rmon_stats`` and
 ``get_pause_stats`` fill the IEEE 802.3 and RMON groups of ``ethtool -S
 --groups`` and the pause statistics of ``ethtool -I -a``, the RMON size buckets
 being 64 to 1518 bytes in the six ranges of the counters and 1519 to 16383.
