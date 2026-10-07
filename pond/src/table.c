@@ -31,6 +31,9 @@ const struct prov pond_provs[] = {
 	{ "port_counters", "Data path", "Switch MIB counters for sfp and pon",
 	  prov_port_counters, NULL, 0 },
 
+	{ "network", "Data path",
+	  "Interfaces with their VLANs and addresses, routes and neighbours",
+	  prov_network, NULL, PROV_SLOW },
 	{ "bridge", "Data path",
 	  "Forwarding database and per-port VLAN membership", prov_bridge, NULL,
 	  PROV_SLOW },

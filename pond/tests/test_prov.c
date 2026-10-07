@@ -231,6 +231,23 @@ static void test_bank_rules(void)
 #define T_IFLA_GEM_MULTICAST 4
 #define T_IFLA_BRIDGE_VLAN_INFO 2
 
+#define T_RTM_NEWADDR 20
+#define T_RTM_NEWROUTE 24
+#define T_IFLA_ADDRESS 1
+#define T_IFLA_MTU 4
+#define T_IFLA_LINK 5
+#define T_IFLA_OPERSTATE 16
+#define T_IFLA_VLAN_ID 1
+#define T_IFA_ADDRESS 1
+#define T_IFA_LOCAL 2
+#define T_RTA_DST 1
+#define T_RTA_OIF 4
+#define T_RTA_GATEWAY 5
+#define T_RTA_TABLE 15
+#define T_AF_INET 2
+#define T_AF_INET6 10
+#define T_NDA_DST 1
+
 #define T_NDA_LLADDR 2
 #define T_NDA_VLAN 5
 #define T_NDA_MASTER 9
@@ -983,6 +1000,203 @@ static void test_netlink_filters(void)
 	      "the filter list is balanced, with no empty element");
 }
 
+static void nlb_link(struct nlb *b, int32_t index, const char *name,
+		     int32_t lower, const char *kind, int vlan, uint8_t oper)
+{
+	static const unsigned char mac[6] = { 0x00, 0x00, 0x5e,
+					      0x00, 0x53, 0x01 };
+
+	nlb_msg(b, T_RTM_NEWLINK);
+	nlb_ifinfo(b, 0, index);
+	nlb_str(b, T_IFLA_IFNAME, name);
+	nlb_attr(b, T_IFLA_ADDRESS, mac, sizeof(mac));
+	nlb_u32(b, T_IFLA_MTU, 1500);
+	nlb_u32(b, T_IFLA_LINK, (uint32_t)lower);
+	nlb_u8(b, T_IFLA_OPERSTATE, oper);
+	if (kind) {
+		nlb_nest(b, T_IFLA_LINKINFO);
+		nlb_str(b, T_IFLA_INFO_KIND, kind);
+		if (vlan >= 0) {
+			nlb_nest(b, T_IFLA_INFO_DATA);
+			nlb_u16(b, T_IFLA_VLAN_ID, (uint16_t)vlan);
+			nlb_nest_end(b);
+		}
+		nlb_nest_end(b);
+	}
+	nlb_msg_end(b);
+}
+
+static void nlb_addr(struct nlb *b, uint8_t family, uint8_t prefix,
+		     uint8_t scope, int32_t index, uint16_t attr,
+		     const void *ip, size_t n)
+{
+	uint8_t head[4] = { family, prefix, 0, scope };
+
+	nlb_msg(b, T_RTM_NEWADDR);
+	nlb_raw(b, head, sizeof(head));
+	nlb_raw(b, &index, 4);
+	nlb_attr(b, attr, ip, n);
+	nlb_msg_end(b);
+}
+
+static void nlb_route(struct nlb *b, uint8_t family, uint8_t dst_len,
+		      uint8_t table, uint8_t proto, uint8_t type,
+		      const void *dst, size_t n, const void *gw, int32_t oif)
+{
+	uint8_t head[8] = { family, dst_len, 0, 0, table, proto, 0, type };
+	uint32_t flags = 0;
+
+	nlb_msg(b, T_RTM_NEWROUTE);
+	nlb_raw(b, head, sizeof(head));
+	nlb_raw(b, &flags, 4);
+	nlb_u32(b, T_RTA_TABLE, table);
+	if (dst)
+		nlb_attr(b, T_RTA_DST, dst, n);
+	if (gw)
+		nlb_attr(b, T_RTA_GATEWAY, gw, n);
+	nlb_u32(b, T_RTA_OIF, (uint32_t)oif);
+	nlb_msg_end(b);
+}
+
+static void nlb_neigh(struct nlb *b, uint8_t family, int32_t index,
+		      uint16_t state, const void *ip, size_t n,
+		      const unsigned char *mac)
+{
+	uint16_t pad = 0;
+
+	nlb_msg(b, T_RTM_NEWNEIGH);
+	b->buf[b->len++] = family;
+	b->buf[b->len++] = 0;
+	nlb_raw(b, &pad, 2);
+	nlb_raw(b, &index, 4);
+	nlb_raw(b, &state, 2);
+	b->buf[b->len++] = 0;
+	b->buf[b->len++] = 0;
+	nlb_attr(b, T_NDA_DST, ip, n);
+	if (mac)
+		nlb_attr(b, T_NDA_LLADDR, mac, 6);
+	nlb_msg_end(b);
+}
+
+static void test_netlink_network(void)
+{
+	static const unsigned char host[6] = { 0x00, 0x00, 0x5e,
+					       0x00, 0x53, 0x02 };
+	static const uint8_t mgmt_ip[4] = { 192, 0, 2, 254 };
+	static const uint8_t lan_ip[4] = { 169, 254, 0, 1 };
+	static const uint8_t net[4] = { 192, 0, 2, 252 };
+	static const uint8_t host_ip[4] = { 192, 0, 2, 253 };
+	static const uint8_t public_ip[4] = { 203, 0, 113, 24 };
+	static const uint8_t gw[4] = { 198, 51, 100, 1 };
+	/* Marked link-local by its scope, as the kernel says, whatever its prefix. */
+	static const uint8_t ll6[16] = { 0x20, 0x01, 0x0d, 0xb8,
+					 [8] = 0x02, [15] = 0x01 };
+	static const uint8_t doc6[16] = { 0x20, 0x01, 0x0d, 0xb8, [15] = 0x01 };
+	struct nlb links, addrs, routes, neigh;
+	struct prov_buf b;
+	char buf[16384];
+	const char *s;
+
+	puts("the network: interfaces with VLANs and addresses, routes, neighbours");
+
+	memset(&links, 0, sizeof(links));
+	nlb_link(&links, 2, "cpu", 2, NULL, -1, 0);
+	nlb_link(&links, 3, "sfp", 2, "dsa", -1, 6);
+	nlb_link(&links, 4, "pon", 2, "dsa", -1, 6);
+	nlb_link(&links, 5, "mgmt", 3, "vlan", 4094, 6);
+	nlb_link(&links, 6, "lan", 3, "vlan", 36, 6);
+	nlb_link(&links, 9, "gem257", 4, "gem", -1, 0);
+	nlb_link(&links, 10, "wan", 9, "vlan", 410, 2);
+
+	memset(&addrs, 0, sizeof(addrs));
+	nlb_addr(&addrs, T_AF_INET, 30, 0, 5, T_IFA_LOCAL, mgmt_ip, 4);
+	nlb_addr(&addrs, T_AF_INET, 32, 0, 6, T_IFA_LOCAL, lan_ip, 4);
+	nlb_addr(&addrs, T_AF_INET6, 64, 253, 5, T_IFA_ADDRESS, ll6, 16);
+
+	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	check(prov_nl_links((const char *)links.buf, links.len,
+			    (const char *)addrs.buf, addrs.len, &b) == 0 &&
+		      !b.overflow && well_formed(buf),
+	      "the interfaces read, balanced");
+	s = buf;
+	check(occurrences(s, "\"ifindex\":") == 7, "every interface is listed");
+	check(strstr(s, "\"name\":\"cpu\",\"ifindex\":2,\"kind\":null,"
+			"\"lower\":null") != NULL,
+	      "the conduit runs over nothing: a link to itself is no lower device");
+	check(strstr(s, "\"name\":\"sfp\",\"ifindex\":3,\"kind\":\"dsa\","
+			"\"lower\":\"cpu\",\"vlan\":null") != NULL,
+	      "a switch port names its conduit and has no VLAN");
+	check(strstr(s, "\"name\":\"lan\",\"ifindex\":6,\"kind\":\"vlan\","
+			"\"lower\":\"sfp\",\"vlan\":36") != NULL,
+	      "a VLAN names its port and its VID");
+	check(strstr(s, "\"name\":\"wan\",\"ifindex\":10,\"kind\":\"vlan\","
+			"\"lower\":\"gem257\",\"vlan\":410,\"master\":null,"
+			"\"operstate\":\"down\"") != NULL,
+	      "a VLAN over a GEM port, and a link that is down, read as such");
+	check(strstr(s, "\"mtu\":1500,\"mac\":\"00:00:5e:00:53:01\"") != NULL,
+	      "the MTU and the MAC address are reported");
+	check(strstr(s, "\"addresses\":[{\"family\":\"ipv4\",\"address\":"
+			"\"192.0.2.254/30\",\"link_local\":false},{\"family\":"
+			"\"ipv6\",\"address\":\"2001:db8::200:0:0:1/64\","
+			"\"link_local\":true}]") != NULL,
+	      "an interface carries its IPv4 and IPv6 addresses, link-local marked");
+	check(strstr(s, "\"169.254.0.1/32\"") != NULL &&
+		      occurrences(s, "\"addresses\":[]") == 5,
+	      "and the others carry theirs or none");
+
+	memset(&routes, 0, sizeof(routes));
+	nlb_route(&routes, T_AF_INET, 0, 254, 3, 1, NULL, 4, gw, 10);
+	nlb_route(&routes, T_AF_INET, 30, 254, 2, 1, net, 4, NULL, 5);
+	nlb_route(&routes, T_AF_INET, 32, 254, 3, 1, public_ip, 4, NULL, 6);
+	nlb_route(&routes, T_AF_INET, 32, 255, 2, 2, mgmt_ip, 4, NULL, 5);
+	nlb_route(&routes, T_AF_INET6, 64, 254, 2, 1, doc6, 16, NULL, 5);
+	nlb_route(&routes, T_AF_INET6, 8, 254, 2, 5, doc6, 16, NULL, 5);
+
+	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	check(prov_nl_routes((const char *)links.buf, links.len,
+			     (const char *)routes.buf, routes.len, &b) == 0 &&
+		      !b.overflow && well_formed(buf),
+	      "the routes read, balanced");
+	s = buf;
+	check(occurrences(s, "\"destination\":") == 4,
+	      "the local table and a multicast route are left out");
+	check(strstr(s, "{\"family\":\"ipv4\",\"destination\":\"default\","
+			"\"gateway\":\"198.51.100.1\",\"dev\":\"wan\","
+			"\"protocol\":\"static\"") != NULL,
+	      "a route with no destination is the default, through its gateway");
+	check(strstr(s, "\"destination\":\"192.0.2.252/30\",\"gateway\":null,"
+			"\"dev\":\"mgmt\",\"protocol\":\"kernel\"") != NULL,
+	      "a connected network has no gateway and comes from the kernel");
+	check(strstr(s, "\"destination\":\"203.0.113.24/32\",\"gateway\":null,"
+			"\"dev\":\"lan\"") != NULL,
+	      "the host route to the handed-over address names its VLAN");
+	check(strstr(s, "\"family\":\"ipv6\",\"destination\":\"2001:db8::1/64\"") !=
+		      NULL,
+	      "an IPv6 route reads in IPv6 notation");
+
+	memset(&neigh, 0, sizeof(neigh));
+	nlb_neigh(&neigh, T_AF_INET, 5, T_NUD_REACHABLE, host_ip, 4, host);
+	nlb_neigh(&neigh, T_AF_INET, 6, T_NUD_STALE, public_ip, 4, host);
+	nlb_neigh(&neigh, T_AF_INET6, 5, T_NUD_NOARP, ll6, 16, NULL);
+	nlb_neigh(&neigh, 7, 3, T_NUD_PERMANENT, host, 6, host);
+
+	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	check(prov_nl_neighbours((const char *)links.buf, links.len,
+				 (const char *)neigh.buf, neigh.len, &b) == 0 &&
+		      !b.overflow && well_formed(buf),
+	      "the neighbours read, balanced");
+	s = buf;
+	check(occurrences(s, "\"address\":") == 2,
+	      "a multicast mapping and a bridge entry are not neighbours");
+	check(strstr(s, "{\"family\":\"ipv4\",\"address\":\"192.0.2.253\","
+			"\"mac\":\"00:00:5e:00:53:02\",\"dev\":\"mgmt\","
+			"\"state\":\"reachable\"}") != NULL,
+	      "a neighbour names its address, MAC, interface and state");
+	check(strstr(s, "\"address\":\"203.0.113.24\"") != NULL &&
+		      strstr(s, "\"state\":\"stale\"") != NULL,
+	      "the host behind the handed-over address is a neighbour on its VLAN");
+}
+
 static void test_netlink_malformed(void)
 {
 	struct nlb b;
@@ -1606,6 +1820,7 @@ int main(void)
 	test_netlink_fdb();
 	test_netlink_vlans();
 	test_netlink_filters();
+	test_netlink_network();
 	test_netlink_malformed();
 	test_netlink_onu();
 	test_optics();

@@ -27,10 +27,17 @@ int prov_nl_fdb(const char *links, size_t llen, const char *fdb, size_t flen,
 		struct prov_buf *out);
 int prov_nl_filters(const char *filters, size_t len, struct prov_buf *out);
 int prov_nl_gem_ports(const char *links, size_t len, struct prov_buf *out);
+int prov_nl_links(const char *links, size_t llen, const char *addrs,
+		  size_t alen, struct prov_buf *out);
+int prov_nl_neighbours(const char *links, size_t llen, const char *neigh,
+		       size_t nlen, struct prov_buf *out);
+int prov_nl_routes(const char *links, size_t llen, const char *routes,
+		   size_t rlen, struct prov_buf *out);
 int prov_nl_onu(const char *links, size_t llen, const char *dev, size_t dlen,
 		struct prov_buf *out);
 int prov_nl_tconts(const char *dump, size_t dlen, struct prov_buf *out);
 int prov_nl_vlans(const char *brlinks, size_t len, struct prov_buf *out);
+int prov_network(struct prov_buf *out);
 int prov_onu(struct prov_buf *out);
 int prov_optics(struct prov_buf *out);
 int prov_port_counters(struct prov_buf *out);

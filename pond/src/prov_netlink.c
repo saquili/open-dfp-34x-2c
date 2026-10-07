@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The providers read through netlink: the GEM ports, the bridge's
+ * The providers read through netlink: the interfaces with their VLANs and
+ * addresses, the routes and the neighbours, the GEM ports, the bridge's
  * forwarding database and VLANs, the tc filters, and the ONU and its
  * T-CONTs from the generic netlink family "pon". Each decoder takes a
  * netlink dump as bytes, so that the tests can feed it dumps of their
@@ -70,6 +71,26 @@ struct ifinfomsg {
 	unsigned int ifi_change;
 };
 
+struct ifaddrmsg {
+	uint8_t ifa_family;
+	uint8_t ifa_prefixlen;
+	uint8_t ifa_flags;
+	uint8_t ifa_scope;
+	uint32_t ifa_index;
+};
+
+struct rtmsg {
+	unsigned char rtm_family;
+	unsigned char rtm_dst_len;
+	unsigned char rtm_src_len;
+	unsigned char rtm_tos;
+	unsigned char rtm_table;
+	unsigned char rtm_protocol;
+	unsigned char rtm_scope;
+	unsigned char rtm_type;
+	unsigned int rtm_flags;
+};
+
 struct tcmsg {
 	unsigned char tcm_family;
 	unsigned char tcm__pad1;
@@ -102,19 +123,51 @@ struct tc_vlan {
 
 #define RTM_NEWLINK 16
 #define RTM_GETLINK 18
+#define RTM_NEWADDR 20
+#define RTM_GETADDR 22
+#define RTM_NEWROUTE 24
+#define RTM_GETROUTE 26
 #define RTM_NEWNEIGH 28
 #define RTM_GETNEIGH 30
 #define RTM_NEWTFILTER 44
 #define RTM_GETTFILTER 46
 
+#define IFLA_ADDRESS 1
 #define IFLA_IFNAME 3
+#define IFLA_MTU 4
+#define IFLA_LINK 5
 #define IFLA_MASTER 10
+#define IFLA_OPERSTATE 16
 #define IFLA_LINKINFO 18
 #define IFLA_AF_SPEC 26
 #define IFLA_EXT_MASK 29
 
 #define IFLA_INFO_KIND 1
 #define IFLA_INFO_DATA 2
+
+#define IFLA_VLAN_ID 1
+
+#define IFA_ADDRESS 1
+#define IFA_LOCAL 2
+
+#define RTA_DST 1
+#define RTA_OIF 4
+#define RTA_GATEWAY 5
+#define RTA_PRIORITY 6
+#define RTA_TABLE 15
+
+#define RTN_UNICAST 1
+#define RT_TABLE_MAIN 254
+#define RT_SCOPE_LINK 253
+#define RTPROT_KERNEL 2
+#define RTPROT_BOOT 3
+#define RTPROT_STATIC 4
+#define RTPROT_RA 9
+#define RTPROT_DHCP 16
+#define RTNH_F_OFFLOAD 8
+#define RTM_F_OFFLOAD 0x4000
+
+#define NDA_DST 1
 
 #define IFLA_GEM_PORT_ID 1
 #define IFLA_GEM_DIRECTION 2
@@ -135,8 +188,12 @@ struct tc_vlan {
 #define NDA_VLAN 5
 #define NDA_MASTER 9
 
+#define NUD_INCOMPLETE 0x01
 #define NUD_REACHABLE 0x02
 #define NUD_STALE 0x04
+#define NUD_DELAY 0x08
+#define NUD_PROBE 0x10
+#define NUD_FAILED 0x20
 #define NUD_NOARP 0x40
 #define NUD_PERMANENT 0x80
 
@@ -251,6 +308,15 @@ struct genlmsghdr {
 #define PON_ALARM_PEE 8
 #endif
 
+/* The address families netlink carries are Linux's, whatever the host. */
+#define NL_AF_INET 2
+#define NL_AF_INET6 10
+
+/* RFC 2863 operational states, as IFLA_OPERSTATE carries them. */
+#define NL_OPER_DOWN 2
+#define NL_OPER_LOWERLAYERDOWN 3
+#define NL_OPER_UP 6
+
 static_assert(sizeof(struct nlmsghdr) == 16,
 	      "netlink message header is 16 bytes");
 static_assert(sizeof(struct nlattr) == 4,
@@ -273,6 +339,22 @@ static_assert(offsetof(struct tc_vlan, v_action) == 20,
 	      "tc_vlan sits behind the tc_gen prefix");
 
 static_assert(RTM_NEWLINK == 16 && RTM_GETLINK == 18, "rtnetlink link types");
+static_assert(RTM_NEWADDR == 20 && RTM_NEWROUTE == 24, "rtnetlink types");
+static_assert(sizeof(struct ifaddrmsg) == 8, "ifaddrmsg is 8 bytes");
+static_assert(offsetof(struct ifaddrmsg, ifa_index) == 4, "ifaddrmsg layout");
+static_assert(sizeof(struct rtmsg) == 12, "rtmsg is 12 bytes");
+static_assert(offsetof(struct rtmsg, rtm_flags) == 8, "rtmsg layout");
+static_assert(IFLA_ADDRESS == 1 && IFLA_MTU == 4 && IFLA_LINK == 5 &&
+	      IFLA_OPERSTATE == 16, "IFLA numbering");
+static_assert(IFLA_VLAN_ID == 1, "IFLA_VLAN numbering");
+static_assert(IFA_ADDRESS == 1 && IFA_LOCAL == 2, "IFA numbering");
+static_assert(RTA_DST == 1 && RTA_OIF == 4 && RTA_GATEWAY == 5 &&
+	      RTA_PRIORITY == 6 && RTA_TABLE == 15, "RTA numbering");
+static_assert(RTM_F_OFFLOAD == 0x4000 && RTNH_F_OFFLOAD == 8, "offload bits");
+#ifdef __linux__
+static_assert(NL_AF_INET == AF_INET && NL_AF_INET6 == AF_INET6,
+	      "netlink carries Linux's address families");
+#endif
 static_assert(RTM_NEWNEIGH == 28 && RTM_GETNEIGH == 30,
 	      "rtnetlink neigh types");
 static_assert(RTM_NEWTFILTER == 44 && RTM_GETTFILTER == 46,
@@ -1252,6 +1334,397 @@ int prov_nl_filters(const char *filters, size_t len, struct prov_buf *out)
 	return 0;
 }
 
+/* An address of a netlink family as text, or null for a family we do not know. */
+static void nl_pv_ip(struct prov_buf *out, uint8_t family, const char *p,
+		     size_t len, int prefix)
+{
+	char t[INET6_ADDRSTRLEN + 4];
+	int af;
+
+	if (family == NL_AF_INET && len >= 4)
+		af = AF_INET;
+	else if (family == NL_AF_INET6 && len >= 16)
+		af = AF_INET6;
+	else {
+		pv_null(out);
+		return;
+	}
+	if (!inet_ntop(af, p, t, INET6_ADDRSTRLEN)) {
+		pv_null(out);
+		return;
+	}
+	if (prefix >= 0)
+		snprintf(t + strlen(t), sizeof(t) - strlen(t), "/%d", prefix);
+	pv_str(out, t);
+}
+
+static const char *nl_family_name(uint8_t family)
+{
+	return family == NL_AF_INET6 ? "ipv6" : "ipv4";
+}
+
+static void nl_link_addresses(struct prov_buf *out, int32_t index,
+			      const char *addrs, size_t alen)
+{
+	size_t off = 0;
+	uint16_t type;
+	const char *pay;
+	size_t paylen;
+	bool first = true;
+
+	pv_open(out, '[');
+	while (nl_next_msg(addrs, alen, &off, &type, &pay, &paylen)) {
+		struct ifaddrmsg ifa;
+		struct nl_attrs a;
+		unsigned int which;
+
+		if (type != RTM_NEWADDR || paylen < sizeof(ifa))
+			continue;
+		memcpy(&ifa, pay, sizeof(ifa));
+		if ((int32_t)ifa.ifa_index != index)
+			continue;
+		nl_attrs_parse(&a, pay + sizeof(ifa), paylen - sizeof(ifa));
+		/* IFA_LOCAL is the interface's own; IFA_ADDRESS, on a
+		 * point-to-point link, the peer's. IPv6 sends only the latter. */
+		which = nl_has(&a, IFA_LOCAL) ? IFA_LOCAL : IFA_ADDRESS;
+		if (!nl_has(&a, which))
+			continue;
+
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "family");
+		pv_str(out, nl_family_name(ifa.ifa_family));
+		pv_comma(out);
+		pv_key(out, "address");
+		nl_pv_ip(out, ifa.ifa_family, a.val[which], a.len[which],
+			 ifa.ifa_prefixlen);
+		pv_comma(out);
+		pv_key(out, "link_local");
+		pv_bool(out, ifa.ifa_scope == RT_SCOPE_LINK);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
+static void nl_pv_operstate(struct prov_buf *out, uint8_t state)
+{
+	switch (state) {
+	case NL_OPER_UP:
+		pv_str(out, "up");
+		break;
+	case NL_OPER_DOWN:
+	case NL_OPER_LOWERLAYERDOWN:
+		pv_str(out, "down");
+		break;
+	default:
+		pv_str(out, "unknown");
+		break;
+	}
+}
+
+int prov_nl_links(const char *links, size_t llen, const char *addrs,
+		  size_t alen, struct prov_buf *out)
+{
+	struct nl_ifmap map;
+	size_t off = 0;
+	uint16_t type;
+	const char *pay;
+	size_t paylen;
+	bool first = true;
+
+	nl_ifmap_build(&map, links, llen);
+
+	pv_open(out, '[');
+	while (nl_next_msg(links, llen, &off, &type, &pay, &paylen)) {
+		struct ifinfomsg ifi;
+		struct nl_attrs a, info, data;
+		char kind[24], name[NL_IFNAMSZ];
+		bool has_kind = false;
+
+		if (type != RTM_NEWLINK || paylen < sizeof(ifi))
+			continue;
+		memcpy(&ifi, pay, sizeof(ifi));
+		nl_attrs_parse(&a, pay + sizeof(ifi), paylen - sizeof(ifi));
+		if (!nl_get_str(&a, IFLA_IFNAME, name, sizeof(name)))
+			continue;
+
+		memset(&data, 0, sizeof(data));
+		if (nl_has(&a, IFLA_LINKINFO)) {
+			nl_attrs_parse(&info, a.val[IFLA_LINKINFO],
+				       a.len[IFLA_LINKINFO]);
+			has_kind = nl_get_str(&info, IFLA_INFO_KIND, kind,
+					      sizeof(kind)) != NULL;
+			if (nl_has(&info, IFLA_INFO_DATA))
+				nl_attrs_parse(&data, info.val[IFLA_INFO_DATA],
+					       info.len[IFLA_INFO_DATA]);
+		}
+
+		if (!first)
+			pv_comma(out);
+		first = false;
+
+		pv_open(out, '{');
+		pv_key(out, "name");
+		pv_str(out, name);
+
+		pv_comma(out);
+		pv_key(out, "ifindex");
+		pv_num(out, ifi.ifi_index);
+
+		pv_comma(out);
+		pv_key(out, "kind");
+		if (has_kind)
+			pv_str(out, kind);
+		else
+			pv_null(out);
+
+		/* The device it runs over: a VLAN's port, a switch port's conduit. */
+		pv_comma(out);
+		pv_key(out, "lower");
+		if (nl_has(&a, IFLA_LINK) &&
+		    (int32_t)nl_get_u32(&a, IFLA_LINK, 0) != ifi.ifi_index)
+			nl_pv_ifname(out, &map,
+				     (int32_t)nl_get_u32(&a, IFLA_LINK, 0));
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "vlan");
+		if (has_kind && !strcmp(kind, "vlan") &&
+		    nl_has(&data, IFLA_VLAN_ID))
+			pv_num(out, nl_get_u16(&data, IFLA_VLAN_ID, 0));
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "master");
+		if (nl_has(&a, IFLA_MASTER))
+			nl_pv_ifname(out, &map,
+				     (int32_t)nl_get_u32(&a, IFLA_MASTER, 0));
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "operstate");
+		nl_pv_operstate(out, nl_get_u8(&a, IFLA_OPERSTATE, 0));
+
+		pv_comma(out);
+		pv_key(out, "admin_up");
+		pv_bool(out, (ifi.ifi_flags & 1U) != 0);
+
+		pv_comma(out);
+		pv_key(out, "mtu");
+		if (nl_has(&a, IFLA_MTU))
+			pv_num(out, nl_get_u32(&a, IFLA_MTU, 0));
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "mac");
+		if (nl_has(&a, IFLA_ADDRESS) && a.len[IFLA_ADDRESS] == 6)
+			nl_pv_mac(out, a.val[IFLA_ADDRESS], a.len[IFLA_ADDRESS]);
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "addresses");
+		nl_link_addresses(out, ifi.ifi_index, addrs, alen);
+
+		pv_close(out, '}');
+		if (out->overflow)
+			break;
+	}
+	pv_close(out, ']');
+	return 0;
+}
+
+static void nl_pv_protocol(struct prov_buf *out, uint8_t proto)
+{
+	switch (proto) {
+	case RTPROT_KERNEL:
+		pv_str(out, "kernel");
+		break;
+	case RTPROT_BOOT:
+	case RTPROT_STATIC:
+		pv_str(out, "static");
+		break;
+	case RTPROT_RA:
+		pv_str(out, "ra");
+		break;
+	case RTPROT_DHCP:
+		pv_str(out, "dhcp");
+		break;
+	default:
+		pv_str(out, "other");
+		break;
+	}
+}
+
+int prov_nl_routes(const char *links, size_t llen, const char *routes,
+		   size_t rlen, struct prov_buf *out)
+{
+	struct nl_ifmap map;
+	size_t off = 0;
+	uint16_t type;
+	const char *pay;
+	size_t paylen;
+	bool first = true;
+
+	nl_ifmap_build(&map, links, llen);
+
+	pv_open(out, '[');
+	while (nl_next_msg(routes, rlen, &off, &type, &pay, &paylen)) {
+		struct rtmsg rt;
+		struct nl_attrs a;
+		uint32_t table;
+
+		if (type != RTM_NEWROUTE || paylen < sizeof(rt))
+			continue;
+		memcpy(&rt, pay, sizeof(rt));
+		nl_attrs_parse(&a, pay + sizeof(rt), paylen - sizeof(rt));
+
+		/* The main table's unicast routes: where traffic goes. */
+		table = nl_get_u32(&a, RTA_TABLE, rt.rtm_table);
+		if (table != RT_TABLE_MAIN || rt.rtm_type != RTN_UNICAST)
+			continue;
+		if (rt.rtm_family != NL_AF_INET && rt.rtm_family != NL_AF_INET6)
+			continue;
+
+		if (!first)
+			pv_comma(out);
+		first = false;
+
+		pv_open(out, '{');
+		pv_key(out, "family");
+		pv_str(out, nl_family_name(rt.rtm_family));
+
+		pv_comma(out);
+		pv_key(out, "destination");
+		if (nl_has(&a, RTA_DST))
+			nl_pv_ip(out, rt.rtm_family, a.val[RTA_DST],
+				 a.len[RTA_DST], rt.rtm_dst_len);
+		else
+			pv_str(out, "default");
+
+		pv_comma(out);
+		pv_key(out, "gateway");
+		if (nl_has(&a, RTA_GATEWAY))
+			nl_pv_ip(out, rt.rtm_family, a.val[RTA_GATEWAY],
+				 a.len[RTA_GATEWAY], -1);
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "dev");
+		if (nl_has(&a, RTA_OIF))
+			nl_pv_ifname(out, &map,
+				     (int32_t)nl_get_u32(&a, RTA_OIF, 0));
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "protocol");
+		nl_pv_protocol(out, rt.rtm_protocol);
+
+		pv_comma(out);
+		pv_key(out, "metric");
+		pv_num(out, nl_get_u32(&a, RTA_PRIORITY, 0));
+
+		pv_comma(out);
+		pv_key(out, "offloaded");
+		pv_bool(out, (rt.rtm_flags & (RTM_F_OFFLOAD | RTNH_F_OFFLOAD)) != 0);
+
+		pv_close(out, '}');
+		if (out->overflow)
+			break;
+	}
+	pv_close(out, ']');
+	return 0;
+}
+
+static void nl_pv_neigh_state(struct prov_buf *out, uint16_t state)
+{
+	if (state & NUD_PERMANENT)
+		pv_str(out, "permanent");
+	else if (state & NUD_NOARP)
+		pv_str(out, "static");
+	else if (state & NUD_REACHABLE)
+		pv_str(out, "reachable");
+	else if (state & (NUD_STALE | NUD_DELAY | NUD_PROBE))
+		pv_str(out, "stale");
+	else if (state & NUD_INCOMPLETE)
+		pv_str(out, "incomplete");
+	else if (state & NUD_FAILED)
+		pv_str(out, "failed");
+	else
+		pv_str(out, "none");
+}
+
+int prov_nl_neighbours(const char *links, size_t llen, const char *neigh,
+		       size_t nlen, struct prov_buf *out)
+{
+	struct nl_ifmap map;
+	size_t off = 0;
+	uint16_t type;
+	const char *pay;
+	size_t paylen;
+	bool first = true;
+
+	nl_ifmap_build(&map, links, llen);
+
+	pv_open(out, '[');
+	while (nl_next_msg(neigh, nlen, &off, &type, &pay, &paylen)) {
+		struct ndmsg nd;
+		struct nl_attrs a;
+
+		if (type != RTM_NEWNEIGH || paylen < sizeof(nd))
+			continue;
+		memcpy(&nd, pay, sizeof(nd));
+		if (nd.ndm_family != NL_AF_INET && nd.ndm_family != NL_AF_INET6)
+			continue;
+		nl_attrs_parse(&a, pay + sizeof(nd), paylen - sizeof(nd));
+		/* A neighbour that never answered, or a multicast mapping, says
+		 * nothing about who is on the line. */
+		if (!nl_has(&a, NDA_DST) || (nd.ndm_state & NUD_NOARP))
+			continue;
+
+		if (!first)
+			pv_comma(out);
+		first = false;
+
+		pv_open(out, '{');
+		pv_key(out, "family");
+		pv_str(out, nl_family_name(nd.ndm_family));
+
+		pv_comma(out);
+		pv_key(out, "address");
+		nl_pv_ip(out, nd.ndm_family, a.val[NDA_DST], a.len[NDA_DST], -1);
+
+		pv_comma(out);
+		pv_key(out, "mac");
+		if (nl_has(&a, NDA_LLADDR))
+			nl_pv_mac(out, a.val[NDA_LLADDR], a.len[NDA_LLADDR]);
+		else
+			pv_null(out);
+
+		pv_comma(out);
+		pv_key(out, "dev");
+		nl_pv_ifname(out, &map, nd.ndm_ifindex);
+
+		pv_comma(out);
+		pv_key(out, "state");
+		nl_pv_neigh_state(out, nd.ndm_state);
+
+		pv_close(out, '}');
+		if (out->overflow)
+			break;
+	}
+	pv_close(out, ']');
+	return 0;
+}
+
 static const char *pon_state_name(uint32_t state)
 {
 	static const char *const names[] = {
@@ -1586,13 +2059,22 @@ int prov_onu(struct prov_buf *out)
 	(void)out;
 	return -EOPNOTSUPP;
 }
+
+int prov_network(struct prov_buf *out)
+{
+	(void)out;
+	return -EOPNOTSUPP;
+}
 #else
 
 #define NL_DUMP_CAP_LINKS (64 * 1024)
 #define NL_DUMP_CAP_OTHER (32 * 1024)
 
+#define NL_DUMP_CAP_ADDRS (16 * 1024)
+
 static char nl_links_buf[NL_DUMP_CAP_LINKS];
 static char nl_other_buf[NL_DUMP_CAP_OTHER];
+static char nl_addrs_buf[NL_DUMP_CAP_ADDRS];
 
 static int nl_dump_bus(int bus, struct nlmsghdr *req, char *out, size_t cap,
 		       size_t *outlen)
@@ -1762,6 +2244,79 @@ static int nl_dump_filters(unsigned int ifindex, char *out, size_t cap,
 	tcm->tcm_parent = TC_H_MAKE(TC_H_CLSACT, TC_H_MIN_INGRESS);
 
 	return nl_dump(nlh, out, cap, outlen);
+}
+
+/* A dump of one family's objects of @type: addresses, routes or neighbours. */
+static int nl_dump_family(uint16_t type, uint8_t family, uint32_t seq,
+			  char *out, size_t cap, size_t *outlen)
+{
+	uint32_t req[NL_REQ_WORDS];
+	struct nlmsghdr *nlh = mnl_nlmsg_put_header(req);
+
+	nlh->nlmsg_type = type;
+	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	nlh->nlmsg_seq = seq;
+	if (type == RTM_GETADDR) {
+		struct ifaddrmsg *ifa =
+			mnl_nlmsg_put_extra_header(nlh, sizeof(*ifa));
+
+		ifa->ifa_family = family;
+	} else if (type == RTM_GETROUTE) {
+		struct rtmsg *rt = mnl_nlmsg_put_extra_header(nlh, sizeof(*rt));
+
+		rt->rtm_family = family;
+	} else {
+		struct ndmsg *nd = mnl_nlmsg_put_extra_header(nlh, sizeof(*nd));
+
+		nd->ndm_family = family;
+	}
+	return nl_dump(nlh, out, cap, outlen);
+}
+
+/*
+ * The interfaces with their VLANs and addresses, the routes and the
+ * neighbours: the stick's network as one object.
+ */
+int prov_network(struct prov_buf *out)
+{
+	size_t llen = 0, alen = 0, olen = 0;
+	size_t mark = out->len;
+	int err;
+
+	err = nl_dump_links(nl_links_buf, sizeof(nl_links_buf), &llen);
+	if (!err)
+		err = nl_dump_family(RTM_GETADDR, AF_UNSPEC, 5, nl_addrs_buf,
+				     sizeof(nl_addrs_buf), &alen);
+	if (err)
+		return err;
+
+	pv_open(out, '{');
+	pv_key(out, "links");
+	prov_nl_links(nl_links_buf, llen, nl_addrs_buf, alen, out);
+
+	err = nl_dump_family(RTM_GETROUTE, AF_UNSPEC, 6, nl_other_buf,
+			     sizeof(nl_other_buf), &olen);
+	if (err)
+		goto fail;
+	pv_comma(out);
+	pv_key(out, "routes");
+	prov_nl_routes(nl_links_buf, llen, nl_other_buf, olen, out);
+
+	err = nl_dump_family(RTM_GETNEIGH, AF_UNSPEC, 7, nl_other_buf,
+			     sizeof(nl_other_buf), &olen);
+	if (err)
+		goto fail;
+	pv_comma(out);
+	pv_key(out, "neighbours");
+	prov_nl_neighbours(nl_links_buf, llen, nl_other_buf, olen, out);
+	pv_close(out, '}');
+	return 0;
+
+fail:
+	out->len = mark;
+	out->buf[mark] = '\0';
+	out->overflow = false;
+	return err;
 }
 
 int prov_bridge(struct prov_buf *out)
