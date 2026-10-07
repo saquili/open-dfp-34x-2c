@@ -124,8 +124,10 @@ The small programs of the ONU.
    session that carries IPv6 hands its delegated prefix on in the same way,
    through ``dhcp6d`` (see ``dhcp6d/README.rst``), once its IPv6 is up: the
    link to the router gets IPv6, and the stick forwards it. A watcher
-   brings each session up once the OLT has provisioned its GEM port, and
-   starts its client again when its link ends; what a session has is in
+   brings each session up once the OLT has provisioned its GEM port, one
+   session every 5 s, as a concentrator may refuse one of two sessions that
+   authenticate at once, and starts its client again when its link ends,
+   each session after a wait of its own; what a session has is in
    ``/run/session/N``. For the bench, ``MODE=router`` makes the stick route
    instead: the LAN is the host link ``sfp``, with an address and BusyBox's
    DHCP server; the WAN is a GEM port or a VLAN on it, with an address by

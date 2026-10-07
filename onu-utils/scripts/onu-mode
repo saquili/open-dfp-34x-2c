@@ -425,7 +425,9 @@ pppoe_loop() {
 		note "$1" ipv6
 		[ "$5" = pd ] && stop_pid "dhcp6d$1"
 		[ "$4" = pass ] && pass_lease_down
-		sleep 5
+		# Sessions that ended together start again apart (see
+		# sessions_tick()): 5 s for the first, 3 s more for each next.
+		sleep $((2 + 3 * $1))
 	done
 }
 
@@ -708,9 +710,13 @@ sessions_down() {
 }
 
 # One round of the watcher in passthrough: each session follows its GEM port,
-# and a session without its account any more goes.
+# and a session without its account any more goes. One session starts in a
+# round, the next a round later: an operator's concentrator refused one of two
+# sessions that authenticated at once, without saying why, and took each alone
+# (measured).
 sessions_tick() {
 	want=" $(sessions | tr '\n' ' ')"
+	started=
 	# The OLT's translations may have come since: omcid leaves the
 	# sessions' VLANs out as they now are, before the sessions move.
 	omcid_sync "$(held_want)"
@@ -724,8 +730,11 @@ sessions_tick() {
 			gem=$(gem_of "$(setting "$n" GEM)")
 			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
 				[ "$(session_dev "$n" "$gem")" != "$dev" ]; }; then
-				[ -n "$cur" ] && session_down "$n"
-				session_up "$n" "$gem"
+				if [ -z "$started" ]; then
+					[ -n "$cur" ] && session_down "$n"
+					session_up "$n" "$gem"
+					started=$n
+				fi
 			elif [ -z "$gem" ] && [ -n "$cur" ]; then
 				log "session $n: its GEM port is gone"
 				session_down "$n"

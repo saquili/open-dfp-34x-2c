@@ -287,6 +287,11 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
+# One session starts in a round: the second waits for the next.
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 "'
+check '! logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 "'
+check '[ ! -e "$ONU_ROOT/run/session/2" ]'
+"$MODE_SCRIPT" tick 2>/dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ -s "$ONU_ROOT/run/session/2/ipv6" ] && [ -s "$ONU_ROOT/run/onu-pass" ] && break
 	"$REAL_SLEEP" 0.2
@@ -329,7 +334,9 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+check '[ "$(cat "$ONU_ROOT/run/session/2/gem")" = gem256 ]'
 # The OLT provisions again: GEM port 256 goes, and the kernel takes wan410
 # with it; the sessions move to the GEM port there is now.
 rm -r "$ONU_ROOT/sys/class/net/gem256" "$ONU_ROOT/sys/class/net/wan410"
@@ -340,7 +347,10 @@ printf '#!/bin/sh\n[ "$1" = gem ] || exit 1\n%s\n' \
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link add link gem1024 name wan410 type vlan id 410"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
+# The second session moves a round later, onto the interface the first made.
+"$MODE_SCRIPT" tick 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/session/2/gem")" = gem1024 ]'
+check '[ "$(grep -c "^ip link add link gem1024 name wan410" "$LOG")" = 1 ]'
 teardown
 
 echo "a session in no VLAN runs on the GEM interface, on the GEM port named"
