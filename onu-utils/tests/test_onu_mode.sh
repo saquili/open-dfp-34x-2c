@@ -35,8 +35,11 @@ setup() {
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
+	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all" "$ONU_ROOT/proc/sys/net/ipv6/conf/lan"
+	echo 0 >"$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding"
+	echo 1 >"$ONU_ROOT/proc/sys/net/ipv6/conf/lan/disable_ipv6"
 	: >"$LOG"
-	for prog in tc killall udhcpd udhcpc logger kill onu-store; do
+	for prog in tc killall udhcpd udhcpc logger kill onu-store dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# ip makes the interfaces it is told to add, as the kernel would.
@@ -267,6 +270,15 @@ check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -6$"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ipv6")" = fe80::2 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ppp")" = ppp1 ]'
+# The IPv6 session hands its delegated prefix on, through dhcp6d.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "^dhcp6d" && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^dhcp6d -w ppp1 -l lan -m wan410 -o $ONU_ROOT/run/session/2$"'
+check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan/disable_ipv6")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/2/family")" = ipv6 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass-session")" = 1 ]'
@@ -279,6 +291,9 @@ check '[ -e "$ONU_ROOT/run/session/1" ]'
 check '! logged "^ip link del wan410"'
 check '! logged "^ip link set pon mtu 1500"'
 check '[ ! -e "$ONU_ROOT/run/pppoed2.pid" ]'
+check '[ ! -e "$ONU_ROOT/run/dhcp6d2.pid" ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 0 ]'
 teardown
 
 echo "a session in no VLAN runs on the GEM interface, on the GEM port named"

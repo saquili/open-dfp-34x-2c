@@ -32,7 +32,8 @@
 # SESSIONn_VLAN, SESSIONn_MAC and SESSIONn_FAMILY (ipv4, ipv6 or both).
 # Sessions in one VLAN share its interface, wanVID, and the MAC of the first.
 # The first session that carries IPv4 hands its address on, and its name
-# servers; the others keep theirs on the stick. What a session has is in the
+# servers; the others keep theirs on the stick. The first that carries IPv6
+# hands its delegated prefix on, through dhcp6d, once its IPv6 is up. What a session has is in the
 # directory /run/session/N: gem, dev and family, and once it is up ppp, ipv4
 # and ipv6. MODE=router, kept for the bench, is the one setting of a shape.
 #
@@ -65,6 +66,8 @@ SESSIONS=$RUN/session
 MAX_SESSIONS=7
 NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
+FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
+IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
 SHARE=$ROOT/usr/share/onu
 
 log() {
@@ -145,6 +148,19 @@ family() {
 	ipv4 | ipv6 | both) echo "$f" ;;
 	*) echo both ;;
 	esac
+}
+
+# The session that hands its delegated IPv6 prefix on: the first that
+# carries IPv6.
+pd_session() {
+	for n in $(sessions); do
+		case $(family "$n") in
+		ipv6 | both)
+			echo "$n"
+			return 0
+			;;
+		esac
+	done
 }
 
 # The session that hands its IPv4 address on: the first that carries IPv4.
@@ -271,10 +287,25 @@ note() {
 	fi
 }
 
+# The delegated IPv6 prefix of session $1, whose link $2 came up on its
+# interface $3, handed on to the host by dhcp6d: the link to the host gets
+# IPv6, and the stick forwards it.
+pd_up() {
+	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
+	[ -n "$lan" ] || return 0
+	stop_pid "dhcp6d$1"
+	echo 0 >"$IPV6_CONF/$lan/disable_ipv6" 2>/dev/null
+	echo 1 >"$FORWARD6" 2>/dev/null
+	dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" 2>>"$RUN/dhcp6d.log" &
+	echo $! >"$RUN/dhcp6d$1.pid"
+	log "session $1: its IPv6 prefix goes to the router on $lan"
+}
+
 # The PPPoE client of session $1 on $2, with the options $3, started again
 # whenever the link ends. In the role $4, "pass", its "up" line gives the
 # name servers and the address the router takes, until the link ends; in
-# "primary" the name servers alone.
+# "primary" the name servers alone. With $5, "pd", its "up6" line starts
+# dhcp6d, which hands the session's delegated IPv6 prefix on.
 pppoe_loop() {
 	while :; do
 		pppoe_client "$1" "$2" "$3" 2>>"$RUN/pppoed.log" |
@@ -284,6 +315,7 @@ pppoe_loop() {
 					note "$1" ppp "$dev"
 					note "$1" ipv6 "$addr"
 					log "session $1: IPv6 up on $dev"
+					[ "$5" = pd ] && pd_up "$1" "$dev" "$2"
 					continue
 					;;
 				up) ;;
@@ -305,6 +337,7 @@ pppoe_loop() {
 		note "$1" ppp
 		note "$1" ipv4
 		note "$1" ipv6
+		[ "$5" = pd ] && stop_pid "dhcp6d$1"
 		[ "$4" = pass ] && pass_lease_down
 		sleep 5
 	done
@@ -382,7 +415,7 @@ wan_up() {
 	case $WAN_PROTO in
 	pppoe)
 		pppoe_mtu "$gem" "$wan"
-		pppoe_loop 1 "$wan" -D primary &
+		pppoe_loop 1 "$wan" -D primary none &
 		echo $! >"$RUN/pppoe-loop1.pid"
 		out=ppp0
 		;;
@@ -502,7 +535,9 @@ session_up() {
 		role=pass
 		echo "$n" >"$RUN/onu-pass-session"
 	fi
-	pppoe_loop "$n" "$dev" "$opts" "$role" &
+	role6=none
+	[ "$n" = "$(pd_session)" ] && role6=pd
+	pppoe_loop "$n" "$dev" "$opts" "$role" "$role6" &
 	echo $! >"$RUN/pppoe-loop$n.pid"
 	log "session $n on $dev ($fam), GEM port ${gem#gem}"
 }
@@ -526,6 +561,7 @@ session_down() {
 	read -r down_gem <"$SESSIONS/$1/gem"
 	stop_pid "pppoe-loop$1"
 	stop_pid "pppoed$1"
+	stop_pid "dhcp6d$1"
 	if [ "$1" = "$(cat "$RUN/onu-pass-session" 2>/dev/null)" ]; then
 		pass_lease_down
 		rm -f "$RUN/onu-pass-session"
@@ -660,6 +696,7 @@ pass_down() {
 	ip link del lan 2>/dev/null
 	rm -f "$RUN/onu-lan"
 	echo 0 >"$FORWARD"
+	echo 0 >"$FORWARD6" 2>/dev/null
 	return 0
 }
 
