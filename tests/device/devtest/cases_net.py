@@ -192,7 +192,9 @@ def pond_health(ctx: Context):
 
 @case("mgmt.pond-page", "Management", "The status page is served on the host side")
 def pond_page(ctx: Context):
-    command = (f"curl -s -m 15 -D - -o /dev/null "
+    # The panel is stored gzip-compressed only, and handed as it is to a
+    # client that accepts gzip, as every browser does.
+    command = (f"curl -s -m 15 -D - -o /dev/null -H 'Accept-Encoding: gzip' "
                f"{shlex.quote(f'http://{ctx.settings.stick}:8080/')}")
     head = ctx.bench.text(command, timeout=40).lower()
     status = head.splitlines()[0] if head else "no answer"
