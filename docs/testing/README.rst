@@ -226,6 +226,16 @@ The runs, the oldest first:
     earlier run of the same cases had found the management VLAN crossing
     the PON both ways after a session, which ``run22`` fixes.
 
+``2026-10-07-run23``
+    The same cases on the image built from ``run23``, the first run
+    on a stick that starts from its flash rather than from RAM. The image
+    went into both banks by its own update path (``docs/handbook/updating.rst``):
+    into bank 1 through the panel's upload route, started on trial and
+    committed by ``onu-trial``, then into bank 0 over ssh. The stick ran bank
+    1, committed. Its accounts were held aside as in the run before, and the
+    reset case brought it back from bank 1 with its two sessions up. 37 of
+    46 passed, with the same four failures and the same five skipped.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at

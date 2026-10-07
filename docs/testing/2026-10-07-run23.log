@@ -1,0 +1,2218 @@
+===== system.kernel: pass in 2.33 s
+evidence: uname -r 6.18.48 (tree 6.18.48), #1 Thu Sep 10 19:15:00 UTC 2026
+stick$ uname -r
+6.18.48
+[exit 0, 1.18 s]
+stick$ uname -v
+#1 Thu Sep 10 19:15:00 UTC 2026
+[exit 0, 1.16 s]
+
+===== system.services: pass in 3.68 s
+evidence: dropbear pid 996 638 64, omcid pid 98, pond pid 114
+stick$ pidof dropbear
+996 638 64
+[exit 0, 1.23 s]
+stick$ pidof omcid
+98
+[exit 0, 1.19 s]
+stick$ pidof pond
+114
+[exit 0, 1.25 s]
+
+===== system.filesystems: pass in 1.22 s
+evidence: / squashfs ro; /tmp tmpfs, /run tmpfs, /var tmpfs
+stick$ cat /proc/mounts
+/dev/root / squashfs ro,relatime,errors=continue 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=12560k,nr_inodes=3140,mode=755 0 0
+proc /proc proc rw,relatime 0 0
+sysfs /sys sysfs rw,relatime 0 0
+devpts /dev/pts devpts rw,relatime,gid=5,mode=620,ptmxmode=666 0 0
+tmpfs /tmp tmpfs rw,relatime 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,relatime,mode=755 0 0
+tmpfs /var tmpfs rw,relatime,mode=755 0 0
+[exit 0, 1.22 s]
+
+===== system.phc: fail in 1.25 s
+evidence: RemoteError: stick: 'ethtool -T sfp' exited 127: sh: ethtool: not found
+stick$ ethtool -T sfp
+sh: ethtool: not found
+[exit 127, 1.25 s]
+
+===== system.watchdog: pass in 4.76 s
+evidence: RTL9602C watchdog, timeout 44 s, active, daemon pid 50
+stick$ cat /sys/class/watchdog/watchdog0/identity
+RTL9602C watchdog
+[exit 0, 1.18 s]
+stick$ cat /sys/class/watchdog/watchdog0/timeout
+44
+[exit 0, 1.21 s]
+stick$ cat /sys/class/watchdog/watchdog0/state
+active
+[exit 0, 1.14 s]
+stick$ pidof watchdog
+50
+[exit 0, 1.23 s]
+
+===== net.host-link: pass in 2.37 s
+evidence: sfp up, 2500 Mb/s
+stick$ cat /sys/class/net/sfp/operstate
+up
+[exit 0, 1.22 s]
+stick$ cat /sys/class/net/sfp/speed
+2500
+[exit 0, 1.15 s]
+
+===== net.mgmt-vlan: pass in 1.18 s
+evidence: mgmt: VLAN 4094 on sfp; this run reaches the stick through it
+stick$ grep '^mgmt' /proc/net/vlan/config
+mgmt           | 4094  | sfp
+[exit 0, 1.18 s]
+
+===== net.filter-loaded: fail in 1.17 s
+evidence: RemoteError: stick: 'nft list ruleset' exited 127: sh: nft: not found
+stick$ nft list ruleset
+sh: nft: not found
+[exit 127, 1.17 s]
+
+===== net.filter-drops: fail in 2.8 s
+evidence: RemoteError: stick: 'nft -f /etc/nftables.conf' exited 127: sh: nft: not found
+bench$ python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET)
+s.settimeout(float(sys.argv[3]))
+t = time.monotonic()
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    r = "open"
+except ConnectionRefusedError:
+    r = "refused"
+except socket.timeout:
+    r = "timeout"
+print(r, round(time.monotonic() - t, 3))
+' <stick> 23 3.0
+refused 0.001
+[exit 0, 0.48 s]
+stick$ nft flush ruleset
+sh: nft: not found
+[exit 127, 1.15 s]
+stick$ nft -f /etc/nftables.conf
+sh: nft: not found
+[exit 127, 1.18 s]
+
+===== net.ssh-keys-only: pass in 0.75 s
+evidence: root@<stick>: Permission denied (publickey).
+local$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J p.phan@<address> root@<stick> true
+root@<stick>: Permission denied (publickey).
+[exit 255]
+
+===== mgmt.pond-health: pass in 0.47 s
+evidence: HTTP 200 {"ok":true}
+bench$ curl -s -m 15 -w '\n%{http_code}'  http://<stick>:8080/api/health
+{"ok":true}
+200[exit 0, 0.46 s]
+
+===== mgmt.pond-page: pass in 0.46 s
+evidence: http/1.1 200 ok, html, with a CSP
+bench$ curl -s -m 15 -D - -o /dev/null -H 'Accept-Encoding: gzip' http://<stick>:8080/
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Etag: "1789067700.388"
+Content-Length: 388
+Content-Encoding: gzip
+Cache-Control: no-store
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+
+[exit 0, 0.46 s]
+
+===== mgmt.pond-locked: pass in 0.44 s
+evidence: HTTP 401 unauthorised
+bench$ curl -s -m 15 -w '\n%{http_code}'  http://<stick>:8080/api/schema
+{"error":"unauthorised","detail":"sign in, or present a bearer token"}
+401[exit 0, 0.44 s]
+
+===== mgmt.pond-values: pass in 0.44 s
+evidence: HTTP 200, kernel: 177 B, onu: 523 B, optics: 94 B
+bench$ curl -s -m 15 -w '\n%{http_code}' -H @- 'http://<stick>:8080/api/getm?ids=kernel,onu,optics'
+{"kernel":"Linux version 6.18.48 (buildroot@buildroot) (mips-buildroot-linux-uclibc-gcc.br_real (Buildroot 2025.02.18) 14.4.0, GNU ld (GNU Binutils) 2.44) #1 Thu Sep 10 19:15:00 UTC 2026","onu":{"id":0,"num_gem_ports":128,"num_tconts":8,"interface":"pon","type":"gpon","state":"o5","onu_id":1,"alloc_ids":[257],"omcc_port_id":1,"alarms":[],"counters":{"sn_requests":1,"ranging_requests":122,"ploam_rx":1032,"ploam_crc_errors":1,"ploam_overflows":0,"bwmap_rx":1382484,"bwmap_crc_errors":0,"bwmap_overflows":0,"gem_frames":384,"bip_errors":4,"fec_corrected_bytes":0,"fec_corrected_codewords":0,"fec_uncorrectable_codewords":0,"fec_codewords":0},"serial":"<serial>"},"optics":{"temperature_c":49.137,"vcc_v":3.209,"bias_ma":7,"tx_power_uw":1682,"rx_power_uw":2}}
+200[exit 0, 0.44 s]
+
+===== gpon.downstream: pass in 4.38 s
+evidence: 7996 bandwidth maps/s, 0 with a CRC error, alarms none
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1038
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1392064
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   384
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.19 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1062
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1417526
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   384
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.18 s]
+
+===== gpon.activation: pass in 1.18 s
+evidence: O5, ONU-ID 1
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1068
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1426949
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   384
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.18 s]
+
+===== gpon.stable: pass in 74.98 s
+evidence: 12 reads 5 s apart: all O5
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1074
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1436881
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   385
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.24 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1110
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1487101
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   386
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.27 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1146
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1536701
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   387
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.20 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1182
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1586657
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   388
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.24 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1218
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1636766
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   389
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.26 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1254
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1686937
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   390
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.27 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1296
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1736721
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   391
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.22 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1332
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1786786
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   392
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.26 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1368
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1836754
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   393
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.25 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1404
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1886415
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   394
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.21 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1440
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1936598
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   395
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.27 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1476
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               1986629
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   396
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.25 s]
+
+===== omci.channel: pass in 6.28 s
+evidence: rx_messages 327, rx_dropped 0, rx_discarded 0, tx_messages 371, tx_errors 0
+stick$ cat /sys/class/pon/pon0omci0/statistics/rx_messages
+327
+[exit 0, 1.31 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/rx_dropped
+0
+[exit 0, 1.17 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/rx_discarded
+0
+[exit 0, 1.22 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/tx_messages
+371
+[exit 0, 1.32 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/tx_errors
+0
+[exit 0, 1.26 s]
+
+===== omci.mib-upload: pass in 1.16 s
+evidence: 2 upload(s), last: 207 units over 105 instances (channel 1)
+stick$ grep 'mib upload:' /run/omcid.log
+[INF] engine.c:645: mib upload: 207 units over 105 instances (channel 1)
+[INF] engine.c:645: mib upload: 207 units over 105 instances (channel 1)
+[exit 0, 1.16 s]
+
+===== omci.gem-bridge: pass in 2.38 s
+evidence: 2 GEM interface(s); omcibr0 holds gem257 gem4095 sfp
+stick$ ip -o link show type gem
+8: gem4095@pon: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master omcibr0 state UNKNOWN mode DEFAULT group default qlen 1000\    link/ether <mac> brd <mac>
+9: gem257@pon: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master omcibr0 state UNKNOWN mode DEFAULT group default qlen 1000\    link/ether <mac> brd <mac>
+[exit 0, 1.18 s]
+stick$ ls /sys/class/net/omcibr0/brif
+gem257
+gem4095
+sfp
+[exit 0, 1.20 s]
+
+===== omci.tcont-map: pass in 2.49 s
+evidence: T-CONT 0 holds 257, mapped to 257
+stick$ mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
+[exit 0, 1.25 s]
+stick$ grep '^tcont' /sys/kernel/debug/rtl9602c/gpon
+tcont 0=257/257 1=-/- 2=-/- 3=-/- 4=-/- 5=-/- 6=-/- 7=-/-   (bound/mapped)
+[exit 0, 1.25 s]
+
+===== omci.alarms: pass in 2.34 s
+evidence: power level high; no alarm
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1584
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2134499
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   399
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.17 s]
+stick$ grep 'alarm:' /run/omcid.log
+[exit 1, 1.17 s]
+
+===== optics.diagnostics: pass in 3.68 s
+evidence: 49.5 °C, 3.20 V, bias 7 mA, TX_power 2.3 dBm, RX_power -27.0 dBm
+stick$ ls -d /sys/class/hwmon/hwmon*
+/sys/class/hwmon/hwmon0
+[exit 0, 1.21 s]
+stick$ cat /sys/class/hwmon/hwmon0/name
+rtl9602c_optics
+[exit 0, 1.15 s]
+stick$ cd /sys/class/hwmon/hwmon0 && for f in *_input; do c=${f%_input}; echo $c $(cat $f) $(cat ${c}_min) $(cat ${c}_max) $(cat ${c}_label 2>/dev/null); done
+curr1 7 1 90 bias
+in0 3202 3100 3500 VCC
+power1 1687 1000 3548 TX_power
+power2 2 1 159 RX_power
+temp1 49477 -20000 90000 temperature
+[exit 0, 1.33 s]
+
+===== data.downstream: pass in 38.83 s
+evidence: 149763 frames of 1514 B left the bench, 149719 arrived (99.97%) at 985 Mb/s; CPU saw 57
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp1g/address
+<mac>
+[exit 0, 0.42 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu <mac> 1514 100 0.001'
+0.109050
+[exit 0, 0.69 s]
+bench$ cat /sys/class/net/sfp10g_cpu/address
+<mac>
+[exit 0, 0.47 s]
+bench$ sudo -n sh -c 'python3 - sfp1g <mac> 1514 100 0.001'
+0.109346
+[exit 0, 0.67 s]
+bench$ cat /sys/class/net/sfp10g_cpu/address
+<mac>
+[exit 0, 0.43 s]
+stick$ for i in /sys/class/net/*; do [ -e $i/dsa/tagging ] && echo ${i##*/}; done; true
+cpu
+[exit 0, 1.14 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307436
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.38 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.51 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32307536
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31537969
+[exit 0, 0.42 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+3991
+[exit 0, 1.18 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.13 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.23 s]
+bench$ sudo -n sh -c 'python3 - sfp1g <mac> 1514 400000 0.0'
+1.840552
+[exit 0, 2.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32334826
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.52 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.55 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32457199
+[exit 0, 0.40 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31687688
+[exit 0, 0.44 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+4048
+[exit 0, 1.20 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.18 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.18 s]
+
+===== data.upstream: pass in 40.94 s
+evidence: 400053 frames of 1514 B left the bench, 161228 arrived (40.30%) at 983 Mb/s; CPU saw 56; ONU O5
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp1g/address
+<mac>
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.47 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.54 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.63 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.54 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.60 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.55 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.52 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.59 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.61 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 1.24 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 1.23 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.72 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.93 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+21868944
+[exit 0, 0.73 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28620449
+[exit 0, 0.71 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+4107
+[exit 0, 2.39 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.15 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.20 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu <mac> 1514 400000 0.0'
+1.986197
+[exit 0, 2.57 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.49 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.40 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.52 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/tx_packets
+22268997
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/rx_packets
+28781677
+[exit 0, 0.43 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+4163
+[exit 0, 1.17 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.18 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.23 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2082
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2811314
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   320701
+    BIP errors                   4
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.17 s]
+
+===== data.vlan-translation: pass in 11.22 s
+evidence: 200 frames of VLAN 3001/5 upstream: 199 as 3002/5; 200 of 3002/5 downstream: 200 as 3001/5
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.48 s]
+stick$ tc qdisc add dev sfp clsact 2>/dev/null
+[exit 2, 1.18 s]
+stick$ tc qdisc add dev pon clsact 2>/dev/null
+[exit 2, 1.16 s]
+stick$ tc filter add dev sfp ingress pref 49000 protocol 802.1Q flower skip_sw vlan_id 3001 action vlan modify id 3002
+[exit 0, 1.16 s]
+stick$ tc filter add dev pon ingress pref 49000 protocol 802.1Q flower skip_sw vlan_id 3002 action vlan modify id 3001
+[exit 0, 1.20 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g 3001 5 200'
+{"3002/5": 199}
+[exit 0, 2.43 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu 3002 5 200'
+{"3001/5": 200}
+[exit 0, 2.36 s]
+stick$ tc filter del dev sfp ingress pref 49000 2>/dev/null; tc filter del dev pon ingress pref 49000 2>/dev/null; true
+[exit 0, 1.24 s]
+
+===== data.vlan-priority: pass in 8.8 s
+evidence: 200 frames of VLAN 3001/5: 200 as 3002/5; 200 of 3001/3: 200 as 3001/3
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.48 s]
+stick$ tc qdisc add dev sfp clsact 2>/dev/null
+[exit 2, 1.16 s]
+stick$ tc filter add dev sfp ingress pref 49000 protocol 802.1Q flower skip_sw vlan_id 3001 vlan_prio 5 action vlan modify id 3002
+[exit 0, 1.17 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g 3001 5 200'
+{"3002/5": 200}
+[exit 0, 2.39 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g 3001 3 200'
+{"3001/3": 200}
+[exit 0, 2.37 s]
+stick$ tc filter del dev sfp ingress pref 49000 2>/dev/null; true
+[exit 0, 1.22 s]
+
+===== data.vlan-push-pop: pass in 19.52 s
+evidence: 200 untagged frames upstream: 200 as c3003p5; 200 of c3003p5 downstream: 200 as u; 200 of c3001p1 upstream: 200 as s3004p3+c3001p1; 200 of s3004p3+c3001p1 downstream: 200 as c3001p1
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.46 s]
+stick$ tc qdisc add dev sfp clsact 2>/dev/null
+[exit 2, 1.14 s]
+stick$ tc qdisc add dev pon clsact 2>/dev/null
+[exit 2, 1.22 s]
+stick$ tc filter add dev sfp ingress pref 49040 protocol all flower skip_sw num_of_vlans 0 action vlan push id 3003 priority 5
+[exit 0, 1.18 s]
+stick$ tc filter add dev pon ingress pref 49040 protocol 802.1Q flower skip_sw vlan_id 3003 action vlan pop
+[exit 0, 1.11 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g u 200'
+{"c3003p5": 200}
+[exit 0, 2.36 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu c3003p5 200'
+{"u": 200}
+[exit 0, 2.41 s]
+stick$ tc filter del dev sfp ingress pref 49040 2>/dev/null; tc filter del dev pon ingress pref 49040 2>/dev/null; true
+[exit 0, 1.15 s]
+stick$ tc filter add dev sfp ingress pref 49040 protocol 802.1Q flower skip_sw vlan_id 3001 action vlan push id 3004 priority 3 protocol 802.1ad
+[exit 0, 1.23 s]
+stick$ tc filter add dev pon ingress pref 49040 protocol 802.1ad flower skip_sw vlan_id 3004 action vlan pop
+[exit 0, 1.23 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g c3001p1 200'
+{"s3004p3+c3001p1": 200}
+[exit 0, 2.39 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu s3004p3+c3001p1 200'
+{"c3001p1": 200}
+[exit 0, 2.40 s]
+stick$ tc filter del dev sfp ingress pref 49040 2>/dev/null; tc filter del dev pon ingress pref 49040 2>/dev/null; true
+[exit 0, 1.25 s]
+
+===== data.mgmt-isolation: pass in 11.72 s
+evidence: 200 of VLAN 4094 upstream: nothing, downstream: nothing; 200 of VLAN 3005 upstream: 199 as c3005p0, downstream: 200 as c3005p0
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.39 s]
+stick$ cat /proc/net/vlan/config
+VLAN Dev name	 | VLAN ID
+Name-Type: VLAN_NAME_TYPE_RAW_PLUS_VID_NO_PAD
+mgmt           | 4094  | sfp
+[exit 0, 1.14 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g c4094 200'
+{}
+[exit 0, 2.70 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu c4094 200'
+{}
+[exit 0, 2.70 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g c3005 200'
+{"c3005p0": 199}
+[exit 0, 2.40 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu c3005 200'
+{"c3005p0": 200}
+[exit 0, 2.39 s]
+
+===== data.pon-silence: pass in 38.28 s
+evidence: IPv6 on none of pon, cpu, omcibr0, gem257, gem4095; IPv6 addresses on none; arp_ignore 1; 10 ARP requests and IPv6 pings from the network side: 20 reached the CPU, answered 0 ARP, 0 echo, 0 solicitation; from the subscriber side in VLAN 4094: 10 ARP, 10 echo
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.44 s]
+stick$ cat /proc/net/vlan/config
+VLAN Dev name	 | VLAN ID
+Name-Type: VLAN_NAME_TYPE_RAW_PLUS_VID_NO_PAD
+mgmt           | 4094  | sfp
+[exit 0, 1.23 s]
+stick$ ip -4 -o addr show dev mgmt
+5: mgmt    inet <stick>/30 scope global mgmt\       valid_lft forever preferred_lft forever
+[exit 0, 1.18 s]
+stick$ cat /sys/class/net/mgmt/address
+<mac>
+[exit 0, 1.22 s]
+stick$ cd /sys/class/net && ls -d gem* 2>/dev/null; true
+gem257
+gem4095
+[exit 0, 1.22 s]
+stick$ [ -e /sys/class/net/pon ]
+[exit 0, 1.19 s]
+stick$ [ -e /sys/class/net/cpu ]
+[exit 0, 1.25 s]
+stick$ [ -e /sys/class/net/omcibr0 ]
+[exit 0, 1.30 s]
+stick$ [ -e /sys/class/net/gem257 ]
+[exit 0, 1.17 s]
+stick$ [ -e /sys/class/net/gem4095 ]
+[exit 0, 1.15 s]
+stick$ cat /proc/sys/net/ipv6/conf/pon/disable_ipv6
+1
+[exit 0, 1.14 s]
+stick$ cat /proc/sys/net/ipv6/conf/cpu/disable_ipv6
+1
+[exit 0, 1.20 s]
+stick$ cat /proc/sys/net/ipv6/conf/omcibr0/disable_ipv6
+1
+[exit 0, 1.22 s]
+stick$ cat /proc/sys/net/ipv6/conf/gem257/disable_ipv6
+1
+[exit 0, 1.17 s]
+stick$ cat /proc/sys/net/ipv6/conf/gem4095/disable_ipv6
+1
+[exit 0, 1.77 s]
+stick$ ip -6 -o addr show; true
+1: lo    inet6 ::1/128 scope host proto kernel_lo \       valid_lft forever preferred_lft forever
+3: sfp    inet6 <address6>/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+5: mgmt    inet6 <address6>/64 scope link proto kernel_ll \       valid_lft forever preferred_lft forever
+[exit 0, 1.21 s]
+stick$ cat /proc/sys/net/ipv4/conf/all/arp_ignore
+1
+[exit 0, 1.18 s]
+stick$ tc qdisc add dev gem257 clsact 2>/dev/null
+[exit 0, 1.15 s]
+stick$ tc qdisc add dev gem4095 clsact 2>/dev/null
+[exit 0, 1.12 s]
+stick$ tc filter add dev gem257 ingress pref 49040 protocol ipv6 flower skip_hw dst_ip ff02::1 ip_proto icmpv6 type 128 action pass
+[exit 0, 1.19 s]
+stick$ tc filter add dev gem257 ingress pref 49041 protocol arp flower skip_hw arp_tip <stick> action pass
+[exit 0, 1.13 s]
+stick$ tc filter add dev gem4095 ingress pref 49040 protocol ipv6 flower skip_hw dst_ip ff02::1 ip_proto icmpv6 type 128 action pass
+[exit 0, 1.30 s]
+stick$ tc filter add dev gem4095 ingress pref 49041 protocol arp flower skip_hw arp_tip <stick> action pass
+[exit 0, 1.12 s]
+bench$ sudo -n sh -c 'python3 - sfp1g 0 <stick> <mac> 10'
+{"arp": 0, "echo6": 0, "ns": 0}
+[exit 0, 4.24 s]
+stick$ tc -s filter show dev gem257 ingress pref 49040; tc -s filter show dev gem257 ingress pref 49041; tc -s filter show dev gem4095 ingress pref 49040; tc -s filter show dev gem4095 ingress pref 49041
+filter protocol ipv6 flower chain 0 
+filter protocol ipv6 flower chain 0 handle 0x1 
+  eth_type ipv6
+  ip_proto icmpv6
+  dst_ip ff02::1
+  icmp_type 128
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 3 ref 1 bind 1 installed 9 sec used 9 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol arp flower chain 0 
+filter protocol arp flower chain 0 handle 0x1 
+  eth_type arp
+  arp_tip <stick>
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 4 ref 1 bind 1 installed 7 sec used 7 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol ipv6 flower chain 0 
+filter protocol ipv6 flower chain 0 handle 0x1 
+  eth_type ipv6
+  ip_proto icmpv6
+  dst_ip ff02::1
+  icmp_type 128
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 5 ref 1 bind 1 installed 6 sec used 3 sec firstused 4 sec
+	Action statistics:
+	Sent 550 bytes 10 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol arp flower chain 0 
+filter protocol arp flower chain 0 handle 0x1 
+  eth_type arp
+  arp_tip <stick>
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 6 ref 1 bind 1 installed 5 sec used 3 sec firstused 4 sec
+	Action statistics:
+	Sent 460 bytes 10 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+[exit 0, 1.28 s]
+stick$ tc filter del dev gem257 ingress pref 49040 2>/dev/null; tc filter del dev gem257 ingress pref 49041 2>/dev/null; tc filter del dev gem4095 ingress pref 49040 2>/dev/null; tc filter del dev gem4095 ingress pref 49041 2>/dev/null; tc qdisc del dev gem257 clsact; tc qdisc del dev gem4095 clsact; true
+[exit 0, 1.23 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu 4094 <stick> <mac> 10'
+{"arp": 10, "echo6": 10, "ns": 1}
+[exit 0, 4.29 s]
+
+===== data.acl: pass in 57.67 s
+evidence: 200 frames each; no rule: 200 arrived, 0 to the CPU; trap: 0 arrived, 200 to the CPU, 200 counted at 49010; drop: 0 arrived, 0 to the CPU, 200 counted at 49010; trap over drop, added last: 0 arrived, 200 to the CPU, 0 counted at 49020, 200 counted at 49010; drop over trap, added last: 0 arrived, 0 to the CPU, 0 counted at 49020, 200 counted at 49010
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.51 s]
+stick$ cd /sys/class/net && ls -d gem* 2>/dev/null; true
+gem257
+gem4095
+[exit 0, 1.15 s]
+stick$ tc qdisc add dev pon clsact 2>/dev/null
+[exit 2, 1.20 s]
+stick$ tc qdisc add dev gem257 clsact 2>/dev/null
+[exit 0, 1.20 s]
+stick$ tc qdisc add dev gem4095 clsact 2>/dev/null
+[exit 0, 1.19 s]
+stick$ tc filter add dev gem257 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.21 s]
+stick$ tc filter add dev gem4095 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.14 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu 0 5 200'
+{"untagged": 200}
+[exit 0, 2.42 s]
+stick$ tc -s filter show dev gem257 ingress pref 49030; tc -s filter show dev gem4095 ingress pref 49030
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 3 ref 1 bind 1 installed 4 sec used 4 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 4 ref 1 bind 1 installed 3 sec used 3 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+[exit 0, 1.26 s]
+stick$ tc filter del dev gem257 ingress pref 49030 2>/dev/null; tc filter del dev gem4095 ingress pref 49030 2>/dev/null; true
+[exit 0, 1.20 s]
+stick$ tc filter add dev gem257 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.18 s]
+stick$ tc filter add dev gem4095 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.18 s]
+stick$ tc filter add dev pon ingress pref 49010 protocol 0x88b5 flower skip_sw action trap
+[exit 0, 1.28 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu 0 5 200'
+{}
+[exit 0, 2.69 s]
+stick$ tc -s filter show dev gem257 ingress pref 49030; tc -s filter show dev gem4095 ingress pref 49030
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 3 ref 1 bind 1 installed 6 sec used 3 sec firstused 3 sec
+	Action statistics:
+	Sent 9200 bytes 200 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 4 ref 1 bind 1 installed 5 sec used 5 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+[exit 0, 1.24 s]
+stick$ tc -s filter show dev pon ingress pref 49010
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_sw
+  in_hw in_hw_count 1
+	action order 1: gact action trap
+	 random type none pass val 0
+	 index 5 ref 1 bind 1 installed 5 sec used 5 sec
+	Action statistics:
+	Sent 0 bytes 200 pkt (dropped 0, overlimits 0 requeues 0) 
+	Sent software 0 bytes 0 pkt
+	Sent hardware 0 bytes 200 pkt
+	backlog 0b 0p requeues 0
+	used_hw_stats immediate
+
+[exit 0, 1.19 s]
+stick$ tc filter del dev pon ingress pref 49010 2>/dev/null; tc filter del dev gem257 ingress pref 49030 2>/dev/null; tc filter del dev gem4095 ingress pref 49030 2>/dev/null; true
+[exit 0, 1.22 s]
+stick$ tc filter add dev gem257 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.16 s]
+stick$ tc filter add dev gem4095 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.18 s]
+stick$ tc filter add dev pon ingress pref 49010 protocol 0x88b5 flower skip_sw action drop
+[exit 0, 1.19 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu 0 5 200'
+{}
+[exit 0, 2.69 s]
+stick$ tc -s filter show dev gem257 ingress pref 49030; tc -s filter show dev gem4095 ingress pref 49030
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 3 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 4 ref 1 bind 1 installed 5 sec used 5 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+[exit 0, 1.21 s]
+stick$ tc -s filter show dev pon ingress pref 49010
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_sw
+  in_hw in_hw_count 1
+	action order 1: gact action drop
+	 random type none pass val 0
+	 index 5 ref 1 bind 1 installed 5 sec used 5 sec
+	Action statistics:
+	Sent 0 bytes 200 pkt (dropped 200, overlimits 0 requeues 0) 
+	Sent software 0 bytes 0 pkt
+	Sent hardware 0 bytes 200 pkt
+	backlog 0b 0p requeues 0
+	used_hw_stats immediate
+
+[exit 0, 1.22 s]
+stick$ tc filter del dev pon ingress pref 49010 2>/dev/null; tc filter del dev gem257 ingress pref 49030 2>/dev/null; tc filter del dev gem4095 ingress pref 49030 2>/dev/null; true
+[exit 0, 1.20 s]
+stick$ tc filter add dev gem257 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.16 s]
+stick$ tc filter add dev gem4095 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.18 s]
+stick$ tc filter add dev pon ingress pref 49020 protocol 0x88b5 flower skip_sw action drop
+[exit 0, 1.24 s]
+stick$ tc filter add dev pon ingress pref 49010 protocol 0x88b5 flower skip_sw action trap
+[exit 0, 1.12 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu 0 5 200'
+{}
+[exit 0, 2.67 s]
+stick$ tc -s filter show dev gem257 ingress pref 49030; tc -s filter show dev gem4095 ingress pref 49030
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 3 ref 1 bind 1 installed 7 sec used 3 sec firstused 3 sec
+	Action statistics:
+	Sent 9200 bytes 200 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 4 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+[exit 0, 1.22 s]
+stick$ tc -s filter show dev pon ingress pref 49020
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_sw
+  in_hw in_hw_count 1
+	action order 1: gact action drop
+	 random type none pass val 0
+	 index 5 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+	used_hw_stats immediate
+
+[exit 0, 1.16 s]
+stick$ tc -s filter show dev pon ingress pref 49010
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_sw
+  in_hw in_hw_count 1
+	action order 1: gact action trap
+	 random type none pass val 0
+	 index 6 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 200 pkt (dropped 0, overlimits 0 requeues 0) 
+	Sent software 0 bytes 0 pkt
+	Sent hardware 0 bytes 200 pkt
+	backlog 0b 0p requeues 0
+	used_hw_stats immediate
+
+[exit 0, 1.20 s]
+stick$ tc filter del dev pon ingress pref 49020 2>/dev/null; tc filter del dev pon ingress pref 49010 2>/dev/null; tc filter del dev gem257 ingress pref 49030 2>/dev/null; tc filter del dev gem4095 ingress pref 49030 2>/dev/null; true
+[exit 0, 1.20 s]
+stick$ tc filter add dev gem257 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.20 s]
+stick$ tc filter add dev gem4095 ingress pref 49030 protocol 0x88b5 flower skip_hw action pass
+[exit 0, 1.13 s]
+stick$ tc filter add dev pon ingress pref 49020 protocol 0x88b5 flower skip_sw action trap
+[exit 0, 1.13 s]
+stick$ tc filter add dev pon ingress pref 49010 protocol 0x88b5 flower skip_sw action drop
+[exit 0, 1.19 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu 0 5 200'
+{}
+[exit 0, 2.64 s]
+stick$ tc -s filter show dev gem257 ingress pref 49030; tc -s filter show dev gem4095 ingress pref 49030
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 3 ref 1 bind 1 installed 7 sec used 7 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_hw
+  not_in_hw
+	action order 1: gact action pass
+	 random type none pass val 0
+	 index 4 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+
+[exit 0, 1.22 s]
+stick$ tc -s filter show dev pon ingress pref 49020
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_sw
+  in_hw in_hw_count 1
+	action order 1: gact action trap
+	 random type none pass val 0
+	 index 5 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 0 pkt (dropped 0, overlimits 0 requeues 0) 
+	backlog 0b 0p requeues 0
+	used_hw_stats immediate
+
+[exit 0, 1.17 s]
+stick$ tc -s filter show dev pon ingress pref 49010
+filter protocol [34997] flower chain 0 
+filter protocol [34997] flower chain 0 handle 0x1 
+  eth_type 88b5
+  skip_sw
+  in_hw in_hw_count 1
+	action order 1: gact action drop
+	 random type none pass val 0
+	 index 6 ref 1 bind 1 installed 6 sec used 6 sec
+	Action statistics:
+	Sent 0 bytes 200 pkt (dropped 200, overlimits 0 requeues 0) 
+	Sent software 0 bytes 0 pkt
+	Sent hardware 0 bytes 200 pkt
+	backlog 0b 0p requeues 0
+	used_hw_stats immediate
+
+[exit 0, 1.18 s]
+stick$ tc filter del dev pon ingress pref 49020 2>/dev/null; tc filter del dev pon ingress pref 49010 2>/dev/null; tc filter del dev gem257 ingress pref 49030 2>/dev/null; tc filter del dev gem4095 ingress pref 49030 2>/dev/null; true
+[exit 0, 1.16 s]
+stick$ tc qdisc del dev gem257 clsact; tc qdisc del dev gem4095 clsact; true
+[exit 0, 1.20 s]
+
+===== data.mirror: pass in 18.75 s
+evidence: 2000 frames each way; mirrored, 2000 of those from the network side to this device and 2000 of those from the host side reached the host side; after, 0 and 0
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.41 s]
+stick$ cat /sys/class/net/sfp/address
+<mac>
+[exit 0, 1.15 s]
+bench$ cat /sys/class/net/sfp1g/address
+<mac>
+[exit 0, 0.47 s]
+stick$ tc qdisc add dev pon clsact 2>/dev/null
+[exit 2, 1.19 s]
+stick$ tc filter add dev pon ingress pref 49040 matchall skip_sw action mirred egress mirror dev sfp
+[exit 0, 1.24 s]
+stick$ tc filter add dev pon egress pref 49040 matchall skip_sw action mirred egress mirror dev sfp
+[exit 0, 1.22 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu <mac> 2000'
+2000
+[exit 0, 2.72 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp10g_cpu <mac> 2000'
+2000
+[exit 0, 2.72 s]
+stick$ tc filter del dev pon ingress pref 49040 2>/dev/null; tc filter del dev pon egress pref 49040 2>/dev/null; true
+[exit 0, 1.21 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu <mac> 2000'
+0
+[exit 0, 3.21 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp10g_cpu <mac> 2000'
+0
+[exit 0, 3.20 s]
+
+===== data.fdb: pass in 9.01 s
+evidence: host side on sfp: <mac> vlan 4094 self; network side on pon: <mac> self; static: <mac> self static, then gone
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp10g_cpu/address
+<mac>
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/address
+<mac>
+[exit 0, 0.42 s]
+stick$ bridge fdb show dev sfp
+<mac> master omcibr0 
+<mac> master omcibr0 permanent
+<mac> vlan 4094 self static
+<mac> vlan 4094 self 
+[exit 0, 1.45 s]
+stick$ bridge fdb show dev pon
+<mac> self 
+[exit 0, 1.32 s]
+stick$ bridge fdb add <mac> dev sfp master static
+[exit 0, 1.23 s]
+stick$ bridge fdb show dev sfp
+<mac> offload master omcibr0 static
+<mac> master omcibr0 
+<mac> master omcibr0 permanent
+<mac> self static
+<mac> vlan 4094 self static
+<mac> vlan 4094 self 
+[exit 0, 1.19 s]
+stick$ bridge fdb del <mac> dev sfp master static
+[exit 0, 1.25 s]
+stick$ bridge fdb show dev sfp
+<mac> master omcibr0 
+<mac> master omcibr0 permanent
+<mac> vlan 4094 self static
+<mac> vlan 4094 self 
+[exit 0, 1.25 s]
+
+===== data.shaper: pass in 75.96 s
+evidence: tbf 200 Mbit/s: 89407 of 427075 frames arrived at 206 Mb/s, CPU saw 60; removed: 147370 of 147312 at 985 Mb/s, CPU saw 59
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.40 s]
+stick$ tc qdisc replace dev sfp root handle 1: tbf rate 200mbit burst 64k latency 50ms
+[exit 0, 1.18 s]
+bench$ cat /sys/class/net/sfp10g_cpu/address
+<mac>
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.40 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32463219
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31694474
+[exit 0, 0.47 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+10444
+[exit 0, 1.18 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.25 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.20 s]
+bench$ sudo -n sh -c 'python3 - sfp1g <mac> 1514 1200000 0.0'
+5.253788
+[exit 0, 5.82 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.52 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.40 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.50 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783881
+[exit 0, 0.43 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+10504
+[exit 0, 1.19 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.14 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.18 s]
+stick$ tc qdisc del dev sfp root 2>/dev/null; true
+[exit 0, 1.23 s]
+bench$ cat /sys/class/net/sfp10g_cpu/address
+<mac>
+[exit 0, 0.47 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.52 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.47 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.40 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.49 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.47 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.42 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32890294
+[exit 0, 0.47 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31783955
+[exit 0, 0.49 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+10576
+[exit 0, 1.23 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.21 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.18 s]
+bench$ sudo -n sh -c 'python3 - sfp1g <mac> 1514 400000 0.0'
+1.811629
+[exit 0, 2.43 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+32943383
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.49 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.47 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.39 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.49 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.45 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.43 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.48 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.41 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.44 s]
+bench$ cat /sys/class/net/sfp1g/statistics/tx_packets
+33037606
+[exit 0, 0.46 s]
+bench$ cat /sys/class/net/sfp10g_cpu/statistics/rx_packets
+31931325
+[exit 0, 0.45 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+10635
+[exit 0, 1.20 s]
+stick$ ethtool -S pon
+sh: ethtool: not found
+[exit 127, 1.21 s]
+stick$ ethtool -S sfp
+sh: ethtool: not found
+[exit 127, 1.24 s]
+
+===== data.storm: pass in 36.7 s
+evidence: 600 broadcasts at 300/s: 598 passed with no rule, 216 under pref 10 at 100/s, 215 with pref 20 at 1000/s added, 416 with pref 10 replaced at 200/s; dropped by the ACL, 0 passed; 600 after
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.40 s]
+stick$ tc qdisc add dev sfp clsact 2>/dev/null
+[exit 2, 1.17 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g <mac> 600 300'
+598
+[exit 0, 4.64 s]
+stick$ tc filter add dev sfp ingress pref 10 handle 1 flower skip_sw dst_mac <mac> action police pkts_rate 100 pkts_burst 100 conform-exceed drop
+[exit 0, 1.27 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g <mac> 600 300'
+216
+[exit 0, 4.69 s]
+stick$ tc filter add dev sfp ingress pref 20 handle 1 flower skip_sw dst_mac <mac> action police pkts_rate 1000 pkts_burst 100 conform-exceed drop
+[exit 0, 1.25 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g <mac> 600 300'
+215
+[exit 0, 4.65 s]
+stick$ tc filter replace dev sfp ingress pref 10 handle 1 flower skip_sw dst_mac <mac> action police pkts_rate 200 pkts_burst 100 conform-exceed drop
+[exit 0, 1.24 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g <mac> 600 300'
+416
+[exit 0, 4.69 s]
+stick$ tc filter del dev sfp ingress pref 10; tc filter del dev sfp ingress pref 20
+[exit 0, 1.25 s]
+stick$ tc filter add dev sfp ingress pref 30 handle 1 flower skip_sw dst_mac <mac> action drop
+[exit 0, 1.29 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g <mac> 600 300'
+0
+[exit 0, 4.19 s]
+stick$ tc filter del dev sfp ingress pref 10 2>/dev/null; tc filter del dev sfp ingress pref 20 2>/dev/null; tc filter del dev sfp ingress pref 30 2>/dev/null; true
+[exit 0, 1.26 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g <mac> 600 300'
+600
+[exit 0, 4.70 s]
+
+===== data.pcp-rewrite: fail in 1.72 s
+evidence: dcb refused the entry: sh: dcb: not found
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.49 s]
+stick$ dcb rewr add dev pon prio-pcp 0:5nd
+sh: dcb: not found
+[exit 127, 1.23 s]
+
+===== data.cpu-limit: pass in 33.58 s
+evidence: cpu_rx_pps 5000: of 2920448 frames in 10 s the CPU took 50426; a loop of 1.27 s took 1.68 s; OMCI 2 of 2 delivered; lifted: 28123 frames/s
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.39 s]
+stick$ devlink dev show | head -n 1
+platform/1b000000.switch
+[exit 0, 1.19 s]
+stick$ devlink dev param show platform/1b000000.switch name cpu_rx_pps
+platform/1b000000.switch:
+  name cpu_rx_pps type driver-specific
+    values:
+      cmode runtime value 5000
+[exit 0, 1.12 s]
+stick$ cat /sys/class/net/sfp/address
+<mac>
+[exit 0, 1.17 s]
+stick$ t0=$(cut -d" " -f1 /proc/uptime); i=0; while [ $i -lt 20000 ]; do i=$((i+1)); done; t1=$(cut -d" " -f1 /proc/uptime); echo "$t0 $t1"
+652.73 654.00
+[exit 0, 2.49 s]
+stick$ rm -f /tmp/devtest-cpu-loop; (sleep 3; t0=$(cut -d" " -f1 /proc/uptime); i=0; while [ $i -lt 20000 ]; do i=$((i+1)); done; t1=$(cut -d" " -f1 /proc/uptime); echo "$t0 $t1" > /tmp/devtest-cpu-loop) </dev/null >/dev/null 2>&1 &
+[exit 0, 1.18 s]
+stick$ mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; sed -n 's/.*omci rx *\([0-9]*\) pkts.*/\1/p' /sys/kernel/debug/rtl9602c/ponmac; cat /sys/class/pon/pon0omci0/statistics/rx_messages
+777
+393
+[exit 0, 1.13 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+12988
+[exit 0, 1.25 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu <mac> 10'
+2920448
+[exit 0, 10.57 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+63414
+[exit 0, 1.23 s]
+stick$ mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; sed -n 's/.*omci rx *\([0-9]*\) pkts.*/\1/p' /sys/kernel/debug/rtl9602c/ponmac; cat /sys/class/pon/pon0omci0/statistics/rx_messages
+779
+395
+[exit 0, 1.17 s]
+stick$ cat /tmp/devtest-cpu-loop 2>/dev/null
+658.20 659.88
+[exit 0, 1.18 s]
+stick$ devlink dev param set platform/1b000000.switch name cpu_rx_pps value 0 cmode runtime
+[exit 0, 1.15 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+63482
+[exit 0, 1.29 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu <mac> 3'
+895744
+[exit 0, 3.53 s]
+stick$ cat /sys/class/net/cpu/statistics/rx_packets
+147850
+[exit 0, 2.25 s]
+stick$ devlink dev param set platform/1b000000.switch name cpu_rx_pps value 5000 cmode runtime
+[exit 0, 1.28 s]
+
+===== data.igmp: pass in 54.78 s
+evidence: IGMPv2 query 1/1 to the host side; from the network side, unasked 0/200, 224.0.0.251 200/200; join 3/3 to the network, group offloaded, its data 200/200; 3/3 reports again, timer restarted; MLD query 1/1, MLDv2 join 3/3, unasked 0/200, joined 200/200, MLDv1 reports 3/3, timer restarted; leave 1/1, group gone, its data 0/200
+bench$ command -v python3
+/usr/bin/python3
+[exit 0, 0.44 s]
+stick$ cat /sys/class/net/omcibr0/bridge/multicast_snooping 2>/dev/null; true
+1
+[exit 0, 1.19 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu query 0.0.0.0 1'
+{"sent": 1, "got": 1}
+[exit 0, 2.40 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu data 239.255.77.1 200'
+{"sent": 200, "got": 0}
+[exit 0, 3.07 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu data 224.0.0.251 200'
+{"sent": 200, "got": 200}
+[exit 0, 3.17 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g join 239.255.77.2 3'
+{"sent": 3, "got": 3}
+[exit 0, 2.75 s]
+stick$ bridge -s mdb show dev omcibr0 2>/dev/null; true
+dev omcibr0 port sfp grp 239.255.77.2 temp offload  256.90
+[exit 0, 1.23 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu data 239.255.77.2 200'
+{"sent": 200, "got": 200}
+[exit 0, 3.11 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g join 239.255.77.2 3'
+{"sent": 3, "got": 3}
+[exit 0, 2.42 s]
+stick$ bridge -s mdb show dev omcibr0 2>/dev/null; true
+dev omcibr0 port sfp grp 239.255.77.2 temp offload  257.13
+[exit 0, 1.30 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu mldquery ff02::1 1'
+{"sent": 1, "got": 1}
+[exit 0, 2.69 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g mldjoin2 ff3e::77:2 3'
+{"sent": 3, "got": 3}
+[exit 0, 2.40 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu data ff3e::77:1 200'
+{"sent": 200, "got": 0}
+[exit 0, 3.09 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu data ff3e::77:2 200'
+{"sent": 200, "got": 200}
+[exit 0, 3.17 s]
+stick$ bridge -s mdb show dev omcibr0 2>/dev/null; true
+dev omcibr0 port sfp grp ff3e::77:2 temp offload  250.97
+dev omcibr0 port sfp grp 239.255.77.2 temp offload  244.60
+[exit 0, 1.19 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g mldjoin1 ff3e::77:2 3'
+{"sent": 3, "got": 3}
+[exit 0, 2.77 s]
+stick$ bridge -s mdb show dev omcibr0 2>/dev/null; true
+dev omcibr0 port sfp grp ff3e::77:2 temp offload  256.98
+dev omcibr0 port sfp grp 239.255.77.2 temp offload  236.67
+[exit 0, 1.15 s]
+stick$ bridge link set dev sfp fastleave on
+[exit 0, 1.24 s]
+bench$ sudo -n sh -c 'python3 - sfp10g_cpu sfp1g leave 239.255.77.2 1'
+{"sent": 1, "got": 1}
+[exit 0, 2.42 s]
+stick$ bridge -s mdb show dev omcibr0 2>/dev/null; true
+dev omcibr0 port sfp grp ff3e::77:2 temp offload  252.14
+[exit 0, 1.17 s]
+bench$ sudo -n sh -c 'python3 - sfp1g sfp10g_cpu data 239.255.77.2 200'
+{"sent": 200, "got": 0}
+[exit 0, 3.12 s]
+stick$ bridge link set dev sfp fastleave off; ip link set omcibr0 type bridge mcast_snooping 0; ip link set omcibr0 type bridge mcast_snooping 1
+[exit 0, 1.26 s]
+
+===== router.static: skip in 0.0 s
+evidence: router mode translates no address now; this case measures NAT, and router.passthrough the address handed on
+
+===== router.tcp: skip in 0.0 s
+evidence: router mode translates no address now; this case measures NAT, and router.passthrough the address handed on
+
+===== router.pppoe: skip in 0.0 s
+evidence: router mode translates no address now; this case measures NAT, and router.passthrough the address handed on
+
+===== router.passthrough: skip in 0.0 s
+evidence: router mode not asked for (--router)
+
+===== router.bridge: skip in 0.0 s
+evidence: router mode not asked for (--router)
+
+===== system.log: pass in 2.4 s
+evidence: 0 of 199 lines
+stick$ dmesg | grep -E '(BUG:|Oops|WARNING:|Call Trace|Kernel panic|segfault|unhandled|soft lockup|hung_task|Failed to (add|del) .* \(object id=)' || true
+[exit 0, 1.19 s]
+stick$ dmesg | wc -l
+199
+[exit 0, 1.21 s]
+
+===== net.host-link-search: pass in 12.44 s
+evidence: 1000BaseX with negotiation: back after 3.2 s, sfp 1000 Mb/s; 2500BaseX: back after 3.2 s, sfp 2500 Mb/s
+bench$ sudo -n sh -c 'ethtool sfp10g_cpu'
+Settings for sfp10g_cpu:
+	Supported ports: [ FIBRE ]
+	Supported link modes:   2500baseX/Full
+	                        1000baseX/Full
+	Supported pause frame use: Symmetric Receive-only
+	Supports auto-negotiation: Yes
+	Supported FEC modes: Not reported
+	Advertised link modes:  2500baseX/Full
+	Advertised pause frame use: Symmetric Receive-only
+	Advertised auto-negotiation: No
+	Advertised FEC modes: Not reported
+	Speed: 2500Mb/s
+	Duplex: Full
+	Auto-negotiation: off
+	Port: FIBRE
+	PHYAD: 0
+	Transceiver: internal
+	Link detected: yes
+[exit 0, 0.48 s]
+bench$ nmcli -t -f DEVICE,STATE device 2>/dev/null
+br0.99:connected
+sfp10g_cpu.4094:connected
+sfp10g_cpu:connected
+br0.10:connected
+br0.500:connected
+br0:connected
+lan1:connected
+lan2:connected
+sfp1g:connected
+sfp10g_cpu.410:connected
+wan-net:connected
+lo:connected (externally)
+lan3:unavailable
+lan4:unavailable
+bng0:unmanaged
+bnglan0:unmanaged
+lan5:unmanaged
+lan6:unmanaged
+lan7:unmanaged
+lan8:unmanaged
+sfp10g:unmanaged
+switch:unmanaged
+sfp1g.410:unmanaged
+[exit 0, 0.53 s]
+bench$ sudo -n sh -c 'systemd-run --on-active=1800 --unit=devtest-host-link /bin/sh -c '"'"'ethtool -s sfp10g_cpu speed 2500 duplex full autoneg off; nmcli device set sfp10g_cpu managed yes; nmcli device connect sfp10g_cpu'"'"''
+Running timer as unit: devtest-host-link.timer
+Will run service as unit: devtest-host-link.service
+[exit 0, 0.59 s]
+bench$ sudo -n sh -c 'nmcli device set sfp10g_cpu managed no'
+[exit 0, 0.63 s]
+bench$ sudo -n sh -c 'ethtool -s sfp10g_cpu speed 1000 duplex full autoneg on'
+[exit 0, 0.49 s]
+bench$ sudo -n sh -c 'ethtool sfp10g_cpu'
+Settings for sfp10g_cpu:
+	Supported ports: [ FIBRE ]
+	Supported link modes:   2500baseX/Full
+	                        1000baseX/Full
+	Supported pause frame use: Symmetric Receive-only
+	Supports auto-negotiation: Yes
+	Supported FEC modes: Not reported
+	Advertised link modes:  1000baseX/Full
+	Advertised pause frame use: Symmetric Receive-only
+	Advertised auto-negotiation: Yes
+	Advertised FEC modes: Not reported
+	Speed: 1000Mb/s
+	Duplex: Full
+	Auto-negotiation: on
+	Port: FIBRE
+	PHYAD: 0
+	Transceiver: internal
+	Link detected: no
+[exit 0, 0.48 s]
+bench$ sudo -n sh -c 'ethtool sfp10g_cpu'
+Settings for sfp10g_cpu:
+	Supported ports: [ FIBRE ]
+	Supported link modes:   2500baseX/Full
+	                        1000baseX/Full
+	Supported pause frame use: Symmetric Receive-only
+	Supports auto-negotiation: Yes
+	Supported FEC modes: Not reported
+	Advertised link modes:  1000baseX/Full
+	Advertised pause frame use: Symmetric Receive-only
+	Advertised auto-negotiation: Yes
+	Advertised FEC modes: Not reported
+	Speed: 1000Mb/s
+	Duplex: Full
+	Auto-negotiation: on
+	Port: FIBRE
+	PHYAD: 0
+	Transceiver: internal
+	Link detected: yes
+[exit 0, 0.53 s]
+stick$ cat /sys/class/net/sfp/speed
+1000
+[exit 0, 1.16 s]
+bench$ sudo -n sh -c 'ethtool -s sfp10g_cpu speed 2500 duplex full autoneg off; nmcli device set sfp10g_cpu managed yes; nmcli device connect sfp10g_cpu; true'
+[2K
+Device 'sfp10g_cpu' successfully activated with 'b2027764-8058-39fb-8bb6-8a112dc71d2e'.
+[exit 0, 2.78 s]
+bench$ sudo -n sh -c 'ethtool sfp10g_cpu'
+Settings for sfp10g_cpu:
+	Supported ports: [ FIBRE ]
+	Supported link modes:   2500baseX/Full
+	                        1000baseX/Full
+	Supported pause frame use: Symmetric Receive-only
+	Supports auto-negotiation: Yes
+	Supported FEC modes: Not reported
+	Advertised link modes:  2500baseX/Full
+	Advertised pause frame use: Symmetric Receive-only
+	Advertised auto-negotiation: No
+	Advertised FEC modes: Not reported
+	Speed: 2500Mb/s
+	Duplex: Full
+	Auto-negotiation: off
+	Port: FIBRE
+	PHYAD: 0
+	Transceiver: internal
+	Link detected: no
+[exit 0, 0.48 s]
+bench$ sudo -n sh -c 'ethtool sfp10g_cpu'
+Settings for sfp10g_cpu:
+	Supported ports: [ FIBRE ]
+	Supported link modes:   2500baseX/Full
+	                        1000baseX/Full
+	Supported pause frame use: Symmetric Receive-only
+	Supports auto-negotiation: Yes
+	Supported FEC modes: Not reported
+	Advertised link modes:  2500baseX/Full
+	Advertised pause frame use: Symmetric Receive-only
+	Advertised auto-negotiation: No
+	Advertised FEC modes: Not reported
+	Speed: 2500Mb/s
+	Duplex: Full
+	Auto-negotiation: off
+	Port: FIBRE
+	PHYAD: 0
+	Transceiver: internal
+	Link detected: yes
+[exit 0, 0.54 s]
+stick$ cat /sys/class/net/sfp/speed
+2500
+[exit 0, 1.18 s]
+bench$ sudo -n sh -c 'systemctl stop devtest-host-link.timer 2>/dev/null; true'
+[exit 0, 0.56 s]
+
+===== system.watchdog-reset: pass in 69.69 s
+evidence: timeout 44 s; gone after 52 s, back with a new boot after 65 s
+stick$ cat /sys/class/watchdog/watchdog0/timeout
+44
+[exit 0, 1.19 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.20 s]
+stick$ killall watchdog; sleep 1; echo armed > /dev/watchdog
+[exit 0, 2.27 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.23 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.23 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.21 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.29 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.23 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+85f46a2e-e5b9-4839-a19b-2be96b647957
+[exit 0, 1.23 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+timed out[exit 124, 10.01 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+channel 0: open failed: connect failed: No route to host
+stdio forwarding failed
+[exit 255, 1.20 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+621940a6-f5c9-4ea6-8843-cb95af769f98
+[exit 0, 1.36 s]
