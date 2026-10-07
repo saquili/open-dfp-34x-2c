@@ -37,7 +37,12 @@ concentrator answers with the tag in its PADS, the session carries up to the
 smaller of the two. An interface of MTU 1508 thus gets a session of 1500-byte
 packets from a concentrator that agrees, and 1492 from one that does not. LCP
 asks for that size as the MRU, and the interface ``pppN`` takes the peer's MRU
-within it as its MTU.
+within it as its MTU. With ``-M`` a concentrator that agreed to larger packets
+in its PADS but asks in LCP for the MRU of plain PPPoE, 1492, is taken at the
+discovery's word, and ``pppN`` sends packets as large as the discovery agreed
+to: an operator's concentrator did both and carried 1500-byte packets each
+way, IPv4 and IPv6, with the don't-fragment bit (measured). A smaller MRU is
+the peer's own limit, and holds.
 
 IPv4 takes the address and the name servers that the peer gives. With ``-P``
 the address goes on no interface here: the ``up`` line names it, for a host

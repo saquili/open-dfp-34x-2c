@@ -284,6 +284,29 @@ int main(void)
 	/* Told to stop, the client leaves the link at once and terminates it. */
 	CHECK(run(STOPPED, &l) == 0);
 
+	/*
+	 * The MTU: the peer's MRU within what the session carries; with
+	 * take_payload, what the discovery agreed to over a peer's MRU of 1492,
+	 * and over no smaller one.
+	 */
+	memset(&l, 0, sizeof(l));
+	l.mru = 1492;
+	l.max_payload = 1500;
+	CHECK(ppp_mtu(&l) == 1492);
+	l.take_payload = true;
+	CHECK(ppp_mtu(&l) == 1500);
+	l.mru = 1400;
+	CHECK(ppp_mtu(&l) == 1400);
+	l.mru = 1492;
+	l.max_payload = 1492;
+	CHECK(ppp_mtu(&l) == 1492);
+	l.take_payload = false;
+	l.mru = 1500;
+	l.max_payload = 1500;
+	CHECK(ppp_mtu(&l) == 1500);
+	l.max_payload = 1492;
+	CHECK(ppp_mtu(&l) == 1492);
+
 	printf("test_ncp: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }

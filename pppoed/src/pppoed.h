@@ -196,6 +196,8 @@ int pppoe_terminate(int fd, const struct pppoe_session *s);
  * @peer_magic: the peer's
  * @mru: the peer's MRU
  * @max_payload: the session's largest PPP packet, which we ask for as our MRU
+ * @take_payload: send packets as large as @max_payload when the peer's MRU is
+ *	the 1492 of plain PPPoE (see ppp_mtu())
  * @auth: the authentication protocol the peer asks for, or 0
  * @chap_alg: the CHAP algorithm
  * @local_ip: the address the peer gave us, network order
@@ -218,6 +220,7 @@ struct ppp_link {
 	uint32_t peer_magic;
 	uint16_t mru;
 	uint16_t max_payload;
+	bool take_payload;
 	uint16_t auth;
 	uint8_t chap_alg;
 	uint32_t local_ip, peer_ip, dns1, dns2;
@@ -242,6 +245,16 @@ int ppp_recv(struct ppp_link *l, uint16_t *proto, void *buf, size_t bufsz,
  */
 int ppp_negotiate(struct ppp_link *l, const char *user, const char *secret,
 		  bool want_ipv4, bool want_ipv6);
+
+/*
+ * The largest packet the link sends: the peer's MRU, within what the session
+ * carries. With @take_payload, a concentrator that agreed to larger PPP
+ * packets in the discovery (RFC 4638) but asks in LCP for the MRU of plain
+ * PPPoE, 1492, is taken at the discovery's word: an operator's did so and
+ * carried 1500-byte packets both ways (measured). An MRU below 1492 is a
+ * limit of the peer's own and holds.
+ */
+uint16_t ppp_mtu(const struct ppp_link *l);
 
 /*
  * Put the negotiated addresses on the interface: the IPv4 address and maybe

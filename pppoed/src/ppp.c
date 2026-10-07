@@ -268,6 +268,14 @@ static int ifconfig_ipv4(int fd, struct ifreq *ifr, const struct ppp_link *l)
 	return 0;
 }
 
+uint16_t ppp_mtu(const struct ppp_link *l)
+{
+	if (l->take_payload && l->mru == PPPOE_MTU &&
+	    l->max_payload > PPPOE_MTU)
+		return l->max_payload;
+	return l->mru < l->max_payload ? l->mru : l->max_payload;
+}
+
 int ppp_ifconfig(struct ppp_link *l, bool defaultroute, bool pass_on)
 {
 	struct ifreq ifr = { 0 };
@@ -287,8 +295,10 @@ int ppp_ifconfig(struct ppp_link *l, bool defaultroute, bool pass_on)
 			goto out;
 	}
 
-	/* What the peer takes, within what the session carries. */
-	ifr.ifr_mtu = l->mru < l->max_payload ? l->mru : l->max_payload;
+	ifr.ifr_mtu = ppp_mtu(l);
+	if (ifr.ifr_mtu > l->mru)
+		PPPOED_INFO("the peer asks for an MRU of %u but agreed to PPP packets of %u bytes: %s sends up to %u",
+			    l->mru, l->max_payload, l->ifname, ifr.ifr_mtu);
 	if (ioctl(fd, SIOCSIFMTU, &ifr) < 0)
 		PPPOED_WARN("could not set %s MTU to %d: %s", l->ifname,
 			    ifr.ifr_mtu, strerror(errno));
