@@ -620,6 +620,14 @@ int main(int argc, char **argv)
 	if (!g_nlisten)
 		g_listen[g_nlisten++] = "http://0.0.0.0:8080";
 
+	/*
+	 * The panel waits; the stick's own work does not. A slow page is
+	 * better than a late answer to the OLT.
+	 */
+	errno = 0;
+	if (nice(10) == -1 && errno)
+		fprintf(stderr, "pond: cannot lower its priority: %s\n", strerror(errno));
+
 	load_token();
 	auth_init(getenv("POND_AUTH_FILE"), getenv("POND_STORE"));
 	mg_mgr_init(&mgr);
