@@ -182,6 +182,8 @@ export const handlers = [
           ppp: null,
           ipv4: null,
           ipv6: null,
+          prefix: null,
+          prefix_host: null,
         };
         list.push(x);
         list.sort((a, z) => a.id - z.id);
@@ -198,6 +200,10 @@ export const handlers = [
       x.ppp = `ppp${x.id - 1}`;
       x.ipv4 = x.family === "ipv6" ? null : "203.0.113.24";
       x.ipv6 = x.family === "ipv4" ? null : "fe80::2";
+      /* The first IPv6 session takes 2001:db8:1200::/56 and hands it on. */
+      const pd = list.find((y) => y.family !== "ipv4");
+      x.prefix = x === pd ? "2001:db8:1200::/56" : null;
+      x.prefix_host = x === pd ? "fe80::2" : null;
     }
     const first = settings.sessions.find((y) => y.family !== "ipv6");
     for (const y of settings.sessions) y.hands_on = y === first;

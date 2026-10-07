@@ -152,6 +152,9 @@ export interface SessionInfo {
   ppp: string | null;
   ipv4: string | null;
   ipv6: string | null;
+  /** The IPv6 prefix delegated to the session, and the host it went on to. */
+  prefix: string | null;
+  prefix_host: string | null;
 }
 
 export interface Settings {

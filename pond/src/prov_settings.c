@@ -8,7 +8,8 @@
  * only.
  *
  * A read gives the settings, each session with its user, whether a secret is
- * set (never the secret) and what onu-mode brought up for it (/run/session/N),
+ * set (never the secret) and what onu-mode and dhcp6d brought up for it
+ * (/run/session/N),
  * the address handed on, and what became of the settings in the configuration
  * store, which onu-store records in /run/onu-store: "loaded" at boot,
  * "defaults" when the store held none, "saved" or "failed" after a change,
@@ -584,6 +585,13 @@ static void pv_sessions(struct prov_buf *out, const struct settings *s)
 		pv_comma(out);
 		pv_key(out, "ipv6");
 		pv_session_fact(out, n, "ipv6");
+		/* What dhcp6d took for the session, and the host it went to. */
+		pv_comma(out);
+		pv_key(out, "prefix");
+		pv_session_fact(out, n, "prefix");
+		pv_comma(out);
+		pv_key(out, "prefix_host");
+		pv_session_fact(out, n, "host");
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');

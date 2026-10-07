@@ -1665,8 +1665,14 @@ static void test_settings(void)
 	put("/run/session/1/ipv4", "192.0.2.2\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"hands_on\":true,\"dev\":\"wan410\",\"gem_dev\":\"gem1\","
-			"\"ppp\":\"ppp0\",\"ipv4\":\"192.0.2.2\",\"ipv6\":null") != NULL,
+			"\"ppp\":\"ppp0\",\"ipv4\":\"192.0.2.2\",\"ipv6\":null,"
+			"\"prefix\":null,\"prefix_host\":null") != NULL,
 	      "a session carries what onu-mode brought up for it");
+	put("/run/session/1/prefix", "2001:db8:1200::/56\n", 0644);
+	put("/run/session/1/host", "fe80::2\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"prefix\":\"2001:db8:1200::/56\",\"prefix_host\":\"fe80::2\"") != NULL,
+	      "and the IPv6 prefix dhcp6d took for it, and the host it went to");
 	check(strstr(s, "\"store\":null") != NULL,
 	      "without a word from onu-store, the store's state is unknown");
 	put("/run/onu-store", "saved\n", 0644);

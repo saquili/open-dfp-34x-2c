@@ -58,6 +58,8 @@ export const LIVE: Live = {
         ppp: "ppp0",
         ipv4: "203.0.113.24",
         ipv6: null,
+        prefix: null,
+        prefix_host: null,
       },
     ],
     mode: "passthrough",

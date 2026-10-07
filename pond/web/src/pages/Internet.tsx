@@ -206,11 +206,21 @@ function SessionCard({ x }: { x: SessionView }) {
               : "–",
           ],
           x.family !== "ipv4" && ["IPv6", x.ipv6 ? t("internet.ipv6Up") : "–"],
+          x.family !== "ipv4" && [
+            t("internet.prefix"),
+            x.prefix
+              ? t(x.prefixHost ? "internet.prefixHost" : "internet.prefixWaiting", {
+                  prefix: x.prefix,
+                })
+              : x.ipv6
+                ? t("internet.prefixNone")
+                : "–",
+          ],
           x.dev ? [t("internet.iface"), [x.dev, x.ppp].filter(Boolean).join(" → ")] : null,
         ]}
       />
-      {x.family !== "ipv4" && x.ipv6 && (
-        <p className="text-xs text-base-content/60">{t("internet.ipv6Pending")}</p>
+      {x.family !== "ipv4" && x.prefix && (
+        <p className="text-xs text-base-content/60">{t("internet.ipv6Software")}</p>
       )}
       {editing ? (
         <SessionForm x={x} onDone={() => setEditing(false)} />
@@ -265,6 +275,7 @@ export function Internet() {
                     t("internet.sessionsLabel"),
                     t("internet.sessionsCount", { n: s.count, max: MAX_SESSIONS }),
                   ],
+                  s.prefix ? [t("internet.hostPrefix"), s.prefix] : null,
                   [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
                 ]}
               />

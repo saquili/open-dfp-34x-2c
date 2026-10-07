@@ -99,6 +99,8 @@ export interface SessionView {
   dev: string | null;
   gemDev: string | null;
   ppp: string | null;
+  prefix: string | null;
+  prefixHost: string | null;
 }
 
 export function sessions(live: Live | undefined): SessionView[] {
@@ -117,6 +119,8 @@ export function sessions(live: Live | undefined): SessionView[] {
     dev: x.dev,
     gemDev: x.gem_dev,
     ppp: x.ppp,
+    prefix: x.prefix,
+    prefixHost: x.prefix_host,
   }));
 }
 
@@ -131,6 +135,8 @@ export interface InternetView {
   main: SessionView | null;
   /** The public address handed to the host. */
   address: string | null;
+  /** The IPv6 prefix delegated to the host. */
+  prefix: string | null;
   dns: string[];
 }
 
@@ -145,6 +151,7 @@ export function session(live: Live | undefined): InternetView {
     count: all.length,
     main,
     address: main?.handsOn && main.up ? (s?.pass?.address ?? null) : null,
+    prefix: all.find((x) => x.prefix && x.prefixHost)?.prefix ?? null,
     dns: s?.dns ? s.dns.split(/\s+/).filter(Boolean) : [],
   };
 }

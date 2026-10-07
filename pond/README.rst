@@ -60,8 +60,9 @@ stick a second after it answers.
   starts ``onu-mode apply``, which also saves them in the store; it refuses
   another change, with 409, until that has ended. A read gives the settings,
   each session with its user and whether a secret is set, never the secret,
-  and what onu-mode brought up for it (``/run/session/N``), the address handed
-  on, and what became of the settings in the store (``store``: ``loaded``,
+  and what onu-mode and dhcp6d brought up for it (``/run/session/N``: the
+  interfaces, the addresses, the delegated IPv6 prefix and the host it went
+  to), the address handed on, and what became of the settings in the store (``store``: ``loaded``,
   ``defaults``, ``saved``, ``failed`` or ``none``).
 * ``session``: a PPPoE session of the stick's own: ``ID`` (none for the first
   free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``
