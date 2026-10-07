@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_DHCP6D
+	bool "dhcp6d"
+	help
+	  The IPv6 of a PPPoE session handed on: DHCPv6 prefix delegation
+	  and router advertisements, from dhcp6d/ in this repository.
