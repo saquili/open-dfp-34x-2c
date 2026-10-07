@@ -159,5 +159,53 @@ check '[ $rc -ne 0 ]'
 check 'cmp -s "$ONU_STORE" "$T/before"'
 teardown
 
+echo "a removed account leaves the store, and does not come back at boot"
+setup
+settings
+run save
+rm -f "$ONU_ROOT/run/onu-pppoe"
+run save
+check '[ $rc -eq 0 ]'
+check 'stored PPPOE_USER='
+check '! stored PPPOE_USER=user@example.net'
+rm -f "$ONU_ROOT/run/onu.conf"
+run load
+check '[ ! -e "$ONU_ROOT/run/onu-pppoe" ]'
+check 'grep -q -x MODE=passthrough "$ONU_ROOT/run/onu.conf"'
+teardown
+
+echo "the sign-in's hash goes to the store and to a file for root"
+setup
+settings
+run save
+run auth 'pbkdf2-sha256$1000$00ff$abcd'
+check '[ $rc -eq 0 ]'
+check 'stored AUTH_HASH=pbkdf2-sha256\$1000\$00ff\$abcd'
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "pbkdf2-sha256\$1000\$00ff\$abcd" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-auth" | cut -c1-10)" = -rw------- ]'
+rm -f "$ONU_ROOT/run/onu-auth" "$ONU_ROOT/run/onu.conf"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "pbkdf2-sha256\$1000\$00ff\$abcd" ]'
+check '! grep -q AUTH "$ONU_ROOT/run/onu.conf"'
+cp "$ONU_STORE" "$T/before"
+run auth 'not a hash'
+check '[ $rc -ne 0 ]'
+check 'cmp -s "$ONU_STORE" "$T/before"'
+teardown
+
+echo "an identity from the status daemon goes to the store and to the running files"
+setup
+settings
+run save
+printf 'SERIAL=XXXXXXXXXXXX\nVERSION=V2.0\n' | "$STORE_SCRIPT" identity 2>/dev/null
+rc=$?
+check '[ $rc -eq 0 ]'
+check 'stored ID_VERSION=V2.0'
+check 'stored ID_MODEL=TEST-1'
+check 'grep -q -x version=V2.0 "$ONU_ROOT/run/onu-identity"'
+check 'grep -q -x model=TEST-1 "$ONU_ROOT/run/onu-identity"'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
+teardown
+
 echo "test_onu_store: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

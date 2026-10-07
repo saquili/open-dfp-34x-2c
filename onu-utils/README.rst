@@ -41,7 +41,13 @@ The small programs of the ONU.
    identity ``ponid`` reads into the same write, and ``onu-store migrate`` does
    that alone, refusing when there is no identity to take. What became of the
    settings is one word in ``/run/onu-store`` (``loaded``, ``defaults``,
-   ``saved``, ``failed``, ``none``), which the status daemon shows.
+   ``saved``, ``failed``, ``none``), which the status daemon shows. The status
+   daemon also keeps two things there through it: ``onu-store identity`` takes
+   the identity of ``KEY=VALUE`` lines on its input (``SERIAL``, ``PLOAM``, …)
+   and ``onu-store auth HASH`` the administrator's password hash
+   (``AUTH_HASH``), which a load puts in ``/run/onu-auth`` for root only. A
+   save with no account in force stores an empty ``PPPOE_USER``, so that a
+   removed account does not come back at the next boot.
 
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's

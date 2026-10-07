@@ -12,10 +12,18 @@
 #                       /run/onu-pppoe into the store, in one write
 #   onu-store migrate   the same, with the identity of the shipped firmware's
 #                       configuration (ponid) taken into the store
+#   onu-store identity  the identity of the KEY=VALUE lines of the standard
+#                       input (SERIAL, PLOAM, ...) into the store and into
+#                       /run/onu-identity
+#   onu-store auth HASH the administrator's password hash into the store and
+#                       into /run/onu-auth
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case; PPPOE_USER and PPPOE_SECRET are the line
-# "user secret" of /run/onu-pppoe; every other key is a line of /run/onu.conf.
+# "user secret" of /run/onu-pppoe, which an empty PPPOE_USER leaves out;
+# AUTH_HASH is the content of /run/onu-auth, for the status daemon's sign-in;
+# every other key is a line of /run/onu.conf. The files of secrets are for
+# root only.
 #
 # Until the store holds an identity, the identity is the one ponid reads from
 # the shipped firmware's configuration, which shares the partition. The first
@@ -37,6 +45,7 @@ RUN=$ROOT/run
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
 IDENTITY=$RUN/onu-identity
+AUTH=$RUN/onu-auth
 STATE=$RUN/onu-store
 
 state() {
@@ -82,15 +91,14 @@ factory_identity() {
 # The settings and the account in force, as keys of the store.
 settings() {
 	if [ -r "$CONF" ]; then
-		grep '^[A-Z][A-Z0-9_]*=' "$CONF" | grep -v -e '^ID_' -e '^PPPOE_'
+		grep '^[A-Z][A-Z0-9_]*=' "$CONF" | grep -v -e '^ID_' -e '^PPPOE_' -e '^AUTH_'
 	fi
-	if [ -r "$CREDS" ]; then
-		read -r user secret <"$CREDS"
-		if [ -n "${user:-}" ]; then
-			echo "PPPOE_USER=$user"
-			echo "PPPOE_SECRET=${secret:-}"
-		fi
-	fi
+	user=
+	secret=
+	[ -r "$CREDS" ] && read -r user secret <"$CREDS"
+	# No account in force removes the stored one: it would come back at boot.
+	echo "PPPOE_USER=${user:-}"
+	echo "PPPOE_SECRET=${secret:-}"
 }
 
 load() {
@@ -99,9 +107,9 @@ load() {
 		list=
 	}
 	umask 077
-	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS.new"
+	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS.new" "$AUTH.new"
 	printf '%s\n' "$list" | awk -v id="$IDENTITY.new" -v conf="$CONF.new" \
-		-v creds="$CREDS.new" '
+		-v creds="$CREDS.new" -v auth="$AUTH.new" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -110,6 +118,7 @@ load() {
 			v = substr($0, i + 1)
 		}
 		k ~ /^ID_/ { print tolower(substr(k, 4)) "=" v > id; next }
+		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k == "PPPOE_USER" { user = v; next }
 		k == "PPPOE_SECRET" { secret = v; next }
 		{ print k "=" v > conf }
@@ -121,6 +130,7 @@ load() {
 		state defaults
 	fi
 	[ -e "$CREDS.new" ] && mv "$CREDS.new" "$CREDS"
+	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
 	if [ -s "$IDENTITY.new" ]; then
 		mv "$IDENTITY.new" "$IDENTITY"
 		return 0
@@ -156,6 +166,30 @@ save() {
 	return 0
 }
 
+# The identity of KEY=VALUE lines on the standard input, as ID_ keys.
+identity() {
+	ids=$(awk '{
+		i = index($0, "=")
+		if (i > 1)
+			print "ID_" toupper(substr($0, 1, i - 1)) "=" substr($0, i + 1)
+	}')
+	[ -n "$ids" ] || return 1
+	printf '%s\n' "$ids" | onucfg --store "$STORE" import || return 1
+	umask 077
+	contents | awk '/^ID_/ {
+		i = index($0, "=")
+		print tolower(substr($0, 4, i - 4)) "=" substr($0, i + 1)
+	}' >"$IDENTITY.new" && mv "$IDENTITY.new" "$IDENTITY"
+}
+
+auth() {
+	case $1 in
+	*[!A-Za-z0-9\$./_-]* | "") return 1 ;;
+	esac
+	echo "AUTH_HASH=$1" | onucfg --store "$STORE" import || return 1
+	(umask 077 && echo "$1" >"$AUTH.new" && mv "$AUTH.new" "$AUTH")
+}
+
 STORE=$(store) || {
 	log "no partition \"config\""
 	state none
@@ -186,8 +220,14 @@ migrate)
 		exit 1
 	fi
 	;;
+identity)
+	identity
+	;;
+auth)
+	auth "${2:-}"
+	;;
 *)
-	echo "usage: onu-store load|save|migrate" >&2
+	echo "usage: onu-store load|save|migrate|identity|auth HASH" >&2
 	exit 2
 	;;
 esac
