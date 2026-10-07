@@ -113,6 +113,11 @@ The VLAN rules into those VLANs stay out of the hardware, and so does a bridge
 port that carries nothing else, such as the GEM ports of an Internet service
 whose PPPoE the stick holds; the subscriber's frames of those VLANs are
 dropped as they come in on ``sfp``. Television and telephone go on crossing
-the bridge. A bridge that
-filters no VLAN would carry the sessions' VLANs too, and the stick then leaves
-it out altogether, as in router mode.
+the bridge. A bridge that filters no VLAN would carry the sessions' VLANs too,
+and the stick then leaves it out altogether, as in router mode.
+
+The daemon also writes the OLT's VLAN translations to ``/run/omcid-xlate``: a
+``SUB NET`` line for each VID it translates from the subscriber's side, with the
+VID it leads into on the fibre. ``onu-mode`` runs a session that was given the
+subscriber's VID, the one a router behind the stick would use, in the VID it
+leads into.

@@ -2640,6 +2640,52 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 	}
 }
 
+/*
+ * The OLT's translations, published for onu-mode: a "SUB NET" line for each
+ * C-VID the OLT translates from the subscriber's side, held or not, with the
+ * VID it leads into, in XLATE_PATH. onu-mode runs a session given the
+ * subscriber's VID of a translation in the VID it leads into, as the
+ * subscriber's frames would leave. The file is replaced whole, and only when
+ * it changes.
+ */
+#define XLATE_PATH "/run/omcid-xlate"
+
+static void xlate_publish(const struct omci_hw_vlan_xlate *rules, size_t n)
+{
+	static char last[OMCI_HW_VLAN_MAX_RULES * 12 + 1];
+	static bool published;
+	char text[sizeof(last)] = "";
+	uint16_t subs[OMCI_HW_VLAN_MAX_RULES];
+	size_t len = 0, n_subs = 0;
+	bool ok = false;
+	FILE *f;
+
+	for (size_t i = 0; i < n; i++) {
+		if (rules[i].kind != OMCI_HW_VLAN_CVID_XLATE ||
+		    !vid_put(subs, &n_subs, ARRAY_SIZE(subs),
+			     rules[i].match_cvid))
+			continue;
+		len += (size_t)snprintf(text + len, sizeof(text) - len,
+					"%u %u\n", rules[i].match_cvid,
+					rules[i].assign_cvid);
+	}
+	if (published && !strcmp(text, last))
+		return;
+	f = fopen(XLATE_PATH ".new", "we");
+	if (f != NULL) {
+		ok = fputs(text, f) >= 0;
+		ok = fclose(f) == 0 && ok;
+		ok = ok && rename(XLATE_PATH ".new", XLATE_PATH) == 0;
+	}
+	if (!ok) {
+		OMCI_WARN("vlan: the translations could not be published in %s",
+			  XLATE_PATH);
+		return;
+	}
+	memcpy(last, text, sizeof(last));
+	published = true;
+}
+
 /* Replace the VLAN rules, each with its filters (see vlan_filters()). */
 static enum omci_status
 kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
@@ -2658,11 +2704,12 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 
 	if (rules == NULL && n > 0)
 		return OMCI_ERR_INVAL;
+	if (n > OMCI_HW_VLAN_MAX_RULES)
+		return OMCI_ERR_NOMEM;
+	xlate_publish(rules, n);
 	held_load();
 	if (router_skips("VLAN rules"))
 		return OMCI_OK;
-	if (n > OMCI_HW_VLAN_MAX_RULES)
-		return OMCI_ERR_NOMEM;
 	if (!uni || !pon) {
 		OMCI_WARN(
 			"vlan: %s or %s is missing; no VLAN rule is programmed",
