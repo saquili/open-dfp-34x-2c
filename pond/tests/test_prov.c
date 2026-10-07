@@ -1454,6 +1454,83 @@ static void test_settings(void)
 	unsetenv("POND_APPLY");
 }
 
+/* onu-store's stand-in: the identity it is given goes to a file. */
+static const char store_stub[] =
+	"#!/bin/sh\n[ \"$1\" = identity ] && cat > \"$POND_ROOT/stored-identity\"\n";
+
+static bool file_has(const char *path, const char *text)
+{
+	char buf[2048];
+
+	return !prov_slurp(path, buf, sizeof(buf), NULL) && strstr(buf, text) != NULL;
+}
+
+static void test_panel_values(void)
+{
+	char buf[4096], file[512], err[256], stub[512];
+	const char *s;
+	struct stat st;
+	int rc, e;
+
+	puts("the panel's identity, account and link");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/run/onu-identity",
+	    "serial=XXXXXXXXXXXX\nvendor_id=XXXX\nversion=V1.0\n"
+	    "ploam_password=0123456789\nmodel=EXAMPLE\n", 0600);
+	put("/run/onu-identity-source", "store\n", 0644);
+	s = render(prov_identity, buf, sizeof(buf), &e);
+	check(!e && strstr(s, "\"serial\":\"XXXXXXXXXXXX\"") && strstr(s, "\"ploam_set\":true") &&
+		      strstr(s, "\"source\":\"store\""),
+	      "the identity is served, and whether a PLOAM password is set");
+	check(!strstr(s, "0123456789"), "but never the PLOAM password itself");
+
+	put("/store-stub", store_stub, 0755);
+	setenv("POND_STORE", prov_path("/store-stub", stub, sizeof(stub)), 1);
+	setenv("POND_REIDENTIFY", "true", 1);
+	check(prov_identity_set("SERIAL=XXXX", err, sizeof(err)) == -EINVAL,
+	      "a serial number of the wrong form is refused");
+	check(prov_identity_set("MODEL=a=b", err, sizeof(err)) == -EINVAL,
+	      "a value with '=' is refused");
+	check(prov_identity_set("PLOAM=not-a-ploam-password", err, sizeof(err)) == -EINVAL,
+	      "a PLOAM password of the wrong form is refused");
+	check(prov_identity_set("COLOUR=red", err, sizeof(err)) == -EINVAL,
+	      "a field the identity lacks is refused");
+	rc = prov_identity_set("SERIAL=000000000000\nPLOAM=\nVERSION=V2.0\n", err, sizeof(err));
+	check(rc == 0 && file_has("/stored-identity", "SERIAL=000000000000\nVERSION=V2.0\n") &&
+		      !file_has("/stored-identity", "PLOAM"),
+	      "a good identity goes to onu-store, an empty PLOAM keeping the one there is");
+	for (int i = 0; i < 100; i++) {
+		prov_identity_reap();
+		pause_10ms();
+	}
+
+	rc = prov_pppoe_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\n", err,
+			    sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "MODE=passthrough") &&
+		      file_has("/run/onu.conf", "WAN_PROTO=pppoe") &&
+		      file_has("/run/onu.conf", "WAN_VLAN=410") &&
+		      file_has("/run/onu-pppoe", "user@example.net example-secret"),
+	      "an account makes the stick hold the session, in the operator's VLAN");
+	check(prov_pppoe_set("VLAN=5000", err, sizeof(err)) == -EINVAL,
+	      "a VLAN out of range is refused");
+	rc = prov_pppoe_set("USER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "MODE=bridge") &&
+		      stat(prov_path("/run/onu-pppoe", file, sizeof(file)), &st) != 0,
+	      "removing it leaves the session to the router and forgets the account");
+
+	rc = prov_link_set("VLAN=36\nGATEWAY=169.254.0.1\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN_VLAN=36") &&
+		      file_has("/run/onu.conf", "PASS_GATEWAY=169.254.0.1"),
+	      "the link to the router takes its VLAN and the gateway it hands out");
+	check(prov_link_set("VLAN=0", err, sizeof(err)) == -EINVAL, "a VLAN of 0 is refused");
+	(void)s;
+	unsetenv("POND_STORE");
+	unsetenv("POND_REIDENTIFY");
+}
+
 static void test_table(void)
 {
 	const struct prov *p;
@@ -1534,6 +1611,7 @@ int main(void)
 	test_optics();
 	test_writers();
 	test_settings();
+	test_panel_values();
 	test_table();
 	test_failure_paths();
 

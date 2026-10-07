@@ -2,19 +2,28 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * pond: the HTTP status daemon of the ONU. It serves, as JSON:
+ * pond: the HTTP daemon of the ONU. It serves, as JSON:
  *
- *   /api/health      that it runs, without a token
- *   /api/schema      the list of values
- *   /api/get/ID      one value
- *   /api/getm?ids=A,B several values at once, slow ones left out
- *   /api/set/ID      a POST: change a value to the body of the request
+ *   /api/health        that it runs, to anyone
+ *   /api/auth/login    a POST of {user, secret}: a session, in a cookie
+ *   /api/auth/session  who is signed in
+ *   /api/auth/logout   a POST: end the session
+ *   /api/auth/password a POST of {current, next}: a new password
+ *   /api/schema        the list of values
+ *   /api/get/ID        one value
+ *   /api/getm?ids=A,B  several values at once, slow ones left out
+ *   /api/set/ID        a POST: change a value to the body of the request
+ *   /api/system/restart a POST: restart the stick
  *
- * Every route but the first needs the bearer token of /etc/pond.token;
- * without the file, the API stays locked. At / it serves the status page,
- * which asks for the token, reads the API and changes the settings.
+ * Every other route of /api needs a session (auth.h) or the bearer token of
+ * /etc/pond.token, for scripts. A change made in a session must carry the
+ * header X-Pond, which a page of another site cannot add, and while the
+ * default password is in force a session may only change it. Every other
+ * path is the panel: the static files of the web directory, the hashed
+ * assets cached for good, and index.html for any path of the app.
  */
 
+#include "auth.h"
 #include "prov.h"
 #include "providers.h"
 
@@ -25,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define POND_VALUE_CAP (64 * 1024)
@@ -39,9 +50,15 @@
 static const char *g_listen[POND_LISTEN_MAX];
 static int g_nlisten;
 static const char *g_tokenf = "/etc/pond.token";
-static const char *g_page = "/usr/share/pond/index.html";
+static const char *g_web = "/usr/share/pond/www";
 static char g_token[128];
 static volatile sig_atomic_t g_stop;
+static time_t g_restart_at;
+
+#define SECURITY_HEADERS                                                   \
+	"X-Content-Type-Options: nosniff\r\n"                               \
+	"X-Frame-Options: DENY\r\n"                                         \
+	"Referrer-Policy: no-referrer\r\n"
 
 static void on_signal(int sig)
 {
@@ -293,6 +310,187 @@ static bool authorised(struct mg_http_message *hm)
 	}
 }
 
+/* The session id of the request's cookie, or an empty string. */
+static void cookie_session(struct mg_http_message *hm, char id[AUTH_ID_LEN + 1])
+{
+	const struct mg_str *h = mg_http_get_header(hm, "Cookie");
+	struct mg_str v;
+
+	id[0] = '\0';
+	if (!h)
+		return;
+	v = mg_http_get_header_var(*h, mg_str("pond_sid"));
+	if (v.len == AUTH_ID_LEN) {
+		memcpy(id, v.buf, AUTH_ID_LEN);
+		id[AUTH_ID_LEN] = '\0';
+	}
+}
+
+/* Secure when the router's proxy says the browser came in over HTTPS. */
+static const char *cookie_secure(struct mg_http_message *hm)
+{
+	const struct mg_str *p = mg_http_get_header(hm, "X-Forwarded-Proto");
+
+	return p && !mg_strcmp(*p, mg_str("https")) ? "; Secure" : "";
+}
+
+static void reply_session(struct mg_connection *c, const char *cookie)
+{
+	char body[160], headers[256];
+
+	snprintf(body, sizeof(body),
+		 "{\"user\":\"%s\",\"must_change\":%s,\"idle_timeout_s\":%d}",
+		 AUTH_USER, auth_default_password() ? "true" : "false",
+		 AUTH_IDLE_S);
+	/* mg_http_reply() takes the headers as they are, not as a format. */
+	snprintf(headers, sizeof(headers),
+		 "Content-Type: application/json\r\nCache-Control: no-store\r\n%s",
+		 cookie ? cookie : "");
+	mg_http_reply(c, 200, headers, "%s", body);
+}
+
+static void reply_retry(struct mg_connection *c, int seconds)
+{
+	char body[128];
+
+	char headers[128];
+
+	snprintf(body, sizeof(body),
+		 "{\"error\":\"too many attempts\",\"retry_after\":%d}",
+		 seconds);
+	snprintf(headers, sizeof(headers),
+		 "Content-Type: application/json\r\nCache-Control: no-store\r\n"
+		 "Retry-After: %d\r\n",
+		 seconds);
+	mg_http_reply(c, 429, headers, "%s", body);
+}
+
+/* A string member of a JSON body, or NULL; the caller frees it. */
+static char *json_str(struct mg_http_message *hm, const char *path)
+{
+	return mg_json_get_str(hm->body, path);
+}
+
+static void free_secret(char *s)
+{
+	if (s) {
+		explicit_bzero(s, strlen(s));
+		free(s);
+	}
+}
+
+static void api_login(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char *user = json_str(hm, "$.user");
+	char *secret = json_str(hm, "$.secret");
+	char id[AUTH_ID_LEN + 1], cookie[160];
+	int retry = 0;
+	int rc = auth_sign_in(user, secret, time(NULL), id, &retry);
+
+	free(user);
+	free_secret(secret);
+	if (rc == -EAGAIN) {
+		reply_retry(c, retry);
+		return;
+	}
+	if (rc == -EACCES) {
+		reply_err(c, 401, "wrong user or password", "try again");
+		return;
+	}
+	if (rc) {
+		reply_err(c, 500, "no session", strerror(-rc));
+		return;
+	}
+	snprintf(cookie, sizeof(cookie),
+		 "Set-Cookie: pond_sid=%s; Path=/; HttpOnly; SameSite=Strict%s\r\n",
+		 id, cookie_secure(hm));
+	reply_session(c, cookie);
+}
+
+static void api_password(struct mg_connection *c, struct mg_http_message *hm,
+			 const char *sid)
+{
+	char *current = json_str(hm, "$.current");
+	char *next = json_str(hm, "$.next");
+	int retry = 0;
+	int rc = auth_change(current, next, sid, time(NULL), &retry);
+
+	free_secret(current);
+	free_secret(next);
+	if (rc == -EAGAIN)
+		reply_retry(c, retry);
+	else if (rc == -EACCES)
+		reply_err(c, 403, "wrong password", "the current password is another");
+	else if (rc == -EINVAL)
+		reply_err(c, 400, "not a password",
+			  "8 to 128 printable characters, other than the current one");
+	else if (rc)
+		reply_err(c, 500, "not stored", strerror(-rc));
+	else
+		reply_session(c, NULL);
+}
+
+/* Restart the stick a moment after the reply has gone. */
+static void api_restart(struct mg_connection *c)
+{
+	g_restart_at = time(NULL) + 1;
+	reply_json(c, 200, "{\"ok\":true}");
+}
+
+static void restart_when_due(void)
+{
+	if (!g_restart_at || time(NULL) < g_restart_at)
+		return;
+	g_restart_at = 0;
+	sync();
+	if (fork() == 0) {
+		execlp("reboot", "reboot", (char *)NULL);
+		_exit(127);
+	}
+}
+
+/* Whether a path climbs out of its directory. */
+static bool dotdot(struct mg_str s)
+{
+	size_t i;
+
+	for (i = 0; i + 1 < s.len; i++)
+		if (s.buf[i] == '.' && s.buf[i + 1] == '.')
+			return true;
+	return false;
+}
+
+/*
+ * The panel. A hashed asset is cached for good; any other path is the app,
+ * index.html, which the browser must ask for again every time.
+ */
+static void serve_web(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char path[512];
+	struct mg_http_serve_opts opts = {
+		.mime_types = "html=text/html; charset=utf-8,js=text/javascript,"
+			      "css=text/css,svg=image/svg+xml",
+	};
+
+	if (mg_match(hm->uri, mg_str("/assets/*"), NULL) &&
+	    !memchr(hm->uri.buf, '%', hm->uri.len) && !dotdot(hm->uri) &&
+	    hm->uri.len < 200) {
+		snprintf(path, sizeof(path), "%s%.*s", g_web, (int)hm->uri.len,
+			 hm->uri.buf);
+		opts.extra_headers = "Cache-Control: public, max-age=31536000, immutable\r\n"
+			SECURITY_HEADERS;
+		mg_http_serve_file(c, hm, path, &opts);
+		return;
+	}
+	snprintf(path, sizeof(path), "%s/index.html", g_web);
+	opts.extra_headers =
+		"Cache-Control: no-store\r\n" SECURITY_HEADERS
+		"Content-Security-Policy: default-src 'self'; script-src 'self'; "
+		"style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+		"frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
+	mg_http_serve_file(c, hm, path, &opts);
+}
+
 static void handler(struct mg_connection *c, int ev, void *ev_data)
 {
 	struct mg_http_message *hm = (struct mg_http_message *)ev_data;
@@ -306,38 +504,66 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		return;
 	}
 
-	if (mg_match(hm->uri, mg_str("/"), NULL) ||
-	    mg_match(hm->uri, mg_str("/index.html"), NULL)) {
-		struct mg_http_serve_opts opts = {
-			.mime_types = "html=text/html; charset=utf-8",
-			.extra_headers =
-				"Cache-Control: no-store\r\n"
-				"X-Content-Type-Options: nosniff\r\n"
-				"Content-Security-Policy: default-src 'none'; "
-				"script-src 'unsafe-inline'; "
-				"style-src 'unsafe-inline'; connect-src 'self'\r\n",
-		};
-
-		mg_http_serve_file(c, hm, g_page, &opts);
-		return;
-	}
-
 	if (!mg_match(hm->uri, mg_str("/api/#"), NULL)) {
-		reply_err(c, 404, "no such route",
-			  "this daemon serves / and /api");
+		serve_web(c, hm);
 		return;
 	}
 
-	if (!authorised(hm)) {
-		reply_err(
-			c, 401, "unauthorised",
-			strlen(g_token) ?
-				"present a bearer token" :
-				"this daemon has no token file, so the API is locked");
+	bool post = !mg_strcmp(hm->method, mg_str("POST"));
+	char sid[AUTH_ID_LEN + 1];
+
+	if (mg_match(hm->uri, mg_str("/api/auth/login"), NULL)) {
+		if (post)
+			api_login(c, hm);
+		else
+			reply_err(c, 405, "use POST", "sign in with a POST");
 		return;
 	}
 
-	if (mg_match(hm->uri, mg_str("/api/schema"), NULL))
+	cookie_session(hm, sid);
+	bool session = auth_session(sid, time(NULL));
+	bool token = !session && authorised(hm);
+
+	if (!session && !token) {
+		reply_err(c, 401, "unauthorised", "sign in, or present a bearer token");
+		return;
+	}
+	/* A change made from a browser comes from this panel, not another site. */
+	if (session && post && !mg_http_get_header(hm, "X-Pond")) {
+		reply_err(c, 403, "refused", "a change needs the X-Pond header");
+		return;
+	}
+
+	if (mg_match(hm->uri, mg_str("/api/auth/session"), NULL)) {
+		reply_session(c, NULL);
+		return;
+	}
+	if (mg_match(hm->uri, mg_str("/api/auth/logout"), NULL)) {
+		auth_sign_out(sid);
+		mg_http_reply(c, 200,
+			      "Content-Type: application/json\r\n"
+			      "Set-Cookie: pond_sid=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict\r\n",
+			      "{}");
+		return;
+	}
+	if (mg_match(hm->uri, mg_str("/api/auth/password"), NULL)) {
+		if (post)
+			api_password(c, hm, sid);
+		else
+			reply_err(c, 405, "use POST", "change the password with a POST");
+		return;
+	}
+	if (session && auth_default_password()) {
+		reply_err(c, 403, "must_change", "set a password of your own first");
+		return;
+	}
+
+	if (mg_match(hm->uri, mg_str("/api/system/restart"), NULL)) {
+		if (post)
+			api_restart(c);
+		else
+			reply_err(c, 405, "use POST", "restart with a POST");
+	} else if (mg_match(hm->uri, mg_str("/api/schema"), NULL))
 		api_schema(c);
 	else if (mg_match(hm->uri, mg_str("/api/getm"), NULL))
 		api_getm(c, hm->query);
@@ -377,11 +603,11 @@ int main(int argc, char **argv)
 			g_listen[g_nlisten++] = argv[++i];
 		else if (!strcmp(argv[i], "-t") && i + 1 < argc)
 			g_tokenf = argv[++i];
-		else if (!strcmp(argv[i], "-p") && i + 1 < argc)
-			g_page = argv[++i];
+		else if (!strcmp(argv[i], "-w") && i + 1 < argc)
+			g_web = argv[++i];
 		else {
 			fprintf(stderr,
-				"usage: %s [-l http://addr:port]... [-t tokenfile] [-p page]\n",
+				"usage: %s [-l http://addr:port]... [-t tokenfile] [-w webdir]\n",
 				argv[0]);
 			return 2;
 		}
@@ -395,6 +621,7 @@ int main(int argc, char **argv)
 		g_listen[g_nlisten++] = "http://0.0.0.0:8080";
 
 	load_token();
+	auth_init(getenv("POND_AUTH_FILE"), getenv("POND_STORE"));
 	mg_mgr_init(&mgr);
 	/*
 	 * An address that is missing costs only its own listener: the others
@@ -411,13 +638,16 @@ int main(int argc, char **argv)
 	}
 	if (!listening)
 		return 1;
-	fprintf(stderr, "pond: %s\n",
-		strlen(g_token) ? "token loaded" :
-				  "NO TOKEN -- the API is locked");
+	fprintf(stderr, "pond: %s; %s\n",
+		strlen(g_token) ? "token loaded" : "no token for scripts",
+		auth_default_password() ? "the default password is in force" :
+					  "a password is set");
 
 	while (!g_stop) {
 		mg_mgr_poll(&mgr, 200);
 		prov_settings_reap();
+		prov_identity_reap();
+		restart_when_due();
 	}
 
 	mg_mgr_free(&mgr);

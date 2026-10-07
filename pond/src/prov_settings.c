@@ -587,3 +587,108 @@ out:
 	explicit_bzero(file, sizeof(file));
 	return rc;
 }
+
+/*
+ * The panel's two views of the settings. The panel names no mode: the
+ * stick passes the OLT's services to the router in any case, and holds a
+ * PPPoE session itself when it has an account. Until onu-mode works the same
+ * way, an account means passthrough mode and none means bridge mode.
+ */
+
+/* A KEY=VALUE line of @text, or NULL; @out holds the value. */
+static const char *line_value(const char *text, const char *key, char *out,
+			      size_t cap)
+{
+	size_t n = strlen(key);
+	const char *p = text;
+
+	while (p && *p) {
+		if (!strncmp(p, key, n) && p[n] == '=') {
+			const char *v = p + n + 1;
+			size_t len = strcspn(v, "\r\n");
+
+			if (len >= cap)
+				return NULL;
+			memcpy(out, v, len);
+			out[len] = '\0';
+			return out;
+		}
+		p = strchr(p, '\n');
+		if (p)
+			p++;
+	}
+	return NULL;
+}
+
+int prov_pppoe_set(const char *val, char *err, size_t errcap)
+{
+	char user[USER_MAX + 2], secret[SECRET_MAX + 2], vlan[VALUE_MAX],
+		mac[VALUE_MAX], text[TEXT_MAX];
+	const char *u = line_value(val, "USER", user, sizeof(user));
+	const char *sec = line_value(val, "SECRET", secret, sizeof(secret));
+	const char *v = line_value(val, "VLAN", vlan, sizeof(vlan));
+	const char *m = line_value(val, "MAC", mac, sizeof(mac));
+	size_t len = 0;
+	int rc;
+
+	if ((v && !valid(K_VLAN, v)) || (m && !valid(K_MAC_OPT, m))) {
+		snprintf(err, errcap, "VLAN: 1 to 4094 or none; MAC: xx:xx:xx:xx:xx:xx or none");
+		return -EINVAL;
+	}
+	if (u && *u && !word(u, USER_MAX)) {
+		snprintf(err, errcap, "USER: printable, without blanks, up to %d characters",
+			 USER_MAX);
+		return -EINVAL;
+	}
+
+	if (u && !*u) {
+		/* No account: the stick leaves the session to the router. */
+		len += (size_t)snprintf(text + len, sizeof(text) - len,
+					"MODE=bridge\nWAN_PROTO=dhcp\n");
+		char path[256];
+
+		if (unlink(prov_path(CREDS, path, sizeof(path))) && errno != ENOENT) {
+			int e = errno;
+
+			snprintf(err, errcap, "%s: %s", CREDS, strerror(e));
+			return -e;
+		}
+	} else if (u) {
+		len += (size_t)snprintf(text + len, sizeof(text) - len,
+					"MODE=passthrough\nWAN_PROTO=pppoe\nPPPOE_USER=%s\n", u);
+		if (sec && *sec)
+			len += (size_t)snprintf(text + len, sizeof(text) - len,
+						"PPPOE_SECRET=%s\n", sec);
+	}
+	if (v)
+		len += (size_t)snprintf(text + len, sizeof(text) - len, "WAN_VLAN=%s\n", v);
+	if (m)
+		len += (size_t)snprintf(text + len, sizeof(text) - len, "WAN_MAC=%s\n", m);
+	if (!len) {
+		snprintf(err, errcap, "nothing to change");
+		return -EINVAL;
+	}
+
+	rc = prov_settings_set(text, err, errcap);
+	explicit_bzero(secret, sizeof(secret));
+	explicit_bzero(text, sizeof(text));
+	return rc;
+}
+
+int prov_link_set(const char *val, char *err, size_t errcap)
+{
+	char vlan[VALUE_MAX], gw[VALUE_MAX], text[TEXT_MAX];
+	const char *v = line_value(val, "VLAN", vlan, sizeof(vlan));
+	const char *g = line_value(val, "GATEWAY", gw, sizeof(gw));
+	size_t len = 0;
+
+	if (v)
+		len += (size_t)snprintf(text + len, sizeof(text) - len, "LAN_VLAN=%s\n", v);
+	if (g)
+		len += (size_t)snprintf(text + len, sizeof(text) - len, "PASS_GATEWAY=%s\n", g);
+	if (!len) {
+		snprintf(err, errcap, "nothing to change");
+		return -EINVAL;
+	}
+	return prov_settings_set(text, err, errcap);
+}

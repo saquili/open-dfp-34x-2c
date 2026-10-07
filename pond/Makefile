@@ -22,8 +22,8 @@ MG_FLAGS := -DMG_TLS=0 -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=262144
 LDLIBS  += -lmnl
 
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
-        table.o
-OBJS := $(addprefix $(BUILD)/src/,pond.o $(PROV)) $(BUILD)/mongoose.o
+        prov_identity.o table.o
+OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o $(PROV)) $(BUILD)/mongoose.o
 
 .PHONY: all check clean
 
@@ -47,10 +47,20 @@ $(BUILD)/tests/test_prov.o: tests/test_prov.c
 $(BUILD)/test_prov: $(BUILD)/tests/test_prov.o $(addprefix $(BUILD)/src/,$(PROV))
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-check: $(BUILD)/test_prov
+$(BUILD)/tests/test_auth.o: tests/test_auth.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
+
+$(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o $(PROV)) \
+		    $(BUILD)/mongoose.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+check: $(BUILD)/test_prov $(BUILD)/test_auth
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
 	POND_ROOT=$(abspath $(BUILD))/fixtures $(BUILD)/test_prov
+	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
+	POND_ROOT=$(abspath $(BUILD))/auth $(BUILD)/test_auth
 
 clean:
 	rm -rf $(BUILD)

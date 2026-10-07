@@ -5,49 +5,91 @@
 pond
 ====
 
-The HTTP status daemon of the ONU. It serves the state of the device as JSON:
-the system, the interfaces and their counters, the bridge, the GEM ports and
-T-CONTs, the tc filters, the ONU as the PON driver reports it, the optics and
-the flash with its two firmware banks. It also changes the settings of the
-stick's mode, bridge or router.
+The HTTP daemon of the ONU and its panel. It serves the state of the device as
+JSON (the system, the interfaces and their counters, the bridge, the GEM ports
+and T-CONTs, the tc filters, the ONU as the PON driver reports it, the optics,
+the flash with its two firmware banks), changes the stick's settings, and
+serves the panel, a single-page app in ``web/``, as static files.
 
 ::
 
-   pond [-l http://ADDRESS:PORT]... [-t TOKENFILE] [-p PAGE]
+   pond [-l http://ADDRESS:PORT]... [-t TOKENFILE] [-w WEBDIR]
 
 Each ``-l`` adds an address to listen on, up to four; with none, the daemon
 listens on port 8080 of every address. An address it cannot listen on is
 reported and left out, and the daemon ends only when it listens on none.
 
-``/api/health`` answers without a token. ``/api/schema``, ``/api/get/ID``,
-``/api/getm?ids=A,B`` and ``/api/set/ID`` need the bearer token of the token
-file (``/etc/pond.token`` by default); without the file the API stays locked.
+Signing in
+==========
 
-``/api/set/ID`` is a POST whose body is the new value. ``settings`` is the one
-value it changes: the settings of onu-mode (see ``onu-utils``), whose body is
-``KEY=value`` lines, the keys of ``/run/onu.conf`` and ``PPPOE_USER`` and
-``PPPOE_SECRET``. pond checks every value and the settings as a whole, writes
-``/run/onu.conf`` and, for PPPoE, ``/run/onu-pppoe`` for root only, then starts
-``onu-mode apply``; it refuses another change, with 409, until that has ended.
-A read of ``settings`` gives the settings, the PPPoE user and whether a secret
-is set, never the secret, what onu-mode brought up, and what became of the
-settings in the configuration store (``store``: ``loaded``, ``defaults``,
-``saved``, ``failed`` or ``none``, as ``onu-store`` records it). ``onu-mode
-apply`` saves them there, so they outlive a restart.
+One user, ``admin``. Its password is kept as a PBKDF2-HMAC-SHA256 hash
+(20000 iterations over a random 16-byte salt, on Mongoose's SHA-256; about
+0.55 s on the stick, during which pond answers nothing else) in the
+configuration store, which ``onu-store`` puts in ``/run/onu-auth`` at boot.
+Until a password is set, it is ``admin``, and a session may do nothing but set
+its own. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
+``SameSite=Strict`` cookie (``Secure`` behind a proxy that says HTTPS). There
+are at most three; a fourth sign-in ends the one idle the longest, and a
+session ends after 15 minutes without a request or 12 hours in all. Five wrong
+passwords in a row stop sign-ins for 30 seconds (429, with ``Retry-After``). A
+change of password ends every other session.
 
-``/`` is the status page, ``www/index.html``, installed as
-``/usr/share/pond/index.html`` (``-p`` names another). It asks for the token,
-keeps it for the session or, if asked to, in the browser, and refreshes every
-five seconds. It leads with the state of the line in words: the fibre (PON
-state, received and transmitted light in dBm, alarms), the internet (the
-session and, in passthrough mode, the address handed to the router), the link
-to the router, and the device (build, bank, uptime, whether the settings are
-saved in flash). Under them, the traffic of the PON port from the switch's own
-counters, with ten minutes of history and how many frames of it the processor
-sees; then a form for the settings, grouped by what they are for; then, folded,
-every value of the API as a table, the slow ones read on request. It needs
-nothing from outside the device, and the daemon serves it with a content
-security policy that lets it talk to the daemon only.
+A change made in a session must carry the header ``X-Pond``, which a page of
+another site cannot add, so a forged form changes nothing. Scripts may present
+the bearer token of the token file (``/etc/pond.token`` by default) instead of
+a session.
+
+Routes
+======
+
+``/api/health`` answers anyone. ``POST /api/auth/login`` takes ``{"user",
+"secret"}``; ``/api/auth/session`` says who is signed in and whether the
+password must change; ``POST /api/auth/logout`` ends the session; ``POST
+/api/auth/password`` takes ``{"current", "next"}``. ``/api/schema``,
+``/api/get/ID``, ``/api/getm?ids=A,B`` (slow values left out) and ``POST
+/api/set/ID`` read and change values; ``POST /api/system/restart`` restarts the
+stick a second after it answers.
+
+``/api/set/ID`` takes ``KEY=VALUE`` lines:
+
+* ``settings``: the settings of onu-mode (see ``onu-utils``), the keys of
+  ``/run/onu.conf`` and ``PPPOE_USER`` and ``PPPOE_SECRET``. pond checks every
+  value and the settings as a whole, writes ``/run/onu.conf`` and, for PPPoE,
+  ``/run/onu-pppoe`` for root only, then starts ``onu-mode apply``, which also
+  saves them in the store; it refuses another change, with 409, until that has
+  ended. A read gives the settings, the PPPoE user and whether a secret is set,
+  never the secret, what onu-mode brought up, and what became of the settings
+  in the store (``store``: ``loaded``, ``defaults``, ``saved``, ``failed`` or
+  ``none``).
+* ``pppoe``: the stick's own PPPoE account, ``USER``, ``SECRET`` (empty keeps
+  it), ``VLAN`` and ``MAC``. With an account the stick holds the session and
+  hands its address to the router; ``USER=`` removes it and leaves the session
+  to the router. The panel names no mode: until onu-mode works without them,
+  an account means passthrough mode and none means bridge mode.
+* ``link``: how the router gets the address, ``VLAN`` and ``GATEWAY``.
+* ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
+  letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
+  ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION`` and ``PLOAM``
+  (ten characters or twenty hex digits; empty keeps it). It goes to
+  ``onu-store identity``, then ``onu-mode reidentify`` registers again. A read
+  never gives the PLOAM password, only whether one is set.
+
+The panel
+=========
+
+Every path outside ``/api`` is the panel, from the web directory
+(``/usr/share/pond/www`` by default): ``/assets/`` holds the files of a build,
+named by their hash and cached for good; any other path is ``index.html``, so
+that the app's own paths work on a reload. The files are stored gzip-compressed
+only, and pond hands them as they are to a browser that accepts gzip. The page
+is served with a content security policy that lets it load and talk to pond
+only.
+
+``web/`` is TypeScript on Preact, with TanStack Router and Query, react-hook-form
+and zod/mini, Tailwind and daisyUI; ``npm run build`` writes ``web/dist``.
+``npm run dev:mock`` runs it against a mock stick inside the dev server, and
+``npm run dev`` against a stick (``POND_TARGET``, the router's proxy by
+default).
 
 Building and testing::
 
@@ -60,8 +102,11 @@ CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests run on the files of ``tests/fixtures``, which stand in
 for ``/proc`` and ``/sys``, and on netlink dumps they build; the two copies of
 the boot loader's environment are made by ``tests/make-env.py``. The tests of
-the settings write under the same tree and start a stand-in for onu-mode,
-which ``POND_APPLY`` names.
+the settings write under the same tree and start stand-ins for onu-mode and
+onu-store, which ``POND_APPLY``, ``POND_REIDENTIFY`` and ``POND_STORE`` name.
+The tests of the sign-in check PBKDF2 against RFC 7914's vectors, the stored
+form, the stop after wrong passwords, the end of sessions and a change of
+password.
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,
