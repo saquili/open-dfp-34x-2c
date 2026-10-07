@@ -46,6 +46,7 @@ CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
 IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
+SOURCE=$RUN/onu-identity-source
 STATE=$RUN/onu-store
 
 state() {
@@ -133,10 +134,12 @@ load() {
 	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
 	if [ -s "$IDENTITY.new" ]; then
 		mv "$IDENTITY.new" "$IDENTITY"
+		(umask 022 && echo store >"$SOURCE")
 		return 0
 	fi
 	rm -f "$IDENTITY.new"
 	# No identity in the store yet: the shipped firmware's.
+	(umask 022 && echo factory >"$SOURCE")
 	ponid >"$IDENTITY"
 }
 
@@ -179,7 +182,8 @@ identity() {
 	contents | awk '/^ID_/ {
 		i = index($0, "=")
 		print tolower(substr($0, 4, i - 4)) "=" substr($0, i + 1)
-	}' >"$IDENTITY.new" && mv "$IDENTITY.new" "$IDENTITY"
+	}' >"$IDENTITY.new" && mv "$IDENTITY.new" "$IDENTITY" &&
+		(umask 022 && echo store >"$SOURCE")
 }
 
 auth() {

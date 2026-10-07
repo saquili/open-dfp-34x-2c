@@ -42,6 +42,8 @@ setup() {
 	# omcid runs from its first start on, as on the board.
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
+	printf '#!/bin/sh\necho "devlink $*" >>"$LOG"\n[ "$1 $2" = "dev show" ] && echo platform/switch\nexit 0\n' \
+		>"$T/bin/devlink"
 	# nft stays a stand-in, so that a call to it would show in the log: the
 	# stick has no packet filter, and onu-mode must not need one.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
@@ -281,6 +283,29 @@ check 'logged "^ip route replace default via 203.0.113.5 dev wan"'
 check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = "198.51.100.1 198.51.100.2" ]'
 interface=wan "$WAN_SCRIPT" deconfig
 check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
+teardown
+
+echo "a new identity: the PON goes down, takes it, comes up, and omcid starts over"
+setup
+printf 'serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\n' >"$ONU_ROOT/run/onu-identity"
+echo passthrough >"$ONU_ROOT/run/onu-mode"
+: >"$T/omcid.running"
+"$MODE_SCRIPT" reidentify 2>/dev/null
+check 'logged "^ip link set pon down"'
+check 'logged "gpon_serial cmode runtime value XXXXXXXXXXXX"'
+check 'logged "gpon_password cmode runtime value 0x00112233445566778899"'
+check '[ "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" ]'
+check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon up" "$LOG" | cut -d: -f1)" ]'
+check 'logged "^killall omcid"'
+teardown
+
+echo "without a serial number the PON stays down"
+setup
+: >"$ONU_ROOT/run/onu-identity"
+"$MODE_SCRIPT" identity 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ]'
+check '! logged "ip link set pon up"'
 teardown
 
 echo "test_onu_mode: $checks checks, $failures failed"

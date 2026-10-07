@@ -47,7 +47,8 @@ The small programs of the ONU.
    and ``onu-store auth HASH`` the administrator's password hash
    (``AUTH_HASH``), which a load puts in ``/run/onu-auth`` for root only. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
-   removed account does not come back at the next boot.
+   removed account does not come back at the next boot. Where the identity in
+   force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
 
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's
@@ -93,6 +94,13 @@ The small programs of the ONU.
       onu-mode start      # at boot
       onu-mode apply      # after /run/onu.conf changed; saves it too
       onu-mode status
+      onu-mode identity   # at boot: the identity to the PON driver, PON up
+      onu-mode reidentify # after the identity changed: register again
+
+   ``identity`` gives the PON driver the serial number and PLOAM password of
+   ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and
+   brings the PON up; ``reidentify`` takes the PON down first and restarts
+   omcid afterwards, so the OLT sees the stick leave and register anew.
 
 Building and testing::
 

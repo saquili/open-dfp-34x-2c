@@ -9,6 +9,10 @@
 #   onu-mode apply    apply the settings of /run/onu.conf again, after a change,
 #                     and keep them in the configuration store (onu-store)
 #   onu-mode stop     stop omcid and take the router down
+#   onu-mode identity give the PON driver the serial number and PLOAM
+#                     password of /run/onu-identity and bring the PON up
+#   onu-mode reidentify  take the PON down, give it the identity of
+#                     /run/onu-identity, and register with the OLT again
 #   onu-mode status   the mode in force and, in router or passthrough mode,
 #                     the WAN
 #
@@ -43,6 +47,7 @@ ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
+IDENTITY=$RUN/onu-identity
 NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 SHARE=$ROOT/usr/share/onu
@@ -424,6 +429,41 @@ pass_down() {
 	return 0
 }
 
+# The identity to the PON driver, which takes it while the PON is down, then
+# the PON up. Twenty hex digits of PLOAM password are its ten octets.
+identity() {
+	serial=$(grep '^serial=' "$IDENTITY" 2>/dev/null | cut -d= -f2)
+	ploam=$(grep '^ploam_password=' "$IDENTITY" 2>/dev/null | cut -d= -f2-)
+	dev=$(devlink dev show 2>/dev/null | head -n 1)
+	if [ -z "$serial" ] || [ -z "$dev" ]; then
+		log "no serial number: the PON stays down"
+		return 1
+	fi
+	devlink dev param set "$dev" name gpon_serial cmode runtime value "$serial" ||
+		log "the PON driver did not take the serial number"
+	if [ -n "$ploam" ]; then
+		case $ploam in
+		*[!0-9A-Fa-f]*) ;;
+		*) [ ${#ploam} -eq 20 ] && ploam=0x$ploam ;;
+		esac
+		devlink dev param set "$dev" name gpon_password cmode runtime value "$ploam" ||
+			log "the PON driver did not take the PLOAM password"
+	fi
+	ip link set pon up || log "the PON does not come up"
+}
+
+# A new identity: the OLT sees the stick leave and a new one arrive, and
+# omcid starts over with the MIB the OLT builds for it.
+reidentify() {
+	ip link set pon down
+	identity || return 1
+	mode=
+	[ -r "$RUN/onu-mode" ] && read -r mode <"$RUN/onu-mode"
+	killall omcid 2>/dev/null
+	omcid_run "${mode:-bridge}"
+	log "registering again"
+}
+
 apply() {
 	old=
 	[ -r "$RUN/onu-mode" ] && read -r old <"$RUN/onu-mode"
@@ -490,6 +530,12 @@ stop)
 	fi
 	killall omcid 2>/dev/null
 	rm -f "$RUN/onu-mode"
+	;;
+identity)
+	identity
+	;;
+reidentify)
+	reidentify
 	;;
 status)
 	mode=

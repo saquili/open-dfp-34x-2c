@@ -62,6 +62,7 @@ check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
 check '[ ! -e "$ONU_ROOT/run/onu.conf" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-pppoe" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = defaults ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = factory ]'
 teardown
 
 echo "the first save takes the identity into the store with the settings"
@@ -94,6 +95,7 @@ check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu.conf" | cut -c1-10)" = -rw-r--r-- ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = loaded ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = store ]'
 teardown
 
 echo "a later save keeps the identity and changes the settings"
