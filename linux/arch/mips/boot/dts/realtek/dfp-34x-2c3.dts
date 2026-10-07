@@ -78,23 +78,25 @@
 
 		/*
 		 * The boot loader's own layout, which covers the whole chip,
-		 * except that bank 0 is split as this system needs: its kernel
-		 * takes 1856 KiB and its root filesystem 1984 KiB, where the
-		 * shipped firmware split the same 3840 KiB as 1328 KiB and
+		 * except that both banks are split as this system needs: a
+		 * kernel takes 1856 KiB and a root filesystem 1984 KiB, where
+		 * the shipped firmware split the same 3840 KiB as 1328 KiB and
 		 * 2512 KiB. The boot loader keeps naming the shipped split in
 		 * its environment, which it rebuilds at every start, and needs
-		 * nothing of this one: it starts the kernel at the start of k0,
-		 * the same in both, and root=31:5 names r0 by number.
+		 * nothing of this one: it starts the kernel at the start of k0
+		 * or k1, the same in both, and root=31:5 or root=31:7 names
+		 * r0 or r1 by number.
 		 *
 		 * The partitions register in this order as mtd0 to mtd7,
 		 * block devices 31:0 to 31:7, and the boot loader names the
 		 * root filesystem by number (root=31:5 for bank 0, root=31:7
 		 * for bank 1): the order is part of the boot contract.
 		 *
-		 * Only the configuration store is writable. The boot loader,
-		 * its environment and both banks are read-only, so that
-		 * nothing this system runs can overwrite the system itself,
-		 * the fallback or what starts them. The chip erases in 4 KiB
+		 * The boot loader is read-only. Its environment, where this
+		 * system says which bank to start, the configuration store and
+		 * both banks are writable: an update goes into the bank the
+		 * system did not start from, which the updater, onu-update,
+		 * tells by root= and never writes. The chip erases in 4 KiB
 		 * sectors, and every partition starts and ends on one.
 		 */
 		partitions {
@@ -113,13 +115,11 @@
 			partition@40000 {
 				label = "env";
 				reg = <0x040000 0x002000>;
-				read-only;
 			};
 
 			partition@42000 {
 				label = "env2";
 				reg = <0x042000 0x002000>;
-				read-only;
 			};
 
 			/*
@@ -131,30 +131,26 @@
 				reg = <0x044000 0x03c000>;
 			};
 
-			/* Bank 0: this system's kernel and root filesystem */
+			/* Bank 0: a kernel and its root filesystem */
 			partition@80000 {
 				label = "k0";
 				reg = <0x080000 0x1d0000>;
-				read-only;
 			};
 
 			partition@250000 {
 				label = "r0";
 				reg = <0x250000 0x1f0000>;
-				read-only;
 			};
 
-			/* Bank 1: the shipped firmware, the fallback */
+			/* Bank 1: the same, the other system */
 			partition@440000 {
 				label = "k1";
-				reg = <0x440000 0x14c000>;
-				read-only;
+				reg = <0x440000 0x1d0000>;
 			};
 
-			partition@58c000 {
+			partition@610000 {
 				label = "r1";
-				reg = <0x58c000 0x274000>;
-				read-only;
+				reg = <0x610000 0x1f0000>;
 			};
 		};
 	};
