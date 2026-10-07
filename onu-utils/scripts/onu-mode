@@ -646,7 +646,11 @@ tick() {
 	fi
 }
 
+# The watcher outlives the shell that started it: an "onu-mode apply" from a
+# login ends with the login, and its hangup must not take the sessions'
+# watcher along.
 watch() {
+	trap '' HUP
 	echo $$ >"$RUN/onu-watch.pid"
 	while :; do
 		tick
