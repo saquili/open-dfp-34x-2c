@@ -199,7 +199,9 @@ export const en = {
     show: "Show",
     hide: "Hide",
     vlan: "Operator VLAN",
-    vlanHint: "The VLAN the operator carries the session in, for example 410.",
+    vlanHint:
+      "The VLAN the operator carries the session in, for example 410. Where the OLT translates it, the stick uses the VLAN it leads into on the fibre.",
+    vlanOnFibre: "{vlan}, {fibre} on the fibre (the OLT translates it)",
     mac: "MAC address the operator sees",
     macHint: "Leave empty for the stick's own, or copy the host's.",
     macStick: "the stick's own",

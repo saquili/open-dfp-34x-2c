@@ -21,7 +21,7 @@ import { useGemText } from "../components/Gem";
 import { Badge, Card, Facts, Figure, PageTitle } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { mac, required, upTo, vlan, z } from "../lib/schemas";
-import { gems, MAX_SESSIONS, type SessionView, session, sessions } from "../lib/state";
+import { fibreVlan, gems, MAX_SESSIONS, type SessionView, session, sessions } from "../lib/state";
 
 const FAMILY: Record<Family, Key> = {
   both: "internet.famBoth",
@@ -189,7 +189,14 @@ function SessionCard({ x }: { x: SessionView }) {
       <Facts
         rows={[
           [t("internet.account"), x.user],
-          [t("internet.vlan"), x.vlan || t("switch.untagged")],
+          [
+            t("internet.vlan"),
+            !x.vlan
+              ? t("switch.untagged")
+              : fibreVlan(x) !== x.vlan
+                ? t("internet.vlanOnFibre", { vlan: x.vlan, fibre: fibreVlan(x) })
+                : x.vlan,
+          ],
           [
             t("internet.channel"),
             portId != null

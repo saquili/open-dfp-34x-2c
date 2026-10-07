@@ -103,6 +103,15 @@ export interface SessionView {
   prefixHost: string | null;
 }
 
+/**
+ * The VLAN a session runs in on the fibre: that of its interface (wanVID),
+ * which differs from the one it was given when the OLT translates that one,
+ * as an operator does from the VLAN a router behind the stick would use.
+ */
+export function fibreVlan(s: SessionView): string {
+  return /^wan(\d+)$/.exec(s.dev ?? "")?.[1] ?? s.vlan;
+}
+
 export function sessions(live: Live | undefined): SessionView[] {
   return (live?.settings?.sessions ?? []).map((x) => ({
     id: x.id,
@@ -187,7 +196,7 @@ export function gems(live: Live | undefined): GemView[] {
             ? null
             : (live?.tconts?.find((x) => x.index === gem.tcont)?.alloc_id ?? null),
         use: on.length ? "session" : gem.master ? "bridged" : "ends",
-        vlan: [...new Set(on.map((x) => x.vlan))].join(", "),
+        vlan: [...new Set(on.map(fibreVlan))].join(", "),
         bridge: gem.master,
       };
     });

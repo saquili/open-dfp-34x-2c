@@ -3,7 +3,17 @@
 
 import { describe, expect, it } from "vitest";
 import { LIVE } from "../mocks/fixture";
-import { fibre, lightQuality, linkSpeed, memory, session, sessions } from "./state";
+import {
+  fibre,
+  fibreVlan,
+  gems,
+  lightQuality,
+  linkSpeed,
+  memory,
+  type SessionView,
+  session,
+  sessions,
+} from "./state";
 
 describe("what the figures mean", () => {
   it("rates the received light against the receiver's range", () => {
@@ -53,5 +63,30 @@ describe("what the figures mean", () => {
     expect(linkSpeed(2500, "en")).toBe("2.5 Gb/s");
     expect(linkSpeed(1000, "pl")).toBe("1 Gb/s");
     expect(memory(LIVE)?.share).toBeGreaterThan(0);
+  });
+});
+
+describe("the VLAN of a session on the fibre", () => {
+  const given = (vlan: string, dev: string | null) =>
+    ({ ...sessions(LIVE)[0], vlan, dev }) as SessionView;
+
+  it("is the VLAN of its interface, which the OLT's translation may make another", () => {
+    expect(fibreVlan(given("410", "wan1410"))).toBe("1410");
+    expect(fibreVlan(given("410", "wan410"))).toBe("410");
+  });
+
+  it("is the VLAN it was given while it has no interface, or runs on the GEM interface", () => {
+    expect(fibreVlan(given("410", null))).toBe("410");
+    expect(fibreVlan(given("", "gem278"))).toBe("");
+  });
+
+  it("is what a channel shows for the sessions it carries", () => {
+    const live = structuredClone(LIVE);
+    const s = live.settings?.sessions?.[0];
+    if (!s) throw new Error("a session");
+    s.vlan = "410";
+    s.dev = "wan1410";
+    const g = gems(live).find((x) => x.use === "session");
+    expect(g?.vlan).toBe("1410");
   });
 });

@@ -201,7 +201,9 @@ export const pl: Dictionary = {
     show: "Pokaż",
     hide: "Ukryj",
     vlan: "VLAN operatora",
-    vlanHint: "VLAN, w którym operator podaje sesję, na przykład 410.",
+    vlanHint:
+      "VLAN, w którym operator podaje sesję, na przykład 410. Jeśli OLT go tłumaczy, wkładka sama użyje VLAN-u, na który prowadzi tłumaczenie.",
+    vlanOnFibre: "{vlan}, na światłowodzie {fibre} (tłumaczy go OLT)",
     mac: "Adres MAC widziany przez operatora",
     macHint: "Zostaw puste dla adresu wkładki albo skopiuj adres urządzenia hosta.",
     macStick: "adres wkładki",
