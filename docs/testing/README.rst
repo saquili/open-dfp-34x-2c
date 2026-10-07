@@ -210,6 +210,22 @@ The runs, the oldest first:
     the shaper held 200 Mb/s at 205. The reset case passed after the loader's
     countdown was stopped at the console and the image was RAM-booted by hand.
 
+``2026-10-07-run22``
+    Every case but those of router mode on the RAM image built from
+    ``run22``: the sessions that the stick's accounts make, two PPPoE
+    sessions over one VLAN with the IPv6 one's delegated prefix handed on to
+    the host, IPv6 routed by the engine, routed frames' TTL decremented, and
+    the management VLAN kept off the PON after a session. The stick held two
+    lab sessions, so for the run their accounts were moved out of ``/run``
+    and the settings applied without a store, which left it in bridge mode;
+    its reset brought them back. The tree had one file the build does not
+    read, a note not under version control, hence "with local changes". 37
+    of 46 passed. The four failures are cases that call ``ethtool``, ``nft``
+    and ``dcb`` on the stick, which its image no longer carries; the five
+    skipped are those of router mode, whose cases predate the sessions. An
+    earlier run of the same cases had found the management VLAN crossing
+    the PON both ways after a session, which ``run22`` fixes.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at
