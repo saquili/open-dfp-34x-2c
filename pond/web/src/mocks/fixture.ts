@@ -549,7 +549,12 @@ function link(name: string, ifindex: number, rest: Partial<Link>): Link {
 /* The stick as it runs with its own session: no bridge, VLANs on each port. */
 export const NETWORK: Network = {
   links: [
-    link("lo", 1, { operstate: "unknown", mtu: 65536, mac: "00:00:00:00:00:00" }),
+    link("lo", 1, {
+      operstate: "unknown",
+      mtu: 65536,
+      mac: "00:00:00:00:00:00",
+      addresses: [{ family: "ipv4", address: "127.0.0.1/8", link_local: false }],
+    }),
     link("cpu", 2, { operstate: "unknown", mtu: 1508 }),
     link("sfp", 3, {
       kind: "dsa",

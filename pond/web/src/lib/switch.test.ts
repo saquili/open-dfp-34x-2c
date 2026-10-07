@@ -41,7 +41,7 @@ describe("what the switch is doing", () => {
     expect(v.bridges).toEqual([]);
   });
 
-  it("names the interfaces the stick can be reached on", () => {
+  it("names the interfaces the stick can be reached on, and not the loopback", () => {
     expect(v.management.map((l) => l.name)).toEqual(["sfp", "mgmt"]);
   });
 

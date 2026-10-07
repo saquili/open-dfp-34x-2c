@@ -120,8 +120,9 @@ export function switchView(net: Network | undefined, live: Live | undefined): Sw
       .sort((a, z) => (a.side === z.side ? 0 : a.side === "host" ? -1 : 1)),
     bridges,
     routed,
+    /* Only what sits on a switch port: the loopback is no way in. */
     management: links.filter(
-      (l) => l.kind !== "ppp" && globalV4(l) && roleOf(l, live) === "management",
+      (l) => sideOf(links, l.name) && globalV4(l) && roleOf(l, live) === "management",
     ),
   };
 }
