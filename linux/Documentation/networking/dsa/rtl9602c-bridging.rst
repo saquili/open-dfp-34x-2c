@@ -1565,6 +1565,27 @@ filtering, so the entries are in place when filtering starts.
        0/4; the same with extension 0 4/4; with extension 1 instead 0/4; member
        {0} with extension 0 0/4; member {3} with extension 0 4/4 (the minimal
        working entry); member {3} alone 0/4; extension 0 alone 0/4.
+   * - With filtering on, a frame goes to the member ports of its VLAN whatever
+       port it enters by, a port outside the VLAN included. So the subscriber's
+       frames tagged with the VLAN of a PPPoE session that the stick holds,
+       whose members are the PON port and the CPU, go out on the fibre unless a
+       rule drops them as they enter, which omcid writes.
+     - M
+     - 100 frames tagged 410 sent into the SFP port, not a member of VLAN 410,
+       while the PON port and the CPU were: 100 arrived beyond the OLT; with a
+       flower rule dropping VID 410 on the SFP port's ingress, 0.
+   * - With filtering on, a frame that the L3 engine routes out of the PON port
+       leaves only if the PON port is a member of the VLAN it leaves in. A
+       PPPoE session over a VLAN device on a GEM interface therefore needs the
+       PON port in the session's VLAN, which the GEM interface asks for by
+       handing the VID of its VLAN device on to the PON port's VLAN filter (see
+       the *GEM interfaces* section of ``pon.rst``).
+     - M
+     - With a bridge filtering VLANs 3001 and 3002 beside two PPPoE sessions in
+       VLAN 410, the SFP port counted the routed upstream frames as forward
+       discards (50 of 50) and none left; with the PON port added to VLAN 410,
+       20 of 20 pings crossed, and the sessions carried 933 Mb/s down and 928
+       up in hardware with the CPU 95 % idle or more.
    * - ``port_vlan_add`` also writes the PVID when the VLAN carries the PVID
        flag; ``port_vlan_del`` clears membership. A user port whose PVID VLAN is
        removed, or re-added without the flag, gets back the PVID of reset, 0,

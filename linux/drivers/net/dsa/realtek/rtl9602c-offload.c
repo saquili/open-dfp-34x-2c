@@ -498,8 +498,14 @@ static int rtl9602c_cf_sid_vlan(struct rtl9602c_priv *p, int port, u16 vid,
  * claimed VLAN, keyed on the C-VID, or, for a VLAN whose priorities several
  * GEM flows divide, one per claimed priority, keyed on the C-VID and the
  * C-tag's priority; a frame in no claimed VLAN, or of a priority no flow
- * claims, gets no stream. A port the classifier has no room for is left
- * without a stream, with a warning.
+ * claims, gets no stream. A port in that bridge that also sends routed frames
+ * gets, besides, an entry for the routed flow keyed on the port alone, below
+ * its bridge entries, which therefore take precedence: the routed frames
+ * arrive in a VLAN the bridge does not carry, so no bridge entry gives them a
+ * stream, and a frame without one is lost (rtl9602c_cf_write_xlate()). While
+ * no VLAN claims a GEM flow, the bridge's own entry keys on the port as well
+ * and the routed frames take the bridge's flow. A port the classifier has no
+ * room for is left without a stream, with a warning.
  *
  * Called at setup, on each bridge membership change, on each VLAN change of an
  * upstream GEM interface and on each change of the routed flow.
@@ -545,6 +551,24 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 				pr_debug("port %d routed upstream: stream %d, entry %d\n",
 					 port, p->l34_us_flow, idx);
 			continue;
+		}
+
+		/*
+		 * In the GEM bridge, the routed flow first: entries are taken
+		 * from the top down, so the bridge's below take precedence.
+		 */
+		if (p->l34_us_flow >= 0) {
+			idx = rtl9602c_cf_sid_alloc(p);
+			if (idx < 0)
+				pr_warn("classifier full: bridged port %d's routed frames get no GEM port upstream\n",
+					port);
+			else if (rtl9602c_cf_write_sid(p, idx, port,
+						       p->l34_us_flow))
+				pr_warn("classifier entry %d was not written\n",
+					idx);
+			else
+				pr_debug("port %d routed upstream beside the bridge: stream %d, entry %d\n",
+					 port, p->l34_us_flow, idx);
 		}
 
 		/* In the GEM bridge, while no VLAN claims a GEM flow. */

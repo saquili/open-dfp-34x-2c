@@ -1243,6 +1243,15 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
      - ``RTL9602C_CLS_ACT_FLOW_SET`` and ``RTL9602C_CLS_ACT_FLOW``: the routed
        flow, or the bridge's upstream flow. Classes ``0x3f``.
      - The top of the usable range, downwards.
+   * - Stream entry of a port in the GEM bridge that also sends routed frames,
+       while VLANs claim GEM flows
+     - Upstream; the ingress port.
+     - The routed flow. Classes ``0x3f``. Taken before the port's entries for
+       its claimed VLANs, so that it sits above them and applies to the
+       frames none of them takes: the routed ones, which arrive in the VLAN
+       of the link the session's address is handed on in, which the bridge
+       does not carry.
+     - The top of the usable range, downwards.
    * - Stream entry of a bridged port for one claimed VLAN
      - Upstream; the ingress port; a C-tag with that VID; no S-tag.
      - The stream of that VLAN's GEM interface. Classes ``0x3f``.
@@ -1283,13 +1292,19 @@ The entries that the driver composes, all in ``rtl9602c-offload.c``:
        without a stream, with a warning in the kernel log. When upstream GEM
        interfaces claim VLANs, a bridged port gets one entry for each claimed
        VLAN instead, and a frame in no claimed VLAN gets no stream (see the
-       *bridging* page, "Bridging the GEM ports").
+       *bridging* page, "Bridging the GEM ports"), unless a routed flow is
+       registered: then the port also gets, above those entries, one giving
+       the rest of its frames the routed flow.
      - T, M
      - T: bridged upstream traffic from the host reaches the far side of an OLT;
        in a routing test the routed port's entry is a ``VALID`` line in ``cf``
        and the flow is forwarded. M: the per-VLAN entries, with two upstream
        GEM interfaces in two VLANs, each VLAN's frames counted in its own GEM
-       port's upstream octets (the *bridging* page).
+       port's upstream octets (the *bridging* page). T: with the GEM interface
+       of two PPPoE sessions bridged with the SFP port in VLANs 3001 and 3002,
+       the SFP port's entries were the routed one at 127 and the VLANs' at 126
+       and 125; 200 of 200 frames of 3001 crossed translated to 3002 and back,
+       and the sessions carried 933 Mb/s down and 929 up in hardware.
    * - A VLAN rule of tc flower (see the *bridging* page, "VLAN tag
        operations") becomes one entry: the tag bits, and the VID and priority
        the rule names, compared on the template of their tag; the direction taken from the port (the PON
