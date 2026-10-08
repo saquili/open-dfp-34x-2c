@@ -28,6 +28,16 @@ export interface Rates {
   lanUp: number;
   /** Frames per second the processor handled, both ways. */
   cpuFrames: number;
+  /** The share of time the processor was busy, 0 to 1; null without its figures. */
+  cpuBusy: number | null;
+  /** Each GEM port's traffic, by interface name: down from the OLT, up to it. */
+  gems: Record<string, { down: number; up: number }>;
+  /** The light received, dBm; null without light. */
+  rxDbm: number | null;
+  /** Errors on the line a second: bit errors (BIP), codewords FEC corrected, and lost. */
+  bip: number;
+  fecCorrected: number;
+  fecLost: number;
 }
 
 interface Reading {
@@ -37,6 +47,13 @@ interface Reading {
   sfpRx: number;
   sfpTx: number;
   cpu: number;
+  busy: number | null;
+  idle: number | null;
+  gems: Record<string, { rx: number; tx: number }>;
+  rxUw: number | null;
+  bip: number;
+  fecCorrected: number;
+  fecLost: number;
 }
 
 let previous: Reading | null = null;
@@ -47,6 +64,10 @@ function reading(live: Live, t: number): Reading | null {
   const pc = live.port_counters;
   if (!pc?.pon || !pc?.sfp) return null;
   const cpu = live.ports?.find((p) => p.name === "cpu")?.cpu_path;
+  const k = live.cpu?.ticks;
+  const gems: Reading["gems"] = {};
+  for (const [name, c] of Object.entries(live.gem_counters ?? {}))
+    gems[name] = { rx: c.pon_rx_octets, tx: c.pon_tx_octets };
   return {
     t,
     ponRx: pc.pon.rx_octets,
@@ -54,6 +75,13 @@ function reading(live: Live, t: number): Reading | null {
     sfpRx: pc.sfp.rx_octets,
     sfpTx: pc.sfp.tx_octets,
     cpu: cpu ? cpu.rx_packets + cpu.tx_packets : 0,
+    busy: k ? k.user + k.nice + k.system + k.irq + k.softirq + k.steal : null,
+    idle: k ? k.idle + k.iowait : null,
+    gems,
+    rxUw: live.optics?.rx_power_uw ?? null,
+    bip: live.onu?.counters.bip_errors ?? 0,
+    fecCorrected: live.onu?.counters.fec_corrected_codewords ?? 0,
+    fecLost: live.onu?.counters.fec_uncorrectable_codewords ?? 0,
   };
 }
 
@@ -79,9 +107,32 @@ function record(live: Live, t: number) {
       lanDown: rate(prev.sfpTx, cur.sfpTx),
       lanUp: rate(prev.sfpRx, cur.sfpRx),
       cpuFrames: Math.max(0, (cur.cpu - prev.cpu) / dt),
+      cpuBusy: busyShare(prev, cur),
+      rxDbm: cur.rxUw != null && cur.rxUw > 0 ? 10 * Math.log10(cur.rxUw / 1000) : null,
+      bip: Math.max(0, (cur.bip - prev.bip) / dt),
+      fecCorrected: Math.max(0, (cur.fecCorrected - prev.fecCorrected) / dt),
+      fecLost: Math.max(0, (cur.fecLost - prev.fecLost) / dt),
+      gems: Object.fromEntries(
+        Object.entries(cur.gems).map(([name, g]) => {
+          const p = prev.gems[name];
+          return [
+            name,
+            p && g.rx >= p.rx && g.tx >= p.tx
+              ? { down: rate(p.rx, g.rx), up: rate(p.tx, g.tx) }
+              : { down: 0, up: 0 },
+          ];
+        }),
+      ),
     },
   ];
   for (const l of listeners) l();
+}
+
+function busyShare(prev: Reading, cur: Reading): number | null {
+  if (prev.busy == null || prev.idle == null || cur.busy == null || cur.idle == null) return null;
+  const busy = cur.busy - prev.busy;
+  const all = busy + (cur.idle - prev.idle);
+  return all > 0 && busy >= 0 ? busy / all : null;
 }
 
 export async function fetchLive(): Promise<Live> {

@@ -233,6 +233,22 @@ export function hostLink(live: Live | undefined): LinkView {
   };
 }
 
+/** The line rates of GPON (ITU-T G.984.1): 2.48832 Gb/s down, 1.24416 Gb/s up. */
+export const GPON_DOWN_BPS = 2_488_320_000;
+export const GPON_UP_BPS = 1_244_160_000;
+
+/** The port between the switch and the processor carries at most a gigabit. */
+export const CPU_PORT_BPS = 1_000_000_000;
+
+/**
+ * The SFP lane's mode, as its speed tells it: 2500BASE-X at 2.5 Gb/s,
+ * 1000BASE-X at 1 Gb/s; null without a link.
+ */
+export function laneMode(live: Live | undefined): string | null {
+  const speed = port(live, "sfp")?.speed_mbit;
+  return speed === 2500 ? "2500BASE-X" : speed === 1000 ? "1000BASE-X" : null;
+}
+
 /** A line rate for people: 2.5 Gb/s (2,5 Gb/s in Polish), 1 Gb/s, 100 Mb/s. */
 export function linkSpeed(mbit: number | null, lang: Lang): string | null {
   if (mbit == null) return null;

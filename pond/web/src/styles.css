@@ -95,3 +95,12 @@ body {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/*
+ * daisyUI lets a paragraph of a card grow, to push the card's buttons to its
+ * bottom; in a card that fills a page's height that opens a gap in the middle
+ * of the card. A paragraph here keeps its own height.
+ */
+.card-body :where(p) {
+  flex-grow: 0;
+}

@@ -6,6 +6,7 @@
 import { Eye, EyeOff } from "lucide-react";
 import type { JSX } from "preact";
 import { forwardRef, type InputHTMLAttributes, useState } from "react";
+import { type ApiError, OfflineError } from "../api/client";
 import { useI18n } from "../i18n";
 
 /* The input type that hides what is typed. */
@@ -85,4 +86,26 @@ export function SaveState({
       {message}
     </span>
   );
+}
+
+/** The state line of a change in progress: saving, saved, or why it failed. */
+export function useChangeState(change: {
+  isPending: boolean;
+  isSuccess: boolean;
+  error: Error | null;
+}): { state: "idle" | "busy" | "ok" | "bad"; message?: string } {
+  const { t } = useI18n();
+  if (change.isPending) return { state: "busy", message: t("internet.saving") };
+  if (change.isSuccess) return { state: "ok", message: t("internet.saved") };
+  if (change.error)
+    return {
+      state: "bad",
+      message:
+        change.error instanceof OfflineError
+          ? t("connection.offline")
+          : t("internet.failed", {
+              reason: (change.error as ApiError).detail ?? change.error.message,
+            }),
+    };
+  return { state: "idle" };
 }

@@ -10,6 +10,7 @@
 import { delay, HttpResponse, http } from "msw";
 import type { Identity, Session, Settings } from "../api/types";
 import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
+import { OMCI } from "./omci";
 
 let adminSecret = "admin";
 const firmware = structuredClone(FIRMWARE);
@@ -27,6 +28,22 @@ const cpu = structuredClone(
   },
 );
 const settings: Settings = structuredClone(LIVE.settings);
+const ticks = structuredClone(
+  LIVE.cpu?.ticks ?? {
+    user: 0,
+    nice: 0,
+    system: 0,
+    idle: 0,
+    iowait: 0,
+    irq: 0,
+    softirq: 0,
+    steal: 0,
+  },
+);
+const gemCounters = structuredClone(LIVE.gem_counters);
+/* The channel of the stick's own session, and the multicast one. */
+const SESSION_GEM = LIVE.settings.sessions[0]?.gem_dev ?? "";
+const MULTICAST_GEM = LIVE.gem_ports.find((g) => g.multicast)?.name ?? "";
 let lastTick = Date.now();
 const identity: Identity = {
   serial: "XXXXXXXXXXXX",
@@ -40,6 +57,12 @@ const identity: Identity = {
   omcc_version: "0xa3",
   vendor_product_code: "0",
   tm_option: "1",
+  loid: "",
+  loid_password_set: false,
+  sw_version: "",
+  sw_version0: "V1.0.0",
+  sw_version1: "",
+  pack_version: "",
   source: "store",
 };
 
@@ -67,13 +90,34 @@ function tick() {
   counters.sfp.rx_octets += add(up);
   cpu.rx_packets += Math.round(3 * dt);
   cpu.tx_packets += Math.round(2 * dt);
+  /* The processor: about 6 % busy idle, more while the traffic runs. */
+  const busy = Math.round(dt * 100 * (phase > 0 ? 0.11 : 0.05) * (0.8 + Math.random() * 0.4));
+  ticks.system += Math.round(busy * 0.8);
+  ticks.user += busy - Math.round(busy * 0.8);
+  ticks.idle += Math.max(0, Math.round(dt * 100) - busy);
+  /* The channels: the session's carries the download, the multicast one a steady stream. */
+  for (const g of Object.values(gemCounters)) {
+    const share = g === gemCounters[SESSION_GEM] ? 1 : 0;
+    g.pon_rx_octets += add(down * share);
+    g.pon_tx_octets += add(up * share);
+  }
+  const mc = gemCounters[MULTICAST_GEM];
+  if (mc) mc.pon_rx_octets += add(17.8e6);
 }
 
 function live() {
   tick();
   const uptime = { ...LIVE.uptime, up_s: LIVE.uptime.up_s + (Date.now() - started) / 1000 };
   const ports = LIVE.ports.map((p) => (p.name === "cpu" ? { ...p, cpu_path: { ...cpu } } : p));
-  return { ...LIVE, uptime, ports, port_counters: structuredClone(counters), settings };
+  return {
+    ...LIVE,
+    uptime,
+    ports,
+    port_counters: structuredClone(counters),
+    gem_counters: structuredClone(gemCounters),
+    cpu: LIVE.cpu ? { ...LIVE.cpu, ticks: { ...ticks } } : null,
+    settings,
+  };
 }
 
 const unauthorized = () => HttpResponse.json({ error: "no session" }, { status: 401 });
@@ -135,6 +179,11 @@ export const handlers = [
       return away() ?? (signedIn ? HttpResponse.json({ id, value }) : unauthorized());
     }),
   ),
+
+  http.get("*/api/get/omci", async () => {
+    await delay(600);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "omci", value: OMCI }) : unauthorized());
+  }),
 
   http.get("*/api/get/banks", async () => {
     await delay(400);
@@ -235,10 +284,17 @@ export const handlers = [
       EQUIPMENT_SERIAL: "equipment_serial",
       MODEL: "model",
       OMCC_VERSION: "omcc_version",
+      VENDOR_PRODUCT_CODE: "vendor_product_code",
+      TM_OPTION: "tm_option",
+      LOID: "loid",
+      SW_VERSION0: "sw_version0",
+      SW_VERSION1: "sw_version1",
+      PACK_VERSION: "pack_version",
     };
     for (const [k, field] of Object.entries(map))
       if (b[k] !== undefined) (identity as unknown as Record<string, string>)[field] = b[k];
     if (b.PLOAM) identity.ploam_set = true;
+    if (b.LOID_PASSWORD) identity.loid_password_set = true;
     settings.store = "saved";
     return HttpResponse.json({ id: "identity", ok: true });
   }),

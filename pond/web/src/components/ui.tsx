@@ -39,22 +39,31 @@ export function Card({
   action,
   children,
   className = "",
+  scroll = false,
 }: {
   title?: ReactNode;
   action?: ReactNode;
   children: ReactNode;
   className?: string;
+  /** The content scrolls inside the card when it is longer than the card. */
+  scroll?: boolean;
 }) {
   return (
-    <section className={`card bg-base-100 border border-base-300 ${className}`}>
-      <div className="card-body gap-3 p-4 sm:p-5">
+    <section className={`card min-h-0 border border-base-300 bg-base-100 ${className}`}>
+      <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
         {(title || action) && (
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex min-h-8 items-center justify-between gap-3">
             {title && <h2 className="card-title text-base">{title}</h2>}
             {action}
           </div>
         )}
-        {children}
+        {scroll ? (
+          <div className="-mx-2 grid min-h-0 flex-1 content-start gap-3 overflow-auto px-2">
+            {children}
+          </div>
+        ) : (
+          children
+        )}
       </div>
     </section>
   );
@@ -131,6 +140,101 @@ export function Meter({
     <div className="grid gap-1">
       <div className="text-sm">{label}</div>
       <progress className={`progress h-2 ${cls}`} value={Math.round(share * 100)} max={100} />
+    </div>
+  );
+}
+
+const STROKE: Record<Tone, string> = {
+  good: "var(--color-success)",
+  warn: "var(--color-warning)",
+  bad: "var(--color-error)",
+  info: "var(--color-info)",
+  neutral: "var(--color-base-content)",
+};
+
+/** A share of a whole as a ring, the figure in its middle and words below. */
+export function Gauge({
+  share,
+  value,
+  label,
+  sub,
+  tone = "info",
+  size = 112,
+}: {
+  share: number | null;
+  value: ReactNode;
+  label: ReactNode;
+  sub?: ReactNode;
+  tone?: Tone;
+  size?: number;
+}) {
+  const r = 42;
+  const c = 2 * Math.PI * r;
+  /* Three quarters of a circle, open at the bottom. */
+  const arc = c * 0.75;
+  const shown = share == null ? 0 : Math.max(0, Math.min(1, share));
+  return (
+    <figure className="grid justify-items-center gap-1 text-center">
+      <svg viewBox="0 0 100 100" width={size} height={size} role="img" aria-label={String(label)}>
+        <circle
+          cx="50"
+          cy="50"
+          r={r}
+          fill="none"
+          stroke="var(--color-base-300)"
+          strokeWidth="9"
+          strokeLinecap="round"
+          strokeDasharray={`${arc} ${c}`}
+          transform="rotate(135 50 50)"
+        />
+        <circle
+          cx="50"
+          cy="50"
+          r={r}
+          fill="none"
+          stroke={STROKE[tone]}
+          strokeWidth="9"
+          strokeLinecap="round"
+          strokeDasharray={`${arc * shown} ${c}`}
+          transform="rotate(135 50 50)"
+          className="transition-[stroke-dasharray] duration-700"
+        />
+        <text
+          x="50"
+          y="54"
+          textAnchor="middle"
+          className="tabular fill-current text-[19px] font-semibold"
+        >
+          {value}
+        </text>
+      </svg>
+      <figcaption className="-mt-3">
+        <div className="text-sm font-medium">{label}</div>
+        {sub && <div className="text-xs text-base-content/60">{sub}</div>}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** A small figure with its caption, for rows of figures. */
+export function Stat({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  sub?: ReactNode;
+  tone?: Tone;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-xs text-base-content/60">{label}</div>
+      <div className={`tabular truncate text-lg font-semibold ${tone ? TEXT[tone] : ""}`}>
+        {value}
+      </div>
+      {sub && <div className="truncate text-xs text-base-content/60">{sub}</div>}
     </div>
   );
 }

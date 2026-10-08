@@ -9,7 +9,7 @@
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, lines, OfflineError, request } from "./client";
-import type { Banks, Bridge, Firmware, Identity, Network, TcRules } from "./types";
+import type { Banks, Bridge, Firmware, Identity, Network, OmciValue, TcRules } from "./types";
 
 interface Value<T> {
   id: string;
@@ -27,6 +27,18 @@ export const identityQuery = queryOptions({
   queryFn: async () => (await request<Value<Identity>>("/api/get/identity")).value,
   staleTime: 30_000,
 });
+
+/* What the OLT set up: slow to read, and it changes only when the OLT says so. */
+export const omciQuery = queryOptions({
+  queryKey: ["omci"],
+  queryFn: async () => (await request<Value<OmciValue>>("/api/get/omci")).value,
+  staleTime: 20_000,
+  refetchInterval: 30_000,
+});
+
+export function useOmci() {
+  return useQuery(omciQuery);
+}
 
 export function useBanks() {
   return useQuery(banksQuery);

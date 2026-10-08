@@ -21,7 +21,7 @@ import {
   Settings2,
   WifiOff,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useSignOut } from "../api/auth";
 import { OfflineError } from "../api/client";
 import { useLive } from "../api/live";
@@ -37,26 +37,73 @@ const NAV: { to: string; key: Key; icon: ReactNode }[] = [
   { to: "/system", key: "nav.system", icon: <Settings2 className="size-4" /> },
 ];
 
-function Connection() {
+/** The time now, again every @ms milliseconds. */
+export function useNow(ms = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+  return now;
+}
+
+/*
+ * How long ago the stick last answered: green while the answers come as
+ * often as they are asked for, amber when one is late, red when the stick
+ * does not answer.
+ */
+function LastAnswer({ now }: { now: number }) {
   const { t, lang } = useI18n();
   const live = useLive();
   const offline = live.error instanceof OfflineError;
-  if (offline) {
-    return (
-      <span className="flex items-center gap-1.5 text-sm text-error">
-        <WifiOff className="size-4" />
-        <span className="hidden sm:inline">{t("connection.offline")}</span>
-      </span>
-    );
-  }
+  const at = live.dataUpdatedAt;
+  const age = at > 0 ? Math.max(0, Math.round((now - at) / 1000)) : null;
+  const ago =
+    age == null
+      ? null
+      : new Intl.RelativeTimeFormat(lang, { numeric: "always", style: "narrow" }).format(
+          -age,
+          "second",
+        );
+  const tone = offline
+    ? "bg-error"
+    : age == null
+      ? "bg-base-300"
+      : age > 12
+        ? "bg-warning"
+        : "bg-success";
+  const text = offline
+    ? ago
+      ? t("connection.silentSince", { ago })
+      : t("connection.offline")
+    : ago
+      ? t("connection.answered", { ago })
+      : t("connection.connecting");
   return (
-    <span className="flex items-center gap-1.5 text-sm text-base-content/70">
-      <span className={`size-2 rounded-full ${live.isSuccess ? "bg-success" : "bg-base-300"}`} />
-      <span className="hidden sm:inline">{t("connection.live")}</span>
-      {live.dataUpdatedAt > 0 && (
-        <span className="tabular hidden md:inline">· {clock(live.dataUpdatedAt, lang, true)}</span>
+    <span
+      className={`flex items-center gap-1.5 text-sm ${offline ? "text-error" : "text-base-content/70"}`}
+      title={at > 0 ? clock(at, lang, true) : undefined}
+    >
+      {offline ? (
+        <WifiOff className="size-4" />
+      ) : (
+        <span className={`size-2 rounded-full ${tone}`} />
       )}
+      <span className="tabular hidden sm:inline">{text}</span>
     </span>
+  );
+}
+
+function Clock({ now }: { now: number }) {
+  const { lang } = useI18n();
+  return (
+    <time
+      dateTime={new Date(now).toISOString()}
+      title={new Intl.DateTimeFormat(lang, { dateStyle: "full" }).format(now)}
+      className="tabular hidden text-sm font-medium md:inline"
+    >
+      {clock(now, lang, true)}
+    </time>
   );
 }
 
@@ -84,7 +131,8 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const live = useLive();
-  const model = live.data?.model;
+  const name = live.data?.hostname || live.data?.model;
+  const now = useNow();
 
   const nav = (
     <ul className="menu w-full gap-1 p-0">
@@ -109,7 +157,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
   return (
     <div className="drawer lg:drawer-open">
       <input id="nav-drawer" type="checkbox" className="drawer-toggle" />
-      <div className="drawer-content flex min-h-dvh flex-col">
+      <div className="drawer-content flex min-h-dvh flex-col lg:h-dvh lg:min-h-0">
         <header className="navbar sticky top-0 z-20 gap-2 border-b border-base-300 bg-base-100 px-3">
           <label
             htmlFor="nav-drawer"
@@ -121,10 +169,11 @@ export function AppShell({ children }: { children?: ReactNode }) {
           <div className="min-w-0 flex-1">
             <div className="truncate">
               <span className="font-semibold">{t("app.product")}</span>
-              {model && <span className="text-sm text-base-content/60"> · {model}</span>}
+              {name && <span className="text-sm text-base-content/60"> · {name}</span>}
             </div>
           </div>
-          <Connection />
+          <LastAnswer now={now} />
+          <Clock now={now} />
           <div className="dropdown dropdown-end">
             <button
               type="button"
@@ -172,7 +221,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
             </ul>
           </div>
         </header>
-        <main className="mx-auto w-full max-w-6xl flex-1 p-4 sm:p-6">
+        <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col p-4 sm:p-6 lg:min-h-0 lg:overflow-auto">
           <OfflineBar />
           {children ?? <Outlet />}
         </main>

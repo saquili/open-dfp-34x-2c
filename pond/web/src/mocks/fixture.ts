@@ -17,6 +17,8 @@ export const LIVE: Live = {
     total_kb: 25308,
     free_kb: 14664,
     available_kb: 17288,
+    buffers_kb: 0,
+    cached_kb: 5296,
   },
   kernel:
     "Linux version 6.18.48 (buildroot@buildroot) (mips-buildroot-linux-uclibc-gcc.br_real (Buildroot 2025.02.18) 14.4.0, GNU ld (GNU Binutils) 2.44) Thu Sep 10 19:15:00 UTC 2026",
@@ -27,6 +29,23 @@ export const LIVE: Live = {
     variant: "",
   },
   model: "ODI DFP-34X-2C3",
+  hostname: "dfp-34x-2c3",
+  cpu: {
+    ticks: {
+      user: 5209,
+      nice: 292,
+      system: 26732,
+      idle: 374601,
+      iowait: 0,
+      irq: 0,
+      softirq: 285,
+      steal: 0,
+    },
+    load: [0.28, 0.18, 0.13],
+    running: 1,
+    threads: 49,
+    model: "Lexra LX5281 V0.2",
+  },
   settings: {
     settings: {
       MODE: "",
@@ -54,13 +73,30 @@ export const LIVE: Live = {
         mac: "00:00:5e:00:53:a1",
         family: "ipv4",
         hands_on: true,
-        dev: "wan410",
-        gem_dev: "gem257",
+        dev: "wan100",
+        gem_dev: "gem278",
         ppp: "ppp0",
         ipv4: "203.0.113.24",
         ipv6: null,
         prefix: null,
         prefix_host: null,
+      },
+      {
+        id: 2,
+        user: "user@example.net/ipv6",
+        secret_set: true,
+        gem: "auto",
+        vlan: "410",
+        mac: "",
+        family: "ipv6",
+        hands_on: false,
+        dev: "wan100",
+        gem_dev: "gem278",
+        ppp: "ppp1",
+        ipv4: null,
+        ipv6: "2001:db8:ff00::1",
+        prefix: "2001:db8:1200::/56",
+        prefix_host: "fe80::2",
       },
     ],
     mode: "passthrough",
@@ -325,24 +361,64 @@ export const LIVE: Live = {
   },
   gem_ports: [
     {
-      name: "gem4095",
-      ifindex: 8,
-      master: null,
-      port_id: 4095,
-      direction: "downstream",
-      direction_bits: 2,
-      tcont: null,
-      multicast: true,
-    },
-    {
-      name: "gem257",
+      name: "gem278",
       ifindex: 9,
       master: null,
-      port_id: 257,
+      port_id: 278,
       direction: "both",
       direction_bits: 3,
       tcont: 0,
       multicast: false,
+    },
+    {
+      name: "gem279",
+      ifindex: 10,
+      master: null,
+      port_id: 279,
+      direction: "both",
+      direction_bits: 3,
+      tcont: 1,
+      multicast: false,
+    },
+    {
+      name: "gem280",
+      ifindex: 11,
+      master: "omcibr0",
+      port_id: 280,
+      direction: "both",
+      direction_bits: 3,
+      tcont: 2,
+      multicast: false,
+    },
+    {
+      name: "gem281",
+      ifindex: 12,
+      master: "omcibr0",
+      port_id: 281,
+      direction: "both",
+      direction_bits: 3,
+      tcont: 2,
+      multicast: false,
+    },
+    {
+      name: "gem2046",
+      ifindex: 13,
+      master: "omcibr0",
+      port_id: 2046,
+      direction: "downstream",
+      direction_bits: 2,
+      tcont: null,
+      multicast: false,
+    },
+    {
+      name: "gem2047",
+      ifindex: 14,
+      master: "omcibr0",
+      port_id: 2047,
+      direction: "downstream",
+      direction_bits: 2,
+      tcont: null,
+      multicast: true,
     },
   ],
   onu: {
@@ -353,7 +429,7 @@ export const LIVE: Live = {
     type: "gpon",
     state: "o5",
     onu_id: 1,
-    alloc_ids: [257],
+    alloc_ids: [271, 272, 282],
     omcc_port_id: 1,
     alarms: [],
     counters: {
@@ -378,17 +454,17 @@ export const LIVE: Live = {
     {
       onu: 0,
       index: 0,
-      alloc_id: 257,
+      alloc_id: 271,
     },
     {
       onu: 0,
       index: 1,
-      alloc_id: null,
+      alloc_id: 272,
     },
     {
       onu: 0,
       index: 2,
-      alloc_id: null,
+      alloc_id: 282,
     },
     {
       onu: 0,
@@ -424,17 +500,41 @@ export const LIVE: Live = {
     rx_power_uw: 2,
   },
   gem_counters: {
-    gem4095: {
+    gem278: {
+      pon_rx_octets: 12095584546,
+      pon_rx_frames: 9000000,
+      pon_tx_octets: 5378437884,
+      pon_tx_frames: 4200000,
+    },
+    gem279: {
+      pon_rx_octets: 19795,
+      pon_rx_frames: 0,
       pon_tx_octets: 0,
       pon_tx_frames: 0,
-      pon_rx_frames: 0,
-      pon_rx_octets: 0,
     },
-    gem257: {
-      pon_tx_octets: 6316599317,
-      pon_tx_frames: 2023314,
-      pon_rx_frames: 1866167,
-      pon_rx_octets: 2482606265,
+    gem280: {
+      pon_rx_octets: 0,
+      pon_rx_frames: 0,
+      pon_tx_octets: 0,
+      pon_tx_frames: 0,
+    },
+    gem281: {
+      pon_rx_octets: 9216,
+      pon_rx_frames: 0,
+      pon_tx_octets: 0,
+      pon_tx_frames: 0,
+    },
+    gem2046: {
+      pon_rx_octets: 0,
+      pon_rx_frames: 0,
+      pon_tx_octets: 0,
+      pon_tx_frames: 0,
+    },
+    gem2047: {
+      pon_rx_octets: 8917477610,
+      pon_rx_frames: 6500000,
+      pon_tx_octets: 0,
+      pon_tx_frames: 0,
     },
   },
 };
@@ -586,7 +686,13 @@ function link(name: string, ifindex: number, rest: Partial<Link>): Link {
   };
 }
 
-/* The stick as it runs with its own session: no bridge, VLANs on each port. */
+/*
+ * The stick as it runs on a line with internet, a phone and television: its
+ * own two PPPoE sessions on the internet channel, the address handed to
+ * the host on VLAN 36, and the phone and television bridged at L2 between
+ * the SFP port and their channels, in the host's VLANs 420 and 421 and the
+ * fibre's 200 and 300.
+ */
 export const NETWORK: Network = {
   links: [
     link("lo", 1, {
@@ -599,10 +705,8 @@ export const NETWORK: Network = {
     link("sfp", 3, {
       kind: "dsa",
       lower: "cpu",
-      addresses: [
-        { family: "ipv4", address: "192.0.2.254/30", link_local: false },
-        { family: "ipv6", address: "2001:db8::1/64", link_local: true },
-      ],
+      master: "omcibr0",
+      addresses: [{ family: "ipv6", address: "fe80::1/64", link_local: true }],
     }),
     link("pon", 4, { kind: "dsa", lower: "cpu", mtu: 1508 }),
     link("mgmt", 5, {
@@ -617,10 +721,21 @@ export const NETWORK: Network = {
       vlan: 36,
       addresses: [{ family: "ipv4", address: "169.254.0.1/32", link_local: false }],
     }),
-    link("gem4095", 8, { kind: "gem", lower: "pon", operstate: "unknown" }),
-    link("gem257", 9, { kind: "gem", lower: "pon", operstate: "unknown", mtu: 1508 }),
-    link("wan410", 10, { kind: "vlan", lower: "gem257", vlan: 410, mtu: 1508 }),
-    link("ppp0", 11, { kind: "ppp", operstate: "unknown", mtu: 1492, mac: null }),
+    link("gem2047", 8, { kind: "gem", lower: "pon", master: "omcibr0", operstate: "unknown" }),
+    link("gem278", 9, { kind: "gem", lower: "pon", operstate: "unknown", mtu: 1508 }),
+    link("gem279", 10, { kind: "gem", lower: "pon", operstate: "unknown" }),
+    link("gem2046", 11, { kind: "gem", lower: "pon", master: "omcibr0", operstate: "unknown" }),
+    link("gem280", 12, { kind: "gem", lower: "pon", master: "omcibr0", operstate: "unknown" }),
+    link("omcibr0", 13, { kind: "bridge" }),
+    link("gem281", 14, { kind: "gem", lower: "pon", master: "omcibr0", operstate: "unknown" }),
+    link("wan100", 15, { kind: "vlan", lower: "gem278", vlan: 100, mtu: 1508 }),
+    link("ppp0", 16, { kind: "ppp", operstate: "unknown", mac: null }),
+    link("ppp1", 17, {
+      kind: "ppp",
+      operstate: "unknown",
+      mac: null,
+      addresses: [{ family: "ipv6", address: "fe80::1/128", link_local: true }],
+    }),
   ],
   routes: [
     {
@@ -629,15 +744,6 @@ export const NETWORK: Network = {
       gateway: null,
       dev: "ppp0",
       protocol: "static",
-      metric: 0,
-      offloaded: false,
-    },
-    {
-      family: "ipv4",
-      destination: "192.0.2.252/30",
-      gateway: null,
-      dev: "sfp",
-      protocol: "kernel",
       metric: 0,
       offloaded: false,
     },
@@ -661,6 +767,15 @@ export const NETWORK: Network = {
     },
     {
       family: "ipv6",
+      destination: "2001:db8:1200::/56",
+      gateway: "fe80::2",
+      dev: "lan",
+      protocol: "dhcp",
+      metric: 1024,
+      offloaded: false,
+    },
+    {
+      family: "ipv6",
       destination: "fe80::/64",
       gateway: null,
       dev: "sfp",
@@ -668,8 +783,24 @@ export const NETWORK: Network = {
       metric: 256,
       offloaded: false,
     },
+    {
+      family: "ipv6",
+      destination: "default",
+      gateway: "fe80::1",
+      dev: "ppp1",
+      protocol: "dhcp",
+      metric: 1024,
+      offloaded: false,
+    },
   ],
   neighbours: [
+    {
+      family: "ipv4",
+      address: "203.0.113.24",
+      mac: HOST_MAC,
+      dev: "lan",
+      state: "stale",
+    },
     {
       family: "ipv4",
       address: "192.0.2.249",
@@ -678,11 +809,11 @@ export const NETWORK: Network = {
       state: "reachable",
     },
     {
-      family: "ipv4",
-      address: "203.0.113.24",
+      family: "ipv6",
+      address: "fe80::2",
       mac: HOST_MAC,
       dev: "lan",
-      state: "stale",
+      state: "reachable",
     },
   ],
 };
@@ -702,17 +833,35 @@ const fdb = (dev: string, ifindex: number, addr: string, rest: Partial<Bridge["f
   ...rest,
 });
 
+const bridged = (dev: string, vlans: number[]) =>
+  vlans.map((vlan) => ({
+    dev,
+    vlan,
+    pvid: false,
+    egress_untagged: false,
+    range_begin: false,
+    range_end: false,
+  }));
+
 export const BRIDGE: Bridge = {
   fdb: [
     fdb("cpu", 2, "33:33:00:00:00:01", {}),
     fdb("cpu", 2, "01:00:5e:00:00:01", {}),
+    fdb("sfp", 3, STICK_MAC, { vlan: 421, master: "omcibr0", self: false }),
+    fdb("sfp", 3, STICK_MAC, { vlan: 420, master: "omcibr0", self: false }),
     fdb("sfp", 3, HOST_MAC, { vlan: 4094, state: "static" }),
-    fdb("sfp", 3, HOST_MAC, { vlan: 4094, state: "reachable", learned: true }),
     fdb("sfp", 3, HOST_MAC, { vlan: 36, state: "static" }),
-    fdb("pon", 4, "00:00:5e:00:53:03", { vlan: 410, state: "static" }),
-    fdb("gem257", 9, STICK_MAC, {}),
+    fdb("pon", 4, "00:00:5e:00:53:04", { vlan: 300, state: "reachable", learned: true }),
+    fdb("pon", 4, "00:00:5e:00:53:03", { vlan: 100, state: "static" }),
+    fdb("gem278", 9, STICK_MAC, {}),
+    fdb("gem280", 12, STICK_MAC, { vlan: 200, master: "omcibr0", self: false }),
   ],
-  vlans: [],
+  vlans: [
+    ...bridged("sfp", [420, 421, 200, 300]),
+    ...bridged("gem2047", [420, 421, 200, 300]),
+    ...bridged("gem2046", [420, 421, 200, 300]),
+    ...bridged("gem280", [420, 200]),
+    ...bridged("gem281", [421, 300]),
+  ],
 };
-
 export const TC_RULES: TcRules = { sfp: { ingress: [] }, pon: { ingress: [] } };

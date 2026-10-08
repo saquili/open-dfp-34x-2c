@@ -87,6 +87,7 @@ describe("the VLAN of a session on the fibre", () => {
     if (!s) throw new Error("a session");
     s.vlan = "410";
     s.dev = "wan1410";
+    for (const x of live.settings?.sessions ?? []) x.dev = "wan1410";
     const g = gems(live).find((x) => x.use === "session");
     expect(g?.vlan).toBe("1410");
   });

@@ -22,6 +22,27 @@ export interface Memory {
   total_kb: number;
   free_kb: number;
   available_kb: number;
+  /** Absent from a stick whose pond predates them. */
+  buffers_kb?: number;
+  cached_kb?: number;
+}
+
+/** The processor: clock ticks in each state since the start, the load, the model. */
+export interface Cpu {
+  ticks: {
+    user: number;
+    nice: number;
+    system: number;
+    idle: number;
+    iowait: number;
+    irq: number;
+    softirq: number;
+    steal: number;
+  };
+  load: [number, number, number];
+  running: number;
+  threads: number;
+  model: string;
 }
 
 export interface Image {
@@ -238,6 +259,9 @@ export interface Live {
   tconts: Tcont[];
   optics: Optics | null;
   settings: Settings;
+  /** null from a stick whose pond does not serve them yet. */
+  cpu: Cpu | null;
+  hostname: string | null;
 }
 
 export const LIVE_IDS: (keyof Live)[] = [
@@ -254,6 +278,8 @@ export const LIVE_IDS: (keyof Live)[] = [
   "tconts",
   "optics",
   "settings",
+  "cpu",
+  "hostname",
 ];
 
 /**
@@ -273,7 +299,33 @@ export interface Identity {
   omcc_version: string;
   vendor_product_code: string;
   tm_option: string;
+  /** Absent from a stick whose pond predates them. */
+  loid?: string;
+  loid_password_set?: boolean;
+  sw_version?: string;
+  sw_version0?: string;
+  sw_version1?: string;
+  pack_version?: string;
   source: "store" | "factory" | null;
+}
+
+/**
+ * What the OLT set up, as omcid holds it: each instance of the classes pond
+ * reads, every attribute in hexadecimal (null for a password), and which of
+ * them are tables, whose value is the rows end to end.
+ */
+export interface OmciValue {
+  mes: {
+    class: number;
+    instance: number;
+    attrs?: Record<string, string | null>;
+    tables?: number[];
+    /** omcid could not dump it. */
+    error?: number;
+  }[];
+  truncated: boolean;
+  logical_password_set: boolean;
+  frames: { handled: number; rejected: number; answered: number } | null;
 }
 
 export interface LinkAddress {

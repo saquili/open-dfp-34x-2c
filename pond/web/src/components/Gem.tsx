@@ -28,5 +28,15 @@ export function useGemText() {
         ? t("fibre.useBridged", { bridge: v.bridge ?? "" })
         : t("fibre.useEnds");
 
-  return { direction, use };
+  /** A word or two for the drawing. */
+  const short = (v: GemView) =>
+    v.gem.multicast
+      ? t("diagram.useMulticast")
+      : v.use === "session"
+        ? t("diagram.useSession")
+        : v.use === "bridged"
+          ? t("diagram.useBridged")
+          : t("diagram.useEnds");
+
+  return { direction, use, short };
 }

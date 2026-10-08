@@ -3,11 +3,12 @@
 
 /*
  * The path of the traffic through the stick, drawn: the host, the SFP
- * port, the switch with the processor beside it, the GPON MAC with the
- * channels the OLT set up, the fibre and the OLT. A line grows with the
- * traffic it carries and is labelled with it; a part is coloured by its
- * state, and a click on it opens its page. Below a phone's width the drawing
- * turns upright, the operator at the top and the host at the bottom.
+ * port, the switch with the processor beside it, the GPON MAC, the fibre
+ * and the OLT, and below them every channel (GEM port) the OLT set up, with
+ * its own traffic. A line grows with the traffic it carries and is labelled
+ * with it; a part is coloured by its state, and a click on it opens its
+ * page. Below a phone's width the drawing turns upright, the operator at the
+ * top and the host at the bottom, the channels under it all.
  */
 
 import { useNavigate } from "@tanstack/react-router";
@@ -24,12 +25,16 @@ import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { Rates } from "../api/live";
 import type { Live } from "../api/types";
 import { useI18n } from "../i18n";
-import { bitrate, dbmText, integer } from "../lib/format";
+import { bitrate, dbmText, decimal, integer, percent } from "../lib/format";
 import {
   fibre as fibreView,
+  type GemView,
+  GPON_DOWN_BPS,
+  GPON_UP_BPS,
   gems as gemViews,
   hostLink,
   LIGHT_TONE,
+  laneMode,
   linkSpeed,
   session as sessionView,
   type Tone,
@@ -42,36 +47,40 @@ type Seg = readonly [Pt, Pt];
 type Part = "host" | "sfp" | "switch" | "cpu" | "ponmac" | "olt";
 
 interface Layout {
-  view: [number, number];
+  width: number;
+  /** The drawing's height without the channels. */
+  height: number;
   box: Record<Part, Box>;
-  gems: Box;
+  /** Where the channels start, how many sit in a row and how big each is. */
+  gems: { x: number; y: number; cols: number; w: number; h: number; gap: number };
 }
 
-/* The gaps that carry labels (host-SFP, MAC-OLT) are wide enough for a rate. */
 const WIDE: Layout = {
-  view: [1100, 290],
+  width: 1100,
+  height: 290,
   box: {
-    host: { x: 8, y: 40, w: 150, h: 84 },
-    sfp: { x: 278, y: 40, w: 140, h: 84 },
-    switch: { x: 488, y: 40, w: 140, h: 84 },
-    cpu: { x: 488, y: 196, w: 140, h: 84 },
-    ponmac: { x: 698, y: 40, w: 140, h: 84 },
-    olt: { x: 958, y: 40, w: 134, h: 84 },
+    host: { x: 8, y: 40, w: 150, h: 88 },
+    sfp: { x: 278, y: 40, w: 150, h: 88 },
+    switch: { x: 488, y: 40, w: 150, h: 88 },
+    cpu: { x: 488, y: 196, w: 150, h: 88 },
+    ponmac: { x: 698, y: 40, w: 180, h: 88 },
+    olt: { x: 958, y: 40, w: 134, h: 88 },
   },
-  gems: { x: 698, y: 150, w: 140, h: 26 },
+  gems: { x: 698, y: 172, cols: 3, w: 124, h: 40, gap: 10 },
 };
 
 const TALL: Layout = {
-  view: [360, 760],
+  width: 360,
+  height: 760,
   box: {
-    olt: { x: 20, y: 10, w: 190, h: 72 },
-    ponmac: { x: 20, y: 172, w: 190, h: 72 },
-    switch: { x: 20, y: 334, w: 190, h: 72 },
-    cpu: { x: 228, y: 334, w: 122, h: 72 },
-    sfp: { x: 20, y: 496, w: 190, h: 72 },
-    host: { x: 20, y: 658, w: 190, h: 72 },
+    olt: { x: 20, y: 10, w: 200, h: 76 },
+    ponmac: { x: 20, y: 172, w: 200, h: 76 },
+    switch: { x: 20, y: 334, w: 200, h: 76 },
+    cpu: { x: 236, y: 334, w: 114, h: 76 },
+    sfp: { x: 20, y: 496, w: 200, h: 76 },
+    host: { x: 20, y: 658, w: 200, h: 76 },
   },
-  gems: { x: 228, y: 172, w: 122, h: 24 },
+  gems: { x: 20, y: 780, cols: 2, w: 160, h: 40, gap: 10 },
 };
 
 const TONE_COLOR: Record<Tone, string> = {
@@ -80,6 +89,14 @@ const TONE_COLOR: Record<Tone, string> = {
   bad: "var(--color-error)",
   info: "var(--color-info)",
   neutral: "var(--color-base-300)",
+};
+
+/* The colour of a channel's mark: what the stick does with it. */
+const USE_COLOR: Record<GemView["use"] | "multicast", string> = {
+  session: "var(--color-primary)",
+  bridged: "var(--color-info)",
+  ends: "var(--color-base-300)",
+  multicast: "var(--color-secondary)",
 };
 
 /** A line's width for a rate: a hair when idle, a thick line near a gigabit. */
@@ -100,11 +117,20 @@ function useNarrow(ref: React.RefObject<HTMLDivElement | null>): boolean {
   return narrow;
 }
 
+function activate(open: () => void) {
+  return (e: KeyboardEvent<SVGGElement>) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      open();
+    }
+  };
+}
+
 function Node({
   box,
   icon: Icon,
   title,
-  sub,
+  lines,
   tone,
   onOpen,
   tip,
@@ -112,25 +138,19 @@ function Node({
   box: Box;
   icon: LucideIcon;
   title: string;
-  sub: string;
+  lines: string[];
   tone: Tone;
   onOpen: () => void;
   tip: string;
 }) {
-  const key = (e: KeyboardEvent<SVGGElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onOpen();
-    }
-  };
   return (
     // biome-ignore lint/a11y/useSemanticElements: an SVG group cannot be a <button>
     <g
       role="button"
       tabIndex={0}
-      aria-label={`${title}: ${sub}`}
+      aria-label={`${title}: ${lines.join(", ")}`}
       onClick={onOpen}
-      onKeyDown={key}
+      onKeyDown={activate(onOpen)}
       className="cursor-pointer outline-none [&:focus-visible>rect]:stroke-[3] [&:hover>rect]:fill-[var(--color-base-200)]"
     >
       <title>{tip}</title>
@@ -148,9 +168,16 @@ function Node({
       <text x={box.x + 40} y={box.y + 28} className="fill-current text-[15px] font-semibold">
         {title}
       </text>
-      <text x={box.x + 12} y={box.y + box.h - 16} className="fill-current text-[13px] opacity-70">
-        {sub}
-      </text>
+      {lines.map((l, i) => (
+        <text
+          key={l}
+          x={box.x + 12}
+          y={box.y + box.h - 16 - (lines.length - 1 - i) * 18}
+          className={`tabular fill-current text-[13px] ${i === 0 ? "opacity-80" : "opacity-60"}`}
+        >
+          {l}
+        </text>
+      ))}
     </g>
   );
 }
@@ -163,8 +190,8 @@ function Edge({
   color = "var(--color-base-content)",
   opacity = 0.35,
 }: {
-  from: { x: number; y: number };
-  to: { x: number; y: number };
+  from: Pt;
+  to: Pt;
   bps?: number;
   dashed?: boolean;
   color?: string;
@@ -207,6 +234,74 @@ function Label({
   );
 }
 
+/** One channel: its Port-ID and direction, its traffic, and what the stick does with it. */
+function Channel({
+  v,
+  box,
+  rate,
+  onOpen,
+}: {
+  v: GemView;
+  box: Box;
+  rate: { down: number; up: number } | undefined;
+  onOpen: () => void;
+}) {
+  const { t, lang } = useI18n();
+  const gem = useGemText();
+  const g = v.gem;
+  const arrow = g.multicast
+    ? "↓"
+    : g.direction === "both"
+      ? "↕"
+      : g.direction === "downstream"
+        ? "↓"
+        : "↑";
+  const traffic =
+    g.direction === "downstream" || g.multicast
+      ? `↓ ${bitrate(rate?.down ?? 0, lang)}`
+      : `↓ ${bitrate(rate?.down ?? 0, lang)}  ↑ ${bitrate(rate?.up ?? 0, lang)}`;
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: an SVG group cannot be a <button>
+    <g
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={activate(onOpen)}
+      className="cursor-pointer outline-none [&:focus-visible>rect]:stroke-[2] [&:hover>rect]:fill-[var(--color-base-200)]"
+    >
+      <title>{`${t("diagram.gem", { id: g.port_id })} · ${gem.direction(g)} · ${gem.use(v)}`}</title>
+      <rect
+        x={box.x}
+        y={box.y}
+        width={box.w}
+        height={box.h}
+        rx={8}
+        fill="var(--color-base-100)"
+        stroke="var(--color-base-300)"
+      />
+      <rect
+        x={box.x}
+        y={box.y}
+        width={5}
+        height={box.h}
+        rx={2}
+        fill={USE_COLOR[g.multicast ? "multicast" : v.use]}
+      />
+      <text
+        x={box.x + 12}
+        y={box.y + 16}
+        className="tabular fill-current text-[12px] font-semibold"
+      >
+        {`${g.port_id} ${arrow}`}
+        <tspan className="font-normal opacity-60">{` ${gem.short(v)}`}</tspan>
+      </text>
+      <text x={box.x + 12} y={box.y + 32} className="tabular fill-current text-[11px] opacity-70">
+        {traffic}
+      </text>
+    </g>
+  );
+}
+
 export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | undefined }) {
   const { t, lang } = useI18n();
   const navigate = useNavigate();
@@ -221,10 +316,12 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
   const go = (to: string) => () => navigate({ to });
 
   const channels = gemViews(live);
-  const shown = channels.slice(0, 4);
-  const gem = useGemText();
+  const rows = Math.ceil(channels.length / L.gems.cols);
+  const gemsBottom = L.gems.y + 22 + rows * (L.gems.h + L.gems.gap);
+  const height = Math.max(L.height, channels.length ? gemsBottom : L.height);
   const down = (v?: number) => `↓ ${bitrate(v, lang)}`;
   const up = (v?: number) => `↑ ${bitrate(v, lang)}`;
+  const gbit = (bps: number) => decimal(bps / 1e9, 2, lang);
 
   /* Edges run between the facing sides of two boxes. */
   const right = (x: Box) => ({ x: x.x + x.w, y: x.y + x.h / 2 });
@@ -243,12 +340,26 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
   const mid = ([a, z]: Seg) => ({ x: (a.x + z.x) / 2, y: (a.y + z.y) / 2 });
   const fibreMid = mid(ponOlt);
   const linkMid = mid(hostSfp);
+  const lane = laneMode(live);
+  const cpuLines = [
+    t("diagram.cpuLimit"),
+    [
+      t("diagram.frames", { n: integer(rate?.cpuFrames ?? 0, lang) }),
+      rate?.cpuBusy != null ? percent(rate.cpuBusy, lang) : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  ];
+
+  /* The channels hang from the PON MAC: a bracket from it to their row. */
+  const bracketY = L.gems.y + 6;
+  const gemsRight = L.gems.x + L.gems.cols * (L.gems.w + L.gems.gap) - L.gems.gap;
 
   return (
     <div ref={wrap} className="w-full">
       {/* biome-ignore lint/a11y/useSemanticElements: the drawing groups its clickable parts */}
       <svg
-        viewBox={`0 0 ${L.view[0]} ${L.view[1]}`}
+        viewBox={`0 0 ${L.width} ${height}`}
         className="w-full text-base-content"
         role="group"
         aria-label={t("diagram.title")}
@@ -278,9 +389,13 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           <>
             <Label
               x={linkMid.x + 14}
-              y={linkMid.y - 4}
+              y={linkMid.y - 12}
               anchor="start"
-              lines={[down(rate?.lanDown), up(rate?.lanUp)]}
+              lines={[
+                linkSpeed(link.speedMbit, lang) ?? t("overview.noLink"),
+                down(rate?.lanDown),
+                up(rate?.lanUp),
+              ]}
             />
             <Label
               x={fibreMid.x + 14}
@@ -314,114 +429,108 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           box={b.host}
           icon={HostIcon}
           title={t("diagram.host")}
-          sub={
+          lines={[
             s.up && s.address
               ? s.address
               : link.up
-                ? (linkSpeed(link.speedMbit, lang) ?? "")
-                : t("overview.noLink")
-          }
+                ? t("diagram.hostLinked")
+                : t("overview.noLink"),
+          ]}
           tone={link.up ? "good" : "bad"}
           onOpen={go("/sfp")}
-          tip={t("diagram.host")}
+          tip={t("diagram.hostTip")}
         />
         <Node
           box={b.sfp}
           icon={Network}
           title={t("diagram.sfp")}
-          sub={link.up ? (linkSpeed(link.speedMbit, lang) ?? "") : t("overview.noLink")}
+          lines={[lane ?? "–", link.up ? t("sfp.up") : t("overview.noLink")]}
           tone={link.up ? "good" : "bad"}
           onOpen={go("/sfp")}
-          tip={t("diagram.sfp")}
+          tip={t("diagram.sfpTip")}
         />
         <Node
           box={b.switch}
           icon={ServerCog}
           title={t("diagram.switch")}
-          sub="RTL9602C"
+          lines={["RTL9602C"]}
           tone="neutral"
-          onOpen={go("/system")}
-          tip={t("diagram.switch")}
+          onOpen={go("/switch")}
+          tip={t("diagram.switchTip")}
         />
         <Node
           box={b.cpu}
           icon={Cpu}
           title={t("diagram.cpu")}
-          sub={t("diagram.frames", { n: integer(rate?.cpuFrames ?? 0, lang) })}
+          lines={cpuLines}
           tone="neutral"
-          onOpen={go("/internet")}
-          tip={t("diagram.cpuSub")}
+          onOpen={go("/system")}
+          tip={t("diagram.cpuTip")}
         />
         <Node
           box={b.ponmac}
           icon={Radio}
           title={t("diagram.ponmac")}
-          sub={t(`state.${f.stateKey}`)}
+          lines={[
+            t("diagram.gponRate", { down: gbit(GPON_DOWN_BPS), up: gbit(GPON_UP_BPS) }),
+            f.onuId != null
+              ? `${t(`state.${f.stateKey}`)} · ONU ${f.onuId}`
+              : t(`state.${f.stateKey}`),
+          ]}
           tone={f.tone}
           onOpen={go("/fibre")}
-          tip={t("diagram.ponmac")}
+          tip={t("diagram.ponmacTip")}
         />
         <Node
           box={b.olt}
           icon={Globe}
           title={tall ? t("diagram.olt") : "OLT"}
-          sub={t(`light.${f.quality}`)}
+          lines={[t(`light.${f.quality}`)]}
           tone={LIGHT_TONE[f.quality]}
           onOpen={go("/fibre")}
           tip={t("diagram.olt")}
         />
 
-        {shown.map((v, i) => {
-          const g = v.gem;
-          const y = L.gems.y + i * (L.gems.h + 6);
-          const kind = g.multicast
-            ? t("diagram.multicast")
-            : g.direction === "both"
-              ? "↕"
-              : g.direction === "downstream"
-                ? "↓"
-                : "↑";
-          return (
-            // biome-ignore lint/a11y/useSemanticElements: an SVG group cannot be a <button>
-            <g
-              key={g.name}
-              role="button"
-              tabIndex={0}
-              onClick={go("/fibre")}
-              onKeyDown={(e) => e.key === "Enter" && navigate({ to: "/fibre" })}
-              className="cursor-pointer outline-none"
+        {channels.length > 0 && (
+          <>
+            <path
+              d={
+                tall
+                  ? `M ${L.gems.x} ${bracketY} H ${gemsRight}`
+                  : `M ${bottom(b.ponmac).x} ${b.ponmac.y + b.ponmac.h} V ${bracketY} M ${L.gems.x} ${bracketY} H ${gemsRight}`
+              }
+              fill="none"
+              stroke="var(--color-base-content)"
+              strokeOpacity={0.2}
+            />
+            <text
+              x={L.gems.x}
+              y={bracketY - 6}
+              className="fill-current text-[12px] font-medium opacity-70"
             >
-              <title>{`${t("diagram.gem", { id: g.port_id })} · ${gem.direction(g)} · ${gem.use(v)}`}</title>
-              <rect
-                x={L.gems.x}
-                y={y}
-                width={L.gems.w}
-                height={L.gems.h}
-                rx={L.gems.h / 2}
-                fill="var(--color-base-200)"
-                stroke="var(--color-base-300)"
-              />
-              <text
-                x={L.gems.x + 12}
-                y={y + L.gems.h / 2 + 4}
-                className="tabular fill-current text-[12px]"
-              >
-                {`${t("diagram.gem", { id: g.port_id })} · ${kind}`}
-              </text>
-            </g>
-          );
-        })}
-        {channels.length > shown.length && (
-          <text
-            x={L.gems.x + 12}
-            y={L.gems.y + shown.length * (L.gems.h + 6) + 14}
-            className="fill-current text-[12px] opacity-70"
-          >
-            +{channels.length - shown.length}
-          </text>
+              {t("diagram.gems", { n: channels.length })}
+            </text>
+            {channels.map((v, i) => {
+              const col = i % L.gems.cols;
+              const row = Math.floor(i / L.gems.cols);
+              return (
+                <Channel
+                  key={v.gem.name}
+                  v={v}
+                  rate={rate?.gems[v.gem.name]}
+                  onOpen={go("/fibre")}
+                  box={{
+                    x: L.gems.x + col * (L.gems.w + L.gems.gap),
+                    y: L.gems.y + 16 + row * (L.gems.h + L.gems.gap),
+                    w: L.gems.w,
+                    h: L.gems.h,
+                  }}
+                />
+              );
+            })}
+          </>
         )}
       </svg>
-      <p className="mt-2 text-xs text-base-content/60">{t("diagram.hint")}</p>
     </div>
   );
 }

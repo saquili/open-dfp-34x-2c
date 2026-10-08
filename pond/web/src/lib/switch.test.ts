@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 import { describe, expect, it } from "vitest";
-import type { Network } from "../api/types";
 import { BRIDGE, LIVE, NETWORK } from "../mocks/fixture";
 import { gems } from "./state";
 import { isSystemEntry, shownRoutes, sideOf, switchView } from "./switch";
@@ -26,60 +25,41 @@ describe("what the switch is doing", () => {
     ]);
   });
 
-  it("hangs the session under its VLAN, and the VLAN under its GEM port", () => {
+  it("hangs the sessions under their VLAN, and the VLAN under its GEM port", () => {
     const pon = v.ports[1];
-    const gem257 = pon?.ifaces.find((i) => i.link.name === "gem257");
-    expect(gem257?.role).toBe("channel");
-    expect(gem257?.children.map((c) => [c.link.name, c.role])).toEqual([["wan410", "wan"]]);
-    expect(gem257?.children[0]?.children.map((c) => [c.link.name, c.role])).toEqual([
+    const gem278 = pon?.ifaces.find((i) => i.link.name === "gem278");
+    expect(gem278?.role).toBe("channel");
+    expect(gem278?.children.map((c) => [c.link.name, c.role])).toEqual([["wan100", "wan"]]);
+    expect(gem278?.children[0]?.children.map((c) => [c.link.name, c.role])).toEqual([
       ["ppp0", "session"],
+      ["ppp1", "session"],
     ]);
   });
 
   it("knows the stick routes between the host's VLAN and its own session", () => {
-    expect(v.routed).toEqual({ lanVlan: 36, wanVlan: 410, gem: "gem257" });
-    expect(v.bridges).toEqual([]);
+    expect(v.routed).toEqual({ lanVlan: 36, wanVlan: 100, gem: "gem278" });
   });
 
   it("names the interfaces the stick can be reached on, and not the loopback", () => {
-    expect(v.management.map((l) => l.name)).toEqual(["sfp", "mgmt"]);
+    expect(v.management.map((l) => l.name)).toEqual(["mgmt"]);
   });
 
-  it("sees a bridge that joins the SFP port and a GEM port as spanning both sides", () => {
-    const bridged: Network = {
-      ...NETWORK,
-      links: [
-        ...NETWORK.links.map((l) =>
-          l.name === "sfp" || l.name === "gem4095" ? { ...l, master: "omcibr0" } : l,
-        ),
-        {
-          name: "omcibr0",
-          ifindex: 20,
-          kind: "bridge",
-          lower: null,
-          vlan: null,
-          master: null,
-          operstate: "up",
-          admin_up: true,
-          mtu: 1500,
-          mac: null,
-          addresses: [],
-        },
-      ],
-    };
-    const b = switchView(bridged, LIVE);
-    expect(b.bridges).toHaveLength(1);
-    expect(b.bridges[0]?.spans).toBe(true);
-    expect(b.bridges[0]?.members.map((m) => [m.link.name, m.side])).toEqual([
+  it("sees the bridge of the phone and television as joining both sides", () => {
+    expect(v.bridges).toHaveLength(1);
+    expect(v.bridges[0]?.spans).toBe(true);
+    expect(v.bridges[0]?.members.map((m) => [m.link.name, m.side])).toEqual([
       ["sfp", "host"],
-      ["gem4095", "operator"],
+      ["gem2047", "operator"],
+      ["gem2046", "operator"],
+      ["gem280", "operator"],
+      ["gem281", "operator"],
     ]);
-    const gem = b.ports[1]?.ifaces.find((i) => i.link.name === "gem4095");
+    const gem = v.ports[1]?.ifaces.find((i) => i.link.name === "gem280");
     expect(gem?.role).toBe("bridged");
   });
 
   it("follows a VLAN down to the port it ends up on", () => {
-    expect(sideOf(NETWORK.links, "wan410")).toBe("operator");
+    expect(sideOf(NETWORK.links, "wan100")).toBe("operator");
     expect(sideOf(NETWORK.links, "mgmt")).toBe("host");
     expect(sideOf(NETWORK.links, "ppp0")).toBe(null);
   });
@@ -87,7 +67,7 @@ describe("what the switch is doing", () => {
   it("leaves the stick's own MAC entries out unless asked", () => {
     const shown = BRIDGE.fdb.filter((e) => !isSystemEntry(e));
     expect(shown.every((e) => !e.addr?.startsWith("33:33:"))).toBe(true);
-    expect(shown.some((e) => e.dev === "gem257")).toBe(false);
+    expect(shown.some((e) => e.dev === "gem278")).toBe(false);
     expect(shown.length).toBe(4);
   });
 
@@ -99,8 +79,12 @@ describe("what the switch is doing", () => {
 
   it("gives each channel its allocation and its use", () => {
     expect(gems(LIVE).map((g) => [g.gem.port_id, g.allocId, g.use])).toEqual([
-      [257, 257, "session"],
-      [4095, null, "ends"],
+      [278, 271, "session"],
+      [279, 272, "ends"],
+      [280, 282, "bridged"],
+      [281, 282, "bridged"],
+      [2046, null, "bridged"],
+      [2047, null, "bridged"],
     ]);
   });
 });

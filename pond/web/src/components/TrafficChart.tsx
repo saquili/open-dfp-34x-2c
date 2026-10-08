@@ -23,11 +23,14 @@ export function TrafficChart({
   down,
   up,
   slots = 120,
+  fill = false,
 }: {
   data: Rates[];
   down: (r: Rates) => number;
   up: (r: Rates) => number;
   slots?: number;
+  /** Take the height the parent gives, instead of a fixed one. */
+  fill?: boolean;
 }) {
   const { t, lang } = useI18n();
   const [hover, setHover] = useState<number | null>(null);
@@ -47,11 +50,11 @@ export function TrafficChart({
   const point = hover != null ? data[hover] : undefined;
 
   return (
-    <div className="relative">
+    <div className={`relative ${fill ? "flex h-full min-h-0 flex-col" : ""}`}>
       <svg
         viewBox={`0 0 ${W} ${H}`}
         preserveAspectRatio="none"
-        className="h-40 w-full touch-none text-base-content"
+        className={`w-full touch-none text-base-content ${fill ? "min-h-24 flex-1" : "h-40"}`}
         role="img"
         aria-label={t("overview.lastMinutes")}
         onPointerMove={(e) => pick(e.clientX, e.currentTarget.getBoundingClientRect())}
@@ -123,6 +126,95 @@ export function TrafficChart({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * A figure over the last ten minutes as a line, on a scale from @min to
+ * @max, with the latest value and the range in words.
+ */
+export function Sparkline({
+  data,
+  value,
+  min,
+  max,
+  format,
+  slots = 120,
+  tone = "var(--color-primary)",
+  bars = false,
+  label = "",
+}: {
+  data: Rates[];
+  value: (r: Rates) => number | null;
+  min: number;
+  max: number;
+  format: (v: number) => string;
+  slots?: number;
+  tone?: string;
+  /** Bars from the bottom, for counts; a line otherwise. */
+  bars?: boolean;
+  /** What the chart shows, for those who cannot see it. */
+  label?: string;
+}) {
+  const points = data.map((r, i) => ({ i, v: value(r) })).filter((p) => p.v != null) as {
+    i: number;
+    v: number;
+  }[];
+  const x = (i: number) => W - (data.length - 1 - i) * (W / (slots - 1));
+  const y = (v: number) =>
+    BOTTOM - ((BOTTOM - TOP) * (Math.min(max, Math.max(min, v)) - min)) / (max - min || 1);
+  return (
+    <div className="relative flex h-full min-h-20 flex-col">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="min-h-16 w-full flex-1 text-base-content"
+        role="img"
+        aria-label={label}
+      >
+        {[0, 0.5, 1].map((f) => (
+          <line
+            key={f}
+            x1={0}
+            x2={W}
+            y1={TOP + (BOTTOM - TOP) * f}
+            y2={TOP + (BOTTOM - TOP) * f}
+            stroke="currentColor"
+            strokeOpacity={0.12}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        {bars
+          ? points.map((p) => (
+              <line
+                key={p.i}
+                x1={x(p.i)}
+                x2={x(p.i)}
+                y1={BOTTOM}
+                y2={p.v > 0 ? Math.min(BOTTOM - 2, y(p.v)) : BOTTOM}
+                stroke={tone}
+                strokeWidth={3}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))
+          : points.length > 1 && (
+              <polyline
+                points={points.map((p) => `${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")}
+                fill="none"
+                stroke={tone}
+                strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+      </svg>
+      <div className="pointer-events-none absolute top-0 left-1 text-[11px] text-base-content/55">
+        {format(max)}
+      </div>
+      <div className="pointer-events-none flex justify-between text-[11px] text-base-content/55">
+        <span>−10 min</span>
+        <span>{format(min)}</span>
+      </div>
     </div>
   );
 }
