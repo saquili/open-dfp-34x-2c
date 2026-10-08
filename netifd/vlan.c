@@ -1,0 +1,330 @@
+/*
+ * netifd - network interface daemon
+ * Copyright (C) 2012 Felix Fietkau <nbd@openwrt.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+#include <errno.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <ctype.h>
+
+#include "netifd.h"
+#include "system.h"
+
+struct vlan_device {
+	struct device dev;
+	struct device_user dep;
+
+	device_state_cb set_state;
+	int id;
+};
+
+static void free_vlan_if(struct device *iface)
+{
+	struct vlan_device *vldev;
+
+	vldev = container_of(iface, struct vlan_device, dev);
+	device_remove_user(&vldev->dep);
+	device_cleanup(&vldev->dev);
+	free(vldev);
+}
+
+static int
+__vlan_hotplug_op(struct device *dev, struct device *member, struct blob_attr *vlan, bool add)
+{
+	struct vlan_device *vldev = container_of(dev, struct vlan_device, dev);
+	/* local buffer: chained vlan devices re-enter this function with
+	 * the vlan attribute pointing into the caller's buffer */
+	struct blob_buf b = {};
+	void *a;
+	int ret;
+
+	dev = vldev->dep.dev;
+	if (!dev || !dev->hotplug_ops)
+		return UBUS_STATUS_NOT_SUPPORTED;
+
+	blob_buf_init(&b, 0);
+	a = blobmsg_open_array(&b, "vlans");
+	blobmsg_printf(&b, NULL, "%d:u", vldev->id);
+	if (vlan && blobmsg_len(vlan))
+		blob_put_raw(&b, blobmsg_data(vlan), blobmsg_len(vlan));
+	blobmsg_close_array(&b, a);
+
+	if (add)
+		ret = dev->hotplug_ops->add(dev, member, blobmsg_data(b.head));
+	else
+		ret = dev->hotplug_ops->del(dev, member, blobmsg_data(b.head));
+
+	blob_buf_free(&b);
+	return ret;
+}
+
+static int
+vlan_hotplug_add(struct device *dev, struct device *member, struct blob_attr *vlan)
+{
+	return __vlan_hotplug_op(dev, member, vlan, true);
+}
+
+static int
+vlan_hotplug_del(struct device *dev, struct device *member, struct blob_attr *vlan)
+{
+	return __vlan_hotplug_op(dev, member, vlan, false);
+}
+
+static int
+vlan_hotplug_prepare(struct device *dev, struct device **bridge_dev)
+{
+	struct vlan_device *vldev = container_of(dev, struct vlan_device, dev);
+
+	dev = vldev->dep.dev;
+	if (!dev || !dev->hotplug_ops)
+		return UBUS_STATUS_NOT_SUPPORTED;
+
+	return dev->hotplug_ops->prepare(dev, bridge_dev);
+}
+
+static void vlan_hotplug_check(struct vlan_device *vldev, struct device *dev)
+{
+	static const struct device_hotplug_ops hotplug_ops = {
+		.prepare = vlan_hotplug_prepare,
+		.add = vlan_hotplug_add,
+		.del = vlan_hotplug_del
+	};
+
+	if (!dev || !dev->hotplug_ops || avl_is_empty(&dev->vlans.avl)) {
+		vldev->dev.hotplug_ops = NULL;
+		return;
+	}
+
+	vldev->dev.hotplug_ops = &hotplug_ops;
+}
+
+
+static int vlan_set_device_state(struct device *dev, bool up)
+{
+	struct vlan_device *vldev;
+	int ret = 0;
+
+	vldev = container_of(dev, struct vlan_device, dev);
+	if (!up) {
+		vldev->set_state(dev, false);
+		system_vlan_del(dev);
+		device_release(&vldev->dep);
+		return 0;
+	}
+
+	ret = device_claim(&vldev->dep);
+	if (ret < 0)
+		return ret;
+
+	/* tolerate a vlan device left behind by a previous netifd run */
+	if (system_vlan_add(vldev->dep.dev, vldev->id) < 0 &&
+	    errno != EEXIST) {
+		ret = -1;
+		goto release;
+	}
+
+	ret = vldev->set_state(dev, true);
+	if (ret)
+		goto delete;
+
+	return 0;
+
+delete:
+	system_vlan_del(dev);
+release:
+	device_release(&vldev->dep);
+	return ret;
+}
+
+static void vlan_dev_cb(struct device_user *dep, enum device_event ev)
+{
+	char name[IFNAMSIZ];
+	struct vlan_device *vldev;
+
+	vldev = container_of(dep, struct vlan_device, dep);
+	switch(ev) {
+	case DEV_EVENT_ADD:
+		device_set_present(&vldev->dev, true);
+		break;
+	case DEV_EVENT_REMOVE:
+		device_set_present(&vldev->dev, false);
+		break;
+	case DEV_EVENT_UPDATE_IFNAME:
+		vlan_hotplug_check(vldev, dep->dev);
+		vldev->dev.hidden = dep->dev->hidden;
+		if (snprintf(name, sizeof(name), "%s.%d", dep->dev->ifname,
+			     vldev->id) < (int)sizeof(name) &&
+		    !device_set_ifname(&vldev->dev, name))
+			break;
+
+		/* freeing the device here would leave dangling device_user
+		 * entries behind; detach it and let device_free_unused()
+		 * reap it once the last user is gone */
+		device_set_present(&vldev->dev, false);
+		device_remove_user(&vldev->dep);
+		device_free_unused();
+		break;
+	case DEV_EVENT_VLAN_UPDATE:
+		vlan_hotplug_check(vldev, dep->dev);
+		break;
+	case DEV_EVENT_TOPO_CHANGE:
+		/* Propagate topo changes */
+		device_broadcast_event(&vldev->dev, DEV_EVENT_TOPO_CHANGE);
+		break;
+	default:
+		break;
+	}
+}
+
+static void
+vlan_config_init(struct device *dev)
+{
+	struct vlan_device *vldev;
+
+	vldev = container_of(dev, struct vlan_device, dev);
+	vlan_hotplug_check(vldev, vldev->dep.dev);
+}
+
+static struct device *get_vlan_device(struct device *dev, char *id_str, bool create)
+{
+	static struct device_type vlan_type = {
+		.name = "VLAN",
+		.config_params = &device_attr_list,
+		.config_init = vlan_config_init,
+		.free = free_vlan_if,
+	};
+	struct vlan_device *vldev;
+	struct device_user *dep;
+	char name[IFNAMSIZ];
+	char *err = NULL;
+	int id, *alias_id;
+
+	id = strtoul(id_str, &err, 10);
+	if (err && *err) {
+		alias_id = kvlist_get(&dev->vlan_aliases, id_str);
+		if (!alias_id)
+			return NULL;
+
+		id = *alias_id;
+	}
+
+	/* look for an existing interface before creating a new one */
+	list_for_each_entry(dep, &dev->users.list, list.list) {
+		if (dep->cb != vlan_dev_cb)
+			continue;
+
+		vldev = container_of(dep, struct vlan_device, dep);
+		if (vldev->id != id)
+			continue;
+
+		return &vldev->dev;
+	}
+
+	if (!create)
+		return NULL;
+
+	if (snprintf(name, sizeof(name), "%s.%d", dev->ifname, id) >= (int)sizeof(name))
+		return NULL;
+
+	D(DEVICE, "Create vlan device '%s'", name);
+
+	vldev = calloc(1, sizeof(*vldev));
+	if (!vldev)
+		return NULL;
+
+	vldev->id = id;
+	vldev->dev.hidden = dev->hidden;
+	strcpy(vldev->dev.ifname, name);
+
+	if (device_init(&vldev->dev, &vlan_type, NULL) < 0)
+		goto error;
+
+	vldev->dev.default_config = true;
+	vldev->dev.config_pending = true;
+
+	vldev->set_state = vldev->dev.set_state;
+	vldev->dev.set_state = vlan_set_device_state;
+
+	vldev->dep.cb = vlan_dev_cb;
+	vlan_hotplug_check(vldev, vldev->dep.dev);
+	device_add_user(&vldev->dep, dev);
+
+	return &vldev->dev;
+
+error:
+	device_cleanup(&vldev->dev);
+	free(vldev);
+	return NULL;
+}
+
+static char *split_vlan(char *s)
+{
+	s = strchr(s, '.');
+	if (!s)
+		return NULL;
+
+	*s = 0;
+	s++;
+
+	return s;
+}
+
+struct device *get_vlan_device_chain(const char *ifname, int create)
+{
+	struct device *dev = NULL, *vldev;
+	char *buf, *s, *next;
+
+	buf = strdup(ifname);
+	if (!buf)
+		return NULL;
+
+	s = split_vlan(buf);
+	dev = __device_get(buf, create, false);
+	if (!dev || !s)
+		goto out;
+
+	/* for the first split, we need to check if we're using an alias or
+	 * if the . separator isn't being used as a vlan separator (e.g. for
+	 * AP WDS VLANs */
+	if (!isdigit(s[0])) {
+		next = split_vlan(s);
+		vldev = get_vlan_device(dev, s, create);
+		if (!vldev) {
+			s[-1] = '.';
+			dev = __device_get(buf, create, false);
+			if (!dev)
+				goto out;
+
+			if (next)
+				next[-1] = '.';
+			s = next;
+		} else {
+			dev = vldev;
+			s = next;
+		}
+	}
+
+
+	while (s) {
+		next = split_vlan(s);
+		dev = get_vlan_device(dev, s, create);
+		if (!dev)
+			break;
+
+		s = next;
+	}
+
+out:
+	free(buf);
+	return dev;
+}
