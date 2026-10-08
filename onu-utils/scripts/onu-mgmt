@@ -1,0 +1,209 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-mgmt: the VLAN and the address the stick is managed on, from the host
+# side, and a change of them that cannot lock anyone out: the new pair is
+# added beside the old one, and replaces it only when confirmed, which a
+# person can do only once the new pair answers.
+#
+#   onu-mgmt status        VLAN, ADDRESS, IFACE, DATA_ADDRESS and, while a
+#                          change waits, PENDING_VLAN, PENDING_ADDRESS and
+#                          PENDING_UNTIL, as KEY=VALUE lines
+#   onu-mgmt add VLAN ADDRESS
+#                          add the new pair beside the old: an interface (or
+#                          the old one's, in the same VLAN), the switch's
+#                          rules that keep the VLAN from the PON, an ssh
+#                          server; gone again after PENDING_LIMIT seconds
+#                          (600) unless committed
+#   onu-mgmt commit        the new pair replaces the old, in the store too
+#   onu-mgmt cancel        the new pair goes, the old one stays
+#
+# The boot script records the pair it brought up in /run/onu-mgmt (VLAN,
+# ADDRESS, IFACE, PREF, the priority of its switch rules, and DATA_ADDRESS,
+# the address on the SFP port itself, if any), as this script does after a
+# commit. The status daemon listens on the addresses itself. ONU_ROOT, when
+# set, is put in front of /run and /proc, for the tests.
+
+set -u
+ROOT=${ONU_ROOT:-}
+RUN=$ROOT/run
+STATE=$RUN/onu-mgmt
+PENDING=$RUN/onu-mgmt-pending
+LIMIT=${PENDING_LIMIT:-600}
+KEY=$RUN/dropbear/host_key
+
+log() {
+	echo "onu-mgmt: $*" >&2
+	logger -t onu-mgmt "$*" 2>/dev/null
+	return 0
+}
+
+field() {
+	sed -n "s/^$1=//p" "$2" 2>/dev/null | head -n 1
+}
+
+uptime_s() {
+	cut -d. -f1 "$ROOT/proc/uptime"
+}
+
+vlan_ok() {
+	case $1 in
+	"" | *[!0-9]* | 0*) return 1 ;;
+	esac
+	[ "$1" -ge 1 ] && [ "$1" -le 4094 ]
+}
+
+# An IPv4 address with a prefix of 1 to 30 bits.
+address_ok() {
+	echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}/([1-9]|[12][0-9]|30)$' &&
+		echo "${1%/*}" | awk -F. '{ for (i = 1; i <= 4; i++) if ($i > 255) exit 1 }'
+}
+
+# The switch's rules for a management VLAN, at a priority of their own: on
+# the SFP port's way in its frames go to the CPU alone, on the PON's they are
+# dropped, as the boot script sets them for the first pair.
+rules_add() {
+	tc filter add dev sfp ingress pref "$2" protocol 802.1Q flower skip_sw \
+		vlan_id "$1" action trap &&
+		tc filter add dev pon ingress pref "$2" protocol 802.1Q flower skip_sw \
+			vlan_id "$1" action drop
+}
+
+rules_del() {
+	tc filter del dev sfp ingress pref "$1" protocol 802.1Q 2>/dev/null
+	tc filter del dev pon ingress pref "$1" protocol 802.1Q 2>/dev/null
+	return 0
+}
+
+status() {
+	for k in VLAN ADDRESS IFACE DATA_ADDRESS; do
+		echo "$k=$(field "$k" "$STATE")"
+	done
+	if [ -r "$PENDING" ]; then
+		for k in VLAN ADDRESS UNTIL; do
+			echo "PENDING_$k=$(field "$k" "$PENDING")"
+		done
+	fi
+}
+
+# Take the pending pair away again; @1 is the token of the change, so that a
+# watcher of an earlier one leaves a later one alone.
+drop_pending() {
+	[ -r "$PENDING" ] && [ "$(field TOKEN "$PENDING")" = "$1" ] || return 0
+	vlan=$(field VLAN "$PENDING")
+	address=$(field ADDRESS "$PENDING")
+	iface=$(field IFACE "$PENDING")
+	pid=$(cat "$RUN/dropbear-pending.pid" 2>/dev/null)
+	[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	rm -f "$RUN/dropbear-pending.pid"
+	if [ "$iface" = "$(field IFACE "$STATE")" ]; then
+		ip address del "$address" dev "$iface" 2>/dev/null
+	else
+		rules_del "$(field PREF "$PENDING")"
+		ip link del "$iface" 2>/dev/null
+	fi
+	rm -f "$PENDING"
+	log "the management address $address in VLAN $vlan taken away"
+}
+
+add() {
+	vlan=$1
+	address=$2
+	vlan_ok "$vlan" && address_ok "$address" || {
+		log "not a VLAN and an address with its prefix: $vlan $address"
+		return 2
+	}
+	[ -e "$PENDING" ] && {
+		log "a change waits already"
+		return 1
+	}
+	old_vlan=$(field VLAN "$STATE")
+	old_iface=$(field IFACE "$STATE")
+	old_pref=$(field PREF "$STATE")
+	[ "$vlan" = "$old_vlan" ] && [ "$address" = "$(field ADDRESS "$STATE")" ] && return 0
+	token=$$
+	until=$(($(uptime_s) + LIMIT))
+	if [ "$vlan" = "$old_vlan" ]; then
+		iface=$old_iface
+		pref=$old_pref
+		ip address add "$address" dev "$iface" || return 1
+	else
+		iface=mgmt$vlan
+		pref=$((3 - ${old_pref:-1}))
+		ip link add link sfp name "$iface" type vlan id "$vlan" || {
+			log "VLAN $vlan cannot be added on sfp: it is in use"
+			return 1
+		}
+		if ! rules_add "$vlan" "$pref" ||
+			! ip link set "$iface" up ||
+			! ip address add "$address" dev "$iface"; then
+			rules_del "$pref"
+			ip link del "$iface" 2>/dev/null
+			return 1
+		fi
+		echo 0 >"$ROOT/proc/sys/net/ipv6/conf/$iface/disable_ipv6" 2>/dev/null
+	fi
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nPREF=%s\nUNTIL=%s\nTOKEN=%s\n' \
+		"$vlan" "$address" "$iface" "$pref" "$until" "$token" >"$PENDING"
+	dropbear -s -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
+		log "no ssh on $address"
+	log "the management address $address in VLAN $vlan added beside the old one"
+	(
+		trap '' HUP
+		sleep "$LIMIT"
+		"$0" expire "$token"
+	) >/dev/null 2>&1 </dev/null &
+}
+
+commit() {
+	[ -r "$PENDING" ] || {
+		log "no change waits"
+		return 1
+	}
+	vlan=$(field VLAN "$PENDING")
+	address=$(field ADDRESS "$PENDING")
+	iface=$(field IFACE "$PENDING")
+	pref=$(field PREF "$PENDING")
+	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n' "$vlan" "$address" | onu-store system ||
+		log "the management address $address is kept until the next start only"
+	old_address=$(field ADDRESS "$STATE")
+	old_iface=$(field IFACE "$STATE")
+	data=$(field DATA_ADDRESS "$STATE")
+	if [ "$iface" = "$old_iface" ]; then
+		ip address del "$old_address" dev "$iface" 2>/dev/null
+	else
+		rules_del "$(field PREF "$STATE")"
+		ip link del "$old_iface" 2>/dev/null
+	fi
+	# One ssh server again, on the new address and the data path's.
+	for f in "$RUN/dropbear.pid" "$RUN/dropbear-pending.pid"; do
+		pid=$(cat "$f" 2>/dev/null)
+		[ -n "$pid" ] && kill "$pid" 2>/dev/null
+	done
+	rm -f "$RUN/dropbear-pending.pid"
+	dropbear -s -r "$KEY" -P "$RUN/dropbear.pid" -p "${address%/*}:22" \
+		${data:+-p "${data%/*}:22"} || log "no ssh on $address"
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$vlan" "$address" "$iface" "$pref" "$data" >"$STATE.new" &&
+		mv "$STATE.new" "$STATE"
+	rm -f "$PENDING"
+	log "the management address is now $address in VLAN $vlan"
+}
+
+cancel() {
+	[ -r "$PENDING" ] || return 0
+	drop_pending "$(field TOKEN "$PENDING")"
+}
+
+case ${1:-} in
+status) status ;;
+add) add "${2:-}" "${3:-}" ;;
+commit) commit ;;
+cancel) cancel ;;
+expire) drop_pending "${2:-}" ;;
+*)
+	echo "usage: onu-mgmt status|add VLAN ADDRESS|commit|cancel" >&2
+	exit 2
+	;;
+esac

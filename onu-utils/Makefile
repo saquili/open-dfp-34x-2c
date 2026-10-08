@@ -67,6 +67,8 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_update
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	sh tests/test_onu_trial.sh
+	sh tests/test_onu_lane.sh
+	sh tests/test_onu_mgmt.sh
 	sh tests/test_onu_mode.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_store.sh
 

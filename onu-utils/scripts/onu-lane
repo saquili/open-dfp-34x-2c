@@ -1,0 +1,149 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-lane: the setting of the SFP lane to the host, which the switch driver
+# finds by itself ("auto") or keeps to one: 2500basex, 1000basex-an (with
+# in-band negotiation) or 1000basex.
+#
+#   onu-lane status       CHOICE, NOW and, on trial, TRIAL_MODE,
+#                         TRIAL_PREVIOUS and TRIAL_UNTIL, as KEY=VALUE lines
+#   onu-lane try MODE     switch to MODE on trial: back to the setting of
+#                         before after TRIAL_LIMIT seconds (60) unless kept
+#   onu-lane keep         keep the setting on trial, in the store as well
+#   onu-lane revert       end the trial now, back to the setting of before
+#   onu-lane apply        at boot: the setting of the store, if it has one
+#
+# The management of the stick comes over this lane, so a setting the host
+# does not take cuts it off; the trial ends by itself, so that whoever tried
+# it gets the stick back. TRIAL_UNTIL is in seconds of /proc/uptime.
+#
+# The driver's devlink parameters sfp_lane and sfp_lane_now carry the
+# setting (Documentation/networking/devlink/rtl9602c.rst). ONU_ROOT, when
+# set, is put in front of /run and /proc, for the tests, and TRIAL_LIMIT
+# names another length of the trial.
+
+set -u
+ROOT=${ONU_ROOT:-}
+RUN=$ROOT/run
+TRIAL=$RUN/onu-lane-trial
+SYSTEM=$RUN/onu-system
+LIMIT=${TRIAL_LIMIT:-60}
+DEV=platform/1b000000.switch
+
+log() {
+	echo "onu-lane: $*" >&2
+	logger -t onu-lane "$*" 2>/dev/null
+	return 0
+}
+
+valid() {
+	case $1 in
+	auto | 2500basex | 1000basex-an | 1000basex) return 0 ;;
+	esac
+	return 1
+}
+
+# The value of a devlink parameter of the switch.
+param() {
+	devlink dev param show "$DEV" name "$1" 2>/dev/null |
+		awk '$1 == "cmode" && $2 == "runtime" && $3 == "value" { print $4 }'
+}
+
+set_lane() {
+	devlink dev param set "$DEV" name sfp_lane value "$1" cmode runtime
+}
+
+uptime_s() {
+	cut -d. -f1 "$ROOT/proc/uptime"
+}
+
+field() {
+	sed -n "s/^$1=//p" "$2" 2>/dev/null | head -n 1
+}
+
+status() {
+	echo "CHOICE=$(param sfp_lane)"
+	echo "NOW=$(param sfp_lane_now)"
+	if [ -r "$TRIAL" ]; then
+		echo "TRIAL_MODE=$(field MODE "$TRIAL")"
+		echo "TRIAL_PREVIOUS=$(field PREVIOUS "$TRIAL")"
+		echo "TRIAL_UNTIL=$(field UNTIL "$TRIAL")"
+	fi
+}
+
+# End the trial named by @1, its token, back to the setting of before: the
+# token keeps a watcher of an earlier trial from ending a later one.
+expire() {
+	[ -r "$TRIAL" ] && [ "$(field TOKEN "$TRIAL")" = "$1" ] || return 0
+	previous=$(field PREVIOUS "$TRIAL")
+	rm -f "$TRIAL"
+	set_lane "$previous" || return 1
+	log "the trial of the lane's setting ended unkept; back to $previous"
+}
+
+try() {
+	valid "$1" || {
+		log "not a setting of the lane: $1"
+		return 2
+	}
+	[ -e "$TRIAL" ] && {
+		log "a trial runs already"
+		return 1
+	}
+	previous=$(param sfp_lane)
+	valid "$previous" || previous=auto
+	[ "$previous" = "$1" ] && return 0
+	token=$$
+	until=$(($(uptime_s) + LIMIT))
+	printf 'MODE=%s\nPREVIOUS=%s\nUNTIL=%s\nTOKEN=%s\n' "$1" "$previous" \
+		"$until" "$token" >"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
+	set_lane "$1" || {
+		rm -f "$TRIAL"
+		return 1
+	}
+	log "the lane's setting $1 on trial for $LIMIT s; before it $previous"
+	# The watcher: it outlives this command, and the status daemon that ran it.
+	(
+		trap '' HUP
+		sleep "$LIMIT"
+		"$0" expire "$token"
+	) >/dev/null 2>&1 </dev/null &
+}
+
+keep() {
+	[ -r "$TRIAL" ] || return 0
+	mode=$(field MODE "$TRIAL")
+	rm -f "$TRIAL"
+	printf 'SFP_LANE=%s\n' "$([ "$mode" = auto ] || echo "$mode")" |
+		onu-store system || log "the lane's setting $mode is kept until the next start only"
+	log "the lane's setting $mode kept"
+}
+
+revert() {
+	[ -r "$TRIAL" ] || return 0
+	expire "$(field TOKEN "$TRIAL")"
+}
+
+apply() {
+	mode=$(field SFP_LANE "$SYSTEM")
+	[ -n "$mode" ] || return 0
+	valid "$mode" || {
+		log "the store's setting of the lane is not one: $mode"
+		return 1
+	}
+	set_lane "$mode"
+}
+
+case ${1:-} in
+status) status ;;
+try) try "${2:-}" ;;
+keep) keep ;;
+revert) revert ;;
+expire) expire "${2:-}" ;;
+apply) apply ;;
+*)
+	echo "usage: onu-lane status|try MODE|keep|revert|apply" >&2
+	exit 2
+	;;
+esac
