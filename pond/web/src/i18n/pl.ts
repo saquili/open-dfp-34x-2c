@@ -317,7 +317,10 @@ export const pl: Dictionary = {
     handoverHint:
       "Urządzenie hosta dostaje od wkładki adres publiczny przez DHCP, w VLAN-ie ustawionym w miejscu. Bramą jest adres serwera operatora z sesji PPPoE, jak przy własnej sesji; wkładka sama bierze go na łączu.",
     hostGets: "Co dostaje host",
-    hostGetsHint: "MTU 1500: wkładka trzyma sesję z ramkami 1508 bajtów (RFC 4638).",
+    mtuAsk:
+      "Wkładka prosi operatora o ramki 1508 bajtów (RFC 4638), żeby host miał MTU 1500; bez jego zgody sesja ma 1492.",
+    mtuFull: "Operator zgodził się na ramki 1508 bajtów (RFC 4638): host ma pełne MTU 1500.",
+    mtuShort: "Operator nie zgodził się na większe ramki (RFC 4638): klasyczne PPPoE, MTU {mtu}.",
     mtu: "MTU",
     title: "Internet",
     up: "Połączona",

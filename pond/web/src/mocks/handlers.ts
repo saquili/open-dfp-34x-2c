@@ -83,6 +83,9 @@ if (SCENARIO === "sessions") {
   };
   const list = [v4, v6, both, one(4, "both", false), one(5, "ipv4", false), one(6, "ipv6", false)];
   settings.sessions = list;
+  /* Slot 3's concentrator did not take RFC 4638: its session came to 1492. */
+  const ppp0 = NETWORK.links.find((l) => l.name === "ppp0");
+  if (ppp0) NETWORK.links.push({ ...ppp0, name: "ppp2", ifindex: 18, mtu: 1492 });
   settings.pass = { address: "203.0.113.21", lan: "lan", peer_gateway: "198.51.100.1" };
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };

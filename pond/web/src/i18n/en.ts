@@ -315,7 +315,11 @@ export const en = {
     handoverHint:
       "The host gets the public address from the stick by DHCP, in the VLAN set in the slot. Its gateway is the operator's concentrator address from the PPPoE session, as with a session of its own; the stick takes it on the link itself.",
     hostGets: "What the host gets",
-    hostGetsHint: "MTU 1500: the stick holds the session with 1508-byte frames (RFC 4638).",
+    mtuAsk:
+      "The stick asks the operator for 1508-byte frames (RFC 4638), for the host to have an MTU of 1500; without its consent the session has 1492.",
+    mtuFull:
+      "The operator agreed to 1508-byte frames (RFC 4638): the host has the full MTU of 1500.",
+    mtuShort: "The operator did not agree to larger frames (RFC 4638): plain PPPoE, MTU {mtu}.",
     mtu: "MTU",
     title: "Internet",
     up: "Up",

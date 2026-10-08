@@ -20,7 +20,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useOmci, useSessionChange } from "../api/config";
+import { useNetwork, useOmci, useSessionChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { Family } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
@@ -725,6 +725,9 @@ function HostCard({ x }: { x: SessionView }) {
   const { data: live } = useLive();
   const s = session(live);
   const link = hostLink(live);
+  const net = useNetwork();
+  /* The MTU the session came to, which the host is given: 1500 when the concentrator took RFC 4638. */
+  const mtu = (x.up && net.data?.links.find((l) => l.name === x.ppp)?.mtu) || null;
   return (
     <Card title={t("internet.handoverTitle")}>
       <p className="text-sm text-base-content/70">{t("internet.handoverHint")}</p>
@@ -735,10 +738,15 @@ function HostCard({ x }: { x: SessionView }) {
           [t("sfp.hostGateway"), x.up && link.hostGateway ? link.hostGateway : "–"],
           [t("internet.hostPrefix"), s.prefix ?? "–"],
           [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
-          [t("internet.mtu"), "1500"],
+          [t("internet.mtu"), mtu ?? "–"],
         ]}
       />
-      <p className="text-xs text-base-content/60">{t("internet.hostGetsHint")}</p>
+      <p className="text-xs text-base-content/60">
+        {t(
+          mtu == null ? "internet.mtuAsk" : mtu >= 1500 ? "internet.mtuFull" : "internet.mtuShort",
+          { mtu: mtu ?? 0 },
+        )}
+      </p>
     </Card>
   );
 }
