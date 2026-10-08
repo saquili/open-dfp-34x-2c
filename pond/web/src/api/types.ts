@@ -222,6 +222,9 @@ export interface FirmwareBank {
   time: number | null;
   kernel_size_b: number | null;
   rootfs_size_b: number | null;
+  /** What its kernel image and root filesystem use; absent from an older stick. */
+  kernel_used_b?: number | null;
+  rootfs_used_b?: number | null;
 }
 
 /** The two banks, the starts, and an upload under way (pond's value "firmware"). */

@@ -45,6 +45,7 @@ const gemCounters = structuredClone(LIVE.gem_counters);
 const SESSION_GEM = LIVE.settings.sessions[0]?.gem_dev ?? "";
 const MULTICAST_GEM = LIVE.gem_ports.find((g) => g.multicast)?.name ?? "";
 let lastTick = Date.now();
+let hostname = LIVE.hostname ?? "dfp-34x-2c3";
 const upNow = () => LIVE.uptime.up_s + (Date.now() - started) / 1000;
 let lane: SfpLane = { choice: "auto", active: "2500basex", trial: null };
 let mgmt: Mgmt = { vlan: 4094, address: "192.0.2.250/30", data_address: null, pending: null };
@@ -119,6 +120,7 @@ function live() {
     port_counters: structuredClone(counters),
     gem_counters: structuredClone(gemCounters),
     cpu: LIVE.cpu ? { ...LIVE.cpu, ticks: { ...ticks } } : null,
+    hostname,
     settings,
   };
 }
@@ -225,6 +227,16 @@ export const handlers = [
       mgmt = { ...mgmt, vlan: mgmt.pending.vlan, address: mgmt.pending.address, pending: null };
     else if (b.CANCEL) mgmt = { ...mgmt, pending: null };
     return HttpResponse.json({ id: "mgmt", ok: true });
+  }),
+
+  http.post("*/api/set/hostname", async ({ request }) => {
+    await delay(300);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    if (!/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(b.HOSTNAME ?? ""))
+      return HttpResponse.json({ error: "refused", detail: "not a host name" }, { status: 400 });
+    hostname = b.HOSTNAME ?? hostname;
+    return HttpResponse.json({ id: "hostname", ok: true });
   }),
 
   http.get("*/api/get/omci", async () => {

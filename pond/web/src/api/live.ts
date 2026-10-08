@@ -30,6 +30,8 @@ export interface Rates {
   cpuFrames: number;
   /** The share of time the processor was busy, 0 to 1; null without its figures. */
   cpuBusy: number | null;
+  /** The share of memory in use, 0 to 1. */
+  memUsed: number | null;
   /** Each GEM port's traffic, by interface name: down from the OLT, up to it. */
   gems: Record<string, { down: number; up: number }>;
   /** The light received, dBm; null without light. */
@@ -51,6 +53,7 @@ interface Reading {
   idle: number | null;
   gems: Record<string, { rx: number; tx: number }>;
   rxUw: number | null;
+  mem: number | null;
   bip: number;
   fecCorrected: number;
   fecLost: number;
@@ -79,6 +82,7 @@ function reading(live: Live, t: number): Reading | null {
     idle: k ? k.idle + k.iowait : null,
     gems,
     rxUw: live.optics?.rx_power_uw ?? null,
+    mem: live.memory?.total_kb ? 1 - live.memory.available_kb / live.memory.total_kb : null,
     bip: live.onu?.counters.bip_errors ?? 0,
     fecCorrected: live.onu?.counters.fec_corrected_codewords ?? 0,
     fecLost: live.onu?.counters.fec_uncorrectable_codewords ?? 0,
@@ -108,6 +112,7 @@ function record(live: Live, t: number) {
       lanUp: rate(prev.sfpRx, cur.sfpRx),
       cpuFrames: Math.max(0, (cur.cpu - prev.cpu) / dt),
       cpuBusy: busyShare(prev, cur),
+      memUsed: cur.mem,
       rxDbm: cur.rxUw != null && cur.rxUw > 0 ? 10 * Math.log10(cur.rxUw / 1000) : null,
       bip: Math.max(0, (cur.bip - prev.bip) / dt),
       fecCorrected: Math.max(0, (cur.fecCorrected - prev.fecCorrected) / dt),

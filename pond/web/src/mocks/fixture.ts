@@ -553,6 +553,8 @@ export const FIRMWARE: Firmware = {
       time: 1789067700,
       kernel_size_b: 1900544,
       rootfs_size_b: 2031616,
+      kernel_used_b: 1712044,
+      rootfs_used_b: 1899954,
     },
     {
       bank: 1,
@@ -561,6 +563,8 @@ export const FIRMWARE: Firmware = {
       time: 1789060000,
       kernel_size_b: 1900544,
       rootfs_size_b: 2031616,
+      kernel_used_b: 1709210,
+      rootfs_used_b: 1886208,
     },
   ],
   update: { state: "idle", received_b: 0, expected_b: 0, bank: null, version: null, message: null },

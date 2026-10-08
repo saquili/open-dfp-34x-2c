@@ -10,6 +10,7 @@
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   Activity,
+  BarChart3,
   Cable,
   EthernetPort,
   Globe,
@@ -34,6 +35,7 @@ const NAV: { to: string; key: Key; icon: ReactNode }[] = [
   { to: "/internet", key: "nav.internet", icon: <Globe className="size-4" /> },
   { to: "/sfp", key: "nav.sfp", icon: <EthernetPort className="size-4" /> },
   { to: "/switch", key: "nav.switch", icon: <Network className="size-4" /> },
+  { to: "/stats", key: "nav.stats", icon: <BarChart3 className="size-4" /> },
   { to: "/system", key: "nav.system", icon: <Settings2 className="size-4" /> },
 ];
 
