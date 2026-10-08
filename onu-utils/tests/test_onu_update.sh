@@ -125,6 +125,9 @@ check 'echo "$out" | grep -qx BANK0_VERSION=0123456789ab'
 check 'echo "$out" | grep -qx BANK0_TIME=1759000000'
 check 'echo "$out" | grep -qx BANK1_STATE=empty'
 check 'echo "$out" | grep -qx BANK1_KERNEL_SIZE=65536'
+check 'echo "$out" | grep -qx BANK0_KERNEL_USED=30064'
+check 'echo "$out" | grep -qx BANK0_ROOTFS_USED=20000'
+check '! echo "$out" | grep -q BANK1_KERNEL_USED'
 teardown
 
 echo "an update file checks out, and damaged ones do not"
@@ -167,6 +170,8 @@ check '[ "$(bytes_at "$ONU_ROOT/dev/mtd1" 4 1)$(bytes_at "$ONU_ROOT/dev/mtd2" 4 
 run status
 check 'echo "$out" | grep -qx BANK1_STATE=valid'
 check 'echo "$out" | grep -qx BANK1_VERSION=7c5fba548abc'
+check 'echo "$out" | grep -qx BANK1_KERNEL_USED=40064'
+check 'echo "$out" | grep -qx BANK1_ROOTFS_USED=30000'
 check 'echo "$out" | grep -qx NEXT=0'
 # The bank read out is the file that went in, byte for byte.
 run read 1

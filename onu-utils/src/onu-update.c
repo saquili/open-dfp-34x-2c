@@ -5,7 +5,8 @@
  * onu-update: the two banks of the stick's flash and the updates that go
  * into them.
  *
- *   onu-update status          the banks, as KEY=VALUE lines
+ *   onu-update status          the banks, as KEY=VALUE lines: each one's
+ *                              partitions' sizes and what its images use
  *   onu-update check FILE      check an update file (update.h), writing
  *                              nothing
  *   onu-update write FILE [BANK]
@@ -541,6 +542,10 @@ static int cmd_status(void)
 			printf("BANK%d_TIME=%" PRIu32 "\n", n, b.time);
 		printf("BANK%d_KERNEL_SIZE=%" PRIu32 "\n", n, b.kernel_size);
 		printf("BANK%d_ROOTFS_SIZE=%" PRIu32 "\n", n, b.rootfs_size);
+		if (b.kernel)
+			printf("BANK%d_KERNEL_USED=%" PRIu32 "\n", n, b.kernel_len);
+		if (b.rootfs)
+			printf("BANK%d_ROOTFS_USED=%" PRIu32 "\n", n, b.rootfs_len);
 	}
 	return 0;
 }
