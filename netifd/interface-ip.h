@@ -185,6 +185,9 @@ void interface_ip_update_start(struct interface_ip_settings *ip);
 void interface_ip_update_complete(struct interface_ip_settings *ip);
 void interface_ip_flush(struct interface_ip_settings *ip);
 void interface_ip_set_enabled(struct interface_ip_settings *ip, bool enabled);
+bool interface_ip_owns_addr(struct device *dev, int af, const void *addr, unsigned int mask);
+bool interface_ip_owns_route(struct device *dev, int af, const void *dst, unsigned int mask,
+			     const void *gw, unsigned int table);
 void interface_ip_update_metric(struct interface_ip_settings *ip, int metric);
 
 struct interface *interface_ip_add_target_route(union if_addr *addr, bool v6, struct interface *iface,

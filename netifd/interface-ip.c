@@ -21,6 +21,7 @@
 #include <limits.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <linux/rtnetlink.h>
 
 #include "netifd.h"
 #include "device.h"
@@ -1756,6 +1757,87 @@ interface_ip_set_route_enabled(struct interface_ip_settings *ip,
 		system_del_route(dev, route);
 
 	route->enabled = enabled;
+}
+
+static int
+device_addr_af(enum device_addr_flags flags)
+{
+	return (flags & DEVADDR_FAMILY) == DEVADDR_INET6 ? AF_INET6 : AF_INET;
+}
+
+static bool
+ip_settings_own_addr(struct interface_ip_settings *ip, int af, const void *addr,
+		     unsigned int mask)
+{
+	struct device_addr *a;
+
+	vlist_for_each_element(&ip->addr, a, node)
+		if (device_addr_af(a->flags) == af && a->mask == mask &&
+		    !memcmp(&a->addr, addr, af == AF_INET6 ? 16 : 4))
+			return true;
+
+	return false;
+}
+
+/*
+ * Whether an interface on @dev holds the address, in its configuration or as
+ * its protocol reported it: what the daemon put on the device itself.
+ */
+bool
+interface_ip_owns_addr(struct device *dev, int af, const void *addr, unsigned int mask)
+{
+	struct interface *iface;
+
+	vlist_for_each_element(&interfaces, iface, node) {
+		if (iface->l3_dev.dev != dev && iface->main_dev.dev != dev)
+			continue;
+		if (ip_settings_own_addr(&iface->config_ip, af, addr, mask) ||
+		    ip_settings_own_addr(&iface->proto_ip, af, addr, mask))
+			return true;
+	}
+
+	return false;
+}
+
+static bool
+ip_settings_own_route(struct interface_ip_settings *ip, int af, const void *dst,
+		      unsigned int mask, const void *gw, unsigned int table)
+{
+	size_t len = af == AF_INET6 ? 16 : 4;
+	struct device_route *r;
+
+	vlist_for_each_element(&ip->route, r, node) {
+		unsigned int rt_table = r->table ? r->table : RT_TABLE_MAIN;
+
+		if (device_addr_af(r->flags) != af || r->mask != mask || rt_table != table)
+			continue;
+		if (memcmp(&r->addr, dst, len))
+			continue;
+		if (gw ? memcmp(&r->nexthop, gw, len) :
+			 memcmp(&r->nexthop, &(union if_addr){ 0 }, len))
+			continue;
+		return true;
+	}
+
+	return false;
+}
+
+/* Whether an interface on @dev holds the route, as for an address. */
+bool
+interface_ip_owns_route(struct device *dev, int af, const void *dst, unsigned int mask,
+			const void *gw, unsigned int table)
+{
+	struct interface *iface;
+
+	vlist_for_each_element(&interfaces, iface, node) {
+		if (iface->l3_dev.dev != dev && iface->main_dev.dev != dev)
+			continue;
+		if (ip_settings_own_route(&iface->config_ip, af, dst, mask, gw, table) ||
+		    ip_settings_own_route(&iface->proto_ip, af, dst, mask, gw, table))
+			return true;
+	}
+
+	return false;
 }
 
 void interface_ip_set_enabled(struct interface_ip_settings *ip, bool enabled)

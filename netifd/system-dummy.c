@@ -131,6 +131,10 @@ void system_if_clear_state(struct device *dev)
 	device_set_ifindex(dev, system_if_resolve(dev));
 }
 
+void system_if_sweep(struct device *dev)
+{
+}
+
 int system_if_check(struct device *dev)
 {
 	if (dev->type == &simple_device_type)

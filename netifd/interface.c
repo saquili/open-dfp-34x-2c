@@ -505,6 +505,11 @@ interface_main_dev_cb(struct device_user *dep, enum device_event ev)
 		break;
 	case DEV_EVENT_UP:
 		interface_set_enabled(iface, true);
+		/*
+		 * A device adopted with its link already up reports no link
+		 * event of its own: take its link as it is.
+		 */
+		interface_set_link_state(iface, device_link_active(dep->dev));
 		break;
 	case DEV_EVENT_DOWN:
 		interface_set_enabled(iface, false);
@@ -877,6 +882,9 @@ interface_proto_event_cb(struct interface_proto_state *state, enum interface_pro
 
 		interface_ip_set_enabled(&iface->config_ip, true);
 		interface_ip_set_enabled(&iface->proto_ip, true);
+		/* Now that its addresses and routes are known, take the rest away. */
+		if (iface->l3_dev.dev)
+			system_if_sweep(iface->l3_dev.dev);
 		system_flush_routes();
 		iface->state = IFS_UP;
 		iface->start_time = system_get_rtime();

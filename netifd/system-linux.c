@@ -81,6 +81,7 @@
 
 #include "netifd.h"
 #include "device.h"
+#include "interface-ip.h"
 #include "system.h"
 #include "utils.h"
 
@@ -1320,6 +1321,8 @@ struct clear_data {
 	int type;
 	int size;
 	int af;
+	/* what to leave in place; everything else the dump matches goes */
+	bool (*keep)(struct device *dev, struct nlmsghdr *hdr);
 	struct nl_msg **del;
 	int n_del;
 };
@@ -1409,6 +1412,9 @@ static int cb_clear_event(struct nl_msg *msg, void *arg)
 	if (!cb(hdr, clr->dev ? clr->dev->ifindex : 0))
 		return NL_SKIP;
 
+	if (clr->keep && clr->keep(clr->dev, hdr))
+		return NL_SKIP;
+
 	obj_name = type == RTM_DELADDR ? "an address" :
 		   type == RTM_DELNEIGH ? "a neighbor" : "a route";
 	if (type == RTM_DELRULE)
@@ -1461,7 +1467,8 @@ error_handler(struct sockaddr_nl *nla, struct nlmsgerr *err, void *arg)
 }
 
 static void
-system_if_clear_entries(struct device *dev, int type, int af)
+system_if_clear_entries(struct device *dev, int type, int af,
+			bool (*keep)(struct device *dev, struct nlmsghdr *hdr))
 {
 	struct clear_data clr;
 	struct nl_cb *cb;
@@ -1480,6 +1487,7 @@ system_if_clear_entries(struct device *dev, int type, int af)
 	clr.af = af;
 	clr.dev = dev;
 	clr.type = type;
+	clr.keep = keep;
 	clr.del = NULL;
 	clr.n_del = 0;
 	switch (type) {
@@ -1542,38 +1550,81 @@ system_if_clear_entries(struct device *dev, int type, int af)
 }
 
 /*
- * Clear bridge (membership) state and bring down device
+ * Take a device as it is. A device that a previous run of the daemon set up
+ * keeps its state -- up, in its bridge, with its addresses and routes -- so
+ * that a restart or a crash of the daemon interrupts nothing: what belongs is
+ * added again over what is there, and what does not is swept once the
+ * interface on the device is up (system_if_sweep()). A device the daemon only
+ * sees, such as a bridge another program built, is left alone.
  */
 void system_if_clear_state(struct device *dev)
 {
-	static char buf[256];
-	char *bridge;
 	device_set_ifindex(dev, system_if_resolve(dev));
+}
 
+/* An address the daemon did not put: IPv6 link-local and dynamic ones stay. */
+static bool
+sweep_keep_addr(struct device *dev, struct nlmsghdr *hdr)
+{
+	struct ifaddrmsg *ifa = NLMSG_DATA(hdr);
+	struct nlattr *tb[__IFA_MAX];
+	struct nlattr *local;
+	uint32_t flags = ifa->ifa_flags;
+
+	nlmsg_parse(hdr, sizeof(*ifa), tb, __IFA_MAX - 1, NULL);
+	if (tb[IFA_FLAGS])
+		flags = nla_get_u32(tb[IFA_FLAGS]);
+
+	if (ifa->ifa_family == AF_INET6 &&
+	    (ifa->ifa_scope == RT_SCOPE_LINK || !(flags & IFA_F_PERMANENT)))
+		return true;
+
+	local = tb[IFA_LOCAL] ? tb[IFA_LOCAL] : tb[IFA_ADDRESS];
+	if (!local)
+		return true;
+
+	return interface_ip_owns_addr(dev, ifa->ifa_family, nla_data(local), ifa->ifa_prefixlen);
+}
+
+/*
+ * A route the daemon did not put. Only static routes are its to take away:
+ * the kernel's own, and the routes of router advertisements, DHCP and other
+ * programs, stay.
+ */
+static bool
+sweep_keep_route(struct device *dev, struct nlmsghdr *hdr)
+{
+	struct rtmsg *r = NLMSG_DATA(hdr);
+	struct nlattr *tb[__RTA_MAX];
+	static const union if_addr any;
+	unsigned int table = r->rtm_table;
+
+	if (r->rtm_protocol != RTPROT_STATIC && r->rtm_protocol != RTPROT_BOOT)
+		return true;
+
+	nlmsg_parse(hdr, sizeof(*r), tb, __RTA_MAX - 1, NULL);
+	if (tb[RTA_TABLE])
+		table = nla_get_u32(tb[RTA_TABLE]);
+
+	return interface_ip_owns_route(dev, r->rtm_family,
+				       tb[RTA_DST] ? nla_data(tb[RTA_DST]) : &any, r->rtm_dst_len,
+				       tb[RTA_GATEWAY] ? nla_data(tb[RTA_GATEWAY]) : NULL, table);
+}
+
+/*
+ * Take away the addresses and static routes on a device that no interface
+ * of the daemon holds: what a previous run left that the configuration no
+ * longer asks for, and what another program put there.
+ */
+void system_if_sweep(struct device *dev)
+{
 	if (dev->external || !dev->ifindex)
 		return;
 
-	system_if_flags(dev->ifname, 0, IFF_UP);
-
-	if (system_is_bridge(dev->ifname)) {
-		D(SYSTEM, "Delete existing bridge named '%s'", dev->ifname);
-		system_bridge_delbr(dev);
-		return;
-	}
-
-	bridge = system_get_bridge(dev->ifname, buf, sizeof(buf));
-	if (bridge) {
-		D(SYSTEM, "Remove device '%s' from bridge '%s'", dev->ifname, bridge);
-		system_bridge_if(bridge, dev, SIOCBRDELIF, NULL);
-	}
-
-	system_if_clear_entries(dev, RTM_GETROUTE, AF_INET);
-	system_if_clear_entries(dev, RTM_GETADDR, AF_INET);
-	system_if_clear_entries(dev, RTM_GETROUTE, AF_INET6);
-	system_if_clear_entries(dev, RTM_GETADDR, AF_INET6);
-	system_if_clear_entries(dev, RTM_GETNEIGH, AF_INET);
-	system_if_clear_entries(dev, RTM_GETNEIGH, AF_INET6);
-	system_set_disable_ipv6(dev, "0");
+	system_if_clear_entries(dev, RTM_GETROUTE, AF_INET, sweep_keep_route);
+	system_if_clear_entries(dev, RTM_GETADDR, AF_INET, sweep_keep_addr);
+	system_if_clear_entries(dev, RTM_GETROUTE, AF_INET6, sweep_keep_route);
+	system_if_clear_entries(dev, RTM_GETADDR, AF_INET6, sweep_keep_addr);
 }
 
 static inline unsigned long
@@ -1582,14 +1633,13 @@ sec_to_jiffies(int val)
 	return (unsigned long) val * 100;
 }
 
-int system_bridge_addbr(struct device *bridge, struct bridge_config *cfg)
+static int system_bridge_link(struct device *bridge, struct bridge_config *cfg, uint16_t flags)
 {
 	struct nlattr *linkinfo, *data;
 	struct nl_msg *msg;
 	uint64_t val;
-	int rv;
 
-	msg = system_ifinfo_msg(bridge->ifname, RTM_NEWLINK, NLM_F_CREATE | NLM_F_EXCL);
+	msg = system_ifinfo_msg(bridge->ifname, RTM_NEWLINK, flags);
 	if (!msg)
 		return -1;
 
@@ -1654,15 +1704,26 @@ int system_bridge_addbr(struct device *bridge, struct bridge_config *cfg)
 	nla_nest_end(msg, data);
 	nla_nest_end(msg, linkinfo);
 
-	rv = system_rtnl_call(msg);
-	if (rv)
-		D(SYSTEM, "Error adding bridge '%s': %d", bridge->ifname, rv);
-
-	return rv;
+	return system_rtnl_call(msg);
 
 nla_put_failure:
 	nlmsg_free(msg);
 	return -ENOMEM;
+}
+
+int system_bridge_addbr(struct device *bridge, struct bridge_config *cfg)
+{
+	int rv = system_bridge_link(bridge, cfg, NLM_F_CREATE | NLM_F_EXCL);
+
+	/* A previous run left this bridge: adopt it and change its settings. */
+	if (rv == -NLE_EXIST && system_is_bridge(bridge->ifname)) {
+		D(SYSTEM, "Adopting bridge '%s'", bridge->ifname);
+		rv = system_bridge_link(bridge, cfg, 0);
+	}
+	if (rv)
+		D(SYSTEM, "Error adding bridge '%s': %d", bridge->ifname, rv);
+
+	return rv;
 }
 
 int system_macvlan_add(struct device *macvlan, struct device *dev, struct macvlan_config *cfg)
@@ -1848,6 +1909,71 @@ int system_vlan_del(struct device *dev)
 	return system_vlan(dev, -1);
 }
 
+struct link_query {
+	char kind[16];
+	int link;
+	int vid;
+};
+
+static int cb_link_query(struct nl_msg *msg, void *arg)
+{
+	struct link_query *q = arg;
+	struct nlmsghdr *hdr = nlmsg_hdr(msg);
+	struct nlattr *tb[__IFLA_MAX], *info[__IFLA_INFO_MAX], *vlan[__IFLA_VLAN_MAX];
+
+	if (hdr->nlmsg_type != RTM_NEWLINK)
+		return NL_SKIP;
+
+	nlmsg_parse(hdr, sizeof(struct ifinfomsg), tb, __IFLA_MAX - 1, NULL);
+	if (tb[IFLA_LINK])
+		q->link = nla_get_u32(tb[IFLA_LINK]);
+	if (!tb[IFLA_LINKINFO] ||
+	    nla_parse_nested(info, __IFLA_INFO_MAX - 1, tb[IFLA_LINKINFO], NULL))
+		return NL_SKIP;
+	if (info[IFLA_INFO_KIND])
+		snprintf(q->kind, sizeof(q->kind), "%s", nla_get_string(info[IFLA_INFO_KIND]));
+	if (info[IFLA_INFO_DATA] &&
+	    !nla_parse_nested(vlan, __IFLA_VLAN_MAX - 1, info[IFLA_INFO_DATA], NULL) &&
+	    vlan[IFLA_VLAN_ID])
+		q->vid = nla_get_u16(vlan[IFLA_VLAN_ID]);
+
+	return NL_SKIP;
+}
+
+/* What the kernel says of an existing link: its kind, lower link and VLAN ID. */
+static int system_link_query(const char *ifname, struct link_query *q)
+{
+	struct nl_msg *msg;
+	struct nl_cb *cb;
+	int pending = 1;
+
+	memset(q, 0, sizeof(*q));
+	msg = system_ifinfo_msg(ifname, RTM_GETLINK, NLM_F_ACK);
+	if (!msg)
+		return -1;
+
+	cb = nl_cb_alloc(NL_CB_DEFAULT);
+	if (!cb) {
+		nlmsg_free(msg);
+		return -1;
+	}
+
+	nl_cb_set(cb, NL_CB_VALID, NL_CB_CUSTOM, cb_link_query, q);
+	nl_cb_set(cb, NL_CB_ACK, NL_CB_CUSTOM, cb_finish_event, &pending);
+	nl_cb_err(cb, NL_CB_CUSTOM, error_handler, &pending);
+
+	if (nl_send_auto_complete(sock_rtnl, msg) < 0)
+		pending = -1;
+	while (pending > 0)
+		if (nl_recvmsgs(sock_rtnl, cb) < 0)
+			break;
+
+	nlmsg_free(msg);
+	nl_cb_put(cb);
+
+	return pending;
+}
+
 int system_vlandev_add(struct device *vlandev, struct device *dev, struct vlandev_config *cfg)
 {
 	struct nl_msg *msg;
@@ -1907,6 +2033,16 @@ int system_vlandev_add(struct device *vlandev, struct device *dev, struct vlande
 	nla_nest_end(msg, linkinfo);
 
 	rv = system_rtnl_call(msg);
+	/* A previous run left this VLAN device: adopt it if it is the same one. */
+	if (rv == -NLE_EXIST) {
+		struct link_query q;
+
+		if (!system_link_query(vlandev->ifname, &q) && !strcmp(q.kind, "vlan") &&
+		    q.link == dev->ifindex && q.vid == cfg->vid) {
+			D(SYSTEM, "Adopting vlandev '%s' over '%s'", vlandev->ifname, dev->ifname);
+			return 0;
+		}
+	}
 	if (rv)
 		D(SYSTEM, "Error adding vlandev '%s' over '%s': %d", vlandev->ifname, dev->ifname, rv);
 
@@ -4219,13 +4355,65 @@ int system_del_iprule(struct iprule *rule)
 	return system_iprule(rule, RTM_DELRULE);
 }
 
+/* The default rules the last flush found in place, a bit each. */
+static unsigned int default_rules_seen;
+
+static unsigned int default_rule_bit(int af, unsigned int table)
+{
+	int i = table == RT_TABLE_LOCAL ? 0 : table == RT_TABLE_MAIN ? 1 : 2;
+
+	return 1U << (i + (af == AF_INET6 ? 3 : 0));
+}
+
+/* The kernel's own rules, which routing cannot do without for an instant. */
+static bool flush_keep_rule(struct device *dev, struct nlmsghdr *hdr)
+{
+	struct rtmsg *r = NLMSG_DATA(hdr);
+	struct nlattr *tb[__FRA_MAX];
+	unsigned int prio = 0, table = r->rtm_table;
+
+	if (r->rtm_src_len || r->rtm_dst_len)
+		return false;
+
+	nlmsg_parse(hdr, sizeof(*r), tb, __FRA_MAX - 1, NULL);
+	if (tb[FRA_PRIORITY])
+		prio = nla_get_u32(tb[FRA_PRIORITY]);
+	if (tb[FRA_TABLE])
+		table = nla_get_u32(tb[FRA_TABLE]);
+
+	if (!(prio == 0 && table == RT_TABLE_LOCAL) &&
+	    !(prio == 32766 && table == RT_TABLE_MAIN) &&
+	    !(prio == 32767 && table == RT_TABLE_DEFAULT))
+		return false;
+
+	default_rules_seen |= default_rule_bit(r->rtm_family, table);
+	return true;
+}
+
+/* A default rule, added unless the flush found it in place. */
+static int system_iprule_default(struct iprule *rule)
+{
+	int af = (rule->flags & IPRULE_FAMILY) == IPRULE_INET4 ? AF_INET : AF_INET6;
+
+	if (default_rules_seen & default_rule_bit(af, rule->lookup))
+		return 0;
+
+	return system_iprule(rule, RTM_NEWRULE);
+}
+
+/*
+ * Take away the rules others put, and make sure of the kernel's defaults.
+ * The defaults are never taken away and put back: between the two, nothing
+ * at all would be routed, the stick's own traffic included.
+ */
 int system_flush_iprules(void)
 {
 	int rv = 0;
 	struct iprule rule;
 
-	system_if_clear_entries(NULL, RTM_GETRULE, AF_INET);
-	system_if_clear_entries(NULL, RTM_GETRULE, AF_INET6);
+	default_rules_seen = 0;
+	system_if_clear_entries(NULL, RTM_GETRULE, AF_INET, flush_keep_rule);
+	system_if_clear_entries(NULL, RTM_GETRULE, AF_INET6, flush_keep_rule);
 
 	memset(&rule, 0, sizeof(rule));
 
@@ -4234,26 +4422,26 @@ int system_flush_iprules(void)
 
 	rule.priority = 0;
 	rule.lookup = RT_TABLE_LOCAL;
-	rv |= system_iprule(&rule, RTM_NEWRULE);
+	rv |= system_iprule_default(&rule);
 
 	rule.priority = 32766;
 	rule.lookup = RT_TABLE_MAIN;
-	rv |= system_iprule(&rule, RTM_NEWRULE);
+	rv |= system_iprule_default(&rule);
 
 	rule.priority = 32767;
 	rule.lookup = RT_TABLE_DEFAULT;
-	rv |= system_iprule(&rule, RTM_NEWRULE);
+	rv |= system_iprule_default(&rule);
 
 
 	rule.flags = IPRULE_INET6 | IPRULE_PRIORITY | IPRULE_LOOKUP;
 
 	rule.priority = 0;
 	rule.lookup = RT_TABLE_LOCAL;
-	rv |= system_iprule(&rule, RTM_NEWRULE);
+	rv |= system_iprule_default(&rule);
 
 	rule.priority = 32766;
 	rule.lookup = RT_TABLE_MAIN;
-	rv |= system_iprule(&rule, RTM_NEWRULE);
+	rv |= system_iprule_default(&rule);
 
 	return rv;
 }
