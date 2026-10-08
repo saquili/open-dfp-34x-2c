@@ -33,6 +33,17 @@ precedence = "override"
 SPDX-FileCopyrightText = "The Linux kernel contributors"
 SPDX-License-Identifier = "GPL-2.0-only WITH Linux-syscall-note"
 
+# netifd/ is the network interface daemon of OpenWrt, carried as a fork and
+# imported with "git subtree add --squash". Its sources carry their authors'
+# GNU GPL version 2 notices without SPDX lines, and OpenWrt licenses the
+# daemon as GPL-2.0; the annotation states that for REUSE. A file this
+# project adds there carries its own SPDX header, which takes precedence.
+[[annotations]]
+path = "netifd/**"
+precedence = "closest"
+SPDX-FileCopyrightText = "The netifd contributors"
+SPDX-License-Identifier = "GPL-2.0-only"
+
 # Mongoose, the HTTP library of pond, is offered under GPL-2.0-only or a
 # commercial licence, which its header names together; the project takes it
 # under GPL-2.0-only.
