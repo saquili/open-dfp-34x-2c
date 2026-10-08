@@ -8,10 +8,13 @@
 # compare-findings holds what it reports to this list: the job passes when the
 # findings are exactly these, and fails when one is new, gone or different.
 #
-# The three functions are in the libraries of libgcc and of uClibc-ng and are
-# built for every MIPS target. A program that links the C library statically
-# takes only the objects it refers to, so none of them is in a static program,
-# and the image holds only static programs (docs/adr/0010).
+# The two functions are in the libraries of libgcc and of uClibc-ng and are
+# built for every MIPS target; a third, uClibc-ng's __cxa_finalize, left the
+# list with the carried patch of the exit handlers (buildroot/README.rst). A
+# program that links the C library statically takes only the objects it refers
+# to, so neither is in a static program; the image's programs share a C library
+# cut to what they import, which leaves out _test_and_set, and the image does
+# not ship libgcc_s (docs/adr/0011).
 #
 # One line for each file, archive member and function: the number of findings,
 # the file (below the toolchain directory), the archive member (- for a file that
@@ -25,7 +28,5 @@
 10 | lib/gcc/mips-buildroot-linux-uclibc/14.4.0/libgcc.a | _speculation_barrier.o | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
 10 | mips-buildroot-linux-uclibc/lib/libgcc_s.so.1 | - | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
 10 | mips-buildroot-linux-uclibc/sysroot/lib/libgcc_s.so.1 | - | __speculation_barrier | .word=0xf ssnop ssnop ssnop ssnop ssnop ssnop ssnop ssnop .word=0x3e00408
-3 | mips-buildroot-linux-uclibc/sysroot/lib/libuClibc-1.0.59.so | - | __cxa_finalize | lwc0 swc0 .word=0xf
 2 | mips-buildroot-linux-uclibc/sysroot/lib/libuClibc-1.0.59.so | - | _test_and_set | lwc0 swc0
-3 | mips-buildroot-linux-uclibc/sysroot/usr/lib/libc.a | __cxa_finalize.os | __cxa_finalize | lwc0 swc0 .word=0xf
 2 | mips-buildroot-linux-uclibc/sysroot/usr/lib/libc.a | _test_and_set.os | _test_and_set | lwc0 swc0

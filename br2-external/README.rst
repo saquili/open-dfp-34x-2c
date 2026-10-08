@@ -246,7 +246,7 @@ leaves out the programs that run on the build machine::
         | xargs tools/isa-gate/isa-gate --archives
 
 For the toolchain this defconfig builds, the list holds 22 files and the gate
-scans 3012 objects, 350588 instructions. It reports 40 findings, all in three
+scans 3109 objects, 366584 instructions. It reports 34 findings, all in two
 functions of the libraries:
 
 ``__speculation_barrier`` (libgcc.a and libgcc_s.so.1, 10 findings in each file)
@@ -254,33 +254,30 @@ functions of the libraries:
     and a ``jr.hb`` word. gcc 14 builds it for every MIPS target
     (``LIB1ASMFUNCS`` in ``libgcc/config/mips/t-mips``). A program reaches it
     through ``__builtin_speculation_safe_value`` only.
-``__cxa_finalize`` (libc.a and libuClibc.so, 3 findings in each file)
-    A compare-and-exchange from uClibc-ng's atomic header: a load-linked and
-    store-conditional pair, which a listing as MIPS I shows as ``lwc0`` and
-    ``swc0``, and a ``sync``. The function runs it for each entry of the
-    exit-handler table that matches the handle it is given, and for every entry
-    when the handle is null; the test programs below register their handlers
-    with ``atexit`` and exit normally, and none of them executes it. uClibc-ng
-    builds the function for every target (``libc/stdlib/Makefile.in``).
 ``_test_and_set`` (libc.a and libuClibc.so, 2 findings in each file)
     A load-linked and store-conditional loop, the function behind
     ``<sys/tas.h>``; uClibc-ng builds it for every MIPS target
     (``libc/sysdeps/linux/mips/Makefile.arch``).
 
-No option of gcc or of uClibc-ng leaves these functions out, and the build carries
-no patch for them. A program that links the C library statically takes only the
-objects it refers to, so a static program does not contain them; the test
-programs below, static and dynamic, pass the gate, and none of them executes a
-load-linked, store-conditional or sync instruction. A root filesystem that holds
-the toolchain's shared libraries (the C library, libgcc_s) does contain them, and
-fails the gate on the target tree. The image of the board therefore holds static
-programs only (ADR 0010).
+A third, ``__cxa_finalize`` of uClibc-ng, ran a compare-and-exchange for each
+entry of the exit-handler table; the carried patch of the exit handlers
+(``buildroot/README.rst``) claims the entry with a plain test and store when
+there are no threads, and it is no longer a finding.
+
+No option of gcc or of uClibc-ng leaves the two functions out. A program that
+links the C library statically takes only the objects it refers to, so a static
+program does not contain them; the test programs below, static and dynamic, pass
+the gate, and none of them executes a load-linked, store-conditional or sync
+instruction. The image's programs share the C library, which the build cuts to
+the functions they import: no program imports ``_test_and_set``, so the image's
+library does not hold it, and the image does not ship ``libgcc_s``, which nothing
+loads (ADR 0011). The gate over the target tree holds the image to that.
 
 ``tests/toolchain/known-findings.txt`` lists the findings, for each file, archive
 member and function, with the instructions in the order the gate reports them.
 ``compare-findings`` holds the gate's output to the list: the toolchain job
 passes when the findings are exactly the list, and fails when one is new, gone or
-different. On the toolchain this defconfig builds the 40 findings are the 7
+different. On the toolchain this defconfig builds the 34 findings are the 5
 groups of the list. When the toolchain changes on purpose,
 ``compare-findings --print-known`` writes the new list from the gate's output.
 
