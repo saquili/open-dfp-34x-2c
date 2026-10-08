@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
 
 CC="$1"
 [ -n "$TARGET_CC_NOCACHE" ] && CC="$TARGET_CC_NOCACHE"
