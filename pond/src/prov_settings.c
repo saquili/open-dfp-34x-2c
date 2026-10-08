@@ -8,9 +8,10 @@
  * only.
  *
  * A read gives the settings, each session with its user, whether a secret is
- * set (never the secret) and what onu-mode and dhcp6d brought up for it
- * (/run/session/N),
- * the address handed on, and what became of the settings in the configuration
+ * set (never the secret), whether it hands its address down and in which VLAN
+ * of the host link, and what onu-mode and dhcp6d brought up for it
+ * (/run/session/N), the address handed on, and what became of the settings
+ * in the configuration
  * store, which onu-store records in /run/onu-store: "loaded" at boot,
  * "defaults" when the store held none, "saved" or "failed" after a change,
  * "none" without a store. A write takes KEY=value lines, checks every value
@@ -56,6 +57,7 @@ enum kind {
 	K_ONOFF,
 	K_MAC_OPT,
 	K_FAMILY,
+	K_HOST_VLAN,
 };
 
 /* The keys of /run/onu.conf, as onu-mode reads them, and their defaults. */
@@ -71,9 +73,6 @@ enum key {
 	LAN_DHCP,
 	LAN_DHCP_START,
 	LAN_DHCP_END,
-	LAN_VLAN,
-	PASS_GATEWAY,
-	PASS_PEER,
 	NKEYS
 };
 
@@ -93,17 +92,29 @@ static const struct {
 	[LAN_DHCP] = { "LAN_DHCP", K_ONOFF, "on" },
 	[LAN_DHCP_START] = { "LAN_DHCP_START", K_ADDR, "192.168.1.100" },
 	[LAN_DHCP_END] = { "LAN_DHCP_END", K_ADDR, "192.168.1.199" },
-	[LAN_VLAN] = { "LAN_VLAN", K_VLAN, "" },
-	[PASS_GATEWAY] = { "PASS_GATEWAY", K_ADDR, "169.254.0.1" },
-	[PASS_PEER] = { "PASS_PEER", K_ONOFF, "on" },
 };
 
-/* The settings of each session, SESSIONn_<suffix>, and their defaults. */
+/*
+ * The one link to the router of before: LAN_VLAN, or the host link itself
+ * when it is empty. It is the link of each session that names none of its
+ * own, until the settings are written again without it (settings_load()).
+ * PASS_GATEWAY and PASS_PEER of then are no settings any more.
+ */
+#define LEGACY_LAN "LAN_VLAN"
+
+/*
+ * The settings of each session, SESSIONn_<suffix>, and their defaults: PASS,
+ * whether it hands its address down to the router or keeps it, and
+ * HOST_VLAN, the VLAN of the host link it hands it down in, none for its own
+ * VLAN or untagged for none.
+ */
 enum skey {
 	S_GEM,
 	S_VLAN,
 	S_MAC,
 	S_FAMILY,
+	S_PASS,
+	S_HOST_VLAN,
 	NSKEYS
 };
 
@@ -116,6 +127,8 @@ static const struct {
 	[S_VLAN] = { "VLAN", K_VLAN, "" },
 	[S_MAC] = { "MAC", K_MAC_OPT, "" },
 	[S_FAMILY] = { "FAMILY", K_FAMILY, "both" },
+	[S_PASS] = { "PASS", K_ONOFF, "on" },
+	[S_HOST_VLAN] = { "HOST_VLAN", K_HOST_VLAN, "" },
 };
 
 struct account {
@@ -233,6 +246,8 @@ static bool valid(enum kind kind, const char *v)
 		return !strcmp(v, "auto") || number(v, 0, 4095, NULL);
 	case K_VLAN:
 		return !*v || number(v, 1, 4094, NULL);
+	case K_HOST_VLAN:
+		return !*v || !strcmp(v, "untagged") || number(v, 1, 4094, NULL);
 	case K_PREFIX:
 		return prefix(v, NULL, NULL);
 	case K_PREFIX_OPT:
@@ -339,7 +354,8 @@ static const char *session_value(const struct settings *s, int n, enum skey k)
 /* The settings in force: the defaults, then the files. */
 static void settings_load(struct settings *s)
 {
-	char text[TEXT_MAX], *line, *save = NULL;
+	char text[TEXT_MAX], legacy[VALUE_MAX], *line, *save = NULL;
+	bool had_legacy = false;
 
 	memset(s, 0, sizeof(*s));
 	for (int k = 0; k < NKEYS; k++)
@@ -363,8 +379,18 @@ static void settings_load(struct settings *s)
 			else if (skey_index(line, &n, &k) &&
 				 valid(g_skeys[k].kind, eq + 1))
 				snprintf(s->sval[n][k], VALUE_MAX, "%s", eq + 1);
+			else if (!strcmp(line, LEGACY_LAN) && valid(K_VLAN, eq + 1)) {
+				snprintf(legacy, sizeof(legacy), "%s", eq + 1);
+				had_legacy = true;
+			}
 		}
 	}
+	/* The link of before is the link of each session that names none. */
+	if (had_legacy)
+		for (int n = 0; n < SESSIONS; n++)
+			if (!*s->sval[n][S_HOST_VLAN])
+				snprintf(s->sval[n][S_HOST_VLAN], VALUE_MAX, "%s",
+					 *legacy ? legacy : "untagged");
 
 	for (int n = 0; n < SESSIONS; n++) {
 		char path[64];
@@ -378,6 +404,48 @@ static void settings_load(struct settings *s)
 		}
 	}
 	explicit_bzero(text, sizeof(text));
+}
+
+/*
+ * The VLAN of the host link session @n hands its address down in, as
+ * onu-mode takes it: its HOST_VLAN, else its own VLAN; "" for none.
+ */
+static const char *down_vlan(const struct settings *s, int n)
+{
+	const char *h = s->sval[n][S_HOST_VLAN];
+
+	if (!strcmp(h, "untagged"))
+		return "";
+	return *h ? h : session_value(s, n, S_VLAN);
+}
+
+/* Whether session @n has an account and is told to hand its address down. */
+static bool hands_down(const struct settings *s, int n)
+{
+	return *s->acct[n].user && strcmp(s->sval[n][S_PASS], "off");
+}
+
+/* Whether session @n carries the family @fam, "ipv4" or "ipv6". */
+static bool carries(const struct settings *s, int n, const char *fam)
+{
+	const char *f = s->sval[n][S_FAMILY];
+
+	return !strcmp(f, "both") || !strcmp(f, fam);
+}
+
+/*
+ * Whether session @n hands its @fam down, as onu-mode decides: it is the
+ * first in its VLAN to the host that is told to and carries it.
+ */
+static bool hands(const struct settings *s, int n, const char *fam)
+{
+	for (int m = 0; m < SESSIONS; m++) {
+		if (!hands_down(s, m) || !carries(s, m, fam) ||
+		    strcmp(down_vlan(s, m), down_vlan(s, n)))
+			continue;
+		return m == n;
+	}
+	return false;
 }
 
 /* Whether the settings make sense together; if not, why in @err. */
@@ -397,12 +465,6 @@ static bool coherent(const struct settings *s, char *err, size_t errcap)
 				 "WAN_GATEWAY is not another address of WAN_ADDRESS's network");
 			return false;
 		}
-	}
-	ipv4(s->val[PASS_GATEWAY], &gw);
-	if (!gw || gw == 0xffffffffu || gw >> 24 == 127 || gw >> 28 == 14) {
-		snprintf(err, errcap,
-			 "PASS_GATEWAY is not an address a station can have");
-		return false;
 	}
 	for (int n = 0; n < SESSIONS; n++) {
 		if (!*s->acct[n].user != !*s->acct[n].secret) {
@@ -432,6 +494,27 @@ static bool coherent(const struct settings *s, char *err, size_t errcap)
 				snprintf(err, errcap,
 					 "sessions %d and %d are in one VLAN and send from one MAC address",
 					 a + 1, b + 1);
+				return false;
+			}
+		}
+	}
+
+	/* In one VLAN to the host one session hands IPv4 down, and one IPv6. */
+	for (int a = 0; a < SESSIONS; a++) {
+		for (int b = a + 1; b < SESSIONS; b++) {
+			const char *both = "";
+
+			if (!hands_down(s, a) || !hands_down(s, b) ||
+			    strcmp(down_vlan(s, a), down_vlan(s, b)))
+				continue;
+			if (carries(s, a, "ipv4") && carries(s, b, "ipv4"))
+				both = "an IPv4 address";
+			else if (carries(s, a, "ipv6") && carries(s, b, "ipv6"))
+				both = "an IPv6 prefix";
+			if (*both) {
+				snprintf(err, errcap,
+					 "sessions %d and %d both hand %s down in one VLAN to the host",
+					 a + 1, b + 1, both);
 				return false;
 			}
 		}
@@ -529,18 +612,8 @@ static void pv_session_fact(struct prov_buf *out, int n, const char *fact)
 		pv_null(out);
 }
 
-/* The first session with an account that carries IPv4: it hands it on. */
-static int pass_session(const struct settings *s)
-{
-	for (int n = 0; n < SESSIONS; n++)
-		if (*s->acct[n].user && strcmp(s->sval[n][S_FAMILY], "ipv6"))
-			return n;
-	return -1;
-}
-
 static void pv_sessions(struct prov_buf *out, const struct settings *s)
 {
-	int pass = pass_session(s);
 	bool first = true;
 
 	pv_open(out, '[');
@@ -564,14 +637,15 @@ static void pv_sessions(struct prov_buf *out, const struct settings *s)
 
 			snprintf(name, sizeof(name), "%s", g_skeys[k].suffix);
 			for (char *c = name; *c; c++)
-				*c = (char)(*c - 'A' + 'a');
+				if (*c >= 'A' && *c <= 'Z')
+					*c = (char)(*c - 'A' + 'a');
 			pv_comma(out);
 			pv_key(out, name);
 			pv_str(out, session_value(s, n, (enum skey)k));
 		}
 		pv_comma(out);
 		pv_key(out, "hands_on");
-		pv_bool(out, n == pass);
+		pv_bool(out, hands(s, n, "ipv4"));
 		pv_comma(out);
 		pv_key(out, "dev");
 		pv_session_fact(out, n, "dev");
@@ -594,6 +668,16 @@ static void pv_sessions(struct prov_buf *out, const struct settings *s)
 		pv_comma(out);
 		pv_key(out, "prefix_host");
 		pv_session_fact(out, n, "host");
+		/* Where it hands down, and the gateway the router is given there. */
+		pv_comma(out);
+		pv_key(out, "lan");
+		pv_session_fact(out, n, "lan");
+		pv_comma(out);
+		pv_key(out, "gateway");
+		pv_session_fact(out, n, "gateway");
+		pv_comma(out);
+		pv_key(out, "dns");
+		pv_session_fact(out, n, "dns");
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');
@@ -874,7 +958,8 @@ static const char *line_value(const char *text, const char *key, char *out,
 /*
  * A session of the stick's own: ID, 1 to 7, or none for the first free one;
  * USER and SECRET, its account, an empty USER removing the session (an
- * absent SECRET keeps the one there is); VLAN, MAC, GEM and FAMILY. Its
+ * absent SECRET keeps the one there is); VLAN, MAC, GEM, FAMILY, PASS and
+ * HOST_VLAN. Its
  * settings replace the WAN's of before, which the first session took when
  * it had none of its own; the bench's router mode is left as it is.
  */
@@ -882,7 +967,7 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 {
 	char id[VALUE_MAX], user[USER_MAX + 2], secret[SECRET_MAX + 2],
 		vlan[VALUE_MAX], mac[VALUE_MAX], gem[VALUE_MAX], fam[VALUE_MAX],
-		text[TEXT_MAX];
+		pass[VALUE_MAX], host[VALUE_MAX], text[TEXT_MAX];
 	const char *i = line_value(val, "ID", id, sizeof(id));
 	const char *u = line_value(val, "USER", user, sizeof(user));
 	const char *sec = line_value(val, "SECRET", secret, sizeof(secret));
@@ -890,15 +975,18 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 	const char *m = line_value(val, "MAC", mac, sizeof(mac));
 	const char *g = line_value(val, "GEM", gem, sizeof(gem));
 	const char *f = line_value(val, "FAMILY", fam, sizeof(fam));
+	const char *p = line_value(val, "PASS", pass, sizeof(pass));
+	const char *h = line_value(val, "HOST_VLAN", host, sizeof(host));
 	struct settings s;
 	unsigned long n = 0;
 	size_t len = 0;
 	int rc;
 
 	if ((v && !valid(K_VLAN, v)) || (m && !valid(K_MAC_OPT, m)) ||
-	    (g && !valid(K_GEM, g)) || (f && !valid(K_FAMILY, f))) {
+	    (g && !valid(K_GEM, g)) || (f && !valid(K_FAMILY, f)) ||
+	    (p && !valid(K_ONOFF, p)) || (h && !valid(K_HOST_VLAN, h))) {
 		snprintf(err, errcap,
-			 "VLAN: 1 to 4094 or none; MAC: xx:xx:xx:xx:xx:xx or none; GEM: a Port-ID or auto; FAMILY: ipv4, ipv6 or both");
+			 "VLAN: 1 to 4094 or none; MAC: xx:xx:xx:xx:xx:xx or none; GEM: a Port-ID or auto; FAMILY: ipv4, ipv6 or both; PASS: on or off; HOST_VLAN: 1 to 4094, untagged or none");
 		return -EINVAL;
 	}
 	if (u && *u && !word(u, USER_MAX)) {
@@ -966,31 +1054,16 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 		if (f)
 			len += (size_t)snprintf(text + len, sizeof(text) - len,
 						"SESSION%lu_FAMILY=%s\n", n, f);
+		if (p)
+			len += (size_t)snprintf(text + len, sizeof(text) - len,
+						"SESSION%lu_PASS=%s\n", n, p);
+		if (h)
+			len += (size_t)snprintf(text + len, sizeof(text) - len,
+						"SESSION%lu_HOST_VLAN=%s\n", n, h);
 	}
 
 	rc = prov_settings_set(text, err, errcap);
 	explicit_bzero(secret, sizeof(secret));
 	explicit_bzero(text, sizeof(text));
 	return rc;
-}
-
-int prov_link_set(const char *val, char *err, size_t errcap)
-{
-	char vlan[VALUE_MAX], gw[VALUE_MAX], peer[VALUE_MAX], text[TEXT_MAX];
-	const char *v = line_value(val, "VLAN", vlan, sizeof(vlan));
-	const char *g = line_value(val, "GATEWAY", gw, sizeof(gw));
-	const char *pe = line_value(val, "PEER", peer, sizeof(peer));
-	size_t len = 0;
-
-	if (v)
-		len += (size_t)snprintf(text + len, sizeof(text) - len, "LAN_VLAN=%s\n", v);
-	if (g)
-		len += (size_t)snprintf(text + len, sizeof(text) - len, "PASS_GATEWAY=%s\n", g);
-	if (pe)
-		len += (size_t)snprintf(text + len, sizeof(text) - len, "PASS_PEER=%s\n", pe);
-	if (!len) {
-		snprintf(err, errcap, "nothing to change");
-		return -EINVAL;
-	}
-	return prov_settings_set(text, err, errcap);
 }

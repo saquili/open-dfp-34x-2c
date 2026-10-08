@@ -1546,9 +1546,9 @@ static void test_settings(void)
 		"WAN_MAC=00:00:00:00:00:00",
 		"WAN_MAC=00:00:5e:00:53",
 		"WAN_MAC=00-00-5e-00-53-01",
-		"LAN_VLAN=4095",
-		"PASS_GATEWAY=169.254.0",
-		"PASS_PEER=yes",
+		"SESSION1_PASS=yes",
+		"SESSION1_HOST_VLAN=4095",
+		"SESSION1_HOST_VLAN=none",
 		"PPPOE_USER=two words",
 		"PPPOE_SECRET=",
 		"a line without an equals sign",
@@ -1655,19 +1655,18 @@ static void test_settings(void)
 			       err, sizeof(err));
 	check(rc == -EINVAL, "a DHCP range that ends before it starts is refused");
 
-	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nPASS_GATEWAY=127.0.0.1\n",
+	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nPASS_GATEWAY=169.254.0.1\n",
 			       err, sizeof(err));
 	check(rc == -EINVAL && strstr(err, "PASS_GATEWAY"),
-	      "a passthrough gateway no station can have is refused");
-	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nLAN_VLAN=410\n"
-			       "WAN_MAC=00:00:5e:00:53:01\n",
+	      "the stick's address on the link to the router is no setting any more");
+	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nWAN_MAC=00:00:5e:00:53:01\n",
 			       err, sizeof(err));
-	check(rc == 0, "passthrough over PPPoE, its link to the router in a VLAN, is taken");
+	check(rc == 0, "passthrough over PPPoE is taken");
 	s = slurp("/run/onu.conf", file, sizeof(file));
-	check(s && strstr(s, "\nMODE=passthrough\n") && strstr(s, "\nLAN_VLAN=410\n") &&
-		      strstr(s, "\nPASS_GATEWAY=169.254.0.1\n") &&
-		      strstr(s, "\nWAN_MAC=00:00:5e:00:53:01\n"),
-	      "onu.conf has the passthrough settings, the gateway its default");
+	check(s && strstr(s, "\nMODE=passthrough\n") &&
+		      strstr(s, "\nWAN_MAC=00:00:5e:00:53:01\n") && !strstr(s, "LAN_VLAN") &&
+		      !strstr(s, "PASS_GATEWAY") && !strstr(s, "PASS_PEER"),
+	      "onu.conf has the passthrough settings, and no link to the router of its own");
 	settled(buf, sizeof(buf));
 
 	put("/run/onu-mode", "router\n", 0644);
@@ -1696,8 +1695,16 @@ static void test_settings(void)
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"hands_on\":true,\"dev\":\"wan410\",\"gem_dev\":\"gem1\","
 			"\"ppp\":\"ppp0\",\"ipv4\":\"192.0.2.2\",\"ipv6\":null,"
-			"\"prefix\":null,\"prefix_host\":null") != NULL,
+			"\"prefix\":null,\"prefix_host\":null,\"lan\":null,"
+			"\"gateway\":null,\"dns\":null}") != NULL,
 	      "a session carries what onu-mode brought up for it");
+	put("/run/session/1/lan", "lan410\n", 0644);
+	put("/run/session/1/gateway", "192.0.2.1\n", 0644);
+	put("/run/session/1/dns", "198.51.100.53\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"lan\":\"lan410\",\"gateway\":\"192.0.2.1\","
+			"\"dns\":\"198.51.100.53\"}") != NULL,
+	      "and where it hands its address down, with the gateway and name servers");
 	put("/run/session/1/prefix", "2001:db8:1200::/56\n", 0644);
 	put("/run/session/1/host", "fe80::2\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
@@ -1815,8 +1822,34 @@ static void test_panel_values(void)
 		      file_has("/run/onu-pppoe2", "user@example.net/ipv6 example-secret"),
 	      "a second account takes the first free session");
 	check(strstr(s, "\"id\":1,") && strstr(s, "\"id\":2,") &&
-		      strstr(s, "\"family\":\"ipv6\",\"hands_on\":false"),
-	      "both are served, and the IPv6 one hands no address on");
+		      strstr(s, "\"family\":\"ipv6\",\"pass\":\"on\",\"host_vlan\":\"\","
+				"\"hands_on\":false"),
+	      "both are served, both hand down in their own VLAN, and the IPv6 one no IPv4");
+	rc = prov_session_set("USER=third@example.net\nSECRET=example-secret\nVLAN=410\n"
+			      "FAMILY=ipv6\n",
+			      err, sizeof(err));
+	check(rc == -EINVAL && strstr(err, "sessions 2 and 3 both hand an IPv6 prefix down"),
+	      "a second IPv6 prefix handed down in one VLAN to the host is refused");
+	rc = prov_session_set("USER=third@example.net\nSECRET=example-secret\nVLAN=410\n"
+			      "FAMILY=ipv6\nPASS=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION3_PASS=off"),
+	      "a session that keeps its prefix on the stick is taken");
+	rc = prov_session_set("ID=3\nPASS=on\nHOST_VLAN=37\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION3_PASS=on\nSESSION3_HOST_VLAN=37") &&
+		      strstr(s, "\"pass\":\"on\",\"host_vlan\":\"37\""),
+	      "and so is one that hands it down in a VLAN of its own");
+	check(prov_session_set("ID=3\nHOST_VLAN=4095\n", err, sizeof(err)) == -EINVAL &&
+		      prov_session_set("ID=3\nPASS=maybe\n", err, sizeof(err)) == -EINVAL,
+	      "a VLAN to the host out of range, and PASS other than on or off, are refused");
+	rc = prov_session_set("ID=3\nHOST_VLAN=untagged\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION3_HOST_VLAN=untagged"),
+	      "the host link itself, without a VLAN, is taken");
+	rc = prov_session_set("ID=3\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
 	check(prov_session_set("ID=2\nMAC=00:00:5e:00:53:02\n", err, sizeof(err)) == -EINVAL &&
 		      strstr(err, "one MAC address"),
 	      "two sessions in one VLAN that would send from two MAC addresses are refused");
@@ -1838,19 +1871,27 @@ static void test_panel_values(void)
 		      stat(prov_path("/run/onu-pppoe1", file, sizeof(file)), &st) != 0,
 	      "without accounts there are no sessions: the router dials through the stick");
 
-	rc = prov_link_set("VLAN=36\nGATEWAY=169.254.0.1\n", err, sizeof(err));
+	/* The one link to the router of before becomes the sessions' own. */
+	put("/run/onu.conf", "MODE=\nLAN_VLAN=36\nPASS_GATEWAY=169.254.0.1\nPASS_PEER=on\n"
+			     "SESSION1_VLAN=410\nSESSION1_FAMILY=ipv4\n",
+	    0644);
+	put("/run/onu-pppoe1", "user@example.net example-secret\n", 0600);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"family\":\"ipv4\",\"pass\":\"on\",\"host_vlan\":\"36\"") != NULL,
+	      "the link of before, LAN_VLAN, is the VLAN a session hands down in");
+	rc = prov_session_set("ID=1\nMAC=00:00:5e:00:53:01\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && file_has("/run/onu.conf", "LAN_VLAN=36") &&
-		      file_has("/run/onu.conf", "PASS_GATEWAY=169.254.0.1"),
-	      "the link to the router takes its VLAN and the gateway it hands out");
-	check(prov_link_set("VLAN=0", err, sizeof(err)) == -EINVAL, "a VLAN of 0 is refused");
-	rc = prov_link_set("PEER=off\n", err, sizeof(err));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION1_HOST_VLAN=36") &&
+		      !file_has("/run/onu.conf", "LAN_VLAN") &&
+		      !file_has("/run/onu.conf", "PASS_GATEWAY") &&
+		      !file_has("/run/onu.conf", "PASS_PEER"),
+	      "and a change writes it as the session's own, without the link's settings");
+	put("/run/onu.conf", "MODE=\nLAN_VLAN=\nSESSION1_VLAN=410\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"host_vlan\":\"untagged\"") != NULL,
+	      "an empty LAN_VLAN of before is the host link itself");
+	rc = prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && file_has("/run/onu.conf", "PASS_PEER=off") &&
-		      file_has("/run/onu.conf", "LAN_VLAN=36"),
-	      "the router can be given the stick's own address as the gateway");
-	check(prov_link_set("PEER=maybe\n", err, sizeof(err)) == -EINVAL,
-	      "PEER is on or off");
 	(void)s;
 	unsetenv("POND_STORE");
 	unsetenv("POND_REIDENTIFY");
