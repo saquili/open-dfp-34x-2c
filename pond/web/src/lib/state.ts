@@ -105,6 +105,9 @@ export interface SessionView {
   ppp: string | null;
   prefix: string | null;
   prefixHost: string | null;
+  /** The gateway the host is given, the concentrator's, while the address is down. */
+  gateway: string | null;
+  dns: string[];
 }
 
 /**
@@ -145,6 +148,8 @@ export function sessions(live: Live | undefined): SessionView[] {
     ppp: x.ppp,
     prefix: x.prefix,
     prefixHost: x.prefix_host,
+    gateway: x.gateway ?? null,
+    dns: x.dns ? x.dns.split(/\s+/).filter(Boolean) : [],
   }));
 }
 

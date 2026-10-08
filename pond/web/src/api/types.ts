@@ -180,6 +180,10 @@ export interface SessionInfo {
   /** The IPv6 prefix delegated to the session, and the host it went on to. */
   prefix: string | null;
   prefix_host: string | null;
+  /** The link it hands down by, the gateway it gives there, its name servers. */
+  lan?: string | null;
+  gateway?: string | null;
+  dns?: string | null;
 }
 
 export interface Settings {

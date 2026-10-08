@@ -64,6 +64,9 @@ if (SCENARIO === "sessions") {
     ipv6: up && family !== "ipv4" ? `2001:db8:ff00::${id}` : null,
     prefix: null,
     prefix_host: null,
+    lan: id <= 2 ? "lan410" : null,
+    gateway: up && id === 1 ? "198.51.100.1" : null,
+    dns: up && family !== "ipv6" ? "198.51.100.53 198.51.100.54" : null,
   });
   /* Slot 1 hands its IPv4 address down into VLAN 410, slot 2 its prefix. */
   const v4 = { ...one(1, "ipv4", true), hands_on: true };
@@ -80,6 +83,8 @@ if (SCENARIO === "sessions") {
     hands_on: true,
     prefix: "2001:db8:1300::/56",
     prefix_host: "fe80::3",
+    lan: "lan36",
+    gateway: "198.51.100.9",
   };
   const list = [v4, v6, both, one(4, "both", false), one(5, "ipv4", false), one(6, "ipv6", false)];
   settings.sessions = list;

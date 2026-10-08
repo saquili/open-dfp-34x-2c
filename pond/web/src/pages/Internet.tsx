@@ -412,6 +412,9 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   const mtu = (x.up && net.data?.links.find((l) => l.name === x.ppp)?.mtu) || null;
   const v4 = x.family !== "ipv6";
   const v6 = x.family !== "ipv4";
+  /* The session's own, else, from a stick of before, the one handed on. */
+  const dns = x.dns.length ? x.dns : x.handsOn ? s.dns : [];
+  const gateway = x.up ? (x.gateway ?? (x.handsOn ? link.hostGateway : null)) : null;
 
   const remove = () => {
     if (!window.confirm(t("internet.removeSessionConfirm", { id: x.id }))) return;
@@ -485,7 +488,7 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
             rows={[
               v4 && ["IPv4", x.ipv4 ?? "–"],
               v6 && [t("internet.prefix"), x.prefix ?? (x.ipv6 ? t("internet.prefixNone") : "–")],
-              x.handsOn && [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
+              v4 && [t("internet.dns"), dns.length ? dns.join(", ") : "–"],
               [
                 t("internet.mtu"),
                 mtu ? t(mtu >= 1500 ? "internet.mtuRfc" : "internet.mtuPlain", { mtu }) : "–",
@@ -499,10 +502,7 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
               rows={[
                 ["VLAN", downVlan(x) || t("switch.untagged")],
                 v4 && [t("internet.hostAddress"), x.handsOn && x.ipv4 ? x.ipv4 : "–"],
-                v4 && [
-                  t("internet.hostGateway"),
-                  x.handsOn && x.up && link.hostGateway ? link.hostGateway : "–",
-                ],
+                v4 && [t("internet.hostGateway"), x.handsOn && gateway ? gateway : "–"],
                 v6 && [
                   t("internet.prefix"),
                   !x.prefix
