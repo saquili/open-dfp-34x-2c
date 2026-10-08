@@ -425,21 +425,26 @@ The watchdog is a block of the SoC, driven by the kernel. Its control register
 is at physical address ``0x18003268``, which a loader prompt reaches as
 ``0xb8003268``; it reads back what was written.
 
-What a restart leaves counting
-------------------------------
+What a restart does
+-------------------
 
 The kernel's restart (``reboot``, SysRq ``b``, a panic with ``panic=10``)
-writes ``0xe7c00000`` to the control register and then jumps to the CPU's reset
-vector. The value enables the watchdog with a deadline of 44.3 seconds and a
-full chip reset as its action. The write is a safety net for the case that the
-jump never reaches the loader.
+restarts the count and writes ``0x80000000`` to the control register: the
+watchdog enabled with its shortest deadline, 335.5 milliseconds, and a full
+chip reset as its action. The loader then starts on a chip as a power cycle
+leaves it, the switch and the SerDes lane to the host included, and no count
+is left running.
 
-The count keeps running through the jump, through the loader and into the next
-boot, although the control register then reads 0. Writing 0 to the register
-stops it. The loader does not. The chip therefore resets about 46 seconds
-after a restart (45.9 seconds were measured from arming to the loader's first
-output, and 46.9 and 47.0 seconds after restarts) unless something clears the
-count in time.
+Older kernels, which a bank may still hold, restarted by a jump to the CPU's
+reset vector, with ``0xe7c00000`` written first: a deadline of 44.3 seconds,
+as a safety net for a jump that never reached the loader. That count keeps
+running through the jump, through the loader and into the next boot, although
+the control register then reads 0. Writing 0 to the register stops it. The
+loader does not. The chip therefore resets about 46 seconds after such a
+restart (45.9 seconds were measured from arming to the loader's first output,
+and 46.9 and 47.0 seconds after restarts) unless something clears the count in
+time. The rest of this section is about that count and the one of a trial
+boot.
 
 Who clears it
 -------------
@@ -453,10 +458,12 @@ Who clears it
 * The chip reset itself, which starts everything again.
 
 A RAM boot does not stop the count, and the bench leaves it running on purpose.
-The boot has to reach the kernel within about 45 seconds of the restart. After
-a restart the first transfer sometimes fails, and waiting does not cure it; the
-reset that the count brings does (see "When something goes wrong" on
-``flashing.rst``).
+After an older kernel's restart, the boot has to reach the kernel within about
+45 seconds. The first transfer after such a restart sometimes fails, and
+waiting does not cure it; the reset that the count brings does (see "When
+something goes wrong" on ``flashing.rst``). The jump had left the switch as the
+kernel set it up, and behind one of the host's cages none of the loader's
+frames left the board until the chip reset.
 
 A trial boot
 ------------
@@ -487,20 +494,20 @@ At the moment the kernel is entered:
   ``bootm``. The kernel's switch driver brings it up itself.
 * The system controller's packet-buffer enable for the PON MAC is clear: the
   register at physical ``0x1800063c`` reads ``0x10``.
-* The watchdog is disarmed, unless a restart or a trial boot armed it. A count
-  armed before survives into the kernel, as the section above says.
+* The watchdog is disarmed, unless a trial boot or an older kernel's restart
+  armed it. A count armed before survives into the kernel, as the section
+  above says.
 
-A restart is a jump to the reset vector, not a reset of the chip. The CPU's
-state, its caches and TLB and every on-chip block keep the state they had; the
-loader initialises what it uses, and the kernel's drivers the rest. Which blocks
-the loader leaves untouched is not established, but one is known: the CPU
-port's DMA engine. Left running, it goes on receiving into the rings of the
-kernel that is going away, in memory that the next kernel owns by then; on the
+A restart resets the whole chip; the switch's table memories are the one state
+known to survive it, and the drivers empty them at bring-up. The older restart,
+a jump to the reset vector, was no reset: the CPU's state, its caches and TLB
+and every on-chip block kept the state they had. One block it left running was
+the CPU port's DMA engine, which went on receiving into the rings of the kernel
+that was going away, in memory that the next kernel owned by then; on the
 board, about half of the boots from the flash that followed a ``reboot`` lost
 their first processes, the boot script among them. The kernel stops the engine
-before the jump on an orderly shutdown and on a panic. SysRq ``b`` restarts
-without stopping it; in six such restarts on the board the next boot was not
-harmed, which does not make it safe.
+on an orderly shutdown and on a panic, and the chip reset stops it in any case,
+SysRq ``b`` included.
 
 Timings
 =======
@@ -511,10 +518,14 @@ Timings
 
    * - Step
      - Time
-   * - A restart through the reset vector, to the loader's countdown
+   * - A restart, to the loader's countdown
+     - About 3.2 s (the first-stage banner after 1.9 s, the ``U-Boot`` banner
+       after 3.1 s).
+   * - An older kernel's restart through the reset vector, to the loader's
+       countdown
      - 1.81 s (the first-stage banner after about 0.3 s, the ``U-Boot`` banner
        after about 1.5 s).
-   * - A restart that only the watchdog completes
+   * - An older kernel's restart that only the watchdog completes
      - About 46 s.
    * - The countdown
      - ``bootdelay`` ticks, taken to be one second each.
@@ -533,8 +544,8 @@ If you replace the loader
 What the kernel and the bench rely on, from the sections above:
 
 * The loader runs from the start of ``boot`` when the CPU is at its reset
-  vector. The kernel's restart jumps there and expects the loader to start at
-  once.
+  vector, after a power-up and after a chip reset; the kernel's restart is a
+  chip reset by the watchdog.
 * It boots a legacy U-Boot image with LZMA compression at the image's load
   address, ``0x80100000``, and enters it at the image's entry point with the
   arguments in the registers that the kernel page describes. It passes no
@@ -542,9 +553,9 @@ What the kernel and the bench rely on, from the sections above:
 * It passes the arguments of the bank: ``console=ttyS0,115200`` and
   ``root=31:5`` for bank 0.
 * It leaves UART0 at 115200 baud, 8N1.
-* A count that the restart armed is still running when the loader starts. A
-  loader that does not stop it has the chip reset about 46 seconds after the
-  restart, unless the kernel clears it first.
+* After an older kernel's restart, a count that the restart armed is still
+  running when the loader starts. A loader that does not stop it has the chip
+  reset about 46 seconds after the restart, unless the kernel clears it first.
 * A loader that uses the network needs the SerDes lane to the host up; the
   lane macro on ``flashing.rst`` says what the bring-up is.
 * The bench types to the dialogue of U-Boot 2011.12: its prompt, its

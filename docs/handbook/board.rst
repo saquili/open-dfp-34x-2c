@@ -151,8 +151,8 @@ Power and restarts
 The stick takes its power from the host's cage and has no power switch, and the
 board cannot switch its own supply off: the kernel's halt and power-off only
 stop the CPU. What software can do is restart. ``reboot``, or SysRq ``b`` on a
-running kernel, jumps to the CPU's reset vector, and the boot loader is at its
-autoboot countdown about two seconds later.
+running kernel, has the watchdog reset the whole chip, and the boot loader is
+at its autoboot countdown about three seconds later.
 
 A power cycle is a person's act: take the stick out of the cage and put it
 back, or cut the cage's power, and never while a flash write is running. A few

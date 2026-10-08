@@ -453,7 +453,7 @@ A good run looks like this on the console, from the restart to the kernel
 values left out; the countdown is that of a board whose ``bootdelay`` is 600)::
 
     sysrq: Resetting
-    rtl9602c: entering the reset vector; watchdog armed behind it
+    rtl9602c: restarting through a watchdog chip reset
 
     9601D
     PRELOADER <name> <version>
@@ -666,8 +666,9 @@ How long each step takes
      - Time
    * - Pushing an image of 0.8 to 1.2 MB to the image host
      - About 1 s.
-   * - A restart through the reset vector, to the loader's countdown
-     - 1.81 s.
+   * - A restart, to the loader's countdown
+     - About 3.2 s; 1.81 s for an older kernel, which jumped to the reset
+       vector.
    * - TFTP transfer and start of an image by the loader
      - About 4 s for images of 0.8 to 1.2 MB.
    * - The kernel's banner to user space
@@ -678,7 +679,8 @@ How long each step takes
        the tool). A script of the same steps took 25 s and 32 s, and 63 s when
        the first transfer failed and the watchdog's reset intervened.
    * - Waiting for the watchdog's reset after a failed first transfer
-     - About 46 s after the restart.
+     - About 46 s after an older kernel's restart. A current kernel's restart
+       is that reset already.
    * - YMODEM at 115200 baud
      - 123 s for 1239420 bytes, so about 200 s for the largest ``r0`` image.
    * - ``sf erase`` of a partition of bank 0, ``sf write``, ``saveenv``,
@@ -704,8 +706,9 @@ When something goes wrong
      - The transfer does not start or does not go on. The lane is off:
        ``sdsup`` is missing, wrong, or its effect was lost. Or the image host
        does not answer: the cable or the cage, the server not running, UDP port
-       69 blocked. Or, right after a restart through the reset vector, the
-       first transfer failed for a reason that is not established.
+       69 blocked. Or, right after an older kernel's restart through the reset
+       vector, the switch still held that kernel's setup of the lane, and
+       behind one of the host's cages no frame leaves until a chip reset.
      - ``python3 -m bench serve check``. The tool ends the attempt after two
        ``T`` marks, presses Ctrl-C and recovers once (see "Recover by a power
        cycle"). Run it again.
@@ -754,7 +757,7 @@ When something goes wrong
        ssh, or asks for a power cycle.
    * - ``PRELOADER`` again, which nothing asked for
      - The board reset by itself, which the watchdog's count does about 46 s
-       after a restart through the reset vector.
+       after an older kernel's restart through the reset vector.
      - Expected after a failed first transfer; the tool breaks in again. In the
        middle of a flash it means that the count was not stopped, and the
        partition is invalid.
@@ -845,12 +848,15 @@ the tool lists the full set in "What is checked only on the board".
   for the RAM copy and for the flash. It has been seen to match once.
 * That a typed ``reset`` heals a failed first transfer as the watchdog's reset
   does (``--recovery reset``, expected to save about 35 seconds). The recovery
-  that is proven is to wait for the watchdog's reset, about 46 seconds after
-  the restart.
-* That ``mw.l b8003268 0`` at the prompt stops the watchdog's count after a
-  restart of the current kernel. The measurement behind it was made with a
-  different kernel build; a flash that starts after a restart is cut off by the
-  chip reset if the write does not stop the count.
+  that is proven is to wait for the watchdog's reset, about 46 seconds after an
+  older kernel's restart. A current kernel's restart leaves no count, so the
+  default recovery waits for a reset that does not come and then types
+  ``reset``.
+* That ``mw.l b8003268 0`` at the prompt stops the watchdog's count after an
+  older kernel's restart. The measurement behind it was made with a different
+  kernel build; a flash that starts after such a restart is cut off by the chip
+  reset if the write does not stop the count. A current kernel's restart leaves
+  no count to stop.
 * That ``boot`` typed at the prompt consumes a pending trial exactly as the end
   of the countdown does. The countdown form is the measured one.
 * That the loader stores the text of a macro as typed, with its semicolons and
