@@ -1,0 +1,35 @@
+From: Paweł Phan <szop.hektar_1w@icloud.com>
+Subject: [PATCH] linux, linux-headers: take the GPL-2.0 text of Linux 6.18
+
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+The build system checks the licence files of the kernel and of its
+headers against the hashes in linux/linux.hash (which
+package/linux-headers/linux-headers.hash links to), whatever the
+kernel's version.
+Those hashes are of the GPL-2.0 text of the kernels of this release.
+Linux 6.18, the kernel of this distribution, replaced the Free Software
+Foundation's postal address in LICENSES/preferred/GPL-2.0 with its web
+address, so the text has another hash and "make legal-info" stops at
+it.
+
+Take the hash of Linux 6.18's text. COPYING and
+LICENSES/exceptions/Linux-syscall-note are unchanged.
+
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ linux/linux.hash | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/linux/linux.hash b/linux/linux.hash
+index 3b0817f2..bc9d3cbe 100644
+--- a/linux/linux.hash
++++ b/linux/linux.hash
+@@ -12,5 +12,5 @@ sha256  b3454708b98016f02604433e41060be2c1feb595c2bddeb25292596f047f0915  linux-
+ 
+ # Licenses hashes
+ sha256  fb5a425bd3b3cd6071a3a9aff9909a859e7c1158d54d32e07658398cd67eb6a0  COPYING
+-sha256  f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79  LICENSES/preferred/GPL-2.0
++sha256  8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa  LICENSES/preferred/GPL-2.0
+ sha256  8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f  LICENSES/exceptions/Linux-syscall-note

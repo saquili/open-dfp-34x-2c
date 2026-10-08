@@ -11,9 +11,9 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release are in ``patches/``: two, which add the MIPS I variant that this core
-needs and keep the shared C library from an atomic operation the core cannot
-run.
+release are in ``patches/``: three, which add the MIPS I variant that this core
+needs, keep the shared C library from an atomic operation the core cannot run,
+and take the licence text of the kernel this distribution builds.
 
 What is here
 ============
@@ -27,8 +27,8 @@ What is here
 ``fetch``
     The script that makes the pinned release ready to build (below).
 ``patches/``
-    The patches applied to the release, in name order: the MIPS I variant
-    and the C library's exit handlers (below).
+    The patches applied to the release, in name order: the MIPS I variant,
+    the C library's exit handlers and the kernel's licence text (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -128,6 +128,18 @@ memory, which a plain test and store does not keep, and no program of the image
 calls it; the cut of the shared C library to what the programs use leaves it out
 (``tools/lib-trim/README.rst``), and the instruction-set gate would refuse an
 image that brought it back.
+
+The kernel's licence text
+=========================
+
+``patches/0003-linux-take-the-GPL-2.0-text-of-Linux-6.18.patch`` changes one
+line of ``linux/linux.hash``, to which ``package/linux-headers/linux-headers.hash``
+links. The build system checks the licence files of the kernel and of its
+headers against those hashes whatever the kernel's version, and ``make
+legal-info`` stops at a file whose hash differs. The hashes are of the GPL-2.0
+text of the kernels of this release; Linux 6.18 replaced the Free Software
+Foundation's postal address in ``LICENSES/preferred/GPL-2.0`` with its web
+address, so the patch gives that file the hash of 6.18's text.
 
 Checking the pin
 ================
