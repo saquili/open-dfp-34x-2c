@@ -411,8 +411,8 @@ Interfaces to user space
   ``hsd``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf`` and ``l3capture``;
   ``rtl9602c-l2.c`` creates ``fdb``; ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``, ``usburst``,
   ``gemusintr``, ``bwmap`` and ``uscntr``; ``rtl9602c-ponmac.c`` creates
-  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``
-  and ``eeblocks``; ``rtl9602c-ptp.c`` creates ``todstat`` and ``ptpstat``. A
+  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``,
+  ``eeblocks`` and ``tables``; ``rtl9602c-ptp.c`` creates ``todstat`` and ``ptpstat``. A
   view belongs to the block that creates it, and the page of that block says
   what it shows.
 - ``/proc/interrupts``: the switch's interrupt is source 8 of the SoC interrupt

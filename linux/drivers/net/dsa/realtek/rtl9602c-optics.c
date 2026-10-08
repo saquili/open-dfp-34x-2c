@@ -1117,13 +1117,62 @@ static int rtl9602c_eeblocks_show(struct seq_file *s, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_eeblocks);
 
+/*
+ * The "tables" view: A2h bytes 128-255 for each table the page select can
+ * show, 0, 1, 2, 4, 5 and 6, with the password bytes written first as the
+ * modulation hold writes them (rtl9602c_gn_t2_password()).  Table 2 holds
+ * the laser driver's configuration, among it the receiver's loss-of-signal
+ * control (BBh) and the APD bias control (BDh); table 6 the temperature
+ * indexed APD DAC values at C0h-FFh.  The page select is put back as it was,
+ * also when a table fails.  The page select and the password bytes are kept
+ * in the module's EEPROM, so every read of the view writes it; a
+ * CONFIG_RTL9602C_OPTICS_RO build has no such view.
+ */
+static int rtl9602c_tables_show(struct seq_file *s, void *unused)
+{
+	static const u8 tables[] = { 0, 1, 2, 4, 5, 6 };
+	struct rtl9602c_priv *p = s->private;
+	unsigned int t, i;
+	u8 b[0x80], was;
+	int err;
+
+	mutex_lock(&p->i2c_lock);
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &was) ?:
+	      rtl9602c_gn_t2_password(p);
+	if (err) {
+		mutex_unlock(&p->i2c_lock);
+		seq_printf(s, "the page select or the password failed: %d\n", err);
+		return 0;
+	}
+	for (t = 0; t < ARRAY_SIZE(tables); t++) {
+		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tables[t]);
+		for (i = 0; i < sizeof(b) && !err; i++)
+			err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x80 + i, &b[i]);
+		if (err) {
+			seq_printf(s, "=== table %u: failed: %d\n\n", tables[t], err);
+			continue;
+		}
+		seq_printf(s, "=== table %u\n", tables[t]);
+		for (i = 0; i < sizeof(b); i += 16)
+			seq_printf(s, "%02x: %*ph\n", 0x80 + i, 16, b + i);
+		seq_puts(s, "\n");
+	}
+	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, was);
+	mutex_unlock(&p->i2c_lock);
+	if (err)
+		seq_printf(s, "the page select was not put back to %02x: %d\n", was, err);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
+
 /**
  * rtl9602c_optics_debugfs_init() - create the optics' debugfs views
  * @p: driver state
  *
  * Creates "a2" and "eeblocks", both mode 0400, in the switch's debugfs
  * directory.  Both only read the part, so a CONFIG_RTL9602C_OPTICS_RO
- * build has them too.
+ * build has them too.  "tables" writes the page select and the password
+ * bytes, and only a build without it has that view.
  */
 void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -1131,6 +1180,9 @@ void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_a2_fops);
 	debugfs_create_file("eeblocks", 0400, p->debugfs, p,
 			    &rtl9602c_eeblocks_fops);
+	if (!IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+		debugfs_create_file("tables", 0400, p->debugfs, p,
+				    &rtl9602c_tables_fops);
 }
 
 #endif

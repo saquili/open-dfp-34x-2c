@@ -336,7 +336,7 @@ Where the code is
        ``rtl9602c_ponmac_sid_valid()`` when it binds or unbinds the OMCC.
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
      - The optics: the I2C master and adapter, the hwmon device, TX_DISABLE and
-       the debugfs views ``a2`` and ``eeblocks``.
+       the debugfs views ``a2``, ``eeblocks`` and ``tables``.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - Probe (which calls ``rtl9602c_ponmac_probe()``), setup and teardown (in
        which the OMCI port and the GEM data path are created and removed), and
@@ -384,7 +384,7 @@ Interfaces to user space
   of the driver adds its views to. This page describes ``ponmac``, ``ponpath``
   and ``pondp`` (see "The debugfs views"). The GPON MAC creates ``gpon``,
   ``gpontbl``, ``ploamlog``, ``usburst``, ``gemusintr``, ``bwmap`` and
-  ``uscntr``, and the optics ``a2`` and ``eeblocks``.
+  ``uscntr``, and the optics ``a2``, ``eeblocks`` and ``tables``.
 - The hwmon device ``rtl9602c_optics`` (temperature, supply voltage, bias
   current, transmitted and received power of the optics) and the I2C adapter
   ``rtl9602c i2c``, which the optics page describes. The hwmon device exists

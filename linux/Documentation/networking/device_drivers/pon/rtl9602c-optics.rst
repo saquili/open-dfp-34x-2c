@@ -30,11 +30,12 @@ The optics have no driver of their own. The code is part of the switch driver,
 - It turns the laser driver's automatic extinction-ratio loop off at every PON
   bring-up, so that the modulation of the laser runs from the value the module
   loads at power-up. This is the modulation hold.
-- It offers two debugfs views that only read, ``a2`` and ``eeblocks``.
+- It offers two debugfs views that only read, ``a2`` and ``eeblocks``, and a
+  third, ``tables``, that selects each table of the upper page to read it.
 
 The driver writes nothing to the laser driver at probe or at setup. Its only
-writes are those of the modulation hold, at PON bring-up, and
-``CONFIG_RTL9602C_OPTICS_RO`` removes them. The connections::
+writes are those of the modulation hold, at PON bring-up, and those a read of
+the ``tables`` view makes, and ``CONFIG_RTL9602C_OPTICS_RO`` removes both. The connections::
 
     RTL9602C                               laser-driver IC
     +---------------+                      +------------------------+
@@ -82,7 +83,8 @@ Configuration
        registered only with it; without it the registration is a stub that
        returns 0.
    * - ``CONFIG_DEBUG_FS``
-     - The debugfs views ``a2`` and ``eeblocks`` exist only with it.
+     - The debugfs views ``a2``, ``eeblocks`` and ``tables`` exist only with
+       it, ``tables`` only without ``CONFIG_RTL9602C_OPTICS_RO``.
    * - ``CONFIG_GPIOLIB``, ``CONFIG_GPIO_REALTEK_OTTO``
      - The GPIO controller that serves the TX_DISABLE line
        (Documentation/arch/mips/rtl9602c.rst).
@@ -203,10 +205,10 @@ Interfaces to user space
   only (see "The I2C adapter"). With ``CONFIG_I2C_CHARDEV`` it has a file
   ``/dev/i2c-N``, and a write through it can change the module for good (see
   "The management interface").
-- ``/sys/kernel/debug/rtl9602c/a2`` and ``/sys/kernel/debug/rtl9602c/eeblocks``,
-  two views that read the laser driver one byte at a time and print it (see
-  "The debugfs views"). Both have mode ``0400`` and exist only with
-  ``CONFIG_DEBUG_FS``.
+- ``/sys/kernel/debug/rtl9602c/a2``, ``/sys/kernel/debug/rtl9602c/eeblocks``
+  and ``/sys/kernel/debug/rtl9602c/tables``, views that read the laser driver
+  one byte at a time and print it (see "The debugfs views"). They have mode
+  ``0400`` and exist only with ``CONFIG_DEBUG_FS``.
 - The TX_DISABLE line. It has no file of its own: it is line 13 of the GPIO
   bank, requested under the consumer name ``tx-disable``, and
   ``/sys/kernel/debug/gpio`` shows its direction and level (high while
@@ -786,6 +788,22 @@ The blocks follow for ``0x51`` (image ``0x100``), ``0x52`` (``0x200``) and
 the word ``silent``. An unanswered read shows as ``00`` in the dump. The view
 never writes byte 127, so A2h bytes 128 to 255 show the page that byte selects
 at that moment, which is page ``02h`` while the modulation hold runs.
+
+The ``tables`` view reads A2h bytes 128 to 255 for each table the page select
+can show, 0, 1, 2, 4, 5 and 6, and prints each as eight rows of sixteen bytes
+under a line ``=== table <n>``. Before the first table it writes ``0xff`` to the
+password bytes 123 to 126, as the modulation hold does, and it puts byte 127
+back as it found it at the end, also when a table fails (``=== table <n>:
+failed: <error>``). Table 2 holds the laser driver's configuration, among it
+the receiver's loss-of-signal control (BBh) and the APD bias control (BDh);
+table 6 the temperature-indexed APD DAC values at C0h to FFh. Bytes 123 to 127
+are kept in the module's EEPROM, so every read of the view writes the EEPROM;
+a build with ``CONFIG_RTL9602C_OPTICS_RO`` has no such view::
+
+    # cat /sys/kernel/debug/rtl9602c/tables
+    === table 0
+    80: <16 bytes>
+    ...
 
 Worked example
 --------------
