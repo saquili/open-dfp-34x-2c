@@ -218,7 +218,7 @@ BusyBox 1.37.0, 94 applets
     lines) back before ``make check``.
 dropbear 2026.93
     The ssh server (``dropbear``), its key tool (``dropbearkey``) and the
-    server side of ``scp``. It takes keys only.
+    server side of ``scp``. It takes root's password and keys.
 The programs of the ONU, from this tree
     ``omcid``, the OMCI daemon, with its tools ``omcitap`` and ``omcivlan``
     (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
@@ -255,10 +255,10 @@ The boot script
        PON in either direction: the switch sends those that come in on ``sfp``
        to the CPU alone, and drops those that come in on ``pon``, so the
        network behind the OLT neither sees the management link nor reaches it;
-    #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear -s``
-       (keys only) on the two addresses above and nowhere else: the stick has no
-       packet filter, so its servers keep off the PON side by where they
-       listen;
+    #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear``
+       (root's password and keys) on the two addresses above and nowhere else:
+       the stick has no packet filter, so its servers keep off the PON side by
+       where they listen;
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
        root only: it holds the PLOAM password), with the versions that
        ``/etc/board.conf`` may name (below), gives the PON driver the
@@ -269,8 +269,27 @@ The boot script
        ``/etc/pond.token``;
     #. prints ``open-dfp-34x-2c: ready``.
 
-    After it, BusyBox init keeps a shell on the console. There is no login
-    prompt: the console of the stick is a serial line on the bench.
+    After it, BusyBox init keeps a login prompt on the console (``getty`` and
+    ``login``).
+
+    The stick has one account, root, with one password for the console, ssh
+    and the panel (``docs/adr/0012-one-account-root.rst``). Until one is set,
+    the password is ``admin``; the panel asks for a new one at the first
+    sign-in, and ``passwd`` sets one on the console or over ssh. Either way
+    ``onu-store`` keeps its hash in the configuration store and writes root's
+    line of ``/run/shadow``, which ``/etc/shadow`` names, at every boot. A
+    forgotten password is cleared from the boot loader's console: a RAM boot
+    (``flashing.rst``) whose kernel arguments end with ``rdinit=/bin/sh``
+    starts a shell instead of the system, with no login, and there::
+
+        mount -t proc proc /proc
+        mount -t devtmpfs devtmpfs /dev
+        grep '"config"' /proc/mtd          # mtd3: ... "config"
+        onucfg --store /dev/mtd3 unset AUTH_HASH
+        reboot -f
+
+    The next boot has the default password, ``admin``, again; nothing else in
+    the store changes.
 
 Everything that the system writes lives in memory and is gone at the next
 restart; the root filesystem is read-only.
@@ -284,8 +303,10 @@ Known limitations
   stick does not have yet.
 * The host key is made from the kernel's random pool a few seconds after power-on,
   before the system has collected much entropy.
-* No ssh key is in the image, so nobody can log in over ssh until one is put in
-  (below). The console is the other way in, and it asks for nothing.
+* No ssh key is in the image, so ssh takes root's password alone until a key is
+  put in (below). Until a password is set, it is ``admin`` on the console, ssh
+  and the panel alike, and anybody who reaches the stick's addresses can use it;
+  the shells of root say so at every login.
 * The status daemon has no token in this image, so its API answers only
   ``/api/health``; a token is a file of one unit, like the ssh key (below).
 * There is no DHCP client and no DHCP server.
@@ -574,8 +595,8 @@ The markers of a good boot on the console are the loader's lines for the image
 80100000``), ``Starting kernel ...``, the kernel's banner ``Linux version 6.18.48``,
 ``VFS: Mounted root (squashfs filesystem) readonly on device 31:5.``, and last
 the three lines of the boot script, ending with ``open-dfp-34x-2c: ready``. What
-to check then, over ssh with the key above or by typing the commands on the
-console, which asks for nothing::
+to check then, over ssh with the key above or on the console, after a login as
+root::
 
     uname -r                 # 6.18.48
     cat /proc/cmdline        # panic=10, console=ttyS0,115200, ..., root=31:5

@@ -51,3 +51,6 @@ record.
    * - 0011
      - Target executables share one C library, cut to what they use
      - Accepted
+   * - 0012
+     - One account, root, for the console, ssh and the panel
+     - Accepted
