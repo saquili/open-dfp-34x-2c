@@ -12,7 +12,7 @@ import type { Identity, LaneMode, Mgmt, Session, Settings, SfpLane } from "../ap
 import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
 import { OMCI, withServices } from "./omci";
 
-let adminSecret = "admin";
+let rootSecret = "admin";
 const firmware = structuredClone(FIRMWARE);
 let signedIn: Session | null = null;
 let offline = false;
@@ -152,9 +152,9 @@ export const handlers = [
   http.post("*/api/auth/login", async ({ request }) => {
     await delay(300);
     const { user, secret } = (await request.json()) as { user: string; secret: string };
-    if (user !== "admin" || secret !== adminSecret)
+    if (user !== "root" || secret !== rootSecret)
       return HttpResponse.json({ error: "wrong user or password" }, { status: 401 });
-    signedIn = { user, must_change: adminSecret === "admin", idle_timeout_s: 900 };
+    signedIn = { user, must_change: rootSecret === "admin", idle_timeout_s: 900 };
     return HttpResponse.json(signedIn);
   }),
 
@@ -167,10 +167,10 @@ export const handlers = [
     await delay(300);
     if (!signedIn) return unauthorized();
     const { current, next } = (await request.json()) as { current: string; next: string };
-    if (current !== adminSecret)
+    if (current !== rootSecret)
       return HttpResponse.json({ error: "wrong password" }, { status: 403 });
     if (next.length < 8) return HttpResponse.json({ error: "too short" }, { status: 400 });
-    adminSecret = next;
+    rootSecret = next;
     signedIn = { ...signedIn, must_change: false };
     return HttpResponse.json(signedIn);
   }),

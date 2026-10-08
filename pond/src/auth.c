@@ -2,9 +2,11 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * Passwords and sessions (auth.h). The hash is PBKDF2-HMAC-SHA256 over a
- * random 16-byte salt, on Mongoose's SHA-256; the HMAC keeps its two padded
- * key states, so an iteration costs two compressions.
+ * Passwords and sessions (auth.h). Root's password is checked by crypt() of
+ * the C library, as login and the ssh server check it, and onu-store hashes
+ * a new one. The older form the panel made, PBKDF2-HMAC-SHA256 over a random
+ * 16-byte salt on Mongoose's SHA-256, is still checked; its HMAC keeps the
+ * two padded key states, so an iteration costs two compressions.
  */
 
 #define _GNU_SOURCE
@@ -14,6 +16,7 @@
 
 #include "mongoose.h"
 
+#include <crypt.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -149,23 +152,6 @@ static bool unhex(const char *in, size_t n, uint8_t *out)
 	return in[2 * n] == '\0' || in[2 * n] == '$';
 }
 
-int auth_hash(const char *secret, unsigned int iterations,
-	      const uint8_t salt[16], char *out, size_t cap)
-{
-	uint8_t dk[32];
-	char salt_hex[33], dk_hex[65];
-	int n;
-
-	auth_pbkdf2((const uint8_t *)secret, strlen(secret), salt, 16,
-		    iterations, dk);
-	hex(salt, 16, salt_hex);
-	hex(dk, sizeof(dk), dk_hex);
-	explicit_bzero(dk, sizeof(dk));
-	n = snprintf(out, cap, "pbkdf2-sha256$%u$%s$%s", iterations, salt_hex,
-		     dk_hex);
-	return n > 0 && (size_t)n < cap ? 0 : -ENOSPC;
-}
-
 static bool same(const uint8_t *a, const uint8_t *b, size_t n)
 {
 	uint8_t diff = 0;
@@ -176,18 +162,31 @@ static bool same(const uint8_t *a, const uint8_t *b, size_t n)
 	return diff == 0;
 }
 
+static const char g_older[] = "pbkdf2-sha256$";
+
+/* A hash of crypt()'s form, "$id$...", checked by crypt(). */
+static bool crypt_matches(const char *secret, const char *stored)
+{
+	const char *got = crypt(secret, stored);
+	size_t n = strlen(stored);
+
+	return got && strlen(got) == n &&
+	       same((const uint8_t *)got, (const uint8_t *)stored, n);
+}
+
 bool auth_verify(const char *secret, const char *stored)
 {
-	static const char prefix[] = "pbkdf2-sha256$";
 	uint8_t salt[16], want[32], got[32];
 	const char *p = stored;
 	unsigned long iterations;
 	char *end;
 	bool ok;
 
-	if (strncmp(p, prefix, sizeof(prefix) - 1))
+	if (*p == '$')
+		return crypt_matches(secret, stored);
+	if (strncmp(p, g_older, sizeof(g_older) - 1))
 		return false;
-	p += sizeof(prefix) - 1;
+	p += sizeof(g_older) - 1;
 	iterations = strtoul(p, &end, 10);
 	if (end == p || *end != '$' || iterations < 1 || iterations > 10000000)
 		return false;
@@ -223,16 +222,67 @@ bool auth_default_password(void)
 	return *h == '\0';
 }
 
-static bool correct(const char *secret)
+/*
+ * Whether @secret is the password in force; @older says whether it matched
+ * a hash of the older form, which a sign-in replaces.
+ */
+static bool correct(const char *secret, bool *older)
 {
 	char h[AUTH_HASH_MAX];
 
+	*older = false;
 	stored(h, sizeof(h));
-	if (*h)
+	if (*h) {
+		*older = !strncmp(h, g_older, sizeof(g_older) - 1);
 		return auth_verify(secret, h);
+	}
 	/* The default password, compared without a shortcut either way. */
 	return strlen(secret) == 5 && same((const uint8_t *)secret,
 					   (const uint8_t *)"admin", 5);
+}
+
+/*
+ * Run "STORE password" with @secret as the line of its standard input, and
+ * wait for it: onu-store hashes it for crypt() and keeps it.
+ */
+static int store_password(const char *secret)
+{
+	int fds[2], status, rc = 0;
+	size_t len = strlen(secret), done = 0;
+	pid_t pid;
+
+	if (pipe2(fds, O_CLOEXEC))
+		return -errno;
+	pid = fork();
+	if (pid < 0) {
+		rc = -errno;
+		close(fds[0]);
+		close(fds[1]);
+		return rc;
+	}
+	if (pid == 0) {
+		if (dup2(fds[0], STDIN_FILENO) < 0)
+			_exit(127);
+		execlp(g_store, g_store, "password", (char *)NULL);
+		_exit(127);
+	}
+	close(fds[0]);
+	while (done < len + 1 && !rc) {
+		ssize_t n = done < len ? write(fds[1], secret + done, len - done) :
+					 write(fds[1], "\n", 1);
+
+		if (n < 0 && errno != EINTR)
+			rc = -EIO;
+		else if (n > 0)
+			done += (size_t)n;
+	}
+	close(fds[1]);
+	while (waitpid(pid, &status, 0) < 0)
+		if (errno != EINTR)
+			return -errno;
+	if (rc)
+		return rc;
+	return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -EIO;
 }
 
 /* Whether sign-ins are stopped now, and for how long. */
@@ -304,14 +354,23 @@ int auth_sign_in(const char *user, const char *secret, time_t now,
 		 char id[AUTH_ID_LEN + 1], int *retry_after)
 {
 	int i, slot = 0;
+	bool older;
 
 	if (locked(now, retry_after))
 		return -EAGAIN;
-	if (!user || !secret || strcmp(user, AUTH_USER) || !correct(secret)) {
+	if (!user || !secret || strcmp(user, AUTH_USER) ||
+	    !correct(secret, &older)) {
 		failed(now);
 		return -EACCES;
 	}
 	g_fails = 0;
+	/*
+	 * A password kept in the older form becomes crypt()'s, which the
+	 * console and the ssh server check too. Should that fail, the panel
+	 * still takes it as it is.
+	 */
+	if (older && store_password(secret))
+		fprintf(stderr, "pond: the password stays in its older form\n");
 
 	/* A free slot, else the one idle the longest. */
 	expire(now);
@@ -363,34 +422,15 @@ static bool printable(const char *s, size_t min, size_t max)
 	return true;
 }
 
-/* Run "STORE auth HASH" and wait for it. */
-static int store_hash(const char *hash)
-{
-	int status;
-	pid_t pid = fork();
-
-	if (pid < 0)
-		return -errno;
-	if (pid == 0) {
-		execlp(g_store, g_store, "auth", hash, (char *)NULL);
-		_exit(127);
-	}
-	if (waitpid(pid, &status, 0) < 0)
-		return -errno;
-	return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -EIO;
-}
-
 int auth_change(const char *current, const char *next, const char *keep,
 		time_t now, int *retry_after)
 {
-	uint8_t salt[16];
-	char hash[AUTH_HASH_MAX];
-	int fd, rc, i;
-	ssize_t got;
+	bool older;
+	int rc, i;
 
 	if (locked(now, retry_after))
 		return -EAGAIN;
-	if (!current || !correct(current)) {
+	if (!current || !correct(current, &older)) {
 		failed(now);
 		return -EACCES;
 	}
@@ -398,18 +438,7 @@ int auth_change(const char *current, const char *next, const char *keep,
 	    !strcmp(next, current))
 		return -EINVAL;
 
-	fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-	if (fd < 0)
-		return -EIO;
-	got = read(fd, salt, sizeof(salt));
-	close(fd);
-	if (got != (ssize_t)sizeof(salt))
-		return -EIO;
-
-	rc = auth_hash(next, AUTH_ITERATIONS, salt, hash, sizeof(hash));
-	if (!rc)
-		rc = store_hash(hash);
-	explicit_bzero(hash, sizeof(hash));
+	rc = store_password(next);
 	if (rc)
 		return rc;
 

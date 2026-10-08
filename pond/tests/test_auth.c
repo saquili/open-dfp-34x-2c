@@ -2,9 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * Tests of the sign-in: PBKDF2 against RFC 7914's vectors, the stored form,
- * the default password, the stop after wrong passwords, sessions that end,
- * and a change of password through a stand-in for onu-store.
+ * Tests of the sign-in: PBKDF2 against RFC 7914's vectors, the two stored
+ * forms, the default password, the stop after wrong passwords, sessions
+ * that end, a change of password through a stand-in for onu-store, and a
+ * password of the older form that a sign-in stores again.
  */
 
 #include "auth.h"
@@ -52,22 +53,36 @@ static void test_pbkdf2(void)
 	      "80000 iterations give the first block of the vector");
 }
 
-static void test_stored_form(void)
-{
-	const uint8_t salt[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-	char h[AUTH_HASH_MAX], bad[AUTH_HASH_MAX];
+/* PBKDF2-HMAC-SHA256 of "example-secret", 1000 iterations, salt 01..10. */
+#define OLDER_HASH "pbkdf2-sha256$1000$0102030405060708090a0b0c0d0e0f10$" \
+	"682b24383b17ce055ed70ead8c23895db05d4a3717dffd00133fc69d366d3627"
 
-	puts("the stored form");
-	check(auth_hash("example-secret", 1000, salt, h, sizeof(h)) == 0 &&
-		      !strncmp(h, "pbkdf2-sha256$1000$0102030405060708090a0b0c0d0e0f10$", 52),
-	      "names the method, the iterations and the salt");
-	check(auth_verify("example-secret", h), "the same secret matches");
-	check(!auth_verify("example-secreT", h), "another does not");
-	snprintf(bad, sizeof(bad), "%s", h);
-	bad[strlen(bad) - 1] = bad[strlen(bad) - 1] == '0' ? '1' : '0';
+static void test_stored_forms(void)
+{
+	char bad[AUTH_HASH_MAX];
+
+	puts("the stored forms");
+	/* The SHA-256 crypt specification's own test vectors. */
+	check(auth_verify("Hello world!",
+			  "$5$saltstring$5B8vYYiY.CVt1RlTTf8KbXBH3hsxY/GNooZaBBGWEc5"),
+	      "crypt()'s SHA-256 form matches the specification's vector");
+	check(auth_verify("Hello world!", "$5$rounds=10000$saltstringsaltst$"
+			  "3xv.VbSHBb41AL9AvLeujZkZRBAwqFMz2.opqey6IcA"),
+	      "and the one with rounds");
+	check(!auth_verify("Hello world?",
+			   "$5$saltstring$5B8vYYiY.CVt1RlTTf8KbXBH3hsxY/GNooZaBBGWEc5"),
+	      "another secret does not");
+	check(!auth_verify("Hello world!",
+			   "$5$saltstring$5B8vYYiY.CVt1RlTTf8KbXBH3hsxY/GNooZaBBGWEc6"),
+	      "a changed hash does not");
+	check(auth_verify("example-secret", OLDER_HASH), "the older form matches");
+	check(!auth_verify("example-secreT", OLDER_HASH), "another secret does not");
+	snprintf(bad, sizeof(bad), "%s", OLDER_HASH);
+	bad[strlen(bad) - 1] = '8';
 	check(!auth_verify("example-secret", bad), "a changed hash does not");
 	check(!auth_verify("example-secret", "md5$whatever"), "another method does not");
 	check(!auth_verify("example-secret", "pbkdf2-sha256$0$00$00"), "a malformed one does not");
+	check(!auth_verify("", "*"), "a hash that no password matches does not");
 }
 
 static char g_root[256];
@@ -82,26 +97,61 @@ static void test_sessions(void)
 	puts("the default password and sessions");
 	auth_init("/run/onu-auth", NULL);
 	check(auth_default_password(), "without a stored hash the default is in force");
-	check(auth_sign_in("admin", "admin", t, id, &retry) == 0 && strlen(id) == AUTH_ID_LEN,
-	      "admin and the default password open a session");
+	check(auth_sign_in("root", "admin", t, id, &retry) == 0 && strlen(id) == AUTH_ID_LEN,
+	      "root and the default password open a session");
 	check(auth_session(id, t + 10), "the session is open");
 	check(!auth_session("0123456789abcdef0123456789abcdef", t + 10), "another id is not");
 	check(!auth_session(id, t + 10 + AUTH_IDLE_S + 1), "it ends after the idle time");
 
 	for (int i = 0; i < 5; i++)
-		auth_sign_in("admin", "wrong", t + 2000, id, &retry);
-	check(auth_sign_in("admin", "admin", t + 2001, id, &retry) == -EAGAIN && retry > 0,
+		auth_sign_in("root", "wrong", t + 2000, id, &retry);
+	check(auth_sign_in("root", "admin", t + 2001, id, &retry) == -EAGAIN && retry > 0,
 	      "five wrong passwords stop sign-ins, even the right one");
-	check(auth_sign_in("admin", "admin", t + 2040, id, &retry) == 0,
+	check(auth_sign_in("root", "admin", t + 2040, id, &retry) == 0,
 	      "and half a minute later they go on");
-	check(auth_sign_in("root", "admin", t + 2041, id, &retry) == -EACCES,
+	check(auth_sign_in("admin", "admin", t + 2041, id, &retry) == -EACCES,
 	      "another user is refused");
 
 	auth_init("/run/onu-auth", NULL);
 	for (int i = 0; i <= AUTH_SESSIONS; i++)
-		auth_sign_in("admin", "admin", t + 3000 + i, ids[i], &retry);
+		auth_sign_in("root", "admin", t + 3000 + i, ids[i], &retry);
 	check(!auth_session(ids[0], t + 3010), "a sign-in past the last slot ends the oldest session");
 	check(auth_session(ids[AUTH_SESSIONS], t + 3010), "and the new one is open");
+}
+
+/*
+ * A stand-in for onu-store: "password" hashes the line of its standard input
+ * with crypt() (Perl's, which is the C library's) and keeps it in the hash
+ * file; the password "store-refuses" fails, as a store that cannot be
+ * written does.
+ */
+static void write_store(char *script, size_t cap)
+{
+	FILE *f;
+
+	snprintf(script, cap, "%s/store.sh", g_root);
+	f = fopen(script, "w");
+	fprintf(f, "#!/bin/sh\n"
+		"[ \"$1\" = password ] || exit 2\n"
+		"IFS= read -r s\n"
+		"[ \"$s\" = store-refuses ] && exit 1\n"
+		"perl -e 'print crypt($ARGV[0], q($5$rounds=1000$teststandinsalt)), \"\\n\"' "
+		"\"$s\" > %s\n", g_hashfile);
+	fclose(f);
+	chmod(script, 0755);
+}
+
+static bool hash_file_starts(const char *prefix)
+{
+	char line[AUTH_HASH_MAX] = "";
+	FILE *f = fopen(g_hashfile, "r");
+
+	if (!f)
+		return false;
+	if (!fgets(line, sizeof(line), f))
+		line[0] = '\0';
+	fclose(f);
+	return !strncmp(line, prefix, strlen(prefix));
 }
 
 static void test_change(void)
@@ -109,18 +159,13 @@ static void test_change(void)
 	char a[AUTH_ID_LEN + 1], b[AUTH_ID_LEN + 1], script[400];
 	int retry = 0;
 	time_t t = 2000000;
-	FILE *f;
 
 	puts("a change of password");
-	snprintf(script, sizeof(script), "%s/store.sh", g_root);
-	f = fopen(script, "w");
-	fprintf(f, "#!/bin/sh\n[ \"$1\" = auth ] && echo \"$2\" > %s\n", g_hashfile);
-	fclose(f);
-	chmod(script, 0755);
+	write_store(script, sizeof(script));
 	auth_init("/run/onu-auth", script);
 
-	auth_sign_in("admin", "admin", t, a, &retry);
-	auth_sign_in("admin", "admin", t + 1, b, &retry);
+	auth_sign_in("root", "admin", t, a, &retry);
+	auth_sign_in("root", "admin", t + 1, b, &retry);
 	check(auth_change("admin", "short", a, t + 2, &retry) == -EINVAL, "a short password is refused");
 	check(auth_change("admin", "admin", a, t + 2, &retry) == -EINVAL,
 	      "and so is the current one again");
@@ -131,10 +176,42 @@ static void test_change(void)
 	check(!auth_default_password(), "the default is no longer in force");
 	check(auth_session(a, t + 4), "the session that changed it stays");
 	check(!auth_session(b, t + 4), "the others, opened with the old password, end");
-	check(auth_sign_in("admin", "admin", t + 5, b, &retry) == -EACCES,
+	check(auth_sign_in("root", "admin", t + 5, b, &retry) == -EACCES,
 	      "the old password no longer opens a session");
-	check(auth_sign_in("admin", "example-secret", t + 6, b, &retry) == 0,
+	check(auth_sign_in("root", "example-secret", t + 6, b, &retry) == 0,
 	      "the new one does");
+	check(hash_file_starts("$5$rounds=1000$teststandinsalt$"),
+	      "the hash kept is crypt()'s");
+	check(auth_change("example-secret", "store-refuses", a, t + 7, &retry) == -EIO,
+	      "a store that cannot keep a new one is an error");
+	check(auth_sign_in("root", "example-secret", t + 8, b, &retry) == 0,
+	      "and the password stays as it was");
+}
+
+static void test_older_form(void)
+{
+	char id[AUTH_ID_LEN + 1], script[400];
+	int retry = 0;
+	time_t t = 3000000;
+	FILE *f;
+
+	puts("a password kept in the older form");
+	write_store(script, sizeof(script));
+	auth_init("/run/onu-auth", script);
+	f = fopen(g_hashfile, "w");
+	fprintf(f, "%s\n", OLDER_HASH);
+	fclose(f);
+
+	check(!auth_default_password(), "it is no default");
+	check(auth_sign_in("root", "example-secreT", t, id, &retry) == -EACCES,
+	      "a wrong password is refused");
+	check(hash_file_starts("pbkdf2-sha256$"), "and the hash stays as it was");
+	check(auth_sign_in("root", "example-secret", t + 1, id, &retry) == 0,
+	      "the right one opens a session");
+	check(hash_file_starts("$5$rounds=1000$teststandinsalt$"),
+	      "and has the password kept in crypt()'s form");
+	check(auth_sign_in("root", "example-secret", t + 2, id, &retry) == 0,
+	      "which opens a session as well");
 }
 
 int main(void)
@@ -156,9 +233,10 @@ int main(void)
 	}
 
 	test_pbkdf2();
-	test_stored_form();
+	test_stored_forms();
 	test_sessions();
 	test_change();
+	test_older_form();
 
 	printf("\n%d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;

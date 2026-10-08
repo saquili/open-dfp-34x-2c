@@ -9,7 +9,8 @@
 # CC, CFLAGS and LDFLAGS come from the caller for a build for the board. The
 # HTTP layer is Mongoose, in third_party/mongoose, built as it comes; pond's
 # own sources are in src/. On Linux, pond reads netlink with libmnl and the
-# kernel's headers, among them linux/pon.h of this repository's kernel.
+# kernel's headers, among them linux/pon.h of this repository's kernel, and
+# checks root's password with crypt() of libcrypt.
 
 CC      ?= cc
 CFLAGS  ?= -O2 -g
@@ -19,7 +20,7 @@ override CPPFLAGS += -Isrc -Ithird_party/mongoose
 override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes \
                  -Wshadow -Wpointer-arith -Wwrite-strings
 MG_FLAGS := -DMG_TLS=0 -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=262144
-LDLIBS  += -lmnl
+LDLIBS  += -lmnl -lcrypt
 
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
         prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o

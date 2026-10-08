@@ -22,12 +22,17 @@ reported and left out, and the daemon ends only when it listens on none.
 Signing in
 ==========
 
-One user, ``admin``. Its password is kept as a PBKDF2-HMAC-SHA256 hash
-(20000 iterations over a random 16-byte salt, on Mongoose's SHA-256; about
-0.55 s on the stick, during which pond answers nothing else) in the
-configuration store, which ``onu-store`` puts in ``/run/onu-auth`` at boot.
-Until a password is set, it is ``admin``, and a session may do nothing but set
-its own. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
+One user, ``root``, the stick's one account: the console's login and the ssh
+server take the same password (``docs/adr/0012-one-account-root.rst``). Its
+hash, of the form of ``crypt()`` (SHA-256, ``$5$``, made by ``onu-store
+password``), is kept in the configuration store, which ``onu-store`` puts in
+``/run/onu-auth`` at boot; pond checks a password with ``crypt()`` of the C
+library, about 0.5 s on the stick, during which it answers nothing else, and
+has ``onu-store password`` hash and keep a new one. Until a password is set, it
+is ``admin``, and a session may do nothing but set its own. A hash of the form
+pond made before, PBKDF2-HMAC-SHA256 (``pbkdf2-sha256$...``), is still taken,
+and the first sign-in with it has ``onu-store`` keep the password in
+``crypt()``'s form, which the console and ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
 ``SameSite=Strict`` cookie (``Secure`` behind a proxy that says HTTPS). There
 are at most three; a fourth sign-in ends the one idle the longest, and a
 session ends after 15 minutes without a request or 12 hours in all. Five wrong

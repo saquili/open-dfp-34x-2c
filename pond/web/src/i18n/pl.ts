@@ -48,7 +48,7 @@ export const pl: Dictionary = {
     repeat: "Powtórz nowe hasło",
     save: "Zapisz hasło",
     saved: "Hasło zmienione.",
-    rules: "Co najmniej 8 znaków.",
+    rules: "Co najmniej 8 znaków. To hasło użytkownika root także do konsoli i SSH.",
     mismatch: "Hasła się różnią.",
     tooShort: "Co najmniej 8 znaków.",
     sameAsOld: "Wybierz inne hasło niż obecne.",

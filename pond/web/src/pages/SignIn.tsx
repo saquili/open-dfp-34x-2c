@@ -40,7 +40,7 @@ export function SignIn() {
   });
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { user: "admin", secret: "" },
+    defaultValues: { user: "root", secret: "" },
   });
 
   useEffect(() => form.setFocus("secret"), [form]);

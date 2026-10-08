@@ -46,7 +46,7 @@ export const en = {
     repeat: "Repeat the new password",
     save: "Save password",
     saved: "Password changed.",
-    rules: "At least 8 characters.",
+    rules: "At least 8 characters. It is root's password for the console and ssh too.",
     mismatch: "The passwords differ.",
     tooShort: "At least 8 characters.",
     sameAsOld: "Choose a password other than the current one.",
