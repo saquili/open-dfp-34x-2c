@@ -83,7 +83,7 @@ if (SCENARIO === "sessions") {
   };
   const list = [v4, v6, both, one(4, "both", false), one(5, "ipv4", false), one(6, "ipv6", false)];
   settings.sessions = list;
-  settings.pass = { address: "203.0.113.21", lan: "lan" };
+  settings.pass = { address: "203.0.113.21", lan: "lan", peer_gateway: "198.51.100.1" };
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
@@ -397,7 +397,7 @@ export const handlers = [
     }
     const first = settings.sessions.find((y) => y.hands_on);
     if (!first) settings.pass = null;
-    else settings.pass = { address: "203.0.113.24", lan: "lan" };
+    else settings.pass = { address: "203.0.113.24", lan: "lan", peer_gateway: "198.51.100.1" };
     settings.mode = settings.sessions.length ? "passthrough" : "bridge";
     settings.store = "saved";
     settings.last_apply_status = 0;
@@ -496,17 +496,5 @@ export const handlers = [
   http.post("*/api/system/restart", async () => {
     await delay(200);
     return signedIn ? HttpResponse.json({ ok: true }) : unauthorized();
-  }),
-
-  http.post("*/api/set/link", async ({ request }) => {
-    await delay(500);
-    if (!signedIn) return unauthorized();
-    for (const l of (await request.text()).split("\n").filter(Boolean)) {
-      const [k, v = ""] = [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)];
-      if (k === "GATEWAY") settings.settings.PASS_GATEWAY = v;
-      if (k === "PEER") settings.settings.PASS_PEER = v;
-    }
-    settings.store = "saved";
-    return HttpResponse.json({ id: "link", ok: true });
   }),
 ];

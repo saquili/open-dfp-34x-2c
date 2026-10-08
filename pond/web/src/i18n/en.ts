@@ -313,7 +313,7 @@ export const en = {
     soon: "soon",
     handoverTitle: "How the host gets the address",
     handoverHint:
-      "The host gets the public address from the stick by DHCP, in the VLAN set in the slot.",
+      "The host gets the public address from the stick by DHCP, in the VLAN set in the slot. Its gateway is the operator's concentrator address from the PPPoE session, as with a session of its own; the stick takes it on the link itself.",
     hostGets: "What the host gets",
     hostGetsHint: "MTU 1500: the stick holds the session with 1508-byte frames (RFC 4638).",
     mtu: "MTU",
@@ -470,15 +470,9 @@ export const en = {
     speed: "Speed",
     up: "Up",
     down: "No link",
-    gatewayHint:
-      "The stick's address on this link, which the DHCP server answers from. Any link-local address works.",
-    peer: "Gateway as in PPPoE",
-    peerHint:
-      "The host is given the operator's concentrator address from the PPPoE session as its gateway, as with a session of its own. Off: the stick's address is the gateway.",
     hostGateway: "The host's gateway",
     stickMac: "Stick's MAC address",
     mtu: "Largest frame (MTU)",
-    gateway: "The stick's address on the link",
     lease: "Address the host has",
     noLease: "Not handed out",
     traffic: "Traffic on the SFP port",

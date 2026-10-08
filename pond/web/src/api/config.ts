@@ -93,7 +93,6 @@ export const useMgmt = () =>
 export const useLaneChange = () => useChange("sfp_lane", [["sfp_lane"], ["live"]]);
 export const useMgmtChange = () => useChange("mgmt", [["mgmt"]]);
 export const useHostnameChange = () => useChange("hostname", [["live"]]);
-export const useLinkChange = () => useChange("link", [["live"]]);
 export const useIdentityChange = () => useChange("identity", [["identity"], ["live"]]);
 
 export function useRestart() {

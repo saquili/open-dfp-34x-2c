@@ -20,7 +20,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useLinkChange, useOmci, useSessionChange } from "../api/config";
+import { useOmci, useSessionChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { Family } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
@@ -28,13 +28,12 @@ import { Page } from "../components/Page";
 import { Badge, Card, Facts, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { Mib, type Service, services } from "../lib/omci";
-import { ipv4, mac, required, upTo, vlan, z } from "../lib/schemas";
+import { mac, required, upTo, vlan, z } from "../lib/schemas";
 import {
   downVlan,
   fibreVlan,
   gems,
   hostLink,
-  type LinkView,
   MAX_SESSIONS,
   type SessionView,
   session,
@@ -720,60 +719,6 @@ function SessionsTab() {
 
 /* ---------------------------------------------------------------- handover */
 
-function HandoverForm({ link }: { link: LinkView }) {
-  const { t } = useI18n();
-  const change = useLinkChange();
-  const state = useChangeState(change);
-  const schema = z.object({ gateway: ipv4(t), peer: z.boolean() });
-  type Values = z.infer<typeof schema>;
-  const current = { gateway: link.gateway, peer: link.peer };
-  const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: current });
-  const { errors, isDirty } = form.formState;
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refill only when the stick's values change
-  useEffect(() => {
-    if (!form.formState.isDirty) form.reset(current);
-  }, [link.gateway, link.peer]);
-
-  return (
-    <form
-      onSubmit={form.handleSubmit((v) =>
-        change.mutate(
-          { GATEWAY: v.gateway, PEER: v.peer ? "on" : "off" },
-          { onSuccess: () => form.reset(v) },
-        ),
-      )}
-      noValidate
-      className="grid gap-4"
-    >
-      <Field
-        label={t("sfp.gateway")}
-        hint={t("sfp.gatewayHint")}
-        error={errors.gateway?.message}
-        {...form.register("gateway")}
-      />
-      <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
-        <input type="checkbox" className="toggle toggle-sm" {...form.register("peer")} />
-        <span>
-          <span className="text-sm">{t("sfp.peer")}</span>
-          <span className="block text-xs text-base-content/60">{t("sfp.peerHint")}</span>
-        </span>
-      </label>
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
-          {t("internet.save")}
-        </button>
-        {isDirty && (
-          <button type="button" className="btn btn-ghost" onClick={() => form.reset(current)}>
-            {t("form.discard")}
-          </button>
-        )}
-        <SaveState {...state} />
-      </div>
-    </form>
-  );
-}
-
 /** How the host gets the address slot @x hands down, and what it gets. */
 function HostCard({ x }: { x: SessionView }) {
   const { t } = useI18n();
@@ -786,15 +731,14 @@ function HostCard({ x }: { x: SessionView }) {
       <Facts
         rows={[
           [t("internet.hostVlan"), downVlan(x) || t("switch.untagged")],
-          [t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")],
-          [t("sfp.hostGateway"), s.up && link.hostGateway ? link.hostGateway : "–"],
+          [t("sfp.lease"), x.up && link.lease ? link.lease : t("sfp.noLease")],
+          [t("sfp.hostGateway"), x.up && link.hostGateway ? link.hostGateway : "–"],
           [t("internet.hostPrefix"), s.prefix ?? "–"],
           [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
           [t("internet.mtu"), "1500"],
         ]}
       />
       <p className="text-xs text-base-content/60">{t("internet.hostGetsHint")}</p>
-      <HandoverForm link={link} />
     </Card>
   );
 }

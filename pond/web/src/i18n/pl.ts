@@ -315,7 +315,7 @@ export const pl: Dictionary = {
     soon: "wkrótce",
     handoverTitle: "Jak host dostaje adres",
     handoverHint:
-      "Urządzenie hosta dostaje od wkładki adres publiczny przez DHCP, w VLAN-ie ustawionym w miejscu.",
+      "Urządzenie hosta dostaje od wkładki adres publiczny przez DHCP, w VLAN-ie ustawionym w miejscu. Bramą jest adres serwera operatora z sesji PPPoE, jak przy własnej sesji; wkładka sama bierze go na łączu.",
     hostGets: "Co dostaje host",
     hostGetsHint: "MTU 1500: wkładka trzyma sesję z ramkami 1508 bajtów (RFC 4638).",
     mtu: "MTU",
@@ -470,15 +470,9 @@ export const pl: Dictionary = {
     speed: "Prędkość",
     up: "Działa",
     down: "Brak łącza",
-    gatewayHint:
-      "Adres wkładki na tym łączu: z niego odpowiada serwer DHCP. Wystarczy dowolny adres link-local.",
-    peer: "Brama jak w PPPoE",
-    peerHint:
-      "Urządzenie hosta dostaje jako bramę adres serwera operatora z sesji PPPoE, jak przy własnej sesji. Wyłączone: bramą jest adres wkładki.",
     hostGateway: "Brama urządzenia hosta",
     stickMac: "Adres MAC wkładki",
     mtu: "Największa ramka (MTU)",
-    gateway: "Adres wkładki na łączu",
     lease: "Adres urządzenia hosta",
     noLease: "Nie przekazano",
     traffic: "Ruch na porcie SFP",

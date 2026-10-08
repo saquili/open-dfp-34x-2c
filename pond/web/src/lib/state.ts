@@ -224,12 +224,12 @@ export function port(live: Live | undefined, name: string): Port | undefined {
 export interface LinkView {
   up: boolean;
   speedMbit: number | null;
-  /** The stick's own address on the link. */
-  gateway: string;
-  /** Whether the host is given the concentrator's address as its gateway. */
-  peer: boolean;
   lease: string | null;
-  /** The gateway the host has now, while a session hands its address on. */
+  /**
+   * The gateway the host has now, while a session hands its address on: the
+   * concentrator's address, as the host would have it with a session of its
+   * own, which the stick takes on the link itself.
+   */
   hostGateway: string | null;
 }
 
@@ -239,10 +239,8 @@ export function hostLink(live: Live | undefined): LinkView {
   return {
     up: !!sfp && sfp.carrier === 1 && sfp.operstate === "up",
     speedMbit: sfp && sfp.speed_mbit > 0 ? sfp.speed_mbit : null,
-    gateway: s?.settings.PASS_GATEWAY ?? "",
-    peer: s?.settings.PASS_PEER !== "off",
     lease: s?.pass?.address ?? null,
-    hostGateway: s?.pass ? (s.pass.peer_gateway ?? s.settings.PASS_GATEWAY ?? null) : null,
+    hostGateway: s?.pass?.peer_gateway ?? null,
   };
 }
 
