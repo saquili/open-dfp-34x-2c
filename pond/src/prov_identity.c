@@ -4,8 +4,8 @@
 /*
  * How the stick introduces itself to the OLT: the "name=value" lines of
  * /run/onu-identity that onu-store keeps, and /run/onu-identity-source,
- * "store" or "factory". A read never gives the PLOAM password, only whether
- * one is set. A change goes to onu-store (POND_STORE names another program),
+ * "store" or "factory". A read never gives the PLOAM password nor the
+ * logical (LOID) password, only whether one is set. A change goes to onu-store (POND_STORE names another program),
  * then onu-mode reidentify (POND_REIDENTIFY) registers again with the OLT.
  */
 
@@ -26,23 +26,33 @@
 #define IDENTITY "/run/onu-identity"
 #define SOURCE "/run/onu-identity-source"
 
-/* The fields the panel shows and may change: its key, the file's, the longest value. */
+/*
+ * The fields the panel shows and may change: its key, the file's, the
+ * longest value, and for a number the largest.
+ */
 static const struct {
 	const char *key;
 	const char *name;
 	size_t max;
+	unsigned long number;
 } g_fields[] = {
-	{ "SERIAL", "serial", 12 },
-	{ "VENDOR_ID", "vendor_id", 4 },
-	{ "EQUIPMENT_ID", "equipment_id", 20 },
-	{ "VERSION", "version", 14 },
-	{ "EQUIPMENT_SERIAL", "equipment_serial", 32 },
-	{ "MODEL", "model", 32 },
-	{ "OMCC_VERSION", "omcc_version", 8 },
+	{ "SERIAL", "serial", 12, 0 },
+	{ "VENDOR_ID", "vendor_id", 4, 0 },
+	{ "EQUIPMENT_ID", "equipment_id", 20, 0 },
+	{ "VERSION", "version", 14, 0 },
+	{ "EQUIPMENT_SERIAL", "equipment_serial", 32, 0 },
+	{ "MODEL", "model", 32, 0 },
+	{ "OMCC_VERSION", "omcc_version", 8, 0xff },
+	{ "VENDOR_PRODUCT_CODE", "vendor_product_code", 6, 0xffff },
+	{ "TM_OPTION", "tm_option", 1, 2 },
+	{ "LOID", "loid", 24, 0 },
+	{ "SW_VERSION0", "sw_version0", 14, 0 },
+	{ "SW_VERSION1", "sw_version1", 14, 0 },
+	{ "PACK_VERSION", "pack_version", 14, 0 },
 };
 
 /* Shown as they are, never changed from the panel. */
-static const char *const g_shown[] = { "ploam_format", "vendor_product_code", "tm_option" };
+static const char *const g_shown[] = { "ploam_format", "sw_version" };
 
 static pid_t g_reidentify;
 
@@ -99,6 +109,10 @@ int prov_identity(struct prov_buf *out)
 	field(text, "ploam_password", v, sizeof(v));
 	pv_key(out, "ploam_set");
 	pv_bool(out, *v != '\0');
+	pv_comma(out);
+	field(text, "loid_password", v, sizeof(v));
+	pv_key(out, "loid_password_set");
+	pv_bool(out, *v != '\0');
 	explicit_bzero(v, sizeof(v));
 	explicit_bzero(text, sizeof(text));
 	pv_comma(out);
@@ -152,6 +166,19 @@ static bool ploam(const char *v)
 		return true;
 	}
 	return n >= 1 && n <= 10 && printable(v, 10);
+}
+
+/* A number up to @max, decimal or 0x and hexadecimal; empty is no number. */
+static bool number(const char *v, unsigned long max)
+{
+	char *end;
+	unsigned long n;
+
+	if (!*v || *v == '-' || *v == '+')
+		return false;
+	errno = 0;
+	n = strtoul(v, &end, 0);
+	return !*end && !errno && n <= max;
 }
 
 /* Run @prog with @arg, writing @input to it; 0 when it ended well. */
@@ -227,24 +254,36 @@ int prov_identity_set(const char *val, char *err, size_t errcap)
 					return -EINVAL;
 				}
 				name = "PLOAM_PASSWORD";
+			} else if (!strcmp(line, "LOID_PASSWORD")) {
+				if (!printable(eq + 1, 12)) {
+					snprintf(err, errcap,
+						 "LOID_PASSWORD: up to twelve characters");
+					return -EINVAL;
+				}
+				name = "LOID_PASSWORD";
 			} else {
+				unsigned long limit = 0;
+
 				for (i = 0; i < ARRAY_SIZE(g_fields); i++)
 					if (!strcmp(line, g_fields[i].key)) {
 						name = g_fields[i].key;
 						max = g_fields[i].max;
+						limit = g_fields[i].number;
 					}
 				if (!name) {
 					snprintf(err, errcap, "%s: not a field of the identity", line);
 					return -EINVAL;
 				}
 				if (!strcmp(name, "SERIAL") ? !serial(eq + 1) :
+				    limit		    ? !number(eq + 1, limit) :
 							      !printable(eq + 1, max)) {
 					snprintf(err, errcap, "%s: not a value of it", name);
 					return -EINVAL;
 				}
 			}
-			/* An empty PLOAM keeps the password there is. */
-			if (strcmp(name, "PLOAM_PASSWORD") || *(eq + 1))
+			/* An empty password keeps the one there is. */
+			if ((strcmp(name, "PLOAM_PASSWORD") &&
+			     strcmp(name, "LOID_PASSWORD")) || *(eq + 1))
 				len += (size_t)snprintf(text + len, sizeof(text) - len,
 							"%s=%s\n", name, eq + 1);
 		} else if (n) {

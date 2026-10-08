@@ -1740,13 +1740,19 @@ static void test_panel_values(void)
 	mkdir(prov_path("/run", file, sizeof(file)), 0755);
 	put("/run/onu-identity",
 	    "serial=XXXXXXXXXXXX\nvendor_id=XXXX\nversion=V1.0\n"
-	    "ploam_password=0123456789\nmodel=EXAMPLE\n", 0600);
+	    "ploam_password=0123456789\nmodel=EXAMPLE\nloid=example-line\n"
+	    "loid_password=lpw00000\nsw_version0=V1.0.0\n", 0600);
 	put("/run/onu-identity-source", "store\n", 0644);
 	s = render(prov_identity, buf, sizeof(buf), &e);
 	check(!e && strstr(s, "\"serial\":\"XXXXXXXXXXXX\"") && strstr(s, "\"ploam_set\":true") &&
 		      strstr(s, "\"source\":\"store\""),
 	      "the identity is served, and whether a PLOAM password is set");
 	check(!strstr(s, "0123456789"), "but never the PLOAM password itself");
+	check(strstr(s, "\"loid\":\"example-line\"") &&
+		      strstr(s, "\"loid_password_set\":true") && !strstr(s, "lpw00000"),
+	      "the logical ONU ID is served, its password only as set or not");
+	check(strstr(s, "\"sw_version0\":\"V1.0.0\"") && strstr(s, "\"sw_version1\":\"\""),
+	      "each software image's version is a field of its own");
 
 	put("/store-stub", store_stub, 0755);
 	setenv("POND_STORE", prov_path("/store-stub", stub, sizeof(stub)), 1);
@@ -1759,10 +1765,26 @@ static void test_panel_values(void)
 	      "a PLOAM password of the wrong form is refused");
 	check(prov_identity_set("COLOUR=red", err, sizeof(err)) == -EINVAL,
 	      "a field the identity lacks is refused");
+	check(prov_identity_set("TM_OPTION=3", err, sizeof(err)) == -EINVAL &&
+		      prov_identity_set("VENDOR_PRODUCT_CODE=65536", err, sizeof(err)) == -EINVAL &&
+		      prov_identity_set("OMCC_VERSION=-1", err, sizeof(err)) == -EINVAL,
+	      "a number beyond its attribute is refused");
+	check(prov_identity_set("LOID_PASSWORD=thirteen-long", err, sizeof(err)) == -EINVAL,
+	      "a logical password longer than twelve characters is refused");
 	rc = prov_identity_set("SERIAL=000000000000\nPLOAM=\nVERSION=V2.0\n", err, sizeof(err));
 	check(rc == 0 && file_has("/stored-identity", "SERIAL=000000000000\nVERSION=V2.0\n") &&
 		      !file_has("/stored-identity", "PLOAM"),
 	      "a good identity goes to onu-store, an empty PLOAM keeping the one there is");
+	for (int i = 0; i < 100; i++) {
+		prov_identity_reap();
+		pause_10ms();
+	}
+	rc = prov_identity_set("LOID=example7\nLOID_PASSWORD=\nOMCC_VERSION=0xA3\nTM_OPTION=2\n",
+			       err, sizeof(err));
+	check(rc == 0 &&
+		      file_has("/stored-identity", "LOID=example7\nOMCC_VERSION=0xA3\nTM_OPTION=2\n"),
+	      "a logical ONU ID and numbers in hexadecimal go to onu-store, an empty "
+	      "logical password keeping the one there is");
 	for (int i = 0; i < 100; i++) {
 		prov_identity_reap();
 		pause_10ms();
