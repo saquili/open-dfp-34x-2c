@@ -8,7 +8,15 @@
  */
 
 import { delay, HttpResponse, http } from "msw";
-import type { Identity, LaneMode, Mgmt, Session, Settings, SfpLane } from "../api/types";
+import type {
+  Identity,
+  LaneMode,
+  Mgmt,
+  Session,
+  SessionInfo,
+  Settings,
+  SfpLane,
+} from "../api/types";
 import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
 import { OMCI, withServices } from "./omci";
 
@@ -29,6 +37,46 @@ const cpu = structuredClone(
   },
 );
 const settings: Settings = structuredClone(LIVE.settings);
+
+/*
+ * POND_MOCK_SCENARIO=sessions: the stick's own sessions in every shape a
+ * slot shows (IPv4, IPv6 and both, each up and down, one row free), and a
+ * person signed in already with a password of their own, for a look at the
+ * internet page without a sign-in.
+ */
+const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_MOCK_SCENARIO;
+if (SCENARIO === "sessions") {
+  const one = (id: number, family: SessionInfo["family"], up: boolean): SessionInfo => ({
+    id,
+    user: family === "ipv6" ? `user${id}@example.net/ipv6` : `user${id}@example.net`,
+    secret_set: true,
+    gem: "auto",
+    vlan: "410",
+    mac: id === 1 ? "00:00:5e:00:53:a1" : "",
+    family,
+    hands_on: false,
+    dev: "wan100",
+    gem_dev: "gem278",
+    ppp: up ? `ppp${id - 1}` : null,
+    ipv4: up && family !== "ipv6" ? `203.0.113.${20 + id}` : null,
+    ipv6: up && family !== "ipv4" ? `2001:db8:ff00::${id}` : null,
+    prefix: null,
+    prefix_host: null,
+  });
+  /* The first IPv4 session hands its address on, the first IPv6 one its prefix. */
+  const v4 = { ...one(1, "ipv4", true), hands_on: true };
+  const v6 = {
+    ...one(2, "ipv6", true),
+    prefix: "2001:db8:1200::/56",
+    prefix_host: "fe80::2",
+  };
+  const both = { ...one(3, "both", true), prefix: "2001:db8:1300::/56" };
+  const list = [v4, v6, both, one(4, "both", false), one(5, "ipv4", false), one(6, "ipv6", false)];
+  settings.sessions = list;
+  settings.pass = { address: "203.0.113.21", lan: "lan" };
+  rootSecret = "scenario-only";
+  signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
+}
 const ticks = structuredClone(
   LIVE.cpu?.ticks ?? {
     user: 0,
