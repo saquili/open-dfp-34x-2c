@@ -192,3 +192,16 @@ documentation prefix, a link-local one made from a documentation MAC address
 and a public resolver's, which the redaction must take out; they name no unit
 and no bench. This entry names them too.
 """
+
+[[allow]]
+gate = "unit-ids"
+rules = ["password"]
+paths = ["pond/web/src/*", "pond/tests/test_prov.c"]
+match = "[Ll][Oo][Ii][Dd].*"
+reason = """
+The logical ONU ID is an identifier an operator may register a line by, which
+the owner sets in the status daemon's panel as the serial number is set. These
+lines name the field, map it to the daemon's key, or carry a made-up value in
+a test; none holds a unit's identifier, and the logical password beside it is
+never served.
+"""
