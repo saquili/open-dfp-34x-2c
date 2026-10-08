@@ -151,15 +151,17 @@ docs:
 # The offline gates: the provenance gates (their own tests, then the tree and
 # the commits since main) and the self-tests of the tools, of the script that
 # fetches the build system, of the one that archives the kernel, of the size
-# check of the images and of the scripts and lists of the distribution. The
-# instruction-set gate's tests skip without a MIPS objdump, and the tests of
-# the image script without mksquashfs.
+# check of the images, of the cut of the shared libraries and of the scripts and
+# lists of the distribution. The instruction-set gate's tests skip without a
+# MIPS objdump, the cut's end-to-end tests without a MIPS cross compiler, and
+# the tests of the image script without mksquashfs.
 check:
 	tools/provenance/check selftest
 	tools/provenance/check all
 	tools/equiv/tests/run
 	python3 -m unittest discover -s tools/bench/tests -t tools
 	tools/isa-gate/tests/run
+	tools/lib-trim/tests/run
 	buildroot/tests/run
 	tools/kernel-archive/tests/run
 	tools/image-budget/tests/run
