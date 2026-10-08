@@ -305,15 +305,6 @@ export const pl: Dictionary = {
     useEnds: "Kończy się na wkładce; nie idzie na port SFP",
   },
   internet: {
-    tabSessions: "Sesje PPPoE",
-    tabHandover: "Adres dla hosta",
-    wayBridge: "Przezroczysty most",
-    wayBridgeText:
-      "Bez żadnej sesji OLT ustawia wkładkę jako przezroczysty most: usługi operatora idą do urządzenia hosta, a ono samo łączy się z internetem (np. własną sesją PPPoE).",
-    waySession: "Sesje PPPoE na wkładce",
-    waySessionText:
-      "Gdy dodasz sesję, wkładka zestawia ją sama, sprzętowo, a dla każdej sesji wybierasz, co zrobić z adresem: oddać go routerowi albo routować i NAT-ować na wkładce. Pozostałe usługi operatora dalej idą mostem.",
-    now: "teraz",
     slots: "{n} z {max} miejsc zajętych.",
     slotsHint:
       "Wkładka trzyma najwyżej 7 sesji PPPoE naraz: tyle ma wierszy jej silnik sprzętowy. Każde wolne miejsce można zająć.",
@@ -333,8 +324,6 @@ export const pl: Dictionary = {
     handoverTitle: "Jak host dostaje adres",
     handoverHint:
       "Gdy sesję PPPoE trzyma wkładka, urządzenie hosta dostaje od niej adres publiczny przez DHCP, w tym VLAN-ie. Dotyczy tylko sesji PPPoE wkładki.",
-    handoverIdle:
-      "Na wkładce nie ma teraz żadnej sesji, więc nic nie jest przekazywane. Ustawienia zadziałają po dodaniu sesji.",
     hostGets: "Co dostaje host",
     hostGetsHint: "MTU 1500: wkładka trzyma sesję z ramkami 1508 bajtów (RFC 4638).",
     mtu: "MTU",
@@ -347,6 +336,30 @@ export const pl: Dictionary = {
     slotN: "Miejsce {id}",
     slotFree: "wolne",
     slotUse: "Użyj tego miejsca",
+    restBridge: "Usługi bez miejsca idą przezroczystym mostem, tak jak ustawił je OLT.",
+    servicesTitle: "Usługi od operatora",
+    servicesNone: "OLT nie ustawił jeszcze żadnej usługi.",
+    servicesLoading: "Czytam, jak OLT ustawił usługi…",
+    serviceNoVlan: "bez VLAN-u",
+    serviceVia: "{fibre} (host: {host})",
+    serviceSlot: "miejsce {list}",
+    serviceSlots: "miejsca {list}",
+    serviceBridged: "most",
+    serviceUnused: "nieużywana",
+    serviceMulticast: "multicast",
+    service: "Usługa od operatora",
+    serviceByHand: "Inny VLAN, wpisany ręcznie",
+    serviceFollows:
+      "Miejsce zapamięta usługę po VLAN-ie {vid}, pod którym podaje ją operator. Gdy OLT przeniesie ją na inny VLAN na światłowodzie albo na inny kanał GEM, sesja pójdzie za nią.",
+    serviceByHandHint: "Sesja stanie w wpisanym VLAN-ie i nie pójdzie za zmianami OLT.",
+    kind: "Co wkładka robi z usługą",
+    kindPppoe: "PPPoE na wkładce",
+    kindPppoeHint: "Wkładka sama zestawia sesję, sprzętowo.",
+    kindDhcp: "DHCP na wkładce",
+    kindDhcpHint: "Dla operatorów, którzy dają adres bez PPPoE.",
+    kindBridge: "Tylko most",
+    kindBridgeHint: "Usługa idzie do hosta, w VLAN-ie, który wybierzesz.",
+    advanced: "Zaawansowane",
     slotFreeText:
       "To miejsce jest wolne. Zajmij je sesją PPPoE: wkładka zestawi ją sama, sprzętowo, a reszta usług operatora dalej idzie mostem.",
     tileV4Host: "IPv4 → host",

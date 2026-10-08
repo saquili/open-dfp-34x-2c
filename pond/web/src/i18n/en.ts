@@ -303,15 +303,6 @@ export const en = {
     useEnds: "Ends on the stick; not passed to the SFP port",
   },
   internet: {
-    tabSessions: "PPPoE sessions",
-    tabHandover: "Address for the host",
-    wayBridge: "Transparent bridge",
-    wayBridgeText:
-      "Without any session the OLT makes the stick a transparent bridge: the operator's services go to the host, which connects to the internet itself (with its own PPPoE session, say).",
-    waySession: "PPPoE sessions on the stick",
-    waySessionText:
-      "Add a session and the stick holds it itself, in hardware; for each session you choose what happens to its address: hand it to the router, or route and NAT on the stick. The operator's other services still go over the bridge.",
-    now: "now",
     slots: "{n} of {max} slots in use.",
     slotsHint:
       "The stick holds at most 7 PPPoE sessions at once: its hardware engine has that many rows. Any free slot can be taken.",
@@ -333,8 +324,6 @@ export const en = {
     handoverTitle: "How the host gets the address",
     handoverHint:
       "When the stick holds the PPPoE session, the host gets the public address from it by DHCP, in this VLAN. It concerns the stick's PPPoE sessions only.",
-    handoverIdle:
-      "The stick holds no session now, so nothing is handed on. The settings take effect once a session is added.",
     hostGets: "What the host gets",
     hostGetsHint: "MTU 1500: the stick holds the session with 1508-byte frames (RFC 4638).",
     mtu: "MTU",
@@ -347,6 +336,30 @@ export const en = {
     slotN: "Slot {id}",
     slotFree: "free",
     slotUse: "Use this slot",
+    restBridge: "Services without a slot go over the transparent bridge, as the OLT set them up.",
+    servicesTitle: "Operator services",
+    servicesNone: "The OLT has not set up any service yet.",
+    servicesLoading: "Reading how the OLT set up the services…",
+    serviceNoVlan: "no VLAN",
+    serviceVia: "{fibre} (host: {host})",
+    serviceSlot: "slot {list}",
+    serviceSlots: "slots {list}",
+    serviceBridged: "bridge",
+    serviceUnused: "unused",
+    serviceMulticast: "multicast",
+    service: "Operator service",
+    serviceByHand: "Another VLAN, typed by hand",
+    serviceFollows:
+      "The slot keeps the service by VLAN {vid}, the one the operator names it with. When the OLT moves it to another VLAN on the fibre or to another GEM channel, the session follows it.",
+    serviceByHandHint: "The session stays in the VLAN typed and does not follow the OLT's changes.",
+    kind: "What the stick does with the service",
+    kindPppoe: "PPPoE on the stick",
+    kindPppoeHint: "The stick holds the session itself, in hardware.",
+    kindDhcp: "DHCP on the stick",
+    kindDhcpHint: "For operators who give the address without PPPoE.",
+    kindBridge: "Bridge only",
+    kindBridgeHint: "The service goes to the host, in a VLAN you choose.",
+    advanced: "Advanced",
     slotFreeText:
       "This slot is free. Take it with a PPPoE session: the stick holds it itself, in hardware, and the operator's other services still go over the bridge.",
     tileV4Host: "IPv4 → host",
