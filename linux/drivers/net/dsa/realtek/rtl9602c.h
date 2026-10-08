@@ -144,9 +144,9 @@
  * multiplier; the clock recovery (CDR), with its analog front end, a manual
  * reset of unknown polarity, the loop filter and a loop setting per line-rate
  * profile; overrides of the receiver enable and the line-rate profile; the
- * burst-enable output level; the transmit amplitude. SD_POR must be clear or
- * the receiver reports no signal (measured on this board); what it selects is
- * not known, and none of the other settings is verified to be needed.
+ * burst-enable output level; the transmit amplitude. SD_POR must be set
+ * for a module whose loss-of-signal output has the polarity its maker gives
+ * it (measured); none of the other settings is verified to be needed.
  */
 #define RTL9602C_SERDES_ANA_TUNE2	0x022588
 #define RTL9602C_SERDES_ANA_PLL_CFG	0x02258c

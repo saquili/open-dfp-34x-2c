@@ -136,12 +136,13 @@ static void rtl9602c_pon_analog_init(struct rtl9602c_priv *p)
 
 	/*
 	 * Enable the analog front end of the clock recovery (not verified), and
-	 * clear SD_POR. What SD_POR selects is not known: the downstream can
-	 * frame with it set too, under a condition not identified.
+	 * set SD_POR: with the optics' loss-of-signal output as the module's
+	 * maker configures it, the receiver detects the signal only with SD_POR
+	 * set (measured).
 	 */
 	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_RX_CFG,
 		     RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE | RTL9602C_SERDES_ANA_RX_CFG_SD_POR,
-		     RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE);
+		     RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE | RTL9602C_SERDES_ANA_RX_CFG_SD_POR);
 
 	/*
 	 * Force the analog line-rate profile to GPON's, 2.48832 Gbit/s down and

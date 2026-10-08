@@ -804,7 +804,9 @@ receiver enable, and at the end takes the burst-enable path out of power-down.
 
 Two of these are known to matter: the GPON mode, without which the MAC reset
 does not complete, and the state of ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR``, which
-has to be clear for the downstream to frame. The others are written because the
+has to be set for the downstream to frame with a module whose loss-of-signal
+output has its maker's polarity. The
+others are written because the
 downstream locks and the ONU reaches O5 with all of them in place; none has been
 removed on its own to see whether it is needed, and the rows say so.
 
@@ -882,7 +884,7 @@ removed on its own to see whether it is needed, and the rows say so.
        with them.
    * - Set ``RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE`` (bit 14 of
        ``RTL9602C_SERDES_ANA_RX_CFG``, ``0x0225b0``), the enable of the clock
-       recovery's analog front end, in the same write that clears bit 15
+       recovery's analog front end, in the same write that sets bit 15
        (``RTL9602C_SERDES_ANA_RX_CFG_SD_POR``, see "Downstream lock, LOS and
        alarms").
      - I
@@ -941,8 +943,7 @@ removed on its own to see whether it is needed, and the rows say so.
        the optical LOS input (see "Downstream lock, LOS and alarms"), the FEC
        detection threshold, the OMCI PTI match and the interrupt enables were
        written as well. It framed in that measurement with
-       ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` set, which it does not do under
-       other conditions (see the next section).
+       ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` set (see the next section).
      - M
      - The ``gpon`` view and register reads before and after each group of
        writes.
@@ -1000,21 +1001,30 @@ detects a signal.
      - The ``sig`` line read 0 and then 1 across the change of the signal-detect
        bit in the next row, the OLT transmitting.
    * - ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` (bit 15 of
-       ``RTL9602C_SERDES_ANA_RX_CFG``) must be clear: set, the receiver's signal
+       ``RTL9602C_SERDES_ANA_RX_CFG``) must be set for a module whose
+       loss-of-signal output has its maker's polarity (the optics' A2h table 2
+       byte BBh, ``LOS_POLARITY`` bit 0, clear): clear, the receiver's signal
        detect reports no signal and the downstream does not frame. The driver
-       clears it in the analog set-up.
+       sets it in the analog set-up.
      - M
-     - With the OLT transmitting and only this bit changed: set, the ``signok``
-       bit read 0 and the ``frame`` line stood still; clear, it read 1 and 80169
-       superframes passed in 10.0 s, LOS, LOF and LOM were clear, the ONU
-       reached O3, and PLOAM messages and bandwidth maps were accepted with no
-       CRC error.
-   * - What bit 15 selects is not established: the downstream has also framed at
-       8 kHz with the bit set, so its effect depends on a condition that has not
-       been identified.
+     - One stick, one fibre, one OLT, only this bit changed: set, the ONU
+       reached O5 4.7 s after the kernel started, ``signok`` 1 and the
+       superframes counting; clear, ``signok`` 0, the ``frame`` line still and
+       the ONU in O1 with LOS, LOF and LOM.
+   * - A module whose BBh had been corrupted to ``0xa1`` (``LOS_POLARITY`` set,
+       the output as signal detect) framed only with the bit clear. Its table 2
+       also held ``0xa1`` or ``0xa0`` at B8h, BDh and C1h, where an intact
+       module of the same model holds ``00``, ``3d`` and ``08``.
+     - M
+     - On that module, with the OLT transmitting and only this bit changed:
+       set, ``signok`` 0 and the ``frame`` line still; clear, ``signok`` 1 and
+       80169 superframes in 10.0 s. The tables of both modules, read through
+       the ``tables`` view.
+   * - What bit 15 selects inside the SerDes is not established; the two rows
+       above fix only which value goes with which polarity of the module's
+       output.
      - I
-     - Repeating the change of the previous row, and with the optics'
-       signal-detect configuration changed.
+     - The bit changed with the module's ``LOS_POLARITY`` changed.
    * - ``RTL9602C_GTC_DS_LOS`` (``0x701040``): ``RTL9602C_GTC_DS_LOS_OPTIC``
        (bit 8) is the level of the optical module's LOS input and
        ``RTL9602C_GTC_DS_LOS_CDR`` (bit 10) the clock recovery's loss
@@ -1026,13 +1036,11 @@ detects a signal.
      - The register read ``0x00000100`` (bit 8 set on live light) before and
        ``0x00000003`` after the bring-up writes; the ``los`` line of the
        ``gpon`` view prints the two loss bits.
-   * - That setting bit 1 is right because this board's module drives its pin as
-       signal detect rather than as loss of signal, and whether bits 0 and 1 are
-       still needed now that ``RTL9602C_SERDES_ANA_RX_CFG_SD_POR`` is clear, are
-       not established.
+   * - Whether ``RTL9602C_GTC_DS_LOS_OPTIC_EN`` (bit 0) and
+       ``RTL9602C_GTC_DS_LOS_OPTIC_POL`` (bit 1) are needed with the module's
+       output at its maker's polarity is not established.
      - I
-     - Clearing each and reading the ``los`` line and the superframe counter,
-       with the ONU reaching O5 on an OLT.
+     - Clearing each and reading the ``los`` line and the superframe counter.
    * - ``RTL9602C_SERDES_PON_RX_STAT_SYNC`` (bit 9) read 0 on a framed
        downstream; what it reports is not established. The ``gpon`` view prints
        it beside bit 8 as ``lecsync``.
