@@ -42,6 +42,7 @@ static void synthetic_caps(struct omci_hw_caps *out)
 	omci_wire_copy(out->identity.equipment_id, "SYNTHETIC-ONU", 14);
 	omci_wire_copy(out->identity.sw_version[0], "0.1.0-synth", 12);
 	omci_wire_copy(out->identity.sw_version[1], "0.0.0-empty", 12);
+	omci_wire_copy(out->identity.loid, "synthetic-loid", 15);
 
 	omci_wire_copy(out->identity.serial, out->identity.vendor_id, 4);
 	out->identity.serial[7] = 1;

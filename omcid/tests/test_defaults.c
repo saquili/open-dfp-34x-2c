@@ -214,6 +214,9 @@ static void test_the_values_the_sheet_states(void)
 	CHECK_MEM(b, caps.identity.serial, 8);
 	CHECK_MEM(b, caps.identity.vendor_id, 4);
 	CHECK_EQ(read_u(mib, 256u, 0u, 4u), caps.identity.tm_option);
+	CHECK(text_is(mib, 256u, 0u, 10u, caps.identity.loid, 0));
+	CHECK(caps.identity.loid[0] != '\0');
+	CHECK(text_is(mib, 256u, 0u, 11u, "", 0));
 	CHECK_EQ(read_u(mib, 256u, 0u, 5u), 0u);
 	CHECK_EQ(read_u(mib, 256u, 0u, 1u) == 0u, false);
 

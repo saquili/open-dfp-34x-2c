@@ -144,7 +144,11 @@ static void make_onu_data(struct build *b)
 	finish(b);
 }
 
-/* ONU-G: vendor ID, version, serial number and traffic management option. */
+/*
+ * ONU-G: vendor ID, version, serial number, traffic management option, and
+ * the logical ONU ID and password (attributes 10 and 11), empty unless the
+ * unit has them.
+ */
 static void make_onu_g(struct build *b, const struct omci_hw_caps *caps)
 {
 	begin(b, ME_ONU_G, 0);
@@ -152,6 +156,8 @@ static void make_onu_g(struct build *b, const struct omci_hw_caps *caps)
 	put_text(b, 2, caps->identity.version, 0);
 	put(b, 3, caps->identity.serial, sizeof(caps->identity.serial));
 	put_u8(b, 4, caps->identity.tm_option);
+	put_text(b, 10, caps->identity.loid, 0);
+	put_text(b, 11, caps->identity.loid_password, 0);
 
 	finish(b);
 }

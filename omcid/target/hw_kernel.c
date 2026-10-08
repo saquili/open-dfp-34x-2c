@@ -55,9 +55,10 @@
  * The identity of the ONU, written at boot from the unit's own data: one
  * "key=value" per line, with the keys vendor_id, version, equipment_id,
  * tm_option, omcc_version, vendor_product_code and serial (four letters
- * and eight hexadecimal digits), and optionally sw_version and
- * pack_version, the versions the software images and the circuit packs
- * report.
+ * and eight hexadecimal digits), and optionally sw_version (or one per
+ * image, sw_version0 and sw_version1) and pack_version, the versions the
+ * software images and the circuit packs report, and loid and
+ * loid_password, the logical ONU ID and password.
  */
 #define IDENTITY_PATH "/run/onu-identity"
 
@@ -141,7 +142,7 @@ static bool identity_copy(const char *key, char *out, size_t cap)
 	return n > 0;
 }
 
-/* Read a value of the identity file as a decimal number. */
+/* Read a value of the identity file as a number: decimal, or 0x and hexadecimal. */
 static bool identity_number(const char *key, unsigned long *out)
 {
 	char t[32];
@@ -149,7 +150,7 @@ static bool identity_number(const char *key, unsigned long *out)
 
 	if (!identity_copy(key, t, sizeof(t)))
 		return false;
-	*out = strtoul(t, &end, 10);
+	*out = strtoul(t, &end, 0);
 	return end != t;
 }
 
@@ -459,15 +460,19 @@ static void identity_serial(struct omci_hw_caps *caps)
 /*
  * The version of the software images. The identity file may name one
  * (sw_version), which both images then report, both valid: so a unit shows
- * an OLT what the firmware it came with showed. Otherwise it is the release
- * of the running kernel, and only the committed image is valid.
+ * an OLT what the firmware it came with showed; or one for each image
+ * (sw_version0, sw_version1), which take precedence. Otherwise it is the
+ * release of the running kernel, and only the committed image is valid.
  */
 static void identity_software(struct omci_hw_caps *caps)
 {
 	char version[sizeof(caps->identity.sw_version[0])] = "";
+	char own[2][sizeof(caps->identity.sw_version[0])] = { "", "" };
+	bool each = identity_copy("sw_version0", own[0], sizeof(own[0])) |
+		    identity_copy("sw_version1", own[1], sizeof(own[1]));
 
 	caps->sw_valid_images = (uint8_t)(1u << caps->sw_committed_image);
-	if (identity_copy("sw_version", version, sizeof(version))) {
+	if (identity_copy("sw_version", version, sizeof(version)) || each) {
 		caps->sw_valid_images = 3u;
 	} else {
 		FILE *f = fopen("/proc/sys/kernel/osrelease", "re");
@@ -478,13 +483,14 @@ static void identity_software(struct omci_hw_caps *caps)
 			fclose(f);
 		}
 	}
-	if (!version[0])
-		return;
 
-	snprintf(caps->identity.sw_version[0],
-		 sizeof(caps->identity.sw_version[0]), "%s", version);
-	snprintf(caps->identity.sw_version[1],
-		 sizeof(caps->identity.sw_version[1]), "%s", version);
+	for (unsigned int i = 0; i < 2; i++) {
+		const char *v = own[i][0] ? own[i] : version;
+
+		if (v[0])
+			snprintf(caps->identity.sw_version[i],
+				 sizeof(caps->identity.sw_version[i]), "%s", v);
+	}
 }
 
 /* The fixed part of the description of the board. */
@@ -562,6 +568,10 @@ static enum omci_status kernel_caps(struct omci_hw_caps *out)
 			       sizeof(out->identity.equipment_id));
 	(void)identity_copy("pack_version", out->identity.pack_version,
 			    sizeof(out->identity.pack_version));
+	(void)identity_copy("loid", out->identity.loid,
+			    sizeof(out->identity.loid));
+	(void)identity_copy("loid_password", out->identity.loid_password,
+			    sizeof(out->identity.loid_password));
 	if (identity_number("tm_option", &n))
 		out->identity.tm_option = (uint8_t)n;
 	if (identity_number("omcc_version", &n))

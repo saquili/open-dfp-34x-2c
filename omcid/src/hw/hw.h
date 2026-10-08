@@ -46,7 +46,8 @@ struct omci_hw_port {
  * @identity: the identity of the ONU: vendor ID, version, serial number,
  *	traffic management option, equipment ID, OMCC version,
  *	vendor product code, versions of the two software images, version of
- *	the circuit packs (the ONU's version when empty), MAC address
+ *	the circuit packs (the ONU's version when empty), MAC address, and the
+ *	logical ONU ID and password an operator may register a unit by
  * @num_tcont: the T-CONTs
  * @num_priq_per_tcont: the upstream priority queues of each T-CONT
  * @num_priq_per_port: the downstream priority queues of each UNI
@@ -78,6 +79,9 @@ struct omci_hw_caps {
 		char sw_version[2][15];
 
 		uint8_t mac[6];
+
+		char loid[25];
+		char loid_password[13];
 	} identity;
 
 	uint8_t num_tcont;

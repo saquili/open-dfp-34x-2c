@@ -133,6 +133,7 @@ static void test_the_host_device_says_all_of_what_it_is(void)
 	CHECK_MEM(caps.identity.equipment_id, equipment, sizeof(equipment));
 	CHECK_MEM(caps.identity.sw_version[0], sw0, sizeof(sw0));
 	CHECK_MEM(caps.identity.sw_version[1], sw1, sizeof(sw1));
+	CHECK_MEM(caps.identity.loid, "synthetic-loid", 15);
 	CHECK_MEM(caps.identity.serial,
 		  ((const uint8_t[8]){ 'Z', 'Z', 'Z', 'Z', 0, 0, 0, 1 }), 8);
 	CHECK_EQ(caps.identity.tm_option, 0u);
