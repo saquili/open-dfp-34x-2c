@@ -29,7 +29,9 @@
 # stick holds the sessions itself (passthrough), and each session runs on a
 # GEM port that the OLT provisioned, or on a VLAN on it, with the settings
 # SESSIONn_GEM, SESSIONn_VLAN, SESSIONn_MAC and SESSIONn_FAMILY (ipv4, ipv6
-# or both). Beside sessions in VLANs omcid still bridges the rest of what the
+# or both), and hands its address down to the host or keeps it on the stick,
+# SESSIONn_PASS (on or off), in the VLAN of the host link SESSIONn_HOST_VLAN
+# names (nothing for the session's own VLAN, untagged for none). Beside sessions in VLANs omcid still bridges the rest of what the
 # OLT provisions, such as television and telephone, and leaves out the
 # sessions' VLANs, which it reads from /run/onu-held-vlans. A session's VLAN
 # may be the subscriber's VID of a translation the OLT provisions, the VID a
@@ -41,11 +43,14 @@
 # untagged on its GEM port, which holds the whole port, omcid leaves the OLT's
 # bridge out (omcid -r).
 # Sessions in one VLAN share its interface, wanVID, and the MAC of the first.
-# The first session that carries IPv4 hands its address on, and its name
-# servers; the others keep theirs on the stick. The first that carries IPv6
-# hands its delegated prefix on, through dhcp6d, once its IPv6 is up. What a session has is in the
-# directory /run/session/N: gem, dev and family, and once it is up ppp, ipv4
-# and ipv6. MODE=router, kept for the bench, is the one setting of a shape.
+# In each VLAN towards the host, the first session told to hand down that
+# carries IPv4 hands its address and its name servers down, and the first
+# that carries IPv6 its delegated prefix, through dhcp6d, once its IPv6 is
+# up; the others keep theirs on the stick. What a session has is in the
+# directory /run/session/N: gem, dev and family, lan where it hands down, and
+# once it is up ppp, ipv4, ipv6 and dns, and pass and gateway once its
+# address went down. MODE=router, kept for the bench, is the one setting of a
+# shape.
 #
 # In bridge mode omcid connects the host link to the PON as the OLT
 # provisions it. In router mode omcid leaves the OLT's bridge out (omcid -r)
@@ -57,11 +62,11 @@
 # brings the WAN up when the OLT provisions its GEM port and restarts the PPPoE
 # or DHCP client when it ends.
 #
-# In passthrough, the address handed on goes on no interface of the stick's,
-# and the one host on the LAN link, the router behind the stick, takes it by
-# DHCP, as a /32 with PASS_GATEWAY, the stick's address on that link, as its
-# gateway. The LAN link is a VLAN on the host link (LAN_VLAN), or the host
-# link itself.
+# In passthrough, the address handed down goes on no interface of the
+# stick's, and the one host on its link, the router behind the stick, takes
+# it by DHCP, as a /32 with the concentrator's address as its gateway. Each
+# VLAN the sessions hand down in is a link of its own, lanVID on the host
+# link, or the host link itself for none.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -81,6 +86,9 @@ IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
 IPV4_CONF=$ROOT/proc/sys/net/ipv4/conf
 IPV4_NEIGH=$ROOT/proc/sys/net/ipv4/neigh
 SHARE=$ROOT/usr/share/onu
+# The stick's own address on a link to the host, from which its DHCP server
+# answers; the host is given the concentrator's address as its gateway.
+LINK_ADDRESS=169.254.0.1
 
 log() {
 	echo "onu-mode: $*" >&2
@@ -102,12 +110,12 @@ load() {
 	LAN_DHCP_START=192.168.1.100
 	LAN_DHCP_END=192.168.1.199
 	LAN_VLAN=
-	PASS_GATEWAY=169.254.0.1
-	PASS_PEER=on
+	LEGACY_LAN=
 	WAN_MAC=
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
 		eval "SESSION${n}_GEM= SESSION${n}_VLAN= SESSION${n}_MAC= SESSION${n}_FAMILY="
+		eval "SESSION${n}_PASS=on SESSION${n}_HOST_VLAN="
 		n=$((n + 1))
 	done
 	if [ -r "$CONF" ]; then
@@ -117,6 +125,16 @@ load() {
 	[ -n "$SESSION1_GEM" ] || SESSION1_GEM=$WAN_GEM
 	[ -n "$SESSION1_VLAN" ] || SESSION1_VLAN=$WAN_VLAN
 	[ -n "$SESSION1_MAC" ] || SESSION1_MAC=$WAN_MAC
+	# The one link of before, LAN_VLAN or the host link itself, is the link
+	# of each session that names none of its own.
+	if [ -n "$LEGACY_LAN" ]; then
+		n=1
+		while [ $n -le $MAX_SESSIONS ]; do
+			[ -n "$(setting $n HOST_VLAN)" ] ||
+				eval "SESSION${n}_HOST_VLAN=\${LAN_VLAN:-untagged}"
+			n=$((n + 1))
+		done
+	fi
 	return 0
 }
 
@@ -125,9 +143,10 @@ load_file() {
 		case $key in
 		MODE | WAN_GEM | WAN_VLAN | WAN_PROTO | WAN_ADDRESS | WAN_GATEWAY | \
 			LAN_ADDRESS | LAN_DHCP | LAN_DHCP_START | LAN_DHCP_END | \
-			LAN_VLAN | PASS_GATEWAY | PASS_PEER | WAN_MAC) ;;
+			WAN_MAC) ;;
+		LAN_VLAN) LEGACY_LAN=1 ;;
 		SESSION[1-7]_GEM | SESSION[1-7]_VLAN | SESSION[1-7]_MAC | \
-			SESSION[1-7]_FAMILY) ;;
+			SESSION[1-7]_FAMILY | SESSION[1-7]_PASS | SESSION[1-7]_HOST_VLAN) ;;
 		*) continue ;;
 		esac
 		case $value in
@@ -174,29 +193,70 @@ family() {
 	esac
 }
 
-# The session that hands its delegated IPv6 prefix on: the first that
-# carries IPv6.
-pd_session() {
-	for n in $(sessions); do
-		case $(family "$n") in
-		ipv6 | both)
-			echo "$n"
-			return 0
+# The VLAN of the host link session $1 hands its address down in: the one
+# its HOST_VLAN names, else its own, the VID the operator names its service
+# with; nothing for none (untagged).
+down_vlan() {
+	hv=$(setting "$1" HOST_VLAN)
+	case $hv in
+	untagged) ;;
+	'') setting "$1" VLAN ;;
+	*) echo "$hv" ;;
+	esac
+}
+
+# The link to the host for the VLAN $1: lanVID, or the host link itself.
+link_of() {
+	if [ -n "$1" ]; then
+		echo "lan$1"
+	else
+		echo sfp
+	fi
+}
+
+# Whether session $1 hands its $2, ipv4 or ipv6, down: it is told to, it
+# carries that family, and it is the first in its VLAN towards the host that
+# is both. In one VLAN one session at most hands its IPv4 address down, and
+# one its IPv6 prefix.
+hands() {
+	hv=$(down_vlan "$1")
+	for hm in $(sessions); do
+		[ "$(setting "$hm" PASS)" = off ] && continue
+		[ "$(down_vlan "$hm")" = "$hv" ] || continue
+		case $(family "$hm") in
+		both | "$2")
+			[ "$hm" = "$1" ]
+			return
 			;;
 		esac
+	done
+	return 1
+}
+
+# The session the stick's own default route goes by, of those that hand an
+# IPv4 address down: the first. Each other has a routing table of its own,
+# by which what comes from its address goes by its link.
+main_pass() {
+	for mp in $(sessions); do
+		if hands "$mp" ipv4; then
+			echo "$mp"
+			return 0
+		fi
 	done
 }
 
-# The session that hands its IPv4 address on: the first that carries IPv4.
-pass_session() {
-	for n in $(sessions); do
-		case $(family "$n") in
-		ipv4 | both)
-			echo "$n"
-			return 0
-			;;
-		esac
-	done
+# The routing table of session $1, for what comes from the address it hands
+# down.
+table_of() {
+	echo $((100 + $1))
+}
+
+# The links to the host the sessions hand down by, one a line.
+pass_links() {
+	for pl in $(sessions); do
+		[ "$(setting "$pl" PASS)" = off ] && continue
+		link_of "$(down_vlan "$pl")"
+	done | sort -u
 }
 
 # The dotted mask of a prefix length.
@@ -407,7 +467,7 @@ note() {
 # interface $3, handed on to the host by dhcp6d: the link to the host gets
 # IPv6, and the stick forwards it.
 pd_up() {
-	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
+	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
 	stop_pid "dhcp6d$1"
 	echo 0 >"$IPV6_CONF/$lan/disable_ipv6" 2>/dev/null
@@ -418,10 +478,11 @@ pd_up() {
 }
 
 # The PPPoE client of session $1 on $2, with the options $3, started again
-# whenever the link ends. In the role $4, "pass", its "up" line gives the
-# name servers and the address the router takes, until the link ends; in
-# "primary" the name servers alone. With $5, "pd", its "up6" line starts
-# dhcp6d, which hands the session's delegated IPv6 prefix on.
+# whenever the link ends. In the role $4, "pass" or "routed", its "up" line
+# gives the address the host takes, until the link ends, by the stick's
+# default route or by the session's own table; "pass" and "primary" give the
+# stick's name servers. With $5, "pd", its "up6" line starts dhcp6d, which
+# hands the session's delegated IPv6 prefix on.
 pppoe_loop() {
 	while :; do
 		pppoe_client "$1" "$2" "$3" 2>>"$RUN/pppoed.log" |
@@ -439,91 +500,121 @@ pppoe_loop() {
 				esac
 				note "$1" ppp "$dev"
 				note "$1" ipv4 "$addr"
-				if [ "$4" != none ]; then
-					dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
+				dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
+				note "$1" dns "$dns"
+				if [ "$4" = pass ] || [ "$4" = primary ]; then
 					if [ -n "$dns" ]; then
 						echo "$dns" >"$RUN/onu-dns"
 					else
 						rm -f "$RUN/onu-dns"
 					fi
 				fi
-				[ "$4" = pass ] && pass_lease "$addr" "$dev" "$peer"
+				case $4 in
+				pass | routed) pass_lease "$1" "$addr" "$dev" "$peer" ;;
+				esac
 				log "session $1: IPv4 up on $dev"
 			done
 		note "$1" ppp
 		note "$1" ipv4
 		note "$1" ipv6
+		note "$1" dns
 		[ "$5" = pd ] && stop_pid "dhcp6d$1"
-		[ "$4" = pass ] && pass_lease_down
+		case $4 in
+		pass | routed) pass_lease_down "$1" ;;
+		esac
 		# Sessions that ended together start again apart (see
 		# sessions_tick()): 5 s for the first, 3 s more for each next.
 		sleep $((2 + 3 * $1))
 	done
 }
 
-# The address $1 of the PPPoE session on $2 handed on: a host route to it on
-# the LAN link, and a DHCP server that leases it alone, as a /32 with the
-# stick as the gateway, the session's name servers and its MTU. A lease runs
-# for a minute: the router asks again before it ends, so it finds a new
-# address of a new session that soon. The gateway is the concentrator's
-# address $3, as a router that made the session itself would have it
-# (PASS_PEER), and the stick answers ARP for it on the link without taking
-# it: a packet to it goes on into the session, so that the concentrator
-# answers it. Otherwise, and without the peer's address, it is the stick's
-# own address on the link, PASS_GATEWAY, which the DHCP server answers from
-# either way.
+# The address $2 of session $1, whose link is $3, handed down: a host route
+# to it on the session's link to the host, and a DHCP server there that
+# leases it alone, as a /32 with the stick as the gateway, the session's name
+# servers and its MTU. A lease runs for a minute: the router asks again
+# before it ends, so it finds a new address of a new session that soon. The
+# gateway is the concentrator's address $4, as a router that made the
+# session itself would have it, and the stick answers ARP for it on the link
+# without taking it: a packet to it goes on into the session, so that the
+# concentrator answers it. Without the peer's address it is the stick's own
+# address on the link, LINK_ADDRESS, which the DHCP server answers from
+# either way. A session other than main_pass() routes what comes from its
+# address by a table of its own, through its link.
 pass_lease() {
-	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
+	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
-	stop_pid udhcpd
-	[ "$(cat "$RUN/onu-pass" 2>/dev/null)" = "$1" ] || rm -f "$RUN/udhcpd.leases"
-	ip route replace "$1" dev "$lan"
-	gw=$PASS_GATEWAY
-	if [ "$PASS_PEER" = on ]; then
-		case $3 in
-		'' | *[!0-9.]* | 0.0.0.0) ;;
-		*) gw=$3 ;;
-		esac
-	fi
-	if [ "$gw" != "$PASS_GATEWAY" ]; then
+	stop_pid "udhcpd-$lan"
+	[ "$(cat "$SESSIONS/$1/pass" 2>/dev/null)" = "$2" ] ||
+		rm -f "$RUN/udhcpd-$lan.leases"
+	ip route replace "$2" dev "$lan"
+	gw=$LINK_ADDRESS
+	case $4 in
+	'' | *[!0-9.]* | 0.0.0.0) ;;
+	*) gw=$4 ;;
+	esac
+	if [ "$gw" != "$LINK_ADDRESS" ]; then
 		echo 0 >"$IPV4_NEIGH/$lan/proxy_delay" 2>/dev/null
 		ip neigh add proxy "$gw" dev "$lan" 2>/dev/null
-		echo "$gw" >"$RUN/onu-pass-proxy"
 	fi
-	mtu=$(cat "$NET/$2/mtu" 2>/dev/null)
+	if [ "$1" != "$(main_pass)" ]; then
+		ip rule del from "$2" lookup "$(table_of "$1")" 2>/dev/null
+		ip rule add from "$2" lookup "$(table_of "$1")"
+		ip route replace default dev "$3" table "$(table_of "$1")"
+	fi
+	mtu=$(cat "$NET/$3/mtu" 2>/dev/null)
+	dns=$(cat "$SESSIONS/$1/dns" 2>/dev/null)
 	{
 		echo "interface $lan"
-		echo "start $1"
-		echo "end $1"
+		echo "start $2"
+		echo "end $2"
 		echo "max_leases 1"
-		echo "lease_file $RUN/udhcpd.leases"
-		echo "pidfile $RUN/udhcpd.pid"
+		echo "lease_file $RUN/udhcpd-$lan.leases"
+		echo "pidfile $RUN/udhcpd-$lan.pid"
 		echo "opt subnet 255.255.255.255"
 		echo "opt router $gw"
 		echo "opt staticroutes $gw/32 0.0.0.0, 0.0.0.0/0 $gw"
-		[ -s "$RUN/onu-dns" ] && echo "opt dns $(cat "$RUN/onu-dns")"
+		[ -n "$dns" ] && echo "opt dns $dns"
 		[ -n "$mtu" ] && echo "opt mtu $mtu"
 		echo "opt lease 60"
-	} >"$RUN/udhcpd.conf"
-	[ -e "$RUN/udhcpd.leases" ] || : >"$RUN/udhcpd.leases"
-	echo "$1" >"$RUN/onu-pass"
-	udhcpd "$RUN/udhcpd.conf"
-	log "the session's address goes to the router on $lan, with the gateway $gw"
+	} >"$RUN/udhcpd-$lan.conf"
+	[ -e "$RUN/udhcpd-$lan.leases" ] || : >"$RUN/udhcpd-$lan.leases"
+	note "$1" pass "$2"
+	note "$1" gateway "$gw"
+	# The stick's own way out: what the status daemon shows as the
+	# address handed on.
+	if [ "$1" = "$(main_pass)" ]; then
+		echo "$2" >"$RUN/onu-pass"
+		echo "$lan" >"$RUN/onu-lan"
+		if [ "$gw" != "$LINK_ADDRESS" ]; then
+			echo "$gw" >"$RUN/onu-pass-proxy"
+		else
+			rm -f "$RUN/onu-pass-proxy"
+		fi
+	fi
+	udhcpd "$RUN/udhcpd-$lan.conf"
+	log "session $1: its address goes to the router on $lan, with the gateway $gw"
 }
 
-# The handed address taken back, when its session ends.
+# The address session $1 handed down taken back, when the session ends.
 pass_lease_down() {
-	addr=$(cat "$RUN/onu-pass" 2>/dev/null)
-	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
-	stop_pid udhcpd
+	addr=$(cat "$SESSIONS/$1/pass" 2>/dev/null)
+	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
+	gw=$(cat "$SESSIONS/$1/gateway" 2>/dev/null)
+	[ -n "$lan" ] && stop_pid "udhcpd-$lan"
 	if [ -n "$addr" ] && [ -n "$lan" ]; then
 		ip route del "$addr" dev "$lan" 2>/dev/null
+		if ip rule del from "$addr" lookup "$(table_of "$1")" 2>/dev/null; then
+			ip route flush table "$(table_of "$1")" 2>/dev/null
+		fi
 	fi
-	proxy=$(cat "$RUN/onu-pass-proxy" 2>/dev/null)
-	if [ -n "$proxy" ] && [ -n "$lan" ]; then
-		ip neigh del proxy "$proxy" dev "$lan" 2>/dev/null
+	if [ -n "$gw" ] && [ "$gw" != "$LINK_ADDRESS" ] && [ -n "$lan" ]; then
+		ip neigh del proxy "$gw" dev "$lan" 2>/dev/null
 	fi
-	rm -f "$RUN/onu-pass" "$RUN/onu-pass-proxy"
+	if [ -n "$addr" ] && [ "$addr" = "$(cat "$RUN/onu-pass" 2>/dev/null)" ]; then
+		rm -f "$RUN/onu-pass" "$RUN/onu-pass-proxy" "$RUN/onu-lan"
+	fi
+	note "$1" pass
+	note "$1" gateway
 	return 0
 }
 
@@ -704,13 +795,20 @@ session_up() {
 	ipv4) opts=-4 ;;
 	ipv6) opts=-6 ;;
 	esac
-	if [ "$n" = "$(pass_session)" ]; then
-		opts="-D $opts -P"
-		role=pass
-		echo "$n" >"$RUN/onu-pass-session"
+	if hands "$n" ipv4; then
+		if [ "$n" = "$(main_pass)" ]; then
+			opts="-D $opts -P"
+			role=pass
+		else
+			opts="$opts -P"
+			role=routed
+		fi
 	fi
 	role6=none
-	[ "$n" = "$(pd_session)" ] && role6=pd
+	hands "$n" ipv6 && role6=pd
+	if [ "$role" != none ] || [ "$role6" != none ]; then
+		link_of "$(down_vlan "$n")" >"$SESSIONS/$n/lan"
+	fi
 	pppoe_loop "$n" "$dev" "$opts" "$role" "$role6" &
 	echo $! >"$RUN/pppoe-loop$n.pid"
 	log "session $n on $dev ($fam), GEM port ${gem#gem}"
@@ -736,10 +834,7 @@ session_down() {
 	stop_pid "pppoe-loop$1"
 	stop_pid "pppoed$1"
 	stop_pid "dhcp6d$1"
-	if [ "$1" = "$(cat "$RUN/onu-pass-session" 2>/dev/null)" ]; then
-		pass_lease_down
-		rm -f "$RUN/onu-pass-session"
-	fi
+	pass_lease_down "$1"
 	if ! dev_shared "$1" "$down_dev"; then
 		[ "$down_dev" != "$down_gem" ] && ip link del "$down_dev" 2>/dev/null
 		# What pppoe_mtu() raised goes back to Ethernet's MTU, the PON port
@@ -878,12 +973,13 @@ ttl_decrement() {
 		log "the switch did not take l3_ttl_decrement $1"
 }
 
-# Passthrough mode: the LAN link, a VLAN on the host link or the host link
-# itself, with the stick's address on it; the session's address comes later.
-# The stick stands in for the operator's ONT between the router and the
-# concentrator, which is no hop: the switch routes the session's packets
+# Passthrough mode: the links to the host, one for each VLAN the sessions
+# hand their addresses down in, a VLAN on the host link or the host link
+# itself, with the stick's address on each; the sessions' addresses come
+# later. The stick stands in for the operator's ONT between the router and
+# the concentrator, which is no hop: the switch routes the sessions' packets
 # with their TTL unchanged, as it does the gateway the router is given.
-# The link forwards only what comes from the address it hands on (BCP 38): a
+# A link forwards only what comes from the address it hands on (BCP 38): a
 # strict reverse-path check drops a packet whose source the stick would not
 # route back by the link. Without it, packets of any source that reached the
 # stick's MAC on the link went out into the session (measured: about half of
@@ -891,30 +987,33 @@ ttl_decrement() {
 # only the handed address's own packets in hardware.
 pass_up() {
 	echo 1 >"$FORWARD"
-	lan=sfp
-	if [ -n "$LAN_VLAN" ]; then
-		ip link add link sfp name lan type vlan id "$LAN_VLAN"
-		ip link set lan up
-		lan=lan
-	fi
-	echo 1 >"$IPV4_CONF/$lan/rp_filter"
 	ttl_decrement false
-	ip address add "$PASS_GATEWAY/32" dev "$lan"
-	echo "$lan" >"$RUN/onu-lan"
+	: >"$RUN/onu-lans"
+	for lan in $(pass_links); do
+		if [ "$lan" != sfp ]; then
+			ip link add link sfp name "$lan" type vlan id "${lan#lan}"
+			ip link set "$lan" up
+		fi
+		echo 1 >"$IPV4_CONF/$lan/rp_filter"
+		ip address add "$LINK_ADDRESS/32" dev "$lan"
+		echo "$lan" >>"$RUN/onu-lans"
+	done
 	[ -n "${ONU_MODE_NO_WATCH:-}" ] || "$0" watch &
 }
 
 pass_down() {
 	stop_pid onu-watch
 	sessions_down
-	pass_lease_down
-	rm -f "$RUN/onu-pass-session"
-	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
-	[ -n "$lan" ] && ip address del "$PASS_GATEWAY/32" dev "$lan" 2>/dev/null
-	[ "$lan" = sfp ] && echo 0 >"$IPV4_CONF/sfp/rp_filter"
+	for lan in $(cat "$RUN/onu-lans" 2>/dev/null); do
+		ip address del "$LINK_ADDRESS/32" dev "$lan" 2>/dev/null
+		if [ "$lan" = sfp ]; then
+			echo 0 >"$IPV4_CONF/sfp/rp_filter"
+		else
+			ip link del "$lan" 2>/dev/null
+		fi
+	done
+	rm -f "$RUN/onu-lans" "$RUN/onu-lan" "$RUN/onu-pass" "$RUN/onu-pass-proxy"
 	ttl_decrement true
-	ip link del lan 2>/dev/null
-	rm -f "$RUN/onu-lan"
 	echo 0 >"$FORWARD"
 	echo 0 >"$FORWARD6" 2>/dev/null
 	return 0
@@ -1038,8 +1137,10 @@ status)
 		echo "$line"
 	done
 	[ -s "$RUN/onu-dns" ] && echo "dns $(cat "$RUN/onu-dns")"
-	[ -s "$RUN/onu-pass" ] &&
-		echo "pass $(cat "$RUN/onu-pass") on $(cat "$RUN/onu-lan" 2>/dev/null)"
+	for d in "$SESSIONS"/*; do
+		[ -r "$d/pass" ] &&
+			echo "pass $(cat "$d/pass") on $(cat "$d/lan") from session ${d##*/}"
+	done
 	exit 0
 	;;
 watch)

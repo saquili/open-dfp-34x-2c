@@ -35,14 +35,17 @@ setup() {
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
-	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all" "$ONU_ROOT/proc/sys/net/ipv6/conf/lan"
+	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding"
-	echo 1 >"$ONU_ROOT/proc/sys/net/ipv6/conf/lan/disable_ipv6"
-	mkdir -p "$ONU_ROOT/proc/sys/net/ipv4/conf/lan" "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp"
-	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/lan/rp_filter"
-	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter"
-	mkdir -p "$ONU_ROOT/proc/sys/net/ipv4/neigh/lan"
-	echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/lan/proxy_delay"
+	# The links to the host the tests make: the host link itself and VLANs.
+	for lan in sfp lan410 lan36 lan37; do
+		mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/$lan" \
+			"$ONU_ROOT/proc/sys/net/ipv4/conf/$lan" \
+			"$ONU_ROOT/proc/sys/net/ipv4/neigh/$lan"
+		echo 1 >"$ONU_ROOT/proc/sys/net/ipv6/conf/$lan/disable_ipv6"
+		echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/$lan/rp_filter"
+		echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/$lan/proxy_delay"
+	done
 	: >"$LOG"
 	for prog in killall udhcpd udhcpc logger kill onu-store dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
@@ -221,12 +224,12 @@ check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 teardown
 
-echo "an account: the stick holds the session, in a VLAN, the LAN link in another"
+echo "an account: the stick holds the session, in a VLAN, and hands it down in another"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
 echo 1492 >"$ONU_ROOT/sys/class/net/ppp0/mtu"
-conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=36 \
-	PASS_GATEWAY=192.0.2.254 SESSION1_MAC=00:00:5e:00:53:01
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_HOST_VLAN=36 \
+	SESSION1_MAC=00:00:5e:00:53:01
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
@@ -236,10 +239,10 @@ check '! logged "omcid -r"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 check 'logged "^ip link del omcibr0"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
-check 'logged "^ip link add link sfp name lan type vlan id 36"'
-check 'logged "^ip address add 192.0.2.254/32 dev lan"'
-# The LAN link forwards only the handed address's packets (BCP 38).
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan/rp_filter")" = 1 ]'
+check 'logged "^ip link add link sfp name lan36 type vlan id 36"'
+check 'logged "^ip address add 169.254.0.1/32 dev lan36"'
+# The link forwards only the handed address's packets (BCP 38).
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan36/rp_filter")" = 1 ]'
 # The stick is no hop: the switch routes with the TTL unchanged.
 check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value false"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
@@ -254,63 +257,53 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	"$REAL_SLEEP" 0.2
 done
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/lan")" = lan36 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/dev")" = wan410 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/ipv4")" = 192.0.2.2 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/ppp")" = ppp0 ]'
 check '[ -s "$ONU_ROOT/run/pppoed1.pid" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
-check 'logged "^ip route replace 192.0.2.2 dev lan"'
-check 'grep -q "^interface lan" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^start 192.0.2.2" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^end 192.0.2.2" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt subnet 255.255.255.255" "$ONU_ROOT/run/udhcpd.conf"'
+check '[ "$(cat "$ONU_ROOT/run/onu-lan")" = lan36 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/pass")" = 192.0.2.2 ]'
+check 'logged "^ip route replace 192.0.2.2 dev lan36"'
+# The stick's own way out: no table of its own.
+check '! logged "^ip rule add"'
+check 'grep -q "^interface lan36" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'grep -q "^start 192.0.2.2" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'grep -q "^end 192.0.2.2" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'grep -q "^opt subnet 255.255.255.255" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 # The gateway is the concentrator's address, as the router would have it with
 # a session of its own; the stick answers ARP for it, at once, without
 # taking it.
-check 'grep -q "^opt router 192.0.2.1" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt staticroutes 192.0.2.1/32 0.0.0.0, 0.0.0.0/0 192.0.2.1" "$ONU_ROOT/run/udhcpd.conf"'
-check 'logged "^ip neigh add proxy 192.0.2.1 dev lan"'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/neigh/lan/proxy_delay")" = 0 ]'
+check 'grep -q "^opt router 192.0.2.1" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'grep -q "^opt staticroutes 192.0.2.1/32 0.0.0.0, 0.0.0.0/0 192.0.2.1" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'logged "^ip neigh add proxy 192.0.2.1 dev lan36"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/neigh/lan36/proxy_delay")" = 0 ]'
 check '! logged "^ip address add 192.0.2.1"'
-check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd.conf"'
-check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
-check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/gateway")" = 192.0.2.1 ]'
+check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'logged "^udhcpd $ONU_ROOT/run/udhcpd-lan36.conf"'
+check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan36 from session 1"'
 check '"$MODE_SCRIPT" status | grep -q "^session 1 on wan410 (ipv4), up on ppp0, 192.0.2.2"'
 # The stand-in session ends after two seconds: the address goes with it.
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	logged "^ip route del 192.0.2.2 dev lan" && break
+	logged "^ip route del 192.0.2.2 dev lan36" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^ip route del 192.0.2.2 dev lan"'
-check 'logged "^ip neigh del proxy 192.0.2.1 dev lan"'
+check 'logged "^ip route del 192.0.2.2 dev lan36"'
+check 'logged "^ip neigh del proxy 192.0.2.1 dev lan36"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-pass" ]'
 check 'logged "^ip link del wan410"'
 teardown
 
-echo "the stick's own address as the gateway, when told so"
-setup
-conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=36 \
-	PASS_GATEWAY=192.0.2.254 PASS_PEER=off
-echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
-"$MODE_SCRIPT" start 2>/dev/null
-"$MODE_SCRIPT" tick 2>/dev/null
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/onu-pass" ] && logged "^udhcpd" && break
-	"$REAL_SLEEP" 0.2
-done
-check 'grep -q "^opt router 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt staticroutes 192.0.2.254/32 0.0.0.0, 0.0.0.0/0 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
-check '! logged "^ip neigh add proxy"'
-"$MODE_SCRIPT" stop 2>/dev/null
-teardown
-
-echo "two sessions in one VLAN: IPv4 handed on, IPv6 on the stick"
+echo "the settings of before: two sessions in one VLAN hand IPv4 and IPv6 down in LAN_VLAN"
 setup
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv6 \
-	LAN_VLAN=36
+	LAN_VLAN=36 PASS_GATEWAY=192.0.2.254 PASS_PEER=off
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
@@ -334,13 +327,17 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	logged "^dhcp6d" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan -m wan410 -o $ONU_ROOT/run/session/2$"'
+check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2$"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan/disable_ipv6")" = 0 ]'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan36/disable_ipv6")" = 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/2/family")" = ipv6 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/2/lan")" = lan36 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
-check '[ "$(cat "$ONU_ROOT/run/onu-pass-session")" = 1 ]'
+# The gateway the stick told of before is no setting any more: the
+# concentrator's address is the gateway, from the stick's own address.
+check 'logged "^ip address add 169.254.0.1/32 dev lan36"'
+check 'grep -q "^opt router 192.0.2.1" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 # The IPv6 account goes: its session ends, the VLAN stays for the other.
 : >"$LOG"
 rm "$ONU_ROOT/run/onu-pppoe2"
@@ -537,13 +534,107 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 : >"$LOG"
 rm "$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" apply 2>/dev/null
-check 'logged "^ip address del 169.254.0.1/32 dev lan"'
-check 'logged "^ip link del lan"'
+check 'logged "^ip address del 169.254.0.1/32 dev lan36"'
+check 'logged "^ip link del lan36"'
 check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value true"'
 check 'logged "^killall -USR2 omcid"'
 check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-lan" ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
+teardown
+
+echo "a session told to keep its address: no link to the host, the address on the stick"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/session/1/ipv4" ] && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -4 -M$"'
+check '! logged "^ip link add link sfp"'
+check '! logged "^ip address add 169.254.0.1"'
+check '[ ! -e "$ONU_ROOT/run/session/1/lan" ]'
+check '! logged "^udhcpd"'
+check '[ ! -e "$ONU_ROOT/run/onu-pass" ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
+echo "in one VLAN to the host one session hands its IPv4 address down"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check '[ "$(grep -c "^ip link add link sfp name lan410 type vlan id 410" "$LOG")" = 1 ]'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -M$"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/lan")" = lan410 ]'
+check '[ ! -e "$ONU_ROOT/run/session/2/lan" ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
+echo "each VLAN to the host a link of its own: the second session routes by its own table"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv4 \
+	SESSION2_HOST_VLAN=37
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+check 'logged "^ip link add link sfp name lan410 type vlan id 410"'
+check 'logged "^ip link add link sfp name lan37 type vlan id 37"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan37/rp_filter")" = 1 ]'
+"$MODE_SCRIPT" tick 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/session/2/pass" ] && [ -s "$ONU_ROOT/run/session/1/pass" ] && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -P -M$"'
+check '[ "$(cat "$ONU_ROOT/run/session/2/lan")" = lan37 ]'
+check 'logged "^ip rule add from 192.0.2.2 lookup 102"'
+check 'logged "^ip route replace default dev ppp0 table 102"'
+check '! logged "^ip rule add from 192.0.2.2 lookup 101"'
+check 'grep -q "^interface lan410" "$ONU_ROOT/run/udhcpd-lan410.conf"'
+check 'grep -q "^interface lan37" "$ONU_ROOT/run/udhcpd-lan37.conf"'
+check 'grep -q "^pidfile $ONU_ROOT/run/udhcpd-lan37.pid" "$ONU_ROOT/run/udhcpd-lan37.conf"'
+check '[ "$("$MODE_SCRIPT" status | grep -c "^pass ")" = 2 ]'
+# What the status daemon shows as the address handed on is the first's.
+check '[ "$(cat "$ONU_ROOT/run/onu-lan")" = lan410 ]'
+: >"$LOG"
+"$MODE_SCRIPT" stop 2>/dev/null
+check 'logged "^ip rule del from 192.0.2.2 lookup 102"'
+check 'logged "^ip route flush table 102"'
+check 'logged "^ip link del lan410"'
+check 'logged "^ip link del lan37"'
+teardown
+
+echo "no VLAN to the host: the host link itself"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_HOST_VLAN=untagged
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
+check '! logged "^ip link add link sfp"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 1 ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
+teardown
+
+echo "the settings of before: an empty LAN_VLAN is the host link itself"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
+check '! logged "^ip link add link sfp"'
+"$MODE_SCRIPT" stop 2>/dev/null
 teardown
 
 echo "settings that are not values"
