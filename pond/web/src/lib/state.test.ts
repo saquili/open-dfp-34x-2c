@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { LIVE } from "../mocks/fixture";
 import {
+  downVlan,
   fibre,
   fibreVlan,
   gems,
@@ -90,6 +91,24 @@ describe("the VLAN of a session on the fibre", () => {
     for (const x of live.settings?.sessions ?? []) x.dev = "wan1410";
     const g = gems(live).find((x) => x.use === "session");
     expect(g?.vlan).toBe("1410");
+  });
+});
+
+describe("the VLAN a session hands its address down in", () => {
+  it("is the session's own, the service's, unless another or none is set", () => {
+    expect(downVlan({ vlan: "410", hostVlan: "" })).toBe("410");
+    expect(downVlan({ vlan: "410", hostVlan: "36" })).toBe("36");
+    expect(downVlan({ vlan: "410", hostVlan: "untagged" })).toBe("");
+  });
+
+  it("is told to the panel by the stick, which hands down unless told not to", () => {
+    const [v4] = sessions(LIVE);
+    expect([v4?.pass, v4?.hostVlan]).toEqual([true, "36"]);
+    const live = structuredClone(LIVE);
+    const s = live.settings?.sessions?.[0];
+    if (!s) throw new Error("a session");
+    s.pass = "off";
+    expect(sessions(live)[0]?.pass).toBe(false);
   });
 });
 

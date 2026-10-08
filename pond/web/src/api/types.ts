@@ -166,6 +166,10 @@ export interface SessionInfo {
   vlan: string;
   mac: string;
   family: Family;
+  /** Whether the session hands its address down to the host ("on") or keeps it. */
+  pass: "on" | "off";
+  /** The VLAN towards the host: a VID, "untagged", or "" for the session's own. */
+  host_vlan: string;
   /** The session whose IPv4 address goes to the host. */
   hands_on: boolean;
   dev: string | null;

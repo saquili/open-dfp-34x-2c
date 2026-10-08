@@ -7,20 +7,19 @@
  * here the OLT makes the stick a transparent bridge, and the host dials the
  * operator through it. A slot takes one service: the stick holds its PPPoE
  * session itself, in its switch's hardware, and hands the public address to
- * the host, whose link is set with the slot that hands it on. A slot is
- * bound to the service, by the VID the operator names it with: when the OLT
- * moves the service to another VID on the fibre or another channel, the
- * session follows; the VLAN towards the host is the OLT's, never set here.
- * Whether a slot hands its address on or keeps it on the stick is, for now,
- * the order of the slots: the first that carries IPv4 hands its address on,
- * the first that carries IPv6 its prefix.
+ * the host or keeps it. A slot is bound to the service, by the VID the
+ * operator names it with: when the OLT moves the service to another VID on
+ * the fibre or another channel, the session follows. The address goes down
+ * to the host in that same VID, unless the slot names another, or none; in
+ * one VLAN towards the host one slot at most hands its IPv4 address down,
+ * and one its IPv6 prefix.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { useForm } from "react-hook-form";
+import { type UseFormRegisterReturn, useForm } from "react-hook-form";
 import { useLinkChange, useOmci, useSessionChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { Family } from "../api/types";
@@ -31,6 +30,7 @@ import { type Key, useI18n } from "../i18n";
 import { Mib, type Service, services } from "../lib/omci";
 import { ipv4, mac, required, upTo, vlan, z } from "../lib/schemas";
 import {
+  downVlan,
   fibreVlan,
   gems,
   hostLink,
@@ -187,20 +187,31 @@ function Dialog({
   );
 }
 
-/* One answer of the form's: the one the stick gives, or one it cannot yet. */
-function Choice({ title, text, on }: { title: string; text: ReactNode; on: boolean }) {
+/* One answer of the form's: a radio of @field with @value. */
+function Choice({
+  title,
+  text,
+  on,
+  field,
+  value,
+}: {
+  title: string;
+  text: string;
+  on: boolean;
+  field: UseFormRegisterReturn;
+  value: string;
+}) {
   return (
     <label
-      className={`flex items-start gap-3 rounded-box border p-3 ${
-        on ? "border-primary/50 bg-primary/5" : "border-base-300 opacity-60"
+      className={`flex cursor-pointer items-start gap-3 rounded-box border p-3 ${
+        on ? "border-primary/50 bg-primary/5" : "border-base-300"
       }`}
     >
       <input
         type="radio"
+        value={value}
         className="radio radio-sm radio-primary mt-0.5"
-        checked={on}
-        disabled={!on}
-        readOnly
+        {...field}
       />
       <span>
         <span className="block text-sm font-medium">{title}</span>
@@ -210,21 +221,31 @@ function Choice({ title, text, on }: { title: string; text: ReactNode; on: boole
   );
 }
 
-/*
- * What slot @id hands down with families @f, as onu-mode decides it: the
- * first session that carries IPv4 hands its address on, the first that
- * carries IPv6 its prefix; with the slots that already do, if any.
- */
-function handing(all: SessionView[], id: number, f: Family) {
-  const before = all.filter((y) => y.id < id).sort((a, z) => a.id - z.id);
-  const v4By = f === "ipv6" ? undefined : before.find((y) => y.family !== "ipv6")?.id;
-  const v6By = f === "ipv4" ? undefined : before.find((y) => y.family !== "ipv4")?.id;
-  return { v4: f !== "ipv6" && v4By == null, v6: f !== "ipv4" && v6By == null, v4By, v6By };
+/* The VIDs service @s comes in on the host's side. */
+function hostSide(s: Service): number[] {
+  const host = s.hostVlans.filter((v): v is number => v != null);
+  return host.length ? host : s.vlan != null ? [s.vlan] : [];
 }
 
-/* What the host is given with families @v4 and @v6. */
-function downWhat(v4: boolean, v6: boolean): Key {
-  return v4 && v6 ? "internet.kindDownBoth" : v4 ? "internet.kindDownV4" : "internet.kindDownV6";
+/*
+ * The slots other than @id that already hand down into VLAN @down what
+ * families @f would: in one VLAN one slot at most hands IPv4, and one IPv6.
+ */
+function clashes(all: SessionView[], id: number, down: string, f: Family) {
+  const there = all.filter((y) => y.id !== id && y.pass && downVlan(y) === down);
+  return {
+    v4: f === "ipv6" ? undefined : there.find((y) => y.family !== "ipv6")?.id,
+    v6: f === "ipv4" ? undefined : there.find((y) => y.family !== "ipv4")?.id,
+  };
+}
+
+/* What the host is given with families @f. */
+function downWhat(f: Family): Key {
+  return f === "both"
+    ? "internet.kindDownBoth"
+    : f === "ipv4"
+      ? "internet.kindDownV4"
+      : "internet.kindDownV6";
 }
 
 /** A slot's session and settings: a new one in @slot without @x, or @x changed. */
@@ -234,13 +255,20 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
   const state = useChangeState(change);
   const all = sessions(useLive().data);
   const { list } = useServices();
+  const id = x?.id ?? slot ?? 0;
   const bound = x ? serviceOf(list, x) : undefined;
   /* A session whose service the OLT no longer provisions keeps its VID. */
   const gone = x && !bound ? x.vlan : null;
+  const first = bound ? serviceVid(bound) : (gone ?? (list[0] ? serviceVid(list[0]) : ""));
+  /* A new slot hands its address down unless its service's VLAN has one that does. */
+  const free = Object.values(clashes(all, id, first, "both")).every((v) => v == null);
   const schema = z.object({
     user: x ? upTo(63) : required(t("form.required")),
     secret: x ? z.string().check(z.maxLength(255)) : required(t("internet.secretRequired")),
     service: required(t("form.required")),
+    pass: z.enum(["on", "off"]),
+    hostVlan: vlan(t),
+    untagged: z.boolean(),
     mac: mac(t),
     family: z.enum(["both", "ipv4", "ipv6"]),
   });
@@ -250,17 +278,31 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
     defaultValues: {
       user: x?.user ?? "",
       secret: "",
-      service: bound ? serviceVid(bound) : (gone ?? (list[0] ? serviceVid(list[0]) : "")),
+      service: first,
+      pass: (x ? x.pass : free) ? "on" : "off",
+      hostVlan: x && x.hostVlan !== "untagged" ? x.hostVlan : "",
+      untagged: x?.hostVlan === "untagged",
       mac: x?.mac ?? "",
       family: x?.family ?? "both",
     },
   });
   const { errors, isDirty } = form.formState;
-  const family = form.watch("family");
-  const service = form.watch("service");
+  const [family, service, pass, hostVlan, untagged] = form.watch([
+    "family",
+    "service",
+    "pass",
+    "hostVlan",
+    "untagged",
+  ]);
   const picked = list.find((s) => serviceVid(s) === service);
-  const h = handing(all, x?.id ?? slot ?? 0, family);
-  const down = h.v4 || h.v6;
+  /* The VLAN the address goes down in, and what stands in its way there. */
+  const down = untagged ? "" : hostVlan || service;
+  const clash = pass === "on" ? clashes(all, id, down, family) : { v4: undefined, v6: undefined };
+  const foreign =
+    pass === "on" && down
+      ? list.find((s) => s !== picked && hostSide(s).includes(Number(down)))
+      : undefined;
+  const blocked = clash.v4 != null || clash.v6 != null || foreign != null;
 
   const send = (v: Values) =>
     change.mutate(
@@ -273,6 +315,9 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         GEM: "auto",
         MAC: v.mac,
         FAMILY: v.family,
+        PASS: v.pass,
+        /* The service's own VLAN is kept as none, to follow the service. */
+        HOST_VLAN: v.untagged ? "untagged" : v.hostVlan === v.service ? "" : v.hostVlan,
       },
       { onSuccess: onDone },
     );
@@ -306,28 +351,54 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
       <fieldset className="grid gap-2">
         <legend className="mb-1 text-sm font-medium">{t("internet.kind")}</legend>
         <div className="grid gap-2 sm:grid-cols-2">
-          <Choice on={!down} title={t("internet.kindStick")} text={t("internet.kindStickHint")} />
           <Choice
-            on={down}
+            value="off"
+            on={pass === "off"}
+            field={form.register("pass")}
+            title={t("internet.kindStick")}
+            text={t("internet.kindStickHint")}
+          />
+          <Choice
+            value="on"
+            on={pass === "on"}
+            field={form.register("pass")}
             title={t("internet.kindDown")}
-            text={
-              <>
-                {t("internet.kindDownHint", {
-                  what: t(
-                    down ? downWhat(h.v4, h.v6) : downWhat(family !== "ipv6", family !== "ipv4"),
-                  ),
-                })}
-                {h.v4By != null && (
-                  <span className="block">{t("internet.kindTakenV4", { id: h.v4By })}</span>
-                )}
-                {h.v6By != null && (
-                  <span className="block">{t("internet.kindTakenV6", { id: h.v6By })}</span>
-                )}
-              </>
-            }
+            text={t("internet.kindDownHint", { what: t(downWhat(family)) })}
           />
         </div>
-        <p className="text-xs text-base-content/60">{t("internet.kindByOrder")}</p>
+        {pass === "on" && (
+          <div className="grid gap-2 pt-1">
+            {!untagged && (
+              <Field
+                label={t("internet.hostVlan")}
+                inputMode="numeric"
+                placeholder={service}
+                hint={t("internet.hostVlanHint", { vid: service })}
+                error={errors.hostVlan?.message}
+                {...form.register("hostVlan")}
+              />
+            )}
+            <label className="label cursor-pointer justify-start gap-3">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-sm"
+                {...form.register("untagged")}
+              />
+              <span className="text-sm">{t("internet.hostVlanUntagged")}</span>
+            </label>
+            {clash.v4 != null && (
+              <p className="text-xs text-error">{t("internet.clashV4", { id: clash.v4 })}</p>
+            )}
+            {clash.v6 != null && (
+              <p className="text-xs text-error">{t("internet.clashV6", { id: clash.v6 })}</p>
+            )}
+            {foreign && (
+              <p className="text-xs text-error">
+                {t("internet.clashService", { vid: down, name: serviceName(t, foreign) })}
+              </p>
+            )}
+          </div>
+        )}
       </fieldset>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
@@ -368,7 +439,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         <button
           type="submit"
           className="btn btn-primary"
-          disabled={(x && !isDirty) || change.isPending || !service}
+          disabled={(x && !isDirty) || change.isPending || !service || blocked}
         >
           {x ? t("internet.save") : t("internet.add")}
         </button>
@@ -456,6 +527,14 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
                 : x.vlan,
           ],
           [
+            t("internet.address"),
+            !x.pass
+              ? t("internet.addressStick")
+              : downVlan(x)
+                ? t("internet.addressDown", { vlan: downVlan(x) })
+                : t("internet.addressDownUntagged"),
+          ],
+          [
             t("internet.channel"),
             portId != null
               ? `GEM ${portId}`
@@ -478,9 +557,14 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
           x.family !== "ipv4" && [
             t("internet.prefix"),
             x.prefix
-              ? t(x.prefixHost ? "internet.prefixHost" : "internet.prefixWaiting", {
-                  prefix: x.prefix,
-                })
+              ? t(
+                  x.prefixHost
+                    ? "internet.prefixHost"
+                    : x.pass
+                      ? "internet.prefixWaiting"
+                      : "internet.prefixStick",
+                  { prefix: x.prefix },
+                )
               : x.ipv6
                 ? t("internet.prefixNone")
                 : "–",
@@ -604,7 +688,7 @@ function SessionsTab() {
         {x ? (
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <SessionCard x={x} onEdit={() => setEditing(x)} />
-            {x.handsOn && <HostCard />}
+            {x.handsOn && <HostCard x={x} />}
           </div>
         ) : (
           <Card title={t("internet.slotN", { id: shown })}>
@@ -647,35 +731,28 @@ function HandoverForm({ link }: { link: LinkView }) {
   const { t } = useI18n();
   const change = useLinkChange();
   const state = useChangeState(change);
-  const schema = z.object({ vlan: vlan(t), gateway: ipv4(t), peer: z.boolean() });
+  const schema = z.object({ gateway: ipv4(t), peer: z.boolean() });
   type Values = z.infer<typeof schema>;
-  const current = { vlan: link.vlan, gateway: link.gateway, peer: link.peer };
+  const current = { gateway: link.gateway, peer: link.peer };
   const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: current });
   const { errors, isDirty } = form.formState;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refill only when the stick's values change
   useEffect(() => {
     if (!form.formState.isDirty) form.reset(current);
-  }, [link.vlan, link.gateway, link.peer]);
+  }, [link.gateway, link.peer]);
 
   return (
     <form
       onSubmit={form.handleSubmit((v) =>
         change.mutate(
-          { VLAN: v.vlan, GATEWAY: v.gateway, PEER: v.peer ? "on" : "off" },
+          { GATEWAY: v.gateway, PEER: v.peer ? "on" : "off" },
           { onSuccess: () => form.reset(v) },
         ),
       )}
       noValidate
       className="grid gap-4"
     >
-      <Field
-        label={t("sfp.vlan")}
-        hint={t("sfp.vlanHint")}
-        inputMode="numeric"
-        error={errors.vlan?.message}
-        {...form.register("vlan")}
-      />
       <Field
         label={t("sfp.gateway")}
         hint={t("sfp.gatewayHint")}
@@ -704,8 +781,8 @@ function HandoverForm({ link }: { link: LinkView }) {
   );
 }
 
-/** How the host gets the address the slot hands on, and what it gets. */
-function HostCard() {
+/** How the host gets the address slot @x hands down, and what it gets. */
+function HostCard({ x }: { x: SessionView }) {
   const { t } = useI18n();
   const { data: live } = useLive();
   const s = session(live);
@@ -715,6 +792,7 @@ function HostCard() {
       <p className="text-sm text-base-content/70">{t("internet.handoverHint")}</p>
       <Facts
         rows={[
+          [t("internet.hostVlan"), downVlan(x) || t("switch.untagged")],
           [t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")],
           [t("sfp.hostGateway"), s.up && link.hostGateway ? link.hostGateway : "–"],
           [t("internet.hostPrefix"), s.prefix ?? "–"],

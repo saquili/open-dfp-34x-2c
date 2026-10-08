@@ -313,7 +313,7 @@ export const en = {
     soon: "soon",
     handoverTitle: "How the host gets the address",
     handoverHint:
-      "When the stick holds the PPPoE session, the host gets the public address from it by DHCP, in this VLAN. It concerns the stick's PPPoE sessions only.",
+      "The host gets the public address from the stick by DHCP, in the VLAN set in the slot.",
     hostGets: "What the host gets",
     hostGetsHint: "MTU 1500: the stick holds the session with 1508-byte frames (RFC 4638).",
     mtu: "MTU",
@@ -349,10 +349,17 @@ export const en = {
     kindDownV4: "the public IPv4 address by DHCP",
     kindDownV6: "the IPv6 prefix by DHCPv6",
     kindDownBoth: "the public IPv4 address by DHCP and the IPv6 prefix by DHCPv6",
-    kindTakenV4: "Slot {id} already hands its IPv4 address on.",
-    kindTakenV6: "Slot {id} already hands its IPv6 prefix on.",
-    kindByOrder:
-      "For now the order of the slots decides: the first slot with IPv4 hands its address on, and the first with IPv6 its prefix.",
+    hostVlan: "VLAN to the host",
+    hostVlanHint:
+      "Empty: the service's VLAN, {vid}. In one VLAN to the host at most one slot hands its IPv4 address down, and one its IPv6 prefix.",
+    hostVlanUntagged: "No VLAN",
+    clashV4: "In this VLAN slot {id} already hands its IPv4 address down.",
+    clashV6: "In this VLAN slot {id} already hands its IPv6 prefix down.",
+    clashService: "VLAN {vid} carries another operator service to the host: {name}.",
+    address: "Address",
+    addressStick: "kept on the stick",
+    addressDown: "handed down to the host, in VLAN {vlan}",
+    addressDownUntagged: "handed down to the host, with no VLAN",
     slotFreeText:
       "This slot is free. Take it with a PPPoE session: the stick holds it itself, in hardware, and the operator's other services still go over the bridge.",
     tileV4Host: "IPv4 → host",
@@ -389,6 +396,7 @@ export const en = {
     prefixHost: "{prefix}, handed to the host",
     prefixWaiting: "{prefix}, waiting for the host to ask for it",
     prefixNone: "waiting for the operator's prefix",
+    prefixStick: "{prefix}, on the stick",
     hostPrefix: "IPv6 prefix for the host",
     iface: "Interface",
     edit: "Change",
@@ -463,8 +471,6 @@ export const en = {
     speed: "Speed",
     up: "Up",
     down: "No link",
-    vlan: "VLAN to the host",
-    vlanHint: "The host gets the address on this VLAN. Leave empty for no VLAN.",
     gatewayHint:
       "The stick's address on this link, which the DHCP server answers from. Any link-local address works.",
     peer: "Gateway as in PPPoE",

@@ -54,6 +54,8 @@ if (SCENARIO === "sessions") {
     vlan: "410",
     mac: id === 1 ? "00:00:5e:00:53:a1" : "",
     family,
+    pass: id <= 2 ? "on" : "off",
+    host_vlan: "",
     hands_on: false,
     dev: "wan100",
     gem_dev: "gem278",
@@ -63,14 +65,22 @@ if (SCENARIO === "sessions") {
     prefix: null,
     prefix_host: null,
   });
-  /* The first IPv4 session hands its address on, the first IPv6 one its prefix. */
+  /* Slot 1 hands its IPv4 address down into VLAN 410, slot 2 its prefix. */
   const v4 = { ...one(1, "ipv4", true), hands_on: true };
   const v6 = {
     ...one(2, "ipv6", true),
     prefix: "2001:db8:1200::/56",
     prefix_host: "fe80::2",
   };
-  const both = { ...one(3, "both", true), prefix: "2001:db8:1300::/56" };
+  /* Slot 3 hands both down into VLAN 36 of its own. */
+  const both = {
+    ...one(3, "both", true),
+    pass: "on" as const,
+    host_vlan: "36",
+    hands_on: true,
+    prefix: "2001:db8:1300::/56",
+    prefix_host: "fe80::3",
+  };
   const list = [v4, v6, both, one(4, "both", false), one(5, "ipv4", false), one(6, "ipv6", false)];
   settings.sessions = list;
   settings.pass = { address: "203.0.113.21", lan: "lan" };
@@ -341,6 +351,8 @@ export const handlers = [
           vlan: "",
           mac: "",
           family: "both",
+          pass: "on",
+          host_vlan: "",
           hands_on: false,
           dev: null,
           gem_dev: null,
@@ -359,19 +371,31 @@ export const handlers = [
       if (body.MAC !== undefined) x.mac = body.MAC;
       if (body.FAMILY === "ipv4" || body.FAMILY === "ipv6" || body.FAMILY === "both")
         x.family = body.FAMILY;
+      if (body.PASS === "on" || body.PASS === "off") x.pass = body.PASS;
+      if (body.HOST_VLAN !== undefined) x.host_vlan = body.HOST_VLAN;
       /* The stand-in stick brings a session up at once, in the VLAN given. */
       x.dev = x.vlan ? `wan${x.vlan}` : "gem257";
       x.gem_dev = "gem257";
       x.ppp = `ppp${x.id - 1}`;
       x.ipv4 = x.family === "ipv6" ? null : "203.0.113.24";
       x.ipv6 = x.family === "ipv4" ? null : "fe80::2";
-      /* The first IPv6 session takes 2001:db8:1200::/56 and hands it on. */
-      const pd = list.find((y) => y.family !== "ipv4");
-      x.prefix = x === pd ? "2001:db8:1200::/56" : null;
-      x.prefix_host = x === pd ? "fe80::2" : null;
+      x.prefix = x.family === "ipv4" ? null : "2001:db8:1200::/56";
     }
-    const first = settings.sessions.find((y) => y.family !== "ipv6");
-    for (const y of settings.sessions) y.hands_on = y === first;
+    /*
+     * In each VLAN towards the host, the first session told to hand its
+     * address down hands its IPv4 address, and the first with IPv6 its prefix.
+     */
+    const down = (y: SessionInfo) => (y.host_vlan === "untagged" ? "" : y.host_vlan || y.vlan);
+    const firstIn = (y: SessionInfo, v4: boolean) =>
+      settings.sessions.find(
+        (z) => z.pass !== "off" && down(z) === down(y) && z.family !== (v4 ? "ipv6" : "ipv4"),
+      ) === y;
+    for (const y of settings.sessions) {
+      y.hands_on = y.pass !== "off" && y.family !== "ipv6" && firstIn(y, true);
+      y.prefix_host =
+        y.pass !== "off" && y.family !== "ipv4" && firstIn(y, false) ? "fe80::2" : null;
+    }
+    const first = settings.sessions.find((y) => y.hands_on);
     if (!first) settings.pass = null;
     else settings.pass = { address: "203.0.113.24", lan: "lan" };
     settings.mode = settings.sessions.length ? "passthrough" : "bridge";
@@ -479,7 +503,6 @@ export const handlers = [
     if (!signedIn) return unauthorized();
     for (const l of (await request.text()).split("\n").filter(Boolean)) {
       const [k, v = ""] = [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)];
-      if (k === "VLAN") settings.settings.LAN_VLAN = v;
       if (k === "GATEWAY") settings.settings.PASS_GATEWAY = v;
       if (k === "PEER") settings.settings.PASS_PEER = v;
     }

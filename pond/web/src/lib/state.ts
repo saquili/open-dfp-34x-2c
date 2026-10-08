@@ -91,6 +91,10 @@ export interface SessionView {
   mac: string;
   gem: string;
   family: Family;
+  /** The session hands its address down to the host, rather than keep it. */
+  pass: boolean;
+  /** The VLAN towards the host as set: a VID, "untagged", or "" for the session's own. */
+  hostVlan: string;
   handsOn: boolean;
   /** pppoed brought the link up. */
   up: boolean;
@@ -112,6 +116,15 @@ export function fibreVlan(s: SessionView): string {
   return /^wan(\d+)$/.exec(s.dev ?? "")?.[1] ?? s.vlan;
 }
 
+/**
+ * The VLAN a session hands its address down in, towards the host: the one
+ * set, else its own, the VID the operator names its service with; "" for
+ * none.
+ */
+export function downVlan(s: Pick<SessionView, "vlan" | "hostVlan">): string {
+  return s.hostVlan === "untagged" ? "" : s.hostVlan || s.vlan;
+}
+
 export function sessions(live: Live | undefined): SessionView[] {
   return (live?.settings?.sessions ?? []).map((x) => ({
     id: x.id,
@@ -121,6 +134,8 @@ export function sessions(live: Live | undefined): SessionView[] {
     mac: x.mac,
     gem: x.gem,
     family: x.family,
+    pass: x.pass !== "off",
+    hostVlan: x.host_vlan ?? "",
     handsOn: x.hands_on,
     up: x.ppp != null,
     ipv4: x.ipv4,
@@ -209,7 +224,6 @@ export function port(live: Live | undefined, name: string): Port | undefined {
 export interface LinkView {
   up: boolean;
   speedMbit: number | null;
-  vlan: string;
   /** The stick's own address on the link. */
   gateway: string;
   /** Whether the host is given the concentrator's address as its gateway. */
@@ -225,7 +239,6 @@ export function hostLink(live: Live | undefined): LinkView {
   return {
     up: !!sfp && sfp.carrier === 1 && sfp.operstate === "up",
     speedMbit: sfp && sfp.speed_mbit > 0 ? sfp.speed_mbit : null,
-    vlan: s?.settings.LAN_VLAN ?? "",
     gateway: s?.settings.PASS_GATEWAY ?? "",
     peer: s?.settings.PASS_PEER !== "off",
     lease: s?.pass?.address ?? null,

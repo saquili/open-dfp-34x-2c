@@ -315,7 +315,7 @@ export const pl: Dictionary = {
     soon: "wkrótce",
     handoverTitle: "Jak host dostaje adres",
     handoverHint:
-      "Gdy sesję PPPoE trzyma wkładka, urządzenie hosta dostaje od niej adres publiczny przez DHCP, w tym VLAN-ie. Dotyczy tylko sesji PPPoE wkładki.",
+      "Urządzenie hosta dostaje od wkładki adres publiczny przez DHCP, w VLAN-ie ustawionym w miejscu.",
     hostGets: "Co dostaje host",
     hostGetsHint: "MTU 1500: wkładka trzyma sesję z ramkami 1508 bajtów (RFC 4638).",
     mtu: "MTU",
@@ -351,10 +351,17 @@ export const pl: Dictionary = {
     kindDownV4: "publiczny adres IPv4 przez DHCP",
     kindDownV6: "prefiks IPv6 przez DHCPv6",
     kindDownBoth: "publiczny adres IPv4 przez DHCP i prefiks IPv6 przez DHCPv6",
-    kindTakenV4: "Adres IPv4 przekazuje już miejsce {id}.",
-    kindTakenV6: "Prefiks IPv6 przekazuje już miejsce {id}.",
-    kindByOrder:
-      "Na razie decyduje kolejność miejsc: adres IPv4 przekazuje pierwsze miejsce z IPv4, a prefiks IPv6 pierwsze z IPv6.",
+    hostVlan: "VLAN do hosta",
+    hostVlanHint:
+      "Puste: VLAN usługi, {vid}. W jednym VLAN-ie do hosta najwyżej jedno miejsce przekazuje adres IPv4 i jedno prefiks IPv6.",
+    hostVlanUntagged: "Bez VLAN-u",
+    clashV4: "W tym VLAN-ie adres IPv4 przekazuje już miejsce {id}.",
+    clashV6: "W tym VLAN-ie prefiks IPv6 przekazuje już miejsce {id}.",
+    clashService: "VLAN {vid} niesie do hosta inną usługę operatora: {name}.",
+    address: "Adres",
+    addressStick: "zostaje na wkładce",
+    addressDown: "przekazuje w dół, do hosta, w VLAN-ie {vlan}",
+    addressDownUntagged: "przekazuje w dół, do hosta, bez VLAN-u",
     slotFreeText:
       "To miejsce jest wolne. Zajmij je sesją PPPoE: wkładka zestawi ją sama, sprzętowo, a reszta usług operatora dalej idzie mostem.",
     tileV4Host: "IPv4 → host",
@@ -390,6 +397,7 @@ export const pl: Dictionary = {
     prefixHost: "{prefix}, oddany hostowi",
     prefixWaiting: "{prefix}, czeka, aż host o niego poprosi",
     prefixNone: "czeka na prefiks od operatora",
+    prefixStick: "{prefix}, na wkładce",
     hostPrefix: "Prefiks IPv6 dla hosta",
     iface: "Interfejs",
     edit: "Zmień",
@@ -463,8 +471,6 @@ export const pl: Dictionary = {
     speed: "Prędkość",
     up: "Działa",
     down: "Brak łącza",
-    vlan: "VLAN do urządzenia hosta",
-    vlanHint: "W tym VLAN-ie urządzenie hosta odbiera adres. Zostaw puste, jeśli bez VLAN-u.",
     gatewayHint:
       "Adres wkładki na tym łączu: z niego odpowiada serwer DHCP. Wystarczy dowolny adres link-local.",
     peer: "Brama jak w PPPoE",
