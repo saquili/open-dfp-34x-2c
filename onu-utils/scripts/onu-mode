@@ -34,7 +34,10 @@
 # sessions' VLANs, which it reads from /run/onu-held-vlans. A session's VLAN
 # may be the subscriber's VID of a translation the OLT provisions, the VID a
 # router behind the stick would use: the session then runs in the VID it
-# leads into, as omcid publishes it (/run/omcid-xlate). Beside a session
+# leads into, as omcid publishes it (/run/omcid-xlate), and a session whose
+# GEM port is auto runs on the GEM port that the OLT lets that VID through
+# (/run/omcid-gem-vlans): the session follows its service when the OLT
+# moves it to another VID or another GEM port. Beside a session
 # untagged on its GEM port, which holds the whole port, omcid leaves the OLT's
 # bridge out (omcid -r).
 # Sessions in one VLAN share its interface, wanVID, and the MAC of the first.
@@ -335,6 +338,28 @@ gem_of() {
 
 wan_gem() {
 	gem_of "$WAN_GEM"
+}
+
+# The GEM interface of session $1: the one its GEM setting names; for auto
+# (or nothing), where the session has a VLAN, the GEM port that the OLT lets
+# that VLAN on the fibre through, as omcid publishes them in
+# /run/omcid-gem-vlans ("VID PORT-ID" lines), the lowest Port-ID of them;
+# else the one gem_of() gives. A session given the VID by which the operator
+# names its service so follows the service to another VID on the fibre and
+# to another GEM port.
+session_gem() {
+	g=$(setting "$1" GEM)
+	v=$(session_vlan "$1")
+	if { [ -z "$g" ] || [ "$g" = auto ]; } && [ -n "$v" ]; then
+		for id in $(awk -v v="$v" '$1 == v { print $2 }' \
+			"$RUN/omcid-gem-vlans" 2>/dev/null | sort -n); do
+			if [ -e "$NET/gem$id" ]; then
+				echo "gem$id"
+				return 0
+			fi
+		done
+	fi
+	gem_of "$g"
 }
 
 # The DHCP server of the LAN, with the WAN's name servers when they are known.
@@ -754,7 +779,7 @@ sessions_tick() {
 		[ -r "$SESSIONS/$n/dev" ] && read -r dev <"$SESSIONS/$n/dev"
 		case $want in
 		*" $n "*)
-			gem=$(gem_of "$(setting "$n" GEM)")
+			gem=$(session_gem "$n")
 			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
 				[ "$(session_dev "$n" "$gem")" != "$dev" ]; }; then
 				if [ -z "$started" ]; then

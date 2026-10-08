@@ -502,6 +502,33 @@ check '! logged "omcid"'
 check '! logged "^ip link"'
 teardown
 
+echo "a session follows its service to the GEM port and the VLAN the OLT moves it to"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+printf '410 1410\n' >"$ONU_ROOT/run/omcid-xlate"
+# The OLT lets 1410 through Port-ID 1024, not the lowest Port-ID, 256.
+printf '1410 1024\n1430 256\n' >"$ONU_ROOT/run/omcid-gem-vlans"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link add link gem1024 name wan1410 type vlan id 1410"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
+: >"$LOG"
+# The operator moves the service to 1600 on Port-ID 256, and keeps 410.
+printf '410 1600\n' >"$ONU_ROOT/run/omcid-xlate"
+printf '1600 256\n' >"$ONU_ROOT/run/omcid-gem-vlans"
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link del wan1410"'
+check 'logged "^ip link add link gem256 name wan1600 type vlan id 1600"'
+check 'logged "^pppoed up -i wan1600 "'
+check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
+# A GEM port named by its Port-ID stays, whatever the OLT lets through it.
+: >"$LOG"
+printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_GEM=1024 >"$ONU_ROOT/run/onu.conf"
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link add link gem1024 name wan1600 type vlan id 1600"'
+teardown
+
 echo "the account removed: from passthrough back to bridge"
 setup
 conf LAN_VLAN=36
