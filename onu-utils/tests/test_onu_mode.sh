@@ -41,6 +41,8 @@ setup() {
 	mkdir -p "$ONU_ROOT/proc/sys/net/ipv4/conf/lan" "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/lan/rp_filter"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter"
+	mkdir -p "$ONU_ROOT/proc/sys/net/ipv4/neigh/lan"
+	echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/lan/proxy_delay"
 	: >"$LOG"
 	for prog in killall udhcpd udhcpc logger kill onu-store dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
@@ -261,8 +263,14 @@ check 'grep -q "^interface lan" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^start 192.0.2.2" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^end 192.0.2.2" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^opt subnet 255.255.255.255" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt router 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt staticroutes 192.0.2.254/32 0.0.0.0, 0.0.0.0/0 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
+# The gateway is the concentrator's address, as the router would have it with
+# a session of its own; the stick answers ARP for it, at once, without
+# taking it.
+check 'grep -q "^opt router 192.0.2.1" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt staticroutes 192.0.2.1/32 0.0.0.0, 0.0.0.0/0 192.0.2.1" "$ONU_ROOT/run/udhcpd.conf"'
+check 'logged "^ip neigh add proxy 192.0.2.1 dev lan"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/neigh/lan/proxy_delay")" = 0 ]'
+check '! logged "^ip address add 192.0.2.1"'
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd.conf"'
 check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
@@ -274,9 +282,27 @@ for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
 	"$REAL_SLEEP" 0.2
 done
 check 'logged "^ip route del 192.0.2.2 dev lan"'
+check 'logged "^ip neigh del proxy 192.0.2.1 dev lan"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
 check 'logged "^ip link del wan410"'
+teardown
+
+echo "the stick's own address as the gateway, when told so"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=36 \
+	PASS_GATEWAY=192.0.2.254 PASS_PEER=off
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/onu-pass" ] && logged "^udhcpd" && break
+	"$REAL_SLEEP" 0.2
+done
+check 'grep -q "^opt router 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
+check 'grep -q "^opt staticroutes 192.0.2.254/32 0.0.0.0, 0.0.0.0/0 192.0.2.254" "$ONU_ROOT/run/udhcpd.conf"'
+check '! logged "^ip neigh add proxy"'
+"$MODE_SCRIPT" stop 2>/dev/null
 teardown
 
 echo "two sessions in one VLAN: IPv4 handed on, IPv6 on the stick"

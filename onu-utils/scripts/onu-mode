@@ -76,6 +76,7 @@ FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
 IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
 IPV4_CONF=$ROOT/proc/sys/net/ipv4/conf
+IPV4_NEIGH=$ROOT/proc/sys/net/ipv4/neigh
 SHARE=$ROOT/usr/share/onu
 
 log() {
@@ -99,6 +100,7 @@ load() {
 	LAN_DHCP_END=192.168.1.199
 	LAN_VLAN=
 	PASS_GATEWAY=169.254.0.1
+	PASS_PEER=on
 	WAN_MAC=
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
@@ -120,7 +122,7 @@ load_file() {
 		case $key in
 		MODE | WAN_GEM | WAN_VLAN | WAN_PROTO | WAN_ADDRESS | WAN_GATEWAY | \
 			LAN_ADDRESS | LAN_DHCP | LAN_DHCP_START | LAN_DHCP_END | \
-			LAN_VLAN | PASS_GATEWAY | WAN_MAC) ;;
+			LAN_VLAN | PASS_GATEWAY | PASS_PEER | WAN_MAC) ;;
 		SESSION[1-7]_GEM | SESSION[1-7]_VLAN | SESSION[1-7]_MAC | \
 			SESSION[1-7]_FAMILY) ;;
 		*) continue ;;
@@ -398,7 +400,7 @@ pd_up() {
 pppoe_loop() {
 	while :; do
 		pppoe_client "$1" "$2" "$3" 2>>"$RUN/pppoed.log" |
-			while read -r word dev _ addr _ _ _ _ _ dns1 dns2; do
+			while read -r word dev _ addr _ peer _ _ _ dns1 dns2; do
 				case $word in
 				up6)
 					note "$1" ppp "$dev"
@@ -420,7 +422,7 @@ pppoe_loop() {
 						rm -f "$RUN/onu-dns"
 					fi
 				fi
-				[ "$4" = pass ] && pass_lease "$addr" "$dev"
+				[ "$4" = pass ] && pass_lease "$addr" "$dev" "$peer"
 				log "session $1: IPv4 up on $dev"
 			done
 		note "$1" ppp
@@ -438,13 +440,31 @@ pppoe_loop() {
 # the LAN link, and a DHCP server that leases it alone, as a /32 with the
 # stick as the gateway, the session's name servers and its MTU. A lease runs
 # for a minute: the router asks again before it ends, so it finds a new
-# address of a new session that soon.
+# address of a new session that soon. The gateway is the concentrator's
+# address $3, as a router that made the session itself would have it
+# (PASS_PEER), and the stick answers ARP for it on the link without taking
+# it: a packet to it goes on into the session, so that the concentrator
+# answers it. Otherwise, and without the peer's address, it is the stick's
+# own address on the link, PASS_GATEWAY, which the DHCP server answers from
+# either way.
 pass_lease() {
 	lan=$(cat "$RUN/onu-lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
 	stop_pid udhcpd
 	[ "$(cat "$RUN/onu-pass" 2>/dev/null)" = "$1" ] || rm -f "$RUN/udhcpd.leases"
 	ip route replace "$1" dev "$lan"
+	gw=$PASS_GATEWAY
+	if [ "$PASS_PEER" = on ]; then
+		case $3 in
+		'' | *[!0-9.]* | 0.0.0.0) ;;
+		*) gw=$3 ;;
+		esac
+	fi
+	if [ "$gw" != "$PASS_GATEWAY" ]; then
+		echo 0 >"$IPV4_NEIGH/$lan/proxy_delay" 2>/dev/null
+		ip neigh add proxy "$gw" dev "$lan" 2>/dev/null
+		echo "$gw" >"$RUN/onu-pass-proxy"
+	fi
 	mtu=$(cat "$NET/$2/mtu" 2>/dev/null)
 	{
 		echo "interface $lan"
@@ -454,8 +474,8 @@ pass_lease() {
 		echo "lease_file $RUN/udhcpd.leases"
 		echo "pidfile $RUN/udhcpd.pid"
 		echo "opt subnet 255.255.255.255"
-		echo "opt router $PASS_GATEWAY"
-		echo "opt staticroutes $PASS_GATEWAY/32 0.0.0.0, 0.0.0.0/0 $PASS_GATEWAY"
+		echo "opt router $gw"
+		echo "opt staticroutes $gw/32 0.0.0.0, 0.0.0.0/0 $gw"
 		[ -s "$RUN/onu-dns" ] && echo "opt dns $(cat "$RUN/onu-dns")"
 		[ -n "$mtu" ] && echo "opt mtu $mtu"
 		echo "opt lease 60"
@@ -463,7 +483,7 @@ pass_lease() {
 	[ -e "$RUN/udhcpd.leases" ] || : >"$RUN/udhcpd.leases"
 	echo "$1" >"$RUN/onu-pass"
 	udhcpd "$RUN/udhcpd.conf"
-	log "the session's address goes to the router on $lan"
+	log "the session's address goes to the router on $lan, with the gateway $gw"
 }
 
 # The handed address taken back, when its session ends.
@@ -474,7 +494,11 @@ pass_lease_down() {
 	if [ -n "$addr" ] && [ -n "$lan" ]; then
 		ip route del "$addr" dev "$lan" 2>/dev/null
 	fi
-	rm -f "$RUN/onu-pass"
+	proxy=$(cat "$RUN/onu-pass-proxy" 2>/dev/null)
+	if [ -n "$proxy" ] && [ -n "$lan" ]; then
+		ip neigh del proxy "$proxy" dev "$lan" 2>/dev/null
+	fi
+	rm -f "$RUN/onu-pass" "$RUN/onu-pass-proxy"
 	return 0
 }
 

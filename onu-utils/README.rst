@@ -114,8 +114,12 @@ The small programs of the ONU.
    address on (``pppoed -P``): the address goes on no interface of the
    stick's, and the router behind the stick takes it from BusyBox's DHCP
    server on the link between them (a VLAN on ``sfp``, ``LAN_VLAN``, or
-   ``sfp`` itself), as a /32 whose gateway is the stick's address on that
-   link (``PASS_GATEWAY``), given as a classless static route too (RFC 3442),
+   ``sfp`` itself), as a /32 whose gateway is the concentrator's address, as
+   a router that made the session itself would have it: the stick answers
+   ARP for it on the link without taking it, so that a packet to it goes on
+   to the concentrator (``PASS_PEER=off`` gives the stick's own address on
+   the link, ``PASS_GATEWAY``, from which the DHCP server answers either
+   way), given as a classless static route too (RFC 3442),
    with the session's name servers and MTU and leases of a minute, so that
    the router finds the address of a new session within one. The stick routes
    the address there with a host route, until the session ends, and forwards
