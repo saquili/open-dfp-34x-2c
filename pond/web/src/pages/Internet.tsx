@@ -10,8 +10,10 @@
  * the host, whose link is set with the slot that hands it on. A slot is
  * bound to the service, by the VID the operator names it with: when the OLT
  * moves the service to another VID on the fibre or another channel, the
- * session follows. DHCP on the stick, a bridge that changes the VLAN, and
- * the stick routing and translating the addresses itself are to come.
+ * session follows; the VLAN towards the host is the OLT's, never set here.
+ * Whether a slot hands its address on or keeps it on the stick is, for now,
+ * the order of the slots: the first that carries IPv4 hands its address on,
+ * the first that carries IPv6 its prefix.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -84,11 +86,15 @@ function serviceOf(list: Service[], x: SessionView): Service | undefined {
   return list.find((s) => s.vlan != null && String(s.vlan) === fibreVlan(x));
 }
 
-/** What service @s is named by: its VID on the fibre, and towards the host. */
+/** What service @s is named by: its VID towards the host, and on the fibre (upstream). */
 function serviceName(t: (k: Key, v?: Record<string, string | number>) => string, s: Service) {
-  const fibre = s.vlan == null ? t("internet.serviceNoVlan") : `VLAN ${s.vlan}`;
   const host = s.hostVlans.filter((v) => v != null && v !== s.vlan);
-  return host.length ? t("internet.serviceVia", { fibre, host: host.join(", ") }) : fibre;
+  if (host.length)
+    return t("internet.serviceVia", {
+      host: host.join(", "),
+      fibre: s.vlan ?? t("internet.serviceNoVlan"),
+    });
+  return s.vlan == null ? t("internet.serviceNoVlan") : `VLAN ${s.vlan}`;
 }
 
 /** The operator's services, each with the slots it carries. */
@@ -181,28 +187,21 @@ function Dialog({
   );
 }
 
-/* A choice of the form that is to come: shown, not yet to be picked. */
-function Soon({ title, text }: { title: string; text: string }) {
-  const { t } = useI18n();
+/* One answer of the form's: the one the stick gives, or one it cannot yet. */
+function Choice({ title, text, on }: { title: string; text: ReactNode; on: boolean }) {
   return (
-    <label className="flex items-start gap-3 rounded-box border border-base-300 p-3 opacity-60">
-      <input type="radio" className="radio radio-sm mt-0.5" disabled />
-      <span>
-        <span className="flex items-center gap-2 text-sm font-medium">
-          {title}
-          <Badge tone="neutral">{t("internet.soon")}</Badge>
-        </span>
-        <span className="block text-xs text-base-content/65">{text}</span>
-      </span>
-    </label>
-  );
-}
-
-/* A choice of the form that is the one there is now. */
-function Chosen({ title, text }: { title: string; text: string }) {
-  return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-box border border-primary/50 bg-primary/5 p-3">
-      <input type="radio" className="radio radio-sm radio-primary mt-0.5" defaultChecked />
+    <label
+      className={`flex items-start gap-3 rounded-box border p-3 ${
+        on ? "border-primary/50 bg-primary/5" : "border-base-300 opacity-60"
+      }`}
+    >
+      <input
+        type="radio"
+        className="radio radio-sm radio-primary mt-0.5"
+        checked={on}
+        disabled={!on}
+        readOnly
+      />
       <span>
         <span className="block text-sm font-medium">{title}</span>
         <span className="block text-xs text-base-content/65">{text}</span>
@@ -211,8 +210,22 @@ function Chosen({ title, text }: { title: string; text: string }) {
   );
 }
 
-/* The value of the service picker that stands for a VID typed by hand. */
-const BY_HAND = "hand";
+/*
+ * What slot @id hands down with families @f, as onu-mode decides it: the
+ * first session that carries IPv4 hands its address on, the first that
+ * carries IPv6 its prefix; with the slots that already do, if any.
+ */
+function handing(all: SessionView[], id: number, f: Family) {
+  const before = all.filter((y) => y.id < id).sort((a, z) => a.id - z.id);
+  const v4By = f === "ipv6" ? undefined : before.find((y) => y.family !== "ipv6")?.id;
+  const v6By = f === "ipv4" ? undefined : before.find((y) => y.family !== "ipv4")?.id;
+  return { v4: f !== "ipv6" && v4By == null, v6: f !== "ipv4" && v6By == null, v4By, v6By };
+}
+
+/* What the host is given with families @v4 and @v6. */
+function downWhat(v4: boolean, v6: boolean): Key {
+  return v4 && v6 ? "internet.kindDownBoth" : v4 ? "internet.kindDownV4" : "internet.kindDownV6";
+}
 
 /** A slot's session and settings: a new one in @slot without @x, or @x changed. */
 function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDone: () => void }) {
@@ -221,15 +234,13 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
   const state = useChangeState(change);
   const all = sessions(useLive().data);
   const { list } = useServices();
-  /* The first session that carries IPv4 is the one that hands its address on. */
-  const handsOn = all.find((y) => y.family !== "ipv6");
   const bound = x ? serviceOf(list, x) : undefined;
-  const firstService = list[0];
+  /* A session whose service the OLT no longer provisions keeps its VID. */
+  const gone = x && !bound ? x.vlan : null;
   const schema = z.object({
     user: x ? upTo(63) : required(t("form.required")),
     secret: x ? z.string().check(z.maxLength(255)) : required(t("internet.secretRequired")),
-    service: z.string(),
-    vlan: vlan(t),
+    service: required(t("form.required")),
     mac: mac(t),
     family: z.enum(["both", "ipv4", "ipv6"]),
   });
@@ -239,14 +250,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
     defaultValues: {
       user: x?.user ?? "",
       secret: "",
-      service: x
-        ? bound && serviceVid(bound) === x.vlan
-          ? serviceVid(bound)
-          : BY_HAND
-        : firstService
-          ? serviceVid(firstService)
-          : BY_HAND,
-      vlan: x?.vlan ?? "",
+      service: bound ? serviceVid(bound) : (gone ?? (list[0] ? serviceVid(list[0]) : "")),
       mac: x?.mac ?? "",
       family: x?.family ?? "both",
     },
@@ -255,7 +259,8 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
   const family = form.watch("family");
   const service = form.watch("service");
   const picked = list.find((s) => serviceVid(s) === service);
-  const willHandOn = family !== "ipv6" && (!handsOn || handsOn.id === x?.id);
+  const h = handing(all, x?.id ?? slot ?? 0, family);
+  const down = h.v4 || h.v6;
 
   const send = (v: Values) =>
     change.mutate(
@@ -263,7 +268,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         ID: x ? String(x.id) : slot ? String(slot) : undefined,
         USER: v.user,
         SECRET: v.secret || undefined,
-        VLAN: v.service === BY_HAND ? v.vlan : v.service,
+        VLAN: v.service,
         /* The channel follows the service: onu-mode finds it. */
         GEM: "auto",
         MAC: v.mac,
@@ -281,36 +286,48 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         <select id="service" className="select w-full" {...form.register("service")}>
           {list.map((s) => (
             <option key={serviceVid(s)} value={serviceVid(s)}>
-              {serviceName(t, s)} ·{" "}
-              {channelIds(s)
-                .map((id) => `GEM ${id}`)
-                .join(", ")}
+              {serviceName(t, s)}
             </option>
           ))}
-          <option value={BY_HAND}>{t("internet.serviceByHand")}</option>
+          {gone != null && (
+            <option value={gone}>
+              {gone ? t("internet.serviceGone", { vid: gone }) : t("switch.untagged")}
+            </option>
+          )}
         </select>
         <p className="text-xs text-base-content/60">
           {picked
             ? t("internet.serviceFollows", { vid: serviceVid(picked) })
-            : t("internet.serviceByHandHint")}
+            : list.length === 0
+              ? t("internet.servicesNone")
+              : null}
         </p>
       </div>
-      {service === BY_HAND && (
-        <Field
-          label={t("internet.vlan")}
-          hint={t("internet.vlanHint")}
-          inputMode="numeric"
-          error={errors.vlan?.message}
-          {...form.register("vlan")}
-        />
-      )}
       <fieldset className="grid gap-2">
         <legend className="mb-1 text-sm font-medium">{t("internet.kind")}</legend>
-        <div className="grid gap-2">
-          <Chosen title={t("internet.kindPppoe")} text={t("internet.kindPppoeHint")} />
-          <Soon title={t("internet.kindDhcp")} text={t("internet.kindDhcpHint")} />
-          <Soon title={t("internet.kindBridge")} text={t("internet.kindBridgeHint")} />
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Choice on={!down} title={t("internet.kindStick")} text={t("internet.kindStickHint")} />
+          <Choice
+            on={down}
+            title={t("internet.kindDown")}
+            text={
+              <>
+                {t("internet.kindDownHint", {
+                  what: t(
+                    down ? downWhat(h.v4, h.v6) : downWhat(family !== "ipv6", family !== "ipv4"),
+                  ),
+                })}
+                {h.v4By != null && (
+                  <span className="block">{t("internet.kindTakenV4", { id: h.v4By })}</span>
+                )}
+                {h.v6By != null && (
+                  <span className="block">{t("internet.kindTakenV6", { id: h.v6By })}</span>
+                )}
+              </>
+            }
+          />
         </div>
+        <p className="text-xs text-base-content/60">{t("internet.kindByOrder")}</p>
       </fieldset>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
@@ -341,38 +358,17 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         </div>
         <p className="text-xs text-base-content/60">{t("internet.familyHint")}</p>
       </div>
-      <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">{t("internet.addressUse")}</legend>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Chosen
-            title={t("internet.useHandover")}
-            text={
-              family === "ipv6"
-                ? t("internet.useHandoverV6")
-                : willHandOn
-                  ? t("internet.useHandoverHint")
-                  : t("internet.useHandoverTaken", { id: handsOn?.id ?? 1 })
-            }
-          />
-          <Soon title={t("internet.useNat")} text={t("internet.useNatHint")} />
-        </div>
-      </fieldset>
-      <details className="group rounded-box border border-base-300 px-3 py-2">
-        <summary className="cursor-pointer text-sm font-medium">{t("internet.advanced")}</summary>
-        <div className="pt-3">
-          <Field
-            label={t("internet.mac")}
-            hint={t("internet.macHint")}
-            error={errors.mac?.message}
-            {...form.register("mac")}
-          />
-        </div>
-      </details>
+      <Field
+        label={t("internet.mac")}
+        hint={t("internet.macHint")}
+        error={errors.mac?.message}
+        {...form.register("mac")}
+      />
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"
           className="btn btn-primary"
-          disabled={(x && !isDirty) || change.isPending}
+          disabled={(x && !isDirty) || change.isPending || !service}
         >
           {x ? t("internet.save") : t("internet.add")}
         </button>
@@ -680,24 +676,19 @@ function HandoverForm({ link }: { link: LinkView }) {
         error={errors.vlan?.message}
         {...form.register("vlan")}
       />
-      <details className="rounded-box border border-base-300 px-3 py-2">
-        <summary className="cursor-pointer text-sm font-medium">{t("internet.advanced")}</summary>
-        <div className="grid gap-4 pt-3">
-          <Field
-            label={t("sfp.gateway")}
-            hint={t("sfp.gatewayHint")}
-            error={errors.gateway?.message}
-            {...form.register("gateway")}
-          />
-          <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
-            <input type="checkbox" className="toggle toggle-sm" {...form.register("peer")} />
-            <span>
-              <span className="text-sm">{t("sfp.peer")}</span>
-              <span className="block text-xs text-base-content/60">{t("sfp.peerHint")}</span>
-            </span>
-          </label>
-        </div>
-      </details>
+      <Field
+        label={t("sfp.gateway")}
+        hint={t("sfp.gatewayHint")}
+        error={errors.gateway?.message}
+        {...form.register("gateway")}
+      />
+      <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
+        <input type="checkbox" className="toggle toggle-sm" {...form.register("peer")} />
+        <span>
+          <span className="text-sm">{t("sfp.peer")}</span>
+          <span className="block text-xs text-base-content/60">{t("sfp.peerHint")}</span>
+        </span>
+      </label>
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
           {t("internet.save")}
