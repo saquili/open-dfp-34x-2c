@@ -46,10 +46,13 @@ In this order:
    the tree, and so on through their own ``NEEDED``. A shared library in ``lib``
    or ``usr/lib`` that no program reaches is removed, with the symbolic links
    that name it. ``libgcc_s.so.1``, which the toolchain installs and nothing of
-   the image needs, is the case it was written for. A library that a program
-   opens with ``dlopen`` has no ``NEEDED`` to show for it; such a library belongs
-   in a directory of its own, which the tool does not touch. A program that
-   needs a library the tree lacks fails the run before anything is changed.
+   the image needs, is the case it was written for. A GNU ld script there, such
+   as gcc's ``libgcc_s.so``, goes too: it stands in for a library when a
+   program is linked, the loader never reads it, and the board has no linker.
+   A library that a program opens with ``dlopen`` has no ``NEEDED`` to show
+   for it; such a library belongs in a directory of its own, which the tool
+   does not touch. A program that needs a library the tree lacks fails the run
+   before anything is changed.
 
 #. **The C library is linked again with what is used.** The symbols that the
    C library exports and that any other ELF file of the tree imports, weakly

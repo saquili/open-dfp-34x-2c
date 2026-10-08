@@ -9,7 +9,7 @@ ROOT is a target tree. Three steps, in this order:
 
 * a shared library in ROOT/lib or ROOT/usr/lib that no program loads, neither
   itself nor through another library, is removed, with the symbolic links that
-  name it;
+  name it, and so is a linker script there, which only a linker reads;
 * the C library, uClibc-ng's lib/libuClibc-VERSION.so, is linked again from
   DIR, uClibc-ng's build directory, with only the members of its archive of
   position-independent objects that define a symbol a program or another
@@ -312,6 +312,34 @@ def plan(root: str, elves: dict[str, Elf]) -> Plan:
     return result
 
 
+LD_SCRIPT = b"/* GNU ld script"
+
+
+def linker_scripts(root: str) -> list[str]:
+    """The GNU ld scripts of the search directories, such as gcc's libgcc_s.so.
+
+    A linker script stands in for a library when a program is linked; the loader
+    never reads one, and the board has no linker.
+    """
+    found = []
+    for directory in SEARCH:
+        here = os.path.join(root, directory)
+        if not os.path.isdir(here) or os.path.islink(here):
+            continue
+        for name in sorted(os.listdir(here)):
+            full = os.path.join(here, name)
+            if os.path.islink(full) or not os.path.isfile(full):
+                continue
+            try:
+                with open(full, "rb") as handle:
+                    head = handle.read(len(LD_SCRIPT))
+            except OSError as exc:
+                raise TrimError("cannot read %s: %s" % (full, exc.strerror)) from exc
+            if head == LD_SCRIPT:
+                found.append(directory + "/" + name)
+    return found
+
+
 def links_to(root: str, targets: Iterable[str]) -> list[str]:
     """The symbolic links of the search directories that end at one of the targets."""
     wanted = set(targets)
@@ -469,8 +497,12 @@ def trim(root: str, prefix: str, uclibc: str, dry_run: bool, quiet: bool) -> int
         say(quiet, "%s %s%s: no program loads it" % (
             "would remove" if dry_run else "removed", rel,
             " and %s" % ", ".join(names) if names else ""))
+    scripts = linker_scripts(root)
+    for rel in scripts:
+        say(quiet, "%s %s: a linker script, which only a linker reads" % (
+            "would remove" if dry_run else "removed", rel))
     if not dry_run:
-        for rel in [*links, *the_plan.unused]:
+        for rel in [*links, *the_plan.unused, *scripts]:
             os.remove(os.path.join(root, rel))
             elves.pop(rel, None)
 

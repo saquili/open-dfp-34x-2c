@@ -260,6 +260,9 @@ class EndToEnd(unittest.TestCase):
            "-o", os.path.join(usrlib, "libunused.so.1"),
            source("unused.c", "int fc(void); int unused(void) { return fc(); }\n"), full)
         os.symlink("libunused.so.1", os.path.join(usrlib, "libunused.so"))
+        with open(os.path.join(rootlib, "libgcc_s.so"), "w", encoding="utf-8") as handle:
+            handle.write("/* GNU ld script\n   Use the shared library.  */\n"
+                         "GROUP ( libgcc_s.so.1 -lgcc )\n")
         cls.program_source = source(
             "prog.c", "int fa(void); int zip(int);\n"
                       "void __start(void) { zip(fa()); for (;;); }\n")
@@ -318,6 +321,12 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(self.root, "lib", "ld-uClibc-1.0.0.so")))
         self.assertIn("removed usr/lib/libunused.so.1 and usr/lib/libunused.so", done.stdout)
 
+    def test_a_linker_script_goes(self):
+        done = self.trim()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertFalse(os.path.lexists(os.path.join(self.root, "lib", "libgcc_s.so")))
+        self.assertIn("removed lib/libgcc_s.so: a linker script", done.stdout)
+
     def test_a_second_run_changes_nothing(self):
         self.assertEqual(self.trim().returncode, 0)
         first = sha(os.path.join(self.root, "lib", "libuClibc-1.0.0.so"))
@@ -329,6 +338,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("would remove usr/lib/libunused.so.1", done.stdout)
         self.assertIn("would cut lib/libuClibc-1.0.0.so", done.stdout)
+        self.assertIn("would remove lib/libgcc_s.so", done.stdout)
         comparison = filecmp.dircmp(self.pristine, self.root)
         self.assertEqual(comparison.diff_files + comparison.left_only + comparison.right_only, [])
         self.assertTrue(filecmp.cmp(os.path.join(self.pristine, "lib", "libuClibc-1.0.0.so"),
