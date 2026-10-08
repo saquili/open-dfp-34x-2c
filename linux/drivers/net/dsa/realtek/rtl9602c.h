@@ -3283,6 +3283,16 @@ struct rtl9602c_priv {
 	/** @optics_ref: @optics_apcset0 and @optics_mod0 are known */
 	bool			optics_ref;
 	/**
+	 * @optics_t2_open: table 2 is open for storing through the debugfs
+	 * entry t2write, which keeps @optics_t2_eectl and @optics_t2_tabsel,
+	 * EEPROM_CTRL and the page select as found; under i2c_lock
+	 */
+	bool			optics_t2_open;
+	/** @optics_t2_eectl: EEPROM_CTRL as found by t2write's "open" */
+	u8			optics_t2_eectl;
+	/** @optics_t2_tabsel: the page select as found by t2write's "open" */
+	u8			optics_t2_tabsel;
+	/**
 	 * @optics_mode: the transmit power level mode the optics are set to:
 	 * 0 normal, 1 normal - 3 dB, 2 normal - 6 dB
 	 */

@@ -30,12 +30,15 @@ The optics have no driver of their own. The code is part of the switch driver,
 - It turns the laser driver's automatic extinction-ratio loop off at every PON
   bring-up, so that the modulation of the laser runs from the value the module
   loads at power-up. This is the modulation hold.
-- It offers two debugfs views that only read, ``a2`` and ``eeblocks``, and a
-  third, ``tables``, that selects each table of the upper page to read it.
+- It offers two debugfs views that only read, ``a2`` and ``eeblocks``, a
+  third, ``tables``, that selects each table of the upper page to read it, and
+  an entry, ``t2write``, that stores a byte of the configuration table in the
+  module's EEPROM, or resets the laser driver, when root writes to it.
 
 The driver writes nothing to the laser driver at probe or at setup. Its only
-writes are those of the modulation hold, at PON bring-up, and those a read of
-the ``tables`` view makes, and ``CONFIG_RTL9602C_OPTICS_RO`` removes both. The connections::
+writes are those of the modulation hold, at PON bring-up, those a read of the
+``tables`` view makes and those a write to ``t2write`` asks for, and
+``CONFIG_RTL9602C_OPTICS_RO`` removes all three. The connections::
 
     RTL9602C                               laser-driver IC
     +---------------+                      +------------------------+
@@ -83,8 +86,9 @@ Configuration
        registered only with it; without it the registration is a stub that
        returns 0.
    * - ``CONFIG_DEBUG_FS``
-     - The debugfs views ``a2``, ``eeblocks`` and ``tables`` exist only with
-       it, ``tables`` only without ``CONFIG_RTL9602C_OPTICS_RO``.
+     - The debugfs views ``a2``, ``eeblocks`` and ``tables`` and the entry
+       ``t2write`` exist only with it, ``tables`` and ``t2write`` only without
+       ``CONFIG_RTL9602C_OPTICS_RO``.
    * - ``CONFIG_GPIOLIB``, ``CONFIG_GPIO_REALTEK_OTTO``
      - The GPIO controller that serves the TX_DISABLE line
        (Documentation/arch/mips/rtl9602c.rst).
@@ -209,6 +213,9 @@ Interfaces to user space
   and ``/sys/kernel/debug/rtl9602c/tables``, views that read the laser driver
   one byte at a time and print it (see "The debugfs views"). They have mode
   ``0400`` and exist only with ``CONFIG_DEBUG_FS``.
+- ``/sys/kernel/debug/rtl9602c/t2write``, mode ``0200``, which stores a byte
+  of table 2 in the module's EEPROM or resets the laser driver (see "Storing
+  table 2 bytes").
 - The TX_DISABLE line. It has no file of its own: it is line 13 of the GPIO
   bank, requested under the consumer name ``tx-disable``, and
   ``/sys/kernel/debug/gpio`` shows its direction and level (high while
@@ -804,6 +811,80 @@ a build with ``CONFIG_RTL9602C_OPTICS_RO`` has no such view::
     === table 0
     80: <16 bytes>
     ...
+
+Storing table 2 bytes
+---------------------
+
+The configuration table, table 2, is the laser driver's configuration as its
+maker sets it: among it the receiver's loss-of-signal control (BBh), whose
+``LOS_POLARITY`` bit decides how the receiver's signal detect has to be read
+(``rtl9602c-gpon.rst``, "Downstream lock, LOS and alarms"), the APD bias
+control (BDh) and the current limits (ADh-AFh). A module whose table 2 has gone
+wrong is put right through ``t2write``, mode ``0200``, one command per write::
+
+    # W=/sys/kernel/debug/rtl9602c/t2write
+    # echo open > $W
+    # echo "bb 1c" > $W
+    # echo close > $W
+    # echo reset > $W
+    # cat /sys/kernel/debug/rtl9602c/tables
+
+``open`` writes the password bytes as the ``tables`` view does, shows table 2 and
+clears both bits of EEPROM_CTRL (C7h), so that the part copies the changes of
+its registers into its EEPROM; it keeps C7h and the page select as found.
+``REG VALUE``, both hexadecimal, writes the password bytes and shows table 2
+again, so that a page switched in between cannot send the byte to another
+table, then writes ``VALUE`` at table 2 byte ``REG``. The byte is not read
+back: while the part copies into its EEPROM it does not acknowledge and its
+reads return a constant, so a read then proves nothing. ``close`` puts C7h and
+the page select back as found. The kernel log has a line for each step,
+beginning ``GN25L95: table 2``.
+
+Only the bytes that a module can carry wrongly are taken, the others fail with
+``EINVAL``, as does a byte before ``open``: the current limits ADh-AFh, the
+transmitter's fault, alarm and rogue ONU controls and the receiver's controls
+B1h-BDh, the sleep control BFh and the ADC control C1h. Not SAFE_MODE_STARTUP
+(A0h), whose wrong value turns the transmitter off for good; not the
+calibrated DACs (A8h-ACh) and constants (D2h-E7h), which belong to the one
+module; not the status (C0h), the part's I2C address (C2h, C3h), the EEPROM
+controls (C4h-C8h), the passwords or the monitors.
+
+``reset``, with table 2 closed, restarts the part's state machine with its reset
+key, ``5D 2C 6A C9`` at bytes 123 to 126 and ``0B`` at the page select, which
+loads the tables from the EEPROM as at power-up; the entry then writes the
+password bytes and the page select back as the driver keeps them. The laser
+goes through its start-up again, so the PON drops for that time. A read of the
+``tables`` view after ``reset`` shows what the EEPROM holds, which is how a
+stored byte is checked without taking the module out.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 60 6 34
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Table 2 bytes written while EEPROM_CTRL is clear are kept in the
+       module's EEPROM and load again at power-up.
+     - M
+     - ADh-AFh written so read the written values again through every power-up
+       of the module for weeks after.
+   * - The reset key loads the tables from the EEPROM.
+     - M
+     - Table 2 bytes changed with C7h at ``03`` read their stored values again
+       after ``reset``.
+   * - With C7h set again one second after a byte, the byte does not reach the
+       EEPROM, and reads in that second return a constant.
+     - M
+     - Nine bytes so written, then ``reset``: the ``tables`` view showed the
+       old values; every read-back had returned the value of CCh.
+   * - With table 2 held open for a minute after the last byte, the bytes
+       reach the EEPROM.
+     - M
+     - Nine bytes (ADh-AFh, B6h-B8h, BBh, BDh, C1h) stored, then ``close`` and
+       ``reset``: the ``tables`` view showed all nine; with BBh back at its
+       maker's value the ONU reached O5, and again after a restart into an
+       image without the entry.
 
 Worked example
 --------------

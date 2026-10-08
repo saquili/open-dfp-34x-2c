@@ -15,10 +15,12 @@
  * SFF-8472 diagnostics through hwmon, drives the laser's TX_DISABLE line,
  * turns the part's automatic extinction-ratio loop off at every PON bring-up
  * (rtl9602c_optics_hold_modulation()), and offers two debugfs views that
- * only read, "a2" and "eeblocks".
+ * only read, "a2" and "eeblocks", a third, "tables", that selects each table
+ * to read it, and "t2write", which stores table 2 bytes in the module's
+ * EEPROM on request.
  *
  * CONFIG_RTL9602C_OPTICS_RO makes the modulation hold, the driver's only
- * write to the part, return without writing, and the adapter refuse every
+ * write to the part of its own accord, return without writing, and the adapter refuse every
  * write with -EPERM, so that nothing on the board changes the module.  The
  * hwmon device and the debugfs views stay as they are, since they only
  * read.
@@ -36,6 +38,7 @@
 #include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/ptp_clock_kernel.h>
+#include <linux/uaccess.h>
 #include <linux/unaligned.h>
 #include <net/ipv6.h>
 #include <linux/dcbnl.h>
@@ -1165,6 +1168,192 @@ static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
 
+/*
+ * The "t2write" entry stores bytes of the laser driver's configuration table
+ * (table 2) in the module's EEPROM, and resets the part.  Root writes one
+ * command at a time:
+ *
+ * "open" writes the password bytes (rtl9602c_gn_t2_password()), shows table 2
+ * and clears both bits of EEPROM_CTRL (C7h), so that the part copies the
+ * changes of its registers into its EEPROM; C7h and the page select as found
+ * are kept for "close".
+ *
+ * "REG VALUE", both hexadecimal, after "open": writes the password bytes and
+ * shows table 2 again, so that nothing else that switched the page in between
+ * sends the byte to another table, then writes VALUE at table 2 byte REG.
+ * The byte is not read back: while the part copies into its EEPROM it does
+ * not acknowledge and reads return a constant (measured on this board), so a
+ * read-back then proves nothing.  A refused transfer is retried for a second.
+ *
+ * "close" puts C7h back as it was found, and the page select.
+ *
+ * "reset" restarts the part's state machine with its reset key, 5Dh 2Ch 6Ah
+ * C9h at A2h 123-126 and 0Bh at the page select, which loads the tables from
+ * the EEPROM as at power-up, then writes the password bytes and the page
+ * select back as the driver keeps them; a read of the "tables" view after it
+ * shows what the EEPROM holds.  The laser goes through its start-up again, so
+ * the PON drops for that time.
+ *
+ * Only the configuration bytes that a module can carry wrongly are taken:
+ * the current limits ADh-AFh, the transmitter's fault, alarm and rogue ONU
+ * controls and the receiver's controls B1h-BDh, the sleep control BFh and
+ * the ADC control C1h.  Not SAFE_MODE_STARTUP (A0h), whose wrong value turns
+ * the transmitter off for good, nor the calibrated DACs and constants, the
+ * status, the part's I2C address, the EEPROM controls, the passwords or the
+ * monitors.  Table 2 bytes written while C7h was clear kept their values
+ * through every power-up of the module since (measured on this board).
+ */
+#define RTL9602C_OPTICS_RESET_MS	500
+#define RTL9602C_OPTICS_BUSY_TRIES	20
+#define RTL9602C_OPTICS_BUSY_MS		50
+
+static bool rtl9602c_t2_storable(unsigned int reg)
+{
+	return (reg >= 0xad && reg <= 0xaf) || (reg >= 0xb1 && reg <= 0xbd) ||
+	       reg == 0xbf || reg == 0xc1;
+}
+
+/* A write the part may refuse while it copies into its EEPROM. */
+static int rtl9602c_l_write_busy(struct rtl9602c_priv *p, u16 reg, u8 val)
+{
+	int err, i;
+
+	for (i = 0; i < RTL9602C_OPTICS_BUSY_TRIES; i++) {
+		err = rtl9602c_l_write(p, reg, val);
+		if (!err)
+			break;
+		msleep(RTL9602C_OPTICS_BUSY_MS);
+	}
+	return err;
+}
+
+/* The password bytes and table 2 shown, each write retried while the part is busy. */
+static int rtl9602c_gn_t2_show(struct rtl9602c_priv *p)
+{
+	int err = 0, i;
+
+	for (i = 0; i < 4 && !err; i++)
+		err = rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE +
+					    RTL9602C_OPTICS_A2_PASSWORD + i, 0xff);
+	return err ?: rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02);
+}
+
+static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p)
+{
+	u8 tabsel, eectl;
+	int err;
+
+	if (p->optics_t2_open)
+		return -EBUSY;
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel) ?:
+	      rtl9602c_gn_t2_show(p) ?:
+	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
+			      &eectl) ?:
+	      rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
+			       eectl & ~RTL9602C_OPTICS_TBL2_PERSIST_OFF);
+	if (err) {
+		rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+		return err;
+	}
+	p->optics_t2_tabsel = tabsel;
+	p->optics_t2_eectl = eectl;
+	p->optics_t2_open = true;
+	pr_info("GN25L95: table 2 open for storing (C7h %02x -> %02x)\n",
+		eectl, eectl & ~RTL9602C_OPTICS_TBL2_PERSIST_OFF);
+	return 0;
+}
+
+static int rtl9602c_gn_t2_close(struct rtl9602c_priv *p)
+{
+	int err;
+
+	if (!p->optics_t2_open)
+		return -EINVAL;
+	err = rtl9602c_gn_t2_show(p) ?:
+	      rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
+				    p->optics_t2_eectl) ?:
+	      rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE + 0x7f, p->optics_t2_tabsel);
+	if (err)
+		return err;
+	p->optics_t2_open = false;
+	pr_info("GN25L95: table 2 closed (C7h %02x)\n", p->optics_t2_eectl);
+	return 0;
+}
+
+static int rtl9602c_gn_t2_store(struct rtl9602c_priv *p, u8 reg, u8 val)
+{
+	int err;
+
+	if (!p->optics_t2_open)
+		return -EINVAL;
+	err = rtl9602c_gn_t2_show(p) ?:
+	      rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE + reg, val);
+	if (!err)
+		pr_info("GN25L95: table 2 %02Xh written %02x\n", reg, val);
+	return err;
+}
+
+static int rtl9602c_gn_reset(struct rtl9602c_priv *p)
+{
+	static const u8 key[] = { 0x5d, 0x2c, 0x6a, 0xc9 };
+	u8 tabsel;
+	int err, i;
+
+	if (p->optics_t2_open)
+		return -EBUSY;
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	for (i = 0; i < ARRAY_SIZE(key) && !err; i++)
+		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_PASSWORD + i,
+				       key[i]);
+	if (err)
+		return err;
+	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x0b);
+	msleep(RTL9602C_OPTICS_RESET_MS);
+	for (i = 0; i < 4 && !err; i++)
+		err = rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE +
+					    RTL9602C_OPTICS_A2_PASSWORD + i, 0xff);
+	err = err ?: rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+	if (!err)
+		pr_info("GN25L95: reset, the tables loaded from the EEPROM\n");
+	return err;
+}
+
+static ssize_t rtl9602c_t2write_write(struct file *file, const char __user *ubuf,
+				      size_t len, loff_t *ppos)
+{
+	struct rtl9602c_priv *p = file->private_data;
+	unsigned int reg, val;
+	char buf[16];
+	int err;
+
+	if (len >= sizeof(buf))
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+	buf[len] = '\0';
+
+	guard(mutex)(&p->i2c_lock);
+	if (sysfs_streq(buf, "open"))
+		err = rtl9602c_gn_t2_open(p);
+	else if (sysfs_streq(buf, "close"))
+		err = rtl9602c_gn_t2_close(p);
+	else if (sysfs_streq(buf, "reset"))
+		err = rtl9602c_gn_reset(p);
+	else if (sscanf(buf, "%x %x", &reg, &val) == 2 && val <= 0xff &&
+		 rtl9602c_t2_storable(reg))
+		err = rtl9602c_gn_t2_store(p, reg, val);
+	else
+		err = -EINVAL;
+	return err ?: len;
+}
+
+static const struct file_operations rtl9602c_t2write_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.write = rtl9602c_t2write_write,
+	.llseek = noop_llseek,
+};
+
 /**
  * rtl9602c_optics_debugfs_init() - create the optics' debugfs views
  * @p: driver state
@@ -1172,7 +1361,8 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
  * Creates "a2" and "eeblocks", both mode 0400, in the switch's debugfs
  * directory.  Both only read the part, so a CONFIG_RTL9602C_OPTICS_RO
  * build has them too.  "tables" writes the page select and the password
- * bytes, and only a build without it has that view.
+ * bytes, and "t2write", mode 0200, stores table 2 bytes in the module's
+ * EEPROM; only a build without it has those two.
  */
 void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -1180,9 +1370,12 @@ void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_a2_fops);
 	debugfs_create_file("eeblocks", 0400, p->debugfs, p,
 			    &rtl9602c_eeblocks_fops);
-	if (!IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
-		debugfs_create_file("tables", 0400, p->debugfs, p,
-				    &rtl9602c_tables_fops);
+	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+		return;
+	debugfs_create_file("tables", 0400, p->debugfs, p,
+			    &rtl9602c_tables_fops);
+	debugfs_create_file("t2write", 0200, p->debugfs, p,
+			    &rtl9602c_t2write_fops);
 }
 
 #endif
