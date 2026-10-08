@@ -615,6 +615,25 @@ check 'logged "^ip link del lan410"'
 check 'logged "^ip link del lan37"'
 teardown
 
+echo "two prefixes handed down in two VLANs: the second by its own table"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv6 SESSION2_VLAN=410 SESSION2_FAMILY=ipv6 \
+	SESSION2_HOST_VLAN=37
+echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user2/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ "$(grep -c "^dhcp6d" "$LOG")" = 2 ] && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1$"'
+check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -t 102$"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan37/disable_ipv6")" = 0 ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
 echo "no VLAN to the host: the host link itself"
 setup
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_HOST_VLAN=untagged

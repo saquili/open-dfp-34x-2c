@@ -245,8 +245,19 @@ main_pass() {
 	done
 }
 
-# The routing table of session $1, for what comes from the address it hands
-# down.
+# The session the stick's own IPv6 default route goes by, of those that hand
+# a prefix down: the first. Each other has its table, as main_pass().
+main_pd() {
+	for mp in $(sessions); do
+		if hands "$mp" ipv6; then
+			echo "$mp"
+			return 0
+		fi
+	done
+}
+
+# The routing table of session $1, for what comes from the address or the
+# prefix it hands down.
 table_of() {
 	echo $((100 + $1))
 }
@@ -465,14 +476,18 @@ note() {
 
 # The delegated IPv6 prefix of session $1, whose link $2 came up on its
 # interface $3, handed on to the host by dhcp6d: the link to the host gets
-# IPv6, and the stick forwards it.
+# IPv6, and the stick forwards it. A session other than main_pd() has dhcp6d
+# route what comes from its prefix by the session's own table.
 pd_up() {
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
 	stop_pid "dhcp6d$1"
 	echo 0 >"$IPV6_CONF/$lan/disable_ipv6" 2>/dev/null
 	echo 1 >"$FORWARD6" 2>/dev/null
-	dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" 2>>"$RUN/dhcp6d.log" &
+	table=
+	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
+	# $table is an option and its value, split on purpose.
+	dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" $table 2>>"$RUN/dhcp6d.log" &
 	echo $! >"$RUN/dhcp6d$1.pid"
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
