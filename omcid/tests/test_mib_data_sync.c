@@ -81,7 +81,8 @@ static void exchange(struct omci_engine *eng, const char *request,
 	CHECK_EQ(omci_t_tx.n, 1u);
 	if (omci_t_tx.n == 1u) {
 		if (memcmp(omci_t_tx.frame[0], want, OMCI_FRAME_LEN) != 0)
-			printf("    %s: the answer is not the expected one\n", what);
+			printf("    %s: the answer is not the expected one\n",
+			       what);
 		CHECK_MEM(omci_t_tx.frame[0], want, OMCI_FRAME_LEN);
 		CHECK(omci_frame_mic_ok(omci_t_tx.frame[0]));
 	}
@@ -131,7 +132,8 @@ static void check_unit(const uint8_t unit[static OMCI_FRAME_LEN],
 
 	vec(hex, want);
 	if (memcmp(&unit[2], &want[2], 42u) != 0)
-		printf("    %s: the upload unit is not the expected one\n", what);
+		printf("    %s: the upload unit is not the expected one\n",
+		       what);
 	CHECK_MEM(&unit[2], &want[2], 42u);
 	CHECK(omci_frame_mic_ok(unit));
 }

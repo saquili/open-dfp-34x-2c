@@ -135,7 +135,8 @@ static void refused(struct omci_t_fixture *fx, const char *request,
 	CHECK_EQ(omci_t_tx.n, 1u);
 	if (omci_t_tx.n == 1u) {
 		if (memcmp(omci_t_tx.frame[0], want, OMCI_FRAME_LEN) != 0)
-			printf("    %s: the answer is not the expected one\n", name);
+			printf("    %s: the answer is not the expected one\n",
+			       name);
 		CHECK_MEM(omci_t_tx.frame[0], want, OMCI_FRAME_LEN);
 		CHECK(omci_frame_mic_ok(omci_t_tx.frame[0]));
 	}
