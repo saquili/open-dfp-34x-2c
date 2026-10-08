@@ -593,14 +593,14 @@ check of a running stick and records it.
 Open items
 ==========
 
-* The image whose programs share the cut C library (ADR 0011) has not been
-  started on the board as a whole yet. Before the cut was part of the build,
-  the programs ran on a board with a library cut by hand the same way, from a
-  copy of the root filesystem in RAM under ``chroot`` beside the running
-  system: BusyBox, dropbear with a key login, ``pond`` answering HTTP,
-  ``ubusd``, and the usage and exit of every other program, with no hang. The
-  build's own cut has run under ``qemu-mips`` only. Starting the image from the
-  flash is the test.
+* The image whose programs share the cut C library (ADR 0011) has been started
+  from the flash on the bench's board only, written into its spare bank by
+  ``onu-update`` and tried once: the boot script reached its ready line,
+  dropbear, ``omcid``, ``pond``, the watchdog daemon and the system log ran,
+  ``pond`` answered HTTP (``licenses.txt`` too), the kernel log held no fault,
+  the processor was 90% idle, and ``onu-trial`` committed the bank 5 seconds
+  after the boot script. The board had no light on its fiber at the time, so
+  the PON stayed at O1; the PON side of the image is not tested yet.
 * The image with the programs of the ONU has not been started on the board as a
   whole yet. ``omcid`` and ``ponid`` of this tree have been run on the board,
   copied to a running stick: it reached O5 and answered the OLT's MIB upload.
