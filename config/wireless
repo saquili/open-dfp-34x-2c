@@ -1,0 +1,25 @@
+config wifi-device  radio0
+	option type     mac80211
+	option phy      wl0
+	option band     2g
+	option channel  11
+	option htmode   HE20
+#	option disabled 1
+
+config wifi-iface vif0
+	option device   radio0
+	option network  lan
+	option mode     ap
+	option ssid     OpenWrt
+	option encryption none
+
+config wifi-vlan
+	option iface	vif0
+	option name	'v#'
+	option vid	'*'
+
+config wifi-station
+	option iface	vif0
+	option mac	00:11:22:33:44:55
+	option vid	100
+	option key	deadbeef
