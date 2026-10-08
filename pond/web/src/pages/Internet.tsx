@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet. On top, the operator's services, as the OLT set them up;
- * under them the seven slots of the session engine. Without anything set
+ * The internet: the seven slots of the session engine, one under another,
+ * each with all there is to know of its session. Without anything set
  * here the OLT makes the stick a transparent bridge, and the host dials the
  * operator through it. A slot takes one service: the stick holds its PPPoE
  * session itself, in its switch's hardware, and hands the public address to
@@ -16,8 +16,7 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Link } from "@tanstack/react-router";
-import { ArrowRight, Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
 import { useNetwork, useOmci, useSessionChange } from "../api/config";
@@ -25,7 +24,7 @@ import { useLive } from "../api/live";
 import type { Family } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page } from "../components/Page";
-import { Badge, Card, Facts, Stat } from "../components/ui";
+import { Badge, Facts } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { Mib, type Service, services } from "../lib/omci";
 import { mac, required, upTo, vlan, z } from "../lib/schemas";
@@ -64,13 +63,6 @@ function useServices() {
   return { list, ready: omci.isSuccess };
 }
 
-/** The Port-IDs of the channels of service @s. */
-function channelIds(s: Service): number[] {
-  return [...new Set(s.ports.flatMap((p) => p.channels.map((c) => c.portId)))].sort(
-    (a, z) => a - z,
-  );
-}
-
 /*
  * The VID a session is given for service @s: the one by which the operator
  * names the service towards the host, which the OLT translates, else the VID
@@ -94,64 +86,6 @@ function serviceName(t: (k: Key, v?: Record<string, string | number>) => string,
       fibre: s.vlan ?? t("internet.serviceNoVlan"),
     });
   return s.vlan == null ? t("internet.serviceNoVlan") : `VLAN ${s.vlan}`;
-}
-
-/** The operator's services, each with the slots it carries. */
-function ServicesStrip({ list, ready }: { list: Service[]; ready: boolean }) {
-  const { t } = useI18n();
-  const { data: live } = useLive();
-  const all = sessions(live);
-  const views = gems(live);
-  return (
-    <section className="grid gap-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold">{t("internet.servicesTitle")}</h2>
-        <Link to="/fibre" search={{ tab: "services" } as never} className="link text-xs">
-          {t("internet.seeServices")} <ArrowRight className="inline size-3" />
-        </Link>
-      </div>
-      {!ready || list.length === 0 ? (
-        <p className="text-sm text-base-content/60">
-          {ready ? t("internet.servicesNone") : t("internet.servicesLoading")}
-        </p>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
-          {list.map((s) => {
-            const ids = channelIds(s);
-            const slots = all.filter((x) => serviceOf(list, x) === s).map((x) => x.id);
-            const bridged = views.some(
-              (v) => v.gem.port_id != null && ids.includes(v.gem.port_id) && v.use === "bridged",
-            );
-            return (
-              <div
-                key={String(s.vlan ?? "none")}
-                className={`grid gap-1 rounded-box border bg-base-100 p-3 text-sm ${slots.length ? "border-primary/60" : "border-base-300"}`}
-              >
-                <span className="flex flex-wrap items-center justify-between gap-1">
-                  <span className="font-semibold">{serviceName(t, s)}</span>
-                  {slots.length > 0 ? (
-                    <Badge tone="info">
-                      {t(slots.length === 1 ? "internet.serviceSlot" : "internet.serviceSlots", {
-                        list: slots.join(", "),
-                      })}
-                    </Badge>
-                  ) : (
-                    <Badge tone={bridged ? "good" : "neutral"}>
-                      {t(bridged ? "internet.serviceBridged" : "internet.serviceUnused")}
-                    </Badge>
-                  )}
-                </span>
-                <span className="text-xs text-base-content/70">
-                  {ids.map((id) => `GEM ${id}`).join(" · ")}
-                  {s.multicast ? ` · ${t("internet.serviceMulticast")}` : ""}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
 }
 
 /** A dialog that opens while @open holds. */
@@ -444,12 +378,29 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
   );
 }
 
-/** One session: its state, what it carries, and its account. */
-function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
+/** A group of a slot's facts, under a small heading. */
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="grid min-w-0 content-start gap-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+
+/** A slot with its session: all there is to know of it at once. */
+function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   const { t } = useI18n();
   const { data: live } = useLive();
+  const net = useNetwork();
+  const { list } = useServices();
   const change = useSessionChange();
   const state = useChangeState(change);
+  const s = session(live);
+  const link = hostLink(live);
+  const bound = serviceOf(list, x);
   const portId = gems(live).find((g) => g.gem.name === x.gemDev)?.gem.port_id;
   /* Sessions in one VLAN send from the MAC address of the first of them. */
   const first = sessions(live).find((y) => y.vlan === x.vlan && y.gem === x.gem);
@@ -457,6 +408,10 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
     first && first.id !== x.id
       ? `${first.mac || t("internet.macStick")} (${t("internet.macShared", { id: first.id })})`
       : x.mac || t("internet.macStick");
+  /* The MTU the session came to, which the host is given: 1500 when the concentrator took RFC 4638. */
+  const mtu = (x.up && net.data?.links.find((l) => l.name === x.ppp)?.mtu) || null;
+  const v4 = x.family !== "ipv6";
+  const v6 = x.family !== "ipv4";
 
   const remove = () => {
     if (!window.confirm(t("internet.removeSessionConfirm", { id: x.id }))) return;
@@ -464,17 +419,18 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   };
 
   return (
-    <Card
-      title={
-        <span className="flex items-center gap-2">
-          {t("internet.slotN", { id: x.id })}
-          <Badge tone={x.up ? "good" : "warn"}>
-            {x.up ? t("internet.up") : t("internet.connecting")}
-          </Badge>
+    <section className="rounded-box border border-base-300 bg-base-100 p-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h2 className="text-base font-semibold">{t("internet.slotN", { id: x.id })}</h2>
+        <Badge tone={x.up ? "good" : "warn"}>
+          {x.up ? t("internet.up") : t("internet.connecting")}
+        </Badge>
+        <span className="text-sm font-medium">
+          {bound ? serviceName(t, bound) : x.vlan ? `VLAN ${x.vlan}` : t("switch.untagged")}
         </span>
-      }
-      action={
-        <span className="flex gap-1">
+        <Badge tone="neutral">{t(FAMILY[x.family])}</Badge>
+        <span className="ml-auto flex items-center gap-1">
+          <SaveState {...state} />
           <button
             type="button"
             className="btn btn-ghost btn-sm btn-square"
@@ -495,208 +451,112 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
             <Trash2 className="size-4" />
           </button>
         </span>
-      }
-    >
-      <div className="flex flex-wrap gap-1">
-        <Badge tone="neutral">{t(FAMILY[x.family])}</Badge>
-        {x.handsOn && <Badge tone="info">{t("internet.handsOn")}</Badge>}
-        {x.prefixHost && <Badge tone="info">{t("internet.prefixToHost")}</Badge>}
       </div>
-      <Facts
-        rows={[
-          [
-            t("internet.account"),
-            <span key="u" className="break-all">
-              {x.user}
-            </span>,
-          ],
-          [
-            t("internet.vlan"),
-            !x.vlan
-              ? t("switch.untagged")
-              : fibreVlan(x) !== x.vlan
-                ? t("internet.vlanOnFibre", { vlan: x.vlan, fibre: fibreVlan(x) })
-                : x.vlan,
-          ],
-          [
-            t("internet.address"),
-            !x.pass
-              ? t("internet.addressStick")
-              : downVlan(x)
-                ? t("internet.addressDown", { vlan: downVlan(x) })
-                : t("internet.addressDownUntagged"),
-          ],
-          [
-            t("internet.channel"),
-            portId != null
-              ? `GEM ${portId}`
-              : x.gem === "auto"
-                ? t("internet.autoGem")
-                : `GEM ${x.gem}`,
-          ],
-          [
-            t("internet.mac"),
-            <span key="m" className="font-mono text-xs">
-              {macText}
-            </span>,
-          ],
-          x.family !== "ipv6" && [
-            "IPv4",
-            x.ipv4
-              ? t(x.handsOn ? "internet.ipv4Host" : "internet.ipv4Stick", { addr: x.ipv4 })
-              : "–",
-          ],
-          x.family !== "ipv4" && [
-            t("internet.prefix"),
-            x.prefix
-              ? t(
-                  x.prefixHost
-                    ? "internet.prefixHost"
-                    : x.pass
-                      ? "internet.prefixWaiting"
-                      : "internet.prefixStick",
-                  { prefix: x.prefix },
-                )
-              : x.ipv6
-                ? t("internet.prefixNone")
-                : "–",
-          ],
-          x.dev ? [t("internet.iface"), [x.dev, x.ppp].filter(Boolean).join(" → ")] : null,
-        ]}
-      />
-      <SaveState {...state} />
-    </Card>
+      <div className="mt-3 grid gap-x-8 gap-y-4 md:grid-cols-3">
+        <Group title={t("internet.colSession")}>
+          <Facts
+            rows={[
+              [
+                t("internet.account"),
+                <span key="u" className="break-all">
+                  {x.user}
+                </span>,
+              ],
+              [
+                t("internet.channel"),
+                portId != null
+                  ? `GEM ${portId}`
+                  : x.gem === "auto"
+                    ? t("internet.autoGem")
+                    : `GEM ${x.gem}`,
+              ],
+              [
+                t("internet.macShort"),
+                <span key="m" className="font-mono text-xs">
+                  {macText}
+                </span>,
+              ],
+              x.dev ? [t("internet.iface"), [x.dev, x.ppp].filter(Boolean).join(" → ")] : null,
+            ]}
+          />
+        </Group>
+        <Group title={t("internet.colOperator")}>
+          <Facts
+            rows={[
+              v4 && ["IPv4", x.ipv4 ?? "–"],
+              v6 && [t("internet.prefix"), x.prefix ?? (x.ipv6 ? t("internet.prefixNone") : "–")],
+              x.handsOn && [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
+              [
+                t("internet.mtu"),
+                mtu ? t(mtu >= 1500 ? "internet.mtuRfc" : "internet.mtuPlain", { mtu }) : "–",
+              ],
+            ]}
+          />
+        </Group>
+        <Group title={t("internet.colHost")}>
+          {x.pass ? (
+            <Facts
+              rows={[
+                ["VLAN", downVlan(x) || t("switch.untagged")],
+                v4 && [t("internet.hostAddress"), x.handsOn && x.ipv4 ? x.ipv4 : "–"],
+                v4 && [
+                  t("internet.hostGateway"),
+                  x.handsOn && x.up && link.hostGateway ? link.hostGateway : "–",
+                ],
+                v6 && [
+                  t("internet.prefix"),
+                  !x.prefix
+                    ? "–"
+                    : x.prefixHost
+                      ? x.prefix
+                      : t("internet.prefixWaiting", { prefix: x.prefix }),
+                ],
+              ]}
+            />
+          ) : (
+            <p className="text-sm text-base-content/70">{t("internet.kindStickHint")}</p>
+          )}
+        </Group>
+      </div>
+    </section>
   );
 }
 
-/** How many of the session engine's seven rows are in use. */
-function Slots({ used }: { used: number }) {
+/** A free slot: one line, and a way to take it. */
+function FreeSlot({ id, onUse }: { id: number; onUse: () => void }) {
   const { t } = useI18n();
   return (
-    <span className="text-sm">
-      <span className="tabular font-semibold">
-        {t("internet.slots", { n: used, max: MAX_SESSIONS })}
-      </span>{" "}
-      <span className="text-base-content/70">
-        {t("internet.slotsHint")} {t("internet.restBridge")}
-      </span>
-    </span>
+    <section className="flex flex-wrap items-center gap-3 rounded-box border border-dashed border-base-300 bg-base-100 px-4 py-2">
+      <h2 className="text-base font-semibold">{t("internet.slotN", { id })}</h2>
+      <Badge tone="neutral">{t("internet.slotFree")}</Badge>
+      <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={onUse}>
+        <Plus className="size-4" />
+        {t("internet.slotUse")}
+      </button>
+    </section>
   );
 }
 
-/** One row of the session engine, as a small card: its session in short, or free. */
-function SlotTile({
-  id,
-  x,
-  selected,
-  onSelect,
-}: {
-  id: number;
-  x?: SessionView;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const { t } = useI18n();
-  const { data: live } = useLive();
-  const portId = x && gems(live).find((g) => g.gem.name === x.gemDev)?.gem.port_id;
-  const service = x
-    ? [portId != null ? `GEM ${portId}` : null, fibreVlan(x) ? `VLAN ${fibreVlan(x)}` : null]
-        .filter(Boolean)
-        .join(" · ")
-    : null;
-  const where = x
-    ? [
-        x.family !== "ipv6" && (x.handsOn ? t("internet.tileV4Host") : t("internet.tileV4Stick")),
-        x.family !== "ipv4" && (x.prefixHost ? t("internet.tileV6Host") : "IPv6"),
-      ]
-        .filter(Boolean)
-        .join(" · ")
-    : null;
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={`flex min-h-24 flex-col gap-1 rounded-box border bg-base-100 p-3 text-left text-sm ${
-        selected
-          ? "border-2 border-primary"
-          : x
-            ? "border-base-300"
-            : "border-dashed border-base-300"
-      } hover:border-primary`}
-    >
-      <span className="flex flex-wrap items-center justify-between gap-1 font-semibold">
-        <span className="whitespace-nowrap">{t("internet.slotN", { id })}</span>
-        {x ? (
-          <Badge tone={x.up ? "good" : "warn"}>
-            {x.up ? t("internet.up") : t("internet.connecting")}
-          </Badge>
-        ) : (
-          <Badge tone="neutral">{t("internet.slotFree")}</Badge>
-        )}
-      </span>
-      {x ? (
-        <>
-          <span className="text-xs text-base-content/70">{service || t("internet.autoGem")}</span>
-          <span className="text-xs">{where}</span>
-        </>
-      ) : (
-        <span className="mt-auto flex items-center gap-1 text-xs text-base-content/60">
-          <Plus className="size-3" />
-          {t("internet.slotUse")}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function SessionsTab() {
+export function Internet() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const list = sessions(live);
-  const services = useServices();
-  /* The row looked at, and a session to change or the free row a new one takes. */
-  const [picked, setPicked] = useState<number | null>(null);
+  /* A session to change, or the free slot a new one takes. */
   const [editing, setEditing] = useState<SessionView | number | null>(null);
-  const shown = picked ?? list[0]?.id ?? 1;
-  const x = list.find((y) => y.id === shown);
-
   return (
-    <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-rows-[auto_auto_auto_minmax(0,1fr)]">
-      <ServicesStrip list={services.list} ready={services.ready} />
-      <Slots used={list.length} />
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
-        {SLOT_IDS.map((id) => (
-          <SlotTile
-            key={id}
-            id={id}
-            x={list.find((y) => y.id === id)}
-            selected={shown === id}
-            onSelect={() => setPicked(id)}
-          />
-        ))}
-      </div>
-      <div className="min-h-0 lg:overflow-auto">
-        {x ? (
-          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <SessionCard x={x} onEdit={() => setEditing(x)} />
-            {x.handsOn && <HostCard x={x} />}
-          </div>
-        ) : (
-          <Card title={t("internet.slotN", { id: shown })}>
-            <p className="text-sm text-base-content/70">{t("internet.slotFreeText")}</p>
-            <div>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => setEditing(shown)}
-              >
-                <Plus className="size-4" />
-                {t("internet.slotUse")}
-              </button>
-            </div>
-          </Card>
-        )}
+    <Page
+      title={t("internet.title")}
+      hint={`${t("internet.slots", { n: list.length, max: MAX_SESSIONS })} ${t("internet.restBridge")}`}
+    >
+      <div className="grid min-h-0 flex-1 content-start gap-3 lg:overflow-auto">
+        {SLOT_IDS.map((id) => {
+          const x = list.find((y) => y.id === id);
+          return x ? (
+            <SlotCard key={id} x={x} onEdit={() => setEditing(x)} />
+          ) : (
+            <FreeSlot key={id} id={id} onUse={() => setEditing(id)} />
+          );
+        })}
       </div>
       <Dialog
         open={editing != null}
@@ -713,66 +573,6 @@ function SessionsTab() {
           onDone={() => setEditing(null)}
         />
       </Dialog>
-    </div>
-  );
-}
-
-/* ---------------------------------------------------------------- handover */
-
-/** How the host gets the address slot @x hands down, and what it gets. */
-function HostCard({ x }: { x: SessionView }) {
-  const { t } = useI18n();
-  const { data: live } = useLive();
-  const s = session(live);
-  const link = hostLink(live);
-  const net = useNetwork();
-  /* The MTU the session came to, which the host is given: 1500 when the concentrator took RFC 4638. */
-  const mtu = (x.up && net.data?.links.find((l) => l.name === x.ppp)?.mtu) || null;
-  return (
-    <Card title={t("internet.handoverTitle")}>
-      <p className="text-sm text-base-content/70">{t("internet.handoverHint")}</p>
-      <Facts
-        rows={[
-          [t("internet.hostVlan"), downVlan(x) || t("switch.untagged")],
-          [t("sfp.lease"), x.up && link.lease ? link.lease : t("sfp.noLease")],
-          [t("sfp.hostGateway"), x.up && link.hostGateway ? link.hostGateway : "–"],
-          [t("internet.hostPrefix"), s.prefix ?? "–"],
-          [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
-          [t("internet.mtu"), mtu ?? "–"],
-        ]}
-      />
-      <p className="text-xs text-base-content/60">
-        {t(
-          mtu == null ? "internet.mtuAsk" : mtu >= 1500 ? "internet.mtuFull" : "internet.mtuShort",
-          { mtu: mtu ?? 0 },
-        )}
-      </p>
-    </Card>
-  );
-}
-
-export function Internet() {
-  const { t } = useI18n();
-  const { data: live } = useLive();
-  const s = session(live);
-  return (
-    <Page
-      title={t("internet.title")}
-      actions={
-        <div className="hidden items-center gap-6 md:flex">
-          <Stat label="IPv4" value={s.address ?? "–"} />
-          <Stat label="IPv6" value={s.prefix ?? "–"} />
-          <Badge tone={s.configured ? (s.up ? "good" : "warn") : "neutral"}>
-            {s.configured
-              ? s.up
-                ? t("internet.up")
-                : t("internet.connecting")
-              : t("internet.off")}
-          </Badge>
-        </div>
-      }
-    >
-      <SessionsTab />
     </Page>
   );
 }
