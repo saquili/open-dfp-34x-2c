@@ -31,19 +31,24 @@
 
 /**
  * struct pon_gem - a GEM interface
+ * @dev: the interface itself
  * @lower: the interface it stacks on, the one that carries the ONU's traffic
  * @pon: the ONU, referenced until the interface is freed
  * @md: the dst every transmitted frame carries: its port_id is @flow and its
  *	lower_dev @lower
  * @cfg: the GEM port as management created it
+ * @rx_work: hands the MAC the unicast frames the interface takes
+ *	(pon_gem_rx_work())
  * @flow: the MAC's flow for the GEM port
  * @offloaded: the GEM interface is a bridge port offloaded to the switch
  */
 struct pon_gem {
+	struct net_device *dev;
 	struct net_device *lower;
 	struct pon_device *pon;
 	struct metadata_dst *md;
 	struct pon_gem_config cfg;
+	struct work_struct rx_work;
 	unsigned int flow;
 	bool offloaded;
 };
@@ -262,6 +267,125 @@ static int pon_gem_change_mtu(struct net_device *dev, int new_mtu)
 }
 
 /*
+ * The most addresses and VLANs a GEM interface hands the MAC; one with more
+ * is passed as promiscuous, and the MAC hands the CPU its port's every frame.
+ */
+#define PON_GEM_RX_ADDRS	8
+#define PON_GEM_RX_VIDS		8
+
+struct pon_gem_rx_vids {
+	u16 vids[PON_GEM_RX_VIDS];
+	unsigned int n;
+	bool full;
+};
+
+static int pon_gem_rx_vid(struct net_device *vlan_dev, int vid, void *arg)
+{
+	struct pon_gem_rx_vids *v = arg;
+
+	if (v->n == PON_GEM_RX_VIDS)
+		v->full = true;
+	else
+		v->vids[v->n++] = vid;
+	return 0;
+}
+
+/*
+ * Hand the MAC the unicast frames the interface takes: its own address and
+ * its unicast list, in the VLANs of the VLAN devices over it and untagged,
+ * and nothing while it is down. Called with RTNL held, which keeps the VLAN
+ * devices in place.
+ */
+static void pon_gem_rx_sync(struct net_device *dev)
+{
+	u8 addrs[PON_GEM_RX_ADDRS][ETH_ALEN];
+	struct pon_gem *gem = netdev_priv(dev);
+	struct pon_gem_rx_vids v = {};
+	struct pon_gem_rx_filter f = {
+		.addrs = addrs,
+		.vids = v.vids,
+	};
+	struct netdev_hw_addr *ha;
+
+	/* An interface that is down takes nothing. */
+	if (!(dev->flags & IFF_UP))
+		goto out;
+
+	ether_addr_copy(addrs[0], dev->dev_addr);
+	f.n_addrs = 1;
+
+	netif_addr_lock_bh(dev);
+	f.promisc = dev->flags & IFF_PROMISC;
+	netdev_for_each_uc_addr(ha, dev) {
+		if (f.n_addrs == PON_GEM_RX_ADDRS) {
+			f.promisc = true;
+			break;
+		}
+		ether_addr_copy(addrs[f.n_addrs++], ha->addr);
+	}
+	netif_addr_unlock_bh(dev);
+
+	vlan_for_each(dev, pon_gem_rx_vid, &v);
+	f.n_vids = v.n;
+	if (v.full)
+		f.promisc = true;
+out:
+	gem->pon->ops->gem_rx_filter(gem->pon, gem->flow, &f);
+}
+
+/*
+ * The work behind ndo_set_rx_mode, which runs under the address lock with
+ * bottom halves off, while the MAC may sleep. It holds a reference to the
+ * interface from when it was queued; an interface that is no longer its
+ * flow's, deleted meanwhile, has nothing left to hand on.
+ */
+static void pon_gem_rx_work(struct work_struct *work)
+{
+	struct pon_gem *gem = container_of(work, struct pon_gem, rx_work);
+	struct net_device *dev = gem->dev;
+
+	rtnl_lock();
+	if (dev->reg_state == NETREG_REGISTERED &&
+	    rtnl_dereference(gem->pon->gem[gem->flow]) == dev)
+		pon_gem_rx_sync(dev);
+	rtnl_unlock();
+	dev_put(dev);
+}
+
+static void pon_gem_rx_schedule(struct net_device *dev)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	if (!gem->pon || !gem->pon->ops->gem_rx_filter)
+		return;
+
+	dev_hold(dev);
+	if (!schedule_work(&gem->rx_work))
+		dev_put(dev);
+}
+
+static void pon_gem_set_rx_mode(struct net_device *dev)
+{
+	pon_gem_rx_schedule(dev);
+}
+
+static int pon_gem_set_mac_address(struct net_device *dev, void *addr)
+{
+	int err = eth_mac_addr(dev, addr);
+
+	if (!err)
+		pon_gem_rx_schedule(dev);
+	return err;
+}
+
+/* What a GEM interface takes goes when it goes down (pon_gem_rx_sync()). */
+static int pon_gem_stop(struct net_device *dev)
+{
+	pon_gem_rx_schedule(dev);
+	return 0;
+}
+
+/*
  * A VLAN device over a GEM interface sends and receives through the lower,
  * and a switch behind the lower may forward by VLAN membership, as one does
  * while a bridge filters VLANs: the GEM interface hands the VIDs of its VLAN
@@ -277,8 +401,11 @@ static int pon_gem_vlan_rx_add_vid(struct net_device *dev, __be16 proto,
 				   u16 vid)
 {
 	struct pon_gem *gem = netdev_priv(dev);
+	int err = gem->lower ? vlan_vid_add(gem->lower, proto, vid) : 0;
 
-	return gem->lower ? vlan_vid_add(gem->lower, proto, vid) : 0;
+	if (!err)
+		pon_gem_rx_schedule(dev);
+	return err;
 }
 
 static int pon_gem_vlan_rx_kill_vid(struct net_device *dev, __be16 proto,
@@ -288,15 +415,18 @@ static int pon_gem_vlan_rx_kill_vid(struct net_device *dev, __be16 proto,
 
 	if (gem->lower)
 		vlan_vid_del(gem->lower, proto, vid);
+	pon_gem_rx_schedule(dev);
 	return 0;
 }
 
 static const struct net_device_ops pon_gem_netdev_ops = {
 	.ndo_open		= pon_gem_open,
+	.ndo_stop		= pon_gem_stop,
 	.ndo_change_mtu		= pon_gem_change_mtu,
 	.ndo_start_xmit		= pon_gem_xmit,
 	.ndo_get_stats64	= dev_get_tstats64,
-	.ndo_set_mac_address	= eth_mac_addr,
+	.ndo_set_rx_mode	= pon_gem_set_rx_mode,
+	.ndo_set_mac_address	= pon_gem_set_mac_address,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_get_iflink		= pon_gem_get_iflink,
 	.ndo_setup_tc		= pon_gem_setup_tc,
@@ -338,11 +468,14 @@ static void pon_gem_free(struct net_device *dev)
 /*
  * An Ethernet interface without a transmit queue, with lockless transmit
  * (gem_xmit may run on several CPUs at once), a VLAN filter that it hands on
- * to the lower (pon_gem_vlan_rx_add_vid()) and per-CPU software counters,
- * freed on unregistration.
+ * to the lower (pon_gem_vlan_rx_add_vid()), a unicast filter that it hands to
+ * the MAC (pon_gem_rx_sync()) and per-CPU software counters, freed on
+ * unregistration.
  */
 static void pon_gem_setup(struct net_device *dev)
 {
+	struct pon_gem *gem = netdev_priv(dev);
+
 	ether_setup(dev);
 
 	dev->netdev_ops = &pon_gem_netdev_ops;
@@ -353,6 +486,9 @@ static void pon_gem_setup(struct net_device *dev)
 	dev->features |= NETIF_F_HW_VLAN_CTAG_FILTER;
 	dev->lltx = true;
 	dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
+
+	gem->dev = dev;
+	INIT_WORK(&gem->rx_work, pon_gem_rx_work);
 }
 
 /*
@@ -551,6 +687,14 @@ static int pon_gem_newlink(struct net_device *dev,
 	dev->mtu = lower->mtu;
 	dev->max_mtu = lower->max_mtu;
 
+	/*
+	 * A MAC that takes the unicast list filters by it, and a VLAN device
+	 * with an address of its own then leaves the interface out of
+	 * promiscuous mode.
+	 */
+	if (gem->pon->ops->gem_rx_filter)
+		dev->priv_flags |= IFF_UNICAST_FLT;
+
 	err = register_netdevice(dev);
 	if (err)
 		goto err_del;
@@ -572,6 +716,8 @@ static int pon_gem_newlink(struct net_device *dev,
 	/* Receive reaches the interface once it is published here. */
 	netif_stacked_transfer_operstate(lower, dev);
 	rcu_assign_pointer(gem->pon->gem[gem->flow], dev);
+	/* A new interface is down and takes nothing, which the MAC hears. */
+	pon_gem_rx_schedule(dev);
 	return 0;
 
 err_del:

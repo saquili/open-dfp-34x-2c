@@ -19,6 +19,7 @@
 #define _LINUX_PON_H
 
 #include <linux/err.h>
+#include <linux/if_ether.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
 #include <uapi/linux/pon.h>
@@ -185,6 +186,25 @@ struct pon_dev_status {
 };
 
 /**
+ * struct pon_gem_rx_filter - the unicast frames a GEM interface takes
+ * @promisc: the interface takes every frame of its GEM port: it is
+ *	promiscuous, or it has more addresses or VLANs than the class passes
+ * @n_addrs: the number of addresses in @addrs
+ * @addrs: the interface's own address, then the addresses of its unicast
+ *	list, which a VLAN device over it with an address of its own adds
+ * @n_vids: the number of VIDs in @vids
+ * @vids: the VIDs of the VLAN devices over the interface; the addresses are
+ *	taken in these VLANs and untagged
+ */
+struct pon_gem_rx_filter {
+	bool promisc;
+	unsigned int n_addrs;
+	const u8 (*addrs)[ETH_ALEN];
+	unsigned int n_vids;
+	const u16 *vids;
+};
+
+/**
  * struct pon_gem_stats - a GEM port's counters, as the MAC counts them
  * @tx_octets: the octets of the GEM frames the MAC sent upstream on the port,
  *	their headers included
@@ -296,6 +316,17 @@ struct pon_device_ops {
 	 */
 	void (*gem_mrouter)(struct pon_device *pon, unsigned int flow,
 			    bool mrouter);
+	/**
+	 * @gem_rx_filter: The GEM interface of flow takes the unicast frames
+	 * f describes, and only those unless f is promiscuous, so that the
+	 * MAC may keep the frames for other addresses from the CPU. f
+	 * replaces what an earlier call gave for flow; gem_del withdraws it.
+	 * Called with RTNL held, from process context, after the interface's
+	 * addresses or VLANs change. Without it, the MAC hands the CPU what
+	 * it does, and the stack sorts the frames by address.
+	 */
+	void (*gem_rx_filter)(struct pon_device *pon, unsigned int flow,
+			      const struct pon_gem_rx_filter *f);
 	/**
 	 * @dev_status: Fill st with the state of the transmission convergence
 	 * layer: the activation state, the identifiers the OLT assigned, the

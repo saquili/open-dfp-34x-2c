@@ -1930,6 +1930,23 @@ The data path operations
      - M
      - The query and the snooping switch-off above (see "Bridging and
        switchdev offload").
+   * - ``gem_rx_filter(pon, flow, f)`` is optional; RTNL is held and the
+       caller may sleep. It hands the MAC the unicast frames the GEM interface
+       of ``flow`` takes (``struct pon_gem_rx_filter``): whether it is
+       promiscuous, its own address and its unicast list, which a VLAN device
+       over it with an address of its own fills, and the VIDs of those VLAN
+       devices, the addresses being taken in them and untagged. An interface
+       that is down takes nothing. More than 8 addresses or 8 VLANs count as
+       promiscuous. With the operation the interface filters unicast
+       (``IFF_UNICAST_FLT``), and a VLAN device with an address of its own no
+       longer makes it promiscuous. The class calls it from a work item, as
+       ``ndo_set_rx_mode`` runs with bottom halves off: on each change of the
+       interface's addresses, promiscuity or VLAN devices, when it goes up or
+       down, and once when it is created. ``gem_del`` withdraws it.
+     - M
+     - A session's VLAN device ``wan410`` over ``gem257`` with an address of
+       its own: ``gem257`` stayed at promiscuity 0, and the MAC got the
+       session's address in VLAN 410 and untagged.
    * - ``pon_gem_rx(pon, flow, skb)`` is called from the MAC's receive path. It
        returns true when the flow has a GEM interface: the frame was
        delivered, or dropped because the interface is down. It returns false
