@@ -66,7 +66,7 @@ const WIDE: Layout = {
     ponmac: { x: 698, y: 40, w: 180, h: 88 },
     olt: { x: 958, y: 40, w: 134, h: 88 },
   },
-  gems: { x: 698, y: 172, cols: 3, w: 124, h: 40, gap: 10 },
+  gems: { x: 698, y: 172, cols: 3, w: 124, h: 54, gap: 8 },
 };
 
 const TALL: Layout = {
@@ -80,7 +80,7 @@ const TALL: Layout = {
     sfp: { x: 20, y: 496, w: 200, h: 76 },
     host: { x: 20, y: 658, w: 200, h: 76 },
   },
-  gems: { x: 20, y: 780, cols: 2, w: 160, h: 40, gap: 10 },
+  gems: { x: 20, y: 780, cols: 2, w: 160, h: 54, gap: 8 },
 };
 
 const TONE_COLOR: Record<Tone, string> = {
@@ -256,10 +256,8 @@ function Channel({
       : g.direction === "downstream"
         ? "↓"
         : "↑";
-  const traffic =
-    g.direction === "downstream" || g.multicast
-      ? `↓ ${bitrate(rate?.down ?? 0, lang)}`
-      : `↓ ${bitrate(rate?.down ?? 0, lang)}  ↑ ${bitrate(rate?.up ?? 0, lang)}`;
+  const downOnly = g.direction === "downstream" || g.multicast;
+  const clip = `gem-clip-${g.name}`;
   return (
     // biome-ignore lint/a11y/useSemanticElements: an SVG group cannot be a <button>
     <g
@@ -270,6 +268,9 @@ function Channel({
       className="cursor-pointer outline-none [&:focus-visible>rect]:stroke-[2] [&:hover>rect]:fill-[var(--color-base-200)]"
     >
       <title>{`${t("diagram.gem", { id: g.port_id })} · ${gem.direction(g)} · ${gem.use(v)}`}</title>
+      <clipPath id={clip}>
+        <rect x={box.x} y={box.y} width={box.w} height={box.h} rx={8} />
+      </clipPath>
       <rect
         x={box.x}
         y={box.y}
@@ -279,25 +280,36 @@ function Channel({
         fill="var(--color-base-100)"
         stroke="var(--color-base-300)"
       />
-      <rect
-        x={box.x}
-        y={box.y}
-        width={5}
-        height={box.h}
-        rx={2}
-        fill={USE_COLOR[g.multicast ? "multicast" : v.use]}
-      />
-      <text
-        x={box.x + 12}
-        y={box.y + 16}
-        className="tabular fill-current text-[12px] font-semibold"
-      >
-        {`${g.port_id} ${arrow}`}
-        <tspan className="font-normal opacity-60">{` ${gem.short(v)}`}</tspan>
-      </text>
-      <text x={box.x + 12} y={box.y + 32} className="tabular fill-current text-[11px] opacity-70">
-        {traffic}
-      </text>
+      {/* What is drawn inside never leaves the chip's outline. */}
+      <g clipPath={`url(#${clip})`}>
+        <rect
+          x={box.x}
+          y={box.y}
+          width={5}
+          height={box.h}
+          fill={USE_COLOR[g.multicast ? "multicast" : v.use]}
+        />
+        <text
+          x={box.x + 12}
+          y={box.y + 16}
+          className="tabular fill-current text-[12px] font-semibold"
+        >
+          {`${g.port_id} ${arrow}`}
+          <tspan className="font-normal opacity-60">{` ${gem.short(v)}`}</tspan>
+        </text>
+        <text x={box.x + 12} y={box.y + 32} className="tabular fill-current text-[11px] opacity-75">
+          {`↓ ${bitrate(rate?.down ?? 0, lang)}`}
+        </text>
+        {!downOnly && (
+          <text
+            x={box.x + 12}
+            y={box.y + 46}
+            className="tabular fill-current text-[11px] opacity-75"
+          >
+            {`↑ ${bitrate(rate?.up ?? 0, lang)}`}
+          </text>
+        )}
+      </g>
     </g>
   );
 }

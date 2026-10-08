@@ -20,7 +20,7 @@ import { useLive, useTraffic } from "../api/live";
 import type { LaneMode } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page } from "../components/Page";
-import { TrafficChart } from "../components/TrafficChart";
+import { HistoryNote, TrafficChart } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, integer } from "../lib/format";
@@ -337,7 +337,7 @@ export function SfpPage() {
           <LaneCard />
           <MgmtCard />
         </div>
-        <Card title={t("sfp.traffic")}>
+        <Card title={t("sfp.traffic")} action={<HistoryNote />}>
           <div className="grid min-h-0 flex-1 gap-4 sm:grid-cols-[10rem_minmax(0,1fr)] lg:grid-cols-[10rem_minmax(0,1fr)_12rem]">
             <div className="grid content-start grid-cols-2 gap-3 sm:grid-cols-1">
               <Figure value={bitrate(now?.lanDown, lang)} caption={`↓ ${t("sfp.toHost")}`} />

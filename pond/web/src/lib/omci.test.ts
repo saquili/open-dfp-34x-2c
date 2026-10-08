@@ -106,6 +106,9 @@ describe("the unit", () => {
     expect(u.vendorId).toBe("ZZZZ");
     expect(u.equipment).toBe("EXAMPLE-ONT");
     expect(u.omcc).toBe(0xa3);
+    /* An ONU-G with no LOID holds an empty one, which the OLT reads as such. */
+    expect(u.loid).toBe("");
+    expect(u.packVersion).toBe("V1.0");
     expect(u.images.map((i) => [i.id, i.version, i.committed, i.active])).toEqual([
       [0, "V1.0.0", true, true],
       [1, "V1.0.0", false, false],

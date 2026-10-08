@@ -107,6 +107,7 @@ const NONE = new Set([0xffff, 0]);
 export const ONU_G = 256;
 export const ONU2_G = 257;
 export const SW_IMAGE = 7;
+export const CIRCUIT_PACK = 6;
 export const OLT_G = 131;
 export const PPTP_ETH = 11;
 export const VEIP = 329;
@@ -426,13 +427,18 @@ export function services(mib: Mib): Service[] {
 
 /** The unit as the OLT reads it, and the OLT as it introduced itself. */
 export interface Unit {
+  /** The serial number: four letters, then eight hexadecimal digits. */
+  serial: string | null;
   vendorId: string | null;
   version: string | null;
   equipment: string | null;
   omcc: number | null;
   productCode: number | null;
   tmOption: number | null;
+  /** Empty when the ONU-G has none, null when it has no such attribute. */
   loid: string | null;
+  /** The version of the stick's circuit packs, one for them all. */
+  packVersion: string | null;
   images: {
     id: number;
     version: string | null;
@@ -447,14 +453,20 @@ export function unit(mib: Mib): Unit {
   const g = mib.get(ONU_G, 0);
   const g2 = mib.get(ONU2_G, 0);
   const olt = mib.all(OLT_G)[0];
+  const sn = g?.attrs.get(3);
   return {
+    serial:
+      sn && sn.length === 8
+        ? String.fromCharCode(...sn.subarray(0, 4)) + hex(sn.subarray(4)).toUpperCase()
+        : null,
     vendorId: text(g, 1),
     version: text(g, 2),
     equipment: text(g2, 1),
     omcc: num(g2, 2),
     productCode: num(g2, 3),
     tmOption: num(g, 4),
-    loid: text(g, 10) || null,
+    loid: text(g, 10),
+    packVersion: text(mib.all(CIRCUIT_PACK)[0], 4),
     images: mib.all(SW_IMAGE).map((s) => ({
       id: s.id,
       version: text(s, 1),

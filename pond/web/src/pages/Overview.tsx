@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 import { useLive, useTraffic } from "../api/live";
 import { Diagram } from "../components/Diagram";
 import { Page } from "../components/Page";
-import { TrafficChart } from "../components/TrafficChart";
+import { HistoryNote, TrafficChart } from "../components/TrafficChart";
 import { Badge, Card, Figure } from "../components/ui";
 import { useI18n } from "../i18n";
 import { bitrate, dbmText, duration, integer, percent } from "../lib/format";
@@ -212,6 +212,7 @@ export function Overview() {
             <div className="grid content-start grid-cols-2 gap-3 sm:grid-cols-1">
               <Figure value={bitrate(now?.wanDown, lang)} caption={`↓ ${t("overview.download")}`} />
               <Figure value={bitrate(now?.wanUp, lang)} caption={`↑ ${t("overview.upload")}`} />
+              <HistoryNote />
             </div>
             <TrafficChart data={traffic} down={(r) => r.wanDown} up={(r) => r.wanUp} fill />
           </div>

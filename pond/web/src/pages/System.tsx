@@ -29,7 +29,7 @@ import { useLive, useTraffic } from "../api/live";
 import type { Banks, Firmware } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page, Tabs, useTab } from "../components/Page";
-import { Sparkline } from "../components/TrafficChart";
+import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Gauge, Meter, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import {
@@ -195,7 +195,7 @@ function ResourcesTab() {
   return (
     <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(0,1fr)]">
       <div className="grid gap-4 md:grid-cols-3">
-        <Card title={t("system.cpu")}>
+        <Card title={t("system.cpu")} action={<HistoryNote />}>
           <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
             <Gauge
               share={now?.cpuBusy ?? null}
@@ -226,7 +226,7 @@ function ResourcesTab() {
             />
           </div>
         </Card>
-        <Card title={t("system.memory")}>
+        <Card title={t("system.memory")} action={<HistoryNote />}>
           <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4">
             <Gauge
               share={mem?.share ?? null}

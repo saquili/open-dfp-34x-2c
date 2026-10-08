@@ -11,16 +11,28 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Activity, Database, Fingerprint, Layers, ListTree } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  Database,
+  Fingerprint,
+  KeyRound,
+  Layers,
+  ListTree,
+  Lock,
+} from "lucide-react";
+import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Identity } from "../api/types";
-import { Field, SaveState, useChangeState } from "../components/Field";
+import { SaveState, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
-import { Sparkline } from "../components/TrafficChart";
+import { Filter, Pager, usePages } from "../components/Pager";
+import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, bytes, dbmText, decimal, integer } from "../lib/format";
@@ -35,6 +47,7 @@ import {
   services as servicesOf,
   tagsMatched,
   translation,
+  type Unit,
   unit as unitOf,
   type VlanRule,
   vlanRules,
@@ -55,6 +68,9 @@ import {
 } from "../lib/state";
 
 const TABS = ["state", "services", "channels", "identity", "omci"] as const;
+
+/* The input type that hides what is typed. */
+const MASKED = "password";
 type Tab = (typeof TABS)[number];
 
 /**
@@ -120,7 +136,7 @@ function StateTab() {
 
   return (
     <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(10rem,1fr)]">
-      <div className="grid gap-4 lg:grid-cols-3 lg:items-start">
+      <div className="grid gap-4 lg:grid-cols-3">
         <Card
           title={t("fibre.status")}
           action={<Badge tone={f.tone}>{t(`state.${f.stateKey}`)}</Badge>}
@@ -246,7 +262,7 @@ function LineHistory() {
   const now = data.at(-1);
   const peak = Math.max(1, ...data.map((r) => Math.max(r.bip, r.fecCorrected, r.fecLost)));
   return (
-    <Card title={t("fibre.history")}>
+    <Card title={t("fibre.history")} action={<HistoryNote />}>
       <div className="grid min-h-0 flex-1 gap-6 md:grid-cols-2">
         <div className="flex min-h-0 flex-col gap-1">
           <div className="flex items-baseline justify-between text-sm">
@@ -312,11 +328,6 @@ function useChannelText() {
   return { dir, pbits, rate };
 }
 
-function VlanName({ vid }: { vid: number | null }) {
-  const { t } = useI18n();
-  return <>{vid == null ? t("switch.untagged") : t("switch.vlanN", { id: vid })}</>;
-}
-
 function MulticastFacts({ m }: { m: Multicast }) {
   const { t, lang } = useI18n();
   const version =
@@ -342,96 +353,6 @@ function MulticastFacts({ m }: { m: Multicast }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function ServiceCard({ s }: { s: Service }) {
-  const { t, lang } = useI18n();
-  const { data: live } = useLive();
-  const rates = useTraffic().at(-1)?.gems;
-  const ct = useChannelText();
-  const gem = useGemText();
-  const views = gems(live);
-  const own = sessions(live).filter((x) => s.vlan != null && fibreVlan(x) === String(s.vlan));
-  const channels = s.ports.flatMap((p) => p.channels.map((c) => ({ c, port: p })));
-  const seen = new Set<number>();
-
-  const host =
-    s.hostVlans.length === 0
-      ? s.vlan == null
-        ? t("fibre.hostAll")
-        : t("fibre.hostSame", { vid: s.vlan })
-      : s.hostVlans
-          .map((v) => (v == null ? t("switch.untagged") : t("switch.vlanN", { id: v })))
-          .join(", ");
-
-  return (
-    <Card
-      title={
-        <span className="flex items-baseline gap-2">
-          {s.vlan == null ? t("fibre.noVlan") : <VlanName vid={s.vlan} />}
-          <span className="text-xs font-normal text-base-content/55">{t("fibre.onFibre")}</span>
-        </span>
-      }
-      action={
-        <span className="flex flex-wrap justify-end gap-1">
-          {own.length > 0 && <Badge tone="info">{t("fibre.tagSession")}</Badge>}
-          {s.multicast && <Badge tone="neutral">{t("fibre.tagMulticast")}</Badge>}
-        </span>
-      }
-    >
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-base-content/65">{t("fibre.atHost")}</span>
-        <span className="font-medium">{host}</span>
-      </div>
-      <ul className="grid gap-1.5">
-        {channels.map(({ c, port }) => {
-          if (seen.has(c.portId)) return null;
-          seen.add(c.portId);
-          const v = views.find((x) => x.gem.port_id === c.portId);
-          const r = v ? rates?.[v.gem.name] : undefined;
-          const shared = (port.vlans?.length ?? 0) > 1;
-          return (
-            <li
-              key={c.portId}
-              className="grid gap-0.5 rounded-box border border-base-300 px-3 py-2 text-sm"
-            >
-              <div className="flex flex-wrap items-baseline gap-x-3">
-                <span className="tabular font-semibold">GEM {c.portId}</span>
-                <span className="text-base-content/70">{ct.dir(c)}</span>
-                {ct.pbits(c) && <span className="text-base-content/70">{ct.pbits(c)}</span>}
-                {c.allocId != null && (
-                  <span className="tabular ml-auto text-xs text-base-content/60">
-                    T-CONT · Alloc-ID {c.allocId}
-                  </span>
-                )}
-              </div>
-              <div className="flex flex-wrap items-baseline gap-x-3 text-xs text-base-content/65">
-                {shared && <span>{t("fibre.sharedBroadcast")}</span>}
-                {c.encrypted && <span>AES</span>}
-                {c.queue && (
-                  <span>{t("fibre.queue", { p: c.queue.priority, w: c.queue.weight ?? "–" })}</span>
-                )}
-                {ct.rate(c.up) && <span>↑ {ct.rate(c.up)}</span>}
-                {ct.rate(c.down) && <span>↓ {ct.rate(c.down)}</span>}
-                {v && <span>{gem.use(v)}</span>}
-                {r && (
-                  <span className="tabular ml-auto">
-                    ↓ {bitrate(r.down, lang)} ↑ {bitrate(r.up, lang)}
-                  </span>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      {own.length > 0 && (
-        <p className="text-xs text-base-content/70">
-          {t("fibre.sessionsHere", { list: own.map((x) => x.id).join(", ") })}
-        </p>
-      )}
-      {s.multicast && <MulticastFacts m={s.multicast} />}
-    </Card>
   );
 }
 
@@ -466,34 +387,265 @@ function useRuleText() {
   return { match, action };
 }
 
-function RulesCard({ mib }: { mib: Mib }) {
+/** What the stick does with a service: the channels' uses, as words. */
+function useServiceUse() {
   const { t } = useI18n();
-  const text = useRuleText();
-  const all = vlanRules(mib);
+  const { data: live } = useLive();
+  const views = gems(live);
+  return (s: Service) => {
+    const ports = new Set(s.ports.flatMap((p) => p.channels.map((c) => c.portId)));
+    const uses = new Set(views.filter((v) => ports.has(v.gem.port_id)).map((v) => v.use));
+    const own = sessions(live).filter((x) => s.vlan != null && fibreVlan(x) === String(s.vlan));
+    const tags: { text: string; tone: "info" | "neutral" | "good" }[] = [];
+    if (own.length)
+      tags.push({
+        text: t("fibre.tagSession", { list: own.map((x) => x.id).join(", ") }),
+        tone: "info",
+      });
+    if (uses.has("bridged")) tags.push({ text: t("fibre.tagBridged"), tone: "good" });
+    if (s.multicast) tags.push({ text: t("fibre.tagMulticast"), tone: "neutral" });
+    if (!tags.length) tags.push({ text: t("fibre.tagStick"), tone: "neutral" });
+    return tags;
+  };
+}
+
+function hostText(t: (k: Key, v?: Record<string, string | number>) => string, s: Service) {
+  return s.hostVlans.length === 0
+    ? s.vlan == null
+      ? t("fibre.hostAll")
+      : t("fibre.hostSame", { vid: s.vlan })
+    : s.hostVlans.map((v) => (v == null ? t("switch.untagged") : String(v))).join(", ");
+}
+
+/* The details of a service: its channels one by one, multicast, the stick's sessions. */
+function ServiceDetails({ s }: { s: Service }) {
+  const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  const rates = useTraffic().at(-1)?.gems;
+  const ct = useChannelText();
+  const gem = useGemText();
+  const views = gems(live);
+  const seen = new Set<number>();
   return (
-    <Card title={t("fibre.rulesTitle")} scroll>
-      <p className="text-xs text-base-content/65">{t("fibre.rulesHint")}</p>
-      {all.length === 0 && <p className="text-sm">{t("fibre.rulesNone")}</p>}
-      {all.map((set) => (
-        <table key={set.me} className="table table-sm">
+    <div className="grid gap-2 py-1">
+      <ul className="grid gap-1">
+        {s.ports.flatMap((port) =>
+          port.channels.map((c) => {
+            if (seen.has(c.portId)) return null;
+            seen.add(c.portId);
+            const v = views.find((x) => x.gem.port_id === c.portId);
+            const r = v ? rates?.[v.gem.name] : undefined;
+            return (
+              <li
+                key={c.portId}
+                className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 rounded-field bg-base-200/60 px-3 py-1.5 text-sm"
+              >
+                <span className="tabular w-20 font-semibold">GEM {c.portId}</span>
+                <span className="text-base-content/70">{ct.dir(c)}</span>
+                {ct.pbits(c) && <span className="text-base-content/70">{ct.pbits(c)}</span>}
+                {(port.vlans?.length ?? 0) > 1 && (
+                  <span className="text-xs text-base-content/60">{t("fibre.sharedBroadcast")}</span>
+                )}
+                {c.allocId != null && (
+                  <span className="tabular text-xs text-base-content/60">
+                    T-CONT · Alloc-ID {c.allocId}
+                  </span>
+                )}
+                {c.queue && (
+                  <span className="text-xs text-base-content/60">
+                    {t("fibre.queue", { p: c.queue.priority, w: c.queue.weight ?? "–" })}
+                  </span>
+                )}
+                {c.encrypted && <span className="text-xs text-base-content/60">AES</span>}
+                {ct.rate(c.up) && <span className="text-xs">↑ {ct.rate(c.up)}</span>}
+                {ct.rate(c.down) && <span className="text-xs">↓ {ct.rate(c.down)}</span>}
+                {v && <span className="text-xs text-base-content/70">{gem.use(v)}</span>}
+                {r && (
+                  <span className="tabular ml-auto text-xs">
+                    ↓ {bitrate(r.down, lang)} ↑ {bitrate(r.up, lang)}
+                  </span>
+                )}
+              </li>
+            );
+          }),
+        )}
+      </ul>
+      {s.multicast && <MulticastFacts m={s.multicast} />}
+    </div>
+  );
+}
+
+function ServicesTable({ list, q }: { list: Service[]; q: string }) {
+  const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  const rates = useTraffic().at(-1)?.gems;
+  const use = useServiceUse();
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
+  const views = gems(live);
+  const needle = q.trim();
+  const shown = list.filter(
+    (s) =>
+      !needle ||
+      String(s.vlan ?? "").includes(needle) ||
+      s.hostVlans.some((h) => String(h ?? "").includes(needle)) ||
+      s.ports.some((p) => p.channels.some((c) => String(c.portId).includes(needle))),
+  );
+  const pager = usePages(shown);
+  const key = (s: Service) => String(s.vlan ?? "none");
+  const toggle = (k: string) =>
+    setOpen((o) => {
+      const n = new Set(o);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      return n;
+    });
+
+  return (
+    <>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <table className="table table-sm table-pin-rows">
           <thead>
             <tr>
+              <th className="w-6" />
+              <th>{t("fibre.colVlan")}</th>
+              <th>{t("fibre.colHost")}</th>
+              <th>{t("fibre.colChannels")}</th>
+              <th>{t("fibre.colStick")}</th>
+              <th className="text-right">{t("fibre.now")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pager.shown.map((s) => {
+              const k = key(s);
+              const ids = [...new Set(s.ports.flatMap((p) => p.channels))];
+              let down = 0;
+              let up = 0;
+              for (const c of new Set(ids.map((c) => c.portId))) {
+                const v = views.find((x) => x.gem.port_id === c);
+                const r = v ? rates?.[v.gem.name] : undefined;
+                down += r?.down ?? 0;
+                up += r?.up ?? 0;
+              }
+              const isOpen = open.has(k);
+              return (
+                <Fragment key={k}>
+                  <tr className="cursor-pointer hover:bg-base-200/60" onClick={() => toggle(k)}>
+                    <td>
+                      <ChevronRight
+                        className={`size-4 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                      />
+                    </td>
+                    <td className="tabular font-semibold">
+                      {s.vlan == null ? t("fibre.noVlan") : s.vlan}
+                    </td>
+                    <td className="tabular">{hostText(t, s)}</td>
+                    <td>
+                      <span className="flex flex-wrap gap-1">
+                        {s.ports.flatMap((p) =>
+                          p.channels.map((c) => (
+                            <span
+                              key={`${p.id}-${c.portId}`}
+                              className={`badge badge-sm tabular ${(p.vlans?.length ?? 0) > 1 ? "badge-ghost" : "badge-outline"}`}
+                              title={
+                                (p.vlans?.length ?? 0) > 1 ? t("fibre.sharedBroadcast") : undefined
+                              }
+                            >
+                              {c.portId}
+                              {c.pbits.length > 0 && c.pbits.length < 8 && (
+                                <span className="text-base-content/55">
+                                  {" "}
+                                  p
+                                  {c.pbits.length > 1
+                                    ? `${c.pbits[0]}–${c.pbits.at(-1)}`
+                                    : c.pbits[0]}
+                                </span>
+                              )}
+                            </span>
+                          )),
+                        )}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="flex flex-wrap gap-1">
+                        {use(s).map((u) => (
+                          <Badge key={u.text} tone={u.tone}>
+                            {u.text}
+                          </Badge>
+                        ))}
+                      </span>
+                    </td>
+                    <td className="tabular text-right text-xs whitespace-nowrap">
+                      ↓ {bitrate(down, lang)} ↑ {bitrate(up, lang)}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr>
+                      <td />
+                      <td colSpan={5}>
+                        <ServiceDetails s={s} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+            {!pager.shown.length && (
+              <tr>
+                <td colSpan={6} className="text-sm text-base-content/65">
+                  {t("fibre.noMatch")}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <Pager pager={pager} />
+    </>
+  );
+}
+
+function RulesTable({ mib, q }: { mib: Mib; q: string }) {
+  const { t } = useI18n();
+  const text = useRuleText();
+  const rows = vlanRules(mib).flatMap((set) => set.rules.map((r, i) => ({ me: set.me, i, r })));
+  const needle = q.trim();
+  const shown = rows.filter((x) => {
+    if (!needle) return true;
+    const tr = translation(x.r);
+    return String(tr?.from ?? "").includes(needle) || String(tr?.to ?? "").includes(needle);
+  });
+  const pager = usePages(shown);
+  return (
+    <>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <table className="table table-sm table-pin-rows">
+          <thead>
+            <tr>
+              <th className="w-10">#</th>
               <th>{t("fibre.ruleFrom")}</th>
               <th>{t("fibre.ruleDo")}</th>
             </tr>
           </thead>
           <tbody>
-            {set.rules.map((r, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the rules have no other key
-              <tr key={i} className={r.remove === 3 ? "text-base-content/60" : ""}>
-                <td>{text.match(r)}</td>
-                <td>{text.action(r)}</td>
+            {pager.shown.map((x) => (
+              <tr key={`${x.me}-${x.i}`} className={x.r.remove === 3 ? "text-base-content/60" : ""}>
+                <td className="tabular text-base-content/55">{x.i + 1}</td>
+                <td>{text.match(x.r)}</td>
+                <td>{text.action(x.r)}</td>
               </tr>
             ))}
+            {!pager.shown.length && (
+              <tr>
+                <td colSpan={3} className="text-sm text-base-content/65">
+                  {rows.length ? t("fibre.noMatch") : t("fibre.rulesNone")}
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
-      ))}
-    </Card>
+      </div>
+      <Pager pager={pager} />
+    </>
   );
 }
 
@@ -519,30 +671,106 @@ function OmciState({ children }: { children: ReactNode }) {
 function ServicesTab() {
   const { t } = useI18n();
   const { omci, mib } = useMib();
+  const [view, setView] = useState<"services" | "rules">("services");
+  const [q, setQ] = useState("");
   const list = servicesOf(mib);
+  const rules = vlanRules(mib).reduce((n, set) => n + set.rules.length, 0);
   return (
     <OmciState>
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="grid min-h-0 content-start gap-4 lg:overflow-auto">
-          <p className="text-sm text-base-content/70">{t("fibre.servicesHint")}</p>
+      <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
+        <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div role="tablist" className="tabs tabs-border">
+              <button
+                type="button"
+                role="tab"
+                className={`tab ${view === "services" ? "tab-active" : ""}`}
+                onClick={() => setView("services")}
+              >
+                {t("fibre.viewServices", { n: list.length })}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={`tab ${view === "rules" ? "tab-active" : ""}`}
+                onClick={() => setView("rules")}
+              >
+                {t("fibre.viewRules", { n: rules })}
+              </button>
+            </div>
+            <Filter value={q} onChange={setQ} placeholder={t("fibre.filterVlan")} />
+          </div>
+          <p className="text-xs text-base-content/65">
+            {view === "services" ? t("fibre.servicesHint") : t("fibre.rulesHint")}
+          </p>
           {omci.data?.truncated && (
             <div role="alert" className="alert alert-warning alert-soft text-sm">
               {t("fibre.truncated")}
             </div>
           )}
-          <div className="grid gap-4 xl:grid-cols-2">
-            {list.map((s) => (
-              <ServiceCard key={s.vlan ?? "none"} s={s} />
-            ))}
-          </div>
+          {view === "services" ? (
+            <ServicesTable list={list} q={q} />
+          ) : (
+            <RulesTable mib={mib} q={q} />
+          )}
         </div>
-        <RulesCard mib={mib} />
-      </div>
+      </section>
     </OmciState>
   );
 }
 
 /* --------------------------------------------------------------- channels */
+
+/** The eight priorities of IEEE 802.1p, those a channel carries filled in. */
+function Pbits({ list }: { list: number[] }) {
+  const { t } = useI18n();
+  if (!list.length) return <span className="text-xs text-base-content/45">–</span>;
+  return (
+    <span className="flex gap-0.5" title={t("fibre.pbits", { list: list.join(", ") })}>
+      {Array.from({ length: 8 }, (_, p) => (
+        <span
+          // biome-ignore lint/suspicious/noArrayIndexKey: the eight priorities are fixed
+          key={p}
+          className={`grid size-4 place-items-center rounded-[3px] text-[9px] tabular ${list.includes(p) ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/35"}`}
+        >
+          {p}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** A rate as a bar on a logarithmic scale, so that kilobits and gigabits both show. */
+function RateBar({
+  bps,
+  max,
+  arrow,
+  tone,
+}: {
+  bps: number;
+  max: number;
+  arrow: string;
+  tone: string;
+}) {
+  const { lang } = useI18n();
+  const share = bps > 0 ? Math.log10(1 + bps / 1e3) / Math.log10(1 + Math.max(max, 1e6) / 1e3) : 0;
+  return (
+    <span className="grid grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-2">
+      <span className="h-1.5 overflow-hidden rounded-full bg-base-200">
+        <span
+          className={`block h-full rounded-full ${tone}`}
+          style={{ width: `${Math.round(share * 100)}%` }}
+        />
+      </span>
+      <span className="tabular text-right text-xs">
+        {arrow} {bitrate(bps, lang)}
+      </span>
+    </span>
+  );
+}
+
+/* The columns of a channel's row, its heading's as well. */
+const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_minmax(10rem,14rem)_8rem]";
 
 function ChannelsTab() {
   const { t, lang } = useI18n();
@@ -550,96 +778,126 @@ function ChannelsTab() {
   const rates = useTraffic().at(-1)?.gems;
   const { mib } = useMib();
   const gem = useGemText();
-  const ct = useChannelText();
-  const list = servicesOf(mib);
-  const byPort = new Map<number, { c: Channel; vlans: (number | null)[] }>();
-  for (const s of list)
+  const views = gems(live);
+  const info = new Map<number, { c: Channel; vlans: (number | null)[] }>();
+  for (const s of servicesOf(mib))
     for (const p of s.ports)
       for (const c of p.channels) {
-        const had = byPort.get(c.portId);
-        byPort.set(c.portId, { c, vlans: [...(had?.vlans ?? []), s.vlan] });
+        const had = info.get(c.portId);
+        info.set(c.portId, { c, vlans: [...(had?.vlans ?? []), s.vlan] });
       }
-  const tconts = (live?.tconts ?? []).filter((x) => x.alloc_id != null);
+  const max = Math.max(
+    1e6,
+    ...views.map((v) => Math.max(rates?.[v.gem.name]?.down ?? 0, rates?.[v.gem.name]?.up ?? 0)),
+  );
+  const groups = new Map<number | null, typeof views>();
+  for (const v of views) groups.set(v.gem.tcont, [...(groups.get(v.gem.tcont) ?? []), v]);
+  const order = [...groups.keys()].sort((a, z) => (a ?? 99) - (z ?? 99));
 
   return (
-    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[minmax(0,1fr)_auto]">
-      <Card title={t("fibre.gemPorts")} scroll>
-        <table className="table table-sm table-pin-rows">
-          <thead>
-            <tr>
-              <th>{t("fibre.channel")}</th>
-              <th>{t("fibre.direction")}</th>
-              <th>{t("fibre.serviceCol")}</th>
-              <th>{t("fibre.pbitsCol")}</th>
-              <th>{t("fibre.allocId")}</th>
-              <th>{t("fibre.use")}</th>
-              <th className="text-right">{t("fibre.now")}</th>
-              <th className="text-right">{t("fibre.received")}</th>
-              <th className="text-right">{t("fibre.sent")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {gems(live).map((v) => {
-              const g = v.gem;
-              const o = byPort.get(g.port_id);
-              const c = live?.gem_counters?.[g.name];
-              const r = rates?.[g.name];
-              return (
-                <tr key={g.name}>
-                  <td className="tabular font-medium whitespace-nowrap">
-                    GEM {g.port_id}
-                    {o?.c.encrypted && (
-                      <span className="ml-1 text-xs text-base-content/55">AES</span>
-                    )}
-                  </td>
-                  <td>{gem.direction(g)}</td>
-                  <td className="tabular">
-                    {o ? o.vlans.map((x) => (x == null ? "–" : x)).join(", ") : "–"}
-                  </td>
-                  <td>{o ? (ct.pbits(o.c) ?? "–") : "–"}</td>
-                  <td className="tabular">{v.allocId ?? "–"}</td>
-                  <td>{gem.use(v)}</td>
-                  <td className="tabular text-right">
-                    {r ? `↓ ${bitrate(r.down, lang)} ↑ ${bitrate(r.up, lang)}` : "–"}
-                  </td>
-                  <td className="tabular text-right">{bytes(c?.pon_rx_octets, lang)}</td>
-                  <td className="tabular text-right">{bytes(c?.pon_tx_octets, lang)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </Card>
-      <Card title={t("fibre.tconts")}>
-        <p className="text-xs text-base-content/65">{t("fibre.tcontsHint")}</p>
-        <div className="flex flex-wrap gap-2">
-          {tconts.length
-            ? tconts.map((x) => (
-                <span key={x.index} className="badge badge-ghost tabular gap-1">
-                  T-CONT {x.index} · Alloc-ID {x.alloc_id}
-                  <span className="text-base-content/55">
-                    {gems(live)
-                      .filter((g) => g.gem.tcont === x.index)
-                      .map((g) => `GEM ${g.gem.port_id}`)
-                      .join(", ")}
-                  </span>
-                </span>
-              ))
-            : t("common.none")}
+    <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
+      <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="card-title text-base">{t("fibre.gemPorts")}</h2>
+          <span className="flex items-center gap-4 text-xs text-base-content/60">
+            <span>{t("fibre.channelsHint")}</span>
+            <HistoryNote />
+          </span>
         </div>
-      </Card>
-    </div>
+        <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto pr-1">
+          <div
+            className={`sticky top-0 z-10 hidden gap-x-4 border-b border-base-300 bg-base-100 px-2 pb-1.5 text-xs font-medium text-base-content/60 md:grid ${CHANNEL_COLS}`}
+          >
+            <span>{t("fibre.channel")}</span>
+            <span>{t("fibre.direction")}</span>
+            <span>{t("fibre.colUse")}</span>
+            <span>{t("fibre.colPbits")}</span>
+            <span>{t("fibre.now")}</span>
+            <span className="text-right">{t("fibre.colTotal")}</span>
+          </div>
+          {order.map((tc) => {
+            const list = groups.get(tc) ?? [];
+            const alloc = list[0]?.allocId;
+            return (
+              <div key={String(tc)} className="grid gap-1.5">
+                <div className="flex items-baseline gap-2 border-b border-base-300 pb-1">
+                  <span className="text-sm font-semibold">
+                    {tc == null
+                      ? t("fibre.downOnlyGroup")
+                      : t("fibre.tcontGroup", { n: tc, alloc: alloc ?? "–" })}
+                  </span>
+                  <span className="text-xs text-base-content/55">
+                    {tc == null ? t("fibre.downOnlyHint") : t("fibre.tcontHint")}
+                  </span>
+                </div>
+                {list.map((v) => {
+                  const g = v.gem;
+                  const o = info.get(g.port_id);
+                  const r = rates?.[g.name];
+                  const c = live?.gem_counters?.[g.name];
+                  return (
+                    <div
+                      key={g.name}
+                      className={`grid items-center gap-x-4 gap-y-1 rounded-field px-2 py-1.5 hover:bg-base-200/50 ${CHANNEL_COLS}`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="tabular font-semibold">GEM {g.port_id}</span>
+                        {o?.c.encrypted && (
+                          <Lock className="size-3.5 text-base-content/50" aria-label="AES" />
+                        )}
+                      </span>
+                      <span className="text-xs text-base-content/70">{gem.direction(g)}</span>
+                      <span className="flex flex-wrap items-center gap-1 text-xs">
+                        {(o?.vlans ?? []).map((x) => (
+                          <span key={String(x)} className="badge badge-sm badge-outline tabular">
+                            {x == null ? "–" : `VLAN ${x}`}
+                          </span>
+                        ))}
+                        <span className="text-base-content/65">{gem.use(v)}</span>
+                      </span>
+                      <Pbits list={o?.c.pbits ?? []} />
+                      <span className="grid gap-0.5">
+                        <RateBar bps={r?.down ?? 0} max={max} arrow="↓" tone="bg-primary" />
+                        {g.direction !== "downstream" && (
+                          <RateBar bps={r?.up ?? 0} max={max} arrow="↑" tone="bg-secondary" />
+                        )}
+                      </span>
+                      <span className="tabular text-right text-xs text-base-content/60">
+                        <span className="block">↓ {bytes(c?.pon_rx_octets, lang)}</span>
+                        {g.direction !== "downstream" && (
+                          <span className="block">↑ {bytes(c?.pon_tx_octets, lang)}</span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 
 /* --------------------------------------------------------------- identity */
 
+type Group = "register" | "unit" | "software";
+
+/*
+ * A field of the identity: where it goes, its words, and what the OLT reads
+ * of it now, from the stick's OMCI database; null where no managed entity
+ * carries it.
+ */
 const IDENTITY_FIELDS: {
-  field: keyof Values;
+  field: Exclude<keyof Values, "ploam" | "loid_secret">;
   key: string;
   label: Key;
   hint?: Key;
-  group: "register" | "unit" | "software";
+  group: Group;
+  olt: ((u: Unit) => string | number | null) | null;
+  numeric?: boolean;
+  mono?: boolean;
 }[] = [
   {
     field: "serial",
@@ -647,17 +905,47 @@ const IDENTITY_FIELDS: {
     label: "fibre.serial",
     hint: "fibre.serialHint",
     group: "register",
+    olt: (u) => u.serial,
+    mono: true,
   },
-  { field: "loid", key: "LOID", label: "fibre.loid", hint: "fibre.loidHint", group: "register" },
-  { field: "vendor_id", key: "VENDOR_ID", label: "fibre.vendorId", group: "unit" },
-  { field: "version", key: "VERSION", label: "fibre.version", group: "unit" },
-  { field: "equipment_id", key: "EQUIPMENT_ID", label: "fibre.equipmentId", group: "unit" },
-  { field: "model", key: "MODEL", label: "fibre.model", group: "unit" },
+  {
+    field: "loid",
+    key: "LOID",
+    label: "fibre.loid",
+    hint: "fibre.loidHint",
+    group: "register",
+    olt: (u) => u.loid,
+  },
+  {
+    field: "vendor_id",
+    key: "VENDOR_ID",
+    label: "fibre.vendorId",
+    hint: "fibre.vendorIdHint",
+    group: "unit",
+    olt: (u) => u.vendorId,
+    mono: true,
+  },
+  {
+    field: "version",
+    key: "VERSION",
+    label: "fibre.version",
+    group: "unit",
+    olt: (u) => u.version,
+  },
+  {
+    field: "equipment_id",
+    key: "EQUIPMENT_ID",
+    label: "fibre.equipmentId",
+    group: "unit",
+    olt: (u) => u.equipment,
+  },
+  { field: "model", key: "MODEL", label: "fibre.model", group: "unit", olt: null },
   {
     field: "equipment_serial",
     key: "EQUIPMENT_SERIAL",
     label: "fibre.equipmentSerial",
     group: "unit",
+    olt: null,
   },
   {
     field: "omcc_version",
@@ -665,12 +953,16 @@ const IDENTITY_FIELDS: {
     label: "fibre.omccVersion",
     hint: "fibre.omccHint",
     group: "software",
+    olt: (u) => u.omcc,
+    numeric: true,
   },
   {
     field: "vendor_product_code",
     key: "VENDOR_PRODUCT_CODE",
     label: "fibre.productCode",
     group: "software",
+    olt: (u) => u.productCode,
+    numeric: true,
   },
   {
     field: "tm_option",
@@ -678,10 +970,36 @@ const IDENTITY_FIELDS: {
     label: "fibre.tmOption",
     hint: "fibre.tmHint",
     group: "software",
+    olt: (u) => u.tmOption,
+    numeric: true,
   },
-  { field: "sw_version0", key: "SW_VERSION0", label: "fibre.swVersion0", group: "software" },
-  { field: "sw_version1", key: "SW_VERSION1", label: "fibre.swVersion1", group: "software" },
-  { field: "pack_version", key: "PACK_VERSION", label: "fibre.packVersion", group: "software" },
+  {
+    field: "sw_version0",
+    key: "SW_VERSION0",
+    label: "fibre.swVersion0",
+    group: "software",
+    olt: (u) => u.images.find((i) => i.id === 0)?.version ?? null,
+  },
+  {
+    field: "sw_version1",
+    key: "SW_VERSION1",
+    label: "fibre.swVersion1",
+    group: "software",
+    olt: (u) => u.images.find((i) => i.id === 1)?.version ?? null,
+  },
+  {
+    field: "pack_version",
+    key: "PACK_VERSION",
+    label: "fibre.packVersion",
+    group: "software",
+    olt: (u) => u.packVersion,
+  },
+];
+
+const GROUPS: { id: Group; label: Key; hint: Key }[] = [
+  { id: "register", label: "fibre.groupRegister", hint: "fibre.groupRegisterHint" },
+  { id: "unit", label: "fibre.groupUnit", hint: "fibre.groupUnitHint" },
+  { id: "software", label: "fibre.groupSoftware", hint: "fibre.groupSoftwareHint" },
 ];
 
 const numberOrEmpty = (max: number) =>
@@ -730,16 +1048,81 @@ function initial(i: Identity): Values {
   };
 }
 
+/* The identity form's columns: the field, the stick's value, what the OLT reads. */
+const IDENTITY_COLS = "md:grid-cols-[minmax(11rem,16rem)_minmax(12rem,26rem)_minmax(10rem,1fr)]";
+
+/* What the OLT reads beside what the stick holds: the same, another value, or a default. */
+function OltValue({
+  stick,
+  olt,
+  numeric,
+  mono,
+}: {
+  stick: string;
+  olt: string | number | null | undefined;
+  numeric?: boolean;
+  mono?: boolean;
+}) {
+  const { t } = useI18n();
+  if (olt === undefined)
+    return <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>;
+  if (olt === null)
+    return <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>;
+  /* An empty value the OLT reads is a value too: the same as an empty field. */
+  const empty = olt === "";
+  const shown = empty
+    ? t("fibre.oltEmpty")
+    : numeric && typeof olt === "number"
+      ? `${olt} (0x${olt.toString(16)})`
+      : String(olt);
+  const same = empty
+    ? stick.trim() === ""
+    : stick.trim() === ""
+      ? null
+      : numeric
+        ? Number(stick) === Number(olt)
+        : stick.trim().toUpperCase() === String(olt).trim().toUpperCase();
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      {same === true && (
+        <Check className="size-3.5 shrink-0 text-success" aria-label={t("fibre.oltSame")} />
+      )}
+      {same === false && (
+        <CircleAlert
+          className="size-3.5 shrink-0 text-warning"
+          aria-label={t("fibre.oltDiffers")}
+        />
+      )}
+      <span
+        className={`truncate text-sm ${mono && !empty ? "font-mono" : ""} ${empty ? "italic text-base-content/55" : ""} ${same === false ? "text-warning" : ""}`}
+        title={
+          same === false
+            ? t("fibre.oltDiffersHint")
+            : same === null
+              ? t("fibre.oltDefaultHint")
+              : undefined
+        }
+      >
+        {shown}
+      </span>
+    </span>
+  );
+}
+
 function IdentityForm({ identity }: { identity: Identity }) {
   const { t } = useI18n();
   const change = useIdentityChange();
   const state = useChangeState(change);
+  const { omci, mib } = useMib();
+  const u = mib.empty ? null : unitOf(mib);
   const form = useForm<Values>({
     resolver: zodResolver(identitySchema(t("fibre.serialRule"))),
     defaultValues: initial(identity),
   });
   const { errors, isDirty, dirtyFields } = form.formState;
+  const values = form.watch();
   const extended = identity.loid !== undefined;
+  const changed = Object.keys(dirtyFields).length;
 
   useEffect(() => {
     if (!form.formState.isDirty) form.reset(initial(identity));
@@ -755,66 +1138,136 @@ function IdentityForm({ identity }: { identity: Identity }) {
     change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
   });
 
-  const group = (g: (typeof IDENTITY_FIELDS)[number]["group"]) =>
-    IDENTITY_FIELDS.filter(
-      (f) =>
-        f.group === g &&
-        (extended || !["loid", "sw_version0", "sw_version1", "pack_version"].includes(f.field)),
-    ).map((f) => (
-      <Field
-        key={f.field}
-        label={t(f.label)}
-        hint={f.hint ? t(f.hint) : undefined}
-        error={errors[f.field]?.message}
-        {...form.register(f.field)}
+  const row = (
+    label: string,
+    hint: string | undefined,
+    input: ReactNode,
+    olt: ReactNode,
+    key: string,
+  ) => (
+    <div
+      key={key}
+      className={`grid items-center gap-x-6 gap-y-1 border-b border-base-200 py-2 last:border-0 ${IDENTITY_COLS}`}
+    >
+      <div className="min-w-0">
+        <div className="text-sm font-medium">{label}</div>
+        {hint && <div className="text-xs text-base-content/55">{hint}</div>}
+      </div>
+      <div className="min-w-0">{input}</div>
+      <div className="min-w-0">
+        <span className="text-[11px] uppercase tracking-wide text-base-content/45 md:hidden">
+          {t("fibre.colOlt")}:{" "}
+        </span>
+        {olt}
+      </div>
+    </div>
+  );
+
+  const secret = (name: "ploam" | "loid_secret", set: boolean | undefined) => (
+    <label className={`input input-sm w-full ${errors[name] ? "input-error" : ""}`}>
+      <KeyRound className="size-3.5 opacity-50" />
+      <input
+        type={MASKED}
+        autoComplete="new-password"
+        placeholder={set ? t("internet.passwordKept") : t("internet.passwordNone")}
+        {...form.register(name)}
       />
-    ));
+    </label>
+  );
 
   return (
-    <form onSubmit={submit} noValidate className="grid min-h-0 flex-1 gap-4">
-      <div className="grid min-h-0 gap-4 lg:grid-cols-3 lg:overflow-auto">
-        <fieldset className="grid content-start gap-3">
-          <legend className="mb-2 text-sm font-semibold">{t("fibre.groupRegister")}</legend>
-          {group("register")}
-          <Field
-            label={t("fibre.ploam")}
-            secret
-            autoComplete="new-password"
-            placeholder={
-              identity.ploam_set ? t("internet.passwordKept") : t("internet.passwordNone")
-            }
-            hint={t("fibre.ploamHint")}
-            {...form.register("ploam")}
-          />
-          {extended && (
-            <Field
-              label={t("fibre.loidPassword")}
-              secret
-              autoComplete="new-password"
-              placeholder={
-                identity.loid_password_set ? t("internet.passwordKept") : t("internet.passwordNone")
-              }
-              {...form.register("loid_secret")}
-            />
-          )}
-        </fieldset>
-        <fieldset className="grid content-start gap-3">
-          <legend className="mb-2 text-sm font-semibold">{t("fibre.groupUnit")}</legend>
-          {group("unit")}
-        </fieldset>
-        <fieldset className="grid content-start gap-3">
-          <legend className="mb-2 text-sm font-semibold">{t("fibre.groupSoftware")}</legend>
-          {group("software")}
-        </fieldset>
+    <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col gap-3">
+      <div
+        className={`hidden gap-x-6 px-0 text-[11px] font-semibold uppercase tracking-wide text-base-content/50 md:grid ${IDENTITY_COLS}`}
+      >
+        <span>{t("fibre.colField")}</span>
+        <span>{t("fibre.colOnStick")}</span>
+        <span>{t("fibre.colOlt")}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
+      <div className="min-h-0 flex-1 overflow-auto pr-1">
+        {GROUPS.map((g) => (
+          <fieldset key={g.id} className="mb-4">
+            <legend className="mb-1 w-full border-b border-base-300 pb-1">
+              <span className="text-sm font-semibold">{t(g.label)}</span>
+              <span className="ml-2 text-xs text-base-content/55">{t(g.hint)}</span>
+            </legend>
+            {IDENTITY_FIELDS.filter(
+              (f) =>
+                f.group === g.id &&
+                (extended ||
+                  !["loid", "sw_version0", "sw_version1", "pack_version"].includes(f.field)),
+            ).map((f) =>
+              row(
+                t(f.label),
+                f.hint ? t(f.hint) : undefined,
+                <>
+                  <input
+                    className={`input input-sm w-full ${f.mono ? "font-mono" : ""} ${errors[f.field] ? "input-error" : ""} ${dirtyFields[f.field] ? "border-primary" : ""}`}
+                    spellcheck={false}
+                    autoComplete="off"
+                    placeholder={t("fibre.factoryValue")}
+                    {...form.register(f.field)}
+                  />
+                  {errors[f.field] && (
+                    <p className="mt-0.5 text-xs text-error">{errors[f.field]?.message}</p>
+                  )}
+                </>,
+                <OltValue
+                  stick={values[f.field] ?? ""}
+                  olt={!u ? undefined : f.olt ? f.olt(u) : null}
+                  numeric={f.numeric}
+                  mono={f.mono}
+                />,
+                f.field,
+              ),
+            )}
+            {g.id === "register" && (
+              <>
+                {row(
+                  t("fibre.ploam"),
+                  t("fibre.ploamHint"),
+                  secret("ploam", identity.ploam_set),
+                  <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>,
+                  "ploam",
+                )}
+                {extended &&
+                  row(
+                    t("fibre.loidPassword"),
+                    undefined,
+                    secret("loid_secret", identity.loid_password_set),
+                    u ? (
+                      <span className="text-sm">
+                        {omci.data?.logical_password_set
+                          ? t("fibre.secretSet")
+                          : t("fibre.secretNone")}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>
+                    ),
+                    "loid_secret",
+                  )}
+              </>
+            )}
+          </fieldset>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
+        <button
+          type="submit"
+          className="btn btn-primary btn-sm"
+          disabled={!isDirty || change.isPending}
+        >
           {t("internet.save")}
         </button>
         {isDirty && (
-          <button type="button" className="btn btn-ghost" onClick={() => form.reset()}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => form.reset()}>
             {t("form.discard")}
           </button>
+        )}
+        {changed > 0 && (
+          <span className="text-sm text-base-content/70">
+            {t("fibre.changedN", { n: changed })}
+          </span>
         )}
         <SaveState {...state} />
         <span className="ml-auto max-w-xl text-xs text-warning">{t("fibre.identityWarning")}</span>
@@ -823,63 +1276,23 @@ function IdentityForm({ identity }: { identity: Identity }) {
   );
 }
 
-function OltView() {
-  const { t } = useI18n();
-  const { mib } = useMib();
-  const u = unitOf(mib);
-  if (mib.empty) return null;
-  return (
-    <Card title={t("fibre.oltSees")} className="lg:w-96">
-      <Facts
-        rows={[
-          [t("fibre.vendorId"), u.vendorId ?? "–"],
-          [t("fibre.version"), u.version ?? "–"],
-          [t("fibre.equipmentId"), u.equipment ?? "–"],
-          [t("fibre.loid"), u.loid ?? "–"],
-          [t("fibre.omccVersion"), u.omcc != null ? `0x${u.omcc.toString(16)}` : "–"],
-          [t("fibre.productCode"), u.productCode ?? "–"],
-          [t("fibre.tmOption"), u.tmOption ?? "–"],
-          ...u.images.map(
-            (i) =>
-              [
-                t("fibre.imageN", { n: i.id }),
-                <span key={i.id}>
-                  {i.version || "–"}
-                  <span className="block text-xs font-normal text-base-content/60">
-                    {[
-                      i.active && t("fibre.imageActive"),
-                      i.committed && t("fibre.imageCommitted"),
-                      i.valid && t("fibre.imageValid"),
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                  </span>
-                </span>,
-              ] as [ReactNode, ReactNode],
-          ),
-        ]}
-      />
-      <p className="text-xs text-base-content/60">{t("fibre.oltSeesHint")}</p>
-    </Card>
-  );
-}
-
 function IdentityTab() {
   const { t } = useI18n();
   const identity = useIdentity();
   return (
-    <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-      <Card
-        title={t("fibre.identity")}
-        action={
-          identity.data?.source && (
+    <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
+      <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="card-title text-base">{t("fibre.identity")}</h2>
+            <p className="text-sm text-base-content/70">{t("fibre.identityHint")}</p>
+          </div>
+          {identity.data?.source && (
             <Badge tone={identity.data.source === "store" ? "good" : "info"}>
               {t(identity.data.source === "store" ? "fibre.fromStore" : "fibre.fromFactory")}
             </Badge>
-          )
-        }
-      >
-        <p className="text-sm text-base-content/70">{t("fibre.identityHint")}</p>
+          )}
+        </div>
         {identity.data ? (
           <IdentityForm identity={identity.data} />
         ) : identity.isError ? (
@@ -887,9 +1300,8 @@ function IdentityTab() {
         ) : (
           <span className="loading loading-spinner" />
         )}
-      </Card>
-      <OltView />
-    </div>
+      </div>
+    </section>
   );
 }
 
@@ -898,7 +1310,9 @@ function IdentityTab() {
 function decoded(b: Uint8Array | null): string {
   if (b == null) return "••••";
   const printable = b.length > 1 && [...b].every((c) => c === 0 || (c >= 32 && c < 127));
-  if (printable && b.some((c) => c !== 0)) return `"${String.fromCharCode(...b.filter((c) => c))}"`;
+  /* Text, an empty text as well: a field of zeros longer than a number. */
+  if (printable && (b.some((c) => c !== 0) || b.length > 4))
+    return `"${String.fromCharCode(...b.filter((c) => c))}"`;
   if (b.length <= 4) {
     let v = 0;
     for (const c of b) v = v * 256 + c;
@@ -910,70 +1324,118 @@ function decoded(b: Uint8Array | null): string {
 function OmciTab() {
   const { t } = useI18n();
   const { omci, mib } = useMib();
-  const classes = [...mib.byClass.keys()];
   const [cls, setCls] = useState<number | null>(null);
-  const shown = cls ?? classes[0] ?? null;
+  const [q, setQ] = useState("");
+  const classes = [...mib.byClass.keys()].filter(
+    (c) =>
+      !q ||
+      String(c).includes(q) ||
+      (CLASSES[c]?.name ?? "").toLowerCase().includes(q.toLowerCase()),
+  );
+  const shown = cls != null && mib.byClass.has(cls) ? cls : (classes[0] ?? null);
   return (
     <OmciState>
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
-        <Card title={t("fibre.omciClasses")} scroll>
-          <ul className="menu menu-sm w-full p-0">
-            {classes.map((c) => (
-              <li key={c}>
-                <button
-                  type="button"
-                  className={c === shown ? "menu-active" : ""}
-                  onClick={() => setCls(c)}
-                >
-                  <span className="tabular w-8 text-base-content/55">{c}</span>
-                  <span className="flex-1 truncate">{CLASSES[c]?.name ?? c}</span>
-                  <span className="badge badge-ghost badge-sm">{mib.all(c).length}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {omci.data?.frames && (
-            <p className="text-xs text-base-content/60">
-              {t("fibre.omciFramesValue", {
-                handled: omci.data.frames.handled,
-                rejected: omci.data.frames.rejected,
-              })}
-            </p>
-          )}
-        </Card>
-        <Card title={shown != null ? `${shown} · ${CLASSES[shown]?.name ?? ""}` : ""} scroll>
-          {shown != null &&
-            mib.all(shown).map((me) => (
-              <section key={me.id} className="grid gap-1">
-                <h3 className="tabular text-sm font-semibold">
-                  {t("fibre.instance")} 0x{me.id.toString(16).padStart(4, "0")} ({me.id})
-                </h3>
-                {me.error ? (
-                  <p className="text-xs text-warning">{t("fibre.omciTooBig")}</p>
-                ) : (
-                  <table className="table table-xs">
-                    <tbody>
-                      {[...me.attrs.entries()].map(([n, b]) => (
-                        <tr key={n}>
-                          <td className="tabular w-6 text-base-content/55">{n}</td>
-                          <td className="w-64">
-                            {CLASSES[shown]?.attrs[n] ?? n}
-                            {me.tables.has(n) && (
-                              <span className="ml-1 badge badge-ghost badge-xs">
-                                {t("fibre.table")}
-                              </span>
-                            )}
-                          </td>
-                          <td className="font-mono text-xs break-all">{hex(b) || "–"}</td>
-                          <td className="text-xs text-base-content/70">{decoded(b)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </section>
-            ))}
-        </Card>
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[22rem_minmax(0,1fr)]">
+        <section className="card flex min-h-0 border border-base-300 bg-base-100">
+          <div className="card-body min-h-0 gap-3 p-4">
+            <h2 className="card-title text-base">{t("fibre.omciClasses")}</h2>
+            <Filter
+              value={q}
+              onChange={setQ}
+              placeholder={t("fibre.classFilter")}
+              className="sm:w-full"
+            />
+            <ul className="grid min-h-0 flex-1 content-start gap-0.5 overflow-auto pr-1">
+              {classes.map((c) => (
+                <li key={c}>
+                  <button
+                    type="button"
+                    onClick={() => setCls(c)}
+                    className={`grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2 rounded-field px-2.5 py-2 text-left text-sm transition-colors ${c === shown ? "bg-primary/10 font-medium text-primary" : "hover:bg-base-200"}`}
+                  >
+                    <span
+                      className={`tabular text-xs ${c === shown ? "text-primary/80" : "text-base-content/50"}`}
+                    >
+                      {c}
+                    </span>
+                    <span className="leading-snug">{CLASSES[c]?.name ?? c}</span>
+                    <span className="badge badge-sm badge-ghost tabular">{mib.all(c).length}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {omci.data?.frames && (
+              <p className="border-t border-base-200 pt-2 text-xs text-base-content/60">
+                {t("fibre.omciFramesValue", {
+                  handled: omci.data.frames.handled,
+                  rejected: omci.data.frames.rejected,
+                })}
+              </p>
+            )}
+          </div>
+        </section>
+        <section className="card flex min-h-0 border border-base-300 bg-base-100">
+          <div className="card-body min-h-0 gap-3 p-4">
+            <h2 className="card-title text-base">
+              {shown != null && (
+                <>
+                  <span className="tabular text-base-content/50">{shown}</span>
+                  {CLASSES[shown]?.name ?? ""}
+                  <span className="badge badge-sm badge-ghost">
+                    {t("fibre.instancesN", { n: mib.all(shown).length })}
+                  </span>
+                </>
+              )}
+            </h2>
+            <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto pr-1">
+              {shown != null &&
+                mib.all(shown).map((me) => (
+                  <div key={me.id} className="overflow-hidden rounded-box border border-base-300">
+                    <div className="flex items-baseline gap-2 bg-base-200/70 px-3 py-1.5 text-sm">
+                      <span className="font-semibold">{t("fibre.instance")}</span>
+                      <span className="tabular font-mono">
+                        0x{me.id.toString(16).padStart(4, "0")}
+                      </span>
+                      <span className="tabular text-xs text-base-content/55">({me.id})</span>
+                    </div>
+                    {me.error ? (
+                      <p className="px-3 py-2 text-xs text-warning">{t("fibre.omciTooBig")}</p>
+                    ) : (
+                      <table className="table table-xs table-zebra">
+                        <thead>
+                          <tr>
+                            <th className="w-8">#</th>
+                            <th className="w-72">{t("fibre.colAttr")}</th>
+                            <th>{t("fibre.colRaw")}</th>
+                            <th className="w-40">{t("fibre.colRead")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...me.attrs.entries()].map(([n, b]) => (
+                            <tr key={n}>
+                              <td className="tabular w-8 text-base-content/50">{n}</td>
+                              <td className="w-72">
+                                {CLASSES[shown]?.attrs[n] ?? n}
+                                {me.tables.has(n) && (
+                                  <span className="ml-1.5 badge badge-ghost badge-xs">
+                                    {t("fibre.table")}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="font-mono text-xs break-all text-base-content/80">
+                                {hex(b) || "–"}
+                              </td>
+                              <td className="w-40 text-xs text-base-content/70">{decoded(b)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                ))}
+            </div>
+          </div>
+        </section>
       </div>
     </OmciState>
   );

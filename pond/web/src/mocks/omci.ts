@@ -105,6 +105,7 @@ me(7, 1, {
   5: str("", 25),
   6: "00".repeat(16),
 });
+me(6, 0x0180, { 1: u8(248), 2: u8(1), 4: str("V1.0", 14), 5: str("ZZZZ", 4) });
 me(131, 0, {
   1: str("XXXX", 4),
   2: str("EXAMPLE-OLT", 20),
@@ -185,29 +186,34 @@ for (let q = 0; q < 24; q++)
   });
 
 /* The rules for the host's frames: translate three VLANs, drop everything else. */
-me(
-  171,
-  0x0101,
-  {
-    1: u8(2),
-    2: u16(32),
-    3: u16(0x8100),
-    4: u16(0x8100),
-    5: u8(0),
-    6: [
-      translate(410, 0, 100),
-      translate(410, 6, 100),
-      translate(410, 7, 100),
-      translate(420, 4, 200),
-      translate(421, 4, 300),
-      rule({ op: NO, ov: VANY, ip: NO, iv: VANY }, 3, { op: NO, ov: 0, ip: NO, iv: 0 }),
-      rule({ op: NO, ov: VANY, ip: DEF, iv: VANY }, 3, { op: NO, ov: 0, ip: NO, iv: 0 }),
-      rule({ op: DEF, ov: VANY, ip: DEF, iv: VANY }, 3, { op: NO, ov: 0, ip: NO, iv: 0 }),
-    ].join(""),
-    7: u16(0x0101),
-  },
-  [6],
-);
+const translations = [
+  translate(410, 0, 100),
+  translate(410, 6, 100),
+  translate(410, 7, 100),
+  translate(420, 4, 200),
+  translate(421, 4, 300),
+];
+const drops = [
+  rule({ op: NO, ov: VANY, ip: NO, iv: VANY }, 3, { op: NO, ov: 0, ip: NO, iv: 0 }),
+  rule({ op: NO, ov: VANY, ip: DEF, iv: VANY }, 3, { op: NO, ov: 0, ip: NO, iv: 0 }),
+  rule({ op: DEF, ov: VANY, ip: DEF, iv: VANY }, 3, { op: NO, ov: 0, ip: NO, iv: 0 }),
+];
+const vlanRules = (more: string[]) =>
+  me(
+    171,
+    0x0101,
+    {
+      1: u8(2),
+      2: u16(32),
+      3: u16(0x8100),
+      4: u16(0x8100),
+      5: u8(0),
+      6: [...translations, ...more, ...drops].join(""),
+      7: u16(0x0101),
+    },
+    [6],
+  );
+vlanRules([]);
 
 /* Television: IGMPv2, snooping, its groups on the multicast channel in VLAN 300. */
 me(
@@ -243,8 +249,35 @@ me(
 me(310, 0x0101, { 1: u8(0), 2: u16(1), 3: u16(0), 4: u32(0), 5: u8(0) });
 
 export const OMCI: OmciValue = {
-  mes,
+  mes: [...mes],
   truncated: false,
   logical_password_set: false,
   frames: { handled: 1912, rejected: 0, answered: 1912 },
 };
+
+/*
+ * The same line with @n more services, for a look at a long list: host VLAN
+ * 1000 + i to fibre VLAN 2000 + i, each on its own channel 300 + i.
+ */
+export function withServices(n: number): OmciValue {
+  mes.length = 0;
+  const more: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const id = 0x2000 + i;
+    port(id, 3, id);
+    mapper(id, Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7].map((p) => [p, 0x3000 + i])));
+    vlanFilter(id, [2000 + i]);
+    ctp(0x3000 + i, 300 + i, 0x8002, 3, 0x8012);
+    iw(0x3000 + i, 5, id);
+    more.push(
+      rule({ op: NO, ov: VANY, ip: 8, iv: 1000 + i }, 1, { op: NO, ov: 0, ip: 8, iv: 2000 + i }),
+    );
+  }
+  vlanRules(more);
+  const added = [...mes];
+  const rules = added.pop();
+  return {
+    ...OMCI,
+    mes: [...OMCI.mes.map((m) => (m.class === 171 && rules ? rules : m)), ...added],
+  };
+}

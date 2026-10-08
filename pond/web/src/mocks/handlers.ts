@@ -10,12 +10,13 @@
 import { delay, HttpResponse, http } from "msw";
 import type { Identity, LaneMode, Mgmt, Session, Settings, SfpLane } from "../api/types";
 import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
-import { OMCI } from "./omci";
+import { OMCI, withServices } from "./omci";
 
 let adminSecret = "admin";
 const firmware = structuredClone(FIRMWARE);
 let signedIn: Session | null = null;
 let offline = false;
+let omci = OMCI;
 const started = Date.now();
 const counters = structuredClone(LIVE.port_counters);
 const cpu = structuredClone(
@@ -136,6 +137,13 @@ export const handlers = [
     return HttpResponse.json({ offline });
   }),
 
+  /* POST /api/__mock/vlans?n=300 gives the line 300 more services; n=0 takes them away. */
+  http.post("*/api/__mock/vlans", ({ request }) => {
+    const n = Math.min(1000, Number(new URL(request.url).searchParams.get("n")) || 0);
+    omci = n ? withServices(n) : OMCI;
+    return HttpResponse.json({ services: 3 + n });
+  }),
+
   http.get("*/api/auth/session", async () => {
     await delay(80);
     return away() ?? (signedIn ? HttpResponse.json(signedIn) : unauthorized());
@@ -241,7 +249,7 @@ export const handlers = [
 
   http.get("*/api/get/omci", async () => {
     await delay(600);
-    return away() ?? (signedIn ? HttpResponse.json({ id: "omci", value: OMCI }) : unauthorized());
+    return away() ?? (signedIn ? HttpResponse.json({ id: "omci", value: omci }) : unauthorized());
   }),
 
   http.get("*/api/get/banks", async () => {

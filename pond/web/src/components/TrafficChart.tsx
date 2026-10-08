@@ -7,6 +7,7 @@
  * at the chart shows the two rates at that moment.
  */
 
+import { Info } from "lucide-react";
 import { useState } from "react";
 import type { Rates } from "../api/live";
 import { useI18n } from "../i18n";
@@ -216,5 +217,23 @@ export function Sparkline({
         <span>{format(min)}</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Where the figures of the charts come from: the browser keeps them, from
+ * the moment the panel was opened, for ten minutes at most; a reload starts
+ * them again. The stick keeps no history of its own.
+ */
+export function HistoryNote() {
+  const { t } = useI18n();
+  return (
+    <span
+      className="flex items-center gap-1 text-xs text-base-content/55"
+      title={t("common.historyHint")}
+    >
+      <Info className="size-3.5" />
+      {t("common.history")}
+    </span>
   );
 }

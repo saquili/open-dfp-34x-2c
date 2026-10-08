@@ -61,6 +61,7 @@ static const uint16_t g_classes[] = {
 	256, /* ONU-G */
 	257, /* ONU2-G */
 	7,   /* software image */
+	6,   /* circuit pack */
 	131, /* OLT-G */
 	263, /* ANI-G */
 	11,  /* PPTP Ethernet UNI */

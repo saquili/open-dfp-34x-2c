@@ -56,6 +56,25 @@ export const CLASSES: Record<number, { name: string; attrs: Record<number, strin
       6: "Image hash",
     },
   },
+  6: {
+    name: "Circuit pack",
+    attrs: {
+      1: "Type",
+      2: "Number of ports",
+      3: "Serial number",
+      4: "Version",
+      5: "Vendor ID",
+      6: "Administrative state",
+      7: "Operational state",
+      8: "Bridged or IP ind",
+      9: "Equipment ID",
+      10: "Card configuration",
+      11: "Total T-CONT buffer number",
+      12: "Total priority queue number",
+      13: "Total traffic scheduler number",
+      14: "Power shed override",
+    },
+  },
   131: {
     name: "OLT-G",
     attrs: {
