@@ -95,4 +95,13 @@ int prov_slurp(const char *path, char *out, size_t cap, size_t *len);
 int prov_read_line(const char *path, char *out, size_t cap);
 long long prov_field(const char *text, const char *key, long long absent);
 
+/*
+ * Run @prog (found on PATH) with @args, a NULL-ended list, @input on its
+ * standard input when not NULL, and its output, both streams, in @out:
+ * its exit status, 128 and the signal for one that killed it, or a
+ * negative errno when it could not run.
+ */
+int prov_exec(const char *prog, const char *const *args, const char *input,
+	      char *out, size_t cap);
+
 #endif

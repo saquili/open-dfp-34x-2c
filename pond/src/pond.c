@@ -29,6 +29,7 @@
 
 #include "auth.h"
 #include "firmware.h"
+#include "mgmt.h"
 #include "prov.h"
 #include "providers.h"
 
@@ -614,6 +615,8 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		api_getm(c, hm->query);
 	else if (mg_match(hm->uri, mg_str("/api/get/*"), caps))
 		api_get(c, caps[0]);
+	else if (mg_match(hm->uri, mg_str("/api/set/mgmt"), NULL) && post)
+		mgmt_set(c, hm, handler);
 	else if (mg_match(hm->uri, mg_str("/api/set/*"), caps))
 		api_set(c, hm, caps[0]);
 	else
@@ -691,6 +694,12 @@ int main(int argc, char **argv)
 	}
 	if (!listening)
 		return 1;
+	/* A change of the management pair that waits: its address answers too. */
+	{
+		const char *colon = strrchr(g_listen[0], ':');
+
+		mgmt_resume(&mgr, colon ? colon + 1 : "8080", handler);
+	}
 	fprintf(stderr, "pond: %s; %s\n",
 		strlen(g_token) ? "token loaded" : "no token for scripts",
 		auth_default_password() ? "the default password is in force" :

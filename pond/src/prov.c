@@ -7,9 +7,11 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static bool room(struct prov_buf *b, size_t need)
@@ -250,4 +252,99 @@ long long prov_field(const char *text, const char *key, long long absent)
 			p++;
 	}
 	return absent;
+}
+
+int prov_exec(const char *prog, const char *const *args, const char *input,
+	      char *out, size_t cap)
+{
+	const char *argv[8];
+	size_t n = 0, len = 0;
+	int fds[2], in[2] = { -1, -1 }, st;
+	sigset_t none;
+	pid_t pid;
+
+	argv[n++] = prog;
+	while (args && *args && n < ARRAY_SIZE(argv) - 1)
+		argv[n++] = *args++;
+	argv[n] = NULL;
+	if (pipe(fds))
+		return -errno;
+	if (input && pipe(in)) {
+		int err = -errno;
+
+		close(fds[0]);
+		close(fds[1]);
+		return err;
+	}
+	pid = fork();
+	if (pid < 0) {
+		int err = -errno;
+
+		close(fds[0]);
+		close(fds[1]);
+		if (input) {
+			close(in[0]);
+			close(in[1]);
+		}
+		return err;
+	}
+	if (!pid) {
+		int null = input ? in[0] : open("/dev/null", O_RDONLY);
+
+		signal(SIGPIPE, SIG_DFL);
+		signal(SIGINT, SIG_DFL);
+		signal(SIGTERM, SIG_DFL);
+		signal(SIGCHLD, SIG_DFL);
+		sigemptyset(&none);
+		sigprocmask(SIG_SETMASK, &none, NULL);
+		if (null >= 0)
+			dup2(null, 0);
+		dup2(fds[1], 1);
+		dup2(fds[1], 2);
+		close(fds[0]);
+		close(fds[1]);
+		if (input)
+			close(in[1]);
+		execvp(argv[0], (char *const *)argv);
+		_exit(127);
+	}
+	close(fds[1]);
+	if (input) {
+		size_t left = strlen(input);
+
+		close(in[0]);
+		while (left) {
+			ssize_t w = write(in[1], input, left);
+
+			if (w < 0 && errno == EINTR)
+				continue;
+			if (w <= 0)
+				break;
+			input += w;
+			left -= (size_t)w;
+		}
+		close(in[1]);
+	}
+	for (;;) {
+		ssize_t got;
+		char sink[256];
+
+		if (len + 1 < cap)
+			got = read(fds[0], out + len, cap - len - 1);
+		else
+			got = read(fds[0], sink, sizeof(sink));
+		if (got < 0 && errno == EINTR)
+			continue;
+		if (got <= 0)
+			break;
+		if (len + 1 < cap)
+			len += (size_t)got;
+	}
+	if (cap)
+		out[len] = '\0';
+	close(fds[0]);
+	while (waitpid(pid, &st, 0) < 0)
+		if (errno != EINTR)
+			return -errno;
+	return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
 }

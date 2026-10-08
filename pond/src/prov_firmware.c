@@ -31,64 +31,7 @@ const char *fw_program(void)
 
 int fw_run(const char *const *args, char *out, size_t cap)
 {
-	const char *argv[8];
-	size_t n = 0, len = 0;
-	int fds[2], st;
-	sigset_t none;
-	pid_t pid;
-
-	argv[n++] = fw_program();
-	while (*args && n < ARRAY_SIZE(argv) - 1)
-		argv[n++] = *args++;
-	argv[n] = NULL;
-	if (pipe(fds))
-		return -errno;
-	pid = fork();
-	if (pid < 0) {
-		close(fds[0]);
-		close(fds[1]);
-		return -errno;
-	}
-	if (!pid) {
-		int null = open("/dev/null", O_RDONLY);
-
-		signal(SIGPIPE, SIG_DFL);
-		signal(SIGINT, SIG_DFL);
-		signal(SIGTERM, SIG_DFL);
-		sigemptyset(&none);
-		sigprocmask(SIG_SETMASK, &none, NULL);
-		if (null >= 0)
-			dup2(null, 0);
-		dup2(fds[1], 1);
-		dup2(fds[1], 2);
-		close(fds[0]);
-		close(fds[1]);
-		execv(argv[0], (char *const *)argv);
-		_exit(127);
-	}
-	close(fds[1]);
-	for (;;) {
-		ssize_t got;
-		char sink[256];
-
-		if (len + 1 < cap)
-			got = read(fds[0], out + len, cap - len - 1);
-		else
-			got = read(fds[0], sink, sizeof(sink));
-		if (got < 0 && errno == EINTR)
-			continue;
-		if (got <= 0)
-			break;
-		if (len + 1 < cap)
-			len += (size_t)got;
-	}
-	if (cap)
-		out[len] = '\0';
-	close(fds[0]);
-	while (waitpid(pid, &st, 0) < 0)
-		if (errno != EINTR)
-			return -errno;
-	return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+	return prov_exec(fw_program(), args, NULL, out, cap);
 }
 
 bool fw_field(const char *text, const char *key, char *out, size_t cap)

@@ -1898,6 +1898,94 @@ static void test_firmware(void)
 	unsetenv("POND_ONU_UPDATE");
 }
 
+/* Stand-ins for onu-lane, onu-mgmt, onu-store and hostname. */
+static const char lane_stub[] =
+	"#!/bin/sh\n"
+	"echo \"$*\" >>\"$POND_ROOT/lane.log\"\n"
+	"case $1 in\n"
+	"status) printf 'CHOICE=auto\\nNOW=2500basex\\n'\n"
+	"  [ -e \"$POND_ROOT/lane.trial\" ] &&"
+	" printf 'TRIAL_MODE=1000basex\\nTRIAL_PREVIOUS=auto\\nTRIAL_UNTIL=1060\\n' ;;\n"
+	"try) [ \"$2\" = bad ] && exit 2; [ -e \"$POND_ROOT/lane.trial\" ] &&"
+	" { echo 'onu-lane: a trial runs already'; exit 1; } ;;\n"
+	"esac\n"
+	"exit 0\n";
+
+static const char mgmt_stub[] =
+	"#!/bin/sh\n"
+	"printf 'VLAN=4094\\nADDRESS=198.51.100.2/30\\nIFACE=mgmt\\nDATA_ADDRESS=\\n'\n"
+	"[ -e \"$POND_ROOT/mgmt.pending\" ] &&"
+	" printf 'PENDING_VLAN=100\\nPENDING_ADDRESS=192.0.2.6/30\\nPENDING_UNTIL=1100\\n'\n"
+	"exit 0\n";
+
+static const char system_store_stub[] =
+	"#!/bin/sh\n[ \"$1\" = system ] && cat >\"$POND_ROOT/stored-system\"\n";
+
+static const char hostname_stub[] =
+	"#!/bin/sh\necho \"$1\" >\"$POND_ROOT/hostname-set\"\n";
+
+static void test_system(void)
+{
+	char buf[2048], stub[512], err[256], path[512];
+	const char *s;
+	int e;
+
+	puts("the stick's name, its lane and its management pair");
+
+	put("/lane-stub", lane_stub, 0755);
+	setenv("POND_ONU_LANE", prov_path("/lane-stub", stub, sizeof(stub)), 1);
+	s = render(prov_sfp_lane, buf, sizeof(buf), &e);
+	check(!e && !strcmp(s, "{\"choice\":\"auto\",\"active\":\"2500basex\",\"trial\":null}"),
+	      "the lane's setting and the one it runs in, no trial");
+	put("/lane.trial", "", 0644);
+	s = render(prov_sfp_lane, buf, sizeof(buf), &e);
+	check(!e && strstr(s, "\"trial\":{\"mode\":\"1000basex\",\"previous\":\"auto\","
+			      "\"until_s\":1060}") != NULL,
+	      "a setting on trial, what it replaced and when it ends");
+	check(prov_sfp_lane_set("MODE=1000basex-an\n", err, sizeof(err)) == -EBUSY &&
+		      strstr(err, "a trial runs already") != NULL,
+	      "a second trial is refused, with onu-lane's reason");
+	unlink(prov_path("/lane.trial", path, sizeof(path)));
+	check(prov_sfp_lane_set("MODE=bad\n", err, sizeof(err)) == -EINVAL,
+	      "a setting that is none is refused");
+	check(prov_sfp_lane_set("MODE=1000basex-an\n", err, sizeof(err)) == 0 &&
+		      prov_sfp_lane_set("KEEP=1\n", err, sizeof(err)) == 0 &&
+		      prov_sfp_lane_set("REVERT=1\n", err, sizeof(err)) == 0 &&
+		      file_has("/lane.log", "try 1000basex-an\nkeep\nrevert\n"),
+	      "a trial, a keep and a revert go to onu-lane");
+	check(prov_sfp_lane_set("SPEED=10\n", err, sizeof(err)) == -EINVAL,
+	      "a change that is none of them is refused");
+	unsetenv("POND_ONU_LANE");
+
+	put("/mgmt-stub", mgmt_stub, 0755);
+	setenv("POND_ONU_MGMT", prov_path("/mgmt-stub", stub, sizeof(stub)), 1);
+	s = render(prov_mgmt, buf, sizeof(buf), &e);
+	check(!e && !strcmp(s, "{\"vlan\":4094,\"address\":\"198.51.100.2/30\","
+			       "\"data_address\":null,\"pending\":null}"),
+	      "the management pair in use");
+	put("/mgmt.pending", "", 0644);
+	s = render(prov_mgmt, buf, sizeof(buf), &e);
+	check(!e && strstr(s, "\"pending\":{\"vlan\":100,\"address\":\"192.0.2.6/30\","
+			      "\"until_s\":1100}") != NULL,
+	      "a new pair that waits, and when it goes unless confirmed");
+	unsetenv("POND_ONU_MGMT");
+
+	put("/system-store", system_store_stub, 0755);
+	put("/hostname-stub", hostname_stub, 0755);
+	setenv("POND_STORE", prov_path("/system-store", stub, sizeof(stub)), 1);
+	setenv("POND_HOSTNAME", prov_path("/hostname-stub", path, sizeof(path)), 1);
+	check(prov_hostname_set("HOSTNAME=stick-7\n", err, sizeof(err)) == 0 &&
+		      file_has("/stored-system", "HOSTNAME=stick-7\n") &&
+		      file_has("/hostname-set", "stick-7\n"),
+	      "a name goes to the store and to the kernel");
+	check(prov_hostname_set("HOSTNAME=-stick\n", err, sizeof(err)) == -EINVAL &&
+		      prov_hostname_set("HOSTNAME=a b\n", err, sizeof(err)) == -EINVAL &&
+		      prov_hostname_set("NAME=x\n", err, sizeof(err)) == -EINVAL,
+	      "a name that is not one of RFC 1123 is refused");
+	unsetenv("POND_STORE");
+	unsetenv("POND_HOSTNAME");
+}
+
 static unsigned int be16_at(const uint8_t *p)
 {
 	return (unsigned int)p[0] << 8 | p[1];
@@ -2131,6 +2219,7 @@ int main(void)
 	test_firmware();
 	test_panel_values();
 	test_omci();
+	test_system();
 	test_table();
 	test_failure_paths();
 
