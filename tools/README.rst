@@ -20,6 +20,8 @@ item:
   distribution build takes its kernel headers from (**WI-14**).
 * ``image-budget/`` -- the size check of the two flash images against their
   partitions (**WI-14**).
+* ``lib-trim/`` -- the cut of the image's shared libraries to what its programs
+  use, with the check that every program finds what it needs.
 
 Each subdirectory carries its own README until it is filled.
 

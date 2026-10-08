@@ -1,0 +1,552 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""lib-trim: cut the shared libraries of a root filesystem to what its programs use.
+
+Usage: lib-trim --cross PREFIX --uclibc DIR [-n] [-q] ROOT
+
+ROOT is a target tree. Three steps, in this order:
+
+* a shared library in ROOT/lib or ROOT/usr/lib that no program loads, neither
+  itself nor through another library, is removed, with the symbolic links that
+  name it;
+* the C library, uClibc-ng's lib/libuClibc-VERSION.so, is linked again from
+  DIR, uClibc-ng's build directory, with only the members of its archive of
+  position-independent objects that define a symbol a program or another
+  library imports, and the members those need; the link is uClibc-ng's own,
+  and the new library's headers have to match the old one's;
+* every program is checked as the dynamic loader would load it: each library
+  it needs is there, and each symbol that it or one of its libraries has the
+  loader resolve, other than a weak one, is defined by one of them or by the
+  loader.
+
+PREFIX is the prefix of the cross tools (gcc, readelf, strip). -n reports
+what would be done and changes nothing; -q prints errors only. The exit status
+is 0 when the tree passed, 1 when a check failed (a library or a symbol that a
+program needs is missing), and 2 when the work could not be done.
+
+README.rst says why and how.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import glob
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
+
+ELF_MAGIC = b"\x7fELF"
+
+# The directories the dynamic loader searches, below the root.
+SEARCH = ("lib", "usr/lib")
+
+# The C library's file and the symbol uClibc-ng names as its initializer
+# (LDFLAGS-libc.so in libc/Makefile.in).
+LIBC_GLOB = "libuClibc-*.so"
+LIBC_INIT = "__uClibc_init"
+
+# Dynamic tags whose value has to be the same in the new C library; for the
+# others only their presence is compared, since they hold addresses and sizes.
+SAME_VALUE = frozenset({"NEEDED", "SONAME", "FLAGS", "FLAGS_1", "MIPS_FLAGS",
+                        "MIPS_RLD_VERSION", "MIPS_BASE_ADDRESS", "TEXTREL", "BIND_NOW"})
+
+_TYPE = re.compile(r"^\s*Type:\s+(\S+)")
+_FLAGS = re.compile(r"^\s*Flags:\s+(0x[0-9a-fA-F]+)")
+_INTERP = re.compile(r"\[Requesting program interpreter: (.+)\]")
+_DYNAMIC = re.compile(r"^\s*0x[0-9a-fA-F]+\s+\((\w+)\)\s+(.*?)\s*$")
+_RELOC = re.compile(r"^\s*[0-9a-fA-F]+\s+[0-9a-fA-F]+\s+R_\w+\s+[0-9a-fA-F]+\s+([^\s+]+)")
+_SYMBOL = re.compile(r"^\s*(\d+):\s")
+_SEGMENT = re.compile(r"^\s{2}([A-Z][A-Z_0-9]+|0x[0-9a-fA-F]+)\s+0x[0-9a-fA-F]+\s")
+_BRACKETED = re.compile(r"\[(.+)\]")
+
+
+class TrimError(Exception):
+    """The work could not be done (exit status 2)."""
+
+
+@dataclass
+class Elf:
+    """What lib-trim needs to know of one ELF file of the tree."""
+
+    path: str                       # relative to the root
+    kind: str                       # EXEC, DYN, REL...
+    interp: str | None = None       # the program interpreter, for a program
+    needed: list[str] = field(default_factory=list)
+    soname: str | None = None
+    defined: set[str] = field(default_factory=set)
+    undefined: set[str] = field(default_factory=set)       # strong
+    weak_undefined: set[str] = field(default_factory=set)
+    resolved: set[str] = field(default_factory=set)        # strong, that the loader resolves
+
+    @property
+    def is_program(self) -> bool:
+        return self.interp is not None
+
+    @property
+    def imports(self) -> set[str]:
+        return self.undefined | self.weak_undefined
+
+
+@dataclass
+class Plan:
+    """What the tree needs: the libraries each program loads, and what is missing."""
+
+    loads: dict[str, list[str]] = field(default_factory=dict)   # program -> libraries
+    loaders: set[str] = field(default_factory=set)
+    unused: list[str] = field(default_factory=list)             # libraries no program loads
+    missing: list[str] = field(default_factory=list)            # messages
+
+
+# --------------------------------------------------------------------------
+# The cross tools
+# --------------------------------------------------------------------------
+
+class Tools:
+    def __init__(self, prefix: str):
+        self.prefix = prefix
+        for tool in ("gcc", "readelf", "strip"):
+            if shutil.which(prefix + tool) is None:
+                raise TrimError("no %s%s" % (prefix, tool))
+
+    def run(self, tool: str, *args: str) -> str:
+        argv = [self.prefix + tool, *args]
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, check=False)
+        except OSError as exc:
+            raise TrimError("cannot run %s: %s" % (argv[0], exc.strerror)) from exc
+        if done.returncode != 0:
+            raise TrimError("%s %s failed: %s" % (argv[0], args[0] if args else "",
+                                                  done.stderr.strip()))
+        return done.stdout
+
+
+# --------------------------------------------------------------------------
+# Reading ELF files
+# --------------------------------------------------------------------------
+
+def symbol_name(token: str) -> str:
+    """A symbol's name without its version: foo@VER and foo@@VER are foo."""
+    return token.split("@", 1)[0]
+
+
+def parse_readelf(text: str) -> Elf:
+    """What ``readelf -hldrW --dyn-syms`` says of a file, its path left empty.
+
+    The dynamic symbol table gives what the file defines and imports: a symbol of
+    section UND is imported, weakly when it is bound WEAK. Of the strong imports,
+    the loader resolves those that a dynamic relocation names and, on MIPS, those
+    of the global part of the GOT (from MIPS_GOTSYM on); an import that neither
+    names, such as the ``__gnu_local_gp`` that -export-dynamic leaves in a MIPS
+    executable, is never looked up.
+    """
+    elf = Elf("", "")
+    gotsym = None
+    relocated: set[str] = set()
+    imports: list[tuple[int, str]] = []
+    section = ""
+    for line in text.splitlines():
+        if line.startswith("Relocation section"):
+            section = "reloc"
+            continue
+        if line.startswith("Symbol table '.dynsym'"):
+            section = "dynsym"
+            continue
+        if not line.strip() or line.startswith(("Program Headers", "Dynamic section",
+                                                "Symbol table")):
+            section = ""
+        match = _TYPE.match(line)
+        if match and not elf.kind:
+            elf.kind = match.group(1)
+            continue
+        match = _INTERP.search(line)
+        if match:
+            elf.interp = match.group(1)
+            continue
+        match = _DYNAMIC.match(line)
+        if match:
+            tag, value = match.groups()
+            name = _BRACKETED.search(value)
+            if tag == "NEEDED" and name:
+                elf.needed.append(name.group(1))
+            elif tag == "SONAME" and name:
+                elf.soname = name.group(1)
+            elif tag == "MIPS_GOTSYM":
+                gotsym = int(value.split()[0], 0)
+            continue
+        if section == "reloc":
+            match = _RELOC.match(line)
+            if match:
+                relocated.add(symbol_name(match.group(1)))
+        elif section == "dynsym" and _SYMBOL.match(line):
+            tokens = line.split()
+            if re.fullmatch(r"\(\d+\)", tokens[-1]):
+                tokens = tokens[:-1]
+            if len(tokens) < 8:
+                continue                        # the null symbol, a section's symbol
+            index, bind, ndx, name = int(tokens[0].rstrip(":")), tokens[4], tokens[-2], tokens[-1]
+            name = symbol_name(name)
+            if ndx != "UND":
+                if bind in ("GLOBAL", "WEAK", "UNIQUE"):
+                    elf.defined.add(name)
+            elif bind == "WEAK":
+                elf.weak_undefined.add(name)
+            else:
+                elf.undefined.add(name)
+                imports.append((index, name))
+    elf.resolved = {name for index, name in imports
+                    if name in relocated or (gotsym is not None and index >= gotsym)}
+    return elf
+
+
+def is_elf(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(4) == ELF_MAGIC
+    except OSError as exc:
+        raise TrimError("cannot read %s: %s" % (path, exc.strerror)) from exc
+
+
+def read_elf(tools: Tools, root: str, rel: str) -> Elf:
+    elf = parse_readelf(tools.run("readelf", "-hldrW", "--dyn-syms", os.path.join(root, rel)))
+    elf.path = rel
+    return elf
+
+
+def walk(root: str) -> list[str]:
+    """Every regular file of the tree that is an ELF file, relative to the root, in order."""
+    found = []
+    for top, dirs, files in os.walk(root):
+        dirs.sort()
+        for name in sorted(files):
+            full = os.path.join(top, name)
+            if not os.path.islink(full) and os.path.isfile(full) and is_elf(full):
+                found.append(os.path.relpath(full, root))
+    return found
+
+
+def resolve(root: str, path: str) -> str | None:
+    """The regular file that a path names inside the root, following symbolic links there.
+
+    An absolute link is taken from the root, as the board would take it. None when
+    nothing is there.
+    """
+    parts = [part for part in path.split("/") if part]
+    out: list[str] = []
+    hops = 0
+    while parts:
+        part = parts.pop(0)
+        if part == ".":
+            continue
+        if part == "..":
+            if out:
+                out.pop()
+            continue
+        here = os.path.join(root, *out, part)
+        if os.path.islink(here):
+            hops += 1
+            if hops > 40:
+                raise TrimError("too many symbolic links in %s" % path)
+            target = os.readlink(here)
+            if target.startswith("/"):
+                out = []
+            parts = [p for p in target.split("/") if p] + parts
+            continue
+        out.append(part)
+    rel = "/".join(out)
+    return rel if rel and os.path.isfile(os.path.join(root, rel)) else None
+
+
+def find_library(root: str, name: str) -> str | None:
+    for directory in SEARCH:
+        found = resolve(root, directory + "/" + name)
+        if found:
+            return found
+    return None
+
+
+# --------------------------------------------------------------------------
+# What the tree needs
+# --------------------------------------------------------------------------
+
+def plan(root: str, elves: dict[str, Elf]) -> Plan:
+    result = Plan()
+    used: set[str] = set()
+    for rel in sorted(elves):
+        program = elves[rel]
+        if not program.is_program:
+            continue
+        loader = resolve(root, program.interp or "")
+        if loader is None:
+            result.missing.append("%s: its interpreter %s is not in the tree"
+                                  % (rel, program.interp))
+        else:
+            result.loaders.add(loader)
+        loads: list[str] = []
+        queue = [(rel, name) for name in program.needed]
+        while queue:
+            who, name = queue.pop(0)
+            lib = find_library(root, name)
+            if lib is None:
+                result.missing.append("%s: needs %s (through %s), which is in neither %s"
+                                      % (rel, name, who, " nor ".join(SEARCH)))
+                continue
+            if lib in loads:
+                continue
+            loads.append(lib)
+            if lib in elves:
+                queue.extend((lib, more) for more in elves[lib].needed)
+        result.loads[rel] = loads
+        used.update(loads)
+    for rel in sorted(elves):
+        elf = elves[rel]
+        if (os.path.dirname(rel) in SEARCH and elf.kind == "DYN" and not elf.is_program
+                and rel not in used and rel not in result.loaders):
+            result.unused.append(rel)
+    return result
+
+
+def links_to(root: str, targets: Iterable[str]) -> list[str]:
+    """The symbolic links of the search directories that end at one of the targets."""
+    wanted = set(targets)
+    found = []
+    for directory in SEARCH:
+        here = os.path.join(root, directory)
+        if not os.path.isdir(here) or os.path.islink(here):
+            continue
+        for name in sorted(os.listdir(here)):
+            rel = directory + "/" + name
+            if os.path.islink(os.path.join(root, rel)) and resolve(root, rel) in wanted:
+                found.append(rel)
+    return found
+
+
+def unresolved(root: str, elves: dict[str, Elf], the_plan: Plan) -> list[str]:
+    """For each program, the strong imports that none of the objects it loads defines."""
+    problems = []
+    for program, libs in sorted(the_plan.loads.items()):
+        loader = resolve(root, elves[program].interp or "")
+        loaded = [program, *libs] + ([loader] if loader else [])
+        defined: set[str] = set()
+        for rel in loaded:
+            if rel in elves:
+                defined |= elves[rel].defined
+        for rel in loaded:
+            if rel not in elves:
+                continue
+            for name in sorted(elves[rel].resolved - defined):
+                problems.append("%s: %s, which %s imports, is defined by none of the objects "
+                                "it loads" % (program, name, rel))
+    return problems
+
+
+# --------------------------------------------------------------------------
+# The C library
+# --------------------------------------------------------------------------
+
+def read_config(path: str) -> dict[str, str]:
+    values = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                match = re.match(r"^([A-Z0-9_]+)=(.*)$", line.strip())
+                if match:
+                    values[match.group(1)] = match.group(2)
+    except OSError as exc:
+        raise TrimError("cannot read %s: %s" % (path, exc.strerror)) from exc
+    return values
+
+
+def link_flags(config: dict[str, str]) -> list[str]:
+    """The options of uClibc-ng's link of the C library (LDFLAGS in Rules.mak)."""
+    flags = ["-shared", "-Wl,--warn-common", "-Wl,--warn-once", "-Wl,-z,combreloc"]
+    if config.get("UCLIBC_BUILD_RELRO") == "y":
+        flags.append("-Wl,-z,relro")
+    if config.get("UCLIBC_BUILD_NOW") == "y":
+        flags.append("-Wl,-z,now")
+    if config.get("LDSO_GNU_HASH_SUPPORT") == "y":
+        flags.append("-Wl,--hash-style=gnu")
+    if config.get("DODEBUG") != "y":
+        flags.append("-Wl,-O2")
+    flags.append("-Wl,-z,defs")
+    return flags
+
+
+def headers(tools: Tools, path: str) -> tuple[str, list[tuple[str, str]], list[str]]:
+    """The ELF flags, the dynamic tags (with the values that have to agree) and the segments."""
+    text = tools.run("readelf", "-hldW", path)
+    flags = ""
+    tags = []
+    segments = []
+    in_segments = False
+    for line in text.splitlines():
+        match = _FLAGS.match(line)
+        if match:
+            flags = match.group(1)
+        if line.startswith("Program Headers:"):
+            in_segments = True
+            continue
+        if in_segments and not line.strip():
+            in_segments = False
+        match = _SEGMENT.match(line) if in_segments else None
+        if match:
+            segments.append(match.group(1))
+        match = _DYNAMIC.match(line)
+        if match:
+            tag = match.group(1)
+            tags.append((tag, match.group(2) if tag in SAME_VALUE else ""))
+    return flags, sorted(set(tags)), sorted(set(segments))
+
+
+def relink_libc(tools: Tools, uclibc: str, full: str, wanted: Sequence[str], out: str,
+                scratch: str) -> None:
+    """Link the C library from uClibc-ng's archive with the wanted symbols only.
+
+    It is uClibc-ng's own link (link.so in Makerules, LDFLAGS-libc.so in
+    libc/Makefile.in), with the archive pulled by -u options instead of whole.
+    """
+    archive = os.path.join(uclibc, "libc", "libc_so.a")
+    lib = os.path.join(uclibc, "lib")
+    loaders = sorted(glob.glob(os.path.join(lib, "ld-uClibc-*.so")))
+    if not os.path.isfile(archive) or len(loaders) != 1:
+        raise TrimError("%s is not a build directory of uClibc-ng with shared libraries "
+                        "(no libc/libc_so.a, or not one lib/ld-uClibc-*.so)" % uclibc)
+    soname = read_elf(tools, "/", full).soname
+    if not soname:
+        raise TrimError("%s has no soname" % full)
+    after = [os.path.join(lib, "interp.os"), loaders[0]]
+    after += [os.path.join(lib, name) for name in ("uclibc_nonshared.a", "libpthread_nonshared.a")
+              if os.path.exists(os.path.join(lib, name))]
+    after.append(tools.run("gcc", "-print-libgcc-file-name").strip())
+    ehframe = os.path.join(lib, "ehframe-term.o")
+    if os.path.exists(ehframe):
+        after.append(ehframe)
+    for path in after:
+        if not os.path.exists(path):
+            raise TrimError("no %s" % path)
+    symbols = os.path.join(scratch, "symbols")
+    with open(symbols, "w", encoding="utf-8") as handle:
+        for name in sorted({*wanted, LIBC_INIT}):
+            handle.write("-Wl,-u,%s\n" % name)
+    linked = os.path.join(scratch, "linked")
+    tools.run("gcc", *link_flags(read_config(os.path.join(uclibc, ".config"))),
+              "-Wl,-init," + LIBC_INIT, "-Wl,-soname=" + soname,
+              "-nostdlib", "-nostartfiles", "-o", linked, "@" + symbols, archive, *after)
+    # Stripped as the build system strips a library of the target.
+    tools.run("strip", "--remove-section=.comment", "--remove-section=.note", "-o", out, linked)
+
+
+# --------------------------------------------------------------------------
+# The run
+# --------------------------------------------------------------------------
+
+def say(quiet: bool, text: str) -> None:
+    if not quiet:
+        print("lib-trim: " + text)
+
+
+def trim(root: str, prefix: str, uclibc: str, dry_run: bool, quiet: bool) -> int:
+    if not os.path.isdir(root):
+        raise TrimError("%s is not a directory" % root)
+    tools = Tools(prefix)
+    elves = {rel: read_elf(tools, root, rel) for rel in walk(root)}
+    the_plan = plan(root, elves)
+    if the_plan.missing:
+        for message in the_plan.missing:
+            print("lib-trim: " + message, file=sys.stderr)
+        return 1
+
+    # 1. The libraries that nothing loads.
+    links = {link: resolve(root, link) for link in links_to(root, the_plan.unused)}
+    for rel in the_plan.unused:
+        names = [link for link, target in links.items() if target == rel]
+        say(quiet, "%s %s%s: no program loads it" % (
+            "would remove" if dry_run else "removed", rel,
+            " and %s" % ", ".join(names) if names else ""))
+    if not dry_run:
+        for rel in [*links, *the_plan.unused]:
+            os.remove(os.path.join(root, rel))
+            elves.pop(rel, None)
+
+    # 2. The C library.
+    libcs = [rel for rel in elves if os.path.dirname(rel) in SEARCH
+             and rel not in the_plan.unused
+             and fnmatch.fnmatch(os.path.basename(rel), LIBC_GLOB)]
+    if len(libcs) > 1:
+        raise TrimError("more than one C library: %s" % ", ".join(sorted(libcs)))
+    if libcs:
+        rel = libcs[0]
+        full = os.path.join(uclibc, "lib", os.path.basename(rel))
+        if not os.path.isfile(full):
+            raise TrimError("no %s for %s: is %s the build directory of the C library the tree "
+                            "holds?" % (full, rel, uclibc))
+        exported = read_elf(tools, "/", full).defined
+        imports: set[str] = set()
+        for other, elf in elves.items():
+            if other != rel and other not in the_plan.loaders and other not in the_plan.unused:
+                imports |= elf.imports
+        wanted = sorted(imports & exported)
+        with tempfile.TemporaryDirectory(prefix="lib-trim.") as scratch:
+            new = os.path.join(scratch, "libc.so")
+            relink_libc(tools, uclibc, full, wanted, new, scratch)
+            kept = read_elf(tools, "/", new).defined
+            lost = sorted(set(wanted) - kept)
+            if lost:
+                raise TrimError("the new C library does not define %s" % ", ".join(lost))
+            old_headers, new_headers = headers(tools, os.path.join(root, rel)), headers(tools, new)
+            if old_headers != new_headers:
+                raise TrimError("the new C library's headers differ from %s's: %r, not %r; "
+                                "has uClibc-ng's link changed?" % (rel, new_headers, old_headers))
+            before = os.path.getsize(os.path.join(root, rel))
+            after = os.path.getsize(new)
+            say(quiet, "%s %s: %d of the %d symbols the C library exports are imported; "
+                       "%d bytes -> %d" % ("would cut" if dry_run else "cut", rel, len(wanted),
+                                           len(exported), before, after))
+            if not dry_run:
+                target = os.path.join(root, rel)
+                mode = os.stat(target).st_mode & 0o7777
+                staged = target + ".lib-trim"
+                shutil.copyfile(new, staged)
+                os.chmod(staged, mode)
+                os.replace(staged, target)
+                elves[rel] = read_elf(tools, root, rel)
+
+    # 3. Every program, as the loader would load it.
+    problems = unresolved(root, elves, the_plan)
+    for message in problems:
+        print("lib-trim: " + message, file=sys.stderr)
+    if problems:
+        return 1
+    programs = sum(1 for elf in elves.values() if elf.is_program)
+    say(quiet, "%d programs checked: every library and symbol they need is there" % programs)
+    return 0
+
+
+def main(argv: Sequence[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="lib-trim", usage=__doc__.split("\n\n")[1].removeprefix("Usage: "),
+        description="Cut the shared libraries of a root filesystem to what its programs use.")
+    parser.add_argument("--cross", required=True, metavar="PREFIX")
+    parser.add_argument("--uclibc", required=True, metavar="DIR")
+    parser.add_argument("-n", "--dry-run", action="store_true")
+    parser.add_argument("-q", "--quiet", action="store_true")
+    parser.add_argument("root", metavar="ROOT")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return 0 if exc.code == 0 else 2
+    try:
+        return trim(args.root, args.cross, args.uclibc, args.dry_run, args.quiet)
+    except TrimError as exc:
+        print("lib-trim: %s" % exc, file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
