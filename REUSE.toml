@@ -46,12 +46,12 @@ SPDX-License-Identifier = "GPL-2.0-only"
 
 # Mongoose, the HTTP library of pond, is offered under GPL-2.0-only or a
 # commercial licence, which its header names together; the project takes it
-# under GPL-2.0-only.
+# under GPL-2.0-only. It holds micro-ecc by Kenneth MacKay, under BSD-2-Clause.
 [[annotations]]
 path = "pond/third_party/mongoose/**"
 precedence = "override"
-SPDX-FileCopyrightText = ["2004-2013 Sergey Lyubka", "2013-2024 Cesanta Software Limited"]
-SPDX-License-Identifier = "GPL-2.0-only"
+SPDX-FileCopyrightText = ["2004-2013 Sergey Lyubka", "2013-2024 Cesanta Software Limited", "2014-2015 Kenneth MacKay"]
+SPDX-License-Identifier = "GPL-2.0-only AND BSD-2-Clause"
 
 # The records of the device tests (docs/testing/README.rst): the logs and
 # the data that tests/device writes beside each page, which has its header.
