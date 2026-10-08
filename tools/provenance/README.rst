@@ -123,9 +123,11 @@ exceptions that depend on where a word appears belong in the allowlist.
        ``sub_...``, ``fcn....``
      -
    * - ``narrative``
-     - "vendor", "vendor's", "vendors"
+     - "vendor", "vendor's", "vendors"; original, stock, OEM or factory
+       firmware, driver, bootloader or software; a previous or old driver
      - standards terms: vendor ID, name, OUI, PN, rev, SN, specific, prefix,
-       product, class ...
+       product, class ...; what a reboot leaves ("the previous kernel"), the
+       unit's factory configuration
    * - ``dev-kit``
      - SDK, also with a prefix letter or inside identifiers
      - ``make sdk``, and a Makefile target of that name
@@ -183,10 +185,21 @@ exceptions that depend on where a word appears belong in the allowlist.
    * - ``password``
      - a literal after "password", "PLOAM PW", "LOID" ...
      - placeholders, expressions
+   * - ``host-name``
+     - a host name under a top-level name kept for private networks
+       (``.lan``, ``.home``, ``home.arpa``, ``.internal``, ``.intranet``,
+       ``.corp``, ``.localdomain``, ``.local``, ``.lab``, ``.private``); the
+       host of a URL given as a target, host, proxy, server, endpoint, base
+       or API URL; the host after ``user@`` in ssh, scp, sftp, rsync, telnet
+     - the RFC 2606 and RFC 6761 names (``example.com``, ``.example``,
+       ``.test``, ``.invalid``, ``localhost``) and addresses; a structure
+       member in C, a property chain in a script
 
 Examples use the documentation ranges: 192.0.2.0/24, 198.51.100.0/24 and
 203.0.113.0/24; 2001:db8::/32; MAC addresses 00:00:5e:00:53:00 to
-00:00:5e:00:53:ff. A standards clause that looks like an address is cited
+00:00:5e:00:53:ff; host names under example.com, .example or .test. A host
+name the rules cannot tell from a public one -- the laboratory's own domain,
+say -- belongs in the deny-list, category ``internal``. A standards clause that looks like an address is cited
 with its standard's name ("G.984.3 9.2.3.1") or the word "clause".
 
 ``binaries``

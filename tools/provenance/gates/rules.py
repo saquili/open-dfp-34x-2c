@@ -90,6 +90,16 @@ _VENDOR = (
 )
 
 
+# Another implementation's software named as such, without the word "vendor":
+# the firmware or driver a unit came with, or a driver before this one. What a
+# reboot leaves behind ("the previous kernel") and the unit's own factory
+# configuration are facts of the hardware, not narrative, and stay out.
+_OTHER_SOFTWARE = (
+    r"\b(?:original|stock|oem|factory)[ \t-]+(?:firmware|drivers?|bootloaders?|software)\b"
+    r"|\b(?:previous|old)[ \t-]+drivers?\b"
+)
+
+
 def _strip_c_suffix(m: re.Match) -> str:
     return re.sub(r"[uUlL]+$", "", m.group(0)).lower()
 
@@ -168,6 +178,8 @@ FORBIDDEN_RULES = (
           "an automatic name made by a disassembler"),
     _rule(GATE_FORBIDDEN, "narrative", _VENDOR,
           "\"vendor\" outside a standards term: narrative about another implementation", re.I),
+    _rule(GATE_FORBIDDEN, "narrative", _OTHER_SOFTWARE,
+          "another implementation's software: narrative about another implementation", re.I),
     _rule(GATE_FORBIDDEN, "dev-kit", r"(?<![A-Za-z0-9])r?sdks?(?![A-Za-z0-9])",
           "a reference to an SDK", re.I, check=_sdk),
     _rule(GATE_FORBIDDEN, "board-package", r"(?<![A-Za-z0-9])bsps?(?![A-Za-z0-9])",
@@ -332,7 +344,62 @@ def _password(m: re.Match, kind: str, path: str) -> Optional[str]:
     return "a password or registration secret"
 
 
+# Host names. A laboratory's machines have names as well as addresses, and a
+# name is as private as the address it stands for. Two shapes are refused: a
+# name under a top-level name that the public DNS does not delegate or that
+# sites keep for their own networks (RFC 6762 .local, RFC 8375 home.arpa and
+# the customary private ones); and a name given as the host of a URL in a
+# setting (target, host, proxy, server, endpoint, a base or API URL) or as the
+# host of a remote login or copy (ssh, scp, sftp, rsync, telnet). The names
+# RFC 2606 and RFC 6761 keep for documentation and testing are left alone,
+# and so are addresses, which the address rules check.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_HOSTNAME = r"(?P<host>%s(?:\.%s)+)" % (_LABEL, _LABEL)
+_HOST_END = r"(?![\w-]|\.[A-Za-z0-9])"
+_PRIVATE_TLD = r"(?:lan|home|home\.arpa|internal|intranet|corp|localdomain|local|lab|private)"
+_DOC_HOST = re.compile(r"(?:^|\.)(?:example\.(?:com|net|org)|example|test|invalid|localhost)$",
+                       re.I)
+
+
+def _host_value(m: re.Match) -> str:
+    return m.group("host").lower()
+
+
+# Script sources the lexer does not split: there a name is taken as a host only
+# where a host is written, after a quote, a slash or an at sign.
+_SCRIPT_SOURCE = re.compile(r"\.(?:[cm]?js|jsx|ts|tsx|vue)$")
+
+
+def _private_host(m: re.Match, kind: str, path: str) -> Optional[str]:
+    if kind == CODE:
+        return None  # a structure member called local or internal
+    before = m.string[m.start() - 1:m.start()]
+    if _SCRIPT_SOURCE.search(path) and before not in ("\"", "'", "`", "/", "@"):
+        return None  # a property chain of a script, ending in a property called lan
+    return "a host name under a private top-level name"
+
+
+def _named_host(m: re.Match, _kind: str, _path: str) -> Optional[str]:
+    host = m.group("host")
+    if _DOC_HOST.search(host) or not re.search(r"[A-Za-z]{2,}$", host):
+        return None  # a documentation name, or an address or version number
+    return "a host name (use the RFC 2606 names: example.com, *.example, *.test)"
+
+
 UNIT_ID_RULES = (
+    _rule(GATE_UNIT_IDS, "host-name",
+          r"(?<![\w.-])(?P<host>(?:%s\.)+%s)%s" % (_LABEL, _PRIVATE_TLD, _HOST_END),
+          "a host name", re.I, check=_private_host, value=_host_value),
+    _rule(GATE_UNIT_IDS, "host-name",
+          r"(?<![A-Za-z0-9])(?:target|host(?:name)?|proxy|server|endpoint|(?:base|api)[_-]?url)"
+          r"(?![A-Za-z0-9])[\"']?[ \t]*[:=][^\n]{0,80}?"
+          r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*://"
+          r"(?:[^\s\"'`/@]+@)?" + _HOSTNAME + _HOST_END,
+          "a host name", re.I, check=_named_host, value=_host_value),
+    _rule(GATE_UNIT_IDS, "host-name",
+          r"(?<![\w-])(?:ssh|scp|sftp|rsync|telnet)(?![\w-])[^\n]{0,120}?[\w.-]+@"
+          + _HOSTNAME + _HOST_END,
+          "a host name", re.I, check=_named_host, value=_host_value),
     _rule(GATE_UNIT_IDS, "gpon-serial",
           r"(?<![A-Za-z0-9])([A-Z]{4})-?([0-9A-Fa-f]{8})(?![A-Za-z0-9])",
           "a GPON serial number", check=_gpon_ascii),

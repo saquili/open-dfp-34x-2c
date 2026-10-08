@@ -115,6 +115,18 @@ class ForbiddenWords(unittest.TestCase):
         self.fires(word("the sibling ", "repo"), "internal-reference")
         self.fires(word("in the lab ", "session"), "internal-reference")
 
+    def test_other_software(self) -> None:
+        for text in (word("the orig", "inal firmware sets it"),
+                     word("as the sto", "ck driver does"), word("the OE", "M bootloader"),
+                     word("factory ", "software"),
+                     word("what the previous ", "driver left"), word("the old ", "drivers")):
+            self.fires(text, "narrative")
+
+    def test_facts_of_the_hardware_are_not_narrative(self) -> None:
+        self.quiet("cleared the entries left by the previous kernel")
+        self.quiet("the identity from the unit's factory configuration")
+        self.quiet("the original value is written back")
+
 
 class UnitIdentifiers(unittest.TestCase):
 
@@ -174,6 +186,28 @@ class UnitIdentifiers(unittest.TestCase):
         secret = word("pass", "word")
         self.quiet("%s: <secret>; %s = cfg->pw;" % (secret, secret), "x.c")
         self.quiet("%s: xxxxxxxx" % secret)
+
+    def test_host_names_under_private_top_level_names(self) -> None:
+        self.fires("the share on %s" % word("nas.l", "an"), "host-name")
+        self.fires("ssh root@%s" % word("build.home.ar", "pa"), "host-name")
+        self.fires('url = "https://%s/x";' % word("wiki.int", "ernal"), "host-name", "x.c")
+        self.fires('fetch("http://%s/api")' % word("stick.l", "ocal"), "host-name", "api.ts")
+        self.quiet(word("cfg.lo", "cal = 1; p->priv.inter", "nal = 0;"), "x.c")
+        self.quiet(word("const lan = s.pass.l", "an;"), "switch.ts")
+        self.quiet("mDNS answers for names under .local")
+
+    def test_host_names_in_settings_and_remote_commands(self) -> None:
+        host = word("stick.bench", "lab.net")
+        self.fires('target: "https://%s",' % host, "host-name", "vite.config.ts")
+        self.fires('const target = process.env.POND_TARGET ?? "https://%s";' % host, "host-name",
+                   "vite.config.ts")
+        self.fires("POND_TARGET=https://%s npm run dev" % host, "host-name")
+        self.fires("proxy = http://user@%s:3128" % host, "host-name", "x.conf")
+        self.fires("scp image root@%s:/tmp" % host, "host-name")
+        self.quiet('target: "https://stick.example", proxy = http://proxy.example.com:3128')
+        self.quiet("POND_TARGET=https://192.0.2.1 npm run dev")
+        self.quiet("ssh root@192.0.2.1; scp x root@stick.test:/tmp")
+        self.quiet("Link: https://git.kernel.org/x and the host the board boots from")
 
 
 if __name__ == "__main__":
