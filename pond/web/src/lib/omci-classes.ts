@@ -30,7 +30,7 @@ export const CLASSES: Record<number, { name: string; attrs: Record<number, strin
     name: "ONU2-G",
     attrs: {
       1: "Equipment ID",
-      2: "OMCC version",
+      2: "Optical network unit management and control channel (OMCC) version",
       3: "Vendor product code",
       4: "Security capability",
       5: "Security mode",
