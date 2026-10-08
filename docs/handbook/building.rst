@@ -11,8 +11,8 @@ toolchain is described in ``toolchain.rst``, the flash layout in
 ``boot-contract.rst``, and the bench commands that write the flash in
 ``flashing.rst``; this page uses all three. The build system and its external
 tree are described in ``buildroot/README.rst`` and ``br2-external/README.rst``,
-and the decision to link every program statically in
-``docs/adr/0010-target-executables-are-linked-statically.rst``.
+and the decision that the programs share one C library, cut to what they use,
+in ``docs/adr/0011-target-executables-share-one-cut-c-library.rst``.
 
 What the build makes
 ====================
@@ -30,20 +30,19 @@ What the build makes
      - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
        the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
        kernel, LZMA, load address ``0x80100000``.
-     - 1616597 bytes; the partition ``k0`` takes 1900544.
+     - 1652846 bytes; the partition ``k0`` takes 1900544.
    * - ``r0.squashfs``
      - The root filesystem for bank 0: a SquashFS image (xz, 64 KiB blocks,
        every file owned by root and carrying the same fixed time, no extended
        attributes) of BusyBox, dropbear, the programs of the ONU and the
        board's files.
-     - 1694616 bytes; the partition ``r0`` takes 2031616.
+     - 1516938 bytes; the partition ``r0`` takes 2031616.
    * - ``update.bin``
      - The two images in one update file, which the stick's ``onu-update``
        writes into the bank it did not start from (``updating.rst``): a header
        with the board, the version and the build's time, the two images, and
        their SHA-256.
-     - The two images and 288 bytes; 3608572 bytes for the images of
-       ``d54057dbe6da``.
+     - The two images and 288 bytes; 3170072 bytes for the images above.
    * - ``SHA256SUMS``
      - The SHA-256 digests of the two images and the update file, in the form
        ``sha256sum -c`` reads.
@@ -70,20 +69,22 @@ Sizes and budgets
      - Budget
      - Margin
    * - ``k0``
-     - 1616597
+     - 1652846
      - 1900544
-     - 283947 bytes (14.9% of the partition).
+     - 247698 bytes (13.0% of the partition).
    * - ``r0``
-     - 1694616
+     - 1516938
      - 2031616
-     - 337000 bytes (16.6% of the partition).
+     - 514678 bytes (25.3% of the partition).
 
 Both images fit, and the build fails when one stops fitting (``IMAGE_ENFORCE``,
 below). They fit because bank 0 is split for this system, 1856 KiB of kernel
 and 1984 KiB of root filesystem where the shipped firmware had 1328 KiB and
 2512 KiB (``boot-contract.rst``), and because the kernel and the root filesystem
 leave out what the stick does not use ("The kernel's size" below, and "The root
-filesystem").
+filesystem"). The programs share one C library, cut to what they use; with
+every program linked statically, as before ADR 0011, the root filesystem was
+2004150 bytes on 2026-10-08.
 
 The numbers are printed by ``tools/image-budget/image-budget``, which ``make``
 runs, and are those of ``make`` on the commit this page was written against, in
@@ -138,7 +139,7 @@ checked against the hash that the build system carries, and a file that does not
 match is refused. The programs of this tree (``omcid``, ``onu-utils``,
 ``pppoed``, ``dhcp6d``, ``pond``) are built from the working tree, not
 downloaded. ``make``
-makes the cross toolchain first, with static libraries only, then the kernel
+makes the cross toolchain first, with shared libraries only, then the kernel
 with it, then the programs of the image, and the host tools the images need
 (``mksquashfs``, ``mkimage``, the LZMA compressor; ``mksquashfs`` brings
 ``cmake`` with it, which takes a minute and a half to build).
@@ -181,7 +182,15 @@ The root filesystem
 
 The root filesystem is the target directory of the build, packed. It holds:
 
-BusyBox 1.37.0, static, 94 applets
+The C library
+    uClibc-ng 1.0.59 as a shared library, with its dynamic loader; every
+    program loads it. The build system installs it whole; the post-build script
+    links it again with only the functions that the programs import
+    (``tools/lib-trim``): 361 of the 1428 symbols it exports, 421516 bytes
+    instead of 712556. It removes ``libgcc_s``, which the toolchain installs and
+    no program loads, and fails the build when a program would miss a library
+    or a symbol.
+BusyBox 1.37.0, 94 applets
     The ones the boot script and a shell session use, by purpose:
 
     shell and init
@@ -207,17 +216,17 @@ BusyBox 1.37.0, static, 94 applets
     ``make -C build/image busybox-update-config``. The second command writes the
     file with BusyBox's own header, so put the licence header (the first two
     lines) back before ``make check``.
-dropbear 2026.93, static
+dropbear 2026.93
     The ssh server (``dropbear``), its key tool (``dropbearkey``) and the
     server side of ``scp``. It takes keys only.
-The programs of the ONU, from this tree, static
+The programs of the ONU, from this tree
     ``omcid``, the OMCI daemon, with its tools ``omcitap`` and ``omcivlan``
     (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
     from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
     PPPoE client (``pppoed/README.rst``); ``dhcp6d``, which hands a session's
     delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
     HTTP status daemon (``pond/README.rst``).
-iproute2, static
+iproute2
     ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
     classifier and the PON driver, and ``bridge``, which shows the bridge's
     VLANs. The post-build script takes the other programs of the package out
@@ -472,7 +481,7 @@ stick translates no address and keeps no packet filter: a router behind it does
 both), the initial RAM disk and kexec, and smaller parts that the board does not
 use, which the configuration's history names; it keeps IPv6, the symbol table,
 debugfs and dynamic debug, through which a problem on the operator's line is
-read. The kernel image is 1616597 bytes, and bank 0 as this system splits it
+read. The kernel image is 1652846 bytes, and bank 0 as this system splits it
 gives the kernel 1856 KiB (``boot-contract.rst``).
 
 Reproducibility
@@ -554,6 +563,14 @@ check of a running stick and records it.
 Open items
 ==========
 
+* The image whose programs share the cut C library (ADR 0011) has not been
+  started on the board as a whole yet. Before the cut was part of the build,
+  the programs ran on a board with a library cut by hand the same way, from a
+  copy of the root filesystem in RAM under ``chroot`` beside the running
+  system: BusyBox, dropbear with a key login, ``pond`` answering HTTP,
+  ``ubusd``, and the usage and exit of every other program, with no hang. The
+  build's own cut has run under ``qemu-mips`` only. Starting the image from the
+  flash is the test.
 * The image with the programs of the ONU has not been started on the board as a
   whole yet. ``omcid`` and ``ponid`` of this tree have been run on the board,
   copied to a running stick: it reached O5 and answered the OLT's MIB upload.

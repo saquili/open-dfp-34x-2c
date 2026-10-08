@@ -61,16 +61,22 @@ runs at all four byte offsets.
 Static or dynamic
 =================
 
-Programs of both forms pass the instruction-set gate. They differ in what goes into
-the root filesystem. A static program holds only the C library objects it
-refers to. A dynamic program needs the dynamic loader and the C library on the
-board, and those carry three functions that the gate refuses (a speculation
-barrier of libgcc, and an exit-handler compare-and-exchange and a test-and-set of
-uClibc-ng; ``br2-external/README.rst`` lists them and says when a program reaches
-them). For what goes into the root filesystem, link statically. The image of the
-board follows this rule: it is built with static libraries only, and the gate runs
-over its whole target tree (``building.rst``,
-``docs/adr/0010-target-executables-are-linked-statically.rst``).
+Programs of both forms pass the instruction-set gate. They differ in what they
+need on the board. A static program holds the C library objects it refers to
+and needs nothing else. A dynamic program needs the dynamic loader and the C
+library there. The image of the board has both: its programs share one C
+library, which the build cuts to the functions those programs import
+(``tools/lib-trim``, ``building.rst``,
+``docs/adr/0011-target-executables-share-one-cut-c-library.rst``). A dynamic
+program built apart from the image runs on the board only if that library holds
+every function it imports; otherwise the loader names the first one it misses.
+For a program copied onto a running board, link statically.
+
+The toolchain's own libraries are whole. Its shared C library and ``libgcc_s``
+carry two functions that the gate refuses, a speculation barrier of libgcc and
+a test-and-set of uClibc-ng (``br2-external/README.rst`` lists them and says when
+a program reaches them); the image leaves both out, and the gate runs over its
+whole target tree.
 
 Checking a program
 ==================
