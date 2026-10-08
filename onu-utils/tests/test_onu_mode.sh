@@ -249,7 +249,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ -s "$ONU_ROOT/run/onu-pass" ] && logged "^udhcpd" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/dev")" = wan410 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/ipv4")" = 192.0.2.2 ]'
@@ -298,7 +298,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 check '[ "$(grep -c "^ip link add link gem256 name wan410" "$LOG")" = 1 ]'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
-check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -6$"'
+check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -6 -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ipv6")" = fe80::2 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ppp")" = ppp1 ]'
 # The IPv6 session hands its delegated prefix on, through dhcp6d.
