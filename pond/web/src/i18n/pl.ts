@@ -254,10 +254,14 @@ export const pl: Dictionary = {
     vlan: "VLAN do urządzenia hosta",
     vlanHint: "W tym VLAN-ie urządzenie hosta odbiera adres. Zostaw puste, jeśli bez VLAN-u.",
     gatewayHint:
-      "Adres, na który urządzenie hosta wysyła ruch. Wystarczy dowolny adres link-local.",
+      "Adres wkładki na tym łączu: z niego odpowiada serwer DHCP. Wystarczy dowolny adres link-local.",
+    peer: "Brama jak w PPPoE",
+    peerHint:
+      "Urządzenie hosta dostaje jako bramę adres serwera operatora z sesji PPPoE, jak przy własnej sesji. Wyłączone: bramą jest adres wkładki.",
+    hostGateway: "Brama urządzenia hosta",
     stickMac: "Adres MAC wkładki",
     mtu: "Największa ramka (MTU)",
-    gateway: "Brama podawana hostowi",
+    gateway: "Adres wkładki na łączu",
     lease: "Adres urządzenia hosta",
     noLease: "Nie przekazano",
     traffic: "Ruch na porcie SFP",

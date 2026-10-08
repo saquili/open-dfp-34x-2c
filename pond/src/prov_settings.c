@@ -73,6 +73,7 @@ enum key {
 	LAN_DHCP_END,
 	LAN_VLAN,
 	PASS_GATEWAY,
+	PASS_PEER,
 	NKEYS
 };
 
@@ -94,6 +95,7 @@ static const struct {
 	[LAN_DHCP_END] = { "LAN_DHCP_END", K_ADDR, "192.168.1.199" },
 	[LAN_VLAN] = { "LAN_VLAN", K_VLAN, "" },
 	[PASS_GATEWAY] = { "PASS_GATEWAY", K_ADDR, "169.254.0.1" },
+	[PASS_PEER] = { "PASS_PEER", K_ONOFF, "on" },
 };
 
 /* The settings of each session, SESSIONn_<suffix>, and their defaults. */
@@ -674,6 +676,13 @@ int prov_settings(struct prov_buf *out)
 			pv_str(out, lan);
 		else
 			pv_null(out);
+		/* The concentrator's address, when it is the router's gateway. */
+		pv_comma(out);
+		pv_key(out, "peer_gateway");
+		if (!prov_read_line("/run/onu-pass-proxy", lan, sizeof(lan)))
+			pv_str(out, lan);
+		else
+			pv_null(out);
 		pv_close(out, '}');
 	} else {
 		pv_null(out);
@@ -967,15 +976,18 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 
 int prov_link_set(const char *val, char *err, size_t errcap)
 {
-	char vlan[VALUE_MAX], gw[VALUE_MAX], text[TEXT_MAX];
+	char vlan[VALUE_MAX], gw[VALUE_MAX], peer[VALUE_MAX], text[TEXT_MAX];
 	const char *v = line_value(val, "VLAN", vlan, sizeof(vlan));
 	const char *g = line_value(val, "GATEWAY", gw, sizeof(gw));
+	const char *pe = line_value(val, "PEER", peer, sizeof(peer));
 	size_t len = 0;
 
 	if (v)
 		len += (size_t)snprintf(text + len, sizeof(text) - len, "LAN_VLAN=%s\n", v);
 	if (g)
 		len += (size_t)snprintf(text + len, sizeof(text) - len, "PASS_GATEWAY=%s\n", g);
+	if (pe)
+		len += (size_t)snprintf(text + len, sizeof(text) - len, "PASS_PEER=%s\n", pe);
 	if (!len) {
 		snprintf(err, errcap, "nothing to change");
 		return -EINVAL;

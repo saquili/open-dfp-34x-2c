@@ -164,7 +164,8 @@ export interface Settings {
   /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;
   dns: string | null;
-  pass: { address: string; lan: string | null } | null;
+  /** peer_gateway: the concentrator's address, when the router has it as its gateway. */
+  pass: { address: string; lan: string | null; peer_gateway?: string | null } | null;
   store: "loaded" | "defaults" | "saved" | "failed" | "none" | null;
   applying: boolean;
   last_apply_status: number | null;

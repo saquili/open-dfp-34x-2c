@@ -24,16 +24,16 @@ import { hostLink, type LinkView, linkSpeed, port, session } from "../lib/state"
 function HandoverForm({ link }: { link: LinkView }) {
   const { t } = useI18n();
   const change = useLinkChange();
-  const schema = z.object({ vlan: vlan(t), gateway: ipv4(t) });
+  const schema = z.object({ vlan: vlan(t), gateway: ipv4(t), peer: z.boolean() });
   type Values = z.infer<typeof schema>;
-  const current = { vlan: link.vlan, gateway: link.gateway };
+  const current = { vlan: link.vlan, gateway: link.gateway, peer: link.peer };
   const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: current });
   const { errors, isDirty } = form.formState;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refill only when the stick's values change
   useEffect(() => {
     if (!form.formState.isDirty) form.reset(current);
-  }, [link.vlan, link.gateway]);
+  }, [link.vlan, link.gateway, link.peer]);
 
   const state = change.isPending
     ? { state: "busy" as const, message: t("internet.saving") }
@@ -54,7 +54,10 @@ function HandoverForm({ link }: { link: LinkView }) {
   return (
     <form
       onSubmit={form.handleSubmit((v) =>
-        change.mutate({ VLAN: v.vlan, GATEWAY: v.gateway }, { onSuccess: () => form.reset(v) }),
+        change.mutate(
+          { VLAN: v.vlan, GATEWAY: v.gateway, PEER: v.peer ? "on" : "off" },
+          { onSuccess: () => form.reset(v) },
+        ),
       )}
       noValidate
       className="grid gap-4"
@@ -74,6 +77,13 @@ function HandoverForm({ link }: { link: LinkView }) {
           {...form.register("gateway")}
         />
       </div>
+      <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
+        <input type="checkbox" className="toggle toggle-sm" {...form.register("peer")} />
+        <span>
+          <span className="text-sm">{t("sfp.peer")}</span>
+          <span className="block text-xs text-base-content/60">{t("sfp.peerHint")}</span>
+        </span>
+      </label>
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
           {t("internet.save")}
@@ -124,7 +134,12 @@ export function SfpPage() {
         </Card>
         <Card title={t("sfp.handover")}>
           <p className="text-sm text-base-content/70">{t("sfp.handoverHint")}</p>
-          <Facts rows={[[t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")]]} />
+          <Facts
+            rows={[
+              [t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")],
+              s.up && link.hostGateway ? [t("sfp.hostGateway"), link.hostGateway] : null,
+            ]}
+          />
           <HandoverForm link={link} />
         </Card>
       </div>

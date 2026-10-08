@@ -7,6 +7,7 @@ import {
   fibre,
   fibreVlan,
   gems,
+  hostLink,
   lightQuality,
   linkSpeed,
   memory,
@@ -88,5 +89,30 @@ describe("the VLAN of a session on the fibre", () => {
     s.dev = "wan1410";
     const g = gems(live).find((x) => x.use === "session");
     expect(g?.vlan).toBe("1410");
+  });
+});
+
+describe("the gateway the host is given", () => {
+  it("is the concentrator's address while a session hands its address on", () => {
+    const link = hostLink(LIVE);
+    expect(link.peer).toBe(true);
+    expect(link.hostGateway).toBe("198.51.100.1");
+    expect(link.gateway).toBe("169.254.0.1");
+  });
+
+  it("is the stick's own address when told so, or without the concentrator's", () => {
+    const live = structuredClone(LIVE);
+    if (!live.settings?.pass) throw new Error("a handed address");
+    live.settings.settings.PASS_PEER = "off";
+    live.settings.pass.peer_gateway = null;
+    expect(hostLink(live).peer).toBe(false);
+    expect(hostLink(live).hostGateway).toBe("169.254.0.1");
+  });
+
+  it("is none while nothing is handed on", () => {
+    const live = structuredClone(LIVE);
+    if (!live.settings) throw new Error("settings");
+    live.settings.pass = null;
+    expect(hostLink(live).hostGateway).toBeNull();
   });
 });

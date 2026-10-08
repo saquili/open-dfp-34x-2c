@@ -251,10 +251,15 @@ export const en = {
       "When the stick holds the PPPoE session, the host gets the public address from the stick by DHCP, on this VLAN.",
     vlan: "VLAN to the host",
     vlanHint: "The host gets the address on this VLAN. Leave empty for no VLAN.",
-    gatewayHint: "The address the host sends its traffic to. Any link-local address works.",
+    gatewayHint:
+      "The stick's address on this link, which the DHCP server answers from. Any link-local address works.",
+    peer: "Gateway as in PPPoE",
+    peerHint:
+      "The host is given the operator's concentrator address from the PPPoE session as its gateway, as with a session of its own. Off: the stick's address is the gateway.",
+    hostGateway: "The host's gateway",
     stickMac: "Stick's MAC address",
     mtu: "Largest frame (MTU)",
-    gateway: "Gateway the host gets",
+    gateway: "The stick's address on the link",
     lease: "Address the host has",
     noLease: "Not handed out",
     traffic: "Traffic on the SFP port",

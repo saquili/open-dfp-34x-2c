@@ -42,6 +42,7 @@ export const LIVE: Live = {
       LAN_DHCP_END: "192.0.2.199",
       LAN_VLAN: "36",
       PASS_GATEWAY: "169.254.0.1",
+      PASS_PEER: "on",
     },
     sessions: [
       {
@@ -68,6 +69,7 @@ export const LIVE: Live = {
     pass: {
       address: "203.0.113.24",
       lan: "lan",
+      peer_gateway: "198.51.100.1",
     },
     applying: false,
     last_apply_status: null,

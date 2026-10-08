@@ -310,6 +310,7 @@ export const handlers = [
       const [k, v = ""] = [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)];
       if (k === "VLAN") settings.settings.LAN_VLAN = v;
       if (k === "GATEWAY") settings.settings.PASS_GATEWAY = v;
+      if (k === "PEER") settings.settings.PASS_PEER = v;
     }
     settings.store = "saved";
     return HttpResponse.json({ id: "link", ok: true });

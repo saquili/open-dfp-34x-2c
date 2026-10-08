@@ -82,7 +82,9 @@ or of the other bank with an empty body, and restarts.
   holds the session, and the first that carries IPv4 hands its address to the
   router; ``USER=`` removes it. The panel names no mode: without accounts the
   router dials through the stick.
-* ``link``: how the router gets the address, ``VLAN`` and ``GATEWAY``.
+* ``link``: how the router gets the address, ``VLAN``, ``GATEWAY``, the
+  stick's address on the link, and ``PEER``, ``on`` to give the router the
+  concentrator's address as its gateway or ``off`` to give it the stick's.
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION`` and ``PLOAM``

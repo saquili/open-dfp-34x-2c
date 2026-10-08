@@ -1524,6 +1524,7 @@ static void test_settings(void)
 		"WAN_MAC=00-00-5e-00-53-01",
 		"LAN_VLAN=4095",
 		"PASS_GATEWAY=169.254.0",
+		"PASS_PEER=yes",
 		"PPPOE_USER=two words",
 		"PPPOE_SECRET=",
 		"a line without an equals sign",
@@ -1655,8 +1656,13 @@ static void test_settings(void)
 	put("/run/onu-pass", "192.0.2.2\n", 0644);
 	put("/run/onu-lan", "lan\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
-	check(strstr(s, "\"pass\":{\"address\":\"192.0.2.2\",\"lan\":\"lan\"}") != NULL,
+	check(strstr(s, "\"pass\":{\"address\":\"192.0.2.2\",\"lan\":\"lan\","
+			"\"peer_gateway\":null}") != NULL,
 	      "and the address a session handed to the router");
+	put("/run/onu-pass-proxy", "192.0.2.1\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"peer_gateway\":\"192.0.2.1\"}") != NULL,
+	      "with the concentrator's address as its gateway");
 	mkdir(prov_path("/run/session", file, sizeof(file)), 0755);
 	mkdir(prov_path("/run/session/1", file, sizeof(file)), 0755);
 	put("/run/session/1/dev", "wan410\n", 0644);
@@ -1792,6 +1798,13 @@ static void test_panel_values(void)
 		      file_has("/run/onu.conf", "PASS_GATEWAY=169.254.0.1"),
 	      "the link to the router takes its VLAN and the gateway it hands out");
 	check(prov_link_set("VLAN=0", err, sizeof(err)) == -EINVAL, "a VLAN of 0 is refused");
+	rc = prov_link_set("PEER=off\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "PASS_PEER=off") &&
+		      file_has("/run/onu.conf", "LAN_VLAN=36"),
+	      "the router can be given the stick's own address as the gateway");
+	check(prov_link_set("PEER=maybe\n", err, sizeof(err)) == -EINVAL,
+	      "PEER is on or off");
 	(void)s;
 	unsetenv("POND_STORE");
 	unsetenv("POND_REIDENTIFY");
