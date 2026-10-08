@@ -17,6 +17,10 @@
 #                       /run/onu-identity
 #   onu-store auth HASH the administrator's password hash into the store and
 #                       into /run/onu-auth
+#   onu-store system    the stick's own settings of the KEY=VALUE lines of the
+#                       standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
+#                       SFP_LANE) into the store and into /run/onu-system; an
+#                       empty value removes the key
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
@@ -24,6 +28,8 @@
 # leaves out (PPPOE_USER and PPPOE_SECRET, the single account of before, are
 # the first session's);
 # AUTH_HASH is the content of /run/onu-auth, for the status daemon's sign-in;
+# a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
+# own settings, which the boot script reads before it brings up the links;
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #
@@ -49,6 +55,7 @@ CREDS=$RUN/onu-pppoe
 MAX_SESSIONS=7
 IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
+SYSTEM=$RUN/onu-system
 SOURCE=$RUN/onu-identity-source
 STATE=$RUN/onu-store
 
@@ -96,7 +103,7 @@ factory_identity() {
 settings() {
 	if [ -r "$CONF" ]; then
 		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
-			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_'
+			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_'
 	fi
 	stored=$(contents 2>/dev/null)
 	n=1
@@ -125,9 +132,10 @@ load() {
 		list=
 	}
 	umask 077
-	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS"*.new "$AUTH.new"
+	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new"
 	printf '%s\n' "$list" | awk -v id="$IDENTITY.new" -v conf="$CONF.new" \
-		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" '
+		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
+		-v sys="$SYSTEM.new" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -137,6 +145,7 @@ load() {
 		}
 		k ~ /^ID_/ { print tolower(substr(k, 4)) "=" v > id; next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
+		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
 		k == "PPPOE_USER" { old_user = v; next }
 		k == "PPPOE_SECRET" { old_secret = v; next }
 		k ~ /^PPPOE[1-9]_USER$/ { user[substr(k, 6, 1)] = v; next }
@@ -161,6 +170,11 @@ load() {
 		[ -e "$new" ] && mv "$new" "${new%.new}"
 	done
 	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
+	if [ -e "$SYSTEM.new" ]; then
+		chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
+	else
+		rm -f "$SYSTEM"
+	fi
 	if [ -s "$IDENTITY.new" ]; then
 		mv "$IDENTITY.new" "$IDENTITY"
 		(umask 022 && echo store >"$SOURCE")
@@ -215,6 +229,36 @@ identity() {
 		(umask 022 && echo store >"$SOURCE")
 }
 
+# The stick's own settings of KEY=VALUE lines on the standard input, as SYS_
+# keys; only the keys the boot script knows, with values of their shape.
+system() {
+	lines=$(awk '{
+		i = index($0, "=")
+		if (i < 2)
+			next
+		k = substr($0, 1, i - 1)
+		v = substr($0, i + 1)
+		if (k == "HOSTNAME" && v !~ /^([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)?$/)
+			exit 1
+		if (k == "MGMT_VLAN" && v !~ /^([1-9][0-9]*)?$/)
+			exit 1
+		if (k == "MGMT_ADDRESS" && v !~ /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+)?$/)
+			exit 1
+		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex)?$/)
+			exit 1
+		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE)$/)
+			exit 1
+		print "SYS_" k "=" v
+	}') || return 1
+	[ -n "$lines" ] || return 1
+	printf '%s\n' "$lines" | onucfg --store "$STORE" import || return 1
+	contents | awk '/^SYS_/ {
+		i = index($0, "=")
+		if (i < length($0))
+			print substr($0, 5)
+	}' >"$SYSTEM.new" && chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
+}
+
 auth() {
 	case $1 in
 	*[!A-Za-z0-9\$./_-]* | "") return 1 ;;
@@ -259,8 +303,11 @@ identity)
 auth)
 	auth "${2:-}"
 	;;
+system)
+	system
+	;;
 *)
-	echo "usage: onu-store load|save|migrate|identity|auth HASH" >&2
+	echo "usage: onu-store load|save|migrate|identity|auth HASH|system" >&2
 	exit 2
 	;;
 esac

@@ -247,5 +247,47 @@ check 'grep -q -x model=TEST-1 "$ONU_ROOT/run/onu-identity"'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
 teardown
 
+echo "the stick's own settings go to the store, to /run/onu-system, and come back at boot"
+setup
+settings
+run save
+printf 'HOSTNAME=stick-7\nMGMT_VLAN=100\nMGMT_ADDRESS=192.0.2.6/30\n' |
+	"$STORE_SCRIPT" system 2>/dev/null
+rc=$?
+check '[ $rc -eq 0 ]'
+check 'stored SYS_HOSTNAME=stick-7'
+check 'stored SYS_MGMT_ADDRESS=192.0.2.6/30'
+check 'grep -q -x HOSTNAME=stick-7 "$ONU_ROOT/run/onu-system"'
+check 'grep -q -x MGMT_VLAN=100 "$ONU_ROOT/run/onu-system"'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-system" | cut -c1-10)" = -rw-r--r-- ]'
+# A save of the data path keeps them, and they are no line of onu.conf.
+run save
+check 'stored SYS_HOSTNAME=stick-7'
+rm -f "$ONU_ROOT/run/onu-system" "$ONU_ROOT/run/onu.conf"
+run load
+check 'grep -q -x MGMT_ADDRESS=192.0.2.6/30 "$ONU_ROOT/run/onu-system"'
+check '! grep -q -e SYS_ -e HOSTNAME "$ONU_ROOT/run/onu.conf"'
+# An empty value takes a setting away; a value of the wrong shape, or a key
+# the boot script does not know, changes nothing.
+printf 'HOSTNAME=\n' | "$STORE_SCRIPT" system 2>/dev/null
+check '! grep -q HOSTNAME "$ONU_ROOT/run/onu-system"'
+check 'grep -q -x MGMT_VLAN=100 "$ONU_ROOT/run/onu-system"'
+cp "$ONU_STORE" "$T/before"
+printf 'HOSTNAME=-bad\n' | "$STORE_SCRIPT" system 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+printf 'MGMT_ADDRESS=192.0.2.6\n' | "$STORE_SCRIPT" system 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+printf 'MODE=router\n' | "$STORE_SCRIPT" system 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+teardown
+# A store without them at all leaves no file behind at boot.
+setup
+run load
+check '[ ! -e "$ONU_ROOT/run/onu-system" ]'
+teardown
+
 echo "test_onu_store: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]
