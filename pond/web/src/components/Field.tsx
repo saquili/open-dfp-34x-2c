@@ -76,7 +76,12 @@ export const Field = forwardRef<HTMLInputElement, Props>(function Field(
 ) {
   const name = id ?? input.name;
   return (
-    <div className={`grid gap-1 ${className}`}>
+    /*
+     * Its rows stay at the top of the cell, so that in a grid of fields the
+     * inputs of one row line up whether or not a neighbour has a hint under
+     * it, which makes the row taller.
+     */
+    <div className={`grid content-start gap-1 ${className}`}>
       <label htmlFor={name} className="text-sm font-medium">
         {label}
       </label>
