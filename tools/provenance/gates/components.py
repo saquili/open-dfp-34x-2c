@@ -53,8 +53,9 @@ DESCRIPTIONS = {
 }
 
 # Directories imported from upstream with "git subtree --squash": the gates
-# look only at what differs from the latest pristine import.
-UPSTREAM_SUBTREES = ("linux",)
+# look only at what differs from the latest pristine import. netifd/ is
+# OpenWrt's network interface daemon, carried as a fork.
+UPSTREAM_SUBTREES = ("linux", "netifd")
 
 # Buildroot names its commits after paths inside the external tree.
 _DISTRO_TOP = ("package", "board", "configs", "Config.in", "external.mk", "external.desc",

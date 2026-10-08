@@ -46,8 +46,9 @@ What each command reads
 
 ``tree``
     Every tracked file (``--untracked`` adds files git does not ignore). Under
-    ``linux/``, which is imported from upstream with ``git subtree --squash``,
-    it reads only what differs from the latest pristine import: new files
+    ``linux/`` and ``netifd/``, which are imported from upstream with ``git
+    subtree --squash``, it reads only what differs from the latest pristine
+    import: new files
     whole, modified upstream files by their changed lines, pristine files and
     links not at all. A symbolic link is read as its target.
 
