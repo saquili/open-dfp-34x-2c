@@ -82,6 +82,25 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertEqual(sorted(os.listdir(sbin)), sorted(kept))
 
+    def test_a_tree_without_the_shared_c_library_needs_no_build_directories(self):
+        env = {key: value for key, value in os.environ.items()
+               if key not in ("HOST_DIR", "STAGING_DIR", "BUILD_DIR")}
+        done = subprocess.run(["sh", SCRIPT, self.target], env=dict(env, GIT=self.git),
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_the_shared_c_library_is_not_left_whole_for_want_of_the_build_directories(self):
+        lib = os.path.join(self.target, "lib")
+        os.makedirs(lib)
+        with open(os.path.join(lib, "libuClibc-1.0.59.so"), "wb") as handle:
+            handle.write(b"\x7fELF")
+        env = {key: value for key, value in os.environ.items()
+               if key not in ("HOST_DIR", "STAGING_DIR", "BUILD_DIR")}
+        done = subprocess.run(["sh", SCRIPT, self.target], env=dict(env, GIT=self.git),
+                              capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("HOST_DIR is not set", done.stderr)
+
     def test_without_the_file_it_fails(self):
         os.remove(self.release)
         done = self.run_script()

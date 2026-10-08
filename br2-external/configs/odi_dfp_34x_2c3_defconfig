@@ -6,24 +6,29 @@
 # r0.squashfs. Running make in the top directory of the repository configures
 # and builds it; docs/handbook/building.rst says how and what it makes.
 #
-# Every executable in the image is linked statically and the image holds no
-# shared object. The shared libraries of this toolchain contain three
-# functions with instructions that the core cannot run (br2-external/README.rst,
-# "The instruction-set gate over the toolchain's own objects"), and no option
-# leaves them out; a static program takes only the objects it refers to, and
-# the instruction-set gate passes the whole target tree. docs/adr/0010 records
-# the decision.
+# The programs of the image share one C library, cut to what they use: the
+# post-build script runs tools/lib-trim, which links the C library again with
+# only the functions the programs import and removes the libraries nothing
+# loads (libgcc_s). The carried patch of uClibc-ng's exit handlers keeps the
+# library's one atomic operation that every program can reach out of it, and
+# the instruction-set gate passes the whole target tree. docs/adr/0011 records
+# the decision, which replaces the static programs of docs/adr/0010.
 
 # MIPS I, big endian, soft-float: the Lexra core of the RTL9602C. The MIPS I
 # variant comes from the patch in buildroot/patches.
 BR2_mips=y
 BR2_mips_1=y
 
-# The toolchain: the same as configs/toolchain_defconfig, but with static
+# The toolchain: the same as configs/toolchain_defconfig, but with shared
 # libraries only. gcc 14 and binutils 2.44, and uClibc-ng with the C library
 # configuration of this product. No threads: the core has no atomic operations.
 # Wide characters, because the build system offers nftables only with them.
-BR2_STATIC_LIBS=y
+# The programs are not position-independent: code that is costs some 15% more
+# flash, and the static programs before them were not either. Full RELRO would
+# force position independence back on, so RELRO is partial.
+BR2_SHARED_LIBS=y
+# BR2_PIC_PIE is not set
+BR2_RELRO_PARTIAL=y
 BR2_BINUTILS_VERSION_2_44_X=y
 BR2_GCC_VERSION_14_X=y
 BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y

@@ -30,7 +30,7 @@ What is here
 ``configs/toolchain_defconfig``
     The configuration of the toolchain, and of nothing but the toolchain.
 ``configs/odi_dfp_34x_2c3_defconfig``
-    The board: the same toolchain with static libraries only, the kernel, the
+    The board: the same toolchain with shared libraries only, the kernel, the
     root filesystem and the two images (see "The board's image").
 ``board/dfp-34x-2c3/uclibc.fragment``
     The uClibc-ng settings that the userspace of the board needs, which both
@@ -42,6 +42,10 @@ What is here
     The files laid over the root filesystem: the inittab, the boot script
     ``etc/init.d/rcS``, the shell profile, the name of the image, and the
     ``var`` directory that a temporary file system is mounted on.
+``board/dfp-34x-2c3/post-build.sh``
+    The script that the build system runs on the target tree: it takes out the
+    programs of iproute2 the stick does not run, cuts the shared libraries with
+    ``tools/lib-trim`` and writes the build's commit into ``/etc/os-release``.
 ``board/dfp-34x-2c3/post-image.sh``
     The script that leaves ``k0.uImage``, ``r0.squashfs`` and ``SHA256SUMS`` in the
     images directory.
@@ -49,7 +53,7 @@ What is here
     The unit tests of the tree (``tests/image`` and ``tests/toolchain``).
 ``tests/image/``
     The tests of the post-image script, the boot script and the defconfig, and
-    the checks that run on a built image: ``check-applets`` runs its static
+    the checks that run on a built image: ``check-applets`` runs its
     programs under ``qemu-mips`` and ``tree-digest`` lists its files with their
     digests.
 ``tests/toolchain/``
@@ -187,9 +191,13 @@ of the stick and leaves the two flash images in ``images/`` of the output
 directory. ``make`` in the top directory does it; ``docs/handbook/building.rst``
 has the commands, the sizes and how to put the images on the board. In short:
 
-* The toolchain is the one above with static libraries only
-  (``BR2_STATIC_LIBS``), so that every program of the image is static and the
-  image holds no shared object (ADR 0010).
+* The toolchain is the one above with shared libraries only
+  (``BR2_SHARED_LIBS``): the programs of the image share one C library, and are
+  not position-independent (``BR2_PIC_PIE`` off, so RELRO is partial). The
+  post-build script cuts the shared libraries to what the programs use with
+  ``tools/lib-trim``, which removes ``libgcc_s`` (nothing loads it), links the C
+  library again with only the functions the programs import, and fails the
+  build when a program would miss a library or a symbol (ADR 0011).
 * The kernel is the tree of ``linux/``, taken from the archive that serves the
   headers, configured by ``rtl9602c_defconfig`` and built with this toolchain.
   The image is the LZMA-compressed legacy U-Boot image the boot loader takes.
@@ -214,7 +222,7 @@ has the commands, the sizes and how to put the images on the board. In short:
 What the build judges is in the top-level ``Makefile``: the images against their
 partitions (``tools/image-budget``), the instruction-set gate over the whole
 target tree, and the digests. ``tests/image/check-applets`` runs the image's
-static programs under ``qemu-mips``, and ``tests/image/tree-digest`` lists a
+programs under ``qemu-mips``, with the image's own loader and cut C library, and ``tests/image/tree-digest`` lists a
 target tree for the comparison of two builds; the ``image`` workflow does both
 (``.github/workflows/README.rst``).
 

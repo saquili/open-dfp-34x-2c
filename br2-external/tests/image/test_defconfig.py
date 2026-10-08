@@ -30,7 +30,7 @@ def settings(path):
 
 
 class Toolchain(unittest.TestCase):
-    """The board's toolchain is the toolchain defconfig's, with static libraries only."""
+    """The board's toolchain is the toolchain defconfig's, with shared libraries only."""
 
     SECTION = ("BR2_mips", "BR2_mips_1", "BR2_BINUTILS_VERSION_2_44_X", "BR2_GCC_VERSION_14_X",
                "BR2_TOOLCHAIN_BUILDROOT_UCLIBC", "BR2_TOOLCHAIN_BUILDROOT_WCHAR",
@@ -46,20 +46,26 @@ class Toolchain(unittest.TestCase):
             self.assertIn(key, toolchain, key)
             self.assertEqual(board.get(key, "missing"), toolchain[key], key)
 
-    def test_every_executable_is_static(self):
+    def test_the_programs_share_the_c_library_and_are_not_position_independent(self):
         board = settings(BOARD_DEFCONFIG)
-        self.assertEqual(board["BR2_STATIC_LIBS"], "y")
-        self.assertNotIn("BR2_SHARED_LIBS", board)
+        self.assertEqual(board["BR2_SHARED_LIBS"], "y")
+        self.assertNotIn("BR2_STATIC_LIBS", board)
         self.assertNotIn("BR2_SHARED_STATIC_LIBS", board)
+        self.assertIn("BR2_PIC_PIE", board)
+        self.assertIsNone(board["BR2_PIC_PIE"])
+        # Full RELRO selects BR2_PIC_PIE and would turn it back on.
+        self.assertEqual(board["BR2_RELRO_PARTIAL"], "y")
+        self.assertNotIn("BR2_RELRO_FULL", board)
 
     def test_the_build_is_reproducible(self):
         self.assertEqual(settings(BOARD_DEFCONFIG)["BR2_REPRODUCIBLE"], "y")
 
-    def test_the_header_says_why_the_image_is_static(self):
+    def test_the_header_says_why_the_programs_share_a_cut_c_library(self):
         with open(BOARD_DEFCONFIG, encoding="utf-8") as handle:
             head = handle.read().split("\nBR2_", 1)[0]
-        self.assertIn("static", head)
-        self.assertIn("docs/adr/0010", head)
+        self.assertIn("share one C library", head)
+        self.assertIn("tools/lib-trim", head)
+        self.assertIn("docs/adr/0011", head)
 
 
 class Kernel(unittest.TestCase):

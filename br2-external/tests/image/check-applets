@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
-"""check-applets: run the static programs of the built image under qemu-mips.
+"""check-applets: run the programs of the built image under qemu-mips.
 
 Usage: check-applets TARGET_DIR [QEMU]
 
 TARGET_DIR is the root filesystem as the build leaves it (build/image/target).
 QEMU is the user-mode emulator (default qemu-mips). The programs are the board's
-own, static MIPS I, and run on the build machine through the emulator; no file
-of the machine is changed. The checks are:
+own, MIPS I, and run on the build machine through the emulator, with the image's
+own dynamic loader and C library (qemu-mips -L TARGET_DIR), the C library as the
+build cut it; no file of the machine is changed. The checks are:
 
 * BusyBox lists every applet that the boot script and /etc/inittab name, and
   each of them starts and prints its usage;
@@ -64,8 +65,8 @@ def main(argv):
         return 2
 
     def run(*args, stdin=None, timeout=120):
-        done = subprocess.run([qemu, *args], input=stdin, capture_output=True, text=True,
-                              timeout=timeout)
+        done = subprocess.run([qemu, "-L", target, *args], input=stdin, capture_output=True,
+                              text=True, timeout=timeout)
         return done.returncode, done.stdout, done.stderr
 
     status, out, err = run(busybox, "--list")
