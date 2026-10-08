@@ -37,6 +37,9 @@ kernel's bindings).
     URL, checked against the pin, and the carried patches are applied to it.
 ``image-budget``
     The self-tests of ``tools/image-budget``, the size check of the flash images.
+``lib-trim``
+    The self-tests of ``tools/lib-trim``, the cut of the image's shared
+    libraries, with the end-to-end tests built by Debian's MIPS cross compiler.
 ``image-scripts``
     ``br2-external/tests/run``: the tests of the post-image script (with the real
     ``mksquashfs``), of the boot script and the inittab, of the board's
