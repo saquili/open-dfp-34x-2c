@@ -153,4 +153,6 @@ password.
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,
-one of the two licences it is offered under, and built as it comes.
+one of the two licences it is offered under, and built as it comes. It holds
+micro-ecc by Kenneth MacKay, for its TLS, under the BSD 2-clause licence, whose
+notice goes with the binary too (``LICENSES/preferred/BSD-2-Clause.txt``).

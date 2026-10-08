@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only AND BSD-2-Clause
+// SPDX-FileCopyrightText: 2014-2015 Kenneth MacKay
 // Vendored from Cesanta mongoose 7.16, taken under the GPL-2.0 arm of its
-// dual licence. Unmodified apart from this header.
+// dual licence. Unmodified apart from this header. Mongoose holds micro-ecc
+// by Kenneth MacKay (its tls_uecc parts), under the BSD 2-clause licence,
+// whose notice a binary keeps too (LICENSES/preferred/BSD-2-Clause.txt).
 // Copyright (c) 2004-2013 Sergey Lyubka
 // Copyright (c) 2013-2024 Cesanta Software Limited
 // All rights reserved
