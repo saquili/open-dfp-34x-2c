@@ -22,6 +22,8 @@ define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-trial $(TARGET_DIR)/usr/sbin/onu-trial
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mode $(TARGET_DIR)/usr/sbin/onu-mode
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-store $(TARGET_DIR)/usr/sbin/onu-store
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-lane $(TARGET_DIR)/usr/sbin/onu-lane
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mgmt $(TARGET_DIR)/usr/sbin/onu-mgmt
 	$(INSTALL) -D -m 0755 $(@D)/scripts/dhcp-wan $(TARGET_DIR)/usr/share/onu/dhcp-wan
 endef
 

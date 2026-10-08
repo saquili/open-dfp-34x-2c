@@ -49,7 +49,36 @@ ln -s ../run /var/run
 ln -s ../tmp /var/tmp
 mkdir -p /var/log
 
+# The identity of the unit, its saved settings and its PPPoE account, from
+# the configuration store; the identity from the shipped firmware's
+# configuration until the store holds one. omcid reads the identity, and the
+# PON driver takes the serial number before the PON comes up. The file holds
+# the PLOAM password, so only root may read it.
+umask 077
+onu-store load || warn "no identity in the configuration store or the factory configuration"
+# A bench may name the versions that the software images and the circuit
+# packs report to the OLT, so that a unit shows what the firmware it came
+# with showed; without them omcid reports its own.
+[ -n "${OMCI_SW_VERSION:-}" ] && echo "sw_version=$OMCI_SW_VERSION" >>/run/onu-identity
+[ -n "${OMCI_PACK_VERSION:-}" ] && echo "pack_version=$OMCI_PACK_VERSION" >>/run/onu-identity
+umask 022
+
+# The stick's own settings that its owner changed (onu-store system): its
+# name, and its management VLAN and address, which replace the image's.
+# Each value is read as data, never run.
+SYS_HOSTNAME=
+BOARD_MGMT_VLAN=$MGMT_VLAN
+BOARD_MGMT_ADDRESS=$MGMT_ADDRESS
+if [ -r /run/onu-system ]; then
+	SYS_HOSTNAME=$(sed -n 's/^HOSTNAME=//p' /run/onu-system)
+	value=$(sed -n 's/^MGMT_VLAN=//p' /run/onu-system)
+	[ -n "$value" ] && MGMT_VLAN=$value
+	value=$(sed -n 's/^MGMT_ADDRESS=//p' /run/onu-system)
+	[ -n "$value" ] && MGMT_ADDRESS=$value
+fi
+
 hostname -F /etc/hostname
+[ -n "$SYS_HOSTNAME" ] && { hostname "$SYS_HOSTNAME" || warn "the name $SYS_HOSTNAME was refused"; }
 
 # The system log, in memory: syslogd keeps /run/messages and one older copy, of
 # 64 KiB each, and klogd copies the kernel's messages into it.
@@ -84,16 +113,37 @@ echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore &&
 	echo 2 >/proc/sys/net/ipv4/conf/all/arp_announce ||
 	warn "ARP answers for every address on every interface"
 
+# The setting of the SFP lane its owner kept (onu-lane), if any; the driver
+# looks for the host's otherwise.
+onu-lane apply || warn "the stored setting of the SFP lane was refused"
+
 # The links. The stick's host side is the interface sfp.
 ip link set lo up
 ip link set sfp up || warn "no interface sfp"
 if [ -n "$DATA_ADDRESS" ]; then
 	ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
 fi
-ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" || warn "no VLAN $MGMT_VLAN on sfp"
+# A stored pair that cannot be brought up gives way to the image's: the
+# stick stays reachable.
+ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" &&
+	ip address add "$MGMT_ADDRESS" dev mgmt || {
+	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS did not come up, the image's instead"
+	ip link del mgmt 2>/dev/null
+	MGMT_VLAN=$BOARD_MGMT_VLAN
+	MGMT_ADDRESS=$BOARD_MGMT_ADDRESS
+	ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" || warn "no VLAN $MGMT_VLAN on sfp"
+	ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
+}
 echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6 || warn "no IPv6 on mgmt"
-ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
 ip link set mgmt up || warn "mgmt does not come up"
+# The pair in use, for onu-mgmt, which changes it later.
+{
+	echo "VLAN=$MGMT_VLAN"
+	echo "ADDRESS=$MGMT_ADDRESS"
+	echo "IFACE=mgmt"
+	echo "PREF=1"
+	echo "DATA_ADDRESS=$DATA_ADDRESS"
+} >/run/onu-mgmt
 
 # The management VLAN stays between the host side and the stick, so that the
 # network behind the PON never sees it and never reaches it: on sfp's ingress
@@ -119,19 +169,6 @@ dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no hos
 dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid -p "$mgmt:22" ${data:+-p "$data:22"} ||
 	warn "dropbear did not start"
 
-# The identity of the unit, its saved settings and its PPPoE account, from
-# the configuration store; the identity from the shipped firmware's
-# configuration until the store holds one. omcid reads the identity, and the
-# PON driver takes the serial number before the PON comes up. The file holds
-# the PLOAM password, so only root may read it.
-umask 077
-onu-store load || warn "no identity in the configuration store or the factory configuration"
-# A bench may name the versions that the software images and the circuit
-# packs report to the OLT, so that a unit shows what the firmware it came
-# with showed; without them omcid reports its own.
-[ -n "${OMCI_SW_VERSION:-}" ] && echo "sw_version=$OMCI_SW_VERSION" >>/run/onu-identity
-[ -n "${OMCI_PACK_VERSION:-}" ] && echo "pack_version=$OMCI_PACK_VERSION" >>/run/onu-identity
-umask 022
 # The identity to the PON driver, which takes it before the PON comes up.
 onu-mode identity || warn "the PON stays down"
 
