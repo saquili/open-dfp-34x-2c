@@ -218,8 +218,8 @@ Interfaces to user space
   "Flash and partitions").
 - A gpiolib chip of 32 lines; line 13 is requested by the switch driver as
   TX_DISABLE.
-- ``reboot``, ``halt`` and ``poweroff``: reboot restarts through the CPU's reset
-  vector; halt and power off spin with interrupts disabled.
+- ``reboot``, ``halt`` and ``poweroff``: reboot resets the whole chip through the
+  watchdog; halt and power off spin with interrupts disabled.
 
 How to read the fact tables
 ===========================
@@ -725,11 +725,6 @@ the last column.
      - One read of ``0x1c000000`` stalls the board. A read inside the PON block
        before it is enabled, with the watchdog armed for 42.9 s and read back as
        armed, produces no reset in eleven minutes.
-   * - ``RTL9602C_RESET_VECTOR`` (``0xbfc00000``, KSEG1) is the MIPS reset
-       exception vector; on this board the boot loader runs there.
-     - P, M
-     - P: MIPS I, the reset vector is ``0xbfc00000``. M: a jump to it reaches
-       the boot loader's autoboot prompt 1.81 s later.
 
 Platform setup, restart and build
 =================================
@@ -762,10 +757,11 @@ Platform setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. Write 0 to the watchdog control register. Purpose: a count armed before this
-   kernel, by a restart or by the boot loader's one-shot boot mode, keeps
-   running across the jump into this kernel although the register then reads 0,
-   and would reset the board; writing 0 stops it. Nothing watches the boot from
-   here until the watchdog driver arms the watchdog at probe. (M, I)
+   kernel, by the boot loader's one-shot boot mode or by an older kernel that
+   restarted by a jump to the reset vector, keeps running across the jump into
+   this kernel although the register then reads 0, and would reset the board;
+   writing 0 stops it. Nothing watches the boot from here until the watchdog
+   driver arms the watchdog at probe. (M, I)
 2. Add the DRAM (``RTL9602C_RAM_BASE``, ``RTL9602C_RAM_SIZE``) to memblock.
    Purpose: early allocation works whatever the tree says. (T)
 3. Call ``__dt_setup_arch(__dtb_start)``. Purpose: hand the built-in device tree
@@ -774,7 +770,8 @@ Platform setup
    the port is in the 8250 driver's table when ``console_init()`` runs (see
    "UART and early console"). (M, T)
 5. Install ``_machine_restart``, ``_machine_halt`` and ``pm_power_off``.
-   Purpose: restart through the reset vector, and spin on halt and power off.
+   Purpose: restart through a chip reset by the watchdog, and spin on halt and
+   power off.
    (I)
 
 .. list-table::
@@ -833,15 +830,15 @@ Restart
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 1. Disable interrupts. Purpose: nothing may run in between. (T)
-2. Write ``RTL9602C_WDT_CTRL_ARM_MAX`` to the watchdog control register.
-   Purpose: a safety net; if the jump never reaches the boot loader, the chip
-   resets 44 s later. (M)
-3. Print one line at emergency level. Purpose: the console shows that the reset
-   vector was entered. (T)
-4. Jump to ``RTL9602C_RESET_VECTOR``. Purpose: the boot loader starts at once,
-   1.81 s to its autoboot prompt against about 46 s by the watchdog alone. (M)
-5. Spin with ``cpu_relax()`` if the jump returns. Purpose: the watchdog armed in
-   step 2 resets the chip. (T)
+2. Print one line at emergency level. Purpose: the console shows that the
+   restart was entered. (T)
+3. Write ``RTL9602C_WDT_KEEPALIVE_KICK`` to the watchdog keepalive register.
+   Purpose: the count starts from zero whatever was left in it, as the watchdog
+   driver does before it enables the watchdog. (T)
+4. Write ``RTL9602C_WDT_CTRL_RESET_NOW`` to the watchdog control register.
+   Purpose: the shortest deadline the block has, 335.5 ms, and a full chip
+   reset at its end. (M)
+5. Spin with ``cpu_relax()``. Purpose: wait for the reset. (T)
 
 .. list-table::
    :header-rows: 1
@@ -850,13 +847,19 @@ Restart
    * - Fact
      - Tag
      - Checked by
-   * - Step 4 is a jump, not a reset: the CPU's CP0 state, caches and TLB, and
-       every on-chip block, keep their state; the boot loader re-initialises
-       what it uses and the next kernel's drivers the rest.
-     - T, I
-     - T: every RAM boot restarts this way. I: which blocks the boot loader
-       leaves untouched is not established; comparing register snapshots before
-       a restart and at the next kernel's start would show.
+   * - The restart is a chip reset, not a jump to the boot loader's reset
+       vector (``0xbfc00000``), which reaches the autoboot prompt sooner (1.81 s)
+       but is no reset: every on-chip block keeps the state the kernel left. The
+       switch then keeps the kernel's setup of the SFP lane, and behind the
+       host's ``sfp10g`` cage (a port of the host's own switch) not one of the
+       boot loader's frames leaves the board until a chip reset.
+     - M
+     - A jump with the watchdog armed 44 s behind it, as this kernel restarted
+       before: the host sees carrier and receives no frame from the boot loader
+       until the chip reset; after it the transfer works. With the chip reset,
+       ``reboot`` at 8.9 s and at 45.6 s of uptime: the host's carrier drops as
+       at a watchdog expiry, and the transfer that follows works at once, 15 s
+       after the restart with the loader's commands typed in between.
 
 Build and configuration
 -----------------------
@@ -1395,7 +1398,8 @@ reset, a kernel that stops running is. Once the device is open, user space must
 write to it, or the board resets at the deadline. The driver offers
 ``WDIOF_SETTIMEOUT``, ``WDIOF_MAGICCLOSE`` and ``WDIOF_KEEPALIVEPING`` and no
 pretimeout. The platform code writes the same control register in two places, a
-clear at every boot and an arm on restart.
+clear at every boot and, on restart, an arm at the shortest deadline that resets
+the chip.
 
 .. list-table::
    :header-rows: 1
@@ -1498,14 +1502,14 @@ Registers and fields
    * - ``RTL9602C_WDT_CTRL_ACTION`` (bits 1:0) =
        ``RTL9602C_WDT_CTRL_ACTION_CHIP_RESET`` (0): expiry resets the whole
        chip, the switch included. The switch's PTP clock, which keeps counting
-       through a restart via the CPU reset vector, starts again from zero, and
+       through a jump to the CPU reset vector, starts again from zero, and
        the boot loader brings the switch core up from scratch. The driver uses
        this action because it needs nothing from the CPU: the failure the
        watchdog is for is a kernel that no longer runs.
      - M
      - The switch's PTP seconds counter read before and after: 153 s to 21 s
        across 233 s of wall clock for a watchdog expiry, against 80 s to 153 s
-       across 73 s for a restart through the reset vector. Repeatable through
+       across 73 s for a jump to the reset vector. Repeatable through
        the PHC, which reads the same counter.
    * - Bits 28, 27, 21:20 and 14:2 of ``RTL9602C_WDT_CTRL`` hold nothing:
        written as ones they read back as zero. The control word therefore has no
@@ -1613,8 +1617,8 @@ Operating it
    * - Stop clears ``RTL9602C_WDT_CTRL_EN`` by read-modify-write. The core stops
        the watchdog on an orderly reboot and when the driver unregisters
        (``watchdog_stop_on_reboot()``, ``watchdog_stop_on_unregister()``), so a
-       reboot is not cut short; the platform's restart arms it again afterwards
-       as a net.
+       reboot is not cut short; the platform's restart then arms it at its
+       shortest deadline to reset the chip.
      - T
      - The watchdog is disarmed; ``reboot`` completes.
    * - Once phase one has expired the block refuses kicks, so the deadline
@@ -1705,9 +1709,10 @@ What it recovers from, and what it does not
      - M
      - The tables read through the driver's debugfs view after a watchdog reset
        and a fresh bring-up.
-   * - After a restart through the CPU reset vector with the watchdog armed, the
-       next kernel reads ``RTL9602C_WDT_CTRL`` as 0 while the count armed before
-       the restart still resets the board 47 s after it; writing 0 to the
+   * - After a jump to the CPU reset vector with the watchdog armed (how this
+       kernel restarted before it reset the chip instead), the next kernel reads
+       ``RTL9602C_WDT_CTRL`` as 0 while the count armed before the jump still
+       resets the board 47 s after it; writing 0 to the
        register stops it. The boot loader does neither. The platform writes 0 at
        every boot for this reason, so the driver finds the watchdog stopped at
        probe.
@@ -1720,8 +1725,9 @@ Platform code and the watchdog
 ------------------------------
 
 The platform code writes the control register in two places only:
-``plat_mem_setup()`` clears it, and the restart path arms it as a net. Both use
-``RTL9602C_WDT_CTRL_ADDR`` and go through KSEG1.
+``plat_mem_setup()`` clears it, and the restart path kicks the count and arms
+the watchdog at its shortest deadline. Both use ``RTL9602C_WDT_CTRL_ADDR``, the
+restart also ``RTL9602C_WDT_KEEPALIVE_ADDR``, and both go through KSEG1.
 
 .. list-table::
    :header-rows: 1
@@ -1735,18 +1741,32 @@ The platform code writes the control register in two places only:
        what was written.
      - M
      - ``0xe7c00000`` and ``0`` both read back.
-   * - ``RTL9602C_WDT_CTRL_ARM_MAX`` (``0xe7c00000``) is
-       ``RTL9602C_WDT_CTRL_EN`` set, ``RTL9602C_WDT_CTRL_PRESCALE`` 3 (2^28 LX
-       clocks, 1.342 s per tick), ``RTL9602C_WDT_CTRL_PHASE1`` 31,
-       ``RTL9602C_WDT_CTRL_PHASE2`` 0, ``RTL9602C_WDT_CTRL_ACTION`` 0 (full chip
-       reset): the chip resets (31 + 1 + 0 + 1) x 1.342 s = 44.3 s after the
-       write.
+   * - ``RTL9602C_WDT_KEEPALIVE_ADDR`` (``0x18003260``) is the keepalive
+       register (``RTL9602C_WDT_KEEPALIVE`` in the watchdog driver); writing
+       ``RTL9602C_WDT_KEEPALIVE_KICK`` (bit 31) restarts the count.
+     - M
+     - See the keepalive rows of the watchdog driver.
+   * - ``RTL9602C_WDT_CTRL_RESET_NOW`` (``0x80000000``) is
+       ``RTL9602C_WDT_CTRL_EN`` set and every other field 0:
+       ``RTL9602C_WDT_CTRL_PRESCALE`` 0 (2^25 LX clocks, 167.8 ms per tick),
+       ``RTL9602C_WDT_CTRL_PHASE1`` 0, ``RTL9602C_WDT_CTRL_PHASE2`` 0,
+       ``RTL9602C_WDT_CTRL_ACTION`` 0 (full chip reset): the chip resets
+       (0 + 1 + 0 + 1) x 167.8 ms = 335.5 ms after the write, the shortest
+       deadline the block has.
+     - M
+     - 1.89 to 1.93 s from the restart's console line to the boot loader's
+       first output, in three restarts: the deadline and about 1.6 s of the
+       reset's own path (see the next row).
+   * - With prescale 3 and phase one 31 (``0xe7c00000``, the safety net of the
+       jump this kernel used to restart with), the chip resets
+       (31 + 1 + 0 + 1) x 1.342 s = 44.3 s after the write.
      - M
      - 45.9 s from arming to the boot loader's first output, about 1.6 s of it
        the reset's own path.
    * - ``plat_mem_setup()`` writes 0 to the control register before anything
-       else, so a watchdog armed by a previous kernel's restart (or by the boot
-       loader's one-shot boot mode) does not reset a kernel that booted. Until
+       else, so a watchdog armed by an older kernel's restart by a jump (or by
+       the boot loader's one-shot boot mode) does not reset a kernel that
+       booted. Until
        the watchdog driver arms it again at probe, nothing watches the boot.
      - M, I
      - M: with the write in place the board survives (see the row on the count
@@ -2509,11 +2529,13 @@ starts.
        opens the watchdog, is therefore not reset by it.
      - I
      - Not observed; a one-shot boot of a kernel that stops early would show.
-   * - Restart: the kernel enters the reset vector, the boot loader starts and
-       counts down to autoboot, then boots the committed bank unless interrupted
-       at the console.
+   * - Restart: the kernel has the watchdog reset the chip, the boot loader
+       starts and counts down to autoboot, then boots the committed bank unless
+       interrupted at the console.
      - M
-     - 1.81 s from the jump to the autoboot prompt.
+     - In three restarts: 1.9 s from the restart's console line to the first
+       stage's banner, 3.1 s to the ``U-Boot`` banner and about 3.2 s to the
+       autoboot prompt.
 
 RAM boot over TFTP
 ------------------
@@ -2564,8 +2586,8 @@ The commands of steps 3 and 5::
        kernel sets up again as its clock; the SerDes
        off unless the RAM boot's second step ran; the system controller's PON
        packet-buffer enable clear (``RTL9602C_SYSCTL_BLOCK_EN`` at ``+0x63c``
-       reads ``0x10``); the watchdog disarmed unless a restart or a one-shot
-       boot armed it.
+       reads ``0x10``); the watchdog disarmed unless a one-shot boot, or an
+       older kernel's restart by a jump, armed it.
      - M
      - Every boot for the divisor; timer 1 and the SerDes control register
        (``0x0004801f`` at the prompt) read at the boot loader prompt; the system
@@ -2677,8 +2699,8 @@ About the platform code
      - ``halt`` and ``poweroff`` on the board.
    * - Whether anything calls ``mb()`` before ``plat_mem_setup()``.
      - A run-time assignment of ``__wbflush`` with a trap on NULL.
-   * - Which blocks the boot loader leaves as they were after the jump to the
-       reset vector.
+   * - Which on-chip state survives the chip reset, beyond the switch's table
+       memories.
      - Comparing register snapshots before a restart and at the next kernel's
        start.
    * - Whether device DMA snoops the CPU caches.

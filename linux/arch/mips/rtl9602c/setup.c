@@ -5,6 +5,7 @@
  * halt, and the write-buffer flush.
  */
 
+#include <linux/bits.h>
 #include <linux/export.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -53,43 +54,42 @@ const char *get_system_type(void)
 }
 
 /*
- * The watchdog's control register, which the platform code writes in two
- * places: it clears it at every boot and arms it on restart.
- * RTL9602C_WDT_CTRL_ARM_MAX sets the enable, prescale 3 (1.342 s a tick),
- * phase one of 32 ticks and phase two of one, and a full chip reset on
- * expiry: the chip resets 44.3 s after the write (measured on this board).
+ * The watchdog's keepalive and control registers, which the platform code
+ * writes in two places: it clears the control register at every boot, and
+ * restarts the board through the watchdog.
+ * RTL9602C_WDT_CTRL_RESET_NOW sets the enable alone: prescale 0 (167.8 ms a
+ * tick), phase one and phase two of one tick each, and a full chip reset on
+ * expiry, the shortest deadline the block has (335.5 ms).
  */
+#define RTL9602C_WDT_KEEPALIVE_ADDR	(RTL9602C_IOMEM_BASE + 0x3260)
+#define RTL9602C_WDT_KEEPALIVE_KICK	BIT(31)
 #define RTL9602C_WDT_CTRL_ADDR	(RTL9602C_IOMEM_BASE + 0x3268)
-#define RTL9602C_WDT_CTRL_ARM_MAX	0xe7c00000
-
-/* The MIPS reset exception vector, in KSEG1; the boot loader runs there. */
-#define RTL9602C_RESET_VECTOR	0xbfc00000
+#define RTL9602C_WDT_CTRL_RESET_NOW	BIT(31)
 
 /*
- * Restart by jumping to the reset vector. The boot loader then starts at
- * once: it reaches its prompt 1.81 s after the jump, against about 46 s for
- * a reset by the watchdog alone (measured on this board). The jump is not a
- * reset: the CPU's state, its caches and TLB, and every on-chip block keep
- * theirs; the boot loader sets up again what it uses, and the next kernel's
- * drivers the rest.
+ * Restart by a full chip reset, which the watchdog makes at its shortest
+ * deadline. A jump to the boot loader's reset vector would reach its prompt
+ * sooner, but is not a reset: every on-chip block keeps the state this
+ * kernel left. The switch then keeps this kernel's setup of the SFP lane,
+ * and behind one of the host's cages the boot loader's frames never leave
+ * the board (measured). The chip reset clears all of it, as a power cycle
+ * does.
  */
 static void rtl9602c_machine_restart(char *command)
 {
-	void (*bootloader)(void) = (void (*)(void))RTL9602C_RESET_VECTOR;
-
 	local_irq_disable();
+
+	pr_emerg("rtl9602c: restarting through a watchdog chip reset\n");
+
 	/*
-	 * A safety net: should the jump never reach the boot loader, the chip
-	 * resets 44 s later. The next kernel stops the count at boot.
+	 * Kick before enabling, so the count starts from zero whatever was
+	 * left in it, as the watchdog driver does.
 	 */
-	__raw_writel(RTL9602C_WDT_CTRL_ARM_MAX,
+	__raw_writel(RTL9602C_WDT_KEEPALIVE_KICK,
+		     (void __iomem *)KSEG1ADDR(RTL9602C_WDT_KEEPALIVE_ADDR));
+	__raw_writel(RTL9602C_WDT_CTRL_RESET_NOW,
 		     (void __iomem *)KSEG1ADDR(RTL9602C_WDT_CTRL_ADDR));
 
-	pr_emerg("rtl9602c: entering the reset vector; watchdog armed behind it\n");
-
-	bootloader();
-
-	/* Should the jump return, the watchdog armed above resets the chip. */
 	while (1)
 		cpu_relax();
 }
@@ -207,10 +207,11 @@ void __init plat_mem_setup(void)
 {
 	/*
 	 * Stop the watchdog before anything else. A count armed before this
-	 * kernel, by a restart or by a trial boot of the boot loader, keeps
-	 * running across the jump into this kernel although the control
-	 * register then reads 0; writing 0 stops it. Nothing watches the boot
-	 * from here until the watchdog driver arms it again at probe.
+	 * kernel, by a trial boot of the boot loader or by an older kernel
+	 * that restarted by a jump, keeps running across the jump into this
+	 * kernel although the control register then reads 0; writing 0 stops
+	 * it. Nothing watches the boot from here until the watchdog driver
+	 * arms it again at probe.
 	 */
 	__raw_writel(0, (void __iomem *)KSEG1ADDR(RTL9602C_WDT_CTRL_ADDR));
 
