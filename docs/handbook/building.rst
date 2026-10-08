@@ -509,6 +509,36 @@ run on the build machine record the directory they were built in, as
 ``br2-external/README.rst`` says of the toolchain, and none of them is in an
 image.
 
+The licence information
+=======================
+
+::
+
+    make legal-info
+
+runs the build system's ``legal-info`` for the board's configuration, after a
+build, into ``build/image/legal-info``:
+
+``manifest.csv``
+    Every package of the image: its version, its licence, its licence files and
+    its source. ``host-manifest.csv`` is the same for the programs of the build
+    machine.
+``licenses/``
+    The licence texts, each checked against its hash in the package's hash file.
+    The packages of this repository take theirs from ``LICENSES/`` at the top
+    (``br2-external/external.mk``).
+``sources/``
+    The sources a release hands on, among them archives of this repository's
+    own packages.
+``pond-panel-licenses.txt``
+    The licences of the npm packages whose code the panel holds, as the panel's
+    build wrote them (``pond/web/licences.ts``); the image carries the same file
+    beside the panel, ``/usr/share/pond/www/licenses.txt``. This is why the
+    command wants a built image.
+
+A build from scratch collects 383 MB, nearly all of it sources. Buildroot's own
+source is not saved; its release is the one pinned in ``buildroot/VERSION``.
+
 Putting the images on the board
 ===============================
 
