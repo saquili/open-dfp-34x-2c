@@ -1384,6 +1384,10 @@ multicast as the bridge would:
   groups are flooded all the same, as the bridge floods the link-local groups,
   which it does not snoop. The PON class passes the router state of a GEM port
   to the driver (``gem_mrouter``, see Documentation/networking/pon.rst).
+- While no bridge joins the SFP port to the GEM interfaces, as where the stick
+  routes or holds the sessions itself, unregistered multicast from the PON side
+  would reach only the CPU, which has no group to take it to, and the PON port
+  drops unregistered IPv4 and IPv6 multicast (``rtl9602c_mcast_refresh()``).
 
 .. list-table::
    :header-rows: 1
@@ -1419,6 +1423,15 @@ multicast as the bridge would:
        ff3e::1234 passed, while 20 of 20 to a group in the table and to
        224.0.0.251 did; 1 for the SFP port changed nothing for frames from the
        PON.
+   * - While no bridge joins the SFP port to the GEM interfaces, the PON port
+       drops unregistered IPv4 and IPv6 multicast, and floods it again while
+       one does. The kernel log says each change.
+     - M
+     - At boot ``unregistered multicast from the PON: IPv4 dropped, IPv6
+       dropped``; ``flooded`` while the OMCI bridge held the SFP port and a
+       GEM interface, and ``dropped`` again once it let go of them. That an
+       operator's multicast GEM port then no longer loads the CPU is not yet
+       measured.
    * - ``RTL9602C_MC_UNKNOWN_CFG`` (``0x01c01c``) reads ``0x28`` at reset: the
        reserved IPv4 groups, 224.0.0.0/24, flooded over a drop, and the reserved
        IPv6 groups as well, of which no class is selected. The driver selects

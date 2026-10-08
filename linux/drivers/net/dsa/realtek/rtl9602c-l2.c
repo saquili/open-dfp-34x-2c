@@ -1176,6 +1176,12 @@ void rtl9602c_mcast_reset(struct rtl9602c_priv *p)
  * SFP port itself is not looked for: the bridge would send it the unregistered
  * multicast from the PON side, and the switch then drops it.
  *
+ * While no bridge joins the SFP port to the GEM interfaces, as where the stick
+ * routes or holds the sessions itself, unregistered multicast from the PON
+ * side would reach only the CPU, which has no group to take it to, and the
+ * PON port drops it too. An operator's OLT sent a television channel by the
+ * multicast GEM port that no one had asked for, 7 Mb/s to the CPU (measured).
+ *
  * Context: RTNL held; called when bridge membership changes, when a group
  * changes and when the router state of a GEM port does.
  */
@@ -1184,8 +1190,10 @@ void rtl9602c_mcast_refresh(struct rtl9602c_priv *p)
 	struct dsa_port *dp = dsa_to_port(&p->ds, RTL9602C_PORT_SFP);
 	u8 drop = 0;
 
-	if (dp && dp->user && p->pon_br &&
-	    rtl9602c_port_bridge_dev(p, dp) == p->pon_br) {
+	if (!dp || !dp->user || !p->pon_br ||
+	    rtl9602c_port_bridge_dev(p, dp) != p->pon_br) {
+		drop = BIT(0) | BIT(1);
+	} else {
 		if (br_multicast_has_router_adjacent(dp->user, ETH_P_IP))
 			drop |= BIT(0);
 		if (br_multicast_has_router_adjacent(dp->user, ETH_P_IPV6))
