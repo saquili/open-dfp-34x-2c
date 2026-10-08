@@ -23,7 +23,6 @@
 #include "interface-ip.h"
 #include "proto.h"
 #include "ubus.h"
-#include "ucode.h"
 #include "config.h"
 #include "system.h"
 
@@ -1362,7 +1361,6 @@ interface_set_up(struct interface *iface)
 		return;
 
 	iface->autostart = true;
-	netifd_ucode_check_network_enabled();
 
 	if (iface->state != IFS_DOWN)
 		return;
@@ -1395,7 +1393,6 @@ interface_set_down(struct interface *iface)
 			__interface_set_down(iface, false);
 	} else {
 		iface->autostart = false;
-		netifd_ucode_check_network_enabled();
 		__interface_set_down(iface, false);
 	}
 }

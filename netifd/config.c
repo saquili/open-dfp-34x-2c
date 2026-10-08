@@ -28,7 +28,6 @@
 #include "config.h"
 #include "ubus.h"
 #include "system.h"
-#include "ucode.h"
 
 bool config_init = false;
 
@@ -834,7 +833,6 @@ config_init_all(void)
 	config_init_devices(true);
 	config_init_vlans();
 	config_init_devices(false);
-	netifd_ucode_config_load(false);
 	config_init_interfaces();
 	config_free_vlans();
 	config_init_ip();
@@ -848,7 +846,6 @@ config_init_all(void)
 	vlist_flush(&interfaces);
 	interface_refresh_assignments(false);
 	interface_start_pending();
-	netifd_ucode_config_load(true);
 
 	return ret;
 }

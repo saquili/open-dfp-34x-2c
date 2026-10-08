@@ -27,7 +27,6 @@
 #include "interface.h"
 #include "proto.h"
 #include "extdev.h"
-#include "ucode.h"
 
 unsigned int debug_mask = 0;
 const char *main_path = DEFAULT_MAIN_PATH;
@@ -36,32 +35,6 @@ const char *resolv_conf = DEFAULT_RESOLV_CONF;
 static char **global_argv;
 
 static struct list_head process_list = LIST_HEAD_INIT(process_list);
-static struct udebug ud;
-static struct udebug_buf udb_log;
-struct udebug_buf udb_nl;
-static const struct udebug_buf_meta meta_log = {
-	.name = "netifd_log",
-	.format = UDEBUG_FORMAT_STRING,
-};
-static const struct udebug_buf_meta meta_nl = {
-	.name = "netifd_nl",
-	.format = UDEBUG_FORMAT_PACKET,
-	.sub_format = UDEBUG_DLT_NETLINK,
-};
-static struct udebug_ubus_ring rings[] = {
-	{
-		.buf = &udb_log,
-		.meta = &meta_log,
-		.default_entries = 1024,
-		.default_size = 64 * 1024,
-	},
-	{
-		.buf = &udb_nl,
-		.meta = &meta_nl,
-		.default_entries = 1024,
-		.default_size = 64 * 1024,
-	},
-};
 
 #define DEFAULT_LOG_LEVEL L_NOTICE
 
@@ -90,41 +63,11 @@ netifd_delete_process(struct netifd_process *proc)
 	close(proc->log.fd.fd);
 }
 
-static void __attribute__((format (printf, 1, 0)))
-netifd_udebug_vprintf(const char *format, va_list ap)
-{
-	if (!udebug_buf_valid(&udb_log))
-		return;
-
-	udebug_entry_init(&udb_log);
-	udebug_entry_vprintf(&udb_log, format, ap);
-	udebug_entry_add(&udb_log);
-}
-
-void netifd_udebug_printf(const char *format, ...)
-{
-	va_list ap;
-
-	va_start(ap, format);
-	netifd_udebug_vprintf(format, ap);
-	va_end(ap);
-}
-
-void netifd_udebug_config(struct udebug_ubus *ctx, struct blob_attr *data,
-			  bool enabled)
-{
-	udebug_ubus_apply_config(&ud, rings, ARRAY_SIZE(rings), data, enabled);
-}
-
 void
 __attribute__((format(printf, 2, 0)))
 netifd_log_message(int priority, const char *format, ...)
 {
 	va_list vl;
-
-	va_start(vl, format);
-	netifd_udebug_vprintf(format, vl);
-	va_end(vl);
 
 	if (priority > log_level)
 		return;
@@ -390,10 +333,6 @@ int main(int argc, char **argv)
 
 	netifd_setup_signals();
 	uloop_init();
-	udebug_init(&ud);
-	udebug_auto_connect(&ud, NULL);
-	for (size_t i = 0; i < ARRAY_SIZE(rings); i++)
-		udebug_ubus_ring_init(&ud, &rings[i]);
 
 	if (netifd_ubus_init(socket) < 0) {
 		fprintf(stderr, "Failed to connect to ubus\n");
@@ -402,7 +341,6 @@ int main(int argc, char **argv)
 
 	proto_shell_init();
 	extdev_init();
-	netifd_ucode_init();
 
 	if (system_init()) {
 		fprintf(stderr, "Failed to initialize system control\n");
@@ -415,7 +353,6 @@ int main(int argc, char **argv)
 	netifd_kill_processes();
 
 	netifd_ubus_done();
-	netifd_ucode_free();
 
 	if (use_syslog)
 		closelog();

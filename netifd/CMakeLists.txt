@@ -21,25 +21,23 @@ SET(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "")
 SET(SOURCES
 	main.c utils.c system.c tunnel.c handler.c
 	interface.c interface-ip.c interface-event.c
-	iprule.c proto.c proto-static.c proto-shell.c proto-ext.c proto-ucode.c
+	iprule.c proto.c proto-static.c proto-shell.c proto-ext.c
 	config.c device.c bridge.c veth.c vlan.c alias.c
 	macvlan.c ubus.c vlandev.c extdev.c bonding.c
-	vrf.c ucode.c)
+	vrf.c)
 
 FIND_LIBRARY(uci NAMES uci)
 FIND_LIBRARY(ubox NAMES ubox)
 FIND_LIBRARY(ubus NAMES ubus)
-FIND_LIBRARY(ucode NAMES ucode)
 FIND_LIBRARY(json NAMES json-c json)
-FIND_LIBRARY(udebug NAMES udebug)
 FIND_LIBRARY(blobmsg_json NAMES blobmsg_json)
 
-SET(LIBS ${ubox} ${ubus} ${uci} ${json} ${blobmsg_json} ${udebug} ${ucode})
+# In the order they need each other, for a static link: libubus, libuci and
+# blobmsg_json need libubox, and blobmsg_json needs json-c.
+SET(LIBS ${ubus} ${uci} ${blobmsg_json} ${ubox} ${json})
 
 FIND_PATH(ubox_include_dir libubox/usock.h)
-FIND_PATH(ucode_include_dir ucode/vm.h)
-FIND_PATH(udebug_include_dir udebug.h)
-INCLUDE_DIRECTORIES(${ubox_include_dir} ${ucode_include_dir})
+INCLUDE_DIRECTORIES(${ubox_include_dir})
 
 IF (NOT DEFINED LIBNL_LIBS)
 	include(FindPkgConfig)
