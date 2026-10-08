@@ -96,7 +96,7 @@ jobs:
         # the binaries; run under qemu-mips against their expected output.
         run: br2-external/tests/toolchain/run "$TOOLCHAIN_A" build/toolchain-tests
       - name: The instruction-set gate over the toolchain's target objects
-        # Three functions of the toolchain's libraries hold instructions that
+        # Two functions of the toolchain's libraries hold instructions that
         # the gate refuses (br2-external/README.rst). The step passes when the
         # findings are exactly the list in known-findings.txt, and fails when
         # one is new, gone or different. The comparison is shown to be able to
