@@ -31,8 +31,9 @@ def main():
             names[cls] = f[1]
             attrs.setdefault(cls, []).append((int(f[2]), f[3]))
     out = [
-        "// SPDX-License-Identifier: GPL-2.0-only",
-        "// SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>",
+        # The tags are split so that REUSE does not read them as this script's.
+        "// SPDX-" "License-Identifier: GPL-2.0-only",
+        "// SPDX-" "FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>",
         "",
         "/*",
         " * The managed entity classes pond reads from omcid, with their attributes as",
