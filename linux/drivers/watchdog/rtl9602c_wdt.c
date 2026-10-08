@@ -320,8 +320,8 @@ static int rtl9602c_wdt_probe(struct platform_device *pdev)
 
 	/*
 	 * Stop it on an orderly reboot and on unregister, so a reboot is not
-	 * cut short; the platform's restart path arms it again as a safety
-	 * net.
+	 * cut short; the platform's restart path then arms it at its shortest
+	 * deadline to reset the chip.
 	 */
 	watchdog_stop_on_reboot(&wdt->wdd);
 	watchdog_stop_on_unregister(&wdt->wdd);
