@@ -211,6 +211,14 @@ int prov_firmware(struct prov_buf *out)
 		pv_key(out, "rootfs_size_b");
 		snprintf(key, sizeof(key), "BANK%d_ROOTFS_SIZE", bank);
 		pv_field_num(out, text, key);
+		pv_comma(out);
+		pv_key(out, "kernel_used_b");
+		snprintf(key, sizeof(key), "BANK%d_KERNEL_USED", bank);
+		pv_field_num(out, text, key);
+		pv_comma(out);
+		pv_key(out, "rootfs_used_b");
+		snprintf(key, sizeof(key), "BANK%d_ROOTFS_USED", bank);
+		pv_field_num(out, text, key);
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');

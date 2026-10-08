@@ -1864,7 +1864,8 @@ static const char update_stub[] =
 	"printf 'BANK0_STATE=valid\\nBANK0_VERSION=0123456789ab\\nBANK0_TIME=1759000000\\n'\n"
 	"printf 'BANK0_KERNEL_SIZE=1900544\\nBANK0_ROOTFS_SIZE=2031616\\n'\n"
 	"printf 'BANK1_STATE=valid\\nBANK1_VERSION=7c5fba548abc\\nBANK1_TIME=1759800000\\n'\n"
-	"printf 'BANK1_KERNEL_SIZE=1900544\\nBANK1_ROOTFS_SIZE=2031616\\n'\n";
+	"printf 'BANK1_KERNEL_SIZE=1900544\\nBANK1_ROOTFS_SIZE=2031616\\n'\n"
+	"printf 'BANK1_KERNEL_USED=1712345\\nBANK1_ROOTFS_USED=1899954\\n'\n";
 
 static void test_firmware(void)
 {
@@ -1882,8 +1883,12 @@ static void test_firmware(void)
 	      "the running bank, the committed one, the next start and the trial");
 	check(strstr(s, "{\"bank\":1,\"state\":\"valid\",\"version\":\"7c5fba548abc\","
 			"\"time\":1759800000,\"kernel_size_b\":1900544,"
-			"\"rootfs_size_b\":2031616}") != NULL,
-	      "each bank, with its version, time and sizes");
+			"\"rootfs_size_b\":2031616,\"kernel_used_b\":1712345,"
+			"\"rootfs_used_b\":1899954}") != NULL,
+	      "each bank, with its version, time, sizes and what its images use");
+	check(strstr(s, "\"rootfs_size_b\":2031616,\"kernel_used_b\":null,"
+			"\"rootfs_used_b\":null}") != NULL,
+	      "a bank whose use onu-update does not give has none");
 	check(strstr(s, "\"update\":{\"state\":\"idle\",\"received_b\":0") != NULL,
 	      "no update under way");
 
