@@ -1152,6 +1152,10 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 	case RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS:
 		ctx->val.vu32 = rtl9602c_cpu_rate_get(p);
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC:
+		ctx->val.vbool = !!(rtl9602c_r(p, RTL9602C_L3_CFG) &
+				    RTL9602C_L3_CFG_TTL_DEC);
+		return 0;
 	default:
 		break;
 	}
@@ -1291,6 +1295,13 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 		if (ctx->val.vu32 >= RTL9602C_METER_CFG_HI_RATE_MAX)
 			return -ERANGE;
 		return rtl9602c_cpu_rate_set(p, ctx->val.vu32);
+	case RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC:
+		/* Under flow_lock, as the IPv6 routes change FLOW6_EN. */
+		mutex_lock(&p->flow_lock);
+		rtl9602c_rmw(p, RTL9602C_L3_CFG, RTL9602C_L3_CFG_TTL_DEC,
+			     ctx->val.vbool ? RTL9602C_L3_CFG_TTL_DEC : 0);
+		mutex_unlock(&p->flow_lock);
+		return 0;
 	default:
 		break;
 	}
@@ -1403,6 +1414,15 @@ static const struct devlink_param rtl9602c_devlink_params[] = {
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
 				 "cpu_rx_pps", DEVLINK_PARAM_TYPE_U32,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/*
+	 * Whether the engine decrements the TTL or hop limit of what it
+	 * routes, as a router does, or leaves it, as a stick that stands in
+	 * for an operator's ONT between a router and the operator does: it is
+	 * then no hop of its own, and a frame that arrives with 1 goes on.
+	 */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC,
+				 "l3_ttl_decrement", DEVLINK_PARAM_TYPE_BOOL,
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 };
 

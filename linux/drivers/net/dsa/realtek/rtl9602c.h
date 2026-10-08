@@ -3396,6 +3396,8 @@ struct rtl9602c_priv {
  *	ONU gives when the OLT asks for it
  * @RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS: cpu_rx_pps, the packets a second
  *	the switch hands the CPU
+ * @RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC: l3_ttl_decrement, whether the
+ *	engine decrements the TTL or hop limit of what it routes
  */
 enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_BASE = DEVLINK_PARAM_GENERIC_ID_MAX,
@@ -3423,6 +3425,7 @@ enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_GPON_SERIAL,
 	RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
 	RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
+	RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC,
 };
 
 /*

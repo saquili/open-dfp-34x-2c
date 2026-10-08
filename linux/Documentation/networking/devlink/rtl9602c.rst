@@ -704,6 +704,34 @@ To lift the limit and set it again::
        (``meters 001fffff``). I: the refusal with ``-ENOSPC`` while storm
        control holds meters 8 to 15 is read from the code.
 
+The TTL of routed frames
+------------------------
+
+A router decrements the TTL of an IPv4 packet and the hop limit of an IPv6
+packet that it forwards, and answers one that arrives with 1 itself (RFC 1812,
+RFC 8200). The L3 engine does so while ``l3_ttl_decrement`` is true, as setup
+leaves it. A stick that holds the operator's sessions for a router behind it
+stands in for the operator's ONT, which is no hop: with the parameter false
+the engine forwards what it routes with its TTL or hop limit unchanged, and a
+frame that arrives with 1 goes on, to expire at the next router. What the
+engine does either way is on Documentation/networking/dsa/rtl9602c-l3-nat.rst
+(``TTL_DEC``); the frames that the CPU forwards are decremented by the kernel
+either way.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``l3_ttl_decrement``
+     - bool
+     - runtime
+     - Whether the engine decrements the TTL or hop limit of what it routes.
+       Default true. Read from ``RTL9602C_L3_CFG``.
+
 GPON serial number
 ------------------
 
