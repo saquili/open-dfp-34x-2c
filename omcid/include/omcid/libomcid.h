@@ -79,6 +79,20 @@ int omcid_me_get(struct omcid_conn *conn, uint16_t class_id, uint16_t instance,
 		 uint8_t *out, size_t cap, size_t *n);
 
 /**
+ * omcid_me_dump() - Read every attribute of an instance, a table's rows too.
+ * @conn: the connection
+ * @class_id: the class
+ * @instance: the instance
+ * @out: the records, as ctl_proto.h describes them
+ * @cap: room in @out
+ * @n: the bytes written; may be NULL
+ *
+ * Return: 0, -1, %OMCI_CTL_ERR_NOT_FOUND or %OMCI_CTL_ERR_TOO_BIG.
+ */
+int omcid_me_dump(struct omcid_conn *conn, uint16_t class_id, uint16_t instance,
+		  uint8_t *out, size_t cap, size_t *n);
+
+/**
  * omcid_me_list() - List the instances of a class.
  * @conn: the connection
  * @class_id: the class

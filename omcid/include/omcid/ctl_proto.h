@@ -42,6 +42,9 @@
  * @OMCI_CTL_OP_TAP: follow the frames received and sent
  * @OMCI_CTL_OP_VLAN_FATES: what became of each VLAN rule, a page from the
  *	record the argument names
+ * @OMCI_CTL_OP_ME_DUMP: every attribute of an instance, each a record of its
+ *	own: a table attribute's rows as well, which %OMCI_CTL_OP_ME_GET
+ *	leaves out
  */
 enum omci_ctl_op {
 
@@ -54,7 +57,18 @@ enum omci_ctl_op {
 	OMCI_CTL_OP_TAP = 4,
 
 	OMCI_CTL_OP_VLAN_FATES = 5,
+
+	OMCI_CTL_OP_ME_DUMP = 6,
 };
+
+/*
+ * A record of a dump: the attribute's number, with %OMCI_CTL_DUMP_TABLE set
+ * for a table, the length of its value, two bytes, and the value; a table's
+ * value is its rows end to end. An instance whose records do not all fit
+ * the payload is answered %OMCI_CTL_ERR_TOO_BIG.
+ */
+#define OMCI_CTL_DUMP_HDR_LEN 3u
+#define OMCI_CTL_DUMP_TABLE 0x80u
 
 /* The fates of a VLAN rule, as enum omci_vlan_fate of the daemon defines them. */
 #define OMCI_CTL_VLAN_FATE_PROGRAMMED 0u

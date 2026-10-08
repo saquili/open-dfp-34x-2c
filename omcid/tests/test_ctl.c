@@ -400,6 +400,65 @@ static void test_replies(void)
 	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_GET, 9999, 0, 0, pay, sizeof(pay), &n),
 		 OMCI_CTL_ERR_NOT_FOUND);
 
+	/* A dump has a record per attribute, the values ME_GET gives. */
+	uint8_t got[OMCI_CTL_PAYLOAD_MAX];
+	size_t m = 0;
+
+	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_GET, 256, 0, 0, got, sizeof(got), &m),
+		 OMCI_CTL_OK);
+	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_DUMP, 256, 0, 0, pay, sizeof(pay), &n),
+		 OMCI_CTL_OK);
+	CHECK_EQ(pay[0], 1u);
+	CHECK_EQ(omci_be16(&pay[1]), 4u);
+	CHECK_MEM(&pay[3], got, 4);
+	CHECK_EQ(pay[7], 2u);
+	CHECK_EQ(omci_be16(&pay[8]), 14u);
+	CHECK_MEM(&pay[10], &got[4], 14);
+	CHECK_EQ(n, m + OMCI_CTL_DUMP_HDR_LEN *
+				    omci_me_class_by_id(256)->attr_count);
+	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_DUMP, 256, 7, 0, pay, sizeof(pay), &n),
+		 OMCI_CTL_ERR_NOT_FOUND);
+	CHECK_EQ(n, 0u);
+	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_DUMP, 9999, 0, 0, pay, sizeof(pay), &n),
+		 OMCI_CTL_ERR_NOT_FOUND);
+
+	/* A table's record holds its rows, which ME_GET leaves out. */
+	uint8_t row[16] = { 0xf8, 0,	0,    0,    0x80, 0x23, 0x80, 0,
+			    0,	  0x0f, 0xa0, 0x00, 0x00, 0x0f, 0x00, 0x00 };
+
+	CHECK_EQ(omci_mib_create(g_mib, 171u, 1u), OMCI_OK);
+	CHECK_EQ(omci_mib_table_put(g_mib, 171u, 1u, 6u, row, sizeof(row), 8u,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	row[5] = 0x24;
+	CHECK_EQ(omci_mib_table_put(g_mib, 171u, 1u, 6u, row, sizeof(row), 8u,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_DUMP, 171, 1, 0, pay, sizeof(pay), &n),
+		 OMCI_CTL_OK);
+
+	size_t at = 0;
+
+	while (at < n && (pay[at] & 0x7fu) != 6u)
+		at += OMCI_CTL_DUMP_HDR_LEN + omci_be16(&pay[at + 1u]);
+	CHECK(at < n);
+	CHECK_EQ(pay[at], 6u | OMCI_CTL_DUMP_TABLE);
+	CHECK_EQ(omci_be16(&pay[at + 1u]), 32u);
+	CHECK_EQ(pay[at + 3u + 5u], 0x23u);
+	CHECK_EQ(pay[at + 3u + 16u + 5u], 0x24u);
+
+	/* Rows beyond the payload: the answer says so, and holds nothing. */
+	for (uint8_t k = 0; k < 40u; k++) {
+		row[5] = k;
+		row[6] = 0x7f;
+		(void)omci_mib_table_put(g_mib, 171u, 1u, 6u, row, sizeof(row),
+					 8u, OMCI_MIB_TABLE_LAST);
+	}
+	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_DUMP, 171, 1, 0, pay, sizeof(pay), &n),
+		 OMCI_CTL_ERR_TOO_BIG);
+	CHECK_EQ(n, 0u);
+	CHECK_EQ(omci_mib_delete(g_mib, 171u, 1u), OMCI_OK);
+
 	for (uint16_t i = 1; i <= 256u; i++)
 		CHECK_EQ(omci_mib_create(g_mib, 321u, i), OMCI_OK);
 	CHECK_EQ(ask(c, OMCI_CTL_OP_ME_LIST, 321, 0, 0, pay, sizeof(pay), &n),

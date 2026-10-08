@@ -176,6 +176,24 @@ int omcid_me_get(struct omcid_conn *conn, uint16_t class_id, uint16_t instance,
 	return 0;
 }
 
+int omcid_me_dump(struct omcid_conn *conn, uint16_t class_id, uint16_t instance,
+		  uint8_t *out, size_t cap, size_t *n)
+{
+	size_t len = 0;
+	const int rc = transact(conn, OMCI_CTL_OP_ME_DUMP, class_id, instance,
+				0, &len);
+	if (rc != 0)
+		return rc;
+
+	if (len > cap)
+		len = cap;
+	if (out != NULL && len > 0)
+		memcpy(out, conn->payload, len);
+	if (n != NULL)
+		*n = len;
+	return 0;
+}
+
 int omcid_me_list(struct omcid_conn *conn, uint16_t class_id, uint16_t *out,
 		  size_t cap, size_t *n)
 {

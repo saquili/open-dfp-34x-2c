@@ -18,6 +18,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "me/table.h"
 #include "me/vlan.h"
 #include "mib/store.h"
 #include "omcid/byteorder.h"
@@ -170,6 +171,55 @@ static size_t op_me_get(struct omci_ctl *ctl, uint16_t class_id,
 
 		if (rc == OMCI_OK)
 			off += n;
+	}
+
+	*status = OMCI_CTL_OK;
+	return off;
+}
+
+/* Every attribute of an instance, a record each; a table with its rows. */
+static size_t op_me_dump(struct omci_ctl *ctl, uint16_t class_id,
+			 uint16_t instance, uint16_t *status)
+{
+	const struct omci_me_class *cls = omci_me_class_by_id(class_id);
+	uint8_t *pay = &ctl->rsp[OMCI_CTL_RSP_LEN];
+	size_t off = 0;
+
+	*status = OMCI_CTL_ERR_NOT_FOUND;
+	if (cls == NULL || !omci_mib_exists(ctl->mib, class_id, instance))
+		return 0;
+
+	for (uint8_t attr = 1; attr <= cls->attr_count; attr++) {
+		const struct omci_me_attr *a = omci_me_attr_get(cls, attr);
+		const bool table = omci_me_attr_is_table(a);
+		const size_t rows =
+			table ? omci_mib_table_count(ctl->mib, class_id,
+						     instance, attr) :
+				1u;
+		const size_t len = rows * a->size;
+
+		if (off + OMCI_CTL_DUMP_HDR_LEN + len > OMCI_CTL_PAYLOAD_MAX) {
+			*status = OMCI_CTL_ERR_TOO_BIG;
+			return 0;
+		}
+		pay[off] = (uint8_t)(table ? attr | OMCI_CTL_DUMP_TABLE : attr);
+		omci_be16_store(&pay[off + 1u], (unsigned int)len);
+		off += OMCI_CTL_DUMP_HDR_LEN;
+
+		memset(&pay[off], 0, len);
+		for (size_t r = 0; r < rows; r++, off += a->size) {
+			const enum omci_status rc =
+				table ? omci_mib_table_get(ctl->mib, class_id,
+							   instance, attr, r,
+							   &pay[off], a->size) :
+					omci_mib_attr_get(ctl->mib, class_id,
+							  instance, attr,
+							  &pay[off], a->size,
+							  NULL);
+
+			/* A value the store does not hold stays zeros. */
+			(void)rc;
+		}
 	}
 
 	*status = OMCI_CTL_OK;
@@ -375,6 +425,9 @@ static bool answer(struct omci_ctl *ctl, struct ctl_client *c)
 			break;
 		case OMCI_CTL_OP_ME_LIST:
 			paylen = op_me_list(ctl, cls, &status);
+			break;
+		case OMCI_CTL_OP_ME_DUMP:
+			paylen = op_me_dump(ctl, cls, inst, &status);
 			break;
 		case OMCI_CTL_OP_STATS:
 			paylen = op_stats(ctl, &status);

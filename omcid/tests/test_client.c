@@ -300,6 +300,22 @@ static void test_requests(void)
 	CHECK_EQ(omcid_me_get(conn, 1, 2, out, 0, &n), 0);
 	CHECK_EQ(n, 0u);
 
+	set_reply(OMCI_CTL_OK, (const uint8_t[5]){ 1, 0, 2, 0xab, 0xcd }, 5);
+	CHECK_EQ(omcid_me_dump(conn, 0x0100, 0x0002, out, sizeof(out), &n), 0);
+	CHECK_EQ(omci_be16(&g_fake.req[OMCI_CTL_REQ_OP]), OMCI_CTL_OP_ME_DUMP);
+	CHECK_EQ(omci_be16(&g_fake.req[OMCI_CTL_REQ_CLASS]), 0x0100u);
+	CHECK_EQ(omci_be16(&g_fake.req[OMCI_CTL_REQ_INSTANCE]), 0x0002u);
+	CHECK_EQ(n, 5u);
+	CHECK_MEM(out, ((const uint8_t[5]){ 1, 0, 2, 0xab, 0xcd }), 5);
+	memset(out, 0xee, sizeof(out));
+	CHECK_EQ(omcid_me_dump(conn, 1, 2, out, 2, &n), 0);
+	CHECK_EQ(n, 2u);
+	CHECK_MEM(out, ((const uint8_t[3]){ 1, 0, 0xee }), 3);
+	CHECK_EQ(omcid_me_dump(conn, 1, 2, NULL, 4, NULL), 0);
+	set_reply(OMCI_CTL_ERR_TOO_BIG, NULL, 0);
+	CHECK_EQ(omcid_me_dump(conn, 1, 2, out, sizeof(out), &n),
+		 OMCI_CTL_ERR_TOO_BIG);
+
 	set_reply(OMCI_CTL_OK,
 		  (const uint8_t[6]){ 0x01, 0x01, 0x80, 0x00, 0xab, 0xcd }, 6);
 	CHECK_EQ(omcid_me_list(conn, 5, ids, 8, &n), 0);
