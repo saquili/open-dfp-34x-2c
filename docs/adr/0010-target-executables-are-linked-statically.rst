@@ -5,7 +5,7 @@
 ADR 0010: Target executables are linked statically
 ======================================================
 
-:Status: Accepted
+:Status: Superseded by ADR 0011
 :Date: 2026-10-02
 :Decided-by: the owner, 2026-10-02
 

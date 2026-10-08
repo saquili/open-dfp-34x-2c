@@ -47,4 +47,7 @@ record.
      - Accepted
    * - 0010
      - Target executables are linked statically
+     - Superseded by 0011
+   * - 0011
+     - Target executables share one C library, cut to what they use
      - Accepted
