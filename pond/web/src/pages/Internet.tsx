@@ -268,7 +268,6 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
     service: required(t("form.required")),
     pass: z.enum(["on", "off"]),
     hostVlan: vlan(t),
-    untagged: z.boolean(),
     mac: mac(t),
     family: z.enum(["both", "ipv4", "ipv6"]),
   });
@@ -280,23 +279,17 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
       secret: "",
       service: first,
       pass: (x ? x.pass : free) ? "on" : "off",
-      hostVlan: x && x.hostVlan !== "untagged" ? x.hostVlan : "",
-      untagged: x?.hostVlan === "untagged",
+      hostVlan: x ? downVlan(x) : first,
       mac: x?.mac ?? "",
       family: x?.family ?? "both",
     },
   });
   const { errors, isDirty } = form.formState;
-  const [family, service, pass, hostVlan, untagged] = form.watch([
-    "family",
-    "service",
-    "pass",
-    "hostVlan",
-    "untagged",
-  ]);
+  const [family, service, pass, down] = form.watch(["family", "service", "pass", "hostVlan"]);
+  /* The VLAN to the host follows the service while it is the service's own. */
+  const prevService = useRef(first);
   const picked = list.find((s) => serviceVid(s) === service);
-  /* The VLAN the address goes down in, and what stands in its way there. */
-  const down = untagged ? "" : hostVlan || service;
+  /* What stands in the way of the address in the VLAN it goes down in. */
   const clash = pass === "on" ? clashes(all, id, down, family) : { v4: undefined, v6: undefined };
   const foreign =
     pass === "on" && down
@@ -316,8 +309,8 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         MAC: v.mac,
         FAMILY: v.family,
         PASS: v.pass,
-        /* The service's own VLAN is kept as none, to follow the service. */
-        HOST_VLAN: v.untagged ? "untagged" : v.hostVlan === v.service ? "" : v.hostVlan,
+        /* The service's own VLAN is kept as nothing, to follow the service. */
+        HOST_VLAN: !v.hostVlan ? "untagged" : v.hostVlan === v.service ? "" : v.hostVlan,
       },
       { onSuccess: onDone },
     );
@@ -328,7 +321,17 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         <label htmlFor="service" className="text-sm font-medium">
           {t("internet.service")}
         </label>
-        <select id="service" className="select w-full" {...form.register("service")}>
+        <select
+          id="service"
+          className="select w-full"
+          {...form.register("service", {
+            onChange: (e) => {
+              if (form.getValues("hostVlan") === prevService.current)
+                form.setValue("hostVlan", e.target.value, { shouldDirty: true });
+              prevService.current = e.target.value;
+            },
+          })}
+        >
           {list.map((s) => (
             <option key={serviceVid(s)} value={serviceVid(s)}>
               {serviceName(t, s)}
@@ -368,24 +371,14 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         </div>
         {pass === "on" && (
           <div className="grid gap-2 pt-1">
-            {!untagged && (
-              <Field
-                label={t("internet.hostVlan")}
-                inputMode="numeric"
-                placeholder={service}
-                hint={t("internet.hostVlanHint", { vid: service })}
-                error={errors.hostVlan?.message}
-                {...form.register("hostVlan")}
-              />
-            )}
-            <label className="label cursor-pointer justify-start gap-3">
-              <input
-                type="checkbox"
-                className="checkbox checkbox-sm"
-                {...form.register("untagged")}
-              />
-              <span className="text-sm">{t("internet.hostVlanUntagged")}</span>
-            </label>
+            <Field
+              label={t("internet.hostVlan")}
+              inputMode="numeric"
+              placeholder={t("switch.untagged")}
+              hint={t("internet.hostVlanHint")}
+              error={errors.hostVlan?.message}
+              {...form.register("hostVlan")}
+            />
             {clash.v4 != null && (
               <p className="text-xs text-error">{t("internet.clashV4", { id: clash.v4 })}</p>
             )}

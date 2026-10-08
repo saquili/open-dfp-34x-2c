@@ -353,8 +353,7 @@ export const pl: Dictionary = {
     kindDownBoth: "publiczny adres IPv4 przez DHCP i prefiks IPv6 przez DHCPv6",
     hostVlan: "VLAN do hosta",
     hostVlanHint:
-      "Puste: VLAN usługi, {vid}. W jednym VLAN-ie do hosta najwyżej jedno miejsce przekazuje adres IPv4 i jedno prefiks IPv6.",
-    hostVlanUntagged: "Bez VLAN-u",
+      "Puste: bez VLAN-u. W jednym VLAN-ie do hosta najwyżej jedno miejsce przekazuje adres IPv4 i jedno prefiks IPv6.",
     clashV4: "W tym VLAN-ie adres IPv4 przekazuje już miejsce {id}.",
     clashV6: "W tym VLAN-ie prefiks IPv6 przekazuje już miejsce {id}.",
     clashService: "VLAN {vid} niesie do hosta inną usługę operatora: {name}.",

@@ -351,8 +351,7 @@ export const en = {
     kindDownBoth: "the public IPv4 address by DHCP and the IPv6 prefix by DHCPv6",
     hostVlan: "VLAN to the host",
     hostVlanHint:
-      "Empty: the service's VLAN, {vid}. In one VLAN to the host at most one slot hands its IPv4 address down, and one its IPv6 prefix.",
-    hostVlanUntagged: "No VLAN",
+      "Empty: no VLAN. In one VLAN to the host at most one slot hands its IPv4 address down, and one its IPv6 prefix.",
     clashV4: "In this VLAN slot {id} already hands its IPv4 address down.",
     clashV6: "In this VLAN slot {id} already hands its IPv6 prefix down.",
     clashService: "VLAN {vid} carries another operator service to the host: {name}.",
