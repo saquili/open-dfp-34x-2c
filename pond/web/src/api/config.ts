@@ -9,7 +9,17 @@
 
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError, lines, OfflineError, request } from "./client";
-import type { Banks, Bridge, Firmware, Identity, Network, OmciValue, TcRules } from "./types";
+import type {
+  Banks,
+  Bridge,
+  Firmware,
+  Identity,
+  Mgmt,
+  Network,
+  OmciValue,
+  SfpLane,
+  TcRules,
+} from "./types";
 
 interface Value<T> {
   id: string;
@@ -61,6 +71,27 @@ function useChange(id: string, refresh: string[][]) {
 }
 
 export const useSessionChange = () => useChange("session", [["live"]]);
+
+/* The SFP lane and the management address: read often while a change waits. */
+const waiting = (q: { state: { data?: { trial?: unknown; pending?: unknown } } }) =>
+  q.state.data?.trial || q.state.data?.pending ? 2_000 : 15_000;
+
+export const useSfpLane = () =>
+  useQuery({
+    queryKey: ["sfp_lane"],
+    queryFn: async () => (await request<Value<SfpLane>>("/api/get/sfp_lane")).value,
+    refetchInterval: waiting,
+    retry: false,
+  });
+export const useMgmt = () =>
+  useQuery({
+    queryKey: ["mgmt"],
+    queryFn: async () => (await request<Value<Mgmt>>("/api/get/mgmt")).value,
+    refetchInterval: waiting,
+    retry: false,
+  });
+export const useLaneChange = () => useChange("sfp_lane", [["sfp_lane"], ["live"]]);
+export const useMgmtChange = () => useChange("mgmt", [["mgmt"]]);
 export const useLinkChange = () => useChange("link", [["live"]]);
 export const useIdentityChange = () => useChange("identity", [["identity"], ["live"]]);
 

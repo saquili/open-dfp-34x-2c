@@ -8,7 +8,7 @@
  */
 
 import { delay, HttpResponse, http } from "msw";
-import type { Identity, Session, Settings } from "../api/types";
+import type { Identity, LaneMode, Mgmt, Session, Settings, SfpLane } from "../api/types";
 import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
 import { OMCI } from "./omci";
 
@@ -45,6 +45,9 @@ const gemCounters = structuredClone(LIVE.gem_counters);
 const SESSION_GEM = LIVE.settings.sessions[0]?.gem_dev ?? "";
 const MULTICAST_GEM = LIVE.gem_ports.find((g) => g.multicast)?.name ?? "";
 let lastTick = Date.now();
+const upNow = () => LIVE.uptime.up_s + (Date.now() - started) / 1000;
+let lane: SfpLane = { choice: "auto", active: "2500basex", trial: null };
+let mgmt: Mgmt = { vlan: 4094, address: "192.0.2.250/30", data_address: null, pending: null };
 const identity: Identity = {
   serial: "XXXXXXXXXXXX",
   ploam_set: true,
@@ -179,6 +182,50 @@ export const handlers = [
       return away() ?? (signedIn ? HttpResponse.json({ id, value }) : unauthorized());
     }),
   ),
+
+  http.get("*/api/get/sfp_lane", async () => {
+    await delay(120);
+    if (lane.trial && upNow() > lane.trial.until_s)
+      lane = { ...lane, choice: lane.trial.previous, trial: null };
+    return (
+      away() ?? (signedIn ? HttpResponse.json({ id: "sfp_lane", value: lane }) : unauthorized())
+    );
+  }),
+
+  http.post("*/api/set/sfp_lane", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    if (b.MODE)
+      lane = {
+        ...lane,
+        trial: { mode: b.MODE as LaneMode, previous: lane.choice, until_s: upNow() + 60 },
+        choice: b.MODE as LaneMode,
+      };
+    else if (b.KEEP) lane = { ...lane, trial: null };
+    else if (b.REVERT && lane.trial) lane = { ...lane, choice: lane.trial.previous, trial: null };
+    return HttpResponse.json({ id: "sfp_lane", ok: true });
+  }),
+
+  http.get("*/api/get/mgmt", async () => {
+    await delay(120);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "mgmt", value: mgmt }) : unauthorized());
+  }),
+
+  http.post("*/api/set/mgmt", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    if (b.VLAN && b.ADDRESS)
+      mgmt = {
+        ...mgmt,
+        pending: { vlan: Number(b.VLAN), address: b.ADDRESS, until_s: upNow() + 600 },
+      };
+    else if (b.COMMIT && mgmt.pending)
+      mgmt = { ...mgmt, vlan: mgmt.pending.vlan, address: mgmt.pending.address, pending: null };
+    else if (b.CANCEL) mgmt = { ...mgmt, pending: null };
+    return HttpResponse.json({ id: "mgmt", ok: true });
+  }),
 
   http.get("*/api/get/omci", async () => {
     await delay(600);

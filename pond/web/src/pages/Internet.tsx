@@ -2,26 +2,39 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet. Everything the operator set up passes to the host; on top of
- * that, the stick holds the PPPoE sessions it has accounts for, up to seven,
- * and the first that carries IPv4 hands its public address to the host. With
- * no account, the host dials through the stick.
+ * The internet. Without anything set here the OLT makes the stick a
+ * transparent bridge, and the host dials the operator through it. With a
+ * PPPoE account the stick holds the session itself, in its switch's
+ * hardware, up to seven at once, and gives the public address to the host;
+ * the other way, the stick routing and translating the addresses itself, is
+ * to come. Two tabs: the sessions, and how the host gets the address.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus } from "lucide-react";
-import { useState } from "react";
+import { Link } from "@tanstack/react-router";
+import { ArrowRight, Globe, Network, Pencil, Plus, Trash2 } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { type ApiError, OfflineError } from "../api/client";
-import { useSessionChange } from "../api/config";
+import { useLinkChange, useSessionChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { Family } from "../api/types";
-import { Field, SaveState } from "../components/Field";
-import { useGemText } from "../components/Gem";
-import { Badge, Card, Facts, Figure, PageTitle } from "../components/ui";
+import { Field, SaveState, useChangeState } from "../components/Field";
+import { Page, Tabs, useTab } from "../components/Page";
+import { Badge, Card, Facts, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
-import { mac, required, upTo, vlan, z } from "../lib/schemas";
-import { fibreVlan, gems, MAX_SESSIONS, type SessionView, session, sessions } from "../lib/state";
+import { ipv4, mac, required, upTo, vlan, z } from "../lib/schemas";
+import {
+  fibreVlan,
+  gems,
+  hostLink,
+  type LinkView,
+  MAX_SESSIONS,
+  type SessionView,
+  session,
+  sessions,
+} from "../lib/state";
+
+const TABS = ["sessions", "handover"] as const;
 
 const FAMILY: Record<Family, Key> = {
   both: "internet.famBoth",
@@ -29,24 +42,36 @@ const FAMILY: Record<Family, Key> = {
   ipv6: "internet.famV6",
 };
 
-/** The state line of a change: saving, saved, or why it failed. */
-function useChangeState(change: ReturnType<typeof useSessionChange>) {
-  const { t } = useI18n();
-  return change.isPending
-    ? { state: "busy" as const, message: t("internet.saving") }
-    : change.isSuccess
-      ? { state: "ok" as const, message: t("internet.saved") }
-      : change.error
-        ? {
-            state: "bad" as const,
-            message:
-              change.error instanceof OfflineError
-                ? t("connection.offline")
-                : t("internet.failed", {
-                    reason: (change.error as ApiError).detail ?? change.error.message,
-                  }),
-          }
-        : { state: "idle" as const };
+/** A dialog that opens while @open holds. */
+function Dialog({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean;
+  title: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) d.showModal();
+    if (!open && d.open) d.close();
+  }, [open]);
+  return (
+    <dialog ref={ref} className="modal" onClose={onClose}>
+      <div className="modal-box max-w-2xl">
+        <h3 className="mb-4 text-lg font-semibold">{title}</h3>
+        {open && children}
+      </div>
+      <form method="dialog" className="modal-backdrop">
+        <button type="submit" aria-label="close" />
+      </form>
+    </dialog>
+  );
 }
 
 /** A session's account and settings: a new one without @x, or @x changed. */
@@ -54,6 +79,9 @@ function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
   const { t } = useI18n();
   const change = useSessionChange();
   const state = useChangeState(change);
+  const all = sessions(useLive().data);
+  /* The first session that carries IPv4 is the one that hands its address on. */
+  const handsOn = all.find((y) => y.family !== "ipv6");
   const schema = z.object({
     user: x ? upTo(63) : required(t("form.required")),
     secret: x ? z.string().check(z.maxLength(255)) : required(t("internet.secretRequired")),
@@ -73,6 +101,8 @@ function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
     },
   });
   const { errors, isDirty } = form.formState;
+  const family = form.watch("family");
+  const willHandOn = family !== "ipv6" && (!handsOn || handsOn.id === x?.id);
 
   const send = (v: Values) =>
     change.mutate(
@@ -88,11 +118,7 @@ function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
     );
 
   return (
-    <form
-      onSubmit={form.handleSubmit(send)}
-      noValidate
-      className="grid gap-4 rounded-box border border-base-300 p-4"
-    >
+    <form onSubmit={form.handleSubmit(send)} noValidate className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
           label={t("internet.user")}
@@ -121,24 +147,50 @@ function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
           error={errors.mac?.message}
           {...form.register("mac")}
         />
-        <div className="grid gap-1 sm:col-span-2">
-          <label htmlFor={`family-${x?.id ?? "new"}`} className="text-sm font-medium">
-            {t("internet.family")}
-          </label>
-          <select
-            id={`family-${x?.id ?? "new"}`}
-            className="select w-full sm:w-auto"
-            {...form.register("family")}
-          >
-            {(["both", "ipv4", "ipv6"] as const).map((f) => (
-              <option key={f} value={f}>
-                {t(FAMILY[f])}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-base-content/60">{t("internet.familyHint")}</p>
-        </div>
       </div>
+      <div className="grid gap-1">
+        <span className="text-sm font-medium">{t("internet.family")}</span>
+        <div className="join">
+          {(["both", "ipv4", "ipv6"] as const).map((f) => (
+            <label key={f} className="join-item btn btn-sm has-[:checked]:btn-primary">
+              <input type="radio" value={f} className="hidden" {...form.register("family")} />
+              {t(FAMILY[f])}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-base-content/60">{t("internet.familyHint")}</p>
+      </div>
+      <fieldset className="grid gap-2">
+        <legend className="mb-1 text-sm font-medium">{t("internet.addressUse")}</legend>
+        <label className="flex cursor-pointer items-start gap-3 rounded-box border border-primary/50 bg-primary/5 p-3">
+          <input
+            type="radio"
+            name="use"
+            className="radio radio-sm radio-primary mt-0.5"
+            defaultChecked
+          />
+          <span>
+            <span className="block text-sm font-medium">{t("internet.useHandover")}</span>
+            <span className="block text-xs text-base-content/65">
+              {family === "ipv6"
+                ? t("internet.useHandoverV6")
+                : willHandOn
+                  ? t("internet.useHandoverHint")
+                  : t("internet.useHandoverTaken", { id: handsOn?.id ?? 1 })}
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-3 rounded-box border border-base-300 p-3 opacity-60">
+          <input type="radio" name="use" className="radio radio-sm mt-0.5" disabled />
+          <span>
+            <span className="flex items-center gap-2 text-sm font-medium">
+              {t("internet.useNat")}
+              <Badge tone="neutral">{t("internet.soon")}</Badge>
+            </span>
+            <span className="block text-xs text-base-content/65">{t("internet.useNatHint")}</span>
+          </span>
+        </label>
+      </fieldset>
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"
@@ -157,10 +209,9 @@ function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
 }
 
 /** One session: its state, what it carries, and its account. */
-function SessionCard({ x }: { x: SessionView }) {
+function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   const { t } = useI18n();
   const { data: live } = useLive();
-  const [editing, setEditing] = useState(false);
   const change = useSessionChange();
   const state = useChangeState(change);
   const portId = gems(live).find((g) => g.gem.name === x.gemDev)?.gem.port_id;
@@ -177,18 +228,52 @@ function SessionCard({ x }: { x: SessionView }) {
   };
 
   return (
-    <li className="grid gap-3 rounded-box border border-base-300 p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-semibold">{t("internet.sessionN", { id: x.id })}</h3>
-        <Badge tone={x.up ? "good" : "warn"}>
-          {x.up ? t("internet.up") : t("internet.connecting")}
-        </Badge>
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          {t("internet.sessionN", { id: x.id })}
+          <Badge tone={x.up ? "good" : "warn"}>
+            {x.up ? t("internet.up") : t("internet.connecting")}
+          </Badge>
+        </span>
+      }
+      action={
+        <span className="flex gap-1">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm btn-square"
+            onClick={onEdit}
+            aria-label={t("internet.edit")}
+            title={t("internet.edit")}
+          >
+            <Pencil className="size-4" />
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm btn-square text-error"
+            onClick={remove}
+            disabled={change.isPending}
+            aria-label={t("internet.removeSession")}
+            title={t("internet.removeSession")}
+          >
+            <Trash2 className="size-4" />
+          </button>
+        </span>
+      }
+    >
+      <div className="flex flex-wrap gap-1">
         <Badge tone="neutral">{t(FAMILY[x.family])}</Badge>
         {x.handsOn && <Badge tone="info">{t("internet.handsOn")}</Badge>}
+        {x.prefixHost && <Badge tone="info">{t("internet.prefixToHost")}</Badge>}
       </div>
       <Facts
         rows={[
-          [t("internet.account"), x.user],
+          [
+            t("internet.account"),
+            <span key="u" className="break-all">
+              {x.user}
+            </span>,
+          ],
           [
             t("internet.vlan"),
             !x.vlan
@@ -205,14 +290,18 @@ function SessionCard({ x }: { x: SessionView }) {
                 ? t("internet.autoGem")
                 : `GEM ${x.gem}`,
           ],
-          [t("internet.mac"), macText],
+          [
+            t("internet.mac"),
+            <span key="m" className="font-mono text-xs">
+              {macText}
+            </span>,
+          ],
           x.family !== "ipv6" && [
             "IPv4",
             x.ipv4
               ? t(x.handsOn ? "internet.ipv4Host" : "internet.ipv4Stick", { addr: x.ipv4 })
               : "–",
           ],
-          x.family !== "ipv4" && ["IPv6", x.ipv6 ? t("internet.ipv6Up") : "–"],
           x.family !== "ipv4" && [
             t("internet.prefix"),
             x.prefix
@@ -226,135 +315,269 @@ function SessionCard({ x }: { x: SessionView }) {
           x.dev ? [t("internet.iface"), [x.dev, x.ppp].filter(Boolean).join(" → ")] : null,
         ]}
       />
-      {x.family !== "ipv4" && x.prefix && (
-        <p className="text-xs text-base-content/60">{t("internet.ipv6Software")}</p>
+      <SaveState {...state} />
+    </Card>
+  );
+}
+
+/** The seven rows of the session engine, used and free. */
+function Slots({ used }: { used: number }) {
+  const { t } = useI18n();
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        className="flex gap-1"
+        role="img"
+        aria-label={t("internet.slots", { n: used, max: MAX_SESSIONS })}
+      >
+        {Array.from({ length: MAX_SESSIONS }, (_, i) => (
+          <span
+            // biome-ignore lint/suspicious/noArrayIndexKey: the slots are fixed
+            key={i}
+            className={`h-5 w-3 rounded-sm ${i < used ? "bg-primary" : "bg-base-300"}`}
+          />
+        ))}
+      </div>
+      <span className="text-sm">
+        <span className="tabular font-semibold">
+          {used} / {MAX_SESSIONS}
+        </span>{" "}
+        <span className="text-base-content/70">{t("internet.slotsHint")}</span>
+      </span>
+    </div>
+  );
+}
+
+/* How the stick handles the internet now: the bridge alone, or its own sessions as well. */
+function Ways({ count }: { count: number }) {
+  const { t } = useI18n();
+  const way = (active: boolean, icon: ReactNode, title: string, text: string) => (
+    <div
+      className={`flex gap-3 rounded-box border p-3 ${active ? "border-primary bg-primary/5" : "border-base-300 opacity-70"}`}
+    >
+      <span className={active ? "text-primary" : "text-base-content/50"}>{icon}</span>
+      <span>
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          {title}
+          {active && <Badge tone="info">{t("internet.now")}</Badge>}
+        </span>
+        <span className="block text-xs text-base-content/70">{text}</span>
+      </span>
+    </div>
+  );
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {way(
+        count === 0,
+        <Network className="size-5" />,
+        t("internet.wayBridge"),
+        t("internet.wayBridgeText"),
       )}
-      {editing ? (
-        <SessionForm x={x} onDone={() => setEditing(false)} />
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>
-            {t("internet.edit")}
-          </button>
+      {way(
+        count > 0,
+        <Globe className="size-5" />,
+        t("internet.waySession"),
+        t("internet.waySessionText"),
+      )}
+    </div>
+  );
+}
+
+function SessionsTab() {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  const list = sessions(live);
+  const [editing, setEditing] = useState<SessionView | "new" | null>(null);
+  const full = list.length >= MAX_SESSIONS;
+
+  return (
+    <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
+      <Ways count={list.length} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Slots used={list.length} />
+        <span className="flex items-center gap-3">
+          <Link to="/fibre" search={{ tab: "services" } as never} className="link text-sm">
+            {t("internet.seeServices")} <ArrowRight className="inline size-3" />
+          </Link>
           <button
             type="button"
-            className="btn btn-sm btn-ghost text-error"
-            onClick={remove}
-            disabled={change.isPending}
+            className="btn btn-sm btn-primary"
+            onClick={() => setEditing("new")}
+            disabled={full}
+            title={full ? t("internet.full", { max: MAX_SESSIONS }) : undefined}
           >
-            {t("internet.removeSession")}
+            <Plus className="size-4" />
+            {t("internet.add")}
           </button>
-          <SaveState {...state} />
-        </div>
+        </span>
+      </div>
+      <div className="grid min-h-0 content-start gap-4 lg:overflow-auto xl:grid-cols-2 2xl:grid-cols-3">
+        {list.map((x) => (
+          <SessionCard key={x.id} x={x} onEdit={() => setEditing(x)} />
+        ))}
+        {list.length === 0 && (
+          <Card>
+            <p className="text-sm">{t("internet.noAccount")}</p>
+          </Card>
+        )}
+      </div>
+      <Dialog
+        open={editing != null}
+        title={
+          editing === "new" || editing == null
+            ? t("internet.addTitle")
+            : t("internet.editTitle", { id: editing.id })
+        }
+        onClose={() => setEditing(null)}
+      >
+        <SessionForm
+          x={editing === "new" || editing == null ? undefined : editing}
+          onDone={() => setEditing(null)}
+        />
+      </Dialog>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- handover */
+
+function HandoverForm({ link }: { link: LinkView }) {
+  const { t } = useI18n();
+  const change = useLinkChange();
+  const state = useChangeState(change);
+  const schema = z.object({ vlan: vlan(t), gateway: ipv4(t), peer: z.boolean() });
+  type Values = z.infer<typeof schema>;
+  const current = { vlan: link.vlan, gateway: link.gateway, peer: link.peer };
+  const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: current });
+  const { errors, isDirty } = form.formState;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refill only when the stick's values change
+  useEffect(() => {
+    if (!form.formState.isDirty) form.reset(current);
+  }, [link.vlan, link.gateway, link.peer]);
+
+  return (
+    <form
+      onSubmit={form.handleSubmit((v) =>
+        change.mutate(
+          { VLAN: v.vlan, GATEWAY: v.gateway, PEER: v.peer ? "on" : "off" },
+          { onSuccess: () => form.reset(v) },
+        ),
       )}
-    </li>
+      noValidate
+      className="grid gap-4"
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label={t("sfp.vlan")}
+          hint={t("sfp.vlanHint")}
+          inputMode="numeric"
+          error={errors.vlan?.message}
+          {...form.register("vlan")}
+        />
+        <Field
+          label={t("sfp.gateway")}
+          hint={t("sfp.gatewayHint")}
+          error={errors.gateway?.message}
+          {...form.register("gateway")}
+        />
+      </div>
+      <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
+        <input type="checkbox" className="toggle toggle-sm" {...form.register("peer")} />
+        <span>
+          <span className="text-sm">{t("sfp.peer")}</span>
+          <span className="block text-xs text-base-content/60">{t("sfp.peerHint")}</span>
+        </span>
+      </label>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
+          {t("internet.save")}
+        </button>
+        {isDirty && (
+          <button type="button" className="btn btn-ghost" onClick={() => form.reset(current)}>
+            {t("form.discard")}
+          </button>
+        )}
+        <SaveState {...state} />
+      </div>
+    </form>
+  );
+}
+
+function HandoverTab() {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  const s = session(live);
+  const link = hostLink(live);
+  return (
+    <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
+      <Card title={t("internet.handoverTitle")}>
+        <p className="text-sm text-base-content/70">{t("internet.handoverHint")}</p>
+        {!s.configured && (
+          <div role="alert" className="alert alert-info alert-soft text-sm">
+            {t("internet.handoverIdle")}
+          </div>
+        )}
+        <HandoverForm link={link} />
+      </Card>
+      <Card title={t("internet.hostGets")}>
+        <Facts
+          rows={[
+            [t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")],
+            [t("sfp.hostGateway"), s.up && link.hostGateway ? link.hostGateway : "–"],
+            [t("internet.hostPrefix"), s.prefix ?? "–"],
+            [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
+            [t("internet.mtu"), "1500"],
+          ]}
+        />
+        <p className="text-xs text-base-content/60">{t("internet.hostGetsHint")}</p>
+      </Card>
+    </div>
   );
 }
 
 export function Internet() {
   const { t } = useI18n();
+  const [tab, setTab] = useTab(TABS);
   const { data: live } = useLive();
   const s = session(live);
-  const list = sessions(live);
-  const [adding, setAdding] = useState(false);
-  const channels = gems(live);
-  const gem = useGemText();
-
-  const badge = s.configured ? (
-    <Badge tone={s.up ? "good" : "warn"}>
-      {s.up ? t("internet.up") : t("internet.connecting")}
-    </Badge>
-  ) : (
-    <Badge tone="neutral">{t("internet.off")}</Badge>
-  );
-
   return (
-    <>
-      <PageTitle hint={t("internet.sessionHint")}>{t("internet.title")}</PageTitle>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title={t("internet.summary")} action={badge}>
-          {s.configured ? (
-            <>
-              <Figure value={s.address ?? "–"} caption={t("internet.hostAddress")} />
-              <Facts
-                rows={[
-                  [
-                    t("internet.sessionsLabel"),
-                    t("internet.sessionsCount", { n: s.count, max: MAX_SESSIONS }),
-                  ],
-                  s.prefix ? [t("internet.hostPrefix"), s.prefix] : null,
-                  [t("internet.dns"), s.dns.length ? s.dns.join(", ") : "–"],
-                ]}
-              />
-            </>
-          ) : (
-            <p className="text-sm">{t("internet.noAccount")}</p>
-          )}
-        </Card>
-        <Card title={t("internet.rules")}>
-          <ul className="grid list-disc gap-1 pl-5 text-sm">
-            <li>{t("internet.rule1")}</li>
-            <li>{t("internet.rule2")}</li>
-            <li>{t("internet.rule3")}</li>
-            <li>{t("internet.rule4")}</li>
-          </ul>
-        </Card>
-      </div>
-
-      <Card
-        title={t("internet.sessionsTitle")}
-        className="mt-4"
-        action={
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            onClick={() => setAdding(true)}
-            disabled={adding || list.length >= MAX_SESSIONS}
-          >
-            <Plus className="size-4" />
-            {t("internet.add")}
-          </button>
-        }
-      >
-        {list.length >= MAX_SESSIONS && (
-          <p className="text-sm text-base-content/70">
-            {t("internet.full", { max: MAX_SESSIONS })}
-          </p>
-        )}
-        {adding && <SessionForm onDone={() => setAdding(false)} />}
-        {list.length ? (
-          <ul className="grid gap-3">
-            {list.map((x) => (
-              <SessionCard key={x.id} x={x} />
-            ))}
-          </ul>
-        ) : (
-          !adding && <p className="text-sm">{t("internet.noAccount")}</p>
-        )}
-      </Card>
-
-      <Card title={t("internet.bridged")} className="mt-4">
-        <p className="text-sm text-base-content/70">{t("internet.bridgedHint")}</p>
-        <ul className="grid gap-2 sm:grid-cols-2">
-          {channels.map((v) => (
-            <li
-              key={v.gem.name}
-              className="grid gap-0.5 rounded-box border border-base-300 px-3 py-2"
-            >
-              <span className="flex items-baseline gap-3">
-                <span className="tabular font-medium">GEM {v.gem.port_id}</span>
-                <span className="text-sm text-base-content/70">{gem.direction(v.gem)}</span>
-                {v.allocId != null && (
-                  <span className="tabular ml-auto text-xs text-base-content/55">
-                    Alloc-ID {v.allocId}
-                  </span>
-                )}
-              </span>
-              <span className="text-sm">{gem.use(v)}</span>
-            </li>
-          ))}
-        </ul>
-      </Card>
-    </>
+    <Page
+      title={t("internet.title")}
+      tabs={
+        <Tabs
+          items={[
+            {
+              id: "sessions",
+              label: t("internet.tabSessions"),
+              badge: (
+                <span className="badge badge-ghost badge-xs tabular">
+                  {s.count}/{MAX_SESSIONS}
+                </span>
+              ),
+            },
+            { id: "handover", label: t("internet.tabHandover") },
+          ]}
+          value={tab}
+          onChange={setTab}
+          label={t("internet.title")}
+        />
+      }
+      actions={
+        <div className="hidden items-center gap-6 md:flex">
+          <Stat label="IPv4" value={s.address ?? "–"} />
+          <Stat label="IPv6" value={s.prefix ?? "–"} />
+          <Badge tone={s.configured ? (s.up ? "good" : "warn") : "neutral"}>
+            {s.configured
+              ? s.up
+                ? t("internet.up")
+                : t("internet.connecting")
+              : t("internet.off")}
+          </Badge>
+        </div>
+      }
+    >
+      {tab === "sessions" ? <SessionsTab /> : <HandoverTab />}
+    </Page>
   );
 }

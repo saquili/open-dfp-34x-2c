@@ -309,6 +309,32 @@ export interface Identity {
   source: "store" | "factory" | null;
 }
 
+/** The modes of the SFP lane: the driver's, and the chip's that are to come. */
+export type LaneMode = "auto" | "2500basex" | "1000basex-an" | "1000basex" | "sgmii" | "hsgmii";
+
+/**
+ * The SFP lane (pond's value "sfp_lane"): the mode chosen, the one the lane
+ * runs in now (null while it looks for the host), and a change on trial,
+ * which the stick undoes at until_s (seconds of uptime) unless it is kept.
+ */
+export interface SfpLane {
+  choice: LaneMode;
+  active: LaneMode | null;
+  trial: { mode: LaneMode; previous: LaneMode; until_s: number } | null;
+}
+
+/**
+ * The management VLAN and address (pond's value "mgmt"), and a new pair
+ * added beside them that waits to be confirmed from a panel opened at it.
+ */
+export interface Mgmt {
+  vlan: number | null;
+  address: string | null;
+  /** An address on the SFP port itself, without a VLAN; empty in production. */
+  data_address: string | null;
+  pending: { vlan: number; address: string; until_s: number } | null;
+}
+
 /**
  * What the OLT set up, as omcid holds it: each instance of the classes pond
  * reads, every attribute in hexadecimal (null for a password), and which of

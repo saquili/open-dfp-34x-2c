@@ -2,156 +2,353 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The SFP port, towards the host: whether it is up and how fast, the
- * traffic on it, and how the host gets the public address when the stick
- * holds the session.
+ * The SFP port, towards the host: the lane, its mode and the traffic on it,
+ * and the management VLAN and address the stick is reached on. Both changes
+ * can cut the panel off, as the panel comes over this very port, so neither
+ * is final at once: a new lane mode is kept only when it is confirmed from
+ * the panel within a minute, else the stick goes back to the old one; a new
+ * management address is added beside the old one and replaces it only when
+ * confirmed from a panel opened at the new address.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect } from "react";
+import { Check, ExternalLink, RotateCcw, Undo2 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { type ApiError, OfflineError } from "../api/client";
-import { useLinkChange } from "../api/config";
+import { useLaneChange, useMgmt, useMgmtChange, useSfpLane } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
-import { Field, SaveState } from "../components/Field";
+import type { LaneMode } from "../api/types";
+import { Field, SaveState, useChangeState } from "../components/Field";
+import { Page } from "../components/Page";
 import { TrafficChart } from "../components/TrafficChart";
-import { Badge, Card, Facts, Figure, PageTitle } from "../components/ui";
-import { useI18n } from "../i18n";
-import { bitrate } from "../lib/format";
-import { ipv4, vlan, z } from "../lib/schemas";
-import { hostLink, type LinkView, linkSpeed, port, session } from "../lib/state";
+import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
+import { type Key, useI18n } from "../i18n";
+import { bitrate, integer } from "../lib/format";
+import { vlan, z } from "../lib/schemas";
+import { hostLink, laneMode, linkSpeed, port } from "../lib/state";
 
-function HandoverForm({ link }: { link: LinkView }) {
-  const { t } = useI18n();
-  const change = useLinkChange();
-  const schema = z.object({ vlan: vlan(t), gateway: ipv4(t), peer: z.boolean() });
-  type Values = z.infer<typeof schema>;
-  const current = { vlan: link.vlan, gateway: link.gateway, peer: link.peer };
-  const form = useForm<Values>({ resolver: zodResolver(schema), defaultValues: current });
-  const { errors, isDirty } = form.formState;
+const MODES: { id: LaneMode; label: Key; hint: Key; ready: boolean }[] = [
+  { id: "auto", label: "sfp.modeAuto", hint: "sfp.modeAutoHint", ready: true },
+  { id: "2500basex", label: "sfp.mode2500", hint: "sfp.mode2500Hint", ready: true },
+  { id: "1000basex-an", label: "sfp.mode1000an", hint: "sfp.mode1000anHint", ready: true },
+  { id: "1000basex", label: "sfp.mode1000", hint: "sfp.mode1000Hint", ready: true },
+  { id: "sgmii", label: "sfp.modeSgmii", hint: "sfp.modeSgmiiHint", ready: false },
+  { id: "hsgmii", label: "sfp.modeHsgmii", hint: "sfp.modeHsgmiiHint", ready: false },
+];
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refill only when the stick's values change
+/** Seconds left until a moment given in seconds of the stick's uptime. */
+function useCountdown(until: number | null | undefined, upNow: number | undefined) {
+  const [start] = useState(() => Date.now());
+  const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!form.formState.isDirty) form.reset(current);
-  }, [link.vlan, link.gateway, link.peer]);
+    if (until == null) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [until]);
+  if (until == null || upNow == null) return null;
+  return Math.max(0, Math.round(until - upNow - (now - start) / 1000));
+}
 
-  const state = change.isPending
-    ? { state: "busy" as const, message: t("internet.saving") }
-    : change.isSuccess
-      ? { state: "ok" as const, message: t("internet.saved") }
-      : change.error
-        ? {
-            state: "bad" as const,
-            message:
-              change.error instanceof OfflineError
-                ? t("connection.offline")
-                : t("internet.failed", {
-                    reason: (change.error as ApiError).detail ?? change.error.message,
-                  }),
-          }
-        : { state: "idle" as const };
+function LaneCard() {
+  const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  const lane = useSfpLane();
+  const change = useLaneChange();
+  const state = useChangeState(change);
+  const link = hostLink(live);
+  const sfp = port(live, "sfp");
+  const l = lane.data;
+  const [pick, setPick] = useState<LaneMode | null>(null);
+  const left = useCountdown(l?.trial?.until_s, live?.uptime.up_s);
+  const chosen = pick ?? l?.choice ?? "auto";
+  const active = l?.active ?? laneMode(live)?.toLowerCase().replace("base-x", "basex") ?? null;
+  const activeName = MODES.find((m) => m.id === active)?.label;
+
+  const apply = () => {
+    if (!window.confirm(t("sfp.modeConfirm"))) return;
+    change.mutate({ MODE: chosen }, { onSuccess: () => setPick(null) });
+  };
 
   return (
-    <form
-      onSubmit={form.handleSubmit((v) =>
-        change.mutate(
-          { VLAN: v.vlan, GATEWAY: v.gateway, PEER: v.peer ? "on" : "off" },
-          { onSuccess: () => form.reset(v) },
-        ),
-      )}
-      noValidate
-      className="grid gap-4"
+    <Card
+      title={t("sfp.link")}
+      action={
+        <Badge tone={link.up ? "good" : "bad"}>{link.up ? t("sfp.up") : t("sfp.down")}</Badge>
+      }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field
-          label={t("sfp.vlan")}
-          hint={t("sfp.vlanHint")}
-          inputMode="numeric"
-          error={errors.vlan?.message}
-          {...form.register("vlan")}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Figure value={linkSpeed(link.speedMbit, lang) ?? "–"} caption={t("sfp.speed")} />
+        <Stat
+          label={t("sfp.modeNow")}
+          value={activeName ? t(activeName) : (laneMode(live) ?? "–")}
+          sub={l?.choice === "auto" ? t("sfp.foundByAuto") : undefined}
         />
-        <Field
-          label={t("sfp.gateway")}
-          hint={t("sfp.gatewayHint")}
-          error={errors.gateway?.message}
-          {...form.register("gateway")}
+        <Stat label={t("sfp.mtu")} value={sfp?.mtu ?? "–"} />
+        <Stat
+          label={t("sfp.stickMac")}
+          value={<span className="font-mono text-sm">{sfp?.mac ?? "–"}</span>}
         />
       </div>
-      <label className="label cursor-pointer justify-start gap-3 whitespace-normal">
-        <input type="checkbox" className="toggle toggle-sm" {...form.register("peer")} />
-        <span>
-          <span className="text-sm">{t("sfp.peer")}</span>
-          <span className="block text-xs text-base-content/60">{t("sfp.peerHint")}</span>
-        </span>
-      </label>
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" className="btn btn-primary" disabled={!isDirty || change.isPending}>
-          {t("internet.save")}
-        </button>
-        {isDirty && (
-          <button type="button" className="btn btn-ghost" onClick={() => form.reset(current)}>
-            {t("form.discard")}
-          </button>
-        )}
-        <SaveState {...state} />
-      </div>
-    </form>
+
+      {l?.trial ? (
+        <div
+          role="alert"
+          className="alert alert-warning alert-soft grid-flow-row gap-2 sm:grid-flow-col"
+        >
+          <span className="text-sm">
+            {t("sfp.trial", {
+              mode: t(MODES.find((m) => m.id === l.trial?.mode)?.label ?? "sfp.modeAuto"),
+              left: left ?? "…",
+            })}
+          </span>
+          <span className="flex gap-2">
+            <button
+              type="button"
+              className="btn btn-sm btn-success"
+              onClick={() => change.mutate({ KEEP: "1" })}
+            >
+              <Check className="size-4" />
+              {t("sfp.keep")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => change.mutate({ REVERT: "1" })}
+            >
+              <Undo2 className="size-4" />
+              {t("sfp.revert")}
+            </button>
+          </span>
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {MODES.map((m) => (
+              <label
+                key={m.id}
+                className={`flex gap-3 rounded-box border p-3 ${m.ready ? "cursor-pointer" : "opacity-55"} ${chosen === m.id ? "border-primary bg-primary/5" : "border-base-300"}`}
+              >
+                <input
+                  type="radio"
+                  name="lane"
+                  className="radio radio-sm radio-primary mt-0.5"
+                  checked={chosen === m.id}
+                  disabled={!m.ready || !l}
+                  onChange={() => setPick(m.id)}
+                />
+                <span>
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    {t(m.label)}
+                    {m.id === active && <Badge tone="good">{t("sfp.modeActive")}</Badge>}
+                    {!m.ready && <Badge tone="neutral">{t("internet.soon")}</Badge>}
+                  </span>
+                  <span className="block text-xs text-base-content/65">{t(m.hint)}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!l || chosen === l.choice || change.isPending}
+              onClick={apply}
+            >
+              <RotateCcw className="size-4" />
+              {t("sfp.modeTry")}
+            </button>
+            <SaveState {...state} />
+            {!l && lane.isFetched && (
+              <span className="text-xs text-base-content/60">{t("sfp.modeUnavailable")}</span>
+            )}
+          </div>
+          <p className="text-xs text-base-content/60">{t("sfp.modeSafety")}</p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function MgmtCard() {
+  const { t } = useI18n();
+  const mgmt = useMgmt();
+  const change = useMgmtChange();
+  const state = useChangeState(change);
+  const m = mgmt.data;
+  const schema = z.object({
+    vlan: vlan(t),
+    address: z.string().check(
+      z.trim(),
+      z.refine(
+        (v) =>
+          /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/.test(v) &&
+          v
+            .split("/")[0]
+            ?.split(".")
+            .every((o) => +o <= 255) === true &&
+          +(v.split("/")[1] ?? 99) <= 32,
+        t("sfp.mgmtAddressRule"),
+      ),
+    ),
+  });
+  type Values = z.infer<typeof schema>;
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    values: { vlan: m?.vlan != null ? String(m.vlan) : "", address: m?.address ?? "" },
+  });
+  const { errors, isDirty } = form.formState;
+  const here = window.location.hostname;
+  const pending = m?.pending;
+  const onNew = pending && here === pending.address.split("/")[0];
+
+  return (
+    <Card title={t("sfp.mgmtTitle")}>
+      <p className="text-sm text-base-content/70">{t("sfp.mgmtHint")}</p>
+      {m ? (
+        <Facts
+          rows={[
+            [t("sfp.mgmtVlan"), m.vlan ?? "–"],
+            [
+              t("sfp.mgmtAddress"),
+              <span key="a" className="tabular">
+                {m.address ?? "–"}
+              </span>,
+            ],
+            m.data_address ? [t("sfp.dataAddress"), m.data_address] : null,
+            [
+              t("sfp.mgmtHere"),
+              <span key="h" className="tabular">
+                {here}
+              </span>,
+            ],
+          ]}
+        />
+      ) : (
+        <p className="text-xs text-base-content/60">{t("sfp.mgmtUnavailable")}</p>
+      )}
+
+      {pending ? (
+        <div role="alert" className="alert alert-info alert-soft grid-flow-row gap-2">
+          <span className="text-sm">
+            {onNew
+              ? t("sfp.mgmtConfirmHere")
+              : t("sfp.mgmtPending", { vlan: pending.vlan, address: pending.address })}
+          </span>
+          <span className="flex flex-wrap gap-2">
+            {onNew ? (
+              <button
+                type="button"
+                className="btn btn-sm btn-success"
+                onClick={() => change.mutate({ COMMIT: "1" })}
+              >
+                <Check className="size-4" />
+                {t("sfp.mgmtCommit")}
+              </button>
+            ) : (
+              <a
+                className="btn btn-sm btn-primary"
+                href={`${window.location.protocol}//${pending.address.split("/")[0]}:${window.location.port || 8080}/sfp`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink className="size-4" />
+                {t("sfp.mgmtOpenNew")}
+              </a>
+            )}
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => change.mutate({ CANCEL: "1" })}
+            >
+              <Undo2 className="size-4" />
+              {t("sfp.mgmtCancel")}
+            </button>
+          </span>
+        </div>
+      ) : (
+        <form
+          onSubmit={form.handleSubmit((v) => {
+            if (!window.confirm(t("sfp.mgmtConfirm"))) return;
+            change.mutate({ VLAN: v.vlan, ADDRESS: v.address });
+          })}
+          noValidate
+          className="grid gap-3"
+        >
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field
+              label={t("sfp.mgmtVlan")}
+              inputMode="numeric"
+              error={errors.vlan?.message}
+              disabled={!m}
+              {...form.register("vlan")}
+            />
+            <Field
+              label={t("sfp.mgmtAddress")}
+              hint={t("sfp.mgmtAddressHint")}
+              error={errors.address?.message}
+              disabled={!m}
+              {...form.register("address")}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={!m || !isDirty || change.isPending}
+            >
+              {t("sfp.mgmtAdd")}
+            </button>
+            <SaveState {...state} />
+          </div>
+        </form>
+      )}
+      <p className="text-xs text-base-content/60">{t("sfp.mgmtSafety")}</p>
+    </Card>
+  );
+}
+
+function PortCounters() {
+  const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  const c = live?.port_counters?.sfp;
+  const n = (k: string) => integer(c?.[k], lang);
+  return (
+    <div className="grid content-start grid-cols-2 gap-3 lg:grid-cols-1">
+      <Stat
+        label={t("sfp.crcErrors")}
+        value={n("rx_crc_errors")}
+        tone={c?.rx_crc_errors ? "warn" : undefined}
+      />
+      <Stat label={t("sfp.drops")} value={n("rx_drops")} />
+      <Stat label={t("sfp.pauseIn")} value={n("rx_pause")} />
+      <Stat label={t("sfp.pauseOut")} value={n("tx_pause")} />
+    </div>
   );
 }
 
 export function SfpPage() {
   const { t, lang } = useI18n();
-  const { data: live } = useLive();
   const traffic = useTraffic();
   const now = traffic.at(-1);
-  const link = hostLink(live);
-  const s = session(live);
-  const sfp = port(live, "sfp");
 
   return (
-    <>
-      <PageTitle>{t("sfp.title")}</PageTitle>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card
-          title={t("sfp.link")}
-          action={
-            <Badge tone={link.up ? "good" : "bad"}>{link.up ? t("sfp.up") : t("sfp.down")}</Badge>
-          }
-        >
-          <Figure value={linkSpeed(link.speedMbit, lang) ?? "–"} caption={t("sfp.speed")} />
-          <Facts
-            rows={[
-              [t("sfp.state"), link.up ? t("sfp.up") : t("sfp.down")],
-              sfp && [
-                t("sfp.stickMac"),
-                <span key="m" className="font-mono text-xs">
-                  {sfp.mac}
-                </span>,
-              ],
-              sfp && [t("sfp.mtu"), sfp.mtu],
-            ]}
-          />
-        </Card>
-        <Card title={t("sfp.handover")}>
-          <p className="text-sm text-base-content/70">{t("sfp.handoverHint")}</p>
-          <Facts
-            rows={[
-              [t("sfp.lease"), s.up && link.lease ? link.lease : t("sfp.noLease")],
-              s.up && link.hostGateway ? [t("sfp.hostGateway"), link.hostGateway] : null,
-            ]}
-          />
-          <HandoverForm link={link} />
+    <Page title={t("sfp.title")}>
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(12rem,1fr)]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] xl:items-start">
+          <LaneCard />
+          <MgmtCard />
+        </div>
+        <Card title={t("sfp.traffic")}>
+          <div className="grid min-h-0 flex-1 gap-4 sm:grid-cols-[10rem_minmax(0,1fr)] lg:grid-cols-[10rem_minmax(0,1fr)_12rem]">
+            <div className="grid content-start grid-cols-2 gap-3 sm:grid-cols-1">
+              <Figure value={bitrate(now?.lanDown, lang)} caption={`↓ ${t("sfp.toHost")}`} />
+              <Figure value={bitrate(now?.lanUp, lang)} caption={`↑ ${t("sfp.fromHost")}`} />
+            </div>
+            <TrafficChart data={traffic} down={(r) => r.lanDown} up={(r) => r.lanUp} fill />
+            <PortCounters />
+          </div>
         </Card>
       </div>
-      <Card title={t("sfp.traffic")} className="mt-4">
-        <div className="grid gap-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-1">
-            <Figure value={bitrate(now?.lanDown, lang)} caption={`↓ ${t("sfp.toHost")}`} />
-            <Figure value={bitrate(now?.lanUp, lang)} caption={`↑ ${t("sfp.fromHost")}`} />
-          </div>
-          <TrafficChart data={traffic} down={(r) => r.lanDown} up={(r) => r.lanUp} />
-        </div>
-      </Card>
-    </>
+    </Page>
   );
 }
