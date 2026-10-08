@@ -1564,6 +1564,66 @@ static int bridge_vlan(int ifindex, uint16_t vid, bool add)
 }
 
 /* The interface of a bridge port: sfp for the UNI, gemN for a GEM port. */
+/*
+ * Replace the file @path with @text, unless it holds @text already as the
+ * last write left it in @last (@cap bytes); @what names it in a warning.
+ */
+static void run_publish(const char *path, const char *text, char *last,
+			size_t cap, bool *published, const char *what)
+{
+	char tmp[64];
+	bool ok = false;
+	FILE *f;
+
+	if (*published && !strcmp(text, last))
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.new", path);
+	f = fopen(tmp, "we");
+	if (f != NULL) {
+		ok = fputs(text, f) >= 0;
+		ok = fclose(f) == 0 && ok;
+		ok = ok && rename(tmp, path) == 0;
+	}
+	if (!ok) {
+		OMCI_WARN("%s could not be published in %s", what, path);
+		return;
+	}
+	snprintf(last, cap, "%s", text);
+	*published = true;
+}
+
+/*
+ * The VLANs the OLT lets through each GEM port, published for onu-mode: a
+ * "VID PORT-ID" line for each VID a GEM port's bridge port carries, held by
+ * a session or not, in GEM_VLANS_PATH. onu-mode runs a session whose GEM
+ * port is "auto" on the GEM port that carries the session's VLAN on the
+ * fibre, so that a session follows its service when the OLT moves it to
+ * another port. The file is replaced whole, and only when it changes.
+ */
+#define GEM_VLANS_PATH "/run/omcid-gem-vlans"
+/* Room for the lines of every VID of every port, and the end. */
+#define GEM_VLANS_TEXT \
+	(OMCI_HW_BRIDGE_MAX_PORTS * OMCI_HW_BRIDGE_MAX_VLANS * 12 + 1)
+
+static void gem_vlans_publish(const struct omci_hw_bridge_port *ports, size_t n)
+{
+	static char last[GEM_VLANS_TEXT];
+	static bool published;
+	char text[sizeof(last)] = "";
+	size_t len = 0;
+
+	for (size_t i = 0; i < n; i++) {
+		if (ports[i].port_id == OMCI_HW_BRIDGE_UNI)
+			continue;
+		for (uint8_t v = 0; v < ports[i].num_vlan; v++)
+			len += (size_t)snprintf(text + len, sizeof(text) - len,
+						"%u %u\n", ports[i].vlan[v],
+						ports[i].port_id);
+	}
+	run_publish(GEM_VLANS_PATH, text, last, sizeof(last), &published,
+		    "bridge: the VLANs of the GEM ports");
+}
+
 static unsigned int bridge_port_ifindex(const struct omci_hw_bridge_port *p)
 {
 	char name[IFNAMSIZ];
@@ -1812,6 +1872,7 @@ kernel_bridge_apply(const struct omci_hw_bridge_port *ports, size_t n,
 	if (n > OMCI_HW_BRIDGE_MAX_PORTS)
 		return OMCI_ERR_NOMEM;
 
+	gem_vlans_publish(ports, n);
 	if (!n) {
 		g_br_n = 0;
 		return OMCI_OK;
@@ -2667,8 +2728,6 @@ static void xlate_publish(const struct omci_hw_vlan_xlate *rules, size_t n)
 	char text[sizeof(last)] = "";
 	uint16_t subs[OMCI_HW_VLAN_MAX_RULES];
 	size_t len = 0, n_subs = 0;
-	bool ok = false;
-	FILE *f;
 
 	for (size_t i = 0; i < n; i++) {
 		if (rules[i].kind != OMCI_HW_VLAN_CVID_XLATE ||
@@ -2679,21 +2738,8 @@ static void xlate_publish(const struct omci_hw_vlan_xlate *rules, size_t n)
 					"%u %u\n", rules[i].match_cvid,
 					rules[i].assign_cvid);
 	}
-	if (published && !strcmp(text, last))
-		return;
-	f = fopen(XLATE_PATH ".new", "we");
-	if (f != NULL) {
-		ok = fputs(text, f) >= 0;
-		ok = fclose(f) == 0 && ok;
-		ok = ok && rename(XLATE_PATH ".new", XLATE_PATH) == 0;
-	}
-	if (!ok) {
-		OMCI_WARN("vlan: the translations could not be published in %s",
-			  XLATE_PATH);
-		return;
-	}
-	memcpy(last, text, sizeof(last));
-	published = true;
+	run_publish(XLATE_PATH, text, last, sizeof(last), &published,
+		    "vlan: the translations");
 }
 
 /* Replace the VLAN rules, each with its filters (see vlan_filters()). */

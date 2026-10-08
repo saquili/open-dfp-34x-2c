@@ -120,4 +120,9 @@ The daemon also writes the OLT's VLAN translations to ``/run/omcid-xlate``: a
 ``SUB NET`` line for each VID it translates from the subscriber's side, with the
 VID it leads into on the fibre. ``onu-mode`` runs a session that was given the
 subscriber's VID, the one a router behind the stick would use, in the VID it
-leads into.
+leads into. And it writes the VLANs the OLT lets through each GEM port to
+``/run/omcid-gem-vlans``: a ``VID PORT-ID`` line for each VID a GEM port's
+bridge port carries. ``onu-mode`` runs a session whose GEM port is ``auto`` on
+the GEM port that carries the session's VID on the fibre. Both files are
+replaced whole, and only when what they say changes, so that a session follows
+its service when the OLT moves it to another VID or another GEM port.
