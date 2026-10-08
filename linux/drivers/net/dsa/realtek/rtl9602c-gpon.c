@@ -108,7 +108,8 @@ void rtl9602c_gpon_report(struct rtl9602c_priv *p)
 
 /*
  * The analog front end of the PON SerDes. RTL9602C_SERDES_ANA_RX_CFG_SD_POR
- * must be clear: set, the receiver's signal detect reports no signal and the
+ * must be set for optics whose loss-of-signal output has its maker's
+ * polarity: clear, the receiver's signal detect reports no signal and the
  * downstream does not frame (measured on this board). None of the other writes
  * is verified to be needed; the downstream locks and the ONU reaches O5 with
  * all of them in place.
