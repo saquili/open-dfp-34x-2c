@@ -5,7 +5,8 @@
  * The panel builds to static files that pond serves from the stick's flash.
  * Every file is stored gzip-compressed only: pond hands a browser that
  * accepts gzip the .gz file as it is, so the stick never compresses anything
- * and the flash holds one copy.
+ * and the flash holds one copy. licenses.txt, beside the panel's files, holds
+ * the licences of the packages whose code the panel carries (licences.ts).
  *
  * "vite" proxies /api to a stick (POND_TARGET names it, and the server stops
  * without it; with POND_TOKEN it presents that bearer token, so the panel shows
@@ -22,6 +23,7 @@ import { gzipSync } from "node:zlib";
 import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
+import { licenceNotices } from "./licences.ts";
 
 /* Replace every file of the output with its gzip-compressed copy. */
 function gzipOnly(): Plugin {
@@ -97,7 +99,13 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-    plugins: [preact(), tailwindcss(), gzipOnly(), ...(mode === "mock" ? [mockApi()] : [])],
+    plugins: [
+      preact(),
+      tailwindcss(),
+      licenceNotices(),
+      gzipOnly(),
+      ...(mode === "mock" ? [mockApi()] : []),
+    ],
     build: {
       target: "es2022",
       assetsInlineLimit: 0,

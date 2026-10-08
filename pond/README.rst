@@ -126,7 +126,11 @@ is served with a content security policy that lets it load and talk to pond
 only.
 
 ``web/`` is TypeScript on Preact, with TanStack Router and Query, react-hook-form
-and zod/mini, Tailwind and daisyUI; ``npm run build`` writes ``web/dist``.
+and zod/mini, Tailwind and daisyUI; ``npm run build`` writes ``web/dist``, with
+``licenses.txt``: the licence of every package whose code the panel holds, as
+the build finds them in the bundle and in the stylesheet's imports
+(``web/licences.ts``). A package without a licence file, or under a licence
+other than MIT, ISC, BSD-2-Clause, BSD-3-Clause and 0BSD, stops the build.
 ``npm run dev:mock`` runs it against a mock stick inside the dev server, and
 ``npm run dev`` against a stick (``POND_TARGET`` names it, or the proxy in
 front of it, and the dev server stops without it).
