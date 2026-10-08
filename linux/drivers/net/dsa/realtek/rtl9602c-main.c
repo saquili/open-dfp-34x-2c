@@ -419,7 +419,7 @@ static int rtl9602c_devlink_info_get(struct dsa_switch *ds,
  * rtl9602c_sds_tries[] in turn and keeps the first one that synchronises.
  * rtl9602c.sfp_mode and rtl9602c.sfp_an narrow the settings tried to one
  * speed or one choice of negotiation; with both set, the lane keeps the one
- * setting left.
+ * setting left. The devlink parameter sfp_lane narrows them at run time.
  */
 static char *sfp_mode = "auto";
 module_param(sfp_mode, charp, 0444);
@@ -429,17 +429,20 @@ static char *sfp_an = "auto";
 module_param(sfp_an, charp, 0444);
 MODULE_PARM_DESC(sfp_an, "SFP lane in-band auto-negotiation: auto (default), on or off");
 
-/* The lane settings, in the order they are tried. */
+/* The lane settings, in the order they are tried, and their sfp_lane names. */
 static const struct {
 	u32 mode;
 	bool an;
 	const char *name;
+	const char *param;
 } rtl9602c_sds_tries[] = {
-	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, false, "2500BaseX" },
+	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, false, "2500BaseX", "2500basex" },
 	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, true,
-	  "1000BaseX with in-band negotiation" },
-	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, false, "1000BaseX" },
+	  "1000BaseX with in-band negotiation", "1000basex-an" },
+	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, false, "1000BaseX", "1000basex" },
 };
+
+#define RTL9602C_SDS_ALL	GENMASK(ARRAY_SIZE(rtl9602c_sds_tries) - 1, 0)
 
 /* How long one setting is given to synchronise, and how often it is checked. */
 #define RTL9602C_SDS_TRY_MS	1000
@@ -466,7 +469,7 @@ static u8 rtl9602c_sds_params(void)
 	if (!tries) {
 		pr_warn("sfp_mode=\"%s\" sfp_an=\"%s\" leave no lane setting; trying them all\n",
 			sfp_mode, sfp_an);
-		tries = GENMASK(ARRAY_SIZE(rtl9602c_sds_tries) - 1, 0);
+		tries = RTL9602C_SDS_ALL;
 	}
 	return tries;
 }
@@ -636,6 +639,57 @@ static void rtl9602c_sds_work(struct work_struct *w)
 	mutex_unlock(&p->sds_lock);
 	schedule_delayed_work(&p->sds_work,
 			      msecs_to_jiffies(RTL9602C_SDS_TRY_MS));
+}
+
+/*
+ * sfp_lane: "auto" for every lane setting, or the name of one. The settings
+ * the module parameters left, when they are neither, read as their names
+ * joined by '+'.
+ */
+static void rtl9602c_sds_lane_get(struct rtl9602c_priv *p, char *buf, size_t len)
+{
+	unsigned int i;
+	size_t n = 0;
+
+	if (p->sds_tries == RTL9602C_SDS_ALL) {
+		strscpy(buf, "auto", len);
+		return;
+	}
+	buf[0] = '\0';
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++)
+		if (p->sds_tries & BIT(i))
+			n += scnprintf(buf + n, len - n, "%s%s", n ? "+" : "",
+				       rtl9602c_sds_tries[i].param);
+}
+
+/*
+ * Narrow the lane to the settings @name allows. A lane in a setting that is
+ * still allowed is left as it is, so "auto" never interrupts it; otherwise
+ * it is brought up in the setting named, and the work looks for the host
+ * again.
+ */
+static int rtl9602c_sds_lane_set(struct rtl9602c_priv *p, const char *name)
+{
+	unsigned int i;
+	u8 tries = 0;
+
+	if (!strcmp(name, "auto"))
+		tries = RTL9602C_SDS_ALL;
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++)
+		if (!strcmp(name, rtl9602c_sds_tries[i].param))
+			tries = BIT(i);
+	if (!tries)
+		return -EINVAL;
+
+	mutex_lock(&p->sds_lock);
+	p->sds_tries = tries;
+	if (!(tries & BIT(p->sds_try))) {
+		p->sds_found = false;
+		rtl9602c_sds_set(p, __ffs(tries));
+		pr_info("SFP lane set to %s\n", rtl9602c_sds_tries[p->sds_try].name);
+	}
+	mutex_unlock(&p->sds_lock);
+	return 0;
 }
 
 /*
@@ -1156,6 +1210,18 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 		ctx->val.vbool = !!(rtl9602c_r(p, RTL9602C_L3_CFG) &
 				    RTL9602C_L3_CFG_TTL_DEC);
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_SFP_LANE:
+		mutex_lock(&p->sds_lock);
+		rtl9602c_sds_lane_get(p, ctx->val.vstr, sizeof(ctx->val.vstr));
+		mutex_unlock(&p->sds_lock);
+		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW:
+		mutex_lock(&p->sds_lock);
+		strscpy(ctx->val.vstr, p->sds_found ?
+			rtl9602c_sds_tries[p->sds_try].param : "searching",
+			sizeof(ctx->val.vstr));
+		mutex_unlock(&p->sds_lock);
+		return 0;
 	default:
 		break;
 	}
@@ -1302,6 +1368,11 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 			     ctx->val.vbool ? RTL9602C_L3_CFG_TTL_DEC : 0);
 		mutex_unlock(&p->flow_lock);
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_SFP_LANE:
+		return rtl9602c_sds_lane_set(p, ctx->val.vstr);
+	/* What the lane runs in is read only. */
+	case RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW:
+		return -EOPNOTSUPP;
 	default:
 		break;
 	}
@@ -1423,6 +1494,14 @@ static const struct devlink_param rtl9602c_devlink_params[] = {
 	 */
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC,
 				 "l3_ttl_decrement", DEVLINK_PARAM_TYPE_BOOL,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/* The lane settings the driver may bring the SFP lane up in. */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_SFP_LANE,
+				 "sfp_lane", DEVLINK_PARAM_TYPE_STRING,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/* The setting the lane runs in, or "searching". */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW,
+				 "sfp_lane_now", DEVLINK_PARAM_TYPE_STRING,
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 };
 

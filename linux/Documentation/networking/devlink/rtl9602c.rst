@@ -16,11 +16,11 @@ Overview
 
 The driver implements these devlink objects and no others:
 
-- 24 driver-specific parameters, all of mode ``runtime``. They configure the
+- 27 driver-specific parameters, all of mode ``runtime``. They configure the
   malformed-frame (DoS) checks, the four storm-control classes that ``tc``
-  cannot describe, the limit on the frames handed to the CPU, the header
-  capture, loop detection, and the ONU's serial number and password (see
-  "Parameters").
+  cannot describe, the limit on the frames handed to the CPU, the TTL of
+  routed frames, the SFP lane, the header capture, loop detection, and the
+  ONU's serial number and password (see "Parameters").
 - One region, ``frame_capture``, that holds a snapshot of the header capture
   (see "The region frame_capture").
 - The reply to ``devlink dev info``, which names the part and the revision of
@@ -115,7 +115,7 @@ Interfaces to user space
 ------------------------
 
 - ``devlink dev show`` and ``devlink dev info platform/1b000000.switch``.
-- ``devlink dev param show`` and ``devlink dev param set`` on the 24
+- ``devlink dev param show`` and ``devlink dev param set`` on the 27
   parameters.
 - ``devlink region show``, ``new``, ``read``, ``dump`` and ``del`` on
   ``platform/1b000000.switch/frame_capture``.
@@ -151,11 +151,12 @@ on an OLT; the storm-control rates match their settings.
 Parameters
 ==========
 
-All 24 parameters are driver-specific, of type u8, u32 or string, and of mode
-``runtime``: a value takes effect at once. There are six for the DoS checks,
-eight for storm control, one for the limit on the frames handed to the CPU,
-four for the header capture, three for loop detection and two for the ONU's
-serial number and password. The driver registers them at setup. If it
+All 27 parameters are driver-specific, of type bool, u8, u32 or string, and of
+mode ``runtime``: a value takes effect at once. There are six for the DoS
+checks, eight for storm control, one for the limit on the frames handed to the
+CPU, one for the TTL of routed frames, two for the SFP lane, four for the header
+capture, three for loop detection and two for the ONU's serial number and
+password. The driver registers them at setup. If it
 cannot, it logs ``devlink parameters unavailable; the switch's own features
 cannot be configured`` and the switch carries on without them.
 
@@ -218,10 +219,12 @@ defaults, and the serial number is empty.
    * - Fact
      - Tag
      - Checked by
-   * - The driver registers 24 parameters, all of mode ``runtime``, at setup.
-     - M
-     - ``devlink dev param show platform/1b000000.switch`` lists them after
-       boot, and every measurement below sets or reads one of them.
+   * - The driver registers 27 parameters, all of mode ``runtime``, at setup.
+     - M, I
+     - M: ``devlink dev param show platform/1b000000.switch`` listed the first
+       24 after boot, and every measurement below sets or reads one of them.
+       I: ``l3_ttl_decrement``, ``sfp_lane`` and ``sfp_lane_now``, added
+       since, are read from the code until they are listed after a boot.
    * - Every range check is made in the set callback, and a value too wide for
        its field is refused with ``-ERANGE``, not truncated.
      - M
@@ -732,6 +735,77 @@ either way.
      - Whether the engine decrements the TTL or hop limit of what it routes.
        Default true. Read from ``RTL9602C_L3_CFG``.
 
+The SFP lane
+------------
+
+The SerDes lane to the host runs in 2500BaseX without in-band negotiation, or
+in 1000BaseX with or without it (IEEE 802.3 clause 37), and nothing on the lane
+says which the host takes. While the lane's receiver has not synchronised, the
+driver tries the settings in turn, once a second, and keeps the first that
+synchronises (Documentation/networking/dsa/rtl9602c.rst). ``sfp_lane`` narrows
+the settings it may try, at run time as the module parameters ``sfp_mode`` and
+``sfp_an`` do at load: to one, which brings the lane up in it at once when it
+runs in another, or to all of them again. A lane in a setting that is still
+allowed is left alone, so ``auto`` never interrupts it. ``sfp_lane_now`` says
+which setting the lane runs in. The management of the stick comes over this
+lane, so a setting the host does not take cuts it off: whoever changes it must
+be able to change it back without the lane, as the stick's own tools do with a
+trial that ends by itself.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Description
+   * - ``sfp_lane``
+     - string
+     - runtime
+     - ``auto``, every setting, or one: ``2500basex``, ``1000basex-an`` (with
+       in-band negotiation) or ``1000basex``. Default ``auto``, unless the
+       module parameters narrow it; settings they leave that are neither read
+       as their names joined by ``+``. Read from the driver's copy. Any other
+       value is refused with ``-EINVAL``.
+   * - ``sfp_lane_now``
+     - string
+     - runtime
+     - The setting the lane has synchronised in, by the names above, or
+       ``searching`` while it has not. Read only: a set is refused with
+       ``-EOPNOTSUPP``.
+
+To keep the lane in 1000BaseX with negotiation, and to let it look again::
+
+    devlink dev param set platform/1b000000.switch \
+            name sfp_lane value 1000basex-an cmode runtime
+    devlink dev param set platform/1b000000.switch \
+            name sfp_lane value auto cmode runtime
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Setting one name brings the lane up in that setting at once, unless it
+       already runs in it, and the host's link follows within the time the host
+       takes to synchronise.
+     - I
+     - Read from the code. A host that switches between 2500BaseX and
+       1000BaseX on the bench, with ``sfp_lane_now`` and the link read after
+       each set, would confirm it.
+   * - ``auto`` leaves a synchronised lane as it is.
+     - I
+     - Read from the code; the link staying up across the set would confirm
+       it.
+   * - ``sfp_lane_now`` reads ``searching`` from the set that changes the
+       setting until the lane synchronises in the new one.
+     - I
+     - Read from the code; ``sfp_lane_now`` read once a second across a set
+       would confirm it.
+
 GPON serial number
 ------------------
 
@@ -1077,6 +1151,11 @@ Assumptions the driver depends on
        control").
      - Offering each class DHCP server, DHCP client and MLD frames under a set
        rate and counting what arrives.
+   * - A set of ``sfp_lane`` brings the lane up in the setting named at once,
+       leaves a lane in an allowed setting alone, and ``sfp_lane_now`` follows
+       ("The SFP lane").
+     - A host that switches between 2500BaseX and 1000BaseX on the bench,
+       with ``sfp_lane_now`` and the link read across each set.
 
 Questions the code does not depend on
 -------------------------------------

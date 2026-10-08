@@ -3478,6 +3478,10 @@ struct rtl9602c_priv {
  *	the switch hands the CPU
  * @RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC: l3_ttl_decrement, whether the
  *	engine decrements the TTL or hop limit of what it routes
+ * @RTL9602C_DEVLINK_PARAM_ID_SFP_LANE: sfp_lane, the settings the SFP lane
+ *	may be brought up in
+ * @RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW: sfp_lane_now, the setting it
+ *	runs in
  */
 enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_BASE = DEVLINK_PARAM_GENERIC_ID_MAX,
@@ -3506,6 +3510,8 @@ enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD,
 	RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS,
 	RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC,
+	RTL9602C_DEVLINK_PARAM_ID_SFP_LANE,
+	RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW,
 };
 
 /*
