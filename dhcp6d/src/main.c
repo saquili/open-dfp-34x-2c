@@ -4,10 +4,11 @@
 /*
  * dhcp6d's sockets, routes and files.
  *
- *   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-v]
+ *   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-t TABLE] [-v]
  *       the prefix of WAN's servers delegated to the host on LAN; the DUID is
  *       IFACE's MAC address (WAN, a PPP link, has none); DIR gets the files
- *       "prefix" and "host"
+ *       "prefix" and "host"; with TABLE the default route goes in that
+ *       routing table, by which what comes from the prefix is routed
  *   dhcp6d -c IFACE [-m IFACE] [-v]
  *       the client alone: the prefix a server on IFACE delegates, printed;
  *       it makes no route, as a host that takes its router from the
@@ -18,7 +19,10 @@
  * The routes it makes are of protocol "dhcp": the default route through the
  * server that delegated the prefix, the prefix as unreachable, so that what
  * is not the host's goes nowhere rather than back out, and the prefix
- * through the host it is delegated to. SIGTERM, SIGINT and SIGHUP take them
+ * through the host it is delegated to. With -t the default route is in a
+ * table of its own, with a rule that routes by it what comes from the prefix:
+ * beside another session that hands a prefix on, each host's traffic leaves
+ * by the session its prefix came from. SIGTERM, SIGINT and SIGHUP take them
  * away, tell the host the stick is no longer its router, and release the
  * prefix.
  */
@@ -29,6 +33,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <ifaddrs.h>
+#include <linux/fib_rules.h>
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 #include <netinet/icmp6.h>
@@ -161,56 +166,18 @@ static const char *ntop(const uint8_t a[16], char *buf, size_t cap)
 	return inet_ntop(AF_INET6, a, buf, (socklen_t)cap) ? buf : "?";
 }
 
-/* A route of @type to @dst/@plen, through @gw (or none) on @oif. */
-static int route(bool add, uint8_t type, const uint8_t dst[16], uint8_t plen,
-		 const uint8_t *gw, unsigned int oif, uint32_t metric)
+/* Send the request @req of @len bytes to the kernel; its answer, 0 or -errno. */
+static int nl_request(const void *req, size_t len)
 {
-	struct {
-		struct nlmsghdr nh;
-		struct rtmsg rt;
-		uint8_t attrs[128];
-	} req;
 	struct sockaddr_nl to = { .nl_family = AF_NETLINK };
 	uint8_t reply[512];
-	size_t off;
 	int fd, err = 0;
 	ssize_t n;
-
-	memset(&req, 0, sizeof(req));
-	req.nh.nlmsg_type = add ? RTM_NEWROUTE : RTM_DELROUTE;
-	req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK |
-			     (add ? NLM_F_CREATE | NLM_F_REPLACE : 0);
-	req.nh.nlmsg_seq = 1;
-	req.rt.rtm_family = AF_INET6;
-	req.rt.rtm_dst_len = plen;
-	req.rt.rtm_table = RT_TABLE_MAIN;
-	req.rt.rtm_protocol = RTPROT_DHCP;
-	req.rt.rtm_scope = RT_SCOPE_UNIVERSE;
-	req.rt.rtm_type = type;
-	off = NLMSG_ALIGN(sizeof(req.nh) + sizeof(req.rt));
-
-#define ATTR(t, v, l)                                                       \
-	do {                                                                \
-		struct rtattr *ra = (struct rtattr *)((uint8_t *)&req + off); \
-		ra->rta_type = (t);                                         \
-		ra->rta_len = (unsigned short)RTA_LENGTH(l);                \
-		memcpy(RTA_DATA(ra), (v), (l));                             \
-		off += RTA_ALIGN(ra->rta_len);                              \
-	} while (0)
-
-	ATTR(RTA_DST, dst, 16);
-	if (gw)
-		ATTR(RTA_GATEWAY, gw, 16);
-	if (oif)
-		ATTR(RTA_OIF, &oif, sizeof(oif));
-	ATTR(RTA_PRIORITY, &metric, sizeof(metric));
-#undef ATTR
-	req.nh.nlmsg_len = (uint32_t)off;
 
 	fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
 	if (fd < 0)
 		return -errno;
-	if (sendto(fd, &req, off, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
+	if (sendto(fd, req, len, 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
 		err = -errno;
 		goto out;
 	}
@@ -227,11 +194,90 @@ static int route(bool add, uint8_t type, const uint8_t dst[16], uint8_t plen,
 	}
 out:
 	close(fd);
+	return err;
+}
+
+/* An attribute of @t with @l bytes of @v, at @off of the request @req. */
+#define ATTR(t, v, l)                                                       \
+	do {                                                                \
+		struct rtattr *ra = (struct rtattr *)((uint8_t *)&req + off); \
+		ra->rta_type = (t);                                         \
+		ra->rta_len = (unsigned short)RTA_LENGTH(l);                \
+		memcpy(RTA_DATA(ra), (v), (l));                             \
+		off += RTA_ALIGN(ra->rta_len);                              \
+	} while (0)
+
+/* A route of @type to @dst/@plen, through @gw (or none) on @oif, in @table. */
+static int route(bool add, uint8_t type, const uint8_t dst[16], uint8_t plen,
+		 const uint8_t *gw, unsigned int oif, uint32_t metric, uint32_t table)
+{
+	struct {
+		struct nlmsghdr nh;
+		struct rtmsg rt;
+		uint8_t attrs[128];
+	} req;
+	size_t off;
+	int err;
+
+	memset(&req, 0, sizeof(req));
+	req.nh.nlmsg_type = add ? RTM_NEWROUTE : RTM_DELROUTE;
+	req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK |
+			     (add ? NLM_F_CREATE | NLM_F_REPLACE : 0);
+	req.nh.nlmsg_seq = 1;
+	req.rt.rtm_family = AF_INET6;
+	req.rt.rtm_dst_len = plen;
+	req.rt.rtm_table = table < 256 ? (uint8_t)table : RT_TABLE_UNSPEC;
+	req.rt.rtm_protocol = RTPROT_DHCP;
+	req.rt.rtm_scope = RT_SCOPE_UNIVERSE;
+	req.rt.rtm_type = type;
+	off = NLMSG_ALIGN(sizeof(req.nh) + sizeof(req.rt));
+	ATTR(RTA_DST, dst, 16);
+	if (gw)
+		ATTR(RTA_GATEWAY, gw, 16);
+	if (oif)
+		ATTR(RTA_OIF, &oif, sizeof(oif));
+	ATTR(RTA_PRIORITY, &metric, sizeof(metric));
+	ATTR(RTA_TABLE, &table, sizeof(table));
+	req.nh.nlmsg_len = (uint32_t)off;
+
+	err = nl_request(&req, off);
 	/* Taking away a route that is not there is no failure. */
 	if (!add && err == -ESRCH)
 		err = 0;
 	return err;
 }
+
+/* The rule that routes what comes from @src by @table. */
+static int rule(bool add, const struct prefix *src, uint32_t table)
+{
+	struct {
+		struct nlmsghdr nh;
+		struct fib_rule_hdr fr;
+		uint8_t attrs[64];
+	} req;
+	size_t off;
+	int err;
+
+	memset(&req, 0, sizeof(req));
+	req.nh.nlmsg_type = add ? RTM_NEWRULE : RTM_DELRULE;
+	req.nh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | (add ? NLM_F_CREATE | NLM_F_EXCL : 0);
+	req.nh.nlmsg_seq = 1;
+	req.fr.family = AF_INET6;
+	req.fr.src_len = src->len;
+	req.fr.action = FR_ACT_TO_TBL;
+	req.fr.table = table < 256 ? (uint8_t)table : RT_TABLE_UNSPEC;
+	off = NLMSG_ALIGN(sizeof(req.nh) + sizeof(req.fr));
+	ATTR(FRA_SRC, src->addr, 16);
+	ATTR(FRA_TABLE, &table, sizeof(table));
+	req.nh.nlmsg_len = (uint32_t)off;
+
+	err = nl_request(&req, off);
+	/* A rule that is there already, or gone already, is no failure. */
+	if ((add && err == -EEXIST) || (!add && err == -ENOENT))
+		err = 0;
+	return err;
+}
+#undef ATTR
 
 static int udp_socket(const char *ifname, uint16_t port, bool join_servers)
 {
@@ -323,6 +369,10 @@ struct daemon {
 	/* the server that delegated, which the default route goes through */
 	uint8_t router[16];
 	bool default_route;
+	/* the table of the default route, and the rule into it of the prefix */
+	uint32_t table;
+	bool ruled;
+	struct prefix rule_prefix;
 	/* the prefix routed nowhere, and the one routed to the host */
 	bool unreachable;
 	struct prefix unreachable_prefix;
@@ -367,27 +417,44 @@ static void sync_routes(struct daemon *d)
 	if (d->unreachable && (!want_un || memcmp(&d->unreachable_prefix,
 						  &d->client.prefix, 17))) {
 		route(false, RTN_UNREACHABLE, d->unreachable_prefix.addr,
-		      d->unreachable_prefix.len, NULL, 0, UNREACHABLE_METRIC);
+		      d->unreachable_prefix.len, NULL, 0, UNREACHABLE_METRIC, RT_TABLE_MAIN);
 		d->unreachable = false;
 	}
 	if (want_un && !d->unreachable) {
 		d->unreachable_prefix = d->client.prefix;
 		if (!route(true, RTN_UNREACHABLE, d->unreachable_prefix.addr,
-			   d->unreachable_prefix.len, NULL, 0, UNREACHABLE_METRIC))
+			   d->unreachable_prefix.len, NULL, 0, UNREACHABLE_METRIC, RT_TABLE_MAIN))
 			d->unreachable = true;
+	}
+
+	/* With a table of its own, what comes from the prefix goes by it. */
+	if (d->ruled && (!want_un || !d->table ||
+			 memcmp(&d->rule_prefix, &d->client.prefix, 17))) {
+		rule(false, &d->rule_prefix, d->table);
+		d->ruled = false;
+	}
+	if (want_un && d->table && !d->ruled) {
+		int err = rule(true, &d->client.prefix, d->table);
+
+		if (err) {
+			DHCP6D_WARN("no rule into table %u: %s", d->table, strerror(-err));
+		} else {
+			d->ruled = true;
+			d->rule_prefix = d->client.prefix;
+		}
 	}
 
 	if (d->routed && (!want_host || memcmp(&d->routed_prefix, &d->server.prefix, 17) ||
 			  memcmp(d->routed_via, d->server.host_addr, 16))) {
 		route(false, RTN_UNICAST, d->routed_prefix.addr, d->routed_prefix.len,
-		      d->routed_via, d->lan_idx, ROUTE_METRIC);
+		      d->routed_via, d->lan_idx, ROUTE_METRIC, RT_TABLE_MAIN);
 		d->routed = false;
 		write_file(d, "host", NULL);
 	}
 	if (want_host && !d->routed) {
 		int err = route(true, RTN_UNICAST, d->server.prefix.addr,
 				d->server.prefix.len, d->server.host_addr,
-				d->lan_idx, ROUTE_METRIC);
+				d->lan_idx, ROUTE_METRIC, RT_TABLE_MAIN);
 
 		if (err) {
 			DHCP6D_WARN("no route to the host: %s", strerror(-err));
@@ -407,15 +474,16 @@ static void sync_routes(struct daemon *d)
 static void default_route(struct daemon *d, bool on)
 {
 	static const uint8_t any[16];
+	const uint32_t table = d->table ? d->table : RT_TABLE_MAIN;
 	int err;
 
 	if (d->default_route) {
-		route(false, RTN_UNICAST, any, 0, d->router, d->wan_idx, ROUTE_METRIC);
+		route(false, RTN_UNICAST, any, 0, d->router, d->wan_idx, ROUTE_METRIC, table);
 		d->default_route = false;
 	}
 	if (!on)
 		return;
-	err = route(true, RTN_UNICAST, any, 0, d->router, d->wan_idx, ROUTE_METRIC);
+	err = route(true, RTN_UNICAST, any, 0, d->router, d->wan_idx, ROUTE_METRIC, table);
 	if (err)
 		DHCP6D_WARN("no default route: %s", strerror(-err));
 	else
@@ -546,14 +614,15 @@ static void on_rs(struct daemon *d, int64_t now)
 static int print_usage(void)
 {
 	fprintf(stderr,
-		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-v]\n"
+		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-t TABLE] [-v]\n"
 		"       dhcp6d -c IFACE [-m IFACE] [-v]\n"
 		"       dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]\n"
 		"\n"
 		"  -w -l  the prefix WAN's servers delegate, delegated on to the host\n"
 		"         on LAN, with the stick as the host's router; -m names the\n"
 		"         interface whose MAC address is the DUID, -o the directory of\n"
-		"         the files \"prefix\" and \"host\".\n"
+		"         the files \"prefix\" and \"host\"; -t puts the default route\n"
+		"         in TABLE, by which what comes from the prefix is routed.\n"
 		"  -c     the client alone: print the prefix delegated on IFACE.\n"
 		"  -s     the server alone: delegate PREFIX/LEN on LAN, with DNS.\n");
 	return 2;
@@ -586,7 +655,7 @@ int main(int argc, char **argv)
 	struct prefix fp;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "w:l:m:o:c:s:d:v")) != -1) {
+	while ((opt = getopt(argc, argv, "w:l:m:o:c:s:d:t:v")) != -1) {
 		switch (opt) {
 		case 'w':
 			d.wan = optarg;
@@ -609,6 +678,17 @@ int main(int argc, char **argv)
 		case 'd':
 			dns = optarg;
 			break;
+		case 't': {
+			char *end;
+			unsigned long t = strtoul(optarg, &end, 10);
+
+			/* Not the kernel's own tables: main, local, default. */
+			if (*end || !t || t > UINT32_MAX - 1 || t == RT_TABLE_MAIN ||
+			    t == RT_TABLE_LOCAL || t == RT_TABLE_DEFAULT)
+				return print_usage();
+			d.table = (uint32_t)t;
+			break;
+		}
 		case 'v':
 			g_verbose = 1;
 			break;
@@ -617,12 +697,12 @@ int main(int argc, char **argv)
 		}
 	}
 	if (client_if) {
-		if (d.wan || d.lan || fixed)
+		if (d.wan || d.lan || fixed || d.table)
 			return print_usage();
 		d.wan = client_if;
 		d.print = true;
 	} else if (fixed) {
-		if (d.wan || !d.lan || fixed_prefix(fixed, &fp))
+		if (d.wan || !d.lan || d.table || fixed_prefix(fixed, &fp))
 			return print_usage();
 		d.fixed = true;
 	} else if (!d.wan || !d.lan) {

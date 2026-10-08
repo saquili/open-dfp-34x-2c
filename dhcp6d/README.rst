@@ -12,7 +12,7 @@ client (RFC 8415) that asks for a delegated prefix and the name servers
 prefix to the one host there, and a router that advertises itself (RFC 4861)
 with the session's MTU and the name servers (RFC 8106)::
 
-   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-v]   # the stick
+   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-t TABLE] [-v]   # the stick
    dhcp6d -c IFACE [-m IFACE] [-v]                 # the client alone
    dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]       # the server alone
 
@@ -35,9 +35,12 @@ host takes the delegated one by DHCPv6.
 The routes dhcp6d makes are of protocol ``dhcp``: the default route through
 the server that delegated the prefix, the prefix as unreachable, so that
 what is not the host's goes nowhere rather than back out, and the prefix
-through the host. SIGTERM, SIGINT and SIGHUP take them away, advertise the
-stick with a router lifetime of 0, so that the host drops it, and release
-the prefix.
+through the host. With ``-t`` the default route goes in the routing table
+TABLE, with a rule that routes by it what comes from the prefix: where the
+stick hands the prefixes of two sessions to two hosts, each host's traffic
+leaves by the session its prefix came from. SIGTERM, SIGINT and SIGHUP take
+them away, advertise the stick with a router lifetime of 0, so that the host
+drops it, and release the prefix.
 
 Building and testing::
 

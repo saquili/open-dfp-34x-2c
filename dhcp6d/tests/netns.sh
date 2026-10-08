@@ -11,7 +11,7 @@
 #
 #   docker run --rm --privileged -v "$PWD":/d6 debian:trixie \
 #     sh -c 'apt-get -qq update && apt-get -qq install -y make gcc iproute2 \
-#            iputils-ping >/dev/null && cd /d6 && make && tests/netns.sh'
+#            iputils-ping procps >/dev/null && cd /d6 && make && tests/netns.sh'
 
 set -u
 D6=${D6:-build/dhcp6d}
@@ -95,6 +95,31 @@ for _ in $(seq 1 5); do
 	sleep 1
 done
 check '! ip -n ho -6 route show default | grep -q "via fe80::"'
+
+echo "with a table of its own: the default route in it, and the prefix routed by it"
+# A new host, which asks the new stick from the start.
+kill "$(cat "$T/ho.pid")"
+ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -t 102 -v >"$T/st.log" 2>&1 &
+echo $! >"$T/st.pid"
+ip netns exec ho "$D6" -c h0 >"$T/ho.out" 2>"$T/ho.log" &
+echo $! >"$T/ho.pid"
+for _ in $(seq 1 30); do
+	[ -s "$T/st/host" ] && ip -n st -6 rule show | grep -q "lookup 102" && break
+	sleep 1
+done
+check 'ip -n st -6 rule show | grep -q "from 2001:db8:1200::/56 lookup 102"'
+check 'ip -n st -6 route show table 102 proto dhcp | grep -q "^default via fe80::.* dev st0"'
+check '! ip -n st -6 route show proto dhcp | grep -q "^default"'
+check 'ip -n st -6 route show proto dhcp | grep -q "^2001:db8:1200::/56 via fe80::.* dev st1"'
+for _ in $(seq 1 10); do
+	ip -n ho -6 route show default | grep -q "via fe80::" && break
+	sleep 1
+done
+check 'ip netns exec ho ping -6 -c 2 -W 2 -I 2001:db8:1200:1::1 2001:db8:ffff::1 >/dev/null'
+kill "$(cat "$T/st.pid")"
+sleep 2
+check '! ip -n st -6 rule show | grep -q "lookup 102"'
+check '[ -z "$(ip -n st -6 route show table 102 proto dhcp 2>/dev/null)" ]'
 
 echo "netns: $checks checks, $failures failed"
 [ "$failures" -eq 0 ] || { echo "--- stick"; cat "$T/st.log"; echo "--- operator"; cat "$T/op.log"; }
