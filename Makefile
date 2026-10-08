@@ -136,11 +136,21 @@ sdk:
 	  toolchain_defconfig && make sdk -C "$(TOOLCHAIN_OUT)" && \
 	  ls -l "$(TOOLCHAIN_OUT)"/images/*.tar.gz
 
+# The licence information a release owes, which the build system collects for
+# the board's configuration into IMAGE_OUT/legal-info: the licence of every
+# package, their licence texts and the sources it may hand on. The licences of
+# the panel's packages are written by the panel's build (pond/web/licences.ts),
+# so they are taken from a built image: run make first.
 legal-info:
-	@echo 'open-dfp-34x-2c: "make legal-info" is not implemented yet.'
-	@echo '  Planned: collect the source and licence bundle a release owes.'
-	@echo '  Arrives with: the distribution build (WI-14).'
-	@exit 1
+	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
+	  odi_dfp_34x_2c3_defconfig && make -C "$(IMAGE_OUT)" legal-info
+	@panel="$(IMAGE_OUT)/target/usr/share/pond/www/licenses.txt.gz"; \
+	if [ ! -f "$$panel" ]; then \
+	  echo "open-dfp-34x-2c: no $$panel: the panel's licences come from its build; run make first" >&2; \
+	  exit 1; \
+	fi; \
+	gzip -dc "$$panel" > "$(IMAGE_OUT)/legal-info/pond-panel-licenses.txt" && \
+	echo "open-dfp-34x-2c: the licence information is in $(IMAGE_OUT)/legal-info"
 
 docs:
 	@echo 'open-dfp-34x-2c: "make docs" is not implemented yet.'
@@ -200,15 +210,17 @@ distclean:
 	@exit 1
 
 help:
-	@echo 'open-dfp-34x-2c entry points (make, make sdk, make linux, make buildroot,'
-	@echo 'make check, make ramboot and make flash work; the others are stubs today):'
+	@echo 'open-dfp-34x-2c entry points (make, make sdk, make legal-info, make linux,'
+	@echo 'make buildroot, make check, make ramboot and make flash work; the others are'
+	@echo 'stubs today):'
 	@echo '  make               build the flashable images k0.uImage and r0.squashfs'
 	@echo '                     in build/image/images (default; needs Linux)'
 	@echo '  make linux         build the kernel (uImage) with the Debian cross compiler'
 	@echo '  make buildroot     fetch, check and patch the pinned Buildroot'
 	@echo '  make omcid         build the OMCI daemon'
 	@echo '  make sdk           build a relocatable cross toolchain tarball'
-	@echo '  make legal-info    collect the source-and-licence bundle'
+	@echo '  make legal-info    collect the licence information of a built image'
+	@echo '                     in build/image/legal-info (needs Linux)'
 	@echo '  make docs          build the documentation'
 	@echo '  make check         run the offline gates'
 	@echo '  make ramboot       boot a trial kernel from RAM over the bench'

@@ -80,7 +80,7 @@ implements it, then exits::
     make buildroot     # fetch the pinned Buildroot and patch it (build/buildroot)
     make omcid         # build the OMCI daemon
     make sdk           # build a relocatable cross toolchain (build/toolchain/images)
-    make legal-info    # collect the source-and-licence bundle for a release
+    make legal-info    # the licences of a built image (build/image/legal-info)
     make docs          # build the documentation
     make check         # run the offline gates
     make ramboot       # boot a trial kernel from RAM over the bench
@@ -91,9 +91,14 @@ Licensing
 =========
 
 Everything authored in this repository is ``GPL-2.0-only``; see ``COPYING`` and
-``LICENSES/``. Third-party packages are not committed here: they are fetched by
-hash at build time and keep their own licences, and each release ships the
-build system's ``legal-info`` bundle. Contributions follow the Developer
+``LICENSES/``. The third-party code committed here keeps its licence and says
+so: Mongoose, in ``pond/third_party``, is taken under ``GPL-2.0-only`` and holds
+micro-ecc under ``BSD-2-Clause``; ``REUSE.toml`` names the rest. Third-party
+packages are not committed: they are fetched by hash at build time and keep
+their own licences. ``make legal-info`` collects the licence of every package of
+the image, their texts and the sources a release hands on, into
+``build/image/legal-info``, and the image carries the licences of the panel's
+packages beside the panel (``/usr/share/pond/www/licenses.txt``). Contributions follow the Developer
 Certificate of Origin and the provenance policy; see ``CONTRIBUTING.rst`` and
 ``docs/policy/provenance.rst``.
 
