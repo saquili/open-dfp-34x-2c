@@ -1259,7 +1259,7 @@ static int rtl9602c_gn_t2_open(struct rtl9602c_priv *p)
 	p->optics_t2_eectl = eectl;
 	p->optics_t2_open = true;
 	pr_info("GN25L95: table 2 open for storing (C7h %02x -> %02x)\n",
-		eectl, eectl & ~RTL9602C_OPTICS_TBL2_PERSIST_OFF);
+		eectl, (u8)(eectl & ~RTL9602C_OPTICS_TBL2_PERSIST_OFF));
 	return 0;
 }
 
