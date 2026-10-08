@@ -284,30 +284,26 @@ static bool rtl9602c_l2_is_own(struct rtl9602c_priv *p,
 	return false;
 }
 
-/**
- * rtl9602c_port_fdb_add() - add a static unicast entry
- * @ds: the switch
- * @port: the port the address lives behind
- * @addr: the address; a group goes through rtl9602c_port_mdb_add()
- * @vid: the VLAN the entry is keyed by, 0 standing for the port's PVID
- * @db: the database DSA files the entry in; unused, as entries are keyed by
- *	address and VID alone
- *
- * The switch gives an untagged frame its ingress port's PVID before the
- * address lookup, so a VID 0, which DSA passes for a VLAN-unaware bridge,
- * stands for the port's PVID, and the entry is keyed as that VLAN learns:
- * by VID in independent learning, by address alone in shared learning,
- * which is where a PVID of 0 leaves it.
- *
- * Return: 0 on success, -EINVAL for a multicast address, -EBUSY when a routed
- * next hop holds the address behind another port, -ENOSPC when the address's
- * bucket and the CAM are full, or a negative error code from the table access.
- */
-int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
-			  const unsigned char *addr, u16 vid,
-			  struct dsa_db db)
+/* The index of @addr in @vid among @n entries of @h, or -1. */
+static int rtl9602c_host_find(const struct rtl9602c_host *h, unsigned int n,
+			      const u8 *addr, u16 vid)
 {
-	struct rtl9602c_priv *p = ds->priv;
+	unsigned int i;
+
+	for (i = 0; i < n; i++)
+		if (h[i].vid == vid && ether_addr_equal(h[i].addr, addr))
+			return i;
+	return -1;
+}
+
+/*
+ * The static entry of rtl9602c_port_fdb_add(); @router lets an entry behind
+ * the CPU port take the router bit while the L3 engine is up.
+ */
+static int rtl9602c_l2_static_add(struct rtl9602c_priv *p, int port,
+				  const unsigned char *addr, u16 vid,
+				  bool router)
+{
 	u32 e[RTL9602C_FDB_ENTRY_WORDS];
 	struct rtl9602c_lookup out;
 	int err, nh_port;
@@ -361,7 +357,7 @@ int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 	 * rtl9602c_l2_own_place() placed. What the bit does is not known: the
 	 * engine takes the frames for these addresses without it (measured).
 	 */
-	if (p->l34_up && port == RTL9602C_PORT_CPU)
+	if (router && p->l34_up && port == RTL9602C_PORT_CPU)
 		e[1] |= RTL9602C_FDB_W1_ROUTER_MAC;
 
 	err = rtl9602c_l2_place(p, e, &out);
@@ -372,6 +368,32 @@ int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
 out:
 	mutex_unlock(&p->fdb_lock);
 	return err;
+}
+
+/**
+ * rtl9602c_port_fdb_add() - add a static unicast entry
+ * @ds: the switch
+ * @port: the port the address lives behind
+ * @addr: the address; a group goes through rtl9602c_port_mdb_add()
+ * @vid: the VLAN the entry is keyed by, 0 standing for the port's PVID
+ * @db: the database DSA files the entry in; unused, as entries are keyed by
+ *	address and VID alone
+ *
+ * The switch gives an untagged frame its ingress port's PVID before the
+ * address lookup, so a VID 0, which DSA passes for a VLAN-unaware bridge,
+ * stands for the port's PVID, and the entry is keyed as that VLAN learns:
+ * by VID in independent learning, by address alone in shared learning,
+ * which is where a PVID of 0 leaves it.
+ *
+ * Return: 0 on success, -EINVAL for a multicast address, -EBUSY when a routed
+ * next hop holds the address behind another port, -ENOSPC when the address's
+ * bucket and the CAM are full, or a negative error code from the table access.
+ */
+int rtl9602c_port_fdb_add(struct dsa_switch *ds, int port,
+			  const unsigned char *addr, u16 vid,
+			  struct dsa_db db)
+{
+	return rtl9602c_l2_static_add(ds->priv, port, addr, vid, true);
 }
 
 /**
@@ -700,7 +722,8 @@ int rtl9602c_l2_own_drop(struct rtl9602c_priv *p, int port)
  * its own address placed by rtl9602c_l2_own_place(); a port that gets its
  * interface later gets it when it is opened. Last, with @on or without, every
  * CPU-port entry whose router bit disagrees with @on is replaced by one that
- * agrees. Each entry is deleted by its own words.
+ * agrees, but for the GEM interfaces' entries (rtl9602c_gem_hosts_sync()).
+ * Each entry is deleted by its own words.
  *
  * What the router bit does is not known. It is not what admits a frame to
  * the L3 engine, which takes the frames for this device's addresses with no
@@ -767,7 +790,9 @@ int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on)
 		rtl9602c_l2_unpack(e, mac, &vid, &eport);
 		if (!hit || eport != RTL9602C_PORT_CPU ||
 		    is_multicast_ether_addr(mac) ||
-		    !!(e[1] & RTL9602C_FDB_W1_ROUTER_MAC) == on)
+		    !!(e[1] & RTL9602C_FDB_W1_ROUTER_MAC) == on ||
+		    rtl9602c_host_find(p->gem_hosts, p->n_gem_hosts, mac,
+				       vid) >= 0)
 			continue;
 
 		/* Delete it by its own words, then place it once as asked. */
@@ -1135,18 +1160,19 @@ void rtl9602c_bridge_refresh(struct dsa_switch *ds)
  * rtl9602c_mcast_reset() - unregistered multicast as a reset leaves it
  * @p: the switch
  *
- * Every port floods the multicast that no address-table entry knows, which a
- * warm reboot may have left otherwise, and the reserved groups are flooded
- * even where a port drops the rest. Unlike at reset, the IPv6 link-scope and
- * solicited-node groups count among them: neighbour discovery and router
- * advertisements use them (RFC 4861), as link-local IPv4 protocols use
- * 224.0.0.0/24, and a bridge floods both without snooping them (RFC 4541
+ * Every port floods the multicast and the unicast that no address-table entry
+ * knows, which a warm reboot may have left otherwise, and the reserved groups
+ * are flooded even where a port drops the rest. Unlike at reset, the IPv6
+ * link-scope and solicited-node groups count among them: neighbour discovery
+ * and router advertisements use them (RFC 4861), as link-local IPv4 protocols
+ * use 224.0.0.0/24, and a bridge floods both without snooping them (RFC 4541
  * section 2.1.2).
  *
  * Context: setup, before rtl9602c_bridge_refresh().
  */
 void rtl9602c_mcast_reset(struct rtl9602c_priv *p)
 {
+	rtl9602c_w(p, RTL9602C_UC_UNKNOWN, 0);
 	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_L2, 0);
 	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_IP4, 0);
 	rtl9602c_w(p, RTL9602C_MC_UNKNOWN_IP6, 0);
@@ -1158,6 +1184,177 @@ void rtl9602c_mcast_reset(struct rtl9602c_priv *p)
 		   RTL9602C_MC_UNKNOWN_CFG_RSV6_LINK |
 		   RTL9602C_MC_UNKNOWN_CFG_RSV6_SOLICITED);
 	p->mc_drop = 0;
+	p->uc_drop = false;
+}
+
+/*
+ * Whether the PON port drops the unicast that no entry knows: only while
+ * nothing needs it. A bridge of the SFP port and the GEM interfaces floods it
+ * to the SFP port, and a GEM interface that is promiscuous, has not said what
+ * it takes, or has an address the table holds no entry for takes it at the
+ * CPU. Otherwise it reaches only the CPU, which has no use for it, as with
+ * the stick's own upstream frames that an OLT sent back down the stick's GEM
+ * port (measured).
+ *
+ * Context: RTNL held.
+ */
+static void rtl9602c_pon_ucast_refresh(struct rtl9602c_priv *p)
+{
+	struct dsa_port *dp = dsa_to_port(&p->ds, RTL9602C_PORT_SFP);
+	bool drop = !p->gem_hosts_full;
+	unsigned int flow;
+
+	if (dp && dp->user && p->pon_br &&
+	    rtl9602c_port_bridge_dev(p, dp) == p->pon_br)
+		drop = false;
+	for_each_set_bit(flow, p->gem_flows, RTL9602C_GPON_NUM_FLOW)
+		if (!p->gem_rx[flow].known || p->gem_rx[flow].promisc)
+			drop = false;
+
+	mutex_lock(&p->fdb_lock);
+	if (drop != p->uc_drop) {
+		rtl9602c_rmw(p, RTL9602C_UC_UNKNOWN,
+			     RTL9602C_UC_UNKNOWN_ACT(RTL9602C_PORT_PON),
+			     FIELD_PREP(RTL9602C_UC_UNKNOWN_ACT(RTL9602C_PORT_PON),
+					drop ? RTL9602C_UC_UNKNOWN_ACT_DROP :
+					RTL9602C_UC_UNKNOWN_ACT_FLOOD));
+		pr_info("unknown unicast from the PON: %s\n",
+			drop ? "dropped" : "flooded");
+		p->uc_drop = drop;
+	}
+	mutex_unlock(&p->fdb_lock);
+}
+
+/**
+ * rtl9602c_gem_hosts_sync() - take the GEM interfaces' addresses to the CPU
+ * @p: the switch
+ *
+ * The switch learns no address of the stick's own, and a session's address
+ * on a GEM interface is one. Each address of a GEM interface that has said
+ * what it takes and is not promiscuous gets a static entry behind the CPU
+ * port, in each VLAN it takes it in and in the PON port's PVID, for untagged
+ * frames, so that the PON port may drop the unicast that no entry knows
+ * (rtl9602c_pon_ucast_refresh()). The entries carry no router bit: with it,
+ * the PPPoE discovery frames for a session's address never reached the CPU
+ * (measured), and the L3 engine routes the frames for the stick's addresses
+ * without it. A user port's own address is left to the entries that
+ * rtl9602c_l2_own_place() keeps. The entries no interface takes any more go
+ * first; an address the table has no room for keeps the PON port flooding.
+ *
+ * Context: RTNL held.
+ */
+/*
+ * The VLAN that the switch looks @vid's frames up in: @vid itself if the VLAN
+ * is in independent learning, and otherwise, keyed by address alone, the
+ * VLAN that @pvid stands for. A frame for a session's address in a VLAN that
+ * no port_vlan_add wrote reached the CPU through an entry at the PON port's
+ * PVID, 0, and not through one at the VLAN's VID (measured). Sets @ivl.
+ */
+static u16 rtl9602c_gem_host_vid(struct rtl9602c_priv *p, u16 vid, u16 pvid,
+				 bool *ivl)
+{
+	mutex_lock(&p->fdb_lock);
+	if (rtl9602c_l2_ivl(p, vid, ivl))
+		*ivl = false;
+	mutex_unlock(&p->fdb_lock);
+	return *ivl ? vid : pvid;
+}
+
+/*
+ * Whether @addr is a user port's own address that its entry
+ * (rtl9602c_l2_own_place()) takes to the CPU in this VLAN already: in one
+ * keyed by address alone, whatever the VLAN, and in one keyed by VID, at the
+ * port's PVID (rtl9602c_l2_is_own()).
+ */
+static bool rtl9602c_gem_host_own(struct rtl9602c_priv *p, const u8 *addr,
+				  u16 vid, bool ivl)
+{
+	struct dsa_port *dp;
+
+	if (ivl)
+		return rtl9602c_l2_is_own(p, addr, vid);
+	dsa_switch_for_each_user_port(dp, &p->ds)
+		if (dp->user && ether_addr_equal(dp->user->dev_addr, addr))
+			return true;
+	return false;
+}
+
+/**
+ * rtl9602c_gem_hosts_sync() - take the GEM interfaces' addresses to the CPU
+ * @p: the switch
+ *
+ * The switch learns no address of the stick's own, and a session's address
+ * on a GEM interface is one. Each address of a GEM interface that has said
+ * what it takes and is not promiscuous gets a static entry behind the CPU
+ * port, in each VLAN it takes it in as the switch looks that VLAN up
+ * (rtl9602c_gem_host_vid()) and in the PON port's PVID, for untagged frames,
+ * so that the PON port may drop the unicast that no entry knows
+ * (rtl9602c_pon_ucast_refresh()). The entries carry no router bit: with it,
+ * the PPPoE discovery frames for a session's address never reached the CPU
+ * (measured), and the L3 engine routes the frames for the stick's addresses
+ * without it. A user port's own address is left to its own entry. The
+ * entries no interface takes any more go; the others are placed again each
+ * time, as DSA deletes a bridge's host addresses, which may share their key,
+ * when the bridge goes. An address the table has no room for keeps the PON
+ * port flooding.
+ *
+ * Context: RTNL held.
+ */
+void rtl9602c_gem_hosts_sync(struct rtl9602c_priv *p)
+{
+	u16 pvid = rtl9602c_port_pvid(p, RTL9602C_PORT_PON);
+	struct rtl9602c_host want[RTL9602C_GEM_HOSTS];
+	unsigned int flow, i, j, n = 0;
+	struct dsa_db db = {};
+	bool full = false;
+
+	for_each_set_bit(flow, p->gem_flows, RTL9602C_GPON_NUM_FLOW) {
+		const struct rtl9602c_gem_rx *r = &p->gem_rx[flow];
+
+		if (!r->known || r->promisc)
+			continue;
+		for (j = 0; j <= r->n_vids; j++) {
+			bool ivl = false;
+			u16 vid = j < r->n_vids ?
+				  rtl9602c_gem_host_vid(p, r->vids[j], pvid,
+							&ivl) :
+				  pvid;
+
+			for (i = 0; i < r->n_addrs; i++) {
+				if (rtl9602c_gem_host_own(p, r->addrs[i], vid,
+							  ivl) ||
+				    rtl9602c_host_find(want, n, r->addrs[i],
+						       vid) >= 0)
+					continue;
+				if (n == RTL9602C_GEM_HOSTS) {
+					full = true;
+					continue;
+				}
+				ether_addr_copy(want[n].addr, r->addrs[i]);
+				want[n++].vid = vid;
+			}
+		}
+	}
+
+	for (i = 0; i < p->n_gem_hosts; i++)
+		if (rtl9602c_host_find(want, n, p->gem_hosts[i].addr,
+				       p->gem_hosts[i].vid) < 0)
+			rtl9602c_port_fdb_del(&p->ds, RTL9602C_PORT_CPU,
+					      p->gem_hosts[i].addr,
+					      p->gem_hosts[i].vid, db);
+
+	p->n_gem_hosts = 0;
+	for (i = 0; i < n; i++) {
+		if (rtl9602c_l2_static_add(p, RTL9602C_PORT_CPU, want[i].addr,
+					   want[i].vid, false)) {
+			full = true;
+			continue;
+		}
+		p->gem_hosts[p->n_gem_hosts++] = want[i];
+	}
+	p->gem_hosts_full = full;
+
+	rtl9602c_pon_ucast_refresh(p);
 }
 
 /**
@@ -1220,6 +1417,8 @@ void rtl9602c_mcast_refresh(struct rtl9602c_priv *p)
 		p->mc_drop = drop;
 	}
 	mutex_unlock(&p->fdb_lock);
+
+	rtl9602c_pon_ucast_refresh(p);
 }
 
 /**

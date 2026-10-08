@@ -1250,6 +1250,17 @@ static inline unsigned int rtl9602c_gem_tcont_qbit(unsigned int n,
 #define RTL9602C_FLOOD_UNKNOWN_UCAST	0x01c028
 
 /*
+ * What becomes of a unicast frame that no address-table entry knows, by the
+ * port it came in by, two bits a port: FLOOD sends it by the unknown-unicast
+ * flood mask, as at reset, and DROP drops it, a frame the L3 engine would
+ * route as well (measured on the PON port).
+ */
+#define RTL9602C_UC_UNKNOWN			0x01c008
+#define RTL9602C_UC_UNKNOWN_ACT(p)		(GENMASK(1, 0) << (2 * (p)))
+#define RTL9602C_UC_UNKNOWN_ACT_FLOOD		0
+#define RTL9602C_UC_UNKNOWN_ACT_DROP		1
+
+/*
  * What becomes of a multicast frame that no address-table entry knows, by the
  * port it came in by, two bits a port: FLOOD sends it by the unknown-multicast
  * flood mask, as at reset, and DROP drops it. IPv4 and IPv6 frames, as the
@@ -2682,6 +2693,41 @@ struct rtl9602c_egress {
 	bool	qid_saved;
 };
 
+/* The most addresses and VLANs a GEM interface hands the driver at once. */
+#define RTL9602C_GEM_RX_ADDRS		8
+#define RTL9602C_GEM_RX_VIDS		8
+
+/**
+ * struct rtl9602c_gem_rx - the unicast frames a GEM interface takes
+ * @known: the interface has said, through rtl9602c_gem_rx_filter()
+ * @promisc: it takes every frame of its GEM port
+ * @n_addrs: the number of addresses in @addrs
+ * @n_vids: the number of VIDs in @vids
+ * @addrs: its addresses
+ * @vids: the VLANs it takes them in, besides untagged
+ */
+struct rtl9602c_gem_rx {
+	bool known;
+	bool promisc;
+	u8 n_addrs;
+	u8 n_vids;
+	u8 addrs[RTL9602C_GEM_RX_ADDRS][ETH_ALEN];
+	u16 vids[RTL9602C_GEM_RX_VIDS];
+};
+
+/* The most static entries that take the GEM interfaces' addresses to the CPU. */
+#define RTL9602C_GEM_HOSTS		32
+
+/**
+ * struct rtl9602c_host - an address the CPU takes in a VLAN
+ * @addr: the address
+ * @vid: the VLAN
+ */
+struct rtl9602c_host {
+	u8 addr[ETH_ALEN];
+	u16 vid;
+};
+
 /**
  * struct rtl9602c_priv - the driver's state for one RTL9602C switch
  *
@@ -2923,6 +2969,24 @@ struct rtl9602c_priv {
 	 * @fdb_lock: BIT(0) for IPv4 and BIT(1) for IPv6
 	 */
 	u8 mc_drop;
+	/**
+	 * @uc_drop: whether the PON port drops unknown unicast, under
+	 * @fdb_lock
+	 */
+	bool uc_drop;
+	/** @gem_rx: what each GEM interface takes, under RTNL */
+	struct rtl9602c_gem_rx gem_rx[RTL9602C_GPON_NUM_FLOW];
+	/**
+	 * @gem_hosts: the static entries placed for the GEM interfaces'
+	 * addresses, @n_gem_hosts of them, under RTNL
+	 */
+	struct rtl9602c_host gem_hosts[RTL9602C_GEM_HOSTS];
+	unsigned int n_gem_hosts;
+	/**
+	 * @gem_hosts_full: an address of a GEM interface has no entry, so the
+	 * CPU needs the PON port's unknown unicast; under RTNL
+	 */
+	bool gem_hosts_full;
 
 	/**
 	 * @l34_netif_ifindex: the device of each L3-interface row by ifindex, 0
@@ -3544,6 +3608,7 @@ int rtl9602c_port_bridge_flags(struct dsa_switch *ds, int port,
 void rtl9602c_bridge_refresh(struct dsa_switch *ds);
 void rtl9602c_mcast_reset(struct rtl9602c_priv *p);
 void rtl9602c_mcast_refresh(struct rtl9602c_priv *p);
+void rtl9602c_gem_hosts_sync(struct rtl9602c_priv *p);
 void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p);
 void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p);
 int rtl9602c_port_bridge_join(struct dsa_switch *ds, int port, struct dsa_bridge bridge,

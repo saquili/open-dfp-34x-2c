@@ -1385,9 +1385,16 @@ multicast as the bridge would:
   which it does not snoop. The PON class passes the router state of a GEM port
   to the driver (``gem_mrouter``, see Documentation/networking/pon.rst).
 - While no bridge joins the SFP port to the GEM interfaces, as where the stick
-  routes or holds the sessions itself, unregistered multicast from the PON side
-  would reach only the CPU, which has no group to take it to, and the PON port
-  drops unregistered IPv4 and IPv6 multicast (``rtl9602c_mcast_refresh()``).
+  routes or holds the sessions itself, the multicast and the unicast from the
+  PON side that no entry knows would reach only the CPU, which has no use for
+  them. The PON port then drops unregistered IPv4 and IPv6 multicast
+  (``rtl9602c_mcast_refresh()``), and unicast that no entry knows
+  (``rtl9602c_pon_ucast_refresh()``). The unicast is dropped only while every
+  GEM interface has said which addresses it takes and none is promiscuous: the
+  PON class hands the driver each GEM interface's addresses and the VLANs of
+  the VLAN devices over it (``gem_rx_filter``), and the driver places a static
+  entry behind the CPU port for each (``rtl9602c_gem_hosts_sync()``), as a
+  session's address is not one the switch learns.
 
 .. list-table::
    :header-rows: 1
@@ -1423,6 +1430,31 @@ multicast as the bridge would:
        ff3e::1234 passed, while 20 of 20 to a group in the table and to
        224.0.0.251 did; 1 for the SFP port changed nothing for frames from the
        PON.
+   * - ``RTL9602C_UC_UNKNOWN`` (``0x01c008``) holds two bits per ingress port:
+       0 floods unicast that no entry knows by the unknown-unicast flood mask,
+       1 drops it, a frame that the L3 engine would route included. It reads 0
+       at reset, and setup writes 0 back.
+     - M
+     - With 1 for the PON port and no entry for a session's address, a routed
+       TCP transfer through the stick and a ping across it stopped at once;
+       with 0 they went on.
+   * - A static entry behind the CPU port lets the frames for a session's
+       address through a drop of unknown unicast on the PON port. In a VLAN
+       that no ``port_vlan_add`` wrote, keyed by address alone, the entry the
+       lookup finds is the one at the PON port's PVID, 0. With the router bit
+       set on it, the frames do not reach the CPU.
+     - M
+     - With entries at VID 0 and 410 that carried the router bit, the PPPoE
+       discovery offers to the session's address never reached ``wan410`` (0
+       frames in 30 s) and no session came up; with the entry at VID 0 without
+       the bit, both sessions came up, the entries at 410 still carrying it.
+   * - Where the stick holds the sessions, the frames that an OLT sent back
+       down the stick's own GEM port, for another address, no longer reach
+       the CPU, and routed traffic keeps its rate.
+     - M
+     - Four TCP streams through the stick: with unknown unicast flooded, 932
+       Mb/s up and 5000 frames a second to the CPU (the CPU limit); with it
+       dropped, 934 up and 936 down and 5 to 10 frames to the CPU in 6 s.
    * - While no bridge joins the SFP port to the GEM interfaces, the PON port
        drops unregistered IPv4 and IPv6 multicast, and floods it again while
        one does. The kernel log says each change.

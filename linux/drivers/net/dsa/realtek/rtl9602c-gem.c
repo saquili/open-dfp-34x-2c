@@ -314,6 +314,7 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	 * the port (rtl9602c_gem_queue_sched()).
 	 */
 	p->gem_cfg[f] = *cfg;
+	memset(&p->gem_rx[f], 0, sizeof(p->gem_rx[f]));
 	set_bit(f, p->gem_flows);
 	err = rtl9602c_gem_program(p, f, cfg);
 	if (err) {
@@ -618,6 +619,41 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 			rtl9602c_gem_queue_sched(p, cfg->tcont, cfg->queue);
 	}
 	mutex_unlock(&p->gpon_lock);
+
+	/* Its addresses leave the table, and its say on unknown unicast. */
+	memset(&p->gem_rx[flow], 0, sizeof(p->gem_rx[flow]));
+	rtl9602c_gem_hosts_sync(p);
+}
+
+/*
+ * The unicast frames the GEM interface of @flow takes, as the class hands
+ * them on (pon_device_ops.gem_rx_filter): kept per flow, and the static
+ * entries and the PON port's unknown unicast follow
+ * (rtl9602c_gem_hosts_sync()). More addresses or VLANs than are kept count
+ * as promiscuous.
+ */
+static void rtl9602c_gem_rx_filter(struct pon_device *pon, unsigned int flow,
+				   const struct pon_gem_rx_filter *f)
+{
+	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_gem_rx *r;
+	unsigned int i;
+
+	if (flow >= RTL9602C_GPON_NUM_FLOW || !test_bit(flow, p->gem_flows))
+		return;
+
+	r = &p->gem_rx[flow];
+	r->known = true;
+	r->promisc = f->promisc || f->n_addrs > RTL9602C_GEM_RX_ADDRS ||
+		     f->n_vids > RTL9602C_GEM_RX_VIDS;
+	r->n_addrs = r->promisc ? 0 : f->n_addrs;
+	r->n_vids = r->promisc ? 0 : f->n_vids;
+	for (i = 0; i < r->n_addrs; i++)
+		ether_addr_copy(r->addrs[i], f->addrs[i]);
+	for (i = 0; i < r->n_vids; i++)
+		r->vids[i] = f->vids[i];
+
+	rtl9602c_gem_hosts_sync(p);
 }
 
 /*
@@ -892,6 +928,7 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 	.gem_vlan_add		= rtl9602c_gem_vlan_add,
 	.gem_vlan_del		= rtl9602c_gem_vlan_del,
 	.gem_mrouter		= rtl9602c_gem_mrouter,
+	.gem_rx_filter		= rtl9602c_gem_rx_filter,
 	.dev_status		= rtl9602c_pon_dev_status,
 	.gem_stats		= rtl9602c_gem_stats,
 	.tcont_get		= rtl9602c_tcont_get,
