@@ -185,9 +185,7 @@ export function Overview() {
           title={t("diagram.title")}
           action={<span className="text-xs text-base-content/55">{t("diagram.hint")}</span>}
         >
-          <div className="mx-auto w-full lg:max-w-[min(100%,calc((100dvh_-_36rem)*3.75))]">
-            <Diagram live={live} rate={now} />
-          </div>
+          <Diagram live={live} rate={now} />
         </Card>
 
         <Card

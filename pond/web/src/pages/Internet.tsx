@@ -36,6 +36,9 @@ import {
 
 const TABS = ["sessions", "handover"] as const;
 
+/* The rows of the session engine, numbered as the sessions are. */
+const SLOT_IDS = Array.from({ length: MAX_SESSIONS }, (_, i) => i + 1);
+
 const FAMILY: Record<Family, Key> = {
   both: "internet.famBoth",
   ipv4: "internet.famV4",
@@ -74,8 +77,8 @@ function Dialog({
   );
 }
 
-/** A session's account and settings: a new one without @x, or @x changed. */
-function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
+/** A session's account and settings: a new one in @slot without @x, or @x changed. */
+function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDone: () => void }) {
   const { t } = useI18n();
   const change = useSessionChange();
   const state = useChangeState(change);
@@ -107,7 +110,7 @@ function SessionForm({ x, onDone }: { x?: SessionView; onDone: () => void }) {
   const send = (v: Values) =>
     change.mutate(
       {
-        ID: x ? String(x.id) : undefined,
+        ID: x ? String(x.id) : slot ? String(slot) : undefined,
         USER: v.user,
         SECRET: v.secret || undefined,
         VLAN: v.vlan,
@@ -231,7 +234,7 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
     <Card
       title={
         <span className="flex items-center gap-2">
-          {t("internet.sessionN", { id: x.id })}
+          {t("internet.slotN", { id: x.id })}
           <Badge tone={x.up ? "good" : "warn"}>
             {x.up ? t("internet.up") : t("internet.connecting")}
           </Badge>
@@ -320,31 +323,82 @@ function SessionCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   );
 }
 
-/** The seven rows of the session engine, used and free. */
+/** How many of the session engine's seven rows are in use. */
 function Slots({ used }: { used: number }) {
   const { t } = useI18n();
   return (
-    <div className="flex items-center gap-3">
-      <div
-        className="flex gap-1"
-        role="img"
-        aria-label={t("internet.slots", { n: used, max: MAX_SESSIONS })}
-      >
-        {Array.from({ length: MAX_SESSIONS }, (_, i) => (
-          <span
-            // biome-ignore lint/suspicious/noArrayIndexKey: the slots are fixed
-            key={i}
-            className={`h-5 w-3 rounded-sm ${i < used ? "bg-primary" : "bg-base-300"}`}
-          />
-        ))}
-      </div>
-      <span className="text-sm">
-        <span className="tabular font-semibold">
-          {used} / {MAX_SESSIONS}
-        </span>{" "}
-        <span className="text-base-content/70">{t("internet.slotsHint")}</span>
+    <span className="text-sm">
+      <span className="tabular font-semibold">
+        {t("internet.slots", { n: used, max: MAX_SESSIONS })}
+      </span>{" "}
+      <span className="text-base-content/70">{t("internet.slotsHint")}</span>
+    </span>
+  );
+}
+
+/** One row of the session engine, as a small card: its session in short, or free. */
+function SlotTile({
+  id,
+  x,
+  selected,
+  onSelect,
+}: {
+  id: number;
+  x?: SessionView;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  const portId = x && gems(live).find((g) => g.gem.name === x.gemDev)?.gem.port_id;
+  const service = x
+    ? [portId != null ? `GEM ${portId}` : null, fibreVlan(x) ? `VLAN ${fibreVlan(x)}` : null]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
+  const where = x
+    ? [
+        x.family !== "ipv6" && (x.handsOn ? t("internet.tileV4Host") : t("internet.tileV4Stick")),
+        x.family !== "ipv4" && (x.prefixHost ? t("internet.tileV6Host") : "IPv6"),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={`flex min-h-24 flex-col gap-1 rounded-box border bg-base-100 p-3 text-left text-sm ${
+        selected
+          ? "border-2 border-primary"
+          : x
+            ? "border-base-300"
+            : "border-dashed border-base-300"
+      } hover:border-primary`}
+    >
+      <span className="flex flex-wrap items-center justify-between gap-1 font-semibold">
+        <span className="whitespace-nowrap">{t("internet.slotN", { id })}</span>
+        {x ? (
+          <Badge tone={x.up ? "good" : "warn"}>
+            {x.up ? t("internet.up") : t("internet.connecting")}
+          </Badge>
+        ) : (
+          <Badge tone="neutral">{t("internet.slotFree")}</Badge>
+        )}
       </span>
-    </div>
+      {x ? (
+        <>
+          <span className="text-xs text-base-content/70">{service || t("internet.autoGem")}</span>
+          <span className="text-xs">{where}</span>
+        </>
+      ) : (
+        <span className="mt-auto flex items-center gap-1 text-xs text-base-content/60">
+          <Plus className="size-3" />
+          {t("internet.slotUse")}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -387,51 +441,65 @@ function SessionsTab() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const list = sessions(live);
-  const [editing, setEditing] = useState<SessionView | "new" | null>(null);
-  const full = list.length >= MAX_SESSIONS;
+  /* The row looked at, and a session to change or the free row a new one takes. */
+  const [picked, setPicked] = useState<number | null>(null);
+  const [editing, setEditing] = useState<SessionView | number | null>(null);
+  const shown = picked ?? list[0]?.id ?? 1;
+  const x = list.find((y) => y.id === shown);
 
   return (
-    <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-rows-[auto_auto_minmax(0,1fr)]">
+    <div className="grid min-h-0 flex-1 content-start gap-4 lg:grid-rows-[auto_auto_auto_minmax(0,1fr)]">
       <Ways count={list.length} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Slots used={list.length} />
-        <span className="flex items-center gap-3">
-          <Link to="/fibre" search={{ tab: "services" } as never} className="link text-sm">
-            {t("internet.seeServices")} <ArrowRight className="inline size-3" />
-          </Link>
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            onClick={() => setEditing("new")}
-            disabled={full}
-            title={full ? t("internet.full", { max: MAX_SESSIONS }) : undefined}
-          >
-            <Plus className="size-4" />
-            {t("internet.add")}
-          </button>
-        </span>
+        <Link to="/fibre" search={{ tab: "services" } as never} className="link text-sm">
+          {t("internet.seeServices")} <ArrowRight className="inline size-3" />
+        </Link>
       </div>
-      <div className="grid min-h-0 content-start gap-4 lg:overflow-auto xl:grid-cols-2 2xl:grid-cols-3">
-        {list.map((x) => (
-          <SessionCard key={x.id} x={x} onEdit={() => setEditing(x)} />
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+        {SLOT_IDS.map((id) => (
+          <SlotTile
+            key={id}
+            id={id}
+            x={list.find((y) => y.id === id)}
+            selected={shown === id}
+            onSelect={() => setPicked(id)}
+          />
         ))}
-        {list.length === 0 && (
-          <Card>
-            <p className="text-sm">{t("internet.noAccount")}</p>
+      </div>
+      <div className="min-h-0 lg:overflow-auto">
+        {x ? (
+          <div className="max-w-3xl">
+            <SessionCard x={x} onEdit={() => setEditing(x)} />
+          </div>
+        ) : (
+          <Card title={t("internet.slotN", { id: shown })}>
+            <p className="text-sm text-base-content/70">{t("internet.slotFreeText")}</p>
+            <div>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => setEditing(shown)}
+              >
+                <Plus className="size-4" />
+                {t("internet.slotUse")}
+              </button>
+            </div>
           </Card>
         )}
       </div>
       <Dialog
         open={editing != null}
         title={
-          editing === "new" || editing == null
-            ? t("internet.addTitle")
-            : t("internet.editTitle", { id: editing.id })
+          typeof editing === "number"
+            ? t("internet.addTitle", { id: editing })
+            : t("internet.editTitle", { id: editing?.id ?? 0 })
         }
         onClose={() => setEditing(null)}
       >
         <SessionForm
-          x={editing === "new" || editing == null ? undefined : editing}
+          x={typeof editing === "number" || editing == null ? undefined : editing}
+          slot={typeof editing === "number" ? editing : undefined}
           onDone={() => setEditing(null)}
         />
       </Dialog>

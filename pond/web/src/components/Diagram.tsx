@@ -21,7 +21,7 @@ import {
   Radio,
   ServerCog,
 } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { Rates } from "../api/live";
 import type { Live } from "../api/types";
 import { useI18n } from "../i18n";
@@ -328,8 +328,16 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
   const go = (to: string) => () => navigate({ to });
 
   const channels = gemViews(live);
+  /*
+   * The channels hang from the PON MAC: a line from it down to a bracket,
+   * their count under the bracket, so that the line never crosses it, and
+   * their cards under the count.
+   */
+  const bracketY = L.gems.y;
+  const countY = bracketY + 16;
+  const cardsY = bracketY + 26;
   const rows = Math.ceil(channels.length / L.gems.cols);
-  const gemsBottom = L.gems.y + 22 + rows * (L.gems.h + L.gems.gap);
+  const gemsBottom = cardsY + 6 + rows * (L.gems.h + L.gems.gap);
   const height = Math.max(L.height, channels.length ? gemsBottom : L.height);
   const down = (v?: number) => `↓ ${bitrate(v, lang)}`;
   const up = (v?: number) => `↑ ${bitrate(v, lang)}`;
@@ -363,12 +371,19 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
       .join(" · "),
   ];
 
-  /* The channels hang from the PON MAC: a bracket from it to their row. */
-  const bracketY = L.gems.y + 6;
   const gemsRight = L.gems.x + L.gems.cols * (L.gems.w + L.gems.gap) - L.gems.gap;
 
   return (
-    <div ref={wrap} className="w-full">
+    /*
+     * On a large screen the drawing may take the height the page leaves it
+     * (the viewport less 38rem of tiles, titles and traffic), at its own proportions,
+     * which grow taller with every row of channels.
+     */
+    <div
+      ref={wrap}
+      className="mx-auto w-full lg:max-w-[min(100%,calc((100dvh_-_38rem)*var(--aspect)))]"
+      style={{ "--aspect": L.width / height } as CSSProperties}
+    >
       {/* biome-ignore lint/a11y/useSemanticElements: the drawing groups its clickable parts */}
       <svg
         viewBox={`0 0 ${L.width} ${height}`}
@@ -517,7 +532,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
             />
             <text
               x={L.gems.x}
-              y={bracketY - 6}
+              y={countY}
               className="fill-current text-[12px] font-medium opacity-70"
             >
               {t("diagram.gems", { n: channels.length })}
@@ -533,7 +548,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
                   onOpen={go("/fibre")}
                   box={{
                     x: L.gems.x + col * (L.gems.w + L.gems.gap),
-                    y: L.gems.y + 16 + row * (L.gems.h + L.gems.gap),
+                    y: cardsY + row * (L.gems.h + L.gems.gap),
                     w: L.gems.w,
                     h: L.gems.h,
                   }}
