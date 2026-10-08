@@ -3,7 +3,8 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of scripts/onu-store, with onucfg of the build on a store in a file,
-# an erased one as the flash would give, and a stand-in for ponid.
+# an erased one as the flash would give, and stand-ins for ponid and for
+# BusyBox's cryptpw.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,8 +32,18 @@ setup() {
 	printf '#!/bin/sh\n[ -e "%s/ponid.fail" ] && exit 1\n%s\n' "$T" \
 		'printf "serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\nmodel=TEST-1\n"' \
 		>"$T/bin/ponid"
+	# cryptpw -m sha256 -S SALT: "$5$SALT$" and the password's bytes in hex,
+	# which shows what it was given.
+	cat >"$T/bin/cryptpw" <<-'EOF'
+	#!/bin/sh
+	[ "$1 $2 $3" = "-m sha256 -S" ] || exit 2
+	IFS= read -r p
+	printf '$5$%s$%s\n' "$4" "$(printf %s "$p" | od -An -tx1 | tr -d ' \n')"
+	EOF
 	chmod +x "$T/bin"/*
 	PATH=$T/bin:$BUILD:$PATH
+	mkdir -p "$ONU_ROOT/etc"
+	printf 'root::19000:0:99999:7:::\ndaemon:*:::::::\n' >"$ONU_ROOT/etc/shadow.image"
 }
 
 teardown() {
@@ -232,6 +243,71 @@ run auth 'not a hash'
 check '[ $rc -ne 0 ]'
 check 'cmp -s "$ONU_STORE" "$T/before"'
 teardown
+
+DEFAULT_HASH=$(sed -n "s/^DEFAULT_HASH='\(.*\)'$/\1/p" "$STORE_SCRIPT")
+ROUNDS=$(sed -n 's/^ROUNDS=//p' "$STORE_SCRIPT")
+
+root_hash() {
+	awk -F: '$1 == "root" { print $2 }' "$ONU_ROOT/run/shadow"
+}
+
+echo "root's password: the default until one is set, in /run/shadow for login and ssh"
+setup
+run load
+check '[ "$(root_hash)" = "$DEFAULT_HASH" ]'
+check 'grep -q -x "daemon:\*:::::::" "$ONU_ROOT/run/shadow"'
+check 'grep -q -x "root:$DEFAULT_HASH:19000:0:99999:7:::" "$ONU_ROOT/run/shadow"'
+check '[ "$(ls -l "$ONU_ROOT/run/shadow" | cut -c1-10)" = -rw------- ]'
+check '[ ! -e "$ONU_ROOT/run/onu-auth" ]'
+check 'case $DEFAULT_HASH in "\$5\$rounds=$ROUNDS\$"*) true ;; *) false ;; esac'
+teardown
+
+echo "a new password is hashed into the store, /run/onu-auth and /run/shadow"
+setup
+printf '%s\n' 'correct horse' | "$STORE_SCRIPT" password 2>/dev/null
+rc=$?
+check '[ $rc -eq 0 ]'
+hash=$(cat "$ONU_ROOT/run/onu-auth" 2>/dev/null)
+check 'case $hash in "\$5\$rounds=$ROUNDS\$"????????????????"\$636f727265637420686f727365") true ;; *) false ;; esac'
+check 'stored "AUTH_HASH=$hash"'
+check '[ "$(root_hash)" = "$hash" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-auth" | cut -c1-10)" = -rw------- ]'
+rm -f "$ONU_ROOT/run/onu-auth" "$ONU_ROOT/run/shadow"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "$hash" ] && [ "$(root_hash)" = "$hash" ]'
+# A second one has a salt of its own.
+printf '%s\n' 'correct horse' | "$STORE_SCRIPT" password 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" != "$hash" ]'
+# Too short, too long, or with a control character: nothing changes.
+cp "$ONU_STORE" "$T/before"
+cp "$ONU_ROOT/run/shadow" "$T/shadow.before"
+printf '%s\n' 'short' | "$STORE_SCRIPT" password 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+printf '%0129d\n' 0 | "$STORE_SCRIPT" password 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+printf 'tab\tinside it\n' | "$STORE_SCRIPT" password 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+check 'cmp -s "$ONU_ROOT/run/shadow" "$T/shadow.before"'
+teardown
+
+echo "a hash of the panel's older form leaves root with keys only on ssh and no console password"
+setup
+run auth 'pbkdf2-sha256$1000$00ff$abcd'
+check '[ "$(root_hash)" = "*" ]'
+rm -f "$ONU_ROOT/run/shadow"
+run load
+check '[ "$(root_hash)" = "*" ]'
+teardown
+
+# The default hash is crypt()'s for "admin", where Perl's crypt() knows the
+# SHA-256 form (the C library of Linux).
+if perl -e 'exit(crypt("a", q($5$rounds=1000$ab)) =~ /^\$5\$/ ? 0 : 1)' 2>/dev/null; then
+	echo "the default hash is the one of admin"
+	check '[ "$(perl -e "print crypt(q(admin), \$ARGV[0])" "$DEFAULT_HASH")" = "$DEFAULT_HASH" ]'
+fi
 
 echo "an identity from the status daemon goes to the store and to the running files"
 setup

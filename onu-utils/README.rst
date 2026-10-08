@@ -44,11 +44,26 @@ The small programs of the ONU.
    ``saved``, ``failed``, ``none``), which the status daemon shows. The status
    daemon also keeps two things there through it: ``onu-store identity`` takes
    the identity of ``KEY=VALUE`` lines on its input (``SERIAL``, ``PLOAM``, …)
-   and ``onu-store auth HASH`` the administrator's password hash
-   (``AUTH_HASH``), which a load puts in ``/run/onu-auth`` for root only. A
+   and ``onu-store password`` root's password, the line of its input, which it
+   hashes in the form of ``crypt()`` (SHA-256 with 20000 rounds and a salt of
+   16 random characters, by BusyBox's ``cryptpw``) into ``AUTH_HASH``;
+   ``onu-store auth HASH`` stores a hash made elsewhere. A load puts the hash in
+   ``/run/onu-auth`` for root only, and root's line of ``/run/shadow``, which
+   ``/etc/shadow`` names, carries it for the console's login and the ssh
+   server: one account, root, with one password for the console, ssh and the
+   panel. Until one is set, the password is ``admin`` (a fixed hash of it); a
+   hash of the panel's older form, which ``crypt()`` cannot check, leaves root
+   without a password on the console and ssh (``*``), keys only, until a
+   sign-in to the panel stores it again. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
    removed account does not come back at the next boot. Where the identity in
    force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
+
+``passwd``
+   a new password for root, at a terminal: it asks twice without echo and
+   hands it to ``onu-store password``, so that it holds after a restart and in
+   the panel at once. It takes no user and no old password, the stick having
+   one account, root, whoever runs it is root already.
 
 ``onu-update``
    the two banks of the flash and the updates that go into them
@@ -165,6 +180,7 @@ CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the
 tests of ``onu-mode`` and ``dhcp-wan`` run them against stand-ins for the
 programs they call, in a scratch root, and those of ``onu-store`` run it with
-``build/onucfg`` on a store in a file. ``onu-update`` is tested on a flash
+``build/onucfg`` on a store in a file and a stand-in for BusyBox's
+``cryptpw``. ``onu-update`` is tested on a flash
 made of files under ``ONU_ROOT``, with update files packed by the image build's
 ``mkupdate.py``, which needs python3; ``onu-trial`` against stand-ins.

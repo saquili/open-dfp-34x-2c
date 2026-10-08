@@ -15,8 +15,9 @@
 #   onu-store identity  the identity of the KEY=VALUE lines of the standard
 #                       input (SERIAL, PLOAM, ...) into the store and into
 #                       /run/onu-identity
-#   onu-store auth HASH the administrator's password hash into the store and
-#                       into /run/onu-auth
+#   onu-store password  root's new password, the line of the standard input,
+#                       hashed into the store, /run/onu-auth and /run/shadow
+#   onu-store auth HASH a hash of root's password made elsewhere, the same way
 #   onu-store system    the stick's own settings of the KEY=VALUE lines of the
 #                       standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
 #                       SFP_LANE) into the store and into /run/onu-system; an
@@ -27,7 +28,10 @@
 # 7, are the line "user secret" of /run/onu-pppoeN, which an empty PPPOEn_USER
 # leaves out (PPPOE_USER and PPPOE_SECRET, the single account of before, are
 # the first session's);
-# AUTH_HASH is the content of /run/onu-auth, for the status daemon's sign-in;
+# AUTH_HASH is the content of /run/onu-auth: the hash of root's password, the
+# one account of the stick, which the console's login, the ssh server and the
+# status daemon's sign-in all check (/run/shadow carries it for the first
+# two);
 # a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
 # own settings, which the boot script reads before it brings up the links;
 # every other key is a line of /run/onu.conf. The files of secrets are for
@@ -58,6 +62,16 @@ AUTH=$RUN/onu-auth
 SYSTEM=$RUN/onu-system
 SOURCE=$RUN/onu-identity-source
 STATE=$RUN/onu-store
+SHADOW=$RUN/shadow
+IMAGE_SHADOW=$ROOT/etc/shadow.image
+
+# Root's password is kept as a SHA-256 crypt hash ("$5$"), which crypt() of
+# the C library checks for login and the ssh server, with ROUNDS rounds: a
+# check takes about 0.5 s on the stick.
+ROUNDS=20000
+# Until a password is set, root's password is "admin", the same on every
+# unit; so is its hash, made once with a fixed salt.
+DEFAULT_HASH='$5$rounds=20000$rootdefaultadmin$v44Onkx4q.cie3KOpV7pUy4Ri7vI57rVX7WcFAofPT9'
 
 state() {
 	(umask 022 && echo "$1" >"$STATE")
@@ -170,6 +184,7 @@ load() {
 		[ -e "$new" ] && mv "$new" "${new%.new}"
 	done
 	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
+	shadow
 	if [ -e "$SYSTEM.new" ]; then
 		chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
 	else
@@ -259,12 +274,64 @@ system() {
 	}' >"$SYSTEM.new" && chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
 }
 
+# /run/shadow, which /etc/shadow names: the image's accounts, root's with the
+# hash in force. A hash of the older form the status daemon made (PBKDF2),
+# which crypt() cannot check, gives root no password for the console and
+# ssh, only keys, until a sign-in to the panel stores the password again.
+shadow() {
+	hash=
+	[ -r "$AUTH" ] && read -r hash <"$AUTH"
+	case $hash in
+	'') hash=$DEFAULT_HASH ;;
+	'$'*) ;;
+	*) hash='*' ;;
+	esac
+	(
+		umask 077
+		if [ -r "$IMAGE_SHADOW" ]; then
+			awk -F: -v OFS=: -v hash="$hash" \
+				'$1 == "root" { $2 = hash } { print }' "$IMAGE_SHADOW"
+		else
+			echo "root:$hash:::::::"
+		fi >"$SHADOW.new" && mv "$SHADOW.new" "$SHADOW"
+	)
+}
+
 auth() {
 	case $1 in
-	*[!A-Za-z0-9\$./_-]* | "") return 1 ;;
+	*[!A-Za-z0-9\$./=_-]* | "") return 1 ;;
 	esac
 	echo "AUTH_HASH=$1" | onucfg --store "$STORE" import || return 1
 	(umask 077 && echo "$1" >"$AUTH.new" && mv "$AUTH.new" "$AUTH")
+	shadow
+}
+
+# Root's new password, the line of the standard input: 8 to 128 characters
+# and no control character, hashed with a salt of 16 random characters.
+password() {
+	IFS= read -r secret || [ -n "$secret" ] || return 1
+	if [ ${#secret} -lt 8 ] || [ ${#secret} -gt 128 ]; then
+		log "a password has 8 to 128 characters"
+		return 1
+	fi
+	case $secret in
+	*[[:cntrl:]]*)
+		log "a password has no control characters"
+		return 1
+		;;
+	esac
+	salt=$(tr -dc 'A-Za-z0-9./' </dev/urandom | head -c 16)
+	[ ${#salt} -eq 16 ] || return 1
+	hash=$(printf '%s\n' "$secret" | cryptpw -m sha256 -S "rounds=$ROUNDS\$$salt") ||
+		return 1
+	case $hash in
+	"\$5\$rounds=$ROUNDS\$$salt\$"?*) ;;
+	*)
+		log "the password could not be hashed"
+		return 1
+		;;
+	esac
+	auth "$hash"
 }
 
 STORE=$(store) || {
@@ -303,11 +370,14 @@ identity)
 auth)
 	auth "${2:-}"
 	;;
+password)
+	password
+	;;
 system)
 	system
 	;;
 *)
-	echo "usage: onu-store load|save|migrate|identity|auth HASH|system" >&2
+	echo "usage: onu-store load|save|migrate|identity|password|auth HASH|system" >&2
 	exit 2
 	;;
 esac
