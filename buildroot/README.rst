@@ -11,8 +11,9 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release are in ``patches/``: one, which adds the MIPS I variant that this core
-needs.
+release are in ``patches/``: two, which add the MIPS I variant that this core
+needs and keep the shared C library from an atomic operation the core cannot
+run.
 
 What is here
 ============
@@ -27,7 +28,7 @@ What is here
     The script that makes the pinned release ready to build (below).
 ``patches/``
     The patches applied to the release, in name order: the MIPS I variant
-    (below).
+    and the C library's exit handlers (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -104,6 +105,30 @@ C only and no multilib are not part of the patch: Buildroot's defaults already
 build the C compiler alone, with no multilib, and ``BR2_MIPS_SOFT_FLOAT``
 already defaults to on.
 
+The exit-handler patch
+======================
+
+``patches/0002-package-uclibc-claim-__cxa_atexit-entries-without-atomics.patch``
+adds a patch of uClibc-ng to the build system's own patches of the C library,
+``package/uclibc/0005-stdlib-claim-__cxa_atexit-entries-without-atomics.patch``,
+which the build system applies whenever it builds uClibc-ng.
+
+``__cxa_finalize()`` marks an entry of the exit-handler table as run with a
+compare-and-exchange: a load-linked and store-conditional pair, which on this
+core retries for ever. Every shared C library holds the function, and the
+start files of each shared object call it when the object is unloaded, so a
+program linked against the shared C library can reach it at exit. Without
+threads, the only configuration that the MIPS I variant offers, the patch
+claims the entry with a plain test and store; in a program with one thread
+nothing comes between the two. With threads the function is as it was.
+
+The C library's other function of this kind, ``_test_and_set()`` of
+``<sys/tas.h>``, is left alone. It promises atomicity to processes that share
+memory, which a plain test and store does not keep, and no program of the image
+calls it; the cut of the shared C library to what the programs use leaves it out
+(``tools/lib-trim/README.rst``), and the instruction-set gate would refuse an
+image that brought it back.
+
 Checking the pin
 ================
 
@@ -132,5 +157,5 @@ leaves the tree is refused, and that a malformed pin is an error. None uses
 the network. They run in ``make check`` and in the ``buildroot-fetch`` job of
 ``.github/workflows/gates.yml``, which then runs ``make buildroot`` on the real
 release: it fetches the release from its URL, checks it against the pin and
-applies the carried patch, so that a pin or a patch that changed without the
+applies the carried patches, so that a pin or a patch that changed without the
 other fails there.
