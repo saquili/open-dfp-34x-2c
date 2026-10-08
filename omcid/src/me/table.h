@@ -7,7 +7,7 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * 36c58856043baf764fa1084f0fd1bc81f0e6f223795ae0a2fea0ea9124080702
+ * 4956f3d61d5ab614c255d3ec6390ce59a4013e7fdb730fbb33871dab010a8220
  * 51 classes, 443 attributes.
  *
  * An attribute is known by its number alone: attribute n of a class is

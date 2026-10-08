@@ -7,7 +7,7 @@
  * table, not this file, then run python3 tools/gen_me_table.py --write.
  *
  * The table follows ITU-T G.988 (11/2022). sha256 of the table:
- * 36c58856043baf764fa1084f0fd1bc81f0e6f223795ae0a2fea0ea9124080702
+ * 4956f3d61d5ab614c255d3ec6390ce59a4013e7fdb730fbb33871dab010a8220
  * 51 classes, 443 attributes.
  */
 
@@ -35,8 +35,8 @@ static const struct omci_me_attr attrs_class_5[] = {
 	{ "Protection profile pointer", 1, OMCI_ME_ACC_READ, 0 }, /* 6 */
 	{ "Invoke protection switch", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  0 }, /* 7 */
-	{ "ARC", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
-	  OMCI_ME_ATTR_AVC }, /* 8 */
+	{ "Alarm-reporting control (ARC)", 1,
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, OMCI_ME_ATTR_AVC }, /* 8 */
 	{ "ARC interval", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, 0 }, /* 9 */
 };
 
@@ -53,7 +53,7 @@ static const struct omci_me_attr attrs_class_6[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
 	{ "Operational state", 1, OMCI_ME_ACC_READ, OMCI_ME_ATTR_AVC }, /* 7 */
 	{ "Bridged or IP ind", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
-	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
+	  0 }, /* 8 */
 	{ "Equipment ID", 20, OMCI_ME_ACC_READ, 0 }, /* 9 */
 	{ "Card configuration", 1,
 	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE | OMCI_ME_ACC_SET_BY_CREATE,
@@ -248,8 +248,8 @@ static const struct omci_me_attr attrs_class_52[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 3 */
 	{ "Delay exceeded discard counter", 4, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY }, /* 4 */
-	{ "MTU exceeded discard counter", 4, OMCI_ME_ACC_READ,
-	  OMCI_ME_ATTR_MANDATORY }, /* 5 */
+	{ "Maximum transmission unit (MTU) exceeded discard counter", 4,
+	  OMCI_ME_ACC_READ, OMCI_ME_ATTR_MANDATORY }, /* 5 */
 	{ "Received frame counter", 4, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY }, /* 6 */
 	{ "Received and discarded counter", 4, OMCI_ME_ACC_READ,
@@ -275,7 +275,7 @@ static const struct omci_me_attr attrs_class_78[] = {
 	  0 }, /* 5 */
 };
 
-/* Class 79: MAC bridge port filter preassign table */
+/* Class 79: MAC bridge port filter pre-assign table */
 static const struct omci_me_attr attrs_class_79[] = {
 	{ "IPv4 multicast filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  OMCI_ME_ATTR_MANDATORY }, /* 1 */
@@ -296,7 +296,8 @@ static const struct omci_me_attr attrs_class_79[] = {
 	  OMCI_ME_ATTR_MANDATORY }, /* 8 */
 	{ "ARP filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  OMCI_ME_ATTR_MANDATORY }, /* 9 */
-	{ "PPPoE broadcast filtering", 1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
+	{ "Point-to-point protocol over Ethernet (PPPoE) broadcast filtering",
+	  1, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
 	  OMCI_ME_ATTR_MANDATORY }, /* 10 */
 };
 
@@ -413,7 +414,7 @@ static const struct omci_me_attr attrs_class_134[] = {
 	{ "Host name", 25, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 15 */
 	{ "Relay agent options", 2, OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
-	  OMCI_ME_ATTR_AVC }, /* 16 */
+	  0 }, /* 16 */
 };
 
 /* Class 136: TCP/UDP config data */
@@ -543,7 +544,8 @@ static const struct omci_me_attr attrs_class_256[] = {
 /* Class 257: ONU2-G */
 static const struct omci_me_attr attrs_class_257[] = {
 	{ "Equipment ID", 20, OMCI_ME_ACC_READ, 0 }, /* 1 */
-	{ "OMCC version", 1, OMCI_ME_ACC_READ,
+	{ "Optical network unit management and control channel (OMCC) version",
+	  1, OMCI_ME_ACC_READ,
 	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_AVC }, /* 2 */
 	{ "Vendor product code", 2, OMCI_ME_ACC_READ, 0 }, /* 3 */
 	{ "Security capability", 1, OMCI_ME_ACC_READ,
@@ -986,8 +988,7 @@ static const struct omci_me_attr attrs_class_310[] = {
 	{ "Multicast service package table", 20,
 	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, OMCI_ME_ATTR_TABLE }, /* 6 */
 	{ "Allowed preview groups table", 22,
-	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE,
-	  OMCI_ME_ATTR_MANDATORY | OMCI_ME_ATTR_TABLE }, /* 7 */
+	  OMCI_ME_ACC_READ | OMCI_ME_ACC_WRITE, OMCI_ME_ATTR_TABLE }, /* 7 */
 };
 
 /* Class 311: Multicast subscriber monitor */
@@ -1278,7 +1279,7 @@ const struct omci_me_class omci_me_classes[] = {
 	},
 	{
 		.class_id = 79,
-		.name = "MAC bridge port filter preassign table",
+		.name = "MAC bridge port filter pre-assign table",
 		.creator = OMCI_ME_CREATED_BY_ONU,
 		/* Set, Get */
 		.actions = 0x00000300u,
