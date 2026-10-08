@@ -7,8 +7,8 @@
  * accepts gzip the .gz file as it is, so the stick never compresses anything
  * and the flash holds one copy.
  *
- * "vite" proxies /api to a stick (POND_TARGET, the router's proxy by
- * default; with POND_TOKEN it presents that bearer token, so the panel shows
+ * "vite" proxies /api to a stick (POND_TARGET names it, and the server stops
+ * without it; with POND_TOKEN it presents that bearer token, so the panel shows
  * the stick without a sign-in); "vite --mode mock" answers /api from the dev server itself with
  * the mock stick of src/mocks, for work without one. The mocks run in the
  * server, not in a service worker, so they work in any browser and for any
@@ -85,27 +85,39 @@ function mockApi(): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => ({
-  plugins: [preact(), tailwindcss(), gzipOnly(), ...(mode === "mock" ? [mockApi()] : [])],
-  build: {
-    target: "es2022",
-    assetsInlineLimit: 0,
-    reportCompressedSize: true,
-  },
-  server: {
-    proxy:
-      mode === "mock"
-        ? undefined
-        : {
-            "/api": {
-              target: process.env.POND_TARGET ?? "https://stick.invalid",
-              changeOrigin: true,
-              secure: true,
-              /* With POND_TOKEN, the proxy signs in with the stick's bearer token. */
-              headers: process.env.POND_TOKEN
-                ? { Authorization: `Bearer ${process.env.POND_TOKEN}` }
-                : undefined,
+export default defineConfig(({ command, mode }) => {
+  const target = process.env.POND_TARGET;
+
+  /* The dev server has nothing to talk to without a stick; a build and the tests need none. */
+  if (command === "serve" && mode === "development" && !target) {
+    throw new Error(
+      "POND_TARGET names the stick, or the proxy in front of it, that npm run dev talks to, " +
+        "for example https://192.0.2.1; npm run dev:mock needs none",
+    );
+  }
+
+  return {
+    plugins: [preact(), tailwindcss(), gzipOnly(), ...(mode === "mock" ? [mockApi()] : [])],
+    build: {
+      target: "es2022",
+      assetsInlineLimit: 0,
+      reportCompressedSize: true,
+    },
+    server: {
+      proxy:
+        mode === "mock"
+          ? undefined
+          : {
+              "/api": {
+                target,
+                changeOrigin: true,
+                secure: true,
+                /* With POND_TOKEN, the proxy signs in with the stick's bearer token. */
+                headers: process.env.POND_TOKEN
+                  ? { Authorization: `Bearer ${process.env.POND_TOKEN}` }
+                  : undefined,
+              },
             },
-          },
-  },
-}));
+    },
+  };
+});

@@ -106,8 +106,8 @@ only.
 ``web/`` is TypeScript on Preact, with TanStack Router and Query, react-hook-form
 and zod/mini, Tailwind and daisyUI; ``npm run build`` writes ``web/dist``.
 ``npm run dev:mock`` runs it against a mock stick inside the dev server, and
-``npm run dev`` against a stick (``POND_TARGET``, the router's proxy by
-default).
+``npm run dev`` against a stick (``POND_TARGET`` names it, or the proxy in
+front of it, and the dev server stops without it).
 
 Building and testing::
 
