@@ -128,6 +128,8 @@ export const pl: Dictionary = {
     down: "w dół",
   },
   fibre: {
+    groupErrors: "W tej grupie są błędy do poprawienia.",
+    differsN: "OLT czyta inaczej: {n}",
     colAttr: "Atrybut",
     colRaw: "Wartość (szesnastkowo)",
     colRead: "Odczytana",

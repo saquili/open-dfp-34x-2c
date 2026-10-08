@@ -126,6 +126,8 @@ export const en = {
     down: "down",
   },
   fibre: {
+    groupErrors: "This group has errors to correct.",
+    differsN: "The OLT reads otherwise: {n}",
     colAttr: "Attribute",
     colRaw: "Value (hex)",
     colRead: "Read as",

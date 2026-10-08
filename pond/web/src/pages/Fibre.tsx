@@ -884,6 +884,9 @@ function ChannelsTab() {
 
 type Group = "register" | "unit" | "software";
 
+/* The fields a stick of older software has none of. */
+const EXTENDED_FIELDS: string[] = ["loid", "sw_version0", "sw_version1", "pack_version"];
+
 /*
  * A field of the identity: where it goes, its words, and what the OLT reads
  * of it now, from the stick's OMCI database; null where no managed entity
@@ -1051,6 +1054,25 @@ function initial(i: Identity): Values {
 /* The identity form's columns: the field, the stick's value, what the OLT reads. */
 const IDENTITY_COLS = "md:grid-cols-[minmax(11rem,16rem)_minmax(12rem,26rem)_minmax(10rem,1fr)]";
 
+/*
+ * Whether the stick's value is the one the OLT reads: true or false, null when
+ * the field is empty and the stick gives its factory value, undefined when
+ * there is nothing to compare with. An empty value the OLT reads is a value
+ * too: the same as an empty field.
+ */
+function sameAsOlt(
+  stick: string,
+  olt: string | number | null | undefined,
+  numeric?: boolean,
+): boolean | null | undefined {
+  if (olt == null) return undefined;
+  if (olt === "") return stick.trim() === "";
+  if (stick.trim() === "") return null;
+  return numeric
+    ? Number(stick) === Number(olt)
+    : stick.trim().toUpperCase() === String(olt).trim().toUpperCase();
+}
+
 /* What the OLT reads beside what the stick holds: the same, another value, or a default. */
 function OltValue({
   stick,
@@ -1068,20 +1090,13 @@ function OltValue({
     return <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>;
   if (olt === null)
     return <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>;
-  /* An empty value the OLT reads is a value too: the same as an empty field. */
   const empty = olt === "";
   const shown = empty
     ? t("fibre.oltEmpty")
     : numeric && typeof olt === "number"
       ? `${olt} (0x${olt.toString(16)})`
       : String(olt);
-  const same = empty
-    ? stick.trim() === ""
-    : stick.trim() === ""
-      ? null
-      : numeric
-        ? Number(stick) === Number(olt)
-        : stick.trim().toUpperCase() === String(olt).trim().toUpperCase();
+  const same = sameAsOlt(stick, olt, numeric);
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       {same === true && (
@@ -1123,20 +1138,52 @@ function IdentityForm({ identity }: { identity: Identity }) {
   const values = form.watch();
   const extended = identity.loid !== undefined;
   const changed = Object.keys(dirtyFields).length;
+  const [group, setGroup] = useState<Group>("register");
+  const visible = IDENTITY_FIELDS.filter((f) => extended || !EXTENDED_FIELDS.includes(f.field));
+  const secrets: (keyof Values)[] = extended ? ["ploam", "loid_secret"] : ["ploam"];
+  const groupOf = (name: string): Group | undefined =>
+    secrets.includes(name as keyof Values)
+      ? "register"
+      : IDENTITY_FIELDS.find((f) => f.field === name)?.group;
+  /* What a group holds that the reader is to see before opening it. */
+  const tally = (g: Group) => {
+    const names = [
+      ...visible.filter((f) => f.group === g).map((f) => f.field),
+      ...(g === "register" ? secrets : []),
+    ];
+    return {
+      changed: names.filter((n) => dirtyFields[n]).length,
+      errors: names.filter((n) => errors[n]).length,
+      differs: visible.filter(
+        (f) =>
+          f.group === g &&
+          u &&
+          f.olt &&
+          sameAsOlt(values[f.field] ?? "", f.olt(u), f.numeric) === false,
+      ).length,
+    };
+  };
 
   useEffect(() => {
     if (!form.formState.isDirty) form.reset(initial(identity));
   }, [identity, form]);
 
-  const submit = form.handleSubmit((v) => {
-    if (!window.confirm(t("fibre.identityConfirm"))) return;
-    const out: Record<string, string> = {};
-    for (const f of IDENTITY_FIELDS)
-      if (dirtyFields[f.field] || f.field === "serial") out[f.key] = v[f.field];
-    if (v.ploam) out.PLOAM = v.ploam;
-    if (v.loid_secret) out.LOID_PASSWORD = v.loid_secret;
-    change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
-  });
+  const submit = form.handleSubmit(
+    (v) => {
+      if (!window.confirm(t("fibre.identityConfirm"))) return;
+      const out: Record<string, string> = {};
+      for (const f of IDENTITY_FIELDS)
+        if (dirtyFields[f.field] || f.field === "serial") out[f.key] = v[f.field];
+      if (v.ploam) out.PLOAM = v.ploam;
+      if (v.loid_secret) out.LOID_PASSWORD = v.loid_secret;
+      change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
+    },
+    (bad) => {
+      /* An error in a group not shown opens that group. */
+      const g = Object.keys(bad).map(groupOf).find(Boolean);
+      if (g) setGroup(g);
+    },
+  );
 
   const row = (
     label: string,
@@ -1175,81 +1222,124 @@ function IdentityForm({ identity }: { identity: Identity }) {
     </label>
   );
 
+  const fieldRow = (f: (typeof IDENTITY_FIELDS)[number]) =>
+    row(
+      t(f.label),
+      f.hint ? t(f.hint) : undefined,
+      <>
+        <input
+          className={`input input-sm w-full ${f.mono ? "font-mono" : ""} ${errors[f.field] ? "input-error" : ""} ${dirtyFields[f.field] ? "border-primary" : ""}`}
+          spellcheck={false}
+          autoComplete="off"
+          placeholder={t("fibre.factoryValue")}
+          {...form.register(f.field)}
+        />
+        {errors[f.field] && <p className="mt-0.5 text-xs text-error">{errors[f.field]?.message}</p>}
+      </>,
+      <OltValue
+        stick={values[f.field] ?? ""}
+        olt={!u ? undefined : f.olt ? f.olt(u) : null}
+        numeric={f.numeric}
+        mono={f.mono}
+      />,
+      f.field,
+    );
+
+  const secretRows = () => (
+    <>
+      {row(
+        t("fibre.ploam"),
+        t("fibre.ploamHint"),
+        secret("ploam", identity.ploam_set),
+        <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>,
+        "ploam",
+      )}
+      {extended &&
+        row(
+          t("fibre.loidPassword"),
+          undefined,
+          secret("loid_secret", identity.loid_password_set),
+          u ? (
+            <span className="text-sm">
+              {omci.data?.logical_password_set ? t("fibre.secretSet") : t("fibre.secretNone")}
+            </span>
+          ) : (
+            <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>
+          ),
+          "loid_secret",
+        )}
+    </>
+  );
+
   return (
     <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col gap-3">
-      <div
-        className={`hidden gap-x-6 px-0 text-[11px] font-semibold uppercase tracking-wide text-base-content/50 md:grid ${IDENTITY_COLS}`}
-      >
-        <span>{t("fibre.colField")}</span>
-        <span>{t("fibre.colOnStick")}</span>
-        <span>{t("fibre.colOlt")}</span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto pr-1">
-        {GROUPS.map((g) => (
-          <fieldset key={g.id} className="mb-4">
-            <legend className="mb-1 w-full border-b border-base-300 pb-1">
-              <span className="text-sm font-semibold">{t(g.label)}</span>
-              <span className="ml-2 text-xs text-base-content/55">{t(g.hint)}</span>
-            </legend>
-            {IDENTITY_FIELDS.filter(
-              (f) =>
-                f.group === g.id &&
-                (extended ||
-                  !["loid", "sw_version0", "sw_version1", "pack_version"].includes(f.field)),
-            ).map((f) =>
-              row(
-                t(f.label),
-                f.hint ? t(f.hint) : undefined,
-                <>
-                  <input
-                    className={`input input-sm w-full ${f.mono ? "font-mono" : ""} ${errors[f.field] ? "input-error" : ""} ${dirtyFields[f.field] ? "border-primary" : ""}`}
-                    spellcheck={false}
-                    autoComplete="off"
-                    placeholder={t("fibre.factoryValue")}
-                    {...form.register(f.field)}
-                  />
-                  {errors[f.field] && (
-                    <p className="mt-0.5 text-xs text-error">{errors[f.field]?.message}</p>
-                  )}
-                </>,
-                <OltValue
-                  stick={values[f.field] ?? ""}
-                  olt={!u ? undefined : f.olt ? f.olt(u) : null}
-                  numeric={f.numeric}
-                  mono={f.mono}
-                />,
-                f.field,
-              ),
-            )}
-            {g.id === "register" && (
-              <>
-                {row(
-                  t("fibre.ploam"),
-                  t("fibre.ploamHint"),
-                  secret("ploam", identity.ploam_set),
-                  <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>,
-                  "ploam",
-                )}
-                {extended &&
-                  row(
-                    t("fibre.loidPassword"),
-                    undefined,
-                    secret("loid_secret", identity.loid_password_set),
-                    u ? (
-                      <span className="text-sm">
-                        {omci.data?.logical_password_set
-                          ? t("fibre.secretSet")
-                          : t("fibre.secretNone")}
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
+        <div
+          role="tablist"
+          aria-orientation="vertical"
+          className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible lg:border-r lg:border-base-200 lg:pr-4"
+        >
+          {GROUPS.map((g) => {
+            const n = tally(g.id);
+            const active = g.id === group;
+            return (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setGroup(g.id)}
+                className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
+              >
+                <span className="flex w-full items-center gap-2 text-sm font-medium">
+                  {t(g.label)}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {n.errors > 0 && (
+                      <span className="badge badge-error badge-xs" title={t("fibre.groupErrors")}>
+                        !
                       </span>
-                    ) : (
-                      <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>
-                    ),
-                    "loid_secret",
-                  )}
-              </>
-            )}
-          </fieldset>
-        ))}
+                    )}
+                    {n.differs > 0 && (
+                      <span
+                        className="tabular flex items-center gap-0.5 text-xs text-warning"
+                        title={t("fibre.differsN", { n: n.differs })}
+                      >
+                        <CircleAlert className="size-3.5" />
+                        {n.differs}
+                      </span>
+                    )}
+                    {n.changed > 0 && (
+                      <span
+                        className="badge badge-primary badge-xs tabular"
+                        title={t("fibre.changedN", { n: n.changed })}
+                      >
+                        {n.changed}
+                      </span>
+                    )}
+                  </span>
+                </span>
+                <span
+                  className={`hidden text-xs lg:block ${active ? "text-primary/70" : "text-base-content/55"}`}
+                >
+                  {t(g.hint)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex min-h-0 flex-col">
+          <div
+            className={`hidden gap-x-6 border-b border-base-300 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-base-content/50 md:grid ${IDENTITY_COLS}`}
+          >
+            <span>{t("fibre.colField")}</span>
+            <span>{t("fibre.colOnStick")}</span>
+            <span>{t("fibre.colOlt")}</span>
+          </div>
+          <div role="tabpanel" className="min-h-0 flex-1 overflow-auto">
+            {visible.filter((f) => f.group === group).map(fieldRow)}
+            {group === "register" && secretRows()}
+          </div>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
         <button
@@ -1321,6 +1411,62 @@ function decoded(b: Uint8Array | null): string {
   return "";
 }
 
+/* The instances of a class, a page at a time: a class may have hundreds. */
+function Instances({ cls }: { cls: number }) {
+  const { t } = useI18n();
+  const { mib } = useMib();
+  const pager = usePages(mib.all(cls), 10);
+  return (
+    <>
+      <div className="grid min-h-0 flex-1 auto-rows-max content-start gap-4 overflow-auto pr-1">
+        {pager.shown.map((me) => (
+          <div key={me.id} className="overflow-hidden rounded-box border border-base-300">
+            <div className="flex items-baseline gap-2 bg-base-200/70 px-3 py-1.5 text-sm">
+              <span className="font-semibold">{t("fibre.instance")}</span>
+              <span className="tabular font-mono">0x{me.id.toString(16).padStart(4, "0")}</span>
+              <span className="tabular text-xs text-base-content/55">({me.id})</span>
+            </div>
+            {me.error ? (
+              <p className="px-3 py-2 text-xs text-warning">{t("fibre.omciTooBig")}</p>
+            ) : (
+              <table className="table table-xs table-zebra">
+                <thead>
+                  <tr>
+                    <th className="w-8">#</th>
+                    <th className="w-72">{t("fibre.colAttr")}</th>
+                    <th>{t("fibre.colRaw")}</th>
+                    <th className="w-40">{t("fibre.colRead")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...me.attrs.entries()].map(([n, b]) => (
+                    <tr key={n}>
+                      <td className="tabular w-8 text-base-content/50">{n}</td>
+                      <td className="w-72">
+                        {CLASSES[cls]?.attrs[n] ?? n}
+                        {me.tables.has(n) && (
+                          <span className="ml-1.5 badge badge-ghost badge-xs">
+                            {t("fibre.table")}
+                          </span>
+                        )}
+                      </td>
+                      <td className="font-mono text-xs break-all text-base-content/80">
+                        {hex(b) || "–"}
+                      </td>
+                      <td className="w-40 text-xs text-base-content/70">{decoded(b)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        ))}
+      </div>
+      <Pager pager={pager} />
+    </>
+  );
+}
+
 function OmciTab() {
   const { t } = useI18n();
   const { omci, mib } = useMib();
@@ -1387,53 +1533,7 @@ function OmciTab() {
                 </>
               )}
             </h2>
-            <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto pr-1">
-              {shown != null &&
-                mib.all(shown).map((me) => (
-                  <div key={me.id} className="overflow-hidden rounded-box border border-base-300">
-                    <div className="flex items-baseline gap-2 bg-base-200/70 px-3 py-1.5 text-sm">
-                      <span className="font-semibold">{t("fibre.instance")}</span>
-                      <span className="tabular font-mono">
-                        0x{me.id.toString(16).padStart(4, "0")}
-                      </span>
-                      <span className="tabular text-xs text-base-content/55">({me.id})</span>
-                    </div>
-                    {me.error ? (
-                      <p className="px-3 py-2 text-xs text-warning">{t("fibre.omciTooBig")}</p>
-                    ) : (
-                      <table className="table table-xs table-zebra">
-                        <thead>
-                          <tr>
-                            <th className="w-8">#</th>
-                            <th className="w-72">{t("fibre.colAttr")}</th>
-                            <th>{t("fibre.colRaw")}</th>
-                            <th className="w-40">{t("fibre.colRead")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {[...me.attrs.entries()].map(([n, b]) => (
-                            <tr key={n}>
-                              <td className="tabular w-8 text-base-content/50">{n}</td>
-                              <td className="w-72">
-                                {CLASSES[shown]?.attrs[n] ?? n}
-                                {me.tables.has(n) && (
-                                  <span className="ml-1.5 badge badge-ghost badge-xs">
-                                    {t("fibre.table")}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="font-mono text-xs break-all text-base-content/80">
-                                {hex(b) || "–"}
-                              </td>
-                              <td className="w-40 text-xs text-base-content/70">{decoded(b)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                ))}
-            </div>
+            {shown != null && <Instances key={shown} cls={shown} />}
           </div>
         </section>
       </div>
