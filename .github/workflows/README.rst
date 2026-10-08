@@ -82,8 +82,8 @@ directory, and checked. One job, in the same pinned container, with these steps
 in order: the build (``make``, which also judges the result: ``r0`` has to fit
 its partition, the instruction-set gate has to pass over the whole root
 filesystem tree, and the digests have to check; the size of ``k0`` is reported);
-what was built (the compiler, the image header, the absence of any shared
-object); the negative control of the gate; the static programs run under
+what was built (the compiler, the image header, the shared objects, and no
+``libgcc_s`` among them); the negative control of the gate; the programs run under
 ``qemu-mips`` (``br2-external/tests/image/check-applets``); the bench's dry run
 of the root filesystem image (``make flash ... ARGS=--dry-run``, which names no
 board); the images kept as the workflow artifact ``images``; and a second build

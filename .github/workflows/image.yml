@@ -69,13 +69,14 @@ jobs:
           grep -e '^CONFIG_CC_VERSION_TEXT' build/image-a/build/linux-custom/.config
           build/image-a/host/bin/mkimage -l build/image-a/images/k0.uImage
           file build/image-a/target/bin/busybox build/image-a/target/usr/sbin/dropbear
-          shared=$(find build/image-a/target \( -name '*.so' -o -name '*.so.*' -o -name 'ld-*' \) | wc -l)
-          echo "shared objects in the root filesystem: $shared"
-          [ "$shared" = 0 ]
+          # The programs share the C library that the post-build script cut;
+          # libgcc_s, which nothing loads, is not shipped.
+          find build/image-a/target \( -name '*.so' -o -name '*.so.*' -o -name 'ld-*' \) | sort
+          ! find build/image-a/target -name 'libgcc_s*' | grep .
       - name: The negative control of the gate
         # The gate has to be able to fail: a MIPS32 object is refused.
         run: br2-external/tests/toolchain/negative-control
-      - name: The static programs run under qemu-mips
+      - name: The programs run under qemu-mips
         run: br2-external/tests/image/check-applets build/image-a/target
       - name: The bench accepts the root filesystem image
         # A dry run prints the plan and touches no board and no host; the
