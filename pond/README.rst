@@ -87,10 +87,32 @@ or of the other bank with an empty body, and restarts.
   concentrator's address as its gateway or ``off`` to give it the stick's.
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
-  ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION`` and ``PLOAM``
-  (ten characters or twenty hex digits; empty keeps it). It goes to
-  ``onu-store identity``, then ``onu-mode reidentify`` registers again. A read
-  never gives the PLOAM password, only whether one is set.
+  ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,
+  ``VENDOR_PRODUCT_CODE`` and ``TM_OPTION`` (numbers, decimal or ``0x``),
+  ``LOID``, the logical ONU ID, ``SW_VERSION0`` and ``SW_VERSION1``, each
+  software image's version, ``PACK_VERSION``, and ``PLOAM`` (ten characters or
+  twenty hex digits) and ``LOID_PASSWORD`` (up to twelve), each kept when
+  empty. It goes to ``onu-store identity``, then ``onu-mode reidentify``
+  registers again. A read never gives either password, only whether one is
+  set.
+* ``hostname``: the stick's name, ``HOSTNAME``, a name of RFC 1123; it goes to
+  ``onu-store system`` and to the kernel.
+* ``sfp_lane``: the SFP lane's setting through ``onu-lane``: ``MODE``
+  (``auto``, ``2500basex``, ``1000basex-an`` or ``1000basex``) on trial, which
+  ends by itself after a minute, ``KEEP=1`` or ``REVERT=1``. A read gives the
+  setting, the one the lane runs in and a trial.
+* ``mgmt``: the management VLAN and address through ``onu-mgmt``: ``VLAN`` and
+  ``ADDRESS`` add a new pair beside the old one, and pond listens on it too;
+  ``COMMIT=1``, taken only from a request that came to the new address, makes
+  it the pair in use and stops the old address; ``CANCEL=1`` takes it away. A
+  read gives the pair and one that waits.
+
+Among the values read only: ``cpu``, the processor's clock ticks in each state
+(a share of busy time is the difference of two reads), its load and model;
+``omci``, the managed entities omcid holds for the classes that describe the
+unit and its services, every attribute of each in hexadecimal and the rows of
+its tables, read over omcid's control socket (the ONU-G's logical password is
+never given, only whether one is set), and omcid's counts of the frames.
 
 The panel
 =========
@@ -121,7 +143,10 @@ CPPFLAGS at an installation of those headers (``make headers_install`` in
 for ``/proc`` and ``/sys``, and on netlink dumps they build; the two copies of
 the boot loader's environment are made by ``tests/make-env.py``. The tests of
 the settings write under the same tree and start stand-ins for onu-mode and
-onu-store, which ``POND_APPLY``, ``POND_REIDENTIFY`` and ``POND_STORE`` name.
+onu-store, which ``POND_APPLY``, ``POND_REIDENTIFY`` and ``POND_STORE`` name;
+those of the stick's own settings start stand-ins for onu-lane, onu-mgmt and
+hostname (``POND_ONU_LANE``, ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those
+of ``omci`` a stand-in for omcid's control socket.
 The tests of the sign-in check PBKDF2 against RFC 7914's vectors, the stored
 form, the stop after wrong passwords, the end of sessions and a change of
 password.
