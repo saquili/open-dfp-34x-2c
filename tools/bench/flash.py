@@ -19,15 +19,15 @@ the host's CRC-32 again. Only then, and only when asked, is a one-shot trial
 armed and the board booted to watch it; the committed bank is changed only on
 an explicit request.
 
-The watchdog that a restart through the CPU reset vector leaves counting would
-reset the chip in the middle of a transfer or a write, so its control register
-is cleared: before the transfer for YMODEM, and for TFTP after the RAM copy has
-been checked and before the erase, because the reset heals a first TFTP attempt
-that fails after a restart. A write must not be interrupted: nothing is typed
-while ``loady``, ``sf erase`` or ``sf write`` runs, and a signal that arrives
-then is held until the command has finished and the prompt is back. If the
-console stalls in the middle of a write, the tool stops, says that the
-partition is invalid, and arms nothing.
+The watchdog that an older kernel's restart, through the CPU reset vector,
+leaves counting would reset the chip in the middle of a transfer or a write, so
+its control register is cleared: before the transfer for YMODEM, and for TFTP
+after the RAM copy has been checked and before the erase, because the reset
+heals a first TFTP attempt that fails after a restart. A write must not be
+interrupted: nothing is typed while ``loady``, ``sf erase`` or ``sf write``
+runs, and a signal that arrives then is held until the command has finished and
+the prompt is back. If the console stalls in the middle of a write, the tool
+stops, says that the partition is invalid, and arms nothing.
 
 A one-shot trial is a good test only while the committed bank is another one:
 when the committed bank is the one under test, a failed trial is followed by

@@ -201,23 +201,24 @@ reported on standard error as ``refused [<code>] <detail>: <line>`` with
 nothing typed; 4 the console is not usable; 5 the board is in an unexpected
 state; 6 a timeout.
 
-A RAM boot, in order: the image is checked (the legacy header with its CRCs, MIPS,
-LZMA, load address, at most 12 MiB); the console is checked and locked; the
-image, the server and the firewall allowance are made ready on the image host;
-the board is brought to the loader prompt (by SysRq ``b`` over ssh if it is
-running, by waiting for a person's power cycle if ssh cannot reach it); the
+A RAM boot, in order: the image is checked (the legacy header with its CRCs,
+MIPS, LZMA, load address, at most 12 MiB); the console is checked and locked;
+the image, the server and the firewall allowance are made ready on the image
+host; the board is brought to the loader prompt (by SysRq ``b`` over ssh if it
+is running, by waiting for a person's power cycle if ssh cannot reach it); the
 environment is read and the macros and addresses checked; ``run ramboot`` is
 typed and the transfer watched; the loader's report of the image must be the
 file's (name, creation time, size, addresses); the kernel's banner and then the
-ready marker must follow. A restart through the CPU reset vector leaves the
-watchdog counting, and about 47 seconds later it resets the chip. After such a
-restart the first transfer sometimes shows only ``T`` marks; two of them without
-a ``#`` fail the attempt, Ctrl-C is pressed, and the tool waits for that watchdog
-reset (``--recovery fuse``, the default, which types ``reset`` at the prompt if
-no watchdog reset has come within a minute) or types ``reset`` at once
-(``--recovery reset``, expected to be about 35 seconds faster, and waiting for
-the watchdog reset if the prompt does not come back) and breaks in again. One
-recovery is made per run.
+ready marker must follow. A current kernel restarts by a chip reset and leaves
+no count running. An older kernel's restart, through the CPU reset vector,
+leaves the watchdog counting, and about 47 seconds later it resets the chip.
+After such a restart the first transfer sometimes shows only ``T`` marks; two
+of them without a ``#`` fail the attempt, Ctrl-C is pressed, and the tool waits
+for that watchdog reset (``--recovery fuse``, the default, which types
+``reset`` at the prompt if no watchdog reset has come within a minute) or types
+``reset`` at once (``--recovery reset``, expected to be about 35 seconds
+faster, and waiting for the watchdog reset if the prompt does not come back)
+and breaks in again. One recovery is made per run.
 
 A flash, in order: the file is checked for its partition and its CRC-32 taken;
 the loader prompt is reached; the layout variables (``fl_*`` and the two kernel

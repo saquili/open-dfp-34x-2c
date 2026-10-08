@@ -2,13 +2,13 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 """The scripted board's network, kernel start and watchdog.
 
-On top of the loader of ``simboard`` this adds what a RAM boot needs: the
-TFTP transfer with its progress marks, the failure that shows only ``T``
-marks, the header that ``bootm`` prints, the kernel's banner and userspace,
-the restart through the CPU reset vector from a running kernel, and the
-watchdog that a restart leaves counting. That watchdog resets the chip about
-47 seconds after a restart unless the prompt writes zero to its control
-register or a kernel starts.
+On top of the loader of ``simboard`` this adds what a RAM boot needs: the TFTP
+transfer with its progress marks, the failure that shows only ``T`` marks, the
+header that ``bootm`` prints, the kernel's banner and userspace, the restart
+through the CPU reset vector from a running kernel, as older kernels restart,
+and the watchdog that such a restart leaves counting. That watchdog resets the
+chip about 47 seconds after a restart unless the prompt writes zero to its
+control register or a kernel starts.
 
 Behaviours a test can switch on: the first transfer after a restart that
 fails with ``T`` marks (and a Ctrl-C that does or does not stop it); a

@@ -12,15 +12,16 @@ the loader prints about the image with the file; and wait for the kernel's
 banner and then for the image's own ready marker.
 
 The board is restarted from a running kernel with SysRq ``b`` over ssh, which
-restarts the CPU at once. A restart through the CPU reset vector leaves the
-watchdog counting, and about 47 seconds later it resets the chip unless a
-kernel clears it first. After such a restart the first transfer sometimes
-shows only ``T`` marks (one per timeout) and never recovers, so an attempt is
-declared failed when two ``T`` marks follow ``Loading: *`` with no ``#``. Ctrl-C
-is pressed, and the default way out is to wait for that watchdog reset and
-break in again; typing ``reset`` at the prompt is expected to do the same
-sooner but is not established, so it is only used when asked for, or when the
-watchdog reset does not come. One recovery is allowed per run; a second
+restarts the board at once. A current kernel restarts by a chip reset, which
+leaves no count running. An older kernel's restart, through the CPU reset
+vector, leaves the watchdog counting, and about 47 seconds later it resets the
+chip unless a kernel clears it first. After such a restart the first transfer
+sometimes shows only ``T`` marks (one per timeout) and never recovers, so an
+attempt is declared failed when two ``T`` marks follow ``Loading: *`` with no
+``#``. Ctrl-C is pressed, and the default way out is to wait for that watchdog
+reset and break in again; typing ``reset`` at the prompt is expected to do the
+same sooner but is not established, so it is only used when asked for, or when
+the watchdog reset does not come. One recovery is allowed per run; a second
 failure ends it with the console's tail. The restart call over ssh is not
 waited for to the end: the board dies under the session, so the tool watches
 the console for the first-stage banner and ends the client after at most ten
