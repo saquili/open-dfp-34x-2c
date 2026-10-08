@@ -357,6 +357,7 @@ export const pl: Dictionary = {
     user: "Nazwa użytkownika",
     passwordField: "Hasło",
     passwordKept: "Zapisane. Zostaw puste, aby go nie zmieniać.",
+    passwordSaved: "Zapisane",
     passwordNone: "Nieustawione",
     secretRequired: "Podaj hasło",
     show: "Pokaż",

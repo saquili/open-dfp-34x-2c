@@ -5,12 +5,63 @@
 
 import { Eye, EyeOff } from "lucide-react";
 import type { JSX } from "preact";
-import { forwardRef, type InputHTMLAttributes, useState } from "react";
+import { forwardRef, type InputHTMLAttributes, type ReactNode, useState } from "react";
 import { type ApiError, OfflineError } from "../api/client";
 import { useI18n } from "../i18n";
 
 /* The input type that hides what is typed. */
 const MASKED = "password";
+
+type SecretProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "size"> & {
+  /** An icon at the start of the field. */
+  icon?: ReactNode;
+  small?: boolean;
+  invalid?: boolean;
+};
+
+/**
+ * The input of a secret: hidden as it is typed, with the eye that shows it
+ * inside the field, at its end.
+ */
+export const SecretInput = forwardRef<HTMLInputElement, SecretProps>(function SecretInput(
+  { icon, small, invalid, className = "", ...input },
+  ref,
+) {
+  const { t } = useI18n();
+  const [shown, setShown] = useState(false);
+  return (
+    <div
+      className={`input w-full pr-1 ${small ? "input-sm" : ""} ${invalid ? "input-error" : ""} ${className}`}
+    >
+      {icon}
+      <input
+        ref={ref}
+        {...({
+          className: "min-w-0 grow",
+          /* Preact types each input type apart; this one switches. */
+          type: shown ? "text" : MASKED,
+          spellcheck: false,
+          autoComplete: "off",
+          "aria-invalid": !!invalid,
+          ...input,
+        } as unknown as JSX.IntrinsicElements["input"])}
+      />
+      <button
+        type="button"
+        className={`btn btn-ghost btn-circle text-base-content/60 ${small ? "btn-xs" : "btn-sm"}`}
+        onClick={() => setShown((v) => !v)}
+        aria-label={shown ? t("internet.hide") : t("internet.show")}
+        title={shown ? t("internet.hide") : t("internet.show")}
+      >
+        {shown ? (
+          <EyeOff className={small ? "size-3.5" : "size-4"} />
+        ) : (
+          <Eye className={small ? "size-3.5" : "size-4"} />
+        )}
+      </button>
+    </div>
+  );
+});
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
   label: string;
@@ -23,39 +74,28 @@ export const Field = forwardRef<HTMLInputElement, Props>(function Field(
   { label, hint, error, secret, id, className = "", ...input },
   ref,
 ) {
-  const { t } = useI18n();
-  const [shown, setShown] = useState(false);
   const name = id ?? input.name;
   return (
     <div className={`grid gap-1 ${className}`}>
       <label htmlFor={name} className="text-sm font-medium">
         {label}
       </label>
-      <div className="flex gap-2">
+      {secret ? (
+        <SecretInput ref={ref} id={name} invalid={!!error} {...input} />
+      ) : (
         <input
           ref={ref}
           {...({
             id: name,
             className: `input w-full ${error ? "input-error" : ""}`,
-            /* Preact types each input type apart; this one switches. */
-            type: secret && !shown ? MASKED : "text",
+            type: "text",
             spellcheck: false,
             autoComplete: "off",
             "aria-invalid": !!error,
             ...input,
           } as unknown as JSX.IntrinsicElements["input"])}
         />
-        {secret && (
-          <button
-            type="button"
-            className="btn btn-square btn-ghost"
-            onClick={() => setShown((v) => !v)}
-            aria-label={shown ? t("internet.hide") : t("internet.show")}
-          >
-            {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-          </button>
-        )}
-      </div>
+      )}
       {error ? (
         <p className="text-xs text-error">{error}</p>
       ) : (

@@ -28,7 +28,7 @@ import { useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Identity } from "../api/types";
-import { SaveState, useChangeState } from "../components/Field";
+import { SaveState, SecretInput, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
@@ -69,8 +69,6 @@ import {
 
 const TABS = ["state", "services", "channels", "identity", "omci"] as const;
 
-/* The input type that hides what is typed. */
-const MASKED = "password";
 type Tab = (typeof TABS)[number];
 
 /**
@@ -1211,15 +1209,15 @@ function IdentityForm({ identity }: { identity: Identity }) {
   );
 
   const secret = (name: "ploam" | "loid_secret", set: boolean | undefined) => (
-    <label className={`input input-sm w-full ${errors[name] ? "input-error" : ""}`}>
-      <KeyRound className="size-3.5 opacity-50" />
-      <input
-        type={MASKED}
-        autoComplete="new-password"
-        placeholder={set ? t("internet.passwordKept") : t("internet.passwordNone")}
-        {...form.register(name)}
-      />
-    </label>
+    <SecretInput
+      small
+      icon={<KeyRound className="size-3.5 shrink-0 opacity-50" />}
+      invalid={!!errors[name]}
+      autoComplete="new-password"
+      placeholder={set ? t("internet.passwordSaved") : t("internet.passwordNone")}
+      title={set ? t("internet.passwordKept") : undefined}
+      {...form.register(name)}
+    />
   );
 
   const fieldRow = (f: (typeof IDENTITY_FIELDS)[number]) =>

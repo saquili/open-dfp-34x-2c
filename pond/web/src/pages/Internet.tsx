@@ -133,7 +133,8 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
           label={t("internet.passwordField")}
           secret
           autoComplete="new-password"
-          placeholder={x?.secretSet ? t("internet.passwordKept") : t("internet.passwordNone")}
+          placeholder={x?.secretSet ? t("internet.passwordSaved") : t("internet.passwordNone")}
+          hint={x?.secretSet ? t("internet.passwordKept") : undefined}
           error={errors.secret?.message}
           {...form.register("secret")}
         />

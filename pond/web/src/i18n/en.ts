@@ -357,6 +357,7 @@ export const en = {
     user: "User name",
     passwordField: "Password",
     passwordKept: "Saved. Leave empty to keep it.",
+    passwordSaved: "Saved",
     passwordNone: "Not set",
     secretRequired: "Enter the password",
     show: "Show",
