@@ -15,10 +15,12 @@
 
 int prov_banks(struct prov_buf *out);
 int prov_bridge(struct prov_buf *out);
+int prov_cpu(struct prov_buf *out);
 int prov_firmware(struct prov_buf *out);
 int prov_gem_counters(struct prov_buf *out);
 int prov_gem_ports(struct prov_buf *out);
 int prov_health(struct prov_buf *out);
+int prov_hostname(struct prov_buf *out);
 int prov_image(struct prov_buf *out);
 int prov_kernel(struct prov_buf *out);
 int prov_log(struct prov_buf *out);
@@ -39,6 +41,7 @@ int prov_nl_onu(const char *links, size_t llen, const char *dev, size_t dlen,
 int prov_nl_tconts(const char *dump, size_t dlen, struct prov_buf *out);
 int prov_nl_vlans(const char *brlinks, size_t len, struct prov_buf *out);
 int prov_network(struct prov_buf *out);
+int prov_omci(struct prov_buf *out);
 int prov_onu(struct prov_buf *out);
 int prov_optics(struct prov_buf *out);
 int prov_port_counters(struct prov_buf *out);

@@ -1,0 +1,6 @@
+system type		: Realtek RTL9602C
+machine			: ODI DFP-34X-2C3
+processor		: 0
+cpu model		: Lexra LX5281 V0.2
+BogoMIPS		: 297.98
+isa			: mips1

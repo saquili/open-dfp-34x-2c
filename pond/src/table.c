@@ -12,6 +12,10 @@ const struct prov pond_provs[] = {
 
 	{ "uptime", "System", "Uptime and idle time", prov_uptime, NULL, 0 },
 	{ "memory", "System", "Memory", prov_memory, NULL, 0 },
+	{ "cpu", "System", "Processor: time in each state, load, model",
+	  prov_cpu, NULL, PROV_VOLATILE },
+	{ "hostname", "System", "The name the stick goes by", prov_hostname,
+	  NULL, 0 },
 	{ "kernel", "System", "Kernel", prov_kernel, NULL, 0 },
 	{ "image", "System", "Image", prov_image, NULL, 0 },
 	{ "model", "System", "Board", prov_model, NULL, 0 },
@@ -64,8 +68,9 @@ const struct prov pond_provs[] = {
 
 	{ "gem_counters", "Data path", "Per-GEM-port counters from the PON MAC",
 	  prov_gem_counters, NULL, 0 },
-	{ "omci", "OMCI", "Session, alarms, managed entities", NULL, NULL,
-	  PROV_ABSENT },
+	{ "omci", "OMCI",
+	  "What the OLT set up: the managed entities omcid holds, and its "
+	  "counts of the frames", prov_omci, NULL, PROV_SLOW },
 };
 
 const size_t pond_nprovs = ARRAY_SIZE(pond_provs);

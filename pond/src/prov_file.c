@@ -54,7 +54,118 @@ int prov_memory(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "available_kb");
 	pv_num(out, prov_field(t, "MemAvailable", -1));
+	pv_comma(out);
+	pv_key(out, "buffers_kb");
+	pv_num(out, prov_field(t, "Buffers", -1));
+	pv_comma(out);
+	pv_key(out, "cached_kb");
+	pv_num(out, prov_field(t, "Cached", -1));
 	pv_close(out, '}');
+	return 0;
+}
+
+/*
+ * The first line of a file that may be longer than @cap, such as /proc/stat
+ * with the interrupt counts of a large system.
+ */
+static int first_line(const char *path, char *out, size_t cap)
+{
+	char rooted[512];
+	ssize_t n;
+	int fd = open(prov_path(path, rooted, sizeof(rooted)), O_RDONLY | O_CLOEXEC);
+
+	if (fd < 0)
+		return -errno;
+	do
+		n = read(fd, out, cap - 1);
+	while (n < 0 && errno == EINTR);
+	close(fd);
+	if (n < 0)
+		return -errno;
+	out[n] = '\0';
+	out[strcspn(out, "\n")] = '\0';
+	return 0;
+}
+
+/*
+ * The processor: the clock ticks it spent in each state since the start, from
+ * the first line of /proc/stat, which a reader turns into a share of busy
+ * time over the interval between two reads; the load averages and the
+ * runnable and existing threads of /proc/loadavg; and its model, from
+ * /proc/cpuinfo.
+ */
+int prov_cpu(struct prov_buf *out)
+{
+	static const char *const names[] = { "user", "nice", "system", "idle",
+					     "iowait", "irq", "softirq", "steal" };
+	unsigned long long v[ARRAY_SIZE(names)] = { 0 };
+	char t[4096], model[64] = "", *m;
+	double load[3] = { 0 };
+	unsigned int running = 0, threads = 0, i;
+	int err = first_line("/proc/stat", t, sizeof(t));
+
+	if (err)
+		return err;
+	if (sscanf(t, "cpu %llu %llu %llu %llu %llu %llu %llu %llu", &v[0], &v[1],
+		   &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) < 4)
+		return -EPROTO;
+	err = prov_read_line("/proc/loadavg", t, sizeof(t));
+	if (err)
+		return err;
+	if (sscanf(t, "%lf %lf %lf %u/%u", &load[0], &load[1], &load[2], &running,
+		   &threads) != 5)
+		return -EPROTO;
+	if (!prov_slurp("/proc/cpuinfo", t, sizeof(t), NULL)) {
+		m = strstr(t, "cpu model");
+		if (m)
+			m = strchr(m, ':');
+		if (m) {
+			m += 1 + strspn(m + 1, " \t");
+			snprintf(model, sizeof(model), "%.*s", (int)strcspn(m, "\n"), m);
+		}
+	}
+
+	pv_open(out, '{');
+	pv_key(out, "ticks");
+	pv_open(out, '{');
+	for (i = 0; i < ARRAY_SIZE(names); i++) {
+		if (i)
+			pv_comma(out);
+		pv_key(out, names[i]);
+		pv_num(out, (long long)v[i]);
+	}
+	pv_close(out, '}');
+	pv_comma(out);
+	pv_key(out, "load");
+	pv_open(out, '[');
+	for (i = 0; i < 3; i++) {
+		if (i)
+			pv_comma(out);
+		pv_fixed(out, (long long)(load[i] * 100.0 + 0.5), 2);
+	}
+	pv_close(out, ']');
+	pv_comma(out);
+	pv_key(out, "running");
+	pv_num(out, running);
+	pv_comma(out);
+	pv_key(out, "threads");
+	pv_num(out, threads);
+	pv_comma(out);
+	pv_key(out, "model");
+	pv_str(out, model);
+	pv_close(out, '}');
+	return 0;
+}
+
+/* The name the stick goes by. */
+int prov_hostname(struct prov_buf *out)
+{
+	char t[128];
+	int err = prov_read_line("/proc/sys/kernel/hostname", t, sizeof(t));
+
+	if (err)
+		return err;
+	pv_str(out, t);
 	return 0;
 }
 
