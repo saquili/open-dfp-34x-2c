@@ -1558,6 +1558,19 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	rtl9602c_filter_qos_reset(p);
 
 	/*
+	 * The frames for the CPU may hold only a few of the buffer's pages:
+	 * with the limit after reset, a flood the rate limit below held back
+	 * filled the buffer, and the switch dropped the frames it forwards as
+	 * well (measured: 59 Mb/s routed upstream instead of 932). Beyond the
+	 * limit it drops a frame for the CPU where the frame enters.
+	 */
+	rtl9602c_rmw(p, RTL9602C_PORT_PAGE_LIMIT(RTL9602C_PORT_CPU),
+		     RTL9602C_PORT_PAGE_LIMIT_MAX <<
+		     RTL9602C_PORT_PAGE_LIMIT_SHIFT(RTL9602C_PORT_CPU),
+		     RTL9602C_CPU_PAGE_LIMIT <<
+		     RTL9602C_PORT_PAGE_LIMIT_SHIFT(RTL9602C_PORT_CPU));
+
+	/*
 	 * A flood to the CPU is held at the switch, at a rate that leaves the
 	 * CPU most of its time (see rtl9602c_cpu_rate_set()).
 	 */

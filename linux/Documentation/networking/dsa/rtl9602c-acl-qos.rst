@@ -2385,6 +2385,17 @@ rate is the devlink parameter ``cpu_rx_pps``, 5000 frames a second from setup;
    ``RTL9602C_QUEUE_RATE_EN`` (``0x7f``). Purpose: the queues count against the
    meter, and none is enabled before it names the meter. (M)
 
+A queue over its rate keeps the frames that it may not send yet in the shared
+buffer. The pages that the frames for one port may hold are limited per port
+(``RTL9602C_PORT_PAGE_LIMIT``, see "Buffer pages and qdepth"), and after reset
+every port may hold 1012, more than the global pause mark of 512 pages (see
+"Flow-control thresholds"). A flood for the CPU beyond the rate held one queue
+of the CPU port at 540 to 588 pages, the switch dropped frames for the other
+ports too, and what it routed slowed to the rate of the limit. So setup, before it sets the
+rate, limits the CPU port to ``RTL9602C_CPU_PAGE_LIMIT`` (128) pages: the switch
+then drops a frame for the CPU beyond them where the frame enters, and the rest
+of the buffer stays for the frames it forwards. (M)
+
 .. list-table::
    :header-rows: 1
    :widths: 58 6 36
@@ -2431,6 +2442,25 @@ rate is the devlink parameter ``cpu_rx_pps``, 5000 frames a second from setup;
        software, IPv6 in router mode among it, to 5000 frames a second in all.
      - I
      - Follows from the rows above; not measured with routed traffic.
+   * - With the CPU port's page limit as reset leaves it, a flood for the CPU
+       beyond the rate limit slows what the switch routes to about that rate,
+       both ways; with the limit at 128 pages the routed path keeps its rate,
+       and the CPU still takes the frames the rate lets through.
+     - M
+     - An OLT that sent every frame of the stick's upstream back down its own
+       GEM port, which the switch hands the CPU (to another MAC address; the
+       kernel drops them), and four TCP streams through the routed path with
+       ``cpu_rx_pps`` 5000. Limit 1012 (reset): 59 Mb/s up, 512 down, queue 0
+       of the CPU port at 540 to 588 pages, the routed frames lost counted in
+       the SFP port's ``rx_forward_discards``. Limit 128: 932 up, 937 down, the
+       CPU's queues empty at every sample, the flood's excess counted in the
+       PON port's ``rx_forward_discards`` (454,000 in 9 s). Limit 64: 935 up.
+       No rate limit (``cpu_rx_pps`` 0) with the limit at reset: 928 up, 933
+       down. The CPU took 5000 frames a second at every limit with the rate.
+   * - The page limit does not hold back what the stick itself receives.
+     - M
+     - 3.6 MB copied over ssh to the stick took 2 to 4 s with the limit at
+       1012, 128 and 64 pages alike.
 
 Buffer pages and qdepth
 =======================
@@ -2462,10 +2492,20 @@ the queue that a frame took is seen.
      - Holding the bit took port 0's port-level peak from 3 pages to its live 2
        and left every per-queue word unchanged, whether the bit was pulsed or
        held.
+   * - ``RTL9602C_PORT_PAGE_LIMIT`` (``0x02d018`` and ``0x02d01c``), ten bits a
+       port, three ports to a word, port p in bits 10(p mod 3) + 9 to
+       10(p mod 3): the pages that the frames leaving by port p may hold.
+       Beyond it the switch drops a frame for port p where it enters, counted
+       in the ``rx_forward_discards`` of the port it came by. 1012 for every
+       port after reset.
+     - M
+     - Read 1012 for ports 0 to 3 after reset; the CPU port at 64 and 128 and
+       the flood of "The limit on frames to the CPU".
    * - ``qdepth`` (debugfs, mode 0600): reading prints port, queue, current and
-       peak pages for all 32 queues; writing ``clear`` sets
-       ``RTL9602C_BUF_PEAK_CLR_PORT``, waits 1 to 2 ms and clears it again,
-       which clears the per-port marks only and changes nothing the view shows.
+       peak pages for all 32 queues, then each port's page limit; writing
+       ``clear`` sets ``RTL9602C_BUF_PEAK_CLR_PORT``, waits 1 to 2 ms and
+       clears it again, which clears the per-port marks only and changes
+       nothing the view shows.
      - M
      - ``cat`` and ``echo clear >`` on ``/sys/kernel/debug/rtl9602c/qdepth``.
 

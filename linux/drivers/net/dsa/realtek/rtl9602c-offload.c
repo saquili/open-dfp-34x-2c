@@ -3601,9 +3601,9 @@ void rtl9602c_nat_clear(struct rtl9602c_priv *p)
 
 /*
  * qdepth: for each port and queue, the buffer pages it holds now and the most
- * it has held. Writing "clear" pulses the clear of the per-port high-water
- * marks, which leaves these per-queue ones as they are: nothing but a full chip
- * reset is known to clear them.
+ * it has held, then each port's page limit. Writing "clear" pulses the clear
+ * of the per-port high-water marks, which leaves these per-queue ones as they
+ * are: nothing but a full chip reset is known to clear them.
  */
 static int rtl9602c_qdepth_show(struct seq_file *s, void *unused)
 {
@@ -3620,6 +3620,11 @@ static int rtl9602c_qdepth_show(struct seq_file *s, void *unused)
 				   FIELD_GET(RTL9602C_BUF_QUEUE_PAGES_CUR, v),
 				   FIELD_GET(RTL9602C_BUF_QUEUE_PAGES_PEAK, v));
 		}
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
+		seq_printf(s, "port %u limit %lu\n", port,
+			   (rtl9602c_r(p, RTL9602C_PORT_PAGE_LIMIT(port)) >>
+			    RTL9602C_PORT_PAGE_LIMIT_SHIFT(port)) &
+			   RTL9602C_PORT_PAGE_LIMIT_MAX);
 	return 0;
 }
 

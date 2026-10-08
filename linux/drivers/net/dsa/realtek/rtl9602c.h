@@ -1828,6 +1828,22 @@ struct rtl9602c_field {
 #define RTL9602C_BUF_PEAK_CLR_PORT	BIT(0)
 
 /*
+ * Per port, three to a word, the buffer pages the frames that leave by the
+ * port may hold. Beyond it the switch drops a frame for the port where the
+ * frame enters, counted in that port's RX_FORWARD_DISCARDS. After reset every
+ * port may hold 1012 pages, more than the global pause mark of 512
+ * (RTL9602C_PAUSE_THR_GLOBAL_HIGH): with one queue of the CPU port at 540 to
+ * 588 pages, the switch dropped frames for the other ports too (both measured
+ * on this board).
+ */
+#define RTL9602C_PORT_PAGE_LIMIT(port)		(0x02d018 + 4 * ((port) / 3))
+#define RTL9602C_PORT_PAGE_LIMIT_SHIFT(port)	(10 * ((port) % 3))
+#define RTL9602C_PORT_PAGE_LIMIT_MAX		GENMASK(9, 0)
+
+/* The pages the frames for the CPU may hold (rtl9602c_setup()). */
+#define RTL9602C_CPU_PAGE_LIMIT			128
+
+/*
  * The egress scheduler and shaper: strict queues first, the highest first,
  * then weighted ones by weight. Queue 0's weight is 16 bits, two ports to a
  * word; those of queues 1 to 7 are 10 bits, three to a word, three words a
