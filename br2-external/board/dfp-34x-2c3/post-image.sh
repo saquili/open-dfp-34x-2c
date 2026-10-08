@@ -33,12 +33,14 @@
 # not being a root filesystem is left out. docs/handbook/building.rst has the
 # sizes and what to do with the images.
 #
-# The files of one bench, an ssh key or other addresses, do not belong in the
-# repository. A directory named by OPEN_DFP_34X_2C_LOCAL_OVERLAY is laid over a
-# copy of the target tree, and the image is made from the copy: the target
-# directory of the build is not touched, so the next build without the variable
-# gives the image without those files. (The build system's own overlays copy
-# their files into the target directory and never remove them.)
+# The image is made from a copy of the target tree, which finish-root.sh
+# finishes (/etc/shadow becomes a link to the file the boot writes); the target
+# directory of the build is not touched. The files of one bench, an ssh key or
+# other addresses, do not belong in the repository: a directory named by
+# OPEN_DFP_34X_2C_LOCAL_OVERLAY is laid over the copy too, so the next build
+# without the variable gives the image without those files. (The build system's
+# own overlays copy their files into the target directory and never remove
+# them.)
 #
 # MKSQUASHFS names another mksquashfs, which the tests use; PYTHON the Python
 # that runs mkupdate.py (python3).
@@ -74,13 +76,11 @@ rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part"
 trap 'rm -f "$images/k0.uImage.part" "$images/r0.squashfs.part" "$images/SHA256SUMS.part"
 	[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
 
-root=$target
-if [ -n "$bench" ]; then
-	scratch=$(mktemp -d "${TMPDIR:-/tmp}/post-image.XXXXXX") || die "cannot make a scratch directory"
-	cp -RPp "$target/." "$scratch/"
-	cp -RPp "$bench/." "$scratch/"
-	root=$scratch
-fi
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/post-image.XXXXXX") || die "cannot make a scratch directory"
+cp -RPp "$target/." "$scratch/"
+[ -z "$bench" ] || cp -RPp "$bench/." "$scratch/"
+root=$scratch
+sh "$(dirname "$0")/finish-root.sh" "$root" || die "finish-root.sh failed"
 
 cp "$images/uImage" "$images/k0.uImage.part"
 mv "$images/k0.uImage.part" "$images/k0.uImage"

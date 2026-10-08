@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # The boot script of the ODI DFP-34X-2C3 image. BusyBox init runs it once from
-# /etc/inittab, before the console shell starts. It mounts the file systems that
+# /etc/inittab, before the console's login prompt starts. It mounts the file systems that
 # the kernel does not, gives the stick its management addresses, starts the ssh
 # server and prints a line that says the board is ready.
 #
@@ -49,11 +49,13 @@ ln -s ../run /var/run
 ln -s ../tmp /var/tmp
 mkdir -p /var/log
 
-# The identity of the unit, its saved settings and its PPPoE account, from
-# the configuration store; the identity from the shipped firmware's
-# configuration until the store holds one. omcid reads the identity, and the
-# PON driver takes the serial number before the PON comes up. The file holds
-# the PLOAM password, so only root may read it.
+# The identity of the unit, its saved settings, its PPPoE account and root's
+# password, from the configuration store; the identity from the shipped
+# firmware's configuration until the store holds one. omcid reads the
+# identity, and the PON driver takes the serial number before the PON comes
+# up. The file holds the PLOAM password, so only root may read it. Root's
+# password goes to /run/shadow, which /etc/shadow names, for the console's
+# login and the ssh server.
 umask 077
 onu-store load || warn "no identity in the configuration store or the factory configuration"
 # A bench may name the versions that the software images and the circuit
@@ -159,14 +161,14 @@ tc qdisc add dev pon clsact &&
 
 # The servers listen on the addresses of the host side and nowhere else:
 # the stick has no packet filter, and nothing on the PON side, nor on the WAN
-# of router mode, is to reach them. The ssh server takes keys only:
-# /root/.ssh/authorized_keys, which an image built with a bench's keys carries
-# and this one does not.
+# of router mode, is to reach them. The ssh server takes root's password and
+# the keys of /root/.ssh/authorized_keys, which an image built with a bench's
+# keys carries and this one does not.
 data=${DATA_ADDRESS%/*}
 mgmt=${MGMT_ADDRESS%/*}
 mkdir -p /run/dropbear
 dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no host key"
-dropbear -s -r /run/dropbear/host_key -P /run/dropbear.pid -p "$mgmt:22" ${data:+-p "$data:22"} ||
+dropbear -r /run/dropbear/host_key -P /run/dropbear.pid -p "$mgmt:22" ${data:+-p "$data:22"} ||
 	warn "dropbear did not start"
 
 # The identity to the PON driver, which takes it before the PON comes up.
@@ -181,8 +183,9 @@ else
 fi
 
 # The HTTP daemon and its panel, on the host side's addresses like the ssh
-# server. People sign in to the panel with a password; scripts may present the
-# token of /etc/pond.token, which an image without the file does not accept.
+# server. People sign in to the panel as root, with root's password; scripts
+# may present the token of /etc/pond.token, which an image without the file
+# does not accept.
 if [ -x /usr/sbin/pond ]; then
 	pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} >/run/pond.log 2>&1 &
 fi

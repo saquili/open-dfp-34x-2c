@@ -85,10 +85,18 @@ class BootScript(unittest.TestCase):
                      "tmpfs", "/tmp", "/run", "/var"):
             self.assertIn(what, text)
 
-    def test_the_ssh_server_takes_keys_only_and_its_host_key_is_made_first(self):
+    def test_the_ssh_server_takes_passwords_and_its_host_key_is_made_first(self):
+        # Root's password, which the console and the panel take too, and keys:
+        # no -s, which would refuse passwords, and no -B, which would take an
+        # empty one.
         text = read(RCS)
-        self.assertRegex(text, r"dropbear -s ")
-        self.assertLess(text.index("dropbearkey -t ed25519"), text.index("dropbear -s "))
+        self.assertRegex(text, r"\ndropbear -r ")
+        self.assertNotRegex(text, r"\ndropbear [^\n]*-[sB]\b")
+        self.assertLess(text.index("dropbearkey -t ed25519"), text.index("dropbear -r "))
+
+    def test_roots_password_is_in_place_before_the_ssh_server_starts(self):
+        text = read(RCS)
+        self.assertLess(text.index("onu-store load"), text.index("dropbear -r "))
 
     def test_it_ends_with_the_ready_line_that_the_bench_waits_for(self):
         self.assertEqual(read(RCS).rstrip().splitlines()[-1],
@@ -155,7 +163,7 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertIn("\nmgmt=${MGMT_ADDRESS%/*}\n", text)
 
     def test_ssh_listens_on_the_vlan_and_on_the_host_link_when_it_has_an_address(self):
-        self.assertRegex(read(RCS), r'\ndropbear -s [^\n]* -p "\$mgmt:22" \$\{data:\+-p "\$data:22"\} \|\|\n')
+        self.assertRegex(read(RCS), r'\ndropbear -r [^\n]* -p "\$mgmt:22" \$\{data:\+-p "\$data:22"\} \|\|\n')
 
     def test_the_status_daemon_listens_on_the_same(self):
         self.assertRegex(read(RCS), r'\n\tpond -l "http://\$mgmt:8080" \$\{data:\+-l "http://\$data:8080"\} >')
@@ -169,7 +177,7 @@ class ServersOnTheHostSide(unittest.TestCase):
         text = read(RCS)
         last = max(text.index('ip address add "$DATA_ADDRESS"'),
                    text.index('ip address add "$MGMT_ADDRESS"'))
-        for server in ("dropbear -s ", "pond -l "):
+        for server in ("dropbear -r ", "pond -l "):
             self.assertLess(last, text.index(server), server)
 
 
@@ -219,16 +227,31 @@ class Inittab(unittest.TestCase):
     def test_the_boot_script_is_run_at_sysinit(self):
         self.assertIn("::sysinit:/etc/init.d/rcS", list(self.entries()))
 
-    def test_the_console_shell_is_a_login_shell_that_is_started_again(self):
-        self.assertIn("::respawn:-/bin/sh", list(self.entries()))
+    def test_the_console_asks_for_root_and_its_password_again_after_each_session(self):
+        entries = list(self.entries())
+        self.assertIn("console::respawn:/sbin/getty -L console 0 vt100", entries)
+        self.assertFalse([e for e in entries if e.endswith(":-/bin/sh")],
+                         "a shell without a login on the console")
 
     def test_the_boot_script_it_names_is_in_the_overlay(self):
         self.assertTrue(os.path.exists(RCS))
 
     def test_init_and_the_applets_it_runs_are_built(self):
         symbols = enabled_applets()
-        for symbol in ("INIT", "FEATURE_USE_INITTAB", "REBOOT", "UMOUNT", "ASH", "SH_IS_ASH"):
+        for symbol in ("INIT", "FEATURE_USE_INITTAB", "REBOOT", "UMOUNT", "ASH", "SH_IS_ASH",
+                       "GETTY", "LOGIN", "FEATURE_SHADOWPASSWDS"):
             self.assertIn(symbol, symbols)
+
+    def test_login_checks_passwords_with_the_c_librarys_crypt(self):
+        # The ssh server and the panel check root's password with crypt() of the
+        # C library; login must take the same hash. BusyBox's own crypt and
+        # shadow reader would be another implementation to keep in step.
+        symbols = enabled_applets()
+        for symbol in ("USE_BB_CRYPT", "USE_BB_SHADOW", "USE_BB_PWD_GRP", "PASSWD",
+                       "FEATURE_SECURETTY"):
+            self.assertNotIn(symbol, symbols)
+        # onu-store hashes a new password with cryptpw.
+        self.assertIn("CRYPTPW", symbols)
 
 
 class Layout(unittest.TestCase):

@@ -7,10 +7,11 @@
 # What the boot does is in /etc/init.d/rcS. It runs once and init waits for it.
 ::sysinit:/etc/init.d/rcS
 
-# A shell on the console, started again whenever it exits. The dash makes it a
-# login shell with the console as its controlling terminal. There is no login
-# prompt: the console of the stick is a serial line on the bench.
-::respawn:-/bin/sh
+# A login prompt on the console, started again whenever the session ends. The
+# one account is root, with the password that ssh and the panel take too
+# (onu-store keeps it; until one is set it is "admin"). The speed stays the
+# one the boot loader set, 115200 baud.
+console::respawn:/sbin/getty -L console 0 vt100
 
 # What init does when it is told to restart or halt.
 ::ctrlaltdel:/sbin/reboot

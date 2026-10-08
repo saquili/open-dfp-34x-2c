@@ -21,6 +21,8 @@ import zlib
 HERE = os.path.dirname(os.path.realpath(__file__))
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
 SCRIPT = os.path.join(BOARD, "post-image.sh")
+FINISH = os.path.join(BOARD, "finish-root.sh")
+SHADOW = "root::::::::\ndaemon:*:::::::\n"
 REAL_MKSQUASHFS = shutil.which("mksquashfs")
 EPOCH = "1747000000"
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
@@ -32,6 +34,7 @@ STUB = """\
 printf '%s\\n' "$@" > "$STUB_ARGS"
 printf '%s\\n' "${SOURCE_DATE_EPOCH-unset}" > "$STUB_ARGS.epoch"
 (cd "$1" && find . | sort) > "$STUB_ARGS.tree"
+readlink "$1/etc/shadow" > "$STUB_ARGS.shadow" || true
 [ -z "$STUB_FAIL" ] || exit 3
 cp "$STUB_PAYLOAD" "$2"
 """
@@ -52,6 +55,8 @@ class Scratch(unittest.TestCase):
             handle.write("board\n")
         with open(os.path.join(self.target, "etc", "os-release"), "w") as handle:
             handle.write("NAME=test\nBUILD_ID=0123456789ab\n")
+        with open(os.path.join(self.target, "etc", "shadow"), "w") as handle:
+            handle.write(SHADOW)
         self.kernel = b"\x27\x05\x19\x56 a kernel image\n" * 5
         with open(os.path.join(self.images, "uImage"), "wb") as handle:
             handle.write(self.kernel)
@@ -137,7 +142,7 @@ class WithAStandIn(Scratch):
         self.run_script()
         with open(self.args_file) as handle:
             args = handle.read().splitlines()
-        self.assertEqual(args[0], self.target)
+        self.assertNotEqual(args[0], self.target)
         self.assertEqual(args[1], os.path.join(self.images, "r0.squashfs.part"))
         rest = args[2:]
         for flag in ("-noappend", "-reproducible", "-nopad", "-no-xattrs", "-no-exports",
@@ -152,6 +157,29 @@ class WithAStandIn(Scratch):
         with open(self.args_file) as handle:
             args = handle.read().splitlines()
         self.assertEqual(args[args.index("-e") + 1], "THIS_IS_NOT_YOUR_ROOT_FILESYSTEM")
+
+    def test_the_image_has_shadow_as_a_link_to_the_file_the_boot_writes(self):
+        done = self.run_script()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        with open(self.args_file + ".shadow") as handle:
+            self.assertEqual(handle.read().strip(), "../run/shadow")
+        with open(self.args_file + ".tree") as handle:
+            self.assertIn("./etc/shadow.image", handle.read().split())
+
+    def test_the_target_tree_keeps_its_shadow_file(self):
+        self.run_script()
+        shadow = os.path.join(self.target, "etc", "shadow")
+        self.assertFalse(os.path.islink(shadow))
+        with open(shadow) as handle:
+            self.assertEqual(handle.read(), SHADOW)
+        self.assertFalse(os.path.exists(os.path.join(self.target, "etc", "shadow.image")))
+
+    def test_a_target_without_shadow_is_refused(self):
+        os.remove(os.path.join(self.target, "etc", "shadow"))
+        done = self.run_script()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("finish-root.sh", done.stderr)
+        self.assertNotIn("r0.squashfs", self.names())
 
     def test_the_compression_is_one_the_kernel_reads(self):
         # docs/handbook/boot-contract.rst: xz (4).
@@ -294,7 +322,7 @@ class WithAStandInAndALocalOverlay(BenchFiles):
         self.assertNotEqual(packed_from, self.target)
         self.assertEqual(sorted(os.listdir(self.target)), ["etc"])
         self.assertEqual(sorted(os.listdir(os.path.join(self.target, "etc"))),
-                         ["hostname", "os-release"])
+                         ["hostname", "os-release", "shadow"])
 
     def test_the_next_run_without_the_variable_packs_none_of_them(self):
         self.run_with()
@@ -321,8 +349,8 @@ class WithAStandInAndALocalOverlay(BenchFiles):
     def test_an_empty_variable_is_no_overlay(self):
         done = self.run_with(OPEN_DFP_34X_2C_LOCAL_OVERLAY="")
         self.assertEqual(done.returncode, 0, done.stderr)
-        with open(self.args_file) as handle:
-            self.assertEqual(handle.read().splitlines()[0], self.target)
+        self.assertNotIn("./etc/board.conf", self.packed())
+        self.assertIn("./etc/hostname", self.packed())
 
 
 def superblock(data):
@@ -365,7 +393,10 @@ class WithTheRealTool(Scratch):
         os.makedirs(os.path.join(self.target, "etc"))
         with open(os.path.join(self.target, "etc", "os-release"), "w") as handle:
             handle.write("BUILD_ID=0123456789ab\n")
-        os.utime(os.path.join(self.target, "etc", "os-release"), (mtime, mtime))
+        with open(os.path.join(self.target, "etc", "shadow"), "w") as handle:
+            handle.write(SHADOW)
+        for name in ("os-release", "shadow"):
+            os.utime(os.path.join(self.target, "etc", name), (mtime, mtime))
         done = self.run_script(mksquashfs=REAL_MKSQUASHFS)
         self.assertEqual(done.returncode, 0, done.stderr)
         return self.read("r0.squashfs")
@@ -467,6 +498,44 @@ class TheScriptItself(unittest.TestCase):
             with self.subTest(shell=shell):
                 done = subprocess.run([shell, "-n", SCRIPT], capture_output=True, text=True)
                 self.assertEqual(done.returncode, 0, done.stderr)
+
+
+class FinishRoot(unittest.TestCase):
+    """finish-root.sh, which post-image.sh and make ram-image run on their copies."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = self._tmp.name
+        os.makedirs(os.path.join(self.root, "etc"))
+        with open(os.path.join(self.root, "etc", "shadow"), "w") as handle:
+            handle.write(SHADOW)
+
+    def run_finish(self):
+        return subprocess.run(["sh", FINISH, self.root], capture_output=True, text=True)
+
+    def test_shadow_becomes_a_link_and_the_accounts_stay_beside_it(self):
+        done = self.run_finish()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        etc = os.path.join(self.root, "etc")
+        self.assertEqual(os.readlink(os.path.join(etc, "shadow")), "../run/shadow")
+        with open(os.path.join(etc, "shadow.image")) as handle:
+            self.assertEqual(handle.read(), SHADOW)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(etc, "shadow.image")).st_mode), 0o600)
+
+    def test_a_copy_finished_before_is_refused(self):
+        self.run_finish()
+        done = self.run_finish()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("finished before", done.stderr)
+        with open(os.path.join(self.root, "etc", "shadow.image")) as handle:
+            self.assertEqual(handle.read(), SHADOW)
+
+    def test_a_tree_without_shadow_is_refused(self):
+        os.remove(os.path.join(self.root, "etc", "shadow"))
+        done = self.run_finish()
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("no ", done.stderr)
 
 
 if __name__ == "__main__":

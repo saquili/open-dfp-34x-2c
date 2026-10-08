@@ -5,3 +5,8 @@
 # system is read-only, so the history of a shell is kept in memory.
 HISTFILE=/tmp/.ash_history
 PS1='\w # '
+
+# Until root has a password of its own, the default one ("admin") opens the
+# console, ssh and the panel to anyone who knows it.
+[ -s /run/onu-auth ] ||
+	echo "The default password is in force: set one of your own with passwd."
