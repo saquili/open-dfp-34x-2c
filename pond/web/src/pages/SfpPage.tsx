@@ -126,27 +126,26 @@ function LaneCard() {
             {MODES.map((m) => (
               <label
                 key={m.id}
-                className={`flex gap-3 rounded-box border p-3 ${m.ready ? "cursor-pointer" : "opacity-55"} ${chosen === m.id ? "border-primary bg-primary/5" : "border-base-300"}`}
+                title={t(m.hint)}
+                className={`flex items-center gap-2 rounded-box border px-3 py-2 ${m.ready ? "cursor-pointer" : "opacity-55"} ${chosen === m.id ? "border-primary bg-primary/5" : "border-base-300"}`}
               >
                 <input
                   type="radio"
                   name="lane"
-                  className="radio radio-sm radio-primary mt-0.5"
+                  className="radio radio-sm radio-primary"
                   checked={chosen === m.id}
                   disabled={!m.ready || !l}
                   onChange={() => setPick(m.id)}
                 />
-                <span>
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    {t(m.label)}
-                    {m.id === active && <Badge tone="good">{t("sfp.modeActive")}</Badge>}
-                    {!m.ready && <Badge tone="neutral">{t("internet.soon")}</Badge>}
-                  </span>
-                  <span className="block text-xs text-base-content/65">{t(m.hint)}</span>
-                </span>
+                <span className="text-sm font-medium">{t(m.label)}</span>
+                {m.id === active && <Badge tone="good">{t("sfp.modeActive")}</Badge>}
+                {!m.ready && <Badge tone="neutral">{t("internet.soon")}</Badge>}
               </label>
             ))}
           </div>
+          <p className="text-xs text-base-content/70">
+            {t(MODES.find((m) => m.id === chosen)?.hint ?? "sfp.modeAutoHint")}
+          </p>
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
