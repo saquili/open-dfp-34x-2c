@@ -87,8 +87,9 @@ jobs:
       # checkpatch message types to leave out, comma-separated. A series adds
       # its files first and its MAINTAINERS entries last, so every commit
       # that adds a file would otherwise ask whether MAINTAINERS needs
-      # updating.
-      CHECKPATCH_IGNORE: "FILE_PATH_CHANGES"
+      # updating. REPEATED_WORD takes a correct "had had" in a published
+      # commit message for a typo, and a published message cannot change.
+      CHECKPATCH_IGNORE: "FILE_PATH_CHANGES,REPEATED_WORD"
     steps:
       - name: Install the tools
         # With python3-ply and python3-git, checkpatch validates SPDX

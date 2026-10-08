@@ -111,8 +111,10 @@ that stops with an error does.
     ``scripts/checkpatch.pl --strict`` on every commit above the imported
     release, with SPDX expressions validated by ``scripts/spdxcheck.py``.
     The ``Co-Authored-By:`` trailer, which checkpatch does not know, is
-    taken out of the patches first, and ``FILE_PATH_CHANGES`` is not
-    reported: a series adds its MAINTAINERS entries in its last commit.
+    taken out of the patches first, and two types are not reported:
+    ``FILE_PATH_CHANGES``, as a series adds its MAINTAINERS entries in its
+    last commit, and ``REPEATED_WORD``, which takes a correct "had had" in a
+    published commit message for a typo.
     With no commits there yet, it checks that the split is the imported
     release. The split needs the commit the import was squashed from, which
     the repository keeps with a tag (``CONTRIBUTING.rst``); push that tag
