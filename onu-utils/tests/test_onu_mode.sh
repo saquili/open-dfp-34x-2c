@@ -240,6 +240,8 @@ check 'logged "^ip link add link sfp name lan type vlan id 36"'
 check 'logged "^ip address add 192.0.2.254/32 dev lan"'
 # The LAN link forwards only the handed address's packets (BCP 38).
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan/rp_filter")" = 1 ]'
+# The stick is no hop: the switch routes with the TTL unchanged.
+check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value false"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 check '! logged "^udhcpd"'
 "$MODE_SCRIPT" tick 2>/dev/null
@@ -510,6 +512,7 @@ rm "$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" apply 2>/dev/null
 check 'logged "^ip address del 169.254.0.1/32 dev lan"'
 check 'logged "^ip link del lan"'
+check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value true"'
 check 'logged "^killall -USR2 omcid"'
 check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-lan" ]'
