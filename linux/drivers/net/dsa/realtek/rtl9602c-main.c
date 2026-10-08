@@ -1051,15 +1051,15 @@ static void rtl9602c_irq_setup(struct rtl9602c_priv *p)
  * captured before the new setting is kept. The four devlink parameters make
  * up one setting, and each of them re-arms with all four.
  */
-static void rtl9602c_hsb_arm(struct rtl9602c_priv *p)
+static void rtl9602c_pktdbg_arm(struct rtl9602c_priv *p)
 {
 	rtl9602c_w(p, RTL9602C_PKTDBG_LATCH,
 		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_MODE, RTL9602C_PKTDBG_LATCH_MODE_NONE));
 	rtl9602c_w(p, RTL9602C_PKTDBG_LATCH,
-		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_MODE, p->hsb.mode) |
-		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_INGRESS_PORTS, p->hsb.igr) |
-		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_EGRESS_PORTS, p->hsb.egr) |
-		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_REASON, p->hsb.reason));
+		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_MODE, p->pktdbg.mode) |
+		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_INGRESS_PORTS, p->pktdbg.igr) |
+		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_EGRESS_PORTS, p->pktdbg.egr) |
+		   FIELD_PREP(RTL9602C_PKTDBG_LATCH_REASON, p->pktdbg.reason));
 }
 
 /*
@@ -1074,9 +1074,9 @@ static void rtl9602c_hsb_arm(struct rtl9602c_priv *p)
  * came in by. An empty latch is refused, so every snapshot describes a
  * frame.
  */
-static int rtl9602c_hsb_snapshot(struct devlink *dl,
-				 const struct devlink_region_ops *ops,
-				 struct netlink_ext_ack *extack, u8 **data)
+static int rtl9602c_pktdbg_snapshot(struct devlink *dl,
+				    const struct devlink_region_ops *ops,
+				    struct netlink_ext_ack *extack, u8 **data)
 {
 	struct dsa_switch *ds = dsa_devlink_to_ds(dl);
 	struct rtl9602c_priv *p = ds->priv;
@@ -1104,9 +1104,9 @@ static int rtl9602c_hsb_snapshot(struct devlink *dl,
 	return 0;
 }
 
-static const struct devlink_region_ops rtl9602c_hsb_region_ops = {
+static const struct devlink_region_ops rtl9602c_pktdbg_region_ops = {
 	.name = "frame_capture",
-	.snapshot = rtl9602c_hsb_snapshot,
+	.snapshot = rtl9602c_pktdbg_snapshot,
 	.destructor = kfree,
 };
 
@@ -1161,16 +1161,16 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 
 	switch (id) {
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_MODE:
-		ctx->val.vu8 = p->hsb.mode;
+		ctx->val.vu8 = p->pktdbg.mode;
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_INGRESS_PORTS:
-		ctx->val.vu8 = p->hsb.igr;
+		ctx->val.vu8 = p->pktdbg.igr;
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_EGRESS_PORTS:
-		ctx->val.vu8 = p->hsb.egr;
+		ctx->val.vu8 = p->pktdbg.egr;
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_REASON:
-		ctx->val.vu8 = p->hsb.reason;
+		ctx->val.vu8 = p->pktdbg.reason;
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_LOOPDET_EN:
 		ctx->val.vu8 = rtl9602c_r(p, RTL9602C_LOOPDET_CTRL) &
@@ -1304,24 +1304,24 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_MODE:
 		if (ctx->val.vu8 > RTL9602C_PKTDBG_LATCH_MODE_MAX)
 			return -ERANGE;
-		p->hsb.mode = ctx->val.vu8;
-		rtl9602c_hsb_arm(p);
+		p->pktdbg.mode = ctx->val.vu8;
+		rtl9602c_pktdbg_arm(p);
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_INGRESS_PORTS:
 		if (ctx->val.vu8 & ~(u8)RTL9602C_DOS_PORT_EN_MASK)
 			return -ERANGE;
-		p->hsb.igr = ctx->val.vu8;
-		rtl9602c_hsb_arm(p);
+		p->pktdbg.igr = ctx->val.vu8;
+		rtl9602c_pktdbg_arm(p);
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_EGRESS_PORTS:
 		if (ctx->val.vu8 & ~(u8)RTL9602C_DOS_PORT_EN_MASK)
 			return -ERANGE;
-		p->hsb.egr = ctx->val.vu8;
-		rtl9602c_hsb_arm(p);
+		p->pktdbg.egr = ctx->val.vu8;
+		rtl9602c_pktdbg_arm(p);
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_PKTDBG_REASON:
-		p->hsb.reason = ctx->val.vu8;
-		rtl9602c_hsb_arm(p);
+		p->pktdbg.reason = ctx->val.vu8;
+		rtl9602c_pktdbg_arm(p);
 		return 0;
 	/*
 	 * Enabling needs the magic first; the interrupt source follows the
@@ -1719,11 +1719,11 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	 * hold one: arm it in mode none, so that no capture predates the
 	 * driver.
 	 */
-	p->hsb.mode = RTL9602C_PKTDBG_LATCH_MODE_NONE;
-	p->hsb.igr = RTL9602C_DOS_PORT_EN_MASK;
-	p->hsb.egr = RTL9602C_DOS_PORT_EN_MASK;
-	p->hsb.reason = 0;
-	rtl9602c_hsb_arm(p);
+	p->pktdbg.mode = RTL9602C_PKTDBG_LATCH_MODE_NONE;
+	p->pktdbg.igr = RTL9602C_DOS_PORT_EN_MASK;
+	p->pktdbg.egr = RTL9602C_DOS_PORT_EN_MASK;
+	p->pktdbg.reason = 0;
+	rtl9602c_pktdbg_arm(p);
 
 	if (dsa_devlink_params_register(ds, rtl9602c_devlink_params,
 					ARRAY_SIZE(rtl9602c_devlink_params)))
@@ -1731,12 +1731,12 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	else
 		p->params_registered = true;
 
-	p->hsb_region = dsa_devlink_region_create(ds, &rtl9602c_hsb_region_ops,
-						  1, RTL9602C_PKTDBG_SNAPSHOT_WORDS *
-						  sizeof(u32));
-	if (IS_ERR(p->hsb_region)) {
+	p->pktdbg_region = dsa_devlink_region_create(ds, &rtl9602c_pktdbg_region_ops,
+						     1, RTL9602C_PKTDBG_SNAPSHOT_WORDS *
+						     sizeof(u32));
+	if (IS_ERR(p->pktdbg_region)) {
 		pr_err("no devlink region; frames cannot be captured\n");
-		p->hsb_region = NULL;
+		p->pktdbg_region = NULL;
 	}
 
 	/*
@@ -1824,8 +1824,8 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 	rtl9602c_omci_teardown(p);
 	rtl9602c_debugfs_exit(p);
 	rtl9602c_ptp_unregister(p);
-	if (p->hsb_region)
-		dsa_devlink_region_destroy(p->hsb_region);
+	if (p->pktdbg_region)
+		dsa_devlink_region_destroy(p->pktdbg_region);
 	if (p->params_registered)
 		dsa_devlink_params_unregister(ds, rtl9602c_devlink_params,
 					      ARRAY_SIZE(rtl9602c_devlink_params));

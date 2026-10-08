@@ -408,7 +408,7 @@ Interfaces to user space
   ``/sys/module/rtl9602c/parameters/`` (see "phylink and the lane parameters").
 - ``/sys/kernel/debug/rtl9602c/``, one directory whose views the blocks of the
   driver create. ``rtl9602c-offload.c`` creates ``qdepth``, ``rma``, ``svlan``,
-  ``hsd``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf`` and ``l3capture``;
+  ``egress_capture``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf`` and ``l3capture``;
   ``rtl9602c-l2.c`` creates ``fdb``; ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``, ``usburst``,
   ``gemusintr``, ``bwmap`` and ``uscntr``; ``rtl9602c-ponmac.c`` creates
   ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``,

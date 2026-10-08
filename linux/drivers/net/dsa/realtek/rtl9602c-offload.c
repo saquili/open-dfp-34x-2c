@@ -6320,7 +6320,8 @@ static const struct file_operations rtl9602c_l2learn_fops = {
  * @len bits from @lsb up of the egress descriptor, bit b being bit b % 32 of
  * word b / 32.
  */
-static u64 rtl9602c_hsd_field(const u32 *w, unsigned int lsb, unsigned int len)
+static u64 rtl9602c_egress_capture_field(const u32 *w, unsigned int lsb,
+					 unsigned int len)
 {
 	u64 v = 0;
 	unsigned int i;
@@ -6454,14 +6455,14 @@ static int rtl9602c_svlan_open(struct inode *inode, struct file *file)
 }
 
 /*
- * hsd: the egress descriptor capture, which holds the last frame to leave by
+ * egress_capture: the egress descriptor capture, which holds the last frame to leave by
  * the ports its configuration word names: the 15 words raw, the configuration
  * decoded, the PTP fields and the switch's clock at the same moment. The PTP
  * identifier and action, and the mode and reason fields, are printed but not
  * verified. A write stores a number, 0x for hexadecimal and 0 for octal, as the
  * configuration word, which re-arms the capture and changes no forwarding.
  */
-static int rtl9602c_hsd_show(struct seq_file *s, void *unused)
+static int rtl9602c_egress_capture_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
 	u32 w[RTL9602C_PKTDBG_DATA_WORDS];
@@ -6484,28 +6485,29 @@ static int rtl9602c_hsd_show(struct seq_file *s, void *unused)
 		   FIELD_GET(RTL9602C_PKTDBG_CFG_EGRESS_PORT, cfg));
 
 	seq_printf(s, "ptp %llu  act %llu  id %llu  stamp %llu.%09llu\n",
-		   rtl9602c_hsd_field(w, RTL9602C_PKTDBG_PTP_FLAG_LSB, 1),
-		   rtl9602c_hsd_field(w, RTL9602C_PKTDBG_PTP_ACTION_LSB,
-				      RTL9602C_PKTDBG_PTP_ACTION_BITS),
-		   rtl9602c_hsd_field(w, RTL9602C_PKTDBG_PTP_ID_LSB,
-				      RTL9602C_PKTDBG_PTP_ID_BITS),
-		   rtl9602c_hsd_field(w, RTL9602C_PKTDBG_PTP_SEC_LSB,
-				      RTL9602C_PKTDBG_PTP_SEC_BITS),
-		   rtl9602c_hsd_field(w, RTL9602C_PKTDBG_PTP_NSEC_LSB,
-				      RTL9602C_PKTDBG_PTP_NSEC_BITS));
+		   rtl9602c_egress_capture_field(w, RTL9602C_PKTDBG_PTP_FLAG_LSB, 1),
+		   rtl9602c_egress_capture_field(w, RTL9602C_PKTDBG_PTP_ACTION_LSB,
+						 RTL9602C_PKTDBG_PTP_ACTION_BITS),
+		   rtl9602c_egress_capture_field(w, RTL9602C_PKTDBG_PTP_ID_LSB,
+						 RTL9602C_PKTDBG_PTP_ID_BITS),
+		   rtl9602c_egress_capture_field(w, RTL9602C_PKTDBG_PTP_SEC_LSB,
+						 RTL9602C_PKTDBG_PTP_SEC_BITS),
+		   rtl9602c_egress_capture_field(w, RTL9602C_PKTDBG_PTP_NSEC_LSB,
+						 RTL9602C_PKTDBG_PTP_NSEC_BITS));
 
 	rtl9602c_ptp_now(p, &ts);
 	seq_printf(s, "clock    %lld.%09ld\n", (s64)ts.tv_sec, ts.tv_nsec);
 	return 0;
 }
 
-static int rtl9602c_hsd_open(struct inode *inode, struct file *file)
+static int rtl9602c_egress_capture_open(struct inode *inode, struct file *file)
 {
-	return single_open(file, rtl9602c_hsd_show, inode->i_private);
+	return single_open(file, rtl9602c_egress_capture_show, inode->i_private);
 }
 
-static ssize_t rtl9602c_hsd_write(struct file *file, const char __user *ubuf,
-				  size_t len, loff_t *ppos)
+static ssize_t rtl9602c_egress_capture_write(struct file *file,
+					     const char __user *ubuf,
+					     size_t len, loff_t *ppos)
 {
 	struct rtl9602c_priv *p = file_inode(file)->i_private;
 	char buf[24], *s;
@@ -6622,11 +6624,11 @@ static const struct file_operations rtl9602c_svlan_fops = {
 	.release	= single_release,
 };
 
-static const struct file_operations rtl9602c_hsd_fops = {
+static const struct file_operations rtl9602c_egress_capture_fops = {
 	.owner		= THIS_MODULE,
-	.open		= rtl9602c_hsd_open,
+	.open		= rtl9602c_egress_capture_open,
 	.read		= seq_read,
-	.write		= rtl9602c_hsd_write,
+	.write		= rtl9602c_egress_capture_write,
 	.llseek		= seq_lseek,
 	.release	= single_release,
 };
@@ -7141,7 +7143,7 @@ void rtl9602c_l34_notifiers_unregister(struct rtl9602c_priv *p)
  * @p: the switch, with its debugfs directory created
  *
  * Creates rma, svlan, l3nat, l3flow, l2learn, qos and cf, mode 0400, and
- * qdepth, hsd and l3capture, mode 0600, since a write to them changes the
+ * qdepth, egress_capture and l3capture, mode 0600, since a write to them changes the
  * hardware's state.
  */
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
@@ -7152,8 +7154,8 @@ void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_rma_fops);
 	debugfs_create_file("svlan", 0400, p->debugfs, p,
 			    &rtl9602c_svlan_fops);
-	debugfs_create_file("hsd", 0600, p->debugfs, p,
-			    &rtl9602c_hsd_fops);
+	debugfs_create_file("egress_capture", 0600, p->debugfs, p,
+			    &rtl9602c_egress_capture_fops);
 	debugfs_create_file("l3nat", 0400, p->debugfs, p,
 			    &rtl9602c_l3nat_fops);
 	debugfs_create_file("l3flow", 0400, p->debugfs, p,

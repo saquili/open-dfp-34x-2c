@@ -69,7 +69,7 @@ What the driver offers
 - Debugfs views of registers that the driver does not use for timestamping:
   the per-port and per-message settings, the PON's time-of-day value and the
   time-of-day transmitter (``ptpstat`` and ``todstat``), and the egress
-  capture (``hsd``).
+  capture (``egress_capture``).
 
 The blocks
 ----------
@@ -104,7 +104,7 @@ The blocks
    * - Egress descriptor capture
      - The descriptor of the last frame that left by a port, with the PTP
        fields of the frame.
-     - The ``hsd`` view.
+     - The ``egress_capture`` view.
      - "The egress capture"
    * - Per-port and per-message settings
      - A PTP enable per port, a transparent-clock bit per port and an action
@@ -212,7 +212,7 @@ The files that hold this page:
      - Registration of the PHC at setup and its removal at teardown, and the
        branch of the interrupt handler for the once-per-second source.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
-     - The ``hsd`` view, which reads the egress capture and the clock.
+     - The ``egress_capture`` view, which reads the egress capture and the clock.
    * - ``drivers/net/ethernet/realtek/rtl9602c-eth.c``
      - The conduit's side of the timestamp tag: the ``RTL9602C_ETH_P_REALTEK``
        and ``RTL9602C_PTP_TAG_*`` macros and the code that takes the tag off.
@@ -244,7 +244,7 @@ Configuration
      - The conduit, which takes the timestamp tag off a received PTP message
        and keeps its time as the frame's hardware timestamp.
    * - ``CONFIG_DEBUG_FS``
-     - The views ``ptpstat`` and ``todstat``, and ``hsd`` of the egress
+     - The views ``ptpstat`` and ``todstat``, and ``egress_capture`` of the egress
        capture.
 
 ``rtl9602c_defconfig`` (``arch/mips/configs/``) does not name
@@ -296,7 +296,7 @@ Interfaces to user space
   ``SOF_TIMESTAMPING_RAW_HARDWARE`` on a socket of ``sfp`` or ``pon`` returns
   the hardware timestamp of a received PTP message.
 - Three debugfs views in ``/sys/kernel/debug/rtl9602c/``. ``ptpstat`` and
-  ``todstat`` (mode 0400) are created by ``rtl9602c-ptp.c``; ``hsd`` (mode
+  ``todstat`` (mode 0400) are created by ``rtl9602c-ptp.c``; ``egress_capture`` (mode
   0600, because a write changes the capture's setting) is created by
   ``rtl9602c-offload.c``. Reading ``ptpstat`` clears the per-port transmit
   indications.
@@ -313,7 +313,7 @@ driver does with it, followed by fact tables with three columns: *Fact*, *Tag*
 and *Checked by*. The tag says how the fact is established. **M**, measured on
 the board (the DFP-34X-2C3): *Checked by* gives the command or observation,
 through the driver's own interfaces (the PHC, ``SO_TIMESTAMPING``, the kernel
-log, the debugfs views ``ptpstat``, ``todstat`` and ``hsd``), that shows it.
+log, the debugfs views ``ptpstat``, ``todstat`` and ``egress_capture``), that shows it.
 **T**, tested by function: the driver depends on the fact, and the named
 behaviour fails if it is wrong. **P**, public standard: *Checked by* names the
 document and the clause. **I**, inferred, not verified: the fact is an
@@ -488,13 +488,13 @@ middle value, 2^27, the clock advances one second per second.
    * - Reading the time is a latch command followed by three reads, and a step
        is three writes followed by a command. ``ptp_lock`` serialises
        ``gettime64``, ``adjtime``, ``adjfine`` and the clock read of the
-       ``hsd`` view, so that two callers cannot hand each other's capture
+       ``egress_capture`` view, so that two callers cannot hand each other's capture
        back; ``settime64`` takes it once for its read and once for its step.
      - T
      - The PTP hardware clock reads and steers.
 
 Reading the time, ``rtl9602c_ptp_now()``, which ``rtl9602c_ptp_gettime()`` and
-the ``hsd`` view call, in order:
+the ``egress_capture`` view call, in order:
 
 1. Take ``ptp_lock``. Purpose: the latch and the reads are one operation. (T)
 2. Set ``RTL9602C_PTP_CLK_CTRL_LATCH`` by read-modify-write. Purpose: capture
@@ -671,7 +671,7 @@ The tag
        the same instant to the nanosecond, with all 48 bits of seconds, while
        the frame's software stamp read 201.8 s.
      - M
-     - ``SO_TIMESTAMPING`` gave 20,323.098509680 s, and the ``hsd`` view the
+     - ``SO_TIMESTAMPING`` gave 20,323.098509680 s, and the ``egress_capture`` view the
        same time.
    * - The tag is added on egress to the CPU port, whatever the per-port
        enable (``RTL9602C_PTP_PORT_EN``) and whatever the ingress action for
@@ -861,7 +861,7 @@ implemented" in the netlink extended ack.
        driver therefore offers only ``HWTSTAMP_TX_OFF`` and answers any other
        ``tx_type`` with ``-ERANGE`` and a message.
      - M
-     - ``hsd``, ``ptpstat`` and the conduit's receive log, for each setting;
+     - ``egress_capture``, ``ptpstat`` and the conduit's receive log, for each setting;
        for the fields, three Syncs per action from a packet socket on
        ``sfp``, captured at the far end.
    * - Without a transmit stamp a port can timestamp the Syncs it receives but
@@ -905,7 +905,7 @@ ports its configuration names. The descriptor of a PTP frame carries the PTP
 fields of the frame: a flag that the frame is a PTP message, and the time the
 switch stamped it with. For a frame on its way to the CPU that time is the
 receive stamp, so the capture is the means of checking the tag's time. The
-instrument is read and armed through the debugfs view ``hsd`` of
+instrument is read and armed through the debugfs view ``egress_capture`` of
 ``rtl9602c-offload.c``, which also reads the switch clock at the same moment.
 The same instrument is described from the side of frame capture in
 Documentation/networking/dsa/rtl9602c-acl-qos.rst ("Egress descriptor
@@ -928,13 +928,13 @@ The view prints four lines::
    * - ``RTL9602C_PKTDBG_DATA(i)`` = ``0x02a070`` + 4 x i, i = 0 ... 14
        (``RTL9602C_PKTDBG_DATA_WORDS`` = 15), hold the descriptor of the last
        frame that left and matched the filter in ``RTL9602C_PKTDBG_CFG``
-       (``0x02a0b4``): one frame, the most recent, not a queue. The ``hsd``
+       (``0x02a0b4``): one frame, the most recent, not a queue. The ``egress_capture``
        view prints the words, the filter, the decoded PTP fields and the
        clock; a write to it stores the written value in
        ``RTL9602C_PKTDBG_CFG``.
      - M
-     - ``cat /sys/kernel/debug/rtl9602c/hsd`` after PTP frames; then
-       ``echo <word> > /sys/kernel/debug/rtl9602c/hsd`` and a second read.
+     - ``cat /sys/kernel/debug/rtl9602c/egress_capture`` after PTP frames; then
+       ``echo <word> > /sys/kernel/debug/rtl9602c/egress_capture`` and a second read.
    * - Filter fields: ``RTL9602C_PKTDBG_CFG_EGRESS_PORT`` (bits 2:0) selects
        the frames leaving one port, ``RTL9602C_PKTDBG_CFG_INGRESS_PORT``
        (bits 5:3) those arriving on one.
@@ -962,9 +962,9 @@ The view prints four lines::
        0 straight after the configuration is written and 1 once a frame has
        been captured.
      - M
-     - ``hsd``: a configuration written through the view read back with the bit
+     - ``egress_capture``: a configuration written through the view read back with the bit
        clear, and with it set once traffic had left by the selected port.
-   * - Printed by ``hsd`` but not interpreted: a 2-bit action at bits 180:179
+   * - Printed by ``egress_capture`` but not interpreted: a 2-bit action at bits 180:179
        (``RTL9602C_PKTDBG_PTP_ACTION_LSB``,
        ``RTL9602C_PKTDBG_PTP_ACTION_BITS``), a 7-bit identifier at bits
        178:172 (``RTL9602C_PKTDBG_PTP_ID_LSB``,

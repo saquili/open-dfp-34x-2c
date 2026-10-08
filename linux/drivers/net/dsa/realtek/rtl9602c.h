@@ -3428,25 +3428,25 @@ struct rtl9602c_priv {
 	/** @egress: the qdiscs each port follows */
 	struct rtl9602c_egress egress[RTL9602C_NUM_PORTS];
 
-	/** @hsb: the frame capture's setting, as armed */
+	/** @pktdbg: the frame capture's setting, as armed */
 	struct {
-		/** @hsb.mode: the capture mode */
+		/** @pktdbg.mode: the capture mode */
 		u8	mode;
-		/** @hsb.igr: the ingress port mask */
+		/** @pktdbg.igr: the ingress port mask */
 		u8	igr;
-		/** @hsb.egr: the egress port mask */
+		/** @pktdbg.egr: the egress port mask */
 		u8	egr;
-		/** @hsb.reason: the forwarding reason mode 7 waits for */
+		/** @pktdbg.reason: the forwarding reason mode 7 waits for */
 		u8	reason;
-	} hsb;
+	} pktdbg;
 
 	/**
 	 * @dos_flood_th: the flood thresholds last written, by
 	 * RTL9602C_DOS_FLOOD_*; the registers are never read
 	 */
 	u8 dos_flood_th[3];
-	/** @hsb_region: the frame_capture devlink region */
-	struct devlink_region *hsb_region;
+	/** @pktdbg_region: the frame_capture devlink region */
+	struct devlink_region *pktdbg_region;
 	/** @params_registered: setup registered the devlink parameters */
 	bool params_registered;
 };

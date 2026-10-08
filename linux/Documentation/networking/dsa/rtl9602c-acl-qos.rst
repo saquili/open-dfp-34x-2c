@@ -109,7 +109,7 @@ thresholds and instruments.
      - "Frame capture"
    * - Egress descriptor capture
      - The last descriptor that left by a port.
-     - The debugfs view ``hsd``.
+     - The debugfs view ``egress_capture``.
      - "Egress descriptor capture"
 
 How the driver reaches the blocks
@@ -179,7 +179,7 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The ACL, the classifier entries, the meters, storm control, the ingress
        policer, the scheduler and the shaper, the priority maps, and the debugfs
-       views ``cf``, ``qos``, ``qdepth`` and ``hsd``. The L3/NAT engine of the
+       views ``cf``, ``qos``, ``qdepth`` and ``egress_capture``. The L3/NAT engine of the
        same file is the *l3-nat* page's, and its views ``rma``, ``svlan`` and
        ``l2learn`` are the *bridging* page's.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
@@ -193,7 +193,7 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers and fields of these blocks, the tables of storm classes
        and devlink parameters, and the driver's state for them (``acl``,
-       ``storm``, ``meter_used``, ``cpu_meter``, ``egress``, ``hsb``,
+       ``storm``, ``meter_used``, ``cpu_meter``, ``egress``, ``pktdbg``,
        ``dos_flood_th``, ``cf_used``).
 
 Configuration
@@ -224,7 +224,7 @@ Configuration
        reads the switch's current maps into the DCB tables when it creates the
        user interfaces.
    * - ``CONFIG_DEBUG_FS``
-     - The views ``cf``, ``qos``, ``qdepth`` and ``hsd``.
+     - The views ``cf``, ``qos``, ``qdepth`` and ``egress_capture``.
 
 ``rtl9602c_defconfig`` sets all of them.
 
@@ -264,7 +264,7 @@ Interfaces to user space
   ``dos_*``, ``storm_*``, ``loop_detect*`` and ``pktdbg_*``, and the region
   ``frame_capture``. The *devlink* page lists the parameters.
 - Four debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``cf`` and ``qos``
-  (mode 0400), ``qdepth`` and ``hsd`` (mode 0600, because a write changes the
+  (mode 0400), ``qdepth`` and ``egress_capture`` (mode 0600, because a write changes the
   hardware). ``qos`` shows, raw, the words that setup returns to their reset
   values: per port the priority-to-queue word, the scheduler's weighted-queue
   bits, the queue weights, the egress shaper and the ingress policer; then the
@@ -2711,7 +2711,7 @@ The forwarding reasons seen in captures:
        "Resource temporarily unavailable". T: the captures of the rows above
        were armed this way.
 
-Arming the capture, ``rtl9602c_hsb_arm()``, in order:
+Arming the capture, ``rtl9602c_pktdbg_arm()``, in order:
 
 1. Write ``RTL9602C_PKTDBG_LATCH`` with mode none. Purpose: it clears VALID, so
    that nothing captured before the new setting is kept. (M)
@@ -2726,7 +2726,7 @@ Egress descriptor capture
 A second instrument holds the last frame descriptor on the egress side that
 matches a configuration: the ports and, if set, a mode and a forwarding reason.
 The descriptor of a PTP frame carries the frame's PTP fields. The instrument is
-read and armed through the debugfs view ``hsd``. The PTP clock and the
+read and armed through the debugfs view ``egress_capture``. The PTP clock and the
 timestamps are the *ptp* page's.
 
 .. list-table::
@@ -2744,7 +2744,7 @@ timestamps are the *ptp* page's.
        ``RTL9602C_PKTDBG_CFG_VALID`` (bit 16) is set while one is held. It holds
        one descriptor, the latest. Writing the configuration word clears VALID.
      - M
-     - ``echo <word> > /sys/kernel/debug/rtl9602c/hsd`` naming each egress port
+     - ``echo <word> > /sys/kernel/debug/rtl9602c/egress_capture`` naming each egress port
        in turn while PTP frames arrived: only port 3 held a PTP descriptor; an
        ingress port of 6, which does not exist, made it match nothing; a read
        after a fresh write held a fresh frame.
@@ -2779,15 +2779,15 @@ timestamps are the *ptp* page's.
        *ptp* page).
      - M
      - All four egress actions.
-   * - ``hsd`` (debugfs, mode 0600): reading prints the 15 raw words, the
+   * - ``egress_capture`` (debugfs, mode 0600): reading prints the 15 raw words, the
        configuration word decoded, the PTP fields, and the switch clock read at
        the same moment (see the *ptp* page); writing a number (decimal,
        hexadecimal with ``0x``, octal with ``0``) stores it in
        ``RTL9602C_PKTDBG_CFG``, which re-arms the capture and changes no
        forwarding.
      - M
-     - ``echo 0x2 > /sys/kernel/debug/rtl9602c/hsd; cat
-       /sys/kernel/debug/rtl9602c/hsd``.
+     - ``echo 0x2 > /sys/kernel/debug/rtl9602c/egress_capture; cat
+       /sys/kernel/debug/rtl9602c/egress_capture``.
 
 Setup for these blocks
 ======================

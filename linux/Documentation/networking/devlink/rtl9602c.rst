@@ -85,8 +85,8 @@ devlink, ``devlink_info_get``, ``devlink_param_get`` and ``devlink_param_set``
      - The parameter table ``rtl9602c_devlink_params[]`` and its callbacks
        ``rtl9602c_devlink_param_get()`` and ``rtl9602c_devlink_param_set()``;
        ``rtl9602c_devlink_info_get()``; the region
-       ``rtl9602c_hsb_region_ops`` with ``rtl9602c_hsb_snapshot()`` and
-       ``rtl9602c_hsb_arm()``; ``rtl9602c_rldp_set_magic()``; the registration
+       ``rtl9602c_pktdbg_region_ops`` with ``rtl9602c_pktdbg_snapshot()`` and
+       ``rtl9602c_pktdbg_arm()``; ``rtl9602c_rldp_set_magic()``; the registration
        in ``rtl9602c_setup()`` and the removal in ``rtl9602c_teardown()``.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The table ``rtl9602c_storm_param[]`` and the functions that get and set
@@ -100,7 +100,7 @@ devlink, ``devlink_info_get``, ``devlink_param_get`` and ``devlink_param_set``
      - ``enum rtl9602c_devlink_param_id``; the registers and fields that the
        parameters write (``RTL9602C_DOS_*``, ``RTL9602C_PKTDBG_*``,
        ``RTL9602C_LOOPDET_*``, ``RTL9602C_METER_CFG_HI_RATE_MAX``); and the
-       members ``hsb``, ``dos_flood_th`` and ``hsb_region`` of the driver's
+       members ``pktdbg``, ``dos_flood_th`` and ``pktdbg_region`` of the driver's
        private structure.
 
 Configuration and device tree
