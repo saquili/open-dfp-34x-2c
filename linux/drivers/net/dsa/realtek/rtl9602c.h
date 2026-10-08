@@ -2978,9 +2978,10 @@ struct rtl9602c_priv {
 	struct rtl9602c_gem_rx gem_rx[RTL9602C_GPON_NUM_FLOW];
 	/**
 	 * @gem_hosts: the static entries placed for the GEM interfaces'
-	 * addresses, @n_gem_hosts of them, under RTNL
+	 * addresses, under RTNL
 	 */
 	struct rtl9602c_host gem_hosts[RTL9602C_GEM_HOSTS];
+	/** @n_gem_hosts: how many of @gem_hosts are placed, under RTNL */
 	unsigned int n_gem_hosts;
 	/**
 	 * @gem_hosts_full: an address of a GEM interface has no entry, so the
