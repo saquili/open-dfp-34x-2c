@@ -250,6 +250,23 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
 
   return (
     <form onSubmit={form.handleSubmit(send)} noValidate className="grid gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label={t("internet.user")}
+          autoComplete="username"
+          error={errors.user?.message}
+          {...form.register("user")}
+        />
+        <Field
+          label={t("internet.passwordField")}
+          secret
+          autoComplete="new-password"
+          placeholder={x?.secretSet ? t("internet.passwordSaved") : t("internet.passwordNone")}
+          hint={x?.secretSet ? t("internet.passwordKept") : undefined}
+          error={errors.secret?.message}
+          {...form.register("secret")}
+        />
+      </div>
       <div className="grid gap-1">
         <label htmlFor="service" className="text-sm font-medium">
           {t("internet.service")}
@@ -284,6 +301,24 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
               : null}
         </p>
       </div>
+      <div className="grid gap-1">
+        <span className="text-sm font-medium">{t("internet.family")}</span>
+        <div className="join">
+          {(["both", "ipv4", "ipv6"] as const).map((f) => (
+            <label key={f} className="join-item btn btn-sm has-[:checked]:btn-primary">
+              <input type="radio" value={f} className="hidden" {...form.register("family")} />
+              {t(FAMILY[f])}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-base-content/60">{t("internet.familyHint")}</p>
+      </div>
+      <Field
+        label={t("internet.mac")}
+        hint={t("internet.macHint")}
+        error={errors.mac?.message}
+        {...form.register("mac")}
+      />
       <fieldset className="grid gap-2">
         <legend className="mb-1 text-sm font-medium">{t("internet.kind")}</legend>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -326,41 +361,6 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
           </div>
         )}
       </fieldset>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field
-          label={t("internet.user")}
-          autoComplete="username"
-          error={errors.user?.message}
-          {...form.register("user")}
-        />
-        <Field
-          label={t("internet.passwordField")}
-          secret
-          autoComplete="new-password"
-          placeholder={x?.secretSet ? t("internet.passwordSaved") : t("internet.passwordNone")}
-          hint={x?.secretSet ? t("internet.passwordKept") : undefined}
-          error={errors.secret?.message}
-          {...form.register("secret")}
-        />
-      </div>
-      <div className="grid gap-1">
-        <span className="text-sm font-medium">{t("internet.family")}</span>
-        <div className="join">
-          {(["both", "ipv4", "ipv6"] as const).map((f) => (
-            <label key={f} className="join-item btn btn-sm has-[:checked]:btn-primary">
-              <input type="radio" value={f} className="hidden" {...form.register("family")} />
-              {t(FAMILY[f])}
-            </label>
-          ))}
-        </div>
-        <p className="text-xs text-base-content/60">{t("internet.familyHint")}</p>
-      </div>
-      <Field
-        label={t("internet.mac")}
-        hint={t("internet.macHint")}
-        error={errors.mac?.message}
-        {...form.register("mac")}
-      />
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="submit"
@@ -546,7 +546,7 @@ export function Internet() {
   return (
     <Page
       title={t("internet.title")}
-      hint={`${t("internet.slots", { n: list.length, max: MAX_SESSIONS })} ${t("internet.restBridge")}`}
+      hint={t("internet.slots", { n: list.length, max: MAX_SESSIONS })}
     >
       <div className="grid min-h-0 flex-1 content-start gap-3 lg:overflow-auto">
         {SLOT_IDS.map((id) => {

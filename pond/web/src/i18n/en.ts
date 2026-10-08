@@ -325,7 +325,6 @@ export const en = {
     slotN: "Slot {id}",
     slotFree: "free",
     slotUse: "Use this slot",
-    restBridge: "Services without a slot go over the transparent bridge, as the OLT set them up.",
     servicesNone: "The OLT has not set up any service yet.",
     serviceNoVlan: "no VLAN",
     serviceVia: "VLAN {host} (upstream {fibre})",

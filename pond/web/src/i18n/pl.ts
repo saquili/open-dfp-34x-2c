@@ -327,7 +327,6 @@ export const pl: Dictionary = {
     slotN: "Miejsce {id}",
     slotFree: "wolne",
     slotUse: "Użyj tego miejsca",
-    restBridge: "Usługi bez miejsca idą przezroczystym mostem, tak jak ustawił je OLT.",
     servicesNone: "OLT nie ustawił jeszcze żadnej usługi.",
     serviceNoVlan: "bez VLAN-u",
     serviceVia: "VLAN {host} (upstream {fibre})",
