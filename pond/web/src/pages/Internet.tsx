@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet: the stick's connections to the operator, the form that adds
- * or changes one on the left, and the connections on the right. A
+ * The internet: the stick's connections to the operator on the left, and on
+ * the right the form that adds or changes one. A
  * connection is PPPoE, a static address or DHCP, and runs in a VLAN of the
  * operator's; a VLAN without one goes through the stick as a bridge, to the
  * host. On a narrow screen the form stands above the list, shut until asked
@@ -78,8 +78,19 @@ export function Internet() {
     <Page title={t("internet.title")} hint={t("internet.hint")}>
       <div className="flex min-h-0 flex-1 flex-col gap-4">
         {!l2 && <NoServices fib={fib} />}
-        <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[25rem_minmax(0,1fr)] xl:content-stretch xl:overflow-hidden">
-          <div ref={form} className="min-h-0 xl:flex xl:flex-col">
+        <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem] xl:content-stretch xl:overflow-hidden">
+          <div className="min-h-0">
+            <ConnList
+              list={list}
+              services={services}
+              l2={l2}
+              known={known}
+              editing={editKey}
+              onEdit={edit}
+            />
+          </div>
+          {/* On a narrow screen the form, or the button that opens it, comes first. */}
+          <div ref={form} className="min-h-0 max-xl:order-first xl:flex xl:flex-col">
             {!shown && (
               <button
                 type="button"
@@ -103,16 +114,6 @@ export function Internet() {
                 onClose={() => setOpen(false)}
               />
             </div>
-          </div>
-          <div className="min-h-0">
-            <ConnList
-              list={list}
-              services={services}
-              l2={l2}
-              known={known}
-              editing={editKey}
-              onEdit={edit}
-            />
           </div>
         </div>
       </div>
