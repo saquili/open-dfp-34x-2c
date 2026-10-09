@@ -239,6 +239,9 @@ function tick() {
   if (mc) mc.pon_rx_octets += add(17.8e6);
 }
 
+/* The fibre without light: the ONU waits in O1, and omcid has no services. */
+let dark = false;
+
 function live() {
   tick();
   const uptime = { ...LIVE.uptime, up_s: LIVE.uptime.up_s + (Date.now() - started) / 1000 };
@@ -252,6 +255,12 @@ function live() {
     cpu: LIVE.cpu ? { ...LIVE.cpu, ticks: { ...ticks } } : null,
     hostname,
     settings,
+    ...(dark
+      ? {
+          onu: LIVE.onu ? { ...LIVE.onu, state: "o1", onu_id: null } : null,
+          optics: LIVE.optics ? { ...LIVE.optics, rx_power_uw: null } : null,
+        }
+      : {}),
   };
 }
 
@@ -264,6 +273,12 @@ export const handlers = [
   http.post("*/api/__mock/offline", ({ request }) => {
     offline = new URL(request.url).searchParams.get("on") === "1";
     return HttpResponse.json({ offline });
+  }),
+
+  /* POST /api/__mock/fibre?on=0 takes the light away, and with it the OLT's services; on=1 brings them back. */
+  http.post("*/api/__mock/fibre", ({ request }) => {
+    dark = new URL(request.url).searchParams.get("on") === "0";
+    return HttpResponse.json({ dark });
   }),
 
   /* POST /api/__mock/vlans?n=300 gives the line 300 more services; n=0 takes them away. */
@@ -378,7 +393,12 @@ export const handlers = [
 
   http.get("*/api/get/omci", async () => {
     await delay(600);
-    return away() ?? (signedIn ? HttpResponse.json({ id: "omci", value: omci }) : unauthorized());
+    return (
+      away() ??
+      (signedIn
+        ? HttpResponse.json({ id: "omci", value: dark ? { mes: [] } : omci })
+        : unauthorized())
+    );
   }),
 
   http.get("*/api/get/banks", async () => {
