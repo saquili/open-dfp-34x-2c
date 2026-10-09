@@ -10,14 +10,7 @@
 
 import type { Live } from "../../api/types";
 import type { Service } from "../../lib/omci";
-import {
-  type IpoeView,
-  ipoes,
-  MAX_IPOE,
-  MAX_SESSIONS,
-  type SessionView,
-  sessions,
-} from "../../lib/state";
+import { type IpoeView, ipoes, MAX_CONNS, type SessionView, sessions } from "../../lib/state";
 import { hostSide } from "./shared";
 
 export const KINDS = ["pppoe", "static", "dhcp"] as const;
@@ -49,11 +42,9 @@ export function conns(live: Live | undefined): Conn[] {
   );
 }
 
-/** Whether another connection of @kind can be added: seven sessions, and the others together. */
-export function room(list: Conn[], kind: Kind) {
-  return kind === "pppoe"
-    ? list.filter((c) => c.kind === "pppoe").length < MAX_SESSIONS
-    : list.filter((c) => c.kind !== "pppoe").length < MAX_IPOE;
+/** Whether another connection can be added: seven of every kind together. */
+export function room(list: Conn[]) {
+  return list.length < MAX_CONNS;
 }
 
 /**

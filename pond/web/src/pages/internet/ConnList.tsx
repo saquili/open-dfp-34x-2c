@@ -27,8 +27,7 @@ import {
   type FibreView,
   fibre,
   gems,
-  MAX_IPOE,
-  MAX_SESSIONS,
+  MAX_CONNS,
   sessions,
   type Tone,
 } from "../../lib/state";
@@ -42,17 +41,17 @@ import { connName, FAMILY, Mono, MonoList, Sub, type T } from "./shared";
  * its own, and each cell under its column's name.
  */
 const NARROW = {
-  caret: "@max-2xl:col-start-1 @max-2xl:row-start-1",
-  name: "@max-2xl:col-span-3 @max-2xl:col-start-2 @max-2xl:row-start-1 @max-lg:col-span-2",
-  acts: "@max-2xl:col-start-5 @max-2xl:row-start-1 @max-lg:col-start-4",
-  vlan: "@max-2xl:col-start-2 @max-2xl:row-start-2",
-  state: "@max-2xl:col-start-3 @max-2xl:row-start-2",
-  addr: "@max-2xl:col-start-4 @max-2xl:row-start-2 @max-lg:col-span-2 @max-lg:col-start-2 @max-lg:row-start-3",
-  more: "@max-2xl:col-span-4 @max-2xl:col-start-2 @max-2xl:row-start-3 @max-lg:col-span-3 @max-lg:row-start-4",
+  caret: "@max-3xl:col-start-1 @max-3xl:row-start-1",
+  name: "@max-3xl:col-span-3 @max-3xl:col-start-2 @max-3xl:row-start-1 @max-lg:col-span-2",
+  acts: "@max-3xl:col-start-5 @max-3xl:row-start-1 @max-lg:col-start-4",
+  vlan: "@max-3xl:col-start-2 @max-3xl:row-start-2",
+  state: "@max-3xl:col-start-3 @max-3xl:row-start-2",
+  addr: "@max-3xl:col-start-4 @max-3xl:row-start-2 @max-lg:col-span-2 @max-lg:col-start-2 @max-lg:row-start-3",
+  more: "@max-3xl:col-span-4 @max-3xl:col-start-2 @max-3xl:row-start-3 @max-lg:col-span-3 @max-lg:row-start-4",
 };
 
 /* The columns of a narrower list, the same in its head and in every card. */
-const MEDIUM = "@max-2xl:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_3.75rem]";
+const MEDIUM = "@max-3xl:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_3.75rem]";
 const PHONE = "@max-lg:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_auto]";
 
 /* A cell; in a narrow list, under its column's name. */
@@ -274,7 +273,7 @@ function ConnCard({
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the caret is its key
     <div
-      className={`col-span-full grid cursor-pointer grid-cols-subgrid items-start gap-y-4 rounded-box border bg-base-100 px-4 py-3 ${MEDIUM} ${PHONE} @max-2xl:gap-x-4 @max-2xl:gap-y-3 @max-lg:gap-x-3 ${
+      className={`col-span-full grid cursor-pointer grid-cols-subgrid items-start gap-y-4 rounded-box border bg-base-100 px-4 py-3 ${MEDIUM} ${PHONE} @max-3xl:gap-x-4 @max-3xl:gap-y-3 @max-lg:gap-x-3 ${
         editing ? "border-primary ring-1 ring-primary" : "border-base-300"
       }`}
       onClick={(e) => {
@@ -412,55 +411,55 @@ export function ConnList({
   const [open, setOpen] = useState<string[]>([]);
   const toggle = (key: string) =>
     setOpen((o) => (o.includes(key) ? o.filter((k) => k !== key) : [...o, key]));
-  const pppoe = list.filter((c) => c.kind === "pppoe").length;
   return (
-    <section aria-labelledby="conns" className="@container">
+    <section aria-labelledby="conns" className="@container flex flex-col xl:h-full xl:min-h-0">
       {/* As high as the form's title, which sits within the form's border. */}
-      <div className="flex min-h-14 flex-wrap items-center gap-x-4 gap-y-1 border-t border-transparent pt-4 pb-2">
+      <div className="flex min-h-14 shrink-0 items-center border-t border-transparent pt-4 pb-2">
         <h2 id="conns" className="text-base font-semibold">
           {t("internet.conns")}
         </h2>
-        <p className="ml-auto text-xs text-base-content/70">
-          {t("internet.room", {
-            p: pppoe,
-            pmax: MAX_SESSIONS,
-            i: list.length - pppoe,
-            imax: MAX_IPOE,
-          })}
-        </p>
       </div>
-      {list.length === 0 ? (
-        <div className="rounded-box border border-dashed border-base-300 px-6 py-8 text-center">
-          <p className="text-base font-semibold">{t("internet.empty")}</p>
-          <p className="mx-auto mt-1 max-w-prose text-base-content/70">{t("internet.emptyHint")}</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-[2rem_auto_minmax(8rem,1fr)_auto_auto_auto] gap-x-4 gap-y-2 @max-2xl:flex @max-2xl:flex-col @max-2xl:gap-3">
-          <div
-            className={`col-span-full grid grid-cols-subgrid border-x border-transparent px-4 text-xs font-semibold text-base-content/70 ${MEDIUM} @max-2xl:gap-x-4 @max-lg:hidden`}
-          >
-            <span />
-            <span>{t("internet.colVlan")}</span>
-            <span className="@max-2xl:hidden">{t("internet.colConn")}</span>
-            <span>{t("internet.colState")}</span>
-            <span>{t("internet.colAddress")}</span>
-            <span />
+      {/* The cards scroll under the names of the columns, which stay, and above the count. */}
+      <div className="min-h-0 flex-1 px-px xl:overflow-auto">
+        {list.length === 0 ? (
+          <div className="rounded-box border border-dashed border-base-300 px-6 py-8 text-center">
+            <p className="text-base font-semibold">{t("internet.empty")}</p>
+            <p className="mx-auto mt-1 max-w-prose text-base-content/70">
+              {t("internet.emptyHint")}
+            </p>
           </div>
-          {list.map((c) => (
-            <ConnCard
-              key={c.key}
-              c={c}
-              services={services}
-              l2={l2}
-              known={known}
-              open={open.includes(c.key)}
-              onToggle={() => toggle(c.key)}
-              editing={editing === c.key}
-              onEdit={() => onEdit(c)}
-            />
-          ))}
-        </div>
-      )}
+        ) : (
+          <div className="grid grid-cols-[2rem_auto_minmax(8rem,1fr)_auto_auto_auto] gap-x-4 gap-y-2 pb-2 @max-3xl:flex @max-3xl:flex-col @max-3xl:gap-3">
+            <div
+              className={`sticky top-0 z-10 col-span-full grid grid-cols-subgrid border-x border-b border-x-transparent border-b-base-300 bg-base-200 px-4 pt-1 pb-2 text-xs font-semibold text-base-content/70 ${MEDIUM} @max-3xl:gap-x-4 @max-lg:hidden`}
+            >
+              <span />
+              <span>{t("internet.colVlan")}</span>
+              <span className="@max-3xl:hidden">{t("internet.colConn")}</span>
+              <span>{t("internet.colState")}</span>
+              <span>{t("internet.colAddress")}</span>
+              <span />
+            </div>
+            {list.map((c) => (
+              <ConnCard
+                key={c.key}
+                c={c}
+                services={services}
+                l2={l2}
+                known={known}
+                open={open.includes(c.key)}
+                onToggle={() => toggle(c.key)}
+                editing={editing === c.key}
+                onEdit={() => onEdit(c)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+      {/* As high as the form's buttons, so that the two lines over them meet. */}
+      <p className="flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
+        {t("internet.room", { n: list.length, max: MAX_CONNS })}
+      </p>
     </section>
   );
 }

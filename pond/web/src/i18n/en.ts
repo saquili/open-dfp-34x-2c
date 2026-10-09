@@ -401,12 +401,10 @@ export const en = {
     vlanRequired: "Pick or type a VLAN",
     ipoeTaken:
       "VLAN {vid} has {name} already. A VLAN has one Static IP or DHCP connection at most.",
-    pppoeFull: "All {max} places for PPPoE sessions are taken.",
-    ipoeFull:
-      "Static IP and DHCP have {max} connections together already, as many as the stick holds.",
+    full: "The stick has {max} connections already, as many as it holds.",
     fullHint: "Remove one of them from the list to add another.",
     conns: "Connections",
-    room: "PPPoE: {p} of {pmax} · Static IP and DHCP: {i} of {imax}",
+    room: "Connections: {n} of {max}",
     empty: "No connections set up",
     emptyHint:
       "Without connections the stick is a transparent bridge: every VLAN of the operator's goes straight to the host.",

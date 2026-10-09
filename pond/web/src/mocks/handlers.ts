@@ -40,8 +40,9 @@ const cpu = structuredClone(
 const settings: Settings = structuredClone(LIVE.settings);
 
 /*
- * POND_MOCK_SCENARIO=sessions: the stick's own sessions in every shape a
- * slot shows (IPv4, IPv6 and both, each up and down, one row free), and a
+ * POND_MOCK_SCENARIO=sessions: the stick's own connections in the shapes
+ * the internet page shows (PPPoE with IPv4, IPv6 and both, up and dialling,
+ * a static address and one from DHCP, one place of the seven free), and a
  * person signed in already with a password of their own, for a look at the
  * internet page without a sign-in.
  */
@@ -118,13 +119,13 @@ if (SCENARIO === "sessions") {
     lan: "lan36",
     gateway: "198.51.100.9",
   };
-  const list = [v4, v6, both, one(4, "both", false), one(5, "ipv4", false), one(6, "ipv6", false)];
+  const list = [v4, v6, both, one(4, "both", false)];
   settings.sessions = list;
   /* Slot 3's concentrator did not take RFC 4638: its session came to 1492. */
   const ppp0 = NETWORK.links.find((l) => l.name === "ppp0");
   if (ppp0) NETWORK.links.push({ ...ppp0, name: "ppp2", ifindex: 18, mtu: 1492 });
   settings.pass = { address: "203.0.113.21", lan: "lan", peer_gateway: "198.51.100.1" };
-  /* A fixed address on VLAN 420, an address from DHCP on 421, and one still waiting for its. */
+  /* A fixed address on VLAN 420, and an address from DHCP on 421. */
   settings.ipoe = [
     {
       ...ipoe(1, "static", "420"),
@@ -153,7 +154,6 @@ if (SCENARIO === "sessions") {
       prefix: "2001:db8:7700::/56",
       lease: 82_800,
     },
-    { ...ipoe(3, "dhcp", "410"), mac: "00:00:5e:00:53:c3" },
   ];
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
@@ -415,11 +415,13 @@ export const handlers = [
     let id = body.ID ? Number(body.ID) : 0;
     if (!id) {
       for (let n = 1; n <= 7 && !id; n++) if (!list.some((x) => x.id === n)) id = n;
+      /* Seven connections at most, of every kind together. */
+      if (list.length + (settings.ipoe?.length ?? 0) >= 7) id = 0;
       if (!id || !body.USER)
         return HttpResponse.json(
           {
             error: "refused",
-            detail: id ? "a new session needs USER" : "all 7 sessions are taken",
+            detail: id ? "a new session needs USER" : "all 7 connections are taken",
           },
           { status: 400 },
         );
@@ -511,8 +513,10 @@ export const handlers = [
     }
     if (body.KIND !== "static" && body.KIND !== "dhcp") return refuse("KIND is static or dhcp");
     if (!id) {
-      for (let n = 1; n <= 4 && !id; n++) if (!list.some((x) => x.id === n)) id = n;
-      if (!id) return refuse("all 4 connections are taken");
+      for (let n = 1; n <= 7 && !id; n++) if (!list.some((x) => x.id === n)) id = n;
+      /* Seven connections at most, of every kind together. */
+      if (!id || list.length + settings.sessions.length >= 7)
+        return refuse("all 7 connections are taken");
     }
     if (body.KIND === "static" && (!body.ADDRESS || !body.GATEWAY))
       return refuse(`connection ${id}: a static address needs ADDRESS and GATEWAY`);

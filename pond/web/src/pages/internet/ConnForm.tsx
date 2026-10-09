@@ -35,14 +35,7 @@ import {
   vlan,
   z,
 } from "../../lib/schemas";
-import {
-  downVlan,
-  type IpoeView,
-  MAX_IPOE,
-  MAX_SESSIONS,
-  type SessionView,
-  sessions,
-} from "../../lib/state";
+import { downVlan, type IpoeView, MAX_CONNS, type SessionView, sessions } from "../../lib/state";
 import { type Conn, ipoeIn, KINDS, type Kind, room, serviceIn } from "./conns";
 import { Choice, connName, FamilyField, hostSide, serviceName, useServices } from "./shared";
 import { VlanField, type VlanOption, type VlanUse, vlanOptions } from "./VlanField";
@@ -143,7 +136,7 @@ function Buttons({
 }) {
   const { t } = useI18n();
   return (
-    <div className="flex flex-wrap items-center gap-3">
+    <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-3">
       <button type="submit" className="btn btn-primary" disabled={disabled}>
         {editing ? t("internet.save") : t("internet.addConn")}
       </button>
@@ -236,89 +229,92 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
     );
 
   return (
-    <form onSubmit={form.handleSubmit(send)} noValidate className="grid gap-4 p-4">
-      <Controller
-        control={form.control}
-        name="vlan"
-        render={({ field, fieldState }) => (
-          <VlanField
-            value={field.value}
-            onChange={(v) => {
-              onVlan(v);
-              field.onChange(v);
-            }}
-            onBlur={field.onBlur}
-            options={c.options}
-            use={use}
-            known={c.known}
-            error={fieldState.error?.message}
-          />
-        )}
-      />
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-        <Field
-          label={t("internet.user")}
-          autoComplete="username"
-          error={errors.user?.message}
-          {...form.register("user")}
+    <form onSubmit={form.handleSubmit(send)} noValidate className="flex min-h-0 flex-1 flex-col">
+      {/* The fields scroll between the tabs and the buttons, which stay. */}
+      <div className="grid min-h-0 flex-1 content-start gap-4 p-4 xl:overflow-auto">
+        <Controller
+          control={form.control}
+          name="vlan"
+          render={({ field, fieldState }) => (
+            <VlanField
+              value={field.value}
+              onChange={(v) => {
+                onVlan(v);
+                field.onChange(v);
+              }}
+              onBlur={field.onBlur}
+              options={c.options}
+              use={use}
+              known={c.known}
+              error={fieldState.error?.message}
+            />
+          )}
         />
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+          <Field
+            label={t("internet.user")}
+            autoComplete="username"
+            error={errors.user?.message}
+            {...form.register("user")}
+          />
+          <Field
+            label={t("internet.passwordField")}
+            secret
+            autoComplete="new-password"
+            placeholder={x?.secretSet ? t("internet.passwordSaved") : t("internet.passwordNone")}
+            hint={x?.secretSet ? t("internet.passwordKept") : undefined}
+            error={errors.secret?.message}
+            {...form.register("secret")}
+          />
+        </div>
+        <FamilyField field={form.register("family")} hint={t("internet.familyHint")} />
+        <fieldset className="grid gap-2">
+          <legend className="mb-1 text-sm font-semibold">{t("internet.kind")}</legend>
+          <Choice
+            value="off"
+            on={pass === "off"}
+            field={passField}
+            title={t("internet.kindStick")}
+            text={t("internet.kindStickHint")}
+          />
+          <Choice
+            value="on"
+            on={pass === "on"}
+            field={passField}
+            title={t("internet.kindDown")}
+            text={t("internet.kindDownHint", { what: t(downWhat(family)) })}
+          />
+          {pass === "on" && (
+            <div className="grid gap-2 pt-1">
+              <Field
+                label={t("internet.hostVlan")}
+                inputMode="numeric"
+                placeholder={t("switch.untagged")}
+                hint={t("internet.hostVlanHint")}
+                error={errors.hostVlan?.message}
+                {...form.register("hostVlan")}
+              />
+              {clash.v4 != null && (
+                <p className="text-xs text-error">{t("internet.clashV4", { id: clash.v4 })}</p>
+              )}
+              {clash.v6 != null && (
+                <p className="text-xs text-error">{t("internet.clashV6", { id: clash.v6 })}</p>
+              )}
+              {foreign && (
+                <p className="text-xs text-error">
+                  {t("internet.clashService", { vid: down, name: serviceName(t, foreign) })}
+                </p>
+              )}
+            </div>
+          )}
+        </fieldset>
         <Field
-          label={t("internet.passwordField")}
-          secret
-          autoComplete="new-password"
-          placeholder={x?.secretSet ? t("internet.passwordSaved") : t("internet.passwordNone")}
-          hint={x?.secretSet ? t("internet.passwordKept") : undefined}
-          error={errors.secret?.message}
-          {...form.register("secret")}
+          label={t("internet.mac")}
+          hint={t("internet.macHint")}
+          error={errors.mac?.message}
+          {...form.register("mac")}
         />
       </div>
-      <FamilyField field={form.register("family")} hint={t("internet.familyHint")} />
-      <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-semibold">{t("internet.kind")}</legend>
-        <Choice
-          value="off"
-          on={pass === "off"}
-          field={passField}
-          title={t("internet.kindStick")}
-          text={t("internet.kindStickHint")}
-        />
-        <Choice
-          value="on"
-          on={pass === "on"}
-          field={passField}
-          title={t("internet.kindDown")}
-          text={t("internet.kindDownHint", { what: t(downWhat(family)) })}
-        />
-        {pass === "on" && (
-          <div className="grid gap-2 pt-1">
-            <Field
-              label={t("internet.hostVlan")}
-              inputMode="numeric"
-              placeholder={t("switch.untagged")}
-              hint={t("internet.hostVlanHint")}
-              error={errors.hostVlan?.message}
-              {...form.register("hostVlan")}
-            />
-            {clash.v4 != null && (
-              <p className="text-xs text-error">{t("internet.clashV4", { id: clash.v4 })}</p>
-            )}
-            {clash.v6 != null && (
-              <p className="text-xs text-error">{t("internet.clashV6", { id: clash.v6 })}</p>
-            )}
-            {foreign && (
-              <p className="text-xs text-error">
-                {t("internet.clashService", { vid: down, name: serviceName(t, foreign) })}
-              </p>
-            )}
-          </div>
-        )}
-      </fieldset>
-      <Field
-        label={t("internet.mac")}
-        hint={t("internet.macHint")}
-        error={errors.mac?.message}
-        {...form.register("mac")}
-      />
       <Buttons
         editing={!!x}
         disabled={(!!x && !isDirty) || change.isPending || blocked}
@@ -399,83 +395,86 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
   };
 
   return (
-    <form onSubmit={form.handleSubmit(send)} noValidate className="grid gap-4 p-4">
-      <Controller
-        control={form.control}
-        name="vlan"
-        render={({ field, fieldState }) => (
-          <VlanField
-            value={field.value}
-            onChange={field.onChange}
-            onBlur={field.onBlur}
-            options={c.options}
-            use={use}
-            known={c.known}
-            error={
-              fieldState.error?.message ??
-              (taken
-                ? t("internet.ipoeTaken", { vid: service, name: connName(t, taken) })
-                : undefined)
-            }
-          />
+    <form onSubmit={form.handleSubmit(send)} noValidate className="flex min-h-0 flex-1 flex-col">
+      {/* The fields scroll between the tabs and the buttons, which stay. */}
+      <div className="grid min-h-0 flex-1 content-start gap-4 p-4 xl:overflow-auto">
+        <Controller
+          control={form.control}
+          name="vlan"
+          render={({ field, fieldState }) => (
+            <VlanField
+              value={field.value}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              options={c.options}
+              use={use}
+              known={c.known}
+              error={
+                fieldState.error?.message ??
+                (taken
+                  ? t("internet.ipoeTaken", { vid: service, name: connName(t, taken) })
+                  : undefined)
+              }
+            />
+          )}
+        />
+        {fixed ? (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+              <Field
+                label={t("internet.address4")}
+                placeholder="192.0.2.10/24"
+                error={errors.address?.message}
+                {...form.register("address")}
+              />
+              <Field
+                label={t("internet.gateway4")}
+                placeholder="192.0.2.1"
+                error={errors.gateway?.message}
+                {...form.register("gateway")}
+              />
+            </div>
+            <Field
+              label={t("internet.dnsServers")}
+              placeholder="198.51.100.53 198.51.100.54"
+              hint={t("internet.dnsHint")}
+              error={errors.dns?.message}
+              {...form.register("dns")}
+            />
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+              <Field
+                label={t("internet.address6")}
+                placeholder="2001:db8::2/64"
+                hint={t("internet.address6Hint")}
+                error={errors.address6?.message}
+                {...form.register("address6")}
+              />
+              <Field
+                label={t("internet.gateway6")}
+                placeholder="2001:db8::1"
+                error={errors.gateway6?.message}
+                {...form.register("gateway6")}
+              />
+            </div>
+            <Field
+              label={t("internet.prefix6")}
+              placeholder="2001:db8:1200::/56"
+              hint={t("internet.prefix6Hint")}
+              error={errors.prefix6?.message}
+              {...form.register("prefix6")}
+            />
+          </>
+        ) : (
+          <FamilyField field={form.register("family")} hint={t("internet.dhcpFamilyHint")} />
         )}
-      />
-      {fixed ? (
-        <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-            <Field
-              label={t("internet.address4")}
-              placeholder="192.0.2.10/24"
-              error={errors.address?.message}
-              {...form.register("address")}
-            />
-            <Field
-              label={t("internet.gateway4")}
-              placeholder="192.0.2.1"
-              error={errors.gateway?.message}
-              {...form.register("gateway")}
-            />
-          </div>
-          <Field
-            label={t("internet.dnsServers")}
-            placeholder="198.51.100.53 198.51.100.54"
-            hint={t("internet.dnsHint")}
-            error={errors.dns?.message}
-            {...form.register("dns")}
-          />
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-            <Field
-              label={t("internet.address6")}
-              placeholder="2001:db8::2/64"
-              hint={t("internet.address6Hint")}
-              error={errors.address6?.message}
-              {...form.register("address6")}
-            />
-            <Field
-              label={t("internet.gateway6")}
-              placeholder="2001:db8::1"
-              error={errors.gateway6?.message}
-              {...form.register("gateway6")}
-            />
-          </div>
-          <Field
-            label={t("internet.prefix6")}
-            placeholder="2001:db8:1200::/56"
-            hint={t("internet.prefix6Hint")}
-            error={errors.prefix6?.message}
-            {...form.register("prefix6")}
-          />
-        </>
-      ) : (
-        <FamilyField field={form.register("family")} hint={t("internet.dhcpFamilyHint")} />
-      )}
-      <Field
-        label={t("internet.mac")}
-        hint={t("internet.macHint")}
-        error={errors.mac?.message}
-        {...form.register("mac")}
-      />
-      <p className="text-xs text-base-content/70">{t("internet.kindStickHint")}</p>
+        <Field
+          label={t("internet.mac")}
+          hint={t("internet.macHint")}
+          error={errors.mac?.message}
+          {...form.register("mac")}
+        />
+        <p className="text-xs text-base-content/70">{t("internet.kindStickHint")}</p>
+      </div>
       <Buttons
         editing={!!x}
         disabled={(!!x && !isDirty) || change.isPending || !!taken}
@@ -510,7 +509,7 @@ function KindTabs({
       ref={ref}
       role="tablist"
       aria-label={t("internet.kindLabel")}
-      className="flex gap-6 border-b border-base-300 px-4"
+      className="flex shrink-0 gap-6 border-b border-base-300 px-4"
       onKeyDown={move}
     >
       {KINDS.map((k) => {
@@ -571,7 +570,7 @@ export function ConnForm({
   /* A new form after each connection added. */
   const [round, setRound] = useState(0);
   const k = editing?.kind ?? kind;
-  const full = !editing && !room(list, k);
+  const full = !editing && !room(list);
   const common: Common = {
     list,
     options,
@@ -589,8 +588,11 @@ export function ConnForm({
   const key = `${editing?.key ?? "new"}:${k}:${round}`;
 
   return (
-    <section className="rounded-box border border-base-300 bg-base-100" aria-labelledby="conn-form">
-      <div className="flex min-h-14 items-center gap-2 px-4 pt-4 pb-2">
+    <section
+      className="flex flex-col rounded-box border border-base-300 bg-base-100 xl:h-full xl:min-h-0"
+      aria-labelledby="conn-form"
+    >
+      <div className="flex min-h-14 shrink-0 items-center gap-2 px-4 pt-4 pb-2">
         <h2 id="conn-form" className="text-base font-semibold">
           {editing
             ? t("internet.editConn", { name: connName(t, editing), vid: editing.vlan })
@@ -609,11 +611,7 @@ export function ConnForm({
       <KindTabs value={k} onChange={onKind} only={editing?.kind} />
       {full ? (
         <div className="m-4 rounded-box border border-dashed border-base-300 p-6 text-center">
-          <p className="font-semibold">
-            {k === "pppoe"
-              ? t("internet.pppoeFull", { max: MAX_SESSIONS })
-              : t("internet.ipoeFull", { max: MAX_IPOE })}
-          </p>
+          <p className="font-semibold">{t("internet.full", { max: MAX_CONNS })}</p>
           <p className="mt-1 text-xs text-base-content/70">{t("internet.fullHint")}</p>
         </div>
       ) : k === "pppoe" ? (

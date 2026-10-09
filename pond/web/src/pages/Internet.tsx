@@ -79,7 +79,7 @@ export function Internet() {
       <div className="flex min-h-0 flex-1 flex-col gap-4">
         {!l2 && <NoServices fib={fib} />}
         <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[25rem_minmax(0,1fr)] xl:content-stretch xl:overflow-hidden">
-          <div ref={form} className="min-h-0 xl:overflow-auto">
+          <div ref={form} className="min-h-0 xl:flex xl:flex-col">
             {!shown && (
               <button
                 type="button"
@@ -90,7 +90,7 @@ export function Internet() {
                 {t("internet.addConn")}
               </button>
             )}
-            <div className={shown ? "" : "max-xl:hidden"}>
+            <div className={`xl:min-h-0 xl:flex-1 ${shown ? "" : "max-xl:hidden"}`}>
               <ConnForm
                 list={list}
                 kind={kind}
@@ -104,7 +104,7 @@ export function Internet() {
               />
             </div>
           </div>
-          <div className="min-h-0 xl:overflow-auto">
+          <div className="min-h-0">
             <ConnList
               list={list}
               services={services}

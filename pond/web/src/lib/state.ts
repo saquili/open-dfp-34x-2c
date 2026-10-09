@@ -154,11 +154,11 @@ export function sessions(live: Live | undefined): SessionView[] {
 }
 
 /*
- * The most connections that take their address as a router does, static and
- * DHCP together: for now; the engine has 8 external addresses, the PPPoE
- * slots' among them.
+ * The most connections the stick holds, of every kind together: as many as
+ * the switch has PPPoE rows for, within the 8 external addresses of its
+ * engine.
  */
-export const MAX_IPOE = 4;
+export const MAX_CONNS = 7;
 
 export interface IpoeView {
   id: number;

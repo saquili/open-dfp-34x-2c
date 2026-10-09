@@ -402,11 +402,10 @@ export const pl: Dictionary = {
     vlanRequired: "Wybierz albo wpisz VLAN",
     ipoeTaken:
       "W VLAN-ie {vid} jest już {name}. W jednym VLAN-ie może być jedno połączenie Static IP albo DHCP.",
-    pppoeFull: "Wszystkie {max} miejsc na sesje PPPoE jest zajętych.",
-    ipoeFull: "Static IP i DHCP mają już razem {max} połączenia, więcej wkładka nie prowadzi.",
+    full: "Wkładka ma już {max} połączeń, tyle ile może prowadzić.",
     fullHint: "Usuń jedno z nich na liście, żeby dodać nowe.",
     conns: "Połączenia",
-    room: "PPPoE: {p} z {pmax} · Static IP i DHCP: {i} z {imax}",
+    room: "Połączenia: {n} z {max}",
     empty: "Brak aktualnie skonfigurowanych połączeń",
     emptyHint:
       "Bez połączeń wkładka jest przezroczystym mostem: każdy VLAN od operatora idzie prosto do hosta.",
