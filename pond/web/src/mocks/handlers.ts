@@ -12,7 +12,6 @@ import type {
   Identity,
   IpoeInfo,
   LaneMode,
-  LanInfo,
   Mgmt,
   Session,
   SessionInfo,
@@ -79,15 +78,6 @@ function ipoe(id: number, kind: IpoeInfo["kind"], vlan: string): IpoeInfo {
     lease: null,
   };
 }
-/* The network behind the stick as a new one stands. */
-const LAN: LanInfo = {
-  vlan: "",
-  address: "192.168.1.1/24",
-  dhcp: "on",
-  pool_from: "192.168.1.100",
-  pool_to: "192.168.1.199",
-  lease_s: 86_400,
-};
 if (SCENARIO === "sessions") {
   const one = (id: number, family: SessionInfo["family"], up: boolean): SessionInfo => ({
     id,
@@ -165,13 +155,38 @@ if (SCENARIO === "sessions") {
       lease: 82_800,
     },
   ];
-  /* The network behind the stick, and four devices in it, one without a name. */
-  settings.lan = { ...LAN };
+  /*
+   * A network behind the stick out through session 4, untagged, with three
+   * devices, one without a name, and one out through DHCP on 421, in VLAN
+   * 20, with one; the static connection has none.
+   */
+  settings.lans = [
+    {
+      id: 1,
+      conn: "pppoe:4",
+      vlan: "",
+      address: "192.168.1.1/24",
+      dhcp: "on",
+      pool_from: "192.168.1.100",
+      pool_to: "192.168.1.199",
+      lease_s: 86_400,
+    },
+    {
+      id: 2,
+      conn: "ipoe:2",
+      vlan: "20",
+      address: "192.168.2.1/24",
+      dhcp: "on",
+      pool_from: "192.168.2.100",
+      pool_to: "192.168.2.199",
+      lease_s: 43_200,
+    },
+  ];
   settings.leases = [
-    { mac: "00:00:5e:00:53:10", ip: "192.168.1.100", name: "laptop", left_s: 81_000 },
-    { mac: "00:00:5e:00:53:11", ip: "192.168.1.101", name: "telefon", left_s: 43_200 },
-    { mac: "00:00:5e:00:53:12", ip: "192.168.1.102", name: "telewizor", left_s: 3_600 },
-    { mac: "00:00:5e:00:53:13", ip: "192.168.1.115", name: null, left_s: 600 },
+    { lan: 1, mac: "00:00:5e:00:53:10", ip: "192.168.1.100", name: "laptop", left_s: 81_000 },
+    { lan: 1, mac: "00:00:5e:00:53:11", ip: "192.168.1.101", name: "telefon", left_s: 43_200 },
+    { lan: 1, mac: "00:00:5e:00:53:13", ip: "192.168.1.115", name: null, left_s: 600 },
+    { lan: 2, mac: "00:00:5e:00:53:12", ip: "192.168.2.100", name: "telewizor", left_s: 3_600 },
   ];
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
@@ -259,6 +274,13 @@ function tick() {
 
 /* The fibre without light: the ONU waits in O1, and omcid has no services. */
 let dark = false;
+
+/* A connection gone, or handing its address down, takes its network behind the stick along. */
+function dropLans(conn: string) {
+  const gone = (settings.lans ?? []).filter((y) => y.conn === conn).map((y) => y.id);
+  settings.lans = (settings.lans ?? []).filter((y) => y.conn !== conn);
+  settings.leases = (settings.leases ?? []).filter((y) => !gone.includes(y.lan));
+}
 
 function live() {
   tick();
@@ -447,6 +469,7 @@ export const handlers = [
     let x = list.find((y) => y.id === id);
     if (body.USER === "") {
       settings.sessions = list.filter((y) => y.id !== id);
+      dropLans(`pppoe:${id}`);
     } else {
       if (!x) {
         if (!body.SECRET)
@@ -483,6 +506,7 @@ export const handlers = [
       if (body.FAMILY === "ipv4" || body.FAMILY === "ipv6" || body.FAMILY === "both")
         x.family = body.FAMILY;
       if (body.PASS === "on" || body.PASS === "off") x.pass = body.PASS;
+      if (x.pass === "on") dropLans(`pppoe:${id}`);
       if (body.HOST_VLAN !== undefined) x.host_vlan = body.HOST_VLAN;
       /* The stand-in stick brings a session up at once, in the VLAN given. */
       x.dev = x.vlan ? `wan${x.vlan}` : "gem257";
@@ -515,13 +539,42 @@ export const handlers = [
     return HttpResponse.json({ id: "session", ok: true });
   }),
 
-  /* The network behind the stick: VLAN, ADDRESS, DHCP, POOL_FROM, POOL_TO, LEASE. */
+  /*
+   * A network behind the stick: added without ID, changed by ID, removed by
+   * CONN=; CONN, VLAN, ADDRESS, DHCP, POOL_FROM, POOL_TO, LEASE.
+   */
   http.post("*/api/set/lan", async ({ request }) => {
     await delay(500);
     if (!signedIn) return unauthorized();
     const body = kv(await request.text());
-    if (!settings.lan) settings.lan = { ...LAN };
-    const x = settings.lan;
+    settings.lans ??= [];
+    const list = settings.lans;
+    const id = body.ID ? Number(body.ID) : Math.max(0, ...list.map((y) => y.id)) + 1;
+    if (body.CONN === "") {
+      settings.lans = list.filter((y) => y.id !== id);
+      settings.leases = (settings.leases ?? []).filter((y) => y.lan !== id);
+      return HttpResponse.json({ id: "lan", ok: true });
+    }
+    let x = list.find((y) => y.id === id);
+    if (!x) {
+      if (!body.CONN)
+        return HttpResponse.json(
+          { error: "refused", detail: "a new network needs CONN" },
+          { status: 400 },
+        );
+      x = {
+        id,
+        conn: body.CONN,
+        vlan: "",
+        address: "",
+        dhcp: "on",
+        pool_from: "",
+        pool_to: "",
+        lease_s: 86_400,
+      };
+      list.push(x);
+    }
+    if (body.CONN) x.conn = body.CONN;
     if (body.VLAN !== undefined) x.vlan = body.VLAN;
     if (body.ADDRESS) x.address = body.ADDRESS;
     if (body.DHCP === "on" || body.DHCP === "off") x.dhcp = body.DHCP;
@@ -543,6 +596,7 @@ export const handlers = [
     let id = body.ID ? Number(body.ID) : 0;
     if (body.KIND === "") {
       settings.ipoe = list.filter((y) => y.id !== id);
+      dropLans(`ipoe:${id}`);
       return HttpResponse.json({ id: "ipoe", ok: true });
     }
     if (body.KIND !== "static" && body.KIND !== "dhcp") return refuse("KIND is static or dhcp");

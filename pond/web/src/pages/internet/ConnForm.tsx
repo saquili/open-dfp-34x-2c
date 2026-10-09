@@ -38,7 +38,7 @@ import {
 import {
   downVlan,
   type IpoeView,
-  lan,
+  lans,
   MAX_CONNS,
   type SessionView,
   sessions,
@@ -203,7 +203,7 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
       ? services.find((s) => s !== picked && hostSide(s).includes(Number(down)))
       : undefined;
   /* The stick's own network to the devices behind it has its VLAN, or none, to itself. */
-  const onLan = pass === "on" && down === lan(live).vlan;
+  const onLan = pass === "on" && !!service && lans(live).some((l) => l.vlan === down);
   const blocked = clash.v4 != null || clash.v6 != null || foreign != null || onLan;
 
   /* What the session does with its address, once chosen by hand, stays as chosen. */

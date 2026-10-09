@@ -8,10 +8,11 @@
  * card's cells stand one under another, each under its column's name.
  */
 
-import { ChevronRight, Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useIpoeChange, useNetwork, useSessionChange } from "../../api/config";
 import { useLive } from "../../api/live";
+import { Acts, AT, CARD, Caret, Cell, HEAD, opens, ROWS } from "../../components/CardTable";
 import { useChangeState } from "../../components/Field";
 import { Dot } from "../../components/ui";
 import { useI18n } from "../../i18n";
@@ -20,42 +21,6 @@ import type { Service } from "../../lib/omci";
 import { downVlan, gems, MAX_CONNS, sessions, type Tone } from "../../lib/state";
 import { type Conn, serviceIn } from "./conns";
 import { connName, FAMILY, Mono, MonoList, Sub, type T } from "./shared";
-
-/*
- * The cells' places in a narrower list: the name and the buttons in a row,
- * and under them the VLAN, the state and the address, under the names of
- * their columns; in a list as narrow as a phone, the address in a row of
- * its own, and each cell under its column's name.
- */
-const NARROW = {
-  caret: "@max-3xl:col-start-1 @max-3xl:row-start-1",
-  name: "@max-3xl:col-span-3 @max-3xl:col-start-2 @max-3xl:row-start-1 @max-lg:col-span-2",
-  acts: "@max-3xl:col-start-5 @max-3xl:row-start-1 @max-lg:col-start-4",
-  vlan: "@max-3xl:col-start-2 @max-3xl:row-start-2",
-  state: "@max-3xl:col-start-3 @max-3xl:row-start-2",
-  addr: "@max-3xl:col-start-4 @max-3xl:row-start-2 @max-lg:col-span-2 @max-lg:col-start-2 @max-lg:row-start-3",
-  more: "@max-3xl:col-span-4 @max-3xl:col-start-2 @max-3xl:row-start-3 @max-lg:col-span-3 @max-lg:row-start-4",
-};
-
-/* The columns of a narrower list, the same in its head and in every card. */
-const MEDIUM = "@max-3xl:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.4fr)_3.75rem]";
-const PHONE = "@max-lg:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_auto]";
-
-/* A cell; in a narrow list, under its column's name. */
-function Cell({ head, at, children }: { head?: string; at: string; children: ReactNode }) {
-  return (
-    <div
-      data-h={head}
-      className={`grid min-w-0 content-start gap-1 ${at} ${
-        head
-          ? "@max-lg:before:text-xs @max-lg:before:text-base-content/70 @max-lg:before:content-[attr(data-h)]"
-          : ""
-      }`}
-    >
-      {children}
-    </div>
-  );
-}
 
 /** A connection's state: a dot, a word, and why when it is not working. */
 function stateOf(t: T, lang: string, c: Conn, l2: boolean, svc: Service | undefined) {
@@ -225,35 +190,24 @@ function ConnCard({
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the caret is its key
     <div
-      className={`col-span-full grid cursor-pointer grid-cols-subgrid items-start gap-y-4 rounded-box border bg-base-100 px-4 py-3 ${MEDIUM} ${PHONE} @max-3xl:gap-x-4 @max-3xl:gap-y-3 @max-lg:gap-x-3 ${
-        editing ? "border-primary ring-1 ring-primary" : "border-base-300"
-      }`}
-      onClick={(e) => {
-        if ((e.target as Element).closest("button, a, input, [data-more]")) return;
-        onToggle();
-      }}
+      className={`${CARD} cursor-pointer ${editing ? "border-primary ring-1 ring-primary" : "border-base-300"}`}
+      onClick={opens(onToggle)}
     >
-      <div className={`-my-1.5 -ml-2 ${NARROW.caret}`}>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm btn-square text-base-content/70"
-          aria-expanded={open}
-          aria-controls={more}
-          aria-label={t("internet.details", { name: connName(t, c) })}
-          onClick={onToggle}
-        >
-          <ChevronRight className={`size-4 transition-transform ${open ? "rotate-90" : ""}`} />
-        </button>
-      </div>
-      <Cell head={t("internet.colVlan")} at={NARROW.vlan}>
+      <Caret
+        open={open}
+        controls={more}
+        label={t("internet.details", { name: connName(t, c) })}
+        onToggle={onToggle}
+      />
+      <Cell head={t("internet.colVlan")} at={AT.first}>
         <span>{`VLAN ${c.vlan}`}</span>
         {onFibre != null && <Sub>{t("internet.onFibre", { vid: onFibre })}</Sub>}
       </Cell>
-      <Cell at={NARROW.name}>
+      <Cell at={AT.name}>
         <span className="font-semibold">{connName(t, c)}</span>
         <Sub>{t(FAMILY[c.x.family])}</Sub>
       </Cell>
-      <Cell head={t("internet.colState")} at={NARROW.state}>
+      <Cell head={t("internet.colState")} at={AT.second}>
         <span className="flex items-center gap-2 whitespace-nowrap">
           <Dot tone={st.tone} />
           {st.word}
@@ -261,7 +215,7 @@ function ConnCard({
         {st.why && <Sub>{st.why}</Sub>}
         {state.state === "bad" && <p className="text-xs text-error">{state.message}</p>}
       </Cell>
-      <Cell head={t("internet.colAddress")} at={NARROW.addr}>
+      <Cell head={t("internet.colAddress")} at={AT.third}>
         {c.kind === "pppoe" ? (
           <>
             {v4 && <span>{c.x.ipv4 ? <Mono>{c.x.ipv4}</Mono> : "IPv4 –"}</span>}
@@ -292,7 +246,7 @@ function ConnCard({
           </>
         )}
       </Cell>
-      <div className={`-my-1.5 -mr-2 flex items-center justify-end gap-1 ${NARROW.acts}`}>
+      <Acts>
         <button
           type="button"
           className="btn btn-ghost btn-sm btn-square text-base-content/70"
@@ -312,13 +266,9 @@ function ConnCard({
         >
           <Trash2 className="size-4" />
         </button>
-      </div>
+      </Acts>
       {open && (
-        <div
-          id={more}
-          data-more
-          className={`col-span-5 col-start-2 cursor-auto pb-1 ${NARROW.more}`}
-        >
+        <div id={more} data-more className={`col-span-5 col-start-2 cursor-auto pb-1 ${AT.more}`}>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 @3xl:grid-cols-3 @max-md:grid-cols-1">
             <Facts c={c} />
           </dl>
@@ -369,10 +319,8 @@ export function ConnList({
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-[2rem_auto_minmax(8rem,1fr)_auto_auto_auto] gap-x-4 gap-y-2 pb-2 @max-3xl:flex @max-3xl:flex-col @max-3xl:gap-3">
-            <div
-              className={`sticky top-0 z-10 col-span-full grid grid-cols-subgrid border-x border-b border-x-transparent border-b-base-300 bg-base-200 mb-2 h-11 items-center px-4 @max-3xl:mb-1 text-xs font-semibold text-base-content/70 ${MEDIUM} @max-3xl:gap-x-4 @max-lg:hidden`}
-            >
+          <div className={`grid grid-cols-[2rem_auto_minmax(8rem,1fr)_auto_auto_auto] ${ROWS}`}>
+            <div className={HEAD}>
               <span />
               <span>{t("internet.colVlan")}</span>
               <span className="@max-3xl:hidden">{t("internet.colConn")}</span>

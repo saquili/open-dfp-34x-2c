@@ -343,8 +343,11 @@ export function memory(live: Live | undefined): MemoryView | null {
   return { totalBytes: m.total_kb * 1024, usedBytes: used * 1024, share: used / m.total_kb };
 }
 
-/** The stick's network towards the devices behind it, as set, or as it stands before it is. */
+/** A network of the stick's towards the devices behind it, out through one connection. */
 export interface LanView {
+  id: number;
+  /** The connection's key, as conns() names it: "pppoe:N" or "ipoe:N". */
+  conn: string;
   vlan: string;
   address: string;
   dhcp: boolean;
@@ -353,16 +356,17 @@ export interface LanView {
   leaseS: number;
 }
 
-export function lan(live: Live | undefined): LanView {
-  const x = live?.settings?.lan;
-  return {
-    vlan: x?.vlan ?? "",
-    address: x?.address ?? "192.168.1.1/24",
-    dhcp: (x?.dhcp ?? "on") === "on",
-    poolFrom: x?.pool_from ?? "192.168.1.100",
-    poolTo: x?.pool_to ?? "192.168.1.199",
-    leaseS: x?.lease_s ?? 86_400,
-  };
+export function lans(live: Live | undefined): LanView[] {
+  return (live?.settings?.lans ?? []).map((x) => ({
+    id: x.id,
+    conn: x.conn,
+    vlan: x.vlan,
+    address: x.address,
+    dhcp: x.dhcp === "on",
+    poolFrom: x.pool_from,
+    poolTo: x.pool_to,
+    leaseS: x.lease_s,
+  }));
 }
 
 /** The devices behind the stick with an address from it, by their address. */

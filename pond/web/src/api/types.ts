@@ -221,8 +221,14 @@ export interface IpoeInfo {
   lease: number | null;
 }
 
-/** The stick's own network, towards the devices behind it, where it is their router. */
+/**
+ * A network of the stick's towards the devices behind it, out through one
+ * connection that makes the stick their router.
+ */
 export interface LanInfo {
+  id: number;
+  /** The connection it goes out through: "pppoe:N" for a session, "ipoe:N" for the others. */
+  conn: string;
   /** The VID it goes in to the SFP port; "" for none. */
   vlan: string;
   /** The stick's address in it, with its length. */
@@ -236,6 +242,8 @@ export interface LanInfo {
 
 /** A device behind the stick that has an address from its DHCP server. */
 export interface LeaseInfo {
+  /** The network it is in. */
+  lan: number;
   mac: string;
   ip: string;
   /** The name it gave itself, if any. */
@@ -249,8 +257,8 @@ export interface Settings {
   sessions: SessionInfo[];
   /** The connections that take their address as a router does; absent on a stick of before. */
   ipoe?: IpoeInfo[];
-  /** The network behind the stick, and the devices in it; absent on a stick of before. */
-  lan?: LanInfo;
+  /** The networks behind the stick, and the devices in them; absent on a stick of before. */
+  lans?: LanInfo[];
   leases?: LeaseInfo[];
   mode: string | null;
   /** The bench's router mode: its WAN. */
