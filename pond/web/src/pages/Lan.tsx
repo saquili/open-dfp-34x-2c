@@ -1050,11 +1050,11 @@ function Devices({
   const canAdd = nets.some((p) => p.lan.dhcp);
   return (
     <div
-      className={`grid min-h-0 flex-1 content-start gap-6 xl:content-stretch xl:overflow-hidden ${fix ? "xl:grid-cols-[minmax(0,1fr)_25rem]" : ""}`}
+      className={`grid min-h-0 flex-1 content-start gap-6 xl:content-stretch ${fix ? "xl:grid-cols-[minmax(0,1fr)_25rem]" : ""}`}
     >
       <section
         aria-label={t("lan.colDevices")}
-        className="@container flex min-h-0 flex-col xl:h-full xl:overflow-hidden"
+        className="@container flex min-h-0 flex-col xl:h-full"
       >
         <div className="mt-px flex min-h-14 shrink-0 flex-wrap items-center gap-3 pt-4 pb-2">
           <Filter
