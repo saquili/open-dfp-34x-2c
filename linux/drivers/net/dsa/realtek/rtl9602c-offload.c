@@ -57,6 +57,7 @@
 #include <net/netevent.h>
 #include <net/arp.h>
 #include <net/fib_notifier.h>
+#include <net/fib_rules.h>
 #include <net/ip_fib.h>
 #include <net/ip6_fib.h>
 #include <net/ndisc.h>
@@ -1529,6 +1530,8 @@ static struct net_device *rtl9602c_flow_dev_of(struct flow_rule *rule);
 static int rtl9602c_extip_get(struct rtl9602c_priv *p, u32 addr);
 static void rtl9602c_extip_put(struct rtl9602c_priv *p, u32 addr);
 static bool rtl9602c_l34_route_wan_sync(struct rtl9602c_priv *p);
+static bool rtl9602c_l34_wan_sync(struct rtl9602c_priv *p,
+				  struct net_device *dev, int *wanp, bool *us);
 static bool rtl9602c_l34_route6_wan_sync(struct rtl9602c_priv *p);
 static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p);
 static int rtl9602c_l34_fib6_event(struct rtl9602c_priv *p,
@@ -3968,8 +3971,11 @@ static int rtl9602c_l34_extip_set(struct rtl9602c_priv *p, unsigned int idx,
 				  RTL9602C_EXTADDR_MODE_NAPT);
 	}
 	rtl9602c_flow_put(e, RTL9602C_EXTADDR_NEXTHOP_IDX, nh);
-	return rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR, idx, e,
-				      extip_words);
+	if (rtl9602c_nat_tbl_write(p, RTL9602C_L3TBL_CTRL_TABLE_EXTADDR, idx, e,
+				   extip_words))
+		return -EIO;
+	p->l34_extip_nhs[idx] = nh;
+	return 0;
 }
 
 /*
@@ -4164,7 +4170,8 @@ static bool rtl9602c_l34_extip_of_wan(struct rtl9602c_priv *p, unsigned int idx)
 
 /*
  * Point the external-address rows of the addresses and of the flows at the
- * uplink's next hop, when it changed; a PPPoE WAN's row keeps its own.
+ * uplink's next hop, when it changed; a PPPoE WAN's row keeps its own, and a
+ * routed host's follows its own WAN (rtl9602c_l34_routed_sync()).
  */
 static void rtl9602c_l34_extip_repoint(struct rtl9602c_priv *p)
 {
@@ -4175,7 +4182,8 @@ static void rtl9602c_l34_extip_repoint(struct rtl9602c_priv *p)
 		return;
 	p->l34_extip_nh = nh;
 	for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++)
-		if (p->l34_extip[i] && !rtl9602c_l34_extip_of_wan(p, i))
+		if (p->l34_extip[i] && !rtl9602c_l34_extip_of_wan(p, i) &&
+		    p->l34_extip_mode[i] != RTL9602C_EXTADDR_MODE_ONE_TO_ONE)
 			rtl9602c_l34_extip_set(p, i, p->l34_extip[i], nh);
 	pr_debug("<l3> translated frames leave by next hop %u\n", nh);
 }
@@ -4217,7 +4225,141 @@ static bool rtl9602c_l34_uplink_known(struct rtl9602c_priv *p)
 }
 
 /*
- * Give each routed host a row and free the rows of hosts no longer routed. A
+ * Whether the namespace's IPv4 rules can be followed: besides the default
+ * rules, only rules that send to a table, chosen by addresses alone. Such a
+ * rule chooses the table a routed host's frames are routed by, and so the
+ * WAN they leave by (rtl9602c_l34_host_dev()); one chosen by anything else, an
+ * interface, a mark, a port, a protocol or a user, cannot be followed, and
+ * neither can one that is inverted. A rule on the destination address is not
+ * told from one on the source here: the engine routes a host's frames by one
+ * next hop, the stick's own rules choose by the source alone (onu-mode), and
+ * rtl9602c_l34_host_dev() asks for two destinations.
+ */
+static bool rtl9602c_l34_rules_plain(void)
+{
+#ifdef CONFIG_IP_MULTIPLE_TABLES
+	const struct fib_rule *rule;
+	bool plain = true;
+
+	if (!fib4_has_custom_rules(&init_net))
+		return true;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(rule, &init_net.ipv4.rules_ops->rules_list, list) {
+		if (fib4_rule_default(rule))
+			continue;
+		if (rule->action != FR_ACT_TO_TBL ||
+		    rule->flags & FIB_RULE_INVERT || rule->iifindex ||
+		    rule->oifindex || rule->iifname[0] || rule->oifname[0] ||
+		    rule->mark || rule->mark_mask || rule->tun_id ||
+		    rule->l3mdev || rule->ip_proto ||
+		    rule->suppress_ifgroup != -1 ||
+		    rule->suppress_prefixlen != -1 ||
+		    fib_rule_port_range_set(&rule->sport_range) ||
+		    fib_rule_port_range_set(&rule->dport_range) ||
+		    __kuid_val(rule->uid_range.start) != 0 ||
+		    __kuid_val(rule->uid_range.end) != (uid_t)~0) {
+			plain = false;
+			break;
+		}
+	}
+	rcu_read_unlock();
+	return plain;
+#else
+	return true;
+#endif
+}
+
+/*
+ * The device the frames of routed host @r leave by, by default, as the rules
+ * and the tables route them: 0 where that is no default route of a unicast
+ * nexthop, or where two destinations give two devices.
+ */
+static int rtl9602c_l34_host_dev(const struct rtl9602c_l34_route *r)
+{
+	/* Any destination, and 192.0.2.1 (RFC 5737), which no table holds. */
+	static const __be32 to[] = { 0, cpu_to_be32(0xc0000201) };
+	int dev = 0;
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(to); i++) {
+		struct flowi4 fl4 = {
+			.flowi4_iif = r->ifindex,
+			.saddr = r->dst,
+			.daddr = to[i],
+		};
+		const struct fib_nh_common *nhc;
+		struct fib_result res;
+		int found = 0;
+
+		rcu_read_lock();
+		if (!fib_lookup(&init_net, &fl4, &res, FIB_LOOKUP_NOREF) &&
+		    res.type == RTN_UNICAST && !res.prefixlen && res.fi &&
+		    fib_info_num_path(res.fi) == 1) {
+			nhc = fib_info_nhc(res.fi, 0);
+			if (nhc->nhc_dev && !nhc->nhc_gw_family)
+				found = nhc->nhc_dev->ifindex;
+		}
+		rcu_read_unlock();
+		if (!found || (dev && found != dev))
+			return 0;
+		dev = found;
+	}
+	return dev;
+}
+
+/*
+ * The next-hop row by which routed host @r leaves, or -1 for none, the host
+ * then left to the CPU. Without rules, the uplink's, while it is known. With
+ * them, the WAN of the PPP device the host's own table routes it by: the
+ * default route's, the uplink's again, or a WAN of a table of its own, taken
+ * from @p->l34_src_wan as rtl9602c_l34_wan_sync() makes the default route's,
+ * its slot marked used. Context: RTNL and flow_lock held.
+ */
+static int rtl9602c_l34_host_nh(struct rtl9602c_priv *p,
+				const struct rtl9602c_l34_route *r, bool uplink)
+{
+	struct rtl9602c_l34_src_wan *s, *free = NULL;
+	struct net_device *dev;
+	unsigned int i;
+	int ifindex;
+
+	if (!fib4_has_custom_rules(&init_net))
+		return uplink ? (int)rtl9602c_l34_uplink_nh(p) : -1;
+
+	ifindex = rtl9602c_l34_host_dev(r);
+	if (!ifindex)
+		return -1;
+	if (p->l34_route_wan > 0 && p->l34_pppoe[p->l34_route_wan].ifindex == ifindex)
+		return p->l34_route_wan;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_src_wan); i++) {
+		s = &p->l34_src_wan[i];
+		if (s->ifindex == ifindex) {
+			s->used = true;
+			return s->wan > 0 ? s->wan : -1;
+		}
+		if (!s->ifindex && !free)
+			free = s;
+	}
+	if (!free)
+		return -1;
+
+	dev = __dev_get_by_index(&init_net, ifindex);
+	if (!dev)
+		return -1;
+	free->ifindex = ifindex;
+	free->used = true;
+	rtl9602c_l34_wan_sync(p, dev, &free->wan, &free->us);
+	if (free->wan > 0)
+		pr_debug("<l3> %s, the table of a routed host, leaves by PPPoE WAN %d\n",
+			 dev->name, free->wan);
+	return free->wan > 0 ? free->wan : -1;
+}
+
+/*
+ * Give each routed host a row, naming the next hop it leaves by, and free the
+ * rows of hosts no longer routed and the WANs no host leaves by any more. A
  * host that finds no free row stays with the CPU, which is said once.
  */
 static void rtl9602c_l34_routed_sync(struct rtl9602c_priv *p)
@@ -4226,16 +4368,30 @@ static void rtl9602c_l34_routed_sync(struct rtl9602c_priv *p)
 		rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_EXTADDR];
 	u32 zero[RTL9602C_L3TBL_DATA_WORDS] = {};
 	bool uplink = rtl9602c_l34_uplink_known(p);
+	int want[ARRAY_SIZE(p->l34_route)];
 	unsigned int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(p->l34_src_wan); i++)
+		p->l34_src_wan[i].used = false;
+	for (j = 0; j < ARRAY_SIZE(p->l34_route); j++)
+		want[j] = rtl9602c_l34_routed_host(&p->l34_route[j]) ?
+			  rtl9602c_l34_host_nh(p, &p->l34_route[j], uplink) : -1;
+	for (i = 0; i < ARRAY_SIZE(p->l34_src_wan); i++) {
+		struct rtl9602c_l34_src_wan *s = &p->l34_src_wan[i];
+
+		if (!s->ifindex || s->used)
+			continue;
+		rtl9602c_l34_wan_sync(p, NULL, &s->wan, &s->us);
+		s->ifindex = 0;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++) {
 		bool keep = false;
 
 		if (p->l34_extip_mode[i] != RTL9602C_EXTADDR_MODE_ONE_TO_ONE)
 			continue;
-		for (j = 0; uplink && j < ARRAY_SIZE(p->l34_route); j++)
-			if (rtl9602c_l34_routed_host(&p->l34_route[j]) &&
-			    p->l34_route[j].dst == p->l34_extip[i])
+		for (j = 0; j < ARRAY_SIZE(p->l34_route); j++)
+			if (want[j] >= 0 && p->l34_route[j].dst == p->l34_extip[i])
 				keep = true;
 		if (keep)
 			continue;
@@ -4246,27 +4402,29 @@ static void rtl9602c_l34_routed_sync(struct rtl9602c_priv *p)
 		p->l34_extip[i] = 0;
 		p->l34_extip_mode[i] = RTL9602C_EXTADDR_MODE_NAPT;
 	}
-	if (!uplink)
-		return;
 
 	for (j = 0; j < ARRAY_SIZE(p->l34_route); j++) {
 		const struct rtl9602c_l34_route *r = &p->l34_route[j];
-		unsigned int free = UINT_MAX, nh;
-		bool has = false;
+		unsigned int free = UINT_MAX, row = UINT_MAX;
 
-		if (!rtl9602c_l34_routed_host(r))
+		if (want[j] < 0)
 			continue;
 		for (i = 0; i < ARRAY_SIZE(p->l34_extip); i++) {
 			bool routed = p->l34_extip_mode[i] ==
 				      RTL9602C_EXTADDR_MODE_ONE_TO_ONE;
 
 			if (routed && p->l34_extip[i] == r->dst)
-				has = true;
+				row = i;
 			else if (!p->l34_extip[i] && free == UINT_MAX)
 				free = i;
 		}
-		if (has)
+		if (row != UINT_MAX) {
+			if (p->l34_extip_nhs[row] != want[j] &&
+			    rtl9602c_l34_extip_set(p, row, r->dst, want[j]))
+				pr_warn("<l3> extaddr[%u] for %pI4 did not take\n",
+					row, &r->dst);
 			continue;
+		}
 		if (free == UINT_MAX) {
 			if (!p->l34_routed_warned)
 				pr_warn("<l3> no external-address row left for %pI4; it is routed by the CPU\n",
@@ -4275,17 +4433,16 @@ static void rtl9602c_l34_routed_sync(struct rtl9602c_priv *p)
 			continue;
 		}
 
-		nh = rtl9602c_l34_uplink_nh(p);
 		p->l34_extip_mode[free] = RTL9602C_EXTADDR_MODE_ONE_TO_ONE;
-		if (rtl9602c_l34_extip_set(p, free, r->dst, nh)) {
+		if (rtl9602c_l34_extip_set(p, free, r->dst, want[j])) {
 			p->l34_extip_mode[free] = RTL9602C_EXTADDR_MODE_NAPT;
 			pr_warn("<l3> extaddr[%u] for %pI4 did not take\n", free,
 				&r->dst);
 			continue;
 		}
 		p->l34_extip[free] = r->dst;
-		pr_debug("<l3> %pI4 is routed: extaddr[%u], next hop %u\n",
-			 &r->dst, free, nh);
+		pr_debug("<l3> %pI4 is routed: extaddr[%u], next hop %d\n",
+			 &r->dst, free, want[j]);
 	}
 }
 
@@ -4293,9 +4450,10 @@ static void rtl9602c_l34_routed_sync(struct rtl9602c_priv *p)
  * Rewrite the hardware table, longest prefix first, which is right whether the
  * engine takes the longest matching row or the first valid one; which it takes
  * is not verified. If the routes need more rows than the table has, the shadow
- * has overflowed or the namespace has FIB rules, which the table cannot
- * express, the table is written empty, every destination to the CPU, with one
- * warning. Rows that did not change are not written. The external-address
+ * has overflowed or the namespace has FIB rules the table cannot express,
+ * other than those that choose a routed host's table by its address
+ * (rtl9602c_l34_rules_plain()), the table is written empty, every destination
+ * to the CPU, with one warning. Rows that did not change are not written. The external-address
  * rows then follow the uplink's next hop, which a route or a neighbour may
  * have changed, and the routed hosts follow the routes.
  */
@@ -4311,7 +4469,7 @@ static void rtl9602c_l34_route_commit(struct rtl9602c_priv *p)
 	if (WARN_ON(rows > ARRAY_SIZE(hw)))
 		rows = ARRAY_SIZE(hw);
 
-	bail = p->l34_route_over || fib4_has_custom_rules(&init_net);
+	bail = p->l34_route_over || !rtl9602c_l34_rules_plain();
 
 	for (prefix = 32; prefix >= 0 && !bail; prefix--) {
 		for (i = 0; i < ARRAY_SIZE(p->l34_route); i++) {
@@ -4426,7 +4584,11 @@ static void rtl9602c_l34_fib_work(struct work_struct *work)
 
 		rtnl_lock();
 		mutex_lock(&p->flow_lock);
-		if (ev->v6)
+		if (ev->resync && ev->v6)
+			rtl9602c_l34_route6_commit(p);
+		else if (ev->resync)
+			rtl9602c_l34_route_commit(p);
+		else if (ev->v6)
 			rtl9602c_l34_route6_set(p, &ev->route6, ev->add);
 		else if (ev->nh)
 			rtl9602c_l34_nh_state(p, ev->route.ifindex,
@@ -4512,6 +4674,22 @@ static void rtl9602c_l34_nh_state(struct rtl9602c_priv *p, int ifindex,
  * nexthop, no nexthop object and no DSCP can be followed; a blackhole route
  * becomes a drop row; any other a CPU row.
  */
+/*
+ * A change the shadow does not hold, a route of another table or a rule:
+ * the work item commits the routes again, which follows the rules.
+ */
+static int rtl9602c_l34_fib_resync(struct rtl9602c_priv *p, bool v6)
+{
+	struct rtl9602c_l34_fib_ev *ev = kzalloc(sizeof(*ev), GFP_ATOMIC);
+
+	if (!ev)
+		return NOTIFY_DONE;
+	ev->resync = true;
+	ev->v6 = v6;
+	rtl9602c_l34_fib_queue(p, ev);
+	return NOTIFY_DONE;
+}
+
 static int rtl9602c_l34_fib_event(struct notifier_block *nb,
 				  unsigned long event, void *ptr)
 {
@@ -4538,14 +4716,21 @@ static int rtl9602c_l34_fib_event(struct notifier_block *nb,
 	case FIB_EVENT_NH_ADD:
 	case FIB_EVENT_NH_DEL:
 		return rtl9602c_l34_fib_nh_event(p, event, info);
+	case FIB_EVENT_RULE_ADD:
+	case FIB_EVENT_RULE_DEL:
+		return rtl9602c_l34_fib_resync(p, false);
 	default:
 		return NOTIFY_DONE;
 	}
 
 	fen = container_of(info, struct fib_entry_notifier_info, info);
 	fi = fen->fi;
-	if (!fi || fen->tb_id != RT_TABLE_MAIN)
+	if (!fi)
 		return NOTIFY_DONE;
+	/* A table of a routed host's own: which WAN it leaves by may change. */
+	if (fen->tb_id != RT_TABLE_MAIN)
+		return fen->tb_id == RT_TABLE_LOCAL ? NOTIFY_DONE :
+						      rtl9602c_l34_fib_resync(p, false);
 	if (fen->dst_len > 32)
 		return NOTIFY_DONE;
 
@@ -4618,6 +4803,9 @@ static int rtl9602c_l34_fib6_event(struct rtl9602c_priv *p,
 	case FIB_EVENT_ENTRY_APPEND:
 	case FIB_EVENT_ENTRY_DEL:
 		break;
+	case FIB_EVENT_RULE_ADD:
+	case FIB_EVENT_RULE_DEL:
+		return rtl9602c_l34_fib_resync(p, true);
 	default:
 		return NOTIFY_DONE;
 	}
@@ -4921,7 +5109,12 @@ static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
 	unsigned int rows = rtl9602c_nat_tbl_entries[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
 	unsigned int words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
 	u32 hw[ARRAY_SIZE(p->l34_route6_hw)][5] = {};
-	bool carried = false, failed = false, bail = p->l34_route6_over;
+	/*
+	 * The engine routes IPv6 by the destination alone: with rules, which
+	 * may route a host by a table of its own, the CPU routes all of it.
+	 */
+	bool carried = false, failed = false,
+	     bail = p->l34_route6_over || fib6_has_custom_rules(&init_net);
 	unsigned int n = 0, i, j, nh;
 	int prefix;
 	bool wan;

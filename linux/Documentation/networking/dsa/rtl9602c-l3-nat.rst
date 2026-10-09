@@ -2343,15 +2343,17 @@ The encoding of a route into a row:
      - M
      - A /32, a /30 and a /24 at rows 0, 1 and 2; a default route as two rows
        below the /30, gone with the route; the routes of a routing test.
-   * - If the routes need more than 16 rows, or the namespace has FIB rules, the
-       table is written empty (every destination to the CPU) and a warning is
-       logged once; the table comes back when the routes fit again. If the
-       32-route shadow overflows, hardware routing stays off until the driver is
-       reloaded, and the warning names the route that was not recorded.
+   * - If the routes need more than 16 rows, or the namespace has FIB rules
+       that choose a table by anything but addresses, the table is written empty
+       (every destination to the CPU) and a warning is logged once; the table
+       comes back when the routes fit again. If the 32-route shadow overflows,
+       hardware routing stays off until the driver is reloaded, and the warning
+       names the route that was not recorded.
      - M
      - 19 rows needed gave 0 rows and recovered when the routes went; 40 routes
-       gave 0 rows and stayed so. The branch for FIB rules is not exercised: the
-       board's kernel has no multiple routing tables.
+       gave 0 rows and stayed so. A rule on the source address of a routed host
+       left the table as it was (see "Routed hosts and the WAN of the default
+       route"); a rule of another kind is not measured.
 
 The shadows
 -----------
@@ -2691,6 +2693,26 @@ uplink goes, and a host that finds no free row is routed by the CPU, which a
 warning says once. The host route itself becomes action 3 with the next-hop row
 of the host's neighbour, internal.
 
+*A host routed by a table of its own.* A stick that hands the addresses of
+two sessions to two hosts, in two VLANs, routes what comes from the second's
+address by a table of its own, chosen by a rule on that address (``ip rule
+add from <address> lookup <table>``, with a default route through the second
+session's PPP device in that table). Once the namespace has rules,
+``rtl9602c_l34_routed_sync()`` asks the kernel which device a host's frames
+leave by, with ``fib_lookup()`` from the host's address on its device, for any
+destination and for 192.0.2.1: the default route's WAN serves the hosts it
+routes, and a PPP device of a table of a host's own gets a PPPoE WAN of its
+own, made as the default route's is (steps 3 to 7 above), held in
+``l34_src_wan`` and released when no host leaves by it. The host's row points
+at that WAN's next hop. A host for which the two destinations give two
+devices, or a device that is no PPP device over a GEM interface, is routed by
+the CPU. The route table goes on mirroring the main table while the rules
+choose a table by addresses alone (``rtl9602c_l34_rules_plain()``); a rule on
+an interface, a mark, a port, a protocol or a user, or an inverted one, has it
+written empty. The engine routes IPv6 by the destination alone, and with rules
+the IPv6 route table is written empty. Routes of the other tables and rule
+changes have the routes committed again.
+
 .. list-table::
    :header-rows: 1
    :widths: 58 6 36
@@ -2724,6 +2746,17 @@ of the host's neighbour, internal.
        idle and its port took 8 frames in each 20 s run.
      - M
      - iperf3 between the router and the concentrator's side, ``/proc/stat``
+       and the CPU port's frame counter around each run.
+   * - Two hosts, each handed the address of a session of its own in a VLAN of
+       its own, the second routed by a table of its own: each host's frames
+       left by its own session, through the engine both ways, 910 and 874
+       Mbit/s up and 885 and 882 down one at a time, about 460 each at once,
+       the CPU port taking about 25 frames in each 6 s run. Before, with the
+       rule in place, both hosts' frames crossed the CPU at 30 to 38 Mbit/s.
+       One host after the rule went still went through the engine.
+     - M
+     - iperf3 from two hosts behind the SFP port, in VLANs 410 and 37, to the
+       concentrator's side, each session's bytes counted at the concentrator,
        and the CPU port's frame counter around each run.
    * - Upstream, 0.5 to 0.7 % of the frames did not reach the concentrator, at
        100 to 15,000 frames a second and 64 to 1,400 octets, while the PON
@@ -3256,10 +3289,15 @@ Known limitations
   first while it is free.
 - The route table mirrors the main routing table of the initial network
   namespace in 16 rows, and a /0 takes two of them. When the routes need more
-  rows, or the namespace has FIB rules, the table is written empty and every
-  destination goes to the CPU, with one warning; it is written again when the
-  routes fit. When more than 32 routes exist, hardware routing stays off until
-  the driver is reloaded.
+  rows, or the namespace has FIB rules that choose a table by anything but
+  addresses, the table is written empty and every destination goes to the CPU,
+  with one warning; it is written again when the routes fit. When more than 32
+  routes exist, hardware routing stays off until the driver is reloaded.
+- A routed host leaves by one next hop, the one its frames take to any
+  destination: a rule that sends some of its destinations by another table is
+  not followed, and the two destinations the driver asks for may not tell it.
+- With FIB rules, all IPv6 goes to the CPU: the IPv6 route table cannot route
+  a host by a table of its own.
 - The IPv6 route table has eight rows: the link-local and multicast prefixes
   take two and the default route one, which leaves five. When the routes need
   more, all IPv6 goes to the CPU. One IPv6 default route has a WAN; another

@@ -2644,7 +2644,25 @@ struct rtl9602c_l34_fib_ev {
 	bool				v6;
 	bool				add;
 	bool				nh;
+	bool				resync;
 };
+
+/**
+ * struct rtl9602c_l34_src_wan - the PPPoE WAN of a routed host's own table
+ * @ifindex: the PPP device the host's frames leave by, 0 for a free slot
+ * @wan: its row, as rtl9602c_priv.l34_route_wan holds the default route's
+ * @us: it holds a reference on rtl9602c_priv.l34_us_flow
+ * @used: a routed host leaves by it, in the sync under way
+ */
+struct rtl9602c_l34_src_wan {
+	int	ifindex;
+	int	wan;
+	bool	us;
+	bool	used;
+};
+
+/* The PPPoE WANs of the routed hosts' own tables: the rows but the default route's. */
+#define RTL9602C_L34_SRC_WANS	6
 
 /**
  * struct rtl9602c_pppoe_wan - a PPPoE WAN of the L3/NAT engine
@@ -3001,6 +3019,13 @@ struct rtl9602c_priv {
 	 * %RTL9602C_EXTADDR_MODE_ONE_TO_ONE for a routed host's row
 	 */
 	u8 l34_extip_mode[8];
+	/** @l34_extip_nhs: the next-hop row each external-address row names */
+	u8 l34_extip_nhs[8];
+	/**
+	 * @l34_src_wan: the PPPoE WANs that routed hosts leave by through a
+	 * table of their own, chosen by a rule on their address
+	 */
+	struct rtl9602c_l34_src_wan l34_src_wan[RTL9602C_L34_SRC_WANS];
 
 	/** @l34_pppoe: the PPPoE WANs by row; row 0 is the Ethernet uplink's */
 	struct rtl9602c_pppoe_wan l34_pppoe[8];
