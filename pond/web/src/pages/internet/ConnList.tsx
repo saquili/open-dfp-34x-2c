@@ -413,8 +413,12 @@ export function ConnList({
     setOpen((o) => (o.includes(key) ? o.filter((k) => k !== key) : [...o, key]));
   return (
     <section aria-labelledby="conns" className="@container flex flex-col xl:h-full xl:min-h-0">
-      {/* As high as the form's title, which sits within the form's border. */}
-      <div className="flex min-h-14 shrink-0 items-center border-t border-transparent pt-4 pb-2">
+      {/*
+       * The title and the names of the columns as high as the form's title
+       * and tabs, which sit within the form's border, so that the lines
+       * under them meet.
+       */}
+      <div className="mt-px flex min-h-14 shrink-0 items-center pt-4 pb-2">
         <h2 id="conns" className="text-base font-semibold">
           {t("internet.conns")}
         </h2>
@@ -431,7 +435,7 @@ export function ConnList({
         ) : (
           <div className="grid grid-cols-[2rem_auto_minmax(8rem,1fr)_auto_auto_auto] gap-x-4 gap-y-2 pb-2 @max-3xl:flex @max-3xl:flex-col @max-3xl:gap-3">
             <div
-              className={`sticky top-0 z-10 col-span-full grid grid-cols-subgrid border-x border-b border-x-transparent border-b-base-300 bg-base-200 px-4 pt-1 pb-2 text-xs font-semibold text-base-content/70 ${MEDIUM} @max-3xl:gap-x-4 @max-lg:hidden`}
+              className={`sticky top-0 z-10 col-span-full grid grid-cols-subgrid border-x border-b border-x-transparent border-b-base-300 bg-base-200 mb-2 h-11 items-center px-4 @max-3xl:mb-1 text-xs font-semibold text-base-content/70 ${MEDIUM} @max-3xl:gap-x-4 @max-lg:hidden`}
             >
               <span />
               <span>{t("internet.colVlan")}</span>
@@ -457,7 +461,7 @@ export function ConnList({
         )}
       </div>
       {/* As high as the form's buttons, so that the two lines over them meet. */}
-      <p className="flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
+      <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
         {t("internet.room", { n: list.length, max: MAX_CONNS })}
       </p>
     </section>

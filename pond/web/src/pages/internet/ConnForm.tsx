@@ -136,7 +136,7 @@ function Buttons({
 }) {
   const { t } = useI18n();
   return (
-    <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-3">
+    <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-2.5">
       <button type="submit" className="btn btn-primary" disabled={disabled}>
         {editing ? t("internet.save") : t("internet.addConn")}
       </button>
