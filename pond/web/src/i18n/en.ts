@@ -426,7 +426,7 @@ export const en = {
     colAddress: "Address from the operator",
     noLink: "No link",
     waitingAddress: "Waiting for an address",
-    lease: "lease {time} left",
+    lease: "lease {time}",
     address4: "IPv4 address with its mask",
     gateway4: "IPv4 gateway",
     dnsServers: "Name servers",

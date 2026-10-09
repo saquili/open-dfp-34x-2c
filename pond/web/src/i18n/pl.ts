@@ -426,7 +426,7 @@ export const pl: Dictionary = {
     colAddress: "Adres od operatora",
     noLink: "Brak łącza",
     waitingAddress: "Czeka na adres",
-    lease: "dzierżawa jeszcze {time}",
+    lease: "dzierżawa {time}",
     address4: "Adres IPv4 z maską",
     gateway4: "Brama IPv4",
     dnsServers: "Serwery DNS",

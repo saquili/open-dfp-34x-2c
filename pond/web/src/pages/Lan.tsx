@@ -482,7 +482,8 @@ const VIEWS = ["nets", "devices"] as const;
  * The devices' table: its columns, the same in its head and in every line,
  * as wide as their longest values (a MAC, 192.168.255.254, a network's name cut short,
  * "22 godz. 30 min", a button), so that they stand still as a search
- * narrows the list.
+ * narrows the list. Below 56rem, about what their least widths and gaps
+ * take with a scroll bar, a device takes two lines: never a scroll across.
  */
 const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_7rem_8rem_6rem]";
 /*
@@ -490,7 +491,7 @@ const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_7rem_8rem_6rem]";
  * head and every line; as narrow as a phone, the button is its icon alone.
  */
 const NARROW =
-  "@max-3xl:grid-cols-[minmax(0,1fr)_8rem_5.5rem] @max-3xl:gap-x-3 @max-lg:grid-cols-[minmax(0,1fr)_7.5rem_1.5rem]";
+  "@max-4xl:grid-cols-[minmax(0,1fr)_8rem_5.5rem] @max-4xl:gap-x-3 @max-lg:grid-cols-[minmax(0,1fr)_7.5rem_1.5rem]";
 
 /** A device of the table: one with an address now, one with a fixed address, or both. */
 interface Device {
@@ -563,16 +564,16 @@ function DeviceTable({
     return l ? netName(t, l, places) : "–";
   };
   return (
-    <div className={`grid ${DEVICE_COLS} gap-x-6 gap-y-2 pb-2 @max-3xl:flex @max-3xl:flex-col`}>
+    <div className={`grid ${DEVICE_COLS} gap-x-6 gap-y-2 pb-2 @max-4xl:flex @max-4xl:flex-col`}>
       {/* In a narrow list the head names the first line's columns alone. */}
       <div
-        className={`sticky top-0 z-10 col-span-full mb-2 grid h-11 grid-cols-subgrid items-center border-x border-b border-x-transparent border-b-base-300 bg-base-200 px-4 text-xs font-semibold text-base-content/70 @max-3xl:mb-1 ${NARROW}`}
+        className={`sticky top-0 z-10 col-span-full mb-2 grid h-11 grid-cols-subgrid items-center border-x border-b border-x-transparent border-b-base-300 bg-base-200 px-4 text-xs font-semibold text-base-content/70 @max-4xl:mb-1 ${NARROW}`}
       >
         <span className="pl-5">{t("lan.colDevice")}</span>
-        <span className="@max-3xl:hidden">{t("lan.colMac")}</span>
-        <span className="@max-3xl:col-start-2 @max-3xl:text-right">{t("lan.colIp")}</span>
-        <span className="@max-3xl:hidden">{t("lan.colNet")}</span>
-        <span className="@max-3xl:hidden">{t("lan.colLease")}</span>
+        <span className="@max-4xl:hidden">{t("lan.colMac")}</span>
+        <span className="@max-4xl:col-start-2 @max-4xl:text-right">{t("lan.colIp")}</span>
+        <span className="@max-4xl:hidden">{t("lan.colNet")}</span>
+        <span className="@max-4xl:hidden">{t("lan.colLease")}</span>
         <span />
       </div>
       <div className="col-span-full grid grid-cols-subgrid rounded-box border border-base-300 bg-base-100">
@@ -587,7 +588,7 @@ function DeviceTable({
           return (
             <div
               key={`${d.lan}:${d.mac}`}
-              className={`col-span-full grid grid-cols-subgrid items-baseline border-b border-base-300 px-4 py-2.5 text-sm last:border-b-0 @max-3xl:gap-y-0.5 ${NARROW}`}
+              className={`col-span-full grid grid-cols-subgrid items-baseline border-b border-base-300 px-4 py-2.5 text-sm last:border-b-0 @max-4xl:gap-y-0.5 ${NARROW}`}
             >
               <span className="flex min-w-0 items-baseline gap-1.5">
                 {d.fixed ? (
@@ -600,10 +601,10 @@ function DeviceTable({
                 )}
                 <span className={`truncate ${d.name ? "" : "text-base-content/60"}`}>{name}</span>
               </span>
-              <span className="font-mono text-xs text-base-content/70 @max-3xl:hidden">
+              <span className="font-mono text-xs text-base-content/70 @max-4xl:hidden">
                 {d.mac}
               </span>
-              <span className="font-mono @max-3xl:col-start-2 @max-3xl:row-start-1 @max-3xl:text-right">
+              <span className="font-mono @max-4xl:col-start-2 @max-4xl:row-start-1 @max-4xl:text-right">
                 {d.fixed?.ip ?? d.now}
                 {moved && (
                   <span className="block font-sans text-xs text-base-content/60">
@@ -611,13 +612,13 @@ function DeviceTable({
                   </span>
                 )}
               </span>
-              <span className="truncate @max-3xl:hidden">{netOf(d.lan)}</span>
+              <span className="truncate @max-4xl:hidden">{netOf(d.lan)}</span>
               <span
-                className={`whitespace-nowrap @max-3xl:hidden ${d.fixed && !d.now ? "text-base-content/60" : ""}`}
+                className={`whitespace-nowrap @max-4xl:hidden ${d.fixed && !d.now ? "text-base-content/60" : ""}`}
               >
                 {lease}
               </span>
-              <span className="-my-1 flex justify-end @max-3xl:col-start-3 @max-3xl:row-start-1">
+              <span className="-my-1 flex justify-end @max-4xl:col-start-3 @max-4xl:row-start-1">
                 {d.fixed ? (
                   <button
                     type="button"
@@ -640,7 +641,7 @@ function DeviceTable({
                   </button>
                 )}
               </span>
-              <span className="col-span-full hidden pl-5 text-xs text-base-content/70 @max-3xl:block">
+              <span className="col-span-full hidden pl-5 text-xs text-base-content/70 @max-4xl:block">
                 <span className="font-mono">{d.mac}</span> · {netOf(d.lan)} · {lease}
               </span>
             </div>
