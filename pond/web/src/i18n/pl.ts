@@ -15,7 +15,6 @@ export const pl: Dictionary = {
     overview: "Przegląd",
     fibre: "Światłowód",
     internet: "Internet",
-    lan: "Sieć lokalna",
     sfp: "Port SFP",
     switch: "Switch",
     system: "System",
@@ -306,7 +305,6 @@ export const pl: Dictionary = {
     useEnds: "Kończy się na wkładce; nie idzie na port SFP",
   },
   lan: {
-    title: "Sieć lokalna",
     hint: "Sieci urządzeń za wkładką. Każda wychodzi do internetu z jednego połączenia-routera, z jego adresem.",
     lans: "Sieci lokalne",
     colNet: "Sieć",

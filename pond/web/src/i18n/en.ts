@@ -13,7 +13,6 @@ export const en = {
     overview: "Overview",
     fibre: "Fibre",
     internet: "Internet",
-    lan: "Local network",
     sfp: "SFP port",
     switch: "Switch",
     system: "System",
@@ -304,7 +303,6 @@ export const en = {
     useEnds: "Ends on the stick; not passed to the SFP port",
   },
   lan: {
-    title: "Local network",
     hint: "The networks of the devices behind the stick. Each goes out to the internet through one router connection, with its address.",
     lans: "Local networks",
     colNet: "Network",

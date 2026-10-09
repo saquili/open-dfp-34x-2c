@@ -24,7 +24,6 @@ import { AppShell } from "./components/AppShell";
 import { useI18n } from "./i18n";
 import { Fibre } from "./pages/Fibre";
 import { Internet } from "./pages/Internet";
-import { Lan } from "./pages/Lan";
 import { Overview } from "./pages/Overview";
 import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
@@ -114,7 +113,15 @@ const app = createRoute({
 const overview = createRoute({ getParentRoute: () => app, path: "/", component: Overview });
 const fibre = createRoute({ getParentRoute: () => app, path: "/fibre", component: Fibre });
 const internet = createRoute({ getParentRoute: () => app, path: "/internet", component: Internet });
-const lanPage = createRoute({ getParentRoute: () => app, path: "/lan", component: Lan });
+/* The local network was a page of its own; its tabs are the internet page's now. */
+const lanPage = createRoute({
+  getParentRoute: () => app,
+  path: "/lan",
+  beforeLoad: ({ search }) => {
+    const tab = (search as { tab?: unknown }).tab === "devices" ? "devices" : "nets";
+    throw redirect({ to: "/internet", search: { tab } as never });
+  },
+});
 const sfpPage = createRoute({
   getParentRoute: () => app,
   path: "/sfp",
