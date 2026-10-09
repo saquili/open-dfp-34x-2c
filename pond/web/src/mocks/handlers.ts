@@ -222,6 +222,8 @@ if (SCENARIO === "sessions") {
       pool_from: "192.168.1.100",
       pool_to: "192.168.1.199",
       lease_s: 86_400,
+      ipv6: "on",
+      ipv6_subnet: "0",
     },
     {
       id: 2,
@@ -233,6 +235,8 @@ if (SCENARIO === "sessions") {
       pool_from: "192.168.2.100",
       pool_to: "192.168.2.199",
       lease_s: 43_200,
+      ipv6: "on",
+      ipv6_subnet: "1",
     },
   ];
   settings.leases = HOUSE.map((name, i) => {
@@ -652,6 +656,8 @@ export const handlers = [
     if (body.POOL_FROM) x.pool_from = body.POOL_FROM;
     if (body.POOL_TO) x.pool_to = body.POOL_TO;
     if (body.LEASE) x.lease_s = Number(body.LEASE);
+    if (body.IPV6 === "on" || body.IPV6 === "off") x.ipv6 = body.IPV6;
+    if (body.IPV6_SUBNET !== undefined) x.ipv6_subnet = body.IPV6_SUBNET;
     return HttpResponse.json({ id: "lan", ok: true });
   }),
 

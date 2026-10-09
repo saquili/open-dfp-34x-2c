@@ -240,6 +240,13 @@ export interface LanInfo {
   pool_from: string;
   pool_to: string;
   lease_s: number;
+  /**
+   * IPv6 for its devices, by SLAAC: the /64 network @ipv6_subnet (hex) of
+   * the prefix its connection has from the operator. None from a stick of
+   * before.
+   */
+  ipv6?: "on" | "off";
+  ipv6_subnet?: string;
 }
 
 /** A device behind the stick that has an address from its DHCP server. */

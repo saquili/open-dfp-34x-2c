@@ -400,6 +400,21 @@ export const en = {
     poolOrder: "The pool's end must come after its start.",
     poolStick: "The stick's address must not lie in the pool.",
     lease: "Lease time",
+    ipv6: "IPv6 for the devices",
+    ipv6On: "On",
+    ipv6Off: "Off",
+    ipv6OnHint:
+      "The devices make their own addresses in a /64 network (SLAAC) and get the operator's name servers. The stick's firewall blocks connections from the internet to them.",
+    ipv6OffHint: "The devices in this network have IPv4 only.",
+    ipv6None: "{name} has no IPv6, so this network has IPv4 only.",
+    ipv6OffShort: "no IPv6",
+    ipv6Wait: "IPv6 waits for a prefix",
+    subnet: "Subnet number",
+    subnetHint: "In hex, 0 to {max}. Network: {net}.",
+    subnetWait:
+      "In hex, 0 to ff. The network comes from the prefix once {name} has it from the operator.",
+    subnetWhole: "The network takes the whole prefix {net}.",
+    subnetBad: "The subnet number is a hex number from 0 to {max}.",
   },
   internet: {
     soon: "soon",

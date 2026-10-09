@@ -400,6 +400,21 @@ export const pl: Dictionary = {
     poolOrder: "Koniec puli musi być za jej początkiem.",
     poolStick: "Adres wkładki nie może leżeć w puli.",
     lease: "Czas dzierżawy",
+    ipv6: "IPv6 dla urządzeń",
+    ipv6On: "Włączone",
+    ipv6Off: "Wyłączone",
+    ipv6OnHint:
+      "Urządzenia same składają adres z podsieci /64 (SLAAC) i dostają DNS operatora. Połączenia z internetu do nich blokuje zapora wkładki.",
+    ipv6OffHint: "Urządzenia w tej sieci mają tylko IPv4.",
+    ipv6None: "{name} nie ma IPv6, więc ta sieć ma tylko IPv4.",
+    ipv6OffShort: "bez IPv6",
+    ipv6Wait: "IPv6 czeka na prefiks",
+    subnet: "Numer podsieci",
+    subnetHint: "Szesnastkowo, od 0 do {max}. Podsieć: {net}.",
+    subnetWait:
+      "Szesnastkowo, od 0 do ff. Podsieć wyjdzie z prefiksu, gdy {name} dostanie go od operatora.",
+    subnetWhole: "Sieć dostaje cały prefiks {net}.",
+    subnetBad: "Numer podsieci to liczba szesnastkowa od 0 do {max}.",
   },
   internet: {
     soon: "wkrótce",

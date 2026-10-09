@@ -356,6 +356,9 @@ export interface LanView {
   poolFrom: string;
   poolTo: string;
   leaseS: number;
+  /** IPv6 for its devices, and the number of its /64 network in its connection's prefix. */
+  ipv6: boolean;
+  subnet6: number;
 }
 
 export function lans(live: Live | undefined): LanView[] {
@@ -369,6 +372,8 @@ export function lans(live: Live | undefined): LanView[] {
     poolFrom: x.pool_from,
     poolTo: x.pool_to,
     leaseS: x.lease_s,
+    ipv6: x.ipv6 === "on",
+    subnet6: Number.parseInt(x.ipv6_subnet ?? "0", 16) || 0,
   }));
 }
 

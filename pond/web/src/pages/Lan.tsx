@@ -35,6 +35,7 @@ import { SidePanel, withPanel } from "../components/SidePanel";
 import { useI18n } from "../i18n";
 import { duration } from "../lib/format";
 import { ip4, net4 } from "../lib/ipv4";
+import { subnet64, subnets64 } from "../lib/ipv6";
 import { ipv4, ipv4Cidr, mac, required, upTo, vlan, z } from "../lib/schemas";
 import { downVlan, fixed, type LanView, lans, leases, sessions } from "../lib/state";
 import { type Conn, conns } from "./internet/conns";
@@ -173,6 +174,8 @@ function LanFields({
   const others = all.filter((l) => l.id !== x?.id);
   const pins = x ? fixed(live).filter((f) => f.lan === x.id) : [];
   const nameOf = (l: LanView) => netName(t, l, places);
+  /* The connection a network goes out through, whose IPv6 prefix it takes a /64 of. */
+  const wanOf = (key: string) => places.find((p) => p.c.key === key)?.c;
   const schema = z
     .object({
       conn: z.string().check(z.minLength(1, t("form.required"))),
@@ -183,6 +186,8 @@ function LanFields({
       poolFrom: ipv4(t),
       poolTo: ipv4(t),
       lease: z.enum(LEASES),
+      ipv6: z.enum(["on", "off"]),
+      subnet: z.string().check(z.trim()),
     })
     .check(
       /*
@@ -191,8 +196,18 @@ function LanFields({
        */
       z.superRefine((v, ctx) => {
         const net = net4(v.address);
-        const fail = (path: "name" | "address" | "poolFrom" | "poolTo", message: string) =>
-          ctx.addIssue({ code: "custom", path: [path], message, input: v[path] });
+        const fail = (
+          path: "name" | "address" | "poolFrom" | "poolTo" | "subnet",
+          message: string,
+        ) => ctx.addIssue({ code: "custom", path: [path], message, input: v[path] });
+        /* The /64 network is one the connection's prefix holds: 0 to ff of a /56. */
+        const w = wanOf(v.conn);
+        if (v.ipv6 === "on" && w && w.x.family !== "ipv4") {
+          const room = w.x.prefix ? subnets64(w.x.prefix) : 256;
+          const id = /^[0-9a-f]{1,4}$/i.test(v.subnet) ? Number.parseInt(v.subnet, 16) : -1;
+          if (room > 1 && (id < 0 || id >= room))
+            fail("subnet", t("lan.subnetBad", { max: (room - 1).toString(16) }));
+        }
         /* Two networks of one name would be one in every list. */
         if (others.some((l) => nameOf(l).toLowerCase() === v.name.toLowerCase()))
           fail("name", t("lan.nameTaken"));
@@ -254,6 +269,8 @@ function LanFields({
           poolFrom: x.poolFrom,
           poolTo: x.poolTo,
           lease: LEASES.find((l) => Number(l) === x.leaseS) ?? "86400",
+          ipv6: x.ipv6 ? "on" : "off",
+          subnet: x.subnet6.toString(16),
         }
       : {
           conn,
@@ -261,11 +278,25 @@ function LanFields({
           vlan: freeVid,
           dhcp: "on",
           lease: "86400",
+          ipv6: wanOf(conn)?.x.family === "ipv4" ? "off" : "on",
+          subnet: "0",
           ...suggest(all),
         },
   });
   const { errors, isDirty } = form.formState;
-  const [vid, address, dhcp] = form.watch(["vlan", "address", "dhcp"]);
+  const [vid, address, dhcp, connKey, ipv6, subnet] = form.watch([
+    "vlan",
+    "address",
+    "dhcp",
+    "conn",
+    "ipv6",
+    "subnet",
+  ]);
+  const w = wanOf(connKey);
+  const v6 = !!w && w.x.family !== "ipv4";
+  const prefix = w?.x.prefix ?? null;
+  const room = prefix ? subnets64(prefix) : 256;
+  const net6 = prefix ? subnet64(prefix, Number.parseInt(subnet || "0", 16)) : null;
   const net = net4(address);
 
   /*
@@ -295,6 +326,8 @@ function LanFields({
         POOL_FROM: v.poolFrom,
         POOL_TO: v.poolTo,
         LEASE: v.lease,
+        IPV6: v6 ? v.ipv6 : "off",
+        IPV6_SUBNET: (Number.parseInt(v.subnet || "0", 16) || 0).toString(16),
       },
       { onSuccess: onDone },
     );
@@ -379,6 +412,45 @@ function LanFields({
                 options={LEASES.map((l) => ({ value: l, label: duration(Number(l), lang) }))}
               />
             </>
+          )}
+          {/* IPv6 by SLAAC: a /64 of the prefix the connection has from the operator. */}
+          {v6 && w ? (
+            <>
+              <Choices
+                label={t("lan.ipv6")}
+                hint={t(ipv6 === "on" ? "lan.ipv6OnHint" : "lan.ipv6OffHint")}
+                field={form.register("ipv6")}
+                options={[
+                  { value: "on", label: t("lan.ipv6On") },
+                  { value: "off", label: t("lan.ipv6Off") },
+                ]}
+              />
+              {ipv6 === "on" &&
+                (room === 1 && prefix ? (
+                  <p className="-mt-2 text-xs text-base-content/70">
+                    {t("lan.subnetWhole", { net: subnet64(prefix, 0) ?? prefix })}
+                  </p>
+                ) : (
+                  <Field
+                    label={t("lan.subnet")}
+                    placeholder="0"
+                    hint={
+                      net6
+                        ? t("lan.subnetHint", { max: (room - 1).toString(16), net: net6 })
+                        : t("lan.subnetWait", { name: connName(t, w) })
+                    }
+                    error={errors.subnet?.message}
+                    {...form.register("subnet")}
+                  />
+                ))}
+            </>
+          ) : (
+            <div className="grid gap-1">
+              <span className="text-sm font-semibold">{t("lan.ipv6")}</span>
+              <p className="text-xs text-base-content/70">
+                {t("lan.ipv6None", { name: w ? connName(t, w) : "" })}
+              </p>
+            </div>
           )}
         </div>
         <Foot
@@ -902,6 +974,15 @@ function NetCard({
         <Mono>{net?.text ?? x.address}</Mono>
         <Sub>
           {t("lan.stickAt")} <Mono>{x.address.split("/")[0]}</Mono>
+        </Sub>
+        <Sub>
+          {!x.ipv6 || p.c.x.family === "ipv4" ? (
+            t("lan.ipv6OffShort")
+          ) : p.c.x.prefix ? (
+            <Mono>{subnet64(p.c.x.prefix, x.subnet6) ?? p.c.x.prefix}</Mono>
+          ) : (
+            t("lan.ipv6Wait")
+          )}
         </Sub>
       </Cell>
       <Cell head={t("lan.colVlan")} at={AT.second}>
