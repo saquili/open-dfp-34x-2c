@@ -16,7 +16,7 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
 import { useNetwork, useOmci, useSessionChange } from "../api/config";
@@ -24,7 +24,7 @@ import { useLive } from "../api/live";
 import type { Family } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page } from "../components/Page";
-import { Badge, Facts } from "../components/ui";
+import { Cell, Dot, Row, Table } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { Mib, type Service, services } from "../lib/omci";
 import { mac, required, upTo, vlan, z } from "../lib/schemas";
@@ -77,15 +77,29 @@ function serviceOf(list: Service[], x: SessionView): Service | undefined {
   return list.find((s) => s.vlan != null && String(s.vlan) === fibreVlan(x));
 }
 
+type T = (k: Key, v?: Record<string, string | number>) => string;
+
+/* The VIDs the OLT translates service @s to towards the host, when they are not its own. */
+function hostNames(s: Service) {
+  return s.hostVlans.filter((v) => v != null && v !== s.vlan);
+}
+
+/** What service @s is named by towards the host. */
+function hostServiceName(t: T, s: Service) {
+  const host = hostNames(s);
+  if (host.length) return `VLAN ${host.join(", ")}`;
+  return s.vlan == null ? t("internet.serviceNoVlan") : `VLAN ${s.vlan}`;
+}
+
 /** What service @s is named by: its VID towards the host, and on the fibre (upstream). */
-function serviceName(t: (k: Key, v?: Record<string, string | number>) => string, s: Service) {
-  const host = s.hostVlans.filter((v) => v != null && v !== s.vlan);
+function serviceName(t: T, s: Service) {
+  const host = hostNames(s);
   if (host.length)
     return t("internet.serviceVia", {
       host: host.join(", "),
       fibre: s.vlan ?? t("internet.serviceNoVlan"),
     });
-  return s.vlan == null ? t("internet.serviceNoVlan") : `VLAN ${s.vlan}`;
+  return hostServiceName(t, s);
 }
 
 /** A dialog that opens while @open holds. */
@@ -109,8 +123,19 @@ function Dialog({
   }, [open]);
   return (
     <dialog ref={ref} className="modal" onClose={onClose}>
-      <div className="modal-box max-w-2xl">
-        <h3 className="mb-4 text-lg font-semibold">{title}</h3>
+      <div className="modal-box max-w-2xl p-6">
+        <div className="mb-6 flex items-center gap-4">
+          <h3 className="text-base font-semibold">{title}</h3>
+          <form method="dialog" className="ml-auto">
+            <button
+              type="submit"
+              className="btn btn-ghost btn-sm btn-square text-base-content/70"
+              aria-label="close"
+            >
+              <X className="size-4" />
+            </button>
+          </form>
+        </div>
         {open && children}
       </div>
       <form method="dialog" className="modal-backdrop">
@@ -147,8 +172,8 @@ function Choice({
         {...field}
       />
       <span>
-        <span className="block text-sm font-medium">{title}</span>
-        <span className="block text-xs text-base-content/65">{text}</span>
+        <span className="block text-sm font-semibold">{title}</span>
+        <span className="mt-1 block text-xs text-base-content/70">{text}</span>
       </span>
     </label>
   );
@@ -268,7 +293,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         />
       </div>
       <div className="grid gap-1">
-        <label htmlFor="service" className="text-sm font-medium">
+        <label htmlFor="service" className="text-sm font-semibold">
           {t("internet.service")}
         </label>
         <select
@@ -293,7 +318,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
             </option>
           )}
         </select>
-        <p className="text-xs text-base-content/60">
+        <p className="text-xs text-base-content/70">
           {picked
             ? t("internet.serviceFollows", { vid: serviceVid(picked) })
             : list.length === 0
@@ -302,7 +327,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         </p>
       </div>
       <div className="grid gap-1">
-        <span className="text-sm font-medium">{t("internet.family")}</span>
+        <span className="text-sm font-semibold">{t("internet.family")}</span>
         <div className="join">
           {(["both", "ipv4", "ipv6"] as const).map((f) => (
             <label key={f} className="join-item btn btn-sm has-[:checked]:btn-primary">
@@ -311,7 +336,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
             </label>
           ))}
         </div>
-        <p className="text-xs text-base-content/60">{t("internet.familyHint")}</p>
+        <p className="text-xs text-base-content/70">{t("internet.familyHint")}</p>
       </div>
       <Field
         label={t("internet.mac")}
@@ -320,7 +345,7 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
         {...form.register("mac")}
       />
       <fieldset className="grid gap-2">
-        <legend className="mb-1 text-sm font-medium">{t("internet.kind")}</legend>
+        <legend className="mb-1 text-sm font-semibold">{t("internet.kind")}</legend>
         <div className="grid gap-2 sm:grid-cols-2">
           <Choice
             value="off"
@@ -378,20 +403,18 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
   );
 }
 
-/** A group of a slot's facts, under a small heading. */
-function Group({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="grid min-w-0 content-start gap-2">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-        {title}
-      </h3>
-      {children}
-    </div>
-  );
+/* A line of detail under a cell's value, quieter. */
+function Sub({ children }: { children: ReactNode }) {
+  return <div className="text-xs text-base-content/70">{children}</div>;
 }
 
-/** A slot with its session: all there is to know of it at once. */
-function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
+/* What is read character by character: an address, an interface. */
+function Mono({ children }: { children: ReactNode }) {
+  return <span className="font-mono">{children}</span>;
+}
+
+/** A slot with its session: one row, with all there is to know of it at once. */
+function SlotRow({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   const { t } = useI18n();
   const { data: live } = useLive();
   const net = useNetwork();
@@ -404,10 +427,8 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   const portId = gems(live).find((g) => g.gem.name === x.gemDev)?.gem.port_id;
   /* Sessions in one VLAN send from the MAC address of the first of them. */
   const first = sessions(live).find((y) => y.vlan === x.vlan && y.gem === x.gem);
-  const macText =
-    first && first.id !== x.id
-      ? `${first.mac || t("internet.macStick")} (${t("internet.macShared", { id: first.id })})`
-      : x.mac || t("internet.macStick");
+  const shared = first && first.id !== x.id ? first : undefined;
+  const macAddr = shared ? shared.mac : x.mac;
   /* The MTU the session came to, which the host is given: 1500 when the concentrator took RFC 4638. */
   const mtu = (x.up && net.data?.links.find((l) => l.name === x.ppp)?.mtu) || null;
   const v4 = x.family !== "ipv6";
@@ -415,6 +436,11 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   /* The session's own, else, from a stick of before, the one handed on. */
   const dns = x.dns.length ? x.dns : x.handsOn ? s.dns : [];
   const gateway = x.up ? (x.gateway ?? (x.handsOn ? link.hostGateway : null)) : null;
+  const fibre =
+    bound && hostNames(bound).length ? (bound.vlan ?? t("internet.serviceNoVlan")) : null;
+  const channel =
+    portId != null ? `GEM ${portId}` : x.gem === "auto" ? t("internet.autoGem") : `GEM ${x.gem}`;
+  const down = downVlan(x);
 
   const remove = () => {
     if (!window.confirm(t("internet.removeSessionConfirm", { id: x.id }))) return;
@@ -422,21 +448,87 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   };
 
   return (
-    <section className="rounded-box border border-base-300 bg-base-100 p-4">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 className="text-base font-semibold">{t("internet.slotN", { id: x.id })}</h2>
-        <Badge tone={x.up ? "good" : "warn"}>
+    <Row>
+      <Cell head={t("internet.colSlot")}>
+        <span className="text-base font-semibold">{x.id}</span>
+        <span className="flex items-center gap-2">
+          <Dot tone={x.up ? "good" : "warn"} />
           {x.up ? t("internet.up") : t("internet.connecting")}
-        </Badge>
-        <span className="text-sm font-medium">
-          {bound ? serviceName(t, bound) : x.vlan ? `VLAN ${x.vlan}` : t("switch.untagged")}
         </span>
-        <Badge tone="neutral">{t(FAMILY[x.family])}</Badge>
-        <span className="ml-auto flex items-center gap-1">
+      </Cell>
+      <Cell head={t("internet.colService")}>
+        <span>
+          {bound ? hostServiceName(t, bound) : x.vlan ? `VLAN ${x.vlan}` : t("switch.untagged")}
+        </span>
+        <Sub>
+          {[fibre != null && t("internet.upstream", { vid: fibre }), channel]
+            .filter(Boolean)
+            .join(" · ")}
+        </Sub>
+      </Cell>
+      <Cell head={t("internet.colSession")}>
+        <span className="break-all">{x.user}</span>
+        <Sub>
+          {t(FAMILY[x.family])}
+          {x.dev && (
+            <>
+              {" · "}
+              <Mono>{[x.dev, x.ppp].filter(Boolean).join(" → ")}</Mono>
+            </>
+          )}
+        </Sub>
+        <Sub>
+          MAC {macAddr ? <Mono>{macAddr}</Mono> : t("internet.macStick")}
+          {shared && `, ${t("internet.macShared", { id: shared.id })}`}
+        </Sub>
+      </Cell>
+      <Cell head={t("internet.colOperator")}>
+        {v4 && <span>{x.ipv4 ? <Mono>{x.ipv4}</Mono> : "IPv4 –"}</span>}
+        {v6 && (
+          <span>
+            {x.prefix ? <Mono>{x.prefix}</Mono> : x.ipv6 ? t("internet.prefixNone") : "IPv6 –"}
+          </span>
+        )}
+        {v4 && (
+          <Sub>
+            DNS{" "}
+            {dns.length
+              ? dns.map((d, i) => (
+                  <span key={d}>
+                    {i > 0 && ", "}
+                    <Mono>{d}</Mono>
+                  </span>
+                ))
+              : "–"}
+          </Sub>
+        )}
+        <Sub>
+          {mtu ? t(mtu >= 1500 ? "internet.mtuRfc" : "internet.mtuPlain", { mtu }) : "MTU –"}
+        </Sub>
+      </Cell>
+      <Cell head={t("internet.colHost")}>
+        {x.pass ? (
+          <>
+            <span>{down ? `VLAN ${down}` : t("switch.untagged")}</span>
+            {v4 && <span>{x.handsOn && x.ipv4 ? <Mono>{x.ipv4}</Mono> : "IPv4 –"}</span>}
+            {v6 && <span>{x.prefix ? <Mono>{x.prefix}</Mono> : "IPv6 –"}</span>}
+            {v6 && x.prefix && !x.prefixHost && <Sub>{t("internet.prefixWaiting")}</Sub>}
+            {v4 && (
+              <Sub>
+                {t("internet.gatewayIs")} {x.handsOn && gateway ? <Mono>{gateway}</Mono> : "–"}
+              </Sub>
+            )}
+          </>
+        ) : (
+          <span className="text-base-content/70">{t("internet.kindStick")}</span>
+        )}
+      </Cell>
+      <Cell actions>
+        <span className="flex items-center justify-end gap-1 max-md:justify-start">
           <SaveState {...state} />
           <button
             type="button"
-            className="btn btn-ghost btn-sm btn-square"
+            className="btn btn-ghost btn-sm btn-square text-base-content/70"
             onClick={onEdit}
             aria-label={t("internet.edit")}
             title={t("internet.edit")}
@@ -445,7 +537,7 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm btn-square text-error"
+            className="btn btn-ghost btn-sm btn-square text-base-content/70 hover:text-error"
             onClick={remove}
             disabled={change.isPending}
             aria-label={t("internet.removeSession")}
@@ -454,86 +546,33 @@ function SlotCard({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
             <Trash2 className="size-4" />
           </button>
         </span>
-      </div>
-      <div className="mt-3 grid gap-x-8 gap-y-4 md:grid-cols-3">
-        <Group title={t("internet.colSession")}>
-          <Facts
-            rows={[
-              [
-                t("internet.account"),
-                <span key="u" className="break-all">
-                  {x.user}
-                </span>,
-              ],
-              [
-                t("internet.channel"),
-                portId != null
-                  ? `GEM ${portId}`
-                  : x.gem === "auto"
-                    ? t("internet.autoGem")
-                    : `GEM ${x.gem}`,
-              ],
-              [
-                t("internet.macShort"),
-                <span key="m" className="font-mono text-xs">
-                  {macText}
-                </span>,
-              ],
-              x.dev ? [t("internet.iface"), [x.dev, x.ppp].filter(Boolean).join(" → ")] : null,
-            ]}
-          />
-        </Group>
-        <Group title={t("internet.colOperator")}>
-          <Facts
-            rows={[
-              v4 && ["IPv4", x.ipv4 ?? "–"],
-              v6 && [t("internet.prefix"), x.prefix ?? (x.ipv6 ? t("internet.prefixNone") : "–")],
-              v4 && [t("internet.dns"), dns.length ? dns.join(", ") : "–"],
-              [
-                t("internet.mtu"),
-                mtu ? t(mtu >= 1500 ? "internet.mtuRfc" : "internet.mtuPlain", { mtu }) : "–",
-              ],
-            ]}
-          />
-        </Group>
-        <Group title={t("internet.colHost")}>
-          {x.pass ? (
-            <Facts
-              rows={[
-                ["VLAN", downVlan(x) || t("switch.untagged")],
-                v4 && [t("internet.hostAddress"), x.handsOn && x.ipv4 ? x.ipv4 : "–"],
-                v4 && [t("internet.hostGateway"), x.handsOn && gateway ? gateway : "–"],
-                v6 && [
-                  t("internet.prefix"),
-                  !x.prefix
-                    ? "–"
-                    : x.prefixHost
-                      ? x.prefix
-                      : t("internet.prefixWaiting", { prefix: x.prefix }),
-                ],
-              ]}
-            />
-          ) : (
-            <p className="text-sm text-base-content/70">{t("internet.kindStickHint")}</p>
-          )}
-        </Group>
-      </div>
-    </section>
+      </Cell>
+    </Row>
   );
 }
 
-/** A free slot: one line, and a way to take it. */
-function FreeSlot({ id, onUse }: { id: number; onUse: () => void }) {
+/** A free slot: one row, and a way to take it. */
+function FreeRow({ id, onUse }: { id: number; onUse: () => void }) {
   const { t } = useI18n();
   return (
-    <section className="flex flex-wrap items-center gap-3 rounded-box border border-dashed border-base-300 bg-base-100 px-4 py-2">
-      <h2 className="text-base font-semibold">{t("internet.slotN", { id })}</h2>
-      <Badge tone="neutral">{t("internet.slotFree")}</Badge>
-      <button type="button" className="btn btn-ghost btn-sm ml-auto" onClick={onUse}>
-        <Plus className="size-4" />
-        {t("internet.slotUse")}
-      </button>
-    </section>
+    <Row>
+      <Cell head={t("internet.colSlot")}>
+        <span className="text-base font-semibold text-base-content/70">{id}</span>
+      </Cell>
+      <Cell span={5}>
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-base-content/70">{t("internet.slotFree")}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm ml-auto text-primary"
+            onClick={onUse}
+          >
+            <Plus className="size-4" />
+            {t("internet.slotUse")}
+          </button>
+        </span>
+      </Cell>
+    </Row>
   );
 }
 
@@ -548,15 +587,26 @@ export function Internet() {
       title={t("internet.title")}
       hint={t("internet.slots", { n: list.length, max: MAX_SESSIONS })}
     >
-      <div className="grid min-h-0 flex-1 content-start gap-3 lg:overflow-auto">
-        {SLOT_IDS.map((id) => {
-          const x = list.find((y) => y.id === id);
-          return x ? (
-            <SlotCard key={id} x={x} onEdit={() => setEditing(x)} />
-          ) : (
-            <FreeSlot key={id} id={id} onUse={() => setEditing(id)} />
-          );
-        })}
+      <div className="min-h-0 flex-1 lg:overflow-auto">
+        <Table
+          head={[
+            t("internet.colSlot"),
+            t("internet.colService"),
+            t("internet.colSession"),
+            t("internet.colOperator"),
+            t("internet.colHost"),
+            "",
+          ]}
+        >
+          {SLOT_IDS.map((id) => {
+            const x = list.find((y) => y.id === id);
+            return x ? (
+              <SlotRow key={id} x={x} onEdit={() => setEditing(x)} />
+            ) : (
+              <FreeRow key={id} id={id} onUse={() => setEditing(id)} />
+            );
+          })}
+        </Table>
       </div>
       <Dialog
         open={editing != null}

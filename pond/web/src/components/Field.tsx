@@ -82,7 +82,7 @@ export const Field = forwardRef<HTMLInputElement, Props>(function Field(
      * it, which makes the row taller.
      */
     <div className={`grid content-start gap-1 ${className}`}>
-      <label htmlFor={name} className="text-sm font-medium">
+      <label htmlFor={name} className="text-sm font-semibold">
         {label}
       </label>
       {secret ? (
@@ -104,7 +104,7 @@ export const Field = forwardRef<HTMLInputElement, Props>(function Field(
       {error ? (
         <p className="text-xs text-error">{error}</p>
       ) : (
-        hint && <p className="text-xs text-base-content/60">{hint}</p>
+        hint && <p className="text-xs text-base-content/70">{hint}</p>
       )}
     </div>
   );

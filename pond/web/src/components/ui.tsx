@@ -78,6 +78,70 @@ export function PageTitle({ children, hint }: { children: ReactNode; hint?: Reac
   );
 }
 
+/**
+ * A table of things of one kind, a row a thing, the names of its columns once
+ * above them. On a narrow screen a row stands as a list of its cells, each
+ * under its column's name.
+ */
+export function Table({ head, children }: { head: ReactNode[]; children: ReactNode }) {
+  return (
+    <div className="overflow-hidden rounded-box border border-base-300 bg-base-100">
+      <table className="w-full border-collapse text-sm max-md:block">
+        <thead className="max-md:hidden">
+          <tr>
+            {head.map((h, i) => (
+              <th
+                // biome-ignore lint/suspicious/noArrayIndexKey: the columns are static
+                key={i}
+                className="border-b border-base-300 px-4 py-3 text-left text-xs font-semibold text-base-content/70"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="max-md:block [&>tr:last-child>td]:border-b-0">{children}</tbody>
+      </table>
+    </div>
+  );
+}
+
+export function Row({ children }: { children: ReactNode }) {
+  return (
+    <tr className="hover:bg-base-200/40 max-md:block max-md:border-b max-md:border-base-300 max-md:py-2 max-md:last:border-b-0">
+      {children}
+    </tr>
+  );
+}
+
+/**
+ * A cell: its value, then lines under it, one under another. @head names its
+ * column on a narrow screen; @actions holds a row's buttons, at its end.
+ */
+export function Cell({
+  head,
+  span,
+  actions = false,
+  children,
+}: {
+  head?: string;
+  span?: number;
+  actions?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <td
+      colSpan={span}
+      data-h={head}
+      className={`border-b border-base-300 px-4 align-top max-md:block max-md:border-0 max-md:py-1 ${
+        actions ? "w-px whitespace-nowrap py-2 text-right max-md:w-auto max-md:text-left" : "py-3"
+      } ${head ? "max-md:before:block max-md:before:text-xs max-md:before:text-base-content/70 max-md:before:content-[attr(data-h)]" : ""}`}
+    >
+      {actions ? children : <div className="grid gap-1">{children}</div>}
+    </td>
+  );
+}
+
 /** A label and its value, one per row. */
 export function Facts({ rows }: { rows: ([ReactNode, ReactNode] | false | null | undefined)[] }) {
   return (
