@@ -365,5 +365,38 @@ run load
 check '[ ! -e "$ONU_ROOT/run/onu-system" ]'
 teardown
 
+echo "the host a session delegates its IPv6 prefix to, kept across a restart"
+setup
+B='000300010000005e0053ff 1 fe80::12 2001:db8:1200::/56'
+echo "$B" >"$ONU_ROOT/run/onu-pd2"
+run pd 2
+check '[ $rc -eq 0 ]'
+check "stored 'PD2_HOST=$B'"
+# A save of the settings keeps it, and it is no line of onu.conf.
+echo "MODE=router" >"$ONU_ROOT/run/onu.conf"
+run save
+check "stored 'PD2_HOST=$B'"
+rm -f "$ONU_ROOT/run/onu-pd2" "$ONU_ROOT/run/onu.conf"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-pd2")" = "$B" ]'
+check '! grep -q PD "$ONU_ROOT/run/onu.conf"'
+check '[ ! -e "$ONU_ROOT/run/onu-pd1" ]'
+# The same again writes nothing.
+cp "$ONU_STORE" "$T/before"
+run pd 2
+check '[ $rc -eq 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+# No file: the host is forgotten.
+rm "$ONU_ROOT/run/onu-pd2"
+run pd 2
+check '[ $rc -eq 0 ] && ! onucfg --store "$ONU_STORE" list | grep -q ^PD2_'
+# Not a binding, or not a session: nothing changes.
+cp "$ONU_STORE" "$T/before"
+echo 'x; reboot' >"$ONU_ROOT/run/onu-pd2"
+run pd 2
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+run pd 8
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+teardown
+
 echo "test_onu_store: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

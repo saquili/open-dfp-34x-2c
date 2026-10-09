@@ -494,7 +494,8 @@ note() {
 # The delegated IPv6 prefix of session $1, whose link $2 came up on its
 # interface $3, handed on to the host by dhcp6d: the link to the host gets
 # IPv6, and the stick forwards it. A session other than main_pd() has dhcp6d
-# route what comes from its prefix by the session's own table.
+# route what comes from its prefix by the session's own table. dhcp6d keeps
+# the host's binding in /run/onu-pdN, which pd_keep() keeps in the store.
 pd_up() {
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
@@ -504,7 +505,8 @@ pd_up() {
 	table=
 	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
 	# $table is an option and its value, split on purpose.
-	dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" $table 2>>"$RUN/dhcp6d.log" &
+	dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" $table \
+		2>>"$RUN/dhcp6d.log" &
 	echo $! >"$RUN/dhcp6d$1.pid"
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
@@ -890,6 +892,30 @@ sessions_down() {
 	return 0
 }
 
+# The host each session delegates its prefix to, which dhcp6d keeps in
+# /run/onu-pdN, goes into the store when it changes, and so does its going:
+# after a restart of the stick, dhcp6d routes the prefix to that host at once,
+# since a router that holds its delegation asks for none (measured:
+# NetworkManager kept its /56 for a day and asked for the name servers only).
+# What went into the store is in /run/onu-pdN.kept.
+pd_keep() {
+	command -v onu-store >/dev/null || return 0
+	n=1
+	while [ $n -le $MAX_SESSIONS ]; do
+		pd=$RUN/onu-pd$n
+		if { [ -e "$pd" ] || [ -e "$pd.kept" ]; } &&
+			[ "$(cat "$pd" 2>/dev/null)" != "$(cat "$pd.kept" 2>/dev/null)" ] &&
+			onu-store pd $n; then
+			if [ -e "$pd" ]; then
+				cp "$pd" "$pd.kept"
+			else
+				rm -f "$pd.kept"
+			fi
+		fi
+		n=$((n + 1))
+	done
+}
+
 # One round of the watcher in passthrough: each session follows its GEM port,
 # and a session without its account any more goes. One session starts in a
 # round, the next a round later: an operator's concentrator refused one of two
@@ -941,6 +967,7 @@ sessions_tick() {
 	else
 		feeds_sync "$first"
 	fi
+	pd_keep
 }
 
 # One round of the watcher: in router mode the WAN follows its GEM port, and

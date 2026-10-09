@@ -328,7 +328,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	logged "^dhcp6d" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2$"'
+check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2$"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan36/disable_ipv6")" = 0 ]'
@@ -349,6 +349,20 @@ check '! logged "^ip link del wan410"'
 check '! logged "^ip link set pon mtu 1500"'
 check '[ ! -e "$ONU_ROOT/run/pppoed2.pid" ]'
 check '[ ! -e "$ONU_ROOT/run/dhcp6d2.pid" ]'
+# The host dhcp6d delegates to goes into the store once, and its going too.
+echo "0003 1 fe80::2 2001:db8:1200::/56" >"$ONU_ROOT/run/onu-pd2"
+: >"$LOG"
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^onu-store pd 2$"'
+check '[ "$(grep -c "^onu-store pd" "$LOG")" = 1 ]'
+check 'cmp -s "$ONU_ROOT/run/onu-pd2" "$ONU_ROOT/run/onu-pd2.kept"'
+: >"$LOG"
+"$MODE_SCRIPT" tick 2>/dev/null
+check '! logged "^onu-store pd"'
+rm "$ONU_ROOT/run/onu-pd2"
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^onu-store pd 2$"'
+check '[ ! -e "$ONU_ROOT/run/onu-pd2.kept" ]'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 0 ]'
 teardown
@@ -649,8 +663,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ "$(grep -c "^dhcp6d" "$LOG")" = 2 ] && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1$"'
-check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -t 102$"'
+check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/onu-pd1$"'
+check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -t 102$"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan37/disable_ipv6")" = 0 ]'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown

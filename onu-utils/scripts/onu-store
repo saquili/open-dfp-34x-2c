@@ -22,6 +22,9 @@
 #                       standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
 #                       SFP_LANE) into the store and into /run/onu-system; an
 #                       empty value removes the key
+#   onu-store pd N      the host session N delegates its IPv6 prefix to, the
+#                       line dhcp6d keeps in /run/onu-pdN, into the store;
+#                       without the file, out of it
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
@@ -34,6 +37,8 @@
 # two);
 # a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
 # own settings, which the boot script reads before it brings up the links;
+# PDn_HOST is the content of /run/onu-pdN, the host session n delegated its
+# IPv6 prefix to, which dhcp6d takes back after a restart (see onu-mode);
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #
@@ -56,6 +61,7 @@ ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
+PD=$RUN/onu-pd
 MAX_SESSIONS=7
 IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
@@ -146,10 +152,10 @@ load() {
 		list=
 	}
 	umask 077
-	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new"
+	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"*
 	printf '%s\n' "$list" | awk -v id="$IDENTITY.new" -v conf="$CONF.new" \
 		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
-		-v sys="$SYSTEM.new" '
+		-v sys="$SYSTEM.new" -v pd="$PD" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -160,6 +166,11 @@ load() {
 		k ~ /^ID_/ { print tolower(substr(k, 4)) "=" v > id; next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
+		k ~ /^PD[1-9]_HOST$/ {
+			if (v != "")
+				print v > (pd substr(k, 3, 1))
+			next
+		}
 		k == "PPPOE_USER" { old_user = v; next }
 		k == "PPPOE_SECRET" { old_secret = v; next }
 		k ~ /^PPPOE[1-9]_USER$/ { user[substr(k, 6, 1)] = v; next }
@@ -274,6 +285,27 @@ system() {
 	}' >"$SYSTEM.new" && chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
 }
 
+# The host session $1 delegates its IPv6 prefix to, from /run/onu-pdN: the
+# DUID in hex, the IAID, the host's address and the prefix; none without the
+# file.
+pd() {
+	case $1 in
+	[1-9]) ;;
+	*) return 1 ;;
+	esac
+	[ "$1" -le $MAX_SESSIONS ] || return 1
+	host=
+	[ -r "$PD$1" ] && read -r host <"$PD$1"
+	if [ -z "$host" ]; then
+		onucfg --store "$STORE" unset "PD$1_HOST"
+		return
+	fi
+	case $host in
+	*[!0-9a-fA-F:./\ ]*) return 1 ;;
+	esac
+	echo "PD$1_HOST=$host" | onucfg --store "$STORE" import
+}
+
 # /run/shadow, which /etc/shadow names: the image's accounts, root's with the
 # hash in force. A hash of the older form the status daemon made (PBKDF2),
 # which crypt() cannot check, gives root no password for the console and
@@ -376,8 +408,11 @@ password)
 system)
 	system
 	;;
+pd)
+	pd "${2:-}"
+	;;
 *)
-	echo "usage: onu-store load|save|migrate|identity|password|auth HASH|system" >&2
+	echo "usage: onu-store load|save|migrate|identity|password|auth HASH|system|pd N" >&2
 	exit 2
 	;;
 esac

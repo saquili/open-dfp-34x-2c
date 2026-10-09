@@ -58,6 +58,11 @@ The small programs of the ONU.
    save with no account in force stores an empty ``PPPOE_USER``, so that a
    removed account does not come back at the next boot. Where the identity in
    force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
+   ``onu-store pd N`` keeps the host session N delegates its IPv6 prefix to,
+   the line ``dhcp6d`` keeps in ``/run/onu-pdN``, as ``PDn_HOST``, and a load
+   puts it back, so that after a restart the prefix goes to that router at
+   once, though it asks for nothing; ``onu-mode`` calls it when the line
+   changes or goes, and a store that holds the same writes nothing.
 
 ``passwd``
    a new password for root, at a terminal: it asks twice without echo and
