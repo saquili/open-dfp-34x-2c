@@ -331,11 +331,11 @@ export const en = {
     dnsServers: "Name servers",
     dnsHint: "The devices behind the stick get them too.",
     address6: "IPv6 address on the link",
-    address6Hint: "Empty when the operator gives no IPv6.",
     gateway6: "IPv6 gateway",
     prefix6: "IPv6 prefix for the local network",
     prefix6Hint:
       "The prefix the operator routes to the stick; the devices behind the switch take their addresses from it.",
+    staticFamilyHint: "Type in the addresses the operator gave in the contract.",
     dhcpFamilyHint:
       "With IPv6 the stick also asks the operator for a prefix for the local network (DHCPv6).",
     kindDown: "Hands the address down, to the host",

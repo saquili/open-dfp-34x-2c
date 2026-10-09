@@ -257,6 +257,7 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
           error={errors.mac?.message}
           {...form.register("mac")}
         />
+        <FamilyField field={form.register("family")} hint={t("internet.familyHint")} />
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
           <Field
             label={t("internet.user")}
@@ -274,7 +275,6 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
             {...form.register("secret")}
           />
         </div>
-        <FamilyField field={form.register("family")} hint={t("internet.familyHint")} />
         <fieldset className="grid gap-2">
           <legend className="mb-1 text-sm font-semibold">{t("internet.kind")}</legend>
           <Choice
@@ -333,23 +333,43 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
   const state = useChangeState(change);
   const self = x ? `ipoe:${x.id}` : undefined;
   const fixed = kind === "static";
-  const schema = z.object({
-    vlan: vlan(t).check(z.minLength(1, t("internet.vlanRequired"))),
-    family: z.enum(["both", "ipv4", "ipv6"]),
-    address: fixed ? ipv4Cidr(t).check(z.minLength(1, t("form.required"))) : z.string(),
-    gateway: fixed ? ipv4(t).check(z.minLength(1, t("form.required"))) : z.string(),
-    dns: addresses(t),
-    address6: ipv6Cidr(t),
-    gateway6: ipv6(t),
-    prefix6: ipv6Cidr(t),
-    mac: mac(t),
-  });
+  const schema = z
+    .object({
+      vlan: vlan(t).check(z.minLength(1, t("internet.vlanRequired"))),
+      family: z.enum(["both", "ipv4", "ipv6"]),
+      address: ipv4Cidr(t),
+      gateway: ipv4(t),
+      dns: addresses(t),
+      address6: ipv6Cidr(t),
+      gateway6: ipv6(t),
+      prefix6: ipv6Cidr(t),
+      mac: mac(t),
+    })
+    .check(
+      /* A static connection is given an address and a gateway of each family it has. */
+      z.superRefine((v, ctx) => {
+        if (!fixed) return;
+        const need = (path: "address" | "gateway" | "address6" | "gateway6", has: boolean) => {
+          if (has && !v[path].trim())
+            ctx.addIssue({
+              code: "custom",
+              path: [path],
+              message: t("form.required"),
+              input: v[path],
+            });
+        };
+        need("address", v.family !== "ipv6");
+        need("gateway", v.family !== "ipv6");
+        need("address6", v.family !== "ipv4");
+        need("gateway6", v.family !== "ipv4");
+      }),
+    );
   type Values = z.infer<typeof schema>;
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: {
       vlan: x?.vlan ?? c.draft.vlan,
-      family: x?.family ?? (fixed ? "ipv4" : c.draft.family),
+      family: x?.family ?? c.draft.family,
       address: x?.address ?? "",
       gateway: x?.gateway ?? "",
       dns: x?.dnsSet ?? "",
@@ -361,14 +381,17 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
   });
   useDraft(form, c.onDraft, !x);
   const { errors, isDirty } = form.formState;
-  const service = form.watch("vlan");
+  const [service, family] = form.watch(["vlan", "family"]);
+  const v4 = family !== "ipv6";
+  const v6 = family !== "ipv4";
   const use = useVlanUse(c.list, kind, self);
   /* A VLAN has one connection that is not PPPoE at most. */
   const taken = service ? ipoeIn(c.list, service, self) : undefined;
 
   const send = (v: Values) => {
-    /* A static connection has the families it is given addresses of. */
-    const family = fixed ? (v.address6 ? "both" : "ipv4") : v.family;
+    /* The addresses of a family the connection does not have are not kept. */
+    const has4 = v.family !== "ipv6";
+    const has6 = v.family !== "ipv4";
     change.mutate(
       {
         ID: x ? String(x.id) : undefined,
@@ -376,18 +399,18 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
         VLAN: v.vlan,
         GEM: "auto",
         MAC: v.mac,
-        FAMILY: family,
+        FAMILY: v.family,
         ...(fixed
           ? {
-              ADDRESS: v.address,
-              GATEWAY: v.gateway,
+              ADDRESS: has4 ? v.address : "",
+              GATEWAY: has4 ? v.gateway : "",
               DNS: v.dns
                 .split(/[\s,]+/)
                 .filter(Boolean)
                 .join(" "),
-              ADDRESS6: v.address6,
-              GATEWAY6: v.gateway6,
-              PREFIX6: v.prefix6,
+              ADDRESS6: has6 ? v.address6 : "",
+              GATEWAY6: has6 ? v.gateway6 : "",
+              PREFIX6: has6 ? v.prefix6 : "",
             }
           : {}),
       },
@@ -426,34 +449,32 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
           error={errors.mac?.message}
           {...form.register("mac")}
         />
-        {fixed ? (
-          <>
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-              <Field
-                label={t("internet.address4")}
-                placeholder="192.0.2.10/24"
-                error={errors.address?.message}
-                {...form.register("address")}
-              />
-              <Field
-                label={t("internet.gateway4")}
-                placeholder="192.0.2.1"
-                error={errors.gateway?.message}
-                {...form.register("gateway")}
-              />
-            </div>
+        <FamilyField
+          field={form.register("family")}
+          hint={t(fixed ? "internet.staticFamilyHint" : "internet.dhcpFamilyHint")}
+        />
+        {fixed && v4 && (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
             <Field
-              label={t("internet.dnsServers")}
-              placeholder="198.51.100.53 198.51.100.54"
-              hint={t("internet.dnsHint")}
-              error={errors.dns?.message}
-              {...form.register("dns")}
+              label={t("internet.address4")}
+              placeholder="192.0.2.10/24"
+              error={errors.address?.message}
+              {...form.register("address")}
             />
+            <Field
+              label={t("internet.gateway4")}
+              placeholder="192.0.2.1"
+              error={errors.gateway?.message}
+              {...form.register("gateway")}
+            />
+          </div>
+        )}
+        {fixed && v6 && (
+          <>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
               <Field
                 label={t("internet.address6")}
                 placeholder="2001:db8::2/64"
-                hint={t("internet.address6Hint")}
                 error={errors.address6?.message}
                 {...form.register("address6")}
               />
@@ -472,8 +493,15 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
               {...form.register("prefix6")}
             />
           </>
-        ) : (
-          <FamilyField field={form.register("family")} hint={t("internet.dhcpFamilyHint")} />
+        )}
+        {fixed && (
+          <Field
+            label={t("internet.dnsServers")}
+            placeholder="198.51.100.53 198.51.100.54"
+            hint={t("internet.dnsHint")}
+            error={errors.dns?.message}
+            {...form.register("dns")}
+          />
         )}
         <p className="text-xs text-base-content/70">{t("internet.kindStickHint")}</p>
       </div>
@@ -612,9 +640,15 @@ export function ConnForm({
       </div>
       <KindTabs value={k} onChange={onKind} only={editing?.kind} />
       {full ? (
-        <div className="m-4 rounded-box border border-dashed border-base-300 p-6 text-center">
-          <p className="font-semibold">{t("internet.full", { max: MAX_CONNS })}</p>
-          <p className="mt-1 text-xs text-base-content/70">{t("internet.fullHint")}</p>
+        /* The buttons stay, the one that adds off, so that nothing moves. */
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 p-4 xl:overflow-auto">
+            <div className="rounded-box border border-dashed border-base-300 p-6 text-center">
+              <p className="font-semibold">{t("internet.full", { max: MAX_CONNS })}</p>
+              <p className="mt-1 text-xs text-base-content/70">{t("internet.fullHint")}</p>
+            </div>
+          </div>
+          <Buttons editing={false} disabled state={{ state: "idle" }} />
         </div>
       ) : k === "pppoe" ? (
         <PppoeForm key={key} x={editing?.kind === "pppoe" ? editing.x : undefined} {...common} />

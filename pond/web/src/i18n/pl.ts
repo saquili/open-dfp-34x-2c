@@ -333,11 +333,11 @@ export const pl: Dictionary = {
     dnsServers: "Serwery DNS",
     dnsHint: "Dostaną je też urządzenia za wkładką.",
     address6: "Adres IPv6 na łączu",
-    address6Hint: "Puste, gdy operator nie daje IPv6.",
     gateway6: "Brama IPv6",
     prefix6: "Prefiks IPv6 dla sieci lokalnej",
     prefix6Hint:
       "Prefiks, który operator kieruje do wkładki; urządzenia za switchem dostaną z niego adresy.",
+    staticFamilyHint: "Wpisz adresy, które operator przydzielił w umowie.",
     dhcpFamilyHint:
       "Przy IPv6 wkładka prosi operatora także o prefiks dla sieci lokalnej (DHCPv6).",
     kindDown: "Przekazuje adres w dół, do hosta",

@@ -518,8 +518,14 @@ export const handlers = [
       if (!id || list.length + settings.sessions.length >= 7)
         return refuse("all 7 connections are taken");
     }
-    if (body.KIND === "static" && (!body.ADDRESS || !body.GATEWAY))
-      return refuse(`connection ${id}: a static address needs ADDRESS and GATEWAY`);
+    /* A static connection is given an address and a gateway of each family it has. */
+    if (body.KIND === "static") {
+      const family = body.FAMILY ?? "ipv4";
+      if (family !== "ipv6" && (!body.ADDRESS || !body.GATEWAY))
+        return refuse(`connection ${id}: static IPv4 needs ADDRESS and GATEWAY`);
+      if (family !== "ipv4" && (!body.ADDRESS6 || !body.GATEWAY6))
+        return refuse(`connection ${id}: static IPv6 needs ADDRESS6 and GATEWAY6`);
+    }
     let x = list.find((y) => y.id === id);
     if (!x) {
       x = ipoe(id, body.KIND, body.VLAN ?? "");
@@ -546,8 +552,8 @@ export const handlers = [
     x.dev = wanOf(x.vlan);
     x.up = true;
     if (x.kind === "static") {
-      x.ipv4 = x.address;
-      x.router = x.gateway;
+      x.ipv4 = x.address || null;
+      x.router = x.gateway || null;
       x.dns_now = x.dns;
       x.ipv6 = x.address6 || null;
       x.prefix = x.prefix6 || null;

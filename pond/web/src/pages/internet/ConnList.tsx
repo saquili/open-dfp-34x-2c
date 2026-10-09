@@ -201,9 +201,11 @@ function Facts({ c }: { c: Conn }) {
   const fixed = c.kind === "static";
   return (
     <>
-      <Pair k={t("internet.gateway4")}>
-        {(fixed ? x.gateway : x.router) ? <Mono>{fixed ? x.gateway : x.router}</Mono> : dash}
-      </Pair>
+      {x.family !== "ipv6" && (
+        <Pair k={t("internet.gateway4")}>
+          {(fixed ? x.gateway : x.router) ? <Mono>{fixed ? x.gateway : x.router}</Mono> : dash}
+        </Pair>
+      )}
       <Pair k={t("internet.dnsServers")}>
         <MonoList items={fixed ? x.dnsSet.split(/\s+/).filter(Boolean) : x.dns} />
       </Pair>
