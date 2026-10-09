@@ -124,6 +124,21 @@ its own under the value, at 12 px in the secondary colour, not brackets after it
 A section within a card has a title at 14 px, weight 600, in the main colour,
 above its pairs.
 
+Tables
+------
+
+Several things of one kind stand in a table, a row a thing, and not as a card
+each that repeats its labels: the names of the columns stand once, in the
+table's head, at 12 px, weight 600, in the secondary colour. A cell holds its
+value on its first line (14 px, main colour) and, under it, lines of detail
+(12 px, secondary) that say what they are in their own words (``MTU 1500``,
+``DNS 198.51.100.53``) rather than under a label of their own. Cells are
+16 px from the sides and 12 px from the lines, and their content starts at
+their top; a line of 1 px parts the rows. A row's actions stand at its end and
+are always shown. On a narrow screen a row stands as a list of its cells, each
+under its column's name. ``Table``, ``Row`` and ``Cell`` in ``ui.tsx`` are
+these pieces.
+
 State
 =====
 
