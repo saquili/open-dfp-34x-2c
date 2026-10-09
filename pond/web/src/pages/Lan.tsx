@@ -446,10 +446,10 @@ const VIEWS = ["nets", "devices"] as const;
 /*
  * The devices' table: its columns, the same in its head and in every line,
  * as wide as their longest values (a MAC, 192.168.255.254, "Static IP",
- * "jeszcze 22 godz. 30 min", a button), so that they stand still as a search
+ * "22 godz. 30 min", a button), so that they stand still as a search
  * narrows the list.
  */
-const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_4.5rem_10rem_6rem]";
+const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_4.5rem_8rem_6rem]";
 /*
  * In a narrow list: the name, the address and the button, the same in the
  * head and every line; as narrow as a phone, the button is its icon alone.
@@ -547,7 +547,7 @@ function DeviceTable({
             ? d.now
               ? t("lan.fixedOn")
               : t("lan.off")
-            : t("lan.leaseLeft", { time: duration(d.left, lang) });
+            : duration(d.left, lang);
           const moved = d.fixed && d.now && d.now !== d.fixed.ip;
           return (
             <div

@@ -359,7 +359,6 @@ export const pl: Dictionary = {
     fixedDup: "To urządzenie ma już w tej sieci stały adres {ip}.",
     netFixed: "Stały adres {ip} ({name}) wypadłby poza sieć albo na adres wkładki.",
     noName: "bez nazwy",
-    leaseLeft: "jeszcze {time}",
     dhcpOffShort: "DHCP wyłączony",
     count: "Sieci lokalne: {n} z {max} · urządzenia: {d}",
     empty: "Brak skonfigurowanych sieci lokalnych",

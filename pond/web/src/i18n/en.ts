@@ -357,7 +357,6 @@ export const en = {
     netFixed:
       "The fixed address {ip} ({name}) would fall outside the network or on the stick's address.",
     noName: "no name",
-    leaseLeft: "{time} left",
     dhcpOffShort: "DHCP off",
     count: "Local networks: {n} of {max} · devices: {d}",
     empty: "No local networks configured",
