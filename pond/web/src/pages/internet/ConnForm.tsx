@@ -606,7 +606,8 @@ export function ConnForm({
   onKind: (k: Kind) => void;
   editing: Conn | null;
   onEditDone: () => void;
-  onClose: () => void;
+  /** Shuts the form; none while it is the page's only content, with no connection yet. */
+  onClose: (() => void) | undefined;
 }) {
   const { t } = useI18n();
   const { list: services, ready } = useServices();
@@ -627,6 +628,7 @@ export function ConnForm({
       : () => {
           setDraft(EMPTY);
           setRound((r) => r + 1);
+          onClose?.();
         },
     onCancel: onEditDone,
   };
@@ -643,15 +645,17 @@ export function ConnForm({
             ? t("internet.editConn", { name: connName(t, editing), vid: editing.vlan })
             : t("internet.addConn")}
         </h2>
-        <button
-          type="button"
-          className={`btn btn-ghost btn-sm btn-square ml-auto text-base-content/70 ${editing ? "" : "xl:hidden"}`}
-          onClick={editing ? onEditDone : onClose}
-          aria-label={t("internet.cancel")}
-          title={t("internet.cancel")}
-        >
-          <X className="size-4" />
-        </button>
+        {(editing || onClose) && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm btn-square ml-auto text-base-content/70"
+            onClick={editing ? onEditDone : onClose}
+            aria-label={t("internet.cancel")}
+            title={t("internet.cancel")}
+          >
+            <X className="size-4" />
+          </button>
+        )}
       </div>
       <KindTabs value={k} onChange={onKind} only={editing?.kind} />
       {full ? (

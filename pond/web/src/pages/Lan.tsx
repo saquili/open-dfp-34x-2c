@@ -9,14 +9,15 @@
  * each can have a network of its own, apart from the others by its VLAN to
  * the switch behind the stick, or untagged, for one of them.
  *
- * Two tabs. The networks: on the left the networks there are, one at most
- * for each connection that makes the stick a router; on the right
- * the form that adds a network or changes one, the connection first: its
- * VLAN to the switch, the stick's address in it, and the DHCP server that
- * gives the devices theirs, with the operator's name servers; the panels
- * stand on the internet page's lines. The devices: every device of the
- * networks, a line each, across the page, to be searched and narrowed to one
- * network, since a big house has fifty of them, which no card would hold.
+ * Two tabs. The networks: the networks there are, one at most for each
+ * connection that makes the stick a router, and at their right, while it is
+ * open (components/SidePanel), the form that adds a network or changes one,
+ * the connection first: its name, its VLAN to the switch, the stick's address
+ * in it, and the DHCP server that gives the devices theirs, with the
+ * operator's name servers; the panels stand on the internet page's lines.
+ * The devices: every device of the networks, a line each, to be searched and
+ * narrowed to one network, since a big house has fifty of them, which no card
+ * would hold; and the form of a fixed address beside them while it is open.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -30,6 +31,7 @@ import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter } from "../components/Pager";
+import { SidePanel, withPanel } from "../components/SidePanel";
 import { useI18n } from "../i18n";
 import { duration } from "../lib/format";
 import { ip4, net4 } from "../lib/ipv4";
@@ -407,7 +409,8 @@ function LanForm({
   all: LanView[];
   editing: LanView | null;
   onDone: () => void;
-  onClose: () => void;
+  /** Shuts the form; none while it is the page's only content, with no network yet. */
+  onClose: (() => void) | undefined;
 }) {
   const { t } = useI18n();
   /* A new form after each network added. */
@@ -423,15 +426,17 @@ function LanForm({
         <h2 id="lan-form" className="text-base font-semibold">
           {editing ? t("lan.editTitle", { name: netName(t, editing, places) }) : t("lan.addTitle")}
         </h2>
-        <button
-          type="button"
-          className={`btn btn-ghost btn-sm btn-square ml-auto text-base-content/70 ${editing ? "" : "xl:hidden"}`}
-          onClick={editing ? onDone : onClose}
-          aria-label={t("internet.cancel")}
-          title={t("internet.cancel")}
-        >
-          <X className="size-4" />
-        </button>
+        {(editing || onClose) && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm btn-square ml-auto text-base-content/70"
+            onClick={editing ? onDone : onClose}
+            aria-label={t("internet.cancel")}
+            title={t("internet.cancel")}
+          >
+            <X className="size-4" />
+          </button>
+        )}
       </div>
       {editing || conn ? (
         <LanFields
@@ -958,21 +963,34 @@ function Places({
   editing,
   onEdit,
   onDevices,
+  onAdd,
 }: {
   places: Place[];
   editing: number | null;
   onEdit: (l: LanView) => void;
   onDevices: (lan: number) => void;
+  /** Opens the form on a new network; none while every connection has one. */
+  onAdd: (() => void) | undefined;
 }) {
   const { t } = useI18n();
   const nets = places.filter((p): p is Net => p.lan != null);
   const devices = leases(useLive().data).filter((l) => nets.some((p) => p.lan.id === l.lan)).length;
   return (
     <section aria-labelledby="lans" className="@container flex flex-col xl:h-full xl:min-h-0">
-      <div className="mt-px flex min-h-14 shrink-0 items-center pt-4 pb-2">
+      <div className="mt-px flex min-h-14 shrink-0 items-center gap-3 pt-4 pb-2">
         <h2 id="lans" className="text-base font-semibold">
           {t("lan.lans")}
         </h2>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm ml-auto"
+          onClick={onAdd}
+          disabled={!onAdd}
+          title={onAdd ? undefined : places.length ? t("lan.allHave") : t("lan.noRouters")}
+        >
+          <Plus className="size-4" />
+          {t("lan.addTitle")}
+        </button>
       </div>
       <div className="min-h-0 flex-1 px-px xl:overflow-auto">
         {nets.length === 0 ? (
@@ -1049,9 +1067,7 @@ function Devices({
   const pinned = all.filter((d) => d.fixed).length;
   const canAdd = nets.some((p) => p.lan.dhcp);
   return (
-    <div
-      className={`grid min-h-0 flex-1 content-start gap-6 xl:content-stretch ${fix ? "xl:grid-cols-[minmax(0,1fr)_25rem]" : ""}`}
-    >
+    <div className={withPanel(fix != null)}>
       <section
         aria-label={t("lan.colDevices")}
         className="@container flex min-h-0 flex-col xl:h-full"
@@ -1120,16 +1136,14 @@ function Devices({
         </p>
       </section>
       {fix && (
-        <div className="min-h-0 max-xl:order-first xl:flex xl:flex-col">
-          <div className="xl:min-h-0 xl:flex-1">
-            <FixedForm
-              key={fix.d ? `${fix.d.lan}:${fix.d.mac}` : "new"}
-              target={fix}
-              nets={nets}
-              onClose={() => setFix(null)}
-            />
-          </div>
-        </div>
+        <SidePanel onClose={() => setFix(null)}>
+          <FixedForm
+            key={fix.d ? `${fix.d.lan}:${fix.d.mac}` : "new"}
+            target={fix}
+            nets={nets}
+            onClose={() => setFix(null)}
+          />
+        </SidePanel>
       )}
     </div>
   );
@@ -1145,18 +1159,28 @@ export function Lan() {
     .map((c) => ({ c, lan: all.find((l) => l.conn === c.key) }));
   const [editId, setEditId] = useState<number | null>(null);
   const editing = all.find((l) => l.id === editId) ?? null;
-  /* The form on a narrow screen, shut until asked for. */
+  /*
+   * The form, shut until asked for while there are networks to look at; with
+   * none yet, and a connection to make one for, it is open from the start.
+   */
   const [open, setOpen] = useState(false);
   const form = useRef<HTMLDivElement>(null);
-  const show = () => {
+  const show = (id: number | null) => {
+    setEditId(id);
     setOpen(true);
     requestAnimationFrame(() => form.current?.scrollIntoView({ block: "nearest" }));
+  };
+  const close = () => {
+    setEditId(null);
+    setOpen(false);
   };
   /* A network gone elsewhere leaves the form. */
   useEffect(() => {
     if (editId != null && !editing) setEditId(null);
   }, [editId, editing]);
-  const shown = open || editing != null;
+  const free = places.some((p) => !p.lan);
+  const first = free && !places.some((p) => p.lan);
+  const shown = open || editing != null || first;
   const [view, setView] = useTab(VIEWS);
   /* The network the devices are narrowed to, from a network's card, or all. */
   const [net, setNet] = useState<number | null>(null);
@@ -1188,42 +1212,30 @@ export function Lan() {
       {view === "devices" ? (
         <Devices places={places} net={net} onNet={setNet} />
       ) : (
-        <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem] xl:content-stretch xl:overflow-hidden">
+        <div className={withPanel(shown)}>
           <div className="min-h-0">
             <Places
               places={places}
               editing={editId}
-              onEdit={(l) => {
-                setEditId(l.id);
-                show();
-              }}
+              onEdit={(l) => show(l.id)}
               onDevices={(lan) => {
                 setNet(lan);
                 setView("devices");
               }}
+              onAdd={free ? () => show(null) : undefined}
             />
           </div>
-          {/* On a narrow screen the form, or the button that opens it, comes first. */}
-          <div ref={form} className="min-h-0 max-xl:order-first xl:flex xl:flex-col">
-            {!shown && (
-              <button type="button" className="btn btn-primary w-full xl:hidden" onClick={show}>
-                <Plus className="size-4" />
-                {t("lan.addTitle")}
-              </button>
-            )}
-            <div className={`xl:min-h-0 xl:flex-1 ${shown ? "" : "max-xl:hidden"}`}>
+          {shown && (
+            <SidePanel ref={form} onClose={first ? undefined : close}>
               <LanForm
                 places={places}
                 all={all}
                 editing={editing}
-                onDone={() => {
-                  setEditId(null);
-                  setOpen(false);
-                }}
-                onClose={() => setOpen(false)}
+                onDone={close}
+                onClose={first ? undefined : close}
               />
-            </div>
-          </div>
+            </SidePanel>
+          )}
         </div>
       )}
     </Page>

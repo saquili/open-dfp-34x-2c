@@ -8,7 +8,7 @@
  * card's cells stand one under another, each under its column's name.
  */
 
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useIpoeChange, useNetwork, useSessionChange } from "../../api/config";
 import { useLive } from "../../api/live";
@@ -285,6 +285,7 @@ export function ConnList({
   l2,
   editing,
   onEdit,
+  onAdd,
 }: {
   list: Conn[];
   services: Service[];
@@ -292,6 +293,8 @@ export function ConnList({
   l2: boolean;
   editing: string | null;
   onEdit: (c: Conn) => void;
+  /** Opens the form on a new connection; none while there is no room for one. */
+  onAdd: (() => void) | undefined;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState<string[]>([]);
@@ -304,10 +307,20 @@ export function ConnList({
        * and tabs, which sit within the form's border, so that the lines
        * under them meet.
        */}
-      <div className="mt-px flex min-h-14 shrink-0 items-center pt-4 pb-2">
+      <div className="mt-px flex min-h-14 shrink-0 items-center gap-3 pt-4 pb-2">
         <h2 id="conns" className="text-base font-semibold">
           {t("internet.conns")}
         </h2>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm ml-auto"
+          onClick={onAdd}
+          disabled={!onAdd}
+          title={onAdd ? undefined : t("internet.full", { max: MAX_CONNS })}
+        >
+          <Plus className="size-4" />
+          {t("internet.addConn")}
+        </button>
       </div>
       {/* The cards scroll under the names of the columns, which stay, and above the count. */}
       <div className="min-h-0 flex-1 px-px xl:overflow-auto">
