@@ -321,7 +321,6 @@ export const en = {
     add: "Add network",
     addTitle: "Add local network",
     editTitle: "Change: network of {name}",
-    views: "View",
     showDevices: "Show the devices of the network of {name}",
     devicesNone: "No device has an address yet.",
     search: "Search: name, IP, MAC",

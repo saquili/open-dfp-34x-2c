@@ -9,26 +9,26 @@
  * each can have a network of its own, apart from the others by its VLAN to
  * the switch behind the stick, or untagged, for one of them.
  *
- * On the left the connections that make the stick a router, each with its
- * network, or a place for one, and beside them, a tab away, every device of
- * the networks, a line each, to be searched and narrowed to one network: a
- * big house has fifty of them, which no card would hold. On the right
+ * Two tabs. The networks: on the left the connections that make the stick a
+ * router, each with its network, or a place for one; on the right
  * the form that adds a network or changes one, the connection first: its
  * VLAN to the switch, the stick's address in it, and the DHCP server that
- * gives the devices theirs, with the operator's name servers. The panels
- * stand on the internet page's lines.
+ * gives the devices theirs, with the operator's name servers; the panels
+ * stand on the internet page's lines. The devices: every device of the
+ * networks, a line each, across the page, to be searched and narrowed to one
+ * network, since a big house has fifty of them, which no card would hold.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
 import { useLanChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { LeaseInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
-import { Page } from "../components/Page";
+import { Page, Tabs, useTab } from "../components/Page";
 import { Filter } from "../components/Pager";
 import { useI18n } from "../i18n";
 import { duration } from "../lib/format";
@@ -427,57 +427,8 @@ function LanForm({
   );
 }
 
-/* What the left panel shows: the networks, or every device in them. */
-type View = "nets" | "devices";
-const VIEWS: View[] = ["nets", "devices"];
-
-/** The switch between the networks and their devices, with how many of each. */
-function ViewTabs({
-  view,
-  onChange,
-  counts,
-}: {
-  view: View;
-  onChange: (v: View) => void;
-  counts: Record<View, number>;
-}) {
-  const { t } = useI18n();
-  const ref = useRef<HTMLDivElement>(null);
-  const label = { nets: t("lan.lans"), devices: t("lan.colDevices") };
-  const move = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
-    const next = view === "nets" ? "devices" : "nets";
-    onChange(next);
-    ref.current?.querySelector<HTMLButtonElement>(`[data-view="${next}"]`)?.focus();
-  };
-  return (
-    <div
-      ref={ref}
-      role="tablist"
-      aria-label={t("lan.views")}
-      className="tabs tabs-box tabs-sm"
-      onKeyDown={move}
-    >
-      {VIEWS.map((v) => (
-        <button
-          key={v}
-          type="button"
-          role="tab"
-          id={`lan-tab-${v}`}
-          data-view={v}
-          aria-selected={view === v}
-          aria-controls="lan-view"
-          tabIndex={view === v ? 0 : -1}
-          className={`tab gap-2 ${view === v ? "tab-active font-semibold" : ""}`}
-          onClick={() => onChange(v)}
-        >
-          {label[v]}
-          <span className="font-normal tabular-nums text-base-content/60">{counts[v]}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
+/* The page's tabs: the networks, and every device in them. */
+const VIEWS = ["nets", "devices"] as const;
 
 /*
  * The devices' table: its columns, the same in its head and in every line,
@@ -648,88 +599,32 @@ function PlaceCard({
   );
 }
 
-/**
- * The left panel: the connections that make the stick a router, each with
- * its network or a place for one, or, a tab away, every device of the
- * networks, searched by name, address or MAC and narrowed to one network.
- */
+/** The connections that make the stick a router, each with its network or a place for one. */
 function Places({
   places,
   editing,
   onEdit,
   onAdd,
+  onDevices,
 }: {
   places: Place[];
   editing: number | null;
   onEdit: (l: LanView) => void;
   onAdd: (conn: string) => void;
+  onDevices: (lan: number) => void;
 }) {
   const { t } = useI18n();
   const ids = places.flatMap((p) => (p.lan ? [p.lan.id] : []));
-  const all = leases(useLive().data).filter((l) => ids.includes(l.lan));
-  const [view, setView] = useState<View>("nets");
-  const [q, setQ] = useState("");
-  /* The network the devices are narrowed to, or all of them. */
-  const [net, setNet] = useState<number | null>(null);
-  const on = net != null && ids.includes(net) ? net : null;
-  const words = q.trim().toLowerCase();
-  const shown = all.filter(
-    (l) =>
-      (on == null || l.lan === on) &&
-      (!words || `${l.name ?? ""} ${l.ip} ${l.mac}`.toLowerCase().includes(words)),
-  );
-  const nets = ids.length;
+  const devices = leases(useLive().data).filter((l) => ids.includes(l.lan)).length;
   return (
-    <section aria-label={t("lan.lans")} className="@container flex flex-col xl:h-full xl:min-h-0">
-      {/* The tabs, 40 px in their box, stand on the line of the form's title. */}
-      <div className="mt-px flex min-h-14 shrink-0 flex-wrap items-center gap-x-4 gap-y-2 pt-3 pb-1">
-        <ViewTabs view={view} onChange={setView} counts={{ nets, devices: all.length }} />
-        {view === "devices" && all.length > 0 && (
-          <div className="flex items-center gap-3 @max-lg:w-full @lg:ml-auto">
-            <Filter
-              value={q}
-              onChange={setQ}
-              placeholder={t("lan.search")}
-              className="@max-lg:flex-1 @lg:w-56"
-            />
-            {nets > 1 && (
-              <select
-                className="select select-sm w-auto"
-                aria-label={t("lan.colNet")}
-                value={on ?? ""}
-                onChange={(e) =>
-                  setNet(e.currentTarget.value ? Number(e.currentTarget.value) : null)
-                }
-              >
-                <option value="">{t("lan.allNets")}</option>
-                {places.map(
-                  (p) =>
-                    p.lan && (
-                      <option key={p.lan.id} value={p.lan.id}>
-                        {connName(t, p.c)}
-                      </option>
-                    ),
-                )}
-              </select>
-            )}
-          </div>
-        )}
+    <section aria-labelledby="lans" className="@container flex flex-col xl:h-full xl:min-h-0">
+      <div className="mt-px flex min-h-14 shrink-0 items-center pt-4 pb-2">
+        <h2 id="lans" className="text-base font-semibold">
+          {t("lan.lans")}
+        </h2>
       </div>
-      <div
-        id="lan-view"
-        role="tabpanel"
-        aria-labelledby={`lan-tab-${view}`}
-        className="min-h-0 flex-1 px-px xl:overflow-auto"
-      >
-        {view === "devices" ? (
-          shown.length ? (
-            <DeviceTable list={shown} places={places} />
-          ) : (
-            <p className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center text-base-content/70">
-              {all.length ? t("lan.noMatch") : t("lan.devicesNone")}
-            </p>
-          )
-        ) : places.length === 0 ? (
+      <div className="min-h-0 flex-1 px-px xl:overflow-auto">
+        {places.length === 0 ? (
           <div className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center">
             <p className="text-base font-semibold">{t("lan.noRouters")}</p>
             <p className="mx-auto mt-1 max-w-prose text-base-content/70">
@@ -753,22 +648,87 @@ function Places({
                 editing={!!p.lan && editing === p.lan.id}
                 onEdit={() => p.lan && onEdit(p.lan)}
                 onAdd={() => onAdd(p.c.key)}
-                onDevices={() => {
-                  setNet(p.lan?.id ?? null);
-                  setQ("");
-                  setView("devices");
-                }}
+                onDevices={() => p.lan && onDevices(p.lan.id)}
               />
             ))}
           </div>
         )}
       </div>
       <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
-        {view === "nets"
-          ? t("lan.count", { n: nets, d: all.length })
-          : shown.length === all.length
-            ? t("lan.devicesCount", { n: all.length })
-            : t("lan.shown", { n: shown.length, all: all.length })}
+        {t("lan.count", { n: ids.length, d: devices })}
+      </p>
+    </section>
+  );
+}
+
+/**
+ * Every device of the networks across the page, searched by name, address
+ * or MAC, and narrowed to the network @net, or none for all of them.
+ */
+function Devices({
+  places,
+  net,
+  onNet,
+}: {
+  places: Place[];
+  net: number | null;
+  onNet: (lan: number | null) => void;
+}) {
+  const { t } = useI18n();
+  const ids = places.flatMap((p) => (p.lan ? [p.lan.id] : []));
+  const all = leases(useLive().data).filter((l) => ids.includes(l.lan));
+  const [q, setQ] = useState("");
+  const on = net != null && ids.includes(net) ? net : null;
+  const words = q.trim().toLowerCase();
+  const shown = all.filter(
+    (l) =>
+      (on == null || l.lan === on) &&
+      (!words || `${l.name ?? ""} ${l.ip} ${l.mac}`.toLowerCase().includes(words)),
+  );
+  return (
+    <section
+      aria-label={t("lan.colDevices")}
+      className="@container flex min-h-0 flex-1 flex-col xl:overflow-hidden"
+    >
+      <div className="mt-px flex min-h-14 shrink-0 flex-wrap items-center gap-3 pt-4 pb-2">
+        <Filter
+          value={q}
+          onChange={setQ}
+          placeholder={t("lan.search")}
+          className="@max-lg:flex-1 @lg:w-72"
+        />
+        {ids.length > 1 && (
+          <select
+            className="select select-sm w-auto"
+            aria-label={t("lan.colNet")}
+            value={on ?? ""}
+            onChange={(e) => onNet(e.currentTarget.value ? Number(e.currentTarget.value) : null)}
+          >
+            <option value="">{t("lan.allNets")}</option>
+            {places.map(
+              (p) =>
+                p.lan && (
+                  <option key={p.lan.id} value={p.lan.id}>
+                    {connName(t, p.c)}
+                  </option>
+                ),
+            )}
+          </select>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 px-px xl:overflow-auto">
+        {shown.length ? (
+          <DeviceTable list={shown} places={places} />
+        ) : (
+          <p className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center text-base-content/70">
+            {all.length ? t("lan.noMatch") : t("lan.devicesNone")}
+          </p>
+        )}
+      </div>
+      <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
+        {shown.length === all.length
+          ? t("lan.devicesCount", { n: all.length })
+          : t("lan.shown", { n: shown.length, all: all.length })}
       </p>
     </section>
   );
@@ -797,49 +757,82 @@ export function Lan() {
     if (editId != null && !editing) setEditId(null);
   }, [editId, editing]);
   const shown = open || editing != null;
+  const [view, setView] = useTab(VIEWS);
+  /* The network the devices are narrowed to, from a network's card, or all. */
+  const [net, setNet] = useState<number | null>(null);
+  const ids = all.flatMap((l) => (places.some((p) => p.lan?.id === l.id) ? [l.id] : []));
+  const devices = leases(live).filter((l) => ids.includes(l.lan)).length;
+  const count = (n: number) => (
+    <span className="font-normal tabular-nums text-base-content/60">{n}</span>
+  );
 
   return (
-    <Page title={t("lan.title")} hint={t("lan.hint")}>
-      <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem] xl:content-stretch xl:overflow-hidden">
-        <div className="min-h-0">
-          <Places
-            places={places}
-            editing={editId}
-            onEdit={(l) => {
-              setEditId(l.id);
-              show();
-            }}
-            onAdd={(conn) => {
-              setEditId(null);
-              setPick(conn);
-              show();
-            }}
-          />
-        </div>
-        {/* On a narrow screen the form, or the button that opens it, comes first. */}
-        <div ref={form} className="min-h-0 max-xl:order-first xl:flex xl:flex-col">
-          {!shown && (
-            <button type="button" className="btn btn-primary w-full xl:hidden" onClick={show}>
-              <Plus className="size-4" />
-              {t("lan.addTitle")}
-            </button>
-          )}
-          <div className={`xl:min-h-0 xl:flex-1 ${shown ? "" : "max-xl:hidden"}`}>
-            <LanForm
+    <Page
+      title={t("lan.title")}
+      hint={t("lan.hint")}
+      tabs={
+        <Tabs
+          items={[
+            { id: "nets", label: t("lan.lans"), badge: count(ids.length) },
+            { id: "devices", label: t("lan.colDevices"), badge: count(devices) },
+          ]}
+          value={view}
+          onChange={(v) => {
+            setNet(null);
+            setView(v);
+          }}
+          label={t("lan.title")}
+        />
+      }
+    >
+      {view === "devices" ? (
+        <Devices places={places} net={net} onNet={setNet} />
+      ) : (
+        <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem] xl:content-stretch xl:overflow-hidden">
+          <div className="min-h-0">
+            <Places
               places={places}
-              all={all}
-              editing={editing}
-              pick={pick}
-              onDone={() => {
-                setEditId(null);
-                setPick("");
-                setOpen(false);
+              editing={editId}
+              onEdit={(l) => {
+                setEditId(l.id);
+                show();
               }}
-              onClose={() => setOpen(false)}
+              onAdd={(conn) => {
+                setEditId(null);
+                setPick(conn);
+                show();
+              }}
+              onDevices={(lan) => {
+                setNet(lan);
+                setView("devices");
+              }}
             />
           </div>
+          {/* On a narrow screen the form, or the button that opens it, comes first. */}
+          <div ref={form} className="min-h-0 max-xl:order-first xl:flex xl:flex-col">
+            {!shown && (
+              <button type="button" className="btn btn-primary w-full xl:hidden" onClick={show}>
+                <Plus className="size-4" />
+                {t("lan.addTitle")}
+              </button>
+            )}
+            <div className={`xl:min-h-0 xl:flex-1 ${shown ? "" : "max-xl:hidden"}`}>
+              <LanForm
+                places={places}
+                all={all}
+                editing={editing}
+                pick={pick}
+                onDone={() => {
+                  setEditId(null);
+                  setPick("");
+                  setOpen(false);
+                }}
+                onClose={() => setOpen(false)}
+              />
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </Page>
   );
 }

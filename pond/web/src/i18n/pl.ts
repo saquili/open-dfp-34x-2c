@@ -323,7 +323,6 @@ export const pl: Dictionary = {
     add: "Dodaj sieć",
     addTitle: "Dodaj sieć lokalną",
     editTitle: "Zmień: sieć {name}",
-    views: "Widok",
     showDevices: "Pokaż urządzenia sieci {name}",
     devicesNone: "Żadne urządzenie nie ma jeszcze adresu.",
     search: "Szukaj: nazwa, IP, MAC",
