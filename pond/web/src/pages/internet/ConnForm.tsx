@@ -250,6 +250,13 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
             />
           )}
         />
+        {/* What every kind has, under the VLAN, where it stays from tab to tab. */}
+        <Field
+          label={t("internet.mac")}
+          hint={t("internet.macHint")}
+          error={errors.mac?.message}
+          {...form.register("mac")}
+        />
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
           <Field
             label={t("internet.user")}
@@ -308,12 +315,6 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
             </div>
           )}
         </fieldset>
-        <Field
-          label={t("internet.mac")}
-          hint={t("internet.macHint")}
-          error={errors.mac?.message}
-          {...form.register("mac")}
-        />
       </div>
       <Buttons
         editing={!!x}
@@ -418,6 +419,13 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
             />
           )}
         />
+        {/* What every kind has, under the VLAN, where it stays from tab to tab. */}
+        <Field
+          label={t("internet.mac")}
+          hint={t("internet.macHint")}
+          error={errors.mac?.message}
+          {...form.register("mac")}
+        />
         {fixed ? (
           <>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
@@ -467,12 +475,6 @@ function IpoeForm({ kind, x, ...c }: Common & { kind: "static" | "dhcp"; x?: Ipo
         ) : (
           <FamilyField field={form.register("family")} hint={t("internet.dhcpFamilyHint")} />
         )}
-        <Field
-          label={t("internet.mac")}
-          hint={t("internet.macHint")}
-          error={errors.mac?.message}
-          {...form.register("mac")}
-        />
         <p className="text-xs text-base-content/70">{t("internet.kindStickHint")}</p>
       </div>
       <Buttons
