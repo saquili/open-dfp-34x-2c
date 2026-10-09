@@ -74,8 +74,9 @@ export function Tabs<T extends string>({
 }
 
 /**
- * The frame of a page. @tabs sit beside the title on a wide screen and
- * below it on a narrow one; @actions sit at the far right.
+ * The frame of a page. @tabs sit beside the title on a wide screen, the
+ * @hint under both, and on a narrow one below the hint; @actions sit at the
+ * far right.
  */
 export function Page({
   title,
@@ -93,12 +94,14 @@ export function Page({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <header className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-          {hint && <p className="mt-0.5 text-sm text-base-content/70">{hint}</p>}
-        </div>
-        {tabs}
-        {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
+        <h1 className="order-1 min-w-0 text-2xl font-semibold tracking-tight">{title}</h1>
+        {hint && (
+          <p className="order-2 -mt-1.5 basis-full text-sm text-base-content/70 sm:order-4">
+            {hint}
+          </p>
+        )}
+        {tabs && <div className="order-3 max-sm:w-full sm:order-2">{tabs}</div>}
+        {actions && <div className="order-3 ml-auto flex items-center gap-2">{actions}</div>}
       </header>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </div>
