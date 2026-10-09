@@ -80,14 +80,7 @@ export function Internet() {
         {!l2 && <NoServices fib={fib} />}
         <div className="grid min-h-0 flex-1 content-start gap-6 xl:grid-cols-[minmax(0,1fr)_25rem] xl:content-stretch xl:overflow-hidden">
           <div className="min-h-0">
-            <ConnList
-              list={list}
-              services={services}
-              l2={l2}
-              known={known}
-              editing={editKey}
-              onEdit={edit}
-            />
+            <ConnList list={list} services={services} l2={l2} editing={editKey} onEdit={edit} />
           </div>
           {/* On a narrow screen the form, or the button that opens it, comes first. */}
           <div ref={form} className="min-h-0 max-xl:order-first xl:flex xl:flex-col">

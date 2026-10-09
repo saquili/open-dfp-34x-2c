@@ -6,11 +6,6 @@
  * whatever kind, the same columns for all; a card opens on what is its kind's
  * alone. The columns line up from card to card (subgrid); in a narrow list a
  * card's cells stand one under another, each under its column's name.
- *
- * A connection works step by step, each step on the one before: light on
- * the fibre, the operator's services (OMCI), its VLAN among them, the
- * session or the lease or the gateway, and the address. Its state is the
- * first step that does not hold.
  */
 
 import { ChevronRight, Pencil, Trash2 } from "lucide-react";
@@ -22,15 +17,7 @@ import { Dot } from "../../components/ui";
 import { useI18n } from "../../i18n";
 import { duration } from "../../lib/format";
 import type { Service } from "../../lib/omci";
-import {
-  downVlan,
-  type FibreView,
-  fibre,
-  gems,
-  MAX_CONNS,
-  sessions,
-  type Tone,
-} from "../../lib/state";
+import { downVlan, gems, MAX_CONNS, sessions, type Tone } from "../../lib/state";
 import { type Conn, serviceIn } from "./conns";
 import { connName, FAMILY, Mono, MonoList, Sub, type T } from "./shared";
 
@@ -68,40 +55,6 @@ function Cell({ head, at, children }: { head?: string; at: string; children: Rea
       {children}
     </div>
   );
-}
-
-/** The connection's way through the steps it rests on, and the first that does not hold. */
-function steps(t: T, c: Conn, fib: FibreView, known: boolean, svc: Service | undefined) {
-  const link = c.x.up;
-  const address =
-    c.kind === "pppoe" ? !!(c.x.ipv4 || c.x.prefix || c.x.ipv6) : !!(c.x.ipv4 || c.x.ipv6);
-  const holds = [
-    fib.rxDbm != null && fib.quality !== "none" && fib.quality !== "tooWeak",
-    fib.connected && known,
-    !!svc,
-    link,
-    address,
-  ];
-  const label = [
-    t("internet.stepLight"),
-    t("internet.stepOmci"),
-    `VLAN ${c.vlan}`,
-    c.kind === "pppoe" ? "PPPoE" : c.kind === "dhcp" ? "DHCP" : t("internet.stepGateway"),
-    t("internet.stepAddress"),
-  ];
-  const broken = holds.indexOf(false);
-  /* A session that dials and a lease asked for are under way, not broken. */
-  const under = broken === 3 && c.kind !== "static";
-  return label.map((l, i) => ({
-    label: l,
-    tone: (broken < 0 || i < broken
-      ? "good"
-      : i > broken
-        ? "neutral"
-        : under
-          ? "warn"
-          : "bad") as Tone,
-  }));
 }
 
 /** A connection's state: a dot, a word, and why when it is not working. */
@@ -236,7 +189,6 @@ function ConnCard({
   c,
   services,
   l2,
-  known,
   open,
   onToggle,
   editing,
@@ -245,14 +197,12 @@ function ConnCard({
   c: Conn;
   services: Service[];
   l2: boolean;
-  known: boolean;
   open: boolean;
   onToggle: () => void;
   editing: boolean;
   onEdit: () => void;
 }) {
   const { t, lang } = useI18n();
-  const fib = fibre(useLive().data);
   const session = useSessionChange();
   const ipoe = useIpoeChange();
   const change = c.kind === "pppoe" ? session : ipoe;
@@ -367,22 +317,8 @@ function ConnCard({
         <div
           id={more}
           data-more
-          className={`col-span-5 col-start-2 grid cursor-auto gap-6 pb-1 ${NARROW.more}`}
+          className={`col-span-5 col-start-2 cursor-auto pb-1 ${NARROW.more}`}
         >
-          <section>
-            <h3 className="mb-2 text-sm font-semibold">{t("internet.steps")}</h3>
-            <ol className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              {steps(t, c, fib, known, svc).map((s, i) => (
-                <li key={s.label} className="flex items-center gap-2">
-                  {i > 0 && (
-                    <ChevronRight className="size-4 text-base-content/45" aria-hidden="true" />
-                  )}
-                  <Dot tone={s.tone} />
-                  {s.label}
-                </li>
-              ))}
-            </ol>
-          </section>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 @3xl:grid-cols-3 @max-md:grid-cols-1">
             <Facts c={c} />
           </dl>
@@ -397,7 +333,6 @@ export function ConnList({
   list,
   services,
   l2,
-  known,
   editing,
   onEdit,
 }: {
@@ -405,7 +340,6 @@ export function ConnList({
   services: Service[];
   /** The fibre is up and the OLT set services: the connections can work. */
   l2: boolean;
-  known: boolean;
   editing: string | null;
   onEdit: (c: Conn) => void;
 }) {
@@ -452,7 +386,6 @@ export function ConnList({
                 c={c}
                 services={services}
                 l2={l2}
-                known={known}
                 open={open.includes(c.key)}
                 onToggle={() => toggle(c.key)}
                 editing={editing === c.key}
