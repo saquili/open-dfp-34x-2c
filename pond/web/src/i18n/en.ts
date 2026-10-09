@@ -317,7 +317,6 @@ export const en = {
     colMac: "MAC",
     colExpires: "Expires in",
     stickAt: "stick",
-    noLan: "no local network",
     add: "Add network",
     addTitle: "Add local network",
     editTitle: "Change: network of {name}",
@@ -331,7 +330,10 @@ export const en = {
     noName: "no name",
     leaseLeft: "{time} left",
     dhcpOffShort: "DHCP off",
-    count: "Local networks: {n} · devices: {d}",
+    count: "Local networks: {n} of {max} · devices: {d}",
+    empty: "No local networks configured",
+    emptyHint:
+      "Each router connection can have one local network. Add it in the form: the connection, the VLAN to the switch and the stick's address.",
     removeConfirm: "Remove the local network of {name}? Its devices lose their addresses.",
     noRouters: "No connection makes the stick a router",
     noRoutersHint:

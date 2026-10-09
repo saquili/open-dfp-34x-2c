@@ -9,8 +9,8 @@
  * each can have a network of its own, apart from the others by its VLAN to
  * the switch behind the stick, or untagged, for one of them.
  *
- * Two tabs. The networks: on the left the connections that make the stick a
- * router, each with its network, or a place for one; on the right
+ * Two tabs. The networks: on the left the networks there are, one at most
+ * for each connection that makes the stick a router; on the right
  * the form that adds a network or changes one, the connection first: its
  * VLAN to the switch, the stick's address in it, and the DHCP server that
  * gives the devices theirs, with the operator's name servers; the panels
@@ -347,19 +347,22 @@ function LanFields({
   );
 }
 
-/** The form: a network added, out through @pick when one was asked for, or @editing changed. */
+/**
+ * The form: a network added, out through the first connection without one
+ * unless another is chosen, or @editing changed. Once every connection has
+ * its network, it says so in place of its fields, as the internet page's does
+ * at its seven connections.
+ */
 function LanForm({
   places,
   all,
   editing,
-  pick,
   onDone,
   onClose,
 }: {
   places: Place[];
   all: LanView[];
   editing: LanView | null;
-  pick: string;
   onDone: () => void;
   onClose: () => void;
 }) {
@@ -367,7 +370,7 @@ function LanForm({
   /* A new form after each network added. */
   const [round, setRound] = useState(0);
   const free = places.filter((p) => !p.lan);
-  const conn = free.find((p) => p.c.key === pick)?.c.key ?? free[0]?.c.key ?? "";
+  const conn = free[0]?.c.key ?? "";
   const of = editing ? places.find((p) => p.c.key === editing.conn) : undefined;
   return (
     <section
@@ -491,49 +494,26 @@ function DeviceTable({ list, places }: { list: LeaseInfo[]; places: Place[] }) {
   );
 }
 
-/** A connection that makes the stick a router: its network, or a place for one. */
-function PlaceCard({
+/** A connection that makes the stick a router, with the network it has. */
+type Net = Place & { lan: LanView };
+
+/** A network: the connection it goes out through, its addresses, VLAN and devices. */
+function NetCard({
   p,
   editing,
   onEdit,
-  onAdd,
   onDevices,
 }: {
-  p: Place;
+  p: Net;
   editing: boolean;
   onEdit: () => void;
-  onAdd: () => void;
   onDevices: () => void;
 }) {
   const { t } = useI18n();
   const change = useLanChange();
   const state = useChangeState(change);
-  const list = leases(useLive().data).filter((l) => l.lan === p.lan?.id);
-  const name = (
-    <Cell at={AT.name}>
-      <span className="font-semibold">{connName(t, p.c)}</span>
-      <Sub>{`VLAN ${p.c.vlan}`}</Sub>
-    </Cell>
-  );
-  if (!p.lan)
-    return (
-      <div className={`${CARD} border-dashed border-base-300`}>
-        <span className={AT.caret} />
-        {name}
-        <Cell head={t("lan.colNet")} at={AT.first}>
-          <span className="text-base-content/70">{t("lan.noLan")}</span>
-        </Cell>
-        <span className={AT.second} />
-        <div className={`-my-1.5 ${AT.third}`}>
-          <button type="button" className="btn btn-ghost btn-sm -ml-3 text-primary" onClick={onAdd}>
-            <Plus className="size-4" />
-            {t("lan.add")}
-          </button>
-        </div>
-        <span className={AT.acts} />
-      </div>
-    );
   const x = p.lan;
+  const list = leases(useLive().data).filter((l) => l.lan === x.id);
   const net = net4(x.address);
   const remove = () => {
     if (!window.confirm(t("lan.removeConfirm", { name: connName(t, p.c) }))) return;
@@ -544,7 +524,10 @@ function PlaceCard({
       className={`${CARD} ${editing ? "border-primary ring-1 ring-primary" : "border-base-300"}`}
     >
       <span className={AT.caret} />
-      {name}
+      <Cell at={AT.name}>
+        <span className="font-semibold">{connName(t, p.c)}</span>
+        <Sub>{`VLAN ${p.c.vlan}`}</Sub>
+      </Cell>
       <Cell head={t("lan.colNet")} at={AT.first}>
         <Mono>{net?.text ?? x.address}</Mono>
         <Sub>
@@ -599,23 +582,24 @@ function PlaceCard({
   );
 }
 
-/** The connections that make the stick a router, each with its network or a place for one. */
+/**
+ * The networks there are, of the @places a network can go out through: one
+ * at most for each connection that makes the stick a router.
+ */
 function Places({
   places,
   editing,
   onEdit,
-  onAdd,
   onDevices,
 }: {
   places: Place[];
   editing: number | null;
   onEdit: (l: LanView) => void;
-  onAdd: (conn: string) => void;
   onDevices: (lan: number) => void;
 }) {
   const { t } = useI18n();
-  const ids = places.flatMap((p) => (p.lan ? [p.lan.id] : []));
-  const devices = leases(useLive().data).filter((l) => ids.includes(l.lan)).length;
+  const nets = places.filter((p): p is Net => p.lan != null);
+  const devices = leases(useLive().data).filter((l) => nets.some((p) => p.lan.id === l.lan)).length;
   return (
     <section aria-labelledby="lans" className="@container flex flex-col xl:h-full xl:min-h-0">
       <div className="mt-px flex min-h-14 shrink-0 items-center pt-4 pb-2">
@@ -624,11 +608,13 @@ function Places({
         </h2>
       </div>
       <div className="min-h-0 flex-1 px-px xl:overflow-auto">
-        {places.length === 0 ? (
+        {nets.length === 0 ? (
           <div className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center">
-            <p className="text-base font-semibold">{t("lan.noRouters")}</p>
+            <p className="text-base font-semibold">
+              {places.length ? t("lan.empty") : t("lan.noRouters")}
+            </p>
             <p className="mx-auto mt-1 max-w-prose text-base-content/70">
-              {t("lan.noRoutersHint")}
+              {places.length ? t("lan.emptyHint") : t("lan.noRoutersHint")}
             </p>
           </div>
         ) : (
@@ -641,21 +627,20 @@ function Places({
               <span>{t("lan.colDevices")}</span>
               <span />
             </div>
-            {places.map((p) => (
-              <PlaceCard
+            {nets.map((p) => (
+              <NetCard
                 key={p.c.key}
                 p={p}
-                editing={!!p.lan && editing === p.lan.id}
-                onEdit={() => p.lan && onEdit(p.lan)}
-                onAdd={() => onAdd(p.c.key)}
-                onDevices={() => p.lan && onDevices(p.lan.id)}
+                editing={editing === p.lan.id}
+                onEdit={() => onEdit(p.lan)}
+                onDevices={() => onDevices(p.lan.id)}
               />
             ))}
           </div>
         )}
       </div>
       <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
-        {t("lan.count", { n: ids.length, d: devices })}
+        {t("lan.count", { n: nets.length, max: places.length, d: devices })}
       </p>
     </section>
   );
@@ -744,7 +729,6 @@ export function Lan() {
     .map((c) => ({ c, lan: all.find((l) => l.conn === c.key) }));
   const [editId, setEditId] = useState<number | null>(null);
   const editing = all.find((l) => l.id === editId) ?? null;
-  const [pick, setPick] = useState("");
   /* The form on a narrow screen, shut until asked for. */
   const [open, setOpen] = useState(false);
   const form = useRef<HTMLDivElement>(null);
@@ -797,11 +781,6 @@ export function Lan() {
                 setEditId(l.id);
                 show();
               }}
-              onAdd={(conn) => {
-                setEditId(null);
-                setPick(conn);
-                show();
-              }}
               onDevices={(lan) => {
                 setNet(lan);
                 setView("devices");
@@ -821,10 +800,8 @@ export function Lan() {
                 places={places}
                 all={all}
                 editing={editing}
-                pick={pick}
                 onDone={() => {
                   setEditId(null);
-                  setPick("");
                   setOpen(false);
                 }}
                 onClose={() => setOpen(false)}

@@ -319,7 +319,6 @@ export const pl: Dictionary = {
     colMac: "MAC",
     colExpires: "Wygasa za",
     stickAt: "wkładka",
-    noLan: "brak sieci lokalnej",
     add: "Dodaj sieć",
     addTitle: "Dodaj sieć lokalną",
     editTitle: "Zmień: sieć {name}",
@@ -333,7 +332,10 @@ export const pl: Dictionary = {
     noName: "bez nazwy",
     leaseLeft: "jeszcze {time}",
     dhcpOffShort: "DHCP wyłączony",
-    count: "Sieci lokalne: {n} · urządzenia: {d}",
+    count: "Sieci lokalne: {n} z {max} · urządzenia: {d}",
+    empty: "Brak skonfigurowanych sieci lokalnych",
+    emptyHint:
+      "Każde połączenie-router może mieć jedną sieć lokalną. Dodaj ją w formularzu: połączenie, VLAN do switcha i adres wkładki.",
     removeConfirm: "Usunąć sieć lokalną {name}? Urządzenia w niej stracą adresy.",
     noRouters: "Żadne połączenie nie robi z wkładki routera",
     noRoutersHint:
