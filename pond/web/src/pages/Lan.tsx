@@ -20,12 +20,12 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { Pencil, Pin, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useLanChange } from "../api/config";
+import { useFixedChange, useLanChange } from "../api/config";
 import { useLive } from "../api/live";
-import type { LeaseInfo } from "../api/types";
+import type { FixedInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Page, Tabs, useTab } from "../components/Page";
@@ -33,8 +33,8 @@ import { Filter } from "../components/Pager";
 import { useI18n } from "../i18n";
 import { duration } from "../lib/format";
 import { ip4, net4 } from "../lib/ipv4";
-import { ipv4, ipv4Cidr, vlan, z } from "../lib/schemas";
-import { downVlan, type LanView, lans, leases, sessions } from "../lib/state";
+import { ipv4, ipv4Cidr, mac, upTo, vlan, z } from "../lib/schemas";
+import { downVlan, fixed, type LanView, lans, leases, sessions } from "../lib/state";
 import { type Conn, conns } from "./internet/conns";
 import { connName, hostSide, Mono, Sub, type T, useServices } from "./internet/shared";
 
@@ -153,6 +153,7 @@ function LanFields({
   const change = useLanChange();
   const state = useChangeState(change);
   const others = all.filter((l) => l.id !== x?.id);
+  const pins = x ? fixed(live).filter((f) => f.lan === x.id) : [];
   const nameOf = (l: LanView) => {
     const p = places.find((q) => q.c.key === l.conn);
     return p ? connName(t, p.c) : l.conn;
@@ -184,6 +185,15 @@ function LanFields({
           : undefined;
         if (net && over)
           fail("address", t("lan.netOverlap", { net: net.text, name: nameOf(over) }));
+        /* The network's fixed addresses stay in it, none of them the stick's. */
+        const stick = ip4(v.address.split("/")[0] ?? "");
+        const out = net
+          ? pins.find((f) => {
+              const a = ip4(f.ip);
+              return a == null || a <= net.first || a >= net.last || a === stick;
+            })
+          : undefined;
+        if (out) fail("address", t("lan.netFixed", { ip: out.ip, name: out.name || out.mac }));
         if (v.dhcp === "off") return;
         if (!v.poolFrom) return fail("poolFrom", t("form.required"));
         if (!v.poolTo) return fail("poolTo", t("form.required"));
@@ -436,61 +446,388 @@ const VIEWS = ["nets", "devices"] as const;
 /*
  * The devices' table: its columns, the same in its head and in every line,
  * as wide as their longest values (a MAC, 192.168.255.254, "Static IP",
- * "22 godz. 30 min", with the line's padding the last one also holds), so
- * that they stand still as a search narrows the list.
+ * "jeszcze 22 godz. 30 min", a button), so that they stand still as a search
+ * narrows the list.
  */
-const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_4.5rem_8rem]";
+const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_4.5rem_10rem_6rem]";
+/*
+ * In a narrow list: the name, the address and the button, the same in the
+ * head and every line; as narrow as a phone, the button is its icon alone.
+ */
+const NARROW =
+  "@max-3xl:grid-cols-[minmax(0,1fr)_8rem_5.5rem] @max-3xl:gap-x-3 @max-lg:grid-cols-[minmax(0,1fr)_7.5rem_1.5rem]";
+
+/** A device of the table: one with an address now, one with a fixed address, or both. */
+interface Device {
+  lan: number;
+  mac: string;
+  /** The name given it by hand, else its own, if any. */
+  name: string | null;
+  /** Its own name, as it gives it. */
+  own: string | null;
+  /** The address it has now, and how long it keeps it, while it is on. */
+  now: string | null;
+  left: number;
+  fixed: FixedInfo | undefined;
+}
+
+/** The devices of the networks @ids: those on now, and those with a fixed address that are off. */
+function useDevices(ids: number[]): Device[] {
+  const { data: live } = useLive();
+  const pins = fixed(live).filter((f) => ids.includes(f.lan));
+  const on = leases(live).filter((l) => ids.includes(l.lan));
+  const pinOf = (lan: number, m: string) => pins.find((f) => f.lan === lan && f.mac === m);
+  const list: Device[] = [
+    ...on.map((l) => {
+      const f = pinOf(l.lan, l.mac);
+      return {
+        lan: l.lan,
+        mac: l.mac,
+        name: f?.name || l.name,
+        own: l.name,
+        now: l.ip,
+        left: l.left_s,
+        fixed: f,
+      };
+    }),
+    ...pins
+      .filter((f) => !on.some((l) => l.lan === f.lan && l.mac === f.mac))
+      .map((f) => ({
+        lan: f.lan,
+        mac: f.mac,
+        name: f.name || null,
+        own: null,
+        now: null,
+        left: 0,
+        fixed: f,
+      })),
+  ];
+  const at = (d: Device) => ip4(d.fixed?.ip ?? d.now ?? "") ?? 0;
+  return list.sort((x, y) => at(x) - at(y));
+}
 
 /**
- * Every device of @list, a line each: its name, MAC, address, network and
- * how long its lease has left; in a narrow list two lines, the name and the
- * address first.
+ * Every device of @list, a line each: its name, MAC, address, network, its
+ * lease, and the button that fixes its address or changes the fixed one; in
+ * a narrow list two lines, the name, the address and the button first. A
+ * fixed address shows where the device has it, or will have it at its next
+ * renewal.
  */
-function DeviceTable({ list, places }: { list: LeaseInfo[]; places: Place[] }) {
+function DeviceTable({
+  list,
+  places,
+  onFix,
+}: {
+  list: Device[];
+  places: Place[];
+  onFix: (d: Device) => void;
+}) {
   const { t, lang } = useI18n();
   const netOf = (id: number) => {
     const p = places.find((x) => x.lan?.id === id);
     return p ? connName(t, p.c) : "–";
   };
   return (
-    <div className={`grid ${DEVICE_COLS} gap-x-6 gap-y-2 pb-2 @max-2xl:flex @max-2xl:flex-col`}>
+    <div className={`grid ${DEVICE_COLS} gap-x-6 gap-y-2 pb-2 @max-3xl:flex @max-3xl:flex-col`}>
+      {/* In a narrow list the head names the first line's columns alone. */}
       <div
-        className={`sticky top-0 z-10 col-span-full mb-2 grid h-11 grid-cols-subgrid items-center border-x border-b border-x-transparent border-b-base-300 bg-base-200 px-4 text-xs font-semibold text-base-content/70 @max-2xl:hidden`}
+        className={`sticky top-0 z-10 col-span-full mb-2 grid h-11 grid-cols-subgrid items-center border-x border-b border-x-transparent border-b-base-300 bg-base-200 px-4 text-xs font-semibold text-base-content/70 @max-3xl:mb-1 ${NARROW}`}
       >
-        <span>{t("lan.colDevice")}</span>
-        <span>{t("lan.colMac")}</span>
-        <span>{t("lan.colIp")}</span>
-        <span>{t("lan.colNet")}</span>
-        <span>{t("lan.colExpires")}</span>
+        <span className="pl-5">{t("lan.colDevice")}</span>
+        <span className="@max-3xl:hidden">{t("lan.colMac")}</span>
+        <span className="@max-3xl:col-start-2 @max-3xl:text-right">{t("lan.colIp")}</span>
+        <span className="@max-3xl:hidden">{t("lan.colNet")}</span>
+        <span className="@max-3xl:hidden">{t("lan.colLease")}</span>
+        <span />
       </div>
       <div className="col-span-full grid grid-cols-subgrid rounded-box border border-base-300 bg-base-100">
-        {list.map((l) => {
-          const left = duration(l.left_s, lang);
+        {list.map((d) => {
+          const name = d.name ?? t("lan.noName");
+          const lease = d.fixed
+            ? d.now
+              ? t("lan.fixedOn")
+              : t("lan.off")
+            : t("lan.leaseLeft", { time: duration(d.left, lang) });
+          const moved = d.fixed && d.now && d.now !== d.fixed.ip;
           return (
             <div
-              key={l.mac}
-              className="col-span-full grid grid-cols-subgrid items-baseline border-b border-base-300 px-4 py-2.5 text-sm last:border-b-0 @max-2xl:grid-cols-[minmax(0,1fr)_auto] @max-2xl:gap-x-4 @max-2xl:gap-y-0.5"
+              key={`${d.lan}:${d.mac}`}
+              className={`col-span-full grid grid-cols-subgrid items-baseline border-b border-base-300 px-4 py-2.5 text-sm last:border-b-0 @max-3xl:gap-y-0.5 ${NARROW}`}
             >
-              <span className={`min-w-0 truncate ${l.name ? "" : "text-base-content/60"}`}>
-                {l.name ?? t("lan.noName")}
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                {d.fixed ? (
+                  <Pin
+                    className="size-3.5 shrink-0 self-center text-primary"
+                    aria-label={t("lan.fixedMark")}
+                  />
+                ) : (
+                  <span className="size-3.5 shrink-0" />
+                )}
+                <span className={`truncate ${d.name ? "" : "text-base-content/60"}`}>{name}</span>
               </span>
-              <span className="font-mono text-xs text-base-content/70 @max-2xl:hidden">
-                {l.mac}
+              <span className="font-mono text-xs text-base-content/70 @max-3xl:hidden">
+                {d.mac}
               </span>
-              <span className="font-mono @max-2xl:col-start-2 @max-2xl:row-start-1 @max-2xl:text-right">
-                {l.ip}
+              <span className="font-mono @max-3xl:col-start-2 @max-3xl:row-start-1 @max-3xl:text-right">
+                {d.fixed?.ip ?? d.now}
+                {moved && (
+                  <span className="block font-sans text-xs text-base-content/60">
+                    {t("lan.now", { ip: d.now ?? "" })}
+                  </span>
+                )}
               </span>
-              <span className="@max-2xl:hidden">{netOf(l.lan)}</span>
-              <span className="whitespace-nowrap @max-2xl:hidden">{left}</span>
-              <span className="col-span-full hidden text-xs text-base-content/70 @max-2xl:block">
-                <span className="font-mono">{l.mac}</span> · {netOf(l.lan)} ·{" "}
-                {t("lan.leaseLeft", { time: left })}
+              <span className="@max-3xl:hidden">{netOf(d.lan)}</span>
+              <span
+                className={`whitespace-nowrap @max-3xl:hidden ${d.fixed && !d.now ? "text-base-content/60" : ""}`}
+              >
+                {lease}
+              </span>
+              <span className="-my-1 flex justify-end @max-3xl:col-start-3 @max-3xl:row-start-1">
+                {d.fixed ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs btn-square text-base-content/70"
+                    onClick={() => onFix(d)}
+                    aria-label={t("lan.fixedEdit", { name })}
+                    title={t("lan.fixedEdit", { name })}
+                  >
+                    <Pencil className="size-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs text-primary @max-lg:btn-square"
+                    onClick={() => onFix(d)}
+                    title={t("lan.pinTitle")}
+                  >
+                    <Pin className="size-3.5" />
+                    <span className="@max-lg:sr-only">{t("lan.pin")}</span>
+                  </button>
+                )}
+              </span>
+              <span className="col-span-full hidden pl-5 text-xs text-base-content/70 @max-3xl:block">
+                <span className="font-mono">{d.mac}</span> · {netOf(d.lan)} · {lease}
               </span>
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+/** What the fixed-address form is open on: a device's address to fix, or a fixed one, or a new one. */
+interface FixTarget {
+  /** A device with an address now, or with a fixed one; none for a device not seen yet. */
+  d: Device | null;
+}
+
+/* The first address of @lan that no device, fixed address or pool takes, for a new fixed one. */
+function freeIp(lan: LanView, taken: string[]) {
+  const net = net4(lan.address);
+  if (!net) return "";
+  const stick = ip4(lan.address.split("/")[0] ?? "");
+  const from = lan.dhcp ? ip4(lan.poolFrom) : null;
+  const to = lan.dhcp ? ip4(lan.poolTo) : null;
+  const used = new Set(taken.map((x) => ip4(x)));
+  for (let a = net.first + 1; a < net.last; a++) {
+    if (a === stick || used.has(a) || (from != null && to != null && a >= from && a <= to))
+      continue;
+    return [a >>> 24, (a >>> 16) & 255, (a >>> 8) & 255, a & 255].join(".");
+  }
+  return "";
+}
+
+/**
+ * The form of a fixed address, at the devices' right while it is open: a
+ * device's address fixed, a fixed one changed or taken away, or one added for
+ * a device not seen yet, by its MAC. The address lies in the network, is not
+ * the stick's, and no other device has it, fixed or now.
+ */
+function FixedForm({
+  target,
+  nets,
+  onClose,
+}: {
+  target: FixTarget;
+  nets: Net[];
+  onClose: () => void;
+}) {
+  const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  const change = useFixedChange();
+  const state = useChangeState(change);
+  const d = target.d;
+  const editing = !!d?.fixed;
+  const pins = fixed(live);
+  const on = leases(live);
+  /* A new fixed address goes in a network whose DHCP server gives addresses. */
+  const choices = d ? nets.filter((p) => p.lan.id === d.lan) : nets.filter((p) => p.lan.dhcp);
+  const lanOf = (id: string) => choices.find((p) => String(p.lan.id) === id)?.lan;
+  const first = choices[0]?.lan;
+  const schema = z
+    .object({
+      lan: z.string().check(z.minLength(1, t("form.required"))),
+      mac: mac(t).check(z.minLength(1, t("form.required"))),
+      name: upTo(63),
+      ip: ipv4(t).check(z.minLength(1, t("form.required"))),
+    })
+    .check(
+      z.superRefine((v, ctx) => {
+        const lan = lanOf(v.lan);
+        const net = lan ? net4(lan.address) : null;
+        const a = ip4(v.ip);
+        const m = v.mac.toLowerCase();
+        const fail = (path: "ip" | "mac", message: string) =>
+          ctx.addIssue({ code: "custom", path: [path], message, input: v[path] });
+        if (!lan || !net || a == null) return;
+        if (!d) {
+          const dup = pins.find((f) => f.lan === lan.id && f.mac === m);
+          if (dup) fail("mac", t("lan.fixedDup", { ip: dup.ip }));
+        }
+        if (a <= net.first || a >= net.last)
+          return fail("ip", t("lan.fixedOut", { net: net.text }));
+        if (a === ip4(lan.address.split("/")[0] ?? "")) return fail("ip", t("lan.fixedStick"));
+        const other = pins.find((f) => f.lan === lan.id && f.ip === v.ip && f.mac !== m);
+        const own = other && on.find((l) => l.lan === other.lan && l.mac === other.mac)?.name;
+        if (other) return fail("ip", t("lan.fixedTaken", { name: other.name || own || other.mac }));
+        const busy = on.find((l) => l.lan === lan.id && l.ip === v.ip && l.mac !== m);
+        if (busy) fail("ip", t("lan.fixedBusy", { name: busy.name ?? busy.mac }));
+      }),
+    );
+  type Values = z.infer<typeof schema>;
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: d
+      ? {
+          lan: String(d.lan),
+          mac: d.mac,
+          name: d.fixed?.name ?? "",
+          ip: d.fixed?.ip ?? d.now ?? "",
+        }
+      : {
+          lan: first ? String(first.id) : "",
+          mac: "",
+          name: "",
+          ip: first
+            ? freeIp(first, [
+                ...pins.filter((f) => f.lan === first.id).map((f) => f.ip),
+                ...on.filter((l) => l.lan === first.id).map((l) => l.ip),
+              ])
+            : "",
+        },
+  });
+  const { errors, isDirty } = form.formState;
+  const [lanId, ip] = form.watch(["lan", "ip"]);
+  const lan = lanOf(lanId);
+  const net = lan ? net4(lan.address) : null;
+  const send = (v: Values) =>
+    change.mutate(
+      { LAN: v.lan, MAC: v.mac.toLowerCase(), IP: v.ip, NAME: v.name },
+      { onSuccess: onClose },
+    );
+  const unpin = () =>
+    d && change.mutate({ LAN: String(d.lan), MAC: d.mac, IP: "" }, { onSuccess: onClose });
+  const title = editing
+    ? t("lan.fixedEditTitle", { name: d?.name ?? d?.mac ?? "" })
+    : d
+      ? t("lan.pinTitle")
+      : t("lan.fixedAdd");
+  return (
+    <section
+      className="flex flex-col rounded-box border border-base-300 bg-base-100 xl:h-full xl:min-h-0"
+      aria-labelledby="fixed-form"
+    >
+      <div className="flex min-h-14 shrink-0 items-center gap-2 px-4 pt-4 pb-2">
+        <h2 id="fixed-form" className="min-w-0 truncate text-base font-semibold">
+          {title}
+        </h2>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm btn-square ml-auto text-base-content/70"
+          onClick={onClose}
+          aria-label={t("internet.cancel")}
+          title={t("internet.cancel")}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      {/* The network the address lies in, and its pool, as high as the list's head. */}
+      <p className="flex h-11 shrink-0 items-center border-b border-base-300 px-4 text-xs text-base-content/70">
+        {lan && net
+          ? lan.dhcp
+            ? t("lan.fixedStrip", { net: net.text, pool: pool(lan.poolFrom, lan.poolTo) })
+            : t("lan.fixedStripOff", { net: net.text })
+          : ""}
+      </p>
+      <form onSubmit={form.handleSubmit(send)} noValidate className="flex min-h-0 flex-1 flex-col">
+        <div className="grid min-h-0 flex-1 content-start gap-4 p-4 xl:overflow-auto">
+          <div className="grid content-start gap-1">
+            <label htmlFor="fixed-lan" className="text-sm font-semibold">
+              {t("lan.colNet")}
+            </label>
+            <select
+              id="fixed-lan"
+              className="select w-full"
+              disabled={!!d}
+              {...form.register("lan")}
+            >
+              {choices.map((p) => (
+                <option key={p.lan.id} value={p.lan.id}>
+                  {`${connName(t, p.c)} · ${net4(p.lan.address)?.text ?? p.lan.address}`}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Field
+            label={t("lan.fixedMac")}
+            placeholder="00:00:5e:00:53:00"
+            hint={d ? undefined : t("lan.fixedMacHint")}
+            disabled={!!d}
+            error={errors.mac?.message}
+            {...form.register("mac")}
+          />
+          <Field
+            label={t("lan.fixedName")}
+            placeholder={d?.own ?? ""}
+            hint={t("lan.fixedNameHint")}
+            error={errors.name?.message}
+            {...form.register("name")}
+          />
+          <Field
+            label={t("lan.fixedIp")}
+            placeholder={net ? net.text.split("/")[0] : "192.168.1.10"}
+            hint={
+              d?.now && ip !== d.now
+                ? t("lan.fixedMoves", { time: duration(d.left, lang) })
+                : t("lan.fixedIpHint")
+            }
+            error={errors.ip?.message}
+            {...form.register("ip")}
+          />
+        </div>
+        <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-2.5">
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={(editing && !isDirty) || change.isPending || !lan}
+          >
+            {editing ? t("internet.save") : d ? t("lan.pin") : t("lan.fixedAddShort")}
+          </button>
+          {editing && (
+            <button
+              type="button"
+              className="btn btn-ghost hover:text-error"
+              onClick={unpin}
+              disabled={change.isPending}
+            >
+              {t("lan.unpin")}
+            </button>
+          )}
+          <SaveState {...state} />
+        </div>
+      </form>
+    </section>
   );
 }
 
@@ -648,7 +985,9 @@ function Places({
 
 /**
  * Every device of the networks across the page, searched by name, address
- * or MAC, and narrowed to the network @net, or none for all of them.
+ * or MAC, narrowed to the network @net, or none for all of them, or to the
+ * fixed addresses; with the form of a fixed address at the right while one
+ * is being fixed, changed or added.
  */
 function Devices({
   places,
@@ -660,62 +999,109 @@ function Devices({
   onNet: (lan: number | null) => void;
 }) {
   const { t } = useI18n();
-  const ids = places.flatMap((p) => (p.lan ? [p.lan.id] : []));
-  const all = leases(useLive().data).filter((l) => ids.includes(l.lan));
+  const nets = places.filter((p): p is Net => p.lan != null);
+  const ids = nets.map((p) => p.lan.id);
+  const all = useDevices(ids);
   const [q, setQ] = useState("");
+  const [only, setOnly] = useState(false);
+  const [fix, setFix] = useState<FixTarget | null>(null);
   const on = net != null && ids.includes(net) ? net : null;
   const words = q.trim().toLowerCase();
   const shown = all.filter(
-    (l) =>
-      (on == null || l.lan === on) &&
-      (!words || `${l.name ?? ""} ${l.ip} ${l.mac}`.toLowerCase().includes(words)),
+    (d) =>
+      (on == null || d.lan === on) &&
+      (!only || d.fixed) &&
+      (!words ||
+        `${d.name ?? ""} ${d.own ?? ""} ${d.now ?? ""} ${d.fixed?.ip ?? ""} ${d.mac}`
+          .toLowerCase()
+          .includes(words)),
   );
+  const pinned = all.filter((d) => d.fixed).length;
+  const canAdd = nets.some((p) => p.lan.dhcp);
   return (
-    <section
-      aria-label={t("lan.colDevices")}
-      className="@container flex min-h-0 flex-1 flex-col xl:overflow-hidden"
+    <div
+      className={`grid min-h-0 flex-1 content-start gap-6 xl:content-stretch xl:overflow-hidden ${fix ? "xl:grid-cols-[minmax(0,1fr)_25rem]" : ""}`}
     >
-      <div className="mt-px flex min-h-14 shrink-0 flex-wrap items-center gap-3 pt-4 pb-2">
-        <Filter
-          value={q}
-          onChange={setQ}
-          placeholder={t("lan.search")}
-          className="@max-lg:flex-1 @lg:w-72"
-        />
-        {ids.length > 1 && (
-          <select
-            className="select select-sm w-auto"
-            aria-label={t("lan.colNet")}
-            value={on ?? ""}
-            onChange={(e) => onNet(e.currentTarget.value ? Number(e.currentTarget.value) : null)}
-          >
-            <option value="">{t("lan.allNets")}</option>
-            {places.map(
-              (p) =>
-                p.lan && (
-                  <option key={p.lan.id} value={p.lan.id}>
-                    {connName(t, p.c)}
-                  </option>
-                ),
-            )}
-          </select>
-        )}
-      </div>
-      <div className="min-h-0 flex-1 px-px xl:overflow-auto">
-        {shown.length ? (
-          <DeviceTable list={shown} places={places} />
-        ) : (
-          <p className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center text-base-content/70">
-            {all.length ? t("lan.noMatch") : t("lan.devicesNone")}
-          </p>
-        )}
-      </div>
-      <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
-        {shown.length === all.length
-          ? t("lan.devicesCount", { n: all.length })
-          : t("lan.shown", { n: shown.length, all: all.length })}
-      </p>
-    </section>
+      <section
+        aria-label={t("lan.colDevices")}
+        className="@container flex min-h-0 flex-col xl:h-full xl:overflow-hidden"
+      >
+        <div className="mt-px flex min-h-14 shrink-0 flex-wrap items-center gap-3 pt-4 pb-2">
+          <Filter
+            value={q}
+            onChange={setQ}
+            placeholder={t("lan.search")}
+            className="@max-lg:basis-full @lg:w-72"
+          />
+          {ids.length > 1 && (
+            <select
+              className="select select-sm w-auto"
+              aria-label={t("lan.colNet")}
+              value={on ?? ""}
+              onChange={(e) => onNet(e.currentTarget.value ? Number(e.currentTarget.value) : null)}
+            >
+              <option value="">{t("lan.allNets")}</option>
+              {nets.map((p) => (
+                <option key={p.lan.id} value={p.lan.id}>
+                  {connName(t, p.c)}
+                </option>
+              ))}
+            </select>
+          )}
+          <label className="label cursor-pointer gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="toggle toggle-sm"
+              checked={only}
+              onChange={(e) => setOnly(e.currentTarget.checked)}
+            />
+            {t("lan.onlyFixed")}
+          </label>
+          {canAdd && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm ml-auto"
+              onClick={() => setFix({ d: null })}
+            >
+              <Plus className="size-4" />
+              {t("lan.fixedAdd")}
+            </button>
+          )}
+        </div>
+        <div className="min-h-0 flex-1 px-px xl:overflow-auto">
+          {shown.length ? (
+            <DeviceTable list={shown} places={places} onFix={(d) => setFix({ d })} />
+          ) : (
+            <p className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center text-base-content/70">
+              {words
+                ? t("lan.noMatch")
+                : only
+                  ? t("lan.fixedNone")
+                  : all.length
+                    ? t("lan.noMatch")
+                    : t("lan.devicesNone")}
+            </p>
+          )}
+        </div>
+        <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
+          {shown.length === all.length
+            ? t("lan.devicesCount", { n: all.length, f: pinned })
+            : t("lan.shown", { n: shown.length, all: all.length, f: pinned })}
+        </p>
+      </section>
+      {fix && (
+        <div className="min-h-0 max-xl:order-first xl:flex xl:flex-col">
+          <div className="xl:min-h-0 xl:flex-1">
+            <FixedForm
+              key={fix.d ? `${fix.d.lan}:${fix.d.mac}` : "new"}
+              target={fix}
+              nets={nets}
+              onClose={() => setFix(null)}
+            />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -745,7 +1131,7 @@ export function Lan() {
   /* The network the devices are narrowed to, from a network's card, or all. */
   const [net, setNet] = useState<number | null>(null);
   const ids = all.flatMap((l) => (places.some((p) => p.lan?.id === l.id) ? [l.id] : []));
-  const devices = leases(live).filter((l) => ids.includes(l.lan)).length;
+  const devices = useDevices(ids).length;
   const count = (n: number) => (
     <span className="font-normal tabular-nums text-base-content/60">{n}</span>
   );

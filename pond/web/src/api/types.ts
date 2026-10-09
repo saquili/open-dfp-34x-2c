@@ -252,6 +252,16 @@ export interface LeaseInfo {
   left_s: number;
 }
 
+/** A device's fixed address: in its network, its MAC always gets the same IP. */
+export interface FixedInfo {
+  /** The network it is in. */
+  lan: number;
+  mac: string;
+  ip: string;
+  /** A name for it given by hand, which the panel shows before its own; empty for none. */
+  name: string;
+}
+
 export interface Settings {
   settings: Record<string, string>;
   sessions: SessionInfo[];
@@ -260,6 +270,7 @@ export interface Settings {
   /** The networks behind the stick, and the devices in them; absent on a stick of before. */
   lans?: LanInfo[];
   leases?: LeaseInfo[];
+  fixed?: FixedInfo[];
   mode: string | null;
   /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;

@@ -244,6 +244,16 @@ if (SCENARIO === "sessions") {
       left_s: [81_000, 43_200, 600, 3_600, 19_800, 72_000][i % 6] ?? 600,
     };
   });
+  /*
+   * Fixed addresses: the printer's where it is, with a name given by hand;
+   * the NAS's elsewhere, which it takes at its next renewal; and a server
+   * that is off now.
+   */
+  settings.fixed = [
+    { lan: 1, mac: "00:00:5e:00:53:16", ip: "192.168.1.113", name: "Drukarka w biurze" },
+    { lan: 1, mac: "00:00:5e:00:53:21", ip: "192.168.1.10", name: "" },
+    { lan: 1, mac: "00:00:5e:00:53:80", ip: "192.168.1.20", name: "serwer-zapas" },
+  ];
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
@@ -336,6 +346,7 @@ function dropLans(conn: string) {
   const gone = (settings.lans ?? []).filter((y) => y.conn === conn).map((y) => y.id);
   settings.lans = (settings.lans ?? []).filter((y) => y.conn !== conn);
   settings.leases = (settings.leases ?? []).filter((y) => !gone.includes(y.lan));
+  settings.fixed = (settings.fixed ?? []).filter((y) => !gone.includes(y.lan));
 }
 
 function live() {
@@ -609,6 +620,7 @@ export const handlers = [
     if (body.CONN === "") {
       settings.lans = list.filter((y) => y.id !== id);
       settings.leases = (settings.leases ?? []).filter((y) => y.lan !== id);
+      settings.fixed = (settings.fixed ?? []).filter((y) => y.lan !== id);
       return HttpResponse.json({ id: "lan", ok: true });
     }
     let x = list.find((y) => y.id === id);
@@ -638,6 +650,39 @@ export const handlers = [
     if (body.POOL_TO) x.pool_to = body.POOL_TO;
     if (body.LEASE) x.lease_s = Number(body.LEASE);
     return HttpResponse.json({ id: "lan", ok: true });
+  }),
+
+  /*
+   * A fixed address: a device's MAC and the IP it always gets in network LAN,
+   * with NAME; IP= takes it away. A network's address of another device, or
+   * one already fixed, is refused, as onu-mode would.
+   */
+  http.post("*/api/set/fixed", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    const body = kv(await request.text());
+    const lan = Number(body.LAN);
+    const mac = (body.MAC ?? "").toLowerCase();
+    const list = (settings.fixed ?? []).filter((y) => !(y.lan === lan && y.mac === mac));
+    if (!body.IP) {
+      settings.fixed = list;
+      return HttpResponse.json({ id: "fixed", ok: true });
+    }
+    if (
+      !(settings.lans ?? []).some((y) => y.id === lan) ||
+      !/^([0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)
+    )
+      return HttpResponse.json(
+        { error: "refused", detail: "a fixed address needs a network and a MAC" },
+        { status: 400 },
+      );
+    if (list.some((y) => y.lan === lan && y.ip === body.IP))
+      return HttpResponse.json(
+        { error: "refused", detail: `${body.IP} is another device's fixed address` },
+        { status: 409 },
+      );
+    settings.fixed = [...list, { lan, mac, ip: body.IP, name: body.NAME ?? "" }];
+    return HttpResponse.json({ id: "fixed", ok: true });
   }),
 
   /* A connection: added to the first free number, changed by ID, removed by KIND=. */

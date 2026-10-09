@@ -369,8 +369,15 @@ export function lans(live: Live | undefined): LanView[] {
   }));
 }
 
+/* An address as a number, for ordering. */
+const order = (ip: string) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
+
 /** The devices behind the stick with an address from it, by their address. */
 export function leases(live: Live | undefined) {
-  const n = (ip: string) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
-  return (live?.settings?.leases ?? []).slice().sort((a, z) => n(a.ip) - n(z.ip));
+  return (live?.settings?.leases ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
+}
+
+/** The fixed addresses of the devices, by address. */
+export function fixed(live: Live | undefined) {
+  return (live?.settings?.fixed ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
 }
