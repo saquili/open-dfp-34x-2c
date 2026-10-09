@@ -118,7 +118,7 @@ const lanPage = createRoute({
   getParentRoute: () => app,
   path: "/lan",
   beforeLoad: ({ search }) => {
-    const tab = (search as { tab?: unknown }).tab === "devices" ? "devices" : "nets";
+    const tab = (search as { tab?: unknown }).tab === "devices" ? "clients" : "lan";
     throw redirect({ to: "/internet", search: { tab } as never });
   },
 });

@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet, in three tabs: the stick's connections to the operator; the
- * local networks that go out through them; and the devices in those
- * (pages/Lan.tsx). In the first, the connections, and at their right, while
+ * The internet, in three tabs: WAN, the stick's connections to the operator;
+ * LAN, the local networks that go out through them; and their clients, the
+ * devices in those (pages/Lan.tsx). In the first, the connections, and at their right, while
  * it is open, the form that adds or changes one (components/SidePanel); with
  * no connection yet it is open from the start. A connection is PPPoE, a
  * static address or DHCP, and runs in a VLAN of the operator's; a VLAN
@@ -53,8 +53,8 @@ function NoServices({ fib }: { fib: FibreView }) {
   );
 }
 
-/* The page's tabs: the connections, the local networks, and the devices in them. */
-const TABS = ["conns", "nets", "devices"] as const;
+/* The page's tabs: the connections, the local networks, and their clients. */
+const TABS = ["wan", "lan", "clients"] as const;
 
 /** The connections, and at their right while it is open, the form that adds or changes one. */
 function Conns() {
@@ -126,13 +126,13 @@ export function Internet() {
   return (
     <Page
       title={t("internet.title")}
-      hint={tab === "conns" ? t("internet.hint") : t("lan.hint")}
+      hint={tab === "wan" ? t("internet.hint") : t("lan.hint")}
       tabs={
         <Tabs
           items={[
-            { id: "conns", label: t("internet.conns"), badge: count(conns(live).length) },
-            { id: "nets", label: t("lan.lans"), badge: count(lan.nets) },
-            { id: "devices", label: t("lan.colDevices"), badge: count(lan.devices) },
+            { id: "wan", label: t("internet.tabWan"), badge: count(conns(live).length) },
+            { id: "lan", label: t("internet.tabLan"), badge: count(lan.nets) },
+            { id: "clients", label: t("internet.tabClients"), badge: count(lan.devices) },
           ]}
           value={tab}
           onChange={(v) => {
@@ -143,13 +143,13 @@ export function Internet() {
         />
       }
     >
-      {tab === "conns" ? (
+      {tab === "wan" ? (
         <Conns />
-      ) : tab === "nets" ? (
+      ) : tab === "lan" ? (
         <LanNets
           onDevices={(id) => {
             setNet(id);
-            setTab("devices");
+            setTab("clients");
           }}
         />
       ) : (
