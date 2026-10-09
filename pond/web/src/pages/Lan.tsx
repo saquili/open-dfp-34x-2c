@@ -33,7 +33,7 @@ import { Filter } from "../components/Pager";
 import { useI18n } from "../i18n";
 import { duration } from "../lib/format";
 import { ip4, net4 } from "../lib/ipv4";
-import { ipv4, ipv4Cidr, mac, upTo, vlan, z } from "../lib/schemas";
+import { ipv4, ipv4Cidr, mac, required, upTo, vlan, z } from "../lib/schemas";
 import { downVlan, fixed, type LanView, lans, leases, sessions } from "../lib/state";
 import { type Conn, conns } from "./internet/conns";
 import { connName, hostSide, Mono, Sub, type T, useServices } from "./internet/shared";
@@ -49,6 +49,22 @@ interface Place {
 
 /* A connection's name with the VLAN it runs in. */
 const wan = (t: T, c: Conn) => `${connName(t, c)} · VLAN ${c.vlan}`;
+
+/* A network's name: the one given it, else its connection's, for one named before names were. */
+function netName(t: T, l: LanView, places: Place[]) {
+  if (l.name) return l.name;
+  const p = places.find((q) => q.c.key === l.conn);
+  return p ? connName(t, p.c) : l.conn;
+}
+
+/* A name for a new network: the first "Sieć N" no other one has. */
+function suggestName(t: T, taken: LanView[]) {
+  const names = new Set(taken.map((l) => l.name.toLowerCase()));
+  for (let n = 1; ; n++) {
+    const name = t("lan.nameDefault", { n });
+    if (!names.has(name.toLowerCase())) return name;
+  }
+}
 
 /* A pool as it is read: its last address cut to what differs from its first. */
 function pool(from: string, to: string) {
@@ -154,13 +170,11 @@ function LanFields({
   const state = useChangeState(change);
   const others = all.filter((l) => l.id !== x?.id);
   const pins = x ? fixed(live).filter((f) => f.lan === x.id) : [];
-  const nameOf = (l: LanView) => {
-    const p = places.find((q) => q.c.key === l.conn);
-    return p ? connName(t, p.c) : l.conn;
-  };
+  const nameOf = (l: LanView) => netName(t, l, places);
   const schema = z
     .object({
       conn: z.string().check(z.minLength(1, t("form.required"))),
+      name: required(t("form.required")).check(z.maxLength(24, t("lan.nameLong"))),
       vlan: vlan(t),
       address: ipv4Cidr(t).check(z.minLength(1, t("form.required"))),
       dhcp: z.enum(["on", "off"]),
@@ -175,8 +189,11 @@ function LanFields({
        */
       z.superRefine((v, ctx) => {
         const net = net4(v.address);
-        const fail = (path: "address" | "poolFrom" | "poolTo", message: string) =>
+        const fail = (path: "name" | "address" | "poolFrom" | "poolTo", message: string) =>
           ctx.addIssue({ code: "custom", path: [path], message, input: v[path] });
+        /* Two networks of one name would be one in every list. */
+        if (others.some((l) => nameOf(l).toLowerCase() === v.name.toLowerCase()))
+          fail("name", t("lan.nameTaken"));
         const over = net
           ? others.find((l) => {
               const o = net4(l.address);
@@ -228,6 +245,7 @@ function LanFields({
     defaultValues: x
       ? {
           conn: x.conn,
+          name: nameOf(x),
           vlan: x.vlan,
           address: x.address,
           dhcp: x.dhcp ? "on" : "off",
@@ -235,7 +253,14 @@ function LanFields({
           poolTo: x.poolTo,
           lease: LEASES.find((l) => Number(l) === x.leaseS) ?? "86400",
         }
-      : { conn, vlan: freeVid, dhcp: "on", lease: "86400", ...suggest(all) },
+      : {
+          conn,
+          name: suggestName(t, all),
+          vlan: freeVid,
+          dhcp: "on",
+          lease: "86400",
+          ...suggest(all),
+        },
   });
   const { errors, isDirty } = form.formState;
   const [vid, address, dhcp] = form.watch(["vlan", "address", "dhcp"]);
@@ -261,6 +286,7 @@ function LanFields({
       {
         ID: x ? String(x.id) : undefined,
         CONN: v.conn,
+        NAME: v.name,
         VLAN: v.vlan,
         ADDRESS: v.address,
         DHCP: v.dhcp,
@@ -298,6 +324,13 @@ function LanFields({
             </select>
             <p className="text-xs text-base-content/70">{t("lan.connHint")}</p>
           </div>
+          <Field
+            label={t("lan.name")}
+            placeholder={t("lan.nameDefault", { n: 1 })}
+            hint={t("lan.nameHint")}
+            error={errors.name?.message}
+            {...form.register("name")}
+          />
           <Field
             label={t("lan.vlan")}
             inputMode="numeric"
@@ -381,7 +414,6 @@ function LanForm({
   const [round, setRound] = useState(0);
   const free = places.filter((p) => !p.lan);
   const conn = free[0]?.c.key ?? "";
-  const of = editing ? places.find((p) => p.c.key === editing.conn) : undefined;
   return (
     <section
       className="flex flex-col rounded-box border border-base-300 bg-base-100 xl:h-full xl:min-h-0"
@@ -389,9 +421,7 @@ function LanForm({
     >
       <div className="flex min-h-14 shrink-0 items-center gap-2 px-4 pt-4 pb-2">
         <h2 id="lan-form" className="text-base font-semibold">
-          {editing
-            ? t("lan.editTitle", { name: of ? connName(t, of.c) : editing.conn })
-            : t("lan.addTitle")}
+          {editing ? t("lan.editTitle", { name: netName(t, editing, places) }) : t("lan.addTitle")}
         </h2>
         <button
           type="button"
@@ -445,11 +475,11 @@ const VIEWS = ["nets", "devices"] as const;
 
 /*
  * The devices' table: its columns, the same in its head and in every line,
- * as wide as their longest values (a MAC, 192.168.255.254, "Static IP",
+ * as wide as their longest values (a MAC, 192.168.255.254, a network's name cut short,
  * "22 godz. 30 min", a button), so that they stand still as a search
  * narrows the list.
  */
-const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_4.5rem_8rem_6rem]";
+const DEVICE_COLS = "grid-cols-[minmax(8rem,1fr)_8rem_8rem_7rem_8rem_6rem]";
 /*
  * In a narrow list: the name, the address and the button, the same in the
  * head and every line; as narrow as a phone, the button is its icon alone.
@@ -524,8 +554,8 @@ function DeviceTable({
 }) {
   const { t, lang } = useI18n();
   const netOf = (id: number) => {
-    const p = places.find((x) => x.lan?.id === id);
-    return p ? connName(t, p.c) : "–";
+    const l = places.find((x) => x.lan?.id === id)?.lan;
+    return l ? netName(t, l, places) : "–";
   };
   return (
     <div className={`grid ${DEVICE_COLS} gap-x-6 gap-y-2 pb-2 @max-3xl:flex @max-3xl:flex-col`}>
@@ -576,7 +606,7 @@ function DeviceTable({
                   </span>
                 )}
               </span>
-              <span className="@max-3xl:hidden">{netOf(d.lan)}</span>
+              <span className="truncate @max-3xl:hidden">{netOf(d.lan)}</span>
               <span
                 className={`whitespace-nowrap @max-3xl:hidden ${d.fixed && !d.now ? "text-base-content/60" : ""}`}
               >
@@ -774,7 +804,7 @@ function FixedForm({
             >
               {choices.map((p) => (
                 <option key={p.lan.id} value={p.lan.id}>
-                  {`${connName(t, p.c)} · ${net4(p.lan.address)?.text ?? p.lan.address}`}
+                  {`${netName(t, p.lan, nets)} · ${net4(p.lan.address)?.text ?? p.lan.address}`}
                 </option>
               ))}
             </select>
@@ -853,7 +883,7 @@ function NetCard({
   const list = leases(useLive().data).filter((l) => l.lan === x.id);
   const net = net4(x.address);
   const remove = () => {
-    if (!window.confirm(t("lan.removeConfirm", { name: connName(t, p.c) }))) return;
+    if (!window.confirm(t("lan.removeConfirm", { name: netName(t, x, [p]) }))) return;
     change.mutate({ ID: String(x.id), CONN: "" });
   };
   return (
@@ -862,10 +892,10 @@ function NetCard({
     >
       <span className={AT.caret} />
       <Cell at={AT.name}>
-        <span className="font-semibold">{connName(t, p.c)}</span>
-        <Sub>{`VLAN ${p.c.vlan}`}</Sub>
+        <span className="truncate font-semibold">{netName(t, x, [p])}</span>
+        <Sub>{wan(t, p.c)}</Sub>
       </Cell>
-      <Cell head={t("lan.colNet")} at={AT.first}>
+      <Cell head={t("lan.colAddr")} at={AT.first}>
         <Mono>{net?.text ?? x.address}</Mono>
         <Sub>
           {t("lan.stickAt")} <Mono>{x.address.split("/")[0]}</Mono>
@@ -879,7 +909,7 @@ function NetCard({
           type="button"
           className="link link-hover -my-0.5 w-fit text-left"
           onClick={onDevices}
-          title={t("lan.showDevices", { name: connName(t, p.c) })}
+          title={t("lan.showDevices", { name: netName(t, x, [p]) })}
         >
           {list.length}
         </button>
@@ -958,8 +988,8 @@ function Places({
           <div className={`grid grid-cols-[2rem_minmax(8rem,1fr)_auto_auto_auto_auto] ${ROWS}`}>
             <div className={HEAD}>
               <span />
-              <span className="@max-3xl:hidden">{t("lan.colConn")}</span>
-              <span>{t("lan.colNet")}</span>
+              <span className="@max-3xl:hidden">{t("lan.colNet")}</span>
+              <span>{t("lan.colAddr")}</span>
               <span>{t("lan.colVlan")}</span>
               <span>{t("lan.colDevices")}</span>
               <span />
@@ -1043,7 +1073,7 @@ function Devices({
               <option value="">{t("lan.allNets")}</option>
               {nets.map((p) => (
                 <option key={p.lan.id} value={p.lan.id}>
-                  {connName(t, p.c)}
+                  {netName(t, p.lan, nets)}
                 </option>
               ))}
             </select>

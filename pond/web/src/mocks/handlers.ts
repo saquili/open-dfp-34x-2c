@@ -214,6 +214,7 @@ if (SCENARIO === "sessions") {
   settings.lans = [
     {
       id: 1,
+      name: "Dom",
       conn: "pppoe:4",
       vlan: "",
       address: "192.168.1.1/24",
@@ -224,6 +225,7 @@ if (SCENARIO === "sessions") {
     },
     {
       id: 2,
+      name: "Biuro",
       conn: "ipoe:2",
       vlan: "20",
       address: "192.168.2.1/24",
@@ -643,6 +645,7 @@ export const handlers = [
       list.push(x);
     }
     if (body.CONN) x.conn = body.CONN;
+    if (body.NAME !== undefined) x.name = body.NAME;
     if (body.VLAN !== undefined) x.vlan = body.VLAN;
     if (body.ADDRESS) x.address = body.ADDRESS;
     if (body.DHCP === "on" || body.DHCP === "off") x.dhcp = body.DHCP;

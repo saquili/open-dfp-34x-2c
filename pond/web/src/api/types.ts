@@ -227,6 +227,8 @@ export interface IpoeInfo {
  */
 export interface LanInfo {
   id: number;
+  /** Its name, given by hand ("Dom", "Goście"); none from a stick of before. */
+  name?: string;
   /** The connection it goes out through: "pppoe:N" for a session, "ipoe:N" for the others. */
   conn: string;
   /** The VID it goes in to the SFP port; "" for none. */

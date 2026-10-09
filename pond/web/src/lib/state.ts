@@ -346,6 +346,8 @@ export function memory(live: Live | undefined): MemoryView | null {
 /** A network of the stick's towards the devices behind it, out through one connection. */
 export interface LanView {
   id: number;
+  /** Its name, given by hand; "" for none. */
+  name: string;
   /** The connection's key, as conns() names it: "pppoe:N" or "ipoe:N". */
   conn: string;
   vlan: string;
@@ -359,6 +361,7 @@ export interface LanView {
 export function lans(live: Live | undefined): LanView[] {
   return (live?.settings?.lans ?? []).map((x) => ({
     id: x.id,
+    name: x.name ?? "",
     conn: x.conn,
     vlan: x.vlan,
     address: x.address,
