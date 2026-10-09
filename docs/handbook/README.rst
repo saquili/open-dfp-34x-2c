@@ -25,6 +25,9 @@ The pages so far:
     Building the two flash images: what each is, its budget and today's margin, the
     root filesystem, how to build, check and reproduce them, and how to put them
     on the board.
+``panel-design.rst``
+    The panel's look: the sizes and colours of text, values and their labels,
+    states, colour, space, edges, actions and forms, the same on every page.
 
 To come with **WI-20**: recovery over the serial console, bank discipline in one
 place, and optical and rogue-ONU safety derived from ITU-T G.984.3 and from our
