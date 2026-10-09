@@ -52,6 +52,57 @@ const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_M
 const FIBRE: Record<string, string> = { "410": "100", "420": "200", "421": "300" };
 const wanOf = (vlan: string) => `wan${FIBRE[vlan] ?? vlan}`;
 
+/* The devices of a big house, as they name themselves, or not. */
+const HOUSE = [
+  "laptop",
+  "telefon",
+  null,
+  "tv-salon",
+  "iphone-ania",
+  "galaxy-s24",
+  "drukarka",
+  "ps5",
+  "chromecast-salon",
+  "kamera-garaz",
+  "kamera-ogrod",
+  "kamera-wejscie",
+  "termostat",
+  "odkurzacz",
+  null,
+  "pralka",
+  "zmywarka",
+  "nas",
+  "sonos-kuchnia",
+  "sonos-salon",
+  "echo-sypialnia",
+  "tablet-kuba",
+  "macbook-pawel",
+  "rpi-homeassistant",
+  "switch-kuba",
+  null,
+  "tv-sypialnia",
+  "dekoder",
+  "brama-garazowa",
+  "alarm",
+  "lodowka",
+  "piekarnik",
+  "rekuperator",
+  "pompa-ciepla",
+  "falownik",
+  null,
+  "ladowarka-auto",
+  "zarowka-hol",
+  "zarowka-salon",
+  "gniazdko-biuro",
+  "watch-ania",
+  "kindle",
+  "nvr",
+  "kamera-ptz",
+  null,
+  "serwer-biuro",
+  "drukarka-biuro",
+  "voip",
+] as const satisfies readonly (string | null)[];
 /* A connection of @kind on VLAN @vlan, as it stands before it has an address. */
 function ipoe(id: number, kind: IpoeInfo["kind"], vlan: string): IpoeInfo {
   return {
@@ -156,9 +207,9 @@ if (SCENARIO === "sessions") {
     },
   ];
   /*
-   * A network behind the stick out through session 4, untagged, with three
-   * devices, one without a name, and one out through DHCP on 421, in VLAN
-   * 20, with one; the static connection has none.
+   * A network behind the stick out through session 4, untagged, and one out
+   * through DHCP on 421, in VLAN 20: a big house's fifty devices, a few
+   * without a name; the static connection has none.
    */
   settings.lans = [
     {
@@ -182,12 +233,17 @@ if (SCENARIO === "sessions") {
       lease_s: 43_200,
     },
   ];
-  settings.leases = [
-    { lan: 1, mac: "00:00:5e:00:53:10", ip: "192.168.1.100", name: "laptop", left_s: 81_000 },
-    { lan: 1, mac: "00:00:5e:00:53:11", ip: "192.168.1.101", name: "telefon", left_s: 43_200 },
-    { lan: 1, mac: "00:00:5e:00:53:13", ip: "192.168.1.115", name: null, left_s: 600 },
-    { lan: 2, mac: "00:00:5e:00:53:12", ip: "192.168.2.100", name: "telewizor", left_s: 3_600 },
-  ];
+  settings.leases = HOUSE.map((name, i) => {
+    const lan = i < 42 ? 1 : 2;
+    const host = 100 + (lan === 1 ? i : i - 42) * 2 + (i % 3 === 0 ? 1 : 0);
+    return {
+      lan,
+      mac: `00:00:5e:00:53:${(0x10 + i).toString(16).padStart(2, "0")}`,
+      ip: `192.168.${lan}.${host}`,
+      name,
+      left_s: [81_000, 43_200, 600, 3_600, 19_800, 72_000][i % 6] ?? 600,
+    };
+  });
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
