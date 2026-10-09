@@ -34,6 +34,7 @@ setup() {
 		"$ONU_ROOT/sys/class/net/sfp" "$ONU_ROOT/sys/class/net/pon" \
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
 		"$ONU_ROOT/sys/class/net/gem256" "$T/bin"
+	echo 00:00:5e:00:53:01 >"$ONU_ROOT/sys/class/net/sfp/address"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv4/ip_forward"
 	mkdir -p "$ONU_ROOT/proc/sys/net/ipv6/conf/all"
 	echo 0 >"$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding"
@@ -559,6 +560,26 @@ check '! logged "^ip address add 169.254.0.1"'
 check '[ ! -e "$ONU_ROOT/run/session/1/lan" ]'
 check '! logged "^udhcpd"'
 check '[ ! -e "$ONU_ROOT/run/onu-pass" ]'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
+echo "a session that names no MAC address sends from the stick's, made locally administered"
+setup
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+# The locally administered forms are put together here: only the
+# documentation range may be written out (tools/provenance).
+la=$(printf %02x 2):00:5e:00:53:01
+turned=$(printf %02x 2):00:5e:00:53:00
+check 'logged "^ip link set wan410 address $la"'
+"$MODE_SCRIPT" stop 2>/dev/null
+echo "$la" >"$ONU_ROOT/sys/class/net/sfp/address"
+: >"$LOG"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check 'logged "^ip link set wan410 address $turned"'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
 

@@ -205,6 +205,23 @@ down_vlan() {
 	esac
 }
 
+# The address the PON side sends from where a session or the WAN names
+# none: the host link's, made locally administered (or, already so, with its
+# last bit turned). On the PON side the switch looks a frame up by the PON
+# port's PVID, where the host link's own address has its entry, with the
+# router bit the L3 engine needs from the host's side: with one address on
+# both sides, the frames the engine routed down from the PON went nowhere
+# once the PON port dropped the unicast no entry knows (measured), while an
+# address of the PON side's own gets an entry of its own.
+pon_mac() {
+	base=$(cat "$NET/sfp/address" 2>/dev/null)
+	[ -n "$base" ] || return 0
+	mac=$(printf '%02x:%s' $((0x${base%%:*} | 2)) "${base#*:}")
+	[ "$mac" != "$base" ] ||
+		mac=$(printf '%s:%02x' "${base%:*}" $((0x${base##*:} ^ 1)))
+	echo "$mac"
+}
+
 # The link to the host for the VLAN $1: lanVID, or the host link itself.
 link_of() {
 	if [ -n "$1" ]; then
@@ -652,8 +669,9 @@ wan_up() {
 		ip link add link "$gem" name wan type vlan id "$WAN_VLAN"
 		wan=wan
 	fi
-	if [ -n "$WAN_MAC" ]; then
-		ip link set "$wan" address "$WAN_MAC" ||
+	mac=${WAN_MAC:-$(pon_mac)}
+	if [ -n "$mac" ]; then
+		ip link set "$wan" address "$mac" ||
 			log "the WAN did not take its MAC address"
 	fi
 	[ "$wan" = wan ] && ip link set wan up
@@ -794,6 +812,7 @@ session_up() {
 			ip link add link "$gem" name "$dev" type vlan id "$(session_vlan "$n")"
 		fi
 		mac=$(setting "$n" MAC)
+		[ -n "$mac" ] || mac=$(pon_mac)
 		if [ -n "$mac" ]; then
 			ip link set "$dev" address "$mac" ||
 				log "session $n: the interface did not take its MAC address"
