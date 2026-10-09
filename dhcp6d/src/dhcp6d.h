@@ -238,6 +238,16 @@ void server_init(struct server *s, const uint8_t *duid, size_t duid_len);
 void server_offer(struct server *s, const struct prefix *p, int64_t now);
 
 /*
+ * The host's binding of before, taken back as the daemon starts: @duid's IA
+ * @iaid at @addr, which had the prefix @was, or none with NULL. It waits for
+ * a prefix to delegate, and then lasts as long as that prefix is valid; a
+ * prefix other than @was goes with @was at a lifetime of 0.
+ */
+void server_restore(struct server *s, const uint8_t *duid, size_t len,
+		    uint32_t iaid, const uint8_t addr[16],
+		    const struct prefix *was);
+
+/*
  * server_answer() - Answer a host's message @in, sent from @src.
  * @events: SERVER_EV_* bits; on ROUTE, the route goes to @s->host_addr
  *

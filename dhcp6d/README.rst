@@ -12,14 +12,15 @@ client (RFC 8415) that asks for a delegated prefix and the name servers
 prefix to the one host there, and a router that advertises itself (RFC 4861)
 with the session's MTU and the name servers (RFC 8106)::
 
-   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-t TABLE] [-v]   # the stick
+   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE] [-v]   # the stick
    dhcp6d -c IFACE [-m IFACE] [-v]                 # the client alone
    dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]       # the server alone
 
 ``-m`` names the interface whose MAC address makes the client's DUID (a PPP
 link has none); ``-o`` the directory where dhcp6d writes the files
 ``prefix``, the delegated prefix, and ``host``, the host's link-local address
-once it has taken it. The client alone prints the prefix and makes no route;
+once it has taken it; ``-b`` the file that keeps the host's binding for the
+next start. The client alone prints the prefix and makes no route;
 the server alone delegates a fixed prefix, as an operator would, for a bench.
 
 The client's Solicit offers Rapid Commit; without it, the best Advertise of
@@ -41,6 +42,18 @@ stick hands the prefixes of two sessions to two hosts, each host's traffic
 leaves by the session its prefix came from. SIGTERM, SIGINT and SIGHUP take
 them away, advertise the stick with a router lifetime of 0, so that the host
 drops it, and release the prefix.
+
+The host's binding outlives dhcp6d in the file of ``-b``, one line: the
+host's DUID in hex, its IAID, its address and the prefix it had. A router
+that holds its delegation asks for none when the stick comes back: measured,
+NetworkManager kept handing out its /56 for a day after the stick restarted
+and asked for the name servers only, so the prefix had no route back. dhcp6d
+takes the binding of before back at its start, routes the prefix to that host
+as soon as it is delegated again, and knows the host's Renew; a prefix other
+than the one of before goes to the host with the old one at a lifetime of 0.
+The file goes when the host releases its binding or the binding runs out, not
+when dhcp6d stops. A route to the host that failed is tried again at the
+host's next message.
 
 Building and testing::
 

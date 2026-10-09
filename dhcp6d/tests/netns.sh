@@ -121,6 +121,49 @@ sleep 2
 check '! ip -n st -6 rule show | grep -q "lookup 102"'
 check '[ -z "$(ip -n st -6 route show table 102 proto dhcp 2>/dev/null)" ]'
 
+echo "a stick that starts again routes the prefix to the host of before at once"
+# A new host, bound by a stick that keeps the binding in a file.
+kill "$(cat "$T/ho.pid")"
+ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -b "$T/binding" -v >"$T/st.log" 2>&1 &
+echo $! >"$T/st.pid"
+ip netns exec ho "$D6" -c h0 >"$T/ho.out" 2>"$T/ho.log" &
+echo $! >"$T/ho.pid"
+for _ in $(seq 1 30); do
+	[ -s "$T/binding" ] && break
+	sleep 1
+done
+check 'grep -q "^[0-9a-f]* 1 fe80::[0-9a-f:]* 2001:db8:1200::/56$" "$T/binding"'
+kill "$(cat "$T/st.pid")"
+sleep 2
+check '[ -s "$T/binding" ]'
+check '[ -z "$(ip -n st -6 route show proto dhcp)" ]'
+# The host asks for nothing until its T1, ten minutes on: the route comes
+# from the binding of before alone.
+ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -b "$T/binding" -v >"$T/st.log" 2>&1 &
+echo $! >"$T/st.pid"
+for _ in $(seq 1 15); do
+	ip -n st -6 route show proto dhcp | grep -q "^2001:db8:1200::/56 via" && break
+	sleep 1
+done
+check 'grep -q "the host of before" "$T/st.log"'
+check 'ip -n st -6 route show proto dhcp | grep -q "^2001:db8:1200::/56 via fe80::.* dev st1"'
+check '[ -s "$T/st/host" ]'
+for _ in $(seq 1 10); do
+	ip -n ho -6 route show default | grep -q "via fe80::" && break
+	sleep 1
+done
+check 'ip netns exec ho ping -6 -c 2 -W 2 -I 2001:db8:1200:1::1 2001:db8:ffff::1 >/dev/null'
+# The host that releases its binding is forgotten.
+kill "$(cat "$T/ho.pid")"
+for _ in $(seq 1 5); do
+	[ -e "$T/binding" ] || break
+	sleep 1
+done
+check '[ ! -e "$T/binding" ]'
+check '! ip -n st -6 route show proto dhcp | grep -q "^2001:db8:1200::/56 via"'
+kill "$(cat "$T/st.pid")"
+sleep 2
+
 echo "netns: $checks checks, $failures failed"
 [ "$failures" -eq 0 ] || { echo "--- stick"; cat "$T/st.log"; echo "--- operator"; cat "$T/op.log"; }
 [ "$failures" -eq 0 ]

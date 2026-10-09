@@ -4,11 +4,12 @@
 /*
  * dhcp6d's sockets, routes and files.
  *
- *   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-t TABLE] [-v]
+ *   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE] [-v]
  *       the prefix of WAN's servers delegated to the host on LAN; the DUID is
  *       IFACE's MAC address (WAN, a PPP link, has none); DIR gets the files
- *       "prefix" and "host"; with TABLE the default route goes in that
- *       routing table, by which what comes from the prefix is routed
+ *       "prefix" and "host"; FILE keeps the host's binding for the next
+ *       start; with TABLE the default route goes in that routing table, by
+ *       which what comes from the prefix is routed
  *   dhcp6d -c IFACE [-m IFACE] [-v]
  *       the client alone: the prefix a server on IFACE delegates, printed;
  *       it makes no route, as a host that takes its router from the
@@ -25,6 +26,14 @@
  * by the session its prefix came from. SIGTERM, SIGINT and SIGHUP take them
  * away, tell the host the stick is no longer its router, and release the
  * prefix.
+ *
+ * The host's binding outlives dhcp6d in the file of -b: a router that holds
+ * its delegation asks for none when the stick comes back (measured:
+ * NetworkManager, which kept handing out its /56 for a day and only asked
+ * for the name servers), so the binding of before is taken back at the start,
+ * and the prefix routed to that host as soon as it is delegated again. The
+ * file is "DUID IAID ADDRESS PREFIX/LEN", the DUID in hex; it goes when the
+ * host releases its binding or the binding runs out, not when dhcp6d stops.
  */
 
 #define _GNU_SOURCE
@@ -360,7 +369,7 @@ static int send_to(int fd, const uint8_t *buf, size_t len, const char *addr,
 
 /* The daemon's state across the loop. */
 struct daemon {
-	const char *wan, *lan, *dir;
+	const char *wan, *lan, *dir, *binding;
 	unsigned int wan_idx, lan_idx;
 	int csock, ssock, rsock;
 	struct client client;
@@ -385,14 +394,12 @@ struct daemon {
 	int64_t ra_last;
 };
 
-static void write_file(const struct daemon *d, const char *name, const char *text)
+/* The line @text in the file @path, written whole; no file without one. */
+static void write_path(const char *path, const char *text)
 {
-	char path[256], tmp[264];
+	char tmp[264];
 	FILE *f;
 
-	if (!d->dir)
-		return;
-	snprintf(path, sizeof(path), "%s/%s", d->dir, name);
 	if (!text) {
 		unlink(path);
 		return;
@@ -404,6 +411,38 @@ static void write_file(const struct daemon *d, const char *name, const char *tex
 	fprintf(f, "%s\n", text);
 	if (fclose(f) || rename(tmp, path))
 		unlink(tmp);
+}
+
+static void write_file(const struct daemon *d, const char *name, const char *text)
+{
+	char path[256];
+
+	if (!d->dir)
+		return;
+	snprintf(path, sizeof(path), "%s/%s", d->dir, name);
+	write_path(path, text);
+}
+
+/* The host's binding as it is now, in the file of -b. */
+static void save_binding(const struct daemon *d)
+{
+	char text[2 * DHCP6_DUID_MAX + 2 * INET6_ADDRSTRLEN + 32], a[INET6_ADDRSTRLEN],
+		p[INET6_ADDRSTRLEN];
+	const struct server *s = &d->server;
+	size_t off = 0;
+
+	if (!d->binding)
+		return;
+	if (!s->bound) {
+		write_path(d->binding, NULL);
+		return;
+	}
+	for (size_t i = 0; i < s->host_len; i++)
+		off += (size_t)snprintf(text + off, sizeof(text) - off, "%02x", s->host[i]);
+	snprintf(text + off, sizeof(text) - off, " %u %s %s/%u", s->host_iaid,
+		 ntop(s->host_addr, a, sizeof(a)), ntop(s->prefix.addr, p, sizeof(p)),
+		 s->prefix.len);
+	write_path(d->binding, text);
 }
 
 /* Bring the routes to what the client and the server hold now. */
@@ -597,7 +636,9 @@ static void on_server(struct daemon *d, int64_t now)
 		send_to(d->ssock, out, m, NULL, from.sin6_addr.s6_addr,
 			ntohs(from.sin6_port), d->lan_idx);
 	if (ev)
-		sync_routes(d);
+		save_binding(d);
+	/* Even with nothing new: a route that failed before is tried again. */
+	sync_routes(d);
 }
 
 static void on_rs(struct daemon *d, int64_t now)
@@ -614,14 +655,15 @@ static void on_rs(struct daemon *d, int64_t now)
 static int print_usage(void)
 {
 	fprintf(stderr,
-		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-t TABLE] [-v]\n"
+		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE] [-v]\n"
 		"       dhcp6d -c IFACE [-m IFACE] [-v]\n"
 		"       dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]\n"
 		"\n"
 		"  -w -l  the prefix WAN's servers delegate, delegated on to the host\n"
 		"         on LAN, with the stick as the host's router; -m names the\n"
 		"         interface whose MAC address is the DUID, -o the directory of\n"
-		"         the files \"prefix\" and \"host\"; -t puts the default route\n"
+		"         the files \"prefix\" and \"host\"; -b the file that keeps the\n"
+		"         host's binding for the next start; -t puts the default route\n"
 		"         in TABLE, by which what comes from the prefix is routed.\n"
 		"  -c     the client alone: print the prefix delegated on IFACE.\n"
 		"  -s     the server alone: delegate PREFIX/LEN on LAN, with DNS.\n");
@@ -646,6 +688,57 @@ static int fixed_prefix(const char *arg, struct prefix *p)
 	return 0;
 }
 
+static int nibble(char c)
+{
+	return c >= '0' && c <= '9' ? c - '0' :
+	       c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+	       c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* The host's binding of before, from the file of -b, back in the server. */
+static void load_binding(struct daemon *d)
+{
+	char hex[2 * DHCP6_DUID_MAX + 2], iaid[12], addr[INET6_ADDRSTRLEN + 1],
+		pfx[INET6_ADDRSTRLEN + 6], *end;
+	uint8_t duid[DHCP6_DUID_MAX], ll[16];
+	struct prefix was;
+	unsigned long id;
+	size_t len;
+	FILE *f;
+	int n;
+
+	if (!d->binding)
+		return;
+	f = fopen(d->binding, "r");
+	if (!f)
+		return;
+	n = fscanf(f, "%261s %11s %46s %51s", hex, iaid, addr, pfx);
+	fclose(f);
+	if (n != 4) {
+		DHCP6D_WARN("%s: not a binding", d->binding);
+		return;
+	}
+	len = strlen(hex) / 2;
+	errno = 0;
+	id = strtoul(iaid, &end, 10);
+	if (strlen(hex) % 2 || !len || len > DHCP6_DUID_MAX || errno || *end || id > UINT32_MAX ||
+	    inet_pton(AF_INET6, addr, ll) != 1 || fixed_prefix(pfx, &was)) {
+		DHCP6D_WARN("%s: not a binding", d->binding);
+		return;
+	}
+	for (size_t i = 0; i < len; i++) {
+		int hi = nibble(hex[2 * i]), lo = nibble(hex[2 * i + 1]);
+
+		if (hi < 0 || lo < 0) {
+			DHCP6D_WARN("%s: not a binding", d->binding);
+			return;
+		}
+		duid[i] = (uint8_t)(hi << 4 | lo);
+	}
+	server_restore(&d->server, duid, len, (uint32_t)id, ll, &was);
+	DHCP6D_INFO("the host of before, %s, gets %s again once it comes", addr, pfx);
+}
+
 int main(int argc, char **argv)
 {
 	struct daemon d = { .csock = -1, .ssock = -1, .rsock = -1 };
@@ -655,7 +748,7 @@ int main(int argc, char **argv)
 	struct prefix fp;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "w:l:m:o:c:s:d:t:v")) != -1) {
+	while ((opt = getopt(argc, argv, "w:l:m:o:b:c:s:d:t:v")) != -1) {
 		switch (opt) {
 		case 'w':
 			d.wan = optarg;
@@ -668,6 +761,9 @@ int main(int argc, char **argv)
 			break;
 		case 'o':
 			d.dir = optarg;
+			break;
+		case 'b':
+			d.binding = optarg;
 			break;
 		case 'c':
 			client_if = optarg;
@@ -697,12 +793,12 @@ int main(int argc, char **argv)
 		}
 	}
 	if (client_if) {
-		if (d.wan || d.lan || fixed || d.table)
+		if (d.wan || d.lan || fixed || d.table || d.binding)
 			return print_usage();
 		d.wan = client_if;
 		d.print = true;
 	} else if (fixed) {
-		if (d.wan || !d.lan || d.table || fixed_prefix(fixed, &fp))
+		if (d.wan || !d.lan || d.table || d.binding || fixed_prefix(fixed, &fp))
 			return print_usage();
 		d.fixed = true;
 	} else if (!d.wan || !d.lan) {
@@ -750,6 +846,7 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		server_init(&d.server, duid, duid_ll(duid, d.ra.mac));
+		load_binding(&d);
 		d.ssock = udp_socket(d.lan, DHCP6_SERVER_PORT, true);
 		if (d.ssock < 0) {
 			DHCP6D_ERR("%s: %s", d.lan, strerror(-d.ssock));
@@ -785,8 +882,10 @@ int main(int argc, char **argv)
 			ra_send(&d, now);
 		if (d.rsock >= 0 && d.ra_next && d.ra_next < deadline)
 			deadline = d.ra_next;
-		if (d.server_on && server_expire(&d.server, now))
+		if (d.server_on && server_expire(&d.server, now)) {
+			save_binding(&d);
 			sync_routes(&d);
+		}
 		if (d.server_on && d.server.bound && d.server.bound_until < deadline)
 			deadline = d.server.bound_until;
 

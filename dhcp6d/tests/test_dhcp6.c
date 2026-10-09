@@ -5,7 +5,8 @@
  * Tests of the protocol: the messages, the client against the server in the
  * same process on a clock of the test's, with and without Rapid Commit, the
  * renewal, a new prefix from the operator, a prefix that runs out, the
- * retransmissions, and the Router Advertisement.
+ * retransmissions, a binding taken back after a restart, and the Router
+ * Advertisement.
  */
 
 #include <stdio.h>
@@ -239,6 +240,84 @@ static void test_lost(void)
 	CHECK((ev & CLIENT_EV_LOST) && !c.bound && c.state == CLIENT_SOLICIT);
 }
 
+/* The IA_PD of the answer @b of @r bytes: how many prefixes, how many at 0. */
+static void count_prefixes(const uint8_t *b, size_t r, int *prefixes, int *zero)
+{
+	size_t len;
+	const uint8_t *ia = opt_find(b + 4, r - 4, DHCP6_OPT_IA_PD, &len);
+
+	*prefixes = *zero = 0;
+	for (size_t off = 12; ia && off + 4 <= len;) {
+		uint16_t code = get16(ia + off), l = get16(ia + off + 2);
+
+		if (code == DHCP6_OPT_IAPREFIX) {
+			(*prefixes)++;
+			*zero += !get32(ia + off + 8);
+		}
+		off += 4 + (size_t)l;
+	}
+}
+
+static void test_restore(void)
+{
+	uint8_t duid[16], sduid[16], a[DHCP6_MSG_MAX], b[DHCP6_MSG_MAX];
+	struct prefix was = { .len = 56 };
+	struct client c;
+	struct server s;
+	unsigned int ev, sev;
+	size_t n, r;
+	int64_t now = 0;
+	int prefixes, zero;
+
+	puts("a binding taken back after a restart: the host's Renew is known");
+	client_init(&c, duid, duid_ll(duid, HOST_MAC), 1, 17, now);
+	server_init(&s, sduid, duid_ll(sduid, STICK_MAC));
+	offer(&s, PREFIX, now);
+	n = client_step(&c, now, NULL, 0, a, sizeof(a), &ev);
+	r = server_answer(&s, a, n, HOST_LL, now, b, sizeof(b), &sev);
+	client_step(&c, now, b, r, a, sizeof(a), &ev);
+	CHECK(c.bound);
+
+	/* The stick starts again: a server of nothing, but the binding. */
+	memcpy(was.addr, PREFIX, 16);
+	server_init(&s, sduid, duid_ll(sduid, STICK_MAC));
+	server_restore(&s, c.duid, c.duid_len, c.iaid, HOST_LL, &was);
+	CHECK(s.bound && !s.have);
+	/* It waits for the prefix, however long that takes. */
+	CHECK(!server_expire(&s, now + 86400000));
+	offer(&s, PREFIX, now);
+	CHECK(!s.have_old);
+
+	now = c.t1_at;
+	n = client_step(&c, now, NULL, 0, a, sizeof(a), &ev);
+	CHECK(n && a[0] == DHCP6_RENEW);
+	r = server_answer(&s, a, n, HOST_LL, now, b, sizeof(b), &sev);
+	CHECK(r && b[0] == DHCP6_REPLY && !sev);
+	CHECK(opt_status(b + 4, r - 4) == DHCP6_SUCCESS);
+	count_prefixes(b, r, &prefixes, &zero);
+	CHECK(prefixes == 1 && zero == 0);
+	client_step(&c, now, b, r, a, sizeof(a), &ev);
+	CHECK(c.state == CLIENT_BOUND && !(ev & (CLIENT_EV_BOUND | CLIENT_EV_LOST)));
+
+	/* Back with another prefix: the host's next Renew hears of both. */
+	server_init(&s, sduid, duid_ll(sduid, STICK_MAC));
+	server_restore(&s, c.duid, c.duid_len, c.iaid, HOST_LL, &was);
+	offer(&s, PREFIX2, now);
+	CHECK(s.have_old);
+	now = c.t1_at;
+	n = client_step(&c, now, NULL, 0, a, sizeof(a), &ev);
+	r = server_answer(&s, a, n, HOST_LL, now, b, sizeof(b), &sev);
+	count_prefixes(b, r, &prefixes, &zero);
+	CHECK(prefixes == 2 && zero == 1);
+	client_step(&c, now, b, r, a, sizeof(a), &ev);
+	CHECK((ev & CLIENT_EV_BOUND) && !memcmp(c.prefix.addr, PREFIX2, 16));
+
+	/* A DUID too long for a binding is not taken back. */
+	server_init(&s, sduid, duid_ll(sduid, STICK_MAC));
+	server_restore(&s, b, DHCP6_DUID_MAX + 1, 1, HOST_LL, NULL);
+	CHECK(!s.bound);
+}
+
 static void test_retransmission(void)
 {
 	uint8_t duid[16], a[DHCP6_MSG_MAX];
@@ -350,6 +429,7 @@ int main(void)
 	test_advertise_request();
 	test_renew_and_new_prefix();
 	test_lost();
+	test_restore();
 	test_retransmission();
 	test_server_rules();
 	test_ra();

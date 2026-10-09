@@ -39,6 +39,27 @@ void server_offer(struct server *s, const struct prefix *p, int64_t now)
 	s->have = p != NULL;
 	if (p)
 		s->prefix = *p;
+	/* The prefix of before back again is no longer the one gone. */
+	if (p && s->have_old && p->len == s->old.len && !memcmp(p->addr, s->old.addr, 16))
+		s->have_old = false;
+}
+
+void server_restore(struct server *s, const uint8_t *duid, size_t len,
+		    uint32_t iaid, const uint8_t addr[16],
+		    const struct prefix *was)
+{
+	if (!len || len > sizeof(s->host))
+		return;
+	s->bound = true;
+	memcpy(s->host, duid, len);
+	s->host_len = len;
+	s->host_iaid = iaid;
+	memcpy(s->host_addr, addr, 16);
+	/* Until a prefix comes; then the client's renewals carry it on. */
+	s->bound_until = INT64_MAX / 4;
+	s->have_old = was != NULL;
+	if (was)
+		s->old = *was;
 }
 
 static uint32_t left(int64_t until, int64_t now)
