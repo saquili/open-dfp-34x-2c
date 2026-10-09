@@ -115,7 +115,7 @@ export interface SessionView {
  * which differs from the one it was given when the OLT translates that one,
  * as an operator does from the VLAN a router behind the stick would use.
  */
-export function fibreVlan(s: SessionView): string {
+export function fibreVlan(s: { dev: string | null; vlan: string }): string {
   return /^wan(\d+)$/.exec(s.dev ?? "")?.[1] ?? s.vlan;
 }
 
@@ -150,6 +150,64 @@ export function sessions(live: Live | undefined): SessionView[] {
     prefixHost: x.prefix_host,
     gateway: x.gateway ?? null,
     dns: x.dns ? x.dns.split(/\s+/).filter(Boolean) : [],
+  }));
+}
+
+/*
+ * The most connections that take their address as a router does, static and
+ * DHCP together: for now; the engine has 8 external addresses, the PPPoE
+ * slots' among them.
+ */
+export const MAX_IPOE = 4;
+
+export interface IpoeView {
+  id: number;
+  kind: "static" | "dhcp";
+  vlan: string;
+  gem: string;
+  mac: string;
+  family: Family;
+  /** As typed, for a static connection. */
+  address: string;
+  gateway: string;
+  dnsSet: string;
+  address6: string;
+  gateway6: string;
+  prefix6: string;
+  dev: string | null;
+  gemDev: string | null;
+  up: boolean;
+  ipv4: string | null;
+  router: string | null;
+  dns: string[];
+  ipv6: string | null;
+  prefix: string | null;
+  lease: number | null;
+}
+
+export function ipoes(live: Live | undefined): IpoeView[] {
+  return (live?.settings?.ipoe ?? []).map((x) => ({
+    id: x.id,
+    kind: x.kind,
+    vlan: x.vlan,
+    gem: x.gem,
+    mac: x.mac,
+    family: x.family,
+    address: x.address,
+    gateway: x.gateway,
+    dnsSet: x.dns,
+    address6: x.address6,
+    gateway6: x.gateway6,
+    prefix6: x.prefix6,
+    dev: x.dev,
+    gemDev: x.gem_dev,
+    up: x.up,
+    ipv4: x.ipv4,
+    router: x.router,
+    dns: x.dns_now ? x.dns_now.split(/\s+/).filter(Boolean) : [],
+    ipv6: x.ipv6,
+    prefix: x.prefix,
+    lease: x.lease,
   }));
 }
 

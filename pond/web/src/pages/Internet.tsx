@@ -2,188 +2,69 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet: the seven slots of the session engine, one under another,
- * each with all there is to know of its session. Without anything set
- * here the OLT makes the stick a transparent bridge, and the host dials the
- * operator through it. A slot takes one service: the stick holds its PPPoE
- * session itself, in its switch's hardware, and hands the public address to
- * the host or keeps it. A slot is bound to the service, by the VID the
+ * The internet: how the stick takes its address from the operator, a tab
+ * for each way. Without anything set here the OLT makes the stick a
+ * transparent bridge, and the host dials the operator through it.
+ *
+ * PPPoE: the seven slots of the session engine, a row each. A slot takes one
+ * service: the stick holds its PPPoE session itself, in its switch's
+ * hardware, and is the router of the devices behind it, or hands the public
+ * address down to the host. A slot is bound to the service, by the VID the
  * operator names it with: when the OLT moves the service to another VID on
  * the fibre or another channel, the session follows. The address goes down
  * to the host in that same VID, unless the slot names another, or none; in
  * one VLAN towards the host one slot at most hands its IPv4 address down,
  * and one its IPv6 prefix.
+ *
+ * Static IP and DHCP: a connection whose address is typed in or comes from
+ * the operator's DHCP; the stick is the router (internet/Routed.tsx).
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useNetwork, useOmci, useSessionChange } from "../api/config";
+import { Plus } from "lucide-react";
+import { useRef, useState } from "react";
+import { useForm } from "react-hook-form";
+import { useNetwork, useSessionChange } from "../api/config";
 import { useLive } from "../api/live";
 import type { Family } from "../api/types";
 import { Field, SaveState, useChangeState } from "../components/Field";
-import { Page } from "../components/Page";
-import { Cell, Dot, Row, Table } from "../components/ui";
+import { Page, Tabs, useTab } from "../components/Page";
+import { Cell, Row, Table } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
-import { Mib, type Service, services } from "../lib/omci";
 import { mac, required, upTo, vlan, z } from "../lib/schemas";
 import {
   downVlan,
-  fibreVlan,
   gems,
   hostLink,
+  ipoes,
   MAX_SESSIONS,
   type SessionView,
   session,
   sessions,
 } from "../lib/state";
+import { RoutedTab } from "./internet/Routed";
+import {
+  ActionsCell,
+  Choice,
+  Dialog,
+  FAMILY,
+  FamilyField,
+  hostSide,
+  Mono,
+  MonoList,
+  RouterCell,
+  ServiceCell,
+  ServiceSelect,
+  StateCell,
+  Sub,
+  serviceName,
+  serviceOf,
+  serviceVid,
+  useServices,
+} from "./internet/shared";
 
 /* The rows of the session engine, numbered as the sessions are. */
 const SLOT_IDS = Array.from({ length: MAX_SESSIONS }, (_, i) => i + 1);
-
-const FAMILY: Record<Family, Key> = {
-  both: "internet.famBoth",
-  ipv4: "internet.famV4",
-  ipv6: "internet.famV6",
-};
-
-/* --------------------------------------------------------------- services */
-
-/** The operator's services that can carry a session: not multicast alone. */
-function useServices() {
-  const omci = useOmci();
-  const list = useMemo(
-    () =>
-      services(new Mib(omci.data)).filter((s) =>
-        s.ports.some((p) => p.channels.some((c) => !c.multicast && c.direction !== "down")),
-      ),
-    [omci.data],
-  );
-  return { list, ready: omci.isSuccess };
-}
-
-/*
- * The VID a session is given for service @s: the one by which the operator
- * names the service towards the host, which the OLT translates, else the VID
- * on the fibre; onu-mode follows it from there.
- */
-function serviceVid(s: Service): string {
-  return String(s.hostVlans.find((v) => v != null) ?? s.vlan ?? "");
-}
-
-/** The service a session runs in: the one whose VID on the fibre it runs in. */
-function serviceOf(list: Service[], x: SessionView): Service | undefined {
-  return list.find((s) => s.vlan != null && String(s.vlan) === fibreVlan(x));
-}
-
-type T = (k: Key, v?: Record<string, string | number>) => string;
-
-/* The VIDs the OLT translates service @s to towards the host, when they are not its own. */
-function hostNames(s: Service) {
-  return s.hostVlans.filter((v) => v != null && v !== s.vlan);
-}
-
-/** What service @s is named by towards the host. */
-function hostServiceName(t: T, s: Service) {
-  const host = hostNames(s);
-  if (host.length) return `VLAN ${host.join(", ")}`;
-  return s.vlan == null ? t("internet.serviceNoVlan") : `VLAN ${s.vlan}`;
-}
-
-/** What service @s is named by: its VID towards the host, and on the fibre (upstream). */
-function serviceName(t: T, s: Service) {
-  const host = hostNames(s);
-  if (host.length)
-    return t("internet.serviceVia", {
-      host: host.join(", "),
-      fibre: s.vlan ?? t("internet.serviceNoVlan"),
-    });
-  return hostServiceName(t, s);
-}
-
-/** A dialog that opens while @open holds. */
-function Dialog({
-  open,
-  title,
-  onClose,
-  children,
-}: {
-  open: boolean;
-  title: ReactNode;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const d = ref.current;
-    if (!d) return;
-    if (open && !d.open) d.showModal();
-    if (!open && d.open) d.close();
-  }, [open]);
-  return (
-    <dialog ref={ref} className="modal" onClose={onClose}>
-      <div className="modal-box max-w-2xl p-6">
-        <div className="mb-6 flex items-center gap-4">
-          <h3 className="text-base font-semibold">{title}</h3>
-          <form method="dialog" className="ml-auto">
-            <button
-              type="submit"
-              className="btn btn-ghost btn-sm btn-square text-base-content/70"
-              aria-label="close"
-            >
-              <X className="size-4" />
-            </button>
-          </form>
-        </div>
-        {open && children}
-      </div>
-      <form method="dialog" className="modal-backdrop">
-        <button type="submit" aria-label="close" />
-      </form>
-    </dialog>
-  );
-}
-
-/* One answer of the form's: a radio of @field with @value. */
-function Choice({
-  title,
-  text,
-  on,
-  field,
-  value,
-}: {
-  title: string;
-  text: string;
-  on: boolean;
-  field: UseFormRegisterReturn;
-  value: string;
-}) {
-  return (
-    <label
-      className={`flex cursor-pointer items-start gap-3 rounded-box border p-3 ${
-        on ? "border-primary/50 bg-primary/5" : "border-base-300"
-      }`}
-    >
-      <input
-        type="radio"
-        value={value}
-        className="radio radio-sm radio-primary mt-0.5"
-        {...field}
-      />
-      <span>
-        <span className="block text-sm font-semibold">{title}</span>
-        <span className="mt-1 block text-xs text-base-content/70">{text}</span>
-      </span>
-    </label>
-  );
-}
-
-/* The VIDs service @s comes in on the host's side. */
-function hostSide(s: Service): number[] {
-  const host = s.hostVlans.filter((v): v is number => v != null);
-  return host.length ? host : s.vlan != null ? [s.vlan] : [];
-}
 
 /*
  * The slots other than @id that already hand down into VLAN @down what
@@ -292,52 +173,19 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
           {...form.register("secret")}
         />
       </div>
-      <div className="grid gap-1">
-        <label htmlFor="service" className="text-sm font-semibold">
-          {t("internet.service")}
-        </label>
-        <select
-          id="service"
-          className="select w-full"
-          {...form.register("service", {
-            onChange: (e) => {
-              if (form.getValues("hostVlan") === prevService.current)
-                form.setValue("hostVlan", e.target.value, { shouldDirty: true });
-              prevService.current = e.target.value;
-            },
-          })}
-        >
-          {list.map((s) => (
-            <option key={serviceVid(s)} value={serviceVid(s)}>
-              {serviceName(t, s)}
-            </option>
-          ))}
-          {gone != null && (
-            <option value={gone}>
-              {gone ? t("internet.serviceGone", { vid: gone }) : t("switch.untagged")}
-            </option>
-          )}
-        </select>
-        <p className="text-xs text-base-content/70">
-          {picked
-            ? t("internet.serviceFollows", { vid: serviceVid(picked) })
-            : list.length === 0
-              ? t("internet.servicesNone")
-              : null}
-        </p>
-      </div>
-      <div className="grid gap-1">
-        <span className="text-sm font-semibold">{t("internet.family")}</span>
-        <div className="join">
-          {(["both", "ipv4", "ipv6"] as const).map((f) => (
-            <label key={f} className="join-item btn btn-sm has-[:checked]:btn-primary">
-              <input type="radio" value={f} className="hidden" {...form.register("family")} />
-              {t(FAMILY[f])}
-            </label>
-          ))}
-        </div>
-        <p className="text-xs text-base-content/70">{t("internet.familyHint")}</p>
-      </div>
+      <ServiceSelect
+        field={form.register("service", {
+          onChange: (e) => {
+            if (form.getValues("hostVlan") === prevService.current)
+              form.setValue("hostVlan", e.target.value, { shouldDirty: true });
+            prevService.current = e.target.value;
+          },
+        })}
+        list={list}
+        gone={gone}
+        picked={picked}
+      />
+      <FamilyField field={form.register("family")} hint={t("internet.familyHint")} />
       <Field
         label={t("internet.mac")}
         hint={t("internet.macHint")}
@@ -403,16 +251,6 @@ function SessionForm({ x, slot, onDone }: { x?: SessionView; slot?: number; onDo
   );
 }
 
-/* A line of detail under a cell's value, quieter. */
-function Sub({ children }: { children: ReactNode }) {
-  return <div className="text-xs text-base-content/70">{children}</div>;
-}
-
-/* What is read character by character: an address, an interface. */
-function Mono({ children }: { children: ReactNode }) {
-  return <span className="font-mono">{children}</span>;
-}
-
 /** A slot with its session: one row, with all there is to know of it at once. */
 function SlotRow({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   const { t } = useI18n();
@@ -436,8 +274,6 @@ function SlotRow({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
   /* The session's own, else, from a stick of before, the one handed on. */
   const dns = x.dns.length ? x.dns : x.handsOn ? s.dns : [];
   const gateway = x.up ? (x.gateway ?? (x.handsOn ? link.hostGateway : null)) : null;
-  const fibre =
-    bound && hostNames(bound).length ? (bound.vlan ?? t("internet.serviceNoVlan")) : null;
   const channel =
     portId != null ? `GEM ${portId}` : x.gem === "auto" ? t("internet.autoGem") : `GEM ${x.gem}`;
   const down = downVlan(x);
@@ -449,23 +285,8 @@ function SlotRow({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
 
   return (
     <Row>
-      <Cell head={t("internet.colSlot")}>
-        <span className="text-base font-semibold">{x.id}</span>
-        <span className="flex items-center gap-2">
-          <Dot tone={x.up ? "good" : "warn"} />
-          {x.up ? t("internet.up") : t("internet.connecting")}
-        </span>
-      </Cell>
-      <Cell head={t("internet.colService")}>
-        <span>
-          {bound ? hostServiceName(t, bound) : x.vlan ? `VLAN ${x.vlan}` : t("switch.untagged")}
-        </span>
-        <Sub>
-          {[fibre != null && t("internet.upstream", { vid: fibre }), channel]
-            .filter(Boolean)
-            .join(" · ")}
-        </Sub>
-      </Cell>
+      <StateCell id={x.id} up={x.up} word={x.up ? t("internet.up") : t("internet.connecting")} />
+      <ServiceCell service={bound} vlan={x.vlan} channel={channel} />
       <Cell head={t("internet.colSession")}>
         <span className="break-all">{x.user}</span>
         <Sub>
@@ -491,62 +312,35 @@ function SlotRow({ x, onEdit }: { x: SessionView; onEdit: () => void }) {
         )}
         {v4 && (
           <Sub>
-            DNS{" "}
-            {dns.length
-              ? dns.map((d, i) => (
-                  <span key={d}>
-                    {i > 0 && ", "}
-                    <Mono>{d}</Mono>
-                  </span>
-                ))
-              : "–"}
+            DNS <MonoList items={dns} />
           </Sub>
         )}
         <Sub>
           {mtu ? t(mtu >= 1500 ? "internet.mtuRfc" : "internet.mtuPlain", { mtu }) : "MTU –"}
         </Sub>
       </Cell>
-      <Cell head={t("internet.colHost")}>
-        {x.pass ? (
-          <>
-            <span>{down ? `VLAN ${down}` : t("switch.untagged")}</span>
-            {v4 && <span>{x.handsOn && x.ipv4 ? <Mono>{x.ipv4}</Mono> : "IPv4 –"}</span>}
-            {v6 && <span>{x.prefix ? <Mono>{x.prefix}</Mono> : "IPv6 –"}</span>}
-            {v6 && x.prefix && !x.prefixHost && <Sub>{t("internet.prefixWaiting")}</Sub>}
-            {v4 && (
-              <Sub>
-                {t("internet.gatewayIs")} {x.handsOn && gateway ? <Mono>{gateway}</Mono> : "–"}
-              </Sub>
-            )}
-          </>
-        ) : (
-          <span className="text-base-content/70">{t("internet.kindStick")}</span>
-        )}
-      </Cell>
-      <Cell actions>
-        <span className="flex items-center justify-end gap-1 max-md:justify-start">
-          <SaveState {...state} />
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-square text-base-content/70"
-            onClick={onEdit}
-            aria-label={t("internet.edit")}
-            title={t("internet.edit")}
-          >
-            <Pencil className="size-4" />
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm btn-square text-base-content/70 hover:text-error"
-            onClick={remove}
-            disabled={change.isPending}
-            aria-label={t("internet.removeSession")}
-            title={t("internet.removeSession")}
-          >
-            <Trash2 className="size-4" />
-          </button>
-        </span>
-      </Cell>
+      {x.pass ? (
+        <Cell head={t("internet.colHost")}>
+          <span>{down ? `VLAN ${down}` : t("switch.untagged")}</span>
+          {v4 && <span>{x.handsOn && x.ipv4 ? <Mono>{x.ipv4}</Mono> : "IPv4 –"}</span>}
+          {v6 && <span>{x.prefix ? <Mono>{x.prefix}</Mono> : "IPv6 –"}</span>}
+          {v6 && x.prefix && !x.prefixHost && <Sub>{t("internet.prefixWaiting")}</Sub>}
+          {v4 && (
+            <Sub>
+              {t("internet.gatewayIs")} {x.handsOn && gateway ? <Mono>{gateway}</Mono> : "–"}
+            </Sub>
+          )}
+        </Cell>
+      ) : (
+        <RouterCell />
+      )}
+      <ActionsCell
+        state={state}
+        onEdit={onEdit}
+        onRemove={remove}
+        busy={change.isPending}
+        removeLabel={t("internet.removeSession")}
+      />
     </Row>
   );
 }
@@ -576,38 +370,34 @@ function FreeRow({ id, onUse }: { id: number; onUse: () => void }) {
   );
 }
 
-export function Internet() {
+/** The PPPoE tab: the seven slots, a row each, and the dialog that sets one. */
+function PppoeTab() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const list = sessions(live);
   /* A session to change, or the free slot a new one takes. */
   const [editing, setEditing] = useState<SessionView | number | null>(null);
   return (
-    <Page
-      title={t("internet.title")}
-      hint={t("internet.slots", { n: list.length, max: MAX_SESSIONS })}
-    >
-      <div className="min-h-0 flex-1 lg:overflow-auto">
-        <Table
-          head={[
-            t("internet.colSlot"),
-            t("internet.colService"),
-            t("internet.colSession"),
-            t("internet.colOperator"),
-            t("internet.colHost"),
-            "",
-          ]}
-        >
-          {SLOT_IDS.map((id) => {
-            const x = list.find((y) => y.id === id);
-            return x ? (
-              <SlotRow key={id} x={x} onEdit={() => setEditing(x)} />
-            ) : (
-              <FreeRow key={id} id={id} onUse={() => setEditing(id)} />
-            );
-          })}
-        </Table>
-      </div>
+    <>
+      <Table
+        head={[
+          t("internet.colSlot"),
+          t("internet.colService"),
+          t("internet.colSession"),
+          t("internet.colOperator"),
+          t("internet.colHost"),
+          "",
+        ]}
+      >
+        {SLOT_IDS.map((id) => {
+          const x = list.find((y) => y.id === id);
+          return x ? (
+            <SlotRow key={id} x={x} onEdit={() => setEditing(x)} />
+          ) : (
+            <FreeRow key={id} id={id} onUse={() => setEditing(id)} />
+          );
+        })}
+      </Table>
       <Dialog
         open={editing != null}
         title={
@@ -623,6 +413,53 @@ export function Internet() {
           onDone={() => setEditing(null)}
         />
       </Dialog>
+    </>
+  );
+}
+
+const TABS = ["pppoe", "static", "dhcp"] as const;
+type Tab = (typeof TABS)[number];
+
+export function Internet() {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  const [tab, setTab] = useTab(TABS);
+  const n: Record<Tab, number> = {
+    pppoe: sessions(live).length,
+    static: ipoes(live).filter((x) => x.kind === "static").length,
+    dhcp: ipoes(live).filter((x) => x.kind === "dhcp").length,
+  };
+  const label: Record<Tab, Key> = {
+    pppoe: "internet.tabPppoe",
+    static: "internet.tabStatic",
+    dhcp: "internet.tabDhcp",
+  };
+  const hint =
+    tab === "pppoe"
+      ? t("internet.slots", { n: n.pppoe, max: MAX_SESSIONS })
+      : t(tab === "static" ? "internet.staticHint" : "internet.dhcpHint");
+  return (
+    <Page
+      title={t("internet.title")}
+      hint={hint}
+      tabs={
+        <Tabs
+          items={TABS.map((id) => ({
+            id,
+            label: t(label[id]),
+            badge: n[id] ? (
+              <span className="text-xs font-normal text-base-content/70">{n[id]}</span>
+            ) : undefined,
+          }))}
+          value={tab}
+          onChange={setTab}
+          label={t("internet.title")}
+        />
+      }
+    >
+      <div className="min-h-0 flex-1 lg:overflow-auto">
+        {tab === "pppoe" ? <PppoeTab /> : <RoutedTab key={tab} kind={tab} />}
+      </div>
     </Page>
   );
 }

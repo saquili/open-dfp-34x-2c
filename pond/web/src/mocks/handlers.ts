@@ -10,6 +10,7 @@
 import { delay, HttpResponse, http } from "msw";
 import type {
   Identity,
+  IpoeInfo,
   LaneMode,
   Mgmt,
   Session,
@@ -45,6 +46,37 @@ const settings: Settings = structuredClone(LIVE.settings);
  * internet page without a sign-in.
  */
 const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_MOCK_SCENARIO;
+
+/* The VID on the fibre of each service the stand-in OLT translates, as onu-mode names its interface. */
+const FIBRE: Record<string, string> = { "410": "100", "420": "200", "421": "300" };
+const wanOf = (vlan: string) => `wan${FIBRE[vlan] ?? vlan}`;
+
+/* A connection of @kind on VLAN @vlan, as it stands before it has an address. */
+function ipoe(id: number, kind: IpoeInfo["kind"], vlan: string): IpoeInfo {
+  return {
+    id,
+    kind,
+    vlan,
+    gem: "auto",
+    mac: "",
+    family: "ipv4",
+    address: "",
+    gateway: "",
+    dns: "",
+    address6: "",
+    gateway6: "",
+    prefix6: "",
+    dev: wanOf(vlan),
+    gem_dev: "gem279",
+    up: false,
+    ipv4: null,
+    router: null,
+    dns_now: null,
+    ipv6: null,
+    prefix: null,
+    lease: null,
+  };
+}
 if (SCENARIO === "sessions") {
   const one = (id: number, family: SessionInfo["family"], up: boolean): SessionInfo => ({
     id,
@@ -92,6 +124,37 @@ if (SCENARIO === "sessions") {
   const ppp0 = NETWORK.links.find((l) => l.name === "ppp0");
   if (ppp0) NETWORK.links.push({ ...ppp0, name: "ppp2", ifindex: 18, mtu: 1492 });
   settings.pass = { address: "203.0.113.21", lan: "lan", peer_gateway: "198.51.100.1" };
+  /* A fixed address on VLAN 420, an address from DHCP on 421, and one still waiting for its. */
+  settings.ipoe = [
+    {
+      ...ipoe(1, "static", "420"),
+      family: "both",
+      address: "192.0.2.10/24",
+      gateway: "192.0.2.1",
+      dns: "198.51.100.53 198.51.100.54",
+      address6: "2001:db8:5::2/64",
+      gateway6: "2001:db8:5::1",
+      prefix6: "2001:db8:5100::/56",
+      up: true,
+      ipv4: "192.0.2.10/24",
+      router: "192.0.2.1",
+      dns_now: "198.51.100.53 198.51.100.54",
+      ipv6: "2001:db8:5::2/64",
+      prefix: "2001:db8:5100::/56",
+    },
+    {
+      ...ipoe(2, "dhcp", "421"),
+      family: "both",
+      up: true,
+      ipv4: "198.51.100.77/24",
+      router: "198.51.100.1",
+      dns_now: "198.51.100.53",
+      ipv6: "2001:db8:7::77/128",
+      prefix: "2001:db8:7700::/56",
+      lease: 82_800,
+    },
+    { ...ipoe(3, "dhcp", "410"), mac: "00:00:5e:00:53:c3" },
+  ];
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
@@ -410,6 +473,70 @@ export const handlers = [
     settings.store = "saved";
     settings.last_apply_status = 0;
     return HttpResponse.json({ id: "session", ok: true });
+  }),
+
+  /* A connection: added to the first free number, changed by ID, removed by KIND=. */
+  http.post("*/api/set/ipoe", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    const body = kv(await request.text());
+    settings.ipoe ??= [];
+    const list = settings.ipoe;
+    const refuse = (detail: string) =>
+      HttpResponse.json({ error: "refused", detail }, { status: 400 });
+    let id = body.ID ? Number(body.ID) : 0;
+    if (body.KIND === "") {
+      settings.ipoe = list.filter((y) => y.id !== id);
+      return HttpResponse.json({ id: "ipoe", ok: true });
+    }
+    if (body.KIND !== "static" && body.KIND !== "dhcp") return refuse("KIND is static or dhcp");
+    if (!id) {
+      for (let n = 1; n <= 4 && !id; n++) if (!list.some((x) => x.id === n)) id = n;
+      if (!id) return refuse("all 4 connections are taken");
+    }
+    if (body.KIND === "static" && (!body.ADDRESS || !body.GATEWAY))
+      return refuse(`connection ${id}: a static address needs ADDRESS and GATEWAY`);
+    let x = list.find((y) => y.id === id);
+    if (!x) {
+      x = ipoe(id, body.KIND, body.VLAN ?? "");
+      list.push(x);
+      list.sort((a, z) => a.id - z.id);
+    }
+    x.kind = body.KIND;
+    if (body.VLAN !== undefined) x.vlan = body.VLAN;
+    if (body.MAC !== undefined) x.mac = body.MAC;
+    if (body.FAMILY === "ipv4" || body.FAMILY === "ipv6" || body.FAMILY === "both")
+      x.family = body.FAMILY;
+    for (const [k, f] of [
+      ["ADDRESS", "address"],
+      ["GATEWAY", "gateway"],
+      ["DNS", "dns"],
+      ["ADDRESS6", "address6"],
+      ["GATEWAY6", "gateway6"],
+      ["PREFIX6", "prefix6"],
+    ] as const)
+      if (body[k] !== undefined) x[f] = body[k];
+    /* The stand-in stick has its address at once: the one typed, or one from DHCP. */
+    const v4 = x.family !== "ipv6";
+    const v6 = x.family !== "ipv4";
+    x.dev = wanOf(x.vlan);
+    x.up = true;
+    if (x.kind === "static") {
+      x.ipv4 = x.address;
+      x.router = x.gateway;
+      x.dns_now = x.dns;
+      x.ipv6 = x.address6 || null;
+      x.prefix = x.prefix6 || null;
+      x.lease = null;
+    } else {
+      x.ipv4 = v4 ? "198.51.100.80/24" : null;
+      x.router = v4 ? "198.51.100.1" : null;
+      x.dns_now = v4 ? "198.51.100.53" : null;
+      x.ipv6 = v6 ? "2001:db8:7::80/128" : null;
+      x.prefix = v6 ? "2001:db8:7800::/56" : null;
+      x.lease = 86_400;
+    }
+    return HttpResponse.json({ id: "ipoe", ok: true });
   }),
 
   http.get("*/api/get/identity", async () => {

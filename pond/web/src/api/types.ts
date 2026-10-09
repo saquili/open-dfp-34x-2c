@@ -186,9 +186,46 @@ export interface SessionInfo {
   dns?: string | null;
 }
 
+/**
+ * A connection that takes its address on a service as a router does: typed
+ * in (static) or from the operator's DHCP. The stick keeps the address and
+ * is the router of what stands behind it.
+ */
+export interface IpoeInfo {
+  id: number;
+  kind: "static" | "dhcp";
+  /** The service's VID, as a session's, and its GEM port's Port-ID or "auto". */
+  vlan: string;
+  gem: string;
+  mac: string;
+  /** The families DHCP asks for; a static connection has those it is given. */
+  family: Family;
+  /** As typed, for a static connection: IPv4 with its length, its gateway, the name servers, and IPv6. */
+  address: string;
+  gateway: string;
+  dns: string;
+  address6: string;
+  gateway6: string;
+  prefix6: string;
+  /** What is in effect: the interface, the addresses with their lengths, the gateway, the name servers. */
+  dev: string | null;
+  gem_dev: string | null;
+  up: boolean;
+  ipv4: string | null;
+  router: string | null;
+  dns_now: string | null;
+  ipv6: string | null;
+  /** The IPv6 prefix for the network behind the stick: delegated, or typed. */
+  prefix: string | null;
+  /** Seconds left of the DHCP lease. */
+  lease: number | null;
+}
+
 export interface Settings {
   settings: Record<string, string>;
   sessions: SessionInfo[];
+  /** The connections that take their address as a router does; absent on a stick of before. */
+  ipoe?: IpoeInfo[];
   mode: string | null;
   /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;
