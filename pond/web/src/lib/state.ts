@@ -342,3 +342,31 @@ export function memory(live: Live | undefined): MemoryView | null {
   const used = m.total_kb - m.available_kb;
   return { totalBytes: m.total_kb * 1024, usedBytes: used * 1024, share: used / m.total_kb };
 }
+
+/** The stick's network towards the devices behind it, as set, or as it stands before it is. */
+export interface LanView {
+  vlan: string;
+  address: string;
+  dhcp: boolean;
+  poolFrom: string;
+  poolTo: string;
+  leaseS: number;
+}
+
+export function lan(live: Live | undefined): LanView {
+  const x = live?.settings?.lan;
+  return {
+    vlan: x?.vlan ?? "",
+    address: x?.address ?? "192.168.1.1/24",
+    dhcp: (x?.dhcp ?? "on") === "on",
+    poolFrom: x?.pool_from ?? "192.168.1.100",
+    poolTo: x?.pool_to ?? "192.168.1.199",
+    leaseS: x?.lease_s ?? 86_400,
+  };
+}
+
+/** The devices behind the stick with an address from it, by their address. */
+export function leases(live: Live | undefined) {
+  const n = (ip: string) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
+  return (live?.settings?.leases ?? []).slice().sort((a, z) => n(a.ip) - n(z.ip));
+}

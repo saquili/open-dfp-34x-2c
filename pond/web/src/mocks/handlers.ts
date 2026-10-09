@@ -12,6 +12,7 @@ import type {
   Identity,
   IpoeInfo,
   LaneMode,
+  LanInfo,
   Mgmt,
   Session,
   SessionInfo,
@@ -78,6 +79,15 @@ function ipoe(id: number, kind: IpoeInfo["kind"], vlan: string): IpoeInfo {
     lease: null,
   };
 }
+/* The network behind the stick as a new one stands. */
+const LAN: LanInfo = {
+  vlan: "",
+  address: "192.168.1.1/24",
+  dhcp: "on",
+  pool_from: "192.168.1.100",
+  pool_to: "192.168.1.199",
+  lease_s: 86_400,
+};
 if (SCENARIO === "sessions") {
   const one = (id: number, family: SessionInfo["family"], up: boolean): SessionInfo => ({
     id,
@@ -154,6 +164,14 @@ if (SCENARIO === "sessions") {
       prefix: "2001:db8:7700::/56",
       lease: 82_800,
     },
+  ];
+  /* The network behind the stick, and four devices in it, one without a name. */
+  settings.lan = { ...LAN };
+  settings.leases = [
+    { mac: "00:00:5e:00:53:10", ip: "192.168.1.100", name: "laptop", left_s: 81_000 },
+    { mac: "00:00:5e:00:53:11", ip: "192.168.1.101", name: "telefon", left_s: 43_200 },
+    { mac: "00:00:5e:00:53:12", ip: "192.168.1.102", name: "telewizor", left_s: 3_600 },
+    { mac: "00:00:5e:00:53:13", ip: "192.168.1.115", name: null, left_s: 600 },
   ];
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
@@ -495,6 +513,22 @@ export const handlers = [
     settings.store = "saved";
     settings.last_apply_status = 0;
     return HttpResponse.json({ id: "session", ok: true });
+  }),
+
+  /* The network behind the stick: VLAN, ADDRESS, DHCP, POOL_FROM, POOL_TO, LEASE. */
+  http.post("*/api/set/lan", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    const body = kv(await request.text());
+    if (!settings.lan) settings.lan = { ...LAN };
+    const x = settings.lan;
+    if (body.VLAN !== undefined) x.vlan = body.VLAN;
+    if (body.ADDRESS) x.address = body.ADDRESS;
+    if (body.DHCP === "on" || body.DHCP === "off") x.dhcp = body.DHCP;
+    if (body.POOL_FROM) x.pool_from = body.POOL_FROM;
+    if (body.POOL_TO) x.pool_to = body.POOL_TO;
+    if (body.LEASE) x.lease_s = Number(body.LEASE);
+    return HttpResponse.json({ id: "lan", ok: true });
   }),
 
   /* A connection: added to the first free number, changed by ID, removed by KIND=. */

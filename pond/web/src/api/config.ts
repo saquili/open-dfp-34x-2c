@@ -72,6 +72,7 @@ function useChange(id: string, refresh: string[][]) {
 
 export const useSessionChange = () => useChange("session", [["live"]]);
 export const useIpoeChange = () => useChange("ipoe", [["live"]]);
+export const useLanChange = () => useChange("lan", [["live"]]);
 
 /* The SFP lane and the management address: read often while a change waits. */
 const waiting = (q: { state: { data?: { trial?: unknown; pending?: unknown } } }) =>

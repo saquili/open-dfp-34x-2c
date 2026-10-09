@@ -221,11 +221,37 @@ export interface IpoeInfo {
   lease: number | null;
 }
 
+/** The stick's own network, towards the devices behind it, where it is their router. */
+export interface LanInfo {
+  /** The VID it goes in to the SFP port; "" for none. */
+  vlan: string;
+  /** The stick's address in it, with its length. */
+  address: string;
+  /** Its DHCP server, and the addresses it gives, first and last, for how long, seconds. */
+  dhcp: "on" | "off";
+  pool_from: string;
+  pool_to: string;
+  lease_s: number;
+}
+
+/** A device behind the stick that has an address from its DHCP server. */
+export interface LeaseInfo {
+  mac: string;
+  ip: string;
+  /** The name it gave itself, if any. */
+  name: string | null;
+  /** Seconds left of its lease. */
+  left_s: number;
+}
+
 export interface Settings {
   settings: Record<string, string>;
   sessions: SessionInfo[];
   /** The connections that take their address as a router does; absent on a stick of before. */
   ipoe?: IpoeInfo[];
+  /** The network behind the stick, and the devices in it; absent on a stick of before. */
+  lan?: LanInfo;
+  leases?: LeaseInfo[];
   mode: string | null;
   /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;

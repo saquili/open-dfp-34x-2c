@@ -35,7 +35,14 @@ import {
   vlan,
   z,
 } from "../../lib/schemas";
-import { downVlan, type IpoeView, MAX_CONNS, type SessionView, sessions } from "../../lib/state";
+import {
+  downVlan,
+  type IpoeView,
+  lan,
+  MAX_CONNS,
+  type SessionView,
+  sessions,
+} from "../../lib/state";
 import { type Conn, ipoeIn, KINDS, type Kind, room, serviceIn } from "./conns";
 import { Choice, connName, FamilyField, hostSide, serviceName, useServices } from "./shared";
 import { VlanField, type VlanOption, type VlanUse, vlanOptions } from "./VlanField";
@@ -155,7 +162,8 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
   const { t } = useI18n();
   const change = useSessionChange();
   const state = useChangeState(change);
-  const all = sessions(useLive().data);
+  const { data: live } = useLive();
+  const all = sessions(live);
   const { list: services } = useServices();
   const id = x?.id ?? 0;
   const first = x?.vlan ?? c.draft.vlan;
@@ -194,7 +202,9 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
     pass === "on" && down
       ? services.find((s) => s !== picked && hostSide(s).includes(Number(down)))
       : undefined;
-  const blocked = clash.v4 != null || clash.v6 != null || foreign != null;
+  /* The stick's own network to the devices behind it has its VLAN, or none, to itself. */
+  const onLan = pass === "on" && down === lan(live).vlan;
+  const blocked = clash.v4 != null || clash.v6 != null || foreign != null || onLan;
 
   /* What the session does with its address, once chosen by hand, stays as chosen. */
   const chosen = useRef(!!x);
@@ -306,6 +316,11 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
               )}
               {clash.v6 != null && (
                 <p className="text-xs text-error">{t("internet.clashV6", { id: clash.v6 })}</p>
+              )}
+              {onLan && (
+                <p className="text-xs text-error">
+                  {down ? t("internet.clashLan", { vid: down }) : t("internet.clashLanNone")}
+                </p>
               )}
               {foreign && (
                 <p className="text-xs text-error">
