@@ -12,4 +12,5 @@ config BR2_PACKAGE_OMCID
 	  it answers the OLT and programs the data path through the
 	  kernel's interfaces, and publishes what the OLT set up on
 	  ubus. Installs /usr/sbin/omcid and the tools omcitap and
-	  omcivlan.
+	  omcivlan, which the board's post-build script sets aside for
+	  the RAM image.

@@ -7,8 +7,9 @@
 #
 # Usage: post-build.sh TARGET_DIR
 #
-# It takes out the programs of iproute2 that the stick does not run, and the
-# command-line tools of the network layer; it cuts the shared libraries to what
+# It takes out the programs of iproute2 that the stick does not run, the
+# command-line tools of the network layer and the tools that diagnose a stick,
+# which it sets aside for the RAM image; it cuts the shared libraries to what
 # the programs use, with tools/lib-trim, when the tree holds the shared C
 # library; and it writes into /etc/os-release, as
 # BUILD_ID, the commit of this repository that the image is built from: the
@@ -20,7 +21,9 @@
 #
 # The cut needs what the build system gives a post-build script: HOST_DIR and
 # STAGING_DIR for the cross tools, BUILD_DIR for uClibc-ng's build directory.
-# GIT names another git, which the tests use.
+# BASE_DIR names the build's directory, where the tools of diagnosis are set
+# aside; without it they go with the rest. GIT names another git, which the
+# tests use.
 
 set -eu
 
@@ -50,20 +53,42 @@ done
 # jshn, with jshn's shell library. A person at the stick has the ssh server and
 # BusyBox, and the panel for the rest; netifd and ubusd need none of them, and
 # lib-trim then takes out the library only jshn loads.
-rm -f "$1/usr/bin/ubus" "$1/usr/bin/uci" "$1/usr/bin/jshn"
+#
+# A stick is diagnosed started from RAM, and its flash holds the image of the
+# final test, so the tools of diagnosis, omcid's omcitap and omcivlan and the
+# network layer's ubus, are set aside in $BASE_DIR/diag, which "make
+# ram-image" lays over its copy of this directory; uci and jshn go.
+diag=${BASE_DIR:+$BASE_DIR/diag}
+for prog in usr/bin/omcitap usr/bin/omcivlan usr/bin/ubus; do
+	[ -e "$1/$prog" ] || continue
+	if [ -n "$diag" ]; then
+		mkdir -p "$diag/${prog%/*}"
+		mv "$1/$prog" "$diag/$prog"
+	else
+		rm -f "$1/$prog"
+	fi
+done
+rm -f "$1/usr/bin/uci" "$1/usr/bin/jshn"
 rm -rf "$1/usr/share/libubox"
 
 # The programs share one C library (docs/adr/0011). The build system installs
 # it whole, with every function it offers, and libgcc_s, which no program
 # needs; lib-trim removes what nothing loads, links the C library again with
 # what the programs import, and fails the build when a program would miss a
-# library or a symbol.
+# library or a symbol. The tools of diagnosis are not among the programs it
+# cuts for, so they get the C library whole, as the build system installs it
+# into the staging directory, stripped as for the target.
 for libc in "$1"/lib/libuClibc-*.so; do
 	[ -f "$libc" ] || continue
 	: "${HOST_DIR:?post-build.sh: HOST_DIR is not set; the build system sets it}"
 	: "${STAGING_DIR:?post-build.sh: STAGING_DIR is not set; the build system sets it}"
 	: "${BUILD_DIR:?post-build.sh: BUILD_DIR is not set; the build system sets it}"
 	tuple=$(basename "$(dirname "$STAGING_DIR")")
+	if [ -n "$diag" ]; then
+		mkdir -p "$diag/lib"
+		"$HOST_DIR/bin/$tuple-strip" --remove-section=.comment --remove-section=.note \
+			-o "$diag/lib/${libc##*/}" "$STAGING_DIR/lib/${libc##*/}"
+	fi
 	"$top/tools/lib-trim/lib-trim" --cross "$HOST_DIR/bin/$tuple-" \
 		--uclibc "$BUILD_DIR/$(basename "$libc" .so | sed 's/^libuClibc-/uclibc-/')" "$1"
 done

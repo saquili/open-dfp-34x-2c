@@ -49,7 +49,8 @@ class PostBuild(unittest.TestCase):
         os.chmod(self.git, stat.S_IRWXU)
 
     def run_script(self, **env):
-        full = dict(os.environ, GIT=self.git, **env)
+        full = {key: value for key, value in os.environ.items() if key != "BASE_DIR"}
+        full.update(GIT=self.git, **env)
         return subprocess.run(["sh", SCRIPT, self.target], env=full, capture_output=True,
                               text=True)
 
@@ -87,19 +88,43 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertEqual(sorted(os.listdir(sbin)), sorted(kept))
 
-    def test_the_command_line_tools_of_the_network_layer_go(self):
+    def make_tools(self):
         tools = os.path.join(self.target, "usr", "bin")
         shell = os.path.join(self.target, "usr", "share", "libubox")
-        os.makedirs(tools)
-        os.makedirs(shell)
-        for prog in ("ubus", "uci", "jshn", "omcitap"):
+        os.makedirs(tools, exist_ok=True)
+        os.makedirs(shell, exist_ok=True)
+        for prog in ("ubus", "uci", "jshn", "omcitap", "omcivlan", "passwd"):
             with open(os.path.join(tools, prog), "w", encoding="utf-8") as handle:
-                handle.write("#!/bin/sh\n")
+                handle.write("#!/bin/sh\n# %s\n" % prog)
         with open(os.path.join(shell, "jshn.sh"), "w", encoding="utf-8") as handle:
             handle.write("# jshn\n")
+        return tools, shell
+
+    def test_the_command_line_tools_of_the_network_layer_go(self):
+        tools, shell = self.make_tools()
         self.assertEqual(self.run_script().returncode, 0)
-        self.assertEqual(os.listdir(tools), ["omcitap"])
+        self.assertEqual(os.listdir(tools), ["passwd"])
         self.assertFalse(os.path.exists(shell))
+
+    def test_the_tools_of_diagnosis_are_set_aside_for_the_ram_image(self):
+        base = os.path.join(self._tmp.name, "base")
+        tools, shell = self.make_tools()
+        done = self.run_script(BASE_DIR=base)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(os.listdir(tools), ["passwd"])
+        self.assertFalse(os.path.exists(shell))
+        aside = os.path.join(base, "diag", "usr", "bin")
+        self.assertEqual(sorted(os.listdir(aside)), ["omcitap", "omcivlan", "ubus"])
+        with open(os.path.join(aside, "ubus"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "#!/bin/sh\n# ubus\n")
+
+    def test_a_second_run_keeps_the_tools_set_aside(self):
+        base = os.path.join(self._tmp.name, "base")
+        self.make_tools()
+        self.assertEqual(self.run_script(BASE_DIR=base).returncode, 0)
+        self.assertEqual(self.run_script(BASE_DIR=base).returncode, 0)
+        aside = os.path.join(base, "diag", "usr", "bin")
+        self.assertEqual(sorted(os.listdir(aside)), ["omcitap", "omcivlan", "ubus"])
 
     def test_a_tree_without_the_shared_c_library_needs_no_build_directories(self):
         env = {key: value for key, value in os.environ.items()
