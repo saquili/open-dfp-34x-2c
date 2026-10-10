@@ -4,7 +4,8 @@
 #
 # dhcp-wan: what udhcpc runs on the WAN of router mode (onu-apply), with the
 # event as its argument and the lease in its environment: the address, the
-# default route and, for the LAN's DHCP server, the name servers.
+# default route and, for the LAN's DHCP server, the name servers, which
+# "onu-apply sync" gives the server, without the client waiting for it.
 #
 # ONU_ROOT names another root for the files it writes, which the tests use.
 
@@ -21,6 +22,11 @@ bound | renew)
 	[ -n "${router:-}" ] &&
 		ip route replace default via "${router%% *}" dev "$interface"
 	[ -n "${dns:-}" ] && echo "$dns" >"$RUN/onu-dns"
+	;;
+esac
+case $1 in
+deconfig | bound | renew)
+	onu-apply sync </dev/null >/dev/null 2>&1 &
 	;;
 esac
 exit 0

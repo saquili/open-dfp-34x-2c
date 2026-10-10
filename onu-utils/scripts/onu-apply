@@ -19,6 +19,13 @@
 #   onu-apply iface    what netifd runs for an event of an interface (netifd
 #                      -h), with ACTION, INTERFACE and DEVICE: a session's
 #                      interface that comes up hands on what it brought
+#   onu-apply sync     follow what changed outside the settings: the GEM
+#                      ports and VLANs the OLT provisions, the host's IPv6
+#                      binding, the WAN's name servers; omcid (-x) and
+#                      dhcp6d (-x) run it as "onu-apply omcid" and
+#                      "onu-apply dhcp6d", dhcp-wan as "onu-apply sync"
+#
+# One onu-apply at a time changes the stick; the others wait for it.
 #
 # The settings are KEY=value lines in /run/onu.conf, which the status daemon
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
@@ -65,9 +72,9 @@
 # DHCP server; the WAN is a GEM port that the OLT provisioned, or a VLAN on
 # it, with an address by PPPoE, DHCP or by hand. The stick translates no
 # address: a host on the LAN reaches beyond the WAN with an address that the
-# network behind the WAN routes back to the stick. A watcher (onu-apply watch)
-# brings the WAN up when the OLT provisions its GEM port and restarts the DHCP
-# client when it ends; a WAN by PPPoE is session 1's interface of netifd.
+# network behind the WAN routes back to the stick. The WAN comes up when the
+# OLT provisions its GEM port (onu-apply sync), and procd keeps its DHCP
+# client; a WAN by PPPoE is session 1's interface of netifd.
 #
 # In passthrough, the address handed down goes on no interface of the
 # stick's, and the one host on its link, the router behind the stick, takes
@@ -100,6 +107,13 @@ SVC_DIR=$RUN/onu-svc.d
 # The stick's own address on a link to the host, from which its DHCP server
 # answers; the host is given the concentrator's address as its gateway.
 LINK_ADDRESS=169.254.0.1
+# Itself, which omcid and dhcp6d run when something changes.
+case $0 in
+/*) SELF=$0 ;;
+*) SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0") ;;
+esac
+LOCK=$RUN/onu-apply.lock
+AGAIN=$RUN/onu-apply.again
 
 log() {
 	echo "onu-apply: $*" >&2
@@ -316,10 +330,6 @@ netmask() {
 	echo "$mask"
 }
 
-pid_of() {
-	[ -r "$RUN/$1.pid" ] && cat "$RUN/$1.pid"
-}
-
 # The programs onu-apply wants run are the instances of one service of procd,
 # "onu" (ADR 0014): a file each in /run/onu-svc.d, named as the instance,
 # whose line is what onu-svc start takes after the name ([OPTION...] --
@@ -348,12 +358,6 @@ svc_stop() {
 	rm -f "$SVC_DIR/$1"
 	[ -d "$SVC_DIR" ] && svc_sync
 	return 0
-}
-
-stop_pid() {
-	pid=$(pid_of "$1")
-	[ -n "$pid" ] && kill "$pid" 2>/dev/null
-	rm -f "$RUN/$1.pid"
 }
 
 # omcid in the mode $1. A running omcid is told by a signal, SIGUSR2 for
@@ -539,7 +543,7 @@ pd_up() {
 	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
 	# $table is an option and its value, split on purpose.
 	svc_start "dhcp6d$1" -o "$RUN/dhcp6d.log" -- \
-		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" $table
+		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" -x "$SELF" $table
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
 
@@ -765,7 +769,7 @@ wan_up() {
 		ip route replace default via "$WAN_GATEWAY" dev "$wan"
 		;;
 	*)
-		udhcpc -i "$wan" -b -p "$RUN/udhcpc.pid" -s "$LIB/dhcp-wan"
+		svc_start udhcpc -- udhcpc -f -i "$wan" -s "$LIB/dhcp-wan"
 		;;
 	esac
 	echo "$gem $wan $out" >"$RUN/onu-wan"
@@ -836,7 +840,7 @@ wan_down() {
 	[ -r "$RUN/onu-wan" ] && read -r gem wan _ <"$RUN/onu-wan"
 	[ "$WAN_PROTO" = pppoe ] && { onu-net del ses1 || log "netifd still has the WAN's session"; }
 	rm -rf "${SESSIONS:?}/1"
-	stop_pid udhcpc
+	svc_stop udhcpc
 	feeds_down
 	# What a static or DHCP WAN put on the interface goes with it.
 	if [ -n "$wan" ]; then
@@ -941,7 +945,7 @@ gem_shared() {
 
 # Session $1 down: its client, which ends the session with the concentrator,
 # and its interface when no other session is on it. Its names are its own:
-# the watcher's round holds the GEM port it goes up on next.
+# sessions_sync() holds the GEM port it goes up on next.
 session_down() {
 	[ -r "$SESSIONS/$1/dev" ] || return 0
 	read -r down_dev <"$SESSIONS/$1/dev"
@@ -994,14 +998,13 @@ pd_keep() {
 	done
 }
 
-# One round of the watcher in passthrough: each session follows its GEM port,
-# and a session without its account any more goes. One session starts in a
-# round, the next a round later: an operator's concentrator refused one of two
-# sessions that authenticated at once, without saying why, and took each alone
-# (measured).
-sessions_tick() {
+# Passthrough: each session follows its GEM port, and a session without its
+# account any more goes. Sessions that start together authenticate apart, as
+# pppoed under netifd waits 3 s for each session before it (-w): an
+# operator's concentrator refused one of two sessions that authenticated at
+# once, without saying why, and took each alone (measured).
+sessions_sync() {
 	want=" $(sessions | tr '\n' ' ')"
-	started=
 	# The OLT's translations may have come since: omcid leaves the
 	# sessions' VLANs out as they now are, before the sessions move.
 	omcid_sync "$(held_want)"
@@ -1015,11 +1018,8 @@ sessions_tick() {
 			gem=$(session_gem "$n")
 			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
 				[ "$(session_dev "$n" "$gem")" != "$dev" ]; }; then
-				if [ -z "$started" ]; then
-					[ -n "$cur" ] && session_down "$n"
-					session_up "$n" "$gem"
-					started=$n
-				fi
+				[ -n "$cur" ] && session_down "$n"
+				session_up "$n" "$gem"
 			elif [ -z "$gem" ] && [ -n "$cur" ]; then
 				log "session $n: its GEM port is gone"
 				session_down "$n"
@@ -1048,14 +1048,19 @@ sessions_tick() {
 	pd_keep
 }
 
-# One round of the watcher: in router mode the WAN follows its GEM port, and
-# the DHCP server follows the name servers; in passthrough the sessions.
-tick() {
-	load
-	if [ "$(cat "$RUN/onu-mode" 2>/dev/null)" = passthrough ]; then
-		sessions_tick
+# What changed outside the settings, followed: in router mode the WAN
+# follows its GEM port, and the DHCP server the name servers; in passthrough
+# the sessions; in bridge mode omcid alone. Run twice on the same facts, it
+# changes nothing.
+sync_all() {
+	case $(cat "$RUN/onu-mode" 2>/dev/null) in
+	passthrough)
+		sessions_sync
 		return 0
-	fi
+		;;
+	router) ;;
+	*) return 0 ;;
+	esac
 	gem=$(wan_gem)
 	cur=
 	[ -r "$RUN/onu-wan" ] && read -r cur _ <"$RUN/onu-wan"
@@ -1074,14 +1079,28 @@ tick() {
 	fi
 }
 
-# The watcher is procd's service onu-watch: it outlives the shell that started
-# it, an "onu-apply reload" from a login that ends, and procd starts it again
-# if it ends.
-watch() {
-	while :; do
-		tick
-		sleep 5
+# Take $1 for this process: a symbolic link to its PID, which ln makes, or
+# fails to make, in one step. One whose process is gone is taken over. Fails
+# while a live process holds it.
+take() {
+	ln -s "$$" "$1" 2>/dev/null && return 0
+	holder=$(readlink "$1" 2>/dev/null)
+	[ -n "$holder" ] && kill -0 "$holder" 2>/dev/null && return 1
+	rm -f "$1"
+	ln -s "$$" "$1" 2>/dev/null
+}
+
+# One onu-apply at a time: the panel's reload, netifd's events, omcid's and
+# dhcp6d's changes each run one. The stick's kernel has no flock
+# (FILE_LOCKING); the lock is LOCK, held until this process ends. Without
+# /run there is nothing to lock, nor to change.
+lock() {
+	until take "$LOCK"; do
+		[ -d "$RUN" ] || exit 1
+		sleep 0.1
 	done
+	trap 'rm -f "$LOCK"' EXIT
+	trap 'exit 1' HUP INT TERM
 }
 
 # Router mode: the LAN is the host link, with its address as netifd's part
@@ -1093,12 +1112,9 @@ router_up() {
 			"$LAN_ADDRESS" | onu-net set router || log "netifd was not given the LAN"
 	fi
 	lan_dhcp
-	# The tests run the watcher's rounds themselves.
-	[ -n "${ONU_APPLY_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
 }
 
 router_down() {
-	svc_stop onu-watch
 	wan_down
 	svc_stop udhcpd
 	onu-net del router
@@ -1132,7 +1148,6 @@ pass_up() {
 	ttl_decrement false
 	# $(pass_links) is a list of names, split on purpose.
 	links_net $(pass_links)
-	[ -n "${ONU_APPLY_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
 }
 
 # The links $@ as netifd's part "links": each a VLAN on the host link, or the
@@ -1160,7 +1175,6 @@ links_net() {
 }
 
 pass_down() {
-	svc_stop onu-watch
 	sessions_down
 	links_net
 	rm -f "$RUN/onu-lan" "$RUN/onu-pass" "$RUN/onu-pass-proxy"
@@ -1240,7 +1254,12 @@ apply() {
 	esac
 	cp "$CONF" "$RUN/onu-mode.conf" 2>/dev/null
 	log "$MODE mode"
+	sync_all
 }
+
+case ${1:-} in
+start | reload | stop | identity | reidentify | iface) lock ;;
+esac
 
 case ${1:-} in
 start)
@@ -1294,11 +1313,14 @@ status)
 	done
 	exit 0
 	;;
-watch)
-	watch
-	;;
-tick)
-	tick
+sync | omcid | dhcp6d)
+	# A change told while another waits for the lock is that one's too:
+	# at most one waits, and it reads everything once it holds the lock.
+	take "$AGAIN" || exit 0
+	lock
+	rm -f "$AGAIN"
+	load
+	sync_all
 	;;
 iface)
 	load
@@ -1308,7 +1330,7 @@ netmask)
 	netmask "${2:-0}"
 	;;
 *)
-	echo "usage: onu-apply start|reload|stop|identity|reidentify|status" >&2
+	echo "usage: onu-apply start|reload|stop|identity|reidentify|status|sync" >&2
 	exit 2
 	;;
 esac

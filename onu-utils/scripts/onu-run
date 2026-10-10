@@ -17,7 +17,8 @@
 #                   /run/omcid.mode: with the OLT's bridge ("bridge") or
 #                   without it ("router", omcid -r), its output appended to
 #                   /run/omcid.log; one started again after a crash takes
-#                   up the mode the stick is in
+#                   up the mode the stick is in. It runs onu-apply after each
+#                   change it publishes (omcid -x)
 #   onu-run ntp     ntpd, which sets the clock and keeps it, from the server
 #                   that the stick's settings name (NTP_SERVER of
 #                   /run/onu-system) or, without one, from the router at the
@@ -51,9 +52,9 @@ fi
 
 if [ "${1:-}" = omcid ]; then
 	if [ "$(cat "$RUN/omcid.mode" 2>/dev/null)" = router ]; then
-		exec omcid -r >>"$RUN/omcid.log" 2>&1
+		exec omcid -r -x /usr/sbin/onu-apply >>"$RUN/omcid.log" 2>&1
 	fi
-	exec omcid >>"$RUN/omcid.log" 2>&1
+	exec omcid -x /usr/sbin/onu-apply >>"$RUN/omcid.log" 2>&1
 fi
 
 field() {

@@ -187,10 +187,13 @@ there, and names it by its whole path where procd starts it.
    ONT, which is no hop, and the concentrator is the router's first. The first
    session that carries IPv6 hands its delegated prefix on in the same way,
    through ``dhcp6d`` (see ``dhcp6d/README.rst``), once its IPv6 is up: the
-   link to the router gets IPv6, and the stick forwards it. A watcher makes
+   link to the router gets IPv6, and the stick forwards it. onu-apply makes
    each session an interface of netifd, ``sesN`` of the protocol ``pppoed``
-   (see ``pppoed/README.rst``), once the OLT has provisioned its GEM port:
-   netifd runs pppoed, puts what the session brought in place and starts
+   (see ``pppoed/README.rst``), once the OLT has provisioned its GEM port,
+   which omcid tells it of: omcid runs ``onu-apply omcid`` after each change
+   of the GEM ports or of the VLANs they carry (its ``-x``), as dhcp6d runs
+   ``onu-apply dhcp6d`` when the host's binding changes, which onu-apply
+   keeps in the configuration store. netifd runs pppoed, puts what the session brought in place and starts
    pppoed again when its link ends, each session 3 s after the one before,
    as a concentrator may refuse one of two sessions that authenticate at
    once. netifd tells onu-apply when an interface comes up or goes down
@@ -209,6 +212,12 @@ there, and names it by its whole path where procd starts it.
       onu-apply identity   # at boot: the identity to the PON driver, PON up
       onu-apply reidentify # after the identity changed: register again
       onu-apply iface      # netifd's, for an interface that came up or down
+      onu-apply sync       # follow what changed outside the settings
+
+   One ``onu-apply`` at a time changes the stick, and the others wait: the
+   lock is ``/run/onu-apply.lock``, a symbolic link to the PID of its holder,
+   as the stick's kernel has no ``flock``. A ``sync`` told while another
+   waits leaves the change to that one.
 
    ``identity`` gives the PON driver the serial number and PLOAM password of
    ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and
@@ -260,11 +269,11 @@ there, and names it by its whole path where procd starts it.
    whose line is what ``start`` takes after the name: procd starts what is
    new, ends what has no file any more, starts again only what changed, and
    leaves the rest alone (ADR 0014). ``onu-apply`` keeps its programs so, in
-   ``/run/onu-svc.d``, as the service ``onu``: omcid, its watcher, dhcp6d and
-   udhcpd. A sync holds the directory while it reads it and tells procd, so
-   that the last one sends what the directory holds then. ``list`` tells each
-   service's or instance's state and how often procd started it again (a
-   procd patch, ``br2-external/package/procd``)::
+   ``/run/onu-svc.d``, as the service ``onu``: omcid, dhcp6d, udhcpd and,
+   for the bench's router, udhcpc. A sync holds the directory while it reads
+   it and tells procd, so that the last one sends what the directory holds
+   then. ``list`` tells each service's or instance's state and how often
+   procd started it again (a procd patch, ``br2-external/package/procd``)::
 
       onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]
       onu-svc sync NAME DIR
