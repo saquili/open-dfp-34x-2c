@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/prctl.h>
 
 #include "nproto.h"
 #include "pppoed.h"
@@ -251,6 +252,8 @@ static int cmd_up(int argc, char **argv)
 	bool defaultroute = false, pass_on = false, take_payload = false;
 	bool want_ipv4 = true, want_ipv6 = true;
 	struct sigaction sa = { .sa_handler = on_stop };
+	struct sigaction ign = { .sa_handler = SIG_IGN };
+	pid_t parent = getppid();
 	struct pppoe_session s;
 	struct ppp_link l;
 	int fd, err, opt;
@@ -259,6 +262,12 @@ static int cmd_up(int argc, char **argv)
 	sigaction(SIGTERM, &sa, NULL);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL);
+	/*
+	 * A line to a log whose reader is gone fails instead of ending the
+	 * process before the session ends as a peer expects.
+	 */
+	sigemptyset(&ign.sa_mask);
+	sigaction(SIGPIPE, &ign, NULL);
 
 	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DPM46vN:o:w:")) != -1) {
 		switch (opt) {
@@ -319,6 +328,17 @@ static int cmd_up(int argc, char **argv)
 	}
 	if (!ifname || !tries || !timeout || (!want_ipv4 && !want_ipv6))
 		return print_usage();
+	/*
+	 * Under netifd the session ends with netifd, as on its SIGTERM: a
+	 * netifd that procd starts again opens a session of its own, and one
+	 * left behind would stay open beside it.
+	 */
+	if (netifd) {
+		if (prctl(PR_SET_PDEATHSIG, SIGTERM))
+			PPPOED_WARN("the session may outlive netifd: %s", strerror(errno));
+		if (getppid() != parent)
+			pppoed_stop = 1;
+	}
 	facts_clear(facts);
 
 	/* Sessions that ended together start again apart. */

@@ -58,5 +58,19 @@ rc=$?
 check '[ $rc -ne 0 ] && [ -z "$(ls "$dir")" ]'
 rm -rf "$dir"
 
+echo "up under netifd: the session ends with netifd, and only then"
+dir=$(mktemp -d)
+gone() {
+	! [ -d "/proc/$1" ] || grep -q "^State:.*Z" "/proc/$1/status"
+}
+# Each parent ends after a second; the children would wait five.
+sh -c "\"$P\" up -N ses1 -i nosuch0 -w 5 >/dev/null 2>&1 & echo \$! >\"$dir/netifd\"; sleep 1"
+sh -c "\"$P\" up -i nosuch0 -w 5 >/dev/null 2>&1 & echo \$! >\"$dir/alone\"; sleep 1"
+sleep 1
+check 'gone "$(cat "$dir/netifd")"'
+check '! gone "$(cat "$dir/alone")"'
+kill "$(cat "$dir/alone")" 2>/dev/null
+rm -rf "$dir"
+
 echo "test_proto: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]
