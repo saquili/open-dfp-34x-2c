@@ -21,6 +21,13 @@ REUSE tool, pinned to a version, and the device-tree schema checker, which is
 the latest release of dtschema (pin it if a release disagrees with the
 kernel's bindings).
 
+The jobs run on the project's own runner, a self-hosted one with the labels
+every such runner has (``self-hosted``, ``linux``, ``x64``): a Linux x86-64
+host with Docker, which starts each job's container.
+It runs one job at a time, so the jobs of a workflow wait their turn. Its
+workspace stays between runs; ``actions/checkout`` cleans it of everything the
+repository does not hold, so a build starts from nothing.
+
 ``gates.yml`` -- on every change
 ================================
 

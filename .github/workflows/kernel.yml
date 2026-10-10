@@ -45,7 +45,7 @@ env:
 jobs:
   build:
     name: build (${{ matrix.config }})
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     # The pinned host build environment: Debian 13, by digest.
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 30
@@ -80,7 +80,7 @@ jobs:
         run: .github/scripts/kernel-series check-log build.log
 
   checkpatch:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     env:
@@ -133,7 +133,7 @@ jobs:
             ${CHECKPATCH_IGNORE:+--ignore "$CHECKPATCH_IGNORE"} "$RUNNER_TEMP"/patches/*.patch
 
   dt-bindings:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 45
     steps:
@@ -178,7 +178,7 @@ jobs:
           fi
 
   docs:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, linux, x64]
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 45
     env:
