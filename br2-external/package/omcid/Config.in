@@ -3,8 +3,13 @@
 
 config BR2_PACKAGE_OMCID
 	bool "omcid"
+	depends on !BR2_STATIC_LIBS # libubox, ubus
+	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # ubus
+	select BR2_PACKAGE_LIBUBOX
+	select BR2_PACKAGE_UBUS
 	help
 	  The OMCI daemon of the ONU, from omcid/ in this repository:
 	  it answers the OLT and programs the data path through the
-	  kernel's interfaces. Installs /usr/sbin/omcid and the tools
-	  omcitap and omcivlan.
+	  kernel's interfaces, and publishes what the OLT set up on
+	  ubus. Installs /usr/sbin/omcid and the tools omcitap and
+	  omcivlan.

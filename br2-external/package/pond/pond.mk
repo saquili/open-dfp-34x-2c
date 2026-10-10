@@ -16,7 +16,7 @@ POND_SITE_METHOD = local
 POND_LICENSE = GPL-2.0-only, BSD-2-Clause (micro-ecc in Mongoose), MIT, ISC (packages of the panel)
 POND_LICENSE_FILES = LICENSES/preferred/GPL-2.0-only.txt LICENSES/preferred/BSD-2-Clause.txt
 POND_POST_RSYNC_HOOKS += OPEN_DFP_34X_2C_COPY_LICENSES
-POND_DEPENDENCIES = libmnl libubox ubus host-nodejs
+POND_DEPENDENCIES = json-c libmnl libubox ubus host-nodejs
 POND_NPM = PATH=$(HOST_DIR)/bin:$$PATH npm_config_cache=$(@D)/.npm \
 	npm_config_update_notifier=false npm --prefix $(@D)/web
 
