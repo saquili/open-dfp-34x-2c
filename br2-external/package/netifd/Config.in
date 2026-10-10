@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_NETIFD
+	bool "netifd"
+	depends on !BR2_STATIC_LIBS # libubox, libuci, ubus
+	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # json-c, ubus
+	select BR2_PACKAGE_JSON_C
+	select BR2_PACKAGE_LIBNL_TINY
+	select BR2_PACKAGE_LIBUBOX
+	select BR2_PACKAGE_LIBUCI
+	select BR2_PACKAGE_UBUS
+	help
+	  The network interface daemon of OpenWrt, from the fork in
+	  netifd/ of this repository: it brings up the links, VLANs
+	  and bridges and gives them their addresses and routes, as
+	  its configuration says, and takes what other programs report
+	  over ubus.

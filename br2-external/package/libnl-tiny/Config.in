@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_LIBNL_TINY
+	bool "libnl-tiny"
+	help
+	  OpenWrt's small netlink library, a subset of libnl, which
+	  netifd is written against. It is built for linking only:
+	  netifd takes it in statically, and the image holds no copy
+	  of its own.
+
+	  https://git.openwrt.org/?p=project/libnl-tiny.git

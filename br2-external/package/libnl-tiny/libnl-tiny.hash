@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# Computed locally: the archive the build system makes of the pinned commit,
+# and nl.c, whose header carries the licence.
+sha256  082fe957463105245c2521e39f8192e7e283a6d91c4f9e29d615618b12d155ff  libnl-tiny-40493a655d8caa2ccf5206dde1e733abe2920432-git4.tar.gz
+sha256  9ea3e9d94618d080bc24aabdcd2a735d8c48d4040c1c38ffaac1d99e2af8d7f3  nl.c
