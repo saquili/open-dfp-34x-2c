@@ -553,7 +553,8 @@ pd_up() {
 	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
 	# $table is an option and its value, split on purpose.
 	svc_start "dhcp6d$1" -o "$RUN/dhcp6d.log" -- \
-		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" -x "$SELF" $table
+		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" -x "$SELF" \
+		-n "ses$1" $table
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
 

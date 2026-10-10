@@ -373,7 +373,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	logged "^dhcp6d" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -x $MODE_SCRIPT$"'
+check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -x $MODE_SCRIPT -n ses2$"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
 check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=1"'
@@ -706,8 +706,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ "$(grep -c "^dhcp6d" "$LOG")" = 2 ] && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/onu-pd1 -x $MODE_SCRIPT$"'
-check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -x $MODE_SCRIPT -t 102$"'
+check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/onu-pd1 -x $MODE_SCRIPT -n ses1$"'
+check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -x $MODE_SCRIPT -n ses2 -t 102$"'
 check 'has links "device: type=8021q ifname=sfp vid=37 name=lan37 rpfilter=strict ipv6=1"'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
