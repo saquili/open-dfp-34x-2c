@@ -61,10 +61,12 @@ umask 022
 # name, and its management VLAN and address, which replace the image's.
 # Each value is read as data, never run.
 SYS_HOSTNAME=
+SYS_LOG_SERVER=
 BOARD_MGMT_VLAN=$MGMT_VLAN
 BOARD_MGMT_ADDRESS=$MGMT_ADDRESS
 if [ -r /run/onu-system ]; then
 	SYS_HOSTNAME=$(sed -n 's/^HOSTNAME=//p' /run/onu-system)
+	SYS_LOG_SERVER=$(sed -n 's/^LOG_SERVER=//p' /run/onu-system)
 	value=$(sed -n 's/^MGMT_VLAN=//p' /run/onu-system)
 	[ -n "$value" ] && MGMT_VLAN=$value
 	value=$(sed -n 's/^MGMT_ADDRESS=//p' /run/onu-system)
@@ -138,6 +140,15 @@ onu-net wait mgmt "$MGMT_ADDRESS" 10 || {
 	ip link set mgmt up || warn "mgmt does not come up"
 }
 
+# The system log goes to a server of the host side as well when the settings
+# name one (LOG_SERVER), now that the management address is there to send
+# from; the stick keeps its own copy. procd starts the log again with these
+# arguments, which the boot's lacked.
+if [ -n "$SYS_LOG_SERVER" ]; then
+	onu-svc start syslogd -- /sbin/syslogd -n -O /run/messages -s 64 -L -R "$SYS_LOG_SERVER" ||
+		warn "the system log stays on the stick"
+fi
+
 # The management VLAN stays between the host side and the stick, so that the
 # network behind the PON never sees it and never reaches it: on sfp's ingress
 # the switch sends its frames to the CPU alone, which keeps them from the PON,
@@ -166,6 +177,12 @@ onu-svc start ssh -- /usr/sbin/onu-run ssh || {
 	onu-run ssh &
 }
 onu-svc start pond -- /usr/sbin/onu-run pond || warn "no status daemon"
+
+# The time, which the stick has no clock of its own for and the OLT does not
+# give: ntpd sets the clock from the router at the other end of the
+# management link, or from the server the settings name (NTP_SERVER), and
+# keeps it, through the host side alone (onu-run).
+onu-svc start ntp -l -- /usr/sbin/onu-run ntp || warn "the clock is not set"
 
 # The identity to the PON driver, which takes it before the PON comes up.
 onu-mode identity || warn "the PON stays down"

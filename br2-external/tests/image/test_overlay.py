@@ -87,9 +87,22 @@ class BootScript(unittest.TestCase):
                  'onu-mgmt start "$MGMT_VLAN"', "onu-svc start netifd -- /usr/sbin/netifd ",
                  'onu-net wait mgmt "$MGMT_ADDRESS" 10',
                  "onu-svc start ssh -- /usr/sbin/onu-run ssh",
-                 "onu-svc start pond -- /usr/sbin/onu-run pond"]
+                 "onu-svc start pond -- /usr/sbin/onu-run pond",
+                 "onu-svc start ntp -l -- /usr/sbin/onu-run ntp"]
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))
+
+    def test_the_log_goes_to_a_server_once_the_management_address_is_up(self):
+        # Only when the settings name one, and with a copy kept on the stick.
+        text = read(RCS)
+        remote = 'syslogd -n -O /run/messages -s 64 -L -R "$SYS_LOG_SERVER"'
+        self.assertIn(remote, text)
+        self.assertLess(text.index('onu-net wait mgmt "$MGMT_ADDRESS" 10'), text.index(remote))
+        self.assertLess(text.index("SYS_LOG_SERVER=$(sed -n 's/^LOG_SERVER=//p' /run/onu-system)"),
+                        text.index(remote))
+        self.assertIn('if [ -n "$SYS_LOG_SERVER" ]; then', text)
+        # The ntpd of the image is a client alone: the stick serves no time.
+        self.assertNotIn("FEATURE_NTPD_SERVER", enabled_applets())
 
     def test_without_procd_the_ssh_server_and_netifd_still_start(self):
         text = read(RCS)
@@ -289,7 +302,8 @@ class Inittab(unittest.TestCase):
     def test_the_applets_it_runs_are_built_and_init_is_procd(self):
         symbols = enabled_applets()
         for symbol in ("REBOOT", "HALT", "POWEROFF", "ASH", "SH_IS_ASH", "GETTY", "LOGIN",
-                       "FEATURE_SHADOWPASSWDS", "SYSLOGD", "KLOGD"):
+                       "FEATURE_SHADOWPASSWDS", "SYSLOGD", "KLOGD", "FEATURE_REMOTE_LOG",
+                       "NTPD"):
             self.assertIn(symbol, symbols)
         # procd is process 1; BusyBox's reboot, halt and poweroff signal it.
         self.assertNotIn("INIT", symbols)
