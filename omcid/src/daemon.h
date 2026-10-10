@@ -6,6 +6,7 @@
 #ifndef OMCID_DAEMON_H
 #define OMCID_DAEMON_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -20,6 +21,22 @@
  */
 int omcid_run(int argc, char **argv, int rx_fd, int tx_fd,
 	      const char *ctl_path);
+
+/**
+ * omcid_keep() - Keep the MIB in a file, and take it up again at the start.
+ * @path: the file, or NULL to keep nothing
+ *
+ * The daemon replaces the file whole after each request of the OLT that may
+ * change what it set up, and when it stops. A daemon that starts and finds
+ * one it can go on from takes the MIB, the time of day and the performance
+ * monitoring intervals from it and programs the data path again, and the
+ * OLT sees no new ONU. A file it cannot go on from is left for the next
+ * change to replace, and the daemon starts afresh. omcid_run() takes the
+ * file as -m.
+ *
+ * Return: false, keeping nothing, for a path longer than the daemon takes.
+ */
+bool omcid_keep(const char *path);
 
 struct omci_transport;
 

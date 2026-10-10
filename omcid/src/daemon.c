@@ -9,6 +9,7 @@
 
 #include <poll.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -73,17 +74,129 @@ static void change_mode(struct omci_engine *eng)
 	omci_engine_reprogram(eng);
 }
 
+/*
+ * The file the MIB is kept in, or NULL, and room for what is kept and the
+ * name of the new file that replaces it.
+ */
+static const char *g_keep;
+static uint8_t g_kept[OMCI_ENGINE_SAVE_MAX + 1u];
+static char g_keep_new[256];
+
+bool omcid_keep(const char *path)
+{
+	if (path != NULL &&
+	    strlen(path) + sizeof(".new") > sizeof(g_keep_new)) {
+		g_keep = NULL;
+		return false;
+	}
+	g_keep = path;
+	if (path != NULL)
+		(void)snprintf(g_keep_new, sizeof(g_keep_new), "%s.new", path);
+	return true;
+}
+
+/*
+ * Take up the MIB the daemon kept. Return: true when it did, false when
+ * nothing was kept or what was cannot be gone on from.
+ */
+static bool take_up(struct omci_engine *eng, const struct omci_mib *mib)
+{
+	if (g_keep == NULL)
+		return false;
+
+	const int fd = open(g_keep, O_RDONLY | O_CLOEXEC);
+
+	if (fd < 0) {
+		if (errno == ENOENT)
+			OMCI_INFO("mib: nothing kept in %s yet", g_keep);
+		else
+			OMCI_WARN("mib: cannot read %s: %s", g_keep,
+				  strerror(errno));
+		return false;
+	}
+
+	size_t len = 0;
+	ssize_t n;
+
+	do {
+		n = read(fd, g_kept + len, sizeof(g_kept) - len);
+		if (n > 0)
+			len += (size_t)n;
+	} while ((n > 0 && len < sizeof(g_kept)) || (n < 0 && errno == EINTR));
+
+	const int err = errno;
+
+	(void)close(fd);
+	if (n < 0) {
+		OMCI_WARN("mib: cannot read %s: %s", g_keep, strerror(err));
+		return false;
+	}
+
+	const enum omci_status rc = omci_engine_load(eng, g_kept, len);
+
+	if (rc != OMCI_OK) {
+		OMCI_WARN("mib: %s is not one this daemon can go on from (%s)",
+			  g_keep, omci_status_str(rc));
+		return false;
+	}
+	OMCI_INFO("mib taken up again from %s: %zu instances", g_keep,
+		  omci_mib_count(mib));
+	return true;
+}
+
+/* Keep the MIB: a new file, written whole, takes the old one's name. */
+static void keep_mib(const struct omci_engine *eng)
+{
+	size_t len = 0;
+
+	if (g_keep == NULL)
+		return;
+	(void)!omci_engine_save(eng, g_kept, sizeof(g_kept), &len);
+
+	const int fd = open(g_keep_new,
+			    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+
+	if (fd < 0) {
+		OMCI_WARN("mib: cannot keep it in %s: %s", g_keep_new,
+			  strerror(errno));
+		return;
+	}
+
+	bool whole = true;
+
+	for (size_t at = 0; at < len && whole;) {
+		const ssize_t n = write(fd, g_kept + at, len - at);
+
+		if (n > 0)
+			at += (size_t)n;
+		else
+			whole = n < 0 && errno == EINTR;
+	}
+
+	const int err = errno;
+
+	(void)close(fd);
+	if (!whole || rename(g_keep_new, g_keep) != 0) {
+		OMCI_WARN("mib: cannot keep it in %s: %s", g_keep,
+			  strerror(whole ? errno : err));
+		(void)unlink(g_keep_new);
+		return;
+	}
+	OMCI_DEBUG("mib kept in %s: %zu bytes", g_keep, len);
+}
+
 static void print_usage(const char *argv0)
 {
 	fprintf(stderr,
 		"omcid " OMCID_VERSION " - the OMCI daemon of the ONU\n"
 		"\n"
-		"usage: %s [-v] [-p] [-t N] [-h]\n"
+		"usage: %s [-v] [-p] [-t N] [-m FILE] [-h]\n"
 		"  -v  log more; may be given more than once\n"
 		"  -p  frames come on the standard input and answers go to the\n"
 		"      standard output (the default of this build)\n"
 		"  -t  hold the clock at second N, so that the same frames give\n"
 		"      the same answers however fast they come\n"
+		"  -m  keep the MIB in FILE, and take it up again at the start\n"
 		"  -h  show this text\n"
 		"\n"
 		"Log lines go to the standard error, so recorded frames can be\n"
@@ -157,6 +270,7 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 
 	g_stop = 0;
 	g_clock_held = false;
+	(void)omcid_keep(NULL);
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-h") == 0) {
@@ -180,6 +294,17 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd, const char *ctl_path)
 		if (strcmp(argv[i], "-v") == 0) {
 			if (verbosity < OMCI_LOG_TRACE)
 				verbosity++;
+			continue;
+		}
+		if (strcmp(argv[i], "-m") == 0) {
+			if (i + 1 == argc || !omcid_keep(argv[i + 1])) {
+				fprintf(stderr,
+					"omcid: -m takes the path of a file, of at most %zu characters\n",
+					sizeof(g_keep_new) - sizeof(".new"));
+				print_usage(argv[0]);
+				return EXIT_FAILURE;
+			}
+			i++;
 			continue;
 		}
 		fprintf(stderr, "omcid: unknown argument '%s'\n", argv[i]);
@@ -259,13 +384,21 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 	}
 	OMCI_INFO("hw: %s", omci_hw()->source());
 
-	/* The MIB starts with the ONU's own instances. */
-	rc = omci_me_defaults_apply(mib, &caps);
-	if (rc != OMCI_OK) {
-		OMCI_ERR("mib population failed: %s", omci_status_str(rc));
-		goto out_engine;
+	/*
+	 * The MIB starts as the daemon kept it, which the OLT set up, or with
+	 * the ONU's own instances.
+	 */
+	if (!take_up(eng, mib)) {
+		rc = omci_me_defaults_apply(mib, &caps);
+		if (rc != OMCI_OK) {
+			OMCI_ERR("mib population failed: %s",
+				 omci_status_str(rc));
+			goto out_engine;
+		}
+		OMCI_INFO("mib ready: %zu instances", omci_mib_count(mib));
 	}
-	OMCI_INFO("mib ready: %zu instances", omci_mib_count(mib));
+
+	uint32_t kept = omci_engine_changes(eng);
 
 	/* The control socket is a convenience: the OLT is served without it. */
 	if (omci_ctl_open(&ctl, ctl_path, mib, &counters) != OMCI_OK)
@@ -366,10 +499,15 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 			rejected++;
 		counters.handled = handled;
 		counters.rejected = rejected;
+		if (omci_engine_changes(eng) != kept) {
+			kept = omci_engine_changes(eng);
+			keep_mib(eng);
+		}
 	}
 
 	OMCI_INFO("stopping: %zu frames handled, %zu rejected", handled,
 		  rejected);
+	keep_mib(eng);
 	status = EXIT_SUCCESS;
 
 out_engine:

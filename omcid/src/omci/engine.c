@@ -211,6 +211,9 @@ struct omci_engine {
 		bool on;
 		uint64_t since;
 	} arc[ARRAY_SIZE(g_arc)];
+
+	/* changes with every request of the OLT that may change its set-up */
+	uint32_t changes;
 };
 
 static struct omci_engine g_engine;
@@ -499,17 +502,22 @@ static void keep_levels(struct omci_engine *eng);
  * itself, with the optical levels last read, and the hardware is brought
  * back to that state.
  */
-static void handle_mib_reset(struct omci_engine *eng,
-			     const struct omci_frame *req)
+static void forget_transfers(struct omci_engine *eng)
 {
-	reply(eng, req, RESULT_OK, NULL, 0);
-
 	omci_wire_fill(eng->resp_cache, 0, sizeof(eng->resp_cache));
 	omci_wire_fill(eng->resp_next, 0, sizeof(eng->resp_next));
 	omci_wire_fill(eng->get_next, 0, sizeof(eng->get_next));
 	eng->upload.active = false;
 	eng->upload.units = 0;
 	eng->upload.row_count = 0;
+}
+
+static void handle_mib_reset(struct omci_engine *eng,
+			     const struct omci_frame *req)
+{
+	reply(eng, req, RESULT_OK, NULL, 0);
+
+	forget_transfers(eng);
 
 	omci_pm_forget_all(eng->pm);
 	omci_alarm_reset_sequence(eng->alarm);
@@ -548,6 +556,105 @@ void omci_engine_reprogram(struct omci_engine *eng)
 	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
 	omci_filter_forget();
 	(void)omci_filter_apply(eng->mib);
+}
+
+uint32_t omci_engine_changes(const struct omci_engine *eng)
+{
+	return eng != NULL ? eng->changes : 0u;
+}
+
+/*
+ * What the engine keeps across a start again: a header, the clock that
+ * Synchronize time set and where the intervals stand, then the MIB
+ * (omci_mib_save()).
+ *
+ *   "OENG", version (2), 0 (2), the clock's time of day (8) and monotonic
+ *   time (8) at the synchronisation, whether it is set (1), whether an
+ *   interval runs (1), the number of the last interval closed (1), 0 (1),
+ *   the second the interval in progress ends (8)
+ */
+#define KEEP_MAGIC 0x4f454e47u
+#define KEEP_VERSION 1u
+#define KEEP_HEADER 36u
+static_assert(KEEP_HEADER + OMCI_MIB_SAVE_MAX == OMCI_ENGINE_SAVE_MAX,
+	      "the engine's bytes are its header and the MIB's");
+
+static void be64_store(uint8_t *p, uint64_t v)
+{
+	omci_be32_store(p, (unsigned int)(v >> 32));
+	omci_be32_store(p + 4, (unsigned int)v);
+}
+
+static uint64_t be64(const uint8_t *p)
+{
+	return (uint64_t)omci_be32(p) << 32 | omci_be32(p + 4);
+}
+
+enum omci_status omci_engine_save(const struct omci_engine *eng, uint8_t *out,
+				  size_t cap, size_t *out_len)
+{
+	if (eng == NULL || out == NULL || out_len == NULL)
+		return OMCI_ERR_INVAL;
+	if (cap < KEEP_HEADER)
+		return OMCI_ERR_TRUNCATED;
+
+	struct omci_pm_schedule pm;
+	size_t mib_len = 0;
+	const enum omci_status rc = omci_mib_save(eng->mib, out + KEEP_HEADER,
+						  cap - KEEP_HEADER, &mib_len);
+
+	if (rc != OMCI_OK)
+		return rc;
+	omci_pm_schedule_get(eng->pm, &pm);
+	omci_wire_fill(out, 0, KEEP_HEADER);
+	omci_be32_store(out, KEEP_MAGIC);
+	omci_be16_store(out + 4, KEEP_VERSION);
+	be64_store(out + 8, eng->clock.wall_at_sync);
+	be64_store(out + 16, eng->clock.mono_at_sync);
+	out[24] = eng->clock.set;
+	out[25] = pm.started;
+	out[26] = pm.interval_end_time;
+	be64_store(out + 28, pm.next_end);
+	*out_len = KEEP_HEADER + mib_len;
+	return OMCI_OK;
+}
+
+enum omci_status omci_engine_load(struct omci_engine *eng, const uint8_t *in,
+				  size_t len)
+{
+	if (eng == NULL || in == NULL)
+		return OMCI_ERR_INVAL;
+
+	enum omci_status rc;
+
+	if (len < KEEP_HEADER)
+		rc = OMCI_ERR_TRUNCATED;
+	else if (omci_be32(in) != KEEP_MAGIC ||
+		 omci_be16(in + 4) != KEEP_VERSION)
+		rc = OMCI_ERR_PROTO;
+	else
+		rc = omci_mib_load(eng->mib, in + KEEP_HEADER,
+				   len - KEEP_HEADER);
+	if (rc != OMCI_OK) {
+		(void)omci_mib_reset(eng->mib);
+		return rc;
+	}
+
+	const struct omci_pm_schedule pm = {
+		.started = in[25] != 0u,
+		.next_end = be64(in + 28),
+		.interval_end_time = in[26],
+	};
+
+	forget_transfers(eng);
+	omci_pm_forget_all(eng->pm);
+	omci_pm_schedule_set(eng->pm, &pm);
+	eng->clock.wall_at_sync = be64(in + 8);
+	eng->clock.mono_at_sync = be64(in + 16);
+	eng->clock.set = in[24] != 0u;
+	omci_vlan_forget_in_force();
+	omci_engine_reprogram(eng);
+	return OMCI_OK;
 }
 
 int omci_engine_mcast_fd(const struct omci_engine *eng)
@@ -2027,6 +2134,10 @@ enum omci_status omci_engine_rx(struct omci_engine *eng,
 		handle_test(eng, &req);
 		break;
 	}
+	if (req.msg_type == MT_MIB_RESET || req.msg_type == MT_CREATE ||
+	    req.msg_type == MT_DELETE || req.msg_type == MT_SET ||
+	    req.msg_type == MT_SYNC_TIME)
+		eng->changes++;
 
 answered:
 

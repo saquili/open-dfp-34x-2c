@@ -99,7 +99,7 @@ the host link ``sfp``, and tc flower rules for the VLAN rules, the
 multicast traps, tags and counts and the bridge port filters, which the
 switch carries out::
 
-   omcid [-d DEVICE] [-r] [-x PROGRAM] [-v]...
+   omcid [-d DEVICE] [-m FILE] [-r] [-x PROGRAM] [-v]...
 
 ``-r`` is router mode: the stick routes the subscriber's traffic itself. The
 daemon answers the OLT as usual, but leaves the bridge and the VLAN rules that
@@ -131,3 +131,17 @@ its service when the OLT moves it to another VID or another GEM port.
 the argument ``omcid`` after it replaces either file and after it makes or
 takes away a GEM interface, and does not wait for it. On the stick the
 program is ``onu-apply``, which follows the change at once.
+
+``-m FILE`` keeps the MIB in a file, so that a daemon started again goes on
+as the OLT set it up, and the OLT sees no new ONU. The daemon replaces the
+file whole after each request that may change what the OLT set up (MIB reset,
+Create, Delete, Set and Synchronize time) and when it stops. One that starts
+and finds the file takes up from it the MIB, the time of day and where the
+performance monitoring intervals stand, and programs the data path again
+from the MIB: what it finds in the kernel as the MIB has it, the GEM
+interfaces, the T-CONTs' Alloc-IDs and the bridge, stays as it is. What a
+start again loses is the counts of the interval in progress and the alarms
+judged so far, which it judges anew. A file of another layout, such as one
+of another build, it does not take: it starts afresh and replaces the file
+at the next change. On the stick the file is ``/run/omcid.mib``, which goes
+with a restart of the stick, as the OLT's set-up does.

@@ -21,10 +21,13 @@
 static void print_help(FILE *f, const char *prog)
 {
 	fprintf(f,
-		"usage: %s [-d DEVICE] [-r] [-x PROGRAM] [-v]... [-h]\n"
+		"usage: %s [-d DEVICE] [-m FILE] [-r] [-x PROGRAM] [-v]... [-h]\n"
 		"Answer the OLT on the OMCI port of the ONU.\n"
 		"\n"
 		"  -d DEVICE  the OMCI port (default %s)\n"
+		"  -m FILE    keep the MIB in FILE, and take it up again at the\n"
+		"             start, so that a daemon started again goes on as\n"
+		"             the OLT set it up\n"
 		"  -r         router mode: the OLT's bridge and VLAN rules are not\n"
 		"             applied, and the GEM interfaces stay out of any bridge;\n"
 		"             SIGUSR1 puts a running daemon in router mode, SIGUSR2\n"
@@ -43,10 +46,18 @@ int main(int argc, char **argv)
 	int level = OMCI_LOG_INFO;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "d:rx:vh")) != -1) {
+	while ((opt = getopt(argc, argv, "d:m:rx:vh")) != -1) {
 		switch (opt) {
 		case 'd':
 			device = optarg;
+			break;
+		case 'm':
+			if (!omcid_keep(optarg)) {
+				fprintf(stderr,
+					"%s: -m %s: the path is too long\n",
+					argv[0], optarg);
+				return EXIT_FAILURE;
+			}
 			break;
 		case 'r':
 			omci_hw_kernel_router(true);

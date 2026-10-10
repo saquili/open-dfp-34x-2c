@@ -100,6 +100,37 @@ void omci_pm_synchronize(struct omci_pm *pm, uint64_t now_sec,
 			 unsigned int offset_sec);
 
 /**
+ * struct omci_pm_schedule - Where the intervals stand.
+ * @started: whether an interval runs
+ * @next_end: the monotonic second the interval in progress ends
+ * @interval_end_time: the number of the last interval that closed
+ */
+struct omci_pm_schedule {
+	bool started;
+	uint64_t next_end;
+	uint8_t interval_end_time;
+};
+
+/**
+ * omci_pm_schedule_get() - Where the intervals stand.
+ * @pm: the state
+ * @out: the schedule
+ */
+void omci_pm_schedule_get(const struct omci_pm *pm,
+			  struct omci_pm_schedule *out);
+
+/**
+ * omci_pm_schedule_set() - Have the intervals go on where they stood.
+ * @pm: the state
+ * @in: the schedule, as omci_pm_schedule_get() gave it
+ *
+ * The counts start from zero; the intervals end when they did before, as
+ * Synchronize time placed them.
+ */
+void omci_pm_schedule_set(struct omci_pm *pm,
+			  const struct omci_pm_schedule *in);
+
+/**
  * omci_pm_changed() - Take what the OLT created or set.
  * @pm: the state
  * @class_id: the class

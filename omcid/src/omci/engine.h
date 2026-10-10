@@ -79,6 +79,60 @@ void omci_engine_tap_set(struct omci_engine *eng,
 void omci_engine_reprogram(struct omci_engine *eng);
 
 /**
+ * omci_engine_changes() - A number that changes with every request of the
+ *	OLT that may change what it set up.
+ * @eng: the engine
+ *
+ * MIB reset, Create, Delete, Set and Synchronize time change it, whether
+ * they succeed or not; a request refused before it is carried out does
+ * not.
+ *
+ * Return: the number.
+ */
+__must_check uint32_t omci_engine_changes(const struct omci_engine *eng);
+
+/* The most bytes omci_engine_save() writes. */
+#define OMCI_ENGINE_SAVE_MAX (36u + OMCI_MIB_SAVE_MAX)
+
+/**
+ * omci_engine_save() - Write what the engine needs to go on after the
+ *	daemon starts again.
+ * @eng: the engine
+ * @out: where the bytes go
+ * @cap: room in @out; %OMCI_ENGINE_SAVE_MAX is always enough
+ * @out_len: how many bytes were written
+ *
+ * The bytes hold the MIB, the time of day that Synchronize time set and
+ * where the performance monitoring intervals stand. The time is that of
+ * the monotonic clock, which a daemon started again on the same system
+ * goes on with.
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL, or %OMCI_ERR_TRUNCATED when @cap is
+ * too small.
+ */
+__must_check enum omci_status omci_engine_save(const struct omci_engine *eng,
+					       uint8_t *out, size_t cap,
+					       size_t *out_len);
+
+/**
+ * omci_engine_load() - Go on from what omci_engine_save() wrote.
+ * @eng: the engine
+ * @in: the bytes
+ * @len: their number
+ *
+ * The MIB, the time of day and the intervals become what they were, every
+ * read in progress ends, and the data path is programmed again from the
+ * MIB. Nothing is sent to the OLT: to it, the daemon never stopped. The
+ * counts of the interval in progress start from zero.
+ *
+ * Return: %OMCI_OK; %OMCI_ERR_INVAL; %OMCI_ERR_PROTO for bytes that are not
+ * an engine's of this daemon; %OMCI_ERR_TRUNCATED for bytes that end too
+ * soon; or the error of omci_mib_load(). After an error the MIB is empty.
+ */
+__must_check enum omci_status omci_engine_load(struct omci_engine *eng,
+					       const uint8_t *in, size_t len);
+
+/**
  * omci_engine_mcast_fd() - The descriptor the multicast agent waits on.
  * @eng: the engine
  *

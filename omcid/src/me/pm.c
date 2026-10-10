@@ -1208,6 +1208,21 @@ void omci_pm_synchronize(struct omci_pm *pm, uint64_t now_sec,
 		       offset_sec % OMCI_PM_INTERVAL_SEC;
 }
 
+void omci_pm_schedule_get(const struct omci_pm *pm,
+			  struct omci_pm_schedule *out)
+{
+	out->started = pm->started;
+	out->next_end = pm->next_end;
+	out->interval_end_time = pm->interval_end_time;
+}
+
+void omci_pm_schedule_set(struct omci_pm *pm, const struct omci_pm_schedule *in)
+{
+	pm->started = in->started;
+	pm->next_end = in->next_end;
+	pm->interval_end_time = in->interval_end_time;
+}
+
 void omci_pm_changed(struct omci_pm *pm, uint16_t class_id, uint16_t instance)
 {
 	if (pm == NULL || !omci_pm_owns(class_id) ||

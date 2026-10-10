@@ -816,6 +816,151 @@ static void test_clock(void)
 	(void)unlink(g_sock);
 }
 
+/* The file the daemon keeps its MIB in. */
+static char g_keep[160];
+
+/* A Set of the MIB data sync, which the OLT reads back with a Get. */
+static void mds_set(uint8_t out[OMCI_FRAME_LEN], uint8_t value)
+{
+	struct omci_frame f = {
+		.tci = 0x51,
+		.msg_type = 8,
+		.ar = true,
+		.device_id = OMCI_DEVICE_ID_BASELINE,
+		.class_id = 2,
+		.instance = 0,
+	};
+	f.contents[0] = 0x80;
+	f.contents[2] = value;
+	(void)!omci_frame_build(&f, out);
+}
+
+static char *g_argv_kept[] = {
+	(char *)"omcid", (char *)"-p", (char *)"-t", (char *)"1",
+	(char *)"-m",	 NULL,	       NULL
+};
+static char g_long_path[300];
+static char *g_argv_bare[] = { (char *)"omcid", (char *)"-m", NULL };
+static char *g_argv_long[] = { (char *)"omcid", (char *)"-m", g_long_path,
+			       NULL };
+
+/* Run the daemon on @frame, or on no frame, keeping its MIB in @path. */
+static int run_kept(struct rig *g, const uint8_t *frame, const char *path)
+{
+	g_argv_kept[5] = (char *)path;
+	if (frame != NULL)
+		CHECK_EQ(write(g->in_w, frame, OMCI_FRAME_LEN),
+			 (ssize_t)OMCI_FRAME_LEN);
+	end_input(g);
+	return run(g, g->in_r, g_sock, 6, g_argv_kept);
+}
+
+static void test_the_mib_is_kept_across_a_start_again(void)
+{
+	uint8_t frame[OMCI_FRAME_LEN];
+	struct stat st;
+	struct rig g;
+
+	(void)unlink(g_keep);
+	CHECK(rig_up(&g));
+	mds_set(frame, 42);
+	CHECK_EQ(run_kept(&g, frame, g_keep), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "mib: nothing kept in") != NULL);
+	CHECK(strstr(g_log, "mib ready: 37 instances") != NULL);
+	CHECK_EQ(stat(g_keep, &st), 0);
+	CHECK(st.st_size > 36);
+	rig_down(&g);
+	(void)unlink(g_sock);
+
+	/* Started again, the daemon answers as the OLT set it up. */
+	CHECK(rig_up(&g));
+	get_frame(frame, 0x52, 2, 0, 0x8000);
+	CHECK_EQ(run_kept(&g, frame, g_keep), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "mib taken up again from") != NULL);
+	CHECK(strstr(g_log, "mib ready") == NULL);
+
+	const size_t n = collect(&g, g_out, sizeof(g_out));
+	bool answered = false;
+
+	for (size_t at = 0; at + OMCI_FRAME_LEN <= n; at += OMCI_FRAME_LEN)
+		if (g_out[at + 1] == 0x52 && g_out[at + 2] == 0x29)
+			answered = g_out[at + 11] == 42;
+	CHECK(answered);
+	CHECK(strstr(g_log, "[WARN]") == NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+	(void)unlink(g_keep);
+}
+
+static void test_a_kept_file_it_cannot_go_on_from(void)
+{
+	char path[sizeof(g_keep) + 16];
+	char other[sizeof(g_keep) + 16];
+	struct stat st;
+	struct rig g;
+
+	/* Bytes of another kind: the daemon starts afresh, and keeps anew. */
+	FILE *f = fopen(g_keep, "w");
+
+	CHECK(f != NULL);
+	if (f != NULL) {
+		fputs("not a MIB\n", f);
+		fclose(f);
+	}
+	CHECK(rig_up(&g));
+	CHECK_EQ(run_kept(&g, NULL, g_keep), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "is not one this daemon can go on from") != NULL);
+	CHECK(strstr(g_log, "mib ready: 37 instances") != NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+	CHECK(rig_up(&g));
+	CHECK_EQ(run_kept(&g, NULL, g_keep), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "mib taken up again from") != NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+
+	/* A directory cannot be read, nor replaced. */
+	CHECK(rig_up(&g));
+	CHECK_EQ(run_kept(&g, NULL, g_dir), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "mib: cannot read") != NULL);
+	CHECK(strstr(g_log, "mib: cannot keep it in") != NULL);
+	(void)snprintf(path, sizeof(path), "%s.new", g_dir);
+	CHECK(stat(path, &st) != 0);
+	rig_down(&g);
+	(void)unlink(g_sock);
+
+	/* Nor can a file under a file. */
+	(void)snprintf(path, sizeof(path), "%s/x", g_keep);
+	CHECK(rig_up(&g));
+	CHECK_EQ(run_kept(&g, NULL, path), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "mib: cannot read") != NULL);
+	CHECK(strstr(g_log, "x.new") != NULL);
+	rig_down(&g);
+	(void)unlink(g_sock);
+
+	/* A device that is full: the new file goes, the old name is untouched. */
+	(void)snprintf(path, sizeof(path), "%s/full", g_dir);
+	(void)snprintf(other, sizeof(other), "%s/full.new", g_dir);
+	CHECK_EQ(symlink("/dev/full", other), 0);
+	CHECK(rig_up(&g));
+	CHECK_EQ(run_kept(&g, NULL, path), EXIT_SUCCESS);
+	CHECK(strstr(g_log, "No space left on device") != NULL);
+	CHECK(lstat(other, &st) != 0);
+	CHECK(stat(path, &st) != 0);
+	rig_down(&g);
+	(void)unlink(g_sock);
+	(void)unlink(g_keep);
+
+	/* -m wants a path, and one short enough. */
+	memset(g_long_path, 'a', sizeof(g_long_path) - 1u);
+	CHECK(rig_up(&g));
+	CHECK_EQ(run(&g, g.in_r, g_sock, 2, g_argv_bare), EXIT_FAILURE);
+	CHECK_EQ(run(&g, g.in_r, g_sock, 3, g_argv_long), EXIT_FAILURE);
+	CHECK(!omcid_keep(g_long_path));
+	CHECK(omcid_keep(NULL));
+	rig_down(&g);
+}
+
 int main(void)
 {
 	(void)signal(SIGPIPE, SIG_IGN);
@@ -826,6 +971,7 @@ int main(void)
 		return 1;
 	}
 	snprintf(g_sock, sizeof(g_sock), "%s/ctl.sock", g_dir);
+	snprintf(g_keep, sizeof(g_keep), "%s/mib", g_dir);
 	make_frames();
 
 	RUN(test_end_of_input);
@@ -839,6 +985,8 @@ int main(void)
 	RUN(test_control_socket_in_the_loop);
 	RUN(test_the_tap_is_fed_in_the_loop);
 	RUN(test_clock);
+	RUN(test_the_mib_is_kept_across_a_start_again);
+	RUN(test_a_kept_file_it_cannot_go_on_from);
 
 	(void)unlink(g_sock);
 	(void)rmdir(g_dir);
