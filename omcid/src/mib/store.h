@@ -334,4 +334,48 @@ omci_mib_walk_first(const struct omci_mib *mib, struct omci_mib_cursor *cursor);
 __must_check enum omci_status
 omci_mib_walk_next(const struct omci_mib *mib, struct omci_mib_cursor *cursor);
 
+/*
+ * The most bytes omci_mib_save() writes: its header, and every instance and
+ * every table with its header and as many values as the MIB can hold.
+ */
+#define OMCI_MIB_SAVE_MAX                                      \
+	(12u + OMCI_MIB_MAX_ROWS * 6u + OMCI_MIB_ARENA_BYTES + \
+	 OMCI_MIB_MAX_TABLES * 8u +                            \
+	 OMCI_MIB_TABLE_ENTRIES * OMCI_MIB_TABLE_ENTRY_MAX)
+
+/**
+ * omci_mib_save() - Write the MIB as bytes, which omci_mib_load() takes.
+ * @mib: the MIB
+ * @out: where the bytes go
+ * @cap: room in @out; %OMCI_MIB_SAVE_MAX is always enough
+ * @out_len: how many bytes were written
+ *
+ * The bytes hold each instance in the order of a walk, with its attribute
+ * values, and the rows of each table attribute in order. Every number in
+ * them is big-endian.
+ *
+ * Return: %OMCI_OK, %OMCI_ERR_INVAL, or %OMCI_ERR_TRUNCATED when @cap is
+ * too small.
+ */
+__must_check enum omci_status omci_mib_save(const struct omci_mib *mib,
+					    uint8_t *out, size_t cap,
+					    size_t *out_len);
+
+/**
+ * omci_mib_load() - Make the MIB what omci_mib_save() wrote.
+ * @mib: the MIB
+ * @in: the bytes
+ * @len: their number
+ *
+ * Nothing is announced. Bytes of another layout, such as those of a daemon
+ * whose classes have other attributes, are refused whole.
+ *
+ * Return: %OMCI_OK; %OMCI_ERR_INVAL; %OMCI_ERR_PROTO for bytes that are not
+ * a MIB of this daemon, %OMCI_ERR_TRUNCATED for bytes that end too soon,
+ * or the error of an instance or a table row the MIB will not take. The
+ * MIB is empty after an error.
+ */
+__must_check enum omci_status omci_mib_load(struct omci_mib *mib,
+					    const uint8_t *in, size_t len);
+
 #endif

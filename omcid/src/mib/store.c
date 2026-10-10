@@ -14,6 +14,7 @@
 #include "me/table.h"
 #include "mib/store.h"
 #include "omci/attrmask.h"
+#include "omcid/byteorder.h"
 #include "sys/log.h"
 #include "sys/wire.h"
 
@@ -682,4 +683,211 @@ enum omci_status omci_mib_table_remove(struct omci_mib *mib, uint16_t class_id,
 		return OMCI_OK;
 	}
 	return OMCI_DECLINED;
+}
+
+/*
+ * The MIB as bytes: a header, then each instance with its values as they
+ * lie in its row, then each table attribute with its rows in order.
+ *
+ *   header      "OMIB", version (2), instances (2), tables (2), 0 (2)
+ *   instance    class (2), instance (2), size of the values (2), values
+ *   table       class (2), instance (2), attribute (1), size of a row (1),
+ *               rows (2), the rows
+ */
+#define SAVE_MAGIC 0x4f4d4942u
+#define SAVE_VERSION 1u
+#define SAVE_HEADER 12u
+
+/* A place in a buffer of bytes, and whether a write or read went past its end. */
+struct bytes {
+	uint8_t *out;
+	const uint8_t *in;
+	size_t len;
+	size_t at;
+	bool short_of_room;
+};
+
+static uint8_t *put(struct bytes *b, size_t n)
+{
+	if (b->short_of_room || b->len - b->at < n) {
+		b->short_of_room = true;
+		return NULL;
+	}
+	b->at += n;
+	return b->out + b->at - n;
+}
+
+static void put16(struct bytes *b, unsigned int v)
+{
+	uint8_t *p = put(b, 2);
+
+	if (p != NULL)
+		omci_be16_store(p, v);
+}
+
+static void put_bytes(struct bytes *b, const void *v, size_t n)
+{
+	uint8_t *p = put(b, n);
+
+	if (p != NULL)
+		omci_wire_copy(p, v, n);
+}
+
+static const uint8_t *take(struct bytes *b, size_t n)
+{
+	if (b->short_of_room || b->len - b->at < n) {
+		b->short_of_room = true;
+		return NULL;
+	}
+	b->at += n;
+	return b->in + b->at - n;
+}
+
+static unsigned int take16(struct bytes *b)
+{
+	const uint8_t *p = take(b, 2);
+
+	return p != NULL ? omci_be16(p) : 0u;
+}
+
+static unsigned int take8(struct bytes *b)
+{
+	const uint8_t *p = take(b, 1);
+
+	return p != NULL ? *p : 0u;
+}
+
+enum omci_status omci_mib_save(const struct omci_mib *mib, uint8_t *out,
+			       size_t cap, size_t *out_len)
+{
+	if (mib == NULL || out == NULL || out_len == NULL)
+		return OMCI_ERR_INVAL;
+
+	struct bytes b = { .out = out, .len = cap };
+	size_t tables = 0;
+
+	for (size_t i = 0; i < OMCI_MIB_MAX_TABLES; i++)
+		tables += mib->tables[i].used;
+
+	uint8_t *magic = put(&b, 4);
+
+	if (magic != NULL)
+		omci_be32_store(magic, SAVE_MAGIC);
+	put16(&b, SAVE_VERSION);
+	put16(&b, (unsigned int)mib->live);
+	put16(&b, (unsigned int)tables);
+	put16(&b, 0);
+
+	for (size_t i = 0; i < mib->row_count; i++) {
+		const struct row *r = &mib->rows[i];
+
+		if (!r->used)
+			continue;
+		put16(&b, r->class_id);
+		put16(&b, r->instance);
+		put16(&b, r->size);
+		put_bytes(&b, r->data, r->size);
+	}
+
+	for (size_t i = 0; i < OMCI_MIB_MAX_TABLES; i++) {
+		const struct table *t = &mib->tables[i];
+
+		if (!t->used)
+			continue;
+		put16(&b, t->class_id);
+		put16(&b, t->instance);
+		put_bytes(&b, &t->attr_no, 1);
+		put_bytes(&b, &t->entry_size, 1);
+		put16(&b, (unsigned int)t->count);
+		for (size_t n = t->head; n != NO_SLOT; n = mib->entries[n].next)
+			put_bytes(&b, mib->entries[n].bytes, t->entry_size);
+	}
+
+	if (b.short_of_room)
+		return OMCI_ERR_TRUNCATED;
+	*out_len = b.at;
+	return OMCI_OK;
+}
+
+static enum omci_status load(struct omci_mib *mib, struct bytes *b)
+{
+	const uint8_t *magic = take(b, 4);
+
+	if (magic == NULL)
+		return OMCI_ERR_TRUNCATED;
+	const unsigned int version = take16(b);
+	const unsigned int rows = take16(b);
+	const unsigned int tables = take16(b);
+
+	(void)take16(b);
+	if (b->short_of_room)
+		return OMCI_ERR_TRUNCATED;
+	if (omci_be32(magic) != SAVE_MAGIC || version != SAVE_VERSION)
+		return OMCI_ERR_PROTO;
+
+	for (unsigned int i = 0; i < rows; i++) {
+		const uint16_t class_id = (uint16_t)take16(b);
+		const uint16_t instance = (uint16_t)take16(b);
+		const size_t size = take16(b);
+		const uint8_t *values = take(b, size);
+
+		if (values == NULL)
+			return OMCI_ERR_TRUNCATED;
+
+		const struct omci_me_class *cls = omci_me_class_by_id(class_id);
+
+		if (cls == NULL || omci_me_row_size(cls) != size)
+			return OMCI_ERR_PROTO;
+
+		const enum omci_status rc =
+			omci_mib_create(mib, class_id, instance);
+
+		if (rc != OMCI_OK)
+			return rc;
+		/* A MIB just reset has no free rows: the new one is the last. */
+		omci_wire_copy(mib->rows[mib->row_count - 1u].data, values,
+			       size);
+	}
+
+	for (unsigned int i = 0; i < tables; i++) {
+		const uint16_t class_id = (uint16_t)take16(b);
+		const uint16_t instance = (uint16_t)take16(b);
+		const uint8_t attr_no = (uint8_t)take8(b);
+		const size_t size = take8(b);
+		const unsigned int count = take16(b);
+		const uint8_t *entries = take(b, (size_t)count * size);
+
+		if (entries == NULL)
+			return OMCI_ERR_TRUNCATED;
+		if (table_entry_size(class_id, attr_no) != size)
+			return OMCI_ERR_PROTO;
+		for (unsigned int n = 0; n < count; n++) {
+			const enum omci_status rc = omci_mib_table_put(
+				mib, class_id, instance, attr_no,
+				entries + (size_t)n * size, size, 0,
+				OMCI_MIB_TABLE_LAST);
+
+			if (rc != OMCI_OK)
+				return rc;
+		}
+	}
+
+	return b->at == b->len ? OMCI_OK : OMCI_ERR_PROTO;
+}
+
+enum omci_status omci_mib_load(struct omci_mib *mib, const uint8_t *in,
+			       size_t len)
+{
+	if (mib == NULL || in == NULL)
+		return OMCI_ERR_INVAL;
+
+	struct bytes b = { .in = in, .len = len };
+
+	(void)omci_mib_reset(mib);
+
+	const enum omci_status rc = load(mib, &b);
+
+	if (rc != OMCI_OK)
+		(void)omci_mib_reset(mib);
+	return rc;
 }

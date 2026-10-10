@@ -1068,6 +1068,152 @@ test_a_refused_first_entry_leaves_no_table_behind(struct omci_mib *mib)
 	CHECK_EQ(omci_mib_table_count(mib, T_CLASS, 2, T_ATTR), 1u);
 }
 
+static uint8_t g_saved[OMCI_MIB_SAVE_MAX];
+
+/* Instances of two classes, one deleted between them, and a table of two rows. */
+static size_t save_some(struct omci_mib *mib)
+{
+	const uint8_t key[2] = { 0x80, 0x01 };
+	uint8_t r[T_SIZE];
+	size_t len = 0;
+
+	CHECK_EQ(omci_mib_create(mib, ANIG, 1), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, ANIG, 2), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, T_CLASS, 7), OMCI_OK);
+	CHECK_EQ(omci_mib_attr_set(mib, ANIG, 2, 2, key, sizeof(key)), OMCI_OK);
+	CHECK_EQ(omci_mib_delete(mib, ANIG, 1), OMCI_OK);
+	rule(r, 1, 0x11);
+	CHECK_EQ(omci_mib_table_put(mib, T_CLASS, 7, T_ATTR, r, T_SIZE, T_KEY,
+				    OMCI_MIB_TABLE_LAST),
+		 OMCI_OK);
+	rule(r, 2, 0x22);
+	CHECK_EQ(omci_mib_table_put(mib, T_CLASS, 7, T_ATTR, r, T_SIZE, T_KEY,
+				    OMCI_MIB_TABLE_FIRST),
+		 OMCI_OK);
+	CHECK_EQ(omci_mib_save(mib, g_saved, sizeof(g_saved), &len), OMCI_OK);
+	return len;
+}
+
+static void test_a_saved_mib_loads_as_it_was(struct omci_mib *mib)
+{
+	const size_t len = save_some(mib);
+	uint8_t again[OMCI_MIB_SAVE_MAX];
+	size_t len2 = 0;
+
+	CHECK_EQ(omci_mib_reset(mib), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, ANIG, 9), OMCI_OK);
+	CHECK_EQ(omci_mib_load(mib, g_saved, len), OMCI_OK);
+
+	CHECK_EQ(omci_mib_count(mib), 2u);
+	CHECK(!omci_mib_exists(mib, ANIG, 9));
+	CHECK(!omci_mib_exists(mib, ANIG, 1));
+
+	uint8_t got[2] = { 0 };
+
+	CHECK_EQ(omci_mib_attr_get(mib, ANIG, 2, 2, got, sizeof(got), NULL),
+		 OMCI_OK);
+	CHECK_EQ(got[0], 0x80);
+	CHECK_EQ(got[1], 0x01);
+
+	uint8_t r[T_SIZE];
+
+	CHECK_EQ(omci_mib_table_count(mib, T_CLASS, 7, T_ATTR), 2u);
+	CHECK_EQ(omci_mib_table_get(mib, T_CLASS, 7, T_ATTR, 0, r, sizeof(r)),
+		 OMCI_OK);
+	CHECK_EQ(r[0], 2);
+	CHECK_EQ(omci_mib_table_get(mib, T_CLASS, 7, T_ATTR, 1, r, sizeof(r)),
+		 OMCI_OK);
+	CHECK_EQ(r[0], 1);
+
+	/* The walk keeps its order, and the bytes come out the same. */
+	struct omci_mib_cursor c;
+
+	CHECK_EQ(omci_mib_walk_first(mib, &c), OMCI_OK);
+	CHECK_EQ(c.class_id, ANIG);
+	CHECK_EQ(omci_mib_walk_next(mib, &c), OMCI_OK);
+	CHECK_EQ(c.class_id, T_CLASS);
+	CHECK_EQ(omci_mib_save(mib, again, sizeof(again), &len2), OMCI_OK);
+	CHECK_EQ(len2, len);
+	CHECK_EQ(memcmp(again, g_saved, len), 0);
+
+	/* An empty MIB is a header alone. */
+	CHECK_EQ(omci_mib_reset(mib), OMCI_OK);
+	CHECK_EQ(omci_mib_save(mib, again, sizeof(again), &len2), OMCI_OK);
+	CHECK_EQ(len2, 12u);
+	CHECK_EQ(omci_mib_load(mib, again, len2), OMCI_OK);
+	CHECK_EQ(omci_mib_count(mib), 0u);
+}
+
+/* The saved bytes with one byte at @at changed to @v. */
+static enum omci_status load_changed(struct omci_mib *mib, size_t len,
+				     size_t at, uint8_t v)
+{
+	uint8_t b[OMCI_MIB_SAVE_MAX];
+
+	memcpy(b, g_saved, len);
+	b[at] = v;
+	return omci_mib_load(mib, b, len);
+}
+
+static void test_bytes_of_another_kind_leave_the_mib_empty(struct omci_mib *mib)
+{
+	const size_t len = save_some(mib);
+	/* the header, the ANI-G and its values, then the table's header */
+	const size_t anig = 12u;
+	const size_t row = omci_me_row_size(omci_me_class_by_id(ANIG));
+	const size_t rule_row = omci_me_row_size(omci_me_class_by_id(T_CLASS));
+	const size_t table = anig + 6u + row + 6u + rule_row;
+	size_t n = 0;
+
+	CHECK_EQ(omci_mib_save(NULL, g_saved, len, &n), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_save(mib, NULL, len, &n), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_save(mib, g_saved, len, NULL), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_save(mib, g_saved, len - 1u, &n), OMCI_ERR_TRUNCATED);
+	CHECK_EQ(omci_mib_load(NULL, g_saved, len), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_load(mib, NULL, len), OMCI_ERR_INVAL);
+	CHECK_EQ(omci_mib_count(mib), 2u);
+
+	/* Too few bytes for the magic, the header, a row, a table. */
+	CHECK_EQ(omci_mib_load(mib, g_saved, 3), OMCI_ERR_TRUNCATED);
+	CHECK_EQ(omci_mib_count(mib), 0u);
+	CHECK_EQ(omci_mib_load(mib, g_saved, 11), OMCI_ERR_TRUNCATED);
+	CHECK_EQ(omci_mib_load(mib, g_saved, anig + 7u), OMCI_ERR_TRUNCATED);
+	CHECK_EQ(omci_mib_load(mib, g_saved, len - 1u), OMCI_ERR_TRUNCATED);
+	CHECK_EQ(omci_mib_count(mib), 0u);
+
+	/* Another magic, another version, bytes left over. */
+	CHECK_EQ(load_changed(mib, len, 0, 'X'), OMCI_ERR_PROTO);
+	CHECK_EQ(load_changed(mib, len, 5, 2), OMCI_ERR_PROTO);
+	CHECK_EQ(omci_mib_load(mib, g_saved, len), OMCI_OK);
+	CHECK_EQ(omci_mib_save(mib, g_saved, sizeof(g_saved), &n), OMCI_OK);
+	g_saved[n] = 0;
+	CHECK_EQ(omci_mib_load(mib, g_saved, n + 1u), OMCI_ERR_PROTO);
+	CHECK_EQ(omci_mib_count(mib), 0u);
+
+	/* A class this daemon lacks, or one whose row is of another size. */
+	CHECK_EQ(load_changed(mib, len, anig, 0xff), OMCI_ERR_PROTO);
+	CHECK_EQ(load_changed(mib, len, anig + 5u, (uint8_t)(row + 1u)),
+		 OMCI_ERR_PROTO);
+	CHECK_EQ(load_changed(mib, len, anig + 5u, (uint8_t)(row - 1u)),
+		 OMCI_ERR_PROTO);
+
+	/* A table of another row size, or of an instance that is not there. */
+	CHECK_EQ(load_changed(mib, len, table + 5u, T_SIZE + 1u),
+		 OMCI_ERR_TRUNCATED);
+	CHECK_EQ(load_changed(mib, len, table + 4u, T_ATTR + 1u),
+		 OMCI_ERR_PROTO);
+	CHECK_EQ(load_changed(mib, len, table + 3u, 8), OMCI_ERR_INST_UNKNOWN);
+	CHECK_EQ(omci_mib_count(mib), 0u);
+
+	/* Two instances of one name: the second is refused. */
+	CHECK_EQ(omci_mib_create(mib, ANIG, 1), OMCI_OK);
+	CHECK_EQ(omci_mib_create(mib, ANIG, 2), OMCI_OK);
+	CHECK_EQ(omci_mib_save(mib, g_saved, sizeof(g_saved), &n), OMCI_OK);
+	CHECK_EQ(load_changed(mib, n, anig + 6u + row + 3u, 1),
+		 OMCI_ERR_EXISTS);
+	CHECK_EQ(omci_mib_count(mib), 0u);
+}
+
 int main(void)
 {
 	test_every_table_entry_fits_a_node();
@@ -1100,6 +1246,8 @@ int main(void)
 	RUN_MIB(test_the_arena_fills_to_its_last_byte);
 	RUN_MIB(test_a_deleted_instance_gives_its_table_slot_back);
 	RUN_MIB(test_the_store_traces_what_it_makes_and_deletes);
+	RUN_MIB(test_a_saved_mib_loads_as_it_was);
+	RUN_MIB(test_bytes_of_another_kind_leave_the_mib_empty);
 
 	printf("\n%d omci_t_checks, %d omci_t_failures\n", omci_t_checks,
 	       omci_t_failures);
