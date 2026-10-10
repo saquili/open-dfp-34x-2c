@@ -79,8 +79,10 @@ image-check:
 # A kernel for a RAM boot that carries the image's root filesystem as its
 # initramfs, so that a build can run on the board without a write to the
 # flash: $(IMAGE_OUT)/images/ram.uImage, for "make ramboot". It takes the
-# target tree of "make image", with the files of OPEN_DFP_34X_2C_LOCAL_OVERLAY
-# laid over a copy that finish-root.sh finishes as for the flash's image, and
+# target tree of "make image", with the tools of diagnosis that post-build.sh
+# set aside in $(IMAGE_OUT)/diag and the files of
+# OPEN_DFP_34X_2C_LOCAL_OVERLAY laid over a copy that finish-root.sh finishes
+# as for the flash's image, and
 # builds the board's kernel configuration with the
 # image's own cross compiler in RAM_OUT. That configuration leaves out the
 # initial RAM disk, which the kernel in the flash does not use, so the RAM
@@ -95,6 +97,7 @@ ram-image:
 	test -d "$(IMAGE_OUT)/target" || { echo 'open-dfp-34x-2c: run "make image" first' >&2; exit 1; }
 	rm -rf "$(RAM_OUT)/root" && mkdir -p "$(RAM_OUT)/root"
 	cp -a "$(IMAGE_OUT)/target/." "$(RAM_OUT)/root/"
+	if [ -d "$(IMAGE_OUT)/diag" ]; then cp -a "$(IMAGE_OUT)/diag/." "$(RAM_OUT)/root/"; fi
 	$(if $(OPEN_DFP_34X_2C_LOCAL_OVERLAY),cp -a "$(OPEN_DFP_34X_2C_LOCAL_OVERLAY)/." "$(RAM_OUT)/root/")
 	rm -f "$(RAM_OUT)/root/THIS_IS_NOT_YOUR_ROOT_FILESYSTEM"
 	sh br2-external/board/dfp-34x-2c3/finish-root.sh "$(RAM_OUT)/root"
