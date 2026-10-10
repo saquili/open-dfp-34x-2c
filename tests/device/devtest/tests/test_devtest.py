@@ -494,7 +494,7 @@ class Cases(unittest.TestCase):
         settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
                                        subscriber_port="eth2", pppoe_secrets="/etc/ppp/secrets")
         bench = Canned("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200')], trail)
-        stick = Canned("stick", [("onu-mode status", 0, "mode router\nwan gem256 on gem256, "
+        stick = Canned("stick", [("onu-apply status", 0, "mode router\nwan gem256 on gem256, "
                                                         "out by ppp0\n"),
                                  ("ppp0", 0, "192.0.2.77/32\n"), ("onu-dns", 0, "192.0.2.53\n")],
                        trail)
@@ -518,7 +518,7 @@ class Cases(unittest.TestCase):
             bench = Canned("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200'),
                                      ("ip -4 -o addr", 0, "pppoe0\n"),
                                      ("python3 - pppoe0", 0, seen + "\n")], trail)
-            stick = Canned("stick", [("onu-mode status", 0, "mode router\nwan gem256 on "
+            stick = Canned("stick", [("onu-apply status", 0, "mode router\nwan gem256 on "
                                                             "gem256, out by ppp0\n"),
                                      ("ppp0/mtu", 0 if mtu else 1, f"{mtu}\n"),
                                      ("ppp0", 0, "192.0.2.77\n"),

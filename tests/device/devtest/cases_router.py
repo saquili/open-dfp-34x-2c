@@ -142,7 +142,7 @@ def set_mode(ctx: Context, lines: str, *, body_from: str = "") -> tuple[int, str
 
 
 def status(ctx: Context) -> str:
-    return ctx.stick.run("onu-mode status").out
+    return ctx.stick.run("onu-apply status").out
 
 
 def wait_for(ctx: Context, test, limit: float) -> float | None:
