@@ -1,0 +1,186 @@
+From: Paweł Phan <szop.hektar_1w@icloud.com>
+Subject: [PATCH] package/libubox, ubus, json-c: build them for the MIPS I variant
+
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+The network interface daemon of OpenWrt, netifd, needs libubox, ubus
+and json-c. The MIPS I variant of patch 0001 claims no atomic builtins,
+so json-c, and ubus with it, are not offered, and libubox builds code
+that the core cannot run.
+
+json-c uses one compare-and-swap, to set the seed of its hash tables
+once; it uses it only where the compiler defines
+__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4, and otherwise stores the value
+plainly. Its atomic reference counts are compiled only with
+ENABLE_THREADING, which the build system leaves off. The compiler of
+the MIPS I variant (gcc configured --without-llsc) defines no such
+macro. Offer json-c, and ubus, which depends on the builtins only
+because of json-c, to the variant too.
+
+json-c also keeps one value per thread, the format of the numbers it
+writes. The variant's toolchain has no threads and emulates
+thread-local storage with __emutls_get_address() of libgcc_s, which
+json-c would then be the only library to load. Without threads, build
+json-c without thread-local storage: the value is the process's.
+
+libubox builds udebug, a ring buffer that processes share and update
+with atomic operations; on the variant the compiler turns them into
+calls to __atomic_fetch_or_4 and the like, which no library provides.
+Add a libubox patch, package/libubox/0001-*.patch, with an option to
+leave udebug out, and leave it out on a toolchain without atomics
+(BR2_TOOLCHAIN_HAS_ATOMIC unset). ulog() then writes to its other
+channels only.
+
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ package/json-c/Config.in                                                                  |  6 ++++--
+ package/json-c/json-c.mk                                                                  |  6 ++++++
+ package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ package/libubox/libubox.mk                                                                |  7 +++++++
+ package/ubus/Config.in                                                                    |  4 ++--
+ 5 files changed, 91 insertions(+), 4 deletions(-)
+
+diff --git a/package/json-c/Config.in b/package/json-c/Config.in
+index 4df44a9..053a6db 100644
+--- a/package/json-c/Config.in
++++ b/package/json-c/Config.in
+@@ -1,7 +1,9 @@
+ config BR2_PACKAGE_JSON_C
+ 	bool "json-c"
+-	# uses __sync_val_compare_and_swap_4
+-	depends on BR2_TOOLCHAIN_HAS_SYNC_4
++	# uses __sync_val_compare_and_swap_4 where the compiler offers
++	# it; the compiler of the MIPS I variant does not, and json-c
++	# then stores the value plainly
++	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1
+ 	help
+ 	  JSON-C - A JSON implementation in C
+ 
+diff --git a/package/json-c/json-c.mk b/package/json-c/json-c.mk
+index 254b6fd..c34a540 100644
+--- a/package/json-c/json-c.mk
++++ b/package/json-c/json-c.mk
+@@ -12,5 +12,11 @@ JSON_C_LICENSE_FILES = COPYING
+ JSON_C_CPE_ID_VENDOR = json-c
+ JSON_C_CONF_OPTS = -DBUILD_APPS=OFF -DDISABLE_EXTRA_LIBS=ON
+ 
++# Without threads a value per thread is a value per process. A toolchain
++# that emulates thread-local storage would take it from libgcc_s.
++ifeq ($(BR2_TOOLCHAIN_HAS_THREADS),)
++JSON_C_CONF_OPTS += -DDISABLE_THREAD_LOCAL_STORAGE=ON
++endif
++
+ $(eval $(cmake-package))
+ $(eval $(host-cmake-package))
+diff --git a/package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch b/package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch
+new file mode 100644
+index 0000000..acdfff3
+--- /dev/null
++++ b/package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch
+@@ -0,0 +1,72 @@
++From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
++From: =?UTF-8?q?Pawe=C5=82=20Phan?= <szop.hektar_1w@icloud.com>
++Date: Sat, 10 Oct 2026 12:00:00 +0000
++Subject: [PATCH] build: make udebug optional, for cores without atomic
++ operations
++MIME-Version: 1.0
++Content-Type: text/plain; charset=UTF-8
++Content-Transfer-Encoding: 8bit
++
++udebug's ring buffer is shared between processes and updated with
++atomic operations (__atomic_fetch_or, __atomic_exchange_n and
++__sync_synchronize). A core that has none, such as a MIPS I core whose
++store-conditional never completes, cannot run that code, and a compiler
++for it makes calls to library functions that no library provides.
++
++Add the option BUILD_UDEBUG, on by default. Off, the library is built
++without udebug.c and udebug-remote.c, and ulog() writes no udebug entry;
++ulog_udebug() still takes a buffer, which is then never written. The
++headers are installed as before.
++
++Upstream: not submitted
++Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
++---
++ CMakeLists.txt | 7 ++++++-
++ ulog.c         | 2 ++
++ 2 files changed, 8 insertions(+), 1 deletion(-)
++
++diff --git a/CMakeLists.txt b/CMakeLists.txt
++index b0fca61..e1191a1 100644
++--- a/CMakeLists.txt
+++++ b/CMakeLists.txt
++@@ -13,6 +13,7 @@ ADD_DEFINITIONS(-Os -std=gnu99 -g3 -Wmissing-declarations -Wno-unused-parameter)
++ 
++ OPTION(BUILD_LUA "build Lua plugin" ON)
++ OPTION(BUILD_EXAMPLES "build examples" ON)
+++OPTION(BUILD_UDEBUG "build udebug, which needs atomic operations" ON)
++ 
++ INCLUDE(FindPkgConfig)
++ PKG_SEARCH_MODULE(JSONC json-c)
++@@ -21,7 +22,11 @@ IF(JSONC_FOUND)
++   INCLUDE_DIRECTORIES(${JSONC_INCLUDE_DIRS})
++ ENDIF()
++ 
++-SET(SOURCES avl.c avl-cmp.c blob.c blobmsg.c uloop.c usock.c ustream.c ustream-fd.c vlist.c utils.c safe_list.c runqueue.c md5.c kvlist.c ulog.c base64.c udebug.c udebug-remote.c)
+++SET(SOURCES avl.c avl-cmp.c blob.c blobmsg.c uloop.c usock.c ustream.c ustream-fd.c vlist.c utils.c safe_list.c runqueue.c md5.c kvlist.c ulog.c base64.c)
+++IF(BUILD_UDEBUG)
+++  LIST(APPEND SOURCES udebug.c udebug-remote.c)
+++  ADD_DEFINITIONS(-DUDEBUG)
+++ENDIF()
++ 
++ ADD_LIBRARY(ubox SHARED ${SOURCES})
++ ADD_LIBRARY(ubox-static STATIC ${SOURCES})
++diff --git a/ulog.c b/ulog.c
++index 6c2c1f8..3fcef4b 100644
++--- a/ulog.c
+++++ b/ulog.c
++@@ -155,6 +155,7 @@ void ulog(int priority, const char *fmt, ...)
++ {
++ 	va_list ap;
++ 
+++#ifdef UDEBUG
++ 	if (udb) {
++ 		va_start(ap, fmt);
++ 		udebug_entry_init(udb);
++@@ -162,6 +163,7 @@ void ulog(int priority, const char *fmt, ...)
++ 		udebug_entry_add(udb);
++ 		va_end(ap);
++ 	}
+++#endif
++ 
++ 	if (priority > _ulog_threshold)
++ 		return;
+diff --git a/package/libubox/libubox.mk b/package/libubox/libubox.mk
+index 00ae2b0..8c32249 100644
+--- a/package/libubox/libubox.mk
++++ b/package/libubox/libubox.mk
+@@ -20,4 +20,11 @@ else
+ LIBUBOX_CONF_OPTS += -DBUILD_LUA=OFF
+ endif
+ 
++# udebug updates a buffer shared between processes with atomic operations.
++ifeq ($(BR2_TOOLCHAIN_HAS_ATOMIC),y)
++LIBUBOX_CONF_OPTS += -DBUILD_UDEBUG=ON
++else
++LIBUBOX_CONF_OPTS += -DBUILD_UDEBUG=OFF
++endif
++
+ $(eval $(cmake-package))
+diff --git a/package/ubus/Config.in b/package/ubus/Config.in
+index 391893e..db2164a 100644
+--- a/package/ubus/Config.in
++++ b/package/ubus/Config.in
+@@ -1,10 +1,10 @@
+ comment "ubus needs a toolchain w/ dynamic library"
+-	depends on BR2_TOOLCHAIN_HAS_SYNC_4
++	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1
+ 	depends on BR2_STATIC_LIBS
+ 
+ config BR2_PACKAGE_UBUS
+ 	bool "ubus"
+-	depends on BR2_TOOLCHAIN_HAS_SYNC_4 # json-c
++	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # json-c
+ 	depends on !BR2_STATIC_LIBS # libubox
+ 	select BR2_PACKAGE_LIBUBOX
+ 	select BR2_PACKAGE_JSON_C

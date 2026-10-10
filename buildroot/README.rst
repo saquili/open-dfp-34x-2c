@@ -11,9 +11,10 @@ Buildroot itself is not committed here. This directory pins one Buildroot
 release by hash and holds the script that turns the pin into a tree ready to
 build, so that every build starts from the same bytes. The tree is made in
 ``build/buildroot`` and is never committed. The patches we carry against the
-release are in ``patches/``: three, which add the MIPS I variant that this core
+release are in ``patches/``: four, which add the MIPS I variant that this core
 needs, keep the shared C library from an atomic operation the core cannot run,
-and take the licence text of the kernel this distribution builds.
+take the licence text of the kernel this distribution builds, and offer the
+libraries of netifd to the MIPS I variant.
 
 What is here
 ============
@@ -28,7 +29,8 @@ What is here
     The script that makes the pinned release ready to build (below).
 ``patches/``
     The patches applied to the release, in name order: the MIPS I variant,
-    the C library's exit handlers and the kernel's licence text (below).
+    the C library's exit handlers, the kernel's licence text and the
+    libraries of netifd (below).
 ``tests/``
     The self-tests of ``fetch``.
 
@@ -140,6 +142,41 @@ legal-info`` stops at a file whose hash differs. The hashes are of the GPL-2.0
 text of the kernels of this release; Linux 6.18 replaced the Free Software
 Foundation's postal address in ``LICENSES/preferred/GPL-2.0`` with its web
 address, so the patch gives that file the hash of 6.18's text.
+
+The libraries of netifd
+=======================
+
+``patches/0004-package-libubox-ubus-json-c-build-them-for-the-MIPS-I-variant.patch``
+changes four recipes and adds a patch of libubox, so that the build system
+builds the libraries of netifd (``netifd/``) for this core: libubox, ubus and
+json-c. Without it json-c and ubus are not offered, as the MIPS I variant claims
+no atomic builtins, and libubox holds code the core cannot run.
+
+* json-c uses one compare-and-swap, to set the seed of its hash tables once, and
+  only where the compiler defines ``__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4``;
+  otherwise it stores the seed plainly. Its atomic reference counts are compiled
+  only with ``ENABLE_THREADING``, which the build system leaves off. The compiler
+  of the MIPS I variant defines no such macro (``gcc -dM -E`` lists none), so
+  ``package/json-c/Config.in`` offers json-c to the variant too, and
+  ``package/ubus/Config.in`` ubus, which depends on the builtins only because of
+  json-c.
+* json-c also keeps one value per thread, the format of the numbers it writes.
+  The variant has no threads and emulates thread-local storage with
+  ``__emutls_get_address()`` of libgcc_s, which json-c would be the only
+  library to load, and so keep in the image. ``package/json-c/json-c.mk``
+  builds json-c without thread-local storage on a toolchain without threads
+  (``BR2_TOOLCHAIN_HAS_THREADS`` unset); the value is then the process's.
+* libubox builds udebug, a ring buffer that processes share and update with
+  ``__atomic_fetch_or``, ``__atomic_exchange_n`` and ``__sync_synchronize``; the
+  compiler of the variant turns them into calls to library functions that no
+  library provides. ``package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch``
+  gives libubox an option to leave udebug out, and ``package/libubox/libubox.mk``
+  leaves it out on a toolchain without atomics (``BR2_TOOLCHAIN_HAS_ATOMIC``
+  unset). ``ulog()`` then writes to its other channels only; netifd, as forked
+  here, does not use udebug.
+
+The instruction-set gate checks what the libraries became, as it checks every
+file of the image.
 
 Checking the pin
 ================
