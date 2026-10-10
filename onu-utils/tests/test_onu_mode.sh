@@ -51,6 +51,16 @@ setup() {
 	for prog in killall udhcpd udhcpc logger kill onu-store dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
+	# onu-svc stands in for procd: "start" runs the program after "--" at
+	# once, as procd starts it, unless the service runs already; "stop"
+	# forgets the service, and ends omcid's stand-in. onu-run is the real one.
+	printf '%s\n' '#!/bin/sh' 'echo "onu-svc $*" >>"$LOG"' 'case $1 in' \
+		'start) name=$2; shift 2' \
+		'	while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done; shift' \
+		"	[ -e \"$T/svc-\$name\" ] && exit 0; : >\"$T/svc-\$name\"; \"\$@\" ;;" \
+		"stop) rm -f \"$T/svc-\$2\"; [ \"\$2\" = omcid ] && rm -f \"$T/omcid.running\" ;;" \
+		'esac' 'exit 0' >"$T/bin/onu-svc"
+	ln -s "$HERE/scripts/onu-run" "$T/bin/onu-run"
 	# tc shows, on the ingress of sfp and pon, the boot's filter of the
 	# management VLAN at priority 1 and two of omcid's VLAN rules.
 	printf '#!/bin/sh\necho "tc $*" >>"$LOG"\n[ "$1 $2" = "filter show" ] || exit 0\n%s\n' \
@@ -121,7 +131,7 @@ check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
 check 'grep -q "^opt subnet 255.255.255.0" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^opt router 198.51.100.1" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^start 198.51.100.10" "$ONU_ROOT/run/udhcpd.conf"'
-check 'logged "^udhcpd $ONU_ROOT/run/udhcpd.conf"'
+check 'logged "^udhcpd -f $ONU_ROOT/run/udhcpd.conf"'
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^ip link set gem256 up"'
 check 'logged "^udhcpc -i gem256 "'
@@ -285,7 +295,7 @@ check '! logged "^ip address add 192.0.2.1"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gateway")" = 192.0.2.1 ]'
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd-lan36.conf"'
-check 'logged "^udhcpd $ONU_ROOT/run/udhcpd-lan36.conf"'
+check 'logged "^udhcpd -f $ONU_ROOT/run/udhcpd-lan36.conf"'
 check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan36 from session 1"'
 check '"$MODE_SCRIPT" status | grep -q "^session 1 on wan410 (ipv4), up on ppp0, 192.0.2.2"'
 # The stand-in session ends after two seconds: the address goes with it.
@@ -348,7 +358,7 @@ check '[ -e "$ONU_ROOT/run/session/1" ]'
 check '! logged "^ip link del wan410"'
 check '! logged "^ip link set pon mtu 1500"'
 check '[ ! -e "$ONU_ROOT/run/pppoed2.pid" ]'
-check '[ ! -e "$ONU_ROOT/run/dhcp6d2.pid" ]'
+check 'logged "^onu-svc stop dhcp6d2$"'
 # The host dhcp6d delegates to goes into the store once, and its going too.
 echo "0003 1 fe80::2 2001:db8:1200::/56" >"$ONU_ROOT/run/onu-pd2"
 : >"$LOG"
@@ -727,7 +737,11 @@ check 'logged "gpon_serial cmode runtime value XXXXXXXXXXXX"'
 check 'logged "gpon_password cmode runtime value 0x00112233445566778899"'
 check '[ "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" ]'
 check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon up" "$LOG" | cut -d: -f1)" ]'
-check 'logged "^killall omcid"'
+# omcid ends as procd's service and starts again, in bridge mode.
+check 'logged "^onu-svc stop omcid$"'
+check 'logged "^onu-svc start omcid -- onu-run omcid$"'
+check 'logged "^omcid $"'
+check '[ "$(grep -n "^onu-svc stop omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^omcid" "$LOG" | cut -d: -f1)" ]'
 teardown
 
 echo "without a serial number the PON stays down"

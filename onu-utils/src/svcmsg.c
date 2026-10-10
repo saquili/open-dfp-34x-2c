@@ -95,10 +95,21 @@ static void put_string(struct out *o, const char *s)
 	put(o, "\"");
 }
 
+/*
+ * The shell that runs a program with its output appended to a file: the file
+ * and then the program come as its arguments, so that neither is ever read
+ * as shell code. exec keeps the program in the shell's process, which procd
+ * watches.
+ */
+static const char *const to_file[] = {
+	"/bin/sh", "-c", "f=$1; shift; exec \"$@\" >>\"$f\" 2>&1", "sh", NULL
+};
+
 int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
-		 bool log, const char *const argv[])
+		 bool log, const char *out, const char *const argv[])
 {
 	struct out o = { .buf = buf, .cap = cap };
+	bool first = true;
 
 	if (!cap)
 		return -1;
@@ -108,10 +119,19 @@ int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respa
 	put(&o, ",\"instances\":{");
 	put_string(&o, name);
 	put(&o, ":{\"command\":[");
+	if (out) {
+		for (int i = 0; to_file[i]; i++) {
+			put(&o, first ? "" : ",");
+			put_string(&o, to_file[i]);
+			first = false;
+		}
+		put(&o, ",");
+		put_string(&o, out);
+	}
 	for (int i = 0; argv[i]; i++) {
-		if (i)
-			put(&o, ",");
+		put(&o, first ? "" : ",");
 		put_string(&o, argv[i]);
+		first = false;
 	}
 	/* procd reads the three numbers of "respawn" as strings. */
 	put(&o, "],\"respawn\":[\"%u\",\"%u\",\"%u\"]", r->threshold, r->timeout, r->retry);

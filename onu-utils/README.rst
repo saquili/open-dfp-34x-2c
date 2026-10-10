@@ -203,27 +203,47 @@ The small programs of the ONU.
       onu-net del PART
       onu-net wait DEV ADDRESS [SECONDS]
 
+``onu-svc``
+   gives procd the stick's programs as its services, over ubus, which procd
+   starts, and again a set time after one ends; OpenWrt's shell scripts and
+   jshn do that elsewhere. The boot script starts the log, netifd, the ssh
+   server and ``pond`` with it, and ``onu-mode`` omcid, its watcher, dhcp6d
+   and udhcpd. ``-r`` gives the threshold under which a run is a crash, the
+   wait before the next start and the crashes in a row after which procd
+   gives up, 60,2,0 unless given (0: never); ``-l`` sends the program's
+   output to the system log, ``-o`` appends it to a file. ``list`` tells
+   each service's state and how often procd started it again (a procd
+   patch, ``br2-external/package/procd``)::
+
+      onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]
+      onu-svc stop NAME
+      onu-svc list [NAME]
+
 ``onu-run``
-   starts, in the foreground, what procd runs from ``/etc/inittab`` once the
-   boot script is done, and again whenever it ends: the ssh server and
-   ``pond``, on the management pair in use and the host link's address, from
+   starts a service of the stick in the foreground, as procd wants it, from
+   the state the scripts keep: the ssh server and ``pond``, on the
+   management pair in use and the host link's address, from
    ``/run/onu-mgmt``, so that one started again after a change of the pair
-   listens on the new one; and the console's login prompt, or, on a bench
+   listens on the new one; omcid, in the mode ``onu-mode`` last gave it
+   (``/run/omcid.mode``), so that one started again after a crash comes up in
+   the mode the stick is in; and the console's login prompt, or, on a bench
    whose ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's shell
    without the password::
 
       onu-run ssh
       onu-run pond
+      onu-run omcid
       onu-run console
 
 Building and testing::
 
-   make           # build/ponid, build/pon, build/onucfg and build/onu-update
+   make           # build/ponid, build/pon, build/onucfg, build/onu-update, build/onu-svc
    make check     # the tests
 
 ``ponid``, ``onucfg`` and ``onu-update`` need zlib, ``onucfg`` and
 ``onu-update`` the kernel's MTD header
-``mtd/mtd-user.h``, ``pon`` libmnl and the kernel's headers, among them
+``mtd/mtd-user.h``, ``onu-svc`` libubus, libubox and libblobmsg_json (its
+tests need none of them), ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the

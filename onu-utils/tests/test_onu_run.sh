@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of scripts/onu-run, with stand-ins for dropbear, dropbearkey, pond,
-# getty, login and sleep, which log what they are asked to do.
+# getty, login, omcid and sleep, which log what they are asked to do.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,7 +26,7 @@ setup() {
 	: >"$LOG"
 	printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=192.0.2.2/30\n' \
 		>"$ONU_ROOT/run/onu-mgmt"
-	for c in dropbear pond getty login sleep; do
+	for c in dropbear pond getty login omcid sleep; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "dropbearkey $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && echo key >"$2"; shift; done\n' \
@@ -114,6 +114,19 @@ for other in "CONSOLE_AUTOLOGIN=admin" "CONSOLE_AUTOLOGIN=" "#CONSOLE_AUTOLOGIN=
 	run console
 done
 check '! grep -q "^login" "$LOG" && [ "$(grep -c "^getty" "$LOG")" -eq 4 ]'
+teardown
+
+echo "omcid in the mode onu-mode gave it, without an address too"
+setup
+rm "$ONU_ROOT/run/onu-mgmt"
+run omcid
+check '[ $rc -eq 0 ] && logged "omcid "'
+echo router >"$ONU_ROOT/run/omcid.mode"
+run omcid
+check 'logged "omcid -r"'
+echo bridge >"$ONU_ROOT/run/omcid.mode"
+run omcid
+check '[ "$(grep -c "^omcid $" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
 teardown
 
 echo "what is not a server"

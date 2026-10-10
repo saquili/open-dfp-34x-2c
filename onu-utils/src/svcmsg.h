@@ -36,11 +36,13 @@ int svc_parse_respawn(const char *s, struct svc_respawn *r);
 /*
  * The service @name with one instance of the same name, which runs @argv
  * (NULL-terminated, at least the program), started again as @r says, with
- * its output in the system log when @log. Written into @buf of @cap bytes;
- * returns the length, or -1 when it does not fit.
+ * its output in the system log when @log, or appended to the file @out when
+ * that is not NULL: procd has the output only to its log, so the program
+ * then runs from a shell that sends it there. Written into @buf of @cap
+ * bytes; returns the length, or -1 when it does not fit.
  */
 int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
-		 bool log, const char *const argv[]);
+		 bool log, const char *out, const char *const argv[]);
 
 /* {"name": @name}, for "delete" and "list"; as svc_set_json(). */
 int svc_name_json(char *buf, size_t cap, const char *name);

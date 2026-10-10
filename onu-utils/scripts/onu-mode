@@ -309,6 +309,18 @@ pid_of() {
 	[ -r "$RUN/$1.pid" ] && cat "$RUN/$1.pid"
 }
 
+# The program $3... as procd's service $1 (onu-svc start NAME [OPTION...] --
+# PROGRAM...), which procd starts, and again 2 s after it ends.
+svc_start() {
+	onu-svc start "$@" || log "$1 is no service of procd: not started"
+}
+
+# procd's service $1 ended, and forgotten; none is no error.
+svc_stop() {
+	onu-svc stop "$1" 2>/dev/null
+	return 0
+}
+
 stop_pid() {
 	pid=$(pid_of "$1")
 	[ -n "$pid" ] && kill "$pid" 2>/dev/null
@@ -318,9 +330,12 @@ stop_pid() {
 # omcid in the mode $1. A running omcid is told by a signal, SIGUSR2 for
 # bridge mode and SIGUSR1 for the others, where the stick routes: it keeps its
 # MIB, so what the OLT provisioned stays, and programs the data path again
-# from it. One that does not run is started, with -r where the stick routes;
-# its log goes on in /run/omcid.log.
+# from it. One that does not run is started as procd's service "omcid"
+# (onu-run omcid), with -r where the stick routes; its log goes on in
+# /run/omcid.log. The mode is kept in /run/omcid.mode, so that an omcid that
+# procd starts again after a crash comes up in the mode the stick is in.
 omcid_run() {
+	echo "$1" >"$RUN/omcid.mode"
 	if pidof omcid >/dev/null 2>&1; then
 		if [ "$1" = bridge ]; then
 			killall -USR2 omcid
@@ -328,10 +343,8 @@ omcid_run() {
 			killall -USR1 omcid
 		fi
 		sleep 1
-	elif [ "$1" = bridge ]; then
-		omcid >>"$RUN/omcid.log" 2>&1 &
 	else
-		omcid -r >>"$RUN/omcid.log" 2>&1 &
+		svc_start omcid -- onu-run omcid
 	fi
 }
 
@@ -452,7 +465,7 @@ session_gem() {
 
 # The DHCP server of the LAN, with the WAN's name servers when they are known.
 lan_dhcp() {
-	stop_pid udhcpd
+	svc_stop udhcpd
 	[ "$LAN_DHCP" = on ] || return 0
 	{
 		echo "interface sfp"
@@ -467,7 +480,7 @@ lan_dhcp() {
 	} >"$RUN/udhcpd.conf"
 	[ -e "$RUN/udhcpd.leases" ] || : >"$RUN/udhcpd.leases"
 	cp "$RUN/onu-dns" "$RUN/udhcpd.dns" 2>/dev/null || rm -f "$RUN/udhcpd.dns"
-	udhcpd "$RUN/udhcpd.conf"
+	svc_start udhcpd -- udhcpd -f "$RUN/udhcpd.conf"
 }
 
 # One run of pppoed for session $1 on $2, with the options $3; its process id
@@ -495,19 +508,19 @@ note() {
 # interface $3, handed on to the host by dhcp6d: the link to the host gets
 # IPv6, and the stick forwards it. A session other than main_pd() has dhcp6d
 # route what comes from its prefix by the session's own table. dhcp6d keeps
-# the host's binding in /run/onu-pdN, which pd_keep() keeps in the store.
+# the host's binding in /run/onu-pdN, which pd_keep() keeps in the store. It
+# is procd's service dhcp6dN.
 pd_up() {
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
-	stop_pid "dhcp6d$1"
+	svc_stop "dhcp6d$1"
 	echo 0 >"$IPV6_CONF/$lan/disable_ipv6" 2>/dev/null
 	echo 1 >"$FORWARD6" 2>/dev/null
 	table=
 	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
 	# $table is an option and its value, split on purpose.
-	dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" $table \
-		2>>"$RUN/dhcp6d.log" &
-	echo $! >"$RUN/dhcp6d$1.pid"
+	svc_start "dhcp6d$1" -o "$RUN/dhcp6d.log" -- \
+		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" $table
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
 
@@ -552,7 +565,7 @@ pppoe_loop() {
 		note "$1" ipv4
 		note "$1" ipv6
 		note "$1" dns
-		[ "$5" = pd ] && stop_pid "dhcp6d$1"
+		[ "$5" = pd ] && svc_stop "dhcp6d$1"
 		case $4 in
 		pass | routed) pass_lease_down "$1" ;;
 		esac
@@ -577,7 +590,7 @@ pppoe_loop() {
 pass_lease() {
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
-	stop_pid "udhcpd-$lan"
+	svc_stop "udhcpd-$lan"
 	[ "$(cat "$SESSIONS/$1/pass" 2>/dev/null)" = "$2" ] ||
 		rm -f "$RUN/udhcpd-$lan.leases"
 	ip route replace "$2" dev "$lan"
@@ -625,7 +638,7 @@ pass_lease() {
 			rm -f "$RUN/onu-pass-proxy"
 		fi
 	fi
-	udhcpd "$RUN/udhcpd-$lan.conf"
+	svc_start "udhcpd-$lan" -- udhcpd -f "$RUN/udhcpd-$lan.conf"
 	log "session $1: its address goes to the router on $lan, with the gateway $gw"
 }
 
@@ -634,7 +647,7 @@ pass_lease_down() {
 	addr=$(cat "$SESSIONS/$1/pass" 2>/dev/null)
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	gw=$(cat "$SESSIONS/$1/gateway" 2>/dev/null)
-	[ -n "$lan" ] && stop_pid "udhcpd-$lan"
+	[ -n "$lan" ] && svc_stop "udhcpd-$lan"
 	if [ -n "$addr" ] && [ -n "$lan" ]; then
 		ip route del "$addr" dev "$lan" 2>/dev/null
 		if ip rule del from "$addr" lookup "$(table_of "$1")" 2>/dev/null; then
@@ -869,7 +882,7 @@ session_down() {
 	read -r down_gem <"$SESSIONS/$1/gem"
 	stop_pid "pppoe-loop$1"
 	stop_pid "pppoed$1"
-	stop_pid "dhcp6d$1"
+	svc_stop "dhcp6d$1"
 	pass_lease_down "$1"
 	if ! dev_shared "$1" "$down_dev"; then
 		[ "$down_dev" != "$down_gem" ] && ip link del "$down_dev" 2>/dev/null
@@ -996,12 +1009,10 @@ tick() {
 	fi
 }
 
-# The watcher outlives the shell that started it: an "onu-mode apply" from a
-# login ends with the login, and its hangup must not take the sessions'
-# watcher along.
+# The watcher is procd's service onu-watch: it outlives the shell that started
+# it, an "onu-mode apply" from a login that ends, and procd starts it again
+# if it ends.
 watch() {
-	trap '' HUP
-	echo $$ >"$RUN/onu-watch.pid"
 	while :; do
 		tick
 		sleep 5
@@ -1013,13 +1024,13 @@ router_up() {
 	ip address add "$LAN_ADDRESS" dev sfp 2>/dev/null
 	lan_dhcp
 	# The tests run the watcher's rounds themselves.
-	[ -n "${ONU_MODE_NO_WATCH:-}" ] || "$0" watch &
+	[ -n "${ONU_MODE_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
 }
 
 router_down() {
-	stop_pid onu-watch
+	svc_stop onu-watch
 	wan_down
-	stop_pid udhcpd
+	svc_stop udhcpd
 	[ -n "$LAN_ADDRESS" ] && ip address del "$LAN_ADDRESS" dev sfp 2>/dev/null
 	echo 0 >"$FORWARD"
 	return 0
@@ -1059,11 +1070,11 @@ pass_up() {
 		ip address add "$LINK_ADDRESS/32" dev "$lan"
 		echo "$lan" >>"$RUN/onu-lans"
 	done
-	[ -n "${ONU_MODE_NO_WATCH:-}" ] || "$0" watch &
+	[ -n "${ONU_MODE_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
 }
 
 pass_down() {
-	stop_pid onu-watch
+	svc_stop onu-watch
 	sessions_down
 	for lan in $(cat "$RUN/onu-lans" 2>/dev/null); do
 		ip address del "$LINK_ADDRESS/32" dev "$lan" 2>/dev/null
@@ -1110,7 +1121,7 @@ reidentify() {
 	identity || return 1
 	want=
 	[ -r "$RUN/onu-omcid" ] && read -r want _ <"$RUN/onu-omcid"
-	killall omcid 2>/dev/null
+	svc_stop omcid
 	case $want in
 	router) omcid_run router ;;
 	*) omcid_run bridge ;;
@@ -1175,8 +1186,8 @@ stop)
 	else
 		router_down
 	fi
-	killall omcid 2>/dev/null
-	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans"
+	svc_stop omcid
+	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans" "$RUN/omcid.mode"
 	;;
 identity)
 	identity

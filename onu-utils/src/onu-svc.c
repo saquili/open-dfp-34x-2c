@@ -5,15 +5,16 @@
  * onu-svc: the stick's programs as procd's services, which procd starts
  * again when they end.
  *
- *   onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l] -- PROGRAM [ARG...]
+ *   onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]
  *                       the service NAME runs PROGRAM: procd starts it, and
  *                       again TIMEOUT seconds after it ends; a run shorter
  *                       than THRESHOLD seconds is a crash, and after RETRY
  *                       crashes in a row procd gives up (0: never). The
  *                       default is 60,2,0. -l puts the program's output in
- *                       the system log. A service that runs already with
- *                       another program or other values is started again
- *                       with these; with the same, nothing happens.
+ *                       the system log, -o appends it to FILE. A service
+ *                       that runs already with another program or other
+ *                       values is started again with these; with the same,
+ *                       nothing happens.
  *   onu-svc stop NAME   procd ends the program and forgets the service
  *   onu-svc list [NAME] a line for each service: its name, "running" and
  *                       the program's process, or "stopped" and its exit
@@ -39,7 +40,7 @@
 
 static int usage(void)
 {
-	fputs("usage: onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l] -- PROGRAM [ARG...]\n"
+	fputs("usage: onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]\n"
 	      "       onu-svc stop NAME\n"
 	      "       onu-svc list [NAME]\n", stderr);
 	return 2;
@@ -119,6 +120,7 @@ static int start(int argc, char **argv)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
 	const char *name = argv[1];
+	const char *out = NULL;
 	bool log = false;
 	char json[4096];
 	int ch;
@@ -126,7 +128,7 @@ static int start(int argc, char **argv)
 	if (argc < 2 || !svc_name_ok(name))
 		return usage();
 	optind = 2;
-	while ((ch = getopt(argc, argv, "+r:l")) != -1) {
+	while ((ch = getopt(argc, argv, "+r:lo:")) != -1) {
 		switch (ch) {
 		case 'r':
 			if (svc_parse_respawn(optarg, &r))
@@ -135,14 +137,18 @@ static int start(int argc, char **argv)
 		case 'l':
 			log = true;
 			break;
+		case 'o':
+			out = optarg;
+			break;
 		default:
 			return usage();
 		}
 	}
 	/* The program follows "--", which getopt has taken. */
-	if (optind >= argc || strcmp(argv[optind - 1], "--"))
+	if (optind >= argc || strcmp(argv[optind - 1], "--") || (log && out))
 		return usage();
-	if (svc_set_json(json, sizeof(json), name, &r, log, (const char *const *)(argv + optind)) < 0) {
+	if (svc_set_json(json, sizeof(json), name, &r, log, out,
+			 (const char *const *)(argv + optind)) < 0) {
 		fprintf(stderr, "onu-svc: the command of %s is too long\n", name);
 		return 1;
 	}
