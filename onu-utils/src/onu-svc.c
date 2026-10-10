@@ -5,13 +5,14 @@
  * onu-svc: the stick's programs as procd's services, which procd starts
  * again when they end.
  *
- *   onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]
+ *   onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] [-u USER] -- PROGRAM [ARG...]
  *                       the service NAME runs PROGRAM: procd starts it, and
  *                       again TIMEOUT seconds after it ends; a run shorter
  *                       than THRESHOLD seconds is a crash, and after RETRY
  *                       crashes in a row procd gives up (0: never). The
  *                       default is 60,2,0. -l puts the program's output in
- *                       the system log, -o appends it to FILE. A service
+ *                       the system log, -o appends it to FILE; -u runs it
+ *                       as the account USER, with its groups. A service
  *                       that runs already with another program or other
  *                       values is started again with these; with the same,
  *                       nothing happens.
@@ -137,7 +138,7 @@ static int start(int argc, char **argv)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
 	const char *name = argv[1];
-	const char *out = NULL;
+	const char *out = NULL, *user = NULL;
 	bool log = false;
 	char json[4096];
 	int ch;
@@ -145,7 +146,7 @@ static int start(int argc, char **argv)
 	if (argc < 2 || !svc_name_ok(name))
 		return usage();
 	optind = 2;
-	while ((ch = getopt(argc, argv, "+r:lo:")) != -1) {
+	while ((ch = getopt(argc, argv, "+r:lo:u:")) != -1) {
 		switch (ch) {
 		case 'r':
 			if (svc_parse_respawn(optarg, &r))
@@ -157,6 +158,11 @@ static int start(int argc, char **argv)
 		case 'o':
 			out = optarg;
 			break;
+		case 'u':
+			if (!svc_name_ok(optarg))
+				return usage();
+			user = optarg;
+			break;
 		default:
 			return usage();
 		}
@@ -164,7 +170,7 @@ static int start(int argc, char **argv)
 	/* The program follows "--", which getopt has taken. */
 	if (optind >= argc || strcmp(argv[optind - 1], "--") || (log && out))
 		return usage();
-	if (svc_set_json(json, sizeof(json), name, &r, log, out,
+	if (svc_set_json(json, sizeof(json), name, &r, log, out, user,
 			 (const char *const *)(argv + optind)) < 0) {
 		fprintf(stderr, "onu-svc: the command of %s is too long\n", name);
 		return 1;

@@ -8,7 +8,11 @@
 #
 #   onu-run ssh     the ssh server: root's password and keys, on the
 #                   management address and on the host link's, if any
-#   onu-run pond    the status daemon and its panel, on the same, port 8080
+#   onu-run pond    the status daemon and its panel, on the same, port 8080,
+#                   as the account pond that procd starts it as (ADR 0014):
+#                   its output goes to /run/pond/log, and the token of
+#                   scripts is /run/pond/token, the boot script's copy of
+#                   /etc/pond.token, which root alone reads
 #   onu-run console the login prompt on the console, which asks for root's
 #                   password; a bench whose /etc/board.conf has
 #                   CONSOLE_AUTOLOGIN=root has root's shell there without
@@ -145,7 +149,12 @@ ssh)
 	exec dropbear -F -r "$KEY" -P "$RUN/dropbear.pid" -p "$mgmt:22" ${data:+-p "$data:22"}
 	;;
 pond)
-	exec pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} >>"$RUN/pond.log" 2>&1
+	log=$RUN/pond/log
+	[ -w "$RUN/pond" ] || log=/dev/null
+	token=
+	[ -r "$RUN/pond/token" ] && token=$RUN/pond/token
+	exec pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} \
+		${token:+-t "$token"} >>"$log" 2>&1
 	;;
 *)
 	echo "usage: onu-run ssh|pond|console|omcid|ntp" >&2

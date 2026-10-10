@@ -57,14 +57,14 @@ static void test_set(void)
 	const char *argv[] = { "/usr/sbin/netifd", "-c", "/run/config", NULL };
 	char buf[512];
 
-	CHECK(svc_set_json(buf, sizeof(buf), "netifd", &r, false, NULL, argv) == (int)strlen(buf));
+	CHECK(svc_set_json(buf, sizeof(buf), "netifd", &r, false, NULL, NULL, argv) == (int)strlen(buf));
 	CHECK(!strcmp(buf, "{\"name\":\"netifd\",\"instances\":{\"netifd\":{\"command\":"
 			   "[\"/usr/sbin/netifd\",\"-c\",\"/run/config\"],"
 			   "\"respawn\":[\"60\",\"2\",\"0\"]}}}"));
 
 	const char *one[] = { "pond", NULL };
 	r = (struct svc_respawn){ 3600, 5, 3 };
-	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, true, NULL, one) > 0);
+	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, true, NULL, NULL, one) > 0);
 	CHECK(!strcmp(buf, "{\"name\":\"pond\",\"instances\":{\"pond\":{\"command\":[\"pond\"],"
 			   "\"respawn\":[\"3600\",\"5\",\"3\"],\"stdout\":true,\"stderr\":true}}}"));
 }
@@ -75,7 +75,7 @@ static void test_escapes(void)
 	const char *argv[] = { "sh", "-c", "echo \"a\\b\"\n\t", NULL };
 	char buf[512];
 
-	CHECK(svc_set_json(buf, sizeof(buf), "x", &r, false, NULL, argv) > 0);
+	CHECK(svc_set_json(buf, sizeof(buf), "x", &r, false, NULL, NULL, argv) > 0);
 	CHECK(strstr(buf, "[\"sh\",\"-c\",\"echo \\\"a\\\\b\\\"\\u000a\\u0009\"]") != NULL);
 }
 
@@ -86,17 +86,17 @@ static void test_too_long(void)
 	char buf[512];
 	int n;
 
-	n = svc_set_json(buf, sizeof(buf), "x", &r, false, NULL, argv);
+	n = svc_set_json(buf, sizeof(buf), "x", &r, false, NULL, NULL, argv);
 	CHECK(n > 0);
 	/* Every size short of the whole fails, and never writes past it. */
 	for (size_t cap = 0; cap <= (size_t)n; cap++) {
 		char small[512];
 
 		memset(small, 'Z', sizeof(small));
-		CHECK(svc_set_json(small, cap, "x", &r, false, NULL, argv) == -1);
+		CHECK(svc_set_json(small, cap, "x", &r, false, NULL, NULL, argv) == -1);
 		CHECK(small[cap] == 'Z');
 	}
-	CHECK(svc_set_json(buf, (size_t)n + 1, "x", &r, false, NULL, argv) == n);
+	CHECK(svc_set_json(buf, (size_t)n + 1, "x", &r, false, NULL, NULL, argv) == n);
 }
 
 static void test_to_file(void)
@@ -105,11 +105,33 @@ static void test_to_file(void)
 	const char *argv[] = { "dhcp6d", "-w", "ppp1", NULL };
 	char buf[512];
 
-	CHECK(svc_set_json(buf, sizeof(buf), "dhcp6d1", &r, false, "/run/dhcp6d.log", argv) > 0);
+	CHECK(svc_set_json(buf, sizeof(buf), "dhcp6d1", &r, false, "/run/dhcp6d.log", NULL, argv) > 0);
 	CHECK(strstr(buf, "\"command\":[\"/bin/sh\",\"-c\","
 			  "\"f=$1; shift; exec \\\"$@\\\" >>\\\"$f\\\" 2>&1\",\"sh\","
 			  "\"/run/dhcp6d.log\",\"dhcp6d\",\"-w\",\"ppp1\"]") != NULL);
 	CHECK(strstr(buf, "stdout") == NULL);
+}
+
+static void test_user(void)
+{
+	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
+	const char *argv[] = { "/usr/lib/onu/onu-run", "pond", NULL };
+	struct svc_instance in;
+	const char *words[SVC_WORDS_MAX];
+	char buf[512], line[128];
+
+	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, false, NULL, "pond", argv) > 0);
+	CHECK(strstr(buf, "\"respawn\":[\"60\",\"2\",\"0\"],\"user\":\"pond\"}") != NULL);
+	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, false, NULL, NULL, argv) > 0);
+	CHECK(strstr(buf, "user") == NULL);
+
+	snprintf(line, sizeof(line), "-u pond -- /usr/lib/onu/onu-run pond");
+	CHECK(svc_parse_instance(line, "pond", &in, words, SVC_WORDS_MAX) == 0);
+	CHECK(in.user && !strcmp(in.user, "pond") && !strcmp(in.argv[1], "pond"));
+	snprintf(line, sizeof(line), "-u -- onu-run pond");
+	CHECK(svc_parse_instance(line, "pond", &in, words, SVC_WORDS_MAX) == -1);
+	snprintf(line, sizeof(line), "-u po/nd -- onu-run pond");
+	CHECK(svc_parse_instance(line, "pond", &in, words, SVC_WORDS_MAX) == -1);
 }
 
 static void test_name(void)
@@ -188,6 +210,7 @@ int main(void)
 	test_escapes();
 	test_too_long();
 	test_to_file();
+	test_user();
 	test_name();
 	test_parse_instance();
 	test_service();

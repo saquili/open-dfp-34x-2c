@@ -68,6 +68,15 @@ check '[ $rc -eq 0 ]'
 check 'logged "pond -l http://198.51.100.2:8080 -l http://192.0.2.2:8080"'
 teardown
 
+echo "the status daemon's token and log, in its directory of /run"
+setup
+mkdir -p "$ONU_ROOT/run/pond"
+echo token-for-scripts >"$ONU_ROOT/run/pond/token"
+run pond
+check 'logged "pond -l http://198.51.100.2:8080 -l http://192.0.2.2:8080 -t $ONU_ROOT/run/pond/token"'
+check '[ -e "$ONU_ROOT/run/pond/log" ]'
+teardown
+
 echo "without an address on the host link, the management address alone"
 setup
 sed -i.bak 's/^DATA_ADDRESS=.*/DATA_ADDRESS=/' "$ONU_ROOT/run/onu-mgmt"

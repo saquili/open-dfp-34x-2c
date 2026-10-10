@@ -39,6 +39,7 @@ int svc_parse_respawn(const char *s, struct svc_respawn *r);
  * @respawn: when procd starts it again
  * @log: whether its output goes to the system log
  * @out: a file its output is appended to, or NULL
+ * @user: the account it runs as, or NULL for root
  * @argv: the program and its arguments, NULL-terminated
  */
 struct svc_instance {
@@ -46,6 +47,7 @@ struct svc_instance {
 	struct svc_respawn respawn;
 	bool log;
 	const char *out;
+	const char *user;
 	const char *const *argv;
 };
 
@@ -54,7 +56,7 @@ struct svc_instance {
 
 /*
  * Read the instance @name of the line @line, "[-r THRESHOLD,TIMEOUT,RETRY]
- * [-l | -o FILE] -- PROGRAM [ARG...]" as onu-svc start takes them, its words
+ * [-l | -o FILE] [-u USER] -- PROGRAM [ARG...]" as onu-svc start takes them, its words
  * split on blanks, into @inst; @line is cut into its words, which @words, of
  * @cap pointers, points at. 0, or -1 when it is not that.
  */
@@ -75,11 +77,13 @@ int svc_service_json(char *buf, size_t cap, const char *name,
  * (NULL-terminated, at least the program), started again as @r says, with
  * its output in the system log when @log, or appended to the file @out when
  * that is not NULL: procd has the output only to its log, so the program
- * then runs from a shell that sends it there. Written into @buf of @cap
- * bytes; returns the length, or -1 when it does not fit.
+ * then runs from a shell that sends it there; as the account @user when
+ * that is not NULL, which procd gives it, with the account's groups.
+ * Written into @buf of @cap bytes; returns the length, or -1 when it does
+ * not fit.
  */
 int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
-		 bool log, const char *out, const char *const argv[]);
+		 bool log, const char *out, const char *user, const char *const argv[]);
 
 /* {"name": @name}, for "delete" and "list"; as svc_set_json(). */
 int svc_name_json(char *buf, size_t cap, const char *name);

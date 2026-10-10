@@ -131,6 +131,10 @@ static void put_instance(struct out *o, const struct svc_instance *in)
 	    in->respawn.timeout, in->respawn.retry);
 	if (in->log)
 		put(o, ",\"stdout\":true,\"stderr\":true");
+	if (in->user) {
+		put(o, ",\"user\":");
+		put_string(o, in->user);
+	}
 	put(o, "}");
 }
 
@@ -156,10 +160,11 @@ int svc_service_json(char *buf, size_t cap, const char *name,
 }
 
 int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
-		 bool log, const char *out, const char *const argv[])
+		 bool log, const char *out, const char *user, const char *const argv[])
 {
 	struct svc_instance one = {
-		.name = name, .respawn = *r, .log = log, .out = out, .argv = argv,
+		.name = name, .respawn = *r, .log = log, .out = out, .user = user,
+		.argv = argv,
 	};
 
 	return svc_service_json(buf, cap, name, &one, 1);
@@ -188,6 +193,11 @@ int svc_parse_instance(char *line, const char *name, struct svc_instance *inst,
 			if (!w)
 				return -1;
 			inst->out = w;
+		} else if (!strcmp(w, "-u")) {
+			w = strtok_r(NULL, " \t\r\n", &save);
+			if (!w || !svc_name_ok(w))
+				return -1;
+			inst->user = w;
 		} else {
 			return -1;
 		}
