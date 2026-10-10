@@ -180,6 +180,10 @@ onu-svc start ssh -- /usr/lib/onu/onu-run ssh || {
 	warn "the ssh server is no service of procd: started once"
 	onu-run ssh &
 }
+# What the status daemon may ask of the stick, onu-act does as root on its
+# behalf, and nothing else (ADR 0014): the status daemon does not run a
+# program of the stick itself.
+onu-svc start act -- /usr/lib/onu/onu-act || warn "the panel can change nothing"
 onu-svc start pond -- /usr/lib/onu/onu-run pond || warn "no status daemon"
 
 # The time, which the stick has no clock of its own for and the OLT does not
