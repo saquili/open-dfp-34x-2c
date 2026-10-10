@@ -21,8 +21,9 @@ keeps it.
 
 Building and testing::
 
-   make           # build/pppoed
-   make check     # the tests
+   make           # build/pppoed, with libubus, libubox and libblobmsg_json
+   make check     # the tests, with build/pppoed-none, which prints what it
+                  # would tell netifd
 
 ``up`` prints a line for each family that came up::
 
@@ -58,6 +59,32 @@ the other; once IPCP is open, IPv6CP has two restart periods, six seconds, to
 open too. ``-4`` and ``-6`` leave a family out: pppoed does not ask for it and
 refuses the peer's request with a Protocol-Reject, as for an operator that
 gives IPv4 and IPv6 on two sessions of one line.
+
+Under netifd
+============
+
+On the stick a session is an interface of netifd, of the protocol
+``pppoed`` (ADR 0014), whose handler is pppoed itself, as
+``/lib/netifd/proto/pppoed.sh``: netifd runs it as ``pppoed.sh '' dump`` for
+what the protocol takes (the session, its family, whether its address is
+handed on, whether the default route goes through it), and as ``pppoed.sh
+pppoed setup|teardown IFACE CONFIG DEVICE`` for an interface. At setup it has
+netifd run ``pppoed up`` for the session on the interface's device, with the
+account of ``/run/onu-pppoeN``, so that netifd keeps it and starts it again
+when it ends; at teardown it has netifd end it, which pppoed does as a peer
+expects. The messages go over ubus (``notify_proto``), as JSON text built in
+``src/nproto.c``, which the tests check on any host.
+
+``-N IFACE`` is what makes ``up`` netifd's: the link comes up with its MTU and
+its IPv6 link-local address, and the IPv4 address (unless ``-P`` hands it on),
+the default route that ``-D`` asks for and the name servers go to netifd, which
+puts them in place and holds them; netifd takes away from an interface it
+holds what it did not put there itself. ``-o DIR`` writes what the session
+brought to the files of DIR while it lasts: ``ppp``, ``ipv4``, ``peer``,
+``dns`` and ``ipv6``. ``-w`` waits before the discovery, so that sessions that
+ended together start again apart; a session that does not come up waits five
+seconds before it ends, so that netifd, which starts it again at once, does
+not do so in a loop.
 
 SIGTERM, SIGINT and SIGHUP end a session as a peer expects: an LCP
 Terminate-Request, then a PADT, so that the concentrator frees the session

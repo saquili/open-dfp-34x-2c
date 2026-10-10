@@ -16,7 +16,7 @@ override CPPFLAGS += -Isrc
 override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes \
                  -Wshadow -Wpointer-arith -Wwrite-strings
 
-OBJS := $(addprefix $(BUILD)/src/,main.o disc.o ppp.o session.o md5.o)
+OBJS := $(addprefix $(BUILD)/src/,main.o disc.o ppp.o session.o md5.o nproto.o)
 
 .PHONY: all check clean
 
@@ -26,7 +26,16 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
-$(BUILD)/pppoed: $(OBJS)
+# pppoed tells netifd about a session over ubus (nproto.h): libubus,
+# libubox and libubox's JSON part. pppoed-none, which the tests build on a host
+# without them, prints what it would send.
+$(BUILD)/pppoed: $(OBJS) $(BUILD)/src/notify-ubus.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lblobmsg_json -lubox
+
+$(BUILD)/pppoed-none: $(OBJS) $(BUILD)/src/notify-none.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_nproto: $(BUILD)/tests/test_nproto.o $(BUILD)/src/nproto.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_md5: $(BUILD)/tests/test_md5.o $(BUILD)/src/md5.o $(BUILD)/tests/log.o
@@ -39,10 +48,13 @@ $(BUILD)/test_ncp: $(BUILD)/tests/test_ncp.o $(addprefix $(BUILD)/src/,session.o
 $(BUILD)/test_disc: $(BUILD)/tests/test_disc.o $(BUILD)/tests/log.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-check: all $(BUILD)/test_md5 $(BUILD)/test_ncp $(BUILD)/test_disc
+check: $(BUILD)/pppoed-none $(BUILD)/test_md5 $(BUILD)/test_ncp $(BUILD)/test_disc \
+	$(BUILD)/test_nproto
 	$(BUILD)/test_md5
 	$(BUILD)/test_ncp
 	$(BUILD)/test_disc
+	$(BUILD)/test_nproto
+	BUILD=$(abspath $(BUILD)) sh tests/test_proto.sh
 
 clean:
 	rm -rf $(BUILD)

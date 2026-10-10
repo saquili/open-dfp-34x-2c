@@ -12,7 +12,11 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
+#include "nproto.h"
 #include "pppoed.h"
+
+/* Where pppoed is, for netifd to run it (cmd_proto()). */
+#define PPPOED_PATH "/usr/sbin/pppoed"
 
 static int g_verbose;
 
@@ -75,6 +79,7 @@ static int print_usage(void)
 	fprintf(stderr,
 		"usage: pppoed up -i IFACE (-f FILE | -u USER -p SECRET) [-s SERVICE]\n"
 		"                 [-D] [-P] [-M] [-4 | -6] [-k SECONDS] [-n TRIES] [-t MS] [-v]\n"
+		"                 [-N INTERFACE] [-o DIR] [-w SECONDS]\n"
 		"       pppoed discover -i IFACE [-s SERVICE] [-n TRIES] [-t MS] [-T] [-A] [-v]\n"
 		"       pppoed sniff -i IFACE [-t MS] [-e ETHERTYPE]\n"
 		"\n"
@@ -89,9 +94,15 @@ static int print_usage(void)
 		"            here, for a host behind this one to take.\n"
 		"            -M sends packets as large as the discovery agreed to\n"
 		"            (RFC 4638) when the peer's LCP asks for 1492.\n"
+		"            -N reports the session to netifd's INTERFACE, which puts\n"
+		"            the address and the default route in place; -o writes it\n"
+		"            to the files of DIR (ppp, ipv4, ipv6, dns, peer) while it\n"
+		"            lasts; -w waits SECONDS before the discovery.\n"
 		"  discover  run the discovery alone and print the session; -T ends\n"
 		"            the session with a PADT, -A listens to every ethertype.\n"
-		"  sniff     print the frames seen on an interface; nothing is sent.\n");
+		"  sniff     print the frames seen on an interface; nothing is sent.\n"
+		"\n"
+		"As /lib/netifd/proto/pppoed.sh it is netifd's protocol \"pppoed\".\n");
 	return 2;
 }
 
@@ -186,11 +197,57 @@ static void on_stop(int sig)
  * that the concentrator frees it at once instead of after its echo timeout;
  * a session that does not come up after its discovery gets a PADT too.
  */
+/* The fact @name of the session in @dir, @value, or none for NULL. */
+static void fact(const char *dir, const char *name, const char *value)
+{
+	char path[256];
+	FILE *f;
+
+	if (!dir)
+		return;
+	snprintf(path, sizeof(path), "%s/%s", dir, name);
+	if (!value) {
+		unlink(path);
+		return;
+	}
+	f = fopen(path, "we");
+	if (!f) {
+		PPPOED_WARN("%s: %s", path, strerror(errno));
+		return;
+	}
+	fprintf(f, "%s\n", value);
+	fclose(f);
+}
+
+/*
+ * No fact of the session in @dir: before it starts, as one that was killed
+ * left its own, and after it ends.
+ */
+static void facts_clear(const char *dir)
+{
+	for (const char *const *f = (const char *const[]){ "ppp", "ipv4", "ipv6", "dns", "peer", NULL };
+	     *f; f++)
+		fact(dir, *f, NULL);
+}
+
+/*
+ * A session that does not come up under netifd ends after a while, so that
+ * netifd, which starts it again at once, does not do so in a loop.
+ */
+static int give_up(const char *netifd)
+{
+	if (netifd)
+		for (int i = 0; i < 5 && !pppoed_stop; i++)
+			sleep(1);
+	return 1;
+}
+
 static int cmd_up(int argc, char **argv)
 {
 	const char *ifname = NULL, *service = "", *credfile = NULL;
+	const char *netifd = NULL, *facts = NULL;
 	char user[64] = "", secret[256] = "";
-	unsigned int tries = 3, timeout = 3000, keep = 0;
+	unsigned int tries = 3, timeout = 3000, keep = 0, wait = 0;
 	bool defaultroute = false, pass_on = false, take_payload = false;
 	bool want_ipv4 = true, want_ipv6 = true;
 	struct sigaction sa = { .sa_handler = on_stop };
@@ -203,7 +260,7 @@ static int cmd_up(int argc, char **argv)
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL);
 
-	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DPM46v")) != -1) {
+	while ((opt = getopt(argc, argv, "i:s:u:p:f:n:t:k:DPM46vN:o:w:")) != -1) {
 		switch (opt) {
 		case 'i':
 			ifname = optarg;
@@ -247,19 +304,35 @@ static int cmd_up(int argc, char **argv)
 		case 'v':
 			g_verbose = 1;
 			break;
+		case 'N':
+			netifd = optarg;
+			break;
+		case 'o':
+			facts = optarg;
+			break;
+		case 'w':
+			wait = (unsigned int)strtoul(optarg, NULL, 10);
+			break;
 		default:
 			return print_usage();
 		}
 	}
 	if (!ifname || !tries || !timeout || (!want_ipv4 && !want_ipv6))
 		return print_usage();
+	facts_clear(facts);
+
+	/* Sessions that ended together start again apart. */
+	while (wait-- && !pppoed_stop)
+		sleep(1);
+	if (pppoed_stop)
+		return 0;
 
 	if (credfile) {
 		err = creds_from_file(credfile, user, sizeof(user), secret,
 				      sizeof(secret));
 		if (err) {
 			PPPOED_ERR("%s: %s", credfile, strerror(-err));
-			return 1;
+			return give_up(netifd);
 		}
 	}
 
@@ -273,14 +346,14 @@ static int cmd_up(int argc, char **argv)
 	if (fd < 0) {
 		PPPOED_ERR("cannot open a discovery socket on %s: %s", ifname,
 			   strerror(-fd));
-		return 1;
+		return give_up(netifd);
 	}
 
 	err = pppoe_discover(fd, &s, service, tries, timeout);
 	if (err) {
 		PPPOED_ERR("discovery failed: %s", strerror(-err));
 		close(fd);
-		return 1;
+		return give_up(netifd);
 	}
 
 	err = ppp_open(&s, &l);
@@ -289,7 +362,7 @@ static int cmd_up(int argc, char **argv)
 			   strerror(-err));
 		pppoe_terminate(fd, &s);
 		close(fd);
-		return 1;
+		return give_up(netifd);
 	}
 	l.take_payload = take_payload;
 
@@ -299,17 +372,25 @@ static int cmd_up(int argc, char **argv)
 		ppp_close(&l);
 		pppoe_terminate(fd, &s);
 		close(fd);
-		return 1;
+		return give_up(netifd);
 	}
 
-	err = ppp_ifconfig(&l, defaultroute, pass_on);
+	/*
+	 * Under netifd the address and the default route are netifd's to put,
+	 * which it takes away from an interface it holds otherwise: here the
+	 * link only comes up, with its MTU and its IPv6 link-local address.
+	 */
+	if (netifd)
+		err = ppp_ifconfig(&l, false, true);
+	else
+		err = ppp_ifconfig(&l, defaultroute, pass_on);
 	if (err) {
 		PPPOED_ERR("cannot configure %s: %s", l.ifname, strerror(-err));
 		ppp_terminate(&l);
 		ppp_close(&l);
 		pppoe_terminate(fd, &s);
 		close(fd);
-		return 1;
+		return give_up(netifd);
 	}
 
 	{
@@ -335,8 +416,37 @@ static int cmd_up(int argc, char **argv)
 			print_link_local(pl, sizeof(pl), l.iid_peer);
 			printf("up6 %s local %s peer %s session %u\n", l.ifname,
 			       ll, pl, s.sid);
+			fact(facts, "ipv6", ll);
 		}
 		fflush(stdout);
+
+		if (l.ipv4_up) {
+			char dns[2 * INET_ADDRSTRLEN];
+
+			snprintf(dns, sizeof(dns), "%s%s%s", l.dns1 ? s1 : "",
+				 l.dns1 && l.dns2 ? " " : "", l.dns2 ? s2 : "");
+			fact(facts, "ipv4", sl);
+			fact(facts, "peer", sp);
+			fact(facts, "dns", *dns ? dns : NULL);
+		}
+		fact(facts, "ppp", l.ifname);
+
+		if (netifd) {
+			struct nproto_link nl = {
+				.ifname = l.ifname,
+				.local = l.ipv4_up ? sl : NULL,
+				.peer = l.ipv4_up && l.peer_ip ? sp : NULL,
+				.dns = { l.dns1 ? s1 : NULL, l.dns2 ? s2 : NULL },
+				.session = s.sid,
+				.pass = pass_on,
+				.defaultroute = defaultroute,
+			};
+			char json[1024];
+
+			if (nproto_up_json(json, sizeof(json), &nl) < 0 ||
+			    nproto_send(netifd, json))
+				PPPOED_WARN("netifd was not told that %s is up", l.ifname);
+		}
 	}
 
 	err = ppp_run(&l, keep);
@@ -349,6 +459,7 @@ static int cmd_up(int argc, char **argv)
 	ppp_close(&l);
 	pppoe_terminate(fd, &s);
 	close(fd);
+	facts_clear(facts);
 	return 0;
 }
 
@@ -414,10 +525,74 @@ static int cmd_sniff(int argc, char **argv)
 	return 0;
 }
 
+/*
+ * netifd's protocol handler (nproto.h): "'' dump", or "pppoed setup|teardown
+ * IFACE CONFIG [DEVICE]". At setup netifd runs pppoed for the session that
+ * CONFIG names, on DEVICE, with its account in /run/onu-pppoeN, and its facts
+ * in /run/session/N; at teardown it ends it.
+ */
+static int cmd_proto(int argc, char **argv)
+{
+	char json[1024], family[16] = "both", account[64], dir[64], wait[12];
+	const char *iface = argc > 3 ? argv[3] : NULL;
+	const char *config = argc > 4 ? argv[4] : NULL;
+	const char *device = argc > 5 ? argv[5] : NULL;
+	const char *cmd[24];
+	int session, c = 0;
+
+	if (!strcmp(argv[2], "dump")) {
+		if (nproto_dump_json(json, sizeof(json)) < 0)
+			return 1;
+		puts(json);
+		return 0;
+	}
+	if (!iface)
+		return print_usage();
+	if (!strcmp(argv[2], "teardown"))
+		return nproto_kill_json(json, sizeof(json)) < 0 || nproto_send(iface, json);
+
+	session = nproto_session(config);
+	if (session < 0 || !device) {
+		PPPOED_ERR("%s: no session 1 to 7, or no device", iface);
+		return 1;
+	}
+	nproto_string(config, "family", family, sizeof(family));
+	snprintf(account, sizeof(account), "/run/onu-pppoe%d", session);
+	snprintf(dir, sizeof(dir), "/run/session/%d", session);
+	snprintf(wait, sizeof(wait), "%d", 3 * (session - 1));
+	cmd[c++] = PPPOED_PATH;
+	cmd[c++] = "up";
+	cmd[c++] = "-i";
+	cmd[c++] = device;
+	cmd[c++] = "-f";
+	cmd[c++] = account;
+	cmd[c++] = "-M";
+	cmd[c++] = "-N";
+	cmd[c++] = iface;
+	cmd[c++] = "-o";
+	cmd[c++] = dir;
+	cmd[c++] = "-w";
+	cmd[c++] = wait;
+	if (!strcmp(family, "ipv4"))
+		cmd[c++] = "-4";
+	else if (!strcmp(family, "ipv6"))
+		cmd[c++] = "-6";
+	if (nproto_bool(config, "pass") == 1)
+		cmd[c++] = "-P";
+	if (nproto_bool(config, "defaultroute") == 1)
+		cmd[c++] = "-D";
+	cmd[c] = NULL;
+	return nproto_run_json(json, sizeof(json), cmd) < 0 || nproto_send(iface, json);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
 		return print_usage();
+
+	if (argc >= 3 && (!strcmp(argv[2], "dump") || !strcmp(argv[2], "setup") ||
+			  !strcmp(argv[2], "teardown")))
+		return cmd_proto(argc, argv);
 
 	if (strcmp(argv[1], "sniff") == 0)
 		return cmd_sniff(argc - 1, argv + 1);
