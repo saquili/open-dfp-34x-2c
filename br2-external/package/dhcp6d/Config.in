@@ -3,6 +3,12 @@
 
 config BR2_PACKAGE_DHCP6D
 	bool "dhcp6d"
+	depends on !BR2_STATIC_LIBS # libubox, ubus
+	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # json-c, ubus
+	select BR2_PACKAGE_JSON_C
+	select BR2_PACKAGE_LIBUBOX
+	select BR2_PACKAGE_UBUS
 	help
 	  The IPv6 of a PPPoE session handed on: DHCPv6 prefix delegation
-	  and router advertisements, from dhcp6d/ in this repository.
+	  and router advertisements, from dhcp6d/ in this repository. It
+	  publishes its state on ubus.
