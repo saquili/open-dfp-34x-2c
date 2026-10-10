@@ -263,7 +263,8 @@ class Inittab(unittest.TestCase):
 
     def test_the_console_asks_for_root_and_its_password_again_after_each_session(self):
         entries = list(self.entries())
-        self.assertIn("console::respawnlate:/sbin/getty -L console 0 vt100", entries)
+        # onu-run console runs getty, or on a bench that asks for it login -f.
+        self.assertIn("console::respawnlate:/usr/sbin/onu-run console", entries)
         self.assertFalse([e for e in entries if e.endswith(":-/bin/sh")],
                          "a shell without a login on the console")
 

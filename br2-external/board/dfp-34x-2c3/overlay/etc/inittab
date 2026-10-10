@@ -29,6 +29,7 @@
 
 # A login prompt on the console, started again whenever the session ends. The
 # one account is root, with the password that ssh and the panel take too
-# (onu-store keeps it; until one is set it is "admin"). The speed stays the
-# one the boot loader set, 115200 baud.
-console::respawnlate:/sbin/getty -L console 0 vt100
+# (onu-store keeps it; until one is set it is "admin"). A bench may have root's
+# shell there without the password (onu-run, CONSOLE_AUTOLOGIN in
+# /etc/board.conf). The speed stays the one the boot loader set, 115200 baud.
+console::respawnlate:/usr/sbin/onu-run console
