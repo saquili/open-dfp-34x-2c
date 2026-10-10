@@ -157,11 +157,15 @@ static void test_banks(void)
 	check(strstr(s, "\"size_src\":\"/proc/mtd\"") != NULL,
 	      "the value says where the sizes came from");
 
-	check(strstr(s, "\"writable\":true") == NULL,
-	      "nothing is reported writable");
-	check(strstr(s, "\"writable\":null") != NULL &&
-		      strstr(s, "\"unreadable\":") != NULL,
-	      "with no MTD device to ask, writability is null with a named reason");
+	check(strstr(s, "\"name\":\"boot\",\"mtd\":0,\"size_b\":262144,\"type\":\"norflash\","
+			"\"type_code\":3,\"writable\":false}") != NULL,
+	      "the driver's type and flags come from sysfs: boot takes no writes");
+	check(strstr(s, "\"name\":\"env\",\"mtd\":1,\"size_b\":8192,\"type\":\"norflash\","
+			"\"type_code\":3,\"writable\":true}") != NULL,
+	      "and env does");
+	check(strstr(s, "\"name\":\"r1\",\"mtd\":7,\"size_b\":2572288,\"type\":null,"
+			"\"type_code\":null,\"writable\":null,\"unreadable\":") != NULL,
+	      "a partition sysfs says nothing of is null, with a named reason");
 
 	check(strstr(s, "\"layout\":\"redundant\"") != NULL,
 	      "the environment is the redundant kind, decided by the CRC not by a guess");

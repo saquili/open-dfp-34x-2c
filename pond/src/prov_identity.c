@@ -3,9 +3,10 @@
 
 /*
  * How the stick introduces itself to the OLT: the "name=value" lines of
- * /run/onu-identity that onu-config keeps, and /run/onu-identity-source,
- * "store" or "factory". A read never gives the PLOAM password nor the
- * logical (LOID) password, only whether one is set. A change goes to
+ * /run/onu-identity that onu-config keeps, and where they came from, "store"
+ * or "factory", as onu-config identity-current gives them through onu-act,
+ * without the PLOAM password nor the logical (LOID) password, only whether
+ * one is set: root alone reads the file. A change goes to
  * onu-config, then onu-apply reidentify registers again with the OLT, both
  * through onu-act (bus.h); onu-apply takes one registration after the other.
  */
@@ -24,9 +25,6 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#define IDENTITY "/run/onu-identity"
-#define SOURCE "/run/onu-identity-source"
 
 /*
  * The fields the panel shows and may change: its key, the file's, the
@@ -81,10 +79,11 @@ static void field(const char *text, const char *name, char *out, size_t cap)
 
 int prov_identity(struct prov_buf *out)
 {
-	char text[2048], v[256], source[32];
+	char text[2048], v[256];
 	size_t i;
 
-	if (prov_slurp(IDENTITY, text, sizeof(text), NULL))
+	/* onu-config gives it without the passwords: root alone reads the file. */
+	if (bus_act("identity_current", NULL, NULL, 0, NULL, text, sizeof(text)))
 		*text = '\0';
 
 	pv_open(out, '{');
@@ -100,20 +99,18 @@ int prov_identity(struct prov_buf *out)
 		pv_str(out, v);
 		pv_comma(out);
 	}
-	field(text, "ploam_password", v, sizeof(v));
+	field(text, "ploam_set", v, sizeof(v));
 	pv_key(out, "ploam_set");
-	pv_bool(out, *v != '\0');
+	pv_bool(out, !strcmp(v, "1"));
 	pv_comma(out);
-	field(text, "loid_password", v, sizeof(v));
+	field(text, "loid_password_set", v, sizeof(v));
 	pv_key(out, "loid_password_set");
-	pv_bool(out, *v != '\0');
-	explicit_bzero(v, sizeof(v));
-	explicit_bzero(text, sizeof(text));
+	pv_bool(out, !strcmp(v, "1"));
 	pv_comma(out);
+	field(text, "source", v, sizeof(v));
 	pv_key(out, "source");
-	if (!prov_read_line(SOURCE, source, sizeof(source)) &&
-	    (!strcmp(source, "store") || !strcmp(source, "factory")))
-		pv_str(out, source);
+	if (!strcmp(v, "store") || !strcmp(v, "factory"))
+		pv_str(out, v);
 	else
 		pv_null(out);
 	pv_close(out, '}');

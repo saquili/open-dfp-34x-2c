@@ -128,8 +128,9 @@ or of the other bank with an empty body, and restarts.
   software image's version, ``PACK_VERSION``, and ``PLOAM`` (ten characters or
   twenty hex digits) and ``LOID_PASSWORD`` (up to twelve), each kept when
   empty. It goes to ``onu-config identity``, then ``onu-apply reidentify``
-  registers again. A read never gives either password, only whether one is
-  set.
+  registers again. A read is ``onu-config identity-current`` through
+  onu-act, which never gives either password, only whether one is set: root
+  alone reads ``/run/onu-identity``.
 * ``hostname``: the stick's name, ``HOSTNAME``, a name of RFC 1123; it goes to
   ``onu-config system`` and to the kernel.
 * ``sfp_lane``: the SFP lane's setting through ``onu-lane``: ``MODE``

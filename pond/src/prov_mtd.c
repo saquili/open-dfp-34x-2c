@@ -21,7 +21,6 @@
 
 #ifdef __linux__
 #include <mtd/mtd-user.h>
-#include <sys/ioctl.h>
 #endif
 
 #define POND_MTD_PARTS 32
@@ -114,63 +113,49 @@ struct mtd_driver {
 	bool writable;
 };
 
-#ifndef __linux__
-
-static void mtd_driver_query(int index, struct mtd_driver *o)
-{
-	(void)index;
-	o->valid = false;
-	o->err = -EOPNOTSUPP;
-}
-#else
-static const char *mtd_type_name(unsigned int type)
-{
-	switch (type) {
-	case MTD_ABSENT:
-		return "absent";
-	case MTD_RAM:
-		return "ram";
-	case MTD_ROM:
-		return "rom";
-	case MTD_NORFLASH:
-		return "norflash";
-	case MTD_NANDFLASH:
-		return "nandflash";
-	case MTD_DATAFLASH:
-		return "dataflash";
-	case MTD_UBIVOLUME:
-		return "ubivolume";
-	case MTD_MLCNANDFLASH:
-		return "mlcnandflash";
-	default:
-		return NULL;
-	}
-}
-
-static void mtd_driver_query(int index, struct mtd_driver *o)
-{
-	struct mtd_info_user mi;
-	char dev[32], rooted[512];
-	int fd;
-
-	snprintf(dev, sizeof(dev), "/dev/mtd%d", index);
-	fd = open(prov_path(dev, rooted, sizeof(rooted)), O_RDONLY | O_CLOEXEC);
-	if (fd < 0) {
-		o->err = -errno;
-		return;
-	}
-	memset(&mi, 0, sizeof(mi));
-	if (ioctl(fd, MEMGETINFO, &mi) < 0) {
-		o->err = -errno;
-	} else {
-		o->valid = true;
-		o->type_code = mi.type;
-		o->type_name = mtd_type_name(mi.type);
-		o->writable = (mi.flags & MTD_WRITEABLE) != 0;
-	}
-	close(fd);
-}
+/* The driver's flag of a partition that takes writes (mtd/mtd-abi.h). */
+#ifndef MTD_WRITEABLE
+#define MTD_WRITEABLE 0x400
 #endif
+
+/*
+ * What the MTD driver says of partition @index, from /sys/class/mtd/mtdN,
+ * which any user may read: its type, as MEMGETINFO names it, and whether it
+ * takes writes. The device itself, root's alone, is not opened.
+ */
+static void mtd_driver_query(int index, struct mtd_driver *o)
+{
+	static const struct {
+		const char *sys;
+		const char *name;
+		long long code;
+	} types[] = {
+		{ "absent", "absent", 0 },	{ "ram", "ram", 1 },
+		{ "rom", "rom", 2 },		{ "nor", "norflash", 3 },
+		{ "nand", "nandflash", 4 },	{ "dataflash", "dataflash", 6 },
+		{ "ubi", "ubivolume", 7 },	{ "mlc-nand", "mlcnandflash", 8 },
+	};
+	char path[64], type[32], flags[32];
+	unsigned int i;
+
+	snprintf(path, sizeof(path), "/sys/class/mtd/mtd%d/type", index);
+	o->err = prov_read_line(path, type, sizeof(type));
+	if (o->err)
+		return;
+	snprintf(path, sizeof(path), "/sys/class/mtd/mtd%d/flags", index);
+	o->err = prov_read_line(path, flags, sizeof(flags));
+	if (o->err)
+		return;
+	o->type_name = "unknown";
+	o->type_code = -1;
+	for (i = 0; i < ARRAY_SIZE(types); i++)
+		if (!strcmp(type, types[i].sys)) {
+			o->type_name = types[i].name;
+			o->type_code = types[i].code;
+		}
+	o->writable = (strtoul(flags, NULL, 16) & MTD_WRITEABLE) != 0;
+	o->valid = true;
+}
 
 struct env_copy {
 	const char *part;
