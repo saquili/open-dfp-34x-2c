@@ -15,6 +15,19 @@
 
 void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_handler_t fn);
 
+/*
+ * The management address in use and the new one that waits to be
+ * confirmed, empty without one, as onu-mgmt tells them (@cap bytes each).
+ */
+bool mgmt_addresses(char *current, char *pending, size_t cap);
+
+/*
+ * After a change was kept or taken back by other means (changes.c): listen
+ * on the address in use alone, where @current and @pending were the ones
+ * of before.
+ */
+void mgmt_settle(struct mg_mgr *mgr, const char *current, const char *pending);
+
 /* After a restart in the middle of a change: listen on the new address too. */
 void mgmt_resume(struct mg_mgr *mgr, const char *port, mg_event_handler_t fn);
 

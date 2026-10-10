@@ -13,6 +13,8 @@
  *   /api/get/ID        one value
  *   /api/getm?ids=A,B  several values at once, slow ones left out
  *   /api/set/ID        a POST: change a value to the body of the request
+ *   /api/set/changes   a POST: keep the changes on trial, or take them back
+ *                      (changes.c)
  *   /api/system/restart a POST: restart the stick
  *   /api/firmware/upload   a POST of an update file: into the other bank
  *   /api/firmware/download the running bank as an update file
@@ -28,6 +30,7 @@
  */
 
 #include "auth.h"
+#include "changes.h"
 #include "firmware.h"
 #include "mgmt.h"
 #include "prov.h"
@@ -617,6 +620,8 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		api_get(c, caps[0]);
 	else if (mg_match(hm->uri, mg_str("/api/set/mgmt"), NULL) && post)
 		mgmt_set(c, hm, handler);
+	else if (mg_match(hm->uri, mg_str("/api/set/changes"), NULL) && post)
+		changes_set(c, hm);
 	else if (mg_match(hm->uri, mg_str("/api/set/*"), caps))
 		api_set(c, hm, caps[0]);
 	else

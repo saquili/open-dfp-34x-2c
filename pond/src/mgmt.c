@@ -169,6 +169,34 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 	}
 }
 
+bool mgmt_addresses(char *current, char *pending, size_t cap)
+{
+	static const char *const status[] = { "status", NULL };
+	char text[512];
+
+	*current = *pending = '\0';
+	if (prov_exec(program(), status, NULL, text, sizeof(text)))
+		return false;
+	if (!status_value(text, "ADDRESS", current, cap))
+		*current = '\0';
+	if (!status_value(text, "PENDING_ADDRESS", pending, cap))
+		*pending = '\0';
+	return true;
+}
+
+void mgmt_settle(struct mg_mgr *mgr, const char *current, const char *pending)
+{
+	char now[24], waits[24];
+
+	if (!*pending || !strcmp(current, pending) ||
+	    !mgmt_addresses(now, waits, sizeof(now)) || *waits)
+		return;
+	if (!strcmp(now, pending))
+		unlisten(mgr, current);
+	else if (!strcmp(now, current))
+		unlisten(mgr, pending);
+}
+
 void mgmt_resume(struct mg_mgr *mgr, const char *port, mg_event_handler_t fn)
 {
 	static const char *const status[] = { "status", NULL };

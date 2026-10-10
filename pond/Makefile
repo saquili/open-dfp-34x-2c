@@ -24,7 +24,7 @@ LDLIBS  += -lmnl -lcrypt
 
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
         prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o
-OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o firmware.o mgmt.o $(PROV)) $(BUILD)/mongoose.o
+OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o changes.o firmware.o mgmt.o $(PROV)) $(BUILD)/mongoose.o
 
 .PHONY: all check clean
 

@@ -1646,23 +1646,21 @@ static void test_settings(void)
 	settled(buf, sizeof(buf));
 
 	s = render(prov_settings, buf, sizeof(buf), &rc);
-	check(strstr(s, "\"trial\":null") != NULL, "no trial without /run/onu-trial");
-	put("/run/onu-trial", "UNTIL=1264\nTOKEN=99\n", 0644);
+	check(strstr(s, "\"trials\":[]") != NULL, "no change on trial without /run/onu-trial.d");
+	mkdir(prov_path("/run/onu-trial.d", file, sizeof(file)), 0755);
+	put("/run/onu-trial.d/settings", "UNTIL=1264\nTOKEN=99\n", 0644);
+	put("/run/onu-trial.d/mgmt",
+	    "VLAN=100\nADDRESS=192.0.2.10/30\nIFACE=mgmt100\nUNTIL=1800\nTOKEN=98\n", 0644);
+	put("/run/onu-trial.d/settings.new", "UNTIL=1\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
-	check(strstr(s, "\"trial\":{\"until_s\":1264}") != NULL,
-	      "the settings tell the change on trial, and when it goes back");
+	check(strstr(s, "\"trials\":[{\"name\":\"settings\",\"until_s\":1264},"
+			"{\"name\":\"mgmt\",\"until_s\":1800,\"address\":\"192.0.2.10/30\"}]") != NULL,
+	      "the settings tell each change on trial, when it goes back, and the pair's address");
 	rc = prov_settings_set("CONFIRM=1\n", err, sizeof(err));
-	check(rc == 0, "CONFIRM=1 alone is taken");
-	settled(buf, sizeof(buf));
-	rc = prov_settings_set("REVERT=1", err, sizeof(err));
-	check(rc == 0, "and so is REVERT=1 alone");
-	settled(buf, sizeof(buf));
-	s = slurp("/run/applied", file, sizeof(file));
-	check(s && strstr(s, "try\nconfirm\nrevert\n"),
-	      "they start onu-apply confirm and onu-apply revert");
-	rc = prov_settings_set("CONFIRM=1\nWAN_VLAN=36\n", err, sizeof(err));
-	check(rc == -EINVAL, "CONFIRM is no setting beside others");
-	unlink(prov_path("/run/onu-trial", file, sizeof(file)));
+	check(rc == -EINVAL, "a confirmation is no setting: /api/set/changes takes it");
+	unlink(prov_path("/run/onu-trial.d/settings", file, sizeof(file)));
+	unlink(prov_path("/run/onu-trial.d/settings.new", file, sizeof(file)));
+	unlink(prov_path("/run/onu-trial.d/mgmt", file, sizeof(file)));
 
 	rc = prov_settings_set("WAN_GATEWAY=203.0.113.1", err, sizeof(err));
 	check(rc == -EINVAL, "a gateway outside the WAN's network is refused");
