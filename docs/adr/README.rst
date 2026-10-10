@@ -53,4 +53,7 @@ record.
      - Accepted
    * - 0012
      - One account, root, for the console, ssh and the panel
+     - Accepted, amended by 0013
+   * - 0013
+     - procd is the first process and watches the stick's programs
      - Accepted

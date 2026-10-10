@@ -233,26 +233,43 @@ The network layer of OpenWrt
     into ``netifd``. Buildroot builds them with
     ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
     command-line tools of these packages, ``ubus``, ``uci`` and ``jshn``, are
-    not in the image: the post-build script takes them out. The boot script
-    starts both; netifd brings up the management VLAN and its address, from
-    the configuration that ``onu-net`` writes in ``/run/config``
+    not in the image: the post-build script takes them out. procd starts both;
+    netifd brings up the management VLAN and its address, from the
+    configuration that ``onu-net`` writes in ``/run/config``
     (``onu-utils/README.rst``), and takes the other links over one at a time
     as the scripts that set them up move to it.
+procd
+    OpenWrt's init and service supervisor, process 1, with the patches in
+    ``br2-external/package/procd`` (``docs/adr/0013-procd-is-the-first-process.rst``).
 iproute2
     ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
     classifier and the PON driver, and ``bridge``, which shows the bridge's
     VLANs. The post-build script takes the other programs of the package out
     (``br2-external/board/dfp-34x-2c3/post-build.sh``).
-The boot script
-    ``/etc/init.d/rcS``, run by BusyBox init at ``sysinit`` (``/etc/inittab``):
+The start
+    ``/sbin/init``, the first program, mounts ``/proc``, ``/sys``,
+    ``/dev/pts`` and tmpfs on ``/tmp``, ``/run`` and ``/var`` (``/var/run`` is
+    ``/run``), and ``/dev`` too if the kernel has not (it mounts devtmpfs
+    itself when it starts the first program), and execs ``procd``, which is
+    process 1 from then on. procd feeds the watchdog (a timeout of 30 s, fed
+    every 5 s), starts ``ubusd`` and runs ``/etc/inittab``:
 
-    #. mounts ``/proc``, ``/sys``, ``/dev/pts`` and tmpfs on ``/tmp``, ``/run``
-       and ``/var``, and ``/dev`` too if the kernel has not (it mounts devtmpfs
-       itself when it starts the first program);
+    #. ``syslogd`` and ``klogd``: the system log, ``/run/messages`` and one
+       older copy of 64 KiB each, with the kernel's messages in it; and
+       ``netifd``;
+    #. the boot script, ``/etc/init.d/rcS`` as ``/etc/rc.d/S10boot`` (below),
+       whose output goes to the log but for the lines on the console at its
+       end;
+    #. once it is done, the ssh server and ``pond``, the status daemon, on the
+       host side's addresses, and the console's login prompt (``onu-run``).
+
+    procd starts each of these programs again, half a second after it ends.
+    ``reboot``, ``halt`` and ``poweroff`` signal procd, which ends every
+    program and restarts.
+The boot script
+    ``/etc/init.d/rcS``:
+
     #. sets the host name (``dfp-34x-2c3``);
-    #. starts the system log, ``/run/messages`` and one older copy of 64 KiB
-       each, with the kernel's messages in it, and the watchdog daemon, which
-       feeds the watchdog every ten seconds;
     #. turns IPv6 off on the PON port, on the CPU port and on every interface
        made after that, the bridge and the GEM interfaces of ``omcid`` among
        them (the host side keeps it), and has ARP answer only for an address
@@ -271,22 +288,20 @@ The boot script
        PON in either direction: the switch sends those that come in on ``sfp``
        to the CPU alone, and drops those that come in on ``pon``, so the
        network behind the OLT neither sees the management link nor reaches it;
-    #. makes an ed25519 host key in ``/run/dropbear`` and starts ``dropbear``
-       (root's password and keys) on the two addresses above and nowhere else:
-       the stick has no packet filter, so its servers keep off the PON side by
-       where they listen;
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
        root only: it holds the PLOAM password), with the versions that
        ``/etc/board.conf`` may name (below), gives the PON driver the
        serial number and the PLOAM password through devlink and brings the PON
        up;
-    #. starts ``omcid``, which answers the OLT, and ``pond``, the status daemon,
-       on the same two addresses, whose API stays locked without
-       ``/etc/pond.token``;
-    #. prints ``open-dfp-34x-2c: ready``.
+    #. starts ``omcid``, which answers the OLT;
+    #. prints ``open-dfp-34x-2c: ready`` on the console.
 
-    After it, BusyBox init keeps a login prompt on the console (``getty`` and
-    ``login``).
+    After it, procd starts ``dropbear`` (root's password and keys), with an
+    ed25519 host key made in ``/run/dropbear``, and ``pond``, whose API stays
+    locked without ``/etc/pond.token``, on the two addresses above and nowhere
+    else: the stick has no packet filter, so its servers keep off the PON side
+    by where they listen. On the console it keeps a login prompt (``getty``
+    and ``login``).
 
     The stick has one account, root, with one password for the console, ssh
     and the panel (``docs/adr/0012-one-account-root.rst``). Until one is set,
