@@ -21,6 +21,11 @@
  *                                            input over the settings in
  *                                            force, judged and written to
  *                                            the running system's files
+ *   onu-config password-check                whether the line of the
+ *                                            standard input is root's
+ *                                            password, in the exit status
+ *   onu-config password-state                "set", or "default" while the
+ *                                            default password is in force
  *   onu-config load|save|migrate|identity|password|auth HASH|system|pd N
  *                                            the files the running system
  *                                            reads, to and from the store:
@@ -53,6 +58,13 @@
  * refuses, and then writes nothing. onu-apply try applies what it wrote.
  * The status daemon has them run through onu-act (ADR 0014).
  *
+ * password-check and password-state read root's hash from /run/onu-auth,
+ * which root alone may read, so that a program that checks a password need
+ * not hold the hash (password.h). password-check exits 0 for the password
+ * in force, 3 for the default one, "admin", while none is set, 4 for one
+ * kept in the older form, which the caller then keeps again with
+ * onu-config password, and 1 for any other.
+ *
  * onu-config was onucfg and onu-store before (ADR 0015).
  */
 
@@ -73,6 +85,7 @@
 #include <mtd/mtd-user.h>
 
 #include "cfgstore.h"
+#include "password.h"
 #include "settings.h"
 
 /* A store at most this big, so a bad --size cannot ask for a huge buffer. */
@@ -401,6 +414,69 @@ out:
 	return rc;
 }
 
+#define AUTH_PATH "/run/onu-auth"
+
+/* The hash in force, the first word of /run/onu-auth, or "" for the default. */
+static void hash_in_force(char *out, size_t cap)
+{
+	char path[PATH_MAX];
+	FILE *f;
+
+	out[0] = '\0';
+	root_path(AUTH_PATH, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	if (!f)
+		return;
+	if (!fgets(out, (int)cap, f))
+		out[0] = '\0';
+	fclose(f);
+	out[strcspn(out, "\r\n ")] = '\0';
+}
+
+static int password_state_cmd(void)
+{
+	char h[256];
+
+	hash_in_force(h, sizeof(h));
+	puts(*h ? "set" : "default");
+	explicit_bzero(h, sizeof(h));
+	return fflush(stdout) ? 2 : 0;
+}
+
+static int password_check_cmd(void)
+{
+	static const char deflt[] = "admin";
+	char secret[256], h[256];
+	unsigned char diff;
+	int rc = 1;
+
+	if (!fgets(secret, sizeof(secret), stdin))
+		secret[0] = '\0';
+	secret[strcspn(secret, "\r\n")] = '\0';
+	hash_in_force(h, sizeof(h));
+	if (!*h) {
+		/* The default password, compared without a shortcut either way. */
+		diff = strlen(secret) != sizeof(deflt) - 1;
+		for (size_t i = 0; i < sizeof(deflt) - 1; i++)
+			diff |= (unsigned char)(secret[i % sizeof(secret)] ^ deflt[i]);
+		rc = diff ? 1 : 3;
+	} else {
+		switch (password_verify(secret, h)) {
+		case PASSWORD_MATCHES:
+			rc = 0;
+			break;
+		case PASSWORD_OLDER:
+			rc = 4;
+			break;
+		default:
+			rc = 1;
+		}
+	}
+	explicit_bzero(secret, sizeof(secret));
+	explicit_bzero(h, sizeof(h));
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
 	const char *store = getenv("ONU_STORE");
@@ -429,12 +505,19 @@ int main(int argc, char **argv)
 	if (optind < argc && (!strcmp(argv[optind], "check") ||
 			      !strcmp(argv[optind], "settings") ||
 			      !strcmp(argv[optind], "current") ||
-			      !strcmp(argv[optind], "change"))) {
+			      !strcmp(argv[optind], "change") ||
+			      !strcmp(argv[optind], "password-check") ||
+			      !strcmp(argv[optind], "password-state"))) {
 		if (argc - optind != 1) {
-			fputs("usage: onu-config check | settings | current | change\n",
+			fputs("usage: onu-config check | settings | current | change"
+			      " | password-check | password-state\n",
 			      stderr);
 			return 2;
 		}
+		if (!strcmp(argv[optind], "password-check"))
+			return password_check_cmd();
+		if (!strcmp(argv[optind], "password-state"))
+			return password_state_cmd();
 		if (!strcmp(argv[optind], "current"))
 			return current_cmd();
 		if (!strcmp(argv[optind], "change"))

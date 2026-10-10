@@ -114,5 +114,29 @@ check '[ $rc -eq 1 ] && grep -q PPPOE3_SECRET "$T/err" && [ ! -e "$R/run/onu-ppp
 rc=$?
 check '[ $rc -eq 2 ]'
 
+echo "password-state and password-check: root's hash, which they keep to themselves"
+rm -f "$R/run/onu-auth"
+check '[ "$(ONU_ROOT=$R "$ONUCFG" password-state </dev/null)" = default ]'
+pwcheck() {
+	printf '%s\n' "$1" | ONU_ROOT=$R "$ONUCFG" password-check >"$T/out" 2>&1
+	rc=$?
+}
+pwcheck admin
+check '[ $rc -eq 3 ] && [ ! -s "$T/out" ]'
+pwcheck admin2
+check '[ $rc -eq 1 ]'
+perl -e 'print crypt($ARGV[0], q($5$rounds=1000$teststandinsalt)), "\n"' example-secret >"$R/run/onu-auth"
+check '[ "$(ONU_ROOT=$R "$ONUCFG" password-state </dev/null)" = set ]'
+pwcheck example-secret
+check '[ $rc -eq 0 ] && [ ! -s "$T/out" ]'
+pwcheck admin
+check '[ $rc -eq 1 ]'
+printf 'pbkdf2-sha256$1000$0102030405060708090a0b0c0d0e0f10$%s\n' \
+	682b24383b17ce055ed70ead8c23895db05d4a3717dffd00133fc69d366d3627 >"$R/run/onu-auth"
+pwcheck example-secret
+check '[ $rc -eq 4 ]'
+pwcheck example-secreT
+check '[ $rc -eq 1 ]'
+
 echo "test_onu_config_settings: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

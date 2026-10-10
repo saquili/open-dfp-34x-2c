@@ -91,7 +91,13 @@ there, and names it by its whole path where procd starts it.
    panel. Until one is set, the password is ``admin`` (a fixed hash of it); a
    hash of the panel's older form, which ``crypt()`` cannot check, leaves root
    without a password on the console and ssh (``*``), keys only, until a
-   sign-in to the panel stores it again. A
+   sign-in to the panel stores it again. ``onu-config password-check`` says in
+   its exit status whether the line of its input is root's password: 0 for the
+   one in force, 3 for ``admin`` while none is set, 4 for one kept in the
+   older form, which the caller keeps again with ``onu-config password``, 1
+   for any other; ``onu-config password-state`` prints ``set`` or
+   ``default``. Both read the hash themselves (``src/password.c``), so that
+   the status daemon, which has onu-act run them, never holds it. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
    removed account does not come back at the next boot. ``onu-config system``
    keeps the stick's own settings of ``KEY=VALUE`` lines on its input as
@@ -323,8 +329,9 @@ there, and names it by its whole path where procd starts it.
    of the stick, and nothing else (ADR 0014): the status daemon's changes of
    the SFP lane, of the management pair, of the name and of the identity, the
    confirmation of the changes on trial, the updates' status and trial, the
-   restart, and the settings of the data path (``onu-config current`` and
-   ``change``, then ``onu-apply try``). It is the object ``onu-act`` on ubus, with a method for each
+   restart, the settings of the data path (``onu-config current`` and
+   ``change``, then ``onu-apply try``), and root's password
+   (``onu-config password-check``, ``password-state`` and ``password``). It is the object ``onu-act`` on ubus, with a method for each
    entry of its table (``src/act.c``): the method runs its program, with no
    shell, the caller's values in their places once each is short enough, of
    the characters its place allows and no option, and the caller's text,

@@ -19,7 +19,8 @@
  * changes on trial, the name, the identity, the updates, the restart, and
  * the settings of the data path with the accounts, which the status daemon
  * sees without their secrets (onu-config current) and changes on trial
- * (onu-config change, then onu-apply try).
+ * (onu-config change, then onu-apply try), and root's password, which it
+ * checks and replaces without holding its hash.
  */
 const struct act_method act_methods[] = {
 	{ .name = "lane_status", .program = LIB "onu-lane", .fixed = { "status" } },
@@ -52,6 +53,12 @@ const struct act_method act_methods[] = {
 	  .input = true },
 	{ .name = "settings_try", .program = "/usr/sbin/onu-apply", .fixed = { "try" },
 	  .timeout_s = 120 },
+	{ .name = "password_check", .program = "/usr/sbin/onu-config",
+	  .fixed = { "password-check" }, .input = true },
+	{ .name = "password_state", .program = "/usr/sbin/onu-config",
+	  .fixed = { "password-state" } },
+	{ .name = "password_set", .program = "/usr/sbin/onu-config", .fixed = { "password" },
+	  .input = true },
 };
 
 const size_t act_method_count = sizeof(act_methods) / sizeof(act_methods[0]);
