@@ -182,9 +182,24 @@ onu-svc start ssh -- /usr/lib/onu/onu-run ssh || {
 }
 # What the status daemon may ask of the stick, onu-act does as root on its
 # behalf, and nothing else (ADR 0014): the status daemon does not run a
-# program of the stick itself.
+# program of the stick itself. It runs as the account pond, which no one
+# logs in with, and ubusd's access list (/usr/share/acl.d/pond.json) lets it
+# call onu-act and read the state of omcid, netifd and dhcp6d. Its directory
+# of /run holds its log and, on a bench, a copy of the token of scripts,
+# which root alone reads in /etc; the two copies of the boot loader's
+# environment, which it shows, are its group's to read, and no other
+# partition of the flash.
 onu-svc start act -- /usr/lib/onu/onu-act || warn "the panel can change nothing"
-onu-svc start pond -- /usr/lib/onu/onu-run pond || warn "no status daemon"
+mkdir -p /run/pond && chown pond:pond /run/pond && chmod 700 /run/pond
+if [ -r /etc/pond.token ]; then
+	cp /etc/pond.token /run/pond/token &&
+		chown pond:pond /run/pond/token && chmod 400 /run/pond/token ||
+		warn "the token of scripts is not the status daemon's"
+fi
+envs=$(sed -n 's,^\(mtd[0-9]*\):.* "env2*"$,/dev/\1,p' /proc/mtd)
+[ -n "$envs" ] && chown :pond $envs && chmod 640 $envs ||
+	warn "the status daemon does not read the boot loader's environment"
+onu-svc start pond -u pond -- /usr/lib/onu/onu-run pond || warn "no status daemon"
 
 # The time, which the stick has no clock of its own for and the OLT does not
 # give: ntpd sets the clock from the router at the other end of the

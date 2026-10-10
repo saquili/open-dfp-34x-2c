@@ -88,7 +88,7 @@ class BootScript(unittest.TestCase):
                  'onu-net wait mgmt "$MGMT_ADDRESS" 10',
                  "onu-svc start ssh -- /usr/lib/onu/onu-run ssh",
                  "onu-svc start act -- /usr/lib/onu/onu-act",
-                 "onu-svc start pond -- /usr/lib/onu/onu-run pond",
+                 "onu-svc start pond -u pond -- /usr/lib/onu/onu-run pond",
                  "onu-svc start ntp -l -- /usr/lib/onu/onu-run ntp"]
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))

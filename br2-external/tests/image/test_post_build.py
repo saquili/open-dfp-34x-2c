@@ -26,6 +26,11 @@ esac
 exit 0
 """
 
+# Root's line of each file of the accounts, as the build system writes them.
+ROOT_LINES = dict(zip(("passwd", "group", "shadow"),
+                      ("root:x:0:0:root:/root:/bin/sh\n", "root:x:0:\n",
+                       "root::19000:0:99999:7:::\n")))
+
 RELEASE = 'NAME="open-dfp-34x-2c"\nPRETTY_NAME="open-dfp-34x-2c on the ODI DFP-34X-2C3"\n'
 
 
@@ -114,6 +119,25 @@ class PostBuild(unittest.TestCase):
                               capture_output=True, text=True)
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("HOST_DIR is not set", done.stderr)
+
+    def test_the_account_of_the_status_daemon_is_written_once(self):
+        etc = os.path.join(self.target, "etc")
+        for name in ("passwd", "group", "shadow"):
+            with open(os.path.join(etc, name), "w", encoding="utf-8") as handle:
+                handle.write(ROOT_LINES[name])
+        for _ in range(2):
+            self.assertEqual(self.run_script().returncode, 0)
+        with open(os.path.join(etc, "passwd"), encoding="utf-8") as handle:
+            passwd = handle.read()
+        with open(os.path.join(etc, "group"), encoding="utf-8") as handle:
+            group = handle.read()
+        with open(os.path.join(etc, "shadow"), encoding="utf-8") as handle:
+            shadow = handle.read()
+        self.assertEqual(passwd.count("\npond:"), 1)
+        self.assertIn("\npond:x:200:200:The status daemon:/var/empty:/bin/false\n", passwd)
+        self.assertIn("\npond:x:200:\n", group)
+        # No password: no one logs in with it.
+        self.assertIn("\npond:*:::::::\n", shadow)
 
     def test_without_the_file_it_fails(self):
         os.remove(self.release)

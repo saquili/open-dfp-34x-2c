@@ -68,6 +68,19 @@ for libc in "$1"/lib/libuClibc-*.so; do
 		--uclibc "$BUILD_DIR/$(basename "$libc" .so | sed 's/^libuClibc-/uclibc-/')" "$1"
 done
 
+# The status daemon runs as an account of its own, pond, without a password
+# or a shell, which no one logs in with (ADR 0014). The image is made from a
+# copy of this directory (post-image.sh), not by the build system's own
+# making of accounts, so the account is written here, once, with the uid and
+# gid 200. /etc/shadow becomes /etc/shadow.image, from which the boot writes
+# every account but root's as it is.
+account() {
+	[ ! -f "$1" ] || grep -q "^$2:" "$1" || echo "$3" >>"$1"
+}
+account "$1/etc/passwd" pond "pond:x:200:200:The status daemon:/var/empty:/bin/false"
+account "$1/etc/group" pond "pond:x:200:"
+account "$1/etc/shadow" pond "pond:*:::::::"
+
 grep -v '^BUILD_ID=' "$release" > "$release.new" || true
 echo "BUILD_ID=$rev" >> "$release.new"
 mv "$release.new" "$release"

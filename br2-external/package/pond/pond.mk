@@ -9,6 +9,11 @@
 # panel holds code of packages under MIT and ISC; its build writes their
 # licence texts into licenses.txt, which goes into the image with the panel's
 # files (pond/web/licences.ts).
+#
+# pond runs as an account of its own, without a password or a shell, which
+# no one logs in with (ADR 0014; post-build.sh writes it): ubusd's access
+# list, pond/acl.json, lets it call onu-act and read the state of omcid,
+# netifd and dhcp6d, and nothing else.
 
 POND_VERSION = local
 POND_SITE = $(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/../pond
@@ -29,6 +34,7 @@ endef
 
 define POND_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/pond $(TARGET_DIR)/usr/sbin/pond
+	$(INSTALL) -D -m 0644 $(@D)/acl.json $(TARGET_DIR)/usr/share/acl.d/pond.json
 	rm -rf $(TARGET_DIR)/usr/share/pond
 	mkdir -p $(TARGET_DIR)/usr/share/pond/www
 	cp -R $(@D)/web/dist/. $(TARGET_DIR)/usr/share/pond/www/
