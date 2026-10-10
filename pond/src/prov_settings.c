@@ -5,19 +5,21 @@
  * The settings of the stick's data path: KEY=value lines in /run/onu.conf,
  * which onu-mode applies, and the account of each of the stick's PPPoE
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
- * only.
+ * only. What the settings mean, their defaults and the rules that bind them
+ * together, is onucfg's (ADR 0014): pond has "onucfg settings" read them in
+ * full and "onucfg check" judge a change, and knows none of the rules
+ * itself.
  *
  * A read gives the settings, each session with its user, whether a secret is
- * set (never the secret), whether it hands its address down and in which VLAN
- * of the host link, and what onu-mode and dhcp6d brought up for it
- * (/run/session/N), the address handed on, and what became of the settings
- * in the configuration
- * store, which onu-store records in /run/onu-store: "loaded" at boot,
- * "defaults" when the store held none, "saved" or "failed" after a change,
- * "none" without a store. A write takes KEY=value lines, checks every value
- * and the settings as a whole, writes the files and starts "onu-mode apply"
- * without waiting for it; until it ends, a write is refused. POND_APPLY names
- * another program to start, for the tests.
+ * set (never the secret), and what onu-mode and dhcp6d brought up for it
+ * (/run/session/N), what it hands down among it, the address handed on, and
+ * what became of the settings in the configuration store, which onu-store
+ * records in /run/onu-store: "loaded" at boot, "defaults" when the store
+ * held none, "saved" or "failed" after a change, "none" without a store. A
+ * write takes KEY=value lines, has onucfg judge them over the settings in
+ * force, writes what it gives back and the accounts, and starts "onu-mode
+ * apply" without waiting for it; until it ends, a write is refused.
+ * POND_APPLY and POND_ONUCFG name other programs to start, for the tests.
  */
 
 #define _GNU_SOURCE
@@ -28,6 +30,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,265 +43,39 @@
 #define CREDS "/run/onu-pppoe"
 #define SESSION_DIR "/run/session"
 #define SESSIONS 7
-#define TEXT_MAX 4096
+#define TEXT_MAX 8192
 #define VALUE_MAX 64
 #define USER_MAX 63
 #define SECRET_MAX 255
-
-enum kind {
-	K_MODE,
-	K_PROTO,
-	K_GEM,
-	K_VLAN,
-	K_PREFIX,
-	K_PREFIX_OPT,
-	K_ADDR,
-	K_ADDR_OPT,
-	K_ONOFF,
-	K_MAC_OPT,
-	K_FAMILY,
-	K_HOST_VLAN,
-};
-
-/* The keys of /run/onu.conf, as onu-mode reads them, and their defaults. */
-enum key {
-	MODE,
-	WAN_GEM,
-	WAN_VLAN,
-	WAN_PROTO,
-	WAN_ADDRESS,
-	WAN_GATEWAY,
-	WAN_MAC,
-	LAN_ADDRESS,
-	LAN_DHCP,
-	LAN_DHCP_START,
-	LAN_DHCP_END,
-	NKEYS
-};
-
-static const struct {
-	const char *name;
-	enum kind kind;
-	const char *dflt;
-} g_keys[NKEYS] = {
-	[MODE] = { "MODE", K_MODE, "" },
-	[WAN_GEM] = { "WAN_GEM", K_GEM, "auto" },
-	[WAN_VLAN] = { "WAN_VLAN", K_VLAN, "" },
-	[WAN_PROTO] = { "WAN_PROTO", K_PROTO, "dhcp" },
-	[WAN_ADDRESS] = { "WAN_ADDRESS", K_PREFIX_OPT, "" },
-	[WAN_GATEWAY] = { "WAN_GATEWAY", K_ADDR_OPT, "" },
-	[WAN_MAC] = { "WAN_MAC", K_MAC_OPT, "" },
-	[LAN_ADDRESS] = { "LAN_ADDRESS", K_PREFIX, "192.168.1.1/24" },
-	[LAN_DHCP] = { "LAN_DHCP", K_ONOFF, "on" },
-	[LAN_DHCP_START] = { "LAN_DHCP_START", K_ADDR, "192.168.1.100" },
-	[LAN_DHCP_END] = { "LAN_DHCP_END", K_ADDR, "192.168.1.199" },
-};
-
-/*
- * The one link to the router of before: LAN_VLAN, or the host link itself
- * when it is empty. It is the link of each session that names none of its
- * own, until the settings are written again without it (settings_load()).
- * PASS_GATEWAY and PASS_PEER of then are no settings any more.
- */
-#define LEGACY_LAN "LAN_VLAN"
-
-/*
- * The settings of each session, SESSIONn_<suffix>, and their defaults: PASS,
- * whether it hands its address down to the router or keeps it, and
- * HOST_VLAN, the VLAN of the host link it hands it down in, none for its own
- * VLAN or untagged for none.
- */
-enum skey {
-	S_GEM,
-	S_VLAN,
-	S_MAC,
-	S_FAMILY,
-	S_PASS,
-	S_HOST_VLAN,
-	NSKEYS
-};
-
-static const struct {
-	const char *suffix;
-	enum kind kind;
-	const char *dflt;
-} g_skeys[NSKEYS] = {
-	[S_GEM] = { "GEM", K_GEM, "auto" },
-	[S_VLAN] = { "VLAN", K_VLAN, "" },
-	[S_MAC] = { "MAC", K_MAC_OPT, "" },
-	[S_FAMILY] = { "FAMILY", K_FAMILY, "both" },
-	[S_PASS] = { "PASS", K_ONOFF, "on" },
-	[S_HOST_VLAN] = { "HOST_VLAN", K_HOST_VLAN, "" },
-};
 
 struct account {
 	char user[USER_MAX + 1];
 	char secret[SECRET_MAX + 1];
 };
 
-struct settings {
-	char val[NKEYS][VALUE_MAX];
-	char sval[SESSIONS][NSKEYS][VALUE_MAX];
-	struct account acct[SESSIONS];
-};
-
 /* The "onu-mode apply" that runs, or 0; how the last one ended, or -1. */
 static pid_t g_apply;
 static int g_apply_status = -1;
 
-static bool number(const char *s, unsigned long lo, unsigned long hi,
-		   unsigned long *out)
+static const char *program(const char *env, const char *otherwise)
 {
-	size_t n = strlen(s);
-	unsigned long v;
+	const char *p = getenv(env);
 
-	if (!n || n > 5 || strspn(s, "0123456789") != n || (n > 1 && *s == '0'))
-		return false;
-	v = strtoul(s, NULL, 10);
-	if (out)
-		*out = v;
-	return v >= lo && v <= hi;
+	return p && *p ? p : otherwise;
 }
 
-/* a.b.c.d, in decimal without leading zeros. */
-static bool ipv4(const char *s, uint32_t *ip)
+/* Text after the @len bytes of @buf, which holds @cap; @len counts past it. */
+static void append(char *buf, size_t cap, size_t *len, const char *fmt, ...)
 {
-	uint32_t v = 0;
+	va_list ap;
+	int n;
 
-	for (int part = 0; part < 4; part++) {
-		size_t n = strspn(s, "0123456789");
-		char num[4];
-		unsigned long octet;
-
-		if (!n || n > 3)
-			return false;
-		memcpy(num, s, n);
-		num[n] = '\0';
-		if (!number(num, 0, 255, &octet))
-			return false;
-		v = v << 8 | (uint32_t)octet;
-		s += n;
-		if (part < 3 && *s++ != '.')
-			return false;
-	}
-	if (ip)
-		*ip = v;
-	return *s == '\0';
-}
-
-/* a.b.c.d/len, with a length from 1 to 32. */
-static bool prefix(const char *s, uint32_t *ip, uint32_t *mask)
-{
-	char addr[VALUE_MAX];
-	const char *slash = strchr(s, '/');
-	unsigned long len;
-
-	if (!slash || (size_t)(slash - s) >= sizeof(addr))
-		return false;
-	memcpy(addr, s, (size_t)(slash - s));
-	addr[slash - s] = '\0';
-	if (!ipv4(addr, ip) || !number(slash + 1, 1, 32, &len))
-		return false;
-	if (mask)
-		*mask = len == 32 ? 0xffffffffu : ~(0xffffffffu >> len);
-	return true;
-}
-
-/*
- * xx:xx:xx:xx:xx:xx, in hexadecimal, an address one station may send from:
- * neither a group address nor all zeros.
- */
-static bool mac(const char *s)
-{
-	unsigned long first = 0;
-	bool zero = true;
-
-	if (strlen(s) != 17)
-		return false;
-	for (int i = 0; i < 17; i++) {
-		if (i % 3 == 2) {
-			if (s[i] != ':')
-				return false;
-		} else if (!strchr("0123456789abcdefABCDEF", s[i])) {
-			return false;
-		} else if (s[i] != '0') {
-			zero = false;
-		}
-	}
-	first = strtoul(s, NULL, 16);
-	return !zero && !(first & 1);
-}
-
-static bool valid(enum kind kind, const char *v)
-{
-	switch (kind) {
-	case K_MODE:
-		/* Only router is a shape; the others are words of before. */
-		return !*v || !strcmp(v, "bridge") || !strcmp(v, "router") ||
-		       !strcmp(v, "passthrough");
-	case K_FAMILY:
-		return !strcmp(v, "ipv4") || !strcmp(v, "ipv6") ||
-		       !strcmp(v, "both");
-	case K_PROTO:
-		return !strcmp(v, "pppoe") || !strcmp(v, "dhcp") ||
-		       !strcmp(v, "static");
-	case K_GEM:
-		return !strcmp(v, "auto") || number(v, 0, 4095, NULL);
-	case K_VLAN:
-		return !*v || number(v, 1, 4094, NULL);
-	case K_HOST_VLAN:
-		return !*v || !strcmp(v, "untagged") || number(v, 1, 4094, NULL);
-	case K_PREFIX:
-		return prefix(v, NULL, NULL);
-	case K_PREFIX_OPT:
-		return !*v || prefix(v, NULL, NULL);
-	case K_ADDR:
-		return ipv4(v, NULL);
-	case K_ADDR_OPT:
-		return !*v || ipv4(v, NULL);
-	case K_ONOFF:
-		return !strcmp(v, "on") || !strcmp(v, "off");
-	case K_MAC_OPT:
-		return !*v || mac(v);
-	}
-	return false;
-}
-
-/* A user or a secret: printable, without blanks, which separate the two. */
-static bool word(const char *v, size_t max)
-{
-	size_t n = strlen(v);
-
-	if (!n || n > max)
-		return false;
-	for (size_t i = 0; i < n; i++)
-		if (v[i] <= ' ' || v[i] > '~')
-			return false;
-	return true;
-}
-
-static int key_index(const char *name)
-{
-	for (int k = 0; k < NKEYS; k++)
-		if (!strcmp(name, g_keys[k].name))
-			return k;
-	return -1;
-}
-
-/* SESSIONn_<suffix>: the session, from 0, and the setting; or false. */
-static bool skey_index(const char *name, int *n, int *k)
-{
-	if (strncmp(name, "SESSION", 7) || name[7] < '1' ||
-	    name[7] > '0' + SESSIONS || name[8] != '_')
-		return false;
-	for (int i = 0; i < NSKEYS; i++) {
-		if (!strcmp(name + 9, g_skeys[i].suffix)) {
-			*n = name[7] - '1';
-			*k = i;
-			return true;
-		}
-	}
-	return false;
+	if (*len >= cap)
+		return;
+	va_start(ap, fmt);
+	n = vsnprintf(buf + *len, cap - *len, fmt, ap);
+	va_end(ap);
+	*len += n > 0 ? (size_t)n : 0;
 }
 
 /* PPPOEn_USER or PPPOEn_SECRET, and PPPOE_USER of before for the first. */
@@ -332,69 +109,14 @@ static const char *creds_path(int n, char *buf, size_t cap)
 	return buf;
 }
 
-/*
- * A setting of session @n as onu-mode takes it: the first session's VLAN,
- * MAC and GEM port are the WAN's of before when it has none of its own.
- */
-static const char *session_value(const struct settings *s, int n, enum skey k)
+/* The account of each session, from its file; an empty user for none. */
+static void accounts_load(struct account acct[SESSIONS])
 {
-	const char *v = s->sval[n][k];
+	char text[512], path[64];
 
-	if (n == 0 && (!*v || (k == S_GEM && !strcmp(v, "auto")))) {
-		if (k == S_VLAN)
-			return s->val[WAN_VLAN];
-		if (k == S_MAC)
-			return s->val[WAN_MAC];
-		if (k == S_GEM)
-			return s->val[WAN_GEM];
-	}
-	return v;
-}
-
-/* The settings in force: the defaults, then the files. */
-static void settings_load(struct settings *s)
-{
-	char text[TEXT_MAX], legacy[VALUE_MAX], *line, *save = NULL;
-	bool had_legacy = false;
-
-	memset(s, 0, sizeof(*s));
-	for (int k = 0; k < NKEYS; k++)
-		snprintf(s->val[k], VALUE_MAX, "%s", g_keys[k].dflt);
-	for (int n = 0; n < SESSIONS; n++)
-		for (int k = 0; k < NSKEYS; k++)
-			snprintf(s->sval[n][k], VALUE_MAX, "%s", g_skeys[k].dflt);
-
-	if (!prov_slurp(CONF, text, sizeof(text), NULL)) {
-		for (line = strtok_r(text, "\n", &save); line;
-		     line = strtok_r(NULL, "\n", &save)) {
-			char *eq = strchr(line, '=');
-			int k, n;
-
-			if (!eq)
-				continue;
-			*eq = '\0';
-			k = key_index(line);
-			if (k >= 0 && valid(g_keys[k].kind, eq + 1))
-				snprintf(s->val[k], VALUE_MAX, "%s", eq + 1);
-			else if (skey_index(line, &n, &k) &&
-				 valid(g_skeys[k].kind, eq + 1))
-				snprintf(s->sval[n][k], VALUE_MAX, "%s", eq + 1);
-			else if (!strcmp(line, LEGACY_LAN) && valid(K_VLAN, eq + 1)) {
-				snprintf(legacy, sizeof(legacy), "%s", eq + 1);
-				had_legacy = true;
-			}
-		}
-	}
-	/* The link of before is the link of each session that names none. */
-	if (had_legacy)
-		for (int n = 0; n < SESSIONS; n++)
-			if (!*s->sval[n][S_HOST_VLAN])
-				snprintf(s->sval[n][S_HOST_VLAN], VALUE_MAX, "%s",
-					 *legacy ? legacy : "untagged");
-
+	memset(acct, 0, sizeof(*acct) * SESSIONS);
 	for (int n = 0; n < SESSIONS; n++) {
-		char path[64];
-		struct account *a = &s->acct[n];
+		struct account *a = &acct[n];
 
 		if (!prov_slurp(creds_path(n, path, sizeof(path)), text,
 				sizeof(text), NULL) &&
@@ -406,130 +128,85 @@ static void settings_load(struct settings *s)
 	explicit_bzero(text, sizeof(text));
 }
 
-/*
- * The VLAN of the host link session @n hands its address down in, as
- * onu-mode takes it: its HOST_VLAN, else its own VLAN; "" for none.
- */
-static const char *down_vlan(const struct settings *s, int n)
+/* The accounts, as onucfg takes them, after the @len bytes of @buf. */
+static void accounts_text(const struct account acct[SESSIONS], char *buf,
+			  size_t cap, size_t *len)
 {
-	const char *h = s->sval[n][S_HOST_VLAN];
-
-	if (!strcmp(h, "untagged"))
-		return "";
-	return *h ? h : session_value(s, n, S_VLAN);
+	for (int n = 0; n < SESSIONS; n++)
+		if (*acct[n].user)
+			append(buf, cap, len, "PPPOE%d_USER=%s\nPPPOE%d_SECRET=%s\n",
+			       n + 1, acct[n].user, n + 1, acct[n].secret);
 }
 
-/* Whether session @n has an account and is told to hand its address down. */
-static bool hands_down(const struct settings *s, int n)
+/* Whether @line is KEY=VALUE, the key in capitals, digits and '_'. */
+static bool setting_line(const char *line)
 {
-	return *s->acct[n].user && strcmp(s->sval[n][S_PASS], "off");
-}
+	size_t k = strspn(line, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
 
-/* Whether session @n carries the family @fam, "ipv4" or "ipv6". */
-static bool carries(const struct settings *s, int n, const char *fam)
-{
-	const char *f = s->sval[n][S_FAMILY];
-
-	return !strcmp(f, "both") || !strcmp(f, fam);
+	return k && line[k] == '=';
 }
 
 /*
- * Whether session @n hands its @fam down, as onu-mode decides: it is the
- * first in its VLAN to the host that is told to and carries it.
+ * Run "onucfg @verb" on @input: 0 when it took the settings, which are in
+ * @out, one KEY=VALUE line each; -EINVAL when it refused them, with why in
+ * @out; -EIO when it could not run.
  */
-static bool hands(const struct settings *s, int n, const char *fam)
+static int onucfg(const char *verb, const char *input, char *out, size_t cap)
 {
-	for (int m = 0; m < SESSIONS; m++) {
-		if (!hands_down(s, m) || !carries(s, m, fam) ||
-		    strcmp(down_vlan(s, m), down_vlan(s, n)))
-			continue;
-		return m == n;
-	}
-	return false;
+	const char *args[] = { verb, NULL };
+	int rc = prov_exec(program("POND_ONUCFG", "onucfg"), args, input, out, cap);
+
+	if (rc < 0 || rc >= 126)
+		return -EIO;
+	return rc ? -EINVAL : 0;
 }
 
-/* Whether the settings make sense together; if not, why in @err. */
-static bool coherent(const struct settings *s, char *err, size_t errcap)
+/*
+ * The settings in force, in full, as onucfg reads them, with the accounts of
+ * @acct: KEY=VALUE lines in @out, and no other.
+ */
+static int settings_read(const struct account acct[SESSIONS], char *out,
+			 size_t cap)
 {
-	uint32_t ip, mask, start, end, gw;
+	char in[TEXT_MAX], got[TEXT_MAX], *line, *save = NULL;
+	size_t len = 0, olen = 0;
+	int rc;
 
-	if (!strcmp(s->val[WAN_PROTO], "static")) {
-		if (!prefix(s->val[WAN_ADDRESS], &ip, &mask) ||
-		    !ipv4(s->val[WAN_GATEWAY], &gw)) {
-			snprintf(err, errcap,
-				 "a static WAN needs WAN_ADDRESS and WAN_GATEWAY");
-			return false;
-		}
-		if ((gw & mask) != (ip & mask) || gw == ip) {
-			snprintf(err, errcap,
-				 "WAN_GATEWAY is not another address of WAN_ADDRESS's network");
-			return false;
-		}
+	if (prov_slurp(CONF, in, sizeof(in), &len)) {
+		len = 0;
+		in[0] = '\0';
 	}
-	for (int n = 0; n < SESSIONS; n++) {
-		if (!*s->acct[n].user != !*s->acct[n].secret) {
-			snprintf(err, errcap,
-				 "session %d: an account needs PPPOE%d_USER and PPPOE%d_SECRET",
-				 n + 1, n + 1, n + 1);
-			return false;
-		}
+	if (len && in[len - 1] != '\n')
+		append(in, sizeof(in), &len, "\n");
+	accounts_text(acct, in, sizeof(in), &len);
+	if (len >= sizeof(in)) {
+		rc = -E2BIG;
+		goto out;
 	}
-	if (!strcmp(s->val[MODE], "router") && !strcmp(s->val[WAN_PROTO], "pppoe") &&
-	    !*s->acct[0].user) {
-		snprintf(err, errcap,
-			 "a PPPoE WAN takes session 1's account: PPPOE1_USER and PPPOE1_SECRET");
-		return false;
-	}
-	/* Sessions in one VLAN share its interface, and so its MAC address. */
-	for (int a = 0; a < SESSIONS; a++) {
-		for (int b = a + 1; b < SESSIONS; b++) {
-			const char *ma = session_value(s, a, S_MAC);
-			const char *mb = session_value(s, b, S_MAC);
+	rc = onucfg("settings", in, got, sizeof(got));
+	if (rc)
+		goto out;
+	/* What it said of a line it left out is no setting. */
+	out[0] = '\0';
+	for (line = strtok_r(got, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
+		if (setting_line(line))
+			append(out, cap, &olen, "%s\n", line);
+	if (olen >= cap)
+		rc = -E2BIG;
+out:
+	explicit_bzero(in, sizeof(in));
+	return rc;
+}
 
-			if (!*s->acct[a].user || !*s->acct[b].user ||
-			    strcmp(session_value(s, a, S_GEM), session_value(s, b, S_GEM)) ||
-			    strcmp(session_value(s, a, S_VLAN), session_value(s, b, S_VLAN)))
-				continue;
-			if (*ma && *mb && strcasecmp(ma, mb)) {
-				snprintf(err, errcap,
-					 "sessions %d and %d are in one VLAN and send from one MAC address",
-					 a + 1, b + 1);
-				return false;
-			}
-		}
-	}
+/* The first line of what onucfg said, without its name, as the reason. */
+static void reason(const char *said, char *err, size_t errcap)
+{
+	size_t n;
 
-	/* In one VLAN to the host one session hands IPv4 down, and one IPv6. */
-	for (int a = 0; a < SESSIONS; a++) {
-		for (int b = a + 1; b < SESSIONS; b++) {
-			const char *both = "";
-
-			if (!hands_down(s, a) || !hands_down(s, b) ||
-			    strcmp(down_vlan(s, a), down_vlan(s, b)))
-				continue;
-			if (carries(s, a, "ipv4") && carries(s, b, "ipv4"))
-				both = "an IPv4 address";
-			else if (carries(s, a, "ipv6") && carries(s, b, "ipv6"))
-				both = "an IPv6 prefix";
-			if (*both) {
-				snprintf(err, errcap,
-					 "sessions %d and %d both hand %s down in one VLAN to the host",
-					 a + 1, b + 1, both);
-				return false;
-			}
-		}
-	}
-
-	prefix(s->val[LAN_ADDRESS], &ip, &mask);
-	ipv4(s->val[LAN_DHCP_START], &start);
-	ipv4(s->val[LAN_DHCP_END], &end);
-	if ((start & mask) != (ip & mask) || (end & mask) != (ip & mask) ||
-	    start > end) {
-		snprintf(err, errcap,
-			 "LAN_DHCP_START to LAN_DHCP_END is not a range of LAN_ADDRESS's network");
-		return false;
-	}
-	return true;
+	if (!strncmp(said, "onucfg: ", 8))
+		said += 8;
+	n = strcspn(said, "\n");
+	snprintf(err, errcap, "%.*s", (int)n, said);
 }
 
 /* Write @text to @path through a new file renamed over it, with @mode. */
@@ -612,13 +289,36 @@ static void pv_session_fact(struct prov_buf *out, int n, const char *fact)
 		pv_null(out);
 }
 
-static void pv_sessions(struct prov_buf *out, const struct settings *s)
+/* Whether session @n hands @fam down, as onu-mode wrote it. */
+static bool hands(int n, const char *fam)
+{
+	char path[64], line[64];
+	size_t len = strlen(fam);
+
+	snprintf(path, sizeof(path), "%s/%d/hands", SESSION_DIR, n + 1);
+	if (prov_read_line(path, line, sizeof(line)))
+		return false;
+	for (const char *p = line; (p = strstr(p, fam)); p += len)
+		if ((p == line || p[-1] == ' ') && (!p[len] || p[len] == ' '))
+			return true;
+	return false;
+}
+
+/*
+ * Each session with an account: its user, whether a secret is set, its
+ * settings of @text (SESSIONn_<KEY> as "key"), and what onu-mode brought up.
+ */
+static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS],
+			const char *text)
 {
 	bool first = true;
 
 	pv_open(out, '[');
 	for (int n = 0; n < SESSIONS; n++) {
-		if (!*s->acct[n].user)
+		char prefix[16];
+		size_t plen;
+
+		if (!*acct[n].user)
 			continue;
 		if (!first)
 			pv_comma(out);
@@ -628,24 +328,35 @@ static void pv_sessions(struct prov_buf *out, const struct settings *s)
 		pv_num(out, n + 1);
 		pv_comma(out);
 		pv_key(out, "user");
-		pv_str(out, s->acct[n].user);
+		pv_str(out, acct[n].user);
 		pv_comma(out);
 		pv_key(out, "secret_set");
-		pv_bool(out, *s->acct[n].secret != '\0');
-		for (int k = 0; k < NSKEYS; k++) {
-			char name[16];
+		pv_bool(out, *acct[n].secret != '\0');
+		plen = (size_t)snprintf(prefix, sizeof(prefix), "SESSION%d_", n + 1);
+		for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+			const char *eq = strchr(p, '=');
+			size_t vlen = strcspn(eq ? eq + 1 : p, "\n");
+			char name[32];
+			size_t klen;
 
-			snprintf(name, sizeof(name), "%s", g_skeys[k].suffix);
-			for (char *c = name; *c; c++)
-				if (*c >= 'A' && *c <= 'Z')
-					*c = (char)(*c - 'A' + 'a');
+			if (strncmp(p, prefix, plen) || !eq)
+				continue;
+			klen = (size_t)(eq - p) - plen;
+			if (klen >= sizeof(name))
+				continue;
+			for (size_t i = 0; i < klen; i++) {
+				char c = p[plen + i];
+
+				name[i] = c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+			}
+			name[klen] = '\0';
 			pv_comma(out);
 			pv_key(out, name);
-			pv_str(out, session_value(s, n, (enum skey)k));
+			pv_strn(out, eq + 1, vlen);
 		}
 		pv_comma(out);
 		pv_key(out, "hands_on");
-		pv_bool(out, hands(s, n, "ipv4"));
+		pv_bool(out, hands(n, "ipv4"));
 		pv_comma(out);
 		pv_key(out, "dev");
 		pv_session_fact(out, n, "dev");
@@ -685,28 +396,47 @@ static void pv_sessions(struct prov_buf *out, const struct settings *s)
 
 int prov_settings(struct prov_buf *out)
 {
-	struct settings s;
-	char line[128];
+	struct account acct[SESSIONS];
+	char text[TEXT_MAX], line[128];
+	bool first = true;
+	int rc;
 
 	prov_settings_reap();
-	settings_load(&s);
+	accounts_load(acct);
+	rc = settings_read(acct, text, sizeof(text));
+	if (rc) {
+		explicit_bzero(acct, sizeof(acct));
+		return rc;
+	}
 
 	pv_open(out, '{');
 	pv_key(out, "settings");
 	pv_open(out, '{');
-	for (int k = 0; k < NKEYS; k++) {
-		if (k)
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		const char *eq = strchr(p, '=');
+		char name[32];
+		size_t klen;
+
+		if (!eq || !strncmp(p, "SESSION", 7))
+			continue;
+		klen = (size_t)(eq - p);
+		if (klen >= sizeof(name))
+			continue;
+		memcpy(name, p, klen);
+		name[klen] = '\0';
+		if (!first)
 			pv_comma(out);
-		pv_key(out, g_keys[k].name);
-		pv_str(out, s.val[k]);
+		first = false;
+		pv_key(out, name);
+		pv_strn(out, eq + 1, strcspn(eq + 1, "\n"));
 	}
 	pv_close(out, '}');
 	pv_comma(out);
 
 	pv_key(out, "sessions");
-	pv_sessions(out, &s);
+	pv_sessions(out, acct, text);
 	pv_comma(out);
-	explicit_bzero(&s, sizeof(s));
+	explicit_bzero(acct, sizeof(acct));
 
 	pv_key(out, "mode");
 	if (!prov_read_line("/run/onu-mode", line, sizeof(line)))
@@ -794,11 +524,11 @@ int prov_settings(struct prov_buf *out)
 
 int prov_settings_set(const char *val, char *err, size_t errcap)
 {
-	struct settings s;
-	char text[TEXT_MAX], file[TEXT_MAX];
+	struct account acct[SESSIONS];
+	char text[TEXT_MAX], in[TEXT_MAX], out[TEXT_MAX], file[TEXT_MAX];
 	char *line, *save = NULL;
 	bool changed[SESSIONS] = { false };
-	size_t len;
+	size_t len, flen = 0;
 	int rc = -EINVAL;
 
 	prov_settings_reap();
@@ -811,66 +541,57 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		return -EINVAL;
 	}
 	snprintf(text, sizeof(text), "%s", val);
-	settings_load(&s);
+	accounts_load(acct);
 
+	/* The settings in force, then the change over them, then the accounts. */
+	rc = settings_read(acct, in, sizeof(in));
+	if (rc) {
+		snprintf(err, errcap, "onucfg: the settings in force cannot be read");
+		goto out;
+	}
+	len = strlen(in);
 	for (line = strtok_r(text, "\r\n", &save); line;
 	     line = strtok_r(NULL, "\r\n", &save)) {
 		char *eq = strchr(line, '=');
-		const char *v;
 		bool user;
-		int k, n;
+		int n;
 
-		if (!eq) {
-			snprintf(err, errcap, "a line without '='");
-			goto out;
-		}
-		*eq = '\0';
-		v = eq + 1;
+		/*
+		 * Every line goes to onucfg, which judges an account too; the
+		 * accounts as they then are follow, and are the files.
+		 */
+		if (eq) {
+			*eq = '\0';
+			if (account_key(line, &n, &user)) {
+				struct account *a = &acct[n];
+				const char *v = eq + 1;
 
-		if (account_key(line, &n, &user)) {
-			struct account *a = &s.acct[n];
-			int max = user ? USER_MAX : SECRET_MAX;
-
-			/* An empty user removes the session's account. */
-			if (user && !*v) {
-				memset(a, 0, sizeof(*a));
 				changed[n] = true;
-				continue;
+				/* An empty user removes the session's account. */
+				if (user && !*v)
+					memset(a, 0, sizeof(*a));
+				else if (strlen(v) <= (user ? USER_MAX : SECRET_MAX))
+					memcpy(user ? a->user : a->secret, v, strlen(v) + 1);
 			}
-			if (!word(v, max)) {
-				snprintf(err, errcap,
-					 "%s: printable, without blanks, up to %d characters",
-					 line, max);
-				goto out;
-			}
-			memcpy(user ? a->user : a->secret, v, strlen(v) + 1);
-			changed[n] = true;
-			continue;
+			*eq = '=';
 		}
-
-		k = key_index(line);
-		if (k >= 0) {
-			if (!valid(g_keys[k].kind, v)) {
-				snprintf(err, errcap, "%s: not a value of it", line);
-				goto out;
-			}
-			snprintf(s.val[k], VALUE_MAX, "%s", v);
-			continue;
-		}
-		if (skey_index(line, &n, &k)) {
-			if (!valid(g_skeys[k].kind, v)) {
-				snprintf(err, errcap, "%s: not a value of it", line);
-				goto out;
-			}
-			snprintf(s.sval[n][k], VALUE_MAX, "%s", v);
-			continue;
-		}
-		snprintf(err, errcap, "%s: no such setting", line);
+		append(in, sizeof(in), &len, "%s\n", line);
+	}
+	accounts_text(acct, in, sizeof(in), &len);
+	if (len >= sizeof(in)) {
+		snprintf(err, errcap, "the settings are too long");
+		rc = -EINVAL;
 		goto out;
 	}
 
-	if (!coherent(&s, err, errcap))
+	rc = onucfg("check", in, out, sizeof(out));
+	if (rc) {
+		if (rc == -EINVAL)
+			reason(out, err, errcap);
+		else
+			snprintf(err, errcap, "onucfg: it does not run");
 		goto out;
+	}
 
 	for (int n = 0; n < SESSIONS; n++) {
 		char path[64], rooted[256];
@@ -878,9 +599,9 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		if (!changed[n])
 			continue;
 		creds_path(n, path, sizeof(path));
-		if (*s.acct[n].user) {
-			snprintf(file, sizeof(file), "%s %s\n", s.acct[n].user,
-				 s.acct[n].secret);
+		if (*acct[n].user) {
+			snprintf(file, sizeof(file), "%s %s\n", acct[n].user,
+				 acct[n].secret);
 			rc = write_file(path, file, 0600);
 		} else if (unlink(prov_path(path, rooted, sizeof(rooted))) &&
 			   errno != ENOENT) {
@@ -894,19 +615,11 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		}
 	}
 
-	len = (size_t)snprintf(file, sizeof(file),
-			       "# The settings of the data path, from pond.\n");
-	for (int k = 0; k < NKEYS; k++)
-		len += (size_t)snprintf(file + len, sizeof(file) - len, "%s=%s\n",
-					g_keys[k].name, s.val[k]);
-	/* A session's settings are kept while it has an account. */
-	for (int n = 0; n < SESSIONS; n++) {
-		if (!*s.acct[n].user)
-			continue;
-		for (int k = 0; k < NSKEYS; k++)
-			len += (size_t)snprintf(file + len, sizeof(file) - len,
-						"SESSION%d_%s=%s\n", n + 1,
-						g_skeys[k].suffix, s.sval[n][k]);
+	append(file, sizeof(file), &flen, "# The settings of the data path, from pond.\n%s", out);
+	if (flen >= sizeof(file)) {
+		snprintf(err, errcap, "the settings are too long");
+		rc = -EINVAL;
+		goto out;
 	}
 	rc = write_file(CONF, file, 0644);
 	if (rc) {
@@ -918,8 +631,9 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 	if (rc)
 		snprintf(err, errcap, "onu-mode: %s", strerror(-rc));
 out:
-	explicit_bzero(&s, sizeof(s));
+	explicit_bzero(acct, sizeof(acct));
 	explicit_bzero(text, sizeof(text));
+	explicit_bzero(in, sizeof(in));
 	explicit_bzero(file, sizeof(file));
 	return rc;
 }
@@ -959,9 +673,9 @@ static const char *line_value(const char *text, const char *key, char *out,
  * A session of the stick's own: ID, 1 to 7, or none for the first free one;
  * USER and SECRET, its account, an empty USER removing the session (an
  * absent SECRET keeps the one there is); VLAN, MAC, GEM, FAMILY, PASS and
- * HOST_VLAN. Its
- * settings replace the WAN's of before, which the first session took when
- * it had none of its own; the bench's router mode is left as it is.
+ * HOST_VLAN. onucfg judges them, and takes over the WAN's settings of before,
+ * which the first session took when it had none of its own; the bench's
+ * router mode is left as it is.
  */
 int prov_session_set(const char *val, char *err, size_t errcap)
 {
@@ -977,90 +691,60 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 	const char *f = line_value(val, "FAMILY", fam, sizeof(fam));
 	const char *p = line_value(val, "PASS", pass, sizeof(pass));
 	const char *h = line_value(val, "HOST_VLAN", host, sizeof(host));
-	struct settings s;
-	unsigned long n = 0;
+	struct account acct[SESSIONS];
+	int n = 0;
 	size_t len = 0;
 	int rc;
 
-	if ((v && !valid(K_VLAN, v)) || (m && !valid(K_MAC_OPT, m)) ||
-	    (g && !valid(K_GEM, g)) || (f && !valid(K_FAMILY, f)) ||
-	    (p && !valid(K_ONOFF, p)) || (h && !valid(K_HOST_VLAN, h))) {
-		snprintf(err, errcap,
-			 "VLAN: 1 to 4094 or none; MAC: xx:xx:xx:xx:xx:xx or none; GEM: a Port-ID or auto; FAMILY: ipv4, ipv6 or both; PASS: on or off; HOST_VLAN: 1 to 4094, untagged or none");
-		return -EINVAL;
-	}
-	if (u && *u && !word(u, USER_MAX)) {
-		snprintf(err, errcap, "USER: printable, without blanks, up to %d characters",
-			 USER_MAX);
-		return -EINVAL;
-	}
-
-	settings_load(&s);
+	accounts_load(acct);
 	if (i) {
-		if (!number(i, 1, SESSIONS, &n)) {
+		if (strlen(i) != 1 || *i < '1' || *i > '0' + SESSIONS) {
 			snprintf(err, errcap, "ID: 1 to %d", SESSIONS);
-			explicit_bzero(&s, sizeof(s));
+			explicit_bzero(acct, sizeof(acct));
 			return -EINVAL;
 		}
+		n = *i - '0';
 	} else {
 		for (int k = 0; k < SESSIONS && !n; k++)
-			if (!*s.acct[k].user)
-				n = (unsigned long)k + 1;
+			if (!*acct[k].user)
+				n = k + 1;
 		if (!n || !u || !*u) {
 			snprintf(err, errcap, n ? "a new session needs USER" :
 						  "all %d sessions are taken",
 				 SESSIONS);
-			explicit_bzero(&s, sizeof(s));
+			explicit_bzero(acct, sizeof(acct));
 			return -EINVAL;
 		}
 	}
-	if (!*s.acct[n - 1].user && (!u || !*u)) {
-		snprintf(err, errcap, "session %lu has no account", n);
-		explicit_bzero(&s, sizeof(s));
+	if (!*acct[n - 1].user && (!u || !*u)) {
+		snprintf(err, errcap, "session %d has no account", n);
+		explicit_bzero(acct, sizeof(acct));
 		return -EINVAL;
 	}
-
-	/* The words of before name no shape: the accounts give it now. */
-	if (strcmp(s.val[MODE], "router"))
-		len += (size_t)snprintf(text + len, sizeof(text) - len, "MODE=\n");
-	if (n == 1 && strcmp(s.val[MODE], "router"))
-		len += (size_t)snprintf(text + len, sizeof(text) - len,
-					"WAN_VLAN=\nWAN_MAC=\nWAN_GEM=auto\n"
-					"SESSION1_VLAN=%s\nSESSION1_MAC=%s\nSESSION1_GEM=%s\n",
-					session_value(&s, 0, S_VLAN),
-					session_value(&s, 0, S_MAC),
-					session_value(&s, 0, S_GEM));
-	explicit_bzero(&s, sizeof(s));
+	explicit_bzero(acct, sizeof(acct));
 
 	if (u && !*u) {
-		len += (size_t)snprintf(text + len, sizeof(text) - len,
-					"PPPOE%lu_USER=\n", n);
+		append(text, sizeof(text), &len, "PPPOE%d_USER=\n", n);
 	} else {
 		if (u)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"PPPOE%lu_USER=%s\n", n, u);
+			append(text, sizeof(text), &len, "PPPOE%d_USER=%s\n", n, u);
 		if (sec && *sec)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"PPPOE%lu_SECRET=%s\n", n, sec);
+			append(text, sizeof(text), &len, "PPPOE%d_SECRET=%s\n", n, sec);
 		if (v)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"SESSION%lu_VLAN=%s\n", n, v);
+			append(text, sizeof(text), &len, "SESSION%d_VLAN=%s\n", n, v);
 		if (m)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"SESSION%lu_MAC=%s\n", n, m);
+			append(text, sizeof(text), &len, "SESSION%d_MAC=%s\n", n, m);
 		if (g)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"SESSION%lu_GEM=%s\n", n, g);
+			append(text, sizeof(text), &len, "SESSION%d_GEM=%s\n", n, g);
 		if (f)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"SESSION%lu_FAMILY=%s\n", n, f);
+			append(text, sizeof(text), &len, "SESSION%d_FAMILY=%s\n", n, f);
 		if (p)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"SESSION%lu_PASS=%s\n", n, p);
+			append(text, sizeof(text), &len, "SESSION%d_PASS=%s\n", n, p);
 		if (h)
-			len += (size_t)snprintf(text + len, sizeof(text) - len,
-						"SESSION%lu_HOST_VLAN=%s\n", n, h);
+			append(text, sizeof(text), &len, "SESSION%d_HOST_VLAN=%s\n", n, h);
 	}
+	if (!len)
+		text[0] = '\0';
 
 	rc = prov_settings_set(text, err, errcap);
 	explicit_bzero(secret, sizeof(secret));

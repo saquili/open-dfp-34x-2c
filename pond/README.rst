@@ -72,15 +72,19 @@ or of the other bank with an empty body, and restarts.
 * ``settings``: the settings of onu-mode (see ``onu-utils``), the keys of
   ``/run/onu.conf`` (``SESSIONn_GEM``, ``_VLAN``, ``_MAC`` and ``_FAMILY``
   among them) and the accounts, ``PPPOEn_USER`` and ``PPPOEn_SECRET`` for the
-  sessions 1 to 7. pond checks every value and the settings as a whole, writes
-  ``/run/onu.conf`` and each account's ``/run/onu-pppoeN`` for root only, then
-  starts ``onu-mode apply``, which also saves them in the store; it refuses
-  another change, with 409, until that has ended. A read gives the settings,
+  sessions 1 to 7. pond knows none of their rules, which are onucfg's (ADR
+  0014): ``onucfg check`` judges the change over the settings in force and
+  gives them back in full, or says why not, which pond answers with; pond
+  writes ``/run/onu.conf`` as onucfg gave it and each account's
+  ``/run/onu-pppoeN`` for root only, then starts ``onu-mode apply``, which
+  also saves them in the store; it refuses another change, with 409, until
+  that has ended. A read gives the settings as ``onucfg settings`` reads them,
   each session with its user and whether a secret is set, never the secret,
   and what onu-mode and dhcp6d brought up for it (``/run/session/N``: the
-  interfaces, the addresses, the delegated IPv6 prefix and the host it went
-  to), the address handed on, and what became of the settings in the store (``store``: ``loaded``,
-  ``defaults``, ``saved``, ``failed`` or ``none``).
+  interfaces, the addresses, what it hands down, the delegated IPv6 prefix and
+  the host it went to), the address handed on, and what became of the
+  settings in the store (``store``: ``loaded``, ``defaults``, ``saved``,
+  ``failed`` or ``none``).
 * ``session``: a PPPoE session of the stick's own: ``ID`` (none for the first
   free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``
   and ``FAMILY`` (``ipv4``, ``ipv6`` or ``both``). With an account the stick
@@ -151,8 +155,10 @@ CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests run on the files of ``tests/fixtures``, which stand in
 for ``/proc`` and ``/sys``, and on netlink dumps they build; the two copies of
 the boot loader's environment are made by ``tests/make-env.py``. The tests of
-the settings write under the same tree and start stand-ins for onu-mode and
-onu-store, which ``POND_APPLY``, ``POND_REIDENTIFY`` and ``POND_STORE`` name;
+the settings write under the same tree and run onucfg, built from
+``../onu-utils`` (``ONU_UTILS``) and named by ``POND_ONUCFG``, and stand-ins
+for onu-mode and onu-store, which ``POND_APPLY``, ``POND_REIDENTIFY`` and
+``POND_STORE`` name;
 those of the stick's own settings start stand-ins for onu-lane, onu-mgmt and
 hostname (``POND_ONU_LANE``, ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those
 of ``omci`` a stand-in for omcid's control socket.

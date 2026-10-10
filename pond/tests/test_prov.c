@@ -1663,10 +1663,11 @@ static void test_settings(void)
 			       err, sizeof(err));
 	check(rc == 0, "passthrough over PPPoE is taken");
 	s = slurp("/run/onu.conf", file, sizeof(file));
-	check(s && strstr(s, "\nMODE=passthrough\n") &&
-		      strstr(s, "\nWAN_MAC=00:00:5e:00:53:01\n") && !strstr(s, "LAN_VLAN") &&
+	check(s && strstr(s, "\nMODE=\n") && strstr(s, "\nWAN_MAC=\n") &&
+		      strstr(s, "\nSESSION1_MAC=00:00:5e:00:53:01\n") && !strstr(s, "LAN_VLAN") &&
 		      !strstr(s, "PASS_GATEWAY") && !strstr(s, "PASS_PEER"),
-	      "onu.conf has the passthrough settings, and no link to the router of its own");
+	      "onu.conf has the passthrough settings as the first session's, with the accounts "
+	      "giving the shape, and no link to the router of its own");
 	settled(buf, sizeof(buf));
 
 	put("/run/onu-mode", "router\n", 0644);
@@ -1692,6 +1693,10 @@ static void test_settings(void)
 	put("/run/session/1/gem", "gem1\n", 0644);
 	put("/run/session/1/ppp", "ppp0\n", 0644);
 	put("/run/session/1/ipv4", "192.0.2.2\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"hands_on\":false,\"dev\":\"wan410\"") != NULL,
+	      "a session hands nothing down until onu-mode says it does");
+	put("/run/session/1/hands", "ipv4 ipv6\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"hands_on\":true,\"dev\":\"wan410\",\"gem_dev\":\"gem1\","
 			"\"ppp\":\"ppp0\",\"ipv4\":\"192.0.2.2\",\"ipv6\":null,"
