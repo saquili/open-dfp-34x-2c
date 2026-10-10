@@ -3,9 +3,14 @@
 
 config BR2_PACKAGE_POND
 	bool "pond"
+	depends on !BR2_STATIC_LIBS # libubox, ubus
+	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # json-c, ubus
 	select BR2_PACKAGE_LIBMNL
+	select BR2_PACKAGE_LIBUBOX
+	select BR2_PACKAGE_UBUS
 	select BR2_PACKAGE_HOST_NODEJS
 	help
 	  The HTTP daemon of the ONU and its panel, from pond/ in this
 	  repository: the state of the device as JSON, the settings,
-	  and a single-page app built with the host's Node.
+	  and a single-page app built with the host's Node. It reads
+	  the state of the stick's programs on ubus.
