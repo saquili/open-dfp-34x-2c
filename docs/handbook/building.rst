@@ -194,7 +194,7 @@ BusyBox 1.37.0, 94 applets
     The ones the boot script and a shell session use, by purpose:
 
     shell and init
-        ash sh init halt poweroff reboot
+        ash sh halt poweroff reboot
     files
         ls cat cp mv rm mkdir rmdir ln touch chmod chown dd df du stat find
         readlink realpath basename dirname pwd sync
@@ -204,7 +204,7 @@ BusyBox 1.37.0, 94 applets
     system
         mount umount mountpoint ps top free uptime dmesg kill killall pidof
         sleep date uname hostname id whoami env which tty stty watch time
-        syslogd klogd logger watchdog
+        syslogd klogd logger ntpd
     network
         ip ping netstat nc traceroute traceroute6 arping nslookup
     archives
@@ -261,7 +261,13 @@ The start
 
     The boot script starts the stick's programs as procd's services
     (``onu-svc``): the log first, ``netifd`` once its configuration is
-    written, the ssh server and ``pond`` once the management address is up.
+    written, the ssh server, ``pond`` and ``ntpd`` once the management
+    address is up. The stick has no clock that runs while it is off, and the
+    OLT gives no date: ``ntpd`` sets the time from the router at the other end
+    of the management link, or from the server that the stick's settings name
+    (``NTP_SERVER``, ``onu-store system``); when the settings name a server of
+    the host side for the log (``LOG_SERVER``), the log goes there as well,
+    the stick keeping its own copy.
     procd starts a service again 2 s after it ends and never gives up;
     ``onu-svc list`` tells how each is doing and how often procd started it
     again. The console's login prompt is started again half a second after it
