@@ -66,7 +66,7 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
        system. Until this system writes its own store there, it holds the
        shipped firmware's, a big-endian JFFS2 image that includes the
        device's registration identity, which this system does not mount.
-     - Linux: ``onu-store``.
+     - Linux: ``onu-config``.
    * - ``k0``
      - ``0x080000``
      - 1856 KiB (``0x1d0000``, 1900544 bytes)

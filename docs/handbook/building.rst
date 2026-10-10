@@ -265,7 +265,7 @@ The start
     address is up. The stick has no clock that runs while it is off, and the
     OLT gives no date: ``ntpd`` sets the time from the router at the other end
     of the management link, or from the server that the stick's settings name
-    (``NTP_SERVER``, ``onu-store system``); when the settings name a server of
+    (``NTP_SERVER``, ``onu-config system``); when the settings name a server of
     the host side for the log (``LOG_SERVER``), the log goes there as well,
     the stick keeping its own copy.
     procd starts a service again 2 s after it ends and never gives up;
@@ -319,7 +319,7 @@ The boot script
     and the panel (``docs/adr/0012-one-account-root.rst``). Until one is set,
     the password is ``admin``; the panel asks for a new one at the first
     sign-in, and ``passwd`` sets one on the console or over ssh. Either way
-    ``onu-store`` keeps its hash in the configuration store and writes root's
+    ``onu-config`` keeps its hash in the configuration store and writes root's
     line of ``/run/shadow``, which ``/etc/shadow`` names, at every boot. A
     forgotten password is cleared from the boot loader's console: a RAM boot
     (``flashing.rst``) whose kernel arguments end with ``rdinit=/bin/sh``
@@ -328,7 +328,7 @@ The boot script
         mount -t proc proc /proc
         mount -t devtmpfs devtmpfs /dev
         grep '"config"' /proc/mtd          # mtd3: ... "config"
-        onucfg --store /dev/mtd3 unset AUTH_HASH
+        onu-config --store /dev/mtd3 unset AUTH_HASH
         reboot -f
 
     The next boot has the default password, ``admin``, again; nothing else in
