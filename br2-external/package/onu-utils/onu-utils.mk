@@ -9,7 +9,7 @@ ONU_UTILS_SITE_METHOD = local
 ONU_UTILS_LICENSE = GPL-2.0-only
 ONU_UTILS_LICENSE_FILES = LICENSES/preferred/GPL-2.0-only.txt
 ONU_UTILS_POST_RSYNC_HOOKS += OPEN_DFP_34X_2C_COPY_LICENSES
-ONU_UTILS_DEPENDENCIES = libmnl zlib
+ONU_UTILS_DEPENDENCIES = json-c libmnl libubox ubus zlib
 
 define ONU_UTILS_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) CC="$(TARGET_CC)" \
@@ -21,6 +21,7 @@ define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/pon $(TARGET_DIR)/usr/sbin/pon
 	$(INSTALL) -D -m 0755 $(@D)/build/onucfg $(TARGET_DIR)/usr/sbin/onucfg
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-update $(TARGET_DIR)/usr/sbin/onu-update
+	$(INSTALL) -D -m 0755 $(@D)/build/onu-svc $(TARGET_DIR)/usr/sbin/onu-svc
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-trial $(TARGET_DIR)/usr/sbin/onu-trial
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mode $(TARGET_DIR)/usr/sbin/onu-mode
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-store $(TARGET_DIR)/usr/sbin/onu-store
