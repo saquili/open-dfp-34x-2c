@@ -36,7 +36,7 @@ there, and names it by its whole path where procd starts it.
       onu-config --store /dev/mtd3 get KEY
       onu-config --store /dev/mtd3 set KEY VALUE
       onu-config --store /dev/mtd3 unset KEY
-      onu-config --store /dev/mtd3 import <lines     # every KEY=VALUE, one write
+      onu-config --store /dev/mtd3 import <lines     # every KEY=VALUE and -KEY, one write
 
    It also holds the one table of the data path's settings (ADR 0014,
    ``src/settings.h``): each key of ``/run/onu.conf``, the shape of its values
@@ -103,7 +103,10 @@ there, and names it by its whole path where procd starts it.
    logical passwords, with ``ploam_set`` and ``loid_password_set`` and where it
    came from, ``source``. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
-   removed account does not come back at the next boot. ``onu-config system``
+   removed account does not come back at the next boot, and takes out of the
+   store each setting that ``/run/onu.conf`` no longer has, such as a key a
+   later version replaced (an import's ``-KEY`` line), unless that file is
+   missing or empty. ``onu-config system``
    keeps the stick's own settings of ``KEY=VALUE`` lines on its input as
    ``SYS_*`` keys, each in the shape the boot script takes: ``HOSTNAME``,
    ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, the server

@@ -124,6 +124,35 @@ check 'stored MODE=router'
 check '! stored MODE=passthrough'
 teardown
 
+echo "a setting no longer in force leaves the store, and nothing else does"
+setup
+settings
+printf '%s\n' LAN_VLAN=36 PASS_GATEWAY=192.0.2.1 >>"$ONU_ROOT/run/onu.conf"
+run save
+check 'stored LAN_VLAN=36'
+printf '%s\n' SYS_HOSTNAME=stick PD2_HOST=host AUTH_HASH=hash |
+	onu-config --store "$ONU_STORE" import
+settings
+run save
+check '[ $rc -eq 0 ]'
+check '! onu-config --store "$ONU_STORE" list | grep -q -e "^LAN_VLAN=" -e "^PASS_GATEWAY="'
+check 'stored MODE=passthrough'
+check 'stored WAN_VLAN=410'
+check 'stored ID_SERIAL=XXXXXXXXXXXX'
+check 'stored SYS_HOSTNAME=stick'
+check 'stored PD2_HOST=host'
+check 'stored AUTH_HASH=hash'
+check 'stored PPPOE1_USER=user@example.net'
+# Without the settings in force, a save takes none of the stored ones away.
+: >"$ONU_ROOT/run/onu.conf"
+run save
+check 'stored MODE=passthrough'
+rm -f "$ONU_ROOT/run/onu.conf"
+run save
+check '[ $rc -eq 0 ]'
+check 'stored WAN_VLAN=410'
+teardown
+
 echo "a save that changes nothing writes nothing"
 setup
 settings
@@ -169,6 +198,22 @@ settings
 run save
 cp "$ONU_STORE" "$T/before"
 printf 'MODE=router\nnot a setting\n' | onu-config --store "$ONU_STORE" import 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ]'
+check 'cmp -s "$ONU_STORE" "$T/before"'
+teardown
+
+echo "an import removes the key of a -KEY line, and refuses a bad one"
+setup
+settings
+run save
+printf -- '-WAN_VLAN\nMODE=router\n' | onu-config --store "$ONU_STORE" import
+rc=$?
+check '[ $rc -eq 0 ]'
+check '! onu-config --store "$ONU_STORE" list | grep -q "^WAN_VLAN="'
+check 'stored MODE=router'
+cp "$ONU_STORE" "$T/before"
+printf -- '-MODE\n-not a key\n' | onu-config --store "$ONU_STORE" import 2>/dev/null
 rc=$?
 check '[ $rc -ne 0 ]'
 check 'cmp -s "$ONU_STORE" "$T/before"'

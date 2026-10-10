@@ -123,13 +123,33 @@ factory_identity() {
 	}'
 }
 
-# The settings and the accounts in force, as keys of the store.
+# The settings and the accounts in force, as keys of the store, and a -KEY
+# line for each setting the store holds and the settings in force no longer
+# have, such as a key that a later version replaced: it would come back at
+# boot.
+# Without the file of the settings in force, none goes.
 settings() {
+	stored=$(contents 2>/dev/null)
 	if [ -r "$CONF" ]; then
 		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
 			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_'
+		[ -s "$CONF" ] && printf '%s\n' "$stored" | awk -v conf="$CONF" '
+			BEGIN {
+				while ((getline line < conf) > 0) {
+					i = index(line, "=")
+					if (i > 1)
+						kept[substr(line, 1, i - 1)] = 1
+				}
+			}
+			{
+				i = index($0, "=")
+				if (i < 2)
+					next
+				k = substr($0, 1, i - 1)
+			}
+			k ~ /^(ID_|PPPOE|AUTH_|SYS_)/ || k ~ /^PD[1-9]_HOST$/ { next }
+			!(k in kept) { print "-" k }'
 	fi
-	stored=$(contents 2>/dev/null)
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
 		user=

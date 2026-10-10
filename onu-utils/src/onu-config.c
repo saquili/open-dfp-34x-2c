@@ -9,7 +9,9 @@
  *   onu-config [--store PATH] set KEY VALUE  set KEY, keeping the store whole
  *   onu-config [--store PATH] unset KEY      remove KEY
  *   onu-config [--store PATH] import         set every KEY=VALUE line of the
- *                                            standard input, in one write
+ *                                            standard input and remove the
+ *                                            key of every -KEY line, in one
+ *                                            write
  *   onu-config check                         the settings of the data path on
  *                                            the standard input, judged
  *   onu-config settings                      the same, taken as they come
@@ -131,9 +133,9 @@ static int write_region(int fd, bool mtd, size_t erase, size_t off,
 }
 
 /*
- * Set the KEY=VALUE lines of @in in @payload. An empty line is skipped; any
- * other line without a valid key, or that does not fit, fails the whole
- * import before anything is written.
+ * Set the KEY=VALUE lines of @in in @payload, and remove the key of each
+ * -KEY line. An empty line is skipped; any other line without a valid key,
+ * or that does not fit, fails the whole import before anything is written.
  */
 static int import_lines(FILE *in, char *payload, size_t cap)
 {
@@ -149,6 +151,15 @@ static int import_lines(FILE *in, char *payload, size_t cap)
 			line[--n] = '\0';
 		if (n == 0)
 			continue;
+		if (line[0] == '-') {
+			if (!cfg_valid_key(line + 1)) {
+				fprintf(stderr, "onu-config: import: not -KEY: %s\n", line);
+				err = -EINVAL;
+				break;
+			}
+			cfg_unset(payload, line + 1);
+			continue;
+		}
 		eq = strchr(line, '=');
 		if (!eq) {
 			fprintf(stderr, "onu-config: import: not KEY=VALUE: %s\n",
