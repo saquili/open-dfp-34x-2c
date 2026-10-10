@@ -82,6 +82,20 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertEqual(sorted(os.listdir(sbin)), sorted(kept))
 
+    def test_the_command_line_tools_of_the_network_layer_go(self):
+        tools = os.path.join(self.target, "usr", "bin")
+        shell = os.path.join(self.target, "usr", "share", "libubox")
+        os.makedirs(tools)
+        os.makedirs(shell)
+        for prog in ("ubus", "uci", "jshn", "omcitap"):
+            with open(os.path.join(tools, prog), "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\n")
+        with open(os.path.join(shell, "jshn.sh"), "w", encoding="utf-8") as handle:
+            handle.write("# jshn\n")
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(os.listdir(tools), ["omcitap"])
+        self.assertFalse(os.path.exists(shell))
+
     def test_a_tree_without_the_shared_c_library_needs_no_build_directories(self):
         env = {key: value for key, value in os.environ.items()
                if key not in ("HOST_DIR", "STAGING_DIR", "BUILD_DIR")}

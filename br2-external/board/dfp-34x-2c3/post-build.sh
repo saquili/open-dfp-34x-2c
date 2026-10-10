@@ -7,9 +7,10 @@
 #
 # Usage: post-build.sh TARGET_DIR
 #
-# It takes out the programs of iproute2 that the stick does not run; it cuts
-# the shared libraries to what the programs use, with tools/lib-trim, when the
-# tree holds the shared C library; and it writes into /etc/os-release, as
+# It takes out the programs of iproute2 that the stick does not run, and the
+# command-line tools of the network layer; it cuts the shared libraries to what
+# the programs use, with tools/lib-trim, when the tree holds the shared C
+# library; and it writes into /etc/os-release, as
 # BUILD_ID, the commit of this repository that the image is built from: the
 # first twelve digits of its hash, followed by "-dirty" when the working tree
 # holds changes that are not committed, or "unknown" when the sources are not a
@@ -44,6 +45,13 @@ fi
 for prog in ctstat dcb genl ifstat lnstat nstat rdma routel rtacct rtmon rtstat ss tipc vdpa; do
 	rm -f "$1/sbin/$prog"
 done
+
+# The network layer installs a command-line tool of each part: ubus, uci and
+# jshn, with jshn's shell library. A person at the stick has the ssh server and
+# BusyBox, and the panel for the rest; netifd and ubusd need none of them, and
+# lib-trim then takes out the library only jshn loads.
+rm -f "$1/usr/bin/ubus" "$1/usr/bin/uci" "$1/usr/bin/jshn"
+rm -rf "$1/usr/share/libubox"
 
 # The programs share one C library (docs/adr/0011). The build system installs
 # it whole, with every function it offers, and libgcc_s, which no program
