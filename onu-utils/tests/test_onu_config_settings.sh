@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of "onucfg check" and "onucfg settings", the settings of the data path
-# as the status daemon asks for them. BUILD names the directory of onucfg.
+# Tests of "onu-config check" and "onu-config settings", the settings of the data path
+# as the status daemon asks for them. BUILD names the directory of onu-config.
 
 set -u
-ONUCFG=${BUILD:-build}/onucfg
+ONUCFG=${BUILD:-build}/onu-config
 checks=0
 failures=0
 
@@ -27,7 +27,7 @@ run() {
 }
 
 echo "check: the settings in full, judged, without a store"
-unset ONUCFG_STORE
+unset ONU_STORE
 run check 'PPPOE1_USER=bench\nPPPOE1_SECRET=not-a-real-one\nSESSION1_VLAN=410\n'
 check '[ $rc -eq 0 ] && [ ! -s "$T/err" ]'
 check 'grep -qx "LAN_ADDRESS=192.168.1.1/24" "$T/out" && grep -qx "SESSION1_VLAN=410" "$T/out"'
@@ -36,7 +36,7 @@ check '[ "$(grep -c "^SESSION1_" "$T/out")" -eq 6 ] && ! grep -q "^SESSION2_" "$
 
 echo "check refuses, says why, and prints no settings"
 run check 'WAN_VLAN=410\nWAN_VLAN=4095\n'
-check '[ $rc -eq 1 ] && [ ! -s "$T/out" ] && grep -qx "onucfg: WAN_VLAN: not a value of it" "$T/err"'
+check '[ $rc -eq 1 ] && [ ! -s "$T/out" ] && grep -qx "onu-config: WAN_VLAN: not a value of it" "$T/err"'
 run check 'PPPOE2_USER=bench\n'
 check '[ $rc -eq 1 ] && grep -q "PPPOE2_SECRET" "$T/err"'
 run check 'PPPOE2_USER=bench\nPPPOE2_SECRET=xyzzy plugh\n'
@@ -45,8 +45,8 @@ check '[ $rc -eq 1 ] && grep -q "PPPOE2_SECRET" "$T/err" && ! grep -q -e xyzzy -
 echo "settings: the same, a line that is not taken left out and said"
 run settings 'WAN_VLAN=410\nWAN_VLAN=4095\nPASS_GATEWAY=169.254.0.1\nLAN_DHCP=on\n'
 check '[ $rc -eq 0 ] && grep -qx "WAN_VLAN=410" "$T/out" && grep -qx "LAN_DHCP=on" "$T/out"'
-check 'grep -qx "onucfg: WAN_VLAN: not a value of it; left out" "$T/err"'
-check 'grep -qx "onucfg: PASS_GATEWAY: no such setting; left out" "$T/err"'
+check 'grep -qx "onu-config: WAN_VLAN: not a value of it; left out" "$T/err"'
+check 'grep -qx "onu-config: PASS_GATEWAY: no such setting; left out" "$T/err"'
 # It judges nothing: an account without a secret is no reason to fail.
 run settings 'PPPOE2_USER=bench\nLAN_DHCP_START=203.0.113.9\n'
 check '[ $rc -eq 0 ] && grep -qx "LAN_DHCP_START=203.0.113.9" "$T/out" && grep -q "^SESSION2_GEM=auto" "$T/out"'
@@ -60,5 +60,17 @@ check '[ $rc -eq 1 ] && grep -q "too long" "$T/err"'
 rc=$?
 check '[ $rc -eq 2 ]'
 
-echo "test_onucfg_settings: $checks checks, $failures failed"
+echo "the files' verbs go to onu-config.sh of ONU_LIB, the store with them"
+mkdir -p "$T/lib"
+printf '#!/bin/sh\necho "$0 $* [${ONU_STORE:-}]" >"%s/ran"\n' "$T" >"$T/lib/onu-config.sh"
+chmod +x "$T/lib/onu-config.sh"
+ONU_LIB=$T/lib "$ONUCFG" load </dev/null
+check '[ "$(cat "$T/ran")" = "$T/lib/onu-config.sh load []" ]'
+ONU_LIB=$T/lib "$ONUCFG" --store /run/x pd 2 </dev/null
+check '[ "$(cat "$T/ran")" = "$T/lib/onu-config.sh pd 2 [/run/x]" ]'
+ONU_LIB=$T/nowhere "$ONUCFG" save </dev/null 2>/dev/null
+rc=$?
+check '[ $rc -eq 127 ]'
+
+echo "test_onu_config_settings: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

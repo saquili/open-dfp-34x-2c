@@ -20,7 +20,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 # host, point CPPFLAGS at an installation of its headers.
 .PHONY: all check clean
 
-all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onucfg $(BUILD)/onu-update $(BUILD)/onu-svc
+all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -33,7 +33,7 @@ $(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o \
 	       $(BUILD)/src/gemlink.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
-$(BUILD)/onucfg: $(BUILD)/src/onucfg.o $(BUILD)/src/cfgstore.o $(BUILD)/src/settings.o
+$(BUILD)/onu-config: $(BUILD)/src/onu-config.o $(BUILD)/src/cfgstore.o $(BUILD)/src/settings.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
 $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
@@ -69,7 +69,7 @@ $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 
 # test_genl asks the kernel it runs on, through a generic netlink socket.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
-	$(BUILD)/test_cfgstore $(BUILD)/onucfg $(BUILD)/test_update $(BUILD)/onu-update \
+	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/test_update $(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
@@ -78,7 +78,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_update
 	$(BUILD)/test_svcmsg
 	$(BUILD)/test_settings
-	BUILD=$(abspath $(BUILD)) sh tests/test_onucfg_settings.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	sh tests/test_onu_trial.sh
 	sh tests/test_onu_lane.sh
@@ -86,7 +86,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	sh tests/test_onu_net.sh
 	sh tests/test_onu_run.sh
 	sh tests/test_onu_apply.sh
-	BUILD=$(abspath $(BUILD)) sh tests/test_onu_store.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config.sh
 
 clean:
 	rm -rf $(BUILD)

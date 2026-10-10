@@ -2,17 +2,29 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * onucfg: read and change the stick's configuration store (cfgstore.h).
+ * onu-config: the stick's settings, their store in the flash and their rules.
  *
- *   onucfg [--store PATH] get KEY        print the value of KEY, or fail
- *   onucfg [--store PATH] list           print every KEY=VALUE line
- *   onucfg [--store PATH] set KEY VALUE  set KEY, keeping the store whole
- *   onucfg [--store PATH] unset KEY      remove KEY
- *   onucfg [--store PATH] import         set every KEY=VALUE line of the
- *                                        standard input, in one write
- *   onucfg check                         the settings of the data path on
- *                                        the standard input, judged
- *   onucfg settings                      the same, taken as they come
+ *   onu-config [--store PATH] get KEY        print the value of KEY, or fail
+ *   onu-config [--store PATH] list           print every KEY=VALUE line
+ *   onu-config [--store PATH] set KEY VALUE  set KEY, keeping the store whole
+ *   onu-config [--store PATH] unset KEY      remove KEY
+ *   onu-config [--store PATH] import         set every KEY=VALUE line of the
+ *                                            standard input, in one write
+ *   onu-config check                         the settings of the data path on
+ *                                            the standard input, judged
+ *   onu-config settings                      the same, taken as they come
+ *   onu-config load|save|migrate|identity|password|auth HASH|system|pd N
+ *                                            the files the running system
+ *                                            reads, to and from the store:
+ *                                            onu-config.sh, in ONU_LIB
+ *                                            (/usr/lib/onu), carries them out
+ *
+ * The store is a file or an MTD character device; --store or ONU_STORE names
+ * it, and --size gives the size of a store that does not exist yet. A change
+ * writes the slot that is not current, then the store carries the new one, so
+ * a power loss in the middle keeps the old configuration (see cfgstore.h). On
+ * an MTD device the slot's erase blocks are erased first. A change that leaves
+ * the configuration as it was writes nothing.
  *
  * check and settings read KEY=VALUE lines of the data path's settings and
  * PPPoE accounts, a later line over an earlier one (settings.h), and print
@@ -22,17 +34,13 @@
  * why; settings leaves such a line out, says so on the standard error, and
  * judges nothing. They need no store.
  *
- * The store is a file or an MTD character device; --store or ONUCFG_STORE
- * names it, and --size gives the size of a store that does not exist yet. A
- * change writes the slot that is not current, then the store carries the new
- * one, so a power loss in the middle keeps the old configuration (see
- * cfgstore.h). On an MTD device the slot's erase blocks are erased first. A
- * change that leaves the configuration as it was writes nothing.
+ * onu-config was onucfg and onu-store before (ADR 0015).
  */
 
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -53,7 +61,7 @@
 
 static int fail(const char *what)
 {
-	fprintf(stderr, "onucfg: %s: %s\n", what, strerror(errno));
+	fprintf(stderr, "onu-config: %s: %s\n", what, strerror(errno));
 	return 1;
 }
 
@@ -103,7 +111,7 @@ static int import_lines(FILE *in, char *payload, size_t cap)
 			continue;
 		eq = strchr(line, '=');
 		if (!eq) {
-			fprintf(stderr, "onucfg: import: not KEY=VALUE: %s\n",
+			fprintf(stderr, "onu-config: import: not KEY=VALUE: %s\n",
 				line);
 			err = -EINVAL;
 			break;
@@ -111,7 +119,7 @@ static int import_lines(FILE *in, char *payload, size_t cap)
 		*eq = '\0';
 		err = cfg_set(payload, cap, line, eq + 1);
 		if (err) {
-			fprintf(stderr, "onucfg: import %s: %s\n", line,
+			fprintf(stderr, "onu-config: import %s: %s\n", line,
 				strerror(-err));
 			break;
 		}
@@ -133,7 +141,7 @@ static int settings_cmd(bool strict)
 	int rc = 1;
 
 	if (len == sizeof(text)) {
-		fprintf(stderr, "onucfg: the settings are too long\n");
+		fprintf(stderr, "onu-config: the settings are too long\n");
 		goto out;
 	}
 	text[len] = '\0';
@@ -143,18 +151,18 @@ static int settings_cmd(bool strict)
 		if (!settings_line(&s, line, err, sizeof(err)))
 			continue;
 		if (strict) {
-			fprintf(stderr, "onucfg: %s\n", err);
+			fprintf(stderr, "onu-config: %s\n", err);
 			goto out;
 		}
-		fprintf(stderr, "onucfg: %s; left out\n", err);
+		fprintf(stderr, "onu-config: %s; left out\n", err);
 	}
 	settings_settle(&s);
 	if (strict && !settings_coherent(&s, err, sizeof(err))) {
-		fprintf(stderr, "onucfg: %s\n", err);
+		fprintf(stderr, "onu-config: %s\n", err);
 		goto out;
 	}
 	if (settings_format(&s, out, sizeof(out)) >= sizeof(out)) {
-		fprintf(stderr, "onucfg: the settings are too long\n");
+		fprintf(stderr, "onu-config: the settings are too long\n");
 		goto out;
 	}
 	fputs(out, stdout);
@@ -165,9 +173,41 @@ out:
 	return rc;
 }
 
+/* The verbs of the files the running system reads, onu-config.sh's. */
+static bool files_verb(const char *verb)
+{
+	static const char *const verbs[] = {
+		"load", "save", "migrate", "identity", "password", "auth", "system", "pd",
+	};
+
+	for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
+		if (!strcmp(verb, verbs[i]))
+			return true;
+	return false;
+}
+
+/*
+ * Run onu-config.sh of ONU_LIB, /usr/lib/onu unless set, with the verb and
+ * the arguments of @args, on the store @store when one was named.
+ */
+static int files(char **args, const char *store)
+{
+	const char *lib = getenv("ONU_LIB");
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/onu-config.sh", lib && *lib ? lib : "/usr/lib/onu");
+	if (store && setenv("ONU_STORE", store, 1))
+		return fail("ONU_STORE");
+	/* args[-1] is onu-config's own, or an option's: the script's name there. */
+	args[-1] = path;
+	execv(path, args - 1);
+	fail(path);
+	return 127;
+}
+
 int main(int argc, char **argv)
 {
-	const char *store = getenv("ONUCFG_STORE");
+	const char *store = getenv("ONU_STORE");
 	size_t size = 0;
 	int opt;
 	static const struct option opts[] = {
@@ -188,16 +228,18 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
+	if (optind < argc && files_verb(argv[optind]))
+		return files(argv + optind, store);
 	if (optind < argc && (!strcmp(argv[optind], "check") ||
 			      !strcmp(argv[optind], "settings"))) {
 		if (argc - optind != 1) {
-			fputs("usage: onucfg check | settings\n", stderr);
+			fputs("usage: onu-config check | settings\n", stderr);
 			return 2;
 		}
 		return settings_cmd(!strcmp(argv[optind], "check"));
 	}
 	if (!store) {
-		fprintf(stderr, "onucfg: no store (--store or ONUCFG_STORE)\n");
+		fprintf(stderr, "onu-config: no store (--store or ONU_STORE)\n");
 		return 2;
 	}
 
@@ -216,9 +258,11 @@ int main(int argc, char **argv)
 	    (!strcmp(verb, "import") && nargs != 1) ||
 	    (strcmp(verb, "get") && strcmp(verb, "set") && strcmp(verb, "unset") &&
 	     strcmp(verb, "list") && strcmp(verb, "import"))) {
-		fputs("usage: onucfg [--store PATH] [--size N] get KEY | list |\n"
-		      "              set KEY VALUE | unset KEY | import\n"
-		      "       onucfg check | settings\n", stderr);
+		fputs("usage: onu-config [--store PATH] [--size N] get KEY | list |\n"
+		      "                  set KEY VALUE | unset KEY | import\n"
+		      "       onu-config check | settings\n"
+		      "       onu-config load | save | migrate | identity | password |\n"
+		      "                  auth HASH | system | pd N\n", stderr);
 		return 2;
 	}
 
@@ -256,7 +300,7 @@ int main(int argc, char **argv)
 	}
 	if (region_len == 0 || region_len > REGION_MAX ||
 	    cfg_payload_cap(region_len) == 0) {
-		fprintf(stderr, "onucfg: %s: no usable store size\n", store);
+		fprintf(stderr, "onu-config: %s: no usable store size\n", store);
 		close(fd);
 		return 2;
 	}
@@ -288,7 +332,7 @@ int main(int argc, char **argv)
 	int err = cfg_load(region, region_len, payload, cap, NULL, &seq, &slot);
 
 	if (err && err != -ENOENT) {
-		fprintf(stderr, "onucfg: %s: %s\n", store, strerror(-err));
+		fprintf(stderr, "onu-config: %s: %s\n", store, strerror(-err));
 		goto out_fail;
 	}
 
@@ -310,7 +354,7 @@ int main(int argc, char **argv)
 	} else if (!strcmp(verb, "set")) {
 		err = cfg_set(payload, cap, key, value);
 		if (err) {
-			fprintf(stderr, "onucfg: set %s: %s\n", key,
+			fprintf(stderr, "onu-config: set %s: %s\n", key,
 				strerror(-err));
 			goto out_fail;
 		}
@@ -328,7 +372,7 @@ int main(int argc, char **argv)
 		err = cfg_store(region, region_len, slot, seq, payload,
 				strlen(payload), &off, &len);
 		if (err) {
-			fprintf(stderr, "onucfg: %s: %s\n", store,
+			fprintf(stderr, "onu-config: %s: %s\n", store,
 				strerror(-err));
 			goto out_fail;
 		}

@@ -227,7 +227,7 @@ commit() {
 	iface=$(field IFACE "$PENDING")
 	name=$(field NAME "$PENDING")
 	pref=$(field PREF "$PENDING")
-	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n' "$vlan" "$address" | onu-store system ||
+	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n' "$vlan" "$address" | onu-config system ||
 		log "the management address $address is kept until the next start only"
 	old_iface=$(field IFACE "$STATE")
 	old_pref=$(field PREF "$STATE")

@@ -2,29 +2,31 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-store: the stick's configuration store, kept by onucfg in the flash
-# partition "config", and the files the running system reads.
+# onu-config.sh: the files the running system reads, to and from the stick's
+# configuration store in the flash partition "config", which onu-config keeps.
+# onu-config runs it for these verbs, and is how a person or a program asks
+# for them (ADR 0015; it was onu-store before):
 #
-#   onu-store load      at boot: the identity, the settings and the PPPoE
-#                       accounts from the store into /run/onu-identity,
-#                       /run/onu.conf and /run/onu-pppoeN
-#   onu-store save      the settings of /run/onu.conf and the accounts of
-#                       /run/onu-pppoeN into the store, in one write
-#   onu-store migrate   the same, with the identity of the shipped firmware's
-#                       configuration (ponid) taken into the store
-#   onu-store identity  the identity of the KEY=VALUE lines of the standard
-#                       input (SERIAL, PLOAM, ...) into the store and into
-#                       /run/onu-identity
-#   onu-store password  root's new password, the line of the standard input,
-#                       hashed into the store, /run/onu-auth and /run/shadow
-#   onu-store auth HASH a hash of root's password made elsewhere, the same way
-#   onu-store system    the stick's own settings of the KEY=VALUE lines of the
-#                       standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
-#                       SFP_LANE, NTP_SERVER, LOG_SERVER) into the store and
-#                       into /run/onu-system; an empty value removes the key
-#   onu-store pd N      the host session N delegates its IPv6 prefix to, the
-#                       line dhcp6d keeps in /run/onu-pdN, into the store;
-#                       without the file, out of it
+#   onu-config load      at boot: the identity, the settings and the PPPoE
+#                        accounts from the store into /run/onu-identity,
+#                        /run/onu.conf and /run/onu-pppoeN
+#   onu-config save      the settings of /run/onu.conf and the accounts of
+#                        /run/onu-pppoeN into the store, in one write
+#   onu-config migrate   the same, with the identity of the shipped firmware's
+#                        configuration (ponid) taken into the store
+#   onu-config identity  the identity of the KEY=VALUE lines of the standard
+#                        input (SERIAL, PLOAM, ...) into the store and into
+#                        /run/onu-identity
+#   onu-config password  root's new password, the line of the standard input,
+#                        hashed into the store, /run/onu-auth and /run/shadow
+#   onu-config auth HASH a hash of root's password made elsewhere, the same way
+#   onu-config system    the stick's own settings of the KEY=VALUE lines of the
+#                        standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
+#                        SFP_LANE, NTP_SERVER, LOG_SERVER) into the store and
+#                        into /run/onu-system; an empty value removes the key
+#   onu-config pd N      the host session N delegates its IPv6 prefix to, the
+#                        line dhcp6d keeps in /run/onu-pdN, into the store;
+#                        without the file, out of it
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
@@ -84,8 +86,8 @@ state() {
 }
 
 log() {
-	echo "onu-store: $*" >&2
-	logger -t onu-store "$*" 2>/dev/null
+	echo "onu-config: $*" >&2
+	logger -t onu-config "$*" 2>/dev/null
 	return 0
 }
 
@@ -103,7 +105,7 @@ store() {
 
 # The store's KEY=VALUE lines; nothing for an empty store.
 contents() {
-	onucfg --store "$STORE" list
+	onu-config --store "$STORE" list
 }
 
 has_identity() {
@@ -225,7 +227,7 @@ save() {
 	{
 		[ -n "$ids" ] && printf '%s\n' "$ids"
 		settings
-	} | onucfg --store "$STORE" import || return 1
+	} | onu-config --store "$STORE" import || return 1
 	# What the store gives back is what was meant to go in.
 	if [ -n "$ids" ]; then
 		printf '%s\n' "$ids" | while IFS= read -r line; do
@@ -246,7 +248,7 @@ identity() {
 			print "ID_" toupper(substr($0, 1, i - 1)) "=" substr($0, i + 1)
 	}')
 	[ -n "$ids" ] || return 1
-	printf '%s\n' "$ids" | onucfg --store "$STORE" import || return 1
+	printf '%s\n' "$ids" | onu-config --store "$STORE" import || return 1
 	umask 077
 	contents | awk '/^ID_/ {
 		i = index($0, "=")
@@ -285,7 +287,7 @@ system() {
 		print "SYS_" k "=" v
 	}') || return 1
 	[ -n "$lines" ] || return 1
-	printf '%s\n' "$lines" | onucfg --store "$STORE" import || return 1
+	printf '%s\n' "$lines" | onu-config --store "$STORE" import || return 1
 	contents | awk '/^SYS_/ {
 		i = index($0, "=")
 		if (i < length($0))
@@ -305,13 +307,13 @@ pd() {
 	host=
 	[ -r "$PD$1" ] && read -r host <"$PD$1"
 	if [ -z "$host" ]; then
-		onucfg --store "$STORE" unset "PD$1_HOST"
+		onu-config --store "$STORE" unset "PD$1_HOST"
 		return
 	fi
 	case $host in
 	*[!0-9a-fA-F:./\ ]*) return 1 ;;
 	esac
-	echo "PD$1_HOST=$host" | onucfg --store "$STORE" import
+	echo "PD$1_HOST=$host" | onu-config --store "$STORE" import
 }
 
 # /run/shadow, which /etc/shadow names: the image's accounts, root's with the
@@ -341,7 +343,7 @@ auth() {
 	case $1 in
 	*[!A-Za-z0-9\$./=_-]* | "") return 1 ;;
 	esac
-	echo "AUTH_HASH=$1" | onucfg --store "$STORE" import || return 1
+	echo "AUTH_HASH=$1" | onu-config --store "$STORE" import || return 1
 	(umask 077 && echo "$1" >"$AUTH.new" && mv "$AUTH.new" "$AUTH")
 	shadow
 }
@@ -420,7 +422,7 @@ pd)
 	pd "${2:-}"
 	;;
 *)
-	echo "usage: onu-store load|save|migrate|identity|password|auth HASH|system|pd N" >&2
+	echo "usage: onu-config load|save|migrate|identity|password|auth HASH|system|pd N" >&2
 	exit 2
 	;;
 esac

@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of scripts/onu-lane, with stand-ins for devlink, which keeps each
-# parameter in a file, onu-store and logger.
+# parameter in a file, onu-config and logger.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -35,7 +35,7 @@ show) printf 'x:\n  name %s type driver-specific\n    values:\n      cmode runti
 set) [ -e "$T/devlink.fail" ] && exit 1; echo "\$8" >"$T/param/\$6"; echo "set \$6 \$8" >>"$LOG" ;;
 esac
 EOF
-	printf '#!/bin/sh\n[ "$1" = system ] && cat >>"%s/stored"\n' "$T" >"$T/bin/onu-store"
+	printf '#!/bin/sh\n[ "$1" = system ] && cat >>"%s/stored"\n' "$T" >"$T/bin/onu-config"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
 	chmod +x "$T/bin"/*
 	PATH=$T/bin:$PATH

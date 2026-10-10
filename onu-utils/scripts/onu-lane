@@ -116,7 +116,7 @@ keep() {
 	mode=$(field MODE "$TRIAL")
 	rm -f "$TRIAL"
 	printf 'SFP_LANE=%s\n' "$([ "$mode" = auto ] || echo "$mode")" |
-		onu-store system || log "the lane's setting $mode is kept until the next start only"
+		onu-config system || log "the lane's setting $mode is kept until the next start only"
 	log "the lane's setting $mode kept"
 }
 

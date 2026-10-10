@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-store, with onucfg of the build on a store in a file,
+# Tests of scripts/onu-config.sh, with onu-config of the build on a store in a file,
 # an erased one as the flash would give, and stand-ins for ponid and for
 # BusyBox's cryptpw.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-STORE_SCRIPT=$HERE/scripts/onu-store
+STORE_SCRIPT=$HERE/scripts/onu-config.sh
 BUILD=${BUILD:-$HERE/build}
 checks=0
 failures=0
@@ -57,7 +57,7 @@ run() {
 }
 
 stored() {
-	onucfg --store "$ONU_STORE" list | grep -q -x -F -e "$1"
+	onu-config --store "$ONU_STORE" list | grep -q -x -F -e "$1"
 }
 
 settings() {
@@ -141,7 +141,7 @@ settings
 run save
 check '[ $rc -eq 0 ]'
 check 'stored MODE=passthrough'
-check '! onucfg --store "$ONU_STORE" list | grep -q "^ID_"'
+check '! onu-config --store "$ONU_STORE" list | grep -q "^ID_"'
 teardown
 
 echo "migrate needs the shipped identity, and writes nothing without it"
@@ -168,7 +168,7 @@ setup
 settings
 run save
 cp "$ONU_STORE" "$T/before"
-printf 'MODE=router\nnot a setting\n' | onucfg --store "$ONU_STORE" import 2>/dev/null
+printf 'MODE=router\nnot a setting\n' | onu-config --store "$ONU_STORE" import 2>/dev/null
 rc=$?
 check '[ $rc -ne 0 ]'
 check 'cmp -s "$ONU_STORE" "$T/before"'
@@ -211,7 +211,7 @@ teardown
 echo "the single account of before becomes the first session's"
 setup
 printf '%s\n' ID_SERIAL=XXXXXXXXXXXX PPPOE_USER=user@example.net PPPOE_SECRET=s3cret \
-	MODE=passthrough | onucfg --store "$ONU_STORE" import
+	MODE=passthrough | onu-config --store "$ONU_STORE" import
 run load
 check '[ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user@example.net s3cret" ]'
 check '! grep -q PPPOE "$ONU_ROOT/run/onu.conf"'
@@ -407,7 +407,7 @@ check '[ $rc -eq 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 # No file: the host is forgotten.
 rm "$ONU_ROOT/run/onu-pd2"
 run pd 2
-check '[ $rc -eq 0 ] && ! onucfg --store "$ONU_STORE" list | grep -q ^PD2_'
+check '[ $rc -eq 0 ] && ! onu-config --store "$ONU_STORE" list | grep -q ^PD2_'
 # Not a binding, or not a session: nothing changes.
 cp "$ONU_STORE" "$T/before"
 echo 'x; reboot' >"$ONU_ROOT/run/onu-pd2"
@@ -417,5 +417,5 @@ run pd 8
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 teardown
 
-echo "test_onu_store: $checks checks, $failures failed"
+echo "test_onu_config: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

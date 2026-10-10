@@ -98,7 +98,7 @@ peer() {
 	echo "$((p >> 24 & 255)).$((p >> 16 & 255)).$((p >> 8 & 255)).$((p & 255))"
 }
 
-# The time. The server is read as data, never run; onu-store took it only in
+# The time. The server is read as data, never run; onu-config took it only in
 # the shape of an address or a name. Without a server it waits an hour before
 # it fails, so that procd asks again once an hour, as the link may change.
 # Its process is ntpd's, whose id onu-mgmt takes to end it when the

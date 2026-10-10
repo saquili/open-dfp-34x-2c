@@ -48,7 +48,7 @@ setup() {
 		echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/$lan/proxy_delay"
 	done
 	: >"$LOG"
-	for prog in killall udhcpd udhcpc logger kill onu-store dhcp6d; do
+	for prog in killall udhcpd udhcpc logger kill onu-config dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# onu-svc stands in for procd: "sync onu DIR" runs, at once, the program
@@ -133,7 +133,7 @@ check '! logged "omcid -r"'
 check '! logged "^nft"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 # A boot applies what the store gave and saves nothing.
-check '! logged "^onu-store"'
+check '! logged "^onu-config"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 teardown
 
@@ -216,7 +216,7 @@ check 'logged "^killall -USR1 omcid"'
 check '! logged "^omcid"'
 check '[ "$(grep -n "killall -USR1 omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" ]'
 # A change is kept in the store before it is applied.
-check '[ "$(grep -n "^onu-store save" "$LOG" | cut -d: -f1)" = 1 ]'
+check '[ "$(grep -n "^onu-config save" "$LOG" | cut -d: -f1)" = 1 ]'
 teardown
 
 echo "a PPPoE session without name servers"
@@ -387,15 +387,15 @@ check 'logged "^procd stop dhcp6d2$" && [ ! -e "$ONU_ROOT/run/onu-svc.d/dhcp6d2"
 echo "0003 1 fe80::2 2001:db8:1200::/56" >"$ONU_ROOT/run/onu-pd2"
 : >"$LOG"
 "$MODE_SCRIPT" tick 2>/dev/null
-check 'logged "^onu-store pd 2$"'
-check '[ "$(grep -c "^onu-store pd" "$LOG")" = 1 ]'
+check 'logged "^onu-config pd 2$"'
+check '[ "$(grep -c "^onu-config pd" "$LOG")" = 1 ]'
 check 'cmp -s "$ONU_ROOT/run/onu-pd2" "$ONU_ROOT/run/onu-pd2.kept"'
 : >"$LOG"
 "$MODE_SCRIPT" tick 2>/dev/null
-check '! logged "^onu-store pd"'
+check '! logged "^onu-config pd"'
 rm "$ONU_ROOT/run/onu-pd2"
 "$MODE_SCRIPT" tick 2>/dev/null
-check 'logged "^onu-store pd 2$"'
+check 'logged "^onu-config pd 2$"'
 check '[ ! -e "$ONU_ROOT/run/onu-pd2.kept" ]'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 0 ]'

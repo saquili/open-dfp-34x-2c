@@ -4,9 +4,9 @@
 /*
  * The settings of the stick's data path, as one table (ADR 0014): each key
  * of /run/onu.conf, the shape of its values and its default, the PPPoE
- * account of each session, and the rules that bind them together. onucfg
- * checks a whole set of settings against it ("onucfg check") and hands the
- * settings on with every default filled in ("onucfg settings"); the status
+ * account of each session, and the rules that bind them together. onu-config
+ * checks a whole set of settings against it ("onu-config check") and hands the
+ * settings on with every default filled in ("onu-config settings"); the status
  * daemon asks it rather than knowing the rules.
  *
  * A set of settings is KEY=VALUE lines, a later line over an earlier one:

@@ -12,60 +12,63 @@ The small programs of the ONU.
    equipment ID, PLOAM password and the values of the ONU-G and ONU2-G that
    G.988 has the ONU report) from its factory configuration, the JFFS2 file
    system in the partition ``config``. Until the configuration store holds an
-   identity, it is the one ``onu-store`` puts in ``/run/onu-identity`` at boot,
+   identity, it is the one ``onu-config`` puts in ``/run/onu-identity`` at boot,
    which omcid reads and which gives the serial number to the PON driver, and
    the one the store's first write takes in. Its output holds the PLOAM
    password, a credential of the line: keep it private.
 
-``onucfg``
-   reads and changes the configuration store: the partition ``config`` split
+``onu-config``
+   the stick's settings, their store in the flash and their rules, in one
+   program (ADR 0015; it was ``onucfg`` and ``onu-store`` before). It reads
+   and changes the configuration store: the partition ``config`` split
    into two slots, each a header and ``KEY=VALUE`` lines. A change writes the
    slot that is not current and then makes it current, so that a power loss in
    the middle leaves the old configuration whole; a change that changes nothing
    writes nothing::
 
-      onucfg --store /dev/mtd3 list
-      onucfg --store /dev/mtd3 get KEY
-      onucfg --store /dev/mtd3 set KEY VALUE
-      onucfg --store /dev/mtd3 unset KEY
-      onucfg --store /dev/mtd3 import <lines     # every KEY=VALUE, one write
+      onu-config --store /dev/mtd3 list
+      onu-config --store /dev/mtd3 get KEY
+      onu-config --store /dev/mtd3 set KEY VALUE
+      onu-config --store /dev/mtd3 unset KEY
+      onu-config --store /dev/mtd3 import <lines     # every KEY=VALUE, one write
 
    It also holds the one table of the data path's settings (ADR 0014,
    ``src/settings.h``): each key of ``/run/onu.conf``, the shape of its values
    and its default, the PPPoE account of each session, and the rules that bind
    them together, such as one session in a VLAN to the host handing its IPv4
-   address down. ``onucfg check`` takes a set of them on its input, a later
+   address down. ``onu-config check`` takes a set of them on its input, a later
    line over an earlier one, accounts among them, and prints the settings in
    full: every default filled in, the keys of before taken over (the WAN's
    VLAN, MAC address and GEM port as the first session's, ``LAN_VLAN`` as each
    session's link to the host), never an account. It refuses a set with a
    value not of its key's shape, a key that is no setting, or settings that
    make no sense together, and says why, naming the key and never the value.
-   ``onucfg settings`` takes a set as it comes, for a reader: a line it cannot
+   ``onu-config settings`` takes a set as it comes, for a reader: a line it cannot
    take is left out, said on the standard error, and nothing is judged. The
    status daemon asks them rather than knowing the rules::
 
-      onucfg check <settings       # the settings in full, or why not
-      onucfg settings <settings    # the same, without judging
+      onu-config check <settings       # the settings in full, or why not
+      onu-config settings <settings    # the same, without judging
 
-``onu-store``
-   keeps the unit's identity (keys ``ID_*``), its settings (the keys of
+``onu-config`` (the files)
+   carries out, through ``onu-config.sh`` in ``/usr/lib/onu``, the verbs of the
+   files the running system reads. It keeps the unit's identity (keys ``ID_*``), its settings (the keys of
    ``/run/onu.conf``) and its PPPoE account (``PPPOE_USER``,
-   ``PPPOE_SECRET``) in the store. ``onu-store load`` puts them in the files
-   the running system reads, at boot; ``onu-store save`` writes the settings
+   ``PPPOE_SECRET``) in the store. ``onu-config load`` puts them in the files
+   the running system reads, at boot; ``onu-config save`` writes the settings
    and the account in force back, which ``onu-apply reload`` does. The store
    shares the partition with the shipped firmware's configuration, and its
    first write overwrites the start of it: so the first save takes the
-   identity ``ponid`` reads into the same write, and ``onu-store migrate`` does
+   identity ``ponid`` reads into the same write, and ``onu-config migrate`` does
    that alone, refusing when there is no identity to take. What became of the
    settings is one word in ``/run/onu-store`` (``loaded``, ``defaults``,
    ``saved``, ``failed``, ``none``), which the status daemon shows. The status
-   daemon also keeps two things there through it: ``onu-store identity`` takes
+   daemon also keeps two things there through it: ``onu-config identity`` takes
    the identity of ``KEY=VALUE`` lines on its input (``SERIAL``, ``PLOAM``, …)
-   and ``onu-store password`` root's password, the line of its input, which it
+   and ``onu-config password`` root's password, the line of its input, which it
    hashes in the form of ``crypt()`` (SHA-256 with 20000 rounds and a salt of
    16 random characters, by BusyBox's ``cryptpw``) into ``AUTH_HASH``;
-   ``onu-store auth HASH`` stores a hash made elsewhere. A load puts the hash in
+   ``onu-config auth HASH`` stores a hash made elsewhere. A load puts the hash in
    ``/run/onu-auth`` for root only, and root's line of ``/run/shadow``, which
    ``/etc/shadow`` names, carries it for the console's login and the ssh
    server: one account, root, with one password for the console, ssh and the
@@ -74,14 +77,14 @@ The small programs of the ONU.
    without a password on the console and ssh (``*``), keys only, until a
    sign-in to the panel stores it again. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
-   removed account does not come back at the next boot. ``onu-store system``
+   removed account does not come back at the next boot. ``onu-config system``
    keeps the stick's own settings of ``KEY=VALUE`` lines on its input as
    ``SYS_*`` keys, each in the shape the boot script takes: ``HOSTNAME``,
    ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, the server
    the clock is set from, and ``LOG_SERVER``, a server of the host side that
    the system log goes to as well; a load puts them in ``/run/onu-system``. Where the identity in
    force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
-   ``onu-store pd N`` keeps the host session N delegates its IPv6 prefix to,
+   ``onu-config pd N`` keeps the host session N delegates its IPv6 prefix to,
    the line ``dhcp6d`` keeps in ``/run/onu-pdN``, as ``PDn_HOST``, and a load
    puts it back, so that after a restart the prefix goes to that router at
    once, though it asks for nothing; ``onu-apply`` calls it when the line
@@ -89,7 +92,7 @@ The small programs of the ONU.
 
 ``passwd``
    a new password for root, at a terminal: it asks twice without echo and
-   hands it to ``onu-store password``, so that it holds after a restart and in
+   hands it to ``onu-config password``, so that it holds after a restart and in
    the panel at once. It takes no user and no old password, the stick having
    one account, root, whoever runs it is root already.
 
@@ -277,10 +280,10 @@ The small programs of the ONU.
 
 Building and testing::
 
-   make           # build/ponid, build/pon, build/onucfg, build/onu-update, build/onu-svc
+   make           # build/ponid, build/pon, build/onu-config, build/onu-update, build/onu-svc
    make check     # the tests
 
-``ponid``, ``onucfg`` and ``onu-update`` need zlib, ``onucfg`` and
+``ponid``, ``onu-config`` and ``onu-update`` need zlib, ``onu-config`` and
 ``onu-update`` the kernel's MTD header
 ``mtd/mtd-user.h``, ``onu-svc`` libubus, libubox and libblobmsg_json (its
 tests need none of them), ``pon`` libmnl and the kernel's headers, among them
@@ -288,8 +291,8 @@ tests need none of them), ``pon`` libmnl and the kernel's headers, among them
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the
 tests of ``onu-apply`` and ``dhcp-wan`` run them against stand-ins for the
-programs they call, in a scratch root, and those of ``onu-store`` run it with
-``build/onucfg`` on a store in a file and a stand-in for BusyBox's
+programs they call, in a scratch root, and those of ``onu-config`` run it with
+``build/onu-config`` on a store in a file and a stand-in for BusyBox's
 ``cryptpw``. ``onu-update`` is tested on a flash
 made of files under ``ONU_ROOT``, with update files packed by the image build's
 ``mkupdate.py``, which needs python3; ``onu-trial`` against stand-ins.

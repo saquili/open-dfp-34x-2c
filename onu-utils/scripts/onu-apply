@@ -8,7 +8,7 @@
 #
 #   onu-apply start    at boot: take the settings from /etc/onu.conf and apply
 #   onu-apply reload   apply the settings of /run/onu.conf again, after a change,
-#                      and keep them in the configuration store (onu-store)
+#                      and keep them in the configuration store (onu-config)
 #   onu-apply stop     stop omcid and take the router down
 #   onu-apply identity give the PON driver the serial number and PLOAM
 #                      password of /run/onu-identity and bring the PON up
@@ -21,7 +21,7 @@
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
 # account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN, as "user
 # secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
-# one, seeds the first. At boot, onu-store has put the saved ones in these
+# one, seeds the first. At boot, onu-config has put the saved ones in these
 # files before onu-apply starts.
 #
 # There is no mode to choose. Without a PPPoE account, omcid connects the host
@@ -941,13 +941,13 @@ sessions_down() {
 # NetworkManager kept its /56 for a day and asked for the name servers only).
 # What went into the store is in /run/onu-pdN.kept.
 pd_keep() {
-	command -v onu-store >/dev/null || return 0
+	command -v onu-config >/dev/null || return 0
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
 		pd=$RUN/onu-pd$n
 		if { [ -e "$pd" ] || [ -e "$pd.kept" ]; } &&
 			[ "$(cat "$pd" 2>/dev/null)" != "$(cat "$pd.kept" 2>/dev/null)" ] &&
-			onu-store pd $n; then
+			onu-config pd $n; then
 			if [ -e "$pd" ]; then
 				cp "$pd" "$pd.kept"
 			else
@@ -1201,8 +1201,8 @@ start)
 	apply
 	;;
 reload)
-	if command -v onu-store >/dev/null; then
-		onu-store save || log "the settings are applied but not saved"
+	if command -v onu-config >/dev/null; then
+		onu-config save || log "the settings are applied but not saved"
 	fi
 	apply
 	;;

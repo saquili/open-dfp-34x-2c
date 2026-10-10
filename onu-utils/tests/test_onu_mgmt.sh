@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of scripts/onu-mgmt, with stand-ins for tc, dropbear, onu-net,
-# onu-store and logger, which log what they are asked to do. The stand-in of
+# onu-config and logger, which log what they are asked to do. The stand-in of
 # onu-net keeps the part "mgmt" of netifd's configuration in $T/part, and its
 # wait fails while $T/no-address is there.
 
@@ -46,7 +46,7 @@ setup() {
 		"$T" "$T" >"$T/bin/onu-net"
 	printf '#!/bin/sh\necho "dropbear $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -P ] && echo 22 >"$2"; shift; done\n' \
 		>"$T/bin/dropbear"
-	printf '#!/bin/sh\n[ "$1" = system ] && cat >>"%s/stored"\n' "$T" >"$T/bin/onu-store"
+	printf '#!/bin/sh\n[ "$1" = system ] && cat >>"%s/stored"\n' "$T" >"$T/bin/onu-config"
 	chmod +x "$T/bin"/*
 	PATH=$T/bin:$PATH
 }
