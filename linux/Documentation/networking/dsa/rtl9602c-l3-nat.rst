@@ -2709,9 +2709,12 @@ devices, or a device that is no PPP device over a GEM interface, is routed by
 the CPU. The route table goes on mirroring the main table while the rules
 choose a table by addresses alone (``rtl9602c_l34_rules_plain()``); a rule on
 an interface, a mark, a port, a protocol or a user, or an inverted one, has it
-written empty. The engine routes IPv6 by the destination alone, and with rules
-the IPv6 route table is written empty. Routes of the other tables and rule
-changes have the routes committed again.
+written empty. The engine routes IPv6 by the destination alone: a rule before
+the main table's lookup has the IPv6 route table written empty, and a rule
+after it, which sees only what the main table has no route for, changes
+nothing, as netifd's rule for an interface with IPv6 does not
+(``rtl9602c_l34_rules6_plain()``). Routes of the other tables and rule changes
+have the routes committed again.
 
 .. list-table::
    :header-rows: 1
@@ -2875,6 +2878,14 @@ routes. ``rtl9602c_l34_route6_set()`` records it in a shadow of 32 routes, and
      - M
      - iperf3 through the host behind the stick, the CPU port's counter and
        ``/proc/stat`` around each run.
+   * - A rule after the main table's lookup leaves the rows as they are.
+       With netifd's rule for the management interface, ``from all iif mgmt``
+       failed_policy at priority 4200000005, the IPv6 session carried 843
+       Mb/s from the host and 860 Mb/s to it; while any rule had the table
+       written empty, 37.5 and 37.4 Mb/s, through the CPU.
+     - M
+     - ``ip -6 rule``, ``l3nat`` and iperf3 through the host behind the stick,
+       on the kernel before the change and after it.
 
 Hit bitmaps, flow statistics and ageing
 =======================================

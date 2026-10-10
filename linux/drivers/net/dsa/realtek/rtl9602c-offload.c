@@ -4271,6 +4271,43 @@ static bool rtl9602c_l34_rules_plain(void)
 }
 
 /*
+ * Whether the namespace's IPv6 rules leave the main table to route every
+ * frame it has a route for, as the engine does by the destination alone: a
+ * rule before the main table's lookup may send a frame to another table, and
+ * cannot be followed; one after it sees only the frames the main table has
+ * no route for, which the engine gives the CPU anyway. netifd's rule for an
+ * interface with IPv6, a policy failure for a frame from it that no table
+ * routes, is one of these. The kernel's own flag, fib6_has_custom_rules(),
+ * stays set from the first rule added on, so the rules themselves are read.
+ */
+static bool rtl9602c_l34_rules6_plain(void)
+{
+#ifdef CONFIG_IPV6_MULTIPLE_TABLES
+	const struct fib_rule *rule;
+	bool plain = true, after_main = false;
+
+	if (!fib6_has_custom_rules(&init_net))
+		return true;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(rule, &init_net.ipv6.fib6_rules_ops->rules_list, list) {
+		if (fib6_rule_default(rule)) {
+			after_main |= rule->table == RT6_TABLE_MAIN;
+			continue;
+		}
+		if (!after_main) {
+			plain = false;
+			break;
+		}
+	}
+	rcu_read_unlock();
+	return plain;
+#else
+	return true;
+#endif
+}
+
+/*
  * The device the frames of routed host @r leave by, by default, as the rules
  * and the tables route them: 0 where that is no default route of a unicast
  * nexthop, or where two destinations give two devices.
@@ -5110,11 +5147,11 @@ static void rtl9602c_l34_route6_commit(struct rtl9602c_priv *p)
 	unsigned int words = rtl9602c_nat_tbl_words[RTL9602C_L3TBL_CTRL_TABLE_ROUTE6];
 	u32 hw[ARRAY_SIZE(p->l34_route6_hw)][5] = {};
 	/*
-	 * The engine routes IPv6 by the destination alone: with rules, which
+	 * The engine routes IPv6 by the destination alone: with a rule that
 	 * may route a host by a table of its own, the CPU routes all of it.
 	 */
 	bool carried = false, failed = false,
-	     bail = p->l34_route6_over || fib6_has_custom_rules(&init_net);
+	     bail = p->l34_route6_over || !rtl9602c_l34_rules6_plain();
 	unsigned int n = 0, i, j, nh;
 	int prefix;
 	bool wan;
