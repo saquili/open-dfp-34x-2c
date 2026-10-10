@@ -11,8 +11,9 @@
 # own sources are in src/. On Linux, pond reads netlink with libmnl and the
 # kernel's headers, among them linux/pon.h of this repository's kernel,
 # checks root's password with crypt() of libcrypt, and reads the state of
-# the stick's programs on ubus (src/bus.h) with libubus. pond-none, which
-# the tests build on a host without libubus, reads it from files.
+# the stick's programs on ubus (src/bus.h) with libubus and libblobmsg_json.
+# pond-none, which the tests build on a host without libubus, reads it from
+# files.
 
 CC      ?= cc
 CFLAGS  ?= -O2 -g
@@ -41,7 +42,7 @@ $(BUILD)/mongoose.o: third_party/mongoose/mongoose.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(MG_FLAGS) -w -c -o $@ $<
 
 $(BUILD)/pond: $(OBJS) $(BUILD)/src/bus-ubus.o
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lubox
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lblobmsg_json -lubox
 
 $(BUILD)/pond-none: $(OBJS) $(BUILD)/src/bus-file.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)

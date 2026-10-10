@@ -130,8 +130,9 @@ Among the values read only: ``cpu``, the processor's clock ticks in each state
 (a share of busy time is the difference of two reads), its load and model;
 ``omci``, the managed entities omcid holds for the classes that describe the
 unit and its services, every attribute of each in hexadecimal and the rows of
-its tables, read over omcid's control socket (the ONU-G's logical password is
-never given, only whether one is set), and omcid's counts of the frames.
+its tables, and omcid's counts of the frames: omcid's answer on ubus (method
+``mib`` of the object ``omcid``), which never gives the ONU-G's logical
+password, only whether one is set.
 
 The panel
 =========
@@ -171,7 +172,7 @@ for onu-apply and onu-config, which ``POND_APPLY``, ``POND_REIDENTIFY`` and
 ``POND_STORE`` name;
 those of the stick's own settings start stand-ins for onu-lane, onu-mgmt and
 hostname (``POND_ONU_LANE``, ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those
-of ``omci`` a stand-in for omcid's control socket.
+of ``omci`` read omcid's answer from ``run/ubus/omcid.mib``.
 The tests of the sign-in check PBKDF2 against RFC 7914's vectors, the stored
 form, the stop after wrong passwords, the end of sessions and a change of
 password.

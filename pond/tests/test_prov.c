@@ -2053,151 +2053,37 @@ static void test_system(void)
 	unsetenv("POND_HOSTNAME");
 }
 
-static unsigned int be16_at(const uint8_t *p)
-{
-	return (unsigned int)p[0] << 8 | p[1];
-}
-
-/* Read @n bytes, or say the peer went. */
-static bool read_full(int fd, uint8_t *p, size_t n)
-{
-	while (n > 0) {
-		ssize_t r = read(fd, p, n);
-
-		if (r <= 0)
-			return false;
-		p += r;
-		n -= (size_t)r;
-	}
-	return true;
-}
-
-/*
- * A stand-in for omcid's control socket, in a child: one ONU-G whose logical
- * password is set, one extended VLAN tagging operation with two rules, and
- * the counts of the frames. Any other class has no instance.
- */
-static pid_t fake_omcid(const char *path)
-{
-	static const uint8_t onu_g[] = {
-		1, 0, 4, 'Z', 'Z', 'Z', 'Z',
-		4, 0, 1, 0x01,
-		11, 0, 12, 's', 'e', 'c', 'r', 'e', 't', 0, 0, 0, 0, 0, 0,
-	};
-	static const uint8_t vlan[] = {
-		1, 0, 1, 0x02,
-		0x86, 0, 32,
-		0xf8, 0, 0, 0, 0x80, 0x23, 0x80, 0, 0, 0x0f, 0xa0, 0, 0, 0x0f, 0, 0,
-		0xf8, 0, 0, 0, 0x80, 0x24, 0x80, 0, 0, 0x0f, 0xa0, 0, 0, 0x0f, 0, 0,
-		7, 0, 2, 0x01, 0x02,
-	};
-	static const uint8_t stats[] = { 0, 0, 0, 5, 0, 0, 0, 1, 0, 0, 0, 4 };
-	struct sockaddr_un sa = { .sun_family = AF_UNIX };
-	int ls = socket(AF_UNIX, SOCK_STREAM, 0);
-	pid_t pid;
-
-	snprintf(sa.sun_path, sizeof(sa.sun_path), "%s", path);
-	unlink(path);
-	if (ls < 0 || bind(ls, (struct sockaddr *)&sa, sizeof(sa)) < 0 ||
-	    listen(ls, 1) < 0)
-		return -1;
-	pid = fork();
-	if (pid == 0) {
-		int c = accept(ls, NULL, NULL);
-		uint8_t req[12], rsp[8 + 64];
-
-		while (c >= 0 && read_full(c, req, sizeof(req))) {
-			unsigned int op = be16_at(&req[4]), cls = be16_at(&req[6]);
-			const uint8_t *pay = NULL;
-			size_t n = 0;
-			uint8_t one[2] = { 0, cls == 171 ? 1 : 0 };
-
-			if (op == 2 && (cls == 256 || cls == 171)) {
-				pay = one;
-				n = 2;
-			} else if (op == 6 && cls == 256) {
-				pay = onu_g;
-				n = sizeof(onu_g);
-			} else if (op == 6 && cls == 171) {
-				pay = vlan;
-				n = sizeof(vlan);
-			} else if (op == 3) {
-				pay = stats;
-				n = sizeof(stats);
-			}
-			memset(rsp, 0, 8);
-			memcpy(rsp, "OMCI", 4);
-			rsp[7] = (uint8_t)n;
-			if (n)
-				memcpy(&rsp[8], pay, n);
-			if (write(c, rsp, 8 + n) != (ssize_t)(8 + n))
-				break;
-		}
-		_exit(0);
-	}
-	close(ls);
-	return pid;
-}
-
-/* The two rules of the stand-in's VLAN operation, as hexadecimal. */
-#define ROW_0023 "f800000080238000000fa000000f0000"
-#define ROW_0024 "f800000080248000000fa000000f0000"
+/* omcid's answer to "mib", as its ubus object gives it. */
+#define OMCID_MIB                                                              \
+	"{\"mes\":[{\"class\":256,\"instance\":0,\"attrs\":{\"1\":\"5a5a5a5a\"},"  \
+	"\"tables\":[]}],\"truncated\":false,\"logical_password_set\":true,"       \
+	"\"frames\":{\"handled\":5,\"rejected\":1,\"answered\":4}}"
 
 static void test_omci(void)
 {
-	char buf[16384], path[100];
+	char buf[16384], path[200];
 	const char *s;
-	pid_t pid;
+	FILE *f;
 	int err;
 
-	puts("the OLT's provisioning, from a stand-in for omcid");
+	puts("the OLT's provisioning, from omcid on ubus");
 
 	snprintf(path, sizeof(path), "%s/run", getenv("POND_ROOT"));
 	mkdir(path, 0755);
-	snprintf(path, sizeof(path), "%s/run/omcid.sock", getenv("POND_ROOT"));
-	pid = fake_omcid(path);
-	check(pid > 0, "the stand-in listens");
+	snprintf(path, sizeof(path), "%s/run/ubus", getenv("POND_ROOT"));
+	mkdir(path, 0755);
+	snprintf(path, sizeof(path), "%s/run/ubus/omcid.mib", getenv("POND_ROOT"));
+	f = fopen(path, "w");
+	check(f != NULL, "omcid's answer is in place");
+	if (!f)
+		return;
+	fputs(OMCID_MIB "\n", f);
+	fclose(f);
 
 	s = render(prov_omci, buf, sizeof(buf), &err);
-	check(!err && strstr(s, "{\"class\":256,\"instance\":0,\"attrs\":{\"1\":\"5a5a5a5a\"") != NULL,
-	      "an instance carries its class, its number and each attribute in hexadecimal");
-	check(!err && strstr(s, "\"11\":null") != NULL && strstr(s, "736563726574") == NULL,
-	      "the logical password is never written");
-	check(!err && strstr(s, "\"logical_password_set\":true") != NULL,
-	      "only whether one is set");
-	check(!err && strstr(s, "\"6\":\"" ROW_0023 ROW_0024 "\"") != NULL,
-	      "a table's rows come end to end");
-	check(!err && strstr(s, "\"tables\":[6]") != NULL,
-	      "and the table is named as one");
-	check(!err && strstr(s, "\"7\":\"0102\"}") != NULL,
-	      "the attributes after a table are read in their place");
-	check(!err && strstr(s, "\"class\":257") == NULL,
-	      "a class without instances adds nothing");
-	check(!err && strstr(s, "\"frames\":{\"handled\":5,\"rejected\":1,\"answered\":4}") != NULL,
-	      "omcid's counts of the frames come last");
-	check(!err && strstr(s, "\"truncated\":false") != NULL,
-	      "everything fitted");
-	waitpid(pid, NULL, 0);
-
-	/*
-	 * On the stick there is no POND_ROOT: the socket's path is used as it
-	 * is (the bug of the first version copied it from a buffer that only
-	 * a POND_ROOT fills).
-	 */
-	{
-		char root[256];
-
-		snprintf(root, sizeof(root), "%s", getenv("POND_ROOT"));
-		pid = fake_omcid(path);
-		unsetenv("POND_ROOT");
-		setenv("POND_OMCID_SOCKET", path, 1);
-		s = render(prov_omci, buf, sizeof(buf), &err);
-		check(!err && strstr(s, "\"class\":256") != NULL,
-		      "the socket is found without POND_ROOT as well");
-		setenv("POND_ROOT", root, 1);
-		unsetenv("POND_OMCID_SOCKET");
-		waitpid(pid, NULL, 0);
-	}
+	check(!err && !strcmp(s, OMCID_MIB), "omcid's answer is the value as it is");
+	s = render(prov_omci, buf, 200, &err);
+	check(err < 0, "an answer that does not fit is an error, not a value cut short");
 
 	unlink(path);
 	s = render(prov_omci, buf, sizeof(buf), &err);
@@ -2218,7 +2104,7 @@ static void test_table(void)
 	      "the optics are served, now that the driver publishes them as hwmon");
 	p = prov_find("omci");
 	check(p && prov_present(p) && (p->flags & PROV_SLOW),
-	      "the OLT's provisioning is served, and slow: a request per instance");
+	      "the OLT's provisioning is served, and slow: the whole MIB of omcid");
 
 	p = prov_find("bridge");
 	check(p && prov_present(p) && (p->flags & PROV_SLOW),

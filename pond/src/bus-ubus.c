@@ -9,11 +9,13 @@
 #include <string.h>
 
 #include <libubox/blobmsg.h>
+#include <libubox/blobmsg_json.h>
 #include <libubus.h>
 
 #include "bus.h"
 
 #define TIMEOUT_MS 500
+#define CALL_TIMEOUT_MS 2000
 
 static struct ubus_context *g_ctx;
 static struct blob_attr *g_reply;
@@ -83,6 +85,24 @@ static void find(struct blob_attr *data, size_t len, const char *path, char *out
 	}
 }
 
+/* The id of @object, connecting first: 0, or a negative errno. */
+static int lookup(const char *object, uint32_t *id)
+{
+	int err;
+
+	if (!g_ctx)
+		g_ctx = ubus_connect(NULL);
+	if (!g_ctx)
+		return -ENOTCONN;
+	err = ubus_lookup_id(g_ctx, object, id);
+	if (err == UBUS_STATUS_CONNECTION_FAILED) {
+		ubus_free(g_ctx);
+		g_ctx = NULL;
+		return -ENOTCONN;
+	}
+	return err ? -ENOENT : 0;
+}
+
 int bus_status(const char *object, const char *const *paths, size_t n,
 	       char (*out)[BUS_VALUE])
 {
@@ -91,18 +111,9 @@ int bus_status(const char *object, const char *const *paths, size_t n,
 
 	for (size_t i = 0; i < n; i++)
 		out[i][0] = '\0';
-	if (!g_ctx)
-		g_ctx = ubus_connect(NULL);
-	if (!g_ctx)
-		return -ENOTCONN;
-	err = ubus_lookup_id(g_ctx, object, &id);
-	if (err == UBUS_STATUS_CONNECTION_FAILED) {
-		ubus_free(g_ctx);
-		g_ctx = NULL;
-		return -ENOTCONN;
-	}
+	err = lookup(object, &id);
 	if (err)
-		return -ENOENT;
+		return err;
 	free(g_reply);
 	g_reply = NULL;
 	if (ubus_invoke(g_ctx, id, "status", NULL, got, NULL, TIMEOUT_MS) || !g_reply)
@@ -110,4 +121,48 @@ int bus_status(const char *object, const char *const *paths, size_t n,
 	for (size_t i = 0; i < n; i++)
 		find(blob_data(g_reply), blob_len(g_reply), paths[i], out[i]);
 	return 0;
+}
+
+int bus_call(const char *object, const char *method,
+	     const struct bus_arg *args, size_t nargs, char *out, size_t cap)
+{
+	struct blob_buf b = { 0 };
+	uint32_t id;
+	size_t len;
+	char *text;
+	int err;
+
+	err = lookup(object, &id);
+	if (err)
+		return err;
+	blob_buf_init(&b, 0);
+	for (size_t i = 0; i < nargs; i++) {
+		void *array;
+
+		if (!args[i].array) {
+			blobmsg_add_u32(&b, args[i].name, args[i].values[0]);
+			continue;
+		}
+		array = blobmsg_open_array(&b, args[i].name);
+		for (size_t k = 0; k < args[i].n; k++)
+			blobmsg_add_u32(&b, NULL, args[i].values[k]);
+		blobmsg_close_array(&b, array);
+	}
+	free(g_reply);
+	g_reply = NULL;
+	err = ubus_invoke(g_ctx, id, method, b.head, got, NULL, CALL_TIMEOUT_MS);
+	blob_buf_free(&b);
+	if (err || !g_reply)
+		return -EIO;
+	text = blobmsg_format_json(g_reply, true);
+	if (!text)
+		return -EIO;
+	len = strlen(text);
+	if (len >= cap) {
+		free(text);
+		return -EFBIG;
+	}
+	memcpy(out, text, len + 1);
+	free(text);
+	return (int)len;
 }

@@ -31,3 +31,21 @@ int bus_status(const char *object, const char *const *paths, size_t n,
 	}
 	return 0;
 }
+
+int bus_call(const char *object, const char *method,
+	     const struct bus_arg *args, size_t nargs, char *out, size_t cap)
+{
+	char path[160];
+	size_t len = 0;
+	int err;
+
+	(void)args;
+	(void)nargs;
+	snprintf(path, sizeof(path), "/run/ubus/%s.%s", object, method);
+	err = prov_slurp(path, out, cap, &len);
+	if (err)
+		return err;
+	while (len > 0 && out[len - 1] == '\n')
+		out[--len] = '\0';
+	return (int)len;
+}
