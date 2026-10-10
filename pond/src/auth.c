@@ -3,7 +3,7 @@
 
 /*
  * Passwords and sessions (auth.h). Root's password is checked by crypt() of
- * the C library, as login and the ssh server check it, and onu-store hashes
+ * the C library, as login and the ssh server check it, and onu-config hashes
  * a new one. The older form the panel made, PBKDF2-HMAC-SHA256 over a random
  * 16-byte salt on Mongoose's SHA-256, is still checked; its HMAC keeps the
  * two padded key states, so an iteration costs two compressions.
@@ -30,7 +30,7 @@
 #define FORGET_S 300
 
 static const char *g_hashfile = "/run/onu-auth";
-static const char *g_store = "onu-store";
+static const char *g_store = "onu-config";
 
 static struct {
 	char id[AUTH_ID_LEN + 1];
@@ -243,7 +243,7 @@ static bool correct(const char *secret, bool *older)
 
 /*
  * Run "STORE password" with @secret as the line of its standard input, and
- * wait for it: onu-store hashes it for crypt() and keeps it.
+ * wait for it: onu-config hashes it for crypt() and keeps it.
  */
 static int store_password(const char *secret)
 {

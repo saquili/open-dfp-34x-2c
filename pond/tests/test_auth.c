@@ -4,7 +4,7 @@
 /*
  * Tests of the sign-in: PBKDF2 against RFC 7914's vectors, the two stored
  * forms, the default password, the stop after wrong passwords, sessions
- * that end, a change of password through a stand-in for onu-store, and a
+ * that end, a change of password through a stand-in for onu-config, and a
  * password of the older form that a sign-in stores again.
  */
 
@@ -120,7 +120,7 @@ static void test_sessions(void)
 }
 
 /*
- * A stand-in for onu-store: "password" hashes the line of its standard input
+ * A stand-in for onu-config: "password" hashes the line of its standard input
  * with crypt() (Perl's, which is the C library's) and keeps it in the hash
  * file; the password "store-refuses" fails, as a store that cannot be
  * written does.

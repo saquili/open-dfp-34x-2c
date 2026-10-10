@@ -24,14 +24,14 @@ Signing in
 
 One user, ``root``, the stick's one account: the console's login and the ssh
 server take the same password (``docs/adr/0012-one-account-root.rst``). Its
-hash, of the form of ``crypt()`` (SHA-256, ``$5$``, made by ``onu-store
-password``), is kept in the configuration store, which ``onu-store`` puts in
+hash, of the form of ``crypt()`` (SHA-256, ``$5$``, made by ``onu-config
+password``), is kept in the configuration store, which ``onu-config`` puts in
 ``/run/onu-auth`` at boot; pond checks a password with ``crypt()`` of the C
 library, about 0.5 s on the stick, during which it answers nothing else, and
-has ``onu-store password`` hash and keep a new one. Until a password is set, it
+has ``onu-config password`` hash and keep a new one. Until a password is set, it
 is ``admin``, and a session may do nothing but set its own. A hash of the form
 pond made before, PBKDF2-HMAC-SHA256 (``pbkdf2-sha256$...``), is still taken,
-and the first sign-in with it has ``onu-store`` keep the password in
+and the first sign-in with it has ``onu-config`` keep the password in
 ``crypt()``'s form, which the console and ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
 ``SameSite=Strict`` cookie (``Secure`` behind a proxy that says HTTPS). There
 are at most three; a fourth sign-in ends the one idle the longest, and a
@@ -72,13 +72,13 @@ or of the other bank with an empty body, and restarts.
 * ``settings``: the settings of onu-apply (see ``onu-utils``), the keys of
   ``/run/onu.conf`` (``SESSIONn_GEM``, ``_VLAN``, ``_MAC`` and ``_FAMILY``
   among them) and the accounts, ``PPPOEn_USER`` and ``PPPOEn_SECRET`` for the
-  sessions 1 to 7. pond knows none of their rules, which are onucfg's (ADR
-  0014): ``onucfg check`` judges the change over the settings in force and
+  sessions 1 to 7. pond knows none of their rules, which are onu-config's (ADR
+  0014): ``onu-config check`` judges the change over the settings in force and
   gives them back in full, or says why not, which pond answers with; pond
-  writes ``/run/onu.conf`` as onucfg gave it and each account's
+  writes ``/run/onu.conf`` as onu-config gave it and each account's
   ``/run/onu-pppoeN`` for root only, then starts ``onu-apply reload``, which
   also saves them in the store; it refuses another change, with 409, until
-  that has ended. A read gives the settings as ``onucfg settings`` reads them,
+  that has ended. A read gives the settings as ``onu-config settings`` reads them,
   each session with its user and whether a secret is set, never the secret,
   and what onu-apply and dhcp6d brought up for it (``/run/session/N``: the
   interfaces, the addresses, what it hands down, the delegated IPv6 prefix and
@@ -101,11 +101,11 @@ or of the other bank with an empty body, and restarts.
   ``LOID``, the logical ONU ID, ``SW_VERSION0`` and ``SW_VERSION1``, each
   software image's version, ``PACK_VERSION``, and ``PLOAM`` (ten characters or
   twenty hex digits) and ``LOID_PASSWORD`` (up to twelve), each kept when
-  empty. It goes to ``onu-store identity``, then ``onu-apply reidentify``
+  empty. It goes to ``onu-config identity``, then ``onu-apply reidentify``
   registers again. A read never gives either password, only whether one is
   set.
 * ``hostname``: the stick's name, ``HOSTNAME``, a name of RFC 1123; it goes to
-  ``onu-store system`` and to the kernel.
+  ``onu-config system`` and to the kernel.
 * ``sfp_lane``: the SFP lane's setting through ``onu-lane``: ``MODE``
   (``auto``, ``2500basex``, ``1000basex-an`` or ``1000basex``) on trial, which
   ends by itself after a minute, ``KEEP=1`` or ``REVERT=1``. A read gives the
@@ -155,9 +155,9 @@ CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests run on the files of ``tests/fixtures``, which stand in
 for ``/proc`` and ``/sys``, and on netlink dumps they build; the two copies of
 the boot loader's environment are made by ``tests/make-env.py``. The tests of
-the settings write under the same tree and run onucfg, built from
-``../onu-utils`` (``ONU_UTILS``) and named by ``POND_ONUCFG``, and stand-ins
-for onu-apply and onu-store, which ``POND_APPLY``, ``POND_REIDENTIFY`` and
+the settings write under the same tree and run onu-config, built from
+``../onu-utils`` (``ONU_UTILS``) and named by ``POND_ONU_CONFIG``, and stand-ins
+for onu-apply and onu-config, which ``POND_APPLY``, ``POND_REIDENTIFY`` and
 ``POND_STORE`` name;
 those of the stick's own settings start stand-ins for onu-lane, onu-mgmt and
 hostname (``POND_ONU_LANE``, ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those

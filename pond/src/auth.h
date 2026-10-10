@@ -3,9 +3,9 @@
 
 /*
  * Signing in to the panel: one user, root, the stick's one account, whose
- * password the console's login and the ssh server take too. onu-store keeps
+ * password the console's login and the ssh server take too. onu-config keeps
  * its hash, of crypt()'s form, in the configuration store and in
- * /run/onu-auth; the panel checks it with crypt() and has onu-store hash a
+ * /run/onu-auth; the panel checks it with crypt() and has onu-config hash a
  * new one. A few sessions, each a random id the browser holds in an
  * HttpOnly cookie.
  *
@@ -13,7 +13,7 @@
  * change it before it may do anything else. Five wrong passwords in a row
  * stop sign-ins for half a minute. A hash of the form the panel made before,
  * PBKDF2-HMAC-SHA256, is still taken, and the first sign-in with it has
- * onu-store keep the password in crypt()'s form.
+ * onu-config keep the password in crypt()'s form.
  */
 
 #ifndef POND_AUTH_H
@@ -34,8 +34,8 @@
 #define AUTH_HASH_MAX 160
 
 /*
- * The file of the hash (/run/onu-auth, which onu-store keeps) and the
- * program that stores a new password (onu-store, given "password" and the
+ * The file of the hash (/run/onu-auth, which onu-config keeps) and the
+ * program that stores a new password (onu-config, given "password" and the
  * password as the line of its standard input). The tests name others.
  */
 void auth_init(const char *hashfile, const char *store);

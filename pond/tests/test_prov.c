@@ -1716,7 +1716,7 @@ static void test_settings(void)
 	check(strstr(s, "\"prefix\":\"2001:db8:1200::/56\",\"prefix_host\":\"fe80::2\"") != NULL,
 	      "and the IPv6 prefix dhcp6d took for it, and the host it went to");
 	check(strstr(s, "\"store\":null") != NULL,
-	      "without a word from onu-store, the store's state is unknown");
+	      "without a word from onu-config, the store's state is unknown");
 	put("/run/onu-store", "saved\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"store\":\"saved\"") != NULL,
@@ -1730,7 +1730,7 @@ static void test_settings(void)
 	unsetenv("POND_APPLY");
 }
 
-/* onu-store's stand-in: the identity it is given goes to a file. */
+/* onu-config's stand-in: the identity it is given goes to a file. */
 static const char store_stub[] =
 	"#!/bin/sh\n[ \"$1\" = identity ] && cat > \"$POND_ROOT/stored-identity\"\n";
 
@@ -1786,7 +1786,7 @@ static void test_panel_values(void)
 	rc = prov_identity_set("SERIAL=000000000000\nPLOAM=\nVERSION=V2.0\n", err, sizeof(err));
 	check(rc == 0 && file_has("/stored-identity", "SERIAL=000000000000\nVERSION=V2.0\n") &&
 		      !file_has("/stored-identity", "PLOAM"),
-	      "a good identity goes to onu-store, an empty PLOAM keeping the one there is");
+	      "a good identity goes to onu-config, an empty PLOAM keeping the one there is");
 	for (int i = 0; i < 100; i++) {
 		prov_identity_reap();
 		pause_10ms();
@@ -1795,7 +1795,7 @@ static void test_panel_values(void)
 			       err, sizeof(err));
 	check(rc == 0 &&
 		      file_has("/stored-identity", "LOID=example7\nOMCC_VERSION=0xA3\nTM_OPTION=2\n"),
-	      "a logical ONU ID and numbers in hexadecimal go to onu-store, an empty "
+	      "a logical ONU ID and numbers in hexadecimal go to onu-config, an empty "
 	      "logical password keeping the one there is");
 	for (int i = 0; i < 100; i++) {
 		prov_identity_reap();
@@ -1944,7 +1944,7 @@ static void test_firmware(void)
 	unsetenv("POND_ONU_UPDATE");
 }
 
-/* Stand-ins for onu-lane, onu-mgmt, onu-store and hostname. */
+/* Stand-ins for onu-lane, onu-mgmt, onu-config and hostname. */
 static const char lane_stub[] =
 	"#!/bin/sh\n"
 	"echo \"$*\" >>\"$POND_ROOT/lane.log\"\n"

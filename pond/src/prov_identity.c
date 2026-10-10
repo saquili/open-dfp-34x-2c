@@ -3,9 +3,9 @@
 
 /*
  * How the stick introduces itself to the OLT: the "name=value" lines of
- * /run/onu-identity that onu-store keeps, and /run/onu-identity-source,
+ * /run/onu-identity that onu-config keeps, and /run/onu-identity-source,
  * "store" or "factory". A read never gives the PLOAM password nor the
- * logical (LOID) password, only whether one is set. A change goes to onu-store (POND_STORE names another program),
+ * logical (LOID) password, only whether one is set. A change goes to onu-config (POND_STORE names another program),
  * then onu-apply reidentify (POND_REIDENTIFY) registers again with the OLT.
  */
 
@@ -299,7 +299,7 @@ int prov_identity_set(const char *val, char *err, size_t errcap)
 		return -EINVAL;
 	}
 
-	rc = run_with_input(getenv("POND_STORE") ?: "onu-store", "identity", text);
+	rc = run_with_input(getenv("POND_STORE") ?: "onu-config", "identity", text);
 	explicit_bzero(text, sizeof(text));
 	explicit_bzero(line, sizeof(line));
 	if (rc) {

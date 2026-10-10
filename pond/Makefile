@@ -56,19 +56,19 @@ $(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o 
 		    $(BUILD)/mongoose.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# The settings' rules are onucfg's, of onu-utils (ADR 0014): the tests of the
+# The settings' rules are onu-config's, of onu-utils (ADR 0014): the tests of the
 # settings run it, built here from its sources.
 ONU_UTILS ?= ../onu-utils
-ONUCFG_SRC := $(addprefix $(ONU_UTILS)/src/,onucfg.c cfgstore.c settings.c)
+ONU_CONFIG_SRC := $(addprefix $(ONU_UTILS)/src/,onu-config.c cfgstore.c settings.c)
 
-$(BUILD)/onucfg: $(ONUCFG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
+$(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -o $@ $(ONUCFG_SRC) -lz
+	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -o $@ $(ONU_CONFIG_SRC) -lz
 
-check: all $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onucfg
+check: all $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onu-config
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
-	POND_ROOT=$(abspath $(BUILD))/fixtures POND_ONUCFG=$(abspath $(BUILD))/onucfg \
+	POND_ROOT=$(abspath $(BUILD))/fixtures POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
 		$(BUILD)/test_prov
 	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
 	POND_ROOT=$(abspath $(BUILD))/auth $(BUILD)/test_auth

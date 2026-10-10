@@ -3,7 +3,7 @@
 
 /*
  * The stick's own settings: its name, the setting of its SFP lane, and the
- * management VLAN and address it answers on. onu-store keeps them, and the
+ * management VLAN and address it answers on. onu-config keeps them, and the
  * scripts onu-lane and onu-mgmt change the last two so that a change the
  * host does not take cannot lock anyone out (a trial that ends by itself, a
  * new address beside the old one). A change of the management pair needs
@@ -74,7 +74,7 @@ int prov_hostname_set(const char *val, char *err, size_t errcap)
 	}
 	snprintf(input, sizeof(input), "HOSTNAME=%s\n", name);
 	args[0] = "system";
-	if (prov_exec(program("POND_STORE", "onu-store"), args, input, out, sizeof(out))) {
+	if (prov_exec(program("POND_STORE", "onu-config"), args, input, out, sizeof(out))) {
 		snprintf(err, errcap, "the name was not stored");
 		return -EIO;
 	}

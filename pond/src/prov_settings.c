@@ -6,20 +6,20 @@
  * which onu-apply applies, and the account of each of the stick's PPPoE
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
  * only. What the settings mean, their defaults and the rules that bind them
- * together, is onucfg's (ADR 0014): pond has "onucfg settings" read them in
- * full and "onucfg check" judge a change, and knows none of the rules
+ * together, is onu-config's (ADR 0014): pond has "onu-config settings" read them in
+ * full and "onu-config check" judge a change, and knows none of the rules
  * itself.
  *
  * A read gives the settings, each session with its user, whether a secret is
  * set (never the secret), and what onu-apply and dhcp6d brought up for it
  * (/run/session/N), what it hands down among it, the address handed on, and
- * what became of the settings in the configuration store, which onu-store
+ * what became of the settings in the configuration store, which onu-config
  * records in /run/onu-store: "loaded" at boot, "defaults" when the store
  * held none, "saved" or "failed" after a change, "none" without a store. A
- * write takes KEY=value lines, has onucfg judge them over the settings in
+ * write takes KEY=value lines, has onu-config judge them over the settings in
  * force, writes what it gives back and the accounts, and starts "onu-apply
  * reload" without waiting for it; until it ends, a write is refused.
- * POND_APPLY and POND_ONUCFG name other programs to start, for the tests.
+ * POND_APPLY and POND_ONU_CONFIG name other programs to start, for the tests.
  */
 
 #define _GNU_SOURCE
@@ -128,7 +128,7 @@ static void accounts_load(struct account acct[SESSIONS])
 	explicit_bzero(text, sizeof(text));
 }
 
-/* The accounts, as onucfg takes them, after the @len bytes of @buf. */
+/* The accounts, as onu-config takes them, after the @len bytes of @buf. */
 static void accounts_text(const struct account acct[SESSIONS], char *buf,
 			  size_t cap, size_t *len)
 {
@@ -147,14 +147,14 @@ static bool setting_line(const char *line)
 }
 
 /*
- * Run "onucfg @verb" on @input: 0 when it took the settings, which are in
+ * Run "onu-config @verb" on @input: 0 when it took the settings, which are in
  * @out, one KEY=VALUE line each; -EINVAL when it refused them, with why in
  * @out; -EIO when it could not run.
  */
-static int onucfg(const char *verb, const char *input, char *out, size_t cap)
+static int onu_config(const char *verb, const char *input, char *out, size_t cap)
 {
 	const char *args[] = { verb, NULL };
-	int rc = prov_exec(program("POND_ONUCFG", "onucfg"), args, input, out, cap);
+	int rc = prov_exec(program("POND_ONU_CONFIG", "onu-config"), args, input, out, cap);
 
 	if (rc < 0 || rc >= 126)
 		return -EIO;
@@ -162,7 +162,7 @@ static int onucfg(const char *verb, const char *input, char *out, size_t cap)
 }
 
 /*
- * The settings in force, in full, as onucfg reads them, with the accounts of
+ * The settings in force, in full, as onu-config reads them, with the accounts of
  * @acct: KEY=VALUE lines in @out, and no other.
  */
 static int settings_read(const struct account acct[SESSIONS], char *out,
@@ -183,7 +183,7 @@ static int settings_read(const struct account acct[SESSIONS], char *out,
 		rc = -E2BIG;
 		goto out;
 	}
-	rc = onucfg("settings", in, got, sizeof(got));
+	rc = onu_config("settings", in, got, sizeof(got));
 	if (rc)
 		goto out;
 	/* What it said of a line it left out is no setting. */
@@ -198,13 +198,14 @@ out:
 	return rc;
 }
 
-/* The first line of what onucfg said, without its name, as the reason. */
+/* The first line of what onu-config said, without its name, as the reason. */
 static void reason(const char *said, char *err, size_t errcap)
 {
+	static const char name[] = "onu-config: ";
 	size_t n;
 
-	if (!strncmp(said, "onucfg: ", 8))
-		said += 8;
+	if (!strncmp(said, name, sizeof(name) - 1))
+		said += sizeof(name) - 1;
 	n = strcspn(said, "\n");
 	snprintf(err, errcap, "%.*s", (int)n, said);
 }
@@ -546,7 +547,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 	/* The settings in force, then the change over them, then the accounts. */
 	rc = settings_read(acct, in, sizeof(in));
 	if (rc) {
-		snprintf(err, errcap, "onucfg: the settings in force cannot be read");
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
 		goto out;
 	}
 	len = strlen(in);
@@ -557,7 +558,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		int n;
 
 		/*
-		 * Every line goes to onucfg, which judges an account too; the
+		 * Every line goes to onu-config, which judges an account too; the
 		 * accounts as they then are follow, and are the files.
 		 */
 		if (eq) {
@@ -584,12 +585,12 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		goto out;
 	}
 
-	rc = onucfg("check", in, out, sizeof(out));
+	rc = onu_config("check", in, out, sizeof(out));
 	if (rc) {
 		if (rc == -EINVAL)
 			reason(out, err, errcap);
 		else
-			snprintf(err, errcap, "onucfg: it does not run");
+			snprintf(err, errcap, "onu-config: it does not run");
 		goto out;
 	}
 
@@ -673,7 +674,7 @@ static const char *line_value(const char *text, const char *key, char *out,
  * A session of the stick's own: ID, 1 to 7, or none for the first free one;
  * USER and SECRET, its account, an empty USER removing the session (an
  * absent SECRET keeps the one there is); VLAN, MAC, GEM, FAMILY, PASS and
- * HOST_VLAN. onucfg judges them, and takes over the WAN's settings of before,
+ * HOST_VLAN. onu-config judges them, and takes over the WAN's settings of before,
  * which the first session took when it had none of its own; the bench's
  * router mode is left as it is.
  */
