@@ -19,6 +19,8 @@
 #include <stdarg.h>
 #include <syslog.h>
 #include <errno.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "netifd.h"
 #include "ubus.h"
@@ -298,6 +300,36 @@ netifd_kill_processes(void)
 		netifd_kill_process(proc);
 }
 
+/*
+ * Before the daemon ends, each of its processes gets SIGTERM and up to two
+ * seconds to end as it would: pppoed ends its session with the
+ * concentrator, which otherwise holds it until its echo requests go
+ * unanswered, and the netifd that procd starts again opens one of its own.
+ * procd, which stops the daemon with SIGTERM, waits five seconds before it
+ * sends SIGKILL. What has not ended by then gets SIGKILL.
+ */
+static void
+netifd_end_processes(void)
+{
+	struct netifd_process *proc, *tmp;
+	int tenths;
+
+	list_for_each_entry(proc, &process_list, list)
+		kill(proc->uloop.pid, SIGTERM);
+
+	for (tenths = 20; tenths > 0 && !list_empty(&process_list); tenths--) {
+		usleep(100 * 1000);
+		list_for_each_entry_safe(proc, tmp, &process_list, list) {
+			if (!waitpid(proc->uloop.pid, NULL, WNOHANG))
+				continue;
+			uloop_process_delete(&proc->uloop);
+			netifd_delete_process(proc);
+		}
+	}
+
+	netifd_kill_processes();
+}
+
 int main(int argc, char **argv)
 {
 	const char *socket = NULL;
@@ -363,7 +395,7 @@ int main(int argc, char **argv)
 	config_init_all();
 
 	uloop_run();
-	netifd_kill_processes();
+	netifd_end_processes();
 
 	netifd_ubus_done();
 
