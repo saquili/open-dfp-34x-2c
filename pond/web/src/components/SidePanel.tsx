@@ -11,7 +11,9 @@
  * choices that shuts); one who asked for less motion sees it at once.
  */
 
+import { X } from "lucide-react";
 import { forwardRef, type ReactNode } from "react";
+import { useI18n } from "../i18n";
 
 /** The grid of a list and, while @open, the form at its right. */
 export function withPanel(open: boolean) {
@@ -37,3 +39,48 @@ export const SidePanel = forwardRef<HTMLDivElement, { onClose?: () => void; chil
     );
   },
 );
+
+/**
+ * A form's card in the panel: its title and the X that shuts it, the line
+ * under them, as high as the list's head (@line), and the form.
+ */
+export function PanelCard({
+  id,
+  title,
+  line,
+  onClose,
+  children,
+}: {
+  id: string;
+  title: string;
+  line: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <section
+      className="flex flex-col rounded-box border border-base-300 bg-base-100 xl:h-full xl:min-h-0"
+      aria-labelledby={id}
+    >
+      <div className="flex min-h-14 shrink-0 items-center gap-2 px-4 pt-4 pb-2">
+        <h2 id={id} className="min-w-0 truncate text-base font-semibold">
+          {title}
+        </h2>
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm btn-square ml-auto text-base-content/70"
+          onClick={onClose}
+          aria-label={t("internet.cancel")}
+          title={t("internet.cancel")}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      <p className="flex h-11 shrink-0 items-center border-b border-base-300 px-4 text-xs text-base-content/70">
+        {line}
+      </p>
+      {children}
+    </section>
+  );
+}

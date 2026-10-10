@@ -324,6 +324,58 @@ if (SCENARIO === "sessions") {
     },
   ];
   settings.dmz = [{ conn: "ipoe:2", lan: 2, mac: "00:00:5e:00:53:3a" }];
+  /*
+   * The firewall: Biuro may print on the printer in Dom; no network sends
+   * mail out by SMTP; the NAS answers HTTPS from the internet by IPv6; and,
+   * turned off, the garage camera kept from the internet.
+   */
+  settings.rules = [
+    {
+      id: 1,
+      name: "Drukarka dla Biura",
+      action: "allow",
+      from: "lan:2",
+      to: "dev:1:00:00:5e:00:53:16",
+      proto: "tcp",
+      ports: "9100",
+      family: "any",
+      on: true,
+    },
+    {
+      id: 2,
+      name: "Bez poczty SMTP",
+      action: "block",
+      from: "lans",
+      to: "internet",
+      proto: "tcp",
+      ports: "25",
+      family: "any",
+      on: true,
+    },
+    {
+      id: 3,
+      name: "NAS po IPv6",
+      action: "allow",
+      from: "internet",
+      to: "dev:1:00:00:5e:00:53:21",
+      proto: "tcp",
+      ports: "443",
+      family: "ipv6",
+      on: true,
+    },
+    {
+      id: 4,
+      name: "Kamera bez chmury",
+      action: "block",
+      from: "dev:1:00:00:5e:00:53:19",
+      to: "internet",
+      proto: "any",
+      ports: "",
+      family: "any",
+      on: false,
+    },
+  ];
+  settings.fw = { out: "allow", between: "block" };
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
@@ -419,6 +471,13 @@ function dropLans(conn: string) {
   settings.fixed = (settings.fixed ?? []).filter((y) => !gone.includes(y.lan));
   settings.forwards = (settings.forwards ?? []).filter((y) => !gone.includes(y.lan));
   settings.dmz = (settings.dmz ?? []).filter((y) => !gone.includes(y.lan));
+  for (const id of gone) dropRules(id);
+}
+
+/* The rules of network @id go with it, as their ends would no longer be. */
+function dropRules(id: number) {
+  const of = (end: string) => end === `lan:${id}` || end.startsWith(`dev:${id}:`);
+  settings.rules = (settings.rules ?? []).filter((y) => !of(y.from) && !of(y.to));
 }
 
 /* A forward's or a DMZ's device keeps its address: the one it has now, fixed, if it has none fixed. */
@@ -702,6 +761,7 @@ export const handlers = [
       settings.fixed = (settings.fixed ?? []).filter((y) => y.lan !== id);
       settings.forwards = (settings.forwards ?? []).filter((y) => y.lan !== id);
       settings.dmz = (settings.dmz ?? []).filter((y) => y.lan !== id);
+      dropRules(id);
       return HttpResponse.json({ id: "lan", ok: true });
     }
     let x = list.find((y) => y.id === id);
@@ -815,6 +875,58 @@ export const handlers = [
     pin(x.lan, x.mac);
     settings.forwards = [...list.filter((y) => y.id !== id), x];
     return HttpResponse.json({ id: "forward", ok: true });
+  }),
+
+  /*
+   * A firewall rule: added at the end with no ID, changed by ID, removed by
+   * ACTION=, or moved one place by MOVE=up or MOVE=down.
+   */
+  http.post("*/api/set/rule", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const list = settings.rules ?? [];
+    const id = b.ID ? Number(b.ID) : Math.max(0, ...list.map((y) => y.id)) + 1;
+    const at = list.findIndex((y) => y.id === id);
+    if (b.MOVE === "up" || b.MOVE === "down") {
+      const to = at + (b.MOVE === "up" ? -1 : 1);
+      if (at < 0 || to < 0 || to >= list.length) return HttpResponse.json({ id: "rule", ok: true });
+      const next = list.slice();
+      const [x] = next.splice(at, 1);
+      if (x) next.splice(to, 0, x);
+      settings.rules = next;
+      return HttpResponse.json({ id: "rule", ok: true });
+    }
+    if (b.ACTION === "") {
+      settings.rules = list.filter((y) => y.id !== id);
+      return HttpResponse.json({ id: "rule", ok: true });
+    }
+    const x = {
+      id,
+      name: b.NAME ?? "",
+      action: (b.ACTION === "block" ? "block" : "allow") as "allow" | "block",
+      from: b.FROM ?? "",
+      to: b.TO ?? "",
+      proto: (b.PROTO ?? "any") as "any" | "tcp" | "udp" | "both" | "icmp",
+      ports: b.PORTS ?? "",
+      family: (b.FAMILY ?? "any") as "any" | "ipv4" | "ipv6",
+      on: b.ON !== "off",
+    };
+    settings.rules = at < 0 ? [...list, x] : list.map((y) => (y.id === id ? x : y));
+    return HttpResponse.json({ id: "rule", ok: true });
+  }),
+
+  /* What the firewall does where no rule decides: OUT, to the internet, and BETWEEN the networks. */
+  http.post("*/api/set/fw", async ({ request }) => {
+    await delay(400);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const now = settings.fw ?? { out: "allow", between: "block" };
+    settings.fw = {
+      out: b.OUT === "block" ? "block" : b.OUT === "allow" ? "allow" : now.out,
+      between: b.BETWEEN === "allow" ? "allow" : b.BETWEEN === "block" ? "block" : now.between,
+    };
+    return HttpResponse.json({ id: "fw", ok: true });
   }),
 
   /* A connection's DMZ: its device by LAN and MAC, or none with MAC=. */

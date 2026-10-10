@@ -53,7 +53,7 @@ export function Tabs<T extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className="tabs tabs-box tabs-sm w-full flex-nowrap overflow-x-auto bg-base-200/70 sm:w-auto"
+      className="tabs tabs-box tabs-sm w-full flex-nowrap overflow-x-auto bg-base-200/70 [scrollbar-width:none] sm:w-auto"
     >
       {items.map((it) => (
         <button
@@ -61,7 +61,7 @@ export function Tabs<T extends string>({
           type="button"
           role="tab"
           aria-selected={it.id === value}
-          className={`tab gap-1.5 whitespace-nowrap ${it.id === value ? "tab-active" : ""}`}
+          className={`tab shrink-0 gap-1.5 whitespace-nowrap ${it.id === value ? "tab-active" : ""}`}
           onClick={() => onChange(it.id)}
         >
           {it.icon}

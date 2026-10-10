@@ -284,6 +284,40 @@ export interface ForwardInfo {
   on: boolean;
 }
 
+/**
+ * A firewall rule: what it lets through or blocks, from where to where.
+ * The first rule that traffic matches decides; what none matches, the
+ * defaults (FwDefaults) do.
+ */
+export interface RuleInfo {
+  id: number;
+  /** A name for it given by hand; empty for none. */
+  name: string;
+  action: "allow" | "block";
+  /**
+   * Where it comes from and goes to: "internet", or a part of it as
+   * "internet:ADDR/LEN"; "lans", every local network; "lan:N", one; or
+   * "dev:N:MAC", a device of network N by its MAC.
+   */
+  from: string;
+  to: string;
+  proto: "any" | "tcp" | "udp" | "both" | "icmp";
+  /** The ports it goes to, of TCP or UDP: "" for every one, "443", "8000-8100". */
+  ports: string;
+  family: "any" | "ipv4" | "ipv6";
+  on: boolean;
+}
+
+/**
+ * What the firewall does where no rule decides: from the local networks to
+ * the internet, and between them. From the internet in it always blocks,
+ * but for the forwards and the DMZ (NAT).
+ */
+export interface FwDefaults {
+  out: "allow" | "block";
+  between: "allow" | "block";
+}
+
 /** A connection's DMZ: the device that takes what comes in that no forward takes. */
 export interface DmzInfo {
   conn: string;
@@ -312,6 +346,9 @@ export interface Settings {
   fixed?: FixedInfo[];
   forwards?: ForwardInfo[];
   dmz?: DmzInfo[];
+  /** The firewall's rules, in their order. */
+  rules?: RuleInfo[];
+  fw?: FwDefaults;
   mode: string | null;
   /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;

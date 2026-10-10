@@ -14,7 +14,7 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
 import { useDmzChange, useForwardChange } from "../api/config";
@@ -22,7 +22,7 @@ import { useLive } from "../api/live";
 import type { ForwardInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
-import { SidePanel, withPanel } from "../components/SidePanel";
+import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
 import { Dot } from "../components/ui";
 import { useI18n } from "../i18n";
 import { ports, readPorts } from "../lib/ports";
@@ -69,21 +69,17 @@ function wanAddress(p: Net) {
 function Strip({ p }: { p: Net | undefined }) {
   const { t } = useI18n();
   const ip = p ? wanAddress(p) : null;
-  return (
-    <p className="flex h-11 shrink-0 items-center border-b border-base-300 px-4 text-xs text-base-content/70">
-      {p &&
-        (ip ? (
-          <span>
-            {t("nat.strip", { name: connName(t, p.c) })} <Mono>{ip}</Mono>
-          </span>
-        ) : (
-          t("nat.stripNone", { name: connName(t, p.c) })
-        ))}
-    </p>
+  if (!p) return null;
+  return ip ? (
+    <span>
+      {t("nat.strip", { name: connName(t, p.c) })} <Mono>{ip}</Mono>
+    </span>
+  ) : (
+    t("nat.stripNone", { name: connName(t, p.c) })
   );
 }
 
-/** A form's frame: its title and X, the line under it, and what it holds. */
+/** A form's frame: its title and X, the address it is about, and what it holds. */
 function Frame({
   id,
   title,
@@ -97,29 +93,10 @@ function Frame({
   onClose: () => void;
   children: ReactNode;
 }) {
-  const { t } = useI18n();
   return (
-    <section
-      className="flex flex-col rounded-box border border-base-300 bg-base-100 xl:h-full xl:min-h-0"
-      aria-labelledby={id}
-    >
-      <div className="flex min-h-14 shrink-0 items-center gap-2 px-4 pt-4 pb-2">
-        <h2 id={id} className="min-w-0 truncate text-base font-semibold">
-          {title}
-        </h2>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm btn-square ml-auto text-base-content/70"
-          onClick={onClose}
-          aria-label={t("internet.cancel")}
-          title={t("internet.cancel")}
-        >
-          <X className="size-4" />
-        </button>
-      </div>
-      <Strip p={p} />
+    <PanelCard id={id} title={title} line={<Strip p={p} />} onClose={onClose}>
       {children}
-    </section>
+    </PanelCard>
   );
 }
 

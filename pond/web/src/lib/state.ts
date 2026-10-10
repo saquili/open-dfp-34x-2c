@@ -392,6 +392,16 @@ export function forwards(live: Live | undefined) {
     .sort((a, z) => a.conn.localeCompare(z.conn) || a.ext_from - z.ext_from);
 }
 
+/** The firewall's rules, in the order they decide in. */
+export function rules(live: Live | undefined) {
+  return live?.settings?.rules ?? [];
+}
+
+/** What the firewall does where no rule decides. */
+export function fwDefaults(live: Live | undefined) {
+  return live?.settings?.fw ?? { out: "allow" as const, between: "block" as const };
+}
+
 /** The connections' DMZ hosts. */
 export function dmzs(live: Live | undefined) {
   return live?.settings?.dmz ?? [];
