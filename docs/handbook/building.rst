@@ -301,8 +301,11 @@ The boot script
        ``/etc/board.conf`` may name (below), gives the PON driver the
        serial number and the PLOAM password through devlink and brings the PON
        up;
-    #. starts ``omcid``, which answers the OLT, as procd's service, and with
-       sessions the watcher and, per session, ``dhcp6d`` (``onu-mode``);
+    #. starts ``omcid``, which answers the OLT, and with sessions the watcher
+       and, per session, ``dhcp6d`` (``onu-mode``), as the instances of one
+       service of procd, ``onu``, which ``onu-mode`` gives procd whole
+       (``onu-svc sync``): procd starts what is new, ends what is gone and
+       starts again only what changed;
     #. prints ``open-dfp-34x-2c: ready`` on the console.
 
     After it, procd starts ``dropbear`` (root's password and keys), with an
