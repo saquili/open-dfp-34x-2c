@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-/* The messages of onu-svc to procd, as JSON text (svcmsg.h). */
+/* The messages of onu-svc to procd, put through a writer (svcmsg.h). */
 
 #include <errno.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,45 +55,6 @@ int svc_parse_respawn(const char *s, struct svc_respawn *r)
 	return 0;
 }
 
-/* Text appended to a buffer that knows when it overflowed. */
-struct out {
-	char *buf;
-	size_t cap;
-	size_t len;
-	bool full;
-};
-
-static void put(struct out *o, const char *fmt, ...)
-{
-	va_list ap;
-	int n;
-
-	if (o->full)
-		return;
-	va_start(ap, fmt);
-	n = vsnprintf(o->buf + o->len, o->cap - o->len, fmt, ap);
-	va_end(ap);
-	if (n < 0 || (size_t)n >= o->cap - o->len)
-		o->full = true;
-	else
-		o->len += (size_t)n;
-}
-
-/* @s as a JSON string: '"' and '\' escaped, and every control character. */
-static void put_string(struct out *o, const char *s)
-{
-	put(o, "\"");
-	for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-		if (*p == '"' || *p == '\\')
-			put(o, "\\%c", *p);
-		else if (*p < 0x20 || *p == 0x7f)
-			put(o, "\\u%04x", *p);
-		else
-			put(o, "%c", *p);
-	}
-	put(o, "\"");
-}
-
 /*
  * The shell that runs a program with its output appended to a file: the file
  * and then the program come as its arguments, so that neither is ever read
@@ -105,69 +65,63 @@ static const char *const to_file[] = {
 	"/bin/sh", "-c", "f=$1; shift; exec \"$@\" >>\"$f\" 2>&1", "sh", NULL
 };
 
-/* One instance, "NAME":{...}, as procd's "set" takes it. */
-static void put_instance(struct out *o, const struct svc_instance *in)
+/* The strings of @argv, NULL-terminated, into the array open in @w. */
+static int put_words(const struct svc_writer *w, const char *const *argv)
 {
-	bool first = true;
-
-	put_string(o, in->name);
-	put(o, ":{\"command\":[");
-	if (in->out) {
-		for (int i = 0; to_file[i]; i++) {
-			put(o, first ? "" : ",");
-			put_string(o, to_file[i]);
-			first = false;
-		}
-		put(o, ",");
-		put_string(o, in->out);
-	}
-	for (int i = 0; in->argv[i]; i++) {
-		put(o, first ? "" : ",");
-		put_string(o, in->argv[i]);
-		first = false;
-	}
-	/* procd reads the three numbers of "respawn" as strings. */
-	put(o, "],\"respawn\":[\"%u\",\"%u\",\"%u\"]", in->respawn.threshold,
-	    in->respawn.timeout, in->respawn.retry);
-	if (in->log)
-		put(o, ",\"stdout\":true,\"stderr\":true");
-	if (in->user) {
-		put(o, ",\"user\":");
-		put_string(o, in->user);
-	}
-	put(o, "}");
+	for (int i = 0; argv[i]; i++)
+		if (w->string(w->ctx, NULL, argv[i]))
+			return -1;
+	return 0;
 }
 
-int svc_service_json(char *buf, size_t cap, const char *name,
-		     const struct svc_instance *inst, size_t n)
+/* One instance, a table named as it is, as procd's "set" takes it. */
+static int put_instance(const struct svc_writer *w, const struct svc_instance *in)
 {
-	struct out o = { .buf = buf, .cap = cap };
+	char n[3][12];
 
-	if (!cap)
+	if (w->open(w->ctx, in->name, false) || w->open(w->ctx, "command", true))
 		return -1;
-	buf[0] = '\0';
-	put(&o, "{\"name\":");
-	put_string(&o, name);
-	put(&o, ",\"instances\":{");
-	for (size_t i = 0; i < n; i++) {
+	if (in->out && (put_words(w, to_file) || w->string(w->ctx, NULL, in->out)))
+		return -1;
+	if (put_words(w, in->argv) || w->close(w->ctx))
+		return -1;
+	/* procd reads the three numbers of "respawn" as strings. */
+	snprintf(n[0], sizeof(n[0]), "%u", in->respawn.threshold);
+	snprintf(n[1], sizeof(n[1]), "%u", in->respawn.timeout);
+	snprintf(n[2], sizeof(n[2]), "%u", in->respawn.retry);
+	if (w->open(w->ctx, "respawn", true) || w->string(w->ctx, NULL, n[0]) ||
+	    w->string(w->ctx, NULL, n[1]) || w->string(w->ctx, NULL, n[2]) || w->close(w->ctx))
+		return -1;
+	if (in->log && (w->boolean(w->ctx, "stdout", true) || w->boolean(w->ctx, "stderr", true)))
+		return -1;
+	if (in->user && w->string(w->ctx, "user", in->user))
+		return -1;
+	return w->close(w->ctx) ? -1 : 0;
+}
+
+int svc_service_msg(const struct svc_writer *w, const char *name,
+		    const struct svc_instance *inst, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
 		if (!inst[i].argv || !inst[i].argv[0])
 			return -1;
-		put(&o, i ? "," : "");
-		put_instance(&o, &inst[i]);
-	}
-	put(&o, "}}");
-	return o.full ? -1 : (int)o.len;
+	if (w->string(w->ctx, "name", name) || w->open(w->ctx, "instances", false))
+		return -1;
+	for (size_t i = 0; i < n; i++)
+		if (put_instance(w, &inst[i]))
+			return -1;
+	return w->close(w->ctx) ? -1 : 0;
 }
 
-int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
-		 bool log, const char *out, const char *user, const char *const argv[])
+int svc_set_msg(const struct svc_writer *w, const char *name, const struct svc_respawn *r,
+		bool log, const char *out, const char *user, const char *const argv[])
 {
 	struct svc_instance one = {
 		.name = name, .respawn = *r, .log = log, .out = out, .user = user,
 		.argv = argv,
 	};
 
-	return svc_service_json(buf, cap, name, &one, 1);
+	return svc_service_msg(w, name, &one, 1);
 }
 
 int svc_parse_instance(char *line, const char *name, struct svc_instance *inst,
@@ -216,15 +170,7 @@ int svc_parse_instance(char *line, const char *name, struct svc_instance *inst,
 	return 0;
 }
 
-int svc_name_json(char *buf, size_t cap, const char *name)
+int svc_name_msg(const struct svc_writer *w, const char *name)
 {
-	struct out o = { .buf = buf, .cap = cap };
-
-	if (!cap)
-		return -1;
-	buf[0] = '\0';
-	put(&o, "{\"name\":");
-	put_string(&o, name);
-	put(&o, "}");
-	return o.full ? -1 : (int)o.len;
+	return w->string(w->ctx, "name", name) ? -1 : 0;
 }

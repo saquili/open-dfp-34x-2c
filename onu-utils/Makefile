@@ -46,9 +46,9 @@ $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
 		     $(BUILD)/src/update.o $(BUILD)/src/sha256.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
-# onu-svc talks to procd over ubus: libubus, libubox and libubox's JSON part.
+# onu-svc talks to procd over ubus: libubus and libubox.
 $(BUILD)/onu-svc: $(BUILD)/src/onu-svc.o $(BUILD)/src/svcmsg.o
-	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lblobmsg_json -lubox
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lubox
 
 # onu-act serves its table (act.c) on ubus: libubus and libubox.
 $(BUILD)/onu-act: $(BUILD)/src/onu-act.o $(BUILD)/src/act.o

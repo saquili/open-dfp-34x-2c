@@ -3,6 +3,7 @@
 
 /* Tests of onu-svc's messages to procd (svcmsg.h). */
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,6 +21,132 @@ static int checks;
 			       #cond);                                   \
 		}                                                        \
 	} while (0)
+
+/*
+ * The tests' writer: the message as JSON text, for its comparison with what
+ * procd takes. A message is the root table's values, which text_end() closes.
+ */
+struct text {
+	char buf[1024];
+	size_t len;
+	int depth;
+	bool array[8];
+	bool any[8];
+	int room;
+	int calls;
+};
+
+static struct text g_text;
+
+static void put(struct text *t, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	t->len += (size_t)vsnprintf(t->buf + t->len, sizeof(t->buf) - t->len, fmt, ap);
+	va_end(ap);
+	if (t->len >= sizeof(t->buf))
+		t->len = sizeof(t->buf) - 1;
+}
+
+static void put_string(struct text *t, const char *s)
+{
+	put(t, "\"");
+	for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+		if (*p == '"' || *p == '\\')
+			put(t, "\\%c", *p);
+		else if (*p < 0x20 || *p == 0x7f)
+			put(t, "\\u%04x", *p);
+		else
+			put(t, "%c", *p);
+	}
+	put(t, "\"");
+}
+
+/* A value's place: room for one more call, a comma, and a name in a table. */
+static int place(struct text *t, const char *name)
+{
+	t->calls++;
+	if (!t->room)
+		return -1;
+	if (t->room > 0)
+		t->room--;
+	if (t->any[t->depth])
+		put(t, ",");
+	t->any[t->depth] = true;
+	if (!t->array[t->depth]) {
+		put_string(t, name);
+		put(t, ":");
+	}
+	return 0;
+}
+
+static int text_open(void *ctx, const char *name, bool array)
+{
+	struct text *t = ctx;
+
+	if (place(t, name))
+		return -1;
+	put(t, array ? "[" : "{");
+	t->depth++;
+	t->array[t->depth] = array;
+	t->any[t->depth] = false;
+	return 0;
+}
+
+static int text_close(void *ctx)
+{
+	struct text *t = ctx;
+
+	t->calls++;
+	if (!t->room)
+		return -1;
+	if (t->room > 0)
+		t->room--;
+	put(t, t->array[t->depth] ? "]" : "}");
+	t->depth--;
+	return 0;
+}
+
+static int text_string(void *ctx, const char *name, const char *value)
+{
+	struct text *t = ctx;
+
+	if (place(t, name))
+		return -1;
+	put_string(t, value);
+	return 0;
+}
+
+static int text_boolean(void *ctx, const char *name, bool value)
+{
+	struct text *t = ctx;
+
+	if (place(t, name))
+		return -1;
+	put(t, value ? "true" : "false");
+	return 0;
+}
+
+static const struct svc_writer g_writer = {
+	.open = text_open, .close = text_close, .string = text_string,
+	.boolean = text_boolean, .ctx = &g_text,
+};
+
+/* A message begins, with room for @room calls, or for any when -1. */
+static const struct svc_writer *text_begin(int room)
+{
+	memset(&g_text, 0, sizeof(g_text));
+	g_text.room = room;
+	put(&g_text, "{");
+	return &g_writer;
+}
+
+static const char *text_end(void)
+{
+	put(&g_text, "}");
+	return g_text.buf;
+}
 
 static void test_names(void)
 {
@@ -55,17 +182,16 @@ static void test_set(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
 	const char *argv[] = { "/usr/sbin/netifd", "-c", "/run/config", NULL };
-	char buf[512];
 
-	CHECK(svc_set_json(buf, sizeof(buf), "netifd", &r, false, NULL, NULL, argv) == (int)strlen(buf));
-	CHECK(!strcmp(buf, "{\"name\":\"netifd\",\"instances\":{\"netifd\":{\"command\":"
+	CHECK(svc_set_msg(text_begin(-1), "netifd", &r, false, NULL, NULL, argv) == 0);
+	CHECK(!strcmp(text_end(), "{\"name\":\"netifd\",\"instances\":{\"netifd\":{\"command\":"
 			   "[\"/usr/sbin/netifd\",\"-c\",\"/run/config\"],"
 			   "\"respawn\":[\"60\",\"2\",\"0\"]}}}"));
 
 	const char *one[] = { "pond", NULL };
 	r = (struct svc_respawn){ 3600, 5, 3 };
-	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, true, NULL, NULL, one) > 0);
-	CHECK(!strcmp(buf, "{\"name\":\"pond\",\"instances\":{\"pond\":{\"command\":[\"pond\"],"
+	CHECK(svc_set_msg(text_begin(-1), "pond", &r, true, NULL, NULL, one) == 0);
+	CHECK(!strcmp(text_end(), "{\"name\":\"pond\",\"instances\":{\"pond\":{\"command\":[\"pond\"],"
 			   "\"respawn\":[\"3600\",\"5\",\"3\"],\"stdout\":true,\"stderr\":true}}}"));
 }
 
@@ -73,39 +199,37 @@ static void test_escapes(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
 	const char *argv[] = { "sh", "-c", "echo \"a\\b\"\n\t", NULL };
-	char buf[512];
 
-	CHECK(svc_set_json(buf, sizeof(buf), "x", &r, false, NULL, NULL, argv) > 0);
-	CHECK(strstr(buf, "[\"sh\",\"-c\",\"echo \\\"a\\\\b\\\"\\u000a\\u0009\"]") != NULL);
+	/* The words reach the writer as they are. */
+	CHECK(svc_set_msg(text_begin(-1), "x", &r, false, NULL, NULL, argv) == 0);
+	CHECK(strstr(text_end(), "[\"sh\",\"-c\",\"echo \\\"a\\\\b\\\"\\u000a\\u0009\"]") != NULL);
 }
 
-static void test_too_long(void)
+static void test_no_room(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
-	const char *argv[] = { "a-program-with-a-long-name", NULL };
-	char buf[512];
-	int n;
+	const char *argv[] = { "a-program", "-x", NULL };
+	int calls;
 
-	n = svc_set_json(buf, sizeof(buf), "x", &r, false, NULL, NULL, argv);
-	CHECK(n > 0);
-	/* Every size short of the whole fails, and never writes past it. */
-	for (size_t cap = 0; cap <= (size_t)n; cap++) {
-		char small[512];
-
-		memset(small, 'Z', sizeof(small));
-		CHECK(svc_set_json(small, cap, "x", &r, false, NULL, NULL, argv) == -1);
-		CHECK(small[cap] == 'Z');
+	CHECK(svc_set_msg(text_begin(-1), "x", &r, true, NULL, "pond", argv) == 0);
+	calls = g_text.calls;
+	CHECK(calls > 10);
+	/* A writer without room for one of its calls gives the message up there. */
+	for (int room = 0; room < calls; room++) {
+		CHECK(svc_set_msg(text_begin(room), "x", &r, true, NULL, "pond", argv) == -1);
+		CHECK(g_text.calls == room + 1);
 	}
-	CHECK(svc_set_json(buf, (size_t)n + 1, "x", &r, false, NULL, NULL, argv) == n);
+	CHECK(svc_set_msg(text_begin(calls), "x", &r, true, NULL, "pond", argv) == 0);
 }
 
 static void test_to_file(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
 	const char *argv[] = { "dhcp6d", "-w", "ppp1", NULL };
-	char buf[512];
+	const char *buf;
 
-	CHECK(svc_set_json(buf, sizeof(buf), "dhcp6d1", &r, false, "/run/dhcp6d.log", NULL, argv) > 0);
+	CHECK(svc_set_msg(text_begin(-1), "dhcp6d1", &r, false, "/run/dhcp6d.log", NULL, argv) == 0);
+	buf = text_end();
 	CHECK(strstr(buf, "\"command\":[\"/bin/sh\",\"-c\","
 			  "\"f=$1; shift; exec \\\"$@\\\" >>\\\"$f\\\" 2>&1\",\"sh\","
 			  "\"/run/dhcp6d.log\",\"dhcp6d\",\"-w\",\"ppp1\"]") != NULL);
@@ -118,12 +242,12 @@ static void test_user(void)
 	const char *argv[] = { "/usr/lib/onu/onu-run", "pond", NULL };
 	struct svc_instance in;
 	const char *words[SVC_WORDS_MAX];
-	char buf[512], line[128];
+	char line[128];
 
-	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, false, NULL, "pond", argv) > 0);
-	CHECK(strstr(buf, "\"respawn\":[\"60\",\"2\",\"0\"],\"user\":\"pond\"}") != NULL);
-	CHECK(svc_set_json(buf, sizeof(buf), "pond", &r, false, NULL, NULL, argv) > 0);
-	CHECK(strstr(buf, "user") == NULL);
+	CHECK(svc_set_msg(text_begin(-1), "pond", &r, false, NULL, "pond", argv) == 0);
+	CHECK(strstr(text_end(), "\"respawn\":[\"60\",\"2\",\"0\"],\"user\":\"pond\"}") != NULL);
+	CHECK(svc_set_msg(text_begin(-1), "pond", &r, false, NULL, NULL, argv) == 0);
+	CHECK(strstr(text_end(), "user") == NULL);
 
 	snprintf(line, sizeof(line), "-u pond -- /usr/lib/onu/onu-run pond");
 	CHECK(svc_parse_instance(line, "pond", &in, words, SVC_WORDS_MAX) == 0);
@@ -136,11 +260,9 @@ static void test_user(void)
 
 static void test_name(void)
 {
-	char buf[64];
-
-	CHECK(svc_name_json(buf, sizeof(buf), "omcid") == 16);
-	CHECK(!strcmp(buf, "{\"name\":\"omcid\"}"));
-	CHECK(svc_name_json(buf, 10, "omcid") == -1);
+	CHECK(svc_name_msg(text_begin(-1), "omcid") == 0);
+	CHECK(!strcmp(text_end(), "{\"name\":\"omcid\"}"));
+	CHECK(svc_name_msg(text_begin(0), "omcid") == -1);
 }
 
 static void test_parse_instance(void)
@@ -186,9 +308,12 @@ static void test_service(void)
 		  .argv = dhcp6d },
 		{ .name = "omcid", .respawn = SVC_RESPAWN_DEFAULT, .log = true, .argv = omcid },
 	};
-	char buf[1024];
+	const char *const none[] = { NULL };
+	struct svc_instance empty = { .name = "x", .respawn = SVC_RESPAWN_DEFAULT, .argv = none };
+	const char *buf;
 
-	CHECK(svc_service_json(buf, sizeof(buf), "onu", in, 2) == (int)strlen(buf));
+	CHECK(svc_service_msg(text_begin(-1), "onu", in, 2) == 0);
+	buf = text_end();
 	static const char head[] = "{\"name\":\"onu\",\"instances\":{\"dhcp6d1\":{\"command\":"
 				   "[\"/bin/sh\",";
 
@@ -197,9 +322,10 @@ static void test_service(void)
 	CHECK(strstr(buf, "},\"omcid\":{\"command\":[\"onu-run\",\"omcid\"],"
 			  "\"respawn\":[\"60\",\"2\",\"0\"],\"stdout\":true,\"stderr\":true}}}") != NULL);
 	/* With none, the service has no program left. */
-	CHECK(svc_service_json(buf, sizeof(buf), "onu", in, 0) == (int)strlen(buf) &&
-	      !strcmp(buf, "{\"name\":\"onu\",\"instances\":{}}"));
-	CHECK(svc_service_json(buf, 20, "onu", in, 2) == -1);
+	CHECK(svc_service_msg(text_begin(-1), "onu", in, 0) == 0 &&
+	      !strcmp(text_end(), "{\"name\":\"onu\",\"instances\":{}}"));
+	/* An instance without a program is refused before anything is written. */
+	CHECK(svc_service_msg(text_begin(-1), "onu", &empty, 1) == -1 && !g_text.calls);
 }
 
 int main(void)
@@ -208,7 +334,7 @@ int main(void)
 	test_respawn();
 	test_set();
 	test_escapes();
-	test_too_long();
+	test_no_room();
 	test_to_file();
 	test_user();
 	test_name();

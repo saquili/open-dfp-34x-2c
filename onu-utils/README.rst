@@ -312,7 +312,10 @@ there, and names it by its whole path where procd starts it.
    the threshold under which a run is a crash, the wait before the next start
    and the crashes in a row after which procd gives up, 60,2,0 unless given
    (0: never); ``-l`` sends the program's output to the system log, ``-o``
-   appends it to a file. ``sync`` gives procd a whole service at once, one
+   appends it to a file, and ``-u`` runs it as an account. Its messages are
+   procd's own form, blobmsg, built as they are put together, with no JSON
+   text between (``src/svcmsg.c`` writes them through a writer, which the
+   tests replace with one of text). ``sync`` gives procd a whole service at once, one
    program for each file of a directory, whose name is the instance's and
    whose line is what ``start`` takes after the name: procd starts what is
    new, ends what has no file any more, starts again only what changed, and
@@ -323,7 +326,7 @@ there, and names it by its whole path where procd starts it.
    then. ``list`` tells each service's or instance's state and how often
    procd started it again (a procd patch, ``br2-external/package/procd``)::
 
-      onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]
+      onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] [-u USER] -- PROGRAM [ARG...]
       onu-svc sync NAME DIR
       onu-svc stop NAME
       onu-svc list [NAME]
@@ -379,8 +382,8 @@ Building and testing::
 
 ``ponid``, ``onu-config`` and ``onu-update`` need zlib, ``onu-config`` and
 ``onu-update`` the kernel's MTD header
-``mtd/mtd-user.h``, ``onu-svc`` libubus, libubox and libblobmsg_json and
-``onu-act`` libubus and libubox (their tests need none of them), ``pon`` libmnl and the kernel's headers, among them
+``mtd/mtd-user.h``, ``onu-svc`` and ``onu-act`` libubus and libubox (their
+tests need neither), ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the

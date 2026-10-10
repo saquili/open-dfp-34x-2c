@@ -48,7 +48,6 @@
 #include <unistd.h>
 
 #include <libubox/blobmsg.h>
-#include <libubox/blobmsg_json.h>
 #include <libubus.h>
 
 #include "svcmsg.h"
@@ -57,7 +56,8 @@
 
 static int usage(void)
 {
-	fputs("usage: onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]\n"
+	fputs("usage: onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] [-u USER] --\n"
+	      "                       PROGRAM [ARG...]\n"
 	      "       onu-svc sync NAME DIR\n"
 	      "       onu-svc stop NAME\n"
 	      "       onu-svc list [NAME]\n", stderr);
@@ -105,11 +105,66 @@ static void print_list(struct ubus_request *req, int type, struct blob_attr *msg
 	}
 }
 
-/* Call @method of procd's "service" with the JSON text @json. */
-static int call(const char *method, const char *json, ubus_data_handler_t cb)
+/* The writer of svcmsg.h that builds blobmsg into a buffer of libubox. */
+struct blob_writer {
+	struct blob_buf *b;
+	void *open[4];
+	int depth;
+};
+
+static int bw_open(void *ctx, const char *name, bool array)
+{
+	struct blob_writer *w = ctx;
+	void *c;
+
+	if (w->depth == (int)ARRAY_SIZE(w->open))
+		return -1;
+	c = array ? blobmsg_open_array(w->b, name) : blobmsg_open_table(w->b, name);
+	if (!c)
+		return -1;
+	w->open[w->depth++] = c;
+	return 0;
+}
+
+static int bw_close(void *ctx)
+{
+	struct blob_writer *w = ctx;
+
+	if (!w->depth)
+		return -1;
+	blobmsg_close_table(w->b, w->open[--w->depth]);
+	return 0;
+}
+
+static int bw_string(void *ctx, const char *name, const char *value)
+{
+	struct blob_writer *w = ctx;
+
+	return blobmsg_add_string(w->b, name, value) ? -1 : 0;
+}
+
+static int bw_boolean(void *ctx, const char *name, bool value)
+{
+	struct blob_writer *w = ctx;
+
+	return blobmsg_add_u8(w->b, name, value) ? -1 : 0;
+}
+
+/* A writer into @b, which it begins anew. */
+static struct svc_writer writer(struct blob_buf *b, struct blob_writer *bw)
+{
+	blob_buf_init(b, 0);
+	*bw = (struct blob_writer){ .b = b };
+	return (struct svc_writer){
+		.open = bw_open, .close = bw_close, .string = bw_string,
+		.boolean = bw_boolean, .ctx = bw,
+	};
+}
+
+/* Call @method of procd's "service" with the message @msg. */
+static int call(const char *method, struct blob_attr *msg, ubus_data_handler_t cb)
 {
 	struct ubus_context *ctx;
-	struct blob_buf b = { 0 };
 	uint32_t id;
 	int ret;
 
@@ -118,18 +173,11 @@ static int call(const char *method, const char *json, ubus_data_handler_t cb)
 		fprintf(stderr, "onu-svc: no ubus\n");
 		return 1;
 	}
-	blob_buf_init(&b, 0);
-	if (!blobmsg_add_json_from_string(&b, json)) {
-		fprintf(stderr, "onu-svc: not a message: %s\n", json);
-		ret = UBUS_STATUS_INVALID_ARGUMENT;
-	} else {
-		ret = ubus_lookup_id(ctx, "service", &id);
-		if (!ret)
-			ret = ubus_invoke(ctx, id, method, b.head, cb, NULL, TIMEOUT_MS);
-		if (ret)
-			fprintf(stderr, "onu-svc: procd's %s: %s\n", method, ubus_strerror(ret));
-	}
-	blob_buf_free(&b);
+	ret = ubus_lookup_id(ctx, "service", &id);
+	if (!ret)
+		ret = ubus_invoke(ctx, id, method, msg, cb, NULL, TIMEOUT_MS);
+	if (ret)
+		fprintf(stderr, "onu-svc: procd's %s: %s\n", method, ubus_strerror(ret));
 	ubus_free(ctx);
 	return ret ? 1 : 0;
 }
@@ -139,9 +187,11 @@ static int start(int argc, char **argv)
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
 	const char *name = argv[1];
 	const char *out = NULL, *user = NULL;
+	struct blob_buf b = { 0 };
+	struct blob_writer bw;
+	struct svc_writer w;
 	bool log = false;
-	char json[4096];
-	int ch;
+	int ch, ret;
 
 	if (argc < 2 || !svc_name_ok(name))
 		return usage();
@@ -170,12 +220,15 @@ static int start(int argc, char **argv)
 	/* The program follows "--", which getopt has taken. */
 	if (optind >= argc || strcmp(argv[optind - 1], "--") || (log && out))
 		return usage();
-	if (svc_set_json(json, sizeof(json), name, &r, log, out, user,
-			 (const char *const *)(argv + optind)) < 0) {
-		fprintf(stderr, "onu-svc: the command of %s is too long\n", name);
-		return 1;
+	w = writer(&b, &bw);
+	if (svc_set_msg(&w, name, &r, log, out, user, (const char *const *)(argv + optind))) {
+		fprintf(stderr, "onu-svc: no room for the message of %s\n", name);
+		ret = 1;
+	} else {
+		ret = call("set", b.head, NULL);
 	}
-	return call("set", json, NULL);
+	blob_buf_free(&b);
+	return ret;
 }
 
 #define INSTANCES_MAX 32
@@ -188,15 +241,17 @@ static int by_name(const void *a, const void *b)
 }
 
 /*
- * The service @name of the instances of the files of @dir, as JSON text in
- * @json, of @cap bytes: 0, or 1 with what is wrong said.
+ * The service @name of the instances of the files of @dir, as a message in
+ * @b, which it begins anew: 0, or 1 with what is wrong said.
  */
-static int dir_json(const char *name, const char *dir, char *json, size_t cap)
+static int dir_msg(const char *name, const char *dir, struct blob_buf *b)
 {
 	static char names[INSTANCES_MAX][NAME_MAX_];
 	static char lines[INSTANCES_MAX][LINE_MAX_];
 	static const char *words[INSTANCES_MAX][SVC_WORDS_MAX];
 	struct svc_instance inst[INSTANCES_MAX];
+	struct blob_writer bw;
+	struct svc_writer w = writer(b, &bw);
 	struct dirent *e;
 	size_t n = 0;
 	int fd, ret = 1;
@@ -250,8 +305,8 @@ static int dir_json(const char *name, const char *dir, char *json, size_t cap)
 			goto out;
 		}
 	}
-	if (svc_service_json(json, cap, name, inst, n) < 0) {
-		fprintf(stderr, "onu-svc: the instances of %s are too long\n", name);
+	if (svc_service_msg(&w, name, inst, n)) {
+		fprintf(stderr, "onu-svc: no room for the instances of %s\n", name);
 		goto out;
 	}
 	ret = 0;
@@ -268,28 +323,47 @@ out:
  */
 static int sync_dir(const char *name, const char *dir)
 {
-	static char json[16384], sent[16384];
+	struct blob_buf bufs[2] = { 0 }, *now = &bufs[0], *sent = NULL, *t;
+	int ret = 1;
 
 	if (!svc_name_ok(name))
 		return usage();
-	sent[0] = '\0';
 	for (int round = 0; round < 8; round++) {
-		if (dir_json(name, dir, json, sizeof(json)))
-			return 1;
-		if (!strcmp(json, sent))
-			return 0;
-		if (call("set", json, NULL))
-			return 1;
-		strcpy(sent, json);
+		if (dir_msg(name, dir, now))
+			goto out;
+		if (sent && blob_attr_equal(now->head, sent->head)) {
+			ret = 0;
+			goto out;
+		}
+		if (call("set", now->head, NULL))
+			goto out;
+		t = sent ? sent : &bufs[1];
+		sent = now;
+		now = t;
 	}
 	fprintf(stderr, "onu-svc: %s kept changing\n", dir);
-	return 1;
+out:
+	blob_buf_free(&bufs[0]);
+	blob_buf_free(&bufs[1]);
+	return ret;
+}
+
+/* @method of procd's "service" for the service @name, or for all without. */
+static int by_service(const char *method, const char *name, ubus_data_handler_t cb)
+{
+	struct blob_buf b = { 0 };
+	struct blob_writer bw;
+	struct svc_writer w = writer(&b, &bw);
+	int ret = 1;
+
+	if (!name || !svc_name_msg(&w, name))
+		ret = call(method, b.head, cb);
+	blob_buf_free(&b);
+	return ret;
 }
 
 int main(int argc, char **argv)
 {
-	char json[256];
-
 	if (argc < 2)
 		return usage();
 	if (!strcmp(argv[1], "start"))
@@ -302,17 +376,12 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[1], "stop")) {
 		if (argc != 3 || !svc_name_ok(argv[2]))
 			return usage();
-		svc_name_json(json, sizeof(json), argv[2]);
-		return call("delete", json, NULL);
+		return by_service("delete", argv[2], NULL);
 	}
 	if (!strcmp(argv[1], "list")) {
 		if (argc > 3 || (argc == 3 && !svc_name_ok(argv[2])))
 			return usage();
-		if (argc == 3)
-			svc_name_json(json, sizeof(json), argv[2]);
-		else
-			strcpy(json, "{}");
-		return call("list", json, print_list);
+		return by_service("list", argc == 3 ? argv[2] : NULL, print_list);
 	}
 	return usage();
 }
