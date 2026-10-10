@@ -259,6 +259,8 @@ export interface LeaseInfo {
   name: string | null;
   /** Seconds left of its lease. */
   left_s: number;
+  /** The global IPv6 addresses the stick sees it use (its neighbours), the ones it made by SLAAC. */
+  ipv6?: string[];
 }
 
 /** A device's fixed address: in its network, its MAC always gets the same IP. */

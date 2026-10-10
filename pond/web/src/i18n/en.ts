@@ -338,6 +338,7 @@ export const en = {
     fixedOn: "fixed",
     off: "off",
     now: "now {ip}",
+    v6Count: "IPv6 ({n})",
     fixedNone: "No device has a fixed address yet.",
     fixedAdd: "Add a fixed address",
     fixedAddShort: "Add",

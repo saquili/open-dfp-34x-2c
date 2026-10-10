@@ -239,15 +239,31 @@ if (SCENARIO === "sessions") {
       ipv6_subnet: "1",
     },
   ];
+  /*
+   * The devices of Biuro, whose connection has a prefix, have IPv6 in its
+   * /64 network 1: one made of their MAC (EUI-64), and most a temporary one
+   * besides; Dom's connection has none yet.
+   */
   settings.leases = HOUSE.map((name, i) => {
     const lan = i < 42 ? 1 : 2;
     const host = 100 + (lan === 1 ? i : i - 42) * 2 + (i % 3 === 0 ? 1 : 0);
+    const last = (0x10 + i).toString(16).padStart(2, "0");
+    const temp = ((i * 2654435761) >>> 0).toString(16).padStart(8, "0");
     return {
       lan,
-      mac: `00:00:5e:00:53:${(0x10 + i).toString(16).padStart(2, "0")}`,
+      mac: `00:00:5e:00:53:${last}`,
       ip: `192.168.${lan}.${host}`,
       name,
       left_s: [81_000, 43_200, 600, 3_600, 19_800, 72_000][i % 6] ?? 600,
+      ipv6:
+        lan === 2
+          ? [
+              `2001:db8:7700:1:200:5eff:fe00:53${last}`,
+              ...(i % 3
+                ? [`2001:db8:7700:1:${temp.slice(0, 4)}:${temp.slice(4)}:9e1:${last}0`]
+                : []),
+            ]
+          : [],
     };
   });
   /*

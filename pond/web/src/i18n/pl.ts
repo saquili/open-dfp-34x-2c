@@ -340,6 +340,7 @@ export const pl: Dictionary = {
     fixedOn: "stała",
     off: "wyłączone",
     now: "teraz {ip}",
+    v6Count: "IPv6 ({n})",
     fixedNone: "Żadne urządzenie nie ma jeszcze stałego adresu.",
     fixedAdd: "Dodaj stały adres",
     fixedAddShort: "Dodaj",

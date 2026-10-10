@@ -574,6 +574,8 @@ interface Device {
   now: string | null;
   left: number;
   fixed: FixedInfo | undefined;
+  /** The IPv6 addresses the stick sees it use. */
+  v6: string[];
 }
 
 /** The devices of the networks @ids: those on now, and those with a fixed address that are off. */
@@ -593,6 +595,7 @@ function useDevices(ids: number[]): Device[] {
         now: l.ip,
         left: l.left_s,
         fixed: f,
+        v6: l.ipv6 ?? [],
       };
     }),
     ...pins
@@ -605,6 +608,7 @@ function useDevices(ids: number[]): Device[] {
         now: null,
         left: 0,
         fixed: f,
+        v6: [],
       })),
   ];
   const at = (d: Device) => ip4(d.fixed?.ip ?? d.now ?? "") ?? 0;
@@ -632,6 +636,10 @@ function DeviceTable({
     const l = places.find((x) => x.lan?.id === id)?.lan;
     return l ? netName(t, l, places) : "–";
   };
+  /* The devices whose IPv6 addresses are open under their line. */
+  const [open, setOpen] = useState<string[]>([]);
+  const toggle = (key: string) =>
+    setOpen((o) => (o.includes(key) ? o.filter((k) => k !== key) : [...o, key]));
   return (
     <div className={`grid ${DEVICE_COLS} gap-x-6 gap-y-2 pb-2 @max-4xl:flex @max-4xl:flex-col`}>
       {/* In a narrow list the head names the first line's columns alone. */}
@@ -654,9 +662,11 @@ function DeviceTable({
               : t("lan.off")
             : duration(d.left, lang);
           const moved = d.fixed && d.now && d.now !== d.fixed.ip;
+          const key = `${d.lan}:${d.mac}`;
+          const v6 = open.includes(key);
           return (
             <div
-              key={`${d.lan}:${d.mac}`}
+              key={key}
               className={`col-span-full grid grid-cols-subgrid items-baseline border-b border-base-300 px-4 py-2.5 text-sm last:border-b-0 @max-4xl:gap-y-0.5 ${NARROW}`}
             >
               <span className="flex min-w-0 items-baseline gap-1.5">
@@ -678,6 +688,19 @@ function DeviceTable({
                 {moved && (
                   <span className="block font-sans text-xs text-base-content/60">
                     {t("lan.now", { ip: d.now ?? "" })}
+                  </span>
+                )}
+                {d.v6.length > 0 && (
+                  <span className="block font-sans text-xs">
+                    <button
+                      type="button"
+                      className="link link-hover text-base-content/60"
+                      aria-expanded={v6}
+                      aria-controls={`v6-${key}`}
+                      onClick={() => toggle(key)}
+                    >
+                      {t("lan.v6Count", { n: d.v6.length })}
+                    </button>
                   </span>
                 )}
               </span>
@@ -713,6 +736,19 @@ function DeviceTable({
               <span className="col-span-full hidden pl-5 text-xs text-base-content/70 @max-4xl:block">
                 <span className="font-mono">{d.mac}</span> · {netOf(d.lan)} · {lease}
               </span>
+              {/* Its IPv6 addresses, under the address column, or across a narrow line. */}
+              {v6 && (
+                <div
+                  id={`v6-${key}`}
+                  className="col-span-3 col-start-3 grid gap-0.5 pt-1 font-mono text-xs text-base-content/70 @max-4xl:col-span-full @max-4xl:col-start-1 @max-4xl:pl-5"
+                >
+                  {d.v6.map((a) => (
+                    <span key={a} className="break-all">
+                      {a}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -1139,7 +1175,7 @@ function Devices({
       (on == null || d.lan === on) &&
       (!only || d.fixed) &&
       (!words ||
-        `${d.name ?? ""} ${d.own ?? ""} ${d.now ?? ""} ${d.fixed?.ip ?? ""} ${d.mac}`
+        `${d.name ?? ""} ${d.own ?? ""} ${d.now ?? ""} ${d.fixed?.ip ?? ""} ${d.mac} ${d.v6.join(" ")}`
           .toLowerCase()
           .includes(words)),
   );
