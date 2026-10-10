@@ -81,9 +81,11 @@ or of the other bank with an empty body, and restarts.
   unless it is confirmed (``changes``, ADR 0014), which saves them in the
   store; it refuses another change, with 409, until onu-apply has ended. A read gives the settings as ``onu-config settings`` reads them,
   each session with its user and whether a secret is set, never the secret,
-  and what onu-apply and dhcp6d brought up for it (``/run/session/N``: the
-  interfaces, the addresses, what it hands down, the delegated IPv6 prefix and
-  the host it went to), the address handed on, and what became of the
+  and what was brought up for it: its link, its address and name servers
+  from its interface of netifd (``network.interface.sesN`` on ubus), the
+  delegated IPv6 prefix and the host it went to from its dhcp6d
+  (``dhcp6d.sesN``), and from ``/run/session/N`` what onu-apply keeps of it
+  (the interfaces, what it hands down, the gateway the router is given), the address handed on, and what became of the
   settings in the store (``store``: ``loaded``, ``defaults``, ``saved``,
   ``failed`` or ``none``), and each change on trial, of the settings, the SFP
   lane or the management pair, with when it goes back and the pair's new

@@ -9,8 +9,10 @@
 # CC, CFLAGS and LDFLAGS come from the caller for a build for the board. The
 # HTTP layer is Mongoose, in third_party/mongoose, built as it comes; pond's
 # own sources are in src/. On Linux, pond reads netlink with libmnl and the
-# kernel's headers, among them linux/pon.h of this repository's kernel, and
-# checks root's password with crypt() of libcrypt.
+# kernel's headers, among them linux/pon.h of this repository's kernel,
+# checks root's password with crypt() of libcrypt, and reads the state of
+# the stick's programs on ubus (src/bus.h) with libubus. pond-none, which
+# the tests build on a host without libubus, reads it from files.
 
 CC      ?= cc
 CFLAGS  ?= -O2 -g
@@ -38,21 +40,24 @@ $(BUILD)/mongoose.o: third_party/mongoose/mongoose.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(MG_FLAGS) -w -c -o $@ $<
 
-$(BUILD)/pond: $(OBJS)
+$(BUILD)/pond: $(OBJS) $(BUILD)/src/bus-ubus.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lubox
+
+$(BUILD)/pond-none: $(OBJS) $(BUILD)/src/bus-file.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/tests/test_prov.o: tests/test_prov.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
-$(BUILD)/test_prov: $(BUILD)/tests/test_prov.o $(addprefix $(BUILD)/src/,$(PROV))
+$(BUILD)/test_prov: $(BUILD)/tests/test_prov.o $(addprefix $(BUILD)/src/,$(PROV) bus-file.o)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/tests/test_auth.o: tests/test_auth.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
-$(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o $(PROV)) \
+$(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o $(PROV) bus-file.o) \
 		    $(BUILD)/mongoose.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
@@ -65,7 +70,7 @@ $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -o $@ $(ONU_CONFIG_SRC) -lz
 
-check: all $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onu-config
+check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onu-config
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
 	POND_ROOT=$(abspath $(BUILD))/fixtures POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \

@@ -1708,8 +1708,10 @@ static void test_settings(void)
 	mkdir(prov_path("/run/session/1", file, sizeof(file)), 0755);
 	put("/run/session/1/dev", "wan410\n", 0644);
 	put("/run/session/1/gem", "gem1\n", 0644);
-	put("/run/session/1/ppp", "ppp0\n", 0644);
-	put("/run/session/1/ipv4", "192.0.2.2\n", 0644);
+	/* What the session brought is netifd's (bus-file.c reads it here). */
+	mkdir(prov_path("/run/ubus", file, sizeof(file)), 0755);
+	put("/run/ubus/network.interface.ses1",
+	    "up=true\nl3_device=ppp0\ndata.address=192.0.2.2\ndata.peer=192.0.2.1\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"hands_on\":false,\"dev\":\"wan410\"") != NULL,
 	      "a session hands nothing down until onu-apply says it does");
@@ -1722,13 +1724,15 @@ static void test_settings(void)
 	      "a session carries what onu-apply brought up for it");
 	put("/run/session/1/lan", "lan410\n", 0644);
 	put("/run/session/1/gateway", "192.0.2.1\n", 0644);
-	put("/run/session/1/dns", "198.51.100.53\n", 0644);
+	put("/run/ubus/network.interface.ses1",
+	    "l3_device=ppp0\ndata.address=192.0.2.2\n"
+	    "dns-server=198.51.100.53 198.51.100.54\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"lan\":\"lan410\",\"gateway\":\"192.0.2.1\","
-			"\"dns\":\"198.51.100.53\"}") != NULL,
+			"\"dns\":\"198.51.100.53 198.51.100.54\"}") != NULL,
 	      "and where it hands its address down, with the gateway and name servers");
-	put("/run/session/1/prefix", "2001:db8:1200::/56\n", 0644);
-	put("/run/session/1/host", "fe80::2\n", 0644);
+	put("/run/ubus/dhcp6d.ses1",
+	    "name=ses1\nprefix=2001:db8:1200::/56\nhost=fe80::2\nbound=true\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"prefix\":\"2001:db8:1200::/56\",\"prefix_host\":\"fe80::2\"") != NULL,
 	      "and the IPv6 prefix dhcp6d took for it, and the host it went to");

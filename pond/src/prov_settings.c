@@ -28,6 +28,7 @@
 
 #define _GNU_SOURCE
 
+#include "bus.h"
 #include "prov.h"
 #include "providers.h"
 
@@ -334,6 +335,15 @@ static void pv_session_fact(struct prov_buf *out, int n, const char *fact)
 		pv_null(out);
 }
 
+/* @value as a string, or null when empty. */
+static void pv_str_or_null(struct prov_buf *out, const char *value)
+{
+	if (*value)
+		pv_str(out, value);
+	else
+		pv_null(out);
+}
+
 /* Whether session @n hands @fam down, as onu-apply wrote it. */
 static bool hands(int n, const char *fam)
 {
@@ -356,11 +366,13 @@ static bool hands(int n, const char *fam)
 static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS],
 			const char *text)
 {
+	static const char *const ses_paths[] = { "l3_device", "data.address", "dns-server" };
+	static const char *const pd_paths[] = { "prefix", "host" };
 	bool first = true;
 
 	pv_open(out, '[');
 	for (int n = 0; n < SESSIONS; n++) {
-		char prefix[16];
+		char prefix[16], object[48], ses[3][BUS_VALUE], pd[2][BUS_VALUE];
 		size_t plen;
 
 		if (!*acct[n].user)
@@ -408,22 +420,30 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		pv_comma(out);
 		pv_key(out, "gem_dev");
 		pv_session_fact(out, n, "gem");
+		/*
+		 * What the session brought, its interface of netifd's (sesN):
+		 * its link, its address, handed on or not, and its name servers;
+		 * and what its dhcp6d took for it and the host it went to.
+		 */
+		snprintf(object, sizeof(object), "network.interface.ses%d", n + 1);
+		bus_status(object, ses_paths, 3, ses);
+		snprintf(object, sizeof(object), "dhcp6d.ses%d", n + 1);
+		bus_status(object, pd_paths, 2, pd);
 		pv_comma(out);
 		pv_key(out, "ppp");
-		pv_session_fact(out, n, "ppp");
+		pv_str_or_null(out, ses[0]);
 		pv_comma(out);
 		pv_key(out, "ipv4");
-		pv_session_fact(out, n, "ipv4");
+		pv_str_or_null(out, ses[1]);
 		pv_comma(out);
 		pv_key(out, "ipv6");
 		pv_session_fact(out, n, "ipv6");
-		/* What dhcp6d took for the session, and the host it went to. */
 		pv_comma(out);
 		pv_key(out, "prefix");
-		pv_session_fact(out, n, "prefix");
+		pv_str_or_null(out, pd[0]);
 		pv_comma(out);
 		pv_key(out, "prefix_host");
-		pv_session_fact(out, n, "host");
+		pv_str_or_null(out, pd[1]);
 		/* Where it hands down, and the gateway the router is given there. */
 		pv_comma(out);
 		pv_key(out, "lan");
@@ -433,7 +453,7 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		pv_session_fact(out, n, "gateway");
 		pv_comma(out);
 		pv_key(out, "dns");
-		pv_session_fact(out, n, "dns");
+		pv_str_or_null(out, ses[2]);
 		pv_close(out, '}');
 	}
 	pv_close(out, ']');
