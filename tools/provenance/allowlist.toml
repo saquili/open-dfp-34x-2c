@@ -149,7 +149,7 @@ that it can be compared with the release.
 gate = "unit-ids"
 rules = ["ipv4-address"]
 paths = [
-  "onu-utils/scripts/onu-mode",
+  "onu-utils/scripts/onu-apply",
   "onu-utils/src/settings.c",
   "onu-utils/tests/test_settings.c",
   "onu-utils/tests/test_onucfg_settings.sh",
