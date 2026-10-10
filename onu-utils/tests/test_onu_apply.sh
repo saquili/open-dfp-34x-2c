@@ -759,7 +759,7 @@ printf 'serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\n' >"$ONU_ROOT/
 echo passthrough >"$ONU_ROOT/run/onu-mode"
 # omcid runs as the instance of procd's service "onu" that onu-apply gave it.
 mkdir -p "$ONU_ROOT/run/onu-svc.d"
-echo "-- onu-run omcid" >"$ONU_ROOT/run/onu-svc.d/omcid"
+echo "-- $T/bin/onu-run omcid" >"$ONU_ROOT/run/onu-svc.d/omcid"
 cp "$ONU_ROOT/run/onu-svc.d/omcid" "$T/svc-omcid"
 : >"$T/omcid.running"
 "$MODE_SCRIPT" reidentify 2>/dev/null
@@ -770,7 +770,7 @@ check '[ "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n
 check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon up" "$LOG" | cut -d: -f1)" ]'
 # omcid ends as procd's service and starts again, in bridge mode.
 check 'logged "^procd stop omcid$"'
-check 'logged "^procd start omcid -- onu-run omcid$"'
+check 'logged "^procd start omcid -- .*/onu-run omcid$"'
 check 'logged "^omcid $"'
 check '[ "$(grep -n "^procd stop omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^omcid" "$LOG" | cut -d: -f1)" ]'
 teardown

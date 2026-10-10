@@ -86,7 +86,10 @@ FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
 IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
 IPV4_CONF=$ROOT/proc/sys/net/ipv4/conf
 IPV4_NEIGH=$ROOT/proc/sys/net/ipv4/neigh
-SHARE=$ROOT/usr/share/onu
+# The helpers of this tree that only other programs run, out of a person's
+# way (ADR 0015).
+LIB=$ROOT/usr/lib/onu
+PATH=$PATH:$LIB
 SVC_DIR=$RUN/onu-svc.d
 # The stick's own address on a link to the host, from which its DHCP server
 # answers; the host is given the concentrator's address as its gateway.
@@ -365,7 +368,8 @@ omcid_run() {
 		fi
 		sleep 1
 	else
-		svc_start omcid -- onu-run omcid
+		# procd runs it, and finds no program on a path of its own.
+		svc_start omcid -- "$(command -v onu-run || echo "$LIB/onu-run")" omcid
 	fi
 }
 
@@ -724,7 +728,7 @@ wan_up() {
 		ip route replace default via "$WAN_GATEWAY" dev "$wan"
 		;;
 	*)
-		udhcpc -i "$wan" -b -p "$RUN/udhcpc.pid" -s "$SHARE/dhcp-wan"
+		udhcpc -i "$wan" -b -p "$RUN/udhcpc.pid" -s "$LIB/dhcp-wan"
 		;;
 	esac
 	echo "$gem $wan $out" >"$RUN/onu-wan"

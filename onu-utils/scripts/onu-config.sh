@@ -61,6 +61,8 @@ set -u
 
 ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
+# ponid is one of the helpers out of a person's way (ADR 0015).
+PATH=$PATH:$ROOT/usr/lib/onu
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
 PD=$RUN/onu-pd
