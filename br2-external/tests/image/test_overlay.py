@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
 OVERLAY = os.path.join(BOARD, "overlay")
 RCS = os.path.join(OVERLAY, "etc", "init.d", "rcS")
+INIT = os.path.join(OVERLAY, "sbin", "init")
 INITTAB = os.path.join(OVERLAY, "etc", "inittab")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
@@ -55,44 +56,36 @@ class BootScript(unittest.TestCase):
 
     def test_it_calls_only_programs_the_image_holds(self):
         symbols = enabled_applets()
-        unknown = []
-        for word in sorted(set(commands(read(RCS)))):
-            if word in BUILTINS or word in DROPBEAR or word in PACKAGES:
-                continue
-            if SYMBOL.get(word, word.upper()) not in symbols:
-                unknown.append(word)
-        self.assertEqual(unknown, [], "not applets of busybox.config")
+        for script in (RCS, INIT):
+            unknown = []
+            for word in sorted(set(commands(read(script)))):
+                if word in BUILTINS or word in DROPBEAR or word in PACKAGES:
+                    continue
+                if SYMBOL.get(word, word.upper()) not in symbols:
+                    unknown.append(word)
+            self.assertEqual(unknown, [], "not applets of busybox.config: " + script)
 
     def test_the_programs_it_needs_are_the_ones_it_calls(self):
-        # If the script stops calling one of these, the list of what the image
+        # If a script stops calling one of these, the list of what the image
         # needs is out of date: take the applet out of the configuration.
-        called = set(commands(read(RCS)))
-        for word in ("mount", "mkdir", "ln", "hostname", "ip", "grep", "uname", "dropbear",
-                     "dropbearkey", "syslogd", "klogd", "watchdog"):
-            self.assertIn(word, called)
-
-    def test_it_mounts_what_the_kernel_leaves_to_it(self):
-        text = read(RCS)
-        for what in ("-t proc proc /proc", "-t sysfs sysfs /sys", "devtmpfs", "/dev/pts",
-                     "tmpfs", "/tmp", "/run", "/var"):
-            self.assertIn(what, text)
-
-    def test_the_ssh_server_takes_passwords_and_its_host_key_is_made_first(self):
-        # Root's password, which the console and the panel take too, and keys:
-        # no -s, which would refuse passwords, and no -B, which would take an
-        # empty one.
-        text = read(RCS)
-        self.assertRegex(text, r"\ndropbear -r ")
-        self.assertNotRegex(text, r"\ndropbear [^\n]*-[sB]\b")
-        self.assertLess(text.index("dropbearkey -t ed25519"), text.index("dropbear -r "))
+        for script, words in ((RCS, ("hostname", "ip", "sed", "uname")),
+                              (INIT, ("mount", "mkdir", "ln", "grep"))):
+            called = set(commands(read(script)))
+            for word in words:
+                self.assertIn(word, called, script)
 
     def test_roots_password_is_in_place_before_the_ssh_server_starts(self):
-        text = read(RCS)
-        self.assertLess(text.index("onu-store load"), text.index("dropbear -r "))
+        # The ssh server starts once the boot script is done (Inittab), and the
+        # script reads root's password from the store. Its flags are
+        # onu-run's, which onu-utils tests.
+        self.assertIn("\nonu-store load ", read(RCS))
 
     def test_it_ends_with_the_ready_line_that_the_bench_waits_for(self):
-        self.assertEqual(read(RCS).rstrip().splitlines()[-1],
-                         'echo "open-dfp-34x-2c: ready"')
+        # procd keeps the script's output for its log: the bench reads the
+        # console, so the last lines go there.
+        lines = read(RCS).rstrip().splitlines()
+        self.assertEqual(lines[-1], "} >/dev/console")
+        self.assertEqual(lines[-2], '\techo "open-dfp-34x-2c: ready"')
 
     def test_the_default_addresses_are_in_the_documentation_ranges(self):
         text = read(RCS)
@@ -133,13 +126,44 @@ class Reading(unittest.TestCase):
         self.assertEqual(commands(script), ["case", "esac", "y"])
 
 
+class FirstProgram(unittest.TestCase):
+    """/sbin/init: the file systems, then procd as process 1."""
+
+    def test_it_is_executable_and_starts_with_its_shell(self):
+        self.assertTrue(os.stat(INIT).st_mode & stat.S_IXUSR)
+        self.assertEqual(read(INIT).splitlines()[0], "#!/bin/sh")
+
+    def test_it_parses_in_every_posix_shell_there_is(self):
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                done = subprocess.run([shell, "-n", INIT], capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+
+    def test_it_mounts_what_the_kernel_leaves_to_it(self):
+        text = read(INIT)
+        for what in ("-t proc proc /proc", "-t sysfs sysfs /sys", "devtmpfs", "/dev/pts",
+                     "tmpfs", "/tmp", "/run", "/var", "ln -s ../run /var/run"):
+            self.assertIn(what, text)
+
+    def test_procd_takes_its_place_once_the_file_systems_are_there(self):
+        lines = read(INIT).rstrip().splitlines()
+        self.assertEqual(lines[-1], "exec /sbin/procd")
+        self.assertNotIn("mount", read(RCS).replace("mounted", ""))
+
+    def test_procd_finds_ubusd_and_the_boot_script_where_it_looks(self):
+        # procd starts /sbin/ubusd, and runs /etc/rc.d/S* at sysinit.
+        self.assertEqual(os.readlink(os.path.join(OVERLAY, "sbin", "ubusd")), "../usr/sbin/ubusd")
+        self.assertEqual(os.readlink(os.path.join(OVERLAY, "etc", "rc.d", "S10boot")),
+                         "../init.d/rcS")
+
+
 class Watchdog(unittest.TestCase):
-    def test_the_daemon_feeds_it_well_inside_the_drivers_timeout(self):
-        # The driver's timeout on this board is 44 seconds, as
-        # /sys/class/watchdog/watchdog0/timeout reads.
-        match = re.search(r"^watchdog -t (\d+) /dev/watchdog ", read(RCS), re.M)
-        self.assertIsNotNone(match)
-        self.assertLessEqual(int(match.group(1)), 15)
+    def test_procd_alone_feeds_it(self):
+        # procd sets the driver's timeout to 30 s and feeds it every 5 s, from
+        # its start; a second feeder would keep a hung procd alive.
+        self.assertNotIn("WATCHDOG", enabled_applets())
+        for script in (RCS, INIT, INITTAB):
+            self.assertNotIn("watchdog", commands(read(script)))
 
 
 class ServersOnTheHostSide(unittest.TestCase):
@@ -154,11 +178,10 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertIn("\ndata=${DATA_ADDRESS%/*}\n", text)
         self.assertIn("\nmgmt=${MGMT_ADDRESS%/*}\n", text)
 
-    def test_ssh_listens_on_the_vlan_and_on_the_host_link_when_it_has_an_address(self):
-        self.assertRegex(read(RCS), r'\ndropbear -r [^\n]* -p "\$mgmt:22" \$\{data:\+-p "\$data:22"\} \|\|\n')
-
-    def test_the_status_daemon_listens_on_the_same(self):
-        self.assertRegex(read(RCS), r'\n\tpond -l "http://\$mgmt:8080" \$\{data:\+-l "http://\$data:8080"\} >')
+    def test_the_servers_listen_on_the_pair_the_script_records(self):
+        # onu-run reads the addresses from /run/onu-mgmt, which onu-mgmt start
+        # writes with the management address and the host link's.
+        self.assertIn('onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS"', read(RCS))
 
     def test_the_host_link_may_have_no_address(self):
         text = read(RCS)
@@ -166,11 +189,11 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertIn('onu-trial "${data:-$mgmt}"', text)
 
     def test_the_addresses_are_there_before_a_server_listens(self):
+        # The servers start after the script, which waits for the management
+        # address (Inittab).
         text = read(RCS)
-        last = max(text.index('ip address add "$DATA_ADDRESS"'),
-                   text.index('ip address add "$MGMT_ADDRESS"'))
-        for server in ("dropbear -r ", "pond -l "):
-            self.assertLess(last, text.index(server), server)
+        self.assertIn('ip address add "$DATA_ADDRESS" dev sfp', text)
+        self.assertIn('onu-net wait mgmt "$MGMT_ADDRESS" 10', text)
 
 
 class QuietTowardsThePon(unittest.TestCase):
@@ -202,8 +225,9 @@ class QuietTowardsThePon(unittest.TestCase):
 
 
 class Inittab(unittest.TestCase):
-    ACTIONS = {"sysinit", "wait", "once", "respawn", "askfirst", "shutdown", "restart",
-               "ctrlaltdel"}
+    # procd's actions (inittab.c).
+    ACTIONS = {"sysinit", "shutdown", "askfirst", "askconsole", "respawn", "askconsolelate",
+               "respawnlate"}
 
     def entries(self):
         for line in read(INITTAB).splitlines():
@@ -217,22 +241,35 @@ class Inittab(unittest.TestCase):
             self.assertIn(fields[2], self.ACTIONS, line)
 
     def test_the_boot_script_is_run_at_sysinit(self):
-        self.assertIn("::sysinit:/etc/init.d/rcS", list(self.entries()))
+        # procd runs /etc/rc.d/S* with "boot" (FirstProgram links the script).
+        self.assertIn("::sysinit:/etc/init.d/rcS S boot", list(self.entries()))
+
+    def test_the_servers_start_once_the_boot_script_is_done(self):
+        entries = list(self.entries())
+        for server in ("ssh", "pond"):
+            self.assertIn("::respawnlate:/usr/sbin/onu-run " + server, entries)
+
+    def test_the_log_and_netifd_run_before_the_boot_script(self):
+        entries = list(self.entries())
+        for program in ("/sbin/syslogd -n ", "/sbin/klogd -n", "/usr/sbin/netifd "):
+            self.assertTrue([e for e in entries if e.startswith("::respawn:" + program)], program)
 
     def test_the_console_asks_for_root_and_its_password_again_after_each_session(self):
         entries = list(self.entries())
-        self.assertIn("console::respawn:/sbin/getty -L console 0 vt100", entries)
+        self.assertIn("console::respawnlate:/sbin/getty -L console 0 vt100", entries)
         self.assertFalse([e for e in entries if e.endswith(":-/bin/sh")],
                          "a shell without a login on the console")
 
     def test_the_boot_script_it_names_is_in_the_overlay(self):
         self.assertTrue(os.path.exists(RCS))
 
-    def test_init_and_the_applets_it_runs_are_built(self):
+    def test_the_applets_it_runs_are_built_and_init_is_procd(self):
         symbols = enabled_applets()
-        for symbol in ("INIT", "FEATURE_USE_INITTAB", "REBOOT", "UMOUNT", "ASH", "SH_IS_ASH",
-                       "GETTY", "LOGIN", "FEATURE_SHADOWPASSWDS"):
+        for symbol in ("REBOOT", "HALT", "POWEROFF", "ASH", "SH_IS_ASH", "GETTY", "LOGIN",
+                       "FEATURE_SHADOWPASSWDS", "SYSLOGD", "KLOGD"):
             self.assertIn(symbol, symbols)
+        # procd is process 1; BusyBox's reboot, halt and poweroff signal it.
+        self.assertNotIn("INIT", symbols)
 
     def test_login_checks_passwords_with_the_c_librarys_crypt(self):
         # The ssh server and the panel check root's password with crypt() of the

@@ -11,9 +11,9 @@ own, MIPS I, and run on the build machine through the emulator, with the image's
 own dynamic loader and C library (qemu-mips -L TARGET_DIR), the C library as the
 build cut it; no file of the machine is changed. The checks are:
 
-* BusyBox lists every applet that the boot script and /etc/inittab name, and
-  each of them starts and prints its usage;
-* BusyBox's own shell parses the boot script;
+* BusyBox lists every applet that the boot scripts (/sbin/init, rcS) and
+  /etc/inittab name, and each of them starts and prints its usage;
+* BusyBox's own shell parses the boot scripts;
 * a few applets do what they should (a shell evaluates arithmetic, text tools
   work on a pipe, ``uname`` names the architecture the image is for);
 * dropbear and its key tool report their version and make a host key.
@@ -35,7 +35,7 @@ import tempfile
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
-from bootscript import applets as busybox_words  # noqa: E402
+from bootscript import PACKAGES, applets as busybox_words  # noqa: E402
 
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
 FAILED = []
@@ -70,17 +70,19 @@ def main(argv):
     applets = set(out.split())
     report(status == 0 and len(applets) > 20, "busybox --list names %d applets" % len(applets), err)
 
-    with open(os.path.join(BOARD, "overlay", "etc", "init.d", "rcS"), encoding="utf-8") as handle:
-        used = busybox_words(handle.read())
+    used = []
+    for script in (("etc", "init.d", "rcS"), ("sbin", "init")):
+        with open(os.path.join(BOARD, "overlay", *script), encoding="utf-8") as handle:
+            used += busybox_words(handle.read())
     with open(os.path.join(BOARD, "overlay", "etc", "inittab"), encoding="utf-8") as handle:
         for line in handle:
             if line.strip() and not line.startswith("#"):
                 match = re.match(r"^[^:]*:[^:]*:[^:]*:-?(/(?:bin|sbin|usr)/\S+)", line)
-                if match:
+                if match and os.path.basename(match.group(1)) not in PACKAGES:
                     used.append(os.path.basename(match.group(1)))
-    used = sorted(set(used) | {"init", "reboot"})
+    used = sorted(set(used) | {"reboot"})
     missing = [name for name in used if name not in applets]
-    report(not missing, "busybox holds the applets the boot script and inittab run (%s)"
+    report(not missing, "busybox holds the applets the boot scripts and inittab run (%s)"
            % " ".join(used), "missing: " + " ".join(missing))
 
     for name in used:
@@ -88,8 +90,9 @@ def main(argv):
         report("Usage:" in out + err and status in (0, 1), "%s --help starts and prints its usage"
                % name, "status %d, %r" % (status, (out + err)[:80]))
 
-    status, out, err = run(busybox, "sh", "-n", os.path.join(target, "etc", "init.d", "rcS"))
-    report(status == 0, "busybox sh parses /etc/init.d/rcS", err)
+    for script in ("etc/init.d/rcS", "sbin/init"):
+        status, out, err = run(busybox, "sh", "-n", os.path.join(target, script))
+        report(status == 0, "busybox sh parses /" + script, err)
 
     status, out, err = run(busybox, "sh", "-c", "echo $((6 * 7))")
     report(out.strip() == "42", "busybox sh evaluates arithmetic", out + err)

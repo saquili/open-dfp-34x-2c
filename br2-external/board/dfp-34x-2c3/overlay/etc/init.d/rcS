@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# The boot script of the ODI DFP-34X-2C3 image. BusyBox init runs it once from
-# /etc/inittab, before the console's login prompt starts. It mounts the file systems that
-# the kernel does not, gives the stick its management addresses, through
-# netifd, starts the ssh server and prints a line that says the board is ready.
+# The boot script of the ODI DFP-34X-2C3 image. procd runs it once, as
+# /etc/rc.d/S10boot, from /etc/inittab: after /sbin/init has mounted the file
+# systems and procd has started ubusd, syslogd and netifd, and before the ssh
+# server, the status daemon and the console's login prompt. It reads the
+# unit's settings, gives the stick its management addresses, through netifd,
+# starts the data path and prints a line on the console that says the board
+# is ready. Its output goes to procd's log, but for that line.
 #
 # The root file system is read-only. Everything that is written lives in memory
-# and is gone at the next restart, including the host key of the ssh server,
-# which is made again at every boot.
+# and is gone at the next restart.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 export PATH
@@ -30,24 +32,6 @@ MGMT_ADDRESS=198.51.100.2/30
 warn() {
 	echo "rcS: $*" >&2
 }
-
-# The file systems. The kernel mounts devtmpfs on /dev itself when it starts
-# the first program; it is mounted here only if that has not happened.
-mount -t proc proc /proc || warn "cannot mount /proc"
-mount -t sysfs sysfs /sys || warn "cannot mount /sys"
-grep -q ' /dev devtmpfs ' /proc/mounts || mount -t devtmpfs devtmpfs /dev || warn "no /dev"
-mkdir -p /dev/pts
-mount -t devpts -o gid=5,mode=620,ptmxmode=0666 devpts /dev/pts || warn "cannot mount /dev/pts"
-ln -sf /proc/self/fd /dev/fd
-ln -sf /proc/self/fd/0 /dev/stdin
-ln -sf /proc/self/fd/1 /dev/stdout
-ln -sf /proc/self/fd/2 /dev/stderr
-mount -t tmpfs -o mode=1777 tmpfs /tmp || warn "cannot mount /tmp"
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run || warn "cannot mount /run"
-mount -t tmpfs -o mode=0755 tmpfs /var || warn "cannot mount /var"
-ln -s ../run /var/run
-ln -s ../tmp /var/tmp
-mkdir -p /var/log
 
 # The identity of the unit, its saved settings, its PPPoE account and root's
 # password, from the configuration store; the identity from the shipped
@@ -81,15 +65,6 @@ fi
 
 hostname -F /etc/hostname
 [ -n "$SYS_HOSTNAME" ] && { hostname "$SYS_HOSTNAME" || warn "the name $SYS_HOSTNAME was refused"; }
-
-# The system log, in memory: syslogd keeps /run/messages and one older copy, of
-# 64 KiB each, and klogd copies the kernel's messages into it.
-syslogd -O /run/messages -s 64 -b 1 || warn "no system log"
-klogd || warn "the kernel's messages do not reach the system log"
-
-# The watchdog restarts the stick when nothing feeds it for the driver's
-# timeout. The daemon feeds it every ten seconds; a hung system does not.
-watchdog -t 10 /dev/watchdog || warn "nothing feeds the watchdog"
 
 # The CPU port's interface, cpu, would otherwise take each frame that arrives
 # alone with an interrupt of its own. Polling again, up to twice, 50 us apart,
@@ -130,26 +105,19 @@ if [ -n "$DATA_ADDRESS" ]; then
 	ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
 fi
 
-# The management VLAN and its address. netifd brings them up, from the part
-# "mgmt" of its configuration in /run/config, which onu-mgmt writes (onu-net)
-# now and again when the pair changes; ubusd is the bus it answers on. A
-# stored pair that is not a VLAN and an address gives way to the image's. The
-# ssh server can listen only once the address is there: if netifd has not
-# brought it up within ten seconds, the script brings it up itself, so that
-# the stick stays reachable; netifd takes the VLAN over as it finds it.
+# The management VLAN and its address. netifd, which procd runs, brings them
+# up, from the part "mgmt" of its configuration in /run/config, which onu-mgmt
+# writes (onu-net) now and again when the pair changes. A stored pair that is
+# not a VLAN and an address gives way to the image's. The ssh server can
+# listen only once the address is there: if netifd has not brought it up
+# within ten seconds, the script brings it up itself, so that the stick stays
+# reachable; netifd takes the VLAN over as it finds it.
 onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
 	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS is not a pair, the image's instead"
 	MGMT_VLAN=$BOARD_MGMT_VLAN
 	MGMT_ADDRESS=$BOARD_MGMT_ADDRESS
 	onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS"
 }
-ubusd -s /run/ubus.sock &
-tenths=50
-while [ ! -S /run/ubus.sock ] && [ "$tenths" -gt 0 ]; do
-	sleep 0.1
-	tenths=$((tenths - 1))
-done
-netifd -s /run/ubus.sock -c /run/config -r /run/resolv.conf.auto &
 onu-net wait mgmt "$MGMT_ADDRESS" 10 || {
 	warn "netifd did not bring $MGMT_ADDRESS up in VLAN $MGMT_VLAN, the script does"
 	ip link add link sfp name mgmt type vlan id "$MGMT_VLAN"
@@ -170,17 +138,16 @@ tc qdisc add dev pon clsact &&
 	tc filter add dev pon ingress $mgmt_tag action drop ||
 	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
 
-# The servers listen on the addresses of the host side and nowhere else:
-# the stick has no packet filter, and nothing on the PON side, nor on the WAN
-# of router mode, is to reach them. The ssh server takes root's password and
-# the keys of /root/.ssh/authorized_keys, which an image built with a bench's
-# keys carries and this one does not.
+# The servers listen on the addresses of the host side and nowhere else: the
+# stick has no packet filter, and nothing on the PON side, nor on the WAN of
+# router mode, is to reach them. procd starts them once this script is done
+# (onu-run): the ssh server, which takes root's password and the keys of
+# /root/.ssh/authorized_keys, which an image built with a bench's keys carries
+# and this one does not, and the status daemon with its panel, where people
+# sign in as root, with root's password, and scripts may present the token of
+# /etc/pond.token, which an image without the file does not accept.
 data=${DATA_ADDRESS%/*}
 mgmt=${MGMT_ADDRESS%/*}
-mkdir -p /run/dropbear
-dropbearkey -t ed25519 -f /run/dropbear/host_key >/dev/null 2>&1 || warn "no host key"
-dropbear -r /run/dropbear/host_key -P /run/dropbear.pid -p "$mgmt:22" ${data:+-p "$data:22"} ||
-	warn "dropbear did not start"
 
 # The identity to the PON driver, which takes it before the PON comes up.
 onu-mode identity || warn "the PON stays down"
@@ -193,21 +160,16 @@ else
 	warn "no omcid: nothing answers the OLT"
 fi
 
-# The HTTP daemon and its panel, on the host side's addresses like the ssh
-# server. People sign in to the panel as root, with root's password; scripts
-# may present the token of /etc/pond.token, which an image without the file
-# does not accept.
-if [ -x /usr/sbin/pond ]; then
-	pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} >/run/pond.log 2>&1 &
-fi
-
 # After a start from a bank that the boot loader was told to try once,
 # onu-trial makes it the bank the loader starts when the system is up, and
 # restarts into the committed bank when it is not; any other start it leaves
 # alone.
 onu-trial "${data:-$mgmt}" >/run/onu-trial.log 2>&1 &
 
-echo
-echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
-echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN)${data:+ and $DATA_ADDRESS (sfp)}"
-echo "open-dfp-34x-2c: ready"
+# The bench waits for the last line on the console.
+{
+	echo
+	echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
+	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN)${data:+ and $DATA_ADDRESS (sfp)}"
+	echo "open-dfp-34x-2c: ready"
+} >/dev/console

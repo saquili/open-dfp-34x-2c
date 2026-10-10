@@ -1,18 +1,33 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# BusyBox init reads this file. The format is <id>:<runlevels>:<action>:<process>;
-# the id names the terminal (empty: the console) and the runlevels are ignored.
+# procd reads this file once ubusd runs. The format is
+# <id>:<runlevels>:<action>:<process>: the id names the terminal (empty: none,
+# the program's output goes to procd's log), the runlevels are ignored.
+# procd starts the "respawn" programs first, then runs the boot script, and
+# once it is done the "respawnlate" ones; a program of either kind that ends
+# is started again half a second later.
 
-# What the boot does is in /etc/init.d/rcS. It runs once and init waits for it.
-::sysinit:/etc/init.d/rcS
+# The system log, in memory: syslogd keeps /run/messages and one older copy, of
+# 64 KiB each, and klogd copies the kernel's messages into it.
+::respawn:/sbin/syslogd -n -O /run/messages -s 64 -b 1
+::respawn:/sbin/klogd -n
+
+# netifd brings up the interfaces that its configuration in /run/config names;
+# the boot script and the stick's scripts write it (onu-net).
+::respawn:/usr/sbin/netifd -c /run/config -r /run/resolv.conf.auto
+
+# The boot script, /etc/init.d/rcS, as /etc/rc.d/S10boot: procd runs the
+# scripts of /etc/rc.d whose names begin with S, in order, with "boot".
+::sysinit:/etc/init.d/rcS S boot
+
+# The ssh server and the status daemon, on the host side's addresses, which
+# the boot script brought up (onu-run).
+::respawnlate:/usr/sbin/onu-run ssh
+::respawnlate:/usr/sbin/onu-run pond
 
 # A login prompt on the console, started again whenever the session ends. The
 # one account is root, with the password that ssh and the panel take too
 # (onu-store keeps it; until one is set it is "admin"). The speed stays the
 # one the boot loader set, 115200 baud.
-console::respawn:/sbin/getty -L console 0 vt100
-
-# What init does when it is told to restart or halt.
-::ctrlaltdel:/sbin/reboot
-::shutdown:/bin/umount -a -r
+console::respawnlate:/sbin/getty -L console 0 vt100
