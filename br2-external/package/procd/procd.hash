@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# Computed locally: the archive the build system makes of the pinned commit,
+# and the two files whose headers carry the licences.
+sha256  df984d314770ee32db8a6ca5425bcd8cc0438c776dfdb9cb9e204e5930d8efdf  rcS.c
+sha256  9edb66a5a19c2cc302b33890218be8fd7dbf24efc6dc39621cd6b0f47a95a70a  signal.c
+sha256  e8d6d1e556400868063b63c5c0d94082a6dcdd448485e3291e1900432d301c77  procd-6a22d3964822f6d58fba4c4686e385ddb7e7fcb1-git4.tar.gz

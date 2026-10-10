@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pawe=C5=82=20Phan?= <szop.hektar_1w@icloud.com>
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Subject: [PATCH 2/2] coldplug: keep the kernel's devtmpfs on /dev
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+At start procd unmounts /dev and mounts a tmpfs there, and udevtrigger
+replays the kernel's events so that hotplug rules make the nodes again.
+A system whose kernel mounts devtmpfs on /dev has the nodes already,
+kept by the kernel for the devices that come later as well; without
+hotplug rules that make nodes, the tmpfs stays empty but for
+/dev/null, and every program that opens a device fails.
+
+When /dev is devtmpfs, procd now leaves it and /dev/pts mounted, starts
+no udevtrigger and goes on once the hotplug events that came in are
+handled. Any other /dev is handled as before.
+
+Upstream: not submitted
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ plug/coldplug.c | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/plug/coldplug.c b/plug/coldplug.c
+index 557d069..f55c761 100644
+--- a/plug/coldplug.c
++++ b/plug/coldplug.c
+@@ -17,7 +17,10 @@
+ #include <sys/mount.h>
+ #include <sys/sysmacros.h>
+ 
++#include <stdbool.h>
++#include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <unistd.h>
+ 
+ #include "../procd.h"
+@@ -41,11 +44,43 @@ static void udevtrigger_complete(struct uloop_process *proc, int ret)
+ 	hotplug_last_event(coldplug_complete);
+ }
+ 
++/*
++ * Whether /dev is the kernel's devtmpfs. The kernel makes and removes the
++ * nodes there itself, for the devices it has from the start and for those
++ * that come later, so there is nothing to make again and no event to replay.
++ */
++static bool dev_is_devtmpfs(void)
++{
++	char line[256], dev[64], dir[64], type[32];
++	bool found = false;
++	FILE *f;
++
++	f = fopen("/proc/self/mounts", "r");
++	if (!f)
++		return false;
++
++	while (fgets(line, sizeof(line), f))
++		if (sscanf(line, "%63s %63s %31s", dev, dir, type) == 3 &&
++		    !strcmp(dir, "/dev"))
++			found = !strcmp(type, "devtmpfs");
++
++	fclose(f);
++	return found;
++}
++
+ void procd_coldplug(void)
+ {
+ 	char *argv[] = { "udevtrigger", NULL };
+ 	unsigned int oldumask = umask(0);
+ 
++	if (dev_is_devtmpfs()) {
++		ignore(symlink("/tmp/shm", "/dev/shm"));
++		umask(oldumask);
++		P_DEBUG(4, "/dev is devtmpfs: no coldplug\n");
++		hotplug_last_event(coldplug_complete);
++		return;
++	}
++
+ 	if (!is_container()) {
+ 		umount2("/dev/pts", MNT_DETACH);
+ 		umount2("/dev/", MNT_DETACH);

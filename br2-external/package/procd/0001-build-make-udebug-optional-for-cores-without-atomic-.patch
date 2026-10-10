@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pawe=C5=82=20Phan?= <szop.hektar_1w@icloud.com>
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Subject: [PATCH 1/2] build: make udebug optional, for cores without atomic
+ operations
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+procd logs to a udebug ring buffer, which processes share and update
+with atomic operations. A core that has none, such as a MIPS I core
+whose store-conditional never completes, cannot run that code, and
+libubox for it is built without udebug.
+
+Add the option UDEBUG, on by default. Off, procd neither links libudebug
+nor includes its header, does not offer the buffer over ubus, and
+procd_udebug_printf() and procd_udebug_set_enabled() do nothing; its
+messages go to its log channels as before.
+
+Upstream: not submitted
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ CMakeLists.txt | 17 +++++++++++++----
+ procd.c        | 10 ++++++++++
+ procd.h        |  2 ++
+ ubus.c         |  4 ++++
+ 4 files changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a52f821..feb3617 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -32,9 +32,15 @@ FIND_LIBRARY(uci NAMES uci)
+ FIND_LIBRARY(blobmsg_json NAMES blobmsg_json)
+ FIND_LIBRARY(json_script NAMES json_script)
+ FIND_LIBRARY(json NAMES json-c json)
+-FIND_LIBRARY(udebug NAMES udebug)
+ 
+-SET(LIBS ${ubox} ${ubus} ${json} ${blobmsg_json} ${json_script} ${udebug})
++SET(LIBS ${ubox} ${ubus} ${json} ${blobmsg_json} ${json_script})
++
++OPTION(UDEBUG "log through udebug, which needs atomic operations" ON)
++IF(UDEBUG)
++  FIND_LIBRARY(udebug NAMES udebug)
++  SET(LIBS ${LIBS} ${udebug})
++  ADD_DEFINITIONS(-DUDEBUG)
++ENDIF()
+ 
+ IF(DEBUG)
+   ADD_DEFINITIONS(-DUDEV_DEBUG -g3)
+@@ -60,8 +66,11 @@ INSTALL(TARGETS procd
+ )
+ 
+ FIND_PATH(ubox_include_dir libubox/uloop.h)
+-FIND_PATH(udebug_include_dir NAMES udebug.h)
+-INCLUDE_DIRECTORIES(${ubox_include_dir} ${udebug_include_dir})
++INCLUDE_DIRECTORIES(${ubox_include_dir})
++IF(UDEBUG)
++  FIND_PATH(udebug_include_dir NAMES udebug.h)
++  INCLUDE_DIRECTORIES(${udebug_include_dir})
++ENDIF()
+ 
+ IF(DISABLE_INIT)
+ ADD_DEFINITIONS(-DDISABLE_INIT)
+diff --git a/procd.c b/procd.c
+index 46ba680..9d2e8cf 100644
+--- a/procd.c
++++ b/procd.c
+@@ -27,6 +27,7 @@
+ 
+ unsigned int debug;
+ 
++#ifdef UDEBUG
+ static struct udebug ud;
+ static struct udebug_buf udb;
+ static bool udebug_enabled;
+@@ -74,6 +75,15 @@ void procd_udebug_set_enabled(bool val)
+ 	udebug_buf_add(&ud, &udb, &meta);
+ 	ulog_udebug(&udb);
+ }
++#else
++void procd_udebug_printf(const char *format, ...)
++{
++}
++
++void procd_udebug_set_enabled(bool val)
++{
++}
++#endif
+ 
+ 
+ static int usage(const char *prog)
+diff --git a/procd.h b/procd.h
+index 404b51c..f240fd8 100644
+--- a/procd.h
++++ b/procd.h
+@@ -18,7 +18,9 @@
+ #include <libubox/uloop.h>
+ #include <libubox/utils.h>
+ #include <libubus.h>
++#ifdef UDEBUG
+ #include <udebug.h>
++#endif
+ 
+ #include <stdio.h>
+ #include <syslog.h>
+diff --git a/ubus.c b/ubus.c
+index 23f640a..b11a063 100644
+--- a/ubus.c
++++ b/ubus.c
+@@ -23,6 +23,7 @@ const char *ubus_socket = NULL;
+ static struct ubus_context *ctx;
+ static struct uloop_timeout ubus_timer;
+ static int timeout;
++#ifdef UDEBUG
+ static struct udebug_ubus udebug;
+ 
+ static void
+@@ -30,6 +31,7 @@ procd_udebug_cb(struct udebug_ubus *ctx, struct blob_attr *data, bool enabled)
+ {
+ 	procd_udebug_set_enabled(enabled);
+ }
++#endif
+ 
+ static void reset_timeout(void)
+ {
+@@ -74,7 +76,9 @@ ubus_connect_cb(struct uloop_timeout *timeout)
+ 		return;
+ 	}
+ 
++#ifdef UDEBUG
+ 	udebug_ubus_init(&udebug, ctx, "procd", procd_udebug_cb);
++#endif
+ 	ctx->connection_lost = ubus_disconnect_cb;
+ 	ubus_init_hotplug(ctx);
+ 	ubus_init_service(ctx);
