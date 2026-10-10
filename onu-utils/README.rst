@@ -203,6 +203,19 @@ The small programs of the ONU.
       onu-net del PART
       onu-net wait DEV ADDRESS [SECONDS]
 
+``onu-run``
+   starts, in the foreground, what procd runs from ``/etc/inittab`` once the
+   boot script is done, and again whenever it ends: the ssh server and
+   ``pond``, on the management pair in use and the host link's address, from
+   ``/run/onu-mgmt``, so that one started again after a change of the pair
+   listens on the new one; and the console's login prompt, or, on a bench
+   whose ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's shell
+   without the password::
+
+      onu-run ssh
+      onu-run pond
+      onu-run console
+
 Building and testing::
 
    make           # build/ponid, build/pon, build/onucfg and build/onu-update
