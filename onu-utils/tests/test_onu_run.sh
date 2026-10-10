@@ -120,13 +120,13 @@ echo "omcid in the mode onu-apply gave it, without an address too"
 setup
 rm "$ONU_ROOT/run/onu-mgmt"
 run omcid
-check '[ $rc -eq 0 ] && logged "omcid -x /usr/sbin/onu-apply"'
+check '[ $rc -eq 0 ] && logged "omcid -m $ONU_ROOT/run/omcid.mib -x /usr/sbin/onu-apply"'
 echo router >"$ONU_ROOT/run/omcid.mode"
 run omcid
-check 'logged "omcid -r -x /usr/sbin/onu-apply"'
+check 'logged "omcid -r -m $ONU_ROOT/run/omcid.mib -x /usr/sbin/onu-apply"'
 echo bridge >"$ONU_ROOT/run/omcid.mode"
 run omcid
-check '[ "$(grep -c "^omcid -x /usr/sbin/onu-apply$" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
+check '[ "$(grep -c -x -F "omcid -m $ONU_ROOT/run/omcid.mib -x /usr/sbin/onu-apply" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
 teardown
 
 echo "the time from the router at the other end of the management link"
