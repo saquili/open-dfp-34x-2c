@@ -207,7 +207,7 @@ add() {
 		[ "$iface" = "$old_iface" ] || rules_del "$pref"
 		return 1
 	fi
-	dropbear -s -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
+	dropbear -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
 		log "no ssh on $address"
 	log "the management address $address in VLAN $vlan added beside the old one"
 	(
@@ -244,7 +244,7 @@ commit() {
 		[ -n "$pid" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "$RUN/dropbear-pending.pid"
-	dropbear -s -r "$KEY" -P "$RUN/dropbear.pid" -p "${address%/*}:22" \
+	dropbear -r "$KEY" -P "$RUN/dropbear.pid" -p "${address%/*}:22" \
 		${data:+-p "${data%/*}:22"} || log "no ssh on $address"
 	log "the management address is now $address in VLAN $vlan"
 }
