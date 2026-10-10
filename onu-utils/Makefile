@@ -20,7 +20,8 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 # host, point CPPFLAGS at an installation of its headers.
 .PHONY: all check clean
 
-all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc
+all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc \
+	$(BUILD)/onu-act
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -43,6 +44,13 @@ $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
 # onu-svc talks to procd over ubus: libubus, libubox and libubox's JSON part.
 $(BUILD)/onu-svc: $(BUILD)/src/onu-svc.o $(BUILD)/src/svcmsg.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lblobmsg_json -lubox
+
+# onu-act serves its table (act.c) on ubus: libubus and libubox.
+$(BUILD)/onu-act: $(BUILD)/src/onu-act.o $(BUILD)/src/act.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lubox
+
+$(BUILD)/test_act: $(BUILD)/tests/test_act.o $(BUILD)/src/act.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_svcmsg: $(BUILD)/tests/test_svcmsg.o $(BUILD)/src/svcmsg.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -70,7 +78,7 @@ $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 # test_genl asks the kernel it runs on, through a generic netlink socket.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/test_update $(BUILD)/onu-update \
-	$(BUILD)/test_svcmsg $(BUILD)/test_settings
+	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
@@ -78,6 +86,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_update
 	$(BUILD)/test_svcmsg
 	$(BUILD)/test_settings
+	$(BUILD)/test_act
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	sh tests/test_onu_trial.sh

@@ -10,7 +10,7 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 in ``/usr/sbin`` and ``/usr/bin``. The others only other programs run, and
 they are in ``/usr/lib/onu``, out of a person's way (ADR 0015): ``ponid``,
 ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-change``,
-``onu-trial``, ``onu-config.sh`` and ``dhcp-wan``. A script that runs one of them finds it
+``onu-trial``, ``onu-act``, ``onu-config.sh`` and ``dhcp-wan``. A script that runs one of them finds it
 there, and names it by its whole path where procd starts it.
 
 ``ponid``
@@ -308,6 +308,23 @@ there, and names it by its whole path where procd starts it.
       onu-svc stop NAME
       onu-svc list [NAME]
 
+``onu-act``
+   does, as root, what a program that runs as an account of its own may ask
+   of the stick, and nothing else (ADR 0014): the status daemon's changes of
+   the SFP lane, of the management pair, of the name and of the identity, the
+   confirmation of the changes on trial, the updates' status and trial, and
+   the restart. It is the object ``onu-act`` on ubus, with a method for each
+   entry of its table (``src/act.c``): the method runs its program, with no
+   shell, the caller's values in their places once each is short enough, of
+   the characters its place allows and no option, and the caller's text,
+   ``input``, on its standard input. The answer comes when the program ends,
+   its exit status and what it wrote, ``{"code", "output"}``, or as soon as it
+   starts for one run in the background (the restart, a new registration);
+   a program that runs past its time is killed. ubusd's access lists say
+   who may call which method. procd keeps it (``rcS``); it ends without
+   ubusd, and procd starts it again. The status daemon of a build without
+   libubus, which its tests make, runs the same table itself.
+
 ``onu-run``
    starts a service of the stick in the foreground, as procd wants it, from
    the state the scripts keep: the ssh server and ``pond``, on the
@@ -331,13 +348,14 @@ there, and names it by its whole path where procd starts it.
 
 Building and testing::
 
-   make           # build/ponid, build/pon, build/onu-config, build/onu-update, build/onu-svc
+   make           # build/ponid, build/pon, build/onu-config, build/onu-update, build/onu-svc,
+                  # build/onu-act
    make check     # the tests
 
 ``ponid``, ``onu-config`` and ``onu-update`` need zlib, ``onu-config`` and
 ``onu-update`` the kernel's MTD header
-``mtd/mtd-user.h``, ``onu-svc`` libubus, libubox and libblobmsg_json (its
-tests need none of them), ``pon`` libmnl and the kernel's headers, among them
+``mtd/mtd-user.h``, ``onu-svc`` libubus, libubox and libblobmsg_json and
+``onu-act`` libubus and libubox (their tests need none of them), ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the
