@@ -47,15 +47,22 @@ procd is process 1.
   ``br2-external/package/procd``).
 * procd feeds the watchdog, from its start; BusyBox's init and watchdog are
   not built.
-* procd starts ubusd and runs ``/etc/inittab``: the log and netifd first, the
-  boot script at sysinit (``/etc/rc.d/S10boot``), then the ssh server, the
-  status daemon and the console's login (``onu-run``). A program that ends is
-  started again half a second later.
+* procd starts ubusd and runs ``/etc/inittab``: the boot script at sysinit
+  (``/etc/rc.d/S10boot``) and then the console's login, which is started
+  again half a second after it ends.
+* The stick's programs are procd's services, which the boot script and
+  ``onu-mode`` start in their order with ``onu-svc``, a small C program of
+  this tree that gives procd a service over ubus: the log, netifd, the ssh
+  server and the status daemon; omcid, onu-mode's watcher, dhcp6d and udhcpd.
+  procd starts each again 2 s after it ends and never gives up; a patch has
+  it tell how often (``onu-svc list``). omcid started again takes the mode
+  the stick is in from ``/run/omcid.mode`` (``onu-run omcid``).
 * procd is OpenWrt's at its commit of 2026-10-07, with patches: udebug, whose
   ring buffer needs atomic operations, is left out; the kernel's devtmpfs is
   kept; and a program of inittab without a terminal is started again too,
   which procd did not do, as OpenWrt's inittab has only the console's
-  entries. libubox and ubus are taken at OpenWrt's current commits to match.
+  entries; and an instance tells how often procd started it again. libubox
+  and ubus are taken at OpenWrt's current commits to match.
 * A bench may give the console root's shell without the password
   (``CONSOLE_AUTOLOGIN=root`` in ``/etc/board.conf``), so that it reaches a
   stick whose network is down. The image without that file asks for the
@@ -67,12 +74,14 @@ Consequences
 * The image grows by some 46 KB: procd, 38 KB compressed, libjson_script,
   which it loads, and the C library's new symbols; BusyBox is 3 KB smaller
   (r0 1787967 bytes with the ONT overlay, 243649 left).
-* The supervision of inittab is the plain one: no limit, no wait that grows,
-  no state of a program to read. procd's services, which have those and are
-  read over ubus, need their definitions given over ubus; OpenWrt gives them
-  with shell scripts and jshn, which the image does not carry. Moving the
-  programs to procd's services is the next step, and onu-mode's (omcid,
-  pppoed, dhcp6d) with them.
+* OpenWrt gives procd its services with shell scripts and jshn, which the
+  image does not carry; onu-svc gives them from the command line, and the
+  services live in procd only, written in no file. onu-svc is 4 KB.
+* pppoed stays in onu-mode's loop, which reads its events and sets up the
+  session's routes and addresses: that is netifd's to do, and pppoed moves
+  under netifd, not under procd.
+* An omcid that procd starts again has lost its MIB: the OLT has to provision
+  the stick again, as after any restart of omcid.
 * procd reads 127 characters of an inittab line and 7 words of a command;
   the tests keep the inittab within that.
 * A restart goes through procd's shutdown entry of inittab, which the image

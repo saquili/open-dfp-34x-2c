@@ -254,16 +254,18 @@ The start
     process 1 from then on. procd feeds the watchdog (a timeout of 30 s, fed
     every 5 s), starts ``ubusd`` and runs ``/etc/inittab``:
 
-    #. ``syslogd`` and ``klogd``: the system log, ``/run/messages`` and one
-       older copy of 64 KiB each, with the kernel's messages in it; and
-       ``netifd``;
     #. the boot script, ``/etc/init.d/rcS`` as ``/etc/rc.d/S10boot`` (below),
        whose output goes to the log but for the lines on the console at its
        end;
-    #. once it is done, the ssh server and ``pond``, the status daemon, on the
-       host side's addresses, and the console's login prompt (``onu-run``).
+    #. once it is done, the console's login prompt (``onu-run console``).
 
-    procd starts each of these programs again, half a second after it ends.
+    The boot script starts the stick's programs as procd's services
+    (``onu-svc``): the log first, ``netifd`` once its configuration is
+    written, the ssh server and ``pond`` once the management address is up.
+    procd starts a service again 2 s after it ends and never gives up;
+    ``onu-svc list`` tells how each is doing and how often procd started it
+    again. The console's login prompt is started again half a second after it
+    ends.
     ``reboot``, ``halt`` and ``poweroff`` signal procd, which ends every
     program and restarts.
 The boot script
@@ -293,7 +295,8 @@ The boot script
        ``/etc/board.conf`` may name (below), gives the PON driver the
        serial number and the PLOAM password through devlink and brings the PON
        up;
-    #. starts ``omcid``, which answers the OLT;
+    #. starts ``omcid``, which answers the OLT, as procd's service, and with
+       sessions the watcher and, per session, ``dhcp6d`` (``onu-mode``);
     #. prints ``open-dfp-34x-2c: ready`` on the console.
 
     After it, procd starts ``dropbear`` (root's password and keys), with an
