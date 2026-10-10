@@ -90,7 +90,9 @@ check 'grep -qx IFACE=mgmt "$ONU_ROOT/run/onu-mgmt" && grep -qx NAME=mgmt "$ONU_
 check 'grep -qx DATA_ADDRESS=192.0.2.2/30 "$ONU_ROOT/run/onu-mgmt"'
 check 'in_part "device mgmt 4094"'
 check 'in_part "interface mgmt mgmt 198.51.100.2/30"'
-check '[ "$(part | wc -l)" -eq 2 ]'
+# The address on the SFP port is netifd's too, as the interface "data".
+check 'in_part "interface data sfp 192.0.2.2/30"'
+check '[ "$(part | wc -l)" -eq 3 ]'
 check 'grep -q "option ipv6 .1." "$T/part"'
 run status
 check 'echo "$out" | grep -qx VLAN=4094'

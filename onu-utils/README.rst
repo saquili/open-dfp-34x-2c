@@ -180,7 +180,9 @@ there, and names it by its whole path where procd starts it.
    the router finds the address of a new session within one. The stick routes
    the address there with a host route, until the session ends, and forwards
    from the link only what comes from that address, by a strict reverse-path
-   check (BCP 38). The switch then routes with the TTL and hop limit
+   check (BCP 38). netifd holds the links, their addresses and checks
+   (onu-apply's part ``links``), and each session's route, proxy ARP entry
+   and table (its part ``pass-N``), as it holds the sessions. The switch then routes with the TTL and hop limit
    unchanged (``l3_ttl_decrement``): the stick stands in for the operator's
    ONT, which is no hop, and the concentrator is the router's first. The first
    session that carries IPv6 hands its delegated prefix on in the same way,
@@ -223,7 +225,8 @@ there, and names it by its whole path where procd starts it.
    after ten minutes. netifd brings the pairs up: each is an interface of its
    own in onu-mgmt's part of netifd's configuration, so that the one a person
    manages the stick from is never taken down and up again when the other
-   comes or goes::
+   comes or goes. The address on ``sfp`` itself, ``DATA_ADDRESS``, is the
+   interface ``data`` of the same part::
 
       onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]   # at boot
       onu-mgmt add VLAN ADDRESS

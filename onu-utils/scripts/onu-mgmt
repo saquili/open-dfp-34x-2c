@@ -29,8 +29,9 @@
 # of its switch rules, and DATA_ADDRESS, the address on the SFP port itself,
 # if any), by start and again by each commit. netifd brings the pairs up: this script writes them as its part
 # "mgmt" of netifd's configuration (onu-net), the pair in use and, while a
-# change waits, the new one, and waits for the new address before it starts
-# the ssh server on it. The status daemon listens on the addresses itself.
+# change waits, the new one, with the address on the SFP port as the
+# interface "data", and waits for the new address before it starts the ssh
+# server on it. The status daemon listens on the addresses itself.
 # ONU_ROOT, when set, is put in front of /run and /proc, for the tests.
 
 set -u
@@ -116,11 +117,15 @@ iface_conf() {
 # (NAME), so that netifd, which takes an interface down and up again when
 # its addresses change, leaves the one alone when the other comes or goes:
 # the address a person manages the stick from never goes away under them.
-# Two pairs in one VLAN are two interfaces on one device.
+# Two pairs in one VLAN are two interfaces on one device. The address on the
+# SFP port is the interface "data": netifd takes away from a device it holds
+# what it did not put there, and the port may be a link of the sessions too.
 net_apply() {
+	data=$(field DATA_ADDRESS "$STATE")
 	{
 		dev_conf "$(field IFACE "$STATE")" "$(field VLAN "$STATE")"
 		iface_conf "$(field NAME "$STATE")" "$(field IFACE "$STATE")" "$(field ADDRESS "$STATE")"
+		[ -z "$data" ] || iface_conf data sfp "$data"
 		if [ -r "$PENDING" ]; then
 			[ "$(field IFACE "$PENDING")" = "$(field IFACE "$STATE")" ] ||
 				dev_conf "$(field IFACE "$PENDING")" "$(field VLAN "$PENDING")"

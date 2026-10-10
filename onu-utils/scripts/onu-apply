@@ -73,7 +73,10 @@
 # stick's, and the one host on its link, the router behind the stick, takes
 # it by DHCP, as a /32 with the concentrator's address as its gateway. Each
 # VLAN the sessions hand down in is a link of its own, lanVID on the host
-# link, or the host link itself for none.
+# link, or the host link itself for none. netifd holds the links with their
+# addresses and checks, the part "links" of its configuration, and what each
+# session hands down, its route, proxy ARP entry and table, the part
+# "pass-N"; router mode's LAN address is the part "router" (onu-net).
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -89,9 +92,6 @@ MAX_SESSIONS=7
 NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
-IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
-IPV4_CONF=$ROOT/proc/sys/net/ipv4/conf
-IPV4_NEIGH=$ROOT/proc/sys/net/ipv4/neigh
 # The helpers of this tree that only other programs run, out of a person's
 # way (ADR 0015).
 LIB=$ROOT/usr/lib/onu
@@ -534,7 +534,6 @@ pd_up() {
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
 	svc_stop "dhcp6d$1"
-	echo 0 >"$IPV6_CONF/$lan/disable_ipv6" 2>/dev/null
 	echo 1 >"$FORWARD6" 2>/dev/null
 	table=
 	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
@@ -648,21 +647,12 @@ pass_lease() {
 	svc_stop "udhcpd-$lan"
 	[ "$(cat "$SESSIONS/$1/pass" 2>/dev/null)" = "$2" ] ||
 		rm -f "$RUN/udhcpd-$lan.leases"
-	ip route replace "$2" dev "$lan"
 	gw=$LINK_ADDRESS
 	case $4 in
 	'' | *[!0-9.]* | 0.0.0.0) ;;
 	*) gw=$4 ;;
 	esac
-	if [ "$gw" != "$LINK_ADDRESS" ]; then
-		echo 0 >"$IPV4_NEIGH/$lan/proxy_delay" 2>/dev/null
-		ip neigh add proxy "$gw" dev "$lan" 2>/dev/null
-	fi
-	if [ "$1" != "$(main_pass)" ]; then
-		ip rule del from "$2" lookup "$(table_of "$1")" 2>/dev/null
-		ip rule add from "$2" lookup "$(table_of "$1")"
-		ip route replace default dev "$3" table "$(table_of "$1")"
-	fi
+	pass_net "$1" "$2" "$lan" "$gw"
 	mtu=$(cat "$NET/$3/mtu" 2>/dev/null)
 	dns=$(cat "$SESSIONS/$1/dns" 2>/dev/null)
 	{
@@ -697,21 +687,37 @@ pass_lease() {
 	log "session $1: its address goes to the router on $lan, with the gateway $gw"
 }
 
+# What session $1 hands down as netifd's part "pass-N": the route to its
+# address $2 on its link $3, the gateway $4 answered for on the link without
+# being taken (proxy ARP) when it is not the stick's own address there, and,
+# for a session other than main_pass(), its table: a rule sends what comes
+# from $2 to it, and its default route goes by the session's interface.
+# netifd puts them in place, and takes them away with the part or with the
+# interface they belong to.
+pass_net() {
+	{
+		printf "config route\n\toption interface '%s'\n" "$3"
+		printf "\toption target '%s/32'\n\n" "$2"
+		if [ "$4" != "$LINK_ADDRESS" ]; then
+			printf "config neighbor\n\toption interface '%s'\n" "$3"
+			printf "\toption ipaddr '%s'\n\toption proxy '1'\n\n" "$4"
+		fi
+		if [ "$1" != "$(main_pass)" ]; then
+			printf "config rule\n\toption src '%s/32'\n" "$2"
+			printf "\toption lookup '%s'\n\n" "$(table_of "$1")"
+			printf "config route\n\toption interface 'ses%s'\n" "$1"
+			printf "\toption target '0.0.0.0/0'\n\toption table '%s'\n\n" \
+				"$(table_of "$1")"
+		fi
+	} | onu-net set "pass-$1" || log "session $1: netifd was not given its address"
+}
+
 # The address session $1 handed down taken back, when the session ends.
 pass_lease_down() {
 	addr=$(cat "$SESSIONS/$1/pass" 2>/dev/null)
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
-	gw=$(cat "$SESSIONS/$1/gateway" 2>/dev/null)
 	[ -n "$lan" ] && svc_stop "udhcpd-$lan"
-	if [ -n "$addr" ] && [ -n "$lan" ]; then
-		ip route del "$addr" dev "$lan" 2>/dev/null
-		if ip rule del from "$addr" lookup "$(table_of "$1")" 2>/dev/null; then
-			ip route flush table "$(table_of "$1")" 2>/dev/null
-		fi
-	fi
-	if [ -n "$gw" ] && [ "$gw" != "$LINK_ADDRESS" ] && [ -n "$lan" ]; then
-		ip neigh del proxy "$gw" dev "$lan" 2>/dev/null
-	fi
+	onu-net del "pass-$1"
 	if [ -n "$addr" ] && [ "$addr" = "$(cat "$RUN/onu-pass" 2>/dev/null)" ]; then
 		rm -f "$RUN/onu-pass" "$RUN/onu-pass-proxy" "$RUN/onu-lan"
 	fi
@@ -1078,9 +1084,14 @@ watch() {
 	done
 }
 
+# Router mode: the LAN is the host link, with its address as netifd's part
+# "router".
 router_up() {
 	echo 1 >"$FORWARD"
-	ip address add "$LAN_ADDRESS" dev sfp 2>/dev/null
+	if [ -n "$LAN_ADDRESS" ]; then
+		printf "config interface 'lan'\n\toption device 'sfp'\n\toption proto 'static'\n\toption ipaddr '%s'\n\n" \
+			"$LAN_ADDRESS" | onu-net set router || log "netifd was not given the LAN"
+	fi
 	lan_dhcp
 	# The tests run the watcher's rounds themselves.
 	[ -n "${ONU_APPLY_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
@@ -1090,7 +1101,7 @@ router_down() {
 	svc_stop onu-watch
 	wan_down
 	svc_stop udhcpd
-	[ -n "$LAN_ADDRESS" ] && ip address del "$LAN_ADDRESS" dev sfp 2>/dev/null
+	onu-net del router
 	echo 0 >"$FORWARD"
 	return 0
 }
@@ -1119,31 +1130,40 @@ ttl_decrement() {
 pass_up() {
 	echo 1 >"$FORWARD"
 	ttl_decrement false
-	: >"$RUN/onu-lans"
-	for lan in $(pass_links); do
-		if [ "$lan" != sfp ]; then
-			ip link add link sfp name "$lan" type vlan id "${lan#lan}"
-			ip link set "$lan" up
-		fi
-		echo 1 >"$IPV4_CONF/$lan/rp_filter"
-		ip address add "$LINK_ADDRESS/32" dev "$lan"
-		echo "$lan" >>"$RUN/onu-lans"
-	done
+	# $(pass_links) is a list of names, split on purpose.
+	links_net $(pass_links)
 	[ -n "${ONU_APPLY_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
+}
+
+# The links $@ as netifd's part "links": each a VLAN on the host link, or the
+# host link itself, with the stick's address, a strict reverse-path check,
+# and IPv6 where a session hands its prefix down by it (the host link keeps
+# its own). Without links the part goes.
+links_net() {
+	if [ $# -eq 0 ]; then
+		onu-net del links
+		return
+	fi
+	for lan in "$@"; do
+		v6=0
+		[ "$lan" = sfp ] && v6=1
+		for ln in $(sessions); do
+			[ "$(link_of "$(down_vlan "$ln")")" = "$lan" ] && hands "$ln" ipv6 && v6=1
+		done
+		printf "config device\n"
+		[ "$lan" = sfp ] ||
+			printf "\toption type '8021q'\n\toption ifname 'sfp'\n\toption vid '%s'\n" "${lan#lan}"
+		printf "\toption name '%s'\n\toption rpfilter 'strict'\n\toption ipv6 '%s'\n\n" "$lan" "$v6"
+		printf "config interface '%s'\n\toption device '%s'\n\toption proto 'static'\n" "$lan" "$lan"
+		printf "\toption ipaddr '%s/32'\n\n" "$LINK_ADDRESS"
+	done | onu-net set links || log "netifd was not given the links to the host"
 }
 
 pass_down() {
 	svc_stop onu-watch
 	sessions_down
-	for lan in $(cat "$RUN/onu-lans" 2>/dev/null); do
-		ip address del "$LINK_ADDRESS/32" dev "$lan" 2>/dev/null
-		if [ "$lan" = sfp ]; then
-			echo 0 >"$IPV4_CONF/sfp/rp_filter"
-		else
-			ip link del "$lan" 2>/dev/null
-		fi
-	done
-	rm -f "$RUN/onu-lans" "$RUN/onu-lan" "$RUN/onu-pass" "$RUN/onu-pass-proxy"
+	links_net
+	rm -f "$RUN/onu-lan" "$RUN/onu-pass" "$RUN/onu-pass-proxy"
 	ttl_decrement true
 	echo 0 >"$FORWARD"
 	echo 0 >"$FORWARD6" 2>/dev/null

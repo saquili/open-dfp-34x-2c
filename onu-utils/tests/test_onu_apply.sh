@@ -26,6 +26,19 @@ logged() {
 	grep -q -- "$1" "$LOG"
 }
 
+# The part $1 of netifd's configuration, a section a line: "TYPE NAME:" or
+# "TYPE:", then each option as KEY=VALUE.
+part() {
+	awk '/^config/ { if (l != "") print l; l = $2 ($3 != "" ? " " $3 : "") ":"; next }
+		/option/ { l = l " " $2 "=" $3 } END { if (l != "") print l }' \
+		"$ONU_ROOT/run/network.d/$1" 2>/dev/null | tr -d "'"
+}
+
+# Whether the part $1 has the section $2, as part() writes it.
+has() {
+	part "$1" | grep -qxF -- "$2"
+}
+
 setup() {
 	T=$(mktemp -d)
 	LOG=$T/log
@@ -150,7 +163,7 @@ check 'logged "^tc filter del dev pon ingress pref 1001"'
 check '! logged "^tc filter del dev [a-z]* ingress pref 1$"'
 check '! logged "^tc qdisc del dev \(sfp\|pon\) clsact"'
 check 'logged "^omcid -r"'
-check 'logged "^ip address add 198.51.100.1/24 dev sfp"'
+check 'has router "interface lan: device=sfp proto=static ipaddr=198.51.100.1/24"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
 check 'grep -q "^opt subnet 255.255.255.0" "$ONU_ROOT/run/udhcpd.conf"'
 check 'grep -q "^opt router 198.51.100.1" "$ONU_ROOT/run/udhcpd.conf"'
@@ -249,7 +262,7 @@ conf MODE=router LAN_ADDRESS=198.51.100.65/24
 printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
 "$MODE_SCRIPT" reload 2>/dev/null
 check '! logged "^nft"'
-check 'logged "^ip address del 198.51.100.65/24 dev sfp"'
+check 'logged "^onu-net del router$" && [ ! -e "$ONU_ROOT/run/network.d/router" ]'
 check 'logged "^killall -USR2 omcid"'
 check '! logged "^omcid"'
 check 'logged "^tc qdisc del dev gem4095 clsact"'
@@ -274,10 +287,9 @@ check '! logged "omcid -r"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 check 'logged "^ip link del omcibr0"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
-check 'logged "^ip link add link sfp name lan36 type vlan id 36"'
-check 'logged "^ip address add 169.254.0.1/32 dev lan36"'
 # The link forwards only the handed address's packets (BCP 38).
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan36/rp_filter")" = 1 ]'
+check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=0"'
+check 'has links "interface lan36: device=lan36 proto=static ipaddr=169.254.0.1/32"'
 # The stick is no hop: the switch routes with the TTL unchanged.
 check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value false"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
@@ -302,9 +314,9 @@ check '[ -s "$ONU_ROOT/run/network.d/ses1" ] && grep -q "option proto .pppoed." 
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-lan")" = lan36 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/pass")" = 192.0.2.2 ]'
-check 'logged "^ip route replace 192.0.2.2 dev lan36"'
+check 'has pass-1 "route: interface=lan36 target=192.0.2.2/32"'
 # The stick's own way out: no table of its own.
-check '! logged "^ip rule add"'
+check '! part pass-1 | grep -q "^rule"'
 check 'grep -q "^interface lan36" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 check 'grep -q "^start 192.0.2.2" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 check 'grep -q "^end 192.0.2.2" "$ONU_ROOT/run/udhcpd-lan36.conf"'
@@ -314,8 +326,7 @@ check 'grep -q "^opt subnet 255.255.255.255" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 # taking it.
 check 'grep -q "^opt router 192.0.2.1" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 check 'grep -q "^opt staticroutes 192.0.2.1/32 0.0.0.0, 0.0.0.0/0 192.0.2.1" "$ONU_ROOT/run/udhcpd-lan36.conf"'
-check 'logged "^ip neigh add proxy 192.0.2.1 dev lan36"'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/neigh/lan36/proxy_delay")" = 0 ]'
+check 'has pass-1 "neighbor: interface=lan36 ipaddr=192.0.2.1 proxy=1"'
 check '! logged "^ip address add 192.0.2.1"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gateway")" = 192.0.2.1 ]'
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd-lan36.conf"'
@@ -323,14 +334,13 @@ check 'grep -q "^opt mtu 1492" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 check 'logged "^udhcpd -f $ONU_ROOT/run/udhcpd-lan36.conf"'
 check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan36 from session 1"'
 check '"$MODE_SCRIPT" status | grep -q "^session 1 on wan410 (ipv4), up on ppp0, 192.0.2.2"'
-# The stand-in session ends after two seconds: the address goes with it.
-# The proxy ARP entry goes last, after the route.
+# The stand-in session ends after two seconds: the address goes with it,
+# its route and the proxy ARP entry with netifd's part.
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	logged "^ip neigh del proxy 192.0.2.1 dev lan36" && break
+	logged "^onu-net del pass-1$" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^ip route del 192.0.2.2 dev lan36"'
-check 'logged "^ip neigh del proxy 192.0.2.1 dev lan36"'
+check 'logged "^onu-net del pass-1$"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-pass" ]'
@@ -367,13 +377,13 @@ done
 check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2$"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan36/disable_ipv6")" = 0 ]'
+check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=1"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/family")" = ipv6 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/2/lan")" = lan36 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
 # The gateway the stick told of before is no setting any more: the
 # concentrator's address is the gateway, from the stick's own address.
-check 'logged "^ip address add 169.254.0.1/32 dev lan36"'
+check 'has links "interface lan36: device=lan36 proto=static ipaddr=169.254.0.1/32"'
 check 'grep -q "^opt router 192.0.2.1" "$ONU_ROOT/run/udhcpd-lan36.conf"'
 # The IPv6 account goes: its session ends, the VLAN stays for the other.
 : >"$LOG"
@@ -481,12 +491,12 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" reload 2>/dev/null
 check '! logged "^killall -USR"'
 check '! logged "^omcid"'
-check 'logged "^ip address del 198.51.100.1/24 dev sfp"'
-check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
+check 'logged "^onu-net del router$"'
+check 'has links "interface sfp: device=sfp proto=static ipaddr=169.254.0.1/32"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 # The host link itself is the LAN link: it checks the sources, until the
 # stick leaves passthrough with the account.
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 1 ]'
+check 'has links "device: name=sfp rpfilter=strict ipv6=1"'
 rm "$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" reload 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
@@ -586,8 +596,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 : >"$LOG"
 rm "$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" reload 2>/dev/null
-check 'logged "^ip address del 169.254.0.1/32 dev lan36"'
-check 'logged "^ip link del lan36"'
+check 'logged "^onu-net del links$" && [ ! -e "$ONU_ROOT/run/network.d/links" ]'
 check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value true"'
 check 'logged "^killall -USR2 omcid"'
 check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
@@ -606,8 +615,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	"$REAL_SLEEP" 0.2
 done
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -4 -M$"'
-check '! logged "^ip link add link sfp"'
-check '! logged "^ip address add 169.254.0.1"'
+check '[ ! -e "$ONU_ROOT/run/network.d/links" ]'
 check '[ ! -e "$ONU_ROOT/run/session/1/lan" ]'
 check '[ -e "$ONU_ROOT/run/session/1/hands" ] && [ ! -s "$ONU_ROOT/run/session/1/hands" ]'
 check '! logged "^udhcpd"'
@@ -643,7 +651,7 @@ echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
-check '[ "$(grep -c "^ip link add link sfp name lan410 type vlan id 410" "$LOG")" = 1 ]'
+check '[ "$(part links | grep -c "name=lan410")" = 1 ]'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/lan")" = lan410 ]'
@@ -660,9 +668,8 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ip
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
-check 'logged "^ip link add link sfp name lan410 type vlan id 410"'
-check 'logged "^ip link add link sfp name lan37 type vlan id 37"'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/lan37/rp_filter")" = 1 ]'
+check 'has links "device: type=8021q ifname=sfp vid=410 name=lan410 rpfilter=strict ipv6=0"'
+check 'has links "device: type=8021q ifname=sfp vid=37 name=lan37 rpfilter=strict ipv6=0"'
 "$MODE_SCRIPT" tick 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -672,9 +679,9 @@ done
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -P -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/lan")" = lan37 ]'
-check 'logged "^ip rule add from 192.0.2.2 lookup 102"'
-check 'logged "^ip route replace default dev ppp0 table 102"'
-check '! logged "^ip rule add from 192.0.2.2 lookup 101"'
+check 'has pass-2 "rule: src=192.0.2.2/32 lookup=102"'
+check 'has pass-2 "route: interface=ses2 target=0.0.0.0/0 table=102"'
+check '! part pass-1 | grep -q "^rule"'
 check 'grep -q "^interface lan410" "$ONU_ROOT/run/udhcpd-lan410.conf"'
 check 'grep -q "^interface lan37" "$ONU_ROOT/run/udhcpd-lan37.conf"'
 check 'grep -q "^pidfile $ONU_ROOT/run/udhcpd-lan37.pid" "$ONU_ROOT/run/udhcpd-lan37.conf"'
@@ -683,10 +690,8 @@ check '[ "$("$MODE_SCRIPT" status | grep -c "^pass ")" = 2 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-lan")" = lan410 ]'
 : >"$LOG"
 "$MODE_SCRIPT" stop 2>/dev/null
-check 'logged "^ip rule del from 192.0.2.2 lookup 102"'
-check 'logged "^ip route flush table 102"'
-check 'logged "^ip link del lan410"'
-check 'logged "^ip link del lan37"'
+check 'logged "^onu-net del pass-2$" && logged "^onu-net del links$"'
+check '[ -z "$(ls "$ONU_ROOT/run/network.d")" ]'
 teardown
 
 echo "two prefixes handed down in two VLANs: the second by its own table"
@@ -704,7 +709,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/onu-pd1$"'
 check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -t 102$"'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/lan37/disable_ipv6")" = 0 ]'
+check 'has links "device: type=8021q ifname=sfp vid=37 name=lan37 rpfilter=strict ipv6=1"'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
 
@@ -713,11 +718,11 @@ setup
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_HOST_VLAN=untagged
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
-check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
-check '! logged "^ip link add link sfp"'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 1 ]'
+check 'has links "device: name=sfp rpfilter=strict ipv6=1"'
+check 'has links "interface sfp: device=sfp proto=static ipaddr=169.254.0.1/32"'
+check '[ "$(part links | wc -l)" -eq 2 ]'
 "$MODE_SCRIPT" stop 2>/dev/null
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
+check '[ ! -e "$ONU_ROOT/run/network.d/links" ]'
 teardown
 
 echo "the settings of before: an empty LAN_VLAN is the host link itself"
@@ -725,8 +730,8 @@ setup
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 LAN_VLAN=
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
-check 'logged "^ip address add 169.254.0.1/32 dev sfp"'
-check '! logged "^ip link add link sfp"'
+check 'has links "interface sfp: device=sfp proto=static ipaddr=169.254.0.1/32"'
+check '! part links | grep -q "type=8021q"'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
 
