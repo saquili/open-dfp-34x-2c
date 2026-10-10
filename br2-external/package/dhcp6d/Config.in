@@ -4,8 +4,7 @@
 config BR2_PACKAGE_DHCP6D
 	bool "dhcp6d"
 	depends on !BR2_STATIC_LIBS # libubox, ubus
-	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # json-c, ubus
-	select BR2_PACKAGE_JSON_C
+	depends on BR2_TOOLCHAIN_HAS_SYNC_4 || BR2_mips_1 # ubus
 	select BR2_PACKAGE_LIBUBOX
 	select BR2_PACKAGE_UBUS
 	help
