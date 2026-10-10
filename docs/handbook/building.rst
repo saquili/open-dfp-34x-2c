@@ -49,8 +49,9 @@ What the build makes
      - 231 bytes.
    * - ``ram.uImage``
      - Made by ``make ram-image``, not by ``make``: the same kernel with the
-       root filesystem built in as its initial RAM disk, for a start from RAM
-       that needs neither bank (see "Putting the images on the board").
+       root filesystem built in as its initial RAM disk, and the tools of
+       diagnosis with it, for a start from RAM that needs neither bank (see
+       "Putting the images on the board").
      - About 3.7 MB, with the files of a bench; the boot loader takes up to
        12 MiB from RAM.
 
@@ -220,8 +221,8 @@ dropbear 2026.93
     The ssh server (``dropbear``), its key tool (``dropbearkey``) and the
     server side of ``scp``. It takes root's password and keys.
 The programs of the ONU, from this tree
-    ``omcid``, the OMCI daemon, with its tools ``omcitap`` and ``omcivlan``
-    (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
+    ``omcid``, the OMCI daemon, whose tools ``omcitap`` and ``omcivlan`` are
+    in the RAM image only (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
     from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
     PPPoE client and netifd's protocol ``pppoed`` (``pppoed/README.rst``),
     which links libubus to tell netifd; ``dhcp6d``, which hands a session's
@@ -233,8 +234,9 @@ The network layer of OpenWrt
     libubox, libubus, libuci, libblobmsg_json and json-c; libnl-tiny is linked
     into ``netifd``. Buildroot builds them with
     ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
-    command-line tools of these packages, ``ubus``, ``uci`` and ``jshn``, are
-    not in the image: the post-build script takes them out. procd starts both;
+    command-line tools of these packages are not in the image: the post-build
+    script takes ``uci`` and ``jshn`` out, and sets ``ubus`` aside for the RAM
+    image. procd starts both;
     netifd brings up the management VLAN, the addresses of the host side,
     the PPPoE sessions and the links that hand their addresses on to the
     router, with their routes, from the configuration that ``onu-net`` writes
@@ -620,9 +622,17 @@ Putting the images on the board
 The bench (``tools/bench``, set up as in ``flashing.rst``) is the only tool that
 writes the flash, and only bank 0.
 
+A stick is diagnosed started from RAM; the flash holds the image of the final
+test. The tools of diagnosis, ``omcitap``, ``omcivlan`` and ``ubus``, are in
+the RAM image only: the post-build script sets them aside in
+``build/image/diag`` with the C library whole, since the image's own is cut to
+what the image's programs use, and ``make ram-image`` lays that directory over
+its root.
+
 Start the kernel from RAM with the root filesystem built in, which needs
-neither bank: ``make ram-image`` makes ``ram.uImage`` from the build (the files
-of ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` included), and::
+neither bank: ``make ram-image`` makes ``ram.uImage`` from the build (the tools
+of diagnosis and the files of ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` included),
+and::
 
     make ram-image OPEN_DFP_34X_2C_LOCAL_OVERLAY=$PWD/local
     make ramboot IMAGE=build/image/images/ram.uImage \
