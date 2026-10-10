@@ -9,6 +9,10 @@
 #   onu-apply start    at boot: take the settings from /etc/onu.conf and apply
 #   onu-apply reload   apply the settings of /run/onu.conf again, after a change,
 #                      and keep them in the configuration store (onu-config)
+#   onu-apply try      apply them on trial: unconfirmed in 90 s (TRIAL_LIMIT),
+#                      the stick goes back to the settings it had
+#   onu-apply confirm  keep the change on trial, in the store as well
+#   onu-apply revert   end the trial now, back to the settings it had
 #   onu-apply stop     stop omcid and take the router down
 #   onu-apply identity give the PON driver the serial number and PLOAM
 #                      password of /run/onu-identity and bring the PON up
@@ -114,6 +118,12 @@ case $0 in
 esac
 LOCK=$RUN/onu-apply.lock
 AGAIN=$RUN/onu-apply.again
+# The settings last applied, the data path's and the sessions' accounts; while
+# a change is on trial (TRIAL), the ones it goes back to (KEPT).
+APPLIED=$RUN/onu-applied
+KEPT=$RUN/onu-kept
+TRIAL=$RUN/onu-trial
+TRIAL_LIMIT=${TRIAL_LIMIT:-90}
 
 log() {
 	echo "onu-apply: $*" >&2
@@ -1253,12 +1263,93 @@ apply() {
 	passthrough) pass_up ;;
 	esac
 	cp "$CONF" "$RUN/onu-mode.conf" 2>/dev/null
+	settings_copy "$APPLIED"
 	log "$MODE mode"
 	sync_all
 }
 
+# The settings in force, /run/onu.conf and the sessions' accounts, copied
+# to the directory $1 whole, readable by root alone; nothing is left of
+# what $1 held.
+settings_copy() {
+	rm -rf "$1.new"
+	(
+		umask 077
+		mkdir "$1.new" && cp "$CONF" "$1.new/onu.conf" || exit 1
+		for f in "$RUN"/onu-pppoe[1-7]; do
+			[ ! -e "$f" ] || cp "$f" "$1.new/" || exit 1
+		done
+	) || {
+		rm -rf "$1.new"
+		log "the settings were not copied to $1"
+		return 1
+	}
+	rm -rf "$1" && mv "$1.new" "$1"
+}
+
+# Seconds of /proc/uptime.
+uptime_s() {
+	up=0
+	read -r up _ <"$ROOT/proc/uptime" 2>/dev/null
+	echo "${up%%.*}"
+}
+
+# A change on trial (ADR 0014): the settings of /run/onu.conf and the accounts
+# applied but not saved, and the ones applied before kept aside. Unless it
+# is confirmed in TRIAL_LIMIT seconds, the stick goes back to those, so that
+# a change that cut off whoever made it comes undone. A change during a
+# trial starts it again, and goes back to the settings of before the first.
+try_change() {
+	if [ ! -e "$TRIAL" ]; then
+		rm -rf "$KEPT"
+		[ ! -d "$APPLIED" ] || cp -R "$APPLIED" "$KEPT" ||
+			log "the settings in force are not kept: an unconfirmed change stays"
+	fi
+	apply
+	token=$$
+	printf 'UNTIL=%s\nTOKEN=%s\n' "$(($(uptime_s) + TRIAL_LIMIT))" "$token" \
+		>"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
+	log "the change is on trial for $TRIAL_LIMIT s"
+	# The watcher outlives this command and the status daemon that ran it;
+	# the token keeps it from ending a later trial.
+	(
+		trap - EXIT
+		trap '' HUP
+		sleep "$TRIAL_LIMIT"
+		"$SELF" expire "$token"
+	) >/dev/null 2>&1 </dev/null &
+}
+
+# The change on trial kept, in the configuration store as well.
+confirm() {
+	[ -e "$TRIAL" ] || return 0
+	if command -v onu-config >/dev/null; then
+		onu-config save || log "the change is kept until the next start only"
+	fi
+	rm -f "$TRIAL"
+	rm -rf "$KEPT"
+	log "the change is confirmed"
+}
+
+# The trial named by $1, its token, ended: back to the settings kept.
+expire() {
+	[ -r "$TRIAL" ] && [ "$(sed -n 's/^TOKEN=//p' "$TRIAL")" = "$1" ] || return 0
+	rm -f "$TRIAL"
+	if [ -r "$KEPT/onu.conf" ] && cat "$KEPT/onu.conf" >"$CONF.new" &&
+		chmod 644 "$CONF.new"; then
+		rm -f "$RUN"/onu-pppoe[1-7]
+		for f in "$KEPT"/onu-pppoe[1-7]; do
+			[ ! -e "$f" ] || mv "$f" "$RUN/"
+		done
+		mv "$CONF.new" "$CONF"
+	fi
+	rm -rf "$KEPT" "$CONF.new"
+	apply
+	log "the change was not confirmed: back to the settings of before"
+}
+
 case ${1:-} in
-start | reload | stop | identity | reidentify | iface) lock ;;
+start | reload | try | confirm | revert | expire | stop | identity | reidentify | iface) lock ;;
 esac
 
 case ${1:-} in
@@ -1273,7 +1364,22 @@ reload)
 	if command -v onu-config >/dev/null; then
 		onu-config save || log "the settings are applied but not saved"
 	fi
+	# What is saved is kept: no trial goes back on it.
+	rm -f "$TRIAL"
+	rm -rf "$KEPT"
 	apply
+	;;
+try)
+	try_change
+	;;
+confirm)
+	confirm
+	;;
+revert)
+	[ -r "$TRIAL" ] && expire "$(sed -n 's/^TOKEN=//p' "$TRIAL")"
+	;;
+expire)
+	expire "${2:-}"
 	;;
 stop)
 	load
@@ -1307,6 +1413,7 @@ status)
 		echo "$line"
 	done
 	[ -s "$RUN/onu-dns" ] && echo "dns $(cat "$RUN/onu-dns")"
+	[ -r "$TRIAL" ] && echo "trial until $(sed -n 's/^UNTIL=//p' "$TRIAL")"
 	for d in "$SESSIONS"/*; do
 		[ -r "$d/pass" ] &&
 			echo "pass $(cat "$d/pass") on $(cat "$d/lan") from session ${d##*/}"
@@ -1330,7 +1437,7 @@ netmask)
 	netmask "${2:-0}"
 	;;
 *)
-	echo "usage: onu-apply start|reload|stop|identity|reidentify|status|sync" >&2
+	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|sync" >&2
 	exit 2
 	;;
 esac

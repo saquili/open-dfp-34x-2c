@@ -208,11 +208,23 @@ there, and names it by its whole path where procd starts it.
 
       onu-apply start      # at boot
       onu-apply reload     # after /run/onu.conf changed; saves it too
+      onu-apply try        # the same on trial, back unless confirmed in 90 s
+      onu-apply confirm    # keep the change on trial, and save it
+      onu-apply revert     # back to the settings of before the trial now
       onu-apply status
       onu-apply identity   # at boot: the identity to the PON driver, PON up
       onu-apply reidentify # after the identity changed: register again
       onu-apply iface      # netifd's, for an interface that came up or down
       onu-apply sync       # follow what changed outside the settings
+
+   A change on trial (ADR 0014) is applied but not saved, and the settings
+   and accounts applied before it are kept aside, in ``/run/onu-kept``,
+   readable by root alone; unless ``confirm`` keeps it within 90 s
+   (``TRIAL_LIMIT``), the stick goes back to them by itself, so that a
+   change that cut off whoever made it comes undone. A change during a
+   trial starts it again and goes back to the settings of before the first;
+   ``reload`` saves, and so ends a trial. A restart during a trial starts
+   with the settings saved before it.
 
    One ``onu-apply`` at a time changes the stick, and the others wait: the
    lock is ``/run/onu-apply.lock``, a symbolic link to the PID of its holder,
