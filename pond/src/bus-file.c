@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "act.h"
 #include "bus.h"
@@ -53,15 +55,27 @@ int bus_call(const char *object, const char *method,
 	return (int)len;
 }
 
+/* The program of @m, from $POND_<ITS NAME> when set, for the tests. */
+static const char *program_of(const struct act_method *m)
+{
+	const char *base = strrchr(m->program, '/') + 1, *prog;
+	char env[64];
+	size_t k = (size_t)snprintf(env, sizeof(env), "POND_");
+
+	for (; *base && k + 1 < sizeof(env); base++)
+		env[k++] = *base == '-' ? '_' : (char)toupper((unsigned char)*base);
+	env[k] = '\0';
+	prog = getenv(env);
+	return prog && *prog ? prog : m->program;
+}
+
 int bus_act(const char *method, const char *const *names,
 	    const char *const *values, size_t n, const char *input, char *out,
 	    size_t cap)
 {
 	const struct act_method *m = act_find(method);
 	const char *given[ACT_PARAMS_MAX] = { NULL };
-	const char *argv[ACT_ARGV_MAX + 1], *bad, *base, *prog;
-	char env[64];
-	size_t k = 0;
+	const char *argv[ACT_ARGV_MAX + 1], *bad;
 
 	if (cap)
 		out[0] = '\0';
@@ -73,14 +87,51 @@ int bus_act(const char *method, const char *const *names,
 				given[p] = values[i];
 	if (act_argv(m, given, argv, &bad))
 		return -EINVAL;
-	/* The program from $POND_<ITS NAME>, for the tests. */
-	base = strrchr(m->program, '/') + 1;
-	k = (size_t)snprintf(env, sizeof(env), "POND_");
-	for (; *base && k + 1 < sizeof(env); base++)
-		env[k++] = *base == '-' ? '_' : (char)toupper((unsigned char)*base);
-	env[k] = '\0';
-	prog = getenv(env);
-	if (prog && *prog)
-		argv[0] = prog;
+	argv[0] = program_of(m);
 	return prov_exec(argv[0], argv + 1, m->input ? input : NULL, out, cap);
+}
+
+/* What bus_act_start() started, and whom to tell. */
+static pid_t g_pid;
+static void (*g_done)(int code);
+
+int bus_act_start(const char *method, void (*done)(int code))
+{
+	const struct act_method *m = act_find(method);
+	const char *argv[ACT_ARGV_MAX + 1], *bad;
+	pid_t pid;
+
+	if (g_pid > 0)
+		return -EBUSY;
+	if (!m)
+		return -ENOENT;
+	if (act_argv(m, NULL, argv, &bad))
+		return -EINVAL;
+	argv[0] = program_of(m);
+	pid = fork();
+	if (pid < 0)
+		return -errno;
+	if (!pid) {
+		execv(argv[0], (char *const *)argv);
+		_exit(127);
+	}
+	g_pid = pid;
+	g_done = done;
+	return 0;
+}
+
+bool bus_act_running(void)
+{
+	return g_pid > 0;
+}
+
+void bus_poll(void)
+{
+	int st;
+
+	if (g_pid <= 0 || waitpid(g_pid, &st, WNOHANG) != g_pid)
+		return;
+	g_pid = 0;
+	if (g_done)
+		g_done(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
 }

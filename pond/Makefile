@@ -86,7 +86,8 @@ $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onu-config
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
-	POND_ROOT=$(abspath $(BUILD))/fixtures POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
+	POND_ROOT=$(abspath $(BUILD))/fixtures ONU_ROOT=$(abspath $(BUILD))/fixtures \
+		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
 		$(BUILD)/test_prov
 	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
 	POND_ROOT=$(abspath $(BUILD))/auth $(BUILD)/test_auth

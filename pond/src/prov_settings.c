@@ -6,24 +6,22 @@
  * which onu-apply applies, and the account of each of the stick's PPPoE
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
  * only. What the settings mean, their defaults and the rules that bind them
- * together, is onu-config's (ADR 0014): pond has "onu-config settings" read them in
- * full and "onu-config check" judge a change, and knows none of the rules
- * itself.
+ * together, is onu-config's (ADR 0014), and so are the files: pond reads
+ * neither, and has onu-act run onu-config for it (bus.h).
  *
- * A read gives the settings, each session with its user, whether a secret is
- * set (never the secret), and what onu-apply and dhcp6d brought up for it
- * (/run/session/N), what it hands down among it, the address handed on, and
- * what became of the settings in the configuration store, which onu-config
- * records in /run/onu-store: "loaded" at boot, "defaults" when the store
- * held none, "saved" or "failed" after a change, "none" without a store,
- * and the changes on trial, of the settings, the SFP lane or the management
- * pair, with when each goes back (/run/onu-trial.d). A write takes
- * KEY=value lines, has onu-config judge them over the settings in force,
- * writes what it gives back and the accounts, and starts "onu-apply try"
- * without waiting for it: the change is on trial, and goes back unless it
- * is confirmed (ADR 0014, changes.c). Until onu-apply ends, a write is
- * refused. POND_APPLY and POND_ONU_CONFIG name other programs to start, for
- * the tests.
+ * A read gives the settings as "onu-config current" gives them, each session
+ * with its user and whether a secret is set (never the secret), and what
+ * onu-apply and dhcp6d brought up for it (/run/session/N), what it hands
+ * down among it, the address handed on, and what became of the settings in
+ * the configuration store, which onu-config records in /run/onu-store:
+ * "loaded" at boot, "defaults" when the store held none, "saved" or
+ * "failed" after a change, "none" without a store, and the changes on
+ * trial, of the settings, the SFP lane or the management pair, with when
+ * each goes back (/run/onu-trial.d). A write takes KEY=value lines, has
+ * "onu-config change" judge them over the settings in force and write
+ * them, and starts "onu-apply try" without waiting for it: the change is on
+ * trial, and goes back unless it is confirmed (ADR 0014, changes.c). Until
+ * onu-apply ends, a write is refused.
  */
 
 #define _GNU_SOURCE
@@ -33,19 +31,12 @@
 #include "providers.h"
 
 #include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
-#define CONF "/run/onu.conf"
-#define CREDS "/run/onu-pppoe"
 #define SESSION_DIR "/run/session"
 #define SESSIONS 7
 #define TEXT_MAX 8192
@@ -53,21 +44,14 @@
 #define USER_MAX 63
 #define SECRET_MAX 255
 
+/* The account of a session as onu-config current gives it: its user, and whether a secret is set. */
 struct account {
 	char user[USER_MAX + 1];
-	char secret[SECRET_MAX + 1];
+	bool secret;
 };
 
-/* The onu-apply that runs, or 0; how the last one ended, or -1. */
-static pid_t g_apply;
+/* How the last onu-apply try ended, or -1. */
 static int g_apply_status = -1;
-
-static const char *program(const char *env, const char *otherwise)
-{
-	const char *p = getenv(env);
-
-	return p && *p ? p : otherwise;
-}
 
 /* Text after the @len bytes of @buf, which holds @cap; @len counts past it. */
 static void append(char *buf, size_t cap, size_t *len, const char *fmt, ...)
@@ -83,66 +67,6 @@ static void append(char *buf, size_t cap, size_t *len, const char *fmt, ...)
 	*len += n > 0 ? (size_t)n : 0;
 }
 
-/* PPPOEn_USER or PPPOEn_SECRET, and PPPOE_USER of before for the first. */
-static bool account_key(const char *name, int *n, bool *user)
-{
-	const char *rest;
-
-	if (strncmp(name, "PPPOE", 5))
-		return false;
-	if (name[5] == '_') {
-		*n = 0;
-		rest = name + 6;
-	} else if (name[5] >= '1' && name[5] <= '0' + SESSIONS && name[6] == '_') {
-		*n = name[5] - '1';
-		rest = name + 7;
-	} else {
-		return false;
-	}
-	if (!strcmp(rest, "USER"))
-		*user = true;
-	else if (!strcmp(rest, "SECRET"))
-		*user = false;
-	else
-		return false;
-	return true;
-}
-
-static const char *creds_path(int n, char *buf, size_t cap)
-{
-	snprintf(buf, cap, "%s%d", CREDS, n + 1);
-	return buf;
-}
-
-/* The account of each session, from its file; an empty user for none. */
-static void accounts_load(struct account acct[SESSIONS])
-{
-	char text[512], path[64];
-
-	memset(acct, 0, sizeof(*acct) * SESSIONS);
-	for (int n = 0; n < SESSIONS; n++) {
-		struct account *a = &acct[n];
-
-		if (!prov_slurp(creds_path(n, path, sizeof(path)), text,
-				sizeof(text), NULL) &&
-		    sscanf(text, "%63s %255s", a->user, a->secret) != 2) {
-			a->user[0] = '\0';
-			a->secret[0] = '\0';
-		}
-	}
-	explicit_bzero(text, sizeof(text));
-}
-
-/* The accounts, as onu-config takes them, after the @len bytes of @buf. */
-static void accounts_text(const struct account acct[SESSIONS], char *buf,
-			  size_t cap, size_t *len)
-{
-	for (int n = 0; n < SESSIONS; n++)
-		if (*acct[n].user)
-			append(buf, cap, len, "PPPOE%d_USER=%s\nPPPOE%d_SECRET=%s\n",
-			       n + 1, acct[n].user, n + 1, acct[n].secret);
-}
-
 /* Whether @line is KEY=VALUE, the key in capitals, digits and '_'. */
 static bool setting_line(const char *line)
 {
@@ -152,55 +76,42 @@ static bool setting_line(const char *line)
 }
 
 /*
- * Run "onu-config @verb" on @input: 0 when it took the settings, which are in
- * @out, one KEY=VALUE line each; -EINVAL when it refused them, with why in
- * @out; -EIO when it could not run.
+ * The settings in force, in full, with each account's PPPOEn_USER and
+ * PPPOEn_SECRET_SET, as onu-config current gives them through onu-act:
+ * KEY=VALUE lines in @out, and no other.
  */
-static int onu_config(const char *verb, const char *input, char *out, size_t cap)
+static int settings_current(char *out, size_t cap)
 {
-	const char *args[] = { verb, NULL };
-	int rc = prov_exec(program("POND_ONU_CONFIG", "onu-config"), args, input, out, cap);
+	char got[TEXT_MAX], *line, *save = NULL;
+	size_t olen = 0;
+	int rc = bus_act("settings_current", NULL, NULL, 0, NULL, got, sizeof(got));
 
-	if (rc < 0 || rc >= 126)
-		return -EIO;
-	return rc ? -EINVAL : 0;
-}
-
-/*
- * The settings in force, in full, as onu-config reads them, with the accounts of
- * @acct: KEY=VALUE lines in @out, and no other.
- */
-static int settings_read(const struct account acct[SESSIONS], char *out,
-			 size_t cap)
-{
-	char in[TEXT_MAX], got[TEXT_MAX], *line, *save = NULL;
-	size_t len = 0, olen = 0;
-	int rc;
-
-	if (prov_slurp(CONF, in, sizeof(in), &len)) {
-		len = 0;
-		in[0] = '\0';
-	}
-	if (len && in[len - 1] != '\n')
-		append(in, sizeof(in), &len, "\n");
-	accounts_text(acct, in, sizeof(in), &len);
-	if (len >= sizeof(in)) {
-		rc = -E2BIG;
-		goto out;
-	}
-	rc = onu_config("settings", in, got, sizeof(got));
 	if (rc)
-		goto out;
+		return rc < 0 ? rc : -EIO;
 	/* What it said of a line it left out is no setting. */
 	out[0] = '\0';
 	for (line = strtok_r(got, "\n", &save); line; line = strtok_r(NULL, "\n", &save))
 		if (setting_line(line))
 			append(out, cap, &olen, "%s\n", line);
-	if (olen >= cap)
-		rc = -E2BIG;
-out:
-	explicit_bzero(in, sizeof(in));
-	return rc;
+	return olen >= cap ? -E2BIG : 0;
+}
+
+/* The account of each session, of the lines of onu-config current. */
+static void accounts_of(const char *text, struct account acct[SESSIONS])
+{
+	memset(acct, 0, sizeof(*acct) * SESSIONS);
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int n;
+
+		if (strncmp(p, "PPPOE", 5) || p[5] < '1' || p[5] > '0' + SESSIONS)
+			continue;
+		n = p[5] - '1';
+		if (!strncmp(p + 6, "_USER=", 6))
+			snprintf(acct[n].user, sizeof(acct[n].user), "%.*s",
+				 (int)strcspn(p + 12, "\n"), p + 12);
+		else if (!strncmp(p + 6, "_SECRET_SET=1", 13))
+			acct[n].secret = true;
+	}
 }
 
 /* The first line of what onu-config said, without its name, as the reason. */
@@ -215,72 +126,15 @@ static void reason(const char *said, char *err, size_t errcap)
 	snprintf(err, errcap, "%.*s", (int)n, said);
 }
 
-/* Write @text to @path through a new file renamed over it, with @mode. */
-static int write_file(const char *path, const char *text, mode_t mode)
-{
-	char rooted[512], tmp[520];
-	const char *dst = prov_path(path, rooted, sizeof(rooted));
-	size_t len = strlen(text);
-	int fd, err = 0;
-
-	snprintf(tmp, sizeof(tmp), "%s.new", dst);
-	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
-	if (fd < 0)
-		return -errno;
-	if (fchmod(fd, mode))
-		err = -errno;
-	else if (write(fd, text, len) != (ssize_t)len)
-		err = -EIO;
-	if (close(fd) && !err)
-		err = -errno;
-	if (!err && rename(tmp, dst))
-		err = -errno;
-	if (err)
-		unlink(tmp);
-	return err;
-}
-
 void prov_settings_reap(void)
 {
-	int st;
-	pid_t r;
-
-	if (g_apply <= 0)
-		return;
-	r = waitpid(g_apply, &st, WNOHANG);
-	if (r == g_apply) {
-		g_apply_status = WIFEXITED(st) ? WEXITSTATUS(st) :
-						 128 + WTERMSIG(st);
-		g_apply = 0;
-	} else if (r < 0) {
-		g_apply = 0;
-	}
+	bus_poll();
 }
 
-/* Start "onu-apply try", with the signals a program starts with. */
-static int apply(void)
+/* The end of onu-apply try. */
+static void applied(int code)
 {
-	const char *prog = getenv("POND_APPLY");
-	sigset_t none;
-	pid_t pid;
-
-	if (!prog || !*prog)
-		prog = "/usr/sbin/onu-apply";
-	pid = fork();
-	if (pid < 0)
-		return -errno;
-	if (!pid) {
-		signal(SIGPIPE, SIG_DFL);
-		signal(SIGINT, SIG_DFL);
-		signal(SIGTERM, SIG_DFL);
-		sigemptyset(&none);
-		sigprocmask(SIG_SETMASK, &none, NULL);
-		execl(prog, prog, "try", (char *)NULL);
-		_exit(127);
-	}
-	g_apply = pid;
-	g_apply_status = -1;
-	return 0;
+	g_apply_status = code < 0 ? 255 : code;
 }
 
 static const char *line_value(const char *text, const char *key, char *out,
@@ -388,7 +242,7 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		pv_str(out, acct[n].user);
 		pv_comma(out);
 		pv_key(out, "secret_set");
-		pv_bool(out, *acct[n].secret != '\0');
+		pv_bool(out, acct[n].secret);
 		plen = (size_t)snprintf(prefix, sizeof(prefix), "SESSION%d_", n + 1);
 		for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
 			const char *eq = strchr(p, '=');
@@ -467,12 +321,10 @@ int prov_settings(struct prov_buf *out)
 	int rc;
 
 	prov_settings_reap();
-	accounts_load(acct);
-	rc = settings_read(acct, text, sizeof(text));
-	if (rc) {
-		explicit_bzero(acct, sizeof(acct));
+	rc = settings_current(text, sizeof(text));
+	if (rc)
 		return rc;
-	}
+	accounts_of(text, acct);
 
 	pv_open(out, '{');
 	pv_key(out, "settings");
@@ -580,7 +432,7 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 
 	pv_key(out, "applying");
-	pv_bool(out, g_apply > 0);
+	pv_bool(out, bus_act_running());
 	pv_comma(out);
 	pv_key(out, "last_apply_status");
 	if (g_apply_status < 0)
@@ -593,117 +445,34 @@ int prov_settings(struct prov_buf *out)
 
 int prov_settings_set(const char *val, char *err, size_t errcap)
 {
-	struct account acct[SESSIONS];
-	char text[TEXT_MAX], in[TEXT_MAX], out[TEXT_MAX], file[TEXT_MAX];
-	char *line, *save = NULL;
-	bool changed[SESSIONS] = { false };
-	size_t len, flen = 0;
-	int rc = -EINVAL;
+	char out[TEXT_MAX];
+	int rc;
 
 	prov_settings_reap();
-	if (g_apply > 0) {
+	if (bus_act_running()) {
 		snprintf(err, errcap, "the last change is still being applied");
 		return -EBUSY;
 	}
-	if (strlen(val) >= sizeof(text)) {
+	if (strlen(val) >= TEXT_MAX) {
 		snprintf(err, errcap, "the settings are too long");
 		return -EINVAL;
 	}
-	snprintf(text, sizeof(text), "%s", val);
-	accounts_load(acct);
 
-	/* The settings in force, then the change over them, then the accounts. */
-	rc = settings_read(acct, in, sizeof(in));
+	/* onu-config judges the change over the settings in force and writes it. */
+	rc = bus_act("settings_change", NULL, NULL, 0, val, out, sizeof(out));
+	if (rc == 1) {
+		reason(out, err, errcap);
+		return -EINVAL;
+	}
 	if (rc) {
-		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
-		goto out;
-	}
-	len = strlen(in);
-	for (line = strtok_r(text, "\r\n", &save); line;
-	     line = strtok_r(NULL, "\r\n", &save)) {
-		char *eq = strchr(line, '=');
-		bool user;
-		int n;
-
-		/*
-		 * Every line goes to onu-config, which judges an account too; the
-		 * accounts as they then are follow, and are the files.
-		 */
-		if (eq) {
-			*eq = '\0';
-			if (account_key(line, &n, &user)) {
-				struct account *a = &acct[n];
-				const char *v = eq + 1;
-
-				changed[n] = true;
-				/* An empty user removes the session's account. */
-				if (user && !*v)
-					memset(a, 0, sizeof(*a));
-				else if (strlen(v) <= (user ? USER_MAX : SECRET_MAX))
-					memcpy(user ? a->user : a->secret, v, strlen(v) + 1);
-			}
-			*eq = '=';
-		}
-		append(in, sizeof(in), &len, "%s\n", line);
-	}
-	accounts_text(acct, in, sizeof(in), &len);
-	if (len >= sizeof(in)) {
-		snprintf(err, errcap, "the settings are too long");
-		rc = -EINVAL;
-		goto out;
+		snprintf(err, errcap, "onu-config: %s",
+			 rc < 0 ? "it does not run" : "the settings were not written");
+		return -EIO;
 	}
 
-	rc = onu_config("check", in, out, sizeof(out));
-	if (rc) {
-		if (rc == -EINVAL)
-			reason(out, err, errcap);
-		else
-			snprintf(err, errcap, "onu-config: it does not run");
-		goto out;
-	}
-
-	for (int n = 0; n < SESSIONS; n++) {
-		char path[64], rooted[256];
-
-		if (!changed[n])
-			continue;
-		creds_path(n, path, sizeof(path));
-		if (*acct[n].user) {
-			snprintf(file, sizeof(file), "%s %s\n", acct[n].user,
-				 acct[n].secret);
-			rc = write_file(path, file, 0600);
-		} else if (unlink(prov_path(path, rooted, sizeof(rooted))) &&
-			   errno != ENOENT) {
-			rc = -errno;
-		} else {
-			rc = 0;
-		}
-		if (rc) {
-			snprintf(err, errcap, "%s: %s", path, strerror(-rc));
-			goto out;
-		}
-	}
-
-	append(file, sizeof(file), &flen, "# The settings of the data path, from pond.\n%s", out);
-	if (flen >= sizeof(file)) {
-		snprintf(err, errcap, "the settings are too long");
-		rc = -EINVAL;
-		goto out;
-	}
-	rc = write_file(CONF, file, 0644);
-	if (rc) {
-		snprintf(err, errcap, "%s: %s", CONF, strerror(-rc));
-		goto out;
-	}
-
-	rc = apply();
+	rc = bus_act_start("settings_try", applied);
 	if (rc)
 		snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
-out:
-	explicit_bzero(acct, sizeof(acct));
-	explicit_bzero(text, sizeof(text));
-	explicit_bzero(in, sizeof(in));
-	explicit_bzero(file, sizeof(file));
 	return rc;
 }
 
@@ -765,7 +534,12 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 	size_t len = 0;
 	int rc;
 
-	accounts_load(acct);
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	accounts_of(text, acct);
 	if (i) {
 		if (strlen(i) != 1 || *i < '1' || *i > '0' + SESSIONS) {
 			snprintf(err, errcap, "ID: 1 to %d", SESSIONS);

@@ -22,9 +22,10 @@ reported and left out, and the daemon ends only when it listens on none.
 What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0014) rather than run the program itself: the SFP lane, the management pair,
 the confirmation of the changes on trial, the name, the identity and a new
-registration, the updates' status and trial, and the restart. The settings,
-the password and the upload and download of an update it still runs itself,
-until the next part of step 8 of ADR 0014 moves them too.
+registration, the updates' status and trial, the restart, and the settings
+of the data path, which pond reads without the accounts' secrets and changes
+on trial. The password and the upload and download of an update it still
+runs itself, until the next parts of step 8 of ADR 0014 move them too.
 
 Signing in
 ==========
@@ -79,14 +80,16 @@ or of the other bank with an empty body, and restarts.
 * ``settings``: the settings of onu-apply (see ``onu-utils``), the keys of
   ``/run/onu.conf`` (``SESSIONn_GEM``, ``_VLAN``, ``_MAC`` and ``_FAMILY``
   among them) and the accounts, ``PPPOEn_USER`` and ``PPPOEn_SECRET`` for the
-  sessions 1 to 7. pond knows none of their rules, which are onu-config's (ADR
-  0014): ``onu-config check`` judges the change over the settings in force and
-  gives them back in full, or says why not, which pond answers with; pond
-  writes ``/run/onu.conf`` as onu-config gave it and each account's
-  ``/run/onu-pppoeN`` for root only, then starts ``onu-apply try``: the
-  change is on trial, and the stick goes back to the settings of before
-  unless it is confirmed (``changes``, ADR 0014), which saves them in the
-  store; it refuses another change, with 409, until onu-apply has ended. A read gives the settings as ``onu-config settings`` reads them,
+  sessions 1 to 7. pond knows none of their rules, nor reads or writes their
+  files, which are onu-config's (ADR 0014): ``onu-config change``, which
+  onu-act runs for pond, judges the change over the settings in force, says
+  why not, which pond answers with, or writes ``/run/onu.conf`` and the
+  accounts that changed, ``/run/onu-pppoeN`` for root only; pond then has
+  onu-act start ``onu-apply try`` and does not wait for it: the change is on
+  trial, and the stick goes back to the settings of before unless it is
+  confirmed (``changes``, ADR 0014), which saves them in the store; it
+  refuses another change, with 409, until onu-apply has ended. A read gives
+  the settings as ``onu-config current`` reads them,
   each session with its user and whether a secret is set, never the secret,
   and what was brought up for it: its link, its address and name servers
   from its interface of netifd (``network.interface.sesN`` on ubus), the

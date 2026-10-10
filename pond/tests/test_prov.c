@@ -1562,7 +1562,7 @@ static void test_settings(void)
 
 	mkdir(prov_path("/run", file, sizeof(file)), 0755);
 	put("/apply-stub", apply_stub, 0755);
-	setenv("POND_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
 
 	s = settled(buf, sizeof(buf));
 	check(strstr(s, "\"MODE\":\"\"") &&
@@ -1743,12 +1743,12 @@ static void test_settings(void)
 	check(strstr(s, "\"store\":\"saved\"") != NULL,
 	      "and with one, what became of the settings in the store");
 
-	setenv("POND_APPLY", "/nonexistent/onu-apply", 1);
+	setenv("POND_ONU_APPLY", "/nonexistent/onu-apply", 1);
 	rc = prov_settings_set("LAN_DHCP=off", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && strstr(s, "\"last_apply_status\":127"),
 	      "an onu-apply that cannot run is reported, not hidden");
-	unsetenv("POND_APPLY");
+	unsetenv("POND_ONU_APPLY");
 }
 
 /* onu-config's stand-in: the identity it is given goes to a file. */
