@@ -156,6 +156,10 @@ owners: what moves to netifd moves whole.
 7. omcid keeps its MIB in ``/run``.
 8. pond as an account of its own, under ubusd's access lists.
 
+omcid's part of step 6 goes with step 8 (decided 2026-10-10): until pond
+leaves root, nothing reads omcid's state on ubus, and then pond needs what
+it reads of the MIB there too, under ubusd's access lists.
+
 Steps 3, 4, 5 and 7 are tried on a stick of the bench with live sessions:
 two sessions at once, an IPv6 prefix, the hardware path's throughput as
 before (some 900 Mb/s each way), and each program killed during a session.
