@@ -19,4 +19,15 @@
  */
 void omci_hw_kernel_router(bool on);
 
+/**
+ * omci_hw_kernel_notify() - a program to tell of each change published
+ * @program: its path, or NULL for none
+ *
+ * After each change of what the backend publishes in /run (the VLANs of the
+ * GEM ports, the OLT's translations) and each GEM interface made or taken
+ * away, the backend runs @program with the argument "omcid", and does not
+ * wait for it.
+ */
+void omci_hw_kernel_notify(const char *program);
+
 #endif

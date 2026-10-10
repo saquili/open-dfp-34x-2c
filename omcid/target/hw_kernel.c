@@ -41,6 +41,7 @@
 #include <linux/pon.h>
 #include <linux/sockios.h>
 #include <net/if.h>
+#include <signal.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -1032,6 +1033,52 @@ static int gem_create(const struct omci_hw_gem_port *g, int lower)
 	return rtnl_talk(req, off, NULL, 0, NULL);
 }
 
+/* The program told of each change published (omci_hw_kernel_notify()). */
+static const char *g_notify;
+
+void omci_hw_kernel_notify(const char *program)
+{
+	struct sigaction sa = { .sa_handler = SIG_IGN,
+				.sa_flags = SA_NOCLDWAIT };
+
+	g_notify = program;
+	if (program == NULL)
+		return;
+	/* The daemon does not wait for its children, and none stays a zombie. */
+	sigemptyset(&sa.sa_mask);
+	(void)sigaction(SIGCHLD, &sa, NULL);
+}
+
+/*
+ * Tell g_notify of a change: run it with the argument "omcid", without
+ * waiting for it. It gets the daemon's standard streams and nothing else of
+ * it, and the default dispositions of the signals the daemon ignores, which
+ * a program would keep.
+ */
+static void notify_run(void)
+{
+	pid_t pid;
+
+	if (g_notify == NULL)
+		return;
+	pid = fork();
+	if (pid == 0) {
+		long max = sysconf(_SC_OPEN_MAX);
+
+		(void)signal(SIGCHLD, SIG_DFL);
+		(void)signal(SIGPIPE, SIG_DFL);
+		if (max <= 0 || max > 4096)
+			max = 1024;
+		for (int fd = 3; fd < max; fd++)
+			(void)close(fd);
+		execl(g_notify, g_notify, "omcid", (char *)NULL);
+		_exit(127);
+	}
+	if (pid < 0)
+		OMCI_WARN("%s was not told of a change: %s", g_notify,
+			  strerror(errno));
+}
+
 /*
  * Make the GEM interfaces those of @ports: an interface that matches a port
  * stays, given the port's upstream attributes where they differ; the others
@@ -1045,6 +1092,7 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 {
 	struct gem_present have[OMCI_HW_GEM_MAX_PORTS * 2];
 	bool keep[ARRAY_SIZE(have)];
+	bool changed = false;
 	size_t nhave;
 	unsigned int lower;
 	int err;
@@ -1104,8 +1152,11 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 		if (err) {
 			OMCI_WARN("gem: could not remove Port-ID %u: %s",
 				  have[j].port_id, strerror(-err));
+			if (changed)
+				notify_run();
 			return OMCI_ERR_HW;
 		}
+		changed = true;
 	}
 
 	for (size_t i = 0; i < n; i++) {
@@ -1127,6 +1178,7 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 			omci_hw_reject_add(rejected, ports[i].port_id);
 			continue;
 		}
+		changed = true;
 		OMCI_INFO(
 			"gem: Port-ID %u up as " GEM_NAME_FMT
 			" (direction %u, T-CONT %u, priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s)",
@@ -1135,6 +1187,8 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 			ports[i].weight, ports[i].cir, ports[i].pir);
 	}
 
+	if (changed)
+		notify_run();
 	return (rejected != NULL && rejected->n) ? OMCI_DECLINED : OMCI_OK;
 }
 
@@ -1566,7 +1620,8 @@ static int bridge_vlan(int ifindex, uint16_t vid, bool add)
 /* The interface of a bridge port: sfp for the UNI, gemN for a GEM port. */
 /*
  * Replace the file @path with @text, unless it holds @text already as the
- * last write left it in @last (@cap bytes); @what names it in a warning.
+ * last write left it in @last (@cap bytes); @what names it in a warning. A
+ * change is told (notify_run()).
  */
 static void run_publish(const char *path, const char *text, char *last,
 			size_t cap, bool *published, const char *what)
@@ -1590,6 +1645,7 @@ static void run_publish(const char *path, const char *text, char *last,
 	}
 	snprintf(last, cap, "%s", text);
 	*published = true;
+	notify_run();
 }
 
 /*

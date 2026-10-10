@@ -21,7 +21,7 @@
 static void print_help(FILE *f, const char *prog)
 {
 	fprintf(f,
-		"usage: %s [-d DEVICE] [-r] [-v]... [-h]\n"
+		"usage: %s [-d DEVICE] [-r] [-x PROGRAM] [-v]... [-h]\n"
 		"Answer the OLT on the OMCI port of the ONU.\n"
 		"\n"
 		"  -d DEVICE  the OMCI port (default %s)\n"
@@ -29,6 +29,9 @@ static void print_help(FILE *f, const char *prog)
 		"             applied, and the GEM interfaces stay out of any bridge;\n"
 		"             SIGUSR1 puts a running daemon in router mode, SIGUSR2\n"
 		"             back in bridge mode\n"
+		"  -x PROGRAM run PROGRAM with the argument omcid after each\n"
+		"             change of what the daemon publishes in /run, and\n"
+		"             each GEM interface made or taken away\n"
 		"  -v         log more; may be given more than once\n"
 		"  -h         show this text\n",
 		prog, OMCI_PORT_DEFAULT);
@@ -40,13 +43,16 @@ int main(int argc, char **argv)
 	int level = OMCI_LOG_INFO;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "d:rvh")) != -1) {
+	while ((opt = getopt(argc, argv, "d:rx:vh")) != -1) {
 		switch (opt) {
 		case 'd':
 			device = optarg;
 			break;
 		case 'r':
 			omci_hw_kernel_router(true);
+			break;
+		case 'x':
+			omci_hw_kernel_notify(optarg);
 			break;
 		case 'v':
 			if (level < OMCI_LOG_TRACE)

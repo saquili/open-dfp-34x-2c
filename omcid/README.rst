@@ -99,7 +99,7 @@ the host link ``sfp``, and tc flower rules for the VLAN rules, the
 multicast traps, tags and counts and the bridge port filters, which the
 switch carries out::
 
-   omcid [-d DEVICE] [-r] [-v]...
+   omcid [-d DEVICE] [-r] [-x PROGRAM] [-v]...
 
 ``-r`` is router mode: the stick routes the subscriber's traffic itself. The
 daemon answers the OLT as usual, but leaves the bridge and the VLAN rules that
@@ -126,3 +126,8 @@ bridge port carries. ``onu-apply`` runs a session whose GEM port is ``auto`` on
 the GEM port that carries the session's VID on the fibre. Both files are
 replaced whole, and only when what they say changes, so that a session follows
 its service when the OLT moves it to another VID or another GEM port.
+
+``-x PROGRAM`` tells a program of each such change: the daemon runs it with
+the argument ``omcid`` after it replaces either file and after it makes or
+takes away a GEM interface, and does not wait for it. On the stick the
+program is ``onu-apply``, which follows the change at once.
