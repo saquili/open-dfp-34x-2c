@@ -185,11 +185,15 @@ there, and names it by its whole path where procd starts it.
    ONT, which is no hop, and the concentrator is the router's first. The first
    session that carries IPv6 hands its delegated prefix on in the same way,
    through ``dhcp6d`` (see ``dhcp6d/README.rst``), once its IPv6 is up: the
-   link to the router gets IPv6, and the stick forwards it. A watcher
-   brings each session up once the OLT has provisioned its GEM port, one
-   session every 5 s, as a concentrator may refuse one of two sessions that
-   authenticate at once, and starts its client again when its link ends,
-   each session after a wait of its own; what a session has is in
+   link to the router gets IPv6, and the stick forwards it. A watcher makes
+   each session an interface of netifd, ``sesN`` of the protocol ``pppoed``
+   (see ``pppoed/README.rst``), once the OLT has provisioned its GEM port:
+   netifd runs pppoed, puts what the session brought in place and starts
+   pppoed again when its link ends, each session 3 s after the one before,
+   as a concentrator may refuse one of two sessions that authenticate at
+   once. netifd tells onu-apply when an interface comes up or goes down
+   (``onu-apply iface``, netifd's ``-h``), and onu-apply hands the session's
+   address and prefix on or takes them back; what a session has is in
    ``/run/session/N``. For the bench, ``MODE=router`` makes the stick route
    instead: the LAN is the host link ``sfp``, with an address and BusyBox's
    DHCP server; the WAN is a GEM port or a VLAN on it, with an address by
@@ -202,6 +206,7 @@ there, and names it by its whole path where procd starts it.
       onu-apply status
       onu-apply identity   # at boot: the identity to the PON driver, PON up
       onu-apply reidentify # after the identity changed: register again
+      onu-apply iface      # netifd's, for an interface that came up or down
 
    ``identity`` gives the PON driver the serial number and PLOAM password of
    ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and

@@ -29,7 +29,7 @@ logged() {
 setup() {
 	T=$(mktemp -d)
 	LOG=$T/log
-	export ONU_ROOT=$T/root ONU_APPLY_NO_WATCH=1 LOG
+	export ONU_ROOT=$T/root ONU_APPLY_NO_WATCH=1 LOG APPLY=$MODE_SCRIPT
 	mkdir -p "$ONU_ROOT/run" "$ONU_ROOT/etc" "$ONU_ROOT/proc/sys/net/ipv4" \
 		"$ONU_ROOT/sys/class/net/sfp" "$ONU_ROOT/sys/class/net/pon" \
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
@@ -83,6 +83,8 @@ setup() {
 	exit 0
 	EOF
 	ln -s "$HERE/scripts/onu-run" "$T/bin/onu-run"
+	# onu-net stands in for netifd and its protocol "pppoed" as well.
+	ln -s "$HERE/tests/netifd-standin.sh" "$T/bin/onu-net"
 	# tc shows, on the ingress of sfp and pon, the boot's filter of the
 	# management VLAN at priority 1 and two of omcid's VLAN rules.
 	printf '#!/bin/sh\necho "tc $*" >>"$LOG"\n[ "$1 $2" = "filter show" ] || exit 0\n%s\n' \
@@ -296,7 +298,7 @@ check '[ "$(cat "$ONU_ROOT/run/session/1/dev")" = wan410 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/ipv4")" = 192.0.2.2 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/ppp")" = ppp0 ]'
-check '[ -s "$ONU_ROOT/run/pppoed1.pid" ]'
+check '[ -s "$ONU_ROOT/run/network.d/ses1" ] && grep -q "option proto .pppoed." "$ONU_ROOT/run/network.d/ses1"'
 check '[ "$(cat "$ONU_ROOT/run/onu-pass")" = 192.0.2.2 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-lan")" = lan36 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/pass")" = 192.0.2.2 ]'
@@ -381,7 +383,7 @@ check '[ ! -e "$ONU_ROOT/run/session/2" ]'
 check '[ -e "$ONU_ROOT/run/session/1" ]'
 check '! logged "^ip link del wan410"'
 check '! logged "^ip link set pon mtu 1500"'
-check '[ ! -e "$ONU_ROOT/run/pppoed2.pid" ]'
+check 'logged "^onu-net del ses2$" && [ ! -e "$ONU_ROOT/run/network.d/ses2" ]'
 check 'logged "^procd stop dhcp6d2$" && [ ! -e "$ONU_ROOT/run/onu-svc.d/dhcp6d2" ]'
 # The host dhcp6d delegates to goes into the store once, and its going too.
 echo "0003 1 fe80::2 2001:db8:1200::/56" >"$ONU_ROOT/run/onu-pd2"
@@ -782,6 +784,60 @@ setup
 rc=$?
 check '[ $rc -ne 0 ]'
 check '! logged "ip link set pon up"'
+teardown
+
+echo "each session an interface of netifd, of the protocol pppoed, in its role"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv4 \
+	SESSION2_HOST_VLAN=37 SESSION3_VLAN=410 SESSION3_FAMILY=ipv6 SESSION3_PASS=off
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
+echo "user3 secret" >"$ONU_ROOT/run/onu-pppoe3"
+"$MODE_SCRIPT" start 2>/dev/null
+for _ in 1 2 3; do "$MODE_SCRIPT" tick 2>/dev/null; done
+net() {
+	tr -d "\t'" <"$ONU_ROOT/run/network.d/ses$1" | grep "^option" | tr '\n' ' '
+}
+# The stick's way out hands its address on and is the default route; the
+# second hands on by its own table; the third keeps its prefix.
+check '[ "$(net 1)" = "option device wan410 option proto pppoed option session 1 option family ipv4 option pass 1 option defaultroute 1 " ]'
+check '[ "$(net 2)" = "option device wan410 option proto pppoed option session 2 option family ipv4 option pass 1 option defaultroute 0 " ]'
+check '[ "$(net 3)" = "option device wan410 option proto pppoed option session 3 option family ipv6 option pass 0 option defaultroute 0 " ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/role")" = "pass none" ] && [ "$(cat "$ONU_ROOT/run/session/2/role")" = "routed none" ] && [ "$(cat "$ONU_ROOT/run/session/3/role")" = "none none" ]'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/session/1/pass" ] && break
+	"$REAL_SLEEP" 0.2
+done
+# Another event of the same session hands on nothing again; another
+# interface's is no business of onu-apply.
+: >"$LOG"
+ACTION=ifupdate INTERFACE=ses1 DEVICE=ppp0 "$MODE_SCRIPT" iface 2>/dev/null
+ACTION=ifup INTERFACE=mgmt DEVICE=mgmt "$MODE_SCRIPT" iface 2>/dev/null
+rc=$?
+check '[ $rc -eq 0 ] && ! logged "^procd start" && ! logged "^ip "'
+"$MODE_SCRIPT" stop 2>/dev/null
+check 'logged "^onu-net del ses1$" && logged "^onu-net del ses2$" && logged "^onu-net del ses3$"'
+check '[ -z "$(ls "$ONU_ROOT/run/network.d" 2>/dev/null)" ]'
+teardown
+
+echo "the bench's router: its PPPoE WAN an interface of netifd too"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+conf MODE=router WAN_PROTO=pppoe WAN_VLAN=410
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" tick 2>/dev/null
+check '[ "$(net 1)" = "option device wan option proto pppoed option session 1 option family both option pass 0 option defaultroute 1 " ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/role")" = "primary none" ]'
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	[ -s "$ONU_ROOT/run/onu-dns" ] && break
+	"$REAL_SLEEP" 0.2
+done
+check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
+check '! logged "^udhcpd -f $ONU_ROOT/run/udhcpd-lan"'
+"$MODE_SCRIPT" stop 2>/dev/null
+check 'logged "^onu-net del ses1$" && [ ! -e "$ONU_ROOT/run/session/1" ]'
 teardown
 
 echo "test_onu_apply: $checks checks, $failures failed"

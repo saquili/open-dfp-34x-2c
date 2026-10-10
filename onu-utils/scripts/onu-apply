@@ -16,6 +16,9 @@
 #                      /run/onu-identity, and register with the OLT again
 #   onu-apply status   the shape in force, the WAN or the sessions, and the
 #                      address handed on
+#   onu-apply iface    what netifd runs for an event of an interface (netifd
+#                      -h), with ACTION, INTERFACE and DEVICE: a session's
+#                      interface that comes up hands on what it brought
 #
 # The settings are KEY=value lines in /run/onu.conf, which the status daemon
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
@@ -48,10 +51,13 @@
 # that carries IPv6 its delegated prefix, through dhcp6d, once its IPv6 is
 # up; the others keep theirs on the stick. What a session has is in the
 # directory /run/session/N: gem, dev and family, hands, the families it hands
-# down ("ipv4 ipv6", one of them or nothing), lan where it hands down, and
-# once it is up ppp, ipv4, ipv6 and dns, and pass and gateway once its
-# address went down. MODE=router, kept for the bench, is the one setting of a
-# shape.
+# down ("ipv4 ipv6", one of them or nothing), role, lan where it hands down,
+# and once it is up ppp, ipv4, peer, ipv6 and dns, which pppoed writes, and
+# pass and gateway once its address went down. Each session is an interface
+# of netifd, sesN, of the protocol "pppoed": netifd keeps pppoed and starts it
+# again when it ends, puts what the session brought in place, and runs
+# "onu-apply iface" when the interface comes up or goes down (ADR 0014).
+# MODE=router, kept for the bench, is the one setting of a shape.
 #
 # In bridge mode omcid connects the host link to the PON as the OLT
 # provisions it. In router mode omcid leaves the OLT's bridge out (omcid -r)
@@ -60,8 +66,8 @@
 # it, with an address by PPPoE, DHCP or by hand. The stick translates no
 # address: a host on the LAN reaches beyond the WAN with an address that the
 # network behind the WAN routes back to the stick. A watcher (onu-apply watch)
-# brings the WAN up when the OLT provisions its GEM port and restarts the PPPoE
-# or DHCP client when it ends.
+# brings the WAN up when the OLT provisions its GEM port and restarts the DHCP
+# client when it ends; a WAN by PPPoE is session 1's interface of netifd.
 #
 # In passthrough, the address handed down goes on no interface of the
 # stick's, and the one host on its link, the router behind the stick, takes
@@ -508,17 +514,6 @@ lan_dhcp() {
 	svc_start udhcpd -- udhcpd -f "$RUN/udhcpd.conf"
 }
 
-# One run of pppoed for session $1 on $2, with the options $3; its process id
-# goes to /run/pppoedN.pid, for session_down().
-pppoe_client() {
-	# $3 is a list of options, split on purpose. -M: a concentrator that
-	# agreed to 1500-byte packets in the discovery is taken at its word
-	# when its LCP asks for 1492, as an operator's does while it carries
-	# 1500 each way (measured; pppoed/README.rst).
-	sh -c 'echo $$ >"$0"; exec "$@"' "$RUN/pppoed$1.pid" \
-		pppoed up -i "$2" -f "$RUN/onu-pppoe$1" $3 -M
-}
-
 # What session $1 has: the fact $2 with the value $3, or none without one.
 note() {
 	[ -d "$SESSIONS/$1" ] || return 0
@@ -549,55 +544,90 @@ pd_up() {
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
 
-# The PPPoE client of session $1 on $2, with the options $3, started again
-# whenever the link ends. In the role $4, "pass" or "routed", its "up" line
-# gives the address the host takes, until the link ends, by the stick's
-# default route or by the session's own table; "pass" and "primary" give the
-# stick's name servers. With $5, "pd", its "up6" line starts dhcp6d, which
-# hands the session's delegated IPv6 prefix on.
-pppoe_loop() {
-	while :; do
-		pppoe_client "$1" "$2" "$3" 2>>"$RUN/pppoed.log" |
-			while read -r word dev _ addr _ peer _ _ _ dns1 dns2; do
-				case $word in
-				up6)
-					note "$1" ppp "$dev"
-					note "$1" ipv6 "$addr"
-					log "session $1: IPv6 up on $dev"
-					[ "$5" = pd ] && pd_up "$1" "$dev" "$2"
-					continue
-					;;
-				up) ;;
-				*) continue ;;
-				esac
-				note "$1" ppp "$dev"
-				note "$1" ipv4 "$addr"
-				dns=$(echo "$dns1 $dns2" | sed 's/ *- *//g')
-				note "$1" dns "$dns"
-				if [ "$4" = pass ] || [ "$4" = primary ]; then
-					if [ -n "$dns" ]; then
-						echo "$dns" >"$RUN/onu-dns"
-					else
-						rm -f "$RUN/onu-dns"
-					fi
-				fi
-				case $4 in
-				pass | routed) pass_lease "$1" "$addr" "$dev" "$peer" ;;
-				esac
-				log "session $1: IPv4 up on $dev"
-			done
-		note "$1" ppp
-		note "$1" ipv4
-		note "$1" ipv6
-		note "$1" dns
-		[ "$5" = pd ] && svc_stop "dhcp6d$1"
-		case $4 in
-		pass | routed) pass_lease_down "$1" ;;
+# Session $1 as an interface of netifd, "sesN", of the protocol "pppoed"
+# (pppoed/README.rst): netifd runs pppoed on the device $2, with the account of
+# /run/onu-pppoeN, for the family $3, the address handed on ($4, 1 or 0) and
+# the default route through it ($5), keeps it and starts it again when it
+# ends, and puts what the session brings in place; pppoed writes it to
+# /run/session/N. -M is pppoed's under netifd: a concentrator that agreed to
+# 1500-byte packets in the discovery is taken at its word when its LCP asks
+# for 1492, as an operator's does while it carries 1500 each way (measured).
+session_net() {
+	{
+		printf "config interface 'ses%s'\n\toption device '%s'\n" "$1" "$2"
+		printf "\toption proto 'pppoed'\n\toption session '%s'\n" "$1"
+		printf "\toption family '%s'\n\toption pass '%s'\n" "$3" "$4"
+		printf "\toption defaultroute '%s'\n\n" "$5"
+	} | onu-net set "ses$1" || log "session $1: netifd was not given it"
+}
+
+# What session $1 brought, which pppoed wrote in /run/session/N, handed on as
+# its role, in /run/session/N/role, says: in the role "pass" or "routed" the
+# address goes to the host, by the stick's default route or by the session's
+# own table; "pass" and "primary" give the stick's name servers. With "pd"
+# the delegated IPv6 prefix goes to the host by dhcp6d. netifd runs it for
+# each event of the session's interface, once a time; what is handed on
+# already stays as it is.
+session_brought() {
+	d=$SESSIONS/$1
+	role= role6=
+	[ -r "$d/role" ] && read -r role role6 <"$d/role"
+	dev=$(cat "$d/ppp" 2>/dev/null)
+	[ -n "$dev" ] || return 0
+	addr=$(cat "$d/ipv4" 2>/dev/null)
+	if [ -n "$addr" ] && [ "$(cat "$d/pass" 2>/dev/null)" != "$addr" ] &&
+		[ "$(cat "$d/up" 2>/dev/null)" != "$addr" ]; then
+		echo "$addr" >"$d/up"
+		dns=$(cat "$d/dns" 2>/dev/null)
+		if [ "$role" = pass ] || [ "$role" = primary ]; then
+			if [ -n "$dns" ]; then
+				echo "$dns" >"$RUN/onu-dns"
+			else
+				rm -f "$RUN/onu-dns"
+			fi
+		fi
+		case $role in
+		pass | routed) pass_lease "$1" "$addr" "$dev" "$(cat "$d/peer" 2>/dev/null)" ;;
 		esac
-		# Sessions that ended together start again apart (see
-		# sessions_tick()): 5 s for the first, 3 s more for each next.
-		sleep $((2 + 3 * $1))
-	done
+		log "session $1: IPv4 up on $dev"
+	fi
+	if [ -s "$d/ipv6" ] && [ "$role6" = pd ] && [ ! -e "$SVC_DIR/dhcp6d$1" ]; then
+		log "session $1: IPv6 up on $dev"
+		pd_up "$1" "$dev" "$(cat "$d/dev" 2>/dev/null)"
+	fi
+	return 0
+}
+
+# What session $1 handed on, taken back when it ends. What the session brought
+# is pppoed's to take away: by the time netifd tells of the end, the next
+# pppoed may have written its own.
+session_lost() {
+	d=$SESSIONS/$1
+	role= role6=
+	[ -r "$d/role" ] && read -r role role6 <"$d/role"
+	[ "$role6" = pd ] && svc_stop "dhcp6d$1"
+	case $role in
+	pass | routed) pass_lease_down "$1" ;;
+	esac
+	rm -f "$d/up"
+	return 0
+}
+
+# An event of an interface of netifd, which netifd runs onu-apply for (netifd
+# -h), with ACTION, INTERFACE and DEVICE: a session's interface, sesN, that
+# comes up or changes hands on what it brought; one that goes down takes it
+# back. The others are no business of onu-apply.
+iface_event() {
+	case ${INTERFACE:-} in
+	ses[1-7]) n=${INTERFACE#ses} ;;
+	*) return 0 ;;
+	esac
+	[ -d "$SESSIONS/$n" ] || return 0
+	case ${ACTION:-} in
+	ifup | ifupdate) session_brought "$n" ;;
+	ifdown) session_lost "$n" ;;
+	esac
+	return 0
 }
 
 # The address $2 of session $1, whose link is $3, handed down: a host route
@@ -719,8 +749,9 @@ wan_up() {
 	case $WAN_PROTO in
 	pppoe)
 		pppoe_mtu "$gem" "$wan"
-		pppoe_loop 1 "$wan" -D primary none &
-		echo $! >"$RUN/pppoe-loop1.pid"
+		mkdir -p "$SESSIONS/1"
+		echo "primary none" >"$SESSIONS/1/role"
+		session_net 1 "$wan" both 0 1
 		out=ppp0
 		;;
 	static)
@@ -797,8 +828,8 @@ feeds_down() {
 wan_down() {
 	gem= wan=
 	[ -r "$RUN/onu-wan" ] && read -r gem wan _ <"$RUN/onu-wan"
-	stop_pid pppoe-loop1
-	stop_pid pppoed1
+	[ "$WAN_PROTO" = pppoe ] && { onu-net del ses1 || log "netifd still has the WAN's session"; }
+	rm -rf "${SESSIONS:?}/1"
 	stop_pid udhcpc
 	feeds_down
 	# What a static or DHCP WAN put on the interface goes with it.
@@ -864,17 +895,13 @@ session_up() {
 	echo "$gem" >"$SESSIONS/$n/gem"
 	echo "$dev" >"$SESSIONS/$n/dev"
 	echo "$fam" >"$SESSIONS/$n/family"
-	opts= role=none
-	case $fam in
-	ipv4) opts=-4 ;;
-	ipv6) opts=-6 ;;
-	esac
+	pass=0 route=0 role=none
 	if hands "$n" ipv4; then
+		pass=1
 		if [ "$n" = "$(main_pass)" ]; then
-			opts="-D $opts -P"
+			route=1
 			role=pass
 		else
-			opts="$opts -P"
 			role=routed
 		fi
 	fi
@@ -891,8 +918,8 @@ session_up() {
 	if [ -n "$hands" ]; then
 		echo "$hands"
 	fi >"$SESSIONS/$n/hands"
-	pppoe_loop "$n" "$dev" "$opts" "$role" "$role6" &
-	echo $! >"$RUN/pppoe-loop$n.pid"
+	echo "$role $role6" >"$SESSIONS/$n/role"
+	session_net "$n" "$dev" "$fam" "$pass" "$route"
 	log "session $n on $dev ($fam), GEM port ${gem#gem}"
 }
 
@@ -913,8 +940,7 @@ session_down() {
 	[ -r "$SESSIONS/$1/dev" ] || return 0
 	read -r down_dev <"$SESSIONS/$1/dev"
 	read -r down_gem <"$SESSIONS/$1/gem"
-	stop_pid "pppoe-loop$1"
-	stop_pid "pppoed$1"
+	onu-net del "ses$1" || log "session $1: netifd still has it"
 	svc_stop "dhcp6d$1"
 	pass_lease_down "$1"
 	if ! dev_shared "$1" "$down_dev"; then
@@ -1253,6 +1279,10 @@ watch)
 	;;
 tick)
 	tick
+	;;
+iface)
+	load
+	iface_event
 	;;
 netmask)
 	netmask "${2:-0}"
