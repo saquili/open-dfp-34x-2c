@@ -227,7 +227,7 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
         USER: v.user,
         SECRET: v.secret || undefined,
         VLAN: v.vlan,
-        /* The channel follows the service: onu-mode finds it. */
+        /* The channel follows the service: onu-apply finds it. */
         GEM: "auto",
         MAC: v.mac,
         FAMILY: v.family,

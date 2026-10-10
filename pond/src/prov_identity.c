@@ -6,7 +6,7 @@
  * /run/onu-identity that onu-store keeps, and /run/onu-identity-source,
  * "store" or "factory". A read never gives the PLOAM password nor the
  * logical (LOID) password, only whether one is set. A change goes to onu-store (POND_STORE names another program),
- * then onu-mode reidentify (POND_REIDENTIFY) registers again with the OLT.
+ * then onu-apply reidentify (POND_REIDENTIFY) registers again with the OLT.
  */
 
 #define _GNU_SOURCE
@@ -310,7 +310,7 @@ int prov_identity_set(const char *val, char *err, size_t errcap)
 	/* Register again under the new identity, without waiting for it. */
 	g_reidentify = fork();
 	if (g_reidentify == 0) {
-		const char *prog = getenv("POND_REIDENTIFY") ?: "onu-mode";
+		const char *prog = getenv("POND_REIDENTIFY") ?: "onu-apply";
 
 		signal(SIGCHLD, SIG_DFL);
 		execlp(prog, prog, "reidentify", (char *)NULL);

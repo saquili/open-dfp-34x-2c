@@ -48,7 +48,7 @@ const settings: Settings = structuredClone(LIVE.settings);
  */
 const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_MOCK_SCENARIO;
 
-/* The VID on the fibre of each service the stand-in OLT translates, as onu-mode names its interface. */
+/* The VID on the fibre of each service the stand-in OLT translates, as onu-apply names its interface. */
 const FIBRE: Record<string, string> = { "410": "100", "420": "200", "421": "300" };
 const wanOf = (vlan: string) => `wan${FIBRE[vlan] ?? vlan}`;
 
@@ -799,7 +799,7 @@ export const handlers = [
   /*
    * A fixed address: a device's MAC and the IP it always gets in network LAN,
    * with NAME; IP= takes it away. A network's address of another device, or
-   * one already fixed, is refused, as onu-mode would.
+   * one already fixed, is refused, as onu-apply would.
    */
   http.post("*/api/set/fixed", async ({ request }) => {
     await delay(500);

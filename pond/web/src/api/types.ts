@@ -156,7 +156,7 @@ export interface Optics {
 
 export type Family = "ipv4" | "ipv6" | "both";
 
-/** A PPPoE session of the stick's own, and what onu-mode brought up for it. */
+/** A PPPoE session of the stick's own, and what onu-apply brought up for it. */
 export interface SessionInfo {
   id: number;
   user: string;

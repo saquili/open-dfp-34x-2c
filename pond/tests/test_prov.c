@@ -1498,7 +1498,7 @@ static void pause_10ms(void)
 	nanosleep(&ts, NULL);
 }
 
-/* The settings once onu-mode's stand-in has ended, waiting up to 5 s. */
+/* The settings once onu-apply's stand-in has ended, waiting up to 5 s. */
 static const char *settled(char *buf, size_t cap)
 {
 	const char *s = "";
@@ -1514,7 +1514,7 @@ static const char *settled(char *buf, size_t cap)
 }
 
 /*
- * onu-mode's stand-in notes that it ran, then waits for run/release, so that
+ * onu-apply's stand-in notes that it ran, then waits for run/release, so that
  * the tests see a change that is still being applied.
  */
 static const char apply_stub[] =
@@ -1567,7 +1567,7 @@ static void test_settings(void)
 	s = settled(buf, sizeof(buf));
 	check(strstr(s, "\"MODE\":\"\"") &&
 		      strstr(s, "\"WAN_PROTO\":\"dhcp\""),
-	      "without a file, the settings are onu-mode's defaults");
+	      "without a file, the settings are onu-apply's defaults");
 	check(strstr(s, "\"sessions\":[]") && strstr(s, "\"mode\":null") &&
 		      strstr(s, "\"wan\":null"),
 	      "no session, and nothing brought up yet");
@@ -1615,7 +1615,7 @@ static void test_settings(void)
 	for (int i = 0; i < 500 && !slurp("/run/applied", file, sizeof(file)); i++)
 		pause_10ms();
 	s = slurp("/run/applied", file, sizeof(file));
-	check(s && !strcmp(s, "apply\n"), "the change starts onu-mode apply");
+	check(s && !strcmp(s, "reload\n"), "the change starts onu-apply reload");
 
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"applying\":true") != NULL,
@@ -1630,7 +1630,7 @@ static void test_settings(void)
 	s = settled(buf, sizeof(buf));
 	check(strstr(s, "\"applying\":false") &&
 		      strstr(s, "\"last_apply_status\":0"),
-	      "once onu-mode has ended, the settings say how it ended");
+	      "once onu-apply has ended, the settings say how it ended");
 
 	rc = prov_settings_set("WAN_PROTO=static\nWAN_ADDRESS=198.51.100.2/24\n"
 			       "WAN_GATEWAY=198.51.100.1\n",
@@ -1676,7 +1676,7 @@ static void test_settings(void)
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"mode\":\"router\"") && strstr(s, "\"out\":\"ppp0\"") &&
 		      strstr(s, "\"dns\":\"198.51.100.53\"") && strstr(s, "\"pass\":null"),
-	      "the settings carry what onu-mode brought up");
+	      "the settings carry what onu-apply brought up");
 	put("/run/onu-pass", "192.0.2.2\n", 0644);
 	put("/run/onu-lan", "lan\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
@@ -1695,14 +1695,14 @@ static void test_settings(void)
 	put("/run/session/1/ipv4", "192.0.2.2\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"hands_on\":false,\"dev\":\"wan410\"") != NULL,
-	      "a session hands nothing down until onu-mode says it does");
+	      "a session hands nothing down until onu-apply says it does");
 	put("/run/session/1/hands", "ipv4 ipv6\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
 	check(strstr(s, "\"hands_on\":true,\"dev\":\"wan410\",\"gem_dev\":\"gem1\","
 			"\"ppp\":\"ppp0\",\"ipv4\":\"192.0.2.2\",\"ipv6\":null,"
 			"\"prefix\":null,\"prefix_host\":null,\"lan\":null,"
 			"\"gateway\":null,\"dns\":null}") != NULL,
-	      "a session carries what onu-mode brought up for it");
+	      "a session carries what onu-apply brought up for it");
 	put("/run/session/1/lan", "lan410\n", 0644);
 	put("/run/session/1/gateway", "192.0.2.1\n", 0644);
 	put("/run/session/1/dns", "198.51.100.53\n", 0644);
@@ -1722,11 +1722,11 @@ static void test_settings(void)
 	check(strstr(s, "\"store\":\"saved\"") != NULL,
 	      "and with one, what became of the settings in the store");
 
-	setenv("POND_APPLY", "/nonexistent/onu-mode", 1);
+	setenv("POND_APPLY", "/nonexistent/onu-apply", 1);
 	rc = prov_settings_set("LAN_DHCP=off", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && strstr(s, "\"last_apply_status\":127"),
-	      "an onu-mode that cannot run is reported, not hidden");
+	      "an onu-apply that cannot run is reported, not hidden");
 	unsetenv("POND_APPLY");
 }
 

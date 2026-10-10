@@ -3,7 +3,7 @@
 
 /*
  * The settings of the stick's data path: KEY=value lines in /run/onu.conf,
- * which onu-mode applies, and the account of each of the stick's PPPoE
+ * which onu-apply applies, and the account of each of the stick's PPPoE
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
  * only. What the settings mean, their defaults and the rules that bind them
  * together, is onucfg's (ADR 0014): pond has "onucfg settings" read them in
@@ -11,14 +11,14 @@
  * itself.
  *
  * A read gives the settings, each session with its user, whether a secret is
- * set (never the secret), and what onu-mode and dhcp6d brought up for it
+ * set (never the secret), and what onu-apply and dhcp6d brought up for it
  * (/run/session/N), what it hands down among it, the address handed on, and
  * what became of the settings in the configuration store, which onu-store
  * records in /run/onu-store: "loaded" at boot, "defaults" when the store
  * held none, "saved" or "failed" after a change, "none" without a store. A
  * write takes KEY=value lines, has onucfg judge them over the settings in
- * force, writes what it gives back and the accounts, and starts "onu-mode
- * apply" without waiting for it; until it ends, a write is refused.
+ * force, writes what it gives back and the accounts, and starts "onu-apply
+ * reload" without waiting for it; until it ends, a write is refused.
  * POND_APPLY and POND_ONUCFG name other programs to start, for the tests.
  */
 
@@ -53,7 +53,7 @@ struct account {
 	char secret[SECRET_MAX + 1];
 };
 
-/* The "onu-mode apply" that runs, or 0; how the last one ended, or -1. */
+/* The "onu-apply reload" that runs, or 0; how the last one ended, or -1. */
 static pid_t g_apply;
 static int g_apply_status = -1;
 
@@ -251,7 +251,7 @@ void prov_settings_reap(void)
 	}
 }
 
-/* Start "onu-mode apply", with the signals a program starts with. */
+/* Start "onu-apply reload", with the signals a program starts with. */
 static int apply(void)
 {
 	const char *prog = getenv("POND_APPLY");
@@ -259,7 +259,7 @@ static int apply(void)
 	pid_t pid;
 
 	if (!prog || !*prog)
-		prog = "/usr/sbin/onu-mode";
+		prog = "/usr/sbin/onu-apply";
 	pid = fork();
 	if (pid < 0)
 		return -errno;
@@ -269,7 +269,7 @@ static int apply(void)
 		signal(SIGTERM, SIG_DFL);
 		sigemptyset(&none);
 		sigprocmask(SIG_SETMASK, &none, NULL);
-		execl(prog, prog, "apply", (char *)NULL);
+		execl(prog, prog, "reload", (char *)NULL);
 		_exit(127);
 	}
 	g_apply = pid;
@@ -277,7 +277,7 @@ static int apply(void)
 	return 0;
 }
 
-/* A fact of session @n that onu-mode wrote, as a string or null. */
+/* A fact of session @n that onu-apply wrote, as a string or null. */
 static void pv_session_fact(struct prov_buf *out, int n, const char *fact)
 {
 	char path[64], line[128];
@@ -289,7 +289,7 @@ static void pv_session_fact(struct prov_buf *out, int n, const char *fact)
 		pv_null(out);
 }
 
-/* Whether session @n hands @fam down, as onu-mode wrote it. */
+/* Whether session @n hands @fam down, as onu-apply wrote it. */
 static bool hands(int n, const char *fam)
 {
 	char path[64], line[64];
@@ -306,7 +306,7 @@ static bool hands(int n, const char *fam)
 
 /*
  * Each session with an account: its user, whether a secret is set, its
- * settings of @text (SESSIONn_<KEY> as "key"), and what onu-mode brought up.
+ * settings of @text (SESSIONn_<KEY> as "key"), and what onu-apply brought up.
  */
 static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS],
 			const char *text)
@@ -629,7 +629,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 
 	rc = apply();
 	if (rc)
-		snprintf(err, errcap, "onu-mode: %s", strerror(-rc));
+		snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
 out:
 	explicit_bzero(acct, sizeof(acct));
 	explicit_bzero(text, sizeof(text));

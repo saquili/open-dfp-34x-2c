@@ -39,7 +39,7 @@ export function useServices() {
 /*
  * The VID a connection is given for service @s: the one by which the
  * operator names the service towards the host, which the OLT translates,
- * else the VID on the fibre; onu-mode follows it from there.
+ * else the VID on the fibre; onu-apply follows it from there.
  */
 export function serviceVid(s: Service): string {
   return String(s.hostVlans.find((v) => v != null) ?? s.vlan ?? "");
