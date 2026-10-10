@@ -7,6 +7,11 @@
 # added beside the old one, and replaces it only when confirmed, which a
 # person can do only once the new pair answers.
 #
+#   onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]
+#                          the pair of the boot, on the interface mgmt, and
+#                          the address on the SFP port itself, if any:
+#                          recorded, and given to netifd; what is not a pair
+#                          fails and changes nothing
 #   onu-mgmt status        VLAN, ADDRESS, IFACE, DATA_ADDRESS and, while a
 #                          change waits, PENDING_VLAN, PENDING_ADDRESS and
 #                          PENDING_UNTIL, as KEY=VALUE lines
@@ -19,11 +24,14 @@
 #   onu-mgmt commit        the new pair replaces the old, in the store too
 #   onu-mgmt cancel        the new pair goes, the old one stays
 #
-# The boot script records the pair it brought up in /run/onu-mgmt (VLAN,
-# ADDRESS, IFACE, PREF, the priority of its switch rules, and DATA_ADDRESS,
-# the address on the SFP port itself, if any), as this script does after a
-# commit. The status daemon listens on the addresses itself. ONU_ROOT, when
-# set, is put in front of /run and /proc, for the tests.
+# The pair in use is recorded in /run/onu-mgmt (VLAN, ADDRESS, IFACE, the
+# VLAN's interface, NAME, the pair's interface of netifd, PREF, the priority
+# of its switch rules, and DATA_ADDRESS, the address on the SFP port itself,
+# if any), by start and again by each commit. netifd brings the pairs up: this script writes them as its part
+# "mgmt" of netifd's configuration (onu-net), the pair in use and, while a
+# change waits, the new one, and waits for the new address before it starts
+# the ssh server on it. The status daemon listens on the addresses itself.
+# ONU_ROOT, when set, is put in front of /run and /proc, for the tests.
 
 set -u
 ROOT=${ONU_ROOT:-}
@@ -76,6 +84,61 @@ rules_del() {
 	return 0
 }
 
+# A VLAN on the SFP port that an interface has already, the management's own
+# or one of onu-mode's: a second one of the same VLAN cannot be made.
+vlan_in_use() {
+	awk -F'|' -v vid="$1" 'NR > 2 {
+		gsub(/[ \t]/, "", $2)
+		gsub(/[ \t]/, "", $3)
+		if ($2 == vid && $3 == "sfp")
+			found = 1
+	} END { exit !found }' "$ROOT/proc/net/vlan/config" 2>/dev/null
+}
+
+# A management VLAN as a device of netifd: the VLAN $2 on sfp, named $1, with
+# IPv6, which an interface made after the boot has only when given it.
+dev_conf() {
+	printf "config device\n\toption type '8021q'\n\toption ifname 'sfp'\n"
+	printf "\toption vid '%s'\n\toption name '%s'\n\toption ipv6 '1'\n\n" "$2" "$1"
+}
+
+# A pair as an interface of netifd: the interface $1 on the device $2 with
+# the address $3.
+iface_conf() {
+	printf "config interface '%s'\n\toption device '%s'\n" "$1" "$2"
+	printf "\toption proto 'static'\n\toption ipaddr '%s'\n\n" "$3"
+}
+
+# The pairs as netifd's part "mgmt": the one in use and, while a change
+# waits, the new one. Each pair is an interface of its own, named once
+# (NAME), so that netifd, which takes an interface down and up again when
+# its addresses change, leaves the one alone when the other comes or goes:
+# the address a person manages the stick from never goes away under them.
+# Two pairs in one VLAN are two interfaces on one device.
+net_apply() {
+	{
+		dev_conf "$(field IFACE "$STATE")" "$(field VLAN "$STATE")"
+		iface_conf "$(field NAME "$STATE")" "$(field IFACE "$STATE")" "$(field ADDRESS "$STATE")"
+		if [ -r "$PENDING" ]; then
+			[ "$(field IFACE "$PENDING")" = "$(field IFACE "$STATE")" ] ||
+				dev_conf "$(field IFACE "$PENDING")" "$(field VLAN "$PENDING")"
+			iface_conf "$(field NAME "$PENDING")" "$(field IFACE "$PENDING")" \
+				"$(field ADDRESS "$PENDING")"
+		fi
+	} | onu-net set mgmt
+}
+
+start() {
+	vlan_ok "$1" && address_ok "$2" || {
+		log "not a VLAN and an address with its prefix: $1 $2"
+		return 2
+	}
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=%s\n' \
+		"$1" "$2" "$3" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
+	rm -f "$PENDING"
+	net_apply
+}
+
 status() {
 	for k in VLAN ADDRESS IFACE DATA_ADDRESS; do
 		echo "$k=$(field "$k" "$STATE")"
@@ -94,16 +157,12 @@ drop_pending() {
 	vlan=$(field VLAN "$PENDING")
 	address=$(field ADDRESS "$PENDING")
 	iface=$(field IFACE "$PENDING")
+	pref=$(field PREF "$PENDING")
 	pid=$(cat "$RUN/dropbear-pending.pid" 2>/dev/null)
 	[ -n "$pid" ] && kill "$pid" 2>/dev/null
-	rm -f "$RUN/dropbear-pending.pid"
-	if [ "$iface" = "$(field IFACE "$STATE")" ]; then
-		ip address del "$address" dev "$iface" 2>/dev/null
-	else
-		rules_del "$(field PREF "$PENDING")"
-		ip link del "$iface" 2>/dev/null
-	fi
-	rm -f "$PENDING"
+	rm -f "$RUN/dropbear-pending.pid" "$PENDING"
+	net_apply || log "netifd was not told that $address in VLAN $vlan goes"
+	[ "$iface" = "$(field IFACE "$STATE")" ] || rules_del "$pref"
 	log "the management address $address in VLAN $vlan taken away"
 }
 
@@ -127,25 +186,27 @@ add() {
 	if [ "$vlan" = "$old_vlan" ]; then
 		iface=$old_iface
 		pref=$old_pref
-		ip address add "$address" dev "$iface" || return 1
 	else
 		iface=mgmt$vlan
 		pref=$((3 - ${old_pref:-1}))
-		ip link add link sfp name "$iface" type vlan id "$vlan" || {
+		if vlan_in_use "$vlan"; then
 			log "VLAN $vlan cannot be added on sfp: it is in use"
 			return 1
-		}
-		if ! rules_add "$vlan" "$pref" ||
-			! ip link set "$iface" up ||
-			! ip address add "$address" dev "$iface"; then
-			rules_del "$pref"
-			ip link del "$iface" 2>/dev/null
-			return 1
 		fi
-		echo 0 >"$ROOT/proc/sys/net/ipv6/conf/$iface/disable_ipv6" 2>/dev/null
+		rules_add "$vlan" "$pref" || {
+			rules_del "$pref"
+			return 1
+		}
 	fi
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nPREF=%s\nUNTIL=%s\nTOKEN=%s\n' \
-		"$vlan" "$address" "$iface" "$pref" "$until" "$token" >"$PENDING"
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nUNTIL=%s\nTOKEN=%s\n' \
+		"$vlan" "$address" "$iface" "mgmt$token" "$pref" "$until" "$token" >"$PENDING"
+	if ! net_apply || ! onu-net wait "$iface" "$address" 10; then
+		log "the management address $address in VLAN $vlan did not come up"
+		rm -f "$PENDING"
+		net_apply
+		[ "$iface" = "$old_iface" ] || rules_del "$pref"
+		return 1
+	fi
 	dropbear -s -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
 		log "no ssh on $address"
 	log "the management address $address in VLAN $vlan added beside the old one"
@@ -164,18 +225,19 @@ commit() {
 	vlan=$(field VLAN "$PENDING")
 	address=$(field ADDRESS "$PENDING")
 	iface=$(field IFACE "$PENDING")
+	name=$(field NAME "$PENDING")
 	pref=$(field PREF "$PENDING")
 	printf 'MGMT_VLAN=%s\nMGMT_ADDRESS=%s\n' "$vlan" "$address" | onu-store system ||
 		log "the management address $address is kept until the next start only"
-	old_address=$(field ADDRESS "$STATE")
 	old_iface=$(field IFACE "$STATE")
+	old_pref=$(field PREF "$STATE")
 	data=$(field DATA_ADDRESS "$STATE")
-	if [ "$iface" = "$old_iface" ]; then
-		ip address del "$old_address" dev "$iface" 2>/dev/null
-	else
-		rules_del "$(field PREF "$STATE")"
-		ip link del "$old_iface" 2>/dev/null
-	fi
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$vlan" "$address" "$iface" "$name" "$pref" "$data" >"$STATE.new" &&
+		mv "$STATE.new" "$STATE"
+	rm -f "$PENDING"
+	net_apply || log "netifd was not told that the old management address goes"
+	[ "$iface" = "$old_iface" ] || rules_del "$old_pref"
 	# One ssh server again, on the new address and the data path's.
 	for f in "$RUN/dropbear.pid" "$RUN/dropbear-pending.pid"; do
 		pid=$(cat "$f" 2>/dev/null)
@@ -184,10 +246,6 @@ commit() {
 	rm -f "$RUN/dropbear-pending.pid"
 	dropbear -s -r "$KEY" -P "$RUN/dropbear.pid" -p "${address%/*}:22" \
 		${data:+-p "${data%/*}:22"} || log "no ssh on $address"
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nPREF=%s\nDATA_ADDRESS=%s\n' \
-		"$vlan" "$address" "$iface" "$pref" "$data" >"$STATE.new" &&
-		mv "$STATE.new" "$STATE"
-	rm -f "$PENDING"
 	log "the management address is now $address in VLAN $vlan"
 }
 
@@ -197,13 +255,14 @@ cancel() {
 }
 
 case ${1:-} in
+start) start "${2:-}" "${3:-}" "${4:-}" ;;
 status) status ;;
 add) add "${2:-}" "${3:-}" ;;
 commit) commit ;;
 cancel) cancel ;;
 expire) drop_pending "${2:-}" ;;
 *)
-	echo "usage: onu-mgmt status|add VLAN ADDRESS|commit|cancel" >&2
+	echo "usage: onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]|status|add VLAN ADDRESS|commit|cancel" >&2
 	exit 2
 	;;
 esac

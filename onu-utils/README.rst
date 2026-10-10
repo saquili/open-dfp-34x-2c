@@ -172,6 +172,37 @@ The small programs of the ONU.
    brings the PON up; ``reidentify`` takes the PON down first and restarts
    omcid afterwards, so the OLT sees the stick leave and register anew.
 
+``onu-mgmt``
+   the VLAN and the address the stick is managed on from the host side, and a
+   change of them that cannot lock anyone out. ``onu-mgmt start`` records the
+   pair of the boot; ``add`` puts a new pair beside the old one, with the
+   switch's rules that keep its VLAN from the PON and an ssh server of its
+   own, and ``commit`` makes it the one in use and stores it, which a person
+   can do only once the new pair answers; a change not committed goes again
+   after ten minutes. netifd brings the pairs up: each is an interface of its
+   own in onu-mgmt's part of netifd's configuration, so that the one a person
+   manages the stick from is never taken down and up again when the other
+   comes or goes::
+
+      onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]   # at boot
+      onu-mgmt add VLAN ADDRESS
+      onu-mgmt commit
+      onu-mgmt cancel
+      onu-mgmt status
+
+``onu-net``
+   writes netifd's configuration, ``/run/config/network``, from parts: each
+   script that sets something up through netifd writes a part of its own,
+   ``/run/network.d/PART``, and the parts in the order of their names are the
+   whole. A change is written to a new file and renamed over the old, and
+   netifd is told with SIGHUP, upon which the fork in ``netifd/`` reads its
+   configuration again; the image has no ``ubus`` command. ``onu-net wait``
+   waits until an address netifd is to put on a device is there::
+
+      onu-net set PART <TEXT
+      onu-net del PART
+      onu-net wait DEV ADDRESS [SECONDS]
+
 Building and testing::
 
    make           # build/ponid, build/pon, build/onucfg and build/onu-update

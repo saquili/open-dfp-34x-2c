@@ -1,0 +1,111 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-net: the configuration of netifd, which brings the stick's interfaces
+# up and gives them their addresses, made of parts: the boot script and each
+# of the stick's scripts writes its own part, and netifd reads them as one.
+#
+#   onu-net set PART       the text on standard input becomes the part PART,
+#                          and netifd reads the whole again
+#   onu-net del PART       the part PART goes, and netifd reads the whole again
+#   onu-net wait DEV ADDRESS [SECONDS]
+#                          wait until the IPv4 ADDRESS, with its prefix
+#                          length, is on DEV; fail after SECONDS (10)
+#
+# The parts are /run/network.d/PART, in netifd's own format, and the whole is
+# /run/config/network, the parts in the order of their names, which netifd
+# reads (netifd -c /run/config). A part or the whole is written to a new file
+# and renamed over the old one, so that netifd never reads half of a change.
+# netifd is told with SIGHUP, upon which the fork reads its configuration
+# again; when it does not run yet, it reads the whole when it starts. A part's
+# name is lower-case letters, digits and dashes. ONU_ROOT, when set, is put in
+# front of /run, for the tests.
+
+set -u
+ROOT=${ONU_ROOT:-}
+PARTS=$ROOT/run/network.d
+CONF=$ROOT/run/config/network
+
+log() {
+	echo "onu-net: $*" >&2
+	logger -t onu-net "$*" 2>/dev/null
+	return 0
+}
+
+name_ok() {
+	case $1 in
+	"" | *[!a-z0-9-]*) return 1 ;;
+	esac
+}
+
+# The parts as one file, and netifd told of it.
+reload() {
+	mkdir -p "$PARTS" "${CONF%/*}" || return 1
+	for part in "$PARTS"/*; do
+		[ ! -f "$part" ] || cat "$part"
+	done >"$CONF.new.$$" && mv "$CONF.new.$$" "$CONF" || {
+		rm -f "$CONF.new.$$"
+		log "cannot write $CONF"
+		return 1
+	}
+	for pid in $(pidof netifd); do
+		kill -HUP "$pid"
+	done
+	return 0
+}
+
+set_part() {
+	name_ok "$1" || {
+		log "not a name of a part: $1"
+		return 2
+	}
+	mkdir -p "$PARTS" || return 1
+	cat >"$PARTS/.$1.$$" && mv "$PARTS/.$1.$$" "$PARTS/$1" || {
+		rm -f "$PARTS/.$1.$$"
+		log "cannot write the part $1"
+		return 1
+	}
+	reload
+}
+
+del_part() {
+	name_ok "$1" || {
+		log "not a name of a part: $1"
+		return 2
+	}
+	rm -f "$PARTS/$1"
+	reload
+}
+
+# Tenths of a second, so that a change that netifd makes at once is not kept
+# waiting for a whole one.
+wait_address() {
+	tenths=$((${3:-10} * 10))
+	while :; do
+		ip -4 address show dev "$1" 2>/dev/null | grep -q -F "inet $2 " && return 0
+		[ "$tenths" -gt 0 ] || return 1
+		tenths=$((tenths - 1))
+		sleep 0.1
+	done
+}
+
+case ${1:-} in
+set) set_part "${2:-}" ;;
+del) del_part "${2:-}" ;;
+wait)
+	seconds=${4:-10}
+	case $seconds in
+	*[!0-9]*) seconds= ;;
+	esac
+	if [ -z "${2:-}" ] || [ -z "${3:-}" ] || [ -z "$seconds" ]; then
+		echo "usage: onu-net wait DEV ADDRESS [SECONDS]" >&2
+		exit 2
+	fi
+	wait_address "$2" "$3" "$seconds"
+	;;
+*)
+	echo "usage: onu-net set PART|del PART|wait DEV ADDRESS [SECONDS]" >&2
+	exit 2
+	;;
+esac
