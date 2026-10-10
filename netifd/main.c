@@ -260,6 +260,18 @@ netifd_handle_signal(int signo)
 	uloop_end();
 }
 
+/* SIGHUP reads the configuration again, as "ubus call network reload" does. */
+static void
+netifd_reload_signal(struct uloop_signal *s)
+{
+	netifd_reload();
+}
+
+static struct uloop_signal reload_signal = {
+	.signo = SIGHUP,
+	.cb = netifd_reload_signal,
+};
+
 static void
 netifd_setup_signals(void)
 {
@@ -333,6 +345,7 @@ int main(int argc, char **argv)
 
 	netifd_setup_signals();
 	uloop_init();
+	uloop_signal_add(&reload_signal);
 
 	if (netifd_ubus_init(socket) < 0) {
 		fprintf(stderr, "Failed to connect to ubus\n");
