@@ -1205,6 +1205,11 @@ kernel tree's generic client reads them::
 Operations
 ----------
 
+Any user may get an ONU and its T-CONTs: the serial number is no secret, as
+the ONU sends it in the clear when it registers and it is printed on the
+unit, and the PLOAM password, which is, is never reported. A change, and the
+notifications, need ``CAP_NET_ADMIN``.
+
 .. list-table::
    :header-rows: 1
    :widths: 20 8 24 26 22
@@ -1218,12 +1223,12 @@ Operations
      - 1
      - ``id``
      - The attributes of the dev object.
-     - ``CAP_NET_ADMIN``
+     - Nothing.
    * - ``dev-get``, dump
      - 1
      - Nothing.
      - One message for each ONU.
-     - ``CAP_NET_ADMIN``
+     - Nothing.
    * - ``dev-change-ntf``
      - 2
      - Not a request: a notification.
@@ -1234,12 +1239,12 @@ Operations
      - 3
      - ``id``, ``index``
      - The attributes of the tcont object.
-     - ``CAP_NET_ADMIN``
+     - Nothing.
    * - ``tcont-get``, dump
      - 3
      - Nothing.
      - One message for each T-CONT of each ONU.
-     - ``CAP_NET_ADMIN``
+     - Nothing.
    * - ``tcont-set``, do
      - 4
      - ``id``, ``index``, and ``alloc-id`` to map, none to unmap

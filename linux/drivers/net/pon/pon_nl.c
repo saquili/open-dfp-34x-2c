@@ -35,24 +35,24 @@ static const struct genl_split_ops pon_nl_ops[] = {
 		.doit		= pon_nl_dev_get_doit,
 		.policy		= pon_dev_get_nl_policy,
 		.maxattr	= PON_A_DEV_ID,
-		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+		.flags		= GENL_CMD_CAP_DO,
 	},
 	{
 		.cmd	= PON_CMD_DEV_GET,
 		.dumpit	= pon_nl_dev_get_dumpit,
-		.flags	= GENL_ADMIN_PERM | GENL_CMD_CAP_DUMP,
+		.flags	= GENL_CMD_CAP_DUMP,
 	},
 	{
 		.cmd		= PON_CMD_TCONT_GET,
 		.doit		= pon_nl_tcont_get_doit,
 		.policy		= pon_tcont_get_nl_policy,
 		.maxattr	= PON_A_TCONT_INDEX,
-		.flags		= GENL_ADMIN_PERM | GENL_CMD_CAP_DO,
+		.flags		= GENL_CMD_CAP_DO,
 	},
 	{
 		.cmd	= PON_CMD_TCONT_GET,
 		.dumpit	= pon_nl_tcont_get_dumpit,
-		.flags	= GENL_ADMIN_PERM | GENL_CMD_CAP_DUMP,
+		.flags	= GENL_CMD_CAP_DUMP,
 	},
 	{
 		.cmd		= PON_CMD_TCONT_SET,
