@@ -122,17 +122,22 @@ check '! ip -n st -6 rule show | grep -q "lookup 102"'
 check '[ -z "$(ip -n st -6 route show table 102 proto dhcp 2>/dev/null)" ]'
 
 echo "a stick that starts again routes the prefix to the host of before at once"
-# A new host, bound by a stick that keeps the binding in a file.
+# A new host, bound by a stick that keeps the binding in a file and tells a
+# program of it.
+printf '#!/bin/sh\necho "$1" >>"%s"\n' "$T/told" >"$T/tell"
+chmod +x "$T/tell"
 kill "$(cat "$T/ho.pid")"
-ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -b "$T/binding" -v >"$T/st.log" 2>&1 &
+ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -b "$T/binding" -x "$T/tell" -v \
+	>"$T/st.log" 2>&1 &
 echo $! >"$T/st.pid"
 ip netns exec ho "$D6" -c h0 >"$T/ho.out" 2>"$T/ho.log" &
 echo $! >"$T/ho.pid"
 for _ in $(seq 1 30); do
-	[ -s "$T/binding" ] && break
+	[ -s "$T/binding" ] && [ -s "$T/told" ] && break
 	sleep 1
 done
 check 'grep -q "^[0-9a-f]* 1 fe80::[0-9a-f:]* 2001:db8:1200::/56$" "$T/binding"'
+check '[ "$(cat "$T/told")" = dhcp6d ]'
 kill "$(cat "$T/st.pid")"
 sleep 2
 check '[ -s "$T/binding" ]'

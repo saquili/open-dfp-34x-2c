@@ -12,7 +12,8 @@ client (RFC 8415) that asks for a delegated prefix and the name servers
 prefix to the one host there, and a router that advertises itself (RFC 4861)
 with the session's MTU and the name servers (RFC 8106)::
 
-   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE] [-v]   # the stick
+   dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE]
+          [-x PROGRAM] [-v]                        # the stick
    dhcp6d -c IFACE [-m IFACE] [-v]                 # the client alone
    dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]       # the server alone
 
@@ -53,7 +54,10 @@ as soon as it is delegated again, and knows the host's Renew; a prefix other
 than the one of before goes to the host with the old one at a lifetime of 0.
 The file goes when the host releases its binding or the binding runs out, not
 when dhcp6d stops. A route to the host that failed is tried again at the
-host's next message.
+host's next message. ``-x PROGRAM`` tells a program when the binding changes:
+dhcp6d runs it with the argument ``dhcp6d`` and does not wait for it. On the
+stick the program is ``onu-apply``, which keeps the binding in the
+configuration store.
 
 Building and testing::
 

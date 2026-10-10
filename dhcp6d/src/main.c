@@ -367,9 +367,16 @@ static int send_to(int fd, const uint8_t *buf, size_t len, const char *addr,
 	return -errno;
 }
 
+/* A host's binding as -b keeps it: DUID, IAID, address and prefix. */
+#define BINDING_TEXT (2 * DHCP6_DUID_MAX + 2 * INET6_ADDRSTRLEN + 32)
+
 /* The daemon's state across the loop. */
 struct daemon {
 	const char *wan, *lan, *dir, *binding;
+	/* the program told of a change of the binding, and the binding told */
+	const char *notify;
+	char binding_text[BINDING_TEXT];
+	bool binding_known;
 	unsigned int wan_idx, lan_idx;
 	int csock, ssock, rsock;
 	struct client client;
@@ -423,26 +430,58 @@ static void write_file(const struct daemon *d, const char *name, const char *tex
 	write_path(path, text);
 }
 
-/* The host's binding as it is now, in the file of -b. */
-static void save_binding(const struct daemon *d)
+/*
+ * Tell the program of -x that the host's binding changed: run it with the
+ * argument "dhcp6d", without waiting for it. It gets the daemon's standard
+ * streams and nothing else of it, and the default dispositions of the
+ * signals the daemon ignores, which a program would keep.
+ */
+static void notify_run(const struct daemon *d)
 {
-	char text[2 * DHCP6_DUID_MAX + 2 * INET6_ADDRSTRLEN + 32], a[INET6_ADDRSTRLEN],
-		p[INET6_ADDRSTRLEN];
+	pid_t pid;
+
+	if (!d->notify)
+		return;
+	pid = fork();
+	if (pid == 0) {
+		long max = sysconf(_SC_OPEN_MAX);
+
+		signal(SIGCHLD, SIG_DFL);
+		signal(SIGPIPE, SIG_DFL);
+		if (max <= 0 || max > 4096)
+			max = 1024;
+		for (int fd = 3; fd < max; fd++)
+			close(fd);
+		execl(d->notify, d->notify, "dhcp6d", (char *)NULL);
+		_exit(127);
+	}
+	if (pid < 0)
+		DHCP6D_WARN("%s was not told of the binding: %s", d->notify, strerror(errno));
+}
+
+/* The host's binding as it is now, in the file of -b, and told when it changed. */
+static void save_binding(struct daemon *d)
+{
+	char text[BINDING_TEXT] = "", a[INET6_ADDRSTRLEN], p[INET6_ADDRSTRLEN];
 	const struct server *s = &d->server;
 	size_t off = 0;
 
 	if (!d->binding)
 		return;
-	if (!s->bound) {
-		write_path(d->binding, NULL);
-		return;
+	if (s->bound) {
+		for (size_t i = 0; i < s->host_len; i++)
+			off += (size_t)snprintf(text + off, sizeof(text) - off, "%02x",
+						s->host[i]);
+		snprintf(text + off, sizeof(text) - off, " %u %s %s/%u", s->host_iaid,
+			 ntop(s->host_addr, a, sizeof(a)), ntop(s->prefix.addr, p, sizeof(p)),
+			 s->prefix.len);
 	}
-	for (size_t i = 0; i < s->host_len; i++)
-		off += (size_t)snprintf(text + off, sizeof(text) - off, "%02x", s->host[i]);
-	snprintf(text + off, sizeof(text) - off, " %u %s %s/%u", s->host_iaid,
-		 ntop(s->host_addr, a, sizeof(a)), ntop(s->prefix.addr, p, sizeof(p)),
-		 s->prefix.len);
-	write_path(d->binding, text);
+	if (d->binding_known && !strcmp(text, d->binding_text))
+		return;
+	write_path(d->binding, s->bound ? text : NULL);
+	snprintf(d->binding_text, sizeof(d->binding_text), "%s", text);
+	d->binding_known = true;
+	notify_run(d);
 }
 
 /* Bring the routes to what the client and the server hold now. */
@@ -655,7 +694,8 @@ static void on_rs(struct daemon *d, int64_t now)
 static int print_usage(void)
 {
 	fprintf(stderr,
-		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE] [-v]\n"
+		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE]\n"
+		"              [-x PROGRAM] [-v]\n"
 		"       dhcp6d -c IFACE [-m IFACE] [-v]\n"
 		"       dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]\n"
 		"\n"
@@ -664,7 +704,8 @@ static int print_usage(void)
 		"         interface whose MAC address is the DUID, -o the directory of\n"
 		"         the files \"prefix\" and \"host\"; -b the file that keeps the\n"
 		"         host's binding for the next start; -t puts the default route\n"
-		"         in TABLE, by which what comes from the prefix is routed.\n"
+		"         in TABLE, by which what comes from the prefix is routed; -x\n"
+		"         runs PROGRAM with the argument dhcp6d when the binding changes.\n"
 		"  -c     the client alone: print the prefix delegated on IFACE.\n"
 		"  -s     the server alone: delegate PREFIX/LEN on LAN, with DNS.\n");
 	return 2;
@@ -748,7 +789,7 @@ int main(int argc, char **argv)
 	struct prefix fp;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "w:l:m:o:b:c:s:d:t:v")) != -1) {
+	while ((opt = getopt(argc, argv, "w:l:m:o:b:c:s:d:t:x:v")) != -1) {
 		switch (opt) {
 		case 'w':
 			d.wan = optarg;
@@ -774,6 +815,9 @@ int main(int argc, char **argv)
 		case 'd':
 			dns = optarg;
 			break;
+		case 'x':
+			d.notify = optarg;
+			break;
 		case 't': {
 			char *end;
 			unsigned long t = strtoul(optarg, &end, 10);
@@ -793,12 +837,13 @@ int main(int argc, char **argv)
 		}
 	}
 	if (client_if) {
-		if (d.wan || d.lan || fixed || d.table || d.binding)
+		if (d.wan || d.lan || fixed || d.table || d.binding || d.notify)
 			return print_usage();
 		d.wan = client_if;
 		d.print = true;
 	} else if (fixed) {
-		if (d.wan || !d.lan || d.table || d.binding || fixed_prefix(fixed, &fp))
+		if (d.wan || !d.lan || d.table || d.binding || d.notify ||
+		    fixed_prefix(fixed, &fp))
 			return print_usage();
 		d.fixed = true;
 	} else if (!d.wan || !d.lan) {
@@ -812,6 +857,13 @@ int main(int argc, char **argv)
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGHUP, &sa, NULL);
 	signal(SIGPIPE, SIG_IGN);
+	if (d.notify) {
+		/* The daemon does not wait for its children, and none stays a zombie. */
+		struct sigaction ign = { .sa_handler = SIG_IGN, .sa_flags = SA_NOCLDWAIT };
+
+		sigemptyset(&ign.sa_mask);
+		sigaction(SIGCHLD, &ign, NULL);
+	}
 
 	/* The links need their link-local addresses before their sockets. */
 	for (int i = 0; !g_stop; i++) {
