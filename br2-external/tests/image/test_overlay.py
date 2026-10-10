@@ -77,7 +77,7 @@ class BootScript(unittest.TestCase):
     def test_roots_password_is_in_place_before_the_ssh_server_starts(self):
         # The ssh server's flags are onu-run's, which onu-utils tests.
         text = read(RCS)
-        self.assertLess(text.index("\nonu-store load "), text.index("onu-svc start ssh "))
+        self.assertLess(text.index("\nonu-config load "), text.index("onu-svc start ssh "))
 
     def test_the_programs_are_services_of_procd_in_their_order(self):
         # The log first; netifd once its configuration is written; the servers
@@ -133,7 +133,7 @@ class BootScript(unittest.TestCase):
 
     def test_a_bench_can_name_the_versions_the_olt_reads(self):
         text = read(RCS)
-        start, end = text.index("onu-store load"), text.index("umask 022")
+        start, end = text.index("onu-config load"), text.index("umask 022")
         for key, name in (("sw_version", "OMCI_SW_VERSION"),
                           ("pack_version", "OMCI_PACK_VERSION")):
             with self.subTest(key=key):
@@ -330,7 +330,7 @@ class Inittab(unittest.TestCase):
         for symbol in ("USE_BB_CRYPT", "USE_BB_SHADOW", "USE_BB_PWD_GRP", "PASSWD",
                        "FEATURE_SECURETTY"):
             self.assertNotIn(symbol, symbols)
-        # onu-store hashes a new password with cryptpw.
+        # onu-config hashes a new password with cryptpw.
         self.assertIn("CRYPTPW", symbols)
 
 

@@ -19,12 +19,12 @@ endef
 define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/ponid $(TARGET_DIR)/usr/sbin/ponid
 	$(INSTALL) -D -m 0755 $(@D)/build/pon $(TARGET_DIR)/usr/sbin/pon
-	$(INSTALL) -D -m 0755 $(@D)/build/onucfg $(TARGET_DIR)/usr/sbin/onucfg
+	$(INSTALL) -D -m 0755 $(@D)/build/onu-config $(TARGET_DIR)/usr/sbin/onu-config
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-update $(TARGET_DIR)/usr/sbin/onu-update
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-svc $(TARGET_DIR)/usr/sbin/onu-svc
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-trial $(TARGET_DIR)/usr/sbin/onu-trial
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-apply $(TARGET_DIR)/usr/sbin/onu-apply
-	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-store $(TARGET_DIR)/usr/sbin/onu-store
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-config.sh $(TARGET_DIR)/usr/lib/onu/onu-config.sh
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-lane $(TARGET_DIR)/usr/sbin/onu-lane
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mgmt $(TARGET_DIR)/usr/sbin/onu-mgmt
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-net $(TARGET_DIR)/usr/sbin/onu-net

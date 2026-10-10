@@ -9,10 +9,10 @@
 # Usage: finish-root.sh ROOT
 #
 # Root's password is kept in the configuration store, and the boot writes the
-# accounts, root's with that password, to /run/shadow (onu-store), the root
+# accounts, root's with that password, to /run/shadow (onu-config), the root
 # filesystem being read-only. /etc/shadow, which login and the ssh server
 # read, becomes a link to it; the accounts the build system wrote stay as
-# /etc/shadow.image, from which onu-store takes the others. The work is done
+# /etc/shadow.image, from which onu-config takes the others. The work is done
 # on a copy because the build system edits /etc/shadow of the target tree at
 # every build and cannot edit it through a link that points nowhere there.
 

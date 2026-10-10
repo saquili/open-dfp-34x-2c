@@ -49,7 +49,7 @@ onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reac
 # password goes to /run/shadow, which /etc/shadow names, for the console's
 # login and the ssh server.
 umask 077
-onu-store load || warn "no identity in the configuration store or the factory configuration"
+onu-config load || warn "no identity in the configuration store or the factory configuration"
 # A bench may name the versions that the software images and the circuit
 # packs report to the OLT, so that a unit shows what the firmware it came
 # with showed; without them omcid reports its own.
@@ -57,7 +57,7 @@ onu-store load || warn "no identity in the configuration store or the factory co
 [ -n "${OMCI_PACK_VERSION:-}" ] && echo "pack_version=$OMCI_PACK_VERSION" >>/run/onu-identity
 umask 022
 
-# The stick's own settings that its owner changed (onu-store system): its
+# The stick's own settings that its owner changed (onu-config system): its
 # name, and its management VLAN and address, which replace the image's.
 # Each value is read as data, never run.
 SYS_HOSTNAME=
