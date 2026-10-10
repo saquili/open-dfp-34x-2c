@@ -263,6 +263,34 @@ export interface LeaseInfo {
   ipv6?: string[];
 }
 
+/**
+ * A port forwarded from the internet, by the NAT of a router connection, to
+ * a device of its local network: by its MAC, whose fixed address it goes to.
+ */
+export interface ForwardInfo {
+  id: number;
+  /** A name for it given by hand; empty for none. */
+  name: string;
+  /** The connection it comes in by: "pppoe:N" or "ipoe:N". */
+  conn: string;
+  proto: "tcp" | "udp" | "both";
+  /** The ports it comes in on, first and last (the same for one). */
+  ext_from: number;
+  ext_to: number;
+  /** The device: its network and MAC, and the first of the ports it goes to. */
+  lan: number;
+  mac: string;
+  int_port: number;
+  on: boolean;
+}
+
+/** A connection's DMZ: the device that takes what comes in that no forward takes. */
+export interface DmzInfo {
+  conn: string;
+  lan: number;
+  mac: string;
+}
+
 /** A device's fixed address: in its network, its MAC always gets the same IP. */
 export interface FixedInfo {
   /** The network it is in. */
@@ -282,6 +310,8 @@ export interface Settings {
   lans?: LanInfo[];
   leases?: LeaseInfo[];
   fixed?: FixedInfo[];
+  forwards?: ForwardInfo[];
+  dmz?: DmzInfo[];
   mode: string | null;
   /** The bench's router mode: its WAN. */
   wan: { gem: string; dev: string; out: string } | null;

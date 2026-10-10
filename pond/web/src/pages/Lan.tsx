@@ -45,7 +45,7 @@ import { connName, hostSide, Mono, Sub, type T, useServices } from "./internet/s
 const LEASES = ["3600", "43200", "86400", "604800"] as const;
 
 /** A connection that makes the stick a router, and its network if it has one. */
-interface Place {
+export interface Place {
   c: Conn;
   lan: LanView | undefined;
 }
@@ -54,7 +54,7 @@ interface Place {
 const wan = (t: T, c: Conn) => `${connName(t, c)} · VLAN ${c.vlan}`;
 
 /* A network's name: the one given it, else its connection's, for one named before names were. */
-function netName(t: T, l: LanView, places: Place[]) {
+export function netName(t: T, l: LanView, places: Place[]) {
   if (l.name) return l.name;
   const p = places.find((q) => q.c.key === l.conn);
   return p ? connName(t, p.c) : l.conn;
@@ -92,7 +92,7 @@ function suggest(taken: LanView[]) {
 }
 
 /* A few short answers as a row of buttons, the chosen one filled. */
-function Choices<V extends string>({
+export function Choices<V extends string>({
   label,
   hint,
   field,
@@ -563,7 +563,7 @@ const NARROW =
   "@max-4xl:grid-cols-[minmax(0,1fr)_8rem_5.5rem] @max-4xl:gap-x-3 @max-lg:grid-cols-[minmax(0,1fr)_7.5rem_1.5rem]";
 
 /** A device of the table: one with an address now, one with a fixed address, or both. */
-interface Device {
+export interface Device {
   lan: number;
   mac: string;
   /** The name given it by hand, else its own, if any. */
@@ -579,7 +579,7 @@ interface Device {
 }
 
 /** The devices of the networks @ids: those on now, and those with a fixed address that are off. */
-function useDevices(ids: number[]): Device[] {
+export function useDevices(ids: number[]): Device[] {
   const { data: live } = useLive();
   const pins = fixed(live).filter((f) => ids.includes(f.lan));
   const on = leases(live).filter((l) => ids.includes(l.lan));
@@ -973,7 +973,7 @@ function FixedForm({
 }
 
 /** A connection that makes the stick a router, with the network it has. */
-type Net = Place & { lan: LanView };
+export type Net = Place & { lan: LanView };
 
 /** A network: the connection it goes out through, its addresses, VLAN and devices. */
 function NetCard({
@@ -1265,7 +1265,7 @@ function Devices({
 }
 
 /** The connections that make the stick a router, each with its network if it has one. */
-function usePlaces() {
+export function usePlaces() {
   const { data: live } = useLive();
   const all = lans(live);
   /* The connections that make the stick a router: whatever does not hand its address down. */

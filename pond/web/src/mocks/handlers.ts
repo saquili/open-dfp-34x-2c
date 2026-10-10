@@ -275,7 +275,55 @@ if (SCENARIO === "sessions") {
     { lan: 1, mac: "00:00:5e:00:53:16", ip: "192.168.1.113", name: "Drukarka w biurze" },
     { lan: 1, mac: "00:00:5e:00:53:21", ip: "192.168.1.10", name: "" },
     { lan: 1, mac: "00:00:5e:00:53:80", ip: "192.168.1.20", name: "serwer-zapas" },
+    { lan: 1, mac: "00:00:5e:00:53:17", ip: "192.168.1.114", name: "" },
+    { lan: 1, mac: "00:00:5e:00:53:19", ip: "192.168.1.119", name: "" },
+    { lan: 2, mac: "00:00:5e:00:53:3d", ip: "192.168.2.107", name: "" },
+    { lan: 2, mac: "00:00:5e:00:53:3a", ip: "192.168.2.101", name: "" },
   ];
+  /*
+   * Ports forwarded: the office server's HTTPS through DHCP, the console's
+   * game port and, turned off, the garage camera through session 4; Biuro's
+   * NVR is DHCP's DMZ. Each device has its fixed address above.
+   */
+  settings.forwards = [
+    {
+      id: 1,
+      name: "Serwer WWW",
+      conn: "ipoe:2",
+      proto: "tcp",
+      ext_from: 443,
+      ext_to: 443,
+      lan: 2,
+      mac: "00:00:5e:00:53:3d",
+      int_port: 443,
+      on: true,
+    },
+    {
+      id: 2,
+      name: "Konsola",
+      conn: "pppoe:4",
+      proto: "udp",
+      ext_from: 3074,
+      ext_to: 3074,
+      lan: 1,
+      mac: "00:00:5e:00:53:17",
+      int_port: 3074,
+      on: true,
+    },
+    {
+      id: 3,
+      name: "Kamera w garażu",
+      conn: "pppoe:4",
+      proto: "tcp",
+      ext_from: 8080,
+      ext_to: 8080,
+      lan: 1,
+      mac: "00:00:5e:00:53:19",
+      int_port: 80,
+      on: false,
+    },
+  ];
+  settings.dmz = [{ conn: "ipoe:2", lan: 2, mac: "00:00:5e:00:53:3a" }];
   rootSecret = "scenario-only";
   signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
 }
@@ -369,6 +417,15 @@ function dropLans(conn: string) {
   settings.lans = (settings.lans ?? []).filter((y) => y.conn !== conn);
   settings.leases = (settings.leases ?? []).filter((y) => !gone.includes(y.lan));
   settings.fixed = (settings.fixed ?? []).filter((y) => !gone.includes(y.lan));
+  settings.forwards = (settings.forwards ?? []).filter((y) => !gone.includes(y.lan));
+  settings.dmz = (settings.dmz ?? []).filter((y) => !gone.includes(y.lan));
+}
+
+/* A forward's or a DMZ's device keeps its address: the one it has now, fixed, if it has none fixed. */
+function pin(lan: number, mac: string) {
+  if ((settings.fixed ?? []).some((y) => y.lan === lan && y.mac === mac)) return;
+  const now = (settings.leases ?? []).find((y) => y.lan === lan && y.mac === mac);
+  if (now) settings.fixed = [...(settings.fixed ?? []), { lan, mac, ip: now.ip, name: "" }];
 }
 
 function live() {
@@ -643,6 +700,8 @@ export const handlers = [
       settings.lans = list.filter((y) => y.id !== id);
       settings.leases = (settings.leases ?? []).filter((y) => y.lan !== id);
       settings.fixed = (settings.fixed ?? []).filter((y) => y.lan !== id);
+      settings.forwards = (settings.forwards ?? []).filter((y) => y.lan !== id);
+      settings.dmz = (settings.dmz ?? []).filter((y) => y.lan !== id);
       return HttpResponse.json({ id: "lan", ok: true });
     }
     let x = list.find((y) => y.id === id);
@@ -708,6 +767,69 @@ export const handlers = [
       );
     settings.fixed = [...list, { lan, mac, ip: body.IP, name: body.NAME ?? "" }];
     return HttpResponse.json({ id: "fixed", ok: true });
+  }),
+
+  /*
+   * A forward: added with no ID, changed by ID, removed by CONN=. Its device
+   * gets its address fixed; ports of another forward of the connection, of
+   * a protocol of its, are refused.
+   */
+  http.post("*/api/set/forward", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const list = settings.forwards ?? [];
+    const id = b.ID ? Number(b.ID) : Math.max(0, ...list.map((y) => y.id)) + 1;
+    if (b.CONN === "") {
+      settings.forwards = list.filter((y) => y.id !== id);
+      return HttpResponse.json({ id: "forward", ok: true });
+    }
+    const x = {
+      id,
+      name: b.NAME ?? "",
+      conn: b.CONN ?? "",
+      proto: (b.PROTO ?? "tcp") as "tcp" | "udp" | "both",
+      ext_from: Number(b.EXT_FROM),
+      ext_to: Number(b.EXT_TO || b.EXT_FROM),
+      lan: Number(b.LAN),
+      mac: (b.MAC ?? "").toLowerCase(),
+      int_port: Number(b.INT_PORT || b.EXT_FROM),
+      on: b.ON !== "off",
+    };
+    const clash = list.find(
+      (y) =>
+        y.id !== id &&
+        y.conn === x.conn &&
+        (y.proto === "both" || x.proto === "both" || y.proto === x.proto) &&
+        y.ext_from <= x.ext_to &&
+        x.ext_from <= y.ext_to,
+    );
+    if (clash)
+      return HttpResponse.json(
+        {
+          error: "refused",
+          detail: `ports ${clash.ext_from}-${clash.ext_to} are forwarded already`,
+        },
+        { status: 409 },
+      );
+    pin(x.lan, x.mac);
+    settings.forwards = [...list.filter((y) => y.id !== id), x];
+    return HttpResponse.json({ id: "forward", ok: true });
+  }),
+
+  /* A connection's DMZ: its device by LAN and MAC, or none with MAC=. */
+  http.post("*/api/set/dmz", async ({ request }) => {
+    await delay(500);
+    if (!signedIn) return unauthorized();
+    const b = kv(await request.text());
+    const list = (settings.dmz ?? []).filter((y) => y.conn !== b.CONN);
+    if (b.MAC) {
+      const x = { conn: b.CONN ?? "", lan: Number(b.LAN), mac: b.MAC.toLowerCase() };
+      pin(x.lan, x.mac);
+      list.push(x);
+    }
+    settings.dmz = list;
+    return HttpResponse.json({ id: "dmz", ok: true });
   }),
 
   /* A connection: added to the first free number, changed by ID, removed by KIND=. */

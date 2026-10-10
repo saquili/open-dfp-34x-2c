@@ -2,9 +2,10 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet, in three tabs: WAN, the stick's connections to the operator;
- * LAN, the local networks that go out through them; and their clients, the
- * devices in those (pages/Lan.tsx). In the first, the connections, and at their right, while
+ * The internet, in four tabs: WAN, the stick's connections to the operator;
+ * LAN, the local networks that go out through them; their clients, the
+ * devices in those (pages/Lan.tsx); and NAT, what comes in to them from the
+ * internet (pages/Nat.tsx). In the first, the connections, and at their right, while
  * it is open, the form that adds or changes one (components/SidePanel); with
  * no connection yet it is open from the start. A connection is PPPoE, a
  * static address or DHCP, and runs in a VLAN of the operator's; a VLAN
@@ -27,6 +28,7 @@ import { ConnList } from "./internet/ConnList";
 import { type Conn, conns, type Kind, room } from "./internet/conns";
 import { useServices } from "./internet/shared";
 import { LanDevices, LanNets, useLanCounts } from "./Lan";
+import { NatTab, useNatCount } from "./Nat";
 
 /** Why there are no services: the fibre, or the OLT. */
 function NoServices({ fib }: { fib: FibreView }) {
@@ -53,8 +55,8 @@ function NoServices({ fib }: { fib: FibreView }) {
   );
 }
 
-/* The page's tabs: the connections, the local networks, and their clients. */
-const TABS = ["wan", "lan", "clients"] as const;
+/* The page's tabs: the connections, the local networks, their clients, and what comes in to them. */
+const TABS = ["wan", "lan", "clients", "nat"] as const;
 
 /** The connections, and at their right while it is open, the form that adds or changes one. */
 function Conns() {
@@ -120,19 +122,21 @@ export function Internet() {
   /* The network the devices are narrowed to, from a network's card, or all. */
   const [net, setNet] = useState<number | null>(null);
   const lan = useLanCounts();
+  const nat = useNatCount();
   const count = (n: number) => (
     <span className="font-normal tabular-nums text-base-content/60">{n}</span>
   );
   return (
     <Page
       title={t("internet.title")}
-      hint={tab === "wan" ? t("internet.hint") : t("lan.hint")}
+      hint={tab === "wan" ? t("internet.hint") : tab === "nat" ? t("nat.hint") : t("lan.hint")}
       tabs={
         <Tabs
           items={[
             { id: "wan", label: t("internet.tabWan"), badge: count(conns(live).length) },
             { id: "lan", label: t("internet.tabLan"), badge: count(lan.nets) },
             { id: "clients", label: t("internet.tabClients"), badge: count(lan.devices) },
+            { id: "nat", label: t("internet.tabNat"), badge: count(nat) },
           ]}
           value={tab}
           onChange={(v) => {
@@ -152,8 +156,10 @@ export function Internet() {
             setTab("clients");
           }}
         />
-      ) : (
+      ) : tab === "clients" ? (
         <LanDevices net={net} onNet={setNet} />
+      ) : (
+        <NatTab />
       )}
     </Page>
   );

@@ -385,6 +385,18 @@ export function leases(live: Live | undefined) {
   return (live?.settings?.leases ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
 }
 
+/** The ports forwarded from the internet, by their connection and first port. */
+export function forwards(live: Live | undefined) {
+  return (live?.settings?.forwards ?? [])
+    .slice()
+    .sort((a, z) => a.conn.localeCompare(z.conn) || a.ext_from - z.ext_from);
+}
+
+/** The connections' DMZ hosts. */
+export function dmzs(live: Live | undefined) {
+  return live?.settings?.dmz ?? [];
+}
+
 /** The fixed addresses of the devices, by address. */
 export function fixed(live: Live | undefined) {
   return (live?.settings?.fixed ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
