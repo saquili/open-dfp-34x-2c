@@ -150,6 +150,9 @@ gate = "unit-ids"
 rules = ["ipv4-address"]
 paths = [
   "onu-utils/scripts/onu-mode",
+  "onu-utils/src/settings.c",
+  "onu-utils/tests/test_settings.c",
+  "onu-utils/tests/test_onucfg_settings.sh",
   "br2-external/board/dfp-34x-2c3/overlay/etc/onu.conf",
   "pond/src/prov_settings.c",
 ]
@@ -157,6 +160,8 @@ reason = """
 The default LAN of router mode, a private /24 with the stick at .1 and its
 DHCP server giving out .100 to .199: a private range on purpose, since a
 router's LAN must not use the documentation ranges. It identifies no unit.
+The table of the settings holds it, and its tests check it; pond held it
+before the table did.
 """
 
 [[allow]]
