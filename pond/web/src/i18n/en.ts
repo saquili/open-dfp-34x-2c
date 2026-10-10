@@ -32,6 +32,8 @@ export const en = {
     trialConfirming: "The change is applied. The panel reaches the stick, so it keeps the change…",
     trialWaiting:
       "The change is on trial. Unless the panel reaches the stick again, the stick goes back to the settings of before in {left} s.",
+    trialElsewhere:
+      "The new management address {address} waits to be confirmed by a panel opened at it; without that the stick goes back to the old one.",
   },
   auth: {
     title: "Sign in",

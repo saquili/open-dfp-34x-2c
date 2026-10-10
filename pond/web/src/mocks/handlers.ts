@@ -651,18 +651,19 @@ export const handlers = [
     return away() ?? (signedIn ? HttpResponse.json({ id: "banks", value: BANKS }) : unauthorized());
   }),
 
-  /* A change on trial kept (CONFIRM=1) or ended (REVERT=1). */
-  http.post("*/api/set/settings", async ({ request }) => {
+  /* The changes on trial kept (CONFIRM=1), but a new management address, or taken back (REVERT=1). */
+  http.post("*/api/set/changes", async ({ request }) => {
     await delay(300);
     if (!signedIn) return unauthorized();
     const body = kv(await request.text());
     if (body.CONFIRM !== "1" && body.REVERT !== "1")
       return HttpResponse.json(
-        { error: "refused", detail: "not a change of the mock" },
+        { error: "changes", detail: "CONFIRM=1 or REVERT=1" },
         { status: 400 },
       );
-    settings.trial = null;
-    return HttpResponse.json({ id: "settings", ok: true });
+    settings.trials =
+      body.CONFIRM === "1" ? (settings.trials ?? []).filter((x) => x.name === "mgmt") : [];
+    return HttpResponse.json({ ok: true });
   }),
 
   /* A session: added to the first free number, changed by ID, removed by USER=. */
@@ -756,7 +757,10 @@ export const handlers = [
     settings.store = "saved";
     settings.last_apply_status = 0;
     /* On trial until the panel confirms it, as on the stick. */
-    settings.trial = { until_s: Math.round(upNow()) + 90 };
+    settings.trials = [
+      ...(settings.trials ?? []).filter((x) => x.name !== "settings"),
+      { name: "settings", until_s: Math.round(upNow()) + 90 },
+    ];
     return HttpResponse.json({ id: "session", ok: true });
   }),
 

@@ -2,25 +2,35 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * A change of the settings on trial (ADR 0014): the stick goes back to the
- * settings of before unless the panel confirms the change. The panel
- * confirms it as soon as a fresh reading shows it applied, which it could
- * only get by reaching the stick again, and once for each trial.
+ * The changes on trial (ADR 0014): the stick takes each back unless the
+ * panel confirms it. The panel confirms them as soon as a fresh reading
+ * shows them applied, which it could only get by reaching the stick again,
+ * and once for each; a new management address only from a panel opened at
+ * that address, which shows that it answers.
  */
 
-import type { Settings } from "../api/types";
+import type { Settings, Trial } from "../api/types";
+
+/** Whether this panel, opened at @here, may confirm @t. */
+export function confirmable(t: Trial, here: string): boolean {
+  return t.name !== "mgmt" || t.address?.split("/")[0] === here;
+}
 
 /**
- * The trial to confirm now, by its end, or null: one that a fresh reading
- * shows, whose change is no longer being applied, and that was not
- * confirmed already (@sent, the end of the last one confirmed).
+ * The changes to confirm now, as a key that names them, or null: those a
+ * fresh reading shows that this panel may confirm, while nothing is being
+ * applied, unless the last confirmation (@sent) was of the same.
  */
-export function trialToConfirm(
-  settings: Pick<Settings, "trial" | "applying"> | undefined,
+export function trialsToConfirm(
+  settings: Pick<Settings, "trials" | "applying"> | undefined,
   fresh: boolean,
-  sent: number | null,
-): number | null {
-  const trial = settings?.trial;
-  if (!fresh || !trial || settings.applying) return null;
-  return trial.until_s === sent ? null : trial.until_s;
+  sent: string | null,
+  here: string,
+): string | null {
+  if (!fresh || !settings || settings.applying) return null;
+  const key = (settings.trials ?? [])
+    .filter((t) => confirmable(t, here))
+    .map((t) => `${t.name}:${t.until_s}`)
+    .join(",");
+  return key && key !== sent ? key : null;
 }

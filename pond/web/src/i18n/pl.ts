@@ -34,6 +34,8 @@ export const pl: Dictionary = {
     trialConfirming: "Zmiana zastosowana. Panel ma połączenie z wkładką, więc ją zachowuje…",
     trialWaiting:
       "Zmiana działa na próbę. Jeśli panel nie połączy się ponownie z wkładką, za {left} s wkładka wróci do poprzednich ustawień.",
+    trialElsewhere:
+      "Nowy adres zarządzania {address} czeka na potwierdzenie z panelu otwartego pod tym adresem. Bez tego wkładka wróci do starego adresu.",
   },
   auth: {
     title: "Logowanie",

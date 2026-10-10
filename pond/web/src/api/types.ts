@@ -335,6 +335,14 @@ export interface FixedInfo {
   name: string;
 }
 
+/** A change on trial (ADR 0014). */
+export interface Trial {
+  name: "settings" | "lane" | "mgmt";
+  until_s: number;
+  /** The management pair's new address, with its prefix. */
+  address?: string;
+}
+
 export interface Settings {
   settings: Record<string, string>;
   sessions: SessionInfo[];
@@ -357,11 +365,11 @@ export interface Settings {
   pass: { address: string; lan: string | null; peer_gateway?: string | null } | null;
   store: "loaded" | "defaults" | "saved" | "failed" | "none" | null;
   /**
-   * A change on trial: the stick goes back to the settings of before at
-   * until_s, in seconds of its uptime, unless the panel confirms it.
-   * Absent on a stick of before.
+   * The changes on trial: each goes back at until_s, in seconds of the
+   * stick's uptime, unless the panel confirms it; the management pair's
+   * only from a panel opened at its new address. Absent on a stick of before.
    */
-  trial?: { until_s: number } | null;
+  trials?: Trial[];
   applying: boolean;
   last_apply_status: number | null;
 }

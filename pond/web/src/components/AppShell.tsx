@@ -27,12 +27,12 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useSignOut } from "../api/auth";
 import { OfflineError } from "../api/client";
-import { useSettingsChange } from "../api/config";
+import { useChanges } from "../api/config";
 import { useLive } from "../api/live";
 import { type Key, useI18n } from "../i18n";
 import { useCountdown } from "../lib/countdown";
 import { clock } from "../lib/format";
-import { trialToConfirm } from "../lib/trial";
+import { confirmable, trialsToConfirm } from "../lib/trial";
 
 const NAV: { to: string; key: Key; icon: ReactNode }[] = [
   { to: "/", key: "nav.overview", icon: <LayoutDashboard className="size-4" /> },
@@ -133,18 +133,21 @@ function OfflineBar() {
 }
 
 /*
- * A change of the settings on trial: confirmed as soon as a fresh reading
- * shows it applied, which the panel could only get by reaching the stick
- * again. While the stick does not answer, the bar says when it goes back.
+ * The changes on trial: confirmed as soon as a fresh reading shows them
+ * applied, which the panel could only get by reaching the stick again; a new
+ * management address only by a panel opened at it. While the stick does not
+ * answer, or a new address waits for its own panel, the bar says when the
+ * stick goes back.
  */
 function TrialBar() {
   const { t } = useI18n();
   const live = useLive();
-  const confirm = useSettingsChange();
-  const sent = useRef<number | null>(null);
+  const confirm = useChanges();
+  const sent = useRef<string | null>(null);
   const settings = live.data?.settings;
+  const here = window.location.hostname;
   const fresh = !live.error && !live.isFetching;
-  const due = trialToConfirm(settings, fresh, sent.current);
+  const due = trialsToConfirm(settings, fresh, sent.current, here);
   useEffect(() => {
     if (due == null) return;
     sent.current = due;
@@ -157,20 +160,27 @@ function TrialBar() {
       },
     );
   }, [due, confirm.mutate]);
-  const left = useCountdown(settings?.trial?.until_s, live.data?.uptime?.up_s, live.dataUpdatedAt);
-  if (!settings?.trial) return null;
-  const waiting = live.error instanceof OfflineError;
+  const trials = settings?.trials ?? [];
+  const first = trials.length ? Math.min(...trials.map((x) => x.until_s)) : null;
+  const left = useCountdown(first, live.data?.uptime?.up_s, live.dataUpdatedAt);
+  if (!trials.length) return null;
+  const offline = live.error instanceof OfflineError;
+  /* Only a new management address is left, which its own panel confirms. */
+  const elsewhere = trials.some((x) => confirmable(x, here))
+    ? undefined
+    : trials.find((x) => x.address)?.address?.split("/")[0];
+  const text = offline
+    ? t("connection.trialWaiting", { left: left ?? "…" })
+    : elsewhere
+      ? t("connection.trialElsewhere", { address: elsewhere })
+      : t("connection.trialConfirming");
   return (
     <div
       role="status"
-      className={`alert alert-soft mb-4 ${waiting ? "alert-warning" : "alert-info"}`}
+      className={`alert alert-soft mb-4 ${offline ? "alert-warning" : "alert-info"}`}
     >
       <ShieldCheck className="size-5" />
-      <span>
-        {waiting
-          ? t("connection.trialWaiting", { left: left ?? "…" })
-          : t("connection.trialConfirming")}
-      </span>
+      <span>{text}</span>
     </div>
   );
 }
