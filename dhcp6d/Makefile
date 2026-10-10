@@ -5,7 +5,7 @@
 # and router advertisements.
 #
 #   make          build/dhcp6d
-#   make check    the program and the tests
+#   make check    the tests, and dhcp6d-none for tests/netns.sh
 #
 # CC, CFLAGS and LDFLAGS come from the caller for a build for the board.
 
@@ -18,6 +18,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
                  -Wshadow -Wpointer-arith -Wwrite-strings
 
 PROTO := $(addprefix $(BUILD)/src/,msg.o client.o server.o ra.o)
+DAEMON := $(addprefix $(BUILD)/src/,main.o state.o) $(PROTO)
 
 .PHONY: all check clean
 
@@ -27,14 +28,24 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
-$(BUILD)/dhcp6d: $(BUILD)/src/main.o $(PROTO)
+# dhcp6d publishes its state on ubus (bus.h): libubus, libubox and
+# libubox's JSON part. dhcp6d-none, which the tests build on a host without
+# them, publishes nothing.
+$(BUILD)/dhcp6d: $(DAEMON) $(BUILD)/src/bus-ubus.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lblobmsg_json -lubox
+
+$(BUILD)/dhcp6d-none: $(DAEMON) $(BUILD)/src/bus-none.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(BUILD)/test_state: $(BUILD)/tests/test_state.o $(BUILD)/src/state.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/test_dhcp6: $(BUILD)/tests/test_dhcp6.o $(PROTO) $(BUILD)/tests/log.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-check: all $(BUILD)/test_dhcp6
+check: $(BUILD)/dhcp6d-none $(BUILD)/test_dhcp6 $(BUILD)/test_state
 	$(BUILD)/test_dhcp6
+	$(BUILD)/test_state
 
 clean:
 	rm -rf $(BUILD)

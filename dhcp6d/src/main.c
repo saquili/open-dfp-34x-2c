@@ -58,7 +58,9 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "bus.h"
 #include "dhcp6d.h"
+#include "state.h"
 
 #define ROUTE_METRIC 1024
 #define UNREACHABLE_METRIC 4096
@@ -373,6 +375,8 @@ static int send_to(int fd, const uint8_t *buf, size_t len, const char *addr,
 /* The daemon's state across the loop. */
 struct daemon {
 	const char *wan, *lan, *dir, *binding;
+	/* the name of its object on ubus, dhcp6d.NAME, or none */
+	const char *name;
 	/* the program told of a change of the binding, and the binding told */
 	const char *notify;
 	char binding_text[BINDING_TEXT];
@@ -457,6 +461,35 @@ static void notify_run(const struct daemon *d)
 	}
 	if (pid < 0)
 		DHCP6D_WARN("%s was not told of the binding: %s", d->notify, strerror(errno));
+}
+
+/*
+ * What the daemon has now, published on ubus when it changed (bus.h): the
+ * prefix delegated to it, or the fixed one it delegates, and the host it
+ * routes the prefix to.
+ */
+static void publish(const struct daemon *d, const struct prefix *fixed)
+{
+	char prefix[INET6_ADDRSTRLEN + 4], host[INET6_ADDRSTRLEN], a[INET6_ADDRSTRLEN];
+	char json[512];
+	const struct prefix *p = fixed;
+	struct dhcp6d_state st = {
+		.name = d->name, .wan = d->wan, .lan = d->lan,
+		.bound = d->server.bound, .routed = d->routed,
+	};
+
+	if (!d->name)
+		return;
+	if (d->client_on && d->client.bound)
+		p = &d->client.prefix;
+	if (p) {
+		snprintf(prefix, sizeof(prefix), "%s/%u", ntop(p->addr, a, sizeof(a)), p->len);
+		st.prefix = prefix;
+	}
+	if (d->routed)
+		st.host = ntop(d->routed_via, host, sizeof(host));
+	if (dhcp6d_state_json(&st, json, sizeof(json)) > 0)
+		bus_publish(json);
 }
 
 /* The host's binding as it is now, in the file of -b, and told when it changed. */
@@ -695,7 +728,7 @@ static int print_usage(void)
 {
 	fprintf(stderr,
 		"usage: dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE]\n"
-		"              [-x PROGRAM] [-v]\n"
+		"              [-x PROGRAM] [-n NAME] [-v]\n"
 		"       dhcp6d -c IFACE [-m IFACE] [-v]\n"
 		"       dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]\n"
 		"\n"
@@ -705,7 +738,8 @@ static int print_usage(void)
 		"         the files \"prefix\" and \"host\"; -b the file that keeps the\n"
 		"         host's binding for the next start; -t puts the default route\n"
 		"         in TABLE, by which what comes from the prefix is routed; -x\n"
-		"         runs PROGRAM with the argument dhcp6d when the binding changes.\n"
+		"         runs PROGRAM with the argument dhcp6d when the binding changes;\n"
+		"         -n publishes the state on ubus as the object dhcp6d.NAME.\n"
 		"  -c     the client alone: print the prefix delegated on IFACE.\n"
 		"  -s     the server alone: delegate PREFIX/LEN on LAN, with DNS.\n");
 	return 2;
@@ -789,7 +823,7 @@ int main(int argc, char **argv)
 	struct prefix fp;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "w:l:m:o:b:c:s:d:t:x:v")) != -1) {
+	while ((opt = getopt(argc, argv, "w:l:m:o:b:c:s:d:t:x:n:v")) != -1) {
 		switch (opt) {
 		case 'w':
 			d.wan = optarg;
@@ -817,6 +851,9 @@ int main(int argc, char **argv)
 			break;
 		case 'x':
 			d.notify = optarg;
+			break;
+		case 'n':
+			d.name = optarg;
 			break;
 		case 't': {
 			char *end;
@@ -915,10 +952,20 @@ int main(int argc, char **argv)
 	if (d.fixed && dns && inet_pton(AF_INET6, dns, d.server.dns[0]) == 1)
 		d.server.ndns = 1;
 
+	int64_t bus_retry = 0;
+
 	while (!g_stop) {
-		struct pollfd pf[3];
+		struct pollfd pf[4];
 		int64_t now = now_ms(), deadline = INT64_MAX / 4;
 		int nfd = 0, wait;
+
+		/* ubusd may come later than dhcp6d, or start again. */
+		if (d.name && bus_fd() < 0 && now >= bus_retry) {
+			if (bus_open(d.name))
+				bus_retry = now + 10000;
+		}
+		if (d.name && bus_fd() < 0 && bus_retry < deadline)
+			deadline = bus_retry;
 
 		/* The fixed prefix stays half an hour preferred, an hour valid. */
 		if (d.fixed) {
@@ -947,6 +994,9 @@ int main(int argc, char **argv)
 			pf[nfd++] = (struct pollfd){ .fd = d.ssock, .events = POLLIN };
 		if (d.rsock >= 0)
 			pf[nfd++] = (struct pollfd){ .fd = d.rsock, .events = POLLIN };
+		if (bus_fd() >= 0)
+			pf[nfd++] = (struct pollfd){ .fd = bus_fd(), .events = POLLIN };
+		publish(&d, d.fixed ? &fp : NULL);
 		wait = deadline - now > 60000 ? 60000 :
 		       deadline - now < 0    ? 0 :
 					       (int)(deadline - now);
@@ -968,8 +1018,10 @@ int main(int argc, char **argv)
 						  from.sin6_addr.s6_addr);
 			} else if (pf[i].fd == d.ssock) {
 				on_server(&d, now);
-			} else {
+			} else if (pf[i].fd == d.rsock) {
 				on_rs(&d, now);
+			} else {
+				bus_handle();
 			}
 		}
 	}
@@ -996,5 +1048,6 @@ int main(int argc, char **argv)
 	}
 	write_file(&d, "prefix", NULL);
 	write_file(&d, "host", NULL);
+	bus_close();
 	return 0;
 }

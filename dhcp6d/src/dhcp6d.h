@@ -21,7 +21,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
 
 /* The ports and the address of every server and relay on a link. */
 #define DHCP6_CLIENT_PORT 546

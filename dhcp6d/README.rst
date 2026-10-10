@@ -13,7 +13,7 @@ prefix to the one host there, and a router that advertises itself (RFC 4861)
 with the session's MTU and the name servers (RFC 8106)::
 
    dhcp6d -w WAN -l LAN [-m IFACE] [-o DIR] [-b FILE] [-t TABLE]
-          [-x PROGRAM] [-v]                        # the stick
+          [-x PROGRAM] [-n NAME] [-v]              # the stick
    dhcp6d -c IFACE [-m IFACE] [-v]                 # the client alone
    dhcp6d -s PREFIX/LEN -l LAN [-d DNS] [-v]       # the server alone
 
@@ -59,10 +59,18 @@ dhcp6d runs it with the argument ``dhcp6d`` and does not wait for it. On the
 stick the program is ``onu-apply``, which keeps the binding in the
 configuration store.
 
+``-n NAME`` publishes the state on ubus (ADR 0014): the object
+``dhcp6d.NAME``, whose method ``status`` gives the prefix delegated, the host
+it went on to, and whether that host is bound and the prefix routed to it,
+and the event ``dhcp6d`` with the same each time it changes. ``onu-apply``
+names each session's dhcp6d ``sesN``. dhcp6d connects to ubusd again when
+ubusd comes later or starts again. ``build/dhcp6d-none``, which ``make
+check`` builds on a host without libubus, publishes nothing.
+
 Building and testing::
 
    make           # build/dhcp6d
-   make check     # the program and the tests of the protocol
+   make check     # the tests, and build/dhcp6d-none
 
 ``tests/netns.sh`` runs an operator, the stick and a host in three network
 namespaces and has the host reach the operator's network from the delegated

@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+/* dhcp6d on ubus (bus.h). */
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <libubox/blobmsg.h>
+#include <libubox/blobmsg_json.h>
+#include <libubus.h>
+
+#include "bus.h"
+#include "dhcp6d.h"
+
+static struct ubus_context *g_ctx;
+static char g_name[64];
+static char *g_state;
+
+static int status(struct ubus_context *ctx, struct ubus_object *obj,
+		  struct ubus_request_data *req, const char *method, struct blob_attr *msg)
+{
+	struct blob_buf b = { 0 };
+
+	(void)obj;
+	(void)method;
+	(void)msg;
+	blob_buf_init(&b, 0);
+	if (g_state)
+		blobmsg_add_json_from_string(&b, g_state);
+	ubus_send_reply(ctx, req, b.head);
+	blob_buf_free(&b);
+	return 0;
+}
+
+static const struct ubus_method g_methods[] = {
+	UBUS_METHOD_NOARG("status", status),
+};
+
+static struct ubus_object_type g_type = UBUS_OBJECT_TYPE("dhcp6d", g_methods);
+
+static struct ubus_object g_object = {
+	.type = &g_type,
+	.methods = g_methods,
+	.n_methods = ARRAY_SIZE(g_methods),
+};
+
+static void lost(struct ubus_context *ctx)
+{
+	(void)ctx;
+	DHCP6D_WARN("ubusd went away: the state is published again when it is back");
+	bus_close();
+}
+
+int bus_open(const char *name)
+{
+	int err;
+
+	if (g_ctx)
+		return 0;
+	snprintf(g_name, sizeof(g_name), "dhcp6d.%s", name);
+	g_object.name = g_name;
+	g_ctx = ubus_connect(NULL);
+	if (!g_ctx)
+		return -ENOTCONN;
+	g_ctx->connection_lost = lost;
+	err = ubus_add_object(g_ctx, &g_object);
+	if (err) {
+		DHCP6D_WARN("%s is not on ubus: %s", g_name, ubus_strerror(err));
+		ubus_free(g_ctx);
+		g_ctx = NULL;
+		return -EIO;
+	}
+	return 0;
+}
+
+int bus_fd(void)
+{
+	return g_ctx ? g_ctx->sock.fd : -1;
+}
+
+void bus_handle(void)
+{
+	if (g_ctx)
+		ubus_handle_event(g_ctx);
+}
+
+void bus_publish(const char *json)
+{
+	struct blob_buf b = { 0 };
+	bool same = g_state && !strcmp(g_state, json);
+
+	if (!same) {
+		free(g_state);
+		g_state = strdup(json);
+	}
+	if (!g_ctx || same)
+		return;
+	blob_buf_init(&b, 0);
+	if (blobmsg_add_json_from_string(&b, json))
+		ubus_send_event(g_ctx, "dhcp6d", b.head);
+	blob_buf_free(&b);
+}
+
+void bus_close(void)
+{
+	if (!g_ctx)
+		return;
+	ubus_free(g_ctx);
+	g_ctx = NULL;
+	g_object.id = 0;
+}

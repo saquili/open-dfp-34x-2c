@@ -11,10 +11,11 @@
 #
 #   docker run --rm --privileged -v "$PWD":/d6 debian:trixie \
 #     sh -c 'apt-get -qq update && apt-get -qq install -y make gcc iproute2 \
-#            iputils-ping procps >/dev/null && cd /d6 && make && tests/netns.sh'
+#            iputils-ping procps >/dev/null && cd /d6 &&
+#            make build/dhcp6d-none && tests/netns.sh'
 
 set -u
-D6=${D6:-build/dhcp6d}
+D6=${D6:-build/dhcp6d-none}
 T=$(mktemp -d)
 checks=0
 failures=0

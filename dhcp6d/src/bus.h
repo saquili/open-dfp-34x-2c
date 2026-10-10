@@ -1,0 +1,28 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> */
+
+/*
+ * dhcp6d on ubus (ADR 0014): the object dhcp6d.NAME, whose method "status"
+ * gives the state last published (state.h), and the event "dhcp6d", with
+ * the state, each time it changes. bus-ubus.c sends them; bus-none.c, for a
+ * build without libubus, which the tests make, sends nothing.
+ */
+
+#ifndef DHCP6D_BUS_H
+#define DHCP6D_BUS_H
+
+/* Connect and add the object dhcp6d.@name: 0, or a negative errno. */
+int bus_open(const char *name);
+
+/* The socket to wait on for ubusd's messages, or -1 without a connection. */
+int bus_fd(void);
+
+/* The messages from ubusd that wait; a lost connection is closed. */
+void bus_handle(void);
+
+/* The state @json from now on, and its event when it is a new one. */
+void bus_publish(const char *json);
+
+void bus_close(void);
+
+#endif
