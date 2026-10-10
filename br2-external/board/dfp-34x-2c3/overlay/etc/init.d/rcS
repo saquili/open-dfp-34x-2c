@@ -4,8 +4,8 @@
 #
 # The boot script of the ODI DFP-34X-2C3 image. BusyBox init runs it once from
 # /etc/inittab, before the console's login prompt starts. It mounts the file systems that
-# the kernel does not, gives the stick its management addresses, starts the ssh
-# server and prints a line that says the board is ready.
+# the kernel does not, gives the stick its management addresses, through
+# netifd, starts the ssh server and prints a line that says the board is ready.
 #
 # The root file system is read-only. Everything that is written lives in memory
 # and is gone at the next restart, including the host key of the ssh server,
@@ -119,33 +119,44 @@ echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore &&
 # looks for the host's otherwise.
 onu-lane apply || warn "the stored setting of the SFP lane was refused"
 
-# The links. The stick's host side is the interface sfp.
+# The links. The stick's host side is the interface sfp. The conduit of the
+# switch, cpu, which carries every port's traffic, the PON's too, is up before
+# netifd starts: netifd brings a port's parent up with the port, and takes
+# down only what it brought up.
 ip link set lo up
+ip link set cpu up || warn "the switch's conduit does not come up"
 ip link set sfp up || warn "no interface sfp"
 if [ -n "$DATA_ADDRESS" ]; then
 	ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
 fi
-# A stored pair that cannot be brought up gives way to the image's: the
-# stick stays reachable.
-ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" &&
-	ip address add "$MGMT_ADDRESS" dev mgmt || {
-	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS did not come up, the image's instead"
-	ip link del mgmt 2>/dev/null
+
+# The management VLAN and its address. netifd brings them up, from the part
+# "mgmt" of its configuration in /run/config, which onu-mgmt writes (onu-net)
+# now and again when the pair changes; ubusd is the bus it answers on. A
+# stored pair that is not a VLAN and an address gives way to the image's. The
+# ssh server can listen only once the address is there: if netifd has not
+# brought it up within ten seconds, the script brings it up itself, so that
+# the stick stays reachable; netifd takes the VLAN over as it finds it.
+onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
+	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS is not a pair, the image's instead"
 	MGMT_VLAN=$BOARD_MGMT_VLAN
 	MGMT_ADDRESS=$BOARD_MGMT_ADDRESS
-	ip link add link sfp name mgmt type vlan id "$MGMT_VLAN" || warn "no VLAN $MGMT_VLAN on sfp"
-	ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
+	onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS"
 }
-echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6 || warn "no IPv6 on mgmt"
-ip link set mgmt up || warn "mgmt does not come up"
-# The pair in use, for onu-mgmt, which changes it later.
-{
-	echo "VLAN=$MGMT_VLAN"
-	echo "ADDRESS=$MGMT_ADDRESS"
-	echo "IFACE=mgmt"
-	echo "PREF=1"
-	echo "DATA_ADDRESS=$DATA_ADDRESS"
-} >/run/onu-mgmt
+ubusd -s /run/ubus.sock &
+tenths=50
+while [ ! -S /run/ubus.sock ] && [ "$tenths" -gt 0 ]; do
+	sleep 0.1
+	tenths=$((tenths - 1))
+done
+netifd -s /run/ubus.sock -c /run/config -r /run/resolv.conf.auto &
+onu-net wait mgmt "$MGMT_ADDRESS" 10 || {
+	warn "netifd did not bring $MGMT_ADDRESS up in VLAN $MGMT_VLAN, the script does"
+	ip link add link sfp name mgmt type vlan id "$MGMT_VLAN"
+	ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
+	echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6 || warn "no IPv6 on mgmt"
+	ip link set mgmt up || warn "mgmt does not come up"
+}
 
 # The management VLAN stays between the host side and the stick, so that the
 # network behind the PON never sees it and never reaches it: on sfp's ingress
