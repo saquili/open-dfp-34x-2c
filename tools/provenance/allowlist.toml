@@ -160,6 +160,33 @@ router's LAN must not use the documentation ranges. It identifies no unit.
 """
 
 [[allow]]
+gate = "unit-ids"
+rules = ["ipv4-address"]
+paths = [
+  "pond/web/src/lib/state.ts",
+  "pond/web/src/pages/Lan.tsx",
+  "pond/web/src/mocks/handlers.ts",
+]
+match = '192\.168\.\d{1,3}\.\d{1,3}(?:/24)?'
+reason = """
+The panel's side of the same default LAN: its defaults and the placeholders
+of its form, the next networks it proposes (192.168.N.0/24), the widest such
+address, which sizes a column, and the mock stick's local networks with their
+devices, which stand for what a stick in router mode has. Private on purpose,
+as a router's LAN; they identify no unit.
+"""
+
+[[allow]]
+gate = "unit-ids"
+rules = ["host-name"]
+paths = ["pond/web/src/components/AppShell.tsx"]
+match = '"nav\.lan"'
+reason = """
+The key of the menu's translation for the local network page, a property path
+of the panel's messages, not a host name under a private top-level name.
+"""
+
+[[allow]]
 gate = "forbidden-words"
 rules = ["issue-reference"]
 paths = ["docs/testing/*"]
