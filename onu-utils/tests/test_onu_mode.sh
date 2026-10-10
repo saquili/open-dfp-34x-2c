@@ -299,8 +299,9 @@ check 'logged "^udhcpd -f $ONU_ROOT/run/udhcpd-lan36.conf"'
 check '"$MODE_SCRIPT" status | grep -q "^pass 192.0.2.2 on lan36 from session 1"'
 check '"$MODE_SCRIPT" status | grep -q "^session 1 on wan410 (ipv4), up on ppp0, 192.0.2.2"'
 # The stand-in session ends after two seconds: the address goes with it.
+# The proxy ARP entry goes last, after the route.
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	logged "^ip route del 192.0.2.2 dev lan36" && break
+	logged "^ip neigh del proxy 192.0.2.1 dev lan36" && break
 	"$REAL_SLEEP" 0.2
 done
 check 'logged "^ip route del 192.0.2.2 dev lan36"'
