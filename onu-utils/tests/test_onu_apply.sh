@@ -145,7 +145,7 @@ echo "bridge mode"
 setup
 conf MODE=bridge
 "$MODE_SCRIPT" start 2>/dev/null
-check 'logged "^omcid -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 check '! logged "omcid -r"'
 check '! logged "^nft"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
@@ -284,7 +284,7 @@ echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 # omcid bridges the rest of what the OLT provisions, without the session's VLAN.
-check 'logged "^omcid -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 check '! logged "omcid -r"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 check 'logged "^ip link del omcibr0"'
@@ -477,7 +477,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	"$REAL_SLEEP" 0.2
 done
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
-check 'logged "^omcid -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 teardown
 
 echo "from router to passthrough, omcid left as it is"
@@ -777,7 +777,7 @@ check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link
 # omcid ends as procd's service and starts again, in bridge mode.
 check 'logged "^procd stop omcid$"'
 check 'logged "^procd start omcid -- .*/onu-run omcid$"'
-check 'logged "^omcid -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 check '[ "$(grep -n "^procd stop omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^omcid" "$LOG" | cut -d: -f1)" ]'
 teardown
 
