@@ -235,11 +235,11 @@ The network layer of OpenWrt
     ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
     command-line tools of these packages, ``ubus``, ``uci`` and ``jshn``, are
     not in the image: the post-build script takes them out. procd starts both;
-    netifd brings up the management VLAN and its address and the PPPoE
-    sessions, from the configuration that ``onu-net`` writes in
-    ``/run/config`` (``onu-utils/README.rst``), tells ``onu-apply`` of each
-    interface that comes up or goes down, and takes the other links over one
-    at a time as the scripts that set them up move to it.
+    netifd brings up the management VLAN, the addresses of the host side,
+    the PPPoE sessions and the links that hand their addresses on to the
+    router, with their routes, from the configuration that ``onu-net`` writes
+    in ``/run/config`` (``onu-utils/README.rst``), and tells ``onu-apply`` of
+    each interface that comes up or goes down.
 procd
     OpenWrt's init and service supervisor, process 1, with the patches in
     ``br2-external/package/procd`` (``docs/adr/0013-procd-is-the-first-process.rst``).
@@ -285,12 +285,12 @@ The boot script
        them (the host side keeps it), and has ARP answer only for an address
        of the interface it is asked on: the stick has no address on the PON
        side, sends nothing of its own to the OLT and answers nothing from it;
-    #. brings the interface ``sfp`` up with the address ``192.0.2.2/30``, and,
-       through ``netifd``, a VLAN interface ``mgmt`` of it (VLAN 4094) with
-       ``198.51.100.2/30``; when netifd has not brought that address up within
-       ten seconds, the script brings it up itself, so that the stick stays
-       reachable. The switch's conduit ``cpu`` is brought up first, so that
-       netifd, which takes down only what it brought up, never takes it down.
+    #. brings the interface ``sfp`` up and, through ``netifd``, gives it the
+       address ``192.0.2.2/30`` and a VLAN interface ``mgmt`` of it (VLAN
+       4094) with ``198.51.100.2/30``, and waits up to ten seconds for each;
+       netifd alone sets them, and procd starts it again if it ends. The
+       switch's conduit ``cpu`` is brought up first, so that netifd, which
+       takes down only what it brought up, never takes it down.
        These are the addresses the bench tries (``flashing.rst``, "What you need"); it
        tries the second first, because that one answers whether or not a bridge
        has been built on the link (``tools/bench/README.rst``). The host has to
