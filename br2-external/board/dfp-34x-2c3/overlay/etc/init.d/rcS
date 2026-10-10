@@ -185,12 +185,12 @@ onu-svc start pond -- /usr/sbin/onu-run pond || warn "no status daemon"
 onu-svc start ntp -l -- /usr/sbin/onu-run ntp || warn "the clock is not set"
 
 # The identity to the PON driver, which takes it before the PON comes up.
-onu-mode identity || warn "the PON stays down"
+onu-apply identity || warn "the PON stays down"
 
-# The mode of /etc/onu.conf, bridge or router: onu-mode starts omcid, which
+# The mode of /etc/onu.conf, bridge or router: onu-apply starts omcid, which
 # answers the OLT and logs to /run/omcid.log, and in router mode the router.
 if [ -x /usr/sbin/omcid ]; then
-	onu-mode start || warn "onu-mode did not start"
+	onu-apply start || warn "onu-apply did not start"
 else
 	warn "no omcid: nothing answers the OLT"
 fi

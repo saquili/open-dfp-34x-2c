@@ -15,4 +15,5 @@ config BR2_PACKAGE_ONU_UTILS
 	  repository: ponid, which prints the identity of the unit
 	  from its factory configuration; pon, which shows the PON
 	  devices and their ONU as the kernel reports them; and
-	  onu-mode, which puts the stick in bridge or router mode.
+	  onu-apply, which turns the settings into what the stick
+	  runs.

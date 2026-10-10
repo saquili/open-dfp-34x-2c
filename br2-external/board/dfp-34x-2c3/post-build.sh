@@ -39,7 +39,7 @@ else
 fi
 
 # The package installs every program of iproute2. The stick runs ip, tc and
-# devlink, from the boot script and onu-mode, and keeps bridge for a person
+# devlink, from the boot script and onu-apply, and keeps bridge for a person
 # who looks at the bridge's VLANs; the others would add some 3 MB, unpacked,
 # to a root filesystem that has to fit the partition r0.
 for prog in ctstat dcb genl ifstat lnstat nstat rdma routel rtacct rtmon rtstat ss tipc vdpa; do

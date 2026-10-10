@@ -249,8 +249,8 @@ class QuietTowardsThePon(unittest.TestCase):
                 self.assertIn(line, text)
                 # "default" covers the bridge and the GEM interfaces that
                 # omcid makes, so it must be in force before omcid starts;
-                # "onu-mode identity" is what brings the PON up.
-                for later in ("onu-mode identity", "onu-mode start"):
+                # "onu-apply identity" is what brings the PON up.
+                for later in ("onu-apply identity", "onu-apply start"):
                     self.assertLess(text.index(line), text.index(later), later)
 
     def test_the_host_side_keeps_ipv6(self):
