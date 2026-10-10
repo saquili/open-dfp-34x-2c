@@ -9,15 +9,15 @@
 #include <string.h>
 
 #include <libubox/blobmsg.h>
-#include <libubox/blobmsg_json.h>
 #include <libubus.h>
 
 #include "bus.h"
 #include "dhcp6d.h"
+#include "state.h"
 
 static struct ubus_context *g_ctx;
 static char g_name[64];
-static char *g_state;
+static struct blob_attr *g_state;
 
 static int status(struct ubus_context *ctx, struct ubus_object *obj,
 		  struct ubus_request_data *req, const char *method, struct blob_attr *msg)
@@ -27,9 +27,11 @@ static int status(struct ubus_context *ctx, struct ubus_object *obj,
 	(void)obj;
 	(void)method;
 	(void)msg;
+	if (g_state) {
+		ubus_send_reply(ctx, req, g_state);
+		return 0;
+	}
 	blob_buf_init(&b, 0);
-	if (g_state)
-		blobmsg_add_json_from_string(&b, g_state);
 	ubus_send_reply(ctx, req, b.head);
 	blob_buf_free(&b);
 	return 0;
@@ -87,19 +89,32 @@ void bus_handle(void)
 		ubus_handle_event(g_ctx);
 }
 
-void bus_publish(const char *json)
+/* A string of the state, left out when there is none. */
+static void add_string(struct blob_buf *b, const char *name, const char *v)
+{
+	if (v)
+		blobmsg_add_string(b, name, v);
+}
+
+void bus_publish(const struct dhcp6d_state *s)
 {
 	struct blob_buf b = { 0 };
-	bool same = g_state && !strcmp(g_state, json);
+	bool same;
 
+	blob_buf_init(&b, 0);
+	add_string(&b, "name", s->name);
+	add_string(&b, "wan", s->wan);
+	add_string(&b, "lan", s->lan);
+	add_string(&b, "prefix", s->prefix);
+	add_string(&b, "host", s->host);
+	blobmsg_add_u8(&b, "bound", s->bound);
+	blobmsg_add_u8(&b, "routed", s->routed);
+	same = g_state && blob_attr_equal(g_state, b.head);
 	if (!same) {
 		free(g_state);
-		g_state = strdup(json);
+		g_state = blob_memdup(b.head);
 	}
-	if (!g_ctx || same)
-		return;
-	blob_buf_init(&b, 0);
-	if (blobmsg_add_json_from_string(&b, json))
+	if (g_ctx && !same)
 		ubus_send_event(g_ctx, "dhcp6d", b.head);
 	blob_buf_free(&b);
 }

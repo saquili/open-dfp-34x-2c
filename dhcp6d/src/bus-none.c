@@ -20,9 +20,9 @@ void bus_handle(void)
 {
 }
 
-void bus_publish(const char *json)
+void bus_publish(const struct dhcp6d_state *s)
 {
-	(void)json;
+	(void)s;
 }
 
 void bus_close(void)

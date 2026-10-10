@@ -4,8 +4,9 @@
 /*
  * dhcp6d on ubus (ADR 0014): the object dhcp6d.NAME, whose method "status"
  * gives the state last published (state.h), and the event "dhcp6d", with
- * the state, each time it changes. bus-ubus.c sends them; bus-none.c, for a
- * build without libubus, which the tests make, sends nothing.
+ * the state, each time it changes. bus-ubus.c sends them, as blobmsg made
+ * straight from the state; bus-none.c, for a build without libubus, which
+ * the tests make, sends nothing.
  */
 
 #ifndef DHCP6D_BUS_H
@@ -20,8 +21,10 @@ int bus_fd(void);
 /* The messages from ubusd that wait; a lost connection is closed. */
 void bus_handle(void);
 
-/* The state @json from now on, and its event when it is a new one. */
-void bus_publish(const char *json);
+struct dhcp6d_state;
+
+/* The state @s from now on, and its event when it is a new one. */
+void bus_publish(const struct dhcp6d_state *s);
 
 void bus_close(void);
 

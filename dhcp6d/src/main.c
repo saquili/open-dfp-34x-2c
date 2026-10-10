@@ -471,7 +471,6 @@ static void notify_run(const struct daemon *d)
 static void publish(const struct daemon *d, const struct prefix *fixed)
 {
 	char prefix[INET6_ADDRSTRLEN + 4], host[INET6_ADDRSTRLEN], a[INET6_ADDRSTRLEN];
-	char json[512];
 	const struct prefix *p = fixed;
 	struct dhcp6d_state st = {
 		.name = d->name, .wan = d->wan, .lan = d->lan,
@@ -488,8 +487,7 @@ static void publish(const struct daemon *d, const struct prefix *fixed)
 	}
 	if (d->routed)
 		st.host = ntop(d->routed_via, host, sizeof(host));
-	if (dhcp6d_state_json(&st, json, sizeof(json)) > 0)
-		bus_publish(json);
+	bus_publish(&st);
 }
 
 /* The host's binding as it is now, in the file of -b, and told when it changed. */
