@@ -29,6 +29,15 @@ seeing its hash, and the upload and download of an update, which stream
 through a pipe whose other end pond passes to onu-act. pond runs no program
 of the stick itself.
 
+On the stick pond runs as an account of its own, ``pond``, without a password
+or a shell, which no one logs in with; root stays the one account to log in
+with (ADR 0012, ADR 0014). ubusd's access list, ``acl.json``, which the image
+installs as ``/usr/share/acl.d/pond.json``, lets it call onu-act and read the
+state of omcid, of netifd's interfaces and of dhcp6d, and nothing else; the
+boot script gives it a directory of ``/run`` of its own for its log and the
+token of scripts, and its group the two copies of the boot loader's
+environment to read. Every other value it reads, any user may.
+
 Signing in
 ==========
 

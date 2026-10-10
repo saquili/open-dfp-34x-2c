@@ -1,0 +1,9 @@
+{
+	"user": "pond",
+	"access": {
+		"onu-act": { "methods": [ "*" ] },
+		"omcid": { "methods": [ "status", "mib" ] },
+		"network.interface.*": { "methods": [ "status" ] },
+		"dhcp6d.*": { "methods": [ "status" ] }
+	}
+}
