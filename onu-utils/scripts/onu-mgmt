@@ -85,7 +85,7 @@ rules_del() {
 }
 
 # A VLAN on the SFP port that an interface has already, the management's own
-# or one of onu-mode's: a second one of the same VLAN cannot be made.
+# or one of onu-apply's: a second one of the same VLAN cannot be made.
 vlan_in_use() {
 	awk -F'|' -v vid="$1" 'NR > 2 {
 		gsub(/[ \t]/, "", $2)

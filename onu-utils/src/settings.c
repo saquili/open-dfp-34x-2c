@@ -26,7 +26,7 @@ enum kind {
 	K_HOST_VLAN,
 };
 
-/* The keys of /run/onu.conf, as onu-mode reads them, and their defaults. */
+/* The keys of /run/onu.conf, as onu-apply reads them, and their defaults. */
 static const struct {
 	const char *name;
 	enum kind kind;

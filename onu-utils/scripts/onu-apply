@@ -2,27 +2,27 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-mode: put the stick's data path in the shape its settings give: the
+# onu-apply: put the stick's data path in the shape its settings give: the
 # OLT's bridge, or the stick's own PPPoE sessions with their addresses handed
 # on, or, on a bench, a router.
 #
-#   onu-mode start    at boot: take the settings from /etc/onu.conf and apply
-#   onu-mode apply    apply the settings of /run/onu.conf again, after a change,
-#                     and keep them in the configuration store (onu-store)
-#   onu-mode stop     stop omcid and take the router down
-#   onu-mode identity give the PON driver the serial number and PLOAM
-#                     password of /run/onu-identity and bring the PON up
-#   onu-mode reidentify  take the PON down, give it the identity of
-#                     /run/onu-identity, and register with the OLT again
-#   onu-mode status   the shape in force, the WAN or the sessions, and the
-#                     address handed on
+#   onu-apply start    at boot: take the settings from /etc/onu.conf and apply
+#   onu-apply reload   apply the settings of /run/onu.conf again, after a change,
+#                      and keep them in the configuration store (onu-store)
+#   onu-apply stop     stop omcid and take the router down
+#   onu-apply identity give the PON driver the serial number and PLOAM
+#                      password of /run/onu-identity and bring the PON up
+#   onu-apply reidentify  take the PON down, give it the identity of
+#                      /run/onu-identity, and register with the OLT again
+#   onu-apply status   the shape in force, the WAN or the sessions, and the
+#                      address handed on
 #
 # The settings are KEY=value lines in /run/onu.conf, which the status daemon
 # rewrites; /etc/onu.conf has the defaults and says what each key means. The
 # account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN, as "user
 # secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
 # one, seeds the first. At boot, onu-store has put the saved ones in these
-# files before onu-mode starts.
+# files before onu-apply starts.
 #
 # There is no mode to choose. Without a PPPoE account, omcid connects the host
 # link to the PON as the OLT provisions it (bridge). With one or more, the
@@ -59,7 +59,7 @@
 # DHCP server; the WAN is a GEM port that the OLT provisioned, or a VLAN on
 # it, with an address by PPPoE, DHCP or by hand. The stick translates no
 # address: a host on the LAN reaches beyond the WAN with an address that the
-# network behind the WAN routes back to the stick. A watcher (onu-mode watch)
+# network behind the WAN routes back to the stick. A watcher (onu-apply watch)
 # brings the WAN up when the OLT provisions its GEM port and restarts the PPPoE
 # or DHCP client when it ends.
 #
@@ -93,8 +93,8 @@ SVC_DIR=$RUN/onu-svc.d
 LINK_ADDRESS=169.254.0.1
 
 log() {
-	echo "onu-mode: $*" >&2
-	logger -t onu-mode "$*" 2>/dev/null
+	echo "onu-apply: $*" >&2
+	logger -t onu-apply "$*" 2>/dev/null
 	return 0
 }
 
@@ -311,7 +311,7 @@ pid_of() {
 	[ -r "$RUN/$1.pid" ] && cat "$RUN/$1.pid"
 }
 
-# The programs onu-mode wants run are the instances of one service of procd,
+# The programs onu-apply wants run are the instances of one service of procd,
 # "onu" (ADR 0014): a file each in /run/onu-svc.d, named as the instance,
 # whose line is what onu-svc start takes after the name ([OPTION...] --
 # PROGRAM...), its words without blanks. onu-svc sync gives procd them all at
@@ -1039,7 +1039,7 @@ tick() {
 }
 
 # The watcher is procd's service onu-watch: it outlives the shell that started
-# it, an "onu-mode apply" from a login that ends, and procd starts it again
+# it, an "onu-apply reload" from a login that ends, and procd starts it again
 # if it ends.
 watch() {
 	while :; do
@@ -1053,7 +1053,7 @@ router_up() {
 	ip address add "$LAN_ADDRESS" dev sfp 2>/dev/null
 	lan_dhcp
 	# The tests run the watcher's rounds themselves.
-	[ -n "${ONU_MODE_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
+	[ -n "${ONU_APPLY_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
 }
 
 router_down() {
@@ -1099,7 +1099,7 @@ pass_up() {
 		ip address add "$LINK_ADDRESS/32" dev "$lan"
 		echo "$lan" >>"$RUN/onu-lans"
 	done
-	[ -n "${ONU_MODE_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
+	[ -n "${ONU_APPLY_NO_WATCH:-}" ] || svc_start onu-watch -- "$0" watch
 }
 
 pass_down() {
@@ -1200,7 +1200,7 @@ start)
 	fi
 	apply
 	;;
-apply)
+reload)
 	if command -v onu-store >/dev/null; then
 		onu-store save || log "the settings are applied but not saved"
 	fi
@@ -1254,7 +1254,7 @@ netmask)
 	netmask "${2:-0}"
 	;;
 *)
-	echo "usage: onu-mode start|apply|stop|identity|reidentify|status" >&2
+	echo "usage: onu-apply start|reload|stop|identity|reidentify|status" >&2
 	exit 2
 	;;
 esac

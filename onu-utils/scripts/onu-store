@@ -38,7 +38,7 @@
 # a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
 # own settings, which the boot script reads before it brings up the links;
 # PDn_HOST is the content of /run/onu-pdN, the host session n delegated its
-# IPv6 prefix to, which dhcp6d takes back after a restart (see onu-mode);
+# IPv6 prefix to, which dhcp6d takes back after a restart (see onu-apply);
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #

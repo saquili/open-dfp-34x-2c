@@ -53,7 +53,7 @@ The small programs of the ONU.
    ``/run/onu.conf``) and its PPPoE account (``PPPOE_USER``,
    ``PPPOE_SECRET``) in the store. ``onu-store load`` puts them in the files
    the running system reads, at boot; ``onu-store save`` writes the settings
-   and the account in force back, which ``onu-mode apply`` does. The store
+   and the account in force back, which ``onu-apply reload`` does. The store
    shares the partition with the shipped firmware's configuration, and its
    first write overwrites the start of it: so the first save takes the
    identity ``ponid`` reads into the same write, and ``onu-store migrate`` does
@@ -84,7 +84,7 @@ The small programs of the ONU.
    ``onu-store pd N`` keeps the host session N delegates its IPv6 prefix to,
    the line ``dhcp6d`` keeps in ``/run/onu-pdN``, as ``PDn_HOST``, and a load
    puts it back, so that after a restart the prefix goes to that router at
-   once, though it asks for nothing; ``onu-mode`` calls it when the line
+   once, though it asks for nothing; ``onu-apply`` calls it when the line
    changes or goes, and a store that holds the same writes nothing.
 
 ``passwd``
@@ -131,8 +131,12 @@ The small programs of the ONU.
           bandwidth maps             5000000
           T-CONT 0  Alloc-ID 1024
 
-``onu-mode``
-   gives the stick's data path the shape its settings give (``/run/onu.conf``,
+``onu-apply``
+   turns the settings into what the stick runs: procd and netifd carry out,
+   but know nothing of sessions, of an address handed down or of omcid, and
+   onu-apply tells them (ADR 0014; it was called ``onu-mode``, of the modes
+   the stick no longer has). It gives the stick's data path the shape its
+   settings give (``/run/onu.conf``,
    seeded from ``/etc/onu.conf``, which says what each key means); there is no
    mode to choose. Without a PPPoE account omcid connects the host link to the
    PON as the OLT provisions it. With accounts, the stick holds up to seven
@@ -144,7 +148,7 @@ The small programs of the ONU.
    then runs in the VID that VID leads into on the fibre, as omcid publishes
    it in ``/run/omcid-xlate``. omcid goes on bridging the rest of what the
    OLT provisions, such as television and telephone, without the sessions'
-   VLANs, which onu-mode writes to ``/run/onu-held-vlans`` before it has
+   VLANs, which onu-apply writes to ``/run/onu-held-vlans`` before it has
    omcid build its bridge again; the frames of those VLANs that come down the
    other GEM ports go to the sessions' GEM interfaces, as an OLT may send a
    session's frames by any GEM port of its VLAN. A session untagged on its GEM
@@ -184,11 +188,11 @@ The small programs of the ONU.
    as its script) or by hand. The stick translates no address and has no
    packet filter::
 
-      onu-mode start      # at boot
-      onu-mode apply      # after /run/onu.conf changed; saves it too
-      onu-mode status
-      onu-mode identity   # at boot: the identity to the PON driver, PON up
-      onu-mode reidentify # after the identity changed: register again
+      onu-apply start      # at boot
+      onu-apply reload     # after /run/onu.conf changed; saves it too
+      onu-apply status
+      onu-apply identity   # at boot: the identity to the PON driver, PON up
+      onu-apply reidentify # after the identity changed: register again
 
    ``identity`` gives the PON driver the serial number and PLOAM password of
    ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and
@@ -238,7 +242,7 @@ The small programs of the ONU.
    program for each file of a directory, whose name is the instance's and
    whose line is what ``start`` takes after the name: procd starts what is
    new, ends what has no file any more, starts again only what changed, and
-   leaves the rest alone (ADR 0014). ``onu-mode`` keeps its programs so, in
+   leaves the rest alone (ADR 0014). ``onu-apply`` keeps its programs so, in
    ``/run/onu-svc.d``, as the service ``onu``: omcid, its watcher, dhcp6d and
    udhcpd. A sync holds the directory while it reads it and tells procd, so
    that the last one sends what the directory holds then. ``list`` tells each
@@ -255,7 +259,7 @@ The small programs of the ONU.
    the state the scripts keep: the ssh server and ``pond``, on the
    management pair in use and the host link's address, from
    ``/run/onu-mgmt``, so that one started again after a change of the pair
-   listens on the new one; omcid, in the mode ``onu-mode`` last gave it
+   listens on the new one; omcid, in the mode ``onu-apply`` last gave it
    (``/run/omcid.mode``), so that one started again after a crash comes up in
    the mode the stick is in; ``ntpd``, which sets the clock and keeps it,
    from ``NTP_SERVER`` of ``/run/onu-system`` or, without one, from the router
@@ -283,7 +287,7 @@ tests need none of them), ``pon`` libmnl and the kernel's headers, among them
 ``linux/pon.h`` of this repository's kernel; for a build on the host, point
 CPPFLAGS at an installation of those headers (``make headers_install`` in
 ``linux/``). The tests of ``pon`` read and print messages that they build; the
-tests of ``onu-mode`` and ``dhcp-wan`` run them against stand-ins for the
+tests of ``onu-apply`` and ``dhcp-wan`` run them against stand-ins for the
 programs they call, in a scratch root, and those of ``onu-store`` run it with
 ``build/onucfg`` on a store in a file and a stand-in for BusyBox's
 ``cryptpw``. ``onu-update`` is tested on a flash

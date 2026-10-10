@@ -116,7 +116,7 @@ done
 check '! grep -q "^login" "$LOG" && [ "$(grep -c "^getty" "$LOG")" -eq 4 ]'
 teardown
 
-echo "omcid in the mode onu-mode gave it, without an address too"
+echo "omcid in the mode onu-apply gave it, without an address too"
 setup
 rm "$ONU_ROOT/run/onu-mgmt"
 run omcid

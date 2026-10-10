@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# dhcp-wan: what udhcpc runs on the WAN of router mode (onu-mode), with the
+# dhcp-wan: what udhcpc runs on the WAN of router mode (onu-apply), with the
 # event as its argument and the lease in its environment: the address, the
 # default route and, for the LAN's DHCP server, the name servers.
 #

@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-mode and scripts/dhcp-wan, against stand-ins for the
+# Tests of scripts/onu-apply and scripts/dhcp-wan, against stand-ins for the
 # programs they run, in a scratch root: each stand-in writes its name and its
 # arguments to a log.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-MODE_SCRIPT=$HERE/scripts/onu-mode
+MODE_SCRIPT=$HERE/scripts/onu-apply
 WAN_SCRIPT=$HERE/scripts/dhcp-wan
 REAL_SLEEP=$(command -v sleep)
 checks=0
@@ -29,7 +29,7 @@ logged() {
 setup() {
 	T=$(mktemp -d)
 	LOG=$T/log
-	export ONU_ROOT=$T/root ONU_MODE_NO_WATCH=1 LOG
+	export ONU_ROOT=$T/root ONU_APPLY_NO_WATCH=1 LOG
 	mkdir -p "$ONU_ROOT/run" "$ONU_ROOT/etc" "$ONU_ROOT/proc/sys/net/ipv4" \
 		"$ONU_ROOT/sys/class/net/sfp" "$ONU_ROOT/sys/class/net/pon" \
 		"$ONU_ROOT/sys/class/net/gem4095" "$ONU_ROOT/sys/class/net/gem1024" \
@@ -100,7 +100,7 @@ setup() {
 	printf '#!/bin/sh\necho "devlink $*" >>"$LOG"\n[ "$1 $2" = "dev show" ] && echo platform/switch\nexit 0\n' \
 		>"$T/bin/devlink"
 	# nft stays a stand-in, so that a call to it would show in the log: the
-	# stick has no packet filter, and onu-mode must not need one.
+	# stick has no packet filter, and onu-apply must not need one.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
 	# pppoed opens IPv4, or IPv6 alone when told -6, and keeps it two seconds.
 	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\n%s 2\n' \
@@ -116,7 +116,7 @@ setup() {
 }
 
 teardown() {
-	ONU_MODE_NO_WATCH=1 "$MODE_SCRIPT" stop 2>/dev/null
+	ONU_APPLY_NO_WATCH=1 "$MODE_SCRIPT" stop 2>/dev/null
 	rm -rf "$T"
 }
 
@@ -211,7 +211,7 @@ conf MODE=bridge
 "$MODE_SCRIPT" start 2>/dev/null
 : >"$LOG"
 printf 'MODE=router\n' >"$ONU_ROOT/run/onu.conf"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^killall -USR1 omcid"'
 check '! logged "^omcid"'
 check '[ "$(grep -n "killall -USR1 omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" ]'
@@ -245,7 +245,7 @@ conf MODE=router LAN_ADDRESS=198.51.100.65/24
 "$MODE_SCRIPT" tick 2>/dev/null
 : >"$LOG"
 printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check '! logged "^nft"'
 check 'logged "^ip address del 198.51.100.65/24 dev sfp"'
 check 'logged "^killall -USR2 omcid"'
@@ -476,7 +476,7 @@ conf MODE=router LAN_ADDRESS=198.51.100.1/24 LAN_DHCP=off
 : >"$LOG"
 printf 'MODE=\n' >"$ONU_ROOT/run/onu.conf"
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check '! logged "^killall -USR"'
 check '! logged "^omcid"'
 check 'logged "^ip address del 198.51.100.1/24 dev sfp"'
@@ -486,7 +486,7 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 # stick leaves passthrough with the account.
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 1 ]'
 rm "$ONU_ROOT/run/onu-pppoe1"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 teardown
@@ -498,7 +498,7 @@ conf MODE=bridge
 : >"$LOG"
 printf 'SESSION1_VLAN=1410\n' >"$ONU_ROOT/run/onu.conf"
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^killall -USR2 omcid"'
 check '! logged "^killall -USR1"'
 check '[ "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" -lt "$(grep -n "killall -USR2 omcid" "$LOG" | cut -d: -f1)" ]'
@@ -514,12 +514,12 @@ check '! logged "matchall"'
 : >"$LOG"
 printf 'SESSION1_VLAN=1410\nSESSION2_VLAN=410\n' >"$ONU_ROOT/run/onu.conf"
 echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^killall -USR2 omcid"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans" | tr "\n" " ")" = "410 1410 " ]'
 # The same sessions again: omcid is left as it is.
 : >"$LOG"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check '! logged "omcid"'
 teardown
 
@@ -583,7 +583,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 : >"$LOG"
 rm "$ONU_ROOT/run/onu-pppoe1"
-"$MODE_SCRIPT" apply 2>/dev/null
+"$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^ip address del 169.254.0.1/32 dev lan36"'
 check 'logged "^ip link del lan36"'
 check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value true"'
@@ -757,7 +757,7 @@ echo "a new identity: the PON goes down, takes it, comes up, and omcid starts ov
 setup
 printf 'serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\n' >"$ONU_ROOT/run/onu-identity"
 echo passthrough >"$ONU_ROOT/run/onu-mode"
-# omcid runs as the instance of procd's service "onu" that onu-mode gave it.
+# omcid runs as the instance of procd's service "onu" that onu-apply gave it.
 mkdir -p "$ONU_ROOT/run/onu-svc.d"
 echo "-- onu-run omcid" >"$ONU_ROOT/run/onu-svc.d/omcid"
 cp "$ONU_ROOT/run/onu-svc.d/omcid" "$T/svc-omcid"
@@ -784,5 +784,5 @@ check '[ $rc -ne 0 ]'
 check '! logged "ip link set pon up"'
 teardown
 
-echo "test_onu_mode: $checks checks, $failures failed"
+echo "test_onu_apply: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

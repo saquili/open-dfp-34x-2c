@@ -13,7 +13,7 @@
 #                   password; a bench whose /etc/board.conf has
 #                   CONSOLE_AUTOLOGIN=root has root's shell there without
 #                   one, which the image without that file never has
-#   onu-run omcid   the OMCI daemon in the mode onu-mode last gave it in
+#   onu-run omcid   the OMCI daemon in the mode onu-apply last gave it in
 #                   /run/omcid.mode: with the OLT's bridge ("bridge") or
 #                   without it ("router", omcid -r), its output appended to
 #                   /run/omcid.log; one started again after a crash takes

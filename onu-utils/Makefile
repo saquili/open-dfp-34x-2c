@@ -85,7 +85,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	sh tests/test_onu_mgmt.sh
 	sh tests/test_onu_net.sh
 	sh tests/test_onu_run.sh
-	sh tests/test_onu_mode.sh
+	sh tests/test_onu_apply.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_store.sh
 
 clean:
