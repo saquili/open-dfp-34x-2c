@@ -26,7 +26,7 @@ setup() {
 	: >"$LOG"
 	printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=192.0.2.2/30\n' \
 		>"$ONU_ROOT/run/onu-mgmt"
-	for c in dropbear pond getty login omcid sleep; do
+	for c in dropbear pond getty login omcid sleep ntpd reboot; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "dropbearkey $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && echo key >"$2"; shift; done\n' \
@@ -127,6 +127,45 @@ check 'logged "omcid -r"'
 echo bridge >"$ONU_ROOT/run/omcid.mode"
 run omcid
 check '[ "$(grep -c "^omcid $" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
+teardown
+
+echo "the time from the router at the other end of the management link"
+setup
+run ntp
+check '[ $rc -eq 0 ] && logged "ntpd -n -p 198.51.100.1"'
+check '[ -s "$ONU_ROOT/run/ntpd.pid" ]'
+: >"$LOG"
+for pair in 198.51.100.1/30:198.51.100.2 198.51.100.6/30:198.51.100.5 \
+	198.51.100.4/31:198.51.100.5 198.51.100.5/31:198.51.100.4 198.051.100.002/30:198.51.100.1; do
+	sed -i.bak "s#^ADDRESS=.*#ADDRESS=${pair%%:*}#" "$ONU_ROOT/run/onu-mgmt"
+	run ntp
+	check 'logged "ntpd -n -p ${pair#*:}"'
+done
+teardown
+
+echo "no router that is known: a wait of an hour, then a failure"
+setup
+for address in 198.51.100.2/24 198.51.100.0/30 198.51.100.3/30 198.51.100.300/30 198.51.100/30; do
+	sed -i.bak "s#^ADDRESS=.*#ADDRESS=$address#" "$ONU_ROOT/run/onu-mgmt"
+	run ntp
+	check '[ $rc -eq 1 ]'
+done
+check '[ "$(grep -c "^sleep 3600$" "$LOG")" -eq 5 ] && ! grep -q "^ntpd" "$LOG"'
+rm "$ONU_ROOT/run/onu-mgmt"
+run ntp
+check '[ $rc -eq 1 ] && ! grep -q "^ntpd" "$LOG"'
+teardown
+
+echo "the time server the settings name, read as data"
+setup
+sed -i.bak "s#^ADDRESS=.*#ADDRESS=198.51.100.2/24#" "$ONU_ROOT/run/onu-mgmt"
+printf 'HOSTNAME=stick\nNTP_SERVER=192.0.2.123\n' >"$ONU_ROOT/run/onu-system"
+run ntp
+check 'logged "ntpd -n -p 192.0.2.123"'
+rm "$ONU_ROOT/run/onu-mgmt"
+printf 'NTP_SERVER=$(reboot)\n' >"$ONU_ROOT/run/onu-system"
+run ntp
+check 'logged "ntpd -n -p \$(reboot)" && ! grep -q "^reboot" "$LOG"'
 teardown
 
 echo "what is not a server"

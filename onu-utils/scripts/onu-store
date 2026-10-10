@@ -20,8 +20,8 @@
 #   onu-store auth HASH a hash of root's password made elsewhere, the same way
 #   onu-store system    the stick's own settings of the KEY=VALUE lines of the
 #                       standard input (HOSTNAME, MGMT_VLAN, MGMT_ADDRESS,
-#                       SFP_LANE) into the store and into /run/onu-system; an
-#                       empty value removes the key
+#                       SFP_LANE, NTP_SERVER, LOG_SERVER) into the store and
+#                       into /run/onu-system; an empty value removes the key
 #   onu-store pd N      the host session N delegates its IPv6 prefix to, the
 #                       line dhcp6d keeps in /run/onu-pdN, into the store;
 #                       without the file, out of it
@@ -272,7 +272,15 @@ system() {
 			exit 1
 		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex)?$/)
 			exit 1
-		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE)$/)
+		# A time server: an address or a name, never an option of ntpd.
+		if (k == "NTP_SERVER" && (length(v) > 253 || v !~ /^([A-Za-z0-9:][A-Za-z0-9.:-]*)?$/))
+			exit 1
+		# A server of the system log: an address or a name, and a port after
+		# a colon, an IPv6 address in brackets then.
+		if (k == "LOG_SERVER" && (length(v) > 253 ||
+		    v !~ /^([A-Za-z0-9:][A-Za-z0-9.:-]*|\[[0-9A-Fa-f:.]+\](:[0-9]+)?)?$/))
+			exit 1
+		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE|NTP_SERVER|LOG_SERVER)$/)
 			exit 1
 		print "SYS_" k "=" v
 	}') || return 1

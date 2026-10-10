@@ -18,6 +18,11 @@
 #                   without it ("router", omcid -r), its output appended to
 #                   /run/omcid.log; one started again after a crash takes
 #                   up the mode the stick is in
+#   onu-run ntp     ntpd, which sets the clock and keeps it, from the server
+#                   that the stick's settings name (NTP_SERVER of
+#                   /run/onu-system) or, without one, from the router at the
+#                   other end of the management link: the stick has no way of
+#                   its own to the internet, and the OLT gives no date
 #
 # The addresses are the pair in use, from /run/onu-mgmt, which onu-mgmt keeps:
 # a server started again after a change of the pair listens on the new one.
@@ -32,6 +37,7 @@ set -u
 RUN=${ONU_ROOT:-}/run
 BOARD=${ONU_ROOT:-}/etc/board.conf
 STATE=$RUN/onu-mgmt
+SYSTEM=$RUN/onu-system
 KEY=$RUN/dropbear/host_key
 
 # The console: a login prompt, or on a bench that says so root's shell.
@@ -53,6 +59,61 @@ fi
 field() {
 	sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -n 1
 }
+
+# The other end of a point-to-point link, from an IPv4 address and its
+# length: the other host of a /30, the other address of a /31. A longer or a
+# shorter network has none that is known.
+peer() {
+	addr=${1%/*}
+	len=${1#*/}
+	case $len in
+	30 | 31) ;;
+	*) return 1 ;;
+	esac
+	case $addr in
+	*[!0-9.]* | *..* | .* | *.) return 1 ;;
+	esac
+	old_ifs=$IFS
+	IFS=.
+	# shellcheck disable=SC2086 # the octets, split on the dots
+	set -- $addr
+	IFS=$old_ifs
+	[ $# -eq 4 ] || return 1
+	n=0
+	for o in "$@"; do
+		# Without its leading zeros, which arithmetic would read as octal.
+		o=${o#"${o%%[!0]*}"}
+		[ "${o:-0}" -le 255 ] || return 1
+		n=$((n * 256 + ${o:-0}))
+	done
+	if [ "$len" = 31 ]; then
+		p=$((n ^ 1))
+	else
+		case $((n & 3)) in
+		1) p=$((n + 1)) ;;
+		2) p=$((n - 1)) ;;
+		*) return 1 ;;
+		esac
+	fi
+	echo "$((p >> 24 & 255)).$((p >> 16 & 255)).$((p >> 8 & 255)).$((p & 255))"
+}
+
+# The time. The server is read as data, never run; onu-store took it only in
+# the shape of an address or a name. Without a server it waits an hour before
+# it fails, so that procd asks again once an hour, as the link may change.
+# Its process is ntpd's, whose id onu-mgmt takes to end it when the
+# management link changes, and procd starts it again for the new one.
+if [ "${1:-}" = ntp ]; then
+	server=$(sed -n 's/^NTP_SERVER=//p' "$SYSTEM" 2>/dev/null | tail -n 1)
+	[ -n "$server" ] || server=$(peer "$(field ADDRESS)")
+	if [ -z "$server" ]; then
+		echo "onu-run: no time server: NTP_SERVER is not set and the management link is no /30 or /31" >&2
+		sleep 3600
+		exit 1
+	fi
+	echo $$ >"$RUN/ntpd.pid"
+	exec ntpd -n -p "$server"
+fi
 
 mgmt=$(field ADDRESS)
 data=$(field DATA_ADDRESS)
@@ -82,7 +143,7 @@ pond)
 	exec pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} >>"$RUN/pond.log" 2>&1
 	;;
 *)
-	echo "usage: onu-run ssh|pond|console|omcid" >&2
+	echo "usage: onu-run ssh|pond|console|omcid|ntp" >&2
 	exit 2
 	;;
 esac

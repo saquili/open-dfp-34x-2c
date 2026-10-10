@@ -56,7 +56,12 @@ The small programs of the ONU.
    without a password on the console and ssh (``*``), keys only, until a
    sign-in to the panel stores it again. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
-   removed account does not come back at the next boot. Where the identity in
+   removed account does not come back at the next boot. ``onu-store system``
+   keeps the stick's own settings of ``KEY=VALUE`` lines on its input as
+   ``SYS_*`` keys, each in the shape the boot script takes: ``HOSTNAME``,
+   ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, the server
+   the clock is set from, and ``LOG_SERVER``, a server of the host side that
+   the system log goes to as well; a load puts them in ``/run/onu-system``. Where the identity in
    force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
    ``onu-store pd N`` keeps the host session N delegates its IPv6 prefix to,
    the line ``dhcp6d`` keeps in ``/run/onu-pdN``, as ``PDn_HOST``, and a load
@@ -226,13 +231,18 @@ The small programs of the ONU.
    ``/run/onu-mgmt``, so that one started again after a change of the pair
    listens on the new one; omcid, in the mode ``onu-mode`` last gave it
    (``/run/omcid.mode``), so that one started again after a crash comes up in
-   the mode the stick is in; and the console's login prompt, or, on a bench
-   whose ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's shell
-   without the password::
+   the mode the stick is in; ``ntpd``, which sets the clock and keeps it,
+   from ``NTP_SERVER`` of ``/run/onu-system`` or, without one, from the router
+   at the other end of the management link, the other address of its /30 or
+   /31, as the stick has no way of its own to the internet and the OLT gives
+   no date; and the console's login prompt, or, on a bench whose
+   ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's shell without
+   the password::
 
       onu-run ssh
       onu-run pond
       onu-run omcid
+      onu-run ntp
       onu-run console
 
 Building and testing::
