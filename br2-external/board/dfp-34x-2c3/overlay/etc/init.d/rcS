@@ -4,11 +4,12 @@
 #
 # The boot script of the ODI DFP-34X-2C3 image. procd runs it once, as
 # /etc/rc.d/S10boot, from /etc/inittab: after /sbin/init has mounted the file
-# systems and procd has started ubusd, syslogd and netifd, and before the ssh
-# server, the status daemon and the console's login prompt. It reads the
-# unit's settings, gives the stick its management addresses, through netifd,
-# starts the data path and prints a line on the console that says the board
-# is ready. Its output goes to procd's log, but for that line.
+# systems and procd has started ubusd, and before the console's login prompt.
+# It starts the stick's programs as procd's services, in their order
+# (onu-svc), reads the unit's settings, gives the stick its management
+# addresses, through netifd, starts the data path and prints a line on the
+# console that says the board is ready. Its output goes to procd's log, but
+# for that line.
 #
 # The root file system is read-only. Everything that is written lives in memory
 # and is gone at the next restart.
@@ -32,6 +33,13 @@ MGMT_ADDRESS=198.51.100.2/30
 warn() {
 	echo "rcS: $*" >&2
 }
+
+# The system log, in memory: syslogd keeps /run/messages and one older copy
+# (its default), of 64 KiB each, and klogd copies the kernel's messages into
+# it. Like every service of the stick, procd starts each again 2 s after it
+# ends, and never gives up (onu-svc's default).
+onu-svc start syslogd -- /sbin/syslogd -n -O /run/messages -s 64 || warn "no system log"
+onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reach the system log"
 
 # The identity of the unit, its saved settings, its PPPoE account and root's
 # password, from the configuration store; the identity from the shipped
@@ -105,9 +113,9 @@ if [ -n "$DATA_ADDRESS" ]; then
 	ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
 fi
 
-# The management VLAN and its address. netifd, which procd runs, brings them
-# up, from the part "mgmt" of its configuration in /run/config, which onu-mgmt
-# writes (onu-net) now and again when the pair changes. A stored pair that is
+# The management VLAN and its address. netifd brings them up, from the part
+# "mgmt" of its configuration in /run/config, which onu-mgmt writes (onu-net)
+# now and again when the pair changes. A stored pair that is
 # not a VLAN and an address gives way to the image's. The ssh server can
 # listen only once the address is there: if netifd has not brought it up
 # within ten seconds, the script brings it up itself, so that the stick stays
@@ -117,6 +125,10 @@ onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
 	MGMT_VLAN=$BOARD_MGMT_VLAN
 	MGMT_ADDRESS=$BOARD_MGMT_ADDRESS
 	onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS"
+}
+onu-svc start netifd -- /usr/sbin/netifd -c /run/config -r /run/resolv.conf.auto || {
+	warn "netifd is no service of procd: started once"
+	netifd -c /run/config -r /run/resolv.conf.auto &
 }
 onu-net wait mgmt "$MGMT_ADDRESS" 10 || {
 	warn "netifd did not bring $MGMT_ADDRESS up in VLAN $MGMT_VLAN, the script does"
@@ -140,14 +152,20 @@ tc qdisc add dev pon clsact &&
 
 # The servers listen on the addresses of the host side and nowhere else: the
 # stick has no packet filter, and nothing on the PON side, nor on the WAN of
-# router mode, is to reach them. procd starts them once this script is done
+# router mode, is to reach them. They start now that the addresses are there
 # (onu-run): the ssh server, which takes root's password and the keys of
 # /root/.ssh/authorized_keys, which an image built with a bench's keys carries
 # and this one does not, and the status daemon with its panel, where people
 # sign in as root, with root's password, and scripts may present the token of
-# /etc/pond.token, which an image without the file does not accept.
+# /etc/pond.token, which an image without the file does not accept. One that
+# procd starts again listens on the pair in use then (onu-mgmt).
 data=${DATA_ADDRESS%/*}
 mgmt=${MGMT_ADDRESS%/*}
+onu-svc start ssh -- /usr/sbin/onu-run ssh || {
+	warn "the ssh server is no service of procd: started once"
+	onu-run ssh &
+}
+onu-svc start pond -- /usr/sbin/onu-run pond || warn "no status daemon"
 
 # The identity to the PON driver, which takes it before the PON comes up.
 onu-mode identity || warn "the PON stays down"

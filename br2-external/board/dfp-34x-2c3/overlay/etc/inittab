@@ -3,20 +3,14 @@
 #
 # procd reads this file once ubusd runs. The format is
 # <id>:<runlevels>:<action>:<process>: the id names the terminal (empty: none,
-# the program reads and writes /dev/null), the runlevels are ignored.
-# procd starts the "respawn" programs first, then runs the boot script, and
-# once it is done the "respawnlate" ones; a program of either kind that ends
-# is started again half a second later. procd reads up to 127 characters of a
-# line and the first 7 words of a command: a longer one is cut short.
-
-# The system log, in memory: syslogd keeps /run/messages and one older copy
-# (its default), of 64 KiB each, and klogd copies the kernel's messages into it.
-::respawn:/sbin/syslogd -n -O /run/messages -s 64
-::respawn:/sbin/klogd -n
-
-# netifd brings up the interfaces that its configuration in /run/config names;
-# the boot script and the stick's scripts write it (onu-net).
-::respawn:/usr/sbin/netifd -c /run/config -r /run/resolv.conf.auto
+# the program reads and writes /dev/null), the runlevels are ignored. procd
+# reads up to 127 characters of a line and the first 7 words of a command: a
+# longer one is cut short.
+#
+# The stick's programs are procd's services, which the boot script starts in
+# their order (onu-svc): procd starts each again when it ends, and tells how
+# often it did (onu-svc list). Only the console's login is a program of this
+# file, started again half a second after it ends.
 
 # The boot script, /etc/init.d/rcS, as /etc/rc.d/S10boot: procd runs the
 # scripts of /etc/rc.d whose names begin with S, in order, with "boot".
@@ -27,11 +21,6 @@
 # restart only once this is done, so without the line it would wait for ever,
 # feeding the watchdog.
 ::shutdown:/etc/init.d/rcS K shutdown
-
-# The ssh server and the status daemon, on the host side's addresses, which
-# the boot script brought up (onu-run).
-::respawnlate:/usr/sbin/onu-run ssh
-::respawnlate:/usr/sbin/onu-run pond
 
 # A login prompt on the console, started again whenever the session ends. The
 # one account is root, with the password that ssh and the panel take too

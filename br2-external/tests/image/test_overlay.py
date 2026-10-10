@@ -75,10 +75,26 @@ class BootScript(unittest.TestCase):
                 self.assertIn(word, called, script)
 
     def test_roots_password_is_in_place_before_the_ssh_server_starts(self):
-        # The ssh server starts once the boot script is done (Inittab), and the
-        # script reads root's password from the store. Its flags are
-        # onu-run's, which onu-utils tests.
-        self.assertIn("\nonu-store load ", read(RCS))
+        # The ssh server's flags are onu-run's, which onu-utils tests.
+        text = read(RCS)
+        self.assertLess(text.index("\nonu-store load "), text.index("onu-svc start ssh "))
+
+    def test_the_programs_are_services_of_procd_in_their_order(self):
+        # The log first; netifd once its configuration is written; the servers
+        # once the management address is there.
+        text = read(RCS)
+        order = ["onu-svc start syslogd -- /sbin/syslogd -n ", "onu-svc start klogd -- ",
+                 'onu-mgmt start "$MGMT_VLAN"', "onu-svc start netifd -- /usr/sbin/netifd ",
+                 'onu-net wait mgmt "$MGMT_ADDRESS" 10',
+                 "onu-svc start ssh -- /usr/sbin/onu-run ssh",
+                 "onu-svc start pond -- /usr/sbin/onu-run pond"]
+        places = [text.index(what) for what in order]
+        self.assertEqual(places, sorted(places))
+
+    def test_without_procd_the_ssh_server_and_netifd_still_start(self):
+        text = read(RCS)
+        self.assertIn("\tonu-run ssh &\n", text)
+        self.assertIn("\tnetifd -c /run/config -r /run/resolv.conf.auto &\n", text)
 
     def test_it_ends_with_the_ready_line_that_the_bench_waits_for(self):
         # procd keeps the script's output for its log: the bench reads the
@@ -189,11 +205,10 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertIn('onu-trial "${data:-$mgmt}"', text)
 
     def test_the_addresses_are_there_before_a_server_listens(self):
-        # The servers start after the script, which waits for the management
-        # address (Inittab).
         text = read(RCS)
-        self.assertIn('ip address add "$DATA_ADDRESS" dev sfp', text)
-        self.assertIn('onu-net wait mgmt "$MGMT_ADDRESS" 10', text)
+        start = text.index("onu-svc start ssh ")
+        self.assertLess(text.index('ip address add "$DATA_ADDRESS" dev sfp'), start)
+        self.assertLess(text.index('onu-net wait mgmt "$MGMT_ADDRESS" 10'), start)
 
 
 class QuietTowardsThePon(unittest.TestCase):
@@ -256,15 +271,10 @@ class Inittab(unittest.TestCase):
         # are done (rcdone in inittab.c): without the entry it never does.
         self.assertIn("::shutdown:/etc/init.d/rcS K shutdown", list(self.entries()))
 
-    def test_the_servers_start_once_the_boot_script_is_done(self):
-        entries = list(self.entries())
-        for server in ("ssh", "pond"):
-            self.assertIn("::respawnlate:/usr/sbin/onu-run " + server, entries)
-
-    def test_the_log_and_netifd_run_before_the_boot_script(self):
-        entries = list(self.entries())
-        for program in ("/sbin/syslogd -n ", "/sbin/klogd -n", "/usr/sbin/netifd "):
-            self.assertTrue([e for e in entries if e.startswith("::respawn:" + program)], program)
+    def test_the_programs_are_the_boot_scripts_services_not_its_own(self):
+        # Only the console's login is a program of the inittab (BootScript).
+        programs = [e for e in self.entries() if ":respawn" in e]
+        self.assertEqual(programs, ["console::respawnlate:/usr/sbin/onu-run console"])
 
     def test_the_console_asks_for_root_and_its_password_again_after_each_session(self):
         entries = list(self.entries())

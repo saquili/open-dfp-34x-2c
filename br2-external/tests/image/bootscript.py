@@ -19,7 +19,7 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # every other command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
 PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-mode", "onu-store", "onu-trial", "onu-lane",
-            "onu-mgmt", "onu-net", "onu-run", "netifd", "ubusd", "procd", "tc"}
+            "onu-mgmt", "onu-net", "onu-run", "onu-svc", "netifd", "ubusd", "procd", "tc"}
 
 
 def applets(text):
