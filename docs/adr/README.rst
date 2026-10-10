@@ -57,3 +57,6 @@ record.
    * - 0013
      - procd is the first process and watches the stick's programs
      - Accepted
+   * - 0014
+     - One control plane turns the settings into what procd and netifd keep
+     - Accepted
