@@ -186,6 +186,20 @@ class FirstProgram(unittest.TestCase):
                          "../init.d/rcS")
 
 
+    def test_the_library_procd_preloads_is_where_lib_trim_leaves_it(self):
+        # procd preloads /lib/libsetlbf.so into a service whose output it logs.
+        # No program needs it, so in lib or usr/lib lib-trim would remove it:
+        # it lies in a directory of its own, with a link where procd looks.
+        recipe = read(os.path.join(os.path.dirname(BOARD), "..", "package", "procd", "procd.mk"))
+        self.assertIn("PROCD_MAKE_OPTS = procd setlbf\n", recipe)
+        self.assertIn("$(@D)/libsetlbf.so $(TARGET_DIR)/usr/lib/procd/libsetlbf.so", recipe)
+        self.assertIn("ln -sf ../usr/lib/procd/libsetlbf.so $(TARGET_DIR)/lib/libsetlbf.so",
+                      recipe)
+        trim = read(os.path.join(os.path.dirname(BOARD), "..", "..", "tools", "lib-trim",
+                                 "lib-trim"))
+        self.assertIn('SEARCH = ("lib", "usr/lib")', trim)
+
+
 class Watchdog(unittest.TestCase):
     def test_procd_alone_feeds_it(self):
         # procd sets the driver's timeout to 30 s and feeds it every 5 s, from
