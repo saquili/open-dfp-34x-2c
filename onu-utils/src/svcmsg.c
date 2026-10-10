@@ -105,11 +105,39 @@ static const char *const to_file[] = {
 	"/bin/sh", "-c", "f=$1; shift; exec \"$@\" >>\"$f\" 2>&1", "sh", NULL
 };
 
-int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
-		 bool log, const char *out, const char *const argv[])
+/* One instance, "NAME":{...}, as procd's "set" takes it. */
+static void put_instance(struct out *o, const struct svc_instance *in)
+{
+	bool first = true;
+
+	put_string(o, in->name);
+	put(o, ":{\"command\":[");
+	if (in->out) {
+		for (int i = 0; to_file[i]; i++) {
+			put(o, first ? "" : ",");
+			put_string(o, to_file[i]);
+			first = false;
+		}
+		put(o, ",");
+		put_string(o, in->out);
+	}
+	for (int i = 0; in->argv[i]; i++) {
+		put(o, first ? "" : ",");
+		put_string(o, in->argv[i]);
+		first = false;
+	}
+	/* procd reads the three numbers of "respawn" as strings. */
+	put(o, "],\"respawn\":[\"%u\",\"%u\",\"%u\"]", in->respawn.threshold,
+	    in->respawn.timeout, in->respawn.retry);
+	if (in->log)
+		put(o, ",\"stdout\":true,\"stderr\":true");
+	put(o, "}");
+}
+
+int svc_service_json(char *buf, size_t cap, const char *name,
+		     const struct svc_instance *inst, size_t n)
 {
 	struct out o = { .buf = buf, .cap = cap };
-	bool first = true;
 
 	if (!cap)
 		return -1;
@@ -117,28 +145,65 @@ int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respa
 	put(&o, "{\"name\":");
 	put_string(&o, name);
 	put(&o, ",\"instances\":{");
-	put_string(&o, name);
-	put(&o, ":{\"command\":[");
-	if (out) {
-		for (int i = 0; to_file[i]; i++) {
-			put(&o, first ? "" : ",");
-			put_string(&o, to_file[i]);
-			first = false;
-		}
-		put(&o, ",");
-		put_string(&o, out);
+	for (size_t i = 0; i < n; i++) {
+		if (!inst[i].argv || !inst[i].argv[0])
+			return -1;
+		put(&o, i ? "," : "");
+		put_instance(&o, &inst[i]);
 	}
-	for (int i = 0; argv[i]; i++) {
-		put(&o, first ? "" : ",");
-		put_string(&o, argv[i]);
-		first = false;
-	}
-	/* procd reads the three numbers of "respawn" as strings. */
-	put(&o, "],\"respawn\":[\"%u\",\"%u\",\"%u\"]", r->threshold, r->timeout, r->retry);
-	if (log)
-		put(&o, ",\"stdout\":true,\"stderr\":true");
-	put(&o, "}}}");
+	put(&o, "}}");
 	return o.full ? -1 : (int)o.len;
+}
+
+int svc_set_json(char *buf, size_t cap, const char *name, const struct svc_respawn *r,
+		 bool log, const char *out, const char *const argv[])
+{
+	struct svc_instance one = {
+		.name = name, .respawn = *r, .log = log, .out = out, .argv = argv,
+	};
+
+	return svc_service_json(buf, cap, name, &one, 1);
+}
+
+int svc_parse_instance(char *line, const char *name, struct svc_instance *inst,
+		       const char **words, size_t cap)
+{
+	char *save = NULL, *w;
+	size_t n = 0;
+
+	memset(inst, 0, sizeof(*inst));
+	inst->name = name;
+	inst->respawn = (struct svc_respawn)SVC_RESPAWN_DEFAULT;
+	for (w = strtok_r(line, " \t\r\n", &save); w; w = strtok_r(NULL, " \t\r\n", &save)) {
+		if (!strcmp(w, "--"))
+			break;
+		if (!strcmp(w, "-l")) {
+			inst->log = true;
+		} else if (!strcmp(w, "-r")) {
+			w = strtok_r(NULL, " \t\r\n", &save);
+			if (!w || svc_parse_respawn(w, &inst->respawn))
+				return -1;
+		} else if (!strcmp(w, "-o")) {
+			w = strtok_r(NULL, " \t\r\n", &save);
+			if (!w)
+				return -1;
+			inst->out = w;
+		} else {
+			return -1;
+		}
+	}
+	if (!w || (inst->log && inst->out))
+		return -1;
+	while ((w = strtok_r(NULL, " \t\r\n", &save))) {
+		if (n + 1 >= cap)
+			return -1;
+		words[n++] = w;
+	}
+	if (!n)
+		return -1;
+	words[n] = NULL;
+	inst->argv = words;
+	return 0;
 }
 
 int svc_name_json(char *buf, size_t cap, const char *name)

@@ -121,6 +121,65 @@ static void test_name(void)
 	CHECK(svc_name_json(buf, 10, "omcid") == -1);
 }
 
+static void test_parse_instance(void)
+{
+	struct svc_instance in;
+	const char *words[SVC_WORDS_MAX];
+	char line[256];
+
+	snprintf(line, sizeof(line), "-- onu-run omcid");
+	CHECK(svc_parse_instance(line, "omcid", &in, words, SVC_WORDS_MAX) == 0);
+	CHECK(!strcmp(in.name, "omcid") && in.respawn.threshold == 60 &&
+	      in.respawn.timeout == 2 && in.respawn.retry == 0 && !in.log && !in.out);
+	CHECK(!strcmp(in.argv[0], "onu-run") && !strcmp(in.argv[1], "omcid") && !in.argv[2]);
+
+	snprintf(line, sizeof(line), "-r 3600,5,3\t-o /run/dhcp6d.log --  dhcp6d -w ppp1\n");
+	CHECK(svc_parse_instance(line, "dhcp6d1", &in, words, SVC_WORDS_MAX) == 0);
+	CHECK(in.respawn.threshold == 3600 && in.respawn.retry == 3 &&
+	      !strcmp(in.out, "/run/dhcp6d.log") && !strcmp(in.argv[2], "ppp1") && !in.argv[3]);
+	snprintf(line, sizeof(line), "-l -- udhcpd -f /run/udhcpd.conf");
+	CHECK(svc_parse_instance(line, "udhcpd", &in, words, SVC_WORDS_MAX) == 0 && in.log);
+
+	static const char *const bad[] = {
+		"", "onu-run omcid", "--", "-l -o /run/x.log -- prog", "-r 60,2 -- prog",
+		"-r", "-o", "-x -- prog", "-l prog -- prog",
+	};
+	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		snprintf(line, sizeof(line), "%s", bad[i]);
+		CHECK(svc_parse_instance(line, "x", &in, words, SVC_WORDS_MAX) == -1);
+	}
+	/* No more words than there is room for, the end included. */
+	snprintf(line, sizeof(line), "-- a b c");
+	CHECK(svc_parse_instance(line, "x", &in, words, 4) == 0);
+	snprintf(line, sizeof(line), "-- a b c d");
+	CHECK(svc_parse_instance(line, "x", &in, words, 4) == -1);
+}
+
+static void test_service(void)
+{
+	const char *omcid[] = { "onu-run", "omcid", NULL };
+	const char *dhcp6d[] = { "dhcp6d", "-w", "ppp1", NULL };
+	struct svc_instance in[2] = {
+		{ .name = "dhcp6d1", .respawn = SVC_RESPAWN_DEFAULT, .out = "/run/dhcp6d.log",
+		  .argv = dhcp6d },
+		{ .name = "omcid", .respawn = SVC_RESPAWN_DEFAULT, .log = true, .argv = omcid },
+	};
+	char buf[1024];
+
+	CHECK(svc_service_json(buf, sizeof(buf), "onu", in, 2) == (int)strlen(buf));
+	static const char head[] = "{\"name\":\"onu\",\"instances\":{\"dhcp6d1\":{\"command\":"
+				   "[\"/bin/sh\",";
+
+	CHECK(!strncmp(buf, head, strlen(head)));
+	CHECK(strstr(buf, "\"/run/dhcp6d.log\",\"dhcp6d\",\"-w\",\"ppp1\"]") != NULL);
+	CHECK(strstr(buf, "},\"omcid\":{\"command\":[\"onu-run\",\"omcid\"],"
+			  "\"respawn\":[\"60\",\"2\",\"0\"],\"stdout\":true,\"stderr\":true}}}") != NULL);
+	/* With none, the service has no program left. */
+	CHECK(svc_service_json(buf, sizeof(buf), "onu", in, 0) == (int)strlen(buf) &&
+	      !strcmp(buf, "{\"name\":\"onu\",\"instances\":{}}"));
+	CHECK(svc_service_json(buf, 20, "onu", in, 2) == -1);
+}
+
 int main(void)
 {
 	test_names();
@@ -130,6 +189,8 @@ int main(void)
 	test_too_long();
 	test_to_file();
 	test_name();
+	test_parse_instance();
+	test_service();
 	printf("test_svcmsg: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }

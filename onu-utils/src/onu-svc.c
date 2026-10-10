@@ -15,6 +15,19 @@
  *                       that runs already with another program or other
  *                       values is started again with these; with the same,
  *                       nothing happens.
+ *   onu-svc sync NAME DIR
+ *                       the service NAME runs one program for each file of
+ *                       DIR, the file's name the instance's and its line
+ *                       what start takes after NAME, its words split on
+ *                       blanks: procd starts what is new, ends what has no
+ *                       file any more, starts again what changed, and leaves
+ *                       the rest alone; DIR without files ends them all.
+ *                       After procd took it, sync reads DIR again, and sends
+ *                       again while DIR holds something else, so that of two
+ *                       at once the last has procd hold what DIR holds. A file
+ *                       whose name begins with '.' is none of them, so that
+ *                       one is written under such a name and renamed into
+ *                       place.
  *   onu-svc stop NAME   procd ends the program and forgets the service
  *   onu-svc list [NAME] a line for each service: its name, "running" and
  *                       the program's process, or "stopped" and its exit
@@ -24,11 +37,14 @@
  * them. procd is asked over ubus, on ubus's own socket.
  */
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <libubox/blobmsg.h>
 #include <libubox/blobmsg_json.h>
@@ -41,6 +57,7 @@
 static int usage(void)
 {
 	fputs("usage: onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]\n"
+	      "       onu-svc sync NAME DIR\n"
 	      "       onu-svc stop NAME\n"
 	      "       onu-svc list [NAME]\n", stderr);
 	return 2;
@@ -155,6 +172,114 @@ static int start(int argc, char **argv)
 	return call("set", json, NULL);
 }
 
+#define INSTANCES_MAX 32
+#define LINE_MAX_ 1024
+#define NAME_MAX_ 64
+
+static int by_name(const void *a, const void *b)
+{
+	return strcmp((const char *)a, (const char *)b);
+}
+
+/*
+ * The service @name of the instances of the files of @dir, as JSON text in
+ * @json, of @cap bytes: 0, or 1 with what is wrong said.
+ */
+static int dir_json(const char *name, const char *dir, char *json, size_t cap)
+{
+	static char names[INSTANCES_MAX][NAME_MAX_];
+	static char lines[INSTANCES_MAX][LINE_MAX_];
+	static const char *words[INSTANCES_MAX][SVC_WORDS_MAX];
+	struct svc_instance inst[INSTANCES_MAX];
+	struct dirent *e;
+	size_t n = 0;
+	int fd, ret = 1;
+	DIR *d;
+
+	fd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	d = fd < 0 ? NULL : fdopendir(fd);
+	if (!d) {
+		fprintf(stderr, "onu-svc: %s: %s\n", dir, strerror(errno));
+		if (fd >= 0)
+			close(fd);
+		return 1;
+	}
+	while ((e = readdir(d))) {
+		if (e->d_name[0] == '.')
+			continue;
+		if (!svc_name_ok(e->d_name) || strlen(e->d_name) >= NAME_MAX_) {
+			fprintf(stderr, "onu-svc: %s/%s: not an instance's name\n", dir, e->d_name);
+			goto out;
+		}
+		if (n == INSTANCES_MAX) {
+			fprintf(stderr, "onu-svc: %s: more than %d instances\n", dir, INSTANCES_MAX);
+			goto out;
+		}
+		strcpy(names[n++], e->d_name);
+	}
+	qsort(names, n, sizeof(names[0]), by_name);
+	for (size_t i = 0; i < n; i++) {
+		int f = openat(dirfd(d), names[i], O_RDONLY | O_CLOEXEC);
+		ssize_t got = f < 0 ? -1 : read(f, lines[i], sizeof(lines[i]) - 1);
+
+		if (f >= 0)
+			close(f);
+		/* One removed meanwhile is no longer one of them. */
+		if (got < 0 && errno == ENOENT) {
+			memmove(names[i], names[i + 1], (n - i - 1) * sizeof(names[0]));
+			n--;
+			i--;
+			continue;
+		}
+		if (got < 0 || (size_t)got == sizeof(lines[i]) - 1) {
+			fprintf(stderr, "onu-svc: %s/%s: %s\n", dir, names[i],
+				got < 0 ? strerror(errno) : "too long");
+			goto out;
+		}
+		lines[i][got] = '\0';
+		lines[i][strcspn(lines[i], "\n")] = '\0';
+		if (svc_parse_instance(lines[i], names[i], &inst[i], words[i], SVC_WORDS_MAX)) {
+			fprintf(stderr, "onu-svc: %s/%s: not [-r T,TO,R] [-l | -o FILE] -- PROGRAM...\n",
+				dir, names[i]);
+			goto out;
+		}
+	}
+	if (svc_service_json(json, cap, name, inst, n) < 0) {
+		fprintf(stderr, "onu-svc: the instances of %s are too long\n", name);
+		goto out;
+	}
+	ret = 0;
+out:
+	closedir(d);
+	return ret;
+}
+
+/*
+ * The service @name of the files of @dir. Two syncs may run at once, and the
+ * stick's kernel has no file locks: each reads @dir again after procd took
+ * what it sent, and sends again while @dir holds something else, so that the
+ * last to send has procd hold what @dir holds.
+ */
+static int sync_dir(const char *name, const char *dir)
+{
+	static char json[16384], sent[16384];
+
+	if (!svc_name_ok(name))
+		return usage();
+	sent[0] = '\0';
+	for (int round = 0; round < 8; round++) {
+		if (dir_json(name, dir, json, sizeof(json)))
+			return 1;
+		if (!strcmp(json, sent))
+			return 0;
+		if (call("set", json, NULL))
+			return 1;
+		strcpy(sent, json);
+	}
+	fprintf(stderr, "onu-svc: %s kept changing\n", dir);
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	char json[256];
@@ -163,6 +288,11 @@ int main(int argc, char **argv)
 		return usage();
 	if (!strcmp(argv[1], "start"))
 		return start(argc - 1, argv + 1);
+	if (!strcmp(argv[1], "sync")) {
+		if (argc != 4)
+			return usage();
+		return sync_dir(argv[2], argv[3]);
+	}
 	if (!strcmp(argv[1], "stop")) {
 		if (argc != 3 || !svc_name_ok(argv[2]))
 			return usage();

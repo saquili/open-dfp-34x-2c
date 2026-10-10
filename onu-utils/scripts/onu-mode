@@ -87,6 +87,7 @@ IPV6_CONF=$ROOT/proc/sys/net/ipv6/conf
 IPV4_CONF=$ROOT/proc/sys/net/ipv4/conf
 IPV4_NEIGH=$ROOT/proc/sys/net/ipv4/neigh
 SHARE=$ROOT/usr/share/onu
+SVC_DIR=$RUN/onu-svc.d
 # The stick's own address on a link to the host, from which its DHCP server
 # answers; the host is given the concentrator's address as its gateway.
 LINK_ADDRESS=169.254.0.1
@@ -310,15 +311,33 @@ pid_of() {
 	[ -r "$RUN/$1.pid" ] && cat "$RUN/$1.pid"
 }
 
-# The program $3... as procd's service $1 (onu-svc start NAME [OPTION...] --
-# PROGRAM...), which procd starts, and again 2 s after it ends.
-svc_start() {
-	onu-svc start "$@" || log "$1 is no service of procd: not started"
+# The programs onu-mode wants run are the instances of one service of procd,
+# "onu" (ADR 0014): a file each in /run/onu-svc.d, named as the instance,
+# whose line is what onu-svc start takes after the name ([OPTION...] --
+# PROGRAM...), its words without blanks. onu-svc sync gives procd them all at
+# once, and procd starts what is new, ends what is gone, starts again only
+# what changed, and leaves the rest alone, starting each again 2 s after it
+# ends.
+svc_sync() {
+	onu-svc sync onu "$SVC_DIR" || log "procd was not given the programs of $SVC_DIR"
 }
 
-# procd's service $1 ended, and forgotten; none is no error.
+# The program $2... as the instance $1, written under a name of a dot and
+# renamed into place, so that a sync never reads half of it.
+svc_start() {
+	sn=$1
+	shift
+	mkdir -p "$SVC_DIR" &&
+		printf '%s\n' "$*" >"$SVC_DIR/.$sn" &&
+		mv "$SVC_DIR/.$sn" "$SVC_DIR/$sn" ||
+		{ log "$sn is no program of procd: not started"; return 0; }
+	svc_sync
+}
+
+# The instance $1 ended and forgotten; none is no error.
 svc_stop() {
-	onu-svc stop "$1" 2>/dev/null
+	rm -f "$SVC_DIR/$1"
+	[ -d "$SVC_DIR" ] && svc_sync
 	return 0
 }
 
@@ -331,10 +350,11 @@ stop_pid() {
 # omcid in the mode $1. A running omcid is told by a signal, SIGUSR2 for
 # bridge mode and SIGUSR1 for the others, where the stick routes: it keeps its
 # MIB, so what the OLT provisioned stays, and programs the data path again
-# from it. One that does not run is started as procd's service "omcid"
-# (onu-run omcid), with -r where the stick routes; its log goes on in
-# /run/omcid.log. The mode is kept in /run/omcid.mode, so that an omcid that
-# procd starts again after a crash comes up in the mode the stick is in.
+# from it. One that does not run is started as the instance "omcid" of
+# procd's service "onu" (onu-run omcid), with -r where the stick routes; its
+# log goes on in /run/omcid.log. The mode is kept in /run/omcid.mode, so that
+# an omcid that procd starts again after a crash comes up in the mode the
+# stick is in.
 omcid_run() {
 	echo "$1" >"$RUN/omcid.mode"
 	if pidof omcid >/dev/null 2>&1; then

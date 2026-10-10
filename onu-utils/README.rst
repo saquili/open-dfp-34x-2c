@@ -230,15 +230,23 @@ The small programs of the ONU.
    gives procd the stick's programs as its services, over ubus, which procd
    starts, and again a set time after one ends; OpenWrt's shell scripts and
    jshn do that elsewhere. The boot script starts the log, netifd, the ssh
-   server and ``pond`` with it, and ``onu-mode`` omcid, its watcher, dhcp6d
-   and udhcpd. ``-r`` gives the threshold under which a run is a crash, the
-   wait before the next start and the crashes in a row after which procd
-   gives up, 60,2,0 unless given (0: never); ``-l`` sends the program's
-   output to the system log, ``-o`` appends it to a file. ``list`` tells
-   each service's state and how often procd started it again (a procd
-   patch, ``br2-external/package/procd``)::
+   server, ``pond`` and ntpd with it, each a service of its own. ``-r`` gives
+   the threshold under which a run is a crash, the wait before the next start
+   and the crashes in a row after which procd gives up, 60,2,0 unless given
+   (0: never); ``-l`` sends the program's output to the system log, ``-o``
+   appends it to a file. ``sync`` gives procd a whole service at once, one
+   program for each file of a directory, whose name is the instance's and
+   whose line is what ``start`` takes after the name: procd starts what is
+   new, ends what has no file any more, starts again only what changed, and
+   leaves the rest alone (ADR 0014). ``onu-mode`` keeps its programs so, in
+   ``/run/onu-svc.d``, as the service ``onu``: omcid, its watcher, dhcp6d and
+   udhcpd. A sync holds the directory while it reads it and tells procd, so
+   that the last one sends what the directory holds then. ``list`` tells each
+   service's or instance's state and how often procd started it again (a
+   procd patch, ``br2-external/package/procd``)::
 
       onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] -- PROGRAM [ARG...]
+      onu-svc sync NAME DIR
       onu-svc stop NAME
       onu-svc list [NAME]
 
