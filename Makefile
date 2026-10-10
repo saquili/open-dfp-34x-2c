@@ -51,7 +51,7 @@ IMAGE_ENFORCE ?= k0 r0
 # headers are built again when the archive of linux/ is another one than last
 # time, and the programs of this tree, which it copies from the working tree,
 # are copied and built again at every build.
-LOCAL_PACKAGES = omcid onu-utils pppoed dhcp6d pond
+LOCAL_PACKAGES = omcid onu-utils pppoed dhcp6d pond netifd
 
 image:
 	$(BR2_ENV) make -C "$$br" O="$(IMAGE_OUT)" BR2_EXTERNAL="$(CURDIR)/br2-external" \
