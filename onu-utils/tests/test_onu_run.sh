@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-run, with stand-ins for dropbear, dropbearkey, pond and
-# sleep, which log what they are asked to do.
+# Tests of scripts/onu-run, with stand-ins for dropbear, dropbearkey, pond,
+# getty, login and sleep, which log what they are asked to do.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,7 +26,7 @@ setup() {
 	: >"$LOG"
 	printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=192.0.2.2/30\n' \
 		>"$ONU_ROOT/run/onu-mgmt"
-	for c in dropbear pond sleep; do
+	for c in dropbear pond getty login sleep; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "dropbearkey $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && echo key >"$2"; shift; done\n' \
@@ -91,6 +91,29 @@ rm "$ONU_ROOT/run/onu-mgmt"
 run ssh
 check '[ $rc -eq 1 ] && logged "sleep 5"'
 check '! grep -q -e "^dropbear" -e "^pond" "$LOG"'
+teardown
+
+echo "the console asks for root's password, without an address too"
+setup
+rm "$ONU_ROOT/run/onu-mgmt"
+run console
+check '[ $rc -eq 0 ] && logged "getty -L console 0 vt100"'
+check '! grep -q -e "^login" -e "^sleep" "$LOG"'
+teardown
+
+echo "a bench may have root's shell on the console without the password"
+setup
+mkdir -p "$ONU_ROOT/etc"
+printf 'DATA_ADDRESS=192.0.2.2/30\nCONSOLE_AUTOLOGIN=root\n' >"$ONU_ROOT/etc/board.conf"
+run console
+check 'logged "login -f root" && ! grep -q "^getty" "$LOG"'
+: >"$LOG"
+for other in "CONSOLE_AUTOLOGIN=admin" "CONSOLE_AUTOLOGIN=" "#CONSOLE_AUTOLOGIN=root" \
+	"CONSOLE_AUTOLOGIN=root; reboot"; do
+	printf '%s\n' "$other" >"$ONU_ROOT/etc/board.conf"
+	run console
+done
+check '! grep -q "^login" "$LOG" && [ "$(grep -c "^getty" "$LOG")" -eq 4 ]'
 teardown
 
 echo "what is not a server"

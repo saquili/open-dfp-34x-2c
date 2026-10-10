@@ -2,26 +2,41 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-run: a server of the host side, in the foreground, for procd, which
-# starts it from /etc/inittab once the boot script is done and again
-# whenever it ends.
+# onu-run: a server of the host side, or the console's login, in the
+# foreground, for procd, which starts it from /etc/inittab once the boot
+# script is done and again whenever it ends.
 #
 #   onu-run ssh     the ssh server: root's password and keys, on the
 #                   management address and on the host link's, if any
 #   onu-run pond    the status daemon and its panel, on the same, port 8080
+#   onu-run console the login prompt on the console, which asks for root's
+#                   password; a bench whose /etc/board.conf has
+#                   CONSOLE_AUTOLOGIN=root has root's shell there without
+#                   one, which the image without that file never has
 #
 # The addresses are the pair in use, from /run/onu-mgmt, which onu-mgmt keeps:
 # a server started again after a change of the pair listens on the new one.
 # The servers listen on the host side and nowhere else: the stick has no
 # packet filter, and nothing on the PON side is to reach them. Without the
 # addresses it waits a little before it fails, so that procd does not start
-# it again twice a second. ONU_ROOT, when set, is put in front of /run, for
-# the tests.
+# it again twice a second. The console needs no address, and comes up
+# whatever the boot script did. ONU_ROOT, when set, is put in front of /run
+# and /etc, for the tests.
 
 set -u
 RUN=${ONU_ROOT:-}/run
+BOARD=${ONU_ROOT:-}/etc/board.conf
 STATE=$RUN/onu-mgmt
 KEY=$RUN/dropbear/host_key
+
+# The console: a login prompt, or on a bench that says so root's shell.
+# board.conf is read as data, never run.
+if [ "${1:-}" = console ]; then
+	if [ "$(sed -n 's/^CONSOLE_AUTOLOGIN=//p' "$BOARD" 2>/dev/null | tail -n 1)" = root ]; then
+		exec login -f root
+	fi
+	exec getty -L console 0 vt100
+fi
 
 field() {
 	sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -n 1
