@@ -4232,7 +4232,7 @@ static bool rtl9602c_l34_uplink_known(struct rtl9602c_priv *p)
  * interface, a mark, a port, a protocol or a user, cannot be followed, and
  * neither can one that is inverted. A rule on the destination address is not
  * told from one on the source here: the engine routes a host's frames by one
- * next hop, the stick's own rules choose by the source alone (onu-mode), and
+ * next hop, the stick's own rules choose by the source alone (onu-apply), and
  * rtl9602c_l34_host_dev() asks for two destinations.
  */
 static bool rtl9602c_l34_rules_plain(void)
