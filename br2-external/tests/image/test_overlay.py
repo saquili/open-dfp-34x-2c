@@ -92,6 +92,12 @@ class BootScript(unittest.TestCase):
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))
 
+    def test_netifd_tells_onu_apply_of_each_interface(self):
+        # A PPPoE session's address is handed on when netifd says it is up.
+        text = read(RCS)
+        self.assertIn("onu-svc start netifd -- /usr/sbin/netifd -c /run/config "
+                      "-r /run/resolv.conf.auto -h /usr/sbin/onu-apply || {", text)
+
     def test_the_log_goes_to_a_server_once_the_management_address_is_up(self):
         # Only when the settings name one, and with a copy kept on the stick.
         text = read(RCS)
@@ -107,7 +113,7 @@ class BootScript(unittest.TestCase):
     def test_without_procd_the_ssh_server_and_netifd_still_start(self):
         text = read(RCS)
         self.assertIn("\tonu-run ssh &\n", text)
-        self.assertIn("\tnetifd -c /run/config -r /run/resolv.conf.auto &\n", text)
+        self.assertIn("\tnetifd -c /run/config -r /run/resolv.conf.auto -h /usr/sbin/onu-apply &\n", text)
 
     def test_it_ends_with_the_ready_line_that_the_bench_waits_for(self):
         # procd keeps the script's output for its log: the bench reads the
