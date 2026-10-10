@@ -748,6 +748,8 @@ ForEachMacros:
   - 'ynl_attr_for_each_nested'
   - 'ynl_attr_for_each_payload'
   - 'zorro_for_each_dev'
+  # libubox's, which target/bus_ubus.c uses
+  - 'blobmsg_for_each_attr'
 
 IncludeBlocks: Preserve
 IncludeCategories:

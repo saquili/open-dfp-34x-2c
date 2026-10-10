@@ -13,6 +13,9 @@
 #include <unistd.h>
 
 #include "daemon.h"
+#ifdef OMCID_UBUS
+#include "bus_ubus.h"
+#endif
 #include "hw_kernel.h"
 #include "omcid/ctl_proto.h"
 #include "sys/log.h"
@@ -87,5 +90,8 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 	OMCI_INFO("omcid: serving %s", device);
+#ifdef OMCID_UBUS
+	omcid_bus_set(&omcid_bus_ubus);
+#endif
 	return omcid_serve(&transport, OMCI_CTL_SOCKET_PATH);
 }

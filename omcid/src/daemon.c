@@ -74,6 +74,14 @@ static void change_mode(struct omci_engine *eng)
 	omci_engine_reprogram(eng);
 }
 
+/* Where the daemon publishes what it holds, or NULL. */
+static const struct omcid_bus *g_bus;
+
+void omcid_bus_set(const struct omcid_bus *bus)
+{
+	g_bus = bus;
+}
+
 /*
  * The file the MIB is kept in, or NULL, and room for what is kept and the
  * name of the new file that replaces it.
@@ -409,6 +417,8 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 	if (ctl != NULL)
 		omci_engine_tap_set(eng, &tap_ops, ctl);
+	if (g_bus != NULL)
+		g_bus->open(mib, &counters);
 
 	size_t handled = 0;
 	size_t rejected = 0;
@@ -418,7 +428,7 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 				     -1;
 
 	while (!g_stop) {
-		struct pollfd fds[2 + OMCI_CTL_MAX_FDS];
+		struct pollfd fds[3 + OMCI_CTL_MAX_FDS];
 		nfds_t n = 0;
 
 		if (g_mode != MODE_KEPT)
@@ -443,6 +453,16 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (mcast_fd >= 0) {
 			fds[n].fd = mcast_fd;
+			fds[n].events = POLLIN;
+			fds[n].revents = 0;
+			n++;
+		}
+		/* The bus's, while it is connected. */
+		const int bus_fd = g_bus != NULL ? g_bus->fd() : -1;
+		const nfds_t bus_at = n;
+
+		if (bus_fd >= 0) {
+			fds[n].fd = bus_fd;
 			fds[n].events = POLLIN;
 			fds[n].revents = 0;
 			n++;
@@ -472,6 +492,8 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 		if (mcast_fd >= 0 && (fds[mcast_at].revents & POLLIN))
 			omci_engine_mcast_service(eng);
+		if (bus_fd >= 0 && (fds[bus_at].revents & (POLLIN | POLLHUP)))
+			g_bus->handle();
 
 		omci_ctl_service(ctl, &fds[ctl_first], n - ctl_first);
 
@@ -502,6 +524,8 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 		if (omci_engine_changes(eng) != kept) {
 			kept = omci_engine_changes(eng);
 			keep_mib(eng);
+			if (g_bus != NULL)
+				g_bus->changed();
 		}
 	}
 
@@ -511,6 +535,8 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 	status = EXIT_SUCCESS;
 
 out_engine:
+	if (g_bus != NULL)
+		g_bus->close();
 	omci_ctl_close(ctl);
 	omci_engine_fini(eng);
 out_mib:

@@ -12,7 +12,9 @@
 #   make check-style       clang-format and checkpatch over the sources
 #                          (CLANG_FORMAT= and CHECKPATCH= name the tools)
 #   make board             the daemon and the client tools for the board, on
-#                          the kernel backend, in build-board/board/
+#                          the kernel backend, in build-board/board/;
+#                          UBUS=1 puts the daemon on ubus (libubus,
+#                          libubox)
 #
 # CROSS_COMPILE= builds for another machine; V=1 shows the commands.
 
@@ -109,7 +111,7 @@ endif
 override STD  := -std=gnu11
 override WARN := -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes -Wshadow -Wpointer-arith \
                  -Wwrite-strings
-override DEFS := $(if $(filter 1,$(BOARD)),,-DOMCID_HW_STUB=1)
+override DEFS := $(if $(filter 1,$(BOARD)),,-DOMCID_HW_STUB=1) $(if $(filter 1,$(UBUS)),-DOMCID_UBUS=1)
 override INCS := -Iinclude -Isrc -Itarget
 
 COMPILE = $(CC) $(STD) $(CPPFLAGS) $(INCS) $(DEFS) $(CFLAGS) $(WARN) $(MAP) $(GROUP_FLAGS) -MMD -MP
@@ -148,14 +150,18 @@ CORE_SRC := \
 	src/omci/test.c \
 	src/sys/ctl.c \
 	src/sys/log.c \
+	src/sys/publish.c \
 	src/sys/transport_pipe.c
 
 CLIENT_SRC := src/libomcid/libomcid.c
 
 DAEMON_SRC := src/main.c
 
-# The board's own sources: the kernel backend, the OMCI port, its entry point.
+# The board's own sources: the kernel backend, the OMCI port, its entry point,
+# and with UBUS=1 the daemon on ubus.
+UBUS       ?= 0
 TARGET_SRC := target/hw_kernel.c target/main.c target/transport_port.c
+UBUS_SRC   := target/bus_ubus.c
 
 # The tools: those linked with the core, and those that only talk to the
 # control socket.
@@ -171,7 +177,7 @@ tools_src_omci_ctl_probe  := tools/deploy/omci_ctl_probe.c
 # The tests, and what some of them take as argument: the data table or the
 # daemon itself.
 TESTS := actions alarm attr_sweep avc_origin ber bridge cases cases_mib checks client clock ctl ctl_mode daemon defaults edges engine_edges exec filter frame gem getnext \
-         hw_host hw_ops keep mcast mcast_agent me171 me_edges mib_data_sync mib_store mibreset_reply model msgtype_matrix msgtypes multibit optical pm pipe priority \
+         hw_host hw_ops keep mcast mcast_agent me171 me_edges mib_data_sync mib_store mibreset_reply model msgtype_matrix msgtypes multibit optical pm pipe priority publish \
          roundtrip std_classes swdl synctime_stamp tables tap test_instance testresult upload vlan
 CLIENT_TESTS := client ctl
 SCRIPT_TESTS := coverage_gate style_gate
@@ -192,7 +198,7 @@ HELPER_SRC  := tests/fault.c
 # or the lists name a file that is not there.
 LISTED_SRC := $(sort $(CORE_SRC) $(CLIENT_SRC) $(DAEMON_SRC))
 FOUND_SRC  := $(sort $(wildcard src/*.c src/*/*.c))
-LISTED_TARGET := $(sort $(TARGET_SRC))
+LISTED_TARGET := $(sort $(TARGET_SRC) $(UBUS_SRC))
 FOUND_TARGET  := $(sort $(wildcard target/*.c))
 LISTED_TOOLS := $(sort $(foreach t,$(TOOLS_CORE) $(TOOLS_CLIENT),$(tools_src_$(t))))
 FOUND_TOOLS  := $(sort $(wildcard tools/*.c tools/*/*.c))
@@ -351,6 +357,8 @@ coverage: all tests
 BOARD_CORE_SRC := $(filter-out src/hw/hw_host.c,$(CORE_SRC))
 BOARD_LIB      := $(BUILD)/libomcid_board.a
 BOARD_PROGRAMS := $(addprefix $(BUILD)/board/,omcid omcitap omcivlan)
+BOARD_SRC      := $(TARGET_SRC) $(if $(filter 1,$(UBUS)),$(UBUS_SRC))
+BOARD_LIBS     := $(if $(filter 1,$(UBUS)),-lubus -lubox)
 
 .PHONY: board
 ifeq ($(BOARD),1)
@@ -361,10 +369,10 @@ $(BOARD_LIB): $(BOARD_CORE_SRC:%.c=$(OBJ)/%.o)
 	$(call say,AR,$@)
 	$(Q)$(AR) $(ARFLAGS) $@ $^
 
-$(BUILD)/board/omcid: $(TARGET_SRC:%.c=$(OBJ)/%.o) $(BOARD_LIB)
+$(BUILD)/board/omcid: $(BOARD_SRC:%.c=$(OBJ)/%.o) $(BOARD_LIB)
 	@mkdir -p $(dir $@)
 	$(call say,LD,$@)
-	$(Q)$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(BOARD_LIB) $(LDLIBS)
+	$(Q)$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(BOARD_LIB) $(BOARD_LIBS) $(LDLIBS)
 
 $(BUILD)/board/omcitap $(BUILD)/board/omcivlan: $(BUILD)/board/%: $(OBJ)/tools/%.o $(CLIENT_LIB)
 	@mkdir -p $(dir $@)

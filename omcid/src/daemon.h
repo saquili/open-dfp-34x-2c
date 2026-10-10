@@ -38,6 +38,34 @@ int omcid_run(int argc, char **argv, int rx_fd, int tx_fd,
  */
 bool omcid_keep(const char *path);
 
+struct omci_mib;
+struct omci_ctl_counters;
+
+/**
+ * struct omcid_bus - Where the daemon publishes what it holds (ADR 0014):
+ *	ubus on the board (target/bus_ubus.c).
+ * @open: connect, and publish from then on @mib and @counters; a bus that
+ *	is not there yet is connected to later by @fd
+ * @fd: the descriptor to wait on, or -1 while there is no connection
+ * @handle: answer what waits on @fd
+ * @changed: tell that the OLT changed what it set up
+ * @close: go away
+ */
+struct omcid_bus {
+	void (*open)(const struct omci_mib *mib,
+		     const struct omci_ctl_counters *counters);
+	int (*fd)(void);
+	void (*handle)(void);
+	void (*changed)(void);
+	void (*close)(void);
+};
+
+/**
+ * omcid_bus_set() - Publish on a bus from the next start of the loop.
+ * @bus: the bus, or NULL for none
+ */
+void omcid_bus_set(const struct omcid_bus *bus);
+
 struct omci_transport;
 
 /**

@@ -961,6 +961,80 @@ static void test_a_kept_file_it_cannot_go_on_from(void)
 	rig_down(&g);
 }
 
+/* A bus that counts what the loop asks of it, its descriptor a pipe. */
+static unsigned int g_bus_opens, g_bus_handles, g_bus_changes, g_bus_closes;
+static const struct omci_mib *g_bus_mib;
+static int g_bus_pipe[2] = { -1, -1 };
+
+static void fake_open(const struct omci_mib *mib,
+		      const struct omci_ctl_counters *counters)
+{
+	(void)counters;
+	g_bus_opens++;
+	g_bus_mib = mib;
+}
+
+static int fake_fd(void)
+{
+	return g_bus_pipe[0];
+}
+
+static void fake_handle(void)
+{
+	char c;
+
+	(void)!read(g_bus_pipe[0], &c, 1);
+	g_bus_handles++;
+}
+
+static void fake_changed(void)
+{
+	g_bus_changes++;
+}
+
+static void fake_close(void)
+{
+	g_bus_closes++;
+}
+
+static const struct omcid_bus g_fake_bus = {
+	.open = fake_open,
+	.fd = fake_fd,
+	.handle = fake_handle,
+	.changed = fake_changed,
+	.close = fake_close,
+};
+
+static void test_the_bus_is_served_in_the_loop(void)
+{
+	uint8_t frame[OMCI_FRAME_LEN];
+	struct rig g;
+
+	CHECK(rig_up(&g));
+	CHECK_EQ(pipe(g_bus_pipe), 0);
+	CHECK_EQ(write(g_bus_pipe[1], "x", 1), 1);
+	omcid_bus_set(&g_fake_bus);
+
+	/* A Set changes what the OLT set up, a Get does not. */
+	mds_set(frame, 5);
+	CHECK_EQ(write(g.in_w, frame, OMCI_FRAME_LEN), (ssize_t)OMCI_FRAME_LEN);
+	get_frame(frame, 0x53, 2, 0, 0x8000);
+	CHECK_EQ(write(g.in_w, frame, OMCI_FRAME_LEN), (ssize_t)OMCI_FRAME_LEN);
+	end_input(&g);
+	CHECK_EQ(run(&g, g.in_r, g_sock, 4, g_argv_held), EXIT_SUCCESS);
+	CHECK_EQ(g_bus_opens, 1u);
+	CHECK(g_bus_mib != NULL);
+	CHECK_EQ(g_bus_handles, 1u);
+	CHECK_EQ(g_bus_changes, 1u);
+	CHECK_EQ(g_bus_closes, 1u);
+
+	omcid_bus_set(NULL);
+	(void)close(g_bus_pipe[0]);
+	(void)close(g_bus_pipe[1]);
+	rig_down(&g);
+	(void)unlink(g_sock);
+}
+
 int main(void)
 {
 	(void)signal(SIGPIPE, SIG_IGN);
@@ -987,6 +1061,7 @@ int main(void)
 	RUN(test_clock);
 	RUN(test_the_mib_is_kept_across_a_start_again);
 	RUN(test_a_kept_file_it_cannot_go_on_from);
+	RUN(test_the_bus_is_served_in_the_loop);
 
 	(void)unlink(g_sock);
 	(void)rmdir(g_dir);

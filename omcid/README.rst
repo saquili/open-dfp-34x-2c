@@ -57,7 +57,8 @@ Layout
 ``src/hw/``
    the interface to the hardware, and the host backend that stands in for it
 ``src/sys/``
-   logging, the transport of frames and the control socket
+   logging, the transport of frames, the control socket and what the daemon
+   publishes of the MIB
 ``src/libomcid/`` and ``include/omcid/``
    the client library of the control socket
 ``tools/``
@@ -131,6 +132,20 @@ its service when the OLT moves it to another VID or another GEM port.
 the argument ``omcid`` after it replaces either file and after it makes or
 takes away a GEM interface, and does not wait for it. On the stick the
 program is ``onu-apply``, which follows the change at once.
+
+With ``make board UBUS=1`` the daemon is on ubus (ADR 0014), as the object
+``omcid``. Its method ``status`` gives the number of instances and the counts
+of the frames; ``mib`` gives the MIB: every instance of the classes of its
+argument ``classes``, an array of class numbers, in that order, or of every
+class without it, each attribute in hexadecimal and a table's rows end to end,
+and the counts of the frames, in at most ``max`` bytes of JSON text when
+given; an instance that does not fit is left out with the rest, and
+``truncated`` says so. The answers are blobmsg, ubus's own binary form,
+written straight from the MIB with no text in between: a reader that needs
+JSON, such as the panel's, makes it once, at the end. The ONU-G's logical password is never given, only whether one is set
+(``logical_password_set``). Each change the OLT makes sends the event
+``omcid``, with the status. A daemon that finds no ubusd, or loses it, tries
+again every ten seconds, and serves the OLT meanwhile.
 
 ``-m FILE`` keeps the MIB in a file, so that a daemon started again goes on
 as the OLT set it up, and the OLT sees no new ONU. The daemon replaces the
