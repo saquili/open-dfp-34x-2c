@@ -22,6 +22,12 @@
 # scripts of /etc/rc.d whose names begin with S, in order, with "boot".
 ::sysinit:/etc/init.d/rcS S boot
 
+# At a restart or a halt, the scripts of /etc/rc.d whose names begin with K,
+# with "shutdown": the image has none. procd goes on to end every program and
+# restart only once this is done, so without the line it would wait for ever,
+# feeding the watchdog.
+::shutdown:/etc/init.d/rcS K shutdown
+
 # The ssh server and the status daemon, on the host side's addresses, which
 # the boot script brought up (onu-run).
 ::respawnlate:/usr/sbin/onu-run ssh

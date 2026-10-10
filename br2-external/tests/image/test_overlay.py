@@ -251,6 +251,11 @@ class Inittab(unittest.TestCase):
         # procd runs /etc/rc.d/S* with "boot" (FirstProgram links the script).
         self.assertIn("::sysinit:/etc/init.d/rcS S boot", list(self.entries()))
 
+    def test_a_restart_goes_on_past_the_shutdown_scripts(self):
+        # procd moves from shutdown to halt when the shutdown entry's scripts
+        # are done (rcdone in inittab.c): without the entry it never does.
+        self.assertIn("::shutdown:/etc/init.d/rcS K shutdown", list(self.entries()))
+
     def test_the_servers_start_once_the_boot_script_is_done(self):
         entries = list(self.entries())
         for server in ("ssh", "pond"):
