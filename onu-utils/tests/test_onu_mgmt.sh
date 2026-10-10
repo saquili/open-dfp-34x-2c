@@ -129,8 +129,10 @@ check '[ $rc -eq 0 ]'
 check 'grep -qx MGMT_VLAN=100 "$T/stored" && grep -qx MGMT_ADDRESS=192.0.2.6/30 "$T/stored"'
 check 'logged "tc filter del dev sfp ingress pref 1 protocol 802.1Q"'
 check '[ "$(part)" = "$(printf "device mgmt100 100\ninterface $name mgmt100 192.0.2.6/30")" ]'
+# The server of the boot ends, and procd starts it again on the new pair;
+# onu-mgmt starts none of its own but the pending pair's.
 check '! kill -0 "$OLD_SSH" 2>/dev/null'
-check 'grep -q "dropbear .*-P $ONU_ROOT/run/dropbear.pid -p 192.0.2.6:22" "$LOG"'
+check '[ "$(grep -c "^dropbear " "$LOG")" -eq 1 ]'
 check '! grep -q "^dropbear .*-[sB]\b" "$LOG"'
 run status
 check 'echo "$out" | grep -qx VLAN=100 && echo "$out" | grep -qx IFACE=mgmt100'

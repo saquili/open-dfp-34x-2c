@@ -1,0 +1,61 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-run: a server of the host side, in the foreground, for procd, which
+# starts it from /etc/inittab once the boot script is done and again
+# whenever it ends.
+#
+#   onu-run ssh     the ssh server: root's password and keys, on the
+#                   management address and on the host link's, if any
+#   onu-run pond    the status daemon and its panel, on the same, port 8080
+#
+# The addresses are the pair in use, from /run/onu-mgmt, which onu-mgmt keeps:
+# a server started again after a change of the pair listens on the new one.
+# The servers listen on the host side and nowhere else: the stick has no
+# packet filter, and nothing on the PON side is to reach them. Without the
+# addresses it waits a little before it fails, so that procd does not start
+# it again twice a second. ONU_ROOT, when set, is put in front of /run, for
+# the tests.
+
+set -u
+RUN=${ONU_ROOT:-}/run
+STATE=$RUN/onu-mgmt
+KEY=$RUN/dropbear/host_key
+
+field() {
+	sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -n 1
+}
+
+mgmt=$(field ADDRESS)
+data=$(field DATA_ADDRESS)
+mgmt=${mgmt%/*}
+data=${data%/*}
+if [ -z "$mgmt" ]; then
+	echo "onu-run: no management address in $STATE" >&2
+	sleep 5
+	exit 1
+fi
+
+case ${1:-} in
+ssh)
+	# A host key of its own at each boot: the root file system is
+	# read-only, and nothing that is written outlives a restart.
+	if [ ! -s "$KEY" ]; then
+		mkdir -p "${KEY%/*}"
+		dropbearkey -t ed25519 -f "$KEY" >/dev/null 2>&1 || {
+			echo "onu-run: no host key" >&2
+			sleep 5
+			exit 1
+		}
+	fi
+	exec dropbear -F -r "$KEY" -P "$RUN/dropbear.pid" -p "$mgmt:22" ${data:+-p "$data:22"}
+	;;
+pond)
+	exec pond -l "http://$mgmt:8080" ${data:+-l "http://$data:8080"} >>"$RUN/pond.log" 2>&1
+	;;
+*)
+	echo "usage: onu-run ssh|pond" >&2
+	exit 2
+	;;
+esac

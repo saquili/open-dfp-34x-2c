@@ -238,14 +238,14 @@ commit() {
 	rm -f "$PENDING"
 	net_apply || log "netifd was not told that the old management address goes"
 	[ "$iface" = "$old_iface" ] || rules_del "$old_pref"
-	# One ssh server again, on the new address and the data path's.
+	# One ssh server again, on the new address and the data path's: procd
+	# starts the server of the boot again (onu-run) once it ends, with the
+	# pair that is now in use.
 	for f in "$RUN/dropbear.pid" "$RUN/dropbear-pending.pid"; do
 		pid=$(cat "$f" 2>/dev/null)
 		[ -n "$pid" ] && kill "$pid" 2>/dev/null
 	done
 	rm -f "$RUN/dropbear-pending.pid"
-	dropbear -r "$KEY" -P "$RUN/dropbear.pid" -p "${address%/*}:22" \
-		${data:+-p "${data%/*}:22"} || log "no ssh on $address"
 	log "the management address is now $address in VLAN $vlan"
 }
 
