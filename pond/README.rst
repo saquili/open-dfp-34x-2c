@@ -76,15 +76,23 @@ or of the other bank with an empty body, and restarts.
   0014): ``onu-config check`` judges the change over the settings in force and
   gives them back in full, or says why not, which pond answers with; pond
   writes ``/run/onu.conf`` as onu-config gave it and each account's
-  ``/run/onu-pppoeN`` for root only, then starts ``onu-apply reload``, which
-  also saves them in the store; it refuses another change, with 409, until
-  that has ended. A read gives the settings as ``onu-config settings`` reads them,
+  ``/run/onu-pppoeN`` for root only, then starts ``onu-apply try``: the
+  change is on trial, and the stick goes back to the settings of before
+  unless it is confirmed (``changes``, ADR 0014), which saves them in the
+  store; it refuses another change, with 409, until onu-apply has ended. A read gives the settings as ``onu-config settings`` reads them,
   each session with its user and whether a secret is set, never the secret,
   and what onu-apply and dhcp6d brought up for it (``/run/session/N``: the
   interfaces, the addresses, what it hands down, the delegated IPv6 prefix and
   the host it went to), the address handed on, and what became of the
   settings in the store (``store``: ``loaded``, ``defaults``, ``saved``,
-  ``failed`` or ``none``).
+  ``failed`` or ``none``), and each change on trial, of the settings, the SFP
+  lane or the management pair, with when it goes back and the pair's new
+  address (``trials``).
+* ``changes``: ``CONFIRM=1`` keeps every change on trial (``onu-change``),
+  a new management pair only from a request that came to its new address,
+  and ``REVERT=1`` takes them all back; pond then listens on the management
+  address in use alone. The panel confirms them as soon as it reaches the
+  stick again.
 * ``session``: a PPPoE session of the stick's own: ``ID`` (none for the first
   free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``
   and ``FAMILY`` (``ipv4``, ``ipv6`` or ``both``). With an account the stick
@@ -108,7 +116,7 @@ or of the other bank with an empty body, and restarts.
   ``onu-config system`` and to the kernel.
 * ``sfp_lane``: the SFP lane's setting through ``onu-lane``: ``MODE``
   (``auto``, ``2500basex``, ``1000basex-an`` or ``1000basex``) on trial, which
-  ends by itself after a minute, ``KEEP=1`` or ``REVERT=1``. A read gives the
+  ends by itself after 90 s, ``KEEP=1`` or ``REVERT=1``. A read gives the
   setting, the one the lane runs in and a trial.
 * ``mgmt``: the management VLAN and address through ``onu-mgmt``: ``VLAN`` and
   ``ADDRESS`` add a new pair beside the old one, and pond listens on it too;
