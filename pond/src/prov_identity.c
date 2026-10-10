@@ -5,12 +5,14 @@
  * How the stick introduces itself to the OLT: the "name=value" lines of
  * /run/onu-identity that onu-config keeps, and /run/onu-identity-source,
  * "store" or "factory". A read never gives the PLOAM password nor the
- * logical (LOID) password, only whether one is set. A change goes to onu-config (POND_STORE names another program),
- * then onu-apply reidentify (POND_REIDENTIFY) registers again with the OLT.
+ * logical (LOID) password, only whether one is set. A change goes to
+ * onu-config, then onu-apply reidentify registers again with the OLT, both
+ * through onu-act (bus.h); onu-apply takes one registration after the other.
  */
 
 #define _GNU_SOURCE
 
+#include "bus.h"
 #include "prov.h"
 #include "providers.h"
 
@@ -53,14 +55,6 @@ static const struct {
 
 /* Shown as they are, never changed from the panel. */
 static const char *const g_shown[] = { "ploam_format", "sw_version" };
-
-static pid_t g_reidentify;
-
-void prov_identity_reap(void)
-{
-	if (g_reidentify > 0 && waitpid(g_reidentify, NULL, WNOHANG) == g_reidentify)
-		g_reidentify = 0;
-}
 
 /* The value of "name=" in the identity, or "". */
 static void field(const char *text, const char *name, char *out, size_t cap)
@@ -181,57 +175,12 @@ static bool number(const char *v, unsigned long max)
 	return !*end && !errno && n <= max;
 }
 
-/* Run @prog with @arg, writing @input to it; 0 when it ended well. */
-static int run_with_input(const char *prog, const char *arg, const char *input)
-{
-	int fd[2], status;
-	pid_t pid;
-	size_t left = strlen(input);
-
-	if (pipe(fd))
-		return -errno;
-	pid = fork();
-	if (pid < 0) {
-		int e = errno;
-
-		close(fd[0]);
-		close(fd[1]);
-		return -e;
-	}
-	if (pid == 0) {
-		dup2(fd[0], 0);
-		close(fd[0]);
-		close(fd[1]);
-		execlp(prog, prog, arg, (char *)NULL);
-		_exit(127);
-	}
-	close(fd[0]);
-	while (left) {
-		ssize_t n = write(fd[1], input, left);
-
-		if (n <= 0)
-			break;
-		input += n;
-		left -= (size_t)n;
-	}
-	close(fd[1]);
-	if (waitpid(pid, &status, 0) < 0)
-		return -errno;
-	return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -EIO;
-}
-
 int prov_identity_set(const char *val, char *err, size_t errcap)
 {
-	char text[1024], line[300];
+	char text[1024], line[300], out[256];
 	const char *p = val;
 	size_t len = 0;
 	int rc;
-
-	prov_identity_reap();
-	if (g_reidentify > 0) {
-		snprintf(err, errcap, "the stick is still registering again");
-		return -EBUSY;
-	}
 
 	while (*p) {
 		size_t n = strcspn(p, "\r\n");
@@ -299,22 +248,18 @@ int prov_identity_set(const char *val, char *err, size_t errcap)
 		return -EINVAL;
 	}
 
-	rc = run_with_input(getenv("POND_STORE") ?: "onu-config", "identity", text);
+	rc = bus_act("identity_store", NULL, NULL, 0, text, out, sizeof(out));
 	explicit_bzero(text, sizeof(text));
 	explicit_bzero(line, sizeof(line));
 	if (rc) {
 		snprintf(err, errcap, "the identity was not stored");
-		return rc;
+		return rc < 0 ? rc : -EIO;
 	}
 
 	/* Register again under the new identity, without waiting for it. */
-	g_reidentify = fork();
-	if (g_reidentify == 0) {
-		const char *prog = getenv("POND_REIDENTIFY") ?: "onu-apply";
-
-		signal(SIGCHLD, SIG_DFL);
-		execlp(prog, prog, "reidentify", (char *)NULL);
-		_exit(127);
+	if (bus_act("reidentify", NULL, NULL, 0, NULL, out, sizeof(out)) < 0) {
+		snprintf(err, errcap, "the identity is stored, and taken at the next start");
+		return -EIO;
 	}
 	return 0;
 }

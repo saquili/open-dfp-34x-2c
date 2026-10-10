@@ -19,6 +19,13 @@ Each ``-l`` adds an address to listen on, up to four; with none, the daemon
 listens on port 8080 of every address. An address it cannot listen on is
 reported and left out, and the daemon ends only when it listens on none.
 
+What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
+0014) rather than run the program itself: the SFP lane, the management pair,
+the confirmation of the changes on trial, the name, the identity and a new
+registration, the updates' status and trial, and the restart. The settings,
+the password and the upload and download of an update it still runs itself,
+until the next part of step 8 of ADR 0014 moves them too.
+
 Signing in
 ==========
 
@@ -167,12 +174,15 @@ CPPFLAGS at an installation of those headers (``make headers_install`` in
 for ``/proc`` and ``/sys``, and on netlink dumps they build; the two copies of
 the boot loader's environment are made by ``tests/make-env.py``. The tests of
 the settings write under the same tree and run onu-config, built from
-``../onu-utils`` (``ONU_UTILS``) and named by ``POND_ONU_CONFIG``, and stand-ins
-for onu-apply and onu-config, which ``POND_APPLY``, ``POND_REIDENTIFY`` and
-``POND_STORE`` name;
-those of the stick's own settings start stand-ins for onu-lane, onu-mgmt and
-hostname (``POND_ONU_LANE``, ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those
-of ``omci`` read omcid's answer from ``run/ubus/omcid.mib``.
+``../onu-utils`` (``ONU_UTILS``) and named by ``POND_ONU_CONFIG``, and a
+stand-in for onu-apply, which ``POND_APPLY`` names. What pond has onu-act do
+(``src/bus.h``) a build without libubus, the tests', runs itself from
+onu-act's table, which it builds from ``../onu-utils``, each program from
+``$POND_<PROGRAM>`` when set: those of the identity and the stick's own
+settings start stand-ins for onu-config, onu-apply, onu-lane, onu-mgmt and
+hostname (``POND_ONU_CONFIG``, ``POND_ONU_APPLY``, ``POND_ONU_LANE``,
+``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci`` read omcid's
+answer from ``run/ubus/omcid.mib``.
 The tests of the sign-in check PBKDF2 against RFC 7914's vectors, the stored
 form, the stop after wrong passwords, the end of sessions and a change of
 password.

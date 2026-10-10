@@ -6,21 +6,22 @@
  * adds the new VLAN and address beside the old ones, and this daemon listens
  * on the new address as well; a panel opened there confirms the change,
  * which shows that the new pair answers, and only then does the old one go.
- * POND_ONU_MGMT names another program, for the tests.
+ * onu-act runs onu-mgmt (bus.h).
  */
 
+#include "bus.h"
 #include "mgmt.h"
 #include "prov.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static const char *program(void)
+/* onu-mgmt's @method through onu-act, with no values. */
+static int run(const char *method, char *out, size_t cap)
 {
-	const char *p = getenv("POND_ONU_MGMT");
-
-	return p && *p ? p : "/usr/lib/onu/onu-mgmt";
+	return bus_act(method, NULL, NULL, 0, NULL, out, cap);
 }
 
 static bool line_value(struct mg_str body, const char *key, char *out, size_t cap)
@@ -105,11 +106,10 @@ static void reply(struct mg_connection *c, int code, const char *error, const ch
 
 void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_handler_t fn)
 {
-	static const char *const status[] = { "status", NULL };
 	char vlan[8], address[24], flag[4], text[512], pending[24], current[24], out[256];
 	unsigned int port = mg_ntohs(c->loc.port);
 
-	if (prov_exec(program(), status, NULL, text, sizeof(text))) {
+	if (run("mgmt_status", text, sizeof(text))) {
 		reply(c, 500, "mgmt", "the management pair cannot be read");
 		return;
 	}
@@ -120,25 +120,21 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 
 	if (line_value(hm->body, "VLAN", vlan, sizeof(vlan)) &&
 	    line_value(hm->body, "ADDRESS", address, sizeof(address))) {
-		const char *args[4] = { NULL };
-		int rc;
-
-		args[0] = "add";
-		args[1] = vlan;
-		args[2] = address;
-		rc = prov_exec(program(), args, NULL, out, sizeof(out));
+		static const char *const names[] = { "vlan", "address" };
+		const char *const values[] = { vlan, address };
+		int rc = bus_act("mgmt_add", names, values, 2, NULL, out, sizeof(out));
+		bool bad = rc == 2 || rc == -EINVAL;
 
 		if (rc) {
-			reply(c, rc == 2 ? 400 : 409, "mgmt",
-			      rc == 2 ? "not a VLAN and an address with its prefix" :
-					"the new pair was not added: a change waits, or the VLAN is in use");
+			reply(c, bad ? 400 : 409, "mgmt",
+			      bad ? "not a VLAN and an address with its prefix" :
+				    "the new pair was not added: a change waits, or the VLAN is in use");
 			return;
 		}
 		if (strcmp(address, current))
 			listen_on(c->mgr, address, port, fn);
 		reply(c, 200, NULL, NULL);
 	} else if (line_value(hm->body, "COMMIT", flag, sizeof(flag))) {
-		static const char *const args[] = { "commit", NULL };
 		struct mg_addr a;
 
 		if (!*pending) {
@@ -150,7 +146,7 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 			reply(c, 403, "mgmt", "confirm the change from a panel opened at the new address");
 			return;
 		}
-		if (prov_exec(program(), args, NULL, out, sizeof(out))) {
+		if (run("mgmt_commit", out, sizeof(out))) {
 			reply(c, 500, "mgmt", "the change was not committed");
 			return;
 		}
@@ -158,9 +154,7 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 			unlisten(c->mgr, current);
 		reply(c, 200, NULL, NULL);
 	} else if (line_value(hm->body, "CANCEL", flag, sizeof(flag))) {
-		static const char *const args[] = { "cancel", NULL };
-
-		prov_exec(program(), args, NULL, out, sizeof(out));
+		run("mgmt_cancel", out, sizeof(out));
 		if (*pending && strcmp(current, pending))
 			unlisten(c->mgr, pending);
 		reply(c, 200, NULL, NULL);
@@ -171,11 +165,10 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 
 bool mgmt_addresses(char *current, char *pending, size_t cap)
 {
-	static const char *const status[] = { "status", NULL };
 	char text[512];
 
 	*current = *pending = '\0';
-	if (prov_exec(program(), status, NULL, text, sizeof(text)))
+	if (run("mgmt_status", text, sizeof(text)))
 		return false;
 	if (!status_value(text, "ADDRESS", current, cap))
 		*current = '\0';
@@ -199,10 +192,9 @@ void mgmt_settle(struct mg_mgr *mgr, const char *current, const char *pending)
 
 void mgmt_resume(struct mg_mgr *mgr, const char *port, mg_event_handler_t fn)
 {
-	static const char *const status[] = { "status", NULL };
 	char text[512], pending[24];
 
-	if (prov_exec(program(), status, NULL, text, sizeof(text)) ||
+	if (run("mgmt_status", text, sizeof(text)) ||
 	    !status_value(text, "PENDING_ADDRESS", pending, sizeof(pending)))
 		return;
 	listen_on(mgr, pending, (unsigned int)atoi(port), fn);

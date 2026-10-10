@@ -30,6 +30,7 @@
  */
 
 #include "auth.h"
+#include "bus.h"
 #include "changes.h"
 #include "firmware.h"
 #include "mgmt.h"
@@ -448,14 +449,14 @@ static void api_restart(struct mg_connection *c)
 
 static void restart_when_due(void)
 {
+	char out[64];
+
 	if (!g_restart_at || time(NULL) < g_restart_at)
 		return;
 	g_restart_at = 0;
 	sync();
-	if (fork() == 0) {
-		execlp("reboot", "reboot", (char *)NULL);
-		_exit(127);
-	}
+	if (bus_act("restart", NULL, NULL, 0, NULL, out, sizeof(out)) < 0)
+		fprintf(stderr, "pond: onu-act did not restart the stick\n");
 }
 
 /* Whether a path climbs out of its directory. */
@@ -713,7 +714,6 @@ int main(int argc, char **argv)
 	while (!g_stop) {
 		mg_mgr_poll(&mgr, 200);
 		prov_settings_reap();
-		prov_identity_reap();
 		firmware_poll();
 		restart_when_due();
 	}

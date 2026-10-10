@@ -7,6 +7,7 @@
  * failed, and the upload of firmware.c.
  */
 
+#include "bus.h"
 #include "firmware.h"
 #include "prov.h"
 #include "providers.h"
@@ -31,7 +32,13 @@ const char *fw_program(void)
 
 int fw_run(const char *const *args, char *out, size_t cap)
 {
-	return prov_exec(fw_program(), args, NULL, out, cap);
+	static const char *const names[] = { "bank" };
+
+	if (!strcmp(args[0], "status"))
+		return bus_act("update_status", NULL, NULL, 0, NULL, out, cap);
+	if (!strcmp(args[0], "try"))
+		return bus_act("update_try", names, &args[1], 1, NULL, out, cap);
+	return -EINVAL;
 }
 
 bool fw_field(const char *text, const char *key, char *out, size_t cap)

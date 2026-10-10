@@ -44,14 +44,27 @@ $(BUILD)/mongoose.o: third_party/mongoose/mongoose.c
 $(BUILD)/pond: $(OBJS) $(BUILD)/src/bus-ubus.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lblobmsg_json -lubox
 
-$(BUILD)/pond-none: $(OBJS) $(BUILD)/src/bus-file.o
+# A build without libubus runs onu-act's methods itself, from its table in
+# onu-utils (src/bus.h).
+ONU_UTILS ?= ../onu-utils
+
+$(BUILD)/src/bus-file.o: src/bus-file.c $(ONU_UTILS)/src/act.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -c -o $@ $<
+
+$(BUILD)/act.o: $(ONU_UTILS)/src/act.c $(ONU_UTILS)/src/act.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -c -o $@ $<
+
+$(BUILD)/pond-none: $(OBJS) $(BUILD)/src/bus-file.o $(BUILD)/act.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/tests/test_prov.o: tests/test_prov.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
-$(BUILD)/test_prov: $(BUILD)/tests/test_prov.o $(addprefix $(BUILD)/src/,$(PROV) bus-file.o)
+$(BUILD)/test_prov: $(BUILD)/tests/test_prov.o $(addprefix $(BUILD)/src/,$(PROV) bus-file.o) \
+		    $(BUILD)/act.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/tests/test_auth.o: tests/test_auth.c
@@ -59,12 +72,11 @@ $(BUILD)/tests/test_auth.o: tests/test_auth.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
 $(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o $(PROV) bus-file.o) \
-		    $(BUILD)/mongoose.o
+		    $(BUILD)/mongoose.o $(BUILD)/act.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # The settings' rules are onu-config's, of onu-utils (ADR 0014): the tests of the
 # settings run it, built here from its sources.
-ONU_UTILS ?= ../onu-utils
 ONU_CONFIG_SRC := $(addprefix $(ONU_UTILS)/src/,onu-config.c cfgstore.c settings.c)
 
 $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)

@@ -45,4 +45,17 @@ struct bus_arg {
 int bus_call(const char *object, const char *method,
 	     const struct bus_arg *args, size_t nargs, char *out, size_t cap);
 
+/*
+ * Have onu-act do @method (onu-utils/src/act.h): the @n values @values of the
+ * params @names, NULL for one not given, and @input on the program's
+ * standard input when it is not NULL. What the program wrote goes in @out,
+ * of @cap bytes. Returns its exit status, as a run of the program would, or
+ * a negative errno when onu-act does not answer or refuses the values. A
+ * build without libubus runs the method's program itself, from
+ * $POND_<PROGRAM> when set (POND_ONU_LANE for onu-lane), for the tests.
+ */
+int bus_act(const char *method, const char *const *names,
+	    const char *const *values, size_t n, const char *input, char *out,
+	    size_t cap);
+
 #endif

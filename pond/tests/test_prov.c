@@ -1764,7 +1764,7 @@ static bool file_has(const char *path, const char *text)
 
 static void test_panel_values(void)
 {
-	char buf[4096], file[512], err[256], stub[512];
+	char buf[4096], file[512], err[256], stub[512], onu_config[512];
 	const char *s;
 	struct stat st;
 	int rc, e;
@@ -1787,9 +1787,11 @@ static void test_panel_values(void)
 	check(strstr(s, "\"sw_version0\":\"V1.0.0\"") && strstr(s, "\"sw_version1\":\"\""),
 	      "each software image's version is a field of its own");
 
+	/* onu-config is the stand-in for the identity alone. */
+	snprintf(onu_config, sizeof(onu_config), "%s", getenv("POND_ONU_CONFIG") ?: "");
 	put("/store-stub", store_stub, 0755);
-	setenv("POND_STORE", prov_path("/store-stub", stub, sizeof(stub)), 1);
-	setenv("POND_REIDENTIFY", "true", 1);
+	setenv("POND_ONU_CONFIG", prov_path("/store-stub", stub, sizeof(stub)), 1);
+	setenv("POND_ONU_APPLY", "true", 1);
 	check(prov_identity_set("SERIAL=XXXX", err, sizeof(err)) == -EINVAL,
 	      "a serial number of the wrong form is refused");
 	check(prov_identity_set("MODEL=a=b", err, sizeof(err)) == -EINVAL,
@@ -1808,20 +1810,13 @@ static void test_panel_values(void)
 	check(rc == 0 && file_has("/stored-identity", "SERIAL=000000000000\nVERSION=V2.0\n") &&
 		      !file_has("/stored-identity", "PLOAM"),
 	      "a good identity goes to onu-config, an empty PLOAM keeping the one there is");
-	for (int i = 0; i < 100; i++) {
-		prov_identity_reap();
-		pause_10ms();
-	}
 	rc = prov_identity_set("LOID=example7\nLOID_PASSWORD=\nOMCC_VERSION=0xA3\nTM_OPTION=2\n",
 			       err, sizeof(err));
 	check(rc == 0 &&
 		      file_has("/stored-identity", "LOID=example7\nOMCC_VERSION=0xA3\nTM_OPTION=2\n"),
 	      "a logical ONU ID and numbers in hexadecimal go to onu-config, an empty "
 	      "logical password keeping the one there is");
-	for (int i = 0; i < 100; i++) {
-		prov_identity_reap();
-		pause_10ms();
-	}
+	setenv("POND_ONU_CONFIG", onu_config, 1);
 
 	/* The sessions start from a stick without settings or accounts. */
 	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
@@ -1919,8 +1914,7 @@ static void test_panel_values(void)
 	rc = prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	(void)s;
-	unsetenv("POND_STORE");
-	unsetenv("POND_REIDENTIFY");
+	unsetenv("POND_ONU_APPLY");
 }
 
 /* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
@@ -1993,7 +1987,7 @@ static const char hostname_stub[] =
 
 static void test_system(void)
 {
-	char buf[2048], stub[512], err[256], path[512];
+	char buf[2048], stub[512], err[256], path[512], onu_config[512];
 	const char *s;
 	int e;
 
@@ -2039,7 +2033,8 @@ static void test_system(void)
 
 	put("/system-store", system_store_stub, 0755);
 	put("/hostname-stub", hostname_stub, 0755);
-	setenv("POND_STORE", prov_path("/system-store", stub, sizeof(stub)), 1);
+	snprintf(onu_config, sizeof(onu_config), "%s", getenv("POND_ONU_CONFIG") ?: "");
+	setenv("POND_ONU_CONFIG", prov_path("/system-store", stub, sizeof(stub)), 1);
 	setenv("POND_HOSTNAME", prov_path("/hostname-stub", path, sizeof(path)), 1);
 	check(prov_hostname_set("HOSTNAME=stick-7\n", err, sizeof(err)) == 0 &&
 		      file_has("/stored-system", "HOSTNAME=stick-7\n") &&
@@ -2049,7 +2044,7 @@ static void test_system(void)
 		      prov_hostname_set("HOSTNAME=a b\n", err, sizeof(err)) == -EINVAL &&
 		      prov_hostname_set("NAME=x\n", err, sizeof(err)) == -EINVAL,
 	      "a name that is not one of RFC 1123 is refused");
-	unsetenv("POND_STORE");
+	setenv("POND_ONU_CONFIG", onu_config, 1);
 	unsetenv("POND_HOSTNAME");
 }
 

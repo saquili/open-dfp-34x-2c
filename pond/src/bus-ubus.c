@@ -16,6 +16,7 @@
 
 #define TIMEOUT_MS 500
 #define CALL_TIMEOUT_MS 2000
+#define ACT_TIMEOUT_MS 120000
 
 static struct ubus_context *g_ctx;
 static struct blob_attr *g_reply;
@@ -165,4 +166,45 @@ int bus_call(const char *object, const char *method,
 	memcpy(out, text, len + 1);
 	free(text);
 	return (int)len;
+}
+
+int bus_act(const char *method, const char *const *names,
+	    const char *const *values, size_t n, const char *input, char *out,
+	    size_t cap)
+{
+	enum { CODE, OUTPUT, __MAX };
+	static const struct blobmsg_policy policy[] = {
+		[CODE] = { .name = "code", .type = BLOBMSG_TYPE_INT32 },
+		[OUTPUT] = { .name = "output", .type = BLOBMSG_TYPE_STRING },
+	};
+	struct blob_attr *tb[__MAX];
+	struct blob_buf b = { 0 };
+	uint32_t id;
+	int err;
+
+	if (cap)
+		out[0] = '\0';
+	err = lookup("onu-act", &id);
+	if (err)
+		return err;
+	blob_buf_init(&b, 0);
+	for (size_t i = 0; i < n; i++)
+		if (values[i])
+			blobmsg_add_string(&b, names[i], values[i]);
+	if (input)
+		blobmsg_add_string(&b, "input", input);
+	free(g_reply);
+	g_reply = NULL;
+	err = ubus_invoke(g_ctx, id, method, b.head, got, NULL, ACT_TIMEOUT_MS);
+	blob_buf_free(&b);
+	if (err == UBUS_STATUS_INVALID_ARGUMENT)
+		return -EINVAL;
+	if (err || !g_reply)
+		return -EIO;
+	blobmsg_parse(policy, __MAX, tb, blob_data(g_reply), blob_len(g_reply));
+	if (!tb[CODE])
+		return -EIO;
+	if (tb[OUTPUT] && cap)
+		snprintf(out, cap, "%s", blobmsg_get_string(tb[OUTPUT]));
+	return (int)blobmsg_get_u32(tb[CODE]);
 }

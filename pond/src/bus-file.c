@@ -3,10 +3,13 @@
 
 /* bus.h from files, for the tests and a build without libubus. */
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "act.h"
 #include "bus.h"
 #include "prov.h"
 
@@ -48,4 +51,36 @@ int bus_call(const char *object, const char *method,
 	while (len > 0 && out[len - 1] == '\n')
 		out[--len] = '\0';
 	return (int)len;
+}
+
+int bus_act(const char *method, const char *const *names,
+	    const char *const *values, size_t n, const char *input, char *out,
+	    size_t cap)
+{
+	const struct act_method *m = act_find(method);
+	const char *given[ACT_PARAMS_MAX] = { NULL };
+	const char *argv[ACT_ARGV_MAX + 1], *bad, *base, *prog;
+	char env[64];
+	size_t k = 0;
+
+	if (cap)
+		out[0] = '\0';
+	if (!m)
+		return -ENOENT;
+	for (size_t p = 0; p < ACT_PARAMS_MAX && m->params[p].name; p++)
+		for (size_t i = 0; i < n; i++)
+			if (!strcmp(names[i], m->params[p].name))
+				given[p] = values[i];
+	if (act_argv(m, given, argv, &bad))
+		return -EINVAL;
+	/* The program from $POND_<ITS NAME>, for the tests. */
+	base = strrchr(m->program, '/') + 1;
+	k = (size_t)snprintf(env, sizeof(env), "POND_");
+	for (; *base && k + 1 < sizeof(env); base++)
+		env[k++] = *base == '-' ? '_' : (char)toupper((unsigned char)*base);
+	env[k] = '\0';
+	prog = getenv(env);
+	if (prog && *prog)
+		argv[0] = prog;
+	return prov_exec(argv[0], argv + 1, m->input ? input : NULL, out, cap);
 }

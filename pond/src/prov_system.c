@@ -7,12 +7,11 @@
  * scripts onu-lane and onu-mgmt change the last two so that a change the
  * host does not take cannot lock anyone out (a trial that ends by itself, a
  * new address beside the old one). A change of the management pair needs
- * the connection it came by, and is mgmt.c's; the reading is here.
- *
- * POND_STORE, POND_HOSTNAME, POND_ONU_LANE and POND_ONU_MGMT name other
- * programs, for the tests.
+ * the connection it came by, and is mgmt.c's; the reading is here. onu-act
+ * runs the programs (bus.h).
  */
 
+#include "bus.h"
 #include "prov.h"
 #include "providers.h"
 
@@ -21,17 +20,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* The helpers of onu-utils it runs, out of a person's way (ADR 0015). */
-#define ONU_LANE "/usr/lib/onu/onu-lane"
-#define ONU_MGMT "/usr/lib/onu/onu-mgmt"
-
-static const char *program(const char *env, const char *otherwise)
-{
-	const char *p = getenv(env);
-
-	return p && *p ? p : otherwise;
-}
 
 /* The value of KEY= in KEY=VALUE lines, or NULL. */
 static const char *line_of(const char *text, const char *key, char *out, size_t cap)
@@ -68,8 +56,9 @@ static bool host_name(const char *v)
 
 int prov_hostname_set(const char *val, char *err, size_t errcap)
 {
+	static const char *const names[] = { "name" };
 	char name[64], input[96], out[256];
-	const char *args[2] = { NULL, NULL };
+	const char *const values[] = { name };
 
 	if (!line_of(val, "HOSTNAME", name, sizeof(name)) || !host_name(name)) {
 		snprintf(err, errcap,
@@ -77,13 +66,11 @@ int prov_hostname_set(const char *val, char *err, size_t errcap)
 		return -EINVAL;
 	}
 	snprintf(input, sizeof(input), "HOSTNAME=%s\n", name);
-	args[0] = "system";
-	if (prov_exec(program("POND_STORE", "onu-config"), args, input, out, sizeof(out))) {
+	if (bus_act("system_store", NULL, NULL, 0, input, out, sizeof(out))) {
 		snprintf(err, errcap, "the name was not stored");
 		return -EIO;
 	}
-	args[0] = name;
-	if (prov_exec(program("POND_HOSTNAME", "hostname"), args, NULL, out, sizeof(out))) {
+	if (bus_act("hostname", names, values, 1, NULL, out, sizeof(out))) {
 		snprintf(err, errcap, "the name is stored, and taken at the next start");
 		return -EIO;
 	}
@@ -119,10 +106,9 @@ static void pv_line_str(struct prov_buf *out, const char *text, const char *key)
 
 int prov_sfp_lane(struct prov_buf *out)
 {
-	static const char *const args[] = { "status", NULL };
 	char text[512], v[32];
 
-	if (prov_exec(program("POND_ONU_LANE", ONU_LANE), args, NULL, text, sizeof(text)))
+	if (bus_act("lane_status", NULL, NULL, 0, NULL, text, sizeof(text)))
 		return -EIO;
 	pv_open(out, '{');
 	pv_key(out, "choice");
@@ -155,23 +141,24 @@ int prov_sfp_lane(struct prov_buf *out)
 
 int prov_sfp_lane_set(const char *val, char *err, size_t errcap)
 {
-	const char *args[3] = { NULL, NULL, NULL };
+	static const char *const names[] = { "mode" };
 	char mode[32], v[8], out[256];
+	const char *const values[] = { mode };
+	const char *method;
 	int rc;
 
 	if (line_of(val, "MODE", mode, sizeof(mode))) {
-		args[0] = "try";
-		args[1] = mode;
+		method = "lane_try";
 	} else if (line_of(val, "KEEP", v, sizeof(v))) {
-		args[0] = "keep";
+		method = "lane_keep";
 	} else if (line_of(val, "REVERT", v, sizeof(v))) {
-		args[0] = "revert";
+		method = "lane_revert";
 	} else {
 		snprintf(err, errcap, "MODE=setting, KEEP=1 or REVERT=1");
 		return -EINVAL;
 	}
-	rc = prov_exec(program("POND_ONU_LANE", ONU_LANE), args, NULL, out, sizeof(out));
-	if (rc == 2) {
+	rc = bus_act(method, names, values, 1, NULL, out, sizeof(out));
+	if (rc == 2 || rc == -EINVAL) {
 		snprintf(err, errcap, "not a setting of the lane");
 		return -EINVAL;
 	}
@@ -185,10 +172,9 @@ int prov_sfp_lane_set(const char *val, char *err, size_t errcap)
 
 int prov_mgmt(struct prov_buf *out)
 {
-	static const char *const args[] = { "status", NULL };
 	char text[512], v[32];
 
-	if (prov_exec(program("POND_ONU_MGMT", ONU_MGMT), args, NULL, text, sizeof(text)))
+	if (bus_act("mgmt_status", NULL, NULL, 0, NULL, text, sizeof(text)))
 		return -EIO;
 	pv_open(out, '{');
 	pv_key(out, "vlan");

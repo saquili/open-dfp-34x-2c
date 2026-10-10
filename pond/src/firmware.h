@@ -40,8 +40,9 @@ extern struct fw_upload fw_upload;
 const char *fw_program(void);
 
 /*
- * Run onu-update with @args (NULL-terminated, the program's name left out):
- * its standard output and error, together, in @out, NUL-terminated.
+ * onu-update's status, @args { "status", NULL }, or its try of a bank,
+ * { "try", BANK or NULL for the other }, through onu-act (bus.h): its
+ * standard output and error, together, in @out, NUL-terminated.
  * Return: its exit status, or a negative errno when it could not run.
  */
 int fw_run(const char *const *args, char *out, size_t cap);

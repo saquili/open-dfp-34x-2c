@@ -58,7 +58,6 @@ void prov_settings_reap(void);
 int prov_session_set(const char *val, char *err, size_t errcap);
 int prov_identity(struct prov_buf *out);
 int prov_identity_set(const char *val, char *err, size_t errcap);
-void prov_identity_reap(void);
 int prov_tc_rules(struct prov_buf *out);
 int prov_tconts(struct prov_buf *out);
 int prov_uboot_bank(const char *value);

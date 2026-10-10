@@ -8,23 +8,16 @@
  * its new address, which this daemon gives it as the address the request
  * came to, or takes them all back. The panel confirms them as soon as it
  * reaches the stick again. The daemon then listens on the management
- * address in use alone. POND_ONU_CHANGE names another program, for the
- * tests.
+ * address in use alone. onu-act runs onu-change (bus.h).
  */
 
+#include "bus.h"
 #include "changes.h"
 #include "mgmt.h"
 #include "prov.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-static const char *program(void)
-{
-	const char *p = getenv("POND_ONU_CHANGE");
-
-	return p && *p ? p : "/usr/lib/onu/onu-change";
-}
 
 /* Whether @body is "@key=1", with a line end or without. */
 static bool flag(struct mg_str body, const char *key)
@@ -48,25 +41,29 @@ static void reply(struct mg_connection *c, int code, const char *detail)
 
 void changes_set(struct mg_connection *c, struct mg_http_message *hm)
 {
-	const char *args[3] = { NULL, NULL, NULL };
+	static const char *const names[] = { "address" };
+	const char *values[1] = { NULL };
 	char current[24], pending[24], here[48], out[256];
+	const char *method;
 	int rc;
 
 	if (flag(hm->body, "CONFIRM")) {
 		mg_snprintf(here, sizeof(here), "%M", mg_print_ip, &c->loc);
-		args[0] = "confirm";
-		args[1] = here;
+		/* An IPv6 address is the bare address. */
+		values[0] = here + (here[0] == '[');
+		here[strcspn(here, "]")] = '\0';
+		method = "changes_confirm";
 	} else if (flag(hm->body, "REVERT")) {
-		args[0] = "revert";
+		method = "changes_revert";
 	} else {
 		reply(c, 400, "CONFIRM=1 or REVERT=1");
 		return;
 	}
 	mgmt_addresses(current, pending, sizeof(current));
-	rc = prov_exec(program(), args, NULL, out, sizeof(out));
+	rc = bus_act(method, names, values, 1, NULL, out, sizeof(out));
 	mgmt_settle(c->mgr, current, pending);
 	if (rc)
-		reply(c, 500, args[1] ? "not every change was kept" : "not every change was taken back");
+		reply(c, 500, values[0] ? "not every change was kept" : "not every change was taken back");
 	else
 		reply(c, 200, NULL);
 }
