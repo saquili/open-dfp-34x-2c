@@ -39,8 +39,9 @@ What is here
     The BusyBox configuration of the image: a complete one, with the applets that
     the boot script and a shell session use.
 ``board/dfp-34x-2c3/overlay/``
-    The files laid over the root filesystem: the inittab, the boot script
-    ``etc/init.d/rcS``, the shell profile, the name of the image, and the
+    The files laid over the root filesystem: the first program ``sbin/init``,
+    which starts procd, procd's inittab, the boot script ``etc/init.d/rcS``
+    (``etc/rc.d/S10boot``), the shell profile, the name of the image, and the
     ``var`` directory that a temporary file system is mounted on.
 ``board/dfp-34x-2c3/post-build.sh``
     The script that the build system runs on the target tree: it takes out the
@@ -203,8 +204,9 @@ has the commands, the sizes and how to put the images on the board. In short:
   The image is the LZMA-compressed legacy U-Boot image the boot loader takes.
 * The root filesystem is BusyBox 1.37.0 (``board/dfp-34x-2c3/busybox.config``),
   dropbear 2026.93, and the files of ``board/dfp-34x-2c3/overlay``. The build
-  system installs no init scripts (``BR2_INIT_NONE``): BusyBox init reads the
-  overlay's ``etc/inittab`` and runs its boot script, ``etc/init.d/rcS``.
+  system installs no init scripts (``BR2_INIT_NONE``): the overlay's
+  ``sbin/init`` starts procd, which reads the overlay's ``etc/inittab`` and
+  runs its boot script, ``etc/init.d/rcS`` (ADR 0013).
   The files that belong to one bench and not to the repository, an ssh key or
   other management addresses, are in a directory named by
   ``OPEN_DFP_34X_2C_LOCAL_OVERLAY``; the post-image script lays it over a copy of
