@@ -359,6 +359,11 @@ without it the images report the release of the running kernel and only the
 committed one is valid. Without the second the circuit packs report the unit's
 version.
 
+``/etc/board.conf`` may set ``CONSOLE_AUTOLOGIN=root``: the console then gives
+root's shell without asking for the password, so that a bench reaches the stick
+when its network does not (``onu-run console``). An image without the file asks
+for root's password there, as the ssh server and the panel do.
+
 The kernel's size
 =================
 
