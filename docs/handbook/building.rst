@@ -137,8 +137,8 @@ eight minutes on 12 CPUs. The first build downloads the sources of the packages
 of the defconfig besides the toolchain's (``br2-external/README.rst``); each is
 checked against the hash that the build system carries, and a file that does not
 match is refused. The programs of this tree (``omcid``, ``onu-utils``,
-``pppoed``, ``dhcp6d``, ``pond``) are built from the working tree, not
-downloaded. ``make``
+``pppoed``, ``dhcp6d``, ``pond``, ``netifd``) are built from the working tree,
+not downloaded. ``make``
 makes the cross toolchain first, with shared libraries only, then the kernel
 with it, then the programs of the image, and the host tools the images need
 (``mksquashfs``, ``mkimage``, the LZMA compressor; ``mksquashfs`` brings
@@ -226,6 +226,15 @@ The programs of the ONU, from this tree
     PPPoE client (``pppoed/README.rst``); ``dhcp6d``, which hands a session's
     delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
     HTTP status daemon (``pond/README.rst``).
+The network layer of OpenWrt
+    ``netifd``, the network interface daemon, from the fork in ``netifd/``,
+    and ``ubusd``, the message bus it answers on, with the libraries they load:
+    libubox, libubus, libuci, libblobmsg_json and json-c; libnl-tiny is linked
+    into ``netifd``. Buildroot builds them with
+    ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
+    command-line tools of these packages, ``ubus``, ``uci`` and ``jshn``, are
+    not in the image: the post-build script takes them out. The boot script
+    does not start the daemons yet.
 iproute2
     ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
     classifier and the PON driver, and ``bridge``, which shows the bridge's
