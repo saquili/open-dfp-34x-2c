@@ -1279,7 +1279,7 @@ static bool g_router_told;
 
 /*
  * The VLANs the stick's own sessions hold, by the VID they have on the PON
- * side: one VID a line in HELD_PATH, which onu-mode writes before it has the
+ * side: one VID a line in HELD_PATH, which onu-apply writes before it has the
  * data path programmed again (SIGUSR2). The OLT's VLAN rules into those
  * VLANs, and its bridge ports that carry nothing else, stay out of the
  * hardware, so that the VLANs' frames reach the sessions and no frame of the
@@ -1593,9 +1593,9 @@ static void run_publish(const char *path, const char *text, char *last,
 }
 
 /*
- * The VLANs the OLT lets through each GEM port, published for onu-mode: a
+ * The VLANs the OLT lets through each GEM port, published for onu-apply: a
  * "VID PORT-ID" line for each VID a GEM port's bridge port carries, held by
- * a session or not, in GEM_VLANS_PATH. onu-mode runs a session whose GEM
+ * a session or not, in GEM_VLANS_PATH. onu-apply runs a session whose GEM
  * port is "auto" on the GEM port that carries the session's VLAN on the
  * fibre, so that a session follows its service when the OLT moves it to
  * another port. The file is replaced whole, and only when it changes.
@@ -2712,9 +2712,9 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 }
 
 /*
- * The OLT's translations, published for onu-mode: a "SUB NET" line for each
+ * The OLT's translations, published for onu-apply: a "SUB NET" line for each
  * C-VID the OLT translates from the subscriber's side, held or not, with the
- * VID it leads into, in XLATE_PATH. onu-mode runs a session given the
+ * VID it leads into, in XLATE_PATH. onu-apply runs a session given the
  * subscriber's VID of a translation in the VID it leads into, as the
  * subscriber's frames would leave. The file is replaced whole, and only when
  * it changes.

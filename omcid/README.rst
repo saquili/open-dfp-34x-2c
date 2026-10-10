@@ -107,7 +107,7 @@ the OLT provisions out of the hardware, so the GEM interfaces stay out of any
 bridge and the stick's router uses them.
 
 Beside the stick's own PPPoE sessions the daemon bridges what the OLT
-provisions but the sessions' VLANs, which ``onu-mode`` writes, by their VID on
+provisions but the sessions' VLANs, which ``onu-apply`` writes, by their VID on
 the PON side, one per line, to ``/run/onu-held-vlans`` before it sends SIGUSR2.
 The VLAN rules into those VLANs stay out of the hardware, and so does a bridge
 port that carries nothing else, such as the GEM ports of an Internet service
@@ -118,11 +118,11 @@ and the stick then leaves it out altogether, as in router mode.
 
 The daemon also writes the OLT's VLAN translations to ``/run/omcid-xlate``: a
 ``SUB NET`` line for each VID it translates from the subscriber's side, with the
-VID it leads into on the fibre. ``onu-mode`` runs a session that was given the
+VID it leads into on the fibre. ``onu-apply`` runs a session that was given the
 subscriber's VID, the one a router behind the stick would use, in the VID it
 leads into. And it writes the VLANs the OLT lets through each GEM port to
 ``/run/omcid-gem-vlans``: a ``VID PORT-ID`` line for each VID a GEM port's
-bridge port carries. ``onu-mode`` runs a session whose GEM port is ``auto`` on
+bridge port carries. ``onu-apply`` runs a session whose GEM port is ``auto`` on
 the GEM port that carries the session's VID on the fibre. Both files are
 replaced whole, and only when what they say changes, so that a session follows
 its service when the OLT moves it to another VID or another GEM port.
