@@ -20,7 +20,7 @@ static const char *program(void)
 {
 	const char *p = getenv("POND_ONU_MGMT");
 
-	return p && *p ? p : "onu-mgmt";
+	return p && *p ? p : "/usr/lib/onu/onu-mgmt";
 }
 
 static bool line_value(struct mg_str body, const char *key, char *out, size_t cap)

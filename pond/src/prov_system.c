@@ -22,6 +22,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The helpers of onu-utils it runs, out of a person's way (ADR 0015). */
+#define ONU_LANE "/usr/lib/onu/onu-lane"
+#define ONU_MGMT "/usr/lib/onu/onu-mgmt"
+
 static const char *program(const char *env, const char *otherwise)
 {
 	const char *p = getenv(env);
@@ -118,7 +122,7 @@ int prov_sfp_lane(struct prov_buf *out)
 	static const char *const args[] = { "status", NULL };
 	char text[512], v[32];
 
-	if (prov_exec(program("POND_ONU_LANE", "onu-lane"), args, NULL, text, sizeof(text)))
+	if (prov_exec(program("POND_ONU_LANE", ONU_LANE), args, NULL, text, sizeof(text)))
 		return -EIO;
 	pv_open(out, '{');
 	pv_key(out, "choice");
@@ -166,7 +170,7 @@ int prov_sfp_lane_set(const char *val, char *err, size_t errcap)
 		snprintf(err, errcap, "MODE=setting, KEEP=1 or REVERT=1");
 		return -EINVAL;
 	}
-	rc = prov_exec(program("POND_ONU_LANE", "onu-lane"), args, NULL, out, sizeof(out));
+	rc = prov_exec(program("POND_ONU_LANE", ONU_LANE), args, NULL, out, sizeof(out));
 	if (rc == 2) {
 		snprintf(err, errcap, "not a setting of the lane");
 		return -EINVAL;
@@ -184,7 +188,7 @@ int prov_mgmt(struct prov_buf *out)
 	static const char *const args[] = { "status", NULL };
 	char text[512], v[32];
 
-	if (prov_exec(program("POND_ONU_MGMT", "onu-mgmt"), args, NULL, text, sizeof(text)))
+	if (prov_exec(program("POND_ONU_MGMT", ONU_MGMT), args, NULL, text, sizeof(text)))
 		return -EIO;
 	pv_open(out, '{');
 	pv_key(out, "vlan");
