@@ -240,6 +240,13 @@ class Inittab(unittest.TestCase):
             self.assertEqual(len(fields), 4, line)
             self.assertIn(fields[2], self.ACTIONS, line)
 
+    def test_procd_reads_every_entry_whole(self):
+        # procd reads 127 characters of a line and 7 words of a command
+        # (LINE_LEN and MAX_ARGS of inittab.c); more are dropped silently.
+        for line in self.entries():
+            self.assertLessEqual(len(line), 127, line)
+            self.assertLessEqual(len(line.split(":", 3)[3].split()), 7, line)
+
     def test_the_boot_script_is_run_at_sysinit(self):
         # procd runs /etc/rc.d/S* with "boot" (FirstProgram links the script).
         self.assertIn("::sysinit:/etc/init.d/rcS S boot", list(self.entries()))

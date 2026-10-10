@@ -3,14 +3,15 @@
 #
 # procd reads this file once ubusd runs. The format is
 # <id>:<runlevels>:<action>:<process>: the id names the terminal (empty: none,
-# the program's output goes to procd's log), the runlevels are ignored.
+# the program reads and writes /dev/null), the runlevels are ignored.
 # procd starts the "respawn" programs first, then runs the boot script, and
 # once it is done the "respawnlate" ones; a program of either kind that ends
-# is started again half a second later.
+# is started again half a second later. procd reads up to 127 characters of a
+# line and the first 7 words of a command: a longer one is cut short.
 
-# The system log, in memory: syslogd keeps /run/messages and one older copy, of
-# 64 KiB each, and klogd copies the kernel's messages into it.
-::respawn:/sbin/syslogd -n -O /run/messages -s 64 -b 1
+# The system log, in memory: syslogd keeps /run/messages and one older copy
+# (its default), of 64 KiB each, and klogd copies the kernel's messages into it.
+::respawn:/sbin/syslogd -n -O /run/messages -s 64
 ::respawn:/sbin/klogd -n
 
 # netifd brings up the interfaces that its configuration in /run/config names;

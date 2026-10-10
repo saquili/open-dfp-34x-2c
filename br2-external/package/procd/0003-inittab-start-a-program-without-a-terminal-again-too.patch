@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pawe=C5=82=20Phan?= <szop.hektar_1w@icloud.com>
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Subject: [PATCH] inittab: start a program without a terminal again too
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An inittab entry whose id names no terminal, "::respawn:/sbin/syslogd",
+runs with /dev/null for its input and output. When it ends, procd starts
+it again only if its terminal still exists, and for an empty id it looks
+for /dev/ itself, which open() does not take: such a program ran once
+and never again. OpenWrt's inittab has only the console's entries, so
+nothing there showed it.
+
+The terminal is now looked for only when the entry names one.
+
+Upstream: not submitted
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ inittab.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/inittab.c b/inittab.c
+index 46ca796..f93ac68 100644
+--- a/inittab.c
++++ b/inittab.c
+@@ -126,7 +126,8 @@ static void child_exit(struct uloop_process *proc, int ret)
+ 	if (a->respawn < 0)
+ 		return;
+ 
+-	if (!dev_exist(a->id)) {
++	/* A program with no terminal of its own has none to lose. */
++	if (a->id && *a->id && !dev_exist(a->id)) {
+ 		DEBUG(4, "Skipping respawn: device '%s' does not exist anymore\n", a->id);
+ 		return;
+ 	}
