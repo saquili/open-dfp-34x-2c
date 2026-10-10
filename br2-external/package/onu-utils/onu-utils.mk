@@ -17,20 +17,20 @@ define ONU_UTILS_BUILD_CMDS
 endef
 
 define ONU_UTILS_INSTALL_TARGET_CMDS
-	$(INSTALL) -D -m 0755 $(@D)/build/ponid $(TARGET_DIR)/usr/sbin/ponid
+	$(INSTALL) -D -m 0755 $(@D)/build/ponid $(TARGET_DIR)/usr/lib/onu/ponid
 	$(INSTALL) -D -m 0755 $(@D)/build/pon $(TARGET_DIR)/usr/sbin/pon
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-config $(TARGET_DIR)/usr/sbin/onu-config
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-update $(TARGET_DIR)/usr/sbin/onu-update
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-svc $(TARGET_DIR)/usr/sbin/onu-svc
-	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-trial $(TARGET_DIR)/usr/sbin/onu-trial
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-trial $(TARGET_DIR)/usr/lib/onu/onu-trial
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-apply $(TARGET_DIR)/usr/sbin/onu-apply
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-config.sh $(TARGET_DIR)/usr/lib/onu/onu-config.sh
-	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-lane $(TARGET_DIR)/usr/sbin/onu-lane
-	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mgmt $(TARGET_DIR)/usr/sbin/onu-mgmt
-	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-net $(TARGET_DIR)/usr/sbin/onu-net
-	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-run $(TARGET_DIR)/usr/sbin/onu-run
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-lane $(TARGET_DIR)/usr/lib/onu/onu-lane
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-mgmt $(TARGET_DIR)/usr/lib/onu/onu-mgmt
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-net $(TARGET_DIR)/usr/lib/onu/onu-net
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-run $(TARGET_DIR)/usr/lib/onu/onu-run
 	$(INSTALL) -D -m 0755 $(@D)/scripts/passwd $(TARGET_DIR)/usr/bin/passwd
-	$(INSTALL) -D -m 0755 $(@D)/scripts/dhcp-wan $(TARGET_DIR)/usr/share/onu/dhcp-wan
+	$(INSTALL) -D -m 0755 $(@D)/scripts/dhcp-wan $(TARGET_DIR)/usr/lib/onu/dhcp-wan
 endef
 
 $(eval $(generic-package))

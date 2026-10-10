@@ -86,9 +86,9 @@ class BootScript(unittest.TestCase):
         order = ["onu-svc start syslogd -- /sbin/syslogd -n ", "onu-svc start klogd -- ",
                  'onu-mgmt start "$MGMT_VLAN"', "onu-svc start netifd -- /usr/sbin/netifd ",
                  'onu-net wait mgmt "$MGMT_ADDRESS" 10',
-                 "onu-svc start ssh -- /usr/sbin/onu-run ssh",
-                 "onu-svc start pond -- /usr/sbin/onu-run pond",
-                 "onu-svc start ntp -l -- /usr/sbin/onu-run ntp"]
+                 "onu-svc start ssh -- /usr/lib/onu/onu-run ssh",
+                 "onu-svc start pond -- /usr/lib/onu/onu-run pond",
+                 "onu-svc start ntp -l -- /usr/lib/onu/onu-run ntp"]
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))
 
@@ -200,6 +200,21 @@ class FirstProgram(unittest.TestCase):
         self.assertIn('SEARCH = ("lib", "usr/lib")', trim)
 
 
+class Names(unittest.TestCase):
+    def test_a_person_sees_only_the_programs_for_a_person(self):
+        # ADR 0015: the helpers only programs run are in /usr/lib/onu.
+        recipe = read(os.path.join(os.path.dirname(BOARD), "..", "package", "onu-utils",
+                                   "onu-utils.mk"))
+        installed = dict(re.findall(r"\$\(@D\)/(?:build|scripts)/(\S+) \$\(TARGET_DIR\)(\S+)",
+                                    recipe))
+        for helper in ("ponid", "onu-mgmt", "onu-net", "onu-run", "onu-lane", "onu-trial",
+                       "onu-config.sh", "dhcp-wan"):
+            self.assertEqual(installed[helper], "/usr/lib/onu/" + helper)
+        for program in ("onu-config", "onu-apply", "onu-update", "onu-svc", "pon"):
+            self.assertEqual(installed[program], "/usr/sbin/" + program)
+        self.assertIn(":/usr/lib/onu\n", read(RCS))
+
+
 class Watchdog(unittest.TestCase):
     def test_procd_alone_feeds_it(self):
         # procd sets the driver's timeout to 30 s and feeds it every 5 s, from
@@ -301,12 +316,12 @@ class Inittab(unittest.TestCase):
     def test_the_programs_are_the_boot_scripts_services_not_its_own(self):
         # Only the console's login is a program of the inittab (BootScript).
         programs = [e for e in self.entries() if ":respawn" in e]
-        self.assertEqual(programs, ["console::respawnlate:/usr/sbin/onu-run console"])
+        self.assertEqual(programs, ["console::respawnlate:/usr/lib/onu/onu-run console"])
 
     def test_the_console_asks_for_root_and_its_password_again_after_each_session(self):
         entries = list(self.entries())
         # onu-run console runs getty, or on a bench that asks for it login -f.
-        self.assertIn("console::respawnlate:/usr/sbin/onu-run console", entries)
+        self.assertIn("console::respawnlate:/usr/lib/onu/onu-run console", entries)
         self.assertFalse([e for e in entries if e.endswith(":-/bin/sh")],
                          "a shell without a login on the console")
 

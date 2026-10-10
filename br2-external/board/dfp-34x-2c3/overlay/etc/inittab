@@ -27,4 +27,4 @@
 # (onu-config keeps it; until one is set it is "admin"). A bench may have root's
 # shell there without the password (onu-run, CONSOLE_AUTOLOGIN in
 # /etc/board.conf). The speed stays the one the boot loader set, 115200 baud.
-console::respawnlate:/usr/sbin/onu-run console
+console::respawnlate:/usr/lib/onu/onu-run console

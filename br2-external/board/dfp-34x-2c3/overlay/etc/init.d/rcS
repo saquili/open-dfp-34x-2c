@@ -14,7 +14,8 @@
 # The root file system is read-only. Everything that is written lives in memory
 # and is gone at the next restart.
 
-PATH=/sbin:/usr/sbin:/bin:/usr/bin
+# /usr/lib/onu holds the helpers of this tree that only programs run (ADR 0015).
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/lib/onu
 export PATH
 
 # The management addresses are in the ranges that RFC 5737 reserves for
@@ -172,17 +173,17 @@ tc qdisc add dev pon clsact &&
 # procd starts again listens on the pair in use then (onu-mgmt).
 data=${DATA_ADDRESS%/*}
 mgmt=${MGMT_ADDRESS%/*}
-onu-svc start ssh -- /usr/sbin/onu-run ssh || {
+onu-svc start ssh -- /usr/lib/onu/onu-run ssh || {
 	warn "the ssh server is no service of procd: started once"
 	onu-run ssh &
 }
-onu-svc start pond -- /usr/sbin/onu-run pond || warn "no status daemon"
+onu-svc start pond -- /usr/lib/onu/onu-run pond || warn "no status daemon"
 
 # The time, which the stick has no clock of its own for and the OLT does not
 # give: ntpd sets the clock from the router at the other end of the
 # management link, or from the server the settings name (NTP_SERVER), and
 # keeps it, through the host side alone (onu-run).
-onu-svc start ntp -l -- /usr/sbin/onu-run ntp || warn "the clock is not set"
+onu-svc start ntp -l -- /usr/lib/onu/onu-run ntp || warn "the clock is not set"
 
 # The identity to the PON driver, which takes it before the PON comes up.
 onu-apply identity || warn "the PON stays down"
