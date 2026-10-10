@@ -10,6 +10,17 @@
  *   onucfg [--store PATH] unset KEY      remove KEY
  *   onucfg [--store PATH] import         set every KEY=VALUE line of the
  *                                        standard input, in one write
+ *   onucfg check                         the settings of the data path on
+ *                                        the standard input, judged
+ *   onucfg settings                      the same, taken as they come
+ *
+ * check and settings read KEY=VALUE lines of the data path's settings and
+ * PPPoE accounts, a later line over an earlier one (settings.h), and print
+ * the settings with every default filled in and the keys of before taken
+ * over, never an account. check refuses a set with a line that is not a
+ * setting or a value, or settings that make no sense together, and says
+ * why; settings leaves such a line out, says so on the standard error, and
+ * judges nothing. They need no store.
  *
  * The store is a file or an MTD character device; --store or ONUCFG_STORE
  * names it, and --size gives the size of a store that does not exist yet. A
@@ -35,6 +46,7 @@
 #include <mtd/mtd-user.h>
 
 #include "cfgstore.h"
+#include "settings.h"
 
 /* A store at most this big, so a bad --size cannot ask for a huge buffer. */
 #define REGION_MAX (1u << 20)
@@ -108,6 +120,51 @@ static int import_lines(FILE *in, char *payload, size_t cap)
 	return err;
 }
 
+/* The longest set of settings that check and settings take. */
+#define SETTINGS_TEXT_MAX 16384
+
+/* check (@strict) or settings, on the standard input and output. */
+static int settings_cmd(bool strict)
+{
+	static char text[SETTINGS_TEXT_MAX], out[SETTINGS_TEXT_MAX];
+	struct settings s;
+	char err[160], *line, *save = NULL;
+	size_t len = fread(text, 1, sizeof(text), stdin);
+	int rc = 1;
+
+	if (len == sizeof(text)) {
+		fprintf(stderr, "onucfg: the settings are too long\n");
+		goto out;
+	}
+	text[len] = '\0';
+	settings_defaults(&s);
+	for (line = strtok_r(text, "\r\n", &save); line;
+	     line = strtok_r(NULL, "\r\n", &save)) {
+		if (!settings_line(&s, line, err, sizeof(err)))
+			continue;
+		if (strict) {
+			fprintf(stderr, "onucfg: %s\n", err);
+			goto out;
+		}
+		fprintf(stderr, "onucfg: %s; left out\n", err);
+	}
+	settings_settle(&s);
+	if (strict && !settings_coherent(&s, err, sizeof(err))) {
+		fprintf(stderr, "onucfg: %s\n", err);
+		goto out;
+	}
+	if (settings_format(&s, out, sizeof(out)) >= sizeof(out)) {
+		fprintf(stderr, "onucfg: the settings are too long\n");
+		goto out;
+	}
+	fputs(out, stdout);
+	rc = fflush(stdout) ? 1 : 0;
+out:
+	explicit_bzero(&s, sizeof(s));
+	explicit_bzero(text, sizeof(text));
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
 	const char *store = getenv("ONUCFG_STORE");
@@ -131,6 +188,14 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
+	if (optind < argc && (!strcmp(argv[optind], "check") ||
+			      !strcmp(argv[optind], "settings"))) {
+		if (argc - optind != 1) {
+			fputs("usage: onucfg check | settings\n", stderr);
+			return 2;
+		}
+		return settings_cmd(!strcmp(argv[optind], "check"));
+	}
 	if (!store) {
 		fprintf(stderr, "onucfg: no store (--store or ONUCFG_STORE)\n");
 		return 2;
@@ -152,7 +217,8 @@ int main(int argc, char **argv)
 	    (strcmp(verb, "get") && strcmp(verb, "set") && strcmp(verb, "unset") &&
 	     strcmp(verb, "list") && strcmp(verb, "import"))) {
 		fputs("usage: onucfg [--store PATH] [--size N] get KEY | list |\n"
-		      "              set KEY VALUE | unset KEY | import\n", stderr);
+		      "              set KEY VALUE | unset KEY | import\n"
+		      "       onucfg check | settings\n", stderr);
 		return 2;
 	}
 

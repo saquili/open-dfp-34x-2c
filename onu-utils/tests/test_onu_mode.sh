@@ -269,6 +269,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/lan")" = lan36 ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/hands")" = ipv4 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/dev")" = wan410 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
 check '[ "$(cat "$ONU_ROOT/run/session/1/ipv4")" = 192.0.2.2 ]'
@@ -411,6 +412,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" tick 2>/dev/null
 check 'logged "^pppoed up -i gem1024 -f $ONU_ROOT/run/onu-pppoe1 -D -P"'
+check '[ "$(cat "$ONU_ROOT/run/session/1/hands")" = "ipv4 ipv6" ]'
 check '! logged "type vlan id"'
 # The session holds the whole GEM port: omcid leaves the OLT's bridge out, and
 # every frame of the downstream ports goes to the session's GEM interface.
@@ -583,6 +585,7 @@ check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -4 -M$"'
 check '! logged "^ip link add link sfp"'
 check '! logged "^ip address add 169.254.0.1"'
 check '[ ! -e "$ONU_ROOT/run/session/1/lan" ]'
+check '[ -e "$ONU_ROOT/run/session/1/hands" ] && [ ! -s "$ONU_ROOT/run/session/1/hands" ]'
 check '! logged "^udhcpd"'
 check '[ ! -e "$ONU_ROOT/run/onu-pass" ]'
 "$MODE_SCRIPT" stop 2>/dev/null
@@ -621,6 +624,7 @@ check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P -M$"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -4 -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/lan")" = lan410 ]'
 check '[ ! -e "$ONU_ROOT/run/session/2/lan" ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/hands")" = ipv4 ] && [ ! -s "$ONU_ROOT/run/session/2/hands" ]'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
 

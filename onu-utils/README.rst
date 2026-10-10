@@ -30,6 +30,24 @@ The small programs of the ONU.
       onucfg --store /dev/mtd3 unset KEY
       onucfg --store /dev/mtd3 import <lines     # every KEY=VALUE, one write
 
+   It also holds the one table of the data path's settings (ADR 0014,
+   ``src/settings.h``): each key of ``/run/onu.conf``, the shape of its values
+   and its default, the PPPoE account of each session, and the rules that bind
+   them together, such as one session in a VLAN to the host handing its IPv4
+   address down. ``onucfg check`` takes a set of them on its input, a later
+   line over an earlier one, accounts among them, and prints the settings in
+   full: every default filled in, the keys of before taken over (the WAN's
+   VLAN, MAC address and GEM port as the first session's, ``LAN_VLAN`` as each
+   session's link to the host), never an account. It refuses a set with a
+   value not of its key's shape, a key that is no setting, or settings that
+   make no sense together, and says why, naming the key and never the value.
+   ``onucfg settings`` takes a set as it comes, for a reader: a line it cannot
+   take is left out, said on the standard error, and nothing is judged. The
+   status daemon asks them rather than knowing the rules::
+
+      onucfg check <settings       # the settings in full, or why not
+      onucfg settings <settings    # the same, without judging
+
 ``onu-store``
    keeps the unit's identity (keys ``ID_*``), its settings (the keys of
    ``/run/onu.conf``) and its PPPoE account (``PPPOE_USER``,

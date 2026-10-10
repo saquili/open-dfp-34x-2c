@@ -47,7 +47,8 @@
 # carries IPv4 hands its address and its name servers down, and the first
 # that carries IPv6 its delegated prefix, through dhcp6d, once its IPv6 is
 # up; the others keep theirs on the stick. What a session has is in the
-# directory /run/session/N: gem, dev and family, lan where it hands down, and
+# directory /run/session/N: gem, dev and family, hands, the families it hands
+# down ("ipv4 ipv6", one of them or nothing), lan where it hands down, and
 # once it is up ppp, ipv4, ipv6 and dns, and pass and gateway once its
 # address went down. MODE=router, kept for the bench, is the one setting of a
 # shape.
@@ -858,6 +859,14 @@ session_up() {
 	if [ "$role" != none ] || [ "$role6" != none ]; then
 		link_of "$(down_vlan "$n")" >"$SESSIONS/$n/lan"
 	fi
+	# What it hands down, for the status daemon, which shows what the stick
+	# does rather than work it out again.
+	hands=
+	[ "$role" != none ] && hands=ipv4
+	[ "$role6" != none ] && hands="${hands:+$hands }ipv6"
+	if [ -n "$hands" ]; then
+		echo "$hands"
+	fi >"$SESSIONS/$n/hands"
 	pppoe_loop "$n" "$dev" "$opts" "$role" "$role6" &
 	echo $! >"$RUN/pppoe-loop$n.pid"
 	log "session $n on $dev ($fam), GEM port ${gem#gem}"
