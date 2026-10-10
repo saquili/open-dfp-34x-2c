@@ -50,11 +50,21 @@ there, and names it by its whole path where procd starts it.
    value not of its key's shape, a key that is no setting, or settings that
    make no sense together, and says why, naming the key and never the value.
    ``onu-config settings`` takes a set as it comes, for a reader: a line it cannot
-   take is left out, said on the standard error, and nothing is judged. The
-   status daemon asks them rather than knowing the rules::
+   take is left out, said on the standard error, and nothing is judged.
+   ``onu-config current`` reads the settings in force from the files of the
+   running system, ``/run/onu.conf`` and the accounts, ``/run/onu-pppoeN``,
+   which root alone may read, and prints them as ``settings`` does, with
+   each account's ``PPPOEn_USER`` and ``PPPOEn_SECRET_SET``, never its
+   secret; ``onu-config change`` takes a change on its input, judges it over
+   them as ``check`` does, and writes ``/run/onu.conf`` and the accounts that
+   changed, or says why not and writes nothing, for ``onu-apply try`` to
+   apply. The status daemon has onu-act run them, and knows neither the
+   rules nor the files::
 
       onu-config check <settings       # the settings in full, or why not
       onu-config settings <settings    # the same, without judging
+      onu-config current               # the settings in force, no secret
+      onu-config change <change        # the change written, or why not
 
 ``onu-config`` (the files)
    carries out, through ``onu-config.sh`` in ``/usr/lib/onu``, the verbs of the
@@ -312,8 +322,9 @@ there, and names it by its whole path where procd starts it.
    does, as root, what a program that runs as an account of its own may ask
    of the stick, and nothing else (ADR 0014): the status daemon's changes of
    the SFP lane, of the management pair, of the name and of the identity, the
-   confirmation of the changes on trial, the updates' status and trial, and
-   the restart. It is the object ``onu-act`` on ubus, with a method for each
+   confirmation of the changes on trial, the updates' status and trial, the
+   restart, and the settings of the data path (``onu-config current`` and
+   ``change``, then ``onu-apply try``). It is the object ``onu-act`` on ubus, with a method for each
    entry of its table (``src/act.c``): the method runs its program, with no
    shell, the caller's values in their places once each is short enough, of
    the characters its place allows and no option, and the caller's text,

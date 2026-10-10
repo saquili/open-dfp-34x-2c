@@ -43,7 +43,7 @@ static const char *run(const char *method, const char *const *values,
 static void test_the_table(void)
 {
 	puts("the table");
-	CHECK(act_method_count >= 17);
+	CHECK(act_method_count >= 20);
 	for (size_t i = 0; i < act_method_count; i++) {
 		const struct act_method *m = &act_methods[i];
 		size_t fixed = 0, params = 0;
@@ -89,6 +89,9 @@ static void test_values_in_their_places(void)
 	CHECK(!strcmp(run("restart", NULL, &bad), "/sbin/reboot"));
 	CHECK(act_find("system_store")->input && act_find("identity_store")->input);
 	CHECK(act_find("reidentify")->background && act_find("restart")->background);
+	CHECK(!strcmp(run("settings_current", NULL, &bad), "/usr/sbin/onu-config current"));
+	CHECK(act_find("settings_change")->input && !act_find("settings_current")->input);
+	CHECK(!act_find("settings_try")->background && act_find("settings_try")->timeout_s >= 60);
 }
 
 static void test_what_is_refused(void)

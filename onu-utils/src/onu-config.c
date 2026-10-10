@@ -13,6 +13,14 @@
  *   onu-config check                         the settings of the data path on
  *                                            the standard input, judged
  *   onu-config settings                      the same, taken as they come
+ *   onu-config current                       the settings in force, of the
+ *                                            running system's files, with
+ *                                            each account's user and whether
+ *                                            its secret is set
+ *   onu-config change                        the change on the standard
+ *                                            input over the settings in
+ *                                            force, judged and written to
+ *                                            the running system's files
  *   onu-config load|save|migrate|identity|password|auth HASH|system|pd N
  *                                            the files the running system
  *                                            reads, to and from the store:
@@ -33,6 +41,17 @@
  * setting or a value, or settings that make no sense together, and says
  * why; settings leaves such a line out, says so on the standard error, and
  * judges nothing. They need no store.
+ *
+ * current and change read the settings in force from the files of the
+ * running system, /run/onu.conf and each session's account,
+ * /run/onu-pppoeN, which root alone may read (ONU_ROOT, when set, is put in
+ * front, for the tests). current prints them as settings does, and for each
+ * account PPPOEn_USER and PPPOEn_SECRET_SET, 1 or 0, never the secret.
+ * change takes KEY=VALUE lines over them, an account's among them, judges
+ * the whole as check does, and writes /run/onu.conf and the accounts that
+ * changed, each a new file renamed over the old; it says why when it
+ * refuses, and then writes nothing. onu-apply try applies what it wrote.
+ * The status daemon has them run through onu-act (ADR 0014).
  *
  * onu-config was onucfg and onu-store before (ADR 0015).
  */
@@ -205,6 +224,183 @@ static int files(char **args, const char *store)
 	return 127;
 }
 
+/* A path of the running system, with ONU_ROOT in front when set. */
+static void root_path(const char *path, int n, char *out, size_t cap)
+{
+	const char *root = getenv("ONU_ROOT");
+
+	if (n)
+		snprintf(out, cap, "%s%s%d", root ? root : "", path, n);
+	else
+		snprintf(out, cap, "%s%s", root ? root : "", path);
+}
+
+#define CONF_PATH "/run/onu.conf"
+#define ACCOUNT_PATH "/run/onu-pppoe"
+
+/*
+ * The settings in force: /run/onu.conf, then each session's account, "USER
+ * SECRET"; a line that is not taken is left out, and said.
+ */
+static void settings_in_force(struct settings *s)
+{
+	static char text[SETTINGS_TEXT_MAX];
+	char path[PATH_MAX], err[160], *line, *save = NULL;
+	char acct[SETTINGS_USER_MAX + SETTINGS_SECRET_MAX + 8];
+	char user[SETTINGS_USER_MAX + 1], secret[SETTINGS_SECRET_MAX + 1];
+	char kv[SETTINGS_SECRET_MAX + 32];
+	size_t len = 0;
+	FILE *f;
+
+	settings_defaults(s);
+	root_path(CONF_PATH, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	if (f) {
+		len = fread(text, 1, sizeof(text) - 1, f);
+		fclose(f);
+	}
+	text[len] = '\0';
+	for (line = strtok_r(text, "\r\n", &save); line;
+	     line = strtok_r(NULL, "\r\n", &save))
+		if (settings_line(s, line, err, sizeof(err)))
+			fprintf(stderr, "onu-config: %s; left out\n", err);
+	for (int n = 1; n <= SETTINGS_SESSIONS; n++) {
+		root_path(ACCOUNT_PATH, n, path, sizeof(path));
+		f = fopen(path, "r");
+		if (!f)
+			continue;
+		if (fgets(acct, sizeof(acct), f) &&
+		    sscanf(acct, "%63s %255s", user, secret) == 2) {
+			snprintf(kv, sizeof(kv), "PPPOE%d_USER=%s", n, user);
+			(void)settings_line(s, kv, err, sizeof(err));
+			snprintf(kv, sizeof(kv), "PPPOE%d_SECRET=%s", n, secret);
+			(void)settings_line(s, kv, err, sizeof(err));
+		}
+		fclose(f);
+	}
+	explicit_bzero(text, sizeof(text));
+	explicit_bzero(acct, sizeof(acct));
+	explicit_bzero(secret, sizeof(secret));
+	explicit_bzero(kv, sizeof(kv));
+}
+
+static int current_cmd(void)
+{
+	static char out[SETTINGS_TEXT_MAX];
+	struct settings s;
+	int rc = 1;
+
+	settings_in_force(&s);
+	settings_settle(&s);
+	if (settings_format(&s, out, sizeof(out)) >= sizeof(out)) {
+		fprintf(stderr, "onu-config: the settings are too long\n");
+		goto out;
+	}
+	fputs(out, stdout);
+	for (int n = 0; n < SETTINGS_SESSIONS; n++)
+		if (*s.acct[n].user)
+			printf("PPPOE%d_USER=%s\nPPPOE%d_SECRET_SET=%d\n", n + 1,
+			       s.acct[n].user, n + 1, *s.acct[n].secret != '\0');
+	rc = fflush(stdout) ? 1 : 0;
+out:
+	explicit_bzero(&s, sizeof(s));
+	return rc;
+}
+
+/* Write @text to @path through a new file renamed over it, with @mode. */
+static int write_file(const char *path, const char *text, mode_t mode)
+{
+	char tmp[PATH_MAX + 8];
+	size_t len = strlen(text);
+	int fd, err = 0;
+
+	snprintf(tmp, sizeof(tmp), "%s.new", path);
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode);
+	if (fd < 0)
+		return -errno;
+	if (fchmod(fd, mode))
+		err = -errno;
+	else if (write(fd, text, len) != (ssize_t)len)
+		err = -EIO;
+	if (close(fd) && !err)
+		err = -errno;
+	if (!err && rename(tmp, path))
+		err = -errno;
+	if (err)
+		unlink(tmp);
+	return err;
+}
+
+static int change_cmd(void)
+{
+	static char text[SETTINGS_TEXT_MAX], out[SETTINGS_TEXT_MAX + 64];
+	static struct settings s, before;
+	char err[160], path[PATH_MAX], *line, *save = NULL;
+	char acct[SETTINGS_USER_MAX + SETTINGS_SECRET_MAX + 4];
+	size_t len = fread(text, 1, sizeof(text), stdin);
+	int rc = 1, e;
+
+	if (len == sizeof(text)) {
+		fprintf(stderr, "onu-config: the settings are too long\n");
+		goto out;
+	}
+	text[len] = '\0';
+	settings_in_force(&s);
+	before = s;
+	for (line = strtok_r(text, "\r\n", &save); line;
+	     line = strtok_r(NULL, "\r\n", &save)) {
+		if (settings_line(&s, line, err, sizeof(err))) {
+			fprintf(stderr, "onu-config: %s\n", err);
+			goto out;
+		}
+	}
+	settings_settle(&s);
+	if (!settings_coherent(&s, err, sizeof(err))) {
+		fprintf(stderr, "onu-config: %s\n", err);
+		goto out;
+	}
+	len = (size_t)snprintf(out, sizeof(out),
+			       "# The settings of the data path, of onu-config change.\n");
+	if (len + settings_format(&s, out + len, sizeof(out) - len) >= sizeof(out)) {
+		fprintf(stderr, "onu-config: the settings are too long\n");
+		goto out;
+	}
+
+	/* The accounts that changed, then the settings. */
+	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
+		const struct settings_account *a = &s.acct[n], *b = &before.acct[n];
+
+		if (!strcmp(a->user, b->user) && !strcmp(a->secret, b->secret))
+			continue;
+		root_path(ACCOUNT_PATH, n + 1, path, sizeof(path));
+		if (*a->user) {
+			snprintf(acct, sizeof(acct), "%s %s\n", a->user, a->secret);
+			e = write_file(path, acct, 0600);
+		} else {
+			e = unlink(path) && errno != ENOENT ? -errno : 0;
+		}
+		if (e) {
+			fprintf(stderr, "onu-config: %s: %s\n", path, strerror(-e));
+			rc = 2;
+			goto out;
+		}
+	}
+	root_path(CONF_PATH, 0, path, sizeof(path));
+	e = write_file(path, out, 0644);
+	if (e) {
+		fprintf(stderr, "onu-config: %s: %s\n", path, strerror(-e));
+		rc = 2;
+		goto out;
+	}
+	rc = 0;
+out:
+	explicit_bzero(&s, sizeof(s));
+	explicit_bzero(&before, sizeof(before));
+	explicit_bzero(text, sizeof(text));
+	explicit_bzero(acct, sizeof(acct));
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
 	const char *store = getenv("ONU_STORE");
@@ -231,11 +427,18 @@ int main(int argc, char **argv)
 	if (optind < argc && files_verb(argv[optind]))
 		return files(argv + optind, store);
 	if (optind < argc && (!strcmp(argv[optind], "check") ||
-			      !strcmp(argv[optind], "settings"))) {
+			      !strcmp(argv[optind], "settings") ||
+			      !strcmp(argv[optind], "current") ||
+			      !strcmp(argv[optind], "change"))) {
 		if (argc - optind != 1) {
-			fputs("usage: onu-config check | settings\n", stderr);
+			fputs("usage: onu-config check | settings | current | change\n",
+			      stderr);
 			return 2;
 		}
+		if (!strcmp(argv[optind], "current"))
+			return current_cmd();
+		if (!strcmp(argv[optind], "change"))
+			return change_cmd();
 		return settings_cmd(!strcmp(argv[optind], "check"));
 	}
 	if (!store) {

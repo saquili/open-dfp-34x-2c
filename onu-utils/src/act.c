@@ -16,7 +16,10 @@
 /*
  * What the status daemon asks of the stick, as it ran it itself before
  * (pond/README.rst): the lane of the SFP port, the management pair, the
- * changes on trial, the name, the identity, the updates and the restart.
+ * changes on trial, the name, the identity, the updates, the restart, and
+ * the settings of the data path with the accounts, which the status daemon
+ * sees without their secrets (onu-config current) and changes on trial
+ * (onu-config change, then onu-apply try).
  */
 const struct act_method act_methods[] = {
 	{ .name = "lane_status", .program = LIB "onu-lane", .fixed = { "status" } },
@@ -44,6 +47,11 @@ const struct act_method act_methods[] = {
 	{ .name = "update_try", .program = "/usr/sbin/onu-update", .fixed = { "try" },
 	  .params = { { "bank", "01", 1, true } } },
 	{ .name = "restart", .program = "/sbin/reboot", .background = true },
+	{ .name = "settings_current", .program = "/usr/sbin/onu-config", .fixed = { "current" } },
+	{ .name = "settings_change", .program = "/usr/sbin/onu-config", .fixed = { "change" },
+	  .input = true },
+	{ .name = "settings_try", .program = "/usr/sbin/onu-apply", .fixed = { "try" },
+	  .timeout_s = 120 },
 };
 
 const size_t act_method_count = sizeof(act_methods) / sizeof(act_methods[0]);

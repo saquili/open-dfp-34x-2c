@@ -72,5 +72,47 @@ ONU_LIB=$T/nowhere "$ONUCFG" save </dev/null 2>/dev/null
 rc=$?
 check '[ $rc -eq 127 ]'
 
+echo "current: the settings in force, each account without its secret"
+R=$T/root
+mkdir -p "$R/run"
+printf '# a remark\nSESSION1_VLAN=410\nWAN_VLAN=4095\n' >"$R/run/onu.conf"
+printf 'bench not-a-real-one\n' >"$R/run/onu-pppoe1"
+chmod 600 "$R/run/onu-pppoe1"
+ONU_ROOT=$R "$ONUCFG" current </dev/null >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=410" "$T/out" && grep -qx "LAN_DHCP=on" "$T/out"'
+check 'grep -qx "PPPOE1_USER=bench" "$T/out" && grep -qx "PPPOE1_SECRET_SET=1" "$T/out"'
+check '! grep -q not-a-real-one "$T/out" && ! grep -q "^PPPOE2" "$T/out"'
+check 'grep -qx "onu-config: WAN_VLAN: not a value of it; left out" "$T/err"'
+
+echo "change: over the settings in force, written to their files"
+printf 'SESSION1_VLAN=36\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=36" "$R/run/onu.conf"'
+check '[ "$(cat "$R/run/onu-pppoe1")" = "bench not-a-real-one" ] && ! grep -q -e PPPOE -e bench "$R/run/onu.conf"'
+check '[ ! -e "$R/run/onu.conf.new" ] && [ "$(stat -c %a "$R/run/onu.conf")" = 644 ]'
+printf 'PPPOE2_USER=second\nPPPOE2_SECRET=s2-secret\nSESSION2_VLAN=40\n' |
+	ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && [ "$(cat "$R/run/onu-pppoe2")" = "second s2-secret" ]'
+check '[ "$(stat -c %a "$R/run/onu-pppoe2")" = 600 ] && grep -qx "SESSION2_VLAN=40" "$R/run/onu.conf"'
+check '! grep -q s2-secret "$R/run/onu.conf" "$T/out" "$T/err"'
+printf 'PPPOE2_USER=\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && [ ! -e "$R/run/onu-pppoe2" ] && ! grep -q "^SESSION2_" "$R/run/onu.conf"'
+check '[ -e "$R/run/onu-pppoe1" ] && grep -qx "SESSION1_VLAN=36" "$R/run/onu.conf"'
+
+echo "change refuses, says why, and writes nothing"
+cp "$R/run/onu.conf" "$T/conf.before"
+printf 'WAN_VLAN=4095\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 1 ] && grep -qx "onu-config: WAN_VLAN: not a value of it" "$T/err" && cmp -s "$R/run/onu.conf" "$T/conf.before"'
+printf 'PPPOE3_USER=third\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 1 ] && grep -q PPPOE3_SECRET "$T/err" && [ ! -e "$R/run/onu-pppoe3" ] && cmp -s "$R/run/onu.conf" "$T/conf.before"'
+"$ONUCFG" current extra </dev/null >/dev/null 2>&1
+rc=$?
+check '[ $rc -eq 2 ]'
+
 echo "test_onu_config_settings: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]
