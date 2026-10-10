@@ -5,9 +5,9 @@
  * Signing in to the panel: one user, root, the stick's one account, whose
  * password the console's login and the ssh server take too. onu-config keeps
  * its hash, of crypt()'s form, in the configuration store and in
- * /run/onu-auth; the panel checks it with crypt() and has onu-config hash a
- * new one. A few sessions, each a random id the browser holds in an
- * HttpOnly cookie.
+ * /run/onu-auth, which root alone reads: onu-config checks a password and
+ * hashes a new one, which the panel has onu-act run (ADR 0014). A few
+ * sessions, each a random id the browser holds in an HttpOnly cookie.
  *
  * Until a password is set, the password is "admin" and every session must
  * change it before it may do anything else. Five wrong passwords in a row
@@ -33,14 +33,14 @@
 #define AUTH_SECRET_MAX 128
 #define AUTH_HASH_MAX 160
 
-/*
- * The file of the hash (/run/onu-auth, which onu-config keeps) and the
- * program that stores a new password (onu-config, given "password" and the
- * password as the line of its standard input). The tests name others.
- */
-void auth_init(const char *hashfile, const char *store);
+/* No session, no failure, and whether the default password is in force, asked. */
+void auth_init(void);
 
-/** Whether the default password is the one in force. */
+/**
+ * Whether the default password is the one in force: as the start found it,
+ * and each sign-in and change since. A password set at the console counts
+ * from the next sign-in.
+ */
 bool auth_default_password(void);
 
 /**
@@ -72,17 +72,5 @@ void auth_sign_out(const char *id);
  */
 int auth_change(const char *current, const char *next, const char *keep,
 		time_t now, int *retry_after);
-
-/**
- * auth_verify() - Whether @secret matches @stored, compared in constant
- * time: a hash of crypt()'s form ("$5$...") through crypt(), or one of the
- * older form, "pbkdf2-sha256$ITERATIONS$SALT$HASH" with salt and hash in hex.
- */
-bool auth_verify(const char *secret, const char *stored);
-
-/** PBKDF2-HMAC-SHA256 (RFC 8018), one 32-byte block. */
-void auth_pbkdf2(const uint8_t *secret, size_t secret_len,
-		 const uint8_t *salt, size_t salt_len, unsigned int iterations,
-		 uint8_t out[32]);
 
 #endif

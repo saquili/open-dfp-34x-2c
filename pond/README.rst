@@ -24,8 +24,9 @@ What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 the confirmation of the changes on trial, the name, the identity and a new
 registration, the updates' status and trial, the restart, and the settings
 of the data path, which pond reads without the accounts' secrets and changes
-on trial. The password and the upload and download of an update it still
-runs itself, until the next parts of step 8 of ADR 0014 move them too.
+on trial, and root's password, which onu-config checks and keeps without
+pond seeing its hash. The upload and download of an update pond still runs
+itself, until the next part of step 8 of ADR 0014 moves them too.
 
 Signing in
 ==========
@@ -34,13 +35,17 @@ One user, ``root``, the stick's one account: the console's login and the ssh
 server take the same password (``docs/adr/0012-one-account-root.rst``). Its
 hash, of the form of ``crypt()`` (SHA-256, ``$5$``, made by ``onu-config
 password``), is kept in the configuration store, which ``onu-config`` puts in
-``/run/onu-auth`` at boot; pond checks a password with ``crypt()`` of the C
-library, about 0.5 s on the stick, during which it answers nothing else, and
-has ``onu-config password`` hash and keep a new one. Until a password is set, it
-is ``admin``, and a session may do nothing but set its own. A hash of the form
-pond made before, PBKDF2-HMAC-SHA256 (``pbkdf2-sha256$...``), is still taken,
-and the first sign-in with it has ``onu-config`` keep the password in
-``crypt()``'s form, which the console and ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
+``/run/onu-auth`` at boot, for root alone; pond has onu-act run
+``onu-config password-check`` on a password, which takes ``crypt()`` about
+0.5 s on the stick, during which pond answers nothing else, and ``onu-config
+password`` hash and keep a new one, and never reads the hash. Until a
+password is set, it is ``admin``, and a session may do nothing but set its
+own; pond asks which at the start (``onu-config password-state``) and knows
+it after each sign-in and change, so that one set at the console counts from
+the next sign-in. A hash of the form pond made before, PBKDF2-HMAC-SHA256
+(``pbkdf2-sha256$...``), is still taken, and the first sign-in with it has
+``onu-config`` keep the password in ``crypt()``'s form, which the console and
+ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
 ``SameSite=Strict`` cookie (``Secure`` behind a proxy that says HTTPS). There
 are at most three; a fourth sign-in ends the one idle the longest, and a
 session ends after 15 minutes without a request or 12 hours in all. Five wrong
@@ -186,9 +191,10 @@ settings start stand-ins for onu-config, onu-apply, onu-lane, onu-mgmt and
 hostname (``POND_ONU_CONFIG``, ``POND_ONU_APPLY``, ``POND_ONU_LANE``,
 ``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci`` read omcid's
 answer from ``run/ubus/omcid.mib``.
-The tests of the sign-in check PBKDF2 against RFC 7914's vectors, the stored
-form, the stop after wrong passwords, the end of sessions and a change of
-password.
+The tests of the sign-in run onu-config, behind a stand-in that keeps a new
+password, and check the default password, the stop after wrong passwords,
+the end of sessions, a change of password and a hash of the older form that
+a sign-in replaces; onu-utils tests the hashes themselves.
 
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,

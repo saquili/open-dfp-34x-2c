@@ -683,7 +683,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "pond: cannot lower its priority: %s\n", strerror(errno));
 
 	load_token();
-	auth_init(getenv("POND_AUTH_FILE"), getenv("POND_STORE"));
+	auth_init();
 	mg_mgr_init(&mgr);
 	/*
 	 * An address that is missing costs only its own listener: the others
