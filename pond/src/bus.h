@@ -58,16 +58,23 @@ int bus_act(const char *method, const char *const *names,
 	    const char *const *values, size_t n, const char *input, char *out,
 	    size_t cap);
 
-/*
- * Have onu-act start @method, with no values, and not wait for it: @done
- * is called from bus_poll() with the program's exit status, or a negative
- * errno when onu-act did not answer. One at a time. Returns 0, -EBUSY while
- * one runs, or another negative errno when it could not start.
- */
-int bus_act_start(const char *method, void (*done)(int code));
+/* What a run that bus_act_start() started wrote, at most this much. */
+#define BUS_OUTPUT_MAX 4096
 
-/* Whether what bus_act_start() started has not ended yet. */
-bool bus_act_running(void);
+/*
+ * Have onu-act start @method, with no values, and not wait for it. @fd, when
+ * not -1, goes to the program as its standard input or output, as the method
+ * takes it, and is no longer the caller's, whatever the result. @done is
+ * called from bus_poll() with the program's exit status, or a negative errno
+ * when onu-act did not answer, and what it wrote. A few methods run at once,
+ * each once. Returns 0, -EBUSY while @method runs, or another negative errno
+ * when it could not start.
+ */
+int bus_act_start(const char *method, int fd,
+		  void (*done)(int code, const char *output));
+
+/* Whether @method, started by bus_act_start(), has not ended yet. */
+bool bus_act_running(const char *method);
 
 /* Take what came of bus_act_start(): from the main loop, often. */
 void bus_poll(void);

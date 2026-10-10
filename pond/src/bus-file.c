@@ -4,6 +4,7 @@
 /* bus.h from files, for the tests and a build without libubus. */
 
 #include <ctype.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -91,47 +92,84 @@ int bus_act(const char *method, const char *const *names,
 	return prov_exec(argv[0], argv + 1, m->input ? input : NULL, out, cap);
 }
 
-/* What bus_act_start() started, and whom to tell. */
-static pid_t g_pid;
-static void (*g_done)(int code);
+/* What bus_act_start() started: a program each, whom to tell, its output. */
+#define SLOTS 4
 
-int bus_act_start(const char *method, void (*done)(int code))
+static struct slot {
+	const char *method;
+	pid_t pid;
+	int out;
+	void (*done)(int code, const char *output);
+} g_slots[SLOTS];
+
+int bus_act_start(const char *method, int fd,
+		  void (*done)(int code, const char *output))
 {
 	const struct act_method *m = act_find(method);
 	const char *argv[ACT_ARGV_MAX + 1], *bad;
+	struct slot *s = NULL;
+	int out[2];
 	pid_t pid;
 
-	if (g_pid > 0)
-		return -EBUSY;
-	if (!m)
-		return -ENOENT;
-	if (act_argv(m, NULL, argv, &bad))
-		return -EINVAL;
+	for (int i = 0; i < SLOTS && !s; i++)
+		if (!g_slots[i].method)
+			s = &g_slots[i];
+	if (!m || bus_act_running(method) || !s || act_argv(m, NULL, argv, &bad) ||
+	    pipe(out)) {
+		if (fd >= 0)
+			close(fd);
+		return !m ? -ENOENT : !s || bus_act_running(method) ? -EBUSY : -EINVAL;
+	}
 	argv[0] = program_of(m);
 	pid = fork();
-	if (pid < 0)
-		return -errno;
 	if (!pid) {
+		int null = open("/dev/null", O_RDWR);
+
+		dup2(m->fd_in && fd >= 0 ? fd : null, 0);
+		dup2(m->fd_out && fd >= 0 ? fd : out[1], 1);
+		dup2(out[1], 2);
+		close(out[0]);
 		execv(argv[0], (char *const *)argv);
 		_exit(127);
 	}
-	g_pid = pid;
-	g_done = done;
+	close(out[1]);
+	if (fd >= 0)
+		close(fd);
+	if (pid < 0) {
+		close(out[0]);
+		return -EIO;
+	}
+	fcntl(out[0], F_SETFL, O_NONBLOCK);
+	s->method = method;
+	s->pid = pid;
+	s->out = out[0];
+	s->done = done;
 	return 0;
 }
 
-bool bus_act_running(void)
+bool bus_act_running(const char *method)
 {
-	return g_pid > 0;
+	for (int i = 0; i < SLOTS; i++)
+		if (g_slots[i].method && !strcmp(g_slots[i].method, method))
+			return true;
+	return false;
 }
 
 void bus_poll(void)
 {
-	int st;
+	for (int i = 0; i < SLOTS; i++) {
+		struct slot *s = &g_slots[i];
+		char output[BUS_OUTPUT_MAX];
+		ssize_t n;
+		int st;
 
-	if (g_pid <= 0 || waitpid(g_pid, &st, WNOHANG) != g_pid)
-		return;
-	g_pid = 0;
-	if (g_done)
-		g_done(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+		if (!s->method || waitpid(s->pid, &st, WNOHANG) != s->pid)
+			continue;
+		n = read(s->out, output, sizeof(output) - 1);
+		output[n > 0 ? n : 0] = '\0';
+		close(s->out);
+		s->method = NULL;
+		if (s->done)
+			s->done(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st), output);
+	}
 }

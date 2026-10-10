@@ -19,9 +19,13 @@
  * and answers; the answer, and what the value "firmware" shows of the
  * upload, come from its exit status and its last message. One upload runs
  * at a time. A download streams the output of "onu-update read" the same
- * way, in chunks, as fast as the browser takes it.
+ * way, in chunks, as fast as the browser takes it. onu-act runs onu-update
+ * (bus.h): pond passes it one end of the pipe, and holds the other.
  */
 
+#define _GNU_SOURCE
+
+#include "bus.h"
 #include "firmware.h"
 #include "prov.h"
 
@@ -43,96 +47,29 @@
 #define FW_CHUNK (16u * 1024u)
 
 static struct {
-	pid_t pid;
+	bool running;			/* onu-update write - has not ended */
 	int in;				/* the pipe to its standard input */
 	struct mg_connection *c;	/* the sender, NULL once it is gone */
-} up = { .pid = -1, .in = -1 };
+} up = { .in = -1 };
 
 static struct {
-	pid_t pid;
+	bool running;			/* onu-update read has not ended */
+	bool ended;			/* it has, and its end waits to be told */
+	int status;
 	int out;			/* the pipe from its standard output */
 	struct mg_connection *c;
-} down = { .pid = -1, .out = -1 };
-
-static const char *log_path(void)
-{
-	const char *p = getenv("POND_UPDATE_LOG");
-
-	return p && *p ? p : "/run/pond-update.log";
-}
+} down = { .out = -1 };
 
 /*
- * Start onu-update with @args: its standard input from a pipe whose writing
- * end goes to *@in, or its standard output into a pipe whose reading end
- * goes to *@out; what it says on standard error, and on standard output
- * without @out, goes to the log. Both ends are non-blocking.
+ * What onu-update said, @text: its fields, and its complaints, the first,
+ * which is the cause, and the last, what became of the bank.
  */
-static pid_t spawn(const char *const *args, int *in, int *out)
-{
-	const char *argv[8];
-	int fds[2] = { -1, -1 }, log, n = 0;
-	sigset_t none;
-	pid_t pid;
-
-	argv[n++] = fw_program();
-	while (*args && n < 7)
-		argv[n++] = *args++;
-	argv[n] = NULL;
-	if (pipe(fds))
-		return -1;
-	log = open(log_path(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-	pid = fork();
-	if (pid < 0) {
-		close(fds[0]);
-		close(fds[1]);
-		if (log >= 0)
-			close(log);
-		return -1;
-	}
-	if (!pid) {
-		int null = open("/dev/null", O_RDWR);
-
-		signal(SIGPIPE, SIG_DFL);
-		signal(SIGINT, SIG_DFL);
-		signal(SIGTERM, SIG_DFL);
-		sigemptyset(&none);
-		sigprocmask(SIG_SETMASK, &none, NULL);
-		dup2(in ? fds[0] : null, 0);
-		dup2(out ? fds[1] : (log >= 0 ? log : null), 1);
-		dup2(log >= 0 ? log : null, 2);
-		close(fds[0]);
-		close(fds[1]);
-		execv(argv[0], (char *const *)argv);
-		_exit(127);
-	}
-	if (log >= 0)
-		close(log);
-	if (in) {
-		close(fds[0]);
-		*in = fds[1];
-	} else {
-		close(fds[1]);
-		*out = fds[0];
-	}
-	fcntl(in ? *in : *out, F_SETFL, O_NONBLOCK);
-	fcntl(in ? *in : *out, F_SETFD, FD_CLOEXEC);
-	return pid;
-}
-
-/*
- * What onu-update said, from the log: its fields, and its complaints, the
- * first, which is the cause, and the last, what became of the bank.
- */
-static void read_log(void)
+static void read_said(const char *text)
 {
 	static const char tag[] = "onu-update: ";
-	static char text[4096];
 	const char *first, *last = NULL, *p;
 	char bank[8];
-	size_t len = 0;
 
-	text[0] = '\0';
-	prov_slurp(log_path(), text, sizeof(text), &len);
 	if (fw_field(text, "BANK", bank, sizeof(bank)))
 		fw_upload.bank = atoi(bank);
 	fw_field(text, "VERSION", fw_upload.version, sizeof(fw_upload.version));
@@ -224,14 +161,16 @@ static void upload_fn(struct mg_connection *c, int ev, void *ev_data)
 	}
 }
 
+static void upload_ended(int status, const char *said);
+
 void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 {
-	static const char *const args[] = { "write", "-", NULL };
 	struct mg_str *cl = mg_http_get_header(hm, "Content-Length");
 	unsigned long long len = 0;
 	char num[24];
+	int fds[2], rc;
 
-	if (up.pid > 0 || down.pid > 0) {
+	if (up.running || down.running) {
 		reply(c, 409, "busy", "an update or a download is under way");
 		c->is_draining = 1;
 		return;
@@ -251,16 +190,24 @@ void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 	memset(&fw_upload, 0, sizeof(fw_upload));
 	fw_upload.bank = -1;
 	fw_upload.expected = (size_t)len;
-	up.pid = spawn(args, &up.in, NULL);
-	if (up.pid < 0) {
-		up.pid = -1;
+	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
+	if (!rc) {
+		/* The reading end goes to onu-act, whatever comes of it. */
+		rc = bus_act_start("update_write", fds[0], upload_ended);
+		if (rc)
+			close(fds[1]);
+	}
+	if (rc) {
 		fw_upload.state = FW_FAILED;
 		snprintf(fw_upload.message, sizeof(fw_upload.message),
-			 "onu-update did not start: %s", strerror(errno));
+			 "onu-update did not start: %s", strerror(-rc));
 		reply(c, 500, "not started", fw_upload.message);
 		c->is_draining = 1;
 		return;
 	}
+	up.in = fds[1];
+	fcntl(up.in, F_SETFL, O_NONBLOCK);
+	up.running = true;
 	fw_upload.state = FW_RECEIVING;
 	up.c = c;
 	/* The headers out of the buffer: mongoose then lets the body be ours. */
@@ -270,9 +217,14 @@ void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 }
 
 /* Send the sender its answer, when onu-update has finished. */
-static void upload_done(int status)
+static void upload_ended(int status, const char *said)
 {
-	read_log();
+	up.running = false;
+	if (up.in >= 0) {
+		close(up.in);
+		up.in = -1;
+	}
+	read_said(said);
 	fw_upload.state = status ? FW_FAILED : FW_DONE;
 	if (status && !fw_upload.message[0])
 		snprintf(fw_upload.message, sizeof(fw_upload.message),
@@ -311,22 +263,30 @@ static void download_fn(struct mg_connection *c, int ev, void *ev_data)
 		}
 	} else if (ev == MG_EV_CLOSE) {
 		down.c = NULL;
+		/* onu-update read ends at its next write. */
 		if (down.out >= 0) {
 			close(down.out);
 			down.out = -1;
 		}
-		if (down.pid > 0)
-			kill(down.pid, SIGTERM);
 	}
+}
+
+/* The end of onu-update read, told once its output has all been sent. */
+static void download_ended(int status, const char *said)
+{
+	(void)said;
+	down.running = false;
+	down.ended = true;
+	down.status = status;
 }
 
 void firmware_download(struct mg_connection *c)
 {
 	static const char *const status_args[] = { "status", NULL };
-	static const char *const args[] = { "read", NULL };
 	char text[2048], running[8], key[32], version[64] = "";
+	int fds[2], rc;
 
-	if (up.pid > 0 || down.pid > 0) {
+	if (up.running || down.running) {
 		reply(c, 409, "busy", "an update or a download is under way");
 		return;
 	}
@@ -339,12 +299,21 @@ void firmware_download(struct mg_connection *c)
 				   strlen(version))
 		snprintf(version, sizeof(version), "%s", "system");
 
-	down.pid = spawn(args, NULL, &down.out);
-	if (down.pid < 0) {
-		down.pid = -1;
-		reply(c, 500, "not started", strerror(errno));
+	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
+	if (!rc) {
+		/* The writing end goes to onu-act, whatever comes of it. */
+		rc = bus_act_start("update_read", fds[1], download_ended);
+		if (rc)
+			close(fds[0]);
+	}
+	if (rc) {
+		reply(c, 500, "not started", strerror(-rc));
 		return;
 	}
+	down.out = fds[0];
+	fcntl(down.out, F_SETFL, O_NONBLOCK);
+	down.running = true;
+	down.ended = false;
 	down.c = c;
 	c->fn = download_fn;
 	mg_printf(c,
@@ -379,7 +348,7 @@ bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
 	const char *args[3] = { "try", NULL, NULL };
 	char out[512], bank[2] = "";
 
-	if (up.pid > 0) {
+	if (up.running) {
 		reply(c, 409, "busy", "an update is under way");
 		return false;
 	}
@@ -405,19 +374,8 @@ bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
 
 void firmware_poll(void)
 {
-	int st;
-
-	if (up.pid > 0 && waitpid(up.pid, &st, WNOHANG) == up.pid) {
-		up.pid = -1;
-		if (up.in >= 0) {
-			close(up.in);
-			up.in = -1;
-		}
-		upload_done(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
-	}
-	if (down.pid > 0 && down.out < 0 &&
-	    waitpid(down.pid, &st, WNOHANG) == down.pid) {
-		down.pid = -1;
-		download_done(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+	if (down.ended && down.out < 0) {
+		down.ended = false;
+		download_done(down.status);
 	}
 }

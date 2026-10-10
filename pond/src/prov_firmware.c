@@ -23,13 +23,6 @@
 
 struct fw_upload fw_upload = { .bank = -1 };
 
-const char *fw_program(void)
-{
-	const char *prog = getenv("POND_ONU_UPDATE");
-
-	return prog && *prog ? prog : "/usr/sbin/onu-update";
-}
-
 int fw_run(const char *const *args, char *out, size_t cap)
 {
 	static const char *const names[] = { "bank" };

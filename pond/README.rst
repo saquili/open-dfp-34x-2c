@@ -24,9 +24,10 @@ What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 the confirmation of the changes on trial, the name, the identity and a new
 registration, the updates' status and trial, the restart, and the settings
 of the data path, which pond reads without the accounts' secrets and changes
-on trial, and root's password, which onu-config checks and keeps without
-pond seeing its hash. The upload and download of an update pond still runs
-itself, until the next part of step 8 of ADR 0014 moves them too.
+on trial, root's password, which onu-config checks and keeps without pond
+seeing its hash, and the upload and download of an update, which stream
+through a pipe whose other end pond passes to onu-act. pond runs no program
+of the stick itself.
 
 Signing in
 ==========
@@ -74,7 +75,7 @@ under way or one that failed, each bank's state, version, time and sizes, and an
 upload under way. ``POST /api/firmware/upload`` takes an update file as the
 body, with a Content-Length of at most 4 MiB: once its headers are in, the
 connection leaves the HTTP parser and the body streams into ``onu-update write
--``, the connection pausing while the pipe is full; the answer comes once the
+-``, which onu-act runs on the reading end of a pipe pond passes it, the connection pausing while the pipe is full; the answer comes once the
 bank was written and read back. One upload runs at a time. ``GET
 /api/firmware/download`` streams the running bank as an update file, in chunks.
 ``POST /api/firmware/try`` arms a start of the bank in the body, ``0`` or ``1``,

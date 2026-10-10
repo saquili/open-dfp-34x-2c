@@ -36,9 +36,6 @@ struct fw_upload {
 
 extern struct fw_upload fw_upload;
 
-/* The program onu-update, or the one POND_ONU_UPDATE names. */
-const char *fw_program(void);
-
 /*
  * onu-update's status, @args { "status", NULL }, or its try of a bank,
  * { "try", BANK or NULL for the other }, through onu-act (bus.h): its

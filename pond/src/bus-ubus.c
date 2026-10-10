@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,29 +88,35 @@ static void find(struct blob_attr *data, size_t len, const char *path, char *out
 	}
 }
 
-/* What bus_act_start() started: its request, whom to tell, and its status. */
-static struct ubus_request g_async;
-static void (*g_done)(int code);
-static bool g_running;
-static int g_async_code;
+/* What bus_act_start() started: a request each, whom to tell, and what came. */
+#define SLOTS 4
 
-/* The end of what bus_act_start() started, told once. */
-static void async_end(int code)
+static struct slot {
+	const char *method;
+	struct ubus_request req;
+	void (*done)(int code, const char *output);
+	int code;
+	char output[BUS_OUTPUT_MAX];
+} g_slots[SLOTS];
+
+/* The end of what @s ran, told once. */
+static void async_end(struct slot *s, int code)
 {
-	void (*done)(int) = g_done;
+	void (*done)(int, const char *) = s->done;
 
-	if (!g_running)
+	if (!s->method)
 		return;
-	g_running = false;
-	g_done = NULL;
+	s->method = NULL;
+	s->done = NULL;
 	if (done)
-		done(code);
+		done(code, s->output);
 }
 
 /* The connection gone: what it carried ends with it. */
 static void drop(void)
 {
-	async_end(-EIO);
+	for (int i = 0; i < SLOTS; i++)
+		async_end(&g_slots[i], -EIO);
 	ubus_free(g_ctx);
 	g_ctx = NULL;
 }
@@ -240,56 +247,79 @@ static void async_data(struct ubus_request *req, int type, struct blob_attr *msg
 {
 	static const struct blobmsg_policy policy[] = {
 		{ .name = "code", .type = BLOBMSG_TYPE_INT32 },
+		{ .name = "output", .type = BLOBMSG_TYPE_STRING },
 	};
-	struct blob_attr *tb[1];
+	struct slot *s = container_of(req, struct slot, req);
+	struct blob_attr *tb[2];
 
-	(void)req;
 	(void)type;
-	blobmsg_parse(policy, 1, tb, blob_data(msg), blob_len(msg));
-	g_async_code = tb[0] ? (int)blobmsg_get_u32(tb[0]) : -EIO;
+	blobmsg_parse(policy, 2, tb, blob_data(msg), blob_len(msg));
+	s->code = tb[0] ? (int)blobmsg_get_u32(tb[0]) : -EIO;
+	if (tb[1])
+		snprintf(s->output, sizeof(s->output), "%s", blobmsg_get_string(tb[1]));
 }
 
 static void async_complete(struct ubus_request *req, int ret)
 {
-	(void)req;
-	async_end(ret ? -EIO : g_async_code);
+	struct slot *s = container_of(req, struct slot, req);
+
+	async_end(s, ret ? -EIO : s->code);
 }
 
-int bus_act_start(const char *method, void (*done)(int code))
+bool bus_act_running(const char *method)
+{
+	for (int i = 0; i < SLOTS; i++)
+		if (g_slots[i].method && !strcmp(g_slots[i].method, method))
+			return true;
+	return false;
+}
+
+int bus_act_start(const char *method, int fd,
+		  void (*done)(int code, const char *output))
 {
 	struct blob_buf b = { 0 };
+	struct slot *s = NULL;
 	uint32_t id;
 	int err;
 
-	if (g_running)
+	for (int i = 0; i < SLOTS && !s; i++)
+		if (!g_slots[i].method)
+			s = &g_slots[i];
+	if (bus_act_running(method) || !s) {
+		if (fd >= 0)
+			close(fd);
 		return -EBUSY;
+	}
 	err = lookup("onu-act", &id);
-	if (err)
+	if (err) {
+		if (fd >= 0)
+			close(fd);
 		return err;
+	}
 	blob_buf_init(&b, 0);
-	err = ubus_invoke_async(g_ctx, id, method, b.head, &g_async);
+	/* libubus closes @fd once it has sent it, or could not. */
+	err = ubus_invoke_async_fd(g_ctx, id, method, b.head, &s->req, fd);
 	blob_buf_free(&b);
 	if (err)
 		return -EIO;
-	g_async.data_cb = async_data;
-	g_async.complete_cb = async_complete;
-	g_async_code = -EIO;
-	g_done = done;
-	g_running = true;
-	ubus_complete_request_async(g_ctx, &g_async);
+	s->req.data_cb = async_data;
+	s->req.complete_cb = async_complete;
+	s->code = -EIO;
+	s->output[0] = '\0';
+	s->done = done;
+	s->method = method;
+	ubus_complete_request_async(g_ctx, &s->req);
 	return 0;
-}
-
-bool bus_act_running(void)
-{
-	return g_running;
 }
 
 void bus_poll(void)
 {
 	struct pollfd p;
+	bool any = false;
 
-	if (!g_ctx || !g_running)
+	for (int i = 0; i < SLOTS; i++)
+		any |= g_slots[i].method != NULL;
+	if (!g_ctx || !any)
 		return;
 	p.fd = g_ctx->sock.fd;
 	p.events = POLLIN;

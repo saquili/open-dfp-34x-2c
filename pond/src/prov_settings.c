@@ -132,8 +132,9 @@ void prov_settings_reap(void)
 }
 
 /* The end of onu-apply try. */
-static void applied(int code)
+static void applied(int code, const char *output)
 {
+	(void)output;
 	g_apply_status = code < 0 ? 255 : code;
 }
 
@@ -432,7 +433,7 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 
 	pv_key(out, "applying");
-	pv_bool(out, bus_act_running());
+	pv_bool(out, bus_act_running("settings_try"));
 	pv_comma(out);
 	pv_key(out, "last_apply_status");
 	if (g_apply_status < 0)
@@ -449,7 +450,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 	int rc;
 
 	prov_settings_reap();
-	if (bus_act_running()) {
+	if (bus_act_running("settings_try")) {
 		snprintf(err, errcap, "the last change is still being applied");
 		return -EBUSY;
 	}
@@ -470,7 +471,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		return -EIO;
 	}
 
-	rc = bus_act_start("settings_try", applied);
+	rc = bus_act_start("settings_try", -1, applied);
 	if (rc)
 		snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
 	return rc;
