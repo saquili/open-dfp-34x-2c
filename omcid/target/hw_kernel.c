@@ -1226,12 +1226,57 @@ static int tcont_set(uint32_t dev, uint32_t index, uint16_t alloc)
 }
 
 /*
+ * The Alloc-ID the kernel holds for T-CONT @index of the PON device @dev,
+ * or %OMCI_HW_ALLOC_NONE for an idle T-CONT, in @alloc, with a tcont-get
+ * request. Return: 0, or a negative errno.
+ */
+static int tcont_get(uint32_t dev, uint32_t index, uint16_t *alloc)
+{
+	uint8_t attrs[32] __aligned(4);
+	uint8_t rsp[512] __aligned(4);
+	uint16_t family = 0;
+	size_t alen = 0, rlen = 0;
+	const uint8_t *p;
+	const uint8_t *end;
+	int err;
+
+	err = pon_family_id(&family);
+	if (err)
+		return err;
+	alen = nla_put(attrs, alen, PON_A_TCONT_ID, &dev, sizeof(dev));
+	alen = nla_put(attrs, alen, PON_A_TCONT_INDEX, &index, sizeof(index));
+	err = nl_request(family, PON_CMD_TCONT_GET, attrs, alen, 0, rsp,
+			 sizeof(rsp), &rlen);
+	if (err)
+		return err;
+	if (rlen < NL_HDRLEN + 4)
+		return -EPROTO;
+
+	*alloc = OMCI_HW_ALLOC_NONE;
+	p = rsp + NL_HDRLEN + 4;
+	end = rsp + rlen;
+	while (p + NLA_HDRLEN_ <= end) {
+		uint16_t len = *(const uint16_t *)p;
+		uint16_t type = *(const uint16_t *)(p + 2) & 0x3fff;
+
+		if (len < NLA_HDRLEN_ || p + len > end)
+			break;
+		if (type == PON_A_TCONT_ALLOC_ID && len >= NLA_HDRLEN_ + 4)
+			*alloc = (uint16_t)nla_uint32(p + NLA_HDRLEN_, 4);
+		p += NL_ALIGN(len);
+	}
+	return 0;
+}
+
+/*
  * Map the T-CONTs to their Alloc-IDs, telling the kernel only the mappings
  * that change. The T-CONTs that give up an Alloc-ID are unmapped first, so
- * that the kernel never sees one Alloc-ID on two T-CONTs; the first time,
- * when what the kernel holds is not known, every T-CONT is. A T-CONT the
- * kernel will not map is rejected. A kernel without tcont-set binds the
- * Alloc-IDs itself, which is taken as done.
+ * that the kernel never sees one Alloc-ID on two T-CONTs. The first time,
+ * the kernel is asked what each T-CONT holds, and a daemon started again
+ * leaves the T-CONTs of its MIB as they are; a kernel that does not say has
+ * every T-CONT unmapped. A T-CONT the kernel will not map is rejected. A
+ * kernel without tcont-set binds the Alloc-IDs itself, which is taken as
+ * done.
  */
 static enum omci_status kernel_tcont_apply(const uint16_t *alloc, size_t n,
 					   struct omci_hw_reject *rejected)
@@ -1250,6 +1295,14 @@ static enum omci_status kernel_tcont_apply(const uint16_t *alloc, size_t n,
 	if (pon_dev_get(&a, buf, sizeof(buf)) != 0)
 		return OMCI_ERR_HW;
 	dev = pon_attr_u32(&a, PON_A_DEV_ID, 0);
+
+	if (!g_tcont_known) {
+		bool told = true;
+
+		for (size_t i = 0; i < n && told; i++)
+			told = !tcont_get(dev, (uint32_t)i, &g_tcont_sent[i]);
+		g_tcont_known = told;
+	}
 
 	for (size_t i = 0; i < n; i++) {
 		if (g_tcont_known && (g_tcont_sent[i] == OMCI_HW_ALLOC_NONE ||
