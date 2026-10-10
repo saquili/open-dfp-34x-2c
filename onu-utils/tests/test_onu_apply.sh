@@ -928,14 +928,14 @@ echo "a change on trial, confirmed: the store takes it then, and not before"
 trial_setup
 TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ] && ! logged "^onu-config save"'
-check 'grep -qx UNTIL=1264 "$ONU_ROOT/run/onu-trial"'
+check 'grep -qx UNTIL=1264 "$ONU_ROOT/run/onu-trial.d/settings"'
 check '"$MODE_SCRIPT" status | grep -qx "trial until 1264"'
 # What it goes back to: the settings of before, without the account.
 check 'grep -qx MODE=bridge "$ONU_ROOT/run/onu-kept/onu.conf" && [ ! -e "$ONU_ROOT/run/onu-kept/onu-pppoe1" ]'
 check '[ "$(stat -c %a "$ONU_ROOT/run/onu-kept" 2>/dev/null || stat -f %Lp "$ONU_ROOT/run/onu-kept")" = 700 ]'
 "$MODE_SCRIPT" confirm 2>/dev/null
 check 'logged "^onu-config save$"'
-check '[ ! -e "$ONU_ROOT/run/onu-trial" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-trial.d/settings" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ] && [ -e "$ONU_ROOT/run/onu-pppoe1" ]'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
@@ -945,7 +945,7 @@ trial_setup
 TRIAL_LIMIT=1 "$MODE_SCRIPT" try 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	[ -e "$ONU_ROOT/run/onu-trial" ] || break
+	[ -e "$ONU_ROOT/run/onu-trial.d/settings" ] || break
 	"$REAL_SLEEP" 0.2
 done
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -954,7 +954,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 done
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 check 'grep -qx MODE=bridge "$ONU_ROOT/run/onu.conf" && [ ! -e "$ONU_ROOT/run/onu-pppoe1" ]'
-check '[ ! -e "$ONU_ROOT/run/onu-trial" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-trial.d/settings" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'
 check '! logged "^onu-config save" && logged "not confirmed"'
 teardown
 
@@ -967,13 +967,13 @@ TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
 check 'grep -qx MODE=bridge "$ONU_ROOT/run/onu-kept/onu.conf"'
 "$MODE_SCRIPT" revert 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ] && [ ! -e "$ONU_ROOT/run/onu-pppoe1" ]'
-check '[ ! -e "$ONU_ROOT/run/onu-trial" ] && ! logged "^onu-config save"'
+check '[ ! -e "$ONU_ROOT/run/onu-trial.d/settings" ] && ! logged "^onu-config save"'
 # A reload saves what it applies, which no trial goes back on.
 printf 'SESSION1_VLAN=410\nSESSION1_FAMILY=ipv4\n' >"$ONU_ROOT/run/onu.conf"
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
 "$MODE_SCRIPT" reload 2>/dev/null
-check 'logged "^onu-config save$" && [ ! -e "$ONU_ROOT/run/onu-trial" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'
+check 'logged "^onu-config save$" && [ ! -e "$ONU_ROOT/run/onu-trial.d/settings" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'
 "$MODE_SCRIPT" revert 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 "$MODE_SCRIPT" stop 2>/dev/null

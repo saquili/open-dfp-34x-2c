@@ -40,7 +40,7 @@ RUN=$ROOT/run
 # onu-net is one of the helpers out of a person's way (ADR 0015).
 PATH=$PATH:$ROOT/usr/lib/onu
 STATE=$RUN/onu-mgmt
-PENDING=$RUN/onu-mgmt-pending
+PENDING=$RUN/onu-trial.d/mgmt
 LIMIT=${PENDING_LIMIT:-600}
 KEY=$RUN/dropbear/host_key
 
@@ -205,6 +205,7 @@ add() {
 			return 1
 		}
 	fi
+	mkdir -p "${PENDING%/*}" || return 1
 	printf 'VLAN=%s\nADDRESS=%s\nIFACE=%s\nNAME=%s\nPREF=%s\nUNTIL=%s\nTOKEN=%s\n' \
 		"$vlan" "$address" "$iface" "mgmt$token" "$pref" "$until" "$token" >"$PENDING"
 	if ! net_apply || ! onu-net wait "$iface" "$address" 10; then

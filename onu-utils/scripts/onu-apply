@@ -122,7 +122,7 @@ AGAIN=$RUN/onu-apply.again
 # a change is on trial (TRIAL), the ones it goes back to (KEPT).
 APPLIED=$RUN/onu-applied
 KEPT=$RUN/onu-kept
-TRIAL=$RUN/onu-trial
+TRIAL=$RUN/onu-trial.d/settings
 TRIAL_LIMIT=${TRIAL_LIMIT:-90}
 
 log() {
@@ -1307,8 +1307,9 @@ try_change() {
 	fi
 	apply
 	token=$$
-	printf 'UNTIL=%s\nTOKEN=%s\n' "$(($(uptime_s) + TRIAL_LIMIT))" "$token" \
-		>"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
+	mkdir -p "${TRIAL%/*}" &&
+		printf 'UNTIL=%s\nTOKEN=%s\n' "$(($(uptime_s) + TRIAL_LIMIT))" "$token" \
+			>"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
 	log "the change is on trial for $TRIAL_LIMIT s"
 	# The watcher outlives this command and the status daemon that ran it;
 	# the token keeps it from ending a later trial.

@@ -75,7 +75,7 @@ check 'echo "$out" | grep -qx TRIAL_UNTIL=1060'
 run try 1000basex
 check '[ $rc -ne 0 ] && [ "$(lane)" = 1000basex-an ]'
 run keep
-check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-lane-trial" ]'
+check '[ $rc -eq 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 check 'grep -qx SFP_LANE=1000basex-an "$T/stored"'
 check '[ "$(lane)" = 1000basex-an ]'
 teardown
@@ -95,7 +95,7 @@ run try 2500basex
 check '[ "$(lane)" = 2500basex ]'
 sleep 3
 check '[ "$(lane)" = auto ]'
-check '[ ! -e "$ONU_ROOT/run/onu-lane-trial" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 check '[ ! -e "$T/stored" ]'
 teardown
 
@@ -103,19 +103,19 @@ echo "a trial ended at once, and a watcher of an earlier trial ends no later one
 setup
 run try 1000basex
 run revert
-check '[ "$(lane)" = auto ] && [ ! -e "$ONU_ROOT/run/onu-lane-trial" ]'
+check '[ "$(lane)" = auto ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 run try 1000basex-an
 run expire 1
-check '[ "$(lane)" = 1000basex-an ] && [ -e "$ONU_ROOT/run/onu-lane-trial" ]'
+check '[ "$(lane)" = 1000basex-an ] && [ -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 teardown
 
 echo "a setting that is none, and a driver that refuses, change nothing"
 setup
 run try 10gbase-r
-check '[ $rc -eq 2 ] && [ "$(lane)" = auto ] && [ ! -e "$ONU_ROOT/run/onu-lane-trial" ]'
+check '[ $rc -eq 2 ] && [ "$(lane)" = auto ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 : >"$T/devlink.fail"
 run try 1000basex
-check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-lane-trial" ]'
+check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 teardown
 
 echo "at boot, the store's setting"

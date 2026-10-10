@@ -114,7 +114,7 @@ echo "a new VLAN beside the old one, then committed"
 setup
 run add 100 192.0.2.6/30
 check '[ $rc -eq 0 ]'
-name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-mgmt-pending")
+name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-trial.d/mgmt")
 check '[ -n "$name" ] && [ "$name" != mgmt ]'
 check 'in_part "device mgmt 4094" && in_part "interface mgmt mgmt 198.51.100.2/30"'
 check 'in_part "device mgmt100 100" && in_part "interface $name mgmt100 192.0.2.6/30"'
@@ -152,13 +152,13 @@ echo "a new address in the same VLAN, as an interface of its own, then cancelled
 setup
 run add 4094 198.51.100.6/30
 check '[ $rc -eq 0 ]'
-name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-mgmt-pending")
+name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-trial.d/mgmt")
 check 'in_part "interface mgmt mgmt 198.51.100.2/30" && in_part "interface $name mgmt 198.51.100.6/30"'
 check '[ "$(part | grep -c "^device")" -eq 1 ]'
 check '! grep -q "^tc " "$LOG"'
 run cancel
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
-check '[ ! -e "$ONU_ROOT/run/onu-mgmt-pending" ] && [ ! -e "$T/stored" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ] && [ ! -e "$T/stored" ]'
 check 'grep -qx ADDRESS=198.51.100.2/30 "$ONU_ROOT/run/onu-mgmt"'
 # The link stays as it was, and so do its servers and ntpd.
 check 'kill -0 "$OLD_SSH" 2>/dev/null && kill -0 "$OLD_NTP" 2>/dev/null'
@@ -167,7 +167,7 @@ teardown
 echo "a new address in the same VLAN, committed: the new one's interface stays as it was"
 setup
 run add 4094 198.51.100.6/30
-name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-mgmt-pending")
+name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-trial.d/mgmt")
 before=$(grep -A4 "^config interface '$name'" "$T/part")
 run commit
 check '[ $rc -eq 0 ]'
@@ -181,20 +181,20 @@ setup
 export PENDING_LIMIT=1
 run add 100 192.0.2.6/30
 sleep 3
-check '[ ! -e "$ONU_ROOT/run/onu-mgmt-pending" ]'
+check '[ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
 check 'logged "tc filter del dev pon ingress pref 2 protocol 802.1Q"'
 export PENDING_LIMIT=600
 run add 100 192.0.2.6/30
 run expire 1
-check '[ -e "$ONU_ROOT/run/onu-mgmt-pending" ]'
+check '[ -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 teardown
 
 echo "an address netifd does not bring up is taken back"
 setup
 : >"$T/no-address"
 run add 100 192.0.2.6/30
-check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-mgmt-pending" ]'
+check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
 check 'logged "tc filter del dev sfp ingress pref 2 protocol 802.1Q"'
 check '! grep -q "^dropbear " "$LOG"'
@@ -211,7 +211,7 @@ done
 check '! grep -q -e "^onu-net " -e "^tc " -e "^dropbear " "$LOG"'
 echo "lan36          | 36  | sfp" >>"$ONU_ROOT/proc/net/vlan/config"
 run add 36 192.0.2.6/30
-check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-mgmt-pending" ]'
+check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 check '! grep -q "tc filter add" "$LOG" && [ ! -e "$T/part" ]'
 run commit
 check '[ $rc -ne 0 ]'

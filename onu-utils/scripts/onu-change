@@ -1,0 +1,95 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-change: the changes on trial (ADR 0014), whichever program made them:
+# the settings (onu-apply try), the setting of the SFP lane (onu-lane try)
+# and the management pair (onu-mgmt add). Each is a file of /run/onu-trial.d
+# named for it, with the moment it goes back, UNTIL, in seconds of
+# /proc/uptime. The program that made a change keeps it or takes it back,
+# and a watcher of its own takes it back when no one kept it in time.
+#
+#   onu-change status        a line for each change on trial: its name, when
+#                            it goes back and, for the management pair, the
+#                            new address, which alone may confirm it
+#   onu-change confirm [IP]  keep every change on trial; the management
+#                            pair's only when IP, the address the
+#                            confirmation came to, is its new one
+#   onu-change revert        take every change on trial back now
+#
+# The status daemon confirms them for the panel, which does so as soon as it
+# reaches the stick again. ONU_ROOT, when set, is put in front of /run, for
+# the tests.
+
+set -u
+ROOT=${ONU_ROOT:-}
+DIR=$ROOT/run/onu-trial.d
+# onu-lane and onu-mgmt are helpers out of a person's way (ADR 0015).
+PATH=$PATH:$ROOT/usr/lib/onu
+
+log() {
+	echo "onu-change: $*" >&2
+	logger -t onu-change "$*" 2>/dev/null
+	return 0
+}
+
+field() {
+	sed -n "s/^$1=//p" "$2" 2>/dev/null | head -n 1
+}
+
+# The program of the change $1 and its verbs to keep it and to take it back.
+verbs() {
+	case $1 in
+	settings) echo "onu-apply confirm revert" ;;
+	lane) echo "onu-lane keep revert" ;;
+	mgmt) echo "onu-mgmt commit cancel" ;;
+	*) return 1 ;;
+	esac
+}
+
+status() {
+	for f in "$DIR"/*; do
+		[ -f "$f" ] || continue
+		name=${f##*/}
+		verbs "$name" >/dev/null || continue
+		line="$name $(field UNTIL "$f")"
+		[ "$name" = mgmt ] && line="$line $(field ADDRESS "$f")"
+		echo "$line"
+	done
+}
+
+# Each change on trial kept ($1 keep) or taken back ($1 back); the management
+# pair kept only when the confirmation came to its new address, $2.
+each() {
+	act=$1
+	from=${2:-}
+	rc=0
+	for f in "$DIR"/*; do
+		[ -f "$f" ] || continue
+		name=${f##*/}
+		v=$(verbs "$name") || continue
+		prog=${v%% *}
+		v=${v#* }
+		if [ "$act" = keep ]; then
+			if [ "$name" = mgmt ] &&
+				[ "$from" != "$(field ADDRESS "$f" | cut -d/ -f1)" ]; then
+				log "the management pair waits for a confirmation from its new address"
+				continue
+			fi
+			"$prog" "${v%% *}" || rc=1
+		else
+			"$prog" "${v#* }" || rc=1
+		fi
+	done
+	return $rc
+}
+
+case ${1:-} in
+status) status ;;
+confirm) each keep "${2:-}" ;;
+revert) each back ;;
+*)
+	echo "usage: onu-change status|confirm [IP]|revert" >&2
+	exit 2
+	;;
+esac

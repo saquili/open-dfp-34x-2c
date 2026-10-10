@@ -9,8 +9,8 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 ``onu-apply``, ``onu-update``, ``onu-svc``, ``pon`` and ``passwd``, which are
 in ``/usr/sbin`` and ``/usr/bin``. The others only other programs run, and
 they are in ``/usr/lib/onu``, out of a person's way (ADR 0015): ``ponid``,
-``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-trial``,
-``onu-config.sh`` and ``dhcp-wan``. A script that runs one of them finds it
+``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-change``,
+``onu-trial``, ``onu-config.sh`` and ``dhcp-wan``. A script that runs one of them finds it
 there, and names it by its whole path where procd starts it.
 
 ``ponid``
@@ -254,6 +254,22 @@ there, and names it by its whole path where procd starts it.
       onu-mgmt commit
       onu-mgmt cancel
       onu-mgmt status
+
+``onu-change``
+   the changes on trial (ADR 0014), whichever program made them: the
+   settings (``onu-apply try``), the setting of the SFP lane (``onu-lane
+   try``) and the management pair (``onu-mgmt add``). Each is a file of
+   ``/run/onu-trial.d`` named for it, with the moment it goes back; the
+   program that made it keeps it or takes it back, and a watcher of its own
+   takes it back when no one kept it in time: 90 s, and for the management
+   pair ten minutes, the time to move a computer to the new VLAN and
+   address. The status daemon confirms them for the panel, which does so as
+   soon as it reaches the stick again; the management pair's only from a
+   panel opened at its new address, which shows that the new pair answers::
+
+      onu-change status        # name, when it goes back, the new address
+      onu-change confirm [IP]  # keep them; the pair's only when IP is its own
+      onu-change revert        # take them back now
 
 ``onu-net``
    writes netifd's configuration, ``/run/config/network``, from parts: each

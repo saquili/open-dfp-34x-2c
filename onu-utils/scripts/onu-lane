@@ -9,7 +9,7 @@
 #   onu-lane status       CHOICE, NOW and, on trial, TRIAL_MODE,
 #                         TRIAL_PREVIOUS and TRIAL_UNTIL, as KEY=VALUE lines
 #   onu-lane try MODE     switch to MODE on trial: back to the setting of
-#                         before after TRIAL_LIMIT seconds (60) unless kept
+#                         before after TRIAL_LIMIT seconds (90) unless kept
 #   onu-lane keep         keep the setting on trial, in the store as well
 #   onu-lane revert       end the trial now, back to the setting of before
 #   onu-lane apply        at boot: the setting of the store, if it has one
@@ -26,9 +26,9 @@
 set -u
 ROOT=${ONU_ROOT:-}
 RUN=$ROOT/run
-TRIAL=$RUN/onu-lane-trial
+TRIAL=$RUN/onu-trial.d/lane
 SYSTEM=$RUN/onu-system
-LIMIT=${TRIAL_LIMIT:-60}
+LIMIT=${TRIAL_LIMIT:-90}
 DEV=platform/1b000000.switch
 
 log() {
@@ -96,6 +96,7 @@ try() {
 	[ "$previous" = "$1" ] && return 0
 	token=$$
 	until=$(($(uptime_s) + LIMIT))
+	mkdir -p "${TRIAL%/*}" || return 1
 	printf 'MODE=%s\nPREVIOUS=%s\nUNTIL=%s\nTOKEN=%s\n' "$1" "$previous" \
 		"$until" "$token" >"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
 	set_lane "$1" || {
