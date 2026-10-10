@@ -48,6 +48,8 @@ struct act_param {
  * @fixed: the arguments before the values, NULL after the last
  * @params: the values, NULL-named after the last
  * @input: whether it takes the caller's text on its standard input
+ * @fd_in: whether the descriptor the caller passes is its standard input
+ * @fd_out: whether the descriptor the caller passes is its standard output
  * @background: whether it is answered once started, and not waited for
  * @timeout_s: how long it may run before it is killed
  */
@@ -57,6 +59,8 @@ struct act_method {
 	const char *fixed[ACT_FIXED_MAX + 1];
 	struct act_param params[ACT_PARAMS_MAX + 1];
 	bool input;
+	bool fd_in;
+	bool fd_out;
 	bool background;
 	unsigned int timeout_s;
 };

@@ -8,7 +8,10 @@
  * act.h; ubusd's access lists say who may call which. A method runs its
  * program, without a shell, with the caller's values in their places once
  * they pass the table's rules, and the caller's text, "input", on its
- * standard input. The answer comes when the program ends: {"code": its
+ * standard input; the descriptor the caller passes, for a method that takes
+ * one, is its standard input or its standard output, so that a file streams
+ * through it without onu-act holding it. The answer comes when the program
+ * ends: {"code": its
  * exit status, or 128 and the signal, "output": what it wrote, at most
  * OUTPUT_MAX bytes}. A method run in the background is answered as soon as
  * it starts, {"code": 0}. A program that runs past its method's time is
@@ -127,8 +130,13 @@ static void on_background_exit(struct uloop_process *p, int status)
 	free(p);
 }
 
-/* Start @argv, with @input on its standard input and its output in @out[1]. */
-static pid_t spawn(const char *const *argv, const char *input, int out)
+/*
+ * Start @argv, with @input, or the descriptor @in, on its standard input, its
+ * standard output to @to when not -1 and its errors, and its output
+ * otherwise, to @out.
+ */
+static pid_t spawn(const char *const *argv, const char *input, int in_fd,
+		   int to, int out)
 {
 	int in[2] = { -1, -1 };
 	pid_t pid;
@@ -144,8 +152,8 @@ static pid_t spawn(const char *const *argv, const char *input, int out)
 		signal(SIGCHLD, SIG_DFL);
 		sigemptyset(&none);
 		sigprocmask(SIG_SETMASK, &none, NULL);
-		dup2(input ? in[0] : null, 0);
-		dup2(out >= 0 ? out : null, 1);
+		dup2(input ? in[0] : in_fd >= 0 ? in_fd : null, 0);
+		dup2(to >= 0 ? to : out >= 0 ? out : null, 1);
 		dup2(out >= 0 ? out : null, 2);
 		execv(argv[0], (char *const *)argv);
 		_exit(127);
@@ -180,11 +188,14 @@ static int call(struct ubus_context *ctx, struct ubus_object *obj,
 	const char *argv[ACT_ARGV_MAX + 1], *bad = NULL, *input = NULL;
 	size_t np, i;
 	struct run *r;
-	int out[2];
+	int out[2], fd = ubus_request_get_caller_fd(req);
 
 	(void)obj;
-	if (!m)
-		return UBUS_STATUS_METHOD_NOT_FOUND;
+	if (!m || (fd >= 0) != (m->fd_in || m->fd_out)) {
+		if (fd >= 0)
+			close(fd);
+		return m ? UBUS_STATUS_INVALID_ARGUMENT : UBUS_STATUS_METHOD_NOT_FOUND;
+	}
 	np = params_of(m);
 	blobmsg_parse(g_policy[m - act_methods], np + m->input, tb,
 		      blob_data(msg), blob_len(msg));
@@ -196,6 +207,8 @@ static int call(struct ubus_context *ctx, struct ubus_object *obj,
 		bad = "input";
 	if (bad || act_argv(m, values, argv, &bad)) {
 		fprintf(stderr, "onu-act: %s: %s refused\n", method, bad);
+		if (fd >= 0)
+			close(fd);
 		return UBUS_STATUS_INVALID_ARGUMENT;
 	}
 
@@ -204,7 +217,7 @@ static int call(struct ubus_context *ctx, struct ubus_object *obj,
 
 		if (!p)
 			return UBUS_STATUS_UNKNOWN_ERROR;
-		p->pid = spawn(argv, input, -1);
+		p->pid = spawn(argv, input, -1, -1, -1);
 		if (p->pid < 0) {
 			free(p);
 			return UBUS_STATUS_UNKNOWN_ERROR;
@@ -220,10 +233,14 @@ static int call(struct ubus_context *ctx, struct ubus_object *obj,
 	r = calloc(1, sizeof(*r));
 	if (!r || pipe2(out, O_CLOEXEC)) {
 		free(r);
+		if (fd >= 0)
+			close(fd);
 		return UBUS_STATUS_UNKNOWN_ERROR;
 	}
-	r->proc.pid = spawn(argv, input, out[1]);
+	r->proc.pid = spawn(argv, input, m->fd_in ? fd : -1, m->fd_out ? fd : -1, out[1]);
 	close(out[1]);
+	if (fd >= 0)
+		close(fd);
 	if (r->proc.pid < 0) {
 		close(out[0]);
 		free(r);

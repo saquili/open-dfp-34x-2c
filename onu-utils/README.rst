@@ -330,8 +330,11 @@ there, and names it by its whole path where procd starts it.
    the SFP lane, of the management pair, of the name and of the identity, the
    confirmation of the changes on trial, the updates' status and trial, the
    restart, the settings of the data path (``onu-config current`` and
-   ``change``, then ``onu-apply try``), and root's password
-   (``onu-config password-check``, ``password-state`` and ``password``). It is the object ``onu-act`` on ubus, with a method for each
+   ``change``, then ``onu-apply try``), root's password (``onu-config
+   password-check``, ``password-state`` and ``password``), and an update file,
+   which streams through the descriptor the caller passes with the call, the
+   reading end of a pipe into ``onu-update write -`` or the writing end out
+   of ``onu-update read``. It is the object ``onu-act`` on ubus, with a method for each
    entry of its table (``src/act.c``): the method runs its program, with no
    shell, the caller's values in their places once each is short enough, of
    the characters its place allows and no option, and the caller's text,

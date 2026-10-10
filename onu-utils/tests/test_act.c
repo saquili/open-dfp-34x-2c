@@ -63,6 +63,8 @@ static void test_the_table(void)
 			      !strcmp(m->name, "mgmt_add"));
 		}
 		CHECK(!(m->input && m->background));
+		CHECK(!(m->fd_in && (m->fd_out || m->input || m->background)));
+		CHECK(!(m->fd_out && m->background));
 	}
 	CHECK(act_find("sh") == NULL && act_find("") == NULL);
 }
@@ -92,6 +94,8 @@ static void test_values_in_their_places(void)
 	CHECK(!strcmp(run("settings_current", NULL, &bad), "/usr/sbin/onu-config current"));
 	CHECK(act_find("settings_change")->input && !act_find("settings_current")->input);
 	CHECK(!act_find("settings_try")->background && act_find("settings_try")->timeout_s >= 60);
+	CHECK(!strcmp(run("update_write", NULL, &bad), "/usr/sbin/onu-update write -"));
+	CHECK(act_find("update_write")->fd_in && act_find("update_read")->fd_out);
 }
 
 static void test_what_is_refused(void)
