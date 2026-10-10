@@ -153,6 +153,7 @@ paths = [
   "onu-utils/src/settings.c",
   "onu-utils/tests/test_settings.c",
   "onu-utils/tests/test_onucfg_settings.sh",
+  "onu-utils/tests/test_onu_config_settings.sh",
   "br2-external/board/dfp-34x-2c3/overlay/etc/onu.conf",
   "pond/src/prov_settings.c",
 ]
