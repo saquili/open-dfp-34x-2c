@@ -138,5 +138,18 @@ check '[ $rc -eq 4 ]'
 pwcheck example-secreT
 check '[ $rc -eq 1 ]'
 
+echo "identity-current: the identity, without its passwords"
+printf 'serial=000000000000\nploam_password=not-a-real-one\nloid_password=\nmodel=stick\n' >"$R/run/onu-identity"
+printf 'store\n' >"$R/run/onu-identity-source"
+ONU_ROOT=$R "$ONUCFG" identity-current </dev/null >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && grep -qx "serial=000000000000" "$T/out" && grep -qx "model=stick" "$T/out"'
+check 'grep -qx "ploam_set=1" "$T/out" && grep -qx "loid_password_set=0" "$T/out" && grep -qx "source=store" "$T/out"'
+check '! grep -q -e not-a-real-one -e "^ploam_password" -e "^loid_password=" "$T/out"'
+rm -f "$R/run/onu-identity" "$R/run/onu-identity-source"
+ONU_ROOT=$R "$ONUCFG" identity-current </dev/null >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && [ "$(cat "$T/out")" = "$(printf "ploam_set=0\nloid_password_set=0\nsource=")" ]'
+
 echo "test_onu_config_settings: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

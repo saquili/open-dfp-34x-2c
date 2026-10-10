@@ -97,7 +97,11 @@ there, and names it by its whole path where procd starts it.
    older form, which the caller keeps again with ``onu-config password``, 1
    for any other; ``onu-config password-state`` prints ``set`` or
    ``default``. Both read the hash themselves (``src/password.c``), so that
-   the status daemon, which has onu-act run them, never holds it. A
+   the status daemon, which has onu-act run them, never holds it.
+   ``onu-config identity-current`` prints the identity of
+   ``/run/onu-identity``, which root alone reads, without its PLOAM and
+   logical passwords, with ``ploam_set`` and ``loid_password_set`` and where it
+   came from, ``source``. A
    save with no account in force stores an empty ``PPPOE_USER``, so that a
    removed account does not come back at the next boot. ``onu-config system``
    keeps the stick's own settings of ``KEY=VALUE`` lines on its input as

@@ -26,6 +26,8 @@
  *                                            password, in the exit status
  *   onu-config password-state                "set", or "default" while the
  *                                            default password is in force
+ *   onu-config identity-current              the identity in force, without
+ *                                            its passwords
  *   onu-config load|save|migrate|identity|password|auth HASH|system|pd N
  *                                            the files the running system
  *                                            reads, to and from the store:
@@ -64,6 +66,12 @@
  * in force, 3 for the default one, "admin", while none is set, 4 for one
  * kept in the older form, which the caller then keeps again with
  * onu-config password, and 1 for any other.
+ *
+ * identity-current prints the identity the unit introduces itself with,
+ * the name=value lines of /run/onu-identity, which root alone may read,
+ * without the PLOAM and the logical passwords: ploam_set and
+ * loid_password_set say whether each is set. source= is where the
+ * identity came from, of /run/onu-identity-source.
  *
  * onu-config was onucfg and onu-store before (ADR 0015).
  */
@@ -477,6 +485,50 @@ static int password_check_cmd(void)
 	return rc;
 }
 
+#define IDENTITY_PATH "/run/onu-identity"
+#define IDENTITY_SOURCE_PATH "/run/onu-identity-source"
+
+static int identity_current_cmd(void)
+{
+	static const char *const secret[] = { "ploam_password", "loid_password" };
+	static const char *const said[] = { "ploam_set", "loid_password_set" };
+	bool set[2] = { false, false };
+	char path[PATH_MAX], line[512], source[32] = "";
+	FILE *f;
+
+	root_path(IDENTITY_PATH, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	while (f && fgets(line, sizeof(line), f)) {
+		bool hidden = false;
+
+		line[strcspn(line, "\r\n")] = '\0';
+		for (int i = 0; i < 2; i++) {
+			size_t n = strlen(secret[i]);
+
+			if (!strncmp(line, secret[i], n) && line[n] == '=') {
+				hidden = true;
+				set[i] = line[n + 1] != '\0';
+			}
+		}
+		if (!hidden && strchr(line, '='))
+			puts(line);
+	}
+	if (f)
+		fclose(f);
+	explicit_bzero(line, sizeof(line));
+	for (int i = 0; i < 2; i++)
+		printf("%s=%d\n", said[i], set[i]);
+	root_path(IDENTITY_SOURCE_PATH, 0, path, sizeof(path));
+	f = fopen(path, "r");
+	if (f) {
+		if (fgets(source, sizeof(source), f))
+			source[strcspn(source, "\r\n")] = '\0';
+		fclose(f);
+	}
+	printf("source=%s\n", source);
+	return fflush(stdout) ? 2 : 0;
+}
+
 int main(int argc, char **argv)
 {
 	const char *store = getenv("ONU_STORE");
@@ -507,10 +559,11 @@ int main(int argc, char **argv)
 			      !strcmp(argv[optind], "current") ||
 			      !strcmp(argv[optind], "change") ||
 			      !strcmp(argv[optind], "password-check") ||
-			      !strcmp(argv[optind], "password-state"))) {
+			      !strcmp(argv[optind], "password-state") ||
+			      !strcmp(argv[optind], "identity-current"))) {
 		if (argc - optind != 1) {
 			fputs("usage: onu-config check | settings | current | change"
-			      " | password-check | password-state\n",
+			      " | password-check | password-state | identity-current\n",
 			      stderr);
 			return 2;
 		}
@@ -518,6 +571,8 @@ int main(int argc, char **argv)
 			return password_check_cmd();
 		if (!strcmp(argv[optind], "password-state"))
 			return password_state_cmd();
+		if (!strcmp(argv[optind], "identity-current"))
+			return identity_current_cmd();
 		if (!strcmp(argv[optind], "current"))
 			return current_cmd();
 		if (!strcmp(argv[optind], "change"))

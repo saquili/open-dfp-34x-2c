@@ -44,6 +44,8 @@ const struct act_method act_methods[] = {
 	  .params = { { "name", LOWER UPPER DIGITS "-", 63 } } },
 	{ .name = "identity_store", .program = "/usr/sbin/onu-config", .fixed = { "identity" },
 	  .input = true },
+	{ .name = "identity_current", .program = "/usr/sbin/onu-config",
+	  .fixed = { "identity-current" } },
 	{ .name = "reidentify", .program = "/usr/sbin/onu-apply", .fixed = { "reidentify" },
 	  .background = true },
 	{ .name = "update_status", .program = "/usr/sbin/onu-update", .fixed = { "status" } },
