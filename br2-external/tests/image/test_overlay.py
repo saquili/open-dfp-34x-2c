@@ -249,14 +249,22 @@ class ServersOnTheHostSide(unittest.TestCase):
 
     def test_the_host_link_may_have_no_address(self):
         text = read(RCS)
-        self.assertIn('if [ -n "$DATA_ADDRESS" ]; then\n\tip address add "$DATA_ADDRESS" dev sfp', text)
+        self.assertIn('[ -z "$DATA_ADDRESS" ] || onu-net wait sfp "$DATA_ADDRESS" 10', text)
         self.assertIn('onu-trial "${data:-$mgmt}"', text)
 
     def test_the_addresses_are_there_before_a_server_listens(self):
         text = read(RCS)
         start = text.index("onu-svc start ssh ")
-        self.assertLess(text.index('ip address add "$DATA_ADDRESS" dev sfp'), start)
+        self.assertLess(text.index('onu-net wait sfp "$DATA_ADDRESS" 10'), start)
         self.assertLess(text.index('onu-net wait mgmt "$MGMT_ADDRESS" 10'), start)
+
+    def test_netifd_alone_gives_the_addresses(self):
+        # netifd takes away from a device it holds what it did not put
+        # there (ADR 0014): onu-mgmt gives it both addresses, and the script
+        # has no address of its own to set, nor a fallback of its own.
+        text = read(RCS)
+        self.assertNotIn("ip address add", text)
+        self.assertNotIn("ip link add", text)
 
 
 class QuietTowardsThePon(unittest.TestCase):
@@ -275,10 +283,20 @@ class QuietTowardsThePon(unittest.TestCase):
                     self.assertLess(text.index(line), text.index(later), later)
 
     def test_the_host_side_keeps_ipv6(self):
+        # sfp has it from before the default changes; mgmt is given it by
+        # netifd, as onu-mgmt asks (test_onu_mgmt.sh).
         text = read(RCS)
         self.assertNotIn("conf/sfp/disable_ipv6", text)
-        made = text.index('name mgmt type vlan id "$MGMT_VLAN"')
-        self.assertLess(made, text.index("echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6"))
+        self.assertNotIn("conf/mgmt/disable_ipv6", text)
+
+    def test_proxy_arp_answers_at_once(self):
+        # onu-apply's links, which netifd makes later, take the default.
+        text = read(RCS)
+        for dev in ("default", "sfp"):
+            line = f"echo 0 >/proc/sys/net/ipv4/neigh/{dev}/proxy_delay"
+            with self.subTest(dev=dev):
+                self.assertIn(line, text)
+                self.assertLess(text.index(line), text.index("onu-svc start netifd "))
 
     def test_arp_answers_only_on_the_interface_of_the_address(self):
         text = read(RCS)

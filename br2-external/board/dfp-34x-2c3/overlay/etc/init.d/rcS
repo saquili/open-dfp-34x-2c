@@ -100,6 +100,13 @@ echo 1 >/proc/sys/net/ipv6/conf/default/disable_ipv6 &&
 echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore &&
 	echo 2 >/proc/sys/net/ipv4/conf/all/arp_announce ||
 	warn "ARP answers for every address on every interface"
+# On a link to the router the stick answers ARP for a session's gateway
+# without taking the address (proxy ARP, onu-apply), at once rather than after
+# the kernel's random wait of up to 0.8 s. The links netifd makes later take
+# the default.
+echo 0 >/proc/sys/net/ipv4/neigh/default/proxy_delay &&
+	echo 0 >/proc/sys/net/ipv4/neigh/sfp/proxy_delay ||
+	warn "proxy ARP answers late"
 
 # The setting of the SFP lane its owner kept (onu-lane), if any; the driver
 # looks for the host's otherwise.
@@ -112,19 +119,16 @@ onu-lane apply || warn "the stored setting of the SFP lane was refused"
 ip link set lo up
 ip link set cpu up || warn "the switch's conduit does not come up"
 ip link set sfp up || warn "no interface sfp"
-if [ -n "$DATA_ADDRESS" ]; then
-	ip address add "$DATA_ADDRESS" dev sfp || warn "no address on sfp"
-fi
 
-# The management VLAN and its address. netifd brings them up, from the part
-# "mgmt" of its configuration in /run/config, which onu-mgmt writes (onu-net)
-# now and again when the pair changes. A stored pair that is
-# not a VLAN and an address gives way to the image's. The ssh server can
-# listen only once the address is there: if netifd has not brought it up
-# within ten seconds, the script brings it up itself, so that the stick stays
-# reachable; netifd takes the VLAN over as it finds it. Each interface that
-# comes up or goes down, netifd tells onu-apply (its -h), which hands a PPPoE
-# session's address on or takes it back.
+# The management VLAN and its address, and the address on sfp itself. netifd
+# brings them up, from the part "mgmt" of its configuration in /run/config,
+# which onu-mgmt writes (onu-net) now and again when the pair changes. A
+# stored pair that is not a VLAN and an address gives way to the image's.
+# The ssh server can listen only once the addresses are there, and waits ten
+# seconds for each. netifd alone sets them (ADR 0014), and procd starts it
+# again if it ends; an address it does not bring up is in the log. Each
+# interface that comes up or goes down, netifd tells onu-apply (its -h),
+# which hands a PPPoE session's address on or takes it back.
 onu-mgmt start "$MGMT_VLAN" "$MGMT_ADDRESS" "$DATA_ADDRESS" || {
 	warn "VLAN $MGMT_VLAN with $MGMT_ADDRESS is not a pair, the image's instead"
 	MGMT_VLAN=$BOARD_MGMT_VLAN
@@ -135,13 +139,10 @@ onu-svc start netifd -- /usr/sbin/netifd -c /run/config -r /run/resolv.conf.auto
 	warn "netifd is no service of procd: started once"
 	netifd -c /run/config -r /run/resolv.conf.auto -h /usr/sbin/onu-apply &
 }
-onu-net wait mgmt "$MGMT_ADDRESS" 10 || {
-	warn "netifd did not bring $MGMT_ADDRESS up in VLAN $MGMT_VLAN, the script does"
-	ip link add link sfp name mgmt type vlan id "$MGMT_VLAN"
-	ip address add "$MGMT_ADDRESS" dev mgmt || warn "no address on mgmt"
-	echo 0 >/proc/sys/net/ipv6/conf/mgmt/disable_ipv6 || warn "no IPv6 on mgmt"
-	ip link set mgmt up || warn "mgmt does not come up"
-}
+onu-net wait mgmt "$MGMT_ADDRESS" 10 ||
+	warn "netifd did not bring $MGMT_ADDRESS up in VLAN $MGMT_VLAN"
+[ -z "$DATA_ADDRESS" ] || onu-net wait sfp "$DATA_ADDRESS" 10 ||
+	warn "netifd did not bring $DATA_ADDRESS up on sfp"
 
 # The system log goes to a server of the host side as well when the settings
 # name one (LOG_SERVER), now that the management address is there to send
