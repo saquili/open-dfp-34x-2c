@@ -223,7 +223,8 @@ The programs of the ONU, from this tree
     ``omcid``, the OMCI daemon, with its tools ``omcitap`` and ``omcivlan``
     (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
     from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
-    PPPoE client (``pppoed/README.rst``); ``dhcp6d``, which hands a session's
+    PPPoE client and netifd's protocol ``pppoed`` (``pppoed/README.rst``),
+    which links libubus to tell netifd; ``dhcp6d``, which hands a session's
     delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
     HTTP status daemon (``pond/README.rst``).
 The network layer of OpenWrt
@@ -234,10 +235,11 @@ The network layer of OpenWrt
     ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
     command-line tools of these packages, ``ubus``, ``uci`` and ``jshn``, are
     not in the image: the post-build script takes them out. procd starts both;
-    netifd brings up the management VLAN and its address, from the
-    configuration that ``onu-net`` writes in ``/run/config``
-    (``onu-utils/README.rst``), and takes the other links over one at a time
-    as the scripts that set them up move to it.
+    netifd brings up the management VLAN and its address and the PPPoE
+    sessions, from the configuration that ``onu-net`` writes in
+    ``/run/config`` (``onu-utils/README.rst``), tells ``onu-apply`` of each
+    interface that comes up or goes down, and takes the other links over one
+    at a time as the scripts that set them up move to it.
 procd
     OpenWrt's init and service supervisor, process 1, with the patches in
     ``br2-external/package/procd`` (``docs/adr/0013-procd-is-the-first-process.rst``).
