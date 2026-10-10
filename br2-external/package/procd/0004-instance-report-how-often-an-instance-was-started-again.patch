@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pawe=C5=82=20Phan?= <szop.hektar_1w@icloud.com>
+Date: Sat, 10 Oct 2026 12:00:00 +0000
+Subject: [PATCH] instance: report how often an instance was started again
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+procd starts an instance with "respawn" again when it ends, and gives up
+after too many crashes in a row; "service list" shows the respawn
+values, but not how often it happened. A program that keeps dying and
+coming back looks the same as one that never died.
+
+The dump of an instance with "respawn" now has "respawns", how often
+procd started it again since the instance was set up, and "crashes",
+the runs in a row shorter than the threshold, which procd compares with
+the retries.
+
+Upstream: not submitted
+SPDX-License-Identifier: GPL-2.0-only
+SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
+---
+ service/instance.c | 4 ++++
+ service/instance.h | 2 ++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/service/instance.c b/service/instance.c
+index 1ceec9a..7e8c7c3 100644
+--- a/service/instance.c
++++ b/service/instance.c
+@@ -1158,6 +1158,7 @@ instance_exit_done(struct service_instance *in)
+ 			service_event_instance_exit("instance.fail", in);
+ 		} else {
+ 			service_event_instance_exit("instance.respawn", in);
++			in->respawns++;
+ 			uloop_timeout_set(&in->timeout, in->respawn_timeout * 1000);
+ 		}
+ 	}
+@@ -2256,6 +2257,9 @@ void instance_dump(struct blob_buf *b, struct service_instance *in, int verbose)
+ 		blobmsg_add_u32(b, "timeout", in->respawn_timeout);
+ 		blobmsg_add_u32(b, "retry", in->respawn_retry);
+ 		blobmsg_close_table(b, r);
++		/* How often it ended, and how often it ended too soon in a row. */
++		blobmsg_add_u32(b, "respawns", in->respawns);
++		blobmsg_add_u32(b, "crashes", in->respawn_count);
+ 	}
+ 
+ 	if (in->trace)
+diff --git a/service/instance.h b/service/instance.h
+index b04ce01..1fe7018 100644
+--- a/service/instance.h
++++ b/service/instance.h
+@@ -84,6 +84,8 @@ struct service_instance {
+ 	bool restart;
+ 	bool respawn;
+ 	int respawn_count;
++	/* How often the instance was started again since it was set up. */
++	uint32_t respawns;
+ 	int reload_signal;
+ 	struct timespec start;
+ 	struct timespec stop;
