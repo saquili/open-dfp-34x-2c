@@ -175,6 +175,11 @@ no atomic builtins, and libubox holds code the core cannot run.
   unset). ``ulog()`` then writes to its other channels only; netifd, as forked
   here, does not use udebug.
 
+* libubox and ubus are taken at OpenWrt's commits of 2026-10-08 and 2026-09-25
+  (``da2d205``, ``414c60a``) instead of the release's (``3868f47``, ``afa57cc``):
+  procd needs the newer event loop, and netifd and procd are taken at their
+  current commits too. The archives' hashes are computed locally.
+
 The instruction-set gate checks what the libraries became, as it checks every
 file of the image.
 

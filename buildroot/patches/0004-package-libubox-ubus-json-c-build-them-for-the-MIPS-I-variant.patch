@@ -32,14 +32,24 @@ leave udebug out, and leave it out on a toolchain without atomics
 (BR2_TOOLCHAIN_HAS_ATOMIC unset). ulog() then writes to its other
 channels only.
 
+libubox and ubus are taken at OpenWrt's commits of 2026-10-08 and
+2026-09-25 (da2d205, 414c60a) instead of those of the release (3868f47
+of 2024-12-19, afa57cc of 2025-01-02): procd, which comes next, needs
+the newer uloop, and netifd and procd are taken at their current
+commits too. ubus's carried patch applies unchanged. The archives'
+hashes are computed locally, as the release's were.
+
 Signed-off-by: Paweł Phan <szop.hektar_1w@icloud.com>
 ---
  package/json-c/Config.in                                                                  |  6 ++++--
  package/json-c/json-c.mk                                                                  |  6 ++++++
- package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch | 72 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- package/libubox/libubox.mk                                                                |  7 +++++++
+ package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch | 70 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ package/libubox/libubox.hash                                                              |  2 +-
+ package/libubox/libubox.mk                                                                |  9 ++++++++-
  package/ubus/Config.in                                                                    |  4 ++--
- 5 files changed, 91 insertions(+), 4 deletions(-)
+ package/ubus/ubus.hash                                                                    |  2 +-
+ package/ubus/ubus.mk                                                                      |  2 +-
+ 8 files changed, 93 insertions(+), 8 deletions(-)
 
 diff --git a/package/json-c/Config.in b/package/json-c/Config.in
 index 4df44a9..053a6db 100644
@@ -75,10 +85,10 @@ index 254b6fd..c34a540 100644
  $(eval $(host-cmake-package))
 diff --git a/package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch b/package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch
 new file mode 100644
-index 0000000..acdfff3
+index 0000000..9aeb32b
 --- /dev/null
 +++ b/package/libubox/0001-build-make-udebug-optional-for-cores-without-atomic-operations.patch
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,70 @@
 +From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 +From: =?UTF-8?q?Pawe=C5=82=20Phan?= <szop.hektar_1w@icloud.com>
 +Date: Sat, 10 Oct 2026 12:00:00 +0000
@@ -107,20 +117,18 @@ index 0000000..acdfff3
 + 2 files changed, 8 insertions(+), 1 deletion(-)
 +
 +diff --git a/CMakeLists.txt b/CMakeLists.txt
-+index b0fca61..e1191a1 100644
++index bb67fec..f80ecbb 100644
 +--- a/CMakeLists.txt
 ++++ b/CMakeLists.txt
-+@@ -13,6 +13,7 @@ ADD_DEFINITIONS(-Os -std=gnu99 -g3 -Wmissing-declarations -Wno-unused-parameter)
++@@ -13,12 +13,17 @@ ADD_DEFINITIONS(-Os -std=gnu99 -g3 -Wmissing-declarations -Wno-unused-parameter)
 + 
 + OPTION(BUILD_LUA "build Lua plugin" ON)
 + OPTION(BUILD_EXAMPLES "build examples" ON)
 ++OPTION(BUILD_UDEBUG "build udebug, which needs atomic operations" ON)
 + 
 + INCLUDE(FindPkgConfig)
-+ PKG_SEARCH_MODULE(JSONC json-c)
-+@@ -21,7 +22,11 @@ IF(JSONC_FOUND)
-+   INCLUDE_DIRECTORIES(${JSONC_INCLUDE_DIRS})
-+ ENDIF()
++ PKG_SEARCH_MODULE(JSONC json-c REQUIRED)
++ INCLUDE_DIRECTORIES(${JSONC_INCLUDE_DIRS})
 + 
 +-SET(SOURCES avl.c avl-cmp.c blob.c blobmsg.c uloop.c usock.c ustream.c ustream-fd.c vlist.c utils.c safe_list.c runqueue.c md5.c kvlist.c ulog.c base64.c udebug.c udebug-remote.c)
 ++SET(SOURCES avl.c avl-cmp.c blob.c blobmsg.c uloop.c usock.c ustream.c ustream-fd.c vlist.c utils.c safe_list.c runqueue.c md5.c kvlist.c ulog.c base64.c)
@@ -151,10 +159,27 @@ index 0000000..acdfff3
 + 
 + 	if (priority > _ulog_threshold)
 + 		return;
+diff --git a/package/libubox/libubox.hash b/package/libubox/libubox.hash
+index eb37d33..c6fee4f 100644
+--- a/package/libubox/libubox.hash
++++ b/package/libubox/libubox.hash
+@@ -1,2 +1,2 @@
+ # Locally calculated
+-sha256  df6e1350fd11016ef30242a279cec195d91e6748c11c40e0991593718c46fa52  libubox-3868f47c8f6c6570e62a3cdf8a7f26ffb1a67e6a-git4.tar.gz
++sha256  402cae56e4dc84cd14f52888f89d565177858d86147f800a16a2d0f15288ea18  libubox-da2d205a5cf3e877c45a2eec488218cbaf452e7d-git4.tar.gz
 diff --git a/package/libubox/libubox.mk b/package/libubox/libubox.mk
-index 00ae2b0..8c32249 100644
+index 00ae2b0..c0c96e0 100644
 --- a/package/libubox/libubox.mk
 +++ b/package/libubox/libubox.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-LIBUBOX_VERSION = 3868f47c8f6c6570e62a3cdf8a7f26ffb1a67e6a
++LIBUBOX_VERSION = da2d205a5cf3e877c45a2eec488218cbaf452e7d
+ LIBUBOX_SITE = https://git.openwrt.org/project/libubox.git
+ LIBUBOX_SITE_METHOD = git
+ LIBUBOX_LICENSE = ISC, BSD-3-Clause
 @@ -20,4 +20,11 @@ else
  LIBUBOX_CONF_OPTS += -DBUILD_LUA=OFF
  endif
@@ -184,3 +209,25 @@ index 391893e..db2164a 100644
  	depends on !BR2_STATIC_LIBS # libubox
  	select BR2_PACKAGE_LIBUBOX
  	select BR2_PACKAGE_JSON_C
+diff --git a/package/ubus/ubus.hash b/package/ubus/ubus.hash
+index e35f37b..5d0fbec 100644
+--- a/package/ubus/ubus.hash
++++ b/package/ubus/ubus.hash
+@@ -1,3 +1,3 @@
+ # Locally calculated
+-sha256  ba7602c660cb2c15c0e04942414e4cf3d96622622406c5fc3b88895694aebb9f  ubus-afa57cce0aff82f4a7a0e509d4387ebc23dd3be7-git4.tar.gz
++sha256  e5409206b54cd44192bd06b386a7d8579ead5001d8b20d7d99c88256c5d7336c  ubus-414c60a2e29e72c2c4f573bc50ad54aef076d169-git4.tar.gz
+ sha256  a3caa6c0e90c87b7c97c2ac3d0c0d416082ef777215faec2e9b24ea6e68f6988  ubusd_acl.h
+diff --git a/package/ubus/ubus.mk b/package/ubus/ubus.mk
+index 913c0e3..68c89b5 100644
+--- a/package/ubus/ubus.mk
++++ b/package/ubus/ubus.mk
+@@ -4,7 +4,7 @@
+ #
+ ################################################################################
+ 
+-UBUS_VERSION = afa57cce0aff82f4a7a0e509d4387ebc23dd3be7
++UBUS_VERSION = 414c60a2e29e72c2c4f573bc50ad54aef076d169
+ UBUS_SITE = https://git.openwrt.org/project/ubus.git
+ UBUS_SITE_METHOD = git
+ 
