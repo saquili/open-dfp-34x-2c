@@ -15,7 +15,7 @@ import stat
 import subprocess
 import unittest
 
-from bootscript import commands
+from bootscript import BUILTINS, DROPBEAR, PACKAGES, commands
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
@@ -24,14 +24,6 @@ RCS = os.path.join(OVERLAY, "etc", "init.d", "rcS")
 INITTAB = os.path.join(OVERLAY, "etc", "inittab")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
-# Words that start a command in the boot script and are not programs.
-BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "do", "done",
-            "case", "esac", ".", "exit", "set", "true", "false", ":", "umask"}
-# Programs of the dropbear package and of this tree's packages; every other
-# command is a BusyBox applet.
-DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-mode", "onu-store", "onu-trial", "onu-lane",
-            "tc"}
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
 SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
 

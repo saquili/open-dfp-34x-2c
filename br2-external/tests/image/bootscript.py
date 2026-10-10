@@ -6,10 +6,25 @@ A conservative reading of a shell script, enough for the one script of the
 overlay: the first word of each line and of each part of a line that an
 operator, a pipe or a command substitution starts. It is shared by the unit
 tests, which compare the commands with the BusyBox configuration, and by
-check-applets, which runs the applets that the built image holds.
+check-applets, which runs the applets that the built image holds; so are the
+words that are not BusyBox's applets.
 """
 
 import re
+
+# Words that start a command in the boot script and are not programs.
+BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "while", "do",
+            "done", "case", "esac", ".", "exit", "set", "true", "false", ":", "umask"}
+# Programs of the dropbear package and of the other packages of the image;
+# every other command is a BusyBox applet.
+DROPBEAR = {"dropbear", "dropbearkey"}
+PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-mode", "onu-store", "onu-trial", "onu-lane",
+            "onu-mgmt", "onu-net", "netifd", "ubusd", "tc"}
+
+
+def applets(text):
+    """The words in command position of a shell script that are BusyBox's, sorted."""
+    return sorted(set(commands(text)) - BUILTINS - DROPBEAR - PACKAGES)
 
 
 def commands(text):
@@ -23,7 +38,8 @@ def commands(text):
         if re.match(r"^esac\b", line):
             in_case -= 1
         # Cut the line at the operators that start another command.
-        for part in re.split(r"\|\||&&|;|\|\s|\$\(|`", line):
+        # $( starts one; $(( is arithmetic and does not.
+        for part in re.split(r"\|\||&&|;|\|\s|\$\((?!\()|`", line):
             part = part.strip()
             if in_case:
                 part = re.sub(r"^[^\s()]+\)\s*", "", part)  # a pattern of the case

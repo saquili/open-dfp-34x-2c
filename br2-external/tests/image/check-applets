@@ -35,12 +35,9 @@ import tempfile
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
-from bootscript import commands  # noqa: E402
+from bootscript import applets as busybox_words  # noqa: E402
 
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
-BUILTINS = {"export", "echo", "warn", "[", "if", "then", "fi", "do", "done", "case", "esac", ".",
-            "exit", "set", "true", "false", ":"}
-DROPBEAR = {"dropbear", "dropbearkey"}
 FAILED = []
 
 
@@ -74,7 +71,7 @@ def main(argv):
     report(status == 0 and len(applets) > 20, "busybox --list names %d applets" % len(applets), err)
 
     with open(os.path.join(BOARD, "overlay", "etc", "init.d", "rcS"), encoding="utf-8") as handle:
-        used = sorted(set(commands(handle.read())) - BUILTINS - DROPBEAR)
+        used = busybox_words(handle.read())
     with open(os.path.join(BOARD, "overlay", "etc", "inittab"), encoding="utf-8") as handle:
         for line in handle:
             if line.strip() and not line.startswith("#"):
