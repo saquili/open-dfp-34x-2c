@@ -155,10 +155,35 @@ owners: what moves to netifd moves whole.
 6. The state on ubus: omcid and dhcp6d publish it, and pond reads it.
 7. omcid keeps its MIB in ``/run``.
 8. pond as an account of its own, under ubusd's access lists.
+9. The settings in the ``config`` partition's own file system: the store
+   becomes a file of the JFFS2 the shipped firmware keeps there, beside its
+   files, and a return to the shipped firmware is a switch of the bank.
 
 omcid's part of step 6 goes with step 8 (decided 2026-10-10): until pond
 leaves root, nothing reads omcid's state on ubus, and then pond needs what
 it reads of the MIB there too, under ubusd's access lists.
+
+Step 9 was added on 2026-10-10 and waits for the owner's decisions. The
+``config`` partition is the user's: the shipped firmware's data there is a
+matter of compatibility, and the user's settings have a limit set in
+advance, which never takes room from a kernel or a root file system. Today
+the store splits the whole partition into two slots, and its first write
+overwrites the shipped firmware's JFFS2, which that firmware erases and
+formats when it cannot mount it: a stick that goes back to it loses its
+registration identity and its laser's calibration. In step 9 the kernel
+mounts that JFFS2, with zlib alone and without extended attributes or
+summaries, as the shipped firmware writes it; the settings are one file of
+their own there, under the limit; the identity is read from the shipped
+firmware's files, and written to them only once the way that firmware
+checks them is known. Measured: JFFS2 adds 40,650 bytes to the compressed
+kernel, which leaves bank 0's kernel partition some 197 KB free. Open:
+whether the kernel takes them, the settings' limit (16 KiB proposed; about
+5 KB are used today), a test on a stick in which the shipped firmware reads
+a file this system wrote, and the two sticks of the bench, whose partition
+holds this system's store now and goes back to the shipped firmware's file
+system. A package that the shipped firmware's web page installs into the
+other bank, for a stick as shipped, is analysed, and not built until the
+owner says so.
 
 Steps 3, 4, 5 and 7 are tried on a stick of the bench with live sessions:
 two sessions at once, an IPv6 prefix, the hardware path's throughput as
