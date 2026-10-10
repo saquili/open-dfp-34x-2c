@@ -29,6 +29,9 @@ export const en = {
     offlineSince: "No connection to the stick since {time}. The figures below are from then.",
     retrying: "Trying again…",
     stale: "Updated {time}",
+    trialConfirming: "The change is applied. The panel reaches the stick, so it keeps the change…",
+    trialWaiting:
+      "The change is on trial. Unless the panel reaches the stick again, the stick goes back to the settings of before in {left} s.",
   },
   auth: {
     title: "Sign in",

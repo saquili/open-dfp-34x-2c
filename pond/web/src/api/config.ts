@@ -71,6 +71,8 @@ function useChange(id: string, refresh: string[][]) {
 }
 
 export const useSessionChange = () => useChange("session", [["live"]]);
+/** CONFIRM=1 keeps a change on trial, REVERT=1 ends it now. */
+export const useSettingsChange = () => useChange("settings", [["live"]]);
 export const useIpoeChange = () => useChange("ipoe", [["live"]]);
 export const useLanChange = () => useChange("lan", [["live"]]);
 export const useFixedChange = () => useChange("fixed", [["live"]]);

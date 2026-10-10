@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Check, ExternalLink, RotateCcw, Undo2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { useLaneChange, useMgmt, useMgmtChange, useSfpLane } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
@@ -23,6 +23,7 @@ import { Page } from "../components/Page";
 import { HistoryNote, TrafficChart } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
+import { useCountdown } from "../lib/countdown";
 import { bitrate, integer } from "../lib/format";
 import { vlan, z } from "../lib/schemas";
 import { hostLink, laneMode, linkSpeed, port } from "../lib/state";
@@ -36,22 +37,9 @@ const MODES: { id: LaneMode; label: Key; hint: Key; ready: boolean }[] = [
   { id: "hsgmii", label: "sfp.modeHsgmii", hint: "sfp.modeHsgmiiHint", ready: false },
 ];
 
-/** Seconds left until a moment given in seconds of the stick's uptime. */
-function useCountdown(until: number | null | undefined, upNow: number | undefined) {
-  const [start] = useState(() => Date.now());
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (until == null) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [until]);
-  if (until == null || upNow == null) return null;
-  return Math.max(0, Math.round(until - upNow - (now - start) / 1000));
-}
-
 function LaneCard() {
   const { t, lang } = useI18n();
-  const { data: live } = useLive();
+  const { data: live, dataUpdatedAt } = useLive();
   const lane = useSfpLane();
   const change = useLaneChange();
   const state = useChangeState(change);
@@ -59,7 +47,7 @@ function LaneCard() {
   const sfp = port(live, "sfp");
   const l = lane.data;
   const [pick, setPick] = useState<LaneMode | null>(null);
-  const left = useCountdown(l?.trial?.until_s, live?.uptime.up_s);
+  const left = useCountdown(l?.trial?.until_s, live?.uptime.up_s, dataUpdatedAt);
   const chosen = pick ?? l?.choice ?? "auto";
   const active = l?.active ?? laneMode(live)?.toLowerCase().replace("base-x", "basex") ?? null;
   const activeName = MODES.find((m) => m.id === active)?.label;

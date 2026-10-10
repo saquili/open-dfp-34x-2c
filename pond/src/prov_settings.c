@@ -15,11 +15,15 @@
  * (/run/session/N), what it hands down among it, the address handed on, and
  * what became of the settings in the configuration store, which onu-config
  * records in /run/onu-store: "loaded" at boot, "defaults" when the store
- * held none, "saved" or "failed" after a change, "none" without a store. A
- * write takes KEY=value lines, has onu-config judge them over the settings in
- * force, writes what it gives back and the accounts, and starts "onu-apply
- * reload" without waiting for it; until it ends, a write is refused.
- * POND_APPLY and POND_ONU_CONFIG name other programs to start, for the tests.
+ * held none, "saved" or "failed" after a change, "none" without a store,
+ * and a change on trial with its end (/run/onu-trial). A write takes
+ * KEY=value lines, has onu-config judge them over the settings in force,
+ * writes what it gives back and the accounts, and starts "onu-apply try"
+ * without waiting for it: the change is on trial, and goes back unless it
+ * is confirmed (ADR 0014). CONFIRM=1 alone confirms it, which the panel
+ * does as soon as it reaches the stick again, and REVERT=1 alone ends it
+ * now. Until onu-apply ends, a write is refused. POND_APPLY and
+ * POND_ONU_CONFIG name other programs to start, for the tests.
  */
 
 #define _GNU_SOURCE
@@ -53,7 +57,7 @@ struct account {
 	char secret[SECRET_MAX + 1];
 };
 
-/* The "onu-apply reload" that runs, or 0; how the last one ended, or -1. */
+/* The onu-apply that runs, or 0; how the last one ended, or -1. */
 static pid_t g_apply;
 static int g_apply_status = -1;
 
@@ -252,8 +256,8 @@ void prov_settings_reap(void)
 	}
 }
 
-/* Start "onu-apply reload", with the signals a program starts with. */
-static int apply(void)
+/* Start "onu-apply @verb", with the signals a program starts with. */
+static int apply(const char *verb)
 {
 	const char *prog = getenv("POND_APPLY");
 	sigset_t none;
@@ -270,7 +274,7 @@ static int apply(void)
 		signal(SIGTERM, SIG_DFL);
 		sigemptyset(&none);
 		sigprocmask(SIG_SETMASK, &none, NULL);
-		execl(prog, prog, "reload", (char *)NULL);
+		execl(prog, prog, verb, (char *)NULL);
 		_exit(127);
 	}
 	g_apply = pid;
@@ -511,6 +515,18 @@ int prov_settings(struct prov_buf *out)
 		pv_null(out);
 	pv_comma(out);
 
+	pv_key(out, "trial");
+	if (!prov_read_line("/run/onu-trial", line, sizeof(line)) &&
+	    !strncmp(line, "UNTIL=", 6)) {
+		pv_open(out, '{');
+		pv_key(out, "until_s");
+		pv_num(out, strtol(line + 6, NULL, 10));
+		pv_close(out, '}');
+	} else {
+		pv_null(out);
+	}
+	pv_comma(out);
+
 	pv_key(out, "applying");
 	pv_bool(out, g_apply > 0);
 	pv_comma(out);
@@ -542,6 +558,14 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		return -EINVAL;
 	}
 	snprintf(text, sizeof(text), "%s", val);
+	/* The change on trial, confirmed or ended now. */
+	if (!strcmp(text, "CONFIRM=1") || !strcmp(text, "CONFIRM=1\n") ||
+	    !strcmp(text, "REVERT=1") || !strcmp(text, "REVERT=1\n")) {
+		rc = apply(text[0] == 'C' ? "confirm" : "revert");
+		if (rc)
+			snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
+		return rc;
+	}
 	accounts_load(acct);
 
 	/* The settings in force, then the change over them, then the accounts. */
@@ -628,7 +652,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		goto out;
 	}
 
-	rc = apply();
+	rc = apply("try");
 	if (rc)
 		snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
 out:

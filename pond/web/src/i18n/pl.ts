@@ -31,6 +31,9 @@ export const pl: Dictionary = {
     offlineSince: "Brak połączenia z wkładką od {time}. Dane poniżej są z tamtej chwili.",
     retrying: "Próbuję ponownie…",
     stale: "Zaktualizowano {time}",
+    trialConfirming: "Zmiana zastosowana. Panel ma połączenie z wkładką, więc ją zachowuje…",
+    trialWaiting:
+      "Zmiana działa na próbę. Jeśli panel nie połączy się ponownie z wkładką, za {left} s wkładka wróci do poprzednich ustawień.",
   },
   auth: {
     title: "Logowanie",

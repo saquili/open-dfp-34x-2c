@@ -356,6 +356,12 @@ export interface Settings {
   /** peer_gateway: the concentrator's address, when the router has it as its gateway. */
   pass: { address: string; lan: string | null; peer_gateway?: string | null } | null;
   store: "loaded" | "defaults" | "saved" | "failed" | "none" | null;
+  /**
+   * A change on trial: the stick goes back to the settings of before at
+   * until_s, in seconds of its uptime, unless the panel confirms it.
+   * Absent on a stick of before.
+   */
+  trial?: { until_s: number } | null;
   applying: boolean;
   last_apply_status: number | null;
 }

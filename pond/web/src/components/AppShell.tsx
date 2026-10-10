@@ -4,7 +4,8 @@
 /*
  * The frame around every page: the menu (a drawer on a phone), whether the
  * stick answers, the language and the user. When the stick stops answering,
- * the pages keep the last figures and a bar says since when.
+ * the pages keep the last figures and a bar says since when. A change of the
+ * settings on trial is confirmed here, whatever the page (ADR 0014).
  */
 
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
@@ -20,14 +21,18 @@ import {
   Menu,
   Network,
   Settings2,
+  ShieldCheck,
   WifiOff,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useSignOut } from "../api/auth";
 import { OfflineError } from "../api/client";
+import { useSettingsChange } from "../api/config";
 import { useLive } from "../api/live";
 import { type Key, useI18n } from "../i18n";
+import { useCountdown } from "../lib/countdown";
 import { clock } from "../lib/format";
+import { trialToConfirm } from "../lib/trial";
 
 const NAV: { to: string; key: Key; icon: ReactNode }[] = [
   { to: "/", key: "nav.overview", icon: <LayoutDashboard className="size-4" /> },
@@ -123,6 +128,49 @@ function OfflineBar() {
         className="loading loading-dots loading-sm"
         aria-label={t("connection.retrying")}
       />
+    </div>
+  );
+}
+
+/*
+ * A change of the settings on trial: confirmed as soon as a fresh reading
+ * shows it applied, which the panel could only get by reaching the stick
+ * again. While the stick does not answer, the bar says when it goes back.
+ */
+function TrialBar() {
+  const { t } = useI18n();
+  const live = useLive();
+  const confirm = useSettingsChange();
+  const sent = useRef<number | null>(null);
+  const settings = live.data?.settings;
+  const fresh = !live.error && !live.isFetching;
+  const due = trialToConfirm(settings, fresh, sent.current);
+  useEffect(() => {
+    if (due == null) return;
+    sent.current = due;
+    confirm.mutate(
+      { CONFIRM: "1" },
+      {
+        onError: () => {
+          sent.current = null;
+        },
+      },
+    );
+  }, [due, confirm.mutate]);
+  const left = useCountdown(settings?.trial?.until_s, live.data?.uptime?.up_s, live.dataUpdatedAt);
+  if (!settings?.trial) return null;
+  const waiting = live.error instanceof OfflineError;
+  return (
+    <div
+      role="status"
+      className={`alert alert-soft mb-4 ${waiting ? "alert-warning" : "alert-info"}`}
+    >
+      <ShieldCheck className="size-5" />
+      <span>
+        {waiting
+          ? t("connection.trialWaiting", { left: left ?? "…" })
+          : t("connection.trialConfirming")}
+      </span>
     </div>
   );
 }
@@ -225,6 +273,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
         </header>
         <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col p-4 sm:p-6 lg:min-h-0 lg:overflow-auto">
           <OfflineBar />
+          <TrialBar />
           {children ?? <Outlet />}
         </main>
       </div>
