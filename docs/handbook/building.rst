@@ -234,7 +234,10 @@ The network layer of OpenWrt
     ``buildroot/patches/0004-*.patch`` (``buildroot/README.rst``). The
     command-line tools of these packages, ``ubus``, ``uci`` and ``jshn``, are
     not in the image: the post-build script takes them out. The boot script
-    does not start the daemons yet.
+    starts both; netifd brings up the management VLAN and its address, from
+    the configuration that ``onu-net`` writes in ``/run/config``
+    (``onu-utils/README.rst``), and takes the other links over one at a time
+    as the scripts that set them up move to it.
 iproute2
     ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
     classifier and the PON driver, and ``bridge``, which shows the bridge's
@@ -255,9 +258,13 @@ The boot script
        them (the host side keeps it), and has ARP answer only for an address
        of the interface it is asked on: the stick has no address on the PON
        side, sends nothing of its own to the OLT and answers nothing from it;
-    #. brings the interface ``sfp`` up with the address ``192.0.2.2/30``, and a
-       VLAN interface ``mgmt`` of it (VLAN 4094) with ``198.51.100.2/30``. These
-       are the addresses the bench tries (``flashing.rst``, "What you need"); it
+    #. brings the interface ``sfp`` up with the address ``192.0.2.2/30``, and,
+       through ``netifd``, a VLAN interface ``mgmt`` of it (VLAN 4094) with
+       ``198.51.100.2/30``; when netifd has not brought that address up within
+       ten seconds, the script brings it up itself, so that the stick stays
+       reachable. The switch's conduit ``cpu`` is brought up first, so that
+       netifd, which takes down only what it brought up, never takes it down.
+       These are the addresses the bench tries (``flashing.rst``, "What you need"); it
        tries the second first, because that one answers whether or not a bridge
        has been built on the link (``tools/bench/README.rst``). The host has to
        have the VLAN on its interface too. No frame of that VLAN crosses the
