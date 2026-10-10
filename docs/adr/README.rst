@@ -60,3 +60,6 @@ record.
    * - 0014
      - One control plane turns the settings into what procd and netifd keep
      - Accepted
+   * - 0015
+     - The names of the stick's own programs say what they do
+     - Accepted

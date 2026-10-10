@@ -302,8 +302,8 @@ The boot script
        serial number and the PLOAM password through devlink and brings the PON
        up;
     #. starts ``omcid``, which answers the OLT, and with sessions the watcher
-       and, per session, ``dhcp6d`` (``onu-mode``), as the instances of one
-       service of procd, ``onu``, which ``onu-mode`` gives procd whole
+       and, per session, ``dhcp6d`` (``onu-apply``), as the instances of one
+       service of procd, ``onu``, which ``onu-apply`` gives procd whole
        (``onu-svc sync``): procd starts what is new, ends what is gone and
        starts again only what changed;
     #. prints ``open-dfp-34x-2c: ready`` on the console.
