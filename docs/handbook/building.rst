@@ -315,9 +315,11 @@ The boot script
     ed25519 host key made in ``/run/dropbear``, and ``pond``, whose API stays
     locked without ``/etc/pond.token``, on the two addresses above and nowhere
     else: the stick has no packet filter, so its servers keep off the PON side
-    by where they listen. ``onu-act`` does, as root, what ``pond`` asks of the
-    stick from a fixed list (ADR 0014). On the console it keeps a login prompt (``getty``
-    and ``login``).
+    by where they listen. ``pond`` runs as an account of its own, ``pond``,
+    with which no one logs in, and ``onu-act`` does, as root, what it asks of
+    the stick from a fixed list; ubusd's access list lets it ask nothing else
+    (ADR 0014). On the console it keeps a login prompt (``getty`` and
+    ``login``).
 
     The stick has one account, root, with one password for the console, ssh
     and the panel (``docs/adr/0012-one-account-root.rst``). Until one is set,
