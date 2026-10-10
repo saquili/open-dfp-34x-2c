@@ -280,6 +280,7 @@ int system_if_up(struct device *dev);
 int system_if_down(struct device *dev);
 int system_if_check(struct device *dev);
 bool system_if_is_point_to_point(struct device *dev);
+bool system_if_is_up(struct device *dev);
 int system_if_resolve(struct device *dev);
 
 int system_if_dump_info(struct device *dev, struct blob_buf *b);

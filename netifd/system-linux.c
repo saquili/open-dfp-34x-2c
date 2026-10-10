@@ -3006,6 +3006,17 @@ bool system_if_is_point_to_point(struct device *dev)
 	return ifr.ifr_flags & IFF_POINTOPOINT;
 }
 
+bool system_if_is_up(struct device *dev)
+{
+	struct ifreq ifr = {};
+
+	strncpy(ifr.ifr_name, dev->ifname, sizeof(ifr.ifr_name) - 1);
+	if (ioctl(sock_ioctl, SIOCGIFFLAGS, &ifr) < 0)
+		return false;
+
+	return ifr.ifr_flags & IFF_UP;
+}
+
 struct if_check_data {
 	struct device *dev;
 	int pending;

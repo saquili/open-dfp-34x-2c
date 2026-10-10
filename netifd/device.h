@@ -312,6 +312,8 @@ struct device {
 	bool auth_status;
 
 	bool external;
+	/* up before netifd raised it: it is left up when released */
+	bool found_up;
 	bool disabled;
 	bool deferred;
 	bool hidden;

@@ -176,6 +176,7 @@ static int set_device_state(struct device *dev, bool state)
 		if (!dev->ifindex)
 			return -1;
 
+		dev->found_up = system_if_is_up(dev);
 		system_if_get_settings(dev, &dev->orig_settings);
 		/* Only keep orig settings based on what needs to be set */
 		dev->orig_settings.valid_flags = dev->orig_settings.flags;
@@ -187,7 +188,13 @@ static int set_device_state(struct device *dev, bool state)
 
 		system_if_apply_settings_after_up(dev, &dev->settings);
 	} else {
-		if (!dev->external)
+		/*
+		 * A device that was up before netifd took it stays up: another
+		 * program, or the kernel, raised it and may still need it. The
+		 * conduit of a DSA switch is such a device: it is the parent of
+		 * every port, and down it takes every port's traffic with it.
+		 */
+		if (!dev->external && !dev->found_up)
 			system_if_down(dev);
 		system_if_apply_settings(dev, &dev->orig_settings, dev->orig_settings.flags);
 
