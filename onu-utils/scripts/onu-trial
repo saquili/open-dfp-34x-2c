@@ -6,13 +6,18 @@
 # see that the system came up, and keep the bank; if it did not come up in
 # time, restart, and the boot loader starts the committed bank again.
 #
-# Usage: onu-trial ADDRESS
+# Usage: onu-trial [ADDRESS]
 #
-# The boot script runs it in the background as its last step; ADDRESS is the
-# host link's address, where the status daemon listens. A start from the
-# committed bank, or from memory, is no trial, and it does nothing.
+# The boot script runs it in the background as its first step, so that a
+# start that hangs in the boot script is restarted too. ADDRESS is where the
+# status daemon listens; without it, the address on the host link, or else
+# the management address, of /run/onu-mgmt once onu-mgmt has written it. A
+# start from the committed bank, or from memory, is no trial, and it does
+# nothing.
 #
-# The system is up when omcid runs, the status daemon answers on ADDRESS, and
+# The system is up when omcid runs and ran as the same process at the look
+# before (procd starts one that crashed again after 2 s), the status daemon
+# answers on ADDRESS, and
 # the PON is in O5, operation, unless the receiver has no light (alarm LOS):
 # without a fiber the PON says nothing about the new system. All three hold
 # for a person to manage the stick and for the operator to see it. Then
@@ -22,7 +27,8 @@
 # started the tried bank, starts the committed one. The watchdog that the
 # boot loader armed for the trial watches the kernel's start alone: the kernel
 # and then procd feed it, so a system that hangs before onu-trial runs is not
-# restarted by it (docs/handbook/boot-contract.rst, "A trial boot").
+# restarted by it (docs/handbook/boot-contract.rst, "A trial boot"). A
+# restart that procd does not carry out within 30 s is forced.
 #
 # What it found is in /run/onu-trial, one word: trial, committed or failed.
 # ONU_ROOT, when set, is put in front of /run, for the tests; TRIAL_STEP
@@ -32,7 +38,7 @@ set -u
 RUN=${ONU_ROOT:-}/run
 LIMIT=${TRIAL_LIMIT:-300}
 STEP=${TRIAL_STEP:-5}
-address=${1:?usage: onu-trial ADDRESS}
+address=${1:-}
 
 log() {
 	logger -t onu-trial "$*" 2>/dev/null
@@ -48,13 +54,33 @@ field() {
 	echo "$status" | sed -n "s/^$1=//p"
 }
 
+# Where the status daemon listens: ADDRESS, or the host link's address of
+# /run/onu-mgmt, or its management address, without the prefix length.
+pond_address() {
+	[ -n "$address" ] && { echo "$address"; return; }
+	a=$(sed -n 's/^DATA_ADDRESS=//p' "$RUN/onu-mgmt" 2>/dev/null)
+	[ -n "$a" ] || a=$(sed -n 's/^ADDRESS=//p' "$RUN/onu-mgmt" 2>/dev/null)
+	echo "${a%%/*}"
+}
+
+# Whether omcid runs, as the process it was at the look before, which
+# $RUN/onu-trial.omcid keeps.
+omcid_steady() {
+	now=$(pidof omcid 2>/dev/null)
+	last=$(cat "$RUN/onu-trial.omcid" 2>/dev/null)
+	echo "$now" >"$RUN/onu-trial.omcid"
+	[ -n "$now" ] && [ "$now" = "$last" ]
+}
+
 # Whether the status daemon answers its health request within 5 s, over the
 # HTTP that it answers it on beside HTTPS; nc of BusyBox has no time limit of
 # its own.
 pond_answers() {
+	at=$(pond_address)
+	[ -n "$at" ] || return 1
 	reply=$RUN/onu-trial.reply
 	: >"$reply"
-	(printf 'GET /api/health HTTP/1.0\r\n\r\n' | nc "$address" 80 >"$reply" 2>/dev/null) &
+	(printf 'GET /api/health HTTP/1.0\r\n\r\n' | nc "$at" 80 >"$reply" 2>/dev/null) &
 	probe=$!
 	for _ in 1 2 3 4 5; do
 		kill -0 "$probe" 2>/dev/null || break
@@ -74,7 +100,7 @@ pon_ready() {
 
 # What is not up yet, or nothing when all of it is.
 missing() {
-	pidof omcid >/dev/null 2>&1 || { echo "omcid does not run"; return; }
+	omcid_steady || { echo "omcid does not run steadily"; return; }
 	pond_answers || { echo "the status daemon does not answer"; return; }
 	pon_ready || { echo "the PON is not in O5"; return; }
 }
@@ -110,3 +136,5 @@ state failed
 log "bank $running is not up after $waited s ($why); restarting into bank $committed"
 sync
 reboot
+sleep 30
+reboot -f

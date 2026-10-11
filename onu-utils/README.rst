@@ -165,10 +165,11 @@ there, and names it by its whole path where procd starts it.
    ``src/update.h``, the environment's in ``src/bootenv.h``.
 
 ``onu-trial``
-   run last by the boot script with the host link's address: after a start of
-   a bank on trial, it commits the bank once omcid runs, the status daemon
-   answers and the PON is in O5 (or has no light), and restarts into the
-   committed bank when that does not happen within 300 s.
+   run first by the boot script: after a start of a bank on trial, it commits
+   the bank once omcid runs as one process across two looks, the status
+   daemon answers on the address of ``/run/onu-mgmt`` (or one given) and the
+   PON is in O5 (or has no light), and restarts into the committed bank when
+   that does not happen within 300 s, forcing the restart after 30 s more.
 
 ``pon``
    shows the PON devices of the kernel and their ONU, through the kernel's

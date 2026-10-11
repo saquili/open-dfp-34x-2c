@@ -30,8 +30,12 @@ setup() {
 	printf '#!/bin/sh\ncat "%s/pon"\n' "$T" >"$T/bin/pon"
 	printf '#!/bin/sh\ncat >/dev/null\n[ -e "%s/pond.up" ] && printf "HTTP/1.1 200 OK\\r\\n\\r\\n{\\"ok\\":true}"\nexit 0\n' \
 		"$T" >"$T/bin/nc"
-	printf '#!/bin/sh\n[ -e "%s/omcid.up" ]\n' "$T" >"$T/bin/pidof"
-	printf '#!/bin/sh\necho reboot >>"$LOG"\n' >"$T/bin/reboot"
+	# pidof gives omcid's PID, of $T/omcid.up, 100 when the file is empty.
+	printf '#!/bin/sh\n[ -e "%s/omcid.up" ] || exit 1\n[ -s "%s/omcid.up" ] && cat "%s/omcid.up" || echo 100\n' \
+		"$T" "$T" "$T" >"$T/bin/pidof"
+	printf '#!/bin/sh\necho "reboot $*" >>"$LOG"\n' >"$T/bin/reboot"
+	# The wait for procd's restart is no wait here; the looks' are real.
+	printf '#!/bin/sh\n[ "$1" = 30 ] && exit 0\nexec %s "$@"\n' "$(command -v sleep)" >"$T/bin/sleep"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/sync"
 	chmod +x "$T/bin"/*
@@ -112,6 +116,26 @@ setup
 rm "$T/omcid.up"
 trial
 check '[ "$result" = failed ] && logged reboot'
+teardown
+
+echo "an omcid that procd starts again and again fails the trial"
+setup
+printf '#!/bin/sh\nn=$(cat "%s/pid" 2>/dev/null || echo 100)\necho $((n + 1)) >"%s/pid"\necho $n\n' \
+	"$T" "$T" >"$T/bin/pidof"
+trial
+check '[ "$result" = failed ] && ! logged "^onu-update commit" && logged "^reboot -f"'
+teardown
+
+echo "without an address, the one of onu-mgmt, once it is there"
+setup
+"$TRIAL_SCRIPT" 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-trial")" = failed ]'
+teardown
+setup
+printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nDATA_ADDRESS=192.0.2.2/30\n' >"$ONU_ROOT/run/onu-mgmt"
+printf '#!/bin/sh\necho "nc $*" >>"$LOG"\ncat >/dev/null\nprintf "HTTP/1.1 200 OK\\r\\n\\r\\n{\\"ok\\":true}"\n' >"$T/bin/nc"
+"$TRIAL_SCRIPT" 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-trial")" = committed ] && logged "^nc 192.0.2.2 80$"'
 teardown
 
 echo "a commit that fails is a failed trial"
