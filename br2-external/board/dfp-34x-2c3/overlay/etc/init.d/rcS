@@ -51,9 +51,11 @@ onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reac
 # identity, and the PON driver takes the serial number before the PON comes
 # up. The file holds the PLOAM password, so only root may read it. Root's
 # password goes to /run/shadow, which /etc/shadow names, for the console's
-# login and the ssh server.
+# login and the ssh server. The key of the panel's HTTPS comes from the store
+# too, or is made now and kept there, the first time (onu-config tls).
 umask 077
 onu-config load || warn "no identity in the configuration store or the factory configuration"
+onu-config tls || warn "no key for HTTPS: the panel answers over HTTP"
 # A bench may name the versions that the software images and the circuit
 # packs report to the OLT, so that a unit shows what the firmware it came
 # with showed; without them omcid reports its own.
@@ -198,6 +200,16 @@ if [ -r /etc/pond.token ]; then
 		chown pond:pond /run/pond/token && chmod 400 /run/pond/token ||
 		warn "the token of scripts is not the status daemon's"
 fi
+# The panel's key, for the status daemon alone to read, and the ports below
+# 1024 that it listens on, 80 and 443, open to every account: the stick runs
+# no program of a person's own.
+if [ -r /run/onu-tls-key ]; then
+	cp /run/onu-tls-key /run/pond/tls.key &&
+		chown pond:pond /run/pond/tls.key && chmod 400 /run/pond/tls.key ||
+		warn "the key of HTTPS is not the status daemon's: the panel answers over HTTP"
+fi
+echo 80 >/proc/sys/net/ipv4/ip_unprivileged_port_start ||
+	warn "the status daemon cannot listen on ports 80 and 443"
 envs=$(sed -n 's,^\(mtd[0-9]*\):.* "env2*"$,/dev/\1,p' /proc/mtd)
 [ -n "$envs" ] && chown :pond $envs && chmod 640 $envs ||
 	warn "the status daemon does not read the boot loader's environment"
@@ -226,10 +238,14 @@ fi
 # alone.
 onu-trial "${data:-$mgmt}" >/run/onu-trial.log 2>&1 &
 
-# The bench waits for the last line on the console.
+# The bench waits for the last line on the console. Before it, the panel's
+# address and the fingerprint of the certificate a browser is shown there,
+# which no authority signed, for a person to compare with the browser's.
 {
 	echo
 	echo "open-dfp-34x-2c: the ODI DFP-34X-2C3, $(uname -sr), $(uname -m)"
 	echo "open-dfp-34x-2c: ssh on $MGMT_ADDRESS (VLAN $MGMT_VLAN)${data:+ and $DATA_ADDRESS (sfp)}"
+	[ -r /run/pond/tls.key ] && pond -k /run/pond/tls.key -F "$mgmt" |
+		sed 's/^\([^ ]*\) SHA-256 \([^ ]*\) until \([^T]*\).*$/open-dfp-34x-2c: the panel on https:\/\/\1\/, certificate SHA-256 \2, valid until \3/'
 	echo "open-dfp-34x-2c: ready"
 } >/dev/console
