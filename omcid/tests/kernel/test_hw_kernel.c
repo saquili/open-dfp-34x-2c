@@ -29,13 +29,14 @@ extern const struct omci_hw_ops omci_hw_kernel_ops;
 
 static int checks, failures;
 
-#define CHECK(cond)                                                          \
-	do {                                                                 \
-		checks++;                                                    \
-		if (!(cond)) {                                               \
-			failures++;                                          \
-			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-		}                                                            \
+#define CHECK(cond)                                                      \
+	do {                                                             \
+		checks++;                                                \
+		if (!(cond)) {                                           \
+			failures++;                                      \
+			printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, \
+			       #cond);                                   \
+		}                                                        \
 	} while (0)
 
 /* What tc shows of the ingress of @dev, all on one line, for strstr(). */
@@ -92,10 +93,14 @@ static int sh(const char *cmd)
 static void vlan_rules(void)
 {
 	const struct omci_hw_vlan_xlate rules[] = {
-		{ .kind = OMCI_HW_VLAN_CVID_XLATE, .match_cvid = 410,
-		  .assign_cvid = 1410, .assign_pri = OMCI_HW_VLAN_PRI_KEEP },
-		{ .kind = OMCI_HW_VLAN_CVID_PUSH, .match_cvid = 0,
-		  .assign_cvid = 420, .assign_pri = 4 },
+		{ .kind = OMCI_HW_VLAN_CVID_XLATE,
+		  .match_cvid = 410,
+		  .assign_cvid = 1410,
+		  .assign_pri = OMCI_HW_VLAN_PRI_KEEP },
+		{ .kind = OMCI_HW_VLAN_CVID_PUSH,
+		  .match_cvid = 0,
+		  .assign_cvid = 420,
+		  .assign_pri = 4 },
 	};
 	struct omci_hw_reject rejected;
 
@@ -118,11 +123,12 @@ static void vlan_rules(void)
 	CHECK(!at("sfp", 1000, NULL) && !at("pon", 1000, NULL));
 }
 
-static void filters(void)
+static void port_filters(void)
 {
 	const struct omci_hw_filter rules[] = {
 		{ .upstream = true, .pass = false, .ethertype = 0x86dd },
-		{ .upstream = false, .pass = true,
+		{ .upstream = false,
+		  .pass = true,
 		  .dmac = { 0x01, 0x00, 0x5e, 0, 0, 0 },
 		  .dmask = { 0xff, 0xff, 0xff, 0x80, 0, 0 } },
 	};
@@ -170,8 +176,9 @@ static void leftover_drops(void)
 /* Whether the kernel has the vlan action, which some kernels leave out. */
 static bool vlan_action(void)
 {
-	return sh("tc actions add action vlan pop index 4242 >/dev/null 2>&1") == 0 &&
-	       sh("tc actions del action vlan index 4242 >/dev/null 2>&1") == 0;
+	if (sh("tc actions add action vlan pop index 4242 >/dev/null 2>&1"))
+		return false;
+	return sh("tc actions del action vlan index 4242 >/dev/null 2>&1") == 0;
 }
 
 int main(void)
@@ -181,20 +188,21 @@ int main(void)
 		puts("test_hw_kernel: SKIPPED: it needs root, network namespaces and tc");
 		return 0;
 	}
-	if (sh("ip link add sfp type dummy && ip link add pon type dummy && "
-	       "ip link set sfp up && ip link set pon up") != 0) {
+	if (sh("ip link add sfp type dummy && ip link set sfp up") != 0 ||
+	    sh("ip link add pon type dummy && ip link set pon up") != 0) {
 		puts("test_hw_kernel: no dummy interfaces");
 		return 1;
 	}
 
+	/* First, as the drops go with the run's first set of VLAN rules. */
+	leftover_drops();
 	if (vlan_action()) {
 		vlan_rules();
 		multicast_tags();
 	} else {
 		puts("(this kernel has no vlan action: the VLAN rules and the multicast tags are skipped)");
 	}
-	filters();
-	leftover_drops();
+	port_filters();
 
 	printf("test_hw_kernel: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
