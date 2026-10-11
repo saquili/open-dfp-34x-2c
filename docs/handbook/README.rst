@@ -30,6 +30,9 @@ Building and installing
         way in through the shipped firmware's web page.
     ``flashing.rst``
         The bench: a RAM boot, writing bank 0, one-shot trials, recovery.
+    ``backup.rst``
+        A copy of the whole flash, taken before the first update: what it
+        holds, how to take and check it.
     ``toolchain.rst``
         The cross toolchain: compiling for the core, what a program must not
         do, checking one with the instruction-set gate, and running the test

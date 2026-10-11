@@ -269,11 +269,9 @@ and asks before it writes over it. ``onu-update write`` on the command line
 does not ask. The first update writes this system there, and the shipped
 firmware is gone; the way back with it.
 
-Keep a copy of the whole flash before the first update. The copy holds the
-unit's registration identity and this system's secrets: keep it private. This
-handbook has no page yet on taking a copy and writing it back;
-``flashing.rst`` shows how to read the partitions and hash them, which proves
-that a copy is whole.
+Keep a copy of the whole flash before the first update (``backup.rst``). The
+copy holds the unit's registration identity and this system's secrets: keep it
+private. No procedure for writing a copy back is recorded yet.
 
 Measured on the board
 =====================

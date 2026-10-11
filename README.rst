@@ -128,8 +128,10 @@ What is not done, or not tried
   addresses they listen on. Whether they can be reached from a session's peer
   has not been tested.
 * The update file carries a checksum against damage and no signature.
-* The handbook has no page yet on copying the whole flash and writing it back,
-  on recovery over the serial console in one place, or on optical safety.
+* The handbook says how to take a copy of the whole flash
+  (``docs/handbook/backup.rst``), not yet how to write one back; nor has it a
+  page on recovery over the serial console in one place, or on optical
+  safety.
 * The other known gaps of the code are kept as the repository's issues.
 
 Before you install
