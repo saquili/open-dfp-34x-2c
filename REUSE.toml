@@ -6,8 +6,8 @@
 # COPYING carries the licence text itself. The GNU GPL version 2 text in it is
 # the Free Software Foundation's; the project uses it under GPL-2.0-only.
 #
-# linux/ is the Linux kernel, imported unchanged from its release, and keeps
-# the kernel's own licensing scheme: each source file names its licence with
+# linux/ is the Linux kernel, imported from its release with this project's
+# kernel commits on top, and keeps the kernel's own licensing scheme: each source file names its licence with
 # an SPDX identifier, linux/LICENSES/ holds the licence texts, and
 # linux/Documentation/process/license-rules.rst gives the rules, which the
 # kernel's scripts/spdxcheck.py and scripts/checkpatch.pl check. REUSE cannot
@@ -17,7 +17,8 @@
 # names are in LICENSES/, copied from linux/LICENSES/. Inside linux/, the
 # information in each file remains authoritative.
 #
-# Everything else in the tree carries an inline SPDX header.
+# Everything else in the tree carries an inline SPDX header, but for the files
+# that omcid/REUSE.toml and pond/REUSE.toml annotate.
 
 version = 1
 
