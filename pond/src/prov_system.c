@@ -54,27 +54,62 @@ static bool host_name(const char *v)
 	return true;
 }
 
-int prov_hostname_set(const char *val, char *err, size_t errcap)
+/* A change of the name: stored first, then given to the running system. */
+static struct prov_change g_host;
+static char g_host_name[64];
+
+static void host_named(void *ctx, int code, const char *output)
+{
+	(void)ctx;
+	(void)output;
+	prov_change_end(&g_host, code ? -EIO : 0,
+			"the name is stored, and taken at the next start");
+}
+
+static void host_stored(void *ctx, int code, const char *output)
 {
 	static const char *const names[] = { "name" };
-	char name[64], input[96], out[256];
-	const char *const values[] = { name };
+	const char *const values[] = { g_host_name };
+
+	(void)ctx;
+	(void)output;
+	if (code)
+		prov_change_end(&g_host, -EIO, "the name was not stored");
+	else if (bus_act_begin("hostname", names, values, 1, NULL, host_named, NULL))
+		prov_change_end(&g_host, -EIO,
+				"the name is stored, and taken at the next start");
+}
+
+int prov_hostname_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx)
+{
+	char name[64], input[96];
+	int rc;
 
 	if (!line_of(val, "HOSTNAME", name, sizeof(name)) || !host_name(name)) {
 		snprintf(err, errcap,
 			 "HOSTNAME: letters, digits and hyphens, not first or last, up to 63");
 		return -EINVAL;
 	}
+	rc = prov_change_take(&g_host, done, ctx, err, errcap);
+	if (rc)
+		return rc;
+	snprintf(g_host_name, sizeof(g_host_name), "%s", name);
 	snprintf(input, sizeof(input), "HOSTNAME=%s\n", name);
-	if (bus_act("system_store", NULL, NULL, 0, input, out, sizeof(out))) {
+	rc = bus_act_begin("system_store", NULL, NULL, 0, input, host_stored, NULL);
+	if (rc) {
+		prov_change_drop(&g_host);
 		snprintf(err, errcap, "the name was not stored");
 		return -EIO;
 	}
-	if (bus_act("hostname", names, values, 1, NULL, out, sizeof(out))) {
-		snprintf(err, errcap, "the name is stored, and taken at the next start");
-		return -EIO;
-	}
-	return 0;
+	return -EINPROGRESS;
+}
+
+int prov_hostname_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_hostname_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 /* A number of KEY= in @text, as JSON, or null. */
@@ -139,10 +174,38 @@ int prov_sfp_lane(struct prov_buf *out)
 	return 0;
 }
 
-int prov_sfp_lane_set(const char *val, char *err, size_t errcap)
+/* A change of the lane's setting: a trial, a keep or a revert. */
+static struct prov_change g_lane;
+
+/* What the lane's program said of a change: 0, or why it was refused. */
+static int lane_result(int code, const char *output, char *err, size_t errcap)
+{
+	if (code == 2 || code == -EINVAL) {
+		snprintf(err, errcap, "not a setting of the lane");
+		return -EINVAL;
+	}
+	if (code) {
+		snprintf(err, errcap, "%s", *output ? output : "the lane was not changed");
+		err[strcspn(err, "\n")] = '\0';
+		return -EBUSY;
+	}
+	return 0;
+}
+
+static void lane_changed(void *ctx, int code, const char *output)
+{
+	char err[256];
+	int rc = lane_result(code, output, err, sizeof(err));
+
+	(void)ctx;
+	prov_change_end(&g_lane, rc, err);
+}
+
+int prov_sfp_lane_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx)
 {
 	static const char *const names[] = { "mode" };
-	char mode[32], v[8], out[256];
+	char mode[32], v[8];
 	const char *const values[] = { mode };
 	const char *method;
 	int rc;
@@ -157,17 +220,22 @@ int prov_sfp_lane_set(const char *val, char *err, size_t errcap)
 		snprintf(err, errcap, "MODE=setting, KEEP=1 or REVERT=1");
 		return -EINVAL;
 	}
-	rc = bus_act(method, names, values, 1, NULL, out, sizeof(out));
-	if (rc == 2 || rc == -EINVAL) {
-		snprintf(err, errcap, "not a setting of the lane");
-		return -EINVAL;
-	}
+	rc = prov_change_take(&g_lane, done, ctx, err, errcap);
+	if (rc)
+		return rc;
+	rc = bus_act_begin(method, names, values, 1, NULL, lane_changed, NULL);
 	if (rc) {
-		snprintf(err, errcap, "%s", *out ? out : "the lane was not changed");
-		err[strcspn(err, "\n")] = '\0';
-		return -EBUSY;
+		prov_change_drop(&g_lane);
+		return lane_result(rc, "", err, errcap);
 	}
-	return 0;
+	return -EINPROGRESS;
+}
+
+int prov_sfp_lane_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_sfp_lane_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 int prov_mgmt(struct prov_buf *out)

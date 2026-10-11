@@ -132,8 +132,9 @@ void prov_settings_reap(void)
 }
 
 /* The end of onu-apply try. */
-static void applied(int code, const char *output)
+static void applied(void *ctx, int code, const char *output)
 {
+	(void)ctx;
 	(void)output;
 	g_apply_status = code < 0 ? 255 : code;
 }
@@ -420,9 +421,37 @@ int prov_settings(struct prov_buf *out)
 	return 0;
 }
 
-int prov_settings_set(const char *val, char *err, size_t errcap)
+/*
+ * A change of the settings: onu-config judges it over the settings in force
+ * and writes it, then onu-apply tries it, which is not waited for.
+ */
+static struct prov_change g_change;
+
+static void settings_written(void *ctx, int code, const char *output)
 {
-	char out[TEXT_MAX];
+	char err[256];
+	int rc;
+
+	(void)ctx;
+	if (code == 1) {
+		reason(output, err, sizeof(err));
+		prov_change_end(&g_change, -EINVAL, err);
+		return;
+	}
+	if (code) {
+		snprintf(err, sizeof(err), "onu-config: %s",
+			 code < 0 ? "it does not run" : "the settings were not written");
+		prov_change_end(&g_change, -EIO, err);
+		return;
+	}
+	rc = bus_act_start("settings_try", -1, NULL, applied, NULL);
+	snprintf(err, sizeof(err), "onu-apply: %s", strerror(-rc));
+	prov_change_end(&g_change, rc, err);
+}
+
+int prov_settings_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx)
+{
 	int rc;
 
 	prov_settings_reap();
@@ -434,23 +463,24 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		snprintf(err, errcap, "the settings are too long");
 		return -EINVAL;
 	}
-
-	/* onu-config judges the change over the settings in force and writes it. */
-	rc = bus_act("settings_change", NULL, NULL, 0, val, out, sizeof(out));
-	if (rc == 1) {
-		reason(out, err, errcap);
-		return -EINVAL;
-	}
+	rc = prov_change_take(&g_change, done, ctx, err, errcap);
+	if (rc)
+		return rc;
+	rc = bus_act_begin("settings_change", NULL, NULL, 0, val, settings_written,
+			   NULL);
 	if (rc) {
-		snprintf(err, errcap, "onu-config: %s",
-			 rc < 0 ? "it does not run" : "the settings were not written");
+		prov_change_drop(&g_change);
+		snprintf(err, errcap, "onu-config: it does not run");
 		return -EIO;
 	}
+	return -EINPROGRESS;
+}
 
-	rc = bus_act_start("settings_try", -1, NULL, applied);
-	if (rc)
-		snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
-	return rc;
+int prov_settings_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_settings_write(val, err, errcap, prov_waited, &w), &w);
 }
 
 /*
@@ -491,7 +521,8 @@ static const char *line_value(const char *text, const char *key, char *out,
  * HOST_VLAN. onu-config judges them, and takes over the WAN's settings of before,
  * which the first session took when it had none of its own.
  */
-int prov_session_set(const char *val, char *err, size_t errcap)
+int prov_session_write(const char *val, char *err, size_t errcap,
+		       prov_done done, void *ctx)
 {
 	char id[VALUE_MAX], user[USER_MAX + 2], secret[SECRET_MAX + 2],
 		vlan[VALUE_MAX], mac[VALUE_MAX], gem[VALUE_MAX], fam[VALUE_MAX],
@@ -565,8 +596,15 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 	if (!len)
 		text[0] = '\0';
 
-	rc = prov_settings_set(text, err, errcap);
+	rc = prov_settings_write(text, err, errcap, done, ctx);
 	explicit_bzero(secret, sizeof(secret));
 	explicit_bzero(text, sizeof(text));
 	return rc;
+}
+
+int prov_session_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_session_write(val, err, errcap, prov_waited, &w), &w);
 }

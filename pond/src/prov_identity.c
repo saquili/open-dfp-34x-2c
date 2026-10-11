@@ -172,9 +172,33 @@ static bool number(const char *v, unsigned long max)
 	return !*end && !errno && n <= max;
 }
 
-int prov_identity_set(const char *val, char *err, size_t errcap)
+/* A change of the identity: stored first, then registered under. */
+static struct prov_change g_ident;
+
+static void ident_stored(void *ctx, int code, const char *output)
 {
-	char text[1024], line[300], out[256];
+	char out[256];
+
+	(void)ctx;
+	(void)output;
+	if (code) {
+		prov_change_end(&g_ident, code < 0 ? code : -EIO,
+				"the identity was not stored");
+		return;
+	}
+	/* Register again under the new identity; onu-act answers once it starts. */
+	if (bus_act("reidentify", NULL, NULL, 0, NULL, out, sizeof(out)) < 0) {
+		prov_change_end(&g_ident, -EIO,
+				"the identity is stored, and taken at the next start");
+		return;
+	}
+	prov_change_end(&g_ident, 0, NULL);
+}
+
+int prov_identity_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx)
+{
+	char text[1024], line[300];
 	const char *p = val;
 	size_t len = 0;
 	int rc;
@@ -245,18 +269,25 @@ int prov_identity_set(const char *val, char *err, size_t errcap)
 		return -EINVAL;
 	}
 
-	rc = bus_act("identity_store", NULL, NULL, 0, text, out, sizeof(out));
-	explicit_bzero(text, sizeof(text));
 	explicit_bzero(line, sizeof(line));
+	rc = prov_change_take(&g_ident, done, ctx, err, errcap);
 	if (rc) {
+		explicit_bzero(text, sizeof(text));
+		return rc;
+	}
+	rc = bus_act_begin("identity_store", NULL, NULL, 0, text, ident_stored, NULL);
+	explicit_bzero(text, sizeof(text));
+	if (rc) {
+		prov_change_drop(&g_ident);
 		snprintf(err, errcap, "the identity was not stored");
-		return rc < 0 ? rc : -EIO;
+		return rc;
 	}
+	return -EINPROGRESS;
+}
 
-	/* Register again under the new identity, without waiting for it. */
-	if (bus_act("reidentify", NULL, NULL, 0, NULL, out, sizeof(out)) < 0) {
-		snprintf(err, errcap, "the identity is stored, and taken at the next start");
-		return -EIO;
-	}
-	return 0;
+int prov_identity_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_identity_write(val, err, errcap, prov_waited, &w), &w);
 }

@@ -88,74 +88,108 @@ static bool password_ok(const char *secret)
 	return rc == 0 || rc == 3 || rc == 4;
 }
 
-int bus_act(const char *method, const char *const *names,
-	    const char *const *values, size_t n, const char *input, char *out,
-	    size_t cap)
+/*
+ * The arguments of a run of @method, from the @n values @values of @names,
+ * in @argv, and the password among them in @password: 0, or a negative
+ * errno as bus_act() returns.
+ */
+static int args_of(const struct act_method *m, const char *const *names,
+		   const char *const *values, size_t n, const char **argv,
+		   const char **password)
 {
-	const struct act_method *m = act_find(method);
 	const char *given[ACT_PARAMS_MAX] = { NULL };
-	const char *argv[ACT_ARGV_MAX + 1], *bad, *password = NULL;
+	const char *bad;
 
-	if (cap)
-		out[0] = '\0';
-	if (!m)
-		return -ENOENT;
+	*password = NULL;
 	for (size_t i = 0; i < n; i++) {
 		for (size_t p = 0; p < ACT_PARAMS_MAX && m->params[p].name; p++)
 			if (!strcmp(names[i], m->params[p].name))
 				given[p] = values[i];
 		if (!strcmp(names[i], "password"))
-			password = values[i];
+			*password = values[i];
 	}
 	if (act_argv(m, given, argv, &bad))
 		return -EINVAL;
-	if (m->needs_password && !password_ok(password))
+	if (m->needs_password && !password_ok(*password))
 		return -EACCES;
 	argv[0] = program_of(m);
+	return 0;
+}
+
+int bus_act(const char *method, const char *const *names,
+	    const char *const *values, size_t n, const char *input, char *out,
+	    size_t cap)
+{
+	const struct act_method *m = act_find(method);
+	const char *argv[ACT_ARGV_MAX + 1], *password;
+	int err;
+
+	if (cap)
+		out[0] = '\0';
+	if (!m)
+		return -ENOENT;
+	err = args_of(m, names, values, n, argv, &password);
+	if (err)
+		return err;
 	return prov_exec(argv[0], argv + 1, m->input ? input : NULL, out, cap);
 }
 
-/* What bus_act_start() started: a program each, whom to tell, its output. */
-#define SLOTS 4
+/* What was started without waiting: a program each, whom to tell, its output. */
+#define SLOTS 8
 
 static struct slot {
 	const char *method;
 	pid_t pid;
 	int out;
-	void (*done)(int code, const char *output);
+	bus_done done;
+	void *ctx;
 } g_slots[SLOTS];
 
-int bus_act_start(const char *method, int fd, const char *password,
-		  void (*done)(int code, const char *output))
+/*
+ * Start @argv for @m without waiting: @fd as its standard input or output
+ * as @m takes it, else @input on its standard input when not NULL. @fd is no
+ * longer the caller's, whatever the result.
+ */
+static int start(const struct act_method *m, const char *const *argv, int fd,
+		 const char *input, bus_done done, void *ctx)
 {
-	const struct act_method *m = act_find(method);
-	const char *argv[ACT_ARGV_MAX + 1], *bad;
 	struct slot *s = NULL;
-	int out[2];
+	int out[2], in[2] = { -1, -1 };
 	pid_t pid;
 
 	for (int i = 0; i < SLOTS && !s; i++)
 		if (!g_slots[i].method)
 			s = &g_slots[i];
-	if (!m || bus_act_running(method) || !s || act_argv(m, NULL, argv, &bad) ||
-	    pipe(out)) {
+	if (bus_act_running(m->name) || !s) {
 		if (fd >= 0)
 			close(fd);
-		return !m ? -ENOENT : !s || bus_act_running(method) ? -EBUSY : -EINVAL;
+		return -EBUSY;
 	}
-	if (m->needs_password && !password_ok(password)) {
+	if (pipe(out)) {
+		if (fd >= 0)
+			close(fd);
+		return -EIO;
+	}
+	/* The input fits the pipe (ACT_INPUT_MAX), so it is written at once. */
+	if (input && m->input && (pipe(in) ||
+	    write(in[1], input, strlen(input)) != (ssize_t)strlen(input))) {
 		close(out[0]);
 		close(out[1]);
+		if (in[0] >= 0) {
+			close(in[0]);
+			close(in[1]);
+		}
 		if (fd >= 0)
 			close(fd);
-		return -EACCES;
+		return -EIO;
 	}
-	argv[0] = program_of(m);
+	if (in[1] >= 0)
+		close(in[1]);
 	pid = fork();
 	if (!pid) {
 		int null = open("/dev/null", O_RDWR);
 
-		dup2(m->fd_in && fd >= 0 ? fd : null, 0);
+		dup2(m->fd_in && fd >= 0 ? fd : in[0] >= 0 ? in[0] : null, 0);
 		dup2(m->fd_out && fd >= 0 ? fd : out[1], 1);
 		dup2(out[1], 2);
 		close(out[0]);
@@ -163,6 +197,8 @@ int bus_act_start(const char *method, int fd, const char *password,
 		_exit(127);
 	}
 	close(out[1]);
+	if (in[0] >= 0)
+		close(in[0]);
 	if (fd >= 0)
 		close(fd);
 	if (pid < 0) {
@@ -170,11 +206,48 @@ int bus_act_start(const char *method, int fd, const char *password,
 		return -EIO;
 	}
 	fcntl(out[0], F_SETFL, O_NONBLOCK);
-	s->method = method;
+	s->method = m->name;
 	s->pid = pid;
 	s->out = out[0];
 	s->done = done;
+	s->ctx = ctx;
 	return 0;
+}
+
+int bus_act_start(const char *method, int fd, const char *password,
+		  bus_done done, void *ctx)
+{
+	const struct act_method *m = act_find(method);
+	const char *argv[ACT_ARGV_MAX + 1], *bad;
+
+	if (!m || act_argv(m, NULL, argv, &bad)) {
+		if (fd >= 0)
+			close(fd);
+		return !m ? -ENOENT : -EINVAL;
+	}
+	if (m->needs_password && !password_ok(password)) {
+		if (fd >= 0)
+			close(fd);
+		return -EACCES;
+	}
+	argv[0] = program_of(m);
+	return start(m, argv, fd, NULL, done, ctx);
+}
+
+int bus_act_begin(const char *method, const char *const *names,
+		  const char *const *values, size_t n, const char *input,
+		  bus_done done, void *ctx)
+{
+	const struct act_method *m = act_find(method);
+	const char *argv[ACT_ARGV_MAX + 1], *password;
+	int err;
+
+	if (!m)
+		return -ENOENT;
+	err = args_of(m, names, values, n, argv, &password);
+	if (err)
+		return err;
+	return start(m, argv, -1, input, done, ctx);
 }
 
 bool bus_act_running(const char *method)
@@ -190,6 +263,8 @@ void bus_poll(void)
 	for (int i = 0; i < SLOTS; i++) {
 		struct slot *s = &g_slots[i];
 		char output[BUS_OUTPUT_MAX];
+		bus_done done = s->done;
+		void *ctx = s->ctx;
 		ssize_t n;
 		int st;
 
@@ -199,7 +274,8 @@ void bus_poll(void)
 		output[n > 0 ? n : 0] = '\0';
 		close(s->out);
 		s->method = NULL;
-		if (s->done)
-			s->done(WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st), output);
+		s->done = NULL;
+		if (done)
+			done(ctx, WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st), output);
 	}
 }

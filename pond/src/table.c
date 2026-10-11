@@ -15,10 +15,10 @@ const struct prov pond_provs[] = {
 	{ "cpu", "System", "Processor: time in each state, load, model",
 	  prov_cpu, NULL, PROV_VOLATILE },
 	{ "hostname", "System", "The name the stick goes by", prov_hostname,
-	  prov_hostname_set, 0 },
+	  prov_hostname_write, 0 },
 	{ "sfp_lane", "System",
 	  "The SFP lane's setting, the one it runs in, and a change on trial",
-	  prov_sfp_lane, prov_sfp_lane_set, PROV_VOLATILE },
+	  prov_sfp_lane, prov_sfp_lane_write, PROV_VOLATILE },
 	{ "mgmt", "System",
 	  "The management VLAN and address, and a new pair that waits to be "
 	  "confirmed from it", prov_mgmt, NULL, PROV_VOLATILE },
@@ -31,13 +31,13 @@ const struct prov pond_provs[] = {
 	{ "log", "System", "Kernel log", prov_log, NULL, PROV_SLOW },
 
 	{ "identity", "GPON", "How the stick introduces itself to the OLT",
-	  prov_identity, prov_identity_set, 0 },
+	  prov_identity, prov_identity_write, 0 },
 	{ "session", "Mode", "A PPPoE session of the stick's own: add, change or remove",
-	  NULL, prov_session_set, 0 },
+	  NULL, prov_session_write, 0 },
 	{ "settings", "Mode",
 	  "The data path: the sessions and where they hand their addresses down, "
 	  "kept in the configuration store",
-	  prov_settings, prov_settings_set, 0 },
+	  prov_settings, prov_settings_write, 0 },
 
 	{ "ports", "Data path", "Interfaces: link, speed and CPU-path counts",
 	  prov_ports, NULL, 0 },

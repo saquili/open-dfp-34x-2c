@@ -3,6 +3,8 @@
 
 /* bus.h over ubus: one connection, made when first needed and again after it was lost. */
 
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <poll.h>
 #include <unistd.h>
@@ -18,7 +20,8 @@
 
 #define TIMEOUT_MS 500
 #define CALL_TIMEOUT_MS 2000
-#define ACT_TIMEOUT_MS 120000
+/* onu-act's limit for a method it is waited for (onu-act.c), and a margin. */
+#define ACT_TIMEOUT_MS 35000
 
 static struct ubus_context *g_ctx;
 static struct blob_attr *g_reply;
@@ -88,28 +91,32 @@ static void find(struct blob_attr *data, size_t len, const char *path, char *out
 	}
 }
 
-/* What bus_act_start() started: a request each, whom to tell, and what came. */
-#define SLOTS 4
+/*
+ * What was started without waiting: a request each, whom to tell, and what
+ * came. A request that ends is marked @ended, and bus_poll() tells its
+ * caller, so that no caller is told from inside a call that waits, which
+ * takes in the answers of the others as it waits for its own.
+ */
+#define SLOTS 8
 
 static struct slot {
 	const char *method;
 	struct ubus_request req;
-	void (*done)(int code, const char *output);
+	bus_done done;
+	void *ctx;
+	bool ended;
+	int answer;
 	int code;
 	char output[BUS_OUTPUT_MAX];
 } g_slots[SLOTS];
 
-/* The end of what @s ran, told once. */
+/* What @s ran has ended with @code; bus_poll() tells its caller. */
 static void async_end(struct slot *s, int code)
 {
-	void (*done)(int, const char *) = s->done;
-
-	if (!s->method)
+	if (!s->method || s->ended)
 		return;
-	s->method = NULL;
-	s->done = NULL;
-	if (done)
-		done(code, s->output);
+	s->code = code;
+	s->ended = true;
 }
 
 /* The connection gone: what it carried ends with it. */
@@ -256,7 +263,7 @@ static void async_data(struct ubus_request *req, int type, struct blob_attr *msg
 
 	(void)type;
 	blobmsg_parse(policy, 2, tb, blob_data(msg), blob_len(msg));
-	s->code = tb[0] ? (int)blobmsg_get_u32(tb[0]) : -EIO;
+	s->answer = tb[0] ? (int)blobmsg_get_u32(tb[0]) : -EIO;
 	if (tb[1])
 		snprintf(s->output, sizeof(s->output), "%s", blobmsg_get_string(tb[1]));
 }
@@ -265,7 +272,9 @@ static void async_complete(struct ubus_request *req, int ret)
 {
 	struct slot *s = container_of(req, struct slot, req);
 
-	async_end(s, ret == UBUS_STATUS_PERMISSION_DENIED ? -EACCES : ret ? -EIO : s->code);
+	async_end(s, ret == UBUS_STATUS_PERMISSION_DENIED ? -EACCES :
+		     ret == UBUS_STATUS_INVALID_ARGUMENT ? -EINVAL :
+		     ret ? -EIO : s->answer);
 }
 
 bool bus_act_running(const char *method)
@@ -276,10 +285,13 @@ bool bus_act_running(const char *method)
 	return false;
 }
 
-int bus_act_start(const char *method, int fd, const char *password,
-		  void (*done)(int code, const char *output))
+/*
+ * Send @method with the arguments @b to onu-act and not wait: @fd, when not
+ * -1, goes with it. Takes a free slot for @done and @ctx.
+ */
+static int start(const char *method, struct blob_buf *b, int fd, bus_done done,
+		 void *ctx)
 {
-	struct blob_buf b = { 0 };
 	struct slot *s = NULL;
 	uint32_t id;
 	int err;
@@ -298,22 +310,54 @@ int bus_act_start(const char *method, int fd, const char *password,
 			close(fd);
 		return err;
 	}
-	blob_buf_init(&b, 0);
-	if (password)
-		blobmsg_add_string(&b, "password", password);
 	/* libubus closes @fd once it has sent it, or could not. */
-	err = ubus_invoke_async_fd(g_ctx, id, method, b.head, &s->req, fd);
-	blob_buf_free(&b);
+	err = ubus_invoke_async_fd(g_ctx, id, method, b->head, &s->req, fd);
 	if (err)
 		return -EIO;
 	s->req.data_cb = async_data;
 	s->req.complete_cb = async_complete;
-	s->code = -EIO;
+	s->answer = -EIO;
+	s->ended = false;
 	s->output[0] = '\0';
 	s->done = done;
+	s->ctx = ctx;
 	s->method = method;
 	ubus_complete_request_async(g_ctx, &s->req);
 	return 0;
+}
+
+int bus_act_start(const char *method, int fd, const char *password,
+		  bus_done done, void *ctx)
+{
+	struct blob_buf b = { 0 };
+	int err;
+
+	blob_buf_init(&b, 0);
+	if (password)
+		blobmsg_add_string(&b, "password", password);
+	err = start(method, &b, fd, done, ctx);
+	blob_buf_free(&b);
+	return err;
+}
+
+int bus_act_begin(const char *method, const char *const *names,
+		  const char *const *values, size_t n, const char *input,
+		  bus_done done, void *ctx)
+{
+	struct blob_buf b = { 0 };
+	int err;
+
+	blob_buf_init(&b, 0);
+	for (size_t i = 0; i < n; i++)
+		if (values[i])
+			blobmsg_add_string(&b, names[i], values[i]);
+	if (input)
+		blobmsg_add_string(&b, "input", input);
+	err = start(method, &b, -1, done, ctx);
+	/* A value may be a password, so the copy is cleared. */
+	explicit_bzero(b.head, b.buflen);
+	blob_buf_free(&b);
+	return err;
 }
 
 void bus_poll(void)
@@ -322,14 +366,31 @@ void bus_poll(void)
 	bool any = false;
 
 	for (int i = 0; i < SLOTS; i++)
-		any |= g_slots[i].method != NULL;
-	if (!g_ctx || !any)
-		return;
-	p.fd = g_ctx->sock.fd;
-	p.events = POLLIN;
-	p.revents = 0;
-	if (poll(&p, 1, 0) > 0)
-		ubus_handle_event(g_ctx);
-	if (g_ctx->sock.eof)
-		drop();
+		any |= g_slots[i].method && !g_slots[i].ended;
+	if (g_ctx && any) {
+		p.fd = g_ctx->sock.fd;
+		p.events = POLLIN;
+		p.revents = 0;
+		if (poll(&p, 1, 0) > 0)
+			ubus_handle_event(g_ctx);
+		if (g_ctx->sock.eof)
+			drop();
+	}
+	for (int i = 0; i < SLOTS; i++) {
+		struct slot *s = &g_slots[i];
+		char output[BUS_OUTPUT_MAX];
+		bus_done done = s->done;
+		void *ctx = s->ctx;
+		int code = s->code;
+
+		if (!s->method || !s->ended)
+			continue;
+		memcpy(output, s->output, sizeof(output));
+		explicit_bzero(s->output, sizeof(s->output));
+		s->method = NULL;
+		s->done = NULL;
+		if (done)
+			done(ctx, code, output);
+		explicit_bzero(output, sizeof(output));
+	}
 }

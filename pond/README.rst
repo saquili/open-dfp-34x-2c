@@ -40,6 +40,18 @@ seeing its hash, and the upload and download of an update, which stream
 through a pipe whose other end pond passes to onu-act. pond runs no program
 of the stick itself.
 
+A change waits for what onu-act runs for it, seconds for a management pair
+or a store's write, without holding up the daemon: pond starts the method,
+serves the other requests meanwhile, and answers the change when the program
+has ended (``src/later.h``), with what it said. A change of one kind runs
+once at a time, and a second one gets 409; a sign-in or a change of the
+password checks one password at a time, and a second one waits a second
+(429), so that a wrong one is counted before the next is tried. Reads of
+state, which onu-act answers at once, are waited for, at most 35 seconds,
+onu-act's own limit and a margin. So are the check of root's password
+before an update's upload or trial and the arming of the trial, a second or
+two: the stick restarts right after a trial is armed.
+
 On the stick pond runs as an account of its own, ``pond``, without a password
 or a shell, which no one logs in with, started as root with ``-u pond``; root stays the one account to log in
 with (ADR 0012, ADR 0014). ubusd's access list, ``acl.json``, which the image

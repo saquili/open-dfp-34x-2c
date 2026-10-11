@@ -10,6 +10,7 @@
  */
 
 #include "bus.h"
+#include "later.h"
 #include "mgmt.h"
 #include "prov.h"
 #include "tls.h"
@@ -91,59 +92,111 @@ static void reply(struct mg_connection *c, int code, const char *error, const ch
 			      "{\"error\":\"%s\",\"detail\":\"%s\"}", error, detail);
 }
 
+/*
+ * The change under way, answered when onu-mgmt has done it (later.h): one at
+ * a time. What follows it, listening on the new address or no longer on an
+ * old one, is done whether or not the request is still there to answer.
+ */
+static struct {
+	const char *method;
+	struct mg_mgr *mgr;
+	unsigned long id;
+	mg_event_handler_t fn;
+	char address[24];
+	char current[24];
+	char pending[24];
+} g_op;
+
+static void done(void *ctx, int code, const char *output)
+{
+	struct mg_connection *c = later_conn(g_op.mgr, g_op.id);
+	bool bad = code == 2 || code == -EINVAL;
+	int status = 200;
+	const char *why = NULL;
+
+	(void)ctx;
+	(void)output;
+	if (!strcmp(g_op.method, "mgmt_add")) {
+		if (code) {
+			status = bad ? 400 : 409;
+			why = bad ? "not a VLAN and an address with its prefix" :
+				    "the new pair was not added: a change waits, or the VLAN is in use";
+		} else if (strcmp(g_op.address, g_op.current)) {
+			tls_listen(g_op.mgr, g_op.address, g_op.fn);
+		}
+	} else if (!strcmp(g_op.method, "mgmt_commit")) {
+		if (code) {
+			status = 500;
+			why = "the change was not committed";
+		} else if (strcmp(g_op.current, g_op.pending) && *g_op.current) {
+			unlisten(g_op.mgr, g_op.current);
+		}
+	} else if (*g_op.pending && strcmp(g_op.current, g_op.pending)) {
+		unlisten(g_op.mgr, g_op.pending);
+	}
+	g_op.method = NULL;
+	if (c)
+		reply(c, status, "mgmt", why);
+}
+
+/* Have onu-mgmt do @method, with @n values, and answer @c when it is done. */
+static void begin(struct mg_connection *c, const char *method,
+		  const char *const *names, const char *const *values, size_t n)
+{
+	int rc;
+
+	g_op.method = method;
+	g_op.mgr = c->mgr;
+	g_op.id = c->id;
+	rc = bus_act_begin(method, names, values, n, NULL, done, NULL);
+	if (rc) {
+		g_op.method = NULL;
+		reply(c, rc == -EINVAL ? 400 : rc == -EBUSY ? 409 : 500, "mgmt",
+		      rc == -EINVAL ? "not a VLAN and an address with its prefix" :
+		      rc == -EBUSY ? "a change of the pair is under way" :
+				     "onu-mgmt does not run");
+	}
+}
+
 void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_handler_t fn)
 {
-	char vlan[8], address[24], flag[4], text[512], pending[24], current[24], out[256];
+	static const char *const names[] = { "vlan", "address" };
+	char vlan[8], address[24], flag[4], text[512];
+	const char *const values[] = { vlan, address };
+	struct mg_addr a;
 
+	if (g_op.method) {
+		reply(c, 409, "mgmt", "a change of the pair is under way");
+		return;
+	}
 	if (run("mgmt_status", text, sizeof(text))) {
 		reply(c, 500, "mgmt", "the management pair cannot be read");
 		return;
 	}
-	if (!status_value(text, "ADDRESS", current, sizeof(current)))
-		current[0] = '\0';
-	if (!status_value(text, "PENDING_ADDRESS", pending, sizeof(pending)))
-		pending[0] = '\0';
+	if (!status_value(text, "ADDRESS", g_op.current, sizeof(g_op.current)))
+		g_op.current[0] = '\0';
+	if (!status_value(text, "PENDING_ADDRESS", g_op.pending, sizeof(g_op.pending)))
+		g_op.pending[0] = '\0';
+	g_op.fn = fn;
 
 	if (line_value(hm->body, "VLAN", vlan, sizeof(vlan)) &&
 	    line_value(hm->body, "ADDRESS", address, sizeof(address))) {
-		static const char *const names[] = { "vlan", "address" };
-		const char *const values[] = { vlan, address };
-		int rc = bus_act("mgmt_add", names, values, 2, NULL, out, sizeof(out));
-		bool bad = rc == 2 || rc == -EINVAL;
-
-		if (rc) {
-			reply(c, bad ? 400 : 409, "mgmt",
-			      bad ? "not a VLAN and an address with its prefix" :
-				    "the new pair was not added: a change waits, or the VLAN is in use");
-			return;
-		}
-		if (strcmp(address, current))
-			tls_listen(c->mgr, address, fn);
-		reply(c, 200, NULL, NULL);
+		snprintf(g_op.address, sizeof(g_op.address), "%s", address);
+		begin(c, "mgmt_add", names, values, 2);
 	} else if (line_value(hm->body, "COMMIT", flag, sizeof(flag))) {
-		struct mg_addr a;
-
-		if (!*pending) {
+		if (!*g_op.pending) {
 			reply(c, 409, "mgmt", "no change waits");
 			return;
 		}
 		/* Only a panel opened at the new address shows that it answers. */
-		if (!parse_ip(pending, &a) || c->loc.is_ip6 || memcmp(c->loc.ip, a.ip, 4)) {
+		if (!parse_ip(g_op.pending, &a) || c->loc.is_ip6 ||
+		    memcmp(c->loc.ip, a.ip, 4)) {
 			reply(c, 403, "mgmt", "confirm the change from a panel opened at the new address");
 			return;
 		}
-		if (run("mgmt_commit", out, sizeof(out))) {
-			reply(c, 500, "mgmt", "the change was not committed");
-			return;
-		}
-		if (strcmp(current, pending) && *current)
-			unlisten(c->mgr, current);
-		reply(c, 200, NULL, NULL);
+		begin(c, "mgmt_commit", NULL, NULL, 0);
 	} else if (line_value(hm->body, "CANCEL", flag, sizeof(flag))) {
-		run("mgmt_cancel", out, sizeof(out));
-		if (*pending && strcmp(current, pending))
-			unlisten(c->mgr, pending);
-		reply(c, 200, NULL, NULL);
+		begin(c, "mgmt_cancel", NULL, NULL, 0);
 	} else {
 		reply(c, 400, "mgmt", "VLAN and ADDRESS, COMMIT=1 or CANCEL=1");
 	}

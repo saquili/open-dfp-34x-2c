@@ -62,6 +62,33 @@ bool auth_default_password(void);
 int auth_sign_in(const char *user, const char *secret, const char *from,
 		 time_t now, char id[AUTH_ID_LEN + 1], int *retry_after);
 
+/*
+ * The end of a sign-in or a change of the password not waited for: @ctx as
+ * given, the result as auth_sign_in() or auth_change() returns it, and after
+ * a sign-in the new session's id, empty otherwise.
+ */
+typedef void (*auth_done)(void *ctx, int rc, const char *id);
+
+/**
+ * auth_sign_in_begin() - auth_sign_in() without waiting for the check.
+ *
+ * Return: -EINPROGRESS, and @done is told the end; any other return is the
+ * end, as auth_sign_in() returns it, and @done is not called. One check
+ * runs at a time: while one runs, -EAGAIN, with a second to wait.
+ */
+int auth_sign_in_begin(const char *user, const char *secret, const char *from,
+		       time_t now, int *retry_after, auth_done done, void *ctx);
+
+/**
+ * auth_change_begin() - auth_change() without waiting for the check and the
+ *	store.
+ *
+ * Return: as auth_sign_in_begin().
+ */
+int auth_change_begin(const char *current, const char *next, const char *keep,
+		      const char *from, time_t now, int *retry_after,
+		      auth_done done, void *ctx);
+
 /** Whether @id is an open session; a hit counts as activity. */
 bool auth_session(const char *id, time_t now);
 

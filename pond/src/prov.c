@@ -5,7 +5,10 @@
 
 #include "prov.h"
 
+#include "bus.h"
+
 #include <errno.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -155,6 +158,56 @@ void pv_key(struct prov_buf *b, const char *k)
 void pv_comma(struct prov_buf *b)
 {
 	pv_raw(b, ",");
+}
+
+int prov_change_take(struct prov_change *c, prov_done done, void *ctx,
+		     char *err, size_t errcap)
+{
+	if (c->done) {
+		snprintf(err, errcap, "a change of it is under way");
+		return -EBUSY;
+	}
+	c->done = done;
+	c->ctx = ctx;
+	return 0;
+}
+
+void prov_change_drop(struct prov_change *c)
+{
+	c->done = NULL;
+	c->ctx = NULL;
+}
+
+void prov_change_end(struct prov_change *c, int rc, const char *err)
+{
+	prov_done done = c->done;
+	void *ctx = c->ctx;
+
+	prov_change_drop(c);
+	if (done)
+		done(ctx, rc, rc ? err : NULL);
+}
+
+void prov_waited(void *ctx, int rc, const char *err)
+{
+	struct prov_wait *w = ctx;
+
+	w->rc = rc;
+	if (rc && err && w->errcap)
+		snprintf(w->err, w->errcap, "%s", err);
+	w->ended = true;
+}
+
+int prov_wait(int rc, struct prov_wait *w)
+{
+	if (rc != -EINPROGRESS)
+		return rc;
+	while (!w->ended) {
+		bus_poll();
+		if (!w->ended)
+			poll(NULL, 0, 10);
+	}
+	return w->rc;
 }
 
 const struct prov *prov_find(const char *id)

@@ -61,26 +61,42 @@ int bus_act(const char *method, const char *const *names,
 	    const char *const *values, size_t n, const char *input, char *out,
 	    size_t cap);
 
-/* What a run that bus_act_start() started wrote, at most this much. */
+/* What a run that was not waited for wrote, at most this much. */
 #define BUS_OUTPUT_MAX 4096
+
+/*
+ * The end of a method a caller did not wait for: @ctx as given, the
+ * program's exit status, or a negative errno as bus_act() returns, and what
+ * it wrote. It is called from bus_poll(), never from inside another call of
+ * this file.
+ */
+typedef void (*bus_done)(void *ctx, int code, const char *output);
 
 /*
  * Have onu-act start @method, with no values but @password when not NULL,
  * and not wait for it. @fd, when not -1, goes to the program as its
  * standard input or output, as the method takes it, and is no longer the
- * caller's, whatever the result. @done is called from bus_poll() with the
- * program's exit status, or a negative errno when onu-act did not answer,
- * -EACCES when it refused the password, and what it wrote. A few methods
- * run at once, each once. Returns 0, -EBUSY while @method runs, or another
- * negative errno when it could not start.
+ * caller's, whatever the result. @done is called with @ctx when it ends,
+ * -EACCES when onu-act refused the password. A few methods run at once,
+ * each once. Returns 0, -EBUSY while @method runs, or another negative
+ * errno when it could not start; @done is called only after 0.
  */
 int bus_act_start(const char *method, int fd, const char *password,
-		  void (*done)(int code, const char *output));
+		  bus_done done, void *ctx);
 
-/* Whether @method, started by bus_act_start(), has not ended yet. */
+/*
+ * Have onu-act do @method as bus_act() does, with its values and input, and
+ * not wait for it: @done is called with @ctx when it ends. The values and
+ * the input are copied before this returns. Returns as bus_act_start().
+ */
+int bus_act_begin(const char *method, const char *const *names,
+		  const char *const *values, size_t n, const char *input,
+		  bus_done done, void *ctx);
+
+/* Whether @method, started without waiting, has not ended yet. */
 bool bus_act_running(const char *method);
 
-/* Take what came of bus_act_start(): from the main loop, often. */
+/* Take what came of the runs not waited for: from the main loop, often. */
 void bus_poll(void);
 
 #endif

@@ -60,13 +60,22 @@ enum prov_flags {
 	PROV_ABSENT = 1u << 2,
 };
 
+/*
+ * The end of a change that a request waits for: @ctx as given, 0 or a
+ * negative errno, and for an error why, or NULL.
+ */
+typedef void (*prov_done)(void *ctx, int rc, const char *err);
+
 /**
  * struct prov - A value of the device.
  * @id: its name in the API
  * @cat: the group it is shown in
  * @label: what it is, in a few words
  * @read: write the value; NULL when it cannot be read
- * @write: change it; NULL when it cannot be changed
+ * @write: change it; NULL when it cannot be changed. A change that has
+ *	onu-act run a program is not waited for: it returns -EINPROGRESS, and
+ *	@done is called with @ctx when it ends. Any other return is the end,
+ *	with why in @err for an error, and @done is not called.
  * @flags: &enum prov_flags
  */
 struct prov {
@@ -74,9 +83,56 @@ struct prov {
 	const char *cat;
 	const char *label;
 	int (*read)(struct prov_buf *out);
-	int (*write)(const char *val, char *err, size_t errcap);
+	int (*write)(const char *val, char *err, size_t errcap, prov_done done,
+		     void *ctx);
 	unsigned int flags;
 };
+
+/**
+ * struct prov_change - A change under way, for a provider that has one at a
+ *	time: whom its end is told to.
+ * @done: the caller's, NULL while none is under way
+ * @ctx: the caller's
+ */
+struct prov_change {
+	prov_done done;
+	void *ctx;
+};
+
+/*
+ * Take @c for a change that @done is told the end of: 0, or -EBUSY, with
+ * why in @err, while another is under way.
+ */
+int prov_change_take(struct prov_change *c, prov_done done, void *ctx,
+		     char *err, size_t errcap);
+
+/* Give @c up without telling anyone: the change did not start. */
+void prov_change_drop(struct prov_change *c);
+
+/* End the change of @c with @rc and @err, and tell its caller. */
+void prov_change_end(struct prov_change *c, int rc, const char *err);
+
+/**
+ * struct prov_wait - A change waited for, by a caller that may block.
+ * @ended: whether it has ended
+ * @rc: how
+ * @err: where why goes, @errcap bytes
+ */
+struct prov_wait {
+	bool ended;
+	int rc;
+	char *err;
+	size_t errcap;
+};
+
+/* The &prov_done of a &struct prov_wait, which is @ctx. */
+void prov_waited(void *ctx, int rc, const char *err);
+
+/*
+ * Wait for the change whose start returned @rc and tells @w its end: the
+ * result of the change. The tests, and the callers that may block, use it.
+ */
+int prov_wait(int rc, struct prov_wait *w);
 
 extern const struct prov pond_provs[];
 extern const size_t pond_nprovs;

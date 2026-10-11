@@ -21,9 +21,13 @@ int prov_gem_counters(struct prov_buf *out);
 int prov_gem_ports(struct prov_buf *out);
 int prov_health(struct prov_buf *out);
 int prov_hostname(struct prov_buf *out);
+int prov_hostname_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx);
 int prov_hostname_set(const char *val, char *err, size_t errcap);
 int prov_mgmt(struct prov_buf *out);
 int prov_sfp_lane(struct prov_buf *out);
+int prov_sfp_lane_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx);
 int prov_sfp_lane_set(const char *val, char *err, size_t errcap);
 int prov_tls(struct prov_buf *out);
 int prov_image(struct prov_buf *out);
@@ -54,10 +58,16 @@ int prov_ports(struct prov_buf *out);
 int prov_root_mtd(const char *cmdline);
 int prov_rootfs_bank(const char *part);
 int prov_settings(struct prov_buf *out);
+int prov_settings_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx);
 int prov_settings_set(const char *val, char *err, size_t errcap);
 void prov_settings_reap(void);
+int prov_session_write(const char *val, char *err, size_t errcap,
+		       prov_done done, void *ctx);
 int prov_session_set(const char *val, char *err, size_t errcap);
 int prov_identity(struct prov_buf *out);
+int prov_identity_write(const char *val, char *err, size_t errcap,
+			prov_done done, void *ctx);
 int prov_identity_set(const char *val, char *err, size_t errcap);
 int prov_tc_rules(struct prov_buf *out);
 int prov_tconts(struct prov_buf *out);

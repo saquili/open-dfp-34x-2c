@@ -34,6 +34,7 @@
 #include "bus.h"
 #include "changes.h"
 #include "firmware.h"
+#include "later.h"
 #include "mgmt.h"
 #include "prov.h"
 #include "providers.h"
@@ -266,12 +267,55 @@ static void api_getm(struct mg_connection *c, struct mg_str query)
 	reply_json(c, 200, body);
 }
 
+/*
+ * A request answered once its change has ended (later.h): the id of its
+ * connection, and what the answer names.
+ */
+struct later {
+	unsigned long id;
+	char name[64];
+	char secure[16];
+};
+
+static struct mg_mgr *g_mgr;
+
+static struct later *later_new(struct mg_connection *c)
+{
+	struct later *l = calloc(1, sizeof(*l));
+
+	if (l)
+		l->id = c->id;
+	return l;
+}
+
+/* The answer to a change of @name that ended with @rc. */
+static void set_reply(struct mg_connection *c, const char *name, int rc,
+		      const char *err)
+{
+	if (rc)
+		reply_err(c, rc == -EBUSY ? 409 : rc == -EINVAL ? 400 : 500, name,
+			  err && *err ? err : strerror(-rc));
+	else
+		reply_json(c, 200, "{\"ok\":true}");
+}
+
+static void set_done(void *ctx, int rc, const char *err)
+{
+	struct later *l = ctx;
+	struct mg_connection *c = later_conn(g_mgr, l->id);
+
+	if (c)
+		set_reply(c, l->name, rc, err);
+	free(l);
+}
+
 static void api_set(struct mg_connection *c, struct mg_http_message *hm,
 		    struct mg_str id)
 {
 	static char val[POND_SET_CAP];
 	char name[64], err[256] = "";
 	const struct prov *p;
+	struct later *l;
 	int rc;
 
 	if (mg_strcmp(hm->method, mg_str("POST"))) {
@@ -299,14 +343,19 @@ static void api_set(struct mg_connection *c, struct mg_http_message *hm,
 	memcpy(val, hm->body.buf, hm->body.len);
 	val[hm->body.len] = '\0';
 
-	rc = p->write(val, err, sizeof(err));
-	explicit_bzero(val, sizeof(val));
-	if (rc) {
-		reply_err(c, rc == -EBUSY ? 409 : rc == -EINVAL ? 400 : 500, name,
-			  *err ? err : strerror(-rc));
+	l = later_new(c);
+	if (!l) {
+		explicit_bzero(val, sizeof(val));
+		reply_err(c, 500, name, "no memory for the change");
 		return;
 	}
-	reply_json(c, 200, "{\"ok\":true}");
+	snprintf(l->name, sizeof(l->name), "%s", name);
+	rc = p->write(val, err, sizeof(err), set_done, l);
+	explicit_bzero(val, sizeof(val));
+	if (rc == -EINPROGRESS)
+		return;
+	free(l);
+	set_reply(c, name, rc, err);
 }
 
 /* Whether the request carries the token, compared in constant time. */
@@ -401,19 +450,12 @@ static void free_secret(char *s)
 	}
 }
 
-static void api_login(struct mg_connection *c, struct mg_http_message *hm)
+/* The answer to a sign-in that ended with @rc, opening session @id. */
+static void login_reply(struct mg_connection *c, int rc, const char *id,
+			int retry, const char *secure)
 {
-	char *user = json_str(hm, "$.user");
-	char *secret = json_str(hm, "$.secret");
-	char id[AUTH_ID_LEN + 1], cookie[160], from[48];
-	int retry = 0, rc;
+	char cookie[160];
 
-	/* The address the wrong passwords are counted by (auth.h). */
-	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
-	rc = auth_sign_in(user, secret, from, time(NULL), id, &retry);
-
-	free(user);
-	free_secret(secret);
 	if (rc == -EAGAIN) {
 		reply_retry(c, retry);
 		return;
@@ -433,23 +475,46 @@ static void api_login(struct mg_connection *c, struct mg_http_message *hm)
 	}
 	snprintf(cookie, sizeof(cookie),
 		 "Set-Cookie: pond_sid=%s; Path=/; HttpOnly; SameSite=Strict%s\r\n",
-		 id, cookie_secure(c, hm));
+		 id, secure);
 	reply_session(c, cookie);
 }
 
-static void api_password(struct mg_connection *c, struct mg_http_message *hm,
-			 const char *sid)
+static void login_done(void *ctx, int rc, const char *id)
 {
-	char *current = json_str(hm, "$.current");
-	char *next = json_str(hm, "$.next");
+	struct later *l = ctx;
+	struct mg_connection *c = later_conn(g_mgr, l->id);
+
+	if (c)
+		login_reply(c, rc, id, 0, l->secure);
+	free(l);
+}
+
+static void api_login(struct mg_connection *c, struct mg_http_message *hm)
+{
+	char *user = json_str(hm, "$.user");
+	char *secret = json_str(hm, "$.secret");
+	struct later *l = later_new(c);
 	char from[48];
-	int retry = 0, rc;
+	int retry = 0, rc = -ENOMEM;
 
+	/* The address the wrong passwords are counted by (auth.h). */
 	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
-	rc = auth_change(current, next, sid, from, time(NULL), &retry);
+	if (l) {
+		snprintf(l->secure, sizeof(l->secure), "%s", cookie_secure(c, hm));
+		rc = auth_sign_in_begin(user, secret, from, time(NULL), &retry,
+					login_done, l);
+	}
+	free(user);
+	free_secret(secret);
+	if (rc == -EINPROGRESS)
+		return;
+	login_reply(c, rc, "", retry, l ? l->secure : "");
+	free(l);
+}
 
-	free_secret(current);
-	free_secret(next);
+/* The answer to a change of the password that ended with @rc. */
+static void password_reply(struct mg_connection *c, int rc, int retry)
+{
 	if (rc == -EAGAIN)
 		reply_retry(c, retry);
 	else if (rc == -EACCES)
@@ -464,6 +529,38 @@ static void api_password(struct mg_connection *c, struct mg_http_message *hm,
 		reply_err(c, 500, "not stored", strerror(-rc));
 	else
 		reply_session(c, NULL);
+}
+
+static void password_done(void *ctx, int rc, const char *id)
+{
+	struct later *l = ctx;
+	struct mg_connection *c = later_conn(g_mgr, l->id);
+
+	(void)id;
+	if (c)
+		password_reply(c, rc, 0);
+	free(l);
+}
+
+static void api_password(struct mg_connection *c, struct mg_http_message *hm,
+			 const char *sid)
+{
+	char *current = json_str(hm, "$.current");
+	char *next = json_str(hm, "$.next");
+	struct later *l = later_new(c);
+	char from[48];
+	int retry = 0, rc = -ENOMEM;
+
+	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
+	if (l)
+		rc = auth_change_begin(current, next, sid, from, time(NULL), &retry,
+				       password_done, l);
+	free_secret(current);
+	free_secret(next);
+	if (rc == -EINPROGRESS)
+		return;
+	password_reply(c, rc, retry);
+	free(l);
 }
 
 /* Restart the stick a moment after the reply has gone. */
@@ -792,6 +889,7 @@ int main(int argc, char **argv)
 	load_token();
 	auth_init();
 	mg_mgr_init(&mgr);
+	g_mgr = &mgr;
 	if (tls_setup(&mgr, g_keyf, g_listen, g_nlisten))
 		return 1;
 	/*

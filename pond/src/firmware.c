@@ -163,7 +163,7 @@ static void upload_fn(struct mg_connection *c, int ev, void *ev_data)
 	}
 }
 
-static void upload_ended(int status, const char *said);
+static void upload_ended(void *ctx, int status, const char *said);
 
 /*
  * Root's password, which writing an update and starting the other bank
@@ -229,7 +229,7 @@ void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
 	if (!rc) {
 		/* The reading end goes to onu-act, whatever comes of it. */
-		rc = bus_act_start("update_write", fds[0], pw, upload_ended);
+		rc = bus_act_start("update_write", fds[0], pw, upload_ended, NULL);
 		if (rc)
 			close(fds[1]);
 	}
@@ -254,8 +254,9 @@ void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 }
 
 /* Send the sender its answer, when onu-update has finished. */
-static void upload_ended(int status, const char *said)
+static void upload_ended(void *ctx, int status, const char *said)
 {
+	(void)ctx;
 	up.running = false;
 	if (up.in >= 0) {
 		close(up.in);
@@ -312,8 +313,9 @@ static void download_fn(struct mg_connection *c, int ev, void *ev_data)
 }
 
 /* The end of onu-update read, told once its output has all been sent. */
-static void download_ended(int status, const char *said)
+static void download_ended(void *ctx, int status, const char *said)
 {
+	(void)ctx;
 	(void)said;
 	down.running = false;
 	down.ended = true;
@@ -342,7 +344,7 @@ void firmware_download(struct mg_connection *c)
 	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
 	if (!rc) {
 		/* The writing end goes to onu-act, whatever comes of it. */
-		rc = bus_act_start("update_read", fds[1], NULL, download_ended);
+		rc = bus_act_start("update_read", fds[1], NULL, download_ended, NULL);
 		if (rc)
 			close(fds[0]);
 	}

@@ -2020,6 +2020,18 @@ static void test_system(void)
 	      "a trial, a keep and a revert go to onu-lane");
 	check(prov_sfp_lane_set("SPEED=10\n", err, sizeof(err)) == -EINVAL,
 	      "a change that is none of them is refused");
+	{
+		struct prov_wait w = { .err = err, .errcap = sizeof(err) };
+		char err2[256];
+
+		e = prov_sfp_lane_write("KEEP=1\n", err, sizeof(err), prov_waited, &w);
+		check(e == -EINPROGRESS && !w.ended &&
+			      prov_sfp_lane_write("REVERT=1\n", err2, sizeof(err2),
+						  prov_waited, &w) == -EBUSY,
+		      "a change is not waited for, and a second one waits its turn");
+		check(prov_wait(e, &w) == 0 && w.ended,
+		      "the first is told its end when it has ended");
+	}
 	unsetenv("POND_ONU_LANE");
 
 	put("/mgmt-stub", mgmt_stub, 0755);

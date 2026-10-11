@@ -152,6 +152,44 @@ def main():
         proc.wait(5)
 
     as_account(pond)
+    slow_change(pond, os.path.dirname(key))
+
+
+def slow_change(pond, workdir):
+    """A change that takes onu-act's program seconds is answered when it ends,
+    and the daemon answers the other requests meanwhile."""
+    print("a slow change")
+    lane = os.path.join(workdir, "onu-lane")
+    with open(lane, "w") as f:
+        f.write("#!/bin/sh\n[ \"$1\" = try ] && sleep 2\necho \"onu-lane $1\"\n")
+    os.chmod(lane, 0o755)
+    env = dict(os.environ, POND_ONU_LANE=lane)
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", "/tls-token"],
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, HTTP):
+            check(False, "the daemon listens")
+            return
+        auth = {"Authorization": f"Bearer {TOKEN}"}
+        slow = http.client.HTTPConnection("127.0.0.1", HTTP, timeout=10)
+        begun = time.monotonic()
+        slow.request("POST", "/api/set/sfp_lane", body="MODE=sgmii\n", headers=auth)
+        time.sleep(0.3)
+        quick = http.client.HTTPConnection("127.0.0.1", HTTP, timeout=10)
+        asked = time.monotonic()
+        status, _, _ = request(quick, "GET", "/api/health")
+        took = time.monotonic() - asked
+        quick.close()
+        check(status == 200 and took < 1.0,
+              f"/api/health answers while the lane's program runs: in {took:.2f} s")
+        r = slow.getresponse()
+        body, waited = r.read(), time.monotonic() - begun
+        slow.close()
+        check(r.status == 200 and b'"ok":true' in body and waited >= 2.0,
+              f"the change is answered when the program has ended: {r.status} after {waited:.1f} s")
+    finally:
+        proc.terminate()
+        proc.wait(5)
 
 
 def proc_status(pid):
