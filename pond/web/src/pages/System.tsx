@@ -39,6 +39,7 @@ import {
   bankLetter,
   bankViews,
   otherBank,
+  overShipped,
   updateTarget,
   uploading,
 } from "../lib/firmware";
@@ -76,6 +77,7 @@ const TAG: Record<BankTag, [Key, Tone]> = {
   failed: ["system.tagFailed", "bad"],
   empty: ["system.tagEmpty", "neutral"],
   incomplete: ["system.tagIncomplete", "bad"],
+  shipped: ["system.tagShipped", "warn"],
 };
 
 const shareTone = (v: number | null): Tone =>
@@ -368,6 +370,9 @@ function Updates() {
   }
 
   function pickFile() {
+    if (f && overShipped(f, target) && target !== null) {
+      if (!window.confirm(t("system.overShippedConfirm", { letter: bankLetter(target) }))) return;
+    }
     if (startAfter && target !== null) {
       const back = f?.running ?? 0;
       if (
@@ -544,10 +549,16 @@ function Updates() {
             </button>
           )}
         </div>
-        {target !== null && (
-          <p className="text-xs text-base-content/60">
-            {t("system.uploadHint", { letter: bankLetter(target) })}
+        {target !== null && f && overShipped(f, target) ? (
+          <p className="text-xs text-warning">
+            {t("system.uploadHintShipped", { letter: bankLetter(target) })}
           </p>
+        ) : (
+          target !== null && (
+            <p className="text-xs text-base-content/60">
+              {t("system.uploadHint", { letter: bankLetter(target) })}
+            </p>
+          )
         )}
       </Card>
       <Card title={t("system.howUpdate")}>

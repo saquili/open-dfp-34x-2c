@@ -410,7 +410,7 @@ export interface Banks {
 /** A bank of the flash as onu-update tells it. */
 export interface FirmwareBank {
   bank: number;
-  /** valid, incomplete (a write cut short) or empty */
+  /** valid, incomplete (a write cut short), empty, or shipped (the shipped firmware) */
   state: string | null;
   version: string | null;
   /** the time of its kernel image, in seconds since 1970 */

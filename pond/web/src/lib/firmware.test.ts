@@ -3,7 +3,14 @@
 
 import { describe, expect, it } from "vitest";
 import type { Firmware, FirmwareBank } from "../api/types";
-import { type BankView, bankViews, otherBank, updateTarget, uploading } from "./firmware";
+import {
+  type BankView,
+  bankViews,
+  otherBank,
+  overShipped,
+  updateTarget,
+  uploading,
+} from "./firmware";
 
 function firmware(over: Partial<Firmware> = {}): Firmware {
   return {
@@ -81,6 +88,16 @@ describe("the banks", () => {
     expect(b.usable).toBe(false);
     expect(b.version).toBeNull();
   });
+
+  it("names the shipped firmware, with its version, as no system to start", () => {
+    const f = firmware();
+    bank(f, 1).state = "shipped";
+    bank(f, 1).version = "V1.0-220923";
+    const b = views(f)[1];
+    expect(b.tags).toEqual(["shipped"]);
+    expect(b.usable).toBe(false);
+    expect(b.version).toBe("V1.0-220923");
+  });
 });
 
 describe("what can be done", () => {
@@ -88,6 +105,15 @@ describe("what can be done", () => {
     expect(updateTarget(firmware())).toBe(1);
     expect(updateTarget(firmware({ running: 1 }))).toBe(0);
     expect(updateTarget(firmware({ running: null }))).toBeNull();
+  });
+
+  it("knows when an update would write over the shipped firmware", () => {
+    const f = firmware();
+    expect(overShipped(f, updateTarget(f))).toBe(false);
+    bank(f, 1).state = "shipped";
+    expect(overShipped(f, updateTarget(f))).toBe(true);
+    expect(overShipped(f, null)).toBe(false);
+    expect(otherBank(f)).toBeNull();
   });
 
   it("starts the other bank only when it holds a system", () => {

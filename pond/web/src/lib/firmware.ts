@@ -16,7 +16,8 @@ export type BankTag =
   | "trial" /* runs on trial, not kept yet */
   | "failed" /* its last trial did not come up */
   | "empty"
-  | "incomplete";
+  | "incomplete"
+  | "shipped" /* the firmware the stick shipped with, in its own split */;
 
 export interface BankView {
   bank: number;
@@ -43,11 +44,13 @@ export function bankViews(f: Firmware): BankView[] {
     if (b.bank === f.failed) tags.push("failed");
     if (b.state === "empty") tags.push("empty");
     if (b.state === "incomplete") tags.push("incomplete");
+    if (b.state === "shipped") tags.push("shipped");
+    const known = usable || b.state === "shipped";
     return {
       bank: b.bank,
       letter: bankLetter(b.bank),
-      version: usable ? b.version : null,
-      time: usable ? b.time : null,
+      version: known ? b.version : null,
+      time: known ? b.time : null,
       tags,
       usable,
     };
@@ -57,6 +60,11 @@ export function bankViews(f: Firmware): BankView[] {
 /** The bank an update goes into: the one that does not run; none after a start from memory. */
 export function updateTarget(f: Firmware): number | null {
   return f.running === 0 || f.running === 1 ? 1 - f.running : null;
+}
+
+/** Whether an update into @bank would write over the shipped firmware. */
+export function overShipped(f: Firmware, bank: number | null): boolean {
+  return bank !== null && f.banks.find((b) => b.bank === bank)?.state === "shipped";
 }
 
 /** The other bank, when it holds a system that can be started. */

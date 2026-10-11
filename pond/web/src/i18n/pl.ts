@@ -895,6 +895,8 @@ export const pl: Dictionary = {
     startAfter: "Po wgraniu od razu uruchom na próbę",
     startAfterHint:
       "Wkładka uruchomi się z nowego systemu raz, na próbę; jeśli nie wstanie w 5 minut, sama wróci do obecnego.",
+    overShippedConfirm:
+      "W systemie {letter} jest firmware, z którym wkładka przyszła. Aktualizacja go nadpisze i wtedy wrócić do niego można tylko z kopii całego flasha zrobionej wcześniej. Nadpisać?",
     uploadStartConfirm:
       "Po wgraniu wkładka od razu uruchomi się z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5 minut, sama wróci do systemu {back}. Kontynuować?",
     howUpdate: "Jak przebiega aktualizacja",
@@ -951,12 +953,15 @@ export const pl: Dictionary = {
     tagTrial: "na próbę",
     tagFailed: "ostatnia próba nieudana",
     tagEmpty: "pusty",
+    tagShipped: "firmware fabryczny",
     tagIncomplete: "niepełny zapis",
     builtOn: "zbudowany {date}",
     upload: "Wgraj nowe oprogramowanie",
     password: "Hasło roota",
     passwordHint: "Wgranie nowego systemu i uruchomienie drugiego wymagają go jeszcze raz.",
     wrongPassword: "Złe hasło: potrzebne jest hasło roota.",
+    uploadHintShipped:
+      "W systemie {letter} jest firmware, z którym wkładka przyszła: plik update.bin go skasuje. Jeśli możesz chcieć do niego wrócić, najpierw zrób kopię całego flasha.",
     uploadHint:
       "Plik update.bin trafia do systemu {letter}, który teraz nie działa. Działający system zostaje nietknięty.",
     sending: "Wysyłanie… {percent}",

@@ -895,6 +895,8 @@ export const en = {
     startAfter: "Start it on trial right after the upload",
     startAfterHint:
       "The stick starts the new system once, on trial; if it does not come up in 5 minutes, it goes back to the current one by itself.",
+    overShippedConfirm:
+      "System {letter} holds the firmware the stick shipped with. An update writes over it, and then the only way back to it is a copy of the whole flash taken before. Write over it?",
     uploadStartConfirm:
       "After the upload the stick starts system {letter} at once, on trial. If it does not come up within 5 minutes, it goes back to system {back} by itself. Go on?",
     howUpdate: "How an update goes",
@@ -952,12 +954,15 @@ export const en = {
     tagTrial: "on trial",
     tagFailed: "last trial failed",
     tagEmpty: "empty",
+    tagShipped: "firmware the stick shipped with",
     tagIncomplete: "incomplete write",
     builtOn: "built {date}",
     upload: "Upload new software",
     password: "Root password",
     passwordHint: "Writing a new system and starting the other one need it again.",
     wrongPassword: "Wrong password. Root's password is needed for this.",
+    uploadHintShipped:
+      "System {letter} holds the firmware the stick shipped with: the update.bin file erases it. Keep a copy of the whole flash first if you may want it back.",
     uploadHint:
       "The update.bin file goes into system {letter}, which is not running now. The running system stays untouched.",
     sending: "Sending… {percent}",
