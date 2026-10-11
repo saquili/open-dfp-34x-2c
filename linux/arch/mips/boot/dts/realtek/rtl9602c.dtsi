@@ -25,6 +25,16 @@
 	};
 
 	/*
+	 * The LX bus clock, 200 MHz (measured on this board), which the
+	 * timers and the watchdog count.
+	 */
+	lx_clk: clock-lx {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	/*
 	 * The CPU's eight interrupt lines. The platform code sets up their
 	 * domain without this node, so no interrupt resolves against it; it
 	 * serves as the parent of intc.
@@ -67,18 +77,29 @@
 			status = "disabled";
 		};
 
-		/* Three registers: keepalive, interrupt status and control */
+		/*
+		 * The general-purpose timers, 0x10 apart: timer 0 gives the
+		 * clock events and timer 1 the clocksource.
+		 */
+		timer@18003200 {
+			compatible = "realtek,rtl9602c-timer", "realtek,otto-timer";
+			reg = <0x18003200 0x10>, <0x18003210 0x10>;
+			interrupt-parent = <&intc>;
+			interrupts = <43>;
+			clocks = <&lx_clk>;
+		};
+
+		/*
+		 * Three registers: keepalive, phase flags and control. The
+		 * block raises no interrupt when a phase ends (measured on
+		 * this board). An expiry resets the whole chip, the switch
+		 * and the SerDes lane to the host included.
+		 */
 		wdt: watchdog@18003260 {
 			compatible = "realtek,rtl9602c-wdt";
 			reg = <0x18003260 0xc>;
-
-			/*
-			 * The phase-one warning. The block has not been seen
-			 * to raise any interrupt, so this source number is not
-			 * verified; the driver runs without it.
-			 */
-			interrupt-parent = <&intc>;
-			interrupts = <5>;
+			clocks = <&lx_clk>;
+			realtek,reset-mode = "soc";
 		};
 
 		/*
