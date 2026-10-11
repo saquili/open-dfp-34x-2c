@@ -190,6 +190,18 @@ files back from their backups; and a package that the shipped firmware's
 web page installs into the other bank, for a stick as shipped, is built
 and tried in that test.
 
+Tried on 2026-10-11 on a stick of the bench with the eight builds of the
+shipped firmware for this stick that the repository Anime4000/RTL960x
+keeps, the one the stick shipped with among them. Each, written into the
+other bank in its own split and started from it, mounted the partition as
+it found it, with no format, took its two XML files as valid, and left
+this system's file as it was; after each, this system started again with
+its settings and the identity of the shipped files. A package other than
+the one a stick shipped with may write the shipped
+firmware's own files anew: on the bench one wrote the PLOAM password's
+format differently, so going back to another package than the stick's own
+can change how the stick introduces itself to an OLT.
+
 Steps 3, 4, 5 and 7 are tried on a stick of the bench with live sessions:
 two sessions at once, an IPv6 prefix, the hardware path's throughput as
 before (some 900 Mb/s each way), and each program killed during a session.
