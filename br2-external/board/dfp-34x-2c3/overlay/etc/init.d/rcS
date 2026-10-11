@@ -60,11 +60,14 @@ onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reac
 # identity, and the PON driver takes the serial number before the PON comes
 # up. The file holds the PLOAM password, so only root may read it. Root's
 # password goes to /run/shadow, which /etc/shadow names, for the console's
-# login and the ssh server. The key of the panel's HTTPS comes from the store
-# too, or is made now and kept there, the first time (onu-config tls).
+# login and the ssh server. The key of the panel's HTTPS and the ssh server's
+# host key come from the store too, or are made now and kept there, the first
+# time, once the kernel's random number generator is seeded (onu-config tls,
+# onu-config ssh).
 umask 077
 onu-config load || warn "no identity in the configuration store or the factory configuration"
 onu-config tls || warn "no key for HTTPS: the panel answers over HTTP"
+onu-config ssh || warn "no ssh host key kept: the ssh server makes one of its own"
 # A bench may name the versions that the software images and the circuit
 # packs report to the OLT, so that a unit shows what the firmware it came
 # with showed; without them omcid reports its own.
