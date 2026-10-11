@@ -27,9 +27,13 @@ ln -sf /proc/self/fd /dev/fd
 ln -sf /proc/self/fd/0 /dev/stdin
 ln -sf /proc/self/fd/1 /dev/stdout
 ln -sf /proc/self/fd/2 /dev/stderr
-mount -t tmpfs -o mode=1777 tmpfs /tmp
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
-mount -t tmpfs -o mode=0755 tmpfs /var
+# Each with a ceiling: a tmpfs takes half the memory by default, and the
+# three together could take more than the stick has, which the kernel and
+# the data path need. Measured after two hours of two sessions: /run holds
+# 376 KiB, /tmp 4 KiB, /var nothing.
+mount -t tmpfs -o mode=1777,size=2m tmpfs /tmp
+mount -t tmpfs -o mode=0755,nosuid,nodev,size=4m tmpfs /run
+mount -t tmpfs -o mode=0755,size=1m tmpfs /var
 ln -s ../run /var/run
 ln -s ../tmp /var/tmp
 mkdir -p /var/log
