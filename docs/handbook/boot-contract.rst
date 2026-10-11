@@ -485,12 +485,11 @@ space opens ``/dev/watchdog``, which procd, the first process, does as it
 starts, and then feeds it for as long as it runs (ADR 0013). Between the
 clearing and the probe nothing watches the boot. Once procd feeds the
 watchdog, what ends a failed trial is ``onu-trial``, which the boot script
-starts at its end and which restarts the stick into the committed bank when
-the system does not come up (``updating.rst``); a boot script that hangs
-before it never starts it. A trial boot that hangs in the kernel before the
-probe, or in the boot script before ``onu-trial``, is therefore expected to
-recover only by a power cycle. This has not been observed; it follows from
-the order above.
+starts as its first step and which restarts the stick into the committed bank
+when the system does not come up (``updating.rst``), a boot script that hangs
+after it included. A trial boot that hangs in the kernel before the probe, or
+before procd runs the boot script, is therefore expected to recover only by a
+power cycle. This has not been observed; it follows from the order above.
 
 What the loader leaves behind
 =============================
@@ -589,9 +588,8 @@ Open items
   test tries to open it for writing, though the flash driver writes the other
   partitions (``onu-update``, ``onu-config``).
 * That a trial boot is not reset by the watchdog when the kernel hangs between
-  the clearing of the count and the probe of the watchdog driver, or when the
-  boot script hangs before it starts ``onu-trial``, has not been observed. A
-  trial boot that stops there would show it.
+  the clearing of the count and the probe of the watchdog driver has not been
+  observed. A trial boot that stops there would show it.
 * That the countdown tick is one second is taken from the figures of the
   countdown and has not been timed.
 * That ``boot`` typed at the prompt consumes a pending trial exactly as the end

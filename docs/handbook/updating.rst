@@ -126,14 +126,16 @@ The boot loader sets ``sw_tryactive`` back to 2 and ``sw_active`` to the bank,
 saves its environment, arms the watchdog and starts the bank. From then on,
 every reset that is not a commit leads to the committed bank.
 
-``onu-trial`` waits for omcid to run, for the status daemon to answer on the
-host link, and for the PON to reach O5, operation, unless the receiver has no
-light: without a fibre the PON says nothing about the new system. When all hold
-it runs ``onu-update commit``, which sets ``sw_commit`` to the running bank,
+``onu-trial``, which the boot script starts first, waits for omcid to run as
+one process across two looks five seconds apart (procd starts one that
+crashed again after 2 s), for the status daemon to answer on the host link,
+and for the PON to reach O5, operation, unless the receiver has no light:
+without a fibre the PON says nothing about the new system. When all hold it
+runs ``onu-update commit``, which sets ``sw_commit`` to the running bank,
 removes the trial's mark and switches the loader's multicast listener off
 (``mupgrade_en``). When they do not hold within 300 seconds it restarts
-the stick. What it found is in ``/run/onu-trial`` and its log in
-``/run/onu-trial.log``.
+the stick, and forces the restart when procd has not carried it out in 30 s.
+What it found is in ``/run/onu-trial`` and its log in ``/run/onu-trial.log``.
 
 The environment as this system uses it
 ======================================
@@ -242,8 +244,9 @@ bank, as ``onu-update`` does. It exits 1 on purpose, and the page says the
 update failed: the shipped firmware then leaves ``sw_commit`` on its own
 bank, and the boot loader starts this system once. ``onu-trial`` commits it
 when it is up; a system that does not come up within its 300 seconds is
-restarted into the shipped firmware, and one that hangs before ``onu-trial``
-starts needs a power cycle (``boot-contract.rst``, "A trial boot").
+restarted into the shipped firmware, and one that hangs in the kernel before
+the boot script starts needs a power cycle (``boot-contract.rst``, "A trial
+boot").
 
 This way in has tests on the host, which run ``fwu.sh`` against stand-ins of
 the stick's partitions and tools (``br2-external/tests/image/test_mkweb.py``).

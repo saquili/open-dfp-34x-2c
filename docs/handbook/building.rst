@@ -307,6 +307,9 @@ The start
 The boot script
     ``/etc/init.d/rcS``:
 
+    #. starts ``onu-trial`` in the background, which keeps a bank started on
+       trial once the system is up, and restarts into the committed bank when
+       it is not, a boot script that hangs included (``updating.rst``);
     #. starts the system log, ``syslogd`` and ``klogd``, which keep
        ``/run/messages`` and one older copy of 64 KiB each;
     #. reads the unit's settings (``onu-config load``): it mounts the
@@ -355,8 +358,6 @@ The boot script
        starts again only what changed. ``omcid`` keeps what the OLT set up in
        ``/run/omcid.mib``, and one that procd starts again goes on from it,
        unseen by the OLT. netifd holds the PPPoE sessions;
-    #. starts ``onu-trial`` in the background, which keeps a bank started on
-       trial once the system is up (``updating.rst``);
     #. prints on the console the addresses of ssh, the panel's address and the
        SHA-256 fingerprint of its certificate, and last
        ``open-dfp-34x-2c: ready``.
