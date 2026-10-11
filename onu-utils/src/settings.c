@@ -3,7 +3,6 @@
 
 /* The settings of the stick's data path, as one table (settings.h). */
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,37 +11,37 @@
 #include "settings.h"
 
 enum kind {
-	K_MODE,
-	K_PROTO,
 	K_GEM,
 	K_VLAN,
-	K_PREFIX,
-	K_PREFIX_OPT,
-	K_ADDR,
-	K_ADDR_OPT,
 	K_ONOFF,
 	K_MAC_OPT,
 	K_FAMILY,
 	K_HOST_VLAN,
 };
 
-/* The keys of /run/onu.conf, as onu-apply reads them, and their defaults. */
+/*
+ * The keys of before that are not a session's: the WAN's GEM port, VLAN and
+ * MAC address of the single session of before, which the first session
+ * takes over (settings_settle()), and their defaults. They are read, and
+ * never written.
+ */
 static const struct {
 	const char *name;
 	enum kind kind;
 	const char *dflt;
 } g_keys[SETTINGS_NKEYS] = {
-	[SET_MODE] = { "MODE", K_MODE, "" },
 	[SET_WAN_GEM] = { "WAN_GEM", K_GEM, "auto" },
 	[SET_WAN_VLAN] = { "WAN_VLAN", K_VLAN, "" },
-	[SET_WAN_PROTO] = { "WAN_PROTO", K_PROTO, "dhcp" },
-	[SET_WAN_ADDRESS] = { "WAN_ADDRESS", K_PREFIX_OPT, "" },
-	[SET_WAN_GATEWAY] = { "WAN_GATEWAY", K_ADDR_OPT, "" },
 	[SET_WAN_MAC] = { "WAN_MAC", K_MAC_OPT, "" },
-	[SET_LAN_ADDRESS] = { "LAN_ADDRESS", K_PREFIX, "192.168.1.1/24" },
-	[SET_LAN_DHCP] = { "LAN_DHCP", K_ONOFF, "on" },
-	[SET_LAN_DHCP_START] = { "LAN_DHCP_START", K_ADDR, "192.168.1.100" },
-	[SET_LAN_DHCP_END] = { "LAN_DHCP_END", K_ADDR, "192.168.1.199" },
+};
+
+/*
+ * The keys of the bench's router of before, which the stick no longer has:
+ * taken with any value, and left out.
+ */
+static const char *const g_gone[] = {
+	"MODE", "WAN_PROTO", "WAN_ADDRESS", "WAN_GATEWAY", "LAN_ADDRESS",
+	"LAN_DHCP", "LAN_DHCP_START", "LAN_DHCP_END",
 };
 
 /*
@@ -80,50 +79,6 @@ static bool number(const char *s, unsigned long lo, unsigned long hi,
 	return v >= lo && v <= hi;
 }
 
-/* a.b.c.d, in decimal without leading zeros. */
-static bool ipv4(const char *s, uint32_t *ip)
-{
-	uint32_t v = 0;
-
-	for (int part = 0; part < 4; part++) {
-		size_t n = strspn(s, "0123456789");
-		char num[4];
-		unsigned long octet;
-
-		if (!n || n > 3)
-			return false;
-		memcpy(num, s, n);
-		num[n] = '\0';
-		if (!number(num, 0, 255, &octet))
-			return false;
-		v = v << 8 | (uint32_t)octet;
-		s += n;
-		if (part < 3 && *s++ != '.')
-			return false;
-	}
-	if (ip)
-		*ip = v;
-	return *s == '\0';
-}
-
-/* a.b.c.d/len, with a length from 1 to 32. */
-static bool prefix(const char *s, uint32_t *ip, uint32_t *mask)
-{
-	char addr[SETTINGS_VALUE_MAX];
-	const char *slash = strchr(s, '/');
-	unsigned long len;
-
-	if (!slash || (size_t)(slash - s) >= sizeof(addr))
-		return false;
-	memcpy(addr, s, (size_t)(slash - s));
-	addr[slash - s] = '\0';
-	if (!ipv4(addr, ip) || !number(slash + 1, 1, 32, &len))
-		return false;
-	if (mask)
-		*mask = len == 32 ? 0xffffffffu : ~(0xffffffffu >> len);
-	return true;
-}
-
 /*
  * xx:xx:xx:xx:xx:xx, in hexadecimal, an address one station may send from:
  * neither a group address nor all zeros.
@@ -152,30 +107,15 @@ static bool mac(const char *s)
 static bool valid(enum kind kind, const char *v)
 {
 	switch (kind) {
-	case K_MODE:
-		/* Only router is a shape; the others are words of before. */
-		return !*v || !strcmp(v, "bridge") || !strcmp(v, "router") ||
-		       !strcmp(v, "passthrough");
 	case K_FAMILY:
 		return !strcmp(v, "ipv4") || !strcmp(v, "ipv6") ||
 		       !strcmp(v, "both");
-	case K_PROTO:
-		return !strcmp(v, "pppoe") || !strcmp(v, "dhcp") ||
-		       !strcmp(v, "static");
 	case K_GEM:
 		return !strcmp(v, "auto") || number(v, 0, 4095, NULL);
 	case K_VLAN:
 		return !*v || number(v, 1, 4094, NULL);
 	case K_HOST_VLAN:
 		return !*v || !strcmp(v, "untagged") || number(v, 1, 4094, NULL);
-	case K_PREFIX:
-		return prefix(v, NULL, NULL);
-	case K_PREFIX_OPT:
-		return !*v || prefix(v, NULL, NULL);
-	case K_ADDR:
-		return ipv4(v, NULL);
-	case K_ADDR_OPT:
-		return !*v || ipv4(v, NULL);
 	case K_ONOFF:
 		return !strcmp(v, "on") || !strcmp(v, "off");
 	case K_MAC_OPT:
@@ -302,6 +242,9 @@ int settings_line(struct settings *s, const char *line, char *err,
 		return 0;
 	}
 
+	for (size_t g = 0; g < sizeof(g_gone) / sizeof(g_gone[0]); g++)
+		if (!strcmp(key, g_gone[g]))
+			return 0;
 	k = key_index(key);
 	if (k >= 0) {
 		if (!valid(g_keys[k].kind, v)) {
@@ -334,12 +277,7 @@ int settings_line(struct settings *s, const char *line, char *err,
 
 void settings_settle(struct settings *s)
 {
-	struct settings_account *first = &s->acct[0];
 	char (*one)[SETTINGS_VALUE_MAX] = s->sval[0];
-
-	if (!strcmp(s->val[SET_MODE], "bridge") ||
-	    !strcmp(s->val[SET_MODE], "passthrough"))
-		s->val[SET_MODE][0] = '\0';
 
 	/* The single session of before: its settings were the WAN's. */
 	if (!*one[SET_S_VLAN])
@@ -348,14 +286,8 @@ void settings_settle(struct settings *s)
 		memcpy(one[SET_S_MAC], s->val[SET_WAN_MAC], SETTINGS_VALUE_MAX);
 	if (!strcmp(one[SET_S_GEM], "auto"))
 		memcpy(one[SET_S_GEM], s->val[SET_WAN_GEM], SETTINGS_VALUE_MAX);
-	if (*first->user && strcmp(s->val[SET_MODE], "router")) {
-		snprintf(s->val[SET_WAN_VLAN], SETTINGS_VALUE_MAX, "%s",
-			 g_keys[SET_WAN_VLAN].dflt);
-		snprintf(s->val[SET_WAN_MAC], SETTINGS_VALUE_MAX, "%s",
-			 g_keys[SET_WAN_MAC].dflt);
-		snprintf(s->val[SET_WAN_GEM], SETTINGS_VALUE_MAX, "%s",
-			 g_keys[SET_WAN_GEM].dflt);
-	}
+	for (int k = 0; k < SETTINGS_NKEYS; k++)
+		snprintf(s->val[k], SETTINGS_VALUE_MAX, "%s", g_keys[k].dflt);
 
 	/* The link of before is the link of each session that names none. */
 	if (s->had_legacy_lan)
@@ -406,21 +338,6 @@ static bool mgmt(const struct settings *s, const char *v)
 
 bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 {
-	uint32_t ip, mask, start, end, gw;
-
-	if (!strcmp(s->val[SET_WAN_PROTO], "static")) {
-		if (!prefix(s->val[SET_WAN_ADDRESS], &ip, &mask) ||
-		    !ipv4(s->val[SET_WAN_GATEWAY], &gw)) {
-			snprintf(err, errcap,
-				 "a static WAN needs WAN_ADDRESS and WAN_GATEWAY");
-			return false;
-		}
-		if ((gw & mask) != (ip & mask) || gw == ip) {
-			snprintf(err, errcap,
-				 "WAN_GATEWAY is not another address of WAN_ADDRESS's network");
-			return false;
-		}
-	}
 	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
 		if (!*s->acct[n].user != !*s->acct[n].secret) {
 			snprintf(err, errcap,
@@ -444,16 +361,6 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 								  down_vlan(s, n));
 			return false;
 		}
-	}
-	if (!strcmp(s->val[SET_MODE], "router") && mgmt(s, s->val[SET_WAN_VLAN])) {
-		snprintf(err, errcap, "WAN_VLAN %s is the management VLAN", s->val[SET_WAN_VLAN]);
-		return false;
-	}
-	if (!strcmp(s->val[SET_MODE], "router") &&
-	    !strcmp(s->val[SET_WAN_PROTO], "pppoe") && !*s->acct[0].user) {
-		snprintf(err, errcap,
-			 "a PPPoE WAN takes session 1's account: PPPOE1_USER and PPPOE1_SECRET");
-		return false;
 	}
 	/* Sessions in one VLAN share its interface, and so its MAC address. */
 	for (int a = 0; a < SETTINGS_SESSIONS; a++) {
@@ -494,16 +401,6 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 			}
 		}
 	}
-
-	if (!prefix(s->val[SET_LAN_ADDRESS], &ip, &mask) ||
-	    !ipv4(s->val[SET_LAN_DHCP_START], &start) ||
-	    !ipv4(s->val[SET_LAN_DHCP_END], &end) ||
-	    (start & mask) != (ip & mask) || (end & mask) != (ip & mask) ||
-	    start > end) {
-		snprintf(err, errcap,
-			 "LAN_DHCP_START to LAN_DHCP_END is not a range of LAN_ADDRESS's network");
-		return false;
-	}
 	return true;
 }
 
@@ -511,10 +408,10 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 {
 	size_t len = 0;
 
-	for (int k = 0; k < SETTINGS_NKEYS; k++)
-		len += (size_t)snprintf(out + (len < cap ? len : cap),
-					len < cap ? cap - len : 0, "%s=%s\n",
-					g_keys[k].name, s->val[k]);
+	/* Without a session there is nothing to write. */
+	if (cap)
+		out[0] = '\0';
+
 	/* A session's settings are kept while it has an account. */
 	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
 		if (!*s->acct[n].user)

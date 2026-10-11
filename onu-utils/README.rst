@@ -10,8 +10,8 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 in ``/usr/sbin`` and ``/usr/bin``. The others only other programs run, and
 they are in ``/usr/lib/onu``, out of a person's way (ADR 0015): ``ponid``,
 ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-change``,
-``onu-trial``, ``onu-act``, ``onu-config.sh`` and ``dhcp-wan``. A script that runs one of them finds it
-there, and names it by its whole path where procd starts it.
+``onu-trial``, ``onu-act`` and ``onu-config.sh``. A script that runs one of
+them finds it there, and names it by its whole path where procd starts it.
 
 ``ponid``
    prints the identity of the unit (serial number, vendor ID, version,
@@ -277,12 +277,9 @@ there, and names it by its whole path where procd starts it.
    once. netifd tells onu-apply when an interface comes up or goes down
    (``onu-apply iface``, netifd's ``-h``), and onu-apply hands the session's
    address and prefix on or takes them back; what a session has is in
-   ``/run/session/N``. For the bench, ``MODE=router`` makes the stick route
-   instead: the LAN is the host link ``sfp``, with an address and BusyBox's
-   DHCP server; the WAN is a GEM port or a VLAN on it, with an address by
-   PPPoE (session 1's account), by DHCP (BusyBox's client, with ``dhcp-wan``
-   as its script) or by hand. The stick translates no address and has no
-   packet filter::
+   ``/run/session/N``. The stick translates no address and has no packet
+   filter. The bench's router of before, ``MODE=router`` with its WAN and
+   LAN settings, is gone: its keys in a store of before are left out::
 
       onu-apply start      # at boot
       onu-apply reload     # after /run/onu.conf changed; saves it too
@@ -380,8 +377,8 @@ there, and names it by its whole path where procd starts it.
    whose line is what ``start`` takes after the name: procd starts what is
    new, ends what has no file any more, starts again only what changed, and
    leaves the rest alone (ADR 0014). ``onu-apply`` keeps its programs so, in
-   ``/run/onu-svc.d``, as the service ``onu``: omcid, dhcp6d, udhcpd and,
-   for the bench's router, udhcpc. A sync holds the directory while it reads
+   ``/run/onu-svc.d``, as the service ``onu``: omcid, dhcp6d and udhcpd. A
+   sync holds the directory while it reads
    it and tells procd, so that the last one sends what the directory holds
    then. ``list`` tells each service's or instance's state and how often
    procd started it again (a procd patch, ``br2-external/package/procd``)::
@@ -456,8 +453,7 @@ that they build, and those of ``onu-nl`` build its requests and read them back;
 the result back with tc, where it may make interfaces (root with
 CAP_NET_ADMIN, as in a container started with ``--cap-add NET_ADMIN``), and
 says that it skipped elsewhere. The
-tests of ``onu-apply`` and ``dhcp-wan`` run them against stand-ins for the
-programs they call, in a scratch root, and those of ``onu-config`` run it with
+tests of ``onu-apply`` run it against stand-ins for the programs it calls, in a scratch root, and those of ``onu-config`` run it with
 ``build/onu-config`` on a store in a file and a stand-in for BusyBox's
 ``cryptpw``. ``onu-update`` is tested on a flash
 made of files under ``ONU_ROOT``, with update files packed by the image build's

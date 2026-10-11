@@ -10,14 +10,17 @@
  * daemon asks it rather than knowing the rules.
  *
  * A set of settings is KEY=VALUE lines, a later line over an earlier one:
- * MODE, WAN_GEM, WAN_VLAN, WAN_PROTO, WAN_ADDRESS, WAN_GATEWAY, WAN_MAC,
- * LAN_ADDRESS, LAN_DHCP, LAN_DHCP_START, LAN_DHCP_END; SESSIONn_GEM,
- * SESSIONn_VLAN, SESSIONn_MAC, SESSIONn_FAMILY, SESSIONn_PASS and
- * SESSIONn_HOST_VLAN for the sessions 1 to 7; PPPOEn_USER and PPPOEn_SECRET,
- * the account of session n, an empty user removing it (PPPOE_USER and
- * PPPOE_SECRET, the single account of before, are the first session's); and
- * LAN_VLAN, the one link to the host of before. Empty lines and lines that
- * begin with '#' are not settings.
+ * SESSIONn_GEM, SESSIONn_VLAN, SESSIONn_MAC, SESSIONn_FAMILY, SESSIONn_PASS
+ * and SESSIONn_HOST_VLAN for the sessions 1 to 7; PPPOEn_USER and
+ * PPPOEn_SECRET, the account of session n, an empty user removing it. The
+ * keys of before are read and taken over: PPPOE_USER and PPPOE_SECRET, the
+ * single account of before, and WAN_GEM, WAN_VLAN and WAN_MAC, its GEM
+ * port, VLAN and MAC address, are the first session's; LAN_VLAN, the one
+ * link to the host of before, is each session's that names none. The keys
+ * of the bench's router of before, MODE, WAN_PROTO, WAN_ADDRESS,
+ * WAN_GATEWAY, LAN_ADDRESS, LAN_DHCP, LAN_DHCP_START and LAN_DHCP_END, are
+ * taken with any value and left out. Empty lines and lines that begin with
+ * '#' are not settings.
  */
 
 #ifndef SETTINGS_H
@@ -31,19 +34,11 @@
 #define SETTINGS_USER_MAX 63
 #define SETTINGS_SECRET_MAX 255
 
-/* The keys that are not a session's, in the order they are written. */
+/* The keys of before that are not a session's, read and never written. */
 enum settings_key {
-	SET_MODE,
 	SET_WAN_GEM,
 	SET_WAN_VLAN,
-	SET_WAN_PROTO,
-	SET_WAN_ADDRESS,
-	SET_WAN_GATEWAY,
 	SET_WAN_MAC,
-	SET_LAN_ADDRESS,
-	SET_LAN_DHCP,
-	SET_LAN_DHCP_START,
-	SET_LAN_DHCP_END,
 	SETTINGS_NKEYS
 };
 
@@ -113,13 +108,10 @@ int settings_line(struct settings *s, const char *line, char *err,
  * settings_settle() - Take over what the keys of before say.
  * @s: the settings, every line taken
  *
- * MODE's words of before, bridge and passthrough, name no shape: the
- * accounts give it, and they become empty. The first session takes the
- * WAN's VLAN, MAC address and GEM port of before where it names none of its
- * own; with an account and outside the bench's router mode, the WAN's go
- * back to their defaults, as they were the session's. LAN_VLAN of before,
- * or the host link itself when it is empty, becomes the link of each
- * session that names none.
+ * The first session takes the WAN's VLAN, MAC address and GEM port of
+ * before where it names none of its own, and the WAN's go back to their
+ * defaults. LAN_VLAN of before, or the host link itself when it is empty,
+ * becomes the link of each session that names none.
  */
 void settings_settle(struct settings *s);
 
@@ -138,8 +130,8 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap);
  * @out: where the lines go
  * @cap: the size of @out
  *
- * Every key that is not a session's, then the keys of each session that has
- * an account; never an account.
+ * The keys of each session that has an account; never an account, nor a
+ * key of before.
  *
  * Return: the length of the lines, which is @cap or more when they did not
  *         fit.

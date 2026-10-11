@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-apply and scripts/dhcp-wan, against stand-ins for the
+# Tests of scripts/onu-apply, against stand-ins for the
 # programs they run, in a scratch root: each stand-in writes its name and its
 # arguments to a log.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 MODE_SCRIPT=$HERE/scripts/onu-apply
-WAN_SCRIPT=$HERE/scripts/dhcp-wan
 REAL_SLEEP=$(command -v sleep)
 checks=0
 failures=0
@@ -151,94 +150,13 @@ check '! logged "^onu-config"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
 teardown
 
-echo "router mode, DHCP on the WAN"
-setup
-conf MODE=router WAN_PROTO=dhcp LAN_ADDRESS=198.51.100.1/24 \
-	LAN_DHCP_START=198.51.100.10 LAN_DHCP_END=198.51.100.20
-"$MODE_SCRIPT" start 2>/dev/null
-check 'logged "^ip link del omcibr0"'
-check 'logged "^onu-nl filter del sfp pref 1000"'
-check 'logged "^onu-nl filter del pon pref 1001"'
-check '! logged "^onu-nl filter del [a-z]* pref 1$"'
-check '! logged "^onu-nl clsact del \(sfp\|pon\)$"'
-check 'logged "^omcid -r"'
-check 'has router "interface lan: device=sfp proto=static ipaddr=198.51.100.1/24"'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
-check 'grep -q "^opt subnet 255.255.255.0" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^opt router 198.51.100.1" "$ONU_ROOT/run/udhcpd.conf"'
-check 'grep -q "^start 198.51.100.10" "$ONU_ROOT/run/udhcpd.conf"'
-check 'logged "^udhcpd -f $ONU_ROOT/run/udhcpd.conf"'
-"$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link set gem256 up"'
-check 'logged "^udhcpc -f -i gem256 -s $ONU_ROOT/usr/lib/onu/dhcp-wan$"'
-check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
-check '! logged "^nft"'
-# Every other GEM port hands its frames on, the downstream-only one and one
-# that also sends, as an IEEE 802.1p mapper's GEM port of other priorities.
-check 'logged "^onu-nl filter add gem4095 redirect gem256"'
-check 'logged "^onu-nl filter add gem1024 redirect gem256"'
-check '! logged "^onu-nl filter add gem256 "'
-check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
-teardown
-
-echo "router mode, PPPoE in a VLAN, on a named GEM port"
-setup
-conf MODE=router WAN_PROTO=pppoe WAN_VLAN=410 WAN_GEM=1024
-echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
-"$MODE_SCRIPT" start 2>/dev/null
-check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe1" | cut -c1-10)" = "-rw-------" ]'
-"$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem1024 name wan type vlan id 410"'
-check 'logged "^ip link set pon mtu 1508"'
-check 'logged "^ip link set gem1024 mtu 1508"'
-check 'logged "^ip link set wan mtu 1508"'
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/onu-dns" ] && break
-	"$REAL_SLEEP" 0.2
-done
-check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^pppoed up" "$LOG" | head -1 | cut -d: -f1)" ]'
-check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe1 -D"'
-check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
-# The WAN in a VLAN takes the frames of that VLAN alone from the other ports.
-check 'logged "^onu-nl filter add gem4095 vlan 410 redirect gem1024"'
-check 'logged "^onu-nl filter add gem256 vlan 410 redirect gem1024"'
-check '! logged "matchall"'
-"$MODE_SCRIPT" sync 2>/dev/null
-check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
-"$MODE_SCRIPT" stop 2>/dev/null
-check 'logged "^ip link set gem1024 mtu 1500"'
-check '[ "$(grep -n "ip link set gem1024 mtu 1500" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon mtu 1500" "$LOG" | cut -d: -f1)" ]'
-teardown
-
-echo "router mode, a static WAN"
-setup
-conf MODE=router WAN_PROTO=static WAN_ADDRESS=203.0.113.2/30 WAN_GATEWAY=203.0.113.1
-"$MODE_SCRIPT" start 2>/dev/null
-"$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip address add 203.0.113.2/30 dev gem256"'
-check 'logged "^ip route replace default via 203.0.113.1 dev gem256"'
-teardown
-
-echo "from bridge to router, with omcid running"
-setup
-conf MODE=bridge
-"$MODE_SCRIPT" start 2>/dev/null
-: >"$LOG"
-printf 'MODE=router\n' >"$ONU_ROOT/run/onu.conf"
-"$MODE_SCRIPT" reload 2>/dev/null
-check 'logged "^killall -USR1 omcid"'
-check '! logged "^omcid"'
-check '[ "$(grep -n "killall -USR1 omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" ]'
-# A change is kept in the store before it is applied.
-check '[ "$(grep -n "^onu-config save" "$LOG" | cut -d: -f1)" = 1 ]'
-teardown
-
 echo "a PPPoE session without name servers"
 setup
 printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
 	'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns - -"' \
 	"$REAL_SLEEP" >"$T/bin/pppoed"
-conf MODE=router WAN_PROTO=pppoe
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
@@ -250,25 +168,6 @@ check 'logged "IPv4 up on ppp0"'
 check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
 check '"$MODE_SCRIPT" status >/dev/null'
 check '! "$MODE_SCRIPT" status | grep -q "^dns"'
-teardown
-
-echo "from router back to bridge"
-setup
-conf MODE=router LAN_ADDRESS=198.51.100.65/24
-"$MODE_SCRIPT" start 2>/dev/null
-"$MODE_SCRIPT" sync 2>/dev/null
-: >"$LOG"
-printf 'MODE=bridge\n' >"$ONU_ROOT/run/onu.conf"
-"$MODE_SCRIPT" reload 2>/dev/null
-check '! logged "^nft"'
-check 'logged "^onu-net del router$" && [ ! -e "$ONU_ROOT/run/network.d/router" ]'
-check 'logged "^killall -USR2 omcid"'
-check '! logged "^omcid"'
-check 'logged "^onu-nl clsact del gem4095"'
-check 'logged "^ip -4 address flush dev gem256"'
-check '[ ! -e "$ONU_ROOT/run/onu-feeds" ]'
-check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
-check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 teardown
 
 echo "an account: the stick holds the session, in a VLAN, and hands it down in another"
@@ -477,17 +376,13 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 teardown
 
-echo "from router to passthrough, omcid left as it is"
+echo "an untagged session: the host link itself is its link, until its account goes"
 setup
-conf MODE=router LAN_ADDRESS=198.51.100.1/24 LAN_DHCP=off
 "$MODE_SCRIPT" start 2>/dev/null
 : >"$LOG"
-printf 'MODE=\n' >"$ONU_ROOT/run/onu.conf"
+: >"$ONU_ROOT/run/onu.conf"
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" reload 2>/dev/null
-check '! logged "^killall -USR"'
-check '! logged "^omcid"'
-check 'logged "^onu-net del router$"'
 check 'has links "interface sfp: device=sfp proto=static ipaddr=169.254.0.1/32"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 # The host link itself is the LAN link: it checks the sources, until the
@@ -781,23 +676,6 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 check '! logged "reboot"'
 teardown
 
-echo "the netmask of a prefix"
-check '[ "$("$MODE_SCRIPT" netmask 24)" = 255.255.255.0 ]'
-check '[ "$("$MODE_SCRIPT" netmask 20)" = 255.255.240.0 ]'
-check '[ "$("$MODE_SCRIPT" netmask 32)" = 255.255.255.255 ]'
-check '[ "$("$MODE_SCRIPT" netmask 0)" = 0.0.0.0 ]'
-
-echo "the DHCP client's script"
-setup
-interface=wan ip=203.0.113.6 mask=30 router="203.0.113.5 203.0.113.9" \
-	dns="198.51.100.1 198.51.100.2" "$WAN_SCRIPT" bound
-check 'logged "^ip address add 203.0.113.6/30 dev wan"'
-check 'logged "^ip route replace default via 203.0.113.5 dev wan"'
-check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = "198.51.100.1 198.51.100.2" ]'
-interface=wan "$WAN_SCRIPT" deconfig
-check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
-teardown
-
 echo "a new identity: the sessions end, the PON goes down, takes it, comes up, and omcid starts over"
 setup
 printf 'serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\n' >"$ONU_ROOT/run/onu-identity"
@@ -891,28 +769,11 @@ check 'logged "^onu-net del ses1$" && logged "^onu-net del ses2$" && logged "^on
 check '[ -z "$(ls "$ONU_ROOT/run/network.d" 2>/dev/null)" ]'
 teardown
 
-echo "the bench's router: its PPPoE WAN an interface of netifd too"
-setup
-mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
-conf MODE=router WAN_PROTO=pppoe WAN_VLAN=410
-echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
-"$MODE_SCRIPT" start 2>/dev/null
-"$MODE_SCRIPT" sync 2>/dev/null
-check '[ "$(net 1)" = "option device wan option proto pppoed option session 1 option family both option pass 0 option defaultroute 1 " ]'
-check '[ "$(cat "$ONU_ROOT/run/session/1/role")" = "primary none" ]'
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -s "$ONU_ROOT/run/onu-dns" ] && break
-	"$REAL_SLEEP" 0.2
-done
-check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
-check '! logged "^udhcpd -f $ONU_ROOT/run/udhcpd-lan"'
-"$MODE_SCRIPT" stop 2>/dev/null
-check 'logged "^onu-net del ses1$" && [ ! -e "$ONU_ROOT/run/session/1" ]'
-teardown
-
 echo "one onu-apply at a time, and changes told while one waits are that one's"
 setup
-conf MODE=router LAN_ADDRESS=198.51.100.1/24
+# A session on a GEM port the OLT has not provisioned yet.
+conf SESSION1_GEM=999 SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 lock=$ONU_ROOT/run/onu-apply.lock
 # A live process holds the lock: a sync waits for it, and one more sync
@@ -920,8 +781,8 @@ lock=$ONU_ROOT/run/onu-apply.lock
 "$REAL_SLEEP" 30 &
 holder=$!
 ln -s "$holder" "$lock"
-# The WAN's name servers change, which a sync gives the LAN's DHCP server.
-echo 198.51.100.53 >"$ONU_ROOT/run/onu-dns"
+# The OLT provisions the session's GEM port, which a sync follows.
+mkdir -p "$ONU_ROOT/sys/class/net/gem999"
 "$MODE_SCRIPT" sync 2>/dev/null &
 waiting=$!
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -932,7 +793,7 @@ check '[ "$(readlink "$ONU_ROOT/run/onu-apply.again")" = "$waiting" ]'
 "$MODE_SCRIPT" omcid 2>/dev/null
 rc=$?
 check '[ $rc -eq 0 ] && kill -0 "$waiting" 2>/dev/null'
-check '! grep -q "^opt dns" "$ONU_ROOT/run/udhcpd.conf"'
+check '[ ! -e "$ONU_ROOT/run/network.d/ses1" ]'
 kill "$holder"
 wait "$holder" 2>/dev/null
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -940,7 +801,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	"$REAL_SLEEP" 0.2
 done
 check '! kill -0 "$waiting" 2>/dev/null'
-check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
+check '[ -e "$ONU_ROOT/run/network.d/ses1" ]'
 check '[ ! -L "$ONU_ROOT/run/onu-apply.again" ] && [ ! -L "$lock" ]'
 # A lock whose holder is gone is taken over; dhcp6d's change is a sync too.
 "$REAL_SLEEP" 0 &
@@ -958,16 +819,6 @@ setup
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
 check '[ $? -eq 0 ] && ! logged "^ip " && ! logged "^procd start" && ! logged "^onu-net"'
-teardown
-
-echo "the DHCP client's script tells onu-apply of a lease"
-setup
-interface=wan ip=203.0.113.6 mask=30 dns=198.51.100.1 "$WAN_SCRIPT" bound
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	logged "^onu-apply sync$" && break
-	"$REAL_SLEEP" 0.1
-done
-check 'logged "^onu-apply sync$"'
 teardown
 
 # A change on trial, as the status daemon makes it: the new settings and

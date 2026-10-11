@@ -30,7 +30,7 @@ echo "check: the settings in full, judged, without a store"
 unset ONU_STORE
 run check 'PPPOE1_USER=bench\nPPPOE1_SECRET=not-a-real-one\nSESSION1_VLAN=410\n'
 check '[ $rc -eq 0 ] && [ ! -s "$T/err" ]'
-check 'grep -qx "LAN_ADDRESS=192.168.1.1/24" "$T/out" && grep -qx "SESSION1_VLAN=410" "$T/out"'
+check 'grep -qx "SESSION1_GEM=auto" "$T/out" && grep -qx "SESSION1_VLAN=410" "$T/out"'
 check '! grep -q -e bench -e not-a-real-one -e PPPOE "$T/out"'
 check '[ "$(grep -c "^SESSION1_" "$T/out")" -eq 6 ] && ! grep -q "^SESSION2_" "$T/out"'
 
@@ -43,16 +43,17 @@ run check 'PPPOE2_USER=bench\nPPPOE2_SECRET=xyzzy plugh\n'
 check '[ $rc -eq 1 ] && grep -q "PPPOE2_SECRET" "$T/err" && ! grep -q -e xyzzy -e plugh "$T/err"'
 
 echo "settings: the same, a line that is not taken left out and said"
-run settings 'WAN_VLAN=410\nWAN_VLAN=4095\nPASS_GATEWAY=169.254.0.1\nLAN_DHCP=on\n'
-check '[ $rc -eq 0 ] && grep -qx "WAN_VLAN=410" "$T/out" && grep -qx "LAN_DHCP=on" "$T/out"'
+run settings 'PPPOE1_USER=a\nWAN_VLAN=410\nWAN_VLAN=4095\nPASS_GATEWAY=169.254.0.1\nLAN_DHCP=on\n'
+# The VLAN of before is the first session's; the router's key goes.
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=410" "$T/out" && ! grep -q "LAN_DHCP" "$T/out"'
 check 'grep -qx "onu-config: WAN_VLAN: not a value of it; left out" "$T/err"'
 check 'grep -qx "onu-config: PASS_GATEWAY: no such setting; left out" "$T/err"'
 # It judges nothing: an account without a secret is no reason to fail.
-run settings 'PPPOE2_USER=bench\nLAN_DHCP_START=203.0.113.9\n'
-check '[ $rc -eq 0 ] && grep -qx "LAN_DHCP_START=203.0.113.9" "$T/out" && grep -q "^SESSION2_GEM=auto" "$T/out"'
+run settings 'PPPOE2_USER=bench\nSESSION2_VLAN=40\n'
+check '[ $rc -eq 0 ] && grep -qx "SESSION2_VLAN=40" "$T/out" && grep -q "^SESSION2_GEM=auto" "$T/out"'
 
 echo "more than it takes, and what is not one of its words"
-awk 'BEGIN { for (i = 0; i < 2000; i++) print "LAN_DHCP=on" }' >"$T/long"
+awk 'BEGIN { for (i = 0; i < 2000; i++) print "SESSION1_PASS=on" }' >"$T/long"
 "$ONUCFG" check <"$T/long" >"$T/out" 2>"$T/err"
 rc=$?
 check '[ $rc -eq 1 ] && grep -q "too long" "$T/err"'
@@ -80,7 +81,7 @@ printf 'bench not-a-real-one\n' >"$R/run/onu-pppoe1"
 chmod 600 "$R/run/onu-pppoe1"
 ONU_ROOT=$R "$ONUCFG" current </dev/null >"$T/out" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=410" "$T/out" && grep -qx "LAN_DHCP=on" "$T/out"'
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=410" "$T/out" && grep -qx "SESSION1_PASS=on" "$T/out"'
 check 'grep -qx "PPPOE1_USER=bench" "$T/out" && grep -qx "PPPOE1_SECRET_SET=1" "$T/out"'
 check '! grep -q not-a-real-one "$T/out" && ! grep -q "^PPPOE2" "$T/out"'
 check 'grep -qx "onu-config: WAN_VLAN: not a value of it; left out" "$T/err"'
