@@ -5,7 +5,12 @@
 Only the two partitions of bank 0 are ever written, each by an image made for
 it: a kernel image to ``k0`` and a SquashFS image to ``r0``. Bank 1 holds the
 shipped firmware, the fallback, and is never touched; the tool records its
-checksums before it writes and fails if they differ afterwards. Every line is
+checksums before it writes and fails if they differ afterwards. A stick that
+took this system through the shipped firmware's web page while that firmware
+ran from bank 0 holds it the other way round: this system in bank 1 and the
+shipped firmware in bank 0, where a write would overwrite its only copy. The
+tool tells such a bank 0 as ``onu-update`` does and writes it only when told
+so explicitly. Every line is
 typed by the tool itself, with literal numbers from its own table, after the
 guard has approved it; the board's own flashing macros are never run.
 
@@ -54,7 +59,8 @@ from dataclasses import dataclass, field
 from . import image
 from .console import (PROMPT, BenchError, Console, ConsoleInterrupted, UnexpectedState,
                       WaitTimeout, display, wait, wait_quiet)
-from .guard import (BY_NAME, Partition, check_bank, check_layout, check_target, window_address)
+from .guard import (BY_NAME, LAYOUT_VARIABLES, Partition, check_bank, check_layout,
+                    check_target, window_address)
 from .ramboot import (SERVER_SOURCE, AttemptFailed, Context, RamBootConfig, RamBootError,
                       check_environment, check_ready_pattern, check_started_image, console_lock,
                       expected_addresses, read_cmdline, reach_loader_prompt, recover,
@@ -87,6 +93,10 @@ class Bank1Changed(UnexpectedState):
     """Bank 1's checksums differ from before the write."""
 
 
+class ShippedInBank0(UnexpectedState):
+    """Bank 0 holds the shipped firmware, and the request did not say to overwrite it."""
+
+
 class SignalGate:
     """Holds a stop request until a command that must not be interrupted has finished."""
 
@@ -114,6 +124,7 @@ class FlashOptions:
     arm: bool = False
     commit: bool = False
     accept_same_bank_fallback: bool = False
+    overwrite_shipped: bool = False
 
 
 @dataclass
@@ -170,6 +181,20 @@ def bank1_lines() -> list[str]:
             flash_crc_line(BY_NAME["r1"], BY_NAME["r1"].size)]
 
 
+# Where the shipped firmware's split of bank 0 puts its root filesystem.
+SHIPPED_ROOTFS = LAYOUT_VARIABLES["fl_rootfs1"]
+
+# The magic numbers that tell what bank 0 holds, at their offsets in the flash.
+SHIPPED_PROBES = ((BY_NAME["k0"].start, image.UIMAGE_MAGIC.to_bytes(4, "big")),
+                  (BY_NAME["r0"].start, image.SQUASHFS_MAGIC),
+                  (SHIPPED_ROOTFS, image.SQUASHFS_MAGIC))
+
+
+def shipped_lines() -> list[str]:
+    return ["crc32 %x %x" % (window_address(offset), len(magic))
+            for offset, magic in SHIPPED_PROBES]
+
+
 @dataclass(frozen=True)
 class Step:
     """A step of the procedure and the lines it types."""
@@ -189,6 +214,7 @@ def plan(target: str, length: int, via: str, *, arm: bool, commit: bool,
     part = BY_NAME[check_target(target)]
     name = config.kernel_name if part.name == "k0" else config.rootfs_name
     steps = [Step("read the environment", ("printenv",)),
+             Step("look for the shipped firmware in bank 0", tuple(shipped_lines())),
              Step("record the checksums of bank 1", tuple(bank1_lines()))]
     if via == "ymodem":
         steps += [Step("stop the watchdog", (WATCHDOG_LINE,)),
@@ -344,6 +370,20 @@ def bank1_checksums(loader: Loader) -> tuple[int, int]:
             loader.crc32(window_address(r1.start), r1.size))
 
 
+def bank0_holds_shipped(loader: Loader) -> bool:
+    """Whether bank 0 holds the shipped firmware, as ``onu-update`` tells it.
+
+    That is a kernel image, no root filesystem where this system keeps it, and
+    one where the shipped firmware's split puts it. The loader gives the tool
+    no bytes of the flash, only checksums, so each magic number is compared by
+    the CRC-32 of its four bytes; all three are read, whatever the first says.
+    """
+    found = [loader.crc32(window_address(offset), len(magic)) == zlib.crc32(magic)
+             for offset, magic in SHIPPED_PROBES]
+    kernel, rootfs, shipped_rootfs = found
+    return kernel and not rootfs and shipped_rootfs
+
+
 def fallback_bank(env: dict[str, str]) -> str:
     """The bank a plain reset boots, which is where a failed trial ends up."""
     return env.get("sw_commit", "?")
@@ -395,10 +435,24 @@ def flash_image(ctx: Context, path: str, options: FlashOptions, config: FlashCon
             raise UnexpectedState("sw_tryactive reads %r, not 2: a trial is already pending, "
                                   "so the board is not in a state to flash"
                                   % env.get("sw_tryactive"))
+        shipped = bank0_holds_shipped(ctx.loader)
+        if shipped and not options.overwrite_shipped:
+            raise ShippedInBank0(
+                "bank 0 holds the shipped firmware: a kernel image, and its root filesystem "
+                "where the shipped firmware's split puts it (%x), not where this system keeps "
+                "it (%x). This system then runs from bank 1, and a write would overwrite the "
+                "only copy of the shipped firmware. Nothing was written. Copy the flash "
+                "first; --overwrite-shipped writes anyway"
+                % (SHIPPED_ROOTFS, BY_NAME["r0"].start))
+        if shipped:
+            ctx.say("bank 0 holds the shipped firmware, and it is overwritten as asked")
+            notes.append("the shipped firmware of bank 0 was overwritten")
         fallback = fallback_bank(env)
         if options.arm:
-            ctx.say("a failed trial falls back to bank %s%s" % (
-                fallback, " (the shipped firmware)" if fallback == "1" else ""))
+            holder = ""
+            if fallback == "1":
+                holder = " (this system)" if shipped else " (the shipped firmware)"
+            ctx.say("a failed trial falls back to bank %s%s" % (fallback, holder))
             if fallback != "1" and not options.accept_same_bank_fallback:
                 raise UnexpectedState(
                     "sw_commit is %s, so a failed trial of bank 0 is not followed by the "

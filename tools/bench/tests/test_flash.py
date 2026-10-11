@@ -90,7 +90,8 @@ class Plan(BenchCase):
     def test_the_kernel_by_tftp(self) -> None:
         steps = fl.plan("kernel", 0x5F41A, "tftp", arm=False, commit=False)
         self.assertEqual(fl.plan_lines(steps), [
-            "printenv", "crc32 94440000 14c000", "crc32 9458c000 274000",
+            "printenv", "crc32 94080000 4", "crc32 94250000 4", "crc32 941cc000 4",
+            "crc32 94440000 14c000", "crc32 9458c000 274000",
             "run sdsup", "tftpboot 80000000 uImage", "crc32 80000000 5f41a",
             "mw.l b8003268 0",
             "sf erase 80000 +1d0000", "sf write 80000000 80000 5f41a", "crc32 94080000 5f41a",
@@ -99,7 +100,8 @@ class Plan(BenchCase):
     def test_the_root_filesystem_by_ymodem_with_a_trial(self) -> None:
         steps = fl.plan("rootfs", 0x1F0000, "ymodem", arm=True, commit=True)
         self.assertEqual(fl.plan_lines(steps), [
-            "printenv", "crc32 94440000 14c000", "crc32 9458c000 274000",
+            "printenv", "crc32 94080000 4", "crc32 94250000 4", "crc32 941cc000 4",
+            "crc32 94440000 14c000", "crc32 9458c000 274000",
             "mw.l b8003268 0", "loady 80000000", "crc32 80000000 1f0000",
             "sf erase 250000 +1f0000", "sf write 80000000 250000 1f0000",
             "crc32 94250000 1f0000", "crc32 94440000 14c000", "crc32 9458c000 274000",
@@ -454,6 +456,48 @@ class Bank1(FlashCase):
         self.assertEqual(fl.bank1_lines(), ["crc32 94440000 14c000", "crc32 9458c000 274000"])
         for line in fl.bank1_lines():
             self.assertIn(line, step_lines(self.loader))
+
+
+class ShippedInBank0(FlashCase):
+    """A stick that took this system through the shipped firmware's web page while that
+    firmware ran from bank 0: the shipped firmware in bank 0, in its own split."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.flash_chip.preload("k0", make_uimage(0x100000, name="Linux-shipped", seed=6))
+        self.flash_chip.data[fl.SHIPPED_ROOTFS:fl.SHIPPED_ROOTFS + 0x120000] = \
+            make_squashfs(0x120000, seed=7)
+        self.before = self.flash_chip.snapshot()
+
+    def test_a_write_over_the_shipped_firmware_is_refused(self) -> None:
+        for target in ("kernel", "rootfs"):
+            with self.subTest(target=target):
+                with self.assertRaises(fl.ShippedInBank0) as caught:
+                    self.run_flash(target=target, arm=True)
+                self.assertIn("--overwrite-shipped", str(caught.exception))
+                self.assertNothingWritten()
+                self.assertNotArmed()
+                self.assertFalse([line for line in step_lines(self.loader)
+                                  if line.startswith(("tftpboot", "sf "))])
+
+    def test_it_is_written_when_asked_and_bank_1_is_this_system(self) -> None:
+        self.board.model.env["sw_commit"] = "1"
+        result = self.run_flash(target="kernel", overwrite_shipped=True, arm=True)
+        self.assertEqual(self.flash_chip.region("k0")[:len(self.kernel_image)],
+                         self.kernel_image)
+        self.assertIn("the shipped firmware of bank 0 was overwritten", result.notes)
+        self.assertTrue(any("falls back to bank 1 (this system)" in line for line in self.said))
+
+    def test_a_bank_0_of_this_system_is_not_taken_for_the_shipped_firmware(self) -> None:
+        self.flash_chip.preload("r0", make_squashfs(3000, seed=4))
+        self.before = self.flash_chip.snapshot()
+        self.run_flash(target="kernel")
+
+    def test_an_empty_bank_0_is_not_taken_for_it(self) -> None:
+        self.flash_chip.preload("k0", b"")
+        self.flash_chip.preload("r0", b"")
+        self.before = self.flash_chip.snapshot()
+        self.run_flash(target="rootfs")
 
 
 class ProtectedRegions(FlashCase):

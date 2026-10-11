@@ -155,7 +155,8 @@ the console nor the image host.
     one-shot trial of bank 0 and boots it; ``--commit`` makes bank 0 the
     committed bank (``sw_commit`` 0). ``--accept-same-bank-fallback`` allows
     arming while ``sw_commit`` is 0, so that a failed trial returns to bank 0
-    again. On a bridge console the transport is TFTP: YMODEM through the bridge
+    again. A bank 0 that holds the shipped firmware is refused, and
+    ``--overwrite-shipped`` writes it anyway (see below). On a bridge console the transport is TFTP: YMODEM through the bridge
     is refused unless ``--ymodem-over-bridge`` is given and ``console.bridge_host``
     names the bridge, because it has not been tried (it stops the pane's client
     and opens the one connection itself). With ``console.serial_device`` set,
@@ -223,7 +224,8 @@ and breaks in again. One recovery is made per run.
 A flash, in order: the file is checked for its partition and its CRC-32 taken;
 the loader prompt is reached; the layout variables (``fl_*`` and the two kernel
 window addresses) must read as the loader names the board's layout, which keeps
-the shipped split of bank 0, and ``sw_tryactive`` must read 2;
+the shipped split of bank 0, and ``sw_tryactive`` must read 2; bank 0 must not
+hold the shipped firmware, unless ``--overwrite-shipped`` was given;
 the CRC-32 of bank 1 is recorded through the loader's flash window; the image
 reaches RAM at ``0x80000000`` by TFTP (``run sdsup`` first) or by YMODEM, and its
 CRC-32 there must equal the host's; the watchdog is stopped (``mw.l b8003268 0``),
@@ -336,6 +338,15 @@ sends nothing.
   the fallback. The command line takes a target word (``kernel``, ``rootfs``) and
   a bank number, never an offset; ``--bank 1`` and a protected name are refused
   before any work.
+* **The shipped firmware in bank 0 is written only on request.** A stick that
+  took this system through the shipped firmware's web page while that firmware
+  ran from bank 0 has this system in bank 1 and the shipped firmware in bank 0,
+  its only copy. The tool tells such a bank 0 as ``onu-update`` does: a kernel
+  image, no root filesystem at ``r0``, and one where the shipped firmware's split
+  puts it (``0x1cc000``). The loader shows the tool no bytes, so each magic
+  number is compared by the CRC-32 of its four bytes (``crc32 94080000 4`` and
+  two more), read before anything else. Such a bank is refused, and only
+  ``--overwrite-shipped`` writes it.
 * **An allowlist, not a blocklist.** A line that is not one of the listed forms
   is refused, however harmless it looks. Command names are compared exactly (the
   loader may accept abbreviations); numbers are hexadecimal, at most 32 bits;

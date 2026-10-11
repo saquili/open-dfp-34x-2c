@@ -119,6 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="arm although sw_commit names bank 0, so a failed trial returns to it")
     flash.add_argument("--commit", action="store_true",
                        help="make bank 0 the committed bank (sw_commit 0)")
+    flash.add_argument("--overwrite-shipped", action="store_true",
+                       help="write bank 0 although it holds the shipped firmware")
     flash.add_argument("--ymodem-over-bridge", action="store_true",
                        help="try YMODEM through the bridge (not validated)")
     flash.add_argument("--dry-run", action="store_true")
@@ -273,7 +275,8 @@ def cmd_flash(args: argparse.Namespace, svc: Services) -> int:
     config.ymodem_over_bridge = args.ymodem_over_bridge
     options = flashmod.FlashOptions(
         target=args.target, bank=args.bank, via=args.via, arm=args.arm, commit=args.commit,
-        accept_same_bank_fallback=args.accept_same_bank_fallback)
+        accept_same_bank_fallback=args.accept_same_bank_fallback,
+        overwrite_shipped=args.overwrite_shipped)
     if args.dry_run:
         return _flash_dry_run(args, svc, settings, options)
     use_serial = args.via == "ymodem" and bool(settings.serial_device)
