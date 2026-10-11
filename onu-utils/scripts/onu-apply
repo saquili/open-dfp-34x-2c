@@ -123,6 +123,8 @@ AGAIN=$RUN/onu-apply.again
 # a change is on trial (TRIAL), the ones it goes back to (KEPT).
 APPLIED=$RUN/onu-applied
 KEPT=$RUN/onu-kept
+# A change onu-config change wrote, which try puts in force under the lock.
+PENDING=$RUN/onu-pending
 TRIAL=$RUN/onu-trial.d/settings
 TRIAL_LIMIT=${TRIAL_LIMIT:-90}
 
@@ -1323,6 +1325,23 @@ uptime_s() {
 	echo "${up%%.*}"
 }
 
+# The change onu-config change left in PENDING put in force: each account it
+# changed, an empty file for one it removed, then the settings. Until then
+# an onu-apply sync applies the settings in force alone.
+pending_take() {
+	[ -d "$PENDING" ] || return 0
+	for f in "$PENDING"/onu-pppoe[1-7]; do
+		[ -e "$f" ] || continue
+		if [ -s "$f" ]; then
+			mv "$f" "$RUN/${f##*/}"
+		else
+			rm -f "$f" "$RUN/${f##*/}"
+		fi
+	done
+	[ ! -e "$PENDING/onu.conf" ] || mv "$PENDING/onu.conf" "$CONF"
+	rm -rf "$PENDING"
+}
+
 # A change on trial (ADR 0014): the settings of /run/onu.conf and the accounts
 # applied but not saved, and the ones applied before kept aside. Unless it
 # is confirmed in TRIAL_LIMIT seconds, the stick goes back to those, so that
@@ -1334,6 +1353,7 @@ try_change() {
 		[ ! -d "$APPLIED" ] || cp -R "$APPLIED" "$KEPT" ||
 			log "the settings in force are not kept: an unconfirmed change stays"
 	fi
+	pending_take
 	apply
 	token=$$
 	mkdir -p "${TRIAL%/*}" &&

@@ -979,6 +979,33 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ] && [ -e "$ONU_ROOT/ru
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
 
+echo "a change waits aside until try: a sync between applies the settings in force"
+trial_setup
+"$MODE_SCRIPT" try 2>/dev/null
+"$MODE_SCRIPT" confirm 2>/dev/null
+# What onu-config change writes: the settings and a new account, aside.
+mkdir -p "$ONU_ROOT/run/onu-pending"
+printf 'SESSION1_VLAN=36\nSESSION1_FAMILY=ipv4\n' >"$ONU_ROOT/run/onu-pending/onu.conf"
+echo "user another" >"$ONU_ROOT/run/onu-pending/onu-pppoe1"
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "^onu-net del ses1$" && grep -qx SESSION1_VLAN=410 "$ONU_ROOT/run/onu.conf"'
+TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
+check 'grep -qx SESSION1_VLAN=36 "$ONU_ROOT/run/onu.conf" && [ ! -e "$ONU_ROOT/run/onu-pending" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user another" ] && logged "^onu-net del ses1$"'
+# And back: the settings and the account of before.
+"$MODE_SCRIPT" revert 2>/dev/null
+check 'grep -qx SESSION1_VLAN=410 "$ONU_ROOT/run/onu.conf" && [ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user secret" ]'
+# An account removed waits as an empty file.
+mkdir -p "$ONU_ROOT/run/onu-pending"
+printf 'SESSION1_VLAN=410\n' >"$ONU_ROOT/run/onu-pending/onu.conf"
+: >"$ONU_ROOT/run/onu-pending/onu-pppoe1"
+TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
+check '[ ! -e "$ONU_ROOT/run/onu-pppoe1" ] && [ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
+"$MODE_SCRIPT" revert 2>/dev/null
+check '[ -e "$ONU_ROOT/run/onu-pppoe1" ] && [ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
+teardown
+
 echo "a change on trial unconfirmed: back to the settings and the accounts of before"
 trial_setup
 TRIAL_LIMIT=1 "$MODE_SCRIPT" try 2>/dev/null

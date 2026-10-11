@@ -72,9 +72,9 @@
  * front, for the tests). current prints them as settings does, and for each
  * account PPPOEn_USER and PPPOEn_SECRET_SET, 1 or 0, never the secret.
  * change takes KEY=VALUE lines over them, an account's among them, judges
- * the whole as check does, and writes /run/onu.conf and the accounts that
- * changed, each a new file renamed over the old; it says why when it
- * refuses, and then writes nothing. It refuses as well a session whose VLAN,
+ * the whole as check does, and writes the settings and the accounts that
+ * changed into /run/onu-pending, which onu-apply try puts in force; it says
+ * why when it refuses, and then writes nothing. It refuses as well a session whose VLAN,
  * or the VLAN it hands down in, is a management VLAN in use, of
  * /run/onu-mgmt or of a pair on trial, whose frames the switch keeps
  * between the host side and the stick. onu-apply try applies what it wrote.
@@ -571,11 +571,36 @@ static int write_file(const char *path, const char *text, mode_t mode)
 	return err;
 }
 
+/*
+ * A change waits in PENDING_PATH until onu-apply try puts it in force,
+ * under its lock, once it has kept the settings it goes back to: written
+ * straight into /run/onu.conf, a change would be in force for an onu-apply
+ * sync that came between, without a trial to undo it. The directory holds
+ * onu.conf and each account that changed, onu-pppoeN, empty for one
+ * removed; a new change replaces the whole, made aside and renamed.
+ */
+#define PENDING_PATH "/run/onu-pending"
+
+/* The files of the pending change @dir, and @dir, gone. */
+static void pending_remove(const char *dir)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/onu.conf", dir);
+	unlink(path);
+	for (int n = 1; n <= SETTINGS_SESSIONS; n++) {
+		snprintf(path, sizeof(path), "%s/onu-pppoe%d", dir, n);
+		unlink(path);
+	}
+	rmdir(dir);
+}
+
 static int change_cmd(void)
 {
 	static char text[SETTINGS_TEXT_MAX], out[SETTINGS_TEXT_MAX + 64];
 	static struct settings s, before;
-	char err[160], path[PATH_MAX], *line, *save = NULL;
+	char err[160], path[PATH_MAX], dir[PATH_MAX], tmp[PATH_MAX + 8] = "";
+	char *line, *save = NULL;
 	char acct[SETTINGS_USER_MAX + SETTINGS_SECRET_MAX + 4];
 	size_t len = fread(text, 1, sizeof(text), stdin);
 	int rc = 1, e;
@@ -608,34 +633,47 @@ static int change_cmd(void)
 		goto out;
 	}
 
-	/* The accounts that changed, then the settings. */
+	/* The settings and the accounts that changed, aside, then pending. */
+	root_path(PENDING_PATH, 0, dir, sizeof(dir));
+	snprintf(tmp, sizeof(tmp), "%s.new", dir);
+	pending_remove(tmp);
+	if (mkdir(tmp, 0700)) {
+		fprintf(stderr, "onu-config: %s: %s\n", tmp, strerror(errno));
+		rc = 2;
+		goto out;
+	}
 	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
 		const struct settings_account *a = &s.acct[n], *b = &before.acct[n];
 
 		if (!strcmp(a->user, b->user) && !strcmp(a->secret, b->secret))
 			continue;
-		root_path(ACCOUNT_PATH, n + 1, path, sizeof(path));
-		if (*a->user) {
+		snprintf(path, sizeof(path), "%s/onu-pppoe%d", tmp, n + 1);
+		acct[0] = '\0';
+		if (*a->user)
 			snprintf(acct, sizeof(acct), "%s %s\n", a->user, a->secret);
-			e = write_file(path, acct, 0600);
-		} else {
-			e = unlink(path) && errno != ENOENT ? -errno : 0;
-		}
+		e = write_file(path, acct, 0600);
 		if (e) {
 			fprintf(stderr, "onu-config: %s: %s\n", path, strerror(-e));
 			rc = 2;
 			goto out;
 		}
 	}
-	root_path(CONF_PATH, 0, path, sizeof(path));
+	snprintf(path, sizeof(path), "%s/onu.conf", tmp);
 	e = write_file(path, out, 0644);
+	if (!e) {
+		pending_remove(dir);
+		if (rename(tmp, dir))
+			e = -errno;
+	}
 	if (e) {
-		fprintf(stderr, "onu-config: %s: %s\n", path, strerror(-e));
+		fprintf(stderr, "onu-config: %s: %s\n", dir, strerror(-e));
 		rc = 2;
 		goto out;
 	}
 	rc = 0;
 out:
+	if (rc && *tmp)
+		pending_remove(tmp);
 	explicit_bzero(&s, sizeof(s));
 	explicit_bzero(&before, sizeof(before));
 	explicit_bzero(text, sizeof(text));

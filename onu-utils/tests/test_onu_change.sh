@@ -82,13 +82,16 @@ check '[ $rc -eq 0 ] && logged "onu-apply revert" && logged "onu-lane revert" &&
 check '[ -z "$(ls "$DIR")" ]'
 teardown
 
-echo "nothing on trial, nothing to do"
+echo "nothing on trial: nothing to take back, and a confirmation says it came too late"
 setup
 rm -rf "$DIR"
 check '[ -z "$("$CHANGE" status)" ]'
-"$CHANGE" confirm 192.0.2.10 && "$CHANGE" revert
+"$CHANGE" revert
 rc=$?
 check '[ $rc -eq 0 ] && [ ! -s "$LOG" ]'
+"$CHANGE" confirm 192.0.2.10 2>/dev/null
+rc=$?
+check '[ $rc -eq 3 ] && [ ! -s "$LOG" ]'
 "$CHANGE" 2>/dev/null
 rc=$?
 check '[ $rc -eq 2 ]'

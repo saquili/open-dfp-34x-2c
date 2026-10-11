@@ -85,28 +85,48 @@ check 'grep -qx "PPPOE1_USER=bench" "$T/out" && grep -qx "PPPOE1_SECRET_SET=1" "
 check '! grep -q not-a-real-one "$T/out" && ! grep -q "^PPPOE2" "$T/out"'
 check 'grep -qx "onu-config: WAN_VLAN: not a value of it; left out" "$T/err"'
 
-echo "change: over the settings in force, written to their files"
+echo "change: over the settings in force, written aside until onu-apply try"
+P=$R/run/onu-pending
+# What onu-apply try does with it, under its lock (pending_take()).
+take() {
+	for f in "$P"/onu-pppoe*; do
+		[ -e "$f" ] || continue
+		if [ -s "$f" ]; then mv "$f" "$R/run/"; else rm -f "$f" "$R/run/${f##*/}"; fi
+	done
+	mv "$P/onu.conf" "$R/run/onu.conf"
+	rm -rf "$P"
+}
+cp "$R/run/onu.conf" "$T/conf.in-force"
 printf 'SESSION1_VLAN=36\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=36" "$R/run/onu.conf"'
-check '[ "$(cat "$R/run/onu-pppoe1")" = "bench not-a-real-one" ] && ! grep -q -e PPPOE -e bench "$R/run/onu.conf"'
-check '[ ! -e "$R/run/onu.conf.new" ] && [ "$(stat -c %a "$R/run/onu.conf")" = 644 ]'
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_VLAN=36" "$P/onu.conf" && cmp -s "$R/run/onu.conf" "$T/conf.in-force"'
+check '[ "$(stat -c %a "$P")" = 700 ] && [ "$(stat -c %a "$P/onu.conf")" = 644 ] && [ ! -e "$P.new" ]'
+check '[ ! -e "$P/onu-pppoe1" ] && ! grep -q -e PPPOE -e bench "$P/onu.conf"'
+# A second change before a try replaces the first whole.
+printf 'SESSION1_VLAN=37\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+check 'grep -qx "SESSION1_VLAN=37" "$P/onu.conf"'
+printf 'SESSION1_VLAN=36\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+take
+check 'grep -qx "SESSION1_VLAN=36" "$R/run/onu.conf" && [ "$(cat "$R/run/onu-pppoe1")" = "bench not-a-real-one" ]'
 printf 'PPPOE2_USER=second\nPPPOE2_SECRET=s2-secret\nSESSION2_VLAN=40\n' |
 	ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && [ "$(cat "$R/run/onu-pppoe2")" = "second s2-secret" ]'
-check '[ "$(stat -c %a "$R/run/onu-pppoe2")" = 600 ] && grep -qx "SESSION2_VLAN=40" "$R/run/onu.conf"'
-check '! grep -q s2-secret "$R/run/onu.conf" "$T/out" "$T/err"'
+check '[ $rc -eq 0 ] && [ "$(cat "$P/onu-pppoe2")" = "second s2-secret" ] && [ ! -e "$R/run/onu-pppoe2" ]'
+check '[ "$(stat -c %a "$P/onu-pppoe2")" = 600 ] && grep -qx "SESSION2_VLAN=40" "$P/onu.conf"'
+check '! grep -q s2-secret "$P/onu.conf" "$T/out" "$T/err"'
+take
+check '[ "$(cat "$R/run/onu-pppoe2")" = "second s2-secret" ]'
 printf 'PPPOE2_USER=\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && [ ! -e "$R/run/onu-pppoe2" ] && ! grep -q "^SESSION2_" "$R/run/onu.conf"'
-check '[ -e "$R/run/onu-pppoe1" ] && grep -qx "SESSION1_VLAN=36" "$R/run/onu.conf"'
+check '[ $rc -eq 0 ] && [ -e "$P/onu-pppoe2" ] && [ ! -s "$P/onu-pppoe2" ] && ! grep -q "^SESSION2_" "$P/onu.conf"'
+take
+check '[ ! -e "$R/run/onu-pppoe2" ] && [ -e "$R/run/onu-pppoe1" ] && grep -qx "SESSION1_VLAN=36" "$R/run/onu.conf"'
 
 echo "change refuses, says why, and writes nothing"
 cp "$R/run/onu.conf" "$T/conf.before"
 printf 'WAN_VLAN=4095\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 1 ] && grep -qx "onu-config: WAN_VLAN: not a value of it" "$T/err" && cmp -s "$R/run/onu.conf" "$T/conf.before"'
+check '[ $rc -eq 1 ] && grep -qx "onu-config: WAN_VLAN: not a value of it" "$T/err" && cmp -s "$R/run/onu.conf" "$T/conf.before" && [ ! -e "$P" ]'
 printf 'PPPOE3_USER=third\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
 rc=$?
 check '[ $rc -eq 1 ] && grep -q PPPOE3_SECRET "$T/err" && [ ! -e "$R/run/onu-pppoe3" ] && cmp -s "$R/run/onu.conf" "$T/conf.before"'
@@ -126,7 +146,7 @@ check '[ $rc -eq 1 ] && grep -q "VLAN 100 is the management VLAN" "$T/err"'
 rm -rf "$R/run/onu-trial.d"
 printf 'SESSION1_HOST_VLAN=100\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
 rc=$?
-check '[ $rc -eq 0 ] && grep -qx "SESSION1_HOST_VLAN=100" "$R/run/onu.conf"'
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_HOST_VLAN=100" "$P/onu.conf"'
 
 echo "password-state and password-check: root's hash, which they keep to themselves"
 rm -f "$R/run/onu-auth"

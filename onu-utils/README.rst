@@ -67,8 +67,11 @@ there, and names it by its whole path where procd starts it.
    secret; ``onu-config change`` takes a change on its input, judges it over
    them as ``check`` does, and as well against the management VLANs in use
    (no session's VLAN, nor the VLAN it hands down in, is one), and writes
-   ``/run/onu.conf`` and the accounts that changed, or says why not and
-   writes nothing, for ``onu-apply try`` to apply. The status daemon has onu-act run them, and knows neither the
+   the settings and the accounts that changed aside, in
+   ``/run/onu-pending``, or says why not and writes nothing; ``onu-apply
+   try`` puts them in force under its lock, once it has kept the settings it
+   goes back to, so that an ``onu-apply sync`` in between applies the
+   settings in force alone. The status daemon has onu-act run them, and knows neither the
    rules nor the files::
 
       onu-config check <settings       # the settings in full, or why not
