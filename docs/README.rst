@@ -5,19 +5,26 @@
 docs
 ====
 
-Project documentation that is not kernel documentation. (Kernel documentation
-lives under ``linux/Documentation/`` in mainline layout.)
+Project documentation that is not kernel documentation, which lives under
+``linux/Documentation/`` in mainline layout. Each program of this tree has a
+README of its own beside its code, for its interfaces and files.
 
-* ``policy/`` -- the provenance policy (``provenance.rst``), the rule for what
-  may and may not enter this repository. In place now.
-* ``adr/`` -- the architecture decision records. In place now.
-* ``handbook/`` -- the device maker's handbook: building, flashing, recovery
-  over the serial console, bank discipline, the boot contract, and optical
-  safety. Filled by **WI-20** (with the board readme and the boot contract from
-  **WI-15**).
-* ``testing/`` -- the records of the device tests run on the stick: a page per
-  run, with the table of every case, its result and its measured values. In
-  place now.
+``handbook/``
+    The device maker's handbook: the board, how the system works, the flash
+    and the boot contract, building, installing and updating, the bench, the
+    toolchain, and the panel's design (``handbook/README.rst``).
+``adr/``
+    The architecture decision records: why the repository, the build, the
+    libraries, the accounts, the supervision, the control plane and the panel
+    are as they are (``adr/README.rst``).
+``policy/``
+    The provenance policy (``provenance.rst``): what may and may not enter
+    this repository, and how a fact about the hardware is written.
+``testing/``
+    The records of the device tests run on the stick: a page per run, with
+    the table of every case, its result and its measured values
+    (``testing/README.rst``).
 
-The handbook is written in reStructuredText and is meant to build with Sphinx,
-alongside the kernel documentation, through ``make docs``.
+The pages are reStructuredText and are read as they are; ``make docs``, which
+would render them, is not implemented. ``make -C linux htmldocs`` renders the
+kernel's.
