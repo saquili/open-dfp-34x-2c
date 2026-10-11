@@ -21,6 +21,8 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
   partitions.
 * ``lib-trim/`` -- the cut of the image's shared libraries to what its programs
   use, with the check that every program finds what it needs.
+* ``docs/`` -- the rendering of the repository's pages to HTML, which fails on
+  any warning of docutils.
 
 One script stands alone:
 

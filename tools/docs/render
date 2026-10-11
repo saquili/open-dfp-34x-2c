@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""render: render the repository's reStructuredText pages to HTML.
+
+Usage: render [--check] [--if-available] [--out DIR] [PAGE ...]
+
+PAGE is a page of the repository, relative to its top; with none, every page
+that git tracks outside linux/, whose pages "make -C linux htmldocs" renders.
+Each page becomes DIR/<page>.html (default build/docs), with its links to
+other pages pointed at their HTML. --check renders and reports, and writes
+nothing. --if-available exits 0 with a note when docutils is not installed,
+for "make check" on a host without it.
+
+Exit status: 0 when every page rendered without a warning; 1 when a page had a
+warning or an error, each one printed; 2 on a usage error, a missing page or
+a missing docutils.
+"""
+
+import argparse
+import io
+import os
+import re
+import subprocess
+import sys
+
+TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+DEFAULT_OUT = os.path.join(TOP, "build", "docs")
+
+# Links to another page of the repository: a relative href that names a .rst
+# file, with or without a fragment.
+RST_HREF = re.compile(r'href="(?![a-z][a-z0-9+.-]*:|/|#)([^"#]*)\.rst(#[^"]*)?"')
+
+
+def pages():
+    out = subprocess.run(["git", "-C", TOP, "ls-files", "-z", "*.rst"],
+                         check=True, capture_output=True).stdout
+    return sorted(p for p in out.decode().split("\0")
+                  if p and not p.startswith("linux/"))
+
+
+def render(page, publish_string):
+    """Return the page's HTML and the warnings docutils reported for it."""
+    warnings = io.StringIO()
+    with open(os.path.join(TOP, page), encoding="utf-8") as f:
+        text = f.read()
+    html = publish_string(text, source_path=page, writer_name="html5",
+                          settings_overrides={
+                              "report_level": 2,
+                              "halt_level": 5,
+                              "warning_stream": warnings,
+                              "raw_enabled": True,
+                              "file_insertion_enabled": False,
+                              "input_encoding": "utf-8",
+                              "output_encoding": "utf-8",
+                              "embed_stylesheet": True,
+                          })
+    html = RST_HREF.sub(lambda m: 'href="%s.html%s"' % (m.group(1), m.group(2) or ""),
+                        html.decode("utf-8"))
+    return html, warnings.getvalue().strip()
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--if-available", action="store_true")
+    ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("-h", "--help", action="store_true")
+    ap.add_argument("pages", nargs="*")
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit:
+        return 2
+    if args.help:
+        sys.stdout.write(__doc__)
+        return 0
+    try:
+        from docutils.core import publish_string
+    except ImportError:
+        if args.if_available:
+            print("docs: docutils is not installed; the pages were not rendered")
+            return 0
+        print("docs: docutils is not installed (python3-docutils)", file=sys.stderr)
+        return 2
+
+    todo = args.pages or pages()
+    missing = [p for p in todo if not os.path.isfile(os.path.join(TOP, p))]
+    if missing:
+        print("docs: no such page: %s" % ", ".join(missing), file=sys.stderr)
+        return 2
+
+    bad = 0
+    for page in todo:
+        html, warnings = render(page, publish_string)
+        if warnings:
+            bad += 1
+            print(warnings)
+        if not args.check:
+            dest = os.path.join(args.out, page[:-len(".rst")] + ".html")
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(html)
+    where = "" if args.check else " into %s" % args.out
+    print("docs: %d page(s) rendered%s, %d with warnings" % (len(todo), where, bad))
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
