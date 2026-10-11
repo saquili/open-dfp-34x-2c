@@ -22,6 +22,19 @@ description: |
 
 allOf:
   - $ref: watchdog.yaml#
+  # The watchdog of the RTL9602C raises no interrupt when a phase ends.
+  - if:
+      properties:
+        compatible:
+          const: realtek,rtl9602c-wdt
+    then:
+      properties:
+        interrupts: false
+        interrupt-names: false
+    else:
+      required:
+        - interrupts
+        - interrupt-names
 
 properties:
   compatible:
@@ -30,6 +43,7 @@ properties:
       - realtek,rtl8390-wdt
       - realtek,rtl9300-wdt
       - realtek,rtl9310-wdt
+      - realtek,rtl9602c-wdt
 
   reg:
     maxItems: 1
@@ -66,8 +80,6 @@ required:
   - compatible
   - reg
   - clocks
-  - interrupts
-  - interrupt-names
 
 unevaluatedProperties: false
 
