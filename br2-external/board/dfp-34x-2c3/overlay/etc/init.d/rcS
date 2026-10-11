@@ -42,9 +42,12 @@ warn() {
 onu-svc start syslogd -- /sbin/syslogd -n -O /run/messages -s 64 || warn "no system log"
 onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reach the system log"
 
-# The identity of the unit, its saved settings, its PPPoE account and root's
-# password, from the configuration store; the identity from the shipped
-# firmware's configuration until the store holds one. omcid reads the
+# The identity of the unit, its saved settings, its PPPoE accounts and root's
+# password. onu-config load makes /config the JFFS2 file system of the
+# partition "config", which the shipped firmware keeps its own files in, and
+# reads this system's file there; a store of before that took the whole
+# partition goes into that file first. The identity is the one of the shipped
+# firmware's files, with what the store changed over it. omcid reads the
 # identity, and the PON driver takes the serial number before the PON comes
 # up. The file holds the PLOAM password, so only root may read it. Root's
 # password goes to /run/shadow, which /etc/shadow names, for the console's
