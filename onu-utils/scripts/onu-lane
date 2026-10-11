@@ -19,7 +19,8 @@
 # it gets the stick back. TRIAL_UNTIL is in seconds of /proc/uptime.
 #
 # The driver's devlink parameters sfp_lane and sfp_lane_now carry the
-# setting (Documentation/networking/devlink/rtl9602c.rst). ONU_ROOT, when
+# setting (Documentation/networking/devlink/rtl9602c.rst), which onu-nl reads
+# and sets. ONU_ROOT, when
 # set, is put in front of /run and /proc, for the tests, and TRIAL_LIMIT
 # names another length of the trial.
 
@@ -29,7 +30,6 @@ RUN=$ROOT/run
 TRIAL=$RUN/onu-trial.d/lane
 SYSTEM=$RUN/onu-system
 LIMIT=${TRIAL_LIMIT:-90}
-DEV=platform/1b000000.switch
 
 log() {
 	echo "onu-lane: $*" >&2
@@ -46,12 +46,11 @@ valid() {
 
 # The value of a devlink parameter of the switch.
 param() {
-	devlink dev param show "$DEV" name "$1" 2>/dev/null |
-		awk '$1 == "cmode" && $2 == "runtime" && $3 == "value" { print $4 }'
+	onu-nl param "$1" 2>/dev/null
 }
 
 set_lane() {
-	devlink dev param set "$DEV" name sfp_lane value "$1" cmode runtime
+	onu-nl param sfp_lane "$1"
 }
 
 uptime_s() {

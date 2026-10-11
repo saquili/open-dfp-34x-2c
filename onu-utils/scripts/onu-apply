@@ -458,11 +458,8 @@ omcid_sync() {
 bridge_down() {
 	ip link del omcibr0 2>/dev/null
 	for dev in sfp pon; do
-		for pref in $(tc filter show dev "$dev" ingress 2>/dev/null |
-			awk '{ for (i = 1; i < NF; i++)
-				if ($i == "pref" && $(i + 1) >= 1000) print $(i + 1) }' |
-			sort -u); do
-			tc filter del dev "$dev" ingress pref "$pref" 2>/dev/null
+		for pref in $(onu-nl filter prefs "$dev" 2>/dev/null); do
+			[ "$pref" -lt 1000 ] || onu-nl filter del "$dev" pref "$pref" 2>/dev/null
 		done
 	done
 	return 0
@@ -822,16 +819,13 @@ feeds_sync() {
 			done
 			[ -n "$rules" ] || continue
 		fi
-		tc qdisc add dev "$port" clsact 2>/dev/null
+		onu-nl clsact add "$port" 2>/dev/null
 		echo "$port" >>"$RUN/onu-feeds"
 		for rule in $rules; do
 			if [ -z "${rule%%:*}" ]; then
-				tc filter add dev "$port" ingress matchall action mirred \
-					ingress redirect dev "${rule#*:}"
+				onu-nl filter add "$port" redirect "${rule#*:}"
 			else
-				tc filter add dev "$port" ingress protocol 802.1Q flower \
-					vlan_id "${rule%%:*}" action mirred ingress redirect \
-					dev "${rule#*:}"
+				onu-nl filter add "$port" vlan "${rule%%:*}" redirect "${rule#*:}"
 			fi
 		done
 	done
@@ -840,7 +834,7 @@ feeds_sync() {
 
 feeds_down() {
 	for port in $(cat "$RUN/onu-feeds" 2>/dev/null); do
-		tc qdisc del dev "$port" clsact 2>/dev/null
+		onu-nl clsact del "$port" 2>/dev/null
 	done
 	rm -f "$RUN/onu-feeds" "$RUN/onu-feeds.key"
 	return 0
@@ -1136,9 +1130,7 @@ router_down() {
 # Whether the switch's L3 engine decrements the TTL or hop limit of what it
 # routes, true or false.
 ttl_decrement() {
-	dev=$(devlink dev show 2>/dev/null | head -n 1)
-	[ -n "$dev" ] || return 0
-	devlink dev param set "$dev" name l3_ttl_decrement cmode runtime value "$1" ||
+	onu-nl param l3_ttl_decrement "$1" ||
 		log "the switch did not take l3_ttl_decrement $1"
 }
 
@@ -1200,19 +1192,18 @@ pass_down() {
 identity() {
 	serial=$(grep '^serial=' "$IDENTITY" 2>/dev/null | cut -d= -f2)
 	ploam=$(grep '^ploam_password=' "$IDENTITY" 2>/dev/null | cut -d= -f2-)
-	dev=$(devlink dev show 2>/dev/null | head -n 1)
-	if [ -z "$serial" ] || [ -z "$dev" ]; then
+	if [ -z "$serial" ]; then
 		log "no serial number: the PON stays down"
 		return 1
 	fi
-	devlink dev param set "$dev" name gpon_serial cmode runtime value "$serial" ||
+	onu-nl param gpon_serial "$serial" ||
 		log "the PON driver did not take the serial number"
 	if [ -n "$ploam" ]; then
 		case $ploam in
 		*[!0-9A-Fa-f]*) ;;
 		*) [ ${#ploam} -eq 20 ] && ploam=0x$ploam ;;
 		esac
-		devlink dev param set "$dev" name gpon_password cmode runtime value "$ploam" ||
+		onu-nl param gpon_password "$ploam" ||
 			log "the PON driver did not take the PLOAM password"
 	fi
 	ip link set pon up || log "the PON does not come up"

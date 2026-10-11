@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-mgmt, with stand-ins for tc, dropbear, onu-net,
+# Tests of scripts/onu-mgmt, with stand-ins for onu-nl, dropbear, onu-net,
 # onu-config and logger, which log what they are asked to do. The stand-in of
 # onu-net keeps the part "mgmt" of netifd's configuration in $T/part, and its
 # wait fails while $T/no-address is there.
@@ -39,7 +39,7 @@ setup() {
 	sleep 60 &
 	OLD_NTP=$!
 	echo "$OLD_NTP" >"$ONU_ROOT/run/ntpd.pid"
-	for c in tc logger; do
+	for c in onu-nl logger; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "onu-net $*" >>"$LOG"\ncase $1 in\nset) cat >"%s/part" ;;\nwait) [ ! -e "%s/no-address" ] ;;\nesac\n' \
@@ -119,8 +119,8 @@ check '[ -n "$name" ] && [ "$name" != mgmt ]'
 check 'in_part "device mgmt 4094" && in_part "interface mgmt mgmt 198.51.100.2/30"'
 check 'in_part "device mgmt100 100" && in_part "interface $name mgmt100 192.0.2.6/30"'
 check 'logged "onu-net wait mgmt100 192.0.2.6/30 10"'
-check 'logged "tc filter add dev sfp ingress pref 2 protocol 802.1Q flower skip_sw vlan_id 100 action trap"'
-check 'logged "tc filter add dev pon ingress pref 2 protocol 802.1Q flower skip_sw vlan_id 100 action drop"'
+check 'logged "onu-nl filter add sfp pref 2 vlan 100 hw trap"'
+check 'logged "onu-nl filter add pon pref 2 vlan 100 hw drop"'
 check 'grep -q -- "-p 192.0.2.6:22" "$LOG"'
 # Root's password as well as keys, as the boot's ssh server (ADR 0012).
 check '! grep -q "^dropbear .*-[sB]\b" "$LOG"'
@@ -133,7 +133,7 @@ check '[ $rc -ne 0 ]'
 run commit
 check '[ $rc -eq 0 ]'
 check 'grep -qx MGMT_VLAN=100 "$T/stored" && grep -qx MGMT_ADDRESS=192.0.2.6/30 "$T/stored"'
-check 'logged "tc filter del dev sfp ingress pref 1 protocol 802.1Q"'
+check 'logged "onu-nl filter del sfp pref 1"'
 check '[ "$(part)" = "$(printf "device mgmt100 100\ninterface $name mgmt100 192.0.2.6/30")" ]'
 # The server of the boot ends, and procd starts it again on the new pair;
 # onu-mgmt starts none of its own but the pending pair's.
@@ -155,7 +155,7 @@ check '[ $rc -eq 0 ]'
 name=$(sed -n 's/^NAME=//p' "$ONU_ROOT/run/onu-trial.d/mgmt")
 check 'in_part "interface mgmt mgmt 198.51.100.2/30" && in_part "interface $name mgmt 198.51.100.6/30"'
 check '[ "$(part | grep -c "^device")" -eq 1 ]'
-check '! grep -q "^tc " "$LOG"'
+check '! grep -q "^onu-nl " "$LOG"'
 run cancel
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ] && [ ! -e "$T/stored" ]'
@@ -173,7 +173,7 @@ run commit
 check '[ $rc -eq 0 ]'
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface $name mgmt 198.51.100.6/30")" ]'
 check '[ "$(grep -A4 "^config interface '"'"'$name'"'"'" "$T/part")" = "$before" ]'
-check '! grep -q "^tc " "$LOG"'
+check '! grep -q "^onu-nl " "$LOG"'
 teardown
 
 echo "a change not committed goes by itself; an earlier watcher leaves a later change"
@@ -183,7 +183,7 @@ run add 100 192.0.2.6/30
 sleep 3
 check '[ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
-check 'logged "tc filter del dev pon ingress pref 2 protocol 802.1Q"'
+check 'logged "onu-nl filter del pon pref 2"'
 export PENDING_LIMIT=600
 run add 100 192.0.2.6/30
 run expire 1
@@ -196,7 +196,7 @@ setup
 run add 100 192.0.2.6/30
 check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
-check 'logged "tc filter del dev sfp ingress pref 2 protocol 802.1Q"'
+check 'logged "onu-nl filter del sfp pref 2"'
 check '! grep -q "^dropbear " "$LOG"'
 teardown
 
@@ -208,11 +208,11 @@ for bad in "0 192.0.2.6/30" "4095 192.0.2.6/30" "100 192.0.2.6" "100 192.0.2.300
 	run add $bad
 	check '[ $rc -eq 2 ]'
 done
-check '! grep -q -e "^onu-net " -e "^tc " -e "^dropbear " "$LOG"'
+check '! grep -q -e "^onu-net " -e "^onu-nl " -e "^dropbear " "$LOG"'
 echo "lan36          | 36  | sfp" >>"$ONU_ROOT/proc/net/vlan/config"
 run add 36 192.0.2.6/30
 check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
-check '! grep -q "tc filter add" "$LOG" && [ ! -e "$T/part" ]'
+check '! grep -q "onu-nl filter add" "$LOG" && [ ! -e "$T/part" ]'
 run commit
 check '[ $rc -ne 0 ]'
 teardown

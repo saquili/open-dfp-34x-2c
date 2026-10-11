@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-lane, with stand-ins for devlink, which keeps each
+# Tests of scripts/onu-lane, with stand-ins for onu-nl, which keeps each
 # parameter in a file, onu-config and logger.
 
 set -u
@@ -27,13 +27,17 @@ setup() {
 	echo "1000.50 900.00" >"$ONU_ROOT/proc/uptime"
 	echo auto >"$T/param/sfp_lane"
 	echo 2500basex >"$T/param/sfp_lane_now"
-	# devlink: "dev param show DEV name N" and "dev param set DEV name N value V cmode runtime".
-	cat >"$T/bin/devlink" <<EOF
+	# onu-nl: "param N" prints the value, "param N V" sets it.
+	cat >"$T/bin/onu-nl" <<EOF
 #!/bin/sh
-case \$3 in
-show) printf 'x:\n  name %s type driver-specific\n    values:\n      cmode runtime value %s\n' "\$6" "\$(cat "$T/param/\$6")" ;;
-set) [ -e "$T/devlink.fail" ] && exit 1; echo "\$8" >"$T/param/\$6"; echo "set \$6 \$8" >>"$LOG" ;;
-esac
+[ "\$1" = param ] || exit 2
+if [ \$# -eq 2 ]; then
+	cat "$T/param/\$2"
+else
+	[ -e "$T/param.fail" ] && exit 1
+	echo "\$3" >"$T/param/\$2"
+	echo "set \$2 \$3" >>"$LOG"
+fi
 EOF
 	printf '#!/bin/sh\n[ "$1" = system ] && cat >>"%s/stored"\n' "$T" >"$T/bin/onu-config"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
@@ -113,7 +117,7 @@ echo "a setting that is none, and a driver that refuses, change nothing"
 setup
 run try 10gbase-r
 check '[ $rc -eq 2 ] && [ "$(lane)" = auto ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
-: >"$T/devlink.fail"
+: >"$T/param.fail"
 run try 1000basex
 check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 teardown

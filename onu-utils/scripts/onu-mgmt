@@ -75,15 +75,13 @@ address_ok() {
 # the SFP port's way in its frames go to the CPU alone, on the PON's they are
 # dropped, as the boot script sets them for the first pair.
 rules_add() {
-	tc filter add dev sfp ingress pref "$2" protocol 802.1Q flower skip_sw \
-		vlan_id "$1" action trap &&
-		tc filter add dev pon ingress pref "$2" protocol 802.1Q flower skip_sw \
-			vlan_id "$1" action drop
+	onu-nl filter add sfp pref "$2" vlan "$1" hw trap &&
+		onu-nl filter add pon pref "$2" vlan "$1" hw drop
 }
 
 rules_del() {
-	tc filter del dev sfp ingress pref "$1" protocol 802.1Q 2>/dev/null
-	tc filter del dev pon ingress pref "$1" protocol 802.1Q 2>/dev/null
+	onu-nl filter del sfp pref "$1" 2>/dev/null
+	onu-nl filter del pon pref "$1" 2>/dev/null
 	return 0
 }
 

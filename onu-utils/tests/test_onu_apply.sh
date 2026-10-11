@@ -98,11 +98,10 @@ setup() {
 	ln -s "$HERE/scripts/onu-run" "$T/bin/onu-run"
 	# onu-net stands in for netifd and its protocol "pppoed" as well.
 	ln -s "$HERE/tests/netifd-standin.sh" "$T/bin/onu-net"
-	# tc shows, on the ingress of sfp and pon, the boot's filter of the
-	# management VLAN at priority 1 and two of omcid's VLAN rules.
-	printf '#!/bin/sh\necho "tc $*" >>"$LOG"\n[ "$1 $2" = "filter show" ] || exit 0\n%s\n' \
-		'printf "filter protocol 802.1Q pref 1 flower chain 0 \nfilter protocol 802.1Q pref 1 flower chain 0 handle 0x1 \nfilter protocol all pref 1000 flower chain 0 \nfilter protocol all pref 1000 flower chain 0 handle 0x1 \nfilter protocol 802.1Q pref 1001 flower chain 0 \n"' \
-		>"$T/bin/tc"
+	# onu-nl lists, on the ingress of sfp and pon, the priority of the boot's
+	# filter of the management VLAN, 1, and those of two of omcid's VLAN rules.
+	printf '#!/bin/sh\necho "onu-nl $*" >>"$LOG"\n[ "$1 $2" = "filter prefs" ] || exit 0\n%s\n' \
+		'printf "1\n1000\n1001\n"' >"$T/bin/onu-nl"
 	# ip makes the interfaces it is told to add, and takes away those it is
 	# told to delete, as the kernel would.
 	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n%s\n%s\n' \
@@ -112,8 +111,6 @@ setup() {
 	# omcid runs from its first start on, as on the board.
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
-	printf '#!/bin/sh\necho "devlink $*" >>"$LOG"\n[ "$1 $2" = "dev show" ] && echo platform/switch\nexit 0\n' \
-		>"$T/bin/devlink"
 	# nft stays a stand-in, so that a call to it would show in the log: the
 	# stick has no packet filter, and onu-apply must not need one.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
@@ -160,10 +157,10 @@ conf MODE=router WAN_PROTO=dhcp LAN_ADDRESS=198.51.100.1/24 \
 	LAN_DHCP_START=198.51.100.10 LAN_DHCP_END=198.51.100.20
 "$MODE_SCRIPT" start 2>/dev/null
 check 'logged "^ip link del omcibr0"'
-check 'logged "^tc filter del dev sfp ingress pref 1000"'
-check 'logged "^tc filter del dev pon ingress pref 1001"'
-check '! logged "^tc filter del dev [a-z]* ingress pref 1$"'
-check '! logged "^tc qdisc del dev \(sfp\|pon\) clsact"'
+check 'logged "^onu-nl filter del sfp pref 1000"'
+check 'logged "^onu-nl filter del pon pref 1001"'
+check '! logged "^onu-nl filter del [a-z]* pref 1$"'
+check '! logged "^onu-nl clsact del \(sfp\|pon\)$"'
 check 'logged "^omcid -r"'
 check 'has router "interface lan: device=sfp proto=static ipaddr=198.51.100.1/24"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
@@ -178,9 +175,9 @@ check '[ "$(cat "$ONU_ROOT/run/onu-wan")" = "gem256 gem256 gem256" ]'
 check '! logged "^nft"'
 # Every other GEM port hands its frames on, the downstream-only one and one
 # that also sends, as an IEEE 802.1p mapper's GEM port of other priorities.
-check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem256"'
-check 'logged "^tc filter add dev gem1024 ingress matchall action mirred ingress redirect dev gem256"'
-check '! logged "^tc filter add dev gem256 "'
+check 'logged "^onu-nl filter add gem4095 redirect gem256"'
+check 'logged "^onu-nl filter add gem1024 redirect gem256"'
+check '! logged "^onu-nl filter add gem256 "'
 check '"$MODE_SCRIPT" status | grep -q "^wan gem256 on gem256"'
 teardown
 
@@ -203,8 +200,8 @@ check '[ "$(grep -n "ip link set wan mtu 1508" "$LOG" | cut -d: -f1)" -lt "$(gre
 check 'logged "^pppoed up -i wan -f $ONU_ROOT/run/onu-pppoe1 -D"'
 check '[ "$(cat "$ONU_ROOT/run/onu-dns")" = 198.51.100.53 ]'
 # The WAN in a VLAN takes the frames of that VLAN alone from the other ports.
-check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 410 action mirred ingress redirect dev gem1024"'
-check 'logged "^tc filter add dev gem256 ingress protocol 802.1Q flower vlan_id 410 action mirred ingress redirect dev gem1024"'
+check 'logged "^onu-nl filter add gem4095 vlan 410 redirect gem1024"'
+check 'logged "^onu-nl filter add gem256 vlan 410 redirect gem1024"'
 check '! logged "matchall"'
 "$MODE_SCRIPT" sync 2>/dev/null
 check 'grep -q "^opt dns 198.51.100.53" "$ONU_ROOT/run/udhcpd.conf"'
@@ -267,7 +264,7 @@ check '! logged "^nft"'
 check 'logged "^onu-net del router$" && [ ! -e "$ONU_ROOT/run/network.d/router" ]'
 check 'logged "^killall -USR2 omcid"'
 check '! logged "^omcid"'
-check 'logged "^tc qdisc del dev gem4095 clsact"'
+check 'logged "^onu-nl clsact del gem4095"'
 check 'logged "^ip -4 address flush dev gem256"'
 check '[ ! -e "$ONU_ROOT/run/onu-feeds" ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
@@ -293,7 +290,7 @@ check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
 check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=0"'
 check 'has links "interface lan36: device=lan36 proto=static ipaddr=169.254.0.1/32"'
 # The stick is no hop: the switch routes with the TTL unchanged.
-check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value false"'
+check 'logged "^onu-nl param l3_ttl_decrement false"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 check '! logged "^udhcpd"'
 "$MODE_SCRIPT" sync 2>/dev/null
@@ -451,7 +448,7 @@ check '! logged "type vlan id"'
 # every frame of the downstream ports goes to the session's GEM interface.
 check 'logged "^omcid -r"'
 check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
-check 'logged "^tc filter add dev gem4095 ingress matchall action mirred ingress redirect dev gem1024"'
+check 'logged "^onu-nl filter add gem4095 redirect gem1024"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check 'logged "^ip link set gem1024 mtu 1500"'
 check 'logged "^ip link set pon mtu 1500"'
@@ -517,9 +514,9 @@ check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
 "$MODE_SCRIPT" sync 2>/dev/null
 # The other ports hand on the frames of the session's VLAN alone, and the
 # session's own port none.
-check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
-check 'logged "^tc filter add dev gem1024 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
-check '! logged "^tc qdisc add dev gem256 "'
+check 'logged "^onu-nl filter add gem4095 vlan 1410 redirect gem256"'
+check 'logged "^onu-nl filter add gem1024 vlan 1410 redirect gem256"'
+check '! logged "^onu-nl clsact add gem256$"'
 check '! logged "matchall"'
 # A second session in another VLAN: omcid builds its bridge again without both.
 : >"$LOG"
@@ -552,7 +549,7 @@ check 'logged "^killall -USR2 omcid"'
 check 'logged "^ip link del wan410"'
 check 'logged "^ip link add link gem256 name wan1410 type vlan id 1410"'
 check 'logged "^pppoed up -i wan1410 "'
-check 'logged "^tc filter add dev gem4095 ingress protocol 802.1Q flower vlan_id 1410 action mirred ingress redirect dev gem256"'
+check 'logged "^onu-nl filter add gem4095 vlan 1410 redirect gem256"'
 # The next round changes nothing.
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
@@ -596,7 +593,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 rm "$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^onu-net del links$" && [ ! -e "$ONU_ROOT/run/network.d/links" ]'
-check 'logged "^devlink dev param set platform/switch name l3_ttl_decrement cmode runtime value true"'
+check 'logged "^onu-nl param l3_ttl_decrement true"'
 check 'logged "^killall -USR2 omcid"'
 check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-lan" ]'
@@ -770,8 +767,8 @@ cp "$ONU_ROOT/run/onu-svc.d/omcid" "$T/svc-omcid"
 : >"$T/omcid.running"
 "$MODE_SCRIPT" reidentify 2>/dev/null
 check 'logged "^ip link set pon down"'
-check 'logged "gpon_serial cmode runtime value XXXXXXXXXXXX"'
-check 'logged "gpon_password cmode runtime value 0x00112233445566778899"'
+check 'logged "^onu-nl param gpon_serial XXXXXXXXXXXX$"'
+check 'logged "^onu-nl param gpon_password 0x00112233445566778899$"'
 check '[ "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" ]'
 check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon up" "$LOG" | cut -d: -f1)" ]'
 # omcid ends as procd's service and starts again, in bridge mode.
