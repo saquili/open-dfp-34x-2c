@@ -126,9 +126,10 @@ Who owns what
 A change of the settings
 ========================
 
-#. The panel sends the change to ``onu-act`` over ubus; ``onu-config check``
+#. The panel sends the change to ``onu-act`` over ubus; ``onu-config change``
    tests it against the one table of the settings and the rules that bind
-   them together, and refuses it with the reason.
+   them together, and refuses it with the reason, or writes it aside, in
+   ``/run/onu-pending``.
 #. ``onu-apply try`` applies it on trial: it writes netifd's configuration
    and procd's list of instances, and procd and netifd change what differs.
 #. The panel confirms the change as soon as it reaches the stick again. A
