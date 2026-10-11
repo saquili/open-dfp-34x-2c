@@ -154,9 +154,10 @@ wrong sign-in, 429 while sign-ins are stopped.
   sessions 1 to 7. pond knows none of their rules, nor reads or writes their
   files, which are onu-config's (ADR 0014): ``onu-config change``, which
   onu-act runs for pond, judges the change over the settings in force, says
-  why not, which pond answers with, or writes ``/run/onu.conf`` and the
-  accounts that changed, ``/run/onu-pppoeN`` for root only; pond then has
-  onu-act start ``onu-apply try`` and does not wait for it: the change is on
+  why not, which pond answers with, or writes the settings and the accounts
+  that changed aside, in ``/run/onu-pending``, for root only; pond then has
+  onu-act start ``onu-apply try``, which puts them in force, and does not
+  wait for it: the change is on
   trial, and the stick goes back to the settings of before unless it is
   confirmed (``changes``, ADR 0014), which saves them in the store; it
   refuses another change, with 409, until onu-apply has ended. A read gives
@@ -174,8 +175,9 @@ wrong sign-in, 429 while sign-ins are stopped.
 * ``changes``: ``CONFIRM=1`` keeps every change on trial (``onu-change``),
   a new management pair only from a request that came to its new address,
   and ``REVERT=1`` takes them all back; pond then listens on the management
-  address in use alone. The panel confirms them as soon as it reaches the
-  stick again.
+  address in use alone. A confirmation when nothing is on trial any more, as
+  after the changes went back, gets 409. The panel confirms them as soon as
+  it reaches the stick again.
 * ``session``: a PPPoE session of the stick's own: ``ID`` (none for the first
   free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``,
   ``FAMILY`` (``ipv4``, ``ipv6`` or ``both``), ``PASS`` (``on`` to hand its

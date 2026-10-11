@@ -62,7 +62,9 @@ void changes_set(struct mg_connection *c, struct mg_http_message *hm)
 	mgmt_addresses(current, pending, sizeof(current));
 	rc = bus_act(method, names, values, 1, NULL, out, sizeof(out));
 	mgmt_settle(c->mgr, current, pending);
-	if (rc)
+	if (rc == 3 && values[0])
+		reply(c, 409, "nothing was on trial: the changes went back already");
+	else if (rc)
 		reply(c, 500, values[0] ? "not every change was kept" : "not every change was taken back");
 	else
 		reply(c, 200, NULL);

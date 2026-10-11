@@ -1521,14 +1521,40 @@ static const char *settled(char *buf, size_t cap)
  * onu-apply's stand-in notes that it ran, then waits for run/release, so that
  * the tests see a change that is still being applied.
  */
+/*
+ * onu-apply's stand-in: "try" puts the change onu-config change left in
+ * /run/onu-pending in force first, as onu-apply does, then says it ran and
+ * waits for the test's release.
+ */
 static const char apply_stub[] =
 	"#!/bin/sh\n"
+	"P=$POND_ROOT/run/onu-pending\n"
+	"if [ \"$1\" = try ] && [ -d \"$P\" ]; then\n"
+	"\tfor f in \"$P\"/onu-pppoe*; do\n"
+	"\t\t[ -e \"$f\" ] || continue\n"
+	"\t\tif [ -s \"$f\" ]; then mv \"$f\" \"$POND_ROOT/run/\";\n"
+	"\t\telse rm -f \"$f\" \"$POND_ROOT/run/${f##*/}\"; fi\n"
+	"\tdone\n"
+	"\tmv \"$P/onu.conf\" \"$POND_ROOT/run/onu.conf\"\n"
+	"\trm -rf \"$P\"\n"
+	"fi\n"
 	"echo \"$1\" >>\"$POND_ROOT/run/applied\"\n"
 	"i=0\n"
 	"while [ ! -e \"$POND_ROOT/run/release\" ] && [ $i -lt 500 ]; do\n"
 	"\tsleep 0.01\n"
 	"\ti=$((i + 1))\n"
 	"done\n";
+
+/* Until onu-apply's stand-in has put the pending change in force. */
+static void wait_taken(void)
+{
+	char path[512];
+	struct stat st;
+
+	prov_path("/run/onu-pending", path, sizeof(path));
+	for (int i = 0; i < 500 && !stat(path, &st); i++)
+		pause_10ms();
+}
 
 static void test_settings(void)
 {
@@ -1605,6 +1631,7 @@ static void test_settings(void)
 			       "PPPOE_USER=bench\r\nPPPOE_SECRET=not-a-real-one\r\n",
 			       err, sizeof(err));
 	check(rc == 0, "a whole change, with the line ends of a form, is taken");
+	wait_taken();
 	s = slurp("/run/onu.conf", file, sizeof(file));
 	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
 		      strstr(s, "\nLAN_DHCP=on\n"),
@@ -1640,6 +1667,7 @@ static void test_settings(void)
 			       "WAN_GATEWAY=198.51.100.1\n",
 			       err, sizeof(err));
 	check(rc == 0, "a change of a few settings is taken");
+	wait_taken();
 	s = slurp("/run/onu.conf", file, sizeof(file));
 	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
 		      strstr(s, "\nWAN_PROTO=static\n"),
@@ -1683,6 +1711,7 @@ static void test_settings(void)
 	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nWAN_MAC=00:00:5e:00:53:01\n",
 			       err, sizeof(err));
 	check(rc == 0, "passthrough over PPPoE is taken");
+	wait_taken();
 	s = slurp("/run/onu.conf", file, sizeof(file));
 	check(s && strstr(s, "\nMODE=\n") && strstr(s, "\nWAN_MAC=\n") &&
 		      strstr(s, "\nSESSION1_MAC=00:00:5e:00:53:01\n") && !strstr(s, "LAN_VLAN") &&
@@ -1795,7 +1824,10 @@ static void test_panel_values(void)
 	snprintf(onu_config, sizeof(onu_config), "%s", getenv("POND_ONU_CONFIG") ?: "");
 	put("/store-stub", store_stub, 0755);
 	setenv("POND_ONU_CONFIG", prov_path("/store-stub", stub, sizeof(stub)), 1);
-	setenv("POND_ONU_APPLY", "true", 1);
+	/* onu-apply's stand-in takes the pending change, and waits for nothing. */
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
 	check(prov_identity_set("SERIAL=XXXX", err, sizeof(err)) == -EINVAL,
 	      "a serial number of the wrong form is refused");
 	check(prov_identity_set("MODEL=a=b", err, sizeof(err)) == -EINVAL,
