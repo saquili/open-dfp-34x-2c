@@ -394,12 +394,14 @@ The top-level ``Makefile`` holds the entry points. You need:
     make sdk           # a relocatable cross toolchain (build/toolchain/images)
     make legal-info    # the licences of a built image (build/image/legal-info)
     make check         # the offline gates and the tools' tests
+    make omcid         # after make: the OMCI daemon again, into the image
+    make docs          # the pages as HTML in build/docs (needs docutils)
     make ramboot       # start a kernel from RAM over the bench
     make flash IMAGE=F TARGET=kernel|rootfs   # write bank 0 over the bench
+    make clean         # remove the build products; distclean all of build/
 
-``make omcid``, ``make docs``, ``make clean`` and ``make distclean`` are not
-implemented yet; each says what to do instead. The programs of this tree
-build and test on their own on the host, with ``make -C <program> check``.
+The programs of this tree build and test on their own on the host, with
+``make -C <program> check``.
 
 Contributing
 ============
