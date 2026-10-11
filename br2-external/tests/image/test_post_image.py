@@ -14,6 +14,7 @@ import shutil
 import stat
 import struct
 import subprocess
+import tarfile
 import tempfile
 import unittest
 import zlib
@@ -87,11 +88,19 @@ class Scratch(unittest.TestCase):
 
 
 class WithAStandIn(Scratch):
-    def test_it_leaves_the_two_images_the_update_file_and_their_digests(self):
+    def test_it_leaves_the_two_images_the_update_file_the_package_and_their_digests(self):
         done = self.run_script()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.names(),
-                         ["SHA256SUMS", "k0.uImage", "r0.squashfs", "uImage", "update.bin"])
+        self.assertEqual(self.names(), ["SHA256SUMS", "k0.uImage", "r0.squashfs", "uImage",
+                                        "update.bin", "web-install.tar"])
+
+    def test_the_package_of_the_web_page_carries_the_two_images(self):
+        self.run_script()
+        with tarfile.open(os.path.join(self.images, "web-install.tar")) as tar:
+            self.assertEqual(tar.getnames(), ["fwu.sh", "md5.txt", "k", "r"])
+            bank = tar.extractfile("k").read() + tar.extractfile("r").read()
+        kernel, rootfs = self.read("k0.uImage"), self.read("r0.squashfs")
+        self.assertEqual(bank, kernel + b"\xff" * (0x1D0000 - len(kernel)) + rootfs)
 
     def test_the_update_file_carries_the_two_images(self):
         self.run_script()
@@ -130,7 +139,7 @@ class WithAStandIn(Scratch):
     def test_the_digests_are_those_sha256sum_reads(self):
         self.run_script()
         want = []
-        for name in ("k0.uImage", "r0.squashfs", "update.bin"):
+        for name in ("k0.uImage", "r0.squashfs", "update.bin", "web-install.tar"):
             want.append("%s  %s" % (hashlib.sha256(self.read(name)).hexdigest(), name))
         self.assertEqual(self.read("SHA256SUMS", "r").splitlines(), want)
         if shutil.which("sha256sum"):

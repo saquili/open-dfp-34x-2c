@@ -19,7 +19,11 @@
 #                writes into the bank it did not start from: made by
 #                mkupdate.py, with the board, the version (BUILD_ID of the
 #                image's /etc/os-release) and the build's time in its header
-#   SHA256SUMS   the SHA-256 digests of those three files, in the form that
+#   web-install.tar
+#                the two in the package that the web page of the stick's
+#                shipped firmware installs into the bank it did not start
+#                from: made by mkweb.py, with fwu.sh (ADR 0014, step 9)
+#   SHA256SUMS   the SHA-256 digests of those four files, in the form that
 #                "sha256sum -c" reads
 #
 # The root filesystem image is made here, and not by the build system's own
@@ -43,7 +47,7 @@
 # them.)
 #
 # MKSQUASHFS names another mksquashfs, which the tests use; PYTHON the Python
-# that runs mkupdate.py (python3).
+# that runs mkupdate.py and mkweb.py (python3).
 
 set -eu
 
@@ -106,11 +110,14 @@ version=$(sed -n 's/^BUILD_ID=//p' "$root/etc/os-release" 2>/dev/null || true)
 "$python" "$(dirname "$0")/mkupdate.py" --board "$board" --version "$version" \
 	--time "$epoch" "$images/k0.uImage" "$images/r0.squashfs" "$images/update.bin" ||
 	die "mkupdate.py failed"
+"$python" "$(dirname "$0")/mkweb.py" --version "$version" --time "$epoch" \
+	"$images/k0.uImage" "$images/r0.squashfs" "$images/web-install.tar" ||
+	die "mkweb.py failed"
 
-(cd "$images" && sha256sum k0.uImage r0.squashfs update.bin) > "$images/SHA256SUMS.part"
+(cd "$images" && sha256sum k0.uImage r0.squashfs update.bin web-install.tar) > "$images/SHA256SUMS.part"
 mv "$images/SHA256SUMS.part" "$images/SHA256SUMS"
 
 size() {
 	wc -c < "$1" | tr -d ' '
 }
-echo "post-image: $(size "$images/k0.uImage") bytes in k0.uImage, $(size "$images/r0.squashfs") bytes in r0.squashfs, $(size "$images/update.bin") bytes in update.bin"
+echo "post-image: $(size "$images/k0.uImage") bytes in k0.uImage, $(size "$images/r0.squashfs") bytes in r0.squashfs, $(size "$images/update.bin") bytes in update.bin, $(size "$images/web-install.tar") bytes in web-install.tar"
