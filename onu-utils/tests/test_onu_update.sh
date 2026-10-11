@@ -231,6 +231,7 @@ run commit
 check '[ $rc -eq 0 ]'
 check '[ "$(envget sw_commit)" = 1 ]'
 check '[ -z "$(envget onu_trial)" ]'
+check '[ "$(envget mupgrade_en)" = 0 ]'
 run status
 check 'echo "$out" | grep -qx COMMITTED=1 && echo "$out" | grep -qx NEXT=1'
 check '! echo "$out" | grep -q "TRIAL\|FAILED"'

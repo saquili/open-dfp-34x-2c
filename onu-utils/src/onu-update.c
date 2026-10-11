@@ -946,9 +946,15 @@ static int cmd_commit(void)
 		return 1;
 	snprintf(set, sizeof(set), "sw_commit=%d", running);
 	{
-		const char *sets[3] = { set, "sw_tryactive=2", "onu_trial=" };
+		/*
+		 * The loader's multicast listener off as well: it writes any
+		 * image sent to the host link, from anyone, by the shipped split,
+		 * which would write a root filesystem over this system's kernel
+		 * (boot-contract.rst). Every way in ends in a commit.
+		 */
+		const char *sets[4] = { set, "sw_tryactive=2", "onu_trial=", "mupgrade_en=0" };
 
-		if (env_change(&e, sets, 3))
+		if (env_change(&e, sets, 4))
 			return 1;
 	}
 	printf("COMMITTED=%d\n", running);
