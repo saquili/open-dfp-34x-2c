@@ -820,6 +820,22 @@ check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 check '[ "$(grep -n "^procd stop omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^omcid" "$LOG" | cut -d: -f1)" ]'
 teardown
 
+echo "a new identity: omcid starts over although procd ends the old one late"
+setup
+printf 'serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\n' >"$ONU_ROOT/run/onu-identity"
+echo passthrough >"$ONU_ROOT/run/onu-mode"
+mkdir -p "$ONU_ROOT/run/onu-svc.d"
+echo "-- $T/bin/onu-run omcid" >"$ONU_ROOT/run/onu-svc.d/omcid"
+cp "$ONU_ROOT/run/onu-svc.d/omcid" "$T/svc-omcid"
+: >"$T/omcid.running"
+# The old daemon lingers for a moment after procd was told to end it.
+printf '#!/bin/sh\n[ "$1" = omcid ] && { [ -e "%s/omcid.running" ] || [ -e "%s/dying" ]; }\n' "$T" "$T" >"$T/bin/pidof"
+: >"$T/dying"
+("$REAL_SLEEP" 0.4; rm -f "$T/dying") &
+"$MODE_SCRIPT" reidentify 2>/dev/null
+check 'logged "^procd start omcid -- .*/onu-run omcid$" && ! logged "^killall"'
+teardown
+
 echo "without a serial number the PON stays down"
 setup
 : >"$ONU_ROOT/run/onu-identity"

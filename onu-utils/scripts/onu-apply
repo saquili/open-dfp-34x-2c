@@ -1247,6 +1247,18 @@ reidentify() {
 	want=
 	[ -r "$RUN/onu-omcid" ] && read -r want _ <"$RUN/onu-omcid"
 	svc_stop omcid
+	# procd ends it in its own time: until it has, omcid_run would find the
+	# daemon on its way out and signal it, rather than start one.
+	i=0
+	while pidof omcid >/dev/null 2>&1 && [ $i -lt 50 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	if pidof omcid >/dev/null 2>&1; then
+		log "omcid did not end in 5 s: killed"
+		killall -KILL omcid
+		sleep 0.1
+	fi
 	case $want in
 	router) omcid_run router ;;
 	*) omcid_run bridge ;;
