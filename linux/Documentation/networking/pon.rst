@@ -1576,12 +1576,11 @@ The type of PON
      - Tag
      - Checked by
    * - ``type`` (enum, from 1) is ``gpon`` (G.984: 2.48832 Gbit/s downstream,
-       1.24416 or 2.48832 Gbit/s upstream), ``xgpon`` (G.987: 9.95328 Gbit/s
-       downstream, 2.48832 Gbit/s upstream), ``xgspon`` (G.9807.1: 9.95328
-       Gbit/s both ways) or ``ngpon2`` (G.989: several TWDM wavelength
-       channels). Only ``gpon`` is reported by a driver today.
+       1.24416 or 2.48832 Gbit/s upstream), the one kind a driver implements.
+       A value for another kind, such as XG-PON (G.987) or XGS-PON
+       (G.9807.1), comes with the first driver that reports it.
      - P
-     - ITU-T G.984.3 Summary; G.987.1; G.9807.1 Summary; the G.989 series.
+     - ITU-T G.984.3 Summary.
 
 Activation states
 -----------------

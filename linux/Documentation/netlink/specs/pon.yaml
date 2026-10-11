@@ -28,19 +28,6 @@ definitions:
           G-PON, ITU-T G.984: 2.48832 Gbit/s downstream, 1.24416 or 2.48832
           Gbit/s upstream.
         value: 1
-      -
-        name: xgpon
-        doc: >-
-          XG-PON, ITU-T G.987: 9.95328 Gbit/s downstream, 2.48832 Gbit/s
-          upstream.
-      -
-        name: xgspon
-        doc: >-
-          XGS-PON, ITU-T G.9807.1: 9.95328 Gbit/s both ways.
-      -
-        name: ngpon2
-        doc: >-
-          NG-PON2, ITU-T G.989: several TWDM wavelength channels.
   -
     type: enum
     name: onu-state

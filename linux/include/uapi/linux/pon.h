@@ -14,16 +14,9 @@
  *   recommendation that its transmission convergence layer follows.
  * @PON_TYPE_GPON: G-PON, ITU-T G.984: 2.48832 Gbit/s downstream, 1.24416 or
  *   2.48832 Gbit/s upstream.
- * @PON_TYPE_XGPON: XG-PON, ITU-T G.987: 9.95328 Gbit/s downstream, 2.48832
- *   Gbit/s upstream.
- * @PON_TYPE_XGSPON: XGS-PON, ITU-T G.9807.1: 9.95328 Gbit/s both ways.
- * @PON_TYPE_NGPON2: NG-PON2, ITU-T G.989: several TWDM wavelength channels.
  */
 enum pon_type {
 	PON_TYPE_GPON = 1,
-	PON_TYPE_XGPON,
-	PON_TYPE_XGSPON,
-	PON_TYPE_NGPON2,
 };
 
 /**
