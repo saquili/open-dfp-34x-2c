@@ -511,6 +511,15 @@ function live() {
 
 const unauthorized = () => HttpResponse.json({ error: "no session" }, { status: 401 });
 
+/* Root's password again, which an update and a start of the other bank need. */
+const rootPassword = (request: Request) =>
+  decodeURIComponent(request.headers.get("X-Pond-Password") ?? "") === rootSecret;
+const wrongPassword = () =>
+  HttpResponse.json(
+    { error: "wrong password", detail: "root's password is needed for this" },
+    { status: 403 },
+  );
+
 const away = () => (offline ? HttpResponse.error() : null);
 
 export const handlers = [
@@ -1086,6 +1095,7 @@ export const handlers = [
   /* An upload: a file of the update's magic is written into the other bank. */
   http.post("*/api/firmware/upload", async ({ request }) => {
     if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
     const body = new Uint8Array(await request.arrayBuffer());
     const target = 1 - (firmware.running ?? 0);
     firmware.update = {
@@ -1116,6 +1126,7 @@ export const handlers = [
   http.post("*/api/firmware/try", async ({ request }) => {
     await delay(300);
     if (!signedIn) return unauthorized();
+    if (!rootPassword(request)) return wrongPassword();
     const text = await request.text();
     firmware.next = text === "" ? 1 - (firmware.running ?? 0) : Number(text);
     return HttpResponse.json({ ok: true, detail: "the stick restarts into the bank once" });

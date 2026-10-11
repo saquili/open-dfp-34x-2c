@@ -233,6 +233,8 @@ int bus_act(const char *method, const char *const *names,
 	blob_buf_free(&b);
 	if (err == UBUS_STATUS_INVALID_ARGUMENT)
 		return -EINVAL;
+	if (err == UBUS_STATUS_PERMISSION_DENIED)
+		return -EACCES;
 	if (err || !g_reply)
 		return -EIO;
 	blobmsg_parse(policy, __MAX, tb, blob_data(g_reply), blob_len(g_reply));
@@ -263,7 +265,7 @@ static void async_complete(struct ubus_request *req, int ret)
 {
 	struct slot *s = container_of(req, struct slot, req);
 
-	async_end(s, ret ? -EIO : s->code);
+	async_end(s, ret == UBUS_STATUS_PERMISSION_DENIED ? -EACCES : ret ? -EIO : s->code);
 }
 
 bool bus_act_running(const char *method)
@@ -274,7 +276,7 @@ bool bus_act_running(const char *method)
 	return false;
 }
 
-int bus_act_start(const char *method, int fd,
+int bus_act_start(const char *method, int fd, const char *password,
 		  void (*done)(int code, const char *output))
 {
 	struct blob_buf b = { 0 };
@@ -297,6 +299,8 @@ int bus_act_start(const char *method, int fd,
 		return err;
 	}
 	blob_buf_init(&b, 0);
+	if (password)
+		blobmsg_add_string(&b, "password", password);
 	/* libubus closes @fd once it has sent it, or could not. */
 	err = ubus_invoke_async_fd(g_ctx, id, method, b.head, &s->req, fd);
 	blob_buf_free(&b);

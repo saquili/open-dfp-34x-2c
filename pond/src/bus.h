@@ -49,10 +49,13 @@ int bus_call(const char *object, const char *method,
  * Have onu-act do @method (onu-utils/src/act.h): the @n values @values of the
  * params @names, NULL for one not given, and @input on the program's
  * standard input when it is not NULL. What the program wrote goes in @out,
- * of @cap bytes. Returns its exit status, as a run of the program would, or
- * a negative errno when onu-act does not answer or refuses the values. A
- * build without libubus runs the method's program itself, from
- * $POND_<PROGRAM> when set (POND_ONU_LANE for onu-lane), for the tests.
+ * of @cap bytes. A method that needs root's password takes it as the value
+ * "password". Returns its exit status, as a run of the program would, or
+ * a negative errno when onu-act does not answer or refuses the values,
+ * -EACCES for a password that is not root's. A build without libubus runs
+ * the method's program itself, from $POND_<PROGRAM> when set (POND_ONU_LANE
+ * for onu-lane), for the tests, and judges the password with onu-config
+ * password-check ($POND_ONU_CONFIG) as onu-act does.
  */
 int bus_act(const char *method, const char *const *names,
 	    const char *const *values, size_t n, const char *input, char *out,
@@ -62,15 +65,16 @@ int bus_act(const char *method, const char *const *names,
 #define BUS_OUTPUT_MAX 4096
 
 /*
- * Have onu-act start @method, with no values, and not wait for it. @fd, when
- * not -1, goes to the program as its standard input or output, as the method
- * takes it, and is no longer the caller's, whatever the result. @done is
- * called from bus_poll() with the program's exit status, or a negative errno
- * when onu-act did not answer, and what it wrote. A few methods run at once,
- * each once. Returns 0, -EBUSY while @method runs, or another negative errno
- * when it could not start.
+ * Have onu-act start @method, with no values but @password when not NULL,
+ * and not wait for it. @fd, when not -1, goes to the program as its
+ * standard input or output, as the method takes it, and is no longer the
+ * caller's, whatever the result. @done is called from bus_poll() with the
+ * program's exit status, or a negative errno when onu-act did not answer,
+ * -EACCES when it refused the password, and what it wrote. A few methods
+ * run at once, each once. Returns 0, -EBUSY while @method runs, or another
+ * negative errno when it could not start.
  */
-int bus_act_start(const char *method, int fd,
+int bus_act_start(const char *method, int fd, const char *password,
 		  void (*done)(int code, const char *output));
 
 /* Whether @method, started by bus_act_start(), has not ended yet. */

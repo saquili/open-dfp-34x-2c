@@ -134,11 +134,22 @@ export function useFirmware() {
   return useQuery(firmwareQuery);
 }
 
+/*
+ * Root's password, which writing an update and starting the other bank need
+ * besides the session: percent-encoded, since a header carries Latin-1 only.
+ */
+const PASSWORD_HEADER = "X-Pond-Password";
+const passwordHeader = (secret: string) => ({ [PASSWORD_HEADER]: encodeURIComponent(secret) });
+
 /** Start a bank once, the other one without @bank: pond arms it and restarts. */
 export function useTryBank() {
   return useMutation({
-    mutationFn: (bank?: number) =>
-      request<{ ok: boolean }>("/api/firmware/try", bank === undefined ? "" : String(bank)),
+    mutationFn: ({ bank, secret }: { bank?: number; secret: string }) =>
+      request<{ ok: boolean }>(
+        "/api/firmware/try",
+        bank === undefined ? "" : String(bank),
+        passwordHeader(secret),
+      ),
   });
 }
 
@@ -149,12 +160,14 @@ export function useTryBank() {
  */
 export function uploadFirmware(
   file: Blob,
+  secret: string,
   onProgress: (sent: number, total: number) => void,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/firmware/upload");
     xhr.setRequestHeader("X-Pond", "1");
+    for (const [k, v] of Object.entries(passwordHeader(secret))) xhr.setRequestHeader(k, v);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.upload.onprogress = (e) => onProgress(e.loaded, e.total || file.size);
     xhr.onload = () => {

@@ -90,16 +90,20 @@ static int correct(const char *secret, bool *older)
 		0 : -EACCES;
 }
 
-/* Have onu-config hash @secret for crypt() and keep it. */
-static int store_password(const char *secret)
+/*
+ * Have onu-config hash @secret for crypt() and keep it; onu-act wants the
+ * password in force, @current, with it.
+ */
+static int store_password(const char *secret, const char *current)
 {
+	static const char *const names[] = { "password" };
 	char in[AUTH_SECRET_MAX + 2], out[256];
 	int rc;
 
 	if (strlen(secret) > AUTH_SECRET_MAX)
 		return -EINVAL;
 	snprintf(in, sizeof(in), "%s\n", secret);
-	rc = bus_act("password_set", NULL, NULL, 0, in, out, sizeof(out));
+	rc = bus_act("password_set", names, &current, 1, in, out, sizeof(out));
 	explicit_bzero(in, sizeof(in));
 	return rc ? -EIO : 0;
 }
@@ -210,7 +214,7 @@ int auth_sign_in(const char *user, const char *secret, time_t now,
 	 * console and the ssh server check too. Should that fail, the panel
 	 * still takes it as it is.
 	 */
-	if (older && store_password(secret))
+	if (older && store_password(secret, secret))
 		fprintf(stderr, "pond: the password stays in its older form\n");
 
 	/* A free slot, else the one idle the longest. */
@@ -263,6 +267,19 @@ static bool printable(const char *s, size_t min, size_t max)
 	return true;
 }
 
+int auth_confirm(const char *secret, time_t now, int *retry_after)
+{
+	bool older;
+	int rc;
+
+	if (locked(now, retry_after))
+		return -EAGAIN;
+	rc = secret ? correct(secret, &older) : -EACCES;
+	if (rc == -EACCES)
+		failed(now);
+	return rc;
+}
+
 int auth_change(const char *current, const char *next, const char *keep,
 		time_t now, int *retry_after)
 {
@@ -280,7 +297,7 @@ int auth_change(const char *current, const char *next, const char *keep,
 	    !strcmp(next, current))
 		return -EINVAL;
 
-	rc = store_password(next);
+	rc = store_password(next, current);
 	if (rc)
 		return rc;
 	g_default = false;

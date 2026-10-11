@@ -38,11 +38,13 @@ extern struct fw_upload fw_upload;
 
 /*
  * onu-update's status, @args { "status", NULL }, or its try of a bank,
- * { "try", BANK or NULL for the other }, through onu-act (bus.h): its
- * standard output and error, together, in @out, NUL-terminated.
- * Return: its exit status, or a negative errno when it could not run.
+ * { "try", BANK or NULL for the other }, which needs root's @password,
+ * through onu-act (bus.h): its standard output and error, together, in
+ * @out, NUL-terminated.
+ * Return: its exit status, or a negative errno when it could not run,
+ * -EACCES for a password that is not root's.
  */
-int fw_run(const char *const *args, char *out, size_t cap);
+int fw_run(const char *const *args, const char *password, char *out, size_t cap);
 
 /* The value of KEY in KEY=VALUE lines @text, in @out; false when absent. */
 bool fw_field(const char *text, const char *key, char *out, size_t cap);

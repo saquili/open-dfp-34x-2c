@@ -3,6 +3,8 @@
 
 /* bus.h from files, for the tests and a build without libubus. */
 
+#define _GNU_SOURCE
+
 #include <ctype.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -70,24 +72,45 @@ static const char *program_of(const struct act_method *m)
 	return prog && *prog ? prog : m->program;
 }
 
+/* Whether @secret is root's password in force, as onu-act judges it. */
+static bool password_ok(const char *secret)
+{
+	static const struct act_method check = { .program = "/usr/sbin/onu-config" };
+	const char *argv[] = { "password-check", NULL };
+	char line[ACT_PASSWORD_MAX + 2], out[64];
+	int rc;
+
+	if (!secret || strlen(secret) > ACT_PASSWORD_MAX || strchr(secret, '\n'))
+		return false;
+	snprintf(line, sizeof(line), "%s\n", secret);
+	rc = prov_exec(program_of(&check), argv, line, out, sizeof(out));
+	explicit_bzero(line, sizeof(line));
+	return rc == 0 || rc == 3 || rc == 4;
+}
+
 int bus_act(const char *method, const char *const *names,
 	    const char *const *values, size_t n, const char *input, char *out,
 	    size_t cap)
 {
 	const struct act_method *m = act_find(method);
 	const char *given[ACT_PARAMS_MAX] = { NULL };
-	const char *argv[ACT_ARGV_MAX + 1], *bad;
+	const char *argv[ACT_ARGV_MAX + 1], *bad, *password = NULL;
 
 	if (cap)
 		out[0] = '\0';
 	if (!m)
 		return -ENOENT;
-	for (size_t p = 0; p < ACT_PARAMS_MAX && m->params[p].name; p++)
-		for (size_t i = 0; i < n; i++)
+	for (size_t i = 0; i < n; i++) {
+		for (size_t p = 0; p < ACT_PARAMS_MAX && m->params[p].name; p++)
 			if (!strcmp(names[i], m->params[p].name))
 				given[p] = values[i];
+		if (!strcmp(names[i], "password"))
+			password = values[i];
+	}
 	if (act_argv(m, given, argv, &bad))
 		return -EINVAL;
+	if (m->needs_password && !password_ok(password))
+		return -EACCES;
 	argv[0] = program_of(m);
 	return prov_exec(argv[0], argv + 1, m->input ? input : NULL, out, cap);
 }
@@ -102,7 +125,7 @@ static struct slot {
 	void (*done)(int code, const char *output);
 } g_slots[SLOTS];
 
-int bus_act_start(const char *method, int fd,
+int bus_act_start(const char *method, int fd, const char *password,
 		  void (*done)(int code, const char *output))
 {
 	const struct act_method *m = act_find(method);
@@ -119,6 +142,13 @@ int bus_act_start(const char *method, int fd,
 		if (fd >= 0)
 			close(fd);
 		return !m ? -ENOENT : !s || bus_act_running(method) ? -EBUSY : -EINVAL;
+	}
+	if (m->needs_password && !password_ok(password)) {
+		close(out[0]);
+		close(out[1]);
+		if (fd >= 0)
+			close(fd);
+		return -EACCES;
 	}
 	argv[0] = program_of(m);
 	pid = fork();

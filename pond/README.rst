@@ -39,8 +39,11 @@ of the stick itself.
 On the stick pond runs as an account of its own, ``pond``, without a password
 or a shell, which no one logs in with; root stays the one account to log in
 with (ADR 0012, ADR 0014). ubusd's access list, ``acl.json``, which the image
-installs as ``/usr/share/acl.d/pond.json``, lets it call onu-act and read the
-state of omcid, of netifd's interfaces and of dhcp6d, and nothing else; the
+installs as ``/usr/share/acl.d/pond.json``, lets it call the methods of
+onu-act it names and read the state of omcid, of netifd's interfaces and of
+dhcp6d, and nothing else; a new password, an update written and a start of
+the other bank need root's password with the call as well (onu-act checks
+it), so that pond, taken over, cannot give itself root; the
 boot script gives it a directory of ``/run`` of its own for its log and the
 token of scripts, and its group the two copies of the boot loader's
 environment to read. Every other value it reads, any user may.
@@ -135,7 +138,10 @@ connection leaves the HTTP parser and the body streams into ``onu-update write
 bank was written and read back. One upload runs at a time. ``GET
 /api/firmware/download`` streams the running bank as an update file, in chunks.
 ``POST /api/firmware/try`` arms a start of the bank in the body, ``0`` or ``1``,
-or of the other bank with an empty body, and restarts.
+or of the other bank with an empty body, and restarts. The upload and the
+start need root's password as well as a session, in the header
+``X-Pond-Password``, percent-encoded: 403 for a wrong one, which counts as a
+wrong sign-in, 429 while sign-ins are stopped.
 
 ``/api/set/ID`` takes ``KEY=VALUE`` lines:
 

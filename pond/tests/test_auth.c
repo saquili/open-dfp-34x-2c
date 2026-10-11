@@ -10,6 +10,7 @@
  */
 
 #include "auth.h"
+#include "bus.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -169,6 +170,37 @@ static void test_older_form(void)
 	      "which opens a session as well");
 }
 
+static void test_confirm(void)
+{
+	static const char *const names[] = { "password" };
+	const char *wrong = "wrong-one", *right = "example-secret";
+	char id[AUTH_ID_LEN + 1], script[400], out[256];
+	int retry = 0;
+	time_t t = 3500000;
+
+	puts("root's password again, for an update or a start of the other bank");
+	write_store(script, sizeof(script));
+	unlink(g_hashfile);
+	auth_init();
+	auth_sign_in("root", "admin", t, id, &retry);
+	auth_change("admin", right, id, t + 1, &retry);
+	check(auth_confirm(right, t + 2, &retry) == 0, "root's password is confirmed");
+	check(auth_confirm(wrong, t + 3, &retry) == -EACCES, "another is not");
+	check(auth_confirm(NULL, t + 4, &retry) == -EACCES, "nor none");
+	for (int i = 0; i < 3; i++)
+		auth_confirm(wrong, t + 5 + i, &retry);
+	check(auth_confirm(right, t + 9, &retry) == -EAGAIN,
+	      "wrong ones count as wrong sign-ins");
+	check(bus_act("password_set", names, &wrong, 1, "another-secret\n", out, sizeof(out)) ==
+		      -EACCES && hash_file_starts("$5$rounds=1000$teststandinsalt$"),
+	      "onu-act keeps no new password without root's");
+	check(bus_act("password_set", NULL, NULL, 0, "another-secret\n", out, sizeof(out)) ==
+		      -EACCES,
+	      "nor without any");
+	check(bus_act("update_try", names, &wrong, 1, NULL, out, sizeof(out)) == -EACCES,
+	      "and starts no other bank without it");
+}
+
 static void test_unknown(void)
 {
 	char id[AUTH_ID_LEN + 1], script[400];
@@ -216,6 +248,7 @@ int main(void)
 	test_sessions();
 	test_change();
 	test_older_form();
+	test_confirm();
 	test_unknown();
 
 	printf("\n%d checks, %d failed\n", checks, fails);

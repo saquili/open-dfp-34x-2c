@@ -954,6 +954,9 @@ export const pl: Dictionary = {
     tagIncomplete: "niepełny zapis",
     builtOn: "zbudowany {date}",
     upload: "Wgraj nowe oprogramowanie",
+    password: "Hasło roota",
+    passwordHint: "Wgranie nowego systemu i uruchomienie drugiego wymagają go jeszcze raz.",
+    wrongPassword: "Złe hasło: potrzebne jest hasło roota.",
     uploadHint:
       "Plik update.bin trafia do systemu {letter}, który teraz nie działa. Działający system zostaje nietknięty.",
     sending: "Wysyłanie… {percent}",

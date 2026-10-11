@@ -46,8 +46,12 @@ const TIMEOUT_MS = 12_000;
 
 type Body = string | Record<string, unknown>;
 
-export async function request<T>(path: string, body?: Body): Promise<T> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+export async function request<T>(
+  path: string,
+  body?: Body,
+  extra?: Record<string, string>,
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json", ...extra };
   let payload: string | undefined;
   if (body !== undefined) {
     headers["X-Pond"] = "1";

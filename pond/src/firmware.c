@@ -25,6 +25,7 @@
 
 #define _GNU_SOURCE
 
+#include "auth.h"
 #include "bus.h"
 #include "firmware.h"
 #include "prov.h"
@@ -38,6 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The most an update file can be: two banks of 3840 KiB and a little. */
@@ -163,11 +165,39 @@ static void upload_fn(struct mg_connection *c, int ev, void *ev_data)
 
 static void upload_ended(int status, const char *said);
 
+/*
+ * Root's password, which writing an update and starting the other bank
+ * need as well as a session (onu-act wants it too): the header
+ * X-Pond-Password, percent-encoded, checked again into @pw. True when it
+ * is root's; otherwise the refusal has been sent.
+ */
+static bool confirmed(struct mg_connection *c, struct mg_http_message *hm,
+		      char *pw, size_t cap)
+{
+	struct mg_str *h = mg_http_get_header(hm, "X-Pond-Password");
+	int retry = 0, rc;
+
+	pw[0] = '\0';
+	if (h && mg_url_decode(h->buf, h->len, pw, cap, 0) < 0)
+		pw[0] = '\0';
+	rc = auth_confirm(pw, time(NULL), &retry);
+	if (!rc)
+		return true;
+	explicit_bzero(pw, cap);
+	if (rc == -EAGAIN)
+		reply(c, 429, "too many attempts", "wait half a minute and try again");
+	else if (rc == -ENOKEY)
+		reply(c, 423, "no store", "the settings store cannot be read");
+	else
+		reply(c, 403, "wrong password", "root's password is needed for this");
+	return false;
+}
+
 void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 {
 	struct mg_str *cl = mg_http_get_header(hm, "Content-Length");
 	unsigned long long len = 0;
-	char num[24];
+	char num[24], pw[AUTH_SECRET_MAX + 1];
 	int fds[2], rc;
 
 	if (up.running || down.running) {
@@ -186,6 +216,10 @@ void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 		c->is_draining = 1;
 		return;
 	}
+	if (!confirmed(c, hm, pw, sizeof(pw))) {
+		c->is_draining = 1;
+		return;
+	}
 
 	memset(&fw_upload, 0, sizeof(fw_upload));
 	fw_upload.bank = -1;
@@ -193,10 +227,11 @@ void firmware_upload(struct mg_connection *c, struct mg_http_message *hm)
 	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
 	if (!rc) {
 		/* The reading end goes to onu-act, whatever comes of it. */
-		rc = bus_act_start("update_write", fds[0], upload_ended);
+		rc = bus_act_start("update_write", fds[0], pw, upload_ended);
 		if (rc)
 			close(fds[1]);
 	}
+	explicit_bzero(pw, sizeof(pw));
 	if (rc) {
 		fw_upload.state = FW_FAILED;
 		snprintf(fw_upload.message, sizeof(fw_upload.message),
@@ -226,7 +261,10 @@ static void upload_ended(int status, const char *said)
 	}
 	read_said(said);
 	fw_upload.state = status ? FW_FAILED : FW_DONE;
-	if (status && !fw_upload.message[0])
+	if (status == -EACCES)
+		snprintf(fw_upload.message, sizeof(fw_upload.message),
+			 "root's password was refused");
+	else if (status && !fw_upload.message[0])
 		snprintf(fw_upload.message, sizeof(fw_upload.message),
 			 "onu-update ended with status %d", status);
 	if (!up.c)
@@ -290,7 +328,7 @@ void firmware_download(struct mg_connection *c)
 		reply(c, 409, "busy", "an update or a download is under way");
 		return;
 	}
-	if (fw_run(status_args, text, sizeof(text)) == 0 &&
+	if (fw_run(status_args, NULL, text, sizeof(text)) == 0 &&
 	    fw_field(text, "RUNNING", running, sizeof(running))) {
 		snprintf(key, sizeof(key), "BANK%s_VERSION", running);
 		fw_field(text, key, version, sizeof(version));
@@ -302,7 +340,7 @@ void firmware_download(struct mg_connection *c)
 	rc = pipe2(fds, O_CLOEXEC) ? -errno : 0;
 	if (!rc) {
 		/* The writing end goes to onu-act, whatever comes of it. */
-		rc = bus_act_start("update_read", fds[1], download_ended);
+		rc = bus_act_start("update_read", fds[1], NULL, download_ended);
 		if (rc)
 			close(fds[0]);
 	}
@@ -346,7 +384,8 @@ static void download_done(int status)
 bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
 {
 	const char *args[3] = { "try", NULL, NULL };
-	char out[512], bank[2] = "";
+	char out[512], bank[2] = "", pw[AUTH_SECRET_MAX + 1];
+	int rc;
 
 	if (up.running) {
 		reply(c, 409, "busy", "an update is under way");
@@ -360,7 +399,15 @@ bool firmware_try(struct mg_connection *c, struct mg_http_message *hm)
 		reply(c, 400, "not a bank", "the body is 0, 1 or nothing for the other bank");
 		return false;
 	}
-	if (fw_run(args, out, sizeof(out))) {
+	if (!confirmed(c, hm, pw, sizeof(pw)))
+		return false;
+	rc = fw_run(args, pw, out, sizeof(out));
+	explicit_bzero(pw, sizeof(pw));
+	if (rc == -EACCES) {
+		reply(c, 403, "wrong password", "root's password is needed for this");
+		return false;
+	}
+	if (rc) {
 		char *why = strstr(out, "onu-update: ");
 
 		why = why ? why + strlen("onu-update: ") : out;

@@ -65,6 +65,16 @@ bool auth_session(const char *id, time_t now);
 void auth_sign_out(const char *id);
 
 /**
+ * auth_confirm() - Check root's password again, for what needs it as well
+ *	as a session: an update written, a start of the other bank. A wrong
+ *	one counts as a wrong sign-in.
+ *
+ * Return: 0, -EACCES for a wrong password, -ENOKEY while no password is
+ * known, -EAGAIN while sign-ins are stopped.
+ */
+int auth_confirm(const char *secret, time_t now, int *retry_after);
+
+/**
  * auth_change() - Replace the password, which @current must match.
  * @keep: the session that asked, which stays open; every other one closes
  *

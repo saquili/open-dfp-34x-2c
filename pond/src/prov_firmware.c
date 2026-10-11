@@ -23,14 +23,17 @@
 
 struct fw_upload fw_upload = { .bank = -1 };
 
-int fw_run(const char *const *args, char *out, size_t cap)
+int fw_run(const char *const *args, const char *password, char *out, size_t cap)
 {
-	static const char *const names[] = { "bank" };
+	static const char *const names[] = { "bank", "password" };
 
 	if (!strcmp(args[0], "status"))
 		return bus_act("update_status", NULL, NULL, 0, NULL, out, cap);
-	if (!strcmp(args[0], "try"))
-		return bus_act("update_try", names, &args[1], 1, NULL, out, cap);
+	if (!strcmp(args[0], "try")) {
+		const char *values[] = { args[1], password };
+
+		return bus_act("update_try", names, values, 2, NULL, out, cap);
+	}
 	return -EINVAL;
 }
 
@@ -101,7 +104,7 @@ int prov_firmware(struct prov_buf *out)
 {
 	static const char *const args[] = { "status", NULL };
 	static char text[2048];
-	int rc = fw_run(args, text, sizeof(text)), bank;
+	int rc = fw_run(args, NULL, text, sizeof(text)), bank;
 
 	if (rc < 0)
 		return rc;

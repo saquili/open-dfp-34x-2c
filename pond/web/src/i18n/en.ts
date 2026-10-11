@@ -955,6 +955,9 @@ export const en = {
     tagIncomplete: "incomplete write",
     builtOn: "built {date}",
     upload: "Upload new software",
+    password: "Root password",
+    passwordHint: "Writing a new system and starting the other one need it again.",
+    wrongPassword: "Wrong password. Root's password is needed for this.",
     uploadHint:
       "The update.bin file goes into system {letter}, which is not running now. The running system stays untouched.",
     sending: "Sending… {percent}",

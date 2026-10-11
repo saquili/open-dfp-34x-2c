@@ -471,7 +471,7 @@ int prov_settings_set(const char *val, char *err, size_t errcap)
 		return -EIO;
 	}
 
-	rc = bus_act_start("settings_try", -1, applied);
+	rc = bus_act_start("settings_try", -1, NULL, applied);
 	if (rc)
 		snprintf(err, errcap, "onu-apply: %s", strerror(-rc));
 	return rc;

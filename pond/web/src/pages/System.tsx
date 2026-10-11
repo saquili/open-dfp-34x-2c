@@ -316,6 +316,8 @@ function Updates() {
   const [share, setShare] = useState(0);
   const [result, setResult] = useState("");
   const [startAfter, setStartAfter] = useState(false);
+  /* Root's password, which writing and starting a system need again. */
+  const [password, setPassword] = useState("");
   const f = firmware.data;
   const target = f ? updateTarget(f) : null;
   const other = f ? otherBank(f) : null;
@@ -326,7 +328,7 @@ function Updates() {
     setShare(0);
     let ok = false;
     try {
-      const version = await uploadFirmware(file, (sent, total) => {
+      const version = await uploadFirmware(file, password, (sent, total) => {
         setShare(total ? sent / total : 0);
         if (total && sent >= total) setPhase("writing");
       });
@@ -340,6 +342,9 @@ function Updates() {
         setResult(now.version ?? "");
         setPhase("done");
         ok = true;
+      } else if (e instanceof ApiError && e.status === 403) {
+        setResult(t("system.wrongPassword"));
+        setPhase("failed");
       } else {
         setResult(now?.message ?? (e instanceof ApiError ? (e.detail ?? e.message) : String(e)));
         setPhase("failed");
@@ -348,7 +353,7 @@ function Updates() {
       qc.invalidateQueries({ queryKey: ["firmware"] });
       if (input.current) input.current.value = "";
     }
-    if (ok && startAfter && target !== null) tryBank.mutate(target);
+    if (ok && startAfter && target !== null) tryBank.mutate({ bank: target, secret: password });
   }
 
   function start(bank: number) {
@@ -359,7 +364,7 @@ function Updates() {
       )
     )
       return;
-    tryBank.mutate(bank);
+    tryBank.mutate({ bank, secret: password });
   }
 
   function pickFile() {
@@ -447,16 +452,18 @@ function Updates() {
         {phase === "failed" && (
           <p className="text-sm text-error">{t("system.notWritten", { reason: result })}</p>
         )}
-        {tryBank.isSuccess && tryBank.variables !== undefined && (
+        {tryBank.isSuccess && tryBank.variables?.bank !== undefined && (
           <p className="text-sm text-info">
-            {t("system.switching", { letter: bankLetter(tryBank.variables) })}
+            {t("system.switching", { letter: bankLetter(tryBank.variables.bank) })}
           </p>
         )}
         {tryBank.isError && (
           <p className="text-sm text-error">
-            {tryBank.error instanceof ApiError
-              ? (tryBank.error.detail ?? tryBank.error.message)
-              : String(tryBank.error)}
+            {tryBank.error instanceof ApiError && tryBank.error.status === 403
+              ? t("system.wrongPassword")
+              : tryBank.error instanceof ApiError
+                ? (tryBank.error.detail ?? tryBank.error.message)
+                : String(tryBank.error)}
           </p>
         )}
 
@@ -483,11 +490,28 @@ function Updates() {
             <span className="block text-xs text-base-content/60">{t("system.startAfterHint")}</span>
           </span>
         </label>
+        <label className="grid gap-1">
+          <span className="text-sm">{t("system.password")}</span>
+          <input
+            type="password"
+            className="input input-sm w-full max-w-xs"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.currentTarget.value)}
+          />
+          <span className="text-xs text-base-content/60">{t("system.passwordHint")}</span>
+        </label>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            disabled={target === null || phase === "sending" || phase === "writing" || elsewhere}
+            disabled={
+              target === null ||
+              !password ||
+              phase === "sending" ||
+              phase === "writing" ||
+              elsewhere
+            }
             onClick={pickFile}
           >
             <Upload className="size-4" />
@@ -497,7 +521,7 @@ function Updates() {
             <button
               type="button"
               className="btn btn-sm btn-success"
-              disabled={tryBank.isPending || tryBank.isSuccess}
+              disabled={!password || tryBank.isPending || tryBank.isSuccess}
               onClick={() => start(target)}
             >
               <Play className="size-4" />
@@ -512,7 +536,7 @@ function Updates() {
             <button
               type="button"
               className="btn btn-sm btn-outline"
-              disabled={tryBank.isPending || tryBank.isSuccess || elsewhere}
+              disabled={!password || tryBank.isPending || tryBank.isSuccess || elsewhere}
               onClick={() => start(other)}
             >
               <RotateCw className="size-4" />
