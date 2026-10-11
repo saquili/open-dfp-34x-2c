@@ -3,7 +3,9 @@
 #
 # pond, built from the pond/ directory of this repository: the daemon, and its
 # panel, which Buildroot's host Node builds from pond/web. npm ci installs the
-# panel's packages as package-lock.json pins them, with their checksums.
+# panel's packages as package-lock.json pins them, with their checksums, and
+# runs none of their install scripts: the build needs none of them (only
+# fsevents, for macOS, and the copy of msw that vitest brings have one).
 #
 # The daemon holds Mongoose, which holds micro-ecc under BSD-2-Clause. The
 # panel holds code of packages under MIT and ISC; its build writes their
@@ -28,7 +30,7 @@ POND_NPM = PATH=$(HOST_DIR)/bin:$$PATH npm_config_cache=$(@D)/.npm \
 define POND_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) CC="$(TARGET_CC)" \
 		CFLAGS="$(TARGET_CFLAGS)" LDFLAGS="$(TARGET_LDFLAGS)"
-	$(POND_NPM) ci --no-audit --no-fund
+	$(POND_NPM) ci --no-audit --no-fund --ignore-scripts
 	$(POND_NPM) run build
 endef
 
