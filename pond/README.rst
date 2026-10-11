@@ -5,11 +5,12 @@
 pond
 ====
 
-The HTTP daemon of the ONU and its panel. It serves the state of the device as
-JSON (the system, the interfaces and their counters, the bridge, the GEM ports
-and T-CONTs, the tc filters, the ONU as the PON driver reports it, the optics,
-the flash with its two firmware banks), changes the stick's settings, and
-serves the panel, a single-page app in ``web/``, as static files.
+The status daemon of the ONU and its panel, over HTTPS on the stick. It serves
+the state of the device as JSON (the system, the interfaces and their
+counters, the bridge, the GEM ports and T-CONTs, the tc filters, the ONU as
+the PON driver reports it, the optics, the flash with its two firmware
+banks), changes the stick's settings, and serves the panel, a single-page
+app in ``web/``, as static files.
 
 ::
 
@@ -167,14 +168,14 @@ or of the other bank with an empty body, and restarts.
   address in use alone. The panel confirms them as soon as it reaches the
   stick again.
 * ``session``: a PPPoE session of the stick's own: ``ID`` (none for the first
-  free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``
-  and ``FAMILY`` (``ipv4``, ``ipv6`` or ``both``). With an account the stick
-  holds the session, and the first that carries IPv4 hands its address to the
-  router; ``USER=`` removes it. The panel names no mode: without accounts the
-  router dials through the stick.
-* ``link``: how the router gets the address, ``VLAN``, ``GATEWAY``, the
-  stick's address on the link, and ``PEER``, ``on`` to give the router the
-  concentrator's address as its gateway or ``off`` to give it the stick's.
+  free one), ``USER``, ``SECRET`` (empty keeps it), ``VLAN``, ``MAC``, ``GEM``,
+  ``FAMILY`` (``ipv4``, ``ipv6`` or ``both``), ``PASS`` (``on`` to hand its
+  address down to the router, ``off`` to keep it on the stick) and
+  ``HOST_VLAN``, the VLAN of the host link it hands down in (nothing for the
+  session's own VLAN, ``untagged`` for none). With an account the stick holds
+  the session, and in each VLAN towards the host the first that hands down and
+  carries IPv4 hands its address to the router; ``USER=`` removes it. The
+  panel names no mode: without accounts the router dials through the stick.
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,
