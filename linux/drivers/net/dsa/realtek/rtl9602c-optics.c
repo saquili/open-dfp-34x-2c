@@ -1211,14 +1211,17 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
  * shows what the EEPROM holds.  The laser goes through its start-up again, so
  * the PON drops for that time.
  *
- * Only the configuration bytes that a module can carry wrongly are taken:
- * the current limits ADh-AFh, the transmitter's fault, alarm and rogue ONU
- * controls and the receiver's controls B1h-BDh, the sleep control BFh and
- * the ADC control C1h.  Not SAFE_MODE_STARTUP (A0h), whose wrong value turns
+ * Only the bytes that a repair of a module has needed are taken: the current
+ * limits ADh-AFh, B6h-B8h, the receiver's loss-of-signal control BBh, its
+ * APD bias control BDh and the ADC control C1h.  The other bytes of B1h-BDh,
+ * among which are the transmitter's fault, alarm and rogue ONU controls, are
+ * not taken, and neither is SAFE_MODE_STARTUP (A0h), whose wrong value turns
  * the transmitter off for good, nor the calibrated DACs and constants, the
  * status, the part's I2C address, the EEPROM controls, the passwords or the
- * monitors.  Table 2 bytes written while C7h was clear kept their values
- * through every power-up of the module since (measured on this board).
+ * monitors.  Which of B1h-BAh holds which control is not recorded, so that
+ * B6h-B8h hold none of the rogue ONU controls is not known.  Table 2 bytes
+ * written while C7h was clear kept their values through every power-up of
+ * the module since (measured on this board).
  */
 #define RTL9602C_OPTICS_RESET_MS	500
 #define RTL9602C_OPTICS_BUSY_TRIES	20
@@ -1226,8 +1229,8 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
 
 static bool rtl9602c_t2_storable(unsigned int reg)
 {
-	return (reg >= 0xad && reg <= 0xaf) || (reg >= 0xb1 && reg <= 0xbd) ||
-	       reg == 0xbf || reg == 0xc1;
+	return (reg >= 0xad && reg <= 0xaf) || (reg >= 0xb6 && reg <= 0xb8) ||
+	       reg == 0xbb || reg == 0xbd || reg == 0xc1;
 }
 
 /* A write the part may refuse while it copies into its EEPROM. */

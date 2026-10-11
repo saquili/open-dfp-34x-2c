@@ -849,14 +849,17 @@ reads return a constant, so a read then proves nothing. ``close`` puts C7h and
 the page select back as found. The kernel log has a line for each step,
 beginning ``GN25L95: table 2``.
 
-Only the bytes that a module can carry wrongly are taken, the others fail with
-``EINVAL``, as does a byte before ``open``: the current limits ADh-AFh, the
-transmitter's fault, alarm and rogue ONU controls and the receiver's controls
-B1h-BDh, the sleep control BFh and the ADC control C1h. Not SAFE_MODE_STARTUP
-(A0h), whose wrong value turns the transmitter off for good; not the
-calibrated DACs (A8h-ACh) and constants (D2h-E7h), which belong to the one
-module; not the status (C0h), the part's I2C address (C2h, C3h), the EEPROM
-controls (C4h-C8h), the passwords or the monitors.
+Only the bytes that a repair of a module has needed are taken, the others fail
+with ``EINVAL``, as does a byte before ``open``: the current limits ADh-AFh,
+B6h-B8h, the receiver's loss-of-signal control BBh, its APD bias control BDh
+and the ADC control C1h. Not the other bytes of B1h-BDh, among which are the
+transmitter's fault, alarm and rogue ONU controls; which of B1h-BAh holds which
+control is not recorded, so that B6h-B8h hold none of the rogue ONU controls is
+not known. Not SAFE_MODE_STARTUP (A0h), whose wrong value turns the transmitter
+off for good; not the calibrated DACs (A8h-ACh) and constants (D2h-E7h), which
+belong to the one module; not the sleep control (BFh), the status (C0h), the
+part's I2C address (C2h, C3h), the EEPROM controls (C4h-C8h), the passwords or
+the monitors.
 
 ``reset``, with table 2 closed, restarts the part's state machine with its reset
 key, ``5D 2C 6A C9`` at bytes 123 to 126 and ``0B`` at the page select, which
