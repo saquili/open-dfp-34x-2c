@@ -2,10 +2,12 @@
 /*
  * Platform setup of the Realtek RTL9602C: the command line from the boot
  * loader, memory and the built-in device tree, the console UART, restart and
- * halt, and the write-buffer flush.
+ * halt, the timers, and the write-buffer flush.
  */
 
 #include <linux/bits.h>
+#include <linux/clk-provider.h>
+#include <linux/clocksource.h>
 #include <linux/export.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -228,6 +230,19 @@ void __init plat_mem_setup(void)
 	_machine_restart = rtl9602c_machine_restart;
 	_machine_halt = rtl9602c_machine_halt;
 	pm_power_off = rtl9602c_machine_halt;
+}
+
+/**
+ * plat_time_init() - set up the tick and the clock
+ *
+ * The LX bus clock is a fixed clock of the device tree, which the timer
+ * driver needs before the timers: the Otto timer driver then makes timer 0
+ * the clock event device and timer 1 the clocksource and sched_clock.
+ */
+void __init plat_time_init(void)
+{
+	of_clk_init(NULL);
+	timer_probe();
 }
 
 /*

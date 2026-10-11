@@ -697,8 +697,10 @@ config RALINK
 config RTL9602C
 	bool "Realtek RTL9602C (Lexra LX5281) based machines"
 	select BOOT_RAW
+	select COMMON_CLK
 	select DMA_NONCOHERENT
 	select IRQ_MIPS_CPU
+	select REALTEK_OTTO_TIMER
 	select SYS_HAS_CPU_R3000
 	select SYS_HAS_EARLY_PRINTK
 	select SYS_SUPPORTS_32BIT_KERNEL

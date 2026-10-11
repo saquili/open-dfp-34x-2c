@@ -45,10 +45,9 @@
  */
 #define RTL9602C_INTC_SRC_CASCADE	12
 
-#define RTL9602C_INTC_SRC_TIMER0	43
 #define RTL9602C_INTC_SRC_UART0	49
 
-/* The LX bus clock, which the timers count; measured on this board */
+/* The LX bus clock, measured on this board */
 #define RTL9602C_LX_HZ		200000000
 
 #endif /* __ASM_MACH_RTL9602C_H */
