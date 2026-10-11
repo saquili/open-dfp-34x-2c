@@ -604,5 +604,47 @@ check '[ "$(ls -l "$ONU_ROOT/run/onu-store.before" | cut -c1-10)" = -rw------- ]
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = none ]'
 teardown
 
+echo "the panel's key: made once, kept in the store, back at boot, never a setting"
+setup
+run tls
+check '[ $rc -eq 0 ]'
+key=$(cat "$ONU_ROOT/run/onu-tls-key" 2>/dev/null)
+check 'echo "$key" | grep -q -x "[0-9a-f]\{64\}"'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-tls-key" | cut -c1-10)" = -rw------- ]'
+check 'stored "TLS_KEY=$key"'
+run tls
+check '[ $rc -eq 0 ] && [ "$(cat "$ONU_ROOT/run/onu-tls-key")" = "$key" ]'
+rm -f "$ONU_ROOT/run/onu-tls-key"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-tls-key")" = "$key" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-tls-key" | cut -c1-10)" = -rw------- ]'
+check '! grep -q "^TLS_" "$ONU_ROOT/run/onu.conf" 2>/dev/null'
+settings
+run save
+check '[ $rc -eq 0 ] && stored "TLS_KEY=$key" && stored MODE=passthrough'
+# The order of the curve is no key; neither is 0: a new one replaces it.
+echo ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551 >"$ONU_ROOT/run/onu-tls-key"
+run tls
+new=$(cat "$ONU_ROOT/run/onu-tls-key")
+check '[ $rc -eq 0 ] && [ "$new" != ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551 ]'
+check 'stored "TLS_KEY=$new" && ! stored "TLS_KEY=$key"'
+printf '%064d\n' 0 >"$ONU_ROOT/run/onu-tls-key"
+run tls
+check '[ $rc -eq 0 ] && [ "$(cat "$ONU_ROOT/run/onu-tls-key")" != "$(printf %064d 0)" ]'
+# A store that lost the key takes the file of before away at boot.
+onu-config --store "$ONU_STORE" unset TLS_KEY
+run load
+check '[ ! -e "$ONU_ROOT/run/onu-tls-key" ]'
+teardown
+
+echo "without a store, the panel's key lasts until the next start"
+setup
+rm -f "$ONU_STORE"
+ONU_STORE= "$STORE_SCRIPT" tls 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && grep -q -x "[0-9a-f]\{64\}" "$ONU_ROOT/run/onu-tls-key"'
+check 'grep -q "not kept: no store" "$T/err"'
+teardown
+
 echo "test_onu_config: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

@@ -36,7 +36,7 @@
  *                                            when it holds none
  *   onu-config erase-slots DEVICE            erase the partition of that
  *                                            store, and refuse any other
- *   onu-config load|save|identity|password|auth HASH|system|pd N
+ *   onu-config load|save|identity|password|auth HASH|system|pd N|tls
  *                                            the files the running system
  *                                            reads, to and from the store:
  *                                            onu-config.sh, in ONU_LIB
@@ -331,6 +331,7 @@ static bool files_verb(const char *verb)
 {
 	static const char *const verbs[] = {
 		"load", "save", "identity", "password", "auth", "system", "pd",
+		"tls",
 	};
 
 	for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
@@ -788,7 +789,7 @@ int main(int argc, char **argv)
 		      "       onu-config check | settings\n"
 		      "       onu-config slots DEVICE | erase-slots DEVICE\n"
 		      "       onu-config load | save | identity | password |\n"
-		      "                  auth HASH | system | pd N\n", stderr);
+		      "                  auth HASH | system | pd N | tls\n", stderr);
 		return 2;
 	}
 

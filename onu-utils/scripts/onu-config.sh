@@ -27,6 +27,8 @@
 #   onu-config pd N      the host session N delegates its IPv6 prefix to, the
 #                        line dhcp6d keeps in /run/onu-pdN, into the store;
 #                        without the file, out of it
+#   onu-config tls       the panel's key: the one load found, or a new one,
+#                        kept in the store, in /run/onu-tls-key
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case, in place of the one the shipped firmware's files
@@ -42,6 +44,9 @@
 # own settings, which the boot script reads before it brings up the links;
 # PDn_HOST is the content of /run/onu-pdN, the host session n delegated its
 # IPv6 prefix to, which dhcp6d takes back after a restart (see onu-apply);
+# TLS_KEY is the content of /run/onu-tls-key: the private key of the status
+# daemon's HTTPS, a scalar of the curve P-256 in 64 hexadecimal digits, made
+# once on the stick, from which the daemon makes its certificates (pond);
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #
@@ -72,6 +77,7 @@ MAX_SESSIONS=7
 IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
 SYSTEM=$RUN/onu-system
+TLS=$RUN/onu-tls-key
 SOURCE=$RUN/onu-identity-source
 STATE=$RUN/onu-store
 SHADOW=$RUN/shadow
@@ -189,7 +195,7 @@ settings() {
 	stored=$(contents 2>/dev/null)
 	if [ -r "$CONF" ]; then
 		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
-			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_'
+			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_' -e '^TLS_'
 		[ -s "$CONF" ] && printf '%s\n' "$stored" | awk -v conf="$CONF" '
 			BEGIN {
 				while ((getline line < conf) > 0) {
@@ -204,7 +210,7 @@ settings() {
 					next
 				k = substr($0, 1, i - 1)
 			}
-			k ~ /^(ID_|PPPOE|AUTH_|SYS_)/ || k ~ /^PD[1-9]_HOST$/ { next }
+			k ~ /^(ID_|PPPOE|AUTH_|SYS_|TLS_)/ || k ~ /^PD[1-9]_HOST$/ { next }
 			!(k in kept) { print "-" k }'
 	fi
 	n=1
@@ -233,10 +239,10 @@ load() {
 		list=
 	}
 	umask 077
-	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"*
+	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"* "$TLS.new"
 	printf '%s\n' "$list" | awk -v conf="$CONF.new" \
 		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
-		-v sys="$SYSTEM.new" -v pd="$PD" '
+		-v sys="$SYSTEM.new" -v pd="$PD" -v tls="$TLS.new" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -246,6 +252,7 @@ load() {
 		}
 		k ~ /^ID_/ { next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
+		k == "TLS_KEY" { if (v != "") print v > tls; next }
 		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
 		k ~ /^PD[1-9]_HOST$/ {
 			if (v != "")
@@ -276,6 +283,11 @@ load() {
 		[ -e "$new" ] && mv "$new" "${new%.new}"
 	done
 	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
+	if [ -e "$TLS.new" ]; then
+		mv "$TLS.new" "$TLS"
+	else
+		rm -f "$TLS"
+	fi
 	shadow
 	if [ -e "$SYSTEM.new" ]; then
 		chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
@@ -424,6 +436,47 @@ password() {
 	auth "$hash"
 }
 
+# The order of P-256 and its scalars that are keys: 1 to the order less one,
+# here in 64 lowercase hexadecimal digits.
+P256_N=ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551
+
+# Whether $1 is such a scalar; awk compares the two as text, of one length.
+is_key() {
+	scalar=$1
+	case $scalar in
+	*[!0-9a-f]* | "") return 1 ;;
+	esac
+	[ ${#scalar} -eq 64 ] && [ "$scalar" != "$(printf '%064d' 0)" ] &&
+		awk -v k="$scalar" -v n="$P256_N" 'BEGIN { exit !((k "") < (n "")) }'
+}
+
+# The panel's key: the store's, which load put in /run/onu-tls-key, or a new
+# one of /dev/urandom, whose bytes that are hexadecimal digits each carry
+# four bits, kept in the store. Without a store, the new one lasts until the
+# next start, and the daemon's certificates change with it.
+tls() {
+	key=
+	[ -r "$TLS" ] && read -r key <"$TLS"
+	is_key "$key" && return 0
+	key=
+	for _ in 1 2 3; do
+		key=$(tr -dc '0-9a-f' </dev/urandom | head -c 64)
+		is_key "$key" && break
+		key=
+	done
+	[ -n "$key" ] || {
+		log "no key for the panel's HTTPS"
+		return 1
+	}
+	(umask 077 && echo "$key" >"$TLS.new" && mv "$TLS.new" "$TLS") || return 1
+	if [ -z "$STORE" ]; then
+		log "the panel's key is not kept: no store"
+	elif ! echo "TLS_KEY=$key" | onu-config --store "$STORE" import; then
+		log "the panel's key is not kept: the store refused it"
+	fi
+	return 0
+}
+
 if [ -z "${ONU_STORE:-}" ] && [ "${1:-}" = load ]; then
 	mount_config || log "the partition \"config\" is not mounted"
 fi
@@ -459,8 +512,11 @@ system)
 pd)
 	pd "${2:-}"
 	;;
+tls)
+	tls
+	;;
 *)
-	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N" >&2
+	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N|tls" >&2
 	exit 2
 	;;
 esac
