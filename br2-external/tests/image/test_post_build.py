@@ -76,17 +76,66 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(self.read().count("BUILD_ID="), 1)
         self.assertTrue(self.read().endswith("BUILD_ID=0123456789ab\n"))
 
-    def test_the_programs_of_iproute2_the_stick_does_not_run_go(self):
-        sbin = os.path.join(self.target, "sbin")
-        os.makedirs(sbin)
-        kept = ("ip", "tc", "bridge", "devlink")
-        gone = ("ctstat", "dcb", "genl", "ifstat", "lnstat", "nstat", "rdma", "routel",
-                "rtacct", "rtmon", "rtstat", "ss", "tipc", "vdpa")
-        for prog in kept + gone:
-            with open(os.path.join(sbin, prog), "w", encoding="utf-8") as handle:
-                handle.write("#!/bin/sh\n")
+    IPROUTE2 = ("ip", "tc", "bridge", "devlink", "ctstat", "dcb", "genl", "ifstat", "lnstat",
+                "nstat", "rdma", "routel", "rtacct", "rtmon", "rtstat", "ss", "tipc", "vdpa")
+
+    def make_iproute2(self, mark="1"):
+        """iproute2's files as its package installs them, and BusyBox."""
+        for directory in ("sbin", "bin", "usr/lib/tc", "usr/share/iproute2"):
+            os.makedirs(os.path.join(self.target, directory), exist_ok=True)
+        files = ["sbin/" + prog for prog in self.IPROUTE2]
+        files += ["usr/lib/tc/normal.dist", "usr/share/iproute2/rt_tables", "bin/busybox"]
+        for name in files:
+            with open(os.path.join(self.target, name), "w", encoding="utf-8") as handle:
+                handle.write("%s %s\n" % (name, mark))
+
+    def busybox_ip(self):
+        ip = os.path.join(self.target, "sbin", "ip")
+        return os.path.islink(ip) and os.readlink(ip) == "../bin/busybox"
+
+    def test_iproute2_goes_and_ip_is_busyboxs(self):
+        self.make_iproute2()
         self.assertEqual(self.run_script().returncode, 0)
-        self.assertEqual(sorted(os.listdir(sbin)), sorted(kept))
+        self.assertEqual(os.listdir(os.path.join(self.target, "sbin")), ["ip"])
+        self.assertTrue(self.busybox_ip())
+        self.assertEqual(os.listdir(os.path.join(self.target, "usr", "lib")), [])
+        self.assertEqual(os.listdir(os.path.join(self.target, "usr", "share")), [])
+
+    def test_iproute2_is_set_aside_for_the_ram_image_with_its_ip_as_ip_full(self):
+        base = os.path.join(self._tmp.name, "base")
+        self.make_iproute2()
+        done = self.run_script(BASE_DIR=base)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(os.listdir(os.path.join(self.target, "sbin")), ["ip"])
+        self.assertTrue(self.busybox_ip())
+        diag = os.path.join(base, "diag")
+        self.assertEqual(sorted(os.listdir(os.path.join(diag, "sbin"))),
+                         ["bridge", "devlink", "tc"])
+        for name, was in (("usr/sbin/ip-full", "sbin/ip"),
+                          ("usr/lib/tc/normal.dist", "usr/lib/tc/normal.dist"),
+                          ("usr/share/iproute2/rt_tables", "usr/share/iproute2/rt_tables")):
+            with open(os.path.join(diag, name), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "%s 1\n" % was)
+
+    def test_a_second_run_keeps_iproute2_set_aside_and_a_new_install_replaces_it(self):
+        base = os.path.join(self._tmp.name, "base")
+        diag = os.path.join(base, "diag")
+        self.make_iproute2()
+        self.assertEqual(self.run_script(BASE_DIR=base).returncode, 0)
+        self.assertEqual(self.run_script(BASE_DIR=base).returncode, 0)
+        self.assertTrue(self.busybox_ip())
+        with open(os.path.join(diag, "usr", "sbin", "ip-full"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "sbin/ip 1\n")
+
+        os.remove(os.path.join(self.target, "sbin", "ip"))
+        self.make_iproute2(mark="2")
+        self.assertEqual(self.run_script(BASE_DIR=base).returncode, 0)
+        self.assertTrue(self.busybox_ip())
+        with open(os.path.join(diag, "usr", "sbin", "ip-full"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "sbin/ip 2\n")
+        self.assertEqual(os.listdir(os.path.join(diag, "usr", "lib", "tc")), ["normal.dist"])
+        with open(os.path.join(diag, "usr", "lib", "tc", "normal.dist"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "usr/lib/tc/normal.dist 2\n")
 
     def make_tools(self):
         tools = os.path.join(self.target, "usr", "bin")

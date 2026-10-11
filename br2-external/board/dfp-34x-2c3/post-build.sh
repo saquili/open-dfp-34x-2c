@@ -7,9 +7,10 @@
 #
 # Usage: post-build.sh TARGET_DIR
 #
-# It takes out the programs of iproute2 that the stick does not run, the
+# It takes out the programs of iproute2, which the stick does not run, the
 # command-line tools of the network layer and the tools that diagnose a stick,
-# which it sets aside for the RAM image; it cuts the shared libraries to what
+# setting aside iproute2's ip, tc, devlink and bridge with the latter for the
+# RAM image, and leaves /sbin/ip to BusyBox; it cuts the shared libraries to what
 # the programs use, with tools/lib-trim, when the tree holds the shared C
 # library; and it writes into /etc/os-release, as
 # BUILD_ID, the commit of this repository that the image is built from: the
@@ -41,10 +42,11 @@ else
 	rev=unknown
 fi
 
-# The package installs every program of iproute2. The stick runs ip, tc and
-# devlink, from the boot script and onu-apply, and keeps bridge for a person
-# who looks at the bridge's VLANs; the others would add some 3 MB, unpacked,
-# to a root filesystem that has to fit the partition r0.
+# The package installs every program of iproute2, and the stick runs none of
+# them: BusyBox's ip does what the boot script and the scripts of onu-utils ask
+# of ip, and onu-nl what they asked of tc and devlink (ADR 0014, step 9g). The
+# RAM image carries ip, tc, devlink and bridge for diagnosis, below; the others
+# would add some 3 MB, unpacked, to it.
 for prog in ctstat dcb genl ifstat lnstat nstat rdma routel rtacct rtmon rtstat ss tipc vdpa; do
 	rm -f "$1/sbin/$prog"
 done
@@ -56,20 +58,36 @@ done
 #
 # A stick is diagnosed started from RAM, and its flash holds the image of the
 # final test, so the tools of diagnosis, omcid's omcitap and omcivlan, the
-# network layer's ubus and the flash's flashcp, flash_erase and mtd_debug, are
-# set aside in $BASE_DIR/diag, which "make ram-image" lays over its copy of
-# this directory; uci and jshn go.
+# network layer's ubus, the flash's flashcp, flash_erase and mtd_debug, and
+# iproute2's tc, devlink and bridge with the tables of tc and of the names ip
+# uses, are set aside in $BASE_DIR/diag, which "make ram-image" lays over its
+# copy of this directory; uci and jshn go.
 diag=${BASE_DIR:+$BASE_DIR/diag}
 for prog in usr/bin/omcitap usr/bin/omcivlan usr/bin/ubus usr/sbin/flashcp \
-	usr/sbin/flash_erase usr/sbin/mtd_debug; do
+	usr/sbin/flash_erase usr/sbin/mtd_debug sbin/tc sbin/devlink sbin/bridge \
+	usr/lib/tc usr/share/iproute2; do
 	[ -e "$1/$prog" ] || continue
 	if [ -n "$diag" ]; then
 		mkdir -p "$diag/${prog%/*}"
+		rm -rf "${diag:?}/$prog"
 		mv "$1/$prog" "$diag/$prog"
 	else
-		rm -f "$1/$prog"
+		rm -rf "${1:?}/$prog"
 	fi
 done
+
+# iproute2's ip stands where BusyBox's would. It goes to the RAM image as
+# ip-full, so that the scripts run BusyBox's ip there, as from the flash, and
+# /sbin/ip becomes BusyBox's again. A second run finds BusyBox's link.
+if [ -f "$1/sbin/ip" ] && [ ! -L "$1/sbin/ip" ]; then
+	if [ -n "$diag" ]; then
+		mkdir -p "$diag/usr/sbin"
+		mv "$1/sbin/ip" "$diag/usr/sbin/ip-full"
+	else
+		rm -f "$1/sbin/ip"
+	fi
+	[ ! -e "$1/bin/busybox" ] || ln -s ../bin/busybox "$1/sbin/ip"
+fi
 rm -f "$1/usr/bin/uci" "$1/usr/bin/jshn"
 rm -rf "$1/usr/share/libubox"
 
