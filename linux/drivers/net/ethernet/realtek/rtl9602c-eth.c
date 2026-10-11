@@ -41,8 +41,6 @@
 #include <net/dst_metadata.h>
 #include <linux/platform_device.h>
 
-#include <asm/mach-rtl9602c/rtl9602c.h>
-
 /*
  * The engine's registers. They are big-endian, and readl() and writel() access
  * them in native order on this big-endian CPU; byte and half-word registers are
