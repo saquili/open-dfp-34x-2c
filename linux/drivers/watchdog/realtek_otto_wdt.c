@@ -303,6 +303,7 @@ static int otto_wdt_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct otto_wdt_ctrl *ctrl;
 	unsigned int max_tick_ms;
+	bool running;
 	int ret;
 
 	ctrl = devm_kzalloc(dev, sizeof(*ctrl), GFP_KERNEL);
@@ -314,10 +315,20 @@ static int otto_wdt_probe(struct platform_device *pdev)
 	if (IS_ERR(ctrl->base))
 		return PTR_ERR(ctrl->base);
 
+	/*
+	 * A boot loader may start the watchdog to guard the kernel's boot.
+	 * Keep it running then, restarting its count, so that the watchdog
+	 * core feeds it until userspace opens the device.
+	 */
+	running = ioread32(ctrl->base + OTTO_WDT_REG_CTRL) & OTTO_WDT_CTRL_ENABLE;
+
 	/* Clear any old interrupts and reset initial state */
 	iowrite32(OTTO_WDT_INTR_PHASE_1 | OTTO_WDT_INTR_PHASE_2,
 			ctrl->base + OTTO_WDT_REG_INTR);
-	iowrite32(OTTO_WDT_CTRL_DEFAULT, ctrl->base + OTTO_WDT_REG_CTRL);
+	if (running)
+		iowrite32(OTTO_WDT_CNTR_PING, ctrl->base + OTTO_WDT_REG_CNTR);
+	else
+		iowrite32(OTTO_WDT_CTRL_DEFAULT, ctrl->base + OTTO_WDT_REG_CTRL);
 
 	ret = otto_wdt_probe_clk(ctrl);
 	if (ret)
@@ -361,6 +372,15 @@ static int otto_wdt_probe(struct platform_device *pdev)
 	ret = otto_wdt_determine_timeouts(&ctrl->wdev, ctrl->wdev.timeout, 1);
 	if (ret)
 		return dev_err_probe(dev, ret, "Failed to set timeout\n");
+
+	/*
+	 * Count the new timeout from here: the count reached under the boot
+	 * loader's timeout may already exceed a shorter one.
+	 */
+	if (running) {
+		otto_wdt_ping(&ctrl->wdev);
+		set_bit(WDOG_HW_RUNNING, &ctrl->wdev.status);
+	}
 
 	return devm_watchdog_register_device(dev, &ctrl->wdev);
 }
