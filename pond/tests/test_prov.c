@@ -1560,18 +1560,10 @@ static void test_settings(void)
 {
 	static const char *const bad[] = {
 		"FOO=1",
-		"MODE=switch",
-		"MODE=router;reboot",
 		"WAN_VLAN=0",
 		"WAN_VLAN=4095",
 		"WAN_GEM=4096",
 		"WAN_GEM=012",
-		"LAN_ADDRESS=192.0.2.1",
-		"LAN_ADDRESS=192.0.2.1/33",
-		"LAN_ADDRESS=192.0.2.256/24",
-		"WAN_GATEWAY=192.0.2.01",
-		"LAN_DHCP=yes",
-		"MODE=passthru",
 		"WAN_MAC=01:00:5e:00:00:01",
 		"WAN_MAC=00:00:00:00:00:00",
 		"WAN_MAC=00:00:5e:00:53",
@@ -1588,28 +1580,21 @@ static void test_settings(void)
 	struct stat st;
 	int rc;
 
-	puts("the settings of the mode, and changes to them");
+	puts("the settings of the data path, and changes to them");
 
 	mkdir(prov_path("/run", file, sizeof(file)), 0755);
 	put("/apply-stub", apply_stub, 0755);
 	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
 
 	s = settled(buf, sizeof(buf));
-	check(strstr(s, "\"MODE\":\"\"") &&
-		      strstr(s, "\"WAN_PROTO\":\"dhcp\""),
-	      "without a file, the settings are onu-apply's defaults");
-	check(strstr(s, "\"sessions\":[]") && strstr(s, "\"mode\":null") &&
-		      strstr(s, "\"wan\":null"),
-	      "no session, and nothing brought up yet");
+	check(strstr(s, "\"sessions\":[]") && strstr(s, "\"mode\":null"),
+	      "without a file, no session, and nothing brought up yet");
 
 	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
 		rc = prov_settings_set(bad[i], err, sizeof(err));
 		snprintf(what, sizeof(what), "refused: %s", bad[i]);
 		check(rc == -EINVAL && *err, what);
 	}
-	rc = prov_settings_set("MODE=router\nWAN_PROTO=pppoe\n", err, sizeof(err));
-	check(rc == -EINVAL && strstr(err, "PPPOE1_SECRET"),
-	      "PPPoE without a user and a secret is refused");
 	rc = prov_settings_set("PPPOE2_USER=bench\n", err, sizeof(err));
 	check(rc == -EINVAL && strstr(err, "PPPOE2_SECRET"),
 	      "an account without a secret is refused");
@@ -1617,24 +1602,18 @@ static void test_settings(void)
 	check(rc == -EINVAL, "a session past the seventh is refused");
 	rc = prov_settings_set("SESSION1_FAMILY=ipx\n", err, sizeof(err));
 	check(rc == -EINVAL, "a family that is not one is refused");
-	rc = prov_settings_set("LAN_DHCP_START=192.0.2.100\nLAN_DHCP_END=192.0.2.199\n",
-			       err, sizeof(err));
-	check(rc == -EINVAL, "a DHCP range outside the LAN's network is refused");
 	check(!slurp("/run/onu.conf", file, sizeof(file)) &&
 		      !slurp("/run/applied", file, sizeof(file)),
 	      "a refused change writes nothing and applies nothing");
 
-	rc = prov_settings_set("MODE=router\r\nWAN_PROTO=pppoe\r\nWAN_VLAN=410\r\n"
-			       "LAN_ADDRESS=192.0.2.1/24\r\n"
-			       "LAN_DHCP_START=192.0.2.100\r\n"
-			       "LAN_DHCP_END=192.0.2.199\r\n"
-			       "PPPOE_USER=bench\r\nPPPOE_SECRET=not-a-real-one\r\n",
+	rc = prov_settings_set("PPPOE_USER=bench\r\nPPPOE_SECRET=not-a-real-one\r\n"
+			       "SESSION1_VLAN=410\r\nSESSION1_FAMILY=ipv4\r\n",
 			       err, sizeof(err));
 	check(rc == 0, "a whole change, with the line ends of a form, is taken");
 	wait_taken();
 	s = slurp("/run/onu.conf", file, sizeof(file));
-	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
-		      strstr(s, "\nLAN_DHCP=on\n"),
+	check(s && strstr(s, "\nSESSION1_VLAN=410\n") && strstr(s, "\nSESSION1_FAMILY=ipv4\n") &&
+		      strstr(s, "\nSESSION1_PASS=on\n"),
 	      "onu.conf has the change and keeps the rest");
 	s = slurp("/run/onu-pppoe1", file, sizeof(file));
 	check(s && !strcmp(s, "bench not-a-real-one\n"),
@@ -1654,7 +1633,7 @@ static void test_settings(void)
 	check(strstr(s, "\"sessions\":[{\"id\":1,\"user\":\"bench\",\"secret_set\":true,") != NULL,
 	      "they give the session's user and that a secret is set");
 	check(!strstr(s, "not-a-real-one"), "but never the secret");
-	rc = prov_settings_set("WAN_VLAN=36", err, sizeof(err));
+	rc = prov_settings_set("SESSION1_VLAN=36", err, sizeof(err));
 	check(rc == -EBUSY, "a change while one is being applied is refused");
 
 	put("/run/release", "", 0644);
@@ -1663,14 +1642,11 @@ static void test_settings(void)
 		      strstr(s, "\"last_apply_status\":0"),
 	      "once onu-apply has ended, the settings say how it ended");
 
-	rc = prov_settings_set("WAN_PROTO=static\nWAN_ADDRESS=198.51.100.2/24\n"
-			       "WAN_GATEWAY=198.51.100.1\n",
-			       err, sizeof(err));
+	rc = prov_settings_set("SESSION1_HOST_VLAN=36\n", err, sizeof(err));
 	check(rc == 0, "a change of a few settings is taken");
 	wait_taken();
 	s = slurp("/run/onu.conf", file, sizeof(file));
-	check(s && strstr(s, "\nMODE=router\n") && strstr(s, "\nWAN_VLAN=410\n") &&
-		      strstr(s, "\nWAN_PROTO=static\n"),
+	check(s && strstr(s, "\nSESSION1_VLAN=410\n") && strstr(s, "\nSESSION1_HOST_VLAN=36\n"),
 	      "and merged with the settings before it");
 	s = slurp("/run/onu-pppoe1", file, sizeof(file));
 	check(s && !strcmp(s, "bench not-a-real-one\n"),
@@ -1694,37 +1670,29 @@ static void test_settings(void)
 	unlink(prov_path("/run/onu-trial.d/settings.new", file, sizeof(file)));
 	unlink(prov_path("/run/onu-trial.d/mgmt", file, sizeof(file)));
 
-	rc = prov_settings_set("WAN_GATEWAY=203.0.113.1", err, sizeof(err));
-	check(rc == -EINVAL, "a gateway outside the WAN's network is refused");
-	rc = prov_settings_set("WAN_GATEWAY=198.51.100.2", err, sizeof(err));
-	check(rc == -EINVAL, "a gateway that is the WAN's own address is refused");
-	rc = prov_settings_set("WAN_GATEWAY=", err, sizeof(err));
-	check(rc == -EINVAL, "a static WAN without a gateway is refused");
-	rc = prov_settings_set("LAN_DHCP_START=192.0.2.199\nLAN_DHCP_END=192.0.2.100\n",
+	rc = prov_settings_set("SESSION1_MAC=00:00:5e:00:53:01\nPPPOE2_USER=b\nPPPOE2_SECRET=x\n"
+			       "SESSION2_VLAN=410\nSESSION2_MAC=00:00:5e:00:53:02\n",
 			       err, sizeof(err));
-	check(rc == -EINVAL, "a DHCP range that ends before it starts is refused");
-
-	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nPASS_GATEWAY=169.254.0.1\n",
-			       err, sizeof(err));
+	check(rc == -EINVAL && strstr(err, "one MAC address"),
+	      "two sessions in one VLAN that send from two MAC addresses are refused");
+	rc = prov_settings_set("PASS_GATEWAY=169.254.0.1\n", err, sizeof(err));
 	check(rc == -EINVAL && strstr(err, "PASS_GATEWAY"),
 	      "the stick's address on the link to the router is no setting any more");
-	rc = prov_settings_set("MODE=passthrough\nWAN_PROTO=pppoe\nWAN_MAC=00:00:5e:00:53:01\n",
+	rc = prov_settings_set("MODE=router\nWAN_PROTO=pppoe\nWAN_MAC=00:00:5e:00:53:01\n",
 			       err, sizeof(err));
-	check(rc == 0, "passthrough over PPPoE is taken");
+	check(rc == 0, "the keys of the bench's router of before are taken");
 	wait_taken();
 	s = slurp("/run/onu.conf", file, sizeof(file));
-	check(s && strstr(s, "\nMODE=\n") && strstr(s, "\nWAN_MAC=\n") &&
-		      strstr(s, "\nSESSION1_MAC=00:00:5e:00:53:01\n") && !strstr(s, "LAN_VLAN") &&
-		      !strstr(s, "PASS_GATEWAY") && !strstr(s, "PASS_PEER"),
-	      "onu.conf has the passthrough settings as the first session's, with the accounts "
-	      "giving the shape, and no link to the router of its own");
+	check(s && strstr(s, "\nSESSION1_MAC=00:00:5e:00:53:01\n") && !strstr(s, "MODE") &&
+		      !strstr(s, "WAN_") && !strstr(s, "LAN_VLAN") && !strstr(s, "PASS_GATEWAY"),
+	      "onu.conf has the WAN's MAC address of before as the first session's, "
+	      "and none of the router's keys");
 	settled(buf, sizeof(buf));
 
-	put("/run/onu-mode", "router\n", 0644);
-	put("/run/onu-wan", "gem1 wan ppp0\n", 0644);
+	put("/run/onu-mode", "passthrough\n", 0644);
 	put("/run/onu-dns", "198.51.100.53\n", 0644);
 	s = render(prov_settings, buf, sizeof(buf), &rc);
-	check(strstr(s, "\"mode\":\"router\"") && strstr(s, "\"out\":\"ppp0\"") &&
+	check(strstr(s, "\"mode\":\"passthrough\"") &&
 		      strstr(s, "\"dns\":\"198.51.100.53\"") && strstr(s, "\"pass\":null"),
 	      "the settings carry what onu-apply brought up");
 	put("/run/onu-pass", "192.0.2.2\n", 0644);
@@ -1777,7 +1745,7 @@ static void test_settings(void)
 	      "and with one, what became of the settings in the store");
 
 	setenv("POND_ONU_APPLY", "/nonexistent/onu-apply", 1);
-	rc = prov_settings_set("LAN_DHCP=off", err, sizeof(err));
+	rc = prov_settings_set("SESSION1_PASS=off", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && strstr(s, "\"last_apply_status\":127"),
 	      "an onu-apply that cannot run is reported, not hidden");
@@ -1866,7 +1834,7 @@ static void test_panel_values(void)
 			      "FAMILY=ipv4\nMAC=00:00:5e:00:53:01\n",
 			      err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && file_has("/run/onu.conf", "MODE=\n") &&
+	check(rc == 0 && !file_has("/run/onu.conf", "MODE=") &&
 		      file_has("/run/onu.conf", "SESSION1_VLAN=410") &&
 		      file_has("/run/onu.conf", "SESSION1_FAMILY=ipv4") &&
 		      file_has("/run/onu-pppoe1", "user@example.net example-secret"),

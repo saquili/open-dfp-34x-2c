@@ -72,8 +72,7 @@ const globalV4 = (l: Link) => l.addresses.some((a) => a.family === "ipv4" && !a.
 export function roleOf(link: Link, live: Live | undefined): Role {
   const s = live?.settings;
   if (link.kind === "ppp") return "session";
-  if (s?.sessions?.some((x) => x.dev === link.name) || (s?.wan && link.name === s.wan.dev))
-    return "wan";
+  if (s?.sessions?.some((x) => x.dev === link.name)) return "wan";
   if (s?.pass?.lan && link.name === s.pass.lan) return "handover";
   if (link.master) return "bridged";
   if (link.kind === "gem") return "channel";
@@ -89,10 +88,7 @@ export function switchView(net: Network | undefined, live: Live | undefined): Sw
 
   /* A PPP link runs over its session's VLAN, though no netlink attribute says so. */
   const over = (l: Link) =>
-    l.kind === "ppp"
-      ? (s?.sessions?.find((x) => x.ppp === l.name)?.dev ??
-        (s?.wan && l.name === s.wan.out ? s.wan.dev : null))
-      : l.lower;
+    l.kind === "ppp" ? (s?.sessions?.find((x) => x.ppp === l.name)?.dev ?? null) : l.lower;
 
   const tree = (parent: string): IfaceView[] =>
     links

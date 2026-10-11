@@ -35,8 +35,8 @@ const struct prov pond_provs[] = {
 	{ "session", "Mode", "A PPPoE session of the stick's own: add, change or remove",
 	  NULL, prov_session_set, 0 },
 	{ "settings", "Mode",
-	  "The data path: the sessions, where they hand their addresses down, "
-	  "and the bench's router mode, kept in the configuration store",
+	  "The data path: the sessions and where they hand their addresses down, "
+	  "kept in the configuration store",
 	  prov_settings, prov_settings_set, 0 },
 
 	{ "ports", "Data path", "Interfaces: link, speed and CPU-path counts",

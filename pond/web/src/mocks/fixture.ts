@@ -103,7 +103,6 @@ export const LIVE: Live = {
       },
     ],
     mode: "passthrough",
-    wan: null,
     dns: "198.51.100.53 198.51.100.54",
     pass: {
       address: "203.0.113.24",

@@ -357,9 +357,8 @@ export interface Settings {
   /** The firewall's rules, in their order. */
   rules?: RuleInfo[];
   fw?: FwDefaults;
+  /** passthrough with sessions, bridge without, as onu-apply brought it up. */
   mode: string | null;
-  /** The bench's router mode: its WAN. */
-  wan: { gem: string; dev: string; out: string } | null;
   dns: string | null;
   /** peer_gateway: the concentrator's address, when the router has it as its gateway. */
   pass: { address: string; lan: string | null; peer_gateway?: string | null } | null;

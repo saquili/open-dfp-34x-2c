@@ -363,30 +363,6 @@ int prov_settings(struct prov_buf *out)
 		pv_null(out);
 	pv_comma(out);
 
-	/* The bench's router mode: its WAN. */
-	pv_key(out, "wan");
-	if (!prov_read_line("/run/onu-wan", line, sizeof(line))) {
-		char gem[32], dev[32], via[32];
-
-		if (sscanf(line, "%31s %31s %31s", gem, dev, via) == 3) {
-			pv_open(out, '{');
-			pv_key(out, "gem");
-			pv_str(out, gem);
-			pv_comma(out);
-			pv_key(out, "dev");
-			pv_str(out, dev);
-			pv_comma(out);
-			pv_key(out, "out");
-			pv_str(out, via);
-			pv_close(out, '}');
-		} else {
-			pv_null(out);
-		}
-	} else {
-		pv_null(out);
-	}
-	pv_comma(out);
-
 	pv_key(out, "dns");
 	if (!prov_read_line("/run/onu-dns", line, sizeof(line)))
 		pv_str(out, line);
@@ -513,8 +489,7 @@ static const char *line_value(const char *text, const char *key, char *out,
  * USER and SECRET, its account, an empty USER removing the session (an
  * absent SECRET keeps the one there is); VLAN, MAC, GEM, FAMILY, PASS and
  * HOST_VLAN. onu-config judges them, and takes over the WAN's settings of before,
- * which the first session took when it had none of its own; the bench's
- * router mode is left as it is.
+ * which the first session took when it had none of its own.
  */
 int prov_session_set(const char *val, char *err, size_t errcap)
 {
