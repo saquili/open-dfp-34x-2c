@@ -101,9 +101,13 @@ def main():
         check(fp == words[2], "with the certificate whose fingerprint -F printed")
 
         conn = http.client.HTTPSConnection("127.0.0.1", HTTPS, context=context(), timeout=10)
+        status, _, _ = request(conn, "POST", "/api/auth/login",
+                               '{"user":"root","secret":"admin"}',
+                               {"Content-Type": "text/plain"})
+        check(status == 403, "a sign-in without X-Pond, as a form of another site sends it, is refused")
         status, headers, body = request(conn, "POST", "/api/auth/login",
                                         '{"user":"root","secret":"admin"}',
-                                        {"Content-Type": "application/json"})
+                                        {"Content-Type": "application/json", "X-Pond": "1"})
         cookie = headers.get("Set-Cookie", "")
         check(status == 200 and "pond_sid=" in cookie and "; Secure" in cookie,
               "a sign-in sets a Secure cookie")

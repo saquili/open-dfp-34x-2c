@@ -22,9 +22,19 @@
 #include <string.h>
 #include <unistd.h>
 
+/*
+ * Wrong passwords stop sign-ins for LOCK_S seconds: LOCK_AFTER of them from
+ * one address stop that address, so that a page of another site, or one
+ * machine of the host side, cannot lock the others out; ALL_AFTER of them
+ * from any stop everyone, so that guesses spread over many addresses stay
+ * as few. A count is forgotten FORGET_S seconds after its last wrong one.
+ */
 #define LOCK_AFTER 5
+#define ALL_AFTER 20
 #define LOCK_S 30
 #define FORGET_S 300
+#define SOURCES 16
+#define SOURCE_LEN 48
 
 /* What onu-config password-check says of a password (onu-utils). */
 enum { CHECK_MATCHES = 0, CHECK_DEFAULT = 3, CHECK_OLDER = 4, CHECK_UNKNOWN = 5 };
@@ -35,8 +45,13 @@ static struct {
 	time_t seen;
 } g_sess[AUTH_SESSIONS];
 
-static int g_fails;
-static time_t g_last_fail;
+/* The wrong passwords of each address lately, and of all together. */
+static struct fails {
+	char from[SOURCE_LEN];
+	int n;
+	time_t last;
+} g_src[SOURCES], g_all;
+
 static bool g_default;
 
 void auth_init(void)
@@ -44,8 +59,8 @@ void auth_init(void)
 	char out[32];
 
 	memset(g_sess, 0, sizeof(g_sess));
-	g_fails = 0;
-	g_last_fail = 0;
+	memset(g_src, 0, sizeof(g_src));
+	memset(&g_all, 0, sizeof(g_all));
 	g_default = bus_act("password_state", NULL, NULL, 0, NULL, out, sizeof(out)) == 0 &&
 		    !strncmp(out, "default", 7);
 }
@@ -130,22 +145,60 @@ static bool same(const uint8_t *a, const uint8_t *b, size_t n)
 }
 
 /* Whether sign-ins are stopped now, and for how long. */
-static bool locked(time_t now, int *retry_after)
+/* The count of @from, a free or the stalest one when @take, else NULL. */
+static struct fails *source(const char *from, bool take)
 {
-	if (g_fails && now - g_last_fail > FORGET_S)
-		g_fails = 0;
-	if (g_fails >= LOCK_AFTER && now - g_last_fail < LOCK_S) {
+	struct fails *pick = NULL;
+
+	from = from ? from : "";
+	for (int i = 0; i < SOURCES; i++)
+		if (g_src[i].n && !strcmp(g_src[i].from, from))
+			return &g_src[i];
+	if (!take)
+		return NULL;
+	for (int i = 0; i < SOURCES; i++) {
+		if (!g_src[i].n) {
+			pick = &g_src[i];
+			break;
+		}
+		if (!pick || g_src[i].last < pick->last)
+			pick = &g_src[i];
+	}
+	memset(pick, 0, sizeof(*pick));
+	snprintf(pick->from, sizeof(pick->from), "%s", from);
+	return pick;
+}
+
+/* Whether @f stops sign-ins now, after @after wrong ones, and how long. */
+static bool stopped(struct fails *f, int after, time_t now, int *retry_after)
+{
+	if (!f)
+		return false;
+	if (f->n && now - f->last > FORGET_S)
+		f->n = 0;
+	if (f->n >= after && now - f->last < LOCK_S) {
 		if (retry_after)
-			*retry_after = (int)(LOCK_S - (now - g_last_fail));
+			*retry_after = (int)(LOCK_S - (now - f->last));
 		return true;
 	}
 	return false;
 }
 
-static void failed(time_t now)
+/* Whether sign-ins from @from are stopped now, and for how long. */
+static bool locked(const char *from, time_t now, int *retry_after)
 {
-	g_fails++;
-	g_last_fail = now;
+	return stopped(&g_all, ALL_AFTER, now, retry_after) ||
+	       stopped(source(from, false), LOCK_AFTER, now, retry_after);
+}
+
+static void failed(const char *from, time_t now)
+{
+	struct fails *f = source(from, true);
+
+	f->n++;
+	f->last = now;
+	g_all.n++;
+	g_all.last = now;
 }
 
 /* ---- sessions ---- */
@@ -194,21 +247,22 @@ static int slot_of(const char *id, time_t now)
 	return hit;
 }
 
-int auth_sign_in(const char *user, const char *secret, time_t now,
-		 char id[AUTH_ID_LEN + 1], int *retry_after)
+int auth_sign_in(const char *user, const char *secret, const char *from,
+		 time_t now, char id[AUTH_ID_LEN + 1], int *retry_after)
 {
 	int i, slot = 0, rc;
 	bool older;
 
-	if (locked(now, retry_after))
+	if (locked(from, now, retry_after))
 		return -EAGAIN;
 	rc = user && secret && !strcmp(user, AUTH_USER) ?
 		correct(secret, &older) : -EACCES;
 	if (rc == -EACCES)
-		failed(now);
+		failed(from, now);
 	if (rc)
 		return rc;
-	g_fails = 0;
+	if (source(from, false))
+		source(from, false)->n = 0;
 	/*
 	 * A password kept in the older form becomes crypt()'s, which the
 	 * console and the ssh server check too. Should that fail, the panel
@@ -267,30 +321,30 @@ static bool printable(const char *s, size_t min, size_t max)
 	return true;
 }
 
-int auth_confirm(const char *secret, time_t now, int *retry_after)
+int auth_confirm(const char *secret, const char *from, time_t now, int *retry_after)
 {
 	bool older;
 	int rc;
 
-	if (locked(now, retry_after))
+	if (locked(from, now, retry_after))
 		return -EAGAIN;
 	rc = secret ? correct(secret, &older) : -EACCES;
 	if (rc == -EACCES)
-		failed(now);
+		failed(from, now);
 	return rc;
 }
 
 int auth_change(const char *current, const char *next, const char *keep,
-		time_t now, int *retry_after)
+		const char *from, time_t now, int *retry_after)
 {
 	bool older;
 	int rc, i;
 
-	if (locked(now, retry_after))
+	if (locked(from, now, retry_after))
 		return -EAGAIN;
 	rc = current ? correct(current, &older) : -EACCES;
 	if (rc == -EACCES)
-		failed(now);
+		failed(from, now);
 	if (rc)
 		return rc;
 	if (!next || !printable(next, AUTH_SECRET_MIN, AUTH_SECRET_MAX) ||

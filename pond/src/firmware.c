@@ -175,12 +175,14 @@ static bool confirmed(struct mg_connection *c, struct mg_http_message *hm,
 		      char *pw, size_t cap)
 {
 	struct mg_str *h = mg_http_get_header(hm, "X-Pond-Password");
+	char from[48];
 	int retry = 0, rc;
 
 	pw[0] = '\0';
 	if (h && mg_url_decode(h->buf, h->len, pw, cap, 0) < 0)
 		pw[0] = '\0';
-	rc = auth_confirm(pw, time(NULL), &retry);
+	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
+	rc = auth_confirm(pw, from, time(NULL), &retry);
 	if (!rc)
 		return true;
 	explicit_bzero(pw, cap);

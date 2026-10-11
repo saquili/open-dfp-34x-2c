@@ -70,11 +70,14 @@ ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
 proxy's that says so). There are at most three; a fourth sign-in ends the one
 idle the longest, and a
 session ends after 15 minutes without a request or 12 hours in all. Five wrong
-passwords in a row stop sign-ins for 30 seconds (429, with ``Retry-After``). A
-change of password ends every other session.
+passwords from one address stop sign-ins from that address for 30 seconds,
+and twenty from all addresses together stop every sign-in as long (429, with
+``Retry-After``); behind a proxy every sign-in comes from the proxy's address.
+A change of password ends every other session.
 
-A change made in a session must carry the header ``X-Pond``, which a page of
-another site cannot add, so a forged form changes nothing. Scripts may present
+A sign-in, and a change made in a session, must carry the header ``X-Pond``,
+which a page of another site cannot add, so a forged form neither signs the
+browser in nor changes anything. Scripts may present
 the bearer token of the token file (``/etc/pond.token`` by default) instead of
 a session.
 

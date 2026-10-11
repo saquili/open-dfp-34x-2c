@@ -398,9 +398,12 @@ static void api_login(struct mg_connection *c, struct mg_http_message *hm)
 {
 	char *user = json_str(hm, "$.user");
 	char *secret = json_str(hm, "$.secret");
-	char id[AUTH_ID_LEN + 1], cookie[160];
-	int retry = 0;
-	int rc = auth_sign_in(user, secret, time(NULL), id, &retry);
+	char id[AUTH_ID_LEN + 1], cookie[160], from[48];
+	int retry = 0, rc;
+
+	/* The address the wrong passwords are counted by (auth.h). */
+	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
+	rc = auth_sign_in(user, secret, from, time(NULL), id, &retry);
 
 	free(user);
 	free_secret(secret);
@@ -432,8 +435,11 @@ static void api_password(struct mg_connection *c, struct mg_http_message *hm,
 {
 	char *current = json_str(hm, "$.current");
 	char *next = json_str(hm, "$.next");
-	int retry = 0;
-	int rc = auth_change(current, next, sid, time(NULL), &retry);
+	char from[48];
+	int retry = 0, rc;
+
+	mg_snprintf(from, sizeof(from), "%M", mg_print_ip, &c->rem);
+	rc = auth_change(current, next, sid, from, time(NULL), &retry);
 
 	free_secret(current);
 	free_secret(next);
@@ -576,10 +582,17 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 	char sid[AUTH_ID_LEN + 1];
 
 	if (mg_match(hm->uri, mg_str("/api/auth/login"), NULL)) {
-		if (post)
-			api_login(c, hm);
-		else
+		/*
+		 * A sign-in comes from this panel too: a form of another site
+		 * can post a text that reads as JSON, which would sign the
+		 * browser in, or lock the sign-ins of its address.
+		 */
+		if (!post)
 			reply_err(c, 405, "use POST", "sign in with a POST");
+		else if (!mg_http_get_header(hm, "X-Pond"))
+			reply_err(c, 403, "refused", "a sign-in needs the X-Pond header");
+		else
+			api_login(c, hm);
 		return;
 	}
 

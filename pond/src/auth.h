@@ -45,6 +45,9 @@ bool auth_default_password(void);
 
 /**
  * auth_sign_in() - Check a user and a password and open a session.
+ * @from: the address the request came from: five wrong passwords from one
+ *	address stop sign-ins from it for half a minute, twenty from all of
+ *	them stop every sign-in as long
  * @id: the new session's id, AUTH_ID_LEN hex digits and a NUL
  * @retry_after: when refused for too many attempts, the seconds to wait
  *
@@ -56,8 +59,8 @@ bool auth_default_password(void);
  * default one), -EAGAIN while sign-ins are stopped, -EIO when no random id
  * could be had.
  */
-int auth_sign_in(const char *user, const char *secret, time_t now,
-		 char id[AUTH_ID_LEN + 1], int *retry_after);
+int auth_sign_in(const char *user, const char *secret, const char *from,
+		 time_t now, char id[AUTH_ID_LEN + 1], int *retry_after);
 
 /** Whether @id is an open session; a hit counts as activity. */
 bool auth_session(const char *id, time_t now);
@@ -72,7 +75,7 @@ void auth_sign_out(const char *id);
  * Return: 0, -EACCES for a wrong password, -ENOKEY while no password is
  * known, -EAGAIN while sign-ins are stopped.
  */
-int auth_confirm(const char *secret, time_t now, int *retry_after);
+int auth_confirm(const char *secret, const char *from, time_t now, int *retry_after);
 
 /**
  * auth_change() - Replace the password, which @current must match.
@@ -84,6 +87,6 @@ int auth_confirm(const char *secret, time_t now, int *retry_after);
  * storing it.
  */
 int auth_change(const char *current, const char *next, const char *keep,
-		time_t now, int *retry_after);
+		const char *from, time_t now, int *retry_after);
 
 #endif

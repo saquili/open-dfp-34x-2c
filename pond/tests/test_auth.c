@@ -22,6 +22,10 @@
 static int fails;
 static int checks;
 
+/* The address the tests sign in from, and another. */
+#define FROM "192.0.2.1"
+#define OTHER "2001:db8::2"
+
 static void check(bool cond, const char *what)
 {
 	checks++;
@@ -49,24 +53,39 @@ static void test_sessions(void)
 	puts("the default password and sessions");
 	auth_init();
 	check(auth_default_password(), "without a stored hash the default is in force");
-	check(auth_sign_in("root", "admin", t, id, &retry) == 0 && strlen(id) == AUTH_ID_LEN,
+	check(auth_sign_in("root", "admin", FROM, t, id, &retry) == 0 && strlen(id) == AUTH_ID_LEN,
 	      "root and the default password open a session");
 	check(auth_session(id, t + 10), "the session is open");
 	check(!auth_session("0123456789abcdef0123456789abcdef", t + 10), "another id is not");
 	check(!auth_session(id, t + 10 + AUTH_IDLE_S + 1), "it ends after the idle time");
 
 	for (int i = 0; i < 5; i++)
-		auth_sign_in("root", "wrong", t + 2000, id, &retry);
-	check(auth_sign_in("root", "admin", t + 2001, id, &retry) == -EAGAIN && retry > 0,
+		auth_sign_in("root", "wrong", FROM, t + 2000, id, &retry);
+	check(auth_sign_in("root", "admin", FROM, t + 2001, id, &retry) == -EAGAIN && retry > 0,
 	      "five wrong passwords stop sign-ins, even the right one");
-	check(auth_sign_in("root", "admin", t + 2040, id, &retry) == 0,
+	check(auth_sign_in("root", "admin", OTHER, t + 2001, id, &retry) == 0,
+	      "from that address only: another one signs in");
+	check(auth_sign_in("root", "admin", FROM, t + 2040, id, &retry) == 0,
 	      "and half a minute later they go on");
-	check(auth_sign_in("admin", "admin", t + 2041, id, &retry) == -EACCES,
+	check(auth_sign_in("admin", "admin", FROM, t + 2041, id, &retry) == -EACCES,
 	      "another user is refused");
+
+	/* Wrong ones spread over many addresses stop everyone, at twenty. */
+	auth_init();
+	for (int i = 0; i < 20; i++) {
+		char from[24];
+
+		snprintf(from, sizeof(from), "198.51.100.%d", i);
+		auth_sign_in("root", "wrong", from, t + 2100, id, &retry);
+	}
+	check(auth_sign_in("root", "admin", OTHER, t + 2101, id, &retry) == -EAGAIN,
+	      "twenty wrong ones from twenty addresses stop every sign-in");
+	check(auth_sign_in("root", "admin", OTHER, t + 2140, id, &retry) == 0,
+	      "for half a minute too");
 
 	auth_init();
 	for (int i = 0; i <= AUTH_SESSIONS; i++)
-		auth_sign_in("root", "admin", t + 3000 + i, ids[i], &retry);
+		auth_sign_in("root", "admin", FROM, t + 3000 + i, ids[i], &retry);
 	check(!auth_session(ids[0], t + 3010), "a sign-in past the last slot ends the oldest session");
 	check(auth_session(ids[AUTH_SESSIONS], t + 3010), "and the new one is open");
 }
@@ -120,27 +139,27 @@ static void test_change(void)
 	write_store(script, sizeof(script));
 	auth_init();
 
-	auth_sign_in("root", "admin", t, a, &retry);
-	auth_sign_in("root", "admin", t + 1, b, &retry);
-	check(auth_change("admin", "short", a, t + 2, &retry) == -EINVAL, "a short password is refused");
-	check(auth_change("admin", "admin", a, t + 2, &retry) == -EINVAL,
+	auth_sign_in("root", "admin", FROM, t, a, &retry);
+	auth_sign_in("root", "admin", FROM, t + 1, b, &retry);
+	check(auth_change("admin", "short", a, FROM, t + 2, &retry) == -EINVAL, "a short password is refused");
+	check(auth_change("admin", "admin", a, FROM, t + 2, &retry) == -EINVAL,
 	      "and so is the current one again");
-	check(auth_change("wrong-one", "example-secret", a, t + 2, &retry) == -EACCES,
+	check(auth_change("wrong-one", "example-secret", a, FROM, t + 2, &retry) == -EACCES,
 	      "a wrong current password is refused");
-	check(auth_change("admin", "example-secret", a, t + 3, &retry) == 0,
+	check(auth_change("admin", "example-secret", a, FROM, t + 3, &retry) == 0,
 	      "a good one is stored");
 	check(!auth_default_password(), "the default is no longer in force");
 	check(auth_session(a, t + 4), "the session that changed it stays");
 	check(!auth_session(b, t + 4), "the others, opened with the old password, end");
-	check(auth_sign_in("root", "admin", t + 5, b, &retry) == -EACCES,
+	check(auth_sign_in("root", "admin", FROM, t + 5, b, &retry) == -EACCES,
 	      "the old password no longer opens a session");
-	check(auth_sign_in("root", "example-secret", t + 6, b, &retry) == 0,
+	check(auth_sign_in("root", "example-secret", FROM, t + 6, b, &retry) == 0,
 	      "the new one does");
 	check(hash_file_starts("$5$rounds=1000$teststandinsalt$"),
 	      "the hash kept is crypt()'s");
-	check(auth_change("example-secret", "store-refuses", a, t + 7, &retry) == -EIO,
+	check(auth_change("example-secret", "store-refuses", a, FROM, t + 7, &retry) == -EIO,
 	      "a store that cannot keep a new one is an error");
-	check(auth_sign_in("root", "example-secret", t + 8, b, &retry) == 0,
+	check(auth_sign_in("root", "example-secret", FROM, t + 8, b, &retry) == 0,
 	      "and the password stays as it was");
 }
 
@@ -159,14 +178,14 @@ static void test_older_form(void)
 	auth_init();
 
 	check(!auth_default_password(), "it is no default");
-	check(auth_sign_in("root", "example-secreT", t, id, &retry) == -EACCES,
+	check(auth_sign_in("root", "example-secreT", FROM, t, id, &retry) == -EACCES,
 	      "a wrong password is refused");
 	check(hash_file_starts("pbkdf2-sha256$"), "and the hash stays as it was");
-	check(auth_sign_in("root", "example-secret", t + 1, id, &retry) == 0,
+	check(auth_sign_in("root", "example-secret", FROM, t + 1, id, &retry) == 0,
 	      "the right one opens a session");
 	check(hash_file_starts("$5$rounds=1000$teststandinsalt$"),
 	      "and has the password kept in crypt()'s form");
-	check(auth_sign_in("root", "example-secret", t + 2, id, &retry) == 0,
+	check(auth_sign_in("root", "example-secret", FROM, t + 2, id, &retry) == 0,
 	      "which opens a session as well");
 }
 
@@ -182,14 +201,14 @@ static void test_confirm(void)
 	write_store(script, sizeof(script));
 	unlink(g_hashfile);
 	auth_init();
-	auth_sign_in("root", "admin", t, id, &retry);
-	auth_change("admin", right, id, t + 1, &retry);
-	check(auth_confirm(right, t + 2, &retry) == 0, "root's password is confirmed");
-	check(auth_confirm(wrong, t + 3, &retry) == -EACCES, "another is not");
-	check(auth_confirm(NULL, t + 4, &retry) == -EACCES, "nor none");
+	auth_sign_in("root", "admin", FROM, t, id, &retry);
+	auth_change("admin", right, id, FROM, t + 1, &retry);
+	check(auth_confirm(right, FROM, t + 2, &retry) == 0, "root's password is confirmed");
+	check(auth_confirm(wrong, FROM, t + 3, &retry) == -EACCES, "another is not");
+	check(auth_confirm(NULL, FROM, t + 4, &retry) == -EACCES, "nor none");
 	for (int i = 0; i < 3; i++)
-		auth_confirm(wrong, t + 5 + i, &retry);
-	check(auth_confirm(right, t + 9, &retry) == -EAGAIN,
+		auth_confirm(wrong, FROM, t + 5 + i, &retry);
+	check(auth_confirm(right, FROM, t + 9, &retry) == -EAGAIN,
 	      "wrong ones count as wrong sign-ins");
 	check(bus_act("password_set", names, &wrong, 1, "another-secret\n", out, sizeof(out)) ==
 		      -EACCES && hash_file_starts("$5$rounds=1000$teststandinsalt$"),
@@ -216,13 +235,13 @@ static void test_unknown(void)
 	auth_init();
 
 	check(!auth_default_password(), "it is no default");
-	check(auth_sign_in("root", "admin", t, id, &retry) == -ENOKEY,
+	check(auth_sign_in("root", "admin", FROM, t, id, &retry) == -ENOKEY,
 	      "the default password opens no session");
-	check(auth_change("admin", "example-secret", id, t + 1, &retry) == -ENOKEY,
+	check(auth_change("admin", "example-secret", id, FROM, t + 1, &retry) == -ENOKEY,
 	      "nor changes the password");
 	for (int i = 0; i < 6; i++)
-		auth_sign_in("root", "admin", t + 2 + i, id, &retry);
-	check(auth_sign_in("root", "admin", t + 9, id, &retry) == -ENOKEY,
+		auth_sign_in("root", "admin", FROM, t + 2 + i, id, &retry);
+	check(auth_sign_in("root", "admin", FROM, t + 9, id, &retry) == -ENOKEY,
 	      "and such refusals stop no sign-in");
 }
 
