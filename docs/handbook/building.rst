@@ -335,8 +335,9 @@ The boot script
 
         mount -t proc proc /proc
         mount -t devtmpfs devtmpfs /dev
-        grep '"config"' /proc/mtd          # mtd3: ... "config"
-        onu-config --store /dev/mtd3 unset AUTH_HASH
+        onu-config load                    # /config, the partition "config"
+        onu-config unset AUTH_HASH
+        umount /config
         reboot -f
 
     The next boot has the default password, ``admin``, again; nothing else in

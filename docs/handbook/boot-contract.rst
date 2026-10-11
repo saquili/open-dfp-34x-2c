@@ -62,10 +62,13 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
    * - ``config``
      - ``0x044000``
      - 240 KiB (``0x03c000``)
-     - The configuration store: what the board keeps across updates of its
-       system. Until this system writes its own store there, it holds the
-       shipped firmware's, a big-endian JFFS2 image that includes the
-       device's registration identity, which this system does not mount.
+     - The shipped firmware's JFFS2 file system (big-endian, 4 KiB erase
+       blocks, zlib), with that firmware's files, the device's registration
+       identity among them. This system mounts it on ``/config`` and keeps
+       what the board keeps across updates, its settings, in a file of its
+       own there, at most 64 KiB, and never writes the shipped firmware's
+       files (ADR 0014, step 9). A store of before step 9, two slots that
+       took the whole partition, goes into that file at the first boot.
      - Linux: ``onu-config``.
    * - ``k0``
      - ``0x080000``
