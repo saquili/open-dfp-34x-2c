@@ -403,8 +403,12 @@ there, and names it by its whole path where procd starts it.
    ``input``, on its standard input. The answer comes when the program ends,
    its exit status and what it wrote, ``{"code", "output"}``, or as soon as it
    starts for one run in the background (the restart, a new registration);
-   a program that runs past its time is killed. ubusd's access lists say
-   who may call which method. procd keeps it (``rcS``); it ends without
+   a program that runs past its time is killed. A new password, an update
+   written and a start of the other bank, what would give a caller root,
+   run only when the call carries root's password in force, ``password``,
+   which ``onu-config password-check`` judges; otherwise the call is refused
+   with ``UBUS_STATUS_PERMISSION_DENIED``. The status daemon, taken over,
+   cannot do them alone. ubusd's access lists say who may call which method. procd keeps it (``rcS``); it ends without
    ubusd, and procd starts it again. The status daemon of a build without
    libubus, which its tests make, runs the same table itself.
 

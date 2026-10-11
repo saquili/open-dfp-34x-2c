@@ -26,6 +26,9 @@
 /* The most text a method takes on its standard input. */
 #define ACT_INPUT_MAX 8192
 
+/* The longest password a call carries (onu-config password: 128). */
+#define ACT_PASSWORD_MAX 128
+
 /**
  * struct act_param - A value a caller gives, in its place after the fixed
  *	arguments.
@@ -51,6 +54,10 @@ struct act_param {
  * @fd_in: whether the descriptor the caller passes is its standard input
  * @fd_out: whether the descriptor the caller passes is its standard output
  * @background: whether it is answered once started, and not waited for
+ * @needs_password: whether it runs only when the call carries root's password in
+ *	force, as "password", which onu-config password-check judges: what
+ *	would give a caller root (a new password, a new system), so that the
+ *	status daemon alone, taken over, cannot
  * @timeout_s: how long it may run before it is killed
  */
 struct act_method {
@@ -62,6 +69,7 @@ struct act_method {
 	bool fd_in;
 	bool fd_out;
 	bool background;
+	bool needs_password;
 	unsigned int timeout_s;
 };
 

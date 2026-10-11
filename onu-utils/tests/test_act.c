@@ -96,6 +96,14 @@ static void test_values_in_their_places(void)
 	CHECK(!act_find("settings_try")->background && act_find("settings_try")->timeout_s >= 60);
 	CHECK(!strcmp(run("update_write", NULL, &bad), "/usr/sbin/onu-update write -"));
 	CHECK(act_find("update_write")->fd_in && act_find("update_read")->fd_out);
+	/* What would give a caller root needs root's password, and no more. */
+	for (size_t i = 0; i < act_method_count; i++) {
+		const char *n = act_methods[i].name;
+
+		CHECK(act_methods[i].needs_password == (!strcmp(n, "password_set") ||
+						  !strcmp(n, "update_write") ||
+						  !strcmp(n, "update_try")));
+	}
 }
 
 static void test_what_is_refused(void)

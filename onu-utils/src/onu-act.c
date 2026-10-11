@@ -10,7 +10,10 @@
  * they pass the table's rules, and the caller's text, "input", on its
  * standard input; the descriptor the caller passes, for a method that takes
  * one, is its standard input or its standard output, so that a file streams
- * through it without onu-act holding it. The answer comes when the program
+ * through it without onu-act holding it. A method that needs root's
+ * password runs only when the call's "password" is the one in force, as
+ * onu-config password-check says; otherwise the call is refused with
+ * UBUS_STATUS_PERMISSION_DENIED. The answer comes when the program
  * ends: {"code": its
  * exit status, or 128 and the signal, "output": what it wrote, at most
  * OUTPUT_MAX bytes}. A method run in the background is answered as soon as
@@ -54,8 +57,8 @@ struct run {
 static struct ubus_context *g_ctx;
 static struct blob_buf g_buf;
 
-/* Each method's policy: its values, then "input" when it takes text. */
-static struct blobmsg_policy g_policy[64][ACT_PARAMS_MAX + 1];
+/* Each method's policy: its values, "input" when it takes text, "password". */
+static struct blobmsg_policy g_policy[64][ACT_PARAMS_MAX + 2];
 static struct ubus_method g_methods[64];
 
 static size_t params_of(const struct act_method *m)
@@ -178,12 +181,38 @@ static pid_t spawn(const char *const *argv, const char *input, int in_fd,
 	return pid;
 }
 
+/*
+ * Whether @secret is root's password in force: onu-config password-check
+ * exits 0 for it, 3 for the default one while none is set, 4 for one kept
+ * in the older form. It takes some 0.5 s, which the other callers wait.
+ */
+static bool password_ok(const char *secret)
+{
+	static const char *const argv[] = { "/usr/sbin/onu-config", "password-check", NULL };
+	char line[ACT_PASSWORD_MAX + 2];
+	int status;
+	pid_t pid;
+
+	if (!secret || strlen(secret) > ACT_PASSWORD_MAX || strchr(secret, '\n'))
+		return false;
+	snprintf(line, sizeof(line), "%s\n", secret);
+	pid = spawn(argv, line, -1, -1, -1);
+	explicit_bzero(line, sizeof(line));
+	while (pid > 0 && waitpid(pid, &status, 0) < 0)
+		if (errno != EINTR)
+			return false;
+	if (pid <= 0 || !WIFEXITED(status))
+		return false;
+	status = WEXITSTATUS(status);
+	return status == 0 || status == 3 || status == 4;
+}
+
 static int call(struct ubus_context *ctx, struct ubus_object *obj,
 		struct ubus_request_data *req, const char *method,
 		struct blob_attr *msg)
 {
 	const struct act_method *m = act_find(method);
-	struct blob_attr *tb[ACT_PARAMS_MAX + 1];
+	struct blob_attr *tb[ACT_PARAMS_MAX + 2];
 	const char *values[ACT_PARAMS_MAX] = { NULL };
 	const char *argv[ACT_ARGV_MAX + 1], *bad = NULL, *input = NULL;
 	size_t np, i;
@@ -197,7 +226,7 @@ static int call(struct ubus_context *ctx, struct ubus_object *obj,
 		return m ? UBUS_STATUS_INVALID_ARGUMENT : UBUS_STATUS_METHOD_NOT_FOUND;
 	}
 	np = params_of(m);
-	blobmsg_parse(g_policy[m - act_methods], np + m->input, tb,
+	blobmsg_parse(g_policy[m - act_methods], np + m->input + m->needs_password, tb,
 		      blob_data(msg), blob_len(msg));
 	for (i = 0; i < np; i++)
 		values[i] = tb[i] ? blobmsg_get_string(tb[i]) : NULL;
@@ -210,6 +239,13 @@ static int call(struct ubus_context *ctx, struct ubus_object *obj,
 		if (fd >= 0)
 			close(fd);
 		return UBUS_STATUS_INVALID_ARGUMENT;
+	}
+	if (m->needs_password &&
+	    !password_ok(tb[np + m->input] ? blobmsg_get_string(tb[np + m->input]) : NULL)) {
+		fprintf(stderr, "onu-act: %s: not root's password\n", method);
+		if (fd >= 0)
+			close(fd);
+		return UBUS_STATUS_PERMISSION_DENIED;
 	}
 
 	if (m->background) {
@@ -291,9 +327,14 @@ int main(void)
 			g_policy[i][np] = (struct blobmsg_policy){
 				.name = "input", .type = BLOBMSG_TYPE_STRING
 			};
+		if (m->needs_password)
+			g_policy[i][np + m->input] = (struct blobmsg_policy){
+				.name = "password", .type = BLOBMSG_TYPE_STRING
+			};
 		g_methods[i] = (struct ubus_method){
 			.name = m->name, .handler = call,
-			.policy = g_policy[i], .n_policy = (int)(np + m->input),
+			.policy = g_policy[i],
+			.n_policy = (int)(np + m->input + m->needs_password),
 		};
 	}
 	g_object.n_methods = (int)act_method_count;

@@ -23,6 +23,8 @@
  * checks and replaces without holding its hash, and an update file, which
  * streams from it into the bank that does not run (onu-update write -) or
  * from the running bank to it (onu-update read) through a pipe it passes.
+ * A new password, an update written and a start of the other bank need
+ * root's password in force with the call.
  */
 const struct act_method act_methods[] = {
 	{ .name = "lane_status", .program = LIB "onu-lane", .fixed = { "status" } },
@@ -50,7 +52,7 @@ const struct act_method act_methods[] = {
 	  .background = true },
 	{ .name = "update_status", .program = "/usr/sbin/onu-update", .fixed = { "status" } },
 	{ .name = "update_try", .program = "/usr/sbin/onu-update", .fixed = { "try" },
-	  .params = { { "bank", "01", 1, true } } },
+	  .params = { { "bank", "01", 1, true } }, .needs_password = true },
 	{ .name = "restart", .program = "/sbin/reboot", .background = true },
 	{ .name = "settings_current", .program = "/usr/sbin/onu-config", .fixed = { "current" } },
 	{ .name = "settings_change", .program = "/usr/sbin/onu-config", .fixed = { "change" },
@@ -62,9 +64,9 @@ const struct act_method act_methods[] = {
 	{ .name = "password_state", .program = "/usr/sbin/onu-config",
 	  .fixed = { "password-state" } },
 	{ .name = "password_set", .program = "/usr/sbin/onu-config", .fixed = { "password" },
-	  .input = true },
+	  .input = true, .needs_password = true },
 	{ .name = "update_write", .program = "/usr/sbin/onu-update", .fixed = { "write", "-" },
-	  .fd_in = true, .timeout_s = 600 },
+	  .fd_in = true, .needs_password = true, .timeout_s = 600 },
 	{ .name = "update_read", .program = "/usr/sbin/onu-update", .fixed = { "read" },
 	  .fd_out = true, .timeout_s = 600 },
 };
