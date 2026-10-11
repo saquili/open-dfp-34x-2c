@@ -593,7 +593,7 @@ printf '%s\n' ID_SERIAL=YYYYYYYYYYYY MODE=passthrough WAN_VLAN=410 PPPOE1_USER=u
 boot_load
 check '[ $rc -eq 0 ]'
 check 'cmp -s "$ONU_ROOT/dev/mtd4" "$T/erased"'
-check 'grep -q -x "\-t jffs2 -o nosuid,nodev,noexec mtd:config $ONU_ROOT/config" "$T/mount.args"'
+check 'grep -q -x "\-t jffs2 -o ro,nosuid,nodev,noexec mtd:config $ONU_ROOT/config" "$T/mount.args"'
 check 'onu-config --store "$BOOT_STORE" list | grep -q -x MODE=passthrough'
 check 'onu-config --store "$BOOT_STORE" list | grep -q -x ID_SERIAL=YYYYYYYYYYYY'
 check '[ "$(ls -l "$BOOT_STORE" | cut -c1-10)" = -rw------- ]'
@@ -737,6 +737,18 @@ ONU_STORE= "$STORE_SCRIPT" ssh 2>"$T/err"
 rc=$?
 check '[ $rc -eq 0 ] && [ -s "$ONU_ROOT/run/dropbear/host_key" ]'
 check 'grep -q "not kept: no store" "$T/err"'
+teardown
+
+echo "changes at once each keep their key: one at a time, under the store's lock"
+setup
+i=1
+while [ $i -le 24 ]; do
+	echo "SYS_TEST$i=$i" | onu-config --store "$ONU_STORE" import &
+	i=$((i + 1))
+done
+wait
+check '[ "$(onu-config --store "$ONU_STORE" list | grep -c "^SYS_TEST")" -eq 24 ]'
+check '[ ! -e "$ONU_STORE.new" ]'
 teardown
 
 echo "test_onu_config: $checks checks, $failures failed"

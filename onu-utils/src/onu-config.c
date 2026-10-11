@@ -52,6 +52,10 @@
  * new file beside it, which it then renames over it, so that a power loss in
  * the middle keeps the old one; a change that leaves the store as it was
  * writes nothing. A store that is not a file of such lines is refused.
+ * Changes are made one at a time, under a lock of the store's directory.
+ * The partition is mounted read-only: a change finds the directory on a
+ * file system mounted read-only, mounts it read-write for the write alone,
+ * and read-only again after it.
  *
  * Before step 9 the store was the whole partition, two slots of its own
  * format, where the shipped firmware's file system had been. slots and
@@ -109,8 +113,11 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/file.h>
 #include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 
 #include <mtd/mtd-user.h>
 
@@ -191,6 +198,19 @@ static int read_store(const char *path, char *payload, size_t cap)
 	return 0;
 }
 
+/* The directory of the store @path, in @dir of @cap bytes. */
+static void store_dir(const char *path, char *dir, size_t cap)
+{
+	char *slash;
+
+	snprintf(dir, cap, "%s", path);
+	slash = strrchr(dir, '/');
+	if (slash)
+		*(slash == dir ? slash + 1 : slash) = '\0';
+	else
+		snprintf(dir, cap, ".");
+}
+
 /*
  * Write @payload as the store @path: to the file @path.new, read and write
  * for root alone, then renamed over @path, and the directory synced, so that
@@ -200,7 +220,6 @@ static int write_store(const char *path, const char *payload)
 {
 	char tmp[PATH_MAX], dir[PATH_MAX];
 	size_t len = strlen(payload), off = 0;
-	char *slash;
 	int fd, d, err = 0;
 
 	if ((size_t)snprintf(tmp, sizeof(tmp), "%s.new", path) >= sizeof(tmp))
@@ -227,18 +246,43 @@ static int write_store(const char *path, const char *payload)
 		unlink(tmp);
 		return err;
 	}
-	snprintf(dir, sizeof(dir), "%s", path);
-	slash = strrchr(dir, '/');
-	if (slash)
-		*(slash == dir ? slash + 1 : slash) = '\0';
-	else
-		strcpy(dir, ".");
+	store_dir(path, dir, sizeof(dir));
 	d = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
 	if (d >= 0) {
 		fsync(d);
 		close(d);
 	}
 	return 0;
+}
+
+/* The flags /config is mounted with besides read-only (onu-config.sh). */
+#define STORE_MOUNT_FLAGS (MS_NOSUID | MS_NODEV | MS_NOEXEC)
+
+/*
+ * Write @payload as the store @path, as write_store() does. When the store's
+ * directory is on a file system mounted read-only, the directory being its
+ * mount point, mount it read-write for the write, and read-only again after
+ * it; a file system that stays read-write is only reported. 0 or -errno.
+ */
+static int change_store(const char *path, const char *payload)
+{
+	char dir[PATH_MAX];
+	struct statvfs vfs;
+	bool remounted = false;
+	int err;
+
+	store_dir(path, dir, sizeof(dir));
+	if (statvfs(dir, &vfs) == 0 && (vfs.f_flag & ST_RDONLY)) {
+		if (mount(NULL, dir, NULL, MS_REMOUNT | STORE_MOUNT_FLAGS, NULL) != 0)
+			return -errno;
+		remounted = true;
+	}
+	err = write_store(path, payload);
+	if (remounted &&
+	    mount(NULL, dir, NULL, MS_REMOUNT | MS_RDONLY | STORE_MOUNT_FLAGS, NULL) != 0)
+		fprintf(stderr, "onu-config: %s stays read-write: %s\n", dir,
+			strerror(errno));
+	return err;
 }
 
 /*
@@ -870,10 +914,24 @@ int main(int argc, char **argv)
 	char *payload = calloc(1, cap);
 	/* What the store holds now, to tell whether a change changes anything. */
 	char *before = NULL;
-	int err;
+	char dir[PATH_MAX];
+	int err, lock = -1;
 
 	if (!payload)
 		return fail("out of memory");
+	/*
+	 * A change reads, changes and writes the store under a lock of its
+	 * directory, so that two changes at once do not lose one of them.
+	 */
+	if (writing) {
+		store_dir(store, dir, sizeof(dir));
+		lock = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		if (lock < 0 || flock(lock, LOCK_EX) != 0) {
+			fprintf(stderr, "onu-config: %s: no lock: %s\n", dir,
+				strerror(errno));
+			goto out_fail;
+		}
+	}
 	err = read_store(store, payload, cap);
 	if (err) {
 		fprintf(stderr, "onu-config: %s: %s\n", store,
@@ -917,18 +975,22 @@ int main(int argc, char **argv)
 	}
 
 	if (writing && strcmp(before, payload)) {
-		err = write_store(store, payload);
+		err = change_store(store, payload);
 		if (err) {
 			fprintf(stderr, "onu-config: %s: %s\n", store, strerror(-err));
 			goto out_fail;
 		}
 	}
 
+	if (lock >= 0)
+		close(lock);
 	free(before);
 	free(payload);
 	return rc;
 
 out_fail:
+	if (lock >= 0)
+		close(lock);
 	free(before);
 	free(payload);
 	return 1;

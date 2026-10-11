@@ -86,7 +86,9 @@ them finds it there, and names it by its whole path where procd starts it.
    ``PPPOE_SECRET``) in the store. ``onu-config load`` puts them in the files
    the running system reads, at boot; ``onu-config save`` writes the settings
    and the account in force back, which ``onu-apply reload`` does. A load first
-   makes ``/config`` the partition's JFFS2 file system; a partition that still
+   makes ``/config`` the partition's JFFS2 file system, mounted read-only:
+   each change of the store mounts it read-write for the write alone, one
+   change at a time, under a lock of the directory; a partition that still
    holds the store of before is read, erased and mounted empty, and that
    store goes into the file, since JFFS2 erases the blocks it does not know.
    The identity is the one ``ponid`` reads from the shipped firmware's files,

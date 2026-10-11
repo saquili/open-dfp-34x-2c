@@ -124,7 +124,8 @@ store() {
 	echo "$ROOT$STORE_FILE"
 }
 
-# The partition "config" mounted on /config. One that still holds the store
+# The partition "config" mounted on /config, read-only: onu-config mounts it
+# read-write for each change of the store alone. One that still holds the store
 # of before step 9, the two slots that took the whole partition, has it taken
 # into the file first: its lines are kept in memory, the partition is erased
 # and mounted empty, and the lines go to the file, since JFFS2 would erase the
@@ -140,7 +141,7 @@ mount_config() {
 	0)
 		log "the store of before goes into $STORE_FILE"
 		onu-config erase-slots "$ROOT/dev/$dev" &&
-			mount -t jffs2 -o nosuid,nodev,noexec mtd:config "$ROOT/config" &&
+			mount -t jffs2 -o ro,nosuid,nodev,noexec mtd:config "$ROOT/config" &&
 			onu-config --store "$ROOT$STORE_FILE" import <"$before" || {
 			log "the store of before is in $before only"
 			return 1
@@ -149,7 +150,7 @@ mount_config() {
 		;;
 	3)
 		rm -f "$before"
-		mount -t jffs2 -o nosuid,nodev,noexec mtd:config "$ROOT/config"
+		mount -t jffs2 -o ro,nosuid,nodev,noexec mtd:config "$ROOT/config"
 		;;
 	*)
 		rm -f "$before"
