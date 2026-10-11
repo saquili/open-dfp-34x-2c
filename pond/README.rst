@@ -15,6 +15,7 @@ app in ``web/``, as static files.
 ::
 
    pond [-l http[s]://ADDRESS:PORT]... [-k KEYFILE] [-t TOKENFILE] [-w WEBDIR]
+        [-u USER]
    pond -k KEYFILE -F ADDRESS
 
 Each ``-l`` adds an address to listen on, up to four; with none, the daemon
@@ -24,7 +25,10 @@ reported and left out, and the daemon ends only when it listens on none. An
 fingerprint of the certificate of an address, and the end of its validity,
 and ends. On the stick ``onu-run`` starts it on the management address, and
 on the address of the host link if there is one, each over HTTPS on port 443
-and over HTTP on port 80.
+and over HTTP on port 80. ``-u`` makes a daemon started as root run as the
+account ``USER``, with its groups, keeping of root's powers only the one to
+listen on a port below 1024, for its listeners and those of a management pair
+that comes later.
 
 What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0014) rather than run the program itself: the SFP lane, the management pair,
@@ -37,7 +41,7 @@ through a pipe whose other end pond passes to onu-act. pond runs no program
 of the stick itself.
 
 On the stick pond runs as an account of its own, ``pond``, without a password
-or a shell, which no one logs in with; root stays the one account to log in
+or a shell, which no one logs in with, started as root with ``-u pond``; root stays the one account to log in
 with (ADR 0012, ADR 0014). ubusd's access list, ``acl.json``, which the image
 installs as ``/usr/share/acl.d/pond.json``, lets it call the methods of
 onu-act it names and read the state of omcid, of netifd's interfaces and of
