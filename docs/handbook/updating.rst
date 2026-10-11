@@ -79,8 +79,11 @@ writes only a bank that is named, and ``onu-trial`` does nothing.
      - Present when the last trial of that bank did not come up: the loader
        took the trial and another bank runs.
    * - ``BANK<N>_STATE``
-     - ``valid``, ``incomplete`` (a write that did not finish) or ``empty`` (no
-       kernel image or no root filesystem image where they belong).
+     - ``valid``, ``incomplete`` (a write that did not finish), ``shipped``
+       (the shipped firmware: a kernel image, and a root filesystem where the
+       shipped split puts it, ``fl_kernel<N+1>_sz`` of the loader's
+       environment or 1328 KiB into the bank) or ``empty`` (no kernel image
+       or no root filesystem image where they belong).
    * - ``BANK<N>_VERSION``
      - The running bank's ``BUILD_ID``; for the other bank the version that
        ``onu-update`` recorded when it wrote it.
@@ -253,9 +256,11 @@ The first update
 
 Until the first update, the bank this system does not run holds the shipped
 firmware, in the shipped split: bank 1 after the bench, either bank after the
-web page. ``onu-update`` reports that bank as ``empty``, and the panel offers it
-for an upload like any other bank, without a warning. The first update writes
-this system there, and the shipped firmware is gone; the way back with it.
+web page. ``onu-update`` reports that bank as ``shipped``, with the version the
+shipped firmware recorded, and the panel names it so, warns under the upload
+and asks before it writes over it. ``onu-update write`` on the command line
+does not ask. The first update writes this system there, and the shipped
+firmware is gone; the way back with it.
 
 Keep a copy of the whole flash before the first update. The copy holds the
 unit's registration identity and this system's secrets: keep it private. This

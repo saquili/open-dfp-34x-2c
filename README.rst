@@ -148,9 +148,9 @@ Before you install
 
   Either way the shipped firmware stays in the other bank, as the way back.
 * **The first update from the running system overwrites the shipped
-  firmware.** The bank that holds it shows as ``empty`` in the panel and in
-  ``onu-update status``, and the panel takes the upload without a warning.
-  Keep a copy of the whole flash before it. The copy holds the unit's
+  firmware.** The panel names the bank that holds it and asks before it
+  writes over it; ``onu-update write`` does not ask. Keep a copy of the
+  whole flash before it. The copy holds the unit's
   registration identity: keep it private (``docs/handbook/updating.rst``, "The
   first update").
 * This system keeps its settings in a file of its own in the partition
