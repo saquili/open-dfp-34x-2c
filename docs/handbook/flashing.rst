@@ -9,8 +9,10 @@ This page takes you from a stick on the desk to a kernel of your own running on
 it: first started from RAM, then written to bank 0 and started once as a trial,
 with whatever bank 1 holds as the way back: the shipped firmware on a stick as
 shipped. Once this system runs, it updates itself into the other bank
-(``updating.rst``); this page remains for the first installation and for a
-recovery. Everything goes through the
+(``updating.rst``). A stick as shipped can also take this system through its
+shipped firmware's web page, without a console (``updating.rst``, "From the
+shipped firmware's web page"); this page is the way in with the console, for a
+stick on a bench, and the way to a recovery. Everything goes through the
 bench tool in ``tools/bench``, started from the top-level ``Makefile``. The
 tool's README, ``tools/bench/README.rst``, is the reference for its commands,
 options, settings and refusals. This page does not repeat them; it says where
@@ -404,7 +406,12 @@ Typing them
 Start a trial kernel from RAM
 =============================
 
-A RAM boot writes nothing to the flash. A kernel that fails costs one reset.
+A RAM boot writes no bank. A kernel that fails costs one reset. Once a root
+filesystem of this system runs, from the RAM image or from the flash, its
+boot script mounts the partition ``config`` and, at its first start, writes
+this system's own file there, with the panel's key, and takes a store of
+before step 9 into it (``boot-contract.rst``); it never writes the shipped
+firmware's files there.
 
 1. Build the kernel from the top of the repository::
 
@@ -804,9 +811,16 @@ Rules that keep the board safe
   erased or written directly. These variables decide which bank boots, and the
   layout variables decide where the loader's macros write. By hand, change
   only what "Prepare the loader" lists.
-* **The configuration is never written.** The partition ``config`` holds the
-  device's configuration, including its registration identity, and nothing in
-  this repository can recreate it.
+* **The bench never writes the configuration.** The partition ``config`` holds
+  the device's configuration, including its registration identity, and
+  nothing in this repository can recreate it. The system the bench starts
+  writes there its own file only (``boot-contract.rst``).
+* **Bank 0 is the bench's whatever it holds.** On a stick that took this
+  system through the shipped firmware's web page while that firmware ran from
+  bank 0, this system is in bank 1 and the shipped firmware in bank 0, and a
+  write by the bench would overwrite it. Before the first write on such a
+  stick, see which bank this system runs from with ``onu-update status``,
+  which shows the shipped firmware's bank as ``empty``.
 * **The flash windows are never written.** A store into the memory-mapped
   window is refused in every spelling. The window is for reading.
 * **A write is never interrupted.** Nothing is typed, reset or power-cycled
@@ -837,9 +851,10 @@ Open items
 None of the following has been run end to end on the board yet. The README of
 the tool lists the full set in "What is checked only on the board".
 
-* The kernel of this tree has been started from RAM on the board. Starting it
-  from the flash, from bank 0 with its root filesystem in ``r0``, has not been
-  tested yet; the first trial boot of a flashed kernel is that test.
+* This system has been started from RAM on the board, and from the flash after
+  it wrote itself into both banks with its own update path (the run
+  ``docs/testing/2026-10-07-run23.rst``). A trial boot of a bank that
+  the bench wrote has not been recorded yet.
 * Flashing by TFTP into ``k0`` and ``r0``: that the lane survives the erase and
   the write, and the durations of ``sf erase``, ``sf write``, ``saveenv`` and
   ``crc32``. The tool's own TFTP server, bound to one address and serving one

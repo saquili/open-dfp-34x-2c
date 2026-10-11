@@ -12,8 +12,10 @@ it comes up; when it does not, the stick restarts into the bank it ran before.
 An update needs neither the boot loader's prompt nor a console, and a power loss
 at any point leaves a stick that starts.
 
-The bench's flashing through the boot loader (``flashing.rst``) remains for the
-first installation and for a recovery.
+A stick as shipped takes this system the first time through its shipped
+firmware's web page (below), or through the bench, which writes the flash
+from the boot loader's prompt (``flashing.rst``) and is also the way to a
+recovery.
 
 The parts
 =========
@@ -43,7 +45,9 @@ The parts
    * - The panel
      - The System page lists system A (bank 0) and system B (bank 1), uploads an
        update file, offers to start the new system, downloads the running one,
-       and starts the other one. pond streams the upload into ``onu-update``.
+       and starts the other one unless it shows as empty. pond hands the upload
+       on a pipe to onu-act, which runs ``onu-update`` on it
+       (``pond/README.rst``).
 
 Which bank runs
 ===============
@@ -121,7 +125,7 @@ every reset that is not a commit leads to the committed bank.
 
 ``onu-trial`` waits for omcid to run, for the status daemon to answer on the
 host link, and for the PON to reach O5, operation, unless the receiver has no
-light: without a fiber the PON says nothing about the new system. When all hold
+light: without a fibre the PON says nothing about the new system. When all hold
 it runs ``onu-update commit``, which sets ``sw_commit`` to the running bank and
 removes the trial's mark. When they do not hold within 300 seconds it restarts
 the stick. What it found is in ``/run/onu-trial`` and its log in
@@ -211,10 +215,10 @@ From the shipped firmware's web page
 A stick as it ships runs the shipped firmware, and its web page takes an
 update as a tar file that the shipped firmware installs into the bank it does
 not run: ``web-install.tar``. The page takes a file smaller than its bank,
-3932160 bytes, that holds ``md5.txt``; the shipped firmware's configd copies
-it, ``/etc/scripts/fwu_starter.sh`` checks the digest of the file's
-``fwu.sh`` against ``md5.txt`` and runs it as root with the bank to write, and
-the stick restarts. Nothing is signed or checked against the model.
+3932160 bytes, that holds ``md5.txt``. The shipped firmware checks the digest
+of the package's ``fwu.sh`` against ``md5.txt``, runs it as root with the
+bank to write, and restarts the stick. Nothing is signed or checked against
+the model.
 
 The package's ``fwu.sh`` (``br2-external/board/dfp-34x-2c3/fwu.sh``) writes
 this system into that bank in the shipped firmware's split of it: ``k``, the
@@ -225,10 +229,16 @@ refuses a stick whose partitions are not this stick's, reads both partitions
 back against the digests that ``mkweb.py`` wrote into it, and then sets
 ``sw_version``, ``sw_valid``, ``onu_trial`` and ``sw_tryactive`` for the
 bank, as ``onu-update`` does. It exits 1 on purpose, and the page says the
-update failed: configd then leaves ``sw_commit`` on the shipped firmware's
+update failed: the shipped firmware then leaves ``sw_commit`` on its own
 bank, and the boot loader starts this system once. ``onu-trial`` commits it
-when it is up; a system that does not come up is restarted by the watchdog
-into the shipped firmware.
+when it is up; a system that does not come up within its 300 seconds is
+restarted into the shipped firmware, and one that hangs before ``onu-trial``
+starts needs a power cycle (``boot-contract.rst``, "A trial boot").
+
+This way in has tests on the host, which run ``fwu.sh`` against stand-ins of
+the stick's partitions and tools (``br2-external/tests/image/test_mkweb.py``).
+An installation through the web page of a real stick has not been recorded
+yet.
 
 The new system finds the shipped firmware's files in the partition
 ``config``, mounts them, takes the identity from them and starts with its
@@ -241,10 +251,17 @@ loader's prompt (``run b<bank>``) or, for good, ``onu-update`` with
 The first update
 ================
 
-A stick that came with the shipped firmware holds it in bank 1, in the shipped
-split, which ``onu-update`` reports as ``empty``. The first update from bank 0
-writes this system into bank 1 and the shipped firmware is gone: keep a copy of
-the whole flash first (``flashing.rst`` shows how to read the partitions).
+Until the first update, the bank this system does not run holds the shipped
+firmware, in the shipped split: bank 1 after the bench, either bank after the
+web page. ``onu-update`` reports that bank as ``empty``, and the panel offers it
+for an upload like any other bank, without a warning. The first update writes
+this system there, and the shipped firmware is gone; the way back with it.
+
+Keep a copy of the whole flash before the first update. The copy holds the
+unit's registration identity and this system's secrets: keep it private. This
+handbook has no page yet on taking a copy and writing it back;
+``flashing.rst`` shows how to read the partitions and hash them, which proves
+that a copy is whole.
 
 Measured on the board
 =====================
