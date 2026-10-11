@@ -1,308 +1,389 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 .. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-===============
-open-dfp-34x-2c
-===============
+.. raw:: html
 
-A from-source Linux distribution for one product: the ODI DFP-34X-2C2 and
-DFP-34X-2C3 GPON SFP ONU sticks, built on the Realtek RTL9601D system-on-chip
-(the kernel and the code call the chip's family RTL9602C). The stick plugs into
-the SFP cage of a router or a switch and takes the place of an operator's ONT
-on a GPON line. Other products built on the same chip are not supported.
+   <h1 align="center">open-dfp-34x-2c</h1>
+   <p align="center">
+     Open firmware for the ODI DFP-34X-2C GPON stick, built from source.
+   </p>
+   <p align="center">
+     <img alt="Status: test builds"
+          src="https://img.shields.io/badge/status-test%20builds-orange">
+     <img alt="Licence: GPL-2.0-only"
+          src="https://img.shields.io/badge/licence-GPL--2.0--only-blue">
+   </p>
+   <p align="center">
+     <a href="#what-it-does">What it does</a> ·
+     <a href="#status">Status</a> ·
+     <a href="#before-you-install">Before you install</a> ·
+     <a href="#where-to-start">Where to start</a> ·
+     <a href="#building">Building</a> ·
+     <a href="#contributing">Contributing</a>
+   </p>
 
-**Test builds, for development only.** The system runs, but it is a base to
-develop on, not firmware for everyday use. Read `Status`_ and
-`Before you install`_ before you put it on a stick.
+The ODI DFP-34X-2C is a GPON ONU in an SFP module. It plugs into the SFP cage
+of a router or a switch and takes the place of the operator's ONT on a fibre
+line. This project gives it an open system, built from source, in place of
+the firmware it ships with: a Linux kernel with drivers for the stick's
+Realtek RTL9601D chip, an OMCI daemon that talks to the OLT, and a small set
+of programs that set the stick up, update it and show its state.
 
-.. contents:: On this page
-   :local:
-   :depth: 1
+::
 
-Scope
-=====
+     your router                     the stick                     the operator
+    ┌────────────┐               ┌────────────────┐               ┌────────────┐
+    │            │   host lane   │   DFP-34X-2C   │     fibre     │            │
+    │  SFP cage  ├───────────────┤    running     ├───────────────┤    OLT     │
+    │            │ 2.5 or 1 Gb/s │  this system   │      GPON     │            │
+    └────────────┘               └────────────────┘               └────────────┘
 
-This repository holds what a device maker ships to build the product from
-source:
+..
 
-* the cross toolchain (through the distribution build system);
-* the Linux kernel, with the board and SoC support this device needs;
-* the userspace: the OMCI daemon, the stick's own programs, and the panel;
-* the image and flash tooling; and
-* the hardware documentation.
+    ⚠️ **Test builds, for development only.** The system works on a lab OLT,
+    but it needs more testing before everyday use. Read `Status`_ and
+    `Before you install`_ before you put it on a stick.
 
-The **structure** follows mainline Linux conventions -- each part is laid out
-the way its own upstream community lays it out, so it stays recognisable and
-liftable. The **scope** is the whole product, not one kernel tree. See
-``docs/adr/`` for the reasoning and ``docs/policy/provenance.rst`` for what may
-and may not enter.
+What it does
+============
+
+* **Connects to a GPON line.** It brings the link up (ITU-T G.984), answers
+  the OLT over OMCI (ITU-T G.988), and carries the traffic the OLT sets up,
+  with its GEM ports, VLAN rules and multicast, in the switch's hardware.
+* **Can hold PPPoE itself.** With PPPoE accounts in its settings it holds up
+  to seven sessions and hands each session's IPv4 address and IPv6 prefix
+  down to the router behind it. The rest of what the OLT sets up, such as
+  television and telephone, stays bridged.
+* **2.5 or 1 Gb/s to the router**, found by itself: 2500BASE-X, or 1000BASE-X
+  with or without auto-negotiation.
+* **Is managed from the router's side**: ssh, and a web panel with an API
+  over HTTPS, on the stick's addresses on that side only.
+* **Updates safely.** An update goes into the other flash bank and starts on
+  trial; the stick keeps it once it has come up, and goes back to the old
+  one otherwise. A change of the settings is tried the same way and undone
+  after 90 seconds unless the panel confirms it.
+
+How the parts fit together is in `docs/handbook/system.rst
+<docs/handbook/system.rst>`__.
 
 Status
 ======
 
-The system runs on the bench's DFP-34X-2C3 against a laboratory OLT. It has
-also run on one operator's line, where no test is recorded.
+**It works on a lab OLT, and it needs more testing.** The system runs on a
+DFP-34X-2C3 against a laboratory OLT, where 23 runs of the device tests are
+recorded (`docs/testing/ <docs/testing/README.rst>`__).
 
-What it does
-------------
-
-* It brings the GPON link up to operation (ITU-T G.984.3, O5), answers the
-  OLT's OMCI (ITU-T G.988), and carries what the OLT provisions as a bridge
-  in the switch's hardware: VLAN rules, the GEM ports, multicast snooping.
-* With PPPoE accounts in its settings, it holds up to seven PPPoE sessions
-  itself and hands a session's IPv4 address, and its delegated IPv6 prefix,
-  down to the router behind it, while the OLT's other services stay bridged.
-* It finds the host's lane: 2500BASE-X, or 1000BASE-X with or without in-band
-  negotiation.
-* It is managed over ssh and over a panel and API on HTTPS, on addresses of
-  the host side only, one of them on a VLAN that the switch keeps off the PON
-  both ways; the OLT manages the data path over OMCI.
-* It updates itself into its other flash bank and keeps the new system only
-  once it has come up; it starts again from the old one otherwise. A change of
-  the settings is applied on trial and undone unless the panel confirms it.
-* procd starts every program again when it ends; netifd holds the interfaces
-  of the host side and the sessions; one table holds the settings and their
-  rules (``docs/handbook/system.rst``).
-
-How each part is known
-----------------------
-
-**Recorded** means a run of the device tests that ``docs/testing/`` keeps;
-**bench** means tried on the bench's stick as a decision record says, with no
-recorded run; **host** means tested on a build host only.
+| 🟢 **Tested**: passed the recorded device tests on the lab OLT.
+| 🟡 **Bench**: works on the developer's stick; no recorded test run yet.
+| ⚪ **Not on a stick yet**: tested on a build machine only, or not tried.
 
 .. list-table::
    :header-rows: 1
-   :widths: 46 18 36
+   :widths: 42 20 38
 
-   * - What
-     - Known by
-     - Where
-   * - The GPON link to O5, the OMCI channel, the MIB upload, the OLT's
-       bridge with its VLAN rules, ACL, mirroring, shaping, storm control and
-       multicast snooping
-     - Recorded
-     - 23 runs, the latest on 2026-10-07
-   * - The host lane's search of 2500BASE-X and 1000BASE-X
-     - Recorded
-     - ``net.host-link-search``, 2026-10-07
-   * - A start from the flash, after the system wrote itself into both banks
-       with its own update path and kept the tried bank
-     - Recorded
-     - The run of 2026-10-07
-   * - Two PPPoE sessions at once, their throughput (some 900 Mb/s each way),
-       an IPv6 prefix handed to the host, each program killed during a session
-     - Bench
-     - ADR 0014
-   * - procd's supervision; omcid going on from its MIB after a start again
-     - Bench
-     - ADR 0013, ADR 0014
-   * - The panel over HTTPS, and the one account, root
-     - Bench and host
-     - ADR 0016, ADR 0012
-   * - The settings kept in the shipped firmware's partition ``config``,
-       beside its files; eight packages of the shipped firmware started from
-       the other bank, finding their files and leaving this system's alone
-     - Bench
-     - ADR 0014, step 9
-   * - The way in through the shipped firmware's web page
-     - Host
-     - ``docs/handbook/updating.rst``
+   * - Feature
+     - Status
+     - Notes
+   * - GPON link up to operation (O5), OMCI, MIB upload, alarms, optics
+       diagnostics
+     - 🟢 Tested
+     -
+   * - The OLT's bridge: GEM ports, T-CONTs, VLAN translation, push and pop,
+       priority
+     - 🟢 Tested
+     -
+   * - IGMP snooping, ACL, port mirroring, shaping, storm control
+     - 🟢 Tested
+     -
+   * - The host lane, 2.5 or 1 Gb/s, found by itself
+     - 🟢 Tested
+     - 2500BASE-X, 1000BASE-X with and without auto-negotiation
+   * - The management VLAN kept off the PON
+     - 🟢 Tested
+     - Both ways, also after a PPPoE session
+   * - Update into the other bank, start on trial, keep it
+     - 🟢 Tested
+     - Into both banks, from the panel and over ssh
+   * - Back to the old bank after a failed start
+     - 🟡 Bench
+     - Measured: a kernel panic, a damaged kernel, power lost during a write
+   * - PPPoE on the stick, with the address and IPv6 prefix handed to the
+       router
+     - 🟡 Bench
+     - Two sessions at once, some 900 Mb/s each way
+   * - Programs started again when they stop
+     - 🟡 Bench
+     - Each program killed during a session
+   * - A change of the settings tried, and undone without a confirmation
+     - 🟡 Bench
+     -
+   * - The web panel and its API over HTTPS
+     - 🟡 Bench
+     - The earlier panel, over HTTP, passed its recorded tests
+   * - Settings kept beside the shipped firmware's files
+     - 🟡 Bench
+     - Eight builds of the shipped firmware, started from the other bank,
+       found their own files and left this system's alone
+   * - Install through the shipped firmware's web page
+     - ⚪ Build machine
+     - No install on a real stick recorded yet
+   * - The DFP-34X-2C2
+     - ⚪ Not tried
+     - It differs from the DFP-34X-2C3 only in its optical connector, APC or
+       UPC, so the same image is for both
 
-**The image that main builds today has no recorded run.** Every record is of
-2026-10-07 or before, of an image whose programs were linked statically, before
-procd, netifd, the panel's HTTPS and the store in ``config``. Some cases of the
-suite still expect that image (``tests/device/README.rst``); a recorded run on
-the current image is the next test.
+..
 
-What is not done, or not tried
-------------------------------
+    ℹ️ **The recorded runs are of an older image.** All of them date from
+    2026-10-07 or before. Since then the system has moved to procd, netifd,
+    the panel over HTTPS and the new store of the settings. That image runs
+    on the bench but has no recorded run yet, and some test cases still
+    expect the old one (`tests/device/README.rst
+    <tests/device/README.rst>`__). A full recorded run on the current image
+    is the next step.
 
-* Only the bench's DFP-34X-2C3 has run it. The DFP-34X-2C2 differs from it
-  only in the optical connector, APC or UPC (M: the owner's comparison of
-  units of both), so the same image is for both. A unit of either may carry
-  another laser-driver IC: the optics support is written for the one of the
-  bench's unit (``rtl9602c-optics.rst`` in the kernel's documentation), and
-  no other has been tried.
-* There is no release: the images are built from source (`Building`_).
-* If the configuration store cannot be read, root's password is not known:
+Not done yet
+------------
+
+* **No release.** You build the images yourself (`Building`_).
+* A unit of either model may carry another laser-driver IC. The optics
+  support is written for the one of the bench's unit, and no other has been
+  tried.
+* If the store of the settings cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial
   console, inside the stick, takes ``admin``.
-* The stick has no packet filter: its servers keep off the PON side by the
-  addresses they listen on. Whether they can be reached from a session's peer
-  has not been tested.
-* The update file carries a checksum against damage and no signature.
+* The stick has no packet filter. Its servers listen only on its addresses
+  on the router's side; whether a session's peer can reach them has not
+  been tested.
+* An update file carries a checksum against damage, but no signature
+  (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
 * The handbook says how to take a copy of the whole flash
-  (``docs/handbook/backup.rst``), not yet how to write one back; nor has it a
-  page on recovery over the serial console in one place, or on optical
-  safety.
-* The other known gaps of the code are kept as the repository's issues.
+  (`backup.rst <docs/handbook/backup.rst>`__), but not yet how to write one
+  back. It has no page yet on recovery over the serial console in one place,
+  or on optical safety.
+* The other known gaps are kept as the repository's issues.
+
+Other sticks
+============
+
+Only the ODI DFP-34X-2C3 has run this system so far. The DFP-34X-2C2 differs
+from it only in its optical connector, so the same image is for both, but it
+has not been tried. Other sticks built on the same chip are not supported yet,
+but
+most of this repository is not tied to one stick: the chip's kernel support
+and drivers, omcid, the stick's programs, the panel and the build are shared.
+A new stick needs mainly its own board files:
+
+* a device tree on top of the chip's, `rtl9602c.dtsi
+  <linux/arch/mips/boot/dts/realtek/rtl9602c.dtsi>`__, with its memory and
+  its flash partitions;
+* support for its laser driver, if it has another one (`the optics
+  <linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst>`__);
+* a Buildroot configuration and a board directory in `br2-external/
+  <br2-external/README.rst>`__;
+* what its boot loader expects: how it picks a bank, and where the shipped
+  firmware keeps the unit's identity (`boot-contract.rst
+  <docs/handbook/boot-contract.rst>`__ says how this stick does it).
+
+If you have such a stick and want to bring it up, open an issue first:
+ports are welcome.
 
 Before you install
 ==================
 
-* A stick as shipped takes this system in one of two ways:
-
-  - through its shipped firmware's web page, with the package
-    ``web-install.tar`` that the build makes, which needs no console. This way
-    has tests on a build host only: an installation on a real stick has not
-    been recorded yet (``docs/handbook/updating.rst``);
-  - through the bench, which writes the flash from the boot loader's prompt,
-    over the console and the SFP lane (``docs/handbook/flashing.rst``).
-
-  Either way the shipped firmware stays in the other bank, as the way back.
-* **The first update from the running system overwrites the shipped
-  firmware.** The panel names the bank that holds it and asks before it
-  writes over it; ``onu-update write`` does not ask. Keep a copy of the
-  whole flash before it. The copy holds the unit's
-  registration identity: keep it private (``docs/handbook/updating.rst``, "The
-  first update").
-* This system keeps its settings in a file of its own in the partition
-  ``config``, beside the shipped firmware's files, which it does not write. A
-  stick that ran a build of before 2026-10-11 had that partition taken whole
-  by the store of then, and the shipped firmware's files there are gone.
-* There is one account, root, whose password is ``admin`` until one is set.
-  The panel allows nothing but setting one; the console and ssh only warn
-  (``docs/adr/0012-one-account-root.rst``).
-* The panel's certificate is signed by the stick itself, and a browser warns
-  at the first visit; the console and the panel show its fingerprint to compare
-  (``docs/adr/0016-the-panel-over-https.rst``).
-* Install only an update file you built or trust: nothing checks who made it.
-* A stick on a PON shares the fibre with every ONU of its tree. Try a build on a
-  laboratory OLT before an operator's line.
+* **Two ways in.** Through the shipped firmware's web page, with the package
+  ``web-install.tar`` that the build makes, which needs no console; this way
+  is tested on a build machine only, and no install on a real stick is
+  recorded yet (`updating.rst <docs/handbook/updating.rst>`__). Or from the
+  bench, which writes the flash from the boot loader's prompt over the
+  serial console (`flashing.rst <docs/handbook/flashing.rst>`__). Either way
+  the shipped firmware stays in the other bank, as the way back.
+* **The first update overwrites the shipped firmware.** The panel names the
+  bank that holds it and asks before it writes over it; ``onu-update write``
+  on the command line does not ask. Copy the whole flash first
+  (`backup.rst <docs/handbook/backup.rst>`__), and keep the copy private: it
+  holds the unit's registration identity (`updating.rst
+  <docs/handbook/updating.rst>`__, "The first update").
+* **Builds from before 2026-10-11 erased the shipped firmware's files** in
+  the partition ``config``. The system now keeps its settings in a file of
+  its own beside them, and does not write theirs.
+* **The password is** ``admin`` **until you set one.** There is one account,
+  root, for the console, ssh and the panel. The panel allows nothing else
+  until a password is set; the console and ssh only warn
+  (`ADR 0012 <docs/adr/0012-one-account-root.rst>`__).
+* **The panel's certificate is signed by the stick itself**, so a browser
+  warns at the first visit. The console and the panel show its fingerprint
+  to compare (`ADR 0016 <docs/adr/0016-the-panel-over-https.rst>`__).
+* **Install only an update file you built or trust**: nothing checks who
+  made it (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
+* **Try it on a lab OLT first.** A stick on a PON shares the fibre with every
+  other ONU of its tree.
 
 Where to start
 ==============
 
-To try it on a stick
-    `docs/handbook/board.rst <docs/handbook/board.rst>`__ for the stick and its
-    interfaces, then `building.rst <docs/handbook/building.rst>`__,
-    `updating.rst <docs/handbook/updating.rst>`__ and, for a stick on a bench,
-    `flashing.rst <docs/handbook/flashing.rst>`__.
-To understand the system
-    `docs/handbook/system.rst <docs/handbook/system.rst>`__: the parts, the
-    start, who owns what, and how a change of the settings reaches the
-    hardware; then the decision records in `docs/adr/ <docs/adr/README.rst>`__.
-To work on the kernel
-    "The kernel tree" in `CONTRIBUTING.rst <CONTRIBUTING.rst>`__, then
-    `the SoC's page <linux/Documentation/arch/mips/rtl9602c.rst>`__ and the
-    driver pages under `Documentation`_.
-To work on the programs
-    The README of the component (`Repository map`_), and
-    `docs/handbook/toolchain.rst <docs/handbook/toolchain.rst>`__ for what a
-    program for this core must not do.
-To contribute
-    `CONTRIBUTING.rst <CONTRIBUTING.rst>`__ and
-    `docs/policy/provenance.rst <docs/policy/provenance.rst>`__: what may enter
-    the repository, how a commit is written, and how to test a change.
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - I want to
+     - Read
+   * - Try it on a stick
+     - `board.rst <docs/handbook/board.rst>`__ for the stick and its
+       interfaces, then `building.rst <docs/handbook/building.rst>`__,
+       `updating.rst <docs/handbook/updating.rst>`__, and for a stick on a
+       bench `flashing.rst <docs/handbook/flashing.rst>`__
+   * - Understand how it works
+     - `system.rst <docs/handbook/system.rst>`__: the parts, the start, who
+       owns what; then the decision records in
+       `docs/adr/ <docs/adr/README.rst>`__
+   * - Work on the kernel
+     - "The kernel tree" in `CONTRIBUTING.rst <CONTRIBUTING.rst>`__, the
+       `SoC's page <linux/Documentation/arch/mips/rtl9602c.rst>`__ and the
+       driver pages under `Documentation`_
+   * - Work on the programs
+     - The README of each part (`Repository map`_), and
+       `toolchain.rst <docs/handbook/toolchain.rst>`__ for what a program for
+       this core must not do
+   * - Contribute
+     - `Contributing`_
+
+What is in this repository
+==========================
+
+Everything needed to build the system and put it on a stick:
+
+* **the Linux kernel**, with support for the chip: its MIPS core, the
+  switch, the GPON MAC, the optics and the watchdog. The kernel and the code
+  call the chip by its family's name, RTL9602C;
+* **the programs that run on the stick**: the OMCI daemon, the PPPoE client,
+  the settings, the updates and the web panel;
+* **the build**: a Buildroot tree that makes the toolchain, the images and
+  the update files;
+* **the tools**: the bench for the serial console and the flash, and the
+  checks that every change goes through;
+* **the documentation**: the hardware, the system, and why it is built the
+  way it is.
+
+Each part keeps the layout of its upstream project: the kernel tree is laid
+out like Linux, the build like Buildroot. So each can be read, reused or sent
+upstream on its own (`ADR 0003 <docs/adr/0003-structure-and-scope.rst>`__);
+the kernel series aims at mainline Linux (`ADR 0018
+<docs/adr/0018-the-kernel-series-aims-at-mainline.rst>`__).
 
 Repository map
-==============
+--------------
 
-`linux/ <linux/>`__
-    Linux 6.18.48 with the kernel series of this project on top: the SoC and its
-    Lexra core, the board's device tree and configuration, and the drivers of
-    the switch, its CPU port, the GPON and PON MACs, the optics, the watchdog
-    and the PON class.
-`omcid/ <omcid/README.rst>`__
-    The OMCI daemon (ITU-T G.988): it answers the OLT and programs the data path
-    from what the OLT configures.
-`onu-utils/ <onu-utils/README.rst>`__
-    The stick's own programs: its settings and their store, the generator that
-    applies them, its identity, its banks and updates, and the helpers of the
-    boot.
-`pond/ <pond/README.rst>`__
-    The status daemon and its panel, over HTTPS: the state of the stick, its
-    settings and its updates.
-`pppoed/ <pppoed/README.rst>`__
-    The PPPoE client, which netifd runs for each session.
-`dhcp6d/ <dhcp6d/README.rst>`__
-    The IPv6 prefix of a PPPoE session, delegated to the host behind the stick.
-`netifd/ <netifd/README.rst>`__
-    The network interface daemon of OpenWrt, carried as a fork.
-`br2-external/ <br2-external/README.rst>`__
-    The distribution: a Buildroot external tree with the board's configuration,
-    the packages (procd, ubus and the programs above among them), the root
-    filesystem's files and the scripts that make the images.
-`buildroot/ <buildroot/README.rst>`__
-    The pin of the build system and the patches carried against it.
-`board/ <board/odi/dfp-34x-2c3/readme.txt>`__
-    The board's readme, in Buildroot's form: what the stick is, and how its
-    images are built and started.
-`tools/ <tools/README.rst>`__
-    Host tools: the bench for RAM boots and flashing, the provenance gates, the
-    instruction-set gate, the size check of the images and the cut of their
-    libraries.
-`tests/device/ <tests/device/README.rst>`__
-    The tests that run on the stick.
-`docs/ <docs/README.rst>`__
-    The handbook, the architecture decision records, the provenance policy and
-    the records of the device tests.
-`.github/ <.github/workflows/README.rst>`__
-    The continuous-integration workflows and the gates they run.
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Directory
+     - What it holds
+   * - `linux/ <linux/>`__
+     - Linux 6.18.48 with this project's kernel series on top: the SoC and
+       its Lexra core, the board's device tree and configuration, and the
+       drivers of the switch, its CPU port, the GPON and PON MACs, the
+       optics, the watchdog and the PON class
+   * - `omcid/ <omcid/README.rst>`__
+     - The OMCI daemon (ITU-T G.988): it answers the OLT and sets up the data
+       path as the OLT asks
+   * - `onu-utils/ <onu-utils/README.rst>`__
+     - The stick's own programs: its settings and their store, the generator
+       that applies them, its identity, its banks and updates, and the
+       helpers of the start
+   * - `pond/ <pond/README.rst>`__
+     - The status daemon and its web panel, over HTTPS
+   * - `pppoed/ <pppoed/README.rst>`__
+     - The PPPoE client, one for each session
+   * - `dhcp6d/ <dhcp6d/README.rst>`__
+     - Hands a PPPoE session's IPv6 prefix on to the router behind the stick
+   * - `netifd/ <netifd/README.rst>`__
+     - OpenWrt's network interface daemon, carried as a fork
+   * - `br2-external/ <br2-external/README.rst>`__
+     - The distribution: a Buildroot external tree with the board's
+       configuration, the packages, the root filesystem's files and the
+       scripts that make the images
+   * - `buildroot/ <buildroot/README.rst>`__
+     - The pinned Buildroot release and the patches carried against it
+   * - `board/ <board/odi/dfp-34x-2c3/readme.txt>`__
+     - The board's readme, in Buildroot's form
+   * - `tools/ <tools/README.rst>`__
+     - Host tools: the bench, the provenance gates, the instruction-set
+       gate, the size check of the images and the cut of their libraries
+   * - `tests/device/ <tests/device/README.rst>`__
+     - The tests that run on the stick
+   * - `docs/ <docs/README.rst>`__
+     - The handbook, the decision records, the provenance policy and the
+       records of the device tests
+   * - `.github/ <.github/workflows/README.rst>`__
+     - The workflows of continuous integration and the gates they run
 
 Documentation
 =============
 
-The handbook, `docs/handbook/ <docs/handbook/README.rst>`__:
+**The handbook**, `docs/handbook/ <docs/handbook/README.rst>`__:
 
-* `board.rst <docs/handbook/board.rst>`__ -- the stick and its interfaces;
-* `system.rst <docs/handbook/system.rst>`__ -- how the system works;
-* `boot-contract.rst <docs/handbook/boot-contract.rst>`__ -- the flash layout,
-  the image formats, how a bank is chosen and the watchdog;
-* `building.rst <docs/handbook/building.rst>`__ -- the images, their budgets,
+* `board.rst <docs/handbook/board.rst>`__: the stick and its interfaces;
+* `system.rst <docs/handbook/system.rst>`__: how the system works;
+* `boot-contract.rst <docs/handbook/boot-contract.rst>`__: the flash layout,
+  the image formats, how a bank is chosen, and the watchdog;
+* `building.rst <docs/handbook/building.rst>`__: the images, their budgets,
   the boot script, and how to build, check and reproduce them;
-* `updating.rst <docs/handbook/updating.rst>`__ -- updates into the other bank,
-  from the panel or a shell, and the way in through the shipped firmware's
-  web page;
-* `flashing.rst <docs/handbook/flashing.rst>`__ -- the bench: RAM boots,
+* `updating.rst <docs/handbook/updating.rst>`__: updates from the panel or a
+  shell, and the way in through the shipped firmware's web page;
+* `backup.rst <docs/handbook/backup.rst>`__: a copy of the whole flash,
+  taken before the first update;
+* `flashing.rst <docs/handbook/flashing.rst>`__: the bench, RAM boots,
   writing the flash, trial starts and recovery;
-* `toolchain.rst <docs/handbook/toolchain.rst>`__ -- the cross toolchain and the
-  instruction-set gate;
-* `panel-design.rst <docs/handbook/panel-design.rst>`__ -- the panel's look.
+* `toolchain.rst <docs/handbook/toolchain.rst>`__: the cross toolchain and
+  the instruction-set gate;
+* `panel-design.rst <docs/handbook/panel-design.rst>`__: the panel's look.
 
-The kernel's pages, under ``linux/Documentation/``:
+**The kernel**, under ``linux/Documentation/``:
 
-* `arch/mips/rtl9602c.rst <linux/Documentation/arch/mips/rtl9602c.rst>`__ --
+* `arch/mips/rtl9602c.rst <linux/Documentation/arch/mips/rtl9602c.rst>`__:
   the system-on-chip, its core and the board;
-* `networking/pon.rst <linux/Documentation/networking/pon.rst>`__ -- the PON
+* `networking/pon.rst <linux/Documentation/networking/pon.rst>`__: the PON
   class;
-* `networking/dsa/rtl9602c.rst <linux/Documentation/networking/dsa/rtl9602c.rst>`__
-  -- the switch, with its pages on
+* `networking/dsa/rtl9602c.rst <linux/Documentation/networking/dsa/rtl9602c.rst>`__:
+  the switch, with its pages on
   `bridging <linux/Documentation/networking/dsa/rtl9602c-bridging.rst>`__,
   `ACL and QoS <linux/Documentation/networking/dsa/rtl9602c-acl-qos.rst>`__,
   `the L3/NAT engine <linux/Documentation/networking/dsa/rtl9602c-l3-nat.rst>`__
   and `PTP <linux/Documentation/networking/dsa/rtl9602c-ptp.rst>`__;
-* `networking/device_drivers/pon/ <linux/Documentation/networking/device_drivers/pon/index.rst>`__
-  -- the `PON MAC <linux/Documentation/networking/device_drivers/pon/rtl9602c.rst>`__,
+* the `PON MAC <linux/Documentation/networking/device_drivers/pon/rtl9602c.rst>`__,
   the `GPON MAC <linux/Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst>`__
   and the `optics <linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst>`__;
 * `the CPU port <linux/Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst>`__
   and `devlink <linux/Documentation/networking/devlink/rtl9602c.rst>`__;
 * the device-tree bindings under ``linux/Documentation/devicetree/bindings/``.
 
-The rest of ``docs/``:
+**Decisions, policy and test records**, in ``docs/``:
 
-* `adr/ <docs/adr/README.rst>`__ -- the architecture decision records: why the
-  repository, the build, the libraries, the accounts, the supervision, the
-  control plane and the panel are as they are;
-* `policy/provenance.rst <docs/policy/provenance.rst>`__ -- what may and may not
-  enter the repository;
-* `testing/ <docs/testing/README.rst>`__ -- one page per run of the device
+* `adr/ <docs/adr/README.rst>`__: the architecture decision records, why the
+  system is built as it is;
+* `policy/provenance.rst <docs/policy/provenance.rst>`__: what may and may
+  not enter the repository;
+* `testing/ <docs/testing/README.rst>`__: one page per run of the device
   tests.
 
 Building
 ========
 
-The top-level ``Makefile`` holds the entry points. ``make`` and ``make sdk``
-run Buildroot, which runs on Linux (on another system, in the container that
-``docs/handbook/building.rst`` names); they need the packages that page names,
-some 9 GB of disk, and the network, to fetch the sources of their packages,
-which they check by hash. ``make linux`` needs a MIPS cross compiler
-(``mips-linux-gnu-gcc`` on Debian, or name yours with ``CROSS_COMPILE=``) and
-``mkimage``. ``make buildroot``, ``make ramboot`` and ``make flash`` need
-Python 3.11 or later; the last two drive the bench in ``tools/bench``, whose
-README describes the settings, the commands and the bank guard::
+The top-level ``Makefile`` holds the entry points. You need:
+
+* for ``make`` and ``make sdk``, which run Buildroot: Linux (or the container
+  that `building.rst <docs/handbook/building.rst>`__ names), the packages
+  that page lists, some 9 GB of disk, and the network, to fetch the sources
+  of the packages, which are checked by hash;
+* for ``make linux`` alone: a MIPS cross compiler (``mips-linux-gnu-gcc`` on
+  Debian, or name yours with ``CROSS_COMPILE=``) and ``mkimage``;
+* for ``make buildroot``, ``make ramboot`` and ``make flash``: Python 3.11 or
+  later. The last two drive the bench in ``tools/bench``, whose README
+  describes its settings, its commands and the bank guard.
+
+::
 
     make               # k0.uImage, r0.squashfs, update.bin and web-install.tar
                        # in build/image/images, then make image-check
@@ -317,26 +398,36 @@ README describes the settings, the commands and the bank guard::
     make flash IMAGE=F TARGET=kernel|rootfs   # write bank 0 over the bench
 
 ``make omcid``, ``make docs``, ``make clean`` and ``make distclean`` are not
-implemented yet; each says what to do instead. The programs of this tree build
-and test on their own on the host, with ``make -C <program> check``
-(``CONTRIBUTING.rst``).
+implemented yet; each says what to do instead. The programs of this tree
+build and test on their own on the host, with ``make -C <program> check``.
+
+Contributing
+============
+
+Fixes, tests, test reports from other OLTs and ports to other sticks are all
+welcome. Read `CONTRIBUTING.rst <CONTRIBUTING.rst>`__ first: a commit touches
+one part of the tree, carries a ``Signed-off-by:`` line, and passes the
+provenance gates (`docs/policy/provenance.rst
+<docs/policy/provenance.rst>`__), which keep out anything that is not ours
+to publish. ``make check`` runs the gates and the tools' tests offline.
 
 Licensing
 =========
 
-Everything authored in this repository is ``GPL-2.0-only``; see ``COPYING`` and
-``LICENSES/``. The third-party code committed here keeps its licence and says
-so: the Linux release in ``linux/``; OpenWrt's netifd, in ``netifd/``, under
-``GPL-2.0-only``; and Mongoose, in ``pond/third_party``, taken under
-``GPL-2.0-only``, which holds micro-ecc under ``BSD-2-Clause``. ``REUSE.toml``
-names them. Third-party packages are not committed: they are fetched by hash
-at build time and keep their own licences. ``make legal-info`` collects the
-licence of every package of the image, their texts and the sources a release
-hands on, into ``build/image/legal-info``, and the image carries the licences
-of the panel's packages beside the panel
-(``/usr/share/pond/www/licenses.txt``). Contributions follow the Developer
-Certificate of Origin and the provenance policy; see ``CONTRIBUTING.rst`` and
-``docs/policy/provenance.rst``.
+* Everything written for this project is ``GPL-2.0-only``; see ``COPYING``
+  and ``LICENSES/``.
+* The third-party code committed here keeps its licence and says so: Linux,
+  in ``linux/``; OpenWrt's netifd, in ``netifd/``, under ``GPL-2.0-only``;
+  and Mongoose, in ``pond/third_party``, taken under ``GPL-2.0-only``, which
+  holds micro-ecc under ``BSD-2-Clause``. ``REUSE.toml`` names them.
+* The packages of the image are not committed: they are fetched by hash at
+  build time and keep their own licences. ``make legal-info`` collects the
+  licence of every package of the image, their texts and the sources a
+  release hands on, into ``build/image/legal-info``. The image carries the
+  licences of the panel's packages beside the panel
+  (``/usr/share/pond/www/licenses.txt``).
+* Contributions follow the Developer Certificate of Origin and the
+  provenance policy.
 
 Trademarks and affiliation
 ==========================
