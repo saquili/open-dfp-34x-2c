@@ -875,7 +875,7 @@ def mirror(ctx: Context):
 
 
 # The address-table case: an address of the documentation range (RFC 7042,
-# 2.1.2) that no line carries and the router cases do not use, made static
+# 2.1.2) that no line carries, made static
 # through the bridge.
 FDB_STATIC = "00:00:5e:00:53:10"
 FDB_WAIT = 3.0         # seconds the switch has to follow the bridge

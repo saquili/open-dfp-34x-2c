@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses
 import json
 import re
 import unittest
 import unittest.mock
 
-from devtest import cases_data, cases_net, cases_pon, cases_router, cases_system
+from devtest import cases_data, cases_net, cases_pon, cases_system
 from devtest.access import Reply, Settings, redact
 from devtest.core import FAIL, PASS, SKIP, Case, Context, failed, passed, run_case, select
 from devtest.report import LOG_LINES, as_json, cell, counts, log, page
@@ -60,16 +59,6 @@ class Sequenced(Canned):
             if re.search(pattern, command):
                 break
         return super().run(command, timeout=timeout, check=check, stdin=stdin)
-
-
-@contextlib.contextmanager
-def unheld():
-    """Run the router-mode cases although they are held, to test their logic."""
-    held, cases_router.HELD = cases_router.HELD, None
-    try:
-        yield
-    finally:
-        cases_router.HELD = held
 
 
 def context(stick=(), bench=()) -> Context:
@@ -438,118 +427,6 @@ class Cases(unittest.TestCase):
             return result
         self.assertEqual(outcome("root@x: Permission denied (publickey).\n").status, PASS)
         self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, FAIL)
-
-    def test_router_mode_runs_only_when_asked_for(self):
-        with unheld():
-            for fn in (cases_router.static, cases_router.pppoe, cases_router.bridge_again):
-                self.assertEqual(fn(context()).status, SKIP)
-
-    def test_router_mode_of_nat_is_held_while_it_translates_nothing(self):
-        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
-                                       subscriber_port="eth2", pond_token="t")
-        for fn in (cases_router.static, cases_router.tcp, cases_router.pppoe):
-            outcome = fn(Context(settings, Canned("stick", [], []), Canned("bench", [], []), []))
-            self.assertEqual(outcome.status, SKIP)
-            self.assertEqual(outcome.evidence, cases_router.HELD)
-        outcome = cases_router.passthrough(Context(settings, Canned("stick", [], []),
-                                                   Canned("bench", [], []), []))
-        self.assertEqual(outcome.status, SKIP)
-        self.assertIn("--pppoe-secrets", outcome.evidence)
-
-    def passthrough(self, cpu: list[str]):
-        """router.passthrough against canned ends: the counters of the host,
-        the bench's end of the session and the host again move by 2,000,
-        1,990 and 2,000, and the CPU port's by the steps of cpu."""
-        trail: list[str] = []
-        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
-                                       subscriber_port="eth2", pond_token="t",
-                                       pppoe_secrets="/etc/ppp/secrets")
-        bench = Sequenced("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200'),
-                                    ("ip netns add", 0, ""),
-                                    ("ip -4 -o addr", 0, "ppp0 192.0.2.1\n"),
-                                    ("route get", 0, "198.51.100.7\n"),
-                                    ("rx_packets", 0, ["100", "2100", "50", "2040",
-                                                       "2100", "4100"]),
-                                    ("python3 -", 0, "")], trail)
-        stick = Sequenced("stick", [("onu-pass", 0, "192.0.2.77\n"),
-                                    ("dsa/tagging", 0, "cpu\n"),
-                                    ("rx_packets", 0, cpu)], trail)
-        with unittest.mock.patch.object(cases_router.time, "sleep", lambda seconds: None):
-            return cases_router.passthrough(Context(settings, stick, bench, trail)), bench
-
-    def test_passthrough_passes_when_the_switch_carries_every_datagram(self):
-        outcome, bench = self.passthrough(["10", "30", "30", "50", "50", "70"])
-        self.assertEqual(outcome.status, PASS, outcome.evidence)
-        post = next(c for c in bench.asked if "curl" in c)
-        self.assertTrue(post.startswith("sudo -n sh -c "))
-        self.assertIn("/etc/ppp/secrets", post)
-        self.assertIn("MODE=passthrough", post)
-
-    def test_passthrough_fails_when_the_cpu_carries_them(self):
-        outcome, _ = self.passthrough(["10", "2010", "2010", "4010", "4010", "6010"])
-        self.assertEqual(outcome.status, FAIL)
-
-    def test_the_pppoe_secret_goes_from_the_bench_s_file_to_the_daemon(self):
-        trail: list[str] = []
-        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
-                                       subscriber_port="eth2", pppoe_secrets="/etc/ppp/secrets")
-        bench = Canned("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200')], trail)
-        stick = Canned("stick", [("onu-apply status", 0, "mode router\nwan gem256 on gem256, "
-                                                        "out by ppp0\n"),
-                                 ("ppp0", 0, "192.0.2.77/32\n"), ("onu-dns", 0, "192.0.2.53\n")],
-                       trail)
-        with unheld():
-            outcome = cases_router.pppoe(Context(settings, stick, bench, trail))
-        self.assertEqual(outcome.status, PASS)
-        post = next(c for c in bench.asked if "curl" in c)
-        self.assertTrue(post.startswith("sudo -n sh -c "))
-        self.assertIn("/etc/ppp/secrets", post)
-        self.assertIn("MODE=router", post)
-        self.assertEqual(outcome.evidence,
-                         "session up in 0 s; ppp0 192.0.2.77/32, MTU 1492; name servers "
-                         "192.0.2.53; MSS not checked without the LAN host of router.static")
-
-    def test_a_pppoe_session_must_clamp_the_lan_host_s_mss(self):
-        def outcome(seen, mtu=None):
-            trail: list[str] = []
-            settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
-                                           subscriber_port="eth2",
-                                           pppoe_secrets="/etc/ppp/secrets")
-            bench = Canned("bench", [("is-active", 0, ""), ("curl", 0, '{"ok":true}\n200'),
-                                     ("ip -4 -o addr", 0, "pppoe0\n"),
-                                     ("python3 - pppoe0", 0, seen + "\n")], trail)
-            stick = Canned("stick", [("onu-apply status", 0, "mode router\nwan gem256 on "
-                                                            "gem256, out by ppp0\n"),
-                                     ("ppp0/mtu", 0 if mtu else 1, f"{mtu}\n"),
-                                     ("ppp0", 0, "192.0.2.77\n"),
-                                     ("onu-dns", 0, "192.0.2.53\n")], trail)
-            ctx = Context(settings, stick, bench, trail)
-            ctx.memo["namespaces"] = True
-            with unheld():
-                return cases_router.pppoe(ctx)
-        self.assertEqual(outcome("[1452, 1452]").status, PASS)
-        self.assertIn("SYN MSS 1452, 1452 through it", outcome("[1452, 1452]").evidence)
-        self.assertEqual(outcome("[1460]").status, FAIL)
-        self.assertEqual(outcome("[]").status, FAIL)
-        # A concentrator that took PPP-Max-Payload 1500 leaves room for 1460.
-        self.assertEqual(outcome("[1460, 1460]", mtu=1500).status, PASS)
-        self.assertIn("MTU 1500", outcome("[1460, 1460]", mtu=1500).evidence)
-        self.assertEqual(outcome("[1461]", mtu=1500).status, FAIL)
-
-    def test_a_pppoe_session_s_bench_interface_is_waited_for(self):
-        trail: list[str] = []
-        settings = dataclasses.replace(SETTINGS, router=True, olt_port="eth1",
-                                       subscriber_port="eth2", pppoe_secrets="/etc/ppp/secrets")
-        bench = Canned("bench", [("ip -4 -o addr", 0, "")], trail)
-        ctx = Context(settings, Canned("stick", [], trail), bench, trail)
-        cases_router.time.sleep, real = (lambda _s: None), cases_router.time.sleep
-        try:
-            ok, seen = cases_router.pppoe_mss(ctx, "192.0.2.77")
-        finally:
-            cases_router.time.sleep = real
-        self.assertFalse(ok)
-        self.assertEqual(seen, "no PPP interface of the session on the bench after 10 s")
-        self.assertEqual(sum("ip -4 -o addr" in c for c in bench.asked), cases_router.PPP_WAIT)
 
     def test_the_data_path_is_skipped_without_ports(self):
         self.assertEqual(cases_data.downstream(context()).status, SKIP)
