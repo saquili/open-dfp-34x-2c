@@ -6,7 +6,7 @@ onu-utils
 =========
 
 The small programs of the ONU. A person at the stick runs ``onu-config``,
-``onu-apply``, ``onu-update``, ``onu-svc``, ``pon`` and ``passwd``, which are
+``onu-apply``, ``onu-update``, ``onu-svc``, ``pon``, ``onu-nl`` and ``passwd``, which are
 in ``/usr/sbin`` and ``/usr/bin``. The others only other programs run, and
 they are in ``/usr/lib/onu``, out of a person's way (ADR 0015): ``ponid``,
 ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-change``,
@@ -174,6 +174,35 @@ there, and names it by its whole path where procd starts it.
           PLOAM messages             120
           bandwidth maps             5000000
           T-CONT 0  Alloc-ID 1024
+
+``onu-nl``
+   makes, through netlink, the requests of tc and devlink that the boot
+   script and the scripts here make, since the image carries neither:
+   iproute2 is in the RAM image only (ADR 0014)::
+
+      onu-nl clsact add|del DEV
+      onu-nl filter add DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO
+      onu-nl filter del DEV pref N
+      onu-nl filter prefs DEV
+      onu-nl param NAME [VALUE]
+
+   A filter is on the ingress of DEV: without ``vlan`` it takes every frame
+   (tc's matchall), with it the frames whose outer 802.1Q tag has that VID
+   (flower); ``hw`` keeps it in the switch alone (tc's skip_sw); ``trap``
+   sends what it takes to the CPU, ``drop`` drops it and ``redirect`` hands
+   it to the ingress of TO. ``clsact add`` leaves a clsact qdisc that is
+   there already. ``filter prefs`` prints the priorities of the filters on
+   DEV's ingress, one a line, the lowest first. ``param`` prints a parameter
+   of the switch's devlink instance in the runtime mode, or sets it: a number
+   in decimal (or hexadecimal after ``0x``), ``true`` or ``false``, or a
+   string (``Documentation/networking/devlink/rtl9602c.rst`` in the kernel
+   lists them). When the kernel refuses, its own message follows the error.
+   It exits 0 when done, 1 when refused, 2 for a wrong command line::
+
+      # onu-nl filter prefs sfp
+      1
+      # onu-nl param sfp_lane_now
+      2500basex
 
 ``onu-apply``
    turns the settings into what the stick runs: procd and netifd carry out,
@@ -392,16 +421,21 @@ there, and names it by its whole path where procd starts it.
 Building and testing::
 
    make           # build/ponid, build/pon, build/onu-config, build/onu-update, build/onu-svc,
-                  # build/onu-act
+                  # build/onu-act, build/onu-nl
    make check     # the tests
 
 ``ponid``, ``onu-config`` and ``onu-update`` need zlib, ``onu-config`` and
 ``onu-update`` the kernel's MTD header
 ``mtd/mtd-user.h``, ``onu-svc`` and ``onu-act`` libubus and libubox (their
-tests need neither), ``pon`` libmnl and the kernel's headers, among them
-``linux/pon.h`` of this repository's kernel; for a build on the host, point
-CPPFLAGS at an installation of those headers (``make headers_install`` in
-``linux/``). The tests of ``pon`` read and print messages that they build; the
+tests need neither), ``pon`` and ``onu-nl`` libmnl and the kernel's headers,
+among them ``linux/pon.h`` of this repository's kernel; for a build on the
+host, point CPPFLAGS at an installation of those headers (``make
+headers_install`` in ``linux/``). The tests of ``pon`` read and print messages
+that they build, and those of ``onu-nl`` build its requests and read them back;
+``tests/test_onu_nl.sh`` runs ``onu-nl`` against the kernel it runs on and reads
+the result back with tc, where it may make interfaces (root with
+CAP_NET_ADMIN, as in a container started with ``--cap-add NET_ADMIN``), and
+says that it skipped elsewhere. The
 tests of ``onu-apply`` and ``dhcp-wan`` run them against stand-ins for the
 programs they call, in a scratch root, and those of ``onu-config`` run it with
 ``build/onu-config`` on a store in a file and a stand-in for BusyBox's

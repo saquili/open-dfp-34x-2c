@@ -21,7 +21,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 .PHONY: all check clean
 
 all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc \
-	$(BUILD)/onu-act
+	$(BUILD)/onu-act $(BUILD)/onu-nl
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -32,6 +32,19 @@ $(BUILD)/ponid: $(BUILD)/src/ponid.o $(BUILD)/src/factory.o
 
 $(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o \
 	       $(BUILD)/src/gemlink.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+# onu-nl sets traffic control and devlink parameters in place of tc and
+# devlink: libmnl.
+$(BUILD)/onu-nl: $(BUILD)/src/onu-nl.o $(BUILD)/src/tcrule.o $(BUILD)/src/dlparam.o \
+		$(BUILD)/src/genl.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+$(BUILD)/test_tcrule: $(BUILD)/tests/test_tcrule.o $(BUILD)/src/tcrule.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+$(BUILD)/test_dlparam: $(BUILD)/tests/test_dlparam.o $(BUILD)/src/dlparam.o \
+		      $(BUILD)/src/genl.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/onu-config: $(BUILD)/src/onu-config.o $(BUILD)/src/cfgstore.o $(BUILD)/src/settings.o \
@@ -84,14 +97,18 @@ $(BUILD)/test_cfgstore: $(BUILD)/tests/test_cfgstore.o $(BUILD)/src/cfgstore.o
 $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-# test_genl asks the kernel it runs on, through a generic netlink socket.
+# test_genl asks the kernel it runs on, through a generic netlink socket;
+# test_onu_nl.sh sets filters on it, and skips without the right to.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
+	$(BUILD)/test_tcrule $(BUILD)/test_dlparam $(BUILD)/onu-nl \
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
+	$(BUILD)/test_tcrule
+	$(BUILD)/test_dlparam
 	$(BUILD)/test_cfgstore
 	$(BUILD)/test_update
 	$(BUILD)/test_svcmsg
@@ -108,6 +125,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	sh tests/test_onu_run.sh
 	sh tests/test_onu_apply.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_nl.sh
 
 clean:
 	rm -rf $(BUILD)
