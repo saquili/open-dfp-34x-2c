@@ -75,7 +75,8 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
      - 1856 KiB (``0x1d0000``, 1900544 bytes)
      - Bank 0 kernel: a legacy U-Boot image.
      - The bench: ``make flash IMAGE=<file> TARGET=kernel``; ``onu-update``
-       while bank 1 runs.
+       while bank 1 runs; the shipped firmware's web page with
+       ``web-install.tar`` while the shipped firmware runs from bank 1.
    * - ``r0``
      - ``0x250000``
      - 1984 KiB (``0x1f0000``, 2031616 bytes)
@@ -85,9 +86,12 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
    * - ``k1``
      - ``0x440000``
      - 1856 KiB (``0x1d0000``, 1900544 bytes)
-     - Bank 1 kernel. On a stick as shipped, the shipped firmware's, in its own
-       split, until the first update.
-     - ``onu-update`` while bank 0 runs.
+     - Bank 1 kernel. On a stick as shipped, the shipped firmware may run from
+       either bank, in its own split; the bank it does not run is the one
+       ``web-install.tar`` writes, and the shipped firmware stays in the other
+       until an update overwrites it.
+     - ``onu-update`` while bank 0 runs; the shipped firmware's web page with
+       ``web-install.tar`` while the shipped firmware runs from bank 0.
    * - ``r1``
      - ``0x610000``
      - 1984 KiB (``0x1f0000``, 2031616 bytes)
@@ -477,11 +481,16 @@ committed bank boots. A committed boot leaves the watchdog disarmed.
 
 The kernel clears the count early in its start and arms its own at the probe of
 the watchdog driver. From then on the kernel feeds the watchdog until user
-space opens ``/dev/watchdog``. Between the clearing and the probe nothing
-watches the boot, and a user space that never opens the watchdog is never reset
-by it. A trial boot of a kernel that hangs in either place is therefore
-expected to recover only by a power cycle. This has not been observed; it
-follows from the order above.
+space opens ``/dev/watchdog``, which procd, the first process, does as it
+starts, and then feeds it for as long as it runs (ADR 0013). Between the
+clearing and the probe nothing watches the boot. Once procd feeds the
+watchdog, what ends a failed trial is ``onu-trial``, which the boot script
+starts at its end and which restarts the stick into the committed bank when
+the system does not come up (``updating.rst``); a boot script that hangs
+before it never starts it. A trial boot that hangs in the kernel before the
+probe, or in the boot script before ``onu-trial``, is therefore expected to
+recover only by a power cycle. This has not been observed; it follows from
+the order above.
 
 What the loader leaves behind
 =============================
@@ -576,12 +585,13 @@ Open items
   there does anything is not known.
 * A bad write to ``boot`` is assumed to be beyond repair from the loader. It
   has never been tried.
-* The read-only flags of the device tree have not been tested, because no flash
-  driver that can write exists.
+* The read-only flag of ``boot`` in the device tree has not been tested: no
+  test tries to open it for writing, though the flash driver writes the other
+  partitions (``onu-update``, ``onu-config``).
 * That a trial boot is not reset by the watchdog when the kernel hangs between
-  the clearing of the count and the probe of the watchdog driver, or when user
-  space never opens the watchdog, has not been observed. A trial boot of a
-  kernel that stops there would show it.
+  the clearing of the count and the probe of the watchdog driver, or when the
+  boot script hangs before it starts ``onu-trial``, has not been observed. A
+  trial boot that stops there would show it.
 * That the countdown tick is one second is taken from the figures of the
   countdown and has not been timed.
 * That ``boot`` typed at the prompt consumes a pending trial exactly as the end
