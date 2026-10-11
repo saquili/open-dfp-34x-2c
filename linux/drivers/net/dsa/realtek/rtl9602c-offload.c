@@ -2364,7 +2364,7 @@ static int rtl9602c_acl_replace(struct rtl9602c_priv *p, int port,
 			rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
 					  ntohs(basic.key->n_proto),
 					  ntohs(basic.mask->n_proto));
-			ipv4 = basic.mask->n_proto == 0xffff &&
+			ipv4 = basic.mask->n_proto == htons(0xffff) &&
 			       basic.key->n_proto == htons(ETH_P_IP);
 		}
 
