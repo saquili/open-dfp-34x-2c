@@ -1334,15 +1334,19 @@ a frame may leave by. They map one to one onto three bridge port flags:
        may cross in either direction. Bridged traffic passes both ways, floods
        included.
    * - Routed, the three masks read ``0x0000000a`` (the SFP and PON ports clear,
-       port 1 and the CPU port at their reset value); bridged, ``0x0000000f``.
+       port 1 and the CPU port at their reset value); bridged, ``0x0000000f``,
+       but for the unknown-multicast mask while the SFP port is bridged with
+       the GEM interfaces, ``0x00000007`` (see "Multicast snooping").
        Forcing the broadcast mask back to ``0x0f`` in the routed state let 2,000
        of 2,000 broadcasts cross again.
      - M
      - Routed, 0 of 2,000 broadcasts and 0 of 2,000 unknown unicast frames
        crossed in either direction; bridged, 2,002 of 2,000 each way.
        ``l2learn``, first line.
-   * - The driver never writes the CPU port's bits, which stay set: that is how
-       unknown traffic reaches the host. DSA would drive them through
+   * - The driver leaves the CPU port's bits set, which is how unknown traffic
+       reaches the host, but for its unknown-multicast bit while the SFP port is
+       bridged with the GEM interfaces (``rtl9602c_mcast_refresh()``, see
+       "Multicast snooping"). DSA would drive them through
        ``port_set_host_flood``, but calls it only on a switch that supports host
        unicast and multicast filtering, which needs VLAN filtering for each
        port, and this switch has one filtering bit (see "VLAN membership,
@@ -1367,13 +1371,12 @@ switch as MDB objects, which become multicast entries of the address table (see
 "Adding, deleting and dumping entries"). Three things make the switch forward
 multicast as the bridge would:
 
-- Every IGMP message, and every MLD query and version 1 report, that enters the
-  SFP or the PON port reaches the bridge. The switch forwards the message as
-  usual, so it keeps its VLAN translation and the GEM stream its VLAN takes,
-  and an ACL rule sends a copy to the CPU (``rtl9602c_acl_snoop_setup()``, see
-  the *acl-qos* page, "Rules of the driver's own"). The copy arrives marked as
-  forwarded, so the bridge snoops it and forwards nothing again. The other MLD
-  messages go to ff02::1, ff02::2 or ff02::16, which reach the CPU unasked.
+- Every IGMP and MLD message that enters the SFP or the PON port reaches the
+  bridge. The switch forwards the message as usual, so it keeps its VLAN
+  translation and the GEM stream its VLAN takes, and an ACL rule sends a copy
+  to the CPU (``rtl9602c_acl_snoop_setup()``, see the *acl-qos* page, "Rules
+  of the driver's own"). The copy arrives marked as forwarded, so the bridge
+  snoops it and forwards nothing again.
 - The PON port is a member of every group in the table, as the side the
   multicast router of a PON sits on: a host's IGMPv1, IGMPv2 or MLDv1 report
   goes to the group's own address.
@@ -1395,6 +1398,16 @@ multicast as the bridge would:
   the VLAN devices over it (``gem_rx_filter``), and the driver places a static
   entry behind the CPU port for each (``rtl9602c_gem_hosts_sync()``), as a
   session's address is not one the switch learns.
+- While a bridge does join the SFP port to the GEM interfaces, the switch
+  forwards between them itself, and the CPU only snoops: the CPU port leaves
+  the unknown-multicast flood mask (``rtl9602c_mcast_refresh()``). In a bridge
+  that filters VLANs, DSA makes the CPU port a member of each VLAN of a GEM
+  interface, so a television channel flooded before any querier was seen would
+  reach the CPU as well. The reserved groups follow that mask, so they no
+  longer reach the CPU by flooding either, and the ACL copies MLD done
+  messages and version 2 reports, which go to ff02::2 and ff02::16, as it
+  copies the rest of MLD. The stick's own traffic in that state comes by a
+  trap rule, as the management VLAN's, or by an interface outside the bridge.
 
 .. list-table::
    :header-rows: 1
@@ -1480,6 +1493,40 @@ multicast as the bridge would:
      - M
      - With ``mcast_flood off`` on the SFP port, 0 of 20 frames from the PON to
        224.0.0.251 and to 224.0.0.1 passed.
+   * - While the SFP port is bridged with the GEM interfaces, the CPU port's bit
+       of ``RTL9602C_FLOOD_UNKNOWN_MCAST`` is clear, and set again once the
+       bridge lets go of them. The kernel log says each change:
+       ``rtl9602c-switch: unregistered multicast to the CPU: not flooded``.
+     - M
+     - ``l2learn`` read ``unknown-mc 00000007`` in the bridge and
+       ``0000000a`` after the sessions took the stick back, with the log line
+       saying ``not flooded`` and ``flooded`` at each change.
+   * - In a bridge that filters VLANs, unregistered multicast flooded from the
+       PON no longer reaches the CPU, and still reaches the SFP side.
+     - M
+     - A bridge of ``sfp``, ``gem257`` and ``gem4095`` with VLAN 410 on each and
+       no querier, 2,000 frames a second to 239.1.2.3 and to ff3e::1234 from
+       the OLT side: 5,792 and 5,907 frames in 3 s left by the SFP port, and
+       none reached the CPU (``rtl9602c-eth/rxreason``: only 5 ACL copies,
+       reason 128, in 4 s). With the CPU port's bit set, 10,040 frames of
+       reason 0 reached the CPU in 5 s.
+   * - With the CPU port out of the mask, the bridge still learns IPv4 and IPv6
+       groups from IGMP and MLDv2 reports, and the joined group is sent on.
+     - M
+     - A host behind the stick joined ff3e::1234, then 239.1.2.3, while each
+       came at 2,000 frames a second: ``bridge mdb`` showed ``port sfp grp
+       ff3e::1234 temp offload vid 410`` and then the IPv4 group, the host
+       received 20,000 of 20,000 frames each time, and the CPU took 4 ACL
+       copies in 4 s.
+   * - With the CPU port out of the mask, the reserved groups still cross the
+       bridge, and the stick's management VLAN, which a tc trap rule takes to
+       the CPU, keeps IPv6 neighbour discovery.
+     - M
+     - 50 frames each to ff02::1, ff02::fb and 224.0.0.251 from the OLT side:
+       150 of 150 left by the SFP port, none reached the CPU; ping6 between
+       the host and the OLT side's link-local address 5 of 5, and from the
+       management side to the stick's link-local address 5 of 5, both after
+       the neighbour caches were flushed.
    * - The driver follows the bridge's routers: before any query, unregistered
        multicast is flooded; a query from the OLT side makes the GEM port it
        came by a router port, and the PON port drops unregistered multicast of

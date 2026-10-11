@@ -391,7 +391,7 @@ reached through the indirect table engine (see the *bridging* page, "The
 indirect table engine").
 
 The driver makes an ACL rule of each ``tc`` flower rule on ingress whose one
-action is ``drop``, ``trap`` or ``pass``, and writes four rules of its own,
+action is ``drop``, ``trap`` or ``pass``, and writes eight rules of its own,
 which copy IGMP and MLD to the CPU for the bridge's multicast snooping. It
 applies only the forwarding class of the action: a rule drops a frame, sends it
 to the CPU, or sends a copy there; a rule that passes lets the frame go on as
@@ -795,11 +795,11 @@ to an ACL rule.
 Rules of the driver's own
 -------------------------
 
-With ``CONFIG_BRIDGE_IGMP_SNOOPING`` the driver writes four rules at setup
+With ``CONFIG_BRIDGE_IGMP_SNOOPING`` the driver writes eight rules at setup
 (``rtl9602c_acl_snoop_setup()``), so that the bridge sees the IGMP and MLD
 messages it snoops while the switch forwards them (see the *bridging* page,
 "Multicast snooping"): on the SFP port and on the PON port, one for IGMP and
-one for the MLD messages that go to a group's own address.
+three for MLD.
 
 .. list-table::
    :header-rows: 1
@@ -813,17 +813,22 @@ one for the MLD messages that go to a group's own address.
        ``RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH``, and in the window of field
        selector ``RTL9602C_FSEL_SPORT``, the first octet of the ICMPv6 message,
        the types 130 and 131 (``0x8200`` under the mask ``0xfe00``): the MLD
-       query and the version 1 report. Each rule names all four fields and
-       ignores those it does not compare, so the four share one template. Their
-       action is ``RTL9602C_ACL_ACT_FWD_MIRROR`` to the CPU port.
+       query and the version 1 report; the other two MLD rules compare the
+       type 132 (``0x8400``), the done message, and 143 (``0x8f00``), the
+       version 2 report, under ``0xff00``. Each rule names all four fields and
+       ignores those it does not compare, so the eight share one template.
+       Their action is ``RTL9602C_ACL_ACT_FWD_MIRROR`` to the CPU port.
      - M
      - 3 of 3 MLDv1 reports to a group in the table were copied, and none of 3
        UDP frames and 3 ICMPv6 echo requests to the same group (see
-       "Actions").
+       "Actions"). With the CPU port out of the unknown-multicast flood mask,
+       where ff02::16 no longer reaches the CPU by flooding, an MLDv2 report
+       for ff3e::1234 made the bridge learn the group (see the *bridging*
+       page, "Multicast snooping").
    * - The rules take priority 65535, the largest a ``tc`` filter can have, and
        the entries after every rule of a smaller priority, so that a ``tc``
        rule that matches the same messages decides for them. Their cookies are
-       1 to 4, which no ``tc`` rule has: a flower rule's cookie is a kernel
+       1 to 8, which no ``tc`` rule has: a flower rule's cookie is a kernel
        address.
      - I
      - Design choice; a ``tc`` drop rule for IGMP on the SFP port would be
@@ -2828,7 +2833,7 @@ state that the driver depends on.
    Purpose: the switch drops a flood to the CPU. (M)
 8. Point field selectors 0 and 1 at the L4 source and destination ports.
    Purpose: ACL rules can match a port. (M)
-9. With bridge multicast snooping in the kernel, add the four rules that copy
+9. With bridge multicast snooping in the kernel, add the eight rules that copy
    IGMP and MLD from the SFP and PON ports to the CPU
    (``rtl9602c_acl_snoop_setup()``, see "Rules of the driver's own"). A rule
    that does not fit is logged. Purpose: the bridge snoops every report. (M)

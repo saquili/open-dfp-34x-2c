@@ -1243,7 +1243,9 @@ static inline unsigned int rtl9602c_gem_tcont_qbit(unsigned int n,
 
 /*
  * The ports a broadcast, an unknown multicast and an unknown unicast frame may
- * leave by.
+ * leave by, bit n for port n. In the unknown-multicast mask the CPU port's bit
+ * decides whether such frames reach the CPU, those to the reserved groups
+ * included, which pass a drop but follow the mask (measured).
  */
 #define RTL9602C_FLOOD_BCAST		0x01c020
 #define RTL9602C_FLOOD_UNKNOWN_MCAST	0x01c024
@@ -2987,6 +2989,11 @@ struct rtl9602c_priv {
 	 * @fdb_lock: BIT(0) for IPv4 and BIT(1) for IPv6
 	 */
 	u8 mc_drop;
+	/**
+	 * @mc_host: whether the unknown-multicast flood mask names the CPU
+	 * port, under @fdb_lock
+	 */
+	bool mc_host;
 	/**
 	 * @uc_drop: whether the PON port drops unknown unicast, under
 	 * @fdb_lock
