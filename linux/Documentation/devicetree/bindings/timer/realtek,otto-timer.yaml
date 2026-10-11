@@ -21,9 +21,11 @@ properties:
     items:
       - enum:
           - realtek,rtl9302-timer
+          - realtek,rtl9602c-timer
       - const: realtek,otto-timer
 
   reg:
+    minItems: 2
     items:
       - description: timer0 registers
       - description: timer1 registers
@@ -35,12 +37,28 @@ properties:
     maxItems: 1
 
   interrupts:
+    minItems: 1
     items:
       - description: timer0 interrupt
       - description: timer1 interrupt
       - description: timer2 interrupt
       - description: timer3 interrupt
       - description: timer4 interrupt
+
+allOf:
+  # The RTL9602C lists its first two timers and the first one's interrupt;
+  # its other timers and the second one's interrupt are not described.
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: realtek,rtl9302-timer
+    then:
+      properties:
+        reg:
+          minItems: 5
+        interrupts:
+          minItems: 5
 
 required:
   - compatible
