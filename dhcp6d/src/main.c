@@ -761,6 +761,55 @@ static int fixed_prefix(const char *arg, struct prefix *p)
 	return 0;
 }
 
+/* The prefix of the first ADDRESS/LEN word of line @field of file @path. */
+static bool prefix_in(const char *path, int field, struct prefix *p)
+{
+	char word[INET6_ADDRSTRLEN + 6];
+	bool ok = false;
+	FILE *f = fopen(path, "r");
+
+	if (!f)
+		return false;
+	for (int i = 0; i <= field && fscanf(f, "%51s", word) == 1; i++)
+		ok = i == field && !fixed_prefix(word, p);
+	fclose(f);
+	return ok;
+}
+
+/*
+ * What a dhcp6d of before that did not end in order, killed, left: for the
+ * prefix it last wrote to the file "prefix", which an orderly end removes,
+ * and the one of the host's binding, the prefix unreachable, the prefix
+ * through the host and the rule into the table; and the default route of
+ * the table. A delegation that comes again makes them again; one of
+ * another prefix would leave them. The kernel takes away only routes of
+ * protocol dhcp, ours.
+ */
+static void clear_leftovers(const struct daemon *d)
+{
+	static const uint8_t any[16];
+	struct prefix p[2];
+	char path[256];
+	int n = 0;
+
+	if (d->dir) {
+		snprintf(path, sizeof(path), "%s/prefix", d->dir);
+		n += prefix_in(path, 0, &p[n]);
+	}
+	if (d->binding)
+		n += prefix_in(d->binding, 3, &p[n]);
+	for (int i = 0; i < n; i++) {
+		route(false, RTN_UNREACHABLE, p[i].addr, p[i].len, NULL, 0,
+		      UNREACHABLE_METRIC, RT_TABLE_MAIN);
+		route(false, RTN_UNICAST, p[i].addr, p[i].len, NULL, 0,
+		      ROUTE_METRIC, RT_TABLE_MAIN);
+		if (d->table)
+			rule(false, &p[i], d->table);
+	}
+	if (d->table)
+		route(false, RTN_UNICAST, any, 0, NULL, 0, ROUTE_METRIC, d->table);
+}
+
 static int nibble(char c)
 {
 	return c >= '0' && c <= '9' ? c - '0' :
@@ -933,6 +982,7 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		server_init(&d.server, duid, duid_ll(duid, d.ra.mac));
+		clear_leftovers(&d);
 		load_binding(&d);
 		d.ssock = udp_socket(d.lan, DHCP6_SERVER_PORT, true);
 		if (d.ssock < 0) {

@@ -170,6 +170,39 @@ check '! ip -n st -6 route show proto dhcp | grep -q "^2001:db8:1200::/56 via"'
 kill "$(cat "$T/st.pid")"
 sleep 2
 
+echo "a stick killed leaves its routes, which the next one takes away"
+ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -t 103 -v >"$T/st.log" 2>&1 &
+echo $! >"$T/st.pid"
+ip netns exec ho "$D6" -c h0 >"$T/ho.out" 2>"$T/ho.log" &
+echo $! >"$T/ho.pid"
+for _ in $(seq 1 30); do
+	[ -s "$T/st/host" ] && ip -n st -6 rule show | grep -q "lookup 103" && break
+	sleep 1
+done
+kill -9 "$(cat "$T/st.pid")"
+sleep 1
+check 'ip -n st -6 route show proto dhcp | grep -q "^unreachable 2001:db8:1200::/56"'
+check 'ip -n st -6 rule show | grep -q "from 2001:db8:1200::/56 lookup 103"'
+check '[ -s "$T/st/prefix" ]'
+# The operator delegates another prefix now.
+kill "$(cat "$T/op.pid")"
+sleep 1
+ip netns exec op "$D6" -s 2001:db8:3400::/56 -l op0 -d 2001:db8::53 >"$T/op.log" 2>&1 &
+echo $! >"$T/op.pid"
+ip netns exec st "$D6" -w st0 -l st1 -m st0 -o "$T/st" -t 103 -v >"$T/st.log" 2>&1 &
+echo $! >"$T/st.pid"
+for _ in $(seq 1 30); do
+	[ "$(cat "$T/st/prefix" 2>/dev/null)" = 2001:db8:3400::/56 ] && break
+	sleep 1
+done
+check '[ "$(cat "$T/st/prefix")" = 2001:db8:3400::/56 ]'
+check '! ip -n st -6 route show proto dhcp | grep -q "2001:db8:1200::/56"'
+check '! ip -n st -6 rule show | grep -q "from 2001:db8:1200::/56"'
+check 'ip -n st -6 route show proto dhcp | grep -q "^unreachable 2001:db8:3400::/56"'
+check 'ip -n st -6 rule show | grep -q "from 2001:db8:3400::/56 lookup 103"'
+kill "$(cat "$T/st.pid")"
+sleep 2
+
 echo "netns: $checks checks, $failures failed"
 [ "$failures" -eq 0 ] || { echo "--- stick"; cat "$T/st.log"; echo "--- operator"; cat "$T/op.log"; }
 [ "$failures" -eq 0 ]

@@ -42,7 +42,10 @@ TABLE, with a rule that routes by it what comes from the prefix: where the
 stick hands the prefixes of two sessions to two hosts, each host's traffic
 leaves by the session its prefix came from. SIGTERM, SIGINT and SIGHUP take
 them away, advertise the stick with a router lifetime of 0, so that the host
-drops it, and release the prefix.
+drops it, and release the prefix. A dhcp6d killed leaves them; the next one
+takes them away as it starts, for the prefix in the file ``prefix`` of
+``-o``, which only a killed one leaves, and the prefix of the host's binding,
+with the default route of its table.
 
 The host's binding outlives dhcp6d in the file of ``-b``, one line: the
 host's DUID in hex, its IAID, its address and the prefix it had. A router
