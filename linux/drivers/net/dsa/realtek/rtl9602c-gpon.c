@@ -1639,23 +1639,6 @@ static const char *rtl9602c_ploam_ds_name(u8 id)
 }
 
 /*
- * Upstream message names by identifier, as G.984.3 clause 9.2.4 and its annex E
- * give them.
- */
-static const char *rtl9602c_ploam_us_name(u8 id)
-{
-	static const char * const names[] = {
-		[1] = "Serial_Number_ONU",	[2] = "Password",
-		[3] = "Dying_Gasp",		[4] = "No_message",
-		[5] = "Encryption_Key",		[6] = "Physical_Equipment_Error",
-		[7] = "PST",			[8] = "REI",
-		[9] = "Acknowledge",		[10] = "Sleep_Request",
-	};
-
-	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
-}
-
-/*
  * Acknowledge downstream message @dm (G.984.3 clause 9.2.4.9) on the urgent
  * queue: its identifier, then its first nine octets. Unacknowledged,
  * Assign_Alloc-ID and Configure_Port-ID are sent three times and then followed
@@ -2975,6 +2958,23 @@ void rtl9602c_gpon_stop(struct rtl9602c_priv *p)
 }
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
+
+/*
+ * Upstream message names by identifier, as G.984.3 clause 9.2.4 and its annex E
+ * give them.
+ */
+static const char *rtl9602c_ploam_us_name(u8 id)
+{
+	static const char * const names[] = {
+		[1] = "Serial_Number_ONU",	[2] = "Password",
+		[3] = "Dying_Gasp",		[4] = "No_message",
+		[5] = "Encryption_Key",		[6] = "Physical_Equipment_Error",
+		[7] = "PST",			[8] = "REI",
+		[9] = "Acknowledge",		[10] = "Sleep_Request",
+	};
+
+	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
+}
 
 /*
  * gpon: the downstream and the activation at a glance, from the registers at
