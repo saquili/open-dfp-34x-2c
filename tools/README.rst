@@ -6,24 +6,21 @@ tools
 =====
 
 Host-side tooling for building, checking and bringing up the product. Each
-subdirectory follows its own upstream conventions and is filled by its own work
-item:
+subdirectory has a README of its own, and ``make check`` runs their tests:
 
 * ``bench/`` -- the serial-console bench: console attach, the bootloader
-  driver, ramboot, and flashing with the bank guard (**WI-15**).
-* ``provenance/`` -- the provenance gates that keep the tree clean (**WI-02**).
+  driver, ramboot, and flashing with the bank guard.
+* ``provenance/`` -- the provenance gates that keep the tree clean.
 * ``equiv/`` -- the equivalence tools that prove the kernel code is unchanged
-  across the clean-up steps (**WI-03**).
+  across the clean-up steps.
 * ``isa-gate/`` -- the instruction-set gate that rejects any non-MIPS-I code in
-  a target binary (**WI-14**).
+  a target binary.
 * ``kernel-archive/`` -- the archive of the committed ``linux/`` tree that the
-  distribution build takes its kernel headers from (**WI-14**).
+  distribution build takes its kernel and its kernel headers from.
 * ``image-budget/`` -- the size check of the two flash images against their
-  partitions (**WI-14**).
+  partitions.
 * ``lib-trim/`` -- the cut of the image's shared libraries to what its programs
   use, with the check that every program finds what it needs.
-
-Each subdirectory carries its own README until it is filled.
 
 One script stands alone:
 

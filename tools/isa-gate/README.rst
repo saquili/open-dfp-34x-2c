@@ -90,4 +90,4 @@ words, so that every forbidden instruction is shown to fail the gate and the
 gate is shown able to fail. The ones that list instructions need a MIPS
 ``objdump`` (``binutils-mips-linux-gnu`` on Debian, or ``OBJDUMP=``) and are
 skipped without one. The distribution build runs the gate over the target tree
-(WI-14).
+(``make image-check``).
