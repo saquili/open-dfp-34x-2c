@@ -28,16 +28,8 @@
 
 #include <asm/bcache.h>
 #include <asm/cpu-features.h>
+#include <asm/lexra-cctl.h>
 #include <asm/page.h>
-
-/*
- * Operation words for CP0 register 20: invalidate the whole instruction
- * cache; write every dirty line of the data cache back to memory; write the
- * data cache back, then invalidate it.
- */
-#define RTL9602C_LEXRA_CACHE_CTRL_ICACHE_INV		0x00000002
-#define RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB		0x00000100
-#define RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB_INV		0x00000200
 
 /*
  * Issue one operation: write 0 to CP0 register 20, then the operation word.
@@ -59,13 +51,13 @@ static inline void cctl_op(unsigned long op)
 
 static void lexra_flush_dcache_all(void)
 {
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB_INV);
+	cctl_op(LEXRA_CCTL_DCACHE_WB_INV);
 }
 
 static void lexra_flush_cache_all(void)
 {
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB_INV);
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_ICACHE_INV);
+	cctl_op(LEXRA_CCTL_DCACHE_WB_INV);
+	cctl_op(LEXRA_CCTL_ICACHE_INV);
 }
 
 static void lexra___flush_cache_all(void)
@@ -115,8 +107,8 @@ static void lexra_flush_cache_page(struct vm_area_struct *vma,
  */
 static void lexra_flush_icache_range(unsigned long start, unsigned long end)
 {
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB);
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_ICACHE_INV);
+	cctl_op(LEXRA_CCTL_DCACHE_WB);
+	cctl_op(LEXRA_CCTL_ICACHE_INV);
 }
 
 static void lexra_flush_kernel_vmap_range(unsigned long vaddr, int size)
@@ -138,12 +130,12 @@ static void lexra_flush_data_cache_page(unsigned long addr)
  */
 static void lexra_dma_cache_wback_inv(unsigned long start, unsigned long size)
 {
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB_INV);
+	cctl_op(LEXRA_CCTL_DCACHE_WB_INV);
 }
 
 static void lexra_dma_cache_wback(unsigned long start, unsigned long size)
 {
-	cctl_op(RTL9602C_LEXRA_CACHE_CTRL_DCACHE_WB);
+	cctl_op(LEXRA_CCTL_DCACHE_WB);
 }
 
 /**
