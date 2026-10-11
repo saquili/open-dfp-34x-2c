@@ -3,10 +3,11 @@
 #
 # Top-level entry points for open-dfp-34x-2c.
 #
-# "make" builds the two flash images of the board, and "make sdk" the cross
-# toolchain as a tarball. Until the component a target drives has landed, the
-# target is a stub: it prints what it will do and which work item implements
-# it, then exits non-zero so that nothing mistakes a stub for a finished build.
+# "make" builds the two flash images of the board, its update file and the
+# package that the shipped firmware's web page installs, and "make sdk" the
+# cross toolchain as a tarball. A target that nothing implements yet is a
+# stub: it says what to do instead and exits non-zero, so that nothing
+# mistakes a stub for a finished build.
 
 .DEFAULT_GOAL := image
 
@@ -129,8 +130,8 @@ buildroot:
 
 omcid:
 	@echo 'open-dfp-34x-2c: "make omcid" is not implemented yet.'
-	@echo '  Planned: build the OMCI daemon from omcid/.'
-	@echo '  Arrives with: userspace (WI-16).'
+	@echo '  "make" builds the OMCI daemon into the image; "make -C omcid" builds'
+	@echo '  it for this host and "make -C omcid check" runs its tests (omcid/README.rst).'
 	@exit 1
 
 # The cross toolchain of configs/toolchain_defconfig, with static and shared
@@ -159,8 +160,8 @@ legal-info:
 
 docs:
 	@echo 'open-dfp-34x-2c: "make docs" is not implemented yet.'
-	@echo '  Planned: render the handbook and the kernel documentation.'
-	@echo '  Arrives with: the handbook (WI-20).'
+	@echo '  The pages are reStructuredText, read as they are (docs/README.rst);'
+	@echo '  "make -C linux htmldocs" renders the kernel documentation.'
 	@exit 1
 
 # The offline gates: the provenance gates (their own tests, then the tree and
@@ -204,22 +205,24 @@ flash:
 
 clean:
 	@echo 'open-dfp-34x-2c: "make clean" is not implemented yet.'
-	@echo '  Planned: remove build products.'
-	@echo '  Arrives with: the distribution build (WI-14).'
+	@echo '  Every build product is under build/; remove the directory of one build'
+	@echo '  (build/image, build/ram, build/linux, build/toolchain) to start it again.'
 	@exit 1
 
 distclean:
 	@echo 'open-dfp-34x-2c: "make distclean" is not implemented yet.'
-	@echo '  Planned: remove build products and the download cache.'
-	@echo '  Arrives with: the distribution build (WI-14).'
+	@echo '  Every build product and the download cache (build/dl) are under build/.'
 	@exit 1
 
 help:
-	@echo 'open-dfp-34x-2c entry points (make, make sdk, make legal-info, make linux,'
-	@echo 'make buildroot, make check, make ramboot and make flash work; the others are'
-	@echo 'stubs today):'
-	@echo '  make               build the flashable images k0.uImage and r0.squashfs'
-	@echo '                     in build/image/images (default; needs Linux)'
+	@echo 'open-dfp-34x-2c entry points (make omcid, make docs, make clean and'
+	@echo 'make distclean are stubs today; the others work):'
+	@echo '  make               build k0.uImage, r0.squashfs, update.bin and'
+	@echo '                     web-install.tar in build/image/images (default;'
+	@echo '                     needs Linux), then check them as make image-check'
+	@echo '  make image-check   check a built image: sizes, instruction set, digests'
+	@echo '  make ram-image     after make: the kernel with the image as its initramfs,'
+	@echo '                     build/image/images/ram.uImage, for make ramboot'
 	@echo '  make linux         build the kernel (uImage) with the Debian cross compiler'
 	@echo '  make buildroot     fetch, check and patch the pinned Buildroot'
 	@echo '  make omcid         build the OMCI daemon'
