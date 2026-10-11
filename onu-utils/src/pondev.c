@@ -140,12 +140,6 @@ static const char *type_name(uint32_t type)
 	switch (type) {
 	case PON_TYPE_GPON:
 		return "GPON";
-	case PON_TYPE_XGPON:
-		return "XG-PON";
-	case PON_TYPE_XGSPON:
-		return "XGS-PON";
-	case PON_TYPE_NGPON2:
-		return "NG-PON2";
 	default:
 		return "PON";
 	}
