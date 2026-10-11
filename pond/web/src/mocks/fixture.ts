@@ -6,7 +6,7 @@
  * replaced by a documentation value. The mocks start from it.
  */
 
-import type { Banks, Bridge, Firmware, Link, Live, Network, TcRules } from "../api/types";
+import type { Banks, Bridge, Firmware, Link, Live, Network, TcRules, Tls } from "../api/types";
 
 export const LIVE: Live = {
   uptime: {
@@ -571,6 +571,21 @@ export const FIRMWARE: Firmware = {
     },
   ],
   update: { state: "idle", received_b: 0, expected_b: 0, bank: null, version: null, message: null },
+};
+
+/* The panel's certificate at the address of the mock, made up. */
+export const TLS: Tls = {
+  https: true,
+  certificates: [
+    {
+      address: "localhost",
+      port: 443,
+      sha256:
+        "3F:49:08:62:85:06:F8:87:2D:21:FD:56:14:40:BC:16:E4:A8:88:86:D4:54:C6:48:88:B2:33:9E:56:D7:AF:02",
+      not_before: "2026-01-01T00:00:00Z",
+      not_after: "2028-04-04T23:59:59Z",
+    },
+  ],
 };
 
 export const BANKS: Banks = {

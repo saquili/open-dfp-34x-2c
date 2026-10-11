@@ -19,6 +19,7 @@ import type {
   OmciValue,
   SfpLane,
   TcRules,
+  Tls,
 } from "./types";
 
 interface Value<T> {
@@ -30,6 +31,13 @@ export const banksQuery = queryOptions({
   queryKey: ["banks"],
   queryFn: async () => (await request<Value<Banks>>("/api/get/banks")).value,
   staleTime: 60_000,
+});
+
+/* The panel's certificates: they change only with the stick's addresses. */
+export const tlsQuery = queryOptions({
+  queryKey: ["tls"],
+  queryFn: async () => (await request<Value<Tls>>("/api/get/tls")).value,
+  staleTime: 300_000,
 });
 
 export const identityQuery = queryOptions({
@@ -52,6 +60,10 @@ export function useOmci() {
 
 export function useBanks() {
   return useQuery(banksQuery);
+}
+
+export function useTls() {
+  return useQuery(tlsQuery);
 }
 
 export function useIdentity() {

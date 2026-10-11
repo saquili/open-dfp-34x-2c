@@ -920,6 +920,13 @@ export const en = {
     storeFailed: "Not saved",
     unknown: "Unknown",
     security: "Security",
+    connection: "Connection to the panel",
+    connectionHttps: "Encrypted (HTTPS)",
+    connectionHttp: "Not encrypted (HTTP)",
+    certificate: "Certificate fingerprint (SHA-256)",
+    certificateUntil: "Certificate valid until",
+    certificateHint:
+      "The stick signed its certificate itself, so the browser warns on the first visit. Compare this fingerprint with the one the browser shows, or with the one the stick prints on its console at boot.",
     restart: "Restart the stick",
     restartConfirm: "Restart the stick now? The connection drops for about half a minute.",
     report: "Download a diagnostic report",

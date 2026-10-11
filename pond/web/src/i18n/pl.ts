@@ -920,6 +920,13 @@ export const pl: Dictionary = {
     storeFailed: "Niezapisane",
     unknown: "Nieznane",
     security: "Bezpieczeństwo",
+    connection: "Połączenie z panelem",
+    connectionHttps: "Szyfrowane (HTTPS)",
+    connectionHttp: "Nieszyfrowane (HTTP)",
+    certificate: "Odcisk certyfikatu (SHA-256)",
+    certificateUntil: "Certyfikat ważny do",
+    certificateHint:
+      "Wkładka sama podpisała swój certyfikat, więc przeglądarka ostrzega przy pierwszym wejściu. Porównaj ten odcisk z tym, który pokazuje przeglądarka, albo z tym, który wkładka wypisuje na konsoli przy starcie.",
     restart: "Uruchom wkładkę ponownie",
     restartConfirm: "Uruchomić wkładkę ponownie? Połączenie zniknie na około pół minuty.",
     report: "Pobierz raport diagnostyczny",

@@ -6,7 +6,8 @@
  * the flash, as gauges, the last ten minutes of the first two, and a map of
  * the flash with what each partition holds. Software: the two systems of
  * the flash and the update of the one that does not run. Settings: the
- * stick's name, security, a restart and a report of every figure.
+ * stick's name, security with the panel's certificate, a restart and a
+ * report of every figure.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -23,6 +24,7 @@ import {
   useFirmware,
   useHostnameChange,
   useRestart,
+  useTls,
   useTryBank,
 } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
@@ -584,6 +586,41 @@ function HostnameForm({ name }: { name: string }) {
   );
 }
 
+/*
+ * The connection to the panel, and the certificate of the address it was
+ * opened at, which the stick signed itself: its fingerprint is what a person
+ * compares with the browser's, and with the one the console shows at boot.
+ */
+function Certificate() {
+  const { t, lang } = useI18n();
+  const tls = useTls();
+  const here = window.location.hostname;
+  const cert = tls.data?.certificates.find((c) => c.address === here);
+  const secure = window.location.protocol === "https:";
+  return (
+    <>
+      <Facts
+        rows={[
+          [
+            t("system.connection"),
+            <Badge key="tls" tone={secure ? "good" : "warn"}>
+              {t(secure ? "system.connectionHttps" : "system.connectionHttp")}
+            </Badge>,
+          ],
+          cert && [
+            t("system.certificate"),
+            <span key="fp" className="break-all font-mono text-xs">
+              {cert.sha256}
+            </span>,
+          ],
+          cert && [t("system.certificateUntil"), day(Date.parse(cert.not_after) / 1000, lang)],
+        ]}
+      />
+      {cert && <p className="text-xs text-base-content/60">{t("system.certificateHint")}</p>}
+    </>
+  );
+}
+
 async function report() {
   const ids = (await request<{ items: { id: string }[] }>("/api/schema")).items.map((i) => i.id);
   const values: Record<string, unknown> = {};
@@ -646,6 +683,7 @@ function SettingsTab() {
       </Card>
 
       <Card title={t("system.security")}>
+        <Certificate />
         <div className="flex flex-wrap gap-2">
           <Link to="/password" className="btn btn-sm">
             <KeyRound className="size-4" />

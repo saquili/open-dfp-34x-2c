@@ -374,6 +374,19 @@ export interface Settings {
   last_apply_status: number | null;
 }
 
+/** The panel's HTTPS: the certificate of each address it answers on (pond's "tls"). */
+export interface Tls {
+  https: boolean;
+  certificates: {
+    address: string;
+    port: number;
+    /** The SHA-256 of the certificate, as browsers show it: "AB:CD:...". */
+    sha256: string;
+    not_before: string;
+    not_after: string;
+  }[];
+}
+
 export interface Banks {
   partitions: {
     name: string;

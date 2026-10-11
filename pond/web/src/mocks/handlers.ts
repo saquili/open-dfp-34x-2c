@@ -18,7 +18,7 @@ import type {
   Settings,
   SfpLane,
 } from "../api/types";
-import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES } from "./fixture";
+import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
 import { OMCI, withServices } from "./omci";
 
 let rootSecret = "admin";
@@ -644,6 +644,11 @@ export const handlers = [
         ? HttpResponse.json({ id: "omci", value: dark ? { mes: [] } : omci })
         : unauthorized())
     );
+  }),
+
+  http.get("*/api/get/tls", async () => {
+    await delay(200);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "tls", value: TLS }) : unauthorized());
   }),
 
   http.get("*/api/get/banks", async () => {
