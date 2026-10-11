@@ -58,6 +58,31 @@ What it needs
 * Python 3.11 or later and an ssh client on the machine that runs the tests;
   ``python3`` and ``curl`` on the bench host.
 
+The cases and the image of today
+================================
+
+The suite was last recorded on 2026-10-07 (``docs/testing/``), on an image of
+before procd, netifd, the panel's HTTPS and the store in the partition
+``config``. Some cases still expect that image, or a tool no image carries:
+
+* The data-path cases that install rules of their own run ``tc``, which the
+  flash's image no longer carries since iproute2 left it (ADR 0014); they need
+  the RAM image (``make ram-image``).
+* ``data.pcp-rewrite`` runs ``dcb``, ``net.filter-loaded`` and
+  ``net.filter-drops`` run ``nft``, and ``system.phc`` runs ``ethtool``: no
+  image carries them, and the kernel has no netfilter.
+* ``system.watchdog`` and ``system.watchdog-reset`` look for BusyBox's watchdog
+  daemon; procd feeds the watchdog now (ADR 0013).
+* ``net.ssh-keys-only`` expects an ssh server that takes keys only; it takes
+  root's password too (ADR 0012).
+* The ``router.*`` cases are of the router of before the PPPoE sessions, and
+  are skipped.
+* ``mgmt.pond-https`` is new and has not been recorded.
+
+The PPPoE sessions, the delegated IPv6 prefix, an update with its trial, the
+way in through the shipped firmware's web page and the store in ``config`` have
+no case yet.
+
 Running
 =======
 
