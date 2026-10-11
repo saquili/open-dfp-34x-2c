@@ -43,9 +43,17 @@ What the build makes
        with the board, the version and the build's time, the two images, and
        their SHA-256.
      - The two images and 288 bytes; 3170072 bytes for the images above.
+   * - ``web-install.tar``
+     - The two images in the package that the web page of the stick's shipped
+       firmware installs into the bank it did not start from
+       (``updating.rst``): ``fwu.sh``, ``md5.txt``, and the bank cut where the
+       shipped firmware cuts it, made by ``mkweb.py``, which refuses a package
+       the page would refuse.
+     - The two images, the kernel's padding and some 13 KB; the page takes
+       fewer than 3932160 bytes.
    * - ``SHA256SUMS``
-     - The SHA-256 digests of the two images and the update file, in the form
-       ``sha256sum -c`` reads.
+     - The SHA-256 digests of the two images, the update file and the package,
+       in the form ``sha256sum -c`` reads.
      - 231 bytes.
    * - ``ram.uImage``
      - Made by ``make ram-image``, not by ``make``: the same kernel with the

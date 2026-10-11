@@ -205,6 +205,39 @@ What a failure costs
 After every measured failure both copies of the environment read back with a
 CRC that checks out, and the panel shows a failed trial as "last trial failed".
 
+From the shipped firmware's web page
+====================================
+
+A stick as it ships runs the shipped firmware, and its web page takes an
+update as a tar file that the shipped firmware installs into the bank it does
+not run: ``web-install.tar``. The page takes a file smaller than its bank,
+3932160 bytes, that holds ``md5.txt``; the shipped firmware's configd copies
+it, ``/etc/scripts/fwu_starter.sh`` checks the digest of the file's
+``fwu.sh`` against ``md5.txt`` and runs it as root with the bank to write, and
+the stick restarts. Nothing is signed or checked against the model.
+
+The package's ``fwu.sh`` (``br2-external/board/dfp-34x-2c3/fwu.sh``) writes
+this system into that bank in the shipped firmware's split of it: ``k``, the
+first 1328 KiB of this system's bank, into the shipped kernel partition, and
+``r``, the rest, into the shipped root filesystem partition, so that the
+kernel and the root filesystem land where this system's split has them. It
+refuses a stick whose partitions are not this stick's, reads both partitions
+back against the digests that ``mkweb.py`` wrote into it, and then sets
+``sw_version``, ``sw_valid``, ``onu_trial`` and ``sw_tryactive`` for the
+bank, as ``onu-update`` does. It exits 1 on purpose, and the page says the
+update failed: configd then leaves ``sw_commit`` on the shipped firmware's
+bank, and the boot loader starts this system once. ``onu-trial`` commits it
+when it is up; a system that does not come up is restarted by the watchdog
+into the shipped firmware.
+
+The new system finds the shipped firmware's files in the partition
+``config``, mounts them, takes the identity from them and starts with its
+settings' defaults, which it then keeps in a file of its own there
+(``boot-contract.rst``). The shipped firmware stays in the other bank until
+an update overwrites it: going back is a switch of the bank, from the boot
+loader's prompt (``run b<bank>``) or, for good, ``onu-update`` with
+``sw_commit`` (``onu-update env``).
+
 The first update
 ================
 
