@@ -1793,15 +1793,23 @@ int rtl9602c_port_vlan_filtering(struct dsa_switch *ds, int port,
 /**
  * rtl9602c_port_max_mtu() - the largest MTU a port can take
  * @ds: the switch
- * @port: unused; the limit is the same for every port
+ * @port: the user port
  *
- * DSA takes the lower of this and the conduit's own limit.
+ * A change of a user port's MTU changes the conduit's as well, and fails
+ * beyond the conduit's limit, which is far below the switch's: the CPU
+ * port's DMA engine takes an MTU of 1508, room for PPPoE around a 1500-byte
+ * packet. The CPU tag travels in the DMA descriptor and adds nothing to a
+ * frame, so a port takes what the conduit takes.
  *
- * Return: the longest frame the switch accepts, less %RTL9602C_FRAME_OVERHEAD.
+ * Return: the lower of the conduit's largest MTU and the longest frame the
+ * switch accepts, less %RTL9602C_FRAME_OVERHEAD.
  */
 int rtl9602c_port_max_mtu(struct dsa_switch *ds, int port)
 {
-	return RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX - RTL9602C_FRAME_OVERHEAD;
+	const struct net_device *conduit = dsa_to_port(ds, port)->cpu_dp->conduit;
+
+	return min_t(int, conduit->max_mtu,
+		     RTL9602C_FRAMELEN_LIMIT0_BYTES_MAX - RTL9602C_FRAME_OVERHEAD);
 }
 
 /**

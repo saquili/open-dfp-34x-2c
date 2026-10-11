@@ -1153,9 +1153,10 @@ travels in the DMA descriptor.
        The writes run in an order that never holds a port below its MTU:
        ``RTL9602C_FRAMELEN_LIMIT0``, the ports that select it,
        ``RTL9602C_FRAMELEN_LIMIT1``, the ports that select it. The default MTU
-       of 1500 gives ``0x5fe``. ``rtl9602c_port_max_mtu()`` reports 0x3fff -
-       34 = 16349; the MTU a user port can take in practice is lower (see
-       "Known limitations"). The ports are forced to 1000 Mb/s, so the gigabit
+       of 1500 gives ``0x5fe``. The switch would take 0x3fff - 34 = 16349;
+       ``rtl9602c_port_max_mtu()`` reports the lower of that and the
+       conduit's limit, 1508 (see "Known limitations"). The ports are forced
+       to 1000 Mb/s, so the gigabit
        selector is the one in use; that the 10/100 selector works like it has
        not been verified.
      - M, T, I
@@ -1955,12 +1956,12 @@ Known limitations
 =================
 
 - The largest MTU a user port takes is the conduit's, 1508, room for PPPoE's
-  1500-byte packets (RFC 4638). ``rtl9602c_port_max_mtu()`` reports 16349, but
-  DSA bounds the MTU of a user port by the ``max_mtu`` of the conduit, so a
-  larger MTU on ``sfp`` or ``pon`` fails with ``-ERANGE``: the conduit's
-  transmit engine, in the mode the driver uses, stops on long frames (see the
-  *CPU port* page). The switch's own limit, described in "Maximum frame
-  length", is not what stops it.
+  1500-byte packets (RFC 4638), and ``rtl9602c_port_max_mtu()`` reports it,
+  as the ``maxmtu`` of ``sfp`` and ``pon``. A change of a user port's MTU
+  changes the conduit's as well, and the conduit's transmit engine, in the
+  mode the driver uses, stops on long frames (see the *CPU port* page). The
+  switch's own limit, described in "Maximum frame length", is not what stops
+  it.
 - The switch has two frame length limits for four ports, so with three
   different MTUs a port with the smallest accepts frames up to the middle one's
   limit (see "Maximum frame length").
