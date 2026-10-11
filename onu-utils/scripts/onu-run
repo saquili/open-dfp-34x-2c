@@ -163,13 +163,15 @@ pond)
 	[ -w "$RUN/pond" ] || log=/dev/null
 	token=
 	[ -r "$RUN/pond/token" ] && token=$RUN/pond/token
+	# Started as root, the daemon runs as the account pond, with the one
+	# power to listen on ports 80 and 443 (pond -u).
 	if [ -r "$RUN/pond/tls.key" ]; then
-		exec pond -l "https://$mgmt:443" -l "http://$mgmt:80" \
+		exec pond -u pond -l "https://$mgmt:443" -l "http://$mgmt:80" \
 			${data:+-l "https://$data:443" -l "http://$data:80"} \
 			-k "$RUN/pond/tls.key" ${token:+-t "$token"} >>"$log" 2>&1
 	fi
 	echo "onu-run: no key for HTTPS: the panel over HTTP" >>"$log"
-	exec pond -l "http://$mgmt:80" ${data:+-l "http://$data:80"} \
+	exec pond -u pond -l "http://$mgmt:80" ${data:+-l "http://$data:80"} \
 		${token:+-t "$token"} >>"$log" 2>&1
 	;;
 *)
