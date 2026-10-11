@@ -29,10 +29,9 @@ The driver implements these devlink objects and no others:
 The driver registers no generic parameters, resources, traps, health reporters
 or shared buffers, and it does not support reload. DSA creates the devlink
 ports of the switch, and the driver adds nothing to them. The SerDes lane to
-the host finds the host's speed and in-band negotiation itself; the module
-parameters ``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an``, not devlink
-parameters, narrow what it tries, as Documentation/networking/dsa/rtl9602c.rst
-describes.
+the host finds the host's speed and in-band negotiation itself, as
+Documentation/networking/dsa/rtl9602c.rst describes; the parameter
+``sfp_lane`` narrows what it tries.
 
 The hardware behind the parameters is described on these pages, which the
 sections below name again where a parameter uses them:
@@ -743,9 +742,8 @@ in 1000BaseX with or without it (IEEE 802.3 clause 37), and nothing on the lane
 says which the host takes. While the lane's receiver has not synchronised, the
 driver tries the settings in turn, once a second, and keeps the first that
 synchronises (Documentation/networking/dsa/rtl9602c.rst). ``sfp_lane`` narrows
-the settings it may try, at run time as the module parameters ``sfp_mode`` and
-``sfp_an`` do at load: to one, which brings the lane up in it at once when it
-runs in another, or to all of them again. A lane in a setting that is still
+the settings it may try: to one, which brings the lane up in it at once when it
+runs in another, or to all of them again, as at probe. A lane in a setting that is still
 allowed is left alone, so ``auto`` never interrupts it. ``sfp_lane_now`` says
 which setting the lane runs in. The management of the stick comes over this
 lane, so a setting the host does not take cuts it off: whoever changes it must

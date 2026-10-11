@@ -106,7 +106,7 @@ order"). Three things are particular to this switch:
 - Every port is a fixed link. phylink does not learn a state from a PHY: it
   asks the driver for the state of each port, and the driver forces each MAC's
   link, speed and duplex, because no port has a partner to learn them from (see
-  "Forced MAC ability" and "phylink and the lane parameters").
+  "Forced MAC ability" and "phylink and the lane").
 
 The driver implements 55 operations of ``struct dsa_switch_ops`` and the three
 operations of ``struct phylink_mac_ops`` (``mac_config``, ``mac_link_up`` and
@@ -403,9 +403,6 @@ Interfaces to user space
   ``frame_capture`` (``devlink region``). ``devlink dev info`` also shows the
   identification of the part (see "Access and identification"); the rest is on
   the *devlink* page.
-- The module parameters ``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an``, on the
-  kernel command line and as read-only files in
-  ``/sys/module/rtl9602c/parameters/`` (see "phylink and the lane parameters").
 - ``/sys/kernel/debug/rtl9602c/``, one directory whose views the blocks of the
   driver create. ``rtl9602c-offload.c`` creates ``qdepth``, ``rma``,
   ``svlan``, ``egress_capture``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf``,
@@ -543,11 +540,9 @@ rest (see "Setup, in order").
      - The word read with the fibre dark; through the driver, the same
        ``devlink dev info`` (output below).
    * - The compatible is ``realtek,rtl9602c-switch``. The platform driver and
-       the module are named ``rtl9602c``, so the parameters are
-       ``rtl9602c.sfp_mode`` and ``rtl9602c.sfp_an`` on the kernel command line
-       and read-only files in ``/sys/module/rtl9602c/parameters/``. The debugfs
-       views are in ``/sys/kernel/debug/rtl9602c/``, and the driver's log lines
-       begin ``rtl9602c-switch:``.
+       the module are named ``rtl9602c``. The debugfs views are in
+       ``/sys/kernel/debug/rtl9602c/``, and the driver's log lines begin
+       ``rtl9602c-switch:``.
      - T
      - The board boots to a shell with the switch probed.
    * - Port numbers: 0 is the SFP SerDes lane to the host
@@ -769,7 +764,7 @@ Registers and modes
      - With the host up, the bit clear and symbol errors flagged; the rise in
        about 20 ms after a correct bring-up; the bit clear in 1000BaseX
        against 2.5 Gb/s. Through the driver, ``/sys/class/net/sfp/carrier``
-       follows it (see "phylink and the lane parameters").
+       follows it (see "phylink and the lane").
    * - ``RTL9602C_SERDES_CTRL_CLK_STOP`` (bit 13) stops the lane's clock;
        ``RTL9602C_SERDES_CTRL_PCIE`` (bit 15) and
        ``RTL9602C_SERDES_CTRL_PHY_MODE`` (bit 8) are cleared by every
@@ -959,8 +954,8 @@ link bounces, 20 of 20 times, without rebooting the stick.
      - Remove the resync and bounce the host port; the assumption predicts
        ``LINK_UP`` stays clear. Not load-bearing: the resync is always done.
 
-phylink and the lane parameters
-===============================
+phylink and the lane
+====================
 
 All three ports are fixed links in the device tree, so phylink does not learn a
 state from a PHY: it asks the driver for the state of each port once a second,
@@ -986,8 +981,8 @@ and a work item, ``rtl9602c_sds_work()``, checks the lane once a second
    pulses its restart and re-latches the lane. Purpose: the host's setting is
    found within the three seconds the settings take. (M)
 
-The module parameters ``sfp_mode`` and ``sfp_an`` narrow the settings tried.
-phylink's ``mac_config`` leaves the lane alone: the interface it passes is the
+The devlink parameter ``sfp_lane`` narrows the settings tried (see the
+*devlink* page). phylink's ``mac_config`` leaves the lane alone: the interface it passes is the
 device tree's ``phy-mode``, which says nothing about the host.
 
 .. list-table::
@@ -1049,16 +1044,11 @@ device tree's ``phy-mode``, which says nothing about the host.
        down`` and ``up``: phylink logged ``configuring for fixed/2500base-x
        link mode``, and the link came back at ``1Gbps/Full`` with the host's
        link up throughout the search.
-   * - ``sfp_mode`` is a read-only string parameter: ``auto``, the default, or
-       ``2500basex`` or ``1000basex``, which keep the search to the settings of
-       that speed; ``sfp_an``, likewise, ``auto``, ``on`` or ``off``, keeps it
-       to the settings with or without in-band negotiation. With one setting
-       left the lane stays in it. A pair that leaves none logs a warning and
-       means ``auto`` for both. Setup logs ``SFP lane in <setting>``, followed
-       by ``, looking for the host's setting`` while more than one is left.
+   * - Setup brings the lane up in the first setting and logs ``SFP lane in
+       <setting>, looking for the host's setting``; every setting may be tried
+       until ``sfp_lane`` leaves one.
      - T
-     - The board boots to a shell with the defaults and finds the host's
-       setting. The narrowed sets are read from the code.
+     - The board boots to a shell and finds the host's setting.
 
 The CPU tag, switch side
 ========================
@@ -1813,9 +1803,8 @@ part that fails is logged and setup still succeeds: a switch without its
 optics, its PHC, its OMCI channel or its GEM data path still switches frames.
 A step that belongs to another page is named and handed over.
 
-1. Bring up the SerDes lane in the first setting that ``sfp_mode`` and
-   ``sfp_an`` leave, and start the work that looks for the host's setting (see
-   "The SerDes lane to the host" and "phylink and the lane parameters"; the log
+1. Bring up the SerDes lane in its first setting, and start the work that looks for the host's setting (see
+   "The SerDes lane to the host" and "phylink and the lane"; the log
    line is ``SFP lane in 2500BaseX, looking for the host's setting``). Purpose:
    the lane first, because nothing else carries a frame without it. (T)
 2. Force the CPU port up at 1000 Mb/s full duplex (see "Forced MAC ability").
@@ -1995,7 +1984,7 @@ Assumptions the driver depends on
    * - Assumption
      - What would settle it
    * - A host that runs 1000BaseX without in-band negotiation links with the
-       lane's third setting ("phylink and the lane parameters").
+       lane's third setting ("phylink and the lane").
      - Such a host port, and the stick's log naming the setting found.
    * - The counter offsets tagged I are what their names say ("Per-port
        counters").

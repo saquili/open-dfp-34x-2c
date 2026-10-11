@@ -417,18 +417,8 @@ static int rtl9602c_devlink_info_get(struct dsa_switch *ds,
  * commonly negotiates in band, and sometimes does not. So while the lane's
  * receiver has not synchronised, rtl9602c_sds_work() tries the settings of
  * rtl9602c_sds_tries[] in turn and keeps the first one that synchronises.
- * rtl9602c.sfp_mode and rtl9602c.sfp_an narrow the settings tried to one
- * speed or one choice of negotiation; with both set, the lane keeps the one
- * setting left. The devlink parameter sfp_lane narrows them at run time.
+ * The devlink parameter sfp_lane narrows them to one, or allows them all.
  */
-static char *sfp_mode = "auto";
-module_param(sfp_mode, charp, 0444);
-MODULE_PARM_DESC(sfp_mode, "SFP lane speed: auto (default), 2500basex or 1000basex");
-
-static char *sfp_an = "auto";
-module_param(sfp_an, charp, 0444);
-MODULE_PARM_DESC(sfp_an, "SFP lane in-band auto-negotiation: auto (default), on or off");
-
 /* The lane settings, in the order they are tried, and their sfp_lane names. */
 static const struct {
 	u32 mode;
@@ -446,33 +436,6 @@ static const struct {
 
 /* How long one setting is given to synchronise, and how often it is checked. */
 #define RTL9602C_SDS_TRY_MS	1000
-
-/* The settings that sfp_mode and sfp_an leave to be tried, one bit each. */
-static u8 rtl9602c_sds_params(void)
-{
-	bool any_mode = !strcmp(sfp_mode, "auto"), any_an = !strcmp(sfp_an, "auto");
-	u8 tries = 0;
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++) {
-		u32 mode = rtl9602c_sds_tries[i].mode;
-		bool an = rtl9602c_sds_tries[i].an;
-
-		if (!any_mode &&
-		    !(mode == RTL9602C_SERDES_CTRL_MODE_2500BASEX ?
-		      !strcmp(sfp_mode, "2500basex") : !strcmp(sfp_mode, "1000basex")))
-			continue;
-		if (!any_an && strcmp(sfp_an, an ? "on" : "off"))
-			continue;
-		tries |= BIT(i);
-	}
-	if (!tries) {
-		pr_warn("sfp_mode=\"%s\" sfp_an=\"%s\" leave no lane setting; trying them all\n",
-			sfp_mode, sfp_an);
-		tries = RTL9602C_SDS_ALL;
-	}
-	return tries;
-}
 
 /**
  * rtl9602c_serdes_init() - bring up the SerDes lane to the host
@@ -1521,10 +1484,10 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	int err;
 
 	/*
-	 * The lane in the first setting that may be tried; the work tries the
-	 * others until one synchronises, unless the parameters leave one.
+	 * The lane in the first setting; the work tries the others until one
+	 * synchronises, unless sfp_lane later leaves one.
 	 */
-	p->sds_tries = rtl9602c_sds_params();
+	p->sds_tries = RTL9602C_SDS_ALL;
 	p->sds_found = false;
 	mutex_lock(&p->sds_lock);
 	rtl9602c_sds_set(p, __ffs(p->sds_tries));
