@@ -124,6 +124,13 @@ echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore &&
 echo 0 >/proc/sys/net/ipv4/neigh/default/proxy_delay &&
 	echo 0 >/proc/sys/net/ipv4/neigh/sfp/proxy_delay ||
 	warn "proxy ARP answers late"
+# The servers listen on their addresses whether or not an interface has them
+# yet, so that one that comes later, or comes back, is served without a
+# restart of the server, and a server that procd starts again does not fail
+# while an address is away.
+echo 1 >/proc/sys/net/ipv4/ip_nonlocal_bind &&
+	echo 1 >/proc/sys/net/ipv6/ip_nonlocal_bind ||
+	warn "a server does not listen on an address that comes later"
 
 # The setting of the SFP lane its owner kept (onu-lane), if any; the driver
 # looks for the host's otherwise.
@@ -211,20 +218,18 @@ if [ -r /etc/pond.token ]; then
 		chown pond:pond /run/pond/token && chmod 400 /run/pond/token ||
 		warn "the token of scripts is not the status daemon's"
 fi
-# The panel's key, for the status daemon alone to read, and the ports below
-# 1024 that it listens on, 80 and 443, open to every account: the stick runs
-# no program of a person's own.
+# The panel's key, for the status daemon alone to read. The daemon starts as
+# root, binds its ports, 80 and 443, and runs as the account pond, keeping
+# only the power to listen on a port below 1024 (pond -u).
 if [ -r /run/onu-tls-key ]; then
 	cp /run/onu-tls-key /run/pond/tls.key &&
 		chown pond:pond /run/pond/tls.key && chmod 400 /run/pond/tls.key ||
 		warn "the key of HTTPS is not the status daemon's: the panel answers over HTTP"
 fi
-echo 80 >/proc/sys/net/ipv4/ip_unprivileged_port_start ||
-	warn "the status daemon cannot listen on ports 80 and 443"
 envs=$(sed -n 's,^\(mtd[0-9]*\):.* "env2*"$,/dev/\1,p' /proc/mtd)
 [ -n "$envs" ] && chown :pond $envs && chmod 640 $envs ||
 	warn "the status daemon does not read the boot loader's environment"
-onu-svc start pond -u pond -- /usr/lib/onu/onu-run pond || warn "no status daemon"
+onu-svc start pond -- /usr/lib/onu/onu-run pond || warn "no status daemon"
 
 # The time, which the stick has no clock of its own for and the OLT does not
 # give: ntpd sets the clock from the router at the other end of the
