@@ -183,7 +183,8 @@ static int otto_wdt_restart(struct watchdog_device *wdev, unsigned long reboot_m
 	u32 reset_mode;
 	u32 v;
 
-	disable_irq(ctrl->irq_phase1);
+	if (ctrl->irq_phase1)
+		disable_irq(ctrl->irq_phase1);
 
 	switch (reboot_mode) {
 	case REBOOT_SOFT:
@@ -233,6 +234,17 @@ static const struct watchdog_info otto_wdt_info = {
 		WDIOF_MAGICCLOSE |
 		WDIOF_SETTIMEOUT |
 		WDIOF_PRETIMEOUT,
+};
+
+/*
+ * Without the phase 1 interrupt no pretimeout can be delivered. Phase 2 then
+ * keeps the one second it gets at probe.
+ */
+static const struct watchdog_info otto_wdt_info_nopretimeout = {
+	.identity = "Realtek Otto watchdog timer",
+	.options = WDIOF_KEEPALIVEPING |
+		WDIOF_MAGICCLOSE |
+		WDIOF_SETTIMEOUT,
 };
 
 static int otto_wdt_probe_clk(struct otto_wdt_ctrl *ctrl)
@@ -311,21 +323,25 @@ static int otto_wdt_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ctrl->irq_phase1 = platform_get_irq_byname(pdev, "phase1");
-	if (ctrl->irq_phase1 < 0)
+	ctrl->irq_phase1 = platform_get_irq_byname_optional(pdev, "phase1");
+	if (ctrl->irq_phase1 == -ENXIO)
+		ctrl->irq_phase1 = 0;
+	else if (ctrl->irq_phase1 < 0)
 		return ctrl->irq_phase1;
 
-	ret = devm_request_irq(dev, ctrl->irq_phase1, otto_wdt_phase1_isr, 0,
-			"realtek-otto-wdt", ctrl);
-	if (ret)
-		return dev_err_probe(dev, ret, "Failed to get IRQ for phase1\n");
+	if (ctrl->irq_phase1) {
+		ret = devm_request_irq(dev, ctrl->irq_phase1, otto_wdt_phase1_isr, 0,
+				       "realtek-otto-wdt", ctrl);
+		if (ret)
+			return dev_err_probe(dev, ret, "Failed to get IRQ for phase1\n");
+	}
 
 	ret = otto_wdt_probe_reset_mode(ctrl);
 	if (ret)
 		return dev_err_probe(dev, ret, "Invalid reset mode specified\n");
 
 	ctrl->wdev.parent = dev;
-	ctrl->wdev.info = &otto_wdt_info;
+	ctrl->wdev.info = ctrl->irq_phase1 ? &otto_wdt_info : &otto_wdt_info_nopretimeout;
 	ctrl->wdev.ops = &otto_wdt_ops;
 
 	/*
