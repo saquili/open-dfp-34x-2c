@@ -738,9 +738,8 @@ measured about them.
      - One group looked up by hash after each step: the SFP port joins, word 2 =
        ``0x00002004`` (member set 0001, port 0); the PON port joins,
        ``0x00002014`` (0101, ports 0 and 2); the PON port leaves,
-       ``0x00002004``; the SFP port leaves, not found. ``bridge mdb`` needs a
-       kernel with bridge IGMP snooping, which ``rtl9602c_defconfig`` leaves
-       out.
+       ``0x00002004``; the SFP port leaves, not found. The group was looked
+       up by hash rather than read with ``bridge mdb``.
    * - A group with the CPU as a member needs
        ``RTL9602C_FDB_W2_MC_EXT_PORTS_CPU`` as well as the CPU port's member
        bit, the same pair as in "Port masks: four ports and seven extensions".

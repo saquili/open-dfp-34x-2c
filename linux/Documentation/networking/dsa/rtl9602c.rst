@@ -108,7 +108,7 @@ order"). Three things are particular to this switch:
   link, speed and duplex, because no port has a partner to learn them from (see
   "Forced MAC ability" and "phylink and the lane parameters").
 
-The driver implements 48 operations of ``struct dsa_switch_ops`` and the three
+The driver implements 55 operations of ``struct dsa_switch_ops`` and the three
 operations of ``struct phylink_mac_ops`` (``mac_config``, ``mac_link_up`` and
 ``mac_link_down``). The table groups the switch operations by the page that
 describes what they do, named as in "Where to read next"; every operation name
@@ -143,11 +143,11 @@ is prefixed ``rtl9602c_``.
        ``port_mirror_del``
      - *bridging*
    * - ``rtl9602c-offload.c``
-     - ``cls_flower_add``, ``cls_flower_del``, ``port_setup_tc``,
-       ``port_policer_add``, ``port_policer_del``, ``port_get_default_prio``,
-       ``port_set_default_prio``, ``port_get_dscp_prio``,
-       ``port_add_dscp_prio``, ``port_del_dscp_prio``, ``port_set_apptrust``,
-       ``port_get_apptrust``
+     - ``cls_flower_add``, ``cls_flower_del``, ``cls_flower_stats``,
+       ``port_setup_tc``, ``port_policer_add``, ``port_policer_del``,
+       ``port_get_default_prio``, ``port_set_default_prio``,
+       ``port_get_dscp_prio``, ``port_add_dscp_prio``, ``port_del_dscp_prio``,
+       ``port_set_apptrust``, ``port_get_apptrust``, ``port_set_pcp_rewr``
      - *acl-qos*; the flowtable offload of ``port_setup_tc`` is *l3-nat*'s.
    * - ``rtl9602c-ptp.c``
      - ``get_ts_info``, ``port_hwtstamp_get``, ``port_hwtstamp_set``,
@@ -230,9 +230,9 @@ Configuration
 conduit and DSA in (``CONFIG_NET_DSA_RTL9602C=y``, ``CONFIG_RTL9602C_ETH=y``
 and ``CONFIG_NET_DSA=y``) and sets the options through which the offloads are
 used: the bridge with VLAN filtering, the ``tc`` classifiers, actions and
-qdiscs (flower, matchall, police, gact, mirred, vlan, tbf and ets), DCB, and
-netfilter's flowtable (``CONFIG_NF_FLOW_TABLE``, ``CONFIG_NFT_FLOW_OFFLOAD``).
-It also sets ``CONFIG_DEBUG_FS=y``.
+qdiscs (flower, matchall, police, gact, mirred, vlan, tbf and ets), and DCB.
+It leaves netfilter out, so the flowtable offload of the *l3-nat* page is not
+reached in that configuration. It also sets ``CONFIG_DEBUG_FS=y``.
 
 Device tree and binding
 -----------------------
@@ -399,7 +399,7 @@ Interfaces to user space
       ethtool -S cpu | grep s00_p03_
 
 - ``devlink`` on the handle ``platform/1b000000.switch``: ``devlink dev info``,
-  the 24 driver parameters (``devlink dev param``) and the region
+  the 27 driver parameters (``devlink dev param``) and the region
   ``frame_capture`` (``devlink region``). ``devlink dev info`` also shows the
   identification of the part (see "Access and identification"); the rest is on
   the *devlink* page.
@@ -407,12 +407,16 @@ Interfaces to user space
   kernel command line and as read-only files in
   ``/sys/module/rtl9602c/parameters/`` (see "phylink and the lane parameters").
 - ``/sys/kernel/debug/rtl9602c/``, one directory whose views the blocks of the
-  driver create. ``rtl9602c-offload.c`` creates ``qdepth``, ``rma``, ``svlan``,
-  ``egress_capture``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf`` and ``l3capture``;
-  ``rtl9602c-l2.c`` creates ``fdb``; ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``, ``usburst``,
-  ``gemusintr``, ``bwmap`` and ``uscntr``; ``rtl9602c-ponmac.c`` creates
-  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``,
-  ``eeblocks`` and ``tables``; ``rtl9602c-ptp.c`` creates ``todstat`` and ``ptpstat``. A
+  driver create. ``rtl9602c-offload.c`` creates ``qdepth``, ``rma``,
+  ``svlan``, ``egress_capture``, ``l3nat``, ``l3flow``, ``l2learn``, ``cf``,
+  ``l3capture`` and ``qos``; ``rtl9602c-l2.c`` creates ``fdb``;
+  ``rtl9602c-gpon.c`` creates ``gpontbl``, ``gpon``, ``ploamlog``,
+  ``usburst``, ``gemusintr``, ``bwmap`` and ``uscntr``, and ``ploaminject``
+  with ``CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT``; ``rtl9602c-ponmac.c`` creates
+  ``ponmac``, ``ponpath`` and ``pondp``; ``rtl9602c-optics.c`` creates ``a2``
+  and ``eeblocks``, and ``tables`` and ``t2write`` without
+  ``CONFIG_RTL9602C_OPTICS_RO``; ``rtl9602c-ptp.c`` creates ``todstat`` and
+  ``ptpstat``. A
   view belongs to the block that creates it, and the page of that block says
   what it shows.
 - ``/proc/interrupts``: the switch's interrupt is source 8 of the SoC interrupt

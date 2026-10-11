@@ -225,8 +225,12 @@ Configuration
    * - ``CONFIG_DEBUG_FS``
      - The views ``l3nat``, ``l3flow`` and ``l3capture``.
 
-``rtl9602c_defconfig`` sets all of them except ``CONFIG_PON``, which the driver
-selects.
+``rtl9602c_defconfig`` sets ``CONFIG_NET_DSA_RTL9602C``, ``CONFIG_PPP``,
+``CONFIG_PPPOE``, ``CONFIG_VLAN_8021Q``, ``CONFIG_IPV6`` and
+``CONFIG_DEBUG_FS``, and the driver selects ``CONFIG_PON``. It sets none of the
+netfilter options: the board routes in the engine through the route
+notifiers, and the flowtable offload and its source NAT are not reached in
+that configuration.
 
 Device tree
 -----------
