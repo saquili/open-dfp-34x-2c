@@ -541,7 +541,9 @@ select, byte 127, is written as ``0x7f`` in the code.
    * - A0h and A2h bytes 0-127 take writes without any password, and what is
        written there survives a power cycle of the module: a write there is a
        permanent change to the module. The driver writes none of it except A2h
-       bytes 123-127, in the modulation hold.
+       bytes 123-127: the password bytes, 123-126, which read 00 whatever is
+       written, and the page select, 127, which it writes only when the byte
+       holds another value.
      - M
      - Bytes written to A0h and A2h 0-127 over this bus were still there after
        the module had been without power.
@@ -809,9 +811,9 @@ password bytes 123 to 126, as the modulation hold does, and it puts byte 127
 back as it found it at the end, also when a table fails (``=== table <n>:
 failed: <error>``). Table 2 holds the laser driver's configuration, among it
 the receiver's loss-of-signal control (BBh) and the APD bias control (BDh);
-table 6 the temperature-indexed APD DAC values at C0h to FFh. Bytes 123 to 127
-are kept in the module's EEPROM, so every read of the view writes the EEPROM;
-a build with ``CONFIG_RTL9602C_OPTICS_RO`` has no such view::
+table 6 the temperature-indexed APD DAC values at C0h to FFh. Byte 127 is kept
+in the module's EEPROM, so a read of the view writes the EEPROM once for each
+table it shows; a build with ``CONFIG_RTL9602C_OPTICS_RO`` has no such view::
 
     # cat /sys/kernel/debug/rtl9602c/tables
     === table 0
@@ -1184,15 +1186,16 @@ nothing. Its steps:
 
 1. Write ``0xff`` to A2h bytes 123, 124, 125 and 126. Purpose: prepare the table
    before it is shown. (I)
-2. Read A2h byte 127 and keep the value; write ``02h`` to it. Purpose: show the
-   configuration table at A2h 128-255, and remember the page to restore. (T)
+2. Read A2h byte 127 and keep the value; write ``02h`` to it unless it holds
+   ``02h`` already. Purpose: show the configuration table at A2h 128-255, and
+   remember the page to restore. (T)
 3. Read PERSIST, MOD_LIMIT and ER_CTRL. Purpose: the three values the next steps
    decide on. (T)
 4. If bits 1:0 of PERSIST are not both set, log ``EEPROM updates are enabled``
    and give up with ``-EPERM``. Purpose: a table write now would be copied into
-   the EEPROM, so none is made. (M) By then steps 1 and 2 have written A2h bytes
-   123 to 127, which the module keeps: the table, PERSIST included, is shown
-   only after them.
+   the EEPROM, so none is made. (M) By then steps 1 and 2 have written the
+   password bytes, and the page select when it held another page, which the
+   module keeps: the table, PERSIST included, is shown only after them.
 5. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
    and wait 400 ms. Purpose: the table takes writes. (I)
 6. If a lower transmit power level is set, put the module's own modulation and

@@ -273,8 +273,9 @@ int rtl9602c_l_read(struct rtl9602c_priv *p, u16 reg, u8 *val)
 /*
  * A0h and A2h bytes 0-127 take writes without a password and keep them
  * across a power cycle of the module: a write there is a permanent change
- * to it.  Of those bytes the driver writes only A2h 123-127, in the
- * modulation hold.
+ * to it.  Of those bytes the driver writes only A2h 123-127: the password,
+ * 123-126, which reads back 00 whatever is written (measured on this board),
+ * and the page select, 127, through rtl9602c_l_write_changed().
  */
 static int rtl9602c_l_write(struct rtl9602c_priv *p, u16 reg, u8 val)
 {
@@ -286,6 +287,22 @@ static int rtl9602c_l_write(struct rtl9602c_priv *p, u16 reg, u8 val)
 	if (err)
 		return err;
 	return rtl9602c_i2c_write_byte(p, slave, sub, val);
+}
+
+/*
+ * Write a byte only when it holds another value, so that a byte kept in the
+ * module's EEPROM, such as the page select that every bring-up sets and puts
+ * back, is written only when it changes.
+ */
+static int rtl9602c_l_write_changed(struct rtl9602c_priv *p, u16 reg, u8 val)
+{
+	u8 now;
+	int err;
+
+	err = rtl9602c_l_read(p, reg, &now);
+	if (err || now == val)
+		return err;
+	return rtl9602c_l_write(p, reg, val);
 }
 
 /**
@@ -810,14 +827,14 @@ static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long actio
 	err = rtl9602c_gn_t2_password(p) ?:
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
 	if (!err) {
-		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
+		err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
 		      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
 				      &eectl);
 		if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) ==
 			    RTL9602C_OPTICS_TBL2_PERSIST_OFF)
 			err = rtl9602c_gn_t2_prepare(p) ?:
 			      rtl9602c_optics_level_set(p, 0);
-		rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+		rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
 	}
 	if (!err)
 		p->optics_mode = 0;
@@ -883,7 +900,7 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
 	if (err)
 		goto told;
-	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
+	err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
 			      &eectl);
 	if (!err && (eectl & RTL9602C_OPTICS_TBL2_PERSIST_OFF) !=
@@ -907,7 +924,7 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 			p->optics_mode = 0;
 		}
 	}
-	rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+	rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
 	if (!err)
 		rtl9602c_optics_tx_bias(p, &tx, &bias);
 told:
@@ -940,11 +957,11 @@ told:
  * of the SoC too, and a power cycle gives the module its own configuration
  * back.  PERSIST is in the table, which the module shows only after the
  * password bytes and the page select have been written, so a hold that
- * gives up with -EPERM has written A2h bytes 123-127, which the module keeps
- * in its EEPROM; table byte 0xcc and the table itself are written only once
- * PERSIST keeps register changes out of the EEPROM.  Once the page select
- * has been written, every path writes it back as found, without checking
- * that write.
+ * gives up with -EPERM has written the password bytes, and the page select
+ * when it did not hold 02h, which the module keeps in its EEPROM; table byte
+ * 0xcc and the table itself are written only once PERSIST keeps register
+ * changes out of the EEPROM.  Once the page select has been set, every path
+ * puts it back as found, without checking that write.
  *
  * Context: Process context.  May sleep.
  * Return: 0 when the modulation is held; -EPERM when table writes would
@@ -963,7 +980,7 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 		return err;
 
 	/* Show the table; from here every path puts the page select back. */
-	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
+	err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
 			      &eectl) ?:
 	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_MOD_LIMIT,
@@ -1064,7 +1081,7 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 			hi, lo, er, rb_er);
 out:
 	/* Leave the page select as it was found. */
-	rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
+	rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tabsel);
 	return err;
 }
 
@@ -1148,7 +1165,7 @@ static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 		return 0;
 	}
 	for (t = 0; t < ARRAY_SIZE(tables); t++) {
-		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tables[t]);
+		err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, tables[t]);
 		for (i = 0; i < sizeof(b) && !err; i++)
 			err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x80 + i, &b[i]);
 		if (err) {
@@ -1160,7 +1177,7 @@ static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 			seq_printf(s, "%02x: %*ph\n", 0x80 + i, 16, b + i);
 		seq_puts(s, "\n");
 	}
-	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, was);
+	err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, was);
 	mutex_unlock(&p->i2c_lock);
 	if (err)
 		seq_printf(s, "the page select was not put back to %02x: %d\n", was, err);
@@ -1307,7 +1324,7 @@ static int rtl9602c_gn_reset(struct rtl9602c_priv *p)
 				       key[i]);
 	if (err)
 		return err;
-	err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x0b);
+	err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x0b);
 	msleep(RTL9602C_OPTICS_RESET_MS);
 	for (i = 0; i < 4 && !err; i++)
 		err = rtl9602c_l_write_busy(p, RTL9602C_OPTICS_A2_BASE +
