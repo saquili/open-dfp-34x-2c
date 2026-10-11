@@ -7,13 +7,17 @@
 
 Continuous-integration workflows.
 
-The gate that a change must pass includes: kernel checkpatch and a
-warnings-clean build of the board configuration; sparse; device-tree binding
-and schema checks; a documentation build; the kernel selftests build; the OMCI
-daemon build, unit tests and coverage; the distribution build; the image-size
-and instruction-set gates; reproducibility; ``reuse lint``; and all the
-provenance gates. The merge rule is a green suite, full line coverage where it
-is measured, and a device run.
+On every change, the workflows run the provenance gates and ``reuse lint``;
+the tests of the tools, of the bench, of the device tests' own code and of
+the distribution's scripts; the tests of each program of this tree on the
+host, with checkpatch over their sources and full line coverage of
+``omcid/src``; and, on a change to ``linux/``, a warnings-clean build of
+``tinyconfig`` and of the board's configuration, checkpatch over every commit
+of the kernel series, the device-tree binding checks with ``dtbs_check`` of
+the board, and the kernel documentation. The cross toolchain and the flash
+images, each built twice and compared for reproducibility, are built when
+started by hand. The merge rule is a green suite, full line coverage where it
+is measured, and a device run (``tests/device``).
 
 Every job runs in one pinned host build environment, a Debian 13 container
 named by digest, and installs its tools from that Debian release -- except the
@@ -38,6 +42,18 @@ repository does not hold, so a build starts from nothing.
     have.
 ``equivalence-tools``
     The self-tests of ``tools/equiv``.
+``bench``
+    The unit tests of the bench (``tools/bench``), against a simulated
+    console and a scripted boot loader, and of the device tests' own code
+    (``tests/device``), against canned replies of the stick.
+``programs``
+    The tests of omcid on the host, its style gate and its coverage gate,
+    and its programs for the board; then the tests of onu-utils, pppoed,
+    dhcp6d and pond, and checkpatch over their sources, which may report
+    checks but no warning or error. They build against the user-space
+    headers of this tree's kernel.
+``isa-gate``
+    The self-tests of ``tools/isa-gate``, the instruction-set gate.
 ``buildroot-fetch``
     The self-tests of ``buildroot/fetch`` and of ``tools/kernel-archive``, and
     then ``make buildroot``: the pinned Buildroot release is fetched from its
@@ -72,7 +88,7 @@ toolchain; a second build in another directory; and the comparison of the two,
 which have to be identical but for the name of the directory and two values
 computed from the contents (``br2-external/README.rst`` says which). The steps
 after the gate over the toolchain's objects run whatever its result. With the
-toolchain as the defconfig builds it, the gate reports findings in three
+toolchain as the defconfig builds it, the gate reports findings in two
 functions of the libraries (``br2-external/README.rst`` lists them), and the step
 holds them to a list: it passes when the findings are exactly the list in
 ``br2-external/tests/toolchain/known-findings.txt``, fails when one is new, gone
@@ -86,9 +102,9 @@ checks.
 The flash images of the board, built from source with
 ``br2-external/configs/odi_dfp_34x_2c3_defconfig`` by ``make`` in the top
 directory, and checked. One job, in the same pinned container, with these steps
-in order: the build (``make``, which also judges the result: ``r0`` has to fit
-its partition, the instruction-set gate has to pass over the whole root
-filesystem tree, and the digests have to check; the size of ``k0`` is reported);
+in order: the build (``make``, which also judges the result: ``k0`` and ``r0`` have to
+fit their partitions, the instruction-set gate has to pass over the whole root
+filesystem tree, and the digests have to check);
 what was built (the compiler, the image header, the shared objects, and no
 ``libgcc_s`` among them); the negative control of the gate; the programs run under
 ``qemu-mips`` (``br2-external/tests/image/check-applets``); the bench's dry run
@@ -128,14 +144,12 @@ that stops with an error does.
     with the branch.
 ``dt-bindings``
     ``make dt_binding_check`` on the bindings the series adds or changes,
-    or on all of them while it has none.
+    or on all of them while it has none, and ``make dtbs_check W=1`` on the
+    board's device tree.
 ``docs``
     ``make htmldocs`` for the documentation directories our pages go to,
     and ``scripts/kernel-doc -none -Wall -Werror`` on the sources of the
     series.
 
-Still to come, each with the work that needs it: the board configuration
-and ``dtbs_check W=1`` in the build matrix, sparse, and the selftests build
-with the kernel series; the OMCI daemon with the userspace; the image-size gate
-for ``k0`` (``image.yml`` reports it and enforces ``r0``), and the nightly
+Not run yet: sparse, a build of the kernel's selftests, and a scheduled
 reproducibility build of the whole distribution.
