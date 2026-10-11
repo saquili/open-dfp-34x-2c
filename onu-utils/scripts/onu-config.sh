@@ -29,6 +29,8 @@
 #                        without the file, out of it
 #   onu-config tls       the panel's key: the one load found, or a new one,
 #                        kept in the store, in /run/onu-tls-key
+#   onu-config ssh       the ssh server's host key: the one load found, or a
+#                        new one, kept in the store, in /run/dropbear/host_key
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case, in place of the one the shipped firmware's files
@@ -51,6 +53,9 @@
 # TLS_KEY is the content of /run/onu-tls-key: the private key of the status
 # daemon's HTTPS, a scalar of the curve P-256 in 64 hexadecimal digits, made
 # once on the stick, from which the daemon makes its certificates (pond);
+# SSH_HOST_KEY is the content of /run/onu-ssh-key: the ssh server's host key,
+# its file in the server's own format, in hexadecimal digits, made once on
+# the stick, so that a client sees one key across restarts;
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #
@@ -82,6 +87,8 @@ IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
 SYSTEM=$RUN/onu-system
 TLS=$RUN/onu-tls-key
+SSHKEY=$RUN/onu-ssh-key
+HOSTKEY=$RUN/dropbear/host_key
 SOURCE=$RUN/onu-identity-source
 STATE=$RUN/onu-store
 SHADOW=$RUN/shadow
@@ -199,7 +206,8 @@ settings() {
 	stored=$(contents 2>/dev/null)
 	if [ -r "$CONF" ]; then
 		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
-			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_' -e '^TLS_'
+			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_' -e '^TLS_' \
+				-e '^SSH_'
 		[ -s "$CONF" ] && printf '%s\n' "$stored" | awk -v conf="$CONF" '
 			BEGIN {
 				while ((getline line < conf) > 0) {
@@ -214,7 +222,7 @@ settings() {
 					next
 				k = substr($0, 1, i - 1)
 			}
-			k ~ /^(ID_|PPPOE|AUTH_|SYS_|TLS_)/ || k ~ /^PD[1-9]_HOST$/ { next }
+			k ~ /^(ID_|PPPOE|AUTH_|SYS_|TLS_|SSH_)/ || k ~ /^PD[1-9]_HOST$/ { next }
 			!(k in kept) { print "-" k }'
 	fi
 	n=1
@@ -245,10 +253,11 @@ load() {
 		known=
 	}
 	umask 077
-	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"* "$TLS.new"
+	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"* "$TLS.new" \
+		"$SSHKEY.new"
 	printf '%s\n' "$list" | awk -v conf="$CONF.new" \
 		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
-		-v sys="$SYSTEM.new" -v pd="$PD" -v tls="$TLS.new" '
+		-v sys="$SYSTEM.new" -v pd="$PD" -v tls="$TLS.new" -v ssh="$SSHKEY.new" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -259,6 +268,7 @@ load() {
 		k ~ /^ID_/ { next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k == "TLS_KEY" { if (v != "") print v > tls; next }
+		k == "SSH_HOST_KEY" { if (v != "") print v > ssh; next }
 		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
 		k ~ /^PD[1-9]_HOST$/ {
 			if (v != "")
@@ -300,6 +310,11 @@ load() {
 		mv "$TLS.new" "$TLS"
 	else
 		rm -f "$TLS"
+	fi
+	if [ -e "$SSHKEY.new" ]; then
+		mv "$SSHKEY.new" "$SSHKEY"
+	else
+		rm -f "$SSHKEY"
 	fi
 	shadow
 	if [ -e "$SYSTEM.new" ]; then
@@ -465,6 +480,14 @@ is_key() {
 		awk -v k="$scalar" -v n="$P256_N" 'BEGIN { exit !((k "") < (n "")) }'
 }
 
+# Wait until the kernel's random number generator is seeded: a read of
+# /dev/random blocks until then, and returns at once afterwards. The boot
+# script runs before the kernel says "crng init done" (about 3 s after its
+# start on the stick), and a key is made once, at the first start.
+seeded() {
+	head -c 1 /dev/random >/dev/null
+}
+
 # The panel's key: the store's, which load put in /run/onu-tls-key, or a new
 # one of /dev/urandom, whose bytes that are hexadecimal digits each carry
 # four bits, kept in the store. Without a store, the new one lasts until the
@@ -474,6 +497,7 @@ tls() {
 	[ -r "$TLS" ] && read -r key <"$TLS"
 	is_key "$key" && return 0
 	key=
+	seeded
 	for _ in 1 2 3; do
 		key=$(tr -dc '0-9a-f' </dev/urandom | head -c 64)
 		is_key "$key" && break
@@ -488,6 +512,54 @@ tls() {
 		log "the panel's key is not kept: no store"
 	elif ! echo "TLS_KEY=$key" | onu-config --store "$STORE" import; then
 		log "the panel's key is not kept: the store refused it"
+	fi
+	return 0
+}
+
+# The bytes of the hexadecimal digits on the standard input, as printf's
+# octal escapes.
+unhex() {
+	awk '{
+		for (i = 1; i < length($0); i += 2) {
+			hi = index("0123456789abcdef", substr($0, i, 1)) - 1
+			lo = index("0123456789abcdef", substr($0, i + 1, 1)) - 1
+			printf "\\%03o", hi * 16 + lo
+		}
+	}'
+}
+
+# The ssh server's host key: the store's, which load put in /run/onu-ssh-key,
+# written back in the server's format, or a new one, kept in the store.
+# Without a store, the new one lasts until the next start.
+ssh_key() {
+	hex=
+	[ -r "$SSHKEY" ] && read -r hex <"$SSHKEY"
+	umask 077
+	mkdir -p "${HOSTKEY%/*}"
+	rm -f "$HOSTKEY.new"
+	case $hex in
+	"" | *[!0-9a-f]*) ;;
+	*)
+		printf "$(echo "$hex" | unhex)" >"$HOSTKEY.new" &&
+			dropbearkey -y -f "$HOSTKEY.new" >/dev/null 2>&1 &&
+			mv "$HOSTKEY.new" "$HOSTKEY" && return 0
+		log "the store's ssh host key cannot be used: a new one"
+		rm -f "$HOSTKEY.new"
+		;;
+	esac
+	seeded
+	dropbearkey -t ed25519 -f "$HOSTKEY.new" >/dev/null 2>&1 &&
+		mv "$HOSTKEY.new" "$HOSTKEY" || {
+		log "no ssh host key"
+		rm -f "$HOSTKEY.new"
+		return 1
+	}
+	hex=$(hexdump -v -e '/1 "%02x"' "$HOSTKEY")
+	echo "$hex" >"$SSHKEY.new" && mv "$SSHKEY.new" "$SSHKEY"
+	if [ -z "$STORE" ]; then
+		log "the ssh host key is not kept: no store"
+	elif ! echo "SSH_HOST_KEY=$hex" | onu-config --store "$STORE" import; then
+		log "the ssh host key is not kept: the store refused it"
 	fi
 	return 0
 }
@@ -530,8 +602,11 @@ pd)
 tls)
 	tls
 	;;
+ssh)
+	ssh_key
+	;;
 *)
-	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N|tls" >&2
+	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N|tls|ssh" >&2
 	exit 2
 	;;
 esac

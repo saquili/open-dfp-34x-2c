@@ -142,8 +142,8 @@ fi
 
 case ${1:-} in
 ssh)
-	# A host key of its own at each boot: the root file system is
-	# read-only, and nothing that is written outlives a restart.
+	# The host key that onu-config ssh wrote from the store, or made and
+	# kept there; without one, a key of its own until the next start.
 	if [ ! -s "$KEY" ]; then
 		mkdir -p "${KEY%/*}"
 		dropbearkey -t ed25519 -f "$KEY" >/dev/null 2>&1 || {

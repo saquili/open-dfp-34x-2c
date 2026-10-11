@@ -38,6 +38,28 @@ setup() {
 	IFS= read -r p
 	printf '$5$%s$%s\n' "$4" "$(printf %s "$p" | od -An -tx1 | tr -d ' \n')"
 	EOF
+	# dropbearkey: -t ed25519 -f FILE writes a key with a NUL byte in it
+	# and counts the keys made; -y -f FILE checks that FILE is such a key.
+	cat >"$T/bin/dropbearkey" <<-EOF
+	#!/bin/sh
+	case "\$1" in
+	-t)
+		[ -e "\$4" ] && exit 1
+		echo made >>"$T/keys.made"
+		printf '\\000\\000\\000\\013ssh-ed25519\\000\\001%s\\377' "\$(date +%N)" >"\$4"
+		;;
+	-y)
+		grep -q ssh-ed25519 "\$3" 2>/dev/null
+		;;
+	*) exit 2 ;;
+	esac
+	EOF
+	# BusyBox's hexdump -v -e '/1 "%02x"' FILE, which the image has.
+	cat >"$T/bin/hexdump" <<-'EOF'
+	#!/bin/sh
+	[ "$1 $2 $3" = '-v -e /1 "%02x"' ] || exit 2
+	od -An -v -tx1 "$4" | tr -d ' \n'
+	EOF
 	chmod +x "$T/bin"/*
 	PATH=$T/bin:$BUILD:$PATH
 	mkdir -p "$ONU_ROOT/etc"
@@ -667,6 +689,53 @@ rm -f "$ONU_STORE"
 ONU_STORE= "$STORE_SCRIPT" tls 2>"$T/err"
 rc=$?
 check '[ $rc -eq 0 ] && grep -q -x "[0-9a-f]\{64\}" "$ONU_ROOT/run/onu-tls-key"'
+check 'grep -q "not kept: no store" "$T/err"'
+teardown
+
+hexof() {
+	od -An -v -tx1 "$1" | tr -d ' \n'
+}
+
+echo "the ssh host key: made once, kept in the store, back at boot, never a setting"
+setup
+run ssh
+key=$ONU_ROOT/run/dropbear/host_key
+check '[ $rc -eq 0 ] && [ -s "$key" ]'
+check '[ "$(ls -l "$key" | cut -c1-10)" = -rw------- ]'
+hex=$(hexof "$key")
+check 'echo "$hex" | grep -q "^000000[0-9a-f]*00[0-9a-f]*ff$"' 
+check '[ "$(cat "$ONU_ROOT/run/onu-ssh-key")" = "$hex" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-ssh-key" | cut -c1-10)" = -rw------- ]'
+check 'stored "SSH_HOST_KEY=$hex"'
+# The key comes back from the store at boot, byte for byte, NUL included.
+rm -f "$key" "$ONU_ROOT/run/onu-ssh-key"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-ssh-key")" = "$hex" ]'
+check '! grep -q "^SSH_" "$ONU_ROOT/run/onu.conf" 2>/dev/null'
+run ssh
+check '[ $rc -eq 0 ] && [ "$(hexof "$key")" = "$hex" ]'
+check '[ "$(wc -l <"$T/keys.made")" -eq 1 ]'
+settings
+run save
+check '[ $rc -eq 0 ] && stored "SSH_HOST_KEY=$hex" && stored MODE=passthrough'
+# A key the server cannot read is replaced by a new one, kept instead.
+echo 00ff >"$ONU_ROOT/run/onu-ssh-key"
+run ssh
+new=$(hexof "$key")
+check '[ $rc -eq 0 ] && [ "$new" != "$hex" ] && [ "$new" != 00ff ]'
+check 'stored "SSH_HOST_KEY=$new" && ! stored "SSH_HOST_KEY=$hex"'
+check '[ "$(wc -l <"$T/keys.made")" -eq 2 ]'
+echo not-hex >"$ONU_ROOT/run/onu-ssh-key"
+run ssh
+check '[ $rc -eq 0 ] && [ "$(wc -l <"$T/keys.made")" -eq 3 ]'
+teardown
+
+echo "without a store, the ssh host key lasts until the next start"
+setup
+rm -f "$ONU_STORE"
+ONU_STORE= "$STORE_SCRIPT" ssh 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && [ -s "$ONU_ROOT/run/dropbear/host_key" ]'
 check 'grep -q "not kept: no store" "$T/err"'
 teardown
 
