@@ -19,6 +19,14 @@
 PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/lib/onu
 export PATH
 
+# After a start from a bank that the boot loader was told to try once,
+# onu-trial makes it the bank the loader starts when the system is up, and
+# restarts into the committed bank when it is not; any other start it leaves
+# alone. It starts first, so that a start that hangs in this script is
+# restarted as well; it finds the panel's address in /run/onu-mgmt once
+# onu-mgmt has written it, below.
+onu-trial >/run/onu-trial.log 2>&1 &
+
 # The management addresses are in the ranges that RFC 5737 reserves for
 # documentation. The first is on the host link itself; the second is on a VLAN
 # of that link of its own, which the switch keeps from the PON both ways and
@@ -233,12 +241,6 @@ if [ -x /usr/sbin/omcid ]; then
 else
 	warn "no omcid: nothing answers the OLT"
 fi
-
-# After a start from a bank that the boot loader was told to try once,
-# onu-trial makes it the bank the loader starts when the system is up, and
-# restarts into the committed bank when it is not; any other start it leaves
-# alone.
-onu-trial "${data:-$mgmt}" >/run/onu-trial.log 2>&1 &
 
 # The bench waits for the last line on the console. Before it, the panel's
 # address and the fingerprint of the certificate a browser is shown there,

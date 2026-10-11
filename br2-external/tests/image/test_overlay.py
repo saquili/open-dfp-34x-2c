@@ -251,7 +251,14 @@ class ServersOnTheHostSide(unittest.TestCase):
     def test_the_host_link_may_have_no_address(self):
         text = read(RCS)
         self.assertIn('[ -z "$DATA_ADDRESS" ] || onu-net wait sfp "$DATA_ADDRESS" 10', text)
-        self.assertIn('onu-trial "${data:-$mgmt}"', text)
+
+    def test_the_trial_is_watched_from_the_first_step(self):
+        # onu-trial starts before anything that could hang, and finds the
+        # panel's address itself.
+        text = read(RCS)
+        trial = text.index("onu-trial >/run/onu-trial.log 2>&1 &")
+        self.assertLess(trial, text.index("\nonu-config load"))
+        self.assertLess(trial, text.index("\nonu-mgmt start"))
 
     def test_the_addresses_are_there_before_a_server_listens(self):
         text = read(RCS)
