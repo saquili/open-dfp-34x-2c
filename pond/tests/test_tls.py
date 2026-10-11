@@ -15,6 +15,7 @@ that is not one, the daemon does not start.
 import hashlib
 import http.client
 import os
+import pwd
 import socket
 import ssl
 import subprocess
@@ -149,6 +150,46 @@ def main():
     finally:
         proc.terminate()
         proc.wait(5)
+
+    as_account(pond)
+
+
+def proc_status(pid):
+    with open(f"/proc/{pid}/status") as f:
+        return dict(line.rstrip("\n").split(":\t", 1) for line in f if ":\t" in line)
+
+
+def as_account(pond):
+    """-u: started as root, the daemon runs as the account, with the one power
+    to listen on a port below 1024."""
+    if os.geteuid() != 0:
+        print("as another account: skipped, not root")
+        return
+    print("as another account")
+    nobody = pwd.getpwnam("nobody")
+    proc = subprocess.Popen([pond, "-u", "nobody", "-l", "http://127.0.0.1:80"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, 80):
+            check(False, "the daemon listens on port 80 as nobody")
+            return
+        st = proc_status(proc.pid)
+        check(st["Uid"].split()[0] == str(nobody.pw_uid)
+              and st["Gid"].split()[0] == str(nobody.pw_gid), "it runs as nobody")
+        check(int(st["CapEff"], 16) == 1 << 10 and int(st["CapPrm"], 16) == 1 << 10,
+              "with CAP_NET_BIND_SERVICE alone")
+        check(st.get("NoNewPrivs") == "1", "and no new privileges")
+        conn = http.client.HTTPConnection("127.0.0.1", 80, timeout=10)
+        status, _, body = request(conn, "GET", "/api/health")
+        check(status == 200 and b'"ok":true' in body, "/api/health answers on port 80")
+        conn.close()
+    finally:
+        proc.terminate()
+        proc.wait(5)
+    r = subprocess.run([pond, "-u", "no-such-account", "-l", "http://127.0.0.1:18081"],
+                       capture_output=True, text=True, timeout=10)
+    check(r.returncode == 1 and "no account no-such-account" in r.stderr,
+          "an account that does not exist is refused")
 
 
 main()

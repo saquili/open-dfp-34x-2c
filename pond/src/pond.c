@@ -49,6 +49,13 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <grp.h>
+#include <linux/capability.h>
+#include <pwd.h>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#endif
 
 #define POND_VALUE_CAP (64 * 1024)
 #define POND_REPLY_CAP (96 * 1024)
@@ -680,10 +687,49 @@ static void load_token(void)
 		}
 }
 
+#ifdef __linux__
+/*
+ * Run as the account @user, with its groups, from here on, and keep of
+ * root's powers only CAP_NET_BIND_SERVICE: the listeners on ports 80 and
+ * 443, here and when a change of the management pair brings another address
+ * later. A process that runs as @user already keeps what it has. 0, or -1.
+ */
+static int run_as(const char *user)
+{
+	struct __user_cap_header_struct hdr = {
+		.version = _LINUX_CAPABILITY_VERSION_3,
+	};
+	struct __user_cap_data_struct caps[_LINUX_CAPABILITY_U32S_3] = { };
+	struct passwd *pw = getpwnam(user);
+
+	if (!pw) {
+		fprintf(stderr, "pond: no account %s\n", user);
+		return -1;
+	}
+	if (getuid() == pw->pw_uid)
+		return 0;
+	caps[CAP_TO_INDEX(CAP_NET_BIND_SERVICE)].permitted =
+		CAP_TO_MASK(CAP_NET_BIND_SERVICE);
+	caps[CAP_TO_INDEX(CAP_NET_BIND_SERVICE)].effective =
+		CAP_TO_MASK(CAP_NET_BIND_SERVICE);
+	if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) ||
+	    initgroups(user, pw->pw_gid) || setgid(pw->pw_gid) ||
+	    setuid(pw->pw_uid) || syscall(SYS_capset, &hdr, caps) ||
+	    prctl(PR_SET_KEEPCAPS, 0, 0, 0, 0) ||
+	    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
+		fprintf(stderr, "pond: cannot run as %s: %s\n", user,
+			strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
 	struct mg_mgr mgr;
 	const char *print_for = NULL;
+	const char *user = NULL;
 	int listening;
 	int i;
 
@@ -699,13 +745,26 @@ int main(int argc, char **argv)
 			print_for = argv[++i];
 		else if (!strcmp(argv[i], "-w") && i + 1 < argc)
 			g_web = argv[++i];
+		else if (!strcmp(argv[i], "-u") && i + 1 < argc)
+			user = argv[++i];
 		else {
 			fprintf(stderr,
 				"usage: %s [-l http[s]://addr:port]... [-k keyfile] [-t tokenfile] [-w webdir]\n"
+				"          [-u user]\n"
 				"       %s -k keyfile -F address\n",
 				argv[0], argv[0]);
 			return 2;
 		}
+	}
+
+	if (user) {
+#ifdef __linux__
+		if (run_as(user))
+			return 1;
+#else
+		fprintf(stderr, "pond: -u needs Linux\n");
+		return 2;
+#endif
 	}
 
 	/* The boot script's line for the console: the certificate of an address. */
