@@ -435,10 +435,10 @@ is at physical address ``0x18003268``, which a loader prompt reaches as
 What a restart does
 -------------------
 
-The kernel's restart (``reboot``, SysRq ``b``, a panic with ``panic=10``)
-restarts the count and writes ``0x80000000`` to the control register: the
-watchdog enabled with its shortest deadline, 335.5 milliseconds, and a full
-chip reset as its action. The loader then starts on a chip as a power cycle
+The kernel's restart (``reboot``, SysRq ``b``, a panic with ``panic=10``) goes
+through the watchdog driver's restart handler, which writes ``0x80000000`` to
+the control register: the watchdog enabled with its shortest deadline, 335.5
+milliseconds, and a full chip reset as its action. The loader then starts on a chip as a power cycle
 leaves it, the switch and the SerDes lane to the host included, and no count
 is left running.
 
@@ -456,8 +456,10 @@ boot.
 Who clears it
 -------------
 
-* The kernel, as the first act of its platform setup. A kernel that is entered
-  therefore survives the count of the restart that started it.
+* The kernel's watchdog driver, at its probe, when it finds the watchdog
+  disabled in the register, as after such a restart: it writes its own word
+  with the enable clear, which stops the count. A kernel whose driver probes
+  within the 46 seconds survives the count of the restart that started it.
 * A person or the bench at the loader prompt, with ``mw.l b8003268 0``. The
   bench types this one memory write before it flashes, because the transfer,
   the erase and the write take longer than the 46 seconds that the count
@@ -479,17 +481,18 @@ The one-shot path arms the watchdog before it boots the bank (the macro
 ``en_wdt``), so that a failing image costs one reset: the chip resets, and the
 committed bank boots. A committed boot leaves the watchdog disarmed.
 
-The kernel clears the count early in its start and arms its own at the probe of
-the watchdog driver. From then on the kernel feeds the watchdog until user
-space opens ``/dev/watchdog``, which procd, the first process, does as it
-starts, and then feeds it for as long as it runs (ADR 0013). Between the
-clearing and the probe nothing watches the boot. Once procd feeds the
-watchdog, what ends a failed trial is ``onu-trial``, which the boot script
-starts as its first step and which restarts the stick into the committed bank
-when the system does not come up (``updating.rst``), a boot script that hangs
-after it included. A trial boot that hangs in the kernel before the probe, or
-before procd runs the boot script, is therefore expected to recover only by a
-power cycle. This has not been observed; it follows from the order above.
+The kernel leaves the loader's count running. The watchdog driver finds it
+enabled at its probe, restarts it with the driver's own timeout and feeds it
+until user space opens ``/dev/watchdog``, for 60 seconds at most; procd, the
+first process, opens it as it starts and feeds it for as long as it runs (ADR
+0013). Once procd feeds the watchdog, what ends a failed trial is
+``onu-trial``, which the boot script starts as its first step and which
+restarts the stick into the committed bank when the system does not come up
+(``updating.rst``), a boot script that hangs after it included. So a trial
+kernel that hangs before the driver's probe is reset by the loader's count, and
+one that never starts user space by the end of the 60 seconds (M: a RAM boot
+with the loader's watchdog armed and no init process reset the chip 69 s after
+``bootm``, 2026-10-11).
 
 What the loader leaves behind
 =============================
@@ -497,8 +500,8 @@ What the loader leaves behind
 At the moment the kernel is entered:
 
 * UART0 is at 115200 baud, divisor 109.
-* Timer 1 is running, with the control word ``0x11000032``. The kernel neither
-  uses nor stops it, and its interrupt stays disabled.
+* Timer 1 is running, with the control word ``0x11000032``. The kernel's timer
+  driver programs it anew as its clocksource, with its interrupt disabled.
 * The SerDes lane to the host is off: the mode field of ``RTL9602C_SERDES_CTRL``
   (offset ``0x000214`` of the switch register file) reads ``0x1f``, and the
   whole register ``0x0004801f``. It stays off unless the lane macro ran before

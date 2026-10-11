@@ -460,7 +460,6 @@ A good run looks like this on the console, from the restart to the kernel
 values left out; the countdown is that of a board whose ``bootdelay`` is 600)::
 
     sysrq: Resetting
-    rtl9602c: restarting through a watchdog chip reset
 
     9601D
     PRELOADER <name> <version>
