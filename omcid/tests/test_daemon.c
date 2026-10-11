@@ -227,12 +227,15 @@ static void test_the_log_is_cut_when_full(void)
 	saved = dup(2);
 	(void)dup2(fd, 2);
 	for (int i = 0; i < 4000; i++)
-		OMCI_INFO("a line of the log that is long enough to fill it soon, %d", i);
+		OMCI_INFO(
+			"a line of the log that is long enough to fill it soon, %d",
+			i);
 	fflush(stderr);
 	(void)dup2(saved, 2);
 	(void)close(saved);
 	(void)close(fd);
-	CHECK(stat(path, &st) == 0 && st.st_size > 0 && st.st_size <= 256 * 1024 + 256);
+	CHECK(stat(path, &st) == 0 && st.st_size > 0 &&
+	      st.st_size <= 256 * 1024 + 256);
 	(void)unlink(path);
 }
 

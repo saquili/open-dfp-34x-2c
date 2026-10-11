@@ -1769,8 +1769,9 @@ static void gem_vlans_publish(const struct omci_hw_bridge_port *ports, size_t n)
 	}
 	/* Said once for each VLAN, again when it comes back after it went. */
 	if (clash && clash != warned)
-		OMCI_WARN("bridge: the OLT carries VLAN %u, the stick's management VLAN, whose frames the switch drops from the PON: give the stick another management VLAN",
-			  clash);
+		OMCI_WARN(
+			"bridge: the OLT carries VLAN %u, the stick's management VLAN, whose frames the switch drops from the PON: give the stick another management VLAN",
+			clash);
 	warned = clash;
 	run_publish(GEM_VLANS_PATH, text, last, sizeof(last), &published,
 		    "bridge: the VLANs of the GEM ports");

@@ -59,6 +59,7 @@ void omci_log__emit(enum omci_log_level level, const char *file, int line,
 
 	if (fstat(STDERR_FILENO, &st) == 0 && S_ISREG(st.st_mode) &&
 	    st.st_size > OMCI_LOG_MAX && ftruncate(STDERR_FILENO, 0) == 0)
-		fprintf(stderr, "[INF] log.c: the log passed %d bytes and was cut\n",
+		fprintf(stderr,
+			"[INF] log.c: the log passed %d bytes and was cut\n",
 			OMCI_LOG_MAX);
 }
