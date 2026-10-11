@@ -16,8 +16,8 @@ there, and names it by its whole path where procd starts it.
 ``ponid``
    prints the identity of the unit (serial number, vendor ID, version,
    equipment ID, PLOAM password and the values of the ONU-G and ONU2-G that
-   G.988 has the ONU report) from its factory configuration, the JFFS2 file
-   system in the partition ``config``. It is the identity ``onu-config`` puts in
+   G.988 has the ONU report) from the shipped firmware's files in the JFFS2
+   file system of the partition ``config``. It is the identity ``onu-config`` puts in
    ``/run/onu-identity`` at boot, with the store's ``ID_*`` keys over it,
    which omcid reads and which gives the serial number to the PON driver. Its
    output holds the PLOAM password, a credential of the line: keep it
@@ -230,16 +230,19 @@ there, and names it by its whole path where procd starts it.
    IPv6 or both (``pppoed -4`` or ``-6``), as an operator that gives IPv6 on a
    session of its own asks. The PON port, the GEM interface and the VLAN get
    an MTU of 1508 first, so that a concentrator that agrees gives a session of
-   1500-byte packets (RFC 4638). The first session that carries IPv4 hands its
-   address on (``pppoed -P``): the address goes on no interface of the
-   stick's, and the router behind the stick takes it from BusyBox's DHCP
-   server on the link between them (a VLAN on ``sfp``, ``LAN_VLAN``, or
-   ``sfp`` itself), as a /32 whose gateway is the concentrator's address, as
-   a router that made the session itself would have it: the stick answers
-   ARP for it on the link without taking it, so that a packet to it goes on
-   to the concentrator (``PASS_PEER=off`` gives the stick's own address on
-   the link, ``PASS_GATEWAY``, from which the DHCP server answers either
-   way), given as a classless static route too (RFC 3442),
+   1500-byte packets (RFC 4638). In each VLAN towards the host, the first
+   session told to hand its address down (``SESSIONn_PASS=on``) that
+   carries IPv4 hands its address on (``pppoed -P``): the address goes on no
+   interface of the stick's, and the router behind the stick takes it from
+   BusyBox's DHCP server on the link between them (the VLAN of ``sfp`` that
+   ``SESSIONn_HOST_VLAN`` names, the session's own VLAN when it names none,
+   or ``sfp`` itself, untagged; ``LAN_VLAN`` of before is taken as the first
+   session's), as a /32 whose gateway is the concentrator's address, as a
+   router that made the session itself would have it: the stick answers ARP
+   for it on the link without taking it, so that a packet to it goes on to
+   the concentrator, and its DHCP server answers from the stick's own
+   address on the link, ``169.254.0.1``. The gateway is given as a
+   classless static route too (RFC 3442),
    with the session's name servers and MTU and leases of a minute, so that
    the router finds the address of a new session within one. The stick routes
    the address there with a host route, until the session ends, and forwards
@@ -298,7 +301,9 @@ there, and names it by its whole path where procd starts it.
    ``identity`` gives the PON driver the serial number and PLOAM password of
    ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and
    brings the PON up; ``reidentify`` takes the PON down first and restarts
-   omcid afterwards, so the OLT sees the stick leave and register anew.
+   omcid afterwards, so the OLT sees the stick leave and register anew. The
+   MIB that omcid kept in ``/run/omcid.mib`` stays, and the new omcid goes on
+   from it until the OLT provisions the stick again.
 
 ``onu-mgmt``
    the VLAN and the address the stick is managed on from the host side, and a

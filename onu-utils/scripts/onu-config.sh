@@ -4,8 +4,8 @@
 #
 # onu-config.sh: the files the running system reads, to and from the stick's
 # configuration store, which onu-config keeps: a file of the JFFS2 file system
-# of the flash partition "config", which /sbin/init mounts on /config, beside
-# the files of the firmware the stick shipped with (ADR 0014, step 9).
+# of the flash partition "config", which "onu-config load" mounts on /config,
+# beside the files of the firmware the stick shipped with (ADR 0014, step 9).
 # onu-config runs it for these verbs, and is how a person or a program asks
 # for them (ADR 0015; it was onu-store before):
 #

@@ -31,8 +31,9 @@
 #
 # One onu-apply at a time changes the stick; the others wait for it.
 #
-# The settings are KEY=value lines in /run/onu.conf, which the status daemon
-# rewrites; /etc/onu.conf has the defaults and says what each key means. The
+# The settings are KEY=value lines in /run/onu.conf, which onu-config writes
+# from the store at boot and at a change; /etc/onu.conf has the defaults and
+# says what each key means. The
 # account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN, as "user
 # secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
 # one, seeds the first. At boot, onu-config has put the saved ones in these
@@ -1210,7 +1211,8 @@ identity() {
 }
 
 # A new identity: the OLT sees the stick leave and a new one arrive, and
-# omcid starts over with the MIB the OLT builds for it.
+# omcid starts again; it goes on from the MIB it kept in /run/omcid.mib until
+# the OLT builds a new one for it.
 reidentify() {
 	ip link set pon down
 	identity || return 1

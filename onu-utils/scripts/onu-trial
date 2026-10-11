@@ -19,9 +19,10 @@
 # "onu-update commit" makes the running bank the one the boot loader starts.
 # When they do not hold within TRIAL_LIMIT seconds (300), onu-trial restarts
 # the stick, and the boot loader, which set sw_tryactive back to 2 before it
-# started the tried bank, starts the committed one. A system that hangs
-# before is restarted by the watchdog, which the boot loader armed for the
-# trial, to the same end.
+# started the tried bank, starts the committed one. The watchdog that the
+# boot loader armed for the trial watches the kernel's start alone: the kernel
+# and then procd feed it, so a system that hangs before onu-trial runs is not
+# restarted by it (docs/handbook/boot-contract.rst, "A trial boot").
 #
 # What it found is in /run/onu-trial, one word: trial, committed or failed.
 # ONU_ROOT, when set, is put in front of /run, for the tests; TRIAL_STEP

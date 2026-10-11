@@ -3,8 +3,9 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # onu-run: a server of the host side, or the console's login, in the
-# foreground, for procd, which starts it from /etc/inittab once the boot
-# script is done and again whenever it ends.
+# foreground, for procd, which starts it again whenever it ends: a server as
+# a service that the boot script starts (onu-svc), the console's login from
+# /etc/inittab once the boot script is done.
 #
 #   onu-run ssh     the ssh server: root's password and keys, on the
 #                   management address and on the host link's, if any
