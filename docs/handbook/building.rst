@@ -624,8 +624,9 @@ The bench (``tools/bench``, set up as in ``flashing.rst``) is the only tool that
 writes the flash, and only bank 0.
 
 A stick is diagnosed started from RAM; the flash holds the image of the final
-test. The tools of diagnosis, ``omcitap``, ``omcivlan`` and ``ubus``, are in
-the RAM image only: the post-build script sets them aside in
+test. The tools of diagnosis, ``omcitap``, ``omcivlan``, ``ubus`` and the
+flash's ``flashcp``, ``flash_erase`` and ``mtd_debug``, are in the RAM image
+only: the post-build script sets them aside in
 ``build/image/diag`` with the C library whole, since the image's own is cut to
 what the image's programs use, and ``make ram-image`` lays that directory over
 its root.
