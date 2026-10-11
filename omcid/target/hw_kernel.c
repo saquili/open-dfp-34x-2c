@@ -1714,21 +1714,55 @@ static void run_publish(const char *path, const char *text, char *last,
 #define GEM_VLANS_TEXT \
 	(OMCI_HW_BRIDGE_MAX_PORTS * OMCI_HW_BRIDGE_MAX_VLANS * 12 + 1)
 
+/*
+ * The stick's management VLAN, onu-mgmt's line VLAN= of MGMT_PATH, or 0.
+ * The boot has the switch drop its frames on the PON's ingress, so that the
+ * network behind the PON never reaches the stick's management.
+ */
+#define MGMT_PATH "/run/onu-mgmt"
+
+static unsigned int mgmt_vlan(void)
+{
+	char line[64];
+	unsigned int vid = 0;
+	FILE *f = fopen(MGMT_PATH, "re");
+
+	while (f != NULL && fgets(line, sizeof(line), f) != NULL) {
+		if (!strncmp(line, "VLAN=", 5)) {
+			vid = (unsigned int)strtoul(line + 5, NULL, 10);
+			break;
+		}
+	}
+	if (f != NULL)
+		fclose(f);
+	return vid;
+}
+
 static void gem_vlans_publish(const struct omci_hw_bridge_port *ports, size_t n)
 {
 	static char last[GEM_VLANS_TEXT];
+	static unsigned int warned;
 	static bool published;
 	char text[sizeof(last)] = "";
+	unsigned int mgmt = mgmt_vlan(), clash = 0;
 	size_t len = 0;
 
 	for (size_t i = 0; i < n; i++) {
 		if (ports[i].port_id == OMCI_HW_BRIDGE_UNI)
 			continue;
-		for (uint8_t v = 0; v < ports[i].num_vlan; v++)
+		for (uint8_t v = 0; v < ports[i].num_vlan; v++) {
 			len += (size_t)snprintf(text + len, sizeof(text) - len,
 						"%u %u\n", ports[i].vlan[v],
 						ports[i].port_id);
+			if (mgmt && ports[i].vlan[v] == mgmt)
+				clash = mgmt;
+		}
 	}
+	/* Said once for each VLAN, again when it comes back after it went. */
+	if (clash && clash != warned)
+		OMCI_WARN("bridge: the OLT carries VLAN %u, the stick's management VLAN, whose frames the switch drops from the PON: give the stick another management VLAN",
+			  clash);
+	warned = clash;
 	run_publish(GEM_VLANS_PATH, text, last, sizeof(last), &published,
 		    "bridge: the VLANs of the GEM ports");
 }
