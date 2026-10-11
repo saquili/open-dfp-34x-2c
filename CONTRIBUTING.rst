@@ -28,7 +28,10 @@ line -- for a reStructuredText file, for instance::
     .. SPDX-License-Identifier: GPL-2.0-only
     .. SPDX-FileCopyrightText: 2026 Your Name <you@example.org>
 
-``reuse lint`` must pass. Third-party code is never committed here; it is
+``reuse lint`` must pass. Third-party code is committed in three places
+only, each keeping its own licence, which ``REUSE.toml`` records: the Linux
+release under ``linux/``, OpenWrt's netifd as a fork under ``netifd/``, and
+Mongoose under ``pond/third_party/``. Any other third-party software is
 fetched by hash at build time and keeps its own licence.
 
 Provenance
@@ -53,13 +56,51 @@ problem first and then the change.
   ``dt-bindings: net: add realtek,rtl9602c-eth``. The body explains the
   problem, then the change in hardware terms, cites standards by clause, and
   gives measurements as results on the named board, with counts.
-* **Userspace and distribution commits** use their component prefix:
-  ``omcid:``, ``package/omcid:``, ``board/<board>:``, ``configs/<board>:``,
-  ``tools/bench:``, ``docs:``.
-* **One component per commit**: a single commit touches only ``linux/``, only
-  ``omcid/``, or only the distribution and tooling directories -- never a mix.
-  This keeps each component liftable on its own and keeps the kernel history
-  clean.
+* **Other commits** start with the component's directory or a path inside
+  it: ``omcid:``, ``pond:``, ``onu-utils:``, ``tools/bench:``, ``docs:``;
+  in the distribution, a path relative to ``br2-external/`` as Buildroot
+  names its commits (``package/omcid:``, ``board/dfp-34x-2c3:``) or
+  ``br2-external:``; a file at the top level by its name, with or without
+  the extension (``README:``, ``Makefile:``).
+* **One component per commit**, so that each component can be lifted out on
+  its own and the kernel history stays clean. The components are
+  ``linux/``; ``omcid/``; the distribution, ``br2-external/`` and
+  ``buildroot/``; ``tools/``; ``tests/``; the documentation, ``docs/`` with
+  the files at the top level, ``LICENSES/`` and ``.github/``; and every other
+  top-level directory on its own (``pond/``, ``onu-utils/``, ``netifd/``
+  ...). ``tools/provenance/gates/components.py`` holds the rule.
+
+Before you send a change
+========================
+
+``make check`` runs the offline gates: the provenance gates over the tree and
+over the commits since ``main``, and the tests of the tools and of the
+distribution's scripts. Each program of this tree has its own tests, on the
+host, against the user-space headers of this tree's kernel::
+
+    make -s -C linux O=/tmp/headers ARCH=x86 headers_install \
+        INSTALL_HDR_PATH=/tmp/uapi
+    make -C omcid check
+    make -C onu-utils check CPPFLAGS=-I/tmp/uapi/include
+
+and likewise for ``pppoed``, ``dhcp6d`` and ``pond``. The tests that need the
+stick are in ``tests/device`` (``tests/device/README.rst``).
+
+Writing documentation
+=====================
+
+* reStructuredText, with the SPDX lines at the top; lines of 80 columns or
+  fewer, except a link or a literal that cannot be broken.
+* Plain, short sentences in British spelling (licence, recognise, fibre).
+* A fact about the hardware carries its tag, M, T, P or I: measured, tested
+  by function, from a public standard, or inferred
+  (``docs/policy/provenance.rst``, "How hardware facts are written").
+* The firmware a stick ships with is "the shipped firmware"; the provenance
+  gates refuse other names for it.
+* One home for each fact: the handbook for what a person does with the stick,
+  a component's README for its programs and interfaces, ``docs/adr/`` for
+  why, ``linux/Documentation/`` for the kernel. Other pages link to it rather
+  than repeat it.
 
 Trailers
 ========
