@@ -874,6 +874,28 @@ session_dev() {
 	fi
 }
 
+# What session $1 on the GEM interface $2 is made of, one line: its
+# interface, its family and MAC address, its account (a digest), and what it
+# hands down by which link, the default routes among it. sessions_sync()
+# takes a session down and up again when this changes, and leaves the others
+# up: a change of one session leaves the other sessions as they are (ADR
+# 0014). It is in /run/session/N/makings, for root only.
+session_makings() {
+	mk_dev=$(session_dev "$1" "$2")
+	mk_role=- mk_role6=-
+	if hands "$1" ipv4; then
+		mk_role=routed
+		[ "$1" = "$(main_pass)" ] && mk_role=pass
+	fi
+	if hands "$1" ipv6; then
+		mk_role6=pd
+		[ "$1" = "$(main_pd)" ] && mk_role6=pd-main
+	fi
+	mk_account=$(md5sum <"$RUN/onu-pppoe$1" 2>/dev/null)
+	echo "$2 $mk_dev $(family "$1") mac=$(setting "$1" MAC) $mk_role $mk_role6" \
+		"lan=$(down_vlan "$1") ${mk_account%% *}"
+}
+
 # Whether a running session other than $1 is on the interface $2.
 dev_shared() {
 	for d in "$SESSIONS"/*/dev; do
@@ -935,6 +957,7 @@ session_up() {
 		echo "$hands"
 	fi >"$SESSIONS/$n/hands"
 	echo "$role $role6" >"$SESSIONS/$n/role"
+	(umask 077 && session_makings "$n" "$gem" >"$SESSIONS/$n/makings")
 	session_net "$n" "$dev" "$fam" "$pass" "$route"
 	log "session $n on $dev ($fam), GEM port ${gem#gem}"
 }
@@ -1004,8 +1027,9 @@ pd_keep() {
 	done
 }
 
-# Passthrough: each session follows its GEM port, and a session without its
-# account any more goes. Sessions that start together authenticate apart, as
+# Passthrough: each session follows its GEM port, a session whose makings
+# changed goes down and up again, and a session without its account any more
+# goes; the others stay up. Sessions that start together authenticate apart, as
 # pppoed under netifd waits 3 s for each session before it (-w): an
 # operator's concentrator refused one of two sessions that authenticated at
 # once, without saying why, and took each alone (measured).
@@ -1023,7 +1047,9 @@ sessions_sync() {
 		*" $n "*)
 			gem=$(session_gem "$n")
 			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
-				[ "$(session_dev "$n" "$gem")" != "$dev" ]; }; then
+				[ "$(session_dev "$n" "$gem")" != "$dev" ] ||
+				[ "$(session_makings "$n" "$gem")" != \
+					"$(cat "$SESSIONS/$n/makings" 2>/dev/null)" ]; }; then
 				[ -n "$cur" ] && session_down "$n"
 				session_up "$n" "$gem"
 			elif [ -z "$gem" ] && [ -n "$cur" ]; then
@@ -1226,10 +1252,28 @@ reidentify() {
 	log "registering again"
 }
 
+# The settings of $CONF, and the mode they make: only the bench's router is
+# chosen; otherwise an account makes the stick hold its sessions, and none
+# leaves the OLT's bridge.
+load_mode() {
+	load
+	if [ "$MODE" != router ]; then
+		if [ -n "$(sessions)" ]; then
+			MODE=passthrough
+		else
+			MODE=bridge
+		fi
+	fi
+}
+
 apply() {
 	old=
 	[ -r "$RUN/onu-mode" ] && read -r old <"$RUN/onu-mode"
-	if [ "$old" = router ] || [ "$old" = passthrough ]; then
+	load_mode
+	# From passthrough to passthrough nothing comes down here: the sessions
+	# whose makings changed go down and up again in sessions_sync(), and
+	# the others stay up.
+	if [ "$old" = router ] || { [ "$old" = passthrough ] && [ "$MODE" != passthrough ]; }; then
 		# Down with the settings it came up with.
 		[ -r "$RUN/onu-mode.conf" ] && CONF=$RUN/onu-mode.conf
 		load
@@ -1239,16 +1283,7 @@ apply() {
 			pass_down
 		fi
 		CONF=$RUN/onu.conf
-	fi
-	load
-	# Only the bench's router is chosen; otherwise an account makes the
-	# stick hold its sessions, and none leaves the OLT's bridge.
-	if [ "$MODE" != router ]; then
-		if [ -n "$(sessions)" ]; then
-			MODE=passthrough
-		else
-			MODE=bridge
-		fi
+		load_mode
 	fi
 	omcid_sync "$(omcid_want)"
 	echo "$MODE" >"$RUN/onu-mode"

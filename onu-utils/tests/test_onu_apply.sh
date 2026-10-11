@@ -690,6 +690,48 @@ check 'logged "^onu-net del pass-2$" && logged "^onu-net del links$"'
 check '[ -z "$(ls "$ONU_ROOT/run/network.d")" ]'
 teardown
 
+echo "a change of one session leaves the other session up, on trial and back"
+setup
+printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_SLEEP" >"$T/bin/sleep"
+echo "1234.56 99.0" >"$ONU_ROOT/proc/uptime"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=36 SESSION2_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user2 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+check '[ -d "$ONU_ROOT/run/session/1" ] && [ -d "$ONU_ROOT/run/session/2" ]'
+check '[ "$(stat -c %a "$ONU_ROOT/run/session/1/makings" 2>/dev/null || stat -f %Lp "$ONU_ROOT/run/session/1/makings")" = 600 ]'
+check '! grep -q secret "$ONU_ROOT/run/session/1/makings"'
+sed -i.bak 's/^SESSION2_FAMILY=ipv4$/SESSION2_FAMILY=both/' "$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
+check '! logged "^onu-net del ses1$" && logged "^onu-net del ses2$"'
+check '[ "$(cat "$ONU_ROOT/run/session/2/family")" = both ]'
+check '[ "$(cat "$ONU_ROOT/run/session/1/family")" = ipv4 ] && ! logged "^onu-net del links$"'
+: >"$LOG"
+"$MODE_SCRIPT" revert 2>/dev/null
+check '! logged "^onu-net del ses1$" && logged "^onu-net del ses2$"'
+check '[ "$(cat "$ONU_ROOT/run/session/2/family")" = ipv4 ]'
+# A new account for one session is a change of that one alone.
+echo "user2 another" >"$ONU_ROOT/run/onu-pppoe2"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '! logged "^onu-net del ses1$" && logged "^onu-net del ses2$"'
+# Nothing changed: nothing comes down.
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '! logged "^onu-net del ses"'
+# One session's account gone: that one goes, the other stays.
+rm -f "$ONU_ROOT/run/onu-pppoe2"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '! logged "^onu-net del ses1$" && logged "^onu-net del ses2$" && [ ! -d "$ONU_ROOT/run/session/2" ]'
+# The last account gone: back to the bridge, the session down.
+rm -f "$ONU_ROOT/run/onu-pppoe1"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^onu-net del ses1$" && [ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
+teardown
+
 echo "two prefixes handed down in two VLANs: the second by its own table"
 setup
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv6 SESSION2_VLAN=410 SESSION2_FAMILY=ipv6 \
