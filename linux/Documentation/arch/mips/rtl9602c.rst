@@ -68,8 +68,14 @@ the configuration of the board. The settings of it that this page relies on:
    * - ``CONFIG_GPIO_REALTEK_OTTO=y``
      - The GPIO bank (``GPIO_REALTEK_OTTO`` depends on
        ``MACH_REALTEK_RTL || RTL9602C``).
-   * - ``CONFIG_RTL9602C_WATCHDOG=y``
-     - The watchdog (``RTL9602C_WATCHDOG`` depends on ``MIPS || COMPILE_TEST``).
+   * - ``CONFIG_REALTEK_OTTO_WDT=y``, ``CONFIG_WATCHDOG_OPEN_TIMEOUT=60``
+     - The watchdog (``REALTEK_OTTO_WDT`` depends on
+       ``MACH_REALTEK_RTL || RTL9602C || COMPILE_TEST``), and the time a
+       watchdog the boot loader armed is fed by the kernel before user space
+       must take it over.
+   * - ``COMMON_CLK``, ``REALTEK_OTTO_TIMER``
+     - Selected by the platform: the fixed LX bus clock of the tree, which the
+       timers and the watchdog count, and the timers' driver.
 
 Device tree and bindings
 ------------------------
@@ -110,9 +116,15 @@ listed in ``vendor-prefixes.yaml``.
    * - ``realtek,rtl9602c-intc``
      - ``intc``
      - ``interrupt-controller/realtek,rtl9602c-intc.yaml``
+   * - ``fixed-clock``
+     - ``lx_clk``
+     - ``clock/fixed-clock.yaml``
+   * - ``realtek,rtl9602c-timer``, ``realtek,otto-timer``
+     - ``timer@18003200``
+     - ``timer/realtek,otto-timer.yaml``
    * - ``realtek,rtl9602c-wdt``
      - ``wdt``
-     - ``watchdog/realtek,rtl9602c-wdt.yaml``
+     - ``watchdog/realtek,otto-wdt.yaml``
    * - ``realtek,rtl9602c-gpio``
      - ``gpio0``
      - ``gpio/realtek,otto-gpio.yaml``
@@ -163,18 +175,22 @@ Where the code is
      - ``KEXEC``
      - none
    * - Platform code
-     - ``arch/mips/rtl9602c/setup.c`` (setup, restart, console UART
-       registration, write-buffer flush); ``irq.c`` (interrupt controller);
-       ``timer.c`` (tick and clock); ``early_printk.c`` (early console); ``Makefile``;
+     - ``arch/mips/rtl9602c/setup.c`` (setup, halt, console UART
+       registration, the probe of the timers, write-buffer flush); ``irq.c``
+       (interrupt controller); ``early_printk.c`` (early console); ``Makefile``;
        ``Platform`` (load address);
        ``arch/mips/include/asm/mach-rtl9602c/rtl9602c.h``;
        ``arch/mips/Kbuild.platforms``
      - ``RTL9602C``; ``EARLY_PRINTK`` for the early console
      - ``soc``, ``intc``, ``uart0``
-   * - Watchdog
-     - ``drivers/watchdog/rtl9602c_wdt.c``
-     - ``RTL9602C_WATCHDOG``
-     - ``wdt``
+   * - Timers
+     - ``drivers/clocksource/timer-rtl-otto.c``
+     - ``REALTEK_OTTO_TIMER``
+     - ``timer@18003200``, ``lx_clk``
+   * - Watchdog and restart
+     - ``drivers/watchdog/realtek_otto_wdt.c``
+     - ``REALTEK_OTTO_WDT``
+     - ``wdt``, ``lx_clk``
    * - GPIO bank
      - ``drivers/gpio/gpio-realtek-otto.c``
      - ``GPIO_REALTEK_OTTO``
@@ -208,18 +224,20 @@ Interfaces to user space
 - ``/proc/cmdline`` and the ``Kernel command line:`` line of the kernel log:
   ``panic=10`` from the tree, then the boot loader's arguments.
 - ``/proc/interrupts``: the SoC's interrupt sources appear under
-  ``rtl9602c-intc``, the tick as ``rtl9602c-tick`` and the console as ``ttyS0``.
+  ``rtl9602c-intc``, the tick as ``timer@18003200`` and the console as
+  ``ttyS0``.
 - ``/dev/ttyS0``: the console, at 115200 baud.
-- ``/dev/watchdog`` (and the watchdog core's sysfs entries): the watchdog is
-  armed when the driver probes, and the kernel feeds it until the device is
-  opened.
+- ``/dev/watchdog`` (and the watchdog core's sysfs entries): a watchdog the
+  boot loader armed is fed by the kernel until the device is opened, for 60 s
+  at most; procd opens it and feeds it.
 - ``/sys/class/mtd/mtd0`` to ``mtd7`` and the block devices 31:0 to 31:7: the
   flash partitions, the boot loader's read-only and the others writable (see
   "Flash and partitions").
 - A gpiolib chip of 32 lines; line 13 is requested by the switch driver as
   TX_DISABLE.
 - ``reboot``, ``halt`` and ``poweroff``: reboot resets the whole chip through the
-  watchdog; halt and power off spin with interrupts disabled.
+  watchdog driver's restart handler; halt and power off spin with interrupts
+  disabled.
 
 How to read the fact tables
 ===========================
@@ -240,7 +258,7 @@ A row with two tags is established in two ways, or in two parts; *Checked by*
 says which part carries which tag. "Every boot" means that the line is in the
 kernel log of every boot of this kernel. Addresses are physical unless marked
 KSEG1. The behaviours that a tested fact depends on are named in words: the
-board boots to a shell; the watchdog is armed at probe, fed and disarmed;
+board boots to a shell; the watchdog is armed, fed and disarmed;
 bridged traffic passes both ways, sourced from the host; the optics diagnostics
 read, the laser is off before O3 and TX_DISABLE is honoured. "The stress run" is
 a user-space program that repeats fork, exec, memory and unaligned-access checks
@@ -308,8 +326,8 @@ The kernel log of every boot names the core::
        "Timers and the tick"); the exception base is fixed.
      - T
      - The board boots to a shell; ``dmesg`` shows ``Switched to clocksource
-       rtl9602c-tc1`` and ``sched_clock: 28 bits at 100MHz, resolution
-       10ns``.
+       realtek_otto_timer`` and ``sched_clock: 28 bits at 3125kHz,
+       resolution 320ns``.
    * - ``MIPS_CPU_3K_CACHE`` selects the R3000 cache code in
        ``cpu_cache_init()``, where the ``CPU_LEXRA_CACHE`` branch comes first
        (see "Caches"), so it selects nothing there on this platform.
@@ -738,17 +756,18 @@ architecture code calls. In the order in which the kernel reaches them:
 3. ``setup_early_printk()`` starts the early console: from here
    ``prom_putchar()`` (``early_printk.c``) prints every character until the 8250
    driver takes over the console UART.
-4. ``plat_mem_setup()`` (``setup.c``) stops the watchdog, adds the DRAM to
-   memblock, hands the built-in device tree to the OF core, registers the
-   console UART and installs restart, halt and power off (the steps are listed
-   below).
+4. ``plat_mem_setup()`` (``setup.c``) adds the DRAM to memblock, hands the
+   built-in device tree to the OF core, registers the console UART and installs
+   halt and power off (the steps are listed below). It does not touch the
+   watchdog: a count the boot loader armed for a trial boot runs on.
 5. ``cpu_cache_init()`` calls ``lexra_cache_init()`` (see "Caches").
 6. ``arch_init_irq()`` (``irq.c``) sets up the interrupt controller.
-7. ``plat_time_init()`` (``timer.c``) sets up the clock and the tick.
+7. ``plat_time_init()`` (``setup.c``) registers the tree's clocks and probes
+   the timers (see "Timers and the tick").
 8. ``rtl9602c_populate_dt()`` (``arch_initcall``) creates the devices of the
    tree.
-9. The drivers probe at ``device_initcall`` time; the watchdog driver arms the
-   watchdog.
+9. The drivers probe at ``device_initcall`` time; the watchdog driver takes
+   over a watchdog the boot loader armed, and registers the restart handler.
 
 Platform setup
 --------------
@@ -756,23 +775,15 @@ Platform setup
 ``plat_mem_setup()``, in order
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-1. Write 0 to the watchdog control register. Purpose: a count armed before this
-   kernel, by the boot loader's one-shot boot mode or by an older kernel that
-   restarted by a jump to the reset vector, keeps running across the jump into
-   this kernel although the register then reads 0, and would reset the board;
-   writing 0 stops it. Nothing watches the boot from here until the watchdog
-   driver arms the watchdog at probe. (M, I)
-2. Add the DRAM (``RTL9602C_RAM_BASE``, ``RTL9602C_RAM_SIZE``) to memblock.
+1. Add the DRAM (``RTL9602C_RAM_BASE``, ``RTL9602C_RAM_SIZE``) to memblock.
    Purpose: early allocation works whatever the tree says. (T)
-3. Call ``__dt_setup_arch(__dtb_start)``. Purpose: hand the built-in device tree
+2. Call ``__dt_setup_arch(__dtb_start)``. Purpose: hand the built-in device tree
    blob to the OF core. (T)
-4. Call ``rtl9602c_serial_init()``. Purpose: register the console UART, so that
+3. Call ``rtl9602c_serial_init()``. Purpose: register the console UART, so that
    the port is in the 8250 driver's table when ``console_init()`` runs (see
    "UART and early console"). (M, T)
-5. Install ``_machine_restart``, ``_machine_halt`` and ``pm_power_off``.
-   Purpose: restart through a chip reset by the watchdog, and spin on halt and
-   power off.
-   (I)
+4. Install ``_machine_halt`` and ``pm_power_off``. Purpose: spin on halt and
+   power off. (I)
 
 .. list-table::
    :header-rows: 1
@@ -803,13 +814,12 @@ Platform setup
      - T
      - The board boots to a shell: every device of the tree that has a driver
        binds.
-   * - Restart, halt and power off are installed at the end of
-       ``plat_mem_setup()``. Halt and power off disable interrupts and spin: the
-       board has no control over its own supply, which comes from the host's
-       cage.
+   * - Halt and power off are installed at the end of ``plat_mem_setup()``.
+       They disable interrupts and spin: the board has no control over its own
+       supply, which comes from the host's cage. The core stops the watchdog
+       on halt and power off, so a halted board stays halted.
      - I
-     - The restart path is exercised by every RAM boot (the board boots to a
-       shell); halt and power off are not exercised.
+     - Halt and power off are not exercised.
    * - ``__wbflush`` is initialised at compile time to ``rtl9602c_wbflush()``,
        an uncached load (``lw $0`` from the KSEG1 base, physical 0) followed by
        a ``nop``. ``mb()`` and ``iob()`` call it on this kernel (see "MIPS I
@@ -826,19 +836,10 @@ Platform setup
 Restart
 -------
 
-``rtl9602c_machine_restart()``, in order
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-1. Disable interrupts. Purpose: nothing may run in between. (T)
-2. Print one line at emergency level. Purpose: the console shows that the
-   restart was entered. (T)
-3. Write ``RTL9602C_WDT_KEEPALIVE_KICK`` to the watchdog keepalive register.
-   Purpose: the count starts from zero whatever was left in it, as the watchdog
-   driver does before it enables the watchdog. (T)
-4. Write ``RTL9602C_WDT_CTRL_RESET_NOW`` to the watchdog control register.
-   Purpose: the shortest deadline the block has, 335.5 ms, and a full chip
-   reset at its end. (M)
-5. Spin with ``cpu_relax()``. Purpose: wait for the reset. (T)
+The platform installs no restart of its own: ``machine_restart()`` runs the
+kernel's restart handlers, among them the watchdog driver's, which arms the
+watchdog at its shortest deadline with a chip reset (see "Watchdog"). A kernel
+without the watchdog driver cannot restart the board.
 
 .. list-table::
    :header-rows: 1
@@ -859,7 +860,9 @@ Restart
        until the chip reset; after it the transfer works. With the chip reset,
        ``reboot`` at 8.9 s and at 45.6 s of uptime: the host's carrier drops as
        at a watchdog expiry, and the transfer that follows works at once, 15 s
-       after the restart with the loader's commands typed in between.
+       after the restart with the loader's commands typed in between; through
+       the watchdog driver's handler, the loader's prompt 8 s after
+       ``reboot`` and the transfer working at once.
 
 Build and configuration
 -----------------------
@@ -873,7 +876,8 @@ Build and configuration
      - Checked by
    * - ``RTL9602C`` is a member of the MIPS system-type choice ("Realtek
        RTL9602C (Lexra LX5281) based machines"). It selects:
-       ``SYS_HAS_CPU_R3000`` (the core runs as an R3000);
+       ``SYS_HAS_CPU_R3000`` (the core runs as an R3000); ``COMMON_CLK`` and
+       ``REALTEK_OTTO_TIMER`` (the tree's clock and the timers' driver);
        ``SYS_SUPPORTS_32BIT_KERNEL`` and ``SYS_SUPPORTS_BIG_ENDIAN``;
        ``CPU_LEXRA_CACHE`` (the cache driver); ``IRQ_MIPS_CPU`` (the CPU's eight
        lines, step 2 of ``arch_init_irq()``); ``SYS_HAS_EARLY_PRINTK``
@@ -889,8 +893,8 @@ Build and configuration
        the maintenance on one buffer and comparing would show.
    * - ``arch/mips/Kbuild.platforms`` adds ``rtl9602c/`` for
        ``CONFIG_RTL9602C``, which builds the directory and reads its
-       ``Platform`` file. The ``Makefile`` builds ``setup.o``, ``irq.o`` and
-       ``timer.o``, and ``early_printk.o`` only with ``CONFIG_EARLY_PRINTK``.
+       ``Platform`` file. The ``Makefile`` builds ``setup.o`` and ``irq.o``, and
+       ``early_printk.o`` only with ``CONFIG_EARLY_PRINTK``.
      - T
      - The kernel builds.
    * - ``Platform`` adds ``arch/mips/include/asm/mach-rtl9602c`` to the include
@@ -940,7 +944,7 @@ number.
 
 ``/proc/interrupts`` shows the sources in use by their number::
 
-    51: ...  rtl9602c-intc  43 rtl9602c-tick
+    51: ...  rtl9602c-intc  43 timer@18003200
     57: ...  rtl9602c-intc  49 ttyS0
 
 .. list-table::
@@ -950,10 +954,6 @@ number.
    * - Source
      - Linux interrupt
      - Used by
-   * - 5
-     - 13
-     - The watchdog's phase-one warning, as named in the tree; never seen
-       asserted.
    * - 8
      - 16
      - The switch's interrupt block.
@@ -966,7 +966,7 @@ number.
      - The CPU port's DMA engine.
    * - 43
      - 51
-     - Timer 0, the tick (``RTL9602C_INTC_SRC_TIMER0``).
+     - Timer 0, the tick (the ``timer`` node's interrupt).
    * - 49
      - 57
      - UART0, the console (``RTL9602C_INTC_SRC_UART0``).
@@ -1034,7 +1034,7 @@ number.
        clear of the CPU's lines (``MIPS_CPU_IRQ_BASE`` + 8 <= 8) and inside
        ``NR_IRQS`` (256).
      - M
-     - ``/proc/interrupts`` shows ``51: ... rtl9602c-intc 43 rtl9602c-tick`` and
+     - ``/proc/interrupts`` shows ``51: ... rtl9602c-intc 43 timer@18003200`` and
        ``57: ... 49 ttyS0``; every boot: ``NR_IRQS: 256``.
    * - The domain is anchored to the device-tree node ``realtek,rtl9602c-intc``
        and translates one cell, so a device node names its source number.
@@ -1081,40 +1081,40 @@ Timers and the tick
 ===================
 
 MIPS I defines no CP0 Count and Compare registers, and the kernel uses none on
-this core. The tick comes from general-purpose timer 0 of the SoC, a periodic
-clockevent (``rtl9602c-tc0``) that counts the LX bus clock divided by 1000 and
-expires once per jiffy. There is no one-shot mode, so the kernel runs a
-periodic tick. The clock comes from timer 1, which the boot loader leaves
-running: the kernel sets it free-running at 100 MHz over its whole 28-bit
-range, with its interrupt disabled, and registers its count as the clocksource
-``rtl9602c-tc1`` and as sched_clock, with a resolution of 10 ns.
+this core. The SoC's general-purpose timers have the layout of the Otto SoCs'
+timers, and the Otto timer driver (``drivers/clocksource/timer-rtl-otto.c``,
+``REALTEK_OTTO_TIMER``) takes them from the device tree: timer 0 as the clock
+event device, periodic or one-shot, and timer 1 as the clocksource
+``realtek_otto_timer`` and as sched_clock. Both count the LX bus clock divided
+by 64, 3.125 MHz, so the clock has a resolution of 320 ns. The board's kernel
+runs a periodic tick (``HZ_PERIODIC``, ``HZ`` = 250). ``plat_time_init()``
+registers the tree's clocks (the fixed LX bus clock) and probes the timers.
 
 .. list-table::
    :header-rows: 1
    :widths: 10 34 56
 
    * - Offset
-     - Register
+     - Register (driver's name)
      - Meaning
    * - ``+0x00``
-     - ``RTL9602C_TIMER_RELOAD``
-     - Counts per period.
+     - ``RTTM_DATA``
+     - The end marker: counts per period.
    * - ``+0x04``
-     - ``RTL9602C_TIMER_COUNT``
-     - The count, from 0 up to the reload value; the clock reads timer 1's.
+     - ``RTTM_CNT``
+     - The count, from 0 up to the end marker; the clock reads timer 1's.
    * - ``+0x08``
-     - ``RTL9602C_TIMER_CTRL``
-     - Bit 28 ``RTL9602C_TIMER_CTRL_EN`` starts the timer; bit 24
-       ``RTL9602C_TIMER_CTRL_PERIODIC`` makes it reload and expire repeatedly;
-       the low bits hold the clock divisor.
+     - ``RTTM_CTRL``
+     - Bit 28 starts the timer; bit 24 makes it reload and expire repeatedly
+       (with it clear the timer stops at the end marker); the low bits hold
+       the clock divisor.
    * - ``+0x0c``
-     - ``RTL9602C_TIMER_IRQ``
-     - Bit 20 ``RTL9602C_TIMER_IRQ_EN`` lets the timer raise its interrupt; bit
-       16 ``RTL9602C_TIMER_IRQ_PENDING`` is set on expiry and cleared by writing
-       1 to it.
+     - ``RTTM_INT``
+     - Bit 20 lets the timer raise its interrupt; bit 16 is set on expiry and
+       cleared by writing 1 to it.
 
-Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
-``RTL9602C_TIMER_STRIDE`` (``0x10``).
+Timer *n* starts at ``0x18003200`` + *n* x ``0x10``; the tree's ``timer`` node
+names timers 0 and 1 and timer 0's interrupt.
 
 .. list-table::
    :header-rows: 1
@@ -1123,121 +1123,51 @@ Timer *n* starts at ``RTL9602C_TIMER_BASE`` (``0x18003200``) + *n* x
    * - Fact
      - Tag
      - Checked by
-   * - ``RTL9602C_TIMER_BASE`` (``0x18003200``) holds general-purpose timers
-       ``RTL9602C_TIMER_STRIDE`` (``0x10``) apart. Per timer:
-       ``RTL9602C_TIMER_RELOAD`` (``+0x00``, counts per period),
-       ``RTL9602C_TIMER_COUNT`` (``+0x04``), ``RTL9602C_TIMER_CTRL``
-       (``+0x08``), ``RTL9602C_TIMER_IRQ`` (``+0x0c``).
+   * - ``0x18003200`` holds general-purpose timers ``0x10`` apart, each with
+       the end marker (``+0x00``), the count (``+0x04``), control (``+0x08``)
+       and interrupt (``+0x0c``) registers, as the Otto timers have them.
      - M
      - At the boot loader prompt timer 1 (``+0x10``) is running with control
-       ``0x11000032``; timer 0 driven by hand with the driver's values counts
-       and sets its pending bit.
-   * - ``RTL9602C_TIMER_CTRL_EN`` (bit 28) starts the timer;
-       ``RTL9602C_TIMER_CTRL_PERIODIC`` (bit 24) makes it reload and expire
+       ``0x11000032``; timer 0 driven by hand counts and sets its pending bit;
+       the Otto driver runs the tick and the clock (every boot).
+   * - Control bit 28 starts the timer; bit 24 makes it reload and expire
        repeatedly; the low bits hold the clock divisor.
      - M
-     - The boot loader's ``0x11000032`` is EN, PERIODIC, divisor 50. The running
-       tick's control register reads ``0x110003e8`` (divisor 1000) and its
-       reload register ``0x320`` (800).
+     - The boot loader's ``0x11000032`` is the enable, periodic, divisor 50;
+       an earlier kernel's tick read ``0x110003e8`` (divisor 1000).
    * - The width of the divisor field.
      - I
-     - 1000 (10 bits) and 2 work, 1 does not count; the upper limit is not
-       established. Writing larger divisors and timing the period would show.
-   * - ``RTL9602C_TIMER_COUNT`` counts up from 0 to the reload value, 28 bits
-       wide like the reload register (``RTL9602C_TIMER_BITS``,
-       ``RTL9602C_TIMER_RELOAD_MAX``); writing the reload register sets the
-       count to 0. The boot loader leaves timer 1 counting with reload
-       ``0x0fffffff``.
+     - 1000 (10 bits), 64 and 2 work, 1 does not count; the upper limit is not
+       established. The Otto driver writes up to ``0xffff`` when it restarts a
+       timer close to its end; whether the field holds all 16 bits is not
+       verified.
+   * - The count runs up from 0 to the end marker, 28 bits wide like the
+       marker; writing the marker sets the count to 0.
      - M
-     - Through the kernel, on timer 1: all ones written to the reload register
-       read back ``0x0fffffff``; the count read 0 right after it and then rose
-       between reads, 1,998,289 in 20 ms at divisor 2; as the boot loader left
-       it, two reads in a row rose by 2.
-   * - Timer 1 at divisor 2 counts at 100 MHz, the LX bus clock halved, and
-       divides by its divisor exactly: the clock it gives kept time with an
-       outside clock.
+     - All ones written to timer 1's marker read back ``0x0fffffff``; the count
+       read 0 right after and then rose between reads.
+   * - A timer divides the LX bus clock (200 MHz) by its divisor exactly.
      - M
-     - 1,998,289 counts in a 20 ms delay; over 301.68 s of a host's clock the
-       stick's uptime advanced 301.69 s.
-   * - ``RTL9602C_TIMER_IRQ_EN`` (bit 20) lets the timer raise its interrupt;
-       ``RTL9602C_TIMER_IRQ_PENDING`` (bit 16) is set on expiry and cleared by
-       writing 1 to it.
+     - At divisor 2, 1,998,289 counts in a 20 ms delay and 301.69 s of uptime
+       over 301.68 s of a host's clock (an earlier kernel); at divisor 64 the
+       clock of this kernel, see the next row.
+   * - Timer 1 at divisor 64 is the clocksource ``realtek_otto_timer`` and
+       sched_clock, 28 bits at 3.125 MHz with a resolution of 320 ns, wrapping
+       every 85.9 s.
      - M
-     - The tick handler clears it this way and the tick runs (every boot); the
-       running tick's interrupt register reads ``0x00100000``.
-   * - The timers count the LX bus clock, ``RTL9602C_LX_HZ`` = 200 MHz, divided
-       by ``RTL9602C_TIMER_DIVISOR`` (1000): ``RTL9602C_TIMER_HZ`` = 200 kHz.
-       The tick reloads with ``RTL9602C_TIMER_HZ / HZ`` (800 at HZ = 250), one
-       expiry per jiffy.
+     - Every boot: ``sched_clock: 28 bits at 3125kHz, resolution 320ns`` and
+       ``Switched to clocksource realtek_otto_timer``.
+   * - Timer 0 gives the tick; its interrupt is source 43, which reaches the
+       CPU only through the cascade.
      - M
-     - The boot loader banner prints ``LX 200MHz``; the watchdog's expiry at
-       four settings matches 2^(25 + prescale) / 200 MHz within 10 ms; 252 tick
-       interrupts arrive between two reads of ``/proc/interrupts`` one second
-       apart.
-   * - Whether the timer divides by the reload value exactly or by one more:
-       the tick's period would be 800 or 801 counts.
+     - ``/proc/interrupts`` shows ``51: ... rtl9602c-intc 43 timer@18003200``,
+       152,124 interrupts after 608.9 s of uptime, 249.8 a second at
+       ``HZ`` = 250.
+   * - In one-shot mode the Otto driver lets timer 0 stop at its end marker
+       (bit 24 clear), and its one interrupt ends the period.
      - I
-     - A 0.1 % difference in the tick rate, which no longer sets the time
-       (the clock does); timing 100,000 ticks against the clock would show.
-   * - Timer 0 (``RTL9602C_TIMER_TICK_IDX``) drives the tick; its interrupt is
-       source 43 (``RTL9602C_INTC_SRC_TIMER0``, Linux 51), which reaches the CPU
-       only through the cascade.
-     - M
-     - Driving timer 0 raises bit 11 of the upper status word;
-       ``/proc/interrupts`` shows ``51: ... rtl9602c-intc 43 rtl9602c-tick``.
-   * - The clockevent ``rtl9602c-tc0`` is periodic only (no one-shot: there is
-       no ``set_next_event``), rating 300, bound to CPU 0 (``cpumask_of(0)``;
-       the clockevents core warns about ``cpu_all_mask``), registered at 200 kHz
-       with delta limits ``0x100``-``0xffffff``. The limits only matter in
-       one-shot mode. The kernel therefore runs a periodic tick.
-     - M
-     - With ``cpu_all_mask`` the clockevents core warns; with ``cpumask_of(0)``
-       it does not. The counter is 28 bits wide (the rows above), which would
-       matter only for a one-shot mode.
-   * - The interrupt handler writes the interrupt register back with the pending
-       bit set (keeping the enable), then calls the clockevent handler. It does
-       not check the source: ``irq.c`` calls it only when source 43 is pending
-       and enabled.
-     - T
-     - The board boots to a shell.
-
-Timer sequences
----------------
-
-Stopping the timer
-~~~~~~~~~~~~~~~~~~
-
-1. Write 0 to the control register. Purpose: stop counting. (T)
-2. Write ``RTL9602C_TIMER_IRQ_PENDING`` to the interrupt register. Purpose:
-   clear an expiry left pending; this also clears the interrupt enable. (T)
-
-Starting the timer
-~~~~~~~~~~~~~~~~~~
-
-1. Stop (above). Purpose: start from a known state. (T)
-2. Write the reload register: counts per period. (T)
-3. Write the control register with the divisor only. Purpose: set the rate while
-   the timer is stopped. (T)
-4. Write the interrupt register with ``RTL9602C_TIMER_IRQ_EN``. (T)
-5. Write the control register with the divisor, ``RTL9602C_TIMER_CTRL_EN`` and
-   ``RTL9602C_TIMER_CTRL_PERIODIC``. Purpose: start. (T)
-
-Setting up the clock and the tick
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-1. ``plat_time_init()`` maps the block and stops timer 0. Purpose: whatever
-   timer 0 was doing before the kernel is cleared. (T)
-2. ``rtl9602c_clock_init()``: stop timer 1, write ``RTL9602C_TIMER_RELOAD_MAX``
-   to its reload register, which sets the count to 0, write the divisor 2
-   while it is stopped, then start it periodic with its interrupt off; register
-   ``rtl9602c-tc1`` at 100 MHz, rating 300, and sched_clock over the same 28
-   bits. Purpose: a clock with a resolution of 10 ns instead of a jiffy. (M)
-3. Register the clockevent. Purpose: the clockevents core switches it to
-   periodic mode, which starts it with ``RTL9602C_TIMER_HZ / HZ`` counts;
-   shutdown stops it. (T)
-4. ``request_irq()`` on Linux interrupt 51 with ``IRQF_TIMER``. Purpose: it
-   enables source 43; with the cascade already open the tick reaches the CPU.
-   (T)
+     - The board's kernel runs a periodic tick and does not use the mode; a
+       kernel with ``NO_HZ_IDLE`` would show.
 
 UART and early console
 ======================
@@ -1386,44 +1316,40 @@ Watchdog
 
 The watchdog block divides the 200 MHz LX bus clock into ticks and counts them
 through two phases. The end of phase one sets a flag in the status register; the
-end of phase two carries out the expiry action, which the driver sets to a reset
-of the whole chip. Writing the kick bit restarts the count. The block is
-described by the ``wdt`` node (``realtek,rtl9602c-wdt``).
+end of phase two carries out the expiry action, which the device tree sets to a
+reset of the whole chip. Writing the kick bit restarts the count. The block has
+the registers of the Otto SoCs' watchdog without its interrupts, and the Otto
+watchdog driver (``drivers/watchdog/realtek_otto_wdt.c``,
+``REALTEK_OTTO_WDT``) drives it through the ``wdt`` node
+(``realtek,rtl9602c-wdt``, the LX bus clock, ``realtek,reset-mode = "soc"``).
 
-The driver (``drivers/watchdog/rtl9602c_wdt.c``, ``CONFIG_RTL9602C_WATCHDOG``)
-arms the watchdog when it probes, with a 44 s deadline unless the device tree
-gives ``timeout-sec``, and marks it running in hardware. The watchdog core then
-feeds it until user space opens ``/dev/watchdog``: a slow user space is not
-reset, a kernel that stops running is. Once the device is open, user space must
-write to it, or the board resets at the deadline. The driver offers
-``WDIOF_SETTIMEOUT``, ``WDIOF_MAGICCLOSE`` and ``WDIOF_KEEPALIVEPING`` and no
-pretimeout. The platform code writes the same control register in two places, a
-clear at every boot and, on restart, an arm at the shortest deadline that resets
-the chip.
+A watchdog the boot loader armed for a trial boot is kept running at probe and
+fed by the watchdog core until user space opens ``/dev/watchdog``, for 60 s at
+most (``WATCHDOG_OPEN_TIMEOUT``). Otherwise the driver leaves it off until
+procd, the first process, opens the device and feeds it (ADR 0013). The driver
+restarts the board through its restart handler, with the shortest deadline and
+a chip reset, and offers no pretimeout, since the block raises no interrupt.
+The platform code does not touch the watchdog.
 
 .. list-table::
    :header-rows: 1
    :widths: 10 34 56
 
    * - Offset
-     - Register
+     - Register (driver's name)
      - Fields
    * - ``+0x00``
-     - ``RTL9602C_WDT_KEEPALIVE``
-     - Bit 31 ``RTL9602C_WDT_KEEPALIVE_KICK`` restarts the count.
+     - ``OTTO_WDT_REG_CNTR``
+     - Bit 31 ``OTTO_WDT_CNTR_PING`` restarts the count.
    * - ``+0x04``
-     - ``RTL9602C_WDT_IRQ_STAT``
-     - Bit 31 ``RTL9602C_WDT_IRQ_STAT_PHASE1``: phase one has expired.
+     - ``OTTO_WDT_REG_INTR``
+     - Bit 31 ``OTTO_WDT_INTR_PHASE_1``: phase one has expired.
    * - ``+0x08``
-     - ``RTL9602C_WDT_CTRL``
-     - ``RTL9602C_WDT_CTRL_EN`` (bit 31), ``RTL9602C_WDT_CTRL_PRESCALE`` (bits
-       30:29), ``RTL9602C_WDT_CTRL_PHASE1`` (bits 26:22),
-       ``RTL9602C_WDT_CTRL_PHASE2`` (bits 19:15), ``RTL9602C_WDT_CTRL_ACTION``
+     - ``OTTO_WDT_REG_CTRL``
+     - ``OTTO_WDT_CTRL_ENABLE`` (bit 31), ``OTTO_WDT_CTRL_PRESCALE`` (bits
+       30:29), ``OTTO_WDT_CTRL_PHASE1`` (bits 26:22),
+       ``OTTO_WDT_CTRL_PHASE2`` (bits 19:15), ``OTTO_WDT_CTRL_RST_MODE``
        (bits 1:0). All other bits hold nothing.
-
-The default control word ``0xe7800000`` is the enable (bit 31, ``0x80000000``),
-prescale 3 (``0x60000000``), phase one 30 (``0x07800000``), phase two 0 and
-action 0: 32 ticks of 1.342 s, which is 42.9 s.
 
 Registers and fields
 --------------------
@@ -1437,35 +1363,33 @@ Registers and fields
      - Checked by
    * - Three 32-bit registers at physical ``0x18003260``, in the SoC peripheral
        window (device tree ``reg = <0x18003260 0xc>``, compatible
-       ``realtek,rtl9602c-wdt``); the driver maps them as one resource.
+       ``realtek,rtl9602c-wdt``), with the layout of the Otto watchdog; the
+       driver maps them as one resource.
      - M
      - Arming through ``+0x08`` resets the board on the predicted schedule;
        opening ``/dev/watchdog`` and not writing to it resets the board.
-   * - ``RTL9602C_WDT_KEEPALIVE`` (``+0x00``): writing
-       ``RTL9602C_WDT_KEEPALIVE_KICK`` (bit 31) restarts the timeout count.
+   * - ``OTTO_WDT_REG_CNTR`` (``+0x00``): writing
+       ``OTTO_WDT_CNTR_PING`` (bit 31) restarts the timeout count.
      - M
      - ``/dev/watchdog`` written every 3 s for 66 s against a 44 s timeout; the
        board stays up.
-   * - ``RTL9602C_WDT_IRQ_STAT`` (``+0x04``): ``RTL9602C_WDT_IRQ_STAT_PHASE1``
+   * - ``OTTO_WDT_REG_INTR`` (``+0x04``): ``OTTO_WDT_INTR_PHASE_1``
        (bit 31) sets when phase one expires and stays set until the expiry
        action.
      - M
      - Control word ``0xe3830000`` (phase one 20.1 s, phase two 9.4 s), the
        register sampled every 4 s: 0 up to t = 20 s, bit 31 alone at t = 24 s,
        still set when the reset comes.
-   * - Writing ``RTL9602C_WDT_IRQ_STAT_PHASE1`` back to
-       ``RTL9602C_WDT_IRQ_STAT`` clears it (write one to clear). The interrupt
-       handler does this, but the handler has never run (see "The phase-one
-       interrupt").
+   * - Writing ``OTTO_WDT_INTR_PHASE_1`` back to ``OTTO_WDT_REG_INTR`` clears
+       it (write one to clear); the driver writes both flags back at probe.
      - I
-     - Not load-bearing: the handler also disables its line after one
-       notification. Writing bit 31 back during phase two and reading the
+     - Not load-bearing. Writing bit 31 back during phase two and reading the
        register would settle it.
-   * - ``RTL9602C_WDT_CTRL`` (``+0x08``) holds what is written to its fields:
+   * - ``OTTO_WDT_REG_CTRL`` (``+0x08``) holds what is written to its fields:
        ``0xe7c00000`` reads back ``0xe7c00000``, ``0`` reads back ``0``.
      - M
      - Written and read back on the running board.
-   * - ``RTL9602C_WDT_CTRL_EN`` (bit 31): writing the control word with it set
+   * - ``OTTO_WDT_CTRL_ENABLE`` (bit 31): writing the control word with it set
        arms the watchdog; writing it clear disarms it. (What a read shows after
        a restart is another matter, see "What it recovers from, and what it does
        not".)
@@ -1473,9 +1397,9 @@ Registers and fields
      - An armed board whose control word is rewritten with bit 31 clear is still
        running at 57 s on a 20 s deadline; every reset of the prescale test has
        the bit set.
-   * - ``RTL9602C_WDT_CTRL_PRESCALE`` (bits 30:29,
-       ``0..RTL9602C_WDT_CTRL_PRESCALE_MAX`` = 3): one tick is
-       2^(``RTL9602C_WDT_TICK_SHIFT`` + PRESCALE) = 2^(25 + PRESCALE) cycles of
+   * - ``OTTO_WDT_CTRL_PRESCALE`` (bits 30:29,
+       ``0..OTTO_WDT_PRESCALE_MAX`` = 3): one tick is
+       2^(``25`` + PRESCALE) = 2^(25 + PRESCALE) cycles of
        the watchdog clock: 0.168, 0.336, 0.671 and 1.342 s at 200 MHz.
      - M
      - Four control words armed and left: the enable alone (bit 31),
@@ -1483,86 +1407,42 @@ Registers and fields
        phase one 0 and 31, phase two 0). Time to the boot loader banner: 1.94,
        4.29, 7.14 and 45.9 s, each (PHASE1 + 1 + PHASE2 + 1) ticks plus the same
        1.60 s, which is the chip reset's own time to the banner.
-   * - ``RTL9602C_WDT_LX_HZ``: the clock the watchdog divides runs at 200 MHz.
+   * - ``The LX bus clock``: the clock the watchdog divides runs at 200 MHz.
      - M
      - It is the one rate that brings all four timings above into agreement, to
        within 10 ms after the 1.60 s is taken off.
-   * - ``RTL9602C_WDT_CTRL_PHASE1`` (bits 26:22,
-       ``0..RTL9602C_WDT_CTRL_PHASE_MAX`` = 31): phase one lasts PHASE1 + 1
+   * - ``OTTO_WDT_CTRL_PHASE1`` (bits 26:22,
+       ``0..31`` = 31): phase one lasts PHASE1 + 1
        ticks.
      - M
      - The prescale test, the rows with phase one 0 and 31.
-   * - ``RTL9602C_WDT_CTRL_PHASE2`` (bits 19:15, 0..31): phase two lasts PHASE2
+   * - ``OTTO_WDT_CTRL_PHASE2`` (bits 19:15, 0..31): phase two lasts PHASE2
        + 1 ticks after phase one, so the whole deadline is (PHASE1 + 1) +
        (PHASE2 + 1) ticks.
      - M
      - ``0xe3830000`` (prescale 3, phase one 14, phase two 6): the phase-one
        flag appears between 20 and 24 s (20.1 s predicted) and the reset about 9
        s later (9.4 s predicted); the prescale test covers phase two 0.
-   * - ``RTL9602C_WDT_CTRL_ACTION`` (bits 1:0) =
-       ``RTL9602C_WDT_CTRL_ACTION_CHIP_RESET`` (0): expiry resets the whole
+   * - ``OTTO_WDT_CTRL_RST_MODE`` (bits 1:0) =
+       ``OTTO_WDT_MODE_SOC`` (0): expiry resets the whole
        chip, the switch included. The switch's PTP clock, which keeps counting
        through a jump to the CPU reset vector, starts again from zero, and
-       the boot loader brings the switch core up from scratch. The driver uses
-       this action because it needs nothing from the CPU: the failure the
-       watchdog is for is a kernel that no longer runs.
+       the boot loader brings the switch core up from scratch. The device tree
+       asks for this action (``realtek,reset-mode = "soc"``) because it needs
+       nothing from the CPU: the failure the watchdog is for is a kernel that
+       no longer runs.
      - M
      - The switch's PTP seconds counter read before and after: 153 s to 21 s
        across 233 s of wall clock for a watchdog expiry, against 80 s to 153 s
        across 73 s for a jump to the reset vector. Repeatable through
        the PHC, which reads the same counter.
-   * - Bits 28, 27, 21:20 and 14:2 of ``RTL9602C_WDT_CTRL`` hold nothing:
+   * - Bits 28, 27, 21:20 and 14:2 of ``OTTO_WDT_REG_CTRL`` hold nothing:
        written as ones they read back as zero. The control word therefore has no
        interrupt enable.
      - M
      - ``0x183ffffc`` ORed into a control write (phase two forced to 31 in the
        same write); the word reads back ``0xc6cf8000``: enable, prescale 2,
        phase one 27, phase two 31, every other bit zero.
-
-The deadline as the driver programs it
---------------------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 58 6 36
-
-   * - Fact
-     - Tag
-     - Checked by
-   * - The driver computes a tick in whole milliseconds, 2^(25 + PRESCALE) /
-       (200 000 000 / 1000): 167, 335, 671 and 1342 ms. Ticks per second would
-       be zero at prescale 3, where a tick is longer than a second, and the next
-       division would divide by zero; dividing by the clock in kHz keeps the
-       numerator at most 2^28, within 32 bits.
-     - T
-     - The watchdog is armed at probe, fed and disarmed; the driver probes on
-       every boot. Dividing by ticks per second would divide by zero at prescale
-       3 and trap in probe.
-   * - The longest deadline at each prescale is 33 ticks (phase one 31, phase
-       two one tick): 5, 11, 22 and 44 s after truncation to whole seconds. The
-       driver offers 1..44 s and starts at 44 s.
-     - M
-     - Every boot: the probe line reports ``1..44 s, two-phase, full chip reset;
-       armed at 44 s``.
-   * - A deadline of S seconds with a warning of P seconds is programmed as: the
-       finest prescale whose longest deadline reaches S; total ticks = floor(S /
-       tick); phase-two ticks = floor(P / tick), or 1
-       (``RTL9602C_WDT_PHASE2_TICKS``) when P is 0, kept within 1..32; total
-       ticks at least phase two + 1; PHASE1 = total - phase-two ticks - 1, at
-       most 31; PHASE2 = phase-two ticks - 1; ACTION 0. One prescale serves both
-       phases.
-     - T
-     - The watchdog is armed at probe, fed and disarmed; the next two rows are
-       this rule measured.
-   * - The default 44 s programs prescale 3, phase one 30, phase two 0: 32
-       ticks, 42.9 s. With the enable the word reads ``0xe7800000``.
-     - M
-     - Control word read back on the running board; ``/dev/watchdog`` opened and
-       left unwritten: reset 44.55 s later (42.9 s plus 1.6 s to the banner).
-   * - A 30 s deadline with a 10 s warning programs ``0xe3830000``: prescale 3,
-       15 ticks of phase one (20.1 s) and 7 of phase two (9.4 s).
-     - M
-     - As the ``0xe3830000`` run above.
 
 Operating it
 ------------
@@ -1574,53 +1454,49 @@ Operating it
    * - Fact
      - Tag
      - Checked by
-   * - Probe arms the watchdog and marks it running in hardware
-       (``WDOG_HW_RUNNING``); the watchdog core then feeds it from its own
-       worker until user space opens ``/dev/watchdog``. A slow user space is
-       therefore not reset; a kernel that stops running is.
+   * - The boot loader's trial boot arms the watchdog with ``0xe7c00000``
+       (prescale 3, phase one 31: 44.3 s). The driver finds the enable set at
+       probe, kicks the count, programs its own timeout keeping the enable,
+       kicks again and marks the watchdog running in hardware
+       (``WDOG_HW_RUNNING``); the core then feeds it until user space opens
+       the device, for 60 s at most.
      - M
-     - After probe the control word reads ``0xe7800000``, enable on, and the
-       board runs over five minutes with nothing opening the device, against a
-       42.9 s deadline.
-   * - Opening ``/dev/watchdog`` and not writing to it resets the board at the
-       deadline; writing to it keeps the board up. This is also how a full chip
-       reset is obtained on demand.
+     - A RAM boot with the loader's watchdog armed and ``rdinit=/bin/sh``,
+       so that nothing opens the device: the chip reset 69 s after
+       ``bootm``, the kernel's start, the 60 s and a tick; a kernel that
+       stopped the count would not reset, and one that left it to the loader
+       would reset after 44 s.
+   * - Without a running watchdog at probe the driver writes its default word,
+       the enable clear, and leaves the watchdog off; procd opens
+       ``/dev/watchdog`` as it starts, sets 30 s and feeds it every 5 s.
      - M
-     - Reset 44.55 s after the open; kept up for 66 s by a write every 3 s.
-   * - Reprogramming (a new timeout or warning) keeps ``RTL9602C_WDT_CTRL_EN``
-       as the register reads it, because the timeout fields and the enable share
-       one word. Composing the word afresh disarms a running watchdog silently,
-       and for the rest of the boot: the core arms it at probe and never calls
-       start again, while it goes on reporting the device active.
-     - M
-     - Two boots differing only in a ``WDIOC_SETTIMEOUT`` of 20 s after arming,
-       the device then closed without the magic character: with the word
-       composed afresh the board is alive at 57 s; with the enable kept, it
-       resets.
-   * - After reprogramming a running watchdog the driver writes
-       ``RTL9602C_WDT_KEEPALIVE_KICK``, so the new deadline counts from the
-       request. Whether a control write restarts the count by itself is not
-       established; without the kick, a deadline shorter than the count already
-       reached might expire at once.
-     - I
-     - Not load-bearing: the kick is always written. Rewriting the control word
-       of a running watchdog without a kick, to a deadline shorter than the
-       count reached, and timing the reset would settle it.
-   * - Start writes the control word, then ``RTL9602C_WDT_KEEPALIVE_KICK``, then
-       sets ``RTL9602C_WDT_CTRL_EN``, so counting starts from zero whatever
-       count an earlier owner left. Whether setting the enable clears the count
-       by itself is not established.
-     - I
-     - Not load-bearing: the kick precedes the enable. Stopping a watchdog
-       mid-count, re-enabling it without a kick and timing the reset would
-       settle it.
-   * - Stop clears ``RTL9602C_WDT_CTRL_EN`` by read-modify-write. The core stops
-       the watchdog on an orderly reboot and when the driver unregisters
-       (``watchdog_stop_on_reboot()``, ``watchdog_stop_on_unregister()``), so a
-       reboot is not cut short; the platform's restart then arms it at its
-       shortest deadline to reset the chip.
+     - Every boot: ``procd: - watchdog -`` about 1.5 s after the kernel's
+       start; sysfs reads ``identity`` "Realtek Otto watchdog timer",
+       ``timeout`` 30, ``state`` active.
+   * - A timeout of S seconds is programmed as the finest prescale at which
+       both phases fit 32 ticks, phase one rounded up to whole ticks of
+       S - 1 s and phase two the rest, at least one tick: 30 s gives prescale 3,
+       22 ticks of phase one and 1 of phase two, 30.9 s. The range is 2 to
+       44 s.
      - T
-     - The watchdog is disarmed; ``reboot`` completes.
+     - procd's 30 s is taken; opening ``/dev/watchdog`` and not writing to it
+       resets the board at the deadline.
+   * - The block raises no interrupt when phase one ends (see "The phase-one
+       interrupt"), so the device tree gives none, and the driver advertises
+       no ``WDIOF_PRETIMEOUT``.
+     - M
+     - Every boot: the device has no ``pretimeout`` attribute in sysfs.
+   * - Restart: the driver's restart handler writes the enable with the chip
+       reset mode and every other field 0, the shortest deadline the block has,
+       (0 + 1 + 0 + 1) x 167.8 ms = 335.5 ms, and waits three ticks. The core
+       stops the watchdog on an orderly reboot first, so a reboot is not cut
+       short by procd's deadline.
+     - M
+     - ``reboot``: ``reboot: Restarting system`` on the console and the boot
+       loader's prompt 8 s after the command, with the host's link down and up
+       again as after a power cycle; the shortest deadline itself, 1.89 to
+       1.93 s from the restart line to the loader's first output, was measured
+       with the same word written by an earlier kernel.
    * - Once phase one has expired the block refuses kicks, so the deadline
        cannot move during phase two.
      - I
@@ -1637,46 +1513,19 @@ The phase-one interrupt
    * - Fact
      - Tag
      - Checked by
-   * - The device tree names source 5 of the SoC interrupt controller for the
-       phase-one flag (``interrupts = <5>`` on the ``wdt`` node). The driver
-       requests it as optional and runs without it; the probe line reports it
-       taken.
-     - I
-     - The number is unverified: nothing has ever been seen on it. Not
-       load-bearing. Enabling every source and watching the status registers
-       while phase one expires would settle it.
-   * - The block raises no interrupt: with ``RTL9602C_WDT_IRQ_STAT_PHASE1``
-       standing for seconds and source 5 enabled (``RTL9602C_INTC_EN`` of bank 0
-       read ``0x00001020``), both ``RTL9602C_INTC_STAT`` words read 0 at every
-       sample and no handler runs. The same status register does latch a source
-       that asserts (the switch's source 8 reads set until acknowledged).
+   * - The block raises no interrupt: with ``OTTO_WDT_INTR_PHASE_1`` standing
+       for seconds and source 5 enabled (``RTL9602C_INTC_EN`` of bank 0 read
+       ``0x00001020``), both ``RTL9602C_INTC_STAT`` words read 0 at every
+       sample. The same status register does latch a source that asserts (the
+       switch's source 8 reads set until acknowledged). The bits of the control
+       word that hold nothing leave no room for an interrupt enable.
      - M
-     - The run of the flag test above, with the interrupt controller's enable
-       and status words read at each 4 s sample.
-   * - A pretimeout cannot be delivered, because the block raises no interrupt
-       when phase one ends. The driver therefore does not advertise
-       ``WDIOF_PRETIMEOUT``: its options are ``WDIOF_SETTIMEOUT``,
-       ``WDIOF_MAGICCLOSE`` and ``WDIOF_KEEPALIVEPING``. The core then never
-       sets a pretimeout, phase two is always one tick, and the handler and
-       ``set_pretimeout`` stay unused.
-     - T
-     - ``WDIOC_GETSUPPORT`` on ``/dev/watchdog`` reports no pretimeout option.
-   * - The handler, should the interrupt ever arrive: returns ``IRQ_NONE``
-       unless the phase-one flag is set; writes the flag back; disables its
-       line, so there is one notification per arming (a flag that did not clear
-       would otherwise repeat the interrupt at once); counts it; calls
-       ``watchdog_notify_pretimeout()``. Start enables the line again.
+     - The run of the phase-one flag test above, with the interrupt
+       controller's enable and status words read at each 4 s sample.
+   * - That the block raises no source at all, rather than one other than 5.
      - I
-     - Never exercised, as the block raises no interrupt.
-   * - ``interrupts = <5>`` (parent ``intc``) on the ``wdt`` node: the phase-one
-       warning. Never seen asserted: with source 5 enabled and phase one expired
-       (the watchdog's own phase-one flag set for seconds), both status
-       registers of the interrupt controller stayed 0. The driver takes the
-       interrupt if the tree gives one and offers no pretimeout.
-     - I
-     - Measured as described. Whether source 5 is the right number, or whether
-       the block raises any source at all, would be settled by enabling every
-       source and watching the status registers while phase one expires.
+     - Enabling every source and watching the status registers while phase one
+       expires would settle it.
 
 What it recovers from, and what it does not
 -------------------------------------------
@@ -1711,68 +1560,16 @@ What it recovers from, and what it does not
        and a fresh bring-up.
    * - After a jump to the CPU reset vector with the watchdog armed (how this
        kernel restarted before it reset the chip instead), the next kernel reads
-       ``RTL9602C_WDT_CTRL`` as 0 while the count armed before the jump still
-       resets the board 47 s after it; writing 0 to the
-       register stops it. The boot loader does neither. The platform writes 0 at
-       every boot for this reason, so the driver finds the watchdog stopped at
-       probe.
-     - M
-     - Two boots without the write are reset 47.0 and 46.9 s after the restart;
-       a boot with 0 written by hand, and one with the platform's write, run
-       past that mark.
-
-Platform code and the watchdog
-------------------------------
-
-The platform code writes the control register in two places only:
-``plat_mem_setup()`` clears it, and the restart path kicks the count and arms
-the watchdog at its shortest deadline. Both use ``RTL9602C_WDT_CTRL_ADDR``, the
-restart also ``RTL9602C_WDT_KEEPALIVE_ADDR``, and both go through KSEG1.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 58 6 36
-
-   * - Fact
-     - Tag
-     - Checked by
-   * - ``RTL9602C_WDT_CTRL_ADDR`` (``0x18003268``) is the watchdog control
-       register (``RTL9602C_WDT_CTRL`` in the watchdog driver). It reads back
-       what was written.
-     - M
-     - ``0xe7c00000`` and ``0`` both read back.
-   * - ``RTL9602C_WDT_KEEPALIVE_ADDR`` (``0x18003260``) is the keepalive
-       register (``RTL9602C_WDT_KEEPALIVE`` in the watchdog driver); writing
-       ``RTL9602C_WDT_KEEPALIVE_KICK`` (bit 31) restarts the count.
-     - M
-     - See the keepalive rows of the watchdog driver.
-   * - ``RTL9602C_WDT_CTRL_RESET_NOW`` (``0x80000000``) is
-       ``RTL9602C_WDT_CTRL_EN`` set and every other field 0:
-       ``RTL9602C_WDT_CTRL_PRESCALE`` 0 (2^25 LX clocks, 167.8 ms per tick),
-       ``RTL9602C_WDT_CTRL_PHASE1`` 0, ``RTL9602C_WDT_CTRL_PHASE2`` 0,
-       ``RTL9602C_WDT_CTRL_ACTION`` 0 (full chip reset): the chip resets
-       (0 + 1 + 0 + 1) x 167.8 ms = 335.5 ms after the write, the shortest
-       deadline the block has.
-     - M
-     - 1.89 to 1.93 s from the restart's console line to the boot loader's
-       first output, in three restarts: the deadline and about 1.6 s of the
-       reset's own path (see the next row).
-   * - With prescale 3 and phase one 31 (``0xe7c00000``, the safety net of the
-       jump this kernel used to restart with), the chip resets
-       (31 + 1 + 0 + 1) x 1.342 s = 44.3 s after the write.
-     - M
-     - 45.9 s from arming to the boot loader's first output, about 1.6 s of it
-       the reset's own path.
-   * - ``plat_mem_setup()`` writes 0 to the control register before anything
-       else, so a watchdog armed by an older kernel's restart by a jump (or by
-       the boot loader's one-shot boot mode) does not reset a kernel that
-       booted. Until
-       the watchdog driver arms it again at probe, nothing watches the boot.
+       ``OTTO_WDT_REG_CTRL`` as 0 while the count armed before the jump still
+       resets the board 47 s after it; writing 0 to the register stops it. The
+       boot loader does neither. The Otto driver, finding the enable clear,
+       writes its default word with the enable clear at probe, which stops such
+       a count as a write of 0 does.
      - M, I
-     - M: with the write in place the board survives (see the row on the count
-       that outlives a restart). I: that a hang between this write and the
-       watchdog driver's probe goes unrecovered is not observed; a deliberate
-       hang in that stretch during a one-shot boot would show.
+     - M: two boots without a write are reset 47.0 and 46.9 s after the
+       restart; a boot with 0 written by hand runs past that mark. I: the
+       driver's word stops the count as the enable rows above say; a restart
+       of an older kernel followed by this one would show.
 
 Kconfig and device tree
 -----------------------
@@ -1784,53 +1581,17 @@ Kconfig and device tree
    * - Fact
      - Tag
      - Checked by
-   * - ``CONFIG_RTL9602C_WATCHDOG``: tristate, depends on
-       ``MIPS || COMPILE_TEST``, selects ``WATCHDOG_CORE``; object
-       ``rtl9602c_wdt.o``.
+   * - ``CONFIG_REALTEK_OTTO_WDT``: tristate, depends on
+       ``MACH_REALTEK_RTL || RTL9602C || COMPILE_TEST`` and ``COMMON_CLK``, on
+       by default on the platform; ``CONFIG_WATCHDOG_OPEN_TIMEOUT=60``.
      - T
-     - The kernel builds with it and the driver probes (boot log).
+     - The driver probes on every boot.
    * - ``wdt: watchdog@18003260``, ``compatible = "realtek,rtl9602c-wdt"``,
-       ``reg = <0x18003260 0xc>``: three 32-bit registers, keepalive, interrupt
-       status and control.
+       ``reg = <0x18003260 0xc>``, ``clocks = <&lx_clk>``,
+       ``realtek,reset-mode = "soc"``, and no interrupts.
      - T
-     - The watchdog is armed at probe, fed and disarmed.
-
-Watchdog sequences
-------------------
-
-Probe
-~~~~~
-
-1. Map the three registers. (T)
-2. Request the phase-one interrupt if the device tree gives one; on failure,
-   warn and go on without it. Purpose: the line is live before the counter is.
-   (I)
-3. Set the range 1..44 s and the default 44 s, then apply a ``timeout-sec`` from
-   the device tree if there is one. (T)
-4. Start (below), then set ``WDOG_HW_RUNNING``. Purpose: the core feeds the
-   watchdog until user space takes over. (M)
-5. Ask the core to stop the watchdog on reboot and on unregister. (T)
-6. Print the range, the armed timeout and whether the interrupt was taken;
-   register the device. (T)
-
-Start the watchdog
-~~~~~~~~~~~~~~~~~~
-
-1. Program the control word for the timeout and the (always zero) pretimeout,
-   keeping the enable as read. (M)
-2. Write ``RTL9602C_WDT_KEEPALIVE_KICK``. Purpose: count from zero. (I)
-3. Read ``RTL9602C_WDT_CTRL`` and write it back with ``RTL9602C_WDT_CTRL_EN``.
-   Purpose: arm. (M)
-4. If the interrupt was masked after a notification, enable it again. (I)
-
-Set timeout, ping and stop
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-- Set timeout (and set pretimeout, which the core never calls): store the value;
-  if the watchdog is active, program the control word keeping the enable (M) and
-  write the kick (I).
-- Ping: write ``RTL9602C_WDT_KEEPALIVE_KICK``. (M)
-- Stop: clear ``RTL9602C_WDT_CTRL_EN`` by read-modify-write. (T)
+     - The device tree passes ``dtbs_check`` against the Otto schema, which
+       allows the RTL9602C no interrupts.
 
 GPIO and pad control
 ====================
@@ -2618,9 +2379,10 @@ Assumptions the driver depends on
        of a register that reflects the store.
    * - The TLB has exactly 64 entries ("TLB").
      - ``tlbwi`` and ``tlbr`` over indices 0 to 64.
-   * - Nothing needs a watchdog between ``plat_mem_setup()`` and the watchdog
-       driver's probe ("Platform code and the watchdog").
-     - A deliberate hang in that stretch during a one-shot boot of the boot
+   * - A trial boot that hangs before the watchdog driver's probe is reset by
+       the count the boot loader armed, which the kernel no longer stops
+       ("Watchdog").
+     - A deliberate hang in that stretch during a trial boot of the boot
        loader.
    * - The PON MAC's DMA stays inside each reserved region. Whether it uses the
        4 KiB past the programmed 1 MiB is unknown, so that 4 KiB is kept ("DRAM
@@ -2694,7 +2456,7 @@ About the platform code
      - A per-field sweep with source 12 enabled and a known-good source pending.
    * - The width of the timer's divisor field.
      - Writing larger divisors and timing the period.
-   * - Whether the timer divides by its reload value or by one more.
+   * - Whether the timer divides by its end marker or by one more.
      - Timing 100,000 ticks against the clock.
    * - Whether halt and power off leave the board spinning quietly.
      - ``halt`` and ``poweroff`` on the board.
@@ -2718,16 +2480,17 @@ About the watchdog
      - What would settle it
    * - Whether writing the phase-one flag back clears it.
      - Writing bit 31 back during phase two and reading the register.
-   * - Whether a control write restarts the count by itself.
+   * - Whether a control write restarts the count by itself; the driver kicks
+       after it reprograms a running watchdog only at probe.
      - Rewriting the control word of a running watchdog without a kick, to a
        deadline shorter than the count reached, and timing the reset.
-   * - Whether setting the enable clears the count by itself.
+   * - Whether setting the enable clears the count by itself; the driver's
+       start sets the enable without a kick.
      - Stopping a watchdog mid-count, re-enabling it without a kick and timing
        the reset.
    * - Whether the block refuses kicks once phase one has expired.
      - Kicking during phase two and timing the reset.
-   * - Whether source 5 is the watchdog's warning, or whether the block raises
-       any source at all; how the interrupt handler behaves.
+   * - Whether the block raises any interrupt source at all.
      - Enabling every source and watching the status registers while phase one
        expires.
    * - Whether, during a stalled bus access, the count stops or the count runs
