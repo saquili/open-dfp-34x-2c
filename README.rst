@@ -123,7 +123,9 @@ What is not done, or not tried
 * There is no release: the images are built from source (`Building`_).
 * A change of the settings takes every PPPoE session down and up again, not
   only the one that changed.
-* If the configuration store cannot be read, root's password is ``admin`` again.
+* If the configuration store cannot be read, root's password is not known:
+  the panel refuses every sign-in, ssh takes keys only, and only the serial
+  console, inside the stick, takes ``admin``.
 * The stick has no packet filter: its servers keep off the PON side by the
   addresses they listen on. Whether they can be reached from a session's peer
   has not been tested.

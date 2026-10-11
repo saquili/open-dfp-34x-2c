@@ -411,7 +411,9 @@ Known limitations
   the boot prints the certificate's fingerprint on the console, and the panel
   shows it under System, for a person to compare with the browser's.
 * If the configuration store cannot be read, or the partition ``config`` is
-  not mounted, root's password is ``admin`` again, and a new one cannot be
+  not mounted, root's password is not known: the panel refuses every sign-in
+  and says why, the ssh server takes keys only, and the console takes
+  ``admin``, so that the store can be mended there. A new password cannot be
   kept until the store is back.
 * The update file has a checksum and no signature (``updating.rst``).
 
