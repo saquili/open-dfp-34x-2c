@@ -42,7 +42,8 @@ At a glance
        mapped for reading at physical address ``0x14000000``.
    * - Host side
      - The SFP edge connector: a SerDes lane of the switch (port 0) running
-       2500BASE-X. Linux interface ``sfp``.
+       2500BASE-X or 1000BASE-X, as the host's cage does. Linux interface
+       ``sfp``.
    * - PON side
      - The GPON MAC and a laser-driver IC on an I2C bus (switch port 2). Linux
        interface ``pon``.
@@ -88,22 +89,30 @@ SoC's SPI controller. The SoC also maps the whole chip into physical memory at
 ``0x14000000`` to ``0x147fffff``, for reading only, and the boot loader starts
 a kernel from that window in place. Linux reaches the chip through the
 controller, which erases and programs it in 4 KiB sectors. The chip holds the
-boot loader, its environment, a configuration store and two banks, each with a
-kernel and a root filesystem; of these, Linux can write only the configuration
-store. The layout is on the page ``boot-contract.rst``.
+boot loader, its environment, the partition ``config`` and two banks, each
+with a kernel and a root filesystem. Linux can write all of them but the boot
+loader, whose partition the device tree marks read-only. The layout is on the
+page ``boot-contract.rst``.
 
 The host side
 =============
 
 The only electrical data interface of the stick is its SFP edge connector. It
-is wired to a SerDes lane of the SoC's switch (port 0) and runs 2500BASE-X: a
-2.5 Gb/s link to the cage of the host, with no PHY in between and nothing
-negotiated in band. In Linux this port is the network interface ``sfp``.
+is wired to a SerDes lane of the SoC's switch (port 0), with no PHY in between.
+In Linux this port is the network interface ``sfp``. Linux finds what the
+host's cage runs, and keeps the first of these that the lane's receiver
+synchronises to: 2500BASE-X without in-band negotiation, 1000BASE-X with it,
+and 1000BASE-X without it. The devlink parameter ``sfp_lane`` narrows the
+choice (``linux/Documentation/networking/devlink/rtl9602c.rst``). The device
+test ``net.host-link-search`` saw the lane follow a host that moved from
+2500BASE-X to 1000BASE-X with negotiation and back (T, record
+``docs/testing/2026-10-07-run23.rst``).
 
 For a developer it is the way in and out of the board. The host sends images to
 the boot loader over it, reaches the running board over it, and sends the test
-traffic over it. The cage of the host therefore has to link at 2500BASE-X; a
-cage that offers 1000BASE-X only has not been tried with this stick.
+traffic over it. The boot loader runs the lane at 2500BASE-X only, so the bench
+needs a cage that links at 2500BASE-X; once Linux runs, a cage of 1000BASE-X
+works too.
 
 The boot loader's network interface is the same lane. The boot loader leaves
 the lane switched off, so a transfer at its prompt works only after the lane
@@ -119,11 +128,12 @@ ITU-T G.984.3 and back. The GPON MAC drives a separate laser-driver IC, which
 sends the upstream bursts and reports the optical diagnostics of the module.
 The SoC reaches that IC over its I2C master 1.
 
-The laser driver has a hard transmit-disable input. The kernel's device tree
-gives it as SoC GPIO 13, active high, and the switch driver keeps the laser
-disabled except while the PON link needs it. That assignment is not yet
-confirmed on the board. Bringing the interface ``pon`` up starts the ONU's
-activation towards the OLT (ITU-T G.984.3, states O1 to O5).
+The laser driver has a hard transmit-disable input, SoC GPIO 13, active high
+(M: ``linux/Documentation/networking/device_drivers/pon/rtl9602c-optics.rst``,
+"Facts"). The switch driver requests it asserted at probe and releases it only
+in the activation states O3 to O5, so that the stick sends no light in any
+other state. Bringing the interface ``pon`` up starts the ONU's activation
+towards the OLT (ITU-T G.984.3, states O1 to O5).
 
 Nothing in the procedures of this handbook needs the PON side: starting a
 kernel from RAM and writing the flash use the host side and the console only.
@@ -198,8 +208,13 @@ kernel drives it:
   tree, and the kernel's side of the boot contract.
 * ``networking/dsa/rtl9602c.rst``: the switch, its four ports and the SerDes
   lane to the host.
-* ``networking/device_drivers/pon/rtl9602c.rst``: the GPON MAC, the PON MAC and
-  the optics.
+* ``networking/pon.rst``: the PON class, the kernel's interface to the ONU
+  that omcid and the stick's programs use.
+* ``networking/device_drivers/pon/rtl9602c.rst``: the PON MAC;
+  ``rtl9602c-gpon.rst`` beside it, the GPON MAC; ``rtl9602c-optics.rst``, the
+  optics and the laser.
+* ``networking/devlink/rtl9602c.rst``: the switch driver's devlink parameters,
+  among them the ONU's identity and the host lane's mode.
 
 The other handbook pages that concern the board are ``boot-contract.rst`` and
 ``flashing.rst``.
@@ -207,9 +222,5 @@ The other handbook pages that concern the board are ``boot-contract.rst`` and
 Open items
 ==========
 
-* The laser driver's transmit-disable input is taken to be SoC GPIO 13, active
-  high. This is not yet confirmed on the board. With the burst enable forced,
-  the module's own transmit-power reading must fall to zero while the line is
-  high; that would settle it.
 * Switch port 1 exists in the silicon. Nothing on this board is known to
   connect to it, which is not yet confirmed on the board either.
