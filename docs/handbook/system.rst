@@ -91,9 +91,6 @@ With PPPoE accounts
     it, and its delegated IPv6 prefix through ``dhcp6d``, or keeps them on the
     stick. ``omcid`` still bridges the rest of what the OLT provisions, such as
     television and telephone.
-Router, on a bench
-    ``MODE=router`` routes between the host link and a WAN on a GEM port. It
-    is kept for the bench, and translates no address.
 
 Who owns what
 =============

@@ -209,7 +209,8 @@ BusyBox 1.37.0
     The applets the boot script and a shell session use, by purpose, as of
     2026-10-08, when there were 94; the console's ``getty`` and ``login``,
     ``cryptpw``, and the DHCP client and server ``udhcpc``, ``udhcpd`` and
-    ``dumpleases`` came after:
+    ``dumpleases`` came after; ``udhcpc`` served the bench's router of before
+    alone, and nothing runs it now:
 
     shell and init
         ash sh halt poweroff reboot
