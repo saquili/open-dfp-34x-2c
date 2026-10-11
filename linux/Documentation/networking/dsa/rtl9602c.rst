@@ -327,7 +327,7 @@ next".
        register accessors and the access to the indirect table engine, the
        SerDes lane and phylink, the forced MAC ability, the switch's
        interrupt, the per-port counters, the devlink parameters, region and
-       info, the module parameters and the debugfs directory.
+       info, and the debugfs directory.
      - This page; *devlink*
    * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``
      - The address table, flooding, isolation, spanning tree, VLANs, ageing,
@@ -375,6 +375,45 @@ next".
      - The ``switch`` node, its ports and the reserved memory of the packet
        buffer.
      - This page; *MIPS*
+
+Changes outside the driver
+--------------------------
+
+The driver needs five changes to code that other drivers share. Each is a
+patch of its own, with its reason, under which the driver's patches sit:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Where
+     - What, and why
+   * - ``include/net/dsa.h``, ``net/dsa/tag_rtl9602c.c``,
+       ``include/linux/dsa/rtl9602c.h``
+     - The tag protocol ``DSA_TAG_PROTO_RTL9602C``, number 30, and a tag driver
+       that moves no bytes, since the CPU tag travels in the DMA descriptors;
+       the conduit hands frames to DSA only for a CPU port with a tag driver.
+       The number is the next free one of the Linux release this tree is on,
+       and moves on to the next free one when the tree moves to a release that
+       takes 30.
+   * - ``net/dsa/user.c``
+     - ``TC_SETUP_FT`` is offered to the switch's ``port_setup_tc`` before the
+       conduit, and goes to the conduit only when the switch declines it with
+       ``-EOPNOTSUPP``: the L3/NAT engine forwards flows in the switch, not in
+       the conduit. Every other switch declines it, as before.
+   * - ``include/net/dsa.h``, ``net/dsa/user.c``
+     - The switch operation ``port_set_pcp_rewr`` and the DCB rewrite table of
+       a user port (``dcb rewr ... prio-pcp``): the switch remarks the PCP of
+       frames on egress, and DSA user ports had no way to be told the map.
+   * - ``include/net/flow_offload.h``, ``net/core/flow_offload.c``
+     - ``flow_rule_match_num_of_vlans()``: flower matches the number of VLAN
+       tags, and a driver had no helper to read it, as it has for the other
+       keys.
+   * - ``drivers/net/pon/``, ``include/linux/pon.h``,
+       ``include/uapi/linux/pon.h``
+     - The PON class, a subsystem of its own: the PON device, its OMCI port
+       and its GEM interfaces, with the generic netlink family ``pon``
+       (Documentation/networking/pon.rst).
 
 Interfaces to user space
 ------------------------
