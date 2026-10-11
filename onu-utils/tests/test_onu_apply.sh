@@ -798,10 +798,13 @@ interface=wan "$WAN_SCRIPT" deconfig
 check '[ ! -e "$ONU_ROOT/run/onu-dns" ]'
 teardown
 
-echo "a new identity: the PON goes down, takes it, comes up, and omcid starts over"
+echo "a new identity: the sessions end, the PON goes down, takes it, comes up, and omcid starts over"
 setup
 printf 'serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\n' >"$ONU_ROOT/run/onu-identity"
 echo passthrough >"$ONU_ROOT/run/onu-mode"
+mkdir -p "$ONU_ROOT/run/session/1"
+echo gem256 >"$ONU_ROOT/run/session/1/gem"
+echo wan410 >"$ONU_ROOT/run/session/1/dev"
 # omcid runs as the instance of procd's service "onu" that onu-apply gave it.
 mkdir -p "$ONU_ROOT/run/onu-svc.d"
 echo "-- $T/bin/onu-run omcid" >"$ONU_ROOT/run/onu-svc.d/omcid"
@@ -809,6 +812,8 @@ cp "$ONU_ROOT/run/onu-svc.d/omcid" "$T/svc-omcid"
 : >"$T/omcid.running"
 "$MODE_SCRIPT" reidentify 2>/dev/null
 check 'logged "^ip link set pon down"'
+check 'logged "^onu-net del ses1$" && [ ! -d "$ONU_ROOT/run/session/1" ]'
+check '[ "$(grep -n "^onu-net del ses1" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" ]'
 check 'logged "^onu-nl param gpon_serial XXXXXXXXXXXX$"'
 check 'logged "^onu-nl param gpon_password 0x00112233445566778899$"'
 check '[ "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" ]'

@@ -1242,6 +1242,14 @@ identity() {
 # omcid starts again; it goes on from the MIB it kept in /run/omcid.mib until
 # the OLT builds a new one for it.
 reidentify() {
+	# The sessions end first, while the PON still carries their PADT: a
+	# concentrator keeps a session it is not told of until its LCP gives up
+	# (seen: a session of before stayed beside the new one). They come back
+	# once the OLT provisions the new identity's GEM ports (sync).
+	if [ "$(cat "$RUN/onu-mode" 2>/dev/null)" = passthrough ]; then
+		load
+		sessions_down
+	fi
 	ip link set pon down
 	identity || return 1
 	want=
