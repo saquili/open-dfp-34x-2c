@@ -63,3 +63,6 @@ record.
    * - 0015
      - The names of the stick's own programs say what they do
      - Accepted
+   * - 0016
+     - The panel answers over HTTPS with its own key
+     - Accepted

@@ -373,6 +373,11 @@ Known limitations
   the shells of root say so at every login.
 * The status daemon has no token in this image, so its API answers only
   ``/api/health``; a token is a file of one unit, like the ssh key (below).
+* The panel answers over HTTPS, on port 443, with a key the stick makes at its
+  first start and keeps in its store, and a certificate it signs itself (ADR
+  0016); port 80 sends a browser there. The browser warns at the first visit:
+  the boot prints the certificate's fingerprint on the console, and the panel
+  shows it under System, for a person to compare with the browser's.
 * There is no DHCP client and no DHCP server.
 
 Files of one bench
