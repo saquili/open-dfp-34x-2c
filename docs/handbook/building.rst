@@ -318,8 +318,9 @@ The boot script
        the shipped firmware's files there, with what the store changed over it,
        into ``/run/onu-identity`` (readable by root only: it holds the PLOAM
        password), and the saved settings, the PPPoE accounts and root's
-       password into ``/run``; ``onu-config tls`` gives the panel its key, made
-       and kept in the store at the first start;
+       password into ``/run``; ``onu-config tls`` gives the panel its key and
+       ``onu-config ssh`` the ssh server its host key, each made and kept in
+       the store at the first start;
     #. sets the host name, turns IPv6 off on the PON port, on the CPU port and
        on every interface made after them, the bridge and the GEM interfaces of
        ``omcid`` among them (the host side keeps it), and has ARP answer only
@@ -341,8 +342,9 @@ The boot script
        in on ``pon`` (``onu-nl``), so the network behind the OLT neither sees
        the management link nor reaches it;
     #. starts the servers on the two addresses above and nowhere else, as
-       procd's services: ``dropbear`` (root's password and keys, with an
-       ed25519 host key made in ``/run/dropbear``), ``onu-act``, and ``pond``,
+       procd's services: ``dropbear`` (root's password and keys, with the
+       ed25519 host key that ``onu-config ssh`` keeps in the store),
+       ``onu-act``, and ``pond``,
        the status daemon and its panel, over HTTPS on port 443 and on port 80
        to send a browser there (ADR 0016), as an account of its own, ``pond``,
        with which no one logs in; ``onu-act`` does, as root, what pond asks of
@@ -395,12 +397,12 @@ boot loader's environment and the bank that does not run, at an update
 Known limitations
 -----------------
 
-* The ssh host key is made at every boot, in memory (``/run``). The host
-  therefore sees a new key at every boot, and an ssh client that keeps host keys
-  will say so. The configuration store could keep the key, as it keeps the
-  panel's; it does not yet.
-* The host key is made from the kernel's random pool a few seconds after power-on,
-  before the system has collected much entropy.
+* The ssh host key and the panel's key are made once, at the first start, and
+  kept in the configuration store (``onu-config ssh``, ``onu-config tls``);
+  each is made only after the kernel says its random number generator is
+  seeded, which a read of ``/dev/random`` waits for (about 3 s after the
+  kernel's start). Without a store that can be written they are made again at
+  every start, and an ssh client that keeps host keys will say so.
 * No ssh key is in the image, so ssh takes root's password alone until a key is
   put in (below). Until a password is set, it is ``admin`` on the console, ssh
   and the panel alike, and anybody who reaches the stick's addresses can use it;
