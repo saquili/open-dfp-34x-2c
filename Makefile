@@ -5,9 +5,7 @@
 #
 # "make" builds the two flash images of the board, its update file and the
 # package that the shipped firmware's web page installs, and "make sdk" the
-# cross toolchain as a tarball. A target that nothing implements yet is a
-# stub: it says what to do instead and exits non-zero, so that nothing
-# mistakes a stub for a finished build.
+# cross toolchain as a tarball.
 
 .DEFAULT_GOAL := image
 
@@ -128,11 +126,14 @@ linux:
 buildroot:
 	buildroot/fetch $(ARGS)
 
+# The OMCI daemon alone, built again from the working tree into the target
+# tree of "make image", which must have run: $(IMAGE_OUT)/target/usr/sbin/omcid,
+# which "make ram-image" then carries. "make -C omcid" builds it for this host,
+# and "make -C omcid check" runs its tests (omcid/README.rst).
 omcid:
-	@echo 'open-dfp-34x-2c: "make omcid" is not implemented yet.'
-	@echo '  "make" builds the OMCI daemon into the image; "make -C omcid" builds'
-	@echo '  it for this host and "make -C omcid check" runs its tests (omcid/README.rst).'
-	@exit 1
+	@test -d "$(IMAGE_OUT)/target" || { echo 'open-dfp-34x-2c: run "make image" first' >&2; exit 1; }
+	$(BR2_ENV) rm -rf "$(IMAGE_OUT)/build/omcid-local" && make -C "$(IMAGE_OUT)" omcid
+	ls -l "$(IMAGE_OUT)/target/usr/sbin/omcid"
 
 # The cross toolchain of configs/toolchain_defconfig, with static and shared
 # libraries, packed by the build system as a tarball that can be unpacked
@@ -158,11 +159,12 @@ legal-info:
 	gzip -dc "$$panel" > "$(IMAGE_OUT)/legal-info/pond-panel-licenses.txt" && \
 	echo "open-dfp-34x-2c: the licence information is in $(IMAGE_OUT)/legal-info"
 
+# The repository's pages as HTML in DOCS_OUT, rendered by docutils, which fails
+# on any warning (tools/docs/README.rst); "make -C linux htmldocs" renders the
+# kernel's.
+DOCS_OUT ?= $(CURDIR)/build/docs
 docs:
-	@echo 'open-dfp-34x-2c: "make docs" is not implemented yet.'
-	@echo '  The pages are reStructuredText, read as they are (docs/README.rst);'
-	@echo '  "make -C linux htmldocs" renders the kernel documentation.'
-	@exit 1
+	tools/docs/render --out "$(DOCS_OUT)"
 
 # The offline gates: the provenance gates (their own tests, then the tree and
 # the commits since main) and the self-tests of the tools, of the script that
@@ -181,6 +183,8 @@ check:
 	buildroot/tests/run
 	tools/kernel-archive/tests/run
 	tools/image-budget/tests/run
+	tools/docs/tests/run
+	tools/docs/render --check --if-available
 	br2-external/tests/run
 
 # The bench: tools/bench is a Python package (3.11 or later, standard library
@@ -203,20 +207,16 @@ flash:
 	$(BENCH) flash $(if $(filter undefined,$(origin BANK)),,--bank "$(BANK)") \
 	  --target "$(TARGET)" $(ARGS) "$(abspath $(IMAGE))"
 
+# Every build product, and with distclean the downloads and the pinned build
+# system as well: the whole of build/.
 clean:
-	@echo 'open-dfp-34x-2c: "make clean" is not implemented yet.'
-	@echo '  Every build product is under build/; remove the directory of one build'
-	@echo '  (build/image, build/ram, build/linux, build/toolchain) to start it again.'
-	@exit 1
+	rm -rf "$(IMAGE_OUT)" "$(RAM_OUT)" "$(KERNEL_OUT)" "$(TOOLCHAIN_OUT)" "$(DOCS_OUT)"
 
-distclean:
-	@echo 'open-dfp-34x-2c: "make distclean" is not implemented yet.'
-	@echo '  Every build product and the download cache (build/dl) are under build/.'
-	@exit 1
+distclean: clean
+	rm -rf "$(CURDIR)/build"
 
 help:
-	@echo 'open-dfp-34x-2c entry points (make omcid, make docs, make clean and'
-	@echo 'make distclean are stubs today; the others work):'
+	@echo 'open-dfp-34x-2c entry points:'
 	@echo '  make               build k0.uImage, r0.squashfs, update.bin and'
 	@echo '                     web-install.tar in build/image/images (default;'
 	@echo '                     needs Linux), then check them as make image-check'
@@ -225,14 +225,14 @@ help:
 	@echo '                     build/image/images/ram.uImage, for make ramboot'
 	@echo '  make linux         build the kernel (uImage) with the Debian cross compiler'
 	@echo '  make buildroot     fetch, check and patch the pinned Buildroot'
-	@echo '  make omcid         build the OMCI daemon'
+	@echo '  make omcid         after make: build the OMCI daemon again into the image'
 	@echo '  make sdk           build a relocatable cross toolchain tarball'
 	@echo '  make legal-info    collect the licence information of a built image'
 	@echo '                     in build/image/legal-info (needs Linux)'
-	@echo '  make docs          build the documentation'
+	@echo '  make docs          render the pages to HTML in build/docs (needs docutils)'
 	@echo '  make check         run the offline gates'
 	@echo '  make ramboot       boot a trial kernel from RAM over the bench'
 	@echo '  make flash IMAGE=F TARGET=kernel|rootfs [BANK=0]'
 	@echo '                     flash an image to the scratch bank'
-	@echo '  make clean         remove build products'
-	@echo '  make distclean     remove build products and downloads'
+	@echo '  make clean         remove the build products'
+	@echo '  make distclean     remove all of build/, the downloads included'
