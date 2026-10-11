@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-config.sh, with onu-config of the build on a store in a file,
-# an erased one as the flash would give, and stand-ins for ponid and for
-# BusyBox's cryptpw.
+# Tests of scripts/onu-config.sh, with onu-config of the build on a store in a
+# file, empty at first, and stand-ins for ponid and for BusyBox's cryptpw.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,8 +24,7 @@ setup() {
 	T=$(mktemp -d)
 	export ONU_ROOT=$T/root ONU_STORE=$T/store
 	mkdir -p "$ONU_ROOT/run" "$T/bin"
-	# 64 KiB of erased flash.
-	dd if=/dev/zero bs=1024 count=64 2>/dev/null | tr '\000' '\377' >"$ONU_STORE"
+	: >"$ONU_STORE"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
 	# ponid gives the shipped firmware's identity, until it is told to fail.
 	printf '#!/bin/sh\n[ -e "%s/ponid.fail" ] && exit 1\n%s\n' "$T" \
@@ -76,29 +74,27 @@ check '[ "$(cat "$ONU_ROOT/run/onu-store")" = defaults ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = factory ]'
 teardown
 
-echo "the first save takes the identity into the store with the settings"
+echo "a save takes the settings and the accounts into the store, never the identity"
 setup
 settings
 run save
 check '[ $rc -eq 0 ]'
-check 'stored ID_SERIAL=XXXXXXXXXXXX'
-check 'stored ID_PLOAM_PASSWORD=00112233445566778899'
-check 'stored ID_MODEL=TEST-1'
 check 'stored MODE=passthrough'
 check 'stored WAN_VLAN=410'
 check 'stored PPPOE1_USER=user@example.net'
 check 'stored PPPOE1_SECRET=s3cret'
 check '! stored PPPOE2_USER='
 check '! stored PPPOE_USER='
+check '! onu-config --store "$ONU_STORE" list | grep -q "^ID_"'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = saved ]'
+check '[ "$(ls -l "$ONU_STORE" | cut -c1-10)" = -rw------- ]'
 teardown
 
-echo "load gives back what was saved, the identity no longer from ponid"
+echo "load gives back what was saved, and the identity of the shipped firmware"
 setup
 settings
 run save
 rm -f "$ONU_ROOT/run/onu.conf" "$ONU_ROOT/run/onu-pppoe1"
-: >"$T/ponid.fail"
 run load
 check '[ $rc -eq 0 ]'
 check '[ "$(sort "$ONU_ROOT/run/onu-identity" | tr "\n" " ")" = "model=TEST-1 ploam_password=00112233445566778899 serial=XXXXXXXXXXXX " ]'
@@ -108,18 +104,43 @@ check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-pppoe1" | cut -c1-10)" = -rw------- ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu.conf" | cut -c1-10)" = -rw-r--r-- ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = loaded ]'
-check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = store ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = factory ]'
 teardown
 
-echo "a later save keeps the identity and changes the settings"
+echo "the store's ID_ keys go over the shipped firmware's identity"
+setup
+printf '%s\n' ID_SERIAL=YYYYYYYYYYYY ID_VERSION=V2.0 | onu-config --store "$ONU_STORE" import
+run load
+check '[ $rc -eq 0 ]'
+check '[ "$(sort "$ONU_ROOT/run/onu-identity" | tr "\n" " ")" = "model=TEST-1 ploam_password=00112233445566778899 serial=YYYYYYYYYYYY version=V2.0 " ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = store ]'
+# Without the shipped firmware's files, the store's alone.
+: >"$T/ponid.fail"
+run load
+check '[ $rc -eq 0 ]'
+check '[ "$(sort "$ONU_ROOT/run/onu-identity" | tr "\n" " ")" = "serial=YYYYYYYYYYYY version=V2.0 " ]'
+# A save keeps them.
+settings
+run save
+check 'stored ID_SERIAL=YYYYYYYYYYYY'
+check 'stored MODE=passthrough'
+teardown
+
+echo "with no identity anywhere, load says so"
+setup
+: >"$T/ponid.fail"
+run load
+check '[ $rc -ne 0 ]'
+check '[ ! -s "$ONU_ROOT/run/onu-identity" ]'
+teardown
+
+echo "a later save changes the settings"
 setup
 settings
 run save
-: >"$T/ponid.fail"
 printf '%s\n' MODE=router WAN_VLAN=410 >"$ONU_ROOT/run/onu.conf"
 run save
 check '[ $rc -eq 0 ]'
-check 'stored ID_SERIAL=XXXXXXXXXXXX'
 check 'stored MODE=router'
 check '! stored MODE=passthrough'
 teardown
@@ -130,7 +151,7 @@ settings
 printf '%s\n' LAN_VLAN=36 PASS_GATEWAY=192.0.2.1 >>"$ONU_ROOT/run/onu.conf"
 run save
 check 'stored LAN_VLAN=36'
-printf '%s\n' SYS_HOSTNAME=stick PD2_HOST=host AUTH_HASH=hash |
+printf '%s\n' ID_SERIAL=XXXXXXXXXXXX SYS_HOSTNAME=stick PD2_HOST=host AUTH_HASH=hash |
 	onu-config --store "$ONU_STORE" import
 settings
 run save
@@ -159,35 +180,6 @@ settings
 run save
 cp "$ONU_STORE" "$T/before"
 run save
-check '[ $rc -eq 0 ]'
-check 'cmp -s "$ONU_STORE" "$T/before"'
-teardown
-
-echo "without the shipped identity, a save keeps the settings alone"
-setup
-settings
-: >"$T/ponid.fail"
-run save
-check '[ $rc -eq 0 ]'
-check 'stored MODE=passthrough'
-check '! onu-config --store "$ONU_STORE" list | grep -q "^ID_"'
-teardown
-
-echo "migrate needs the shipped identity, and writes nothing without it"
-setup
-settings
-: >"$T/ponid.fail"
-cp "$ONU_STORE" "$T/before"
-run migrate
-check '[ $rc -ne 0 ]'
-check 'cmp -s "$ONU_STORE" "$T/before"'
-check '[ "$(cat "$ONU_ROOT/run/onu-store")" = failed ]'
-rm -f "$T/ponid.fail"
-run migrate
-check '[ $rc -eq 0 ]'
-check 'stored ID_SERIAL=XXXXXXXXXXXX'
-cp "$ONU_STORE" "$T/before"
-run migrate
 check '[ $rc -eq 0 ]'
 check 'cmp -s "$ONU_STORE" "$T/before"'
 teardown
@@ -362,9 +354,11 @@ printf 'SERIAL=XXXXXXXXXXXX\nVERSION=V2.0\n' | "$STORE_SCRIPT" identity 2>/dev/n
 rc=$?
 check '[ $rc -eq 0 ]'
 check 'stored ID_VERSION=V2.0'
-check 'stored ID_MODEL=TEST-1'
+check 'stored ID_SERIAL=XXXXXXXXXXXX'
+check '! stored ID_MODEL=TEST-1'
 check 'grep -q -x version=V2.0 "$ONU_ROOT/run/onu-identity"'
 check 'grep -q -x model=TEST-1 "$ONU_ROOT/run/onu-identity"'
+check '[ "$(cat "$ONU_ROOT/run/onu-identity-source")" = store ]'
 check '[ "$(ls -l "$ONU_ROOT/run/onu-identity" | cut -c1-10)" = -rw------- ]'
 teardown
 
@@ -460,6 +454,154 @@ run pd 2
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 run pd 8
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+teardown
+
+echo "the store is a file of KEY=VALUE lines, at most 64 KiB, replaced whole"
+setup
+rm -f "$ONU_STORE"
+check '[ -z "$(onu-config --store "$ONU_STORE" list)" ]'
+onu-config --store "$ONU_STORE" set MODE router
+check 'stored MODE=router'
+check '[ "$(ls -l "$ONU_STORE" | cut -c1-10)" = -rw------- ] && [ ! -e "$ONU_STORE.new" ]'
+# A last line without its newline is still a line.
+printf 'MODE=router\nWAN_VLAN=410' >"$ONU_STORE"
+onu-config --store "$ONU_STORE" set LAN_DHCP on
+check '[ "$(cat "$ONU_STORE" | tr "\n" " ")" = "MODE=router WAN_VLAN=410 LAN_DHCP=on " ]'
+# Not lines of keys: refused, and left as it is.
+printf 'MODE=router\nsomething else\n' >"$ONU_STORE"
+cp "$ONU_STORE" "$T/before"
+onu-config --store "$ONU_STORE" list >/dev/null 2>&1
+rc=$?
+check '[ $rc -ne 0 ]'
+onu-config --store "$ONU_STORE" set MODE bridge 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
+printf 'MODE=router\n\000\n' >"$ONU_STORE"
+onu-config --store "$ONU_STORE" list >/dev/null 2>&1
+rc=$?
+check '[ $rc -ne 0 ]'
+# A device is not a store.
+onu-config --store /dev/null list >/dev/null 2>&1
+rc=$?
+check '[ $rc -ne 0 ]'
+# 64 KiB at most: a change past it is refused, and a bigger file is.
+: >"$ONU_STORE"
+awk 'BEGIN { for (i = 0; i < 70; i++) { printf "K%03d=", i; for (j = 0; j < 1000; j++) printf "x"; print "" } }' |
+	onu-config --store "$ONU_STORE" import 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && [ ! -s "$ONU_STORE" ]'
+awk 'BEGIN { for (i = 0; i < 60; i++) { printf "K%03d=", i; for (j = 0; j < 1000; j++) printf "x"; print "" } }' |
+	onu-config --store "$ONU_STORE" import
+rc=$?
+check '[ $rc -eq 0 ] && [ "$(wc -c <"$ONU_STORE")" -le 65536 ]'
+awk 'BEGIN { for (i = 0; i < 70; i++) { printf "K%03d=", i; for (j = 0; j < 1000; j++) printf "x"; print "" } }' >"$ONU_STORE"
+onu-config --store "$ONU_STORE" list >/dev/null 2>&1
+rc=$?
+check '[ $rc -ne 0 ]'
+teardown
+
+echo "without a store, load still gives the identity and root's default password"
+setup
+rm -f "$ONU_STORE"
+ONU_STORE= "$STORE_SCRIPT" load 2>/dev/null
+rc=$?
+check '[ $rc -eq 0 ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = none ]'
+check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
+check '[ -s "$ONU_ROOT/run/shadow" ]'
+settings
+ONU_STORE= "$STORE_SCRIPT" save 2>/dev/null
+rc=$?
+check '[ $rc -ne 0 ] && [ "$(cat "$ONU_ROOT/run/onu-store")" = failed ]'
+teardown
+
+# The boot's own store: the partition "config", of /proc/mtd, mounted on
+# /config. mountpoint and mount stand in: a mount leaves a mark in the
+# directory, and fails while $T/mount.fail is there.
+boot_setup() {
+	setup
+	mkdir -p "$ONU_ROOT/proc" "$ONU_ROOT/dev" "$ONU_ROOT/config"
+	echo 'mtd4: 00010000 00001000 "config"' >"$ONU_ROOT/proc/mtd"
+	printf '#!/bin/sh\n[ "$1" = -q ] && shift\n[ -e "$1/.mounted" ]\n' >"$T/bin/mountpoint"
+	cat >"$T/bin/mount" <<-EOF
+	#!/bin/sh
+	[ -e "$T/mount.fail" ] && exit 32
+	echo "\$*" >>"$T/mount.args"
+	for d; do :; done
+	: >"\$d/.mounted"
+	EOF
+	chmod +x "$T/bin/mountpoint" "$T/bin/mount"
+	dd if=/dev/zero bs=1024 count=64 2>/dev/null | tr '\000' '\377' >"$T/erased"
+	BOOT_STORE=$ONU_ROOT/config/open-dfp-34x-2c.conf
+}
+
+boot_load() {
+	ONU_STORE= "$STORE_SCRIPT" load 2>/dev/null
+	rc=$?
+}
+
+echo "at boot: the store of before goes into the file, and the partition is mounted"
+boot_setup
+printf '%s\n' ID_SERIAL=YYYYYYYYYYYY MODE=passthrough WAN_VLAN=410 PPPOE1_USER=user@example.net \
+	PPPOE1_SECRET=s3cret AUTH_HASH=hash | mkslots "$ONU_ROOT/dev/mtd4" 0x10000
+boot_load
+check '[ $rc -eq 0 ]'
+check 'cmp -s "$ONU_ROOT/dev/mtd4" "$T/erased"'
+check 'grep -q -x "\-t jffs2 -o nosuid,nodev,noexec mtd:config $ONU_ROOT/config" "$T/mount.args"'
+check 'onu-config --store "$BOOT_STORE" list | grep -q -x MODE=passthrough'
+check 'onu-config --store "$BOOT_STORE" list | grep -q -x ID_SERIAL=YYYYYYYYYYYY'
+check '[ "$(ls -l "$BOOT_STORE" | cut -c1-10)" = -rw------- ]'
+check '[ ! -e "$ONU_ROOT/run/onu-store.before" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu.conf" | tr "\n" " ")" = "MODE=passthrough WAN_VLAN=410 " ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe1")" = "user@example.net s3cret" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = hash ]'
+check 'grep -q -x serial=YYYYYYYYYYYY "$ONU_ROOT/run/onu-identity"'
+check 'grep -q -x model=TEST-1 "$ONU_ROOT/run/onu-identity"'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = loaded ]'
+# The next boot mounts the partition as it is, and finds the file.
+rm -f "$ONU_ROOT/config/.mounted" "$ONU_ROOT/run/onu.conf" "$T/mount.args"
+boot_load
+check '[ $rc -eq 0 ] && [ "$(wc -l <"$T/mount.args")" -eq 1 ]'
+check 'grep -q -x MODE=passthrough "$ONU_ROOT/run/onu.conf"'
+# A save writes the file.
+printf '%s\n' MODE=router >"$ONU_ROOT/run/onu.conf"
+ONU_STORE= "$STORE_SCRIPT" save 2>/dev/null
+check 'onu-config --store "$BOOT_STORE" list | grep -q -x MODE=router'
+teardown
+
+echo "at boot: a partition without the store of before is mounted as it is"
+boot_setup
+printf 'not a store of before' >"$ONU_ROOT/dev/mtd4"
+dd if=/dev/zero bs=1024 count=63 2>/dev/null >>"$ONU_ROOT/dev/mtd4"
+cp "$ONU_ROOT/dev/mtd4" "$T/before"
+boot_load
+check '[ $rc -eq 0 ] && [ "$(cat "$ONU_ROOT/run/onu-store")" = defaults ]'
+check 'cmp -s "$ONU_ROOT/dev/mtd4" "$T/before"'
+check '[ -e "$ONU_ROOT/config/.mounted" ]'
+check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
+# erase-slots refuses it.
+onu-config erase-slots "$ONU_ROOT/dev/mtd4" 2>/dev/null
+rc=$?
+check '[ $rc -eq 3 ] && cmp -s "$ONU_ROOT/dev/mtd4" "$T/before"'
+teardown
+
+echo "at boot: a partition that cannot be mounted leaves no store, and the identity"
+boot_setup
+cp "$T/erased" "$ONU_ROOT/dev/mtd4"
+: >"$T/mount.fail"
+boot_load
+check '[ $rc -eq 0 ] && [ "$(cat "$ONU_ROOT/run/onu-store")" = none ]'
+check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
+teardown
+
+echo "at boot: when the store of before cannot be mounted after its erase, it stays in /run"
+boot_setup
+printf '%s\n' MODE=passthrough | mkslots "$ONU_ROOT/dev/mtd4" 0x10000
+: >"$T/mount.fail"
+boot_load
+check '[ "$(cat "$ONU_ROOT/run/onu-store.before")" = MODE=passthrough ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-store.before" | cut -c1-10)" = -rw------- ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = none ]'
 teardown
 
 echo "test_onu_config: $checks checks, $failures failed"

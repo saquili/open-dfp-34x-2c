@@ -30,18 +30,31 @@
  *                                            default password is in force
  *   onu-config identity-current              the identity in force, without
  *                                            its passwords
- *   onu-config load|save|migrate|identity|password|auth HASH|system|pd N
+ *   onu-config slots DEVICE                  print the lines of the store of
+ *                                            before, the two slots of the
+ *                                            partition (cfgstore.h); exit 3
+ *                                            when it holds none
+ *   onu-config erase-slots DEVICE            erase the partition of that
+ *                                            store, and refuse any other
+ *   onu-config load|save|identity|password|auth HASH|system|pd N
  *                                            the files the running system
  *                                            reads, to and from the store:
  *                                            onu-config.sh, in ONU_LIB
  *                                            (/usr/lib/onu), carries them out
  *
- * The store is a file or an MTD character device; --store or ONU_STORE names
- * it, and --size gives the size of a store that does not exist yet. A change
- * writes the slot that is not current, then the store carries the new one, so
- * a power loss in the middle keeps the old configuration (see cfgstore.h). On
- * an MTD device the slot's erase blocks are erased first. A change that leaves
- * the configuration as it was writes nothing.
+ * The store is a file of KEY=VALUE lines, at most 64 KiB:
+ * /config/open-dfp-34x-2c.conf, in the JFFS2 file system of the flash
+ * partition "config", which the shipped firmware keeps its own files in
+ * (ADR 0014, step 9), unless --store or ONU_STORE names another. A file
+ * that is missing is an empty store. A change writes the whole store to a
+ * new file beside it, which it then renames over it, so that a power loss in
+ * the middle keeps the old one; a change that leaves the store as it was
+ * writes nothing. A store that is not a file of such lines is refused.
+ *
+ * Before step 9 the store was the whole partition, two slots of its own
+ * format, where the shipped firmware's file system had been. slots and
+ * erase-slots let onu-config load take such a store into the file before
+ * the partition is mounted, since JFFS2 would erase what it does not know.
  *
  * check and settings read KEY=VALUE lines of the data path's settings and
  * PPPoE accounts, a later line over an earlier one (settings.h), and print
@@ -98,7 +111,11 @@
 #include "password.h"
 #include "settings.h"
 
-/* A store at most this big, so a bad --size cannot ask for a huge buffer. */
+/* The store, unless --store or ONU_STORE names another, and its most. */
+#define STORE_PATH "/config/open-dfp-34x-2c.conf"
+#define STORE_MAX 65536u
+
+/* A partition of the store of before at most this big. */
 #define REGION_MAX (1u << 20)
 
 static int fail(const char *what)
@@ -108,27 +125,112 @@ static int fail(const char *what)
 }
 
 /*
- * Write @len bytes of @buf to the store at @off. On an MTD device the erase
- * blocks the write falls in are erased first; @off is the start of a slot,
- * which the slot layout puts on an erase-block boundary. On a file the bytes
- * are written in place.
+ * The store @path into @payload, of @cap bytes, the NUL included, every
+ * line ended by a newline: 0, 0 with nothing for a missing file, -EFBIG for
+ * one of more than @cap - 1 bytes, -EILSEQ for one that is not KEY=VALUE
+ * lines, or -errno.
  */
-static int write_region(int fd, bool mtd, size_t erase, size_t off,
-			const uint8_t *buf, size_t len)
+static int read_store(const char *path, char *payload, size_t cap)
 {
-	if (mtd) {
-		struct erase_info_user e;
-		size_t start = off - off % erase;
-		size_t end = off + len;
+	struct stat st;
+	size_t len = 0;
+	ssize_t n;
+	int fd, err = 0;
 
-		end = end % erase ? end + erase - end % erase : end;
-		e.start = (uint32_t)start;
-		e.length = (uint32_t)(end - start);
-		if (ioctl(fd, MEMERASE, &e) != 0)
-			return -1;
+	payload[0] = '\0';
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return errno == ENOENT ? 0 : -errno;
+	if (fstat(fd, &st) != 0) {
+		err = -errno;
+	} else if (!S_ISREG(st.st_mode)) {
+		err = -EILSEQ;
+	} else if ((uintmax_t)st.st_size >= cap) {
+		err = -EFBIG;
+	} else {
+		while ((n = read(fd, payload + len, cap - 1 - len)) > 0)
+			len += (size_t)n;
+		if (n < 0)
+			err = -errno;
 	}
-	if (pwrite(fd, buf, len, (off_t)off) != (ssize_t)len)
-		return -1;
+	close(fd);
+	if (err)
+		return err;
+	payload[len] = '\0';
+	if (strlen(payload) != len)
+		return -EILSEQ;
+	if (len && payload[len - 1] != '\n') {
+		if (len + 1 >= cap)
+			return -EFBIG;
+		payload[len++] = '\n';
+		payload[len] = '\0';
+	}
+	for (char *line = payload; *line;) {
+		char *nl = strchr(line, '\n'), *eq = strchr(line, '=');
+		char key[CFG_KEY_MAX + 1];
+
+		if (nl == line) {
+			line++;
+			continue;
+		}
+		if (!eq || eq > nl || (size_t)(eq - line) > CFG_KEY_MAX)
+			return -EILSEQ;
+		memcpy(key, line, (size_t)(eq - line));
+		key[eq - line] = '\0';
+		if (!cfg_valid_key(key))
+			return -EILSEQ;
+		line = nl + 1;
+	}
+	return 0;
+}
+
+/*
+ * Write @payload as the store @path: to the file @path.new, read and write
+ * for root alone, then renamed over @path, and the directory synced, so that
+ * the store is the old one or the new one whole. 0 or -errno.
+ */
+static int write_store(const char *path, const char *payload)
+{
+	char tmp[PATH_MAX], dir[PATH_MAX];
+	size_t len = strlen(payload), off = 0;
+	char *slash;
+	int fd, d, err = 0;
+
+	if ((size_t)snprintf(tmp, sizeof(tmp), "%s.new", path) >= sizeof(tmp))
+		return -ENAMETOOLONG;
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+	if (fd < 0)
+		return -errno;
+	while (off < len) {
+		ssize_t n = write(fd, payload + off, len - off);
+
+		if (n < 0) {
+			err = -errno;
+			break;
+		}
+		off += (size_t)n;
+	}
+	if (!err && fsync(fd) != 0)
+		err = -errno;
+	if (close(fd) != 0 && !err)
+		err = -errno;
+	if (!err && rename(tmp, path) != 0)
+		err = -errno;
+	if (err) {
+		unlink(tmp);
+		return err;
+	}
+	snprintf(dir, sizeof(dir), "%s", path);
+	slash = strrchr(dir, '/');
+	if (slash)
+		*(slash == dir ? slash + 1 : slash) = '\0';
+	else
+		strcpy(dir, ".");
+	d = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (d >= 0) {
+		fsync(d);
+		close(d);
+	}
 	return 0;
 }
 
@@ -228,7 +330,7 @@ out:
 static bool files_verb(const char *verb)
 {
 	static const char *const verbs[] = {
-		"load", "save", "migrate", "identity", "password", "auth", "system", "pd",
+		"load", "save", "identity", "password", "auth", "system", "pd",
 	};
 
 	for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
@@ -254,6 +356,81 @@ static int files(char **args, const char *store)
 	execv(path, args - 1);
 	fail(path);
 	return 127;
+}
+
+/*
+ * slots and erase-slots on @dev, an MTD device or, for the tests, a file of
+ * its bytes: the store of before printed, or its partition erased, every
+ * byte 0xff then, as the flash erases. 0, 3 when @dev holds no such store, 1
+ * or 2 on an error.
+ */
+static int slots_cmd(const char *dev, bool erase)
+{
+	struct mtd_info_user mi;
+	struct stat st;
+	uint8_t *region = NULL;
+	char *payload = NULL;
+	size_t len = 0;
+	int fd, rc = 1, err;
+	bool mtd;
+
+	fd = open(dev, (erase ? O_RDWR : O_RDONLY) | O_CLOEXEC);
+	if (fd < 0)
+		return fail(dev);
+	mtd = ioctl(fd, MEMGETINFO, &mi) == 0;
+	if (mtd)
+		len = mi.size;
+	else if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode))
+		len = (size_t)st.st_size;
+	if (len == 0 || len > REGION_MAX || cfg_payload_cap(len) == 0) {
+		fprintf(stderr, "onu-config: %s: not a partition of the store of before\n", dev);
+		close(fd);
+		return 2;
+	}
+	region = malloc(len);
+	payload = malloc(cfg_payload_cap(len) + 1);
+	if (!region || !payload) {
+		fail("out of memory");
+		goto out;
+	}
+	if (pread(fd, region, len, 0) != (ssize_t)len) {
+		fail(dev);
+		goto out;
+	}
+	err = cfg_load(region, len, payload, cfg_payload_cap(len) + 1, NULL, NULL, NULL);
+	if (err == -ENOENT) {
+		rc = 3;
+		goto out;
+	}
+	if (err) {
+		fprintf(stderr, "onu-config: %s: %s\n", dev, strerror(-err));
+		goto out;
+	}
+	if (!erase) {
+		fputs(payload, stdout);
+		rc = fflush(stdout) ? 1 : 0;
+		goto out;
+	}
+	if (mtd) {
+		struct erase_info_user e = { .start = 0, .length = mi.size };
+
+		if (ioctl(fd, MEMERASE, &e) != 0) {
+			fail(dev);
+			goto out;
+		}
+	} else {
+		memset(region, 0xff, len);
+		if (pwrite(fd, region, len, 0) != (ssize_t)len) {
+			fail(dev);
+			goto out;
+		}
+	}
+	rc = 0;
+out:
+	free(region);
+	free(payload);
+	close(fd);
+	return rc;
 }
 
 /* A path of the running system, with ONU_ROOT in front when set. */
@@ -543,21 +720,16 @@ static int identity_current_cmd(void)
 int main(int argc, char **argv)
 {
 	const char *store = getenv("ONU_STORE");
-	size_t size = 0;
 	int opt;
 	static const struct option opts[] = {
 		{ "store", required_argument, NULL, 's' },
-		{ "size", required_argument, NULL, 'z' },
 		{ NULL, 0, NULL, 0 },
 	};
 
-	while ((opt = getopt_long(argc, argv, "s:z:", opts, NULL)) != -1) {
+	while ((opt = getopt_long(argc, argv, "s:", opts, NULL)) != -1) {
 		switch (opt) {
 		case 's':
 			store = optarg;
-			break;
-		case 'z':
-			size = (size_t)strtoul(optarg, NULL, 0);
 			break;
 		default:
 			return 2;
@@ -590,10 +762,11 @@ int main(int argc, char **argv)
 			return change_cmd();
 		return settings_cmd(!strcmp(argv[optind], "check"));
 	}
-	if (!store) {
-		fprintf(stderr, "onu-config: no store (--store or ONU_STORE)\n");
-		return 2;
-	}
+	if (argc - optind == 2 && (!strcmp(argv[optind], "slots") ||
+				   !strcmp(argv[optind], "erase-slots")))
+		return slots_cmd(argv[optind + 1], !strcmp(argv[optind], "erase-slots"));
+	if (!store || !*store)
+		store = STORE_PATH;
 
 	int nargs = argc - optind;
 	const char *verb = nargs > 0 ? argv[optind] : NULL;
@@ -610,86 +783,37 @@ int main(int argc, char **argv)
 	    (!strcmp(verb, "import") && nargs != 1) ||
 	    (strcmp(verb, "get") && strcmp(verb, "set") && strcmp(verb, "unset") &&
 	     strcmp(verb, "list") && strcmp(verb, "import"))) {
-		fputs("usage: onu-config [--store PATH] [--size N] get KEY | list |\n"
+		fputs("usage: onu-config [--store PATH] get KEY | list |\n"
 		      "                  set KEY VALUE | unset KEY | import\n"
 		      "       onu-config check | settings\n"
-		      "       onu-config load | save | migrate | identity | password |\n"
+		      "       onu-config slots DEVICE | erase-slots DEVICE\n"
+		      "       onu-config load | save | identity | password |\n"
 		      "                  auth HASH | system | pd N\n", stderr);
 		return 2;
 	}
 
-	int fd = open(store, writing ? O_RDWR : O_RDONLY);
-
-	if (fd < 0 && writing && errno == ENOENT && size)
-		fd = open(store, O_RDWR | O_CREAT, 0600);
-	if (fd < 0)
-		return fail(store);
-
-	/*
-	 * An MTD device gives its own size and erase block; a file its size,
-	 * or --size for one that does not exist yet, grown to that size.
-	 */
-	struct mtd_info_user mi;
-	bool mtd = ioctl(fd, MEMGETINFO, &mi) == 0;
-	size_t erase = mtd ? mi.erasesize : 0;
-	size_t region_len;
-
-	if (mtd) {
-		region_len = mi.size;
-	} else {
-		struct stat st;
-
-		if (fstat(fd, &st) != 0) {
-			close(fd);
-			return fail(store);
-		}
-		region_len = st.st_size > 0 ? (size_t)st.st_size : size;
-		if (writing && (size_t)st.st_size < region_len &&
-		    ftruncate(fd, (off_t)region_len) != 0) {
-			close(fd);
-			return fail(store);
-		}
-	}
-	if (region_len == 0 || region_len > REGION_MAX ||
-	    cfg_payload_cap(region_len) == 0) {
-		fprintf(stderr, "onu-config: %s: no usable store size\n", store);
-		close(fd);
-		return 2;
-	}
-
-	uint8_t *region = calloc(1, region_len);
-	size_t cap = cfg_payload_cap(region_len) + 1;
+	size_t cap = STORE_MAX + 1;
 	char *payload = calloc(1, cap);
-
-	if (!region || !payload) {
-		free(region);
-		free(payload);
-		close(fd);
-		return fail("out of memory");
-	}
-
-	ssize_t got = pread(fd, region, region_len, 0);
-
-	if (got < 0) {
-		free(region);
-		free(payload);
-		close(fd);
-		return fail(store);
-	}
-
-	uint32_t seq = 0;
-	int slot = -1;
 	/* What the store holds now, to tell whether a change changes anything. */
 	char *before = NULL;
-	int err = cfg_load(region, region_len, payload, cap, NULL, &seq, &slot);
+	int err;
 
-	if (err && err != -ENOENT) {
-		fprintf(stderr, "onu-config: %s: %s\n", store, strerror(-err));
+	if (!payload)
+		return fail("out of memory");
+	err = read_store(store, payload, cap);
+	if (err) {
+		fprintf(stderr, "onu-config: %s: %s\n", store,
+			err == -EFBIG ? "larger than 64 KiB" :
+			err == -EILSEQ ? "not a store of KEY=VALUE lines" : strerror(-err));
 		goto out_fail;
 	}
-
-	if (err == 0 && writing)
+	if (writing) {
 		before = strdup(payload);
+		if (!before) {
+			fail("out of memory");
+			goto out_fail;
+		}
+	}
 
 	int rc = 0;
 
@@ -718,32 +842,20 @@ int main(int argc, char **argv)
 		cfg_unset(payload, key);
 	}
 
-	if (writing && !(before && !strcmp(before, payload))) {
-		size_t off, len;
-
-		err = cfg_store(region, region_len, slot, seq, payload,
-				strlen(payload), &off, &len);
+	if (writing && strcmp(before, payload)) {
+		err = write_store(store, payload);
 		if (err) {
-			fprintf(stderr, "onu-config: %s: %s\n", store,
-				strerror(-err));
-			goto out_fail;
-		}
-		if (write_region(fd, mtd, erase, off, region + off, len) != 0) {
-			fail(store);
+			fprintf(stderr, "onu-config: %s: %s\n", store, strerror(-err));
 			goto out_fail;
 		}
 	}
 
 	free(before);
-	free(region);
 	free(payload);
-	close(fd);
 	return rc;
 
 out_fail:
 	free(before);
-	free(region);
 	free(payload);
-	close(fd);
 	return 1;
 }

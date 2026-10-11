@@ -17,26 +17,35 @@ there, and names it by its whole path where procd starts it.
    prints the identity of the unit (serial number, vendor ID, version,
    equipment ID, PLOAM password and the values of the ONU-G and ONU2-G that
    G.988 has the ONU report) from its factory configuration, the JFFS2 file
-   system in the partition ``config``. Until the configuration store holds an
-   identity, it is the one ``onu-config`` puts in ``/run/onu-identity`` at boot,
-   which omcid reads and which gives the serial number to the PON driver, and
-   the one the store's first write takes in. Its output holds the PLOAM
-   password, a credential of the line: keep it private.
+   system in the partition ``config``. It is the identity ``onu-config`` puts in
+   ``/run/onu-identity`` at boot, with the store's ``ID_*`` keys over it,
+   which omcid reads and which gives the serial number to the PON driver. Its
+   output holds the PLOAM password, a credential of the line: keep it
+   private.
 
 ``onu-config``
    the stick's settings, their store in the flash and their rules, in one
    program (ADR 0015; it was ``onucfg`` and ``onu-store`` before). It reads
-   and changes the configuration store: the partition ``config`` split
-   into two slots, each a header and ``KEY=VALUE`` lines. A change writes the
-   slot that is not current and then makes it current, so that a power loss in
-   the middle leaves the old configuration whole; a change that changes nothing
-   writes nothing::
+   and changes the configuration store: the file
+   ``/config/open-dfp-34x-2c.conf`` of ``KEY=VALUE`` lines, at most 64 KiB,
+   in the JFFS2 file system of the partition ``config``, beside the files the
+   shipped firmware keeps there, which it never writes, so that the shipped
+   firmware finds them after a switch of the bank (ADR 0014, step 9). A
+   change writes the whole store to a new file and renames it over the old
+   one, so that a power loss in the middle leaves the old store whole; a
+   change that changes nothing writes nothing. ``--store`` or ``ONU_STORE``
+   names another file::
 
-      onu-config --store /dev/mtd3 list
-      onu-config --store /dev/mtd3 get KEY
-      onu-config --store /dev/mtd3 set KEY VALUE
-      onu-config --store /dev/mtd3 unset KEY
-      onu-config --store /dev/mtd3 import <lines     # every KEY=VALUE and -KEY, one write
+      onu-config list
+      onu-config get KEY
+      onu-config set KEY VALUE
+      onu-config unset KEY
+      onu-config import <lines     # every KEY=VALUE and -KEY, one write
+
+   Before step 9 the store took the whole partition, in two slots of its
+   own format; ``onu-config slots DEVICE`` prints such a store and
+   ``onu-config erase-slots DEVICE`` erases its partition, refusing one that
+   holds none, for the boot to take it into the file (below).
 
    It also holds the one table of the data path's settings (ADR 0014,
    ``src/settings.h``): each key of ``/run/onu.conf``, the shape of its values
@@ -72,13 +81,16 @@ there, and names it by its whole path where procd starts it.
    ``/run/onu.conf``) and its PPPoE account (``PPPOE_USER``,
    ``PPPOE_SECRET``) in the store. ``onu-config load`` puts them in the files
    the running system reads, at boot; ``onu-config save`` writes the settings
-   and the account in force back, which ``onu-apply reload`` does. The store
-   shares the partition with the shipped firmware's configuration, and its
-   first write overwrites the start of it: so the first save takes the
-   identity ``ponid`` reads into the same write, and ``onu-config migrate`` does
-   that alone, refusing when there is no identity to take. What became of the
+   and the account in force back, which ``onu-apply reload`` does. A load first
+   makes ``/config`` the partition's JFFS2 file system; a partition that still
+   holds the store of before is read, erased and mounted empty, and that
+   store goes into the file, since JFFS2 erases the blocks it does not know.
+   The identity is the one ``ponid`` reads from the shipped firmware's files,
+   with the store's ``ID_*`` keys over it, which hold only what was changed
+   here; a save never takes the identity into the store. What became of the
    settings is one word in ``/run/onu-store`` (``loaded``, ``defaults``,
-   ``saved``, ``failed``, ``none``), which the status daemon shows. The status
+   ``saved``, ``failed``, ``none`` without ``/config``), which the status
+   daemon shows. The status
    daemon also keeps two things there through it: ``onu-config identity`` takes
    the identity of ``KEY=VALUE`` lines on its input (``SERIAL``, ``PLOAM``, …)
    and ``onu-config password`` root's password, the line of its input, which it

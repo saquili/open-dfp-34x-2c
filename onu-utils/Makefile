@@ -74,6 +74,10 @@ $(BUILD)/test_pondev: $(BUILD)/tests/test_pondev.o $(BUILD)/src/pondev.o \
 $(BUILD)/test_genl: $(BUILD)/tests/test_genl.o $(BUILD)/src/genl.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
+# mkslots writes a store of before step 9 for test_onu_config.sh.
+$(BUILD)/mkslots: $(BUILD)/tests/mkslots.o $(BUILD)/src/cfgstore.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+
 $(BUILD)/test_cfgstore: $(BUILD)/tests/test_cfgstore.o $(BUILD)/src/cfgstore.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
 
@@ -82,7 +86,8 @@ $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 
 # test_genl asks the kernel it runs on, through a generic netlink socket.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
-	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/test_update $(BUILD)/onu-update \
+	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
+	$(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev

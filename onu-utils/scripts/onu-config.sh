@@ -3,20 +3,20 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # onu-config.sh: the files the running system reads, to and from the stick's
-# configuration store in the flash partition "config", which onu-config keeps.
+# configuration store, which onu-config keeps: a file of the JFFS2 file system
+# of the flash partition "config", which /sbin/init mounts on /config, beside
+# the files of the firmware the stick shipped with (ADR 0014, step 9).
 # onu-config runs it for these verbs, and is how a person or a program asks
 # for them (ADR 0015; it was onu-store before):
 #
-#   onu-config load      at boot: the identity, the settings and the PPPoE
-#                        accounts from the store into /run/onu-identity,
-#                        /run/onu.conf and /run/onu-pppoeN
+#   onu-config load      at boot: /config mounted, and the identity, the
+#                        settings and the PPPoE accounts from the store into
+#                        /run/onu-identity, /run/onu.conf and /run/onu-pppoeN
 #   onu-config save      the settings of /run/onu.conf and the accounts of
 #                        /run/onu-pppoeN into the store, in one write
-#   onu-config migrate   the same, with the identity of the shipped firmware's
-#                        configuration (ponid) taken into the store
 #   onu-config identity  the identity of the KEY=VALUE lines of the standard
-#                        input (SERIAL, PLOAM, ...) into the store and into
-#                        /run/onu-identity
+#                        input (SERIAL, PLOAM, ...) into the store, over the
+#                        shipped firmware's, and into /run/onu-identity
 #   onu-config password  root's new password, the line of the standard input,
 #                        hashed into the store, /run/onu-auth and /run/shadow
 #   onu-config auth HASH a hash of root's password made elsewhere, the same way
@@ -29,7 +29,8 @@
 #                        without the file, out of it
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
-# the name in lower case; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
+# the name in lower case, in place of the one the shipped firmware's files
+# give; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
 # 7, are the line "user secret" of /run/onu-pppoeN, which an empty PPPOEn_USER
 # leaves out (PPPOE_USER and PPPOE_SECRET, the single account of before, are
 # the first session's);
@@ -44,15 +45,16 @@
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #
-# Until the store holds an identity, the identity is the one ponid reads from
-# the shipped firmware's configuration, which shares the partition. The first
-# write of the store overwrites the start of that configuration, so a save
-# that finds no identity in the store takes ponid's into the same write: the
-# unit never loses its identity to its first saved setting.
+# The identity is the one ponid reads from the shipped firmware's files, which
+# share the file system, with the store's ID_ keys over it: the store holds
+# only what was changed here, and the shipped firmware's files are never
+# written, so that the shipped firmware finds its own after a switch of the
+# bank.
 #
 # What became of the settings is the word in /run/onu-store, for the status
 # daemon: "loaded" when load found settings in the store, "defaults" when it
-# found none, "saved" or "failed" after a save, "none" without a store.
+# found none, "saved" or "failed" after a save, "none" without a store, when
+# /config is not mounted.
 #
 # ONU_ROOT names another root for the files it reads and writes, and
 # ONU_STORE another store (a file), which the tests use.
@@ -93,34 +95,89 @@ log() {
 	return 0
 }
 
-# The store: ONU_STORE, else the character device of the partition "config".
+# The store: ONU_STORE, else the file of /config, when the partition is
+# mounted there.
+STORE_FILE=/config/open-dfp-34x-2c.conf
 store() {
 	if [ -n "${ONU_STORE:-}" ]; then
 		echo "$ONU_STORE"
 		return 0
 	fi
+	mountpoint -q "$ROOT/config" || return 1
+	echo "$ROOT$STORE_FILE"
+}
+
+# The partition "config" mounted on /config. One that still holds the store
+# of before step 9, the two slots that took the whole partition, has it taken
+# into the file first: its lines are kept in memory, the partition is erased
+# and mounted empty, and the lines go to the file, since JFFS2 would erase the
+# blocks it does not know. Fails when the partition cannot be mounted.
+mount_config() {
+	mountpoint -q "$ROOT/config" && return 0
 	dev=$(awk '$4 == "\"config\"" { sub(":", "", $1); print $1 }' \
 		"$ROOT/proc/mtd" 2>/dev/null)
 	[ -n "$dev" ] || return 1
-	echo "/dev/$dev"
+	before=$RUN/onu-store.before
+	(umask 077 && onu-config slots "$ROOT/dev/$dev" >"$before")
+	case $? in
+	0)
+		log "the store of before goes into $STORE_FILE"
+		onu-config erase-slots "$ROOT/dev/$dev" &&
+			mount -t jffs2 -o nosuid,nodev,noexec mtd:config "$ROOT/config" &&
+			onu-config --store "$ROOT$STORE_FILE" import <"$before" || {
+			log "the store of before is in $before only"
+			return 1
+		}
+		rm -f "$before"
+		;;
+	3)
+		rm -f "$before"
+		mount -t jffs2 -o nosuid,nodev,noexec mtd:config "$ROOT/config"
+		;;
+	*)
+		rm -f "$before"
+		return 1
+		;;
+	esac
 }
 
-# The store's KEY=VALUE lines; nothing for an empty store.
+# The store's KEY=VALUE lines; nothing for an empty store or none.
 contents() {
+	[ -n "$STORE" ] || return 0
 	onu-config --store "$STORE" list
 }
 
-has_identity() {
-	contents | grep -q '^ID_'
-}
-
-# The identity ponid reads, as ID_ keys.
-factory_identity() {
-	ponid | awk '{
+# /run/onu-identity: the identity ponid reads from the shipped firmware's
+# files, with the ID_ keys of the store's lines $1 over it, and where it came
+# from in /run/onu-identity-source: "store" when the store holds one of them,
+# else "factory". Fails when there is none at all.
+put_identity() {
+	umask 077
+	{
+		ponid 2>/dev/null
+		printf '%s\n' "$1" | awk '/^ID_/ {
+			i = index($0, "=")
+			print tolower(substr($0, 4, i - 4)) "=" substr($0, i + 1)
+		}'
+	} | awk '{
 		i = index($0, "=")
-		if (i > 1)
-			print "ID_" toupper(substr($0, 1, i - 1)) "=" substr($0, i + 1)
-	}'
+		if (i < 2)
+			next
+		k = substr($0, 1, i - 1)
+		if (!(k in v))
+			order[n++] = k
+		v[k] = substr($0, i + 1)
+	}
+	END {
+		for (j = 0; j < n; j++)
+			print order[j] "=" v[order[j]]
+	}' >"$IDENTITY.new" && mv "$IDENTITY.new" "$IDENTITY" || return 1
+	if printf '%s\n' "$1" | grep -q '^ID_'; then
+		(umask 022 && echo store >"$SOURCE")
+	else
+		(umask 022 && echo factory >"$SOURCE")
+	fi
+	[ -s "$IDENTITY" ]
 }
 
 # The settings and the accounts in force, as keys of the store, and a -KEY
@@ -176,8 +233,8 @@ load() {
 		list=
 	}
 	umask 077
-	rm -f "$IDENTITY.new" "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"*
-	printf '%s\n' "$list" | awk -v id="$IDENTITY.new" -v conf="$CONF.new" \
+	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"*
+	printf '%s\n' "$list" | awk -v conf="$CONF.new" \
 		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
 		-v sys="$SYSTEM.new" -v pd="$PD" '
 		{
@@ -187,7 +244,7 @@ load() {
 			k = substr($0, 1, i - 1)
 			v = substr($0, i + 1)
 		}
-		k ~ /^ID_/ { print tolower(substr(k, 4)) "=" v > id; next }
+		k ~ /^ID_/ { next }
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
 		k ~ /^PD[1-9]_HOST$/ {
@@ -225,41 +282,14 @@ load() {
 	else
 		rm -f "$SYSTEM"
 	fi
-	if [ -s "$IDENTITY.new" ]; then
-		mv "$IDENTITY.new" "$IDENTITY"
-		(umask 022 && echo store >"$SOURCE")
-		return 0
-	fi
 	rm -f "$IDENTITY.new"
-	# No identity in the store yet: the shipped firmware's.
-	(umask 022 && echo factory >"$SOURCE")
-	ponid >"$IDENTITY"
+	[ -n "$STORE" ] || state none
+	put_identity "$list"
 }
 
 save() {
-	need_identity=$1
-	ids=
-	if ! has_identity; then
-		ids=$(factory_identity)
-		if [ -z "$ids" ] && [ "$need_identity" = yes ]; then
-			log "no identity in the shipped firmware's configuration"
-			return 1
-		fi
-	fi
-	{
-		[ -n "$ids" ] && printf '%s\n' "$ids"
-		settings
-	} | onu-config --store "$STORE" import || return 1
-	# What the store gives back is what was meant to go in.
-	if [ -n "$ids" ]; then
-		printf '%s\n' "$ids" | while IFS= read -r line; do
-			contents | grep -q -x -F -e "$line" || {
-				log "the store does not hold ${line%%=*}"
-				return 1
-			}
-		done || return 1
-	fi
-	return 0
+	[ -n "$STORE" ] || return 1
+	settings | onu-config --store "$STORE" import
 }
 
 # The identity of KEY=VALUE lines on the standard input, as ID_ keys.
@@ -269,14 +299,9 @@ identity() {
 		if (i > 1)
 			print "ID_" toupper(substr($0, 1, i - 1)) "=" substr($0, i + 1)
 	}')
-	[ -n "$ids" ] || return 1
+	[ -n "$ids" ] && [ -n "$STORE" ] || return 1
 	printf '%s\n' "$ids" | onu-config --store "$STORE" import || return 1
-	umask 077
-	contents | awk '/^ID_/ {
-		i = index($0, "=")
-		print tolower(substr($0, 4, i - 4)) "=" substr($0, i + 1)
-	}' >"$IDENTITY.new" && mv "$IDENTITY.new" "$IDENTITY" &&
-		(umask 022 && echo store >"$SOURCE")
+	put_identity "$(contents)"
 }
 
 # The stick's own settings of KEY=VALUE lines on the standard input, as SYS_
@@ -308,7 +333,7 @@ system() {
 			exit 1
 		print "SYS_" k "=" v
 	}') || return 1
-	[ -n "$lines" ] || return 1
+	[ -n "$lines" ] && [ -n "$STORE" ] || return 1
 	printf '%s\n' "$lines" | onu-config --store "$STORE" import || return 1
 	contents | awk '/^SYS_/ {
 		i = index($0, "=")
@@ -325,7 +350,7 @@ pd() {
 	[1-9]) ;;
 	*) return 1 ;;
 	esac
-	[ "$1" -le $MAX_SESSIONS ] || return 1
+	[ "$1" -le $MAX_SESSIONS ] && [ -n "$STORE" ] || return 1
 	host=
 	[ -r "$PD$1" ] && read -r host <"$PD$1"
 	if [ -z "$host" ]; then
@@ -365,6 +390,7 @@ auth() {
 	case $1 in
 	*[!A-Za-z0-9\$./=_-]* | "") return 1 ;;
 	esac
+	[ -n "$STORE" ] || return 1
 	echo "AUTH_HASH=$1" | onu-config --store "$STORE" import || return 1
 	(umask 077 && echo "$1" >"$AUTH.new" && mv "$AUTH.new" "$AUTH")
 	shadow
@@ -398,10 +424,12 @@ password() {
 	auth "$hash"
 }
 
+if [ -z "${ONU_STORE:-}" ] && [ "${1:-}" = load ]; then
+	mount_config || log "the partition \"config\" is not mounted"
+fi
 STORE=$(store) || {
-	log "no partition \"config\""
-	state none
-	exit 1
+	log "/config is not mounted: no store"
+	STORE=
 }
 
 case ${1:-} in
@@ -409,19 +437,7 @@ load)
 	load
 	;;
 save)
-	if save no; then
-		state saved
-	else
-		state failed
-		exit 1
-	fi
-	;;
-migrate)
-	if has_identity; then
-		log "the store already holds an identity"
-		exit 0
-	fi
-	if save yes; then
+	if save; then
 		state saved
 	else
 		state failed
@@ -444,7 +460,7 @@ pd)
 	pd "${2:-}"
 	;;
 *)
-	echo "usage: onu-config load|save|migrate|identity|password|auth HASH|system|pd N" >&2
+	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N" >&2
 	exit 2
 	;;
 esac
