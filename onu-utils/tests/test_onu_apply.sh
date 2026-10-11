@@ -170,6 +170,36 @@ check '"$MODE_SCRIPT" status >/dev/null'
 check '! "$MODE_SCRIPT" status | grep -q "^dns"'
 teardown
 
+echo "a session's packets to the host side's networks are dropped on its interface"
+setup
+printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \
+	'echo "up ppp0 local 192.0.2.2 peer 192.0.2.1 session 17 dns - -"' \
+	"$REAL_SLEEP" >"$T/bin/pppoed"
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nDATA_ADDRESS=203.0.113.2/30\n' \
+	>"$ONU_ROOT/run/onu-mgmt"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" sync 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "IPv4 up on ppp0" && break
+	"$REAL_SLEEP" 0.2
+done
+check 'logged "^onu-nl clsact add ppp0$"'
+check 'logged "^onu-nl filter del ppp0 pref 1$" && ! logged "^onu-nl filter del ppp0 pref 1000$"'
+check 'logged "^onu-nl filter add ppp0 pref 1 dst 198.51.100.2/30 drop$"'
+check 'logged "^onu-nl filter add ppp0 pref 2 dst 203.0.113.2/30 drop$"'
+check 'logged "^onu-nl filter add ppp0 pref 3 dst 169.254.0.0/16 drop$"'
+# A pair that waits is kept off as well, once onu-mgmt asks again.
+mkdir -p "$ONU_ROOT/run/onu-trial.d"
+printf 'VLAN=100\nADDRESS=192.0.2.66/29\n' >"$ONU_ROOT/run/onu-trial.d/mgmt"
+: >"$LOG"
+"$MODE_SCRIPT" guard 2>/dev/null
+check 'logged "^onu-nl filter add ppp0 pref 3 dst 192.0.2.66/29 drop$"'
+check 'logged "^onu-nl filter add ppp0 pref 4 dst 169.254.0.0/16 drop$"'
+teardown
+
 echo "an account: the stick holds the session, in a VLAN, and hands it down in another"
 setup
 mkdir -p "$ONU_ROOT/sys/class/net/ppp0"

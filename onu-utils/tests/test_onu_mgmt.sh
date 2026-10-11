@@ -39,7 +39,7 @@ setup() {
 	sleep 60 &
 	OLD_NTP=$!
 	echo "$OLD_NTP" >"$ONU_ROOT/run/ntpd.pid"
-	for c in onu-nl logger; do
+	for c in onu-nl logger onu-apply; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "onu-net $*" >>"$LOG"\ncase $1 in\nset) cat >"%s/part" ;;\nwait) [ ! -e "%s/no-address" ] ;;\nesac\n' \
@@ -93,6 +93,8 @@ check 'in_part "interface mgmt mgmt 198.51.100.2/30"'
 # The address on the SFP port is netifd's too, as the interface "data".
 check 'in_part "interface data sfp 192.0.2.2/30"'
 check '[ "$(part | wc -l)" -eq 3 ]'
+# The sessions keep their packets off the pair's networks.
+check 'logged "onu-apply guard"'
 check 'grep -q "option ipv6 .1." "$T/part"'
 run status
 check 'echo "$out" | grep -qx VLAN=4094'
@@ -132,6 +134,7 @@ run add 200 192.0.2.10/30
 check '[ $rc -ne 0 ]'
 run commit
 check '[ $rc -eq 0 ]'
+check '[ "$(grep -c -x "onu-apply guard" "$LOG")" -ge 2 ]'
 check 'grep -qx MGMT_VLAN=100 "$T/stored" && grep -qx MGMT_ADDRESS=192.0.2.6/30 "$T/stored"'
 check 'logged "onu-nl filter del sfp pref 1"'
 check '[ "$(part)" = "$(printf "device mgmt100 100\ninterface $name mgmt100 192.0.2.6/30")" ]'

@@ -23,6 +23,8 @@
 #   onu-apply iface    what netifd runs for an event of an interface (netifd
 #                      -h), with ACTION, INTERFACE and DEVICE: a session's
 #                      interface that comes up hands on what it brought
+#   onu-apply guard    the filters that keep the sessions' packets off the
+#                      host side again, after the management pair changed
 #   onu-apply sync     follow what changed outside the settings: the GEM
 #                      ports and VLANs the OLT provisions, the host's IPv6
 #                      binding; omcid (-x) and dhcp6d (-x) run it as
@@ -513,12 +515,42 @@ session_net() {
 # the delegated IPv6 prefix goes to the host by dhcp6d. netifd runs it for
 # each event of the session's interface, once a time; what is handed on
 # already stays as it is.
+# The stick's networks of the host side: the management pair, one that waits,
+# the address on the SFP port, and the links that hand a session's address on.
+host_nets() {
+	sed -n -e 's/^ADDRESS=\(.\)/\1/p' -e 's/^DATA_ADDRESS=\(.\)/\1/p' \
+		"$RUN/onu-mgmt" 2>/dev/null
+	sed -n 's/^ADDRESS=\(.\)/\1/p' "$RUN/onu-trial.d/mgmt" 2>/dev/null
+	echo 169.254.0.0/16
+}
+
+# A packet that comes in on session interface $1 to a network of the host
+# side is dropped before the stick takes it as its own or passes it on to the
+# host, whoever sends it: the operator's end of a session can address one.
+# The filters take priorities 1 to 9 of the interface's ingress.
+guard() {
+	onu-nl clsact add "$1" 2>/dev/null || {
+		log "$1: the host side is not kept from the session"
+		return 0
+	}
+	for pref in $(onu-nl filter prefs "$1" 2>/dev/null); do
+		[ "$pref" -ge 10 ] || onu-nl filter del "$1" pref "$pref" 2>/dev/null
+	done
+	pref=1
+	for net in $(host_nets); do
+		onu-nl filter add "$1" pref $pref dst "$net" drop 2>/dev/null ||
+			log "$1: packets to $net are not kept from the session"
+		pref=$((pref + 1))
+	done
+}
+
 session_brought() {
 	d=$SESSIONS/$1
 	role= role6=
 	[ -r "$d/role" ] && read -r role role6 <"$d/role"
 	dev=$(cat "$d/ppp" 2>/dev/null)
 	[ -n "$dev" ] || return 0
+	guard "$dev"
 	addr=$(cat "$d/ipv4" 2>/dev/null)
 	if [ -n "$addr" ] && [ "$(cat "$d/pass" 2>/dev/null)" != "$addr" ] &&
 		[ "$(cat "$d/up" 2>/dev/null)" != "$addr" ]; then
@@ -1317,8 +1349,14 @@ iface)
 	load
 	iface_event
 	;;
+guard)
+	for d in "$SESSIONS"/*; do
+		[ -r "$d/ppp" ] && [ -e "$d/up" ] && guard "$(cat "$d/ppp")"
+	done
+	exit 0
+	;;
 *)
-	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|sync" >&2
+	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|sync|guard" >&2
 	exit 2
 	;;
 esac

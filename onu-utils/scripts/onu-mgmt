@@ -137,7 +137,9 @@ net_apply() {
 			iface_conf "$(field NAME "$PENDING")" "$(field IFACE "$PENDING")" \
 				"$(field ADDRESS "$PENDING")"
 		fi
-	} | onu-net set mgmt
+	} | onu-net set mgmt || return 1
+	# The sessions keep their packets off the networks of the pair in use.
+	onu-apply guard || log "the sessions are not kept off the new pair's network"
 }
 
 start() {
