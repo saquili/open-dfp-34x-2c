@@ -136,8 +136,10 @@ A change of the settings
    back to the settings it had. Only a confirmed change is written to the
    store.
 
-ADR 0014 gives the design. Today a change takes every session down and up
-again, not only the one that changed; the generator does not compare yet.
+ADR 0014 gives the design. A session goes down and up again only when what
+it is made of changes (its GEM port, interface, family, MAC address, account,
+or what it hands down by which link, ``/run/session/N/makings``); the other
+sessions stay up.
 
 How the parts talk
 ==================

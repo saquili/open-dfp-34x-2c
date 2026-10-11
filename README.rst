@@ -121,8 +121,6 @@ What is not done, or not tried
 * Only the bench's DFP-34X-2C3 has run it. The DFP-34X-2C2 has not been tried,
   and the build makes images for the DFP-34X-2C3 only.
 * There is no release: the images are built from source (`Building`_).
-* A change of the settings takes every PPPoE session down and up again, not
-  only the one that changed.
 * If the configuration store cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial
   console, inside the stick, takes ``admin``.
