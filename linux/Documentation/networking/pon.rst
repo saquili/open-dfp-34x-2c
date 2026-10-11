@@ -178,9 +178,12 @@ The class is independent of the hardware. On the only board of this tree, the
 ODI DFP-34X-2C3 with a Realtek RTL9602C, the hardware behind it is described
 on other pages:
 
-- The GPON MAC and the PON MAC, which run the activation, the Alloc-IDs, the
-  GEM flows, the T-CONTs and the queues:
-  Documentation/networking/device_drivers/pon/rtl9602c.rst.
+- The GPON MAC, which runs the activation and the Alloc-IDs:
+  Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst.
+- The PON MAC and the packet buffer, which carry the GEM flows, the T-CONTs
+  and the queues: Documentation/networking/device_drivers/pon/rtl9602c.rst.
+- The optics, the laser driver and its transmit-disable line:
+  Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
 - The CPU port and its DMA engine, the conduit through which the OMCI messages
   and the GEM frames reach the switch:
   Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst.
@@ -1396,13 +1399,12 @@ The family and its permissions
      - M: a ``dev-get`` dump and ``dev-change-ntf`` on the board. I:
        ``tcont-get`` is a design choice not exercised; a ``tcont-get`` dump
        would exercise it.
-   * - ``dev-get`` and ``tcont-get``, the do and the dump of each, need
-       ``CAP_NET_ADMIN`` (``admin-perm``), and so does joining ``monitor``
-       (``GENL_MCAST_CAP_NET_ADMIN``, which the generator writes for a group
-       with ``admin-perm``): its notifications carry the serial number, the
-       credential the OLT takes the ONU by.
+   * - ``tcont-set`` needs ``CAP_NET_ADMIN`` (``admin-perm``), and so does
+       joining ``monitor`` (``GENL_MCAST_CAP_NET_ADMIN``, which the generator
+       writes for a group with ``admin-perm``). ``dev-get`` and ``tcont-get``
+       need none (see "Operations").
      - I
-     - Design choice, not exercised: an unprivileged ``dev-get`` gets
+     - Design choice, not exercised: an unprivileged ``tcont-set`` gets
        ``-EPERM``, and an unprivileged join of ``monitor`` is refused.
    * - ``netnsok``: the family answers in every network namespace. ONUs are not
        per namespace, and notifications go to the initial namespace only.
