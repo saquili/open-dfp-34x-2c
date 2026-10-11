@@ -10,6 +10,7 @@
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
 #include <asm/addrspace.h>
+#include <asm/lexra-cctl.h>
 #include <asm/sync.h>
 
 #include <kernel-entry-init.h>
@@ -93,6 +94,18 @@ done:
 	syncw
 	synci		0($0)
 	.set pop
+#elif defined(CONFIG_CPU_LEXRA_CACHE)
+	/*
+	 * The new kernel was copied through the cached segment: write the
+	 * data cache back and invalidate it, then invalidate the instruction
+	 * cache, as c-lexra.c does.
+	 */
+	li		t0, LEXRA_CCTL_DCACHE_WB_INV
+	mtc0		zero, $20
+	mtc0		t0, $20
+	li		t0, LEXRA_CCTL_ICACHE_INV
+	mtc0		zero, $20
+	mtc0		t0, $20
 #else
 	__SYNC(full, always)
 #endif
