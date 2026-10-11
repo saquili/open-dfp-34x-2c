@@ -90,11 +90,15 @@ class PostBuild(unittest.TestCase):
 
     def make_tools(self):
         tools = os.path.join(self.target, "usr", "bin")
+        sbin = os.path.join(self.target, "usr", "sbin")
         shell = os.path.join(self.target, "usr", "share", "libubox")
-        os.makedirs(tools, exist_ok=True)
-        os.makedirs(shell, exist_ok=True)
+        for directory in (tools, sbin, shell):
+            os.makedirs(directory, exist_ok=True)
         for prog in ("ubus", "uci", "jshn", "omcitap", "omcivlan", "passwd"):
             with open(os.path.join(tools, prog), "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\n# %s\n" % prog)
+        for prog in ("flashcp", "flash_erase", "mtd_debug", "pond"):
+            with open(os.path.join(sbin, prog), "w", encoding="utf-8") as handle:
                 handle.write("#!/bin/sh\n# %s\n" % prog)
         with open(os.path.join(shell, "jshn.sh"), "w", encoding="utf-8") as handle:
             handle.write("# jshn\n")
@@ -117,6 +121,9 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(aside)), ["omcitap", "omcivlan", "ubus"])
         with open(os.path.join(aside, "ubus"), encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "#!/bin/sh\n# ubus\n")
+        self.assertEqual(sorted(os.listdir(os.path.join(base, "diag", "usr", "sbin"))),
+                         ["flash_erase", "flashcp", "mtd_debug"])
+        self.assertEqual(os.listdir(os.path.join(self.target, "usr", "sbin")), ["pond"])
 
     def test_a_second_run_keeps_the_tools_set_aside(self):
         base = os.path.join(self._tmp.name, "base")

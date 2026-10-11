@@ -55,11 +55,13 @@ done
 # lib-trim then takes out the library only jshn loads.
 #
 # A stick is diagnosed started from RAM, and its flash holds the image of the
-# final test, so the tools of diagnosis, omcid's omcitap and omcivlan and the
-# network layer's ubus, are set aside in $BASE_DIR/diag, which "make
-# ram-image" lays over its copy of this directory; uci and jshn go.
+# final test, so the tools of diagnosis, omcid's omcitap and omcivlan, the
+# network layer's ubus and the flash's flashcp, flash_erase and mtd_debug, are
+# set aside in $BASE_DIR/diag, which "make ram-image" lays over its copy of
+# this directory; uci and jshn go.
 diag=${BASE_DIR:+$BASE_DIR/diag}
-for prog in usr/bin/omcitap usr/bin/omcivlan usr/bin/ubus; do
+for prog in usr/bin/omcitap usr/bin/omcivlan usr/bin/ubus usr/sbin/flashcp \
+	usr/sbin/flash_erase usr/sbin/mtd_debug; do
 	[ -e "$1/$prog" ] || continue
 	if [ -n "$diag" ]; then
 		mkdir -p "$diag/${prog%/*}"
