@@ -156,7 +156,14 @@ performance monitoring intervals stand, and programs the data path again
 from the MIB: what it finds in the kernel as the MIB has it, the GEM
 interfaces, the T-CONTs' Alloc-IDs and the bridge, stays as it is. What a
 start again loses is the counts of the interval in progress and the alarms
-judged so far, which it judges anew. A file of another layout, such as one
+judged so far, which it judges anew. Traffic does not notice: on the stick holding
+two PPPoE sessions, with a TCP upload of 905 Mb/s through them, the frames
+that left by the PON port, read every 0.1 s, went on at their rate through
+nine restarts, five after SIGTERM and four after SIGKILL, each back in about
+2.5 s, procd's wait of 2 s with it. The upload's stalls of 0.1 to 0.3 s came
+as often without a restart: they are TCP's, after a burst of frames that the
+switch dropped at the SFP port, whose 2.5 Gb/s the PON's upstream does not
+drain. A file of another layout, such as one
 of another build, it does not take: it starts afresh and replaces the file
 at the next change. On the stick the file is ``/run/omcid.mib``, which goes
 with a restart of the stick, as the OLT's set-up does.
