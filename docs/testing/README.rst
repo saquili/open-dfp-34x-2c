@@ -199,9 +199,9 @@ The runs, the oldest first:
     The same cases and the new case of the PON side's silence on the RAM image
     built from ``run21``, after the boot script keeps the stick quiet
     towards the PON, omcid takes the versions a bench names and reports an
-    unmapped T-CONT as the original did, gives the bridge ports the VLANs a
-    translation and a port without a filter need, and discards the tagged
-    frames that no VLAN rule takes. The lab OLT sets no VLAN filter, so the
+    unmapped T-CONT with the Alloc-ID 0x00FF of G.988 9.2.2, gives the bridge
+    ports the VLANs a translation and a port without a filter need, and
+    discards the tagged frames that no VLAN rule takes. The lab OLT sets no VLAN filter, so the
     last two had nothing to do. 43 of 45 passed, and both failures lay with
     the bench: its ssh client shared the connection of the earlier cases with
     the probe that offers no key, which so got in; and since the bench host's
