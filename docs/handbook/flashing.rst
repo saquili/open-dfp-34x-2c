@@ -814,12 +814,12 @@ Rules that keep the board safe
   the device's configuration, including its registration identity, and
   nothing in this repository can recreate it. The system the bench starts
   writes there its own file only (``boot-contract.rst``).
-* **Bank 0 is the bench's whatever it holds.** On a stick that took this
-  system through the shipped firmware's web page while that firmware ran from
-  bank 0, this system is in bank 1 and the shipped firmware in bank 0, and a
-  write by the bench would overwrite it. Before the first write on such a
-  stick, see which bank this system runs from with ``onu-update status``,
-  which shows the shipped firmware's bank as ``empty``.
+* **The shipped firmware in bank 0 is written only on request.** On a stick
+  that took this system through the shipped firmware's web page while that
+  firmware ran from bank 0, this system is in bank 1 and the shipped firmware
+  in bank 0, its only copy. The bench tells such a bank 0 as ``onu-update
+  status`` does, which shows it as ``shipped``, refuses to write it, and writes
+  it only with ``--overwrite-shipped``. Copy the flash first.
 * **The flash windows are never written.** A store into the memory-mapped
   window is refused in every spelling. The window is for reading.
 * **A write is never interrupted.** Nothing is typed, reset or power-cycled
