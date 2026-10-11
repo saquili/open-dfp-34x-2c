@@ -295,9 +295,6 @@ struct genlmsghdr {
 #define PON_CMD_DEV_GET 1
 
 #define PON_TYPE_GPON 1
-#define PON_TYPE_XGPON 2
-#define PON_TYPE_XGSPON 3
-#define PON_TYPE_NGPON2 4
 
 #define PON_ONU_STATE_O1 1
 #define PON_ONU_STATE_O7 7
@@ -1745,12 +1742,6 @@ static const char *pon_type_name(uint32_t type)
 	switch (type) {
 	case PON_TYPE_GPON:
 		return "gpon";
-	case PON_TYPE_XGPON:
-		return "xgpon";
-	case PON_TYPE_XGSPON:
-		return "xgs-pon";
-	case PON_TYPE_NGPON2:
-		return "ng-pon2";
 	default:
 		return NULL;
 	}
