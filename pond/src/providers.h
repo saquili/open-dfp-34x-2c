@@ -25,6 +25,7 @@ int prov_hostname_set(const char *val, char *err, size_t errcap);
 int prov_mgmt(struct prov_buf *out);
 int prov_sfp_lane(struct prov_buf *out);
 int prov_sfp_lane_set(const char *val, char *err, size_t errcap);
+int prov_tls(struct prov_buf *out);
 int prov_image(struct prov_buf *out);
 int prov_kernel(struct prov_buf *out);
 int prov_log(struct prov_buf *out);

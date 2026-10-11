@@ -7,8 +7,9 @@
 #   make check    the tests, on the files of tests/fixtures
 #
 # CC, CFLAGS and LDFLAGS come from the caller for a build for the board. The
-# HTTP layer is Mongoose, in third_party/mongoose, built as it comes; pond's
-# own sources are in src/. On Linux, pond reads netlink with libmnl and the
+# HTTP layer is Mongoose, in third_party/mongoose, with its own TLS 1.3
+# (MG_TLS_BUILTIN), which every source is built for; pond's own sources are
+# in src/. On Linux, pond reads netlink with libmnl and the
 # kernel's headers, among them linux/pon.h of this repository's kernel, and
 # reads the state of the stick's programs on ubus (src/bus.h) with libubus
 # and libblobmsg_json.
@@ -19,14 +20,14 @@ CC      ?= cc
 CFLAGS  ?= -O2 -g
 BUILD   ?= build
 
-override CPPFLAGS += -Isrc -Ithird_party/mongoose
+override CPPFLAGS += -Isrc -Ithird_party/mongoose -DMG_TLS=MG_TLS_BUILTIN
 override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes \
                  -Wshadow -Wpointer-arith -Wwrite-strings
-MG_FLAGS := -DMG_TLS=0 -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=262144
+MG_FLAGS := -DMG_ENABLE_PACKED_FS=0 -DMG_MAX_RECV_SIZE=262144
 LDLIBS  += -lmnl
 
 PROV := prov.o prov_file.o prov_net.o prov_mtd.o prov_netlink.o prov_settings.o \
-        prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o
+        prov_identity.o prov_firmware.o prov_omci.o prov_system.o table.o tls.o cert.o
 OBJS := $(addprefix $(BUILD)/src/,pond.o auth.o changes.o firmware.o mgmt.o $(PROV)) $(BUILD)/mongoose.o
 
 .PHONY: all check clean
@@ -64,7 +65,7 @@ $(BUILD)/tests/test_prov.o: tests/test_prov.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
 
 $(BUILD)/test_prov: $(BUILD)/tests/test_prov.o $(addprefix $(BUILD)/src/,$(PROV) bus-file.o) \
-		    $(BUILD)/act.o
+		    $(BUILD)/act.o $(BUILD)/mongoose.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BUILD)/tests/test_auth.o: tests/test_auth.c
@@ -75,6 +76,13 @@ $(BUILD)/test_auth: $(BUILD)/tests/test_auth.o $(addprefix $(BUILD)/src/,auth.o 
 		    $(BUILD)/mongoose.o $(BUILD)/act.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(BUILD)/tests/test_cert.o: tests/test_cert.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) -c -o $@ $<
+
+$(BUILD)/test_cert: $(BUILD)/tests/test_cert.o $(BUILD)/src/cert.o $(BUILD)/mongoose.o
+	$(CC) $(LDFLAGS) -o $@ $^
+
 # The settings' rules are onu-config's, of onu-utils (ADR 0014): the tests of the
 # settings run it, built here from its sources.
 ONU_CONFIG_SRC := $(addprefix $(ONU_UTILS)/src/,onu-config.c cfgstore.c settings.c password.c sha256.c)
@@ -83,7 +91,7 @@ $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) -I$(ONU_UTILS)/src $(CFLAGS) $(WARN) -o $@ $(ONU_CONFIG_SRC) -lz -lcrypt
 
-check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onu-config
+check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_cert $(BUILD)/onu-config
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
 	POND_ROOT=$(abspath $(BUILD))/fixtures ONU_ROOT=$(abspath $(BUILD))/fixtures \
@@ -92,6 +100,18 @@ check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/onu-con
 	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
 	POND_ROOT=$(abspath $(BUILD))/auth ONU_ROOT=$(abspath $(BUILD))/auth \
 		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config $(BUILD)/test_auth
+	# The certificate, read by OpenSSL: its signature and its fingerprint;
+	# then the daemon over HTTPS.
+	rm -rf $(BUILD)/tls && mkdir -p $(BUILD)/tls
+	$(BUILD)/test_cert $(BUILD)/tls
+	openssl x509 -inform DER -in $(BUILD)/tls/cert.der -out $(BUILD)/tls/cert.pem
+	openssl verify -check_ss_sig -partial_chain -trusted $(BUILD)/tls/cert.pem $(BUILD)/tls/cert.pem
+	test "$$(openssl x509 -in $(BUILD)/tls/cert.pem -noout -fingerprint -sha256 | cut -d= -f2)" = \
+		"$$(cat $(BUILD)/tls/cert.fp)"
+	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
+	POND_ROOT=$(abspath $(BUILD))/auth ONU_ROOT=$(abspath $(BUILD))/auth \
+		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
+		python3 tests/test_tls.py $(abspath $(BUILD))/pond-none $(abspath $(BUILD))/tls
 
 clean:
 	rm -rf $(BUILD)

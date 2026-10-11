@@ -12,10 +12,10 @@
 #include "bus.h"
 #include "mgmt.h"
 #include "prov.h"
+#include "tls.h"
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* onu-mgmt's @method through onu-act, with no values. */
@@ -82,19 +82,6 @@ static void unlisten(struct mg_mgr *mgr, const char *cidr)
 		}
 }
 
-static void listen_on(struct mg_mgr *mgr, const char *cidr, unsigned int port,
-		      mg_event_handler_t fn)
-{
-	char url[64];
-	size_t n = strcspn(cidr, "/");
-
-	snprintf(url, sizeof(url), "http://%.*s:%u", (int)n, cidr, port);
-	if (mg_http_listen(mgr, url, fn, NULL))
-		fprintf(stderr, "pond: listening on %s\n", url);
-	else
-		fprintf(stderr, "pond: cannot listen on %s\n", url);
-}
-
 static void reply(struct mg_connection *c, int code, const char *error, const char *detail)
 {
 	if (code == 200)
@@ -107,7 +94,6 @@ static void reply(struct mg_connection *c, int code, const char *error, const ch
 void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_handler_t fn)
 {
 	char vlan[8], address[24], flag[4], text[512], pending[24], current[24], out[256];
-	unsigned int port = mg_ntohs(c->loc.port);
 
 	if (run("mgmt_status", text, sizeof(text))) {
 		reply(c, 500, "mgmt", "the management pair cannot be read");
@@ -132,7 +118,7 @@ void mgmt_set(struct mg_connection *c, struct mg_http_message *hm, mg_event_hand
 			return;
 		}
 		if (strcmp(address, current))
-			listen_on(c->mgr, address, port, fn);
+			tls_listen(c->mgr, address, fn);
 		reply(c, 200, NULL, NULL);
 	} else if (line_value(hm->body, "COMMIT", flag, sizeof(flag))) {
 		struct mg_addr a;
@@ -190,12 +176,12 @@ void mgmt_settle(struct mg_mgr *mgr, const char *current, const char *pending)
 		unlisten(mgr, pending);
 }
 
-void mgmt_resume(struct mg_mgr *mgr, const char *port, mg_event_handler_t fn)
+void mgmt_resume(struct mg_mgr *mgr, mg_event_handler_t fn)
 {
 	char text[512], pending[24];
 
 	if (run("mgmt_status", text, sizeof(text)) ||
 	    !status_value(text, "PENDING_ADDRESS", pending, sizeof(pending)))
 		return;
-	listen_on(mgr, pending, (unsigned int)atoi(port), fn);
+	tls_listen(mgr, pending, fn);
 }

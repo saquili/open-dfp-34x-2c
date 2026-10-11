@@ -4,8 +4,9 @@
 /*
  * A change of the management VLAN and address (mgmt.c): POST /api/set/mgmt
  * with VLAN and ADDRESS adds the new pair beside the old one and listens on
- * it; COMMIT=1, which only a request that came to the new address may send,
- * makes it the pair in use; CANCEL=1 takes it away.
+ * it, with each scheme and port of the address in use (tls.h); COMMIT=1,
+ * which only a request that came to the new address may send, makes it the
+ * pair in use; CANCEL=1 takes it away.
  */
 
 #ifndef POND_MGMT_H
@@ -28,7 +29,10 @@ bool mgmt_addresses(char *current, char *pending, size_t cap);
  */
 void mgmt_settle(struct mg_mgr *mgr, const char *current, const char *pending);
 
-/* After a restart in the middle of a change: listen on the new address too. */
-void mgmt_resume(struct mg_mgr *mgr, const char *port, mg_event_handler_t fn);
+/*
+ * After a restart in the middle of a change: listen on the new address too,
+ * with each scheme and port of the others (tls.h).
+ */
+void mgmt_resume(struct mg_mgr *mgr, mg_event_handler_t fn);
 
 #endif

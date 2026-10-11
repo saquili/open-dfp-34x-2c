@@ -13,11 +13,17 @@ serves the panel, a single-page app in ``web/``, as static files.
 
 ::
 
-   pond [-l http://ADDRESS:PORT]... [-t TOKENFILE] [-w WEBDIR]
+   pond [-l http[s]://ADDRESS:PORT]... [-k KEYFILE] [-t TOKENFILE] [-w WEBDIR]
+   pond -k KEYFILE -F ADDRESS
 
 Each ``-l`` adds an address to listen on, up to four; with none, the daemon
 listens on port 8080 of every address. An address it cannot listen on is
-reported and left out, and the daemon ends only when it listens on none.
+reported and left out, and the daemon ends only when it listens on none. An
+``https://`` address needs the key of ``-k`` (see "HTTPS"); ``-F`` prints the
+fingerprint of the certificate of an address, and the end of its validity,
+and ends. On the stick ``onu-run`` starts it on the management address, and
+on the address of the host link if there is one, each over HTTPS on port 443
+and over HTTP on port 80.
 
 What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0014) rather than run the program itself: the SFP lane, the management pair,
@@ -56,8 +62,9 @@ the next sign-in. A hash of the form pond made before, PBKDF2-HMAC-SHA256
 (``pbkdf2-sha256$...``), is still taken, and the first sign-in with it has
 ``onu-config`` keep the password in ``crypt()``'s form, which the console and
 ssh take too. A sign-in opens a session: a random 128-bit id in an ``HttpOnly``,
-``SameSite=Strict`` cookie (``Secure`` behind a proxy that says HTTPS). There
-are at most three; a fourth sign-in ends the one idle the longest, and a
+``SameSite=Strict`` cookie (``Secure`` over HTTPS, the daemon's own or a
+proxy's that says so). There are at most three; a fourth sign-in ends the one
+idle the longest, and a
 session ends after 15 minutes without a request or 12 hours in all. Five wrong
 passwords in a row stop sign-ins for 30 seconds (429, with ``Retry-After``). A
 change of password ends every other session.
@@ -66,6 +73,45 @@ A change made in a session must carry the header ``X-Pond``, which a page of
 another site cannot add, so a forged form changes nothing. Scripts may present
 the bearer token of the token file (``/etc/pond.token`` by default) instead of
 a session.
+
+HTTPS
+=====
+
+With an ``https://`` address, the daemon serves the panel and its API over
+TLS 1.3, with Mongoose's own TLS, and an ``http://`` address only sends the
+browser on: a request comes back as a 308 to the same host and path over
+HTTPS, before its body is read, so that a password never crosses the link in
+the clear. ``/api/health`` alone still answers over HTTP, for onu-trial, which
+asks it whether the daemon of a new firmware runs. No
+``Strict-Transport-Security`` is sent: with a certificate no authority signed,
+it would keep a browser from letting its user go on.
+
+The key, the file of ``-k``, is a scalar of the curve P-256 in 64 hexadecimal
+digits, which onu-config made once on the stick and keeps in the
+configuration store (``TLS_KEY``, ``onu-config tls``); the boot script gives
+the daemon a copy only it reads. From it the daemon makes, for each address
+it answers on, a certificate (``src/cert.c``): X.509 version 3, the common
+name ``ONU`` and the address, the address as the subject's alternative name,
+for TLS servers and not a CA, signed by its own key with ECDSA and SHA-256.
+The signature is deterministic (RFC 6979) and nothing else in it changes from
+one start to the next, so the same key and address give the same
+certificate, and the same fingerprint, for as long as it is valid. The
+validity follows a calendar of two-year periods from 2026-01-01: each
+certificate is valid for 825 days from the start of its period, the most
+that Apple's systems take, so that two periods overlap by three months, and
+a clock that has not been set yet, before 2026, counts as the first period.
+The panel shows the fingerprint of the address it was opened at (``tls``,
+below), and the boot script prints the one of the management address on the
+console, for a person to compare with the browser's.
+
+Mongoose's TLS, of version 7.16, is changed in three places, each marked in
+``third_party/mongoose/mongoose.c``: ChaCha20 takes the byte order from the
+compiler, as the C library defines ``LITTLE_ENDIAN`` on the big-endian stick
+too, where every record came out wrong; the signature of its
+CertificateVerify message is encoded as DER asks, without the leading zeros
+that made OpenSSL, and BoringSSL with it, refuse about one handshake in 128;
+and a malformed key ends the connection rather than leaving it a key of the
+wrong bytes.
 
 Routes
 ======
@@ -158,7 +204,9 @@ Among the values read only: ``cpu``, the processor's clock ticks in each state
 unit and its services, every attribute of each in hexadecimal and the rows of
 its tables, and omcid's counts of the frames: omcid's answer on ubus (method
 ``mib`` of the object ``omcid``), which never gives the ONU-G's logical
-password, only whether one is set.
+password, only whether one is set; ``tls``, whether the daemon serves HTTPS
+and, for each address it does, the port, the certificate's SHA-256 as
+browsers show it and the start and end of its validity.
 
 The panel
 =========
@@ -207,8 +255,18 @@ password, and check the default password, the stop after wrong passwords,
 the end of sessions, a change of password and a hash of the older form that
 a sign-in replaces; onu-utils tests the hashes themselves.
 
+The tests of HTTPS write a certificate that OpenSSL then reads, its signature
+and its fingerprint (``tests/test_cert.c``), and run the daemon with a key on
+two addresses of the loopback, one over HTTPS and one over HTTP, which
+``tests/test_tls.py`` reaches with Python's ssl module, OpenSSL too: the
+handshake, the certificate, a hundred handshakes in a row, the cookie, the
+redirect and the refusals; ``openssl`` is needed for them.
+
 The HTTP layer is Mongoose 7.16 by Cesanta Software, in
 ``third_party/mongoose``, used under the GNU General Public License version 2,
-one of the two licences it is offered under, and built as it comes. It holds
+one of the two licences it is offered under, and built with its own TLS,
+changed as "HTTPS" says. The tests run on the build machine, little-endian:
+the byte order of the stick's own is tried on the stick (``tests/device``,
+``mgmt.pond-https``). It holds
 micro-ecc by Kenneth MacKay, for its TLS, under the BSD 2-clause licence, whose
 notice goes with the binary too (``LICENSES/preferred/BSD-2-Clause.txt``).

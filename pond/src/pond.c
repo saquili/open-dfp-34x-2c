@@ -21,8 +21,9 @@
  *   /api/firmware/try      a POST: start a bank once, by a restart
  *                          (firmware.c)
  *
- * Every other route of /api needs a session (auth.h) or the bearer token of
- * /etc/pond.token, for scripts. A change made in a session must carry the
+ * Over HTTPS (tls.h), a request that comes over HTTP is sent on to the same
+ * path over HTTPS, but for /api/health. Every other route of /api needs a
+ * session (auth.h) or the bearer token of /etc/pond.token, for scripts. A change made in a session must carry the
  * header X-Pond, which a page of another site cannot add, and while the
  * default password is in force a session may only change it. Every other
  * path is the panel: the static files of the web directory, the hashed
@@ -36,6 +37,7 @@
 #include "mgmt.h"
 #include "prov.h"
 #include "providers.h"
+#include "tls.h"
 
 #include "mongoose.h"
 
@@ -60,6 +62,7 @@
 static const char *g_listen[POND_LISTEN_MAX];
 static int g_nlisten;
 static const char *g_tokenf = "/etc/pond.token";
+static const char *g_keyf;
 static const char *g_web = "/usr/share/pond/www";
 static char g_token[128];
 static volatile sig_atomic_t g_stop;
@@ -336,11 +339,13 @@ static void cookie_session(struct mg_http_message *hm, char id[AUTH_ID_LEN + 1])
 	}
 }
 
-/* Secure when the router's proxy says the browser came in over HTTPS. */
-static const char *cookie_secure(struct mg_http_message *hm)
+/* Secure over HTTPS, the daemon's own or a proxy's that says so. */
+static const char *cookie_secure(struct mg_connection *c, struct mg_http_message *hm)
 {
 	const struct mg_str *p = mg_http_get_header(hm, "X-Forwarded-Proto");
 
+	if (c->is_tls)
+		return "; Secure";
 	return p && !mg_strcmp(*p, mg_str("https")) ? "; Secure" : "";
 }
 
@@ -413,7 +418,7 @@ static void api_login(struct mg_connection *c, struct mg_http_message *hm)
 	}
 	snprintf(cookie, sizeof(cookie),
 		 "Set-Cookie: pond_sid=%s; Path=/; HttpOnly; SameSite=Strict%s\r\n",
-		 id, cookie_secure(hm));
+		 id, cookie_secure(c, hm));
 	reply_session(c, cookie);
 }
 
@@ -530,14 +535,23 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 	struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 	struct mg_str caps[2];
 
-	/* An upload is taken as its headers come, before its body. */
+	if (ev == MG_EV_ACCEPT) {
+		tls_accept(c);
+		return;
+	}
+	/*
+	 * An upload is taken as its headers come, before its body; a request
+	 * over HTTP, while there is HTTPS, is sent on before its body too.
+	 */
 	if (ev == MG_EV_HTTP_HDRS) {
-		if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL) &&
-		    !mg_strcmp(hm->method, mg_str("POST")) && upload_admitted(c, hm))
+		if (!mg_match(hm->uri, mg_str("/api/health"), NULL) && tls_redirect(c, hm))
+			c->is_draining = 1;
+		else if (mg_match(hm->uri, mg_str("/api/firmware/upload"), NULL) &&
+			 !mg_strcmp(hm->method, mg_str("POST")) && upload_admitted(c, hm))
 			firmware_upload(c, hm);
 		return;
 	}
-	if (ev != MG_EV_HTTP_MSG)
+	if (ev != MG_EV_HTTP_MSG || c->is_draining)
 		return;
 
 	if (mg_match(hm->uri, mg_str("/api/health"), NULL)) {
@@ -648,7 +662,8 @@ static void load_token(void)
 int main(int argc, char **argv)
 {
 	struct mg_mgr mgr;
-	int listening = 0;
+	const char *print_for = NULL;
+	int listening;
 	int i;
 
 	for (i = 1; i < argc; i++) {
@@ -657,14 +672,26 @@ int main(int argc, char **argv)
 			g_listen[g_nlisten++] = argv[++i];
 		else if (!strcmp(argv[i], "-t") && i + 1 < argc)
 			g_tokenf = argv[++i];
+		else if (!strcmp(argv[i], "-k") && i + 1 < argc)
+			g_keyf = argv[++i];
+		else if (!strcmp(argv[i], "-F") && i + 1 < argc)
+			print_for = argv[++i];
 		else if (!strcmp(argv[i], "-w") && i + 1 < argc)
 			g_web = argv[++i];
 		else {
 			fprintf(stderr,
-				"usage: %s [-l http://addr:port]... [-t tokenfile] [-w webdir]\n",
-				argv[0]);
+				"usage: %s [-l http[s]://addr:port]... [-k keyfile] [-t tokenfile] [-w webdir]\n"
+				"       %s -k keyfile -F address\n",
+				argv[0], argv[0]);
 			return 2;
 		}
+	}
+
+	/* The boot script's line for the console: the certificate of an address. */
+	if (print_for) {
+		if (!g_keyf || tls_setup(NULL, g_keyf, NULL, 0))
+			return 1;
+		return tls_print(print_for, time(NULL));
 	}
 
 	signal(SIGINT, on_signal);
@@ -685,27 +712,17 @@ int main(int argc, char **argv)
 	load_token();
 	auth_init();
 	mg_mgr_init(&mgr);
+	if (tls_setup(&mgr, g_keyf, g_listen, g_nlisten))
+		return 1;
 	/*
 	 * An address that is missing costs only its own listener: the others
 	 * still serve, and only when none does is there no daemon.
 	 */
-	for (i = 0; i < g_nlisten; i++) {
-		if (!mg_http_listen(&mgr, g_listen[i], handler, NULL)) {
-			fprintf(stderr, "pond: cannot listen on %s\n",
-				g_listen[i]);
-			continue;
-		}
-		fprintf(stderr, "pond: listening on %s\n", g_listen[i]);
-		listening++;
-	}
+	listening = tls_listen_all(&mgr, handler);
 	if (!listening)
 		return 1;
 	/* A change of the management pair that waits: its address answers too. */
-	{
-		const char *colon = strrchr(g_listen[0], ':');
-
-		mgmt_resume(&mgr, colon ? colon + 1 : "8080", handler);
-	}
+	mgmt_resume(&mgr, handler);
 	fprintf(stderr, "pond: %s; %s\n",
 		strlen(g_token) ? "token loaded" : "no token for scripts",
 		auth_default_password() ? "the default password is in force" :
