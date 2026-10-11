@@ -7418,3 +7418,7 @@ void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p)
 	debugfs_create_file("l3capture", 0600, p->debugfs, p,
 			    &rtl9602c_l3capture_fops);
 }
+
+#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_KUNIT_TEST)
+#include "rtl9602c-offload-test.c"
+#endif

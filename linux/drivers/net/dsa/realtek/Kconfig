@@ -129,3 +129,14 @@ config NET_DSA_RTL9602C_PLOAM_INJECT
 	  option is for test images, not for an ONU in service.
 
 	  If unsure, say N.
+
+config NET_DSA_RTL9602C_KUNIT_TEST
+	bool "KUnit tests of the Realtek RTL9602C switch driver" if !KUNIT_ALL_TESTS
+	depends on NET_DSA_RTL9602C && KUNIT=y
+	default KUNIT_ALL_TESTS
+	help
+	  Build the KUnit tests of the driver's pure functions, the NAPT
+	  hashes and the fields of the L3/NAT engine's table entries, into
+	  the driver. They run when the driver is loaded.
+
+	  If unsure, say N.
