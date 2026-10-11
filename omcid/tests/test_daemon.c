@@ -211,6 +211,31 @@ static void check_output(struct rig *g)
 	CHECK_MEM(g_out, g_ref, len < g_ref_n ? len : g_ref_n);
 }
 
+/* A log appended to a file is cut once it passes 256 KiB. */
+static void test_the_log_is_cut_when_full(void)
+{
+	char path[160];
+	struct stat st;
+	int fd, saved;
+
+	snprintf(path, sizeof(path), "%s/log", g_dir);
+	fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_TRUNC, 0600);
+	CHECK(fd >= 0);
+	if (fd < 0)
+		return;
+	fflush(stderr);
+	saved = dup(2);
+	(void)dup2(fd, 2);
+	for (int i = 0; i < 4000; i++)
+		OMCI_INFO("a line of the log that is long enough to fill it soon, %d", i);
+	fflush(stderr);
+	(void)dup2(saved, 2);
+	(void)close(saved);
+	(void)close(fd);
+	CHECK(stat(path, &st) == 0 && st.st_size > 0 && st.st_size <= 256 * 1024 + 256);
+	(void)unlink(path);
+}
+
 static void test_end_of_input(void)
 {
 	struct rig g;
@@ -1048,6 +1073,7 @@ int main(void)
 	snprintf(g_keep, sizeof(g_keep), "%s/mib", g_dir);
 	make_frames();
 
+	RUN(test_the_log_is_cut_when_full);
 	RUN(test_end_of_input);
 	RUN(test_signal_stops_the_loop);
 	RUN(test_signals_change_the_mode);

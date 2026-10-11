@@ -6,8 +6,19 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "sys/log.h"
+
+/*
+ * On the stick the log is a file in memory, /run/omcid.log, which the
+ * daemon's standard error is appended to (onu-run). Past OMCI_LOG_MAX bytes
+ * it is cut back to nothing, with a line that says so, so that a long life
+ * of the OLT's changes cannot fill the memory; a log that is no file, a
+ * terminal or a pipe, is left alone.
+ */
+#define OMCI_LOG_MAX (256 * 1024)
 
 static enum omci_log_level g_level = OMCI_LOG_INFO;
 
@@ -43,4 +54,11 @@ void omci_log__emit(enum omci_log_level level, const char *file, int line,
 	va_end(ap);
 
 	fputc('\n', stderr);
+
+	struct stat st;
+
+	if (fstat(STDERR_FILENO, &st) == 0 && S_ISREG(st.st_mode) &&
+	    st.st_size > OMCI_LOG_MAX && ftruncate(STDERR_FILENO, 0) == 0)
+		fprintf(stderr, "[INF] log.c: the log passed %d bytes and was cut\n",
+			OMCI_LOG_MAX);
 }
