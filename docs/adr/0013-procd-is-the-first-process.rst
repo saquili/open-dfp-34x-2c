@@ -1,9 +1,9 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 .. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
-====================================================================
+=====================================================================
 ADR 0013: procd is the first process and watches the stick's programs
-====================================================================
+=====================================================================
 
 :Status: Accepted, amended by 0014 (pppoed under netifd, omcid's MIB kept)
 :Date: 2026-10-10
