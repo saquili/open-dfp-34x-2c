@@ -1735,6 +1735,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	err = rtl9602c_i2c_register(p);
 	if (err)
 		pr_warn("i2c master not registered: %d\n", err);
+	rtl9602c_optics_identify(p);
 
 	err = rtl9602c_optics_hwmon_register(p);
 	if (err)

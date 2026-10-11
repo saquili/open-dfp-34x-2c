@@ -39,7 +39,9 @@ The optics have no driver of their own. The code is part of the switch driver,
 The driver writes nothing to the laser driver at probe or at setup. Its only
 writes are those of the modulation hold, at PON bring-up, those a read of the
 ``tables`` view makes and those a write to ``t2write`` asks for, and
-``CONFIG_RTL9602C_OPTICS_RO`` removes all three. The connections::
+``CONFIG_RTL9602C_OPTICS_RO`` removes all three. So does a module that does not
+declare itself as one the driver was measured on (see "The modules the driver
+writes"). The connections::
 
     RTL9602C                               laser-driver IC
     +---------------+                      +------------------------+
@@ -229,7 +231,8 @@ Interfaces to user space
   ``ip link set pon up`` and ``ip link set pon down`` are the commands that
   move it (see "TX_DISABLE").
 - ``ip link set pon up`` also runs the modulation hold, unless
-  ``CONFIG_RTL9602C_OPTICS_RO`` is set (see "The modulation hold").
+  ``CONFIG_RTL9602C_OPTICS_RO`` is set or the module is not one the driver
+  writes (see "The modulation hold" and "The modules the driver writes").
 - The kernel log lines of the optics, which begin with ``rtl9602c-switch:``
   (see "Logging").
 - The optics have no module parameters, devlink parameters or ethtool
@@ -583,7 +586,8 @@ What the driver reads and writes of the part:
      - Read by
      - Written by
    * - ``0x50`` (A0h), bytes 0-255
-     - The ``eeblocks`` view.
+     - The ``eeblocks`` view; bytes 20-35 and 40-55 once at probe (see "The
+       modules the driver writes").
      - Nothing in the driver.
    * - ``0x51`` (A2h), bytes 0-127
      - The ``a2`` view; the hwmon device reads bytes 0-39 and 96-105 only.
@@ -1184,8 +1188,8 @@ defined in ``rtl9602c-optics.c``):
        clear would settle it. Not load-bearing while the step stays.
 
 The hold runs at ``ip link set pon up``, after the GPON MAC reset and before the
-first O3. With ``CONFIG_RTL9602C_OPTICS_RO`` it returns at once and writes
-nothing. Its steps:
+first O3. With ``CONFIG_RTL9602C_OPTICS_RO``, or for a module the driver does
+not write, it returns at once and writes nothing. Its steps:
 
 1. Write ``0xff`` to A2h bytes 123, 124, 125 and 126. Purpose: prepare the table
    before it is shown. (I)
@@ -1356,6 +1360,45 @@ Setting a level (``rtl9602c_optics_level_work()``, queued by the GPON code):
    tell the GPON code what was set, which declares it in Serial_Number_ONU.
    (T)
 
+The modules the driver writes
+=============================
+
+At probe, once the master is enabled, ``rtl9602c_optics_identify()`` reads the
+vendor name (A0h bytes 20-35) and the vendor part number (A0h bytes 40-55) the
+module declares, the header the host reads through the SFP cage, and drops the
+trailing spaces. The driver writes the laser driver only when the name is
+``ODI`` and the part number begins with ``DFP-34X-2C``, the module this page
+was measured on. For any other module, and when the header cannot be read, the
+driver behaves as the read-only build below, without the build option: the
+modulation hold returns at once, ``rtl9602c_l_write()`` and the I2C adapter
+refuse writes with ``-EPERM``, no transmit power level is set, and the log has
+one line at probe (see "Logging").
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Claim
+     - Kind
+     - Checked by
+   * - The header is that of the module, not of its laser driver; no
+       register that identifies the laser driver is known, so the module that
+       was measured stands for the laser driver it carries.
+     - I
+     - A module of the same vendor name and part number with another laser
+       driver would be written as this one.
+   * - The header can be rewritten (A0h bytes 0-127 take writes without a
+       password, see "Known limitations"). A module whose header was changed
+       to another name is taken for an unknown one, and one changed to this
+       module's name is written.
+     - I
+     - The driver reads the header once, at probe; a change takes effect at
+       the next boot.
+   * - The module this page was measured on reads ``ODI`` and
+       ``DFP-34X-2C3``.
+     - M
+     - The ``eeblocks`` view, A0h bytes 20-35 and 40-55.
+
 The read-only build
 ===================
 
@@ -1406,6 +1449,12 @@ device.
      - ``i2c master not registered: <error>``
    * - Setup, no hwmon device
      - ``no optical diagnostics: <error>``
+   * - Setup, the module is not one the driver writes
+     - ``optics: module "<vendor name>" "<part number>" is not one the driver
+       was measured on; the laser driver is only read``
+   * - Setup, the module's header cannot be read
+     - ``optics: the module's header could not be read (<error>); the laser
+       driver is only read``
    * - Bring-up, the hold succeeded
      - ``GN25L95: modulation held at <m>.<d> mA (modulation DAC <hhhh>, the
        module's calibration); automatic ER <hh> -> <hh>``. When bits 3:2 of
@@ -1446,8 +1495,11 @@ end of a step is the tag of the fact the step rests on (see the tables above).
    the hwmon device. (M)
 3. Set ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
    read-modify-write, and register the master as the adapter ``rtl9602c i2c``.
-   Purpose: without the enable the master ignores every command. (M for the
-   enable, I for the adapter)
+   Then read the module's vendor name and part number, and with them whether
+   the driver writes the laser driver (see "The modules the driver writes").
+   Purpose: without the enable the master ignores every command; a module the
+   driver was not measured on is only read. (M for the enable, I for the
+   adapter and for the module standing for its laser driver)
 4. Read the temperature word once (A2h bytes 96 and 97). If it reads, register
    the hwmon device ``rtl9602c_optics``; if not, log ``no optical diagnostics``
    and go on. Purpose: no device appears when nothing answers at A2h. (M)
@@ -1470,8 +1522,8 @@ directory, which switch teardown removes.
 Known limitations
 =================
 
-- Without ``CONFIG_RTL9602C_OPTICS_RO`` the I2C adapter passes every write on,
-  and A0h and A2h bytes 0-127 take writes without a password and keep them
+- Without ``CONFIG_RTL9602C_OPTICS_RO``, for a module the driver writes, the
+  I2C adapter passes every write on, and A0h and A2h bytes 0-127 take writes without a password and keep them
   across a power cycle of the module, so a client of the adapter can change the
   module for good. User space reaches the adapter through ``i2c-dev`` where
   ``CONFIG_I2C_CHARDEV`` is set.
@@ -1480,11 +1532,12 @@ Known limitations
   kernel takes that level for the module's own until the module loses power
   (see "Transmit power levelling"). The extinction ratio at the lower levels
   is not measured.
-- Each PON bring-up writes bytes that the module keeps. Before it has read
-  PERSIST, the modulation hold writes ``0xff`` to A2h bytes 123 to 126 and
-  ``02h`` to byte 127, and at the end it writes the old value back to byte 127:
-  six byte writes. Whether the part skips rewriting a byte that already holds
-  the value is not known, so the wear of the EEPROM is unmeasured.
+- Each PON bring-up writes bytes that the module may keep. Before it has read
+  PERSIST, the modulation hold writes ``0xff`` to A2h bytes 123 to 126, and
+  ``02h`` to byte 127 only when that holds another page, which it puts back at
+  the end: four byte writes while byte 127 holds ``02h``, as it does at rest on
+  this board. Whether the part stores the password bytes, which read back
+  ``00h``, is not known, so the wear of the EEPROM is unmeasured.
 
 Open questions
 ==============

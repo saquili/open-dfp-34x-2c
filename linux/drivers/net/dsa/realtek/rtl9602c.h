@@ -3315,6 +3315,12 @@ struct rtl9602c_priv {
 	/** @optics_ref: @optics_apcset0 and @optics_mod0 are known */
 	bool			optics_ref;
 	/**
+	 * @optics_known: the module declares itself as one whose laser driver
+	 * the driver writes (rtl9602c_optics_identify()); without it the
+	 * driver only reads the laser driver
+	 */
+	bool			optics_known;
+	/**
 	 * @optics_t2_open: table 2 is open for storing through the debugfs
 	 * entry t2write, which keeps @optics_t2_eectl and @optics_t2_tabsel,
 	 * EEPROM_CTRL and the page select as found; under i2c_lock
@@ -3616,6 +3622,7 @@ void rtl9602c_gpon_work(struct work_struct *w);
 void rtl9602c_gpon_irq(struct rtl9602c_priv *p);
 int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg, u8 *val);
 int rtl9602c_i2c_register(struct rtl9602c_priv *p);
+void rtl9602c_optics_identify(struct rtl9602c_priv *p);
 void rtl9602c_l2_clear(struct rtl9602c_priv *p);
 int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on);
 int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port);

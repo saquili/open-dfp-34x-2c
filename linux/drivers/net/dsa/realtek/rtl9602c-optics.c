@@ -23,7 +23,9 @@
  * write to the part of its own accord, return without writing, and the adapter refuse every
  * write with -EPERM, so that nothing on the board changes the module.  The
  * hwmon device and the debugfs views stay as they are, since they only
- * read.
+ * read.  A module that does not declare itself as one this file was
+ * measured on gets the same treatment, without the build option
+ * (rtl9602c_optics_identify()).
  *
  * The hwmon reads, the debugfs views, the modulation hold and clients of
  * the adapter all drive the same registers, and the hwmon core and the I2C
@@ -176,7 +178,7 @@ static s32 rtl9602c_i2c_smbus_xfer(struct i2c_adapter *adap, u16 addr,
 	if (size != I2C_SMBUS_BYTE_DATA)
 		return -EOPNOTSUPP;
 	if (read_write != I2C_SMBUS_READ &&
-	    IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+	    (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_known))
 		return -EPERM;
 
 	mutex_lock(&p->i2c_lock);
@@ -204,7 +206,8 @@ static const struct i2c_algorithm rtl9602c_i2c_algo = {
  *
  * Enables the master and registers it as the SMBus adapter "rtl9602c i2c".
  * The driver itself reaches the part without going through the adapter.
- * With CONFIG_RTL9602C_OPTICS_RO the adapter refuses every write from its
+ * With CONFIG_RTL9602C_OPTICS_RO, or for a module the driver does not write
+ * (rtl9602c_optics_identify()), the adapter refuses every write from its
  * clients.
  *
  * Return: 0 or a negative error code.
@@ -271,6 +274,79 @@ int rtl9602c_l_read(struct rtl9602c_priv *p, u16 reg, u8 *val)
 }
 
 /*
+ * The modules whose laser driver this file writes: those it was measured on,
+ * by the vendor name (A0h bytes 20-35) and the start of the vendor part
+ * number (A0h bytes 40-55) they declare, the header the host reads through
+ * the SFP cage.  The header describes the module, not its laser driver, for
+ * which no identification register is known; the module it names was
+ * measured with the laser driver this file describes.  The header can be
+ * rewritten: a module whose header was changed is taken for an unknown one.
+ */
+static const struct {
+	const char *name;
+	const char *part;
+} rtl9602c_optics_modules[] = {
+	{ "ODI", "DFP-34X-2C" },
+};
+
+/* Read the @len-byte space-padded ASCII field at @reg into @out. */
+static int rtl9602c_optics_field(struct rtl9602c_priv *p, u16 reg, char *out,
+				 size_t len)
+{
+	size_t i;
+	u8 c;
+	int err;
+
+	for (i = 0; i < len; i++) {
+		err = rtl9602c_l_read(p, reg + i, &c);
+		if (err)
+			return err;
+		out[i] = c >= 0x20 && c < 0x7f ? c : '?';
+	}
+	out[len] = '\0';
+	strim(out);
+	return 0;
+}
+
+/**
+ * rtl9602c_optics_identify() - tell whether the driver may write the laser driver
+ * @p: driver state
+ *
+ * Reads the vendor name and part number the module declares and sets
+ * &rtl9602c_priv.optics_known when they are those of a module in
+ * rtl9602c_optics_modules.  For any other module, or when the header
+ * cannot be read, the driver only reads the laser driver: the modulation
+ * hold writes nothing and the adapter refuses writes, as with
+ * CONFIG_RTL9602C_OPTICS_RO.  Called once, after the master is enabled.
+ */
+void rtl9602c_optics_identify(struct rtl9602c_priv *p)
+{
+	char name[17], part[17];
+	unsigned int i;
+	int err;
+
+	mutex_lock(&p->i2c_lock);
+	err = rtl9602c_optics_field(p, 20, name, 16) ?:
+	      rtl9602c_optics_field(p, 40, part, 16);
+	mutex_unlock(&p->i2c_lock);
+	if (err) {
+		pr_warn("optics: the module's header could not be read (%pe); the laser driver is only read\n",
+			ERR_PTR(err));
+		return;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(rtl9602c_optics_modules); i++) {
+		if (!strcmp(name, rtl9602c_optics_modules[i].name) &&
+		    strstarts(part, rtl9602c_optics_modules[i].part)) {
+			p->optics_known = true;
+			return;
+		}
+	}
+	pr_info("optics: module \"%s\" \"%s\" is not one the driver was measured on; the laser driver is only read\n",
+		name, part);
+}
+
+/*
  * A0h and A2h bytes 0-127 take writes without a password and keep them
  * across a power cycle of the module: a write there is a permanent change
  * to it.  Of those bytes the driver writes only A2h 123-127: the password,
@@ -283,6 +359,8 @@ static int rtl9602c_l_write(struct rtl9602c_priv *p, u16 reg, u8 val)
 	u8 sub;
 	int err;
 
+	if (!p->optics_known)
+		return -EPERM;
 	err = rtl9602c_l_addr(reg, &slave, &sub);
 	if (err)
 		return err;
@@ -949,7 +1027,8 @@ told:
  * MAC reset and before the first O3 to turn the loop off, so that the
  * modulation runs from the value the module loaded at power-up.  Whether
  * activation needs this is not verified; the bring-up logs a failure and
- * carries on.  With CONFIG_RTL9602C_OPTICS_RO this returns 0 at once and
+ * carries on.  With CONFIG_RTL9602C_OPTICS_RO, or for a module the driver
+ * does not write (rtl9602c_optics_identify()), this returns 0 at once and
  * writes nothing.
  *
  * The table change stays in registers, kept out of the EEPROM by PERSIST:
@@ -1087,7 +1166,7 @@ out:
 
 int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 {
-	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
+	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_known)
 		return 0;
 
 	guard(mutex)(&p->i2c_lock);
