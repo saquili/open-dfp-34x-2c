@@ -20498,6 +20498,7 @@ PON ONU CLASS
 M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
+F:	Documentation/ABI/testing/sysfs-class-pon
 F:	Documentation/netlink/specs/pon.yaml
 F:	Documentation/networking/pon.rst
 F:	drivers/net/pon/

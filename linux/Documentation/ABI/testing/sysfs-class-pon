@@ -1,0 +1,44 @@
+What:		/sys/class/pon/pon<N>omci0/statistics/rx_messages
+Date:		October 2026
+KernelVersion:	6.18
+Contact:	netdev@vger.kernel.org
+Description:
+		(RO) Number of OMCI messages from the OLT queued for the reader of
+		the port's character device.
+		See Documentation/networking/pon.rst.
+
+What:		/sys/class/pon/pon<N>omci0/statistics/rx_dropped
+Date:		October 2026
+KernelVersion:	6.18
+Contact:	netdev@vger.kernel.org
+Description:
+		(RO) Number of OMCI messages from the OLT dropped because the
+		port's character device was not open, or because its reader
+		was 64 messages behind.
+		See Documentation/networking/pon.rst.
+
+What:		/sys/class/pon/pon<N>omci0/statistics/rx_discarded
+Date:		October 2026
+KernelVersion:	6.18
+Contact:	netdev@vger.kernel.org
+Description:
+		(RO) Number of OMCI messages from the OLT still waiting for the
+		reader when the OMCI channel went down, and discarded then.
+		See Documentation/networking/pon.rst.
+
+What:		/sys/class/pon/pon<N>omci0/statistics/tx_messages
+Date:		October 2026
+KernelVersion:	6.18
+Contact:	netdev@vger.kernel.org
+Description:
+		(RO) Number of OMCI messages to the OLT that the MAC accepted for
+		transmission.
+		See Documentation/networking/pon.rst.
+
+What:		/sys/class/pon/pon<N>omci0/statistics/tx_errors
+Date:		October 2026
+KernelVersion:	6.18
+Contact:	netdev@vger.kernel.org
+Description:
+		(RO) Number of OMCI messages to the OLT that the MAC refused.
+		See Documentation/networking/pon.rst.
