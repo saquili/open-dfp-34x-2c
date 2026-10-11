@@ -130,11 +130,11 @@ def needs(ctx: Context, *, nat: bool = False):
 def set_mode(ctx: Context, lines: str, *, body_from: str = "") -> tuple[int, str]:
     """POST settings to the daemon from the bench host; body_from is a command
     on the bench whose output goes first in the body."""
-    url = shlex.quote(f"http://{ctx.settings.stick}:8080/api/set/settings")
+    url = shlex.quote(f"https://{ctx.settings.stick}/api/set/settings")
     head = shlex.quote(f"Authorization: Bearer {ctx.settings.pond_token}")
     first = f"{body_from}; " if body_from else ""
     command = (f"{{ {first}printf '%s' {shlex.quote(lines)}; }} | "
-               f"curl -s -m 15 -w '\\n%{{http_code}}' -H {head} --data-binary @- {url}")
+               f"curl -s -k -m 15 -w '\\n%{{http_code}}' -H {head} --data-binary @- {url}")
     reply = ctx.bench.run(command if not body_from else sudo(ctx.settings, command),
                           timeout=40)
     body, _, code = reply.out.rpartition("\n")

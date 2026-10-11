@@ -176,8 +176,10 @@ def ssh_keys_only(ctx: Context):
 
 
 def http(ctx: Context, path: str, token: bool = False) -> tuple[int, str]:
-    url = f"http://{ctx.settings.stick}:8080{path}"
-    command = f"curl -s -m 15 -w '\\n%{{http_code}}' {'-H @-' if token else ''} {shlex.quote(url)}"
+    # The daemon's certificate is its own, which curl cannot check; the case
+    # mgmt.pond-https checks it against the stick's.
+    url = f"https://{ctx.settings.stick}{path}"
+    command = f"curl -s -k -m 15 -w '\\n%{{http_code}}' {'-H @-' if token else ''} {shlex.quote(url)}"
     header = f"Authorization: Bearer {ctx.settings.pond_token}\n" if token else None
     reply = ctx.bench.run(command, timeout=40, stdin=header)
     body, _, code = reply.out.rpartition("\n")
@@ -190,12 +192,33 @@ def pond_health(ctx: Context):
     return verdict(code == 200 and json.loads(body) == {"ok": True}, f"HTTP {code} {body}")
 
 
+@case("mgmt.pond-https", "Management",
+      "The status daemon answers over HTTPS with the certificate the stick shows, and sends "
+      "HTTP there")
+def pond_https(ctx: Context):
+    stick = ctx.settings.stick
+    shown = ctx.stick.text(f"pond -k /run/pond/tls.key -F {shlex.quote(stick)} 2>/dev/null; true")
+    words = shown.split()
+    if len(words) < 3 or words[1] != "SHA-256":
+        return failed(f"the stick shows no certificate for {stick}: {shown!r}")
+    served = ctx.bench.text(
+        f"echo | openssl s_client -connect {shlex.quote(stick)}:443 -tls1_3 2>/dev/null | "
+        "openssl x509 -noout -fingerprint -sha256 2>/dev/null; true", timeout=40)
+    served = served.strip().partition("=")[2]
+    sent = ctx.bench.text(
+        f"curl -s -m 15 -o /dev/null -w '%{{http_code}} %{{redirect_url}}' "
+        f"{shlex.quote(f'http://{stick}/settings')}", timeout=40).strip()
+    ok = served == words[2] and sent == f"308 https://{stick}/settings"
+    return verdict(ok, f"served {'the same certificate' if served == words[2] else served or 'none'}; "
+                       f"HTTP: {sent or 'no answer'}")
+
+
 @case("mgmt.pond-page", "Management", "The status page is served on the host side")
 def pond_page(ctx: Context):
     # The panel is stored gzip-compressed only, and handed as it is to a
     # client that accepts gzip, as every browser does.
-    command = (f"curl -s -m 15 -D - -o /dev/null -H 'Accept-Encoding: gzip' "
-               f"{shlex.quote(f'http://{ctx.settings.stick}:8080/')}")
+    command = (f"curl -s -k -m 15 -D - -o /dev/null -H 'Accept-Encoding: gzip' "
+               f"{shlex.quote(f'https://{ctx.settings.stick}/')}")
     head = ctx.bench.text(command, timeout=40).lower()
     status = head.splitlines()[0] if head else "no answer"
     ok = " 200" in status and "content-type: text/html" in head
