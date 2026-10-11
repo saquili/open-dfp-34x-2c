@@ -14,6 +14,7 @@ config BR2_PACKAGE_ONU_UTILS
 	  The small programs of the ONU, from onu-utils/ in this
 	  repository: ponid, which prints the identity of the unit
 	  from its factory configuration; pon, which shows the PON
-	  devices and their ONU as the kernel reports them; and
-	  onu-apply, which turns the settings into what the stick
-	  runs.
+	  devices and their ONU as the kernel reports them; onu-nl,
+	  which sets the traffic control and the switch's parameters
+	  that tc and devlink would; and onu-apply, which turns the
+	  settings into what the stick runs.

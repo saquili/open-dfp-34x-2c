@@ -18,8 +18,8 @@ BUILTINS = {"export", "echo", "warn", "[", "if", "then", "else", "elif", "fi", "
 # Programs of the dropbear package and of the other packages of the image;
 # every other command is a BusyBox applet.
 DROPBEAR = {"dropbear", "dropbearkey"}
-PACKAGES = {"omcid", "ponid", "devlink", "pond", "onu-apply", "onu-config", "onu-trial", "onu-lane",
-            "onu-mgmt", "onu-net", "onu-run", "onu-svc", "netifd", "ubusd", "procd", "tc"}
+PACKAGES = {"omcid", "ponid", "pond", "onu-apply", "onu-config", "onu-trial", "onu-lane",
+            "onu-mgmt", "onu-net", "onu-nl", "onu-run", "onu-svc", "netifd", "ubusd", "procd"}
 
 
 def applets(text):

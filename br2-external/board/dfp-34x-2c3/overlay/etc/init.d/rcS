@@ -160,12 +160,11 @@ fi
 # network behind the PON never sees it and never reaches it: on sfp's ingress
 # the switch sends its frames to the CPU alone, which keeps them from the PON,
 # and on pon's ingress it drops them.
-mgmt_tag="pref 1 protocol 802.1Q flower skip_sw vlan_id $MGMT_VLAN"
-tc qdisc add dev sfp clsact &&
-	tc filter add dev sfp ingress $mgmt_tag action trap ||
+onu-nl clsact add sfp &&
+	onu-nl filter add sfp pref 1 vlan "$MGMT_VLAN" hw trap ||
 	warn "frames of VLAN $MGMT_VLAN can go out to the PON"
-tc qdisc add dev pon clsact &&
-	tc filter add dev pon ingress $mgmt_tag action drop ||
+onu-nl clsact add pon &&
+	onu-nl filter add pon pref 1 vlan "$MGMT_VLAN" hw drop ||
 	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
 
 # The servers listen on the addresses of the host side and nowhere else: the

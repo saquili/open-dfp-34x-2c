@@ -19,6 +19,7 @@ endef
 define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/ponid $(TARGET_DIR)/usr/lib/onu/ponid
 	$(INSTALL) -D -m 0755 $(@D)/build/pon $(TARGET_DIR)/usr/sbin/pon
+	$(INSTALL) -D -m 0755 $(@D)/build/onu-nl $(TARGET_DIR)/usr/sbin/onu-nl
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-config $(TARGET_DIR)/usr/sbin/onu-config
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-update $(TARGET_DIR)/usr/sbin/onu-update
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-svc $(TARGET_DIR)/usr/sbin/onu-svc
