@@ -500,7 +500,7 @@ rc=$?
 check '[ $rc -ne 0 ]'
 teardown
 
-echo "without a store, load still gives the identity and root's default password"
+echo "without a store, load still gives the identity, and root's password is not known"
 setup
 rm -f "$ONU_STORE"
 ONU_STORE= "$STORE_SCRIPT" load 2>/dev/null
@@ -508,11 +508,35 @@ rc=$?
 check '[ $rc -eq 0 ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-store")" = none ]'
 check 'grep -q -x serial=XXXXXXXXXXXX "$ONU_ROOT/run/onu-identity"'
-check '[ -s "$ONU_ROOT/run/shadow" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "!" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-auth" | cut -c1-10)" = -rw------- ]'
+# The console's login alone takes the default password then.
+check '[ "$(root_hash)" = "$DEFAULT_HASH" ]'
 settings
 ONU_STORE= "$STORE_SCRIPT" save 2>/dev/null
 rc=$?
 check '[ $rc -ne 0 ] && [ "$(cat "$ONU_ROOT/run/onu-store")" = failed ]'
+teardown
+
+echo "a store that cannot be read leaves root's password not known, not the default"
+setup
+printf 'AUTH_HASH=$5$rounds=1000$salt$hash\n' >"$ONU_STORE"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "\$5\$rounds=1000\$salt\$hash" ]'
+# A store over its limit is refused as a whole.
+awk 'BEGIN { for (i = 0; i < 70; i++) { printf "K%03d=", i; for (j = 0; j < 1000; j++) printf "x"; print "" } }' >"$ONU_STORE"
+run load
+check '[ $rc -eq 0 ] && [ "$(cat "$ONU_ROOT/run/onu-auth")" = "!" ]'
+check '[ "$(cat "$ONU_ROOT/run/onu-store")" = none ]'
+check '[ "$(root_hash)" = "$DEFAULT_HASH" ]'
+# Read again, the store gives its hash back.
+printf 'AUTH_HASH=$5$rounds=1000$salt$hash\n' >"$ONU_STORE"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-auth")" = "\$5\$rounds=1000\$salt\$hash" ]'
+# And one without a hash is the default again, with no file.
+: >"$ONU_STORE"
+run load
+check '[ ! -e "$ONU_ROOT/run/onu-auth" ] && [ "$(root_hash)" = "$DEFAULT_HASH" ]'
 teardown
 
 # The boot's own store: the partition "config", of /proc/mtd, mounted on

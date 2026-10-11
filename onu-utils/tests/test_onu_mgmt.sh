@@ -148,6 +148,14 @@ check '! echo "$out" | grep -q PENDING_'
 check 'grep -qx PREF=2 "$ONU_ROOT/run/onu-mgmt" && grep -qx "NAME=$name" "$ONU_ROOT/run/onu-mgmt"'
 teardown
 
+echo "the pending pair's ssh server takes keys only while root's password is not known"
+setup
+echo '!' >"$ONU_ROOT/run/onu-auth"
+run add 100 192.0.2.6/30
+check '[ $rc -eq 0 ] && grep -q "^dropbear -s .* -p 192.0.2.6:22$" "$LOG"'
+run cancel
+teardown
+
 echo "a new address in the same VLAN, as an interface of its own, then cancelled"
 setup
 run add 4094 198.51.100.6/30

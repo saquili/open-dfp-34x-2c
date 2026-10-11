@@ -213,7 +213,9 @@ add() {
 		[ "$iface" = "$old_iface" ] || rules_del "$pref"
 		return 1
 	fi
-	dropbear -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
+	nopw=
+	[ "$(cat "$RUN/onu-auth" 2>/dev/null)" = '!' ] && nopw=-s
+	dropbear $nopw -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
 		log "no ssh on $address"
 	log "the management address $address in VLAN $vlan added beside the old one"
 	(

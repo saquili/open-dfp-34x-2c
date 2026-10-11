@@ -59,6 +59,11 @@ check '! grep -q "^dropbear .*-[sB]\\b" "$LOG"'
 : >"$LOG"
 run ssh
 check '! grep -q "^dropbearkey" "$LOG"'
+# Root's password not known, without a store: keys only.
+echo '!' >"$ONU_ROOT/run/onu-auth"
+: >"$LOG"
+run ssh
+check 'logged "dropbear -F -s -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22 -p 192.0.2.2:22"'
 teardown
 
 echo "the status daemon on the same addresses, without a key over HTTP"

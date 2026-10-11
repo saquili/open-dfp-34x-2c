@@ -103,13 +103,19 @@ there, and names it by its whole path where procd starts it.
    panel. Until one is set, the password is ``admin`` (a fixed hash of it); a
    hash of the panel's older form, which ``crypt()`` cannot check, leaves root
    without a password on the console and ssh (``*``), keys only, until a
-   sign-in to the panel stores it again. ``onu-config password-check`` says in
-   its exit status whether the line of its input is root's password: 0 for the
-   one in force, 3 for ``admin`` while none is set, 4 for one kept in the
-   older form, which the caller keeps again with ``onu-config password``, 1
-   for any other; ``onu-config password-state`` prints ``set`` or
-   ``default``. Both read the hash themselves (``src/password.c``), so that
-   the status daemon, which has onu-act run them, never holds it.
+   sign-in to the panel stores it again. Without a store that can be read
+   (``/config`` not mounted, or the file damaged) the password is not known:
+   ``/run/onu-auth`` holds ``!``, the panel refuses every sign-in, the ssh
+   server takes keys only, and the console, which needs the stick opened,
+   takes ``admin``, so that the store can be mended there.
+   ``onu-config password-check`` says in its exit status whether the line of
+   its input is root's password: 0 for the one in force, 3 for ``admin``
+   while none is set, 4 for one kept in the older form, which the caller
+   keeps again with ``onu-config password``, 5 for any while the password is
+   not known, 1 for any other; ``onu-config password-state`` prints ``set``,
+   ``default`` or ``unknown``. Both read the hash themselves
+   (``src/password.c``), so that the status daemon, which has onu-act run
+   them, never holds it.
    ``onu-config identity-current`` prints the identity of
    ``/run/onu-identity``, which root alone reads, without its PLOAM and
    logical passwords, with ``ploam_set`` and ``loid_password_set`` and where it

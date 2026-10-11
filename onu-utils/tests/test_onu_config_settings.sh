@@ -137,6 +137,12 @@ pwcheck example-secret
 check '[ $rc -eq 4 ]'
 pwcheck example-secreT
 check '[ $rc -eq 1 ]'
+echo '!' >"$R/run/onu-auth"
+check '[ "$(ONU_ROOT=$R "$ONUCFG" password-state </dev/null)" = unknown ]'
+pwcheck admin
+check '[ $rc -eq 5 ] && [ ! -s "$T/out" ]'
+pwcheck example-secret
+check '[ $rc -eq 5 ]'
 
 echo "identity-current: the identity, without its passwords"
 printf 'serial=000000000000\nploam_password=not-a-real-one\nloid_password=\nmodel=stick\n' >"$R/run/onu-identity"

@@ -26,8 +26,10 @@
  *   onu-config password-check                whether the line of the
  *                                            standard input is root's
  *                                            password, in the exit status
- *   onu-config password-state                "set", or "default" while the
- *                                            default password is in force
+ *   onu-config password-state                "set", "default" while the
+ *                                            default password is in force,
+ *                                            or "unknown" without a store
+ *                                            that could be read
  *   onu-config identity-current              the identity in force, without
  *                                            its passwords
  *   onu-config slots DEVICE                  print the lines of the store of
@@ -80,7 +82,9 @@
  * not hold the hash (password.h). password-check exits 0 for the password
  * in force, 3 for the default one, "admin", while none is set, 4 for one
  * kept in the older form, which the caller then keeps again with
- * onu-config password, and 1 for any other.
+ * onu-config password, 5 for any while the password is not known, when
+ * onu-config load found no store it could read and wrote "!" there, and 1
+ * for any other.
  *
  * identity-current prints the identity the unit introduces itself with,
  * the name=value lines of /run/onu-identity, which root alone may read,
@@ -635,7 +639,7 @@ static int password_state_cmd(void)
 	char h[256];
 
 	hash_in_force(h, sizeof(h));
-	puts(*h ? "set" : "default");
+	puts(!strcmp(h, "!") ? "unknown" : *h ? "set" : "default");
 	explicit_bzero(h, sizeof(h));
 	return fflush(stdout) ? 2 : 0;
 }
@@ -651,7 +655,10 @@ static int password_check_cmd(void)
 		secret[0] = '\0';
 	secret[strcspn(secret, "\r\n")] = '\0';
 	hash_in_force(h, sizeof(h));
-	if (!*h) {
+	if (!strcmp(h, "!")) {
+		/* No store could be read: no password is taken. */
+		rc = 5;
+	} else if (!*h) {
 		/* The default password, compared without a shortcut either way. */
 		diff = strlen(secret) != sizeof(deflt) - 1;
 		for (size_t i = 0; i < sizeof(deflt) - 1; i++)

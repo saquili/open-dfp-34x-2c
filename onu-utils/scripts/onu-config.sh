@@ -39,7 +39,11 @@
 # AUTH_HASH is the content of /run/onu-auth: the hash of root's password, the
 # one account of the stick, which the console's login, the ssh server and the
 # status daemon's sign-in all check (/run/shadow carries it for the first
-# two);
+# two); without the key the default password is in force, and without a
+# store that can be read the file holds "!": the password is not known;
+# the status daemon refuses every sign-in, the ssh server takes only keys,
+# and the console, which needs the stick opened, takes the default
+# password, so that the store can be mended there;
 # a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
 # own settings, which the boot script reads before it brings up the links;
 # PDn_HOST is the content of /run/onu-pdN, the host session n delegated its
@@ -59,7 +63,7 @@
 # What became of the settings is the word in /run/onu-store, for the status
 # daemon: "loaded" when load found settings in the store, "defaults" when it
 # found none, "saved" or "failed" after a save, "none" without a store, when
-# /config is not mounted.
+# /config is not mounted or the store cannot be read.
 #
 # ONU_ROOT names another root for the files it reads and writes, and
 # ONU_STORE another store (a file), which the tests use.
@@ -234,9 +238,11 @@ settings() {
 }
 
 load() {
+	known=$STORE
 	list=$(contents) || {
 		log "the store cannot be read"
 		list=
+		known=
 	}
 	umask 077
 	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"* "$TLS.new"
@@ -282,7 +288,14 @@ load() {
 	for new in "$CREDS"*.new; do
 		[ -e "$new" ] && mv "$new" "${new%.new}"
 	done
-	[ -e "$AUTH.new" ] && mv "$AUTH.new" "$AUTH"
+	if [ -z "$known" ]; then
+		echo '!' >"$AUTH"
+		rm -f "$AUTH.new"
+	elif [ -e "$AUTH.new" ]; then
+		mv "$AUTH.new" "$AUTH"
+	else
+		rm -f "$AUTH"
+	fi
 	if [ -e "$TLS.new" ]; then
 		mv "$TLS.new" "$TLS"
 	else
@@ -295,7 +308,7 @@ load() {
 		rm -f "$SYSTEM"
 	fi
 	rm -f "$IDENTITY.new"
-	[ -n "$STORE" ] || state none
+	[ -n "$known" ] || state none
 	put_identity "$list"
 }
 
@@ -379,11 +392,13 @@ pd() {
 # hash in force. A hash of the older form the status daemon made (PBKDF2),
 # which crypt() cannot check, gives root no password for the console and
 # ssh, only keys, until a sign-in to the panel stores the password again.
+# A password not known ("!") is the default one here, for the console only:
+# the ssh server is started without passwords then (onu-run, onu-mgmt).
 shadow() {
 	hash=
 	[ -r "$AUTH" ] && read -r hash <"$AUTH"
 	case $hash in
-	'') hash=$DEFAULT_HASH ;;
+	'' | '!') hash=$DEFAULT_HASH ;;
 	'$'*) ;;
 	*) hash='*' ;;
 	esac
