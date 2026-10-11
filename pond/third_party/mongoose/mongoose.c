@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only AND BSD-2-Clause
 // SPDX-FileCopyrightText: 2014-2015 Kenneth MacKay
 // Vendored from Cesanta mongoose 7.16, taken under the GPL-2.0 arm of its
-// dual licence. Unmodified apart from this header. Mongoose holds micro-ecc
-// by Kenneth MacKay (its tls_uecc parts), under the BSD 2-clause licence,
-// whose notice a binary keeps too (LICENSES/preferred/BSD-2-Clause.txt).
+// dual licence. Changed, apart from this header, in three places of its
+// built-in TLS, each marked "open-dfp-34x-2c": the signature of the
+// CertificateVerify message is DER as RFC 8446 asks, a malformed EC key ends
+// the connection rather than lending it 32 bytes of the wrong place as its
+// key, and ChaCha20 takes the byte order from the compiler. Mongoose holds
+// micro-ecc by Kenneth MacKay (its tls_uecc parts), under the BSD 2-clause
+// licence, whose notice a binary keeps too (LICENSES/preferred/BSD-2-Clause.txt).
 // Copyright (c) 2004-2013 Sergey Lyubka
 // Copyright (c) 2013-2024 Cesanta Software Limited
 // All rights reserved
@@ -10642,6 +10646,19 @@ static void finish_SHA256(const MG_UECC_HashContext *base,
   mg_sha256_final(hash_result, &c->ctx);
 }
 
+// A 32-byte unsigned big-endian number as a DER INTEGER into out, at most
+// 35 bytes; returns its length
+static size_t mg_tls_der_uint(uint8_t *out, const uint8_t *v) {
+  size_t n = 32, pad;
+  while (n > 1 && v[0] == 0) v++, n--;
+  pad = (v[0] & 0x80) ? 1 : 0;
+  out[0] = 0x02;  // ASN.1 INTEGER
+  out[1] = (uint8_t) (n + pad);
+  out[2] = 0;
+  memmove(out + 2 + pad, v, n);
+  return 2 + pad + n;
+}
+
 static void mg_tls_send_cert_verify(struct mg_connection *c, int is_client) {
   struct tls_data *tls = (struct tls_data *) c->tls;
   // server certificate verify packet
@@ -10651,7 +10668,7 @@ static void mg_tls_send_cert_verify(struct mg_connection *c, int is_client) {
   struct SHA256_HashContext ctx = {
       {&init_SHA256, &update_SHA256, &finish_SHA256, 64, 32, tmp},
       {{0}, 0, 0, {0}}};
-  int neg1, neg2;
+  size_t rlen, slen;
   uint8_t sig[64] = {0};
 
   mg_tls_calc_cert_verify_hash(c, (uint8_t *) hash, is_client);
@@ -10659,18 +10676,15 @@ static void mg_tls_send_cert_verify(struct mg_connection *c, int is_client) {
   mg_uecc_sign_deterministic(tls->ec_key, hash, sizeof(hash), &ctx.uECC, sig,
                              mg_uecc_secp256r1());
 
-  neg1 = !!(sig[0] & 0x80);
-  neg2 = !!(sig[32] & 0x80);
+  // r and s as DER INTEGERs: without leading zero bytes, but for one that
+  // keeps a number positive, as verifiers that take DER alone require
+  // (open-dfp-34x-2c: before, about 1 handshake in 128 failed with OpenSSL)
   verify[8] = 0x30;  // ASN.1 SEQUENCE
-  verify[9] = (uint8_t) (68 + neg1 + neg2);
-  verify[10] = 0x02;  // ASN.1 INTEGER
-  verify[11] = (uint8_t) (32 + neg1);
-  memmove(verify + 12 + neg1, sig, 32);
-  verify[12 + 32 + neg1] = 0x02;  // ASN.1 INTEGER
-  verify[13 + 32 + neg1] = (uint8_t) (32 + neg2);
-  memmove(verify + 14 + 32 + neg1 + neg2, sig + 32, 32);
+  rlen = mg_tls_der_uint(verify + 10, sig);
+  slen = mg_tls_der_uint(verify + 10 + rlen, sig + 32);
+  verify[9] = (uint8_t) (rlen + slen);
 
-  sigsz = (size_t) (70 + neg1 + neg2);
+  sigsz = 2 + rlen + slen;
   verifysz = 8U + sigsz;
   verify[3] = (uint8_t) (sigsz + 4);
   verify[7] = (uint8_t) sigsz;
@@ -11276,7 +11290,10 @@ void mg_tls_init(struct mg_connection *c, const struct mg_tls_opts *opts) {
       return;
     }
     if (memcmp(key.buf + 2, "\x02\x01\x01\x04\x20", 5) != 0) {
-      MG_ERROR(("EC private key: ASN.1 bad data"));
+      // open-dfp-34x-2c: it went on with the key
+      mg_error(c, "EC private key: ASN.1 bad data");
+      free((void *) key.buf);
+      return;
     }
     memmove(tls->ec_key, key.buf + 7, 32);
     free((void *) key.buf);
@@ -11429,9 +11446,14 @@ static PORTABLE_8439_DECL void poly1305_finish(poly1305_context *ctx,
 // assembly.
 
 // based on https://sourceforge.net/p/predef/wiki/Endianness/
-#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
-    __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+// open-dfp-34x-2c: the compiler's byte order decides where it gives one: a C
+// library's <endian.h> defines LITTLE_ENDIAN on big-endian machines too, as
+// the constant 1234, which took the little-endian path on MIPS and broke every
+// record
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__)
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #define __HAVE_LITTLE_ENDIAN 1
+#endif
 #elif defined(__LITTLE_ENDIAN__) || defined(__ARMEL__) ||                 \
     defined(__THUMBEL__) || defined(__AARCH64EL__) || defined(_MIPSEL) || \
     defined(__MIPSEL) || defined(__MIPSEL__) || defined(__XTENSA_EL__) || \
