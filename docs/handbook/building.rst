@@ -390,9 +390,11 @@ The boot script
 The root filesystem is read-only, and what the system writes in ``/run``,
 ``/tmp`` and ``/var`` lives in memory. Three things it writes to the flash:
 its own file in the partition ``config``, at most 64 KiB, with the settings,
-the accounts, the password's hash and the panel's key (``onu-config``); the
-boot loader's environment and the bank that does not run, at an update
-(``onu-update``).
+the accounts, the password's hash, the panel's key and the ssh host key
+(``onu-config``); the boot loader's environment and the bank that does not run,
+at an update (``onu-update``). The partition is mounted read-only, and
+``onu-config`` mounts it read-write for each change of its file alone, one
+change at a time.
 
 Known limitations
 -----------------
