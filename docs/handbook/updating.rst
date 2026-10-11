@@ -129,8 +129,9 @@ every reset that is not a commit leads to the committed bank.
 ``onu-trial`` waits for omcid to run, for the status daemon to answer on the
 host link, and for the PON to reach O5, operation, unless the receiver has no
 light: without a fibre the PON says nothing about the new system. When all hold
-it runs ``onu-update commit``, which sets ``sw_commit`` to the running bank and
-removes the trial's mark. When they do not hold within 300 seconds it restarts
+it runs ``onu-update commit``, which sets ``sw_commit`` to the running bank,
+removes the trial's mark and switches the loader's multicast listener off
+(``mupgrade_en``). When they do not hold within 300 seconds it restarts
 the stick. What it found is in ``/run/onu-trial`` and its log in
 ``/run/onu-trial.log``.
 
@@ -166,6 +167,12 @@ The environment as this system uses it
      - ``onu-update try``, ``commit``
      - The bank armed for a trial, until a commit; with ``sw_tryactive`` back at
        2 and another bank running, that trial failed.
+   * - ``mupgrade_en``
+     - ``onu-update commit``
+     - 0: the loader does not listen on the host link for an image sent by
+       multicast, which it would write from anyone, by the shipped split, over
+       this system's kernel (``boot-contract.rst``). Every way in ends in a
+       commit, so a stick that runs this system has it at 0.
 
 ``onu-update`` saves the environment as the loader does: the whole new copy
 into the copy that is not current, flagged 1, read back, and then the flag

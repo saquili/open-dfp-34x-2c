@@ -372,7 +372,7 @@ Which bank a plain reset boots is set in the loader's saved environment.
      - 1 as shipped: when the countdown ends, the loader first listens on the
        host link for a firmware image sent to it by multicast, and writes what
        it receives. Nothing asks who sends it. 0 switches the listener off; the
-       bench's board runs with 0. The listener also sets up the loader's
+       bench's board runs with 0, and ``onu-update commit`` sets 0. The listener also sets up the loader's
        network on the way, which used to hide the restart fault described under
        "What the loader leaves behind".
 
