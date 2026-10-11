@@ -276,6 +276,38 @@ Keep a copy of the whole flash before the first update (``backup.rst``). The
 copy holds the unit's registration identity and this system's secrets: keep it
 private. No procedure for writing a copy back is recorded yet.
 
+A store of before step 9
+========================
+
+Before step 9 of ADR 0014 the store took the whole partition ``config``, in two
+slots of its own, where the shipped firmware's file system had been; a stick
+that ran such a system keeps its settings, and the registration identity it
+took from the shipped firmware, there. The first start of a later system takes
+that store into the file ``/config/open-dfp-34x-2c.conf`` before it mounts the
+partition (``onu-config.sh``, ``mount_config()``): it reads the lines of the
+current slot into ``/run/onu-store.before``, erases the partition, mounts it
+as an empty file system and writes the lines into the file. Between the erase
+and the end of that write the lines are in RAM only, and a power loss there
+loses the settings and the identity with them. The erase of the 240 KiB takes
+seconds.
+
+So the first start after such an update is attended:
+
+1. Take a copy of the whole flash first (``backup.rst``), while the system of
+   before still runs. It holds the store of before, slots and all.
+2. Keep the stick powered until the system is up. Its log says ``the store
+   of before goes into /config/open-dfp-34x-2c.conf`` as the conversion starts;
+   when no line about ``/run/onu-store.before`` follows, it finished, and
+   ``onu-config list`` shows the settings.
+3. If the log says instead ``the store of before is in /run/onu-store.before
+   only``, the write did not finish: copy that file off the stick before
+   anything restarts it, since ``/run`` does not outlive a restart. Its lines
+   go back with ``onu-config import``.
+
+A stick that never ran a system of before step 9, one that took this system
+through the shipped firmware's web page or through the bench since, has no such
+store, and its first start writes nothing of the kind.
+
 Measured on the board
 =====================
 
