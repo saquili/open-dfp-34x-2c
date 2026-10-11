@@ -88,6 +88,20 @@ run filter add $D0 pref 2 vlan 36 drop
 check '[ $rc -eq 0 ]'
 check 'at 2 | grep -q "pref 2 flower .*vlan_id 36 .*gact action drop"'
 
+echo "the IPv4 packets to an address dropped, and to a prefix"
+run filter add $D0 pref 3 dst 192.0.2.10 drop
+check '[ $rc -eq 0 ] && [ -z "$out$err" ]'
+check 'at 3 | grep -q "filter protocol ip pref 3 flower .*dst_ip 192.0.2.10 .*gact action drop"'
+run filter add $D0 pref 4 dst 198.51.100.77/24 drop
+check '[ $rc -eq 0 ]'
+check 'at 4 | grep -q "dst_ip 198.51.100.0/24 .*gact action drop"'
+run filter add $D0 pref 6 dst 192.0.2.300 drop
+check '[ $rc -eq 2 ] && [ -z "$(at 6)" ]'
+run filter add $D0 pref 6 vlan 5 dst 192.0.2.1 drop
+check '[ $rc -eq 2 ] && [ -z "$(at 6)" ]'
+run filter del $D0 pref 3
+run filter del $D0 pref 4
+
 echo "every frame handed to the ingress of another interface, at the priority the kernel picks"
 run filter add $D0 redirect $D1
 if $matchall; then

@@ -11,6 +11,8 @@
  *   tc qdisc add|del dev DEV clsact
  *   tc filter add dev DEV ingress [pref N] protocol 802.1Q flower [skip_sw]
  *	vlan_id VID action trap|drop|mirred ingress redirect dev TO
+ *   tc filter add dev DEV ingress [pref N] protocol ip flower [skip_sw]
+ *	dst_ip ADDRESS/LEN action trap|drop|mirred ingress redirect dev TO
  *   tc filter add dev DEV ingress [pref N] matchall [skip_sw]
  *	action trap|drop|mirred ingress redirect dev TO
  *   tc filter del dev DEV ingress pref N
@@ -42,6 +44,10 @@ enum tc_rule_action {
  * @has_vlan: it takes the frames whose outer tag, 802.1Q, has VID @vlan;
  *	without, every frame
  * @vlan: that VID, 0 to 4095
+ * @has_dst: it takes the IPv4 packets to an address of @dst/@dst_len; not
+ *	with @has_vlan
+ * @dst: that address, in network order
+ * @dst_len: the length of its prefix, 0 to 32
  * @hw: in the switch alone, never in software (tc's skip_sw)
  * @action: what it does with what it takes
  * @to_ifindex: for TC_RULE_REDIRECT, the interface whose ingress the frames
@@ -52,6 +58,9 @@ struct tc_rule {
 	uint16_t pref;
 	bool has_vlan;
 	uint16_t vlan;
+	bool has_dst;
+	uint32_t dst;
+	uint8_t dst_len;
 	bool hw;
 	enum tc_rule_action action;
 	int to_ifindex;

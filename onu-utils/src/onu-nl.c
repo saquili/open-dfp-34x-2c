@@ -7,13 +7,16 @@
  * which only the RAM image carries (ADR 0014, step 9g).
  *
  *   onu-nl clsact add|del DEV
- *   onu-nl filter add DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO
+ *   onu-nl filter add DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw]
+ *                         trap|drop|redirect TO
  *   onu-nl filter del DEV pref N
  *   onu-nl filter prefs DEV
  *   onu-nl param NAME [VALUE]
  *
  * "clsact add" leaves a clsact qdisc that is there already. A filter is on
- * the ingress of DEV; without "vlan" it takes every frame; "hw" keeps it in
+ * the ingress of DEV; "vlan" takes the frames of a VLAN, "dst" the IPv4
+ * packets to an address of a prefix (/32 without LEN), and without either it
+ * takes every frame; "hw" keeps it in
  * the switch alone; "redirect" hands what it takes to the ingress of TO.
  * "filter prefs" prints the priorities of the filters on the ingress of
  * DEV, one a line, the lowest first. "param" prints the value of a
@@ -24,6 +27,7 @@
  * Exit status: 0 done, 1 refused or failed, 2 a wrong command line.
  */
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <net/if.h>
 #include <stdbool.h>
@@ -177,7 +181,8 @@ static int usage(void)
 {
 	fprintf(stderr,
 		"usage: onu-nl clsact add|del DEV\n"
-		"       onu-nl filter add DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO\n"
+		"       onu-nl filter add DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw]\n"
+		"                         trap|drop|redirect TO\n"
 		"       onu-nl filter del DEV pref N\n"
 		"       onu-nl filter prefs DEV\n"
 		"       onu-nl param NAME [VALUE]\n");
@@ -225,7 +230,7 @@ static int clsact(int argc, char **argv)
 	return err ? 1 : 0;
 }
 
-/* DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO, into @r. */
+/* DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw] trap|drop|redirect TO, into @r. */
 static bool rule_args(int argc, char **argv, struct tc_rule *r)
 {
 	bool pref = false;
@@ -240,11 +245,30 @@ static bool rule_args(int argc, char **argv, struct tc_rule *r)
 			r->pref = (uint16_t)v;
 			pref = true;
 		} else if (!strcmp(argv[i], "vlan") && !r->has_vlan &&
-			   i + 1 < argc) {
+			   !r->has_dst && i + 1 < argc) {
 			if (!decimal(argv[++i], 0, 4095, &v))
 				return false;
 			r->vlan = (uint16_t)v;
 			r->has_vlan = true;
+		} else if (!strcmp(argv[i], "dst") && !r->has_vlan &&
+			   !r->has_dst && i + 1 < argc) {
+			char addr[INET_ADDRSTRLEN];
+			const char *slash = strchr(argv[++i], '/');
+			size_t n = slash ? (size_t)(slash - argv[i]) : strlen(argv[i]);
+			struct in_addr in;
+
+			if (n >= sizeof(addr))
+				return false;
+			memcpy(addr, argv[i], n);
+			addr[n] = '\0';
+			if (inet_pton(AF_INET, addr, &in) != 1)
+				return false;
+			v = 32;
+			if (slash && !decimal(slash + 1, 0, 32, &v))
+				return false;
+			r->dst = in.s_addr;
+			r->dst_len = (uint8_t)v;
+			r->has_dst = true;
 		} else if (!strcmp(argv[i], "hw") && !r->hw) {
 			r->hw = true;
 		} else {

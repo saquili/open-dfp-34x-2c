@@ -89,8 +89,10 @@ static void put_action(struct nlmsghdr *nlh, uint16_t list,
 
 struct nlmsghdr *tc_rule_msg(char *buf, const struct tc_rule *r, uint32_t seq)
 {
-	const uint16_t proto = r->has_vlan ? ETH_P_8021Q : ETH_P_ALL;
+	const uint16_t proto = r->has_vlan ? ETH_P_8021Q :
+			       r->has_dst ? ETH_P_IP : ETH_P_ALL;
 	const uint32_t flags = r->hw ? TCA_CLS_FLAGS_SKIP_SW : 0;
+	const bool flower = r->has_vlan || r->has_dst;
 	struct nlmsghdr *nlh;
 	struct nlattr *opts;
 
@@ -98,11 +100,19 @@ struct nlmsghdr *tc_rule_msg(char *buf, const struct tc_rule *r, uint32_t seq)
 			NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL, seq, r->ifindex,
 			TC_INGRESS,
 			TC_H_MAKE((uint32_t)r->pref << 16, htons(proto)));
-	mnl_attr_put_strz(nlh, TCA_KIND, r->has_vlan ? "flower" : "matchall");
+	mnl_attr_put_strz(nlh, TCA_KIND, flower ? "flower" : "matchall");
 	opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
-	if (r->has_vlan) {
+	if (flower) {
 		mnl_attr_put_u16(nlh, TCA_FLOWER_KEY_ETH_TYPE, htons(proto));
-		mnl_attr_put_u16(nlh, TCA_FLOWER_KEY_VLAN_ID, r->vlan);
+		if (r->has_vlan) {
+			mnl_attr_put_u16(nlh, TCA_FLOWER_KEY_VLAN_ID, r->vlan);
+		} else {
+			uint32_t mask = r->dst_len ?
+				htonl(~0u << (32 - r->dst_len)) : 0;
+
+			mnl_attr_put_u32(nlh, TCA_FLOWER_KEY_IPV4_DST, r->dst & mask);
+			mnl_attr_put_u32(nlh, TCA_FLOWER_KEY_IPV4_DST_MASK, mask);
+		}
 		mnl_attr_put_u32(nlh, TCA_FLOWER_FLAGS, flags);
 		put_action(nlh, TCA_FLOWER_ACT, r);
 	} else {

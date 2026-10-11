@@ -184,6 +184,42 @@ static void test_vlan_drop(void)
 	      mnl_attr_get_u16(in(opts, TCA_FLOWER_KEY_VLAN_ID)) == 0);
 }
 
+/* tc filter add dev 6 ingress pref 2 protocol ip flower dst_ip
+ * 192.0.2.10/32 action drop: a session's packets to an address of the
+ * stick's host side; a prefix keeps only its own bits. */
+static void test_ipv4_destination_dropped(void)
+{
+	struct tc_rule r = {
+		.ifindex = 6, .pref = 2, .has_dst = true,
+		.dst = htonl(0xc000020a), .dst_len = 32, .action = TC_RULE_DROP,
+	};
+	struct nlmsghdr *nlh = tc_rule_msg(buf, &r, 25);
+	const struct nlattr *opts = top(nlh, TCA_OPTIONS), *a;
+
+	CHECK(tcm_of(nlh)->tcm_info == ((2u << 16) | htons(ETH_P_IP)));
+	CHECK(is_str(top(nlh, TCA_KIND), "flower"));
+	CHECK(opts && count(opts) == 5);
+	a = in(opts, TCA_FLOWER_KEY_ETH_TYPE);
+	CHECK(a && mnl_attr_get_u16(a) == htons(ETH_P_IP));
+	CHECK(!in(opts, TCA_FLOWER_KEY_VLAN_ID));
+	a = in(opts, TCA_FLOWER_KEY_IPV4_DST);
+	CHECK(a && mnl_attr_get_payload_len(a) == 4 &&
+	      mnl_attr_get_u32(a) == htonl(0xc000020a));
+	a = in(opts, TCA_FLOWER_KEY_IPV4_DST_MASK);
+	CHECK(a && mnl_attr_get_u32(a) == 0xffffffffu);
+	CHECK(gact(action(in(opts, TCA_FLOWER_ACT), "gact")) == TC_ACT_SHOT);
+
+	r.dst_len = 24;
+	nlh = tc_rule_msg(buf, &r, 26);
+	opts = top(nlh, TCA_OPTIONS);
+	CHECK(mnl_attr_get_u32(in(opts, TCA_FLOWER_KEY_IPV4_DST)) == htonl(0xc0000200));
+	CHECK(mnl_attr_get_u32(in(opts, TCA_FLOWER_KEY_IPV4_DST_MASK)) == htonl(0xffffff00));
+	r.dst_len = 0;
+	nlh = tc_rule_msg(buf, &r, 27);
+	opts = top(nlh, TCA_OPTIONS);
+	CHECK(mnl_attr_get_u32(in(opts, TCA_FLOWER_KEY_IPV4_DST_MASK)) == 0);
+}
+
 /* tc filter add dev 5 ingress matchall action mirred ingress redirect
  * dev 9: a feed of onu-apply, with the priority the kernel picks. */
 static void test_everything_redirected(void)
@@ -281,6 +317,7 @@ int main(void)
 	test_clsact();
 	test_vlan_trap_in_the_switch();
 	test_vlan_drop();
+	test_ipv4_destination_dropped();
 	test_everything_redirected();
 	test_more_kinds();
 	test_del_and_dump();
