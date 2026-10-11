@@ -17357,14 +17357,12 @@ S:	Maintained
 F:	Documentation/arch/mips/rtl9602c.rst
 F:	Documentation/devicetree/bindings/interrupt-controller/realtek,rtl9602c-intc.yaml
 F:	Documentation/devicetree/bindings/mips/realtek-rtl9602c.yaml
-F:	Documentation/devicetree/bindings/watchdog/realtek,rtl9602c-wdt.yaml
 F:	arch/mips/boot/dts/realtek/dfp-34x-2c3.dts
 F:	arch/mips/boot/dts/realtek/rtl9602c.dtsi
 F:	arch/mips/configs/rtl9602c_defconfig
 F:	arch/mips/include/asm/mach-rtl9602c/
 F:	arch/mips/mm/c-lexra.c
 F:	arch/mips/rtl9602c/
-F:	drivers/watchdog/rtl9602c_wdt.c
 
 MIROSOUND PCM20 FM RADIO RECEIVER DRIVER
 M:	Hans Verkuil <hverkuil@kernel.org>
