@@ -61,11 +61,20 @@ run ssh
 check '! grep -q "^dropbearkey" "$LOG"'
 teardown
 
-echo "the status daemon on the same addresses"
+echo "the status daemon on the same addresses, without a key over HTTP"
 setup
 run pond
 check '[ $rc -eq 0 ]'
-check 'logged "pond -l http://198.51.100.2:8080 -l http://192.0.2.2:8080"'
+check 'logged "pond -l http://198.51.100.2:80 -l http://192.0.2.2:80"'
+teardown
+
+echo "with the key, over HTTPS on 443, and on 80 to send browsers there"
+setup
+mkdir -p "$ONU_ROOT/run/pond"
+echo 0123 >"$ONU_ROOT/run/pond/tls.key"
+run pond
+check 'logged "pond -l https://198.51.100.2:443 -l http://198.51.100.2:80 -l https://192.0.2.2:443 -l http://192.0.2.2:80 -k $ONU_ROOT/run/pond/tls.key"'
+check '! grep -q "no key for HTTPS" "$ONU_ROOT/run/pond/log"'
 teardown
 
 echo "the status daemon's token and log, in its directory of /run"
@@ -73,8 +82,8 @@ setup
 mkdir -p "$ONU_ROOT/run/pond"
 echo token-for-scripts >"$ONU_ROOT/run/pond/token"
 run pond
-check 'logged "pond -l http://198.51.100.2:8080 -l http://192.0.2.2:8080 -t $ONU_ROOT/run/pond/token"'
-check '[ -e "$ONU_ROOT/run/pond/log" ]'
+check 'logged "pond -l http://198.51.100.2:80 -l http://192.0.2.2:80 -t $ONU_ROOT/run/pond/token"'
+check '[ -e "$ONU_ROOT/run/pond/log" ] && grep -q "no key for HTTPS" "$ONU_ROOT/run/pond/log"'
 teardown
 
 echo "without an address on the host link, the management address alone"
@@ -83,7 +92,7 @@ sed -i.bak 's/^DATA_ADDRESS=.*/DATA_ADDRESS=/' "$ONU_ROOT/run/onu-mgmt"
 run ssh
 check 'logged "dropbear -F -r $ONU_ROOT/run/dropbear/host_key -P $ONU_ROOT/run/dropbear.pid -p 198.51.100.2:22"'
 run pond
-check 'logged "pond -l http://198.51.100.2:8080"'
+check 'logged "pond -l http://198.51.100.2:80"'
 teardown
 
 echo "the pair in use after a change"

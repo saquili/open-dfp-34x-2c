@@ -47,12 +47,13 @@ field() {
 	echo "$status" | sed -n "s/^$1=//p"
 }
 
-# Whether the status daemon answers its health request within 5 s; nc of
-# BusyBox has no time limit of its own.
+# Whether the status daemon answers its health request within 5 s, over the
+# HTTP that it answers it on beside HTTPS; nc of BusyBox has no time limit of
+# its own.
 pond_answers() {
 	reply=$RUN/onu-trial.reply
 	: >"$reply"
-	(printf 'GET /api/health HTTP/1.0\r\n\r\n' | nc "$address" 8080 >"$reply" 2>/dev/null) &
+	(printf 'GET /api/health HTTP/1.0\r\n\r\n' | nc "$address" 80 >"$reply" 2>/dev/null) &
 	probe=$!
 	for _ in 1 2 3 4 5; do
 		kill -0 "$probe" 2>/dev/null || break
