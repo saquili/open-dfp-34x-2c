@@ -5,7 +5,8 @@
 ADR 0012: One account, root, for the console, ssh and the panel
 ==================================================================
 
-:Status: Accepted, amended by 0013 (a bench's console)
+:Status: Accepted, amended by 0013 (a bench's console) and 0014 (the panel's
+         own account)
 :Date: 2026-10-08
 :Decided-by: the owner, 2026-10-08
 

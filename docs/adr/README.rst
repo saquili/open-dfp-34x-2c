@@ -53,10 +53,10 @@ record.
      - Accepted
    * - 0012
      - One account, root, for the console, ssh and the panel
-     - Accepted, amended by 0013
+     - Accepted, amended by 0013 and 0014
    * - 0013
      - procd is the first process and watches the stick's programs
-     - Accepted
+     - Accepted, amended by 0014
    * - 0014
      - One control plane turns the settings into what procd and netifd keep
      - Accepted

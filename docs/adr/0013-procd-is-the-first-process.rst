@@ -5,7 +5,7 @@
 ADR 0013: procd is the first process and watches the stick's programs
 ====================================================================
 
-:Status: Accepted
+:Status: Accepted, amended by 0014 (pppoed under netifd, omcid's MIB kept)
 :Date: 2026-10-10
 :Decided-by: the owner, 2026-10-10
 
