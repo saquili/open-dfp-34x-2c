@@ -25,6 +25,6 @@ README of its own beside its code, for its interfaces and files.
     the table of every case, its result and its measured values
     (``testing/README.rst``).
 
-The pages are reStructuredText and are read as they are; ``make docs``, which
-would render them, is not implemented. ``make -C linux htmldocs`` renders the
-kernel's.
+The pages are reStructuredText and are read as they are; ``make docs`` renders
+them to HTML in ``build/docs`` and fails on any warning (``tools/docs``).
+``make -C linux htmldocs`` renders the kernel's.
