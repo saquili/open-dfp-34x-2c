@@ -27,7 +27,7 @@
 #define FORGET_S 300
 
 /* What onu-config password-check says of a password (onu-utils). */
-enum { CHECK_MATCHES = 0, CHECK_DEFAULT = 3, CHECK_OLDER = 4 };
+enum { CHECK_MATCHES = 0, CHECK_DEFAULT = 3, CHECK_OLDER = 4, CHECK_UNKNOWN = 5 };
 
 static struct {
 	char id[AUTH_ID_LEN + 1];
@@ -70,19 +70,24 @@ static int check(const char *secret)
 }
 
 /*
- * Whether @secret is the password in force; @older says whether it matched
- * a hash of the older form, which a sign-in replaces.
+ * 0 when @secret is the password in force, -EACCES when it is not, and
+ * -ENOKEY while no password is known, without a store onu-config could
+ * read; @older says whether it matched a hash of the older form, which a
+ * sign-in replaces.
  */
-static bool correct(const char *secret, bool *older)
+static int correct(const char *secret, bool *older)
 {
 	int rc = check(secret);
 
 	*older = rc == CHECK_OLDER;
+	if (rc == CHECK_UNKNOWN)
+		return -ENOKEY;
 	if (rc == CHECK_MATCHES || rc == CHECK_OLDER)
 		g_default = false;
 	else if (rc == CHECK_DEFAULT)
 		g_default = true;
-	return rc == CHECK_MATCHES || rc == CHECK_OLDER || rc == CHECK_DEFAULT;
+	return rc == CHECK_MATCHES || rc == CHECK_OLDER || rc == CHECK_DEFAULT ?
+		0 : -EACCES;
 }
 
 /* Have onu-config hash @secret for crypt() and keep it. */
@@ -188,16 +193,17 @@ static int slot_of(const char *id, time_t now)
 int auth_sign_in(const char *user, const char *secret, time_t now,
 		 char id[AUTH_ID_LEN + 1], int *retry_after)
 {
-	int i, slot = 0;
+	int i, slot = 0, rc;
 	bool older;
 
 	if (locked(now, retry_after))
 		return -EAGAIN;
-	if (!user || !secret || strcmp(user, AUTH_USER) ||
-	    !correct(secret, &older)) {
+	rc = user && secret && !strcmp(user, AUTH_USER) ?
+		correct(secret, &older) : -EACCES;
+	if (rc == -EACCES)
 		failed(now);
-		return -EACCES;
-	}
+	if (rc)
+		return rc;
 	g_fails = 0;
 	/*
 	 * A password kept in the older form becomes crypt()'s, which the
@@ -265,10 +271,11 @@ int auth_change(const char *current, const char *next, const char *keep,
 
 	if (locked(now, retry_after))
 		return -EAGAIN;
-	if (!current || !correct(current, &older)) {
+	rc = current ? correct(current, &older) : -EACCES;
+	if (rc == -EACCES)
 		failed(now);
-		return -EACCES;
-	}
+	if (rc)
+		return rc;
 	if (!next || !printable(next, AUTH_SECRET_MIN, AUTH_SECRET_MAX) ||
 	    !strcmp(next, current))
 		return -EINVAL;

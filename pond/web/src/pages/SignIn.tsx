@@ -57,9 +57,11 @@ export function SignIn() {
       ? t("auth.offline")
       : e instanceof ApiError && e.status === 429
         ? t("auth.tooMany", { seconds: e.retryAfter ?? 30 })
-        : e
-          ? t("auth.wrong")
-          : null;
+        : e instanceof ApiError && e.status === 423
+          ? t("auth.noStore")
+          : e
+            ? t("auth.wrong")
+            : null;
 
   return (
     <Frame>
@@ -127,9 +129,11 @@ export function ChangePassword({ forced }: { forced: boolean }) {
       ? t("auth.offline")
       : change.error instanceof ApiError && change.error.status === 403
         ? t("auth.wrong")
-        : change.error
-          ? change.error.message
-          : null;
+        : change.error instanceof ApiError && change.error.status === 423
+          ? t("auth.noStore")
+          : change.error
+            ? change.error.message
+            : null;
 
   const body = (
     <>

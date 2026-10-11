@@ -43,6 +43,8 @@ export const en = {
     signIn: "Sign in",
     wrong: "Wrong user or password.",
     tooMany: "Too many attempts. Try again in {seconds} s.",
+    noStore:
+      "The stick cannot read its settings, so no password is known. Sign in on the serial console, where the default password works.",
     offline: "The stick does not answer. Check the cable and try again.",
     changeTitle: "Set a new password",
     changeForced: "The stick still has its default password. Set your own before you go on.",

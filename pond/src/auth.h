@@ -51,8 +51,10 @@ bool auth_default_password(void);
  * A full table loses its least recently used session. A password kept in
  * the older form is stored again in crypt()'s.
  *
- * Return: 0, -EACCES for a wrong user or password, -EAGAIN while sign-ins
- * are stopped, -EIO when no random id could be had.
+ * Return: 0, -EACCES for a wrong user or password, -ENOKEY while no
+ * password is known (no store could be read; the console takes the
+ * default one), -EAGAIN while sign-ins are stopped, -EIO when no random id
+ * could be had.
  */
 int auth_sign_in(const char *user, const char *secret, time_t now,
 		 char id[AUTH_ID_LEN + 1], int *retry_after);
@@ -66,9 +68,10 @@ void auth_sign_out(const char *id);
  * auth_change() - Replace the password, which @current must match.
  * @keep: the session that asked, which stays open; every other one closes
  *
- * Return: 0, -EACCES for a wrong current password, -EINVAL for a new one
- * that is too short, too long or not printable, -EAGAIN while sign-ins are
- * stopped, or the error of storing it.
+ * Return: 0, -EACCES for a wrong current password, -ENOKEY while no
+ * password is known, -EINVAL for a new one that is too short, too long or
+ * not printable, -EAGAIN while sign-ins are stopped, or the error of
+ * storing it.
  */
 int auth_change(const char *current, const char *next, const char *keep,
 		time_t now, int *retry_after);

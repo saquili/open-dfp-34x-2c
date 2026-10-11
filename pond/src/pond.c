@@ -412,6 +412,11 @@ static void api_login(struct mg_connection *c, struct mg_http_message *hm)
 		reply_err(c, 401, "wrong user or password", "try again");
 		return;
 	}
+	if (rc == -ENOKEY) {
+		reply_err(c, 423, "no store",
+			  "the settings store cannot be read; sign in on the console");
+		return;
+	}
 	if (rc) {
 		reply_err(c, 500, "no session", strerror(-rc));
 		return;
@@ -436,6 +441,9 @@ static void api_password(struct mg_connection *c, struct mg_http_message *hm,
 		reply_retry(c, retry);
 	else if (rc == -EACCES)
 		reply_err(c, 403, "wrong password", "the current password is another");
+	else if (rc == -ENOKEY)
+		reply_err(c, 423, "no store",
+			  "the settings store cannot be read; sign in on the console");
 	else if (rc == -EINVAL)
 		reply_err(c, 400, "not a password",
 			  "8 to 128 printable characters, other than the current one");

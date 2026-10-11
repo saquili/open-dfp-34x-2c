@@ -45,6 +45,8 @@ export const pl: Dictionary = {
     signIn: "Zaloguj",
     wrong: "Zły użytkownik lub hasło.",
     tooMany: "Za dużo prób. Spróbuj za {seconds} s.",
+    noStore:
+      "Wkładka nie może odczytać swoich ustawień, więc nie zna hasła. Zaloguj się przez konsolę szeregową, tam działa hasło domyślne.",
     offline: "Wkładka nie odpowiada. Sprawdź połączenie i spróbuj ponownie.",
     changeTitle: "Ustaw nowe hasło",
     changeForced: "Wkładka ma jeszcze domyślne hasło. Ustaw własne, zanim przejdziesz dalej.",

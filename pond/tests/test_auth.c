@@ -3,8 +3,8 @@
 
 /*
  * Tests of the sign-in: the default password, the stop after wrong
- * passwords, sessions that end, a change of password, and a password of the
- * older form that a sign-in stores again. onu-config checks the passwords,
+ * passwords, sessions that end, a change of password, a password of the
+ * older form that a sign-in stores again, and none known without a store. onu-config checks the passwords,
  * as onu-act has it do on the stick (onu-utils tests the hashes); a
  * stand-in in front of it keeps a new one.
  */
@@ -169,6 +169,31 @@ static void test_older_form(void)
 	      "which opens a session as well");
 }
 
+static void test_unknown(void)
+{
+	char id[AUTH_ID_LEN + 1], script[400];
+	int retry = 0;
+	time_t t = 4000000;
+	FILE *f;
+
+	puts("no password known, without a store that could be read");
+	write_store(script, sizeof(script));
+	f = fopen(g_hashfile, "w");
+	fprintf(f, "!\n");
+	fclose(f);
+	auth_init();
+
+	check(!auth_default_password(), "it is no default");
+	check(auth_sign_in("root", "admin", t, id, &retry) == -ENOKEY,
+	      "the default password opens no session");
+	check(auth_change("admin", "example-secret", id, t + 1, &retry) == -ENOKEY,
+	      "nor changes the password");
+	for (int i = 0; i < 6; i++)
+		auth_sign_in("root", "admin", t + 2 + i, id, &retry);
+	check(auth_sign_in("root", "admin", t + 9, id, &retry) == -ENOKEY,
+	      "and such refusals stop no sign-in");
+}
+
 int main(void)
 {
 	const char *root = getenv("POND_ROOT");
@@ -191,6 +216,7 @@ int main(void)
 	test_sessions();
 	test_change();
 	test_older_form();
+	test_unknown();
 
 	printf("\n%d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;
