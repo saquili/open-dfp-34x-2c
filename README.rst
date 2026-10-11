@@ -118,8 +118,12 @@ the current image is the next test.
 What is not done, or not tried
 ------------------------------
 
-* Only the bench's DFP-34X-2C3 has run it. The DFP-34X-2C2 has not been tried,
-  and the build makes images for the DFP-34X-2C3 only.
+* Only the bench's DFP-34X-2C3 has run it. The DFP-34X-2C2 differs from it
+  only in the optical connector, APC or UPC (M: the owner's comparison of
+  units of both), so the same image is for both. A unit of either may carry
+  another laser-driver IC: the optics support is written for the one of the
+  bench's unit (``rtl9602c-optics.rst`` in the kernel's documentation), and
+  no other has been tried.
 * There is no release: the images are built from source (`Building`_).
 * If the configuration store cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial

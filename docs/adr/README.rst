@@ -66,3 +66,9 @@ record.
    * - 0016
      - The panel answers over HTTPS with its own key
      - Accepted
+   * - 0017
+     - Update files carry no signature
+     - Accepted
+   * - 0018
+     - The kernel series aims at mainline
+     - Accepted
