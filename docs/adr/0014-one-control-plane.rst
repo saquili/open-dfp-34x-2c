@@ -202,6 +202,21 @@ firmware's own files anew: on the bench one wrote the PLOAM password's
 format differently, so going back to another package than the stick's own
 can change how the stick introduces itself to an OLT.
 
+Decided on 2026-10-11, as the step after step 9: iproute2 leaves the
+flash's image. BusyBox's ``ip``, built in already, does what the scripts
+ask of ``ip``, and ``onu-nl`` of onu-utils, some 7 KB compressed, makes the
+requests of ``tc`` and ``devlink`` that they made: the clsact qdisc, the
+switch's rules of the management VLAN, the feeds of the sessions' GEM
+ports, the removal of omcid's bridge rules, and the parameters of the
+switch and of the PON driver. The RAM image keeps iproute2 for diagnosis,
+its ``ip`` as ``ip-full``, so that the scripts run BusyBox's ``ip`` there
+as they do from the flash. The root file system went from 1,825,101 to
+1,287,869 bytes, which leaves ``r0`` 743,747 bytes, 36.6 % of it. Tried on
+a stick of the bench started from RAM: the rules in the switch, the
+parameters, the identity and O5, two sessions with their throughput as
+before (902 Mb/s up, 880 down), a management pair added and cancelled, and
+omcid's rules taken away as the sessions came and went.
+
 Steps 3, 4, 5 and 7 are tried on a stick of the bench with live sessions:
 two sessions at once, an IPv6 prefix, the hardware path's throughput as
 before (some 900 Mb/s each way), and each program killed during a session.
@@ -214,8 +229,8 @@ Consequences
 * What the settings mean is in one place, the table, and pond and the
   generator take it from there.
 * netifd alone sets addresses and routes. Most of the image's uses of
-  ``ip`` go with onu-mode's; taking iproute2 out of the image is a step of
-  its own.
+  ``ip`` go with onu-mode's; iproute2 left the image in a step of its own
+  (above).
 * pond reads ubus as well as the kernel's interfaces, which it did not.
   libubus is in the image already (procd, netifd); pond, omcid and dhcp6d
   add only their calls to it. Each step measures what it adds to the image.

@@ -231,7 +231,9 @@ dropbear 2026.93
 The programs of the ONU, from this tree
     ``omcid``, the OMCI daemon, whose tools ``omcitap`` and ``omcivlan`` are
     in the RAM image only (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
-    from its factory configuration (``onu-utils/README.rst``); ``pppoed``, the
+    from its factory configuration, and ``onu-nl``, which sets the switch's
+    filters and the drivers' parameters as tc and devlink would
+    (``onu-utils/README.rst``); ``pppoed``, the
     PPPoE client and netifd's protocol ``pppoed`` (``pppoed/README.rst``),
     which links libubus to tell netifd; ``dhcp6d``, which hands a session's
     delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
@@ -254,9 +256,11 @@ procd
     OpenWrt's init and service supervisor, process 1, with the patches in
     ``br2-external/package/procd`` (``docs/adr/0013-procd-is-the-first-process.rst``).
 iproute2
-    ``ip``, ``tc`` and ``devlink``, which configure the links, the switch's
-    classifier and the PON driver, and ``bridge``, which shows the bridge's
-    VLANs. The post-build script takes the other programs of the package out
+    Built for the RAM image alone (ADR 0014): there ``tc``, ``devlink`` and
+    ``bridge``, and iproute2's ``ip`` as ``ip-full``, so that the scripts run
+    BusyBox's ``ip`` from RAM as they do from the flash. In the flash's image
+    BusyBox's ``ip`` configures the links, their addresses and routes, and
+    ``onu-nl`` the switch's classifier and the PON driver
     (``br2-external/board/dfp-34x-2c3/post-build.sh``).
 The start
     ``/sbin/init``, the first program, mounts ``/proc``, ``/sys``,
@@ -311,8 +315,8 @@ The boot script
     #. reads the identity of the unit into ``/run/onu-identity`` (readable by
        root only: it holds the PLOAM password), with the versions that
        ``/etc/board.conf`` may name (below), gives the PON driver the
-       serial number and the PLOAM password through devlink and brings the PON
-       up;
+       serial number and the PLOAM password through its devlink parameters
+       (``onu-nl``) and brings the PON up;
     #. starts ``omcid``, which answers the OLT, and per session ``dhcp6d``
        (``onu-apply``), as the instances of one service of procd, ``onu``,
        which ``onu-apply`` gives procd whole (``onu-svc sync``): procd starts
@@ -632,9 +636,10 @@ The bench (``tools/bench``, set up as in ``flashing.rst``) is the only tool that
 writes the flash, and only bank 0.
 
 A stick is diagnosed started from RAM; the flash holds the image of the final
-test. The tools of diagnosis, ``omcitap``, ``omcivlan``, ``ubus`` and the
-flash's ``flashcp``, ``flash_erase`` and ``mtd_debug``, are in the RAM image
-only: the post-build script sets them aside in
+test. The tools of diagnosis, ``omcitap``, ``omcivlan``, ``ubus``, the
+flash's ``flashcp``, ``flash_erase`` and ``mtd_debug``, and iproute2's ``tc``,
+``devlink``, ``bridge`` and ``ip``, the last as ``ip-full``, are in the RAM
+image only: the post-build script sets them aside in
 ``build/image/diag`` with the C library whole, since the image's own is cut to
 what the image's programs use, and ``make ram-image`` lays that directory over
 its root.
