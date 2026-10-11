@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Platform setup of the Realtek RTL9602C: the command line from the boot
- * loader, memory and the built-in device tree, the console UART, restart and
- * halt, the timers, and the write-buffer flush.
+ * loader, memory and the built-in device tree, the console UART, halt, the
+ * timers, and the write-buffer flush. The watchdog's driver restarts the
+ * board.
  */
 
-#include <linux/bits.h>
 #include <linux/clk-provider.h>
 #include <linux/clocksource.h>
 #include <linux/export.h>
@@ -53,47 +53,6 @@
 const char *get_system_type(void)
 {
 	return "Realtek RTL9602C";
-}
-
-/*
- * The watchdog's keepalive and control registers, which the platform code
- * writes in two places: it clears the control register at every boot, and
- * restarts the board through the watchdog.
- * RTL9602C_WDT_CTRL_RESET_NOW sets the enable alone: prescale 0 (167.8 ms a
- * tick), phase one and phase two of one tick each, and a full chip reset on
- * expiry, the shortest deadline the block has (335.5 ms).
- */
-#define RTL9602C_WDT_KEEPALIVE_ADDR	(RTL9602C_IOMEM_BASE + 0x3260)
-#define RTL9602C_WDT_KEEPALIVE_KICK	BIT(31)
-#define RTL9602C_WDT_CTRL_ADDR	(RTL9602C_IOMEM_BASE + 0x3268)
-#define RTL9602C_WDT_CTRL_RESET_NOW	BIT(31)
-
-/*
- * Restart by a full chip reset, which the watchdog makes at its shortest
- * deadline. A jump to the boot loader's reset vector would reach its prompt
- * sooner, but is not a reset: every on-chip block keeps the state this
- * kernel left. The switch then keeps this kernel's setup of the SFP lane,
- * and behind one of the host's cages the boot loader's frames never leave
- * the board (measured). The chip reset clears all of it, as a power cycle
- * does.
- */
-static void rtl9602c_machine_restart(char *command)
-{
-	local_irq_disable();
-
-	pr_emerg("rtl9602c: restarting through a watchdog chip reset\n");
-
-	/*
-	 * Kick before enabling, so the count starts from zero whatever was
-	 * left in it, as the watchdog driver does.
-	 */
-	__raw_writel(RTL9602C_WDT_KEEPALIVE_KICK,
-		     (void __iomem *)KSEG1ADDR(RTL9602C_WDT_KEEPALIVE_ADDR));
-	__raw_writel(RTL9602C_WDT_CTRL_RESET_NOW,
-		     (void __iomem *)KSEG1ADDR(RTL9602C_WDT_CTRL_ADDR));
-
-	while (1)
-		cpu_relax();
 }
 
 /*
@@ -201,22 +160,14 @@ static void __init rtl9602c_serial_init(void)
 /**
  * plat_mem_setup() - platform setup, called early from setup_arch()
  *
- * Stops the watchdog, adds the DRAM to memblock, hands the built-in device
- * tree to the OF core, registers the console UART and installs restart,
- * halt and power off.
+ * Adds the DRAM to memblock, hands the built-in device tree to the OF core,
+ * registers the console UART and installs halt and power off.
+ *
+ * A watchdog count that the boot loader armed for a trial boot runs on into
+ * the kernel, until the watchdog's driver takes it over.
  */
 void __init plat_mem_setup(void)
 {
-	/*
-	 * Stop the watchdog before anything else. A count armed before this
-	 * kernel, by a trial boot of the boot loader or by an older kernel
-	 * that restarted by a jump, keeps running across the jump into this
-	 * kernel although the control register then reads 0; writing 0 stops
-	 * it. Nothing watches the boot from here until the watchdog driver
-	 * arms it again at probe.
-	 */
-	__raw_writel(0, (void __iomem *)KSEG1ADDR(RTL9602C_WDT_CTRL_ADDR));
-
 	memblock_add(RTL9602C_RAM_BASE, RTL9602C_RAM_SIZE);
 
 	/*
@@ -227,7 +178,6 @@ void __init plat_mem_setup(void)
 
 	rtl9602c_serial_init();
 
-	_machine_restart = rtl9602c_machine_restart;
 	_machine_halt = rtl9602c_machine_halt;
 	pm_power_off = rtl9602c_machine_halt;
 }
