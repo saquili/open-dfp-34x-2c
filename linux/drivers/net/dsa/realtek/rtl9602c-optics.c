@@ -16,8 +16,8 @@
  * turns the part's automatic extinction-ratio loop off at every PON bring-up
  * (rtl9602c_optics_hold_modulation()), and offers two debugfs views that
  * only read, "a2" and "eeblocks", a third, "tables", that selects each table
- * to read it, and "t2write", which stores table 2 bytes in the module's
- * EEPROM on request.
+ * to read it, and, with CONFIG_NET_DSA_RTL9602C_OPTICS_STORE, "t2write",
+ * which stores table 2 bytes in the module's EEPROM on request.
  *
  * CONFIG_RTL9602C_OPTICS_RO makes the modulation hold, the driver's only
  * write to the part of its own accord, return without writing, and the adapter refuse every
@@ -1361,8 +1361,10 @@ static const struct file_operations rtl9602c_t2write_fops = {
  * Creates "a2" and "eeblocks", both mode 0400, in the switch's debugfs
  * directory.  Both only read the part, so a CONFIG_RTL9602C_OPTICS_RO
  * build has them too.  "tables" writes the page select and the password
- * bytes, and "t2write", mode 0200, stores table 2 bytes in the module's
- * EEPROM; only a build without it has those two.
+ * bytes, and only a build without it has that view.  "t2write", mode 0200,
+ * stores table 2 bytes in the module's EEPROM, where they outlive every
+ * power cycle, among them the rogue ONU controls; only a build with
+ * CONFIG_NET_DSA_RTL9602C_OPTICS_STORE, which excludes the other, has it.
  */
 void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 {
@@ -1374,8 +1376,9 @@ void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 		return;
 	debugfs_create_file("tables", 0400, p->debugfs, p,
 			    &rtl9602c_tables_fops);
-	debugfs_create_file("t2write", 0200, p->debugfs, p,
-			    &rtl9602c_t2write_fops);
+	if (IS_ENABLED(CONFIG_NET_DSA_RTL9602C_OPTICS_STORE))
+		debugfs_create_file("t2write", 0200, p->debugfs, p,
+				    &rtl9602c_t2write_fops);
 }
 
 #endif

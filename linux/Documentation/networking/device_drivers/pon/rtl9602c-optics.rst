@@ -31,9 +31,10 @@ The optics have no driver of their own. The code is part of the switch driver,
   bring-up, so that the modulation of the laser runs from the value the module
   loads at power-up. This is the modulation hold.
 - It offers two debugfs views that only read, ``a2`` and ``eeblocks``, a
-  third, ``tables``, that selects each table of the upper page to read it, and
-  an entry, ``t2write``, that stores a byte of the configuration table in the
-  module's EEPROM, or resets the laser driver, when root writes to it.
+  third, ``tables``, that selects each table of the upper page to read it, and,
+  with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``, an entry, ``t2write``, that
+  stores a byte of the configuration table in the module's EEPROM, or resets
+  the laser driver, when root writes to it.
 
 The driver writes nothing to the laser driver at probe or at setup. Its only
 writes are those of the modulation hold, at PON bring-up, those a read of the
@@ -87,8 +88,13 @@ Configuration
        returns 0.
    * - ``CONFIG_DEBUG_FS``
      - The debugfs views ``a2``, ``eeblocks`` and ``tables`` and the entry
-       ``t2write`` exist only with it, ``tables`` and ``t2write`` only without
+       ``t2write`` exist only with it, ``tables`` only without
        ``CONFIG_RTL9602C_OPTICS_RO``.
+   * - ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``
+     - Boolean, off by default, and only without ``CONFIG_RTL9602C_OPTICS_RO``.
+       The entry ``t2write`` exists only with it. The bytes it stores outlive
+       every power cycle, among them the transmitter's rogue ONU controls,
+       which protect the other ONUs of the PON: the option is for test images.
    * - ``CONFIG_GPIOLIB``, ``CONFIG_GPIO_REALTEK_OTTO``
      - The GPIO controller that serves the TX_DISABLE line
        (Documentation/arch/mips/rtl9602c.rst).
@@ -215,7 +221,7 @@ Interfaces to user space
   ``0400`` and exist only with ``CONFIG_DEBUG_FS``.
 - ``/sys/kernel/debug/rtl9602c/t2write``, mode ``0200``, which stores a byte
   of table 2 in the module's EEPROM or resets the laser driver (see "Storing
-  table 2 bytes").
+  table 2 bytes"), only with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``.
 - The TX_DISABLE line. It has no file of its own: it is line 13 of the GPIO
   bank, requested under the consumer name ``tx-disable``, and
   ``/sys/kernel/debug/gpio`` shows its direction and level (high while
@@ -820,7 +826,8 @@ maker sets it: among it the receiver's loss-of-signal control (BBh), whose
 ``LOS_POLARITY`` bit decides how the receiver's signal detect has to be read
 (``rtl9602c-gpon.rst``, "Downstream lock, LOS and alarms"), the APD bias
 control (BDh) and the current limits (ADh-AFh). A module whose table 2 has gone
-wrong is put right through ``t2write``, mode ``0200``, one command per write::
+wrong is put right through ``t2write``, mode ``0200``, in a kernel built with
+``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``, one command per write::
 
     # W=/sys/kernel/debug/rtl9602c/t2write
     # echo open > $W

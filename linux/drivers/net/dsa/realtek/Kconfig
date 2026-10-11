@@ -100,6 +100,22 @@ config NET_DSA_RTL9602C
 	  Say Y or M on an RTL9602C board. To compile this driver as a module,
 	  choose M here: the module will be called rtl9602c.
 
+config NET_DSA_RTL9602C_OPTICS_STORE
+	bool "Store bytes of the optics' configuration table through debugfs"
+	depends on NET_DSA_RTL9602C && DEBUG_FS && !RTL9602C_OPTICS_RO
+	help
+	  Give the switch's debugfs directory a file, rtl9602c/t2write, that
+	  stores bytes of the laser driver's configuration table (table 2)
+	  in the module's EEPROM, where they stay across every power cycle,
+	  and resets the laser driver. It puts right a module whose table 2
+	  has gone wrong. Among the bytes it takes are the transmitter's
+	  fault, alarm and rogue ONU controls, which keep a faulty ONU from
+	  disturbing the other ONUs of the PON, so a process that can write
+	  the file can weaken that protection for good. The option is for
+	  test images, not for an ONU in service.
+
+	  If unsure, say N.
+
 config NET_DSA_RTL9602C_PLOAM_INJECT
 	bool "Inject downstream PLOAM messages through debugfs"
 	depends on NET_DSA_RTL9602C && DEBUG_FS
