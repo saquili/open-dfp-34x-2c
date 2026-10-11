@@ -9,14 +9,15 @@ The distribution: a Buildroot external tree (see ADR 0005).
 
 This is where the product is assembled from source -- the board definition, the
 target configuration, the C-library and BusyBox configurations, the package
-recipes (including the OMCI daemon), and the post-image script that lays out the
-two partition images the bootloader loads. The kernel comes from ``linux/`` and
-the pinned build system from ``buildroot/``.
+recipes, and the post-image script that lays out the two partition images the
+bootloader loads. The kernel comes from ``linux/`` and the pinned build system
+from ``buildroot/``.
 
-The tree builds the cross toolchain, and the two flash images of the
-DFP-34X-2C3: the kernel, and a root filesystem of BusyBox, dropbear and a boot
-script (see "The board's image"). The OMCI daemon package arrives with the
-userspace work item.
+The tree builds the cross toolchain, and the images of the DFP-34X-2C3: the
+kernel; a root filesystem of procd, ubus, netifd, BusyBox, dropbear and the
+programs of this tree, with the boot script; the update file of the stick's
+``onu-update``; and the package that the shipped firmware's web page installs
+(see "The board's image").
 
 What is here
 ============
@@ -24,9 +25,16 @@ What is here
 ``external.desc``, ``Config.in``, ``external.mk``
     The three files Buildroot requires of an external tree. The tree is named
     ``OPEN_DFP_34X_2C``, so Buildroot sets ``BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH``
-    to this directory. ``Config.in`` has no entry yet; ``external.mk`` includes
-    the package recipes under ``package/`` (there are none) and refuses to run a
-    build without the kernel archive described below.
+    to this directory. ``Config.in`` names the packages of ``package/``;
+    ``external.mk`` includes their recipes and refuses to run a build without
+    the kernel archive described below.
+``package/``
+    The recipes of the packages Buildroot does not carry: ``omcid``,
+    ``onu-utils``, ``pppoed``, ``dhcp6d``, ``pond`` and ``netifd``, each built
+    from its directory of this repository (``SITE_METHOD = local``); and
+    ``procd`` and ``libnl-tiny`` of OpenWrt, fetched by hash, with ``procd``'s
+    patches (ADR 0013). libubox, ubus, json-c and libuci are Buildroot's own
+    packages, which ``buildroot/patches`` builds for this core.
 ``configs/toolchain_defconfig``
     The configuration of the toolchain, and of nothing but the toolchain.
 ``configs/odi_dfp_34x_2c3_defconfig``
@@ -41,15 +49,28 @@ What is here
 ``board/dfp-34x-2c3/overlay/``
     The files laid over the root filesystem: the first program ``sbin/init``,
     which starts procd, procd's inittab, the boot script ``etc/init.d/rcS``
-    (``etc/rc.d/S10boot``), the shell profile, the name of the image, and the
-    ``var`` directory that a temporary file system is mounted on.
+    (``etc/rc.d/S10boot``), the defaults of the settings ``etc/onu.conf``, the
+    shell profile, the name of the image, and the ``var`` directory that a
+    temporary file system is mounted on.
 ``board/dfp-34x-2c3/post-build.sh``
-    The script that the build system runs on the target tree: it takes out the
-    programs of iproute2 the stick does not run, cuts the shared libraries with
-    ``tools/lib-trim`` and writes the build's commit into ``/etc/os-release``.
+    The script that the build system runs on the target tree: it takes out
+    iproute2, the command-line tools of the network layer (``uci``, ``jshn``)
+    and the tools of diagnosis, and sets the latter aside in ``diag/`` of the
+    build's directory for the RAM image; it cuts the shared libraries with
+    ``tools/lib-trim`` and writes the build's commit into
+    ``/etc/os-release``.
+``board/dfp-34x-2c3/finish-root.sh``
+    What a copy of the target tree needs before it becomes a root filesystem,
+    the flash's or the RAM image's: its accounts among them.
 ``board/dfp-34x-2c3/post-image.sh``
-    The script that leaves ``k0.uImage``, ``r0.squashfs`` and ``SHA256SUMS`` in the
-    images directory.
+    The script that leaves ``k0.uImage``, ``r0.squashfs``, ``update.bin``,
+    ``web-install.tar`` and ``SHA256SUMS`` in the images directory, with
+    ``mkupdate.py``, which makes the update file, and ``mkweb.py``, which
+    makes the package of the shipped firmware's web page around ``fwu.sh``,
+    the script that installs it.
+``board/dfp-34x-2c3/initramfs.list``
+    What the initramfs of a RAM image holds beyond the target tree: the
+    console's device and ``/init``.
 ``tests/run``
     The unit tests of the tree (``tests/image`` and ``tests/toolchain``).
 ``tests/image/``
@@ -214,7 +235,8 @@ has the commands, the sizes and how to put the images on the board. In short:
 * ``board/dfp-34x-2c3/post-image.sh`` makes ``r0.squashfs`` from the target
   directory with the host ``mksquashfs`` (xz, every file root-owned and
   carrying the build's time, no extended attributes), copies the kernel's
-  ``uImage`` to ``k0.uImage`` and writes ``SHA256SUMS``.
+  ``uImage`` to ``k0.uImage``, makes ``update.bin`` and ``web-install.tar``
+  from the two, and writes ``SHA256SUMS``.
 * The build is reproducible: ``BR2_REPRODUCIBLE`` fixes ``SOURCE_DATE_EPOCH``,
   which the kernel build, ``mkimage`` and the post-image script use for every
   time they write; the kernel builds as ``buildroot@buildroot``. As for the
