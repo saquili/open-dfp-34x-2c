@@ -77,6 +77,7 @@ Building and testing
    make check          # the tests
    make coverage       # the tests, failing unless every line of src/ ran
    make check-style CLANG_FORMAT=clang-format CHECKPATCH=../linux/scripts/checkpatch.pl
+   make check-kernel   # the board's backend against this host's kernel, as root
 
 This build runs on the host backend. Frames come on the standard input and
 the answers go to the standard output, so recorded frames can be played
@@ -90,6 +91,16 @@ and the answers can depend on how fast the frames come. ``-t N`` holds the
 clock at second N, and the same frames then give the same answers::
 
    build/omcid -p -t 1 < frames.bin > answers.bin
+
+``make check-kernel`` runs the board's backend, ``target/hw_kernel.c``, in a
+network namespace of its own, with dummy interfaces named ``sfp`` and ``pon``,
+and reads back with tc the filters it adds: the VLAN rules, the bridge port
+filters, the multicast tags and the drops at the UNI that an earlier run
+left. It builds the backend with ``OMCID_TC_FLAGS=0``, so that the filters,
+which on the board go to the switch alone, go into software. It needs root
+and tc, and says that it skipped without them; on a kernel without the vlan
+action it skips the VLAN rules and the tags. The parts that need the stick's
+PON family are tried on the board.
 
 ``make board`` builds the daemon for the board, with the backend of the
 board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the

@@ -64,6 +64,15 @@
 #define IDENTITY_PATH "/run/onu-identity"
 
 /*
+ * The flags of the filters omcid adds: in the switch alone. The kernel test
+ * (make check-kernel) builds with 0, so that its dummy interfaces, which no
+ * switch is behind, take them in software.
+ */
+#ifndef OMCID_TC_FLAGS
+#define OMCID_TC_FLAGS TCA_CLS_FLAGS_SKIP_SW
+#endif
+
+/*
  * The switch ports and the interfaces of the board: the subscriber side,
  * the PON side, and the management VLAN of the subscriber side.
  */
@@ -2709,7 +2718,7 @@ static int tc_filter_add(int ifindex, unsigned int prio,
 		.action = TC_ACT_PIPE,
 		.v_action = f->v_action,
 	};
-	uint32_t flags = TCA_CLS_FLAGS_SKIP_SW;
+	uint32_t flags = OMCID_TC_FLAGS;
 	size_t off, opts, acts, act1, aopts;
 
 	memset(req, 0, sizeof(req));
@@ -3131,7 +3140,7 @@ static int tc_gact_add(int ifindex, unsigned int prio,
 	};
 	struct tc_gact gact = { .action = r->action };
 	const uint16_t eth = htons(r->proto);
-	uint32_t flags = TCA_CLS_FLAGS_SKIP_SW;
+	uint32_t flags = OMCID_TC_FLAGS;
 	size_t off, opts, acts, act1, aopts;
 
 	memset(req, 0, sizeof(req));
@@ -3238,17 +3247,23 @@ static int mcast_traps(int uni, bool on)
 
 static uint16_t g_uni_drop[DISCARD_MAX];
 static size_t g_uni_drop_n;
+/*
+ * Whether the rules an earlier run left were taken away: a daemon that ends
+ * leaves its rules on sfp, and one that starts again knows none of them.
+ */
+static bool g_uni_drop_clear;
 
 static void uni_discard_sync(const uint16_t *vids, size_t n)
 {
 	const int uni = (int)if_nametoindex(UNI_IFNAME);
-	bool same = n == g_uni_drop_n;
+	bool same = n == g_uni_drop_n && g_uni_drop_clear;
 	int err;
 
 	for (size_t i = 0; same && i < n; i++)
 		same = vid_in(g_uni_drop, g_uni_drop_n, vids[i]);
 	if (same || !uni)
 		return;
+	g_uni_drop_clear = true;
 
 	for (unsigned int i = 0; i < DISCARD_MAX; i++)
 		(void)tc_filter_del(uni, DISCARD_PRIO + i);

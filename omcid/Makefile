@@ -383,6 +383,31 @@ board:
 	$(Q)$(MAKE) --no-print-directory BOARD=1 board
 endif
 
+# The kernel backend against the kernel the host runs, in a network namespace
+# of its own, with dummy interfaces for the switch's ports; its filters go
+# into software (OMCID_TC_FLAGS=0), as no switch is behind a dummy interface.
+# It needs root, network namespaces and tc, and says that it skipped without
+# them (tests/kernel/test_hw_kernel.c).
+.PHONY: check-kernel
+ifeq ($(BOARD),1)
+KERNEL_TEST := $(BUILD)/test_hw_kernel
+
+check-kernel: $(KERNEL_TEST)
+	$(KERNEL_TEST)
+
+$(OBJ)/kernel-sw/hw_kernel.o: target/hw_kernel.c
+	@mkdir -p $(dir $@)
+	$(call say,CC,$< (filters in software))
+	$(Q)$(COMPILE) -DOMCID_TC_FLAGS=0 -c $< -o $@
+
+$(KERNEL_TEST): $(OBJ)/tests/kernel/test_hw_kernel.o $(OBJ)/kernel-sw/hw_kernel.o $(BOARD_LIB)
+	$(call say,LD,$@)
+	$(Q)$(CC) $(LDFLAGS) -o $@ $(filter %.o,$^) $(BOARD_LIB) $(LDLIBS)
+else
+check-kernel:
+	$(Q)$(MAKE) --no-print-directory BOARD=1 BUILD=build-kernel check-kernel
+endif
+
 clean:
 	rm -rf $(BUILD)
 
