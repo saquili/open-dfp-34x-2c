@@ -215,7 +215,7 @@ class Names(unittest.TestCase):
         installed = dict(re.findall(r"\$\(@D\)/(?:build|scripts)/(\S+) \$\(TARGET_DIR\)(\S+)",
                                     recipe))
         for helper in ("ponid", "onu-mgmt", "onu-net", "onu-run", "onu-lane", "onu-trial",
-                       "onu-config.sh", "dhcp-wan"):
+                       "onu-config.sh"):
             self.assertEqual(installed[helper], "/usr/lib/onu/" + helper)
         for program in ("onu-config", "onu-apply", "onu-update", "onu-svc", "pon"):
             self.assertEqual(installed[program], "/usr/sbin/" + program)

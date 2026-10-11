@@ -179,8 +179,7 @@ onu-nl clsact add pon &&
 	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
 
 # The servers listen on the addresses of the host side and nowhere else: the
-# stick has no packet filter, and nothing on the PON side, nor on the WAN of
-# router mode, is to reach them. They start now that the addresses are there
+# stick has no packet filter, and nothing on the PON side is to reach them. They start now that the addresses are there
 # (onu-run): the ssh server, which takes root's password and the keys of
 # /root/.ssh/authorized_keys, which an image built with a bench's keys carries
 # and this one does not, and the status daemon with its panel, where people
@@ -235,7 +234,7 @@ onu-apply identity || warn "the PON stays down"
 
 # The data path as the settings shape it: onu-apply starts omcid, which
 # answers the OLT and logs to /run/omcid.log, and what the settings ask for,
-# the PPPoE sessions with their links to the host, or on a bench the router.
+# the PPPoE sessions with their links to the host.
 if [ -x /usr/sbin/omcid ]; then
 	onu-apply start || warn "onu-apply did not start"
 else
