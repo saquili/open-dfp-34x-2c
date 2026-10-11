@@ -2798,7 +2798,9 @@ static int tc_filter_add(int ifindex, unsigned int prio,
  * pushed in front of a C-tag, by popping the tag. A rule that takes one
  * priority matches it upstream; an S-tag that takes the priority of the
  * C-tag behind it from frames of any priority takes one upstream filter per
- * priority, as a push names the priority it gives. Returns the number of
+ * priority, as a push names the priority it gives, and so does a rule that
+ * takes each priority apart (@per_pri), so that the switch gives the frames
+ * of each priority the GEM port of that priority. Returns the number of
  * upstream filters, 0 for a rule of no kind known here.
  */
 static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
@@ -2806,22 +2808,27 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
 			   struct tc_vlan_filter *down)
 {
 	switch (r->kind) {
-	case OMCI_HW_VLAN_CVID_XLATE:
-		up[0] = (struct tc_vlan_filter){
-			.match_vid = r->match_cvid,
-			.match_has_pri = r->match_has_pri,
-			.match_pri = r->match_pri,
-			.v_action = TCA_VLAN_ACT_MODIFY,
-			.vid = r->assign_cvid,
-			.pri = r->assign_pri,
-		};
+	case OMCI_HW_VLAN_CVID_XLATE: {
+		const bool apart = r->per_pri && !r->match_has_pri;
+		const size_t n = apart ? VLAN_UP_MAX : 1u;
+
+		for (size_t i = 0; i < n; i++)
+			up[i] = (struct tc_vlan_filter){
+				.match_vid = r->match_cvid,
+				.match_has_pri = apart || r->match_has_pri,
+				.match_pri = apart ? (uint8_t)i : r->match_pri,
+				.v_action = TCA_VLAN_ACT_MODIFY,
+				.vid = r->assign_cvid,
+				.pri = r->assign_pri,
+			};
 		*down = (struct tc_vlan_filter){
 			.match_vid = r->assign_cvid,
 			.v_action = TCA_VLAN_ACT_MODIFY,
 			.vid = r->match_cvid,
 			.pri = OMCI_HW_VLAN_PRI_KEEP,
 		};
-		return 1;
+		return n;
+	}
 	case OMCI_HW_VLAN_CVID_PUSH:
 		up[0] = (struct tc_vlan_filter){
 			.untagged = true,
@@ -3007,8 +3014,9 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 				r->up_only ? ", upstream only" : "");
 		else
 			OMCI_INFO(
-				"vlan: C-VID %u%s <-> %u translated in hardware%s",
+				"vlan: C-VID %u%s <-> %u translated in hardware%s%s",
 				r->match_cvid, pri, r->assign_cvid,
+				n_up > 1u ? ", each priority apart" : "",
 				r->up_only ? ", upstream only" : "");
 	}
 

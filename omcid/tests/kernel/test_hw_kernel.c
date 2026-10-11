@@ -121,6 +121,29 @@ static void vlan_rules(void)
 	CHECK(!at("sfp", 1001, NULL) && !at("pon", 1001, NULL));
 	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
 	CHECK(!at("sfp", 1000, NULL) && !at("pon", 1000, NULL));
+
+	const struct omci_hw_vlan_xlate apart = {
+		.kind = OMCI_HW_VLAN_CVID_XLATE,
+		.match_cvid = 410,
+		.assign_cvid = 1410,
+		.assign_pri = OMCI_HW_VLAN_PRI_KEEP,
+		.per_pri = true,
+	};
+
+	puts("a translation that takes each priority apart: eight filters up, one down");
+	CHECK(omci_hw_kernel_ops.vlan_apply(&apart, 1, &rejected) == OMCI_OK);
+	CHECK(rejected.n == 0);
+	for (unsigned int pcp = 0; pcp < 8; pcp++) {
+		char text[16];
+
+		snprintf(text, sizeof(text), "vlan_prio %u", pcp);
+		CHECK(at("sfp", 1000, text));
+	}
+	CHECK(at("sfp", 1000, "modify id 1410"));
+	CHECK(at("pon", 1000, "modify id 410"));
+	CHECK(!at("pon", 1000, "vlan_prio"));
+	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
+	CHECK(!at("sfp", 1000, NULL) && !at("pon", 1000, NULL));
 }
 
 static void port_filters(void)

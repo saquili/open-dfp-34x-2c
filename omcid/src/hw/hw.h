@@ -183,6 +183,10 @@ enum omci_hw_vlan_kind {
  * @up_only: the rule works upstream only: an earlier rule gives frames the
  *	same tag toward the network, and the way back downstream is that
  *	rule's (G.988 9.3.13, many-to-one mappings)
+ * @per_pri: the rule takes the frames of each priority upstream apart, as
+ *	eight rules that each match one: it keeps any priority, and the GEM
+ *	ports of the VLAN it leads into divide that VLAN's priorities, while
+ *	one rule of the switch sends its frames to one GEM port
  */
 struct omci_hw_vlan_xlate {
 	enum omci_hw_vlan_kind kind;
@@ -193,6 +197,7 @@ struct omci_hw_vlan_xlate {
 	bool match_has_pri;
 	uint8_t match_pri;
 	bool up_only;
+	bool per_pri;
 };
 
 /**

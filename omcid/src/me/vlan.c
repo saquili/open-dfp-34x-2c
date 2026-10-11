@@ -13,6 +13,8 @@
 
 #include "me/vlan.h"
 #include "hw/hw.h"
+#include "me/bridge.h"
+#include "me/gem.h"
 #include "mib/store.h"
 #include "omcid/array_size.h"
 #include "omcid/byteorder.h"
@@ -323,6 +325,50 @@ static struct omci_hw_vlan_xlate hw_rule_of(const struct omci_vlan_rule *d)
 		.match_has_pri = d->match_has_pri,
 		.match_pri = d->match_pri,
 	};
+}
+
+/*
+ * Whether the GEM ports of VLAN @net divide its priorities upstream: a port
+ * that carries it takes some of them and not all. A port that carries the
+ * VLAN @sub, whose frames a translation leads into @net, carries @net as
+ * well. The ports are those the bridges and the GEM ports were last
+ * programmed with.
+ */
+static bool gem_divides(uint16_t net, uint16_t sub)
+{
+	const struct omci_hw_bridge_port *bp;
+	const struct omci_hw_gem_port *gp;
+	const size_t nb = omci_bridge_last(&bp), ng = omci_gem_last(&gp);
+
+	for (size_t i = 0; i < nb; i++) {
+		bool carries = bp[i].num_vlan == 0u;
+
+		if (bp[i].port_id == OMCI_HW_BRIDGE_UNI)
+			continue;
+		for (uint8_t v = 0; v < bp[i].num_vlan; v++)
+			carries = carries || bp[i].vlan[v] == net ||
+				  bp[i].vlan[v] == sub;
+		for (size_t j = 0; j < ng && carries; j++)
+			if (gp[j].port_id == bp[i].port_id &&
+			    !gp[j].multicast &&
+			    (gp[j].direction & OMCI_HW_GEM_DIR_UPSTREAM) &&
+			    gp[j].pbits != 0u && gp[j].pbits != 0xffu)
+				return true;
+	}
+	return false;
+}
+
+/*
+ * Whether a rule takes each priority apart (struct omci_hw_vlan_xlate): a
+ * translation that keeps any priority, into a VLAN whose GEM ports divide
+ * the priorities. An S-VID push that copies any priority is taken apart by
+ * the hardware layer anyway, as the tag it adds names its priority.
+ */
+static bool wants_per_pri(const struct omci_hw_vlan_xlate *r)
+{
+	return r->kind == OMCI_HW_VLAN_CVID_XLATE && !r->match_has_pri &&
+	       r->assign_pri == OMCI_HW_VLAN_PRI_KEEP &&
+	       gem_divides(r->assign_cvid, r->match_cvid);
 }
 
 /*
@@ -677,6 +723,12 @@ static size_t gather(const struct omci_mib *mib, uint16_t class_id,
 								&rules[rival]));
 				}
 
+				cand.per_pri = wants_per_pri(&cand);
+				if (cand.per_pri && warn)
+					OMCI_INFO(
+						"me171: C-VID %u<->%u keeps any priority, and the GEM ports of VLAN %u divide the priorities: each priority is taken apart",
+						d.match_cvid, net_vid, net_vid);
+
 				rules[n] = cand;
 				fate_put(record, cur.instance, i,
 					 OMCI_VLAN_FATE_PROGRAMMED,
@@ -775,6 +827,14 @@ size_t omci_vlan_in_force(const struct omci_hw_vlan_xlate **out)
 {
 	*out = g_in_force;
 	return g_in_force_n;
+}
+
+bool omci_vlan_per_pri_stale(void)
+{
+	for (size_t i = 0; i < g_in_force_n; i++)
+		if (g_in_force[i].per_pri != wants_per_pri(&g_in_force[i]))
+			return true;
+	return false;
 }
 
 bool omci_vlan_row_refused(const uint8_t *row, size_t len)

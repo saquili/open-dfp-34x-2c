@@ -279,6 +279,20 @@ size_t omci_vlan_fates(const struct omci_vlan_fate_rec **out,
 size_t omci_vlan_in_force(const struct omci_hw_vlan_xlate **out);
 
 /**
+ * omci_vlan_per_pri_stale() - Whether the rules in force take the priorities
+ *	apart where the GEM ports now divide them.
+ *
+ * A translation that keeps any priority, into a VLAN whose GEM ports divide
+ * its priorities, takes each priority apart (struct omci_hw_vlan_xlate,
+ * @per_pri). Programming the GEM ports or the bridges can change which
+ * VLANs those are; the rules are then to be programmed again.
+ *
+ * Return: true when a rule in force takes them apart and no longer needs
+ * to, or needs to and does not.
+ */
+bool omci_vlan_per_pri_stale(void);
+
+/**
  * omci_vlan_forget_in_force() - Forget which rules are in force, as after a MIB reset.
  */
 void omci_vlan_forget_in_force(void);

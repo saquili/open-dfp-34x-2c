@@ -390,9 +390,22 @@ static enum omci_status reprogram_vlan(struct omci_engine *eng)
 				 ME171_RULE_ATTR, NULL);
 }
 
+/*
+ * The VLAN rules again, when the GEM ports or the bridges just programmed
+ * change which rules take the priorities apart (omci_vlan_per_pri_stale()).
+ */
+static void reprogram_vlan_per_pri(struct omci_engine *eng)
+{
+	if (omci_vlan_per_pri_stale())
+		(void)reprogram_vlan(eng);
+}
+
 static enum omci_status reprogram_gem(struct omci_engine *eng)
 {
-	return omci_gem_program(eng->mib, NULL);
+	const enum omci_status rc = omci_gem_program(eng->mib, NULL);
+
+	reprogram_vlan_per_pri(eng);
+	return rc;
 }
 
 /*
@@ -421,7 +434,10 @@ static bool class_builds_bridge(uint16_t class_id)
 
 static enum omci_status reprogram_bridge(struct omci_engine *eng)
 {
-	return omci_bridge_program(eng->mib, NULL);
+	const enum omci_status rc = omci_bridge_program(eng->mib, NULL);
+
+	reprogram_vlan_per_pri(eng);
+	return rc;
 }
 
 /*
