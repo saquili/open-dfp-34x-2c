@@ -113,6 +113,20 @@ check '[ $rc -eq 1 ] && grep -q PPPOE3_SECRET "$T/err" && [ ! -e "$R/run/onu-ppp
 "$ONUCFG" current extra </dev/null >/dev/null 2>&1
 rc=$?
 check '[ $rc -eq 2 ]'
+# The management VLAN in use, and one on trial, are no session's.
+printf 'VLAN=4094\nADDRESS=198.51.100.2/30\n' >"$R/run/onu-mgmt"
+mkdir -p "$R/run/onu-trial.d"
+printf 'VLAN=100\nADDRESS=192.0.2.6/30\n' >"$R/run/onu-trial.d/mgmt"
+printf 'SESSION1_VLAN=4094\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 1 ] && grep -q "session 1: VLAN 4094 is the management VLAN" "$T/err" && cmp -s "$R/run/onu.conf" "$T/conf.before"'
+printf 'SESSION1_HOST_VLAN=100\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 1 ] && grep -q "VLAN 100 is the management VLAN" "$T/err"'
+rm -rf "$R/run/onu-trial.d"
+printf 'SESSION1_HOST_VLAN=100\n' | ONU_ROOT=$R "$ONUCFG" change >"$T/out" 2>"$T/err"
+rc=$?
+check '[ $rc -eq 0 ] && grep -qx "SESSION1_HOST_VLAN=100" "$R/run/onu.conf"'
 
 echo "password-state and password-check: root's hash, which they keep to themselves"
 rm -f "$R/run/onu-auth"

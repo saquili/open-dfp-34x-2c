@@ -148,6 +148,18 @@ check '! echo "$out" | grep -q PENDING_'
 check 'grep -qx PREF=2 "$ONU_ROOT/run/onu-mgmt" && grep -qx "NAME=$name" "$ONU_ROOT/run/onu-mgmt"'
 teardown
 
+echo "a VLAN the settings give a session is no management VLAN"
+setup
+printf 'SESSION2_VLAN=410\nSESSION1_HOST_VLAN=36\n' >"$ONU_ROOT/run/onu.conf"
+run add 410 192.0.2.6/30
+check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
+run add 36 192.0.2.6/30
+check '[ $rc -ne 0 ] && [ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
+run add 37 192.0.2.6/30
+check '[ $rc -eq 0 ]'
+run cancel
+teardown
+
 echo "the pending pair's ssh server takes keys only while root's password is not known"
 setup
 echo '!' >"$ONU_ROOT/run/onu-auth"

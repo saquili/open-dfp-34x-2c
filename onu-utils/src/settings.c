@@ -396,6 +396,14 @@ static bool carries(const struct settings *s, int n, const char *fam)
 	return !strcmp(f, "both") || !strcmp(f, fam);
 }
 
+/* Whether the VLAN @v, a setting's value, is a management VLAN of @s. */
+static bool mgmt(const struct settings *s, const char *v)
+{
+	unsigned long vid = strtoul(v, NULL, 10);
+
+	return *v && vid && (vid == s->mgmt_vlan[0] || vid == s->mgmt_vlan[1]);
+}
+
 bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 {
 	uint32_t ip, mask, start, end, gw;
@@ -420,6 +428,26 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 				 n + 1, n + 1, n + 1);
 			return false;
 		}
+	}
+	/*
+	 * The switch drops a management VLAN's frames on the PON's ingress and
+	 * keeps them from the PON on the host link's: a session or a link in
+	 * it would carry nothing.
+	 */
+	for (int n = 0; n < SETTINGS_SESSIONS; n++) {
+		if (!*s->acct[n].user)
+			continue;
+		if (mgmt(s, s->sval[n][SET_S_VLAN]) || mgmt(s, down_vlan(s, n))) {
+			snprintf(err, errcap,
+				 "session %d: VLAN %s is the management VLAN", n + 1,
+				 mgmt(s, s->sval[n][SET_S_VLAN]) ? s->sval[n][SET_S_VLAN] :
+								  down_vlan(s, n));
+			return false;
+		}
+	}
+	if (!strcmp(s->val[SET_MODE], "router") && mgmt(s, s->val[SET_WAN_VLAN])) {
+		snprintf(err, errcap, "WAN_VLAN %s is the management VLAN", s->val[SET_WAN_VLAN]);
+		return false;
 	}
 	if (!strcmp(s->val[SET_MODE], "router") &&
 	    !strcmp(s->val[SET_WAN_PROTO], "pppoe") && !*s->acct[0].user) {

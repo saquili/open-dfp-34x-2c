@@ -65,9 +65,10 @@ there, and names it by its whole path where procd starts it.
    which root alone may read, and prints them as ``settings`` does, with
    each account's ``PPPOEn_USER`` and ``PPPOEn_SECRET_SET``, never its
    secret; ``onu-config change`` takes a change on its input, judges it over
-   them as ``check`` does, and writes ``/run/onu.conf`` and the accounts that
-   changed, or says why not and writes nothing, for ``onu-apply try`` to
-   apply. The status daemon has onu-act run them, and knows neither the
+   them as ``check`` does, and as well against the management VLANs in use
+   (no session's VLAN, nor the VLAN it hands down in, is one), and writes
+   ``/run/onu.conf`` and the accounts that changed, or says why not and
+   writes nothing, for ``onu-apply try`` to apply. The status daemon has onu-act run them, and knows neither the
    rules nor the files::
 
       onu-config check <settings       # the settings in full, or why not
@@ -316,7 +317,7 @@ there, and names it by its whole path where procd starts it.
    change of them that cannot lock anyone out. ``onu-mgmt start`` records the
    pair of the boot; ``add`` puts a new pair beside the old one, with the
    switch's rules that keep its VLAN from the PON and an ssh server of its
-   own, and ``commit`` makes it the one in use and stores it, which a person
+   own, and refuses a VLAN a session or the WAN is given, and ``commit`` makes it the one in use and stores it, which a person
    can do only once the new pair answers; a change not committed goes again
    after ten minutes. netifd brings the pairs up: each is an interface of its
    own in onu-mgmt's part of netifd's configuration, so that the one a person

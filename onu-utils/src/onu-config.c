@@ -74,7 +74,10 @@
  * change takes KEY=VALUE lines over them, an account's among them, judges
  * the whole as check does, and writes /run/onu.conf and the accounts that
  * changed, each a new file renamed over the old; it says why when it
- * refuses, and then writes nothing. onu-apply try applies what it wrote.
+ * refuses, and then writes nothing. It refuses as well a session whose VLAN,
+ * or the VLAN it hands down in, is a management VLAN in use, of
+ * /run/onu-mgmt or of a pair on trial, whose frames the switch keeps
+ * between the host side and the stick. onu-apply try applies what it wrote.
  * The status daemon has them run through onu-act (ADR 0014).
  *
  * password-check and password-state read root's hash from /run/onu-auth,
@@ -451,6 +454,29 @@ static void root_path(const char *path, int n, char *out, size_t cap)
 
 #define CONF_PATH "/run/onu.conf"
 #define ACCOUNT_PATH "/run/onu-pppoe"
+/* onu-mgmt's management pair in use, and a pair on trial (onu-mgmt). */
+#define MGMT_PATH "/run/onu-mgmt"
+#define MGMT_PENDING_PATH "/run/onu-trial.d/mgmt"
+
+/* The VLAN of the management pair of @path, its line VLAN=, or 0. */
+static unsigned int mgmt_vlan_of(const char *path)
+{
+	char p[PATH_MAX], line[64];
+	unsigned int vid = 0;
+	FILE *f;
+
+	root_path(path, 0, p, sizeof(p));
+	f = fopen(p, "r");
+	while (f && fgets(line, sizeof(line), f)) {
+		if (!strncmp(line, "VLAN=", 5)) {
+			vid = (unsigned int)strtoul(line + 5, NULL, 10);
+			break;
+		}
+	}
+	if (f)
+		fclose(f);
+	return vid;
+}
 
 /*
  * The settings in force: /run/onu.conf, then each session's account, "USER
@@ -569,6 +595,8 @@ static int change_cmd(void)
 		}
 	}
 	settings_settle(&s);
+	s.mgmt_vlan[0] = mgmt_vlan_of(MGMT_PATH);
+	s.mgmt_vlan[1] = mgmt_vlan_of(MGMT_PENDING_PATH);
 	if (!settings_coherent(&s, err, sizeof(err))) {
 		fprintf(stderr, "onu-config: %s\n", err);
 		goto out;

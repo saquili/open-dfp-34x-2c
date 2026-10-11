@@ -29,6 +29,8 @@ static char g_out[8192];
 /* Take the lines of @text over the defaults, as onu-config check does: 0, or
  * -1 at the first line that is not taken, or -2 when the whole makes no
  * sense; the settings are in @s and their lines in g_out. */
+static unsigned int g_mgmt[2];
+
 static int judge(struct settings *s, const char *text)
 {
 	char copy[4096], *line, *save = NULL;
@@ -41,6 +43,8 @@ static int judge(struct settings *s, const char *text)
 		if (settings_line(s, line, g_err, sizeof(g_err)))
 			return -1;
 	settings_settle(s);
+	s->mgmt_vlan[0] = g_mgmt[0];
+	s->mgmt_vlan[1] = g_mgmt[1];
 	if (!settings_coherent(s, g_err, sizeof(g_err)))
 		return -2;
 	settings_format(s, g_out, sizeof(g_out));
@@ -208,6 +212,27 @@ static void test_sessions(void)
 			"SESSION1_HOST_VLAN=410\nSESSION2_HOST_VLAN=410\nSESSION2_PASS=off\n") == 0);
 }
 
+static void test_mgmt(void)
+{
+	struct settings s;
+
+	/* Nothing of the data path in a management VLAN, on either side. */
+	g_mgmt[0] = 4094;
+	g_mgmt[1] = 100;
+	CHECK(judge(&s, ONE "SESSION1_VLAN=410\n") == 0);
+	CHECK(judge(&s, ONE "SESSION1_VLAN=4094\n") == -2 &&
+	      strstr(g_err, "session 1: VLAN 4094 is the management VLAN"));
+	CHECK(judge(&s, ONE "SESSION1_VLAN=410\nSESSION1_HOST_VLAN=100\n") == -2 &&
+	      strstr(g_err, "VLAN 100 is the management VLAN"));
+	CHECK(judge(&s, ONE "SESSION1_VLAN=100\nSESSION1_HOST_VLAN=untagged\n") == -2);
+	CHECK(judge(&s, ONE "SESSION1_VLAN=410\nSESSION1_HOST_VLAN=untagged\n") == 0);
+	/* A session without an account is no session. */
+	CHECK(judge(&s, "SESSION3_VLAN=4094\n") == 0);
+	CHECK(judge(&s, "MODE=router\nWAN_VLAN=100\n") == -2 && strstr(g_err, "WAN_VLAN 100"));
+	g_mgmt[0] = g_mgmt[1] = 0;
+	CHECK(judge(&s, ONE "SESSION1_VLAN=4094\n") == 0);
+}
+
 static void test_before(void)
 {
 	struct settings s;
@@ -262,6 +287,7 @@ int main(void)
 	test_wan();
 	test_lan();
 	test_sessions();
+	test_mgmt();
 	test_before();
 	test_format();
 	printf("test_settings: %d checks, %d failed\n", checks, failures);

@@ -96,6 +96,13 @@ vlan_in_use() {
 	} END { exit !found }' "$ROOT/proc/net/vlan/config" 2>/dev/null
 }
 
+# Whether the settings of the data path name the VLAN $1 for a session, on
+# the PON's side or the host's, or for the WAN: the switch keeps a
+# management VLAN's frames from the PON, and the session would carry nothing.
+vlan_of_settings() {
+	grep -q -E "^(SESSION[1-7]_(VLAN|HOST_VLAN)|WAN_VLAN)=$1\$" "$RUN/onu.conf" 2>/dev/null
+}
+
 # A management VLAN as a device of netifd: the VLAN $2 on sfp, named $1, with
 # IPv6, which an interface made after the boot has only when given it.
 dev_conf() {
@@ -196,6 +203,10 @@ add() {
 		pref=$((3 - ${old_pref:-1}))
 		if vlan_in_use "$vlan"; then
 			log "VLAN $vlan cannot be added on sfp: it is in use"
+			return 1
+		fi
+		if vlan_of_settings "$vlan"; then
+			log "VLAN $vlan is the data path's: a session or the WAN is in it"
 			return 1
 		fi
 		rules_add "$vlan" "$pref" || {

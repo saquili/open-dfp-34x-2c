@@ -77,6 +77,13 @@ struct settings {
 	struct settings_account acct[SETTINGS_SESSIONS];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;
+	/*
+	 * The management VLANs in use, the pair's and a pair's on trial, 0 for
+	 * none: no setting of the data path, but what its VLANs must keep off,
+	 * since the switch keeps their frames between the host side and the
+	 * stick. The caller that knows them, onu-config change, sets them.
+	 */
+	unsigned int mgmt_vlan[2];
 };
 
 /**
