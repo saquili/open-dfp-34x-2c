@@ -30,19 +30,19 @@ What the build makes
      - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
        the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
        kernel, LZMA, load address ``0x80100000``.
-     - 1652846 bytes; the partition ``k0`` takes 1900544.
+     - About 1.7 MB (below); the partition ``k0`` takes 1900544.
    * - ``r0.squashfs``
      - The root filesystem for bank 0: a SquashFS image (xz, 64 KiB blocks,
        every file owned by root and carrying the same fixed time, no extended
        attributes) of BusyBox, dropbear, the programs of the ONU and the
        board's files.
-     - 1516938 bytes; the partition ``r0`` takes 2031616.
+     - About 1.3 MB (below); the partition ``r0`` takes 2031616.
    * - ``update.bin``
      - The two images in one update file, which the stick's ``onu-update``
        writes into the bank it did not start from (``updating.rst``): a header
        with the board, the version and the build's time, the two images, and
        their SHA-256.
-     - The two images and 288 bytes; 3170072 bytes for the images above.
+     - The two images and 288 bytes.
    * - ``web-install.tar``
      - The two images in the package that the web page of the stick's shipped
        firmware installs into the bank it did not start from
@@ -54,7 +54,7 @@ What the build makes
    * - ``SHA256SUMS``
      - The SHA-256 digests of the two images, the update file and the package,
        in the form ``sha256sum -c`` reads.
-     - 231 bytes.
+     - 313 bytes.
    * - ``ram.uImage``
      - Made by ``make ram-image``, not by ``make``: the same kernel with the
        root filesystem built in as its initial RAM disk, and the tools of
@@ -76,15 +76,18 @@ Sizes and budgets
    * - Image
      - Size
      - Budget
-     - Margin
+     - Margin, and when it was measured
    * - ``k0``
-     - 1652846
+     - 1698834
      - 1900544
-     - 247698 bytes (13.0% of the partition).
+     - 201710 bytes (10.6% of the partition), on 2026-10-11, once the
+       kernel took JFFS2 for the partition ``config`` (ADR 0014).
    * - ``r0``
-     - 1516938
+     - 1287869
      - 2031616
-     - 514678 bytes (25.3% of the partition).
+     - 743747 bytes (36.6% of the partition), on 2026-10-11, once iproute2
+       left the flash's image (ADR 0014); the panel's TLS, which came after,
+       adds about 22 KiB (ADR 0016).
 
 Both images fit, and the build fails when one stops fitting (``IMAGE_ENFORCE``,
 below). They fit because bank 0 is split for this system, 1856 KiB of kernel
@@ -96,8 +99,11 @@ every program linked statically, as before ADR 0011, the root filesystem was
 2004150 bytes on 2026-10-08.
 
 The numbers are printed by ``tools/image-budget/image-budget``, which ``make``
-runs, and are those of ``make`` on the commit this page was written against, in
-the pinned container (below).
+runs, in the pinned container (below); the table keeps the latest that a
+record of this repository gives. The other counts of this page, of files,
+instructions, symbols and applets, were measured on 2026-10-08, before procd,
+netifd, ``onu-nl`` and the panel's TLS entered the image, and are of that
+image; ``make`` prints the current ones.
 
 The build host
 ==============
@@ -137,7 +143,7 @@ Building
 
     make
 
-fetches the pinned Buildroot release and applies the carried patch (``make
+fetches the pinned Buildroot release and applies the carried patches (``make
 buildroot``), archives the committed ``linux/`` tree
 (``tools/kernel-archive``), configures ``odi_dfp_34x_2c3_defconfig`` in
 ``build/image``, builds, and then judges the result (``make image-check``). With
@@ -199,8 +205,11 @@ The C library
     instead of 712556. It removes ``libgcc_s``, which the toolchain installs and
     no program loads, and fails the build when a program would miss a library
     or a symbol.
-BusyBox 1.37.0, 94 applets
-    The ones the boot script and a shell session use, by purpose:
+BusyBox 1.37.0
+    The applets the boot script and a shell session use, by purpose, as of
+    2026-10-08, when there were 94; the console's ``getty`` and ``login``,
+    ``cryptpw``, and the DHCP client and server ``udhcpc``, ``udhcpd`` and
+    ``dumpleases`` came after:
 
     shell and init
         ash sh halt poweroff reboot
@@ -230,14 +239,17 @@ dropbear 2026.93
     server side of ``scp``. It takes root's password and keys.
 The programs of the ONU, from this tree
     ``omcid``, the OMCI daemon, whose tools ``omcitap`` and ``omcivlan`` are
-    in the RAM image only (``omcid/README.rst``); ``ponid``, which reads the identity of the unit
-    from its factory configuration, and ``onu-nl``, which sets the switch's
+    in the RAM image only (``omcid/README.rst``); ``ponid``, which reads the
+    identity of the unit from the shipped firmware's files in the partition
+    ``config``, and ``onu-nl``, which sets the switch's
     filters and the drivers' parameters as tc and devlink would
     (``onu-utils/README.rst``); ``pppoed``, the
     PPPoE client and netifd's protocol ``pppoed`` (``pppoed/README.rst``),
     which links libubus to tell netifd; ``dhcp6d``, which hands a session's
     delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
-    HTTP status daemon (``pond/README.rst``).
+    status daemon and its panel, over HTTPS (``pond/README.rst``); and
+    ``onu-config``, ``onu-apply``, ``onu-update`` and the other programs of
+    ``onu-utils`` (``onu-utils/README.rst``).
 The network layer of OpenWrt
     ``netifd``, the network interface daemon, from the fork in ``netifd/``,
     and ``ubusd``, the message bus it answers on, with the libraries they load:
@@ -288,52 +300,67 @@ The start
     ``onu-svc list`` tells how each is doing and how often procd started it
     again. The console's login prompt is started again half a second after it
     ends.
-    ``reboot``, ``halt`` and ``poweroff`` signal procd, which ends every
-    program and restarts.
+    ``reboot`` signals procd, which ends every program and restarts the
+    stick. What ``halt`` and ``poweroff`` leave the stick in has not been
+    tried.
 The boot script
     ``/etc/init.d/rcS``:
 
-    #. sets the host name (``dfp-34x-2c3``);
-    #. turns IPv6 off on the PON port, on the CPU port and on every interface
-       made after that, the bridge and the GEM interfaces of ``omcid`` among
-       them (the host side keeps it), and has ARP answer only for an address
-       of the interface it is asked on: the stick has no address on the PON
-       side, sends nothing of its own to the OLT and answers nothing from it;
-    #. brings the interface ``sfp`` up and, through ``netifd``, gives it the
-       address ``192.0.2.2/30`` and a VLAN interface ``mgmt`` of it (VLAN
-       4094) with ``198.51.100.2/30``, and waits up to ten seconds for each;
-       netifd alone sets them, and procd starts it again if it ends. The
-       switch's conduit ``cpu`` is brought up first, so that netifd, which
-       takes down only what it brought up, never takes it down.
-       These are the addresses the bench tries (``flashing.rst``, "What you need"); it
-       tries the second first, because that one answers whether or not a bridge
-       has been built on the link (``tools/bench/README.rst``). The host has to
-       have the VLAN on its interface too. No frame of that VLAN crosses the
-       PON in either direction: the switch sends those that come in on ``sfp``
-       to the CPU alone, and drops those that come in on ``pon``, so the
-       network behind the OLT neither sees the management link nor reaches it;
-    #. reads the identity of the unit into ``/run/onu-identity`` (readable by
-       root only: it holds the PLOAM password), with the versions that
-       ``/etc/board.conf`` may name (below), gives the PON driver the
-       serial number and the PLOAM password through its devlink parameters
-       (``onu-nl``) and brings the PON up;
-    #. starts ``omcid``, which answers the OLT, and per session ``dhcp6d``
-       (``onu-apply``), as the instances of one service of procd, ``onu``,
-       which ``onu-apply`` gives procd whole (``onu-svc sync``): procd starts
-       what is new, ends what is gone and starts again only what changed.
-       ``omcid`` keeps what the OLT set up in ``/run/omcid.mib``, and one
-       that procd starts again goes on from it, unseen by the OLT;
-    #. prints ``open-dfp-34x-2c: ready`` on the console.
+    #. starts the system log, ``syslogd`` and ``klogd``, which keep
+       ``/run/messages`` and one older copy of 64 KiB each;
+    #. reads the unit's settings (``onu-config load``): it mounts the
+       partition ``config`` on ``/config``, reads the identity of the unit from
+       the shipped firmware's files there, with what the store changed over it,
+       into ``/run/onu-identity`` (readable by root only: it holds the PLOAM
+       password), and the saved settings, the PPPoE accounts and root's
+       password into ``/run``; ``onu-config tls`` gives the panel its key, made
+       and kept in the store at the first start;
+    #. sets the host name, turns IPv6 off on the PON port, on the CPU port and
+       on every interface made after them, the bridge and the GEM interfaces of
+       ``omcid`` among them (the host side keeps it), and has ARP answer only
+       for an address of the interface it is asked on: the stick has no address
+       on the PON side, sends nothing of its own to the OLT and answers nothing
+       from it;
+    #. brings the switch's conduit ``cpu`` and the interface ``sfp`` up, and
+       starts ``netifd``, which gives ``sfp`` the address ``192.0.2.2/30`` and a
+       VLAN interface ``mgmt`` of it (VLAN 4094) the address
+       ``198.51.100.2/30``, from the configuration ``onu-mgmt`` writes; it waits
+       up to ten seconds for each. netifd alone sets them, and procd starts it
+       again if it ends. These are the addresses the bench tries
+       (``flashing.rst``, "What you need"); it tries the second first, because
+       that one answers whether or not a bridge has been built on the link
+       (``tools/bench/README.rst``). The host has to have the VLAN on its
+       interface too;
+    #. keeps that VLAN off the PON both ways: the switch sends the frames of
+       it that come in on ``sfp`` to the CPU alone, and drops those that come
+       in on ``pon`` (``onu-nl``), so the network behind the OLT neither sees
+       the management link nor reaches it;
+    #. starts the servers on the two addresses above and nowhere else, as
+       procd's services: ``dropbear`` (root's password and keys, with an
+       ed25519 host key made in ``/run/dropbear``), ``onu-act``, and ``pond``,
+       the status daemon and its panel, over HTTPS on port 443 and on port 80
+       to send a browser there (ADR 0016), as an account of its own, ``pond``,
+       with which no one logs in; ``onu-act`` does, as root, what pond asks of
+       the stick from a fixed list, and ubusd's access list lets pond ask
+       nothing else (ADR 0014). Then ``ntpd``. The stick has no packet filter,
+       so its servers keep off the PON side by where they listen;
+    #. gives the PON driver the serial number and the PLOAM password through
+       its devlink parameters (``onu-apply identity``, with ``onu-nl``) and
+       brings the PON up;
+    #. starts ``omcid``, which answers the OLT, and what the settings ask for:
+       per session ``dhcp6d``, per local network ``udhcpd``, as the instances
+       of one service of procd, ``onu``, which ``onu-apply`` gives procd whole
+       (``onu-svc sync``): procd starts what is new, ends what is gone and
+       starts again only what changed. ``omcid`` keeps what the OLT set up in
+       ``/run/omcid.mib``, and one that procd starts again goes on from it,
+       unseen by the OLT. netifd holds the PPPoE sessions;
+    #. starts ``onu-trial`` in the background, which keeps a bank started on
+       trial once the system is up (``updating.rst``);
+    #. prints on the console the addresses of ssh, the panel's address and the
+       SHA-256 fingerprint of its certificate, and last
+       ``open-dfp-34x-2c: ready``.
 
-    After it, procd starts ``dropbear`` (root's password and keys), with an
-    ed25519 host key made in ``/run/dropbear``, and ``pond``, whose API stays
-    locked without ``/etc/pond.token``, on the two addresses above and nowhere
-    else: the stick has no packet filter, so its servers keep off the PON side
-    by where they listen. ``pond`` runs as an account of its own, ``pond``,
-    with which no one logs in, and ``onu-act`` does, as root, what it asks of
-    the stick from a fixed list; ubusd's access list lets it ask nothing else
-    (ADR 0014). On the console it keeps a login prompt (``getty`` and
-    ``login``).
+    procd then starts the console's login prompt (``getty`` and ``login``).
 
     The stick has one account, root, with one password for the console, ssh
     and the panel (``docs/adr/0012-one-account-root.rst``). Until one is set,
@@ -355,30 +382,38 @@ The boot script
     The next boot has the default password, ``admin``, again; nothing else in
     the store changes.
 
-Everything that the system writes lives in memory and is gone at the next
-restart; the root filesystem is read-only.
+The root filesystem is read-only, and what the system writes in ``/run``,
+``/tmp`` and ``/var`` lives in memory. Three things it writes to the flash:
+its own file in the partition ``config``, at most 64 KiB, with the settings,
+the accounts, the password's hash and the panel's key (``onu-config``); the
+boot loader's environment and the bank that does not run, at an update
+(``onu-update``).
 
 Known limitations
 -----------------
 
 * The ssh host key is made at every boot, in memory (``/run``). The host
   therefore sees a new key at every boot, and an ssh client that keeps host keys
-  will say so. A key that survives restarts needs a place to keep it, which the
-  stick does not have yet.
+  will say so. The configuration store could keep the key, as it keeps the
+  panel's; it does not yet.
 * The host key is made from the kernel's random pool a few seconds after power-on,
   before the system has collected much entropy.
 * No ssh key is in the image, so ssh takes root's password alone until a key is
   put in (below). Until a password is set, it is ``admin`` on the console, ssh
   and the panel alike, and anybody who reaches the stick's addresses can use it;
   the shells of root say so at every login.
-* The status daemon has no token in this image, so its API answers only
-  ``/api/health``; a token is a file of one unit, like the ssh key (below).
+* The status daemon has no token for scripts in this image, so a script signs
+  in as root with root's password, as a person does; a token is a file of one
+  unit, like the ssh key (below).
 * The panel answers over HTTPS, on port 443, with a key the stick makes at its
   first start and keeps in its store, and a certificate it signs itself (ADR
   0016); port 80 sends a browser there. The browser warns at the first visit:
   the boot prints the certificate's fingerprint on the console, and the panel
   shows it under System, for a person to compare with the browser's.
-* There is no DHCP client and no DHCP server.
+* If the configuration store cannot be read, or the partition ``config`` is
+  not mounted, root's password is ``admin`` again, and a new one cannot be
+  kept until the store is back.
+* The update file has a checksum and no signature (``updating.rst``).
 
 Files of one bench
 ------------------
@@ -576,8 +611,9 @@ stick translates no address and keeps no packet filter: a router behind it does
 both), the initial RAM disk and kexec, and smaller parts that the board does not
 use, which the configuration's history names; it keeps IPv6, the symbol table,
 debugfs and dynamic debug, through which a problem on the operator's line is
-read. The kernel image is 1652846 bytes, and bank 0 as this system splits it
-gives the kernel 1856 KiB (``boot-contract.rst``).
+read. The kernel image was 1652846 bytes then, and 1698834 once it took JFFS2
+for the partition ``config`` (ADR 0014); bank 0 as this system splits it gives
+the kernel 1856 KiB (``boot-contract.rst``).
 
 Reproducibility
 ===============
@@ -637,8 +673,11 @@ source is not saved; its release is the one pinned in ``buildroot/VERSION``.
 Putting the images on the board
 ===============================
 
-The bench (``tools/bench``, set up as in ``flashing.rst``) is the only tool that
-writes the flash, and only bank 0.
+A stick as shipped takes this system through its shipped firmware's web page
+and ``web-install.tar`` (``updating.rst``), or through the bench
+(``tools/bench``, set up as in ``flashing.rst``), which writes bank 0 alone.
+Once this system runs, it updates itself into the other bank with
+``update.bin``.
 
 A stick is diagnosed started from RAM; the flash holds the image of the final
 test. The tools of diagnosis, ``omcitap``, ``omcivlan``, ``ubus``, the
@@ -669,8 +708,8 @@ Write the root filesystem to ``r0``. See the plan first; it names no board::
     make flash IMAGE=build/image/images/r0.squashfs TARGET=rootfs ARGS=--dry-run
     make flash IMAGE=build/image/images/r0.squashfs TARGET=rootfs
 
-When ``k0`` fits, write it and start the trial of bank 0 (``flashing.rst``, "Arm a
-one-shot trial")::
+Write the kernel to ``k0`` and start the trial of bank 0 (``flashing.rst``, "Arm
+a one-shot trial")::
 
     make flash IMAGE=build/image/images/k0.uImage TARGET=kernel ARGS=--arm
 
@@ -678,16 +717,17 @@ The markers of a good boot on the console are the loader's lines for the image
 (``Image Type: MIPS Linux Kernel Image (lzma compressed)``, ``Load Address:
 80100000``), ``Starting kernel ...``, the kernel's banner ``Linux version 6.18.48``,
 ``VFS: Mounted root (squashfs filesystem) readonly on device 31:5.``, and last
-the three lines of the boot script, ending with ``open-dfp-34x-2c: ready``. What
+the lines of the boot script, ending with ``open-dfp-34x-2c: ready``. What
 to check then, over ssh with the key above or on the console, after a login as
 root::
 
     uname -r                 # 6.18.48
     cat /proc/cmdline        # panic=10, console=ttyS0,115200, ..., root=31:5
     grep ' / ' /proc/mounts  # /dev/root / squashfs ro,...
-    busybox --list | wc -l   # 94
+    busybox --list           # the applets above
     ip addr                  # 192.0.2.2/30 on sfp, 198.51.100.2/30 on mgmt
-    pidof dropbear omcid pond watchdog syslogd
+    pidof procd netifd dropbear omcid pond syslogd
+    onu-svc list             # procd's services, and how often each restarted
     netstat -ltn             # ssh and the status daemon, on the two addresses only
     cat /etc/issue           # open-dfp-34x-2c on the ODI DFP-34X-2C3
 
@@ -698,18 +738,14 @@ check of a running stick and records it.
 Open items
 ==========
 
-* The image whose programs share the cut C library (ADR 0011) has been started
-  from the flash on the bench's board only, written into its spare bank by
-  ``onu-update`` and tried once: the boot script reached its ready line,
-  dropbear, ``omcid``, ``pond``, the watchdog daemon and the system log ran,
-  ``pond`` answered HTTP (``licenses.txt`` too), the kernel log held no fault,
-  the processor was 90% idle, and ``onu-trial`` committed the bank 5 seconds
-  after the boot script. The board had no light on its fiber at the time, so
-  the PON stayed at O1; the PON side of the image is not tested yet.
-* The image with the programs of the ONU has not been started on the board as a
-  whole yet. ``omcid`` and ``ponid`` of this tree have been run on the board,
-  copied to a running stick: it reached O5 and answered the OLT's MIB upload.
-  The first start of ``ram.uImage`` and a run of ``tests/device`` are the test.
+* The image as it is now, with procd, netifd, the panel over HTTPS, ``onu-nl``
+  and the store in the partition ``config``, has been tried on the bench's
+  board, as ADR 0013, 0014 and 0016 say, but no run of ``tests/device`` is
+  recorded on it. The latest record,
+  ``docs/testing/2026-10-07-run23.rst``, is of an image of before
+  them, whose programs were linked statically, and
+  some cases of the suite still expect that image (``tests/device/README.rst``).
+  A recorded run on the current image is the test.
 * Whether the host's link comes up and the addresses answer depends on the host
   side having the matching addresses (``flashing.rst``); the VLAN of the second
   address has to exist on the host's interface too.
