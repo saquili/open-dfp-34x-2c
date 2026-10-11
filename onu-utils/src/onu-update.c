@@ -463,16 +463,43 @@ static long env_number(struct env *e, const char *key, long otherwise)
 	return *v && !*end ? n : otherwise;
 }
 
-/* What a bank holds: a kernel image and a root filesystem that check out. */
+/*
+ * The shipped firmware splits a bank as 1328 KiB of kernel and the rest
+ * root filesystem (boot-contract.rst); the loader names that split at every
+ * start, fl_kernel1_sz and fl_kernel2_sz in hexadecimal.
+ */
+#define SHIPPED_KERNEL_SIZE 0x14c000u
+
+/* Where the shipped firmware's root filesystem would start in bank @n. */
+static uint32_t shipped_split(struct env *e, bool have_env, int n)
+{
+	const char *v = have_env ? bootenv_get(e->copy[e->cur],
+					       n ? "fl_kernel2_sz" : "fl_kernel1_sz") : NULL;
+	char *end;
+	unsigned long sz;
+
+	if (!v)
+		return SHIPPED_KERNEL_SIZE;
+	sz = strtoul(v, &end, 16);
+	return *v && !*end && sz && sz < UINT32_MAX ? (uint32_t)sz : SHIPPED_KERNEL_SIZE;
+}
+
+/*
+ * What a bank holds: a kernel image and a root filesystem that check out,
+ * or the shipped firmware: a kernel image, no root filesystem where this
+ * system keeps it, and one where the shipped firmware's split puts it.
+ */
 struct bank {
-	bool kernel, rootfs;
+	bool kernel, rootfs, shipped;
 	uint32_t kernel_len, rootfs_len, time, data_crc;
 	uint32_t kernel_size, rootfs_size;
 };
 
-static void bank_probe(int n, struct bank *b)
+/* Bank @n; with @shipped_at, whether it holds the shipped firmware. */
+static void bank_probe(int n, struct bank *b, uint32_t shipped_at)
 {
 	uint8_t head[SQUASHFS_SUPER];
+	uint32_t used;
 	struct part p;
 
 	memset(b, 0, sizeof(*b));
@@ -482,6 +509,11 @@ static void bank_probe(int n, struct bank *b)
 			    !uimage_check(head, &b->kernel_len, &b->data_crc,
 					  &b->time) &&
 			    b->kernel_len <= p.size;
+		/* Its root filesystem starts inside this system's kernel partition. */
+		b->shipped = shipped_at && b->kernel && b->kernel_len <= shipped_at &&
+			     (uint64_t)shipped_at + SQUASHFS_SUPER <= p.size &&
+			     !part_read(&p, shipped_at, head, SQUASHFS_SUPER) &&
+			     !squashfs_check(head, &used);
 	}
 	part_close(&p);
 	if (!part_open(&p, n ? "r1" : "r0", false)) {
@@ -491,6 +523,8 @@ static void bank_probe(int n, struct bank *b)
 			    b->rootfs_len <= p.size;
 	}
 	part_close(&p);
+	if (b->rootfs)
+		b->shipped = false;
 }
 
 static int cmd_status(void)
@@ -519,9 +553,11 @@ static int cmd_status(void)
 		const char *state;
 		char key[16];
 
-		bank_probe(n, &b);
+		bank_probe(n, &b, shipped_split(&e, have_env, n));
 		snprintf(key, sizeof(key), "sw_valid%d", n);
-		if (!b.kernel || !b.rootfs)
+		if (b.shipped)
+			state = "shipped";
+		else if (!b.kernel || !b.rootfs)
 			state = "empty";
 		else if (have_env && env_number(&e, key, 1) == 0)
 			state = "incomplete";
@@ -819,7 +855,7 @@ static int cmd_read(int bank)
 		say("the bank the stick started from is not known; name one");
 		return 1;
 	}
-	bank_probe(bank, &b);
+	bank_probe(bank, &b, 0);
 	if (!b.kernel || !b.rootfs) {
 		say("bank %d holds no system", bank);
 		return 1;
@@ -880,7 +916,7 @@ static int cmd_try(int bank)
 		}
 		bank = 1 - running;
 	}
-	bank_probe(bank, &b);
+	bank_probe(bank, &b, 0);
 	if (env_load(&e))
 		return 1;
 	snprintf(key, sizeof(key), "sw_valid%d", bank);

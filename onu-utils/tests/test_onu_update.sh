@@ -130,6 +130,35 @@ check 'echo "$out" | grep -qx BANK0_ROOTFS_USED=20000'
 check '! echo "$out" | grep -q BANK1_KERNEL_USED'
 teardown
 
+echo "a bank in the shipped firmware's split reads as shipped, not empty"
+setup
+# The shipped split, as the loader names it: a kernel of 32 KiB here, its
+# root filesystem right after it, inside this system's kernel partition.
+fixture env "$ONU_ROOT/dev/mtd2" 2 bootdelay=5 sw_active=0 sw_commit=0 \
+	sw_tryactive=2 sw_valid0=1 sw_valid1=1 sw_version1=V1.0-210702 \
+	fl_kernel1_sz=8000 fl_kernel2_sz=8000
+fixture uimage "$T/k-shipped" 4 20000 1663932999
+fixture squashfs "$T/r-shipped" 4 10000
+dd if="$T/k-shipped" of="$ONU_ROOT/dev/mtd6" conv=notrunc 2>/dev/null
+dd if="$T/r-shipped" of="$ONU_ROOT/dev/mtd6" bs=4096 seek=8 conv=notrunc 2>/dev/null
+run status
+check '[ $rc -eq 0 ] && echo "$out" | grep -qx BANK1_STATE=shipped'
+check 'echo "$out" | grep -qx BANK1_VERSION=V1.0-210702'
+check 'echo "$out" | grep -qx BANK0_STATE=valid'
+# Where the loader does not name the split, the shipped 1328 KiB, beyond
+# these partitions: nothing is found there.
+fixture env "$ONU_ROOT/dev/mtd2" 3 bootdelay=5 sw_active=0 sw_commit=0 \
+	sw_tryactive=2 sw_valid0=1 sw_valid1=1
+run status
+check 'echo "$out" | grep -qx BANK1_STATE=empty'
+# A bank of this system that holds such bytes as well is this system's.
+fixture env "$ONU_ROOT/dev/mtd2" 4 bootdelay=5 sw_active=0 sw_commit=0 \
+	sw_tryactive=2 sw_valid0=1 sw_valid1=1 fl_kernel2_sz=8000
+dd if="$T/r-old" of="$ONU_ROOT/dev/mtd7" conv=notrunc 2>/dev/null
+run status
+check 'echo "$out" | grep -qx BANK1_STATE=valid'
+teardown
+
 echo "an update file checks out, and damaged ones do not"
 setup
 run check "$T/update.bin"
