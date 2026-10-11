@@ -276,8 +276,9 @@ iproute2
     (``br2-external/board/dfp-34x-2c3/post-build.sh``).
 The start
     ``/sbin/init``, the first program, mounts ``/proc``, ``/sys``,
-    ``/dev/pts`` and tmpfs on ``/tmp``, ``/run`` and ``/var`` (``/var/run`` is
-    ``/run``), and ``/dev`` too if the kernel has not (it mounts devtmpfs
+    ``/dev/pts`` and tmpfs on ``/tmp`` (2 MiB at most), ``/run`` (4 MiB) and
+    ``/var`` (1 MiB; ``/var/run`` is ``/run``), and ``/dev`` too if the kernel
+    has not (it mounts devtmpfs
     itself when it starts the first program), and execs ``procd``, which is
     process 1 from then on. procd feeds the watchdog (a timeout of 30 s, fed
     every 5 s), starts ``ubusd`` and runs ``/etc/inittab``:
