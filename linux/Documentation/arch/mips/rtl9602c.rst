@@ -2028,9 +2028,9 @@ boot loader, ``boot``, is read-only.
    * - ``config``
      - ``0x044000``
      - 240 KiB (``0x03c000``)
-     - The configuration store: what the board keeps across updates of its
-       system. Until this system writes its own store there, it holds the
-       shipped firmware's, a big-endian JFFS2 image this system does not mount.
+     - The shipped firmware's big-endian JFFS2 file system, with its files.
+       This system mounts it on ``/config`` and keeps what the board keeps
+       across updates of its system in a file of its own there, beside them.
      - no
    * - ``k0``
      - ``0x080000``
@@ -2167,7 +2167,7 @@ The wiring, as the device tree has it::
       |
    GPON MAC, PON MAC
       |
-   laser driver IC   (I2C master 1; TX_DISABLE taken to be GPIO 13)
+   laser driver IC   (I2C master 1; TX_DISABLE on GPIO 13)
 
 .. list-table::
    :header-rows: 1
@@ -2193,7 +2193,8 @@ The wiring, as the device tree has it::
        host-side link bounces.
    * - The optical side: the GPON MAC drives a separate laser-driver IC, which
        the SoC reaches over its I2C master 1. Its hard transmit-disable input is
-       taken to be SoC GPIO 13 (see "GPIO and pad control"; not verified).
+       SoC GPIO 13 (see "GPIO and pad control"), measured as the optics page
+       says (Documentation/networking/device_drivers/pon/rtl9602c-optics.rst).
      - M
      - The optics diagnostics read through hwmon over master 1 (see "GPIO and
        pad control").
