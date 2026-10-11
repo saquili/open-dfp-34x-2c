@@ -4,18 +4,17 @@
 List of maintainers for open-dfp-34x-2c
 =======================================
 
-This file uses the Linux kernel MAINTAINERS format so that, once the kernel
-tree is imported under linux/ and components are added, per-subsystem entries
-can be written in the same style. Field letters used here:
+This file uses the Linux kernel MAINTAINERS format, so that each component
+can gain an entry of its own in the same style. Field letters used here:
 
 	M: Maintainer -- the responsible person, with an e-mail address.
 	S: Status -- Supported, Maintained, Odd Fixes, Orphan or Obsolete.
 	F: Files and directories; wildcards allowed, a trailing slash means a
 	   whole subtree.
 
-As each component lands (see the per-directory READMEs and docs/adr/), it
-gains its own section below. Kernel code under linux/ additionally keeps its
-own entries in linux/MAINTAINERS, upstream style.
+One person maintains the whole tree for now, so there is one section. Kernel
+code under linux/ additionally keeps its own entries in linux/MAINTAINERS,
+upstream style.
 
 Maintainers List
 ----------------
