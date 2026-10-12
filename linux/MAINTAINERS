@@ -21729,6 +21729,7 @@ F:	drivers/net/dsa/realtek/rtl9602c*
 F:	drivers/net/ethernet/realtek/rtl9602c-eth.c
 F:	include/linux/dsa/rtl9602c.h
 F:	net/dsa/tag_rtl9602c.c
+F:	tools/testing/selftests/drivers/net/rtl9602c/
 
 REALTEK SPI-NAND
 M:	Chris Packham <chris.packham@alliedtelesis.co.nz>

@@ -123,6 +123,23 @@ Interfaces to user space
   be configured``, ``no devlink region; frames cannot be captured`` and
   ``<GPON> serial number set``.
 
+Tests
+-----
+
+The kselftests in ``tools/testing/selftests/drivers/net/rtl9602c`` check what
+this page states of the parameters and the region, and of the filters of
+``tc`` that the switch carries out, on a board: ``devlink_params.sh`` (the 27
+names, a value read back, a value out of range refused, the storm-control
+classes, the refusals of the lane and of the mode ``driverinit``, the reply of
+the info command), ``devlink_region.sh`` (a snapshot refused while the capture
+never latches and taken when it does) and ``tc_offload.sh`` (a filter by VLAN
+or address in the switch, and one the switch cannot carry out refused with the
+driver's words). They are written for a POSIX shell and BusyBox, put back what
+they change, and report that they are skipped on a machine without the
+switch::
+
+    make -C tools/testing/selftests TARGETS=drivers/net/rtl9602c run_tests
+
 How to read the fact tables
 ===========================
 
