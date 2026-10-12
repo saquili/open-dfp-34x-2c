@@ -21,7 +21,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 .PHONY: all check clean
 
 all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc \
-	$(BUILD)/onu-act $(BUILD)/onu-nl
+	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -61,6 +61,10 @@ $(BUILD)/test_password: $(BUILD)/tests/test_password.o $(BUILD)/src/password.o \
 $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
 		     $(BUILD)/src/update.o $(BUILD)/src/sha256.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+
+# onu-drop starts a program as an account of its own, with the powers it needs.
+$(BUILD)/onu-drop: $(BUILD)/src/onu-drop.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # onu-svc talks to procd over ubus: libubus and libubox.
 $(BUILD)/onu-svc: $(BUILD)/src/onu-svc.o $(BUILD)/src/svcmsg.o
@@ -102,7 +106,7 @@ $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 
 # test_genl asks the kernel it runs on, through a generic netlink socket;
 # test_onu_nl.sh sets filters on it, and skips without the right to.
-check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
+check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_tcrule $(BUILD)/test_linkmsg $(BUILD)/test_dlparam $(BUILD)/onu-nl \
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
@@ -121,6 +125,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_password
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_drop.sh
 	sh tests/test_onu_trial.sh
 	sh tests/test_onu_lane.sh
 	sh tests/test_onu_change.sh

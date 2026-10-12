@@ -442,6 +442,23 @@ them finds it there, and names it by its whole path where procd starts it.
    ubusd, and procd starts it again. The status daemon of a build without
    libubus, which its tests make, runs the same table itself.
 
+``onu-drop``
+   starts a program as an account of its own, with only the powers it needs
+   (ADR 0014)::
+
+      onu-drop [-c CAP[,CAP...]] USER PROGRAM [ARGUMENT...]
+
+   Started as root, it takes the account USER (not root's) and its groups,
+   keeps of root's powers those named by ``-c``, from ``net_bind_service``,
+   ``net_admin``, ``net_raw`` and ``sys_time``, and runs PROGRAM in its own
+   place. Without ``-c`` it keeps none. The powers are kept for PROGRAM and
+   what it runs (ambient), the rest leave the bounding set, so that nothing
+   it runs can have them, and the program gains nothing from a file
+   (``no_new_privs``). It exits 2 for a wrong command line, 1 when it cannot
+   become the account or run the program. ``tests/test_onu_drop.sh`` reads
+   the program's own ``/proc/self/status``; it needs root and the account
+   ``nobody``, and says that it skipped without them.
+
 ``onu-run``
    starts a service of the stick in the foreground, as procd wants it, from
    the state the scripts keep: the ssh server and ``pond``, on the
