@@ -763,14 +763,15 @@ check of a running stick and records it.
 Open items
 ==========
 
-* The image as it is now, with procd, netifd, the panel over HTTPS, ``onu-nl``
-  and the store in the partition ``config``, has been tried on the bench's
-  board, as ADR 0013, 0014 and 0016 say, but no run of ``tests/device`` is
-  recorded on it. The latest record,
-  ``docs/testing/2026-10-07-run23.rst``, is of an image of before
-  them, whose programs were linked statically, and
-  some cases of the suite still expect that image (``tests/device/README.rst``).
-  A recorded run on the current image is the test.
+* The data-path cases of ``tests/device`` (``data.*``) and the search of the
+  host link have not run on the image as it is now, with procd, netifd, the
+  panel over HTTPS, ``onu-nl`` and the store in the partition ``config``.
+  They send frames from two ports of a bench, one behind the OLT and one at
+  the far end of the stick's host link, and the lab as it is has none. Their
+  latest record, ``docs/testing/2026-10-07-run23.rst``, is of an image
+  of before those, whose programs were linked statically. The other cases
+  are recorded on the current image
+  (``docs/testing/2026-10-12-fd90fa47fb2f.rst``).
 * Whether the host's link comes up and the addresses answer depends on the host
   side having the matching addresses (``flashing.rst``); the VLAN of the second
   address has to exist on the host's interface too.

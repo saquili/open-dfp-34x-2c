@@ -70,8 +70,9 @@ Status
 ======
 
 **It works on a lab OLT, and it needs more testing.** The system runs on a
-DFP-34X-2C3 against a laboratory OLT, where 23 runs of the device tests are
-recorded (`docs/testing/ <docs/testing/README.rst>`__).
+DFP-34X-2C3 against a laboratory OLT, where 24 runs of the device tests are
+recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
+2026-10-12, is of the image as it is now.
 
 | 🟢 **Tested**: passed the recorded device tests on the lab OLT.
 | 🟡 **Bench**: works on the developer's stick; no recorded test run yet.
@@ -91,40 +92,50 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__).
    * - The OLT's bridge: GEM ports, T-CONTs, VLAN translation, push and pop,
        priority
      - 🟢 Tested
-     -
+     - GEM ports and T-CONTs on the current image. The translation, push and
+       pop and priority cases send frames from a bench's ports and were last
+       recorded on 2026-10-07, on an earlier image
    * - IGMP snooping, ACL, port mirroring, shaping, storm control
      - 🟢 Tested
-     -
+     - Recorded on 2026-10-07, on an earlier image; the current image ran
+       the kernel's selftests of the devlink parameters and the tc offload,
+       not these cases
    * - The host lane, 2.5 or 1 Gb/s, found by itself
      - 🟢 Tested
-     - 2500BASE-X, 1000BASE-X with and without auto-negotiation
+     - 2500BASE-X, 1000BASE-X with and without auto-negotiation (2026-10-07);
+       the current image's link came up at 2500 Mb/s
    * - The management VLAN kept off the PON
      - 🟢 Tested
-     - Both ways, also after a PPPoE session
+     - Both ways, also after a PPPoE session (2026-10-07, an earlier
+       image); the run on the current image reaches the stick through it
    * - Update into the other bank, start on trial, keep it
      - 🟢 Tested
-     - Into both banks, from the panel and over ssh
+     - Into both banks over ssh, and back, on the current image; from the
+       panel on 2026-10-07
    * - Back to the old bank after a failed start
      - 🟡 Bench
      - Measured: a kernel panic, a damaged kernel, power lost during a write
    * - PPPoE on the stick, with the address and IPv6 prefix handed to the
        router
-     - 🟡 Bench
-     - Two sessions at once, 911 Mb/s up and 920 down together (TCP;
-       ``docs/handbook/system.rst``)
+     - 🟢 Tested
+     - Two sessions at once. 911 Mb/s up and 920 down together (TCP, measured
+       by hand; ``docs/handbook/system.rst``)
    * - Programs started again when they stop
-     - 🟡 Bench
-     - Each program killed during a session
+     - 🟢 Tested
+     - Each of 14 programs killed with SIGKILL: all back within 6 s, the
+       sessions in 5 s
    * - A change of the settings tried, and undone without a confirmation
      - 🟡 Bench
-     -
+     - By hand; no device test yet
    * - The web panel and its API over HTTPS
-     - 🟡 Bench
-     - The earlier panel, over HTTP, passed its recorded tests
+     - 🟢 Tested
+     - The API and the delivery of the page. What the panel shows in a
+       browser is checked by hand
    * - Settings kept beside the shipped firmware's files
-     - 🟡 Bench
-     - Eight builds of the shipped firmware, started from the other bank,
-       found their own files and left this system's alone
+     - 🟢 Tested
+     - A save leaves the shipped firmware's 13 files as they were. Eight
+       builds of the shipped firmware, started from the other bank, found
+       their own files and left this system's alone (by hand)
    * - Install through the shipped firmware's web page
      - ⚪ Build machine
      - No install on a real stick recorded yet
@@ -135,13 +146,14 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__).
 
 ..
 
-    ℹ️ **The recorded runs are of an older image.** All of them date from
-    2026-10-07 or before. Since then the system has moved to procd, netifd,
-    the panel over HTTPS and the new store of the settings. That image runs
-    on the bench but has no recorded run yet, and some test cases still
-    expect the old one (`tests/device/README.rst
-    <tests/device/README.rst>`__). A full recorded run on the current image
-    is the next step.
+    ℹ️ **The latest run is of the current image, without the data path.**
+    On 2026-10-12 32 of 48 cases passed on the image as it is now, run from
+    the flash, and none failed. The 16 it skipped send frames from the ports
+    of a bench, one behind the OLT and one at the far end of the stick's host
+    link, and the lab as it is has no such ports. They were last recorded on
+    2026-10-07, on an image of before procd, netifd, the panel over HTTPS and
+    the new store of the settings, and have not run on this one
+    (`tests/device/README.rst <tests/device/README.rst>`__).
 
 Not done yet
 ------------
