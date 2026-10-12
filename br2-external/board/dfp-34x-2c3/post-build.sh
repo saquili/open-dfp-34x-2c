@@ -124,7 +124,11 @@ done
 # /etc/shadow.image, from which the boot writes every account but root's as
 # it is.
 account() {
-	[ ! -f "$1" ] || grep -q "^$2:" "$1" || echo "$3" >>"$1"
+	[ -f "$1" ] || return 0
+	# A line of an earlier build is replaced, as a tree that is built again
+	# keeps what the last build wrote; the file keeps its mode and owner.
+	{ grep -v "^$2:" "$1" || true; echo "$3"; } >"$1.new" && cat "$1.new" >"$1"
+	rm -f "$1.new"
 }
 account "$1/etc/passwd" pond "pond:x:200:200:The status daemon:/var/empty:/bin/false"
 account "$1/etc/group" pond "pond:x:200:"

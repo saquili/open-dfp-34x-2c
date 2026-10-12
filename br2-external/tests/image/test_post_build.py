@@ -235,6 +235,23 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\npppoed:x:203:\n", group)
         self.assertIn("\npppoed:*:::::::\n", shadow)
 
+    def test_a_line_of_an_earlier_build_is_replaced_and_the_mode_stays(self):
+        etc = os.path.join(self.target, "etc")
+        for name in ("passwd", "group", "shadow"):
+            with open(os.path.join(etc, name), "w", encoding="utf-8") as handle:
+                handle.write(ROOT_LINES[name])
+        group = os.path.join(etc, "group")
+        with open(group, "a", encoding="utf-8") as handle:
+            handle.write("onu:x:210:dhcp6d\n")
+        os.chmod(os.path.join(etc, "shadow"), 0o600)
+        self.assertEqual(self.run_script().returncode, 0)
+        with open(group, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertEqual(text.count("\nonu:"), 1)
+        self.assertIn("\nonu:x:210:dhcp6d,pppoed\n", text)
+        self.assertEqual(os.stat(os.path.join(etc, "shadow")).st_mode & 0o777, 0o600)
+        self.assertFalse(os.path.exists(os.path.join(etc, "shadow.new")))
+
     def test_without_the_file_it_fails(self):
         os.remove(self.release)
         done = self.run_script()
