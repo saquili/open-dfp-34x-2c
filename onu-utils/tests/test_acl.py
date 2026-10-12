@@ -16,6 +16,7 @@ import sys
 # alone, by which it tells onu-apply of a change (onu-call).
 EXPECTED = {
     "dhcp6d": ("dhcp6d/acl.json", {"dhcp6d"}),
+    "omcid": ("omcid/acl.json", {"omcid"}),
 }
 
 

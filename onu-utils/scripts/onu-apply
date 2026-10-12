@@ -54,9 +54,9 @@
 # sessions' VLANs, which it reads from /run/onu-held-vlans. A session's VLAN
 # may be the subscriber's VID of a translation the OLT provisions, the VID a
 # router behind the stick would use: the session then runs in the VID it
-# leads into, as omcid publishes it (/run/omcid-xlate), and a session whose
+# leads into, as omcid publishes it (/run/omcid/xlate), and a session whose
 # GEM port is auto runs on the GEM port that the OLT lets that VID through
-# (/run/omcid-gem-vlans): the session follows its service when the OLT
+# (/run/omcid/gem-vlans): the session follows its service when the OLT
 # moves it to another VID or another GEM port. Beside a session
 # untagged on its GEM port, which holds the whole port, omcid leaves the OLT's
 # bridge out (omcid -r).
@@ -214,12 +214,12 @@ setting() {
 
 # The VLAN session $1 runs in on the PON side: its VLAN, or, where the OLT
 # translates that VLAN of the subscriber's side, the VLAN the translation
-# leads into, as omcid publishes them in /run/omcid-xlate ("SUB NET" lines).
+# leads into, as omcid publishes them in /run/omcid/xlate ("SUB NET" lines).
 # A session can so be given the VLAN a router behind the stick would use.
 session_vlan() {
 	v=$(setting "$1" VLAN)
 	[ -n "$v" ] || return 0
-	net=$(awk -v v="$v" '$1 == v { print $2; exit }' "$RUN/omcid-xlate" 2>/dev/null)
+	net=$(awk -v v="$v" '$1 == v { print $2; exit }' "$RUN/omcid/xlate" 2>/dev/null)
 	echo "${net:-$v}"
 }
 
@@ -367,7 +367,7 @@ omcid_applied() {
 	oa_i=0
 	while [ $oa_i -lt "$APPLIED_TENTHS" ]; do
 		oa_got=
-		read -r oa_got 2>/dev/null <"$RUN/omcid.applied"
+		read -r oa_got 2>/dev/null <"$RUN/omcid/applied"
 		[ "$oa_got" = "$oa_want" ] && return 0
 		sleep 0.1
 		oa_i=$((oa_i + 1))
@@ -376,10 +376,20 @@ omcid_applied() {
 	return 0
 }
 
+# The identity omcid reads, a copy of the unit's without the PLOAM password,
+# which root alone and the PON driver need: omcid is an account of its own.
+omcid_identity() {
+	[ -r "$IDENTITY" ] || return 0
+	grep -v '^ploam_password=' "$IDENTITY" >"$RUN/omcid/identity.new" &&
+		chown :omcid "$RUN/omcid/identity.new" && chmod 640 "$RUN/omcid/identity.new" &&
+		mv "$RUN/omcid/identity.new" "$RUN/omcid/identity" ||
+		log "omcid cannot read the identity"
+}
+
 # omcid in the mode $1. A running omcid is told by a signal, SIGUSR2 for
 # bridge mode and SIGUSR1 for "router", without the OLT's bridge: it keeps its
 # MIB, so what the OLT provisioned stays, and programs the data path again
-# from it, and says so in /run/omcid.applied, which is taken away before the
+# from it, and says so in /run/omcid/applied, which is taken away before the
 # signal and waited for after it, for 5 s. One that does not run is started as the instance "omcid" of
 # procd's service "onu" (onu-run omcid), with -r without the bridge; its
 # log goes on in /run/omcid.log. The mode is kept in /run/omcid.mode, so that
@@ -388,7 +398,7 @@ omcid_applied() {
 omcid_run() {
 	echo "$1" >"$RUN/omcid.mode"
 	if pidof omcid >/dev/null 2>&1; then
-		rm -f "$RUN/omcid.applied"
+		rm -f "$RUN/omcid/applied"
 		if [ "$1" = bridge ]; then
 			killall -USR2 omcid
 		else
@@ -396,6 +406,7 @@ omcid_run() {
 		fi
 		omcid_applied "$1"
 	else
+		omcid_identity
 		# procd runs it, and finds no program on a path of its own.
 		svc_start omcid -- "$(command -v onu-run || echo "$LIB/onu-run")" omcid
 	fi
@@ -502,7 +513,7 @@ gem_of() {
 # The GEM interface of session $1: the one its GEM setting names; for auto
 # (or nothing), where the session has a VLAN, the GEM port that the OLT lets
 # that VLAN on the fibre through, as omcid publishes them in
-# /run/omcid-gem-vlans ("VID PORT-ID" lines), the lowest Port-ID of them;
+# /run/omcid/gem-vlans ("VID PORT-ID" lines), the lowest Port-ID of them;
 # else the one gem_of() gives. A session given the VID by which the operator
 # names its service so follows the service to another VID on the fibre and
 # to another GEM port.
@@ -511,7 +522,7 @@ session_gem() {
 	v=$(session_vlan "$1")
 	if { [ -z "$g" ] || [ "$g" = auto ]; } && [ -n "$v" ]; then
 		for id in $(awk -v v="$v" '$1 == v { print $2 }' \
-			"$RUN/omcid-gem-vlans" 2>/dev/null | sort -n); do
+			"$RUN/omcid/gem-vlans" 2>/dev/null | sort -n); do
 			if [ -e "$NET/gem$id" ]; then
 				echo "gem$id"
 				return 0
@@ -1179,7 +1190,7 @@ identity() {
 }
 
 # A new identity: the OLT sees the stick leave and a new one arrive, and
-# omcid starts again; it goes on from the MIB it kept in /run/omcid.mib until
+# omcid starts again; it goes on from the MIB it kept in /run/omcid/mib until
 # the OLT builds a new one for it.
 reidentify() {
 	# The sessions end first, while the PON still carries their PADT: a
@@ -1421,7 +1432,7 @@ stop)
 	[ -r "$RUN/onu-mode" ] && read -r mode <"$RUN/onu-mode"
 	[ "$mode" != passthrough ] || pass_down
 	svc_stop omcid
-	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans" "$RUN/omcid.mode" "$RUN/omcid.applied"
+	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans" "$RUN/omcid.mode" "$RUN/omcid/applied"
 	;;
 identity)
 	identity

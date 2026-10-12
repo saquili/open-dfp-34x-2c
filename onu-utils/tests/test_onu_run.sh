@@ -26,7 +26,10 @@ setup() {
 	: >"$LOG"
 	printf 'VLAN=4094\nADDRESS=198.51.100.2/30\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=192.0.2.2/30\n' \
 		>"$ONU_ROOT/run/onu-mgmt"
-	for c in dropbear pond getty login omcid sleep ntpd reboot; do
+	# The OMCI port of the PON driver, and chown, which the group of it needs.
+	mkdir -p "$ONU_ROOT/dev"
+	: >"$ONU_ROOT/dev/pon0omci0"
+	for c in dropbear pond getty login omcid sleep ntpd reboot chown; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "dropbearkey $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && echo key >"$2"; shift; done\n' \
@@ -148,13 +151,17 @@ echo "omcid in the mode onu-apply gave it, without an address too"
 setup
 rm "$ONU_ROOT/run/onu-mgmt"
 run omcid
-check '[ $rc -eq 0 ] && logged "omcid -m $ONU_ROOT/run/omcid.mib -x /usr/sbin/onu-apply"'
+check '[ $rc -eq 0 ] && logged "omcid -m $ONU_ROOT/run/omcid/mib -x $ONU_ROOT/usr/lib/onu/onu-call"'
+# It runs as the account omcid with the two powers it uses, in a directory of
+# its own, and the OMCI port is the group's.
+check 'logged "onu-drop -c net_admin,net_raw omcid omcid -m $ONU_ROOT/run/omcid/mib -x $ONU_ROOT/usr/lib/onu/onu-call"'
+check 'logged "chown :omcid $ONU_ROOT/dev/pon0omci0"'
 echo router >"$ONU_ROOT/run/omcid.mode"
 run omcid
-check 'logged "omcid -r -m $ONU_ROOT/run/omcid.mib -x /usr/sbin/onu-apply"'
+check 'logged "omcid -r -m $ONU_ROOT/run/omcid/mib -x $ONU_ROOT/usr/lib/onu/onu-call"'
 echo bridge >"$ONU_ROOT/run/omcid.mode"
 run omcid
-check '[ "$(grep -c -x -F "omcid -m $ONU_ROOT/run/omcid.mib -x /usr/sbin/onu-apply" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
+check '[ "$(grep -c -x -F "omcid -m $ONU_ROOT/run/omcid/mib -x $ONU_ROOT/usr/lib/onu/onu-call" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
 teardown
 
 echo "the time from the router at the other end of the management link"

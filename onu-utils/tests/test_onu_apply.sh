@@ -65,7 +65,7 @@ setup() {
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# A running omcid, signalled, programs the data path again and says so.
-	printf '#!/bin/sh\necho "killall $*" >>"$LOG"\ncase "$1" in\n-USR1) echo router ;;\n-USR2) echo bridge ;;\n*) exit 0 ;;\nesac >"%s/run/omcid.applied"\n' \
+	printf '#!/bin/sh\necho "killall $*" >>"$LOG"\ncase "$1" in\n-USR1) echo router ;;\n-USR2) echo bridge ;;\n*) exit 0 ;;\nesac >"%s/run/omcid/applied"\n' \
 		"$ONU_ROOT" >"$T/bin/killall"
 	# The defaults of the settings are the real table's, and no call to log.
 	printf '#!/bin/sh\n[ "$1" = defaults ] && exec "%s/onu-config" defaults\necho "onu-config $*" >>"$LOG"\n' \
@@ -106,7 +106,7 @@ setup() {
 	ln -s "$HERE/tests/netifd-standin.sh" "$T/bin/onu-net"
 	# onu-drop notes the account and the powers it is told of, and runs the
 	# program as it is, in place of the real one, which needs root.
-	mkdir -p "$ONU_ROOT/usr/lib/onu" "$ONU_ROOT/run/dhcp6d"
+	mkdir -p "$ONU_ROOT/usr/lib/onu" "$ONU_ROOT/run/dhcp6d" "$ONU_ROOT/run/omcid"
 	printf '#!/bin/sh\necho "onu-drop $*" >>"$LOG"\n[ "$1" = -c ] && shift 2\nshift\nexec "$@"\n' \
 		>"$ONU_ROOT/usr/lib/onu/onu-drop"
 	chmod +x "$ONU_ROOT/usr/lib/onu/onu-drop"
@@ -154,7 +154,7 @@ echo "bridge mode"
 setup
 conf MODE=bridge
 "$MODE_SCRIPT" start 2>/dev/null
-check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid/mib -x .*/usr/lib/onu/onu-call$"'
 check '! logged "omcid -r"'
 check '! logged "^nft"'
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
@@ -246,7 +246,7 @@ echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 # omcid bridges the rest of what the OLT provisions, without the session's VLAN.
-check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid/mib -x .*/usr/lib/onu/onu-call$"'
 check '! logged "omcid -r"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 check 'logged "^onu-nl link del omcibr0"'
@@ -480,7 +480,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	"$REAL_SLEEP" 0.2
 done
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
-check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid/mib -x .*/usr/lib/onu/onu-call$"'
 teardown
 
 echo "an untagged session: the host link itself is its link, until its account goes"
@@ -543,7 +543,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 check 'logged "^onu-nl link add vlan gem256 wan410 410"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 : >"$LOG"
-printf '410 1410\n420 1430\n' >"$ONU_ROOT/run/omcid-xlate"
+printf '410 1410\n420 1430\n' >"$ONU_ROOT/run/omcid/xlate"
 "$MODE_SCRIPT" sync 2>/dev/null
 # With them, omcid leaves 1410 out, and the session moves into it.
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
@@ -563,17 +563,17 @@ echo "a session follows its service to the GEM port and the VLAN the OLT moves i
 setup
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
-printf '410 1410\n' >"$ONU_ROOT/run/omcid-xlate"
+printf '410 1410\n' >"$ONU_ROOT/run/omcid/xlate"
 # The OLT lets 1410 through Port-ID 1024, not the lowest Port-ID, 256.
-printf '1410 1024\n1430 256\n' >"$ONU_ROOT/run/omcid-gem-vlans"
+printf '1410 1024\n1430 256\n' >"$ONU_ROOT/run/omcid/gem-vlans"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
 check 'logged "^onu-nl link add vlan gem1024 wan1410 1410"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
 : >"$LOG"
 # The operator moves the service to 1600 on Port-ID 256, and keeps 410.
-printf '410 1600\n' >"$ONU_ROOT/run/omcid-xlate"
-printf '1600 256\n' >"$ONU_ROOT/run/omcid-gem-vlans"
+printf '410 1600\n' >"$ONU_ROOT/run/omcid/xlate"
+printf '1600 256\n' >"$ONU_ROOT/run/omcid/gem-vlans"
 "$MODE_SCRIPT" sync 2>/dev/null
 check 'logged "^onu-nl link del wan1410"'
 check 'logged "^onu-nl link add vlan gem256 wan1600 1600"'
@@ -805,8 +805,14 @@ check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "onu-nl 
 # omcid ends as procd's service and starts again, in bridge mode.
 check 'logged "^procd stop omcid$"'
 check 'logged "^procd start omcid -- .*/onu-run omcid$"'
-check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
+check 'logged "^omcid -m .*/run/omcid/mib -x .*/usr/lib/onu/onu-call$"'
 check '[ "$(grep -n "^procd stop omcid" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^omcid" "$LOG" | cut -d: -f1)" ]'
+# omcid, an account of its own, reads the identity without the PLOAM password,
+# in its own directory, as the group's.
+check 'grep -qx serial=XXXXXXXXXXXX "$ONU_ROOT/run/omcid/identity" && ! grep -q ploam "$ONU_ROOT/run/omcid/identity"'
+check 'logged "^chown :omcid $ONU_ROOT/run/omcid/identity.new$"'
+check 'ls -l "$ONU_ROOT/run/omcid/identity" | grep -q "^-rw-r-----"'
+check 'grep -q ploam_password "$ONU_ROOT/run/onu-identity"'
 teardown
 
 echo "a new identity: omcid starts over although procd ends the old one late"
@@ -1028,14 +1034,14 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 : >"$LOG"
 "$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^killall -USR2 omcid"'
-check '[ "$(cat "$ONU_ROOT/run/omcid.applied")" = bridge ]'
+check '[ "$(cat "$ONU_ROOT/run/omcid/applied")" = bridge ]'
 # The sleep of a second after the signal is gone: the stand-in sleep, which
 # returns at once for a whole second, would show it.
 check '! logged "^sleep 1"'
 check '! logged "omcid did not say"'
 # An omcid that says nothing: the wait ends, says so, and the change goes on.
 printf '#!/bin/sh\necho "killall $*" >>"%s"\n' "$LOG" >"$T/bin/killall"
-rm -f "$ONU_ROOT/run/omcid.applied"
+rm -f "$ONU_ROOT/run/omcid/applied"
 printf 'SESSION1_VLAN=1410\nSESSION2_VLAN=410\n' >"$ONU_ROOT/run/onu.conf"
 echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 : >"$LOG"

@@ -253,7 +253,7 @@ them finds it there, and names it by its whole path where procd starts it.
    VLAN). A session's VLAN may be the subscriber's VID of a translation the
    OLT provisions, the one a router behind the stick would use: the session
    then runs in the VID that VID leads into on the fibre, as omcid publishes
-   it in ``/run/omcid-xlate``. omcid goes on bridging the rest of what the
+   it in ``/run/omcid/xlate``. omcid goes on bridging the rest of what the
    OLT provisions, such as television and telephone, without the sessions'
    VLANs, which onu-apply writes to ``/run/onu-held-vlans`` before it has
    omcid build its bridge again; the frames of those VLANs that come down the
@@ -333,7 +333,7 @@ them finds it there, and names it by its whole path where procd starts it.
    ``/run/onu-identity`` (twenty hex digits of password as its ten octets) and
    brings the PON up; ``reidentify`` takes the PON down first and restarts
    omcid afterwards, so the OLT sees the stick leave and register anew. The
-   MIB that omcid kept in ``/run/omcid.mib`` stays, and the new omcid goes on
+   MIB that omcid kept in ``/run/omcid/mib`` stays, and the new omcid goes on
    from it until the OLT provisions the stick again.
 
 ``onu-mgmt``

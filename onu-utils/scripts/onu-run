@@ -28,9 +28,10 @@
 #                   without it ("router", omcid -r), its output appended to
 #                   /run/omcid.log; one started again after a crash takes
 #                   up the mode the stick is in, and the MIB the OLT set up,
-#                   which it keeps in /run/omcid.mib (omcid -m), so that the
-#                   OLT sees no new ONU. It runs onu-apply after each change
-#                   it publishes (omcid -x)
+#                   which it keeps in /run/omcid/mib (omcid -m), so that the
+#                   OLT sees no new ONU. It runs as the account omcid with the
+#                   two powers it uses (onu-drop), in /run/omcid, and tells
+#                   onu-apply of each change it publishes by onu-call (omcid -x)
 #   onu-run ntp     ntpd, which sets the clock and keeps it, as the account ntp
 #                   with the one power to set the clock (onu-drop), from the
 #                   server that the stick's settings name (NTP_SERVER of
@@ -54,7 +55,10 @@ STATE=$RUN/onu-mgmt
 SYSTEM=$RUN/onu-system
 KEY=$RUN/dropbear/host_key
 # Starts a program as an account of its own, with the powers it needs.
-DROP=${ONU_ROOT:-}/usr/lib/onu/onu-drop
+LIB=${ONU_ROOT:-}/usr/lib/onu
+DROP=$LIB/onu-drop
+# The OMCI port of the PON driver, which omcid opens.
+OMCI_PORT=${ONU_ROOT:-}/dev/pon0omci0
 
 # The console: a login prompt, or on a bench that says so root's shell.
 # board.conf is read as data, never run.
@@ -66,12 +70,14 @@ if [ "${1:-}" = console ]; then
 fi
 
 if [ "${1:-}" = omcid ]; then
-	if [ "$(cat "$RUN/omcid.mode" 2>/dev/null)" = router ]; then
-		exec omcid -r -m "$RUN/omcid.mib" -x /usr/sbin/onu-apply \
-			>>"$RUN/omcid.log" 2>&1
-	fi
-	exec omcid -m "$RUN/omcid.mib" -x /usr/sbin/onu-apply \
-		>>"$RUN/omcid.log" 2>&1
+	# The OMCI port is the group omcid's, as the driver makes it root's.
+	[ ! -e "$OMCI_PORT" ] || { chown :omcid "$OMCI_PORT" && chmod 660 "$OMCI_PORT"; } ||
+		echo "onu-run: omcid cannot open $OMCI_PORT" >&2
+	mode=
+	[ "$(cat "$RUN/omcid.mode" 2>/dev/null)" = router ] && mode=-r
+	# $mode is an option or nothing, left unquoted on purpose.
+	exec "$DROP" -c net_admin,net_raw omcid omcid $mode -m "$RUN/omcid/mib" \
+		-x "$LIB/onu-call" >>"$RUN/omcid.log" 2>&1
 fi
 
 field() {
