@@ -75,7 +75,7 @@ test_a_vlan_is_trapped_in_the_switch()
 
 test_an_address_is_dropped_in_the_switch()
 {
-	add $((PREF + 2)) protocol ip flower skip_sw dst_ip 198.18.0.77/32 action drop
+	add $((PREF + 2)) protocol ip flower skip_sw dst_ip 192.0.2.77/32 action drop
 	check_ok "a drop by address" || return 1
 	in_hw $((PREF + 2)) || { mismatch "the drop by address" "in_hw" "not"; return 1; }
 }
