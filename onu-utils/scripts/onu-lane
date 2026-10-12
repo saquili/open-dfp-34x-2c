@@ -72,7 +72,7 @@ status() {
 }
 
 # End the trial named by @1, its token, back to the setting of before: the
-# token keeps a watcher of an earlier trial from ending a later one.
+# token keeps the keeper's call for an earlier trial from ending a later one.
 expire() {
 	[ -r "$TRIAL" ] && [ "$(field TOKEN "$TRIAL")" = "$1" ] || return 0
 	previous=$(field PREVIOUS "$TRIAL")
@@ -103,12 +103,7 @@ try() {
 		return 1
 	}
 	log "the lane's setting $1 on trial for $LIMIT s; before it $previous"
-	# The watcher: it outlives this command, and the status daemon that ran it.
-	(
-		trap '' HUP
-		sleep "$LIMIT"
-		"$0" expire "$token"
-	) >/dev/null 2>&1 </dev/null &
+	# The keeper of the deadlines (onu-change watch) takes it back.
 }
 
 keep() {

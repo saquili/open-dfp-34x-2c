@@ -617,7 +617,6 @@ teardown
 
 echo "a change of one session leaves the other session up, on trial and back"
 setup
-printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_SLEEP" >"$T/bin/sleep"
 echo "1234.56 99.0" >"$ONU_ROOT/proc/uptime"
 conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=36 SESSION2_FAMILY=ipv4
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
@@ -852,11 +851,12 @@ check '[ $? -eq 0 ] && ! logged "^ip " && ! logged "^procd start" && ! logged "^
 teardown
 
 # A change on trial, as the status daemon makes it: the new settings and
-# accounts are written, then "onu-apply try". The watcher of a trial waits
-# for real here.
+# accounts are written, then "onu-apply try". A trial has no watcher of its
+# own, and the stand-in sleep here returns at once: one that waited on it
+# would end the trial at once. The keeper of the deadlines (onu-change watch)
+# takes it back, with its token.
 trial_setup() {
 	setup
-	printf '#!/bin/sh\nexec %s "$@"\n' "$REAL_SLEEP" >"$T/bin/sleep"
 	echo "1234.56 99.0" >"$ONU_ROOT/proc/uptime"
 	conf MODE=bridge
 	"$MODE_SCRIPT" start 2>/dev/null
@@ -912,14 +912,9 @@ echo "a change on trial unconfirmed: back to the settings and the accounts of be
 trial_setup
 TRIAL_LIMIT=1 "$MODE_SCRIPT" try 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-	[ -e "$ONU_ROOT/run/onu-trial.d/settings" ] || break
-	"$REAL_SLEEP" 0.2
-done
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-	[ -L "$ONU_ROOT/run/onu-apply.lock" ] || break
-	"$REAL_SLEEP" 0.2
-done
+# The keeper's call when the time has come: the program and the token.
+token=$(sed -n 's/^TOKEN=//p' "$ONU_ROOT/run/onu-trial.d/settings")
+"$MODE_SCRIPT" expire "$token" 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 check 'grep -qx MODE=bridge "$ONU_ROOT/run/onu.conf" && [ ! -e "$ONU_ROOT/run/onu-pppoe1" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-trial.d/settings" ] && [ ! -e "$ONU_ROOT/run/onu-kept" ]'

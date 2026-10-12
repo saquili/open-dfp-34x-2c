@@ -199,15 +199,14 @@ check '[ "$(grep -A4 "^config interface '"'"'$name'"'"'" "$T/part")" = "$before"
 check '! grep -q "^onu-nl " "$LOG"'
 teardown
 
-echo "a change not committed goes by itself; an earlier watcher leaves a later change"
+echo "a change not committed goes when the keeper says so; a call for an earlier one leaves a later change"
 setup
-export PENDING_LIMIT=1
 run add 100 192.0.2.6/30
-sleep 3
+token=$(sed -n 's/^TOKEN=//p' "$ONU_ROOT/run/onu-trial.d/mgmt")
+run expire "$token"
 check '[ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
 check 'logged "onu-nl filter del pon pref 2"'
-export PENDING_LIMIT=600
 run add 100 192.0.2.6/30
 run expire 1
 check '[ -e "$ONU_ROOT/run/onu-trial.d/mgmt" ]'

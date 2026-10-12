@@ -8,6 +8,7 @@
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 LANE=$HERE/scripts/onu-lane
+CHANGE=$HERE/scripts/onu-change
 checks=0
 failures=0
 
@@ -92,18 +93,22 @@ run keep
 check 'grep -qx SFP_LANE= "$T/stored"'
 teardown
 
-echo "a trial that is not kept ends by itself, back to the setting of before"
+echo "a trial that is not kept goes back with the keeper, to the setting of before"
 setup
+ln -s "$LANE" "$T/bin/onu-lane"
 export TRIAL_LIMIT=1
 run try 2500basex
 check '[ "$(lane)" = 2500basex ]'
-sleep 3
+"$CHANGE" expire 2>/dev/null
+check '[ "$(lane)" = 2500basex ] && [ -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
+echo "1002.00 900.00" >"$ONU_ROOT/proc/uptime"
+"$CHANGE" expire 2>/dev/null
 check '[ "$(lane)" = auto ]'
 check '[ ! -e "$ONU_ROOT/run/onu-trial.d/lane" ]'
 check '[ ! -e "$T/stored" ]'
 teardown
 
-echo "a trial ended at once, and a watcher of an earlier trial ends no later one"
+echo "a trial ended at once, and the call for an earlier trial ends no later one"
 setup
 run try 1000basex
 run revert

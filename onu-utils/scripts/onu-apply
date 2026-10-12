@@ -1232,14 +1232,8 @@ try_change() {
 		printf 'UNTIL=%s\nTOKEN=%s\n' "$(($(uptime_s) + TRIAL_LIMIT))" "$token" \
 			>"$TRIAL.new" && mv "$TRIAL.new" "$TRIAL" || return 1
 	log "the change is on trial for $TRIAL_LIMIT s"
-	# The watcher outlives this command and the status daemon that ran it;
-	# the token keeps it from ending a later trial.
-	(
-		trap - EXIT
-		trap '' HUP
-		sleep "$TRIAL_LIMIT"
-		"$SELF" expire "$token"
-	) >/dev/null 2>&1 </dev/null &
+	# The keeper of the deadlines (onu-change watch) takes it back, with the
+	# token, which keeps it from ending a later trial.
 }
 
 # The change on trial kept, in the configuration store as well.

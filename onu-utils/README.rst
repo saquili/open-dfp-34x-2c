@@ -341,7 +341,8 @@ them finds it there, and names it by its whole path where procd starts it.
    settings (``onu-apply try``), the setting of the SFP lane (``onu-lane
    try``) and the management pair (``onu-mgmt add``). Each is a file of
    ``/run/onu-trial.d`` named for it, with the moment it goes back; the
-   program that made it keeps it or takes it back, and a watcher of its own
+   program that made it keeps it or takes it back, and the keeper of the
+   deadlines, ``onu-change watch``, one for all of them and a service of procd,
    takes it back when no one kept it in time: 90 s, and for the management
    pair ten minutes, the time to move a computer to the new VLAN and
    address. The status daemon confirms them for the panel, which does so as
@@ -351,6 +352,8 @@ them finds it there, and names it by its whole path where procd starts it.
       onu-change status        # name, when it goes back, the new address
       onu-change confirm [IP]  # keep them; the pair's only when IP is its own
       onu-change revert        # take them back now
+      onu-change expire        # take back those whose time has come, once
+      onu-change watch         # the keeper: expire, wait for the nearest, for ever
 
 ``onu-net``
    writes netifd's configuration, ``/run/config/network``, from parts: each

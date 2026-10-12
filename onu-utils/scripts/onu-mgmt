@@ -165,7 +165,7 @@ status() {
 }
 
 # Take the pending pair away again; @1 is the token of the change, so that a
-# watcher of an earlier one leaves a later one alone.
+# call for an earlier one leaves a later one alone.
 drop_pending() {
 	[ -r "$PENDING" ] && [ "$(field TOKEN "$PENDING")" = "$1" ] || return 0
 	vlan=$(field VLAN "$PENDING")
@@ -231,11 +231,7 @@ add() {
 	dropbear $nopw -r "$KEY" -P "$RUN/dropbear-pending.pid" -p "${address%/*}:22" ||
 		log "no ssh on $address"
 	log "the management address $address in VLAN $vlan added beside the old one"
-	(
-		trap '' HUP
-		sleep "$LIMIT"
-		"$0" expire "$token"
-	) >/dev/null 2>&1 </dev/null &
+	# The keeper of the deadlines (onu-change watch) takes it away again.
 }
 
 commit() {
