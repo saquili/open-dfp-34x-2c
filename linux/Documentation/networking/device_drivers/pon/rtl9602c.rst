@@ -283,6 +283,9 @@ Configuration
    * - ``CONFIG_PON_RTL9602C_PLOAM_INJECT``
      - Bool, depends on ``PON_RTL9602C`` and ``DEBUG_FS``. The debugfs file
        ``ploaminject``, for test images (see the *gpon* page).
+   * - ``CONFIG_PON_RTL9602C_KUNIT_TEST``
+     - Bool, depends on ``PON_RTL9602C`` and ``KUNIT=y``. The tests of the
+       calculations in ``rtl9602c-pon-calc.c`` (see "Tests").
    * - ``CONFIG_PON``
      - The PON class. ``PON_RTL9602C`` selects it.
    * - ``CONFIG_MFD_SYSCON``
@@ -436,6 +439,12 @@ Where the code is
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - Probe, setup and teardown (in which the PON driver's device is made and
        destroyed), and the debugfs directory.
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-calc.c``, ``rtl9602c-pon-test.c``
+     - The calculations of the driver that touch no register (the serial
+       number and the password, the length of a burst's overhead, the split of
+       the equalization delay, the units of a queue's rates, the names of the
+       PLOAM messages), and the KUnit tests of them and of the numbering of
+       T-CONTs and their queues.
    * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-main.c``
      - The PON driver's probe and remove (``rtl9602c_ponmac_probe()``, the OMCI
        port and the GEM data path are created and removed there), its PON
@@ -466,6 +475,26 @@ Where the code is
    * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``, ``dfp-34x-2c3.dts``
      - The ``sysctl`` and ``switch`` nodes, and the reserved memory of the
        packet buffer.
+
+Tests
+-----
+
+``rtl9602c-pon-test.c`` holds KUnit tests of the calculations in
+``rtl9602c-pon-calc.c``: that a serial number parses in either case of its
+hexadecimal digits and a vendor ID of printable ASCII, and is refused otherwise;
+the same for the registration password, as ten characters or as ``0x`` and
+twenty digits; the bytes and the length field of a burst's overhead, with the
+guard time capped at 32 bits and the length within the field's limits; the
+split of the equalization delay into whole upstream frames and bits; the units
+of a queue's rates, the committed rate rounded up and the peak rate down; the
+numbering of T-CONTs and their queues; and the names of the PLOAM messages. They
+run on any architecture, under qemu::
+
+    tools/testing/kunit/kunit.py run --arch=arm64 --kunitconfig=FILE
+
+with ``CONFIG_NET_DSA_RTL9602C=y``, ``CONFIG_PON_RTL9602C=y`` and
+``CONFIG_PON_RTL9602C_KUNIT_TEST=y`` in the file, among the options the drivers
+depend on. What reads or writes a register is tested on the board.
 
 Interfaces to user space
 ------------------------

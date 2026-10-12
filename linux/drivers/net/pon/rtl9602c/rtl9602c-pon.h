@@ -401,6 +401,24 @@ u32 rtl9602c_gpon_flow_cntr(struct rtl9602c_pon *p, unsigned int flow,
 			    bool bytes);
 void rtl9602c_gem_cntr_sync_all(struct rtl9602c_pon *p);
 
+/*
+ * The unit of the queue rate fields: 1024 bytes per second of frames counted
+ * with their FCS, with the token clock the build sets (measured on this
+ * board).
+ */
+#define RTL9602C_GEM_RATE_UNIT		1024
+
+int rtl9602c_gpon_sn_parse(const char *s, u8 sn[RTL9602C_GPON_SN_BYTES]);
+int rtl9602c_gpon_password_parse(const char *s,
+				 u8 pw[RTL9602C_GPON_PASSWORD_BYTES]);
+unsigned int rtl9602c_gpon_boh_bytes_of(const u8 *ovh, u8 type3);
+u8 rtl9602c_gpon_boh_len_of(const u8 *ovh, u8 type3);
+void rtl9602c_gpon_eqd_split(u32 eqd, u32 *frames, u32 *bits);
+const char *rtl9602c_ploam_ds_name(u8 id);
+const char *rtl9602c_ploam_us_name(u8 id);
+void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,
+			     u32 *pir_u);
+
 int rtl9602c_pon_probe(struct rtl9602c_pon_data *pd, struct device *dev);
 void rtl9602c_pon_remove(struct rtl9602c_pon_data *pd);
 

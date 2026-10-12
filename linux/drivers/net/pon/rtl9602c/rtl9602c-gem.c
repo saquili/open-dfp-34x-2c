@@ -88,13 +88,6 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_pon *p, u32 tcont)
 static void rtl9602c_gem_park(struct rtl9602c_pon *p, unsigned int f);
 
 /*
- * The unit of the queue rate fields: 1024 bytes per second of frames counted
- * with their FCS, with the token clock the build sets (measured on this
- * board).
- */
-#define RTL9602C_GEM_RATE_UNIT		1024
-
-/*
  * A GEM port's weight w goes into the queue's 10-bit field as 4w: two queues
  * weighted 1 and 3 shared 29 % to 71 %, while 4 and 12 shared 25.4 % to
  * 74.6 % (measured on this board).
@@ -115,7 +108,7 @@ static void rtl9602c_gem_queue_sched(struct rtl9602c_pon *p, u32 tcont,
 				     u8 queue)
 {
 	unsigned int f, weight = 0;
-	u64 cir = 0, pir = 0, units;
+	u64 cir = 0, pir = 0;
 	bool limited = true;
 	u32 cir_u, pir_u;
 
@@ -136,12 +129,7 @@ static void rtl9602c_gem_queue_sched(struct rtl9602c_pon *p, u32 tcont,
 			pir = U64_MAX;
 	}
 
-	pir_u = RTL9602C_PONSCH_QUEUE_RATE_MAX;
-	if (limited && pir)
-		pir_u = clamp_t(u64, pir / RTL9602C_GEM_RATE_UNIT, 1,
-				RTL9602C_PONSCH_QUEUE_RATE_MAX);
-	units = cir / RTL9602C_GEM_RATE_UNIT + !!(cir % RTL9602C_GEM_RATE_UNIT);
-	cir_u = min_t(u64, units, pir_u);
+	rtl9602c_gem_rate_units(cir, pir, limited, &cir_u, &pir_u);
 
 	rtl9602c_pon_queue_set(p, RTL9602C_PON_QUEUE(rtl9602c_gem_tcont(tcont),
 						     rtl9602c_gem_tcont_qbit(tcont, queue)),

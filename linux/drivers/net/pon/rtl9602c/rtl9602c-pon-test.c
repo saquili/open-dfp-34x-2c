@@ -1,0 +1,345 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * KUnit tests of the calculations in rtl9602c-pon-calc.c, which includes this
+ * file when CONFIG_PON_RTL9602C_KUNIT_TEST is set: the parsing of the serial
+ * number and the password, the length of a burst's overhead, the split of the
+ * equalization delay, the units of a queue's rates, the numbering of T-CONTs
+ * and their queues, and the names of the PLOAM messages.
+ */
+
+#include <kunit/test.h>
+
+/*
+ * A serial number as devlink gives it: the four characters of the Vendor_ID
+ * and eight hexadecimal digits, assembled here so that the source holds no
+ * serial number.
+ */
+static void rtl9602c_test_make_sn(char *buf, size_t len, u32 tail, bool upper)
+{
+	snprintf(buf, len, upper ? "%c%c%c%c%08X" : "%c%c%c%c%08x",
+		 'T', 'E', 'S', 'T', tail);
+}
+
+static void rtl9602c_test_sn_parse(struct kunit *test)
+{
+	static const u8 want[RTL9602C_GPON_SN_BYTES] = {
+		'T', 'E', 'S', 'T', 0x12, 0xab, 0x34, 0xcd
+	};
+	u8 sn[RTL9602C_GPON_SN_BYTES];
+	char s[16];
+
+	/* Either case of the hexadecimal digits gives the same octets. */
+	rtl9602c_test_make_sn(s, sizeof(s), 0x12ab34cd, false);
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), 0);
+	KUNIT_EXPECT_MEMEQ(test, sn, want, sizeof(want));
+
+	rtl9602c_test_make_sn(s, sizeof(s), 0x12ab34cd, true);
+	memset(sn, 0, sizeof(sn));
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), 0);
+	KUNIT_EXPECT_MEMEQ(test, sn, want, sizeof(want));
+
+	/* Characters after the twelfth are not read. */
+	s[12] = 'x';
+	s[13] = '\0';
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), 0);
+}
+
+static void rtl9602c_test_sn_parse_refuses(struct kunit *test)
+{
+	u8 sn[RTL9602C_GPON_SN_BYTES];
+	char s[16];
+	unsigned int i;
+
+	/* Twelve characters at least. */
+	rtl9602c_test_make_sn(s, sizeof(s), 0x12ab34cd, false);
+	s[11] = '\0';
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), -EINVAL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse("", sn), -EINVAL);
+
+	/* A Vendor_ID of printable ASCII: 0x20 to 0x7e. */
+	for (i = 0; i < 4; i++) {
+		rtl9602c_test_make_sn(s, sizeof(s), 0x12ab34cd, false);
+		s[i] = 0x1f;
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), -EINVAL);
+		s[i] = 0x7f;
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), -EINVAL);
+		s[i] = 0x20;
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), 0);
+		KUNIT_EXPECT_EQ(test, sn[i], 0x20);
+		s[i] = 0x7e;
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), 0);
+		KUNIT_EXPECT_EQ(test, sn[i], 0x7e);
+	}
+
+	/* The other eight characters are hexadecimal digits, each of them. */
+	for (i = 4; i < 12; i++) {
+		rtl9602c_test_make_sn(s, sizeof(s), 0x12ab34cd, false);
+		s[i] = 'g';
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), -EINVAL);
+		s[i] = ' ';
+		KUNIT_EXPECT_EQ(test, rtl9602c_gpon_sn_parse(s, sn), -EINVAL);
+	}
+}
+
+static void rtl9602c_test_pw_parse(struct kunit *test)
+{
+	static const u8 text[RTL9602C_GPON_PASSWORD_BYTES] = { 'a', 'b', 'c' };
+	static const u8 full[RTL9602C_GPON_PASSWORD_BYTES] = {
+		'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'
+	};
+	static const u8 octets[RTL9602C_GPON_PASSWORD_BYTES] = {
+		0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x9a
+	};
+	u8 pw[RTL9602C_GPON_PASSWORD_BYTES];
+
+	/* A short text is padded with zeros. */
+	memset(pw, 0xff, sizeof(pw));
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("abc", pw), 0);
+	KUNIT_EXPECT_MEMEQ(test, pw, text, sizeof(text));
+
+	/* Ten characters are the most. */
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("0123456789", pw), 0);
+	KUNIT_EXPECT_MEMEQ(test, pw, full, sizeof(full));
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("01234567890", pw),
+			-EINVAL);
+
+	/* "0x" and twenty hexadecimal digits are ten octets. */
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("0x00112233445566778899", pw), 0);
+	KUNIT_EXPECT_EQ(test, pw[0], 0x00);
+	KUNIT_EXPECT_EQ(test, pw[9], 0x99);
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("0X00112233445566778899", pw), 0);
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("0x0011223344556677889a", pw), 0);
+	KUNIT_EXPECT_MEMEQ(test, pw, octets, sizeof(octets));
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("0x0011223344556677889A", pw), 0);
+	KUNIT_EXPECT_MEMEQ(test, pw, octets, sizeof(octets));
+
+	/* Ten characters that start with "0x" are text, not octets. */
+	KUNIT_ASSERT_EQ(test, rtl9602c_gpon_password_parse("0x12345678", pw), 0);
+	KUNIT_EXPECT_EQ(test, pw[0], '0');
+	KUNIT_EXPECT_EQ(test, pw[1], 'x');
+	KUNIT_EXPECT_EQ(test, pw[9], '8');
+}
+
+static void rtl9602c_test_pw_parse_refuses(struct kunit *test)
+{
+	u8 pw[RTL9602C_GPON_PASSWORD_BYTES];
+
+	/* A digit that is none, and the wrong number of digits after "0x". */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("0x0011223344556677889g", pw), -EINVAL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("0x001122334455667788", pw), -EINVAL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("0x001122334455667788990", pw), -EINVAL);
+
+	/* A text of printable ASCII only. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("ab\x1f", pw), -EINVAL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("ab\x7f", pw), -EINVAL);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_password_parse("ab \x7e", pw), 0);
+}
+
+/*
+ * The octets of an Upstream_Overhead message that the length reads: the guard
+ * time, and the type 1 and type 2 preambles, in bits.
+ */
+static void rtl9602c_test_overhead(u8 *ovh, u8 guard, u8 type1, u8 type2)
+{
+	memset(ovh, 0, RTL9602C_GPON_PLOAM_BYTES);
+	ovh[RTL9602C_PLOAM_OVERHEAD_GUARD_BITS] = guard;
+	ovh[RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS] = type1;
+	ovh[RTL9602C_PLOAM_OVERHEAD_TYPE2_BITS] = type2;
+}
+
+static void rtl9602c_test_boh_bytes(struct kunit *test)
+{
+	u8 ovh[RTL9602C_GPON_PLOAM_BYTES];
+
+	/* 32 guard bits, no type 1 or 2: 4 bytes, the type 3 preamble, the delimiter. */
+	rtl9602c_test_overhead(ovh, 32, 0, 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_bytes_of(ovh, 0),
+			4 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_bytes_of(ovh, 60),
+			4 + 60 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN);
+
+	/* The guard time counts for 32 bits at most. */
+	rtl9602c_test_overhead(ovh, 255, 0, 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_bytes_of(ovh, 0),
+			4 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN);
+	rtl9602c_test_overhead(ovh, 8, 0, 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_bytes_of(ovh, 0),
+			1 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN);
+
+	/* The type 1 and type 2 preambles are given in bits. */
+	rtl9602c_test_overhead(ovh, 32, 32, 16);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_bytes_of(ovh, 0),
+			4 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN + 6);
+}
+
+static void rtl9602c_test_boh_len(struct kunit *test)
+{
+	u8 ovh[RTL9602C_GPON_PLOAM_BYTES];
+
+	rtl9602c_test_overhead(ovh, 32, 0, 0);
+
+	/* With no type 3 preamble the length is the default. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_len_of(ovh, 0), RTL9602C_BURST_CFG_LEN_DEF);
+
+	/* Within the limits it is the bytes of the overhead. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_len_of(ovh, 60),
+			rtl9602c_gpon_boh_bytes_of(ovh, 60));
+
+	/* Below the default it is the default, above the field it is its largest. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_len_of(ovh, 1), RTL9602C_BURST_CFG_LEN_DEF);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_len_of(ovh, 255), RTL9602C_BURST_CFG_LEN_MAX);
+}
+
+static void rtl9602c_test_eqd_split(struct kunit *test)
+{
+	u32 frames, bits;
+
+	/* A delay of a live ranging: less than a frame. */
+	rtl9602c_gpon_eqd_split(97331 + 290 * RTL9602C_GTC_US_RESP_DELAY_COARSE_BITS,
+				&frames, &bits);
+	KUNIT_EXPECT_EQ(test, frames, 0);
+	KUNIT_EXPECT_EQ(test, bits, 134451);
+
+	rtl9602c_gpon_eqd_split(0, &frames, &bits);
+	KUNIT_EXPECT_EQ(test, frames, 0);
+	KUNIT_EXPECT_EQ(test, bits, 0);
+
+	/* The frame's size is the edge. */
+	rtl9602c_gpon_eqd_split(RTL9602C_GPON_EQD_FRAME_BITS - 1, &frames, &bits);
+	KUNIT_EXPECT_EQ(test, frames, 0);
+	KUNIT_EXPECT_EQ(test, bits, RTL9602C_GPON_EQD_FRAME_BITS - 1);
+	rtl9602c_gpon_eqd_split(RTL9602C_GPON_EQD_FRAME_BITS, &frames, &bits);
+	KUNIT_EXPECT_EQ(test, frames, 1);
+	KUNIT_EXPECT_EQ(test, bits, 0);
+	rtl9602c_gpon_eqd_split(2 * RTL9602C_GPON_EQD_FRAME_BITS + 5, &frames, &bits);
+	KUNIT_EXPECT_EQ(test, frames, 2);
+	KUNIT_EXPECT_EQ(test, bits, 5);
+}
+
+static void rtl9602c_test_rate_units(struct kunit *test)
+{
+	u32 c, p;
+
+	/* No rates: no commitment, and a peak at the field's largest value. */
+	rtl9602c_gem_rate_units(0, 0, true, &c, &p);
+	KUNIT_EXPECT_EQ(test, c, 0);
+	KUNIT_EXPECT_EQ(test, p, RTL9602C_PONSCH_QUEUE_RATE_MAX);
+
+	/* 10 Mbit/s and 100 Mbit/s in bytes a second: up for the first, down for the second. */
+	rtl9602c_gem_rate_units(1250000, 12500000, true, &c, &p);
+	KUNIT_EXPECT_EQ(test, c, 1221);
+	KUNIT_EXPECT_EQ(test, p, 12207);
+
+	/* Whole units stay, one byte more takes the next. */
+	rtl9602c_gem_rate_units(2 * RTL9602C_GEM_RATE_UNIT, 0, true, &c, &p);
+	KUNIT_EXPECT_EQ(test, c, 2);
+	rtl9602c_gem_rate_units(2 * RTL9602C_GEM_RATE_UNIT + 1, 0, true, &c, &p);
+	KUNIT_EXPECT_EQ(test, c, 3);
+
+	/* A peak below a unit is one unit, and the commitment keeps within it. */
+	rtl9602c_gem_rate_units(100, 100, true, &c, &p);
+	KUNIT_EXPECT_EQ(test, p, 1);
+	KUNIT_EXPECT_EQ(test, c, 1);
+
+	/* A commitment above the peak is cut to it. */
+	rtl9602c_gem_rate_units(10 * RTL9602C_GEM_RATE_UNIT, 4 * RTL9602C_GEM_RATE_UNIT,
+				true, &c, &p);
+	KUNIT_EXPECT_EQ(test, p, 4);
+	KUNIT_EXPECT_EQ(test, c, 4);
+
+	/* A queue with a port that has no peak rate has no limit, whatever the others add up to. */
+	rtl9602c_gem_rate_units(10 * RTL9602C_GEM_RATE_UNIT, 4 * RTL9602C_GEM_RATE_UNIT,
+				false, &c, &p);
+	KUNIT_EXPECT_EQ(test, p, RTL9602C_PONSCH_QUEUE_RATE_MAX);
+	KUNIT_EXPECT_EQ(test, c, 10);
+
+	/* Nothing passes the field's largest value, however large the rates. */
+	rtl9602c_gem_rate_units(U64_MAX, U64_MAX, true, &c, &p);
+	KUNIT_EXPECT_EQ(test, p, RTL9602C_PONSCH_QUEUE_RATE_MAX);
+	KUNIT_EXPECT_EQ(test, c, RTL9602C_PONSCH_QUEUE_RATE_MAX);
+	rtl9602c_gem_rate_units(U64_MAX, 0, false, &c, &p);
+	KUNIT_EXPECT_EQ(test, c, RTL9602C_PONSCH_QUEUE_RATE_MAX);
+}
+
+/*
+ * The PON class numbers T-CONTs from 0; the scheduler has groups of eight, of
+ * which each GEM T-CONT uses four, so 0 to 3 are the scheduler's 0 to 3 and 4
+ * to 7 its 8 to 11. A T-CONT's queues take the group's bits from the top:
+ * priority 0 the highest bit of the T-CONT's byte.
+ */
+static void rtl9602c_test_tcont_numbers(struct kunit *test)
+{
+	static const unsigned int sched[RTL9602C_GEM_NUM_TCONT] = {
+		0, 1, 2, 3, 8, 9, 10, 11
+	};
+	unsigned int n, k;
+	u32 seen = 0;
+
+	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++)
+		KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont(n), sched[n]);
+
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qbit(0, 0), 7);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qbit(0, 7), 0);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qbit(1, 0), 15);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qbit(3, 0), 31);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qbit(3, 7), 24);
+
+	/* Four T-CONTs and eight priorities each have a bit of 32; no two share one. */
+	for (n = 0; n < 4; n++) {
+		for (k = 0; k < RTL9602C_GEM_TCONT_QUEUES; k++) {
+			unsigned int bit = rtl9602c_gem_tcont_qbit(n, k);
+
+			KUNIT_ASSERT_LT(test, bit, 32);
+			KUNIT_EXPECT_EQ(test, seen & BIT(bit), 0);
+			seen |= BIT(bit);
+		}
+	}
+	KUNIT_EXPECT_EQ(test, seen, U32_MAX);
+
+	/* The second group has the same bits: the group is the scheduler's index. */
+	for (k = 0; k < RTL9602C_GEM_TCONT_QUEUES; k++)
+		KUNIT_EXPECT_EQ(test, rtl9602c_gem_tcont_qbit(4, k),
+				rtl9602c_gem_tcont_qbit(0, k));
+}
+
+static void rtl9602c_test_ploam_names(struct kunit *test)
+{
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(1), "Upstream_Overhead");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(3), "Assign_ONU-ID");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(4), "Ranging_Time");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(10), "Assign_Alloc-ID");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(14), "Configure_Port-ID");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(24), "Sleep_Allow");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(1), "Serial_Number_ONU");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(3), "Dying_Gasp");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(9), "Acknowledge");
+
+	/* Identifier 0 and every one above the tables are unknown. */
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(0), "unknown");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(25), "unknown");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_ds_name(255), "unknown");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(0), "unknown");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(11), "unknown");
+	KUNIT_EXPECT_STREQ(test, rtl9602c_ploam_us_name(255), "unknown");
+}
+
+static struct kunit_case rtl9602c_pon_test_cases[] = {
+	KUNIT_CASE(rtl9602c_test_sn_parse),
+	KUNIT_CASE(rtl9602c_test_sn_parse_refuses),
+	KUNIT_CASE(rtl9602c_test_pw_parse),
+	KUNIT_CASE(rtl9602c_test_pw_parse_refuses),
+	KUNIT_CASE(rtl9602c_test_boh_bytes),
+	KUNIT_CASE(rtl9602c_test_boh_len),
+	KUNIT_CASE(rtl9602c_test_eqd_split),
+	KUNIT_CASE(rtl9602c_test_rate_units),
+	KUNIT_CASE(rtl9602c_test_tcont_numbers),
+	KUNIT_CASE(rtl9602c_test_ploam_names),
+	{ }
+};
+
+static struct kunit_suite rtl9602c_pon_test_suite = {
+	.name = "rtl9602c-pon",
+	.test_cases = rtl9602c_pon_test_cases,
+};
+
+kunit_test_suite(rtl9602c_pon_test_suite);

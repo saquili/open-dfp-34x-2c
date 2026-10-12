@@ -360,9 +360,9 @@ static void rtl9602c_gpon_set_eqd(struct rtl9602c_pon *p, u32 delay)
 	u32 min_delay = FIELD_GET(RTL9602C_GTC_US_RESP_DELAY_COARSE,
 				   rtl9602c_pon_r(p, RTL9602C_GTC_US_RESP_DELAY));
 	u32 eqd1 = delay + min_delay * RTL9602C_GTC_US_RESP_DELAY_COARSE_BITS;
-	u32 multi = eqd1 / RTL9602C_GPON_EQD_FRAME_BITS;
-	u32 intra = eqd1 % RTL9602C_GPON_EQD_FRAME_BITS;
+	u32 multi, intra;
 
+	rtl9602c_gpon_eqd_split(eqd1, &multi, &intra);
 	p->gpon_eqd_delay = delay;
 	rtl9602c_pon_w(p, RTL9602C_RANGING_EQD,
 		       FIELD_PREP(RTL9602C_RANGING_EQD_FRAMES, multi) |
@@ -379,12 +379,7 @@ static void rtl9602c_gpon_set_eqd(struct rtl9602c_pon *p, u32 delay)
  */
 static unsigned int rtl9602c_gpon_boh_bytes(struct rtl9602c_pon *p, u8 type3)
 {
-	const u8 *ovh = p->gpon_overhead;
-
-	return min_t(unsigned int, ovh[RTL9602C_PLOAM_OVERHEAD_GUARD_BITS], 32) / 8 +
-	       type3 + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN +
-	       (ovh[RTL9602C_PLOAM_OVERHEAD_TYPE1_BITS] +
-		ovh[RTL9602C_PLOAM_OVERHEAD_TYPE2_BITS]) / 8;
+	return rtl9602c_gpon_boh_bytes_of(p->gpon_overhead, type3);
 }
 
 /*
@@ -400,10 +395,7 @@ static unsigned int rtl9602c_gpon_boh_bytes(struct rtl9602c_pon *p, u8 type3)
  */
 static u8 rtl9602c_gpon_boh_len(struct rtl9602c_pon *p, u8 type3)
 {
-	if (!type3)
-		return RTL9602C_BURST_CFG_LEN_DEF;
-	return clamp_t(unsigned int, rtl9602c_gpon_boh_bytes(p, type3),
-		       RTL9602C_BURST_CFG_LEN_DEF, RTL9602C_BURST_CFG_LEN_MAX);
+	return rtl9602c_gpon_boh_len_of(p->gpon_overhead, type3);
 }
 
 /*
@@ -1617,30 +1609,6 @@ static void rtl9602c_gpon_o5_teardown(struct rtl9602c_pon *p)
 }
 
 /*
- * Downstream message names by identifier, as G.984.3 clause 9.2.3 and its
- * annexes give them; 2 and 7 are deprecated.
- */
-static const char *rtl9602c_ploam_ds_name(u8 id)
-{
-	static const char * const names[] = {
-		[1]  = "Upstream_Overhead",	[2]  = "Serial_number_mask",
-		[3]  = "Assign_ONU-ID",		[4]  = "Ranging_Time",
-		[5]  = "Deactivate_ONU-ID",	[6]  = "Disable_serial_number",
-		[7]  = "Configure_VP/VC",	[8]  = "Encrypted_Port-ID",
-		[9]  = "Request_password",	[10] = "Assign_Alloc-ID",
-		[11] = "No_message",		[12] = "POPUP",
-		[13] = "Request_Key",		[14] = "Configure_Port-ID",
-		[15] = "Physical_Equipment_Error", [16] = "Change_Power_Level",
-		[17] = "PST",			[18] = "BER_Interval",
-		[19] = "Key_switching_time",	[20] = "Extended_Burst_Length",
-		[21] = "PON-ID",		[22] = "Swift_POPUP",
-		[23] = "Ranging_adjustment",	[24] = "Sleep_Allow",
-	};
-
-	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
-}
-
-/*
  * Acknowledge downstream message @dm (G.984.3 clause 9.2.4.9) on the urgent
  * queue: its identifier, then its first nine octets. Unacknowledged,
  * Assign_Alloc-ID and Configure_Port-ID are sent three times and then followed
@@ -2824,24 +2792,11 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 int rtl9602c_gpon_sn_set(struct rtl9602c_pon *p, const char *s)
 {
 	u8 sn[RTL9602C_GPON_SN_BYTES];
-	unsigned int i;
+	int err;
 
-	if (strlen(s) < 12)
-		return -EINVAL;
-
-	for (i = 0; i < 4; i++) {
-		if (s[i] < 0x20 || s[i] > 0x7e)
-			return -EINVAL;
-		sn[i] = s[i];
-	}
-	for (i = 0; i < 4; i++) {
-		int hi = hex_to_bin(s[4 + i * 2]);
-		int lo = hex_to_bin(s[5 + i * 2]);
-
-		if (hi < 0 || lo < 0)
-			return -EINVAL;
-		sn[4 + i] = (hi << 4) | lo;
-	}
+	err = rtl9602c_gpon_sn_parse(s, sn);
+	if (err)
+		return err;
 
 	memcpy(p->gpon_sn, sn, sizeof(sn));
 	p->gpon_have_sn = true;
@@ -2865,28 +2820,19 @@ int rtl9602c_gpon_sn_set(struct rtl9602c_pon *p, const char *s)
  */
 int rtl9602c_gpon_password_set(struct rtl9602c_pon *p, const char *s)
 {
-	u8 pw[RTL9602C_GPON_PASSWORD_BYTES] = {};
-	size_t len = strlen(s);
-	unsigned int i;
+	u8 pw[RTL9602C_GPON_PASSWORD_BYTES];
+	int err;
 
-	if (!len) {
+	if (!*s) {
 		memzero_explicit(p->gpon_password, sizeof(p->gpon_password));
 		p->gpon_have_password = false;
 		return 0;
 	}
 
-	if (len == 2 + 2 * sizeof(pw) && s[0] == '0' &&
-	    (s[1] == 'x' || s[1] == 'X')) {
-		if (hex2bin(pw, s + 2, sizeof(pw)))
-			return -EINVAL;
-	} else {
-		if (len > sizeof(pw))
-			return -EINVAL;
-		for (i = 0; i < len; i++) {
-			if (s[i] < 0x20 || s[i] > 0x7e)
-				return -EINVAL;
-			pw[i] = s[i];
-		}
+	err = rtl9602c_gpon_password_parse(s, pw);
+	if (err) {
+		memzero_explicit(pw, sizeof(pw));
+		return err;
 	}
 
 	memcpy(p->gpon_password, pw, sizeof(pw));
@@ -2962,23 +2908,6 @@ void rtl9602c_gpon_stop(struct rtl9602c_pon *p)
 }
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
-
-/*
- * Upstream message names by identifier, as G.984.3 clause 9.2.4 and its annex E
- * give them.
- */
-static const char *rtl9602c_ploam_us_name(u8 id)
-{
-	static const char * const names[] = {
-		[1] = "Serial_Number_ONU",	[2] = "Password",
-		[3] = "Dying_Gasp",		[4] = "No_message",
-		[5] = "Encryption_Key",		[6] = "Physical_Equipment_Error",
-		[7] = "PST",			[8] = "REI",
-		[9] = "Acknowledge",		[10] = "Sleep_Request",
-	};
-
-	return id < ARRAY_SIZE(names) && names[id] ? names[id] : "unknown";
-}
 
 /*
  * gpon: the downstream and the activation at a glance, from the registers at

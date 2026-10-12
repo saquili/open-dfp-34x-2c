@@ -5,5 +5,5 @@
 #
 
 obj-$(CONFIG_PON_RTL9602C) += rtl9602c-pon.o
-rtl9602c-pon-y := rtl9602c-pon-main.o rtl9602c-gpon.o rtl9602c-ponmac.o \
-		  rtl9602c-omci.o rtl9602c-gem.o
+rtl9602c-pon-y := rtl9602c-pon-main.o rtl9602c-pon-calc.o rtl9602c-gpon.o \
+		  rtl9602c-ponmac.o rtl9602c-omci.o rtl9602c-gem.o
