@@ -90,7 +90,7 @@ The index
      - Accepted, amended by 0014
    * - 0014
      - One control plane turns the settings into what procd and netifd keep
-     - Accepted
+     - Accepted, amended by 0019 and 0020
    * - 0015
      - The names of the stick's own programs say what they do
      - Accepted, amended
@@ -103,3 +103,9 @@ The index
    * - 0018
      - The kernel series aims at mainline
      - Accepted, amended
+   * - 0019
+     - The settings are a file in the config partition's file system
+     - Accepted
+   * - 0020
+     - The flash's image has no iproute2 and the scripts run no ip
+     - Accepted

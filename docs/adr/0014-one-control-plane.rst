@@ -5,7 +5,8 @@
 ADR 0014: One control plane turns the settings into what procd and netifd keep
 ==============================================================================
 
-:Status: Accepted
+:Status: Accepted, amended by 0019 (step 9), by 0020 (iproute2) and by the
+         entries under "Amendments"
 :Date: 2026-10-10
 :Decided-by: the owner, 2026-10-10
 
@@ -155,107 +156,8 @@ owners: what moves to netifd moves whole.
 6. The state on ubus: omcid and dhcp6d publish it, and pond reads it.
 7. omcid keeps its MIB in ``/run``.
 8. pond as an account of its own, under ubusd's access lists.
-9. The settings in the ``config`` partition's own file system: the store
-   becomes a file of the JFFS2 the shipped firmware keeps there, beside its
-   files, and a return to the shipped firmware is a switch of the bank.
-
-omcid's part of step 6 goes with step 8 (decided 2026-10-10): until pond
-leaves root, nothing reads omcid's state on ubus, and then pond needs what
-it reads of the MIB there too, under ubusd's access lists.
-
-Decided on 2026-10-12, in the clean-up of the debts: the scripts run no ``ip``
-at all. What was left of it, fourteen requests on links (the PON up and
-down, a session's GEM and VLAN interfaces made, taken away and given their
-MTU and MAC address, and the boot script's three), is ``onu-nl link``, as
-the requests ``ip`` makes. BusyBox's ``ip`` stays built in for a person at
-the console, and is the first applet to go when the image is slimmed.
-
-Decided on 2026-10-12, in the clean-up of the debts, the second rule of the
-list above is carried out: pond (before), ntpd, dhcp6d, pppoed and omcid run
-as accounts of their own, uid 200 to 204, started by ``onu-drop`` with only
-the powers each uses (``net_admin``, ``net_raw``, ``net_bind_service``,
-``sys_time``), which they keep for what they run, with the rest out of the
-bounding set and ``no_new_privs``; ubusd's lists let each publish its
-objects and call what it needs. Since only root may run ``onu-apply``, omcid
-and dhcp6d tell it of a change by ``onu-call``, which asks onu-act for a
-method of their own name, and nothing else. omcid writes in ``/run/omcid`` and
-reads an identity without the PLOAM password; dhcp6d keeps the host's binding
-in ``/run/dhcp6d``; a session's directory belongs to the group ``onu``, and
-the file of its account to the group ``pppoed``. netifd stays root's: it
-starts the sessions as pppoed, writes sysctls and runs ``onu-apply`` for the
-events of the interfaces, so a netifd of its own would need the power to start
-a program as another account and a way to ask ``onu-apply iface`` from an
-account that is not root's. The handbook lists who runs as whom
-(``docs/handbook/system.rst``).
-
-Decided on 2026-10-12, in the clean-up of the debts: the events are not
-sent, and pond reads no file of ``/run``. omcid and dhcp6d run the program
-of ``-x``, ``onu-apply``, when what they publish changes, which is how the
-stick follows it; nothing listened to the events on ubus, and a second
-notice of one change is one more thing to keep in step. Their objects stay,
-with the method ``status``. What no program of the stick publishes, the
-state that ``onu-apply`` keeps in files (the mode, each session's facts, the
-address handed on, the changes on trial), is told by ``onu-apply state``,
-which onu-act runs for pond (``settings_state``), in lines ``name=value``
-that are the contract; the files under them may change.
-
-Step 9 was added on 2026-10-10. The ``config`` partition is the user's:
-the shipped firmware's data there is a matter of compatibility, and the
-user's settings have a limit set in advance, which never takes room from a
-kernel or a root file system. Until step 9 the store split the whole
-partition into two slots, and its first write overwrote the shipped
-firmware's JFFS2, which that firmware erases and formats when it cannot
-mount it: a stick that goes back to it loses its registration identity and
-its laser's calibration. In step 9 the kernel mounts that JFFS2, with zlib
-alone and without extended attributes, summaries or the write buffer of
-NAND, as the shipped firmware writes it; the settings are one file of their
-own there, under the limit; the identity is read from the shipped
-firmware's files, with what this system changed kept in its own file, and
-is written to them only once the way that firmware checks them is known. A
-partition that still holds the store of before is taken into the file at
-the first boot, before the mount, since JFFS2 erases what it does not know.
-
-Decided on 2026-10-11: the kernel takes JFFS2, which adds 36,711 bytes to
-the compressed kernel and leaves bank 0's kernel partition 201,710 bytes;
-the settings' file has 64 KiB at most (about 5 KB are used), which with a
-replacement in flight and the shipped firmware's files fills less than half
-of the partition; a test on a stick of the bench boots the shipped firmware
-in the other bank and checks that it reads its own files and leaves this
-system's alone; the two sticks of the bench get their shipped firmware's
-files back from their backups; and a package that the shipped firmware's
-web page installs into the other bank, for a stick as shipped, is built
-and tried in that test.
-
-Tried on 2026-10-11 on a stick of the bench with the eight builds of the
-shipped firmware for this stick that the repository Anime4000/RTL960x
-keeps, the one the stick shipped with among them. Each, written into the
-other bank in its own split and started from it, mounted the partition as
-it found it, with no format, took its two XML files as valid, and left
-this system's file as it was; after each, this system started again with
-its settings and the identity of the shipped files. A package other than
-the one a stick shipped with may write the shipped
-firmware's own files anew: on the bench one wrote the PLOAM password's
-format differently, so going back to another package than the stick's own
-can change how the stick introduces itself to an OLT.
-
-Decided on 2026-10-11, as the step after step 9: iproute2 leaves the
-flash's image. BusyBox's ``ip``, built in already, does what the scripts
-ask of ``ip``, and ``onu-nl`` of onu-utils, some 7 KB compressed, makes the
-requests of ``tc`` and ``devlink`` that they made: the clsact qdisc, the
-switch's rules of the management VLAN, the feeds of the sessions' GEM
-ports, the removal of omcid's bridge rules, and the parameters of the
-switch and of the PON driver. The RAM image keeps iproute2 for diagnosis,
-its ``ip`` as ``ip-full``, so that the scripts run BusyBox's ``ip`` there
-as they do from the flash. The root file system went from 1,825,101 to
-1,287,869 bytes, which leaves ``r0`` 743,747 bytes, 36.6 % of it. Tried on
-a stick of the bench started from RAM: the rules in the switch, the
-parameters, the identity and O5, two sessions with their throughput as
-before (902 Mb/s up, 880 down), a management pair added and cancelled, and
-omcid's rules taken away as the sessions came and went.
-
-Steps 3, 4, 5 and 7 are tried on a stick of the bench with live sessions:
-two sessions at once, an IPv6 prefix, the hardware path's throughput as
-before (some 900 Mb/s each way), and each program killed during a session.
+9. The settings in the ``config`` partition's own file system, beside the
+   shipped firmware's files (added on 2026-10-10; ADR 0019 has it).
 
 Consequences
 ============
@@ -266,7 +168,7 @@ Consequences
   generator take it from there.
 * netifd alone sets addresses and routes. Most of the image's uses of
   ``ip`` go with onu-mode's; iproute2 left the image in a step of its own
-  (above).
+  (ADR 0020).
 * pond reads ubus as well as the kernel's interfaces, which it did not.
   libubus is in the image already (procd, netifd); pond, omcid and dhcp6d
   add only their calls to it. Each step measures what it adds to the image.
@@ -276,3 +178,63 @@ Consequences
   become the instances of ``onu``.
 * While the move goes on, onu-mode still sets what has not moved yet; the
   tests of each step check that netifd and onu-mode never touch one device.
+
+Amendments
+==========
+
+**2026-10-10, the owner: step 6, the state on ubus.**
+
+omcid's part of step 6 goes with step 8: until pond leaves root, nothing reads
+omcid's state on ubus, and then pond needs what it reads of the MIB there too,
+under ubusd's access lists.
+
+**2026-10-10, the owner: a ninth step.**
+
+The settings go into the file system that the shipped firmware keeps in the
+config partition, instead of taking the partition. This is ADR 0019, which has
+the decision and what it cost; the step's text left this record on 2026-10-12.
+
+**2026-10-11, the owner: iproute2 leaves the image.**
+
+The decision and its consequences are ADR 0020, which also holds the decision
+of 2026-10-12 that the scripts run no ip. The text left this record on
+2026-10-12.
+
+**2026-10-12, the owner: accounts of their own (second rule).**
+
+The second rule of the decision is carried out: pond (before), ntpd, dhcp6d,
+pppoed and omcid run as accounts of their own, uid 200 to 204, started by
+``onu-drop`` with only the powers each uses (``net_admin``, ``net_raw``,
+``net_bind_service``, ``sys_time``), which they keep for what they run, with
+the rest out of the bounding set and ``no_new_privs``; ubusd's lists let each
+publish its objects and call what it needs. Since only root may run
+``onu-apply``, omcid and dhcp6d tell it of a change by ``onu-call``, which
+asks onu-act for a method of their own name, and nothing else. omcid writes in
+``/run/omcid`` and reads an identity without the PLOAM password; dhcp6d keeps
+the host's binding in ``/run/dhcp6d``; a session's directory belongs to the
+group ``onu``, and the file of its account to the group ``pppoed``. netifd
+stays root's: it starts the sessions as pppoed, writes sysctls and runs
+``onu-apply`` for the events of the interfaces, so a netifd of its own would
+need the power to start a program as another account and a way to ask
+``onu-apply iface`` from an account that is not root's. The handbook lists who
+runs as whom (``docs/handbook/system.rst``).
+
+**2026-10-12, the owner: no events, no state files (fifth part, step 6).**
+
+The events of "The state on ubus" are not sent, and pond reads no file of
+``/run``. omcid and dhcp6d run the program of ``-x``, ``onu-apply``, when what
+they publish changes, which is how the stick follows it; nothing listened to
+the events on ubus, and a second notice of one change is one more thing to
+keep in step. Their objects stay, with the method ``status``. What no program
+of the stick publishes, the state that ``onu-apply`` keeps in files (the mode,
+each session's facts, the address handed on, the changes on trial), is told by
+``onu-apply state``, which onu-act runs for pond (``settings_state``), in
+lines ``name=value`` that are the contract; the files under them may change.
+
+**2026-10-12: the notes of trials.**
+
+The record had gathered the notes of trials among its paragraphs. They are out
+of it: the trial of the shipped firmware's packages is in
+docs/handbook/updating.rst, and the others (steps 3, 4, 5 and 7 on a stick
+with live sessions, and the removal of iproute2) stand in the history of this
+file.

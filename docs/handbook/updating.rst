@@ -309,6 +309,24 @@ A stick that never ran a system of before step 9, one that took this system
 through the shipped firmware's web page or through the bench since, has no such
 store, and its first start writes nothing of the kind.
 
+The shipped firmware's packages beside this system
+==================================================
+
+The packages of the shipped firmware were tried against the partition
+``config`` that this system shares with it (ADR 0019; M: a stick of the
+bench, 2026-10-11): the eight builds that the repository Anime4000/RTL960x
+keeps for this stick, the one the stick shipped with among them.
+
+* Each, written into the other bank in its own split and started from it,
+  mounted the partition as it found it, with no format, took its two XML
+  files as valid, and left this system's file as it was. After each, this
+  system started again with its settings and the identity of the shipped
+  files.
+* A package other than the one a stick shipped with may write the shipped
+  firmware's own files anew: on the bench one wrote the PLOAM password's
+  format differently, so going back to another package than the stick's own
+  can change how the stick introduces itself to an OLT.
+
 Measured on the board
 =====================
 
