@@ -177,6 +177,29 @@ check '"$MODE_SCRIPT" status >/dev/null'
 check '! "$MODE_SCRIPT" status | grep -q "^dns"'
 teardown
 
+echo "a session whose interface went with the GEM interface under it is made again"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" sync 2>/dev/null
+check '[ "$(grep -c "^onu-nl link add vlan gem256 wan410 410" "$LOG")" = 1 ]'
+# A sync with the interface there changes nothing.
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "^onu-nl link" && ! logged "^onu-net"'
+# The kernel takes a VLAN interface away with the GEM interface it is on, which
+# omcid makes again when the OLT provisions anew (seen after a new identity: the
+# session stayed on a name that was gone, and a sync saw the same names).
+rm -rf "$ONU_ROOT/sys/class/net/wan410"
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check 'logged "^onu-nl link add vlan gem256 wan410 410"'
+check '[ -e "$ONU_ROOT/sys/class/net/wan410" ] && [ "$(cat "$ONU_ROOT/run/session/1/dev")" = wan410 ]'
+check 'logged "^onu-net set ses1" || logged "^onu-net add ses1"'
+teardown
+
 echo "a session's packets to the host side's networks are dropped on its interface"
 setup
 printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\n%s\n%s 2\n' \

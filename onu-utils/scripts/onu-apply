@@ -993,8 +993,11 @@ pd_keep() {
 }
 
 # Passthrough: each session follows its GEM port, a session whose makings
-# changed goes down and up again, and a session without its account any more
-# goes; the others stay up. Sessions that start together authenticate apart, as
+# changed, or whose interface is gone, goes down and up again, and a session
+# without its account any more goes; the others stay up. The kernel takes a
+# VLAN interface away with the GEM interface it is on, which omcid makes anew
+# when the OLT provisions anew: the names are then the same, and only the
+# interface's absence says that the session is not there. Sessions that start together authenticate apart, as
 # pppoed under netifd waits 3 s for each session before it (-w): an
 # operator's concentrator refused one of two sessions that authenticated at
 # once, without saying why, and took each alone (measured).
@@ -1013,6 +1016,7 @@ sessions_sync() {
 			gem=$(session_gem "$n")
 			if [ -n "$gem" ] && { [ "$gem" != "$cur" ] ||
 				[ "$(session_dev "$n" "$gem")" != "$dev" ] ||
+				{ [ -n "$cur" ] && [ ! -e "$NET/$dev" ]; } ||
 				[ "$(session_makings "$n" "$gem")" != \
 					"$(cat "$SESSIONS/$n/makings" 2>/dev/null)" ]; }; then
 				[ -n "$cur" ] && session_down "$n"
