@@ -71,7 +71,13 @@ handed on, whether the default route goes through it), and as ``pppoed.sh
 pppoed setup|teardown IFACE CONFIG DEVICE`` for an interface. At setup it has
 netifd run ``pppoed up`` for the session on the interface's device, with the
 account of ``/run/onu-pppoeN``, so that netifd keeps it and starts it again
-when it ends; at teardown it has netifd end it, which pppoed does as a peer
+when it ends. netifd starts it through ``onu-drop``, as the account
+``pppoed`` with the two powers it uses, ``net_raw`` for the discovery and
+``net_admin`` for the PPP unit, its interface and its addresses; the file of
+the account belongs to the group ``pppoed``, ``/dev/ppp`` too, and the
+directory of the session's facts to the group ``onu``, and ubusd's list
+(``acl.json``) lets it call ``notify_proto`` of netifd's interfaces and
+nothing else; at teardown it has netifd end it, which pppoed does as a peer
 expects. The messages go over ubus (``notify_proto``), as JSON text built in
 ``src/nproto.c``, which the tests check on any host.
 

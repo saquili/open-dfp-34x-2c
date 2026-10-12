@@ -18,6 +18,12 @@
 
 /* Where pppoed is, for netifd to run it (cmd_proto()). */
 #define PPPOED_PATH "/usr/sbin/pppoed"
+/*
+ * The session runs as the account pppoed, started by onu-drop (onu-utils)
+ * with the two powers it uses: the raw socket of the discovery, and the
+ * PPP unit with its interface and addresses.
+ */
+#define PPPOED_DROP "/usr/lib/onu/onu-drop"
 
 static int g_verbose;
 
@@ -548,8 +554,9 @@ static int cmd_sniff(int argc, char **argv)
 /*
  * netifd's protocol handler (nproto.h): "'' dump", or "pppoed setup|teardown
  * IFACE CONFIG [DEVICE]". At setup netifd runs pppoed for the session that
- * CONFIG names, on DEVICE, with its account in /run/onu-pppoeN, and its facts
- * in /run/session/N; at teardown it ends it.
+ * CONFIG names, on DEVICE, as the account pppoed, with the session's account
+ * in /run/onu-pppoeN, and its facts in /run/session/N; at teardown it ends
+ * it.
  */
 static int cmd_proto(int argc, char **argv)
 {
@@ -557,7 +564,7 @@ static int cmd_proto(int argc, char **argv)
 	const char *iface = argc > 3 ? argv[3] : NULL;
 	const char *config = argc > 4 ? argv[4] : NULL;
 	const char *device = argc > 5 ? argv[5] : NULL;
-	const char *cmd[24];
+	const char *cmd[32];
 	int session, c = 0;
 
 	if (!strcmp(argv[2], "dump")) {
@@ -580,6 +587,10 @@ static int cmd_proto(int argc, char **argv)
 	snprintf(account, sizeof(account), "/run/onu-pppoe%d", session);
 	snprintf(dir, sizeof(dir), "/run/session/%d", session);
 	snprintf(wait, sizeof(wait), "%d", 3 * (session - 1));
+	cmd[c++] = PPPOED_DROP;
+	cmd[c++] = "-c";
+	cmd[c++] = "net_raw,net_admin";
+	cmd[c++] = "pppoed";
 	cmd[c++] = PPPOED_PATH;
 	cmd[c++] = "up";
 	cmd[c++] = "-i";

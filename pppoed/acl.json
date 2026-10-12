@@ -1,0 +1,6 @@
+{
+	"user": "pppoed",
+	"access": {
+		"network.interface.*": { "methods": [ "notify_proto" ] }
+	}
+}

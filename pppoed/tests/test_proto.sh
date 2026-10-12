@@ -28,10 +28,10 @@ echo "what the protocol takes"
 run '' dump
 check '[ $rc -eq 0 ] && echo "$out" | grep -q "^{\"name\":\"pppoed\",\"config\":\[\[\"session\",5\]"'
 
-echo "setup: netifd runs pppoed for the session, on the interface's device"
+echo "setup: netifd runs pppoed for the session, on the interface's device, as the account pppoed"
 run pppoed setup ses1 '{ "session": 1, "family": "ipv4", "pass": true, "defaultroute": true }' wan1410
 check '[ $rc -eq 0 ]'
-check '[ "$out" = "notify ses1 {\"action\":1,\"command\":[\"/usr/sbin/pppoed\",\"up\",\"-i\",\"wan1410\",\"-f\",\"/run/onu-pppoe1\",\"-M\",\"-N\",\"ses1\",\"-o\",\"/run/session/1\",\"-w\",\"0\",\"-4\",\"-P\",\"-D\"]}" ]'
+check '[ "$out" = "notify ses1 {\"action\":1,\"command\":[\"/usr/lib/onu/onu-drop\",\"-c\",\"net_raw,net_admin\",\"pppoed\",\"/usr/sbin/pppoed\",\"up\",\"-i\",\"wan1410\",\"-f\",\"/run/onu-pppoe1\",\"-M\",\"-N\",\"ses1\",\"-o\",\"/run/session/1\",\"-w\",\"0\",\"-4\",\"-P\",\"-D\"]}" ]'
 run pppoed setup ses3 '{ "session": 3, "family": "both", "pass": false, "defaultroute": false }' gem1024
 check 'echo "$out" | grep -q "\"-i\",\"gem1024\",\"-f\",\"/run/onu-pppoe3\"" && echo "$out" | grep -q "\"-w\",\"6\"\]}$"'
 check '! echo "$out" | grep -q -e "\"-4\"" -e "\"-6\"" -e "\"-P\"" -e "\"-D\""'
