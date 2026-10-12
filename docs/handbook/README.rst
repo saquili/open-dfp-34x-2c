@@ -38,6 +38,11 @@ Building and installing
         do, checking one with the instruction-set gate, and running the test
         programs.
 
+Developing the kernel
+    ``kernel-series.rst``
+        The kernel series and the kernel under it: its layers, and every file
+        of the kernel's own that it changes, with the reason.
+
 Developing the panel
     ``panel-design.rst``
         The panel's look: the sizes and colours of text, values and their

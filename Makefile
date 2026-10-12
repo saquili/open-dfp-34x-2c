@@ -182,6 +182,8 @@ check:
 	tools/lib-trim/tests/run
 	buildroot/tests/run
 	tools/kernel-archive/tests/run
+	tools/kernel-series/tests/run
+	tools/kernel-series/kernel-series check
 	tools/image-budget/tests/run
 	tools/docs/tests/run
 	tools/docs/render --check --if-available

@@ -181,6 +181,10 @@ jobs:
         run: buildroot/tests/run -v
       - name: Self-tests of the kernel archive tool
         run: tools/kernel-archive/tests/run -v
+      - name: Self-tests of the kernel series tool, and its page
+        run: |
+          tools/kernel-series/tests/run -v
+          tools/kernel-series/kernel-series check
       - name: The pinned release and the carried patches
         # The tests above use a tarball of their own. This one fetches the
         # pinned release from its URL, refuses it unless it is the pinned file,
