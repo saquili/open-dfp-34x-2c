@@ -10,7 +10,8 @@ The OMCI daemon of the ONU: the side of ITU-T G.988 that answers the OLT.
 It holds the management information base, answers each request of the OLT
 in the baseline message format, and programs the data path from what the
 OLT configures: GEM ports, bridges and the VLAN rules of the extended VLAN
-tagging operation. It notifies the OLT of alarms, among them those it
+tagging operation, and the rate at which the UNI sends to the subscriber,
+from the outbound traffic descriptor of its bridge port. It notifies the OLT of alarms, among them those it
 judges itself: signal fail and degrade from the BIP errors of the
 downstream, and the optical alarms from the readings of the transceiver,
 whose levels it keeps in the ANI-G. It counts the performance monitoring
@@ -96,10 +97,11 @@ clock at second N, and the same frames then give the same answers::
 network namespace of its own, with dummy interfaces named ``sfp`` and ``pon``,
 and reads back with tc the filters it adds: the VLAN rules, the bridge port
 filters, the multicast tags and the drops at the UNI that an earlier run
-left. It builds the backend with ``OMCID_TC_FLAGS=0``, so that the filters,
+left, and the tbf that limits the UNI. It builds the backend with ``OMCID_TC_FLAGS=0``, so that the filters,
 which on the board go to the switch alone, go into software. It needs root
 and tc, and says that it skipped without them; on a kernel without the vlan
-action it skips the VLAN rules and the tags. The parts that need the stick's
+action it skips the VLAN rules and the tags, and without the tbf qdisc the
+UNI's rate. The parts that need the stick's
 PON family are tried on the board.
 
 ``make board`` builds the daemon for the board, with the backend of the
@@ -107,9 +109,9 @@ board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
 "pon" generic netlink family for the ONU's state, T-CONTs and FEC counts, the
 "gem" link kind for the GEM ports, the ethtool statistics of the switch ports
 and the GEM ports for the performance monitoring, the bridge ``omcibr0`` with
-the host link ``sfp``, and tc flower rules for the VLAN rules, the
-multicast traps, tags and counts and the bridge port filters, which the
-switch carries out::
+the host link ``sfp``, tc flower rules for the VLAN rules, the multicast
+traps, tags and counts and the bridge port filters, and a tbf at the root of
+``sfp`` for the UNI's rate, which the switch carries out::
 
    omcid [-d DEVICE] [-m FILE] [-r] [-x PROGRAM] [-v]...
 

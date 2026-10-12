@@ -4153,6 +4153,94 @@ static enum omci_status kernel_mcast_port(const struct omci_hw_mcast_port *cfg)
 	return OMCI_OK;
 }
 
+/*
+ * The rate of the UNI towards the subscriber is a tbf at the root of the
+ * UNI, which the switch driver takes as the port's egress shaper, in steps
+ * of 1000 bytes a second; the burst and the queue shape only what the CPU
+ * sends there itself: a hundredth of a second at the rate, at least two
+ * frames, and half a second more. The tbf has the backend's own handle, so
+ * that taking the limit away removes only a tbf of the backend.
+ */
+#define UNI_TBF_HANDLE TC_H_MAKE(0x0b70U << 16, 0)
+#define UNI_TBF_BURST_MIN 3200U
+#define UNI_TBF_BURST_MAX (4U << 20)
+#define UNI_TBF_LIMIT_MAX (16U << 20)
+
+static enum omci_status kernel_uni_rate(uint64_t bytes_ps)
+{
+	uint8_t req[NL_HDRLEN + sizeof(struct tcmsg) + 128] __aligned(4);
+	const int uni = (int)if_nametoindex(UNI_IFNAME);
+	struct tcmsg tcm = {
+		.tcm_family = AF_UNSPEC,
+		.tcm_ifindex = uni,
+		.tcm_parent = TC_H_ROOT,
+		.tcm_handle = UNI_TBF_HANDLE,
+	};
+	struct tc_tbf_qopt q = {
+		.rate = {
+			.linklayer = TC_LINKLAYER_ETHERNET,
+			.rate = bytes_ps > UINT32_MAX ? UINT32_MAX :
+							(uint32_t)bytes_ps,
+		},
+	};
+	uint64_t burst = bytes_ps / 100, limit;
+	uint32_t burst32;
+	size_t off, opts;
+	int err;
+
+	if (uni <= 0)
+		return OMCI_ERR_HW;
+
+	memset(req, 0, sizeof(req));
+	memcpy(req + NL_HDRLEN, &tcm, sizeof(tcm));
+	off = NL_HDRLEN + sizeof(tcm);
+
+	if (bytes_ps == 0) {
+		*(uint16_t *)&req[4] = RTM_DELQDISC;
+		*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK;
+		*(uint32_t *)&req[8] = 23;
+		*(uint32_t *)&req[0] = (uint32_t)off;
+		err = rtnl_talk(req, off, NULL, 0, NULL);
+		/* No tbf of the backend at the root: nothing to take away. */
+		if (err == -ENOENT || err == -EINVAL)
+			err = 0;
+	} else {
+		if (burst < UNI_TBF_BURST_MIN)
+			burst = UNI_TBF_BURST_MIN;
+		if (burst > UNI_TBF_BURST_MAX)
+			burst = UNI_TBF_BURST_MAX;
+		burst32 = (uint32_t)burst;
+		limit = burst + bytes_ps / 2;
+		q.limit = limit > UNI_TBF_LIMIT_MAX ? UNI_TBF_LIMIT_MAX :
+						      (uint32_t)limit;
+
+		*(uint16_t *)&req[4] = RTM_NEWQDISC;
+		*(uint16_t *)&req[6] = NLM_F_REQUEST | NLM_F_ACK |
+				       NLM_F_CREATE | NLM_F_REPLACE;
+		*(uint32_t *)&req[8] = 23;
+		off = nla_put(req, off, TCA_KIND, "tbf", sizeof("tbf"));
+		opts = off;
+		off += NLA_HDRLEN_;
+		off = nla_put(req, off, TCA_TBF_PARMS, &q, sizeof(q));
+		off = nla_put(req, off, TCA_TBF_BURST, &burst32,
+			      sizeof(burst32));
+		if (bytes_ps > UINT32_MAX)
+			off = nla_put(req, off, TCA_TBF_RATE64, &bytes_ps,
+				      sizeof(bytes_ps));
+		*(uint16_t *)(req + opts) = (uint16_t)(off - opts);
+		*(uint16_t *)(req + opts + 2) = TCA_OPTIONS | NLA_F_NESTED;
+		*(uint32_t *)&req[0] = (uint32_t)off;
+		err = rtnl_talk(req, off, NULL, 0, NULL);
+	}
+	if (err) {
+		OMCI_WARN("uni: the kernel did not set the rate of %s to %llu bytes/s: %s",
+			  UNI_IFNAME, (unsigned long long)bytes_ps,
+			  strerror(-err));
+		return OMCI_ERR_HW;
+	}
+	return OMCI_OK;
+}
+
 const struct omci_hw_ops omci_hw_kernel_ops = {
 	.caps = kernel_caps,
 	.source = kernel_source,
@@ -4181,4 +4269,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.filter_apply = kernel_filter_apply,
 	.mcast_watch = kernel_mcast_watch,
 	.mcast_seen = kernel_mcast_seen,
+	.uni_rate = kernel_uni_rate,
 };

@@ -45,6 +45,18 @@ static bool attr_u16(const struct omci_mib *mib, uint16_t class_id,
 	return true;
 }
 
+static uint32_t attr_u32(const struct omci_mib *mib, uint16_t class_id,
+			 uint16_t instance, uint8_t attr)
+{
+	uint8_t buf[4] = { 0 };
+	size_t len = 0;
+
+	(void)!omci_mib_attr_get(mib, class_id, instance, attr, buf,
+				 sizeof(buf), &len);
+	return (uint32_t)buf[0] << 24 | (uint32_t)buf[1] << 16 |
+	       (uint32_t)buf[2] << 8 | buf[3];
+}
+
 static uint8_t attr_u8(const struct omci_mib *mib, uint16_t class_id,
 		       uint16_t instance, uint8_t attr)
 {
@@ -334,4 +346,86 @@ size_t omci_bridge_last(const struct omci_hw_bridge_port **out)
 	if (out != NULL)
 		*out = g_last;
 	return g_last_n;
+}
+
+/* The rate last given to the UNI, and whether the backend has it. */
+static uint64_t g_uni_rate;
+static bool g_uni_rate_given;
+
+/*
+ * The rate of traffic descriptor @td in bytes per second, 0 for none: its
+ * peak rate, which G.988 takes to be the committed rate when it is lower.
+ */
+static uint64_t td_rate(const struct omci_mib *mib, uint16_t td)
+{
+	uint32_t cir, pir;
+
+	if (td == 0 || td == 0xffff ||
+	    !omci_mib_exists(mib, OMCI_GEM_TD_CLASS_ID, td))
+		return 0;
+	cir = attr_u32(mib, OMCI_GEM_TD_CLASS_ID, td, OMCI_GEM_TD_ATTR_CIR);
+	pir = attr_u32(mib, OMCI_GEM_TD_CLASS_ID, td, OMCI_GEM_TD_ATTR_PIR);
+	return pir > cir ? pir : cir;
+}
+
+/* The lowest rate the subscriber-side bridge ports name, 0 for none. */
+static uint64_t uni_rate_of(const struct omci_mib *mib)
+{
+	struct omci_mib_cursor cur;
+	uint64_t rate = 0;
+	enum omci_status rc;
+
+	for (rc = omci_mib_walk_first(mib, &cur); rc == OMCI_OK;
+	     rc = omci_mib_walk_next(mib, &cur)) {
+		uint16_t td = 0;
+		uint8_t tp_type;
+		uint64_t r;
+
+		if (cur.class_id != OMCI_BRIDGE_PORT_CLASS_ID)
+			continue;
+		tp_type = attr_u8(mib, cur.class_id, cur.instance,
+				  OMCI_BRIDGE_PORT_ATTR_TPTYPE);
+		if (tp_type != OMCI_BRIDGE_TP_PPTP_ETH &&
+		    tp_type != OMCI_BRIDGE_TP_VEIP)
+			continue;
+		if (!attr_u16(mib, cur.class_id, cur.instance,
+			      OMCI_BRIDGE_PORT_ATTR_TD_OUT, &td))
+			continue;
+		r = td_rate(mib, td);
+		if (r != 0 && (rate == 0 || r < rate))
+			rate = r;
+	}
+	return rate;
+}
+
+void omci_bridge_uni_rate(const struct omci_mib *mib)
+{
+	const uint64_t rate = uni_rate_of(mib);
+	enum omci_status rc;
+
+	if (omci_hw()->uni_rate == NULL ||
+	    (g_uni_rate_given && rate == g_uni_rate))
+		return;
+
+	rc = omci_hw()->uni_rate(rate);
+	if (rc != OMCI_OK) {
+		OMCI_WARN(
+			"me47: the UNI's outbound rate of %llu bytes/s was not set: %s",
+			(unsigned long long)rate, omci_status_str(rc));
+		g_uni_rate_given = false;
+		return;
+	}
+	g_uni_rate = rate;
+	g_uni_rate_given = true;
+	if (rate != 0)
+		OMCI_INFO(
+			"me47: the UNI sends the subscriber at most %llu bytes/s (outbound traffic descriptor)",
+			(unsigned long long)rate);
+	else
+		OMCI_INFO("me47: the UNI's outbound rate is not limited");
+}
+
+void omci_bridge_uni_rate_forget(void)
+{
+	g_uni_rate_given = false;
 }

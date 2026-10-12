@@ -478,6 +478,16 @@ static void reprogram_filters(struct omci_engine *eng, uint16_t class_id)
 }
 
 /*
+ * The classes whose instances limit the rate of the UNI towards the
+ * subscriber: the bridge ports, and the traffic descriptors they name.
+ */
+static void reprogram_uni_rate(struct omci_engine *eng, uint16_t class_id)
+{
+	if (class_id == ME_MAC_BRIDGE_PORT || class_id == ME_TRAFFIC_DESCRIPTOR)
+		omci_bridge_uni_rate(eng->mib);
+}
+
+/*
  * A data-path program that declines part of a set-up fails the request
  * only when the declined instance is the one the request configures.
  */
@@ -562,6 +572,8 @@ static void handle_mib_reset(struct omci_engine *eng,
 	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
 	omci_filter_forget();
 	(void)omci_filter_apply(eng->mib);
+	omci_bridge_uni_rate_forget();
+	omci_bridge_uni_rate(eng->mib);
 }
 
 void omci_engine_reprogram(struct omci_engine *eng)
@@ -572,6 +584,8 @@ void omci_engine_reprogram(struct omci_engine *eng)
 	omci_mcast_program(eng->mcast, eng->mib, eng->now_sec);
 	omci_filter_forget();
 	(void)omci_filter_apply(eng->mib);
+	omci_bridge_uni_rate_forget();
+	omci_bridge_uni_rate(eng->mib);
 }
 
 uint32_t omci_engine_changes(const struct omci_engine *eng)
@@ -1110,6 +1124,7 @@ static void handle_create(struct omci_engine *eng, const struct omci_frame *req)
 		bridge = reprogram_bridge(eng);
 	reprogram_mcast(eng, req->class_id);
 	reprogram_filters(eng, req->class_id);
+	reprogram_uni_rate(eng, req->class_id);
 	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	reply(eng, req,
@@ -1141,6 +1156,8 @@ static void handle_delete(struct omci_engine *eng, const struct omci_frame *req)
 		reprogram_mcast(eng, req->class_id);
 	if (rc == OMCI_OK)
 		reprogram_filters(eng, req->class_id);
+	if (rc == OMCI_OK)
+		reprogram_uni_rate(eng, req->class_id);
 
 	enum omci_status answer = rc;
 
@@ -1390,6 +1407,7 @@ static void handle_set(struct omci_engine *eng, const struct omci_frame *req)
 	}
 	reprogram_mcast(eng, req->class_id);
 	reprogram_filters(eng, req->class_id);
+	reprogram_uni_rate(eng, req->class_id);
 	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	if (message_level != 0u) {

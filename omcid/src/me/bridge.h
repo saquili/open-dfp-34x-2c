@@ -32,6 +32,7 @@ enum {
 	OMCI_BRIDGE_PORT_ATTR_NUM = 2,
 	OMCI_BRIDGE_PORT_ATTR_TPTYPE = 3,
 	OMCI_BRIDGE_PORT_ATTR_TPPTR = 4,
+	OMCI_BRIDGE_PORT_ATTR_TD_OUT = 11,
 
 	OMCI_BRIDGE_VLAN_ATTR_TABLE = 1,
 	OMCI_BRIDGE_VLAN_ATTR_FWDOP = 2,
@@ -82,6 +83,24 @@ __must_check enum omci_status omci_bridge_program(const struct omci_mib *mib,
  * Return: true when it did.
  */
 __must_check bool omci_bridge_instance_rejected(uint16_t instance);
+
+/**
+ * omci_bridge_uni_rate() - Limit the UNI to the rate its bridge ports name.
+ * @mib: the MIB
+ *
+ * A bridge port on the subscriber side whose outbound traffic descriptor
+ * pointer (attribute 11) names a traffic descriptor (class 280) limits what
+ * the UNI sends to the subscriber: to the descriptor's peak rate, or its
+ * committed rate when the peak rate is below it (G.988 9.2.12). With
+ * several, the lowest rate counts. The backend is told only of a change.
+ */
+void omci_bridge_uni_rate(const struct omci_mib *mib);
+
+/**
+ * omci_bridge_uni_rate_forget() - Tell the backend the rate again at the
+ *	next omci_bridge_uni_rate(), as after a reset of the MIB.
+ */
+void omci_bridge_uni_rate_forget(void);
 
 /**
  * omci_bridge_last() - The ports of the last programming.

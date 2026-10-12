@@ -196,6 +196,50 @@ static void leftover_drops(void)
 	CHECK(!at("sfp", 50, NULL) && !at("sfp", 65, NULL));
 }
 
+/* What tc shows of the root qdisc of @dev, on one line. */
+static const char *root_qdisc(const char *dev)
+{
+	static char out[1024];
+	char cmd[128];
+	size_t len = 0;
+	FILE *p;
+	int c;
+
+	snprintf(cmd, sizeof(cmd), "tc qdisc show dev %s root", dev);
+	p = popen(cmd, "r");
+	if (!p)
+		return "";
+	while ((c = fgetc(p)) != EOF && len + 1 < sizeof(out))
+		out[len++] = c == '\n' ? ' ' : (char)c;
+	out[len] = '\0';
+	pclose(p);
+	return out;
+}
+
+static void uni_rate(void)
+{
+	puts("the UNI's rate: a tbf at the root of sfp, replaced, then taken away");
+	CHECK(omci_hw_kernel_ops.uni_rate(1250000) == OMCI_OK);
+	CHECK(strstr(root_qdisc("sfp"), "tbf b70: root") != NULL);
+	CHECK(strstr(root_qdisc("sfp"), "rate 10Mbit") != NULL);
+	CHECK(omci_hw_kernel_ops.uni_rate(2500000) == OMCI_OK);
+	CHECK(strstr(root_qdisc("sfp"), "rate 20Mbit") != NULL);
+	CHECK(omci_hw_kernel_ops.uni_rate(0) == OMCI_OK);
+	CHECK(strstr(root_qdisc("sfp"), "tbf") == NULL);
+	CHECK(omci_hw_kernel_ops.uni_rate(0) == OMCI_OK);
+}
+
+/* Whether the kernel has the tbf qdisc. */
+static bool tbf_qdisc(void)
+{
+	if (sh("ip link add tbfprobe type dummy 2>/dev/null"))
+		return false;
+	const bool ok = sh("tc qdisc add dev tbfprobe root tbf rate 1mbit burst 4k limit 8k 2>/dev/null") == 0;
+
+	sh("ip link del tbfprobe");
+	return ok;
+}
+
 /* Whether the kernel has the vlan action, which some kernels leave out. */
 static bool vlan_action(void)
 {
@@ -226,6 +270,10 @@ int main(void)
 		puts("(this kernel has no vlan action: the VLAN rules and the multicast tags are skipped)");
 	}
 	port_filters();
+	if (tbf_qdisc())
+		uni_rate();
+	else
+		puts("(this kernel has no tbf qdisc: the UNI's rate is skipped)");
 
 	printf("test_hw_kernel: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

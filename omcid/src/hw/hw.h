@@ -948,6 +948,26 @@ size_t omci_hw_filter_recorded(const struct omci_hw_filter **out);
 #endif
 
 /**
+ * omci_hw_uni_rate() - Limit the rate at which the UNI sends to the
+ *	subscriber (host backend).
+ * @bytes_ps: the rate in bytes per second, 0 for no limit
+ *
+ * Return: %OMCI_OK, or the failure of the change.
+ */
+__must_check enum omci_status omci_hw_uni_rate(uint64_t bytes_ps);
+
+#if defined(OMCID_HW_STUB)
+
+/*
+ * Test hooks of the host backend for the UNI's rate: a failure of the next
+ * change, and the rate last set, with the number of changes made.
+ */
+void omci_hw_uni_rate_fail_next(void);
+
+uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
+#endif
+
+/**
  * struct omci_hw_ops - A backend.
  * @caps: what the device has
  * @source: the backend's name
@@ -992,6 +1012,8 @@ size_t omci_hw_filter_recorded(const struct omci_hw_filter **out);
  * @mcast_seen: the downstream frames of a counted group so far
  * @filter_apply: replace the rules of the bridge port filters; NULL in a
  *	backend without them, where the filters are only kept
+ * @uni_rate: limit the rate at which the UNI sends to the subscriber; NULL
+ *	in a backend without a limit
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -1034,6 +1056,7 @@ struct omci_hw_ops {
 	enum omci_status (*mcast_seen)(const uint8_t *group, uint64_t *frames);
 	enum omci_status (*filter_apply)(const struct omci_hw_filter *rules,
 					 size_t n);
+	enum omci_status (*uni_rate)(uint64_t bytes_ps);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */
