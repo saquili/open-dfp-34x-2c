@@ -82,6 +82,11 @@ class Redaction(unittest.TestCase):
                                        "public <address>")
         self.assertEqual(redact("ssh 192.0.2.2 ok", SETTINGS), "ssh <stick> ok")
 
+    def test_a_bench_that_is_a_login_at_an_address_goes_whole(self):
+        settings = Settings(bench="op@8.8.8.8", stick="192.0.2.2")
+        self.assertEqual(redact("ssh -J op@8.8.8.8 root@192.0.2.2 true; then 8.8.8.8 alone", settings),
+                         "ssh -J <bench> root@<stick> true; then <address> alone")
+
     def test_ipv6_addresses_but_the_documentation_ones_are_taken_out(self):
         # A link-local address holds its interface's MAC address.
         text = ("sfp inet6 fe80::200:5eff:fe00:5301/64 scope link, global 2001:4860:4860::8888, "

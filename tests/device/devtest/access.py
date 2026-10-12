@@ -100,17 +100,17 @@ def address6(match: re.Match) -> str:
 
 
 def redact(text: str, settings: Settings | None = None) -> str:
-    text = MAC.sub("<mac>", text)
-    text = SERIAL.sub("<serial>", text)
-    if settings and settings.stick:
-        text = text.replace(settings.stick, "<stick>")
-    text = ADDRESS.sub(address, text)
-    text = ADDRESS6.sub(address6, text)
+    # The names the settings give come first, whole: the bench is "login@address", and the
+    # pattern for addresses would otherwise take its address and leave the login.
     if settings:
         for value, name in ((settings.pond_token, "<token>"), (settings.bench, "<bench>"),
                             (settings.stick, "<stick>")):
             if value:
                 text = text.replace(value, name)
+    text = MAC.sub("<mac>", text)
+    text = SERIAL.sub("<serial>", text)
+    text = ADDRESS.sub(address, text)
+    text = ADDRESS6.sub(address6, text)
     return text
 
 
