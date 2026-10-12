@@ -242,6 +242,27 @@ The runs, the oldest first:
     reset case brought it back from bank 1 with its two sessions up. 37 of
     46 passed, with the same four failures and the same five skipped.
 
+``2026-10-12-fd90fa47fb2f``
+    The first run on the image as it is now, built from ``fd90fa47fb2f``,
+    run from the flash, with the cases of the suite as of ``60d26e04fc11``,
+    whose commits after ``fd90fa47fb2f`` change the tests alone. The image
+    went into both banks by its update path, over ssh: into bank 1 from the
+    flash image of before, started on trial and committed, then into bank 0
+    from bank 1. The stick ran bank 0, committed, with its settings in the
+    flash and its two lab PPPoE sessions, one for each address family, and
+    nothing held aside; the programs of diagnosis that some cases run were put
+    on in memory for the run. 32 of 48 passed and none failed. The 16
+    skipped are the 15 cases of the data path and the search of the host
+    link, which need the ports of a bench, and the lab as it is has none. The
+    cases new since the run before are ``net.sessions`` (both sessions on a
+    GEM port, the address handed on, the prefix routed),
+    ``system.restart`` (14 programs killed with SIGKILL, all running again
+    within 6 s, the sessions after 5 s, the objects of ``omcid`` and
+    ``dhcp6d`` on ubus after 1 s), ``update.trial-and-back`` (written in
+    37 s, committed after 38 s on trial, back after 37 s),
+    ``system.config-store``, ``system.log-limits``, ``system.loader-listener``
+    and ``mgmt.pond-no-store``.
+
 The series was rebased after the first, the second and the fourth run, before
 any of it was published, so the commits they name are not in the history. The
 same code, as far as the stick and the bench host run it, is at

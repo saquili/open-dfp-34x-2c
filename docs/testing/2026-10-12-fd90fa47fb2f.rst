@@ -1,0 +1,263 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+.. SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+==========================
+Device tests of 2026-10-12
+==========================
+
+:Date: 2026-10-12 23:26 UTC
+:Source: 60d26e04fc11
+:Kernel: 6.18.48 #1 Thu Sep 10 19:15:00 UTC 2026
+:Image: open-dfp-34x-2c on the ODI DFP-34X-2C3, build fd90fa47fb2f
+:Tools: tc, bridge, devlink, dcb, ethtool and ubus put on the stick in /run/devtest-tools, in memory
+:Result: 32 passed, 0 failed, 16 skipped, of 48
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 10 32 7 33
+
+   * - Case
+     - Area
+     - What is checked
+     - Result
+     - Evidence
+   * - ``system.kernel``
+     - System
+     - The stick runs the kernel of this tree
+     - **PASS**
+     - uname -r 6.18.48 (tree 6.18.48), #1 Thu Sep 10 19:15:00 UTC 2026
+   * - ``system.services``
+     - System
+     - The boot started the ssh server, omcid and pond
+     - **PASS**
+     - dropbear pid 1208 177, omcid pid 288, pond pid 213
+   * - ``system.filesystems``
+     - System
+     - The root is the image's own, read-only from flash or the initramfs of a RAM boot; /tmp, /run and /var are in memory
+     - **PASS**
+     - / squashfs ro; /tmp tmpfs, /run tmpfs, /var tmpfs
+   * - ``system.phc``
+     - System
+     - The PTP hardware clock is the ports' timestamping clock, and its pulse comes once a second
+     - **PASS**
+     - ptp0 rtl9602c-ptp, hardware-receive, hardware-raw-clock; 4 pulses 4.000 s apart
+   * - ``system.watchdog``
+     - System
+     - The watchdog runs, and procd, the first process, feeds it
+     - **PASS**
+     - Realtek Otto watchdog timer, timeout 30 s, active; procd (pid 1) holds /dev/watchdog; up 265 s
+   * - ``system.loader-listener``
+     - System
+     - The boot loader is told not to listen on the host link for an image sent to it by multicast, which it would write over this system from anyone
+     - **PASS**
+     - mupgrade\_en=0
+   * - ``system.config-store``
+     - System
+     - The partition config is the shipped firmware's JFFS2 with this system's one file beside its files, under its limit, and a save leaves the shipped firmware's files as they were
+     - **PASS**
+     - jffs2 (ro); the shipped firmware's 13 files as they were after a save; this system's file 1059 B of 65536
+   * - ``system.log-limits``
+     - System
+     - The file systems in memory have limits, the system log rotates past its own, and the OMCI daemon's log stays under its
+     - **PASS**
+     - /tmp 2048 KiB, /run 4096 KiB, /var 1024 KiB; after 2000 lines the log is 4 KiB and a rotated copy 64 KiB (limit 64); OMCI log 3 KiB (cut at 256)
+   * - ``net.host-link``
+     - Host side
+     - The host link sfp is up at its speed
+     - **PASS**
+     - sfp up, 2500 Mb/s
+   * - ``net.mgmt-vlan``
+     - Host side
+     - The management address answers on its VLAN of the host link
+     - **PASS**
+     - mgmt: VLAN 4094 on sfp; this run reaches the stick through it
+   * - ``net.listeners``
+     - Host side
+     - The servers listen on the two host-side addresses and on no other, and the bench reaches ssh and the panel and is refused elsewhere
+     - **PASS**
+     - listening: 22, 80, 443 on 2 host-side addresses; on no other; bench: ssh open, panel open, a closed port refused
+   * - ``net.ssh-login``
+     - Host side
+     - The ssh server offers root's key and root's password, and nothing else
+     - **PASS**
+     - root@<stick>: Permission denied (publickey,password).
+   * - ``mgmt.pond-health``
+     - Management
+     - The status daemon answers on the host side
+     - **PASS**
+     - HTTP 200 {"ok":true}
+   * - ``mgmt.pond-https``
+     - Management
+     - The status daemon answers over HTTPS with the certificate the stick shows, and sends HTTP there
+     - **PASS**
+     - served the same certificate; HTTP: 308 https://<stick>/settings
+   * - ``mgmt.pond-page``
+     - Management
+     - The status page is served on the host side
+     - **PASS**
+     - http/1.1 200 ok, html, with a CSP
+   * - ``mgmt.pond-locked``
+     - Management
+     - Without the token the daemon's API stays locked
+     - **PASS**
+     - HTTP 401 unauthorised
+   * - ``mgmt.pond-values``
+     - Management
+     - With the token the daemon reports the kernel, the ONU and the optics
+     - **PASS**
+     - HTTP 200, kernel: 177 B, onu: 524 B, optics: 94 B
+   * - ``net.sessions``
+     - Host side
+     - The stick holds its PPPoE sessions: each on a GEM interface and up under netifd, the address of the IPv4 one handed to the host and the delegated IPv6 prefix routed to it
+     - **PASS**
+     - session 1 on gem257, its address handed to the host; session 2 on gem257, prefix 2001:db8:1200:6e00::/56 routed to the host
+   * - ``mgmt.pond-no-store``
+     - Management
+     - When the stick cannot read its store the panel refuses every sign-in with 423 and does not fall back to the default password
+     - **PASS**
+     - a sign-in with the published default answered HTTP 423
+   * - ``gpon.downstream``
+     - GPON
+     - Downstream is locked: bandwidth maps keep being accepted, none with a CRC error, and no alarm
+     - **PASS**
+     - 7998 bandwidth maps/s, 0 with a CRC error, alarms none
+   * - ``gpon.activation``
+     - GPON
+     - The ONU is in O5, operation
+     - **PASS**
+     - O5, ONU-ID 1
+   * - ``gpon.stable``
+     - GPON
+     - The ONU stays in O5 for a minute
+     - **PASS**
+     - 12 reads 5 s apart: all O5
+   * - ``omci.channel``
+     - OMCI
+     - OMCI messages flow both ways and none is dropped
+     - **PASS**
+     - rx\_messages 352, rx\_dropped 0, rx\_discarded 0, tx\_messages 418, tx\_errors 0
+   * - ``omci.mib-upload``
+     - OMCI
+     - omcid answered the OLT's MIB upload
+     - **PASS**
+     - 2 upload(s), last: 207 units over 105 instances (channel 1)
+   * - ``omci.gem-ports``
+     - OMCI
+     - The GEM ports the OLT created are interfaces, bridged with the host link, or each the one a PPPoE session of the stick runs on
+     - **PASS**
+     - 2 GEM interface(s); sessions: session 1 on gem257, session 2 on gem257
+   * - ``omci.tcont-map``
+     - OMCI
+     - Each T-CONT the OLT mapped to an Alloc-ID through OMCI holds that Alloc-ID
+     - **PASS**
+     - T-CONT 0 holds 257, mapped to 257
+   * - ``omci.alarms``
+     - OMCI
+     - omcid raises no alarm on the clean line, with the power level the kernel reports
+     - **PASS**
+     - power level high; no alarm
+   * - ``optics.diagnostics``
+     - Optics
+     - Temperature, supply, bias and both optical powers read within the module's warning thresholds
+     - **PASS**
+     - 51.2 °C, 3.23 V, bias 8 mA, TX\_power 2.2 dBm, RX\_power -27.0 dBm
+   * - ``data.downstream``
+     - Data path
+     - A burst from the network side crosses the OLT, the PON and the switch to the host side in hardware
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.upstream``
+     - Data path
+     - A burst from the host side, above the upstream rate, leaves by the PON in hardware and the ONU stays in O5
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.vlan-translation``
+     - Data path
+     - A C-VID translation in the switch rewrites the VLAN of frames both ways across the PON and keeps their priority
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.vlan-priority``
+     - Data path
+     - A translation of one priority rewrites the VLAN of that priority's frames alone
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.vlan-push-pop``
+     - Data path
+     - The switch pushes a C-tag onto untagged frames upstream and pops it from frames downstream, and pushes an S-tag in front of a C-tag upstream and pops it downstream, with the priorities it is given
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.mgmt-isolation``
+     - Data path
+     - No frame of the management VLAN crosses the PON in either direction, while the frames of another VLAN cross both ways
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.pon-silence``
+     - Data path
+     - The stick keeps IPv6 off its PON side and answers neither ARP for its management address nor an IPv6 ping of all nodes from the network side, though the questions reach its CPU; from the subscriber side, in the management VLAN, it answers both
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.acl``
+     - Data path
+     - ACL rules on the PON port drop frames from the network side or trap them to the CPU, the rule of the lower tc priority deciding whichever was added first, and tc counts the frames for the rule that decided
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.mirror``
+     - Data path
+     - A matchall mirror copies to the host side what the PON port receives and what it sends, both at once, and nothing once it is removed
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.fdb``
+     - Data path
+     - The switch learns each bench port's address behind the port it reaches it by, and a static address given to the bridge enters its table and leaves it again
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.shaper``
+     - Data path
+     - A tbf on the SFP port holds the frames from the network side to its rate in hardware, and its removal gives the full rate back
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.storm``
+     - Data path
+     - Of several police rules on broadcast the one of the lowest priority value holds the class, through a replace of it too, and a drop of broadcast is an ACL rule that drops
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.pcp-rewrite``
+     - Data path
+     - A DCB rewrite entry on pon gives the frames of its priority that it sends the PCP of the entry, leaves the PCP of other priorities as it was, and stops with the entry
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.cpu-limit``
+     - Data path
+     - A flood to the stick's own address reaches its CPU no faster than cpu\_rx\_pps says, leaves the CPU at least half its time and the OMCI messages whole, and goes through once the limit is lifted
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``data.igmp``
+     - Data path
+     - Multicast snooping: from the network side a group a host joined reaches it and one no host asked for does not, the link-local groups pass, and every report reaches the network
+     - skip
+     - the settings name no network-side and subscriber-side ports
+   * - ``system.log``
+     - System
+     - After the other cases, the kernel log holds no oops, warning, BUG or panic and no switchdev object that a driver failed
+     - **PASS**
+     - 0 of 159 lines
+   * - ``system.restart``
+     - System
+     - Every program that procd keeps, and each session's pppoed under netifd, is running again after kill -9, and the stick is back at O5 with its sessions and its objects on ubus
+     - **PASS**
+     - 14 of 14 killed programs running again, the slowest onu/dhcp6d2 after 6 s; O5 again; 2 session(s) up again after 5 s; dhcp6d.ses2, omcid on ubus after 1 s
+   * - ``net.host-link-search``
+     - Host side
+     - The host link finds the host's setting as the host moves from 2500BaseX to 1000BaseX with in-band negotiation and back
+     - skip
+     - the settings name no subscriber-side port
+   * - ``update.trial-and-back``
+     - Updates
+     - An update written into the other bank starts there on trial and is kept, and the stick goes back to the bank it came from by the same way
+     - **PASS**
+     - written into bank 1 (3045730 B, was valid) in 37 s; on trial it ran and committed after 38 s (version fd90fa47fb2f); back in bank 0, committed, after 37 s
+   * - ``system.watchdog-reset``
+     - System
+     - An armed watchdog that nobody feeds resets the stick within its timeout
+     - **PASS**
+     - timeout 30 s; gone after 37 s, back with a new boot after 53 s

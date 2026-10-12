@@ -1,0 +1,1733 @@
+===== system.kernel: pass in 3.17 s
+evidence: uname -r 6.18.48 (tree 6.18.48), #1 Thu Sep 10 19:15:00 UTC 2026
+stick$ uname -r
+6.18.48
+[exit 0, 1.74 s]
+stick$ uname -v
+#1 Thu Sep 10 19:15:00 UTC 2026
+[exit 0, 1.43 s]
+
+===== system.services: pass in 4.63 s
+evidence: dropbear pid 1208 177, omcid pid 288, pond pid 213
+stick$ pidof dropbear
+1208 177
+[exit 0, 1.43 s]
+stick$ pidof omcid
+288
+[exit 0, 1.46 s]
+stick$ pidof pond
+213
+[exit 0, 1.75 s]
+
+===== system.filesystems: pass in 1.59 s
+evidence: / squashfs ro; /tmp tmpfs, /run tmpfs, /var tmpfs
+stick$ cat /proc/mounts
+/dev/root / squashfs ro,relatime,errors=continue 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=12460k,nr_inodes=3115,mode=755 0 0
+proc /proc proc rw,relatime 0 0
+sysfs /sys sysfs rw,relatime 0 0
+devpts /dev/pts devpts rw,relatime,gid=5,mode=620,ptmxmode=666 0 0
+tmpfs /tmp tmpfs rw,relatime,size=2048k 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,relatime,size=4096k,mode=755 0 0
+tmpfs /var tmpfs rw,relatime,size=1024k,mode=755 0 0
+mtd:config /config jffs2 ro,nosuid,nodev,noexec,relatime 0 0
+[exit 0, 1.59 s]
+
+===== system.phc: pass in 21.46 s
+evidence: ptp0 rtl9602c-ptp, hardware-receive, hardware-raw-clock; 4 pulses 4.000 s apart
+stick$ command -v ethtool
+[exit 127, 1.42 s]
+stick$ mkdir -p /run/devtest-tools && { mountpoint -q /run/devtest-tools || mount -t tmpfs -o size=4096k,mode=755 tmpfs /run/devtest-tools; } && gunzip -c | tar -x -C /run/devtest-tools
+[exit 0, 2.76 s]
+stick$ command -v ethtool
+/run/devtest-tools/bin/ethtool
+[exit 0, 1.42 s]
+stick$ ethtool -T sfp
+Time stamping parameters for sfp:
+Capabilities:
+	software-transmit     (SOF_TIMESTAMPING_TX_SOFTWARE)
+	hardware-receive      (SOF_TIMESTAMPING_RX_HARDWARE)
+	software-receive      (SOF_TIMESTAMPING_RX_SOFTWARE)
+	software-system-clock (SOF_TIMESTAMPING_SOFTWARE)
+	hardware-raw-clock    (SOF_TIMESTAMPING_RAW_HARDWARE)
+PTP Hardware Clock: 0
+Hardware Transmit Timestamp Modes:
+	off                   (HWTSTAMP_TX_OFF)
+Hardware Receive Filter Modes:
+	none                  (HWTSTAMP_FILTER_NONE)
+	ptpv2-l2-event        (HWTSTAMP_FILTER_PTP_V2_L2_EVENT)
+	ptpv2-l2-sync         (HWTSTAMP_FILTER_PTP_V2_L2_SYNC)
+	ptpv2-l2-delay-req    (HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ)
+[exit 0, 1.50 s]
+stick$ cat /sys/class/ptp/ptp0/clock_name
+rtl9602c-ptp
+[exit 0, 1.68 s]
+stick$ for d in /sys/class/pps/pps*; do [ "$(cat $d/name)" = ptp0 ] && echo ${d##*/}; done; true
+pps0
+[exit 0, 1.42 s]
+stick$ echo 1 > /sys/class/ptp/ptp0/pps_enable
+[exit 0, 1.47 s]
+stick$ sleep 2; cat /sys/class/pps/pps0/assert; sleep 4; cat /sys/class/pps/pps0/assert
+249.894019520#4
+253.894019840#8
+[exit 0, 7.69 s]
+stick$ echo 0 > /sys/class/ptp/ptp0/pps_enable
+[exit 0, 2.01 s]
+
+===== system.watchdog: pass in 9.0 s
+evidence: Realtek Otto watchdog timer, timeout 30 s, active; procd (pid 1) holds /dev/watchdog; up 265 s
+stick$ cat /sys/class/watchdog/watchdog0/identity
+Realtek Otto watchdog timer
+[exit 0, 1.49 s]
+stick$ cat /sys/class/watchdog/watchdog0/timeout
+30
+[exit 0, 1.50 s]
+stick$ cat /sys/class/watchdog/watchdog0/state
+active
+[exit 0, 1.42 s]
+stick$ cat /proc/1/comm
+procd
+[exit 0, 1.72 s]
+stick$ ls -l /proc/1/fd 2>/dev/null | grep -c /dev/watchdog
+1
+[exit 0, 1.41 s]
+stick$ cut -d' ' -f1 /proc/uptime
+265.26
+[exit 0, 1.44 s]
+
+===== system.loader-listener: pass in 1.49 s
+evidence: mupgrade_en=0
+stick$ onu-update env mupgrade_en
+mupgrade_en=0
+[exit 0, 1.49 s]
+
+===== system.config-store: pass in 12.68 s
+evidence: jffs2 (ro); the shipped firmware's 13 files as they were after a save; this system's file 1059 B of 65536
+stick$ cat /proc/mounts
+/dev/root / squashfs ro,relatime,errors=continue 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=12460k,nr_inodes=3115,mode=755 0 0
+proc /proc proc rw,relatime 0 0
+sysfs /sys sysfs rw,relatime 0 0
+devpts /dev/pts devpts rw,relatime,gid=5,mode=620,ptmxmode=666 0 0
+tmpfs /tmp tmpfs rw,relatime,size=2048k 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,relatime,size=4096k,mode=755 0 0
+tmpfs /var tmpfs rw,relatime,size=1024k,mode=755 0 0
+mtd:config /config jffs2 ro,nosuid,nodev,noexec,relatime 0 0
+tmpfs /run/devtest-tools tmpfs rw,relatime,size=4096k,mode=755 0 0
+[exit 0, 1.72 s]
+stick$ find /config -type f ! -name open-dfp-34x-2c.conf | wc -l
+13
+[exit 0, 1.50 s]
+stick$ [ -f /config/open-dfp-34x-2c.conf ]
+[exit 0, 1.57 s]
+stick$ find /config -type f ! -name open-dfp-34x-2c.conf -exec sh -c 'echo "$(sha256sum < "$1" | cut -c1-64) $(printf %s "$1" | sha256sum | cut -c1-8)"' sh {} \; | sort
+01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b b98601f3
+057ff782de35c52bc4aab073ea098be8299dbbe7b565c405083bc0138501c686 80aebbae
+057ff782de35c52bc4aab073ea098be8299dbbe7b565c405083bc0138501c686 afc566f6
+1d07012caa770bf3a37db9566a9448582bfa4f91d9cb05e2dc6a6d98b365c3b6 be72668b
+2c6d878875a6390cf5ed3c584ce39c276023be6c1854adcc0fe460025687fccd d3cfbf23
+3d4dd812f6db024f0d6658c138e6898addac7e70421b736b7b9758610c47326c aa8aae25
+61d34dcc5c00973ee0f92da72a8cc6c17f4ec672bf5a2cfe7ce90d35a7b7e4e2 76fd6238
+7036efc816b7c846362c92daaee047af1235c15a880bccb0be6a3a58c5ead506 fdff6af2
+76d759f92cd8bb769f4795b296eec6115ab0ce049fa3cb5516d54cabc95adcb3 5084ef62
+8439e135e079b8a120032d42810d8a65e9d0afdc0078d030259e08a39f6210b4 4e940a2a
+9a329c6f993cb81d8c6c8fc7942b775cabf0a068c63c94447efb792793215851 4bb45990
+cb299265b8a9b842a203253853005bbd9b172b0e5be74eed7b143583eb45ec71 df8838d9
+de21c7bde68a8b2689f42947a81e81e456c5570a1b53f5abc4df33195b83841b f1b40f24
+[exit 0, 2.51 s]
+stick$ wc -c < /config/open-dfp-34x-2c.conf
+1059
+[exit 0, 1.39 s]
+stick$ onu-config save
+[exit 0, 1.64 s]
+stick$ find /config -type f ! -name open-dfp-34x-2c.conf -exec sh -c 'echo "$(sha256sum < "$1" | cut -c1-64) $(printf %s "$1" | sha256sum | cut -c1-8)"' sh {} \; | sort
+01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b b98601f3
+057ff782de35c52bc4aab073ea098be8299dbbe7b565c405083bc0138501c686 80aebbae
+057ff782de35c52bc4aab073ea098be8299dbbe7b565c405083bc0138501c686 afc566f6
+1d07012caa770bf3a37db9566a9448582bfa4f91d9cb05e2dc6a6d98b365c3b6 be72668b
+2c6d878875a6390cf5ed3c584ce39c276023be6c1854adcc0fe460025687fccd d3cfbf23
+3d4dd812f6db024f0d6658c138e6898addac7e70421b736b7b9758610c47326c aa8aae25
+61d34dcc5c00973ee0f92da72a8cc6c17f4ec672bf5a2cfe7ce90d35a7b7e4e2 76fd6238
+7036efc816b7c846362c92daaee047af1235c15a880bccb0be6a3a58c5ead506 fdff6af2
+76d759f92cd8bb769f4795b296eec6115ab0ce049fa3cb5516d54cabc95adcb3 5084ef62
+8439e135e079b8a120032d42810d8a65e9d0afdc0078d030259e08a39f6210b4 4e940a2a
+9a329c6f993cb81d8c6c8fc7942b775cabf0a068c63c94447efb792793215851 4bb45990
+cb299265b8a9b842a203253853005bbd9b172b0e5be74eed7b143583eb45ec71 df8838d9
+de21c7bde68a8b2689f42947a81e81e456c5570a1b53f5abc4df33195b83841b f1b40f24
+[exit 0, 2.35 s]
+
+===== system.log-limits: pass in 10.34 s
+evidence: /tmp 2048 KiB, /run 4096 KiB, /var 1024 KiB; after 2000 lines the log is 4 KiB and a rotated copy 64 KiB (limit 64); OMCI log 3 KiB (cut at 256)
+stick$ cat /proc/mounts
+/dev/root / squashfs ro,relatime,errors=continue 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=12460k,nr_inodes=3115,mode=755 0 0
+proc /proc proc rw,relatime 0 0
+sysfs /sys sysfs rw,relatime 0 0
+devpts /dev/pts devpts rw,relatime,gid=5,mode=620,ptmxmode=666 0 0
+tmpfs /tmp tmpfs rw,relatime,size=2048k 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,relatime,size=4096k,mode=755 0 0
+tmpfs /var tmpfs rw,relatime,size=1024k,mode=755 0 0
+mtd:config /config jffs2 ro,nosuid,nodev,noexec,relatime 0 0
+tmpfs /run/devtest-tools tmpfs rw,relatime,size=4096k,mode=755 0 0
+[exit 0, 1.47 s]
+stick$ awk 'BEGIN { for (i = 0; i < 2000; i++) print "line " i " " "012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789" }' | logger -t devtest
+[exit 0, 2.06 s]
+stick$ wc -c < /run/messages
+4276
+[exit 0, 1.74 s]
+stick$ wc -c < /run/messages.0
+65540
+[exit 0, 1.63 s]
+stick$ wc -c < /run/omcid.log
+3411
+[exit 0, 1.43 s]
+
+===== net.host-link: pass in 3.1 s
+evidence: sfp up, 2500 Mb/s
+stick$ cat /sys/class/net/sfp/operstate
+up
+[exit 0, 1.67 s]
+stick$ cat /sys/class/net/sfp/speed
+2500
+[exit 0, 1.42 s]
+
+===== net.mgmt-vlan: pass in 1.4 s
+evidence: mgmt: VLAN 4094 on sfp; this run reaches the stick through it
+stick$ grep '^mgmt' /proc/net/vlan/config
+mgmt           | 4094  | sfp
+[exit 0, 1.40 s]
+
+===== net.listeners: pass in 5.15 s
+evidence: listening: 22, 80, 443 on 2 host-side addresses; on no other; bench: ssh open, panel open, a closed port refused
+stick$ cat /run/onu-mgmt
+VLAN=4094
+ADDRESS=<stick>/30
+IFACE=mgmt
+NAME=mgmt
+PREF=1
+DATA_ADDRESS=<address>/30
+[exit 0, 1.75 s]
+stick$ netstat -ltn
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       
+tcp        0      0 <stick>:80         0.0.0.0:*               LISTEN      
+tcp        0      0 <stick>:22         0.0.0.0:*               LISTEN      
+tcp        0      0 <stick>:443        0.0.0.0:*               LISTEN      
+tcp        0      0 <address>:443        0.0.0.0:*               LISTEN      
+tcp        0      0 <address>:22         0.0.0.0:*               LISTEN      
+tcp        0      0 <address>:80         0.0.0.0:*               LISTEN      
+[exit 0, 1.57 s]
+bench$ python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET)
+s.settimeout(float(sys.argv[3]))
+t = time.monotonic()
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    r = "open"
+except ConnectionRefusedError:
+    r = "refused"
+except socket.timeout:
+    r = "timeout"
+print(r, round(time.monotonic() - t, 3))
+' <stick> 22 3.0
+open 0.001
+[exit 0, 0.60 s]
+bench$ python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET)
+s.settimeout(float(sys.argv[3]))
+t = time.monotonic()
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    r = "open"
+except ConnectionRefusedError:
+    r = "refused"
+except socket.timeout:
+    r = "timeout"
+print(r, round(time.monotonic() - t, 3))
+' <stick> 443 3.0
+open 0.001
+[exit 0, 0.61 s]
+bench$ python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET)
+s.settimeout(float(sys.argv[3]))
+t = time.monotonic()
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    r = "open"
+except ConnectionRefusedError:
+    r = "refused"
+except socket.timeout:
+    r = "timeout"
+print(r, round(time.monotonic() - t, 3))
+' <stick> 23 3.0
+refused 0.001
+[exit 0, 0.62 s]
+
+===== net.ssh-login: pass in 1.32 s
+evidence: root@<stick>: Permission denied (publickey,password).
+local$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o ControlMaster=no -o ControlPath=none -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -J <bench> root@<stick> true
+root@<stick>: Permission denied (publickey,password).
+[exit 255]
+
+===== mgmt.pond-health: pass in 0.65 s
+evidence: HTTP 200 {"ok":true}
+bench$ curl -s -k -m 15 -w '\n%{http_code}'  https://<stick>/api/health
+{"ok":true}
+200[exit 0, 0.65 s]
+
+===== mgmt.pond-https: pass in 2.96 s
+evidence: served the same certificate; HTTP: 308 https://<stick>/settings
+stick$ pond -k /run/pond/tls.key -F <stick> 2>/dev/null; true
+<stick> SHA-256 <mac>:<mac>:<mac>:<mac>:<mac>:F7:8A until 2028-04-04T23:59:59Z
+[exit 0, 1.53 s]
+bench$ echo | openssl s_client -connect <stick>:443 -tls1_3 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null; true
+sha256 Fingerprint=<mac>:<mac>:<mac>:<mac>:<mac>:F7:8A
+[exit 0, 0.83 s]
+bench$ curl -s -m 15 -o /dev/null -w '%{http_code} %{redirect_url}' http://<stick>/settings
+308 https://<stick>/settings[exit 0, 0.60 s]
+
+===== mgmt.pond-page: pass in 1.08 s
+evidence: http/1.1 200 ok, html, with a CSP
+bench$ curl -s -k -m 15 -D - -o /dev/null -H 'Accept-Encoding: gzip' https://<stick>/
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Etag: "1789067700.388"
+Content-Length: 388
+Content-Encoding: gzip
+Cache-Control: no-store
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+
+[exit 0, 1.08 s]
+
+===== mgmt.pond-locked: pass in 0.72 s
+evidence: HTTP 401 unauthorised
+bench$ curl -s -k -m 15 -w '\n%{http_code}'  https://<stick>/api/schema
+{"error":"unauthorised","detail":"sign in, or present a bearer token"}
+401[exit 0, 0.72 s]
+
+===== mgmt.pond-values: pass in 0.72 s
+evidence: HTTP 200, kernel: 177 B, onu: 524 B, optics: 94 B
+bench$ curl -s -k -m 15 -w '\n%{http_code}' -H @- 'https://<stick>/api/getm?ids=kernel,onu,optics'
+{"kernel":"Linux version 6.18.48 (buildroot@buildroot) (mips-buildroot-linux-uclibc-gcc.br_real (Buildroot 2025.02.18) 14.4.0, GNU ld (GNU Binutils) 2.44) #1 Thu Sep 10 19:15:00 UTC 2026","onu":{"id":0,"num_gem_ports":128,"num_tconts":8,"interface":"pon","type":"gpon","state":"o5","onu_id":1,"alloc_ids":[257],"omcc_port_id":1,"alarms":[],"counters":{"sn_requests":1,"ranging_requests":122,"ploam_rx":1764,"ploam_crc_errors":1,"ploam_overflows":0,"bwmap_rx":2379429,"bwmap_crc_errors":0,"bwmap_overflows":0,"gem_frames":404,"bip_errors":13,"fec_corrected_bytes":0,"fec_corrected_codewords":0,"fec_uncorrectable_codewords":0,"fec_codewords":0},"serial":"<serial>"},"optics":{"temperature_c":50.492,"vcc_v":3.233,"bias_ma":7,"tx_power_uw":1667,"rx_power_uw":2}}
+200[exit 0, 0.72 s]
+
+===== net.sessions: pass in 7.6 s
+evidence: session 1 on gem257, its address handed to the host; session 2 on gem257, prefix 2001:db8:1200:6e00::/56 routed to the host
+stick$ command -v ubus
+/run/devtest-tools/bin/ubus
+[exit 0, 1.43 s]
+stick$ onu-apply state
+mode=passthrough
+pass.address=<address>
+pass.lan=lan410
+pass.peer_gateway=<address>
+store=saved
+session.1.dev=wan410
+session.1.gem=gem257
+session.1.hands=ipv4
+session.1.lan=lan410
+session.1.gateway=<address>
+session.2.dev=wan410
+session.2.gem=gem257
+session.2.hands=ipv6
+session.2.ipv6=<address6>
+session.2.lan=lan410
+[exit 0, 1.52 s]
+stick$ ubus call network.interface.ses1 status
+{
+	"up": true,
+	"pending": false,
+	"available": true,
+	"autostart": true,
+	"dynamic": false,
+	"uptime": 289,
+	"l3_device": "ppp0",
+	"proto": "pppoed",
+	"device": "wan410",
+	"updated": [
+		"routes",
+		"data"
+	],
+	"metric": 0,
+	"dns_metric": 0,
+	"delegation": true,
+	"ipv4-address": [
+		
+	],
+	"ipv6-address": [
+		
+	],
+	"ipv6-prefix": [
+		
+	],
+	"ipv6-prefix-assignment": [
+		
+	],
+	"route": [
+		{
+			"target": "0.0.0.0",
+			"mask": 0,
+			"nexthop": "0.0.0.0",
+			"source": "0.0.0.0/0"
+		}
+	],
+	"dns-server": [
+		
+	],
+	"dns-search": [
+		
+	],
+	"neighbors": [
+		
+	],
+	"inactive": {
+		"ipv4-address": [
+			
+		],
+		"ipv6-address": [
+			
+		],
+		"route": [
+			
+		],
+		"dns-server": [
+			
+		],
+		"dns-search": [
+			
+		],
+		"neighbors": [
+			
+		]
+	},
+	"data": {
+		"address": "<address>",
+		"pass": true,
+		"peer": "<address>",
+		"session": 59776
+	}
+}
+[exit 0, 1.78 s]
+stick$ ubus call network.interface.ses2 status
+{
+	"up": true,
+	"pending": false,
+	"available": true,
+	"autostart": true,
+	"dynamic": false,
+	"uptime": 289,
+	"l3_device": "ppp1",
+	"proto": "pppoed",
+	"device": "wan410",
+	"updated": [
+		"data"
+	],
+	"metric": 0,
+	"dns_metric": 0,
+	"delegation": true,
+	"ipv4-address": [
+		
+	],
+	"ipv6-address": [
+		
+	],
+	"ipv6-prefix": [
+		
+	],
+	"ipv6-prefix-assignment": [
+		
+	],
+	"route": [
+		
+	],
+	"dns-server": [
+		
+	],
+	"dns-search": [
+		
+	],
+	"neighbors": [
+		
+	],
+	"inactive": {
+		"ipv4-address": [
+			
+		],
+		"ipv6-address": [
+			
+		],
+		"route": [
+			
+		],
+		"dns-server": [
+			
+		],
+		"dns-search": [
+			
+		],
+		"neighbors": [
+			
+		]
+	},
+	"data": {
+		"pass": false,
+		"session": 59840
+	}
+}
+[exit 0, 1.48 s]
+stick$ ubus call dhcp6d.ses2 status
+{
+	"name": "ses2",
+	"wan": "ppp1",
+	"lan": "lan410",
+	"prefix": "2001:db8:1200:6e00::/56",
+	"host": "<address6>",
+	"bound": true,
+	"routed": true
+}
+[exit 0, 1.38 s]
+
+===== mgmt.pond-no-store: pass in 7.67 s
+evidence: a sign-in with the published default answered HTTP 423
+stick$ cp -p /run/onu-auth /run/onu-auth.devtest 2>/dev/null; true
+[exit 0, 1.67 s]
+stick$ [ -e /run/onu-auth.devtest ]
+[exit 0, 1.48 s]
+stick$ echo '!' > /run/onu-auth
+[exit 0, 1.46 s]
+bench$ curl -s -k -m 30 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'X-Pond: 1' -d '{"user":"root","secret":"admin"}' https://<stick>/api/auth/login
+423[exit 0, 1.26 s]
+stick$ mv /run/onu-auth.devtest /run/onu-auth
+[exit 0, 1.79 s]
+
+===== gpon.downstream: pass in 5.14 s
+evidence: 7998 bandwidth maps/s, 0 with a CRC error, alarms none
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1860
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2512898
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   407
+    BIP errors                   13
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.37 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1884
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2543094
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   407
+    BIP errors                   13
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.77 s]
+
+===== gpon.activation: pass in 1.54 s
+evidence: O5, ONU-ID 1
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1896
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2555388
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   407
+    BIP errors                   13
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.54 s]
+
+===== gpon.stable: pass in 83.75 s
+evidence: 12 reads 5 s apart: all O5
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1902
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2566640
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   408
+    BIP errors                   13
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.41 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1944
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2622541
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   409
+    BIP errors                   13
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.98 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               1992
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2688371
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   410
+    BIP errors                   14
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 3.23 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2034
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2743747
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   411
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.92 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2070
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2799490
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   413
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.97 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2112
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2854210
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   415
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.83 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2154
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2909719
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   416
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.93 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2196
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               2965112
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   417
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.92 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2232
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               3020160
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   418
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.87 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2274
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               3074614
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   419
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.80 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2316
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               3129542
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   420
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.87 s]
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2352
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               3185189
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   426
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.95 s]
+
+===== omci.channel: pass in 7.99 s
+evidence: rx_messages 352, rx_dropped 0, rx_discarded 0, tx_messages 418, tx_errors 0
+stick$ cat /sys/class/pon/pon0omci0/statistics/rx_messages
+352
+[exit 0, 1.81 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/rx_dropped
+0
+[exit 0, 1.49 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/rx_discarded
+0
+[exit 0, 1.57 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/tx_messages
+418
+[exit 0, 1.69 s]
+stick$ cat /sys/class/pon/pon0omci0/statistics/tx_errors
+0
+[exit 0, 1.44 s]
+
+===== omci.mib-upload: pass in 1.45 s
+evidence: 2 upload(s), last: 207 units over 105 instances (channel 1)
+stick$ grep 'mib upload:' /run/omcid.log
+[INF] engine.c:782: mib upload: 207 units over 105 instances (channel 1)
+[INF] engine.c:782: mib upload: 207 units over 105 instances (channel 1)
+[exit 0, 1.45 s]
+
+===== omci.gem-ports: pass in 3.25 s
+evidence: 2 GEM interface(s); sessions: session 1 on gem257, session 2 on gem257
+stick$ pon gem
+gem4095 port 4095 down multicast
+gem257 port 257 both tcont 0 queue 0 strict
+[exit 0, 1.48 s]
+stick$ onu-apply state
+mode=passthrough
+pass.address=<address>
+pass.lan=lan410
+pass.peer_gateway=<address>
+store=saved
+session.1.dev=wan410
+session.1.gem=gem257
+session.1.hands=ipv4
+session.1.lan=lan410
+session.1.gateway=<address>
+session.2.dev=wan410
+session.2.gem=gem257
+session.2.hands=ipv6
+session.2.ipv6=<address6>
+session.2.lan=lan410
+[exit 0, 1.77 s]
+
+===== omci.tcont-map: pass in 2.87 s
+evidence: T-CONT 0 holds 257, mapped to 257
+stick$ mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug
+[exit 0, 1.45 s]
+stick$ grep '^tcont' /sys/kernel/debug/rtl9602c/gpon
+tcont 0=257/257 1=-/- 2=-/- 3=-/- 4=-/- 5=-/- 6=-/- 7=-/-   (bound/mapped)
+[exit 0, 1.42 s]
+
+===== omci.alarms: pass in 3.18 s
+evidence: power level high; no alarm
+stick$ pon
+pon  GPON  O5 operation  ONU-ID 1  Alloc-ID 257  OMCC 1
+     alarms none  GEM ports up to 128  T-CONTs up to 8  queues each 8  power level high  serial number set (-s shows it)
+    serial number requests       1
+    ranging requests             122
+    PLOAM messages               2484
+    PLOAM CRC errors             1
+    PLOAM overflows              0
+    bandwidth maps               3361133
+    bandwidth map CRC errors     0
+    bandwidth map overflows      0
+    GEM frames                   429
+    BIP errors                   15
+    FEC corrected bytes          0
+    FEC corrected codewords      0
+    FEC uncorrectable codewords  0
+    FEC codewords                0
+    T-CONT 0  Alloc-ID 257
+    T-CONT 1  idle
+    T-CONT 2  idle
+    T-CONT 3  idle
+    T-CONT 4  idle
+    T-CONT 5  idle
+    T-CONT 6  idle
+    T-CONT 7  idle
+[exit 0, 1.42 s]
+stick$ grep 'alarm:' /run/omcid.log
+[exit 1, 1.76 s]
+
+===== optics.diagnostics: pass in 4.96 s
+evidence: 51.2 °C, 3.23 V, bias 8 mA, TX_power 2.2 dBm, RX_power -27.0 dBm
+stick$ ls -d /sys/class/hwmon/hwmon*
+/sys/class/hwmon/hwmon0
+[exit 0, 1.43 s]
+stick$ cat /sys/class/hwmon/hwmon0/name
+rtl9602c_optics
+[exit 0, 1.60 s]
+stick$ cd /sys/class/hwmon/hwmon0 && for f in *_input; do c=${f%_input}; echo $c $(cat $f) $(cat ${c}_min) $(cat ${c}_max) $(cat ${c}_label 2>/dev/null); done
+curr1 8 1 90 bias
+in0 3225 3100 3500 VCC
+power1 1677 1000 3548 TX_power
+power2 2 1 159 RX_power
+temp1 51168 -20000 90000 temperature
+[exit 0, 1.92 s]
+
+===== data.downstream: skip in 0.0 s
+evidence: the settings name no network-side and subscriber-side ports
+
+===== data.upstream: skip in 0.0 s
+evidence: the settings name no network-side and subscriber-side ports
+
+===== data.vlan-translation: skip in 1.41 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.41 s]
+
+===== data.vlan-priority: skip in 1.6 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.60 s]
+
+===== data.vlan-push-pop: skip in 1.35 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.35 s]
+
+===== data.mgmt-isolation: skip in 0.0 s
+evidence: the settings name no network-side and subscriber-side ports
+
+===== data.pon-silence: skip in 1.73 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.73 s]
+
+===== data.acl: skip in 1.4 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.40 s]
+
+===== data.mirror: skip in 1.37 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.37 s]
+
+===== data.fdb: skip in 1.43 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v bridge
+/run/devtest-tools/bin/bridge
+[exit 0, 1.43 s]
+
+===== data.shaper: skip in 1.73 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.73 s]
+
+===== data.storm: skip in 1.41 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v tc
+/run/devtest-tools/bin/tc
+[exit 0, 1.41 s]
+
+===== data.pcp-rewrite: skip in 1.57 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v dcb
+/run/devtest-tools/bin/dcb
+[exit 0, 1.57 s]
+
+===== data.cpu-limit: skip in 1.47 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v devlink
+/run/devtest-tools/bin/devlink
+[exit 0, 1.47 s]
+
+===== data.igmp: skip in 1.64 s
+evidence: the settings name no network-side and subscriber-side ports
+stick$ command -v bridge
+/run/devtest-tools/bin/bridge
+[exit 0, 1.64 s]
+
+===== system.log: pass in 2.89 s
+evidence: 0 of 159 lines
+stick$ dmesg | grep -E '(BUG:|Oops|WARNING:|Call Trace|Kernel panic|segfault|unhandled|soft lockup|hung_task|Failed to (add|del) .* \(object id=)' || true
+[exit 0, 1.46 s]
+stick$ dmesg | wc -l
+159
+[exit 0, 1.43 s]
+
+===== system.restart: pass in 105.76 s
+evidence: 14 of 14 killed programs running again, the slowest onu/dhcp6d2 after 6 s; O5 again; 2 session(s) up again after 5 s; dhcp6d.ses2, omcid on ubus after 1 s
+stick$ command -v ubus
+/run/devtest-tools/bin/ubus
+[exit 0, 1.48 s]
+stick$ ubus call service list
+{
+	"act": {
+		"instances": {
+			"act": {
+				"running": true,
+				"pid": 185,
+				"incarnation": 7,
+				"command": [
+					"/usr/lib/onu/onu-act"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"klogd": {
+		"instances": {
+			"klogd": {
+				"running": true,
+				"pid": 50,
+				"incarnation": 3,
+				"command": [
+					"/sbin/klogd",
+					"-n"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"netifd": {
+		"instances": {
+			"netifd": {
+				"running": true,
+				"pid": 169,
+				"incarnation": 4,
+				"command": [
+					"/usr/sbin/netifd",
+					"-c",
+					"/run/config",
+					"-r",
+					"/run/resolv.conf.auto",
+					"-h",
+					"/usr/sbin/onu-apply"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"ntp": {
+		"instances": {
+			"ntp": {
+				"running": true,
+				"pid": 219,
+				"incarnation": 9,
+				"command": [
+					"/usr/lib/onu/onu-run",
+					"ntp"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"onu": {
+		"instances": {
+			"dhcp6d2": {
+				"running": true,
+				"pid": 1114,
+				"incarnation": 12,
+				"command": [
+					"/bin/sh",
+					"-c",
+					"f=$1; shift; exec \"$@\" >>\"$f\" 2>&1",
+					"sh",
+					"/run/dhcp6d.log",
+					"/usr/lib/onu/onu-drop",
+					"-c",
+					"net_bind_service,net_admin,net_raw",
+					"dhcp6d",
+					"dhcp6d",
+					"-w",
+					"ppp1",
+					"-l",
+					"lan410",
+					"-m",
+					"wan410",
+					"-o",
+					"/run/session/2",
+					"-b",
+					"/run/dhcp6d/pd2",
+					"-x",
+					"/usr/lib/onu/onu-call",
+					"-n",
+					"ses2"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			},
+			"omcid": {
+				"running": true,
+				"pid": 288,
+				"incarnation": 10,
+				"command": [
+					"/usr/lib/onu/onu-run",
+					"omcid"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			},
+			"udhcpd-lan410": {
+				"running": true,
+				"pid": 1061,
+				"incarnation": 11,
+				"command": [
+					"udhcpd",
+					"-f",
+					"/run/udhcpd-lan410.conf"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"pond": {
+		"instances": {
+			"pond": {
+				"running": true,
+				"pid": 213,
+				"incarnation": 8,
+				"command": [
+					"/usr/lib/onu/onu-run",
+					"pond"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"ssh": {
+		"instances": {
+			"ssh": {
+				"running": true,
+				"pid": 177,
+				"incarnation": 5,
+				"command": [
+					"/usr/lib/onu/onu-run",
+					"ssh"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"syslogd": {
+		"instances": {
+			"syslogd": {
+				"running": true,
+				"pid": 48,
+				"incarnation": 2,
+				"command": [
+					"/sbin/syslogd",
+					"-n",
+					"-O",
+					"/run/messages",
+					"-s",
+					"64"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"trials": {
+		"instances": {
+			"trials": {
+				"running": true,
+				"pid": 179,
+				"incarnation": 6,
+				"command": [
+					"/usr/lib/onu/onu-change",
+					"watch"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 60,
+					"timeout": 2,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	},
+	"ubus": {
+		"instances": {
+			"instance1": {
+				"running": true,
+				"pid": 43,
+				"incarnation": 1,
+				"command": [
+					"/sbin/ubusd"
+				],
+				"term_timeout": 5,
+				"respawn": {
+					"threshold": 3600,
+					"timeout": 1,
+					"retry": 0
+				},
+				"respawns": 0,
+				"crashes": 0
+			}
+		}
+	}
+}
+[exit 0, 1.68 s]
+stick$ onu-apply state
+mode=passthrough
+pass.address=<address>
+pass.lan=lan410
+pass.peer_gateway=<address>
+store=saved
+session.1.dev=wan410
+session.1.gem=gem257
+session.1.hands=ipv4
+session.1.lan=lan410
+session.1.gateway=<address>
+session.2.dev=wan410
+session.2.gem=gem257
+session.2.hands=ipv6
+session.2.ipv6=<address6>
+session.2.lan=lan410
+[exit 0, 1.55 s]
+stick$ ubus call network.interface.ses1 status
+{
+	"up": true,
+	"pending": false,
+	"available": true,
+	"autostart": true,
+	"dynamic": false,
+	"uptime": 441,
+	"l3_device": "ppp0",
+	"proto": "pppoed",
+	"device": "wan410",
+	"updated": [
+		"routes",
+		"data"
+	],
+	"metric": 0,
+	"dns_metric": 0,
+	"delegation": true,
+	"ipv4-address": [
+		
+	],
+	"ipv6-address": [
+		
+	],
+	"ipv6-prefix": [
+		
+	],
+	"ipv6-prefix-assignment": [
+		
+	],
+	"route": [
+		{
+			"target": "0.0.0.0",
+			"mask": 0,
+			"nexthop": "0.0.0.0",
+			"source": "0.0.0.0/0"
+		}
+	],
+	"dns-server": [
+		
+	],
+	"dns-search": [
+		
+	],
+	"neighbors": [
+		
+	],
+	"inactive": {
+		"ipv4-address": [
+			
+		],
+		"ipv6-address": [
+			
+		],
+		"route": [
+			
+		],
+		"dns-server": [
+			
+		],
+		"dns-search": [
+			
+		],
+		"neighbors": [
+			
+		]
+	},
+	"data": {
+		"address": "<address>",
+		"pass": true,
+		"peer": "<address>",
+		"session": 59776
+	}
+}
+[exit 0, 1.36 s]
+stick$ ubus call network.interface.ses2 status
+{
+	"up": true,
+	"pending": false,
+	"available": true,
+	"autostart": true,
+	"dynamic": false,
+	"uptime": 441,
+	"l3_device": "ppp1",
+	"proto": "pppoed",
+	"device": "wan410",
+	"updated": [
+		"data"
+	],
+	"metric": 0,
+	"dns_metric": 0,
+	"delegation": true,
+	"ipv4-address": [
+		
+	],
+	"ipv6-address": [
+		
+	],
+	"ipv6-prefix": [
+		
+	],
+	"ipv6-prefix-assignment": [
+... 6470 more lines
+
+===== net.host-link-search: skip in 0.0 s
+evidence: the settings name no subscriber-side port
+
+===== update.trial-and-back: pass in 123.36 s
+evidence: written into bank 1 (3045730 B, was valid) in 37 s; on trial it ran and committed after 38 s (version fd90fa47fb2f); back in bank 0, committed, after 37 s
+stick$ onu-update status
+RUNNING=0
+COMMITTED=0
+NEXT=0
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 1.49 s]
+stick$ onu-update write - 1
+BANK=1
+VERSION=fd90fa47fb2f
+[exit 0, 36.52 s]
+stick$ onu-update status
+RUNNING=0
+COMMITTED=0
+NEXT=0
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 2.06 s]
+stick$ onu-update try 1
+NEXT=1
+[exit 0, 1.49 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+16548c13-9cdc-4e7e-b7d3-ee5d02029756
+[exit 0, 1.51 s]
+stick$ reboot
+[exit 0, 1.69 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+Ncat: No route to host.
+[exit 255, 4.09 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+Ncat: No route to host.
+[exit 255, 4.24 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+f3bae38c-62e3-41c6-aac2-301f648f9209
+[exit 0, 1.91 s]
+stick$ onu-update status
+RUNNING=1
+COMMITTED=0
+NEXT=0
+TRIAL=1
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 1.48 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+f3bae38c-62e3-41c6-aac2-301f648f9209
+[exit 0, 2.73 s]
+stick$ onu-update status
+RUNNING=1
+COMMITTED=1
+NEXT=1
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 2.16 s]
+stick$ onu-update try 0
+NEXT=0
+[exit 0, 1.85 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+f3bae38c-62e3-41c6-aac2-301f648f9209
+[exit 0, 1.47 s]
+stick$ reboot
+[exit 0, 1.40 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+Ncat: No route to host.
+[exit 255, 4.02 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+Ncat: No route to host.
+[exit 255, 4.21 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 2.01 s]
+stick$ onu-update status
+RUNNING=0
+COMMITTED=1
+NEXT=1
+TRIAL=0
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 1.42 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 2.48 s]
+stick$ onu-update status
+RUNNING=0
+COMMITTED=0
+NEXT=0
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 1.40 s]
+stick$ onu-update status
+RUNNING=0
+COMMITTED=0
+NEXT=0
+BANK0_STATE=valid
+BANK0_VERSION=fd90fa47fb2f
+BANK0_TIME=1789067700
+BANK0_KERNEL_SIZE=1900544
+BANK0_ROOTFS_SIZE=2031616
+BANK0_KERNEL_USED=1713868
+BANK0_ROOTFS_USED=1331574
+BANK1_STATE=valid
+BANK1_VERSION=fd90fa47fb2f
+BANK1_TIME=1789067700
+BANK1_KERNEL_SIZE=1900544
+BANK1_ROOTFS_SIZE=2031616
+BANK1_KERNEL_USED=1713868
+BANK1_ROOTFS_USED=1331574
+[exit 0, 1.68 s]
+
+===== system.watchdog-reset: pass in 63.0 s
+evidence: timeout 30 s; gone after 37 s, back with a new boot after 53 s
+stick$ command -v ubus
+[exit 127, 1.67 s]
+stick$ mkdir -p /run/devtest-tools && { mountpoint -q /run/devtest-tools || mount -t tmpfs -o size=4096k,mode=755 tmpfs /run/devtest-tools; } && gunzip -c | tar -x -C /run/devtest-tools
+[exit 0, 2.41 s]
+stick$ command -v ubus
+/run/devtest-tools/bin/ubus
+[exit 0, 1.43 s]
+stick$ cat /sys/class/watchdog/watchdog0/timeout
+30
+[exit 0, 1.75 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 1.40 s]
+stick$ ubus call system watchdog '{"stop": true}'
+{
+	"status": "offline",
+	"timeout": 30,
+	"frequency": 5,
+	"magicclose": false
+}
+[exit 0, 1.47 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 2.05 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 1.75 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 1.76 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+0c5f27b4-b8c4-40db-8a55-e59f86aed4bb
+[exit 0, 2.00 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+Ncat: No route to host.
+[exit 255, 4.07 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+Ncat: No route to host.
+[exit 255, 4.27 s]
+stick$ cat /proc/sys/kernel/random/boot_id
+6619bab5-06e9-410a-8e60-85b00b44f7f8
+[exit 0, 1.80 s]
