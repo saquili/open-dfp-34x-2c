@@ -51,6 +51,18 @@ warn() {
 onu-svc start syslogd -- /sbin/syslogd -n -O /run/messages -s 64 || warn "no system log"
 onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reach the system log"
 
+# The flash is partitioned on its 4 KiB sectors (the device tree, and the
+# option MTD_SPI_NOR_USE_4K_SECTORS of the kernel). On a chip or a kernel that
+# erases larger blocks, the kernel makes the partitions that are not whole
+# blocks read-only: the boot loader's environment, 8 KiB, and with it the
+# bank switch, and the configuration store. Say so now, and not at the first
+# save. /proc/mtd lists a partition's size, its erase size and its name.
+erases_in_sectors() {
+	grep -q '^mtd[0-9]*: [0-9a-f]* 00001000 "config"$' "${1:-/proc/mtd}"
+}
+erases_in_sectors ||
+	warn "the flash does not erase in 4 KiB sectors: the configuration store and the updates will fail"
+
 # The identity of the unit, its saved settings, its PPPoE accounts and root's
 # password. onu-config load makes /config the JFFS2 file system of the
 # partition "config", which the shipped firmware keeps its own files in, and

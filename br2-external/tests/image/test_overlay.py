@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tempfile
 import unittest
 
 from bootscript import BUILTINS, DROPBEAR, PACKAGES, commands
@@ -51,6 +52,29 @@ class BootScript(unittest.TestCase):
     def test_it_is_executable_and_starts_with_its_shell(self):
         self.assertTrue(os.stat(RCS).st_mode & stat.S_IXUSR)
         self.assertEqual(read(RCS).splitlines()[0], "#!/bin/sh")
+
+    def run_erases_in_sectors(self, shell, proc_mtd):
+        """The boot script's check of the flash's sector, run on a copy of /proc/mtd."""
+        text = read(RCS)
+        start = text.index("erases_in_sectors() {")
+        function = text[start:text.index("\n}\n", start) + 3]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "mtd")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(proc_mtd)
+            return subprocess.run([shell, "-c", function + '\nerases_in_sectors "$1"', "sh", path],
+                                  capture_output=True, text=True).returncode
+
+    def test_it_says_when_the_flash_does_not_erase_in_4_kib_sectors(self):
+        board = ('dev:    size   erasesize  name\nmtd0: 00040000 00001000 "boot"\n'
+                 'mtd3: 0003c000 00001000 "config"\nmtd4: 001d0000 00001000 "k0"\n')
+        blocks = board.replace("00001000", "00010000")
+        for shell in SHELLS:
+            with self.subTest(shell=shell):
+                self.assertEqual(self.run_erases_in_sectors(shell, board), 0)
+                self.assertNotEqual(self.run_erases_in_sectors(shell, blocks), 0)
+                self.assertNotEqual(self.run_erases_in_sectors(shell, "dev: size erasesize name\n"), 0)
+        self.assertIn("erases_in_sectors ||\n\twarn", read(RCS))
 
     def test_it_parses_in_every_posix_shell_there_is(self):
         for shell in SHELLS:
