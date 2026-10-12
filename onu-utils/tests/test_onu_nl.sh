@@ -228,11 +228,11 @@ check '[ $rc -eq 0 ] && ! flags $D1 | grep -q "\bUP\b"'
 # What is not named stays as it was.
 run link set $D1 mtu 1400
 check '[ $rc -eq 0 ] && ip -o link show $D1 | grep -q "mtu 1400" && ! flags $D1 | grep -q "\bUP\b"'
-run link set $D1 address 02:00:5e:00:53:99
-check '[ $rc -eq 0 ] && ip -o link show $D1 | grep -q "link/ether 02:00:5e:00:53:99" && ip -o link show $D1 | grep -q "mtu 1400"'
+run link set $D1 address 00:00:5e:00:53:99
+check '[ $rc -eq 0 ] && ip -o link show $D1 | grep -q "link/ether 00:00:5e:00:53:99" && ip -o link show $D1 | grep -q "mtu 1400"'
 # All three, in another order, and the MAC address in capitals.
-run link set $D1 address 02:00:5E:00:53:AB mtu 1500 up
-check '[ $rc -eq 0 ] && flags $D1 | grep -q "\bUP\b" && ip -o link show $D1 | grep -q "mtu 1500" && ip -o link show $D1 | grep -q "link/ether 02:00:5e:00:53:ab"'
+run link set $D1 address 00:00:5E:00:53:AB mtu 1500 up
+check '[ $rc -eq 0 ] && flags $D1 | grep -q "\bUP\b" && ip -o link show $D1 | grep -q "mtu 1500" && ip -o link show $D1 | grep -q "link/ether 00:00:5e:00:53:ab"'
 run link set nosuch0 up
 check '[ $rc -eq 1 ] && echo "$err" | grep -q "no interface nosuch0"'
 # The kernel refuses what it cannot take, and says so.
@@ -244,8 +244,8 @@ check '[ $rc -eq 0 ] && ip -d -o link show onunlv | grep -q "vlan protocol 802.1
 check '! flags onunlv | grep -q "\bUP\b"'
 run link add vlan $D1 onunlv 36
 check '[ $rc -eq 1 ] && echo "$err" | grep -q "^onu-nl: link not added: File exists"'
-run link set onunlv address 02:00:5e:00:53:35 up
-check '[ $rc -eq 0 ] && flags onunlv | grep -q "\bUP\b" && ip -o link show onunlv | grep -q "link/ether 02:00:5e:00:53:35"'
+run link set onunlv address 00:00:5e:00:53:35 up
+check '[ $rc -eq 0 ] && flags onunlv | grep -q "\bUP\b" && ip -o link show onunlv | grep -q "link/ether 00:00:5e:00:53:35"'
 run link add vlan nosuch0 onunlw 410
 check '[ $rc -eq 1 ] && echo "$err" | grep -q "no interface nosuch0"'
 run link del onunlv
@@ -254,8 +254,8 @@ run link del onunlv
 check '[ $rc -eq 1 ] && echo "$err" | grep -q "no interface onunlv"'
 for line in "link" "link set" "link set $D1" "link set $D1 up down" "link set $D1 mtu" \
 	"link set $D1 mtu 67" "link set $D1 mtu 65536" "link set $D1 mtu x" \
-	"link set $D1 mtu 1500 mtu 1500" "link set $D1 address 02:00:5e:00:53" \
-	"link set $D1 address 02:00:5e:00:53:zz" "link set $D1 address 02-00-5e-00-53-01" \
+	"link set $D1 mtu 1500 mtu 1500" "link set $D1 address 00:00:5e:00:53" \
+	"link set $D1 address 00:00:5e:00:53:zz" "link set $D1 address 00-00-5e-00-53-01" \
 	"link set $D1 address 020:0:5e:00:53:01" "link set $D1 fast" \
 	"link add" "link add vlan $D1 v1" "link add vlan $D1 v1 0" "link add vlan $D1 v1 4095" \
 	"link add vlan $D1 v1 x" "link add vlan $D1 abcdefghijklmnop 5" "link add vlan $D1 a/b 5" \
