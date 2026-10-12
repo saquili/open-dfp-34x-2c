@@ -13,7 +13,7 @@ import sys
 from . import cases_system, cases_net, cases_pon, cases_data  # noqa: F401
 from .access import Settings, bench_remote, redact, stick_remote
 from .core import CASES, FAIL, Context, run_case, select
-from .tools import TOOLS_DIR, remove
+from .tools import PROGRAMS, TOOLS_DIR, remove
 from .report import as_json, counts, log, page
 
 
@@ -48,8 +48,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="a file with the status daemon's token")
     parser.add_argument("--tools", default=os.environ.get("DEVTEST_TOOLS", ""), metavar="DIR",
                         help="a build's diag directory (build/image/diag): the cases that need "
-                             "tc, bridge or devlink, which the flash's image lacks, have them "
-                             "put on the stick, in memory, for the run (DEVTEST_TOOLS)")
+                             "tc, bridge, devlink, dcb, ethtool or ubus, which the flash's image "
+                             "lacks, have them put on the stick, in memory, for the run "
+                             "(DEVTEST_TOOLS)")
     parser.add_argument("--no-sudo", action="store_true",
                         help="the bench host runs the packet generator without sudo")
     parser.add_argument("--destructive", action="store_true",
@@ -101,7 +102,9 @@ def main(argv: list[str] | None = None) -> int:
         results.append(result)
         print(f"{result.status.upper():4}  {result.id:24} {result.evidence}", flush=True)
     if ctx.memo.get("tools"):
-        header["Tools"] = f"tc, bridge and devlink put on the stick in {TOOLS_DIR}, in memory"
+        names = list(PROGRAMS)
+        header["Tools"] = (f"{', '.join(names[:-1])} and {names[-1]} put on the stick in "
+                           f"{TOOLS_DIR}, in memory")
     remove(ctx)
     print(counts(results))
 

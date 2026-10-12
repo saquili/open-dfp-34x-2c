@@ -96,11 +96,22 @@ def mib_upload(ctx: Context):
     return passed(f"{len(lines)} upload(s), last: {lines[-1].split('mib upload: ')[-1]}")
 
 
-@case("omci.gem-bridge", "OMCI",
-      "The GEM ports the OLT created are interfaces, bridged with the host link")
-def gem_bridge(ctx: Context):
-    gems = [l.split(":")[1].strip().split("@")[0]
-            for l in ctx.stick.text("ip -o link show type gem").splitlines()]
+@case("omci.gem-ports", "OMCI",
+      "The GEM ports the OLT created are interfaces, bridged with the host link, or each the "
+      "one a PPPoE session of the stick runs on")
+def gem_ports(ctx: Context):
+    gems = [line.split()[0] for line in ctx.stick.text("pon gem").splitlines() if line.split()]
+    # What the stick made of the settings, told by onu-apply: the lines name=value.
+    told = dict(line.split("=", 1) for line in ctx.stick.text("onu-apply state").splitlines()
+                if "=" in line)
+    if told.get("mode") == "passthrough":
+        sessions = {key.split(".")[1]: value for key, value in told.items()
+                    if re.fullmatch(r"session\.\d+\.gem", key)}
+        lost = [n for n, gem in sessions.items() if gem not in gems]
+        shown = ", ".join(f"session {n} on {gem}" for n, gem in sorted(sessions.items()))
+        return verdict(bool(gems) and bool(sessions) and not lost,
+                       f"{len(gems)} GEM interface(s); sessions: {shown or 'none'}"
+                       + (f"; no interface for session {', '.join(lost)}" if lost else ""))
     ports = ctx.stick.run("ls /sys/class/net/omcibr0/brif").out.split()
     bridged = [g for g in gems if g in ports]
     ok = "sfp" in ports and bool(bridged)

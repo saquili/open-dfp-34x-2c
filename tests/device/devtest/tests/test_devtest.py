@@ -269,15 +269,33 @@ class Cases(unittest.TestCase):
         ctx = context(stick=[("^pon$", 0, PON.replace("O5 operation", "O3 serial number"))])
         self.assertEqual(cases_pon.activation(ctx).status, FAIL)
 
+    GEMS = ("gem256 port 256 both tcont 0 queue 0 strict\n"
+            "gem4095 port 4095 down multicast\n")
+
     def test_the_gem_ports_must_be_in_the_bridge_with_the_host_link(self):
-        links = ("7: gem256@pon: <BROADCAST,UP> mtu 1500\n"
-                 "8: gem4095@pon: <BROADCAST,UP> mtu 1500\n")
-        ctx = context(stick=[("type gem", 0, links), ("brif", 0, "gem256 sfp\n")])
-        outcome = cases_pon.gem_bridge(ctx)
+        bridge = ("^pon gem", 0, self.GEMS), ("onu-apply state", 0, "mode=bridge\n")
+        ctx = context(stick=[*bridge, ("brif", 0, "gem256 sfp\n")])
+        outcome = cases_pon.gem_ports(ctx)
         self.assertEqual(outcome.status, PASS)
         self.assertEqual(outcome.evidence, "2 GEM interface(s); omcibr0 holds gem256 sfp")
-        alone = context(stick=[("type gem", 0, links), ("brif", 0, "sfp\n")])
-        self.assertEqual(cases_pon.gem_bridge(alone).status, FAIL)
+        alone = context(stick=[*bridge, ("brif", 0, "sfp\n")])
+        self.assertEqual(cases_pon.gem_ports(alone).status, FAIL)
+
+    def test_with_sessions_each_must_run_on_a_gem_interface_that_exists(self):
+        told = ("mode=passthrough\nsession.1.dev=wan410\nsession.1.gem=gem256\n"
+                "session.2.gem=gem256\n")
+        ctx = context(stick=[("^pon gem", 0, self.GEMS), ("onu-apply state", 0, told)])
+        outcome = cases_pon.gem_ports(ctx)
+        self.assertEqual(outcome.status, PASS)
+        self.assertEqual(outcome.evidence,
+                         "2 GEM interface(s); sessions: session 1 on gem256, session 2 on gem256")
+        gone = told.replace("session.2.gem=gem256", "session.2.gem=gem300")
+        ctx = context(stick=[("^pon gem", 0, self.GEMS), ("onu-apply state", 0, gone)])
+        outcome = cases_pon.gem_ports(ctx)
+        self.assertEqual(outcome.status, FAIL)
+        self.assertIn("no interface for session 2", outcome.evidence)
+        none = context(stick=[("^pon gem", 0, self.GEMS), ("onu-apply state", 0, "mode=passthrough\n")])
+        self.assertEqual(cases_pon.gem_ports(none).status, FAIL)
 
     def test_optical_power_is_shown_in_dbm(self):
         self.assertEqual(cases_pon.dbm(1000), "0.0 dBm")
@@ -404,19 +422,57 @@ class Cases(unittest.TestCase):
         finally:
             cases_system.RELOAD_TIMEOUT = real
 
-    def test_the_filter_must_drop_in_both_chains(self):
-        two = "policy drop;\npolicy drop;\npolicy accept;\n"
-        self.assertEqual(cases_net.filter_loaded(context(stick=[("nft list", 0, two)])).status, PASS)
-        one = "policy drop;\npolicy accept;\n"
-        self.assertEqual(cases_net.filter_loaded(context(stick=[("nft list", 0, one)])).status, FAIL)
+    NETSTAT = ("Active Internet connections (only servers)\n"
+               "Proto Recv-Q Send-Q Local Address           Foreign Address         State\n"
+               "tcp        0      0 192.0.2.1:22         0.0.0.0:*               LISTEN\n"
+               "tcp        0      0 192.0.2.1:443        0.0.0.0:*               LISTEN\n"
+               "tcp        0      0 192.0.2.5:22         0.0.0.0:*               LISTEN\n"
+               "tcp        0      0 192.0.2.5:443        0.0.0.0:*               LISTEN\n")
+    MGMT = "VLAN=4094\nADDRESS=192.0.2.1/30\nDATA_ADDRESS=192.0.2.5/30\n"
 
-    def test_the_ssh_server_must_offer_keys_only(self):
+    def listening(self, netstat, probes):
+        answers = iter(probes)
+        real = cases_net.probe
+        cases_net.probe = lambda ctx, port, wait=3.0: next(answers)
+        try:
+            return cases_net.listening(context(stick=[("cat /run/onu-mgmt", 0, self.MGMT),
+                                                      ("netstat", 0, netstat)]))
+        finally:
+            cases_net.probe = real
+
+    def test_the_servers_must_listen_on_the_two_host_side_addresses_only(self):
+        good = [("open", 0.01), ("open", 0.01), ("refused", 0.01)]
+        result = self.listening(self.NETSTAT, good)
+        self.assertEqual(result.status, PASS)
+        self.assertIn("22, 443 on 2 host-side addresses; on no other", result.evidence)
+        wild = self.NETSTAT + "tcp        0      0 :::80                   :::*                    LISTEN\n"
+        result = self.listening(wild, good)
+        self.assertEqual(result.status, FAIL)
+        self.assertIn("also :::80", result.evidence)
+        anywhere = self.NETSTAT + "tcp   0   0 0.0.0.0:23   0.0.0.0:*   LISTEN\n"
+        self.assertEqual(self.listening(anywhere, good).status, FAIL)
+
+    def test_the_servers_must_answer_the_bench_and_a_closed_port_must_be_refused(self):
+        self.assertEqual(self.listening(self.NETSTAT, [("timeout", 3.0), ("open", 0.01),
+                                                       ("refused", 0.01)]).status, FAIL)
+        self.assertEqual(self.listening(self.NETSTAT, [("open", 0.01), ("open", 0.01),
+                                                       ("timeout", 3.0)]).status, FAIL)
+
+    def test_the_listeners_are_read_from_netstat(self):
+        text = self.NETSTAT + "tcp        0      0 :::80                   :::*                    LISTEN\n"
+        self.assertEqual(cases_net.listeners(text),
+                         {("192.0.2.1", 22), ("192.0.2.1", 443), ("192.0.2.5", 22),
+                          ("192.0.2.5", 443), ("::", 80)})
+        self.assertEqual(cases_net.listeners("tcp 0 0 192.0.2.1:22 198.51.100.2:5000 ESTABLISHED\n"),
+                         set())
+
+    def test_the_ssh_server_must_offer_the_key_and_the_password(self):
         def outcome(err):
             seen = []
             real = cases_net.local_run
             cases_net.local_run = lambda argv, timeout: seen.append(argv) or (255, err)
             try:
-                result = cases_net.ssh_keys_only(context())
+                result = cases_net.ssh_login(context())
             finally:
                 cases_net.local_run = real
             self.assertIn("-J", seen[0])
@@ -425,8 +481,58 @@ class Cases(unittest.TestCase):
             self.assertIn("ControlMaster=no", seen[0])
             self.assertIn("ControlPath=none", seen[0])
             return result
-        self.assertEqual(outcome("root@x: Permission denied (publickey).\n").status, PASS)
-        self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, FAIL)
+        self.assertEqual(outcome("root@x: Permission denied (publickey,password).\n").status, PASS)
+        self.assertEqual(outcome("root@x: Permission denied (password,publickey).\n").status, PASS)
+        self.assertEqual(outcome("root@x: Permission denied (publickey).\n").status, FAIL)
+        self.assertEqual(outcome("root@x: Permission denied (publickey,password,keyboard-interactive).\n").status, FAIL)
+
+    def test_the_watchdog_must_be_held_and_fed_by_procd(self):
+        def outcome(comm="procd", held="1", state="active", up="120.5"):
+            stick = Canned("stick", [("identity", 0, "Realtek watchdog timer\n"),
+                                     ("watchdog0/timeout", 0, "30\n"),
+                                     ("watchdog0/state", 0, state + "\n"),
+                                     ("/proc/1/comm", 0, comm + "\n"),
+                                     ("/proc/1/fd", 0, held + "\n"),
+                                     ("/proc/uptime", 0, up + "\n")], [])
+            ctx = Context(SETTINGS, stick, Canned("bench", [], []), [])
+            return cases_system.watchdog(ctx)
+        good = outcome()
+        self.assertEqual(good.status, PASS)
+        self.assertIn("procd (pid 1) holds /dev/watchdog; up 120 s", good.evidence)
+        self.assertEqual(outcome(comm="init").status, FAIL)
+        self.assertEqual(outcome(held="0").status, FAIL)
+        self.assertEqual(outcome(state="inactive").status, FAIL)
+
+    def test_a_young_stick_is_waited_for_before_the_watchdog_is_called_fed(self):
+        class Clock:
+            slept = 0.0
+
+            def sleep(self, seconds):
+                self.slept += seconds
+
+        ups = iter(["12.0", "36.0"])
+
+        class Stick:
+            def text(self, command, *, timeout=60.0):
+                if "uptime" in command:
+                    return next(ups)
+                return {"identity": "wdt", "timeout": "30", "state": "active",
+                        "comm": "procd"}[next(k for k in ("identity", "timeout", "state", "comm")
+                                              if k in command)]
+
+            def run(self, command, *, timeout=60.0, check=False, stdin=None):
+                return Reply([command], 0, "1\n", "", 0.0)
+
+        clock, real = Clock(), cases_system.time
+        cases_system.time = clock
+        try:
+            ctx = context()
+            ctx.stick = Stick()
+            result = cases_system.watchdog(ctx)
+        finally:
+            cases_system.time = real
+        self.assertEqual(result.status, PASS)
+        self.assertEqual(clock.slept, 30 + cases_system.WATCHDOG_MARGIN - 12.0)
 
     def test_the_data_path_is_skipped_without_ports(self):
         self.assertEqual(cases_data.downstream(context()).status, SKIP)
@@ -663,7 +769,7 @@ class Cases(unittest.TestCase):
         self.assertEqual(good.status, PASS, good.evidence)
         self.assertIn("join 3/3 to the network, group offloaded", good.evidence)
         self.assertIn("timer restarted", good.evidence)
-        self.assertIn("ip link set omcibr0 type bridge mcast_snooping 1", asked[-1])
+        self.assertTrue(asked[-1].endswith("echo 1 > /sys/class/net/omcibr0/bridge/multicast_snooping"))
         bad = outcome(reports_to_a_group_pass=False)[0]
         self.assertEqual(bad.status, FAIL)
         self.assertIn("1/3 reports again, timer not restarted", bad.evidence)

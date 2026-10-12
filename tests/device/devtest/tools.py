@@ -2,9 +2,10 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 """Tools the flash's image does not carry, put on the stick for a run.
 
-The cases that install rules of their own run iproute2's tc, bridge and
-devlink, which only a RAM image carries (the post-build script sets them
-aside in build/image/diag, docs/handbook/building.rst). A case that names such
+The cases that install rules of their own run iproute2's tc, bridge, devlink
+and dcb, and others ubus and ethtool, which only a RAM image carries (the
+post-build script sets them aside in build/image/diag,
+docs/handbook/building.rst). A case that names such
 a tool finds it on the stick, or, when the run was given a build's diag
 directory (--tools), has it put there: a small file system of memory of its
 own, /run/devtest-tools, with the programs, the C library whole as the diag
@@ -30,7 +31,8 @@ if TYPE_CHECKING:
 
 TOOLS_DIR = "/run/devtest-tools"
 # The programs, by name, where the diag directory has them.
-PROGRAMS = {"tc": "sbin/tc", "bridge": "sbin/bridge", "devlink": "sbin/devlink"}
+PROGRAMS = {"tc": "sbin/tc", "bridge": "sbin/bridge", "devlink": "sbin/devlink",
+            "dcb": "sbin/dcb", "ethtool": "usr/sbin/ethtool", "ubus": "usr/bin/ubus"}
 # What the programs read, if the diag directory has it: tc's tables.
 TABLES = ("usr/lib/tc", "usr/share/iproute2")
 SIZE_KIB = 4096

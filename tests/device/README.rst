@@ -57,28 +57,36 @@ The cases and the image of today
 
 The suite was last recorded on 2026-10-07 (``docs/testing/``), on an image of
 before procd, netifd, the panel's HTTPS and the store in the partition
-``config``. Some cases still expect that image, or a tool no image carries:
+``config``. The cases that expected that image, or a tool no image carried, have
+been brought up to today's. What a case expects of the image:
 
-* The cases that install rules of their own run iproute2's ``tc``, ``bridge``
-  and ``devlink``, which the flash's image no longer carries (ADR 0014); only a
-  RAM image does (``make ram-image``). Each such case names the tools it runs,
-  and a run on the flash's image has them put on the stick for it: ``--tools
-  build/image/diag`` (the directory that ``make image`` sets them aside in)
-  unpacks the three programs, the C library whole and a script for each into a
-  file system of memory of their own, ``/run/devtest-tools``, takes them away
-  at the end of the run and writes nothing to the flash. A case whose tool is
-  not there and was not given is skipped, with what to do. The image under test
-  is then the flash's: a RAM image without the tools of diagnosis,
-  ``make ram-image RAM_DIAG=no``, has its root filesystem, and ``--tools``
-  gives it what the cases need.
-* ``data.pcp-rewrite`` runs ``dcb``, ``net.filter-loaded`` and
-  ``net.filter-drops`` run ``nft``, and ``system.phc`` runs ``ethtool``: no
-  image carries them, and the kernel has no netfilter.
-* ``system.watchdog`` and ``system.watchdog-reset`` look for BusyBox's watchdog
-  daemon; procd feeds the watchdog now (ADR 0013).
-* ``net.ssh-keys-only`` expects an ssh server that takes keys only; it takes
-  root's password too (ADR 0012).
-* ``mgmt.pond-https`` is new and has not been recorded.
+* The cases that install rules of their own, read the switch or stop procd's
+  feeding of the watchdog run iproute2's ``tc``, ``bridge``, ``devlink`` and
+  ``dcb``, ``ethtool`` and ``ubus``, which the flash's image does not carry
+  (ADR 0014); only a RAM image does (``make ram-image``). Each such case names
+  the tools it runs, and a run on the flash's image has them put on the stick
+  for it: ``--tools build/image/diag`` (the directory that ``make image`` sets
+  them aside in) unpacks the programs, the C library whole and a script for
+  each into a file system of memory of their own, ``/run/devtest-tools``,
+  takes them away at the end of the run and writes nothing to the flash. A
+  case whose tool is not there and was not given is skipped, with what to do.
+  The image under test is then the flash's: a RAM image without the tools of
+  diagnosis, ``make ram-image RAM_DIAG=no``, has its root filesystem, and
+  ``--tools`` gives it what the cases need. The data-path cases read the
+  switch's own frame counts with ``ethtool`` when the stick has it, and do
+  without otherwise.
+* The stick has no packet filter (``docs/handbook/system.rst``): what keeps its
+  servers off the PON side is the addresses they listen on, which
+  ``net.listeners`` checks.
+* procd feeds the watchdog (ADR 0013): ``system.watchdog`` looks for procd
+  holding the device, and ``system.watchdog-reset`` has procd let go of it
+  without closing it properly, so that nobody feeds an armed watchdog.
+* The ssh server takes root's key and root's password (ADR 0012), which
+  ``net.ssh-login`` checks.
+* ``omci.gem-ports`` knows both shapes of the stick: bridged by omcid, or
+  holding PPPoE sessions that each run on a GEM port. ``data.igmp`` needs the
+  bridge ``omcibr0``, which omcid builds only while the stick holds no PPPoE
+  account.
 
 The PPPoE sessions, the delegated IPv6 prefix, an update with its trial, the
 way in through the shipped firmware's web page and the store in ``config`` have

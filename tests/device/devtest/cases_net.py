@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
-"""The host side: the link, the management VLAN, the packet filter, the ssh
-server and the status daemon, seen from the bench host as a subscriber's
+"""The host side: the link, the management VLAN, what the stick listens on, the
+ssh server and the status daemon, seen from the bench host as a subscriber's
 machine sees them."""
 
 from __future__ import annotations
@@ -123,27 +123,37 @@ def mgmt_vlan(ctx: Context):
     return verdict(ok, f"{name}: VLAN {vid} on {parent}; this run reaches the stick through it")
 
 
-@case("net.filter-loaded", "Host side", "The packet filter is loaded, dropping by default")
-def filter_loaded(ctx: Context):
-    rules = ctx.stick.text("nft list ruleset")
-    drops = rules.count("policy drop;")
-    return verdict(drops == 2, f"{drops} chains with policy drop (input, forward), "
-                               f"{len(rules.splitlines())} lines")
+def listeners(text: str) -> set[tuple[str, int]]:
+    """The (address, port) pairs that BusyBox's "netstat -ltn" shows in LISTEN."""
+    found = set()
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) >= 6 and fields[0].startswith("tcp") and fields[-1] == "LISTEN":
+            address, _, port = fields[3].rpartition(":")
+            found.add((address, int(port)))
+    return found
 
 
-@case("net.filter-drops", "Host side",
-      "A port nobody listens on is dropped with the filter and refused without it")
-def filter_drops(ctx: Context):
-    with_filter = probe(ctx, 23)
-    try:
-        ctx.stick.run("nft flush ruleset", check=True)
-        without = probe(ctx, 23)
-    finally:
-        ctx.stick.run("nft -f /etc/nftables.conf", check=True)
-    back = ctx.stick.text("nft list ruleset").count("policy drop;")
-    ok = with_filter[0] == "timeout" and without[0] == "refused" and back == 2
-    return verdict(ok, f"filtered: {with_filter[0]} after {with_filter[1]:.2f} s; "
-                       f"unfiltered: {without[0]} in {without[1]:.3f} s; filter restored")
+@case("net.listeners", "Host side",
+      "The servers listen on the two host-side addresses and on no other, and the bench "
+      "reaches ssh and the panel and is refused elsewhere")
+def listening(ctx: Context):
+    # The stick has no packet filter (docs/handbook/system.rst): what keeps its servers
+    # off the PON side is the addresses they listen on.
+    mgmt = ctx.stick.text("cat /run/onu-mgmt")
+    mine = {re.sub(r"/\d+$", "", v) for k, v in
+            (l.split("=", 1) for l in mgmt.splitlines() if "=" in l)
+            if k in ("ADDRESS", "DATA_ADDRESS")}
+    found = listeners(ctx.stick.text("netstat -ltn"))
+    stray = sorted(f"{a}:{p}" for a, p in found if a not in mine)
+    ports = sorted({p for a, p in found if a in mine})
+    ssh, panel, closed = probe(ctx, 22), probe(ctx, 443), probe(ctx, 23)
+    ok = (len(mine) == 2 and not stray and {22, 443} <= set(ports) and ssh[0] == "open" and
+          panel[0] == "open" and closed[0] == "refused")
+    shown = ", ".join(str(p) for p in ports) or "none"
+    return verdict(ok, f"listening: {shown} on {len(mine)} host-side addresses"
+                       + (f"; also {', '.join(stray)}" if stray else "; on no other")
+                       + f"; bench: ssh {ssh[0]}, panel {panel[0]}, a closed port {closed[0]}")
 
 
 def local_run(argv: list[str], timeout: float) -> tuple[int, str]:
@@ -156,8 +166,9 @@ def local_run(argv: list[str], timeout: float) -> tuple[int, str]:
         return 124, "timed out"
 
 
-@case("net.ssh-keys-only", "Host side", "The ssh server offers keys only, no passwords")
-def ssh_keys_only(ctx: Context):
+@case("net.ssh-login", "Host side",
+      "The ssh server offers root's key and root's password, and nothing else")
+def ssh_login(ctx: Context):
     # From the machine that runs the tests, through the bench host, without
     # offering a key: the refusal names the methods the server offers. A
     # connection of its own, as one shared with the cases before it is
@@ -172,7 +183,9 @@ def ssh_keys_only(ctx: Context):
     denied = [l for l in err.splitlines() if "Permission denied" in l]
     if not denied:
         return failed(f"exit {code}: {err.strip()}")
-    return verdict(denied[0].rstrip(".").endswith("(publickey)"), denied[0])
+    methods = re.search(r"\(([a-z,-]+)\)\.?$", denied[0].strip())
+    return verdict(bool(methods) and set(methods[1].split(",")) == {"publickey", "password"},
+                   denied[0])
 
 
 def http(ctx: Context, path: str, token: bool = False) -> tuple[int, str]:

@@ -19,7 +19,7 @@ from devtest.access import Remote, Settings
 from devtest.core import CASES, PASS, SKIP, Case, Context, passed, run_case
 from devtest.tests.test_devtest import SETTINGS, Canned
 
-PROGRAMS = ("sbin/tc", "sbin/bridge", "sbin/devlink")
+PROGRAMS = ("sbin/tc", "sbin/bridge", "sbin/devlink", "sbin/dcb", "usr/sbin/ethtool", "usr/bin/ubus")
 
 
 def diag(root: str, programs=PROGRAMS, lib=True, tables=True) -> str:
@@ -115,7 +115,7 @@ class Archive(unittest.TestCase):
     def test_tables_the_build_lacks_are_left_out(self):
         with tempfile.TemporaryDirectory() as root:
             got, _ = self.members(diag(root, tables=False))
-        self.assertFalse([n for n in got if n.startswith("usr/")])
+        self.assertFalse([n for n in got if n.startswith(("usr/lib/", "usr/share/"))])
 
 
 class Ensure(unittest.TestCase):
@@ -197,11 +197,20 @@ class Running(unittest.TestCase):
 
 
 class Declared(unittest.TestCase):
-    """A case that runs tc, bridge or devlink says so, so that a run on the flash's
-    image skips it with a reason rather than failing on a missing program."""
+    """A case that runs a tool the flash's image lacks says so, so that a run on that
+    image skips it with a reason rather than failing on a missing program.
+    ethtool counts for its timestamping query alone: the switch's counts that the
+    data-path cases ask it for are theirs to do without, and the bench's own port
+    settings are the bench's."""
 
-    COMMAND = re.compile(r"(^|[;|&(\s\"])(tc|bridge|devlink) "
-                         r"(filter|qdisc|-s|dev|fdb|link|mdb|-[a-zA-Z]|show|class|chain|monitor)")
+    START = r"(?:^|[;|&(\s\"])"
+    COMMANDS = (
+        re.compile(START + r"(tc|bridge|devlink) "
+                   r"(?:filter|qdisc|-s|dev|fdb|link|mdb|-[a-zA-Z]|show|class|chain|monitor)"),
+        re.compile(START + r"(dcb) (?:rewr|app|ets|pfc|maxrate|buffer|dcbx) "),
+        re.compile(START + r"(ethtool) -T "),
+        re.compile(START + r"(ubus) call "),
+    )
 
     def used(self, path):
         with open(path, encoding="utf-8") as handle:
@@ -212,7 +221,8 @@ class Declared(unittest.TestCase):
             direct[name], calls[name] = set(), set()
             for node in ast.walk(fn):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    direct[name] |= {m.group(2) for m in self.COMMAND.finditer(node.value)}
+                    for rule in self.COMMANDS:
+                        direct[name] |= {m.group(1) for m in rule.finditer(node.value)}
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                         and node.func.id in funcs:
                     calls[name].add(node.func.id)
@@ -236,7 +246,8 @@ class Declared(unittest.TestCase):
         self.assertTrue(by_function)
         for c in CASES:
             self.assertEqual(set(c.tools), by_function[c.id], c.id)
-        self.assertEqual({t for c in CASES for t in c.tools}, {"tc", "bridge", "devlink"})
+        self.assertEqual({t for c in CASES for t in c.tools},
+                         {"tc", "bridge", "devlink", "dcb", "ethtool", "ubus"})
 
     def test_a_declared_tool_is_one_the_tools_can_supply(self):
         for c in CASES:

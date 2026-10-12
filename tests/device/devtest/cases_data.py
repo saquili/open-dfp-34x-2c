@@ -1084,7 +1084,8 @@ REWR_COUNT = 100
 
 @case("data.pcp-rewrite", "Data path",
       "A DCB rewrite entry on pon gives the frames of its priority that it sends the PCP "
-      "of the entry, leaves the PCP of other priorities as it was, and stops with the entry")
+      "of the entry, leaves the PCP of other priorities as it was, and stops with the entry",
+      tools=("dcb",))
 def pcp_rewrite(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -1384,9 +1385,9 @@ def igmp(ctx: Context):
         left = down("data", MC_JOINED)
     finally:
         # Snooping off and on again forgets the case's groups and routers.
-        ctx.stick.run("bridge link set dev sfp fastleave off; "
-                      "ip link set omcibr0 type bridge mcast_snooping 0; "
-                      "ip link set omcibr0 type bridge mcast_snooping 1")
+        snooping = "/sys/class/net/omcibr0/bridge/multicast_snooping"
+        ctx.stick.run(f"bridge link set dev sfp fastleave off; echo 0 > {snooping}; "
+                      f"echo 1 > {snooping}")
     # A timer the reports restarted reads about what it read after the join;
     # one they did not has run down by MC_REFRESH seconds and more.
     every, none = MC_COUNT * 0.99, MC_COUNT * 0.01

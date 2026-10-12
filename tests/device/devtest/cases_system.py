@@ -22,6 +22,8 @@ RESET_MARGIN = 15
 RESET_RETURN = 900
 # Seconds the bench's reload command may take: a RAM boot, with its retries.
 RELOAD_TIMEOUT = 600
+# Seconds past the watchdog's timeout that the stick must have lived to show it fed.
+WATCHDOG_MARGIN = 5
 
 
 def reload_stick(command: str) -> tuple[int, str]:
@@ -110,7 +112,7 @@ def pps_assert(text: str) -> tuple[float, int]:
 
 @case("system.phc", "System",
       "The PTP hardware clock is the ports' timestamping clock, and its pulse comes once a "
-      "second")
+      "second", tools=("ethtool",))
 def phc(ctx: Context):
     info = ctx.stick.text("ethtool -T sfp")
     match = re.search(r"(?:Hardware timestamp provider index|PTP Hardware Clock):\s*(\d+)", info)
@@ -141,27 +143,36 @@ def phc(ctx: Context):
                        f"{pulses} pulses {seconds:.3f} s apart")
 
 
-@case("system.watchdog", "System", "The watchdog runs, and the daemon of the boot feeds it")
+@case("system.watchdog", "System", "The watchdog runs, and procd, the first process, feeds it")
 def watchdog(ctx: Context):
     base = "/sys/class/watchdog/watchdog0"
     identity = ctx.stick.text(f"cat {base}/identity")
     timeout = int(ctx.stick.text(f"cat {base}/timeout"))
     state = ctx.stick.text(f"cat {base}/state")
-    daemon = ctx.stick.run("pidof watchdog").out.strip()
-    return verdict(timeout > 0 and state == "active" and bool(daemon),
-                   f"{identity}, timeout {timeout} s, {state}, "
-                   f"daemon {'pid ' + daemon if daemon else 'not running'}")
+    first = ctx.stick.text("cat /proc/1/comm")
+    held = ctx.stick.run("ls -l /proc/1/fd 2>/dev/null | grep -c /dev/watchdog").out.strip() == "1"
+    # The watchdog has no count to read, so it is shown fed by the stick's age: an armed
+    # watchdog that nobody fed would have reset it after its timeout. A stick younger
+    # than that is waited for.
+    up = float(ctx.stick.text("cut -d' ' -f1 /proc/uptime"))
+    if up <= timeout + WATCHDOG_MARGIN:
+        time.sleep(timeout + WATCHDOG_MARGIN - up)
+        up = float(ctx.stick.text("cut -d' ' -f1 /proc/uptime"))
+    ok = timeout > 0 and state == "active" and first == "procd" and held and up > timeout
+    return verdict(ok, f"{identity}, timeout {timeout} s, {state}; "
+                       f"{first} (pid 1) {'holds' if held else 'does not hold'} /dev/watchdog; "
+                       f"up {up:.0f} s")
 
 
 @case("system.watchdog-reset", "System",
       "An armed watchdog that nobody feeds resets the stick within its timeout",
-      destructive=True, last=True)
+      destructive=True, last=True, tools=("ubus",))
 def watchdog_reset(ctx: Context):
     timeout = int(ctx.stick.text("cat /sys/class/watchdog/watchdog0/timeout"))
     boot = ctx.stick.text("cat /proc/sys/kernel/random/boot_id")
-    # The daemon stops feeding it; writing anything but the magic character
-    # and closing leaves it armed.
-    ctx.stick.run("killall watchdog; sleep 1; echo armed > /dev/watchdog", timeout=20)
+    # procd stops feeding it and lets go of the device without the magic character,
+    # which leaves it armed (procd's "system watchdog" method, with "stop").
+    ctx.stick.run("ubus call system watchdog '{\"stop\": true}'", timeout=20, check=True)
     start = time.monotonic()
     gone = None
     how = ""
