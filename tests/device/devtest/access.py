@@ -40,6 +40,9 @@ class Settings:
     pond_token: str = ""
     ssh_options: tuple[str, ...] = ()
     reload: str = ""
+    # A build's diag directory, which has the tools that a case needs and the
+    # stick lacks (tools.py).
+    tools: str = ""
 
 
 @dataclasses.dataclass
@@ -113,17 +116,22 @@ class Remote:
         self.name = name
         self.ssh = list(ssh)
         self.log = log
+        # Run before each command, not recorded with it: the path to tools
+        # that were put on the stick for the run (tools.py).
+        self.prefix = ""
 
     def run(self, command: str, *, timeout: float = 60.0, check: bool = False,
-            stdin: str | None = None) -> Reply:
-        argv = self.ssh + [command]
+            stdin: str | bytes | None = None) -> Reply:
+        argv = self.ssh + [self.prefix + command]
         start = time.monotonic()
+        binary = isinstance(stdin, bytes)
         try:
-            done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                                  errors="replace", input=stdin,
-                                  stdin=None if stdin is not None else subprocess.DEVNULL)
-            reply = Reply(argv, done.returncode, done.stdout, done.stderr,
-                          time.monotonic() - start)
+            done = subprocess.run(argv, capture_output=True, timeout=timeout, input=stdin,
+                                  stdin=None if stdin is not None else subprocess.DEVNULL,
+                                  **({} if binary else {"text": True, "errors": "replace"}))
+            out, err = (done.stdout, done.stderr) if not binary else (
+                done.stdout.decode(errors="replace"), done.stderr.decode(errors="replace"))
+            reply = Reply(argv, done.returncode, out, err, time.monotonic() - start)
         except subprocess.TimeoutExpired as exc:
             out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else ""
             reply = Reply(argv, 124, out, "timed out", time.monotonic() - start)

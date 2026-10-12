@@ -302,7 +302,7 @@ def tags(seen: dict[str, int]) -> str:
 
 @case("data.vlan-translation", "Data path",
       "A C-VID translation in the switch rewrites the VLAN of frames both ways across the PON "
-      "and keeps their priority")
+      "and keeps their priority", tools=("tc",))
 def vlan_translation(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -338,7 +338,8 @@ PRI_OTHER = 3
 
 
 @case("data.vlan-priority", "Data path",
-      "A translation of one priority rewrites the VLAN of that priority's frames alone")
+      "A translation of one priority rewrites the VLAN of that priority's frames alone",
+      tools=("tc",))
 def vlan_priority(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -457,7 +458,7 @@ def stack_text(seen: dict[str, int]) -> str:
 @case("data.vlan-push-pop", "Data path",
       "The switch pushes a C-tag onto untagged frames upstream and pops it from frames "
       "downstream, and pushes an S-tag in front of a C-tag upstream and pops it "
-      "downstream, with the priorities it is given")
+      "downstream, with the priorities it is given", tools=("tc",))
 def vlan_push_pop(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -645,7 +646,8 @@ def silence_probe(ctx: Context, port: str, vid: int, address: str,
 @case("data.pon-silence", "Data path",
       "The stick keeps IPv6 off its PON side and answers neither ARP for its management "
       "address nor an IPv6 ping of all nodes from the network side, though the questions "
-      "reach its CPU; from the subscriber side, in the management VLAN, it answers both")
+      "reach its CPU; from the subscriber side, in the management VLAN, it answers both",
+      tools=("tc",))
 def pon_silence(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -748,7 +750,7 @@ def acl_round(ctx: Context, gems: list[str],
 @case("data.acl", "Data path",
       "ACL rules on the PON port drop frames from the network side or trap them to the CPU, "
       "the rule of the lower tc priority deciding whichever was added first, and tc counts "
-      "the frames for the rule that decided")
+      "the frames for the rule that decided", tools=("tc",))
 def acl(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -844,7 +846,7 @@ def mirrored(ctx: Context, into: str, dst: str) -> int:
 
 @case("data.mirror", "Data path",
       "A matchall mirror copies to the host side what the PON port receives and what it "
-      "sends, both at once, and nothing once it is removed")
+      "sends, both at once, and nothing once it is removed", tools=("tc",))
 def mirror(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -903,7 +905,7 @@ def within(check, limit: float = FDB_WAIT, pause: float = 0.25):
 
 @case("data.fdb", "Data path",
       "The switch learns each bench port's address behind the port it reaches it by, and a "
-      "static address given to the bridge enters its table and leaves it again")
+      "static address given to the bridge enters its table and leaves it again", tools=("bridge",))
 def fdb(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -937,7 +939,7 @@ FULL_MBIT = 900        # the downstream rate without a shaper is about 984 Mb/s
 
 @case("data.shaper", "Data path",
       "A tbf on the SFP port holds the frames from the network side to its rate in hardware, "
-      "and its removal gives the full rate back")
+      "and its removal gives the full rate back", tools=("tc",))
 def shaper(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -1026,7 +1028,8 @@ def storm_round(ctx: Context) -> int:
 
 @case("data.storm", "Data path",
       "Of several police rules on broadcast the one of the lowest priority value holds the "
-      "class, through a replace of it too, and a drop of broadcast is an ACL rule that drops")
+      "class, through a replace of it too, and a drop of broadcast is an ACL rule that drops",
+      tools=("tc",))
 def storm(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -1174,7 +1177,7 @@ def omci_counts(ctx: Context) -> tuple[int, int]:
 @case("data.cpu-limit", "Data path",
       "A flood to the stick's own address reaches its CPU no faster than cpu_rx_pps says, "
       "leaves the CPU at least half its time and the OMCI messages whole, and goes through "
-      "once the limit is lifted")
+      "once the limit is lifted", tools=("devlink",))
 def cpu_limit(ctx: Context):
     if (skip := needs(ctx)):
         return skip
@@ -1340,7 +1343,8 @@ def group_timer(ctx: Context, group: str) -> float | None:
 
 @case("data.igmp", "Data path",
       "Multicast snooping: from the network side a group a host joined reaches it and one no "
-      "host asked for does not, the link-local groups pass, and every report reaches the network")
+      "host asked for does not, the link-local groups pass, and every report reaches the network",
+      tools=("bridge",))
 def igmp(ctx: Context):
     if (skip := needs(ctx)):
         return skip

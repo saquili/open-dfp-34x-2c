@@ -59,9 +59,18 @@ The suite was last recorded on 2026-10-07 (``docs/testing/``), on an image of
 before procd, netifd, the panel's HTTPS and the store in the partition
 ``config``. Some cases still expect that image, or a tool no image carries:
 
-* The data-path cases that install rules of their own run ``tc``, which the
-  flash's image no longer carries since iproute2 left it (ADR 0014); they need
-  the RAM image (``make ram-image``).
+* The cases that install rules of their own run iproute2's ``tc``, ``bridge``
+  and ``devlink``, which the flash's image no longer carries (ADR 0014); only a
+  RAM image does (``make ram-image``). Each such case names the tools it runs,
+  and a run on the flash's image has them put on the stick for it: ``--tools
+  build/image/diag`` (the directory that ``make image`` sets them aside in)
+  unpacks the three programs, the C library whole and a script for each into a
+  file system of memory of their own, ``/run/devtest-tools``, takes them away
+  at the end of the run and writes nothing to the flash. A case whose tool is
+  not there and was not given is skipped, with what to do. The image under test
+  is then the flash's: a RAM image without the tools of diagnosis,
+  ``make ram-image RAM_DIAG=no``, has its root filesystem, and ``--tools``
+  gives it what the cases need.
 * ``data.pcp-rewrite`` runs ``dcb``, ``net.filter-loaded`` and
   ``net.filter-drops`` run ``nft``, and ``system.phc`` runs ``ethtool``: no
   image carries them, and the kernel has no netfilter.
@@ -82,7 +91,7 @@ From this directory::
 
     python3 -m devtest --bench BENCH --stick ADDRESS \
         --olt-port PORT --subscriber-port PORT \
-        --token-file FILE --out ../../docs/testing/NAME
+        --token-file FILE [--tools ../../build/image/diag] --out ../../docs/testing/NAME
 
 ``--list`` lists the cases; naming cases or areas (``gpon``, ``data.upstream``)
 runs only those. The kernel log is read after the other cases, so that it
@@ -102,7 +111,8 @@ runs the tests as soon as the stick is gone, that brings it back at once, such
 as the bench tool's RAM boot of the image under test, which breaks into the
 countdown (``tools/bench``). The settings can also come from the environment:
 ``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_OLT_PORT``,
-``DEVTEST_SUBSCRIBER_PORT``, ``DEVTEST_TOKEN_FILE`` and ``DEVTEST_RELOAD``.
+``DEVTEST_SUBSCRIBER_PORT``, ``DEVTEST_TOKEN_FILE``, ``DEVTEST_TOOLS`` and
+``DEVTEST_RELOAD``.
 
 What a run records leaves out what names one unit or one bench: MAC addresses,
 GPON serial numbers, the token, and the names of the bench host and the stick

@@ -18,6 +18,7 @@ import traceback
 from typing import Callable
 
 from .access import Remote, RemoteError, Settings, redact
+from .tools import ToolsError, ensure
 
 PASS, FAIL, SKIP = "pass", "fail", "skip"
 
@@ -62,16 +63,20 @@ class Case:
     run: Callable[[Context], Outcome]
     destructive: bool = False
     last: bool = False
+    # Programs of the stick that the case runs and the flash's image lacks
+    # (tools.py): tc, bridge, devlink.
+    tools: tuple[str, ...] = ()
 
 
 CASES: list[Case] = []
 
 
-def case(id: str, area: str, check: str, *, destructive: bool = False, last: bool = False):
+def case(id: str, area: str, check: str, *, destructive: bool = False, last: bool = False,
+         tools: tuple[str, ...] = ()):
     def register(fn: Callable[[Context], Outcome]) -> Callable[[Context], Outcome]:
         if any(c.id == id for c in CASES):
             raise ValueError(f"two cases named {id}")
-        CASES.append(Case(id, area, check, fn, destructive, last))
+        CASES.append(Case(id, area, check, fn, destructive, last, tools))
         return fn
     return register
 
@@ -94,7 +99,14 @@ def run_case(c: Case, ctx: Context) -> Result:
         outcome = skipped("destructive: run with --destructive")
     else:
         try:
-            outcome = c.run(ctx)
+            missing = ensure(ctx, c.tools) if c.tools else []
+            if missing:
+                outcome = skipped(f"{', '.join(missing)} not on the stick: give --tools a build's "
+                                  "diag directory (build/image/diag), or boot a RAM image")
+            else:
+                outcome = c.run(ctx)
+        except ToolsError as exc:
+            outcome = skipped(str(exc))
         except (RemoteError, AssertionError, ValueError, KeyError, IndexError) as exc:
             outcome = failed(f"{type(exc).__name__}: {exc}")
         except Exception:  # a bug in the case itself is a failure too

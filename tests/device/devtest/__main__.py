@@ -13,6 +13,7 @@ import sys
 from . import cases_system, cases_net, cases_pon, cases_data  # noqa: F401
 from .access import Settings, bench_remote, redact, stick_remote
 from .core import CASES, FAIL, Context, run_case, select
+from .tools import TOOLS_DIR, remove
 from .report import as_json, counts, log, page
 
 
@@ -45,6 +46,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="the bench host's port at the far end of the stick's host link")
     parser.add_argument("--token-file", default=os.environ.get("DEVTEST_TOKEN_FILE", ""),
                         help="a file with the status daemon's token")
+    parser.add_argument("--tools", default=os.environ.get("DEVTEST_TOOLS", ""), metavar="DIR",
+                        help="a build's diag directory (build/image/diag): the cases that need "
+                             "tc, bridge or devlink, which the flash's image lacks, have them "
+                             "put on the stick, in memory, for the run (DEVTEST_TOOLS)")
     parser.add_argument("--no-sudo", action="store_true",
                         help="the bench host runs the packet generator without sudo")
     parser.add_argument("--destructive", action="store_true",
@@ -73,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
             token = handle.read().strip()
     settings = Settings(bench=args.bench, stick=args.stick, bench_sudo=not args.no_sudo,
                         olt_port=args.olt_port, subscriber_port=args.subscriber_port,
-                        pond_token=token, reload=args.reload)
+                        pond_token=token, reload=args.reload, tools=args.tools)
     trail: list[str] = []
     ctx = Context(settings, stick_remote(settings, trail), bench_remote(settings, trail), trail,
                   destructive=args.destructive)
@@ -95,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
         result = run_case(c, ctx)
         results.append(result)
         print(f"{result.status.upper():4}  {result.id:24} {result.evidence}", flush=True)
+    if ctx.memo.get("tools"):
+        header["Tools"] = f"tc, bridge and devlink put on the stick in {TOOLS_DIR}, in memory"
+    remove(ctx)
     print(counts(results))
 
     if args.out:
