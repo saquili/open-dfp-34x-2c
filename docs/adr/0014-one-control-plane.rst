@@ -163,6 +163,13 @@ omcid's part of step 6 goes with step 8 (decided 2026-10-10): until pond
 leaves root, nothing reads omcid's state on ubus, and then pond needs what
 it reads of the MIB there too, under ubusd's access lists.
 
+Decided on 2026-10-12, in the clean-up of the debts: the scripts run no ``ip``
+at all. What was left of it, fourteen requests on links (the PON up and
+down, a session's GEM and VLAN interfaces made, taken away and given their
+MTU and MAC address, and the boot script's three), is ``onu-nl link``, as
+the requests ``ip`` makes. BusyBox's ``ip`` stays built in for a person at
+the console, and is the first applet to go when the image is slimmed.
+
 Decided on 2026-10-12, in the clean-up of the debts: the events are not
 sent, and pond reads no file of ``/run``. omcid and dhcp6d run the program
 of ``-x``, ``onu-apply``, when what they publish changes, which is how the

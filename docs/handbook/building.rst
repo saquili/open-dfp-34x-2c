@@ -270,11 +270,12 @@ procd
     ``br2-external/package/procd`` (``docs/adr/0013-procd-is-the-first-process.rst``).
 iproute2
     Built for the RAM image alone (ADR 0014): there ``tc``, ``devlink`` and
-    ``bridge``, and iproute2's ``ip`` as ``ip-full``, so that the scripts run
-    BusyBox's ``ip`` from RAM as they do from the flash. In the flash's image
-    BusyBox's ``ip`` configures the links, their addresses and routes, and
-    ``onu-nl`` the switch's classifier and the PON driver
-    (``br2-external/board/dfp-34x-2c3/post-build.sh``).
+    ``bridge``, and iproute2's ``ip`` as ``ip-full``, so that ``ip`` is
+    BusyBox's from RAM as it is from the flash. No script of the stick runs
+    ``ip``: netifd sets the addresses and routes, and ``onu-nl`` the links,
+    the switch's classifier and the PON driver
+    (``br2-external/board/dfp-34x-2c3/post-build.sh``); BusyBox's ``ip`` is
+    built in for a person at the console.
 The start
     ``/sbin/init``, the first program, mounts ``/proc``, ``/sys``,
     ``/dev/pts`` and tmpfs on ``/tmp`` (2 MiB at most), ``/run`` (4 MiB) and
