@@ -73,6 +73,10 @@ CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_MTD=y
 CONFIG_MTD_BLOCK=y
 CONFIG_MTD_SPI_NOR=y
+# The partitions of the flash, 8 KiB for the environment, are made of 4 KiB sectors;
+# without this the kernel erases 64 KiB blocks and makes them read-only.
+# tools/flash-layout checks this line, and the built kernel for it.
+CONFIG_MTD_SPI_NOR_USE_4K_SECTORS=y
 CONFIG_NETDEVICES=y
 CONFIG_NET_DSA_RTL9602C=y
 CONFIG_RTL9602C_ETH=y
