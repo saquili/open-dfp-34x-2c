@@ -66,3 +66,14 @@ Consequences
 * Dead paths, such as NAPT and the flowtable without netfilter in the
   board's configuration, are either reached and tested or removed before a
   submission.
+
+Decided on 2026-10-12, in the clean-up of the debts: the GEM ports'
+attributes ``IFLA_GEM_{QUEUE,WEIGHT,CIR,PIR}`` stay in the link until the PON
+class is offered. They overlap with an offloaded HTB class of tc (rate, ceil,
+priority, quantum), but the queues belong to the T-CONT, which is no network
+interface, and nothing yet chooses the class of a frame; ``Documentation/
+networking/pon.rst`` says so where the attributes are described. When the
+PON class is offered they move to tc and the attributes go, ``IFLA_GEM_PBITS``
+apart, which is the 802.1p mapper and not a queue discipline. The NAPT and
+flowtable paths stay until the NAT backend can reach and test them, which is
+before a submission, as above.
