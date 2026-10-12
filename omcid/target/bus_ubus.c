@@ -6,9 +6,9 @@
  * the number of instances and the counts of the frames, and "mib" the MIB
  * (src/sys/publish.h), of the classes of its argument "classes", an array of
  * numbers, or of every class, in at most "max" bytes of JSON text, when
- * given; and the event "omcid", with the status, each time the OLT changes
- * what it set up. The answers are written straight into blobmsg, with no
- * text in between. A daemon that finds no ubusd, or loses it, tries again
+ * given. The answers are written straight into blobmsg, with no text in
+ * between. A change the OLT makes is told to the program of -x, which is how
+ * the stick follows it; ubus carries no event of it. A daemon that finds no ubusd, or loses it, tries again
  * every ten seconds.
  */
 
@@ -222,21 +222,9 @@ static void bus_handle(void)
 		ubus_handle_event(g_ctx);
 }
 
-static void bus_changed(void)
-{
-	struct writer w = { .b = &g_buf };
-
-	if (g_ctx == NULL)
-		return;
-	blob_buf_init(&g_buf, 0);
-	omci_publish_status(g_mib, g_counters, &g_ops, &w);
-	ubus_send_event(g_ctx, "omcid", g_buf.head);
-}
-
 const struct omcid_bus omcid_bus_ubus = {
 	.open = bus_open,
 	.fd = bus_fd,
 	.handle = bus_handle,
-	.changed = bus_changed,
 	.close = bus_close,
 };

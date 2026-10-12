@@ -48,7 +48,6 @@ struct omci_ctl_counters;
  *	is not there yet is connected to later by @fd
  * @fd: the descriptor to wait on, or -1 while there is no connection
  * @handle: answer what waits on @fd
- * @changed: tell that the OLT changed what it set up
  * @close: go away
  */
 struct omcid_bus {
@@ -56,7 +55,6 @@ struct omcid_bus {
 		     const struct omci_ctl_counters *counters);
 	int (*fd)(void);
 	void (*handle)(void);
-	void (*changed)(void);
 	void (*close)(void);
 };
 

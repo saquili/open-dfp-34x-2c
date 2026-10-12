@@ -526,8 +526,6 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 		if (omci_engine_changes(eng) != kept) {
 			kept = omci_engine_changes(eng);
 			keep_mib(eng);
-			if (g_bus != NULL)
-				g_bus->changed();
 		}
 	}
 

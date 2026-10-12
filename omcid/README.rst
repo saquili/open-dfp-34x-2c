@@ -159,9 +159,9 @@ given; an instance that does not fit is left out with the rest, and
 ``truncated`` says so. The answers are blobmsg, ubus's own binary form,
 written straight from the MIB with no text in between: a reader that needs
 JSON, such as the panel's, makes it once, at the end. The ONU-G's logical password is never given, only whether one is set
-(``logical_password_set``). Each change the OLT makes sends the event
-``omcid``, with the status. A daemon that finds no ubusd, or loses it, tries
-again every ten seconds, and serves the OLT meanwhile.
+(``logical_password_set``). It sends no event: a change the OLT makes is
+told to the program of ``-x``. A daemon that finds no ubusd, or loses it,
+tries again every ten seconds, and serves the OLT meanwhile.
 
 ``-m FILE`` keeps the MIB in a file, so that a daemon started again goes on
 as the OLT set it up, and the OLT sees no new ONU. The daemon replaces the

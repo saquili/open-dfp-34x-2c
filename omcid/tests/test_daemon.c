@@ -1006,7 +1006,7 @@ static void test_a_kept_file_it_cannot_go_on_from(void)
 }
 
 /* A bus that counts what the loop asks of it, its descriptor a pipe. */
-static unsigned int g_bus_opens, g_bus_handles, g_bus_changes, g_bus_closes;
+static unsigned int g_bus_opens, g_bus_handles, g_bus_closes;
 static const struct omci_mib *g_bus_mib;
 static int g_bus_pipe[2] = { -1, -1 };
 
@@ -1031,11 +1031,6 @@ static void fake_handle(void)
 	g_bus_handles++;
 }
 
-static void fake_changed(void)
-{
-	g_bus_changes++;
-}
-
 static void fake_close(void)
 {
 	g_bus_closes++;
@@ -1045,7 +1040,6 @@ static const struct omcid_bus g_fake_bus = {
 	.open = fake_open,
 	.fd = fake_fd,
 	.handle = fake_handle,
-	.changed = fake_changed,
 	.close = fake_close,
 };
 
@@ -1059,7 +1053,7 @@ static void test_the_bus_is_served_in_the_loop(void)
 	CHECK_EQ(write(g_bus_pipe[1], "x", 1), 1);
 	omcid_bus_set(&g_fake_bus);
 
-	/* A Set changes what the OLT set up, a Get does not. */
+	/* The loop serves the bus between the frames, and closes it at the end. */
 	mds_set(frame, 5);
 	CHECK_EQ(write(g.in_w, frame, OMCI_FRAME_LEN), (ssize_t)OMCI_FRAME_LEN);
 	get_frame(frame, 0x53, 2, 0, 0x8000);
@@ -1069,7 +1063,6 @@ static void test_the_bus_is_served_in_the_loop(void)
 	CHECK_EQ(g_bus_opens, 1u);
 	CHECK(g_bus_mib != NULL);
 	CHECK_EQ(g_bus_handles, 1u);
-	CHECK_EQ(g_bus_changes, 1u);
 	CHECK_EQ(g_bus_closes, 1u);
 
 	omcid_bus_set(NULL);
