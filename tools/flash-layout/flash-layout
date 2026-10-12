@@ -1,0 +1,206 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""flash-layout: the flash is erased in 4 KiB sectors, and the layout is built on them.
+
+Usage: flash-layout [--sector BYTES] [--dts FILE] [--kernel-config FILE]
+
+The partitions of the board's flash start and end on its sectors, and the
+kernel erases the chip in 4 KiB ones only if CONFIG_MTD_SPI_NOR_USE_4K_SECTORS
+is set. Without it the kernel erases in larger blocks and makes every partition
+that is not made of whole blocks read-only: the two copies of the boot loader's
+environment, 8 KiB each, and with them the configuration store and the bank
+switch. Nothing says so until the first save fails on the board.
+
+This checks, without a board:
+
+* in the device tree (default: the board's, in linux/), every partition of the
+  node "fixed-partitions": it has a label, its offset and its size are
+  multiples of the sector, its unit address is its offset, and it does not
+  overlap the one before;
+* in a kernel configuration (--kernel-config, the .config of a built kernel),
+  that the flash driver is built in and uses 4 KiB sectors.
+
+Exit status: 0 when all is as it should be, 1 on a finding, 2 when a file
+cannot be read or the device tree has no partitions.
+"""
+
+import argparse
+import os
+import re
+import sys
+
+TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+DEFAULT_DTS = os.path.join(TOP, "linux", "arch", "mips", "boot", "dts", "realtek",
+                           "dfp-34x-2c3.dts")
+SECTOR = 4096
+KERNEL_OPTIONS = ("CONFIG_MTD_SPI_NOR", "CONFIG_MTD_SPI_NOR_USE_4K_SECTORS")
+
+
+class Problem(Exception):
+    """Something that stops the check: a file that cannot be read, no partitions."""
+
+
+def strip_comments(text):
+    """The device tree without its comments, which may hold braces."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"//[^\n]*", " ", text)
+
+
+def block_end(text, start):
+    """The index just past the brace that closes the one at text[start]."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    raise Problem("a brace is never closed")
+
+
+def number(word):
+    return int(word, 16) if word.lower().startswith("0x") else int(word)
+
+
+def parse_partitions(text):
+    """The partitions of the node "fixed-partitions": dicts, in the file's order."""
+    text = strip_comments(text)
+    match = re.search(r'compatible\s*=\s*"fixed-partitions"', text)
+    if not match:
+        raise Problem("no node with compatible = \"fixed-partitions\"")
+    start = text.rfind("{", 0, match.start())
+    if start < 0:
+        raise Problem("the fixed-partitions node has no opening brace")
+    body = text[start:block_end(text, start)]
+    parts = []
+    for node in re.finditer(r"([A-Za-z0-9_,.+-]+)@([0-9a-fA-F]+)\s*\{", body):
+        end = block_end(body, node.end() - 1)
+        inner = body[node.end():end - 1]
+        label = re.search(r'label\s*=\s*"([^"]*)"', inner)
+        reg = re.search(r"reg\s*=\s*<\s*(\S+)\s+(\S+)\s*>", inner)
+        parts.append({
+            "node": node.group(0).rstrip("{ \t\n"),
+            "unit": int(node.group(2), 16),
+            "label": label.group(1) if label else None,
+            "offset": number(reg.group(1)) if reg else None,
+            "size": number(reg.group(2)) if reg else None,
+            "read_only": bool(re.search(r"\bread-only\s*;", inner)),
+        })
+    if not parts:
+        raise Problem("the fixed-partitions node has no partitions")
+    return parts
+
+
+def check_partitions(parts, sector):
+    """The findings about a list of partitions, as sentences."""
+    found = []
+    labels = {}
+    previous = None
+    for part in sorted((p for p in parts if p["offset"] is not None),
+                       key=lambda p: p["offset"]):
+        name = part["label"] or part["node"]
+        if previous is not None and part["offset"] < previous["offset"] + previous["size"]:
+            found.append("%s overlaps %s" % (name, previous["label"] or previous["node"]))
+        previous = part
+    for part in parts:
+        name = part["label"] or part["node"]
+        if part["label"] is None:
+            found.append("%s has no label" % part["node"])
+        elif part["label"] in labels:
+            found.append("the label %s is used twice" % part["label"])
+        labels[part["label"]] = True
+        if part["offset"] is None or part["size"] is None:
+            found.append("%s has no reg of an offset and a size" % name)
+            continue
+        if part["size"] == 0:
+            found.append("%s is empty" % name)
+        if part["unit"] != part["offset"]:
+            found.append("%s has the unit address %#x but starts at %#x"
+                         % (name, part["unit"], part["offset"]))
+        if part["offset"] % sector:
+            found.append("%s starts at %#x, which is not a multiple of %d"
+                         % (name, part["offset"], sector))
+        if part["size"] % sector:
+            found.append("%s is %#x long, which is not a multiple of %d"
+                         % (name, part["size"], sector))
+    return found
+
+
+def parse_kernel_config(text):
+    """The options of a kernel .config: name -> value; unset options are absent."""
+    options = {}
+    for line in text.splitlines():
+        match = re.match(r"(CONFIG_[A-Za-z0-9_]+)=(.*)$", line.strip())
+        if match:
+            options[match.group(1)] = match.group(2)
+    return options
+
+
+def check_kernel_config(options):
+    """The findings about a kernel configuration, as sentences."""
+    found = []
+    if options.get(KERNEL_OPTIONS[0]) != "y":
+        found.append("%s is not set to y: the flash driver is not built in" % KERNEL_OPTIONS[0])
+    if options.get(KERNEL_OPTIONS[1]) != "y":
+        found.append("%s is not set to y: the kernel erases in larger blocks and makes the "
+                     "partitions that are not whole blocks read-only" % KERNEL_OPTIONS[1])
+    return found
+
+
+def read(path, what):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as exc:
+        raise Problem("cannot read %s, %s: %s" % (what, path, exc.strerror)) from exc
+
+
+def run(dts, kernel_config, sector, out, err):
+    """Make the checks; return the exit status."""
+    try:
+        parts = parse_partitions(read(dts, "the device tree"))
+        options = parse_kernel_config(read(kernel_config, "the kernel configuration")) \
+            if kernel_config else None
+    except Problem as problem:
+        print("flash-layout: %s" % problem, file=err)
+        return 2
+    for part in parts:
+        print("%-8s %#08x %#08x%s" % (part["label"], part["offset"] or 0, part["size"] or 0,
+                                       "  read-only" if part["read_only"] else ""), file=out)
+    found = check_partitions(parts, sector)
+    if options is not None:
+        found += check_kernel_config(options)
+    for line in found:
+        print("flash-layout: %s" % line, file=err)
+    if found:
+        return 1
+    print("flash-layout: %d partitions on %d-byte sectors%s" % (
+        len(parts), sector, ", and the kernel uses 4 KiB sectors" if options is not None else ""),
+        file=out)
+    return 0
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(
+        prog="flash-layout", description="Check the flash layout against the sector size.",
+        epilog="Exit status: 0 ok; 1 a finding; 2 a file that cannot be read, or no partitions.")
+    parser.add_argument("--dts", default=DEFAULT_DTS, metavar="FILE",
+                        help="the device tree (default: the board's)")
+    parser.add_argument("--kernel-config", metavar="FILE",
+                        help="the .config of a built kernel, to check the flash driver too")
+    parser.add_argument("--sector", type=int, default=SECTOR, metavar="BYTES",
+                        help="the erase sector (default: %d)" % SECTOR)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return 2 if exc.code else 0
+    if args.sector <= 0:
+        print("flash-layout: the sector must be positive", file=sys.stderr)
+        return 2
+    return run(args.dts, args.kernel_config, args.sector, sys.stdout, sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

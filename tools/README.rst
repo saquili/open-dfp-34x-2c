@@ -20,6 +20,9 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
 * ``kernel-series/`` -- what the kernel series changes in the kernel's own
   files, the check that the handbook page explains each, and the export of the
   networking-core patches.
+* ``flash-layout/`` -- the check that the flash's partitions and the kernel agree on
+  the 4 KiB erase sector, without which the environment and the store would be
+  read-only.
 * ``image-budget/`` -- the size check of the two flash images against their
   partitions.
 * ``lib-trim/`` -- the cut of the image's shared libraries to what its programs
