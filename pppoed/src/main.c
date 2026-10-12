@@ -249,6 +249,23 @@ static int give_up(const char *netifd)
 	return 1;
 }
 
+/*
+ * Tell netifd that the link is up. netifd may be reconnecting to a ubusd that
+ * started again and has not published its interfaces yet, so the message is
+ * sent again for a few seconds before it is given up.
+ */
+#define TELL_TRIES 10
+
+static int tell_netifd(const char *netifd, const char *json)
+{
+	for (int i = 0; i < TELL_TRIES && !pppoed_stop; i++) {
+		if (!nproto_send(netifd, json))
+			return 0;
+		sleep(1);
+	}
+	return -EIO;
+}
+
 static int cmd_up(int argc, char **argv)
 {
 	const char *ifname = NULL, *service = "", *credfile = NULL;
@@ -470,8 +487,20 @@ static int cmd_up(int argc, char **argv)
 			char json[1024];
 
 			if (nproto_up_json(json, sizeof(json), &nl) < 0 ||
-			    nproto_send(netifd, json))
-				PPPOED_WARN("netifd was not told that %s is up", l.ifname);
+			    tell_netifd(netifd, json)) {
+				/*
+				 * A link that netifd does not know is up stays
+				 * pending for ever: end it, and netifd opens another.
+				 */
+				PPPOED_ERR("netifd was not told that %s is up: the session ends",
+					   l.ifname);
+				ppp_terminate(&l);
+				ppp_close(&l);
+				pppoe_terminate(fd, &s);
+				close(fd);
+				facts_clear(facts);
+				return give_up(netifd);
+			}
 		}
 	}
 
