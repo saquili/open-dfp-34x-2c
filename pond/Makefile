@@ -94,8 +94,13 @@ $(BUILD)/onu-config: $(ONU_CONFIG_SRC) $(wildcard $(ONU_UTILS)/src/*.h)
 check: $(BUILD)/pond-none $(BUILD)/test_prov $(BUILD)/test_auth $(BUILD)/test_cert $(BUILD)/onu-config
 	rm -rf $(BUILD)/fixtures && cp -R tests/fixtures $(BUILD)/fixtures
 	python3 tests/make-env.py $(BUILD)/fixtures
+	# What came of the settings is onu-apply's to say (onu-apply state), who
+	# asks onu-change about the changes on trial: the tests run both.
+	mkdir -p $(BUILD)/fixtures/usr/lib/onu
+	ln -s $(abspath $(ONU_UTILS))/scripts/onu-change $(BUILD)/fixtures/usr/lib/onu/onu-change
 	POND_ROOT=$(abspath $(BUILD))/fixtures ONU_ROOT=$(abspath $(BUILD))/fixtures \
 		POND_ONU_CONFIG=$(abspath $(BUILD))/onu-config \
+		POND_REAL_ONU_APPLY=$(abspath $(ONU_UTILS))/scripts/onu-apply \
 		$(BUILD)/test_prov
 	rm -rf $(BUILD)/auth && mkdir -p $(BUILD)/auth
 	POND_ROOT=$(abspath $(BUILD))/auth ONU_ROOT=$(abspath $(BUILD))/auth \

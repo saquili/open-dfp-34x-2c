@@ -1522,12 +1522,14 @@ static const char *settled(char *buf, size_t cap)
  * the tests see a change that is still being applied.
  */
 /*
- * onu-apply's stand-in: "try" puts the change onu-config change left in
+ * onu-apply's stand-in: "state" is the real onu-apply's, which reads the
+ * files of the scratch root; "try" puts the change onu-config change left in
  * /run/onu-pending in force first, as onu-apply does, then says it ran and
  * waits for the test's release.
  */
 static const char apply_stub[] =
 	"#!/bin/sh\n"
+	"[ \"$1\" = state ] && exec \"$POND_REAL_ONU_APPLY\" state\n"
 	"P=$POND_ROOT/run/onu-pending\n"
 	"if [ \"$1\" = try ] && [ -d \"$P\" ]; then\n"
 	"\tfor f in \"$P\"/onu-pppoe*; do\n"

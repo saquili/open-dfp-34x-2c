@@ -7,7 +7,7 @@
 			"changes_confirm", "changes_revert",
 			"system_store", "hostname",
 			"identity_store", "identity_current", "reidentify",
-			"settings_current", "settings_change", "settings_try",
+			"settings_current", "settings_state", "settings_change", "settings_try",
 			"password_check", "password_state", "password_set",
 			"update_status", "update_write", "update_read", "update_try",
 			"restart"

@@ -182,12 +182,14 @@ wrong sign-in, 429 while sign-ins are stopped.
   and what was brought up for it: its link, its address and name servers
   from its interface of netifd (``network.interface.sesN`` on ubus), the
   delegated IPv6 prefix and the host it went to from its dhcp6d
-  (``dhcp6d.sesN``), and from ``/run/session/N`` what onu-apply keeps of it
-  (the interfaces, what it hands down, the gateway the router is given), the address handed on, and what became of the
-  settings in the store (``store``: ``loaded``, ``defaults``, ``saved``,
-  ``failed`` or ``none``), and each change on trial, of the settings, the SFP
-  lane or the management pair, with when it goes back and the pair's new
-  address (``trials``).
+  (``dhcp6d.sesN``), and from ``onu-apply state``, which onu-act runs for
+  pond (``settings_state``), what onu-apply keeps of it (the interfaces,
+  what it hands down, the gateway the router is given), the address handed
+  on, and what became of the settings in the store (``store``: ``loaded``,
+  ``defaults``, ``saved``, ``failed`` or ``none``), and each change on trial,
+  of the settings, the SFP lane or the management pair, with when it goes
+  back and the pair's new address (``trials``). pond reads no file of
+  ``/run`` for it.
 * ``changes``: ``CONFIRM=1`` keeps every change on trial (``onu-change``),
   a new management pair only from a request that came to its new address,
   and ``REVERT=1`` takes them all back; pond then listens on the management

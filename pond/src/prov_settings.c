@@ -7,17 +7,18 @@
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
  * only. What the settings mean, their defaults and the rules that bind them
  * together, is onu-config's (ADR 0014), and so are the files: pond reads
- * neither, and has onu-act run onu-config for it (bus.h).
+ * neither, and has onu-act run onu-config for it (bus.h). What came of them
+ * is onu-apply's, and pond reads no file of it either: "onu-apply state"
+ * gives it as lines "name=value" (settings_state).
  *
  * A read gives the settings as "onu-config current" gives them, each session
  * with its user and whether a secret is set (never the secret), and what
- * onu-apply and dhcp6d brought up for it (/run/session/N), what it hands
- * down among it, the address handed on, and what became of the settings in
- * the configuration store, which onu-config records in /run/onu-store:
- * "loaded" at boot, "defaults" when the store held none, "saved" or
+ * onu-apply and dhcp6d brought up for it, what it hands down among it, the
+ * address handed on, and what became of the settings in the configuration
+ * store: "loaded" at boot, "defaults" when the store held none, "saved" or
  * "failed" after a change, "none" without a store, and the changes on
  * trial, of the settings, the SFP lane or the management pair, with when
- * each goes back (/run/onu-trial.d). A write takes KEY=value lines, has
+ * each goes back. A write takes KEY=value lines, has
  * "onu-config change" judge them over the settings in force and write
  * them, and starts "onu-apply try" without waiting for it: the change is on
  * trial, and goes back unless it is confirmed (ADR 0014, changes.c). Until
@@ -37,7 +38,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SESSION_DIR "/run/session"
 #define SESSIONS 7
 #define TEXT_MAX 8192
 #define VALUE_MAX 64
@@ -143,22 +143,21 @@ static const char *line_value(const char *text, const char *key, char *out,
 			      size_t cap);
 
 /*
- * The changes on trial, each a file of /run/onu-trial.d named for it, with
- * when it goes back, in seconds of the uptime, and the new address the
- * management pair's may be confirmed from alone.
+ * The changes on trial of the state @st (trial.NAME), each with when it
+ * goes back, in seconds of the uptime, and the new address the management
+ * pair's may be confirmed from alone (trial.mgmt.address).
  */
-static void pv_trials(struct prov_buf *out)
+static void pv_trials(struct prov_buf *out, const char *st)
 {
 	static const char *const names[] = { "settings", "lane", "mgmt" };
 	bool first = true;
 
 	pv_open(out, '[');
 	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-		char path[64], text[512], v[32];
+		char key[32], v[32];
 
-		snprintf(path, sizeof(path), "/run/onu-trial.d/%s", names[i]);
-		if (prov_slurp(path, text, sizeof(text), NULL) ||
-		    !line_value(text, "UNTIL", v, sizeof(v)))
+		snprintf(key, sizeof(key), "trial.%s", names[i]);
+		if (!line_value(st, key, v, sizeof(v)))
 			continue;
 		if (!first)
 			pv_comma(out);
@@ -169,7 +168,8 @@ static void pv_trials(struct prov_buf *out)
 		pv_comma(out);
 		pv_key(out, "until_s");
 		pv_num(out, strtol(v, NULL, 10));
-		if (!strcmp(names[i], "mgmt") && line_value(text, "ADDRESS", v, sizeof(v))) {
+		snprintf(key, sizeof(key), "trial.%s.address", names[i]);
+		if (!strcmp(names[i], "mgmt") && line_value(st, key, v, sizeof(v))) {
 			pv_comma(out);
 			pv_key(out, "address");
 			pv_str(out, v);
@@ -179,16 +179,25 @@ static void pv_trials(struct prov_buf *out)
 	pv_close(out, ']');
 }
 
-/* A fact of session @n that onu-apply wrote, as a string or null. */
-static void pv_session_fact(struct prov_buf *out, int n, const char *fact)
+/* The fact @key of the state @st, as a string or null. */
+static void pv_fact(struct prov_buf *out, const char *st, const char *key)
 {
-	char path[64], line[128];
+	char line[128];
 
-	snprintf(path, sizeof(path), "%s/%d/%s", SESSION_DIR, n + 1, fact);
-	if (!prov_read_line(path, line, sizeof(line)))
+	if (line_value(st, key, line, sizeof(line)))
 		pv_str(out, line);
 	else
 		pv_null(out);
+}
+
+/* A fact of session @n that onu-apply says, as a string or null. */
+static void pv_session_fact(struct prov_buf *out, const char *st, int n,
+			    const char *fact)
+{
+	char key[48];
+
+	snprintf(key, sizeof(key), "session.%d.%s", n + 1, fact);
+	pv_fact(out, st, key);
 }
 
 /* @value as a string, or null when empty. */
@@ -200,14 +209,14 @@ static void pv_str_or_null(struct prov_buf *out, const char *value)
 		pv_null(out);
 }
 
-/* Whether session @n hands @fam down, as onu-apply wrote it. */
-static bool hands(int n, const char *fam)
+/* Whether session @n hands @fam down, as onu-apply says in @st. */
+static bool hands(const char *st, int n, const char *fam)
 {
-	char path[64], line[64];
+	char key[48], line[64];
 	size_t len = strlen(fam);
 
-	snprintf(path, sizeof(path), "%s/%d/hands", SESSION_DIR, n + 1);
-	if (prov_read_line(path, line, sizeof(line)))
+	snprintf(key, sizeof(key), "session.%d.hands", n + 1);
+	if (!line_value(st, key, line, sizeof(line)))
 		return false;
 	for (const char *p = line; (p = strstr(p, fam)); p += len)
 		if ((p == line || p[-1] == ' ') && (!p[len] || p[len] == ' '))
@@ -217,10 +226,11 @@ static bool hands(int n, const char *fam)
 
 /*
  * Each session with an account: its user, whether a secret is set, its
- * settings of @text (SESSIONn_<KEY> as "key"), and what onu-apply brought up.
+ * settings of @text (SESSIONn_<KEY> as "key"), and what onu-apply brought up,
+ * which it says in @st.
  */
 static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS],
-			const char *text)
+			const char *text, const char *st)
 {
 	static const char *const ses_paths[] = { "l3_device", "data.address", "dns-server" };
 	static const char *const pd_paths[] = { "prefix", "host" };
@@ -269,13 +279,13 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		}
 		pv_comma(out);
 		pv_key(out, "hands_on");
-		pv_bool(out, hands(n, "ipv4"));
+		pv_bool(out, hands(st, n, "ipv4"));
 		pv_comma(out);
 		pv_key(out, "dev");
-		pv_session_fact(out, n, "dev");
+		pv_session_fact(out, st, n, "dev");
 		pv_comma(out);
 		pv_key(out, "gem_dev");
-		pv_session_fact(out, n, "gem");
+		pv_session_fact(out, st, n, "gem");
 		/*
 		 * What the session brought, its interface of netifd's (sesN):
 		 * its link, its address, handed on or not, and its name servers;
@@ -293,7 +303,7 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		pv_str_or_null(out, ses[1]);
 		pv_comma(out);
 		pv_key(out, "ipv6");
-		pv_session_fact(out, n, "ipv6");
+		pv_session_fact(out, st, n, "ipv6");
 		pv_comma(out);
 		pv_key(out, "prefix");
 		pv_str_or_null(out, pd[0]);
@@ -303,10 +313,10 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		/* Where it hands down, and the gateway the router is given there. */
 		pv_comma(out);
 		pv_key(out, "lan");
-		pv_session_fact(out, n, "lan");
+		pv_session_fact(out, st, n, "lan");
 		pv_comma(out);
 		pv_key(out, "gateway");
-		pv_session_fact(out, n, "gateway");
+		pv_session_fact(out, st, n, "gateway");
 		pv_comma(out);
 		pv_key(out, "dns");
 		pv_str_or_null(out, ses[2]);
@@ -315,10 +325,21 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 	pv_close(out, ']');
 }
 
+/*
+ * What the data path came to, as onu-apply says it (onu-apply state): lines
+ * "name=value", of which a fact that is not there has none. Without an
+ * answer the page shows the settings and no state.
+ */
+static void state_of(char *out, size_t cap)
+{
+	if (bus_act("settings_state", NULL, NULL, 0, NULL, out, cap))
+		out[0] = '\0';
+}
+
 int prov_settings(struct prov_buf *out)
 {
 	struct account acct[SESSIONS];
-	char text[TEXT_MAX], line[128];
+	char text[TEXT_MAX], st[TEXT_MAX], line[128];
 	bool first = true;
 	int rc;
 
@@ -327,6 +348,7 @@ int prov_settings(struct prov_buf *out)
 	if (rc)
 		return rc;
 	accounts_of(text, acct);
+	state_of(st, sizeof(st));
 
 	pv_open(out, '{');
 	pv_key(out, "settings");
@@ -353,45 +375,31 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 
 	pv_key(out, "sessions");
-	pv_sessions(out, acct, text);
+	pv_sessions(out, acct, text, st);
 	pv_comma(out);
 	explicit_bzero(acct, sizeof(acct));
 
 	pv_key(out, "mode");
-	if (!prov_read_line("/run/onu-mode", line, sizeof(line)))
-		pv_str(out, line);
-	else
-		pv_null(out);
+	pv_fact(out, st, "mode");
 	pv_comma(out);
 
 	pv_key(out, "dns");
-	if (!prov_read_line("/run/onu-dns", line, sizeof(line)))
-		pv_str(out, line);
-	else
-		pv_null(out);
+	pv_fact(out, st, "dns");
 	pv_comma(out);
 
 	/* The address a session handed to the router, and where. */
 	pv_key(out, "pass");
-	if (!prov_read_line("/run/onu-pass", line, sizeof(line))) {
-		char lan[32];
-
+	if (line_value(st, "pass.address", line, sizeof(line))) {
 		pv_open(out, '{');
 		pv_key(out, "address");
 		pv_str(out, line);
 		pv_comma(out);
 		pv_key(out, "lan");
-		if (!prov_read_line("/run/onu-lan", lan, sizeof(lan)))
-			pv_str(out, lan);
-		else
-			pv_null(out);
+		pv_fact(out, st, "pass.lan");
 		/* The concentrator's address, when it is the router's gateway. */
 		pv_comma(out);
 		pv_key(out, "peer_gateway");
-		if (!prov_read_line("/run/onu-pass-proxy", lan, sizeof(lan)))
-			pv_str(out, lan);
-		else
-			pv_null(out);
+		pv_fact(out, st, "pass.peer_gateway");
 		pv_close(out, '}');
 	} else {
 		pv_null(out);
@@ -399,14 +407,11 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 
 	pv_key(out, "store");
-	if (!prov_read_line("/run/onu-store", line, sizeof(line)))
-		pv_str(out, line);
-	else
-		pv_null(out);
+	pv_fact(out, st, "store");
 	pv_comma(out);
 
 	pv_key(out, "trials");
-	pv_trials(out);
+	pv_trials(out, st);
 	pv_comma(out);
 
 	pv_key(out, "applying");
