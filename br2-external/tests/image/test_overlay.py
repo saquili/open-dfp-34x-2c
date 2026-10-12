@@ -30,7 +30,7 @@ ONU_APPLY = os.path.join(REPO, "onu-utils", "scripts", "onu-apply")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
-SYMBOL = {"hostname": "HOSTNAME", "ip": "IP"}
+SYMBOL = {"hostname": "HOSTNAME"}
 
 
 def read(path):
@@ -72,7 +72,7 @@ class BootScript(unittest.TestCase):
     def test_the_programs_it_needs_are_the_ones_it_calls(self):
         # If a script stops calling one of these, the list of what the image
         # needs is out of date: take the applet out of the configuration.
-        for script, words in ((RCS, ("hostname", "ip", "sed", "uname")),
+        for script, words in ((RCS, ("hostname", "sed", "uname")),
                               (INIT, ("mount", "mkdir", "ln", "grep"))):
             called = set(commands(read(script)))
             for word in words:
@@ -298,6 +298,15 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertNotIn("ip address add", text)
         self.assertNotIn("ip link add", text)
 
+    def test_the_links_are_onu_nls(self):
+        # The stick runs no ip: onu-nl makes the requests, so that the image
+        # needs none of BusyBox's applet for its own scripts.
+        text = read(RCS)
+        self.assertIsNone(re.search(r"^\s*ip\s", text, re.M))
+        for dev in ("lo", "cpu", "sfp"):
+            with self.subTest(dev=dev):
+                self.assertIn(f"onu-nl link set {dev} up", text)
+
 
 class QuietTowardsThePon(unittest.TestCase):
     """Nothing of the stick's own leaves by the PON, and nothing from it is answered."""
@@ -334,7 +343,7 @@ class QuietTowardsThePon(unittest.TestCase):
         text = read(RCS)
         self.assertIn("echo 1 >/proc/sys/net/ipv4/conf/all/arp_ignore", text)
         self.assertIn("echo 2 >/proc/sys/net/ipv4/conf/all/arp_announce", text)
-        self.assertLess(text.index("arp_ignore"), text.index("ip link set sfp up"))
+        self.assertLess(text.index("arp_ignore"), text.index("onu-nl link set sfp up"))
 
 
 class Inittab(unittest.TestCase):

@@ -43,10 +43,11 @@ else
 fi
 
 # The package installs every program of iproute2, and the stick runs none of
-# them: BusyBox's ip does what the boot script and the scripts of onu-utils ask
-# of ip, and onu-nl what they asked of tc and devlink (ADR 0014, step 9g). The
-# RAM image carries ip, tc, devlink and bridge for diagnosis, below; the others
-# would add some 3 MB, unpacked, to it.
+# them: onu-nl does what the boot script and the scripts of onu-utils ask of
+# ip, tc and devlink (ADR 0014, step 9g); BusyBox's ip stays built in for a
+# person at the console, and no script runs it. The RAM image carries ip, tc,
+# devlink and bridge for diagnosis, below; the others would add some 3 MB,
+# unpacked, to it.
 for prog in ctstat dcb genl ifstat lnstat nstat rdma routel rtacct rtmon rtstat ss tipc vdpa; do
 	rm -f "$1/sbin/$prog"
 done
@@ -77,8 +78,8 @@ for prog in usr/bin/omcitap usr/bin/omcivlan usr/bin/ubus usr/sbin/flashcp \
 done
 
 # iproute2's ip stands where BusyBox's would. It goes to the RAM image as
-# ip-full, so that the scripts run BusyBox's ip there, as from the flash, and
-# /sbin/ip becomes BusyBox's again. A second run finds BusyBox's link.
+# ip-full, so that /sbin/ip is BusyBox's there, as from the flash, and
+# becomes BusyBox's again. A second run finds BusyBox's link.
 if [ -f "$1/sbin/ip" ] && [ ! -L "$1/sbin/ip" ]; then
 	if [ -n "$diag" ]; then
 		mkdir -p "$diag/usr/sbin"

@@ -140,9 +140,9 @@ onu-lane apply || warn "the stored setting of the SFP lane was refused"
 # switch, cpu, which carries every port's traffic, the PON's too, is up before
 # netifd starts: netifd brings a port's parent up with the port, and takes
 # down only what it brought up.
-ip link set lo up
-ip link set cpu up || warn "the switch's conduit does not come up"
-ip link set sfp up || warn "no interface sfp"
+onu-nl link set lo up
+onu-nl link set cpu up || warn "the switch's conduit does not come up"
+onu-nl link set sfp up || warn "no interface sfp"
 
 # The management VLAN and its address, and the address on sfp itself. netifd
 # brings them up, from the part "mgmt" of its configuration in /run/config,
