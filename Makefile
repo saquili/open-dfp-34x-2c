@@ -193,6 +193,8 @@ check:
 	tools/kernel-series/kernel-series check
 	tools/flash-layout/tests/run
 	tools/flash-layout/flash-layout >/dev/null
+	tools/run-files/tests/run
+	tools/run-files/run-files
 	tools/image-budget/tests/run
 	tools/docs/tests/run
 	tools/docs/render --check --if-available
