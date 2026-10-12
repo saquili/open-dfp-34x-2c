@@ -20,7 +20,9 @@
  * the settings of the data path with the accounts, which the status daemon
  * sees without their secrets (onu-config current) and changes on trial
  * (onu-config change, then onu-apply try), and what became of them (onu-apply
- * state: the mode, the sessions' facts, the changes on trial), root's password, which it
+ * state: the mode, the sessions' facts, the changes on trial), the changes
+ * that omcid and dhcp6d tell of (onu-call, each its own method: "omcid" and
+ * "dhcp6d" follow what changed, as onu-apply does), root's password, which it
  * checks and replaces without holding its hash, and an update file, which
  * streams from it into the bank that does not run (onu-update write -) or
  * from the running bank to it (onu-update read) through a pipe it passes.
@@ -61,6 +63,10 @@ const struct act_method act_methods[] = {
 	{ .name = "settings_state", .program = "/usr/sbin/onu-apply", .fixed = { "state" } },
 	{ .name = "settings_try", .program = "/usr/sbin/onu-apply", .fixed = { "try" },
 	  .timeout_s = 120 },
+	{ .name = "omcid", .program = "/usr/sbin/onu-apply", .fixed = { "omcid" },
+	  .background = true },
+	{ .name = "dhcp6d", .program = "/usr/sbin/onu-apply", .fixed = { "dhcp6d" },
+	  .background = true },
 	{ .name = "password_check", .program = "/usr/sbin/onu-config",
 	  .fixed = { "password-check" }, .input = true },
 	{ .name = "password_state", .program = "/usr/sbin/onu-config",

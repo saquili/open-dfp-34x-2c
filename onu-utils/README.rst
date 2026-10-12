@@ -459,6 +459,19 @@ them finds it there, and names it by its whole path where procd starts it.
    the program's own ``/proc/self/status``; it needs root and the account
    ``nobody``, and says that it skipped without them.
 
+``onu-call``
+   asks ``onu-act`` for a method, from an account that runs no program of the
+   stick as root::
+
+      onu-call METHOD
+
+   It prints what the method's program wrote and exits with its status; a
+   method run in the background answers at once with 0. The programs that tell
+   ``onu-apply`` of a change they publish run it with ``-x``, and it gets their
+   name as the method (``omcid``, ``dhcp6d``): each is the method that runs
+   ``onu-apply`` for that name, and ubusd's list lets each program call its own
+   and no other (``tests/test_acl.py`` reads the lists).
+
 ``onu-run``
    starts a service of the stick in the foreground, as procd wants it, from
    the state the scripts keep: the ssh server and ``pond``, on the

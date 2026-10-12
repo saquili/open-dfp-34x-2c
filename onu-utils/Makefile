@@ -21,7 +21,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 .PHONY: all check clean
 
 all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc \
-	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop
+	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop $(BUILD)/onu-call
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -61,6 +61,10 @@ $(BUILD)/test_password: $(BUILD)/tests/test_password.o $(BUILD)/src/password.o \
 $(BUILD)/onu-update: $(BUILD)/src/onu-update.o $(BUILD)/src/bootenv.o \
 		     $(BUILD)/src/update.o $(BUILD)/src/sha256.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lz
+
+# onu-call asks onu-act for a method over ubus: libubus and libubox.
+$(BUILD)/onu-call: $(BUILD)/src/onu-call.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lubus -lubox
 
 # onu-drop starts a program as an account of its own, with the powers it needs.
 $(BUILD)/onu-drop: $(BUILD)/src/onu-drop.o
@@ -126,6 +130,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_drop.sh
+	python3 -I tests/test_acl.py $(abspath ..)
 	sh tests/test_onu_trial.sh
 	sh tests/test_onu_lane.sh
 	sh tests/test_onu_change.sh

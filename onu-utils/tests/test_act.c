@@ -94,6 +94,12 @@ static void test_values_in_their_places(void)
 	CHECK(!strcmp(run("settings_current", NULL, &bad), "/usr/sbin/onu-config current"));
 	CHECK(act_find("settings_change")->input && !act_find("settings_current")->input);
 	CHECK(!strcmp(run("settings_state", NULL, &bad), "/usr/sbin/onu-apply state"));
+	/* What omcid and dhcp6d tell of a change: each its own, at once, no more. */
+	CHECK(!strcmp(run("omcid", NULL, &bad), "/usr/sbin/onu-apply omcid"));
+	CHECK(!strcmp(run("dhcp6d", NULL, &bad), "/usr/sbin/onu-apply dhcp6d"));
+	CHECK(act_find("omcid")->background && act_find("dhcp6d")->background);
+	CHECK(!act_find("omcid")->input && !act_find("omcid")->needs_password &&
+	      !act_find("omcid")->params[0].name);
 	CHECK(!act_find("settings_state")->input && !act_find("settings_state")->needs_password);
 	CHECK(!act_find("settings_try")->background && act_find("settings_try")->timeout_s >= 60);
 	CHECK(!strcmp(run("update_write", NULL, &bad), "/usr/sbin/onu-update write -"));
