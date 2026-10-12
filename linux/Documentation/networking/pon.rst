@@ -789,6 +789,23 @@ priority queue per T-CONT and priority (clause 9.2.10), the T-CONT's policy,
 strict priority or weighted round robin (clause 9.2.2), and the rates of a
 traffic descriptor (clause 9.2.12).
 
+Queue, weight and rates overlap with what ``tc`` describes, and they are
+attributes of the link for now, not ``tc`` objects, for three reasons that
+hold in this model. The queues belong to the T-CONT, which is not a network
+interface (see the facts above), so a qdisc would have no interface to hang
+from; the interface that carries the traffic is the GEM port, and it names
+the queue it sends through, not a queue of its own. The order in which the MAC
+serves the queues, committed rates first, is the MAC's and is stated in the
+facts below. And the one object of ``tc`` that holds the same four numbers, an
+offloaded HTB class with its rate, ceil, priority and quantum, has no driver in
+the tree that takes it on an interface that is not a port of a switch, and
+nothing here yet chooses the class of a frame as the bridge chooses the GEM
+port. When the PON class is offered, the four go to ``tc`` and the attributes
+are removed, ``IFLA_GEM_PBITS`` apart, which is the mapper of ITU-T G.988
+clause 9.3.10 and not a queue discipline (ADR 0018 of the project's
+repository records the decision). Until then the OMCI daemon is their only
+user.
+
 .. list-table::
    :header-rows: 1
    :widths: 58 6 36
