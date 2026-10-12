@@ -123,6 +123,8 @@ KEPT=$RUN/onu-kept
 PENDING=$RUN/onu-pending
 TRIAL=$RUN/onu-trial.d/settings
 TRIAL_LIMIT=${TRIAL_LIMIT:-90}
+# Tenths of a second to wait for omcid to say that it changed its mode.
+APPLIED_TENTHS=${APPLIED_TENTHS:-50}
 
 log() {
 	echo "onu-apply: $*" >&2
@@ -349,10 +351,29 @@ svc_stop() {
 	return 0
 }
 
+# Wait until omcid says that it programmed the data path for the mode $1:
+# 5 s at most (APPLIED_TENTHS). What omcid said of another mode, an earlier
+# signal's, is not it.
+omcid_applied() {
+	oa_want=router
+	[ "$1" = bridge ] && oa_want=bridge
+	oa_i=0
+	while [ $oa_i -lt "$APPLIED_TENTHS" ]; do
+		oa_got=
+		read -r oa_got 2>/dev/null <"$RUN/omcid.applied"
+		[ "$oa_got" = "$oa_want" ] && return 0
+		sleep 0.1
+		oa_i=$((oa_i + 1))
+	done
+	log "omcid did not say that it is in $1 mode: it may not have changed it"
+	return 0
+}
+
 # omcid in the mode $1. A running omcid is told by a signal, SIGUSR2 for
 # bridge mode and SIGUSR1 for "router", without the OLT's bridge: it keeps its
 # MIB, so what the OLT provisioned stays, and programs the data path again
-# from it. One that does not run is started as the instance "omcid" of
+# from it, and says so in /run/omcid.applied, which is taken away before the
+# signal and waited for after it, for 5 s. One that does not run is started as the instance "omcid" of
 # procd's service "onu" (onu-run omcid), with -r without the bridge; its
 # log goes on in /run/omcid.log. The mode is kept in /run/omcid.mode, so that
 # an omcid that procd starts again after a crash comes up in the mode the
@@ -360,12 +381,13 @@ svc_stop() {
 omcid_run() {
 	echo "$1" >"$RUN/omcid.mode"
 	if pidof omcid >/dev/null 2>&1; then
+		rm -f "$RUN/omcid.applied"
 		if [ "$1" = bridge ]; then
 			killall -USR2 omcid
 		else
 			killall -USR1 omcid
 		fi
-		sleep 1
+		omcid_applied "$1"
 	else
 		# procd runs it, and finds no program on a path of its own.
 		svc_start omcid -- "$(command -v onu-run || echo "$LIB/onu-run")" omcid
@@ -1325,7 +1347,7 @@ stop)
 	[ -r "$RUN/onu-mode" ] && read -r mode <"$RUN/onu-mode"
 	[ "$mode" != passthrough ] || pass_down
 	svc_stop omcid
-	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans" "$RUN/omcid.mode"
+	rm -f "$RUN/onu-mode" "$RUN/onu-omcid" "$RUN/onu-held-vlans" "$RUN/omcid.mode" "$RUN/omcid.applied"
 	;;
 identity)
 	identity

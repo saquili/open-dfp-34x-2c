@@ -64,6 +64,9 @@ setup() {
 	for prog in killall udhcpd udhcpc logger kill onu-config dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
+	# A running omcid, signalled, programs the data path again and says so.
+	printf '#!/bin/sh\necho "killall $*" >>"$LOG"\ncase "$1" in\n-USR1) echo router ;;\n-USR2) echo bridge ;;\n*) exit 0 ;;\nesac >"%s/run/omcid.applied"\n' \
+		"$ONU_ROOT" >"$T/bin/killall"
 	# The defaults of the settings are the real table's, and no call to log.
 	printf '#!/bin/sh\n[ "$1" = defaults ] && exec "%s/onu-config" defaults\necho "onu-config $*" >>"$LOG"\n' \
 		"$BUILD" >"$T/bin/onu-config"
@@ -944,6 +947,32 @@ check 'logged "^onu-config save$" && [ ! -e "$ONU_ROOT/run/onu-trial.d/settings"
 "$MODE_SCRIPT" revert 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 "$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
+echo "a signal to omcid is waited for until omcid says that it changed, not for a second"
+setup
+conf MODE=bridge
+"$MODE_SCRIPT" start 2>/dev/null
+printf 'SESSION1_VLAN=1410\n' >"$ONU_ROOT/run/onu.conf"
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^killall -USR2 omcid"'
+check '[ "$(cat "$ONU_ROOT/run/omcid.applied")" = bridge ]'
+# The sleep of a second after the signal is gone: the stand-in sleep, which
+# returns at once for a whole second, would show it.
+check '! logged "^sleep 1"'
+check '! logged "omcid did not say"'
+# An omcid that says nothing: the wait ends, says so, and the change goes on.
+printf '#!/bin/sh\necho "killall $*" >>"%s"\n' "$LOG" >"$T/bin/killall"
+rm -f "$ONU_ROOT/run/omcid.applied"
+printf 'SESSION1_VLAN=1410\nSESSION2_VLAN=410\n' >"$ONU_ROOT/run/onu.conf"
+echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
+: >"$LOG"
+APPLIED_TENTHS=3 "$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "^killall -USR2 omcid"'
+check 'logged "omcid did not say that it is in bridge mode"'
+check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans" | tr "\n" " ")" = "410 1410 " ]'
 teardown
 
 echo "test_onu_apply: $checks checks, $failures failed"
