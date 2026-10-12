@@ -31,8 +31,9 @@
 #                   which it keeps in /run/omcid.mib (omcid -m), so that the
 #                   OLT sees no new ONU. It runs onu-apply after each change
 #                   it publishes (omcid -x)
-#   onu-run ntp     ntpd, which sets the clock and keeps it, from the server
-#                   that the stick's settings name (NTP_SERVER of
+#   onu-run ntp     ntpd, which sets the clock and keeps it, as the account ntp
+#                   with the one power to set the clock (onu-drop), from the
+#                   server that the stick's settings name (NTP_SERVER of
 #                   /run/onu-system) or, without one, from the router at the
 #                   other end of the management link: the stick has no way of
 #                   its own to the internet, and the OLT gives no date
@@ -52,6 +53,8 @@ BOARD=${ONU_ROOT:-}/etc/board.conf
 STATE=$RUN/onu-mgmt
 SYSTEM=$RUN/onu-system
 KEY=$RUN/dropbear/host_key
+# Starts a program as an account of its own, with the powers it needs.
+DROP=${ONU_ROOT:-}/usr/lib/onu/onu-drop
 
 # The console: a login prompt, or on a bench that says so root's shell.
 # board.conf is read as data, never run.
@@ -127,7 +130,7 @@ if [ "${1:-}" = ntp ]; then
 		exit 1
 	fi
 	echo $$ >"$RUN/ntpd.pid"
-	exec ntpd -n -p "$server"
+	exec "$DROP" -c sys_time ntp ntpd -n -p "$server"
 fi
 
 mgmt=$(field ADDRESS)

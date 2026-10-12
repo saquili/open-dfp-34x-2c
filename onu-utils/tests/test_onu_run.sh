@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of scripts/onu-run, with stand-ins for dropbear, dropbearkey, pond,
-# getty, login, omcid and sleep, which log what they are asked to do.
+# getty, login, omcid, onu-drop and sleep, which log what they are asked to do.
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -31,7 +31,12 @@ setup() {
 	done
 	printf '#!/bin/sh\necho "dropbearkey $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && echo key >"$2"; shift; done\n' \
 		>"$T/bin/dropbearkey"
-	chmod +x "$T/bin"/*
+	# onu-drop logs the account and the powers it is told of, then runs the
+	# program as it is, in place of the real one, which needs root.
+	mkdir -p "$ONU_ROOT/usr/lib/onu"
+	printf '#!/bin/sh\necho "onu-drop $*" >>"$LOG"\n[ "$1" = -c ] && shift 2\nshift\nexec "$@"\n' \
+		>"$ONU_ROOT/usr/lib/onu/onu-drop"
+	chmod +x "$T/bin"/* "$ONU_ROOT/usr/lib/onu/onu-drop"
 	PATH=$T/bin:$PATH
 }
 
@@ -157,6 +162,8 @@ setup
 run ntp
 check '[ $rc -eq 0 ] && logged "ntpd -n -p 198.51.100.1"'
 check '[ -s "$ONU_ROOT/run/ntpd.pid" ]'
+# It runs as the account ntp with the power to set the clock, and no other.
+check 'logged "onu-drop -c sys_time ntp ntpd -n -p 198.51.100.1"'
 : >"$LOG"
 for pair in 198.51.100.1/30:198.51.100.2 198.51.100.6/30:198.51.100.5 \
 	198.51.100.4/31:198.51.100.5 198.51.100.5/31:198.51.100.4 198.051.100.002/30:198.51.100.1; do
