@@ -5,7 +5,7 @@
  * The settings of the stick's data path: KEY=value lines in /run/onu.conf,
  * which onu-apply applies, and the account of each of the stick's PPPoE
  * sessions, 1 to 7, in /run/onu-pppoeN, as "user secret", readable by root
- * only. What the settings mean, their defaults and the rules that bind them
+ * and by pppoed, which runs the session. What the settings mean, their defaults and the rules that bind them
  * together, is onu-config's (ADR 0014), and so are the files: pond reads
  * neither, and has onu-act run onu-config for it (bus.h). What came of them
  * is onu-apply's, and pond reads no file of it either: "onu-apply state"
