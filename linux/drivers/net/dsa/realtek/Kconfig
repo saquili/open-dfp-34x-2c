@@ -82,9 +82,11 @@ config NET_DSA_RTL9602C
 	depends on HWMON || HWMON=n
 	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on RTL9602C_ETH || !RTL9602C_ETH
+	select AUXILIARY_BUS
 	select MFD_SYSCON
 	select NET_DSA_TAG_RTL9602C
 	select PON
+	imply I2C_RTL9602C
 	help
 	  DSA driver for the Ethernet switch of Realtek RTL9602C SoCs, the
 	  chip of GPON ONUs such as SFP sticks. The switch has a SerDes port
@@ -94,8 +96,8 @@ config NET_DSA_RTL9602C
 	  L3/NAT offload), the driver runs the chip's GPON MAC and PON MAC and
 	  offers them through the PON class: the ONU's activation, its OMCI
 	  channel and a network interface per GEM port. It also registers the
-	  switch's IEEE 1588 clock, and the I2C master and diagnostics of the
-	  optics.
+	  switch's IEEE 1588 clock, and the diagnostics of the optics, whose
+	  I2C master has a driver of its own, I2C_RTL9602C.
 
 	  Say Y or M on an RTL9602C board. To compile this driver as a module,
 	  choose M here: the module will be called rtl9602c.

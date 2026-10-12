@@ -20,8 +20,8 @@ The optics have no driver of their own. The code is part of the switch driver,
 ``rtl9602c``, in ``rtl9602c-optics.c``, and it does five things:
 
 - It moves bytes over the I2C master, one per transfer or the two of a
-  diagnostic word together, and registers the master as the SMBus adapter
-  ``rtl9602c i2c``.
+  diagnostic word together, through the SMBus adapter ``rtl9602c i2c`` that the
+  master's own driver, ``i2c-rtl9602c``, registers.
 - It publishes the five measurements of the SFF-8472 diagnostics, which are the
   temperature, the supply voltage, the transmitter bias, the transmitted power
   and the received power, as the hwmon device ``rtl9602c_optics``.
@@ -145,7 +145,7 @@ path allows it. Without the property every TX_DISABLE step is skipped. GPIO
 13, active high, is the laser driver's disable input: driving it high stops the
 light (measured, see "TX_DISABLE").
 
-There is no node for the I2C master or for the laser driver. The driver
+There is no node for the I2C master or for the laser driver. The master's driver
 registers the adapter without a node, and the devices at ``0x50`` and ``0x51``
 are not described. The GPIO controller, ``gpio@18003300`` (compatible
 ``realtek,rtl9602c-gpio`` and ``realtek,otto-gpio``), and the pad-function
@@ -161,9 +161,9 @@ Where the code is
    * - File
      - Contents
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
-     - The byte transfers over the I2C master and the SMBus adapter
-       (``rtl9602c_i2c_read_byte()``, ``rtl9602c_i2c_register()``), the
-       numbering of the part's registers (``rtl9602c_l_read()``), the TX_DISABLE
+     - The byte transfers through the SMBus adapter and their locks
+       (``rtl9602c_i2c_read_byte()``, ``rtl9602c_i2c_lock()``), the hand-over of
+       the master to its driver (``rtl9602c_optics_i2c_add()``), the numbering of the part's registers (``rtl9602c_l_read()``), the TX_DISABLE
        drive (``rtl9602c_l_txdis_gpio()``), the hwmon device
        (``rtl9602c_optics_hwmon_register()``), the modulation hold
        (``rtl9602c_optics_hold_modulation()``) with the
@@ -172,11 +172,14 @@ Where the code is
        ``rtl9602c_optics_level_work()``), and the debugfs views
        (``rtl9602c_optics_debugfs_init()``).
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
-     - The registers of the I2C master and of the pad functions
-       (``RTL9602C_I2C_*``, ``RTL9602C_PADMUX_*``), the byte numbers of the
-       diagnostics (``RTL9602C_OPTICS_A2_*``), the members ``tx_disable`` and
-       ``i2c`` of ``struct rtl9602c_priv``, and the prototypes of the calls
-       above.
+     - The byte numbers of the diagnostics (``RTL9602C_OPTICS_A2_*``), the
+       members ``tx_disable``, ``i2c`` and ``optics_lock`` of ``struct
+       rtl9602c_priv``, and the prototypes of the calls above.
+   * - ``drivers/i2c/busses/i2c-rtl9602c.c``
+     - The I2C master: its registers (``RTL9602C_I2C_*``, ``RTL9602C_PADMUX_*``)
+       and the SMBus adapter (Documentation/i2c/busses/i2c-rtl9602c.rst).
+   * - ``include/linux/platform_data/i2c-rtl9602c.h``
+     - What the switch driver gives the master's driver, and what it gets back.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - ``rtl9602c_probe()`` takes the ``tx-disable`` line and prepares the
        transmit power levels. ``rtl9602c_setup()`` creates the debugfs
@@ -214,7 +217,7 @@ Interfaces to user space
   reading a label takes none.
 - The I2C adapter ``rtl9602c i2c``, whose name is in
   ``/sys/class/i2c-adapter/i2c-N/name``. It offers SMBus byte-data transfers
-  only (see "The I2C adapter"). With ``CONFIG_I2C_CHARDEV`` it has a file
+  and word-data reads (Documentation/i2c/busses/i2c-rtl9602c.rst). With ``CONFIG_I2C_CHARDEV`` it has a file
   ``/dev/i2c-N``, and a write through it can change the module for good (see
   "The management interface").
 - ``/sys/kernel/debug/rtl9602c/a2``, ``/sys/kernel/debug/rtl9602c/eeblocks``
@@ -279,49 +282,16 @@ words: the optics diagnostics read, and the ONU reaches O5 on an OLT.
 The I2C master
 ==============
 
-The SoC has two I2C masters with the same set of registers. The laser driver
-answers on master 1 only, and the driver uses master 1 only
-(``RTL9602C_I2C_OPTICS_MASTER``): the macros below are master 1's. A transfer
-moves one, two or four data bytes. The driver describes the transfer in the transfer
-configuration register (the device address, the widths of the register address
-and of the data, and the clock divider), writes the register address and, for a
-write, the byte, starts the transfer with a command, and polls the command
-register until the master is no longer busy. No interrupt is used. A master
-ignores its commands until its pad function is enabled, in a register that
-other pad functions share.
-
-Registers
----------
-
-Offsets are the values of the macros for master 1.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 14 36 50
-
-   * - Offset
-     - Register
-     - What the driver does
-   * - ``+0x0000b4``
-     - ``RTL9602C_I2C_TX_DATA``
-     - Writes the byte that a write transfer sends.
-   * - ``+0x0000bc``
-     - ``RTL9602C_I2C_SUBADDR``
-     - Writes the register address inside the device, before every transfer.
-   * - ``+0x0000c4``
-     - ``RTL9602C_I2C_CMD``
-     - Writes START, with WRITE for a write; reads it until BUSY clears, then
-       tests NACK.
-   * - ``+0x0000cc``
-     - ``RTL9602C_I2C_RX_DATA``
-     - Reads the byte that a read transfer received, in the low 8 bits.
-   * - ``+0x023008``
-     - ``RTL9602C_I2C_XFER_CFG``
-     - Read-modify-write of bits 21:0 before every transfer.
-   * - ``+0x023018``
-     - ``RTL9602C_PADMUX_FUNC_EN``
-     - Sets bit 14 (``RTL9602C_PADMUX_FUNC_EN_I2C``) once, when the adapter is
-       registered.
+The SoC has two I2C masters with the same set of registers, and the laser
+driver answers on master 1 only. The master has a driver of its own,
+``i2c-rtl9602c`` (Documentation/i2c/busses/i2c-rtl9602c.rst), which owns its
+registers, the pad function that enables it and the order of a transfer, and
+registers the SMBus adapter ``rtl9602c i2c``. The switch driver makes the
+auxiliary device that driver binds to, with the switch's register window
+(``rtl9602c_optics_i2c_add()``), and is told when the adapter appears
+(``rtl9602c_optics_adapter()``): that identifies the module and publishes the
+diagnostics. The code of this page moves its bytes through the I2C core, with
+``__i2c_smbus_xfer()``, in sequences under the locks below.
 
 .. list-table::
    :header-rows: 1
@@ -330,145 +300,33 @@ Offsets are the values of the macros for master 1.
    * - Fact
      - Tag
      - Checked by
-   * - The two masters have the same registers at a 4-byte stride. For master
-       m, ``RTL9602C_I2C_TX_DATA`` is at ``0x0000b0 + 4m``,
-       ``RTL9602C_I2C_SUBADDR`` at ``0x0000b8 + 4m``, ``RTL9602C_I2C_CMD`` at
-       ``0x0000c0 + 4m``, ``RTL9602C_I2C_RX_DATA`` at ``0x0000c8 + 4m``, and the
-       transfer configuration register ``RTL9602C_I2C_XFER_CFG`` at
-       ``0x023004 + 4m``. The driver uses m = ``RTL9602C_I2C_OPTICS_MASTER`` =
-       1 only, and its macros already include the 4m of master 1.
-     - T
-     - The optics diagnostics read: every read of the laser driver goes through
-       these registers of master 1.
-   * - The laser driver is on master 1: through master 1 it answers at ``0x50``
-       and ``0x51``, while the same reads through master 0 return zeros.
-     - M
-     - A0h bytes 40-55 read through each master in turn.
-   * - ``RTL9602C_PADMUX_FUNC_EN`` (``0x023018``), bit 13 + m, enables master m
-       (``RTL9602C_PADMUX_FUNC_EN_I2C``, bit 14 for master 1). With the bit
-       clear the master ignores the start command: the transfer ends at once,
-       BUSY is never set, there is no NACK, and the data byte is zero. The
-       driver sets the bit once, when it registers the adapter.
-     - M
-     - With bit 14 clear no transfer ran; setting it made master 1 run at once.
-   * - The same register holds the enables of other pad functions, so the
-       driver sets its bit by read-modify-write.
+   * - Every user of the optics holds the switch's ``optics_lock`` for its
+       whole sequence of transfers, and the adapter's bus lock inside it
+       (``rtl9602c_i2c_lock()``): a hwmon read, the ``a2``, ``eeblocks`` and
+       ``tables`` views, the modulation hold, the transmit power levelling and
+       the store view. A transfer of another client of the adapter takes the
+       bus lock alone, so none can come between two transfers of a sequence.
+       The hwmon core and the I2C core serialise only their own callers, and
+       the modulation hold switches the page of A2h 128-255 and puts it back,
+       which no other user may see. Without the adapter, the sequence runs under
+       ``optics_lock`` and every transfer fails with ``-ENODEV``.
      - I
-     - What the other bits enable is not verified; the read-modify-write is
-       right either way. Not load-bearing.
-   * - ``RTL9602C_I2C_XFER_CFG_BUS_EN`` (bit 21 of ``RTL9602C_I2C_XFER_CFG``)
-       must be set, or a transfer runs without driving the bus: it ends without
-       a NACK and every read returns the same byte (``0xff`` at a clock divider
-       of 30).
-     - M
-     - With bit 21 clear every byte of ``0x50`` and ``0x51`` read the same
-       constant; with it set they read the module's contents.
-   * - ``RTL9602C_I2C_XFER_CFG_DEV_ADDR`` (bits 20:14) is the 7-bit device
-       address. ``RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH`` (bits 13:12) is written
-       ``RTL9602C_I2C_XFER_CFG_WIDTH_8BIT`` (0): one register-address byte.
-       ``RTL9602C_I2C_XFER_CFG_DATA_WIDTH`` (bits 11:10) is the number of data
-       bytes: 0 one, ``RTL9602C_I2C_XFER_CFG_WIDTH_16BIT`` (1) two, 2 and 3
-       four. A read leaves them in ``RTL9602C_I2C_RX_DATA`` in the order they
-       came, the first in bits 7:0. The driver moves two bytes for a
-       diagnostic word and one for everything else.
-     - M, T
-     - M: A0h bytes 0 to 7 read at each width. At 1, ``RX_DATA`` held
-       ``0x0403`` at byte 0, whose bytes are ``03 04``, and a read lasted 9 SCL
-       periods more than at 0; at 2 and at 3, ``0x00010403`` and 27 periods
-       more. The temperature word read in one transfer matched its two bytes
-       read one by one. T: the optics diagnostics read.
-   * - The driver writes bits 21:0 of ``RTL9602C_I2C_XFER_CFG`` by
-       read-modify-write before every transfer and leaves bits 31:22 as it
-       found them.
+     - Read from the code; in a kernel with lockdep, the transfer function
+       asserts that ``optics_lock`` is held. Reading the hwmon attributes in a
+       loop while reading the ``a2`` view would show no mixed bytes; not run.
+   * - The adapter passes a write on only for a module the driver identified
+       (``rtl9602c_optics_writable()``) and never with
+       ``CONFIG_RTL9602C_OPTICS_RO``; otherwise it refuses it with ``-EPERM``.
+       The driver's own writes check the same condition first.
      - T
-     - The optics diagnostics read.
-   * - ``RTL9602C_I2C_XFER_CFG_CLK_DIV`` (bits 9:0) sets SCL to 31.25 MHz /
-       (``CLK_DIV`` + 1). The driver writes
-       ``RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ`` (311): 100 kHz, I2C's standard
-       mode. Until it did, it wrote 30, about 1 MHz.
-     - M
-     - 256 one-byte reads of A0h at dividers 30, 77, 311 and 479 took 12.0,
-       29.5, 117.8 and 180.9 ms: 1.47 us for each step of ``CLK_DIV`` + 1, so a
-       read lasts about 46 periods of 31.25 MHz / (``CLK_DIV`` + 1). In 2560
-       reads of A0h no transfer went unacknowledged at 30 or at 311.
-   * - ``RTL9602C_I2C_CMD``: ``RTL9602C_I2C_CMD_START`` (bit 0) starts the
-       transfer the other registers describe and clears itself;
-       ``RTL9602C_I2C_CMD_WRITE`` (bit 1) makes it a write, clear a read;
-       ``RTL9602C_I2C_CMD_BUSY`` (bit 2) is set while it runs;
-       ``RTL9602C_I2C_CMD_NACK`` (bit 3) says the device did not acknowledge.
-     - M
-     - START and BUSY polled; the ``eeblocks`` view counts the unacknowledged
-       reads per address.
-   * - ``RTL9602C_I2C_SUBADDR`` takes the register address inside the device and
-       ``RTL9602C_I2C_TX_DATA`` the byte a write sends; ``RTL9602C_I2C_RX_DATA``
-       returns the byte a read received, in its low 8 bits.
-     - T
-     - The optics diagnostics read, for reads; for writes, the modulation hold
-       reads back what it wrote.
-   * - Every user of the master holds the switch's ``i2c_lock`` for its whole
-       sequence of transfers: a hwmon read, the ``a2`` and ``eeblocks`` views,
-       the modulation hold, and each transfer of a client of the adapter. The
-       hwmon core and the I2C core serialise only their own callers, and the
-       modulation hold switches the page of A2h 128-255 and puts it back, which
-       no other user may see.
+     - The modulation hold writes on the module the driver knows, and on one
+       it does not know the hold, the levelling and the store view return
+       without a write.
+   * - A client of the adapter has not been run: the I2C core can reach the
+       laser driver through ``/dev/i2c-N`` with ``CONFIG_I2C_CHARDEV``.
      - I
-     - Read from the code; in a kernel with lockdep, the transfer functions
-       assert that the lock is held. Reading the hwmon attributes in a loop
-       while reading the ``a2`` view would show no mixed bytes; not run.
-
-One byte
---------
-
-Every read and write of the laser driver is one byte, in these steps:
-
-1. Read-modify-write bits 21:0 of ``RTL9602C_I2C_XFER_CFG``:
-   ``RTL9602C_I2C_XFER_CFG_BUS_EN`` set, ``RTL9602C_I2C_XFER_CFG_DEV_ADDR`` the
-   device, both widths 8-bit, ``RTL9602C_I2C_XFER_CFG_CLK_DIV`` 30. Purpose:
-   describe the transfer; without BUS_EN the master does not drive the bus. (M
-   for BUS_EN and the divider, T for the other fields)
-2. Write the register address to ``RTL9602C_I2C_SUBADDR``. Purpose: name the
-   byte inside the device. (T)
-3. For a write, write the byte to ``RTL9602C_I2C_TX_DATA``. Purpose: the byte
-   the transfer sends. (T)
-4. Write ``RTL9602C_I2C_CMD_START`` to ``RTL9602C_I2C_CMD`` for a read, and
-   ``RTL9602C_I2C_CMD_START`` with ``RTL9602C_I2C_CMD_WRITE`` for a write.
-   Purpose: start the transfer. (M)
-5. Poll ``RTL9602C_I2C_CMD`` until ``RTL9602C_I2C_CMD_BUSY`` is clear: at most
-   2000 polls 1 us apart, else fail with ``-ETIMEDOUT``. Purpose: wait for the
-   transfer. The bound is the driver's; a one-byte read at 100 kHz takes about
-   460 us. (T)
-6. If ``RTL9602C_I2C_CMD_NACK`` is set, fail with ``-ENXIO``. Purpose: the
-   device did not acknowledge. (M)
-7. For a read, the byte is the low 8 bits of ``RTL9602C_I2C_RX_DATA``; for a
-   diagnostic word, bits 7:0 are its most significant byte and bits 15:8 its
-   least significant one. Purpose: the result. (T, M for the word)
-
-The I2C adapter
----------------
-
-The master is also registered as an I2C adapter, so that the I2C core and its
-clients can reach the laser driver. The driver's own reads do not go through
-it. The adapter passes a read or a write on to the 7-bit address and the
-register it is given, without restricting either, and refuses every transfer
-size other than an SMBus byte-data read or write with ``-EOPNOTSUPP``.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 58 6 36
-
-   * - Fact
-     - Tag
-     - Checked by
-   * - The master is registered at switch setup as the I2C adapter
-       ``rtl9602c i2c``, offering SMBus byte-data transfers only
-       (``I2C_FUNC_SMBUS_BYTE_DATA``), which is the one transaction the
-       controller performs. A registration failure is logged and the switch
-       carries on. The driver's own reads do not go through the adapter, and no
-       client of it has been run.
-     - I
-     - Reading ``0x50`` through the adapter (i2c-dev, where
-       ``CONFIG_I2C_CHARDEV`` is set) and comparing with the ``eeblocks`` view
-       would settle it.
+     - Reading ``0x50`` through the adapter and comparing with the ``eeblocks``
+       view would settle it.
 
 The management interface
 ========================
@@ -1446,8 +1304,8 @@ device.
    * - Probe, the ``tx-disable`` line is given and cannot be taken
      - ``cannot get the laser tx-disable gpio``, reported by
        ``dev_err_probe()``; the probe fails or is deferred.
-   * - Setup, the adapter cannot be registered
-     - ``i2c master not registered: <error>``
+   * - Setup, the master cannot be handed to its driver
+     - ``i2c master not handed over: <error>``
    * - Setup, no hwmon device
      - ``no optical diagnostics: <error>``
    * - Setup, the module is not one the driver writes
@@ -1494,9 +1352,10 @@ end of a step is the tag of the fact the step rests on (see the tables above).
 2. During switch setup, create the debugfs directory and with it the views
    ``a2`` and ``eeblocks``. Purpose: the laser driver can be read back without
    the hwmon device. (M)
-3. Set ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
-   read-modify-write, and register the master as the adapter ``rtl9602c i2c``.
-   Then read the module's vendor name and part number, and with them whether
+3. Make the auxiliary device ``rtl9602c.i2c``, for the master's driver to set
+   ``RTL9602C_PADMUX_FUNC_EN_I2C`` in ``RTL9602C_PADMUX_FUNC_EN`` by
+   read-modify-write and register the master as the adapter ``rtl9602c i2c``.
+   When the adapter is there, read the module's vendor name and part number, and with them whether
    the driver writes the laser driver (see "The modules the driver writes").
    Purpose: without the enable the master ignores every command; a module the
    driver was not measured on is only read. (M for the enable, I for the
@@ -1592,7 +1451,7 @@ Questions the code does not depend on
      - Nothing the driver needs; the read-modify-write is right either way.
        Finding what each other set bit of the word enables would settle it.
    * - Whether a client can read and write the laser driver through the adapter
-       ("The I2C adapter").
+       ("The I2C master").
      - Reading ``0x50`` through the adapter (i2c-dev, where
        ``CONFIG_I2C_CHARDEV`` is set) and comparing with the ``eeblocks`` view.
    * - Whether the part skips rewriting a byte that already holds the value, and

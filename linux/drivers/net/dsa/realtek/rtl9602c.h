@@ -2444,40 +2444,6 @@ struct rtl9602c_field {
 #define RTL9602C_APPTRUST_MAX		2
 
 /*
- * The I2C master the optics are on, the second of two. Without BUS_EN a
- * transfer runs without driving the bus.
- */
-#define RTL9602C_I2C_OPTICS_MASTER		1
-#define RTL9602C_I2C_XFER_CFG		(0x023004 + 4 * RTL9602C_I2C_OPTICS_MASTER)
-#define RTL9602C_I2C_XFER_CFG_BUS_EN		BIT(21)
-#define RTL9602C_I2C_XFER_CFG_DEV_ADDR	GENMASK(20, 14)
-#define RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH	GENMASK(13, 12)
-#define RTL9602C_I2C_XFER_CFG_DATA_WIDTH	GENMASK(11, 10)
-#define RTL9602C_I2C_XFER_CFG_CLK_DIV	GENMASK(9, 0)
-#define RTL9602C_I2C_TX_DATA		(0x0000b0 + 4 * RTL9602C_I2C_OPTICS_MASTER)
-#define RTL9602C_I2C_SUBADDR		(0x0000b8 + 4 * RTL9602C_I2C_OPTICS_MASTER)
-#define RTL9602C_I2C_CMD		(0x0000c0 + 4 * RTL9602C_I2C_OPTICS_MASTER)
-#define RTL9602C_I2C_RX_DATA		(0x0000c8 + 4 * RTL9602C_I2C_OPTICS_MASTER)
-#define RTL9602C_I2C_CMD_NACK		BIT(3)
-#define RTL9602C_I2C_CMD_BUSY		BIT(2)
-#define RTL9602C_I2C_CMD_WRITE		BIT(1)
-#define RTL9602C_I2C_CMD_START		BIT(0)
-
-/* Pad functions; the master ignores its commands until FUNC_EN_I2C is set. */
-#define RTL9602C_PADMUX_FUNC_EN		0x023018
-#define RTL9602C_PADMUX_FUNC_EN_I2C	BIT(13 + RTL9602C_I2C_OPTICS_MASTER)
-
-/*
- * A one-byte register address, and one data byte or, with WIDTH_16BIT, two
- * (2 and 3 move four); a read leaves them in RX_DATA in the order they
- * came, the first in bits 7:0 (measured). SCL runs at 31.25 MHz /
- * (CLK_DIV + 1) (measured), so 311 gives 100 kHz, I2C's standard mode.
- */
-#define RTL9602C_I2C_XFER_CFG_WIDTH_8BIT	0
-#define RTL9602C_I2C_XFER_CFG_WIDTH_16BIT	1
-#define RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ	311
-
-/*
  * The optics' SFF-8472 bytes as the driver numbers them, A2h from A2_BASE:
  * the thresholds, the diagnostics, and bytes 123 to 126, left to the
  * module maker.  Each of the five diagnostics, numbered as in enum
@@ -2528,6 +2494,7 @@ enum rtl9602c_optics_limit {
 #define RTL9602C_PADMUX_GPIO_EN		0x48
 
 #include <linux/i2c.h>
+#include <linux/platform_data/i2c-rtl9602c.h>
 #include <linux/gpio/consumer.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/workqueue.h>
@@ -3298,16 +3265,33 @@ struct rtl9602c_priv {
 	/** @debugfs: the driver's debugfs directory */
 	struct dentry		*debugfs;
 
-	/** @i2c: the optics' I2C master as an SMBus adapter */
-	struct i2c_adapter	i2c;
 	/**
-	 * @i2c_lock: held by every user of the optics' I2C master for the
-	 * whole of its sequence of transfers
+	 * @i2c: what the optics' I2C master gets from the driver and gives it
+	 * back (include/linux/platform_data/i2c-rtl9602c.h)
 	 */
-	struct mutex		i2c_lock;
+	struct rtl9602c_i2c_data	i2c;
+	/**
+	 * @i2c_nr: the number of the master's adapter once its driver has
+	 * registered it, else -1; under @optics_lock
+	 */
+	int			i2c_nr;
+	/**
+	 * @i2c_adap: the adapter while @optics_lock is held and the master's
+	 * driver is there, else NULL
+	 */
+	struct i2c_adapter	*i2c_adap;
+	/**
+	 * @optics_lock: held by every user of the optics for the whole of its
+	 * sequence of transfers, with the adapter's bus lock inside it
+	 */
+	struct mutex		optics_lock;
+	/**
+	 * @optics_hwmon: the hwmon device of the diagnostics, once registered
+	 */
+	struct device		*optics_hwmon;
 	/**
 	 * @optics_apcset0: the power control's set point the module came
-	 * with, that of transmit power level mode 0; under i2c_lock
+	 * with, that of transmit power level mode 0; under optics_lock
 	 */
 	u8			optics_apcset0;
 	/** @optics_mod0: the modulation DAC the module came with */
@@ -3323,7 +3307,7 @@ struct rtl9602c_priv {
 	/**
 	 * @optics_t2_open: table 2 is open for storing through the debugfs
 	 * entry t2write, which keeps @optics_t2_eectl and @optics_t2_tabsel,
-	 * EEPROM_CTRL and the page select as found; under i2c_lock
+	 * EEPROM_CTRL and the page select as found; under optics_lock
 	 */
 	bool			optics_t2_open;
 	/** @optics_t2_eectl: EEPROM_CTRL as found by t2write's "open" */
@@ -3620,9 +3604,7 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p);
 void rtl9602c_gpon_report(struct rtl9602c_priv *p);
 void rtl9602c_gpon_work(struct work_struct *w);
 void rtl9602c_gpon_irq(struct rtl9602c_priv *p);
-int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg, u8 *val);
-int rtl9602c_i2c_register(struct rtl9602c_priv *p);
-void rtl9602c_optics_identify(struct rtl9602c_priv *p);
+int rtl9602c_optics_i2c_add(struct rtl9602c_priv *p);
 void rtl9602c_l2_clear(struct rtl9602c_priv *p);
 int rtl9602c_l2_l3lookup_cpu(struct rtl9602c_priv *p, bool on);
 int rtl9602c_l2_own_place(struct rtl9602c_priv *p, int port);
@@ -3653,7 +3635,6 @@ int rtl9602c_optics_level_register(struct rtl9602c_priv *p);
 int rtl9602c_gpon_reboot_register(struct rtl9602c_priv *p);
 void rtl9602c_gpon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
 				 int err);
-int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p);
 void rtl9602c_meter_free(struct rtl9602c_priv *p, unsigned int meter);
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p);
 void rtl9602c_l2_debugfs_init(struct rtl9602c_priv *p);

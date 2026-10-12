@@ -358,7 +358,8 @@ next".
      - The OMCI channel as the PON class's OMCI port.
      - *PON*; *PON class*
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
-     - The optics I2C master, the hwmon diagnostics and TX_DISABLE.
+     - The optics' hwmon diagnostics, modulation hold and TX_DISABLE, over the
+       I2C master that ``drivers/i2c/busses/i2c-rtl9602c.c`` drives.
      - *PON*
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The register map block by block, the driver's state ``struct

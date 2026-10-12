@@ -1732,14 +1732,14 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	rtl9602c_gpon_report(p);
 	rtl9602c_debugfs_init(p);
 
-	err = rtl9602c_i2c_register(p);
+	/*
+	 * The optics' I2C master has a driver of its own. It registers the
+	 * adapter when it binds, and that identifies the module and publishes
+	 * its diagnostics (rtl9602c_optics_adapter()).
+	 */
+	err = rtl9602c_optics_i2c_add(p);
 	if (err)
-		pr_warn("i2c master not registered: %d\n", err);
-	rtl9602c_optics_identify(p);
-
-	err = rtl9602c_optics_hwmon_register(p);
-	if (err)
-		pr_warn("no optical diagnostics: %pe\n", ERR_PTR(err));
+		pr_warn("i2c master not handed over: %pe\n", ERR_PTR(err));
 
 	{
 		int perr = rtl9602c_ptp_register(p);
@@ -2418,12 +2418,13 @@ static int rtl9602c_probe(struct platform_device *pdev)
 
 	p->dev = &pdev->dev;
 	spin_lock_init(&p->irq_enable_lock);
-	mutex_init(&p->i2c_lock);
 	INIT_DELAYED_WORK(&p->intr_rearm, rtl9602c_intr_rearm);
 	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
 	spin_lock_init(&p->mib_lock);
 	INIT_DELAYED_WORK(&p->mib_work, rtl9602c_mib_work);
 	mutex_init(&p->sds_lock);
+	mutex_init(&p->optics_lock);
+	p->i2c_nr = -1;
 	INIT_DELAYED_WORK(&p->sds_work, rtl9602c_sds_work);
 	mutex_init(&p->table_lock);
 	mutex_init(&p->fdb_lock);

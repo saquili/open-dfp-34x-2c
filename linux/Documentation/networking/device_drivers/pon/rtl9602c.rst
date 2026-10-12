@@ -335,8 +335,9 @@ Where the code is
        ``rtl9602c_gem_tcont_ready()`` when an Alloc-ID is bound to a T-CONT, and
        ``rtl9602c_ponmac_sid_valid()`` when it binds or unbinds the OMCC.
    * - ``drivers/net/dsa/realtek/rtl9602c-optics.c``
-     - The optics: the I2C master and adapter, the hwmon device, TX_DISABLE and
-       the debugfs views ``a2``, ``eeblocks`` and ``tables``.
+     - The optics: the hwmon device, TX_DISABLE and the debugfs views ``a2``,
+       ``eeblocks`` and ``tables``, over the I2C master and adapter, which
+       ``drivers/i2c/busses/i2c-rtl9602c.c`` drives.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - Probe (which calls ``rtl9602c_ponmac_probe()``), setup and teardown (in
        which the OMCI port and the GEM data path are created and removed), and
@@ -387,7 +388,7 @@ Interfaces to user space
   ``uscntr``, and the optics ``a2``, ``eeblocks`` and ``tables``.
 - The hwmon device ``rtl9602c_optics`` (temperature, supply voltage, bias
   current, transmitted and received power of the optics) and the I2C adapter
-  ``rtl9602c i2c``, which the optics page describes. The hwmon device exists
+  ``rtl9602c i2c``, which Documentation/i2c/busses/i2c-rtl9602c.rst describes. The hwmon device exists
   only with ``CONFIG_HWMON`` (on in the board's configuration).
 - ``devlink`` on the switch, for the parameters and the region that the
   devlink page describes (Documentation/networking/devlink/rtl9602c.rst); the

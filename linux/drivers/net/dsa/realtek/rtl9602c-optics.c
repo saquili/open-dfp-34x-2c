@@ -1,42 +1,46 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * RTL9602C switch: the optics I2C master, diagnostics and TX_DISABLE
+ * RTL9602C switch: the optics' diagnostics, laser levelling and TX_DISABLE
  *
  * The transmitter and the receiver are run by a laser driver IC that
  * serves the SFF-8472 management interface, A0h at 0x50 and A2h at 0x51.
  * The SoC has two I2C masters with the same set of registers; the part
- * answers on master 1 only (through master 0 its addresses read zeros),
- * and the RTL9602C_I2C_* registers used here are master 1's.  The part
- * runs from the configuration and calibration in its own EEPROM, and the
- * driver writes nothing to it at probe.
+ * answers on master 1 only (through master 0 its addresses read zeros).
+ * The master has a driver of its own, i2c-rtl9602c, which registers it as an
+ * SMBus adapter once the switch driver has made its device
+ * (rtl9602c_optics_i2c_add()). The part runs from the configuration and
+ * calibration in its own EEPROM, and the driver writes nothing to it at
+ * probe.
  *
- * This file moves bytes over the master, one per transfer or the two of a
- * diagnostic word together, registers it as an SMBus adapter, publishes the
- * SFF-8472 diagnostics through hwmon, drives the laser's TX_DISABLE line,
- * turns the part's automatic extinction-ratio loop off at every PON bring-up
+ * This file moves bytes over that adapter, one per transfer or the two of a
+ * diagnostic word together, publishes the SFF-8472 diagnostics through hwmon,
+ * drives the laser's TX_DISABLE line, turns the part's automatic
+ * extinction-ratio loop off at every PON bring-up
  * (rtl9602c_optics_hold_modulation()), and offers two debugfs views that
  * only read, "a2" and "eeblocks", a third, "tables", that selects each table
  * to read it, and, with CONFIG_NET_DSA_RTL9602C_OPTICS_STORE, "t2write",
  * which stores table 2 bytes in the module's EEPROM on request.
  *
  * CONFIG_RTL9602C_OPTICS_RO makes the modulation hold, the driver's only
- * write to the part of its own accord, return without writing, and the adapter refuse every
- * write with -EPERM, so that nothing on the board changes the module.  The
- * hwmon device and the debugfs views stay as they are, since they only
- * read.  A module that does not declare itself as one this file was
+ * write to the part of its own accord, return without writing, and the adapter
+ * refuse every write with -EPERM, so that nothing on the board changes the
+ * module. The hwmon device and the debugfs views stay as they are, since they
+ * only read. A module that does not declare itself as one this file was
  * measured on gets the same treatment, without the build option
  * (rtl9602c_optics_identify()).
  *
  * The hwmon reads, the debugfs views, the modulation hold and clients of
  * the adapter all drive the same registers, and the hwmon core and the I2C
- * core each serialize their own callers only.  So every transfer runs under
- * the switch's i2c_lock, which each of those users holds for its whole
- * sequence: the modulation hold switches the page of A2h 128-255 and puts
- * it back, and no other user sees the switched page.
+ * core each serialize their own callers only. So every user of this file
+ * holds the optics lock for its whole sequence and the adapter's bus lock
+ * inside it (rtl9602c_i2c_lock()): the modulation hold switches the page of
+ * A2h 128-255 and puts it back, and no other user, a client of the adapter
+ * included, sees the switched page.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
 
+#include <linux/auxiliary_bus.h>
 #include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/ptp_clock_kernel.h>
@@ -61,6 +65,7 @@
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
 #include <linux/reboot.h>
+#include <linux/swab.h>
 #include <net/dsa.h>
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
@@ -68,44 +73,49 @@
 #include "rtl9602c.h"
 
 /*
- * BUSY is set while a transfer runs.  Poll up to 2000 times, 1 us apart:
- * a one-byte read at 100 kHz takes about 460 us.  The last command word
- * read, with its NACK bit, is left in @cmd.
+ * The optics' bus is the adapter that i2c-rtl9602c registers, reached by the
+ * number it is registered under, since it may come after this driver and go
+ * before it. A user holds the optics lock for a whole sequence, and the
+ * adapter's bus lock inside it, so that a client of the adapter, such as
+ * i2c-dev, cannot put a transfer between two of the sequence's. Without the
+ * adapter the sequence runs all the same, under the optics lock, and every
+ * transfer in it fails with -ENODEV.
  */
-static int rtl9602c_i2c_wait(struct rtl9602c_priv *p, u32 *cmd)
+static void rtl9602c_i2c_lock(struct rtl9602c_priv *p)
 {
-	int i;
+	struct i2c_adapter *adap = NULL;
 
-	for (i = 0; i < 2000; i++) {
-		*cmd = rtl9602c_r(p, RTL9602C_I2C_CMD);
-		if (!(*cmd & RTL9602C_I2C_CMD_BUSY))
-			return 0;
-		udelay(1);
-	}
-	return -ETIMEDOUT;
+	mutex_lock(&p->optics_lock);
+	if (p->i2c_nr >= 0)
+		adap = i2c_get_adapter(p->i2c_nr);
+	if (adap)
+		i2c_lock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
+	p->i2c_adap = adap;
 }
 
-static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave,
-				     u32 width)
+static void rtl9602c_i2c_unlock(struct rtl9602c_priv *p)
 {
-	/*
-	 * Describe the next transfer: the 7-bit device address, one
-	 * register-address byte, @width for the data bytes, and the SCL
-	 * divider for 100 kHz.  Without BUS_EN the master runs the transfer
-	 * without driving the bus: it ends without NACK and every read
-	 * returns the same byte.  Bits 31:22 are left as they are.
-	 */
-	rtl9602c_rmw(p, RTL9602C_I2C_XFER_CFG,
-		     RTL9602C_I2C_XFER_CFG_BUS_EN | RTL9602C_I2C_XFER_CFG_DEV_ADDR |
-		     RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH |
-		     RTL9602C_I2C_XFER_CFG_DATA_WIDTH | RTL9602C_I2C_XFER_CFG_CLK_DIV,
-		     RTL9602C_I2C_XFER_CFG_BUS_EN |
-		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_DEV_ADDR, slave) |
-		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_SUBADDR_WIDTH,
-				RTL9602C_I2C_XFER_CFG_WIDTH_8BIT) |
-		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_DATA_WIDTH, width) |
-		     FIELD_PREP(RTL9602C_I2C_XFER_CFG_CLK_DIV,
-				RTL9602C_I2C_XFER_CFG_CLK_DIV_100KHZ));
+	struct i2c_adapter *adap = p->i2c_adap;
+
+	p->i2c_adap = NULL;
+	if (adap) {
+		i2c_unlock_bus(adap, I2C_LOCK_ROOT_ADAPTER);
+		i2c_put_adapter(adap);
+	}
+	mutex_unlock(&p->optics_lock);
+}
+
+DEFINE_GUARD(rtl9602c_i2c, struct rtl9602c_priv *, rtl9602c_i2c_lock(_T),
+	     rtl9602c_i2c_unlock(_T))
+
+/* One SMBus transfer on the optics' bus, in a sequence under rtl9602c_i2c_lock(). */
+static int rtl9602c_i2c_xfer(struct rtl9602c_priv *p, u16 slave, char rw, u8 reg,
+			     int size, union i2c_smbus_data *data)
+{
+	lockdep_assert_held(&p->optics_lock);
+	if (!p->i2c_adap)
+		return -ENODEV;
+	return __i2c_smbus_xfer(p->i2c_adap, slave, 0, rw, reg, size, data);
 }
 
 /**
@@ -115,126 +125,86 @@ static void rtl9602c_i2c_setup_slave(struct rtl9602c_priv *p, u16 slave,
  * @reg: register address inside the device
  * @val: set to the byte read
  *
- * Busy-waits for up to about two milliseconds.  Called with p->i2c_lock held:
- * see the note at the top of this file.
+ * Busy-waits for up to about two milliseconds. Called in a sequence under
+ * rtl9602c_i2c_lock(): see the note at the top of this file.
  *
- * Return: 0, -ETIMEDOUT if the transfer does not end, or -ENXIO if the
- * device does not acknowledge.
+ * Return: 0, -ETIMEDOUT if the transfer does not end, -ENXIO if the device
+ * does not acknowledge, or -ENODEV without the adapter.
  */
-int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
-			   u8 *val)
+static int rtl9602c_i2c_read_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
+				  u8 *val)
 {
-	u32 cmd;
+	union i2c_smbus_data data;
 	int err;
 
-	lockdep_assert_held(&p->i2c_lock);
-	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_8BIT);
-	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, reg);
-
-	rtl9602c_w(p, RTL9602C_I2C_CMD, RTL9602C_I2C_CMD_START);
-	err = rtl9602c_i2c_wait(p, &cmd);
-	if (err)
-		return err;
-	if (cmd & RTL9602C_I2C_CMD_NACK)
-		return -ENXIO;
-	*val = rtl9602c_r(p, RTL9602C_I2C_RX_DATA);
-	return 0;
+	err = rtl9602c_i2c_xfer(p, slave, I2C_SMBUS_READ, reg, I2C_SMBUS_BYTE_DATA, &data);
+	if (!err)
+		*val = data.byte;
+	return err;
 }
 
 static int rtl9602c_i2c_write_byte(struct rtl9602c_priv *p, u16 slave, u8 reg,
 				   u8 val)
 {
-	u32 cmd;
-	int err;
+	union i2c_smbus_data data = { .byte = val };
 
-	lockdep_assert_held(&p->i2c_lock);
-	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_8BIT);
-	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, reg);
-	rtl9602c_w(p, RTL9602C_I2C_TX_DATA, val);
-
-	rtl9602c_w(p, RTL9602C_I2C_CMD,
-		   RTL9602C_I2C_CMD_START | RTL9602C_I2C_CMD_WRITE);
-	err = rtl9602c_i2c_wait(p, &cmd);
-	if (err)
-		return err;
-	if (cmd & RTL9602C_I2C_CMD_NACK)
-		return -ENXIO;
-	return 0;
+	return rtl9602c_i2c_xfer(p, slave, I2C_SMBUS_WRITE, reg, I2C_SMBUS_BYTE_DATA, &data);
 }
+
+/* Whether the adapter may pass on the write of a client: the module is one it knows. */
+static bool rtl9602c_optics_writable(void *priv)
+{
+	struct rtl9602c_priv *p = priv;
+
+	return !IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) && READ_ONCE(p->optics_known);
+}
+
+static void rtl9602c_optics_identify(struct rtl9602c_priv *p);
+static int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p);
 
 /*
- * The adapter moves one register-address byte and one data byte per
- * transfer, so it offers SMBus byte data and nothing else.  Access through
- * the adapter is not verified.
+ * The master's driver registers its adapter, or is about to take it away.
+ * The module is identified, and the diagnostics published, from the first
+ * moment the adapter is there.
  */
-static s32 rtl9602c_i2c_smbus_xfer(struct i2c_adapter *adap, u16 addr,
-				   unsigned short flags, char read_write,
-				   u8 command, int size,
-				   union i2c_smbus_data *data)
+static void rtl9602c_optics_adapter(void *priv, struct i2c_adapter *adap)
 {
-	struct rtl9602c_priv *p = i2c_get_adapdata(adap);
+	struct rtl9602c_priv *p = priv;
 	int err;
 
-	if (size != I2C_SMBUS_BYTE_DATA)
-		return -EOPNOTSUPP;
-	if (read_write != I2C_SMBUS_READ &&
-	    (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_known))
-		return -EPERM;
+	mutex_lock(&p->optics_lock);
+	p->i2c_nr = adap ? adap->nr : -1;
+	mutex_unlock(&p->optics_lock);
+	if (!adap)
+		return;
 
-	mutex_lock(&p->i2c_lock);
-	if (read_write == I2C_SMBUS_READ)
-		err = rtl9602c_i2c_read_byte(p, addr, command, &data->byte);
-	else
-		err = rtl9602c_i2c_write_byte(p, addr, command, data->byte);
-	mutex_unlock(&p->i2c_lock);
-	return err;
+	rtl9602c_optics_identify(p);
+	err = rtl9602c_optics_hwmon_register(p);
+	if (err)
+		pr_warn("no optical diagnostics: %pe\n", ERR_PTR(err));
 }
-
-static u32 rtl9602c_i2c_functionality(struct i2c_adapter *adap)
-{
-	return I2C_FUNC_SMBUS_BYTE_DATA;
-}
-
-static const struct i2c_algorithm rtl9602c_i2c_algo = {
-	.smbus_xfer	= rtl9602c_i2c_smbus_xfer,
-	.functionality	= rtl9602c_i2c_functionality,
-};
 
 /**
- * rtl9602c_i2c_register() - register the optics I2C master as an adapter
+ * rtl9602c_optics_i2c_add() - hand the optics' I2C master to its driver
  * @p: driver state
  *
- * Enables the master and registers it as the SMBus adapter "rtl9602c i2c".
- * The driver itself reaches the part without going through the adapter.
- * With CONFIG_RTL9602C_OPTICS_RO, or for a module the driver does not write
- * (rtl9602c_optics_identify()), the adapter refuses every write from its
- * clients.
+ * Makes the auxiliary device "rtl9602c.i2c" that i2c-rtl9602c binds to, with
+ * the switch's register window, which holds the master's registers. The
+ * adapter comes when that driver is there, which may be after this call
+ * (rtl9602c_optics_adapter()).
  *
  * Return: 0 or a negative error code.
  */
-int rtl9602c_i2c_register(struct rtl9602c_priv *p)
+int rtl9602c_optics_i2c_add(struct rtl9602c_priv *p)
 {
-	/*
-	 * Until its pad function is enabled the master ignores the start
-	 * command: the transfer ends at once, with no BUSY, no NACK and a zero
-	 * byte.  The register holds the enables of other pad functions too, so
-	 * only this bit is changed.
-	 */
-	rtl9602c_rmw(p, RTL9602C_PADMUX_FUNC_EN, 0, RTL9602C_PADMUX_FUNC_EN_I2C);
+	struct auxiliary_device *adev;
 
-	p->i2c.owner = THIS_MODULE;
-	p->i2c.algo = &rtl9602c_i2c_algo;
-	p->i2c.dev.parent = p->dev;
-	/*
-	 * The adapter has no device tree node. The switch's would make the I2C
-	 * core treat the node's children as I2C devices, and the ports node is
-	 * not one: it would log that no I2C device could be created for it. No
-	 * node refers to the adapter, and the devices at 0x50 and 0x51 are not
-	 * described.
-	 */
-	i2c_set_adapdata(&p->i2c, p);
-	strscpy(p->i2c.name, "rtl9602c i2c", sizeof(p->i2c.name));
-	return devm_i2c_add_adapter(p->dev, &p->i2c);
+	p->i2c.reg = p->reg;
+	p->i2c.priv = p;
+	p->i2c.writable = rtl9602c_optics_writable;
+	p->i2c.adapter = rtl9602c_optics_adapter;
+	adev = devm_auxiliary_device_create(p->dev, "i2c", &p->i2c);
+	return adev ? 0 : -ENODEV;
 }
 
 /*
@@ -319,16 +289,16 @@ static int rtl9602c_optics_field(struct rtl9602c_priv *p, u16 reg, char *out,
  * hold writes nothing and the adapter refuses writes, as with
  * CONFIG_RTL9602C_OPTICS_RO.  Called once, after the master is enabled.
  */
-void rtl9602c_optics_identify(struct rtl9602c_priv *p)
+static void rtl9602c_optics_identify(struct rtl9602c_priv *p)
 {
 	char name[17], part[17];
 	unsigned int i;
 	int err;
 
-	mutex_lock(&p->i2c_lock);
+	rtl9602c_i2c_lock(p);
 	err = rtl9602c_optics_field(p, 20, name, 16) ?:
 	      rtl9602c_optics_field(p, 40, part, 16);
-	mutex_unlock(&p->i2c_lock);
+	rtl9602c_i2c_unlock(p);
 	if (err) {
 		pr_warn("optics: the module's header could not be read (%pe); the laser driver is only read\n",
 			ERR_PTR(err));
@@ -338,7 +308,7 @@ void rtl9602c_optics_identify(struct rtl9602c_priv *p)
 	for (i = 0; i < ARRAY_SIZE(rtl9602c_optics_modules); i++) {
 		if (!strcmp(name, rtl9602c_optics_modules[i].name) &&
 		    strstarts(part, rtl9602c_optics_modules[i].part)) {
-			p->optics_known = true;
+			WRITE_ONCE(p->optics_known, true);
 			return;
 		}
 	}
@@ -424,31 +394,23 @@ int rtl9602c_l_txdis_gpio(struct rtl9602c_priv *p, bool disable)
 /*
  * Read the word at A2h byte @a2, most significant byte first, in one
  * transfer of two bytes: SFF-8472 has a diagnostic read in one two-byte
- * sequence, during which the module does not update it.  RX_DATA holds the
- * first byte read, the most significant, in bits 7:0.
+ * sequence, during which the module does not update it.
  */
 static int rtl9602c_l_a2_word(struct rtl9602c_priv *p, unsigned int a2, u16 *val)
 {
-	u32 cmd, rx;
+	union i2c_smbus_data data;
 	u16 slave;
 	u8 sub;
 	int err;
 
-	lockdep_assert_held(&p->i2c_lock);
 	err = rtl9602c_l_addr(RTL9602C_OPTICS_A2_BASE + a2, &slave, &sub);
 	if (err)
 		return err;
-	rtl9602c_i2c_setup_slave(p, slave, RTL9602C_I2C_XFER_CFG_WIDTH_16BIT);
-	rtl9602c_w(p, RTL9602C_I2C_SUBADDR, sub);
-
-	rtl9602c_w(p, RTL9602C_I2C_CMD, RTL9602C_I2C_CMD_START);
-	err = rtl9602c_i2c_wait(p, &cmd);
+	/* The first byte read, the most significant, is the SMBus word's low byte. */
+	err = rtl9602c_i2c_xfer(p, slave, I2C_SMBUS_READ, sub, I2C_SMBUS_WORD_DATA, &data);
 	if (err)
 		return err;
-	if (cmd & RTL9602C_I2C_CMD_NACK)
-		return -ENXIO;
-	rx = rtl9602c_r(p, RTL9602C_I2C_RX_DATA);
-	*val = (rx & 0xff) << 8 | (rx >> 8 & 0xff);
+	*val = swab16(data.word);
 	return 0;
 }
 
@@ -519,7 +481,7 @@ static int rtl9602c_hwmon_read(struct device *dev,
 
 	a2 = limit < 0 ? RTL9602C_OPTICS_A2_WORD(ddm) :
 			 RTL9602C_OPTICS_A2_LIMIT(ddm, limit);
-	scoped_guard(mutex, &p->i2c_lock)
+	scoped_guard(rtl9602c_i2c, p)
 		err = rtl9602c_l_a2_word(p, a2, &raw);
 
 	switch (ddm) {
@@ -609,17 +571,21 @@ static const struct hwmon_chip_info rtl9602c_hwmon_chip = {
  *
  * Registers the hwmon device "rtl9602c_optics" once one read of the
  * temperature word has succeeded, so that no device appears when nothing
- * answers at A2h.  Without CONFIG_HWMON this is a stub that returns 0.
+ * answers at A2h.  It does nothing if the device is there already, as when
+ * the master's driver comes back.  Without CONFIG_HWMON this is a stub that
+ * returns 0.
  *
  * Return: 0, the error of the test read, or an error from the hwmon core.
  */
-int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
+static int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
 {
 	struct device *hwmon;
 	u16 probe;
 	int err;
 
-	scoped_guard(mutex, &p->i2c_lock)
+	if (p->optics_hwmon)
+		return 0;
+	scoped_guard(rtl9602c_i2c, p)
 		err = rtl9602c_l_a2_word(p, RTL9602C_OPTICS_A2_WORD(RTL9602C_OPTICS_TEMP),
 					 &probe);
 	if (err)
@@ -628,10 +594,13 @@ int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
 	hwmon = devm_hwmon_device_register_with_info(p->dev, "rtl9602c_optics",
 						     p, &rtl9602c_hwmon_chip,
 						     NULL);
-	return PTR_ERR_OR_ZERO(hwmon);
+	if (IS_ERR(hwmon))
+		return PTR_ERR(hwmon);
+	p->optics_hwmon = hwmon;
+	return 0;
 }
 #else
-int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
+static int rtl9602c_optics_hwmon_register(struct rtl9602c_priv *p)
 {
 	return 0;
 }
@@ -654,12 +623,12 @@ static int rtl9602c_a2_show(struct seq_file *s, void *unused)
 	u16 w[5];
 	int mdeg;
 
-	mutex_lock(&p->i2c_lock);
+	rtl9602c_i2c_lock(p);
 	for (i = 0; i < sizeof(b) && !err; i++)
 		err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + i, &b[i]);
 	for (i = 0; i < ARRAY_SIZE(w) && !err; i++)
 		err = rtl9602c_l_a2_word(p, RTL9602C_OPTICS_A2_WORD(i), &w[i]);
-	mutex_unlock(&p->i2c_lock);
+	rtl9602c_i2c_unlock(p);
 	if (err) {
 		seq_printf(s, "A2h read failed: %d\n", err);
 		return 0;
@@ -877,9 +846,9 @@ static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long actio
 	u8 tabsel, eectl;
 	int err;
 
-	mutex_lock(&p->i2c_lock);
+	rtl9602c_i2c_lock(p);
 	if (!p->optics_ref || !p->optics_mode) {
-		mutex_unlock(&p->i2c_lock);
+		rtl9602c_i2c_unlock(p);
 		return NOTIFY_DONE;
 	}
 	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
@@ -895,7 +864,7 @@ static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long actio
 	}
 	if (!err)
 		p->optics_mode = 0;
-	mutex_unlock(&p->i2c_lock);
+	rtl9602c_i2c_unlock(p);
 	pr_info("GN25L95: transmit power %s level mode 0 before the restart\n",
 		err ? "not put back at" : "back at");
 	return NOTIFY_DONE;
@@ -921,7 +890,7 @@ int rtl9602c_optics_level_register(struct rtl9602c_priv *p)
  * rtl9602c_optics_level_work() - set the optics to the ONU's power level
  * @work: &rtl9602c_priv.optics_level_work
  *
- * Takes the level mode the GPON code asks for and sets it under i2c_lock,
+ * Takes the level mode the GPON code asks for and sets it under the optics lock,
  * with the configuration table shown and its writes kept out of the EEPROM
  * as in the modulation hold; a failure puts mode 0 back.  The GPON code is
  * then told what was set.  Nothing is written with CONFIG_RTL9602C_OPTICS_RO
@@ -942,9 +911,9 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 	mutex_unlock(&p->gpon_lock);
 	mode = asked;
 
-	mutex_lock(&p->i2c_lock);
+	rtl9602c_i2c_lock(p);
 	if (mode == p->optics_mode) {
-		mutex_unlock(&p->i2c_lock);
+		rtl9602c_i2c_unlock(p);
 		return;
 	}
 	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_ref ||
@@ -985,7 +954,7 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 		rtl9602c_optics_tx_bias(p, &tx, &bias);
 told:
 	mode = p->optics_mode < RTL9602C_OPTICS_LEVEL_MODES ? p->optics_mode : 0;
-	mutex_unlock(&p->i2c_lock);
+	rtl9602c_i2c_unlock(p);
 
 	if (!err)
 		pr_info("GN25L95: transmit power level mode %u: %u.%u uW, bias %u.%02u mA\n",
@@ -1148,7 +1117,7 @@ int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO) || !p->optics_known)
 		return 0;
 
-	guard(mutex)(&p->i2c_lock);
+	guard(rtl9602c_i2c)(p);
 	return __rtl9602c_optics_hold_modulation(p);
 }
 
@@ -1172,7 +1141,7 @@ static int rtl9602c_eeblocks_show(struct seq_file *s, void *unused)
 
 	for (slave = 0x50; slave <= 0x53; slave++) {
 		nack = 0;
-		mutex_lock(&p->i2c_lock);
+		rtl9602c_i2c_lock(p);
 		for (i = 0; i < sizeof(b); i++) {
 			err = rtl9602c_i2c_read_byte(p, slave, i, &b[i]);
 			if (err) {
@@ -1180,7 +1149,7 @@ static int rtl9602c_eeblocks_show(struct seq_file *s, void *unused)
 				nack++;
 			}
 		}
-		mutex_unlock(&p->i2c_lock);
+		rtl9602c_i2c_unlock(p);
 		seq_printf(s, "=== i2c 0x%02x -- image 0x%03x -- %d of 256 did not answer\n",
 			   slave, (slave - 0x50) * 0x100, nack);
 		if (nack == (int)sizeof(b)) {
@@ -1213,10 +1182,10 @@ static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 	u8 b[0x80], was;
 	int err;
 
-	mutex_lock(&p->i2c_lock);
+	rtl9602c_i2c_lock(p);
 	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &was);
 	if (err) {
-		mutex_unlock(&p->i2c_lock);
+		rtl9602c_i2c_unlock(p);
 		seq_printf(s, "the page select could not be read: %d\n", err);
 		return 0;
 	}
@@ -1234,7 +1203,7 @@ static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 		seq_puts(s, "\n");
 	}
 	err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, was);
-	mutex_unlock(&p->i2c_lock);
+	rtl9602c_i2c_unlock(p);
 	if (err)
 		seq_printf(s, "the page select was not put back to %02x: %d\n", was, err);
 	return 0;
@@ -1408,7 +1377,7 @@ static ssize_t rtl9602c_t2write_write(struct file *file, const char __user *ubuf
 		return -EFAULT;
 	buf[len] = '\0';
 
-	guard(mutex)(&p->i2c_lock);
+	guard(rtl9602c_i2c)(p);
 	if (sysfs_streq(buf, "open"))
 		err = rtl9602c_gn_t2_open(p);
 	else if (sysfs_streq(buf, "close"))
