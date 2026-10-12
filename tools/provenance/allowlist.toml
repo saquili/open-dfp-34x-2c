@@ -195,6 +195,22 @@ of the panel's messages, not a host name under a private top-level name.
 """
 
 [[allow]]
+gate = "unit-ids"
+rules = ["host-name"]
+paths = [
+  "onu-utils/scripts/onu-apply",
+  "onu-utils/tests/test_onu_apply.sh",
+  "pond/src/prov_settings.c",
+]
+match = '(?:pass|session\.\d+)\.lan'
+reason = """
+Keys of the state that onu-apply prints and the status daemon reads: the
+pass-through LAN's, and one for the LAN of each session. The name of a LAN
+interface stands under each key, and the dot is the key's structure, not a
+host name. They name no host and identify no unit.
+"""
+
+[[allow]]
 gate = "forbidden-words"
 rules = ["issue-reference"]
 paths = ["docs/testing/*"]
