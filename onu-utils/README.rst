@@ -6,12 +6,13 @@ onu-utils
 =========
 
 The small programs of the ONU. A person at the stick runs ``onu-config``,
-``onu-apply``, ``onu-update``, ``onu-svc``, ``pon``, ``onu-nl`` and ``passwd``, which are
-in ``/usr/sbin`` and ``/usr/bin``. The others only other programs run, and
-they are in ``/usr/lib/onu``, out of a person's way (ADR 0015): ``ponid``,
-``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``, ``onu-change``,
-``onu-trial``, ``onu-act`` and ``onu-config.sh``. A script that runs one of
-them finds it there, and names it by its whole path where procd starts it.
+``onu-apply``, ``onu-update``, ``onu-svc``, ``pon``, ``onu-nl`` and
+``passwd``, which are in ``/usr/sbin`` and ``/usr/bin``. The others only other
+programs run, and they are in ``/usr/lib/onu``, out of a person's way (ADR
+0015): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``,
+``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call`` and
+``onu-config.sh``. A script that runs one of them finds it there, and names it
+by its whole path where procd starts it.
 
 ``ponid``
    prints the identity of the unit (serial number, vendor ID, version,
