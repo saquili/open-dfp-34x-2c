@@ -1,0 +1,119 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# kernel-series: what this repository's kernel series changes in code that the
+# Linux kernel owns.
+#
+# Usage: kernel-series list   [REV]
+#        kernel-series check  [REV]
+#        kernel-series export [-o DIR] [REV]
+#
+# Run inside the repository. REV is the commit to look at (default HEAD). The
+# series is every commit from the one that imported the kernel
+# ("linux: import Linux ...") to REV.
+#
+#   list    The files of linux/ that the series modifies or deletes, one path
+#           a line, relative to linux/. Files it adds are the series' own and
+#           are not listed.
+#   check   Fails when a file that "list" prints is missing from
+#           docs/handbook/kernel-series.rst, which says why each was changed.
+#           The page is read from the working tree, or from REV when one is
+#           given.
+#   export  Writes the commits that touch the networking core, the PTP core
+#           and the YNL generator (the paths in CORE below) as patch files, in
+#           the order of the series, to DIR (default build/kernel-series), and
+#           prints their names. A commit that adds a driver beside such a
+#           change, as the tag driver's commit does, is exported whole.
+#
+# Exit status: 0 on success, 1 when a check fails or nothing could be done.
+
+set -eu
+
+prog=kernel-series
+die() {
+	echo "$prog: $*" >&2
+	exit 1
+}
+usage() {
+	echo "usage: $prog list [REV] | check [REV] | export [-o DIR] [REV]" >&2
+	exit 2
+}
+
+# The paths, under linux/, of the code whose changes are offered to its
+# maintainers first.
+CORE="linux/net/dsa linux/include/net/dsa.h linux/include/net/flow_offload.h
+	linux/net/core/flow_offload.c linux/drivers/ptp/ptp_clock.c
+	linux/tools/net/ynl/pyynl"
+DOC=docs/handbook/kernel-series.rst
+
+[ $# -ge 1 ] || usage
+cmd=$1
+shift
+out=
+if [ "$cmd" = export ]; then
+	while getopts o: opt; do
+		case $opt in
+		o) out=$OPTARG ;;
+		*) usage ;;
+		esac
+	done
+	shift $((OPTIND - 1))
+fi
+[ $# -le 1 ] || usage
+named=${1:+yes}
+rev=${1:-HEAD}
+
+command -v git >/dev/null 2>&1 || die "git is not installed"
+top=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+git rev-parse --verify --quiet "$rev^{commit}" >/dev/null || die "$rev is not a commit"
+
+# The import is the first commit, oldest first, whose subject says so.
+base=$(git log --reverse --format='%H %s' "$rev" | awk '/^[0-9a-f]+ linux: import Linux / { print $1; exit }')
+[ -n "$base" ] || die "no commit \"linux: import Linux ...\" below $rev"
+
+modified() {
+	git diff --name-status --no-renames "$base" "$rev" -- linux |
+		awk -F'\t' '$1 == "M" || $1 == "D" { sub(/^linux\//, "", $2); print $2 }'
+}
+
+case $cmd in
+list)
+	modified
+	;;
+check)
+	# Without a REV the page is read from the working tree, so that it can
+	# be checked before it is committed; with one, from that commit.
+	if [ -n "$named" ]; then
+		doc=$(git show "$rev:$DOC" 2>/dev/null) || die "$rev has no $DOC"
+	else
+		[ -f "$top/$DOC" ] || die "no $DOC"
+		doc=$(cat "$top/$DOC")
+	fi
+	missing=0
+	for path in $(modified); do
+		# As the page writes it, between double backticks: a path that is
+		# only part of another does not count.
+		if ! printf '%s\n' "$doc" | grep -F -q -- "\`\`$path\`\`"; then
+			echo "$prog: $path is changed by the series but $DOC does not name it" >&2
+			missing=1
+		fi
+	done
+	[ "$missing" -eq 0 ] || exit 1
+	;;
+export)
+	[ -n "$out" ] || out=$top/build/kernel-series
+	mkdir -p "$out"
+	n=1
+	# CORE is split on purpose: it is a list of paths.
+	# shellcheck disable=SC2086
+	for commit in $(git log --reverse --format=%H "$base..$rev" -- $CORE); do
+		git format-patch --no-signature --start-number "$n" -1 -o "$out" "$commit"
+		n=$((n + 1))
+	done
+	[ "$n" -gt 1 ] || die "no commit in $base..$rev touches the networking core"
+	;;
+*)
+	usage
+	;;
+esac

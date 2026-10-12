@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""Run the self-tests of tools/kernel-series.
+
+Usage: tests/run [-v] [TEST...]
+
+TEST names a module, class or method; without one every test_*.py here runs.
+The tests need Python 3 and git; they make small repositories of their own
+and use no network.
+"""
+import os
+import sys
+import unittest
+
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+
+
+def main(argv):
+    verbosity = 1
+    names = []
+    for arg in argv:
+        if arg in ("-v", "--verbose"):
+            verbosity = 2
+        elif arg in ("-h", "--help"):
+            sys.stdout.write(__doc__)
+            return 0
+        else:
+            names.append(arg)
+    loader = unittest.defaultTestLoader
+    suite = (loader.loadTestsFromNames(names) if names
+             else loader.discover(HERE, pattern="test_*.py"))
+    result = unittest.TextTestRunner(verbosity=verbosity).run(suite)
+    return 0 if result.wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

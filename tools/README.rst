@@ -17,6 +17,9 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
   a target binary.
 * ``kernel-archive/`` -- the archive of the committed ``linux/`` tree that the
   distribution build takes its kernel and its kernel headers from.
+* ``kernel-series/`` -- what the kernel series changes in the kernel's own
+  files, the check that the handbook page explains each, and the export of the
+  networking-core patches.
 * ``image-budget/`` -- the size check of the two flash images against their
   partitions.
 * ``lib-trim/`` -- the cut of the image's shared libraries to what its programs
