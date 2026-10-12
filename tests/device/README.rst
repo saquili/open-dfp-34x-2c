@@ -88,9 +88,27 @@ been brought up to today's. What a case expects of the image:
   bridge ``omcibr0``, which omcid builds only while the stick holds no PPPoE
   account.
 
-The PPPoE sessions, the delegated IPv6 prefix, an update with its trial, the
-way in through the shipped firmware's web page and the store in ``config`` have
-no case yet.
+* ``net.sessions`` and ``system.restart`` look at the PPPoE sessions the stick
+  holds, and are skipped (or fail to find them) on a stick with no PPPoE account.
+  ``system.restart`` kills with SIGKILL every program procd keeps and each
+  session's ``pppoed``, which cuts the sessions off without a goodbye, so that the
+  concentrator may keep the old ones for minutes before it takes new ones; the
+  case waits up to five minutes for the sessions. It is run with
+  ``--destructive``.
+* ``update.trial-and-back`` writes the update file given with ``--update`` into
+  the bank the stick does not run, has the loader start it once, waits until it
+  has committed itself, and goes back to the bank it came from by the same way.
+  It needs a stick that runs a bank of the flash, not a RAM boot, and refuses to
+  write over a bank that holds the shipped firmware unless ``--overwrite-shipped``
+  says so. It is run with ``--destructive``; the stick is restarted three times.
+* ``mgmt.pond-no-store`` puts the mark that ``onu-config`` leaves when the store
+  cannot be read, ``!`` in ``/run/onu-auth``, for the length of one request and
+  puts the file back.
+
+The way in through the shipped firmware's web page has no case yet; the host tests
+of ``mkweb.py`` cover the package. The warning of ``omcid`` about a VLAN of the OLT
+that is the stick's management VLAN has none either, since the lab's OLT carries
+no such VLAN: ``omcid/tests/kernel`` tests it.
 
 Running
 =======
@@ -99,7 +117,8 @@ From this directory::
 
     python3 -m devtest --bench BENCH --stick ADDRESS \
         --olt-port PORT --subscriber-port PORT \
-        --token-file FILE [--tools ../../build/image/diag] --out ../../docs/testing/NAME
+        --token-file FILE [--tools ../../build/image/diag] \
+        [--update ../../build/image/images/update.bin] --out ../../docs/testing/NAME
 
 ``--list`` lists the cases; naming cases or areas (``gpon``, ``data.upstream``)
 runs only those. The kernel log is read after the other cases, so that it
@@ -119,8 +138,8 @@ runs the tests as soon as the stick is gone, that brings it back at once, such
 as the bench tool's RAM boot of the image under test, which breaks into the
 countdown (``tools/bench``). The settings can also come from the environment:
 ``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_OLT_PORT``,
-``DEVTEST_SUBSCRIBER_PORT``, ``DEVTEST_TOKEN_FILE``, ``DEVTEST_TOOLS`` and
-``DEVTEST_RELOAD``.
+``DEVTEST_SUBSCRIBER_PORT``, ``DEVTEST_TOKEN_FILE``, ``DEVTEST_TOOLS``,
+``DEVTEST_UPDATE`` and ``DEVTEST_RELOAD``.
 
 What a run records leaves out what names one unit or one bench: MAC addresses,
 GPON serial numbers, the token, and the names of the bench host and the stick

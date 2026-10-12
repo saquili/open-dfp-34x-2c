@@ -260,3 +260,67 @@ def pond_values(ctx: Context):
     missing += [k for k in ("onu", "optics") if not isinstance(values.get(k), dict)]
     shown = ", ".join(f"{k}: {len(json.dumps(v))} B" for k, v in values.items())
     return verdict(not missing, f"HTTP {code}, {shown}" + (f"; missing {missing}" if missing else ""))
+
+
+@case("net.sessions", "Host side",
+      "The stick holds its PPPoE sessions: each on a GEM interface and up under netifd, the "
+      "address of the IPv4 one handed to the host and the delegated IPv6 prefix routed to it",
+      tools=("ubus",))
+def sessions(ctx: Context):
+    from .cases_system import kv
+    told = kv(ctx.stick.text("onu-apply state"))
+    if told.get("mode") != "passthrough":
+        return skipped("the stick holds no PPPoE account (mode " + (told.get("mode") or "unknown") + ")")
+    numbers = sorted({k.split(".")[1] for k in told if re.fullmatch(r"session\.\d+\.dev", k)})
+    if not numbers:
+        return failed("passthrough, and no session in the state")
+    problems, shown = [], []
+    for n in numbers:
+        gem, hands = told.get(f"session.{n}.gem", ""), told.get(f"session.{n}.hands", "")
+        status = json.loads(ctx.stick.text(f"ubus call network.interface.ses{n} status"))
+        if not gem or not status.get("up"):
+            problems.append(f"session {n} {'has no GEM port' if not gem else 'is not up'}")
+        if hands == "ipv4":
+            if not told.get("pass.address") or not told.get("pass.peer_gateway"):
+                problems.append(f"session {n}: no address handed to the host")
+            shown.append(f"session {n} on {gem}, its address handed to the host")
+        elif hands == "ipv6":
+            dhcp = ctx.stick.run(f"ubus call dhcp6d.ses{n} status")
+            state = json.loads(dhcp.out) if dhcp.ok else {}
+            if not (state.get("prefix") and state.get("bound") and state.get("routed")):
+                problems.append(f"session {n}: its prefix is not delegated and routed "
+                                f"({dhcp.out.strip() or 'dhcp6d.ses%s is not on ubus' % n})")
+            shown.append(f"session {n} on {gem}, prefix {state.get('prefix', 'none')} "
+                         f"{'routed to the host' if state.get('routed') else 'not routed'}")
+        else:
+            shown.append(f"session {n} on {gem}, its address kept on the stick")
+    return verdict(not problems, "; ".join(shown) + (" | " + "; ".join(problems) if problems else ""))
+
+
+# Seconds the panel's reply to a sign-in may take.
+LOGIN_WAIT = 30
+
+
+@case("mgmt.pond-no-store", "Management",
+      "When the stick cannot read its store the panel refuses every sign-in with 423 and "
+      "does not fall back to the default password")
+def pond_no_store(ctx: Context):
+    # The state onu-config keeps in /run/onu-auth when it cannot read the store is a "!";
+    # put it there, with the file's own mode and owner kept, and put the file back whatever
+    # happens. The sign-in is tried with the published default password.
+    ctx.stick.run("cp -p /run/onu-auth /run/onu-auth.devtest 2>/dev/null; true")
+    saved = ctx.stick.run("[ -e /run/onu-auth.devtest ]").ok
+    try:
+        ctx.stick.run("echo '!' > /run/onu-auth", check=True)
+        command = (f"curl -s -k -m {LOGIN_WAIT} -o /dev/null -w '%{{http_code}}' "
+                   "-H 'Content-Type: application/json' -H 'X-Pond: 1' "
+                   "-d '{\"user\":\"root\",\"secret\":\"admin\"}' "
+                   f"{shlex.quote(f'https://{ctx.settings.stick}/api/auth/login')}")
+        code = ctx.bench.text(command, timeout=LOGIN_WAIT + 15).strip()
+    finally:
+        if saved:
+            ctx.stick.run("mv /run/onu-auth.devtest /run/onu-auth")
+        else:
+            ctx.stick.run("rm -f /run/onu-auth")
+    return verdict(code == "423", f"a sign-in with the published default answered HTTP {code}")
+

@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 
-from . import cases_system, cases_net, cases_pon, cases_data  # noqa: F401
+from . import cases_system, cases_net, cases_pon, cases_data, cases_update  # noqa: F401
 from .access import Settings, bench_remote, redact, stick_remote
 from .core import CASES, FAIL, Context, run_case, select
 from .tools import PROGRAMS, TOOLS_DIR, remove
@@ -51,6 +51,11 @@ def main(argv: list[str] | None = None) -> int:
                              "tc, bridge, devlink, dcb, ethtool or ubus, which the flash's image "
                              "lacks, have them put on the stick, in memory, for the run "
                              "(DEVTEST_TOOLS)")
+    parser.add_argument("--update", default=os.environ.get("DEVTEST_UPDATE", ""), metavar="FILE",
+                        help="an update file (update.bin) for the case that writes the other "
+                             "bank, starts it on trial, keeps it and goes back (DEVTEST_UPDATE)")
+    parser.add_argument("--overwrite-shipped", action="store_true",
+                        help="let that case write over a bank that holds the shipped firmware")
     parser.add_argument("--no-sudo", action="store_true",
                         help="the bench host runs the packet generator without sudo")
     parser.add_argument("--destructive", action="store_true",
@@ -79,7 +84,8 @@ def main(argv: list[str] | None = None) -> int:
             token = handle.read().strip()
     settings = Settings(bench=args.bench, stick=args.stick, bench_sudo=not args.no_sudo,
                         olt_port=args.olt_port, subscriber_port=args.subscriber_port,
-                        pond_token=token, reload=args.reload, tools=args.tools)
+                        pond_token=token, reload=args.reload, tools=args.tools,
+                        update=args.update, overwrite_shipped=args.overwrite_shipped)
     trail: list[str] = []
     ctx = Context(settings, stick_remote(settings, trail), bench_remote(settings, trail), trail,
                   destructive=args.destructive)

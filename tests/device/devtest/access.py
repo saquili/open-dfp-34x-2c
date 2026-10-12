@@ -43,6 +43,11 @@ class Settings:
     # A build's diag directory, which has the tools that a case needs and the
     # stick lacks (tools.py).
     tools: str = ""
+    # An update file (update.bin) for the case that updates the stick's other bank
+    # (cases_update.py), and whether that case may write over a bank that holds the
+    # shipped firmware.
+    update: str = ""
+    overwrite_shipped: bool = False
 
 
 @dataclasses.dataclass

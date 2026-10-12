@@ -134,8 +134,8 @@ class Runner(unittest.TestCase):
     def test_the_kernel_log_is_read_after_the_other_cases(self):
         everything = [c.id for c in select(None) if not c.destructive]
         self.assertEqual(everything[-1], "system.log")
-        self.assertEqual([c.id for c in select(["system"])][-2:],
-                         ["system.log", "system.watchdog-reset"])
+        self.assertEqual([c.id for c in select(["system"])][-3:],
+                         ["system.log", "system.restart", "system.watchdog-reset"])
 
 
 class Record(unittest.TestCase):
