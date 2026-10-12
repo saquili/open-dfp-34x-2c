@@ -5,7 +5,8 @@
 (ONU_UTILS/src/act.c) agree. A method of the table that pond's sources name
 must be in the list, or ubusd refuses pond the call and the page shows nothing
 for it; a method of the list must be in the table, or it is a typo that
-allows nothing. Run from pond's directory.
+allows nothing. The methods that omcid and dhcp6d call for themselves are not
+pond's: the list must not give them to it. Run from pond's directory.
 """
 
 import glob
@@ -14,13 +15,17 @@ import re
 import sys
 
 
+# The methods of the programs that tell of a change they publish (onu-call).
+OTHERS = {"omcid", "dhcp6d"}
+
+
 def main():
     onu_utils = sys.argv[1]
     table = set(re.findall(r'\.name = "([a-z_]+)"', open(onu_utils + "/src/act.c").read()))
     acl = json.load(open("acl.json"))["access"]["onu-act"]["methods"]
     listed = set(acl)
     sources = "".join(open(f).read() for f in glob.glob("src/*.c"))
-    named = {m for m in table if re.search(r'"%s"' % m, sources)}
+    named = {m for m in table - OTHERS if re.search(r'"%s"' % m, sources)}
     failures = 0
     checks = 0
 
@@ -35,6 +40,7 @@ def main():
     check(not listed - table, "listed but not in the table: %s" % sorted(listed - table))
     check(not named - listed, "named by pond but not listed: %s" % sorted(named - listed))
     check("settings_state" in named, "pond asks for the state of the settings")
+    check(not listed & OTHERS, "pond may call none that another program calls for itself")
     print("test_acl: %d checks, %d failed" % (checks, failures))
     sys.exit(1 if failures else 0)
 
