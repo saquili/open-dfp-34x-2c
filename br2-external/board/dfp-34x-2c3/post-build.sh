@@ -9,8 +9,9 @@
 #
 # It takes out the programs of iproute2, which the stick does not run, the
 # command-line tools of the network layer and the tools that diagnose a stick,
-# setting aside iproute2's ip, tc, devlink and bridge with the latter for the
-# RAM image, and leaves /sbin/ip to BusyBox; it cuts the shared libraries to what
+# setting aside iproute2's ip, tc, devlink, bridge and dcb, and ethtool, with the
+# latter for the RAM image, and leaves /sbin/ip to BusyBox; it cuts the shared
+# libraries to what
 # the programs use, with tools/lib-trim, when the tree holds the shared C
 # library; and it writes into /etc/os-release, as
 # BUILD_ID, the commit of this repository that the image is built from: the
@@ -46,9 +47,9 @@ fi
 # them: onu-nl does what the boot script and the scripts of onu-utils ask of
 # ip, tc and devlink (ADR 0014, step 9g); BusyBox's ip stays built in for a
 # person at the console, and no script runs it. The RAM image carries ip, tc,
-# devlink and bridge for diagnosis, below; the others would add some 3 MB,
+# devlink, bridge and dcb for diagnosis, below; the others would add some 3 MB,
 # unpacked, to it.
-for prog in ctstat dcb genl ifstat lnstat nstat rdma routel rtacct rtmon rtstat ss tipc vdpa; do
+for prog in ctstat genl ifstat lnstat nstat rdma routel rtacct rtmon rtstat ss tipc vdpa; do
 	rm -f "$1/sbin/$prog"
 done
 
@@ -59,14 +60,14 @@ done
 #
 # A stick is diagnosed started from RAM, and its flash holds the image of the
 # final test, so the tools of diagnosis, omcid's omcitap and omcivlan, the
-# network layer's ubus, the flash's flashcp, flash_erase and mtd_debug, and
-# iproute2's tc, devlink and bridge with the tables of tc and of the names ip
-# uses, are set aside in $BASE_DIR/diag, which "make ram-image" lays over its
-# copy of this directory; uci and jshn go.
+# network layer's ubus, the flash's flashcp, flash_erase and mtd_debug,
+# ethtool, and iproute2's tc, devlink, bridge and dcb with the tables of tc and
+# of the names ip uses, are set aside in $BASE_DIR/diag, which "make ram-image"
+# lays over its copy of this directory; uci and jshn go.
 diag=${BASE_DIR:+$BASE_DIR/diag}
 for prog in usr/bin/omcitap usr/bin/omcivlan usr/bin/ubus usr/sbin/flashcp \
-	usr/sbin/flash_erase usr/sbin/mtd_debug sbin/tc sbin/devlink sbin/bridge \
-	usr/lib/tc usr/share/iproute2; do
+	usr/sbin/flash_erase usr/sbin/mtd_debug usr/sbin/ethtool sbin/tc sbin/devlink \
+	sbin/bridge sbin/dcb usr/lib/tc usr/share/iproute2; do
 	[ -e "$1/$prog" ] || continue
 	if [ -n "$diag" ]; then
 		mkdir -p "$diag/${prog%/*}"

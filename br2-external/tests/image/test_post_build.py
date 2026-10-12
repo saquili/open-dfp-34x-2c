@@ -110,7 +110,7 @@ class PostBuild(unittest.TestCase):
         self.assertTrue(self.busybox_ip())
         diag = os.path.join(base, "diag")
         self.assertEqual(sorted(os.listdir(os.path.join(diag, "sbin"))),
-                         ["bridge", "devlink", "tc"])
+                         ["bridge", "dcb", "devlink", "tc"])
         for name, was in (("usr/sbin/ip-full", "sbin/ip"),
                           ("usr/lib/tc/normal.dist", "usr/lib/tc/normal.dist"),
                           ("usr/share/iproute2/rt_tables", "usr/share/iproute2/rt_tables")):
@@ -146,7 +146,7 @@ class PostBuild(unittest.TestCase):
         for prog in ("ubus", "uci", "jshn", "omcitap", "omcivlan", "passwd"):
             with open(os.path.join(tools, prog), "w", encoding="utf-8") as handle:
                 handle.write("#!/bin/sh\n# %s\n" % prog)
-        for prog in ("flashcp", "flash_erase", "mtd_debug", "pond"):
+        for prog in ("flashcp", "flash_erase", "mtd_debug", "ethtool", "pond"):
             with open(os.path.join(sbin, prog), "w", encoding="utf-8") as handle:
                 handle.write("#!/bin/sh\n# %s\n" % prog)
         with open(os.path.join(shell, "jshn.sh"), "w", encoding="utf-8") as handle:
@@ -158,6 +158,13 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         self.assertEqual(os.listdir(tools), ["passwd"])
         self.assertFalse(os.path.exists(shell))
+
+    def test_the_tools_of_diagnosis_are_not_left_in_the_flash_image(self):
+        self.make_tools()
+        self.make_iproute2()
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual(os.listdir(os.path.join(self.target, "usr", "sbin")), ["pond"])
+        self.assertEqual(os.listdir(os.path.join(self.target, "sbin")), ["ip"])
 
     def test_the_tools_of_diagnosis_are_set_aside_for_the_ram_image(self):
         base = os.path.join(self._tmp.name, "base")
@@ -171,7 +178,7 @@ class PostBuild(unittest.TestCase):
         with open(os.path.join(aside, "ubus"), encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "#!/bin/sh\n# ubus\n")
         self.assertEqual(sorted(os.listdir(os.path.join(base, "diag", "usr", "sbin"))),
-                         ["flash_erase", "flashcp", "mtd_debug"])
+                         ["ethtool", "flash_erase", "flashcp", "mtd_debug"])
         self.assertEqual(os.listdir(os.path.join(self.target, "usr", "sbin")), ["pond"])
 
     def test_a_second_run_keeps_the_tools_set_aside(self):

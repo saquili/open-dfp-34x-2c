@@ -104,6 +104,11 @@ BR2_PACKAGE_PROCD=y
 BR2_PACKAGE_IPROUTE2=y
 BR2_PACKAGE_LIBMNL=y
 
+# ethtool, for the RAM image alone like the rest of iproute2 above: the device
+# tests read the ports' timestamping and counters with it. The post-build
+# script sets it aside, out of the flash's image.
+BR2_PACKAGE_ETHTOOL=y
+
 # The tools of the flash for the RAM image alone: flashcp, flash_erase and
 # mtd_debug write, erase and read a partition, such as a bank that takes
 # another firmware for a test. The post-build script sets them aside with the
