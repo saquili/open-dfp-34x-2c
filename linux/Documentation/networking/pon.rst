@@ -2553,6 +2553,52 @@ Teardown of the RTL9602C driver
 3. The PON device is unregistered with its last child, the OMCI port. Purpose:
    nothing of the class is left behind. (I)
 
+Tests
+=====
+
+The class is tested over ``pon_sim`` (``drivers/net/pon/pon_sim.c``,
+``CONFIG_PON_SIM``), a stand-in MAC with no hardware. It registers an OMCI port
+and a data path on a platform device of its own, and an interface, ``ponsimN``,
+that carries the traffic of GEM interfaces. A frame sent on a GEM interface is
+counted and dropped, an OMCI message written to the port comes back to be read,
+and everything else the class asks of a MAC is answered from arrays; the state
+it reports is set through debugfs, in ``pon_sim``: ``state`` (the activation
+state, which sends a notification), ``omci_link`` (the OMCI channel), ``rx`` (a
+frame received in a flow), and ``flows`` and ``calls`` to read.
+
+``tools/testing/selftests/drivers/net/pon/pon.py`` drives it, as root, with YNL
+for the family and plain rtnetlink for the ``gem`` links (iproute2 does not
+know the kind):
+
+* ``dev-get`` for one ONU and as a dump, and its errors; the status the MAC
+  reports in each state, and the ONU-ID that appears from O4;
+* the ``dev-change-ntf`` message of the ``monitor`` group when the state
+  changes;
+* ``tcont-set`` and ``tcont-get``: an Alloc-ID that serves one T-CONT, Alloc-ID
+  0, unmapping, the dump, and the errors of an index or an Alloc-ID out of range;
+* the life of a GEM interface: the Port-ID has one, the OMCC's is not for one;
+  every refusal of the link attributes the class makes (no Port-ID, multicast
+  with upstream, upstream without a T-CONT, a queue or a T-CONT the MAC has not,
+  a commitment above the peak, an upstream attribute on a downstream port, a
+  link no MAC owns), each with its message; a change of the upstream attributes;
+* a bridge with VLAN filtering: the join, the VLANs and the leave reach the MAC;
+* frames received in a flow, counted on the GEM interface, and frames sent on
+  it;
+* the OMCI port: a message of 48 and one of 1980 bytes come back, a write fails
+  with ``-ENOLINK`` while the channel is down, and the MAC's ``start`` and
+  ``stop`` follow the open and the close.
+
+The tests need a kernel with ``CONFIG_PON_SIM``, ``CONFIG_DEBUG_FS`` and
+``CONFIG_BRIDGE_VLAN_FILTERING``, and iproute2 with ``bridge``; the ``config``
+file in the directory lists them. They run on any architecture. Under qemu on
+arm64, with lock debugging on, they found a mutex taken in ``gem_xmit``, which
+the class calls with bottom halves off, and that a bridge refuses a GEM
+interface whose lower device has no ``ndo_get_port_parent_id`` or a kernel
+without switchdev, which the class now selects.
+
+The calculations of the RTL9602C driver have KUnit tests of their own (see
+Documentation/networking/device_drivers/pon/rtl9602c.rst).
+
 Known limitations
 =================
 

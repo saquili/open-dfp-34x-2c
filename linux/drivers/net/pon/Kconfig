@@ -40,4 +40,16 @@ config PON_OMCI_INJECT
 
 	  If unsure, say N.
 
+config PON_SIM
+	tristate "Stand-in ONU MAC for testing the PON class"
+	depends on PON && DEBUG_FS
+	help
+	  A MAC driver with no hardware, for the tests of the PON class
+	  (tools/testing/selftests/drivers/net/pon/). It registers an OMCI
+	  port and a data path on a platform device of its own and an
+	  interface, ponsim0, that carries the traffic of GEM interfaces; the
+	  state it reports is set through debugfs, in the directory pon_sim.
+
+	  If unsure, say N.
+
 source "drivers/net/pon/rtl9602c/Kconfig"

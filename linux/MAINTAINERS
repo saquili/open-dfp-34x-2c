@@ -20504,6 +20504,7 @@ F:	Documentation/networking/pon.rst
 F:	drivers/net/pon/
 F:	include/linux/pon.h
 F:	include/uapi/linux/pon.h
+F:	tools/testing/selftests/drivers/net/pon/
 
 PORTWELL EC DRIVER
 M:	Yen-Chi Huang <jesse.huang@portwell.com.tw>
