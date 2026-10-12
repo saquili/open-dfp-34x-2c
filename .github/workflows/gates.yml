@@ -185,6 +185,10 @@ jobs:
         run: |
           tools/kernel-series/tests/run -v
           tools/kernel-series/kernel-series check
+      - name: Self-tests of the flash layout check, and the board's layout
+        run: |
+          tools/flash-layout/tests/run -v
+          tools/flash-layout/flash-layout
       - name: The pinned release and the carried patches
         # The tests above use a tarball of their own. This one fetches the
         # pinned release from its URL, refuses it unless it is the pinned file,

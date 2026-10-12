@@ -113,6 +113,21 @@ tree is part of the contract. The device tree marks ``boot`` read-only: from
 Linux the loader cannot be written, and its environment, the configuration
 store and both banks can.
 
+The erase sector
+----------------
+
+Linux erases the chip in 4 KiB sectors, and every partition of the table starts
+and ends on one: the two copies of the environment are 8 KiB each. The kernel
+does so only with ``CONFIG_MTD_SPI_NOR_USE_4K_SECTORS``, which is on by default
+and which ``rtl9602c_defconfig`` states. Without it the kernel erases 64 KiB
+blocks and forces read-only every partition that is not made of whole blocks
+(``drivers/mtd/mtdpart.c``): no bank could be chosen and nothing saved, and the
+JFFS2 of ``config`` was made with 4 KiB blocks. ``tools/flash-layout`` checks
+the device tree for partitions that are off the sector, and the kernel of an
+image build for the option (``make check`` and ``make image-check``); the boot
+script warns on the console when ``/proc/mtd`` shows that ``config`` erases in
+anything but 4 KiB.
+
 The loader's window
 -------------------
 

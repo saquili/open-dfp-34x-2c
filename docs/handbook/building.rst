@@ -183,6 +183,9 @@ What ``make`` judges
 
 #. ``image-budget``: the sizes of ``k0`` and ``r0`` against their partitions,
    reported, and enforced for the images that ``IMAGE_ENFORCE`` names.
+#. ``flash-layout``: the partitions of the device tree on the flash's 4 KiB
+   sectors, and the kernel of this build with the flash driver built in and
+   erasing in them (``boot-contract.rst``, "The erase sector").
 #. ``isa-gate`` over ``build/image/target``, every executable of the root
    filesystem: none may hold an instruction that the core cannot run
    (``toolchain.rst``). It reports 26 files, 26 objects, 1749347 instructions

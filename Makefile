@@ -63,10 +63,11 @@ image:
 	make -C "$(IMAGE_OUT)"
 	$(MAKE) image-check
 
-# What the build left, judged: the size of each image against its partition, the
-# instruction-set gate over every executable of the root filesystem, and the
+# What the build left, judged: the flash layout against the kernel's erase sector,
+# the size of each image against its partition, the instruction-set gate over every executable of the root filesystem, and the
 # digests of the images.
 image-check:
+	tools/flash-layout/flash-layout --kernel-config "$(IMAGE_OUT)/build/linux-custom/.config"
 	$(if $(IMAGE_ENFORCE),tools/image-budget/image-budget --images "$(IMAGE_OUT)/images" \
 	  --enforce $(IMAGE_ENFORCE))
 	$(if $(filter-out $(IMAGE_ENFORCE),k0 r0),tools/image-budget/image-budget \
@@ -184,6 +185,8 @@ check:
 	tools/kernel-archive/tests/run
 	tools/kernel-series/tests/run
 	tools/kernel-series/kernel-series check
+	tools/flash-layout/tests/run
+	tools/flash-layout/flash-layout >/dev/null
 	tools/image-budget/tests/run
 	tools/docs/tests/run
 	tools/docs/render --check --if-available
