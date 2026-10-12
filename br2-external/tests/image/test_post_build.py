@@ -229,7 +229,11 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\ndhcp6d:*:::::::\n", shadow)
         # The programs that write into a session's directory share a group.
         self.assertEqual(group.count("\nonu:"), 1)
-        self.assertIn("\nonu:x:210:dhcp6d\n", group)
+        self.assertIn("\nonu:x:210:dhcp6d,pppoed\n", group)
+        self.assertEqual(passwd.count("\npppoed:"), 1)
+        self.assertIn("\npppoed:x:203:203:The PPPoE client:/var/empty:/bin/false\n", passwd)
+        self.assertIn("\npppoed:x:203:\n", group)
+        self.assertIn("\npppoed:*:::::::\n", shadow)
 
     def test_without_the_file_it_fails(self):
         os.remove(self.release)

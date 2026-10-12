@@ -296,6 +296,11 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertLess(text.index("chown dhcp6d:dhcp6d /run/dhcp6d"),
                         text.index("\nonu-config load "))
 
+    def test_pppoed_may_open_the_ppp_device_before_a_session_is_made(self):
+        text = read(RCS)
+        self.assertIn("chown :pppoed /dev/ppp", text)
+        self.assertLess(text.index("chown :pppoed /dev/ppp"), text.index("onu-svc start netifd "))
+
     def test_netifd_alone_gives_the_addresses(self):
         # netifd takes away from a device it holds what it did not put
         # there (ADR 0014): onu-mgmt gives it both addresses, and the script
