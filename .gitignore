@@ -3,3 +3,5 @@
 #
 # Build products: the kernel (make linux) and, later, the distribution.
 /build/
+__pycache__/
+*.pyc
