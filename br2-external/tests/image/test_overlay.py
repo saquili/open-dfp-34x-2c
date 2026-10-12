@@ -23,6 +23,10 @@ OVERLAY = os.path.join(BOARD, "overlay")
 RCS = os.path.join(OVERLAY, "etc", "init.d", "rcS")
 INIT = os.path.join(OVERLAY, "sbin", "init")
 INITTAB = os.path.join(OVERLAY, "etc", "inittab")
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+TCPRIO = os.path.join(REPO, "omcid", "target", "tcprio.h")
+ONU_MGMT = os.path.join(REPO, "onu-utils", "scripts", "onu-mgmt")
+ONU_APPLY = os.path.join(REPO, "onu-utils", "scripts", "onu-apply")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
 # BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
@@ -93,6 +97,25 @@ class BootScript(unittest.TestCase):
                  "onu-svc start ntp -l -- /usr/lib/onu/onu-run ntp"]
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))
+
+    def test_the_scripts_take_their_tc_priorities_from_the_registry(self):
+        # omcid/target/tcprio.h is the one list of the priorities of the filters
+        # on sfp and pon. The two scripts that write numbers of it say the same.
+        registry = {name: int(value) for name, value in
+                    re.findall(r"#define (TC_PRIO_\w+) (\d+)u", read(TCPRIO))}
+        mgmt = read(ONU_MGMT)
+        first, second = (int(re.search(rf"^PREF_{x}=(\d+)$", mgmt, re.M).group(1)) for x in "AB")
+        self.assertEqual((first, second), (registry["TC_PRIO_MGMT"], registry["TC_PRIO_MGMT"] + 1))
+        self.assertEqual(registry["TC_PRIO_MGMT_N"], 2)
+        apply = read(ONU_APPLY)
+        self.assertEqual(int(re.search(r"^VLAN_PREF=(\d+)$", apply, re.M).group(1)),
+                         registry["TC_PRIO_VLAN"])
+        # The ranges are in the order the stick's rules look at a frame, and the
+        # session interfaces' own drops stay below the management VLAN's range.
+        self.assertLess(int(re.search(r"^GUARD_PREFS=(\d+)$", apply, re.M).group(1)),
+                        registry["TC_PRIO_DISCARD"])
+        # The boot script writes none: onu-mgmt is the only writer of the first two.
+        self.assertNotIn("onu-nl filter", read(RCS))
 
     def test_netifd_tells_onu_apply_of_each_interface(self):
         # A PPPoE session's address is handed on when netifd says it is up.

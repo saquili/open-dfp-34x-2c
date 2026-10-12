@@ -177,17 +177,6 @@ if [ -n "$SYS_LOG_SERVER" ]; then
 		warn "the system log stays on the stick"
 fi
 
-# The management VLAN stays between the host side and the stick, so that the
-# network behind the PON never sees it and never reaches it: on sfp's ingress
-# the switch sends its frames to the CPU alone, which keeps them from the PON,
-# and on pon's ingress it drops them.
-onu-nl clsact add sfp &&
-	onu-nl filter add sfp pref 1 vlan "$MGMT_VLAN" hw trap ||
-	warn "frames of VLAN $MGMT_VLAN can go out to the PON"
-onu-nl clsact add pon &&
-	onu-nl filter add pon pref 1 vlan "$MGMT_VLAN" hw drop ||
-	warn "frames of VLAN $MGMT_VLAN can come in from the PON"
-
 # The servers listen on the addresses of the host side and nowhere else: the
 # stick has no packet filter, and nothing on the PON side is to reach them. They start now that the addresses are there
 # (onu-run): the ssh server, which takes root's password and the keys of
