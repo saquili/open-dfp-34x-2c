@@ -23,10 +23,11 @@
  *
  * Over HTTPS (tls.h), a request that comes over HTTP is sent on to the same
  * path over HTTPS, but for /api/health. Every other route of /api needs a
- * session (auth.h) or the bearer token of /etc/pond.token, for scripts. A change made in a session must carry the
- * header X-Pond, which a page of another site cannot add, and while the
- * default password is in force a session may only change it. Every other
- * path is the panel: the static files of the web directory, the hashed
+ * session (auth.h) or the bearer token of the file of -t, for scripts: the
+ * token that onu-config keeps in the stick's store. A change made in a session
+ * must carry the header X-Pond, which a page of another site cannot add, and
+ * while the default password is in force a session may only change it. Every
+ * other path is the panel: the static files of the web directory, the hashed
  * assets cached for good, and index.html for any path of the app.
  */
 
@@ -69,7 +70,7 @@
 #define POND_LISTEN_MAX 4
 static const char *g_listen[POND_LISTEN_MAX];
 static int g_nlisten;
-static const char *g_tokenf = "/etc/pond.token";
+static const char *g_tokenf;
 static const char *g_keyf;
 static const char *g_web = "/usr/share/pond/www";
 static char g_token[128];
@@ -358,15 +359,41 @@ static void api_set(struct mg_connection *c, struct mg_http_message *hm,
 	set_reply(c, name, rc, err);
 }
 
+/*
+ * The token of scripts, out of the file of -t, which onu-config makes, replaces
+ * and removes while the daemon runs. The file is read at every request that
+ * does not carry a session (a few bytes of tmpfs), so that a new token holds
+ * at once and a removed one stops holding, with no restart that would end the
+ * sessions.
+ */
+static void load_token(void)
+{
+	size_t i;
+
+	g_token[0] = '\0';
+	if (!g_tokenf || prov_read_line(g_tokenf, g_token, sizeof(g_token))) {
+		g_token[0] = '\0';
+		return;
+	}
+	for (i = 0; g_token[i]; i++)
+		if (g_token[i] == '\n' || g_token[i] == '\r' ||
+		    g_token[i] == ' ') {
+			g_token[i] = '\0';
+			break;
+		}
+}
+
 /* Whether the request carries the token, compared in constant time. */
 static bool authorised(struct mg_http_message *hm)
 {
 	const struct mg_str *h = mg_http_get_header(hm, "Authorization");
-	size_t n = strlen(g_token);
+	size_t n;
 
-	if (!n)
+	if (!h || h->len < 7 || strncmp(h->buf, "Bearer ", 7))
 		return false;
-	if (!h || h->len != n + 7 || strncmp(h->buf, "Bearer ", 7))
+	load_token();
+	n = strlen(g_token);
+	if (!n || h->len != n + 7)
 		return false;
 
 	{
@@ -768,22 +795,6 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 		reply_err(c, 404, "no such route", "try /api/schema");
 }
 
-static void load_token(void)
-{
-	size_t i;
-
-	g_token[0] = '\0';
-	if (prov_read_line(g_tokenf, g_token, sizeof(g_token)))
-		return;
-
-	for (i = 0; g_token[i]; i++)
-		if (g_token[i] == '\n' || g_token[i] == '\r' ||
-		    g_token[i] == ' ') {
-			g_token[i] = '\0';
-			break;
-		}
-}
-
 #ifdef __linux__
 /*
  * Run as the account @user, with its groups, from here on, and keep of
@@ -902,7 +913,7 @@ int main(int argc, char **argv)
 	/* A change of the management pair that waits: its address answers too. */
 	mgmt_resume(&mgr, handler);
 	fprintf(stderr, "pond: %s; %s\n",
-		strlen(g_token) ? "token loaded" : "no token for scripts",
+		strlen(g_token) ? "token for scripts" : "no token for scripts",
 		auth_default_password() ? "the default password is in force" :
 					  "a password is set");
 

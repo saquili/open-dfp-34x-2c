@@ -28,7 +28,8 @@ on the address of the host link if there is one, each over HTTPS on port 443
 and over HTTP on port 80. ``-u`` makes a daemon started as root run as the
 account ``USER``, with its groups, keeping of root's powers only the one to
 listen on a port below 1024, for its listeners and those of a management pair
-that comes later.
+that comes later. ``-t`` names the file of the token of scripts (see "The token
+of scripts"); without it no token is taken.
 
 What pond changes on the stick, it asks onu-act to do (``onu-utils``, ADR
 0014) rather than run the program itself: the SFP lane, the management pair,
@@ -93,9 +94,37 @@ A change of password ends every other session.
 
 A sign-in, and a change made in a session, must carry the header ``X-Pond``,
 which a page of another site cannot add, so a forged form neither signs the
-browser in nor changes anything. Scripts may present
-the bearer token of the token file (``/etc/pond.token`` by default) instead of
-a session.
+browser in nor changes anything.
+
+The token of scripts
+--------------------
+
+A script that cannot sign in as a person does may present a bearer token
+instead of a session. The stick has none until root makes one, on the stick
+itself (ssh, the console)::
+
+    onu-config token new      # makes a token, keeps it, prints it
+    onu-config token          # prints it again
+    onu-config token off      # takes it away
+
+The token is 64 hexadecimal digits of ``/dev/urandom`` in the configuration
+store (``POND_TOKEN``), where it stays across restarts and updates, never
+among the settings a person sees or saves. ``onu-config`` and the boot script
+(``onu-config token install``) put a copy in the file the daemon is told to
+read, ``-t TOKENFILE`` (``/run/pond/token``, for the account ``pond`` alone);
+without ``-t`` the daemon has no token. The daemon reads that file at each
+request that comes without a session, so a new token holds at once and one
+taken away stops holding, with no restart that would end the sessions.
+
+A script sends ``Authorization: Bearer TOKEN`` to an ``https://`` address; the
+panel's certificate is the stick's own, which the fingerprint under System or
+on the console tells apart. Over ``http://`` the request is sent on to HTTPS
+before its body is read, but its headers have crossed the link in the clear:
+the token is for HTTPS only. A request with the token needs no ``X-Pond``
+header, as it has no session for a page of another site to use, and it is not
+held back by the default password, since someone with root's shell made it.
+It may call every route that a session may, and no more: a new update written
+and a bank started need root's password in ``X-Pond-Password`` too.
 
 HTTPS
 =====

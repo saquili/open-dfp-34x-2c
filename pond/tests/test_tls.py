@@ -153,6 +153,7 @@ def main():
 
     as_account(pond)
     slow_change(pond, os.path.dirname(key))
+    token_file(pond)
 
 
 def slow_change(pond, workdir):
@@ -190,6 +191,66 @@ def slow_change(pond, workdir):
     finally:
         proc.terminate()
         proc.wait(5)
+
+
+def token_file(pond):
+    """The token of scripts is read from its file at each request: one made,
+    replaced or taken away while the daemon runs holds or stops holding at
+    once, and a daemon told of no file takes none."""
+    print("the token of scripts")
+    path = "/reload-token"
+    full = os.environ["POND_ROOT"] + path
+    first, second = "a" * 64, "b" * 64
+
+    def status(port, token=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        code = request(conn, "GET", "/api/schema", headers=headers)[0]
+        conn.close()
+        return code
+
+    def put(token):
+        with open(full + ".new", "w") as f:
+            f.write(token + "\n")
+        os.replace(full + ".new", full)
+
+    if os.path.exists(full):
+        os.unlink(full)
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}", "-t", path],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, HTTP):
+            check(False, "the daemon listens")
+            return
+        check(status(HTTP, first) == 401, "without the file, a token is none")
+        put(first)
+        check(status(HTTP, first) == 200, "a token made while the daemon runs holds at once")
+        check(status(HTTP, second) == 401 and status(HTTP, first[:-1]) == 401
+              and status(HTTP, first + "a") == 401 and status(HTTP) == 401,
+              "another, a shorter, a longer one and none do not")
+        put(second)
+        check(status(HTTP, second) == 200 and status(HTTP, first) == 401,
+              "a token replaced: the new holds, the old does not")
+        os.unlink(full)
+        check(status(HTTP, second) == 401, "a token taken away stops holding")
+    finally:
+        proc.terminate()
+        proc.wait(5)
+        if os.path.exists(full):
+            os.unlink(full)
+
+    put(first)
+    proc = subprocess.Popen([pond, "-l", f"http://127.0.0.1:{HTTP}"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if not started(proc, HTTP):
+            check(False, "the daemon listens")
+            return
+        check(status(HTTP, first) == 401, "told of no file (no -t), a daemon takes no token")
+    finally:
+        proc.terminate()
+        proc.wait(5)
+        os.unlink(full)
 
 
 def proc_status(pid):
