@@ -324,7 +324,8 @@ The boot script
        password), and the saved settings, the PPPoE accounts and root's
        password into ``/run``; ``onu-config tls`` gives the panel its key and
        ``onu-config ssh`` the ssh server its host key, each made and kept in
-       the store at the first start;
+       the store at the first start; a token of scripts, if root made one, is
+       handed to the status daemon with the servers below;
     #. sets the host name, turns IPv6 off on the PON port, on the CPU port and
        on every interface made after them, the bridge and the GEM interfaces of
        ``omcid`` among them (the host side keeps it), and has ARP answer only
@@ -413,9 +414,13 @@ Known limitations
   put in (below). Until a password is set, it is ``admin`` on the console, ssh
   and the panel alike, and anybody who reaches the stick's addresses can use it;
   the shells of root say so at every login.
-* The status daemon has no token for scripts in this image, so a script signs
-  in as root with root's password, as a person does; a token is a file of one
-  unit, like the ssh key (below).
+* The status daemon has no token for scripts until root makes one on the stick
+  (``onu-config token new``, over ssh or on the console), so a script signs in
+  as root with root's password, as a person does. The token is kept in the
+  configuration store, like the keys above, and stays across restarts and
+  updates; ``onu-config token`` prints it again and ``onu-config token off``
+  takes it away. It is for ``https://`` addresses only (``pond/README.rst``,
+  "The token of scripts").
 * The panel answers over HTTPS, on port 443, with a key the stick makes at its
   first start and keeps in its store, and a certificate it signs itself (ADR
   0016); port 80 sends a browser there. The browser warns at the first visit:
