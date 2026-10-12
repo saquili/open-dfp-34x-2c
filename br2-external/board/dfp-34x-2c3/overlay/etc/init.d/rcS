@@ -207,8 +207,8 @@ fi
 # (onu-run): the ssh server, which takes root's password and the keys of
 # /root/.ssh/authorized_keys, which an image built with a bench's keys carries
 # and this one does not, and the status daemon with its panel, where people
-# sign in as root, with root's password, and scripts may present the token of
-# /etc/pond.token, which an image without the file does not accept. One that
+# sign in as root, with root's password, and scripts may present the token
+# that a person made with onu-config token new, which the store keeps. One that
 # procd starts again listens on the pair in use then (onu-mgmt).
 data=${DATA_ADDRESS%/*}
 mgmt=${MGMT_ADDRESS%/*}
@@ -225,17 +225,13 @@ onu-svc start trials -- /usr/lib/onu/onu-change watch ||
 # program of the stick itself. It runs as the account pond, which no one
 # logs in with, and ubusd's access list (/usr/share/acl.d/pond.json) lets it
 # call onu-act and read the state of omcid, netifd and dhcp6d. Its directory
-# of /run holds its log and, on a bench, a copy of the token of scripts,
-# which root alone reads in /etc; the two copies of the boot loader's
-# environment, which it shows, are its group's to read, and no other
+# of /run holds its log and its copy of the token of scripts, if a person made
+# one (the store's, which root alone reads); the two copies of the boot
+# loader's environment, which it shows, are its group's to read, and no other
 # partition of the flash.
 onu-svc start act -- /usr/lib/onu/onu-act || warn "the panel can change nothing"
 mkdir -p /run/pond && chown pond:pond /run/pond && chmod 700 /run/pond
-if [ -r /etc/pond.token ]; then
-	cp /etc/pond.token /run/pond/token &&
-		chown pond:pond /run/pond/token && chmod 400 /run/pond/token ||
-		warn "the token of scripts is not the status daemon's"
-fi
+onu-config token install || warn "the token of scripts is not the status daemon's"
 # The panel's key, for the status daemon alone to read. The daemon starts as
 # root, binds its ports, 80 and 443, and runs as the account pond, keeping
 # only the power to listen on a port below 1024 (pond -u).
