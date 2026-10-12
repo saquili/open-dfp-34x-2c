@@ -202,6 +202,10 @@ onu-svc start ssh -- /usr/lib/onu/onu-run ssh || {
 	warn "the ssh server is no service of procd: started once"
 	onu-run ssh &
 }
+# A change on trial that no one kept goes back (ADR 0014): one keeper of the
+# deadlines for the settings, the SFP lane and the management pair.
+onu-svc start trials -- /usr/lib/onu/onu-change watch ||
+	warn "a change on trial that no one keeps does not go back by itself"
 # What the status daemon may ask of the stick, onu-act does as root on its
 # behalf, and nothing else (ADR 0014): the status daemon does not run a
 # program of the stick itself. It runs as the account pond, which no one

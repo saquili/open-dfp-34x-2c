@@ -87,6 +87,7 @@ class BootScript(unittest.TestCase):
                  'onu-mgmt start "$MGMT_VLAN"', "onu-svc start netifd -- /usr/sbin/netifd ",
                  'onu-net wait mgmt "$MGMT_ADDRESS" 10',
                  "onu-svc start ssh -- /usr/lib/onu/onu-run ssh",
+                 "onu-svc start trials -- /usr/lib/onu/onu-change watch",
                  "onu-svc start act -- /usr/lib/onu/onu-act",
                  "onu-svc start pond -- /usr/lib/onu/onu-run pond",
                  "onu-svc start ntp -l -- /usr/lib/onu/onu-run ntp"]
