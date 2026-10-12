@@ -120,6 +120,61 @@ Who owns what
    * - The settings, the accounts and root's password
      - ``onu-config``, in the store.
 
+Who runs as whom
+================
+
+Root is the account to log in with (ADR 0012). The programs that face a
+network run as accounts of their own, without a password or a shell, with
+only the powers they use: ``onu-drop`` starts them so, and they keep the
+powers for what they run. ubusd's lists (``/usr/share/acl.d``) say what each
+may do on ubus. Each writes into a directory it owns, or into one of the group
+``onu``, which a session's directory is.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 8 22 56
+
+   * - Program
+     - Account
+     - Powers
+     - What it writes, and what ubusd lets it do
+   * - pond
+     - 200
+     - ``net_bind_service``
+     - ``/run/pond``; the calls of the panel (``pond/acl.json``).
+   * - ntpd
+     - ntp, 201
+     - ``sys_time``
+     - Nothing; no use of ubus.
+   * - dhcp6d
+     - dhcp6d, 202
+     - ``net_bind_service``, ``net_admin``, ``net_raw``
+     - ``/run/dhcp6d`` (the host's binding) and its session's directory;
+       it publishes ``dhcp6d.*`` and calls the method ``dhcp6d`` of onu-act.
+   * - pppoed
+     - pppoed, 203
+     - ``net_admin``, ``net_raw``
+     - Its session's directory; it calls ``notify_proto`` of netifd's
+       interfaces. The file of its account and ``/dev/ppp`` are its group's.
+   * - omcid
+     - omcid, 204
+     - ``net_admin``, ``net_raw``
+     - ``/run/omcid`` (its socket, the MIB, three files for onu-apply);
+       it publishes ``omcid`` and calls the method ``omcid`` of onu-act. The
+       OMCI port is its group's, and it reads a copy of the identity without
+       the PLOAM password.
+
+A program that is not root's cannot run ``onu-apply``, which changes the data
+path: omcid and dhcp6d tell it of a change through ``onu-call``, which asks
+onu-act for the method of their own name, and onu-act, root's, runs it.
+
+netifd, onu-act, procd, ubusd and the scripts are root's. netifd starts the
+sessions as the account pppoed, writes the kernel's sysctls of the interfaces,
+and runs ``onu-apply`` for each event of an interface, which only root may do;
+to change that, netifd would need the power to start a program as another
+account, and ``onu-apply iface`` a way to be asked for from one that is not
+root's.
+
 A change of the settings
 ========================
 

@@ -170,6 +170,24 @@ MTU and MAC address, and the boot script's three), is ``onu-nl link``, as
 the requests ``ip`` makes. BusyBox's ``ip`` stays built in for a person at
 the console, and is the first applet to go when the image is slimmed.
 
+Decided on 2026-10-12, in the clean-up of the debts, the second rule of the
+list above is carried out: pond (before), ntpd, dhcp6d, pppoed and omcid run
+as accounts of their own, uid 200 to 204, started by ``onu-drop`` with only
+the powers each uses (``net_admin``, ``net_raw``, ``net_bind_service``,
+``sys_time``), which they keep for what they run, with the rest out of the
+bounding set and ``no_new_privs``; ubusd's lists let each publish its
+objects and call what it needs. Since only root may run ``onu-apply``, omcid
+and dhcp6d tell it of a change by ``onu-call``, which asks onu-act for a
+method of their own name, and nothing else. omcid writes in ``/run/omcid`` and
+reads an identity without the PLOAM password; dhcp6d keeps the host's binding
+in ``/run/dhcp6d``; a session's directory belongs to the group ``onu``, and
+the file of its account to the group ``pppoed``. netifd stays root's: it
+starts the sessions as pppoed, writes sysctls and runs ``onu-apply`` for the
+events of the interfaces, so a netifd of its own would need the power to start
+a program as another account and a way to ask ``onu-apply iface`` from an
+account that is not root's. The handbook lists who runs as whom
+(``docs/handbook/system.rst``).
+
 Decided on 2026-10-12, in the clean-up of the debts: the events are not
 sent, and pond reads no file of ``/run``. omcid and dhcp6d run the program
 of ``-x``, ``onu-apply``, when what they publish changes, which is how the
