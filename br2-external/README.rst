@@ -49,9 +49,9 @@ What is here
 ``board/dfp-34x-2c3/overlay/``
     The files laid over the root filesystem: the first program ``sbin/init``,
     which starts procd, procd's inittab, the boot script ``etc/init.d/rcS``
-    (``etc/rc.d/S10boot``), the defaults of the settings ``etc/onu.conf``, the
-    shell profile, the name of the image, and the ``var`` directory that a
-    temporary file system is mounted on.
+    (``etc/rc.d/S10boot``), ``etc/onu.conf``, which says what each key of the
+    settings means and sets none, the shell profile, the name of the image,
+    and the ``var`` directory that a temporary file system is mounted on.
 ``board/dfp-34x-2c3/post-build.sh``
     The script that the build system runs on the target tree: it takes out
     iproute2, the command-line tools of the network layer (``uci``, ``jshn``)
