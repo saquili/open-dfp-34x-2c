@@ -1,0 +1,7 @@
+{
+	"user": "omcid",
+	"publish": [ "omcid" ],
+	"access": {
+		"onu-act": { "methods": [ "omcid" ] }
+	}
+}

@@ -14,3 +14,9 @@ SPDX-License-Identifier = "GPL-2.0-only"
 path = ".clang-format"
 SPDX-FileCopyrightText = "The Linux kernel contributors"
 SPDX-License-Identifier = "GPL-2.0-only"
+
+# ubusd's access list cannot carry a comment.
+[[annotations]]
+path = "acl.json"
+SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
+SPDX-License-Identifier = "GPL-2.0-only"
