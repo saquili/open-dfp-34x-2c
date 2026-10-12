@@ -25,6 +25,8 @@
 #                      interface that comes up hands on what it brought
 #   onu-apply guard    the filters that keep the sessions' packets off the
 #                      host side again, after the management pair changed
+#   onu-apply state    the state last brought up, as lines name=value for the
+#                      status daemon (state() below)
 #   onu-apply sync     follow what changed outside the settings: the GEM
 #                      ports and VLANs the OLT provisions, the host's IPv6
 #                      binding; omcid (-x) and dhcp6d (-x) run it as
@@ -1321,6 +1323,45 @@ expire() {
 	log "the change was not confirmed: back to the settings of before"
 }
 
+# The state last brought up, as the lines "name=value" for the status daemon,
+# which asks for them through onu-act and reads no file of /run itself: the
+# mode, the name servers, the address handed to the router and where, what
+# became of the settings in the store, each session's facts (session.N.dev,
+# gem, hands, ipv6, lan, gateway), and when each change on trial goes back
+# (trial.NAME, and trial.mgmt.address). A fact that is not there is left out.
+# This is the one place that names these files for a reader, and the lines are
+# the contract: the files themselves may change under it.
+state_line() {
+	st_v=
+	[ -r "$2" ] || return 0
+	read -r st_v <"$2" || [ -n "$st_v" ] || return 0
+	[ -z "$st_v" ] || echo "$1=$st_v"
+}
+
+state() {
+	state_line mode "$RUN/onu-mode"
+	state_line dns "$RUN/onu-dns"
+	if [ -r "$RUN/onu-pass" ]; then
+		state_line pass.address "$RUN/onu-pass"
+		state_line pass.lan "$RUN/onu-lan"
+		state_line pass.peer_gateway "$RUN/onu-pass-proxy"
+	fi
+	state_line store "$RUN/onu-store"
+	st_n=1
+	while [ "$st_n" -le "$MAX_SESSIONS" ]; do
+		for st_f in dev gem hands ipv6 lan gateway; do
+			state_line "session.$st_n.$st_f" "$SESSIONS/$st_n/$st_f"
+		done
+		st_n=$((st_n + 1))
+	done
+	# onu-change status: "NAME UNTIL", and for mgmt "NAME UNTIL ADDRESS".
+	onu-change status 2>/dev/null | while read -r st_name st_until st_addr; do
+		[ -n "$st_until" ] || continue
+		echo "trial.$st_name=$st_until"
+		[ -z "$st_addr" ] || echo "trial.$st_name.address=$st_addr"
+	done
+}
+
 case ${1:-} in
 start | reload | try | confirm | revert | expire | stop | identity | reidentify | iface) lock ;;
 esac
@@ -1387,6 +1428,10 @@ status)
 	done
 	exit 0
 	;;
+state)
+	state
+	exit 0
+	;;
 sync | omcid | dhcp6d)
 	# A change told while another waits for the lock is that one's too:
 	# at most one waits, and it reads everything once it holds the lock.
@@ -1407,7 +1452,7 @@ guard)
 	exit 0
 	;;
 *)
-	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|sync|guard" >&2
+	echo "usage: onu-apply start|reload|try|confirm|revert|stop|identity|reidentify|status|state|sync|guard" >&2
 	exit 2
 	;;
 esac

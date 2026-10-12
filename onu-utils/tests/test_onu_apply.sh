@@ -1005,5 +1005,55 @@ check 'logged "omcid did not say that it is in bridge mode"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans" | tr "\n" " ")" = "410 1410 " ]'
 teardown
 
+echo "the state for the status daemon is lines name=value, and leaves out what is not there"
+setup
+mkdir -p "$ONU_ROOT/usr/lib/onu" "$ONU_ROOT/run/session/1" "$ONU_ROOT/run/session/3" \
+	"$ONU_ROOT/run/onu-trial.d"
+ln -s "$HERE/scripts/onu-change" "$ONU_ROOT/usr/lib/onu/onu-change"
+check '[ -z "$("$MODE_SCRIPT" state)" ]'
+echo passthrough >"$ONU_ROOT/run/onu-mode"
+echo "198.51.100.53 198.51.100.54" >"$ONU_ROOT/run/onu-dns"
+echo saved >"$ONU_ROOT/run/onu-store"
+echo wan410 >"$ONU_ROOT/run/session/1/dev"
+echo gem1 >"$ONU_ROOT/run/session/1/gem"
+printf 'ipv4 ipv6' >"$ONU_ROOT/run/session/1/hands"
+: >"$ONU_ROOT/run/session/1/lan"
+echo lan410 >"$ONU_ROOT/run/session/3/lan"
+echo 192.0.2.1 >"$ONU_ROOT/run/session/3/gateway"
+got=$("$MODE_SCRIPT" state)
+check 'echo "$got" | grep -qx "mode=passthrough"'
+check 'echo "$got" | grep -qx "dns=198.51.100.53 198.51.100.54"'
+check 'echo "$got" | grep -qx "store=saved"'
+check 'echo "$got" | grep -qx "session.1.dev=wan410"'
+check 'echo "$got" | grep -qx "session.1.gem=gem1"'
+# A file without a final newline is read, and an empty one is left out.
+check 'echo "$got" | grep -qx "session.1.hands=ipv4 ipv6"'
+check '! echo "$got" | grep -q "^session.1.lan"'
+check 'echo "$got" | grep -qx "session.3.lan=lan410"'
+check 'echo "$got" | grep -qx "session.3.gateway=192.0.2.1"'
+check '! echo "$got" | grep -q "^session.2\|^pass\|^trial"'
+# The address handed on is told once it is there, with where.
+echo 192.0.2.2 >"$ONU_ROOT/run/onu-pass"
+echo lan >"$ONU_ROOT/run/onu-lan"
+echo 192.0.2.1 >"$ONU_ROOT/run/onu-pass-proxy"
+got=$("$MODE_SCRIPT" state)
+check 'echo "$got" | grep -qx "pass.address=192.0.2.2"'
+check 'echo "$got" | grep -qx "pass.lan=lan"'
+check 'echo "$got" | grep -qx "pass.peer_gateway=192.0.2.1"'
+# The changes on trial are onu-change's: when each goes back, and the pair's address.
+printf 'UNTIL=1264\nTOKEN=99\n' >"$ONU_ROOT/run/onu-trial.d/settings"
+printf 'UNTIL=1300\nADDRESS=198.51.100.2/30\n' >"$ONU_ROOT/run/onu-trial.d/mgmt"
+printf 'UNTIL=1\n' >"$ONU_ROOT/run/onu-trial.d/settings.new"
+got=$("$MODE_SCRIPT" state)
+check 'echo "$got" | grep -qx "trial.settings=1264"'
+check 'echo "$got" | grep -qx "trial.mgmt=1300"'
+check 'echo "$got" | grep -qx "trial.mgmt.address=198.51.100.2/30"'
+check '! echo "$got" | grep -q "trial.lane\|settings.new"'
+# It reads, and takes no lock: a change that holds it does not hold this up.
+ln -s 1 "$ONU_ROOT/run/onu-apply.lock"
+check '"$MODE_SCRIPT" state >/dev/null'
+rm -f "$ONU_ROOT/run/onu-apply.lock"
+teardown
+
 echo "test_onu_apply: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

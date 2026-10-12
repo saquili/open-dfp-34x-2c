@@ -93,6 +93,8 @@ static void test_values_in_their_places(void)
 	CHECK(act_find("reidentify")->background && act_find("restart")->background);
 	CHECK(!strcmp(run("settings_current", NULL, &bad), "/usr/sbin/onu-config current"));
 	CHECK(act_find("settings_change")->input && !act_find("settings_current")->input);
+	CHECK(!strcmp(run("settings_state", NULL, &bad), "/usr/sbin/onu-apply state"));
+	CHECK(!act_find("settings_state")->input && !act_find("settings_state")->needs_password);
 	CHECK(!act_find("settings_try")->background && act_find("settings_try")->timeout_s >= 60);
 	CHECK(!strcmp(run("update_write", NULL, &bad), "/usr/sbin/onu-update write -"));
 	CHECK(act_find("update_write")->fd_in && act_find("update_read")->fd_out);

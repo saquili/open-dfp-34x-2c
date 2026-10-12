@@ -72,7 +72,14 @@ them finds it there, and names it by its whole path where procd starts it.
    try`` puts them in force under its lock, once it has kept the settings it
    goes back to, so that an ``onu-apply sync`` in between applies the
    settings in force alone. The status daemon has onu-act run them, and knows neither the
-   rules nor the files::
+   rules nor the files. What came of the settings it asks of ``onu-apply
+   state`` (the method ``settings_state``), and reads no file of ``/run``:
+   the lines ``name=value`` of the mode, the name servers, the address handed
+   to the router and where, what became of the settings in the store, each
+   session's ``session.N.dev``, ``gem``, ``hands``, ``ipv6``, ``lan`` and
+   ``gateway``, and ``trial.NAME`` for each change on trial, when it goes
+   back, with ``trial.mgmt.address``. A fact that is not there has no line.
+   The lines are the contract; the files under them may change::
 
       onu-config check <settings       # the settings in full, or why not
       onu-config settings <settings    # the same, without judging
@@ -407,7 +414,8 @@ them finds it there, and names it by its whole path where procd starts it.
    the SFP lane, of the management pair, of the name and of the identity, the
    confirmation of the changes on trial, the updates' status and trial, the
    restart, the settings of the data path (``onu-config current`` and
-   ``change``, then ``onu-apply try``), root's password (``onu-config
+   ``change``, then ``onu-apply try``) and what came of them (``onu-apply
+   state``), root's password (``onu-config
    password-check``, ``password-state`` and ``password``), and an update file,
    which streams through the descriptor the caller passes with the call, the
    reading end of a pipe into ``onu-update write -`` or the writing end out
