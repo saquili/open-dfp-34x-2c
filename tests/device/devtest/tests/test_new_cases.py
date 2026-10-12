@@ -58,7 +58,7 @@ class ConfigStore(unittest.TestCase):
         self.assertIn("this system's file 1059 B of 65536", good.evidence)
         changed = cases_system.config_store(self.ctx(sums=("a 1\nb 2\n", "a 1\nb 3\n")))
         self.assertEqual(changed.status, FAIL)
-        self.assertIn("CHANGED", changed.evidence)
+        self.assertIn("CHANGED (2 digests differ)", changed.evidence)
 
     def test_it_wants_jffs2_this_systems_file_under_its_limit_and_the_shipped_ones(self):
         self.assertEqual(cases_system.config_store(self.ctx(mounts=MOUNTS.replace("jffs2", "ext4"))).status, FAIL)
@@ -68,11 +68,13 @@ class ConfigStore(unittest.TestCase):
         self.assertEqual((none.status, none.evidence), (FAIL, "/config holds no file of the shipped firmware"))
         self.assertEqual(cases_system.config_store(self.ctx(mounts="tmpfs /run tmpfs rw 0 0\n")).status, FAIL)
 
-    def test_the_files_are_found_by_find_not_named(self):
+    def test_the_files_are_found_by_find_and_told_by_digests_not_named(self):
         ctx = self.ctx()
         cases_system.config_store(ctx)
-        self.assertTrue(any(a.startswith("find /config -type f ! -name open-dfp-34x-2c.conf -exec sha256sum")
-                            for a in ctx.stick.asked))
+        asked = [a for a in ctx.stick.asked if a.startswith("find /config -type f ! -name open-dfp-34x-2c.conf -exec")]
+        self.assertTrue(asked)
+        # The command prints the digest of each name, never the name.
+        self.assertTrue(all('printf %s "$1" | sha256sum' in a and "echo $1" not in a for a in asked))
 
 
 GOOD_MOUNTS = ("tmpfs /tmp tmpfs rw,relatime,size=2048k 0 0\n"

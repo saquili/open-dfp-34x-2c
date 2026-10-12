@@ -238,9 +238,13 @@ def config_store(ctx: Context):
     if not mount:
         return failed("/config is not mounted")
     # The shipped firmware names a file after its kernel and builder, with brackets and an
-    # at sign, so the files are found and summed by find, not named.
+    # at sign, so the files are found by find, not named. Each is told by the digest of its
+    # contents and of its name, which compare before and after a save and put no name in
+    # the record.
     others = f"find /config -type f ! -name {CONFIG_FILE}"
-    sums = f"{others} -exec sha256sum {{}} \\; | sort -k 2"
+    digest = ("sh -c 'echo \"$(sha256sum < \"$1\" | cut -c1-64) "
+              "$(printf %s \"$1\" | sha256sum | cut -c1-8)\"' sh {} \\;")
+    sums = f"{others} -exec {digest} | sort"
     shipped = int(ctx.stick.text(f"{others} | wc -l"))
     if not shipped:
         return failed("/config holds no file of the shipped firmware")
@@ -250,9 +254,10 @@ def config_store(ctx: Context):
     ctx.stick.run("onu-config save", timeout=60, check=True)
     after = ctx.stick.text(sums)
     ok = mount[2] == "jffs2" and ours and 0 < size <= CONFIG_LIMIT and before == after
+    moved = len(set(before.splitlines()) ^ set(after.splitlines()))
+    same = "as they were" if before == after else f"CHANGED ({moved} digests differ)"
     return verdict(ok, f"{mount[2]} ({mount[3].split(',')[0]}); the shipped firmware's {shipped} "
-                       f"files {'as they were' if before == after else 'CHANGED'} after a save; "
-                       f"this system's file {size} B of {CONFIG_LIMIT}")
+                       f"files {same} after a save; this system's file {size} B of {CONFIG_LIMIT}")
 
 
 # The most a file system in memory may be, by its mount point, in KiB; "size=" in the
