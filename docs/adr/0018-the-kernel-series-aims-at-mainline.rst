@@ -77,3 +77,37 @@ PON class is offered they move to tc and the attributes go, ``IFLA_GEM_PBITS``
 apart, which is the 802.1p mapper and not a queue discipline. The NAPT and
 flowtable paths stay until the NAT backend can reach and test them, which is
 before a submission, as above.
+
+Done, on 2026-10-12, in the same clean-up:
+
+* The I2C master of the optics is a driver of ``drivers/i2c``,
+  ``i2c-rtl9602c``, on the auxiliary device ``rtl9602c.i2c`` that the switch
+  driver makes.
+* The GPON MAC, the PON MAC, the GEM ports and the OMCI channel are a driver
+  of their own, ``rtl9602c-pon`` (``drivers/net/pon/rtl9602c/``), on the
+  auxiliary device ``rtl9602c.pon``. The two drivers meet at
+  ``include/linux/platform_data/rtl9602c-pon.h``: the services of the switch
+  to the MAC (the interrupt, the laser, the switch's half of the GEM ports) and
+  the services of the MAC to the switch, called under a read-write semaphore
+  that the MAC's driver takes for writing to bind and to unbind. Neither
+  includes the other's header. The switch module went from 310 to 228 KiB, the
+  image's kernel grew by about 1 KiB, and the behaviour on the board is as
+  measured before. The step found a fault that only an unbind shows: with no
+  driver to read the GTC latches the GPON interrupt source asserted again at
+  once and the interrupt thread spun until the watchdog reset the stick. The
+  source is now masked when no driver handles it.
+* The changes to files the kernel owns are listed, each with its reason, in
+  ``docs/handbook/kernel-series.rst``, and ``tools/kernel-series`` checks that
+  the page names every such file and exports the commits of the networking
+  core as patches.
+* The pure calculations of the PON driver are in one file and have KUnit
+  tests, as the NAPT hashes of the switch driver do. The PON class has a
+  stand-in MAC, ``pon_sim``, and a kselftest through YNL
+  (``tools/testing/selftests/drivers/net/pon/``) that runs on any
+  architecture. It found a fault of the class itself, the missing selection of
+  switchdev, which is fixed, and with lock debugging a sleeping lock in the
+  stand-in's own transmit path.
+
+What stays before a submission is the NAPT and flowtable paths, as above, and
+the size of ``rtl9602c-offload.c``, which holds the offloads of the switch and
+may be split by function.
