@@ -157,10 +157,6 @@ Not done yet
   been tested.
 * An update file carries a checksum against damage, but no signature
   (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
-* The handbook says how to take a copy of the whole flash
-  (`backup.rst <docs/handbook/backup.rst>`__), but not yet how to write one
-  back. It has no page yet on recovery over the serial console in one place,
-  or on optical safety.
 * The other known gaps are kept as the repository's issues.
 
 Other sticks
@@ -217,7 +213,8 @@ Before you install
 * **Install only an update file you built or trust**: nothing checks who
   made it (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
 * **Try it on a lab OLT first.** A stick on a PON shares the fibre with every
-  other ONU of its tree.
+  other ONU of its tree (`optical-safety.rst
+  <docs/handbook/optical-safety.rst>`__).
 
 Where to start
 ==============
@@ -333,7 +330,11 @@ Documentation
 * `updating.rst <docs/handbook/updating.rst>`__: updates from the panel or a
   shell, and the way in through the shipped firmware's web page;
 * `backup.rst <docs/handbook/backup.rst>`__: a copy of the whole flash,
-  taken before the first update;
+  taken before the first update, and how to write it back;
+* `recovery.rst <docs/handbook/recovery.rst>`__: recovery over the serial
+  console in one place;
+* `optical-safety.rst <docs/handbook/optical-safety.rst>`__: the laser, the
+  other subscribers of a PON, and rogue ONUs;
 * `flashing.rst <docs/handbook/flashing.rst>`__: the bench, RAM boots,
   writing the flash, trial starts and recovery;
 * `toolchain.rst <docs/handbook/toolchain.rst>`__: the cross toolchain and

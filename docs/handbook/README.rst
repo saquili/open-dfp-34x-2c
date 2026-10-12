@@ -18,6 +18,10 @@ The stick and the system
     ``boot-contract.rst``
         The flash layout, the image formats, how a bank is selected, the
         watchdog.
+    ``optical-safety.rst``
+        The laser and the other subscribers of a PON: how the stick is kept
+        dark, what it does not write to the laser driver, what it cannot do,
+        and what a person does.
 
 Building and installing
     ``building.rst``
@@ -32,7 +36,11 @@ Building and installing
         The bench: a RAM boot, writing bank 0, one-shot trials, recovery.
     ``backup.rst``
         A copy of the whole flash, taken before the first update: what it
-        holds, how to take and check it.
+        holds, how to take and check it, and how to write it back.
+    ``recovery.rst``
+        Recovery over the serial console in one place: where the stick is,
+        the loader's countdown and prompt, a bank that does not come up, a
+        lost password, the way back to the shipped firmware.
     ``toolchain.rst``
         The cross toolchain: compiling for the core, what a program must not
         do, checking one with the instruction-set gate, and running the test
@@ -48,7 +56,3 @@ Developing the panel
         The panel's look: the sizes and colours of text, values and their
         labels, states, colour, space, edges, actions and forms, the same on
         every page.
-
-Still to be written: copying the whole flash and writing it back, recovery
-over the serial console in one place, and optical and rogue-ONU safety
-derived from ITU-T G.984.3 and from measurements on the board.

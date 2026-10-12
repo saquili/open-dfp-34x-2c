@@ -11,8 +11,9 @@ README of its own beside its code, for its interfaces and files.
 
 ``handbook/``
     The device maker's handbook: the board, how the system works, the flash
-    and the boot contract, building, installing and updating, the bench, the
-    toolchain, and the panel's design (``handbook/README.rst``).
+    and the boot contract, building, installing and updating, the bench,
+    copying and restoring the flash, recovery over the console, optical
+    safety, the toolchain, and the panel's design (``handbook/README.rst``).
 ``adr/``
     The architecture decision records: why the repository, the build, the
     libraries, the accounts, the supervision, the control plane and the panel
