@@ -16,7 +16,13 @@
 /* The first four bytes of every request and response: "OMCI". */
 #define OMCI_CTL_MAGIC 0x4F4D4349u
 
-#define OMCI_CTL_SOCKET_PATH "/run/omcid.sock"
+/*
+ * On the stick omcid runs as an account of its own, in a directory of its own,
+ * where everything it writes is: its socket, the MIB it keeps (-m), the
+ * identity it reads, and the files that tell onu-apply what the OLT set up.
+ */
+#define OMCI_RUN_DIR "/run/omcid"
+#define OMCI_CTL_SOCKET_PATH OMCI_RUN_DIR "/ctl"
 
 /* A request: magic, operation, class, instance and an argument, at these offsets. */
 #define OMCI_CTL_REQ_LEN 12u

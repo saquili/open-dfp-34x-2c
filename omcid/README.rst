@@ -123,7 +123,7 @@ bridge and the stick's router uses them.
 Beside the stick's own PPPoE sessions the daemon bridges what the OLT
 provisions but the sessions' VLANs, which ``onu-apply`` writes, by their VID on
 the PON side, one per line, to ``/run/onu-held-vlans`` before it sends SIGUSR2,
-and waits for the daemon to say in ``/run/omcid.applied``, ``bridge`` or
+and waits for the daemon to say in ``/run/omcid/applied``, ``bridge`` or
 ``router``, that it programmed the data path again for the mode the signal
 asked for.
 The VLAN rules into those VLANs stay out of the hardware, and so does a bridge
@@ -133,12 +133,12 @@ dropped as they come in on ``sfp``. Television and telephone go on crossing
 the bridge. A bridge that filters no VLAN would carry the sessions' VLANs too,
 and the stick then leaves it out altogether, as in router mode.
 
-The daemon also writes the OLT's VLAN translations to ``/run/omcid-xlate``: a
+The daemon also writes the OLT's VLAN translations to ``/run/omcid/xlate``: a
 ``SUB NET`` line for each VID it translates from the subscriber's side, with the
 VID it leads into on the fibre. ``onu-apply`` runs a session that was given the
 subscriber's VID, the one a router behind the stick would use, in the VID it
 leads into. And it writes the VLANs the OLT lets through each GEM port to
-``/run/omcid-gem-vlans``: a ``VID PORT-ID`` line for each VID a GEM port's
+``/run/omcid/gem-vlans``: a ``VID PORT-ID`` line for each VID a GEM port's
 bridge port carries. ``onu-apply`` runs a session whose GEM port is ``auto`` on
 the GEM port that carries the session's VID on the fibre. Both files are
 replaced whole, and only when what they say changes, so that a session follows
@@ -181,5 +181,5 @@ as often without a restart: they are TCP's, after a burst of frames that the
 switch dropped at the SFP port, whose 2.5 Gb/s the PON's upstream does not
 drain. A file of another layout, such as one
 of another build, it does not take: it starts afresh and replaces the file
-at the next change. On the stick the file is ``/run/omcid.mib``, which goes
+at the next change. On the stick the file is ``/run/omcid/mib``, which goes
 with a restart of the stick, as the OLT's set-up does.

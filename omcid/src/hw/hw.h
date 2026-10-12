@@ -1014,7 +1014,7 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  *	backend without them, where the filters are only kept
  * @mode_done: the data path is programmed again after a change of mode, the
  *	argument being true for router mode; the kernel backend says so in
- *	/run/omcid.applied, which a program that signalled the change waits
+ *	/run/omcid/applied, which a program that signalled the change waits
  *	for. NULL in a backend that says nothing
  * @uni_rate: limit the rate at which the UNI sends to the subscriber; NULL
  *	in a backend without a limit

@@ -50,19 +50,21 @@
 #include "hw_kernel.h"
 #include "omcid/array_size.h"
 #include "omcid/attrs.h"
+#include "omcid/ctl_proto.h"
 #include "sys/log.h"
 #include "tcprio.h"
 
 /*
- * The identity of the ONU, written at boot from the unit's own data: one
- * "key=value" per line, with the keys vendor_id, version, equipment_id,
+ * The identity of the ONU, a copy of the unit's own data that onu-apply makes
+ * for omcid before it starts, without the PLOAM password, which only the PON
+ * driver needs: one "key=value" per line, with the keys vendor_id, version, equipment_id,
  * tm_option, omcc_version, vendor_product_code and serial (four letters
  * and eight hexadecimal digits), and optionally sw_version (or one per
  * image, sw_version0 and sw_version1) and pack_version, the versions the
  * software images and the circuit packs report, and loid and
  * loid_password, the logical ONU ID and password.
  */
-#define IDENTITY_PATH "/run/onu-identity"
+#define IDENTITY_PATH OMCI_RUN_DIR "/identity"
 
 /*
  * The flags of the filters omcid adds: in the switch alone. The kernel test
@@ -1442,7 +1444,7 @@ static bool kernel_routing(void)
  * whole: what a program that signalled the change (onu-apply) waits for,
  * having removed the file before it signalled. No hook is run for it.
  */
-#define APPLIED_PATH "/run/omcid.applied"
+#define APPLIED_PATH OMCI_RUN_DIR "/applied"
 
 static void kernel_mode_done(bool router)
 {
@@ -1743,7 +1745,7 @@ static void run_publish(const char *path, const char *text, char *last,
  * fibre, so that a session follows its service when the OLT moves it to
  * another port. The file is replaced whole, and only when it changes.
  */
-#define GEM_VLANS_PATH "/run/omcid-gem-vlans"
+#define GEM_VLANS_PATH OMCI_RUN_DIR "/gem-vlans"
 /* Room for the lines of every VID of every port, and the end. */
 #define GEM_VLANS_TEXT \
 	(OMCI_HW_BRIDGE_MAX_PORTS * OMCI_HW_BRIDGE_MAX_VLANS * 12 + 1)
@@ -2908,7 +2910,7 @@ static size_t vlan_filters(const struct omci_hw_vlan_xlate *r,
  * subscriber's frames would leave. The file is replaced whole, and only when
  * it changes.
  */
-#define XLATE_PATH "/run/omcid-xlate"
+#define XLATE_PATH OMCI_RUN_DIR "/xlate"
 
 static void xlate_publish(const struct omci_hw_vlan_xlate *rules, size_t n)
 {

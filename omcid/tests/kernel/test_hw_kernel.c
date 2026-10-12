@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "hw/hw.h"
@@ -223,13 +224,14 @@ static const char *first_line(const char *path)
 
 static void mode_applied(void)
 {
-	puts("the mode the data path was programmed for is told in /run/omcid.applied");
-	unlink("/run/omcid.applied");
+	puts("the mode the data path was programmed for is told in /run/omcid/applied");
+	mkdir("/run/omcid", 0755);
+	unlink("/run/omcid/applied");
 	omci_hw_kernel_ops.mode_done(true);
-	CHECK(!strcmp(first_line("/run/omcid.applied"), "router"));
+	CHECK(!strcmp(first_line("/run/omcid/applied"), "router"));
 	omci_hw_kernel_ops.mode_done(false);
-	CHECK(!strcmp(first_line("/run/omcid.applied"), "bridge"));
-	CHECK(access("/run/omcid.applied.new", F_OK) != 0);
+	CHECK(!strcmp(first_line("/run/omcid/applied"), "bridge"));
+	CHECK(access("/run/omcid/applied.new", F_OK) != 0);
 }
 
 /* What tc shows of the root qdisc of @dev, on one line. */
