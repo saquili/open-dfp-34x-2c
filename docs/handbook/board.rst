@@ -48,8 +48,8 @@ At a glance
      - The GPON MAC and a laser-driver IC on an I2C bus (switch port 2). Linux
        interface ``pon``.
    * - Console
-     - UART0, 115200 baud, 8 data bits, no parity, 1 stop bit. ``ttyS0`` in
-       Linux.
+     - UART0, 3.3 V logic, 115200 baud, 8 data bits, no parity, 1 stop bit.
+       ``ttyS0`` in Linux.
    * - Power
      - From the host's cage. There is no power switch.
    * - Boot loader
@@ -60,25 +60,25 @@ Block diagram
 
 ::
 
-      host's SFP cage
-           |    power, SerDes lane, signals
-           |
-      port 0 (sfp)
-           |
-      switch core ---- port 3 (CPU) ---- DMA ---- LX5281 CPU ---- DRAM, 32 MiB
-           |                                          |   |
-      port 2 (pon)                                    |   +-- SPI -- flash, 8 MiB
-           |                                          |
-      PON MAC, GPON MAC                               +---- UART0 -- console pads
-           |
-           +---- burst enable ------------------------------+
-                                                            |
-      CPU -- I2C master 1 -- SCL, SDA ----------------+     |
-      CPU -- GPIO 13 ------- TX_DISABLE ---------+    |     |
-                                                 |    |     |
-                                                 v    v     v
-                                        laser-driver IC (GN25L95) ---- fibre
-                                        transmitter and receiver
+    host's SFP cage
+         |    power, SerDes lane, signals
+         |
+    port 0 (sfp)
+         |
+    switch core ---- port 3 (CPU) ---- DMA ---- LX5281 CPU ---- DRAM, 32 MiB
+         |                                          |   |
+    port 2 (pon)                                    |   +-- SPI -- flash, 8 MiB
+         |                                          |
+    PON MAC, GPON MAC                               +---- UART0 -- console pads
+         |
+         +---- burst enable ------------------------------+
+                                                          |
+    CPU -- I2C master 1 -- SCL, SDA ----------------+     |
+    CPU -- GPIO 13 ------- TX_DISABLE ---------+    |     |
+                                               |    |     |
+                                               v    v     v
+                                      laser-driver IC (GN25L95) ---- fibre
+                                      transmitter and receiver
 
 The switch (ports 0, 2 and 3), the CPU's DMA engine, the CPU, its controllers,
 the GPON MAC, the PON MAC, the I2C master and the GPIO are blocks of the SoC.
@@ -218,10 +218,18 @@ The console
 
 The SoC's UART0 is the console of both the boot loader and the kernel: 115200
 baud, 8 data bits, no parity, 1 stop bit. It is a 16550-compatible UART, and in
-Linux it is ``ttyS0``. The UART has two signals, TX and RX, and a ground. Where
-its pads lie on the board and what logic level they carry are not recorded in
-this repository (see "Open items"); how the UART of the stick is wired to
-whatever carries it to the bench is not part of the board's description.
+Linux it is ``ttyS0``. The UART has two signals, TX and RX, and a ground, and it
+runs at 3.3 V logic: an adapter for 1.8 V or 5 V is the wrong one, and a
+3.3 V one carries the console of the unit that this system was developed on (I:
+the unit's owner reports it so; a meter on the pad would settle it). The pads
+are on the top side of the board, near the SFP edge connector, to be reached
+with the stick out of its cage and powered through a breakout, since the
+adapter does not power it (I: a community page about the DFP-34X-2C2, "ODI
+Realtek DFP-34X-2C2" at hack-gpon.org, read on 2026-10-12, says so with
+photographs; a photograph of the 2C3's board would settle it). Which pad is TX
+and which RX is not recorded here: if the console stays silent, swap the two
+wires at the adapter. How the UART of the stick is wired to whatever carries it
+to the bench is not part of the board's description.
 
 On a bench the UART is reached through a UART-over-network bridge that offers
 one raw TCP socket per UART. Three properties of such a bridge matter:
@@ -299,8 +307,8 @@ The other handbook pages that concern the board are ``boot-contract.rst`` and
 Open items
 ==========
 
-* The console's pads: where TX, RX and ground lie on the board, and the logic
-  level they carry, are to be recorded here from the board itself.
+* The console's pads: a photograph of the board, with TX, RX and ground marked,
+  is still to be added; until then "The console" is all this handbook says.
 
 * Switch port 1 exists in the silicon. Nothing on this board is known to
   connect to it, which is not yet confirmed on the board either.
