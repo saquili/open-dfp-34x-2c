@@ -39,35 +39,10 @@
 #                        status daemon (the boot script, after it made the
 #                        daemon's directory, and each change of the token)
 #
-# A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
-# the name in lower case, in place of the one the shipped firmware's files
-# give; PPPOEn_USER and PPPOEn_SECRET, for the sessions 1 to
-# 7, are the line "user secret" of /run/onu-pppoeN, which an empty PPPOEn_USER
-# leaves out (PPPOE_USER and PPPOE_SECRET, the single account of before, are
-# the first session's);
-# AUTH_HASH is the content of /run/onu-auth: the hash of root's password, the
-# one account of the stick, which the console's login, the ssh server and the
-# status daemon's sign-in all check (/run/shadow carries it for the first
-# two); without the key the default password is in force, and without a
-# store that can be read the file holds "!": the password is not known;
-# the status daemon refuses every sign-in, the ssh server takes only keys,
-# and the console, which needs the stick opened, takes the default
-# password, so that the store can be mended there;
-# a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
-# own settings, which the boot script reads before it brings up the links;
-# PDn_HOST is the content of /run/dhcp6d/pdN, the host session n delegated its
-# IPv6 prefix to, which dhcp6d takes back after a restart (see onu-apply);
-# TLS_KEY is the content of /run/onu-tls-key: the private key of the status
-# daemon's HTTPS, a scalar of the curve P-256 in 64 hexadecimal digits, made
-# once on the stick, from which the daemon makes its certificates (pond);
-# SSH_HOST_KEY is the content of /run/onu-ssh-key: the ssh server's host key,
-# its file in the server's own format, in hexadecimal digits, made once on
-# the stick, so that a client sees one key across restarts;
-# POND_TOKEN is the content of /run/onu-pond-token: the token of scripts, 64
-# hexadecimal digits, which only a person makes (onu-config token new) and
-# which the status daemon reads in its own copy, /run/pond/token;
-# every other key is a line of /run/onu.conf. The files of secrets are for
-# root only.
+# The keys of the store, and the file of /run that a load puts each in, are
+# listed in onu-utils/README.rst, "onu-config (the files)"; every key that no
+# row of that table claims is a line of /run/onu.conf. The files of secrets are
+# for root only.
 #
 # The identity is the one ponid reads from the shipped firmware's files, which
 # share the file system, with the store's ID_ keys over it: the store holds

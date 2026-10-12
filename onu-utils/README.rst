@@ -88,11 +88,11 @@ them finds it there, and names it by its whole path where procd starts it.
 
 ``onu-config`` (the files)
    carries out, through ``onu-config.sh`` in ``/usr/lib/onu``, the verbs of the
-   files the running system reads. It keeps the unit's identity (keys ``ID_*``), its settings (the keys of
-   ``/run/onu.conf``) and its PPPoE account (``PPPOE_USER``,
-   ``PPPOE_SECRET``) in the store. ``onu-config load`` puts them in the files
-   the running system reads, at boot; ``onu-config save`` writes the settings
-   and the account in force back, which ``onu-apply reload`` does. A load first
+   files the running system reads. It keeps in the store what must outlive a
+   restart, as ``KEY=VALUE`` lines (the table below is the one list of them).
+   ``onu-config load`` puts them in the files the running system reads, at
+   boot; ``onu-config save`` writes the settings and the accounts in force
+   back, which ``onu-apply reload`` does, and no other key. A load first
    makes ``/config`` the partition's JFFS2 file system, mounted read-only:
    each change of the store mounts it read-write for the write alone, one
    change at a time, under a lock of the directory, a socket of the abstract
@@ -102,7 +102,7 @@ them finds it there, and names it by its whole path where procd starts it.
    does not know.
    The identity is the one ``ponid`` reads from the shipped firmware's files,
    with the store's ``ID_*`` keys over it, which hold only what was changed
-   here; a save never takes the identity into the store. What became of the
+   here. What became of the
    settings is one word in ``/run/onu-store`` (``loaded``, ``defaults``,
    ``saved``, ``failed``, ``none`` without ``/config``), which the status
    daemon shows. The status
@@ -111,18 +111,18 @@ them finds it there, and names it by its whole path where procd starts it.
    and ``onu-config password`` root's password, the line of its input, which it
    hashes in the form of ``crypt()`` (SHA-256 with 20000 rounds and a salt of
    16 random characters, by BusyBox's ``cryptpw``) into ``AUTH_HASH``;
-   ``onu-config auth HASH`` stores a hash made elsewhere. A load puts the hash in
-   ``/run/onu-auth`` for root only, and root's line of ``/run/shadow``, which
-   ``/etc/shadow`` names, carries it for the console's login and the ssh
-   server: one account, root, with one password for the console, ssh and the
-   panel. Until one is set, the password is ``admin`` (a fixed hash of it); a
-   hash of the panel's older form, which ``crypt()`` cannot check, leaves root
-   without a password on the console and ssh (``*``), keys only, until a
-   sign-in to the panel stores it again. Without a store that can be read
-   (``/config`` not mounted, or the file damaged) the password is not known:
-   ``/run/onu-auth`` holds ``!``, the panel refuses every sign-in, the ssh
-   server takes keys only, and the console, which needs the stick opened,
-   takes ``admin``, so that the store can be mended there.
+   ``onu-config auth HASH`` stores a hash made elsewhere. Root's line of
+   ``/run/shadow``, which ``/etc/shadow`` names, carries the hash for the
+   console's login and the ssh server: one account, root, with one password
+   for the console, ssh and the panel. Until one is set, the password is
+   ``admin`` (a fixed hash of it); a hash of the panel's older form, which
+   ``crypt()`` cannot check, leaves root without a password on the console and
+   ssh (``*``), keys only, until a sign-in to the panel stores it again.
+   Without a store that can be read (``/config`` not mounted, or the file
+   damaged) the password is not known: ``/run/onu-auth`` holds ``!``, the
+   panel refuses every sign-in, the ssh server takes keys only, and the
+   console, which needs the stick opened, takes ``admin``, so that the store
+   can be mended there.
    ``onu-config password-check`` says in its exit status whether the line of
    its input is root's password: 0 for the one in force, 3 for ``admin``
    while none is set, 4 for one kept in the older form, which the caller
@@ -133,8 +133,7 @@ them finds it there, and names it by its whole path where procd starts it.
    them, never holds it.
    ``onu-config token new`` makes the token of scripts, which the status daemon
    takes in place of a sign-in (``pond/README.rst``): 64 hexadecimal digits,
-   kept in the store as ``POND_TOKEN`` and in ``/run/onu-pond-token`` for root
-   only, and printed once, for the script. ``onu-config token`` prints it again
+   printed once, for the script. ``onu-config token`` prints it again
    (exit status 1 and no output when there is none), ``onu-config token off``
    takes it away, and ``onu-config token install`` hands the one in force to the
    status daemon, whose copy is ``/run/pond/token`` for the account ``pond``
@@ -142,28 +141,77 @@ them finds it there, and names it by its whole path where procd starts it.
    ``token off`` themselves. A person runs it, on the stick; the status daemon
    cannot (ubusd's access list has no method for it), so that a daemon taken
    over cannot make itself a token. Without a store the new token lasts until
-   the next start. The token is no setting: a save keeps it and a load puts it
-   aside.
+   the next start.
    ``onu-config identity-current`` prints the identity of
    ``/run/onu-identity``, which root alone reads, without its PLOAM and
    logical passwords, with ``ploam_set`` and ``loid_password_set`` and where it
    came from, ``source``. A
-   save with no account in force stores an empty ``PPPOE_USER``, so that a
+   save with no account in force stores an empty ``PPPOEn_USER``, so that a
    removed account does not come back at the next boot, and takes out of the
    store each setting that ``/run/onu.conf`` no longer has, such as a key a
    later version replaced (an import's ``-KEY`` line), unless that file is
-   missing or empty. ``onu-config system``
-   keeps the stick's own settings of ``KEY=VALUE`` lines on its input as
-   ``SYS_*`` keys, each in the shape the boot script takes: ``HOSTNAME``,
-   ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER``, the server
-   the clock is set from, and ``LOG_SERVER``, a server of the host side that
-   the system log goes to as well; a load puts them in ``/run/onu-system``. Where the identity in
-   force came from is ``store`` or ``factory`` in ``/run/onu-identity-source``.
-   ``onu-config pd N`` keeps the host session N delegates its IPv6 prefix to,
-   the line ``dhcp6d`` keeps in ``/run/onu-pdN``, as ``PDn_HOST``, and a load
-   puts it back, so that after a restart the prefix goes to that router at
-   once, though it asks for nothing; ``onu-apply`` calls it when the line
-   changes or goes, and a store that holds the same writes nothing.
+   missing or empty. ``onu-config system`` keeps the stick's own settings of
+   ``KEY=VALUE`` lines on its input as ``SYS_*`` keys, each in the shape the
+   boot script takes. Where the identity in force came from is ``store`` or
+   ``factory`` in ``/run/onu-identity-source``. ``onu-config pd N`` keeps the
+   host session N delegates its IPv6 prefix to, so that after a restart the
+   prefix goes to that router at once, though it asks for nothing;
+   ``onu-apply`` calls it when the line changes or goes, and a store that holds
+   the same writes nothing.
+
+   The keys of the store, and the file of ``/run`` a load puts each in (the
+   files of secrets are for root only):
+
+   .. list-table::
+      :header-rows: 1
+      :widths: 24 22 54
+
+      * - Key
+        - Kept by
+        - In the file
+      * - ``ID_<NAME>``
+        - ``onu-config identity``
+        - The line ``name=value``, the name in lower case, of
+          ``/run/onu-identity``, over what ``ponid`` reads from the shipped
+          firmware's files.
+      * - ``PPPOEn_USER``, ``PPPOEn_SECRET``, n from 1 to 7
+        - ``onu-config save``
+        - The line ``user secret`` of ``/run/onu-pppoeN``; an empty user leaves
+          the session without an account. ``PPPOE_USER`` and ``PPPOE_SECRET``,
+          the single account of before, are the first session's.
+      * - ``AUTH_HASH``
+        - ``onu-config password``, ``auth``
+        - ``/run/onu-auth``: the hash of root's password, which the console's
+          login, the ssh server and the status daemon's sign-in all check.
+          Without the key the default password is in force; without a store
+          that can be read the file holds ``!``.
+      * - ``SYS_<NAME>``
+        - ``onu-config system``
+        - The line ``NAME=value`` of ``/run/onu-system``, for ``HOSTNAME``,
+          ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER`` (the
+          server the clock is set from) and ``LOG_SERVER`` (a server of the
+          host side that the system log goes to as well).
+      * - ``PDn_HOST``
+        - ``onu-config pd``
+        - ``/run/dhcp6d/pdN``: the host session N delegated its IPv6 prefix to,
+          which ``dhcp6d`` takes back after a restart.
+      * - ``TLS_KEY``
+        - ``onu-config tls``
+        - ``/run/onu-tls-key``: the status daemon's key, a scalar of P-256 in 64
+          hexadecimal digits, made once on the stick.
+      * - ``SSH_HOST_KEY``
+        - ``onu-config ssh``
+        - ``/run/onu-ssh-key``: the ssh server's host key in its own format, in
+          hexadecimal digits, made once on the stick.
+      * - ``POND_TOKEN``
+        - ``onu-config token``
+        - ``/run/onu-pond-token``: the token of scripts.
+      * - every other key
+        - ``onu-config save``, ``import``
+        - A line of ``/run/onu.conf``: the settings (``src/settings.h``).
+
+   A save writes the settings, the last row, and the accounts, the second; it
+   leaves every other key as it is, and the panel never shows them.
 
 ``passwd``
    a new password for root, at a terminal: it asks twice without echo and
