@@ -43,6 +43,14 @@ def main():
         check(set(acl["access"]) == {"onu-act"}, "%s: it calls nothing else" % path)
         check(all(isinstance(p, str) and p for p in acl.get("publish", [])),
               "%s: what it publishes is names" % path)
+    # pppoed tells netifd of its session, on the interface's object, and calls
+    # nothing of onu-act's.
+    with open(os.path.join(repo, "pppoed", "acl.json"), encoding="utf-8") as handle:
+        pppoed = json.load(handle)
+    check(pppoed["user"] == "pppoed", "pppoed/acl.json is the list of pppoed")
+    check(pppoed["access"] == {"network.interface.*": {"methods": ["notify_proto"]}},
+          "pppoed/acl.json: notify_proto of netifd's interfaces, and nothing else")
+    check("publish" not in pppoed, "pppoed publishes no object")
     print("test_acl: %d checks, %d failed" % (checks, failures))
     sys.exit(1 if failures else 0)
 

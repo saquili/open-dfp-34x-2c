@@ -344,6 +344,9 @@ check 'logged "^onu-drop -c net_bind_service,net_admin,net_raw dhcp6d dhcp6d -w 
 # The session's directory is the group onu's, which the programs of the session write to.
 check 'logged "^chown :onu $ONU_ROOT/run/session/2$"'
 check 'ls -ld "$ONU_ROOT/run/session/2" | grep -q "^drwxrws---"'
+# pppoed, an account of its own, reads the session's account: the group pppoed's.
+check 'logged "^chown :pppoed $ONU_ROOT/run/onu-pppoe2$"'
+check 'ls -l "$ONU_ROOT/run/onu-pppoe2" | grep -q "^-rw-r-----"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
 check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=1"'

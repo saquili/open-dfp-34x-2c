@@ -38,7 +38,7 @@
 # from the store at boot and at a change; /etc/onu.conf says what each key
 # means, and the default of a key is the table of onu-config (onu-config
 # defaults). The account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN,
-# as "user secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
+# as "user secret", readable by root and pppoed only; /etc/onu-pppoe, if a bench's files carry
 # one, seeds the first. At boot, onu-config has put the saved ones in these
 # files before onu-apply starts.
 #
@@ -907,6 +907,10 @@ session_up() {
 	# as the accounts of the group onu (the boot script's, post-build.sh).
 	chown :onu "$SESSIONS/$n" && chmod 2770 "$SESSIONS/$n" ||
 		log "session $n: its directory is not the group onu's"
+	# pppoed, an account of its own, reads the session's account: the group
+	# pppoed's and no one else's but root's.
+	chown :pppoed "$RUN/onu-pppoe$n" && chmod 640 "$RUN/onu-pppoe$n" ||
+		log "session $n: pppoed cannot read its account"
 	echo "$gem" >"$SESSIONS/$n/gem"
 	echo "$dev" >"$SESSIONS/$n/dev"
 	echo "$fam" >"$SESSIONS/$n/family"

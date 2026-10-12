@@ -75,7 +75,8 @@
  *
  * current and change read the settings in force from the files of the
  * running system, /run/onu.conf and each session's account,
- * /run/onu-pppoeN, which root alone may read (ONU_ROOT, when set, is put in
+ * /run/onu-pppoeN, which only root and pppoed may read (onu-apply gives a
+ * session's file to the group pppoed; ONU_ROOT, when set, is put in
  * front, for the tests). current prints them as settings does, and for each
  * account PPPOEn_USER and PPPOEn_SECRET_SET, 1 or 0, never the secret.
  * change takes KEY=VALUE lines over them, an account's among them, judges
