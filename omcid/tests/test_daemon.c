@@ -311,6 +311,16 @@ static void test_signal_stops_the_loop(void)
 static unsigned int g_mode_calls;
 static bool g_mode_router;
 static unsigned int g_bridge_applies;
+static unsigned int g_mode_dones;
+static bool g_mode_done_router;
+static unsigned int g_applies_at_done;
+
+static void count_done(bool router)
+{
+	g_mode_dones++;
+	g_mode_done_router = router;
+	g_applies_at_done = g_bridge_applies;
+}
 
 static void count_mode(bool on)
 {
@@ -336,6 +346,7 @@ static void test_signals_change_the_mode(void)
 
 	ops.set_router = count_mode;
 	ops.bridge_apply = count_bridge;
+	ops.mode_done = count_done;
 	for (unsigned int i = 0; i < ARRAY_SIZE(sigs); i++) {
 		const bool host = i == 2;
 		const char *want = sigs[i] == SIGUSR1 ? "mode: router" :
@@ -345,6 +356,7 @@ static void test_signals_change_the_mode(void)
 		CHECK(rig_up(&g));
 		g_mode_calls = 0;
 		g_bridge_applies = 0;
+		g_mode_dones = 0;
 		if (!host)
 			omci_hw_ops_set(&ops);
 		fault_signal(FAULT_POLL, 1, sigs[i]);
@@ -357,6 +369,10 @@ static void test_signals_change_the_mode(void)
 		CHECK_EQ(g_mode_calls, host ? 0u : 1u);
 		CHECK(host || g_mode_router == (sigs[i] == SIGUSR1));
 		CHECK_EQ(g_bridge_applies, host ? 0u : 1u);
+		/* Told once the data path is programmed again, not before. */
+		CHECK_EQ(g_mode_dones, host ? 0u : 1u);
+		CHECK(host || g_mode_done_router == (sigs[i] == SIGUSR1));
+		CHECK(host || g_applies_at_done == 1u);
 		CHECK(strstr(g_log, "[ERR]") == NULL);
 		rig_down(&g);
 		(void)unlink(g_sock);

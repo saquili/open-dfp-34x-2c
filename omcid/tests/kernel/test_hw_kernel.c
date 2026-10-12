@@ -207,6 +207,31 @@ static void leftover_drops(void)
 	CHECK(!at("sfp", first, NULL) && !at("sfp", last, NULL));
 }
 
+/* The first line of the file @path, or "" without one. */
+static const char *first_line(const char *path)
+{
+	static char line[32];
+	FILE *f = fopen(path, "r");
+
+	line[0] = '\0';
+	if (f && fgets(line, sizeof(line), f))
+		line[strcspn(line, "\n")] = '\0';
+	if (f)
+		fclose(f);
+	return line;
+}
+
+static void mode_applied(void)
+{
+	puts("the mode the data path was programmed for is told in /run/omcid.applied");
+	unlink("/run/omcid.applied");
+	omci_hw_kernel_ops.mode_done(true);
+	CHECK(!strcmp(first_line("/run/omcid.applied"), "router"));
+	omci_hw_kernel_ops.mode_done(false);
+	CHECK(!strcmp(first_line("/run/omcid.applied"), "bridge"));
+	CHECK(access("/run/omcid.applied.new", F_OK) != 0);
+}
+
 /* What tc shows of the root qdisc of @dev, on one line. */
 static const char *root_qdisc(const char *dev)
 {
@@ -281,6 +306,7 @@ int main(void)
 		puts("(this kernel has no vlan action: the VLAN rules and the multicast tags are skipped)");
 	}
 	port_filters();
+	mode_applied();
 	if (tbf_qdisc())
 		uni_rate();
 	else

@@ -1012,6 +1012,10 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  * @mcast_seen: the downstream frames of a counted group so far
  * @filter_apply: replace the rules of the bridge port filters; NULL in a
  *	backend without them, where the filters are only kept
+ * @mode_done: the data path is programmed again after a change of mode, the
+ *	argument being true for router mode; the kernel backend says so in
+ *	/run/omcid.applied, which a program that signalled the change waits
+ *	for. NULL in a backend that says nothing
  * @uni_rate: limit the rate at which the UNI sends to the subscriber; NULL
  *	in a backend without a limit
  */
@@ -1057,6 +1061,7 @@ struct omci_hw_ops {
 	enum omci_status (*filter_apply)(const struct omci_hw_filter *rules,
 					 size_t n);
 	enum omci_status (*uni_rate)(uint64_t bytes_ps);
+	void (*mode_done)(bool router);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

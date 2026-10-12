@@ -72,6 +72,8 @@ static void change_mode(struct omci_engine *eng)
 	if (omci_hw()->set_router != NULL)
 		omci_hw()->set_router(router);
 	omci_engine_reprogram(eng);
+	if (omci_hw()->mode_done != NULL)
+		omci_hw()->mode_done(router);
 }
 
 /* Where the daemon publishes what it holds, or NULL. */

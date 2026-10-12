@@ -1437,6 +1437,30 @@ static bool kernel_routing(void)
 	return g_router;
 }
 
+/*
+ * The mode the data path was last programmed for, once it was, replaced
+ * whole: what a program that signalled the change (onu-apply) waits for,
+ * having removed the file before it signalled. No hook is run for it.
+ */
+#define APPLIED_PATH "/run/omcid.applied"
+
+static void kernel_mode_done(bool router)
+{
+	char tmp[64];
+	FILE *f;
+	bool ok = false;
+
+	snprintf(tmp, sizeof(tmp), "%s.new", APPLIED_PATH);
+	f = fopen(tmp, "we");
+	if (f != NULL) {
+		ok = fputs(router ? "router\n" : "bridge\n", f) >= 0;
+		ok = fclose(f) == 0 && ok;
+		ok = ok && rename(tmp, APPLIED_PATH) == 0;
+	}
+	if (!ok)
+		OMCI_WARN("mode: not told in %s", APPLIED_PATH);
+}
+
 /* Whether an address is already among those read, for the same side. */
 static bool fdb_has(const struct omci_hw_fdb *out, size_t n, const uint8_t *mac,
 		    bool ani)
@@ -4283,4 +4307,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_watch = kernel_mcast_watch,
 	.mcast_seen = kernel_mcast_seen,
 	.uni_rate = kernel_uni_rate,
+	.mode_done = kernel_mode_done,
 };

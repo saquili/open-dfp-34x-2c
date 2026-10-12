@@ -122,7 +122,10 @@ bridge and the stick's router uses them.
 
 Beside the stick's own PPPoE sessions the daemon bridges what the OLT
 provisions but the sessions' VLANs, which ``onu-apply`` writes, by their VID on
-the PON side, one per line, to ``/run/onu-held-vlans`` before it sends SIGUSR2.
+the PON side, one per line, to ``/run/onu-held-vlans`` before it sends SIGUSR2,
+and waits for the daemon to say in ``/run/omcid.applied``, ``bridge`` or
+``router``, that it programmed the data path again for the mode the signal
+asked for.
 The VLAN rules into those VLANs stay out of the hardware, and so does a bridge
 port that carries nothing else, such as the GEM ports of an Internet service
 whose PPPoE the stick holds; the subscriber's frames of those VLANs are
