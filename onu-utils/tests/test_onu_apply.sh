@@ -391,6 +391,36 @@ check 'logged "^ip link set pon mtu 1500"'
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
 teardown
 
+echo "a session in no VLAN and a GEM port on auto: the lowest that carries both ways and is no multicast"
+setup
+# Lower than the others: a port that only receives, and a multicast port that
+# is not 4095. Neither is a port a session can run on.
+mkdir -p "$ONU_ROOT/sys/class/net/gem100" "$ONU_ROOT/sys/class/net/gem200"
+printf '#!/bin/sh\n[ "$1" = gem ] || exit 1\n%s\n' \
+	'printf "gem100 port 100 down\ngem200 port 200 down multicast\ngem256 port 256 both tcont 0\ngem1024 port 1024 both tcont 1\n"' \
+	>"$T/bin/pon"
+conf SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" sync 2>/dev/null
+check 'logged "^pppoed up -i gem256 "'
+check '! logged "pppoed up -i gem100" && ! logged "pppoed up -i gem200"'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
+echo "a driver that has no GEM port for a moment: the session looks again, and does not go down"
+setup
+# pon gem lists nothing the first two times it is asked, as while the ports are made again.
+printf '#!/bin/sh\necho x >>"%s/pon-asked"\n[ "$1" = gem ] || exit 1\n[ "$(wc -l <"%s/pon-asked")" -gt 2 ] || exit 0\nprintf "gem256 port 256 both tcont 0\\n"\n' \
+	"$T" "$T" >"$T/bin/pon"
+conf SESSION1_FAMILY=ipv4
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+"$MODE_SCRIPT" start 2>/dev/null
+check 'logged "^pppoed up -i gem256 "'
+check '! grep -q "GEM port is gone" "$LOG"'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
 echo "the settings of before: the WAN's VLAN and MAC are the first session's"
 setup
 conf MODE=passthrough WAN_VLAN=410 WAN_MAC=00:00:5e:00:53:01

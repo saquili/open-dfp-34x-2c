@@ -466,16 +466,29 @@ bridge_down() {
 }
 
 # The GEM interface for the setting $1: gemN for N, or for auto (or nothing)
-# the one of the lowest Port-ID but 4095, which OLTs give to multicast.
+# the one of the lowest Port-ID of the GEM ports that carry both ways and are
+# not multicast, as the driver says (pon gem): a session sends and receives,
+# and the multicast port, which OLTs usually give 4095, is neither. The
+# driver's list is asked up to three times, 0.2 s apart: while the OLT
+# provisions the ports, or omcid programs them again, there may be none for a
+# moment, and a session that finds none goes down and stays down until the
+# next change tells onu-apply to look again.
 gem_of() {
 	if [ -n "$1" ] && [ "$1" != auto ]; then
 		[ -e "$NET/gem$1" ] && echo "gem$1"
 		return 0
 	fi
-	for id in $(ls "$NET" 2>/dev/null | sed -n 's/^gem\([0-9][0-9]*\)$/\1/p' | sort -n); do
-		[ "$id" = 4095 ] && continue
-		echo "gem$id"
-		return 0
+	gem_try=0
+	while [ $gem_try -lt 3 ]; do
+		for gem_id in $(pon gem 2>/dev/null |
+			awk '$4 == "both" && !/ multicast/ { print $3 }' | sort -n); do
+			if [ -e "$NET/gem$gem_id" ]; then
+				echo "gem$gem_id"
+				return 0
+			fi
+		done
+		gem_try=$((gem_try + 1))
+		[ $gem_try -ge 3 ] || sleep 0.2
 	done
 }
 
