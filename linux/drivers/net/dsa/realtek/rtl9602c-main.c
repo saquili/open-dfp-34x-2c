@@ -936,13 +936,17 @@ static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 
 /*
  * The GPON handler reads the GTC latches, and only then is the GPON source's
- * pending bit written. The line stays masked meanwhile (IRQF_ONESHOT).
+ * pending bit written. The line stays masked meanwhile (IRQF_ONESHOT). With
+ * no handler bound nothing reads the latches and the source would assert
+ * again at once, so it is masked; the MAC's driver enables it when it brings
+ * the MAC up.
  */
 static irqreturn_t rtl9602c_irq_thread(int irq, void *dev_id)
 {
 	struct rtl9602c_priv *p = dev_id;
 
-	rtl9602c_pon_irq(p);
+	if (!rtl9602c_pon_irq(p))
+		rtl9602c_irq_enable(p, RTL9602C_IRQ_SRC_GPON, 0);
 	rtl9602c_w(p, RTL9602C_IRQ_PENDING, RTL9602C_IRQ_SRC_GPON);
 	return IRQ_HANDLED;
 }

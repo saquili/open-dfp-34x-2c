@@ -20,6 +20,7 @@
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
 
+#include <linux/auxiliary_bus.h>
 #include <linux/bitmap.h>
 #include <linux/if_link.h>
 #include <linux/if_vlan.h>
@@ -28,7 +29,6 @@
 #include <net/switchdev.h>
 
 #include "rtl9602c.h"
-#include "rtl9602c-pon.h"
 
 /* The host operations */
 
@@ -372,24 +372,35 @@ static void rtl9602c_pon_data_init(struct rtl9602c_priv *p)
 }
 
 /**
- * rtl9602c_pon_attach() - start the driver of the GPON MAC
+ * rtl9602c_pon_attach() - make the device of the GPON MAC's driver
  * @p: the switch
  *
- * Return: 0, or a negative error code, with nothing started.
+ * The driver, PON_RTL9602C, binds to it when it is there, now or when it
+ * loads. It is destroyed with rtl9602c_pon_detach() and not with the
+ * switch's device, so that the driver unbinds before the switch is torn down.
+ *
+ * Return: 0, or a negative error code, with nothing made.
  */
 int rtl9602c_pon_attach(struct rtl9602c_priv *p)
 {
 	rtl9602c_pon_data_init(p);
-	return rtl9602c_pon_probe(&p->pon, p->dev);
+	p->pon_adev = auxiliary_device_create(p->dev, KBUILD_MODNAME, "pon",
+					      &p->pon, 0);
+	return p->pon_adev ? 0 : -ENODEV;
 }
 
 /**
- * rtl9602c_pon_detach() - stop the driver of the GPON MAC
+ * rtl9602c_pon_detach() - destroy the device of the GPON MAC's driver
  * @p: the switch
+ *
+ * The driver unbinds, which takes its services away from the switch and
+ * unregisters its PON device.
  */
 void rtl9602c_pon_detach(struct rtl9602c_priv *p)
 {
-	rtl9602c_pon_remove(&p->pon);
+	if (p->pon_adev)
+		auxiliary_device_destroy(p->pon_adev);
+	p->pon_adev = NULL;
 }
 
 /**
@@ -437,14 +448,24 @@ void rtl9602c_pon_operstate(struct rtl9602c_priv *p)
 	up_read(&pd->sem);
 }
 
-void rtl9602c_pon_irq(struct rtl9602c_priv *p)
+/**
+ * rtl9602c_pon_irq() - run the thread of the GPON interrupt
+ * @p: the switch
+ *
+ * Return: whether a PON driver was bound to run it.
+ */
+bool rtl9602c_pon_irq(struct rtl9602c_priv *p)
 {
 	struct rtl9602c_pon_data *pd = &p->pon;
+	bool handled = false;
 
 	down_read(&pd->sem);
-	if (pd->pon_ops)
+	if (pd->pon_ops) {
 		pd->pon_ops->irq(pd->pon);
+		handled = true;
+	}
 	up_read(&pd->sem);
+	return handled;
 }
 
 bool rtl9602c_pon_is_up(struct rtl9602c_priv *p)

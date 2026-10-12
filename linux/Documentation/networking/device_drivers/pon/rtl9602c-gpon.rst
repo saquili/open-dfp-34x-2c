@@ -244,35 +244,38 @@ Where the code is
 
    * - File
      - Contents
-   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gpon.c``
      - The GPON MAC: the boot report, the PON SerDes and analog set-up, bring-up
        and take-down, the activation state machine, PLOAM receive and transmit,
        the burst overhead and the upstream timing, the Alloc-ID, Port-ID and
        multicast tables, the counters, the status report to the PON class and
        the debugfs views.
-   * - ``drivers/net/dsa/realtek/rtl9602c.h``
-     - The register map of the GPON MAC, and the fields of ``struct
-       rtl9602c_priv`` that hold its state (their names begin ``gpon_`` and
-       ``ploam_``).
-   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
-     - The GPON source of the switch interrupt (``rtl9602c_irq()`` and
-       ``rtl9602c_irq_thread()``, which calls ``rtl9602c_gpon_irq()``), the
-       set-up of the worker, ``rtl9602c_port_enable()`` and
-       ``rtl9602c_port_disable()`` of the PON port, the devlink parameter
-       ``gpon_serial`` and the info item ``gpon.mac``, and the calls of
-       ``rtl9602c_gpon_report()`` and of the debugfs set-up at switch setup.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-regs.h``, ``rtl9602c-pon.h``
+     - The register map of the GPON MAC, and ``struct rtl9602c_pon``, whose
+       fields hold its state (their names begin ``gpon_`` and ``ploam_``).
+   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``, ``rtl9602c-pon-host.c``
+     - The GPON source of the switch interrupt (``rtl9602c_irq()`` notes the
+       time, ``rtl9602c_irq_thread()`` calls the PON operation ``irq``, which
+       is ``rtl9602c_gpon_irq()``), ``rtl9602c_port_enable()`` and
+       ``rtl9602c_port_disable()`` of the PON port, which start and stop the
+       MAC through the PON operations, the devlink parameter ``gpon_serial``
+       and the info item ``gpon.mac``. The MAC's boot report and its debugfs
+       views are made by the PON driver when it binds
+       (``rtl9602c_pon_probe()``).
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gem.c``
      - The PON class's data path. This block calls ``rtl9602c_gem_restore()``
        and ``rtl9602c_gem_tcont_ready()`` in it. It calls back
        ``rtl9602c_gpon_port_bind()`` and ``rtl9602c_gpon_port_unbind()`` for the
        Port-ID table and ``rtl9602c_gpon_fill_status()`` for the status, and it
        answers the T-CONT query from the driver's record of the Alloc-IDs.
-   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-omci.c``
      - The OMCI port. It reads the activation state and whether the OMCC is
        bound; this block reports the OMCI channel's link to the port.
-   * - ``rtl9602c-ponmac.c`` and ``rtl9602c-optics.c``, same directory
+   * - ``rtl9602c-ponmac.c`` in the same directory, and ``rtl9602c-optics.c`` of
+       the switch driver
      - Called from this block: ``rtl9602c_ponmac_init()`` and
-       ``rtl9602c_ponmac_sid_valid()`` of the PON MAC, and
+       ``rtl9602c_ponmac_sid_valid()`` of the PON MAC, and, through the host
+       operations ``tx_disable`` and ``hold_modulation``,
        ``rtl9602c_l_txdis_gpio()`` and ``rtl9602c_optics_hold_modulation()`` of
        the optics. The ``ponpath`` view of the PON MAC calls
        ``rtl9602c_gpon_port_get()``, ``rtl9602c_gpon_cntr_sync()`` and
@@ -320,7 +323,7 @@ Interfaces to user space
   serial number, and announces changes.
 - Seven debugfs views in ``/sys/kernel/debug/rtl9602c/``: ``gpon``, ``gpontbl``,
   ``ploamlog``, ``bwmap``, ``usburst``, ``uscntr`` and ``gemusintr`` (see "The
-  debugfs views"); with ``CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT``, a test
+  debugfs views"); with ``CONFIG_PON_RTL9602C_PLOAM_INJECT``, a test
   image's option, also the file ``ploaminject``.
 - The kernel log: the lines of this block begin ``rtl9602c-switch: <GPON>`` (see
   "The kernel log").
@@ -3053,7 +3056,7 @@ Seven views are created by ``rtl9602c_gpon_debugfs_init()`` in the switch's
 debugfs directory, ``/sys/kernel/debug/rtl9602c/``. All are mode 0400 but
 ``ploamlog``, which is 0600 because a write to it empties the log. They exist
 only with ``CONFIG_DEBUG_FS``. A test image built with
-``CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT`` also has ``ploaminject``, mode 0200:
+``CONFIG_PON_RTL9602C_PLOAM_INJECT`` also has ``ploaminject``, mode 0200:
 a write of the twelve octets of a downstream PLOAM message before its CRC, in
 hex, spaces allowed, hands the message to the dispatcher as if the OLT had sent
 it, and is refused with ``-ENETDOWN`` while the PON is down. An ONU in service

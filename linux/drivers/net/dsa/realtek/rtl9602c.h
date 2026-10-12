@@ -16,6 +16,7 @@
 #include <linux/bits.h>
 #include <linux/if_vlan.h>
 #include <linux/pon.h>
+#include <linux/auxiliary_bus.h>
 #include <linux/dsa/rtl9602c.h>
 #include <linux/platform_data/rtl9602c-pon.h>
 
@@ -1638,6 +1639,8 @@ struct rtl9602c_priv {
 	 * services each does for the other, and the interrupt's time
 	 */
 	struct rtl9602c_pon_data pon;
+	/** @pon_adev: the device the GPON MAC's driver binds to; NULL when none is made */
+	struct auxiliary_device *pon_adev;
 
 	/**
 	 * @l34_up: the L3/NAT engine's enable read back set; everything that
@@ -2407,7 +2410,7 @@ void rtl9602c_pon_irq_note(struct rtl9602c_priv *p);
 int rtl9602c_pon_start(struct rtl9602c_priv *p);
 void rtl9602c_pon_stop(struct rtl9602c_priv *p);
 void rtl9602c_pon_operstate(struct rtl9602c_priv *p);
-void rtl9602c_pon_irq(struct rtl9602c_priv *p);
+bool rtl9602c_pon_irq(struct rtl9602c_priv *p);
 bool rtl9602c_pon_is_up(struct rtl9602c_priv *p);
 int rtl9602c_pon_sn_set(struct rtl9602c_priv *p, const char *s);
 int rtl9602c_pon_sn_get(struct rtl9602c_priv *p, char *buf, size_t len);

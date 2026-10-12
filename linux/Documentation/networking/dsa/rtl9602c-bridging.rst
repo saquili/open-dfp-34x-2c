@@ -69,8 +69,9 @@ Operations and files
 
 The driver implements these operations of ``struct dsa_switch_ops`` for the
 function, all in ``rtl9602c-l2.c`` except where the table says otherwise, and
-the five bridge operations of the PON class in ``rtl9602c-gem.c``. Every name is
-prefixed ``rtl9602c_``.
+the host operations that the PON driver's bridge operations of the PON class
+(in its ``rtl9602c-gem.c``) are passed on to, in ``rtl9602c-pon-host.c``. Every
+name is prefixed ``rtl9602c_``.
 
 .. list-table::
    :header-rows: 1
@@ -101,9 +102,11 @@ prefixed ``rtl9602c_``.
        that drop, trap or police are on the *acl-qos* page)
      - "VLAN tag operations".
    * - ``gem_bridge_join``, ``gem_bridge_leave``, ``gem_vlan_add``,
-       ``gem_vlan_del`` (``rtl9602c-gem.c``, operations of the PON class)
+       ``gem_vlan_del`` (host operations, ``rtl9602c-pon-host.c``, called by the
+       operations of the PON class of the same names)
      - "Bridging the GEM ports".
-   * - ``gem_mrouter`` (``rtl9602c-gem.c``, an operation of the PON class)
+   * - ``gem_mrouter`` (a host operation, ``rtl9602c-pon-host.c``, called by the
+       operation of the PON class)
      - "Multicast snooping".
 
 The files that hold the rest of this page:
@@ -135,8 +138,13 @@ The files that hold the rest of this page:
        ports a GEM stream (``rtl9602c_cf_sid_refresh()``), the ACL rules that copy
        IGMP and MLD to the CPU (``rtl9602c_acl_snoop_setup()``), and the
        debugfs views ``l2learn``, ``svlan`` and ``rma``.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
-     - The bridge half of the GEM interfaces.
+   * - ``drivers/net/dsa/realtek/rtl9602c-pon-host.c``
+     - The bridge half of the GEM interfaces: the one bridge they share, the
+       VLANs and priorities each flow claims, and the addresses the CPU takes
+       for them, kept for the PON driver.
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gem.c``
+     - The GEM interfaces' bridge operations of the PON class, which pass on
+       to the host what the switch keeps.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers and entry layouts of this page, ``struct rtl9602c_lookup``
        and the state of the driver that it uses (``flood_req``, ``mc_drop``,

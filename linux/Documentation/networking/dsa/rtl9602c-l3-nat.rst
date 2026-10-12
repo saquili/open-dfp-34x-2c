@@ -173,10 +173,13 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - The steps of ``rtl9602c_setup()`` and ``rtl9602c_teardown()`` that call
        the engine, and the initialisation of ``flow_lock``.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gem.c``
      - ``rtl9602c_gem_us_ready()``, which says whether a GEM interface can
-       carry a routed flow, and the release of the routed flow when its GEM
-       port is removed.
+       carry a routed flow; the switch driver asks it through the PON
+       operations (``rtl9602c_pon_us_ready()``).
+   * - ``drivers/net/dsa/realtek/rtl9602c-pon-host.c``
+     - The release of the routed flow when its GEM port is removed (the host
+       operation ``gem_unbind``).
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers of the engine, the entry fields (``RTL9602C_FIELD()``),
        the shadows in ``struct rtl9602c_priv`` (``l34_*``, ``flow_lock``),

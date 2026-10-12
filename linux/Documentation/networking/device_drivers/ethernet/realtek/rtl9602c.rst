@@ -179,7 +179,7 @@ Where the code is
      - The switch's half of the CPU tag (``RTL9602C_CPUTAG_CTRL``), the frame
        length limit (``RTL9602C_FRAME_OVERHEAD``) and the tag protocol the
        switch driver reports.
-   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``, ``rtl9602c-gem.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-omci.c``, ``rtl9602c-gem.c``
      - The users of the conduit's calls: the OMCI port and the GEM data path
        of the PON class.
    * - ``drivers/net/dsa/realtek/rtl9602c-ptp.c``

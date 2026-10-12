@@ -187,7 +187,7 @@ The files that hold this page:
        parts of the interrupt handler for the meters, the ACL and loop
        detection, the loop detection's magic, the devlink parameters and the
        ``frame_capture`` region.
-   * - ``drivers/net/dsa/realtek/rtl9602c-ponmac.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-ponmac.c``
      - ``rtl9602c_pon_fc_thresholds()``, the flow-control thresholds of the PON
        port.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``

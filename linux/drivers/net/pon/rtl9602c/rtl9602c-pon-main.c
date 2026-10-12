@@ -11,9 +11,11 @@
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
 
+#include <linux/auxiliary_bus.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/err.h>
+#include <linux/module.h>
 #include <linux/pon.h>
 #include <net/dsa.h>
 
@@ -157,8 +159,10 @@ int rtl9602c_pon_probe(struct rtl9602c_pon_data *pd, struct device *dev)
 				     "cannot register the dying gasp\n");
 
 	rtl9602c_gpon_report(p);
-	rtl9602c_gpon_debugfs_init(p);
-	rtl9602c_ponmac_debugfs_init(p);
+	if (IS_ENABLED(CONFIG_DEBUG_FS)) {
+		rtl9602c_gpon_debugfs_init(p);
+		rtl9602c_ponmac_debugfs_init(p);
+	}
 
 	/*
 	 * The OMCI port first, then the GEM data path, which registers on the
@@ -184,9 +188,13 @@ int rtl9602c_pon_probe(struct rtl9602c_pon_data *pd, struct device *dev)
  * @pd: the platform data
  *
  * Takes the driver's operations away from the switch driver, which waits for
- * a call in progress, then cancels the worker and unregisters the data path
- * before the OMCI port: the PON device is unregistered with its last child,
- * the OMCI port, and the data path must not outlive it.
+ * a call in progress, takes the MAC down if it is up, so that the laser is
+ * dark and the PON interface has no carrier, then cancels the worker and
+ * unregisters the data path before the OMCI port: the PON device is
+ * unregistered with its last child, the OMCI port, and the data path must not
+ * outlive it. The ONU's serial number and password go with the driver's
+ * state: after a bind they are set again, and the PON interface, which stays
+ * up, is cycled to bring the MAC up.
  */
 void rtl9602c_pon_remove(struct rtl9602c_pon_data *pd)
 {
@@ -200,8 +208,48 @@ void rtl9602c_pon_remove(struct rtl9602c_pon_data *pd)
 	pd->pon_ops = NULL;
 	up_write(&pd->sem);
 
+	rtl9602c_pon_debugfs_exit(p);
+
+	rtl9602c_gpon_stop(p);
+	rtl9602c_gpon_operstate(p);
+
+	/*
+	 * Nothing reads the GTC latches any more, so the source must not
+	 * assert: the switch driver masks it too if it fires meanwhile.
+	 */
+	RTL9602C_HOST(p, irq_enable, RTL9602C_IRQ_SRC_GPON, 0);
+
 	/* With no interrupt the worker is not cancelled by the bring-down. */
 	cancel_delayed_work_sync(&p->gpon_work);
 	rtl9602c_gem_teardown(p);
 	rtl9602c_omci_teardown(p);
 }
+
+static int rtl9602c_pon_aux_probe(struct auxiliary_device *adev,
+				  const struct auxiliary_device_id *id)
+{
+	return rtl9602c_pon_probe(dev_get_platdata(&adev->dev), &adev->dev);
+}
+
+static void rtl9602c_pon_aux_remove(struct auxiliary_device *adev)
+{
+	rtl9602c_pon_remove(dev_get_platdata(&adev->dev));
+}
+
+/* The switch driver makes the device, whose module is rtl9602c. */
+static const struct auxiliary_device_id rtl9602c_pon_id_table[] = {
+	{ .name = "rtl9602c.pon" },
+	{ }
+};
+MODULE_DEVICE_TABLE(auxiliary, rtl9602c_pon_id_table);
+
+static struct auxiliary_driver rtl9602c_pon_driver = {
+	.probe		= rtl9602c_pon_aux_probe,
+	.remove		= rtl9602c_pon_aux_remove,
+	.id_table	= rtl9602c_pon_id_table,
+};
+module_auxiliary_driver(rtl9602c_pon_driver);
+
+MODULE_DESCRIPTION("GPON MAC of the Realtek RTL9602C");
+MODULE_AUTHOR("Paweł Phan <szop.hektar_1w@icloud.com>");
+MODULE_LICENSE("GPL");

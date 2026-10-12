@@ -45,6 +45,10 @@ struct rtl9602c_pon {
 	struct rtl9602c_pon_data *pd;
 	struct dsa_switch *ds;
 	void __iomem *reg;
+	/** @dbg: the debugfs files the driver made in the switch's directory */
+	struct dentry *dbg[12];
+	/** @n_dbg: how many of @dbg are made */
+	unsigned int n_dbg;
 
 	/** @ploam_lock: serialises the writers of upstream PLOAM messages */
 	struct mutex ploam_lock;
@@ -272,6 +276,38 @@ struct rtl9602c_pon {
 	struct rtl9602c_pon *__p = (p); \
 	__p->pd->host_ops->op(__p->pd->host, ##__VA_ARGS__); \
 })
+
+/**
+ * rtl9602c_pon_debugfs_file() - add a view to the switch's debugfs directory
+ * @p: the PON driver
+ * @name: the file's name
+ * @mode: its mode
+ * @fops: its operations; the file's private data is @p
+ *
+ * The files are in the switch driver's directory, so that their paths stay
+ * as they were, and the driver removes them when it unbinds
+ * (rtl9602c_pon_debugfs_exit()).
+ */
+static inline void rtl9602c_pon_debugfs_file(struct rtl9602c_pon *p,
+					     const char *name, umode_t mode,
+					     const struct file_operations *fops)
+{
+	struct dentry *d = debugfs_create_file(name, mode, p->pd->debugfs, p,
+					       fops);
+
+	if (p->n_dbg < ARRAY_SIZE(p->dbg))
+		p->dbg[p->n_dbg++] = d;
+}
+
+/**
+ * rtl9602c_pon_debugfs_exit() - remove the views the driver made
+ * @p: the PON driver
+ */
+static inline void rtl9602c_pon_debugfs_exit(struct rtl9602c_pon *p)
+{
+	while (p->n_dbg)
+		debugfs_remove(p->dbg[--p->n_dbg]);
+}
 
 /**
  * rtl9602c_pon_irq_ns() - the time of the last GPON interrupt

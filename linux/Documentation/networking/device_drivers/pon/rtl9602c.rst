@@ -28,13 +28,15 @@ a fibre to an optical line terminal (OLT):
   interface over an I2C master.
 
 The GPON MAC and the PON MAC sit in the register window of the switch, physical
-``0x1b000000``, together with the I2C masters that reach the optics. One
-driver, ``rtl9602c``, drives all of them and the switch itself. The driver is a
-DSA driver, and it offers the PON side through the PON class
-(Documentation/networking/pon.rst): an OMCI control port, a network interface
-for each GEM port, and a generic netlink family. This page gives the overview
-of the three blocks and describes the PON MAC, the GEM ports as network
-interfaces and the OMCI path as far as the switch driver carries it. The GPON
+``0x1b000000``, together with the I2C masters that reach the optics. The switch is
+driven by the DSA driver ``rtl9602c``. The GPON MAC and the PON MAC have a
+driver of their own, ``rtl9602c-pon`` (``drivers/net/pon/rtl9602c/``), which
+binds to an auxiliary device that the DSA driver makes, and offers the PON side
+through the PON class (Documentation/networking/pon.rst): an OMCI control port,
+a network interface for each GEM port, and a generic netlink family. The I2C
+masters have a driver too, ``i2c-rtl9602c``. This page gives the overview of
+the three blocks and describes the PON MAC, the GEM ports as network
+interfaces and the OMCI path, and the contract between the two drivers. The GPON
 MAC has a page of its own,
 Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst, and so have the
 optics, Documentation/networking/device_drivers/pon/rtl9602c-optics.rst.
@@ -117,15 +119,18 @@ The words of this page:
 
 The order of events on the PON side, from the boot of the kernel:
 
-1. Probe. ``rtl9602c_ponmac_probe()`` looks up the system controller and the
-   two memory regions of the packet buffer in the device tree. It reads nothing
-   in the block. A system controller that has not probed yet defers the probe.
-   The code treats a device tree without them as "no PON MAC" and leaves the
-   switch working (see "The buffer's DRAM").
-2. Setup. The driver creates its debugfs directory and views, registers the
-   optics' I2C adapter and hwmon device, creates the OMCI port, and registers
-   the GEM data path with the PON class. The last two happen only when the
-   system controller, the buffers and the CPU port's conduit exist.
+1. Setup of the switch. The DSA driver creates its debugfs directory and views,
+   registers the optics' I2C adapter and hwmon device, and makes the auxiliary
+   device ``rtl9602c.pon`` of the PON driver.
+2. Probe of the PON driver, when it binds to that device (now, or when it is
+   loaded). ``rtl9602c_ponmac_probe()`` looks up the system controller and the
+   two memory regions of the packet buffer in the device tree of the device,
+   which has the switch's node. It reads nothing in the block. A device tree
+   without them means "no PON MAC": the driver does not bind, and the switch
+   works without it. The driver then makes its debugfs views in the switch's
+   directory, creates the OMCI port and registers the GEM data path with the PON
+   class; the last two only when the system controller, the buffers and the CPU
+   port's conduit exist (see "The buffer's DRAM").
 3. ``ip link set pon up``. The first bring-up of the PON builds the PON MAC
    (see "Building the PON MAC"); every bring-up programs the GEM ports again.
    Until the build succeeds, no GEM interface can be created and no OMCI
@@ -133,6 +138,84 @@ The order of events on the PON side, from the boot of the kernel:
 4. The OLT activates the ONU. Configure_Port-ID binds the OMCC, which brings
    the OMCI port's link up. Assign_Alloc-ID binds Alloc-IDs to T-CONTs, which
    starts the upstream half of the GEM ports on those T-CONTs.
+
+The two drivers
+===============
+
+The GPON MAC and the PON MAC sit behind the switch's PON port, in its register
+window and behind its interrupt, so the DSA driver owns what they share and the
+PON driver is bound to a device it makes. ``struct rtl9602c_pon_data``
+(``include/linux/platform_data/rtl9602c-pon.h``) is the device's platform data:
+the switch (``struct dsa_switch``), the register window, the debugfs
+directory, the time of the last GPON interrupt, and two tables of operations.
+Neither driver includes the other's header.
+
+The host operations are the DSA driver's services to the MAC
+(``rtl9602c-pon-host.c``):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Operation
+     - What the switch driver does
+   * - ``irq_enable``
+     - Changes the sources of the switch interrupt: the GPON source is enabled
+       by the bring-up.
+   * - ``tx_disable``, ``hold_modulation``
+     - Drives the laser's TX_DISABLE line, and turns the laser driver's
+       extinction-ratio loop off before the first burst (see the *optics* page).
+   * - ``power_level_changed``
+     - Queues the work that sets the laser to the level the MAC asks for.
+   * - ``gem_added``, ``gem_unbind``, ``gem_forget``
+     - A flow now carries a GEM port; a GEM port is going (it leaves the
+       bridge, gives up its VLAN claims and the routed flow that names it); it
+       is gone (its addresses leave the address table).
+   * - ``gem_bridge_join``, ``gem_bridge_leave``
+     - Keeps the one bridge the GEM interfaces share (see the *bridging* page).
+   * - ``gem_vlan_add``, ``gem_vlan_del``, ``gem_pbits_change``
+     - Keeps the VLANs and IEEE 802.1p priorities each upstream flow claims; a
+       claim another flow holds is refused with a message in the extended
+       acknowledgment.
+   * - ``gem_mrouter``, ``gem_rx_filter``
+     - Follows a multicast router behind a GEM port, and the unicast addresses
+       and VLANs a GEM interface takes.
+
+The PON operations are the MAC's to the switch driver (``rtl9602c-pon-main.c``):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Operation
+     - What the PON driver does
+   * - ``start``, ``stop``, ``operstate``
+     - Brings the MAC up and down with the PON port, and reports its carrier. A
+       refusal fails ``ip link set pon up``.
+   * - ``irq``
+     - The thread of the GPON interrupt; the first half, which notes the time,
+       is the switch driver's.
+   * - ``is_up``, ``sn_set``, ``sn_get``, ``password_set``, ``password_is_set``
+     - The ONU's identity, which the devlink parameters ``gpon_serial`` and
+       ``gpon_password`` set and read; refused with ``-EBUSY`` while the MAC is
+       up.
+   * - ``us_ready``
+     - Whether a GEM port's upstream is programmed (the flowtable offload asks).
+   * - ``power_mode``, ``power_applied``
+     - The transmit power level the MAC asks for, and what the optics set.
+
+The switch calls the PON operations under the read side of a semaphore in the
+platform data; the PON driver takes the write side to bind and to unbind, so
+a call in progress ends before the driver goes. A call while no driver is
+bound returns ``-ENODEV``, or the neutral answer. The switch driver destroys
+the device in its teardown, before anything the MAC uses goes. When the PON
+driver unbinds, it removes its debugfs views, takes the MAC down if it is up
+(the laser goes dark and the ``pon`` interface loses its carrier), cancels its
+worker and unregisters the data path before the OMCI port (the PON class
+unregisters its device with its last child). The ONU's serial number and
+password are the driver's state and go with it: after a bind they are set again
+(``gpon_serial`` and ``gpon_password`` of the devlink instance), and cycling the
+``pon`` interface, which stays up through the unbind, brings the MAC up.
 
 The blocks and their files
 --------------------------
@@ -168,7 +251,9 @@ The blocks and their files
      - ``rtl9602c-optics.c``
      - Documentation/networking/device_drivers/pon/rtl9602c-optics.rst
 
-The register definitions of all of them are in ``rtl9602c.h``.
+The register definitions of the GPON MAC and the PON MAC are in
+``rtl9602c-pon-regs.h`` of the PON driver, and those of the optics in
+``rtl9602c.h`` of the switch driver.
 
 Configuration
 -------------
@@ -182,15 +267,24 @@ Configuration
    * - ``CONFIG_NET_DSA_RTL9602C``
      - Tristate, "Realtek RTL9602C switch". Depends on ``NET_DSA``,
        ``HAS_IOMEM`` and ``RTL9602C_ETH || !RTL9602C_ETH``. Selects
-       ``MFD_SYSCON``, ``NET_DSA_TAG_RTL9602C`` and ``PON``. Builds
-       ``rtl9602c.o`` from ``rtl9602c-main.o``, ``rtl9602c-l2.o``,
-       ``rtl9602c-gpon.o``, ``rtl9602c-ponmac.o``, ``rtl9602c-omci.o``,
-       ``rtl9602c-gem.o``, ``rtl9602c-optics.o``, ``rtl9602c-offload.o`` and
-       ``rtl9602c-ptp.o``; as a module it is ``rtl9602c``. The PON MAC, the
-       GPON MAC, the OMCI port, the GEM data path and the optics have no
-       options of their own, apart from the one below.
+       ``MFD_SYSCON``, ``NET_DSA_TAG_RTL9602C`` and ``AUXILIARY_BUS``, and
+       implies ``PON_RTL9602C``. Builds ``rtl9602c.o`` from
+       ``rtl9602c-main.o``, ``rtl9602c-l2.o``, ``rtl9602c-pon-host.o``,
+       ``rtl9602c-optics.o``, ``rtl9602c-offload.o`` and ``rtl9602c-ptp.o``; as
+       a module it is ``rtl9602c``. The optics have no options of their own,
+       apart from the one below.
+   * - ``CONFIG_PON_RTL9602C``
+     - Tristate, "Realtek RTL9602C GPON MAC". Depends on
+       ``NET_DSA_RTL9602C`` and ``RTL9602C_ETH || !RTL9602C_ETH``. Selects
+       ``AUXILIARY_BUS`` and ``PON``. Builds ``rtl9602c-pon.o`` from
+       ``rtl9602c-pon-main.o``, ``rtl9602c-gpon.o``, ``rtl9602c-ponmac.o``,
+       ``rtl9602c-omci.o`` and ``rtl9602c-gem.o`` in
+       ``drivers/net/pon/rtl9602c/``; as a module it is ``rtl9602c-pon``.
+   * - ``CONFIG_PON_RTL9602C_PLOAM_INJECT``
+     - Bool, depends on ``PON_RTL9602C`` and ``DEBUG_FS``. The debugfs file
+       ``ploaminject``, for test images (see the *gpon* page).
    * - ``CONFIG_PON``
-     - The PON class. The switch driver selects it.
+     - The PON class. ``PON_RTL9602C`` selects it.
    * - ``CONFIG_MFD_SYSCON``
      - The system controller is found as a syscon regmap. The switch driver
        selects it.
@@ -214,9 +308,10 @@ Configuration
      - The debugfs directory ``rtl9602c`` and its views. ``rtl9602c_defconfig``
        sets it.
 
-``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver and
-the conduit in (``CONFIG_NET_DSA_RTL9602C=y`` and ``CONFIG_RTL9602C_ETH=y``),
-which builds the PON class in.
+``rtl9602c_defconfig`` (``arch/mips/configs/``) builds the switch driver, the
+conduit and the PON driver in (``CONFIG_NET_DSA_RTL9602C=y``,
+``CONFIG_RTL9602C_ETH=y`` and ``CONFIG_PON_RTL9602C=y``), which builds the PON
+class in.
 
 Device tree and binding
 -----------------------
@@ -311,25 +406,25 @@ Where the code is
 
    * - File
      - Contents
-   * - ``drivers/net/dsa/realtek/rtl9602c-ponmac.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-ponmac.c``
      - The PON MAC: ``rtl9602c_ponmac_probe()`` (the system controller and the
        regions), ``rtl9602c_ponmac_init()`` (the build), ``rtl9602c_pbo_init()``
        (the packet buffer), the stream, queue and T-CONT operations
        (``rtl9602c_ponq_stream_queue_set()``, ``rtl9602c_ponmac_sid_valid()``,
        ``rtl9602c_pon_drain()``, ``rtl9602c_pon_queue_add()``) and the debugfs
        views ``ponmac``, ``ponpath`` and ``pondp``.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gem.c``
      - GEM ports as network interfaces of the PON class:
        ``rtl9602c_gem_setup()`` and ``rtl9602c_gem_teardown()``, the operations
        table ``rtl9602c_pon_ops``, the programming of a flow
        (``rtl9602c_gem_program()`` and ``rtl9602c_gem_unprogram()``), the
        bridge and VLAN operations, and the upstream octet count of a port.
-   * - ``drivers/net/dsa/realtek/rtl9602c-omci.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-omci.c``
      - The OMCI channel as the PON class's OMCI port: ``rtl9602c_omci_setup()``
        and ``rtl9602c_omci_teardown()``, the receive handler
        ``rtl9602c_omci_rx()`` and the transmit operation
        ``rtl9602c_omci_tx()``.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gpon.c``
      - The GPON MAC. It calls ``rtl9602c_ponmac_init()`` and
        ``rtl9602c_gem_restore()`` at each bring-up,
        ``rtl9602c_gem_tcont_ready()`` when an Alloc-ID is bound to a T-CONT, and
@@ -339,17 +434,28 @@ Where the code is
        ``eeblocks`` and ``tables``, over the I2C master and adapter, which
        ``drivers/i2c/busses/i2c-rtl9602c.c`` drives.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
-     - Probe (which calls ``rtl9602c_ponmac_probe()``), setup and teardown (in
-       which the OMCI port and the GEM data path are created and removed), and
-       the debugfs directory.
+     - Probe, setup and teardown (in which the PON driver's device is made and
+       destroyed), and the debugfs directory.
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-main.c``
+     - The PON driver's probe and remove (``rtl9602c_ponmac_probe()``, the OMCI
+       port and the GEM data path are created and removed there), its PON
+       operations, and the auxiliary driver.
+   * - ``drivers/net/dsa/realtek/rtl9602c-pon-host.c``
+     - The host operations, and the calls into the PON operations.
    * - ``drivers/net/dsa/realtek/rtl9602c-l2.c``, ``rtl9602c-offload.c``
      - The switch side of the GEM ports: ``rtl9602c_bridge_refresh()`` and
        ``rtl9602c_cf_sid_refresh()``, which give the PON port its bridge and
        the frames it forwards their stream.
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-regs.h``, ``rtl9602c-pon.h``
+     - The register map of the PON side, and the PON driver's state ``struct
+       rtl9602c_pon`` (``sysctl``, ``pbo_base``, ``ponmac_up``, ``gem_flows``,
+       ``gem_cfg`` and the rest).
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
-     - The register map of all these blocks, the driver state ``struct
-       rtl9602c_priv`` (``sysctl``, ``pbo_base``, ``ponmac_up``, ``gem_flows``,
-       ``gem_cfg`` and the rest), and the functions the files call across.
+     - The register map of the optics and the switch, and the DSA driver's
+       state ``struct rtl9602c_priv``.
+   * - ``include/linux/platform_data/rtl9602c-pon.h``
+     - The contract between the two drivers: the platform data of the device,
+       the host operations and the PON operations.
    * - ``include/linux/dsa/rtl9602c.h``
      - The contract with the conduit: the handler types and the five calls that
        the OMCI port and the GEM data path use.

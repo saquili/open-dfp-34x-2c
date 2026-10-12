@@ -185,11 +185,14 @@ Where the code is
        transmit power levels. ``rtl9602c_setup()`` creates the debugfs
        directory with the optics views, registers the I2C adapter and then the
        hwmon device (see "Setup, in order").
-   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gpon.c``
      - ``rtl9602c_gpon_apply_state()`` drives TX_DISABLE at every change of the
        ONU state, ``rtl9602c_gpon_bringup()`` calls the modulation hold after
        the MAC reset, and Change_Power_Level and Upstream_Overhead ask for
-       transmit power levels.
+       transmit power levels. It reaches the optics through the host operations
+       ``tx_disable``, ``hold_modulation`` and ``power_level_changed``, and the
+       optics ask which level it wants, and tell it what they set, through the
+       PON operations ``power_mode`` and ``power_applied``.
    * - ``drivers/net/dsa/realtek/Kconfig``, ``Makefile``
      - ``CONFIG_RTL9602C_OPTICS_RO`` and the list of objects of ``rtl9602c.o``.
    * - ``arch/mips/boot/dts/realtek/rtl9602c.dtsi``

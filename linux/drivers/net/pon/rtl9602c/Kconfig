@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config PON_RTL9602C
+	tristate "Realtek RTL9602C GPON MAC"
+	depends on NET_DSA_RTL9602C
+	depends on RTL9602C_ETH || !RTL9602C_ETH
+	select AUXILIARY_BUS
+	select PON
+	help
+	  Driver of the GPON MAC, the PON MAC behind it, the GEM ports and the
+	  OMCI channel of the Realtek RTL9602C, the chip of GPON ONUs such as
+	  SFP sticks. It registers the ONU with the PON class: its activation
+	  state machine, its OMCI port and a network interface per GEM port.
+
+	  The MAC sits behind the PON port of the chip's switch, in the same
+	  register window and behind the same interrupt, so the switch driver,
+	  NET_DSA_RTL9602C, makes the auxiliary device this driver binds to and
+	  offers it its services. Without this driver the switch works, but the
+	  PON port cannot be enabled.
+
+	  Say Y or M on an RTL9602C board. To compile this driver as a module,
+	  choose M here: the module will be called rtl9602c-pon.
+
+config PON_RTL9602C_PLOAM_INJECT
+	bool "Inject downstream PLOAM messages through debugfs"
+	depends on PON_RTL9602C && DEBUG_FS
+	help
+	  Give the switch's debugfs directory a file, rtl9602c/ploaminject. A
+	  write of the twelve octets of a downstream PLOAM message, in hex,
+	  hands the message to the activation state machine as if the OLT had
+	  sent it, so that what the OLT at hand never sends, such as
+	  Disable_Serial_Number and POPUP, can be tested. A process that can
+	  write the file can stop the ONU or take it off the PON, so the
+	  option is for test images, not for an ONU in service.
+
+	  If unsure, say N.

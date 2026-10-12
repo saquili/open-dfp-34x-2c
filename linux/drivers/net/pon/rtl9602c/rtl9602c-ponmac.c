@@ -1075,12 +1075,12 @@ static const struct file_operations rtl9602c_pondp_fops = {
  */
 void rtl9602c_ponmac_debugfs_init(struct rtl9602c_pon *p)
 {
-	debugfs_create_file("ponmac", 0400, p->pd->debugfs, p,
-			    &rtl9602c_ponmac_fops);
-	debugfs_create_file("ponpath", 0400, p->pd->debugfs, p,
-			    &rtl9602c_ponpath_fops);
-	debugfs_create_file("pondp", 0400, p->pd->debugfs, p,
-			    &rtl9602c_pondp_fops);
+	rtl9602c_pon_debugfs_file(p, "ponmac", 0400,
+				  &rtl9602c_ponmac_fops);
+	rtl9602c_pon_debugfs_file(p, "ponpath", 0400,
+				  &rtl9602c_ponpath_fops);
+	rtl9602c_pon_debugfs_file(p, "pondp", 0400,
+				  &rtl9602c_pondp_fops);
 }
 
 #endif

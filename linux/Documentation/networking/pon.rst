@@ -134,14 +134,16 @@ Where the code is
      - The specification of the family.
    * - ``include/uapi/linux/if_link.h``
      - ``enum ifla_gem_direction`` and the ``IFLA_GEM_*`` attributes.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gem.c``, ``rtl9602c-omci.c``,
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gem.c``, ``rtl9602c-omci.c``,
        ``rtl9602c-gpon.c``
-     - The calls the RTL9602C switch driver makes into the class: the data
+     - The calls the RTL9602C PON driver makes into the class: the data
        path, the OMCI port, and the status, notifications and OMCI channel
        state of the GPON MAC.
-   * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
-     - ``rtl9602c_setup()`` creates the OMCI port and then registers the data
-       path; ``rtl9602c_teardown()`` removes them in the opposite order.
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-pon-main.c``
+     - ``rtl9602c_pon_probe()`` creates the OMCI port and then registers the
+       data path; ``rtl9602c_pon_remove()`` removes them in the opposite order.
+       The switch driver makes the device the PON driver binds to, in
+       ``rtl9602c_setup()``, and destroys it in ``rtl9602c_teardown()``.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - Asks ``pon_gem_netdev_flow()`` whether a device is a GEM interface,
        when a flow offload names one.

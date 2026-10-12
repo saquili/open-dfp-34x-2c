@@ -7,3 +7,4 @@
 
 obj-$(CONFIG_PON) += pon.o
 pon-y := pon_core.o pon_gem.o pon_netlink.o pon_nl.o
+obj-$(CONFIG_PON_RTL9602C) += rtl9602c/

@@ -93,8 +93,11 @@ devlink, ``devlink_info_get``, ``devlink_param_get`` and ``devlink_param_set``
        ``rtl9602c_storm_ports_get()``, ``rtl9602c_storm_ports_set()``,
        ``rtl9602c_storm_rate_get()`` and ``rtl9602c_storm_rate_set()``, over
        the pool of meters.
-   * - ``drivers/net/dsa/realtek/rtl9602c-gpon.c``
-     - ``rtl9602c_gpon_sn_set()``, which parses and keeps the serial number.
+   * - ``drivers/net/pon/rtl9602c/rtl9602c-gpon.c``
+     - ``rtl9602c_gpon_sn_set()``, which parses and keeps the serial number. The
+       parameters' callbacks reach it, and the password's, through the PON
+       operations in ``rtl9602c-pon-host.c``; without the PON driver they
+       return ``-ENODEV`` and read as empty.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - ``enum rtl9602c_devlink_param_id``; the registers and fields that the
        parameters write (``RTL9602C_DOS_*``, ``RTL9602C_PKTDBG_*``,

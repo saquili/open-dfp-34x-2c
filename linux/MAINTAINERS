@@ -21729,8 +21729,10 @@ F:	Documentation/networking/dsa/rtl9602c*.rst
 F:	drivers/i2c/busses/i2c-rtl9602c.c
 F:	drivers/net/dsa/realtek/rtl9602c*
 F:	drivers/net/ethernet/realtek/rtl9602c-eth.c
+F:	drivers/net/pon/rtl9602c/
 F:	include/linux/dsa/rtl9602c.h
 F:	include/linux/platform_data/i2c-rtl9602c.h
+F:	include/linux/platform_data/rtl9602c-pon.h
 F:	net/dsa/tag_rtl9602c.c
 F:	tools/testing/selftests/drivers/net/rtl9602c/
 

@@ -3181,7 +3181,7 @@ static const struct file_operations rtl9602c_ploamlog_fops = {
 	.release = single_release,
 };
 
-#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT)
+#if IS_ENABLED(CONFIG_PON_RTL9602C_PLOAM_INJECT)
 /*
  * ploaminject: one downstream PLOAM message per write, the twelve octets before
  * its CRC in hex, spaces allowed between them, handed to the dispatcher under
@@ -3503,27 +3503,27 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gpontbl);
  *
  * Creates gpontbl, gpon, usburst, gemusintr, bwmap and uscntr, mode 0400,
  * ploamlog, mode 0600, since a write to it empties the log, and, with
- * CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT, ploaminject, mode 0200.
+ * CONFIG_PON_RTL9602C_PLOAM_INJECT, ploaminject, mode 0200.
  */
 void rtl9602c_gpon_debugfs_init(struct rtl9602c_pon *p)
 {
-	debugfs_create_file("gpontbl", 0400, p->pd->debugfs, p,
-			    &rtl9602c_gpontbl_fops);
-	debugfs_create_file("gpon", 0400, p->pd->debugfs, p,
-			    &rtl9602c_gpon_fops);
-	debugfs_create_file("ploamlog", 0600, p->pd->debugfs, p,
-			    &rtl9602c_ploamlog_fops);
-	debugfs_create_file("usburst", 0400, p->pd->debugfs, p,
-			    &rtl9602c_usburst_fops);
-	debugfs_create_file("gemusintr", 0400, p->pd->debugfs, p,
-			    &rtl9602c_gemusintr_fops);
-	debugfs_create_file("bwmap", 0400, p->pd->debugfs, p,
-			    &rtl9602c_bwmap_fops);
-	debugfs_create_file("uscntr", 0400, p->pd->debugfs, p,
-			    &rtl9602c_uscntr_fops);
-#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT)
-	debugfs_create_file("ploaminject", 0200, p->pd->debugfs, p,
-			    &rtl9602c_ploaminject_fops);
+	rtl9602c_pon_debugfs_file(p, "gpontbl", 0400,
+				  &rtl9602c_gpontbl_fops);
+	rtl9602c_pon_debugfs_file(p, "gpon", 0400,
+				  &rtl9602c_gpon_fops);
+	rtl9602c_pon_debugfs_file(p, "ploamlog", 0600,
+				  &rtl9602c_ploamlog_fops);
+	rtl9602c_pon_debugfs_file(p, "usburst", 0400,
+				  &rtl9602c_usburst_fops);
+	rtl9602c_pon_debugfs_file(p, "gemusintr", 0400,
+				  &rtl9602c_gemusintr_fops);
+	rtl9602c_pon_debugfs_file(p, "bwmap", 0400,
+				  &rtl9602c_bwmap_fops);
+	rtl9602c_pon_debugfs_file(p, "uscntr", 0400,
+				  &rtl9602c_uscntr_fops);
+#if IS_ENABLED(CONFIG_PON_RTL9602C_PLOAM_INJECT)
+	rtl9602c_pon_debugfs_file(p, "ploaminject", 0200,
+				  &rtl9602c_ploaminject_fops);
 #endif
 }
 

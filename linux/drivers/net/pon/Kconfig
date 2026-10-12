@@ -35,3 +35,5 @@ config PON_OMCI_INJECT
 	  service.
 
 	  If unsure, say N.
+
+source "drivers/net/pon/rtl9602c/Kconfig"

@@ -85,19 +85,20 @@ config NET_DSA_RTL9602C
 	select AUXILIARY_BUS
 	select MFD_SYSCON
 	select NET_DSA_TAG_RTL9602C
-	select PON
 	imply I2C_RTL9602C
+	imply PON_RTL9602C
 	help
 	  DSA driver for the Ethernet switch of Realtek RTL9602C SoCs, the
 	  chip of GPON ONUs such as SFP sticks. The switch has a SerDes port
 	  to the host, the PON port and the CPU port, whose conduit is the
 	  RTL9602C_ETH driver. Besides the switch itself (bridging, VLANs, the
 	  address table, ACL and classifier rules, QoS, storm control and
-	  L3/NAT offload), the driver runs the chip's GPON MAC and PON MAC and
-	  offers them through the PON class: the ONU's activation, its OMCI
-	  channel and a network interface per GEM port. It also registers the
-	  switch's IEEE 1588 clock, and the diagnostics of the optics, whose
-	  I2C master has a driver of its own, I2C_RTL9602C.
+	  L3/NAT offload). It also registers the switch's IEEE 1588 clock,
+	  and the diagnostics of the optics, whose I2C master has a driver of
+	  its own, I2C_RTL9602C. The chip's GPON MAC, with the PON class's
+	  ONU, its OMCI channel and a network interface per GEM port, has a
+	  driver of its own too, PON_RTL9602C, which this driver makes a
+	  device for.
 
 	  Say Y or M on an RTL9602C board. To compile this driver as a module,
 	  choose M here: the module will be called rtl9602c.
@@ -115,20 +116,6 @@ config NET_DSA_RTL9602C_OPTICS_STORE
 	  disturbing the other ONUs of the PON, so a process that can write
 	  the file can weaken that protection for good. The option is for
 	  test images, not for an ONU in service.
-
-	  If unsure, say N.
-
-config NET_DSA_RTL9602C_PLOAM_INJECT
-	bool "Inject downstream PLOAM messages through debugfs"
-	depends on NET_DSA_RTL9602C && DEBUG_FS
-	help
-	  Give the switch's debugfs directory a file, rtl9602c/ploaminject. A
-	  write of the twelve octets of a downstream PLOAM message, in hex,
-	  hands the message to the activation state machine as if the OLT had
-	  sent it, so that what the OLT at hand never sends, such as
-	  Disable_Serial_Number and POPUP, can be tested. A process that can
-	  write the file can stop the ONU or take it off the PON, so the
-	  option is for test images, not for an ONU in service.
 
 	  If unsure, say N.
 
