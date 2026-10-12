@@ -88,9 +88,11 @@ them finds it there, and names it by its whole path where procd starts it.
    and the account in force back, which ``onu-apply reload`` does. A load first
    makes ``/config`` the partition's JFFS2 file system, mounted read-only:
    each change of the store mounts it read-write for the write alone, one
-   change at a time, under a lock of the directory; a partition that still
-   holds the store of before is read, erased and mounted empty, and that
-   store goes into the file, since JFFS2 erases the blocks it does not know.
+   change at a time, under a lock of the directory, a socket of the abstract
+   namespace named after it, as the stick's kernel has no ``flock``; a
+   partition that still holds the store of before is read, erased and mounted
+   empty, and that store goes into the file, since JFFS2 erases the blocks it
+   does not know.
    The identity is the one ``ponid`` reads from the shipped firmware's files,
    with the store's ``ID_*`` keys over it, which hold only what was changed
    here; a save never takes the identity into the store. What became of the

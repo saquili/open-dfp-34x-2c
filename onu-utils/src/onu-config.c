@@ -107,17 +107,19 @@
 #include <getopt.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/un.h>
 
 #include <mtd/mtd-user.h>
 
@@ -209,6 +211,43 @@ static void store_dir(const char *path, char *dir, size_t cap)
 		*(slash == dir ? slash + 1 : slash) = '\0';
 	else
 		snprintf(dir, cap, ".");
+}
+
+/*
+ * Take the lock of the store's directory @dir: a socket of the abstract
+ * namespace bound to a name made from @dir, which one process alone can hold
+ * and the kernel lets go of when the process ends, as the stick's kernel has
+ * no file locks (CONFIG_FILE_LOCKING). A change that finds it held waits, 50
+ * ms at a time, for up to 10 s. Return: the socket to close to let go, or
+ * -errno.
+ */
+#define LOCK_TRIES 200
+#define LOCK_WAIT_US 50000
+
+static int store_lock(const char *dir)
+{
+	struct sockaddr_un sa = { .sun_family = AF_UNIX };
+	const int fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	int n, err = -EAGAIN;
+
+	if (fd < 0)
+		return -errno;
+	n = snprintf(sa.sun_path + 1, sizeof(sa.sun_path) - 1, "onu-config:%s",
+		     dir);
+	if (n < 0 || (size_t)n >= sizeof(sa.sun_path) - 1)
+		n = (int)sizeof(sa.sun_path) - 2;
+	for (int i = 0; i < LOCK_TRIES; i++) {
+		if (bind(fd, (const struct sockaddr *)&sa,
+			 (socklen_t)(offsetof(struct sockaddr_un, sun_path) +
+				     1 + (size_t)n)) == 0)
+			return fd;
+		err = -errno;
+		if (err != -EADDRINUSE)
+			break;
+		usleep(LOCK_WAIT_US);
+	}
+	close(fd);
+	return err;
 }
 
 /*
@@ -925,10 +964,10 @@ int main(int argc, char **argv)
 	 */
 	if (writing) {
 		store_dir(store, dir, sizeof(dir));
-		lock = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-		if (lock < 0 || flock(lock, LOCK_EX) != 0) {
+		lock = store_lock(dir);
+		if (lock < 0) {
 			fprintf(stderr, "onu-config: %s: no lock: %s\n", dir,
-				strerror(errno));
+				strerror(-lock));
 			goto out_fail;
 		}
 	}

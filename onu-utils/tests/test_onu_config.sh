@@ -751,5 +751,29 @@ check '[ "$(onu-config --store "$ONU_STORE" list | grep -c "^SYS_TEST")" -eq 24 
 check '[ ! -e "$ONU_STORE.new" ]'
 teardown
 
+echo "a change waits while another holds the store's lock, which needs no file lock"
+setup
+# The stick's kernel has no file locks (CONFIG_FILE_LOCKING): a flock() there
+# fails, and with it every change of the store.
+check '! grep -aq flock "$BUILD/onu-config"'
+python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+s.bind("\0onu-config:" + sys.argv[1])
+open(sys.argv[2], "w").close()
+time.sleep(1)
+' "$T" "$T/held" &
+holder=$!
+while [ ! -e "$T/held" ]; do sleep 0.05; done
+start=$(date +%s%N)
+echo "SYS_WAITED=1" | onu-config --store "$ONU_STORE" import
+rc=$?
+end=$(date +%s%N)
+wait $holder
+check '[ $rc -eq 0 ]'
+check '[ $(((end - start) / 1000000)) -ge 500 ]'
+check '[ "$(onu-config --store "$ONU_STORE" get SYS_WAITED)" = 1 ]'
+teardown
+
 echo "test_onu_config: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]
