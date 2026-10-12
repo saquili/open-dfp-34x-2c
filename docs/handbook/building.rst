@@ -700,17 +700,17 @@ Once this system runs, it updates itself into the other bank with
 
 A stick is diagnosed started from RAM; the flash holds the image of the final
 test. The tools of diagnosis, ``omcitap``, ``omcivlan``, ``ubus``, the
-flash's ``flashcp``, ``flash_erase`` and ``mtd_debug``, and iproute2's ``tc``,
-``devlink``, ``bridge`` and ``ip``, the last as ``ip-full``, are in the RAM
-image only: the post-build script sets them aside in
+flash's ``flashcp``, ``flash_erase`` and ``mtd_debug``, ``ethtool``, and
+iproute2's ``tc``, ``devlink``, ``bridge``, ``dcb`` and ``ip``, the last as
+``ip-full``, are in the RAM image only: the post-build script sets them aside in
 ``build/image/diag`` with the C library whole, since the image's own is cut to
 what the image's programs use, and ``make ram-image`` lays that directory over
 its root.
 
 A RAM image is the flash's image plus those tools, which is not what the flash
 holds. ``make ram-image RAM_DIAG=no`` leaves them out, and the device tests
-(``tests/device/README.rst``) put the three of iproute2 that they need on the
-stick, in memory, for the run (``--tools build/image/diag``): that run tests the
+(``tests/device/README.rst``) put the ones that they need on the stick, in
+memory, for the run (``--tools build/image/diag``): that run tests the
 flash's root filesystem and kernel without a write to the flash.
 
 Start the kernel from RAM with the root filesystem built in, which needs
