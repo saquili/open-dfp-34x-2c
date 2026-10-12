@@ -15,6 +15,7 @@
 
 #define _GNU_SOURCE
 
+#include <fcntl.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -234,6 +235,81 @@ static void mode_applied(void)
 	CHECK(access("/run/omcid/applied.new", F_OK) != 0);
 }
 
+/* The file @path whole, up to a few KiB, or "" without it. */
+static const char *whole(const char *path)
+{
+	static char text[2048];
+	FILE *f = fopen(path, "r");
+	size_t n = 0;
+
+	if (f) {
+		n = fread(text, 1, sizeof(text) - 1, f);
+		fclose(f);
+	}
+	text[n] = '\0';
+	return text;
+}
+
+/* How many times @needle is in @hay. */
+static int times(const char *hay, const char *needle)
+{
+	int n = 0;
+
+	for (const char *p = strstr(hay, needle); p; p = strstr(p + 1, needle))
+		n++;
+	return n;
+}
+
+/*
+ * Apply a bridge whose one port carries @vid and 410, with the daemon's log
+ * (standard error) in the file @log, and return how often the warning about
+ * the management VLAN is in it afterwards.
+ */
+static int clash_warnings(const char *log, uint16_t vid)
+{
+	struct omci_hw_bridge_port port = { .bridge = 1, .port_id = 257, .num_vlan = 2 };
+	int saved, fd;
+
+	port.vlan[0] = vid;
+	port.vlan[1] = 410;
+	fflush(stderr);
+	fd = open(log, O_WRONLY | O_CREAT | O_APPEND, 0600);
+	saved = dup(STDERR_FILENO);
+	dup2(fd, STDERR_FILENO);
+	close(fd);
+	(void)omci_hw_kernel_ops.bridge_apply(&port, 1, NULL);
+	fflush(stderr);
+	dup2(saved, STDERR_FILENO);
+	close(saved);
+	return times(whole(log), "the stick's management VLAN");
+}
+
+static void mgmt_vlan_clash(void)
+{
+	const char *log = "/tmp/hw-kernel-test.log";
+	FILE *f;
+
+	puts("a VLAN of the OLT that is the stick's management VLAN is said once, and again when it returns");
+	mkdir("/run/omcid", 0755);
+	f = fopen("/run/onu-mgmt", "w");
+	CHECK(f != NULL);
+	if (f) {
+		fputs("VLAN=4094\nADDRESS=192.0.2.1/30\n", f);
+		fclose(f);
+	}
+	unlink(log);
+	CHECK(clash_warnings(log, 4093) == 0);
+	CHECK(!strstr(whole("/run/omcid/gem-vlans"), "4094 "));
+	CHECK(clash_warnings(log, 4094) == 1);
+	CHECK(strstr(whole("/run/omcid/gem-vlans"), "4094 257\n") != NULL);
+	CHECK(clash_warnings(log, 4094) == 1);
+	CHECK(clash_warnings(log, 4093) == 1);
+	CHECK(clash_warnings(log, 4094) == 2);
+	unlink("/run/onu-mgmt");
+	unlink(log);
+	CHECK(omci_hw_kernel_ops.bridge_apply(NULL, 0, NULL) == OMCI_OK);
+}
+
 /* What tc shows of the root qdisc of @dev, on one line. */
 static const char *root_qdisc(const char *dev)
 {
@@ -309,6 +385,7 @@ int main(void)
 	}
 	port_filters();
 	mode_applied();
+	mgmt_vlan_clash();
 	if (tbf_qdisc())
 		uni_rate();
 	else
