@@ -61,7 +61,7 @@ setup() {
 		echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/$lan/proxy_delay"
 	done
 	: >"$LOG"
-	for prog in killall udhcpd udhcpc logger kill onu-config dhcp6d; do
+	for prog in killall udhcpd udhcpc logger kill onu-config dhcp6d chown; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# A running omcid, signalled, programs the data path again and says so.
@@ -104,6 +104,12 @@ setup() {
 	ln -s "$HERE/scripts/onu-run" "$T/bin/onu-run"
 	# onu-net stands in for netifd and its protocol "pppoed" as well.
 	ln -s "$HERE/tests/netifd-standin.sh" "$T/bin/onu-net"
+	# onu-drop notes the account and the powers it is told of, and runs the
+	# program as it is, in place of the real one, which needs root.
+	mkdir -p "$ONU_ROOT/usr/lib/onu" "$ONU_ROOT/run/dhcp6d"
+	printf '#!/bin/sh\necho "onu-drop $*" >>"$LOG"\n[ "$1" = -c ] && shift 2\nshift\nexec "$@"\n' \
+		>"$ONU_ROOT/usr/lib/onu/onu-drop"
+	chmod +x "$ONU_ROOT/usr/lib/onu/onu-drop"
 	# onu-nl lists, on the ingress of sfp and pon, the priority of the boot's
 	# filter of the management VLAN, 1, and those of two of omcid's VLAN rules.
 	# It makes the interfaces it is told to add, and takes away those it is
@@ -331,7 +337,13 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	logged "^dhcp6d" && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -x $MODE_SCRIPT -n ses2$"'
+check 'logged "^dhcp6d -w ppp1 -l lan36 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/dhcp6d/pd2 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses2$"'
+# It runs as its own account with the three powers it uses, and tells onu-apply
+# of a change through onu-call, which an account that is not root's can run.
+check 'logged "^onu-drop -c net_bind_service,net_admin,net_raw dhcp6d dhcp6d -w ppp1 "'
+# The session's directory is the group onu's, which the programs of the session write to.
+check 'logged "^chown :onu $ONU_ROOT/run/session/2$"'
+check 'ls -ld "$ONU_ROOT/run/session/2" | grep -q "^drwxrws---"'
 check '[ "$(grep -c "^dhcp6d" "$LOG")" = 1 ]'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv6/conf/all/forwarding")" = 1 ]'
 check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=1"'
@@ -353,16 +365,16 @@ check '! logged "^onu-nl link set pon mtu 1500"'
 check 'logged "^onu-net del ses2$" && [ ! -e "$ONU_ROOT/run/network.d/ses2" ]'
 check 'logged "^procd stop dhcp6d2$" && [ ! -e "$ONU_ROOT/run/onu-svc.d/dhcp6d2" ]'
 # The host dhcp6d delegates to goes into the store once, and its going too.
-echo "0003 1 fe80::2 2001:db8:1200::/56" >"$ONU_ROOT/run/onu-pd2"
+echo "0003 1 fe80::2 2001:db8:1200::/56" >"$ONU_ROOT/run/dhcp6d/pd2"
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
 check 'logged "^onu-config pd 2$"'
 check '[ "$(grep -c "^onu-config pd" "$LOG")" = 1 ]'
-check 'cmp -s "$ONU_ROOT/run/onu-pd2" "$ONU_ROOT/run/onu-pd2.kept"'
+check 'cmp -s "$ONU_ROOT/run/dhcp6d/pd2" "$ONU_ROOT/run/onu-pd2.kept"'
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
 check '! logged "^onu-config pd"'
-rm "$ONU_ROOT/run/onu-pd2"
+rm "$ONU_ROOT/run/dhcp6d/pd2"
 "$MODE_SCRIPT" sync 2>/dev/null
 check 'logged "^onu-config pd 2$"'
 check '[ ! -e "$ONU_ROOT/run/onu-pd2.kept" ]'
@@ -731,8 +743,8 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ "$(grep -c "^dhcp6d" "$LOG")" = 2 ] && break
 	"$REAL_SLEEP" 0.2
 done
-check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/onu-pd1 -x $MODE_SCRIPT -n ses1$"'
-check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/onu-pd2 -x $MODE_SCRIPT -n ses2 -t 102$"'
+check 'logged "^dhcp6d -w ppp1 -l lan410 -m wan410 -o $ONU_ROOT/run/session/1 -b $ONU_ROOT/run/dhcp6d/pd1 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses1$"'
+check 'logged "^dhcp6d -w ppp1 -l lan37 -m wan410 -o $ONU_ROOT/run/session/2 -b $ONU_ROOT/run/dhcp6d/pd2 -x $ONU_ROOT/usr/lib/onu/onu-call -n ses2 -t 102$"'
 check 'has links "device: type=8021q ifname=sfp vid=37 name=lan37 rpfilter=strict ipv6=1"'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown

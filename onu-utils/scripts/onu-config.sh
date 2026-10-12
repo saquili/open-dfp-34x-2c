@@ -25,7 +25,7 @@
 #                        SFP_LANE, NTP_SERVER, LOG_SERVER) into the store and
 #                        into /run/onu-system; an empty value removes the key
 #   onu-config pd N      the host session N delegates its IPv6 prefix to, the
-#                        line dhcp6d keeps in /run/onu-pdN, into the store;
+#                        line dhcp6d keeps in /run/dhcp6d/pdN, into the store;
 #                        without the file, out of it
 #   onu-config tls       the panel's key: the one load found, or a new one,
 #                        kept in the store, in /run/onu-tls-key
@@ -48,7 +48,7 @@
 # password, so that the store can be mended there;
 # a key SYS_<NAME> is the line "<NAME>=value" of /run/onu-system, the stick's
 # own settings, which the boot script reads before it brings up the links;
-# PDn_HOST is the content of /run/onu-pdN, the host session n delegated its
+# PDn_HOST is the content of /run/dhcp6d/pdN, the host session n delegated its
 # IPv6 prefix to, which dhcp6d takes back after a restart (see onu-apply);
 # TLS_KEY is the content of /run/onu-tls-key: the private key of the status
 # daemon's HTTPS, a scalar of the curve P-256 in 64 hexadecimal digits, made
@@ -81,7 +81,7 @@ RUN=$ROOT/run
 PATH=$PATH:$ROOT/usr/lib/onu
 CONF=$RUN/onu.conf
 CREDS=$RUN/onu-pppoe
-PD=$RUN/onu-pd
+PD=$RUN/dhcp6d/pd
 MAX_SESSIONS=7
 IDENTITY=$RUN/onu-identity
 AUTH=$RUN/onu-auth
@@ -290,6 +290,13 @@ load() {
 				if (user[n] != "")
 					print user[n] " " secret[n] > (creds n ".new")
 		}'
+	# dhcp6d runs as an account of its own, in a directory of its own: the
+	# bindings it takes back after a restart are its to read and to replace.
+	for f in "$PD"[1-9]; do
+		[ -e "$f" ] || continue
+		chown dhcp6d "$f" 2>/dev/null && chmod 644 "$f" ||
+			log "dhcp6d cannot take its binding $f back"
+	done
 	if [ -e "$CONF.new" ]; then
 		chmod 644 "$CONF.new" && mv "$CONF.new" "$CONF"
 		state loaded
@@ -383,7 +390,7 @@ system() {
 	}' >"$SYSTEM.new" && chmod 644 "$SYSTEM.new" && mv "$SYSTEM.new" "$SYSTEM"
 }
 
-# The host session $1 delegates its IPv6 prefix to, from /run/onu-pdN: the
+# The host session $1 delegates its IPv6 prefix to, from /run/dhcp6d/pdN: the
 # DUID in hex, the IAID, the host's address and the prefix; none without the
 # file.
 pd() {

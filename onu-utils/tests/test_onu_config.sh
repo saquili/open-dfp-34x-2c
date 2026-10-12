@@ -23,9 +23,11 @@ check() {
 setup() {
 	T=$(mktemp -d)
 	export ONU_ROOT=$T/root ONU_STORE=$T/store
-	mkdir -p "$ONU_ROOT/run" "$T/bin"
+	mkdir -p "$ONU_ROOT/run/dhcp6d" "$T/bin"
 	: >"$ONU_STORE"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
+	# chown is root's: the stand-in notes who is given what.
+	printf '#!/bin/sh\necho "chown $*" >>"%s/chown.log"\n' "$T" >"$T/bin/chown"
 	# ponid gives the shipped firmware's identity, until it is told to fail.
 	printf '#!/bin/sh\n[ -e "%s/ponid.fail" ] && exit 1\n%s\n' "$T" \
 		'printf "serial=XXXXXXXXXXXX\nploam_password=00112233445566778899\nmodel=TEST-1\n"' \
@@ -448,7 +450,7 @@ teardown
 echo "the host a session delegates its IPv6 prefix to, kept across a restart"
 setup
 B='000300010000005e0053ff 1 fe80::12 2001:db8:1200::/56'
-echo "$B" >"$ONU_ROOT/run/onu-pd2"
+echo "$B" >"$ONU_ROOT/run/dhcp6d/pd2"
 run pd 2
 check '[ $rc -eq 0 ]'
 check "stored 'PD2_HOST=$B'"
@@ -456,22 +458,25 @@ check "stored 'PD2_HOST=$B'"
 echo "MODE=router" >"$ONU_ROOT/run/onu.conf"
 run save
 check "stored 'PD2_HOST=$B'"
-rm -f "$ONU_ROOT/run/onu-pd2" "$ONU_ROOT/run/onu.conf"
+rm -f "$ONU_ROOT/run/dhcp6d/pd2" "$ONU_ROOT/run/onu.conf"
 run load
-check '[ "$(cat "$ONU_ROOT/run/onu-pd2")" = "$B" ]'
+check '[ "$(cat "$ONU_ROOT/run/dhcp6d/pd2")" = "$B" ]'
 check '! grep -q PD "$ONU_ROOT/run/onu.conf"'
-check '[ ! -e "$ONU_ROOT/run/onu-pd1" ]'
+check '[ ! -e "$ONU_ROOT/run/dhcp6d/pd1" ]'
+# dhcp6d, an account of its own, reads what it is given back and may replace it.
+check 'grep -qx "chown dhcp6d $ONU_ROOT/run/dhcp6d/pd2" "$T/chown.log"'
+check 'ls -l "$ONU_ROOT/run/dhcp6d/pd2" | grep -q "^-rw-r--r--"'
 # The same again writes nothing.
 cp "$ONU_STORE" "$T/before"
 run pd 2
 check '[ $rc -eq 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 # No file: the host is forgotten.
-rm "$ONU_ROOT/run/onu-pd2"
+rm "$ONU_ROOT/run/dhcp6d/pd2"
 run pd 2
 check '[ $rc -eq 0 ] && ! onu-config --store "$ONU_STORE" list | grep -q ^PD2_'
 # Not a binding, or not a session: nothing changes.
 cp "$ONU_STORE" "$T/before"
-echo 'x; reboot' >"$ONU_ROOT/run/onu-pd2"
+echo 'x; reboot' >"$ONU_ROOT/run/dhcp6d/pd2"
 run pd 2
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 run pd 8

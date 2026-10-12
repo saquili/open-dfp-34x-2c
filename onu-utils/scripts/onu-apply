@@ -106,6 +106,11 @@ FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
 # way (ADR 0015).
 LIB=$ROOT/usr/lib/onu
 PATH=$PATH:$LIB
+# Starts a program as an account of its own with the powers it needs, and the
+# program that tells this one of a change (onu-call), which a program that is
+# not root's runs.
+DROP=$LIB/onu-drop
+CALL=$LIB/onu-call
 SVC_DIR=$RUN/onu-svc.d
 # The stick's own address on a link to the host, from which its DHCP server
 # answers; the host is given the concentrator's address as its gateway.
@@ -530,8 +535,10 @@ note() {
 # interface $3, handed on to the host by dhcp6d: the link to the host gets
 # IPv6, and the stick forwards it. A session other than main_pd() has dhcp6d
 # route what comes from its prefix by the session's own table. dhcp6d keeps
-# the host's binding in /run/onu-pdN, which pd_keep() keeps in the store. It
-# is procd's service dhcp6dN.
+# the host's binding in /run/dhcp6d/pdN, which pd_keep() keeps in the store. It
+# is procd's service dhcp6dN, and runs as the account dhcp6d with the three
+# powers it uses: ports 546 and 547, the raw socket of its Router
+# Advertisements, and the route of the prefix.
 pd_up() {
 	lan=$(cat "$SESSIONS/$1/lan" 2>/dev/null)
 	[ -n "$lan" ] || return 0
@@ -541,7 +548,8 @@ pd_up() {
 	[ "$1" = "$(main_pd)" ] || table="-t $(table_of "$1")"
 	# $table is an option and its value, split on purpose.
 	svc_start "dhcp6d$1" -o "$RUN/dhcp6d.log" -- \
-		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/onu-pd$1" -x "$SELF" \
+		"$DROP" -c net_bind_service,net_admin,net_raw dhcp6d \
+		dhcp6d -w "$2" -l "$lan" -m "$3" -o "$SESSIONS/$1" -b "$RUN/dhcp6d/pd$1" -x "$CALL" \
 		-n "ses$1" $table
 	log "session $1: its IPv6 prefix goes to the router on $lan"
 }
@@ -895,6 +903,10 @@ session_up() {
 		pppoe_mtu "$gem" "$dev"
 	fi
 	mkdir -p "$SESSIONS/$n"
+	# The programs of the session write what they bring into its directory,
+	# as the accounts of the group onu (the boot script's, post-build.sh).
+	chown :onu "$SESSIONS/$n" && chmod 2770 "$SESSIONS/$n" ||
+		log "session $n: its directory is not the group onu's"
 	echo "$gem" >"$SESSIONS/$n/gem"
 	echo "$dev" >"$SESSIONS/$n/dev"
 	echo "$fam" >"$SESSIONS/$n/family"
@@ -969,23 +981,23 @@ sessions_down() {
 }
 
 # The host each session delegates its prefix to, which dhcp6d keeps in
-# /run/onu-pdN, goes into the store when it changes, and so does its going:
+# /run/dhcp6d/pdN, goes into the store when it changes, and so does its going:
 # after a restart of the stick, dhcp6d routes the prefix to that host at once,
 # since a router that holds its delegation asks for none (measured:
 # NetworkManager kept its /56 for a day and asked for the name servers only).
-# What went into the store is in /run/onu-pdN.kept.
+# What went into the store is in /run/onu-pdN.kept, which is root's alone.
 pd_keep() {
 	command -v onu-config >/dev/null || return 0
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
-		pd=$RUN/onu-pd$n
-		if { [ -e "$pd" ] || [ -e "$pd.kept" ]; } &&
-			[ "$(cat "$pd" 2>/dev/null)" != "$(cat "$pd.kept" 2>/dev/null)" ] &&
+		pd=$RUN/dhcp6d/pd$n kept=$RUN/onu-pd$n.kept
+		if { [ -e "$pd" ] || [ -e "$kept" ]; } &&
+			[ "$(cat "$pd" 2>/dev/null)" != "$(cat "$kept" 2>/dev/null)" ] &&
 			onu-config pd $n; then
 			if [ -e "$pd" ]; then
-				cp "$pd" "$pd.kept"
+				cp "$pd" "$kept"
 			else
-				rm -f "$pd.kept"
+				rm -f "$kept"
 			fi
 		fi
 		n=$((n + 1))
