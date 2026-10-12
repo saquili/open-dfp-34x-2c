@@ -59,8 +59,13 @@ The file goes when the host releases its binding or the binding runs out, not
 when dhcp6d stops. A route to the host that failed is tried again at the
 host's next message. ``-x PROGRAM`` tells a program when the binding changes:
 dhcp6d runs it with the argument ``dhcp6d`` and does not wait for it. On the
-stick the program is ``onu-apply``, which keeps the binding in the
-configuration store.
+stick the program is ``onu-call``, which asks ``onu-act`` for the method of
+that name: ``onu-apply`` then follows the change and keeps the binding in the
+configuration store. dhcp6d runs as the account ``dhcp6d``, started by
+``onu-drop`` with the three powers it uses: ports 546 and 547, the raw socket
+of its Router Advertisements, and the route of the prefix. It cannot run
+``onu-apply`` itself, and ubusd's list (``acl.json``) lets it call that one
+method, and publish its objects.
 
 ``-n NAME`` publishes the state on ubus (ADR 0014): the object
 ``dhcp6d.NAME``, whose method ``status`` gives the prefix delegated, the host

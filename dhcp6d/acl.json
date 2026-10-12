@@ -1,0 +1,7 @@
+{
+	"user": "dhcp6d",
+	"publish": [ "dhcp6d.*" ],
+	"access": {
+		"onu-act": { "methods": [ "dhcp6d" ] }
+	}
+}
