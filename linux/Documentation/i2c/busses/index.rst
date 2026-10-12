@@ -23,6 +23,7 @@ I2C Bus Drivers
    i2c-parport
    i2c-pca-isa
    i2c-piix4
+   i2c-rtl9602c
    i2c-sis5595
    i2c-sis630
    i2c-sis96x
