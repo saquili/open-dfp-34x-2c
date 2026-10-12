@@ -106,14 +106,14 @@ setup() {
 	ln -s "$HERE/tests/netifd-standin.sh" "$T/bin/onu-net"
 	# onu-nl lists, on the ingress of sfp and pon, the priority of the boot's
 	# filter of the management VLAN, 1, and those of two of omcid's VLAN rules.
-	printf '#!/bin/sh\necho "onu-nl $*" >>"$LOG"\n[ "$1 $2" = "filter prefs" ] || exit 0\n%s\n' \
-		'printf "1\n1000\n1001\n"' >"$T/bin/onu-nl"
-	# ip makes the interfaces it is told to add, and takes away those it is
+	# It makes the interfaces it is told to add, and takes away those it is
 	# told to delete, as the kernel would.
-	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n%s\n%s\n' \
-		'[ "$1 $2 $3 $5" = "link add link name" ] && mkdir -p "$ONU_ROOT/sys/class/net/$6"' \
-		'[ "$1 $2" = "link del" ] && rm -rf "$ONU_ROOT/sys/class/net/$3"; exit 0' \
-		>"$T/bin/ip"
+	printf '#!/bin/sh\necho "onu-nl $*" >>"$LOG"\n%s\n%s\n[ "$1 $2" = "filter prefs" ] || exit 0\n%s\n' \
+		'[ "$1 $2 $3" = "link add vlan" ] && mkdir -p "$ONU_ROOT/sys/class/net/$5"' \
+		'[ "$1 $2" = "link del" ] && rm -rf "$ONU_ROOT/sys/class/net/$3"' \
+		'printf "1\n1000\n1001\n"' >"$T/bin/onu-nl"
+	# onu-apply has no use for ip: a call of it shows in the log.
+	printf '#!/bin/sh\necho "ip $*" >>"$LOG"\n' >"$T/bin/ip"
 	# omcid runs from its first start on, as on the board.
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
@@ -220,7 +220,7 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = passthrough ]'
 check 'logged "^omcid -m .*/run/omcid.mib -x /usr/sbin/onu-apply$"'
 check '! logged "omcid -r"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
-check 'logged "^ip link del omcibr0"'
+check 'logged "^onu-nl link del omcibr0"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
 # The link forwards only the handed address's packets (BCP 38).
 check 'has links "device: type=8021q ifname=sfp vid=36 name=lan36 rpfilter=strict ipv6=0"'
@@ -230,10 +230,12 @@ check 'logged "^onu-nl param l3_ttl_decrement false"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/conf/sfp/rp_filter")" = 0 ]'
 check '! logged "^udhcpd"'
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
-check 'logged "^ip link set wan410 address 00:00:5e:00:53:01"'
-check '[ "$(grep -n "ip link set wan410 address" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^ip link set wan410 up" "$LOG" | cut -d: -f1)" ]'
-check 'logged "^ip link set wan410 mtu 1508"'
+check 'logged "^onu-nl link add vlan gem256 wan410 410"'
+check 'logged "^onu-nl link set wan410 address 00:00:5e:00:53:01"'
+check '[ "$(grep -n "onu-nl link set wan410 address" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^onu-nl link set wan410 up" "$LOG" | cut -d: -f1)" ]'
+check 'logged "^onu-nl link set wan410 mtu 1508"'
+# The links are onu-nl's: ip is not run.
+check '! logged "^ip "'
 for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ -s "$ONU_ROOT/run/onu-pass" ] && logged "^udhcpd" && break
 	"$REAL_SLEEP" 0.2
@@ -279,7 +281,7 @@ check 'logged "^onu-net del pass-1$"'
 "$MODE_SCRIPT" stop 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-pass" ]'
-check 'logged "^ip link del wan410"'
+check 'logged "^onu-nl link del wan410"'
 teardown
 
 echo "the settings of before: two sessions in one VLAN hand IPv4 and IPv6 down in LAN_VLAN"
@@ -296,7 +298,7 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
 	[ -s "$ONU_ROOT/run/session/2/ipv6" ] && [ -s "$ONU_ROOT/run/onu-pass" ] && break
 	"$REAL_SLEEP" 0.2
 done
-check '[ "$(grep -c "^ip link add link gem256 name wan410" "$LOG")" = 1 ]'
+check '[ "$(grep -c "^onu-nl link add vlan gem256 wan410" "$LOG")" = 1 ]'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe1 -D -4 -P"'
 check 'logged "^pppoed up -i wan410 -f $ONU_ROOT/run/onu-pppoe2 -6 -M$"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/ipv6")" = fe80::2 ]'
@@ -323,8 +325,8 @@ rm "$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" sync 2>/dev/null
 check '[ ! -e "$ONU_ROOT/run/session/2" ]'
 check '[ -e "$ONU_ROOT/run/session/1" ]'
-check '! logged "^ip link del wan410"'
-check '! logged "^ip link set pon mtu 1500"'
+check '! logged "^onu-nl link del wan410"'
+check '! logged "^onu-nl link set pon mtu 1500"'
 check 'logged "^onu-net del ses2$" && [ ! -e "$ONU_ROOT/run/network.d/ses2" ]'
 check 'logged "^procd stop dhcp6d2$" && [ ! -e "$ONU_ROOT/run/onu-svc.d/dhcp6d2" ]'
 # The host dhcp6d delegates to goes into the store once, and its going too.
@@ -353,7 +355,7 @@ echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+check 'logged "^onu-nl link add vlan gem256 wan410 410"'
 check '[ "$(cat "$ONU_ROOT/run/session/2/gem")" = gem256 ]'
 # The OLT provisions again: GEM port 256 goes, and the kernel takes wan410
 # with it; the sessions move to the GEM port there is now.
@@ -363,12 +365,12 @@ printf '#!/bin/sh\n[ "$1" = gem ] || exit 1\n%s\n' \
 	>"$T/bin/pon"
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem1024 name wan410 type vlan id 410"'
+check 'logged "^onu-nl link add vlan gem1024 wan410 410"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
 # The second session moves a round later, onto the interface the first made.
 "$MODE_SCRIPT" sync 2>/dev/null
 check '[ "$(cat "$ONU_ROOT/run/session/2/gem")" = gem1024 ]'
-check '[ "$(grep -c "^ip link add link gem1024 name wan410" "$LOG")" = 1 ]'
+check '[ "$(grep -c "^onu-nl link add vlan gem1024 wan410" "$LOG")" = 1 ]'
 teardown
 
 echo "a session in no VLAN runs on the GEM interface, on the GEM port named"
@@ -386,8 +388,8 @@ check 'logged "^omcid -r"'
 check '[ ! -e "$ONU_ROOT/run/onu-held-vlans" ]'
 check 'logged "^onu-nl filter add gem4095 redirect gem1024"'
 "$MODE_SCRIPT" stop 2>/dev/null
-check 'logged "^ip link set gem1024 mtu 1500"'
-check 'logged "^ip link set pon mtu 1500"'
+check 'logged "^onu-nl link set gem1024 mtu 1500"'
+check 'logged "^onu-nl link set pon mtu 1500"'
 check '[ ! -e "$ONU_ROOT/run/session/1" ]'
 teardown
 
@@ -427,8 +429,8 @@ conf MODE=passthrough WAN_VLAN=410 WAN_MAC=00:00:5e:00:53:01
 echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
-check 'logged "^ip link set wan410 address 00:00:5e:00:53:01"'
+check 'logged "^onu-nl link add vlan gem256 wan410 410"'
+check 'logged "^onu-nl link set wan410 address 00:00:5e:00:53:01"'
 teardown
 
 echo "without an account there is no session: the OLT's bridge"
@@ -471,7 +473,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" reload 2>/dev/null
 check 'logged "^killall -USR2 omcid"'
 check '! logged "^killall -USR1"'
-check '[ "$(grep -n "ip link del omcibr0" "$LOG" | cut -d: -f1)" -lt "$(grep -n "killall -USR2 omcid" "$LOG" | cut -d: -f1)" ]'
+check '[ "$(grep -n "onu-nl link del omcibr0" "$LOG" | cut -d: -f1)" -lt "$(grep -n "killall -USR2 omcid" "$LOG" | cut -d: -f1)" ]'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
 "$MODE_SCRIPT" sync 2>/dev/null
 # The other ports hand on the frames of the session's VLAN alone, and the
@@ -500,7 +502,7 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
 # Before the OLT's translations the session runs in the VLAN it was given.
-check 'logged "^ip link add link gem256 name wan410 type vlan id 410"'
+check 'logged "^onu-nl link add vlan gem256 wan410 410"'
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 410 ]'
 : >"$LOG"
 printf '410 1410\n420 1430\n' >"$ONU_ROOT/run/omcid-xlate"
@@ -508,15 +510,15 @@ printf '410 1410\n420 1430\n' >"$ONU_ROOT/run/omcid-xlate"
 # With them, omcid leaves 1410 out, and the session moves into it.
 check '[ "$(cat "$ONU_ROOT/run/onu-held-vlans")" = 1410 ]'
 check 'logged "^killall -USR2 omcid"'
-check 'logged "^ip link del wan410"'
-check 'logged "^ip link add link gem256 name wan1410 type vlan id 1410"'
+check 'logged "^onu-nl link del wan410"'
+check 'logged "^onu-nl link add vlan gem256 wan1410 1410"'
 check 'logged "^pppoed up -i wan1410 "'
 check 'logged "^onu-nl filter add gem4095 vlan 1410 redirect gem256"'
 # The next round changes nothing.
 : >"$LOG"
 "$MODE_SCRIPT" sync 2>/dev/null
 check '! logged "omcid"'
-check '! logged "^ip link"'
+check '! logged "^onu-nl link"'
 teardown
 
 echo "a session follows its service to the GEM port and the VLAN the OLT moves it to"
@@ -528,22 +530,22 @@ printf '410 1410\n' >"$ONU_ROOT/run/omcid-xlate"
 printf '1410 1024\n1430 256\n' >"$ONU_ROOT/run/omcid-gem-vlans"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem1024 name wan1410 type vlan id 1410"'
+check 'logged "^onu-nl link add vlan gem1024 wan1410 1410"'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem1024 ]'
 : >"$LOG"
 # The operator moves the service to 1600 on Port-ID 256, and keeps 410.
 printf '410 1600\n' >"$ONU_ROOT/run/omcid-xlate"
 printf '1600 256\n' >"$ONU_ROOT/run/omcid-gem-vlans"
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link del wan1410"'
-check 'logged "^ip link add link gem256 name wan1600 type vlan id 1600"'
+check 'logged "^onu-nl link del wan1410"'
+check 'logged "^onu-nl link add vlan gem256 wan1600 1600"'
 check 'logged "^pppoed up -i wan1600 "'
 check '[ "$(cat "$ONU_ROOT/run/session/1/gem")" = gem256 ]'
 # A GEM port named by its Port-ID stays, whatever the OLT lets through it.
 : >"$LOG"
 printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_GEM=1024 >"$ONU_ROOT/run/onu.conf"
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link add link gem1024 name wan1600 type vlan id 1600"'
+check 'logged "^onu-nl link add vlan gem1024 wan1600 1600"'
 teardown
 
 echo "the account removed: from passthrough back to bridge"
@@ -591,13 +593,13 @@ echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
 # documentation range may be written out (tools/provenance).
 la=$(printf %02x 2):00:5e:00:53:01
 turned=$(printf %02x 2):00:5e:00:53:00
-check 'logged "^ip link set wan410 address $la"'
+check 'logged "^onu-nl link set wan410 address $la"'
 "$MODE_SCRIPT" stop 2>/dev/null
 echo "$la" >"$ONU_ROOT/sys/class/net/sfp/address"
 : >"$LOG"
 "$MODE_SCRIPT" start 2>/dev/null
 "$MODE_SCRIPT" sync 2>/dev/null
-check 'logged "^ip link set wan410 address $turned"'
+check 'logged "^onu-nl link set wan410 address $turned"'
 "$MODE_SCRIPT" stop 2>/dev/null
 teardown
 
@@ -755,13 +757,13 @@ echo "-- $T/bin/onu-run omcid" >"$ONU_ROOT/run/onu-svc.d/omcid"
 cp "$ONU_ROOT/run/onu-svc.d/omcid" "$T/svc-omcid"
 : >"$T/omcid.running"
 "$MODE_SCRIPT" reidentify 2>/dev/null
-check 'logged "^ip link set pon down"'
+check 'logged "^onu-nl link set pon down"'
 check 'logged "^onu-net del ses1$" && [ ! -d "$ONU_ROOT/run/session/1" ]'
-check '[ "$(grep -n "^onu-net del ses1" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" ]'
+check '[ "$(grep -n "^onu-net del ses1" "$LOG" | cut -d: -f1)" -lt "$(grep -n "onu-nl link set pon down" "$LOG" | cut -d: -f1)" ]'
 check 'logged "^onu-nl param gpon_serial XXXXXXXXXXXX$"'
 check 'logged "^onu-nl param gpon_password 0x00112233445566778899$"'
-check '[ "$(grep -n "ip link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" ]'
-check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "ip link set pon up" "$LOG" | cut -d: -f1)" ]'
+check '[ "$(grep -n "onu-nl link set pon down" "$LOG" | cut -d: -f1)" -lt "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" ]'
+check '[ "$(grep -n "gpon_serial" "$LOG" | cut -d: -f1)" -lt "$(grep -n "onu-nl link set pon up" "$LOG" | cut -d: -f1)" ]'
 # omcid ends as procd's service and starts again, in bridge mode.
 check 'logged "^procd stop omcid$"'
 check 'logged "^procd start omcid -- .*/onu-run omcid$"'
@@ -791,7 +793,7 @@ setup
 "$MODE_SCRIPT" identity 2>/dev/null
 rc=$?
 check '[ $rc -ne 0 ]'
-check '! logged "ip link set pon up"'
+check '! logged "onu-nl link set pon up"'
 teardown
 
 echo "each session an interface of netifd, of the protocol pppoed, in its role"

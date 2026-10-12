@@ -458,7 +458,7 @@ omcid_sync() {
 # management VLAN, which onu-mgmt put at its priorities of the same qdiscs,
 # stay: they keep that VLAN off the PON in every mode.
 bridge_down() {
-	ip link del omcibr0 2>/dev/null
+	onu-nl link del omcibr0 2>/dev/null
 	for dev in sfp pon; do
 		for pref in $(onu-nl filter prefs "$dev" 2>/dev/null); do
 			[ "$pref" -lt "$VLAN_PREF" ] || onu-nl filter del "$dev" pref "$pref" 2>/dev/null
@@ -769,7 +769,7 @@ pass_lease_down() {
 # when the interface has no room or the concentrator does not agree.
 pppoe_mtu() {
 	for mtu_dev in pon "$1" "$2"; do
-		ip link set "$mtu_dev" mtu 1508 2>/dev/null || return 0
+		onu-nl link set "$mtu_dev" mtu 1508 2>/dev/null || return 0
 	done
 }
 
@@ -881,17 +881,17 @@ session_up() {
 	dev=$(session_dev "$n" "$gem")
 	fam=$(family "$n")
 	if ! dev_shared "$n" "$dev" || [ ! -e "$NET/$dev" ]; then
-		ip link set "$gem" up
+		onu-nl link set "$gem" up
 		if [ "$dev" != "$gem" ]; then
-			ip link add link "$gem" name "$dev" type vlan id "$(session_vlan "$n")"
+			onu-nl link add vlan "$gem" "$dev" "$(session_vlan "$n")"
 		fi
 		mac=$(setting "$n" MAC)
 		[ -n "$mac" ] || mac=$(pon_mac)
 		if [ -n "$mac" ]; then
-			ip link set "$dev" address "$mac" ||
+			onu-nl link set "$dev" address "$mac" ||
 				log "session $n: the interface did not take its MAC address"
 		fi
-		[ "$dev" != "$gem" ] && ip link set "$dev" up
+		[ "$dev" != "$gem" ] && onu-nl link set "$dev" up
 		pppoe_mtu "$gem" "$dev"
 	fi
 	mkdir -p "$SESSIONS/$n"
@@ -948,13 +948,13 @@ session_down() {
 	svc_stop "dhcp6d$1"
 	pass_lease_down "$1"
 	if ! dev_shared "$1" "$down_dev"; then
-		[ "$down_dev" != "$down_gem" ] && ip link del "$down_dev" 2>/dev/null
+		[ "$down_dev" != "$down_gem" ] && onu-nl link del "$down_dev" 2>/dev/null
 		# What pppoe_mtu() raised goes back to Ethernet's MTU, the PON port
 		# last, once no session is on the GEM port.
-		gem_shared "$1" "$down_gem" || ip link set "$down_gem" mtu 1500 2>/dev/null
+		gem_shared "$1" "$down_gem" || onu-nl link set "$down_gem" mtu 1500 2>/dev/null
 	fi
 	rm -rf "${SESSIONS:?}/$1"
-	[ -n "$(ls "$SESSIONS" 2>/dev/null)" ] || ip link set pon mtu 1500 2>/dev/null
+	[ -n "$(ls "$SESSIONS" 2>/dev/null)" ] || onu-nl link set pon mtu 1500 2>/dev/null
 	log "session $1 down"
 	return 0
 }
@@ -1155,7 +1155,7 @@ identity() {
 		onu-nl param gpon_password "$ploam" ||
 			log "the PON driver did not take the PLOAM password"
 	fi
-	ip link set pon up || log "the PON does not come up"
+	onu-nl link set pon up || log "the PON does not come up"
 }
 
 # A new identity: the OLT sees the stick leave and a new one arrive, and
@@ -1170,7 +1170,7 @@ reidentify() {
 		load
 		sessions_down
 	fi
-	ip link set pon down
+	onu-nl link set pon down
 	identity || return 1
 	want=
 	[ -r "$RUN/onu-omcid" ] && read -r want _ <"$RUN/onu-omcid"
