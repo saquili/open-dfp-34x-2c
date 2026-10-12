@@ -890,6 +890,18 @@ dev_shared() {
 	return 1
 }
 
+# pppoed, an account of its own, reads the sessions' accounts: the group
+# pppoed's and no one else's but root's. An account put in place anew, by a
+# change taken or a trial that goes back, is root's alone until this runs, so
+# it runs after each such put. $1 is one session; without it, all of them.
+accounts_to_pppoed() {
+	for ap_f in "$RUN"/onu-pppoe${1:-[1-7]}; do
+		[ -e "$ap_f" ] || continue
+		chown :pppoed "$ap_f" && chmod 640 "$ap_f" ||
+			log "${ap_f##*/}: pppoed cannot read it"
+	done
+}
+
 # Session $1 up on the GEM interface $2: its interface, made for the first
 # session on it, or again when it is gone (the kernel takes a VLAN interface
 # away with the GEM interface under it, which an OLT's new provisioning
@@ -918,10 +930,7 @@ session_up() {
 	# as the accounts of the group onu (the boot script's, post-build.sh).
 	chown :onu "$SESSIONS/$n" && chmod 2770 "$SESSIONS/$n" ||
 		log "session $n: its directory is not the group onu's"
-	# pppoed, an account of its own, reads the session's account: the group
-	# pppoed's and no one else's but root's.
-	chown :pppoed "$RUN/onu-pppoe$n" && chmod 640 "$RUN/onu-pppoe$n" ||
-		log "session $n: pppoed cannot read its account"
+	accounts_to_pppoed "$n"
 	echo "$gem" >"$SESSIONS/$n/gem"
 	echo "$dev" >"$SESSIONS/$n/dev"
 	echo "$fam" >"$SESSIONS/$n/family"
@@ -1301,6 +1310,7 @@ pending_take() {
 		fi
 	done
 	[ ! -e "$PENDING/onu.conf" ] || mv "$PENDING/onu.conf" "$CONF"
+	accounts_to_pppoed
 	rm -rf "$PENDING"
 }
 
@@ -1347,6 +1357,7 @@ expire() {
 		for f in "$KEPT"/onu-pppoe[1-7]; do
 			[ ! -e "$f" ] || mv "$f" "$RUN/"
 		done
+		accounts_to_pppoed
 		mv "$CONF.new" "$CONF"
 	fi
 	rm -rf "$KEPT" "$CONF.new"

@@ -1004,6 +1004,32 @@ check '[ ! -e "$ONU_ROOT/run/onu-trial.d/settings" ] && [ ! -e "$ONU_ROOT/run/on
 check '! logged "^onu-config save" && logged "not confirmed"'
 teardown
 
+echo "a trial that goes back puts the accounts in place anew, and pppoed reads them again"
+setup
+echo "1234.56 99.0" >"$ONU_ROOT/proc/uptime"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION2_VLAN=410 SESSION2_FAMILY=ipv6
+echo "user secret" >"$ONU_ROOT/run/onu-pppoe1"
+echo "user/ipv6 secret" >"$ONU_ROOT/run/onu-pppoe2"
+"$MODE_SCRIPT" start 2>/dev/null
+# A change of the second session's account alone, as the status daemon makes it.
+mkdir -p "$ONU_ROOT/run/onu-pending"
+cp "$ONU_ROOT/run/onu.conf" "$ONU_ROOT/run/onu-pending/onu.conf"
+echo "user/ipv6 other" >"$ONU_ROOT/run/onu-pending/onu-pppoe2"
+TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe2")" = "user/ipv6 other" ]'
+check 'ls -l "$ONU_ROOT/run/onu-pppoe2" | grep -q "^-rw-r-----"'
+: >"$LOG"
+"$MODE_SCRIPT" revert 2>/dev/null
+check '[ "$(cat "$ONU_ROOT/run/onu-pppoe2")" = "user/ipv6 secret" ]'
+# The first session did not change and did not start again; its account came
+# back from the copy that only root reads, and is pppoed's again.
+check '! logged "^onu-net del ses1$"'
+check 'logged "^chown :pppoed $ONU_ROOT/run/onu-pppoe1$"'
+check 'ls -l "$ONU_ROOT/run/onu-pppoe1" | grep -q "^-rw-r-----"'
+check 'ls -l "$ONU_ROOT/run/onu-pppoe2" | grep -q "^-rw-r-----"'
+"$MODE_SCRIPT" stop 2>/dev/null
+teardown
+
 echo "a trial ended at once, and one that a second change starts again"
 trial_setup
 TRIAL_LIMIT=30 "$MODE_SCRIPT" try 2>/dev/null
