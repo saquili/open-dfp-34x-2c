@@ -10,7 +10,8 @@
 #   onu-mgmt start VLAN ADDRESS [DATA_ADDRESS]
 #                          the pair of the boot, on the interface mgmt, and
 #                          the address on the SFP port itself, if any:
-#                          recorded, and given to netifd; what is not a pair
+#                          recorded, given to netifd, and its VLAN kept from
+#                          the PON by the switch's rules; what is not a pair
 #                          fails and changes nothing
 #   onu-mgmt status        VLAN, ADDRESS, IFACE, DATA_ADDRESS and, while a
 #                          change waits, PENDING_VLAN, PENDING_ADDRESS and
@@ -42,6 +43,12 @@ PATH=$PATH:$ROOT/usr/lib/onu
 STATE=$RUN/onu-mgmt
 PENDING=$RUN/onu-trial.d/mgmt
 LIMIT=${PENDING_LIMIT:-600}
+# The priorities of the switch's rules for a management VLAN on sfp and pon:
+# the registry's first two (omcid/target/tcprio.h, TC_PRIO_MGMT), and this
+# script their only writer. The pair in use has one, the pair on trial the
+# other.
+PREF_A=1
+PREF_B=2
 KEY=$RUN/dropbear/host_key
 
 log() {
@@ -73,7 +80,8 @@ address_ok() {
 
 # The switch's rules for a management VLAN, at a priority of their own: on
 # the SFP port's way in its frames go to the CPU alone, on the PON's they are
-# dropped, as the boot script sets them for the first pair.
+# dropped. So the VLAN stays between the host side and the stick: the network
+# behind the PON never sees it and never reaches it.
 rules_add() {
 	onu-nl filter add sfp pref "$2" vlan "$1" hw trap &&
 		onu-nl filter add pon pref "$2" vlan "$1" hw drop
@@ -83,6 +91,15 @@ rules_del() {
 	onu-nl filter del sfp pref "$1" 2>/dev/null
 	onu-nl filter del pon pref "$1" 2>/dev/null
 	return 0
+}
+
+# The priority the pair that is not on $1 has.
+other_pref() {
+	if [ "$1" = "$PREF_A" ]; then
+		echo "$PREF_B"
+	else
+		echo "$PREF_A"
+	fi
 }
 
 # A VLAN on the SFP port that an interface has already, the management's own
@@ -147,9 +164,14 @@ start() {
 		log "not a VLAN and an address with its prefix: $1 $2"
 		return 2
 	}
-	printf 'VLAN=%s\nADDRESS=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=1\nDATA_ADDRESS=%s\n' \
-		"$1" "$2" "$3" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
+	printf 'VLAN=%s\nADDRESS=%s\nIFACE=mgmt\nNAME=mgmt\nPREF=%s\nDATA_ADDRESS=%s\n' \
+		"$1" "$2" "$PREF_A" "$3" >"$STATE.new" && mv "$STATE.new" "$STATE" || return 1
 	rm -f "$PENDING"
+	# The pair's rules, whatever an earlier start of this script left.
+	rules_del "$PREF_A"
+	if ! { onu-nl clsact add sfp && onu-nl clsact add pon && rules_add "$1" "$PREF_A"; }; then
+		log "frames of VLAN $1 can go out to the PON or come in from it"
+	fi
 	net_apply
 }
 
@@ -202,7 +224,7 @@ add() {
 		pref=$old_pref
 	else
 		iface=mgmt$vlan
-		pref=$((3 - ${old_pref:-1}))
+		pref=$(other_pref "${old_pref:-$PREF_A}")
 		if vlan_in_use "$vlan"; then
 			log "VLAN $vlan cannot be added on sfp: it is in use"
 			return 1

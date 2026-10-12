@@ -95,6 +95,16 @@ check 'in_part "interface data sfp 192.0.2.2/30"'
 check '[ "$(part | wc -l)" -eq 3 ]'
 # The sessions keep their packets off the pair's networks.
 check 'logged "onu-apply guard"'
+# The switch keeps the VLAN from the PON, at the first priority: this script
+# is the only writer of it, the boot script no longer is.
+check 'logged "onu-nl clsact add sfp" && logged "onu-nl clsact add pon"'
+check 'logged "onu-nl filter add sfp pref 1 vlan 4094 hw trap"'
+check 'logged "onu-nl filter add pon pref 1 vlan 4094 hw drop"'
+# A second start leaves what the first did, and does not stack rules.
+: >"$LOG"
+run start 4094 198.51.100.2/30 192.0.2.2/30
+check 'logged "onu-nl filter del sfp pref 1" && logged "onu-nl filter del pon pref 1"'
+check '[ "$(grep -c "^onu-nl filter add sfp pref 1 " "$LOG")" -eq 1 ]'
 check 'grep -q "option ipv6 .1." "$T/part"'
 run status
 check 'echo "$out" | grep -qx VLAN=4094'

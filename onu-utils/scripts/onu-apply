@@ -90,6 +90,13 @@ CONF=$RUN/onu.conf
 IDENTITY=$RUN/onu-identity
 SESSIONS=$RUN/session
 MAX_SESSIONS=7
+# The priorities of the filters on sfp and pon are the registry's
+# (omcid/target/tcprio.h): omcid's VLAN rules take those from VLAN_PREF up,
+# and the management VLAN's, below, are onu-mgmt's alone. The drops on a
+# session's own interface take 1 to GUARD_PREFS of it, and no other writer
+# has that interface.
+VLAN_PREF=1000
+GUARD_PREFS=9
 NET=$ROOT/sys/class/net
 FORWARD=$ROOT/proc/sys/net/ipv4/ip_forward
 FORWARD6=$ROOT/proc/sys/net/ipv6/conf/all/forwarding
@@ -423,14 +430,14 @@ omcid_sync() {
 }
 
 # What omcid built in bridge mode: the bridge and its VLAN rules, the filters
-# from priority 1000 up on the ingress of sfp and pon. The filters of the
-# management VLAN, which the boot put at priority 1 of the same qdiscs, stay:
-# they keep that VLAN off the PON in every mode.
+# from priority VLAN_PREF up on the ingress of sfp and pon. The filters of the
+# management VLAN, which onu-mgmt put at its priorities of the same qdiscs,
+# stay: they keep that VLAN off the PON in every mode.
 bridge_down() {
 	ip link del omcibr0 2>/dev/null
 	for dev in sfp pon; do
 		for pref in $(onu-nl filter prefs "$dev" 2>/dev/null); do
-			[ "$pref" -lt 1000 ] || onu-nl filter del "$dev" pref "$pref" 2>/dev/null
+			[ "$pref" -lt "$VLAN_PREF" ] || onu-nl filter del "$dev" pref "$pref" 2>/dev/null
 		done
 	done
 	return 0
@@ -538,17 +545,21 @@ host_nets() {
 # A packet that comes in on session interface $1 to a network of the host
 # side is dropped before the stick takes it as its own or passes it on to the
 # host, whoever sends it: the operator's end of a session can address one.
-# The filters take priorities 1 to 9 of the interface's ingress.
+# The filters take priorities 1 to GUARD_PREFS of the interface's ingress.
 guard() {
 	onu-nl clsact add "$1" 2>/dev/null || {
 		log "$1: the host side is not kept from the session"
 		return 0
 	}
 	for pref in $(onu-nl filter prefs "$1" 2>/dev/null); do
-		[ "$pref" -ge 10 ] || onu-nl filter del "$1" pref "$pref" 2>/dev/null
+		[ "$pref" -gt "$GUARD_PREFS" ] || onu-nl filter del "$1" pref "$pref" 2>/dev/null
 	done
 	pref=1
 	for net in $(host_nets); do
+		[ "$pref" -le "$GUARD_PREFS" ] || {
+			log "$1: more networks than priorities: $net is not kept from the session"
+			break
+		}
 		onu-nl filter add "$1" pref $pref dst "$net" drop 2>/dev/null ||
 			log "$1: packets to $net are not kept from the session"
 		pref=$((pref + 1))
