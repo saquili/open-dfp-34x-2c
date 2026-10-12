@@ -53,9 +53,9 @@ the configuration of the board. The settings of it that this page relies on:
      - The kernel has no floating-point support, and the CPU probe does not
        touch coprocessor 1.
    * - ``# CONFIG_KEXEC is not set``
-     - kexec builds for the platform but does not start a new kernel on the
-       board (see "kexec"), so the board's configuration leaves it out, and with
-       it ``CRASH_DUMP``, which would move the load address.
+     - kexec starts a new kernel on the board (see "kexec"), but the board does
+       not use it, so its configuration leaves it out, and with it
+       ``CRASH_DUMP``, which would move the load address.
    * - ``CONFIG_SPI=y``, ``CONFIG_SPI_REALTEK_RTL=y``, ``CONFIG_MTD_SPI_NOR=y``
      - The SoC's SPI controller and the flash on it as an MTD device that can be
        erased and programmed, in 4 KiB sectors (``MTD_SPI_NOR_USE_4K_SECTORS``,
@@ -611,11 +611,20 @@ bottom of the TLB a full flush leaves alone; on this core it is 0.
 kexec
 -----
 
-``CONFIG_KEXEC`` builds for the platform. The relocation code
-(``arch/mips/kernel/relocate_kernel.S``) writes ``__SYNC(full, always)`` where
-it had a bare ``sync``; on MIPS I that assembles to nothing. A kernel started
-with kexec does not run on the DFP-34X-2C3. To run a development kernel without
-writing flash, use the RAM boot described under "Boot contract".
+``CONFIG_KEXEC`` builds for the platform and starts a new kernel on the
+DFP-34X-2C3. The relocation code (``arch/mips/kernel/relocate_kernel.S``)
+copies the new image through the cached segment. MIPS I has neither ``sync``
+nor ``synci``, so with ``CONFIG_CPU_LEXRA_CACHE`` the code writes the data cache
+back and invalidates it, then invalidates the instruction cache, through CP0
+register 20 as ``c-lexra.c`` does, before it jumps to the new kernel.
+
+The new kernel is given no command line of its own: registers a0 to a3 come
+from ``kexec_args``, which no code of this platform fills in. The watchdog core
+stops a running watchdog at a kexec as at a restart, unless the old kernel was
+started with ``watchdog.stop_on_reboot=0``; then the watchdog keeps counting
+across the jump, and a new kernel that hangs ends in a chip reset. The board's
+configuration leaves kexec out. To run a development kernel without writing
+flash, use the RAM boot described under "Boot contract".
 
 .. list-table::
    :header-rows: 1
@@ -631,21 +640,34 @@ writing flash, use the RAM boot described under "Boot contract".
        elsewhere it is the same ``sync`` as before.
      - T
      - ``CONFIG_KEXEC=y`` builds for this platform.
-   * - kexec does not start the new kernel on this board: ``kexec_load()``
-       accepts the segments, then ``reboot(LINUX_REBOOT_CMD_KEXEC)`` drops the
-       network connection and nothing appears on the console; only a power cycle
-       recovers the board. The flash is not written.
+   * - kexec starts the new kernel: after "Starting new kernel" the new
+       kernel's log follows on the console, and it runs ``/init`` 0.86 s after
+       it starts. Without the cache maintenance before the jump nothing
+       appeared on the console, and only a power cycle recovered the board.
      - M
-     - kexec started over the network, with the console watched.
-   * - Why the new kernel does not start: one candidate is that
-       ``relocate_new_kernel`` copies the new image through the cached segment
-       and jumps to it with no cache maintenance on MIPS I (no ``sync``, no
-       ``synci``, and the relocation code issues no CP0 register 20 operation);
-       with a write-back data cache part of the new kernel would still be in the
-       cache when the CPU fetches it.
-     - I
-     - Adding a data-cache write-back and an instruction-cache invalidate before
-       the jump and repeating the kexec start would confirm or refute it.
+     - ``kexec_load()`` with one 6 MB segment, then
+       ``reboot(LINUX_REBOOT_CMD_KEXEC)``, on a RAM-booted board, with the
+       console watched.
+   * - The new kernel's command line is ``/chosen/bootargs`` followed by
+       ``CONFIG_CMDLINE``; the old kernel's arguments do not reach it.
+     - M
+     - ``/proc/cmdline`` of the new kernel.
+   * - With ``watchdog.stop_on_reboot=0`` the watchdog keeps counting across
+       the jump: a new kernel whose user space never opens the watchdog ends in
+       a chip reset, about 60 s after the jump.
+     - M
+     - The boot loader's banner on the console after the jump, with no
+       restart in the new kernel's log.
+   * - ``kexec_load()`` copies the whole image into kernel pages while the
+       file it was read from stays in memory, so a kernel needs twice its size
+       free: a RAM-booted system leaves about 10 MB of the 25 MB, and a 6 MB
+       kernel needed services stopped first.
+     - M
+     - ``MemFree`` in ``/proc/meminfo`` before and after the load.
+   * - At a kexec the switch driver sends Dying Gasp, as at a restart.
+     - M
+     - "Dying_Gasp sent 3 of 3 times before the restart" in the kernel log
+       before "Starting new kernel".
 
 Memory map and address windows
 ==============================
@@ -2432,8 +2454,6 @@ About the CPU core
      - Sampling CP0 Random repeatedly.
    * - What duplicate EntryHi values do.
      - Writing two entries with one EntryHi and probing.
-   * - Why kexec does not start the new kernel.
-     - A cache write-back and invalidate before the kexec jump.
 
 About the platform code
 ~~~~~~~~~~~~~~~~~~~~~~~
