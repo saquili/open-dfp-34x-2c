@@ -69,9 +69,18 @@ class Budgets(unittest.TestCase):
             self.skipTest("the handbook is not part of this checkout")
         with open(page, encoding="utf-8") as handle:
             text = handle.read()
-        for needle in ("1856 KiB (``0x1d0000``, 1900544 bytes)",
-                       "1984 KiB (``0x1f0000``, 2031616 bytes)"):
-            self.assertIn(needle, text)
+        for size, hexsize in ((K0, "0x1d0000"), (R0, "0x1f0000")):
+            self.assertEqual(int(hexsize, 16), size)
+            self.assertIn("%d KiB (``%s``" % (size // 1024, hexsize), text)
+
+    def test_the_budgets_page_gives_the_same_bytes(self):
+        page = os.path.join(os.path.dirname(TOOLS), "docs", "handbook", "building.rst")
+        if not os.path.exists(page):
+            self.skipTest("the handbook is not part of this checkout")
+        with open(page, encoding="utf-8") as handle:
+            text = handle.read()
+        for size in (K0, R0):
+            self.assertIn("\n     - %d\n" % size, text)
 
 
 class Verdicts(unittest.TestCase):

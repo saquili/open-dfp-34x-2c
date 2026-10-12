@@ -8,11 +8,10 @@ tools/image-budget
 The size check of the flash images.
 
 The kernel and the root filesystem of bank 0 each have a partition of fixed
-size (``docs/handbook/boot-contract.rst``): ``k0`` takes the kernel image,
-1856 KiB (1900544 bytes), and ``r0`` the root filesystem image, 1984 KiB
-(2031616 bytes). ``image-budget`` compares the two images that the build leaves
-with those sizes and prints what is left of each partition, or by how much an
-image is over.
+size (``docs/handbook/boot-contract.rst``): ``k0`` takes the kernel image and
+``r0`` the root filesystem image. ``image-budget`` compares the two images that
+the build leaves with the sizes of their partitions, which are its budgets, and
+prints what is left of each partition, or by how much an image is over.
 
 Usage
 =====
