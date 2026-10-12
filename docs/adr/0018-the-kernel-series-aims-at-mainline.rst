@@ -5,7 +5,7 @@
 ADR 0018: The kernel series aims at mainline
 =========================================================
 
-:Status: Accepted
+:Status: Accepted, amended (see "Amendments")
 :Date: 2026-10-11
 :Decided-by: the owner, 2026-10-11
 
@@ -67,18 +67,24 @@ Consequences
   board's configuration, are either reached and tested or removed before a
   submission.
 
-Decided on 2026-10-12, in the clean-up of the debts: the GEM ports'
-attributes ``IFLA_GEM_{QUEUE,WEIGHT,CIR,PIR}`` stay in the link until the PON
-class is offered. They overlap with an offloaded HTB class of tc (rate, ceil,
-priority, quantum), but the queues belong to the T-CONT, which is no network
-interface, and nothing yet chooses the class of a frame; ``Documentation/
-networking/pon.rst`` says so where the attributes are described. When the
-PON class is offered they move to tc and the attributes go, ``IFLA_GEM_PBITS``
-apart, which is the 802.1p mapper and not a queue discipline. The NAPT and
-flowtable paths stay until the NAT backend can reach and test them, which is
-before a submission, as above.
+Amendments
+==========
 
-Done, on 2026-10-12, in the same clean-up:
+**2026-10-12, the owner: the GEM queue attributes and the NAPT paths stay.**
+
+The GEM ports' attributes ``IFLA_GEM_{QUEUE,WEIGHT,CIR,PIR}`` stay in the link
+until the PON class is offered. They overlap with an offloaded HTB class of tc
+(rate, ceil, priority, quantum), but the queues belong to the T-CONT, which is
+no network interface, and nothing yet chooses the class of a frame;
+``Documentation/networking/pon.rst`` says so where the attributes are
+described. When the PON class is offered they move to tc and the attributes
+go, ``IFLA_GEM_PBITS`` apart, which is the 802.1p mapper and not a queue
+discipline. The NAPT and flowtable paths stay until the NAT backend can reach
+and test them, which is before a submission, as above.
+
+**2026-10-12: what the split has done.**
+
+Done in the same clean-up:
 
 * The I2C master of the optics is a driver of ``drivers/i2c``,
   ``i2c-rtl9602c``, on the auxiliary device ``rtl9602c.i2c`` that the switch

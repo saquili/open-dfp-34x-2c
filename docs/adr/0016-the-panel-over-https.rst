@@ -5,7 +5,7 @@
 ADR 0016: The panel answers over HTTPS with its own key
 =========================================================
 
-:Status: Accepted
+:Status: Accepted, amended (see "Amendments")
 :Date: 2026-10-11
 :Decided-by: the owner, 2026-10-11
 
@@ -80,3 +80,12 @@ Consequences
 * Mongoose's own TLS is young code: it speaks only TLS 1.3 with X25519,
   ChaCha20-Poly1305 and a P-256 key, which every current browser does, and an
   update of Mongoose has to carry the three fixes over or show them made.
+
+Amendments
+==========
+
+**2026-10-12: the room that was left.**
+
+The "743 KiB left" of the context were 743,747 bytes of the partition for the
+root file system, which is about 726 KiB. The estimate of mbedTLS stands as
+it was, 100 to 200 KiB of it.

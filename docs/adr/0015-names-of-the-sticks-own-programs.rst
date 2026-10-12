@@ -5,7 +5,7 @@
 ADR 0015: The names of the stick's own programs say what they do
 ================================================================
 
-:Status: Accepted
+:Status: Accepted, amended (see "Amendments")
 :Date: 2026-10-10
 :Decided-by: the owner, 2026-10-10
 
@@ -66,3 +66,20 @@ Consequences
   the program, with their tests.
 * A program in ``/usr/lib/onu`` is called by its whole path, or by a caller
   that names the directory, which its tests set to their stand-ins.
+
+Amendments
+==========
+
+**2026-10-12, the owner: the programs as they stand.**
+
+A person at the stick runs seven programs of this tree, not six. ``onu-nl``,
+which makes the requests of ``tc``, ``devlink`` and ``ip`` that the scripts
+need (ADR 0020), is in ``/usr/sbin`` beside ``onu-config``, ``onu-apply``,
+``onu-update``, ``onu-svc`` and ``pon``, and ``passwd`` is in ``/usr/bin``.
+
+The programs that only other programs run, in ``/usr/lib/onu``, are now
+``onu-net``, ``onu-run``, ``onu-mgmt``, ``onu-lane``, ``onu-trial``,
+``onu-change``, ``onu-act``, ``onu-drop``, ``onu-call``, ``onu-config.sh``
+and ``ponid``. ``onu-act``, ``onu-drop`` and ``onu-call`` came with ADR 0014,
+and ``dhcp-wan`` went with the bench's router mode. ``onu-utils/README.rst``
+says what each is for.
