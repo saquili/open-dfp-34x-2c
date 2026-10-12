@@ -43,7 +43,8 @@ The parts
        commits the bank once the system is up, and restarts into the committed
        bank when it is not.
    * - The panel
-     - The System page lists system A (bank 0) and system B (bank 1), uploads an
+     - The System page lists system A (bank 0) and system B (bank 1; see
+       ``boot-contract.rst``, "The names of a bank"), uploads an
        update file, offers to start the new system, downloads the running one,
        and starts the other one unless it shows as empty. pond hands the upload
        on a pipe to onu-act, which runs ``onu-update`` on it

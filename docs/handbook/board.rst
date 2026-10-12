@@ -55,6 +55,37 @@ At a glance
    * - Boot loader
      - U-Boot of the 2011.12 release, in the first 256 KiB of the flash.
 
+Block diagram
+=============
+
+::
+
+      host's SFP cage
+           |    power, SerDes lane, signals
+           |
+      port 0 (sfp)
+           |
+      switch core ---- port 3 (CPU) ---- DMA ---- LX5281 CPU ---- DRAM, 32 MiB
+           |                                          |   |
+      port 2 (pon)                                    |   +-- SPI -- flash, 8 MiB
+           |                                          |
+      PON MAC, GPON MAC                               +---- UART0 -- console pads
+           |
+           +---- burst enable ------------------------------+
+                                                            |
+      CPU -- I2C master 1 -- SCL, SDA ----------------+     |
+      CPU -- GPIO 13 ------- TX_DISABLE ---------+    |     |
+                                                 |    |     |
+                                                 v    v     v
+                                        laser-driver IC (GN25L95) ---- fibre
+                                        transmitter and receiver
+
+The switch (ports 0, 2 and 3), the CPU's DMA engine, the CPU, its controllers,
+the GPON MAC, the PON MAC, the I2C master and the GPIO are blocks of the SoC.
+The DRAM, the flash and the laser-driver IC are separate parts, the console is
+the SoC's UART0 on pads (below), and the kernel pages named under `Where to read
+next`_ describe each block.
+
 Names
 =====
 
@@ -119,6 +150,50 @@ the lane switched off, so a transfer at its prompt works only after the lane
 has been brought up by hand or by a macro of the saved environment. The page
 ``flashing.rst`` says what that macro has to do.
 
+The SFP connector
+=================
+
+The host sees the stick through the signals of an SFP module. The stick takes
+its power from the cage and its data over the SerDes lane. What the host's
+driver reads of the others, with the stick in O5 on a lab OLT in a cage of a
+Linux router (M: the state file of the router's SFP driver, in its debugfs, and
+``ethtool -m`` of the port, 2026-10-12):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 20 56
+
+   * - Signal
+     - The host reads
+     - Notes
+   * - MOD_DEF0 (module present)
+     - present
+     - The host sees the module while it is in the cage.
+   * - TX_FAULT
+     - 0
+     - The option word declares the signal implemented.
+   * - RX_LOS
+     - 0
+     - Not declared by the option word. It read 0 throughout, with light from
+       the OLT; what it does without light is not recorded.
+   * - TX_DISABLE
+     - 0, driven by the host
+     - The option word declares the signal implemented. What the stick does
+       with it is not recorded: the hard disable that this system uses is
+       the SoC's GPIO 13, inside the module ("The PON side").
+   * - RS0, RS1
+     - 0, driven by the host
+     - The option word declares no rate select.
+
+The identity page the host reads over the cage's two-wire bus (A0h at
+``0x50``) declares an SFP (identifier ``0x03``) with a single-mode laser of
+1310 nm and 20 km on an SC connector, the name ``ODI`` (bytes 20 to 35) and
+the part number ``DFP-34X-2C3`` (bytes 40 to 55), and no digital
+diagnostics. Its option word, bytes 64 and 65,
+reads ``0x0018``: bit 4 (``SFP_OPTIONS_TX_DISABLE``) and bit 3
+(``SFP_OPTIONS_TX_FAULT``) of ``linux/include/linux/sfp.h``. Which part of the
+stick serves this page to the host is not recorded here.
+
 The PON side
 ============
 
@@ -143,8 +218,10 @@ The console
 
 The SoC's UART0 is the console of both the boot loader and the kernel: 115200
 baud, 8 data bits, no parity, 1 stop bit. It is a 16550-compatible UART, and in
-Linux it is ``ttyS0``. How the UART of the stick is wired to whatever carries it
-to the bench is not part of the board's description.
+Linux it is ``ttyS0``. The UART has two signals, TX and RX, and a ground. Where
+its pads lie on the board and what logic level they carry are not recorded in
+this repository (see "Open items"); how the UART of the stick is wired to
+whatever carries it to the bench is not part of the board's description.
 
 On a bench the UART is reached through a UART-over-network bridge that offers
 one raw TCP socket per UART. Three properties of such a bridge matter:
@@ -221,6 +298,9 @@ The other handbook pages that concern the board are ``boot-contract.rst`` and
 
 Open items
 ==========
+
+* The console's pads: where TX, RX and ground lie on the board, and the logic
+  level they carry, are to be recorded here from the board itself.
 
 * Switch port 1 exists in the silicon. Nothing on this board is known to
   connect to it, which is not yet confirmed on the board either.

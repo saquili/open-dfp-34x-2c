@@ -114,6 +114,43 @@ tree is part of the contract. The device tree marks ``boot`` read-only: from
 Linux the loader cannot be written, and its environment, the configuration
 store and both banks can.
 
+The names of a bank
+-------------------
+
+A bank goes by a different name in each place that speaks of it, and the names
+count differently:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Where
+     - The first bank
+     - The second bank
+   * - This handbook, ``onu-update`` (``RUNNING``, ``BANK<N>_STATE``), the
+       bench (``BANK=``) and the programs: the bank, from 0
+     - bank 0: ``k0``, ``r0``
+     - bank 1: ``k1``, ``r1``
+   * - The panel's System page: a system, by letter
+     - system A
+     - system B
+   * - The kernel's command line: the root filesystem by number
+     - ``root=31:5``
+     - ``root=31:7``
+   * - The loader's environment, counting from 0: ``sw_commit``,
+       ``sw_tryactive``, ``sw_active``, ``sw_valid<N>``, ``sw_version<N>``,
+       ``mtdparts<N>``, ``img<N>_kernel``, the macros ``b<N>`` and
+       ``set_act<N>``
+     - 0
+     - 1
+   * - The loader's layout variables, counting from 1: ``fl_kernel<N>``,
+       ``fl_rootfs<N>`` and their sizes
+     - 1
+     - 2
+
+The loader is the one that mixes the two counts; the rest of the handbook says
+bank 0 and bank 1.
+
 The erase sector
 ----------------
 
@@ -149,8 +186,8 @@ The loader's names for the layout
 
 The loader describes the same layout in variables, in hexadecimal without a
 prefix. The bench compares them with its own table before it writes anything,
-and stops with the variable's name if one differs. Mind the numbering: the
-loader counts the banks from 1, and the rest of this page counts them from 0.
+and stops with the variable's name if one differs. Mind the numbering: these
+variables count the banks from 1 (see "The names of a bank").
 
 .. list-table::
    :header-rows: 1
