@@ -125,6 +125,20 @@ void settings_settle(struct settings *s);
 bool settings_coherent(const struct settings *s, char *err, size_t errcap);
 
 /**
+ * settings_format_defaults() - The default of every key as KEY=VALUE lines.
+ * @out: where the lines go
+ * @cap: the size of @out
+ *
+ * The keys of before that are not a session's, then the keys of each of the
+ * sessions 1 to %SETTINGS_SESSIONS: what the programs that apply the
+ * settings start from. This table is the only place that says a default.
+ *
+ * Return: the length of the lines, which is @cap or more when they did not
+ *         fit.
+ */
+size_t settings_format_defaults(char *out, size_t cap);
+
+/**
  * settings_format() - The settings as KEY=VALUE lines.
  * @s: the settings, settled
  * @out: where the lines go

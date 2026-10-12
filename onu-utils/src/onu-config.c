@@ -15,6 +15,9 @@
  *   onu-config check                         the settings of the data path on
  *                                            the standard input, judged
  *   onu-config settings                      the same, taken as they come
+ *   onu-config defaults                      the default of every key, as
+ *                                            KEY=VALUE lines: the table of
+ *                                            settings.h is where they are
  *   onu-config current                       the settings in force, of the
  *                                            running system's files, with
  *                                            each account's user and whether
@@ -607,6 +610,18 @@ static void settings_in_force(struct settings *s)
 	explicit_bzero(kv, sizeof(kv));
 }
 
+static int defaults_cmd(void)
+{
+	static char out[SETTINGS_TEXT_MAX];
+
+	if (settings_format_defaults(out, sizeof(out)) >= sizeof(out)) {
+		fprintf(stderr, "onu-config: the defaults are too long\n");
+		return 1;
+	}
+	fputs(out, stdout);
+	return fflush(stdout) ? 1 : 0;
+}
+
 static int current_cmd(void)
 {
 	static char out[SETTINGS_TEXT_MAX];
@@ -897,14 +912,15 @@ int main(int argc, char **argv)
 	if (optind < argc && (!strcmp(argv[optind], "check") ||
 			      !strcmp(argv[optind], "settings") ||
 			      !strcmp(argv[optind], "current") ||
+			      !strcmp(argv[optind], "defaults") ||
 			      !strcmp(argv[optind], "change") ||
 			      !strcmp(argv[optind], "password-check") ||
 			      !strcmp(argv[optind], "password-state") ||
 			      !strcmp(argv[optind], "identity-current"))) {
 		if (argc - optind != 1) {
-			fputs("usage: onu-config check | settings | current | change"
-			      " | password-check | password-state | identity-current\n",
-			      stderr);
+			fputs("usage: onu-config check | settings | current | defaults |"
+			      " change | password-check | password-state |"
+			      " identity-current\n", stderr);
 			return 2;
 		}
 		if (!strcmp(argv[optind], "password-check"))
@@ -915,6 +931,8 @@ int main(int argc, char **argv)
 			return identity_current_cmd();
 		if (!strcmp(argv[optind], "current"))
 			return current_cmd();
+		if (!strcmp(argv[optind], "defaults"))
+			return defaults_cmd();
 		if (!strcmp(argv[optind], "change"))
 			return change_cmd();
 		return settings_cmd(!strcmp(argv[optind], "check"));

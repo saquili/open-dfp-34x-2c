@@ -224,8 +224,9 @@ them finds it there, and names it by its whole path where procd starts it.
    but know nothing of sessions, of an address handed down or of omcid, and
    onu-apply tells them (ADR 0014; it was called ``onu-mode``, of the modes
    the stick no longer has). It gives the stick's data path the shape its
-   settings give (``/run/onu.conf``,
-   seeded from ``/etc/onu.conf``, which says what each key means); there is no
+   settings give (``/run/onu.conf``, seeded from ``/etc/onu.conf``, which sets
+   nothing and says what each key means; the default of a key is the table of
+   ``onu-config``, which ``onu-config defaults`` prints); there is no
    mode to choose. Without a PPPoE account omcid connects the host link to the
    PON as the OLT provisions it. With accounts, the stick holds up to seven
    PPPoE sessions itself, each with the user and secret of

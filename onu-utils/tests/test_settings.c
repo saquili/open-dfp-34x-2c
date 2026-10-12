@@ -245,9 +245,40 @@ static void test_format(void)
 	CHECK(strlen(small) == sizeof(small) - 1 && !strncmp(small, g_out, sizeof(small) - 1));
 }
 
+static void test_defaults_format(void)
+{
+	char out[4096], small[16], line[128], err[160];
+	struct settings s;
+	size_t need = settings_format_defaults(out, sizeof(out));
+	char *save = NULL, *l, copy[4096];
+	int lines = 0, bad = 0;
+
+	CHECK(need == strlen(out) && need < sizeof(out));
+	CHECK(strstr(out, "WAN_GEM=auto\n") && strstr(out, "WAN_VLAN=\n"));
+	CHECK(strstr(out, "SESSION1_GEM=auto\n") && strstr(out, "SESSION3_FAMILY=both\n"));
+	CHECK(strstr(out, "SESSION7_PASS=on\n") && strstr(out, "SESSION2_VLAN=\n"));
+	CHECK(strstr(out, "SESSION7_HOST_VLAN=\n"));
+	/* Every line is a setting the table takes, and the table has them all. */
+	settings_defaults(&s);
+	snprintf(copy, sizeof(copy), "%s", out);
+	for (l = strtok_r(copy, "\n", &save); l; l = strtok_r(NULL, "\n", &save)) {
+		snprintf(line, sizeof(line), "%s", l);
+		lines++;
+		if (settings_line(&s, line, err, sizeof(err)))
+			bad++;
+	}
+	CHECK(bad == 0);
+	CHECK(lines == SET_WAN_MAC + 1 + SETTINGS_SESSIONS * SETTINGS_NSKEYS);
+	/* The values given are the ones the table starts from. */
+	CHECK(strstr(out, "WAN_MAC=\n") != NULL);
+	need = settings_format_defaults(small, sizeof(small));
+	CHECK(need == strlen(out) && strlen(small) == sizeof(small) - 1);
+}
+
 int main(void)
 {
 	test_defaults();
+	test_defaults_format();
 	test_values();
 	test_accounts();
 	test_gone();

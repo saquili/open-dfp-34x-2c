@@ -8,6 +8,7 @@
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
+BUILD=${BUILD:-$HERE/build}
 MODE_SCRIPT=$HERE/scripts/onu-apply
 REAL_SLEEP=$(command -v sleep)
 checks=0
@@ -63,6 +64,9 @@ setup() {
 	for prog in killall udhcpd udhcpc logger kill onu-config dhcp6d; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
+	# The defaults of the settings are the real table's, and no call to log.
+	printf '#!/bin/sh\n[ "$1" = defaults ] && exec "%s/onu-config" defaults\necho "onu-config $*" >>"$LOG"\n' \
+		"$BUILD" >"$T/bin/onu-config"
 	# onu-svc stands in for procd: "sync onu DIR" runs, at once, the program
 	# after "--" of each file of DIR that is new or changed, as procd starts
 	# it ("procd start NAME LINE" in the log), and forgets the ones whose file

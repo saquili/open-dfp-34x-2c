@@ -6,7 +6,7 @@
 # OLT's bridge, and the stick's own PPPoE sessions with their addresses handed
 # on.
 #
-#   onu-apply start    at boot: take the settings from /etc/onu.conf and apply
+#   onu-apply start    at boot: take the settings of /run/onu.conf and apply
 #   onu-apply reload   apply the settings of /run/onu.conf again, after a change,
 #                      and keep them in the configuration store (onu-config)
 #   onu-apply try      apply them on trial: unconfirmed in 90 s (TRIAL_LIMIT),
@@ -33,10 +33,10 @@
 # One onu-apply at a time changes the stick; the others wait for it.
 #
 # The settings are KEY=value lines in /run/onu.conf, which onu-config writes
-# from the store at boot and at a change; /etc/onu.conf has the defaults and
-# says what each key means. The
-# account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN, as "user
-# secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
+# from the store at boot and at a change; /etc/onu.conf says what each key
+# means, and the default of a key is the table of onu-config (onu-config
+# defaults). The account of PPPoE session N, 1 to 7, is in /run/onu-pppoeN,
+# as "user secret", readable by root only; /etc/onu-pppoe, if a bench's files carry
 # one, seeds the first. At boot, onu-config has put the saved ones in these
 # files before onu-apply starts.
 #
@@ -123,29 +123,40 @@ log() {
 	return 0
 }
 
-# The settings: the defaults, then /run/onu.conf. A key that is not one of
+# The settings: the defaults, which are the table of onu-config and nowhere
+# else (onu-config defaults), then /run/onu.conf. A key that is not one of
 # these and a value with characters no setting has are left out. WAN_GEM,
 # WAN_VLAN, WAN_MAC and LAN_VLAN are keys of before, which the first session
 # and the sessions' links take over; the bench's router of before, MODE and
 # its WAN_ and LAN_ settings, is gone, and its keys are left out.
 load() {
 	MODE=bridge
-	WAN_GEM=auto
-	WAN_VLAN=
 	LAN_VLAN=
 	LEGACY_LAN=
-	WAN_MAC=
+	# No value here: the keys exist, so that a table that cannot be read
+	# leaves them empty and not unset.
+	WAN_GEM= WAN_VLAN= WAN_MAC=
 	n=1
 	while [ $n -le $MAX_SESSIONS ]; do
 		eval "SESSION${n}_GEM= SESSION${n}_VLAN= SESSION${n}_MAC= SESSION${n}_FAMILY="
-		eval "SESSION${n}_PASS=on SESSION${n}_HOST_VLAN="
+		eval "SESSION${n}_PASS= SESSION${n}_HOST_VLAN="
 		n=$((n + 1))
 	done
+	defaults=$(onu-config defaults) || {
+		log "the defaults of the settings are not known: onu-config does not say them"
+		defaults=
+	}
+	while IFS='=' read -r key value; do
+		[ -n "$key" ] && eval "$key=\$value"
+	done <<EOF
+$defaults
+EOF
+	DEFAULT_FAMILY=$SESSION1_FAMILY
 	if [ -r "$CONF" ]; then
 		load_file
 	fi
 	# The single session of before: its settings were the WAN's.
-	[ -n "$SESSION1_GEM" ] || SESSION1_GEM=$WAN_GEM
+	[ "$SESSION1_GEM" != auto ] || SESSION1_GEM=$WAN_GEM
 	[ -n "$SESSION1_VLAN" ] || SESSION1_VLAN=$WAN_VLAN
 	[ -n "$SESSION1_MAC" ] || SESSION1_MAC=$WAN_MAC
 	# The one link of before, LAN_VLAN or the host link itself, is the link
@@ -210,7 +221,7 @@ family() {
 	f=$(setting "$1" FAMILY)
 	case $f in
 	ipv4 | ipv6 | both) echo "$f" ;;
-	*) echo both ;;
+	*) echo "$DEFAULT_FAMILY" ;;
 	esac
 }
 

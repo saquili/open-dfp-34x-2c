@@ -404,6 +404,25 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 	return true;
 }
 
+size_t settings_format_defaults(char *out, size_t cap)
+{
+	size_t len = 0;
+
+	if (cap)
+		out[0] = '\0';
+	for (int k = 0; k < SETTINGS_NKEYS; k++)
+		len += (size_t)snprintf(out + (len < cap ? len : cap),
+					len < cap ? cap - len : 0, "%s=%s\n",
+					g_keys[k].name, g_keys[k].dflt);
+	for (int n = 0; n < SETTINGS_SESSIONS; n++)
+		for (int k = 0; k < SETTINGS_NSKEYS; k++)
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0,
+						"SESSION%d_%s=%s\n", n + 1,
+						g_skeys[k].suffix, g_skeys[k].dflt);
+	return len;
+}
+
 size_t settings_format(const struct settings *s, char *out, size_t cap)
 {
 	size_t len = 0;
