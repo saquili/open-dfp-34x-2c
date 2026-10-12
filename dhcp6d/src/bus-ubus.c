@@ -120,4 +120,11 @@ void bus_close(void)
 	ubus_free(g_ctx);
 	g_ctx = NULL;
 	g_object.id = 0;
+	/*
+	 * The id of the object's type is the one ubusd gave it. Another ubusd
+	 * knows no such id and makes the object without a type, which "ubus
+	 * list" does not show (measured), so the type is sent again with the
+	 * object.
+	 */
+	g_type.id = 0;
 }

@@ -1012,8 +1012,6 @@ int main(int argc, char **argv)
 			if (bus_open(d.name))
 				bus_retry = now + 10000;
 		}
-		if (d.name && bus_fd() < 0 && bus_retry < deadline)
-			deadline = bus_retry;
 
 		/* The fixed prefix stays half an hour preferred, an hour valid. */
 		if (d.fixed) {
@@ -1045,6 +1043,9 @@ int main(int argc, char **argv)
 		if (bus_fd() >= 0)
 			pf[nfd++] = (struct pollfd){ .fd = bus_fd(), .events = POLLIN };
 		publish(&d, d.fixed ? &fp : NULL);
+		/* After the other deadlines, which the client's replaces. */
+		if (d.name && bus_fd() < 0 && bus_retry < deadline)
+			deadline = bus_retry;
 		wait = deadline - now > 60000 ? 60000 :
 		       deadline - now < 0    ? 0 :
 					       (int)(deadline - now);
