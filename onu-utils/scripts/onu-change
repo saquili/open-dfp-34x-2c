@@ -7,7 +7,8 @@
 # and the management pair (onu-mgmt add). Each is a file of /run/onu-trial.d
 # named for it, with the moment it goes back, UNTIL, in seconds of
 # /proc/uptime. The program that made a change keeps it or takes it back,
-# and a watcher of its own takes it back when no one kept it in time.
+# and the keeper of the deadlines (watch), one for all of them, takes it back
+# when no one kept it in time.
 #
 #   onu-change status        a line for each change on trial: its name, when
 #                            it goes back and, for the management pair, the
@@ -18,6 +19,11 @@
 #                            when none was on trial, as when it came after
 #                            the changes went back
 #   onu-change revert        take every change on trial back now
+#   onu-change expire        take back every change on trial whose time has
+#                            come, once
+#   onu-change watch         the keeper of the deadlines: expire, then wait
+#                            for the nearest deadline, for ever; a service of
+#                            procd, which starts it again if it ends
 #
 # The status daemon confirms them for the panel, which does so as soon as it
 # reaches the stick again. ONU_ROOT, when set, is put in front of /run, for
@@ -26,6 +32,9 @@
 set -u
 ROOT=${ONU_ROOT:-}
 DIR=$ROOT/run/onu-trial.d
+# The longest the keeper waits when no deadline is nearer: a change that
+# starts meanwhile is seen then, and its deadline is minutes away.
+IDLE=${KEEPER_IDLE:-5}
 # onu-lane and onu-mgmt are helpers out of a person's way (ADR 0015).
 PATH=$PATH:$ROOT/usr/lib/onu
 
@@ -92,12 +101,45 @@ each() {
 	return $rc
 }
 
+# The changes whose time has come taken back, each by the program that made
+# it, with its token, so that a change started again since is left alone. WAIT
+# is left as the seconds to the nearest deadline ahead, at most IDLE.
+due() {
+	read -r up _ <"$ROOT/proc/uptime" 2>/dev/null || up=0
+	now=${up%%.*}
+	WAIT=$IDLE
+	for f in "$DIR"/*; do
+		[ -f "$f" ] || continue
+		name=${f##*/}
+		v=$(verbs "$name") || continue
+		end=$(field UNTIL "$f")
+		case $end in "" | *[!0-9]*) continue ;; esac
+		left=$((end - now))
+		if [ "$left" -gt 0 ]; then
+			[ "$left" -lt "$WAIT" ] && WAIT=$left
+			continue
+		fi
+		log "the change $name was not kept in time"
+		"${v%% *}" expire "$(field TOKEN "$f")" ||
+			log "the change $name was not taken back: tried again"
+	done
+}
+
+watch() {
+	while :; do
+		due
+		sleep "$WAIT"
+	done
+}
+
 case ${1:-} in
 status) status ;;
 confirm) each keep "${2:-}" ;;
 revert) each back ;;
+expire) due ;;
+watch) watch ;;
 *)
-	echo "usage: onu-change status|confirm [IP]|revert" >&2
+	echo "usage: onu-change status|confirm [IP]|revert|expire|watch" >&2
 	exit 2
 	;;
 esac

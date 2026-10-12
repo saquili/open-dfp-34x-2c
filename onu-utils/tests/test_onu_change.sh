@@ -97,5 +97,56 @@ rc=$?
 check '[ $rc -eq 2 ]'
 teardown
 
+echo "the keeper takes back what is due, with its token, and waits for the nearest"
+setup
+mkdir -p "$ONU_ROOT/proc"
+echo "1000.50 900.00" >"$ONU_ROOT/proc/uptime"
+"$CHANGE" expire 2>/dev/null
+check '[ ! -s "$LOG" ] && [ -e "$DIR/settings" ] && [ -e "$DIR/lane" ] && [ -e "$DIR/mgmt" ]'
+echo "1264.00 900.00" >"$ONU_ROOT/proc/uptime"
+"$CHANGE" expire 2>/dev/null
+check 'logged "onu-apply expire 7" && [ ! -e "$DIR/settings" ]'
+check '! grep -q "^onu-lane" "$LOG" && [ -e "$DIR/lane" ] && [ -e "$DIR/mgmt" ]'
+echo "1271.00 900.00" >"$ONU_ROOT/proc/uptime"
+: >"$LOG"
+"$CHANGE" expire 2>/dev/null
+check 'logged "onu-lane expire 8" && [ ! -e "$DIR/lane" ] && [ -e "$DIR/mgmt" ] && [ "$(wc -l <"$LOG")" -eq 1 ]'
+echo "1801.00 900.00" >"$ONU_ROOT/proc/uptime"
+: >"$LOG"
+"$CHANGE" expire 2>/dev/null
+check 'logged "onu-mgmt expire 9" && [ -z "$(ls "$DIR")" ]'
+teardown
+
+echo "a change that does not go back is tried again, and a file in the making is left alone"
+setup
+mkdir -p "$ONU_ROOT/proc"
+echo "1264.00 900.00" >"$ONU_ROOT/proc/uptime"
+printf '#!/bin/sh\necho "onu-apply $*" >>"%s"\nexit 1\n' "$LOG" >"$T/bin/onu-apply"
+: >"$DIR/settings.new"
+"$CHANGE" expire 2>/dev/null
+"$CHANGE" expire 2>/dev/null
+check '[ "$(grep -c "^onu-apply expire 7" "$LOG")" -eq 2 ] && [ -e "$DIR/settings" ]'
+check '! grep -q "settings.new" "$LOG"'
+teardown
+
+echo "the keeper waits for the nearest deadline, at most the idle time, and ends nothing early"
+setup
+mkdir -p "$ONU_ROOT/proc"
+echo "1000.00 900.00" >"$ONU_ROOT/proc/uptime"
+cat >"$T/bin/sleep" <<EOF2
+#!/bin/sh
+echo "sleep \$1" >>"$LOG"
+echo "1264.00 900.00" >"$ONU_ROOT/proc/uptime"
+EOF2
+chmod +x "$T/bin/sleep"
+# The first wait is the idle time (the nearest deadline is 264 s away); the
+# stand-in sleep moves the clock to the settings' deadline, where the second
+# pass takes the change back and the loop is stopped by the stand-in onu-apply.
+printf '#!/bin/sh\necho "onu-apply $*" >>"%s"\nrm -f "%s/settings"\nkill -TERM $PPID\n' "$LOG" "$DIR" >"$T/bin/onu-apply"
+"$CHANGE" watch 2>/dev/null
+check 'sed -n 1p "$LOG" | grep -qx "sleep 5"'
+check 'logged "onu-apply expire 7" && [ ! -e "$DIR/settings" ]'
+teardown
+
 echo "test_onu_change: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]
