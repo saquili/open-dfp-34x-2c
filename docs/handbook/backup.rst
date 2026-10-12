@@ -13,44 +13,53 @@ record of what was there.
 What the copy holds
 ===================
 
-The flash is 8 MiB in eight partitions that cover it exactly, in this order
-(``boot-contract.rst``):
+The flash is the eight partitions of ``boot-contract.rst``, "The flash", which
+say what each holds and how it is written; the copy is the chip from its first
+byte to its last. The commands below need only where each partition starts and
+how long it is, in blocks of 4 KiB, and ``mtd`` is its number on the stick:
 
 .. list-table::
    :header-rows: 1
-   :widths: 12 12 16 60
+   :widths: 14 16 22 22
 
    * - Device
      - Name
-     - Size, 4 KiB blocks
-     - What it holds
+     - First block
+     - Blocks
    * - ``mtd0``
      - ``boot``
+     - 0
      - 64
-     - The boot loader.
-   * - ``mtd1``, ``mtd2``
-     - ``env``, ``env2``
-     - 2 each
-     - The two copies of the loader's environment, with the board's MAC
-       address.
+   * - ``mtd1``
+     - ``env``
+     - 64
+     - 2
+   * - ``mtd2``
+     - ``env2``
+     - 66
+     - 2
    * - ``mtd3``
      - ``config``
+     - 68
      - 60
-     - The shipped firmware's file system: the unit's registration identity
-       (serial number, PLOAM password), and this system's store (root's
-       password hash, the PPPoE accounts, the panel's key).
-   * - ``mtd4``, ``mtd5``
-     - ``k0``, ``r0``
-     - 464, 496
-     - Bank 0, in this system's split.
-   * - ``mtd6``, ``mtd7``
-     - ``k1``, ``r1``
-     - 464, 496
-     - Bank 1, in this system's split. A bank of the shipped firmware is in
-       its own split within the same 3840 KiB, so the two partitions of a
-       bank together hold it whole.
+   * - ``mtd4``
+     - ``k0``
+     - 128
+     - 464
+   * - ``mtd5``
+     - ``r0``
+     - 592
+     - 496
+   * - ``mtd6``
+     - ``k1``
+     - 1088
+     - 464
+   * - ``mtd7``
+     - ``r1``
+     - 1552
+     - 496
 
-The sizes are those ``/proc/mtd`` gives on the board (M: the command below,
+The lengths are those ``/proc/mtd`` gives on the board (M: the command below,
 2026-10-11).
 
 **The copy is private.** It holds the unit's registration identity, its MAC
@@ -110,8 +119,7 @@ root. ``STICK`` is its management address:
    the loader's environment last, so that an interruption leaves the
    environment naming a bank that was put back before it. Each ``put`` takes
    the number of the ``mtd`` device, the first block of the partition in the
-   copy and its length, in 4 KiB blocks (the table above gives the lengths; a
-   partition starts where the one before ends)::
+   copy and its length, in 4 KiB blocks (the table above gives both)::
 
        put() {
            dd if=flash.bin bs=4096 skip=$2 count=$3 2>/dev/null |

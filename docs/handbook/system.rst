@@ -255,8 +255,9 @@ What is kept where
    * - The partition ``config``
      - The shipped firmware's JFFS2 file system with its files, which hold the
        unit's identity, and this system's own file beside them, at most 64
-       KiB: the saved settings, the PPPoE accounts, root's password hash and
-       the panel's key (``boot-contract.rst``).
+       KiB, of what must outlive a restart: the settings, the accounts, the
+       password, the keys (``boot-contract.rst``; the keys are listed in
+       ``onu-utils/README.rst``).
    * - ``env``, ``env2``
      - The boot loader's environment: which bank starts, and a trial.
    * - The two banks

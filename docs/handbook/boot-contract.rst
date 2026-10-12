@@ -67,25 +67,26 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
        identity among them. This system mounts it on ``/config`` and keeps
        what the board keeps across updates, its settings, in a file of its
        own there, at most 64 KiB, and never writes the shipped firmware's
-       files (ADR 0014, step 9). A store of before step 9, two slots that
+       files (ADR 0014, step 9; the file's keys are listed in
+       ``onu-utils/README.rst``). A store of before step 9, two slots that
        took the whole partition, goes into that file at the first boot.
      - Linux: ``onu-config``.
    * - ``k0``
      - ``0x080000``
-     - 1856 KiB (``0x1d0000``, 1900544 bytes)
+     - 1856 KiB (``0x1d0000``)
      - Bank 0 kernel: a legacy U-Boot image.
      - The bench: ``make flash IMAGE=<file> TARGET=kernel``; ``onu-update``
        while bank 1 runs; the shipped firmware's web page with
        ``web-install.tar`` while the shipped firmware runs from bank 1.
    * - ``r0``
      - ``0x250000``
-     - 1984 KiB (``0x1f0000``, 2031616 bytes)
+     - 1984 KiB (``0x1f0000``)
      - Bank 0 root filesystem: a SquashFS image.
      - The bench: ``make flash IMAGE=<file> TARGET=rootfs``; ``onu-update``
        while bank 1 runs.
    * - ``k1``
      - ``0x440000``
-     - 1856 KiB (``0x1d0000``, 1900544 bytes)
+     - 1856 KiB (``0x1d0000``)
      - Bank 1 kernel. On a stick as shipped, the shipped firmware may run from
        either bank, in its own split; the bank it does not run is the one
        ``web-install.tar`` writes, and the shipped firmware stays in the other
@@ -94,7 +95,7 @@ filesystem 2512 KiB, and this system gives the same 3840 KiB as 1856 KiB and
        ``web-install.tar`` while the shipped firmware runs from bank 0.
    * - ``r1``
      - ``0x610000``
-     - 1984 KiB (``0x1f0000``, 2031616 bytes)
+     - 1984 KiB (``0x1f0000``)
      - Bank 1 root filesystem.
      - ``onu-update`` while bank 0 runs.
 
@@ -312,7 +313,7 @@ The root filesystem of a bank is a SquashFS image in ``r0`` (or ``r1``), which
 the kernel mounts from the block device that ``root=`` names. The bench checks
 the magic ``hsqs`` at offset 0 and the compression id, a 16-bit little-endian
 value at offset 20, against the set the kernel supports (xz, 4, in the current
-kernel configuration), and refuses a file over 2031616 bytes.
+kernel configuration), and refuses a file that does not fit ``r0``.
 
 Where an image goes in RAM
 --------------------------

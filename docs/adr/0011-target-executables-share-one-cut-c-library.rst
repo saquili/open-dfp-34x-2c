@@ -27,7 +27,8 @@ objects it uses. It said what would supersede it: the offending functions
 leaving the libraries, which would make dynamic linking possible.
 
 The flash is now the constraint. The root filesystem has to fit its partition,
-``r0``, 2031616 bytes, and the image of the day used 2004150 of them. Every
+``r0`` (``docs/handbook/boot-contract.rst``), and the image of the day used
+2004150 bytes of it. Every
 static program carries its own copy of the C library functions it uses; the
 same functions are in the flash once per program. The network layer that is
 to come, netifd and ubusd, adds programs, and with them more copies.

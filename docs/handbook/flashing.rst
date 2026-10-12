@@ -496,8 +496,9 @@ values left out; the countdown is that of a board whose ``bootdelay`` is 600)::
 Write bank 0
 ============
 
-``k0`` takes a legacy U-Boot image of at most 1900544 bytes, and ``r0`` a
-SquashFS image of at most 2031616 bytes; ``boot-contract.rst`` describes both,
+``k0`` takes a legacy U-Boot image and ``r0`` a SquashFS image, each of at
+most the size of its partition (``building.rst``, "Sizes and budgets");
+``boot-contract.rst`` describes both,
 and how a board gets bank 0's split before its first write.
 The tool checks the file against its target before it touches the board.
 

@@ -30,13 +30,13 @@ What the build makes
      - The kernel of ``linux/``, built with the board's ``rtl9602c_defconfig``, as
        the legacy U-Boot image that the boot loader takes for bank 0: MIPS, Linux,
        kernel, LZMA, load address ``0x80100000``.
-     - About 1.7 MB (below); the partition ``k0`` takes 1900544.
+     - About 1.7 MB (see "Sizes and budgets").
    * - ``r0.squashfs``
      - The root filesystem for bank 0: a SquashFS image (xz, 64 KiB blocks,
        every file owned by root and carrying the same fixed time, no extended
        attributes) of BusyBox, dropbear, the programs of the ONU and the
        board's files.
-     - About 1.3 MB (below); the partition ``r0`` takes 2031616.
+     - About 1.3 MB (see "Sizes and budgets").
    * - ``update.bin``
      - The two images in one update file, which the stick's ``onu-update``
        writes into the bank it did not start from (``updating.rst``): a header
@@ -90,9 +90,10 @@ Sizes and budgets
        adds about 22 KiB (ADR 0016).
 
 Both images fit, and the build fails when one stops fitting (``IMAGE_ENFORCE``,
-below). They fit because bank 0 is split for this system, 1856 KiB of kernel
-and 1984 KiB of root filesystem where the shipped firmware had 1328 KiB and
-2512 KiB (``boot-contract.rst``), and because the kernel and the root filesystem
+below). The budget of an image is the size of its partition
+(``boot-contract.rst``, "The flash"). They fit because bank 0 is split for
+this system and not as the shipped firmware splits it, which left the kernel
+too little room, and because the kernel and the root filesystem
 leave out what the stick does not use ("The kernel's size" below, and "The root
 filesystem"). The programs share one C library, cut to what they use; with
 every program linked statically, as before ADR 0011, the root filesystem was
@@ -631,7 +632,7 @@ use, which the configuration's history names; it keeps IPv6, the symbol table,
 debugfs and dynamic debug, through which a problem on the operator's line is
 read. The kernel image was 1652846 bytes then, and 1698834 once it took JFFS2
 for the partition ``config`` (ADR 0014); bank 0 as this system splits it gives
-the kernel 1856 KiB (``boot-contract.rst``).
+the kernel room for it (``boot-contract.rst``).
 
 Reproducibility
 ===============
