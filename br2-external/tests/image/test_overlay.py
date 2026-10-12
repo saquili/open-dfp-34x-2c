@@ -296,6 +296,11 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertLess(text.index("chown dhcp6d:dhcp6d /run/dhcp6d"),
                         text.index("\nonu-config load "))
 
+    def test_omcid_has_a_directory_before_the_data_path_starts(self):
+        text = read(RCS)
+        self.assertIn("chown omcid:omcid /run/omcid", text)
+        self.assertLess(text.index("chown omcid:omcid /run/omcid"), text.index("onu-apply start"))
+
     def test_pppoed_may_open_the_ppp_device_before_a_session_is_made(self):
         text = read(RCS)
         self.assertIn("chown :pppoed /dev/ppp", text)

@@ -234,6 +234,10 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\npppoed:x:203:203:The PPPoE client:/var/empty:/bin/false\n", passwd)
         self.assertIn("\npppoed:x:203:\n", group)
         self.assertIn("\npppoed:*:::::::\n", shadow)
+        self.assertEqual(passwd.count("\nomcid:"), 1)
+        self.assertIn("\nomcid:x:204:204:The OMCI daemon:/var/empty:/bin/false\n", passwd)
+        self.assertIn("\nomcid:x:204:\n", group)
+        self.assertIn("\nomcid:*:::::::\n", shadow)
 
     def test_a_line_of_an_earlier_build_is_replaced_and_the_mode_stays(self):
         etc = os.path.join(self.target, "etc")

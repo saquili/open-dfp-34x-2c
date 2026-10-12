@@ -2,6 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # omcid, built from the omcid/ directory of this repository for the board.
+#
+# omcid runs as an account of its own, omcid (post-build.sh writes it), with
+# the two powers it uses (onu-drop), in the directory /run/omcid: ubusd's
+# access list, omcid/acl.json, lets it publish its object and tell onu-apply
+# of a change, and nothing else.
 
 OMCID_VERSION = local
 OMCID_SITE = $(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/../omcid
@@ -21,6 +26,7 @@ define OMCID_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build-board/board/omcid $(TARGET_DIR)/usr/sbin/omcid
 	$(INSTALL) -D -m 0755 $(@D)/build-board/board/omcitap $(TARGET_DIR)/usr/bin/omcitap
 	$(INSTALL) -D -m 0755 $(@D)/build-board/board/omcivlan $(TARGET_DIR)/usr/bin/omcivlan
+	$(INSTALL) -D -m 0644 $(@D)/acl.json $(TARGET_DIR)/usr/share/acl.d/omcid.json
 endef
 
 $(eval $(generic-package))

@@ -68,6 +68,11 @@ onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reac
 # /dev/ppp, which belongs to its group.
 [ ! -e /dev/ppp ] || { chown :pppoed /dev/ppp && chmod 660 /dev/ppp; } ||
 	warn "pppoed cannot open /dev/ppp"
+# omcid, an account of its own, writes everything it keeps in a directory of
+# its own: its socket, the MIB, and the files that tell onu-apply what the OLT
+# set up. onu-apply puts the identity it reads there.
+mkdir -p /run/omcid && chown omcid:omcid /run/omcid && chmod 755 /run/omcid ||
+	warn "no directory for omcid"
 # dhcp6d, an account of its own, keeps the host's binding in a directory of
 # its own, which load fills from the store.
 mkdir -p /run/dhcp6d && chown dhcp6d:dhcp6d /run/dhcp6d && chmod 755 /run/dhcp6d ||
