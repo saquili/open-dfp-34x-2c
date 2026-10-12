@@ -18,6 +18,9 @@ The stick and the system
     ``boot-contract.rst``
         The flash layout, the image formats, how a bank is selected, the
         watchdog.
+    ``run-files.rst``
+        The files of ``/run``: which program writes each, which reads it, and
+        how far a reader may count on it.
     ``optical-safety.rst``
         The laser and the other subscribers of a PON: how the stick is kept
         dark, what it does not write to the laser driver, what it cannot do,

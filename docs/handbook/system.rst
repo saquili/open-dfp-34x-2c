@@ -219,7 +219,7 @@ How the parts talk
        the state of each session (``/run/session/N``) and of the trial, and
        ``omcid``'s MIB. The programs of the stick read them; the panel does
        not, but asks ``onu-apply state`` through ``onu-act``. They are gone at
-       the next start.
+       the next start. ``run-files.rst`` lists them all.
    * - HTTPS
      - A browser or a script and the panel's API.
 
