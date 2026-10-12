@@ -744,6 +744,84 @@ check '[ $rc -eq 0 ] && [ -s "$ONU_ROOT/run/dropbear/host_key" ]'
 check 'grep -q "not kept: no store" "$T/err"'
 teardown
 
+echo "the token of scripts: none until a person makes one, then kept in the store"
+setup
+out=$("$STORE_SCRIPT" token 2>/dev/null)
+rc=$?
+check '[ $rc -eq 1 ] && [ -z "$out" ]'
+out=$("$STORE_SCRIPT" token new 2>/dev/null)
+rc=$?
+check '[ $rc -eq 0 ] && echo "$out" | grep -q -x "[0-9a-f]\{64\}"'
+token=$out
+check '[ "$(cat "$ONU_ROOT/run/onu-pond-token")" = "$token" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/onu-pond-token" | cut -c1-10)" = -rw------- ]'
+check 'stored "POND_TOKEN=$token"'
+check '[ "$("$STORE_SCRIPT" token)" = "$token" ]'
+# The status daemon's directory is not there yet: nothing is made in it.
+check '[ ! -e "$ONU_ROOT/run/pond" ]'
+# A new token takes the old one's place, in the store too.
+out=$("$STORE_SCRIPT" token new 2>/dev/null)
+check '[ "$out" != "$token" ] && stored "POND_TOKEN=$out" && ! stored "POND_TOKEN=$token"'
+check '[ "$(onu-config --store "$ONU_STORE" list | grep -c "^POND_TOKEN=")" -eq 1 ]'
+teardown
+
+echo "the token of scripts is handed to the status daemon whole, for its account alone"
+setup
+mkdir -p "$ONU_ROOT/run/pond"
+token=$("$STORE_SCRIPT" token new 2>/dev/null)
+check '[ "$(cat "$ONU_ROOT/run/pond/token")" = "$token" ]'
+check '[ "$(ls -l "$ONU_ROOT/run/pond/token" | cut -c1-10)" = -r-------- ]'
+check 'grep -q "^chown pond:pond .*/run/pond/token.new$" "$T/chown.log"'
+check '[ ! -e "$ONU_ROOT/run/pond/token.new" ]'
+# After a restart of the stick: load brings the token back, install hands it on.
+rm -rf "$ONU_ROOT/run/pond" "$ONU_ROOT/run/onu-pond-token"
+run load
+check '[ "$(cat "$ONU_ROOT/run/onu-pond-token")" = "$token" ]'
+check '! grep -q "^POND_" "$ONU_ROOT/run/onu.conf" 2>/dev/null'
+check '[ ! -e "$ONU_ROOT/run/pond" ]'
+mkdir -p "$ONU_ROOT/run/pond"
+run token install
+check '[ $rc -eq 0 ] && [ "$(cat "$ONU_ROOT/run/pond/token")" = "$token" ]'
+# A save of the settings keeps the token, and the token is no setting.
+settings
+run save
+check '[ $rc -eq 0 ] && stored "POND_TOKEN=$token" && stored MODE=passthrough'
+check '! grep -q "^POND_" "$ONU_ROOT/run/onu.conf"'
+teardown
+
+echo "the token of scripts is taken away by off, and what is no token is none"
+setup
+mkdir -p "$ONU_ROOT/run/pond"
+token=$("$STORE_SCRIPT" token new 2>/dev/null)
+run token off
+check '[ $rc -eq 0 ] && ! stored "POND_TOKEN=$token"'
+check '[ ! -e "$ONU_ROOT/run/onu-pond-token" ] && [ ! -e "$ONU_ROOT/run/pond/token" ]'
+run token
+check '[ $rc -eq 1 ]'
+run token off
+check '[ $rc -eq 0 ]'
+# A value of the store that is no token is none, whatever is in /run.
+echo "POND_TOKEN=short" | onu-config --store "$ONU_STORE" import
+echo oldtoken >"$ONU_ROOT/run/pond/token"
+run load
+run token install
+check '[ ! -e "$ONU_ROOT/run/pond/token" ]'
+run token
+check '[ $rc -eq 1 ]'
+run token bogus
+check '[ $rc -eq 2 ]'
+teardown
+
+echo "without a store, the token of scripts lasts until the next start"
+setup
+rm -f "$ONU_STORE"
+out=$(ONU_STORE= "$STORE_SCRIPT" token new 2>"$T/err")
+rc=$?
+check '[ $rc -eq 0 ] && echo "$out" | grep -q -x "[0-9a-f]\{64\}"'
+check '[ "$(cat "$ONU_ROOT/run/onu-pond-token")" = "$out" ]'
+check 'grep -q "not kept: no store" "$T/err"'
+teardown
+
 echo "changes at once each keep their key: one at a time, under the store's lock"
 setup
 i=1

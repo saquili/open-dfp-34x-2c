@@ -425,7 +425,7 @@ static bool files_verb(const char *verb)
 {
 	static const char *const verbs[] = {
 		"load", "save", "identity", "password", "auth", "system", "pd",
-		"tls", "ssh",
+		"tls", "ssh", "token",
 	};
 
 	for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
@@ -964,7 +964,8 @@ int main(int argc, char **argv)
 		      "       onu-config check | settings\n"
 		      "       onu-config slots DEVICE | erase-slots DEVICE\n"
 		      "       onu-config load | save | identity | password |\n"
-		      "                  auth HASH | system | pd N | tls | ssh\n", stderr);
+		      "                  auth HASH | system | pd N | tls | ssh\n"
+		      "       onu-config token [new | off | install]\n", stderr);
 		return 2;
 	}
 

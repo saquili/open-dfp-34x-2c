@@ -16,9 +16,10 @@
 #                   It runs as the account pond that procd starts it as (ADR
 #                   0014), which may listen on these ports as the boot script
 #                   lets every account from port 80 up: its output goes to
-#                   /run/pond/log, and the token of scripts is
-#                   /run/pond/token, the boot script's copy of
-#                   /etc/pond.token, which root alone reads
+#                   /run/pond/log, and the token of scripts is the file
+#                   /run/pond/token, onu-config's copy (onu-config token),
+#                   which the daemon reads at each request that comes without
+#                   a session, so that it need not exist when the daemon starts
 #   onu-run console the login prompt on the console, which asks for root's
 #                   password; a bench whose /etc/board.conf has
 #                   CONSOLE_AUTOLOGIN=root has root's shell there without
@@ -170,18 +171,17 @@ ssh)
 pond)
 	log=$RUN/pond/log
 	[ -w "$RUN/pond" ] || log=/dev/null
-	token=
-	[ -r "$RUN/pond/token" ] && token=$RUN/pond/token
+	token=$RUN/pond/token
 	# Started as root, the daemon runs as the account pond, with the one
 	# power to listen on ports 80 and 443 (pond -u).
 	if [ -r "$RUN/pond/tls.key" ]; then
 		exec pond -u pond -l "https://$mgmt:443" -l "http://$mgmt:80" \
 			${data:+-l "https://$data:443" -l "http://$data:80"} \
-			-k "$RUN/pond/tls.key" ${token:+-t "$token"} >>"$log" 2>&1
+			-k "$RUN/pond/tls.key" -t "$token" >>"$log" 2>&1
 	fi
 	echo "onu-run: no key for HTTPS: the panel over HTTP" >>"$log"
 	exec pond -u pond -l "http://$mgmt:80" ${data:+-l "http://$data:80"} \
-		${token:+-t "$token"} >>"$log" 2>&1
+		-t "$token" >>"$log" 2>&1
 	;;
 *)
 	echo "usage: onu-run ssh|pond|console|omcid|ntp" >&2

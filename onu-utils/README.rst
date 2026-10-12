@@ -131,6 +131,19 @@ them finds it there, and names it by its whole path where procd starts it.
    ``default`` or ``unknown``. Both read the hash themselves
    (``src/password.c``), so that the status daemon, which has onu-act run
    them, never holds it.
+   ``onu-config token new`` makes the token of scripts, which the status daemon
+   takes in place of a sign-in (``pond/README.rst``): 64 hexadecimal digits,
+   kept in the store as ``POND_TOKEN`` and in ``/run/onu-pond-token`` for root
+   only, and printed once, for the script. ``onu-config token`` prints it again
+   (exit status 1 and no output when there is none), ``onu-config token off``
+   takes it away, and ``onu-config token install`` hands the one in force to the
+   status daemon, whose copy is ``/run/pond/token`` for the account ``pond``
+   alone: the boot script after it made that directory, and ``token new`` and
+   ``token off`` themselves. A person runs it, on the stick; the status daemon
+   cannot (ubusd's access list has no method for it), so that a daemon taken
+   over cannot make itself a token. Without a store the new token lasts until
+   the next start. The token is no setting: a save keeps it and a load puts it
+   aside.
    ``onu-config identity-current`` prints the identity of
    ``/run/onu-identity``, which root alone reads, without its PLOAM and
    logical passwords, with ``ploam_set`` and ``loid_password_set`` and where it

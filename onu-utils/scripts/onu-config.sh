@@ -31,6 +31,13 @@
 #                        kept in the store, in /run/onu-tls-key
 #   onu-config ssh       the ssh server's host key: the one load found, or a
 #                        new one, kept in the store, in /run/dropbear/host_key
+#   onu-config token     the token of scripts, which the status daemon takes in
+#                        place of a sign-in: printed, if there is one;
+#                        "token new" makes a new one, in place of the old,
+#                        kept in the store, and prints it; "token off" takes
+#                        it away; "token install" hands the one in force to the
+#                        status daemon (the boot script, after it made the
+#                        daemon's directory, and each change of the token)
 #
 # A key ID_<NAME> of the store is the line "<name>=value" of /run/onu-identity,
 # the name in lower case, in place of the one the shipped firmware's files
@@ -56,6 +63,9 @@
 # SSH_HOST_KEY is the content of /run/onu-ssh-key: the ssh server's host key,
 # its file in the server's own format, in hexadecimal digits, made once on
 # the stick, so that a client sees one key across restarts;
+# POND_TOKEN is the content of /run/onu-pond-token: the token of scripts, 64
+# hexadecimal digits, which only a person makes (onu-config token new) and
+# which the status daemon reads in its own copy, /run/pond/token;
 # every other key is a line of /run/onu.conf. The files of secrets are for
 # root only.
 #
@@ -89,6 +99,8 @@ SYSTEM=$RUN/onu-system
 TLS=$RUN/onu-tls-key
 SSHKEY=$RUN/onu-ssh-key
 HOSTKEY=$RUN/dropbear/host_key
+TOKEN=$RUN/onu-pond-token
+POND_DIR=$RUN/pond
 SOURCE=$RUN/onu-identity-source
 STATE=$RUN/onu-store
 SHADOW=$RUN/shadow
@@ -208,7 +220,7 @@ settings() {
 	if [ -r "$CONF" ]; then
 		grep '^[A-Z][A-Z0-9_]*=' "$CONF" |
 			grep -v -e '^ID_' -e '^PPPOE[0-9]*_' -e '^AUTH_' -e '^SYS_' -e '^TLS_' \
-				-e '^SSH_'
+				-e '^SSH_' -e '^POND_'
 		[ -s "$CONF" ] && printf '%s\n' "$stored" | awk -v conf="$CONF" '
 			BEGIN {
 				while ((getline line < conf) > 0) {
@@ -223,7 +235,7 @@ settings() {
 					next
 				k = substr($0, 1, i - 1)
 			}
-			k ~ /^(ID_|PPPOE|AUTH_|SYS_|TLS_|SSH_)/ || k ~ /^PD[1-9]_HOST$/ { next }
+			k ~ /^(ID_|PPPOE|AUTH_|SYS_|TLS_|SSH_|POND_)/ || k ~ /^PD[1-9]_HOST$/ { next }
 			!(k in kept) { print "-" k }'
 	fi
 	n=1
@@ -255,10 +267,11 @@ load() {
 	}
 	umask 077
 	rm -f "$CONF.new" "$CREDS"*.new "$AUTH.new" "$SYSTEM.new" "$PD"* "$TLS.new" \
-		"$SSHKEY.new"
+		"$SSHKEY.new" "$TOKEN.new"
 	printf '%s\n' "$list" | awk -v conf="$CONF.new" \
 		-v creds="$CREDS" -v auth="$AUTH.new" -v max="$MAX_SESSIONS" \
-		-v sys="$SYSTEM.new" -v pd="$PD" -v tls="$TLS.new" -v ssh="$SSHKEY.new" '
+		-v sys="$SYSTEM.new" -v pd="$PD" -v tls="$TLS.new" -v ssh="$SSHKEY.new" \
+		-v tok="$TOKEN.new" '
 		{
 			i = index($0, "=")
 			if (i < 2)
@@ -270,6 +283,7 @@ load() {
 		k == "AUTH_HASH" { if (v != "") print v > auth; next }
 		k == "TLS_KEY" { if (v != "") print v > tls; next }
 		k == "SSH_HOST_KEY" { if (v != "") print v > ssh; next }
+		k == "POND_TOKEN" { if (v != "") print v > tok; next }
 		k ~ /^SYS_/ { if (v != "") print substr(k, 5) "=" v > sys; next }
 		k ~ /^PD[1-9]_HOST$/ {
 			if (v != "")
@@ -323,6 +337,11 @@ load() {
 		mv "$SSHKEY.new" "$SSHKEY"
 	else
 		rm -f "$SSHKEY"
+	fi
+	if [ -e "$TOKEN.new" ]; then
+		mv "$TOKEN.new" "$TOKEN"
+	else
+		rm -f "$TOKEN"
 	fi
 	shadow
 	if [ -e "$SYSTEM.new" ]; then
@@ -572,6 +591,90 @@ ssh_key() {
 	return 0
 }
 
+# Whether $1 is a token of scripts: 64 hexadecimal digits, 256 bits.
+is_token() {
+	candidate=$1
+	case $candidate in
+	*[!0-9a-f]* | "") return 1 ;;
+	esac
+	[ ${#candidate} -eq 64 ]
+}
+
+# The token in force: what load put in /run/onu-pond-token, else nothing.
+current_token() {
+	hex=
+	[ -r "$TOKEN" ] && read -r hex <"$TOKEN"
+	is_token "$hex" || hex=
+	[ -n "$hex" ]
+}
+
+# The status daemon's copy of the token, /run/pond/token, which only its
+# account reads, put in place whole: the daemon reads the file at every
+# request that comes without a session, and takes none once it is gone. The
+# boot script makes the daemon's directory; without it there is nothing to
+# hand over.
+install_token() {
+	[ -d "$POND_DIR" ] || return 0
+	if ! current_token; then
+		rm -f "$POND_DIR/token" "$POND_DIR/token.new"
+		return 0
+	fi
+	(umask 077 && echo "$hex" >"$POND_DIR/token.new") &&
+		chown pond:pond "$POND_DIR/token.new" && chmod 400 "$POND_DIR/token.new" &&
+		mv "$POND_DIR/token.new" "$POND_DIR/token" || {
+		rm -f "$POND_DIR/token.new"
+		log "the token of scripts is not the status daemon's"
+		return 1
+	}
+}
+
+# The token of scripts, which only a person makes, on the stick (ssh, the
+# console), and prints once to put in a script: a script has none until then,
+# and signs in as a person does. A new token takes the place of the old one at
+# once, and "off" takes it away; both stay across restarts, in the store.
+# Without a store, a new token lasts until the next start.
+token() {
+	case ${1:-} in
+	"")
+		current_token || {
+			log "no token of scripts: onu-config token new makes one"
+			return 1
+		}
+		echo "$hex"
+		;;
+	new)
+		seeded
+		hex=$(tr -dc '0-9a-f' </dev/urandom | head -c 64)
+		is_token "$hex" || {
+			log "no token of scripts: no random numbers"
+			return 1
+		}
+		if [ -z "$STORE" ]; then
+			log "the token of scripts is not kept: no store"
+		elif ! echo "POND_TOKEN=$hex" | onu-config --store "$STORE" import; then
+			log "the token of scripts is not kept: the store refused it"
+			return 1
+		fi
+		(umask 077 && echo "$hex" >"$TOKEN.new" && mv "$TOKEN.new" "$TOKEN") || return 1
+		install_token
+		echo "$hex"
+		;;
+	off)
+		if [ -n "$STORE" ]; then
+			onu-config --store "$STORE" unset POND_TOKEN || return 1
+		fi
+		rm -f "$TOKEN"
+		install_token
+		;;
+	install)
+		install_token
+		;;
+	*)
+		return 2
+		;;
+	esac
+}
+
 if [ -z "${ONU_STORE:-}" ] && [ "${1:-}" = load ]; then
 	mount_config || log "the partition \"config\" is not mounted"
 fi
@@ -613,8 +716,12 @@ tls)
 ssh)
 	ssh_key
 	;;
+token)
+	token "${2:-}"
+	;;
 *)
 	echo "usage: onu-config load|save|identity|password|auth HASH|system|pd N|tls|ssh" >&2
+	echo "       onu-config token [new|off|install]" >&2
 	exit 2
 	;;
 esac
