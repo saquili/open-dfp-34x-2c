@@ -80,7 +80,10 @@ image-check:
 # initramfs, so that a build can run on the board without a write to the
 # flash: $(IMAGE_OUT)/images/ram.uImage, for "make ramboot". It takes the
 # target tree of "make image", with the tools of diagnosis that post-build.sh
-# set aside in $(IMAGE_OUT)/diag and the files of
+# set aside in $(IMAGE_OUT)/diag (RAM_DIAG=no leaves them out, so that the
+# stick runs the root filesystem of the flash's image and nothing else; the
+# device tests then bring the tools they need, tests/device/README.rst) and the
+# files of
 # OPEN_DFP_34X_2C_LOCAL_OVERLAY laid over a copy that finish-root.sh finishes
 # as for the flash's image, and
 # builds the board's kernel configuration with the
@@ -90,6 +93,7 @@ image-check:
 # for scripts/config such as "--enable NET_DSA_RTL9602C_PLOAM_INJECT", changes
 # that configuration for a test image.
 RAM_OUT ?= $(CURDIR)/build/ram
+RAM_DIAG ?= yes
 RAM_MAKE = $(MAKE) -C linux O="$(RAM_OUT)/kernel" ARCH=$(ARCH) \
 	   CROSS_COMPILE="$(IMAGE_OUT)/host/bin/mips-buildroot-linux-uclibc-"
 
@@ -97,7 +101,8 @@ ram-image:
 	test -d "$(IMAGE_OUT)/target" || { echo 'open-dfp-34x-2c: run "make image" first' >&2; exit 1; }
 	rm -rf "$(RAM_OUT)/root" && mkdir -p "$(RAM_OUT)/root"
 	cp -a "$(IMAGE_OUT)/target/." "$(RAM_OUT)/root/"
-	if [ -d "$(IMAGE_OUT)/diag" ]; then cp -a "$(IMAGE_OUT)/diag/." "$(RAM_OUT)/root/"; fi
+	if [ -d "$(IMAGE_OUT)/diag" ] && [ "$(RAM_DIAG)" != no ]; then \
+	  cp -a "$(IMAGE_OUT)/diag/." "$(RAM_OUT)/root/"; fi
 	$(if $(OPEN_DFP_34X_2C_LOCAL_OVERLAY),cp -a "$(OPEN_DFP_34X_2C_LOCAL_OVERLAY)/." "$(RAM_OUT)/root/")
 	rm -f "$(RAM_OUT)/root/THIS_IS_NOT_YOUR_ROOT_FILESYSTEM"
 	sh br2-external/board/dfp-34x-2c3/finish-root.sh "$(RAM_OUT)/root"
@@ -170,8 +175,9 @@ docs:
 # The offline gates: the provenance gates (their own tests, then the tree and
 # the commits since main) and the self-tests of the tools, of the script that
 # fetches the build system, of the one that archives the kernel, of the size
-# check of the images, of the cut of the shared libraries and of the scripts and
-# lists of the distribution. The instruction-set gate's tests skip without a
+# check of the images, of the cut of the shared libraries, of the scripts and
+# lists of the distribution and of the device tests (their own, which need no
+# stick). The instruction-set gate's tests skip without a
 # MIPS objdump, the cut's end-to-end tests without a MIPS cross compiler, and
 # the tests of the image script without mksquashfs.
 check:
@@ -191,6 +197,7 @@ check:
 	tools/docs/tests/run
 	tools/docs/render --check --if-available
 	br2-external/tests/run
+	cd tests/device && python3 -m unittest discover -s devtest/tests -t .
 
 # The bench: tools/bench is a Python package (3.11 or later, standard library
 # only) run from tools/. A TOML file of settings is named by BENCH_CONFIG;

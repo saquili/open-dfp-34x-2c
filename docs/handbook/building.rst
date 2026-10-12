@@ -706,6 +706,12 @@ image only: the post-build script sets them aside in
 what the image's programs use, and ``make ram-image`` lays that directory over
 its root.
 
+A RAM image is the flash's image plus those tools, which is not what the flash
+holds. ``make ram-image RAM_DIAG=no`` leaves them out, and the device tests
+(``tests/device/README.rst``) put the three of iproute2 that they need on the
+stick, in memory, for the run (``--tools build/image/diag``): that run tests the
+flash's root filesystem and kernel without a write to the flash.
+
 Start the kernel from RAM with the root filesystem built in, which needs
 neither bank: ``make ram-image`` makes ``ram.uImage`` from the build (the tools
 of diagnosis and the files of ``OPEN_DFP_34X_2C_LOCAL_OVERLAY`` included),
