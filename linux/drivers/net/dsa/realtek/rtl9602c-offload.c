@@ -626,8 +626,8 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 /*
  * Meters. Sixteen shared meters serve storm control, from tc and devlink alike,
  * under meter_lock. A meter is 64 bits in two words, the high half, which
- * holds the rate, at the lower address. Only packet mode is used: in byte mode
- * a meter does not police (measured on this board).
+ * holds the rate, at the lower address. Only packet mode is used: no
+ * measurement has shown a meter in byte mode drop a frame.
  */
 static int rtl9602c_meter_alloc(struct rtl9602c_priv *p)
 {

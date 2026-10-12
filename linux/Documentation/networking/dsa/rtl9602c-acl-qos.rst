@@ -1412,8 +1412,8 @@ Sixteen meters are shared by everything that limits a rate by packets: the
 storm control of ``tc`` and of devlink, and the limit on the frames handed to
 the CPU. A meter has a rate, a bucket size and a unit, and it sets a latching
 bit when it drops a frame. The driver programs every meter that it hands out in
-packet mode, with the default bucket, because byte mode does not police on this
-chip. ``tc`` and devlink reach the meters from different paths, so the pool
+packet mode, with the default bucket, because no measurement has shown a meter
+in byte mode drop a frame. ``tc`` and devlink reach the meters from different paths, so the pool
 and the state of storm control and of the CPU limit are changed under one
 mutex, ``meter_lock``.
 
@@ -1440,14 +1440,33 @@ mutex, ``meter_lock``.
      - Broadcast offered at 322 frames/s against limits of 50, 150, 300, 600 and
        1200 set with ``tc ... police pkts_rate``: 51.7, 151.7 and 301.8 frames/s
        arrived, and everything at the two limits above the offered rate.
-   * - Byte mode (mode bit 0) does not police on this chip, and bit 0 of the low
-       word, which would count the preamble and inter-frame gap in a byte rate,
-       reads back 0 whatever is written. The driver therefore programs every
-       meter that it hands out in packet mode.
+   * - In byte mode (mode bit 0) a meter sets its exceeded bit, but no
+       measurement has shown it drop a frame. Bit 0 of the low word, which
+       would count the preamble and inter-frame gap in a byte rate, reads back
+       0 whatever is written. The driver therefore programs every meter that it
+       hands out in packet mode.
+     - M, I
+     - M: a broadcast class bound to a byte-mode meter at its lowest rate once
+       passed thirty times that rate for 15 s without setting its exceeded bit,
+       and changing only the mode bit made it exceed at once; in a later run a
+       byte-mode meter at rate 125 and at rate 1 set its bit at once under
+       1000 broadcasts a second of 1400 bytes. I: the frames of that run went to
+       the CPU, which neither mode held back (next row), so whether the meter
+       dropped any is not seen.
+   * - Broadcasts that the switch hands the CPU from ``sfp``, of a VLAN without
+       an interface on the stick, are held back neither by storm control nor by
+       the limit on frames to the CPU.
      - M
-     - A broadcast class bound to a byte-mode meter at its lowest rate passed
-       thirty times that rate for 15 s without setting its exceeded bit;
-       changing only the mode bit made it exceed at once.
+     - 1000 frames/s for 5 s with a storm-control rule of 100 packets/s on
+       ``sfp`` (its meter exceeding) and, apart, with ``cpu_rx_pps`` 100:
+       about 5020 frames reached ``sfp``'s receive count each time, as with no
+       limit at all.
+   * - ``0x025000``, which holds the meters' token period and tokens, reads
+       ``0x00012bbd``, and the byte token ``RTL9602C_SCHED_TOKEN_SIZE``
+       (``0x02d890``) ``0x42``; the driver writes neither. The register dump of
+       the shipped firmware has the same two values.
+     - M
+     - Both registers read through the driver on a RAM-booted board.
    * - Every meter reads rate ``RTL9602C_METER_CFG_HI_RATE_MAX`` (``0x7ffff``),
        which never limits, and bucket ``RTL9602C_METER_CFG_LO_BURST_DEFAULT``
        (``0x3fff``) out of reset. The driver always writes that bucket; a bucket
@@ -2991,6 +3010,9 @@ Questions the code does not depend on
    * - Whether a frame from the SFP port to the CPU crosses neither classifier
        direction ("What the driver writes").
      - A frame across the PON, translated by an entry.
+   * - Whether a meter in byte mode drops what exceeds its rate ("Meters").
+     - A byte-mode meter on frames that the switch forwards rather than hands
+       the CPU, counted where they leave.
    * - Whether the DHCP and IGMP storm-control classes are wider than one flower
        rule ("Storm control").
      - The classes offered DHCP server, DHCP client and MLD frames.
