@@ -55,10 +55,13 @@ What it needs
 The cases and the image of today
 ================================
 
-The suite was last recorded on 2026-10-07 (``docs/testing/``), on an image of
-before procd, netifd, the panel's HTTPS and the store in the partition
-``config``. The cases that expected that image, or a tool no image carried, have
-been brought up to today's. What a case expects of the image:
+The suite was last recorded on 2026-10-12 (``docs/testing/``), on the image of
+that day, run from the flash: 32 of 48 cases passed and 16 were skipped, the 15
+of the data path (``data.*``) and the search of the host link
+(``net.host-link-search``), which need the ports of a bench. Those were last
+recorded on 2026-10-07, on an image of before procd, netifd, the panel's HTTPS and
+the store in the partition ``config``. Their cases have been brought up to
+today's image, but none has run on it. What a case expects of the image:
 
 * The cases that install rules of their own, read the switch or stop procd's
   feeding of the watchdog run iproute2's ``tc``, ``bridge``, ``devlink`` and
