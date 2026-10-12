@@ -51,6 +51,7 @@
 #include "omcid/array_size.h"
 #include "omcid/attrs.h"
 #include "sys/log.h"
+#include "tcprio.h"
 
 /*
  * The identity of the ONU, written at boot from the unit's own data: one
@@ -2621,9 +2622,13 @@ static enum omci_status kernel_optics_limits(struct omci_hw_optics_limits *out)
 	return out->valid ? OMCI_OK : OMCI_ERR_HW;
 }
 
-/* The priorities of the VLAN filters, one per rule. */
-#define TC_PRIO_BASE 1000u
-#define TC_PRIO_LAST (TC_PRIO_BASE + OMCI_HW_VLAN_MAX_RULES)
+/*
+ * The priorities of the filters are the registry's (tcprio.h); the VLAN
+ * rules have one each, from TC_PRIO_VLAN.
+ */
+#define TC_PRIO_LAST (TC_PRIO_VLAN + OMCI_HW_VLAN_MAX_RULES)
+_Static_assert(OMCI_HW_VLAN_MAX_RULES <= TC_PRIO_VLAN_N,
+	       "more VLAN rules than priorities in the registry");
 
 /* The info word of a filter: its priority and protocol. */
 static uint32_t tc_info(unsigned int prio, uint16_t proto)
@@ -2939,13 +2944,13 @@ kernel_vlan_apply(const struct omci_hw_vlan_xlate *rules, size_t n,
 		return OMCI_ERR_HW;
 	}
 
-	for (unsigned int prio = TC_PRIO_BASE; prio < TC_PRIO_LAST; prio++) {
+	for (unsigned int prio = TC_PRIO_VLAN; prio < TC_PRIO_LAST; prio++) {
 		(void)tc_filter_del((int)uni, prio);
 		(void)tc_filter_del((int)pon, prio);
 	}
 
 	for (size_t i = 0; i < n; i++) {
-		const unsigned int prio = TC_PRIO_BASE + (unsigned int)i;
+		const unsigned int prio = TC_PRIO_VLAN + (unsigned int)i;
 		const struct omci_hw_vlan_xlate *r = &rules[i];
 		struct tc_vlan_filter up[VLAN_UP_MAX], down;
 
@@ -3042,7 +3047,7 @@ static void bridge_remove(void)
 	const int uni = (int)if_nametoindex(UNI_IFNAME);
 	const int pon = (int)if_nametoindex(PON_IFNAME);
 
-	for (unsigned int prio = TC_PRIO_BASE; prio < TC_PRIO_LAST; prio++) {
+	for (unsigned int prio = TC_PRIO_VLAN; prio < TC_PRIO_LAST; prio++) {
 		if (uni)
 			(void)tc_filter_del(uni, prio);
 		if (pon)
@@ -3090,7 +3095,7 @@ static bool g_mc_tried;
  * (131) and done (132) and version 2 report (143), each a flower rule on sfp
  * with priorities from TRAP_PRIO, before the VLAN rules (tc_vlan_apply).
  */
-#define TRAP_PRIO 100u
+#define TRAP_PRIO TC_PRIO_TRAP
 static const struct {
 	uint16_t proto;
 	uint8_t ip_proto;
@@ -3102,6 +3107,8 @@ static const struct {
 	{ ETH_P_IPV6, IPPROTO_ICMPV6, 132 },
 	{ ETH_P_IPV6, IPPROTO_ICMPV6, 143 },
 };
+_Static_assert(ARRAY_SIZE(g_traps) <= TC_PRIO_TRAP_N,
+	       "more traps than priorities in the registry");
 /*
  * Whether the traps are on: -1 until the first setting, which also clears
  * what an earlier run left; and the last failure to set them, said once.
@@ -3251,8 +3258,8 @@ static int mcast_traps(int uni, bool on)
  * traps of IGMP and MLD and of the bridge port filters, as the VLAN rules
  * take a frame first at the UNI. The rules change only when the VIDs do.
  */
-#define DISCARD_PRIO 50u
-#define DISCARD_MAX 16u
+#define DISCARD_PRIO TC_PRIO_DISCARD
+#define DISCARD_MAX TC_PRIO_DISCARD_N
 
 static uint16_t g_uni_drop[DISCARD_MAX];
 static size_t g_uni_drop_n;
@@ -3315,7 +3322,9 @@ static void uni_discard_sync(const uint16_t *vids, size_t n)
  * MLD, so that the agent still takes those, and before the counting rules of
  * the multicast groups, so that a filter drops a group's frames.
  */
-#define FILTER_PRIO 240u
+#define FILTER_PRIO TC_PRIO_FILTER
+_Static_assert(OMCI_HW_FILTER_MAX <= TC_PRIO_FILTER_N,
+	       "more bridge port filters than priorities in the registry");
 
 static bool mac_any(const uint8_t *mask)
 {
@@ -3372,7 +3381,9 @@ static enum omci_status kernel_filter_apply(const struct omci_hw_filter *rules,
  * The downstream tags of the multicast VLANs: a flower rule each on pon's
  * ingress, with priorities from DS_PRIO, whose VLAN no VLAN rule shares.
  */
-#define DS_PRIO 200u
+#define DS_PRIO TC_PRIO_DS
+_Static_assert(OMCI_HW_MCAST_DS_MAX <= TC_PRIO_DS_N,
+	       "more downstream tags than priorities in the registry");
 
 static enum omci_status kernel_mcast_ds(const struct omci_hw_mcast_ds *rules,
 					size_t n)
@@ -3429,7 +3440,9 @@ static enum omci_status kernel_mcast_ds(const struct omci_hw_mcast_ds *rules,
  * by its address; an IPv6 group by the MAC address it maps to (RFC 2464),
  * as the switch compares no IPv6 address.
  */
-#define WATCH_PRIO 300u
+#define WATCH_PRIO TC_PRIO_WATCH
+_Static_assert(OMCI_HW_MCAST_WATCH_MAX <= TC_PRIO_WATCH_N,
+	       "more counted groups than priorities in the registry");
 #define WATCH_HANDLE 1u
 static struct {
 	bool used;
