@@ -114,18 +114,23 @@ for libc in "$1"/lib/libuClibc-*.so; do
 		--uclibc "$BUILD_DIR/$(basename "$libc" .so | sed 's/^libuClibc-/uclibc-/')" "$1"
 done
 
-# The status daemon runs as an account of its own, pond, without a password
-# or a shell, which no one logs in with (ADR 0014). The image is made from a
-# copy of this directory (post-image.sh), not by the build system's own
-# making of accounts, so the account is written here, once, with the uid and
-# gid 200. /etc/shadow becomes /etc/shadow.image, from which the boot writes
-# every account but root's as it is.
+# The programs that face a network run as accounts of their own, without a
+# password or a shell, which no one logs in with (ADR 0014): pond, the status
+# daemon, and the time daemon ntp, started by onu-drop with the one power it
+# needs. The image is made from a copy of this directory (post-image.sh), not
+# by the build system's own making of accounts, so they are written here,
+# once, with the uid and gid 200 and 201. /etc/shadow becomes
+# /etc/shadow.image, from which the boot writes every account but root's as
+# it is.
 account() {
 	[ ! -f "$1" ] || grep -q "^$2:" "$1" || echo "$3" >>"$1"
 }
 account "$1/etc/passwd" pond "pond:x:200:200:The status daemon:/var/empty:/bin/false"
 account "$1/etc/group" pond "pond:x:200:"
 account "$1/etc/shadow" pond "pond:*:::::::"
+account "$1/etc/passwd" ntp "ntp:x:201:201:The time daemon:/var/empty:/bin/false"
+account "$1/etc/group" ntp "ntp:x:201:"
+account "$1/etc/shadow" ntp "ntp:*:::::::"
 
 grep -v '^BUILD_ID=' "$release" > "$release.new" || true
 echo "BUILD_ID=$rev" >> "$release.new"

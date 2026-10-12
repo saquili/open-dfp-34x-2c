@@ -24,6 +24,7 @@ define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-update $(TARGET_DIR)/usr/sbin/onu-update
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-svc $(TARGET_DIR)/usr/sbin/onu-svc
 	$(INSTALL) -D -m 0755 $(@D)/build/onu-act $(TARGET_DIR)/usr/lib/onu/onu-act
+	$(INSTALL) -D -m 0755 $(@D)/build/onu-drop $(TARGET_DIR)/usr/lib/onu/onu-drop
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-trial $(TARGET_DIR)/usr/lib/onu/onu-trial
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-apply $(TARGET_DIR)/usr/sbin/onu-apply
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-config.sh $(TARGET_DIR)/usr/lib/onu/onu-config.sh

@@ -201,7 +201,7 @@ class PostBuild(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("HOST_DIR is not set", done.stderr)
 
-    def test_the_account_of_the_status_daemon_is_written_once(self):
+    def test_the_accounts_of_the_daemons_are_written_once(self):
         etc = os.path.join(self.target, "etc")
         for name in ("passwd", "group", "shadow"):
             with open(os.path.join(etc, name), "w", encoding="utf-8") as handle:
@@ -219,6 +219,10 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\npond:x:200:\n", group)
         # No password: no one logs in with it.
         self.assertIn("\npond:*:::::::\n", shadow)
+        self.assertEqual(passwd.count("\nntp:"), 1)
+        self.assertIn("\nntp:x:201:201:The time daemon:/var/empty:/bin/false\n", passwd)
+        self.assertIn("\nntp:x:201:\n", group)
+        self.assertIn("\nntp:*:::::::\n", shadow)
 
     def test_without_the_file_it_fails(self):
         os.remove(self.release)
