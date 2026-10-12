@@ -1784,57 +1784,10 @@ loader's own layout. The kernel and the root filesystem of two banks sit in
 system: an update goes into the bank the system did not start from. Only the
 boot loader, ``boot``, is read-only.
 
-.. list-table::
-   :header-rows: 1
-   :widths: 10 12 22 46 10
-
-   * - Partition
-     - Offset
-     - Size
-     - Holds
-     - ``read-only``
-   * - ``boot``
-     - ``0x000000``
-     - 256 KiB (``0x040000``)
-     - The boot loader.
-     - yes
-   * - ``env``
-     - ``0x040000``
-     - 8 KiB (``0x002000``)
-     - The boot loader's environment.
-     - no
-   * - ``env2``
-     - ``0x042000``
-     - 8 KiB (``0x002000``)
-     - Its redundant copy.
-     - no
-   * - ``config``
-     - ``0x044000``
-     - 240 KiB (``0x03c000``)
-     - The shipped firmware's big-endian JFFS2 file system, with its files.
-       This system mounts it on ``/config`` and keeps what the board keeps
-       across updates of its system in a file of its own there, beside them.
-     - no
-   * - ``k0``
-     - ``0x080000``
-     - 1856 KiB (``0x1d0000``)
-     - Bank 0 kernel.
-     - no
-   * - ``r0``
-     - ``0x250000``
-     - 1984 KiB (``0x1f0000``)
-     - Bank 0 root filesystem.
-     - no
-   * - ``k1``
-     - ``0x440000``
-     - 1856 KiB (``0x1d0000``)
-     - Bank 1 kernel.
-     - no
-   * - ``r1``
-     - ``0x610000``
-     - 1984 KiB (``0x1f0000``)
-     - Bank 1 root filesystem.
-     - no
+The partitions are the eight of the board's device tree,
+``arch/mips/boot/dts/realtek/dfp-34x-2c3.dts``, which gives each its offset
+and its size; the project's handbook lists them, with what each holds and who
+writes it, in ``docs/handbook/boot-contract.rst``.
 
 .. list-table::
    :header-rows: 1
@@ -1879,14 +1832,14 @@ boot loader, ``boot``, is read-only.
        the boot loader, too, erases its environment in 4 KiB steps.
    * - The partitions (``partitions``, ``compatible = "fixed-partitions"``) are
        the boot loader's own layout, offsets and sizes as its environment lists
-       them, except the banks: the shipped firmware splits a bank's 3840 KiB as
-       1328 KiB of kernel and 2512 KiB of root filesystem, and this system as
-       1856 KiB and 1984 KiB, because its kernel does not fit 1328 KiB. The boot
-       loader keeps naming the shipped split: it rebuilds its layout variables
-       and its partition table from the first-stage loader's flash table at
-       every start. It needs nothing of this split, as it starts the kernel at
-       the start of ``k0`` or ``k1``, the same in both. The eight cover the chip
-       exactly (``0x610000`` + ``0x1f0000`` = ``0x800000``).
+       them, except the banks: the shipped firmware splits a bank into a
+       kernel and a root filesystem in its own proportions, and this system in
+       others, because its kernel does not fit the room the shipped split gives
+       it. The boot loader keeps naming the shipped split: it rebuilds its
+       layout variables and its partition table from the first-stage loader's
+       flash table at every start. It needs nothing of this split, as it starts
+       the kernel at the start of ``k0`` or ``k1``, the same in both. The eight
+       cover the chip exactly (``0x610000`` + ``0x1f0000`` = ``0x800000``).
      - M
      - The boot loader's environment, printed at its prompt: the same offsets
        and sizes for everything but the banks, which it names as shipped even
