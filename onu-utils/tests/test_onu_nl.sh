@@ -214,5 +214,56 @@ for line in "addr-wait" "addr-wait $D0" "addr-wait $D0 192.0.2.1" "addr-wait $D0
 	check '[ $rc -eq 2 ] && echo "$err" | grep -q "^usage: onu-nl "'
 done
 
+# The flags of $1 as ip shows them, between < and >.
+flags() {
+	ip -o link show "$1" | sed -n 's/^[^<]*<\([^>]*\)>.*/\1/p'
+}
+
+echo "links: up and down, MTU and MAC address, a VLAN interface"
+ip link set $D1 down
+run link set $D1 up
+check '[ $rc -eq 0 ] && flags $D1 | grep -q "\bUP\b"'
+run link set $D1 down
+check '[ $rc -eq 0 ] && ! flags $D1 | grep -q "\bUP\b"'
+# What is not named stays as it was.
+run link set $D1 mtu 1400
+check '[ $rc -eq 0 ] && ip -o link show $D1 | grep -q "mtu 1400" && ! flags $D1 | grep -q "\bUP\b"'
+run link set $D1 address 02:00:5e:00:53:99
+check '[ $rc -eq 0 ] && ip -o link show $D1 | grep -q "link/ether 02:00:5e:00:53:99" && ip -o link show $D1 | grep -q "mtu 1400"'
+# All three, in another order, and the MAC address in capitals.
+run link set $D1 address 02:00:5E:00:53:AB mtu 1500 up
+check '[ $rc -eq 0 ] && flags $D1 | grep -q "\bUP\b" && ip -o link show $D1 | grep -q "mtu 1500" && ip -o link show $D1 | grep -q "link/ether 02:00:5e:00:53:ab"'
+run link set nosuch0 up
+check '[ $rc -eq 1 ] && echo "$err" | grep -q "no interface nosuch0"'
+# The kernel refuses what it cannot take, and says so.
+run link set $D1 address 01:00:5e:00:53:01
+check '[ $rc -eq 1 ] && echo "$err" | grep -q "^onu-nl: link not set: "'
+
+run link add vlan $D1 onunlv 410
+check '[ $rc -eq 0 ] && ip -d -o link show onunlv | grep -q "vlan protocol 802.1Q id 410" && ip -o link show onunlv | grep -q "onunlv@$D1"'
+check '! flags onunlv | grep -q "\bUP\b"'
+run link add vlan $D1 onunlv 36
+check '[ $rc -eq 1 ] && echo "$err" | grep -q "^onu-nl: link not added: File exists"'
+run link set onunlv address 02:00:5e:00:53:35 up
+check '[ $rc -eq 0 ] && flags onunlv | grep -q "\bUP\b" && ip -o link show onunlv | grep -q "link/ether 02:00:5e:00:53:35"'
+run link add vlan nosuch0 onunlw 410
+check '[ $rc -eq 1 ] && echo "$err" | grep -q "no interface nosuch0"'
+run link del onunlv
+check '[ $rc -eq 0 ] && ! ip link show onunlv >/dev/null 2>&1'
+run link del onunlv
+check '[ $rc -eq 1 ] && echo "$err" | grep -q "no interface onunlv"'
+for line in "link" "link set" "link set $D1" "link set $D1 up down" "link set $D1 mtu" \
+	"link set $D1 mtu 67" "link set $D1 mtu 65536" "link set $D1 mtu x" \
+	"link set $D1 mtu 1500 mtu 1500" "link set $D1 address 02:00:5e:00:53" \
+	"link set $D1 address 02:00:5e:00:53:zz" "link set $D1 address 02-00-5e-00-53-01" \
+	"link set $D1 address 020:0:5e:00:53:01" "link set $D1 fast" \
+	"link add" "link add vlan $D1 v1" "link add vlan $D1 v1 0" "link add vlan $D1 v1 4095" \
+	"link add vlan $D1 v1 x" "link add vlan $D1 abcdefghijklmnop 5" "link add vlan $D1 a/b 5" \
+	"link add dummy $D1 v1 5" "link del" "link del $D0 $D1" "link frob $D0"; do
+	# $line is split into words on purpose.
+	run $line
+	check '[ $rc -eq 2 ] && echo "$err" | grep -q "^usage: onu-nl "'
+done
+
 echo "test_onu_nl: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

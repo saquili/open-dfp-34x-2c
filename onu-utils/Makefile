@@ -37,10 +37,13 @@ $(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o \
 # onu-nl sets traffic control and devlink parameters in place of tc and
 # devlink: libmnl.
 $(BUILD)/onu-nl: $(BUILD)/src/onu-nl.o $(BUILD)/src/tcrule.o $(BUILD)/src/dlparam.o \
-		$(BUILD)/src/genl.o
+		$(BUILD)/src/linkmsg.o $(BUILD)/src/genl.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_tcrule: $(BUILD)/tests/test_tcrule.o $(BUILD)/src/tcrule.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+$(BUILD)/test_linkmsg: $(BUILD)/tests/test_linkmsg.o $(BUILD)/src/linkmsg.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_dlparam: $(BUILD)/tests/test_dlparam.o $(BUILD)/src/dlparam.o \
@@ -100,7 +103,7 @@ $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 # test_genl asks the kernel it runs on, through a generic netlink socket;
 # test_onu_nl.sh sets filters on it, and skips without the right to.
 check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
-	$(BUILD)/test_tcrule $(BUILD)/test_dlparam $(BUILD)/onu-nl \
+	$(BUILD)/test_tcrule $(BUILD)/test_linkmsg $(BUILD)/test_dlparam $(BUILD)/onu-nl \
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
 	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password
@@ -108,6 +111,7 @@ check: $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
 	$(BUILD)/test_tcrule
+	$(BUILD)/test_linkmsg
 	$(BUILD)/test_dlparam
 	$(BUILD)/test_cfgstore
 	$(BUILD)/test_update

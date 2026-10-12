@@ -2,9 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * onu-nl: the traffic control and the switch's parameters that the stick's
- * scripts set, through netlink, in place of tc and devlink of iproute2,
- * which only the RAM image carries (ADR 0014, step 9g).
+ * onu-nl: the traffic control, the links and the switch's parameters that the
+ * stick's scripts set, through netlink, in place of tc, ip and devlink of
+ * iproute2, which only the RAM image carries (ADR 0014, step 9g).
  *
  *   onu-nl clsact add|del DEV
  *   onu-nl filter add DEV [pref N] [vlan VID | dst ADDRESS[/LEN]] [hw]
@@ -12,6 +12,9 @@
  *   onu-nl filter del DEV pref N
  *   onu-nl filter prefs DEV
  *   onu-nl param NAME [VALUE]
+ *   onu-nl link set DEV [up|down] [mtu N] [address MAC]
+ *   onu-nl link add vlan DEV NAME VID
+ *   onu-nl link del DEV
  *   onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
  *
  * "clsact add" leaves a clsact qdisc that is there already. A filter is on
@@ -22,7 +25,11 @@
  * "filter prefs" prints the priorities of the filters on the ingress of
  * DEV, one a line, the lowest first. "param" prints the value of a
  * parameter of the stick's devlink instance, the first the kernel lists,
- * or sets it (src/dlparam.h). "addr-wait" returns when DEV has the IPv4
+ * or sets it (src/dlparam.h). "link set" takes DEV up or down and sets its
+ * MTU and its MAC address, whichever it is given, once each, in any order;
+ * "link add vlan" makes the interface NAME of VLAN VID, 1 to 4094, on DEV,
+ * and is refused when NAME is taken; "link del" removes DEV (src/linkmsg.h).
+ * "addr-wait" returns when DEV has the IPv4
  * address with that prefix length, at once if it has it, else as the
  * kernel says it got it, or fails after SECONDS (10 without): it listens
  * for the kernel's message and does not look in a loop. When the kernel
@@ -49,6 +56,7 @@
 
 #include "dlparam.h"
 #include "genl.h"
+#include "linkmsg.h"
 #include "tcrule.h"
 
 /**
@@ -193,6 +201,9 @@ static int usage(void)
 		"       onu-nl filter del DEV pref N\n"
 		"       onu-nl filter prefs DEV\n"
 		"       onu-nl param NAME [VALUE]\n"
+		"       onu-nl link set DEV [up|down] [mtu N] [address MAC]\n"
+		"       onu-nl link add vlan DEV NAME VID\n"
+		"       onu-nl link del DEV\n"
 		"       onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]\n");
 	return 2;
 }
@@ -431,6 +442,112 @@ out:
 	return err ? 1 : 0;
 }
 
+/* A MAC address as six pairs of hexadecimal digits apart by colons. */
+static bool mac_arg(const char *s, uint8_t mac[6])
+{
+	if (strlen(s) != 17)
+		return false;
+	for (int i = 0; i < 6; i++) {
+		const char *p = s + 3 * i;
+		unsigned int v = 0;
+
+		if (i && p[-1] != ':')
+			return false;
+		for (int k = 0; k < 2; k++) {
+			char c = p[k];
+
+			if (c >= '0' && c <= '9')
+				v = v * 16 + (unsigned int)(c - '0');
+			else if (c >= 'a' && c <= 'f')
+				v = v * 16 + (unsigned int)(c - 'a' + 10);
+			else if (c >= 'A' && c <= 'F')
+				v = v * 16 + (unsigned int)(c - 'A' + 10);
+			else
+				return false;
+		}
+		mac[i] = (uint8_t)v;
+	}
+	return true;
+}
+
+/* The name of an interface to make: 1 to 15 letters, digits and . _ - alone. */
+static bool name_arg(const char *s)
+{
+	return *s && strlen(s) < IFNAMSIZ &&
+	       !s[strspn(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")];
+}
+
+/* DEV [up|down] [mtu N] [address MAC], into @s: each once, one at least. */
+static bool link_set_args(int argc, char **argv, struct link_set *s)
+{
+	unsigned long v;
+
+	for (int i = 1; i < argc; i++) {
+		if ((!strcmp(argv[i], "up") || !strcmp(argv[i], "down")) && !s->has_state) {
+			s->has_state = true;
+			s->up = !strcmp(argv[i], "up");
+		} else if (!strcmp(argv[i], "mtu") && !s->has_mtu && i + 1 < argc) {
+			if (!decimal(argv[++i], 68, 65535, &v))
+				return false;
+			s->has_mtu = true;
+			s->mtu = (uint32_t)v;
+		} else if (!strcmp(argv[i], "address") && !s->has_mac && i + 1 < argc) {
+			if (!mac_arg(argv[++i], s->mac))
+				return false;
+			s->has_mac = true;
+		} else {
+			return false;
+		}
+	}
+	return s->has_state || s->has_mtu || s->has_mac;
+}
+
+static int link_cmd(int argc, char **argv)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct link_set s = { 0 };
+	struct mnl_socket *nl;
+	struct nlmsghdr *nlh;
+	unsigned long vid = 0;
+	const char *what;
+	int ifindex, err;
+
+	if (argc < 2)
+		return usage();
+	if (!strcmp(argv[0], "set")) {
+		if (!link_set_args(argc - 1, argv + 1, &s))
+			return usage();
+		what = "link not set";
+	} else if (!strcmp(argv[0], "add")) {
+		if (argc != 5 || strcmp(argv[1], "vlan") || !name_arg(argv[3]) ||
+		    !decimal(argv[4], 1, 4094, &vid))
+			return usage();
+		what = "link not added";
+	} else if (!strcmp(argv[0], "del") && argc == 2) {
+		what = "link not removed";
+	} else {
+		return usage();
+	}
+	/* "set" and "del" name the interface first, "add vlan" the one it goes on. */
+	ifindex = interface(argv[!strcmp(argv[0], "add") ? 2 : 1]);
+	if (!ifindex)
+		return 1;
+	nl = open_bus(NETLINK_ROUTE);
+	if (!nl)
+		return 1;
+	if (!strcmp(argv[0], "set")) {
+		s.ifindex = ifindex;
+		nlh = link_set_msg(buf, &s, ++g_seq);
+	} else if (!strcmp(argv[0], "add")) {
+		nlh = link_vlan_add_msg(buf, ifindex, argv[3], (uint16_t)vid, ++g_seq);
+	} else {
+		nlh = link_del_msg(buf, ifindex, ++g_seq);
+	}
+	err = talk(nl, nlh, NULL, NULL, 0, what);
+	mnl_socket_close(nl);
+	return err ? 1 : 0;
+}
+
 /* The address wanted, and whether it is on the interface. */
 struct addr_want {
 	const char *dev;
@@ -567,5 +684,7 @@ int main(int argc, char **argv)
 		return filter(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "param"))
 		return param(argc - 2, argv + 2);
+	if (!strcmp(argv[1], "link"))
+		return link_cmd(argc - 2, argv + 2);
 	return usage();
 }

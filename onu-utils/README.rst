@@ -198,15 +198,18 @@ them finds it there, and names it by its whole path where procd starts it.
           T-CONT 0  Alloc-ID 1024
 
 ``onu-nl``
-   makes, through netlink, the requests of tc and devlink that the boot
-   script and the scripts here make, since the image carries neither:
-   iproute2 is in the RAM image only (ADR 0014)::
+   makes, through netlink, the requests of tc, ip (the links) and devlink that
+   the boot script and the scripts here make, since the image carries
+   neither: iproute2 is in the RAM image only (ADR 0014)::
 
       onu-nl clsact add|del DEV
       onu-nl filter add DEV [pref N] [vlan VID] [hw] trap|drop|redirect TO
       onu-nl filter del DEV pref N
       onu-nl filter prefs DEV
       onu-nl param NAME [VALUE]
+      onu-nl link set DEV [up|down] [mtu N] [address MAC]
+      onu-nl link add vlan DEV NAME VID
+      onu-nl link del DEV
       onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
 
    A filter is on the ingress of DEV: without ``vlan`` it takes every frame
@@ -219,7 +222,11 @@ them finds it there, and names it by its whole path where procd starts it.
    of the switch's devlink instance in the runtime mode, or sets it: a number
    in decimal (or hexadecimal after ``0x``), ``true`` or ``false``, or a
    string (``Documentation/networking/devlink/rtl9602c.rst`` in the kernel
-   lists them). ``addr-wait`` returns when DEV has the IPv4 address with that
+   lists them). ``link set`` takes DEV up or down and sets its MTU (68 to
+   65535) and its MAC address, whichever it is given, once each, in any order,
+   and leaves the rest as it is; ``link add vlan`` makes the interface NAME of
+   VLAN VID, 1 to 4094, on DEV, and is refused when NAME is taken; ``link
+   del`` removes DEV. ``addr-wait`` returns when DEV has the IPv4 address with that
    prefix length, at once if it has it, else when the kernel announces it, and
    fails after SECONDS (10): it listens and does not look in a loop. When the
    kernel refuses, its own message follows the error.
