@@ -360,7 +360,7 @@ The boot script
        of one service of procd, ``onu``, which ``onu-apply`` gives procd whole
        (``onu-svc sync``): procd starts what is new, ends what is gone and
        starts again only what changed. ``omcid`` keeps what the OLT set up in
-       ``/run/omcid.mib``, and one that procd starts again goes on from it,
+       ``/run/omcid/mib``, and one that procd starts again goes on from it,
        unseen by the OLT. netifd holds the PPPoE sessions;
     #. prints on the console the addresses of ssh, the panel's address and the
        SHA-256 fingerprint of its certificate, and last
