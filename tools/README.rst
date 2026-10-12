@@ -23,6 +23,8 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
 * ``flash-layout/`` -- the check that the flash's partitions and the kernel agree on
   the 4 KiB erase sector, without which the environment and the store would be
   read-only.
+* ``run-files/`` -- the check that the handbook page of ``/run`` names the files
+  the programs of the stick name there, and no others.
 * ``image-budget/`` -- the size check of the two flash images against their
   partitions.
 * ``lib-trim/`` -- the cut of the image's shared libraries to what its programs

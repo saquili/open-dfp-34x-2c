@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""run-files: the handbook page of /run names what the programs name.
+
+Usage: run-files [--page FILE] [--list]
+
+The programs of the stick tell each other things in files of /run, and
+docs/handbook/run-files.rst says which, who writes each and who reads it. This
+checks, without a board, that the page and the sources agree on the paths:
+
+* every path of /run that a script, a program or the boot script names is
+  named on the page, and
+* every path the page names is named by one of them.
+
+A path is compared by its name up to the first character a program fills in
+(``/run/onu-pppoe%d``, ``$RUN/onu-pppoe$n``, ``/run/onu-pppoeN`` are one), and
+a file below a directory the page names with a slash (``/run/onu-trial.d/``)
+is named by it.
+
+Exit status: 0 when they agree, 1 on a finding, which is named on the standard
+error, and 2 when a file cannot be read.
+"""
+
+import argparse
+import os
+import re
+import sys
+
+TOP = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+DEFAULT_PAGE = os.path.join(TOP, "docs", "handbook", "run-files.rst")
+
+# Where the programs of the stick are written. A tests directory is left out:
+# it names the stand-ins of /run it makes for itself.
+SOURCES = (
+    "onu-utils/scripts",
+    "onu-utils/src",
+    "omcid/src",
+    "omcid/target",
+    "omcid/include",
+    "omcid/tools",
+    "pond/src",
+    "pppoed/src",
+    "dhcp6d/src",
+    "br2-external/board",
+)
+SKIP_DIRS = {"tests", "build", ".git", "__pycache__"}
+TEXT_SUFFIXES = {"", ".c", ".h", ".sh"}
+
+# A path of /run as a program writes it: "/run/NAME" or "$RUN/NAME" or
+# "${RUN}/NAME", with a second component of a directory's file. Where the
+# program fills in a number or a name ("%d", "$n", "${f}") the match stops.
+PATH_RE = re.compile(r"(?:/run|\$RUN|\$\{RUN\})/([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)")
+
+# omcid names the files of its directory by a macro, OMCI_RUN_DIR "/mib".
+MACRO_RE = re.compile(r'\bOMCI_RUN_DIR\s*"/([A-Za-z0-9_.-]+)"')
+
+
+class Problem(Exception):
+    """Something that stops the check: a file that cannot be read."""
+
+
+def stem(name):
+    """The part of a path that is the same however a program fills it in.
+
+    A name is cut at its first capital letter, which stands for what a program
+    fills in (N, NAME, PART), and what follows a cut is dropped.
+    """
+    out = []
+    for part in name.split("/"):
+        cut = re.split(r"[A-Z]", part, maxsplit=1)[0]
+        if cut:
+            out.append(cut)
+        if cut != part:
+            break
+    return "/".join(out).rstrip(".-_")
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError as e:
+        raise Problem("%s: %s" % (path, e.strerror))
+
+
+def source_files(top):
+    for root in SOURCES:
+        for dirpath, dirnames, filenames in os.walk(os.path.join(top, root)):
+            dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+            for name in sorted(filenames):
+                path = os.path.join(dirpath, name)
+                if os.path.splitext(name)[1] in TEXT_SUFFIXES and os.path.isfile(path):
+                    yield path
+
+
+def names_in(text):
+    """{path: open} for the paths of /run that a text names.
+
+    A path is open when the program fills in the rest of its name ("$", "%" or
+    "{" follows), as in "/run/onu-pppoe%d".
+    """
+    found = {}
+    for m in PATH_RE.finditer(text):
+        name = m.group(1).rstrip("/")
+        fills = text[m.end():m.end() + 1] in ("$", "%", "{")
+        found[name] = found.get(name, False) or fills
+    for m in MACRO_RE.finditer(text):
+        found.setdefault("omcid/" + m.group(1), False)
+    return found
+
+
+def source_names(top):
+    """{stem: (files, open)} for every path of /run the sources name."""
+    names = {}
+    for path in source_files(top):
+        for name, fills in names_in(read(path)).items():
+            s = stem(name)
+            if not s:
+                continue
+            files, was = names.get(s, ([], False))
+            files.append(os.path.relpath(path, top))
+            names[s] = (files, was or fills)
+    return names
+
+
+def page_names(text):
+    """The stems of the paths the page names, and the directories it names."""
+    stems = set()
+    dirs = set()
+    for m in re.finditer(r"/run/([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*)(/?)", text):
+        name = m.group(1)
+        s = stem(name)
+        if s:
+            stems.add(s)
+        if m.group(2) == "/":
+            dirs.add(stem(name.split("/")[0]))
+            dirs.add(s)
+    return stems, dirs
+
+
+def plain(name):
+    """A name without the number a program counts with (onu-pppoe1)."""
+    return name.rstrip("0123456789")
+
+
+def named_on_page(s, fills, stems, dirs):
+    """Whether the page names the stem @s: itself, or by its directory."""
+    if "/" in s and s.split("/")[0] in dirs:
+        return True
+    return any(plain(s) == plain(p) or (fills and p.startswith(s)) for p in stems)
+
+
+def named_by_sources(p, sources, dirs):
+    """Whether a program names the stem @p of the page."""
+    if p in dirs and any(s.startswith(p + "/") for s in sources):
+        return True
+    return any(plain(p) == plain(s) or (fills and p.startswith(s))
+               for s, (_files, fills) in sources.items())
+
+
+def check(top, page):
+    text = read(page)
+    stems, dirs = page_names(text)
+    sources = source_names(top)
+    findings = []
+    here = os.path.relpath(page, top)
+    for s, (files, fills) in sorted(sources.items()):
+        if not named_on_page(s, fills, stems, dirs):
+            findings.append("%s: /run/%s is named by %s and not on the page" %
+                            (here, s, ", ".join(sorted(set(files))[:3])))
+    for p in sorted(stems):
+        if not named_by_sources(p, sources, dirs):
+            findings.append("%s: /run/%s is on the page and no program names it" % (here, p))
+    return findings
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="the handbook page of /run and the sources agree")
+    ap.add_argument("--page", default=DEFAULT_PAGE, help="the page (default: docs/handbook/run-files.rst)")
+    ap.add_argument("--top", default=TOP, help="the tree to scan (default: this one)")
+    ap.add_argument("--list", action="store_true", help="print the paths the sources name")
+    args = ap.parse_args(argv)
+    try:
+        if args.list:
+            for s, (files, fills) in sorted(source_names(args.top).items()):
+                print("/run/%s%s\t%s" % (s, "*" if fills else "", ", ".join(sorted(set(files))[:2])))
+            return 0
+        findings = check(args.top, args.page)
+    except Problem as e:
+        sys.stderr.write("run-files: %s\n" % e)
+        return 2
+    for f in findings:
+        sys.stderr.write("run-files: %s\n" % f)
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
