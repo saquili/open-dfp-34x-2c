@@ -12,6 +12,7 @@
  *   onu-nl filter del DEV pref N
  *   onu-nl filter prefs DEV
  *   onu-nl param NAME [VALUE]
+ *   onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
  *
  * "clsact add" leaves a clsact qdisc that is there already. A filter is on
  * the ingress of DEV; "vlan" takes the frames of a VLAN, "dst" the IPv4
@@ -21,8 +22,11 @@
  * "filter prefs" prints the priorities of the filters on the ingress of
  * DEV, one a line, the lowest first. "param" prints the value of a
  * parameter of the stick's devlink instance, the first the kernel lists,
- * or sets it (src/dlparam.h). When the kernel refuses, its own message
- * follows the error.
+ * or sets it (src/dlparam.h). "addr-wait" returns when DEV has the IPv4
+ * address with that prefix length, at once if it has it, else as the
+ * kernel says it got it, or fails after SECONDS (10 without): it listens
+ * for the kernel's message and does not look in a loop. When the kernel
+ * refuses, its own message follows the error.
  *
  * Exit status: 0 done, 1 refused or failed, 2 a wrong command line.
  */
@@ -30,15 +34,18 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <net/if.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <libmnl/libmnl.h>
 #include <linux/devlink.h>
 #include <linux/genetlink.h>
+#include <linux/rtnetlink.h>
 
 #include "dlparam.h"
 #include "genl.h"
@@ -185,7 +192,8 @@ static int usage(void)
 		"                         trap|drop|redirect TO\n"
 		"       onu-nl filter del DEV pref N\n"
 		"       onu-nl filter prefs DEV\n"
-		"       onu-nl param NAME [VALUE]\n");
+		"       onu-nl param NAME [VALUE]\n"
+		"       onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]\n");
 	return 2;
 }
 
@@ -423,10 +431,136 @@ out:
 	return err ? 1 : 0;
 }
 
+/* The address wanted, and whether it is on the interface. */
+struct addr_want {
+	const char *dev;
+	struct in_addr addr;
+	uint8_t plen;
+	bool found;
+};
+
+static int addr_attr(const struct nlattr *a, void *data)
+{
+	struct in_addr *got = data;
+
+	if (mnl_attr_get_type(a) == IFA_LOCAL &&
+	    mnl_attr_get_payload_len(a) == sizeof(*got))
+		memcpy(got, mnl_attr_get_payload(a), sizeof(*got));
+	return MNL_CB_OK;
+}
+
+/* An address that arrived, or one the dump lists: is it the one wanted. */
+static int addr_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct addr_want *w = data;
+	const struct ifaddrmsg *ifa = mnl_nlmsg_get_payload(nlh);
+	struct in_addr got = { 0 };
+
+	if (nlh->nlmsg_type != RTM_NEWADDR ||
+	    nlh->nlmsg_len < mnl_nlmsg_size(sizeof(*ifa)) ||
+	    ifa->ifa_family != AF_INET || ifa->ifa_prefixlen != w->plen ||
+	    ifa->ifa_index != if_nametoindex(w->dev))
+		return MNL_CB_OK;
+	mnl_attr_parse(nlh, sizeof(*ifa), addr_attr, &got);
+	if (got.s_addr == w->addr.s_addr)
+		w->found = true;
+	return MNL_CB_OK;
+}
+
+/* The IPv4 addresses the kernel lists now, into @w. */
+static int addr_dump(struct addr_want *w)
+{
+	char buf[MNL_SOCKET_BUFFER_SIZE];
+	struct mnl_socket *nl = open_bus(NETLINK_ROUTE);
+	struct nlmsghdr *nlh;
+	struct ifaddrmsg *ifa;
+	int err;
+
+	if (!nl)
+		return -ENOBUFS;
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_GETADDR;
+	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	nlh->nlmsg_seq = ++g_seq;
+	ifa = mnl_nlmsg_put_extra_header(nlh, sizeof(*ifa));
+	ifa->ifa_family = AF_INET;
+	err = talk(nl, nlh, addr_cb, w, 0, "addresses not listed");
+	mnl_socket_close(nl);
+	return err;
+}
+
+static long now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+static int addr_wait(int argc, char **argv)
+{
+	struct addr_want w = { .dev = argv[0] };
+	char text[INET_ADDRSTRLEN], buf[MNL_SOCKET_BUFFER_SIZE];
+	const char *slash = argc > 1 ? strchr(argv[1], '/') : NULL;
+	unsigned long plen, seconds = 10;
+	struct mnl_socket *nl;
+	long end;
+
+	if (argc < 2 || argc > 3 || !slash ||
+	    (size_t)(slash - argv[1]) >= sizeof(text) ||
+	    !decimal(slash + 1, 1, 32, &plen) ||
+	    (argc == 3 && !decimal(argv[2], 0, 3600, &seconds)))
+		return usage();
+	memcpy(text, argv[1], (size_t)(slash - argv[1]));
+	text[slash - argv[1]] = '\0';
+	if (inet_pton(AF_INET, text, &w.addr) != 1)
+		return usage();
+	w.plen = (uint8_t)plen;
+
+	/* Listen first, so that no address that comes during the dump is lost. */
+	nl = mnl_socket_open(NETLINK_ROUTE);
+	if (!nl || mnl_socket_bind(nl, RTMGRP_IPV4_IFADDR, MNL_SOCKET_AUTOPID) < 0) {
+		fprintf(stderr, "onu-nl: no netlink socket: %s\n", strerror(errno));
+		if (nl)
+			mnl_socket_close(nl);
+		return 1;
+	}
+	end = now_ms() + (long)seconds * 1000L;
+	for (bool dump = true;;) {
+		struct pollfd pfd = { .fd = mnl_socket_get_fd(nl), .events = POLLIN };
+		long left;
+		ssize_t n;
+
+		if (dump) {
+			dump = false;
+			if (addr_dump(&w) < 0 || w.found)
+				break;
+		}
+		left = end - now_ms();
+		if (left <= 0 || poll(&pfd, 1, (int)left) <= 0)
+			break;
+		n = mnl_socket_recvfrom(nl, buf, sizeof(buf));
+		if (n < 0) {
+			/* Messages lost: look at the addresses again. */
+			dump = errno == ENOBUFS || errno == EINTR;
+			if (!dump)
+				break;
+			continue;
+		}
+		mnl_cb_run(buf, (size_t)n, 0, 0, addr_cb, &w);
+		if (w.found)
+			break;
+	}
+	mnl_socket_close(nl);
+	return w.found ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 3)
 		return usage();
+	if (!strcmp(argv[1], "addr-wait"))
+		return addr_wait(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "clsact"))
 		return clsact(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "filter"))

@@ -200,6 +200,7 @@ them finds it there, and names it by its whole path where procd starts it.
       onu-nl filter del DEV pref N
       onu-nl filter prefs DEV
       onu-nl param NAME [VALUE]
+      onu-nl addr-wait DEV ADDRESS/LEN [SECONDS]
 
    A filter is on the ingress of DEV: without ``vlan`` it takes every frame
    (tc's matchall), with it the frames whose outer 802.1Q tag has that VID
@@ -211,7 +212,10 @@ them finds it there, and names it by its whole path where procd starts it.
    of the switch's devlink instance in the runtime mode, or sets it: a number
    in decimal (or hexadecimal after ``0x``), ``true`` or ``false``, or a
    string (``Documentation/networking/devlink/rtl9602c.rst`` in the kernel
-   lists them). When the kernel refuses, its own message follows the error.
+   lists them). ``addr-wait`` returns when DEV has the IPv4 address with that
+   prefix length, at once if it has it, else when the kernel announces it, and
+   fails after SECONDS (10): it listens and does not look in a loop. When the
+   kernel refuses, its own message follows the error.
    It exits 0 when done, 1 when refused, 2 for a wrong command line::
 
       # onu-nl filter prefs sfp
@@ -363,7 +367,8 @@ them finds it there, and names it by its whole path where procd starts it.
    whole. A change is written to a new file and renamed over the old, and
    netifd is told with SIGHUP, upon which the fork in ``netifd/`` reads its
    configuration again; the image has no ``ubus`` command. ``onu-net wait``
-   waits until an address netifd is to put on a device is there::
+   waits until an address netifd is to put on a device is there, as the
+   kernel announces it (``onu-nl addr-wait``)::
 
       onu-net set PART <TEXT
       onu-net del PART

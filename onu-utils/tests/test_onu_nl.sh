@@ -175,5 +175,44 @@ echo "a parameter that the kernel has not: no devlink instance, or not this para
 run param sfp_lane
 check '[ $rc -eq 1 ] && [ -z "$out" ] && echo "$err" | grep -q "^onu-nl: "'
 
+echo "addr-wait: an address that is there, one that comes, one that does not"
+ip -4 address add 192.0.2.1/30 dev $D0
+run addr-wait $D0 192.0.2.1/30 1
+check '[ $rc -eq 0 ] && [ -z "$err" ]'
+# The same address with another length is another address, and so is another interface's.
+run addr-wait $D0 192.0.2.1/29 0
+check '[ $rc -eq 1 ]'
+run addr-wait $D1 192.0.2.1/30 0
+check '[ $rc -eq 1 ]'
+run addr-wait nosuch0 192.0.2.1/30 0
+check '[ $rc -eq 1 ]'
+# One that comes while it waits ends the wait when it comes, not at its end.
+(sleep 0.5 && ip -4 address add 192.0.2.5/30 dev $D1) &
+start=$(date +%s%N)
+run addr-wait $D1 192.0.2.5/30 5
+end=$(date +%s%N)
+wait
+check '[ $rc -eq 0 ]'
+check '[ $(((end - start) / 1000000)) -ge 400 ] && [ $(((end - start) / 1000000)) -lt 2500 ]'
+# One that comes on an interface that is made while it waits.
+(sleep 0.5 && ip link add onunl2 type dummy && ip link set onunl2 up &&
+	ip -4 address add 192.0.2.9/30 dev onunl2) &
+run addr-wait onunl2 192.0.2.9/30 5
+wait
+ip link del onunl2 2>/dev/null
+check '[ $rc -eq 0 ]'
+# One that does not come fails at the end of the time.
+start=$(date +%s%N)
+run addr-wait $D0 192.0.2.13/30 1
+end=$(date +%s%N)
+check '[ $rc -eq 1 ] && [ $(((end - start) / 1000000)) -ge 900 ] && [ $(((end - start) / 1000000)) -lt 2500 ]'
+for line in "addr-wait" "addr-wait $D0" "addr-wait $D0 192.0.2.1" "addr-wait $D0 192.0.2.1/0" \
+	"addr-wait $D0 192.0.2.1/33" "addr-wait $D0 x/30" "addr-wait $D0 192.0.2.1/30 x" \
+	"addr-wait $D0 192.0.2.1/30 1 1" "addr-wait $D0 192.0.2.300/30"; do
+	# $line is split into words on purpose.
+	run $line
+	check '[ $rc -eq 2 ] && echo "$err" | grep -q "^usage: onu-nl "'
+done
+
 echo "test_onu_nl: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

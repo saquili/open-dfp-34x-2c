@@ -11,7 +11,8 @@
 #   onu-net del PART       the part PART goes, and netifd reads the whole again
 #   onu-net wait DEV ADDRESS [SECONDS]
 #                          wait until the IPv4 ADDRESS, with its prefix
-#                          length, is on DEV; fail after SECONDS (10)
+#                          length, is on DEV; fail after SECONDS (10); the
+#                          kernel says when it comes (onu-nl addr-wait)
 #
 # The parts are /run/network.d/PART, in netifd's own format, and the whole is
 # /run/config/network, the parts in the order of their names, which netifd
@@ -78,18 +79,6 @@ del_part() {
 	reload
 }
 
-# Tenths of a second, so that a change that netifd makes at once is not kept
-# waiting for a whole one.
-wait_address() {
-	tenths=$((${3:-10} * 10))
-	while :; do
-		ip -4 address show dev "$1" 2>/dev/null | grep -q -F "inet $2 " && return 0
-		[ "$tenths" -gt 0 ] || return 1
-		tenths=$((tenths - 1))
-		sleep 0.1
-	done
-}
-
 case ${1:-} in
 set) set_part "${2:-}" ;;
 del) del_part "${2:-}" ;;
@@ -102,7 +91,7 @@ wait)
 		echo "usage: onu-net wait DEV ADDRESS [SECONDS]" >&2
 		exit 2
 	fi
-	wait_address "$2" "$3" "$seconds"
+	onu-nl addr-wait "$2" "$3" "$seconds"
 	;;
 *)
 	echo "usage: onu-net set PART|del PART|wait DEV ADDRESS [SECONDS]" >&2

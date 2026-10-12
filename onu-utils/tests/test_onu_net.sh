@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# Tests of scripts/onu-net, with stand-ins for pidof, ip and logger. The
+# Tests of scripts/onu-net, with stand-ins for pidof, onu-nl and logger. The
 # stand-in netifd is a shell that notes each SIGHUP in $T/hups; pidof names
-# it while $T/netifd-runs is there. The stand-in ip shows the addresses in
-# $T/addr-DEV.
+# it while $T/netifd-runs is there. The stand-in onu-nl answers
+# "addr-wait DEV ADDRESS SECONDS" as the real one does, from the address in
+# $T/addr-DEV, which is in the file or not (the real one is tried in
+# test_onu_nl).
 
 set -u
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,8 +31,8 @@ setup() {
 	NETIFD=$!
 	printf '#!/bin/sh\n[ "$1" = netifd ] && [ -e "%s/netifd-runs" ] && echo %s\nexit 0\n' \
 		"$T" "$NETIFD" >"$T/bin/pidof"
-	printf '#!/bin/sh\n[ "$1 $2 $3" = "-4 address show" ] && cat "%s/addr-$5" 2>/dev/null\nexit 0\n' \
-		"$T" >"$T/bin/ip"
+	printf '#!/bin/sh\necho "onu-nl $*" >>"%s/calls"\n[ "$1" = addr-wait ] || exit 2\ngrep -q -F "$3" "%s/addr-$2" 2>/dev/null || exit 1\n' \
+		"$T" "$T" >"$T/bin/onu-nl"
 	printf '#!/bin/sh\nexit 0\n' >"$T/bin/logger"
 	chmod +x "$T/bin"/*
 	PATH=$T/bin:$PATH
@@ -91,23 +93,19 @@ teardown
 
 echo "waiting for an address"
 setup
-echo "    inet 198.51.100.2/30 scope global mgmt" >"$T/addr-mgmt"
+echo "198.51.100.2/30" >"$T/addr-mgmt"
 "$NET" wait mgmt 198.51.100.2/30 1
 rc=$?
-check '[ $rc -eq 0 ]'
+check '[ $rc -eq 0 ] && grep -qx "onu-nl addr-wait mgmt 198.51.100.2/30 1" "$T/calls"'
 "$NET" wait mgmt 198.51.100.2/31 0
-rc=$?
-check '[ $rc -eq 1 ]'
-"$NET" wait mgmt 198.51.100.20/30 0
 rc=$?
 check '[ $rc -eq 1 ]'
 "$NET" wait other 198.51.100.2/30 0
 rc=$?
 check '[ $rc -eq 1 ]'
-(sleep 0.5 && echo "    inet 192.0.2.6/30 scope global mgmt100" >"$T/addr-mgmt100") &
-"$NET" wait mgmt100 192.0.2.6/30 3
-rc=$?
-check '[ $rc -eq 0 ]'
+# The seconds default to ten, and the wait is the kernel's, not this script's.
+"$NET" wait mgmt 198.51.100.2/30
+check 'grep -qx "onu-nl addr-wait mgmt 198.51.100.2/30 10" "$T/calls"'
 for bad in "mgmt" "mgmt 198.51.100.2/30 x" "mgmt 198.51.100.2/30 -1"; do
 	# shellcheck disable=SC2086
 	"$NET" wait $bad 2>/dev/null
