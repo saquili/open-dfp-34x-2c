@@ -2,6 +2,7 @@
 
 config PON
 	tristate "Passive Optical Network (PON) ONU support"
+	select NET_SWITCHDEV
 	help
 	  The class for drivers of optical network units (ONUs), the
 	  subscriber end of a passive optical network such as G-PON. It gives
@@ -15,6 +16,9 @@ config PON
 	  - the "pon" generic netlink family, which reports the ONU's
 	    activation state, the identifiers the OLT assigned to it, its
 	    alarms and counters, and its T-CONTs.
+
+	  A GEM interface that joins a bridge is offloaded through switchdev,
+	  so the class selects it.
 
 	  The drivers of ONU MACs select this option, so it needs setting by
 	  hand only to build the class without one. If unsure, say N.
