@@ -91,7 +91,11 @@ its host link down run only with ``--destructive``, and after all the others.
 The router cases of the bench's router of before, which the stick no longer
 has, are gone with it. Without ``--olt-port`` and
 ``--subscriber-port`` the data-path cases are skipped; without
-``--token-file`` so is the case that reads values from the status daemon. A
+``--token-file`` so is the case that reads values from the status daemon. The
+token is the one root makes on the stick, once, with ``onu-config token new``;
+the store keeps it across restarts and updates of any image, a RAM boot
+included, and ``ssh root@STICK onu-config token >FILE`` brings it to the file
+(keep the file private). A
 case that resets the stick waits for the boot loader to count down, which can
 take minutes; ``--reload COMMAND`` names a command, run on the machine that
 runs the tests as soon as the stick is gone, that brings it back at once, such
