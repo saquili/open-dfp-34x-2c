@@ -3,10 +3,10 @@
 
 /*
  * dhcp6d on ubus (ADR 0014): the object dhcp6d.NAME, whose method "status"
- * gives the state last published (state.h), and the event "dhcp6d", with
- * the state, each time it changes. bus-ubus.c sends them, as blobmsg made
- * straight from the state; bus-none.c, for a build without libubus, which
- * the tests make, sends nothing.
+ * gives the state last published (state.h). bus-ubus.c serves it, as blobmsg
+ * made straight from the state; bus-none.c, for a build without libubus,
+ * which the tests make, serves nothing. A change is told to the program of -x
+ * (main.c), which is how the stick follows it; ubus carries no event of it.
  */
 
 #ifndef DHCP6D_BUS_H
@@ -23,7 +23,7 @@ void bus_handle(void);
 
 struct dhcp6d_state;
 
-/* The state @s from now on, and its event when it is a new one. */
+/* The state @s from now on, which "status" gives. */
 void bus_publish(const struct dhcp6d_state *s);
 
 void bus_close(void);

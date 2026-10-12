@@ -64,8 +64,8 @@ configuration store.
 
 ``-n NAME`` publishes the state on ubus (ADR 0014): the object
 ``dhcp6d.NAME``, whose method ``status`` gives the prefix delegated, the host
-it went on to, and whether that host is bound and the prefix routed to it,
-and the event ``dhcp6d`` with the same each time it changes. ``onu-apply``
+it went on to, and whether that host is bound and the prefix routed to it. It
+sends no event: a change is told to the program of ``-x``. ``onu-apply``
 names each session's dhcp6d ``sesN``. dhcp6d connects to ubusd again when
 ubusd comes later or starts again. ``build/dhcp6d-none``, which ``make
 check`` builds on a host without libubus, publishes nothing.

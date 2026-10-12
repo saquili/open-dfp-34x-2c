@@ -99,7 +99,6 @@ static void add_string(struct blob_buf *b, const char *name, const char *v)
 void bus_publish(const struct dhcp6d_state *s)
 {
 	struct blob_buf b = { 0 };
-	bool same;
 
 	blob_buf_init(&b, 0);
 	add_string(&b, "name", s->name);
@@ -109,13 +108,8 @@ void bus_publish(const struct dhcp6d_state *s)
 	add_string(&b, "host", s->host);
 	blobmsg_add_u8(&b, "bound", s->bound);
 	blobmsg_add_u8(&b, "routed", s->routed);
-	same = g_state && blob_attr_equal(g_state, b.head);
-	if (!same) {
-		free(g_state);
-		g_state = blob_memdup(b.head);
-	}
-	if (g_ctx && !same)
-		ubus_send_event(g_ctx, "dhcp6d", b.head);
+	free(g_state);
+	g_state = blob_memdup(b.head);
 	blob_buf_free(&b);
 }
 
