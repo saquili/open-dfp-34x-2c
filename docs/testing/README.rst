@@ -23,6 +23,12 @@ serial numbers, the status daemon's token, the bench's own addresses, and the
 names of the bench host and of the stick. ``tests/device/README.rst`` says how
 to make one.
 
+In the upstream burst (``data.upstream``) the sender offers about 2.4 Gb/s for
+some two seconds, above what the PON carries. The percentage of its line is
+the share of the frames that fit, and the Mb/s is the rate the PON carried,
+not a share of it; ``docs/handbook/system.rst``, "What the data path
+carries", has the figures and the grant behind them.
+
 The runs, the oldest first:
 
 ``2026-10-02-run01``

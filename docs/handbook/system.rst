@@ -92,6 +92,78 @@ With PPPoE accounts
     stick. ``omcid`` still bridges the rest of what the OLT provisions, such as
     television and telephone.
 
+What the data path carries
+==========================
+
+The switch carries the frames in hardware, so the speed of the stick is that
+of the PON and of its ports, not of its CPU, which saw 20 to 24 frames in each
+run below and was busy 6 % to 7 % of the time. The figures are of one lab (M:
+the bench's stick on a RAM image, ``c82dd9affe55``, at O5 on the lab OLT with
+two PPPoE sessions to the lab concentrator; a host behind the stick's host
+link; runs of 12 s of ``iperf3`` against servers on the concentrator's router;
+2026-10-12):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 38 48
+
+   * - Way
+     - Traffic
+     - Result
+   * - Up
+     - TCP, the IPv4 session, three runs
+     - 902, 908 and 909 Mb/s of TCP payload
+   * - Up
+     - TCP, the IPv6 session
+     - 881 Mb/s
+   * - Up
+     - TCP, both sessions at once, two runs
+     - 911 and 911 Mb/s together (427 and 484, 462 and 449)
+   * - Up
+     - UDP offered at 1500 Mb/s, two runs
+     - The PON carried 982 and 983 Mb/s of frames. The receiver counted
+       897 and 850 Mb/s of payload, 40 % and 43 % of the datagrams lost.
+   * - Down
+     - TCP, the IPv4 session, three runs
+     - 877, 878 and 882 Mb/s
+   * - Down
+     - TCP, both sessions at once, two runs
+     - 920 and 922 Mb/s together (457 and 463, 461 and 461)
+   * - Down
+     - UDP offered at 1200 Mb/s, two runs
+     - 932 and 937 Mb/s of payload received, 22 % lost
+
+Reading them:
+
+* **Upstream, the OLT's grant is the ceiling.** The bandwidth map gives the
+  stick's T-CONT 15,417 bytes in every frame of 125 us, which is 986.7 Mb/s,
+  the same with the line idle and under load (M: the ``bwmap`` view in
+  ``/sys/kernel/debug/rtl9602c/``). The PON's counter of bytes read 954 to
+  962 Mb/s in the TCP runs and 982 to 983 Mb/s in the UDP ones. A grant of
+  another OLT is another ceiling.
+* **TCP payload is the frame less its headers.** Of 961 Mb/s that the PON
+  counted, 909 Mb/s is payload, about 95 %. That is what the PPPoE session's
+  MTU of 1492 leaves: 1440 bytes of TCP payload, with its timestamps, in an
+  IP packet of 1492 bytes and the 22 bytes of Ethernet and PPPoE around it.
+* **Two sessions share the grant.** At once they add up to the same 911 Mb/s
+  that one gives, and "some 900 Mb/s each way" for two sessions is that sum.
+* **Not all that the PON carried arrives.** In the two UDP runs the stick sent
+  983,915 and 983,692 frames upstream and the server counted 935,341 and
+  886,436 datagrams, 5 % and 10 % fewer. Where they were lost after the PON
+  was not measured.
+* **The bench's burst is above the rate.** ``data.upstream`` (``tests/device``)
+  sends 400,000 frames of 1514 bytes in about 2 s from a port of 2.5 Gb/s.
+  What it records, "159683 arrived (39.91%) at 963 Mb/s", is the share of the
+  burst that fit in the grant and the rate the PON carried; it is not 40 % of
+  963 Mb/s. The records of ``data.upstream`` in ``docs/testing`` that give a
+  rate carry 962 or 963 Mb/s in twenty runs and 983 or 984 in two later ones,
+  each with some 40 % of the frames; in the one other, 433 Mb/s, the bench's
+  sender was the limit and every frame arrived (``docs/testing/README.rst``).
+  No run measured an upstream of 390 Mb/s. The case's text says what the two
+  figures are since 2026-10-12; the older records read the same.
+* **The RAM image is the kernel of the flash image**, with tools for diagnosis
+  in its root file system. These runs did not use the flash image.
+
 Who owns what
 =============
 

@@ -110,7 +110,8 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__).
    * - PPPoE on the stick, with the address and IPv6 prefix handed to the
        router
      - 🟡 Bench
-     - Two sessions at once, some 900 Mb/s each way
+     - Two sessions at once, 911 Mb/s up and 920 down together (TCP;
+       ``docs/handbook/system.rst``)
    * - Programs started again when they stop
      - 🟡 Bench
      - Each program killed during a session
