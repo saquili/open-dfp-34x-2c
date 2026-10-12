@@ -191,7 +191,7 @@ def downstream(ctx: Context):
         return failed(f"the bench: {ctx.settings.olt_port} sent {sent} of {COUNT} frames")
     ok = arrived >= sent * 0.999 and cpu < sent * 0.01
     return verdict(ok, f"{sent} frames of {FRAME} B left the bench, {arrived} arrived "
-                       f"({arrived / sent:.2%}) at {rate:.0f} Mb/s; CPU saw {cpu}{hw}")
+                       f"({arrived / sent:.2%}), carried at {rate:.0f} Mb/s; CPU saw {cpu}{hw}")
 
 
 @case("data.upstream", "Data path",
@@ -209,9 +209,11 @@ def upstream(ctx: Context):
     if arrived == 0:
         return failed(f"{sent} frames sent, none arrived; ONU O{state}")
     ok = cpu < sent * 0.01 and state == 5
+    # The burst is above the PON's rate, so the share that arrives is the PON's rate
+    # over the burst's, and the rate is the PON's.
     return verdict(ok, f"{sent} frames of {FRAME} B left the bench, {arrived} arrived "
-                       f"({arrived / sent:.2%}) at {rate:.0f} Mb/s; CPU saw {cpu}; "
-                       f"ONU O{state}{hw}")
+                       f"({arrived / sent:.2%} of a burst above the PON's rate), carried at "
+                       f"{rate:.0f} Mb/s; CPU saw {cpu}; ONU O{state}{hw}")
 
 
 def clsact(ctx: Context, devs: list[str]) -> list[str]:
