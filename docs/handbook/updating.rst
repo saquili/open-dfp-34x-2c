@@ -274,7 +274,7 @@ firmware is gone; the way back with it.
 
 Keep a copy of the whole flash before the first update (``backup.rst``). The
 copy holds the unit's registration identity and this system's secrets: keep it
-private. No procedure for writing a copy back is recorded yet.
+private. ``backup.rst``, "Writing it back", says how to write it back.
 
 A store of before step 9
 ========================

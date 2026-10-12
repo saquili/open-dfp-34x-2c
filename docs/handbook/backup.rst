@@ -81,8 +81,82 @@ digest with the copy.
 Writing it back
 ===============
 
-No procedure for writing a copy back is recorded yet, and no tool of this
-repository does it. The bench writes bank 0 from the loader and never bank 1
-(``flashing.rst``); ``onu-update`` writes only update files of this system.
-The copy still proves what the stick held, and is what a later procedure will
-write back.
+Write a copy back from a RAM boot, never from the flash: a system that runs
+from the flash cannot write the bank it runs from, and it keeps ``config``
+mounted. Start the stick from RAM with an image that carries ``flash_erase``,
+which the plain ``make ram-image`` does and ``RAM_DIAG=no`` does not
+(``building.rst``, "Putting the images on the board"; ``flashing.rst``, "Start
+a trial kernel from RAM"). No bank runs then, and the flash is idle.
+
+The loader is not part of this. ``boot`` is read-only in the device tree: an
+erase or a write of ``/dev/mtd0`` fails with "Permission denied" (M:
+``flash_erase /dev/mtd0 0 0`` on the board, 2026-10-12). Nothing in this
+repository writes the loader, and a damaged one is for a programmer on the chip
+(``flashing.rst``, "Rules that keep the board safe"). The copy holds it, and
+the steps below leave it alone.
+
+Put back only a copy of this very stick. A copy of another unit carries that
+unit's registration identity and MAC address, and writing it makes this stick
+a second one of it.
+
+The steps, from the host that holds ``flash.bin`` and reaches the stick as
+root. ``STICK`` is its management address:
+
+1. Let go of the store, which the boot mounted read-only::
+
+       ssh root@STICK 'umount /config'
+
+2. Write the partitions back one at a time, the banks first, then ``config``,
+   the loader's environment last, so that an interruption leaves the
+   environment naming a bank that was put back before it. Each ``put`` takes
+   the number of the ``mtd`` device, the first block of the partition in the
+   copy and its length, in 4 KiB blocks (the table above gives the lengths; a
+   partition starts where the one before ends)::
+
+       put() {
+           dd if=flash.bin bs=4096 skip=$2 count=$3 2>/dev/null |
+               ssh root@STICK "flash_erase /dev/mtd$1 0 0 >/dev/null &&
+                   dd of=/dev/mtd$1 bs=4096 2>/dev/null"
+       }
+       put 4 128 464     # k0
+       put 5 592 496     # r0
+       put 6 1088 464    # k1
+       put 7 1552 496    # r1
+       put 3 68 60       # config
+       put 1 64 2        # env
+       put 2 66 2        # env2
+
+   One partition alone is one ``put``: for the store, ``put 3 68 60``.
+
+3. Check the stick against the copy with the loop of "Taking the copy"::
+
+       ssh root@STICK 'n=0; for c in 64 2 2 60 464 496 464 496; do
+           dd if=/dev/mtd${n}ro bs=4096 count=$c 2>/dev/null; n=$((n + 1))
+       done' | cmp - flash.bin && echo 'the flash is the copy'
+
+4. Restart the stick: ``ssh root@STICK reboot``. The loader starts the bank
+   that the restored ``env`` and ``env2`` name.
+
+Do not stop a ``put`` once it has begun, and do not restart or power-cycle the
+stick while one runs. A partition that was cut short reads as erased or half
+written; run its ``put`` again, from the start. What a half-written ``env`` or
+``env2`` does to the loader has not been tried.
+
+What the writing was measured to do (M: the steps above on the board,
+2026-10-12, through an ssh jump host, from a copy taken minutes before):
+
+* The steps as written, after ``config``, ``k1`` and ``env`` had been erased
+  on purpose, took 92 s with the check, which said "the flash is the copy". A
+  ``put`` took 1 s or 2 s for ``env`` and ``env2``, 3 s or 4 s for ``config``
+  and 18 s or 19 s for a bank; the check read the whole flash in 11 s.
+* ``config`` and ``k1`` erased and the stick started from RAM with the erased
+  ``config``: it took the empty partition for a store of defaults (the root
+  password and the settings gone, and the shipped identity with them, since
+  the shipped firmware's files are in ``config``). The two ``put`` of the steps
+  put both back, and the next start read the store (``/run/onu-store`` said
+  ``loaded``), found the password set, read the identity from the shipped
+  firmware's files and reached O5 with its two sessions.
+
+The restart after the copy was written was into the RAM boot that the bench
+uses, not into the flash's own system; the test did not boot the restored
+banks.
