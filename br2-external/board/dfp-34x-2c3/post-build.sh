@@ -116,10 +116,10 @@ done
 
 # The programs that face a network run as accounts of their own, without a
 # password or a shell, which no one logs in with (ADR 0014): pond, the status
-# daemon, and the time daemon ntp, started by onu-drop with the one power it
-# needs. The image is made from a copy of this directory (post-image.sh), not
-# by the build system's own making of accounts, so they are written here,
-# once, with the uid and gid 200 and 201. /etc/shadow becomes
+# daemon, the time daemon ntp and the DHCPv6 daemon dhcp6d, started by onu-drop
+# with the powers each needs. The image is made from a copy of this directory
+# (post-image.sh), not by the build system's own making of accounts, so they
+# are written here, once, with the uid and gid 200, 201 and 202. /etc/shadow becomes
 # /etc/shadow.image, from which the boot writes every account but root's as
 # it is.
 account() {
@@ -131,6 +131,12 @@ account "$1/etc/shadow" pond "pond:*:::::::"
 account "$1/etc/passwd" ntp "ntp:x:201:201:The time daemon:/var/empty:/bin/false"
 account "$1/etc/group" ntp "ntp:x:201:"
 account "$1/etc/shadow" ntp "ntp:*:::::::"
+account "$1/etc/passwd" dhcp6d "dhcp6d:x:202:202:The DHCPv6 daemon:/var/empty:/bin/false"
+account "$1/etc/group" dhcp6d "dhcp6d:x:202:"
+account "$1/etc/shadow" dhcp6d "dhcp6d:*:::::::"
+# The group onu: the accounts of the programs that write into a session's
+# directory, which onu-apply makes the group's.
+account "$1/etc/group" onu "onu:x:210:dhcp6d"
 
 grep -v '^BUILD_ID=' "$release" > "$release.new" || true
 echo "BUILD_ID=$rev" >> "$release.new"

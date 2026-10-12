@@ -290,6 +290,12 @@ class ServersOnTheHostSide(unittest.TestCase):
         self.assertLess(text.index('onu-net wait sfp "$DATA_ADDRESS" 10'), start)
         self.assertLess(text.index('onu-net wait mgmt "$MGMT_ADDRESS" 10'), start)
 
+    def test_dhcp6d_has_a_directory_for_its_binding_before_the_store_is_read(self):
+        text = read(RCS)
+        self.assertIn("chown dhcp6d:dhcp6d /run/dhcp6d", text)
+        self.assertLess(text.index("chown dhcp6d:dhcp6d /run/dhcp6d"),
+                        text.index("\nonu-config load "))
+
     def test_netifd_alone_gives_the_addresses(self):
         # netifd takes away from a device it holds what it did not put
         # there (ADR 0014): onu-mgmt gives it both addresses, and the script

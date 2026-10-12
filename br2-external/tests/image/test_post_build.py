@@ -223,6 +223,13 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\nntp:x:201:201:The time daemon:/var/empty:/bin/false\n", passwd)
         self.assertIn("\nntp:x:201:\n", group)
         self.assertIn("\nntp:*:::::::\n", shadow)
+        self.assertEqual(passwd.count("\ndhcp6d:"), 1)
+        self.assertIn("\ndhcp6d:x:202:202:The DHCPv6 daemon:/var/empty:/bin/false\n", passwd)
+        self.assertIn("\ndhcp6d:x:202:\n", group)
+        self.assertIn("\ndhcp6d:*:::::::\n", shadow)
+        # The programs that write into a session's directory share a group.
+        self.assertEqual(group.count("\nonu:"), 1)
+        self.assertIn("\nonu:x:210:dhcp6d\n", group)
 
     def test_without_the_file_it_fails(self):
         os.remove(self.release)

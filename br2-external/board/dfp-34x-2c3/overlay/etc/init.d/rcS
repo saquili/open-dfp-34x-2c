@@ -64,6 +64,10 @@ onu-svc start klogd -- /sbin/klogd -n || warn "the kernel's messages do not reac
 # host key come from the store too, or are made now and kept there, the first
 # time, once the kernel's random number generator is seeded (onu-config tls,
 # onu-config ssh).
+# dhcp6d, an account of its own, keeps the host's binding in a directory of
+# its own, which load fills from the store.
+mkdir -p /run/dhcp6d && chown dhcp6d:dhcp6d /run/dhcp6d && chmod 755 /run/dhcp6d ||
+	warn "no directory for the binding of dhcp6d"
 umask 077
 onu-config load || warn "no identity in the configuration store or the factory configuration"
 onu-config tls || warn "no key for HTTPS: the panel answers over HTTP"
