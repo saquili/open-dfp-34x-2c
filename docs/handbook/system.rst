@@ -162,7 +162,9 @@ How the parts talk
    * - Files in ``/run``
      - The settings in force (``/run/onu.conf``), the accounts, the identity,
        the state of each session (``/run/session/N``) and of the trial, and
-       ``omcid``'s MIB. They are gone at the next start.
+       ``omcid``'s MIB. The programs of the stick read them; the panel does
+       not, but asks ``onu-apply state`` through ``onu-act``. They are gone at
+       the next start.
    * - HTTPS
      - A browser or a script and the panel's API.
 

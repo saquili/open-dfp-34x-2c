@@ -163,6 +163,17 @@ omcid's part of step 6 goes with step 8 (decided 2026-10-10): until pond
 leaves root, nothing reads omcid's state on ubus, and then pond needs what
 it reads of the MIB there too, under ubusd's access lists.
 
+Decided on 2026-10-12, in the clean-up of the debts: the events are not
+sent, and pond reads no file of ``/run``. omcid and dhcp6d run the program
+of ``-x``, ``onu-apply``, when what they publish changes, which is how the
+stick follows it; nothing listened to the events on ubus, and a second
+notice of one change is one more thing to keep in step. Their objects stay,
+with the method ``status``. What no program of the stick publishes, the
+state that ``onu-apply`` keeps in files (the mode, each session's facts, the
+address handed on, the changes on trial), is told by ``onu-apply state``,
+which onu-act runs for pond (``settings_state``), in lines ``name=value``
+that are the contract; the files under them may change.
+
 Step 9 was added on 2026-10-10. The ``config`` partition is the user's:
 the shipped firmware's data there is a matter of compatibility, and the
 user's settings have a limit set in advance, which never takes room from a
