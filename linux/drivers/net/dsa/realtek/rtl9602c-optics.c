@@ -906,9 +906,7 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 	u16 tx = 0, bias = 0;
 	int err;
 
-	mutex_lock(&p->gpon_lock);
-	asked = p->gpon_power_mode;
-	mutex_unlock(&p->gpon_lock);
+	asked = rtl9602c_pon_power_mode(p);
 	mode = asked;
 
 	rtl9602c_i2c_lock(p);
@@ -959,7 +957,7 @@ told:
 	if (!err)
 		pr_info("GN25L95: transmit power level mode %u: %u.%u uW, bias %u.%02u mA\n",
 			mode, tx / 10, tx % 10, bias / 500, bias % 500 / 5);
-	rtl9602c_gpon_power_applied(p, asked, mode, err);
+	rtl9602c_pon_power_applied(p, asked, mode, err);
 }
 
 /**

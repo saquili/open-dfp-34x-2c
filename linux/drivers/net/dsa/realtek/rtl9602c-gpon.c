@@ -66,7 +66,7 @@
 
 #include <linux/pon.h>
 
-#include "rtl9602c.h"
+#include "rtl9602c-pon.h"
 
 /**
  * rtl9602c_gpon_report() - log the GPON MAC's self-test result and revision
@@ -84,10 +84,10 @@
  * done, memory test failed and retention test failed. That is not verified: no
  * failure bit has been seen set.
  */
-void rtl9602c_gpon_report(struct rtl9602c_priv *p)
+void rtl9602c_gpon_report(struct rtl9602c_pon *p)
 {
-	u32 bist = rtl9602c_r(p, RTL9602C_GPON_MEM_SELFTEST);
-	u32 gtc = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
+	u32 bist = rtl9602c_pon_r(p, RTL9602C_GPON_MEM_SELFTEST);
+	u32 gtc = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT);
 
 	if (bist & (RTL9602C_GPON_MEM_SELFTEST_FAIL | RTL9602C_GPON_MEM_SELFTEST_RETAIN_FAIL))
 		pr_err("<GPON> MAC self test FAILED (0x%08x)\n", bist);
@@ -95,7 +95,7 @@ void rtl9602c_gpon_report(struct rtl9602c_priv *p)
 		pr_warn("<GPON> MAC self test did not complete (0x%08x)\n", bist);
 	else
 		pr_info("<GPON> MAC rev 0x%08x, self test passed%s\n",
-			rtl9602c_r(p, RTL9602C_GPON_REVISION),
+			rtl9602c_pon_r(p, RTL9602C_GPON_REVISION),
 			bist & RTL9602C_GPON_MEM_SELFTEST_RETAIN_DONE ?
 			", data retention included" : "");
 
@@ -114,26 +114,26 @@ void rtl9602c_gpon_report(struct rtl9602c_priv *p)
  * is verified to be needed; the downstream locks and the ONU reaches O5 with
  * all of them in place.
  */
-static void rtl9602c_pon_analog_init(struct rtl9602c_priv *p)
+static void rtl9602c_pon_analog_init(struct rtl9602c_pon *p)
 {
 	/*
 	 * Five tuning words written whole, the second of them the clock
 	 * multiplier; not verified.
 	 */
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_TUNE2, RTL9602C_SERDES_ANA_TUNE2_INIT);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_PLL_CFG, RTL9602C_SERDES_ANA_PLL_CFG_INIT);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_TUNE8, RTL9602C_SERDES_ANA_TUNE8_INIT);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_TUNE25, RTL9602C_SERDES_ANA_TUNE25_INIT);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_TUNE24, RTL9602C_SERDES_ANA_TUNE24_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_TUNE2, RTL9602C_SERDES_ANA_TUNE2_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_PLL_CFG, RTL9602C_SERDES_ANA_PLL_CFG_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_TUNE8, RTL9602C_SERDES_ANA_TUNE8_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_TUNE25, RTL9602C_SERDES_ANA_TUNE25_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_TUNE24, RTL9602C_SERDES_ANA_TUNE24_INIT);
 
 	/*
 	 * One clock-recovery loop filter setting for all three line-rate
 	 * profiles, taken to be integral gain 1 and proportional gains 4 and 2;
 	 * neither the value nor that reading of it is verified.
 	 */
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_CDR_LOOP_1G25, RTL9602C_SERDES_ANA_CDR_LOOP_INIT);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_CDR_LOOP_EPON, RTL9602C_SERDES_ANA_CDR_LOOP_INIT);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_CDR_LOOP_GPON, RTL9602C_SERDES_ANA_CDR_LOOP_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_CDR_LOOP_1G25, RTL9602C_SERDES_ANA_CDR_LOOP_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_CDR_LOOP_EPON, RTL9602C_SERDES_ANA_CDR_LOOP_INIT);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_CDR_LOOP_GPON, RTL9602C_SERDES_ANA_CDR_LOOP_INIT);
 
 	/*
 	 * Enable the analog front end of the clock recovery (not verified), and
@@ -141,8 +141,8 @@ static void rtl9602c_pon_analog_init(struct rtl9602c_priv *p)
 	 * maker configures it, the receiver detects the signal only with SD_POR
 	 * set (measured).
 	 */
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_RX_CFG,
-		     RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE | RTL9602C_SERDES_ANA_RX_CFG_SD_POR,
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_RX_CFG,
+			 RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE | RTL9602C_SERDES_ANA_RX_CFG_SD_POR,
 		     RTL9602C_SERDES_ANA_RX_CFG_CDR_AFE | RTL9602C_SERDES_ANA_RX_CFG_SD_POR);
 
 	/*
@@ -150,15 +150,15 @@ static void rtl9602c_pon_analog_init(struct rtl9602c_priv *p)
 	 * 1.24416 Gbit/s up, rather than let it follow the digital side; not
 	 * verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_FORCE_RATE,
-		     RTL9602C_SERDES_ANA_FORCE_RATE_VAL | RTL9602C_SERDES_ANA_FORCE_RATE_EN,
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_FORCE_RATE,
+			 RTL9602C_SERDES_ANA_FORCE_RATE_VAL | RTL9602C_SERDES_ANA_FORCE_RATE_EN,
 		     FIELD_PREP(RTL9602C_SERDES_ANA_FORCE_RATE_VAL,
 				RTL9602C_SERDES_ANA_FORCE_RATE_VAL_GPON) |
 		     RTL9602C_SERDES_ANA_FORCE_RATE_EN);
 
 	/* The burst-enable output to the optics at TTL level; not verified. */
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_BURST_OUT,
-		     RTL9602C_SERDES_ANA_BURST_OUT_TTL, RTL9602C_SERDES_ANA_BURST_OUT_TTL);
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_BURST_OUT,
+			 RTL9602C_SERDES_ANA_BURST_OUT_TTL, RTL9602C_SERDES_ANA_BURST_OUT_TTL);
 
 	/*
 	 * Upstream transmit amplitude 5, where it resets to 7; the receiver
@@ -167,13 +167,13 @@ static void rtl9602c_pon_analog_init(struct rtl9602c_priv *p)
 	 * bit holds the clock recovery in reset is not known. None of it is
 	 * verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_TX_CFG, RTL9602C_SERDES_ANA_TX_CFG_AMP,
-		     FIELD_PREP(RTL9602C_SERDES_ANA_TX_CFG_AMP,
-				RTL9602C_SERDES_ANA_TX_CFG_AMP_GPON));
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_RX_FILTER,
-		     RTL9602C_SERDES_ANA_RX_FILTER_CFG, 0);
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_CDR_CTRL,
-		     RTL9602C_SERDES_ANA_CDR_CTRL_RESET |
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_TX_CFG, RTL9602C_SERDES_ANA_TX_CFG_AMP,
+			 FIELD_PREP(RTL9602C_SERDES_ANA_TX_CFG_AMP,
+				    RTL9602C_SERDES_ANA_TX_CFG_AMP_GPON));
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_RX_FILTER,
+			 RTL9602C_SERDES_ANA_RX_FILTER_CFG, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_CDR_CTRL,
+			 RTL9602C_SERDES_ANA_CDR_CTRL_RESET |
 		     RTL9602C_SERDES_ANA_CDR_CTRL_LPF_EN,
 		     RTL9602C_SERDES_ANA_CDR_CTRL_RESET |
 		     RTL9602C_SERDES_ANA_CDR_CTRL_LPF_EN);
@@ -182,36 +182,37 @@ static void rtl9602c_pon_analog_init(struct rtl9602c_priv *p)
 	 * Override the receiver enable with the receiver off, then on, then
 	 * wait 50 ms; not verified.
 	 */
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_FORCE_RX, RTL9602C_SERDES_ANA_FORCE_RX_OFF);
-	rtl9602c_w(p, RTL9602C_SERDES_ANA_FORCE_RX, RTL9602C_SERDES_ANA_FORCE_RX_ON);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_FORCE_RX, RTL9602C_SERDES_ANA_FORCE_RX_OFF);
+	rtl9602c_pon_w(p, RTL9602C_SERDES_ANA_FORCE_RX, RTL9602C_SERDES_ANA_FORCE_RX_ON);
 	msleep(50);
 
 	/* Last, the burst-enable path out of power-down; not verified. */
-	rtl9602c_rmw(p, RTL9602C_SERDES_PON_PDOWN,
-		     RTL9602C_SERDES_PON_PDOWN_BURST, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_PDOWN,
+			 RTL9602C_SERDES_PON_PDOWN_BURST, 0);
 }
 
 /*
  * Switch the PON SerDes to GPON mode, without which the MAC reset does not
  * complete (measured on this board).
  */
-static void rtl9602c_pon_serdes_gpon(struct rtl9602c_priv *p)
+static void rtl9602c_pon_serdes_gpon(struct rtl9602c_pon *p)
 {
 	/*
 	 * Park the SerDes and clear its reset register, so that it is stopped
 	 * while it is set up; not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_SERDES_PON_CTRL, RTL9602C_SERDES_PON_CTRL_MODE,
-		     FIELD_PREP(RTL9602C_SERDES_PON_CTRL_MODE, RTL9602C_SERDES_PON_CTRL_MODE_OFF));
-	rtl9602c_w(p, RTL9602C_SERDES_PON_RESET, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_CTRL, RTL9602C_SERDES_PON_CTRL_MODE,
+			 FIELD_PREP(RTL9602C_SERDES_PON_CTRL_MODE,
+				    RTL9602C_SERDES_PON_CTRL_MODE_OFF));
+	rtl9602c_pon_w(p, RTL9602C_SERDES_PON_RESET, 0);
 
 	/*
 	 * Reset the PON SerDes and give it 10 ms; the bit is never cleared.
 	 * That this is needed is not verified, nor whether it resets the GPON
 	 * MAC as well.
 	 */
-	rtl9602c_rmw(p, RTL9602C_CHIP_RESET, RTL9602C_CHIP_RESET_PON_SERDES,
-		     RTL9602C_CHIP_RESET_PON_SERDES);
+	rtl9602c_pon_rmw(p, RTL9602C_CHIP_RESET, RTL9602C_CHIP_RESET_PON_SERDES,
+			 RTL9602C_CHIP_RESET_PON_SERDES);
 
 	usleep_range(10000, 11000);
 
@@ -220,27 +221,28 @@ static void rtl9602c_pon_serdes_gpon(struct rtl9602c_priv *p)
 	 * with no delay against the data, and select data source 0 for the
 	 * transmitter; not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_SERDES_PON_OPTIC_CTRL, RTL9602C_SERDES_PON_OPTIC_CTRL_BURST_OE,
-		     RTL9602C_SERDES_PON_OPTIC_CTRL_BURST_OE);
-	rtl9602c_rmw(p, RTL9602C_SERDES_PON_TX_CFG,
-		     RTL9602C_SERDES_PON_TX_CFG_BURST_DLY |
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_OPTIC_CTRL, RTL9602C_SERDES_PON_OPTIC_CTRL_BURST_OE,
+			 RTL9602C_SERDES_PON_OPTIC_CTRL_BURST_OE);
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_TX_CFG,
+			 RTL9602C_SERDES_PON_TX_CFG_BURST_DLY |
 		     RTL9602C_SERDES_PON_TX_CFG_D2A_SEL, 0);
 
 	/* GPON mode, which the MAC reset waits for. */
-	rtl9602c_rmw(p, RTL9602C_SERDES_PON_CTRL, RTL9602C_SERDES_PON_CTRL_MODE,
-		     FIELD_PREP(RTL9602C_SERDES_PON_CTRL_MODE, RTL9602C_SERDES_PON_CTRL_MODE_GPON));
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_CTRL, RTL9602C_SERDES_PON_CTRL_MODE,
+			 FIELD_PREP(RTL9602C_SERDES_PON_CTRL_MODE,
+				    RTL9602C_SERDES_PON_CTRL_MODE_GPON));
 
 	/*
 	 * Override the SerDes's bit-error indication (not verified), and force
 	 * no burst enable: forced, it does not make the module emit (measured
 	 * on this board), and what it does force is not known.
 	 */
-	rtl9602c_rmw(p, RTL9602C_SERDES_ANA_FORCE_BER,
-		     RTL9602C_SERDES_ANA_FORCE_BER_VAL |
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_ANA_FORCE_BER,
+			 RTL9602C_SERDES_ANA_FORCE_BER_VAL |
 		     RTL9602C_SERDES_ANA_FORCE_BER_EN,
 		     RTL9602C_SERDES_ANA_FORCE_BER_VAL |
 		     RTL9602C_SERDES_ANA_FORCE_BER_EN);
-	rtl9602c_rmw(p, RTL9602C_SERDES_PON_BURST_FORCE, RTL9602C_SERDES_PON_BURST_FORCE_EN, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_SERDES_PON_BURST_FORCE, RTL9602C_SERDES_PON_BURST_FORCE_EN, 0);
 }
 
 /*
@@ -248,20 +250,20 @@ static void rtl9602c_pon_serdes_gpon(struct rtl9602c_priv *p)
  * with the SerDes in GPON mode. From then on the GTC registers answer, and the
  * MAC holds O1 and no ONU-ID.
  */
-static int rtl9602c_gpon_reset(struct rtl9602c_priv *p)
+static int rtl9602c_gpon_reset(struct rtl9602c_pon *p)
 {
 	u32 v;
 	int err;
 
-	rtl9602c_rmw(p, RTL9602C_GPON_RESET_CTRL, RTL9602C_GPON_RESET_CTRL_TRIGGER,
-		     RTL9602C_GPON_RESET_CTRL_TRIGGER);
-	rtl9602c_rmw(p, RTL9602C_GPON_RESET_CTRL, RTL9602C_GPON_RESET_CTRL_TRIGGER, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_GPON_RESET_CTRL, RTL9602C_GPON_RESET_CTRL_TRIGGER,
+			 RTL9602C_GPON_RESET_CTRL_TRIGGER);
+	rtl9602c_pon_rmw(p, RTL9602C_GPON_RESET_CTRL, RTL9602C_GPON_RESET_CTRL_TRIGGER, 0);
 
-	err = read_poll_timeout(rtl9602c_r, v, v & RTL9602C_GPON_RESET_CTRL_DONE,
+	err = read_poll_timeout(rtl9602c_pon_r, v, v & RTL9602C_GPON_RESET_CTRL_DONE,
 				100, 20000, false, p, RTL9602C_GPON_RESET_CTRL);
 	if (err)
 		pr_err("<GPON> MAC did not leave reset (reset control %08x)\n",
-		       rtl9602c_r(p, RTL9602C_GPON_RESET_CTRL));
+		       rtl9602c_pon_r(p, RTL9602C_GPON_RESET_CTRL));
 	return err;
 }
 
@@ -271,7 +273,7 @@ static int rtl9602c_gpon_reset(struct rtl9602c_priv *p)
  * before it counts as a repeat of that one and moves its time on, so an
  * unbroken run of one message takes one entry.
  */
-static void rtl9602c_ploam_log(struct rtl9602c_priv *p, u8 kind, const u8 *msg,
+static void rtl9602c_ploam_log(struct rtl9602c_pon *p, u8 kind, const u8 *msg,
 			       u32 aux)
 {
 	struct rtl9602c_ploam_ev *ev;
@@ -310,9 +312,9 @@ out:
  * they have changed. A queue's flag clears when it takes a message and sets
  * again once the message has been sent (measured on this board).
  */
-static void rtl9602c_ploam_log_usq(struct rtl9602c_priv *p)
+static void rtl9602c_ploam_log_usq(struct rtl9602c_pon *p)
 {
-	u32 ind = rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL);
+	u32 ind = rtl9602c_pon_r(p, RTL9602C_PLOAM_TX_CTRL);
 	u32 bits = ind & (RTL9602C_PLOAM_TX_CTRL_NORMAL_EMPTY |
 			  RTL9602C_PLOAM_TX_CTRL_URGENT_EMPTY);
 
@@ -327,22 +329,22 @@ static void rtl9602c_ploam_log_usq(struct rtl9602c_priv *p)
  * octets to a data word with the earlier in the high byte, then pop it. The MAC
  * checks the CRC itself. Returns false when the queue is empty.
  */
-static bool rtl9602c_ploam_pop(struct rtl9602c_priv *p, u8 *msg)
+static bool rtl9602c_ploam_pop(struct rtl9602c_pon *p, u8 *msg)
 {
 	int i;
 
-	if (rtl9602c_r(p, RTL9602C_PLOAM_RX_CTRL) &
+	if (rtl9602c_pon_r(p, RTL9602C_PLOAM_RX_CTRL) &
 	    RTL9602C_PLOAM_RX_CTRL_EMPTY)
 		return false;
 
 	for (i = 0; i < RTL9602C_GPON_PLOAM_WORDS; i++) {
-		u32 w = rtl9602c_r(p, RTL9602C_PLOAM_RX_DATA(i));
+		u32 w = rtl9602c_pon_r(p, RTL9602C_PLOAM_RX_DATA(i));
 
 		msg[i * 2]     = FIELD_GET(RTL9602C_PLOAM_RX_DATA_WORD, w) >> 8;
 		msg[i * 2 + 1] = FIELD_GET(RTL9602C_PLOAM_RX_DATA_WORD, w);
 	}
-	rtl9602c_rmw(p, RTL9602C_PLOAM_RX_CTRL,
-		     RTL9602C_PLOAM_RX_CTRL_POP, RTL9602C_PLOAM_RX_CTRL_POP);
+	rtl9602c_pon_rmw(p, RTL9602C_PLOAM_RX_CTRL,
+			 RTL9602C_PLOAM_RX_CTRL_POP, RTL9602C_PLOAM_RX_CTRL_POP);
 	return true;
 }
 
@@ -353,17 +355,17 @@ static bool rtl9602c_ploam_pop(struct rtl9602c_priv *p, u8 *msg)
  * land where the OLT listens, in ranging and in O5. @delay is kept, so that a
  * Ranging_Time in O5 is applied only when it changes the delay.
  */
-static void rtl9602c_gpon_set_eqd(struct rtl9602c_priv *p, u32 delay)
+static void rtl9602c_gpon_set_eqd(struct rtl9602c_pon *p, u32 delay)
 {
 	u32 min_delay = FIELD_GET(RTL9602C_GTC_US_RESP_DELAY_COARSE,
-				   rtl9602c_r(p, RTL9602C_GTC_US_RESP_DELAY));
+				   rtl9602c_pon_r(p, RTL9602C_GTC_US_RESP_DELAY));
 	u32 eqd1 = delay + min_delay * RTL9602C_GTC_US_RESP_DELAY_COARSE_BITS;
 	u32 multi = eqd1 / RTL9602C_GPON_EQD_FRAME_BITS;
 	u32 intra = eqd1 % RTL9602C_GPON_EQD_FRAME_BITS;
 
 	p->gpon_eqd_delay = delay;
-	rtl9602c_w(p, RTL9602C_RANGING_EQD,
-		   FIELD_PREP(RTL9602C_RANGING_EQD_FRAMES, multi) |
+	rtl9602c_pon_w(p, RTL9602C_RANGING_EQD,
+		       FIELD_PREP(RTL9602C_RANGING_EQD_FRAMES, multi) |
 		   FIELD_PREP(RTL9602C_RANGING_EQD_BITS, intra));
 	pr_info("<GPON> EQD: %u + %u * 128 = %u -> mf %u, in-frame %u\n",
 		delay, min_delay, eqd1, multi, intra);
@@ -375,7 +377,7 @@ static void rtl9602c_gpon_set_eqd(struct rtl9602c_priv *p, u32 delay)
  * the type 3 preamble, the three delimiter octets and the type 1 and type 2
  * preamble bits.
  */
-static unsigned int rtl9602c_gpon_boh_bytes(struct rtl9602c_priv *p, u8 type3)
+static unsigned int rtl9602c_gpon_boh_bytes(struct rtl9602c_pon *p, u8 type3)
 {
 	const u8 *ovh = p->gpon_overhead;
 
@@ -396,7 +398,7 @@ static unsigned int rtl9602c_gpon_boh_bytes(struct rtl9602c_priv *p, u8 type3)
  * The ONU reaches O5 with the lengths this gives. That the guard belongs in the
  * length, and only up to 32 bits, is not verified.
  */
-static u8 rtl9602c_gpon_boh_len(struct rtl9602c_priv *p, u8 type3)
+static u8 rtl9602c_gpon_boh_len(struct rtl9602c_pon *p, u8 type3)
 {
 	if (!type3)
 		return RTL9602C_BURST_CFG_LEN_DEF;
@@ -409,11 +411,11 @@ static u8 rtl9602c_gpon_boh_len(struct rtl9602c_priv *p, u8 type3)
  * pattern byte before the delimiter; that it names the byte the MAC repeats to
  * make up the length is inferred from its value, not verified.
  */
-static void rtl9602c_gpon_set_boh(struct rtl9602c_priv *p, u8 len)
+static void rtl9602c_gpon_set_boh(struct rtl9602c_pon *p, u8 len)
 {
-	rtl9602c_w(p, RTL9602C_BURST_CFG,
-		   FIELD_PREP(RTL9602C_BURST_CFG_REPEAT_IDX,
-			      RTL9602C_BURST_CFG_REPEAT_IDX_DEF) |
+	rtl9602c_pon_w(p, RTL9602C_BURST_CFG,
+		       FIELD_PREP(RTL9602C_BURST_CFG_REPEAT_IDX,
+				  RTL9602C_BURST_CFG_REPEAT_IDX_DEF) |
 		   FIELD_PREP(RTL9602C_BURST_CFG_LEN, len));
 }
 
@@ -438,7 +440,7 @@ static void rtl9602c_gpon_set_boh(struct rtl9602c_priv *p, u8 len)
  * it applies, and at 0 otherwise. The message is kept for
  * rtl9602c_gpon_boh_len().
  */
-static void rtl9602c_gpon_set_overhead(struct rtl9602c_priv *p, const u8 *msg)
+static void rtl9602c_gpon_set_overhead(struct rtl9602c_pon *p, const u8 *msg)
 {
 	const unsigned int pre = RTL9602C_GPON_BOH_BYTES - RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN;
 	u8 boh[RTL9602C_GPON_BOH_BYTES];
@@ -463,15 +465,15 @@ static void rtl9602c_gpon_set_overhead(struct rtl9602c_priv *p, const u8 *msg)
 		boh[pre + i] = msg[RTL9602C_PLOAM_OVERHEAD_DELIMITER + i];
 
 	for (i = 0; i < pre + RTL9602C_PLOAM_OVERHEAD_DELIMITER_LEN; i++)
-		rtl9602c_w(p, RTL9602C_BURST_DATA(i),
-			   FIELD_PREP(RTL9602C_BURST_DATA_BYTE, boh[i]));
+		rtl9602c_pon_w(p, RTL9602C_BURST_DATA(i),
+			       FIELD_PREP(RTL9602C_BURST_DATA_BYTE, boh[i]));
 
-	rtl9602c_w(p, RTL9602C_BURST_CFG,
-		   RTL9602C_BURST_CFG_PRERANGED);
+	rtl9602c_pon_w(p, RTL9602C_BURST_CFG,
+		       RTL9602C_BURST_CFG_PRERANGED);
 
-	rtl9602c_rmw(p, RTL9602C_GTC_DS_CTRL, RTL9602C_GTC_DS_CTRL_EXTRA_SN,
-		     FIELD_PREP(RTL9602C_GTC_DS_CTRL_EXTRA_SN,
-				(msg[RTL9602C_PLOAM_OVERHEAD_FLAGS] >>
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_CTRL, RTL9602C_GTC_DS_CTRL_EXTRA_SN,
+			 FIELD_PREP(RTL9602C_GTC_DS_CTRL_EXTRA_SN,
+				    (msg[RTL9602C_PLOAM_OVERHEAD_FLAGS] >>
 				 RTL9602C_PLOAM_OVERHEAD_EXTRA_SN_SHIFT) &
 				RTL9602C_PLOAM_OVERHEAD_EXTRA_SN_MASK));
 
@@ -510,7 +512,7 @@ static void rtl9602c_gpon_set_overhead(struct rtl9602c_priv *p, const u8 *msg)
  * refuses the message with -EBUSY. Every write and every refusal is recorded in
  * the ploamlog ring with the slot and the queue flags.
  */
-static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
+static int rtl9602c_ploam_enqueue(struct rtl9602c_pon *p, const u8 *msg,
 				  unsigned int type)
 {
 	u8 shown[RTL9602C_GPON_PLOAM_WORDS * 2];
@@ -524,7 +526,7 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 			   RTL9602C_PLOAM_TX_CTRL_URGENT_FULL :
 			   RTL9602C_PLOAM_TX_CTRL_NORMAL_FULL;
 
-		u32 ind = rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL);
+		u32 ind = rtl9602c_pon_r(p, RTL9602C_PLOAM_TX_CTRL);
 
 		if (ind & full) {
 			mutex_unlock(&p->ploam_lock);
@@ -537,16 +539,16 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 		}
 	}
 
-	rtl9602c_rmw(p, RTL9602C_PLOAM_TX_CTRL,
-		     RTL9602C_PLOAM_TX_CTRL_SLOT | RTL9602C_PLOAM_TX_CTRL_PUSH,
+	rtl9602c_pon_rmw(p, RTL9602C_PLOAM_TX_CTRL,
+			 RTL9602C_PLOAM_TX_CTRL_SLOT | RTL9602C_PLOAM_TX_CTRL_PUSH,
 		     FIELD_PREP(RTL9602C_PLOAM_TX_CTRL_SLOT, type));
 
 	for (i = 0; i < RTL9602C_GPON_PLOAM_PAYLOAD_WORDS; i++)
-		rtl9602c_w(p, RTL9602C_PLOAM_TX_DATA(i),
-			   (msg[i * 2] << 8) | msg[i * 2 + 1]);
+		rtl9602c_pon_w(p, RTL9602C_PLOAM_TX_DATA(i),
+			       (msg[i * 2] << 8) | msg[i * 2 + 1]);
 
-	rtl9602c_rmw(p, RTL9602C_PLOAM_TX_CTRL,
-		     RTL9602C_PLOAM_TX_CTRL_PUSH, RTL9602C_PLOAM_TX_CTRL_PUSH);
+	rtl9602c_pon_rmw(p, RTL9602C_PLOAM_TX_CTRL,
+			 RTL9602C_PLOAM_TX_CTRL_PUSH, RTL9602C_PLOAM_TX_CTRL_PUSH);
 
 	/*
 	 * The ring is readable in debugfs: a password, or a fragment of a
@@ -560,7 +562,7 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
 		       RTL9602C_GPON_AES_FRAG_BYTES);
 	rtl9602c_ploam_log(p, RTL9602C_EV_US, shown,
 			   (type << 24) |
-			   (rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL) & 0xffffff));
+			   (rtl9602c_pon_r(p, RTL9602C_PLOAM_TX_CTRL) & 0xffffff));
 	mutex_unlock(&p->ploam_lock);
 	return 0;
 }
@@ -574,7 +576,7 @@ static int rtl9602c_ploam_enqueue(struct rtl9602c_priv *p, const u8 *msg,
  * message is an assumption, not verified. Nothing is armed until a serial
  * number is set.
  */
-static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_arm_sn(struct rtl9602c_pon *p)
 {
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 
@@ -604,7 +606,7 @@ static void rtl9602c_gpon_arm_sn(struct rtl9602c_priv *p)
 static int rtl9602c_gpon_reboot(struct notifier_block *nb, unsigned long action,
 				void *data)
 {
-	struct rtl9602c_priv *p = container_of(nb, struct rtl9602c_priv,
+	struct rtl9602c_pon *p = container_of(nb, struct rtl9602c_pon,
 					       gpon_reboot_nb);
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 	unsigned int sent = 0;
@@ -617,7 +619,7 @@ static int rtl9602c_gpon_reboot(struct notifier_block *nb, unsigned long action,
 		msg[1] = RTL9602C_PLOAM_US_DYING_GASP;
 		while (sent < RTL9602C_GPON_DG_COPIES &&
 		       !rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_URGENT) &&
-		       !read_poll_timeout(rtl9602c_r, ctrl,
+		       !read_poll_timeout(rtl9602c_pon_r, ctrl,
 					  ctrl & RTL9602C_PLOAM_TX_CTRL_URGENT_EMPTY,
 					  USEC_PER_MSEC, RTL9602C_GPON_DG_WAIT_MS * USEC_PER_MSEC,
 					  false, p, RTL9602C_PLOAM_TX_CTRL))
@@ -635,7 +637,7 @@ static int rtl9602c_gpon_reboot(struct notifier_block *nb, unsigned long action,
  *
  * Return: 0, or the error of registering the notifier.
  */
-int rtl9602c_gpon_reboot_register(struct rtl9602c_priv *p)
+int rtl9602c_gpon_reboot_register(struct rtl9602c_pon *p)
 {
 	p->gpon_reboot_nb.notifier_call = rtl9602c_gpon_reboot;
 	return devm_register_reboot_notifier(p->dev, &p->gpon_reboot_nb);
@@ -654,7 +656,7 @@ int rtl9602c_gpon_reboot_register(struct rtl9602c_priv *p)
  *
  * Context: process context; takes gpon_lock.
  */
-void rtl9602c_gpon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
+void rtl9602c_gpon_power_applied(struct rtl9602c_pon *p, u8 asked, u8 mode,
 				 int err)
 {
 	mutex_lock(&p->gpon_lock);
@@ -674,12 +676,12 @@ void rtl9602c_gpon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
  * transmit mode, the burst power save and the response delay are written under
  * it too, since a key that is not needed costs nothing.
  */
-static void rtl9602c_gpon_us_locked_rmw(struct rtl9602c_priv *p, u32 off,
+static void rtl9602c_gpon_us_locked_rmw(struct rtl9602c_pon *p, u32 off,
 					u32 clr, u32 set)
 {
-	rtl9602c_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_UNLOCK);
-	rtl9602c_rmw(p, off, clr, set);
-	rtl9602c_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_LOCK);
+	rtl9602c_pon_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_UNLOCK);
+	rtl9602c_pon_rmw(p, off, clr, set);
+	rtl9602c_pon_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_LOCK);
 }
 
 /*
@@ -689,7 +691,7 @@ static void rtl9602c_gpon_us_locked_rmw(struct rtl9602c_priv *p, u32 off,
  * bytes after a correct header (measured on this board). What makes the MAC
  * send the Dying_Gasp template is not known; nothing in the driver does.
  */
-static void rtl9602c_gpon_arm_idle_slots(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_arm_idle_slots(struct rtl9602c_pon *p)
 {
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 
@@ -701,10 +703,10 @@ static void rtl9602c_gpon_arm_idle_slots(struct rtl9602c_priv *p)
 	rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_DYING_GASP);
 }
 
-static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_priv *p);
-static void rtl9602c_gpon_o5_teardown(struct rtl9602c_priv *p);
-static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p);
-static void rtl9602c_gpon_key_clear(struct rtl9602c_priv *p);
+static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_pon *p);
+static void rtl9602c_gpon_o5_teardown(struct rtl9602c_pon *p);
+static void rtl9602c_gpon_aes_reset(struct rtl9602c_pon *p);
+static void rtl9602c_gpon_key_clear(struct rtl9602c_pon *p);
 
 /**
  * rtl9602c_gpon_operstate() - make the pon interface dormant outside O5
@@ -716,9 +718,9 @@ static void rtl9602c_gpon_key_clear(struct rtl9602c_priv *p);
  * enabled; does nothing while the port has no user interface. That the
  * interface then shows dormant below O5 and up in O5 is not verified.
  */
-void rtl9602c_gpon_operstate(struct rtl9602c_priv *p)
+void rtl9602c_gpon_operstate(struct rtl9602c_pon *p)
 {
-	struct dsa_port *dp = dsa_to_port(&p->ds, RTL9602C_PORT_PON);
+	struct dsa_port *dp = dsa_to_port(p->ds, RTL9602C_PORT_PON);
 
 	if (!dp || !dp->user)
 		return;
@@ -748,7 +750,7 @@ void rtl9602c_gpon_operstate(struct rtl9602c_priv *p)
  *
  * Context: gpon_lock held.
  */
-void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
+void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p)
 {
 	struct pon_dev_stats *s = &p->gpon_stats;
 	u32 active, ploam_fail, bwm_fail, ds, frame, frames;
@@ -758,33 +760,33 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
 	if (!p->gpon_up)
 		return;
 
-	active = rtl9602c_r(p, RTL9602C_GPON_CNT_ACTIVATION);
+	active = rtl9602c_pon_r(p, RTL9602C_GPON_CNT_ACTIVATION);
 	s->sn_requests += FIELD_GET(RTL9602C_GPON_CNT_ACTIVATION_SN, active);
 	s->ranging_requests += FIELD_GET(RTL9602C_GPON_CNT_ACTIVATION_RANGING, active);
 
-	s->ploam_rx += rtl9602c_r(p, RTL9602C_GPON_CNT_PLOAM_RX);
-	ploam_fail = rtl9602c_r(p, RTL9602C_GPON_CNT_PLOAM_ERR);
+	s->ploam_rx += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_PLOAM_RX);
+	ploam_fail = rtl9602c_pon_r(p, RTL9602C_GPON_CNT_PLOAM_ERR);
 	s->ploam_crc_errors += FIELD_GET(RTL9602C_GPON_CNT_PLOAM_ERR_CRC, ploam_fail);
 	s->ploam_overflows += FIELD_GET(RTL9602C_GPON_CNT_PLOAM_ERR_OVERFLOW, ploam_fail);
 
-	s->bwmap_rx += rtl9602c_r(p, RTL9602C_GPON_CNT_BWMAP_RX);
-	bwm_fail = rtl9602c_r(p, RTL9602C_GPON_CNT_BWMAP_ERR);
+	s->bwmap_rx += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_BWMAP_RX);
+	bwm_fail = rtl9602c_pon_r(p, RTL9602C_GPON_CNT_BWMAP_ERR);
 	s->bwmap_crc_errors += FIELD_GET(RTL9602C_GPON_CNT_BWMAP_ERR_CRC, bwm_fail);
 	s->bwmap_overflows += FIELD_GET(RTL9602C_GPON_CNT_BWMAP_ERR_OVERFLOW, bwm_fail);
 
-	s->gem_frames += rtl9602c_r(p, RTL9602C_GPON_CNT_GEM_FRAMES);
-	s->bip_errors += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_BITS);
-	p->gpon_bip_blocks += rtl9602c_r(p, RTL9602C_GPON_CNT_BIP_BLOCKS);
+	s->gem_frames += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_GEM_FRAMES);
+	s->bip_errors += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_BIP_BITS);
+	p->gpon_bip_blocks += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_BIP_BLOCKS);
 
-	s->fec_corrected_bytes += rtl9602c_r(p, RTL9602C_GPON_CNT_FEC_BYTES);
+	s->fec_corrected_bytes += rtl9602c_pon_r(p, RTL9602C_GPON_CNT_FEC_BYTES);
 	s->fec_corrected_codewords +=
-		rtl9602c_r(p, RTL9602C_GPON_CNT_FEC_CODEWORDS);
+		rtl9602c_pon_r(p, RTL9602C_GPON_CNT_FEC_CODEWORDS);
 	s->fec_uncorrectable_codewords +=
-		rtl9602c_r(p, RTL9602C_GPON_CNT_FEC_UNCORRECTABLE);
+		rtl9602c_pon_r(p, RTL9602C_GPON_CNT_FEC_UNCORRECTABLE);
 
-	ds = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
+	ds = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT);
 	frame = FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
-			  rtl9602c_r(p, RTL9602C_GTC_DS_SUPERFRAME));
+			  rtl9602c_pon_r(p, RTL9602C_GTC_DS_SUPERFRAME));
 	frames = (frame - p->gpon_fec_frame) &
 		 FIELD_MAX(RTL9602C_GTC_DS_SUPERFRAME_CNT);
 	if (p->gpon_fec_frame_valid && (ds & RTL9602C_GTC_DS_IRQ_FEC) &&
@@ -817,10 +819,10 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_priv *p)
  *
  * Context: gpon_lock held.
  */
-void rtl9602c_gpon_fill_status(struct rtl9602c_priv *p,
+void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 			       struct pon_dev_status *st)
 {
-	struct dsa_port *dp = dsa_to_port(&p->ds, RTL9602C_PORT_PON);
+	struct dsa_port *dp = dsa_to_port(p->ds, RTL9602C_PORT_PON);
 	unsigned int i;
 
 	lockdep_assert_held(&p->gpon_lock);
@@ -855,7 +857,7 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_priv *p,
 	st->power_level = PON_POWER_LEVEL_HIGH - p->gpon_power_mode;
 	st->have_power_level = true;
 
-	i = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
+	i = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT);
 	st->have_alarms = true;
 	if (i & RTL9602C_GTC_DS_IRQ_LOS)
 		st->alarms |= PON_ALARM_LOS;
@@ -872,7 +874,7 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_priv *p,
  * counters left out of the comparison: counters moving is no change, and a
  * steady O5 sends nothing.
  */
-static void rtl9602c_gpon_notify(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_notify(struct rtl9602c_pon *p)
 {
 	struct pon_dev_status st, key;
 
@@ -900,7 +902,7 @@ static void rtl9602c_gpon_notify(struct rtl9602c_priv *p)
  * ONU-ID and TX_DISABLE are written, since a console line takes milliseconds;
  * leaving O5 logs how long the session lasted.
  */
-static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
+static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 {
 	static const char * const name[] = {
 		[RTL9602C_ONU_O1_INITIAL]	= "O1 initial",
@@ -935,8 +937,8 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	p->gpon_to2 = state == RTL9602C_ONU_O6_POPUP ?
 		      jiffies + msecs_to_jiffies(RTL9602C_GPON_TO2_MS) : 0;
 
-	rtl9602c_rmw(p, RTL9602C_ONU_CTRL, RTL9602C_ONU_CTRL_STATE,
-		     FIELD_PREP(RTL9602C_ONU_CTRL_STATE, state));
+	rtl9602c_pon_rmw(p, RTL9602C_ONU_CTRL, RTL9602C_ONU_CTRL_STATE,
+			 FIELD_PREP(RTL9602C_ONU_CTRL_STATE, state));
 
 	/*
 	 * Below O4, and in O7, the ONU holds no ONU-ID, and G.984.3 has it
@@ -952,11 +954,11 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 		p->gpon_onu_id = RTL9602C_ONU_ONUID_UNASSIGNED;
 		p->gpon_rei_every = 0;
 		rtl9602c_gpon_aes_reset(p);
-		rtl9602c_w(p, RTL9602C_ONU_US_ONUID,
-			   FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
-				      RTL9602C_ONU_ONUID_UNASSIGNED));
-		rtl9602c_rmw(p, RTL9602C_ONU_CTRL,
-			     RTL9602C_ONU_CTRL_ONUID,
+		rtl9602c_pon_w(p, RTL9602C_ONU_US_ONUID,
+			       FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
+					  RTL9602C_ONU_ONUID_UNASSIGNED));
+		rtl9602c_pon_rmw(p, RTL9602C_ONU_CTRL,
+				 RTL9602C_ONU_CTRL_ONUID,
 			     FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
 					RTL9602C_ONU_ONUID_UNASSIGNED));
 		rtl9602c_gpon_alloc_unbind(p);
@@ -968,8 +970,8 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 	 * the allocations the OLT grants: not below O3, nor in O6, where the
 	 * downstream was lost, nor in O7, where the OLT stopped the ONU.
 	 */
-	rtl9602c_l_txdis_gpio(p, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
-			      state > RTL9602C_ONU_O5_OPERATION);
+	RTL9602C_HOST(p, tx_disable, state < RTL9602C_ONU_O3_SERIAL_NUMBER ||
+		      state > RTL9602C_ONU_O5_OPERATION);
 
 	if (state == RTL9602C_ONU_O5_OPERATION) {
 		p->gpon_o5_since = jiffies;
@@ -991,7 +993,7 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_priv *p, u8 state)
 }
 
 /* Change the state, then report the ONU's status to the PON class. */
-static void rtl9602c_gpon_set_state(struct rtl9602c_priv *p, u8 state)
+static void rtl9602c_gpon_set_state(struct rtl9602c_pon *p, u8 state)
 {
 	rtl9602c_gpon_apply_state(p, state);
 	rtl9602c_gpon_notify(p);
@@ -1004,7 +1006,7 @@ static void rtl9602c_gpon_set_state(struct rtl9602c_priv *p, u8 state)
  * one in O1 goes on to O2. O6 and O7 wait for the OLT. The conditions are read
  * as levels, so a call after a missed change still finds the state right.
  */
-static void rtl9602c_gpon_ds_sync(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_ds_sync(struct rtl9602c_pon *p)
 {
 	bool lost;
 
@@ -1013,7 +1015,7 @@ static void rtl9602c_gpon_ds_sync(struct rtl9602c_priv *p)
 	if (!p->gpon_up)
 		return;
 
-	lost = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT) &
+	lost = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT) &
 	       (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF);
 	switch (p->gpon_state) {
 	case RTL9602C_ONU_O1_INITIAL:
@@ -1042,18 +1044,18 @@ static void rtl9602c_gpon_ds_sync(struct rtl9602c_priv *p)
  * goes to another entry (measured on this board); the command is then repeated
  * with EXEC, and DONE polled for about 100 us.
  */
-static int rtl9602c_gpon_tbl_op(struct rtl9602c_priv *p, u32 ind, u32 wr,
+static int rtl9602c_gpon_tbl_op(struct rtl9602c_pon *p, u32 ind, u32 wr,
 				unsigned int mode, unsigned int idx, u16 data)
 {
 	u32 cmd = FIELD_PREP(RTL9602C_GPON_TBL_CMD_OP, mode) |
 		  FIELD_PREP(RTL9602C_GPON_TBL_CMD_IDX, idx);
 	int i;
 
-	rtl9602c_w(p, ind, cmd);
-	rtl9602c_w(p, wr, FIELD_PREP(RTL9602C_GPON_TBL_DATA_ID, data));
-	rtl9602c_w(p, ind, RTL9602C_GPON_TBL_CMD_EXEC | cmd);
+	rtl9602c_pon_w(p, ind, cmd);
+	rtl9602c_pon_w(p, wr, FIELD_PREP(RTL9602C_GPON_TBL_DATA_ID, data));
+	rtl9602c_pon_w(p, ind, RTL9602C_GPON_TBL_CMD_EXEC | cmd);
 	for (i = 0; i < 100; i++) {
-		if (rtl9602c_r(p, ind) & RTL9602C_GPON_TBL_CMD_DONE)
+		if (rtl9602c_pon_r(p, ind) & RTL9602C_GPON_TBL_CMD_DONE)
 			return 0;
 		udelay(1);
 	}
@@ -1065,7 +1067,7 @@ static int rtl9602c_gpon_tbl_op(struct rtl9602c_priv *p, u32 ind, u32 wr,
  * T-CONT 16, whose allocations carry the upstream PLOAMs and the OMCC. It is
  * bound with the ONU-ID and cleared when the ONU-ID is given back.
  */
-static int rtl9602c_gpon_alloc_bind(struct rtl9602c_priv *p, u8 onu_id)
+static int rtl9602c_gpon_alloc_bind(struct rtl9602c_pon *p, u8 onu_id)
 {
 	return rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
 				    RTL9602C_ALLOCID_TBL_WDATA,
@@ -1073,7 +1075,7 @@ static int rtl9602c_gpon_alloc_bind(struct rtl9602c_priv *p, u8 onu_id)
 				    RTL9602C_GPON_DEFAULT_TCONT_IDX, onu_id);
 }
 
-static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_priv *p)
+static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_pon *p)
 {
 	return rtl9602c_gpon_tbl_op(p, RTL9602C_ALLOCID_TBL_CMD,
 				    RTL9602C_ALLOCID_TBL_WDATA,
@@ -1094,7 +1096,7 @@ static int rtl9602c_gpon_alloc_unbind(struct rtl9602c_priv *p)
  * registers.
  * Return: 0, or -ETIMEDOUT when the table does not complete the write.
  */
-int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
+int rtl9602c_gpon_port_bind(struct rtl9602c_pon *p, unsigned int idx,
 			    u16 port_id)
 {
 	int err;
@@ -1115,7 +1117,7 @@ int rtl9602c_gpon_port_bind(struct rtl9602c_priv *p, unsigned int idx,
  * Context: gpon_lock held.
  * Return: 0, or -ETIMEDOUT when the table does not complete the clear.
  */
-int rtl9602c_gpon_port_unbind(struct rtl9602c_priv *p, unsigned int idx)
+int rtl9602c_gpon_port_unbind(struct rtl9602c_pon *p, unsigned int idx)
 {
 	p->gpon_flow_port[idx] = RTL9602C_GPON_PORTID_NONE;
 	return rtl9602c_gpon_tbl_op(p, RTL9602C_GEM_DS_PORTID_TBL_CMD,
@@ -1133,7 +1135,7 @@ int rtl9602c_gpon_port_unbind(struct rtl9602c_priv *p, unsigned int idx)
  *
  * Context: gpon_lock held.
  */
-u32 rtl9602c_gpon_port_aes(struct rtl9602c_priv *p, u16 port_id)
+u32 rtl9602c_gpon_port_aes(struct rtl9602c_pon *p, u16 port_id)
 {
 	lockdep_assert_held(&p->gpon_lock);
 
@@ -1146,7 +1148,7 @@ u32 rtl9602c_gpon_port_aes(struct rtl9602c_priv *p, u16 port_id)
  * Mark Port-ID @port_id encrypted or not, and set or clear the decryption bit
  * of every flow bound to it; a flow bound later takes the bit with its type.
  */
-static void rtl9602c_gpon_port_aes_set(struct rtl9602c_priv *p, u16 port_id,
+static void rtl9602c_gpon_port_aes_set(struct rtl9602c_pon *p, u16 port_id,
 				       bool on)
 {
 	unsigned int f;
@@ -1158,8 +1160,8 @@ static void rtl9602c_gpon_port_aes_set(struct rtl9602c_priv *p, u16 port_id,
 
 	for (f = 0; f < RTL9602C_GPON_NUM_FLOW; f++)
 		if (p->gpon_flow_port[f] == port_id)
-			rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
-				     RTL9602C_GEM_DS_FLOW_CFG_AES,
+			rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+					 RTL9602C_GEM_DS_FLOW_CFG_AES,
 				     on ? RTL9602C_GEM_DS_FLOW_CFG_AES : 0);
 }
 
@@ -1167,15 +1169,15 @@ static void rtl9602c_gpon_port_aes_set(struct rtl9602c_priv *p, u16 port_id,
  * Forget every encrypted Port-ID, clear the bit of every flow, and clear the
  * keys, so that none outlives the activation it was made for.
  */
-static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_aes_reset(struct rtl9602c_pon *p)
 {
 	unsigned int f;
 
 	bitmap_zero(p->gpon_aes_ports, RTL9602C_GPON_NUM_PORTID);
 	for (f = 0; f < RTL9602C_GPON_NUM_FLOW; f++)
 		if (p->gpon_flow_port[f] != RTL9602C_GPON_PORTID_NONE)
-			rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
-				     RTL9602C_GEM_DS_FLOW_CFG_AES, 0);
+			rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+					 RTL9602C_GEM_DS_FLOW_CFG_AES, 0);
 	rtl9602c_gpon_key_clear(p);
 	p->gpon_key_switch = 0;
 }
@@ -1186,7 +1188,7 @@ static void rtl9602c_gpon_aes_reset(struct rtl9602c_priv *p)
  * use and @data holds its identifier. -ETIMEDOUT when the table does not answer
  * within about 100 us.
  */
-static int rtl9602c_gpon_tbl_read(struct rtl9602c_priv *p, u32 ind, u32 rd,
+static int rtl9602c_gpon_tbl_read(struct rtl9602c_pon *p, u32 ind, u32 rd,
 				  unsigned int idx, u16 *data, bool *hit)
 {
 	u32 cmd = FIELD_PREP(RTL9602C_GPON_TBL_CMD_OP,
@@ -1195,13 +1197,13 @@ static int rtl9602c_gpon_tbl_read(struct rtl9602c_priv *p, u32 ind, u32 rd,
 	u32 v;
 	int i;
 
-	rtl9602c_w(p, ind, cmd);
-	rtl9602c_w(p, ind, RTL9602C_GPON_TBL_CMD_EXEC | cmd);
+	rtl9602c_pon_w(p, ind, cmd);
+	rtl9602c_pon_w(p, ind, RTL9602C_GPON_TBL_CMD_EXEC | cmd);
 	for (i = 0; i < 100; i++) {
-		v = rtl9602c_r(p, ind);
+		v = rtl9602c_pon_r(p, ind);
 		if (v & RTL9602C_GPON_TBL_CMD_DONE) {
 			*hit = v & RTL9602C_GPON_TBL_CMD_VALID;
-			*data = rtl9602c_r(p, rd) & RTL9602C_GPON_TBL_DATA_ID;
+			*data = rtl9602c_pon_r(p, rd) & RTL9602C_GPON_TBL_DATA_ID;
 			return 0;
 		}
 		udelay(1);
@@ -1223,7 +1225,7 @@ static int rtl9602c_gpon_tbl_read(struct rtl9602c_priv *p, u32 ind, u32 rd,
  * Context: gpon_lock held.
  * Return: 0, or -ETIMEDOUT when the table does not complete the read.
  */
-int rtl9602c_gpon_port_get(struct rtl9602c_priv *p, unsigned int flow,
+int rtl9602c_gpon_port_get(struct rtl9602c_pon *p, unsigned int flow,
 			   u16 *port_id, bool *valid)
 {
 	return rtl9602c_gpon_tbl_read(p, RTL9602C_GEM_DS_PORTID_TBL_CMD,
@@ -1243,18 +1245,18 @@ int rtl9602c_gpon_port_get(struct rtl9602c_priv *p, unsigned int flow,
  *
  * Return: the count, or U32_MAX when the MAC does not answer within 1 ms.
  */
-u32 rtl9602c_gpon_flow_cntr(struct rtl9602c_priv *p, unsigned int flow,
+u32 rtl9602c_gpon_flow_cntr(struct rtl9602c_pon *p, unsigned int flow,
 			    bool bytes)
 {
 	u32 v;
 
-	rtl9602c_w(p, RTL9602C_GEM_DS_CNT_CMD,
-		   FIELD_PREP(RTL9602C_GEM_DS_CNT_CMD_FLOW, flow) |
+	rtl9602c_pon_w(p, RTL9602C_GEM_DS_CNT_CMD,
+		       FIELD_PREP(RTL9602C_GEM_DS_CNT_CMD_FLOW, flow) |
 		   (bytes ? RTL9602C_GEM_DS_CNT_CMD_BYTES : 0));
-	if (read_poll_timeout(rtl9602c_r, v, v & RTL9602C_GEM_DS_CNT_CMD_DONE,
+	if (read_poll_timeout(rtl9602c_pon_r, v, v & RTL9602C_GEM_DS_CNT_CMD_DONE,
 			      0, 1000, false, p, RTL9602C_GEM_DS_CNT_CMD))
 		return U32_MAX;
-	return rtl9602c_r(p, RTL9602C_GEM_DS_CNT_DATA);
+	return rtl9602c_pon_r(p, RTL9602C_GEM_DS_CNT_DATA);
 }
 
 /*
@@ -1262,7 +1264,7 @@ u32 rtl9602c_gpon_flow_cntr(struct rtl9602c_priv *p, unsigned int flow,
  * says only whether the entry is in use, in @hit when that is given; the driver
  * writes no entry.
  */
-static int rtl9602c_gpon_mc_op(struct rtl9602c_priv *p, unsigned int mode,
+static int rtl9602c_gpon_mc_op(struct rtl9602c_pon *p, unsigned int mode,
 			       unsigned int idx, bool *hit)
 {
 	u32 cmd = FIELD_PREP(RTL9602C_GPON_TBL_CMD_OP, mode) |
@@ -1270,10 +1272,10 @@ static int rtl9602c_gpon_mc_op(struct rtl9602c_priv *p, unsigned int mode,
 	u32 v;
 	int i;
 
-	rtl9602c_w(p, RTL9602C_GEM_DS_MC_TBL_CMD, cmd);
-	rtl9602c_w(p, RTL9602C_GEM_DS_MC_TBL_CMD, RTL9602C_GPON_TBL_CMD_EXEC | cmd);
+	rtl9602c_pon_w(p, RTL9602C_GEM_DS_MC_TBL_CMD, cmd);
+	rtl9602c_pon_w(p, RTL9602C_GEM_DS_MC_TBL_CMD, RTL9602C_GPON_TBL_CMD_EXEC | cmd);
 	for (i = 0; i < 100; i++) {
-		v = rtl9602c_r(p, RTL9602C_GEM_DS_MC_TBL_CMD);
+		v = rtl9602c_pon_r(p, RTL9602C_GEM_DS_MC_TBL_CMD);
 		if (v & RTL9602C_GPON_TBL_CMD_DONE) {
 			if (hit)
 				*hit = v & RTL9602C_GPON_TBL_CMD_VALID;
@@ -1298,7 +1300,7 @@ static int rtl9602c_gpon_mc_op(struct rtl9602c_priv *p, unsigned int mode,
  * and the OMCC is marked unbound, which takes the OMCI channel down. Returns 0,
  * or the error of the first entry that does not complete.
  */
-static int rtl9602c_gpon_tables_clear(struct rtl9602c_priv *p)
+static int rtl9602c_gpon_tables_clear(struct rtl9602c_pon *p)
 {
 	unsigned int i, allocs = 0, ports = 0, mcs = 0;
 	char seen[96] = "";
@@ -1330,8 +1332,8 @@ static int rtl9602c_gpon_tables_clear(struct rtl9602c_priv *p)
 		err = rtl9602c_gpon_port_unbind(p, i);
 		if (err)
 			goto out;
-		rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(i),
-			     RTL9602C_GEM_DS_FLOW_CFG_TYPE, 0);
+		rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(i),
+				 RTL9602C_GEM_DS_FLOW_CFG_TYPE, 0);
 	}
 
 	for (i = 0; i < RTL9602C_GPON_NUM_MC; i++) {
@@ -1366,7 +1368,7 @@ out:
  * frames on as OMCI, its upstream GEM frames carry the Port-ID, and its stream
  * is admitted into the PON MAC. The OMCI port's link goes up only then.
  */
-static int rtl9602c_gpon_omcc_bind(struct rtl9602c_priv *p, u16 port_id)
+static int rtl9602c_gpon_omcc_bind(struct rtl9602c_pon *p, u16 port_id)
 {
 	unsigned int f = RTL9602C_GPON_OMCC_FLOW;
 	int err;
@@ -1375,12 +1377,12 @@ static int rtl9602c_gpon_omcc_bind(struct rtl9602c_priv *p, u16 port_id)
 	if (err)
 		return err;
 
-	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
-		     RTL9602C_GEM_DS_FLOW_CFG_TYPE,
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+			 RTL9602C_GEM_DS_FLOW_CFG_TYPE,
 		     RTL9602C_GEM_DS_FLOW_CFG_TYPE_OMCI |
 		     rtl9602c_gpon_port_aes(p, port_id));
-	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f), RTL9602C_GEM_US_FLOW_CFG_PORTID,
-		     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID, port_id));
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f), RTL9602C_GEM_US_FLOW_CFG_PORTID,
+			 FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID, port_id));
 	rtl9602c_ponmac_sid_valid(p, f, true);
 
 	p->gpon_omcc_port = port_id;
@@ -1394,7 +1396,7 @@ static int rtl9602c_gpon_omcc_bind(struct rtl9602c_priv *p, u16 port_id)
  * Undo rtl9602c_gpon_omcc_bind(). The OMCI port's link goes down first, which
  * drops the messages still waiting for the reader.
  */
-static void rtl9602c_gpon_omcc_unbind(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_omcc_unbind(struct rtl9602c_pon *p)
 {
 	unsigned int f = RTL9602C_GPON_OMCC_FLOW;
 
@@ -1403,15 +1405,15 @@ static void rtl9602c_gpon_omcc_unbind(struct rtl9602c_priv *p)
 		pon_omci_port_link_set(p->omci_port, false);
 
 	rtl9602c_gpon_port_unbind(p, f);
-	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
-		     RTL9602C_GEM_DS_FLOW_CFG_TYPE, 0);
-	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f), RTL9602C_GEM_US_FLOW_CFG_PORTID,
-		     0);
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+			 RTL9602C_GEM_DS_FLOW_CFG_TYPE, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f), RTL9602C_GEM_US_FLOW_CFG_PORTID,
+			 0);
 	rtl9602c_ponmac_sid_valid(p, f, false);
 }
 
 /* The Alloc-ID GEM T-CONT @n holds, RTL9602C_GPON_ALLOC_NONE for none. */
-static u16 rtl9602c_gpon_tcont_holds(struct rtl9602c_priv *p, unsigned int n)
+static u16 rtl9602c_gpon_tcont_holds(struct rtl9602c_pon *p, unsigned int n)
 {
 	unsigned int t = rtl9602c_gem_tcont(n);
 
@@ -1420,7 +1422,7 @@ static u16 rtl9602c_gpon_tcont_holds(struct rtl9602c_priv *p, unsigned int n)
 }
 
 /* Whether management mapped a GEM T-CONT to Alloc-ID @alloc. */
-static bool rtl9602c_gpon_alloc_mapped(struct rtl9602c_priv *p, u16 alloc)
+static bool rtl9602c_gpon_alloc_mapped(struct rtl9602c_pon *p, u16 alloc)
 {
 	unsigned int n;
 
@@ -1443,7 +1445,7 @@ static bool rtl9602c_gpon_alloc_mapped(struct rtl9602c_priv *p, u16 alloc)
  * record of what each T-CONT holds, since the table keeps its entries through
  * a reset and so tells what was written, not what the OLT still assigns.
  */
-static void rtl9602c_gpon_tcont_sync(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_tcont_sync(struct rtl9602c_pon *p)
 {
 	u16 want[RTL9602C_GEM_NUM_TCONT];
 	unsigned long alloc;
@@ -1512,7 +1514,7 @@ static void rtl9602c_gpon_tcont_sync(struct rtl9602c_priv *p)
 }
 
 /* Whether a GEM T-CONT holds Alloc-ID @alloc. */
-static bool rtl9602c_gpon_alloc_bound(struct rtl9602c_priv *p, u16 alloc)
+static bool rtl9602c_gpon_alloc_bound(struct rtl9602c_pon *p, u16 alloc)
 {
 	unsigned int n;
 
@@ -1527,7 +1529,7 @@ static bool rtl9602c_gpon_alloc_bound(struct rtl9602c_priv *p, u16 alloc)
  * say (rtl9602c_gpon_tcont_sync()). The repeated copies of an
  * Assign_Alloc-ID change nothing.
  */
-static void rtl9602c_gpon_tcont_add(struct rtl9602c_priv *p, u16 alloc)
+static void rtl9602c_gpon_tcont_add(struct rtl9602c_pon *p, u16 alloc)
 {
 	if (test_and_set_bit(alloc, p->gpon_assigned))
 		return;
@@ -1538,7 +1540,7 @@ static void rtl9602c_gpon_tcont_add(struct rtl9602c_priv *p, u16 alloc)
 }
 
 /* The OLT took Alloc-ID @alloc back: unbind it. */
-static void rtl9602c_gpon_tcont_del(struct rtl9602c_priv *p, u16 alloc)
+static void rtl9602c_gpon_tcont_del(struct rtl9602c_pon *p, u16 alloc)
 {
 	if (test_and_clear_bit(alloc, p->gpon_assigned))
 		rtl9602c_gpon_tcont_sync(p);
@@ -1561,7 +1563,7 @@ static void rtl9602c_gpon_tcont_del(struct rtl9602c_priv *p, u16 alloc)
  * Context: takes gpon_lock.
  * Return: 0, -EBUSY or -EOPNOTSUPP.
  */
-int rtl9602c_gpon_tcont_map(struct rtl9602c_priv *p, unsigned int n, u16 alloc,
+int rtl9602c_gpon_tcont_map(struct rtl9602c_pon *p, unsigned int n, u16 alloc,
 			    struct netlink_ext_ack *extack)
 {
 	unsigned int m;
@@ -1599,7 +1601,7 @@ out:
  * Unbind what the OLT assigned after the ONU-ID: the Alloc-IDs in T-CONTs 0 to
  * 15, and the OMCC.
  */
-static void rtl9602c_gpon_o5_teardown(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_o5_teardown(struct rtl9602c_pon *p)
 {
 	unsigned int i;
 
@@ -1644,7 +1646,7 @@ static const char *rtl9602c_ploam_ds_name(u8 id)
  * Assign_Alloc-ID and Configure_Port-ID are sent three times and then followed
  * by Deactivate_ONU-ID (measured on this board).
  */
-static void rtl9602c_gpon_ploam_ack(struct rtl9602c_priv *p, const u8 *dm)
+static void rtl9602c_gpon_ploam_ack(struct rtl9602c_pon *p, const u8 *dm)
 {
 	u8 ack[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 
@@ -1661,7 +1663,7 @@ static void rtl9602c_gpon_ploam_ack(struct rtl9602c_priv *p, const u8 *dm)
  * identifier, then the ten octets of the password. Without a password set
  * the request is not answered, and the OLT decides what that means.
  */
-static void rtl9602c_gpon_password_send(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_password_send(struct rtl9602c_pon *p)
 {
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 	unsigned int i;
@@ -1687,7 +1689,7 @@ static void rtl9602c_gpon_password_send(struct rtl9602c_priv *p)
  * The worker sends them (rtl9602c_gpon_rei_tick()), so an interval is kept to
  * within its period.
  */
-static void rtl9602c_gpon_rei_start(struct rtl9602c_priv *p, u32 frames)
+static void rtl9602c_gpon_rei_start(struct rtl9602c_pon *p, u32 frames)
 {
 	unsigned int ms = frames / RTL9602C_GPON_DS_FRAMES_PER_MS;
 
@@ -1707,7 +1709,7 @@ static void rtl9602c_gpon_rei_start(struct rtl9602c_priv *p, u32 frames)
  * the cadence again from now. Context: gpon_lock held, the counters just
  * taken.
  */
-static void rtl9602c_gpon_rei_tick(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_rei_tick(struct rtl9602c_pon *p)
 {
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 	u64 errors;
@@ -1739,26 +1741,26 @@ static void rtl9602c_gpon_rei_tick(struct rtl9602c_priv *p)
  * the active one at the superframe of Key_Switching_Time, or with @active as
  * the active key at once. Returns 0, or -ETIMEDOUT when a word is not taken.
  */
-static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key,
+static int rtl9602c_gpon_key_write(struct rtl9602c_pon *p, const u8 *key,
 				   bool active)
 {
 	u32 cfg = active ? RTL9602C_GPON_AES_KEY_CFG_ACTIVE : 0;
 	unsigned int i, spin;
 
-	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG, cfg);
-	rtl9602c_w(p, RTL9602C_GPON_AES_KEY_CFG,
-		   cfg | RTL9602C_GPON_AES_KEY_CFG_REQ);
+	rtl9602c_pon_w(p, RTL9602C_GPON_AES_KEY_CFG, cfg);
+	rtl9602c_pon_w(p, RTL9602C_GPON_AES_KEY_CFG,
+		       cfg | RTL9602C_GPON_AES_KEY_CFG_REQ);
 
 	for (i = 0; i < RTL9602C_GPON_AES_KEY_WORDS; i++) {
 		u32 idx = FIELD_PREP(RTL9602C_GPON_AES_KEY_WORD_IDX, i);
 
-		rtl9602c_w(p, RTL9602C_GPON_AES_KEY_DATA,
-			   key[2 * i] << 8 | key[2 * i + 1]);
-		rtl9602c_w(p, RTL9602C_GPON_AES_KEY_WORD, idx);
-		rtl9602c_w(p, RTL9602C_GPON_AES_KEY_WORD,
-			   idx | RTL9602C_GPON_AES_KEY_WORD_REQ);
+		rtl9602c_pon_w(p, RTL9602C_GPON_AES_KEY_DATA,
+			       key[2 * i] << 8 | key[2 * i + 1]);
+		rtl9602c_pon_w(p, RTL9602C_GPON_AES_KEY_WORD, idx);
+		rtl9602c_pon_w(p, RTL9602C_GPON_AES_KEY_WORD,
+			       idx | RTL9602C_GPON_AES_KEY_WORD_REQ);
 		for (spin = 0; spin < 100; spin++) {
-			if (rtl9602c_r(p, RTL9602C_GPON_AES_KEY_WORD) &
+			if (rtl9602c_pon_r(p, RTL9602C_GPON_AES_KEY_WORD) &
 			    RTL9602C_GPON_AES_KEY_WORD_DONE)
 				break;
 			udelay(1);
@@ -1774,17 +1776,17 @@ static int rtl9602c_gpon_key_write(struct rtl9602c_priv *p, const u8 *key,
  * names its superframe: the switch time becomes the superframe just passed,
  * which the counter reaches again only after about 37 hours.
  */
-static void rtl9602c_gpon_key_hold(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_key_hold(struct rtl9602c_pon *p)
 {
 	u32 now = FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
-			    rtl9602c_r(p, RTL9602C_GTC_DS_SUPERFRAME));
+			    rtl9602c_pon_r(p, RTL9602C_GTC_DS_SUPERFRAME));
 
-	rtl9602c_w(p, RTL9602C_GPON_AES_SWITCH_TIME,
-		   (now - 1) & RTL9602C_GPON_AES_SWITCH_TIME_SF);
+	rtl9602c_pon_w(p, RTL9602C_GPON_AES_SWITCH_TIME,
+		       (now - 1) & RTL9602C_GPON_AES_SWITCH_TIME_SF);
 }
 
 /* Zero both keys, with no switch pending. */
-static void rtl9602c_gpon_key_clear(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_key_clear(struct rtl9602c_pon *p)
 {
 	static const u8 zero[RTL9602C_GPON_AES_KEY_BYTES];
 
@@ -1802,7 +1804,7 @@ static void rtl9602c_gpon_key_clear(struct rtl9602c_priv *p)
  * switch is held until the OLT names one for the new key. The key is not kept,
  * and the ploamlog ring holds the fragments zeroed.
  */
-static void rtl9602c_gpon_key_send(struct rtl9602c_priv *p)
+static void rtl9602c_gpon_key_send(struct rtl9602c_pon *p)
 {
 	u8 key[RTL9602C_GPON_AES_KEY_BYTES];
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
@@ -1840,22 +1842,22 @@ static void rtl9602c_gpon_key_send(struct rtl9602c_priv *p)
  * two words each in RTL9602C_BWMAP_CAPTURE_DATA(): the control register is
  * zeroed, cleared with the count, then started with it.
  */
-static void rtl9602c_gpon_bwm_arm(struct rtl9602c_priv *p, unsigned int entries)
+static void rtl9602c_gpon_bwm_arm(struct rtl9602c_pon *p, unsigned int entries)
 {
 	u32 n = FIELD_PREP(RTL9602C_BWMAP_CAPTURE_CTRL_COUNT, entries);
 
-	rtl9602c_w(p, RTL9602C_BWMAP_CAPTURE_CTRL, 0);
-	rtl9602c_w(p, RTL9602C_BWMAP_CAPTURE_CTRL, RTL9602C_BWMAP_CAPTURE_CTRL_CLEAR | n);
-	rtl9602c_w(p, RTL9602C_BWMAP_CAPTURE_CTRL, RTL9602C_BWMAP_CAPTURE_CTRL_START | n);
+	rtl9602c_pon_w(p, RTL9602C_BWMAP_CAPTURE_CTRL, 0);
+	rtl9602c_pon_w(p, RTL9602C_BWMAP_CAPTURE_CTRL, RTL9602C_BWMAP_CAPTURE_CTRL_CLEAR | n);
+	rtl9602c_pon_w(p, RTL9602C_BWMAP_CAPTURE_CTRL, RTL9602C_BWMAP_CAPTURE_CTRL_START | n);
 }
 
-static void rtl9602c_gpon_bwm_read(struct rtl9602c_priv *p, u32 *buf,
+static void rtl9602c_gpon_bwm_read(struct rtl9602c_pon *p, u32 *buf,
 				   unsigned int entries)
 {
 	unsigned int i;
 
 	for (i = 0; i < entries * 2; i++)
-		buf[i] = rtl9602c_r(p, RTL9602C_BWMAP_CAPTURE_DATA(i));
+		buf[i] = rtl9602c_pon_r(p, RTL9602C_BWMAP_CAPTURE_DATA(i));
 }
 
 /*
@@ -1870,7 +1872,7 @@ static void rtl9602c_gpon_bwm_read(struct rtl9602c_priv *p, u32 *buf,
  * second, and Upstream_Overhead and Extended_Burst_Length outside the one state
  * each is acted on in.
  */
-static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
+static void rtl9602c_gpon_ploam_rx(struct rtl9602c_pon *p, const u8 *msg)
 {
 	u8 boh;
 
@@ -1906,7 +1908,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		 * in bursts, which come often only from O4 on.
 		 */
 		p->gpon_power_mode = 0;
-		queue_work(system_wq, &p->optics_level_work);
+		RTL9602C_HOST(p, power_level_changed);
 		rtl9602c_gpon_arm_sn(p);
 		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O3_SERIAL_NUMBER);
 		return;
@@ -1927,11 +1929,11 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 			u64 written;
 
 			p->gpon_onu_id = msg[RTL9602C_PLOAM_ASSIGN_ONUID_ONUID];
-			rtl9602c_w(p, RTL9602C_ONU_US_ONUID,
-				   FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
-					      p->gpon_onu_id));
-			rtl9602c_rmw(p, RTL9602C_ONU_CTRL,
-				     RTL9602C_ONU_CTRL_ONUID,
+			rtl9602c_pon_w(p, RTL9602C_ONU_US_ONUID,
+				       FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
+						  p->gpon_onu_id));
+			rtl9602c_pon_rmw(p, RTL9602C_ONU_CTRL,
+					 RTL9602C_ONU_CTRL_ONUID,
 				     FIELD_PREP(RTL9602C_ONU_CTRL_ONUID,
 						p->gpon_onu_id));
 
@@ -1940,8 +1942,8 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 					p->gpon_onu_id);
 
 			/* The bandwidth-map filter as at bring-up. */
-			rtl9602c_rmw(p, RTL9602C_GTC_DS_CTRL,
-				     RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL |
+			rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_CTRL,
+					 RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL |
 				     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID,
 				     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
 
@@ -1967,7 +1969,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 			if (p->gpon_from_irq)
 				pr_info("<GPON> ONU-ID %u assigned; written %llu us after the interrupt\n",
 					p->gpon_onu_id,
-					div_u64(written - p->gpon_irq_ns, NSEC_PER_USEC));
+					div_u64(written - rtl9602c_pon_irq_ns(p), NSEC_PER_USEC));
 			else
 				pr_info("<GPON> ONU-ID %u assigned; seen by the poll, not the IRQ\n",
 					p->gpon_onu_id);
@@ -2037,10 +2039,10 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 			 * discovery goes out ahead of the first acknowledgment;
 			 * not verified. The bit is left set.
 			 */
-			rtl9602c_rmw(p, RTL9602C_PLOAM_TX_CFG,
-				     RTL9602C_PLOAM_TX_CFG_FLUSH, 0);
-			rtl9602c_rmw(p, RTL9602C_PLOAM_TX_CFG,
-				     RTL9602C_PLOAM_TX_CFG_FLUSH,
+			rtl9602c_pon_rmw(p, RTL9602C_PLOAM_TX_CFG,
+					 RTL9602C_PLOAM_TX_CFG_FLUSH, 0);
+			rtl9602c_pon_rmw(p, RTL9602C_PLOAM_TX_CFG,
+					 RTL9602C_PLOAM_TX_CFG_FLUSH,
 				     RTL9602C_PLOAM_TX_CFG_FLUSH);
 			rtl9602c_gpon_set_state(p, RTL9602C_ONU_O5_OPERATION);
 			pr_info("<GPON> Ranging_Time raw: %12ph -- eqd %u\n",
@@ -2093,7 +2095,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		    p->gpon_state == RTL9602C_ONU_O7_EMERGENCY_STOP)
 			return;
 		rtl9602c_ploam_log(p, RTL9602C_EV_USQ, NULL,
-				   rtl9602c_r(p, RTL9602C_PLOAM_TX_CTRL));
+				   rtl9602c_pon_r(p, RTL9602C_PLOAM_TX_CTRL));
 		pr_info("<GPON> the OLT deactivated this ONU in O%u\n",
 			p->gpon_state);
 		rtl9602c_gpon_set_state(p, RTL9602C_ONU_O2_STANDBY);
@@ -2238,7 +2240,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		p->gpon_key_switch =
 			get_unaligned_be32(&msg[RTL9602C_PLOAM_KEY_SWITCH_TIME]) &
 			RTL9602C_GPON_AES_SWITCH_TIME_SF;
-		rtl9602c_w(p, RTL9602C_GPON_AES_SWITCH_TIME, p->gpon_key_switch);
+		rtl9602c_pon_w(p, RTL9602C_GPON_AES_SWITCH_TIME, p->gpon_key_switch);
 		rtl9602c_gpon_ploam_ack(p, msg);
 		return;
 
@@ -2334,7 +2336,7 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
 		if (mode == p->gpon_power_mode)
 			return;
 		p->gpon_power_mode = mode;
-		queue_work(system_wq, &p->optics_level_work);
+		RTL9602C_HOST(p, power_level_changed);
 		return;
 	}
 
@@ -2403,8 +2405,8 @@ static void rtl9602c_gpon_ploam_rx(struct rtl9602c_priv *p, const u8 *msg)
  */
 void rtl9602c_gpon_work(struct work_struct *w)
 {
-	struct rtl9602c_priv *p =
-		container_of(to_delayed_work(w), struct rtl9602c_priv, gpon_work);
+	struct rtl9602c_pon *p =
+		container_of(to_delayed_work(w), struct rtl9602c_pon, gpon_work);
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2];
 	int n = 0;
 
@@ -2468,13 +2470,13 @@ void rtl9602c_gpon_work(struct work_struct *w)
  *
  * Context: the switch's interrupt thread; takes gpon_lock to dispatch.
  */
-void rtl9602c_gpon_irq(struct rtl9602c_priv *p)
+void rtl9602c_gpon_irq(struct rtl9602c_pon *p)
 {
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2];
 	u32 ds;
 	int n = 0;
 
-	u32 top = rtl9602c_r(p, RTL9602C_GPON_IRQ_STAT);
+	u32 top = rtl9602c_pon_r(p, RTL9602C_GPON_IRQ_STAT);
 
 	/*
 	 * The upstream latch is read whenever the sub-block signals: left
@@ -2484,7 +2486,7 @@ void rtl9602c_gpon_irq(struct rtl9602c_priv *p)
 	 * long; what exactly they detect is not verified.
 	 */
 	if (top & RTL9602C_GPON_IRQ_GTC_US) {
-		u32 us = rtl9602c_r(p, RTL9602C_GTC_US_IRQ_LATCH);
+		u32 us = rtl9602c_pon_r(p, RTL9602C_GTC_US_IRQ_LATCH);
 
 		if (us)
 			rtl9602c_ploam_log(p, RTL9602C_EV_US_INTR, NULL, us);
@@ -2506,7 +2508,7 @@ void rtl9602c_gpon_irq(struct rtl9602c_priv *p)
 	 * ends the taking of Extended_Burst_Length, before any message popped
 	 * below is dispatched.
 	 */
-	ds = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_LATCH);
+	ds = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_LATCH);
 	if (ds & ~RTL9602C_GTC_DS_IRQ_PLOAM_RX)
 		rtl9602c_ploam_log(p, RTL9602C_EV_DS_INTR, NULL, ds);
 	if (ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF |
@@ -2536,7 +2538,7 @@ void rtl9602c_gpon_irq(struct rtl9602c_priv *p)
  * The GPON interrupt is enabled last, so that the first PLOAM message
  * dispatched finds the whole activation path programmed.
  */
-static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
+static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 {
 	int err;
 
@@ -2585,7 +2587,7 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * verified.
 	 */
 	p->gpon_power_mode = 0;
-	err = rtl9602c_optics_hold_modulation(p);
+	err = RTL9602C_HOST(p, hold_modulation);
 	if (err)
 		pr_warn("GN25L95: modulation not held (%d)\n", err);
 
@@ -2593,8 +2595,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * The threshold below which the ends of adjacent bursts are merged; its
 	 * unit is not known, and the value is not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GEM_US_BURST_MERGE,
-		     RTL9602C_GEM_US_BURST_MERGE_THR,
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_BURST_MERGE,
+			 RTL9602C_GEM_US_BURST_MERGE_THR,
 		     FIELD_PREP(RTL9602C_GEM_US_BURST_MERGE_THR,
 				RTL9602C_GEM_US_BURST_MERGE_THR_DEF));
 
@@ -2606,22 +2608,22 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * rate, the response time G.984.3 gives the ONU (clause 10.4.1); that
 	 * the register realises that time is inferred from this, not verified.
 	 */
-	rtl9602c_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_UNLOCK);
-	rtl9602c_rmw(p, RTL9602C_GTC_US_RESP_DELAY,
-		     RTL9602C_GTC_US_RESP_DELAY_COARSE | RTL9602C_GTC_US_RESP_DELAY_FINE,
+	rtl9602c_pon_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_UNLOCK);
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_US_RESP_DELAY,
+			 RTL9602C_GTC_US_RESP_DELAY_COARSE | RTL9602C_GTC_US_RESP_DELAY_FINE,
 		     FIELD_PREP(RTL9602C_GTC_US_RESP_DELAY_COARSE,
 				RTL9602C_GTC_US_RESP_DELAY_COARSE_DEF) |
 		     FIELD_PREP(RTL9602C_GTC_US_RESP_DELAY_FINE,
 				RTL9602C_GTC_US_RESP_DELAY_FINE_DEF));
-	rtl9602c_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_LOCK);
+	rtl9602c_pon_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_LOCK);
 
 	/*
 	 * A pulse every 8000 downstream frames, once a second, at offset 1.
 	 * Nothing the driver reports uses it; what consumes it, what the offset
 	 * counts and whether it is needed are not known.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GTC_DS_PPS,
-		     RTL9602C_GTC_DS_PPS_PERIOD | RTL9602C_GTC_DS_PPS_OFFSET,
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_PPS,
+			 RTL9602C_GTC_DS_PPS_PERIOD | RTL9602C_GTC_DS_PPS_OFFSET,
 		     FIELD_PREP(RTL9602C_GTC_DS_PPS_PERIOD,
 				RTL9602C_GTC_DS_PPS_PERIOD_1S) |
 		     FIELD_PREP(RTL9602C_GTC_DS_PPS_OFFSET, 1));
@@ -2630,8 +2632,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * The signal-detect mismatch limit, 0x50; the rest of the word keeps
 	 * its reset value. Not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GTC_US_SD_THR,
-		     RTL9602C_GTC_US_SD_THR_MISMATCH,
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_US_SD_THR,
+			 RTL9602C_GTC_US_SD_THR_MISMATCH,
 		     FIELD_PREP(RTL9602C_GTC_US_SD_THR_MISMATCH,
 				RTL9602C_GTC_US_SD_THR_MISMATCH_DEF));
 
@@ -2641,17 +2643,17 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * pin as signal detect, which would make this the right polarity, and
 	 * that either bit is needed are not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GTC_DS_LOS,
-		     RTL9602C_GTC_DS_LOS_OPTIC_EN | RTL9602C_GTC_DS_LOS_OPTIC_POL,
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_LOS,
+			 RTL9602C_GTC_DS_LOS_OPTIC_EN | RTL9602C_GTC_DS_LOS_OPTIC_POL,
 		     RTL9602C_GTC_DS_LOS_OPTIC_EN | RTL9602C_GTC_DS_LOS_OPTIC_POL);
 
 	/*
 	 * Downstream FEC detection threshold 0, where it resets to 1; nothing
 	 * else of FEC is set up. Not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GTC_DS_CTRL, RTL9602C_GTC_DS_CTRL_FEC_DET_THR,
-		     FIELD_PREP(RTL9602C_GTC_DS_CTRL_FEC_DET_THR,
-				RTL9602C_GTC_DS_CTRL_FEC_DET_THR_DEF));
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_CTRL, RTL9602C_GTC_DS_CTRL_FEC_DET_THR,
+			 FIELD_PREP(RTL9602C_GTC_DS_CTRL_FEC_DET_THR,
+				    RTL9602C_GTC_DS_CTRL_FEC_DET_THR_DEF));
 
 	/*
 	 * Keep only the allocations for this ONU, in every state and so for the
@@ -2660,17 +2662,18 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * long before the next grant meant for this ONU (measured on this
 	 * board).
 	 */
-	rtl9602c_rmw(p, RTL9602C_GTC_DS_CTRL,
-		     RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL | RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID,
-		     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_CTRL,
+			 RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL |
+			 RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID,
+			 RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
 
 	/*
 	 * The last GEM fragment of an OMCI message: compare PTI bit 0 only, and
 	 * require it set, as in the fragment that ends a user-data frame
 	 * (G.984.3 clause 8.3.1). Both fields reset to 5.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GEM_DS_OMCI_PTI,
-		     RTL9602C_GEM_DS_OMCI_PTI_MASK | RTL9602C_GEM_DS_OMCI_PTI_END,
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_OMCI_PTI,
+			 RTL9602C_GEM_DS_OMCI_PTI_MASK | RTL9602C_GEM_DS_OMCI_PTI_END,
 		     FIELD_PREP(RTL9602C_GEM_DS_OMCI_PTI_MASK,
 				RTL9602C_GEM_DS_OMCI_PTI_EOF) |
 		     FIELD_PREP(RTL9602C_GEM_DS_OMCI_PTI_END,
@@ -2683,8 +2686,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * includes only what the empty table lists and refuses broadcast and
 	 * unicast.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GEM_DS_MC_FILTER,
-		     RTL9602C_GEM_DS_MC_FILTER_IPV6_PASS |
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_MC_FILTER,
+			 RTL9602C_GEM_DS_MC_FILTER_IPV6_PASS |
 		     RTL9602C_GEM_DS_MC_FILTER_IPV6_DROP |
 		     RTL9602C_GEM_DS_MC_FILTER_BCAST_PASS |
 		     RTL9602C_GEM_DS_MC_FILTER_UCAST_PASS | RTL9602C_GEM_DS_MC_FILTER_FCS_CHECK |
@@ -2701,13 +2704,13 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * FEC, LOF and LOS conditions, which it only records. Then the two
 	 * sub-blocks at the top level.
 	 */
-	rtl9602c_w(p, RTL9602C_GTC_DS_IRQ_EN,
-		   RTL9602C_GTC_DS_IRQ_PLOAM_RX | RTL9602C_GTC_DS_IRQ_RANGING_REQ |
+	rtl9602c_pon_w(p, RTL9602C_GTC_DS_IRQ_EN,
+		       RTL9602C_GTC_DS_IRQ_PLOAM_RX | RTL9602C_GTC_DS_IRQ_RANGING_REQ |
 		   RTL9602C_GTC_DS_IRQ_SN_REQ | RTL9602C_GTC_DS_IRQ_LOM |
 		   RTL9602C_GTC_DS_IRQ_FEC | RTL9602C_GTC_DS_IRQ_LOF |
 		   RTL9602C_GTC_DS_IRQ_LOS);
-	rtl9602c_w(p, RTL9602C_GPON_IRQ_EN,
-		   RTL9602C_GPON_IRQ_GTC_US | RTL9602C_GPON_IRQ_GTC_DS);
+	rtl9602c_pon_w(p, RTL9602C_GPON_IRQ_EN,
+		       RTL9602C_GPON_IRQ_GTC_US | RTL9602C_GPON_IRQ_GTC_DS);
 
 	/*
 	 * How early the laser is keyed before a burst, and how long it stays
@@ -2715,8 +2718,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * 0x18; leads of 0 and 0x20 make no measurable difference (measured on
 	 * this board). The unit of either is not known.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GTC_US_LASER,
-		     RTL9602C_GTC_US_LASER_ON_LEAD | RTL9602C_GTC_US_LASER_OFF_LAG,
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_US_LASER,
+			 RTL9602C_GTC_US_LASER_ON_LEAD | RTL9602C_GTC_US_LASER_OFF_LAG,
 		     FIELD_PREP(RTL9602C_GTC_US_LASER_ON_LEAD,
 				RTL9602C_GTC_US_LASER_ON_LEAD_DEF) |
 		     FIELD_PREP(RTL9602C_GTC_US_LASER_OFF_LAG,
@@ -2726,7 +2729,7 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * Upstream GTC interrupts; which events bits 2, 5 and 7 enable is not
 	 * known. Their latch must be read (rtl9602c_gpon_irq()).
 	 */
-	rtl9602c_w(p, RTL9602C_GTC_US_IRQ_EN, RTL9602C_GTC_US_IRQ_EN_DEF);
+	rtl9602c_pon_w(p, RTL9602C_GTC_US_IRQ_EN, RTL9602C_GTC_US_IRQ_EN_DEF);
 
 	/*
 	 * Burst power save, the transmitter enabled only around bursts: in the
@@ -2736,8 +2739,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	rtl9602c_gpon_us_locked_rmw(p, RTL9602C_GTC_US_POWERSAVE,
 				    RTL9602C_GTC_US_POWERSAVE_EN,
 				    RTL9602C_GTC_US_POWERSAVE_EN);
-	rtl9602c_rmw(p, RTL9602C_GEM_US_POWERSAVE,
-		     RTL9602C_GEM_US_POWERSAVE_LAG |
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_POWERSAVE,
+			 RTL9602C_GEM_US_POWERSAVE_LAG |
 		     RTL9602C_GEM_US_POWERSAVE_LEAD,
 		     FIELD_PREP(RTL9602C_GEM_US_POWERSAVE_LAG, 0x10) |
 		     FIELD_PREP(RTL9602C_GEM_US_POWERSAVE_LEAD, 0x100));
@@ -2746,8 +2749,8 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	 * The PTI codes the upstream GEM framer puts in its headers: 0, 1, 0
 	 * and 1. Which kind of fragment takes which of the four is not known.
 	 */
-	rtl9602c_rmw(p, RTL9602C_GEM_US_PTI_MAP,
-		     RTL9602C_GEM_US_PTI_MAP_3 | RTL9602C_GEM_US_PTI_MAP_2 |
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_PTI_MAP,
+			 RTL9602C_GEM_US_PTI_MAP_3 | RTL9602C_GEM_US_PTI_MAP_2 |
 		     RTL9602C_GEM_US_PTI_MAP_1 | RTL9602C_GEM_US_PTI_MAP_0,
 		     FIELD_PREP(RTL9602C_GEM_US_PTI_MAP_3, 1) |
 		     FIELD_PREP(RTL9602C_GEM_US_PTI_MAP_1, 1));
@@ -2782,9 +2785,10 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 				    RTL9602C_GTC_US_TX_MODE_SMALL_SSTART);
 
 	/* The bandwidth-map filter once more. */
-	rtl9602c_rmw(p, RTL9602C_GTC_DS_CTRL,
-		     RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL | RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID,
-		     RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
+	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_CTRL,
+			 RTL9602C_GTC_DS_CTRL_BWMAP_ACCEPT_ALL |
+			 RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID,
+			 RTL9602C_GTC_DS_CTRL_BWMAP_MATCH_ONUID);
 
 	/*
 	 * No ONU-ID, and O1 until LOS and LOF have cleared, then O2, to wait
@@ -2799,7 +2803,7 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
 	rtl9602c_gpon_arm_sn(p);
 
 	/* Last, the GPON source of the switch interrupt; and run the worker. */
-	rtl9602c_irq_enable(p, 0, RTL9602C_IRQ_SRC_GPON);
+	RTL9602C_HOST(p, irq_enable, 0, RTL9602C_IRQ_SRC_GPON);
 	mod_delayed_work(system_wq, &p->gpon_work, 0);
 	return 0;
 }
@@ -2817,7 +2821,7 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_priv *p)
  *
  * Return: 0, or -EINVAL for a malformed @s.
  */
-int rtl9602c_gpon_sn_set(struct rtl9602c_priv *p, const char *s)
+int rtl9602c_gpon_sn_set(struct rtl9602c_pon *p, const char *s)
 {
 	u8 sn[RTL9602C_GPON_SN_BYTES];
 	unsigned int i;
@@ -2859,7 +2863,7 @@ int rtl9602c_gpon_sn_set(struct rtl9602c_priv *p, const char *s)
  *
  * Return: 0, or -EINVAL for a malformed @s.
  */
-int rtl9602c_gpon_password_set(struct rtl9602c_priv *p, const char *s)
+int rtl9602c_gpon_password_set(struct rtl9602c_pon *p, const char *s)
 {
 	u8 pw[RTL9602C_GPON_PASSWORD_BYTES] = {};
 	size_t len = strlen(s);
@@ -2907,7 +2911,7 @@ int rtl9602c_gpon_password_set(struct rtl9602c_priv *p, const char *s)
  * MAC's build; -ETIMEDOUT when the MAC does not leave reset or its tables
  * cannot be emptied. On an error the PON stays down.
  */
-int rtl9602c_gpon_start(struct rtl9602c_priv *p)
+int rtl9602c_gpon_start(struct rtl9602c_pon *p)
 {
 	int err = 0;
 
@@ -2947,7 +2951,7 @@ out:
  *
  * Context: process context; takes gpon_lock.
  */
-void rtl9602c_gpon_stop(struct rtl9602c_priv *p)
+void rtl9602c_gpon_stop(struct rtl9602c_pon *p)
 {
 	mutex_lock(&p->gpon_lock);
 	if (p->gpon_up) {
@@ -2996,7 +3000,7 @@ static const char *rtl9602c_ploam_us_name(u8 id)
  */
 static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 {
-	struct rtl9602c_priv *p = s->private;
+	struct rtl9602c_pon *p = s->private;
 	u16 bound[RTL9602C_GEM_NUM_TCONT], map[RTL9602C_GEM_NUM_TCONT];
 	unsigned int rei_ms, rei_sent, aes_ports, n;
 	u32 key_switch;
@@ -3005,11 +3009,11 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	u64 bip_blocks;
 	u32 sts, onu, los, sig;
 
-	sts = rtl9602c_r(p, RTL9602C_GTC_DS_IRQ_STAT);
-	onu = rtl9602c_r(p, RTL9602C_ONU_CTRL);
-	los = rtl9602c_r(p, RTL9602C_GTC_DS_LOS);
+	sts = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT);
+	onu = rtl9602c_pon_r(p, RTL9602C_ONU_CTRL);
+	los = rtl9602c_pon_r(p, RTL9602C_GTC_DS_LOS);
 
-	seq_printf(s, "top   %08x\n", rtl9602c_r(p, RTL9602C_GPON_IRQ_STAT));
+	seq_printf(s, "top   %08x\n", rtl9602c_pon_r(p, RTL9602C_GPON_IRQ_STAT));
 	seq_printf(s, "ds    %08x  los %u lof %u lom %u fec %u\n", sts,
 		   !!(sts & RTL9602C_GTC_DS_IRQ_LOS),
 		   !!(sts & RTL9602C_GTC_DS_IRQ_LOF),
@@ -3022,14 +3026,14 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	seq_printf(s, "los   %08x  cdr %u optical %u\n", los,
 		   !!(los & RTL9602C_GTC_DS_LOS_CDR),
 		   !!(los & RTL9602C_GTC_DS_LOS_OPTIC));
-	sig = rtl9602c_r(p, RTL9602C_SERDES_PON_RX_STAT);
+	sig = rtl9602c_pon_r(p, RTL9602C_SERDES_PON_RX_STAT);
 	seq_printf(s, "sig   %08x  signok %u lecsync %u   <- positive logic\n",
 		   sig, !!(sig & RTL9602C_SERDES_PON_RX_STAT_SIGNAL),
 		   !!(sig & RTL9602C_SERDES_PON_RX_STAT_SYNC));
 
 	seq_printf(s, "frame %08lu  superframes (8000/s when locked)\n",
 		   FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
-			     rtl9602c_r(p, RTL9602C_GTC_DS_SUPERFRAME)));
+			     rtl9602c_pon_r(p, RTL9602C_GTC_DS_SUPERFRAME)));
 
 	mutex_lock(&p->gpon_lock);
 	rtl9602c_gpon_cntr_sync(p);
@@ -3057,9 +3061,9 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	seq_printf(s, "rei   every %u ms, %u sent\n", rei_ms, rei_sent);
 	seq_printf(s, "aes   key %u%s, switch at superframe %u (register %08x), %u Port-IDs encrypted\n",
 		   key_index,
-		   rtl9602c_r(p, RTL9602C_GPON_AES_KEY_WORD) &
+		   rtl9602c_pon_r(p, RTL9602C_GPON_AES_KEY_WORD) &
 		   RTL9602C_GPON_AES_KEY_WORD_SWITCHED ? "" : " waiting",
-		   key_switch, rtl9602c_r(p, RTL9602C_GPON_AES_SWITCH_TIME),
+		   key_switch, rtl9602c_pon_r(p, RTL9602C_GPON_AES_SWITCH_TIME),
 		   aes_ports);
 	seq_puts(s, "tcont");
 	for (n = 0; n < RTL9602C_GEM_NUM_TCONT; n++) {
@@ -3077,7 +3081,6 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-
 /*
  * ploamlog: the last RTL9602C_PLOAM_LOG_LEN events of the PLOAM channel, oldest
  * first, each with its time since boot and the state it came in: downstream
@@ -3089,7 +3092,7 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
  */
 static int rtl9602c_ploamlog_show(struct seq_file *s, void *unused)
 {
-	struct rtl9602c_priv *p = s->private;
+	struct rtl9602c_pon *p = s->private;
 	struct rtl9602c_ploam_ev *log;
 	unsigned int next, n, i;
 	unsigned long flags;
@@ -3160,7 +3163,7 @@ static ssize_t rtl9602c_ploamlog_write(struct file *file,
 				       const char __user *buf, size_t count,
 				       loff_t *ppos)
 {
-	struct rtl9602c_priv *p = ((struct seq_file *)file->private_data)->private;
+	struct rtl9602c_pon *p = ((struct seq_file *)file->private_data)->private;
 	unsigned long flags;
 
 	spin_lock_irqsave(&p->ploam_log_lock, flags);
@@ -3189,7 +3192,7 @@ static ssize_t rtl9602c_ploaminject_write(struct file *file,
 					  const char __user *ubuf,
 					  size_t count, loff_t *ppos)
 {
-	struct rtl9602c_priv *p = file->private_data;
+	struct rtl9602c_pon *p = file->private_data;
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 	const unsigned int len = RTL9602C_GPON_PLOAM_BYTES - 1;
 	unsigned int n = 0, i;
@@ -3272,7 +3275,7 @@ static void rtl9602c_bwm_print(struct seq_file *s, u32 w0, u32 w1)
  */
 static int rtl9602c_bwmap_show(struct seq_file *s, void *unused)
 {
-	struct rtl9602c_priv *p = s->private;
+	struct rtl9602c_pon *p = s->private;
 	unsigned int n = RTL9602C_GPON_BWM_O4_ENTRIES;
 	u32 o4[RTL9602C_GPON_BWM_O4_ENTRIES * 2];
 	unsigned int i, valid = 0;
@@ -3287,10 +3290,10 @@ static int rtl9602c_bwmap_show(struct seq_file *s, void *unused)
 
 	mutex_lock(&p->gpon_lock);
 	seq_printf(s, "capture of %u entries, sts %08x\n" RTL9602C_BWM_HEADER,
-		   n, rtl9602c_r(p, RTL9602C_BWMAP_CAPTURE_STAT));
+		   n, rtl9602c_pon_r(p, RTL9602C_BWMAP_CAPTURE_STAT));
 	for (i = 0; i < n; i++) {
-		u32 w0 = rtl9602c_r(p, RTL9602C_BWMAP_CAPTURE_DATA(2 * i));
-		u32 w1 = rtl9602c_r(p, RTL9602C_BWMAP_CAPTURE_DATA(2 * i + 1));
+		u32 w0 = rtl9602c_pon_r(p, RTL9602C_BWMAP_CAPTURE_DATA(2 * i));
+		u32 w1 = rtl9602c_pon_r(p, RTL9602C_BWMAP_CAPTURE_DATA(2 * i + 1));
 
 		if (!(w0 & RTL9602C_BWMAP_ALLOC_VALID))
 			continue;
@@ -3348,9 +3351,9 @@ static int rtl9602c_gemusintr_show(struct seq_file *s, void *unused)
 		"excess", "burst-over-grant", "pli-error",
 		"short-grant", "late-request", "sd-mismatch", "sd-too-long",
 	};
-	struct rtl9602c_priv *p = s->private;
-	u32 dlt = rtl9602c_r(p, RTL9602C_GEM_US_IRQ_LATCH);
-	u32 sts = rtl9602c_r(p, RTL9602C_GEM_US_IRQ_STAT);
+	struct rtl9602c_pon *p = s->private;
+	u32 dlt = rtl9602c_pon_r(p, RTL9602C_GEM_US_IRQ_LATCH);
+	u32 sts = rtl9602c_pon_r(p, RTL9602C_GEM_US_IRQ_STAT);
 	unsigned int i;
 
 	seq_printf(s, "latch %08x  status %08x\n", dlt, sts);
@@ -3373,14 +3376,14 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gemusintr);
  */
 static int rtl9602c_usburst_show(struct seq_file *s, void *unused)
 {
-	struct rtl9602c_priv *p = s->private;
+	struct rtl9602c_pon *p = s->private;
 	unsigned int i;
-	u32 laser = rtl9602c_r(p, RTL9602C_GTC_US_LASER);
-	u32 cfg = rtl9602c_r(p, RTL9602C_GTC_US_CTRL);
-	u32 ps = rtl9602c_r(p, RTL9602C_GTC_US_POWERSAVE);
-	u32 gps = rtl9602c_r(p, RTL9602C_GEM_US_POWERSAVE);
-	u32 boh = rtl9602c_r(p, RTL9602C_BURST_CFG);
-	u32 proc = rtl9602c_r(p, RTL9602C_GTC_US_TX_MODE);
+	u32 laser = rtl9602c_pon_r(p, RTL9602C_GTC_US_LASER);
+	u32 cfg = rtl9602c_pon_r(p, RTL9602C_GTC_US_CTRL);
+	u32 ps = rtl9602c_pon_r(p, RTL9602C_GTC_US_POWERSAVE);
+	u32 gps = rtl9602c_pon_r(p, RTL9602C_GEM_US_POWERSAVE);
+	u32 boh = rtl9602c_pon_r(p, RTL9602C_BURST_CFG);
+	u32 proc = rtl9602c_pon_r(p, RTL9602C_GTC_US_TX_MODE);
 
 	seq_printf(s, "laser         %08x  on-lead %lu  off-lag %lu\n", laser,
 		   FIELD_GET(RTL9602C_GTC_US_LASER_ON_LEAD, laser),
@@ -3398,7 +3401,7 @@ static int rtl9602c_usburst_show(struct seq_file *s, void *unused)
 	seq_puts(s, "burst bytes  ");
 	for (i = 0; i < RTL9602C_GPON_BOH_BYTES; i++)
 		seq_printf(s, " %02lx", FIELD_GET(RTL9602C_BURST_DATA_BYTE,
-						  rtl9602c_r(p, RTL9602C_BURST_DATA(i))));
+						  rtl9602c_pon_r(p, RTL9602C_BURST_DATA(i))));
 	seq_putc(s, '\n');
 	seq_printf(s, "tx mode       %08x  small-sstart %u  suppress-off %u\n",
 		   proc, !!(proc & RTL9602C_GTC_US_TX_MODE_SMALL_SSTART),
@@ -3428,7 +3431,7 @@ static const struct file_operations rtl9602c_usburst_fops = {
  */
 static int rtl9602c_uscntr_show(struct seq_file *s, void *unused)
 {
-	struct rtl9602c_priv *p = s->private;
+	struct rtl9602c_pon *p = s->private;
 	unsigned int i;
 
 	static const char * const name[RTL9602C_GPON_US_CNTR_COUNT] = {
@@ -3437,9 +3440,9 @@ static int rtl9602c_uscntr_show(struct seq_file *s, void *unused)
 	};
 
 	for (i = 0; i < RTL9602C_GPON_US_CNTR_COUNT; i++) {
-		rtl9602c_w(p, RTL9602C_GPON_CNT_US_SEL, i);
+		rtl9602c_pon_w(p, RTL9602C_GPON_CNT_US_SEL, i);
 		seq_printf(s, "[%u] %08x  %s\n", i,
-			   rtl9602c_r(p, RTL9602C_GPON_CNT_US_DATA),
+			   rtl9602c_pon_r(p, RTL9602C_GPON_CNT_US_DATA),
 			   name[i] ?: "");
 	}
 	return 0;
@@ -3459,7 +3462,7 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gpon);
  */
 static int rtl9602c_gpontbl_show(struct seq_file *s, void *unused)
 {
-	struct rtl9602c_priv *p = s->private;
+	struct rtl9602c_pon *p = s->private;
 	unsigned int f;
 	bool hit;
 	u16 v;
@@ -3478,9 +3481,9 @@ static int rtl9602c_gpontbl_show(struct seq_file *s, void *unused)
 			continue;
 		seq_printf(s, "  %3u: %4u  %02lx  %4lu\n", f, v,
 			   FIELD_GET(RTL9602C_GEM_DS_FLOW_CFG_TYPE,
-				     rtl9602c_r(p, RTL9602C_GEM_DS_FLOW_CFG(f))),
+				     rtl9602c_pon_r(p, RTL9602C_GEM_DS_FLOW_CFG(f))),
 			   FIELD_GET(RTL9602C_GEM_US_FLOW_CFG_PORTID,
-				     rtl9602c_r(p, RTL9602C_GEM_US_FLOW_CFG(f))));
+				     rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_CFG(f))));
 	}
 
 	seq_puts(s, "GEM ports (flow: received frames, octets; sent frames, octets)\n");
@@ -3502,24 +3505,24 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_gpontbl);
  * ploamlog, mode 0600, since a write to it empties the log, and, with
  * CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT, ploaminject, mode 0200.
  */
-void rtl9602c_gpon_debugfs_init(struct rtl9602c_priv *p)
+void rtl9602c_gpon_debugfs_init(struct rtl9602c_pon *p)
 {
-	debugfs_create_file("gpontbl", 0400, p->debugfs, p,
+	debugfs_create_file("gpontbl", 0400, p->pd->debugfs, p,
 			    &rtl9602c_gpontbl_fops);
-	debugfs_create_file("gpon", 0400, p->debugfs, p,
+	debugfs_create_file("gpon", 0400, p->pd->debugfs, p,
 			    &rtl9602c_gpon_fops);
-	debugfs_create_file("ploamlog", 0600, p->debugfs, p,
+	debugfs_create_file("ploamlog", 0600, p->pd->debugfs, p,
 			    &rtl9602c_ploamlog_fops);
-	debugfs_create_file("usburst", 0400, p->debugfs, p,
+	debugfs_create_file("usburst", 0400, p->pd->debugfs, p,
 			    &rtl9602c_usburst_fops);
-	debugfs_create_file("gemusintr", 0400, p->debugfs, p,
+	debugfs_create_file("gemusintr", 0400, p->pd->debugfs, p,
 			    &rtl9602c_gemusintr_fops);
-	debugfs_create_file("bwmap", 0400, p->debugfs, p,
+	debugfs_create_file("bwmap", 0400, p->pd->debugfs, p,
 			    &rtl9602c_bwmap_fops);
-	debugfs_create_file("uscntr", 0400, p->debugfs, p,
+	debugfs_create_file("uscntr", 0400, p->pd->debugfs, p,
 			    &rtl9602c_uscntr_fops);
 #if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_PLOAM_INJECT)
-	debugfs_create_file("ploaminject", 0200, p->debugfs, p,
+	debugfs_create_file("ploaminject", 0200, p->pd->debugfs, p,
 			    &rtl9602c_ploaminject_fops);
 #endif
 }

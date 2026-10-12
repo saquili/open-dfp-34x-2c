@@ -5397,7 +5397,7 @@ static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
 		return true;
 
 	return READ_ONCE(p->l34_us_flow) == (int)flow &&
-	       rtl9602c_gem_us_ready(p, flow);
+	       rtl9602c_pon_us_ready(p, flow);
 }
 
 /*

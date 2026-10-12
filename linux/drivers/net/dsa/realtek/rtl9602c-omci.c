@@ -20,7 +20,7 @@
 #include <linux/dsa/rtl9602c.h>
 #include <net/dsa.h>
 
-#include "rtl9602c.h"
+#include "rtl9602c-pon.h"
 
 /*
  * Every downstream OMCI message arrives with four zero bytes after it, added
@@ -43,7 +43,7 @@
  */
 static bool rtl9602c_omci_rx(void *ctx, struct sk_buff *skb, unsigned int port)
 {
-	struct rtl9602c_priv *p = ctx;
+	struct rtl9602c_pon *p = ctx;
 	u8 state = READ_ONCE(p->gpon_state);
 
 	if (port != RTL9602C_PORT_PON)
@@ -78,7 +78,7 @@ static bool rtl9602c_omci_rx(void *ctx, struct sk_buff *skb, unsigned int port)
  */
 static int rtl9602c_omci_tx(struct pon_omci_port *port, struct sk_buff *skb)
 {
-	struct rtl9602c_priv *p = pon_omci_port_get_drvdata(port);
+	struct rtl9602c_pon *p = pon_omci_port_get_drvdata(port);
 
 	if (!READ_ONCE(p->gpon_omcc_bound))
 		return -ENOLINK;
@@ -105,9 +105,9 @@ static const struct pon_omci_port_ops rtl9602c_omci_ops = {
  * Return: 0, also when nothing is created, or a negative error code, with
  * nothing created.
  */
-int rtl9602c_omci_setup(struct rtl9602c_priv *p)
+int rtl9602c_omci_setup(struct rtl9602c_pon *p)
 {
-	struct dsa_port *cpu_dp = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
+	struct dsa_port *cpu_dp = dsa_to_port(p->ds, RTL9602C_PORT_CPU);
 	struct pon_omci_port *port;
 	int err;
 
@@ -142,7 +142,7 @@ int rtl9602c_omci_setup(struct rtl9602c_priv *p)
  * rtl9602c_gem_teardown(): the PON class needs the data path unregistered
  * before the OMCI port goes.
  */
-void rtl9602c_omci_teardown(struct rtl9602c_priv *p)
+void rtl9602c_omci_teardown(struct rtl9602c_pon *p)
 {
 	if (!p->omci_port)
 		return;

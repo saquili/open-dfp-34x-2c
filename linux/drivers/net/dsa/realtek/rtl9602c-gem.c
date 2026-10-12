@@ -26,9 +26,8 @@
 #include <linux/pon.h>
 #include <linux/dsa/rtl9602c.h>
 #include <net/dsa.h>
-#include <net/switchdev.h>
 
-#include "rtl9602c.h"
+#include "rtl9602c-pon.h"
 
 /*
  * Queue 63, where the build points every GEM stream, not admitted, and where
@@ -44,14 +43,14 @@
 static bool rtl9602c_gem_owns_netdev(struct pon_device *pon,
 				     const struct net_device *dev)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	struct dsa_port *dp;
 
 	if (!dsa_user_dev_check(dev))
 		return false;
 
 	dp = dsa_port_from_netdev((struct net_device *)dev);
-	return !IS_ERR(dp) && dp->ds == &p->ds &&
+	return !IS_ERR(dp) && dp->ds == p->ds &&
 	       dp->index == RTL9602C_PORT_PON;
 }
 
@@ -61,7 +60,7 @@ static bool rtl9602c_gem_owns_netdev(struct pon_device *pon,
  * message, which may come before or after the OMCI that creates a GEM port
  * on the T-CONT.
  */
-static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u32 tcont)
+static bool rtl9602c_gem_tcont_bound(struct rtl9602c_pon *p, u32 tcont)
 {
 	lockdep_assert_held(&p->gpon_lock);
 
@@ -86,7 +85,7 @@ static bool rtl9602c_gem_tcont_bound(struct rtl9602c_priv *p, u32 tcont)
  *
  * With the Alloc-ID, the upstream half follows (rtl9602c_gem_us_program()).
  */
-static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f);
+static void rtl9602c_gem_park(struct rtl9602c_pon *p, unsigned int f);
 
 /*
  * The unit of the queue rate fields: 1024 bytes per second of frames counted
@@ -112,7 +111,7 @@ static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f);
  * rate within the peak rate. A queue that no GEM port sends through is made
  * strict and unshaped again.
  */
-static void rtl9602c_gem_queue_sched(struct rtl9602c_priv *p, u32 tcont,
+static void rtl9602c_gem_queue_sched(struct rtl9602c_pon *p, u32 tcont,
 				     u8 queue)
 {
 	unsigned int f, weight = 0;
@@ -158,7 +157,7 @@ static void rtl9602c_gem_queue_sched(struct rtl9602c_priv *p, u32 tcont,
  * port among them (rtl9602c_gem_queue_sched()): the caller has recorded
  * @cfg as the flow's configuration.
  */
-static int rtl9602c_gem_us_program(struct rtl9602c_priv *p, unsigned int f,
+static int rtl9602c_gem_us_program(struct rtl9602c_pon *p, unsigned int f,
 				   const struct pon_gem_config *cfg)
 {
 	unsigned int t = rtl9602c_gem_tcont(cfg->tcont);
@@ -169,8 +168,8 @@ static int rtl9602c_gem_us_program(struct rtl9602c_priv *p, unsigned int f,
 	if (err)
 		return err;
 
-	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
-		     RTL9602C_GEM_US_FLOW_CFG_PORTID,
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
+			 RTL9602C_GEM_US_FLOW_CFG_PORTID,
 		     FIELD_PREP(RTL9602C_GEM_US_FLOW_CFG_PORTID, cfg->port_id));
 	rtl9602c_ponq_stream_queue_set(p, f, RTL9602C_PON_QUEUE(t, q));
 	rtl9602c_ponmac_sid_valid(p, f, true);
@@ -178,7 +177,7 @@ static int rtl9602c_gem_us_program(struct rtl9602c_priv *p, unsigned int f,
 	return 0;
 }
 
-static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
+static int rtl9602c_gem_program(struct rtl9602c_pon *p, unsigned int f,
 				const struct pon_gem_config *cfg)
 {
 	u32 type = RTL9602C_GEM_DS_FLOW_CFG_TYPE_ETH;
@@ -193,8 +192,8 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
 		if (err)
 			return err;
 	}
-	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
-		     RTL9602C_GEM_DS_FLOW_CFG_TYPE, type);
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+			 RTL9602C_GEM_DS_FLOW_CFG_TYPE, type);
 
 	if (cfg->direction & IFLA_GEM_DIR_UPSTREAM) {
 		if (!rtl9602c_gem_tcont_bound(p, cfg->tcont)) {
@@ -218,7 +217,7 @@ static int rtl9602c_gem_program(struct rtl9602c_priv *p, unsigned int f,
  * since queues are never detached.
  */
 /* Park the stream of flow @f: not admitted, on the parking queue. */
-static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f)
+static void rtl9602c_gem_park(struct rtl9602c_pon *p, unsigned int f)
 {
 	if (f < RTL9602C_PON_NUM_SID) {
 		rtl9602c_ponmac_sid_valid(p, f, false);
@@ -227,23 +226,23 @@ static void rtl9602c_gem_park(struct rtl9602c_priv *p, unsigned int f)
 	}
 }
 
-static void rtl9602c_gem_unprogram(struct rtl9602c_priv *p, unsigned int f)
+static void rtl9602c_gem_unprogram(struct rtl9602c_pon *p, unsigned int f)
 {
 	rtl9602c_gem_park(p, f);
-	rtl9602c_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
-		     RTL9602C_GEM_US_FLOW_CFG_PORTID, 0);
-	rtl9602c_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
-		     RTL9602C_GEM_DS_FLOW_CFG_TYPE, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_US_FLOW_CFG(f),
+			 RTL9602C_GEM_US_FLOW_CFG_PORTID, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_GEM_DS_FLOW_CFG(f),
+			 RTL9602C_GEM_DS_FLOW_CFG_TYPE, 0);
 	rtl9602c_gpon_port_unbind(p, f);
 }
 
-static void rtl9602c_gem_cntr_sync(struct rtl9602c_priv *p, unsigned int f);
+static void rtl9602c_gem_cntr_sync(struct rtl9602c_pon *p, unsigned int f);
 
 static int rtl9602c_gem_add(struct pon_device *pon,
 			    const struct pon_gem_config *cfg,
 			    unsigned int *flow, struct netlink_ext_ack *extack)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	unsigned int f, last;
 	int err = 0;
 
@@ -314,7 +313,6 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	 * the port (rtl9602c_gem_queue_sched()).
 	 */
 	p->gem_cfg[f] = *cfg;
-	memset(&p->gem_rx[f], 0, sizeof(p->gem_rx[f]));
 	set_bit(f, p->gem_flows);
 	err = rtl9602c_gem_program(p, f, cfg);
 	if (err) {
@@ -334,6 +332,7 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	p->gem_tx_frames[f] = 0;
 	p->gem_rx_frames[f] = 0;
 	p->gem_rx_octets[f] = 0;
+	RTL9602C_HOST(p, gem_added, f);
 	*flow = f;
 	pr_debug("GEM port %u in flow %u\n", cfg->port_id, f);
 out:
@@ -344,164 +343,49 @@ out:
 /*
  * The switch keeps isolation, learning and VLAN membership per port and sees
  * every GEM port as its one PON port, so all GEM interfaces share one bridge.
- * rtl9602c_bridge_refresh() then makes the PON port a member of that bridge
- * and rebuilds the classifier entries that give the frames the switch
- * forwards to the PON port their stream; where no VLAN claims a stream, the
- * entries name the flow of the last upstream GEM interface to join, or, once
- * that one has left, of another (rtl9602c_gem_unbridge()).
+ * The switch driver keeps the bridge, makes its PON port a member and gives
+ * the frames it forwards to that port their stream (rtl9602c-pon-host.c);
+ * here the flow says only whether it carries upstream traffic.
  */
 static int rtl9602c_gem_bridge_join(struct pon_device *pon, unsigned int flow,
 				    struct net_device *br,
 				    struct netlink_ext_ack *extack)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	bool upstream = p->gem_cfg[flow].direction & IFLA_GEM_DIR_UPSTREAM;
 
-	if (p->pon_br && p->pon_br != br) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "the GEM interfaces can be in one bridge only");
-		return -EBUSY;
-	}
-	set_bit(flow, p->gem_bridged);
-	p->pon_br = br;
-	p->pon_br_members++;
-
-	if (upstream)
-		p->pon_br_us_flow = flow;
-	rtl9602c_bridge_refresh(&p->ds);
-	return 0;
-}
-
-/*
- * Claim the frames of VID @vid with the IEEE 802.1p priorities in @pbits for
- * @flow, and give up the flow's claims on the VID's other priorities; refuse
- * when another flow holds one of @pbits. gem_vid_flow holds a claim as the
- * flow plus one, 0 for none.
- */
-static int rtl9602c_gem_vid_claim(struct rtl9602c_priv *p, unsigned int flow,
-				  u16 vid, u8 pbits,
-				  struct netlink_ext_ack *extack)
-{
-	u8 *row = p->gem_vid_flow[vid];
-	unsigned int pcp;
-
-	for (pcp = 0; pcp < 8; pcp++) {
-		if (!(pbits & BIT(pcp)) || !row[pcp] || row[pcp] == flow + 1)
-			continue;
-		NL_SET_ERR_MSG_FMT_MOD(extack,
-				       "VLAN %u priority %u already travels up another GEM interface",
-				       vid, pcp);
-		return -EBUSY;
-	}
-	for (pcp = 0; pcp < 8; pcp++) {
-		if (pbits & BIT(pcp))
-			row[pcp] = flow + 1;
-		else if (row[pcp] == flow + 1)
-			row[pcp] = 0;
-	}
-	return 0;
-}
-
-/* Give up @flow's claims on VID @vid; return whether it had any. */
-static bool rtl9602c_gem_vid_release(struct rtl9602c_priv *p,
-				     unsigned int flow, u16 vid)
-{
-	u8 *row = p->gem_vid_flow[vid];
-	bool had = false;
-	unsigned int pcp;
-
-	for (pcp = 0; pcp < 8; pcp++) {
-		if (row[pcp] != flow + 1)
-			continue;
-		row[pcp] = 0;
-		had = true;
-	}
-	return had;
-}
-
-/*
- * Take @flow out of the bridge. Both gem_bridge_leave and gem_del come here,
- * in either order, and the second finds nothing to do. If @flow was the one
- * the bridge's stream entries name, the upstream GEM interface of the lowest
- * flow left in the bridge takes its place, so that the bridge's frames keep a
- * stream while it has one. The flow gives up its VLAN claims here, since the
- * bridge reports a port's VLANs going away only while it is still a bridge
- * port. When the last GEM interface leaves, the addresses the PON port
- * learned are flushed.
- */
-static void rtl9602c_gem_unbridge(struct rtl9602c_priv *p, unsigned int flow)
-{
-	unsigned int f;
-
-	if (!test_and_clear_bit(flow, p->gem_bridged))
-		return;
-
-	if (p->pon_br_us_flow == flow) {
-		p->pon_br_us_flow = -1;
-		for_each_set_bit(f, p->gem_bridged, RTL9602C_GPON_NUM_FLOW) {
-			if (p->gem_cfg[f].direction & IFLA_GEM_DIR_UPSTREAM) {
-				p->pon_br_us_flow = f;
-				break;
-			}
-		}
-	}
-
-	for (unsigned int vid = 0; vid < VLAN_N_VID; vid++)
-		rtl9602c_gem_vid_release(p, flow, vid);
-	if (!--p->pon_br_members)
-		p->pon_br = NULL;
-	rtl9602c_bridge_refresh(&p->ds);
-
-	if (!p->pon_br)
-		rtl9602c_port_fast_age(&p->ds, RTL9602C_PORT_PON);
+	return RTL9602C_HOST(p, gem_bridge_join, flow, upstream, br, extack);
 }
 
 static void rtl9602c_gem_bridge_leave(struct pon_device *pon,
 				      unsigned int flow, struct net_device *br)
 {
-	rtl9602c_gem_unbridge(pon_device_get_drvdata(pon), flow);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
+
+	RTL9602C_HOST(p, gem_bridge_leave, flow);
 }
 
 /*
  * The switch keeps VLAN membership per port, so a bridged GEM interface's
  * VLANs are the PON port's. An upstream GEM interface also claims the frames
- * of each of its VLANs with its IEEE 802.1p priorities for its flow
- * (rtl9602c_gem_vid_claim()): once VLANs claim flows, the classifier entries
- * that give forwarded frames their stream match the ingress port, the C-VID
- * and, where the GEM interfaces of a VLAN divide its priorities, the C-tag's
- * priority. So upstream GEM interfaces may share a VLAN only with disjoint
- * priorities, and one that would take a priority another holds is refused.
- * The claim is made first, so that a refusal leaves the PON port's VLANs as
- * they were.
+ * of each of its VLANs with its IEEE 802.1p priorities for its flow: once
+ * VLANs claim flows, the classifier entries that give forwarded frames their
+ * stream match the ingress port, the C-VID and, where the GEM interfaces of a
+ * VLAN divide its priorities, the C-tag's priority. So upstream GEM
+ * interfaces may share a VLAN only with disjoint priorities, and one that
+ * would take a priority another holds is refused; the switch driver keeps
+ * the claims (rtl9602c-pon-host.c).
  */
 static int rtl9602c_gem_vlan_add(struct pon_device *pon, unsigned int flow,
 				 u16 vid, u16 flags,
 				 struct netlink_ext_ack *extack)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
-	struct switchdev_obj_port_vlan vlan = { .vid = vid, .flags = flags };
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	const struct pon_gem_config *cfg = &p->gem_cfg[flow];
-	bool upstream = cfg->direction & IFLA_GEM_DIR_UPSTREAM;
-	u8 had[8];
-	int err;
 
-	if (upstream && vid < VLAN_N_VID) {
-		memcpy(had, p->gem_vid_flow[vid], sizeof(had));
-		err = rtl9602c_gem_vid_claim(p, flow, vid, cfg->pbits, extack);
-		if (err)
-			return err;
-	}
-
-	err = rtl9602c_port_vlan_add(&p->ds, RTL9602C_PORT_PON, &vlan, extack);
-	if (err) {
-		if (upstream && vid < VLAN_N_VID)
-			memcpy(p->gem_vid_flow[vid], had, sizeof(had));
-		return err;
-	}
-
-	if (upstream && vid < VLAN_N_VID)
-		rtl9602c_cf_sid_refresh(p);
-	return 0;
+	return RTL9602C_HOST(p, gem_vlan_add, flow,
+			     cfg->direction & IFLA_GEM_DIR_UPSTREAM, cfg->pbits,
+			     vid, flags, extack);
 }
 
 /*
@@ -511,56 +395,22 @@ static int rtl9602c_gem_vlan_add(struct pon_device *pon, unsigned int flow,
 static void rtl9602c_gem_vlan_del(struct pon_device *pon, unsigned int flow,
 				  u16 vid, bool last)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
-	struct switchdev_obj_port_vlan vlan = { .vid = vid };
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 
-	if (vid < VLAN_N_VID && rtl9602c_gem_vid_release(p, flow, vid))
-		rtl9602c_cf_sid_refresh(p);
-	if (last)
-		rtl9602c_port_vlan_del(&p->ds, RTL9602C_PORT_PON, &vlan);
-}
-
-/*
- * The flow's claims on every VID it claims, taken again with new priorities
- * @pbits; refused, leaving every claim as it was, when another flow holds one
- * of them in one of those VLANs.
- */
-static int rtl9602c_gem_pbits_change(struct rtl9602c_priv *p,
-				     unsigned int flow, u8 pbits,
-				     struct netlink_ext_ack *extack)
-{
-	unsigned int vid, pcp;
-
-	for (vid = 0; vid < VLAN_N_VID; vid++) {
-		const u8 *row = p->gem_vid_flow[vid];
-
-		if (!memchr(row, flow + 1, 8))
-			continue;
-		for (pcp = 0; pcp < 8; pcp++) {
-			if (!(pbits & BIT(pcp)) || !row[pcp] ||
-			    row[pcp] == flow + 1)
-				continue;
-			NL_SET_ERR_MSG_FMT_MOD(extack,
-					       "VLAN %u priority %u already travels up another GEM interface",
-					       vid, pcp);
-			return -EBUSY;
-		}
-	}
-	for (vid = 0; vid < VLAN_N_VID; vid++)
-		if (memchr(p->gem_vid_flow[vid], flow + 1, 8))
-			rtl9602c_gem_vid_claim(p, flow, vid, pbits, NULL);
-	rtl9602c_cf_sid_refresh(p);
-	return 0;
+	RTL9602C_HOST(p, gem_vlan_del, flow, vid, last);
 }
 
 /*
  * Whether the bridge sees a multicast router behind a GEM port decides what
- * the PON port does with unregistered multicast (rtl9602c_mcast_refresh()).
+ * the PON port does with unregistered multicast, which the switch driver
+ * works out.
  */
 static void rtl9602c_gem_mrouter(struct pon_device *pon, unsigned int flow,
 				 bool mrouter)
 {
-	rtl9602c_mcast_refresh(pon_device_get_drvdata(pon));
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
+
+	RTL9602C_HOST(p, gem_mrouter);
 }
 
 /**
@@ -576,7 +426,7 @@ static void rtl9602c_gem_mrouter(struct pon_device *pon, unsigned int flow,
  * Context: process context; takes gpon_lock.
  * Return: true when all of that holds.
  */
-bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow)
+bool rtl9602c_gem_us_ready(struct rtl9602c_pon *p, unsigned int flow)
 {
 	bool ready;
 
@@ -600,16 +450,10 @@ bool rtl9602c_gem_us_ready(struct rtl9602c_priv *p, unsigned int flow)
  */
 static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	const struct pon_gem_config *cfg = &p->gem_cfg[flow];
 
-	rtl9602c_gem_unbridge(p, flow);
-
-	if (p->l34_us_flow == (int)flow) {
-		p->l34_us_flow = -1;
-		p->l34_us_refs = 0;
-		rtl9602c_cf_sid_refresh(p);
-	}
+	RTL9602C_HOST(p, gem_unbind, flow);
 
 	mutex_lock(&p->gpon_lock);
 	if (test_and_clear_bit(flow, p->gem_flows) && p->ponmac_up) {
@@ -620,45 +464,28 @@ static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow)
 	}
 	mutex_unlock(&p->gpon_lock);
 
-	/* Its addresses leave the table, and its say on unknown unicast. */
-	memset(&p->gem_rx[flow], 0, sizeof(p->gem_rx[flow]));
-	rtl9602c_gem_hosts_sync(p);
+	RTL9602C_HOST(p, gem_forget, flow);
 }
 
 /*
  * The unicast frames the GEM interface of @flow takes, as the class hands
- * them on (pon_device_ops.gem_rx_filter): kept per flow, and the static
- * entries and the PON port's unknown unicast follow
- * (rtl9602c_gem_hosts_sync()). More addresses or VLANs than are kept count
- * as promiscuous.
+ * them on (pon_device_ops.gem_rx_filter). The switch driver keeps them per
+ * flow, and the static entries and the PON port's unknown unicast follow.
  */
 static void rtl9602c_gem_rx_filter(struct pon_device *pon, unsigned int flow,
 				   const struct pon_gem_rx_filter *f)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
-	struct rtl9602c_gem_rx *r;
-	unsigned int i;
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 
 	if (flow >= RTL9602C_GPON_NUM_FLOW || !test_bit(flow, p->gem_flows))
 		return;
 
-	r = &p->gem_rx[flow];
-	r->known = true;
-	r->promisc = f->promisc || f->n_addrs > RTL9602C_GEM_RX_ADDRS ||
-		     f->n_vids > RTL9602C_GEM_RX_VIDS;
-	r->n_addrs = r->promisc ? 0 : f->n_addrs;
-	r->n_vids = r->promisc ? 0 : f->n_vids;
-	for (i = 0; i < r->n_addrs; i++)
-		ether_addr_copy(r->addrs[i], f->addrs[i]);
-	for (i = 0; i < r->n_vids; i++)
-		r->vids[i] = f->vids[i];
-
-	rtl9602c_gem_hosts_sync(p);
+	RTL9602C_HOST(p, gem_rx_filter, flow, f);
 }
 
 /*
  * New upstream attributes for a GEM port. New priorities take the flow's
- * VLAN claims again first (rtl9602c_gem_pbits_change()), under RTNL as the
+ * VLAN claims again first (the host's gem_pbits_change()), under RTNL as the
  * bridge's VLAN changes are. Then the configuration is recorded, and while
  * the port's upstream is programmed, the upstream half is programmed again
  * for it, which moves the stream to a new queue when the queue changes, and
@@ -670,7 +497,7 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 			       const struct pon_gem_config *cfg,
 			       struct netlink_ext_ack *extack)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	struct pon_gem_config old = p->gem_cfg[flow];
 	int err = 0;
 
@@ -678,7 +505,7 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 		return -ENOENT;
 
 	if (cfg->pbits != old.pbits) {
-		err = rtl9602c_gem_pbits_change(p, flow, cfg->pbits, extack);
+		err = RTL9602C_HOST(p, gem_pbits_change, flow, cfg->pbits, extack);
 		if (err)
 			return err;
 	}
@@ -700,7 +527,7 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 out:
 	mutex_unlock(&p->gpon_lock);
 	if (err && cfg->pbits != old.pbits)
-		rtl9602c_gem_pbits_change(p, flow, old.pbits, NULL);
+		RTL9602C_HOST(p, gem_pbits_change, flow, old.pbits, NULL);
 	return err;
 }
 
@@ -716,7 +543,7 @@ out:
  * (rtl9602c_gem_tcont_ready()). The PON MAC is not rebuilt, so without the
  * parking the stream would keep its old queue and admission meanwhile.
  */
-void rtl9602c_gem_restore(struct rtl9602c_priv *p)
+void rtl9602c_gem_restore(struct rtl9602c_pon *p)
 {
 	unsigned int f;
 
@@ -738,7 +565,7 @@ void rtl9602c_gem_restore(struct rtl9602c_priv *p)
  *
  * Context: gpon_lock held.
  */
-void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u32 tcont)
+void rtl9602c_gem_tcont_ready(struct rtl9602c_pon *p, u32 tcont)
 {
 	unsigned int f;
 
@@ -769,8 +596,8 @@ void rtl9602c_gem_tcont_ready(struct rtl9602c_priv *p, u32 tcont)
  */
 static int rtl9602c_gem_xmit(struct pon_device *pon, struct sk_buff *skb)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
-	struct dsa_port *cpu_dp = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
+	struct dsa_port *cpu_dp = dsa_to_port(p->ds, RTL9602C_PORT_CPU);
 
 	skb->dev = cpu_dp->conduit;
 	skb_set_queue_mapping(skb, RTL9602C_PORT_PON);
@@ -784,7 +611,7 @@ static int rtl9602c_gem_xmit(struct pon_device *pon, struct sk_buff *skb)
 static int rtl9602c_pon_dev_status(struct pon_device *pon,
 				   struct pon_dev_status *st)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 
 	mutex_lock(&p->gpon_lock);
 	rtl9602c_gpon_fill_status(p, st);
@@ -794,18 +621,18 @@ static int rtl9602c_pon_dev_status(struct pon_device *pon,
 }
 
 /* Read flow @f's upstream GEM frame count, -ETIMEDOUT after 1 ms without it. */
-static int rtl9602c_gem_us_frames(struct rtl9602c_priv *p, unsigned int f,
+static int rtl9602c_gem_us_frames(struct rtl9602c_pon *p, unsigned int f,
 				  u32 *count)
 {
 	u32 v;
 
-	rtl9602c_w(p, RTL9602C_GEM_US_FLOW_CNT_SEL,
-		   FIELD_PREP(RTL9602C_GEM_US_FLOW_CNT_SEL_FLOW, f));
-	if (read_poll_timeout(rtl9602c_r, v,
+	rtl9602c_pon_w(p, RTL9602C_GEM_US_FLOW_CNT_SEL,
+		       FIELD_PREP(RTL9602C_GEM_US_FLOW_CNT_SEL_FLOW, f));
+	if (read_poll_timeout(rtl9602c_pon_r, v,
 			      v & RTL9602C_GEM_US_FLOW_CNT_SEL_DONE, 0, 1000,
 			      false, p, RTL9602C_GEM_US_FLOW_CNT_SEL))
 		return -ETIMEDOUT;
-	*count = rtl9602c_r(p, RTL9602C_GEM_US_FLOW_CNT_DATA);
+	*count = rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_CNT_DATA);
 	return 0;
 }
 
@@ -819,7 +646,7 @@ static int rtl9602c_gem_us_frames(struct rtl9602c_priv *p, unsigned int f,
  * payload, the Ethernet frames with their FCS. A count the MAC does not give
  * within 1 ms is left for the next time.
  */
-static void rtl9602c_gem_cntr_sync(struct rtl9602c_priv *p, unsigned int f)
+static void rtl9602c_gem_cntr_sync(struct rtl9602c_pon *p, unsigned int f)
 {
 	u32 lo, hi, v;
 
@@ -828,8 +655,8 @@ static void rtl9602c_gem_cntr_sync(struct rtl9602c_priv *p, unsigned int f)
 	if (!p->ponmac_up)
 		return;
 
-	lo = rtl9602c_r(p, RTL9602C_GEM_US_FLOW_BYTES(f));
-	hi = rtl9602c_r(p, RTL9602C_GEM_US_FLOW_BYTES(f) + 4);
+	lo = rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_BYTES(f));
+	hi = rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_BYTES(f) + 4);
 	p->gem_tx_octets[f] += (u64)hi << 32 | lo;
 
 	if (!rtl9602c_gem_us_frames(p, f, &v))
@@ -851,7 +678,7 @@ static void rtl9602c_gem_cntr_sync(struct rtl9602c_priv *p, unsigned int f)
  *
  * Context: gpon_lock held.
  */
-void rtl9602c_gem_cntr_sync_all(struct rtl9602c_priv *p)
+void rtl9602c_gem_cntr_sync_all(struct rtl9602c_pon *p)
 {
 	unsigned int f;
 
@@ -862,7 +689,7 @@ void rtl9602c_gem_cntr_sync_all(struct rtl9602c_priv *p)
 static int rtl9602c_gem_stats(struct pon_device *pon, unsigned int flow,
 			      struct pon_gem_stats *st)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 
 	if (flow >= RTL9602C_GPON_NUM_FLOW)
 		return -ERANGE;
@@ -886,7 +713,7 @@ static int rtl9602c_gem_stats(struct pon_device *pon, unsigned int flow,
 static int rtl9602c_tcont_get(struct pon_device *pon, unsigned int index,
 			      u16 *alloc_id)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	unsigned int t = rtl9602c_gem_tcont(index);
 	int err = -ENOENT;
 
@@ -907,7 +734,7 @@ static int rtl9602c_tcont_get(struct pon_device *pon, unsigned int index,
 static int rtl9602c_tcont_set(struct pon_device *pon, unsigned int index,
 			      int alloc_id, struct netlink_ext_ack *extack)
 {
-	struct rtl9602c_priv *p = pon_device_get_drvdata(pon);
+	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 
 	if (index >= RTL9602C_GEM_NUM_TCONT)
 		return -ENOENT;
@@ -943,7 +770,7 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
 			    unsigned int port, unsigned int flow)
 {
-	struct rtl9602c_priv *p = ctx;
+	struct rtl9602c_pon *p = ctx;
 
 	if (port != RTL9602C_PORT_PON || flow == RTL9602C_GPON_OMCC_FLOW)
 		return false;
@@ -966,9 +793,9 @@ static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
  * Return: 0, also when nothing is registered, or a negative error code, with
  * nothing registered.
  */
-int rtl9602c_gem_setup(struct rtl9602c_priv *p)
+int rtl9602c_gem_setup(struct rtl9602c_pon *p)
 {
-	struct dsa_port *cpu_dp = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
+	struct dsa_port *cpu_dp = dsa_to_port(p->ds, RTL9602C_PORT_CPU);
 	struct pon_device *pon;
 	int err;
 
@@ -1003,9 +830,9 @@ int rtl9602c_gem_setup(struct rtl9602c_priv *p)
  * GEM interfaces. Runs before rtl9602c_omci_teardown(), since the PON class
  * needs the data path unregistered before the OMCI port goes.
  */
-void rtl9602c_gem_teardown(struct rtl9602c_priv *p)
+void rtl9602c_gem_teardown(struct rtl9602c_pon *p)
 {
-	struct dsa_port *cpu_dp = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
+	struct dsa_port *cpu_dp = dsa_to_port(p->ds, RTL9602C_PORT_CPU);
 
 	if (!p->pon)
 		return;

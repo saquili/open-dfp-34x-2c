@@ -11,6 +11,18 @@
 #ifndef _RTL9602C_PON_REGS_H
 #define _RTL9602C_PON_REGS_H
 
+/*
+ * The GPON MAC's T-CONTs and downstream multicast filter entries. Its flows
+ * are RTL9602C_GPON_NUM_FLOW, which the switch driver needs too.
+ */
+#define RTL9602C_GPON_NUM_TCONT			32
+#define RTL9602C_GPON_NUM_MC			256
+
+static inline unsigned int rtl9602c_gem_tcont(unsigned int n)
+{
+	return 8 * (n / 4) + n % 4;
+}
+
 /* The PON SerDes's mode; the GPON MAC's reset completes only in MODE_GPON. */
 #define RTL9602C_SERDES_PON_CTRL		0x0001d0
 #define RTL9602C_SERDES_PON_CTRL_MODE		GENMASK(4, 0)
@@ -1109,8 +1121,16 @@ static inline unsigned int rtl9602c_gem_tcont_qbit(unsigned int n,
 /* What a GTC register reads before the MAC leaves reset; harmless. */
 #define RTL9602C_GPON_NO_RESPONSE		0xca0eca0f
 
-/* The most addresses and VLANs a GEM interface hands the driver at once. */
-#define RTL9602C_GEM_RX_ADDRS		8
-#define RTL9602C_GEM_RX_VIDS		8
+/*
+ * The GPON MAC's memory self-test and the downstream interrupt status; the
+ * revision register is the switch driver's too (RTL9602C_GPON_REVISION in
+ * <linux/platform_data/rtl9602c-pon.h>).
+ */
+#define RTL9602C_GPON_MEM_SELFTEST	0x700280
+#define RTL9602C_GTC_DS_IRQ_STAT	0x701008
+#define RTL9602C_GPON_MEM_SELFTEST_DONE		BIT(0)
+#define RTL9602C_GPON_MEM_SELFTEST_RETAIN_DONE	BIT(1)
+#define RTL9602C_GPON_MEM_SELFTEST_FAIL		BIT(3)
+#define RTL9602C_GPON_MEM_SELFTEST_RETAIN_FAIL	BIT(4)
 
 #endif /* _RTL9602C_PON_REGS_H */

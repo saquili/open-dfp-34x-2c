@@ -843,7 +843,7 @@ static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 	 * interrupt is noted here, for the GPON code.
 	 */
 	if (pending & RTL9602C_IRQ_SRC_GPON) {
-		p->gpon_irq_ns = ktime_get_ns();
+		rtl9602c_pon_irq_note(p);
 		pending &= ~RTL9602C_IRQ_SRC_GPON;
 		ret = IRQ_WAKE_THREAD;
 	}
@@ -942,7 +942,7 @@ static irqreturn_t rtl9602c_irq_thread(int irq, void *dev_id)
 {
 	struct rtl9602c_priv *p = dev_id;
 
-	rtl9602c_gpon_irq(p);
+	rtl9602c_pon_irq(p);
 	rtl9602c_w(p, RTL9602C_IRQ_PENDING, RTL9602C_IRQ_SRC_GPON);
 	return IRQ_HANDLED;
 }
@@ -957,7 +957,6 @@ static void rtl9602c_irq_disable(void *data)
 
 	rtl9602c_irq_enable(p, ~0u, 0);
 	cancel_delayed_work_sync(&p->intr_rearm);
-	cancel_delayed_work_sync(&p->gpon_work);
 }
 
 /*
@@ -1153,17 +1152,12 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 		 * octets as characters and the other four in hex (ITU-T
 		 * G.984.3 clause 9.2.4.1).
 		 */
-		if (!p->gpon_have_sn) {
+		if (rtl9602c_pon_sn_get(p, ctx->val.vstr, sizeof(ctx->val.vstr)))
 			ctx->val.vstr[0] = '\0';
-			return 0;
-		}
-		snprintf(ctx->val.vstr, sizeof(ctx->val.vstr),
-			 "%.4s%02X%02X%02X%02X", p->gpon_sn, p->gpon_sn[4],
-			 p->gpon_sn[5], p->gpon_sn[6], p->gpon_sn[7]);
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD:
 		/* Whether it is set, never the password itself. */
-		strscpy(ctx->val.vstr, p->gpon_have_password ? "set" : "",
+		strscpy(ctx->val.vstr, rtl9602c_pon_password_is_set(p) ? "set" : "",
 			sizeof(ctx->val.vstr));
 		return 0;
 	case RTL9602C_DEVLINK_PARAM_ID_CPU_RX_PPS:
@@ -1220,13 +1214,13 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 		 * Refused while the PON is up. A parameter set has no
 		 * message channel, so the error code has to say why.
 		 */
-		if (p->gpon_up)
+		if (rtl9602c_pon_is_up(p))
 			return -EBUSY;
-		return rtl9602c_gpon_sn_set(p, ctx->val.vstr);
+		return rtl9602c_pon_sn_set(p, ctx->val.vstr);
 	case RTL9602C_DEVLINK_PARAM_ID_GPON_PASSWORD:
-		if (p->gpon_up)
+		if (rtl9602c_pon_is_up(p))
 			return -EBUSY;
-		return rtl9602c_gpon_password_set(p, ctx->val.vstr);
+		return rtl9602c_pon_password_set(p, ctx->val.vstr);
 	case RTL9602C_DEVLINK_PARAM_ID_DOS_PORTS:
 		if (ctx->val.vu32 & ~(u32)RTL9602C_DOS_PORT_EN_MASK)
 			return -ERANGE;
@@ -1713,6 +1707,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	p->pon_br_us_flow = -1;
 	p->l34_us_flow = -1;
 	bitmap_zero(p->gem_bridged, RTL9602C_GPON_NUM_FLOW);
+	bitmap_zero(p->gem_bridged_up, RTL9602C_GPON_NUM_FLOW);
 	for (i = 0; i < RTL9602C_NUM_PORTS; i++) {
 		p->cf_sid[i] = -1;
 		p->flood_req[i] = BR_FLOOD | BR_MCAST_FLOOD | BR_BCAST_FLOOD;
@@ -1729,7 +1724,6 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	rtl9602c_l34_init(p);
 	rtl9602c_l34_notifiers_register(p);
 
-	rtl9602c_gpon_report(p);
 	rtl9602c_debugfs_init(p);
 
 	/*
@@ -1749,16 +1743,13 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	}
 
 	/*
-	 * The OMCI port first, then the GEM data path, which registers on
-	 * the same PON device.
+	 * The GPON MAC has a driver of its own. It brings up the MAC's
+	 * registration with the PON class, the OMCI port and the GEM data
+	 * path when it binds.
 	 */
-	err = rtl9602c_omci_setup(p);
+	err = rtl9602c_pon_attach(p);
 	if (err)
-		pr_warn("no OMCI channel: %pe\n", ERR_PTR(err));
-
-	err = rtl9602c_gem_setup(p);
-	if (err)
-		pr_warn("no GEM data path: %pe\n", ERR_PTR(err));
+		pr_warn("no GPON MAC: %pe\n", ERR_PTR(err));
 
 	/* Fold the port counters into their totals before any can wrap. */
 	schedule_delayed_work(&p->mib_work, RTL9602C_MIB_FOLD_S * HZ);
@@ -1777,15 +1768,12 @@ static void rtl9602c_teardown(struct dsa_switch *ds)
 {
 	struct rtl9602c_priv *p = ds->priv;
 
-	/* With no interrupt the GPON work is not cancelled by its teardown. */
-	cancel_delayed_work_sync(&p->gpon_work);
 	cancel_delayed_work_sync(&p->mib_work);
 	cancel_delayed_work_sync(&p->sds_work);
 	cancel_work_sync(&p->optics_level_work);
 	rtl9602c_l34_notifiers_unregister(p);
 	rtl9602c_l34_fini(p);
-	rtl9602c_gem_teardown(p);
-	rtl9602c_omci_teardown(p);
+	rtl9602c_pon_detach(p);
 	rtl9602c_debugfs_exit(p);
 	rtl9602c_ptp_unregister(p);
 	if (p->pktdbg_region)
@@ -1924,11 +1912,11 @@ static int rtl9602c_port_enable(struct dsa_switch *ds, int port,
 	rtl9602c_rmw(p, RTL9602C_PORT_FORCE_EN(port), RTL9602C_PORT_FORCE_LINK, 0);
 
 	if (port == RTL9602C_PORT_PON) {
-		int err = rtl9602c_gpon_start(p);
+		int err = rtl9602c_pon_start(p);
 
 		if (err)
 			return err;
-		rtl9602c_gpon_operstate(p);
+		rtl9602c_pon_operstate(p);
 	}
 
 	/*
@@ -1947,7 +1935,7 @@ static void rtl9602c_port_disable(struct dsa_switch *ds, int port)
 	struct rtl9602c_priv *p = ds->priv;
 
 	if (port == RTL9602C_PORT_PON)
-		rtl9602c_gpon_stop(p);
+		rtl9602c_pon_stop(p);
 
 	rtl9602c_rmw(p, RTL9602C_PORT_FORCE_VAL(port), RTL9602C_PORT_FORCE_LINK, 0);
 	rtl9602c_rmw(p, RTL9602C_PORT_FORCE_EN(port), 0, RTL9602C_PORT_FORCE_LINK);
@@ -2398,8 +2386,7 @@ static const struct dsa_switch_ops rtl9602c_switch_ops = {
 };
 
 /*
- * Map the register window, find what the PON MAC needs outside the switch,
- * take the laser's transmit-disable line asserted, and register the switch
+ * Map the register window, take the laser's transmit-disable line asserted, and register the switch
  * with DSA, which then calls rtl9602c_setup().
  */
 static int rtl9602c_probe(struct platform_device *pdev)
@@ -2414,12 +2401,11 @@ static int rtl9602c_probe(struct platform_device *pdev)
 				       sizeof(*p->gem_vid_flow), GFP_KERNEL);
 	if (!p->gem_vid_flow)
 		return -ENOMEM;
-	memset(p->gpon_tcont_map, 0xff, sizeof(p->gpon_tcont_map));
+	init_rwsem(&p->pon.sem);
 
 	p->dev = &pdev->dev;
 	spin_lock_init(&p->irq_enable_lock);
 	INIT_DELAYED_WORK(&p->intr_rearm, rtl9602c_intr_rearm);
-	INIT_DELAYED_WORK(&p->gpon_work, rtl9602c_gpon_work);
 	spin_lock_init(&p->mib_lock);
 	INIT_DELAYED_WORK(&p->mib_work, rtl9602c_mib_work);
 	mutex_init(&p->sds_lock);
@@ -2428,9 +2414,6 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	INIT_DELAYED_WORK(&p->sds_work, rtl9602c_sds_work);
 	mutex_init(&p->table_lock);
 	mutex_init(&p->fdb_lock);
-	mutex_init(&p->ploam_lock);
-	spin_lock_init(&p->ploam_log_lock);
-	mutex_init(&p->gpon_lock);
 	mutex_init(&p->acl_lock);
 	mutex_init(&p->meter_lock);
 	mutex_init(&p->ptp_lock);
@@ -2438,11 +2421,6 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	if (IS_ERR(p->reg))
 		return dev_err_probe(&pdev->dev, PTR_ERR(p->reg),
 				     "cannot map the switch registers\n");
-
-	err = rtl9602c_ponmac_probe(p);
-	if (err)
-		return dev_err_probe(&pdev->dev, err,
-				     "cannot reach the system controller\n");
 
 	/*
 	 * Asserted from the start, so that the laser emits nothing before
@@ -2459,11 +2437,6 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	if (err)
 		return dev_err_probe(&pdev->dev, err,
 				     "cannot register the transmit power restore\n");
-	err = rtl9602c_gpon_reboot_register(p);
-	if (err)
-		return dev_err_probe(&pdev->dev, err,
-				     "cannot register the dying gasp\n");
-
 	p->ds.dev = &pdev->dev;
 	p->ds.num_ports = RTL9602C_NUM_PORTS;
 	p->ds.ops = &rtl9602c_switch_ops;
@@ -2520,8 +2493,6 @@ static void rtl9602c_debugfs_init(struct rtl9602c_priv *p)
 	p->debugfs = debugfs_create_dir("rtl9602c", NULL);
 	rtl9602c_offload_debugfs_init(p);
 	rtl9602c_l2_debugfs_init(p);
-	rtl9602c_gpon_debugfs_init(p);
-	rtl9602c_ponmac_debugfs_init(p);
 	rtl9602c_optics_debugfs_init(p);
 	rtl9602c_ptp_debugfs_init(p);
 }

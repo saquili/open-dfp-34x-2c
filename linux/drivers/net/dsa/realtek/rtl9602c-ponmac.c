@@ -29,7 +29,7 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/regmap.h>
 
-#include "rtl9602c.h"
+#include "rtl9602c-pon.h"
 
 /*
  * The chip identification word; RTL9602C_CHIP_IDENT_REV is the silicon
@@ -40,13 +40,13 @@
 #define RTL9602C_CHIP_IDENT_READ_KEY		0xa0000000
 #define RTL9602C_CHIP_IDENT_REV		GENMASK(19, 16)
 
-static unsigned int rtl9602c_chip_rev(struct rtl9602c_priv *p)
+static unsigned int rtl9602c_chip_rev(struct rtl9602c_pon *p)
 {
 	u32 v;
 
-	rtl9602c_w(p, RTL9602C_CHIP_IDENT, RTL9602C_CHIP_IDENT_READ_KEY);
-	v = rtl9602c_r(p, RTL9602C_CHIP_IDENT);
-	rtl9602c_w(p, RTL9602C_CHIP_IDENT, 0);
+	rtl9602c_pon_w(p, RTL9602C_CHIP_IDENT, RTL9602C_CHIP_IDENT_READ_KEY);
+	v = rtl9602c_pon_r(p, RTL9602C_CHIP_IDENT);
+	rtl9602c_pon_w(p, RTL9602C_CHIP_IDENT, 0);
 	return FIELD_GET(RTL9602C_CHIP_IDENT_REV, v);
 }
 
@@ -67,7 +67,7 @@ static unsigned int rtl9602c_chip_rev(struct rtl9602c_priv *p)
  * Return: 0, also when the PON MAC is not available, or -EPROBE_DEFER while
  * the system controller is not ready.
  */
-int rtl9602c_ponmac_probe(struct rtl9602c_priv *p)
+int rtl9602c_ponmac_probe(struct rtl9602c_pon *p)
 {
 	static const char * const names[] = {
 		[RTL9602C_PBO_US] = "pbo-us",
@@ -118,7 +118,7 @@ int rtl9602c_ponmac_probe(struct rtl9602c_priv *p)
  * stream from 68 up would lie past the map, among the admission words and
  * the registers after them: a stream the block does not have is refused.
  */
-void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,
+void rtl9602c_ponq_stream_queue_set(struct rtl9602c_pon *p, unsigned int sid,
 				    unsigned int queue)
 {
 	unsigned int sh;
@@ -127,17 +127,17 @@ void rtl9602c_ponq_stream_queue_set(struct rtl9602c_priv *p, unsigned int sid,
 		return;
 
 	sh = RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(sid);
-	rtl9602c_rmw(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid),
-		     RTL9602C_PONQ_US_STREAM_QUEUE_MASK << sh,
+	rtl9602c_pon_rmw(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid),
+			 RTL9602C_PONQ_US_STREAM_QUEUE_MASK << sh,
 		     (queue & RTL9602C_PONQ_US_STREAM_QUEUE_MASK) << sh);
 }
 
 /* Admit stream @sid's frames to its queue, or stop admitting them. */
-static void rtl9602c_ponq_stream_enable(struct rtl9602c_priv *p, unsigned int sid,
+static void rtl9602c_ponq_stream_enable(struct rtl9602c_pon *p, unsigned int sid,
 					bool valid)
 {
-	rtl9602c_rmw(p, RTL9602C_PONQ_US_STREAM_EN(sid), BIT(sid % 32),
-		     valid ? BIT(sid % 32) : 0);
+	rtl9602c_pon_rmw(p, RTL9602C_PONQ_US_STREAM_EN(sid), BIT(sid % 32),
+			 valid ? BIT(sid % 32) : 0);
 }
 
 /**
@@ -150,7 +150,7 @@ static void rtl9602c_ponq_stream_enable(struct rtl9602c_priv *p, unsigned int si
  * closed, and for a stream the block does not have: RTL9602C_PON_NUM_SID
  * and up.
  */
-void rtl9602c_ponmac_sid_valid(struct rtl9602c_priv *p, unsigned int sid,
+void rtl9602c_ponmac_sid_valid(struct rtl9602c_pon *p, unsigned int sid,
 			       bool valid)
 {
 	if (p->ponmac_up && sid < RTL9602C_PON_NUM_SID)
@@ -175,19 +175,19 @@ void rtl9602c_ponmac_sid_valid(struct rtl9602c_priv *p, unsigned int sid,
  * bytes per second of frames counted with their FCS. A strict queue's
  * weight word is written 1.
  */
-void rtl9602c_pon_queue_set(struct rtl9602c_priv *p, unsigned int q,
+void rtl9602c_pon_queue_set(struct rtl9602c_pon *p, unsigned int q,
 			    unsigned int weight, u32 cir, u32 pir)
 {
 	unsigned int sh = RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT(q);
 
-	rtl9602c_rmw(p, RTL9602C_PONSCH_QUEUE_WFQ(q), BIT(q % 32),
-		     weight ? BIT(q % 32) : 0);
-	rtl9602c_w(p, RTL9602C_PONSCH_QUEUE_CIR(q),
-		   FIELD_PREP(RTL9602C_PONSCH_QUEUE_RATE, cir));
-	rtl9602c_w(p, RTL9602C_PONSCH_QUEUE_PIR(q),
-		   FIELD_PREP(RTL9602C_PONSCH_QUEUE_RATE, pir));
-	rtl9602c_rmw(p, RTL9602C_PONSCH_QUEUE_WEIGHT(q),
-		     RTL9602C_PONSCH_QUEUE_WEIGHT_MASK << sh,
+	rtl9602c_pon_rmw(p, RTL9602C_PONSCH_QUEUE_WFQ(q), BIT(q % 32),
+			 weight ? BIT(q % 32) : 0);
+	rtl9602c_pon_w(p, RTL9602C_PONSCH_QUEUE_CIR(q),
+		       FIELD_PREP(RTL9602C_PONSCH_QUEUE_RATE, cir));
+	rtl9602c_pon_w(p, RTL9602C_PONSCH_QUEUE_PIR(q),
+		       FIELD_PREP(RTL9602C_PONSCH_QUEUE_RATE, pir));
+	rtl9602c_pon_rmw(p, RTL9602C_PONSCH_QUEUE_WEIGHT(q),
+			 RTL9602C_PONSCH_QUEUE_WEIGHT_MASK << sh,
 		     (weight ? weight : 1) << sh);
 }
 
@@ -223,33 +223,33 @@ void rtl9602c_pon_queue_set(struct rtl9602c_priv *p, unsigned int q,
  * waits for is not verified, nor what it does to frames that other streams
  * go on feeding into the queue.
  */
-static int rtl9602c_pon_drain(struct rtl9602c_priv *p, unsigned int q)
+static int rtl9602c_pon_drain(struct rtl9602c_pon *p, unsigned int q)
 {
-	u32 use = rtl9602c_r(p, RTL9602C_PKTBUF_POOL_USED(RTL9602C_PBO_US));
+	u32 use = rtl9602c_pon_r(p, RTL9602C_PKTBUF_POOL_USED(RTL9602C_PBO_US));
 	unsigned long sram = FIELD_GET(RTL9602C_PKTBUF_POOL_USED_SRAM, use);
 	unsigned long dram = FIELD_GET(RTL9602C_PKTBUF_POOL_USED_DRAM, use);
 	ktime_t t0;
 	u32 v;
 	int err;
 
-	rtl9602c_w(p, RTL9602C_PONQ_DRAIN_CMD,
-		   FIELD_PREP(RTL9602C_PONQ_DRAIN_CMD_IDX, q) |
+	rtl9602c_pon_w(p, RTL9602C_PONQ_DRAIN_CMD,
+		       FIELD_PREP(RTL9602C_PONQ_DRAIN_CMD_IDX, q) |
 		   RTL9602C_PONQ_DRAIN_CMD_BY_QUEUE | RTL9602C_PONQ_DRAIN_CMD_START);
 
 	t0 = ktime_get();
-	err = read_poll_timeout(rtl9602c_r, v, !(v & RTL9602C_PONQ_DRAIN_CMD_BUSY),
+	err = read_poll_timeout(rtl9602c_pon_r, v, !(v & RTL9602C_PONQ_DRAIN_CMD_BUSY),
 				0, RTL9602C_PON_DRN_US, false, p,
 				RTL9602C_PONQ_DRAIN_CMD);
 	if (!err)
 		return 0;
 
-	err = read_poll_timeout(rtl9602c_r, v, !(v & RTL9602C_PONQ_DRAIN_CMD_BUSY),
+	err = read_poll_timeout(rtl9602c_pon_r, v, !(v & RTL9602C_PONQ_DRAIN_CMD_BUSY),
 				100, RTL9602C_PON_DRN_SLOW_US, false, p,
 				RTL9602C_PONQ_DRAIN_CMD);
 	if (err)
 		pr_err("PON queue %u did not drain in %u ms: %08x, with %lu SRAM and %lu DRAM descriptors in use and the block %s ready\n",
 		       q, RTL9602C_PON_DRN_SLOW_US / 1000, v, sram, dram,
-		       rtl9602c_r(p, RTL9602C_PKTBUF_STAT(RTL9602C_PBO_US)) &
+		       rtl9602c_pon_r(p, RTL9602C_PKTBUF_STAT(RTL9602C_PBO_US)) &
 		       RTL9602C_PKTBUF_STAT_INIT_DONE ? "was" : "was NOT");
 	else
 		pr_warn("PON queue %u drained in %lld us, past the %u us this port allows, with %lu SRAM and %lu DRAM descriptors in use when it started\n",
@@ -283,7 +283,7 @@ static int rtl9602c_pon_drain(struct rtl9602c_priv *p, unsigned int q)
  * Return: 0, or -ETIMEDOUT when the drain does not complete; the T-CONT is
  * then switched on and its map left as it was.
  */
-int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
+int rtl9602c_pon_queue_add(struct rtl9602c_pon *p, unsigned int tcont,
 			   unsigned int queue)
 {
 	unsigned int pq = RTL9602C_PON_QUEUE(tcont, queue);
@@ -292,13 +292,13 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 	u32 qmap;
 	int err;
 
-	qmap = rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont));
+	qmap = rtl9602c_pon_r(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont));
 	if (!qmap)
-		rtl9602c_rmw(p, RTL9602C_PONSCH_TCONT_EN, 0, BIT(tcont));
+		rtl9602c_pon_rmw(p, RTL9602C_PONSCH_TCONT_EN, 0, BIT(tcont));
 
 	/* The T-CONTs of a group, eight of them, share its 32 queues. */
 	for (t = first; t < first + 8 && t < RTL9602C_PON_NUM_TCONT; t++)
-		if (rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)) & BIT(queue))
+		if (rtl9602c_pon_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t)) & BIT(queue))
 			in_use = true;
 
 	if (!in_use) {
@@ -309,7 +309,7 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
 				       RTL9602C_PONSCH_QUEUE_RATE_MAX);
 	}
 
-	rtl9602c_w(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont), qmap | BIT(queue));
+	rtl9602c_pon_w(p, RTL9602C_PONSCH_TCONT_QUEUES(tcont), qmap | BIT(queue));
 	return 0;
 }
 
@@ -325,7 +325,7 @@ int rtl9602c_pon_queue_add(struct rtl9602c_priv *p, unsigned int tcont,
  * Sets @ready_us to the time the halves took to finish initialising, and
  * returns 0, or -ETIMEDOUT when a half does not finish.
  */
-static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
+static int rtl9602c_pbo_init(struct rtl9602c_pon *p, s64 *ready_us)
 {
 	static const u32 sram[2] = {
 		[RTL9602C_PBO_US] = RTL9602C_PBO_SRAM_US,
@@ -340,12 +340,12 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	ktime_t t0;
 
 	for (d = 0; d < 2; d++)
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_DMA_CTRL(d),
-			     RTL9602C_PKTBUF_DMA_CTRL_GMII_RX_EN |
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_DMA_CTRL(d),
+				 RTL9602C_PKTBUF_DMA_CTRL_GMII_RX_EN |
 			     RTL9602C_PKTBUF_DMA_CTRL_GMII_TX_EN, 0);
 	for (d = 0; d < 2; d++)
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_CTRL(d),
-			     RTL9602C_PKTBUF_CTRL_EN, 0);
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_CTRL(d),
+				 RTL9602C_PKTBUF_CTRL_EN, 0);
 
 	for (d = 0; d < 2; d++) {
 		u32 sram_pages = sram[d] / RTL9602C_PBO_PAGE;
@@ -359,10 +359,10 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 		 * short of the region. The SRAM sizes, the encoding and the
 		 * limits are not verified.
 		 */
-		rtl9602c_w(p, RTL9602C_PKTBUF_DRAM_BASE(d),
-			   lower_32_bits(p->pbo_base[d]));
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_POOL_CFG(d),
-			     RTL9602C_PKTBUF_POOL_CFG_SRAM_PAGES |
+		rtl9602c_pon_w(p, RTL9602C_PKTBUF_DRAM_BASE(d),
+			       lower_32_bits(p->pbo_base[d]));
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_POOL_CFG(d),
+				 RTL9602C_PKTBUF_POOL_CFG_SRAM_PAGES |
 			     RTL9602C_PKTBUF_POOL_CFG_DRAM_PAGES,
 			     FIELD_PREP(RTL9602C_PKTBUF_POOL_CFG_SRAM_PAGES,
 					sram_pages - 1) |
@@ -372,8 +372,8 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 		sram_runout[d] = sram_pages - 2;
 		dram_runout[d] = RTL9602C_PBO_DRAM / RTL9602C_PBO_PAGE - 0x28 -
 				 sram_pages;
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_POOL_LIMIT(d),
-			     RTL9602C_PKTBUF_POOL_LIMIT_SRAM |
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_POOL_LIMIT(d),
+				 RTL9602C_PKTBUF_POOL_LIMIT_SRAM |
 			     RTL9602C_PKTBUF_POOL_LIMIT_DRAM,
 			     FIELD_PREP(RTL9602C_PKTBUF_POOL_LIMIT_SRAM,
 					sram_runout[d]) |
@@ -390,26 +390,26 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	 * above the off level and downstream below it, so which field is the
 	 * level that asserts is not known. None of these marks is verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_PKTBUF_THR_US_STOP, RTL9602C_PKTBUF_THR_OFF,
-		     FIELD_PREP(RTL9602C_PKTBUF_THR_OFF,
-				dram_runout[RTL9602C_PBO_US] - 0x28));
-	rtl9602c_rmw(p, RTL9602C_PKTBUF_THR_US_GLOBAL,
-		     RTL9602C_PKTBUF_THR_ON | RTL9602C_PKTBUF_THR_OFF,
+	rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_THR_US_STOP, RTL9602C_PKTBUF_THR_OFF,
+			 FIELD_PREP(RTL9602C_PKTBUF_THR_OFF,
+				    dram_runout[RTL9602C_PBO_US] - 0x28));
+	rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_THR_US_GLOBAL,
+			 RTL9602C_PKTBUF_THR_ON | RTL9602C_PKTBUF_THR_OFF,
 		     FIELD_PREP(RTL9602C_PKTBUF_THR_ON,
 				dram_runout[RTL9602C_PBO_US] - 0x78) |
 		     FIELD_PREP(RTL9602C_PKTBUF_THR_OFF,
 				dram_runout[RTL9602C_PBO_US] - 0x118));
 	for (s = 0; s < RTL9602C_PON_NUM_SID; s++)
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_THR_US_STREAM(s),
-			     RTL9602C_PKTBUF_THR_ON | RTL9602C_PKTBUF_THR_OFF,
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_THR_US_STREAM(s),
+				 RTL9602C_PKTBUF_THR_ON | RTL9602C_PKTBUF_THR_OFF,
 			     FIELD_PREP(RTL9602C_PKTBUF_THR_ON, 0x96) |
 			     FIELD_PREP(RTL9602C_PKTBUF_THR_OFF, 0x82));
 
 	th = dram_runout[RTL9602C_PBO_DS] + sram_runout[RTL9602C_PBO_DS];
-	rtl9602c_rmw(p, RTL9602C_PKTBUF_THR_DS, RTL9602C_PKTBUF_THR_OFF,
-		     FIELD_PREP(RTL9602C_PKTBUF_THR_OFF, th - 0x84));
-	rtl9602c_rmw(p, RTL9602C_PKTBUF_THR_DS, RTL9602C_PKTBUF_THR_ON,
-		     FIELD_PREP(RTL9602C_PKTBUF_THR_ON, th - 0xa4));
+	rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_THR_DS, RTL9602C_PKTBUF_THR_OFF,
+			 FIELD_PREP(RTL9602C_PKTBUF_THR_OFF, th - 0x84));
+	rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_THR_DS, RTL9602C_PKTBUF_THR_ON,
+			 FIELD_PREP(RTL9602C_PKTBUF_THR_ON, th - 0xa4));
 
 	/*
 	 * GPON framing in both halves. The rest is taken to be needed and is
@@ -418,25 +418,25 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	 * of 0, taken to mean 128 bytes, in both pools and both engines.
 	 */
 	for (d = 0; d < 2; d++)
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_CTRL(d),
-			     RTL9602C_PKTBUF_CTRL_EPON_MODE, 0);
-	rtl9602c_rmw(p, RTL9602C_PKTBUF_CTRL(RTL9602C_PBO_US), 0,
-		     RTL9602C_PKTBUF_CTRL_RX_STOP_EN);
-	rtl9602c_rmw(p, RTL9602C_PKTBUF_US_FIFO_CFG,
-		     RTL9602C_PKTBUF_US_FIFO_CFG_SPACE | RTL9602C_PKTBUF_US_FIFO_CFG_START,
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_CTRL(d),
+				 RTL9602C_PKTBUF_CTRL_EPON_MODE, 0);
+	rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_CTRL(RTL9602C_PBO_US), 0,
+			 RTL9602C_PKTBUF_CTRL_RX_STOP_EN);
+	rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_US_FIFO_CFG,
+			 RTL9602C_PKTBUF_US_FIFO_CFG_SPACE | RTL9602C_PKTBUF_US_FIFO_CFG_START,
 		     FIELD_PREP(RTL9602C_PKTBUF_US_FIFO_CFG_SPACE, 1) |
 		     FIELD_PREP(RTL9602C_PKTBUF_US_FIFO_CFG_START, 3));
 	for (d = 0; d < 2; d++) {
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_POOL_CFG(d),
-			     RTL9602C_PKTBUF_POOL_CFG_PAGE_SIZE, 0);
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_DMA_PAGE_CFG(d),
-			     RTL9602C_PKTBUF_DMA_PAGE_CFG_RX_SIZE |
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_POOL_CFG(d),
+				 RTL9602C_PKTBUF_POOL_CFG_PAGE_SIZE, 0);
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_DMA_PAGE_CFG(d),
+				 RTL9602C_PKTBUF_DMA_PAGE_CFG_RX_SIZE |
 			     RTL9602C_PKTBUF_DMA_PAGE_CFG_TX_SIZE, 0);
 	}
 
 	for (d = 0; d < 2; d++)
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_CTRL(d), 0,
-			     RTL9602C_PKTBUF_CTRL_EN);
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_CTRL(d), 0,
+				 RTL9602C_PKTBUF_CTRL_EN);
 
 	/*
 	 * A debug selection in each DMA engine; that the data path depends on
@@ -444,10 +444,10 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	 */
 	for (d = 0; d < 2; d++) {
 		u32 sel = FIELD_GET(RTL9602C_PKTBUF_DMA_DBG_SEL_FUNC,
-				    rtl9602c_r(p, RTL9602C_PKTBUF_DMA_DBG_SEL(d)));
+				    rtl9602c_pon_r(p, RTL9602C_PKTBUF_DMA_DBG_SEL(d)));
 
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_DMA_DBG_SEL(d),
-			     RTL9602C_PKTBUF_DMA_DBG_SEL_FUNC,
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_DMA_DBG_SEL(d),
+				 RTL9602C_PKTBUF_DMA_DBG_SEL_FUNC,
 			     FIELD_PREP(RTL9602C_PKTBUF_DMA_DBG_SEL_FUNC, sel | 2));
 	}
 
@@ -458,19 +458,19 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	 * accepted. None of it is verified.
 	 */
 	for (d = 0; d < 2; d++) {
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_MAC_CFG(d), 0,
-			     RTL9602C_PKTBUF_MAC_CFG_RX_AFULL_EN |
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_MAC_CFG(d), 0,
+				 RTL9602C_PKTBUF_MAC_CFG_RX_AFULL_EN |
 			     RTL9602C_PKTBUF_MAC_CFG_TX_STOP_EN |
 			     RTL9602C_PKTBUF_MAC_CFG_TX_EN_EXTRA);
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_MAC_TX_CFG(d),
-			     RTL9602C_PKTBUF_MAC_TX_CFG_IPG |
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_MAC_TX_CFG(d),
+				 RTL9602C_PKTBUF_MAC_TX_CFG_IPG |
 			     RTL9602C_PKTBUF_MAC_TX_CFG_PREAMBLE_LEN |
 			     RTL9602C_PKTBUF_MAC_TX_CFG_PAD_EN,
 			     FIELD_PREP(RTL9602C_PKTBUF_MAC_TX_CFG_IPG, 3) |
 			     FIELD_PREP(RTL9602C_PKTBUF_MAC_TX_CFG_PREAMBLE_LEN, 1) |
 			     RTL9602C_PKTBUF_MAC_TX_CFG_PAD_EN);
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_MAC_RX_CFG(d), 0,
-			     RTL9602C_PKTBUF_MAC_RX_CFG_ACCEPT_ERR);
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_MAC_RX_CFG(d), 0,
+				 RTL9602C_PKTBUF_MAC_RX_CFG_ACCEPT_ERR);
 	}
 
 	/*
@@ -482,8 +482,8 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	 * known to be needed.
 	 */
 	for (d = 0; d < 2; d++)
-		rtl9602c_rmw(p, RTL9602C_PKTBUF_DMA_CTRL(d),
-			     RTL9602C_PKTBUF_DMA_CTRL_MAX_BURST_SEL0 |
+		rtl9602c_pon_rmw(p, RTL9602C_PKTBUF_DMA_CTRL(d),
+				 RTL9602C_PKTBUF_DMA_CTRL_MAX_BURST_SEL0 |
 			     RTL9602C_PKTBUF_DMA_CTRL_MAX_BURST_SEL1 |
 			     RTL9602C_PKTBUF_DMA_CTRL_EARLY_TX |
 			     RTL9602C_PKTBUF_DMA_CTRL_TX_FIFO_THR |
@@ -509,7 +509,7 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
 	t0 = ktime_get();
 	for (d = 0; d < 2; d++) {
 		u32 sts;
-		int err = read_poll_timeout(rtl9602c_r, sts,
+		int err = read_poll_timeout(rtl9602c_pon_r, sts,
 					    sts & RTL9602C_PKTBUF_STAT_INIT_DONE,
 					    10, RTL9602C_PON_IPRDY_US, false, p,
 					    RTL9602C_PKTBUF_STAT(d));
@@ -530,7 +530,7 @@ static int rtl9602c_pbo_init(struct rtl9602c_priv *p, s64 *ready_us)
  * the switch's global ones, each clamped to its field. That the PON port
  * needs them is not verified.
  */
-static void rtl9602c_pon_fc_thresholds(struct rtl9602c_priv *p)
+static void rtl9602c_pon_fc_thresholds(struct rtl9602c_pon *p)
 {
 	static const u32 regs[][2] = {
 		{ RTL9602C_PAUSE_THR_GLOBAL_HIGH, RTL9602C_PAUSE_THR_PON_HIGH },
@@ -539,7 +539,7 @@ static void rtl9602c_pon_fc_thresholds(struct rtl9602c_priv *p)
 	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(regs); i++) {
-		u32 v = rtl9602c_r(p, regs[i][0]);
+		u32 v = rtl9602c_pon_r(p, regs[i][0]);
 		u32 on = min_t(u32, FIELD_GET(RTL9602C_PAUSE_THR_ON, v) +
 			       RTL9602C_FC_PON_EXTRA,
 			       FIELD_MAX(RTL9602C_PAUSE_THR_ON));
@@ -547,8 +547,8 @@ static void rtl9602c_pon_fc_thresholds(struct rtl9602c_priv *p)
 				RTL9602C_FC_PON_EXTRA,
 				FIELD_MAX(RTL9602C_PAUSE_THR_OFF));
 
-		rtl9602c_rmw(p, regs[i][1],
-			     RTL9602C_PAUSE_THR_ON | RTL9602C_PAUSE_THR_OFF,
+		rtl9602c_pon_rmw(p, regs[i][1],
+				 RTL9602C_PAUSE_THR_ON | RTL9602C_PAUSE_THR_OFF,
 			     FIELD_PREP(RTL9602C_PAUSE_THR_ON, on) |
 			     FIELD_PREP(RTL9602C_PAUSE_THR_OFF, off));
 	}
@@ -571,7 +571,7 @@ static void rtl9602c_pon_fc_thresholds(struct rtl9602c_priv *p)
  * (rtl9602c_ponmac_probe()); -ETIMEDOUT when a half of the packet buffer
  * does not finish initialising or the OMCC's queue does not drain.
  */
-int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
+int rtl9602c_ponmac_init(struct rtl9602c_pon *p)
 {
 	unsigned int omcc_q = RTL9602C_PON_QUEUE(RTL9602C_GPON_DEFAULT_TCONT_IDX,
 						 0);
@@ -601,8 +601,8 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * The token clock of the queue rate limiters. With every peak rate at
 	 * the maximum nothing depends on it; its values are not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_PONSCH_TOKEN_CLK,
-		     RTL9602C_PONSCH_TOKEN_CLK_PERIOD | RTL9602C_PONSCH_TOKEN_CLK_TOKENS,
+	rtl9602c_pon_rmw(p, RTL9602C_PONSCH_TOKEN_CLK,
+			 RTL9602C_PONSCH_TOKEN_CLK_PERIOD | RTL9602C_PONSCH_TOKEN_CLK_TOKENS,
 		     FIELD_PREP(RTL9602C_PONSCH_TOKEN_CLK_PERIOD, 0x6e) |
 		     FIELD_PREP(RTL9602C_PONSCH_TOKEN_CLK_TOKENS, 0x95));
 
@@ -610,18 +610,18 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * Per-bit forcing of the queues' committed-rate state, written whole,
 	 * bits of no known field included; not verified.
 	 */
-	rtl9602c_w(p, RTL9602C_PONSCH_CIR_FORCE_EN, 0xffffffff);
-	rtl9602c_w(p, RTL9602C_PONSCH_CIR_FORCE_VAL, 0xffffffff);
+	rtl9602c_pon_w(p, RTL9602C_PONSCH_CIR_FORCE_EN, 0xffffffff);
+	rtl9602c_pon_w(p, RTL9602C_PONSCH_CIR_FORCE_VAL, 0xffffffff);
 
 	/*
 	 * Invert the output of the dying-gasp comparator, the supply-loss
 	 * detector. Nothing else in the driver uses it, and which polarity
 	 * reports a real loss is not verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_DGASP_CFG, 0, RTL9602C_DGASP_CFG_INVERT);
+	rtl9602c_pon_rmw(p, RTL9602C_DGASP_CFG, 0, RTL9602C_DGASP_CFG_INVERT);
 	/* Thresholds on the remainder of a grant; not verified. */
-	rtl9602c_rmw(p, RTL9602C_PONSCH_GRANT_THR,
-		     RTL9602C_PONSCH_GRANT_THR_LAST | RTL9602C_PONSCH_GRANT_THR_RUNT,
+	rtl9602c_pon_rmw(p, RTL9602C_PONSCH_GRANT_THR,
+			 RTL9602C_PONSCH_GRANT_THR_LAST | RTL9602C_PONSCH_GRANT_THR_RUNT,
 		     FIELD_PREP(RTL9602C_PONSCH_GRANT_THR_LAST, 5) |
 		     FIELD_PREP(RTL9602C_PONSCH_GRANT_THR_RUNT, 5));
 	/*
@@ -630,8 +630,8 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * OMCC's, is left as it is.
 	 */
 	for (i = 0; i < RTL9602C_PON_NUM_TCONT - 1; i++) {
-		rtl9602c_rmw(p, RTL9602C_PONSCH_TCONT_EN, BIT(i), 0);
-		rtl9602c_w(p, RTL9602C_PONSCH_TCONT_QUEUES(i), 0);
+		rtl9602c_pon_rmw(p, RTL9602C_PONSCH_TCONT_EN, BIT(i), 0);
+		rtl9602c_pon_w(p, RTL9602C_PONSCH_TCONT_QUEUES(i), 0);
 	}
 	/*
 	 * Make a queue's peak rate a limit. With the bit set, a queue sends
@@ -641,7 +641,7 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * peak rate whenever its T-CONT's other queues leave the grant unused
 	 * (all measured on this board, see rtl9602c.rst).
 	 */
-	rtl9602c_rmw(p, RTL9602C_PONSCH_CFG, 0, RTL9602C_PONSCH_CFG_PIR_DROP);
+	rtl9602c_pon_rmw(p, RTL9602C_PONSCH_CFG, 0, RTL9602C_PONSCH_CFG_PIR_DROP);
 	for (i = 0; i < RTL9602C_PON_NUM_QUEUE; i++)
 		rtl9602c_pon_queue_set(p, i, 0, 0, RTL9602C_PONSCH_QUEUE_RATE_MAX);
 	/*
@@ -651,9 +651,9 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * there; that this register is what gives them the priority is not
 	 * verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_OMCI_TRAP_CFG, RTL9602C_OMCI_TRAP_CFG_PRI,
-		     FIELD_PREP(RTL9602C_OMCI_TRAP_CFG_PRI,
-				RTL9602C_OMCI_TRAP_CFG_PRI_HIGHEST));
+	rtl9602c_pon_rmw(p, RTL9602C_OMCI_TRAP_CFG, RTL9602C_OMCI_TRAP_CFG_PRI,
+			 FIELD_PREP(RTL9602C_OMCI_TRAP_CFG_PRI,
+				    RTL9602C_OMCI_TRAP_CFG_PRI_HIGHEST));
 
 	/*
 	 * Streams 0 to 63 are for GEM ports: each is parked, pointed at queue
@@ -670,9 +670,9 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	}
 	rtl9602c_ponq_stream_queue_set(p, RTL9602C_GPON_OMCC_FLOW, omcc_q);
 	rtl9602c_ponq_stream_enable(p, RTL9602C_GPON_OMCC_FLOW, true);
-	rtl9602c_rmw(p, RTL9602C_OMCI_OMCC_CFG, RTL9602C_OMCI_OMCC_CFG_STREAM,
-		     FIELD_PREP(RTL9602C_OMCI_OMCC_CFG_STREAM,
-				RTL9602C_GPON_OMCC_FLOW));
+	rtl9602c_pon_rmw(p, RTL9602C_OMCI_OMCC_CFG, RTL9602C_OMCI_OMCC_CFG_STREAM,
+			 FIELD_PREP(RTL9602C_OMCI_OMCC_CFG_STREAM,
+				    RTL9602C_GPON_OMCC_FLOW));
 
 	err = rtl9602c_pbo_init(p, &ready_us);
 	if (err)
@@ -683,8 +683,8 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * towards the switch; the other streams are left as they are. Not
 	 * verified.
 	 */
-	rtl9602c_rmw(p, RTL9602C_PONQ_DS_STREAM_QUEUE(RTL9602C_GPON_OMCC_FLOW),
-		     RTL9602C_PONQ_DS_STREAM_QUEUE_MASK <<
+	rtl9602c_pon_rmw(p, RTL9602C_PONQ_DS_STREAM_QUEUE(RTL9602C_GPON_OMCC_FLOW),
+			 RTL9602C_PONQ_DS_STREAM_QUEUE_MASK <<
 		     RTL9602C_PONQ_DS_STREAM_QUEUE_SHIFT(RTL9602C_GPON_OMCC_FLOW), 0);
 
 	/*
@@ -692,11 +692,11 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 * OMCI, and give the PON port its own pause marks. Neither is
 	 * verified to be needed.
 	 */
-	rtl9602c_rmw(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_PON), 0,
-		     RTL9602C_PORT_MAC_CFG_RX_PON_CTRL);
+	rtl9602c_pon_rmw(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_PON), 0,
+			 RTL9602C_PORT_MAC_CFG_RX_PON_CTRL);
 	rtl9602c_pon_fc_thresholds(p);
-	rtl9602c_rmw(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_CPU), 0,
-		     RTL9602C_PORT_MAC_CFG_RX_PON_CTRL);
+	rtl9602c_pon_rmw(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_CPU), 0,
+			 RTL9602C_PORT_MAC_CFG_RX_PON_CTRL);
 
 	/*
 	 * No peak-rate drop on chip revision 1. This board's chip reads
@@ -704,8 +704,8 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 	 */
 	rev = rtl9602c_chip_rev(p);
 	if (rev == 1)
-		rtl9602c_rmw(p, RTL9602C_PONSCH_CFG,
-			     RTL9602C_PONSCH_CFG_PIR_DROP, 0);
+		rtl9602c_pon_rmw(p, RTL9602C_PONSCH_CFG,
+				 RTL9602C_PONSCH_CFG_PIR_DROP, 0);
 
 	/*
 	 * The GPON MAC grants the allocations of the default Alloc-ID, which
@@ -730,29 +730,29 @@ int rtl9602c_ponmac_init(struct rtl9602c_priv *p)
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 
 /* One queue's scheduling as rtl9602c_pon_queue_set() writes it, rates raw. */
-static void rtl9602c_queue_show(struct seq_file *m, struct rtl9602c_priv *p,
+static void rtl9602c_queue_show(struct seq_file *m, struct rtl9602c_pon *p,
 				unsigned int q)
 {
-	u32 weight = (rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_WEIGHT(q)) >>
+	u32 weight = (rtl9602c_pon_r(p, RTL9602C_PONSCH_QUEUE_WEIGHT(q)) >>
 		      RTL9602C_PONSCH_QUEUE_WEIGHT_SHIFT(q)) &
 		     RTL9602C_PONSCH_QUEUE_WEIGHT_MASK;
 
-	if (rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_WFQ(q)) & BIT(q % 32))
+	if (rtl9602c_pon_r(p, RTL9602C_PONSCH_QUEUE_WFQ(q)) & BIT(q % 32))
 		seq_printf(m, "    queue %-2u  weight %-4u", q, weight);
 	else
 		seq_printf(m, "    queue %-2u  strict     ", q);
 	seq_printf(m, "  cir %05lx  pir %05lx\n",
 		   FIELD_GET(RTL9602C_PONSCH_QUEUE_RATE,
-			     rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_CIR(q))),
+			     rtl9602c_pon_r(p, RTL9602C_PONSCH_QUEUE_CIR(q))),
 		   FIELD_GET(RTL9602C_PONSCH_QUEUE_RATE,
-			     rtl9602c_r(p, RTL9602C_PONSCH_QUEUE_PIR(q))));
+			     rtl9602c_pon_r(p, RTL9602C_PONSCH_QUEUE_PIR(q))));
 }
 
 /* The queue stream @sid points at. */
-static unsigned int rtl9602c_ponq_stream_queue_get(struct rtl9602c_priv *p,
+static unsigned int rtl9602c_ponq_stream_queue_get(struct rtl9602c_pon *p,
 						   unsigned int sid)
 {
-	return (rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid)) >>
+	return (rtl9602c_pon_r(p, RTL9602C_PONQ_US_STREAM_QUEUE(sid)) >>
 		RTL9602C_PONQ_US_STREAM_QUEUE_SHIFT(sid)) & RTL9602C_PONQ_US_STREAM_QUEUE_MASK;
 }
 
@@ -773,7 +773,7 @@ static unsigned int rtl9602c_ponq_stream_queue_get(struct rtl9602c_priv *p,
  */
 static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 {
-	struct rtl9602c_priv *p = m->private;
+	struct rtl9602c_pon *p = m->private;
 	unsigned int f = RTL9602C_GPON_OMCC_FLOW, d, t, s;
 	u32 qmap = RTL9602C_PONSCH_TCONT_QUEUES(RTL9602C_GPON_DEFAULT_TCONT_IDX);
 	u32 v = 0;
@@ -788,26 +788,26 @@ static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 
 	seq_puts(m, "\nGPON MAC, OMCC flow\n");
 	seq_printf(m, "  traffic     %08x\n",
-		   rtl9602c_r(p, RTL9602C_GEM_DS_FLOW_CFG(f)));
+		   rtl9602c_pon_r(p, RTL9602C_GEM_DS_FLOW_CFG(f)));
 	seq_printf(m, "  us port     %08x\n",
-		   rtl9602c_r(p, RTL9602C_GEM_US_FLOW_CFG(f)));
+		   rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_CFG(f)));
 
 	if (p->ponmac_up) {
 		seq_puts(m, "\nPON MAC\n");
 		seq_printf(m, "  omci sid    %lu\n",
 			   FIELD_GET(RTL9602C_OMCI_OMCC_CFG_STREAM,
-				     rtl9602c_r(p, RTL9602C_OMCI_OMCC_CFG)));
+				     rtl9602c_pon_r(p, RTL9602C_OMCI_OMCC_CFG)));
 		if (f < RTL9602C_PON_NUM_SID)
 			seq_printf(m, "  sid %u       queue %u, %s\n", f,
 				   rtl9602c_ponq_stream_queue_get(p, f),
-				   rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_EN(f)) &
+				   rtl9602c_pon_r(p, RTL9602C_PONQ_US_STREAM_EN(f)) &
 				   BIT(f % 32) ? "valid" : "invalid");
 		else
 			seq_printf(m, "  sid %u       none: no upstream stream\n",
 				   f);
 		seq_printf(m, "  tcont en    %08x  qmap[16] %08x\n",
-			   rtl9602c_r(p, RTL9602C_PONSCH_TCONT_EN),
-			   rtl9602c_r(p, qmap));
+			   rtl9602c_pon_r(p, RTL9602C_PONSCH_TCONT_EN),
+			   rtl9602c_pon_r(p, qmap));
 		/*
 		 * The maps of T-CONTs 0 to 15 in use, each queue in them with
 		 * its scheduling, and the streams admitted.
@@ -816,7 +816,7 @@ static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 			unsigned long map;
 			unsigned int b;
 
-			map = rtl9602c_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t));
+			map = rtl9602c_pon_r(p, RTL9602C_PONSCH_TCONT_QUEUES(t));
 			if (!map)
 				continue;
 			seq_printf(m, "  qmap[%2u]    %08lx\n", t, map);
@@ -824,36 +824,36 @@ static int rtl9602c_ponmac_show(struct seq_file *m, void *unused)
 				rtl9602c_queue_show(m, p, RTL9602C_PON_QUEUE(t, b));
 		}
 		for (s = 0; s < RTL9602C_GPON_OMCC_FLOW; s++)
-			if (rtl9602c_r(p, RTL9602C_PONQ_US_STREAM_EN(s)) & BIT(s % 32))
+			if (rtl9602c_pon_r(p, RTL9602C_PONQ_US_STREAM_EN(s)) & BIT(s % 32))
 				seq_printf(m, "  sid %-2u      queue %u, valid\n", s,
 					   rtl9602c_ponq_stream_queue_get(p, s));
 		for (d = 0; d < 2; d++)
 			seq_printf(m,
 				   "  %s          ctl %08x  ready %u  base %08x  usage %08x  io %08x\n",
 				   d == RTL9602C_PBO_US ? "us" : "ds",
-				   rtl9602c_r(p, RTL9602C_PKTBUF_CTRL(d)),
-				   (unsigned int)!!(rtl9602c_r(p, RTL9602C_PKTBUF_STAT(d)) &
+				   rtl9602c_pon_r(p, RTL9602C_PKTBUF_CTRL(d)),
+				   (unsigned int)!!(rtl9602c_pon_r(p, RTL9602C_PKTBUF_STAT(d)) &
 						    RTL9602C_PKTBUF_STAT_INIT_DONE),
-				   rtl9602c_r(p, RTL9602C_PKTBUF_DRAM_BASE(d)),
-				   rtl9602c_r(p, RTL9602C_PKTBUF_POOL_USED(d)),
-				   rtl9602c_r(p, RTL9602C_PKTBUF_DMA_CTRL(d)));
+				   rtl9602c_pon_r(p, RTL9602C_PKTBUF_DRAM_BASE(d)),
+				   rtl9602c_pon_r(p, RTL9602C_PKTBUF_POOL_USED(d)),
+				   rtl9602c_pon_r(p, RTL9602C_PKTBUF_DMA_CTRL(d)));
 	}
 
 	seq_puts(m, "\nswitch\n");
 	seq_printf(m, "  trap pri    %lu\n",
 		   FIELD_GET(RTL9602C_OMCI_TRAP_CFG_PRI,
-			     rtl9602c_r(p, RTL9602C_OMCI_TRAP_CFG)));
+			     rtl9602c_pon_r(p, RTL9602C_OMCI_TRAP_CFG)));
 	seq_printf(m, "  port misc   pon %08x  cpu %08x\n",
-		   rtl9602c_r(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_PON)),
-		   rtl9602c_r(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_CPU)));
+		   rtl9602c_pon_r(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_PON)),
+		   rtl9602c_pon_r(p, RTL9602C_PORT_MAC_CFG(RTL9602C_PORT_CPU)));
 	seq_printf(m, "  omci rx     %u pkts %u bytes, crc %u, drop %u\n",
-		   rtl9602c_r(p, RTL9602C_MIB_OMCI_RX_PKTS),
-		   rtl9602c_r(p, RTL9602C_MIB_OMCI_RX_OCTETS),
-		   rtl9602c_r(p, RTL9602C_MIB_OMCI_RX_CRC_ERRORS),
-		   rtl9602c_r(p, RTL9602C_MIB_OMCI_DISCARDS));
+		   rtl9602c_pon_r(p, RTL9602C_MIB_OMCI_RX_PKTS),
+		   rtl9602c_pon_r(p, RTL9602C_MIB_OMCI_RX_OCTETS),
+		   rtl9602c_pon_r(p, RTL9602C_MIB_OMCI_RX_CRC_ERRORS),
+		   rtl9602c_pon_r(p, RTL9602C_MIB_OMCI_DISCARDS));
 	seq_printf(m, "  omci tx     %u pkts %u bytes\n",
-		   rtl9602c_r(p, RTL9602C_MIB_OMCI_TX_PKTS),
-		   rtl9602c_r(p, RTL9602C_MIB_OMCI_TX_OCTETS));
+		   rtl9602c_pon_r(p, RTL9602C_MIB_OMCI_TX_PKTS),
+		   rtl9602c_pon_r(p, RTL9602C_MIB_OMCI_TX_OCTETS));
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_ponmac);
@@ -874,7 +874,7 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_ponmac);
 #define RTL9602C_GEM_DS_STATS_IDX	0x704064
 #define RTL9602C_GEM_DS_STATS_DATA	0x704068
 
-static void rtl9602c_ponpath_regs(struct seq_file *m, struct rtl9602c_priv *p,
+static void rtl9602c_ponpath_regs(struct seq_file *m, struct rtl9602c_pon *p,
 				  const char *label, const u32 *regs,
 				  unsigned int n)
 {
@@ -882,7 +882,7 @@ static void rtl9602c_ponpath_regs(struct seq_file *m, struct rtl9602c_priv *p,
 
 	seq_printf(m, "  %-12s", label);
 	for (i = 0; i < n; i++)
-		seq_printf(m, " %08x", rtl9602c_r(p, regs[i]));
+		seq_printf(m, " %08x", rtl9602c_pon_r(p, regs[i]));
 	seq_putc(m, '\n');
 }
 
@@ -941,7 +941,7 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 		0xf04010, 0xf04014, 0xf04018, 0xf04038, 0xf0403c, 0xf04044,
 		0xf0404c, 0xf04058,
 	};
-	struct rtl9602c_priv *p = m->private;
+	struct rtl9602c_pon *p = m->private;
 	unsigned int f = RTL9602C_GPON_OMCC_FLOW, i;
 
 	if (!p->ponmac_up) {
@@ -974,7 +974,7 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 			seq_printf(m, "<GPON> MAC cam[%u]    Port-ID %u, %s\n", f,
 				   port, hit ? "hit" : "no hit");
 
-		fail = rtl9602c_r(p, RTL9602C_GTC_DS_GEM_MISMATCH_CNT);
+		fail = rtl9602c_pon_r(p, RTL9602C_GTC_DS_GEM_MISMATCH_CNT);
 		seq_printf(m, "<GPON> GTC gem        non-idle %llu  port-id mismatch %lu  length mismatch %lu\n",
 			   frames, FIELD_GET(GENMASK(31, 16), fail),
 			   FIELD_GET(GENMASK(15, 0), fail));
@@ -989,12 +989,12 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 		   f, rtl9602c_gpon_flow_cntr(p, f, false),
 		   rtl9602c_gpon_flow_cntr(p, f, true));
 	seq_printf(m, "<GPON> MAC flow %u  upstream bytes: %08x %08x\n", f,
-		   rtl9602c_r(p, RTL9602C_GEM_US_FLOW_BYTES(f)),
-		   rtl9602c_r(p, RTL9602C_GEM_US_FLOW_BYTES(f) + 4));
+		   rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_BYTES(f)),
+		   rtl9602c_pon_r(p, RTL9602C_GEM_US_FLOW_BYTES(f) + 4));
 	seq_puts(m, "<GPON> GEM misc      ");
 	for (i = 0; i < 16; i++) {
-		rtl9602c_w(p, RTL9602C_GEM_DS_STATS_IDX, i);
-		seq_printf(m, " %x", rtl9602c_r(p, RTL9602C_GEM_DS_STATS_DATA));
+		rtl9602c_pon_w(p, RTL9602C_GEM_DS_STATS_IDX, i);
+		seq_printf(m, " %x", rtl9602c_pon_r(p, RTL9602C_GEM_DS_STATS_DATA));
 	}
 	seq_putc(m, '\n');
 
@@ -1012,15 +1012,15 @@ static int rtl9602c_ponpath_show(struct seq_file *m, void *unused)
 	seq_puts(m, "  pon rx      ");
 	for (i = 0; i < 16; i++)
 		seq_printf(m, " %08x",
-			   rtl9602c_r(p, RTL9602C_MIB_RX(RTL9602C_PORT_PON) + 4 * i));
+			   rtl9602c_pon_r(p, RTL9602C_MIB_RX(RTL9602C_PORT_PON) + 4 * i));
 	seq_puts(m, "\n  pon tx      ");
 	for (i = 0; i < 16; i++)
 		seq_printf(m, " %08x",
-			   rtl9602c_r(p, RTL9602C_MIB_TX(RTL9602C_PORT_PON) + 4 * i));
+			   rtl9602c_pon_r(p, RTL9602C_MIB_TX(RTL9602C_PORT_PON) + 4 * i));
 	seq_puts(m, "\n  cpu tx      ");
 	for (i = 0; i < 16; i++)
 		seq_printf(m, " %08x",
-			   rtl9602c_r(p, RTL9602C_MIB_TX(RTL9602C_PORT_CPU) + 4 * i));
+			   rtl9602c_pon_r(p, RTL9602C_MIB_TX(RTL9602C_PORT_CPU) + 4 * i));
 	seq_putc(m, '\n');
 	return 0;
 }
@@ -1034,15 +1034,15 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_ponpath);
  */
 static int rtl9602c_pondp_show(struct seq_file *m, void *unused)
 {
-	struct rtl9602c_priv *p = m->private;
+	struct rtl9602c_pon *p = m->private;
 	u32 fifo, io;
 
 	if (!p->ponmac_up) {
 		seq_puts(m, "PON MAC not built: the PON link is down\n");
 		return 0;
 	}
-	fifo = rtl9602c_r(p, RTL9602C_PKTBUF_US_FIFO_CFG);
-	io = rtl9602c_r(p, RTL9602C_PKTBUF_DMA_CTRL(RTL9602C_PBO_US));
+	fifo = rtl9602c_pon_r(p, RTL9602C_PKTBUF_US_FIFO_CFG);
+	io = rtl9602c_pon_r(p, RTL9602C_PKTBUF_DMA_CTRL(RTL9602C_PBO_US));
 	seq_printf(m, "us fifo cfg     %08x  start %lu  space %lu\n", fifo,
 		   FIELD_GET(RTL9602C_PKTBUF_US_FIFO_CFG_START, fifo),
 		   FIELD_GET(RTL9602C_PKTBUF_US_FIFO_CFG_SPACE, fifo));
@@ -1073,13 +1073,13 @@ static const struct file_operations rtl9602c_pondp_fops = {
  * the block is built: ponpath and pondp then read nothing, and ponmac only
  * the system controller, the GPON MAC and the switch.
  */
-void rtl9602c_ponmac_debugfs_init(struct rtl9602c_priv *p)
+void rtl9602c_ponmac_debugfs_init(struct rtl9602c_pon *p)
 {
-	debugfs_create_file("ponmac", 0400, p->debugfs, p,
+	debugfs_create_file("ponmac", 0400, p->pd->debugfs, p,
 			    &rtl9602c_ponmac_fops);
-	debugfs_create_file("ponpath", 0400, p->debugfs, p,
+	debugfs_create_file("ponpath", 0400, p->pd->debugfs, p,
 			    &rtl9602c_ponpath_fops);
-	debugfs_create_file("pondp", 0400, p->debugfs, p,
+	debugfs_create_file("pondp", 0400, p->pd->debugfs, p,
 			    &rtl9602c_pondp_fops);
 }
 
