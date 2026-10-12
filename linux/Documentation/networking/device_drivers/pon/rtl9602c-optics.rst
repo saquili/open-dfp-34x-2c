@@ -543,10 +543,10 @@ select, byte 127, is written as ``0x7f`` in the code.
      - The hwmon attributes and the ``a2`` view in O5 on an OLT.
    * - A0h and A2h bytes 0-127 take writes without any password, and what is
        written there survives a power cycle of the module: a write there is a
-       permanent change to the module. The driver writes none of it except A2h
-       bytes 123-127: the password bytes, 123-126, which read 00 whatever is
-       written, and the page select, 127, which it writes only when the byte
-       holds another value.
+       permanent change to the module. The driver writes none of it except the
+       page select, A2h byte 127, which it writes only when the byte holds
+       another value, and, from the ``t2write`` view only, the password bytes,
+       123-126, which read 00 whatever is written.
      - M
      - Bytes written to A0h and A2h 0-127 over this bus were still there after
        the module had been without power.
@@ -559,11 +559,11 @@ select, byte 127, is written as ``0x7f`` in the code.
      - T
      - The modulation hold's log after a module power-up, with the text
        ``automatic ER e3 -> e2``, reads that table before and after its write.
-   * - The modulation hold writes A2h bytes 123-126 and byte 127 on every PON
-       bring-up, and restores byte 127 to the value it found. Those are writes
-       to bytes that the module keeps across a power cycle; whether the part
-       skips rewriting a byte that already holds the value is not known (see
-       "Known limitations").
+   * - The modulation hold writes A2h byte 127 on a PON bring-up only when it
+       holds another page than ``02h``, and restores it to the value it found.
+       That byte is kept across a power cycle; whether the part skips
+       rewriting a byte that already holds the value is not known (see "Known
+       limitations").
      - I
      - Bears on EEPROM wear, not on function. The write cycles cannot be
        observed on this board; reading the ``a2`` view ("table select") after a
@@ -591,8 +591,9 @@ What the driver reads and writes of the part:
      - Nothing in the driver.
    * - ``0x51`` (A2h), bytes 0-127
      - The ``a2`` view; the hwmon device reads bytes 0-39 and 96-105 only.
-     - The modulation hold: ``0xff`` to bytes 123-126, ``02h`` to byte 127, and
-       byte 127 again to restore it.
+     - The modulation hold: ``02h`` to byte 127 when it holds another page, and
+       byte 127 again to restore it. The ``t2write`` view: ``0xff`` to bytes
+       123-126, and its reset key there.
    * - ``0x51`` (A2h), bytes 128-255
      - The ``eeblocks`` view, whichever page byte 127 selects at that moment;
        the modulation hold reads the configuration table there.
@@ -810,9 +811,7 @@ at that moment, which is page ``02h`` while the modulation hold runs.
 
 The ``tables`` view reads A2h bytes 128 to 255 for each table the page select
 can show, 0, 1, 2, 4, 5 and 6, and prints each as eight rows of sixteen bytes
-under a line ``=== table <n>``. Before the first table it writes ``0xff`` to the
-password bytes 123 to 126, as the modulation hold does, and it puts byte 127
-back as it found it at the end, also when a table fails (``=== table <n>:
+under a line ``=== table <n>``. It puts byte 127 back as it found it at the end, also when a table fails (``=== table <n>:
 failed: <error>``). Table 2 holds the laser driver's configuration, among it
 the receiver's loss-of-signal control (BBh) and the APD bias control (BDh);
 table 6 the temperature-indexed APD DAC values at C0h to FFh. Byte 127 is kept
@@ -842,7 +841,7 @@ wrong is put right through ``t2write``, mode ``0200``, in a kernel built with
     # echo reset > $W
     # cat /sys/kernel/debug/rtl9602c/tables
 
-``open`` writes the password bytes as the ``tables`` view does, shows table 2 and
+``open`` writes ``0xff`` to the password bytes 123 to 126, shows table 2 and
 clears both bits of EEPROM_CTRL (C7h), so that the part copies the changes of
 its registers into its EEPROM; it keeps C7h and the page select as found.
 ``REG VALUE``, both hexadecimal, writes the password bytes and shows table 2
@@ -867,8 +866,8 @@ the monitors.
 
 ``reset``, with table 2 closed, restarts the part's state machine with its reset
 key, ``5D 2C 6A C9`` at bytes 123 to 126 and ``0B`` at the page select, which
-loads the tables from the EEPROM as at power-up; the entry then writes the
-password bytes and the page select back as the driver keeps them. The laser
+loads the tables from the EEPROM as at power-up; the entry then writes ``0xff``
+to the password bytes, as ``open`` does, and puts the page select back. The laser
 goes through its start-up again, so the PON drops for that time. A read of the
 ``tables`` view after ``reset`` shows what the EEPROM holds, which is how a
 stored byte is checked without taking the module out.
@@ -1178,53 +1177,55 @@ defined in ``rtl9602c-optics.c``):
    * - On this module A2h bytes 123-126 (``RTL9602C_OPTICS_A2_PASSWORD``) read
        ``00`` whatever was written to them.
      - M
-     - The ``a2`` view, repeated: ``00 00 00 00`` after bring-ups that had
-       written ``0xff`` to each.
-   * - The driver writes ``0xff`` to each of A2h bytes 123-126 before it writes
-       the table; whether the table takes the writes without that is not
-       tested.
-     - I
-     - Skipping the step and checking that ER_CTRL still reads back with bit 0
-       clear would settle it. Not load-bearing while the step stays.
+     - The ``a2`` view, repeated: ``00 00 00 00`` after writes of ``0xff`` to
+       each.
+   * - Table 2 needs no password. After the part's reset, which loads the
+       tables from the EEPROM as at power-up and turns the automatic ER loop
+       back on, with nothing written to bytes 123-126 the table read as before
+       (PERSIST ``03h``), and the hold's writes took (``automatic ER e3 ->
+       e2``), so the driver writes no password outside the ``t2write`` view.
+       Whether a power cycle of the module, rather than the part's reset,
+       leaves the table as open is not tried.
+     - M, I
+     - M: the hold's log line and table 2 as read before it, after
+       ``echo reset`` to ``t2write`` in a build that left out every write of
+       the password bytes. I: a power cycle of the module followed by a
+       bring-up would settle the rest.
 
 The hold runs at ``ip link set pon up``, after the GPON MAC reset and before the
 first O3. With ``CONFIG_RTL9602C_OPTICS_RO``, or for a module the driver does
 not write, it returns at once and writes nothing. Its steps:
 
-1. Write ``0xff`` to A2h bytes 123, 124, 125 and 126. Purpose: prepare the table
-   before it is shown. (I)
-2. Read A2h byte 127 and keep the value; write ``02h`` to it unless it holds
+1. Read A2h byte 127 and keep the value; write ``02h`` to it unless it holds
    ``02h`` already. Purpose: show the configuration table at A2h 128-255, and
    remember the page to restore. (T)
-3. Read PERSIST, MOD_LIMIT and ER_CTRL. Purpose: the three values the next steps
+2. Read PERSIST, MOD_LIMIT and ER_CTRL. Purpose: the three values the next steps
    decide on. (T)
-4. If bits 1:0 of PERSIST are not both set, log ``EEPROM updates are enabled``
+3. If bits 1:0 of PERSIST are not both set, log ``EEPROM updates are enabled``
    and give up with ``-EPERM``. Purpose: a table write now would be copied into
-   the EEPROM, so none is made. (M) By then steps 1 and 2 have written the
-   password bytes, and the page select when it held another page, which the
-   module keeps: the table, PERSIST included, is shown only after them.
-5. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
+   the EEPROM, so none is made. (M) By then step 1 has written the page select,
+   when it held another page, which the module keeps.
+4. Read byte ``0xcc``; if bit 3 or bit 2 is set, write it back with both clear
    and wait 400 ms. Purpose: the table takes writes. (I)
-6. If a lower transmit power level is set, put the module's own modulation and
+5. If a lower transmit power level is set, put the module's own modulation and
    set point back (see "Transmit power levelling") and log ``transmit power
    back at level mode 0``. Purpose: every session starts at mode 0. (T)
-7. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
+6. Write ER_CTRL with bit 0 clear, read it back, and read MOD_DAC. Purpose: turn
    the loop off, and see the value the modulation now runs from. (M)
-8. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
+7. If bit 0 still reads set, or MOD_DAC is zero, or MOD_LIMIT is not ``0xff``
    and the high byte of MOD_DAC exceeds it: write ER_CTRL back as it was, so
    that the loop keeps running, log ``modulation DAC seed ... is unusable`` and
    give up with ``-EINVAL``. Purpose: do not leave the modulation at a value
    that cannot be right. (I)
-9. At the first hold since probe, read the set point (``0xa8``) and keep it
+8. At the first hold since probe, read the set point (``0xa8``) and keep it
    with MOD_DAC as the settings of transmit power level mode 0. Purpose: the
    lower levels are made from them, and mode 0 puts them back. (M)
-10. Log the held modulation. Purpose: show the value the modulation runs from.
-    (I)
-11. Write the value kept in step 2 back to byte 127. Purpose: leave the page
+9. Log the held modulation. Purpose: show the value the modulation runs from.
+   (I)
+10. Write the value kept in step 1 back to byte 127. Purpose: leave the page
     selection as it was found. This follows every step after the write of
-    step 2, whatever its outcome; only a transfer that fails in step 1 or in
-    the read of step 2 returns before it, when the page select has not been
-    written. (T)
+    step 1, whatever its outcome; only a transfer that fails in the read of
+    step 1 returns before it, when the page select has not been written. (T)
 
 A failed hold is logged by the GPON bring-up (``modulation not held``), and the
 bring-up carries on.
@@ -1532,12 +1533,11 @@ Known limitations
   kernel takes that level for the module's own until the module loses power
   (see "Transmit power levelling"). The extinction ratio at the lower levels
   is not measured.
-- Each PON bring-up writes bytes that the module may keep. Before it has read
-  PERSIST, the modulation hold writes ``0xff`` to A2h bytes 123 to 126, and
-  ``02h`` to byte 127 only when that holds another page, which it puts back at
-  the end: four byte writes while byte 127 holds ``02h``, as it does at rest on
-  this board. Whether the part stores the password bytes, which read back
-  ``00h``, is not known, so the wear of the EEPROM is unmeasured.
+- A PON bring-up writes a byte that the module keeps only when A2h byte 127
+  holds another page than ``02h``: before it has read PERSIST, the modulation
+  hold writes ``02h`` there, and it puts the page back at the end. At rest the
+  byte holds ``02h`` on this board, so a bring-up writes nothing the module
+  keeps.
 
 Open questions
 ==============
@@ -1607,9 +1607,9 @@ Questions the code does not depend on
        ("The modulation hold").
      - Nothing the driver needs: the first guards against an implausible value
        and the others only change the log line.
-   * - Whether the table write needs byte ``0xcc`` cleared, and the ``0xff``
-       written to A2h bytes 123-126 ("The modulation hold").
-     - Skipping each step and checking that ER_CTRL still reads back with bit 0
+   * - Whether the table write needs byte ``0xcc`` cleared ("The modulation
+       hold").
+     - Skipping the step and checking that ER_CTRL still reads back with bit 0
        clear.
    * - Whether activation needs the modulation hold ("The modulation hold").
      - Repeated activations from a module power-up with the hold (the default)

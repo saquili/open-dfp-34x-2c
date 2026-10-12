@@ -349,9 +349,9 @@ void rtl9602c_optics_identify(struct rtl9602c_priv *p)
 /*
  * A0h and A2h bytes 0-127 take writes without a password and keep them
  * across a power cycle of the module: a write there is a permanent change
- * to it.  Of those bytes the driver writes only A2h 123-127: the password,
- * 123-126, which reads back 00 whatever is written (measured on this board),
- * and the page select, 127, through rtl9602c_l_write_changed().
+ * to it.  Of those bytes the driver writes the page select, 127, through
+ * rtl9602c_l_write_changed(), and only the store view writes the password,
+ * 123-126, which reads back 00 whatever is written (measured on this board).
  */
 static int rtl9602c_l_write(struct rtl9602c_priv *p, u16 reg, u8 val)
 {
@@ -685,9 +685,9 @@ static int rtl9602c_a2_show(struct seq_file *s, void *unused)
 		   w[4] / 10, w[4] % 10);
 
 	/*
-	 * SFF-8472 leaves bytes 120-126 to the module maker.  The modulation
-	 * hold writes 0xff to 123-126, and on this module they read 00
-	 * whatever was written (measured on this board).
+	 * SFF-8472 leaves bytes 120-126 to the module maker.  The store view
+	 * writes 0xff to 123-126, and on this module they read 00 whatever was
+	 * written (measured on this board).
 	 */
 	seq_printf(s, "\npassword 0x7b-0x7e  %02x %02x %02x %02x\n",
 		   b[RTL9602C_OPTICS_A2_PASSWORD], b[RTL9602C_OPTICS_A2_PASSWORD + 1],
@@ -725,26 +725,6 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_a2);
 #define RTL9602C_OPTICS_TBL2_MOD_LIMIT		0xaf
 #define RTL9602C_OPTICS_TBL2_PERSIST	0xc7
 #define RTL9602C_OPTICS_TBL2_PERSIST_OFF	(BIT(1) | BIT(0))
-
-/*
- * Write 0xff to each password byte, before the configuration table is
- * shown.  That the table needs it, to be read or written, is not verified.
- * As A2h bytes 0-127 are kept in the module's EEPROM, every call writes the
- * EEPROM; whether the part skips a byte that already holds the value is not
- * known.
- */
-static int rtl9602c_gn_t2_password(struct rtl9602c_priv *p)
-{
-	int err, i;
-
-	for (i = 0; i < 4; i++) {
-		err = rtl9602c_l_write(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_A2_PASSWORD + i,
-				       0xff);
-		if (err)
-			return err;
-	}
-	return 0;
-}
 
 /*
  * Prepare the shown configuration table for a write: if bit 3 or 2 of
@@ -902,8 +882,7 @@ static int rtl9602c_optics_reboot(struct notifier_block *nb, unsigned long actio
 		mutex_unlock(&p->i2c_lock);
 		return NOTIFY_DONE;
 	}
-	err = rtl9602c_gn_t2_password(p) ?:
-	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
 	if (!err) {
 		err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
 		      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + RTL9602C_OPTICS_TBL2_PERSIST,
@@ -974,8 +953,7 @@ void rtl9602c_optics_level_work(struct work_struct *work)
 		goto told;
 	}
 
-	err = rtl9602c_gn_t2_password(p) ?:
-	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
 	if (err)
 		goto told;
 	err = rtl9602c_l_write_changed(p, RTL9602C_OPTICS_A2_BASE + 0x7f, 0x02) ?:
@@ -1034,13 +1012,15 @@ told:
  * The table change stays in registers, kept out of the EEPROM by PERSIST:
  * the loop stays off until the module loses power, across a warm reboot
  * of the SoC too, and a power cycle gives the module its own configuration
- * back.  PERSIST is in the table, which the module shows only after the
- * password bytes and the page select have been written, so a hold that
- * gives up with -EPERM has written the password bytes, and the page select
- * when it did not hold 02h, which the module keeps in its EEPROM; table byte
- * 0xcc and the table itself are written only once PERSIST keeps register
- * changes out of the EEPROM.  Once the page select has been set, every path
- * puts it back as found, without checking that write.
+ * back.  PERSIST is in the table, which the module shows once the page
+ * select holds 02h, and the table needs no password bytes written.  After
+ * the part's reset, which loads the tables from the EEPROM as at power-up,
+ * the table read and took these writes with nothing written to bytes
+ * 123-126 (measured on this board).  So a hold that gives up with -EPERM has written only the page
+ * select, when it did not hold 02h, which the module keeps in its EEPROM;
+ * table byte 0xcc and the table itself are written only once PERSIST keeps
+ * register changes out of the EEPROM.  Once the page select has been set,
+ * every path puts it back as found, without checking that write.
  *
  * Context: Process context.  May sleep.
  * Return: 0 when the modulation is held; -EPERM when table writes would
@@ -1053,8 +1033,7 @@ static int __rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p)
 	unsigned int dac;
 	int err;
 
-	err = rtl9602c_gn_t2_password(p) ?:
-	      rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &tabsel);
 	if (err)
 		return err;
 
@@ -1218,14 +1197,13 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_eeblocks);
 
 /*
  * The "tables" view: A2h bytes 128-255 for each table the page select can
- * show, 0, 1, 2, 4, 5 and 6, with the password bytes written first as the
- * modulation hold writes them (rtl9602c_gn_t2_password()).  Table 2 holds
- * the laser driver's configuration, among it the receiver's loss-of-signal
- * control (BBh) and the APD bias control (BDh); table 6 the temperature
- * indexed APD DAC values at C0h-FFh.  The page select is put back as it was,
- * also when a table fails.  The page select and the password bytes are kept
- * in the module's EEPROM, so every read of the view writes it; a
- * CONFIG_RTL9602C_OPTICS_RO build has no such view.
+ * show, 0, 1, 2, 4, 5 and 6.  Table 2 holds the laser driver's
+ * configuration, among it the receiver's loss-of-signal control (BBh) and
+ * the APD bias control (BDh); table 6 the temperature indexed APD DAC
+ * values at C0h-FFh.  The page select is put back as it was, also when a
+ * table fails.  The page select is kept in the module's EEPROM, so every
+ * read of the view writes it; a CONFIG_RTL9602C_OPTICS_RO build has no
+ * such view.
  */
 static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 {
@@ -1236,11 +1214,10 @@ static int rtl9602c_tables_show(struct seq_file *s, void *unused)
 	int err;
 
 	mutex_lock(&p->i2c_lock);
-	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &was) ?:
-	      rtl9602c_gn_t2_password(p);
+	err = rtl9602c_l_read(p, RTL9602C_OPTICS_A2_BASE + 0x7f, &was);
 	if (err) {
 		mutex_unlock(&p->i2c_lock);
-		seq_printf(s, "the page select or the password failed: %d\n", err);
+		seq_printf(s, "the page select could not be read: %d\n", err);
 		return 0;
 	}
 	for (t = 0; t < ARRAY_SIZE(tables); t++) {
@@ -1269,7 +1246,7 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
  * (table 2) in the module's EEPROM, and resets the part.  Root writes one
  * command at a time:
  *
- * "open" writes the password bytes (rtl9602c_gn_t2_password()), shows table 2
+ * "open" writes the password bytes (rtl9602c_gn_t2_show()), shows table 2
  * and clears both bits of EEPROM_CTRL (C7h), so that the part copies the
  * changes of its registers into its EEPROM; C7h and the page select as found
  * are kept for "close".
@@ -1285,10 +1262,10 @@ DEFINE_SHOW_ATTRIBUTE(rtl9602c_tables);
  *
  * "reset" restarts the part's state machine with its reset key, 5Dh 2Ch 6Ah
  * C9h at A2h 123-126 and 0Bh at the page select, which loads the tables from
- * the EEPROM as at power-up, then writes the password bytes and the page
- * select back as the driver keeps them; a read of the "tables" view after it
- * shows what the EEPROM holds.  The laser goes through its start-up again, so
- * the PON drops for that time.
+ * the EEPROM as at power-up, then writes 0xff to the password bytes, as
+ * "open" does, and puts the page select back; a read of the "tables" view
+ * after it shows what the EEPROM holds.  The laser goes through its start-up
+ * again, so the PON drops for that time.
  *
  * Only the bytes that a repair of a module has needed are taken: the current
  * limits ADh-AFh, B6h-B8h, the receiver's loss-of-signal control BBh, its
@@ -1459,8 +1436,8 @@ static const struct file_operations rtl9602c_t2write_fops = {
  *
  * Creates "a2" and "eeblocks", both mode 0400, in the switch's debugfs
  * directory.  Both only read the part, so a CONFIG_RTL9602C_OPTICS_RO
- * build has them too.  "tables" writes the page select and the password
- * bytes, and only a build without it has that view.  "t2write", mode 0200,
+ * build has them too.  "tables" writes the page select, and only a build
+ * without it has that view.  "t2write", mode 0200,
  * stores table 2 bytes in the module's EEPROM, where they outlive every
  * power cycle, among them the rogue ONU controls; only a build with
  * CONFIG_NET_DSA_RTL9602C_OPTICS_STORE, which excludes the other, has it.
