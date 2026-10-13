@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""bsend: UDP broadcasts out of one interface at a fixed rate.
+
+Usage: bsend [--port PORT] IFACE PPS SECONDS [SIZE]
+
+Sends PPS datagrams of SIZE payload bytes (1400 by default) a second for
+SECONDS seconds to the limited broadcast address, out of the interface IFACE
+whatever the routing table says, and prints what it sent and the rate it
+kept. It is the load the switch's broadcast and storm-control tests need: a
+steady rate of frames that a bridge floods, from a host that has no other
+way to make broadcasts of that size at that pace.
+
+The interface is named with SO_BINDTODEVICE, which needs CAP_NET_RAW (run it
+as root on Linux). Frames carry the payload "x" and go to UDP port 9, the
+discard port, unless --port says another.
+
+Exit status: 0 when it sent; 2 on a usage error or when the socket could not
+be made or bound.
+"""
+
+import socket
+import sys
+import time
+
+DEFAULT_SIZE = 1400
+DEFAULT_PORT = 9
+BROADCAST = "255.255.255.255"
+MAX_PAYLOAD = 65507
+
+
+def usage(out):
+    out.write(__doc__.split("\n\n")[0].replace("bsend: ", "") + "\n")
+    out.write("usage: bsend [--port PORT] IFACE PPS SECONDS [SIZE]\n")
+
+
+def parse(argv):
+    """The arguments as (iface, pps, seconds, size, port), or an error text."""
+    port = DEFAULT_PORT
+    args = list(argv)
+    if args[:1] == ["--port"]:
+        if len(args) < 2:
+            return "--port needs a number"
+        try:
+            port = int(args[1])
+        except ValueError:
+            return f"{args[1]!r} is not a port"
+        if not 1 <= port <= 65535:
+            return f"{port} is not a port"
+        args = args[2:]
+    if not 3 <= len(args) <= 4:
+        return "need IFACE PPS SECONDS and, if wanted, SIZE"
+    iface = args[0]
+    try:
+        pps = int(args[1])
+        seconds = float(args[2])
+        size = int(args[3]) if len(args) == 4 else DEFAULT_SIZE
+    except ValueError:
+        return "PPS and SIZE are whole numbers and SECONDS a number"
+    if pps < 1:
+        return "PPS is at least 1"
+    if seconds <= 0:
+        return "SECONDS is more than 0"
+    if not 1 <= size <= MAX_PAYLOAD:
+        return f"SIZE is from 1 to {MAX_PAYLOAD}"
+    return iface, pps, seconds, size, port
+
+
+def send(sock, pps, seconds, size, port, clock=time.monotonic, sleep=time.sleep):
+    """Send at PPS for SECONDS; the frames sent and the time it took.
+
+    The frames are PPS * SECONDS, one at each 1/PPS from the start, and the
+    run lasts out the last interval, so that the time is the one asked for and
+    the rate printed is the rate kept.
+    """
+    data = b"x" * size
+    gap = 1.0 / pps
+    total = max(1, round(pps * seconds))
+    start = clock()
+    for n in range(total):
+        now = clock()
+        due = start + n * gap
+        if now < due:
+            sleep(due - now)
+        sock.sendto(data, (BROADCAST, port))
+    end = start + total * gap
+    now = clock()
+    if now < end:
+        sleep(end - now)
+    return total, clock() - start
+
+
+def main(argv, make_socket=socket.socket, clock=time.monotonic, sleep=time.sleep,
+         out=sys.stdout, err=sys.stderr):
+    if not argv or argv[0] in ("-h", "--help"):
+        usage(out if argv else err)
+        return 0 if argv else 2
+    parsed = parse(argv)
+    if isinstance(parsed, str):
+        err.write(f"bsend: {parsed}\n")
+        return 2
+    iface, pps, seconds, size, port = parsed
+    try:
+        sock = make_socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
+    except (OSError, AttributeError) as e:
+        err.write(f"bsend: cannot send out of {iface}: {e}\n")
+        return 2
+    sent, took = send(sock, pps, seconds, size, port, clock, sleep)
+    out.write(f"sent {sent} frames of {size} B in {took:.2f} s: {sent / took:.0f} pps, "
+              f"{sent * size * 8 / took / 1e6:.2f} Mbit/s of payload\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
