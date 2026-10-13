@@ -624,7 +624,9 @@ stops a running watchdog at a kexec as at a restart, unless the old kernel was
 started with ``watchdog.stop_on_reboot=0``; then the watchdog keeps counting
 across the jump, and a new kernel that hangs ends in a chip reset. The board's
 configuration leaves kexec out. To run a development kernel without writing
-flash, use the RAM boot described under "Boot contract".
+flash, use the RAM boot described under "Boot contract"; the project's
+``tools/kexec`` builds the RAM image with kexec on, a small target kernel and
+the program that starts it (``tools/kexec/README.rst``).
 
 .. list-table::
    :header-rows: 1
