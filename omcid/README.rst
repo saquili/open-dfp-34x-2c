@@ -196,8 +196,10 @@ backend with ``OMCID_TC_FLAGS=0``, so that the filters, which on the board go
 to the switch alone, go into software. It needs root
 and tc, and says that it skipped without them; on a kernel without the vlan
 action it skips the VLAN rules and the tags, and without the tbf qdisc the
-UNI's rate. The parts that need the stick's
-PON family are tried on the board.
+UNI's rate. ``tools/vm/vm omcid-kernel`` runs it on a kernel of this
+repository's tree in qemu, which has every action it uses
+(``tools/vm/README.rst``). The parts that need the stick's PON family are
+tried on the board.
 
 ``make board`` builds the daemon for the board, with the backend of the
 board's kernel interfaces (``target/``): the OMCI port ``/dev/pon0omci0``, the
