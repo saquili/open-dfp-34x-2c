@@ -728,8 +728,8 @@ with a line-rate override.
        switch's buffer. A flood to the CPU port makes none: the switch drops
        it at the CPU port's queue.
      - M
-     - Port 0 with ``pause`` in its fixed-link node (a test build): pause
-       frames from the host every 2 ms let 713 of 406,268 downstream frames
+     - Port 0 with ``pause`` in its fixed-link node (as the board's device tree
+       has it): pause frames from the host every 2 ms let 713 of 406,268 downstream frames
        through, against 405,843 without them, and 406,248 of 406,348 with them
        and the bits clear (the port's ``rx_pause`` counted every one). A burst
        of 1514-byte frames from the host for 5 s, more than the OLT's grants
@@ -1069,7 +1069,8 @@ device tree's ``phy-mode``, which says nothing about the host.
        pause. Being fixed links, the ports take their pause from the
        ``pause`` property of their fixed-link node, and phylink refuses a
        change through ``ethtool -A`` with ``EOPNOTSUPP``; the board's device
-       tree has none, so pause is off (see "Forced MAC ability" and "Known
+       tree has ``pause`` for port 0 only, so port 0 sends and honours pause
+       frames and the others do neither (see "Forced MAC ability" and "Known
        limitations"). Port 0 offers the interfaces
        2500BASE-X and 1000BASE-X; ports 2 and 3 offer INTERNAL. All three are
        fixed links in the device tree, so phylink asks the driver for their
@@ -2032,7 +2033,9 @@ Known limitations
   limit (see "Maximum frame length").
 - Pause on the SerDes port is set only by the device tree: the ports are fixed
   links, so ``ethtool -A sfp`` fails with ``EOPNOTSUPP``, and the board's
-  device tree leaves pause off. Pause also does not keep a flood to the CPU
+  device tree turns it on for port 0. A host that ignores pause frames, as the
+  bench router does until ``ethtool -A`` is given ``rx on``, sees no change from
+  it. Pause also does not keep a flood to the CPU
   from being dropped, since the switch drops it at the CPU port's queue
   without sending pause frames.
 - The lane finds a host's setting by trying three in turn, a second each, so it

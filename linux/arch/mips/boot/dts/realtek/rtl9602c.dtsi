@@ -209,8 +209,17 @@
 				 * speed of the setting found; it does not take
 				 * the setting from this phy-mode.
 				 * With "pause" in the fixed link the port sends
-				 * and honours pause frames; without it, as
-				 * here, it does neither.
+				 * and honours pause frames; without it it does
+				 * neither. The lane is faster than the PON
+				 * carries upstream, so a host that sends in
+				 * bursts fills the switch's buffer. With the
+				 * port sending pause frames the PON port's
+				 * queue may fill to the pause marks, which
+				 * the PON driver sets; without them the
+				 * switch drops frames at about half that
+				 * depth. A host that honours the pause frames
+				 * slows down instead, and one that ignores
+				 * them sees no change.
 				 */
 				port@0 {
 					reg = <0>;
@@ -220,6 +229,7 @@
 					fixed-link {
 						speed = <2500>;
 						full-duplex;
+						pause;
 					};
 				};
 
