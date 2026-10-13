@@ -177,10 +177,10 @@ docs:
 # fetches the build system, of the one that archives the kernel, of the size
 # check of the images, of the cut of the shared libraries, of the scripts and
 # lists of the distribution, of the device tests (their own, which need no
-# stick) and of the launcher of the tests in qemu (which need no docker). The
-# instruction-set gate's tests skip without a MIPS objdump, the cut's
-# end-to-end tests without a MIPS cross compiler, and the tests of the image
-# script without mksquashfs.
+# stick), of the launcher of the tests in qemu (which need no docker) and of
+# the files of the kexec trial. The instruction-set gate's tests skip without
+# a MIPS objdump, the cut's end-to-end tests without a MIPS cross compiler, and
+# the tests of the image script without mksquashfs.
 check:
 	tools/provenance/check selftest
 	tools/provenance/check all
@@ -200,6 +200,7 @@ check:
 	tools/docs/tests/run
 	tools/docs/render --check --if-available
 	tools/vm/tests/run
+	tools/kexec/tests/run
 	br2-external/tests/run
 	cd tests/device && python3 -m unittest discover -s devtest/tests -t .
 
