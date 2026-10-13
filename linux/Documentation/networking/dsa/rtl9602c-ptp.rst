@@ -477,6 +477,18 @@ middle value, 2^27, the clock advances one second per second.
        in 64 bits, a 32-bit overflow made every word 58.96 times as far off
        nominal as asked, and those words, up to 94 % of the rate off, fitted
        the same proportion.
+   * - Steps and the frequency word act as asked, to the resolution of the
+       reads. Steps of +1.5 s, -1.5 s, -250 ms, +250 ms, +100 us, -100 us,
+       +8 ns and -1 ns each landed within 200 ns of the step asked for, less
+       than the 6.7 to 7.4 us that the two reads around a step take. The
+       free-running clock gained 0.12 ppm on ``CLOCK_MONOTONIC_RAW`` over
+       10 s; with ``ADJ_FREQUENCY`` at +100 ppm and at -100 ppm it gained
+       +100.23 ppm and -99.70 ppm, and +0.30 ppm again at 0.
+     - M
+     - ``clock_adjtime64`` (the only clock_adjtime this kernel has: the
+       32-bit-time one answers ENOSYS) with ``ADJ_SETOFFSET`` and
+       ``ADJ_FREQUENCY`` on ``/dev/ptp0``, each result against
+       ``CLOCK_MONOTONIC_RAW`` read before and after.
    * - ``max_adj`` is 32,767,000 ppb, the largest offset whose ``scaled_ppm``
        fits the ``long`` that ``adjfine`` takes on this 32-bit architecture.
        The PTP core refuses a larger request with ``-ERANGE``.
@@ -864,6 +876,27 @@ implemented" in the netlink extended ack.
      - ``egress_capture``, ``ptpstat`` and the conduit's receive log, for each setting;
        for the fields, three Syncs per action from a packet socket on
        ``sfp``, captured at the far end.
+   * - The test above was repeated for Sync, Delay_Req, Pdelay_Req and
+       Pdelay_Resp, each at the egress actions 0 to 3, with the per-port
+       enable on all four ports and with bit 0, 1 or 2 of the descriptor's
+       word 3 toggled (bit 0, which the driver never sets, sits where a PTP
+       flag of a transmit descriptor would). No copy came back to the CPU,
+       and the egress capture of the frame read the PTP flag set, action 0
+       and a zero time every time. Toggling bit 3 stopped the frame from
+       leaving by port 0.
+     - M
+     - ``egress_capture`` (filter 0x18), ``ptpstat`` and the receive reasons,
+       three messages per case from a packet socket on ``sfp``, with the
+       actions and the descriptor bits set by lab-only debugfs files.
+   * - That the part cannot produce a departure time for a message the CPU
+       sends under any setting is not shown: no setting tried produced one,
+       and the receive reason 243 that a copy of a departing message would
+       carry was never seen, though reasons of 242 and above were looked for in
+       every case.
+     - I
+     - A departure copy, or a documented account of the part producing one,
+       would refute it; a search of every field of the transmit descriptor and
+       of the registers around ``RTL9602C_PTP_ACTION_EGRESS`` would back it.
    * - Without a transmit stamp a port can timestamp the Syncs it receives but
        cannot time its own Delay_Req, which the delay request-response
        mechanism needs: it can listen, not synchronise. ``get_ts_info``
