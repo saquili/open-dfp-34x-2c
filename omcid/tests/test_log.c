@@ -26,7 +26,8 @@ struct log_file {
 /* Point the log at a file appended to, as the shell does for the daemon's. */
 static bool log_file_open(struct log_file *lf)
 {
-	strcpy(lf->path, "/tmp/omcid-test-log.XXXXXX");
+	snprintf(lf->path, sizeof(lf->path), "%s",
+		 "/tmp/omcid-test-log.XXXXXX");
 	lf->fd = mkstemp(lf->path);
 	if (lf->fd < 0)
 		return false;

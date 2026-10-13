@@ -200,10 +200,11 @@ int main(void)
 		CHECK_EQ(rates(eng, 8, TD_A, 1250000u, 3000000u), 0u);
 	});
 	omci_log_level_set(OMCI_LOG_ERR);
-	CHECK_EQ(omci_t_log_count(
-			 log,
-			 "me47: the UNI's outbound rate of 3000000 bytes/s was not set"),
-		 1u);
+	CHECK_EQ(
+		omci_t_log_count(
+			log,
+			"me47: the UNI's outbound rate of 3000000 bytes/s was not set"),
+		1u);
 	CHECK_EQ(rate_now(NULL), 1250000u);
 	CHECK_EQ(point(eng, 9, UNI_PORT, TD_A), 0u);
 	CHECK_EQ(rate_now(NULL), 3000000u);
