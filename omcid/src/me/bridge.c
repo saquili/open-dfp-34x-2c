@@ -388,9 +388,9 @@ static uint64_t uni_rate_of(const struct omci_mib *mib)
 		if (tp_type != OMCI_BRIDGE_TP_PPTP_ETH &&
 		    tp_type != OMCI_BRIDGE_TP_VEIP)
 			continue;
-		if (!attr_u16(mib, cur.class_id, cur.instance,
-			      OMCI_BRIDGE_PORT_ATTR_TD_OUT, &td))
-			continue;
+		/* A port whose descriptor cannot be read names none (td stays 0). */
+		(void)attr_u16(mib, cur.class_id, cur.instance,
+			       OMCI_BRIDGE_PORT_ATTR_TD_OUT, &td);
 		r = td_rate(mib, td);
 		if (r != 0 && (rate == 0 || r < rate))
 			rate = r;
