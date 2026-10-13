@@ -159,6 +159,13 @@ class PostBuild(unittest.TestCase):
         self.assertEqual(os.listdir(tools), ["passwd"])
         self.assertFalse(os.path.exists(shell))
 
+    def test_the_skeletons_dangling_resolver_link_goes(self):
+        etc = os.path.join(self.target, "etc")
+        os.symlink("../tmp/resolv.conf", os.path.join(etc, "resolv.conf"))
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertFalse(os.path.lexists(os.path.join(etc, "resolv.conf")))
+        self.assertEqual(self.run_script().returncode, 0)  # and a second run has nothing to do
+
     def test_the_tools_of_diagnosis_are_not_left_in_the_flash_image(self):
         self.make_tools()
         self.make_iproute2()

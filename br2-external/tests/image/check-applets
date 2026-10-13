@@ -58,9 +58,6 @@ FILTERS = {"awk", "basename", "cat", "cryptpw", "cut", "dirname", "grep", "head"
 # does not list and that were read in BusyBox's own help: cp -R is -r, getty -L
 # is a line without carrier detection, mount -t names the file system.
 REVIEWED = {"cp": {"-R"}, "getty": {"-L"}, "mount": {"-t"}}
-# Scripts of the tree that no program of the image runs, and why they are not read.
-UNRUN = {"default.script": "the sample script of udhcpc, which nothing runs since the router mode went; "
-                           "it needs ifconfig, route and mktemp, which the image does not have"}
 
 
 def report(ok, what, detail=""):
@@ -116,8 +113,8 @@ def main(argv):
     report(len(scripts) >= 10, "the tree holds %d shell scripts" % len(scripts))
     for label, path in scripts:
         uses, lost = imagescripts.uses(label, imagescripts.read(path))
-        found[label] = (path, [] if label in UNRUN else uses)
-        unread += ["%s:%d %s" % (label, line, word) for line, word in lost if label not in UNRUN]
+        found[label] = (path, uses)
+        unread += ["%s:%d %s" % (label, line, word) for line, word in lost]
     report(not unread, "every command word of the scripts is one that can be read", " ".join(unread))
 
     names = sorted({use.name for _, uses in found.values() for use in uses if "/" not in use.spelled})

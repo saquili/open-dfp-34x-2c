@@ -10,16 +10,16 @@
 # It takes out the programs of iproute2, which the stick does not run, the
 # command-line tools of the network layer and the tools that diagnose a stick,
 # setting aside iproute2's ip, tc, devlink, bridge and dcb, and ethtool, with the
-# latter for the RAM image, and leaves /sbin/ip to BusyBox; it cuts the shared
-# libraries to what
-# the programs use, with tools/lib-trim, when the tree holds the shared C
-# library; and it writes into /etc/os-release, as
-# BUILD_ID, the commit of this repository that the image is built from: the
-# first twelve digits of its hash, followed by "-dirty" when the working tree
-# holds changes that are not committed, or "unknown" when the sources are not a
-# git checkout. The status daemon and the device tests read it, so that a
-# result names the build it was measured on. Two builds of one commit write the
-# same line.
+# latter for the RAM image, and leaves /sbin/ip to BusyBox; it takes out the
+# skeleton's /etc/resolv.conf, a link to a file nothing writes, as the stick
+# asks no name server; it cuts the shared libraries to what the programs use,
+# with tools/lib-trim, when the tree holds the shared C library; and it writes
+# into /etc/os-release, as BUILD_ID, the commit of this repository that the
+# image is built from: the first twelve digits of its hash, followed by
+# "-dirty" when the working tree holds changes that are not committed, or
+# "unknown" when the sources are not a git checkout. The status daemon and the
+# device tests read it, so that a result names the build it was measured on.
+# Two builds of one commit write the same line.
 #
 # The cut needs what the build system gives a post-build script: HOST_DIR and
 # STAGING_DIR for the cross tools, BUILD_DIR for uClibc-ng's build directory.
@@ -92,6 +92,10 @@ if [ -f "$1/sbin/ip" ] && [ ! -L "$1/sbin/ip" ]; then
 fi
 rm -f "$1/usr/bin/uci" "$1/usr/bin/jshn"
 rm -rf "$1/usr/share/libubox"
+# The stick runs offline: it asks no name server, so it has no resolver
+# configuration. The skeleton links /etc/resolv.conf to a file in /tmp that
+# nothing writes.
+rm -f "$1/etc/resolv.conf"
 
 # The programs share one C library (docs/adr/0011). The build system installs
 # it whole, with every function it offers, and libgcc_s, which no program
