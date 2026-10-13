@@ -11,9 +11,14 @@ own, MIPS I, and run on the build machine through the emulator, with the image's
 own dynamic loader and C library (qemu-mips -L TARGET_DIR), the C library as the
 build cut it; no file of the machine is changed. The checks are:
 
-* BusyBox lists every applet that the boot scripts (/sbin/init, rcS) and
-  /etc/inittab name, and each of them starts and prints its usage;
-* BusyBox's own shell parses the boot scripts;
+* every command that a shell script of the image runs (the scripts are read by
+  imagescripts.py, not run) is a function of its script, a builtin of the
+  image's ash (asked with ``type``), a program of the tree or an applet that
+  BusyBox lists, each of them found where the board's PATH looks; and the
+  options that the scripts give to an applet are in its usage;
+* BusyBox lists every applet that /etc/inittab names, and each applet that the
+  scripts or the inittab use starts and prints its usage;
+* BusyBox's own shell parses every script;
 * a few applets do what they should (a shell evaluates arithmetic, text tools
   work on a pipe, ``uname`` names the architecture the image is for);
 * dropbear and its key tool report their version and make a host key.
@@ -35,16 +40,52 @@ import tempfile
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
-from bootscript import PACKAGES, applets as busybox_words  # noqa: E402
+import imagescripts  # noqa: E402
 
-BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
+BOARD = imagescripts.BOARD
 FAILED = []
+# Where the scripts' PATH looks, in the tree.
+PATH = ("sbin", "usr/sbin", "bin", "usr/bin", "usr/lib/onu")
+# The image is built without BusyBox's long usage, so a usage that reads
+# "[OPTIONS]" lists none, and the options that a script gives are tried instead:
+# the option alone, with no operand and nothing on the standard input, for these
+# applets, which read and print and do nothing else. A BusyBox that does not
+# take the option says "invalid option"; one that takes it asks for an argument
+# or for an operand.
+FILTERS = {"awk", "basename", "cat", "cryptpw", "cut", "dirname", "grep", "head", "hexdump", "id", "md5sum",
+           "pidof", "readlink", "sed", "sort", "tail", "tr", "uname"}
+# The options of the other applets, which this check does not run, that the usage
+# does not list and that were read in BusyBox's own help: cp -R is -r, getty -L
+# is a line without carrier detection, mount -t names the file system.
+REVIEWED = {"cp": {"-R"}, "getty": {"-L"}, "mount": {"-t"}}
+# Scripts of the tree that no program of the image runs, and why they are not read.
+UNRUN = {"default.script": "the sample script of udhcpc, which nothing runs since the router mode went; "
+                           "it needs ifconfig, route and mktemp, which the image does not have"}
 
 
 def report(ok, what, detail=""):
     print("%s %s%s" % ("pass" if ok else "FAIL", what, ": " + detail if detail and not ok else ""))
     if not ok:
         FAILED.append(what)
+
+
+def resolve(target, path):
+    """The file that a path of the board is, in the target tree, following links; None if there is none."""
+    real = os.path.join(target, path.lstrip("/"))
+    for _ in range(20):
+        if not os.path.islink(real):
+            break
+        link = os.readlink(real)
+        real = os.path.join(target, link.lstrip("/")) if link.startswith("/") \
+            else os.path.join(os.path.dirname(real), link)
+    return real if os.path.isfile(real) else None
+
+
+def option_in(usage, option):
+    """Whether the usage text of an applet names the option (a letter may be in a cluster: [-sfn])."""
+    if option.startswith("--"):
+        return option in usage
+    return re.search(r"(?<![\w-])-[A-Za-z]*" + re.escape(option[1]), usage) is not None
 
 
 def main(argv):
@@ -70,29 +111,76 @@ def main(argv):
     applets = set(out.split())
     report(status == 0 and len(applets) > 20, "busybox --list names %d applets" % len(applets), err)
 
-    used = []
-    for script in (("etc", "init.d", "rcS"), ("sbin", "init")):
-        with open(os.path.join(BOARD, "overlay", *script), encoding="utf-8") as handle:
-            used += busybox_words(handle.read())
+    found, unread = {}, []
+    scripts = imagescripts.tree_scripts(target)
+    report(len(scripts) >= 10, "the tree holds %d shell scripts" % len(scripts))
+    for label, path in scripts:
+        uses, lost = imagescripts.uses(label, imagescripts.read(path))
+        found[label] = (path, [] if label in UNRUN else uses)
+        unread += ["%s:%d %s" % (label, line, word) for line, word in lost if label not in UNRUN]
+    report(not unread, "every command word of the scripts is one that can be read", " ".join(unread))
+
+    names = sorted({use.name for _, uses in found.values() for use in uses if "/" not in use.spelled})
+    status, out, err = run(busybox, "sh", "-c", 'for n; do type "$n"; done 2>&1', "sh", *names)
+    builtins = set(re.findall(r"^(\S+) is a (?:special )?shell builtin$", out, re.M))
+    report(status in (0, 1) and len(builtins) > 5, "the image's shell says which of the commands are its builtins",
+           "status %d, %r" % (status, out[:80]))
+    used, options = set(), {}
+    for label, (path, uses) in sorted(found.items()):
+        lost = []
+        for use in uses:
+            if "/" in use.spelled:
+                if resolve(target, use.spelled) is None:
+                    lost.append("%s (line %d)" % (use.spelled, use.line))
+            elif use.name in builtins:
+                continue
+            else:
+                where = [resolve(target, d + "/" + use.name) for d in PATH]
+                where = [real for real in where if real]
+                if not where:
+                    lost.append("%s (line %d)" % (use.name, use.line))
+                elif use.name in applets and os.path.basename(where[0]) == "busybox":
+                    used.add(use.name)
+                    options.setdefault(use.name, set()).update(use.options)
+        report(not lost, "%s: every command is a function, a builtin, a program or an applet of the image"
+               % label, "missing: " + " ".join(sorted(set(lost))))
     with open(os.path.join(BOARD, "overlay", "etc", "inittab"), encoding="utf-8") as handle:
         for line in handle:
             if line.strip() and not line.startswith("#"):
                 match = re.match(r"^[^:]*:[^:]*:[^:]*:-?(/(?:bin|sbin|usr)/\S+)", line)
-                if match and os.path.basename(match.group(1)) not in PACKAGES:
-                    used.append(os.path.basename(match.group(1)))
-    used = sorted(set(used) | {"reboot"})
+                if match:
+                    report(resolve(target, match.group(1)) is not None,
+                           "/etc/inittab names %s, which the image holds" % match.group(1))
+                    if os.path.basename(match.group(1)) in applets:
+                        used.add(os.path.basename(match.group(1)))
+    used = sorted(used | {"reboot"})
     missing = [name for name in used if name not in applets]
-    report(not missing, "busybox holds the applets the boot scripts and inittab run (%s)"
+    report(not missing, "busybox holds the applets the scripts and inittab run (%s)"
            % " ".join(used), "missing: " + " ".join(missing))
 
+    usage = {}
     for name in used:
         status, out, err = run(busybox, name, "--help")
+        usage[name] = out + err
         report("Usage:" in out + err and status in (0, 1), "%s --help starts and prints its usage"
                % name, "status %d, %r" % (status, (out + err)[:80]))
+    lost, tried = [], 0
+    for name, wanted in sorted(options.items()):
+        for option in sorted(wanted):
+            if option_in(usage.get(name, ""), option) or option in REVIEWED.get(name, ()):
+                continue
+            tried += 1
+            if name in FILTERS:
+                status, out, err = run(busybox, name, option, stdin="", timeout=20)
+                if "invalid option" not in out + err:
+                    continue
+            lost.append("%s %s" % (name, option))
+    report(not lost, "the options that the scripts give to applets are in their usage or taken by the applet "
+           "(%d of %d tried)" % (tried - len(lost), tried), "not taken: " + ", ".join(lost))
 
-    for script in ("etc/init.d/rcS", "sbin/init"):
-        status, out, err = run(busybox, "sh", "-n", os.path.join(target, script))
-        report(status == 0, "busybox sh parses /" + script, err)
+    for label, (path, _) in sorted(found.items()):
+        status, out, err = run(busybox, "sh", "-n", path)
+        report(status == 0, "busybox sh parses /%s" % os.path.relpath(path, target), err)
 
     status, out, err = run(busybox, "sh", "-c", "echo $((6 * 7))")
     report(out.strip() == "42", "busybox sh evaluates arithmetic", out + err)

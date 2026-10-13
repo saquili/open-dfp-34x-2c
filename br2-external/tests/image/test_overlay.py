@@ -3,9 +3,9 @@
 """Tests of the files of the board's overlay and of what they rely on.
 
 The boot script runs on the board and cannot run here, so these tests read it:
-it must parse, it may call only commands that the image holds, and the commands
-that it needs must be in the BusyBox configuration. The inittab is read against
-the format that BusyBox init takes.
+it must parse, and its order and its words are the ones the rest of the tree
+relies on. That every command it runs is in the image is test_scripts.py's. The
+inittab is read against the format that BusyBox init takes.
 """
 
 import os
@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import unittest
 
-from bootscript import BUILTINS, DROPBEAR, PACKAGES, commands
+import shellwords
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 BOARD = os.path.join(os.path.dirname(os.path.dirname(HERE)), "board", "dfp-34x-2c3")
@@ -30,13 +30,15 @@ ONU_MGMT = os.path.join(REPO, "onu-utils", "scripts", "onu-mgmt")
 ONU_APPLY = os.path.join(REPO, "onu-utils", "scripts", "onu-apply")
 SHELLS = [s for s in (shutil.which("sh"), shutil.which("dash")) if s]
 
-# BusyBox applets by the name of their configuration symbol, where it is not the upper-case name.
-SYMBOL = {"hostname": "HOSTNAME"}
-
 
 def read(path):
     with open(path, encoding="utf-8") as handle:
         return handle.read()
+
+
+def called(path):
+    """The names of the commands that a script runs."""
+    return [command.name for command in shellwords.commands(read(path))[0]]
 
 
 def enabled_applets():
@@ -81,26 +83,6 @@ class BootScript(unittest.TestCase):
             with self.subTest(shell=shell):
                 done = subprocess.run([shell, "-n", RCS], capture_output=True, text=True)
                 self.assertEqual(done.returncode, 0, done.stderr)
-
-    def test_it_calls_only_programs_the_image_holds(self):
-        symbols = enabled_applets()
-        for script in (RCS, INIT):
-            unknown = []
-            for word in sorted(set(commands(read(script)))):
-                if word in BUILTINS or word in DROPBEAR or word in PACKAGES:
-                    continue
-                if SYMBOL.get(word, word.upper()) not in symbols:
-                    unknown.append(word)
-            self.assertEqual(unknown, [], "not applets of busybox.config: " + script)
-
-    def test_the_programs_it_needs_are_the_ones_it_calls(self):
-        # If a script stops calling one of these, the list of what the image
-        # needs is out of date: take the applet out of the configuration.
-        for script, words in ((RCS, ("hostname", "sed", "uname")),
-                              (INIT, ("mount", "mkdir", "ln", "grep"))):
-            called = set(commands(read(script)))
-            for word in words:
-                self.assertIn(word, called, script)
 
     def test_roots_password_is_in_place_before_the_ssh_server_starts(self):
         # The ssh server's flags are onu-run's, which onu-utils tests.
@@ -197,19 +179,6 @@ class BootScript(unittest.TestCase):
                 self.assertTrue(start < text.index(line) < end)
 
 
-class Reading(unittest.TestCase):
-    """The reading of a script that the tests above rest on."""
-
-    def test_operators_substitutions_and_tests_start_commands(self):
-        self.assertEqual(commands('a x || b y && c\nd $(e f) | g\n[ -n "$x" ] && h\n'),
-                         ["a", "b", "c", "d", "e", "g", "h"])
-
-    def test_assignments_and_case_patterns_are_not_commands(self):
-        script = ("x=1\ncase $x in\n*[!0-9]*) ;;\n"
-                  "*) [ ${#x} -eq 2 ] && x=0x$x ;;\nesac\ny z\n")
-        self.assertEqual(commands(script), ["case", "esac", "y"])
-
-
 class FirstProgram(unittest.TestCase):
     """/sbin/init: the file systems, then procd as process 1."""
 
@@ -275,15 +244,17 @@ class Watchdog(unittest.TestCase):
         # procd sets the driver's timeout to 30 s and feeds it every 5 s, from
         # its start; a second feeder would keep a hung procd alive.
         self.assertNotIn("WATCHDOG", enabled_applets())
-        for script in (RCS, INIT, INITTAB):
-            self.assertNotIn("watchdog", commands(read(script)))
+        for script in (RCS, INIT):
+            self.assertNotIn("watchdog", called(script))
+        entries = [line for line in read(INITTAB).splitlines() if line.strip() and not line.startswith("#")]
+        self.assertEqual([line for line in entries if "watchdog" in line], [])
 
 
 class ServersOnTheHostSide(unittest.TestCase):
     """The stick has no packet filter: its servers listen on the host side alone."""
 
     def test_there_is_no_packet_filter(self):
-        self.assertNotIn("nft", commands(read(RCS)))
+        self.assertNotIn("nft", called(RCS))
         self.assertFalse(os.path.exists(os.path.join(OVERLAY, "etc", "nftables.conf")))
 
     def test_the_two_addresses_are_those_of_the_host_side(self):

@@ -74,10 +74,14 @@ What is here
 ``tests/run``
     The unit tests of the tree (``tests/image`` and ``tests/toolchain``).
 ``tests/image/``
-    The tests of the post-image script, the boot script and the defconfig, and
-    the checks that run on a built image: ``check-applets`` runs its
-    programs under ``qemu-mips`` and ``tree-digest`` lists its files with their
-    digests.
+    The tests of the post-image script, the boot script and the defconfig,
+    and of the shell scripts of the image: ``test_scripts.py`` reads them
+    (``shellwords.py`` and ``imagescripts.py`` do the reading) and holds every
+    command that one runs against what the image has, which the tests of
+    ``onu-utils``, on a build machine with a GNU userland, cannot see. And the
+    checks that run on a built image: ``check-applets`` asks the tree the same
+    question, runs its programs under ``qemu-mips`` and ``tree-digest`` lists
+    its files with their digests.
 ``tests/toolchain/``
     The programs and scripts that check a toolchain built from the toolchain
     defconfig (see "Checks on the toolchain"), and the list of the findings of the
@@ -245,7 +249,8 @@ has the commands, the sizes and how to put the images on the board. In short:
 
 What the build judges is in the top-level ``Makefile``: the images against their
 partitions (``tools/image-budget``), the instruction-set gate over the whole
-target tree, and the digests. ``tests/image/check-applets`` runs the image's
+target tree, and the digests. ``tests/image/check-applets`` checks that every
+command the shell scripts of the image run is in the image, and runs the image's
 programs under ``qemu-mips``, with the image's own loader and cut C library, and ``tests/image/tree-digest`` lists a
 target tree for the comparison of two builds; the ``image`` workflow does both
 (``.github/workflows/README.rst``).
