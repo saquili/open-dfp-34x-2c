@@ -500,8 +500,14 @@ static void pon_gem_setup(struct net_device *dev)
  * have. IFLA_GEM_QUEUE is checked against the MAC's queues per T-CONT
  * (pon_gem_parse_upstream()); IFLA_GEM_WEIGHT is a priority queue's weight,
  * one byte (ITU-T G.988 clause 9.2.10); the rates are bytes per second;
- * IFLA_GEM_PBITS has a bit for each of the eight IEEE 802.1p priorities.
+ * IFLA_GEM_PBITS has a bit for each of the eight IEEE 802.1p priorities;
+ * IFLA_GEM_DS_BURST is a number of bytes.
  */
+/* A burst is a 32-bit number of bytes: the policy's own maximum is 16 bits. */
+static const struct netlink_range_validation pon_gem_burst_range = {
+	.max = U32_MAX,
+};
+
 static const struct nla_policy pon_gem_policy[IFLA_GEM_MAX + 1] = {
 	[IFLA_GEM_PORT_ID]	= NLA_POLICY_MAX(NLA_U16, 4095),
 	[IFLA_GEM_DIRECTION]	= NLA_POLICY_RANGE(NLA_U8,
@@ -514,12 +520,19 @@ static const struct nla_policy pon_gem_policy[IFLA_GEM_MAX + 1] = {
 	[IFLA_GEM_CIR]		= { .type = NLA_UINT },
 	[IFLA_GEM_PIR]		= { .type = NLA_UINT },
 	[IFLA_GEM_PBITS]	= NLA_POLICY_MIN(NLA_U8, 1),
+	[IFLA_GEM_DS_RATE]	= { .type = NLA_UINT },
+	[IFLA_GEM_DS_BURST]	= NLA_POLICY_FULL_RANGE(NLA_UINT, &pon_gem_burst_range),
 };
 
 /* The upstream attributes of a GEM port: what it takes, how it is scheduled. */
 static const int pon_gem_upstream_attrs[] = {
 	IFLA_GEM_PBITS, IFLA_GEM_QUEUE, IFLA_GEM_WEIGHT, IFLA_GEM_CIR,
 	IFLA_GEM_PIR,
+};
+
+/* The downstream attributes of a GEM port: how much of its traffic from the OLT it takes. */
+static const int pon_gem_downstream_attrs[] = {
+	IFLA_GEM_DS_RATE, IFLA_GEM_DS_BURST,
 };
 
 static int pon_gem_parse(struct pon_gem_config *cfg, struct nlattr **data,
@@ -614,6 +627,50 @@ static int pon_gem_parse_upstream(const struct pon_device *pon,
 	return 0;
 }
 
+/*
+ * Apply the downstream attributes in @data to @cfg, as
+ * pon_gem_parse_upstream() does the upstream ones. Only a port that carries
+ * downstream traffic has them, and a burst needs a rate to be the bucket of.
+ * A rate of 0 takes the limit away, and the burst with it.
+ */
+static int pon_gem_parse_downstream(struct pon_gem_config *cfg,
+				    struct nlattr **data,
+				    struct netlink_ext_ack *extack)
+{
+	unsigned int i;
+
+	if (!data)
+		return 0;
+
+	if (!(cfg->direction & IFLA_GEM_DIR_DOWNSTREAM)) {
+		for (i = 0; i < ARRAY_SIZE(pon_gem_downstream_attrs); i++) {
+			if (!data[pon_gem_downstream_attrs[i]])
+				continue;
+			NL_SET_ERR_MSG_ATTR(extack,
+					    data[pon_gem_downstream_attrs[i]],
+					    "A GEM port that carries no downstream traffic has no downstream attributes");
+			return -EINVAL;
+		}
+		return 0;
+	}
+
+	if (data[IFLA_GEM_DS_RATE])
+		cfg->ds_rate = nla_get_uint(data[IFLA_GEM_DS_RATE]);
+	if (data[IFLA_GEM_DS_BURST])
+		cfg->ds_burst = nla_get_uint(data[IFLA_GEM_DS_BURST]);
+
+	if (!cfg->ds_rate && cfg->ds_burst) {
+		if (data[IFLA_GEM_DS_BURST]) {
+			NL_SET_ERR_MSG_ATTR(extack, data[IFLA_GEM_DS_BURST],
+					    "A downstream burst needs a downstream rate");
+			return -EINVAL;
+		}
+		/* The limit was taken away: its burst goes with it. */
+		cfg->ds_burst = 0;
+	}
+	return 0;
+}
+
 static int pon_gem_newlink(struct net_device *dev,
 			   struct rtnl_newlink_params *params,
 			   struct netlink_ext_ack *extack)
@@ -649,6 +706,10 @@ static int pon_gem_newlink(struct net_device *dev,
 	}
 
 	err = pon_gem_parse_upstream(gem->pon, &gem->cfg, params->data, extack);
+	if (err)
+		goto err_free;
+
+	err = pon_gem_parse_downstream(&gem->cfg, params->data, extack);
 	if (err)
 		goto err_free;
 
@@ -743,8 +804,8 @@ static void pon_gem_dellink(struct net_device *dev, struct list_head *head)
 }
 
 /*
- * Only the upstream attributes may change, so every other attribute in
- * @data must say what the port already has. IFLA_GEM_MULTICAST, a flag, can
+ * Only the upstream attributes and the downstream limit may change, so every
+ * other attribute in @data must say what the port already has. IFLA_GEM_MULTICAST, a flag, can
  * only be given, so it may come only for a multicast port.
  */
 static int pon_gem_changelink(struct net_device *dev, struct nlattr *tb[],
@@ -773,22 +834,26 @@ static int pon_gem_changelink(struct net_device *dev, struct nlattr *tb[],
 		bad = data[IFLA_GEM_MULTICAST];
 	if (bad) {
 		NL_SET_ERR_MSG_ATTR(extack, bad,
-				    "Only a GEM port's upstream attributes can change; delete the port and create it again");
+				    "Only a GEM port's upstream attributes and downstream limit can change; delete the port and create it again");
 		return -EOPNOTSUPP;
 	}
 
 	err = pon_gem_parse_upstream(gem->pon, &cfg, data, extack);
 	if (err)
 		return err;
+	err = pon_gem_parse_downstream(&cfg, data, extack);
+	if (err)
+		return err;
 
 	if (cfg.pbits == gem->cfg.pbits && cfg.queue == gem->cfg.queue &&
 	    cfg.weight == gem->cfg.weight && cfg.cir == gem->cfg.cir &&
-	    cfg.pir == gem->cfg.pir)
+	    cfg.pir == gem->cfg.pir && cfg.ds_rate == gem->cfg.ds_rate &&
+	    cfg.ds_burst == gem->cfg.ds_burst)
 		return 0;
 
 	if (!gem->pon->ops->gem_change) {
 		NL_SET_ERR_MSG(extack,
-			       "The MAC cannot change a GEM port's upstream attributes");
+			       "The MAC cannot change a GEM port's attributes");
 		return -EOPNOTSUPP;
 	}
 
@@ -807,7 +872,7 @@ static size_t pon_gem_get_size(const struct net_device *dev)
 	       nla_total_size(sizeof(u32)) +
 	       nla_total_size(0) +
 	       3 * nla_total_size(sizeof(u8)) +
-	       2 * nla_total_size(sizeof(u64));
+	       4 * nla_total_size(sizeof(u64));
 }
 
 static int pon_gem_fill_info(struct sk_buff *skb, const struct net_device *dev)
@@ -828,6 +893,11 @@ static int pon_gem_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	     nla_put_u8(skb, IFLA_GEM_PBITS, cfg->pbits)))
 		return -EMSGSIZE;
 
+	if ((cfg->direction & IFLA_GEM_DIR_DOWNSTREAM) &&
+	    (nla_put_uint(skb, IFLA_GEM_DS_RATE, cfg->ds_rate) ||
+	     nla_put_uint(skb, IFLA_GEM_DS_BURST, cfg->ds_burst)))
+		return -EMSGSIZE;
+
 	if (cfg->multicast && nla_put_flag(skb, IFLA_GEM_MULTICAST))
 		return -EMSGSIZE;
 
@@ -842,7 +912,7 @@ static struct net *pon_gem_get_link_net(const struct net_device *dev)
 }
 
 /*
- * changelink changes the upstream attributes only: a Port-ID or T-CONT
+ * changelink changes the upstream attributes and the downstream limit only: a Port-ID or T-CONT
  * changed under traffic would move a subscriber's frames to another service
  * with nothing torn down, so a GEM port whose Port-ID, direction or T-CONT
  * changes is deleted and created again.

@@ -54,6 +54,8 @@ IFLA_GEM_WEIGHT = 6
 IFLA_GEM_CIR = 7
 IFLA_GEM_PIR = 8
 IFLA_GEM_PBITS = 9
+IFLA_GEM_DS_RATE = 10
+IFLA_GEM_DS_BURST = 11
 DIR_UP, DIR_DOWN, DIR_BOTH = 1, 2, 3
 NLMSGERR_ATTR_MSG = 1
 SOL_NETLINK = 270
@@ -88,6 +90,7 @@ def gem_link_attrs(**kw):
         "tcont": (IFLA_GEM_TCONT, "I"), "queue": (IFLA_GEM_QUEUE, "B"),
         "weight": (IFLA_GEM_WEIGHT, "B"), "cir": (IFLA_GEM_CIR, "Q"),
         "pir": (IFLA_GEM_PIR, "Q"), "pbits": (IFLA_GEM_PBITS, "B"),
+        "ds_rate": (IFLA_GEM_DS_RATE, "Q"), "ds_burst": (IFLA_GEM_DS_BURST, "Q"),
     }
     data = b""
     for name, val in kw.items():
@@ -162,11 +165,11 @@ def calls():
 
 
 def flows():
-    """The flows of the stand-in: {flow: (port_id, tcont, direction)}."""
+    """The flows of the stand-in: {flow: (port_id, tcont, direction, ds_rate, ds_burst)}."""
     out = {}
     for line in dfs_read("flows").splitlines():
-        f, port, tcont, direction = (int(x) for x in line.split())
-        out[f] = (port, tcont, direction)
+        f, port, tcont, direction, ds_rate, ds_burst = (int(x) for x in line.split())
+        out[f] = (port, tcont, direction, ds_rate, ds_burst)
     return out
 
 
@@ -325,6 +328,10 @@ def gem_refused(_cfg) -> None:
                                               cir=2000, pir=1000), errno.EINVAL),
         ("an upstream attribute on a downstream port",
          dict(port_id=106, direction=DIR_DOWN, queue=1), errno.EINVAL),
+        ("a downstream attribute on an upstream port",
+         dict(port_id=108, direction=DIR_UP, tcont=0, ds_rate=1000), errno.EINVAL),
+        ("a downstream burst without a rate",
+         dict(port_id=109, direction=DIR_DOWN, ds_burst=4096), errno.EINVAL),
     )
     for what, kw, want in cases:
         try:
@@ -360,6 +367,52 @@ def gem_change(_cfg) -> None:
         ksft_eq(calls()["change"], before + 1)
     finally:
         ip("link del gemt3")
+
+
+def gem_downstream(_cfg) -> None:
+    gem_add("gemt5", SIM.ifname, port_id=130, direction=DIR_BOTH, tcont=0)
+    try:
+        flow = next(f for f, v in flows().items() if v[0] == 130)
+        ksft_eq(flows()[flow][3:], (0, 0))
+        before = calls()["change"]
+
+        # A rate and its bucket reach the MAC, and a change of either is one call.
+        gem_set("gemt5", ds_rate=12500000, ds_burst=16384)
+        ksft_eq(flows()[flow][3:], (12500000, 16384))
+        ksft_eq(calls()["change"], before + 1)
+        gem_set("gemt5", ds_rate=12500000, ds_burst=16384)
+        ksft_eq(calls()["change"], before + 1, comment="the same limit again")
+        gem_set("gemt5", ds_rate=2500000)
+        ksft_eq(flows()[flow][3:], (2500000, 16384), comment="the burst stays")
+        ksft_eq(calls()["change"], before + 2)
+
+        # A burst needs a rate; a rate of 0 takes the limit and its burst away.
+        for kw in (dict(ds_rate=0, ds_burst=4096),):
+            try:
+                gem_set("gemt5", **kw)
+            except LinkError as e:
+                ksft_eq(e.error, errno.EINVAL, comment=f"{kw}")
+            else:
+                raise AssertionError(f"{kw} was taken")
+        ksft_eq(calls()["change"], before + 2)
+        gem_set("gemt5", ds_rate=0)
+        ksft_eq(flows()[flow][3:], (0, 0), comment="the limit is gone")
+        try:
+            gem_set("gemt5", ds_burst=4096)
+        except LinkError as e:
+            ksft_eq(e.error, errno.EINVAL, comment="a burst alone")
+        else:
+            raise AssertionError("a burst without a rate was taken")
+        ksft_eq(calls()["change"], before + 3)
+
+        # The limit is the port's own, and an upstream-only port has none.
+        gem_add("gemt6", SIM.ifname, port_id=131, direction=DIR_DOWN)
+        try:
+            gem_set("gemt6", ds_rate=1000)
+        finally:
+            ip("link del gemt6")
+    finally:
+        ip("link del gemt5")
 
 
 def gem_bridge(_cfg) -> None:
@@ -458,8 +511,8 @@ def main() -> None:
     global SIM
     SIM = Sim()
     ksft_run([dev_dump, dev_get_errors, dev_status, dev_notify, tcont_map,
-              gem_lifecycle, gem_refused, gem_change, gem_bridge, gem_traffic,
-              omci_loopback], args=(None,))
+              gem_lifecycle, gem_refused, gem_change, gem_downstream, gem_bridge,
+              gem_traffic, omci_loopback], args=(None,))
     ksft_exit()
 
 

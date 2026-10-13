@@ -521,7 +521,7 @@ static const struct file_operations pon_sim_rx_fops = {
 	.write	= pon_sim_rx_write,
 };
 
-/* debugfs: flows (r): "FLOW PORT-ID TCONT DIRECTION" a line for each */
+/* debugfs: flows (r): "FLOW PORT-ID TCONT DIRECTION DS-RATE DS-BURST" a line for each */
 static int pon_sim_flows_show(struct seq_file *m, void *unused)
 {
 	struct pon_sim *sim = m->private;
@@ -529,8 +529,9 @@ static int pon_sim_flows_show(struct seq_file *m, void *unused)
 
 	mutex_lock(&sim->lock);
 	for_each_set_bit(f, sim->flows, PON_SIM_FLOWS)
-		seq_printf(m, "%u %u %u %u\n", f, sim->cfg[f].port_id,
-			   sim->cfg[f].tcont, sim->cfg[f].direction);
+		seq_printf(m, "%u %u %u %u %llu %u\n", f, sim->cfg[f].port_id,
+			   sim->cfg[f].tcont, sim->cfg[f].direction,
+			   sim->cfg[f].ds_rate, sim->cfg[f].ds_burst);
 	mutex_unlock(&sim->lock);
 	return 0;
 }

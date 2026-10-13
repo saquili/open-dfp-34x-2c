@@ -716,6 +716,18 @@ Attributes
      - u8
      - The IEEE 802.1p priorities of the upstream frames the port takes from
        its VLANs, bit p for priority p, at least one. All eight if absent.
+   * - ``IFLA_GEM_DS_RATE``
+     - 10
+     - uint
+     - The rate in bytes per second above which the port's downstream frames
+       are dropped. 0, the default, for no limit. Only for a port that carries
+       downstream traffic.
+   * - ``IFLA_GEM_DS_BURST``
+     - 11
+     - uint
+     - How many bytes of the port's downstream frames may pass at once above
+       that rate, up to 32 bits. 0, the default, for the MAC's own. Allowed
+       only with a rate.
 
 .. list-table::
    :header-rows: 1
@@ -764,12 +776,14 @@ Attributes
    * - The attribute numbers are ABI: ``IFLA_GEM_PORT_ID`` 1,
        ``IFLA_GEM_DIRECTION`` 2, ``IFLA_GEM_TCONT`` 3, ``IFLA_GEM_MULTICAST``
        4, ``IFLA_GEM_QUEUE`` 5, ``IFLA_GEM_WEIGHT`` 6, ``IFLA_GEM_CIR`` 7,
-       ``IFLA_GEM_PIR`` 8 and ``IFLA_GEM_PBITS`` 9. ``enum
-       ifla_gem_direction`` is ``IFLA_GEM_DIR_UPSTREAM`` 1,
-       ``IFLA_GEM_DIR_DOWNSTREAM`` 2 and ``IFLA_GEM_DIR_BOTH`` 3.
+       ``IFLA_GEM_PIR`` 8, ``IFLA_GEM_PBITS`` 9, ``IFLA_GEM_DS_RATE`` 10 and
+       ``IFLA_GEM_DS_BURST`` 11. ``enum ifla_gem_direction`` is
+       ``IFLA_GEM_DIR_UPSTREAM`` 1, ``IFLA_GEM_DIR_DOWNSTREAM`` 2 and
+       ``IFLA_GEM_DIR_BOTH`` 3.
      - T, I
      - T for 1 to 4: the recorded exchange, in which the daemon builds its
-       requests with these numbers. I for 5 to 9: not yet sent by the daemon.
+       requests with these numbers. I for 5 to 11: not yet sent by the daemon
+       in the exchange.
 
 Upstream traffic
 ----------------
@@ -875,6 +889,51 @@ user.
        the traffic (the driver's page); a change to the queue a port already
        had succeeded. I for the refusals of a change, not exercised.
 
+Downstream traffic
+------------------
+
+A port that carries downstream traffic may be told to take no more of it than
+a rate: ``IFLA_GEM_DS_RATE``, in bytes per second, drops the frames the OLT
+sends on the port above it, and ``IFLA_GEM_DS_BURST`` is the bucket, in bytes,
+that lets a burst pass. It is what the OLT's traffic descriptor for the
+downstream of a GEM port says (ITU-T G.988 clause 9.2.3 and 9.2.12), and the
+OMCI daemon is its user. In ``ip`` syntax, for an ``ip`` that knows the kind::
+
+    ip link set gemN type gem ds-rate 12500000 ds-burst 16384
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``IFLA_GEM_DS_RATE`` and ``IFLA_GEM_DS_BURST`` are ``NLA_UINT``; the
+       burst is at most 32 bits. 0 stands for no limit, and for the MAC's own
+       bucket. A burst with no rate, given or kept, is refused with
+       ``-EINVAL``, and a rate of 0 takes a kept burst away with it.
+     - T
+     - ``pon.gem_downstream`` on the stand-in: a burst alone and a burst with
+       a rate of 0 were refused, and a rate of 0 left both at 0.
+   * - A port that carries no downstream traffic may not be given either
+       attribute (``-EINVAL``); a downstream port reports both, its defaults
+       included.
+     - T, I
+     - T for the refusal, ``pon.gem_refused``: an upstream-only port with a
+       rate. I for the reports, not read back.
+   * - Both may change on an existing link, with the upstream attributes,
+       through ``changelink`` and ``gem_change``. A change that leaves them as
+       they are calls nothing.
+     - T
+     - ``pon.gem_downstream``: a limit set, set again and moved, counted in
+       the stand-in's ``calls`` file.
+   * - The class passes both on as the OLT's descriptor gives them. A MAC may
+       round the rate and the burst to what it can set, and raise a burst that
+       is below what its largest frame needs; what the RTL9602C does is on its
+       page.
+     - I
+     - Design choice.
+
 Creating and deleting
 ---------------------
 
@@ -882,8 +941,9 @@ Creation is an ``RTM_NEWLINK`` and deletion an ``RTM_DELLINK``, both with RTNL
 held (see "Creating a GEM interface" and "Deleting a GEM interface" under
 "Sequences"). A GEM interface is also deleted when its lower interface is
 unregistered. The link kind's ``changelink`` changes the upstream attributes
-only (see "Upstream traffic"): a GEM port whose Port-ID, direction or T-CONT
-changes is deleted and created again.
+and the downstream limit only (see "Upstream traffic" and "Downstream
+traffic"): a GEM port whose Port-ID, direction or T-CONT changes is deleted
+and created again.
 
 .. list-table::
    :header-rows: 1
@@ -1906,9 +1966,10 @@ The data path operations
      - T
      - The recorded exchange: six created, none refused.
    * - ``gem_change(pon, flow, cfg, extack)``, optional, applies new upstream
-       attributes to the GEM port of ``flow``: ``cfg`` differs from the port's
-       configuration in ``pbits``, ``queue``, ``weight``, ``cir`` or ``pir``
-       only, and the class has checked it as for ``gem_add``. The MAC refuses,
+       attributes or downstream limit to the GEM port of ``flow``: ``cfg``
+       differs from the port's configuration in ``pbits``, ``queue``,
+       ``weight``, ``cir``, ``pir``, ``ds_rate`` or ``ds_burst`` only, and the
+       class has checked it as for ``gem_add``. The MAC refuses,
        with an extack message, what it cannot do, and leaves the port as it
        was. RTNL is held.
      - I

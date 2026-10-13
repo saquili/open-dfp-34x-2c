@@ -47,12 +47,18 @@ struct pon_omci_port;
  *	 for no limit but the T-CONT's grants
  * @pbits: the IEEE 802.1p priorities of the upstream frames the port takes
  *	   from its VLANs, bit p for priority p; 0xff for all
+ * @ds_rate: the rate above which the port's downstream frames are dropped,
+ *	     bytes per second; 0 for no limit
+ * @ds_burst: the bucket of that limit, in bytes; 0 for the MAC's own, and
+ *	      always 0 without a @ds_rate
  *
  * The class has checked the combination: a multicast port is downstream
  * only, a port that carries upstream traffic has a T-CONT, @queue is below
  * the queues per T-CONT the MAC registered, @cir is not above a @pir that
- * limits, and a port that carries no upstream traffic has the upstream
- * defaults (@pbits 0xff, the others 0). Several GEM ports may share one T-CONT, and one queue
+ * limits, a port that carries no upstream traffic has the upstream
+ * defaults (@pbits 0xff, the others 0), and a port that carries no
+ * downstream traffic has no @ds_rate and no @ds_burst. Several GEM ports
+ * may share one T-CONT, and one queue
  * of it; the rates of the ports that share a queue add up. The MAC checks
  * @tcont against the T-CONTs it has, and refuses what it cannot do.
  */
@@ -66,6 +72,8 @@ struct pon_gem_config {
 	u64 cir;
 	u64 pir;
 	u8 pbits;
+	u64 ds_rate;
+	u32 ds_burst;
 };
 
 /**
@@ -251,7 +259,8 @@ struct pon_device_ops {
 	/**
 	 * @gem_change: Apply cfg to the GEM port of flow. cfg differs from the
 	 * port's configuration only in its upstream attributes (pbits, queue,
-	 * weight, cir and pir), and the class has checked it as for gem_add.
+	 * weight, cir and pir) or its downstream limit (ds_rate and
+	 * ds_burst), and the class has checked it as for gem_add.
 	 * Refuse what the MAC cannot do with a message in extack, leaving the
 	 * port as it was. Called with RTNL held. Without it, a GEM port's
 	 * upstream attributes stay as the port was created.

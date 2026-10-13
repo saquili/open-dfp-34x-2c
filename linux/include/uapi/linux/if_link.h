@@ -2069,6 +2069,18 @@ enum ifla_gem_direction {
  *	above which the port's upstream frames are dropped; 0, the default,
  *	for no limit but the T-CONT's grants. Not below IFLA_GEM_CIR. The
  *	rates of the ports that share a queue add up.
+ *
+ * The downstream attributes of a port that carries downstream traffic, which
+ * a port of the upstream direction may not be given. Each may also be changed
+ * on an existing link.
+ *
+ * IFLA_GEM_DS_RATE: uint, the rate in bytes per second above which the
+ *	port's downstream frames are dropped; 0, the default, for no limit.
+ * IFLA_GEM_DS_BURST: uint, how many bytes of the port's downstream frames
+ *	may pass at once above that rate, as the bucket of a token bucket; 0,
+ *	the default, for the MAC's own. Allowed only with a rate. A MAC may
+ *	round the rate and the burst to what it can set, and take a burst
+ *	below what its largest frame needs for that.
  */
 enum {
 	IFLA_GEM_UNSPEC,
@@ -2081,6 +2093,8 @@ enum {
 	IFLA_GEM_CIR,
 	IFLA_GEM_PIR,
 	IFLA_GEM_PBITS,
+	IFLA_GEM_DS_RATE,
+	IFLA_GEM_DS_BURST,
 	__IFLA_GEM_MAX,
 };
 
