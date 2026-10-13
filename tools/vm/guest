@@ -1,0 +1,154 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# What runs inside the container of tools/vm (tools/vm/vm starts it): the
+# repository is at /r, read-only, and the kernel builds are in /kb.
+#
+#   guest omcid-kernel   build omcid's kernel backend test and run it in a guest
+#   guest pon-selftest   run the PON class selftest over the stand-in MAC
+#   guest kunit          run the KUnit tests of the RTL9602C drivers
+#
+# The guest kernel is an arm64 one built from the repository's own tree on
+# qemu's virt machine, in software (no KVM). The container's root is the
+# guest's root, shared over 9p, so the guest runs the programs the container
+# has, with the container's /tmp and /proc of its own. The guest's init is a
+# script that runs the test and prints "vm-rc=" and its status, which this
+# script returns; a guest that never got there is a failure.
+#
+# Environment: REBUILD=1 configures the kernel again, JOBS the build's
+# parallelism, QEMU_TIMEOUT the seconds the guest may take, VM_CMD (pon-selftest
+# only) a command to run in the selftest's directory instead of the selftest,
+# PYTEST_ARGS the selftest's arguments.
+
+set -eu
+
+die() {
+	echo "vm: $*" >&2
+	exit 2
+}
+
+[ "$(uname -m)" = aarch64 ] || die "the guest is an arm64 kernel built natively: run this in an aarch64 container (Apple silicon, or an aarch64 host)"
+
+R=/r
+K=/kb
+JOBS=${JOBS:-$(nproc)}
+QEMU_TIMEOUT=${QEMU_TIMEOUT:-900}
+HERE=$R/tools/vm
+
+kmake() {
+	out=$1
+	shift
+	make -s -C "$R/linux" O="$out" ARCH=arm64 "$@"
+}
+
+# kernel DIR FRAGMENT...: the guest kernel in DIR, configured from the
+# kernel's kvm_guest.config and the fragments, built when there is none yet.
+# A fragment that left an option out of the configuration is named.
+kernel() {
+	out=$1
+	shift
+	frags=$HERE/base.config
+	for f in "$@"; do frags="$frags $HERE/$f.config"; done
+	# A kernel is configured again when a fragment changed since.
+	# shellcheck disable=SC2086
+	sum=$(cat "$R/linux/kernel/configs/kvm_guest.config" $frags | cksum)
+	if [ ! -f "$out/.config" ] || [ ! -f "$out/arch/arm64/boot/Image" ] ||
+		[ "$(cat "$out/.vm-fragments" 2>/dev/null)" != "$sum" ] || [ "${REBUILD:-}" = 1 ]; then
+		mkdir -p "$out"
+		kmake "$out" allnoconfig >/dev/null
+		# shellcheck disable=SC2086
+		"$R/linux/scripts/kconfig/merge_config.sh" -m -O "$out" "$out/.config" \
+			"$R/linux/kernel/configs/kvm_guest.config" $frags >/dev/null
+		kmake "$out" olddefconfig >/dev/null
+		echo "$sum" >"$out/.vm-fragments"
+	fi
+	kmake "$out" -j"$JOBS" Image
+	for f in $frags; do
+		sed -n 's/^\(CONFIG_[A-Z0-9_]*\)=y$/\1/p' "$f" | while read -r opt; do
+			grep -q "^$opt=y" "$out/.config" || die "the configuration lacks $opt ($f)"
+		done
+	done
+}
+
+# guest KERNEL_DIR: boot the kernel with /tmp/vm-init.sh as its init; return
+# the status the init printed.
+guest() {
+	log=$(mktemp)
+	timeout "$QEMU_TIMEOUT" qemu-system-aarch64 -M virt -cpu max -m 1G -smp 2 \
+		-nographic -no-reboot -kernel "$1/arch/arm64/boot/Image" \
+		-append "console=ttyAMA0 root=root rootfstype=9p rootflags=trans=virtio,version=9p2000.L rw init=/tmp/vm-init.sh panic=-1 quiet" \
+		-virtfs local,path=/,mount_tag=root,security_model=none,multidevs=remap >"$log" 2>&1 || true
+	# The guest's kernel messages are not the test's output.
+	grep -v '^\[ *[0-9]' "$log" | tail -400
+	rc=$(sed -n 's/^vm-rc=\([0-9]*\).*/\1/p' "$log" | tail -1)
+	rm -f "$log"
+	[ -n "$rc" ] || die "the guest did not finish: no status was printed"
+	return "$rc"
+}
+
+# init SCRIPT: the guest's init, which sets up the mounts and runs SCRIPT.
+# SCRIPT is written as it is: the guest's shell expands it, not this one.
+init() {
+	{
+		cat <<'EOF2'
+#!/bin/sh
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t tmpfs tmpfs /run
+mount -t debugfs none /sys/kernel/debug 2>/dev/null
+EOF2
+		printf '%s\n' "$1"
+	} >/tmp/vm-init.sh
+	chmod +x /tmp/vm-init.sh
+}
+
+case "${1:-}" in
+omcid-kernel)
+	kernel "$K/omcid" omcid
+	kmake /tmp/h headers_install INSTALL_HDR_PATH=/tmp/uapi >/dev/null 2>&1
+	mkdir /tmp/o
+	cp -r "$R/omcid/." /tmp/o
+	cd /tmp/o
+	rm -rf build build-kernel
+	make -s BOARD=1 BUILD=build-kernel build-kernel/test_hw_kernel \
+		CPPFLAGS=-I/tmp/uapi/include >/tmp/b.log 2>&1 || { tail -20 /tmp/b.log; exit 1; }
+	init 'cd /tmp/o
+./build-kernel/test_hw_kernel >/tmp/out 2>&1
+rc=$?
+grep -v "^\[" /tmp/out
+echo "vm-rc=$rc"'
+	guest "$K/omcid"
+	;;
+pon-selftest)
+	kernel "$K/pon" omcid pon
+	# The selftest and what it imports: the networking selftests' library, the
+	# YNL library and the netlink specs.
+	mkdir -p /tmp/k/tools/testing/selftests/net /tmp/k/tools/testing/selftests/drivers/net \
+		/tmp/k/tools/net /tmp/k/Documentation/netlink
+	cp -r "$R/linux/tools/testing/selftests/net/lib" /tmp/k/tools/testing/selftests/net/
+	cp -r "$R/linux/tools/testing/selftests/drivers/net/pon" /tmp/k/tools/testing/selftests/drivers/net/
+	cp -r "$R/linux/tools/net/ynl" /tmp/k/tools/net/
+	cp -r "$R/linux/Documentation/netlink/specs" /tmp/k/Documentation/netlink/
+	rm -f /tmp/vm-cmd.sh
+	[ -z "${VM_CMD:-}" ] || printf '%s\n' "$VM_CMD" >/tmp/vm-cmd.sh
+	init 'cd /tmp/k/tools/testing/selftests/drivers/net/pon
+if [ -s /tmp/vm-cmd.sh ]; then sh /tmp/vm-cmd.sh >/tmp/out 2>&1; else python3 pon.py '"${PYTEST_ARGS:-}"' >/tmp/out 2>&1; fi
+rc=$?
+cat /tmp/out
+# A locking or a sleeping mistake that the checks found, or a kernel warning,
+# fails the run too: their reports start with "BUG: " or "WARNING: ".
+if dmesg -t | grep -E "^(BUG: |WARNING: )|Oops" | head -20 | grep .; then rc=1; fi
+echo "vm-rc=$rc"'
+	guest "$K/pon"
+	;;
+kunit)
+	cd "$R/linux"
+	python3 tools/testing/kunit/kunit.py run --arch=arm64 --build_dir="$K/kunit" \
+		--jobs="$JOBS" --kunitconfig="$HERE/rtl9602c.kunitconfig"
+	;;
+*)
+	die "usage: guest omcid-kernel | pon-selftest | kunit"
+	;;
+esac
