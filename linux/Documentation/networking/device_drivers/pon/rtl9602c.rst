@@ -494,7 +494,9 @@ run on any architecture, under qemu::
 
 with ``CONFIG_NET_DSA_RTL9602C=y``, ``CONFIG_PON_RTL9602C=y`` and
 ``CONFIG_PON_RTL9602C_KUNIT_TEST=y`` in the file, among the options the drivers
-depend on. What reads or writes a register is tested on the board.
+depend on; the project's ``tools/vm/vm kunit`` does it, with the file
+``tools/vm/rtl9602c.kunitconfig``. What reads or writes a register is tested on
+the board.
 
 Interfaces to user space
 ------------------------

@@ -2629,7 +2629,8 @@ frame received in a flow), and ``flows`` and ``calls`` to read.
 
 ``tools/testing/selftests/drivers/net/pon/pon.py`` drives it, as root, with YNL
 for the family and plain rtnetlink for the ``gem`` links (iproute2 does not
-know the kind):
+know the kind). The project's ``tools/vm/vm pon-selftest`` runs it on a kernel
+of the tree in qemu, with the locking checks on:
 
 * ``dev-get`` for one ONU and as a dump, and its errors; the status the MAC
   reports in each state, and the ONU-ID that appears from O4;
