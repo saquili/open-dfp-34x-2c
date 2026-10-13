@@ -2,7 +2,8 @@
 /*
  * KUnit tests of the pure functions of rtl9602c-offload.c, which includes
  * this file when CONFIG_NET_DSA_RTL9602C_KUNIT_TEST is set: the NAPT hashes,
- * and the fields of the engine's table entries.
+ * the fields of the engine's table entries, the action of an ACL rule and the
+ * numbers of a GEM port's limit.
  */
 
 #include <kunit/test.h>
@@ -76,11 +77,86 @@ static void rtl9602c_test_flow_fields(struct kunit *test)
 	}
 }
 
+/* The @len bits at @lsb of the action of ACL rule words @w. */
+static u32 rtl9602c_test_act_get(const u32 *w, unsigned int lsb, unsigned int len)
+{
+	const u32 *act = &w[RTL9602C_ACL_W_ACT];
+	u64 v = act[lsb / 32] | (u64)act[lsb / 32 + 1] << 32;
+
+	return (v >> (lsb % 32)) & GENMASK_ULL(len - 1, 0);
+}
+
+/*
+ * The log class of a rule is a counter, or a meter that polices; the forwarding
+ * class is on only for a rule that decides forwarding; the classes it names are
+ * in the word after the action, and a rule with neither log class nor
+ * forwarding names none of them.
+ */
+static void rtl9602c_test_acl_classes(struct kunit *test)
+{
+	static const u8 slot_of[RTL9602C_ACL_TMPL_SLOTS] = { };
+	struct rtl9602c_acl_match m = { };
+	u32 w[2 * RTL9602C_ACL_RULE_WORDS + RTL9602C_ACL_ACT_WORDS + 1] = { };
+
+	rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_GEMIDX, 5, 0xffff);
+
+	rtl9602c_acl_compose(w, RTL9602C_PORT_PON, 1, slot_of, &m, RTL9602C_ACL_ACT_FWD_NONE, 0, -1,
+			     9);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_act_get(w, RTL9602C_ACL_ACT_LOG_LSB, 2),
+			(u32)RTL9602C_ACL_ACT_LOG_METER);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_act_get(w, RTL9602C_ACL_ACT_LOG_IDX_LSB, 5), 9U);
+	KUNIT_EXPECT_EQ(test, w[RTL9602C_ACL_W_EN], (u32)RTL9602C_ACL_ACT_EN_LOG);
+
+	memset(w, 0, sizeof(w));
+	rtl9602c_acl_compose(w, RTL9602C_PORT_PON, 1, slot_of, &m, RTL9602C_ACL_ACT_FWD_REDIRECT, 0,
+			     3, -1);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_act_get(w, RTL9602C_ACL_ACT_LOG_LSB, 2),
+			(u32)RTL9602C_ACL_ACT_LOG_COUNTER);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_act_get(w, RTL9602C_ACL_ACT_LOG_IDX_LSB, 5), 3U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_test_act_get(w, RTL9602C_ACL_ACT_FWD_LSB, 2),
+			(u32)RTL9602C_ACL_ACT_FWD_REDIRECT);
+	KUNIT_EXPECT_EQ(test, w[RTL9602C_ACL_W_EN],
+			(u32)(RTL9602C_ACL_ACT_EN_LOG | RTL9602C_ACL_ACT_EN_FWD));
+
+	memset(w, 0, sizeof(w));
+	rtl9602c_acl_compose(w, RTL9602C_PORT_PON, 1, slot_of, &m, RTL9602C_ACL_ACT_FWD_TRAP,
+			     0, -1, -1);
+	KUNIT_EXPECT_EQ(test, w[RTL9602C_ACL_W_EN], (u32)RTL9602C_ACL_ACT_EN_FWD);
+}
+
+/* The units of a byte-mode meter round to the nearest, and stay in the field. */
+static void rtl9602c_test_gem_ds_units(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(0), 1U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(1), 1U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(1499), 1U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(1500), 2U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(12500000), 12500U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(524287000),
+			(u32)RTL9602C_METER_CFG_HI_RATE_MAX);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_units(U64_MAX), (u32)RTL9602C_METER_CFG_HI_RATE_MAX);
+}
+
+/* The bucket is the default for 0, and otherwise between what passes a frame and the field. */
+static void rtl9602c_test_gem_ds_bucket(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(0), (u32)RTL9602C_METER_CFG_LO_BURST_DEFAULT);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(1), (u32)RTL9602C_GEM_DS_BURST_MIN);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(2048), 2048U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(16000), 16000U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(65535), 65535U);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(70000), (u32)RTL9602C_GEM_DS_BURST_MAX);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gem_ds_bucket(U32_MAX), (u32)RTL9602C_GEM_DS_BURST_MAX);
+}
+
 static struct kunit_case rtl9602c_offload_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_napt_example),
 	KUNIT_CASE(rtl9602c_test_napt_rem_hash),
 	KUNIT_CASE(rtl9602c_test_napt_buckets),
 	KUNIT_CASE(rtl9602c_test_flow_fields),
+	KUNIT_CASE(rtl9602c_test_acl_classes),
+	KUNIT_CASE(rtl9602c_test_gem_ds_units),
+	KUNIT_CASE(rtl9602c_test_gem_ds_bucket),
 	{ }
 };
 

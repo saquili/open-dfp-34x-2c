@@ -625,9 +625,12 @@ void rtl9602c_cf_sid_refresh(struct rtl9602c_priv *p)
 
 /*
  * Meters. Sixteen shared meters serve storm control, from tc and devlink alike,
+ * the limit on the frames to the CPU and the downstream limits of GEM ports,
  * under meter_lock. A meter is 64 bits in two words, the high half, which
- * holds the rate, at the lower address. Only packet mode is used: no
- * measurement has shown a meter in byte mode drop a frame.
+ * holds the rate, at the lower address. Storm control and the CPU limit use
+ * packet mode, where a meter of byte mode has not been seen to drop a frame;
+ * the limit of a GEM port, which an ACL rule hands its frames to, uses byte
+ * mode, which drops them (measured).
  */
 static int rtl9602c_meter_alloc(struct rtl9602c_priv *p)
 {
@@ -675,6 +678,21 @@ static void rtl9602c_meter_program(struct rtl9602c_priv *p, unsigned int meter,
 			      RTL9602C_METER_CFG_LO_BURST_DEFAULT) |
 		   FIELD_PREP(RTL9602C_METER_CFG_LO_MODE,
 			      RTL9602C_METER_CFG_LO_MODE_PACKET));
+}
+
+/*
+ * Program @meter in byte mode: @units of 8 kbit/s, which are
+ * RTL9602C_METER_BYTE_RATE_UNIT bytes a second each, and a bucket of @bucket
+ * bytes.
+ */
+static void rtl9602c_meter_program_bytes(struct rtl9602c_priv *p,
+					 unsigned int meter, u32 units,
+					 u32 bucket)
+{
+	rtl9602c_w(p, RTL9602C_METER_CFG_HI(meter),
+		   FIELD_PREP(RTL9602C_METER_CFG_HI_RATE, units));
+	rtl9602c_w(p, RTL9602C_METER_CFG_LO(meter),
+		   FIELD_PREP(RTL9602C_METER_CFG_LO_BURST, bucket));
 }
 
 /*
@@ -1816,8 +1834,8 @@ int rtl9602c_port_setup_tc(struct dsa_switch *ds, int port,
  * number, the ingress port and eight 16-bit slots, and its template says which
  * field each slot holds. Seven templates are used: a rule naming the eighth,
  * which no register holds, matches nothing. The action classes applied are
- * the forwarding decision, drop or trap, and the log counter, which a rule
- * that passes takes alone. Rules judge the frames entering a port, not those
+ * the forwarding decision, drop or trap, and the log class, a counter or a
+ * meter, which a rule that passes takes alone. Rules judge the frames entering a port, not those
  * the CPU sends out of it; rules on ports 0 and 2 are verified. Of two rules
  * that match a frame the lower entry decides each class it has, so the rules
  * are kept in entries ordered by tc's priority (rtl9602c_acl_place()).
@@ -1947,6 +1965,7 @@ static void rtl9602c_acl_push(struct rtl9602c_acl_match *m, u8 sel, u16 val,
 #define RTL9602C_ACL_W_MASK	0
 #define RTL9602C_ACL_W_DATA	RTL9602C_ACL_RULE_WORDS
 #define RTL9602C_ACL_W_ACT	(2 * RTL9602C_ACL_RULE_WORDS)
+#define RTL9602C_ACL_W_EN	(RTL9602C_ACL_W_ACT + RTL9602C_ACL_ACT_WORDS)
 
 /*
  * Compose rule @w: the template, compared whole; the ingress port bits, of
@@ -1955,13 +1974,15 @@ static void rtl9602c_acl_push(struct rtl9602c_acl_match *m, u8 sel, u16 val,
  * RTL9602C_ACL_ACT_FWD_REDIRECT with no port drops the frame,
  * RTL9602C_ACL_ACT_FWD_TRAP sends it to the CPU, and
  * RTL9602C_ACL_ACT_FWD_MIRROR to the CPU port copies it there. With a log
- * counter @log, not -1, the log class counts the frame in it.
+ * counter @log, not -1, the log class counts the frame in it; with a meter
+ * @meter, not -1, it hands the frame to the meter, which drops it above its
+ * rate. The classes of the action are in the word after it.
  */
 static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 				 const u8 *slot_of,
 				 const struct rtl9602c_acl_match *m,
 				 unsigned int fwdact, unsigned int fwd_pmsk,
-				 int log)
+				 int log, int meter)
 {
 	u32 *mask = &w[RTL9602C_ACL_W_MASK], *data = &w[RTL9602C_ACL_W_DATA];
 	u32 *act = &w[RTL9602C_ACL_W_ACT];
@@ -1979,30 +2000,19 @@ static void rtl9602c_acl_compose(u32 *w, int port, unsigned int tmpl,
 
 	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_LSB, 2, fwdact);
 	rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_FWD_PORTS_LSB, 4, fwd_pmsk);
+	if (fwdact)
+		w[RTL9602C_ACL_W_EN] |= RTL9602C_ACL_ACT_EN_FWD;
 	if (log >= 0) {
 		rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_LOG_LSB, 2,
 				  RTL9602C_ACL_ACT_LOG_COUNTER);
 		rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_LOG_IDX_LSB, 5, log);
+		w[RTL9602C_ACL_W_EN] |= RTL9602C_ACL_ACT_EN_LOG;
+	} else if (meter >= 0) {
+		rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_LOG_LSB, 2,
+				  RTL9602C_ACL_ACT_LOG_METER);
+		rtl9602c_acl_bits(act, RTL9602C_ACL_ACT_LOG_IDX_LSB, 5, meter);
+		w[RTL9602C_ACL_W_EN] |= RTL9602C_ACL_ACT_EN_LOG;
 	}
-}
-
-/*
- * The action classes of rule @w: forwarding when the action decides it, and
- * the log class when the action names a log counter. A rule with neither is
- * never written: classes of 0 would chain its entry to the one before.
- */
-static u32 rtl9602c_acl_act_en(const u32 *w)
-{
-	const u32 *act = &w[RTL9602C_ACL_W_ACT];
-	unsigned int log = RTL9602C_ACL_ACT_LOG_LSB;
-	unsigned int fwd = RTL9602C_ACL_ACT_FWD_LSB;
-	u32 en = 0;
-
-	if ((act[fwd / 32] >> (fwd % 32)) & GENMASK(1, 0))
-		en |= RTL9602C_ACL_ACT_EN_FWD;
-	if ((act[log / 32] >> (log % 32)) & GENMASK(1, 0))
-		en |= RTL9602C_ACL_ACT_EN_LOG;
-	return en;
 }
 
 /*
@@ -2030,7 +2040,7 @@ static int rtl9602c_acl_put(struct rtl9602c_priv *p, unsigned int idx,
 	if (err)
 		return err;
 
-	rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx, rtl9602c_acl_act_en(w));
+	rtl9602c_w(p, RTL9602C_ACL_ACT_EN + 4 * idx, w[RTL9602C_ACL_W_EN]);
 
 	return rtl9602c_table_write(p, RTL9602C_TBLACC_CMD_TABLE_ACL_RULE,
 				    idx + RTL9602C_ACL_RULE_ONES_PLANE,
@@ -2149,13 +2159,14 @@ void rtl9602c_acl_log_fold(struct rtl9602c_priv *p)
 /*
  * Write the rule of @m on @port into a new entry, kept in priority order
  * (rtl9602c_acl_place()), and turn on the port's lookup. With @count, the rule
- * takes a log counter while one is free. @extack, if not NULL, gets the reason
- * of a failure.
+ * takes a log counter while one is free; with a @meter, not -1, it hands the
+ * frames it matches to that meter instead. @extack, if not NULL, gets the
+ * reason of a failure.
  */
 static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 			       const struct rtl9602c_acl_match *m, u16 prio,
 			       unsigned long cookie, unsigned int fwdact,
-			       unsigned int fwd_pmsk, bool count,
+			       unsigned int fwd_pmsk, bool count, int meter,
 			       struct netlink_ext_ack *extack)
 {
 	u8 slot_of[RTL9602C_ACL_TMPL_SLOTS];
@@ -2185,7 +2196,7 @@ static int rtl9602c_acl_insert(struct rtl9602c_priv *p, int port,
 	log = count ? rtl9602c_acl_log_get(p) : -1;
 	memset(p->acl[idx].words, 0, sizeof(p->acl[idx].words));
 	rtl9602c_acl_compose(p->acl[idx].words, port, tmpl, slot_of, m,
-			     fwdact, fwd_pmsk, log);
+			     fwdact, fwd_pmsk, log, meter);
 	err = rtl9602c_acl_put(p, idx, p->acl[idx].words);
 	if (err) {
 		if (log >= 0)
@@ -2490,7 +2501,7 @@ no_addrs:
 	}
 
 	err = rtl9602c_acl_insert(p, port, &m, cls->common.prio, cls->cookie,
-				  fwdact, fwd_pmsk, true, extack);
+				  fwdact, fwd_pmsk, true, -1, extack);
 out:
 	mutex_unlock(&p->acl_lock);
 	return err;
@@ -2562,7 +2573,8 @@ void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
 					  RTL9602C_ACL_SNOOP_PRIO,
 					  RTL9602C_ACL_SNOOP_COOKIE(n++),
 					  RTL9602C_ACL_ACT_FWD_MIRROR,
-					  BIT(RTL9602C_PORT_CPU), false, NULL);
+					  BIT(RTL9602C_PORT_CPU), false, -1,
+					  NULL);
 
 		for (j = 0; !err && j < ARRAY_SIZE(mld_types); j++) {
 			struct rtl9602c_acl_match mld = {};
@@ -2583,7 +2595,7 @@ void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
 						  RTL9602C_ACL_SNOOP_COOKIE(n++),
 						  RTL9602C_ACL_ACT_FWD_MIRROR,
 						  BIT(RTL9602C_PORT_CPU), false,
-						  NULL);
+						  -1, NULL);
 		}
 		if (err)
 			pr_err("port %d: no ACL rule for IGMP and MLD; the bridge misses reports to groups in the table\n",
@@ -2625,6 +2637,136 @@ static int rtl9602c_acl_del(struct rtl9602c_priv *p, unsigned long cookie)
 	}
 	mutex_unlock(&p->acl_lock);
 	return -ENOENT;
+}
+
+/*
+ * The cookie of the ACL rule that limits GEM flow @flow downstream. The
+ * flower rules' cookies are addresses and the snooping rules' small numbers,
+ * which these do not meet.
+ */
+#define RTL9602C_ACL_GEM_DS_COOKIE(flow)	((1UL << 16) + (flow))
+
+/*
+ * A rate in bytes per second as the units of a byte-mode meter: rounded to
+ * the unit, at least one and at most what the field holds.
+ */
+static u32 rtl9602c_gem_ds_units(u64 rate)
+{
+	/* The cap first: rounding adds half a unit to a rate near U64_MAX, which would wrap. */
+	rate = min_t(u64, rate,
+		     (u64)RTL9602C_METER_CFG_HI_RATE_MAX * RTL9602C_METER_BYTE_RATE_UNIT);
+	return max_t(u32, DIV_ROUND_CLOSEST_ULL(rate, RTL9602C_METER_BYTE_RATE_UNIT), 1);
+}
+
+/*
+ * A burst in bytes as the bucket of a meter: between what passes the largest
+ * frame and what the field holds; 0 is the default.
+ */
+static u32 rtl9602c_gem_ds_bucket(u32 burst)
+{
+	return burst ? clamp(burst, RTL9602C_GEM_DS_BURST_MIN, RTL9602C_GEM_DS_BURST_MAX) :
+		       RTL9602C_METER_CFG_LO_BURST_DEFAULT;
+}
+
+/**
+ * rtl9602c_gem_ds_limit() - limit the downstream traffic of a GEM port
+ * @p: the switch
+ * @flow: the GEM flow of the port
+ * @rate: the rate above which its frames from the OLT are dropped, in bytes
+ *	per second; 0 takes the limit away
+ * @burst: the bucket in bytes; 0 for the default one
+ * @extack: where to say why not, or NULL
+ *
+ * An ACL rule on the PON port keys on the flow of the frames that enter by it
+ * and hands them to a meter of its own, in byte mode, which drops what is
+ * above the rate. The rate is rounded to a unit of 8 kbit/s, at least one, and
+ * the bucket lies between what passes the largest frame and what the field
+ * holds, as RTL9602C_GEM_DS_BURST_MIN and RTL9602C_GEM_DS_BURST_MAX say. A
+ * limit that exists is given its new rate and bucket in place.
+ *
+ * Context: RTNL held, where the PON class changes a GEM port; takes
+ * meter_lock and acl_lock, one after the other.
+ * Return: 0, -ENOSPC when every meter or every ACL rule is in use, or the
+ * table's error.
+ */
+int rtl9602c_gem_ds_limit(struct rtl9602c_priv *p, unsigned int flow, u64 rate,
+			  u32 burst, struct netlink_ext_ack *extack)
+{
+	struct rtl9602c_acl_match m = {};
+	u32 units, bucket;
+	int meter, err;
+
+	if (flow >= RTL9602C_GPON_NUM_FLOW)
+		return -EINVAL;
+
+	if (!rate) {
+		rtl9602c_gem_ds_forget(p, flow);
+		return 0;
+	}
+
+	units = rtl9602c_gem_ds_units(rate);
+	bucket = rtl9602c_gem_ds_bucket(burst);
+
+	meter = (int)p->gem_ds_meter[flow] - 1;
+	if (meter >= 0) {
+		mutex_lock(&p->meter_lock);
+		rtl9602c_meter_program_bytes(p, meter, units, bucket);
+		mutex_unlock(&p->meter_lock);
+		return 0;
+	}
+
+	/* The meter is set before the rule that hands frames to it is live. */
+	mutex_lock(&p->meter_lock);
+	meter = rtl9602c_meter_alloc(p);
+	if (meter >= 0)
+		rtl9602c_meter_program_bytes(p, meter, units, bucket);
+	mutex_unlock(&p->meter_lock);
+	if (meter < 0) {
+		NL_SET_ERR_MSG_MOD(extack, "all sixteen meters are in use");
+		return meter;
+	}
+
+	rtl9602c_acl_push(&m, RTL9602C_ACL_TMPL_FIELD_GEMIDX, flow, 0xffff);
+	mutex_lock(&p->acl_lock);
+	err = rtl9602c_acl_insert(p, RTL9602C_PORT_PON, &m, 0,
+				  RTL9602C_ACL_GEM_DS_COOKIE(flow),
+				  RTL9602C_ACL_ACT_FWD_NONE, 0, false, meter,
+				  extack);
+	mutex_unlock(&p->acl_lock);
+	if (err) {
+		mutex_lock(&p->meter_lock);
+		rtl9602c_meter_free(p, meter);
+		mutex_unlock(&p->meter_lock);
+		return err;
+	}
+
+	p->gem_ds_meter[flow] = meter + 1;
+	WRITE_ONCE(p->gem_ds_meters, p->gem_ds_meters | BIT(meter));
+	return 0;
+}
+
+/**
+ * rtl9602c_gem_ds_forget() - take the downstream limit of a GEM port away
+ * @p: the switch
+ * @flow: the GEM flow of the port
+ *
+ * The rule goes first, so that no frame meets a meter that is given back.
+ *
+ * Context: as rtl9602c_gem_ds_limit().
+ */
+void rtl9602c_gem_ds_forget(struct rtl9602c_priv *p, unsigned int flow)
+{
+	int meter = (int)p->gem_ds_meter[flow] - 1;
+
+	if (meter < 0)
+		return;
+
+	rtl9602c_acl_del(p, RTL9602C_ACL_GEM_DS_COOKIE(flow));
+	WRITE_ONCE(p->gem_ds_meters, p->gem_ds_meters & ~BIT(meter));
+	mutex_lock(&p->meter_lock);
+	rtl9602c_meter_free(p, meter);
+	mutex_unlock(&p->meter_lock);
+	p->gem_ds_meter[flow] = 0;
 }
 
 /*

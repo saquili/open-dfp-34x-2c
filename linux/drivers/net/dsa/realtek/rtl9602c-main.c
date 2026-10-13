@@ -881,16 +881,22 @@ static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 	/*
 	 * One latching bit per meter. It asserts once, and again only after
 	 * a clear and a fresh excess, so writing back the bits read re-arms
-	 * them.
+	 * them. The source masks itself and is re-armed a second later: a
+	 * meter that limits a GEM port is exceeded all the time it works.
 	 */
 	if (pending & RTL9602C_IRQ_SRC_METER) {
 		u32 hit = rtl9602c_r(p, RTL9602C_METER_EXCEEDED);
 
+		rtl9602c_irq_rearm_later(p, RTL9602C_IRQ_SRC_METER);
 		if (hit) {
+			/* A limit of a GEM port is meant to be exceeded. */
+			u32 other = hit & ~READ_ONCE(p->gem_ds_meters);
+
 			rtl9602c_w(p, RTL9602C_METER_EXCEEDED, hit);
-			dev_warn_ratelimited(p->dev,
-					     "meters %#x exceeded their rate\n",
-					     hit);
+			if (other)
+				dev_warn_ratelimited(p->dev,
+						     "meters %#x exceeded their rate\n",
+						     other);
 		}
 	}
 

@@ -299,11 +299,15 @@ static void rtl9602c_host_gem_unbind(void *host, unsigned int flow)
 	}
 }
 
-/* Its addresses leave the table, and its say on unknown unicast. */
+/*
+ * Its addresses leave the table, its say on unknown unicast, and its limit
+ * on what the OLT sends it.
+ */
 static void rtl9602c_host_gem_forget(void *host, unsigned int flow)
 {
 	struct rtl9602c_priv *p = host;
 
+	rtl9602c_gem_ds_forget(p, flow);
 	clear_bit(flow, p->gem_flows);
 	memset(&p->gem_rx[flow], 0, sizeof(p->gem_rx[flow]));
 	rtl9602c_gem_hosts_sync(p);
@@ -336,6 +340,17 @@ static void rtl9602c_host_gem_rx_filter(void *host, unsigned int flow,
 	rtl9602c_gem_hosts_sync(p);
 }
 
+/*
+ * The most the OLT may send the GEM port of @flow: an ACL rule on the PON
+ * port hands its frames to a meter (rtl9602c_gem_ds_limit()).
+ */
+static int rtl9602c_host_gem_ds_limit(void *host, unsigned int flow, u64 rate,
+				      u32 burst,
+				      struct netlink_ext_ack *extack)
+{
+	return rtl9602c_gem_ds_limit(host, flow, rate, burst, extack);
+}
+
 static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.irq_enable		= rtl9602c_host_irq_enable,
 	.tx_disable		= rtl9602c_host_tx_disable,
@@ -351,6 +366,7 @@ static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.gem_pbits_change	= rtl9602c_host_gem_pbits_change,
 	.gem_mrouter		= rtl9602c_host_gem_mrouter,
 	.gem_rx_filter		= rtl9602c_host_gem_rx_filter,
+	.gem_ds_limit		= rtl9602c_host_gem_ds_limit,
 };
 
 /**

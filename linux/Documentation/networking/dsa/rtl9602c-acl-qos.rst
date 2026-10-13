@@ -677,10 +677,19 @@ decision is one of them.
        drop at 10 above a pass at 20 let none through and counted 100. The
        trap of the management VLAN at priority 1 on ``sfp`` still took every
        frame of that VLAN with a pass at 10 for it.
-   * - The log class's other types police with a meter, so the driver sets
-       ``RTL9602C_ACL_ACT_EN_LOG`` only with type 1 and a counter.
-     - I
-     - Not measured; a rule with the class on and type 0 would show it.
+   * - Type ``RTL9602C_ACL_ACT_LOG_METER`` (0) of the log class hands each frame
+       the rule decides for to meter ``RTL9602C_ACL_ACT_LOG_IDX_LSB`` names,
+       which drops it above its rate, in packet mode and in byte mode alike.
+       The driver sets ``RTL9602C_ACL_ACT_EN_LOG`` for it as for a counter, for
+       the downstream limit of a GEM port ("Limiting a GEM port downstream").
+       Such a rule decides the log class for its frames, so a counter of a rule
+       below it counts none of them.
+     - M
+     - A rule on ``pon`` keyed on flow 1 with a meter: 883 Mbit/s of TCP
+       downstream fell to 32 in packet mode at 5000 packets a second and to 88
+       in byte mode at 12500 units, and a rule on flow 2 changed nothing; a
+       pass rule with a counter on the same frames counted 0 of 20 pings with
+       the limit and 20 of 20 without it.
    * - Bit k of ``RTL9602C_LOG_TYPE`` (``0x034008``) chooses what counters 2k
        and 2k + 1 count, ``RTL9602C_LOG_TYPE_PACKETS`` (0) frames; bit k of
        ``RTL9602C_LOG_WIDE`` (``0x034004``) joins them into one counter of 64
@@ -1408,14 +1417,17 @@ engine's lock itself, so the view does not hold it.
 Meters
 ======
 
-Sixteen meters are shared by everything that limits a rate by packets: the
-storm control of ``tc`` and of devlink, and the limit on the frames handed to
-the CPU. A meter has a rate, a bucket size and a unit, and it sets a latching
-bit when it drops a frame. The driver programs every meter that it hands out in
-packet mode, with the default bucket, because no measurement has shown a meter
-in byte mode drop a frame. ``tc`` and devlink reach the meters from different paths, so the pool
-and the state of storm control and of the CPU limit are changed under one
-mutex, ``meter_lock``.
+Sixteen meters are shared by everything that limits a rate: the storm control
+of ``tc`` and of devlink, the limit on the frames handed to the CPU, and the
+downstream limits of GEM ports. A meter has a rate, a bucket size and a unit,
+and it sets a latching bit when it drops a frame. The driver programs the
+meters of storm control and of the CPU limit in packet mode, with the default
+bucket, because no measurement has shown a meter that those bind drop a frame
+in byte mode; the meter of a GEM port's limit, which an ACL rule hands the
+frames to, is programmed in byte mode, which drops them (see "Limiting a GEM
+port downstream"). ``tc`` and devlink reach the meters from different paths, so
+the pool and the state of storm control and of the CPU limit are changed under
+one mutex, ``meter_lock``.
 
 .. list-table::
    :header-rows: 1
@@ -1440,11 +1452,14 @@ mutex, ``meter_lock``.
      - Broadcast offered at 322 frames/s against limits of 50, 150, 300, 600 and
        1200 set with ``tc ... police pkts_rate``: 51.7, 151.7 and 301.8 frames/s
        arrived, and everything at the two limits above the offered rate.
-   * - In byte mode (mode bit 0) a meter sets its exceeded bit, but no
-       measurement has shown it drop a frame. Bit 0 of the low word, which
-       would count the preamble and inter-frame gap in a byte rate, reads back
-       0 whatever is written. The driver therefore programs every meter that it
-       hands out in packet mode.
+   * - In byte mode (mode bit 0) a meter that storm control or the CPU limit
+       binds sets its exceeded bit, but no measurement has shown it drop a
+       frame. Bit 0 of the low word, which would count the preamble and
+       inter-frame gap in a byte rate, reads back 0 whatever is written. The
+       driver therefore programs the meters of storm control and of the CPU
+       limit in packet mode. A meter that an ACL rule binds does drop in byte
+       mode (see "Limiting a GEM port downstream"), so these runs, whose
+       frames went to the CPU, did not show the mode to be unable to.
      - M, I
      - M: a broadcast class bound to a byte-mode meter at its lowest rate once
        passed thirty times that rate for 15 s without setting its exceeded bit,
@@ -1493,6 +1508,95 @@ mutex, ``meter_lock``.
      - An ARP limit from ``tc`` on meter 0 and an unknown-unicast limit from
        devlink on meter 1 held at the same time; deleting the rules left no
        class enabled and no meter bound.
+
+Limiting a GEM port downstream
+==============================
+
+The OLT can give a GEM port a rate for what it sends the ONU (ITU-T G.988,
+the traffic descriptor of a GEM port network CTP), and the PON class carries it
+as ``IFLA_GEM_DS_RATE`` and ``IFLA_GEM_DS_BURST``. The driver limits a flow
+with an ACL rule on the PON port that keys on the frames' GEM flow and hands
+them to a meter of the flow's own, in byte mode. The PON driver passes the
+class's two numbers to the switch driver's ``gem_ds_limit`` host operation
+when it creates or changes the port, and the switch driver removes the limit
+with the port (``gem_forget``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A frame that entered by the PON port holds its GEM flow, the number the
+       GPON MAC gives the port, in the template field
+       ``RTL9602C_ACL_TMPL_FIELD_GEMIDX`` (``0x0a``). A rule on the PON port
+       with that field and a mask of ``0xffff`` matches the frames of one GEM
+       port and no others.
+     - M
+     - GEM port 257, flow 1 on the lab stick: a rule on flow 1 limited the
+       traffic the OLT sent it from 883 Mbit/s of TCP to 32, and a rule on flow
+       2 left 880.
+   * - A rule with the log class's type ``RTL9602C_ACL_ACT_LOG_METER`` and a
+       meter drops the frames it matches above the meter's rate, whatever the
+       forwarding class does: the rule has the log class alone, with
+       ``RTL9602C_ACL_ACT_FWD_NONE``, and the frames it lets through go as the
+       switch would send them.
+     - M
+     - As above; the meter's exceeded bit set, and the throughput back at 933
+       Mbit/s over 16 streams with the rule removed.
+   * - A meter in byte mode counts bytes: its rate is in units of 8 kbit/s,
+       1000 bytes a second (``RTL9602C_METER_BYTE_RATE_UNIT``), and bit 0 of the
+       low word, which would add the preamble and the gap, reads 0. With the
+       registers as the reset leaves them, ``0x025000`` at ``0x00012bbd`` and
+       the byte token ``0x02d890`` at ``0x42``, nothing has to be written to
+       make it police.
+     - M
+     - 16 TCP streams from the network side to the host side, rates of 12500
+       and 6250 units: 88 and 38 Mbit/s of TCP payload, against 100 and 50
+       Mbit/s of rate. TCP under a policer does not reach the rate; the
+       figures are what a stream got, not a calibration.
+   * - The bucket is in bytes, 16 bits at bits 16:1 of the low word. A bucket
+       below a frame passes no frame of that size: 1024 bytes passed no
+       full-size frame, 1536 passed them, and the throughput at a rate rises
+       with the bucket. The driver takes at least
+       ``RTL9602C_GEM_DS_BURST_MIN`` (2048) and at most
+       ``RTL9602C_GEM_DS_BURST_MAX`` (65535) bytes, and the default 16383
+       for a burst of 0.
+     - M
+     - At a rate of 12500 units: buckets of 1536, 1600, 2048, 4096 and 16383
+       bytes gave 58, 59, 60, 75 and 88 Mbit/s; at 1250 units, 1024, 256, 64
+       and 8 gave 0.1 Mbit/s and nothing.
+   * - The rate is rounded to a unit of 8 kbit/s and is at least one unit. The
+       field holds 19 bits, so the highest rate is 524 MB/s; the driver clamps
+       to it.
+     - I
+     - By the register's width; a rate below 8 kbit/s was not tried.
+   * - A flow's limit takes a meter of the pool and one ACL rule, which
+       ``RTL9602C_ACL_GEM_DS_COOKIE`` names, placed before the rules of ``tc``.
+       A limit that finds none left is refused with a message, and the PON
+       driver then refuses the port. Giving a port a new rate changes the
+       meter in place. Taking a limit away, deleting the port, retires the
+       rule first and resets the meter, which limits nothing once given back.
+     - T
+     - On the lab stick: a limit set, changed twice, removed with a rate of 0
+       and set again; the GEM interface deleted and made again with its limit,
+       which came up limited; the ``qos`` view showed the one meter in use and
+       the others at the maximum rate.
+   * - A rule of a limit decides the log class for the frames it matches, so the
+       counter of a ``tc`` rule on the PON port counts none of a limited
+       flow's frames, though the rule's forwarding still applies.
+     - M
+     - See the type 0 row of the log class: 0 of 20 against 20 of 20.
+   * - A limit that is working exceeds its meter all the time, and the
+       exceeded latch re-arms at once. The switch interrupt's meter source
+       therefore masks itself for a second after each interrupt, as the ACL
+       and the learning limit do, and the handler leaves the meters of GEM
+       limits out of its message.
+     - T
+     - With a limit on under a downstream load, the kernel log held no
+       ``exceeded their rate`` line; before the handler left these meters out
+       it held one a second.
 
 Storm control
 =============

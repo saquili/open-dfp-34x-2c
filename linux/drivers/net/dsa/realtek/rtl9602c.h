@@ -877,7 +877,8 @@ struct rtl9602c_field {
  * IPv4 TOS octet above the protocol,
  * IPV6_TC_NH the IPv6 traffic class above the protocol of the payload that
  * follows any extension headers: 58 for an MLD message behind its hop-by-hop
- * header (measured).
+ * header (measured). GEMIDX holds the GEM flow of a frame that entered by the
+ * PON port, the number the GPON MAC gives the port (measured).
  */
 #define RTL9602C_ACL_TMPL_FIELD_NONE		0x00
 #define RTL9602C_ACL_TMPL_FIELD_DMAC0		0x01
@@ -888,6 +889,7 @@ struct rtl9602c_field {
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_DST0		0x12
 #define RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO	0x14
 #define RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH	0x15
+#define RTL9602C_ACL_TMPL_FIELD_GEMIDX		0x0a
 
 /*
  * The forwarding decision and its port mask: REDIRECT with no port drops the
@@ -907,14 +909,17 @@ struct rtl9602c_field {
 #define RTL9602C_ACL_ACT_EN_DEFAULT	0x7f
 
 /*
- * The log class of an action: its type at LOG_LSB, 2 bits, and a counter at
- * LOG_IDX_LSB, 5 bits. Type LOG_COUNTER counts each frame the rule matches in
- * log counter LOG_IDX. EN_LOG is the class's bit of RTL9602C_ACL_ACT_EN; the
- * driver sets it only for a rule with a counter, as the class's other types
- * police.
+ * The log class of an action: its type at LOG_LSB, 2 bits, and a counter or
+ * meter at LOG_IDX_LSB, 5 bits. Type LOG_COUNTER counts each frame the rule
+ * matches in log counter LOG_IDX. Type LOG_METER, 0, hands each such frame to
+ * meter LOG_IDX, which drops it when the meter is exceeded (measured, in
+ * packet and in byte mode). EN_LOG is the class's bit of
+ * RTL9602C_ACL_ACT_EN; the driver sets it for a rule with a counter or a
+ * meter.
  */
 #define RTL9602C_ACL_ACT_LOG_LSB	35
 #define RTL9602C_ACL_ACT_LOG_IDX_LSB	30
+#define RTL9602C_ACL_ACT_LOG_METER	0
 #define RTL9602C_ACL_ACT_LOG_COUNTER	1
 #define RTL9602C_ACL_ACT_EN_LOG		BIT(3)
 
@@ -1128,9 +1133,10 @@ struct rtl9602c_field {
 #define RTL9602C_STORM_METER_SEL_PORT(p)	(0xfu << (4 * (p)))
 
 /*
- * Sixteen meters of two words, the high one at the lower address; byte mode
- * does not police (measured on this board), and the maximum rate does not
- * limit.
+ * Sixteen meters of two words, the high one at the lower address. A meter
+ * bound to an ACL rule polices in byte mode as in packet mode, in units of
+ * 8 kbit/s, and the maximum rate does not limit (see "Meters" in the ACL and
+ * QoS page).
  */
 #define RTL9602C_METER_COUNT			16
 
@@ -1164,6 +1170,16 @@ struct rtl9602c_field {
 #define RTL9602C_METER_CFG_LO_MODE_PACKET	1
 #define RTL9602C_METER_CFG_HI_RATE_MAX		0x7ffff
 #define RTL9602C_METER_CFG_LO_BURST_DEFAULT	0x3fff
+
+/*
+ * What a byte-mode rate unit stands for, in bytes per second (8 kbit/s), and
+ * the bucket, in bytes, a downstream limit of a GEM port takes: from what
+ * passes the largest frame to what the field holds. A bucket of 1024 bytes
+ * passed no full-size frame, and one of 1536 did (measured).
+ */
+#define RTL9602C_METER_BYTE_RATE_UNIT		1000
+#define RTL9602C_GEM_DS_BURST_MIN		2048
+#define RTL9602C_GEM_DS_BURST_MAX		0xffff
 
 /* A latching bit per meter, cleared by writing 1. */
 #define RTL9602C_METER_EXCEEDED		0x025084
@@ -2051,10 +2067,11 @@ struct rtl9602c_priv {
 		s8		log;
 		/**
 		 * @acl.words: the entry as written: the zeros plane, the ones
-		 * plane and the action, so that the rule can be moved
+		 * plane, the action and its classes, so that the rule can be
+		 * moved
 		 */
 		u32		words[2 * RTL9602C_ACL_RULE_WORDS +
-				      RTL9602C_ACL_ACT_WORDS];
+				      RTL9602C_ACL_ACT_WORDS + 1];
 	} acl[RTL9602C_ACL_ENTRIES];
 	/** @acl_log_used: the log counters given to ACL rules */
 	DECLARE_BITMAP(acl_log_used, RTL9602C_LOG_COUNTERS);
@@ -2090,6 +2107,17 @@ struct rtl9602c_priv {
 	struct mutex meter_lock;
 	/** @meter_used: the meters handed out */
 	DECLARE_BITMAP(meter_used, RTL9602C_METER_COUNT);
+	/**
+	 * @gem_ds_meter: the meter of the downstream limit of each GEM flow,
+	 * plus one; 0 for a flow with none. Under RTNL, where the PON class
+	 * changes a GEM port
+	 */
+	u8 gem_ds_meter[RTL9602C_GPON_NUM_FLOW];
+	/**
+	 * @gem_ds_meters: the meters of those limits, a bit each, which the
+	 * interrupt handler reads and does not report as exceeded
+	 */
+	u16 gem_ds_meters;
 	/**
 	 * @cpu_meter: the meter that limits the frames handed to the CPU, or
 	 * -1 (rtl9602c_cpu_rate_set())
@@ -2312,6 +2340,9 @@ int rtl9602c_optics_hold_modulation(struct rtl9602c_priv *p);
 void rtl9602c_optics_level_work(struct work_struct *work);
 int rtl9602c_optics_level_register(struct rtl9602c_priv *p);
 void rtl9602c_meter_free(struct rtl9602c_priv *p, unsigned int meter);
+int rtl9602c_gem_ds_limit(struct rtl9602c_priv *p, unsigned int flow, u64 rate,
+			  u32 burst, struct netlink_ext_ack *extack);
+void rtl9602c_gem_ds_forget(struct rtl9602c_priv *p, unsigned int flow);
 void rtl9602c_offload_debugfs_init(struct rtl9602c_priv *p);
 void rtl9602c_l2_debugfs_init(struct rtl9602c_priv *p);
 void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p);

@@ -74,6 +74,10 @@ struct pon_gem_rx_filter;
  *	@pbits
  * @gem_mrouter: a multicast router appeared or went behind a GEM port
  * @gem_rx_filter: the unicast frames the GEM interface of @flow takes
+ * @gem_ds_limit: limit the traffic the OLT sends the GEM port of @flow to
+ *	@rate bytes per second, with a bucket of @burst bytes, 0 for the
+ *	switch's own; a @rate of 0 takes the limit away; refuse with a message
+ *	in @extack what the switch cannot do
  *
  * All are called in process context, with the PON driver's lock not held but
  * for @power_level_changed.
@@ -99,6 +103,8 @@ struct rtl9602c_pon_host_ops {
 	void (*gem_mrouter)(void *host);
 	void (*gem_rx_filter)(void *host, unsigned int flow,
 			      const struct pon_gem_rx_filter *f);
+	int (*gem_ds_limit)(void *host, unsigned int flow, u64 rate, u32 burst,
+			    struct netlink_ext_ack *extack);
 };
 
 /**
