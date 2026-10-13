@@ -24,8 +24,8 @@ and a transmitted power of 1672 uW to 1682 uW, about +2.2 dBm (M: the hwmon
 device ``rtl9602c_optics``, ``curr1_input`` and ``power1_input``, on the
 DFP-34X-2C3 in O5 on a lab OLT, 2026-10-12). Never look into the cage, a
 connector or a fibre. Keep the caps on whatever is not connected. The
-DFP-34X-2C2 differs from the DFP-34X-2C3 only in its optical connector, APC or
-UPC; use the cord of the kind the stick has.
+DFP-34X-2C2 and the DFP-34X-2C3 are one stick, the 2C2 with a UPC optical
+connector and the 2C3 with an APC one; use the cord of the kind the stick has.
 
 **The other subscribers.** The upstream of a PON is shared by time: the OLT
 grants each ONU its allocations, and an ONU may emit only inside them. An ONU
