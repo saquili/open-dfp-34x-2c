@@ -32,9 +32,10 @@ groups; under such a policy it sends the subscriber's IGMP and MLD
 upstream itself, a refused join held back, with the profile's tag and
 rate, and gives multicast the profile's downstream tag; and it reports
 the active groups and the join counts, and the groups whose stream
-stopped, with the lost multicast group alarm. A local control socket lets
-tools read the MIB, follow the frames and see what became of each VLAN
-rule.
+stopped, with the lost multicast group alarm. With the profile's IGMP
+function at 1 or 2 it speaks for the subscribers to the OLT instead
+(`The multicast proxy`_). A local control socket lets tools read the MIB,
+follow the frames and see what became of each VLAN rule.
 
 Layout
 ======
@@ -51,10 +52,11 @@ Layout
 ``src/mcast/``
    multicast: the tables of the multicast operations profile and of the
    multicast subscriber config info, read into whole rows; the IGMP and MLD
-   messages of the subscriber, taken apart; and the agent that holds the
-   bridge's snooped groups to the OLT's policy, keeps the multicast
-   subscriber monitor and counts the groups' downstream frames to tell the
-   lost ones
+   messages of the subscriber and the OLT's queries, taken apart; the
+   messages the ONU makes itself, and the proxy that tells the OLT what the
+   subscribers hold; and the agent that holds the bridge's snooped groups to
+   the OLT's policy, keeps the multicast subscriber monitor and counts the
+   groups' downstream frames to tell the lost ones
 ``src/hw/``
    the interface to the hardware, and the host backend that stands in for it
 ``src/sys/``
@@ -68,6 +70,92 @@ Layout
    the tests
 ``data/g988-me-min.tsv``
    the managed entity classes, from which ``src/me/table.[ch]`` are made
+
+The multicast proxy
+===================
+
+The IGMP function of the multicast operations profile (G.988 9.3.27) has
+three values. At 0 the agent only snoops, and passes each message of the
+subscribers on to the OLT as it came, under the OLT's policy. At 1,
+snooping with proxy reporting, and at 2, IGMP proxy (RFC 4605 is the
+model), the OLT hears of the groups from the ONU itself:
+
+* a join goes up once, for the first subscriber of a group, and a leave once,
+  for the last; more subscribers, and the subscribers' repeated reports, tell
+  the OLT nothing;
+* a general query of the OLT is answered with the groups held, after a time
+  within the response time that the query allows, and a query of one group
+  at once if it is held; the messages are IGMP version 1 to 3 or MLD version
+  1 and 2, as the profile's version says, and for the protocol the profile is
+  not of, the highest;
+* when a subscriber leaves a group and the profile has no immediate leave,
+  the agent asks the subscribers with queries of the group (the profile's
+  robustness and last member interval), in the VLAN the group was joined in,
+  and lets the group go from the bridge when none answers. The bridge alone
+  shortens the group's timer at a leave and lets the group go, without a
+  query, while another subscriber of the port still holds it;
+* at 2 the ONU is also the querier of the subscribers: it sends general
+  queries, IGMP and MLD, at the profile's interval and response time.
+
+The messages are made in ``src/mcast/message.c``, whose source address is the
+profile's querier address (attribute 11) for IGMP and the link-local address
+of the ONU's Ethernet address for MLD. A message for a group carries the VLAN
+and priority of the joins of it, and goes up with the profile's upstream tag
+control, the VLAN rules, GEM port and rate as the subscribers' own do. ``src/mcast/proxy.c``
+keeps what the OLT was told, so that a message that could not be sent is
+made again a second later.
+
+What it does not do: the switch also forwards the OLT's queries to the
+subscribers, so that the subscribers answer them, and the agent takes in
+what they answer without telling the OLT; a state change is sent once, not
+robustness times, and the next query of the OLT repairs a loss; at most 64
+groups and 8 sources of one group are told; and the profile's upstream IGMP
+rate holds the proxy's messages back, which are sent again, as it holds the
+subscribers' back. The kernel bridge snoops the group of a join that names
+sources without the sources, so such a join is told to the OLT as a join of
+the group from every source. Where the agent cannot hold the subscribers' messages
+back for itself (a backend that cannot send, an Ethernet address that cannot
+be read, no subscriber side to hold), the function is carried out as 0, and
+the log says so.
+
+What was measured on the board (the ODI DFP-34X-2C3, 2026-10-13): the lab OLT
+provisions nothing, so the recorded provisioning of an operator's OLT, with
+its multicast operations profile, was written into the OMCI port's inject
+file (``CONFIG_PON_OMCI_INJECT``, a test image) and the profile's function
+was changed with further Set messages. Subscribers were frames sent into
+``sfp`` and the frames of the stick were read on every interface.
+
+* Function 0: a join in the subscriber VLAN went up one GEM port as it came,
+  its VLAN translated by the rules.
+* Function 1: the first join of a group went up as a message of the stick,
+  from its Ethernet address and the profile's querier address, in the VLAN
+  the rules give the join's, and a second subscriber's join and repeated
+  reports sent nothing. With immediate leave a leave went up at once. Without
+  it, the stick queried the group in the subscribers' VLAN, twice a second
+  apart when none answered and then told the OLT, and a single answer of
+  another subscriber kept the group and told the OLT nothing. With the
+  profile at version 3 the messages were IGMPv3 reports.
+* Function 2: the stick sent IGMP and MLD general queries at the profile's
+  interval, the IGMP ones in the VLAN of the groups held, and a subscriber
+  that did not answer lost its group after the profile's membership time,
+  with a leave to the OLT. The MLD queries and their checksums were read by
+  the router's kernel, which answered them.
+* A query that arrived on a GEM interface (made by a tc rule on ``sfp``
+  that redirects a VLAN of the test to ``gem257``) was answered with the
+  groups held, after a time within the response time it allowed, and a query
+  of one group was answered at once when the group was held and not when it
+  was not.
+
+The packet socket now reads every interface, to tell the OLT's side from the
+subscriber's. Two PPPoE sessions at once, TCP from the host behind the stick
+to the router's side: 905, 899, 912, 912 and 902 Mb/s up and 881 and 881
+down with it, against 905, 908, 898, 896 and 894 up and 880 and 882 down
+with the daemon before, each run 15 s, the stick's CPU at 5 per cent.
+
+Not measured: queries that come from the OLT itself, since the lab OLT passes
+only the GEM ports it knows and the stick had none of those in the
+provisioning; and the MLD proxy, the recorded policy having no IPv6 group.
+The proxy's messages are tested on the host for both.
 
 Building and testing
 ====================
@@ -97,8 +185,12 @@ clock at second N, and the same frames then give the same answers::
 network namespace of its own, with dummy interfaces named ``sfp`` and ``pon``,
 and reads back with tc the filters it adds: the VLAN rules, the bridge port
 filters, the multicast tags and the drops at the UNI that an earlier run
-left, and the tbf that limits the UNI. It builds the backend with ``OMCID_TC_FLAGS=0``, so that the filters,
-which on the board go to the switch alone, go into software. It needs root
+left, and the tbf that limits the UNI. It also sends IGMP queries over pairs
+of virtual Ethernet interfaces to see that a message of ``sfp`` is the
+subscriber's, one of a GEM interface the OLT's and one of any other none, and
+that a message goes out of ``sfp`` or of a GEM interface. It builds the
+backend with ``OMCID_TC_FLAGS=0``, so that the filters, which on the board go
+to the switch alone, go into software. It needs root
 and tc, and says that it skipped without them; on a kernel without the vlan
 action it skips the VLAN rules and the tags, and without the tbf qdisc the
 UNI's rate. The parts that need the stick's
