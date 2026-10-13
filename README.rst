@@ -29,8 +29,8 @@ the firmware it ships with: a Linux kernel with drivers for the stick's
 Realtek RTL9601D chip, an OMCI daemon that talks to the OLT, and a small set
 of programs that set the stick up, update it and show its state.
 
-The DFP-34X-2C2 and the DFP-34X-2C3 are this same stick; only the optical
-connector differs, UPC or APC. One image is for both.
+The DFP-34X-2C2 and the DFP-34X-2C3 are this same stick, the 2C2 with a UPC
+optical connector and the 2C3 with an APC one. One image is for both.
 
 ::
 
@@ -158,8 +158,13 @@ Not done yet
 ------------
 
 * **No release.** You build the images yourself (`Building`_).
-* A stick may carry another laser-driver IC. The optics support is written
-  for the one of the bench's unit, and no other has been tried.
+* **Only one laser-driver IC is known.** A DFP-34X-2C may have been made
+  with one of several laser-driver ICs. The optics support is written for the
+  one in the developer's stick, which the kernel's log calls GN25L95; that
+  name has not been checked against the chip's marking. The driver tells a
+  stick by the name and part number in its header, not by the IC in it, so a
+  stick that carries another IC under that header is taken for this one. No
+  other IC has been tried.
 * If the store of the settings cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial
   console, inside the stick, takes ``admin``.
@@ -224,6 +229,20 @@ Before you install
 * **Try it on a lab OLT first.** A stick on a PON shares the fibre with every
   other ONU of its tree (`optical-safety.rst
   <docs/handbook/optical-safety.rst>`__).
+* **The laser driver is known for one IC only** (`Not done yet`_). The
+  driver writes the laser driver only in a module whose header reads ``ODI``
+  and ``DFP-34X-2C``, and only reads any other. It cannot tell which IC such
+  a stick carries. In one, every start of the PON link writes registers of
+  the IC's configuration table: the automatic extinction-ratio loop goes
+  off, and when the OLT asks for a lower transmit power the modulation and
+  the power set point move. The driver writes no byte of the table unless it
+  has read that the IC keeps register changes out of its EEPROM, and the
+  image never writes the table's password bytes (only a test build's store
+  entry does). The one byte the module keeps, the page select, is written
+  only when it holds another page, and put back as found. What those
+  registers do in another IC is not known, and neither is whether its optics
+  would work or stay dark when they should (`optical-safety.rst
+  <docs/handbook/optical-safety.rst>`__, "What the system does not write").
 
 Where to start
 ==============
