@@ -212,9 +212,9 @@ The C library
 BusyBox 1.37.0
     The applets the boot script and a shell session use, by purpose, as of
     2026-10-08, when there were 94; the console's ``getty`` and ``login``,
-    ``cryptpw``, and the DHCP client and server ``udhcpc``, ``udhcpd`` and
-    ``dumpleases`` came after; ``udhcpc`` served the bench's router of before
-    alone, and nothing runs it now:
+    ``cryptpw``, and the DHCP server ``udhcpd`` and ``dumpleases`` came after
+    (the DHCP client ``udhcpc`` served the bench's router of before and is out
+    of the configuration):
 
     shell and init
         ash sh halt poweroff reboot
@@ -302,7 +302,8 @@ The start
     of the management link, or from the server that the stick's settings name
     (``NTP_SERVER``, ``onu-config system``); when the settings name a server of
     the host side for the log (``LOG_SERVER``), the log goes there as well,
-    the stick keeping its own copy.
+    the stick keeping its own copy. Both are addresses, not names: the stick
+    runs offline, has no name server to ask and no ``/etc/resolv.conf``.
     procd starts a service again 2 s after it ends and never gives up;
     ``onu-svc list`` tells how each is doing and how often procd started it
     again. The console's login prompt is started again half a second after it
