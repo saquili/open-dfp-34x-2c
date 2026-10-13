@@ -181,6 +181,35 @@ static void gem_rates(const struct omci_mib *mib, uint16_t td,
 }
 
 /*
+ * The limit on what the OLT sends port @p, from the traffic descriptor @td
+ * its downstream pointer names: the peak rate in bytes per second, raised to
+ * the committed rate when that is higher, and the burst, the peak burst size
+ * or else the committed one. The committed rate is what the OLT promises the
+ * port, not a ceiling, so a descriptor with no peak rate limits nothing.
+ */
+static void gem_ds_limit(const struct omci_mib *mib, uint16_t td,
+			 struct omci_hw_gem_port *p)
+{
+	uint32_t cir, pir, cbs, pbs;
+
+	if (null_pointer(td) || !omci_mib_exists(mib, OMCI_GEM_TD_CLASS_ID, td))
+		return;
+
+	pir = (uint32_t)attr_of(mib, OMCI_GEM_TD_CLASS_ID, td,
+				OMCI_GEM_TD_ATTR_PIR, 4);
+	if (pir == 0u)
+		return;
+	cir = (uint32_t)attr_of(mib, OMCI_GEM_TD_CLASS_ID, td,
+				OMCI_GEM_TD_ATTR_CIR, 4);
+	cbs = (uint32_t)attr_of(mib, OMCI_GEM_TD_CLASS_ID, td,
+				OMCI_GEM_TD_ATTR_CBS, 4);
+	pbs = (uint32_t)attr_of(mib, OMCI_GEM_TD_CLASS_ID, td,
+				OMCI_GEM_TD_ATTR_PBS, 4);
+	p->ds_rate = pir > cir ? pir : cir;
+	p->ds_burst = pbs != 0u ? pbs : cbs;
+}
+
+/*
  * The priorities the IEEE 802.1p mappers of the MIB send to GEM port network
  * CTP @instance, through the GEM interworking termination points their
  * priorities point at; all eight when no mapper leads to it.
@@ -389,6 +418,13 @@ static size_t gather(const struct omci_mib *mib, struct omci_hw_gem_port *out,
 				"me268: instance %#06x is downstream only and still points at T-CONT %#06x; ignoring the pointer",
 				cur.instance, tcont);
 		}
+
+		if (dir == OMCI_HW_GEM_DIR_DOWNSTREAM ||
+		    dir == OMCI_HW_GEM_DIR_BOTH)
+			gem_ds_limit(mib,
+				     attr_u16(mib, cur.instance,
+					      OMCI_GEM_ATTR_TD_DS),
+				     &p);
 
 		for (size_t i = 0; i < n; i++)
 			if (out[i].port_id == port_id)

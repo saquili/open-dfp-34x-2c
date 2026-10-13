@@ -469,6 +469,76 @@ int main(void)
 		CHECK(g != NULL && g->cir == 0u && g->pir == 0u);
 		printf("    the rates come from the traffic descriptor, a peak rate below the committed one raised to it\n");
 
+		/* The downstream pointer's descriptor limits what the OLT sends. */
+		CHECK_EQ(omci_mib_create(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u),
+			 OMCI_OK);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_CIR, 1000000u, 4);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_PIR, 12500000u, 4);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_CBS, 3000u, 4);
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_PBS, 16000u, 4);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 0u && g->ds_burst == 0u);
+		printf("    a port with no downstream pointer is not limited downstream\n");
+
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TD_DS,
+			 0x0002u, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 12500000u &&
+		      g->ds_burst == 16000u);
+		CHECK(g != NULL && g->cir == 0u && g->pir == 0u);
+		printf("    the downstream limit is the peak rate with the peak burst, and the upstream rates stay as they were\n");
+
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_PBS, 0u, 4);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 12500000u &&
+		      g->ds_burst == 3000u);
+		printf("    without a peak burst size the committed one is the burst\n");
+
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_PIR, 500000u, 4);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 1000000u);
+		printf("    a peak rate below the committed rate is raised to it\n");
+
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_PIR, 0u, 4);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 0u && g->ds_burst == 0u);
+		printf("    a descriptor with no peak rate limits nothing, whatever its committed rate and bursts\n");
+
+		attr_put(mib, OMCI_GEM_TD_CLASS_ID, 0x0002u,
+			 OMCI_GEM_TD_ATTR_PIR, 12500000u, 4);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0503u, OMCI_GEM_ATTR_TD_DS,
+			 0x0002u, 2);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0501u, OMCI_GEM_ATTR_TD_DS,
+			 0x0002u, 2);
+		g = programmed(mib, 503u);
+		CHECK(g != NULL && g->ds_rate == 12500000u);
+		g = programmed(mib, 501u);
+		CHECK(g != NULL && g->ds_rate == 0u && g->ds_burst == 0u);
+		printf("    a downstream-only port is limited, and a port that carries nothing downstream is not\n");
+
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TD_DS,
+			 0x0099u, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 0u);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0500u, OMCI_GEM_ATTR_TD_DS,
+			 0xffffu, 2);
+		g = programmed(mib, 500u);
+		CHECK(g != NULL && g->ds_rate == 0u);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0503u, OMCI_GEM_ATTR_TD_DS,
+			 0u, 2);
+		g = programmed(mib, 503u);
+		CHECK(g != NULL && g->ds_rate == 0u);
+		attr_put(mib, OMCI_GEM_CLASS_ID, 0x0501u, OMCI_GEM_ATTR_TD_DS,
+			 0u, 2);
+		printf("    a pointer to no descriptor, the null pointers and no pointer leave a port unlimited\n");
+
 		CHECK_EQ(omci_mib_create(mib, OMCI_GEM_IW_CLASS_ID, 0x0600u),
 			 OMCI_OK);
 		attr_put(mib, OMCI_GEM_IW_CLASS_ID, 0x0600u,

@@ -255,9 +255,13 @@ enum omci_hw_gem_dir {
  *	for none
  * @pir: the peak rate of its upstream traffic, in bytes per second; 0 for no
  *	limit
+ * @ds_rate: the rate above which the frames the OLT sends it are dropped, in
+ *	bytes per second; 0 for no limit
+ * @ds_burst: the burst that limit lets pass, in bytes; 0 for the backend's own
  *
- * The last five apply to a port that carries traffic upstream; a port that
- * does not has 0xff and zeros.
+ * The five before the last two apply to a port that carries traffic upstream;
+ * a port that does not has 0xff and zeros. The last two apply to a port that
+ * carries traffic downstream, and are zero for one that does not.
  */
 struct omci_hw_gem_port {
 	uint16_t port_id;
@@ -270,6 +274,8 @@ struct omci_hw_gem_port {
 	uint8_t weight;
 	uint32_t cir;
 	uint32_t pir;
+	uint32_t ds_rate;
+	uint32_t ds_burst;
 };
 
 /**

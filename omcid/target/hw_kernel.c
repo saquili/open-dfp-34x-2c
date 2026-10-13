@@ -625,6 +625,8 @@ struct gem_present {
 	uint8_t weight;
 	uint32_t cir;
 	uint32_t pir;
+	uint32_t ds_rate;
+	uint32_t ds_burst;
 };
 
 /* The reason the kernel gave for the last refusal. */
@@ -791,8 +793,9 @@ static uint32_t nla_uint32(const uint8_t *v, uint16_t len)
 
 /*
  * The attributes of a GEM link: its port identifier, direction and T-CONT,
- * and the upstream attributes, which the kernel reports for a port that
- * carries traffic upstream.
+ * the upstream attributes, which the kernel reports for a port that carries
+ * traffic upstream, and the downstream limit, which it reports for a port that
+ * carries traffic downstream.
  */
 static void gem_info_data(const uint8_t *d, const uint8_t *end,
 			  struct gem_present *g)
@@ -827,6 +830,12 @@ static void gem_info_data(const uint8_t *d, const uint8_t *end,
 			g->cir = nla_uint32(dv, (uint16_t)(dlen - NLA_HDRLEN_));
 		if (dtype == IFLA_GEM_PIR)
 			g->pir = nla_uint32(dv, (uint16_t)(dlen - NLA_HDRLEN_));
+		if (dtype == IFLA_GEM_DS_RATE)
+			g->ds_rate =
+				nla_uint32(dv, (uint16_t)(dlen - NLA_HDRLEN_));
+		if (dtype == IFLA_GEM_DS_BURST)
+			g->ds_burst =
+				nla_uint32(dv, (uint16_t)(dlen - NLA_HDRLEN_));
 		d += NL_ALIGN(dlen);
 	}
 }
@@ -940,6 +949,16 @@ static size_t gem_upstream_put(uint8_t *data, size_t dlen,
 	return nla_put(data, dlen, IFLA_GEM_PIR, &g->pir, sizeof(g->pir));
 }
 
+/* The downstream limit of port @g into @data at @dlen. Return: the new length. */
+static size_t gem_downstream_put(uint8_t *data, size_t dlen,
+				 const struct omci_hw_gem_port *g)
+{
+	dlen = nla_put(data, dlen, IFLA_GEM_DS_RATE, &g->ds_rate,
+		       sizeof(g->ds_rate));
+	return nla_put(data, dlen, IFLA_GEM_DS_BURST, &g->ds_burst,
+		       sizeof(g->ds_burst));
+}
+
 /* Whether link @have already has port @g's upstream attributes. */
 static bool gem_upstream_same(const struct gem_present *have,
 			      const struct omci_hw_gem_port *g)
@@ -949,6 +968,15 @@ static bool gem_upstream_same(const struct gem_present *have,
 	return have->pbits == g->pbits && have->queue == g->queue &&
 	       have->weight == g->weight && have->cir == g->cir &&
 	       have->pir == g->pir;
+}
+
+/* Whether link @have already has port @g's downstream limit. */
+static bool gem_downstream_same(const struct gem_present *have,
+				const struct omci_hw_gem_port *g)
+{
+	if (g->direction == OMCI_HW_GEM_DIR_UPSTREAM)
+		return true;
+	return have->ds_rate == g->ds_rate && have->ds_burst == g->ds_burst;
 }
 
 /* The link information of kind "gem" with @data, into @info. Return: its length. */
@@ -963,19 +991,23 @@ static size_t gem_link_info_put(uint8_t *info, const uint8_t *data, size_t dlen)
 }
 
 /*
- * Give GEM interface @ifindex port @g's upstream attributes, through the
- * link's changelink, which changes them without taking the port down.
+ * Give GEM interface @ifindex port @g's upstream attributes and downstream
+ * limit, through the link's changelink, which changes them without taking the
+ * port down.
  */
 static int gem_change(int ifindex, const struct omci_hw_gem_port *g)
 {
 	uint8_t req[256] __aligned(4);
-	uint8_t data[64] __aligned(4);
-	uint8_t info[128] __aligned(4);
+	uint8_t data[96] __aligned(4);
+	uint8_t info[160] __aligned(4);
 	struct ifinfomsg ifi = { .ifi_family = AF_UNSPEC,
 				 .ifi_index = ifindex };
-	size_t dlen, ilen, off;
+	size_t dlen = 0, ilen, off;
 
-	dlen = gem_upstream_put(data, 0, g);
+	if (g->direction != OMCI_HW_GEM_DIR_DOWNSTREAM)
+		dlen = gem_upstream_put(data, dlen, g);
+	if (g->direction != OMCI_HW_GEM_DIR_UPSTREAM)
+		dlen = gem_downstream_put(data, dlen, g);
 	ilen = gem_link_info_put(info, data, dlen);
 
 	memset(req, 0, sizeof(req));
@@ -995,7 +1027,8 @@ static int gem_change(int ifindex, const struct omci_hw_gem_port *g)
 
 /*
  * Create a GEM interface on @lower, up, with the port's direction and T-CONT,
- * and the upstream attributes of a port that carries traffic upstream.
+ * the upstream attributes of a port that carries traffic upstream, and the
+ * downstream limit of one that has it.
  */
 static int gem_create(const struct omci_hw_gem_port *g, int lower)
 {
@@ -1018,6 +1051,8 @@ static int gem_create(const struct omci_hw_gem_port *g, int lower)
 			       sizeof(tcont));
 		dlen = gem_upstream_put(data, dlen, g);
 	}
+	if (g->direction != OMCI_HW_GEM_DIR_UPSTREAM && g->ds_rate != 0)
+		dlen = gem_downstream_put(data, dlen, g);
 	if (g->multicast && g->direction == OMCI_HW_GEM_DIR_DOWNSTREAM)
 		dlen = nla_put(data, dlen, IFLA_GEM_MULTICAST, NULL, 0);
 
@@ -1136,24 +1171,27 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 			    have[j].multicast != ports[i].multicast)
 				continue;
 			keep[j] = true;
-			if (gem_upstream_same(&have[j], &ports[i]))
+			if (gem_upstream_same(&have[j], &ports[i]) &&
+			    gem_downstream_same(&have[j], &ports[i]))
 				continue;
 			err = gem_change(have[j].ifindex, &ports[i]);
 			if (err) {
 				OMCI_WARN(
-					"gem: the kernel refused Port-ID %u priorities %#04x, queue %u, weight %u, rates %u/%u: %s (%s)",
+					"gem: the kernel refused Port-ID %u priorities %#04x, queue %u, weight %u, rates %u/%u, downstream limit %u bytes/s, burst %u: %s (%s)",
 					ports[i].port_id, ports[i].pbits,
 					ports[i].queue, ports[i].weight,
 					ports[i].cir, ports[i].pir,
+					ports[i].ds_rate, ports[i].ds_burst,
 					strerror(-err), omci_hw_last_extack());
 				omci_hw_reject_add(rejected, ports[i].port_id);
 				continue;
 			}
 			OMCI_INFO(
-				"gem: Port-ID %u now takes priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s",
+				"gem: Port-ID %u now takes priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s, downstream limit %u bytes/s, burst %u",
 				ports[i].port_id, ports[i].pbits,
 				ports[i].queue, ports[i].weight, ports[i].cir,
-				ports[i].pir);
+				ports[i].pir, ports[i].ds_rate,
+				ports[i].ds_burst);
 		}
 	}
 
@@ -1193,10 +1231,11 @@ static enum omci_status kernel_gem_apply(const struct omci_hw_gem_port *ports,
 		changed = true;
 		OMCI_INFO(
 			"gem: Port-ID %u up as " GEM_NAME_FMT
-			" (direction %u, T-CONT %u, priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s)",
+			" (direction %u, T-CONT %u, priorities %#04x, queue %u, weight %u, rates %u/%u bytes/s, downstream limit %u bytes/s)",
 			ports[i].port_id, ports[i].port_id, ports[i].direction,
 			ports[i].tcont, ports[i].pbits, ports[i].queue,
-			ports[i].weight, ports[i].cir, ports[i].pir);
+			ports[i].weight, ports[i].cir, ports[i].pir,
+			ports[i].ds_rate);
 	}
 
 	if (changed)

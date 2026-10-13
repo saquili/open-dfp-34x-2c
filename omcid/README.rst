@@ -10,8 +10,11 @@ The OMCI daemon of the ONU: the side of ITU-T G.988 that answers the OLT.
 It holds the management information base, answers each request of the OLT
 in the baseline message format, and programs the data path from what the
 OLT configures: GEM ports, bridges and the VLAN rules of the extended VLAN
-tagging operation, and the rate at which the UNI sends to the subscriber,
-from the outbound traffic descriptor of its bridge port. It notifies the OLT of alarms, among them those it
+tagging operation, the rate at which the UNI sends to the subscriber, from
+the outbound traffic descriptor of its bridge port, and the most each GEM
+port takes from the OLT, from the traffic descriptor its downstream pointer
+names (the peak rate, with the peak burst size, which the switch holds to with
+a meter). It notifies the OLT of alarms, among them those it
 judges itself: signal fail and degrade from the BIP errors of the
 downstream, and the optical alarms from the readings of the transceiver,
 whose levels it keeps in the ANI-G. It counts the performance monitoring

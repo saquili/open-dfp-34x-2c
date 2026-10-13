@@ -32,6 +32,7 @@ enum {
 	OMCI_GEM_ATTR_DIRECTION = 3,
 	OMCI_GEM_ATTR_TM_US = 4,
 	OMCI_GEM_ATTR_TD_US = 5,
+	OMCI_GEM_ATTR_TD_DS = 9,
 
 	OMCI_GEM_TCONT_CLASS_ID = 262,
 	OMCI_GEM_TCONT_ATTR_ALLOC = 1,
@@ -48,6 +49,8 @@ enum {
 	OMCI_GEM_TD_CLASS_ID = 280,
 	OMCI_GEM_TD_ATTR_CIR = 1,
 	OMCI_GEM_TD_ATTR_PIR = 2,
+	OMCI_GEM_TD_ATTR_CBS = 3,
+	OMCI_GEM_TD_ATTR_PBS = 4,
 
 	OMCI_GEM_MAPPER_CLASS_ID = 130,
 	OMCI_GEM_MAPPER_ATTR_PBIT0 = 2,
@@ -117,7 +120,10 @@ size_t omci_gem_mcast_ports(const struct omci_mib *mib, uint16_t instance,
  * else its T-CONT, has the weighted round robin policy; its rates from the
  * traffic descriptor its descriptor pointer names; and its priorities from
  * the IEEE 802.1p mappers whose priorities lead to it, all eight when none
- * does.
+ * does. A port that carries traffic downstream is limited to the peak rate
+ * of the traffic descriptor its downstream descriptor pointer names, at least
+ * its committed rate, with the burst the descriptor names for the peak rate,
+ * else for the committed rate; a descriptor with no peak rate limits nothing.
  *
  * Return: the status of the hardware.
  */
