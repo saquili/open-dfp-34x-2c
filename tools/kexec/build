@@ -1,0 +1,142 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The files a kexec trial needs, from an image build that has run (make image):
+#
+#   RAM image    ram.uImage: the RAM image with kexec turned on and crash dumps
+#                off (they move the load address)
+#   target.elf   a small kernel to start: the board's configuration, a
+#                busybox initramfs, and console and panic=10 in its built-in
+#                command line, since kexec on MIPS passes none
+#   kexecboot    the program that loads target.elf and starts it, linked
+#                statically (the image's libc is cut to what its programs use)
+#
+# Usage: tools/kexec/build [--dry-run | --list TARGET_DIR]
+#
+# Environment: IMAGE_OUT (build/image) and KEXEC_OUT (build/kexec) name the
+# image build and where the files go, JOBS the build's parallelism.
+# --dry-run prints what it would run; --list prints the initramfs list of the
+# target kernel for the target tree TARGET_DIR, which is what its busybox and
+# libc are taken from. Run it on the Linux host that built the image, as the
+# user of that build: see tools/kexec/README.rst.
+
+set -eu
+
+top=$(cd "$(dirname "$0")/../.." && pwd)
+here=$top/tools/kexec
+image=${IMAGE_OUT:-$top/build/image}
+out=${KEXEC_OUT:-$top/build/kexec}
+jobs=${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
+dry=0
+
+die() {
+	echo "kexec/build: $*" >&2
+	exit 2
+}
+
+# list TARGET_DIR: the initramfs list of the target kernel. The libc and its
+# loader are named by what the target tree has, whatever their version.
+list() {
+	t=$1
+	[ -x "$t/bin/busybox" ] || die "$t/bin/busybox is not there"
+	ld=$(cd "$t/lib" 2>/dev/null && ls ld-uClibc-*.so 2>/dev/null | head -1) || true
+	libc=$(cd "$t/lib" 2>/dev/null && ls libuClibc-*.so 2>/dev/null | head -1) || true
+	[ -n "$ld" ] || die "$t/lib has no ld-uClibc-*.so"
+	[ -n "$libc" ] || die "$t/lib has no libuClibc-*.so"
+	cat <<EOF2
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+dir /proc 0755 0 0
+dir /bin 0755 0 0
+dir /lib 0755 0 0
+file /bin/busybox $t/bin/busybox 0755 0 0
+slink /bin/sh busybox 0777 0 0
+slink /bin/mount busybox 0777 0 0
+slink /bin/cat busybox 0777 0 0
+slink /bin/cut busybox 0777 0 0
+slink /bin/echo busybox 0777 0 0
+file /lib/$ld $t/lib/$ld 0755 0 0
+slink /lib/ld-uClibc.so.1 $ld 0777 0 0
+slink /lib/ld-uClibc.so.0 ld-uClibc.so.1 0777 0 0
+file /lib/$libc $t/lib/$libc 0755 0 0
+slink /lib/libc.so.0 $libc 0777 0 0
+file /init $out/init 0755 0 0
+EOF2
+}
+
+# init: the target kernel's init, which says where it is and stops at a shell.
+init() {
+	cat <<'EOF2'
+#!/bin/sh
+mount -t proc proc /proc
+echo "kexec-target: userspace up at $(cut -d" " -f1 /proc/uptime) s"
+cat /proc/version
+echo "kexec-target: cmdline: $(cat /proc/cmdline)"
+echo "kexec-target: watchdog left unfed; the chip resets when its open timeout ends"
+exec /bin/sh
+EOF2
+}
+
+run() {
+	if [ "$dry" = 1 ]; then
+		echo "+ $*"
+	else
+		"$@"
+	fi
+}
+
+case "${1:-}" in
+--list)
+	[ $# -eq 2 ] || die "usage: build --list TARGET_DIR"
+	list "$2"
+	exit 0
+	;;
+--dry-run)
+	dry=1
+	;;
+"")
+	;;
+*)
+	die "usage: build [--dry-run | --list TARGET_DIR]"
+	;;
+esac
+
+host=$image/host/bin/mips-buildroot-linux-uclibc-
+target=$image/target
+[ -d "$target" ] || die "$target is not there: run make image first"
+[ -x "${host}gcc" ] || die "${host}gcc is not there: run make image first"
+
+cd "$top"
+run mkdir -p "$out/kernel"
+
+# The RAM image, with kexec in it. Crash dumps stay off: they reserve memory
+# that moves the load address of the new kernel. The diagnostics stay out of it
+# (RAM_DIAG=no): the stick has 25 MB, and loading a kernel takes the file in
+# memory and its copy again.
+run make ram-image IMAGE_OUT="$image" RAM_DIAG=no \
+	OPEN_DFP_34X_2C_RAM_KCONFIG="--enable KEXEC --disable CRASH_DUMP"
+run cp "$image/images/ram.uImage" "$out/ram.uImage"
+
+# The target kernel: the board's configuration with a built-in initramfs.
+if [ "$dry" = 1 ]; then
+	echo "+ init > $out/init; list $target > $out/tiny.list"
+else
+	init >"$out/init"
+	list "$target" >"$out/tiny.list"
+fi
+kmake="make -s -C linux O=$out/kernel ARCH=mips CROSS_COMPILE=$host"
+run $kmake rtl9602c_defconfig
+run linux/scripts/config --file "$out/kernel/.config" --enable BLK_DEV_INITRD \
+	--set-str INITRAMFS_SOURCE "$out/tiny.list" --set-val INITRAMFS_ROOT_UID 0 \
+	--set-val INITRAMFS_ROOT_GID 0 --enable CMDLINE_BOOL \
+	--set-str CMDLINE "console=ttyS0,115200 panic=10"
+run $kmake olddefconfig
+run $kmake -j"$jobs" vmlinux
+run "${host}strip" -s -o "$out/target.elf" "$out/kernel/vmlinux"
+
+# The program that starts it.
+run "${host}gcc" -static -Os -Wall -o "$out/kexecboot" "$here/kexecboot.c"
+run "${host}strip" -s "$out/kexecboot"
+
+[ "$dry" = 1 ] || ls -l "$out/ram.uImage" "$out/target.elf" "$out/kexecboot"

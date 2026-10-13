@@ -31,6 +31,8 @@ subdirectory has a README of its own, and ``make check`` runs their tests:
   use, with the check that every program finds what it needs.
 * ``docs/`` -- the rendering of the repository's pages to HTML, which fails on
   any warning of docutils.
+* ``kexec/`` -- the files for starting a trial kernel on the stick from the
+  running one, without the boot loader or a write to flash.
 * ``vm/`` -- the kernel of this tree in qemu, for the tests that need one with
   the features of the board's: omcid's kernel backend, the PON class selftest
   and the KUnit tests of the drivers.
