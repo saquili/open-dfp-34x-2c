@@ -225,6 +225,7 @@ static void rtl9602c_gem_unprogram(struct rtl9602c_pon *p, unsigned int f)
 }
 
 static void rtl9602c_gem_cntr_sync(struct rtl9602c_pon *p, unsigned int f);
+static void rtl9602c_gem_del(struct pon_device *pon, unsigned int flow);
 
 static int rtl9602c_gem_add(struct pon_device *pon,
 			    const struct pon_gem_config *cfg,
@@ -325,6 +326,18 @@ static int rtl9602c_gem_add(struct pon_device *pon,
 	pr_debug("GEM port %u in flow %u\n", cfg->port_id, f);
 out:
 	mutex_unlock(&p->gpon_lock);
+
+	/*
+	 * The switch limits what the OLT sends the port. It does so outside
+	 * the lock, as it does for a change; a port it cannot limit is
+	 * taken away again, as the class expects of a refusal.
+	 */
+	if (!err && cfg->ds_rate) {
+		err = RTL9602C_HOST(p, gem_ds_limit, *flow, cfg->ds_rate,
+				    cfg->ds_burst, extack);
+		if (err)
+			rtl9602c_gem_del(pon, *flow);
+	}
 	return err;
 }
 
@@ -472,14 +485,15 @@ static void rtl9602c_gem_rx_filter(struct pon_device *pon, unsigned int flow,
 }
 
 /*
- * New upstream attributes for a GEM port. New priorities take the flow's
- * VLAN claims again first (the host's gem_pbits_change()), under RTNL as the
+ * New attributes for a GEM port. A new downstream limit goes to the switch
+ * first (the host's gem_ds_limit()). New priorities take the flow's
+ * VLAN claims again (the host's gem_pbits_change()), under RTNL as the
  * bridge's VLAN changes are. Then the configuration is recorded, and while
  * the port's upstream is programmed, the upstream half is programmed again
  * for it, which moves the stream to a new queue when the queue changes, and
  * the old queue is scheduled for the ports left in it. Frames already in the
  * old queue still leave in the T-CONT's grants. When the new queue cannot be
- * attached, the old configuration and claims are put back.
+ * attached, the old configuration, claims and limit are put back.
  */
 static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 			       const struct pon_gem_config *cfg,
@@ -487,15 +501,24 @@ static int rtl9602c_gem_change(struct pon_device *pon, unsigned int flow,
 {
 	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	struct pon_gem_config old = p->gem_cfg[flow];
+	const bool ds_changed = cfg->ds_rate != old.ds_rate ||
+				cfg->ds_burst != old.ds_burst;
 	int err = 0;
 
 	if (WARN_ON(!test_bit(flow, p->gem_flows)))
 		return -ENOENT;
 
+	if (ds_changed) {
+		err = RTL9602C_HOST(p, gem_ds_limit, flow, cfg->ds_rate,
+				    cfg->ds_burst, extack);
+		if (err)
+			return err;
+	}
+
 	if (cfg->pbits != old.pbits) {
 		err = RTL9602C_HOST(p, gem_pbits_change, flow, cfg->pbits, extack);
 		if (err)
-			return err;
+			goto undo;
 	}
 
 	mutex_lock(&p->gpon_lock);
@@ -516,6 +539,10 @@ out:
 	mutex_unlock(&p->gpon_lock);
 	if (err && cfg->pbits != old.pbits)
 		RTL9602C_HOST(p, gem_pbits_change, flow, old.pbits, NULL);
+undo:
+	if (err && ds_changed)
+		RTL9602C_HOST(p, gem_ds_limit, flow, old.ds_rate, old.ds_burst,
+			      NULL);
 	return err;
 }
 

@@ -1641,6 +1641,19 @@ Flows, streams and T-CONTs
      - T: the changes of the row above, between runs, each followed by the
        stream lines of the ``ponmac`` view. I for a change under traffic and
        for a failed attach.
+   * - A new downstream limit of a GEM port (``IFLA_GEM_DS_RATE`` and
+       ``IFLA_GEM_DS_BURST``), at its creation or in ``gem_change``, goes to the
+       switch driver through the host operation ``gem_ds_limit``, outside the
+       driver's lock; a port the switch cannot limit is refused, as a creation
+       is undone, and a change is taken back. The switch limits the flow with
+       an ACL rule and a meter (the *ACL, classifier and QoS* page, "Limiting a
+       GEM port downstream"); ``gem_del`` takes the limit away through
+       ``gem_forget``.
+     - T
+     - The lab stick, with an OLT's descriptor injected through OMCI: the
+       downstream traffic of GEM port 257 fell from 933 to 87 Mbit/s of TCP, a
+       new peak rate changed it, a pointer taken away gave it back, and the GEM
+       interface made again after it was deleted came up limited.
    * - Each T-CONT's GEM ports send through queues of the T-CONT's own, so no
        two T-CONTs of a group share one. A queue shared between two T-CONTs'
        maps is drained by either T-CONT's allocations, so the frames of one
