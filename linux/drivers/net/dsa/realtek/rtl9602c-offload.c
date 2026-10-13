@@ -2516,15 +2516,13 @@ out:
  * (RTL9602C_ACL_ACT_FWD_MIRROR, measured with IGMPv2 and MLDv1 reports). DSA
  * and the PON class mark the copy as forwarded, so the bridge snoops it and
  * forwards nothing again. IGMP is found by its IP protocol. MLD is ICMPv6, of
- * which the rules take the four types through the field selector at the start
- * of the IP payload: the query (130) and the version 1 report (131) in one
- * rule, the done message (132) and the version 2 report (143) in one each.
- * Done and version 2 reports go to ff02::2 and ff02::16, reserved groups that
- * no longer reach the CPU by flooding while it is out of the unknown-multicast
- * flood mask (rtl9602c_mcast_refresh()). No ping or neighbour discovery
- * message is copied. The rules take the largest priority, after every tc rule,
- * so that a tc rule matching these messages decides for them; their cookies
- * are no kernel address, so no tc rule has one.
+ * which the rule takes the two types sent to a group's own address, the query
+ * (130) and the version 1 report (131), through the field selector at the
+ * start of the IP payload; the rest of MLD goes to ff02::1, ff02::2 or ff02::16,
+ * which reach the CPU unasked, and no ping or neighbour discovery message is
+ * copied. The rules take the largest priority, after every tc rule, so that a
+ * tc rule matching these messages decides for them; their cookies are no kernel
+ * address, so no tc rule has one.
  */
 #define RTL9602C_ACL_SNOOP_PRIO		U16_MAX
 #define RTL9602C_ACL_SNOOP_COOKIE(i)	(1UL + (i))
@@ -2533,34 +2531,24 @@ out:
  * rtl9602c_acl_snoop_setup() - copy IGMP and MLD to the CPU for snooping
  * @p: the switch
  *
- * Writes the eight rules, IGMP and the three of MLD on the SFP and the PON
- * port, with a kernel that has bridge multicast snooping. Each rule names the
- * EtherType, the IPv4 protocol, the IPv6 protocol and the ICMPv6 type,
- * ignoring what it does not compare, so that the eight share one template.
+ * Writes the four rules, IGMP and MLD on the SFP and the PON port, with a
+ * kernel that has bridge multicast snooping. Each rule names the EtherType,
+ * the IPv4 protocol, the IPv6 protocol and the ICMPv6 type, ignoring what it
+ * does not compare, so that the four share one template.
  *
  * Context: setup, after rtl9602c_filter_qos_reset().
  */
 void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
 {
 	static const int ports[] = { RTL9602C_PORT_SFP, RTL9602C_PORT_PON };
-	/* The ICMPv6 types of MLD, under a mask: 130 and 131 share a rule. */
-	static const struct {
-		u8 type;
-		u8 mask;
-	} mld_types[] = {
-		{ ICMPV6_MGM_QUERY, 0xfe },
-		{ ICMPV6_MGM_REDUCTION, 0xff },
-		{ ICMPV6_MLD2_REPORT, 0xff },
-	};
-	unsigned int i, j, n = 0;
+	unsigned int i, n = 0;
 
 	if (!IS_ENABLED(CONFIG_BRIDGE_IGMP_SNOOPING))
 		return;
 
 	mutex_lock(&p->acl_lock);
 	for (i = 0; i < ARRAY_SIZE(ports); i++) {
-		struct rtl9602c_acl_match igmp = {};
-		int err;
+		struct rtl9602c_acl_match igmp = {}, mld = {};
 
 		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
 				  ETH_P_IP, 0xffff);
@@ -2569,35 +2557,26 @@ void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p)
 		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH, 0, 0);
 		rtl9602c_acl_push(&igmp, RTL9602C_ACL_TMPL_FIELD_USER0 +
 				  RTL9602C_FSEL_SPORT, 0, 0);
-		err = rtl9602c_acl_insert(p, ports[i], &igmp,
-					  RTL9602C_ACL_SNOOP_PRIO,
-					  RTL9602C_ACL_SNOOP_COOKIE(n++),
-					  RTL9602C_ACL_ACT_FWD_MIRROR,
-					  BIT(RTL9602C_PORT_CPU), false, -1,
-					  NULL);
 
-		for (j = 0; !err && j < ARRAY_SIZE(mld_types); j++) {
-			struct rtl9602c_acl_match mld = {};
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
+				  ETH_P_IPV6, 0xffff);
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO, 0, 0);
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH,
+				  IPPROTO_ICMPV6, 0x00ff);
+		rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_USER0 +
+				  RTL9602C_FSEL_SPORT,
+				  ICMPV6_MGM_QUERY << 8, 0xfe00);
 
-			rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_ETHERTYPE,
-					  ETH_P_IPV6, 0xffff);
-			rtl9602c_acl_push(&mld,
-					  RTL9602C_ACL_TMPL_FIELD_IPV4_TOS_PROTO,
-					  0, 0);
-			rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_IPV6_TC_NH,
-					  IPPROTO_ICMPV6, 0x00ff);
-			rtl9602c_acl_push(&mld, RTL9602C_ACL_TMPL_FIELD_USER0 +
-					  RTL9602C_FSEL_SPORT,
-					  mld_types[j].type << 8,
-					  mld_types[j].mask << 8);
-			err = rtl9602c_acl_insert(p, ports[i], &mld,
-						  RTL9602C_ACL_SNOOP_PRIO,
-						  RTL9602C_ACL_SNOOP_COOKIE(n++),
-						  RTL9602C_ACL_ACT_FWD_MIRROR,
-						  BIT(RTL9602C_PORT_CPU), false,
-						  -1, NULL);
-		}
-		if (err)
+		if (rtl9602c_acl_insert(p, ports[i], &igmp,
+					RTL9602C_ACL_SNOOP_PRIO,
+					RTL9602C_ACL_SNOOP_COOKIE(n++),
+					RTL9602C_ACL_ACT_FWD_MIRROR,
+					BIT(RTL9602C_PORT_CPU), false, -1, NULL) ||
+		    rtl9602c_acl_insert(p, ports[i], &mld,
+					RTL9602C_ACL_SNOOP_PRIO,
+					RTL9602C_ACL_SNOOP_COOKIE(n++),
+					RTL9602C_ACL_ACT_FWD_MIRROR,
+					BIT(RTL9602C_PORT_CPU), false, -1, NULL))
 			pr_err("port %d: no ACL rule for IGMP and MLD; the bridge misses reports to groups in the table\n",
 			       ports[i]);
 	}
