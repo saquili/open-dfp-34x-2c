@@ -688,6 +688,15 @@ struct omci_hw_mcast_group {
 	uint8_t group[OMCI_HW_MCAST_ADDR_LEN];
 	uint8_t source[OMCI_HW_MCAST_ADDR_LEN];
 	bool permanent;
+	/*
+	 * An entry the agent adds beside a group the bridge snoops, filed
+	 * under the VLAN the OLT sends the group in. The switch looks the
+	 * frames of a group up by the VID they arrive with, not by the VID
+	 * that a translation gives them, so the snooped entry, filed under the
+	 * VLAN of the subscriber's join, never matches them. A backend whose
+	 * bridge does not filter VLANs has nothing to add.
+	 */
+	bool alias;
 };
 
 /**

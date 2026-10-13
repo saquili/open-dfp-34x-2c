@@ -121,6 +121,19 @@ back for itself (a backend that cannot send, an Ethernet address that cannot
 be read, no subscriber side to hold), the function is carried out as 0, and
 the log says so.
 
+Where the VLAN rules translate the subscriber's VLAN to the one the OLT sends
+the group in, the bridge holds a snooped group under the first, the VLAN of
+the join, and the switch looks the group's downstream frames up by the VID
+they arrive with, the second. The agent therefore files each group it allows
+under the VLAN of the row that allowed it as well (``alias_sync()``), and
+takes that entry away with the group; a permanent group of the bridge that is
+no static group and no such entry is a leftover of an agent that ended, and
+goes. Measured on an operator's line, 2026-10-13: with the group under the
+subscriber's VLAN alone, the PON port of the switch received 5,800 multicast
+frames a second after a join and discarded all of them in forwarding; with
+one entry added by hand under the OLT's VLAN, the frames of that group, 1,290
+a second, left by the SFP port and reached the host.
+
 What was measured on the board (the ODI DFP-34X-2C3, 2026-10-13): the lab OLT
 provisions nothing, so the recorded provisioning of an operator's OLT, with
 its multicast operations profile, was written into the OMCI port's inject

@@ -994,6 +994,119 @@ static void test_static_groups(void)
 	down();
 }
 
+/* Whether the bridge holds a group under a VLAN, and what it holds there. */
+static bool filed(uint32_t group, unsigned int vid)
+{
+	struct omci_hw_mcast_group g[OMCI_HW_MCAST_MAX_GROUPS];
+	uint8_t want[16];
+	size_t n = 0;
+
+	a4(want, group);
+	CHECK_EQ(omci_hw_mcast_groups(g, ARRAY_SIZE(g), &n), OMCI_OK);
+	for (size_t i = 0; i < n; i++)
+		if (g[i].vid == vid && memcmp(g[i].group, want, 16) == 0)
+			return true;
+	return false;
+}
+
+/*
+ * The switch looks a group's downstream frames up by the VID they arrive
+ * with: the agent files each group it allows under the VLAN the row names, as
+ * well as the VLAN of the join, and takes that entry away with the group.
+ */
+static void test_a_group_is_filed_under_the_vlan_the_olt_sends_it_in(void)
+{
+	struct omci_hw_mcast_group stale = { .vid = 1420, .permanent = true };
+
+	up();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 1420);
+	acl(PROFILE, 7, 2, 0, IP4(239, 1, 2, 0), IP4(239, 1, 2, 255), 0, 0);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* The bridge holds the join under VID 0 here; the row says 1420. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK(held(IP4(239, 1, 1, 5)));
+	CHECK(filed(IP4(239, 1, 1, 5), 1420));
+	CHECK_EQ(bridge(0, 0, NULL), 2u);
+
+	/* A row that names no VLAN files nothing more. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 2, 5), -1);
+	CHECK(held(IP4(239, 1, 2, 5)));
+	CHECK(!filed(IP4(239, 1, 2, 5), 1420));
+	CHECK_EQ(bridge(0, 0, NULL), 3u);
+
+	/* Serving again adds nothing; the entry stays while the group does. */
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(bridge(0, 0, NULL), 3u);
+
+	/* A second client of the group shares the entry, and the last takes it. */
+	join(IP4(10, 0, 0, 3), IP4(239, 1, 1, 5), -1);
+	CHECK_EQ(bridge(0, 0, NULL), 3u);
+
+	/* The bridge lets the group go: both entries do. */
+	snoop(IP4(239, 1, 1, 5), 0, false);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK(!held(IP4(239, 1, 1, 5)));
+	CHECK(!filed(IP4(239, 1, 1, 5), 1420));
+	CHECK(held(IP4(239, 1, 2, 5)));
+
+	/* A permanent group that is no static group and no entry of the agent
+	 * is a leftover of an agent that ended, and goes. */
+	a4(stale.group, IP4(239, 1, 1, 7));
+	CHECK_EQ(omci_hw_mcast_group_add(&stale), OMCI_OK);
+	CHECK(filed(IP4(239, 1, 1, 7), 1420));
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK(!filed(IP4(239, 1, 1, 7), 1420));
+	down();
+}
+
+/* A group ends under the VLAN the bridge holds it in, and its other entry goes too. */
+static void test_a_group_ends_under_the_vlan_the_bridge_holds_it_in(void)
+{
+	struct omci_hw_mcast_group g = { .vid = 421 };
+
+	up();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 1420);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	a4(g.group, IP4(239, 1, 1, 5));
+	omci_hw_mcast_snoop(&g, true);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK(filed(IP4(239, 1, 1, 5), 421));
+	CHECK(filed(IP4(239, 1, 1, 5), 1420));
+
+	/* The list loses the row: the group ends, under both VLANs. */
+	delete_row(309, PROFILE, 7, 1, 24);
+	omci_mcast_program(g_m, g_mib, g_now);
+	CHECK(!filed(IP4(239, 1, 1, 5), 421));
+	CHECK(!filed(IP4(239, 1, 1, 5), 1420));
+	down();
+}
+
+/* An entry the bridge will not take is noted and not tried again. */
+static void test_an_entry_the_bridge_refuses_is_tried_once(void)
+{
+	up();
+	side(true);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 1420);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	omci_hw_mcast_fail_next(false, true, false);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK(held(IP4(239, 1, 1, 5)));
+	CHECK(!filed(IP4(239, 1, 1, 5), 1420));
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK(!filed(IP4(239, 1, 1, 5), 1420));
+
+	/* The group goes without an entry to take with it. */
+	snoop(IP4(239, 1, 1, 5), 0, false);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(bridge(0, 0, NULL), 0u);
+	down();
+}
+
 static void test_leaves(void)
 {
 	uint8_t f[160];
@@ -2338,6 +2451,9 @@ int main(void)
 	RUN(test_previews);
 	RUN(test_allowed_preview_groups);
 	RUN(test_static_groups);
+	RUN(test_a_group_is_filed_under_the_vlan_the_olt_sends_it_in);
+	RUN(test_a_group_ends_under_the_vlan_the_bridge_holds_it_in);
+	RUN(test_an_entry_the_bridge_refuses_is_tried_once);
 	RUN(test_leaves);
 	RUN(test_linking_to_the_subscriber_side);
 	RUN(test_what_the_bridge_refuses);

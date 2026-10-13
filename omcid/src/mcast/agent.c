@@ -75,6 +75,15 @@ struct active {
 	bool preview;
 	uint64_t preview_end;
 	bool held;
+	/*
+	 * The VLAN the OLT sends the group in, when its row names one, and
+	 * whether the agent tried to file the group in the bridge under it,
+	 * and did (see alias_sync()).
+	 */
+	uint16_t olt_vlan;
+	uint16_t mdb_vid;
+	bool alias_tried;
+	bool aliased;
 };
 
 /* The VLAN of the latest join of a group from a source. */
@@ -160,6 +169,8 @@ struct grant {
 	bool preview;
 	uint16_t preview_length;
 	bool preview_resets;
+	/* The VLAN the row that allowed the join names: where the OLT sends the group. */
+	uint16_t vlan;
 };
 
 /*
@@ -480,6 +491,7 @@ static enum verdict judge(struct omci_mcast *m, const struct omci_mib *mib,
 	pkg = k < c.n ? &c.pkg[k] : &none;
 	out->bandwidth = row.bandwidth;
 	out->package = pkg->key;
+	out->vlan = k < c.n && row.vlan >= 1u && row.vlan <= 4094u ? row.vlan : 0u;
 	return how == JUDGE_RENEW ? ALLOWED :
 				    limits(m, mib, sub, pkg, g, s, out);
 }
@@ -555,8 +567,31 @@ static struct asker vlan_noted(const struct omci_mcast *m, const uint8_t *g,
 	return a.known ? a : any;
 }
 
+/*
+ * The entry filed under the VLAN the OLT sends a channel in (alias_sync())
+ * goes with the channel's last active entry.
+ */
+static void alias_del(struct omci_mcast *m, size_t i)
+{
+	const struct active *x = &m->active[i];
+	struct omci_hw_mcast_group g = {
+		.vid = x->olt_vlan, .permanent = true, .alias = true
+	};
+
+	if (!x->aliased)
+		return;
+	for (size_t j = 0; j < m->n_active; j++)
+		if (j != i && m->active[j].aliased &&
+		    same_channel(&m->active[j], x->group, x->source))
+			return;
+	memcpy(g.group, x->group, ADDR);
+	memcpy(g.source, x->source, ADDR);
+	(void)!omci_hw()->mcast_group_del(&g);
+}
+
 static void drop_entry(struct omci_mcast *m, size_t i)
 {
+	alias_del(m, i);
 	memmove(&m->active[i], &m->active[i + 1u],
 		(m->n_active - i - 1u) * sizeof(m->active[0]));
 	m->n_active--;
@@ -598,7 +633,12 @@ static struct active *admit(struct omci_mcast *m, const uint8_t *g,
 			x->preview = peer->preview;
 			x->preview_end = peer->preview_end;
 			x->held = peer->held;
+			x->olt_vlan = peer->olt_vlan;
+			x->mdb_vid = peer->mdb_vid;
+			x->alias_tried = peer->alias_tried;
+			x->aliased = peer->aliased;
 		} else {
+			x->olt_vlan = gr->vlan;
 			x->bandwidth = gr->bandwidth;
 			x->package = gr->package;
 			x->preview = gr->preview;
@@ -949,7 +989,7 @@ static bool forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f,
 static void end_channel(struct omci_mcast *m, const struct active *x,
 			const char *why)
 {
-	struct omci_hw_mcast_group g = { .vid = 0 };
+	struct omci_hw_mcast_group g = { .vid = x->mdb_vid };
 	uint8_t group[ADDR], source[ADDR];
 	char text[40];
 
@@ -963,6 +1003,72 @@ static void end_channel(struct omci_mcast *m, const struct active *x,
 			drop_entry(m, i);
 	addr_text(group, text);
 	OMCI_INFO("mcast: %s ended: %s", text, why);
+}
+
+/*
+ * File each group the bridge holds for the subscriber under the VLAN the
+ * OLT sends it in as well, when the bridge holds it under another, the
+ * VLAN of the join. The switch looks the downstream frames of a group up by
+ * the VID they arrive with, 1420 say, and a translation to the subscriber's
+ * VLAN, 421, changes the tag but not the key: an entry under 421 never
+ * matches them, the switch takes the stream for unregistered multicast and
+ * drops it. The entry under the OLT's VLAN follows the bridge's: it goes
+ * when the active entry does (alias_del()). Tried once for an entry.
+ */
+static void alias_sync(struct omci_mcast *m)
+{
+	for (size_t i = 0; i < m->n_active; i++) {
+		struct active *x = &m->active[i];
+		struct omci_hw_mcast_group g = {
+			.vid = x->olt_vlan, .permanent = true, .alias = true
+		};
+
+		if (!x->held || x->alias_tried || x->olt_vlan == 0u ||
+		    x->olt_vlan == x->mdb_vid)
+			continue;
+		memcpy(g.group, x->group, ADDR);
+		memcpy(g.source, x->source, ADDR);
+		for (size_t j = 0; j < m->n_active; j++)
+			if (same_channel(&m->active[j], x->group, x->source))
+				m->active[j].alias_tried = true;
+		if (omci_hw()->mcast_group_add(&g) != OMCI_OK) {
+			char text[40];
+
+			addr_text(x->group, text);
+			OMCI_WARN("mcast: %s could not be filed under VLAN %u",
+				  text, (unsigned int)x->olt_vlan);
+			continue;
+		}
+		for (size_t j = 0; j < m->n_active; j++)
+			if (same_channel(&m->active[j], x->group, x->source))
+				m->active[j].aliased = true;
+	}
+}
+
+/*
+ * A permanent group of the bridge under a VLAN that is no static group and
+ * no entry under an OLT's VLAN of an active channel is a leftover, of an
+ * agent that ended with its channels active: the stream it lets through goes
+ * on with nobody to watch it. It goes. (A bridge that does not filter VLANs
+ * holds every group under VID 0, and none is taken for a leftover there.)
+ */
+static void leftovers(const struct omci_mcast *m,
+		      const struct omci_hw_mcast_group *g, size_t n)
+{
+	for (size_t i = 0; i < n; i++) {
+		bool known = !g[i].permanent || g[i].vid == 0u;
+
+		for (size_t k = 0; k < m->n_statics && !known; k++)
+			known = g[i].vid == m->statics[k].vid &&
+				memcmp(g[i].group, m->statics[k].group, ADDR) == 0 &&
+				memcmp(g[i].source, m->statics[k].source, ADDR) == 0;
+		for (size_t k = 0; k < m->n_active && !known; k++)
+			known = m->active[k].aliased &&
+				m->active[k].olt_vlan == g[i].vid &&
+				same_channel(&m->active[k], g[i].group, g[i].source);
+		if (!known)
+			(void)!omci_hw()->mcast_group_del(&g[i]);
+	}
 }
 
 /*
@@ -995,6 +1101,7 @@ static bool look(struct omci_mcast *m)
 			if (same_channel(&m->active[j], g[i].group,
 					 g[i].source)) {
 				m->active[j].held = true;
+				m->active[j].mdb_vid = g[i].vid;
 				held = true;
 			}
 		if (held)
@@ -1035,6 +1142,8 @@ static bool look(struct omci_mcast *m)
 		    omci_hw()->mcast_group_add(&m->statics[k]) != OMCI_OK)
 			OMCI_WARN("mcast: a static group could not be added");
 	}
+	alias_sync(m);
+	leftovers(m, g, n);
 	return true;
 }
 

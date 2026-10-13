@@ -4103,7 +4103,7 @@ static enum omci_status mdb_change(const struct omci_hw_mcast_group *g,
 	size_t off;
 	int err;
 
-	if (bridge_out())
+	if (bridge_out() || (g->alias && g_bridge_filtering != 1))
 		return OMCI_OK;
 	memset(&e, 0, sizeof(e));
 	bpm.ifindex = if_nametoindex(BRIDGE_IFNAME);
