@@ -421,19 +421,24 @@ check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 printf 'MODE=router\n' | "$STORE_SCRIPT" system 2>/dev/null
 rc=$?
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
-# The time server and the server of the system log: an address or a name, the
-# latter with a port; nothing that ntpd or syslogd would read as an option.
+# The time server and the server of the system log: an address, the latter with
+# a port; no name, as the stick runs offline and has no resolver, and nothing
+# that ntpd or syslogd would read as an option.
 printf 'NTP_SERVER=192.0.2.123\nLOG_SERVER=[2001:db8::1]:5514\n' | "$STORE_SCRIPT" system 2>/dev/null
 check 'grep -q -x NTP_SERVER=192.0.2.123 "$ONU_ROOT/run/onu-system"'
 check 'grep -q -x "LOG_SERVER=\[2001:db8::1\]:5514" "$ONU_ROOT/run/onu-system"'
-for good in NTP_SERVER=time.example.com NTP_SERVER=2001:db8::123 LOG_SERVER=192.0.2.9 \
-	LOG_SERVER=192.0.2.9:5514 LOG_SERVER=logs.example.com:514 LOG_SERVER=2001:db8::9; do
+for good in NTP_SERVER=2001:db8::123 NTP_SERVER=198.51.100.255 LOG_SERVER=192.0.2.9 \
+	LOG_SERVER=192.0.2.9:5514 LOG_SERVER=192.0.2.9:65535 LOG_SERVER=2001:db8::9 \
+	"LOG_SERVER=[2001:db8::9]"; do
 	printf '%s\n' "$good" | "$STORE_SCRIPT" system 2>/dev/null
 	check 'grep -q -x -F "$good" "$ONU_ROOT/run/onu-system"'
 done
 cp "$ONU_STORE" "$T/before"
 for bad in NTP_SERVER=-d "NTP_SERVER=192.0.2.1 -d" 'NTP_SERVER=$(reboot)' NTP_SERVER=a/b \
-	LOG_SERVER=-x "LOG_SERVER=192.0.2.9 514" "LOG_SERVER=[2001:db8::9" 'LOG_SERVER=a;b'; do
+	NTP_SERVER=time.example.com NTP_SERVER=192.0.2.256 NTP_SERVER=192.0.2 NTP_SERVER=1:2 \
+	LOG_SERVER=-x "LOG_SERVER=192.0.2.9 514" "LOG_SERVER=[2001:db8::9" 'LOG_SERVER=a;b' \
+	LOG_SERVER=logs.example.com:514 LOG_SERVER=192.0.2.9:0 LOG_SERVER=192.0.2.9:65536 \
+	"LOG_SERVER=[2001:db8::9]:" "LOG_SERVER=[192.0.2.9]:514" LOG_SERVER=192.0.2.9:; do
 	printf '%s\n' "$bad" | "$STORE_SCRIPT" system 2>/dev/null
 	rc=$?
 	check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'

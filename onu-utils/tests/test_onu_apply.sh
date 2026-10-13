@@ -61,7 +61,7 @@ setup() {
 		echo 80 >"$ONU_ROOT/proc/sys/net/ipv4/neigh/$lan/proxy_delay"
 	done
 	: >"$LOG"
-	for prog in killall udhcpd udhcpc logger kill onu-config dhcp6d chown; do
+	for prog in killall udhcpd logger kill onu-config dhcp6d chown; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$prog" >"$T/bin/$prog"
 	done
 	# A running omcid, signalled, programs the data path again and says so.

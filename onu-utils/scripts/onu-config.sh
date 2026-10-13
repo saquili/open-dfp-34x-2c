@@ -347,9 +347,44 @@ identity() {
 }
 
 # The stick's own settings of KEY=VALUE lines on the standard input, as SYS_
-# keys; only the keys the boot script knows, with values of their shape.
+# keys; only the keys the boot script knows, with values of their shape. The
+# stick runs offline and has no resolver, so the servers are addresses, never
+# names.
 system() {
-	lines=$(awk '{
+	lines=$(awk '
+	function ip4(s,   p, n, i) {
+		n = split(s, p, ".")
+		if (n != 4)
+			return 0
+		for (i = 1; i <= 4; i++)
+			if (p[i] !~ /^[0-9]+$/ || length(p[i]) > 3 || p[i] + 0 > 255)
+				return 0
+		return 1
+	}
+	function ip6(s) {
+		return s ~ /^[0-9A-Fa-f:.]+$/ && s ~ /:.*:/ && length(s) <= 45
+	}
+	function port(s) {
+		return s ~ /^[0-9]+$/ && s + 0 >= 1 && s + 0 <= 65535
+	}
+	# An address of either family, or nothing.
+	function address(s) {
+		return s == "" || ip4(s) || ip6(s)
+	}
+	# An address, and after it a port: IPv4 behind a colon, IPv6 in brackets.
+	function logserver(s,   i) {
+		if (address(s))
+			return 1
+		if (substr(s, 1, 1) == "[") {
+			i = index(s, "]")
+			if (i == 0 || !ip6(substr(s, 2, i - 2)))
+				return 0
+			return i == length(s) || (substr(s, i + 1, 1) == ":" && port(substr(s, i + 2)))
+		}
+		i = index(s, ":")
+		return i > 0 && ip4(substr(s, 1, i - 1)) && port(substr(s, i + 1))
+	}
+	{
 		i = index($0, "=")
 		if (i < 2)
 			next
@@ -363,13 +398,11 @@ system() {
 			exit 1
 		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex)?$/)
 			exit 1
-		# A time server: an address or a name, never an option of ntpd.
-		if (k == "NTP_SERVER" && (length(v) > 253 || v !~ /^([A-Za-z0-9:][A-Za-z0-9.:-]*)?$/))
+		# A time server: an address, which cannot read as an option of ntpd.
+		if (k == "NTP_SERVER" && !address(v))
 			exit 1
-		# A server of the system log: an address or a name, and a port after
-		# a colon, an IPv6 address in brackets then.
-		if (k == "LOG_SERVER" && (length(v) > 253 ||
-		    v !~ /^([A-Za-z0-9:][A-Za-z0-9.:-]*|\[[0-9A-Fa-f:.]+\](:[0-9]+)?)?$/))
+		# A server of the system log: an address, with a port after it.
+		if (k == "LOG_SERVER" && !logserver(v))
 			exit 1
 		if (k !~ /^(HOSTNAME|MGMT_VLAN|MGMT_ADDRESS|SFP_LANE|NTP_SERVER|LOG_SERVER)$/)
 			exit 1

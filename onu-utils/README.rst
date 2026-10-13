@@ -190,8 +190,10 @@ by its whole path where procd starts it.
         - ``onu-config system``
         - The line ``NAME=value`` of ``/run/onu-system``, for ``HOSTNAME``,
           ``MGMT_VLAN``, ``MGMT_ADDRESS``, ``SFP_LANE``, ``NTP_SERVER`` (the
-          server the clock is set from) and ``LOG_SERVER`` (a server of the
-          host side that the system log goes to as well).
+          address of the server the clock is set from) and ``LOG_SERVER`` (the
+          address of a server of the host side that the system log goes to as
+          well, with a port after it where it is not 514). The stick runs
+          offline and resolves no name, so a name is refused.
       * - ``PDn_HOST``
         - ``onu-config pd``
         - ``/run/dhcp6d/pdN``: the host session N delegated its IPv6 prefix to,
