@@ -711,6 +711,8 @@ struct omci_hw_mcast_port {
 
 /**
  * struct omci_hw_mcast_frame - An IGMP or MLD message of the subscriber side.
+ * @from_pon: it came from the OLT's side, a query for the agent to answer;
+ *	otherwise from the subscriber side
  * @tagged: the receive path took a VLAN tag off the frame
  * @tci: that tag
  * @len: the bytes in @data
@@ -718,6 +720,7 @@ struct omci_hw_mcast_port {
  *	%OMCI_HW_MCAST_FRAME_MAX bytes
  */
 struct omci_hw_mcast_frame {
+	bool from_pon;
 	bool tagged;
 	uint16_t tci;
 	uint16_t len;
@@ -849,9 +852,10 @@ __must_check enum omci_status
 omci_hw_mcast_frame(struct omci_hw_mcast_frame *out);
 
 /**
- * omci_hw_mcast_send() - Send an IGMP or MLD message upstream (host
- *	backend).
- * @port_id: the GEM port that carries it
+ * omci_hw_mcast_send() - Send an IGMP or MLD message upstream, or to the
+ *	subscriber side (host backend).
+ * @port_id: the GEM port that carries it, or %OMCI_HW_MCAST_UNI for the
+ *	subscriber side
  * @frame: the frame, from its destination address, with its tags
  * @len: its length
  *
@@ -860,6 +864,22 @@ omci_hw_mcast_frame(struct omci_hw_mcast_frame *out);
  */
 __must_check enum omci_status
 omci_hw_mcast_send(uint16_t port_id, const uint8_t *frame, size_t len);
+
+/*
+ * The @port_id of mcast_send that names the subscriber side: where the
+ * agent's own queries go. It is no Port-ID of a GEM port, which stop short
+ * of it.
+ */
+#define OMCI_HW_MCAST_UNI 0xffffu
+
+/**
+ * omci_hw_mcast_mac() - The Ethernet address the ONU speaks with on the
+ *	subscriber side (host backend).
+ * @mac: the address
+ *
+ * Return: %OMCI_OK.
+ */
+__must_check enum omci_status omci_hw_mcast_mac(uint8_t mac[static 6]);
 
 #if defined(OMCID_HW_STUB)
 
@@ -872,6 +892,7 @@ omci_hw_mcast_send(uint16_t port_id, const uint8_t *frame, size_t len);
  */
 void omci_hw_mcast_snoop(const struct omci_hw_mcast_group *g, bool join);
 
+void omci_hw_mcast_receive_pon(const uint8_t *frame, size_t len);
 void omci_hw_mcast_receive(const uint8_t *frame, size_t len, bool tagged,
 			   uint16_t tci);
 
@@ -1001,10 +1022,13 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  * @mcast_group_del: remove a group
  * @mcast_fd: a descriptor that becomes readable when a group changes or a
  *	message comes, or -1 for none: the daemon then looks once a second
- * @mcast_frame: take the next IGMP or MLD message of the subscriber side
- * @mcast_send: send an IGMP or MLD message upstream through a GEM port;
- *	NULL in a backend that cannot, whose agent leaves the messages to the
- *	switch
+ * @mcast_frame: take the next IGMP or MLD message of the subscriber side or
+ *	of the OLT's, the latter marked
+ * @mcast_send: send an IGMP or MLD message upstream through a GEM port, or
+ *	to the subscriber side (%OMCI_HW_MCAST_UNI); NULL in a backend that
+ *	cannot, whose agent leaves the messages to the switch
+ * @mcast_mac: the Ethernet address the agent's own messages are from; NULL in
+ *	a backend that cannot tell, where the agent makes none
  * @mcast_ds: replace the downstream tags of the multicast VLANs; NULL in a
  *	backend without them
  * @mcast_watch: count the downstream frames of a group, or stop; NULL in a
@@ -1054,6 +1078,7 @@ struct omci_hw_ops {
 	enum omci_status (*mcast_frame)(struct omci_hw_mcast_frame *out);
 	enum omci_status (*mcast_send)(uint16_t port_id, const uint8_t *frame,
 				       size_t len);
+	enum omci_status (*mcast_mac)(uint8_t mac[static 6]);
 	enum omci_status (*mcast_ds)(const struct omci_hw_mcast_ds *rules,
 				     size_t n);
 	enum omci_status (*mcast_watch)(const uint8_t *group, bool on);

@@ -3101,11 +3101,13 @@ static bool kernel_reprogram_due(void)
 /*
  * Multicast. The bridge snoops IGMP and MLD and keeps the groups it forwards
  * to sfp in its MDB, which the agent reads (RTM_GETMDB), changes
- * (RTM_NEWMDB, RTM_DELMDB) and hears change (RTNLGRP_MDB). The subscriber's
- * messages come up a packet socket on sfp through a filter that lets IGMP
- * and the MLD behind a hop-by-hop header through, untagged or under one or
- * two tags. One epoll descriptor stands for both sockets. In router mode
- * sfp is no bridge port: there is nothing to read or change.
+ * (RTM_NEWMDB, RTM_DELMDB) and hears change (RTNLGRP_MDB). The messages
+ * come up a packet socket through a filter that lets IGMP and the MLD behind
+ * a hop-by-hop header through, untagged or under one or two tags: those that
+ * sfp received are the subscriber's, those that a GEM interface received the
+ * OLT's, and no other interface's are taken. One epoll descriptor stands for
+ * both sockets. In router mode sfp is no bridge port: there is nothing to
+ * read or change.
  */
 static int g_mc_epoll = -1;
 static int g_mc_events = -1;
@@ -3668,7 +3670,29 @@ static enum omci_status kernel_mcast_seen(const uint8_t *group,
 	return OMCI_OK;
 }
 
-/* Send a message upstream through the interface of a GEM port. */
+/* The Ethernet address of sfp, which the agent's own messages are from. */
+static enum omci_status kernel_mcast_mac(uint8_t mac[static 6])
+{
+	struct ifreq ifr = { 0 };
+	int fd;
+
+	fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return OMCI_ERR_HW;
+	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", UNI_IFNAME);
+	if (ioctl(fd, SIOCGIFHWADDR, &ifr) < 0) {
+		close(fd);
+		return OMCI_ERR_HW;
+	}
+	close(fd);
+	memcpy(mac, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
+	return OMCI_OK;
+}
+
+/*
+ * Send a message upstream through the interface of a GEM port, or to the
+ * subscriber side through sfp.
+ */
 static enum omci_status kernel_mcast_send(uint16_t port_id,
 					  const uint8_t *frame, size_t len)
 {
@@ -3680,7 +3704,10 @@ static enum omci_status kernel_mcast_send(uint16_t port_id,
 
 	if (g_mc_tx < 0)
 		g_mc_tx = socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, 0);
-	snprintf(name, sizeof(name), GEM_NAME_FMT, port_id);
+	if (port_id == OMCI_HW_MCAST_UNI)
+		snprintf(name, sizeof(name), "%s", UNI_IFNAME);
+	else
+		snprintf(name, sizeof(name), GEM_NAME_FMT, port_id);
 	sll.sll_ifindex = (int)if_nametoindex(name);
 	if (g_mc_tx < 0 || !sll.sll_ifindex || len < ETH_HLEN)
 		return OMCI_ERR_HW;
@@ -3724,16 +3751,14 @@ static int mcast_packet_socket(void)
 		.len = ARRAY_SIZE(code),
 		.filter = (struct sock_filter *)code,
 	};
+	/* Every interface: the frame says which it came from. */
 	struct sockaddr_ll sll = {
 		.sll_family = AF_PACKET,
 		.sll_protocol = htons(ETH_P_ALL),
-		.sll_ifindex = (int)if_nametoindex(UNI_IFNAME),
 	};
 	int on = 1;
 	int fd, err;
 
-	if (!sll.sll_ifindex)
-		return -ENODEV;
 	/* No frame comes before the filter is on and the socket bound. */
 	fd = socket(AF_PACKET, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 	if (fd < 0)
@@ -3799,14 +3824,34 @@ static int kernel_mcast_fd(void)
 	ev.data.fd = g_mc_events;
 	(void)epoll_ctl(g_mc_epoll, EPOLL_CTL_ADD, g_mc_events, &ev);
 	OMCI_INFO(
-		"mcast: reading the IGMP and MLD messages of %s and the groups of %s",
+		"mcast: reading the IGMP and MLD messages of %s and the GEM interfaces, and the groups of %s",
 		UNI_IFNAME, BRIDGE_IFNAME);
 	return g_mc_epoll;
 }
 
 /*
- * The next message from the subscriber side: one that sfp received, not one
- * the stick sent out of it, with the tag the receive path took off.
+ * Which side an interface is: the subscriber's (1), the OLT's (2) when it is
+ * a GEM interface, or neither (0).
+ */
+static int mcast_side(int ifindex)
+{
+	char name[IFNAMSIZ];
+	unsigned int port;
+	int n = 0;
+
+	if (!if_indextoname((unsigned int)ifindex, name))
+		return 0;
+	if (strcmp(name, UNI_IFNAME) == 0)
+		return 1;
+	return sscanf(name, GEM_NAME_FMT "%n", &port, &n) == 1 &&
+			       name[n] == '\0' ?
+		       2 :
+		       0;
+}
+
+/*
+ * The next message: one that sfp or a GEM interface received, not one the
+ * stick sent out of it, with the tag the receive path took off.
  */
 static enum omci_status kernel_mcast_frame(struct omci_hw_mcast_frame *out)
 {
@@ -3829,11 +3874,17 @@ static enum omci_status kernel_mcast_frame(struct omci_hw_mcast_frame *out)
 		struct cmsghdr *c;
 		const ssize_t n = recvmsg(g_mc_packets, &msg, 0);
 
+		int side;
+
 		if (n < 0)
 			return OMCI_DECLINED;
 		if (from.sll_pkttype == PACKET_OUTGOING || bridge_out())
 			continue;
+		side = mcast_side(from.sll_ifindex);
+		if (side == 0)
+			continue;
 		out->len = (uint16_t)n;
+		out->from_pon = side == 2;
 		out->tagged = false;
 		for (c = CMSG_FIRSTHDR(&msg); c != NULL;
 		     c = CMSG_NXTHDR(&msg, c)) {
@@ -4272,9 +4323,10 @@ static enum omci_status kernel_uni_rate(uint64_t bytes_ps)
 		err = rtnl_talk(req, off, NULL, 0, NULL);
 	}
 	if (err) {
-		OMCI_WARN("uni: the kernel did not set the rate of %s to %llu bytes/s: %s",
-			  UNI_IFNAME, (unsigned long long)bytes_ps,
-			  strerror(-err));
+		OMCI_WARN(
+			"uni: the kernel did not set the rate of %s to %llu bytes/s: %s",
+			UNI_IFNAME, (unsigned long long)bytes_ps,
+			strerror(-err));
 		return OMCI_ERR_HW;
 	}
 	return OMCI_OK;
@@ -4304,6 +4356,7 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_fd = kernel_mcast_fd,
 	.mcast_frame = kernel_mcast_frame,
 	.mcast_send = kernel_mcast_send,
+	.mcast_mac = kernel_mcast_mac,
 	.mcast_ds = kernel_mcast_ds,
 	.filter_apply = kernel_filter_apply,
 	.mcast_watch = kernel_mcast_watch,

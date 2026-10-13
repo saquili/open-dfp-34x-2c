@@ -361,6 +361,24 @@ static void test_the_multicast_bridge_keeps_its_groups(void)
 	}
 	CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_DECLINED);
 
+	/* A message of the OLT's side is marked, and one of the subscriber's is not. */
+	omci_hw_mcast_receive_pon(frame, 64u);
+	omci_hw_mcast_receive(frame, 64u, false, 0);
+	CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_OK);
+	CHECK(f.from_pon && !f.tagged);
+	CHECK_EQ(omci_hw_mcast_frame(&f), OMCI_OK);
+	CHECK(!f.from_pon);
+
+	/* The Ethernet address the ONU's own messages are from. */
+	{
+		static const uint8_t own[6] = { 0x00, 0x00, 0x5e,
+						0x00, 0x53, 0x01 };
+		uint8_t mac[6] = { 0 };
+
+		CHECK_EQ(omci_hw_mcast_mac(mac), OMCI_OK);
+		CHECK_MEM(mac, own, 6);
+	}
+
 	/* More downstream tags than the backend holds are refused. */
 	{
 		struct omci_hw_mcast_ds ds[OMCI_HW_MCAST_DS_MAX + 1u] = { 0 };

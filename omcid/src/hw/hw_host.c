@@ -825,6 +825,14 @@ enum omci_status omci_hw_mcast_send(uint16_t port_id, const uint8_t *frame,
 	return OMCI_OK;
 }
 
+enum omci_status omci_hw_mcast_mac(uint8_t mac[static 6])
+{
+	static const uint8_t own[6] = { 0x00, 0x00, 0x5e, 0x00, 0x53, 0x01 };
+
+	omci_wire_copy(mac, own, sizeof(own));
+	return OMCI_OK;
+}
+
 size_t omci_hw_mcast_sent(size_t index, uint16_t *port_id, uint8_t *frame,
 			  size_t cap)
 {
@@ -877,8 +885,8 @@ void omci_hw_mcast_snoop(const struct omci_hw_mcast_group *g, bool join)
 		mcast_remove(i);
 }
 
-void omci_hw_mcast_receive(const uint8_t *frame, size_t len, bool tagged,
-			   uint16_t tci)
+static void mcast_queue(const uint8_t *frame, size_t len, bool from_pon,
+			bool tagged, uint16_t tci)
 {
 	struct omci_hw_mcast_frame *f;
 
@@ -887,10 +895,22 @@ void omci_hw_mcast_receive(const uint8_t *frame, size_t len, bool tagged,
 	f = &g_mc_q[(g_mc_q_head + g_mc_q_n++) % MCAST_QUEUE];
 	if (len > sizeof(f->data))
 		len = sizeof(f->data);
+	f->from_pon = from_pon;
 	f->tagged = tagged;
 	f->tci = tci;
 	f->len = (uint16_t)len;
 	omci_wire_copy(f->data, frame, len);
+}
+
+void omci_hw_mcast_receive(const uint8_t *frame, size_t len, bool tagged,
+			   uint16_t tci)
+{
+	mcast_queue(frame, len, false, tagged, tci);
+}
+
+void omci_hw_mcast_receive_pon(const uint8_t *frame, size_t len)
+{
+	mcast_queue(frame, len, true, false, 0);
 }
 
 unsigned int omci_hw_mcast_port_recorded(struct omci_hw_mcast_port *out)
@@ -990,6 +1010,7 @@ const struct omci_hw_ops omci_hw_host_ops = {
 	.mcast_fd = host_mcast_fd,
 	.mcast_frame = omci_hw_mcast_frame,
 	.mcast_send = omci_hw_mcast_send,
+	.mcast_mac = omci_hw_mcast_mac,
 	.mcast_ds = omci_hw_mcast_ds,
 	.mcast_watch = omci_hw_mcast_watch,
 	.mcast_seen = omci_hw_mcast_seen,

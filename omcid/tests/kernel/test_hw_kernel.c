@@ -15,17 +15,24 @@
 
 #define _GNU_SOURCE
 
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <net/if.h>
+#include <poll.h>
 #include <sched.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "hw/hw.h"
 #include "hw_kernel.h"
+#include "omcid/array_size.h"
 #include "tcprio.h"
 
 extern const struct omci_hw_ops omci_hw_kernel_ops;
@@ -121,7 +128,8 @@ static void vlan_rules(void)
 	puts("a smaller set takes the rules of before away");
 	CHECK(omci_hw_kernel_ops.vlan_apply(rules, 1, &rejected) == OMCI_OK);
 	CHECK(at("sfp", TC_PRIO_VLAN, "vlan_id 410"));
-	CHECK(!at("sfp", TC_PRIO_VLAN + 1, NULL) && !at("pon", TC_PRIO_VLAN + 1, NULL));
+	CHECK(!at("sfp", TC_PRIO_VLAN + 1, NULL) &&
+	      !at("pon", TC_PRIO_VLAN + 1, NULL));
 	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, &rejected) == OMCI_OK);
 	CHECK(!at("sfp", TC_PRIO_VLAN, NULL) && !at("pon", TC_PRIO_VLAN, NULL));
 
@@ -166,7 +174,8 @@ static void port_filters(void)
 	CHECK(at("pon", TC_PRIO_FILTER, "dst_mac 01:00:5e:00:00:00/25"));
 	CHECK(at("pon", TC_PRIO_FILTER, "action pass"));
 	CHECK(omci_hw_kernel_ops.filter_apply(NULL, 0) == OMCI_OK);
-	CHECK(!at("sfp", TC_PRIO_FILTER, NULL) && !at("pon", TC_PRIO_FILTER, NULL));
+	CHECK(!at("sfp", TC_PRIO_FILTER, NULL) &&
+	      !at("pon", TC_PRIO_FILTER, NULL));
 }
 
 static void multicast_tags(void)
@@ -196,13 +205,15 @@ static void leftover_drops(void)
 
 	puts("the drops at the UNI that a daemon of before left go with the first rules");
 	sh("tc qdisc add dev sfp clsact 2>/dev/null");
-	snprintf(cmd, sizeof(cmd),
-		 "tc filter add dev sfp ingress pref %u protocol 802.1Q flower vlan_id 99 action drop",
-		 first);
+	snprintf(
+		cmd, sizeof(cmd),
+		"tc filter add dev sfp ingress pref %u protocol 802.1Q flower vlan_id 99 action drop",
+		first);
 	sh(cmd);
-	snprintf(cmd, sizeof(cmd),
-		 "tc filter add dev sfp ingress pref %u protocol 802.1Q flower vlan_id 98 action drop",
-		 last);
+	snprintf(
+		cmd, sizeof(cmd),
+		"tc filter add dev sfp ingress pref %u protocol 802.1Q flower vlan_id 98 action drop",
+		last);
 	sh(cmd);
 	CHECK(at("sfp", first, "vlan_id 99") && at("sfp", last, "vlan_id 98"));
 	CHECK(omci_hw_kernel_ops.vlan_apply(NULL, 0, NULL) == OMCI_OK);
@@ -267,7 +278,9 @@ static int times(const char *hay, const char *needle)
  */
 static int clash_warnings(const char *log, uint16_t vid)
 {
-	struct omci_hw_bridge_port port = { .bridge = 1, .port_id = 257, .num_vlan = 2 };
+	struct omci_hw_bridge_port port = { .bridge = 1,
+					    .port_id = 257,
+					    .num_vlan = 2 };
 	int saved, fd;
 
 	port.vlan[0] = vid;
@@ -343,14 +356,168 @@ static void uni_rate(void)
 	CHECK(omci_hw_kernel_ops.uni_rate(0) == OMCI_OK);
 }
 
+/* A packet socket bound to @dev, to send on it or to read what it sends. */
+static int packet_socket(const char *dev)
+{
+	struct sockaddr_ll sll = {
+		.sll_family = AF_PACKET,
+		.sll_protocol = htons(ETH_P_ALL),
+		.sll_ifindex = (int)if_nametoindex(dev),
+	};
+	const int fd = socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, 0);
+
+	if (fd < 0 || sll.sll_ifindex == 0 ||
+	    bind(fd, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+		if (fd >= 0)
+			close(fd);
+		return -1;
+	}
+	return fd;
+}
+
+/* An IGMPv2 general query as the OLT sends it, untagged. */
+static size_t igmp_query(uint8_t *f)
+{
+	static const uint8_t head[] = {
+		0x01, 0x00, 0x5e, 0x00, 0x00, 0x01, 0x00, 0x00, 0x5e,
+		0x00, 0x53, 0x99, 0x08, 0x00, 0x45, 0xc0, 0x00, 0x1c,
+		0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x0a,
+		0x00, 0x00, 0x01, 0xe0, 0x00, 0x00, 0x01,
+	};
+
+	memset(f, 0, 64);
+	memcpy(f, head, sizeof(head));
+	f[sizeof(head)] = 0x11u;
+	f[sizeof(head) + 1] = 100u;
+	return 60;
+}
+
+/* Send @len bytes on @dev's peer, which arrive on @dev. */
+static void arrive(const char *peer, const uint8_t *f, size_t len)
+{
+	const int fd = packet_socket(peer);
+
+	CHECK(fd >= 0 && send(fd, f, len, 0) == (ssize_t)len);
+	if (fd >= 0)
+		close(fd);
+}
+
+/* Wait a moment for what was sent to be queued on the receive side. */
+static void settle(void)
+{
+	usleep(100000);
+}
+
+/*
+ * The messages of IGMP and MLD: from sfp the subscriber's, from a GEM
+ * interface the OLT's, from none other; the Ethernet address of sfp for the
+ * agent's own; and a message sent to the subscriber side or to a GEM port.
+ */
+static void multicast_frames(void)
+{
+	static const char *const links[] = { "sfp",   "sfpx",	  "gem257",
+					     "gemx",  "gem257.5", "gemv",
+					     "other", "otherx" };
+	struct omci_hw_mcast_frame f;
+	uint8_t frame[64], mac[6], back[128];
+	unsigned int sfp_mac[6] = { 0 }, from_pon = 0, from_uni = 0;
+	FILE *fp;
+	int fd;
+
+	puts("the IGMP and MLD messages: the side by the interface, the Ethernet address, a message sent");
+	sh("ip link del sfp");
+	sh("ip link add sfp type veth peer name sfpx");
+	sh("ip link add gem257 type veth peer name gemx");
+	sh("ip link add gem257.5 type veth peer name gemv");
+	sh("ip link add other type veth peer name otherx");
+	for (size_t i = 0; i < ARRAY_SIZE(links); i++) {
+		char cmd[64];
+
+		snprintf(cmd, sizeof(cmd), "ip link set %s up", links[i]);
+		sh(cmd);
+	}
+	CHECK(omci_hw_kernel_ops.mcast_fd() >= 0);
+	/* The new interfaces say their own MLD; none waits after it is read. */
+	settle();
+	while (omci_hw_kernel_ops.mcast_frame(&f) == OMCI_OK)
+		;
+	CHECK(omci_hw_kernel_ops.mcast_frame(&f) == OMCI_DECLINED);
+
+	(void)igmp_query(frame);
+	arrive("sfpx", frame, 60);
+	arrive("gemx", frame, 60);
+	arrive("gemv", frame, 60);
+	arrive("otherx", frame, 60);
+	settle();
+	/*
+	 * Of the four, one from sfp and one from the GEM interface are read: not
+	 * those of a VLAN interface over a GEM interface and of any other. The
+	 * kernel's own MLD of the new interfaces is no query, and is not 60 bytes.
+	 */
+	while (omci_hw_kernel_ops.mcast_frame(&f) == OMCI_OK) {
+		if (f.len != 60)
+			continue;
+		CHECK(f.data[14 + 20] == 0x11u);
+		if (f.from_pon)
+			from_pon++;
+		else
+			from_uni++;
+	}
+	CHECK(from_uni == 1 && from_pon == 1);
+
+	/* The Ethernet address of sfp (the namespace has no /sys of its own, so ip tells it). */
+	fp = popen("ip -o link show sfp", "r");
+	CHECK(fp != NULL);
+	if (fp) {
+		char line[512];
+		const char *eth = NULL;
+
+		while (fgets(line, sizeof(line), fp) && !eth)
+			eth = strstr(line, "link/ether ");
+		CHECK(eth != NULL);
+		CHECK(eth && sscanf(eth + 11, "%x:%x:%x:%x:%x:%x", &sfp_mac[0],
+				    &sfp_mac[1], &sfp_mac[2], &sfp_mac[3],
+				    &sfp_mac[4], &sfp_mac[5]) == 6);
+		pclose(fp);
+	}
+	CHECK(omci_hw_kernel_ops.mcast_mac(mac) == OMCI_OK);
+	for (unsigned int i = 0; i < 6; i++)
+		CHECK(mac[i] == sfp_mac[i]);
+
+	/* A message to the subscriber side goes out of sfp, one to a GEM port out of its interface. */
+	fd = packet_socket("sfpx");
+	CHECK(fd >= 0);
+	CHECK(omci_hw_kernel_ops.mcast_send(OMCI_HW_MCAST_UNI, frame, 60) ==
+	      OMCI_OK);
+	settle();
+	CHECK(fd >= 0 && recv(fd, back, sizeof(back), MSG_DONTWAIT) == 60);
+	CHECK(memcmp(back, frame, 60) == 0);
+	if (fd >= 0)
+		close(fd);
+	fd = packet_socket("gemx");
+	CHECK(fd >= 0);
+	CHECK(omci_hw_kernel_ops.mcast_send(257, frame, 60) == OMCI_OK);
+	settle();
+	CHECK(fd >= 0 && recv(fd, back, sizeof(back), MSG_DONTWAIT) == 60);
+	if (fd >= 0)
+		close(fd);
+	/* No such GEM interface, and a frame too short for an Ethernet header. */
+	CHECK(omci_hw_kernel_ops.mcast_send(3, frame, 60) == OMCI_ERR_HW);
+	CHECK(omci_hw_kernel_ops.mcast_send(OMCI_HW_MCAST_UNI, frame, 8) ==
+	      OMCI_ERR_HW);
+}
+
 /* Whether the kernel has the tbf qdisc. */
 static bool tbf_qdisc(void)
 {
-	if (sh("ip link add tbfprobe type dummy 2>/dev/null"))
-		return false;
-	const bool ok = sh("tc qdisc add dev tbfprobe root tbf rate 1mbit burst 4k limit 8k 2>/dev/null") == 0;
+	const char *add =
+		"tc qdisc add dev tp root tbf rate 1mbit burst 4k limit 8k 2>&-";
+	bool ok;
 
-	sh("ip link del tbfprobe");
+	if (sh("ip link add tp type dummy 2>/dev/null"))
+		return false;
+	ok = sh(add) == 0;
+	sh("ip link del tp");
 	return ok;
 }
 
@@ -390,6 +557,7 @@ int main(void)
 		uni_rate();
 	else
 		puts("(this kernel has no tbf qdisc: the UNI's rate is skipped)");
+	multicast_frames();
 
 	printf("test_hw_kernel: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
