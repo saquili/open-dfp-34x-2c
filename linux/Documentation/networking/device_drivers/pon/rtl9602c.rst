@@ -1485,14 +1485,18 @@ its siblings describe the registers from the switch's side.
        ``RTL9602C_PAUSE_THR_PON_HIGH`` (``0x02311c``) and
        ``RTL9602C_PAUSE_THR_PON_LOW`` (``0x023120``), each with
        ``RTL9602C_PAUSE_THR_ON`` (bits 25:16) and ``RTL9602C_PAUSE_THR_OFF``
-       (bits 9:0). The build sets port 2's pair to the global pair plus
+       (bits 9:0). The build writes the global pairs, 450 pages above those of
+       a reset, and sets port 2's pair to the global pair plus
        ``RTL9602C_FC_PON_EXTRA`` (``0x30``), each clamped to its field
        (Documentation/networking/dsa/rtl9602c-acl-qos.rst, "Flow-control
        thresholds").
-     - I
-     - Assumption, load-bearing: the driver writes them. An upstream flood above
-       the grant, reading the pause counters, would show whether port 2's marks
-       act, and may locate the loss of the upstream overload row.
+     - M
+     - The global pairs: with the levels of a reset the switch dropped 0.2 % of
+       the frames of a saturating upload from the host, with these about
+       0.001 % (the page named above has the runs), provided that port 0 sends
+       pause frames, which the device tree asks for. Port 2's own pairs:
+       assumption, load-bearing, the driver writes them; raised alone by 300 they
+       changed nothing.
    * - ``RTL9602C_DGASP_CFG``, ``0x0001ec``: ``RTL9602C_DGASP_CFG_INVERT``
        (bit 3) inverts the output of the dying-gasp comparator, the supply-loss
        detector; the build sets it. The driver does nothing else with dying

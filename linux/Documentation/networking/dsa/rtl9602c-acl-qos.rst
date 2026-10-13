@@ -2516,7 +2516,7 @@ rate is the devlink parameter ``cpu_rx_pps``, 5000 frames a second from setup;
 A queue over its rate keeps the frames that it may not send yet in the shared
 buffer. The pages that the frames for one port may hold are limited per port
 (``RTL9602C_PORT_PAGE_LIMIT``, see "Buffer pages and qdepth"), and after reset
-every port may hold 1012, more than the global pause mark of 512 pages (see
+every port may hold 1012, more than the global pause mark of 512 pages of a reset (see
 "Flow-control thresholds"). A flood for the CPU beyond the rate held one queue
 of the CPU port at 540 to 588 pages, the switch dropped frames for the other
 ports too, and what it routed slowed to the rate of the limit. So setup, before it sets the
@@ -2642,11 +2642,14 @@ Flow-control thresholds
 
 The switch has flow-control thresholds, in buffer pages: a pair for the whole
 switch and a pair of the PON port's own. A pair is two words, and each word has
-an on level and an off level. The driver gives the PON port its own thresholds
-when the PON MAC is built (see the *PON* page): each PON level is the
-switch-wide level plus ``RTL9602C_FC_PON_EXTRA`` (``0x30``) pages, clamped to
-its field. That the registers are what their names say, and that the PON port
-needs the margin, are not verified.
+an on level and an off level. When the PON MAC is built (see the *PON* page)
+the driver writes the switch-wide levels, ``RTL9602C_FC_GLOBAL_*``, which are
+those of a reset plus 450 pages, and gives the PON port its own: each PON level
+is the switch-wide level plus ``RTL9602C_FC_PON_EXTRA`` (``0x30``) pages,
+clamped to its field. That the switch-wide levels set the depth to which the
+queue of the PON port fills before the switch drops frames is measured. That the
+registers are what their names say, and that the PON port needs the margin, are
+not verified.
 
 .. list-table::
    :header-rows: 1
@@ -2664,19 +2667,52 @@ needs the margin, are not verified.
        buffer pages.
      - I
      - The registers have been written only; see the next row.
-   * - When the PON MAC is built the driver sets both PON pairs to the global
-       pairs plus ``RTL9602C_FC_PON_EXTRA`` (``0x30``), each level clamped to
-       its field.
-     - I
-     - The driver depends on it, and whether the PON port needs it is not
-       verified. Reading the global and PON words after bring-up, then repeating
-       the bridged-traffic check with the write removed, would show whether it
-       matters.
+   * - After a reset the switch-wide levels read 512 and 500 (high pair) and 486
+       and 471 (low pair); the PON port's, after the build added
+       ``RTL9602C_FC_PON_EXTRA``, 560 and 548, 534 and 519. With them, a
+       saturating TCP upload from the host (15 s, 1.18 million frames) filled
+       queue 0 of the PON port to 540 to 612 pages and the switch dropped 2,458
+       to 2,734 frames, 0.2 %, counted in the ``rx_dropped`` of the sfp port,
+       which is its ``rx_forward_discards``. Raising only the PON port's pairs
+       by 300 left 2,514 dropped. Raising only the switch-wide pairs by 300 left
+       189. Raising the switch-wide pairs by 450 (962 and 950, 936 and 921) and
+       the PON port's to 1010 and 998, 984 and 969 left 12 dropped, the queue
+       peaking at 996 pages. The round trip of a ping during the upload was 1.15
+       ms on average with the reset levels and 1.29 ms with the 450 added; an
+       upload and a download at once gave the same rates with both (upload 658
+       and 660 Mb/s against 670 and 651, download 715 and 716 against 687 and
+       699), and the drops fell from about 1,050 to 34 and 0. In all of these
+       runs port 0 sent pause frames (``pause`` in its fixed link), which the
+       host ignored. With the levels of the build and the port's pause off,
+       the same upload dropped 2,735 to 3,516 frames and the queue peaked at
+       541 pages, as with the levels of a reset: the levels set the depth only
+       while the port sends pause frames.
+     - M
+     - ``cat /sys/kernel/debug/rtl9602c/qdepth`` (port 2 queue 0) and the
+       ``rx_dropped`` of ``/sys/class/net/sfp/statistics`` before and after an
+       ``iperf3`` upload from a host behind the sfp lane, with the levels
+       written by a temporary debugfs file, and the same with the device tree
+       without ``pause`` for the last result. The host's own switch dropped
+       about as many of the same frames as the retransmissions that remained, so
+       the retransmissions of the upload are not a measure of this.
+   * - When the PON MAC is built the driver writes ``RTL9602C_FC_GLOBAL_HIGH_ON``,
+       ``_HIGH_OFF``, ``_LOW_ON`` and ``_LOW_OFF`` (962, 950, 936 and 921) to
+       the switch-wide words, whole, so that a second build does not raise them
+       again, and sets both PON pairs to those plus ``RTL9602C_FC_PON_EXTRA``
+       (``0x30``), each level clamped to its field.
+     - T
+     - The queue of the PON port fills to 996 pages and the drops of the
+       upload above fall to about a hundredth of those with the levels of a
+       reset. Whether the PON port needs its own margin is not verified:
+       repeating the upload with the PON words left as they are after a reset
+       would show it.
 
 The one step, ``rtl9602c_pon_fc_thresholds()``: for the high and then the low
-pair, read the global word, add ``RTL9602C_FC_PON_EXTRA`` to its on and off
-levels, clamp each to its field, and write both into the PON word by
-read-modify-write. Purpose: the PON port has its own margin of pages. (I)
+pair, write the switch-wide levels into the global word, add
+``RTL9602C_FC_PON_EXTRA`` to them, clamp each to its field, and write both into
+the PON word by read-modify-write. Purpose: the queue of the PON port holds the
+bursts that the host's lane, faster than the PON, sends; the PON port has its
+own margin of pages. (M for the switch-wide levels, I for the PON port's)
 
 Frame capture
 =============

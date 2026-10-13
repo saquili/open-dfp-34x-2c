@@ -526,31 +526,37 @@ static int rtl9602c_pbo_init(struct rtl9602c_pon *p, s64 *ready_us)
 }
 
 /*
- * Give the PON port its own pause marks, RTL9602C_FC_PON_EXTRA pages above
- * the switch's global ones, each clamped to its field. That the PON port
- * needs them is not verified.
+ * Set the switch-wide pause marks to RTL9602C_FC_GLOBAL_*, which let the queue
+ * of the PON port hold more of the host's bursts, and give the PON port its
+ * own, RTL9602C_FC_PON_EXTRA pages above them, each clamped to its field.
+ * That the PON port needs its own is not verified.
  */
 static void rtl9602c_pon_fc_thresholds(struct rtl9602c_pon *p)
 {
-	static const u32 regs[][2] = {
-		{ RTL9602C_PAUSE_THR_GLOBAL_HIGH, RTL9602C_PAUSE_THR_PON_HIGH },
-		{ RTL9602C_PAUSE_THR_GLOBAL_LOW, RTL9602C_PAUSE_THR_PON_LOW },
+	static const struct {
+		u32 global, pon, on, off;
+	} marks[] = {
+		{ RTL9602C_PAUSE_THR_GLOBAL_HIGH, RTL9602C_PAUSE_THR_PON_HIGH,
+		  RTL9602C_FC_GLOBAL_HIGH_ON, RTL9602C_FC_GLOBAL_HIGH_OFF },
+		{ RTL9602C_PAUSE_THR_GLOBAL_LOW, RTL9602C_PAUSE_THR_PON_LOW,
+		  RTL9602C_FC_GLOBAL_LOW_ON, RTL9602C_FC_GLOBAL_LOW_OFF },
 	};
 	unsigned int i;
 
-	for (i = 0; i < ARRAY_SIZE(regs); i++) {
-		u32 v = rtl9602c_pon_r(p, regs[i][0]);
-		u32 on = min_t(u32, FIELD_GET(RTL9602C_PAUSE_THR_ON, v) +
-			       RTL9602C_FC_PON_EXTRA,
+	for (i = 0; i < ARRAY_SIZE(marks); i++) {
+		u32 on = min_t(u32, marks[i].on + RTL9602C_FC_PON_EXTRA,
 			       FIELD_MAX(RTL9602C_PAUSE_THR_ON));
-		u32 off = min_t(u32, FIELD_GET(RTL9602C_PAUSE_THR_OFF, v) +
-				RTL9602C_FC_PON_EXTRA,
+		u32 off = min_t(u32, marks[i].off + RTL9602C_FC_PON_EXTRA,
 				FIELD_MAX(RTL9602C_PAUSE_THR_OFF));
 
-		rtl9602c_pon_rmw(p, regs[i][1],
+		rtl9602c_pon_rmw(p, marks[i].global,
 				 RTL9602C_PAUSE_THR_ON | RTL9602C_PAUSE_THR_OFF,
-			     FIELD_PREP(RTL9602C_PAUSE_THR_ON, on) |
-			     FIELD_PREP(RTL9602C_PAUSE_THR_OFF, off));
+				 FIELD_PREP(RTL9602C_PAUSE_THR_ON, marks[i].on) |
+				 FIELD_PREP(RTL9602C_PAUSE_THR_OFF, marks[i].off));
+		rtl9602c_pon_rmw(p, marks[i].pon,
+				 RTL9602C_PAUSE_THR_ON | RTL9602C_PAUSE_THR_OFF,
+				 FIELD_PREP(RTL9602C_PAUSE_THR_ON, on) |
+				 FIELD_PREP(RTL9602C_PAUSE_THR_OFF, off));
 	}
 }
 

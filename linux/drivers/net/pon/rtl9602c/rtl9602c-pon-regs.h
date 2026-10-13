@@ -918,7 +918,9 @@ enum {
 
 /*
  * Flow-control thresholds in buffer pages, switch-wide and the PON port's,
- * each an on and an off level; not verified.
+ * each an on and an off level. The switch-wide ones decide how many pages the
+ * queue of the PON port may fill before the switch drops frames for it
+ * (measured; what each of the four pairs means is not).
  */
 #define RTL9602C_PAUSE_THR_GLOBAL_HIGH		0x0230e4
 #define RTL9602C_PAUSE_THR_GLOBAL_LOW		0x0230e8
@@ -927,6 +929,20 @@ enum {
 #define RTL9602C_PAUSE_THR_ON		GENMASK(25, 16)
 #define RTL9602C_PAUSE_THR_OFF		GENMASK(9, 0)
 #define RTL9602C_FC_PON_EXTRA		0x30
+
+/*
+ * The switch-wide levels the build writes: those of a reset, 512 and 500 for
+ * the high pair and 486 and 471 for the low one, 450 pages higher. The
+ * host's lane is faster than the PON carries upstream, and with the reset
+ * levels a burst from the host filled the queue of the PON port and the
+ * switch dropped about 0.3 % of the frames of a saturating upload; with these
+ * it drops about 0.001 %. They are written whole, not added to what is
+ * there, so that a second build of the PON MAC does not raise them again.
+ */
+#define RTL9602C_FC_GLOBAL_HIGH_ON	962
+#define RTL9602C_FC_GLOBAL_HIGH_OFF	950
+#define RTL9602C_FC_GLOBAL_LOW_ON	936
+#define RTL9602C_FC_GLOBAL_LOW_OFF	921
 
 /*
  * In the system controller's page, not the switch's window. The PON MAC, from
