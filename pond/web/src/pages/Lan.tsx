@@ -32,12 +32,13 @@ import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Filter } from "../components/Pager";
 import { SidePanel, withPanel } from "../components/SidePanel";
+import { NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
 import { duration } from "../lib/format";
 import { ip4, net4 } from "../lib/ipv4";
 import { subnet64, subnets64 } from "../lib/ipv6";
 import { ipv4, ipv4Cidr, mac, required, upTo, vlan, z } from "../lib/schemas";
-import { downVlan, fixed, type LanView, lans, leases, sessions } from "../lib/state";
+import { downVlan, fixed, type LanView, lans, leases, served, sessions } from "../lib/state";
 import { type Conn, conns } from "./internet/conns";
 import { connName, hostSide, Mono, Sub, type T, useServices } from "./internet/shared";
 
@@ -1286,7 +1287,7 @@ export function useLanCounts() {
  * The networks, and at their right while it is open, the form that adds one
  * or changes one; @onDevices opens a network's devices.
  */
-export function LanNets({ onDevices }: { onDevices: (lan: number) => void }) {
+function Nets({ onDevices }: { onDevices: (lan: number) => void }) {
   const { all, places } = usePlaces();
   const [editId, setEditId] = useState<number | null>(null);
   const editing = all.find((l) => l.id === editId) ?? null;
@@ -1338,14 +1339,26 @@ export function LanNets({ onDevices }: { onDevices: (lan: number) => void }) {
   );
 }
 
+/* The networks tab: the networks, or that the stick has none yet. */
+export function LanNets({ onDevices }: { onDevices: (lan: number) => void }) {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  if (!live) return null;
+  if (!served(live, "lans")) return <NotYet>{t("notYet.nets")}</NotYet>;
+  return <Nets onDevices={onDevices} />;
+}
+
 /** Every device of the networks, narrowed to the network @net, or all with none. */
-export function LanDevices({
-  net,
-  onNet,
-}: {
-  net: number | null;
-  onNet: (lan: number | null) => void;
-}) {
+function Clients({ net, onNet }: { net: number | null; onNet: (lan: number | null) => void }) {
   const { places } = usePlaces();
   return <Devices places={places} net={net} onNet={onNet} />;
+}
+
+/* The devices tab: the devices, or that the stick has none yet. */
+export function LanDevices(props: { net: number | null; onNet: (lan: number | null) => void }) {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  if (!live) return null;
+  if (!served(live, "lans")) return <NotYet>{t("notYet.clients")}</NotYet>;
+  return <Clients {...props} />;
 }

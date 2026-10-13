@@ -22,6 +22,7 @@ import { useIpoeChange, useSessionChange } from "../../api/config";
 import { useLive } from "../../api/live";
 import type { Family } from "../../api/types";
 import { Field, SaveState, useChangeState } from "../../components/Field";
+import { NotYet } from "../../components/ui";
 import { type Key, useI18n } from "../../i18n";
 import {
   addresses,
@@ -41,6 +42,7 @@ import {
   lans,
   MAX_CONNS,
   type SessionView,
+  served,
   sessions,
 } from "../../lib/state";
 import { type Conn, ipoeIn, KINDS, type Kind, room, serviceIn } from "./conns";
@@ -164,6 +166,8 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
   const state = useChangeState(change);
   const { data: live } = useLive();
   const all = sessions(live);
+  /* Without networks of its own, the stick keeps the address for itself and routes nothing. */
+  const routes = served(live, "lans");
   const { list: services } = useServices();
   const id = x?.id ?? 0;
   const first = x?.vlan ?? c.draft.vlan;
@@ -292,7 +296,7 @@ function PppoeForm({ x, ...c }: Common & { x?: SessionView }) {
             on={pass === "off"}
             field={passField}
             title={t("internet.kindStick")}
-            text={t("internet.kindStickHint")}
+            text={t(routes ? "internet.kindStickHint" : "internet.kindStickNow")}
           />
           <Choice
             value="on"
@@ -610,6 +614,7 @@ export function ConnForm({
   onClose: (() => void) | undefined;
 }) {
   const { t } = useI18n();
+  const { data: live } = useLive();
   const { list: services, ready } = useServices();
   const options = useMemo(() => vlanOptions(services), [services]);
   const [draft, setDraft] = useState<Draft>(EMPTY);
@@ -671,6 +676,11 @@ export function ConnForm({
         </div>
       ) : k === "pppoe" ? (
         <PppoeForm key={key} x={editing?.kind === "pppoe" ? editing.x : undefined} {...common} />
+      ) : !served(live, "ipoe") ? (
+        /* No buttons: there is nothing to save. */
+        <div className="min-h-0 flex-1 p-4 xl:overflow-auto">
+          <NotYet>{t("notYet.ipoe")}</NotYet>
+        </div>
       ) : (
         <IpoeForm
           key={key}

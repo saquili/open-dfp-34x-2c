@@ -542,6 +542,16 @@ export const pl: Dictionary = {
       "Urządzenie w DMZ dostaje z internetu cały ruch, którego nie złapało żadne przekierowanie, na wszystkich portach. Ustaw je tylko dla urządzenia, które samo się chroni.",
     dmzDisable: "Wyłącz DMZ",
   },
+  /* A tab or a form the stick has no backend for yet: the panel says so and saves nothing. */
+  notYet: {
+    title: "Jeszcze nie na wkładce",
+    nets: "Wkładka nie ma jeszcze własnych sieci lokalnych ani serwera DHCP: urządzenia za nią dostają adresy od tego, co stoi za wkładką. Pojawi się to z późniejszą wersją oprogramowania. Do tego czasu nic się tu nie zapisze.",
+    clients:
+      "Wkładka nie daje jeszcze adresów, więc nie ma własnych urządzeń do wylistowania ani stałych adresów do przypięcia. Pojawi się to z późniejszą wersją oprogramowania.",
+    nat: "Wkładka nie robi jeszcze NAT-u: nie ma przekierowań portów ani DMZ. NAT robi to, co stoi za wkładką. Pojawi się to z późniejszą wersją oprogramowania.",
+    fw: "Wkładka nie ma jeszcze własnej zapory. Ruch filtruje to, co stoi za wkładką. Pojawi się to z późniejszą wersją oprogramowania.",
+    ipoe: "Wkładka nie obsługuje jeszcze połączeń ze stałym adresem ani z DHCP, tylko PPPoE. Pojawi się to z późniejszą wersją oprogramowania.",
+  },
   internet: {
     soon: "wkrótce",
     mtuRfc: "MTU {mtu}, RFC 4638",
@@ -558,6 +568,8 @@ export const pl: Dictionary = {
     kindStick: "Jest routerem",
     kindStickHint:
       "Wkładka trzyma adres u siebie i jest routerem dla urządzeń za switchem: daje im prywatne adresy z DHCP i robi NAT w sprzęcie.",
+    kindStickNow:
+      "Wkładka trzyma adres na własny użytek. Nie daje jeszcze adresów urządzeniom za sobą i nie robi dla nich NAT.",
     tabPppoe: "PPPoE",
     tabStatic: "Static IP",
     tabDhcp: "DHCP",
@@ -664,6 +676,7 @@ export const pl: Dictionary = {
     goesDown: "do hosta, VLAN {vid}",
     goesDownUntagged: "do hosta, bez VLAN-u",
     staysRouter: "na wkładce, router z NAT",
+    staysOnStick: "na wkładce",
     details: "Szczegóły: {name}",
     factIface: "Interfejs",
     factMac: "Adres MAC",

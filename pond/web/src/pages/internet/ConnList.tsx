@@ -18,7 +18,7 @@ import { Dot } from "../../components/ui";
 import { useI18n } from "../../i18n";
 import { duration } from "../../lib/format";
 import type { Service } from "../../lib/omci";
-import { downVlan, gems, MAX_CONNS, sessions, type Tone } from "../../lib/state";
+import { downVlan, gems, MAX_CONNS, served, sessions, type Tone } from "../../lib/state";
 import { type Conn, serviceIn } from "./conns";
 import { connName, FAMILY, Mono, MonoList, Sub, type T } from "./shared";
 
@@ -168,6 +168,9 @@ function ConnCard({
   onEdit: () => void;
 }) {
   const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  /* Without networks of its own the stick routes nothing: the address is only its own. */
+  const stays = t(served(live, "lans") ? "internet.staysRouter" : "internet.staysOnStick");
   const session = useSessionChange();
   const ipoe = useIpoeChange();
   const change = c.kind === "pppoe" ? session : ipoe;
@@ -235,14 +238,14 @@ function ConnCard({
                 ? downVlan(c.x)
                   ? t("internet.goesDown", { vid: downVlan(c.x) })
                   : t("internet.goesDownUntagged")
-                : t("internet.staysRouter")}
+                : stays}
             </Sub>
           </>
         ) : (
           <>
             {v4 && <span>{c.x.ipv4 ? <Mono>{c.x.ipv4}</Mono> : "IPv4 –"}</span>}
             {v6 && <span>{c.x.ipv6 ? <Mono>{c.x.ipv6}</Mono> : "IPv6 –"}</span>}
-            <Sub>{t("internet.staysRouter")}</Sub>
+            <Sub>{stays}</Sub>
           </>
         )}
       </Cell>

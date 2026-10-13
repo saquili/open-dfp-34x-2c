@@ -48,6 +48,17 @@ const settings: Settings = structuredClone(LIVE.settings);
  */
 const SCENARIO = typeof process === "undefined" ? undefined : process.env.POND_MOCK_SCENARIO;
 
+/*
+ * POND_MOCK_SCENARIO=stick: the stick as its software serves it today, with
+ * none of the routing (no static or DHCP connections, networks, forwards or
+ * rules), and a person signed in already, for a look at what the panel says
+ * of what is not on the stick yet.
+ */
+if (SCENARIO === "stick") {
+  rootSecret = "scenario-only";
+  signedIn = { user: "root", must_change: false, idle_timeout_s: 900 };
+}
+
 /* The VID on the fibre of each service the stand-in OLT translates, as onu-apply names its interface. */
 const FIBRE: Record<string, string> = { "410": "100", "420": "200", "421": "300" };
 const wanOf = (vlan: string) => `wan${FIBRE[vlan] ?? vlan}`;

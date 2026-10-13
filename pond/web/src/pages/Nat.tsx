@@ -23,11 +23,11 @@ import type { ForwardInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
-import { Dot } from "../components/ui";
+import { Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
 import { ports, readPorts } from "../lib/ports";
 import { upTo, z } from "../lib/schemas";
-import { dmzs, forwards } from "../lib/state";
+import { dmzs, forwards, served } from "../lib/state";
 import { connName, Mono, Sub, type T } from "./internet/shared";
 import { Choices, type Device, type Net, netName, useDevices, usePlaces } from "./Lan";
 
@@ -502,7 +502,7 @@ function ForwardCard({
 type Open = { forward: ForwardInfo | null } | { dmz: string };
 
 /** The NAT tab: each connection's DMZ, the forwards, and their forms. */
-export function NatTab() {
+function Nat() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const nets = useNets();
@@ -592,4 +592,13 @@ export function NatTab() {
       </div>
     </div>
   );
+}
+
+/* The NAT tab, or that the stick does no NAT yet. */
+export function NatTab() {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  if (!live) return null;
+  if (!served(live, "forwards")) return <NotYet>{t("notYet.nat")}</NotYet>;
+  return <Nat />;
 }

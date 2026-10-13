@@ -22,7 +22,7 @@ import { Page, Tabs, useTab } from "../components/Page";
 import { SidePanel, withPanel } from "../components/SidePanel";
 import { Dot } from "../components/ui";
 import { useI18n } from "../i18n";
-import { type FibreView, fibre } from "../lib/state";
+import { type FibreView, fibre, served } from "../lib/state";
 import { FirewallTab, useFwCount } from "./Firewall";
 import { ConnForm } from "./internet/ConnForm";
 import { ConnList } from "./internet/ConnList";
@@ -125,9 +125,9 @@ export function Internet() {
   const lan = useLanCounts();
   const nat = useNatCount();
   const fw = useFwCount();
-  const count = (n: number) => (
-    <span className="font-normal tabular-nums text-base-content/60">{n}</span>
-  );
+  /* A tab the stick has no backend for yet shows no count. */
+  const count = (n: number, has = true) =>
+    has && <span className="font-normal tabular-nums text-base-content/60">{n}</span>;
   return (
     <Page
       title={t("internet.title")}
@@ -144,10 +144,18 @@ export function Internet() {
         <Tabs
           items={[
             { id: "wan", label: t("internet.tabWan"), badge: count(conns(live).length) },
-            { id: "lan", label: t("internet.tabLan"), badge: count(lan.nets) },
-            { id: "clients", label: t("internet.tabClients"), badge: count(lan.devices) },
-            { id: "nat", label: t("internet.tabNat"), badge: count(nat) },
-            { id: "fw", label: t("internet.tabFw"), badge: count(fw) },
+            {
+              id: "lan",
+              label: t("internet.tabLan"),
+              badge: count(lan.nets, served(live, "lans")),
+            },
+            {
+              id: "clients",
+              label: t("internet.tabClients"),
+              badge: count(lan.devices, served(live, "lans")),
+            },
+            { id: "nat", label: t("internet.tabNat"), badge: count(nat, served(live, "forwards")) },
+            { id: "fw", label: t("internet.tabFw"), badge: count(fw, served(live, "rules")) },
           ]}
           value={tab}
           onChange={(v) => {

@@ -219,6 +219,12 @@ wrong sign-in, 429 while sign-ins are stopped.
   of the settings, the SFP lane or the management pair, with when it goes
   back and the pair's new address (``trials``). pond reads no file of
   ``/run`` for it.
+  The parts of the settings that come with a stick that does the routing
+  (``ipoe``, the connections with a fixed address or from DHCP; ``lans``, the
+  networks behind the stick with their devices; ``forwards``, ``dmz``, the
+  NAT; ``rules`` and ``fw``, the firewall) are in the reply only from
+  software that has them. Without them the panel says "Not on the stick yet"
+  on those tabs and saves nothing there.
 * ``changes``: ``CONFIRM=1`` keeps every change on trial (``onu-change``),
   a new management pair only from a request that came to its new address,
   and ``REVERT=1`` takes them all back; pond then listens on the management

@@ -13,6 +13,7 @@ import {
   linkSpeed,
   memory,
   type SessionView,
+  served,
   session,
   sessions,
 } from "./state";
@@ -122,5 +123,25 @@ describe("the gateway the host is given", () => {
     if (!live.settings) throw new Error("settings");
     live.settings.pass = null;
     expect(hostLink(live).hostGateway).toBeNull();
+  });
+});
+
+describe("what the stick serves of the routing settings", () => {
+  it("takes a part the stick leaves out as not served", () => {
+    /* The recorded stick is one of before the routing: it serves none of the parts. */
+    for (const part of ["ipoe", "lans", "forwards", "rules"] as const)
+      expect(served(LIVE, part)).toBe(false);
+  });
+
+  it("takes a part the stick lists, even empty, as served", () => {
+    const live = { ...LIVE, settings: { ...LIVE.settings, lans: [], rules: [] } };
+    expect(served(live, "lans")).toBe(true);
+    expect(served(live, "rules")).toBe(true);
+    expect(served(live, "forwards")).toBe(false);
+    expect(served(live, "ipoe")).toBe(false);
+  });
+
+  it("serves nothing before the first reading", () => {
+    expect(served(undefined, "lans")).toBe(false);
   });
 });

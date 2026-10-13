@@ -24,14 +24,14 @@ import type { FwDefaults, RuleInfo } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { PanelCard, SidePanel, withPanel } from "../components/SidePanel";
-import { Badge, Dot } from "../components/ui";
+import { Badge, Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
 import { type End, lanOf, readEnd } from "../lib/fw";
 import { ip4, net4 } from "../lib/ipv4";
 import { ip6, prefix6 } from "../lib/ipv6";
 import { readPorts } from "../lib/ports";
 import { upTo, z } from "../lib/schemas";
-import { fwDefaults, rules } from "../lib/state";
+import { fwDefaults, rules, served } from "../lib/state";
 import { Sub, type T } from "./internet/shared";
 import { Choices, type Device, type Net, netName, useDevices, usePlaces } from "./Lan";
 
@@ -552,7 +552,7 @@ function RuleCard({
 type Open = { rule: RuleInfo | null } | { defaults: true };
 
 /** The firewall tab: the defaults, the rules in order, and their forms. */
-export function FirewallTab() {
+function Firewall() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const nets = useNets();
@@ -639,4 +639,13 @@ export function FirewallTab() {
       </div>
     </div>
   );
+}
+
+/* The firewall tab, or that the stick has no firewall yet. */
+export function FirewallTab() {
+  const { t } = useI18n();
+  const { data: live } = useLive();
+  if (!live) return null;
+  if (!served(live, "rules")) return <NotYet>{t("notYet.fw")}</NotYet>;
+  return <Firewall />;
 }

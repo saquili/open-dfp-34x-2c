@@ -4,6 +4,7 @@
 /* The few building blocks every page is made of. */
 
 import type { ReactNode } from "react";
+import { useI18n } from "../i18n";
 import type { Tone } from "../lib/state";
 
 const BADGE: Record<Tone, string> = {
@@ -299,6 +300,23 @@ export function Stat({
         {value}
       </div>
       {sub && <div className="truncate text-xs text-base-content/60">{sub}</div>}
+    </div>
+  );
+}
+
+/**
+ * Over a tab or a form the stick has no backend for yet: that it is not on
+ * the stick, and what it would be. Nothing in its place is saved.
+ */
+export function NotYet({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
+  return (
+    <div
+      role="status"
+      className="mt-4 rounded-box border border-dashed border-base-300 px-6 py-8 text-center"
+    >
+      <p className="text-base font-semibold">{t("notYet.title")}</p>
+      <p className="mx-auto mt-1 max-w-prose text-base-content/70">{children}</p>
     </div>
   );
 }

@@ -411,3 +411,15 @@ export function dmzs(live: Live | undefined) {
 export function fixed(live: Live | undefined) {
   return (live?.settings?.fixed ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
 }
+
+/** The parts of the settings that come with the software of a stick that does the routing. */
+export type Served = "ipoe" | "lans" | "forwards" | "rules";
+
+/**
+ * Whether the stick serves @part of its settings. A stick whose software has
+ * no backend for it yet leaves it out, and the panel then says so and saves
+ * nothing for it. Before the first reading nothing is served.
+ */
+export function served(live: Live | undefined, part: Served): boolean {
+  return live?.settings?.[part] != null;
+}

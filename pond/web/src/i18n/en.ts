@@ -541,6 +541,16 @@ export const en = {
       "The DMZ device gets everything from the internet that no forward caught, on every port. Set it only for a device that protects itself.",
     dmzDisable: "Turn the DMZ off",
   },
+  /* A tab or a form the stick has no backend for yet: the panel says so and saves nothing. */
+  notYet: {
+    title: "Not on the stick yet",
+    nets: "The stick has no local networks of its own yet, and no DHCP server: the devices behind it get their addresses from whatever stands behind it. This comes with a later software version. Nothing can be saved here until then.",
+    clients:
+      "The stick gives no addresses yet, so it has no devices of its own to list and fixes no addresses. This comes with a later software version.",
+    nat: "The stick does no NAT yet: no port forwards and no DMZ. Whatever stands behind it does the NAT. This comes with a later software version.",
+    fw: "The stick has no firewall of its own yet. Whatever stands behind it filters the traffic. This comes with a later software version.",
+    ipoe: "The stick holds no connection with a fixed address or from DHCP yet, only PPPoE. This comes with a later software version.",
+  },
   internet: {
     soon: "soon",
     mtuRfc: "MTU {mtu}, RFC 4638",
@@ -557,6 +567,8 @@ export const en = {
     kindStick: "Is the router",
     kindStickHint:
       "The stick keeps the address and is the router of the devices behind the switch: it gives them private addresses by DHCP and does NAT in its hardware.",
+    kindStickNow:
+      "The stick keeps the address for its own use. It does not give out addresses or do NAT for the devices behind it yet.",
     tabPppoe: "PPPoE",
     tabStatic: "Static IP",
     tabDhcp: "DHCP",
@@ -664,6 +676,7 @@ export const en = {
     goesDown: "to the host, VLAN {vid}",
     goesDownUntagged: "to the host, untagged",
     staysRouter: "on the stick, router with NAT",
+    staysOnStick: "on the stick",
     details: "Details: {name}",
     factIface: "Interface",
     factMac: "MAC address",
