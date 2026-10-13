@@ -11,6 +11,8 @@
 #include "hw/hw.h"
 #include "mcast/acl.h"
 #include "mcast/agent.h"
+#include "mcast/message.h"
+#include "mcast/proxy.h"
 #include "mcast/report.h"
 #include "me/bridge.h"
 #include "me/gem.h"
@@ -54,6 +56,7 @@ struct asker {
 	bool known;
 	bool tagged;
 	uint16_t vid;
+	uint8_t pcp;
 };
 
 /*
@@ -137,6 +140,14 @@ struct omci_mcast {
 	struct watch watches[OMCI_HW_MCAST_WATCH_MAX];
 	size_t n_watches;
 	bool watch_short;
+
+	/*
+	 * The proxy of IGMP function 1 and 2, and the function the profile
+	 * asked for and the one in force, last told.
+	 */
+	struct omci_mcast_proxy proxy;
+	int function_asked;
+	int function_in_force;
 };
 
 static struct omci_mcast g_mcast;
@@ -521,20 +532,27 @@ static void note_vlan(struct omci_mcast *m, const uint8_t *g, const uint8_t *s,
 	e->asker = *a;
 }
 
-/* The VLAN of the latest join of a group from a source, unknown when none was heard. */
+/*
+ * The VLAN of the latest join of a group from a source, or when none was
+ * from that source, of a join of the group from any: a bridge that snoops a
+ * source-specific join holds the group alone, and the join it came of named
+ * the source. Unknown when none was heard.
+ */
 static struct asker vlan_noted(const struct omci_mcast *m, const uint8_t *g,
 			       const uint8_t *s)
 {
-	struct asker a = { .known = false };
+	struct asker a = { .known = false }, any = { .known = false };
 
 	for (size_t k = 0; k < MAX_SEEN; k++) {
 		const struct seen *e = &m->seen[(m->seen_next + k) % MAX_SEEN];
 
-		if (e->asker.known && memcmp(e->group, g, ADDR) == 0 &&
-		    memcmp(e->source, s, ADDR) == 0)
+		if (!e->asker.known || memcmp(e->group, g, ADDR) != 0)
+			continue;
+		any = e->asker;
+		if (memcmp(e->source, s, ADDR) == 0)
 			a = e->asker;
 	}
-	return a;
+	return a.known ? a : any;
 }
 
 static void drop_entry(struct omci_mcast *m, size_t i)
@@ -688,16 +706,18 @@ static bool version_taken(const struct omci_mcast *m,
  * whether the message goes upstream: one that leaves a group or has a join
  * that was allowed; one whose joins were all refused only when the profile
  * forwards an unauthorized join request (G.988 9.3.27); none of a version
- * the profile does not take.
+ * the profile does not take. @unauthorized says that this is the only reason.
  */
-static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r)
+static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r,
+		  bool *unauthorized)
 {
-	const struct asker a = { .known = true,
-				 .tagged = r->tagged,
-				 .vid = r->vid };
+	const struct asker a = {
+		.known = true, .tagged = r->tagged, .vid = r->vid, .pcp = r->pcp
+	};
 	bool joined = false, refused = false, left = false;
 	uint16_t p;
 
+	*unauthorized = false;
 	if (!version_taken(m, r)) {
 		OMCI_INFO(
 			"mcast: a message of version %u, which the profile does not take, dropped",
@@ -735,10 +755,11 @@ static bool heard(struct omci_mcast *m, const struct omci_mcast_report *r)
 		(void)admit(m, rec->group, rec->source, r->client, &a, &gr);
 		joined = true;
 	}
-	return left || joined ||
-	       (refused && port_profile(m->mib, &p) &&
-		attr_be(m->mib, OMCI_MCAST_PROFILE, p,
-			OMCI_MCAST_PROFILE_UNAUTHORIZED, 1) != 0u);
+	*unauthorized = !left && !joined && refused &&
+			port_profile(m->mib, &p) &&
+			attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+				OMCI_MCAST_PROFILE_UNAUTHORIZED, 1) != 0u;
+	return left || joined || *unauthorized;
 }
 
 /* The outer tag of a frame: its TPID, or 0 for an untagged frame, and its TCI. */
@@ -879,9 +900,12 @@ static bool gem_for(const uint8_t *f, uint16_t *out)
 
 /*
  * Send a message upstream, within the profile's upstream IGMP rate, in
- * messages a second (G.988 9.3.27): those over it are dropped.
+ * messages a second (G.988 9.3.27): those over it are dropped. Return:
+ * whether it was sent. The proxy, which tries again, makes no noise of a
+ * message that did not go (@warn).
  */
-static void forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f)
+static bool forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f,
+		    bool warn)
 {
 	uint8_t out[OMCI_HW_MCAST_FRAME_MAX + 8u];
 	uint32_t rate = 0;
@@ -892,7 +916,7 @@ static void forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f)
 	if (len == 0u) {
 		OMCI_DEBUG(
 			"mcast: the VLAN rules discard a message in a VLAN they do not take");
-		return;
+		return false;
 	}
 	if (port_profile(m->mib, &p))
 		rate = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
@@ -902,17 +926,23 @@ static void forward(struct omci_mcast *m, const struct omci_hw_mcast_frame *f)
 		m->rate_used = 0;
 	}
 	if (rate != 0u && m->rate_used >= rate)
-		return;
+		return false;
 	m->rate_used++;
 
 	if (!gem_for(out, &port)) {
-		OMCI_WARN(
-			"mcast: no GEM port carries the message upstream; dropped");
-		return;
+		if (warn)
+			OMCI_WARN(
+				"mcast: no GEM port carries the message upstream; dropped");
+		return false;
 	}
-	if (omci_hw()->mcast_send(port, out, len) != OMCI_OK)
-		OMCI_WARN("mcast: a message to GEM port %u could not be sent",
-			  (unsigned int)port);
+	if (omci_hw()->mcast_send(port, out, len) != OMCI_OK) {
+		if (warn)
+			OMCI_WARN(
+				"mcast: a message to GEM port %u could not be sent",
+				(unsigned int)port);
+		return false;
+	}
+	return true;
 }
 
 /* End a group and source: out of the bridge and the active list. */
@@ -938,16 +968,17 @@ static void end_channel(struct omci_mcast *m, const struct active *x,
 /*
  * Look at the groups of the bridge: one that the agent does not know is
  * judged, and removed unless allowed; an active group the bridge no longer
- * has is gone; a static group that went missing comes back.
+ * has is gone; a static group that went missing comes back. Return: false
+ * when the bridge's groups could not be read.
  */
-static void look(struct omci_mcast *m)
+static bool look(struct omci_mcast *m)
 {
 	struct omci_hw_mcast_group g[OMCI_HW_MCAST_MAX_GROUPS];
 	static const uint8_t none[ADDR];
 	size_t n = 0;
 
 	if (omci_hw()->mcast_groups(g, ARRAY_SIZE(g), &n) != OMCI_OK)
-		return;
+		return false;
 
 	for (size_t i = 0; i < m->n_active; i++)
 		m->active[i].held = false;
@@ -1004,6 +1035,7 @@ static void look(struct omci_mcast *m)
 		    omci_hw()->mcast_group_add(&m->statics[k]) != OMCI_OK)
 			OMCI_WARN("mcast: a static group could not be added");
 	}
+	return true;
 }
 
 static bool port_profile(const struct omci_mib *mib, uint16_t *out)
@@ -1429,6 +1461,178 @@ static void watch(struct omci_mcast *m)
 	}
 }
 
+/*
+ * The proxy of IGMP function 1 and 2 (proxy.h). It takes the place of the
+ * subscribers towards the OLT, which needs the messages of the subscribers
+ * held back for the agent, a way to send, and an Ethernet address to send
+ * from: where it has not, the profile's function is carried out as 0.
+ */
+static const char *const g_function[] = {
+	"transparent snooping",
+	"snooping with proxy reporting",
+	"IGMP proxy",
+};
+
+static void proxy_params(struct omci_mcast *m,
+			 struct omci_mcast_proxy_params *pr)
+{
+	const struct omci_hw_ops *hw = omci_hw();
+	unsigned int asked = OMCI_MCAST_FUNCTION_SNOOPING;
+	uint16_t p;
+
+	memset(pr, 0, sizeof(*pr));
+	if (port_profile(m->mib, &p)) {
+		const uint32_t querier = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+						 OMCI_MCAST_PROFILE_QUERIER, 4);
+
+		asked = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+				OMCI_MCAST_PROFILE_IGMP_FUNCTION, 1);
+		if (asked > OMCI_MCAST_FUNCTION_PROXY)
+			asked = OMCI_MCAST_FUNCTION_PROXY;
+		pr->version = (uint8_t)attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					       OMCI_MCAST_PROFILE_IGMP_VERSION,
+					       1);
+		for (unsigned int i = 0; i < 4u; i++)
+			pr->querier[i] = (uint8_t)(querier >> (24u - 8u * i));
+		pr->robustness = (uint8_t)attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+						  OMCI_MCAST_PROFILE_ROBUSTNESS,
+						  1);
+		pr->query_interval = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					     OMCI_MCAST_PROFILE_QUERY_INTERVAL,
+					     4);
+		pr->query_response = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					     OMCI_MCAST_PROFILE_QUERY_RESPONSE,
+					     4);
+		pr->last_member = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					  OMCI_MCAST_PROFILE_LAST_MEMBER, 4);
+		pr->fast_leave = attr_be(m->mib, OMCI_MCAST_PROFILE, p,
+					 OMCI_MCAST_PROFILE_IMMEDIATE_LEAVE,
+					 1) != 0u;
+	}
+	pr->function = (uint8_t)asked;
+	if (asked != OMCI_MCAST_FUNCTION_SNOOPING &&
+	    !(m->forwarding && hw->mcast_send != NULL && hw->mcast_mac != NULL))
+		pr->function = OMCI_MCAST_FUNCTION_SNOOPING;
+
+	if ((int)asked == m->function_asked &&
+	    (int)pr->function == m->function_in_force)
+		return;
+	m->function_asked = (int)asked;
+	m->function_in_force = pr->function;
+	if (pr->function == asked)
+		OMCI_INFO("mcast: IGMP function %u: %s", asked,
+			  g_function[asked]);
+	else
+		OMCI_INFO(
+			"mcast: IGMP function %u (%s) cannot be done here: the messages of the subscribers are not held for the agent; %s instead",
+			asked, g_function[asked], g_function[pr->function]);
+}
+
+static bool proxy_up(void *ctx, const uint8_t *frame, size_t len,
+		     const struct omci_mcast_tag *tag)
+{
+	struct omci_hw_mcast_frame f = { .len = (uint16_t)len,
+					 .tagged = tag->tagged,
+					 .tci = (uint16_t)(tag->pcp << 13 |
+							   tag->vid) };
+
+	memcpy(f.data, frame, len < sizeof(f.data) ? len : sizeof(f.data));
+	return forward(ctx, &f, false);
+}
+
+static bool proxy_down(void *ctx, const uint8_t *frame, size_t len,
+		       const struct omci_mcast_tag *tag)
+{
+	uint8_t out[OMCI_HW_MCAST_FRAME_MAX + 4u];
+
+	(void)ctx;
+	memcpy(out, frame, len);
+	if (tag->tagged)
+		len = push_tag(out, len, 0x8100u,
+			       (unsigned int)tag->pcp << 13 | tag->vid);
+	return omci_hw()->mcast_send(OMCI_HW_MCAST_UNI, out, len) == OMCI_OK;
+}
+
+/* Nobody on the subscriber side answered for a group: end it, whatever its sources. */
+static void proxy_drop(void *ctx, const uint8_t group[static ADDR])
+{
+	struct omci_mcast *m = ctx;
+	bool again;
+
+	do {
+		again = false;
+		for (size_t i = 0; i < m->n_active && !again; i++) {
+			if (memcmp(m->active[i].group, group, ADDR) != 0)
+				continue;
+			end_channel(
+				m, &m->active[i],
+				"nobody answered the query after the leave");
+			again = true;
+		}
+	} while (again);
+}
+
+static bool proxy_mac(void *ctx, uint8_t mac[static OMCI_MCAST_MAC_LEN])
+{
+	(void)ctx;
+	return omci_hw()->mcast_mac(mac) == OMCI_OK;
+}
+
+/*
+ * A message of the subscriber side was taken in: a join ends the check of
+ * the group's leave, and a leave starts one, whoever else the agent knows to
+ * hold the group: the bridge shortens the group's timer at a leave and would
+ * let it go before long, without a query, if the others did not answer one.
+ */
+static void proxy_noted(struct omci_mcast *m,
+			const struct omci_mcast_proxy_params *pr,
+			const struct omci_mcast_report *r)
+{
+	for (uint8_t i = 0; i < r->n; i++) {
+		const struct omci_mcast_record *rec = &r->rec[i];
+		const struct omci_mcast_tag tag = { .tagged = r->tagged,
+						    .vid = r->vid,
+						    .pcp = r->pcp };
+		bool active = false;
+
+		if (rec->join) {
+			omci_mcast_proxy_joined(&m->proxy, rec->group);
+			continue;
+		}
+		for (size_t k = 0; k < m->n_active; k++)
+			active = active || memcmp(m->active[k].group,
+						  rec->group, ADDR) == 0;
+		if (active)
+			omci_mcast_proxy_left(&m->proxy, pr, rec->group, &tag,
+					      m->now);
+	}
+}
+
+/* Run the proxy over the groups the bridge holds, after the agent has looked at them. */
+static void proxy_run(struct omci_mcast *m,
+		      const struct omci_mcast_proxy_params *pr)
+{
+	const struct omci_mcast_proxy_ops ops = {
+		.up = proxy_up,
+		.down = proxy_down,
+		.drop = proxy_drop,
+		.mac = proxy_mac,
+		.ctx = m,
+	};
+	struct omci_mcast_chan held[MAX_ACTIVE];
+
+	for (size_t i = 0; i < m->n_active; i++) {
+		const struct asker *a = &m->active[i].asker;
+
+		memcpy(held[i].group, m->active[i].group, ADDR);
+		memcpy(held[i].source, m->active[i].source, ADDR);
+		held[i].tag.tagged = a->known && a->tagged;
+		held[i].tag.vid = held[i].tag.tagged ? a->vid : 0u;
+		held[i].tag.pcp = held[i].tag.tagged ? a->pcp : 0u;
+	}
+	omci_mcast_proxy_run(&m->proxy, pr, &ops, held, m->n_active, m->now);
+}
+
 static bool ready(struct omci_mcast *m, struct omci_mib *mib, uint64_t now_sec)
 {
 	if (m == NULL || omci_hw()->mcast_port == NULL)
@@ -1441,25 +1645,49 @@ static bool ready(struct omci_mcast *m, struct omci_mib *mib, uint64_t now_sec)
 void omci_mcast_service(struct omci_mcast *m, struct omci_mib *mib,
 			uint64_t now_sec)
 {
+	struct omci_mcast_proxy_params pr;
 	struct omci_hw_mcast_frame f;
 	struct omci_mcast_report r;
 
 	if (!ready(m, mib, now_sec))
 		return;
+	proxy_params(m, &pr);
 	/*
 	 * A message the switch trapped goes upstream only if the agent sends
 	 * it: a query from the subscriber side, or what is not taken apart,
-	 * never does.
+	 * never does. Under a proxy it is the proxy that tells the OLT, and a
+	 * message goes upstream as it came only when it asks for a group the
+	 * policy refuses and the profile forwards such requests. The OLT's
+	 * queries are for the proxy to answer.
 	 */
 	for (unsigned int k = 0;
 	     k < FRAMES_PER_SERVICE && omci_hw()->mcast_frame(&f) == OMCI_OK;
-	     k++)
-		if (omci_mcast_report_parse(f.data, f.len, f.tci, f.tagged,
-					    &r) &&
-		    r.kind != OMCI_MCAST_KIND_OTHER && heard(m, &r) &&
-		    m->forwarding)
-			forward(m, &f);
-	look(m);
+	     k++) {
+		bool unauthorized;
+
+		if (!omci_mcast_report_parse(f.data, f.len, f.tci, f.tagged,
+					     &r))
+			continue;
+		if (f.from_pon) {
+			if (r.kind == OMCI_MCAST_KIND_QUERY &&
+			    pr.function != OMCI_MCAST_FUNCTION_SNOOPING)
+				omci_mcast_proxy_query(&m->proxy, &r, m->now);
+			continue;
+		}
+		if (r.kind == OMCI_MCAST_KIND_OTHER ||
+		    r.kind == OMCI_MCAST_KIND_QUERY)
+			continue;
+		if (!heard(m, &r, &unauthorized))
+			continue;
+		if (pr.function != OMCI_MCAST_FUNCTION_SNOOPING)
+			proxy_noted(m, &pr, &r);
+		if (m->forwarding &&
+		    (pr.function == OMCI_MCAST_FUNCTION_SNOOPING ||
+		     unauthorized))
+			(void)forward(m, &f, true);
+	}
+	if (look(m))
+		proxy_run(m, &pr);
 	report_bandwidth(m);
 }
 
@@ -1512,6 +1740,7 @@ enum omci_status omci_mcast_init(struct omci_mcast **out)
 	if (g_mcast_taken)
 		return OMCI_ERR_BUSY;
 	memset(&g_mcast, 0, sizeof(g_mcast));
+	omci_mcast_proxy_reset(&g_mcast.proxy);
 	g_mcast.upto = SIZE_MAX;
 	g_mcast_taken = true;
 	*out = &g_mcast;

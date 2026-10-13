@@ -1291,6 +1291,391 @@ static void test_a_backend_that_cannot_send_leaves_the_messages_alone(void)
 	down();
 }
 
+/* ---- The proxy (IGMP function 1 and 2) ------------------------------ */
+
+/* The Ethernet address the host backend gives the ONU. */
+static const uint8_t PROXY_MAC[6] = { 0x00, 0x00, 0x5e, 0x00, 0x53, 0x01 };
+
+/* The subscriber side and the network side, as for the messages upstream, with the function. */
+static void proxy_side(unsigned int function)
+{
+	up();
+	onu();
+	side(true);
+	network(0);
+	acl(PROFILE, 7, 1, 0, IP4(239, 1, 1, 0), IP4(239, 1, 1, 255), 0, 0);
+	set_n(309, PROFILE, 2, function, 1);
+}
+
+/* A client leaves with IGMPv2; the bridge drops the group at once when @drops. */
+static void leaves(uint32_t client, uint32_t group, bool drops)
+{
+	uint8_t f[160];
+
+	send(f, igmp(f, -1, 0x17u, client, group));
+	if (drops)
+		snoop(group, 0, false);
+	omci_mcast_service(g_m, g_mib, g_now);
+}
+
+/* A query from the OLT's side: general for a zero group, of IGMP version 1 in form. */
+static void olt_asks(uint32_t group)
+{
+	uint8_t f[160];
+
+	omci_hw_mcast_receive_pon(f,
+				  igmp(f, -1, 0x11u, IP4(10, 0, 0, 1), group));
+	omci_mcast_service(g_m, g_mib, g_now);
+}
+
+/* The message sent @back from the last, taken apart; its GEM port. */
+static struct omci_mcast_report sent_report(size_t back, uint16_t *port)
+{
+	struct omci_mcast_report r;
+	uint8_t f[600];
+	const size_t n = sent(back, port, f);
+
+	CHECK(n != 0u);
+	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
+	return r;
+}
+
+static void test_function_1_speaks_for_the_subscribers(void)
+{
+	struct omci_mcast_report r;
+	uint8_t out[600];
+	uint16_t gem;
+	size_t n;
+
+	proxy_side(1);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* A group of another subscriber, held all along. */
+	join(IP4(10, 0, 0, 9), IP4(239, 1, 1, 9), -1);
+	CHECK_EQ(sent_count(), 1u);
+	(void)sent(0, &gem, out);
+
+	/* The first subscriber of a group: one report of the ONU's own. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK_EQ(sent_count(), 2u);
+	n = sent(0, &gem, out);
+	CHECK_EQ(gem, 256u);
+	CHECK_MEM(&out[6], PROXY_MAC, 6);
+	CHECK(omci_mcast_report_parse(out, n, 0, false, &r));
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_REPORT);
+	CHECK_EQ(r.version, 3u);
+	CHECK(r.n == 1u && r.rec[0].join);
+	CHECK_EQ(be32_at(&r.rec[0].group[12]), IP4(239, 1, 1, 5));
+	CHECK_EQ(be32_at(&r.client[12]), 0u);
+
+	/* Another subscriber and a repeated report tell the OLT nothing. */
+	join(IP4(10, 0, 0, 3), IP4(239, 1, 1, 5), -1);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK_EQ(sent_count(), 2u);
+
+	/*
+	 * One leaves while another holds the group: nothing to tell, but the
+	 * subscribers are asked, for the other to answer.
+	 */
+	leaves(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), false);
+	CHECK_EQ(sent_count(), 3u);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, OMCI_HW_MCAST_UNI);
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	join(IP4(10, 0, 0, 3), IP4(239, 1, 1, 5), -1);
+	for (unsigned int i = 0; i < 4u; i++) {
+		g_now++;
+		omci_mcast_service(g_m, g_mib, g_now);
+	}
+	CHECK_EQ(sent_count(), 3u);
+	CHECK(held(IP4(239, 1, 1, 5)));
+
+	/* The last leaves: the subscribers are asked, twice, a second apart. */
+	leaves(IP4(10, 0, 0, 3), IP4(239, 1, 1, 5), false);
+	CHECK_EQ(sent_count(), 4u);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, OMCI_HW_MCAST_UNI);
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	CHECK_EQ(be32_at(&r.query_group[12]), IP4(239, 1, 1, 5));
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 4u);
+	g_now++;
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 5u);
+	CHECK(held(IP4(239, 1, 1, 5)));
+
+	/* Nobody answered: the group goes from the bridge, and then the OLT hears of it. */
+	g_now++;
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK(!held(IP4(239, 1, 1, 5)));
+	CHECK_EQ(sent_count(), 5u);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 6u);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, 256u);
+	CHECK(r.n == 1u && !r.rec[0].join);
+	CHECK_EQ(listed(PORT, false), 1u);
+
+	down();
+}
+
+static void test_a_join_while_a_leave_is_checked_ends_the_check(void)
+{
+	proxy_side(1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 6), -1);
+	CHECK_EQ(sent_count(), 1u);
+	leaves(IP4(10, 0, 0, 2), IP4(239, 1, 1, 6), false);
+	CHECK_EQ(sent_count(), 2u);
+	join(IP4(10, 0, 0, 4), IP4(239, 1, 1, 6), -1);
+	for (unsigned int i = 0; i < 4u; i++) {
+		g_now++;
+		omci_mcast_service(g_m, g_mib, g_now);
+	}
+	/* The OLT hears nothing more, and the subscribers are asked no more. */
+	CHECK_EQ(sent_count(), 2u);
+	CHECK(held(IP4(239, 1, 1, 6)));
+	down();
+}
+
+static void test_the_proxy_speaks_in_the_vlan_of_the_join(void)
+{
+	struct omci_mcast_report r;
+	uint16_t gem;
+	uint8_t f[160];
+
+	proxy_side(2);
+	set_n(309, PROFILE, 12, 60, 4);
+	omci_mcast_program(g_m, g_mib, g_now);
+	/* Untagged where the subscribers send no tag. */
+	r = sent_report(1, &gem);
+	CHECK(!r.tagged);
+	g_pcp = 3;
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), 410);
+	/* The report goes up with the tag of the join, VID and priority. */
+	r = sent_report(0, &gem);
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_REPORT);
+	CHECK(r.tagged && r.vid == 410u && r.pcp == 3u);
+
+	/* The query that checks its leave goes to the subscribers in the same tag. */
+	send(f, igmp(f, 410, 0x17u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5)));
+	omci_mcast_service(g_m, g_mib, g_now);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, OMCI_HW_MCAST_UNI);
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	CHECK(r.tagged && r.vid == 410u && r.pcp == 3u);
+
+	/* A join again, and the general queries then go in that tag. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), 410);
+	g_now += 60;
+	omci_mcast_service(g_m, g_mib, g_now);
+	r = sent_report(1, &gem);
+	CHECK_EQ(gem, OMCI_HW_MCAST_UNI);
+	CHECK(r.kind == OMCI_MCAST_KIND_QUERY && r.tagged && r.vid == 410u);
+	g_pcp = 5;
+	down();
+}
+
+static void test_a_source_specific_join_is_told_in_its_vlan(void)
+{
+	struct omci_mcast_report r;
+	uint16_t gem;
+	uint8_t f[160];
+
+	proxy_side(1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	/* The bridge holds the group alone, as a bridge does that snoops a join with a source. */
+	g_pcp = 4;
+	send(f, igmp3(f, 410, IP4(10, 0, 0, 2), 1u, IP4(239, 1, 1, 20), 1,
+		      IP4(10, 1, 1, 1)));
+	snoop(IP4(239, 1, 1, 20), 0, true);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 1u);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, 256u);
+	CHECK(r.tagged && r.vid == 410u && r.pcp == 4u);
+	g_pcp = 5;
+	down();
+}
+
+static void test_a_leave_with_fast_leave_is_told_at_once(void)
+{
+	struct omci_mcast_report r;
+	uint16_t gem;
+
+	proxy_side(1);
+	set_n(309, PROFILE, 3, 1, 1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK_EQ(sent_count(), 1u);
+	leaves(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), true);
+	/* The bridge dropped the group, so the OLT hears of the leave at once, and no query goes. */
+	CHECK_EQ(sent_count(), 2u);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, 256u);
+	CHECK(r.n == 1u && !r.rec[0].join);
+	down();
+}
+
+static void test_the_proxy_answers_the_olts_queries(void)
+{
+	struct omci_mcast_report r;
+	uint16_t gem;
+	unsigned int waited = 0;
+
+	proxy_side(1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	join(IP4(10, 0, 0, 3), IP4(239, 1, 1, 6), -1);
+	CHECK_EQ(sent_count(), 2u);
+
+	/* A general query is answered with the state of the groups, within its time. */
+	olt_asks(0);
+	while (sent_count() == 2u && waited < 11u) {
+		g_now++;
+		waited++;
+		omci_mcast_service(g_m, g_mib, g_now);
+	}
+	CHECK(waited < 10u);
+	CHECK_EQ(sent_count(), 3u);
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, 256u);
+	CHECK_EQ(r.n, 2u);
+	CHECK(r.rec[0].join && r.rec[1].join);
+
+	/* A query of a group is answered at once if it is held, and not if it is not. */
+	olt_asks(IP4(239, 1, 1, 6));
+	CHECK_EQ(sent_count(), 4u);
+	r = sent_report(0, &gem);
+	CHECK(r.n == 1u && r.rec[0].join);
+	CHECK_EQ(be32_at(&r.rec[0].group[12]), IP4(239, 1, 1, 6));
+	olt_asks(IP4(239, 1, 1, 77));
+	CHECK_EQ(sent_count(), 4u);
+
+	/* Transparent snooping leaves the OLT's queries alone. */
+	set_n(309, PROFILE, 2, 0, 1);
+	omci_mcast_service(g_m, g_mib, g_now);
+	olt_asks(IP4(239, 1, 1, 6));
+	olt_asks(0);
+	g_now += 20;
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 4u);
+	down();
+}
+
+static void test_function_2_is_the_querier_of_the_subscribers(void)
+{
+	struct omci_mcast_report r;
+	uint16_t gem;
+	uint8_t out[600];
+
+	proxy_side(2);
+	set_n(309, PROFILE, 11, IP4(10, 0, 0, 77), 4);
+	set_n(309, PROFILE, 12, 60, 4);
+	set_n(309, PROFILE, 13, 50, 4);
+	omci_mcast_program(g_m, g_mib, g_now);
+
+	/* Queries of both protocols at once, to the subscriber side. */
+	CHECK_EQ(sent_count(), 2u);
+	r = sent_report(1, &gem);
+	CHECK_EQ(gem, OMCI_HW_MCAST_UNI);
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	CHECK_EQ(r.version, 3u);
+	CHECK_EQ(r.max_resp, 50u);
+	CHECK_EQ(be32_at(&r.client[12]), IP4(10, 0, 0, 77));
+	r = sent_report(0, &gem);
+	CHECK_EQ(gem, OMCI_HW_MCAST_UNI);
+	CHECK_EQ(r.version, 17u);
+
+	/* And again every interval of the profile. */
+	g_now += 59;
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 2u);
+	g_now++;
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 4u);
+
+	/* A subscriber's own query is not for the proxy: nothing comes of it. */
+	{
+		uint8_t f[160];
+
+		send(f, igmp(f, -1, 0x11u, IP4(10, 0, 0, 5), 0));
+		omci_mcast_service(g_m, g_mib, g_now);
+		CHECK_EQ(sent_count(), 4u);
+		(void)sent(0, &gem, out);
+	}
+	down();
+}
+
+static void test_a_proxy_that_cannot_be_leaves_the_messages_as_they_are(void)
+{
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	uint8_t f[160], out[600];
+	uint16_t gem;
+	size_t n;
+
+	/* No Ethernet address to send from. */
+	proxy_side(2);
+	ops.mcast_mac = NULL;
+	omci_hw_ops_set(&ops);
+	omci_mcast_program(g_m, g_mib, g_now);
+	n = igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 1, 1, 5));
+	send(f, n);
+	snoop(IP4(239, 1, 1, 5), 0, true);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 1u);
+	CHECK_EQ(sent(0, &gem, out), n);
+	CHECK_MEM(out, f, n);
+	CHECK_EQ(gem, 256u);
+	omci_hw_ops_set(NULL);
+	down();
+
+	/* No policy, so the switch forwards the messages itself. */
+	up();
+	onu();
+	side(false);
+	network(0);
+	set_n(309, PROFILE, 2, 1, 1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK_EQ(sent_count(), 0u);
+	down();
+
+	/* A function that is not one is taken for the highest. */
+	proxy_side(1);
+	set_n(309, PROFILE, 2, 3, 1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 2u);
+	down();
+}
+
+static void
+test_a_refused_join_goes_up_as_it_came_where_the_profile_forwards_it(void)
+{
+	uint8_t f[160], out[600];
+	uint16_t gem;
+	size_t n;
+
+	proxy_side(1);
+	set_n(309, PROFILE, 15, 1, 1);
+	omci_mcast_program(g_m, g_mib, g_now);
+	n = igmp(f, -1, 0x16u, IP4(10, 0, 0, 2), IP4(239, 2, 2, 2));
+	send(f, n);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 1u);
+	CHECK_EQ(sent(0, &gem, out), n);
+	CHECK_MEM(out, f, n);
+	/* An allowed one is told by the ONU itself, and the refused group is not held. */
+	join(IP4(10, 0, 0, 2), IP4(239, 1, 1, 5), -1);
+	CHECK_EQ(sent_count(), 2u);
+	CHECK(sent(0, &gem, out) != n);
+	set_n(309, PROFILE, 15, 0, 1);
+	send(f, n);
+	omci_mcast_service(g_m, g_mib, g_now);
+	CHECK_EQ(sent_count(), 2u);
+	down();
+}
+
 static void test_the_rate_of_messages_upstream(void)
 {
 	uint8_t f[256];
@@ -1958,6 +2343,15 @@ int main(void)
 	RUN(test_what_the_bridge_refuses);
 	RUN(test_messages_go_upstream_under_a_policy);
 	RUN(test_a_backend_that_cannot_send_leaves_the_messages_alone);
+	RUN(test_function_1_speaks_for_the_subscribers);
+	RUN(test_a_join_while_a_leave_is_checked_ends_the_check);
+	RUN(test_the_proxy_speaks_in_the_vlan_of_the_join);
+	RUN(test_a_source_specific_join_is_told_in_its_vlan);
+	RUN(test_a_leave_with_fast_leave_is_told_at_once);
+	RUN(test_the_proxy_answers_the_olts_queries);
+	RUN(test_function_2_is_the_querier_of_the_subscribers);
+	RUN(test_a_proxy_that_cannot_be_leaves_the_messages_as_they_are);
+	RUN(test_a_refused_join_goes_up_as_it_came_where_the_profile_forwards_it);
 	RUN(test_the_rate_of_messages_upstream);
 	RUN(test_the_upstream_igmp_tag_control);
 	RUN(test_the_vlan_rules_tag_the_messages);
