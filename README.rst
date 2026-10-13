@@ -29,6 +29,9 @@ the firmware it ships with: a Linux kernel with drivers for the stick's
 Realtek RTL9601D chip, an OMCI daemon that talks to the OLT, and a small set
 of programs that set the stick up, update it and show its state.
 
+The DFP-34X-2C2 and the DFP-34X-2C3 are this same stick; only the optical
+connector differs, UPC or APC. One image is for both.
+
 ::
 
      your router                     the stick                     the operator
@@ -139,10 +142,6 @@ recorded (`docs/testing/ <docs/testing/README.rst>`__). The latest, of
    * - Install through the shipped firmware's web page
      - ⚪ Build machine
      - No install on a real stick recorded yet
-   * - The DFP-34X-2C2
-     - ⚪ Not tried
-     - It differs from the DFP-34X-2C3 only in its optical connector, APC or
-       UPC, so the same image is for both
 
 ..
 
@@ -159,9 +158,8 @@ Not done yet
 ------------
 
 * **No release.** You build the images yourself (`Building`_).
-* A unit of either model may carry another laser-driver IC. The optics
-  support is written for the one of the bench's unit, and no other has been
-  tried.
+* A stick may carry another laser-driver IC. The optics support is written
+  for the one of the bench's unit, and no other has been tried.
 * If the store of the settings cannot be read, root's password is not known:
   the panel refuses every sign-in, ssh takes keys only, and only the serial
   console, inside the stick, takes ``admin``.
@@ -175,13 +173,11 @@ Not done yet
 Other sticks
 ============
 
-Only the ODI DFP-34X-2C3 has run this system so far. The DFP-34X-2C2 differs
-from it only in its optical connector, so the same image is for both, but it
-has not been tried. Other sticks built on the same chip are not supported yet,
-but
-most of this repository is not tied to one stick: the chip's kernel support
-and drivers, omcid, the stick's programs, the panel and the build are shared.
-A new stick needs mainly its own board files:
+Only the ODI DFP-34X-2C has run this system so far. Other sticks built on the
+same chip are not supported yet, but most of this repository is not tied to
+one stick: the chip's kernel support and drivers, omcid, the stick's programs,
+the panel and the build are shared. A new stick needs mainly its own board
+files:
 
 * a device tree on top of the chip's, `rtl9602c.dtsi
   <linux/arch/mips/boot/dts/realtek/rtl9602c.dtsi>`__, with its memory and
