@@ -30,7 +30,10 @@ enum {
 	IGMP_V2_REPORT = 0x16,
 	IGMP_V2_LEAVE = 0x17,
 	IGMP_V3_REPORT = 0x22,
+	IGMP_QUERY = 0x11,
+	IGMP_RESP = 1,
 	IGMP_GROUP = 4,
+	IGMP_V3_QUERY_MIN = 12,
 
 	/* IPv6, its hop-by-hop options, and MLD. */
 	IP6_LEN = 40,
@@ -39,10 +42,14 @@ enum {
 	IP6_SRC = 8,
 	PROTO_HOPOPTS = 0,
 	PROTO_ICMPV6 = 58,
+	MLD_QUERY = 130,
 	MLD_V1_REPORT = 131,
 	MLD_V1_DONE = 132,
 	MLD_V2_REPORT = 143,
+	MLD_RESP = 4,
 	MLD_GROUP = 8,
+	MLD_V1_QUERY_LEN = 24,
+	MLD_V2_QUERY_MIN = 28,
 
 	/* The records of a version 3 or MLDv2 report (RFC 3376 4.2, 3810 5.2). */
 	REPORT_RECORDS = 6,
@@ -136,6 +143,21 @@ static bool records(struct omci_mcast_report *r, const uint8_t *p,
 	return true;
 }
 
+/*
+ * The maximum response code of an IGMPv3 query (RFC 3376 4.1.1) or an MLDv2
+ * one (RFC 3810 5.1.3): a code under @threshold is the value, any other a
+ * floating point number of a mantissa with the implicit bit @implicit above
+ * it, shifted by an exponent of three bits at @exp_shift, plus three.
+ */
+static uint32_t coded(uint32_t code, uint32_t threshold, uint32_t implicit,
+		      unsigned int exp_shift)
+{
+	if (code < threshold)
+		return code;
+	return ((code & (implicit - 1u)) | implicit)
+	       << (((code >> exp_shift) & 7u) + 3u);
+}
+
 static bool igmp(const uint8_t *ip, size_t len, struct omci_mcast_report *r)
 {
 	size_t hl, total;
@@ -167,6 +189,19 @@ static bool igmp(const uint8_t *ip, size_t len, struct omci_mcast_report *r)
 		r->kind = OMCI_MCAST_KIND_REPORT;
 		r->version = 3u;
 		return records(r, m, &ip[total], 4u);
+	case IGMP_QUERY:
+		r->kind = OMCI_MCAST_KIND_QUERY;
+		if (total - hl >= IGMP_V3_QUERY_MIN) {
+			r->version = 3u;
+			r->max_resp = coded(m[IGMP_RESP], 128u, 16u, 4u);
+		} else {
+			r->version = m[IGMP_RESP] == 0u ? 1u : 2u;
+			r->max_resp = m[IGMP_RESP] == 0u ? 100u : m[IGMP_RESP];
+		}
+		omci_mcast_addr_set_v4(r->query_group, &m[IGMP_GROUP]);
+		if (omci_be32(&m[IGMP_GROUP]) == 0u)
+			memset(r->query_group, 0, sizeof(r->query_group));
+		return true;
 	default:
 		return true;
 	}
@@ -208,6 +243,18 @@ static bool mld(const uint8_t *ip, size_t len, struct omci_mcast_report *r)
 		r->kind = OMCI_MCAST_KIND_REPORT;
 		r->version = 17u;
 		return records(r, p, end, OMCI_MCAST_ADDR_LEN);
+	case MLD_QUERY:
+		if ((size_t)(end - p) < MLD_V1_QUERY_LEN)
+			return false;
+		r->kind = OMCI_MCAST_KIND_QUERY;
+		r->version = (size_t)(end - p) >= MLD_V2_QUERY_MIN ? 17u : 16u;
+		r->max_resp = omci_be16(&p[MLD_RESP]);
+		if (r->version == 17u)
+			r->max_resp = coded(r->max_resp, 32768u, 4096u, 12u);
+		/* Milliseconds, in tenths of a second. */
+		r->max_resp = (r->max_resp + 99u) / 100u;
+		memcpy(r->query_group, &p[MLD_GROUP], OMCI_MCAST_ADDR_LEN);
+		return true;
 	default:
 		return true;
 	}

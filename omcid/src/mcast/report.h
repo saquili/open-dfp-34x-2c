@@ -22,15 +22,17 @@
 
 /**
  * enum omci_mcast_kind - What a message is.
- * @OMCI_MCAST_KIND_OTHER: not a report or a leave: a query, or a message
- *	that is not taken apart
+ * @OMCI_MCAST_KIND_OTHER: not a report, a leave or a query: a message that
+ *	is not taken apart
  * @OMCI_MCAST_KIND_REPORT: a membership report, of any version
  * @OMCI_MCAST_KIND_LEAVE: an IGMPv2 leave or an MLDv1 done
+ * @OMCI_MCAST_KIND_QUERY: a membership query, of any version
  */
 enum omci_mcast_kind {
 	OMCI_MCAST_KIND_OTHER = 0,
 	OMCI_MCAST_KIND_REPORT,
 	OMCI_MCAST_KIND_LEAVE,
+	OMCI_MCAST_KIND_QUERY,
 };
 
 /**
@@ -54,10 +56,18 @@ struct omci_mcast_record {
  * @vid: the VID of its outer tag
  * @pcp: the priority of its outer tag
  * @client: the address it came from
+ * @query_group: of a query, the group it asks about, all zero for a general
+ *	query
+ * @max_resp: of a query, the most time to answer it, in units of 0.1 s
  * @n: the records kept
  * @cut: records that did not fit
  * @rec: the records: one per group and source, a group joined from every
  *	source with an all-zero source
+ *
+ * The version of a query is that of its form: IGMP version 1 has a maximum
+ * response time of zero in a message of eight bytes, version 2 has one, and
+ * version 3 is the message of twelve bytes or more, as MLD version 1 is the
+ * message of twenty-four bytes and version 2 that of twenty-eight or more.
  */
 struct omci_mcast_report {
 	enum omci_mcast_kind kind;
@@ -66,6 +76,8 @@ struct omci_mcast_report {
 	uint16_t vid;
 	uint8_t pcp;
 	uint8_t client[OMCI_MCAST_ADDR_LEN];
+	uint8_t query_group[OMCI_MCAST_ADDR_LEN];
+	uint32_t max_resp;
 	uint8_t n;
 	uint8_t cut;
 	struct omci_mcast_record rec[OMCI_MCAST_REPORT_RECORDS];

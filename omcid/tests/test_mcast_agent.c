@@ -203,11 +203,39 @@ static void test_messages_are_taken_apart(void)
 	CHECK_EQ(r.kind, OMCI_MCAST_KIND_LEAVE);
 	CHECK(!r.rec[0].join);
 
-	/* A query is IGMP, but nothing to count. */
-	n = igmp(f, -1, 0x11u, IP4(10, 0, 0, 1), IP4(224, 0, 0, 1));
+	/* A query is IGMP, but nothing to count: a general one of version 1 (a zero response time) or 2. */
+	n = igmp(f, -1, 0x11u, IP4(10, 0, 0, 1), 0);
+	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	CHECK_EQ(r.n, 0u);
+	CHECK_EQ(r.version, 1u);
+	CHECK_EQ(r.max_resp, 100u);
+	CHECK_EQ(be32_at(&r.query_group[12]), 0u);
+	f[14 + 24 + 1] = 50u;
+	put32(&f[14 + 24 + 4], IP4(239, 1, 1, 5));
+	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
+	CHECK_EQ(r.version, 2u);
+	CHECK_EQ(r.max_resp, 50u);
+	CHECK_EQ(be32_at(&r.query_group[12]), IP4(239, 1, 1, 5));
+
+	/* An IGMP message of a type that is not taken apart is none to count either. */
+	n = igmp(f, -1, 0x13u, IP4(10, 0, 0, 1), IP4(224, 0, 0, 1));
 	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
 	CHECK_EQ(r.kind, OMCI_MCAST_KIND_OTHER);
 	CHECK_EQ(r.n, 0u);
+
+	/* Version 3 is the longer message, its response time a small number or a floating point one. */
+	n = igmp3(f, -1, IP4(10, 0, 0, 1), 0u, 0, 0, 0);
+	f[14 + 24] = 0x11u;
+	f[14 + 24 + 1] = 100u;
+	put16(&f[14 + 24 + 6], 0u);
+	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	CHECK_EQ(r.version, 3u);
+	CHECK_EQ(r.max_resp, 100u);
+	f[14 + 24 + 1] = 0xa2u;
+	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
+	CHECK_EQ(r.max_resp, 576u);
 
 	/* IGMPv3: exclude mode joins every source. */
 	n = igmp3(f, -1, IP4(10, 0, 0, 2), 4u, IP4(239, 1, 1, 6), 1,
@@ -282,8 +310,33 @@ static void test_messages_are_taken_apart(void)
 	CHECK_EQ(r.version, 17u);
 	CHECK(r.n == 1u && r.rec[0].join);
 	n = mld(f, -1, 130u, client6, group6, 0);
+	put16(&f[14 + 48 + 4], 5000u);
+	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
+	CHECK_EQ(r.kind, OMCI_MCAST_KIND_QUERY);
+	CHECK_EQ(r.version, 16u);
+	CHECK_EQ(r.max_resp, 50u);
+	CHECK_MEM(r.query_group, group6, 16);
+	/* An ICMPv6 message after the options that is not MLD is none to count. */
+	n = mld(f, -1, 133u, client6, group6, 0);
 	CHECK(omci_mcast_report_parse(f, n, 0, false, &r));
 	CHECK_EQ(r.kind, OMCI_MCAST_KIND_OTHER);
+	n = mld(f, -1, 130u, client6, group6, 0);
+	put16(&f[14 + 48 + 4], 5000u);
+	/* A longer one is version 2, its response time in milliseconds as a small or floating point number. */
+	{
+		uint8_t q2[128];
+
+		memcpy(q2, f, n);
+		memset(&q2[n], 0, 4);
+		put16(&q2[14 + 4], 8u + 28u);
+		put16(&q2[14 + 48 + 4], 0x9000u);
+		CHECK(omci_mcast_report_parse(q2, n + 4, 0, false, &r));
+		CHECK_EQ(r.version, 17u);
+		CHECK_EQ(r.max_resp, (((0x1000u | 0u) << 4) + 99u) / 100u);
+		/* One cut short of the group is not a query. */
+		put16(&f[14 + 4], 8u + 20u);
+		CHECK(!omci_mcast_report_parse(f, n - 4, 0, false, &r));
+	}
 
 	/* An MLD message without the hop-by-hop header. */
 	n = mld(f, -1, 131u, client6, group6, 0);
