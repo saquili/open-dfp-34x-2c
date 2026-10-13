@@ -1042,16 +1042,18 @@ defined in ``rtl9602c-optics.c``):
        each.
    * - Table 2 needs no password. After the part's reset, which loads the
        tables from the EEPROM as at power-up and turns the automatic ER loop
-       back on, with nothing written to bytes 123-126 the table read as before
-       (PERSIST ``03h``), and the hold's writes took (``automatic ER e3 ->
-       e2``), so the driver writes no password outside the ``t2write`` view.
-       Whether a power cycle of the module, rather than the part's reset,
-       leaves the table as open is not tried.
-     - M, I
-     - M: the hold's log line and table 2 as read before it, after
-       ``echo reset`` to ``t2write`` in a build that left out every write of
-       the password bytes. I: a power cycle of the module followed by a
-       bring-up would settle the rest.
+       back on, and after a power cycle of the module, with nothing written to
+       bytes 123-126 the table read as before (PERSIST ``03h``), and the
+       hold's writes took (``automatic ER e3 -> e2``), so the driver writes no
+       password outside the ``t2write`` view.
+     - M
+     - The hold's log line and table 2 as read before it: after ``echo reset``
+       to ``t2write`` in a build that left out every write of the password
+       bytes, and after the module was taken out of its cage for 34 s and put
+       back (2026-10-13), the stick starting from its flash image, which
+       writes no password byte. ER_CTRL read ``e3`` before the hold, which only
+       a module that lost power gives, and the stick went on to O5 with the
+       transmitted power at +2.2 dBm.
 
 The hold runs at ``ip link set pon up``, after the GPON MAC reset and before the
 first O3. With ``CONFIG_RTL9602C_OPTICS_RO``, or for a module the driver does
