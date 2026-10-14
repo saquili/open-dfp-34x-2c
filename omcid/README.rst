@@ -20,7 +20,10 @@ downstream, and the optical alarms from the readings of the transceiver,
 whose levels it keeps in the ANI-G. It counts the performance monitoring
 of the Ethernet UNI, the bridge ports, the GEM ports and the downstream FEC
 in fifteen-minute intervals, which Synchronize time places, and raises the
-threshold crossing alerts that the threshold data ask for. It reports the
+threshold crossing alerts that the threshold data ask for. It gives the
+kernel the time of day that the OLT sets in the OLT-G, the frame it names and
+the time of that frame, and the switch's PTP clock takes the time at that
+frame. It reports the
 result of the optical line supervision test, the addresses the switch
 forwards by in the bridge table of each bridge port, and through the VEIP
 whether the stick routes. It has the switch carry out the filters of the
