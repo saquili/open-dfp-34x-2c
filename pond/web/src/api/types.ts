@@ -223,7 +223,8 @@ export interface IpoeInfo {
 
 /**
  * A network of the stick's towards the devices behind it, out through one
- * connection that makes the stick their router.
+ * connection that makes the stick their router; a connection may have
+ * several, each IPv6 one in a /64 of its own of the connection's prefix.
  */
 export interface LanInfo {
   id: number;
@@ -265,7 +266,8 @@ export interface LeaseInfo {
 
 /**
  * A port forwarded from the internet, by the NAT of a router connection, to
- * a device of its local network: by its MAC, whose fixed address it goes to.
+ * a device of one of its local networks (@lan): by its MAC, whose fixed
+ * address it goes to.
  */
 export interface ForwardInfo {
   id: number;

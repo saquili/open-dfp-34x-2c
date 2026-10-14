@@ -160,6 +160,24 @@ export function sessions(live: Live | undefined): SessionView[] {
  */
 export const MAX_CONNS = 7;
 
+/*
+ * The most local networks, of every connection together: what the switch's
+ * engine routes in silicon beside seven connections, of its 16 interfaces
+ * and 16 routes (8 for IPv6) that the connections share.
+ */
+export const MAX_LANS = 8;
+
+/* The most fixed addresses, of every network together: a list of the DHCP server's. */
+export const MAX_FIXED = 512;
+
+/*
+ * The most forwards, and the most firewall rules: as many as the switch has
+ * ACL rules, 96, which the two will share with what the stick sets there
+ * itself.
+ */
+export const MAX_FORWARDS = 96;
+export const MAX_RULES = 96;
+
 export interface IpoeView {
   id: number;
   kind: "static" | "dhcp";

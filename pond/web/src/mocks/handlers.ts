@@ -18,6 +18,7 @@ import type {
   Settings,
   SfpLane,
 } from "../api/types";
+import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
 import { OMCI, withServices } from "./omci";
 
@@ -218,9 +219,10 @@ if (SCENARIO === "sessions") {
     },
   ];
   /*
-   * A network behind the stick out through session 4, untagged, and one out
-   * through DHCP on 421, in VLAN 20: a big house's fifty devices, a few
-   * without a name; the static connection has none.
+   * Two networks behind the stick out through session 4, the house's
+   * untagged and the guests' in VLAN 30, and one out through DHCP on 421, in
+   * VLAN 20: a big house's fifty devices, a few without a name; the static
+   * connection has none.
    */
   settings.lans = [
     {
@@ -249,6 +251,19 @@ if (SCENARIO === "sessions") {
       ipv6: "on",
       ipv6_subnet: "1",
     },
+    {
+      id: 3,
+      name: "Goście",
+      conn: "pppoe:4",
+      vlan: "30",
+      address: "192.168.3.1/24",
+      dhcp: "on",
+      pool_from: "192.168.3.100",
+      pool_to: "192.168.3.199",
+      lease_s: 3_600,
+      ipv6: "on",
+      ipv6_subnet: "1",
+    },
   ];
   /*
    * The devices of Biuro, whose connection has a prefix, have IPv6 in its
@@ -256,8 +271,8 @@ if (SCENARIO === "sessions") {
    * besides; Dom's connection has none yet.
    */
   settings.leases = HOUSE.map((name, i) => {
-    const lan = i < 42 ? 1 : 2;
-    const host = 100 + (lan === 1 ? i : i - 42) * 2 + (i % 3 === 0 ? 1 : 0);
+    const lan = i < 38 ? 1 : i < 42 ? 3 : 2;
+    const host = 100 + (lan === 1 ? i : lan === 3 ? i - 38 : i - 42) * 2 + (i % 3 === 0 ? 1 : 0);
     const last = (0x10 + i).toString(16).padStart(2, "0");
     const temp = ((i * 2654435761) >>> 0).toString(16).padStart(8, "0");
     return {
@@ -497,6 +512,17 @@ function pin(lan: number, mac: string) {
   const now = (settings.leases ?? []).find((y) => y.lan === lan && y.mac === mac);
   if (now) settings.fixed = [...(settings.fixed ?? []), { lan, mac, ip: now.ip, name: "" }];
 }
+
+/* Whether the device's address could not be fixed, at the most fixed addresses. */
+const noRoomToPin = (lan: number, mac: string) =>
+  (settings.fixed ?? []).length >= MAX_FIXED &&
+  !(settings.fixed ?? []).some((y) => y.lan === lan && y.mac === mac);
+
+const fixedFull = () =>
+  HttpResponse.json(
+    { error: "refused", detail: `all ${MAX_FIXED} fixed addresses are taken` },
+    { status: 400 },
+  );
 
 function live() {
   tick();
@@ -823,6 +849,11 @@ export const handlers = [
           { error: "refused", detail: "a new network needs CONN" },
           { status: 400 },
         );
+      if (list.length >= MAX_LANS)
+        return HttpResponse.json(
+          { error: "refused", detail: `all ${MAX_LANS} local networks are taken` },
+          { status: 400 },
+        );
       x = {
         id,
         conn: body.CONN,
@@ -877,6 +908,11 @@ export const handlers = [
         { error: "refused", detail: `${body.IP} is another device's fixed address` },
         { status: 409 },
       );
+    if (list.length >= MAX_FIXED)
+      return HttpResponse.json(
+        { error: "refused", detail: `all ${MAX_FIXED} fixed addresses are taken` },
+        { status: 400 },
+      );
     settings.fixed = [...list, { lan, mac, ip: body.IP, name: body.NAME ?? "" }];
     return HttpResponse.json({ id: "fixed", ok: true });
   }),
@@ -908,6 +944,12 @@ export const handlers = [
       int_port: Number(b.INT_PORT || b.EXT_FROM),
       on: b.ON !== "off",
     };
+    if (!list.some((y) => y.id === id) && list.length >= MAX_FORWARDS)
+      return HttpResponse.json(
+        { error: "refused", detail: `all ${MAX_FORWARDS} forwards are taken` },
+        { status: 400 },
+      );
+    if (noRoomToPin(x.lan, x.mac)) return fixedFull();
     const clash = list.find(
       (y) =>
         y.id !== id &&
@@ -953,6 +995,11 @@ export const handlers = [
       settings.rules = list.filter((y) => y.id !== id);
       return HttpResponse.json({ id: "rule", ok: true });
     }
+    if (at < 0 && list.length >= MAX_RULES)
+      return HttpResponse.json(
+        { error: "refused", detail: `all ${MAX_RULES} rules are taken` },
+        { status: 400 },
+      );
     const x = {
       id,
       name: b.NAME ?? "",
@@ -989,6 +1036,7 @@ export const handlers = [
     const list = (settings.dmz ?? []).filter((y) => y.conn !== b.CONN);
     if (b.MAC) {
       const x = { conn: b.CONN ?? "", lan: Number(b.LAN), mac: b.MAC.toLowerCase() };
+      if (noRoomToPin(x.lan, x.mac)) return fixedFull();
       pin(x.lan, x.mac);
       list.push(x);
     }

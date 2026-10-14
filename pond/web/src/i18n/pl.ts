@@ -342,8 +342,8 @@ export const pl: Dictionary = {
     search: "Szukaj: nazwa, IP, MAC",
     allNets: "Wszystkie sieci",
     noMatch: "Nic nie pasuje do wyszukiwania.",
-    devicesCount: "Klienci: {n} · stałe adresy: {f}",
-    shown: "Pokazane: {n} z {all} · stałe adresy: {f}",
+    devicesCount: "Klienci: {n} · stałe adresy: {f} z {max}",
+    shown: "Pokazane: {n} z {all} · stałe adresy: {f} z {max}",
     onlyFixed: "Tylko stałe",
     pin: "Przypnij",
     pinTitle: "Przypnij adres",
@@ -373,19 +373,22 @@ export const pl: Dictionary = {
     fixedTaken: "To już stały adres urządzenia {name}.",
     fixedBusy: "Ten adres ma teraz urządzenie {name}.",
     fixedDup: "To urządzenie ma już w tej sieci stały adres {ip}.",
+    fixedFull:
+      "Jest już {max} stałych adresów, najwięcej, ile wkładka trzyma. Odepnij któryś, żeby dodać nowy.",
     netFixed: "Stały adres {ip} ({name}) wypadłby poza sieć albo na adres wkładki.",
     noName: "bez nazwy",
     dhcpOffShort: "DHCP wyłączony",
     count: "Sieci lokalne: {n} z {max} · klienci: {d}",
     empty: "Brak skonfigurowanych sieci lokalnych",
     emptyHint:
-      "Każde połączenie-router może mieć jedną sieć lokalną. Dodaj ją w formularzu: połączenie, VLAN do switcha i adres wkładki.",
+      "Połączenie-router może mieć kilka sieci lokalnych, wszystkich razem najwyżej {max}. Dodaj sieć w formularzu: połączenie, VLAN do switcha i adres wkładki.",
     removeConfirm: "Usunąć sieć lokalną {name}? Urządzenia w niej stracą adresy.",
     noRouters: "Żadne połączenie nie robi z wkładki routera",
     noRoutersHint:
       "Sieć lokalna wychodzi z połączenia-routera. Dodaj na stronie Internet › WAN Static IP, DHCP albo PPPoE z wyborem „Jest routerem”.",
-    allHave: "Każde połączenie-router ma już swoją sieć lokalną",
-    allHaveHint: "Nowa sieć potrzebuje nowego połączenia-routera na stronie Internet › WAN.",
+    full: "Jest już {max} sieci lokalnych",
+    fullHint:
+      "Tyle sieci przyspiesza krzem wkładki obok siedmiu połączeń. Usuń którąś, żeby dodać nową.",
     netIn: "Sieć {net} w VLAN-ie {vid}",
     netNone: "Sieć {net}, bez VLAN-u",
     netUnknown: "Wpisz adres wkładki z maską",
@@ -428,6 +431,7 @@ export const pl: Dictionary = {
       "Szesnastkowo, od 0 do ff. Podsieć wyjdzie z prefiksu, gdy {name} dostanie go od operatora.",
     subnetWhole: "Sieć dostaje cały prefiks {net}.",
     subnetBad: "Numer podsieci to liczba szesnastkowa od 0 do {max}.",
+    subnetTaken: "Tę podsieć ma już sieć {name} tego połączenia.",
   },
   fw: {
     hint: "Zapora przepuszcza albo blokuje ruch między internetem a sieciami LAN i między samymi sieciami. Rozstrzyga pierwsza pasująca reguła, a gdy żadna nie pasuje, domyślne zasady.",
@@ -437,7 +441,7 @@ export const pl: Dictionary = {
     in: "Z internetu do LAN",
     inBut: "(poza NAT i DMZ)",
     inHint:
-      "Blokuj, zawsze. Ruch z internetu wpuszczają przekierowania i DMZ w zakładce NAT, a reguły tutaj.",
+      "Blokuj, zawsze. Ruch z internetu wpuszczają przekierowania i DMZ na stronie NAT, a reguły tutaj.",
     out: "Z LAN do internetu",
     outHint: "Zablokuj, jeśli do internetu mają wychodzić tylko urządzenia, którym pozwolą reguły.",
     between: "Między sieciami LAN",
@@ -463,7 +467,8 @@ export const pl: Dictionary = {
     empty: "Brak reguł",
     emptyHint:
       "Ruchem rządzą domyślne zasady powyżej. Dodaj regułę, żeby coś dodatkowo przepuścić albo zablokować.",
-    count: "Reguły: {n} · włączone: {on}",
+    count: "Reguły: {n} z {max} · włączone: {on}",
+    full: "Jest już {max} reguł, najwięcej, ile wkładka trzyma. Usuń którąś, żeby dodać nową.",
     name: "Nazwa (opcjonalnie)",
     namePlaceholder: "np. Drukarka dla Biura",
     action: "Akcja",
@@ -483,7 +488,7 @@ export const pl: Dictionary = {
     addrFamily: "Ten adres jest z innej rodziny niż reguła.",
     bothInternet: "Ruch z internetu do internetu nie przechodzi przez wkładkę.",
     sameLan: "Ruch wewnątrz jednej sieci nie przechodzi przez wkładkę, tylko przez switch.",
-    v4in: "Przez IPv4 ruch z internetu dotrze do urządzenia tylko przekierowaniem albo DMZ (zakładka NAT); przez IPv6 reguła otwiera go sama.",
+    v4in: "Przez IPv4 ruch z internetu dotrze do urządzenia tylko przekierowaniem albo DMZ (strona NAT); przez IPv6 reguła otwiera go sama.",
     proto: "Protokół",
     protoAny: "Wszystko",
     ports: "Porty docelowe",
@@ -514,12 +519,14 @@ export const pl: Dictionary = {
     emptyHint:
       "Dodaj, gdy urządzenie z sieci LAN ma być widoczne z internetu, np. serwer, kamera albo konsola.",
     noNets:
-      "NAT działa w połączeniach, które robią z wkładki router i mają sieć LAN. Dodaj sieć w zakładce LAN.",
-    count: "Przekierowania: {n} · włączone: {on}",
+      "NAT działa w połączeniach, które robią z wkładki router i mają sieć LAN. Dodaj sieć na stronie LAN.",
+    count: "Przekierowania: {n} z {max} · włączone: {on}",
+    full: "Jest już {max} przekierowań, najwięcej, ile wkładka trzyma. Usuń któreś, żeby dodać nowe.",
     name: "Nazwa (opcjonalnie)",
     namePlaceholder: "np. Serwer WWW",
     conn: "Połączenie (WAN)",
     connHint: "Ruch przychodzi na adres tego połączenia; urządzenie wybierasz z jego sieci LAN.",
+    deviceIn: "{name} · {net}",
     proto: "Protokół",
     both: "TCP i UDP",
     ext: "Port z internetu",
@@ -531,7 +538,7 @@ export const pl: Dictionary = {
     intBad: "Port w urządzeniu to liczba od 1 do 65535, a cały zakres musi się w nich zmieścić.",
     device: "Urządzenie",
     devicePick: "Wybierz urządzenie",
-    deviceOther: "Wybierz urządzenie z sieci {name}.",
+    deviceOther: "Wybierz urządzenie z sieci połączenia {name}.",
     pinWill: "Dostanie stały adres {ip}, żeby ruch trafiał w nie także po zmianie dzierżawy.",
     pinned: "Ma stały adres {ip}.",
     state: "Przekierowanie",
@@ -547,7 +554,7 @@ export const pl: Dictionary = {
       "Urządzenie w DMZ dostaje z internetu cały ruch, którego nie złapało żadne przekierowanie, na wszystkich portach. Ustaw je tylko dla urządzenia, które samo się chroni.",
     dmzDisable: "Wyłącz DMZ",
   },
-  /* A tab or a form the stick has no backend for yet: the panel says so and saves nothing. */
+  /* A page or a form the stick has no backend for yet: the panel says so and saves nothing. */
   notYet: {
     title: "Jeszcze nie na wkładce",
     nets: "Wkładka nie ma jeszcze własnych sieci lokalnych ani serwera DHCP: urządzenia za nią dostają adresy od tego, co stoi za wkładką. Pojawi się to z późniejszą wersją oprogramowania. Do tego czasu nic się tu nie zapisze.",

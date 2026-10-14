@@ -340,8 +340,8 @@ export const en = {
     search: "Search: name, IP, MAC",
     allNets: "All networks",
     noMatch: "Nothing matches the search.",
-    devicesCount: "Clients: {n} · fixed addresses: {f}",
-    shown: "Shown: {n} of {all} · fixed addresses: {f}",
+    devicesCount: "Clients: {n} · fixed addresses: {f} of {max}",
+    shown: "Shown: {n} of {all} · fixed addresses: {f} of {max}",
     onlyFixed: "Fixed only",
     pin: "Pin",
     pinTitle: "Pin the address",
@@ -369,6 +369,8 @@ export const en = {
     fixedStick: "That is the stick's address.",
     fixedTaken: "That is already the fixed address of {name}.",
     fixedBusy: "{name} has this address now.",
+    fixedFull:
+      "There are {max} fixed addresses already, the most the stick holds. Unpin one to add another.",
     fixedDup: "This device already has the fixed address {ip} in this network.",
     netFixed:
       "The fixed address {ip} ({name}) would fall outside the network or on the stick's address.",
@@ -377,13 +379,14 @@ export const en = {
     count: "Local networks: {n} of {max} · clients: {d}",
     empty: "No local networks configured",
     emptyHint:
-      "Each router connection can have one local network. Add it in the form: the connection, the VLAN to the switch and the stick's address.",
+      "A router connection can have several local networks, {max} at most of all together. Add a network in the form: the connection, the VLAN to the switch and the stick's address.",
     removeConfirm: "Remove the local network of {name}? Its devices lose their addresses.",
     noRouters: "No connection makes the stick a router",
     noRoutersHint:
       "A local network goes out through a router connection. Add Static IP, DHCP, or PPPoE with “Is the router” on the Internet › WAN page.",
-    allHave: "Every router connection has its local network already",
-    allHaveHint: "Another network needs another router connection on the Internet › WAN page.",
+    full: "There are {max} local networks already",
+    fullHint:
+      "As many networks as the stick's silicon speeds up beside seven connections. Remove one to add another.",
     netIn: "Network {net} in VLAN {vid}",
     netNone: "Network {net}, untagged",
     netUnknown: "Type the stick's address with its mask",
@@ -428,6 +431,7 @@ export const en = {
       "In hex, 0 to ff. The network comes from the prefix once {name} has it from the operator.",
     subnetWhole: "The network takes the whole prefix {net}.",
     subnetBad: "The subnet number is a hex number from 0 to {max}.",
+    subnetTaken: "Network {name} of this connection has this subnet already.",
   },
   fw: {
     hint: "The firewall lets through or blocks traffic between the internet and the LANs, and between the networks. The first rule that matches decides; where none does, the defaults.",
@@ -437,7 +441,7 @@ export const en = {
     in: "From the internet to the LANs",
     inBut: "(but NAT and the DMZ)",
     inHint:
-      "Block, always. Traffic from the internet comes in by the forwards and the DMZ of the NAT tab, and by the rules here.",
+      "Block, always. Traffic from the internet comes in by the forwards and the DMZ of the NAT page, and by the rules here.",
     out: "From the LANs to the internet",
     outHint: "Block, if only the devices the rules allow should reach the internet.",
     between: "Between the LANs",
@@ -462,7 +466,8 @@ export const en = {
     empty: "No rules",
     emptyHint:
       "The defaults above rule the traffic. Add a rule to let something more through or block it.",
-    count: "Rules: {n} · on: {on}",
+    count: "Rules: {n} of {max} · on: {on}",
+    full: "There are {max} rules already, the most the stick holds. Remove one to add another.",
     name: "Name (optional)",
     namePlaceholder: "such as Printer for the office",
     action: "Action",
@@ -482,7 +487,7 @@ export const en = {
     addrFamily: "This address is of another family than the rule.",
     bothInternet: "Traffic from the internet to the internet does not pass the stick.",
     sameLan: "Traffic within one network does not pass the stick, only the switch.",
-    v4in: "By IPv4, traffic from the internet reaches a device only by a forward or the DMZ (NAT tab); by IPv6 the rule opens it by itself.",
+    v4in: "By IPv4, traffic from the internet reaches a device only by a forward or the DMZ (NAT page); by IPv6 the rule opens it by itself.",
     proto: "Protocol",
     protoAny: "Everything",
     ports: "Destination ports",
@@ -513,12 +518,14 @@ export const en = {
     emptyHint:
       "Add one when a device of a LAN should be reachable from the internet, such as a server, a camera or a console.",
     noNets:
-      "NAT works in connections that make the stick a router and have a LAN. Add a network in the LAN tab.",
-    count: "Forwards: {n} · on: {on}",
+      "NAT works in connections that make the stick a router and have a LAN. Add a network on the LAN page.",
+    count: "Forwards: {n} of {max} · on: {on}",
+    full: "There are {max} forwards already, the most the stick holds. Remove one to add another.",
     name: "Name (optional)",
     namePlaceholder: "such as Web server",
     conn: "Connection (WAN)",
     connHint: "Traffic comes in on this connection's address; you choose the device from its LAN.",
+    deviceIn: "{name} · {net}",
     proto: "Protocol",
     both: "TCP and UDP",
     ext: "Port from the internet",
@@ -530,7 +537,7 @@ export const en = {
     intBad: "The port on the device is a number from 1 to 65535, and the whole range must fit.",
     device: "Device",
     devicePick: "Choose a device",
-    deviceOther: "Choose a device of the network {name}.",
+    deviceOther: "Choose a device of a network of {name}.",
     pinWill: "It gets the fixed address {ip}, so that traffic reaches it after a new lease too.",
     pinned: "Its address is fixed: {ip}.",
     state: "Forward",
@@ -546,7 +553,7 @@ export const en = {
       "The DMZ device gets everything from the internet that no forward caught, on every port. Set it only for a device that protects itself.",
     dmzDisable: "Turn the DMZ off",
   },
-  /* A tab or a form the stick has no backend for yet: the panel says so and saves nothing. */
+  /* A page or a form the stick has no backend for yet: the panel says so and saves nothing. */
   notYet: {
     title: "Not on the stick yet",
     nets: "The stick has no local networks of its own yet, and no DHCP server: the devices behind it get their addresses from whatever stands behind it. This comes with a later software version. Nothing can be saved here until then.",

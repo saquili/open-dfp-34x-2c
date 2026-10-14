@@ -27,9 +27,10 @@ import { Dot, NotYet } from "../components/ui";
 import { useI18n } from "../i18n";
 import { ports, readPorts } from "../lib/ports";
 import { upTo, z } from "../lib/schemas";
-import { dmzs, forwards, served } from "../lib/state";
+import { dmzs, forwards, MAX_FORWARDS, served } from "../lib/state";
+import type { Conn } from "./internet/conns";
 import { connName, Mono, Sub, type T } from "./internet/shared";
-import { Choices, type Device, type Net, netName, useDevices, usePlaces } from "./Lan";
+import { Choices, type Device, type Net, netName, useDevices, useNets } from "./Lan";
 
 const PROTOS = ["tcp", "udp", "both"] as const;
 type Proto = (typeof PROTOS)[number];
@@ -48,10 +49,19 @@ const byName = (list: Device[]) =>
       a.name && b.name ? a.name.localeCompare(b.name) : a.name ? -1 : b.name ? 1 : 0,
     );
 
-/* The connections that make the stick a router and have a network: where NAT is. */
-function useNets() {
-  const { places } = usePlaces();
-  return places.filter((p): p is Net => p.lan != null);
+/* The connections of @nets, once each: those that make the stick a router and have a network, where NAT is. */
+const wansOf = (nets: Net[]): Conn[] =>
+  nets.map((n) => n.c).filter((c, i, all) => all.findIndex((y) => y.key === c.key) === i);
+
+/* The networks of @nets that go out through the connection @key. */
+const idsOf = (nets: Net[], key: string) =>
+  nets.filter((n) => n.c.key === key).map((n) => n.lan.id);
+
+/* A device as a select's value: its network and MAC, as a MAC may be in two networks of a connection. */
+const devKey = (lan: number, mac: string) => `${lan}/${mac}`;
+function readDev(v: string) {
+  const i = v.indexOf("/");
+  return i < 0 ? null : { lan: Number(v.slice(0, i)), mac: v.slice(i + 1) };
 }
 
 /** How many forwards there are, for the menu that shows them. */
@@ -60,22 +70,22 @@ export function useNatCount() {
 }
 
 /** A connection's public IPv4 address, the one forwards come in on, or null. */
-function wanAddress(p: Net) {
-  const a = (p.c.x as { ipv4?: string | null }).ipv4;
+function wanAddress(c: Conn) {
+  const a = (c.x as { ipv4?: string | null }).ipv4;
   return a ? (a.split("/")[0] ?? null) : null;
 }
 
 /** The line under a form's title: the address what comes in comes to. */
-function Strip({ p }: { p: Net | undefined }) {
+function Strip({ c }: { c: Conn | undefined }) {
   const { t } = useI18n();
-  const ip = p ? wanAddress(p) : null;
-  if (!p) return null;
+  const ip = c ? wanAddress(c) : null;
+  if (!c) return null;
   return ip ? (
     <span>
-      {t("nat.strip", { name: connName(t, p.c) })} <Mono>{ip}</Mono>
+      {t("nat.strip", { name: connName(t, c) })} <Mono>{ip}</Mono>
     </span>
   ) : (
-    t("nat.stripNone", { name: connName(t, p.c) })
+    t("nat.stripNone", { name: connName(t, c) })
   );
 }
 
@@ -83,37 +93,50 @@ function Strip({ p }: { p: Net | undefined }) {
 function Frame({
   id,
   title,
-  p,
+  c,
   onClose,
   children,
 }: {
   id: string;
   title: string;
-  p: Net | undefined;
+  c: Conn | undefined;
   onClose: () => void;
   children: ReactNode;
 }) {
   return (
-    <PanelCard id={id} title={title} line={<Strip p={p} />} onClose={onClose}>
+    <PanelCard id={id} title={title} line={<Strip c={c} />} onClose={onClose}>
       {children}
     </PanelCard>
   );
 }
 
-/** The device of a forward or a DMZ, and what keeps its address: fixed already, or fixed by this. */
+/**
+ * The device of a forward or a DMZ, of the networks @nets of its connection,
+ * with its network's name when there are more; and what keeps its address:
+ * fixed already, or fixed by this.
+ */
 function DeviceSelect({
   devices,
-  mac,
+  nets,
+  value,
   error,
   field,
 }: {
   devices: Device[];
-  mac: string;
+  nets: Net[];
+  value: string;
   error: string | undefined;
   field: UseFormRegisterReturn;
 }) {
   const { t } = useI18n();
-  const d = devices.find((x) => x.mac === mac);
+  const d = devices.find((x) => devKey(x.lan, x.mac) === value);
+  const many = new Set(devices.map((x) => x.lan)).size > 1;
+  const label = (x: Device) => {
+    const n = nets.find((y) => y.lan.id === x.lan);
+    return many && n
+      ? t("nat.deviceIn", { name: deviceLabel(t, x), net: netName(t, n.lan, nets) })
+      : deviceLabel(t, x);
+  };
   return (
     <div className="grid content-start gap-1">
       <label htmlFor="nat-device" className="text-sm font-semibold">
@@ -122,8 +145,8 @@ function DeviceSelect({
       <select id="nat-device" className={`select w-full ${error ? "select-error" : ""}`} {...field}>
         <option value="">{t("nat.devicePick")}</option>
         {devices.map((x) => (
-          <option key={x.mac} value={x.mac}>
-            {deviceLabel(t, x)}
+          <option key={devKey(x.lan, x.mac)} value={devKey(x.lan, x.mac)}>
+            {label(x)}
           </option>
         ))}
       </select>
@@ -155,22 +178,23 @@ function ForwardForm({
   const state = useChangeState(change);
   const all = useDevices(nets.map((p) => p.lan.id));
   const others = list.filter((f) => f.id !== x?.id);
-  const netOf = (key: string) => nets.find((p) => p.c.key === key);
+  const wans = wansOf(nets);
+  const wanOf = (key: string) => wans.find((c) => c.key === key);
   const schema = z
     .object({
       name: upTo(32),
       conn: z.string().check(z.minLength(1, t("form.required"))),
       proto: z.enum(PROTOS),
       ext: z.string(),
-      mac: z.string().check(z.minLength(1, t("nat.devicePick"))),
+      dev: z.string().check(z.minLength(1, t("nat.devicePick"))),
       int: z.string(),
       on: z.enum(["on", "off"]),
     })
     .check(
       z.superRefine((v, ctx) => {
-        const fail = (path: "ext" | "mac" | "int", message: string) =>
+        const fail = (path: "ext" | "dev" | "int", message: string) =>
           ctx.addIssue({ code: "custom", path: [path], message, input: v[path] });
-        const p = netOf(v.conn);
+        const c = wanOf(v.conn);
         const ext = readPorts(v.ext);
         if (!ext) return fail("ext", t("nat.extBad"));
         /* Ports of another forward of the connection, of a protocol of this one. */
@@ -193,8 +217,15 @@ function ForwardForm({
         const int = v.int.trim() ? Number(v.int) : ext.from;
         if (!/^\d*$/.test(v.int.trim()) || int < 1 || int + (ext.to - ext.from) > 65535)
           fail("int", t("nat.intBad"));
-        if (p && v.mac && !all.some((d) => d.lan === p.lan.id && d.mac === v.mac))
-          fail("mac", t("nat.deviceOther", { name: netName(t, p.lan, nets) }));
+        /* The device is in a network of the connection. */
+        const ids = idsOf(nets, v.conn);
+        const dev = readDev(v.dev);
+        if (
+          c &&
+          dev &&
+          !all.some((d) => ids.includes(d.lan) && d.lan === dev.lan && d.mac === dev.mac)
+        )
+          fail("dev", t("nat.deviceOther", { name: connName(t, c) }));
       }),
     );
   type Values = z.infer<typeof schema>;
@@ -206,20 +237,21 @@ function ForwardForm({
           conn: x.conn,
           proto: x.proto,
           ext: x.ext_from === x.ext_to ? String(x.ext_from) : `${x.ext_from}-${x.ext_to}`,
-          mac: x.mac,
+          dev: devKey(x.lan, x.mac),
           int: x.int_port === x.ext_from ? "" : String(x.int_port),
           on: x.on ? "on" : "off",
         }
-      : { name: "", conn: nets[0]?.c.key ?? "", proto: "tcp", ext: "", mac: "", int: "", on: "on" },
+      : { name: "", conn: wans[0]?.key ?? "", proto: "tcp", ext: "", dev: "", int: "", on: "on" },
   });
   const { errors, isDirty } = form.formState;
-  const [connKey, mac] = form.watch(["conn", "mac"]);
-  const p = netOf(connKey);
-  const devices = byName(all.filter((d) => d.lan === p?.lan.id));
+  const [connKey, dev] = form.watch(["conn", "dev"]);
+  const c = wanOf(connKey);
+  const ids = idsOf(nets, connKey);
+  const devices = byName(all.filter((d) => ids.includes(d.lan)));
   const send = (v: Values) => {
     const ext = readPorts(v.ext);
-    const net = netOf(v.conn);
-    if (!ext || !net) return;
+    const d = readDev(v.dev);
+    if (!ext || !d) return;
     change.mutate(
       {
         ID: x ? String(x.id) : undefined,
@@ -228,8 +260,8 @@ function ForwardForm({
         PROTO: v.proto,
         EXT_FROM: String(ext.from),
         EXT_TO: String(ext.to),
-        LAN: String(net.lan.id),
-        MAC: v.mac,
+        LAN: String(d.lan),
+        MAC: d.mac,
         INT_PORT: v.int.trim() || String(ext.from),
         ON: v.on,
       },
@@ -241,7 +273,7 @@ function ForwardForm({
     <Frame
       id="forward-form"
       title={x ? t("nat.editTitle", { name }) : t("nat.addTitle")}
-      p={p}
+      c={c}
       onClose={onClose}
     >
       <form onSubmit={form.handleSubmit(send)} noValidate className="flex min-h-0 flex-1 flex-col">
@@ -257,9 +289,9 @@ function ForwardForm({
               {t("nat.conn")}
             </label>
             <select id="nat-conn" className="select w-full" {...form.register("conn")}>
-              {nets.map((n) => (
-                <option key={n.c.key} value={n.c.key}>
-                  {`${connName(t, n.c)} · ${netName(t, n.lan, nets)}`}
+              {wans.map((w) => (
+                <option key={w.key} value={w.key}>
+                  {connName(t, w)}
                 </option>
               ))}
             </select>
@@ -290,9 +322,10 @@ function ForwardForm({
           </div>
           <DeviceSelect
             devices={devices}
-            mac={mac}
-            error={errors.mac?.message}
-            field={form.register("mac")}
+            nets={nets}
+            value={dev}
+            error={errors.dev?.message}
+            field={form.register("dev")}
           />
           <Choices
             label={t("nat.state")}
@@ -329,19 +362,25 @@ function DmzForm({ conn, nets, onClose }: { conn: string; nets: Net[]; onClose: 
   const { data: live } = useLive();
   const change = useDmzChange();
   const state = useChangeState(change);
-  const p = nets.find((n) => n.c.key === conn);
+  const c = wansOf(nets).find((w) => w.key === conn);
   const now = dmzs(live).find((y) => y.conn === conn);
-  const all = useDevices(p ? [p.lan.id] : []);
-  const devices = byName(all);
-  const form = useForm<{ mac: string }>({ defaultValues: { mac: now?.mac ?? "" } });
-  const mac = form.watch("mac");
-  const send = (v: { mac: string }) =>
-    p && change.mutate({ CONN: conn, LAN: String(p.lan.id), MAC: v.mac }, { onSuccess: onClose });
+  const was = now ? devKey(now.lan, now.mac) : "";
+  const devices = byName(useDevices(idsOf(nets, conn)));
+  const form = useForm<{ dev: string }>({ defaultValues: { dev: was } });
+  const dev = form.watch("dev");
+  /* The device of the DMZ, or none to turn it off. */
+  const send = (v: { dev: string }) => {
+    const d = readDev(v.dev);
+    change.mutate(
+      { CONN: conn, LAN: d ? String(d.lan) : String(now?.lan ?? ""), MAC: d?.mac ?? "" },
+      { onSuccess: onClose },
+    );
+  };
   return (
     <Frame
       id="dmz-form"
-      title={t("nat.dmzTitle", { name: p ? connName(t, p.c) : conn })}
-      p={p}
+      title={t("nat.dmzTitle", { name: c ? connName(t, c) : conn })}
+      c={c}
       onClose={onClose}
     >
       <form onSubmit={form.handleSubmit(send)} noValidate className="flex min-h-0 flex-1 flex-col">
@@ -351,16 +390,17 @@ function DmzForm({ conn, nets, onClose }: { conn: string; nets: Net[]; onClose: 
           </p>
           <DeviceSelect
             devices={devices}
-            mac={mac}
+            nets={nets}
+            value={dev}
             error={undefined}
-            field={form.register("mac")}
+            field={form.register("dev")}
           />
         </div>
         <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-base-300 px-4 py-2.5">
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={!mac || mac === now?.mac || change.isPending}
+            disabled={!dev || dev === was || change.isPending}
           >
             {t("internet.save")}
           </button>
@@ -369,7 +409,7 @@ function DmzForm({ conn, nets, onClose }: { conn: string; nets: Net[]; onClose: 
               type="button"
               className="btn btn-ghost hover:text-error"
               disabled={change.isPending}
-              onClick={() => send({ mac: "" })}
+              onClick={() => send({ dev: "" })}
             >
               {t("nat.dmzDisable")}
             </button>
@@ -392,12 +432,12 @@ function DmzBar({ nets, onSet }: { nets: Net[]; onSet: (conn: string) => void })
       className="flex shrink-0 flex-wrap items-center gap-x-8 gap-y-2 rounded-box border border-base-300 bg-base-100 px-4 py-2.5 text-sm"
     >
       <span className="font-semibold">{t("nat.dmz")}</span>
-      {nets.map((p) => {
-        const z = dmzs(live).find((y) => y.conn === p.c.key);
+      {wansOf(nets).map((c) => {
+        const z = dmzs(live).find((y) => y.conn === c.key);
         const d = z && all.find((x) => x.lan === z.lan && x.mac === z.mac);
-        const name = connName(t, p.c);
+        const name = connName(t, c);
         return (
-          <span key={p.c.key} className="flex items-center gap-2">
+          <span key={c.key} className="flex items-center gap-2">
             <span className="text-base-content/70">{name}:</span>
             {z ? (
               <>
@@ -410,7 +450,7 @@ function DmzBar({ nets, onSet }: { nets: Net[]; onSet: (conn: string) => void })
             <button
               type="button"
               className={`btn btn-ghost btn-xs ${z ? "btn-square text-base-content/70" : "text-primary"}`}
-              onClick={() => onSet(p.c.key)}
+              onClick={() => onSet(c.key)}
               aria-label={z ? t("nat.dmzEdit", { name }) : undefined}
               title={z ? t("nat.dmzEdit", { name }) : undefined}
             >
@@ -439,7 +479,7 @@ function ForwardCard({
 }) {
   const { t } = useI18n();
   const change = useForwardChange();
-  const p = nets.find((n) => n.c.key === f.conn);
+  const p = nets.find((n) => n.lan.id === f.lan);
   const d = devices.find((x) => x.lan === f.lan && x.mac === f.mac);
   const name = f.name || t("nat.unnamed", { ports: ports(f.ext_from, f.ext_to) });
   const span = f.ext_to - f.ext_from;
@@ -505,8 +545,9 @@ type Open = { forward: ForwardInfo | null } | { dmz: string };
 function Nat() {
   const { t } = useI18n();
   const { data: live } = useLive();
-  const nets = useNets();
+  const { nets } = useNets();
   const list = forwards(live);
+  const full = list.length >= MAX_FORWARDS;
   const devices = useDevices(nets.map((p) => p.lan.id));
   const [open, setOpen] = useState<Open | null>(null);
   const form = useRef<HTMLDivElement>(null);
@@ -532,8 +573,14 @@ function Nat() {
               type="button"
               className="btn btn-primary btn-sm ml-auto"
               onClick={() => show({ forward: null })}
-              disabled={!nets.length}
-              title={nets.length ? undefined : t("nat.noNets")}
+              disabled={!nets.length || full}
+              title={
+                !nets.length
+                  ? t("nat.noNets")
+                  : full
+                    ? t("nat.full", { max: MAX_FORWARDS })
+                    : undefined
+              }
             >
               <Plus className="size-4" />
               {t("nat.add")}
@@ -571,7 +618,11 @@ function Nat() {
             )}
           </div>
           <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
-            {t("nat.count", { n: list.length, on: list.filter((f) => f.on).length })}
+            {t("nat.count", {
+              n: list.length,
+              max: MAX_FORWARDS,
+              on: list.filter((f) => f.on).length,
+            })}
           </p>
         </section>
         {open && (

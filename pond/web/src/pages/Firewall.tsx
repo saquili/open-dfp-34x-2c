@@ -31,9 +31,9 @@ import { ip4, net4 } from "../lib/ipv4";
 import { ip6, prefix6 } from "../lib/ipv6";
 import { readPorts } from "../lib/ports";
 import { upTo, z } from "../lib/schemas";
-import { fwDefaults, rules, served } from "../lib/state";
+import { fwDefaults, MAX_RULES, rules, served } from "../lib/state";
 import { Sub, type T } from "./internet/shared";
-import { Choices, type Device, type Net, netName, useDevices, usePlaces } from "./Lan";
+import { Choices, type Device, type Net, netName, useDevices, useNets } from "./Lan";
 
 const PROTOS = ["any", "tcp", "udp", "both", "icmp"] as const;
 type Proto = (typeof PROTOS)[number];
@@ -45,12 +45,6 @@ const SOME = "internet:";
 /** How many rules there are, for the menu that shows them. */
 export function useFwCount() {
   return rules(useLive().data).length;
-}
-
-/* The connections that make the stick a router and have a network. */
-function useNets() {
-  const { places } = usePlaces();
-  return places.filter((p): p is Net => p.lan != null);
 }
 
 /* An address's family: 4 or 6, of an address or a network, or null for neither. */
@@ -555,8 +549,9 @@ type Open = { rule: RuleInfo | null } | { defaults: true };
 function Firewall() {
   const { t } = useI18n();
   const { data: live } = useLive();
-  const nets = useNets();
+  const { nets } = useNets();
   const list = rules(live);
+  const full = list.length >= MAX_RULES;
   const d = fwDefaults(live);
   const devices = useDevices(nets.map((p) => p.lan.id));
   const [open, setOpen] = useState<Open | null>(null);
@@ -580,6 +575,8 @@ function Firewall() {
               type="button"
               className="btn btn-primary btn-sm ml-auto"
               onClick={() => show({ rule: null })}
+              disabled={full}
+              title={full ? t("fw.full", { max: MAX_RULES }) : undefined}
             >
               <Plus className="size-4" />
               {t("fw.add")}
@@ -617,7 +614,7 @@ function Firewall() {
             )}
           </div>
           <p className="mb-px flex min-h-16 shrink-0 items-center border-t border-base-300 text-xs text-base-content/70">
-            {t("fw.count", { n: list.length, on: list.filter((r) => r.on).length })}
+            {t("fw.count", { n: list.length, max: MAX_RULES, on: list.filter((r) => r.on).length })}
           </p>
         </section>
         {open && (
