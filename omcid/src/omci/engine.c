@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "hw/hw.h"
 #include "mcast/acl.h"
@@ -382,6 +383,10 @@ enum {
 	ME_TRAFFIC_DESCRIPTOR = 280,
 
 	ME171_RULE_ATTR = 6,
+
+	ME_OLT_G = 131,
+	OLT_G_TOD_ATTR = 4,
+	OLT_G_TOD_LEN = 14,
 };
 
 static enum omci_status reprogram_vlan(struct omci_engine *eng)
@@ -485,6 +490,30 @@ static void reprogram_uni_rate(struct omci_engine *eng, uint16_t class_id)
 {
 	if (class_id == ME_MAC_BRIDGE_PORT || class_id == ME_TRAFFIC_DESCRIPTOR)
 		omci_bridge_uni_rate(eng->mib);
+}
+
+/*
+ * The Time of day information of OLT-G (ITU-T G.988 clause 9.12.2), when a
+ * Set wrote it: the superframe N in its first four bytes and TstampN, an
+ * IEEE 1588 timestamp, in the other ten, for the hardware to set the clock
+ * at frame N. All zero is no time: the attribute as the ONU starts.
+ */
+static void reprogram_tod(struct omci_engine *eng, uint16_t class_id,
+			  uint16_t instance, uint16_t written)
+{
+	uint8_t v[OLT_G_TOD_LEN];
+	static const uint8_t none[OLT_G_TOD_LEN];
+
+	if (class_id != ME_OLT_G || omci_hw()->tod_info == NULL ||
+	    !(written & omci_attr_bit(OLT_G_TOD_ATTR)) ||
+	    omci_mib_attr_get(eng->mib, class_id, instance, OLT_G_TOD_ATTR, v,
+			      sizeof(v), NULL) != OMCI_OK ||
+	    memcmp(v, none, sizeof(v)) == 0)
+		return;
+
+	omci_hw()->tod_info(omci_be32(&v[0]),
+			    (uint64_t)omci_be16(&v[4]) << 32 | omci_be32(&v[6]),
+			    omci_be32(&v[10]));
 }
 
 /*
@@ -1408,6 +1437,8 @@ static void handle_set(struct omci_engine *eng, const struct omci_frame *req)
 	reprogram_mcast(eng, req->class_id);
 	reprogram_filters(eng, req->class_id);
 	reprogram_uni_rate(eng, req->class_id);
+	reprogram_tod(eng, req->class_id, req->instance,
+		      mask & (uint16_t)~(failed | unsupported));
 	omci_pm_changed(eng->pm, req->class_id, req->instance);
 
 	if (message_level != 0u) {

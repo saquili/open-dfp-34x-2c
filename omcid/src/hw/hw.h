@@ -1061,6 +1061,12 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  *	seconds since 1970 (UTC); the kernel backend writes them, with the
  *	monotonic time they came at, in /run/omcid/clock, which the stick's
  *	time daemon reads. NULL in a backend that keeps nothing
+ * @tod_info: the Time of day information the OLT set in OLT-G (ITU-T G.988
+ *	clause 9.12.2): superframe N and TstampN, the time at which frame N
+ *	reaches an ONU with an equalization delay and a response time of zero,
+ *	as seconds and nanoseconds; the kernel backend has the kernel set the
+ *	PON's PTP clock at frame N (tod-set, ITU-T G.984.3 Amendment 2 clause
+ *	10.4.6). NULL in a backend that keeps nothing
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -1107,6 +1113,7 @@ struct omci_hw_ops {
 	enum omci_status (*uni_rate)(uint64_t bytes_ps);
 	void (*mode_done)(bool router);
 	void (*time_of_day)(uint64_t utc);
+	void (*tod_info)(uint32_t superframe, uint64_t sec, uint32_t nsec);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

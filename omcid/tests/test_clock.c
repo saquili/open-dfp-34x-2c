@@ -16,6 +16,8 @@
 #define MT_SYNC_TIME 24u
 #define MT_CREATE 4u
 #define MT_GET 9u
+#define MT_SET 8u
+#define ME_OLT_G 131u
 #define ME_ETH_PM_UP 322u
 #define PM_INSTANCE 0x0101u
 
@@ -398,6 +400,71 @@ static void test_a_date_is_handed_to_the_backend(void)
 	omci_hw_ops_set(NULL);
 }
 
+static uint32_t g_tod_sf;
+static uint64_t g_tod_sec;
+static uint32_t g_tod_nsec;
+static unsigned int g_tods;
+
+static void tod_tell(uint32_t superframe, uint64_t sec, uint32_t nsec)
+{
+	g_tod_sf = superframe;
+	g_tod_sec = sec;
+	g_tod_nsec = nsec;
+	g_tods++;
+}
+
+/* A Set of OLT-G's Time of day information: its 14 bytes, attribute 4. */
+static enum omci_status send_tod(struct omci_engine *eng, uint16_t tci,
+				 const uint8_t info[14])
+{
+	uint8_t wire[OMCI_FRAME_LEN];
+
+	omci_t_build(wire, tci, MT_SET, true, false, ME_OLT_G, 0u);
+	wire[8] = 0x10u;
+	wire[9] = 0x00u;
+	memcpy(&wire[10], info, 14);
+	return omci_t_rx(eng, wire);
+}
+
+/*
+ * The Time of day information the OLT sets in OLT-G reaches the backend as
+ * the superframe and TstampN, its 48-bit seconds and its nanoseconds; an
+ * all-zero one, no time, does not.
+ */
+static void test_olt_g_time_of_day_is_handed_to_the_backend(void)
+{
+	static const uint8_t info[14] = {
+		0x02u, 0x34u, 0x56u, 0x78u,			/* N */
+		0x00u, 0x01u, 0x6au, 0x0bu, 0x9cu, 0x00u,	/* seconds */
+		0x07u, 0x5bu, 0xcdu, 0x15u,			/* nanoseconds */
+	};
+	static const uint8_t none[14];
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct omci_t_fixture fx;
+
+	ops.tod_info = tod_tell;
+	g_tods = 0;
+	omci_hw_ops_set(&ops);
+	if (!omci_t_up(&fx)) {
+		omci_hw_ops_set(NULL);
+		return;
+	}
+	CHECK_EQ(omci_mib_create(fx.mib, ME_OLT_G, 0u), OMCI_OK);
+
+	CHECK_EQ(send_tod(fx.eng, 0x0150u, info), OMCI_OK);
+	CHECK_EQ(reply_of()[8], 0u);
+	CHECK_EQ(g_tods, 1u);
+	CHECK_EQ(g_tod_sf, 0x02345678u);
+	CHECK_EQ(g_tod_sec, 0x00016a0b9c00ull);
+	CHECK_EQ(g_tod_nsec, 123456789u);
+
+	CHECK_EQ(send_tod(fx.eng, 0x0151u, none), OMCI_OK);
+	CHECK_EQ(g_tods, 1u);
+
+	omci_t_down(&fx);
+	omci_hw_ops_set(NULL);
+}
+
 int main(void)
 {
 	RUN(test_days_from_civil);
@@ -411,6 +478,7 @@ int main(void)
 	RUN(test_a_mib_reset_keeps_the_intervals);
 	RUN(test_every_sync_starts_the_numbering_again);
 	RUN(test_a_date_is_handed_to_the_backend);
+	RUN(test_olt_g_time_of_day_is_handed_to_the_backend);
 
 	return OMCI_T_REPORT("clock");
 }

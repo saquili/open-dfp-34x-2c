@@ -1533,6 +1533,44 @@ static void kernel_time_of_day(uint64_t utc)
 		OMCI_WARN("sync-time: not told in %s", CLOCK_PATH);
 }
 
+/*
+ * The OLT's Time of day information: the kernel sets the PON's PTP clock at
+ * superframe @superframe to the time at which that frame reaches the ONU,
+ * from TstampN (@sec, @nsec) and the ONU's equalization delay, with a tod-set
+ * request (ITU-T G.984.3 Amendment 2 clause 10.4.6).
+ */
+static void kernel_tod_info(uint32_t superframe, uint64_t sec, uint32_t nsec)
+{
+	uint8_t attrs[64] __aligned(4);
+	uint8_t rsp[512] __aligned(4);
+	uint8_t buf[4096] __aligned(4);
+	struct pon_dev_attrs a;
+	uint16_t family = 0;
+	size_t alen = 0, rlen = 0;
+	uint32_t dev;
+	int err;
+
+	err = pon_family_id(&family);
+	if (!err)
+		err = pon_dev_get(&a, buf, sizeof(buf));
+	if (!err) {
+		dev = pon_attr_u32(&a, PON_A_DEV_ID, 0);
+		alen = nla_put(attrs, alen, PON_A_TOD_ID, &dev, sizeof(dev));
+		alen = nla_put(attrs, alen, PON_A_TOD_SUPERFRAME, &superframe,
+			       sizeof(superframe));
+		alen = nla_put(attrs, alen, PON_A_TOD_SEC, &sec, sizeof(sec));
+		alen = nla_put(attrs, alen, PON_A_TOD_NSEC, &nsec, sizeof(nsec));
+		err = nl_request(family, PON_CMD_TOD_SET, attrs, alen,
+				 NLM_F_ACK, rsp, sizeof(rsp), &rlen);
+	}
+	if (err)
+		OMCI_WARN("tod: the clock is not set at superframe %u: %s",
+			  superframe, strerror(-err));
+	else
+		OMCI_INFO("tod: the clock takes TstampN %llu.%09u at superframe %u",
+			  (unsigned long long)sec, nsec, superframe);
+}
+
 /* Whether an address is already among those read, for the same side. */
 static bool fdb_has(const struct omci_hw_fdb *out, size_t n, const uint8_t *mac,
 		    bool ani)
@@ -4434,4 +4472,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.uni_rate = kernel_uni_rate,
 	.mode_done = kernel_mode_done,
 	.time_of_day = kernel_time_of_day,
+	.tod_info = kernel_tod_info,
 };
