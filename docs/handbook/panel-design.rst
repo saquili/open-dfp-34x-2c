@@ -171,9 +171,9 @@ A pill (``Badge``) is not a state: it marks a neutral property of a thing
 (``IPv4 and IPv6``, ``soon``), in the neutral tone.
 
 What the stick has no software for yet is not a state of a thing but a gap in
-the stick: the tab or form says so in one dashed notice (``NotYet``), titled
+the stick: the page or form says so in one dashed notice (``NotYet``), titled
 "Not on the stick yet", that says what it would be, in place of the list and
-the form, with no count on the tab and no button that saves. The panel knows
+the form, with no count in the menu and no button that saves. The panel knows
 it by the part missing from the stick's settings (``served`` in
 ``lib/state.ts``), so the notice goes by itself when the software has it.
 
