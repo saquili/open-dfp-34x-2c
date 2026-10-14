@@ -220,7 +220,10 @@ may do on ubus. Each writes into a directory it owns, or into one of the group
    * - timed
      - ntp, 201
      - ``sys_time``, ``net_raw``, ``net_bind_service``
-     - ``/run/timed`` (its state, which pond reads); no use of ubus.
+     - ``/run/timed`` (its state, which pond reads); the PTP hardware clock,
+       ``/dev/ptp0``, which it steers through the device, whose group
+       ``onu-run`` makes ``ntp`` (the hardware stamps are turned on before,
+       as root, with ``timed -H``); no use of ubus.
    * - dhcp6d
      - dhcp6d, 202
      - ``net_bind_service``, ``net_admin``, ``net_raw``

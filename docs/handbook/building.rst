@@ -301,7 +301,8 @@ The start
     written, the ssh server, ``pond`` and ``timed`` once the management
     address is up. The stick has no clock that runs while it is off, and keeps
     no time in the flash: ``timed`` sets the time by PTP from a master on the
-    management link, or by NTP from the router at the other end of it or from
+    management link, with the switch's hardware stamps over layer 2, or by
+    NTP from the router at the other end of it or from
     the server that the stick's settings name (``NTP_SERVER``, ``onu-config
     system``), or, when the host gives none, from the date the OLT gives with
     OMCI, if it gives one; until then the clock reads 1970. When the settings
