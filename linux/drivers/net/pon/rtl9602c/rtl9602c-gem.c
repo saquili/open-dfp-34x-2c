@@ -24,6 +24,7 @@
 #include <linux/if_link.h>
 #include <linux/netdevice.h>
 #include <linux/pon.h>
+#include <linux/ptp_classify.h>
 #include <linux/dsa/rtl9602c.h>
 #include <net/dsa.h>
 
@@ -797,21 +798,50 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 };
 
 /*
+ * A PTP message gets what DSA gives one that reaches the pon interface
+ * (dsa_skb_defer_rx_timestamp()): the switch driver completes the stamp the
+ * conduit took from its tag, or takes it off, under the PON port's
+ * configuration. The switch's port_rxtstamp never keeps a frame, so the frame
+ * is delivered at once whatever it returns. A frame that then goes on to DSA
+ * has it done again, which leaves the stamp as it is.
+ */
+static void rtl9602c_gem_rxtstamp(struct rtl9602c_pon *p, struct sk_buff *skb)
+{
+	unsigned int type;
+
+	if (!skb_hwtstamps(skb)->hwtstamp || !p->ds->ops->port_rxtstamp)
+		return;
+
+	/* ptp_parse_header() finds the header from the MAC header. */
+	skb_reset_mac_header(skb);
+	type = ptp_classify_raw(skb);
+	if (type != PTP_CLASS_NONE)
+		p->ds->ops->port_rxtstamp(p->ds, RTL9602C_PORT_PON, skb, type);
+}
+
+/*
  * The receive handler for data frames: a frame from the PON port in any flow
  * but the OMCC's goes to the GEM interface of its flow, if there is one. A
- * frame not taken goes on to its user port, the pon interface, and so does
- * one whose flow the conduit cannot tell (%RTL9602C_FLOW_UNKNOWN): every PTP
- * message the switch stamps on its way up, so that no GEM interface receives
- * a hardware timestamp, and the pon interface receives them all.
+ * frame not taken goes on to its user port, the pon interface.
+ *
+ * The conduit cannot tell the flow (%RTL9602C_FLOW_UNKNOWN) of a PTP message
+ * the switch stamps on its way up. Such a message goes by its VLAN to the GEM
+ * interface with a VLAN device of it (pon_gem_rx_vlan()), so that a PTP stack
+ * on that VLAN device receives its messages stamped. One in no such VLAN goes
+ * to the pon interface.
  */
 static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
 			    unsigned int port, unsigned int flow)
 {
 	struct rtl9602c_pon *p = ctx;
 
-	if (port != RTL9602C_PORT_PON || flow == RTL9602C_GPON_OMCC_FLOW ||
-	    flow == RTL9602C_FLOW_UNKNOWN)
+	if (port != RTL9602C_PORT_PON || flow == RTL9602C_GPON_OMCC_FLOW)
 		return false;
+
+	if (flow == RTL9602C_FLOW_UNKNOWN) {
+		rtl9602c_gem_rxtstamp(p, skb);
+		return pon_gem_rx_vlan(p->pon, skb);
+	}
 
 	return pon_gem_rx(p->pon, flow, skb);
 }

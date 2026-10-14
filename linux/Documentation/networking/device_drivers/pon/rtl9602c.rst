@@ -1754,14 +1754,31 @@ Transmit and receive
      - The 80 frames of the downstream row above.
    * - A PTP message from port 2 that the switch stamps on its way to the CPU
        comes up without its flow: the conduit gives the receive handler
-       ``RTL9602C_FLOW_UNKNOWN`` (the CPU port page), and the handler leaves
-       the message to the ``pon`` interface, where it arrives with its
-       hardware stamp. No GEM interface receives a stamped PTP message.
+       ``RTL9602C_FLOW_UNKNOWN`` (the CPU port page). The handler has the
+       switch driver complete or take off its stamp under the ``pon``
+       interface's configuration, as DSA would, and gives it to the GEM
+       interface with a VLAN device of its VLAN (``pon_gem_rx_vlan()``,
+       Documentation/networking/pon.rst). A message in no such VLAN, or in one
+       that VLAN devices of two GEM interfaces carry, goes to the ``pon``
+       interface, stamped. Which GEM port carried a stamped message is not
+       known, and does not matter for its stamp.
      - M
      - Syncs, Follow_Ups and Announces from beyond the OLT, to the PTP group
        and to the stick's own address, reached a packet socket on ``pon`` with
        hardware stamps on the PTP clock's time scale; the GEM port counters
-       had counted them in the GEM port of flow 1.
+       had counted them in the GEM port of flow 1. In VLAN 2002, with a VLAN
+       2002 device on the GEM interface of flow 1, they reached that device:
+       timed there locked to the master beyond the OLT, on hardware stamps
+       both ways.
+   * - A PTP stack on a VLAN device of a GEM interface works as on any port
+       with hardware timestamps: the receive stamps come by the VLAN, the
+       transmit stamps as below, and the timestamping configuration it sets
+       is the ``pon`` interface's.
+     - M
+     - timed as a PTP slave on a VLAN 2002 device of the GEM interface of flow
+       1, against a software-stamped master beyond the OLT: locked over 257
+       Syncs, the PHC's offset within 26 us over the last 30, mean path delay
+       96 to 145 us, 19 Delay_Req stamped, none missed.
    * - Transmit timestamps: a frame whose socket asked for a hardware transmit
        stamp is given to the switch driver's ``port_txtstamp`` for port 2
        before it goes to the conduit, as DSA does for a frame sent on ``pon``,
