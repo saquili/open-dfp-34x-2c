@@ -1066,7 +1066,8 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  *	reaches an ONU with an equalization delay and a response time of zero,
  *	as seconds and nanoseconds; the kernel backend has the kernel set the
  *	PON's PTP clock at frame N (tod-set, ITU-T G.984.3 Amendment 2 clause
- *	10.4.6). NULL in a backend that keeps nothing
+ *	10.4.6), and writes what it took in /run/omcid/tod, which the stick's
+ *	time daemon reads. NULL in a backend that keeps nothing
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);

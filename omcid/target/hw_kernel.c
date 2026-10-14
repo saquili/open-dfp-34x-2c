@@ -1534,10 +1534,44 @@ static void kernel_time_of_day(uint64_t utc)
 }
 
 /*
+ * The Time of day information the kernel took, for the stick's time daemon
+ * (timed -t), which then knows that the PON's PTP clock holds the OLT's time
+ * from frame @superframe on: KEY=VALUE lines, replaced whole, with the
+ * monotonic time the kernel took it at.
+ */
+#define TOD_PATH OMCI_RUN_DIR "/tod"
+
+static void kernel_tod_tell(uint32_t superframe, uint64_t sec, uint32_t nsec)
+{
+	struct timespec mono;
+	char tmp[64];
+	FILE *f;
+	bool ok = false;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &mono) != 0)
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.new", TOD_PATH);
+	f = fopen(tmp, "we");
+	if (f != NULL) {
+		ok = fprintf(f,
+			     "superframe=%u\nsec=%llu\nnsec=%u\n"
+			     "monotonic_ns=%lld\n",
+			     superframe, (unsigned long long)sec, nsec,
+			     (long long)mono.tv_sec * 1000000000LL +
+				     mono.tv_nsec) > 0;
+		ok = fclose(f) == 0 && ok;
+		ok = ok && rename(tmp, TOD_PATH) == 0;
+	}
+	if (!ok)
+		OMCI_WARN("tod: not told in %s", TOD_PATH);
+}
+
+/*
  * The OLT's Time of day information: the kernel sets the PON's PTP clock at
  * superframe @superframe to the time at which that frame reaches the ONU,
  * from TstampN (@sec, @nsec) and the ONU's equalization delay, with a tod-set
- * request (ITU-T G.984.3 Amendment 2 clause 10.4.6).
+ * request (ITU-T G.984.3 Amendment 2 clause 10.4.6). What it took is told in
+ * TOD_PATH.
  */
 static void kernel_tod_info(uint32_t superframe, uint64_t sec, uint32_t nsec)
 {
@@ -1566,9 +1600,11 @@ static void kernel_tod_info(uint32_t superframe, uint64_t sec, uint32_t nsec)
 	if (err)
 		OMCI_WARN("tod: the clock is not set at superframe %u: %s",
 			  superframe, strerror(-err));
-	else
+	else {
 		OMCI_INFO("tod: the clock takes TstampN %llu.%09u at superframe %u",
 			  (unsigned long long)sec, nsec, superframe);
+		kernel_tod_tell(superframe, sec, nsec);
+	}
 }
 
 /* Whether an address is already among those read, for the same side. */
