@@ -412,14 +412,18 @@ static int rtl9602c_devlink_info_get(struct dsa_switch *ds,
 
 /*
  * The SerDes lane to the host runs as the host chooses, and nothing on the lane
- * says which: a host port that takes 2500BaseX sends it without in-band
- * auto-negotiation (IEEE 802.3 clause 37), and one that takes only 1000BaseX
- * commonly negotiates in band, and sometimes does not. So while the lane's
- * receiver has not synchronised, rtl9602c_sds_work() tries the settings of
- * rtl9602c_sds_tries[] in turn and keeps the first one that synchronises.
- * The devlink parameter sfp_lane narrows them to one, or allows them all.
+ * says which: a host port that takes 2500BaseX commonly sends it without
+ * in-band auto-negotiation (IEEE 802.3 clause 37), and one that takes only
+ * 1000BaseX commonly negotiates in band, and sometimes does not. So while the
+ * lane's receiver has not synchronised, rtl9602c_sds_work() tries the settings
+ * "auto" allows in turn and keeps the first one that synchronises. The devlink
+ * parameter sfp_lane narrows them to one, or allows them all.
  */
-/* The lane settings, in the order they are tried, and their sfp_lane names. */
+/*
+ * The lane settings and their sfp_lane names: first those "auto" tries, in the
+ * order it tries them, then 2500BaseX with in-band negotiation, which the lane
+ * runs only when it is named, for a host that negotiates at 2500BaseX.
+ */
 static const struct {
 	u32 mode;
 	bool an;
@@ -430,9 +434,12 @@ static const struct {
 	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, true,
 	  "1000BaseX with in-band negotiation", "1000basex-an" },
 	{ RTL9602C_SERDES_CTRL_MODE_1000BASEX, false, "1000BaseX", "1000basex" },
+	{ RTL9602C_SERDES_CTRL_MODE_2500BASEX, true,
+	  "2500BaseX with in-band negotiation", "2500basex-an" },
 };
 
-#define RTL9602C_SDS_ALL	GENMASK(ARRAY_SIZE(rtl9602c_sds_tries) - 1, 0)
+/* The settings "auto" tries: all but the last. */
+#define RTL9602C_SDS_AUTO	GENMASK(ARRAY_SIZE(rtl9602c_sds_tries) - 2, 0)
 
 /* How long one setting is given to synchronise, and how often it is checked. */
 #define RTL9602C_SDS_TRY_MS	1000
@@ -605,7 +612,7 @@ static void rtl9602c_sds_work(struct work_struct *w)
 }
 
 /*
- * sfp_lane: "auto" for every lane setting, or the name of one. The settings
+ * sfp_lane: "auto" for the settings it tries, or the name of one. The settings
  * the module parameters left, when they are neither, read as their names
  * joined by '+'.
  */
@@ -614,7 +621,7 @@ static void rtl9602c_sds_lane_get(struct rtl9602c_priv *p, char *buf, size_t len
 	unsigned int i;
 	size_t n = 0;
 
-	if (p->sds_tries == RTL9602C_SDS_ALL) {
+	if (p->sds_tries == RTL9602C_SDS_AUTO) {
 		strscpy(buf, "auto", len);
 		return;
 	}
@@ -637,7 +644,7 @@ static int rtl9602c_sds_lane_set(struct rtl9602c_priv *p, const char *name)
 	u8 tries = 0;
 
 	if (!strcmp(name, "auto"))
-		tries = RTL9602C_SDS_ALL;
+		tries = RTL9602C_SDS_AUTO;
 	for (i = 0; i < ARRAY_SIZE(rtl9602c_sds_tries); i++)
 		if (!strcmp(name, rtl9602c_sds_tries[i].param))
 			tries = BIT(i);
@@ -1511,7 +1518,7 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	 * The lane in the first setting; the work tries the others until one
 	 * synchronises, unless sfp_lane later leaves one.
 	 */
-	p->sds_tries = RTL9602C_SDS_ALL;
+	p->sds_tries = RTL9602C_SDS_AUTO;
 	p->sds_found = false;
 	mutex_lock(&p->sds_lock);
 	rtl9602c_sds_set(p, __ffs(p->sds_tries));
