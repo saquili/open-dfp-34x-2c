@@ -184,7 +184,14 @@ Where the code is
        of the PON class.
    * - ``drivers/net/dsa/realtek/rtl9602c-ptp.c``
      - ``rtl9602c_port_rxtstamp()``, which completes the seconds of the receive
-       timestamp that the conduit takes from the PTP tag.
+       timestamp that the conduit takes from the PTP tag;
+       ``rtl9602c_port_txtstamp()``, which marks a PTP message for its
+       departure time, and the handler that completes it from the departure
+       report.
+   * - ``include/linux/dsa/rtl9602c.h``
+     - The contract between the conduit, the switch driver and the tag
+       driver: the calls and handler types under "The conduit and DSA", and
+       the mark of a message awaiting its departure time.
    * - ``Kconfig`` and ``Makefile`` in ``drivers/net/ethernet/realtek/`` and
        in ``net/dsa/``
      - The build entries.
@@ -201,15 +208,18 @@ Interfaces to user space
   receive queue. ``ip link set cpu down`` halts the engine and setting it up
   again restarts it (see "Sequences").
 - The user ports ``sfp@cpu`` and ``pon@cpu``. The ``SO_PRIORITY`` of a frame
-  sent on ``sfp`` chooses its egress queue at the switch, and the receive time
-  of a PTP message on ``sfp`` arrives as the frame's hardware timestamp (see
-  "Transmit" and "The timestamp tag on PTP frames").
+  sent on ``sfp`` chooses its egress queue at the switch, the receive time of a
+  PTP message on ``sfp`` arrives as the frame's hardware timestamp, and the
+  departure time of a PTP event message sent on ``sfp`` with transmit
+  stamping on comes back on the socket's error queue (see "Transmit", "The
+  timestamp tag on PTP frames" and "Departure reports").
 - ``ethtool -S cpu``. The conduit has no ``ethtool`` operations of its own, and
   the driver no module parameters; DSA adds the switch's counters for the CPU
   port under the prefix ``s00_p03_``
   (Documentation/networking/dsa/rtl9602c.rst).
 - ``/sys/kernel/debug/rtl9602c-eth/rxreason``: the frames the switch sent up,
-  counted per reason. Reading it lists the non-zero counts and any write
+  counted per reason, and the departure reports that came with no handler
+  attached. Reading it lists the non-zero counts and any write
   clears them (see "Statistics").
 - ``/sys/kernel/debug/rtl9602c-eth/rings``: the priority-to-ring map, and per
   receive ring its length, the engine's index into it, the driver's, and the
@@ -1013,7 +1023,8 @@ Transmit descriptor:
    * - 0
      - 25
      - ``RTL9602C_NIC_TXD_NO_REWRITE``
-     - Set on every frame.
+     - Set on every frame but a PTP message awaiting its departure time (see
+       "Departure reports").
    * - 0
      - 23
      - ``RTL9602C_NIC_TXD_ADD_FCS``
@@ -1061,7 +1072,8 @@ Transmit descriptor:
    * - 3
      - 1
      - ``RTL9602C_NIC_TXD_L34_BYPASS``
-     - Set on every frame.
+     - Set on every frame but a PTP message awaiting its departure time (see
+       "Departure reports").
    * - 4
      - 31:0
      - (large send)
@@ -1279,12 +1291,21 @@ from a data frame (see "The OMCI channel").
        the exception (see "The OMCI channel").
      - P
      - IEEE 802.3, clause 4.4.2 (minFrameSize, 512 bits).
-   * - Word 0: ``RTL9602C_NIC_TXD_NO_REWRITE`` (bit 25) is set on every frame,
-       and is meant to keep the switch from rewriting a frame the CPU has
-       already aimed. Its effect is not established.
-     - I
-     - No run with it clear. Clearing it and comparing frames at the far end
-       would settle it.
+   * - Word 0: ``RTL9602C_NIC_TXD_NO_REWRITE`` (bit 25) is set on every frame
+       but a PTP message awaiting its departure time, and is meant to keep the
+       switch from rewriting a frame the CPU has already aimed. With it set,
+       or with ``RTL9602C_NIC_TXD_L34_BYPASS`` set, the switch applies no PTP
+       egress action to the frame; with both clear it applies the egress
+       action of the message's type, and the frame leaves byte for byte as
+       with both set. What else the bit does is not established.
+     - M, I
+     - M: Delay_Req and Sync from a packet socket on ``sfp``, the bits
+       toggled by a lab-only debugfs file: the switch's egress capture read
+       action 0 with either bit set and the configured action with both
+       clear, and only then did departure reports come; three Delay_Req each
+       way, captured at the far end of the SFP lane, were the same 60 bytes.
+       I: any other effect; clearing it on other frames and comparing them at
+       the far end would settle it.
    * - Word 2: ``RTL9602C_NIC_TXD_CPUTAG_EN`` (bit 31) says the descriptor
        carries CPU-tag fields; the driver sets it on every frame. With it set,
        word 3 decides the egress port. What the switch does with a frame
@@ -1337,12 +1358,15 @@ from a data frame (see "The OMCI channel").
        priority 6 or VID 111 priority 2 with action 3 and those values in the
        descriptor. All four PPPoE actions, with the L3 engine off and on, left
        the frame an unchanged IPv4 frame.
-   * - Word 3: ``RTL9602C_NIC_TXD_L34_BYPASS`` (bit 1) is set on every frame.
-       With it clear, and with the L3 engine enabled, a frame aimed by port mask
-       still left unchanged; what it changes is not established.
-     - I
-     - Not load-bearing: it had no effect on port-aimed frames. A frame the L3
-       engine would route would settle it.
+   * - Word 3: ``RTL9602C_NIC_TXD_L34_BYPASS`` (bit 1) is set on every frame
+       but a PTP message awaiting its departure time. With it clear, and with
+       the L3 engine enabled, a frame aimed by port mask still left unchanged.
+       With it set the switch applies no PTP egress action to the frame, as
+       with ``RTL9602C_NIC_TXD_NO_REWRITE``; what else it changes is not
+       established.
+     - M, I
+     - M: as the row of ``RTL9602C_NIC_TXD_NO_REWRITE``. I: what it changes
+       for a frame the L3 engine would route; such a frame would settle it.
    * - Word 3: ``RTL9602C_NIC_TXD_FLOW`` (bits 22:16) is the PON flow the frame
        goes upstream in, 0..127; the PON MAC files the frame under that flow's
        T-CONT queue and GEM Port-ID
@@ -1692,6 +1716,94 @@ The tag, with offsets from the start of the frame as the switch delivers it:
      - Sending a ``0x8899`` frame with a protocol byte other than 4 to the
        board's address and checking that it arrives whole would settle it.
 
+Departure reports
+=================
+
+The switch can report when a PTP message that the CPU sends leaves it. Under
+the egress action that latches the departure time and mirrors it to the CPU
+(see Documentation/networking/dsa/rtl9602c-ptp.rst, "Transmit timestamps"), it
+sends the CPU a frame of its own for each such message, a departure report.
+It applies an egress action only to a frame sent with
+``RTL9602C_NIC_TXD_NO_REWRITE`` and ``RTL9602C_NIC_TXD_L34_BYPASS`` both clear.
+The conduit clears them for a message that the switch driver has marked
+``SKBTX_IN_PROGRESS`` in ``skb_shinfo()->tx_flags`` (its ``port_txtstamp``
+operation), and for no other frame; the mark travels in the shared info
+because ``skb->cb`` does not survive the conduit's queueing discipline. On
+receive the conduit hands the report's time to the handler that the switch
+driver attached with ``rtl9602c_conduit_tstamp_attach()``, in the form of a
+receive timestamp, and consumes the report. A report that comes with no
+handler attached is counted (``rxreason``) and dropped.
+
+The report, with offsets from the start of the frame:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 10 8 82
+
+   * - Offset
+     - Bytes
+     - Content
+   * - 0
+     - 6
+     - Broadcast destination, ``ff:ff:ff:ff:ff:ff``.
+   * - 6
+     - 6
+     - Zero source address.
+   * - 12
+     - 16
+     - A timestamp tag as on a received PTP message ("The timestamp tag on PTP
+       frames"): ``0x8899``, protocol byte 4, reason byte 243, six zero bytes,
+       the low 16 bits of the seconds and the nanoseconds.
+   * - 28
+     - 32
+     - Zero.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - A PTP message that the CPU sends with ``RTL9602C_NIC_TXD_NO_REWRITE``
+       and ``RTL9602C_NIC_TXD_L34_BYPASS`` clear, under the egress action that
+       latches and mirrors, makes the switch send the CPU a 60-byte report
+       with a CPU tag and the trap reason 243
+       (``RTL9602C_RX_REASON_PTP_DEPARTURE``), laid out as above. It holds
+       nothing of the message, so it does not say which message left.
+     - M
+     - Delay_Req, Sync with and without the two-step flag, and Follow_Up from
+       a packet socket on ``sfp``: the reports dumped by a lab-only kernel,
+       and the ``rxreason`` view counting one report per message.
+   * - The report's time is when the message left the switch: it lay between
+       two reads of the switch's clock, one before the message was sent and
+       one after.
+     - M
+     - 21 Delay_Req and Sync sent through ``SO_TIMESTAMPING`` on ``sfp`` and
+       on its VLAN 4094 interface: each stamp 178 to 211 us after the read
+       before the send and 8 to 238 us before the read after it.
+   * - Reports come 58 us to 9.2 ms after the send returns, most within
+       170 us.
+     - M
+     - The same messages, timed by the sender from the send to the stamp on
+       its error queue.
+   * - The conduit takes a frame for a report only when it came up with a CPU
+       tag and the trap reason 243 and holds ``0x8899`` at offset 12 and the
+       protocol byte 4 at offset 14; any other frame of that reason goes up
+       the ordinary path.
+     - I
+     - No other frame of reason 243 has been seen; the check keeps a host's
+       frame from being taken for a report.
+   * - The nanoseconds of the reports lie on a 128 ns grid: their low seven
+       bits kept one value through a boot (``0x60`` in one, ``0x58`` in
+       another), and the switch wrote times on the same grid into the
+       correctionField of one-step Syncs. Whether the latch is coarse or
+       departures fall on the grid is not established.
+     - M, I
+     - M: every report of two boots, and three one-step Syncs captured at the
+       far end. I: the cause; a second stamped port, or a scope on the lane,
+       would settle it.
+
 The conduit and DSA
 ===================
 
@@ -1814,8 +1926,13 @@ at a time.
        ``rtl9602c_conduit_ctrl_attach()`` does.
    * - ``rtl9602c_conduit_flow_detach(dev)``
      - Detaches it; as ``rtl9602c_conduit_ctrl_detach()``.
+   * - ``rtl9602c_conduit_tstamp_attach(dev, rx, ctx)``
+     - Attaches the handler for departure reports (see "Departure reports");
+       returns as ``rtl9602c_conduit_ctrl_attach()`` does.
+   * - ``rtl9602c_conduit_tstamp_detach(dev)``
+     - Detaches it; as ``rtl9602c_conduit_ctrl_detach()``.
 
-The two handler types:
+The three handler types:
 
 .. list-table::
    :header-rows: 1
@@ -1833,11 +1950,17 @@ The two handler types:
    * - ``rtl9602c_flow_rx_t``: ``bool (*)(void *ctx, struct sk_buff *skb,
        unsigned int port, unsigned int flow)``
      - From the receive poll, while DSA uses the conduit, for each frame with a
-       CPU tag that the OMCI handler has not taken. The frame is as it arrived,
+       CPU tag that the OMCI handler has not taken and that is not a departure
+       report. The frame is as it arrived,
        from its Ethernet header, before DSA sees it and before a PTP timestamp
        tag is taken off. ``flow`` (0 to 127) means something only for a frame
        from the PON port. Returns true if it took the frame; false lets DSA
        deliver it to the user port of ``port``.
+   * - ``rtl9602c_tstamp_rx_t``: ``void (*)(void *ctx, ktime_t stamp)``
+     - From the receive poll, while DSA uses the conduit, for each departure
+       report, with its time in the form of a receive timestamp: the low 16
+       bits of the seconds and the nanoseconds. The conduit consumes the
+       report.
 
 .. list-table::
    :header-rows: 1
@@ -1850,11 +1973,12 @@ The two handler types:
        behind which the GPON MAC sits.
      - T
      - OMCI both ways over ``/dev/pon0omci0``.
-   * - The switch driver attaches two receive handlers to the conduit: one for
-       OMCI frames (``RTL9602C_NIC_RXD_OMCI`` and a tag), called with the source
-       port; one for every tagged data frame, called with the source port and
-       the flow. A handler returns whether it took the frame; a frame it leaves
-       goes up the ordinary path. Attach publishes the context before the
+   * - The switch driver attaches three receive handlers to the conduit: one
+       for OMCI frames (``RTL9602C_NIC_RXD_OMCI`` and a tag), called with the
+       source port; one for every tagged data frame, called with the source
+       port and the flow; and one for departure reports, called with their
+       time. A frame handler returns whether it took the frame; a frame it
+       leaves goes up the ordinary path. Attach publishes the context before the
        handler (release, paired with an acquire on the receive path); detach
        clears the handler and waits out every poll (``synchronize_net()``).
        ``rtl9602c_conduit_ctrl_xmit()`` sends an OMCI frame (see "The OMCI
@@ -1862,7 +1986,8 @@ The two handler types:
        conduit driver built, the header's stubs return ``-EOPNOTSUPP``.
      - T
      - OMCI both ways over ``/dev/pon0omci0``; GEM downstream, frames delivered
-       to their GEM interface by flow.
+       to their GEM interface by flow; departure times returned through
+       ``SO_TIMESTAMPING``.
    * - The conduit is named ``cpu``: the user ports appear as ``sfp@cpu`` and
        ``pon@cpu``.
      - T
@@ -2249,15 +2374,19 @@ Transmitting a data frame
    the frame meets the 64-byte minimum, and the engine reads it from memory.
    (P)
 2. Build word 0: ``RTL9602C_NIC_DESC_OWN``, first and last segment,
-   ``RTL9602C_NIC_TXD_ADD_FCS``, ``RTL9602C_NIC_TXD_NO_REWRITE`` and the length;
-   add ``RTL9602C_NIC_TXD_FLOW_SEL`` and take the flow from the dst if the frame
-   carries a flow dst. Purpose: describe the frame to the engine. (T)
+   ``RTL9602C_NIC_TXD_ADD_FCS``, the length and, unless the switch driver
+   marked the frame ``SKBTX_IN_PROGRESS``, ``RTL9602C_NIC_TXD_NO_REWRITE``; add
+   ``RTL9602C_NIC_TXD_FLOW_SEL`` and take the flow from the dst if the frame
+   carries a flow dst. Purpose: describe the frame to the engine, and let the
+   switch apply its PTP egress action to a marked message (see "Departure
+   reports"). (T)
 3. Take the ring lock. If the ring is full, stop every queue, drop the lock,
    unmap the frame and return busy. Purpose: one ring and one lock serve every
    queue, and the stack retries when the ring has room again. (T)
 4. Write word 1 (the buffer), word 2 (``RTL9602C_NIC_TXD_CPUTAG_EN |
    RTL9602C_NIC_TXD_PRI_EN`` and the priority), word 3 (the queue's port, the
-   flow, ``RTL9602C_NIC_TXD_L34_BYPASS``) and word 4 (0). Purpose: aim the frame
+   flow, and ``RTL9602C_NIC_TXD_L34_BYPASS`` unless the frame is marked) and
+   word 4 (0). Purpose: aim the frame
    at one port, with its priority and flow. (T)
 5. Write word 0 last, with ``RTL9602C_NIC_DESC_RING_END`` if this is the last
    descriptor of the ring. Advance the head, and stop the queues if the ring is
@@ -2467,9 +2596,11 @@ About the transmit path
 
    * - Question
      - What would settle it
-   * - What ``RTL9602C_NIC_TXD_NO_REWRITE`` (set on every frame) does.
-     - Clearing it and comparing frames at the far end.
-   * - What ``RTL9602C_NIC_TXD_L34_BYPASS`` (set on every frame) changes.
+   * - What ``RTL9602C_NIC_TXD_NO_REWRITE`` does besides keeping the PTP
+       egress action off a frame.
+     - Clearing it on other frames and comparing them at the far end.
+   * - What ``RTL9602C_NIC_TXD_L34_BYPASS`` changes besides keeping the PTP
+       egress action off a frame.
      - Sending a frame the L3 engine would route.
    * - Whether the flow of transmit word 3 is honoured without
        ``RTL9602C_NIC_TXD_FLOW_SEL``.

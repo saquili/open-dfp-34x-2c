@@ -210,6 +210,16 @@
  */
 #define RTL9602C_RX_REASON_PTP		240
 #define RTL9602C_RX_REASON_PTP_MIRROR	241
+
+/*
+ * A departure report: when a PTP message leaves under the egress action that
+ * latches its time and mirrors it to the CPU, the switch sends the CPU a
+ * 60-byte frame of its own for this reason (measured on this board). It holds
+ * a whole timestamp tag, reason byte 243 included, after a broadcast
+ * destination and a zero source address, and zeros after the tag: the time
+ * of the departure and nothing of the message.
+ */
+#define RTL9602C_RX_REASON_PTP_DEPARTURE	243
 #define RTL9602C_PTP_TAG_SEC_OFFSET	22
 #define RTL9602C_PTP_TAG_NSEC_OFFSET	24
 
@@ -280,11 +290,14 @@
  * Set on every frame. RTL9602C_NIC_TXD_ADD_FCS (word 0) makes the engine append
  * the FCS; without it the switch discards every frame from the CPU as a CRC
  * error (measured on this board). RTL9602C_NIC_TXD_NO_REWRITE (word 0) is meant
- * to keep the switch from rewriting a frame the CPU has already aimed; its
- * effect is not verified. RTL9602C_NIC_TXD_L34_BYPASS (word 3) is taken, as its
- * name says, to keep the frame away from the L3 engine, which is not verified:
- * a frame aimed by port mask leaves unchanged with it clear, even with the L3
- * engine on (measured).
+ * to keep the switch from rewriting a frame the CPU has already aimed.
+ * RTL9602C_NIC_TXD_L34_BYPASS (word 3) is taken, as its name says, to keep the
+ * frame away from the L3 engine: a frame aimed by port mask leaves unchanged
+ * with it clear, even with the L3 engine on (measured). One effect of the two
+ * is measured: with either set, the switch applies no PTP egress action to the
+ * frame, and with both clear it does. A PTP message whose departure time the
+ * switch driver awaits therefore goes with both clear; it left byte for byte
+ * as with both set (measured at the far end of the SFP lane).
  */
 #define RTL9602C_NIC_TXD_ADD_FCS	BIT(23)
 #define RTL9602C_NIC_TXD_NO_REWRITE	BIT(25)
@@ -537,6 +550,13 @@ struct rtl9602c_eth {
 	unsigned int ctrl_tx_logged;
 	rtl9602c_flow_rx_t flow_rx;
 	void *flow_ctx;
+	/*
+	 * The switch driver's handler for departure reports, published in the
+	 * same way, and the reports that found none.
+	 */
+	rtl9602c_tstamp_rx_t tstamp_rx;
+	void *tstamp_ctx;
+	u32 tstamp_orphans;
 
 	/* Stops the engine on a panic: see rtl9602c_eth_stop_dma(). */
 	struct notifier_block panic_nb;
@@ -1136,6 +1156,52 @@ static void rtl9602c_eth_rx_tail(struct rtl9602c_eth *priv, unsigned int r,
 }
 
 /*
+ * Hand the time of a departure report (RTL9602C_RX_REASON_PTP_DEPARTURE) to
+ * the switch driver's handler, in the form of a receive timestamp, and
+ * consume the report. The report is the switch's own frame and belongs to no
+ * port. A frame that came up for that reason without the tag that a report
+ * holds at offset 12 is left to the ordinary receive path. The first report
+ * is logged with its tag.
+ *
+ * Return: true if @skb was a report, which is then consumed.
+ */
+static bool rtl9602c_eth_rx_departure(struct net_device *dev,
+				      struct sk_buff *skb)
+{
+	struct rtl9602c_eth *priv = netdev_priv(dev);
+	rtl9602c_tstamp_rx_t rx;
+	u32 sec, nsec;
+
+	if (skb->len < 2 * ETH_ALEN + RTL9602C_PTP_TAG_LEN ||
+	    get_unaligned_be16(skb->data + 2 * ETH_ALEN) !=
+	    RTL9602C_ETH_P_REALTEK ||
+	    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] !=
+	    RTL9602C_PTP_TAG_PROTO_PTP)
+		return false;
+
+	if (!test_and_set_bit(RTL9602C_RX_REASON_PTP_DEPARTURE,
+			      priv->ptp_reason_seen))
+		eth_info(dev, "ptp departure report: %16phN\n",
+			 skb->data + 2 * ETH_ALEN);
+
+	sec = get_unaligned_be16(skb->data + RTL9602C_PTP_TAG_SEC_OFFSET);
+	nsec = get_unaligned_be32(skb->data + RTL9602C_PTP_TAG_NSEC_OFFSET);
+
+	/*
+	 * Acquire, paired with the release in rtl9602c_conduit_tstamp_attach():
+	 * the context read below is the one stored before the handler.
+	 */
+	rx = smp_load_acquire(&priv->tstamp_rx);
+	if (rx)
+		rx(READ_ONCE(priv->tstamp_ctx), ktime_set(sec, nsec));
+	else
+		priv->tstamp_orphans++;
+
+	consume_skb(skb);
+	return true;
+}
+
+/*
  * Hand on frame @skb of ring @r, the engine's offset and the FCS taken off,
  * with word 0 (@sts) and the CPU-tag words (@w2, @w3) of its first
  * descriptor.
@@ -1173,6 +1239,11 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 		struct metadata_dst *md = NULL;
 
 		priv->rx_reason[why]++;
+
+		/* A departure report is no port's frame. */
+		if (why == RTL9602C_RX_REASON_PTP_DEPARTURE &&
+		    rtl9602c_eth_rx_departure(dev, skb))
+			return;
 
 		/*
 		 * Acquire, paired with the release in
@@ -1664,11 +1735,18 @@ static int rtl9602c_eth_stop(struct net_device *dev)
  * Post a data frame on the descriptor at tx_head. A short frame is padded to
  * 60 bytes, which with the FCS the engine appends makes the 64-byte minimum
  * (IEEE 802.3 clause 4.4.2). Word 3 aims the frame at the port of its queue.
+ *
+ * A PTP message whose departure time the switch driver awaits, marked
+ * SKBTX_IN_PROGRESS (see include/linux/dsa/rtl9602c.h), goes without
+ * RTL9602C_NIC_TXD_NO_REWRITE and RTL9602C_NIC_TXD_L34_BYPASS, so that the
+ * switch applies its PTP egress action to it; every other frame goes with
+ * both.
  */
 static netdev_tx_t rtl9602c_eth_start_xmit(struct sk_buff *skb,
 					   struct net_device *dev)
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
+	u32 bypass = RTL9602C_NIC_TXD_L34_BYPASS;
 	struct metadata_dst *md;
 	dma_addr_t dma;
 	unsigned int i;
@@ -1695,8 +1773,11 @@ static netdev_tx_t rtl9602c_eth_start_xmit(struct sk_buff *skb,
 	}
 
 	sts = RTL9602C_NIC_DESC_OWN | RTL9602C_NIC_DESC_FIRST_SEG | RTL9602C_NIC_DESC_LAST_SEG |
-	      RTL9602C_NIC_TXD_ADD_FCS | RTL9602C_NIC_TXD_NO_REWRITE |
-	      (skb->len & RTL9602C_NIC_TXD_LEN);
+	      RTL9602C_NIC_TXD_ADD_FCS | (skb->len & RTL9602C_NIC_TXD_LEN);
+	if (skb_shinfo(skb)->tx_flags & SKBTX_IN_PROGRESS)
+		bypass = 0;
+	else
+		sts |= RTL9602C_NIC_TXD_NO_REWRITE;
 
 	/*
 	 * A frame from a GEM interface names its PON flow as the port_id of a
@@ -1733,7 +1814,7 @@ static netdev_tx_t rtl9602c_eth_start_xmit(struct sk_buff *skb,
 				      FIELD_PREP(RTL9602C_NIC_TXD_PRI,
 						 min_t(u32, skb->priority, 7)));
 	priv->tx[i].dest = cpu_to_be32(RTL9602C_NIC_TXD_DST_PORT(skb_get_queue_mapping(skb)) |
-				       flow | RTL9602C_NIC_TXD_L34_BYPASS);
+				       flow | bypass);
 	priv->tx[i].lso = 0;
 	/*
 	 * Word 0 last, carrying OWN. The words are stores to uncached memory in
@@ -1857,7 +1938,8 @@ EXPORT_SYMBOL_GPL(rtl9602c_conduit_ctrl_detach);
  * @ctx: passed to @rx
  *
  * While DSA uses the conduit, every received frame with a CPU tag that the OMCI
- * handler has not taken is offered to @rx as it arrived: from its Ethernet
+ * handler has not taken, other than a departure report (see
+ * rtl9602c_conduit_tstamp_attach()), is offered to @rx as it arrived: from its Ethernet
  * header, before any PTP timestamp tag is taken off. The flow means something
  * only for frames from the PON port. A frame the handler takes is its own; one
  * it leaves goes on to its user port. There is one handler at a time.
@@ -1917,6 +1999,66 @@ void rtl9602c_conduit_flow_detach(struct net_device *dev)
 	synchronize_net();
 }
 EXPORT_SYMBOL_GPL(rtl9602c_conduit_flow_detach);
+
+/**
+ * rtl9602c_conduit_tstamp_attach() - attach the handler for departure reports
+ * @dev: the conduit
+ * @rx: the handler, called from the receive poll with @ctx and the time of
+ *	each departure report
+ * @ctx: passed to @rx
+ *
+ * While DSA uses the conduit, each frame that comes up with a CPU tag for the
+ * trap reason of a departure report and holds a timestamp tag is a report:
+ * its time goes to @rx, and the conduit consumes it. A report that comes with
+ * no handler attached is counted and dropped. There is one handler at a time.
+ *
+ * Return: 0, -EINVAL if @dev is not this driver's conduit or @rx is NULL, or
+ * -EBUSY if a handler is attached already.
+ */
+int rtl9602c_conduit_tstamp_attach(struct net_device *dev,
+				   rtl9602c_tstamp_rx_t rx, void *ctx)
+{
+	struct rtl9602c_eth *priv;
+
+	if (!dev || dev->netdev_ops != &rtl9602c_eth_netdev_ops || !rx)
+		return -EINVAL;
+
+	priv = netdev_priv(dev);
+	/* READ_ONCE: detach clears the handler without a lock. */
+	if (READ_ONCE(priv->tstamp_rx))
+		return -EBUSY;
+
+	/* The receive path reads this with READ_ONCE after the acquire. */
+	WRITE_ONCE(priv->tstamp_ctx, ctx);
+
+	/* Release: the context is visible before the handler is. */
+	smp_store_release(&priv->tstamp_rx, rx);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(rtl9602c_conduit_tstamp_attach);
+
+/**
+ * rtl9602c_conduit_tstamp_detach() - detach the handler for departure reports
+ * @dev: the conduit; nothing is done if it is not this driver's
+ *
+ * On return no receive poll is still running the handler, and its context may
+ * be freed.
+ *
+ * Context: process context; sleeps.
+ */
+void rtl9602c_conduit_tstamp_detach(struct net_device *dev)
+{
+	struct rtl9602c_eth *priv;
+
+	if (!dev || dev->netdev_ops != &rtl9602c_eth_netdev_ops)
+		return;
+
+	priv = netdev_priv(dev);
+	/* As in rtl9602c_conduit_flow_detach(). */
+	WRITE_ONCE(priv->tstamp_rx, NULL);
+	synchronize_net();
+}
+EXPORT_SYMBOL_GPL(rtl9602c_conduit_tstamp_detach);
 
 /**
  * rtl9602c_conduit_ctrl_xmit() - send an OMCI message
@@ -2046,6 +2188,10 @@ static ssize_t rtl9602c_eth_rxreason_read(struct file *file, char __user *ubuf,
 			continue;
 		n += scnprintf(buf + n, PAGE_SIZE - n, "reason %3u  %u\n", i, v);
 	}
+	if (READ_ONCE(priv->tstamp_orphans) && n <= PAGE_SIZE - 64)
+		n += scnprintf(buf + n, PAGE_SIZE - n,
+			       "departure reports without a handler  %u\n",
+			       READ_ONCE(priv->tstamp_orphans));
 	if (!n)
 		n = scnprintf(buf, PAGE_SIZE,
 			      "no tagged frame has been received\n");

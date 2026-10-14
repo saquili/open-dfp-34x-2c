@@ -8,6 +8,14 @@
  * conduit: it attaches one receive handler for OMCI frames and one for
  * every tagged data frame, and it sends OMCI frames with
  * rtl9602c_conduit_ctrl_xmit().
+ *
+ * Transmit timestamps take both drivers as well. The switch driver marks a
+ * PTP message whose departure time it awaits with SKBTX_IN_PROGRESS in
+ * skb_shinfo()->tx_flags, which reaches the conduit's transmit path where
+ * skb->cb does not; the conduit sends such a frame so that the switch
+ * applies its PTP egress action to it, and hands the departure report that
+ * the switch then sends to the CPU to the handler attached with
+ * rtl9602c_conduit_tstamp_attach().
  */
 
 #ifndef _LINUX_DSA_RTL9602C_H
@@ -15,6 +23,7 @@
 
 #include <linux/errno.h>
 #include <linux/kconfig.h>
+#include <linux/ktime.h>
 #include <linux/types.h>
 
 struct net_device;
@@ -57,6 +66,21 @@ typedef bool (*rtl9602c_ctrl_rx_t)(void *ctx, struct sk_buff *skb,
 typedef bool (*rtl9602c_flow_rx_t)(void *ctx, struct sk_buff *skb,
 				   unsigned int port, unsigned int flow);
 
+/**
+ * typedef rtl9602c_tstamp_rx_t - handler for departure reports
+ * @ctx: the context given to rtl9602c_conduit_tstamp_attach()
+ * @stamp: the time at which a PTP message left the switch, in the form of a
+ *	receive timestamp: the low 16 bits of the PTP clock's seconds and the
+ *	nanoseconds
+ *
+ * Called from the conduit's NAPI poll for each departure report, a frame the
+ * switch sends to the CPU when a PTP message leaves under the egress action
+ * that latches its time and mirrors it to the CPU. The report carries the
+ * time and nothing of the message, so it does not say which message left.
+ * The conduit consumes the report.
+ */
+typedef void (*rtl9602c_tstamp_rx_t)(void *ctx, ktime_t stamp);
+
 #if IS_ENABLED(CONFIG_RTL9602C_ETH)
 /* Provided by the conduit driver, rtl9602c-eth.c, which documents them */
 int rtl9602c_conduit_ctrl_attach(struct net_device *conduit,
@@ -68,6 +92,9 @@ int rtl9602c_conduit_ctrl_xmit(struct net_device *conduit,
 int rtl9602c_conduit_flow_attach(struct net_device *conduit,
 				 rtl9602c_flow_rx_t rx, void *ctx);
 void rtl9602c_conduit_flow_detach(struct net_device *conduit);
+int rtl9602c_conduit_tstamp_attach(struct net_device *conduit,
+				   rtl9602c_tstamp_rx_t rx, void *ctx);
+void rtl9602c_conduit_tstamp_detach(struct net_device *conduit);
 #else
 /* Without the conduit driver there is no path to the PON port. */
 static inline int rtl9602c_conduit_ctrl_attach(struct net_device *conduit,
@@ -97,6 +124,18 @@ static inline int rtl9602c_conduit_flow_attach(struct net_device *conduit,
 }
 
 static inline void rtl9602c_conduit_flow_detach(struct net_device *conduit)
+{
+}
+
+/* Nor any departure report. */
+static inline int rtl9602c_conduit_tstamp_attach(struct net_device *conduit,
+						 rtl9602c_tstamp_rx_t rx,
+						 void *ctx)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void rtl9602c_conduit_tstamp_detach(struct net_device *conduit)
 {
 }
 #endif
