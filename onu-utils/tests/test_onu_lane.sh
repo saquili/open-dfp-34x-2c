@@ -85,6 +85,14 @@ check 'grep -qx SFP_LANE=1000basex-an "$T/stored"'
 check '[ "$(lane)" = 1000basex-an ]'
 teardown
 
+echo "2500BaseX with negotiation, which auto does not try, is set by its name"
+setup
+run try 2500basex-an
+check '[ $rc -eq 0 ] && [ "$(lane)" = 2500basex-an ]'
+run keep
+check 'grep -qx SFP_LANE=2500basex-an "$T/stored"'
+teardown
+
 echo "auto kept takes the setting out of the store"
 setup
 echo 1000basex >"$T/param/sfp_lane"

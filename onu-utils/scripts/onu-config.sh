@@ -396,7 +396,7 @@ system() {
 			exit 1
 		if (k == "MGMT_ADDRESS" && v !~ /^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+)?$/)
 			exit 1
-		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex)?$/)
+		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex|2500basex-an)?$/)
 			exit 1
 		# A time server: an address, which cannot read as an option of timed.
 		if (k == "NTP_SERVER" && !address(v))

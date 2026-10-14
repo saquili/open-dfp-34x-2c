@@ -4,7 +4,8 @@
 #
 # onu-lane: the setting of the SFP lane to the host, which the switch driver
 # finds by itself ("auto") or keeps to one: 2500basex, 1000basex-an (with
-# in-band negotiation) or 1000basex.
+# in-band negotiation), 1000basex or 2500basex-an (with in-band negotiation,
+# which "auto" does not try).
 #
 #   onu-lane status       CHOICE, NOW and, on trial, TRIAL_MODE,
 #                         TRIAL_PREVIOUS and TRIAL_UNTIL, as KEY=VALUE lines
@@ -39,7 +40,7 @@ log() {
 
 valid() {
 	case $1 in
-	auto | 2500basex | 1000basex-an | 1000basex) return 0 ;;
+	auto | 2500basex | 1000basex-an | 1000basex | 2500basex-an) return 0 ;;
 	esac
 	return 1
 }
