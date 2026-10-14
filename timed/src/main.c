@@ -27,7 +27,8 @@
  * taken instead, in the clock of the interface (its PHC): the PHC is set from
  * the master as the system clock would be, and the system clock follows the
  * PHC, read against it once a second (phc.h), as ptp4l and phc2sys of
- * linuxptp do between them.
+ * linuxptp do between them. While no master does, the OLT's seconds, which
+ * the PHC reports when the stick is on a PON (pon.h), steer its rate.
  */
 
 #define _GNU_SOURCE
@@ -61,6 +62,7 @@
 #include "ntp.h"
 #include "olt.h"
 #include "phc.h"
+#include "pon.h"
 #include "ptp.h"
 #include "select.h"
 #include "servo.h"
@@ -87,6 +89,9 @@
 
 #ifndef SOF_TIMESTAMPING_OPT_TSONLY
 #define SOF_TIMESTAMPING_OPT_TSONLY (1 << 11)
+#endif
+#ifndef PTP_EXTTS_REQUEST2
+#define PTP_EXTTS_REQUEST2 PTP_EXTTS_REQUEST
 #endif
 
 /* The clock of a PTP device, open as @fd (clock_gettime(2)). */
@@ -132,6 +137,17 @@ static const uint8_t ptp_l2_group[6] = { 0x01, 0x1b, 0x19, 0x00, 0x00, 0x00 };
  */
 #define OLT_PERIOD NS_PER_SEC
 #define OLT_HOLD (10 * 60 * NS_PER_SEC)
+
+/*
+ * The PHC is asked for the OLT's seconds once a minute until it gives them:
+ * the GPON MAC's driver may come after timed. They count as coming while the
+ * last is at most 3 s old.
+ */
+#define PON_RETRY (60 * NS_PER_SEC)
+#define PON_HOLD (3 * NS_PER_SEC)
+
+/* What steers the PHC: nothing, a PTP master, or the OLT's seconds. */
+enum phc_owner { PHC_FREE, PHC_PTP, PHC_PON };
 
 enum transport { VIA_NONE, VIA_L2, VIA_UDP };
 
@@ -203,6 +219,22 @@ struct daemon {
 	bool have_sys_phc;
 	unsigned int tx_stamps;		/* Delay_Req stamped in hardware */
 	unsigned int tx_missed;		/* and those whose stamp never came */
+	enum phc_owner phc_owner;
+
+	/*
+	 * The OLT's seconds, external timestamps of the PHC (pon.h), which
+	 * steer it while no master does.
+	 */
+	bool pon_ready;			/* the PHC gives them */
+	bool pon_none_said;		/* the log said it gives none */
+	ns_t pon_retry_at;
+	struct pon pon;
+	ns_t pon_at;			/* monotonic time of the last second */
+	ns_t pon_offset;		/* the PHC's offset from them, filtered, last */
+	bool pon_have_offset;
+	bool pon_in_step;		/* the log said the PHC follows them */
+	unsigned int pon_seconds;	/* seconds that gave an offset */
+	unsigned int pon_jumps;		/* times the PHC jumped under them */
 
 	/* the OLT's time: the file as last read, and what it said */
 	ns_t olt_check_at;
@@ -412,6 +444,16 @@ static void write_state(const struct daemon *d, ns_t mono)
 			fprintf(f, "ptp_tx_stamps=%u\n", d->tx_stamps);
 			fprintf(f, "ptp_tx_missed=%u\n", d->tx_missed);
 		}
+	}
+	if (d->pon_ready) {
+		bool coming = mono - d->pon_at < PON_HOLD;
+
+		fprintf(f, "pon_seconds=%d\n", coming);
+		fprintf(f, "pon_steers=%d\n", coming && d->phc_owner == PHC_PON);
+		if (d->pon_have_offset)
+			fprintf(f, "pon_offset_ns=%lld\n", (long long)d->pon_offset);
+		fprintf(f, "pon_count=%u\n", d->pon_seconds);
+		fprintf(f, "pon_jumps=%u\n", d->pon_jumps);
 	}
 	if (d->olt_path) {
 		fprintf(f, "olt_file=%s\n", d->olt_path);
@@ -798,6 +840,9 @@ static void hw_open(struct daemon *d)
 		d->phc_index = info.phc_index;
 		d->phc = FD_TO_CLOCKID(d->phc_fd);
 		d->phc_set = false;
+		d->phc_owner = PHC_FREE;
+		d->pon_ready = false;
+		d->pon_retry_at = 0;
 		freq = phc_freq_now(d);
 		servo_init(&d->phc_servo, STEP_LIMIT, freq, freq != 0);
 		if (d->phc_servo.freq != freq)
@@ -869,6 +914,24 @@ static void hw_tx_read(struct daemon *d)
 }
 
 /*
+ * The PHC is steered by @owner from now: the offsets filtered before are of
+ * the other one's reference, and the rate the servo knows is the crystal's.
+ */
+static void phc_take(struct daemon *d, enum phc_owner owner)
+{
+	if (d->phc_owner == owner)
+		return;
+	d->phc_owner = owner;
+	d->dirty = true;
+	median3_reset(&d->phc_med);
+	servo_reset(&d->phc_servo);
+	if (owner != PHC_PON) {
+		pon_reset(&d->pon);
+		d->pon_in_step = false;
+	}
+}
+
+/*
  * An offset of the PHC from the master: the PHC's servo, as discipline() is
  * the system clock's. The stamps are the PHC's but the master's are only as
  * good as the master: one that stamps in software gave offsets some 20 us
@@ -882,6 +945,7 @@ static void phc_sample(struct daemon *d, ns_t offset, ns_t mono)
 	char buf[32];
 	ns_t off;
 
+	phc_take(d, PHC_PTP);
 	off = median3_add(&d->phc_med, offset);
 	/* Three to take the median of, but a clock far out is set at once. */
 	if (d->phc_med.n < 3 && offset < STEP_LIMIT && offset > -STEP_LIMIT)
@@ -947,6 +1011,132 @@ static void phc_follow(struct daemon *d, ns_t mono)
 	d->sys_phc_window = window;
 	d->have_sys_phc = true;
 	on_sample(d, SRC_PTP, offset, mono, PHC_L2_HOLD);
+}
+
+/* ---- the OLT's seconds ---- */
+
+/* A master heard over layer 2 with hardware stamps steers the PHC. */
+static bool phc_ptp_steers(const struct daemon *d, ns_t mono)
+{
+	return d->hw_ready && d->ptp.have_master && d->ptp.local_timescale &&
+	       mono - d->l2_sync_at < PHC_L2_HOLD;
+}
+
+/*
+ * Ask the PHC for the OLT's seconds, its external timestamps of channel 0.
+ * A PHC without them, or with no PON behind it, refuses; it is asked again
+ * a minute later.
+ */
+static void pon_open(struct daemon *d)
+{
+	struct ptp_extts_request req;
+
+	memset(&req, 0, sizeof(req));
+	req.index = 0;
+	req.flags = PTP_ENABLE_FEATURE | PTP_RISING_EDGE;
+	if (ioctl(d->phc_fd, PTP_EXTTS_REQUEST2, &req) < 0) {
+		if (!d->pon_none_said)
+			LOG(d, "OLT seconds: none from /dev/ptp%d (%s)", d->phc_index, strerror(errno));
+		d->pon_none_said = true;
+		return;
+	}
+	d->pon_ready = true;
+	d->pon_none_said = false;
+	pon_reset(&d->pon);
+	d->dirty = true;
+	LOG(d, "OLT seconds: from /dev/ptp%d", d->phc_index);
+}
+
+/*
+ * An offset of the PHC from the OLT's seconds: the PHC's servo, as for a
+ * master. The seconds are as exact as the interrupt that reads them, within
+ * some 6 us (measured): through a median of three, with the gains of the
+ * master's offsets, which hold with its delay.
+ */
+static void pon_steer(struct daemon *d, ns_t offset, ns_t mono)
+{
+	double freq = 0;
+	char buf[32];
+	ns_t off;
+
+	phc_take(d, PHC_PON);
+	off = median3_add(&d->phc_med, offset);
+	if (d->phc_med.n < 3)
+		return;
+	d->pon_offset = off;
+	d->pon_have_offset = true;
+	d->phc_servo.baseline = SERVO_BASELINE_PTP;
+	d->phc_servo.gains = SERVO_GAINS_FILTERED;
+	switch (servo_sample(&d->phc_servo, off, mono, &freq)) {
+	case SERVO_STEP:
+		phc_step(d, off);
+		return;
+	case SERVO_JUMP:
+		if (phc_step(d, off) && phc_freq_set(d, freq) < 0)
+			WARN(d, "cannot set the PHC's frequency: %s", strerror(errno));
+		return;
+	case SERVO_FREQ:
+		if (phc_freq_set(d, freq) < 0)
+			WARN(d, "cannot set the PHC's frequency: %s", strerror(errno));
+		break;
+	case SERVO_HOLD:
+		break;
+	}
+	if (!d->pon_in_step) {
+		d->pon_in_step = true;
+		d->dirty = true;
+		LOG(d, "PHC in step with the OLT's seconds, offset %s", show(off, buf, sizeof(buf)));
+	}
+	DEBUG(d, "PHC: offset %lld ns from the OLT's seconds, frequency %+.0f ppb", (long long)off,
+	      -d->phc_servo.freq);
+}
+
+/* A second of the OLT's that began at the PHC's time @t. */
+static void pon_event(struct daemon *d, ns_t t)
+{
+	ns_t mono = mono_now();
+	ns_t off;
+
+	d->pon_at = mono;
+	if (phc_ptp_steers(d, mono)) {
+		pon_reset(&d->pon);
+		return;
+	}
+	switch (pon_second(&d->pon, t, &off)) {
+	case PON_ANCHOR:
+		return;
+	case PON_JUMPED:
+		d->pon_jumps++;
+		d->dirty = true;
+		median3_reset(&d->phc_med);
+		LOG(d, "OLT seconds: the PHC jumped; counting from this second");
+		return;
+	case PON_OFFSET:
+		break;
+	}
+	d->pon_seconds++;
+	pon_steer(d, off, mono);
+}
+
+/*
+ * The seconds the PHC has queued, once poll() said it has some: a read of the
+ * device waits for one whatever O_NONBLOCK says, so it is read once.
+ */
+static void pon_read(struct daemon *d)
+{
+	struct ptp_extts_event ev[4];
+	ssize_t n = read(d->phc_fd, ev, sizeof(ev));
+	size_t i;
+
+	if (n < 0) {
+		WARN(d, "OLT seconds: %s", strerror(errno));
+		d->pon_ready = false;
+		d->pon_retry_at = mono_now() + PON_RETRY;
+		return;
+	}
+	for (i = 0; i < (size_t)n / sizeof(ev[0]); i++)
+		if (ev[i].index == 0)
+			pon_event(d, (ns_t)ev[i].t.sec * NS_PER_SEC + ev[i].t.nsec);
 }
 
 static int udp_socket(const struct daemon *d, unsigned int port, struct in_addr group)
@@ -1269,6 +1459,10 @@ static void tick(struct daemon *d, ns_t mono)
 	}
 	if (d->iface)
 		ptp_tick(d, mono);
+	if (d->phc_fd >= 0 && !d->pon_ready && !d->dry && mono >= d->pon_retry_at) {
+		d->pon_retry_at = mono + PON_RETRY;
+		pon_open(d);
+	}
 	if (d->olt_path)
 		olt_check(d, mono);
 }
@@ -1348,8 +1542,8 @@ int main(int argc, char **argv)
 	    d.olt_path ? d.olt_path : "off");
 
 	while (!g_stop) {
-		struct pollfd pfd[4];
-		int idx_ntp = -1, idx_l2 = -1, idx_ev = -1, idx_gen = -1, n = 0;
+		struct pollfd pfd[5];
+		int idx_ntp = -1, idx_l2 = -1, idx_ev = -1, idx_gen = -1, idx_pon = -1, n = 0;
 		ns_t mono = mono_now();
 
 		memset(pfd, 0, sizeof(pfd));
@@ -1373,6 +1567,11 @@ int main(int argc, char **argv)
 			pfd[n].fd = d.general_fd;
 			pfd[n++].events = POLLIN;
 		}
+		if (d.pon_ready) {
+			idx_pon = n;
+			pfd[n].fd = d.phc_fd;
+			pfd[n++].events = POLLIN;
+		}
 		/* A tick each 200 ms is enough for every timer here. */
 		if (poll(pfd, (nfds_t)n, 200) < 0 && errno != EINTR)
 			break;
@@ -1387,6 +1586,8 @@ int main(int argc, char **argv)
 			ptp_read(&d, d.event_fd, VIA_UDP);
 		if (idx_gen >= 0 && (pfd[idx_gen].revents & POLLIN) && d.general_fd >= 0)
 			ptp_read(&d, d.general_fd, VIA_UDP);
+		if (idx_pon >= 0 && (pfd[idx_pon].revents & POLLIN) && d.pon_ready)
+			pon_read(&d);
 
 		mono = mono_now();
 		tick(&d, mono);

@@ -139,6 +139,37 @@ the master, the system clock within 1 us of the PHC, the PHC's frequency some
 -6.5 ppm. With a master that reads the time before it sends, the PHC followed
 that master's tens of microseconds.
 
+The OLT's seconds
+=================
+
+On a PON the switch's PHC also reports the start of each second of the OLT's
+downstream frames, 8000 frames of 125 us, as its external timestamps, channel
+0 (see "The OLT's seconds" in the driver's page,
+``Documentation/networking/dsa/rtl9602c-ptp.rst``). The OLT keeps its frames
+at its clock's rate. While no master steers the PHC, one heard over layer 2
+with hardware stamps in the last 4 s, timed steers it by those seconds, so
+that it keeps the OLT's rate and the phase it had (``src/pon.h``):
+
+- The first second is counted from; each one after gives the PHC's offset from
+  a whole number of seconds after it. A jump of more than 1 ms is the PHC set
+  anew, by the time of day the OLT gives, which sets it in hardware (ITU-T
+  G.984.3), or by a master, and the count starts again from that second.
+- The offsets go through a median of three to the PHC's servo, with the gains
+  of a master's offsets: the seconds are as exact as the interrupt that reads
+  them, within some 6 us (measured).
+- timed asks the PHC for them when it has opened it, and again each minute
+  while the PHC refuses: off a PON, or before the GPON MAC's driver is bound.
+  A dry run (``-D``) does not ask.
+
+Measured on the stick, on the lab OLT: left alone, the PHC ran 14.4 ppm fast
+of the OLT's frames; steered by them, its frequency set to -14.0 to -15.7 ppm
+and its offsets from the seconds within 3 us, it kept to the frames within
+15 us over 8 minutes (read beside the superframe counter, apart from timed), a
+drift of -0.005 ppm.
+
+The system clock does not follow the PHC on the OLT's seconds: they give a
+rate, not a date.
+
 The state
 =========
 
@@ -174,6 +205,11 @@ less the source's, in nanoseconds.
    to read the PHC, at the last reading.
 ``ptp_tx_stamps``, ``ptp_tx_missed``
    Delay_Req stamped as they left, and those whose stamp never came.
+``pon_seconds``, ``pon_steers``, ``pon_offset_ns``, ``pon_count``, ``pon_jumps``
+   With a PHC that gives the OLT's seconds: whether they come, the last at most
+   3 s old (``1`` or ``0``); whether they steer the PHC; the PHC's offset from
+   them, filtered, at the last; the seconds that gave an offset; and the jumps
+   of the PHC under them. The PHC's frequency is ``ptp_phc_freq_ppb``.
 ``olt_file``, ``olt_good``, ``olt_utc``, ``olt_offset_ns``
    The file of the OLT's time and whether it is good; the time the OLT gave,
    in seconds since 1970, and its offset.

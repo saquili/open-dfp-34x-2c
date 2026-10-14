@@ -9,6 +9,7 @@
 #include "ntp.h"
 #include "olt.h"
 #include "phc.h"
+#include "pon.h"
 #include "ptp.h"
 #include "select.h"
 #include "servo.h"
@@ -1014,6 +1015,45 @@ static void test_median3(void)
 	CHECK_EQ(median3_add(&m, -3), -3);
 }
 
+/* ---- the OLT's seconds ---- */
+
+/*
+ * The first second is counted from; the next give the PHC's offset from a
+ * whole number of seconds after it, also across a second not reported; a
+ * jump beyond PON_JUMP, either way, starts the count again from that second.
+ */
+static void test_pon(void)
+{
+	ns_t base = SEC(T0), off = 0;
+	struct pon p;
+
+	pon_reset(&p);
+	CHECK_EQ(pon_second(&p, base, &off), PON_ANCHOR);
+	CHECK_EQ(pon_second(&p, base + SEC(1) + 15000, &off), PON_OFFSET);
+	CHECK_EQ(off, 15000);
+	CHECK_EQ(pon_second(&p, base + SEC(3) + 45000, &off), PON_OFFSET);
+	CHECK_EQ(off, 45000);
+	CHECK_EQ(pon_second(&p, base + SEC(4) - 6000, &off), PON_OFFSET);
+	CHECK_EQ(off, -6000);
+	CHECK_EQ(pon_second(&p, base + SEC(5) + PON_JUMP, &off), PON_OFFSET);
+	CHECK_EQ(off, PON_JUMP);
+
+	/* The time of day set the PHC 37 s and a half on. */
+	CHECK_EQ(pon_second(&p, base + SEC(43) + NS_PER_SEC / 2, &off), PON_JUMPED);
+	CHECK_EQ(pon_second(&p, base + SEC(44) + NS_PER_SEC / 2 + 2000, &off), PON_OFFSET);
+	CHECK_EQ(off, 2000);
+	CHECK_EQ(pon_second(&p, base + SEC(45) + NS_PER_SEC / 2 + PON_JUMP + 1, &off), PON_JUMPED);
+	CHECK_EQ(pon_second(&p, base + SEC(40), &off), PON_JUMPED);
+	CHECK_EQ(pon_second(&p, base + SEC(40), &off), PON_JUMPED);
+	CHECK_EQ(pon_second(&p, base + SEC(41) - 3000, &off), PON_OFFSET);
+	CHECK_EQ(off, -3000);
+
+	pon_reset(&p);
+	CHECK_EQ(pon_second(&p, base + SEC(100), &off), PON_ANCHOR);
+	CHECK_EQ(pon_second(&p, base + SEC(101), &off), PON_OFFSET);
+	CHECK_EQ(off, 0);
+}
+
 /* ---- the receive stamp ---- */
 
 static void test_stamp(void)
@@ -1121,6 +1161,7 @@ int main(void)
 	test_olt();
 	test_servo();
 	test_median3();
+	test_pon();
 	test_stamp();
 	test_stamp_hw();
 	test_phc_sys_offset();
