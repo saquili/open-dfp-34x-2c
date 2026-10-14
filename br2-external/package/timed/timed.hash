@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# The licence texts of the repository (LICENSES/), computed locally. The
+# source is a directory of this repository, so it has no hash of its own.
+sha256  8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa  LICENSES/preferred/GPL-2.0-only.txt

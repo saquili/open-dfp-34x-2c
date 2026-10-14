@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+config BR2_PACKAGE_TIMED
+	bool "timed"
+	help
+	  The clock of the stick, set from the host: an NTP client and a
+	  PTP slave in one daemon, which sets the clock from the better of
+	  the two that answer, and from the date the OLT gives when the
+	  host gives none. From timed/ in this repository.

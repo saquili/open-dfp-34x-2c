@@ -130,7 +130,7 @@ class TheScripts(unittest.TestCase):
         symbols = scripts.enabled()
         called = {use.name for label, path in scripts.sources() for use in scripts.uses(label, read(path))[0]}
         for name in ("hostname", "sed", "uname", "mount", "mkdir", "ln", "grep", "chown", "chmod",
-                     "syslogd", "klogd", "ntpd", "udhcpd", "getty", "login", "cryptpw"):
+                     "syslogd", "klogd", "udhcpd", "getty", "login", "cryptpw"):
             self.assertIn(name, called)
             self.assertIn(scripts.applet_symbol(name), symbols, name)
 

@@ -91,13 +91,14 @@ BR2_PACKAGE_HOST_SQUASHFS=y
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/board/dfp-34x-2c3/post-image.sh"
 
 # The programs of the ONU: the OMCI daemon, the unit's tools, the PPPoE client,
-# the DHCPv6 server and the status daemon of this tree; the network interface
-# daemon of the netifd/ fork, with ubusd, the message bus it answers on; ip, tc
-# and devlink.
+# the DHCPv6 server, the time daemon and the status daemon of this tree; the
+# network interface daemon of the netifd/ fork, with ubusd, the message bus it
+# answers on; ip, tc and devlink.
 BR2_PACKAGE_OMCID=y
 BR2_PACKAGE_ONU_UTILS=y
 BR2_PACKAGE_PPPOED=y
 BR2_PACKAGE_DHCP6D=y
+BR2_PACKAGE_TIMED=y
 BR2_PACKAGE_POND=y
 BR2_PACKAGE_NETIFD=y
 BR2_PACKAGE_PROCD=y

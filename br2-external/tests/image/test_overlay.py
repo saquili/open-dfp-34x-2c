@@ -100,7 +100,7 @@ class BootScript(unittest.TestCase):
                  "onu-svc start trials -- /usr/lib/onu/onu-change watch",
                  "onu-svc start act -- /usr/lib/onu/onu-act",
                  "onu-svc start pond -- /usr/lib/onu/onu-run pond",
-                 "onu-svc start ntp -l -- /usr/lib/onu/onu-run ntp"]
+                 "onu-svc start time -l -- /usr/lib/onu/onu-run time"]
         places = [text.index(what) for what in order]
         self.assertEqual(places, sorted(places))
 
@@ -138,7 +138,9 @@ class BootScript(unittest.TestCase):
         self.assertLess(text.index("SYS_LOG_SERVER=$(sed -n 's/^LOG_SERVER=//p' /run/onu-system)"),
                         text.index(remote))
         self.assertIn('if [ -n "$SYS_LOG_SERVER" ]; then', text)
-        # The ntpd of the image is a client alone: the stick serves no time.
+        # The clock is timed's: BusyBox's ntpd is not built, and the stick serves
+        # no time.
+        self.assertNotIn("NTPD", enabled_applets())
         self.assertNotIn("FEATURE_NTPD_SERVER", enabled_applets())
 
     def test_without_procd_the_ssh_server_and_netifd_still_start(self):
@@ -407,8 +409,7 @@ class Inittab(unittest.TestCase):
     def test_the_applets_it_runs_are_built_and_init_is_procd(self):
         symbols = enabled_applets()
         for symbol in ("REBOOT", "HALT", "POWEROFF", "ASH", "SH_IS_ASH", "GETTY", "LOGIN",
-                       "FEATURE_SHADOWPASSWDS", "SYSLOGD", "KLOGD", "FEATURE_REMOTE_LOG",
-                       "NTPD"):
+                       "FEATURE_SHADOWPASSWDS", "SYSLOGD", "KLOGD", "FEATURE_REMOTE_LOG"):
             self.assertIn(symbol, symbols)
         # procd is process 1; BusyBox's reboot, halt and poweroff signal it.
         self.assertNotIn("INIT", symbols)

@@ -121,9 +121,9 @@ done
 
 # The programs that face a network run as accounts of their own, without a
 # password or a shell, which no one logs in with (ADR 0014): pond, the status
-# daemon, the time daemon ntp, the DHCPv6 daemon dhcp6d, the PPPoE client
-# pppoed and the OMCI daemon omcid, started by onu-drop with the powers each
-# needs. The image is made from a copy of this directory (post-image.sh), not
+# daemon, ntp, the time daemon timed's, the DHCPv6 daemon dhcp6d, the PPPoE
+# client pppoed and the OMCI daemon omcid, started by onu-drop with the powers
+# each needs. The image is made from a copy of this directory (post-image.sh), not
 # by the build system's own making of accounts, so they are written here,
 # once, with the uid and gid 200 to 204. /etc/shadow becomes
 # /etc/shadow.image, from which the boot writes every account but root's as
