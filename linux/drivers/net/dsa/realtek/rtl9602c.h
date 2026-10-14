@@ -759,13 +759,15 @@ struct rtl9602c_field {
 
 /*
  * Per-port and per-message PTP settings. Of these the driver writes the egress
- * actions of the event messages while transmit stamping is on, and the
- * reference time for a one-step Sync; the transparent-clock bits are not
- * verified. RTL9602C_PTP_RX_TSTAMP is the reference time that the egress
- * action RTL9602C_PTP_ACTION_CORRECT takes off a message's departure time
- * before it adds the difference, modulo 8 s, to the correctionField: the
- * seconds' low three bits in the first word, the nanoseconds in 8 ns ticks in
- * the second (both measured).
+ * actions of the event messages while transmit stamping is on, the ingress
+ * actions while a port stamps what it receives, and the reference time for a
+ * one-step Pdelay_Resp; the transparent-clock bits act on no frame the CPU
+ * sends or receives (measured). RTL9602C_PTP_RX_TSTAMP is the reference time
+ * that the egress action RTL9602C_PTP_ACTION_CORRECT takes off a message's
+ * departure time before it adds the difference, modulo 8 s, to the
+ * correctionField: the seconds' low three bits in the first word, the
+ * nanoseconds in 8 ns ticks in the second (both measured). The same action
+ * adds RTL9602C_PTP_PATH_DELAY, in nanoseconds (measured).
  */
 #define RTL9602C_PTP_TRANSPARENT_PORTS	0x0111d4
 #define RTL9602C_PTP_ACTION_INGRESS	0x0111d8
@@ -773,6 +775,7 @@ struct rtl9602c_field {
 #define RTL9602C_PTP_RX_TSTAMP		0x0111e0
 #define RTL9602C_PTP_RX_TSTAMP_SEC	GENMASK(2, 0)
 #define RTL9602C_PTP_RX_TSTAMP_NSEC	GENMASK(29, 3)
+#define RTL9602C_PTP_PATH_DELAY		0x01b020
 
 /*
  * Set when a PTP message leaves the port, cleared when read; no timestamp
@@ -810,17 +813,22 @@ struct rtl9602c_field {
 #define RTL9602C_PTP_ACTION_MASK		GENMASK(1, 0)
 
 /*
- * The egress action that latches the time a message leaves and sends the CPU
- * a departure report with it, and the one that adds the time from the
- * reference to the departure to the correctionField. The slots of the event
+ * The egress actions: one that latches the time a message leaves and, for a
+ * one-step Sync, writes it into the originTimestamp; one that latches it and
+ * sends the CPU a departure report with it; and one that adds the time from
+ * the reference to the departure to the correctionField (all measured). The
+ * ingress action that takes a message to the CPU and forwards it no further.
+ * The slots of the event
  * messages in the action registers, measured for every message: a Sync goes
  * by slot 0 with the twoStepFlag set and by slot 8 without it, a Pdelay_Req
  * by slot 2 with it and by slot 9 without it; a Pdelay_Resp by slot 3 either
  * way. The general messages go by slots 4 to 7: Follow_Up, Delay_Resp,
  * Pdelay_Resp_Follow_Up and Announce.
  */
+#define RTL9602C_PTP_ACTION_LATCH		1
 #define RTL9602C_PTP_ACTION_LATCH_REPORT	2
 #define RTL9602C_PTP_ACTION_CORRECT		3
+#define RTL9602C_PTP_ACTION_TRAP		1
 #define RTL9602C_PTP_SLOT_SYNC			0
 #define RTL9602C_PTP_SLOT_DELAY_REQ		1
 #define RTL9602C_PTP_SLOT_PDELAY_REQ_2STEP	2

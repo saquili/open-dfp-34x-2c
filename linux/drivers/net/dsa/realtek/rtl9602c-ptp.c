@@ -27,7 +27,6 @@
 #include <linux/dsa/rtl9602c.h>
 #include <linux/ptp_classify.h>
 #include <linux/ptp_clock_kernel.h>
-#include <linux/unaligned.h>
 #include <net/ipv6.h>
 #include <linux/dcbnl.h>
 #include <linux/bitops.h>
@@ -333,10 +332,11 @@ static ktime_t rtl9602c_ptp_complete(struct rtl9602c_priv *p, ktime_t stamp)
  * egress action only when the PTP enable of the port it enters by, the CPU
  * port, is set: the enable of the port it leaves by makes no difference
  * (measured).  The action latches the time and reports it for each event
- * message, but for a one-step Sync while a port sends them (@onestep), and
- * a Pdelay_Resp while a port answers one-step (@p2p): their action writes the
- * time from the reference to their departure into them.  The general
- * messages keep no action.  A message gets the action
+ * message, but for a one-step Sync while a port sends them (@onestep), whose
+ * action writes its departure time into its originTimestamp, and a
+ * Pdelay_Resp while a port answers one-step (@p2p), whose action adds the
+ * time from the reference to its departure to its correctionField.  The
+ * general messages keep no action.  A message gets the action
  * only when the CPU-port driver sends it so (see the transmit path of
  * rtl9602c-eth), so the other messages the CPU sends, and those the switch
  * forwards between ports, leave unchanged and unreported (measured).
@@ -359,8 +359,9 @@ static void rtl9602c_ptp_tx_reports(struct rtl9602c_priv *p, bool on, bool onest
 		 * A one-step Sync carries its time, and a one-step Pdelay_Resp
 		 * its turnaround: neither is reported.
 		 */
-		if ((slot == RTL9602C_PTP_SLOT_SYNC_1STEP && onestep) ||
-		    (slot == RTL9602C_PTP_SLOT_PDELAY_RESP && p2p))
+		if (slot == RTL9602C_PTP_SLOT_SYNC_1STEP && onestep)
+			act = RTL9602C_PTP_ACTION_LATCH;
+		if (slot == RTL9602C_PTP_SLOT_PDELAY_RESP && p2p)
 			act = RTL9602C_PTP_ACTION_CORRECT;
 		clr |= RTL9602C_PTP_ACTION_MASK << (2 * slot);
 		if (on)
@@ -368,6 +369,45 @@ static void rtl9602c_ptp_tx_reports(struct rtl9602c_priv *p, bool on, bool onest
 	}
 	rtl9602c_rmw(p, RTL9602C_PTP_ACTION_EGRESS, clr, set);
 	rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * RTL9602C_PORT_CPU, 1, on);
+}
+
+/*
+ * Take the PTP messages that arrive on @port to the CPU only (@on), or let the
+ * switch forward them as other frames: a clock behind a port that stamps what
+ * it receives answers its peer itself, and a copy the switch forwarded would
+ * reach the next port unstamped and uncorrected.  The ingress action of every
+ * message type traps while any port asks (@any); it acts on a message only
+ * when the PTP enable of the port the message arrives by is set, as the
+ * egress action does on the CPU's (measured for the egress action).  A
+ * message from the CPU, which names its port, is not trapped (measured).
+ */
+static void rtl9602c_ptp_rx_trap(struct rtl9602c_priv *p, int port, bool on,
+				 bool any)
+{
+	unsigned int slot;
+	u32 igr = 0;
+
+	if (any)
+		for (slot = 0; slot < RTL9602C_PTP_MSG_TYPES; slot++)
+			igr |= RTL9602C_PTP_ACTION_TRAP << (2 * slot);
+	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, igr);
+	rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1, on);
+}
+
+/*
+ * The state the PTP block starts from: no port enabled, no ingress action and
+ * no path delay added to a correction.  The CPU port's enable and the egress
+ * actions follow transmit stamping (rtl9602c_ptp_tx_reports()).
+ */
+static void rtl9602c_ptp_block_reset(struct rtl9602c_priv *p)
+{
+	int port;
+
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
+		if (port != RTL9602C_PORT_CPU)
+			rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1, 0);
+	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, 0);
+	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, 0);
 }
 
 /*
@@ -503,6 +543,7 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 	}
 	ptp_schedule_worker(p->ptp_clock, 0);
 
+	rtl9602c_ptp_block_reset(p);
 	rtl9602c_ptp_tx_reports(p, false, false, false);
 	err = rtl9602c_conduit_tstamp_attach(cpu ? cpu->conduit : NULL,
 					     rtl9602c_ptp_departure, p);
@@ -530,6 +571,7 @@ void rtl9602c_ptp_unregister(struct rtl9602c_priv *p)
 		rtl9602c_conduit_tstamp_detach(cpu ? cpu->conduit : NULL);
 		p->ptp_tx_ready = false;
 		rtl9602c_ptp_tx_reports(p, false, false, false);
+		rtl9602c_ptp_block_reset(p);
 
 		spin_lock_bh(&p->ptp_tx_lock);
 		skb = p->ptp_tx_skb;
@@ -598,39 +640,31 @@ bool rtl9602c_port_rxtstamp(struct dsa_switch *ds, int port,
 }
 
 /*
- * The reference time is one register for every port: a one-step Sync must
- * have left the switch before the next one's is written.  The next waits out
- * what is left of this time after the last, with the interrupts off; a Sync
- * took 51 to 84 us from here to leaving (measured: the correction it carried).
+ * The reference time is one register for every port: a one-step Pdelay_Resp
+ * must have left the switch before the next one's is written.  The next waits
+ * out what is left of this time after the last, with the interrupts off; a
+ * message took 51 to 84 us from the write to leaving (measured: the
+ * correction it carried).
  */
 #define RTL9602C_PTP_ONESTEP_GAP_US	250
 
 /*
- * Write the reference time, @ts or, without it, the clock's time now, which
- * goes to @ts: the switch's egress action adds the time from it to a
- * message's departure to the message's correctionField, modulo 8 s.  The
- * reference has 8 ns ticks; the clock's time fits it, a receive time is cut
- * to them.  A write waits out what is left of RTL9602C_PTP_ONESTEP_GAP_US
- * after the last.
+ * Write the reference time @ts: the switch's egress action adds the time from
+ * it to a message's departure to the message's correctionField, modulo 8 s.
+ * The reference has 8 ns ticks; @ts is cut to them.  A write waits out what
+ * is left of RTL9602C_PTP_ONESTEP_GAP_US after the last.
  */
-static void rtl9602c_ptp_reference(struct rtl9602c_priv *p, struct timespec64 *ts,
-				   bool now)
+static void rtl9602c_ptp_reference(struct rtl9602c_priv *p,
+				   const struct timespec64 *ts)
 {
 	unsigned long flags;
 	s64 since;
-	u32 nsec;
 
 	spin_lock_irqsave(&p->ptp_lock, flags);
 	since = ktime_us_delta(ktime_get(), p->ptp_onestep_at);
 	if (since >= 0 && since < RTL9602C_PTP_ONESTEP_GAP_US)
 		udelay(RTL9602C_PTP_ONESTEP_GAP_US - since);
 
-	if (now) {
-		rtl9602c_rmw(p, RTL9602C_PTP_CLK_CTRL, 0, RTL9602C_PTP_CLK_CTRL_LATCH);
-		ts->tv_sec = rtl9602c_ptp_rd_sec(p, RTL9602C_PTP_CLK_SEC);
-		nsec = rtl9602c_r(p, RTL9602C_PTP_CLK_NSEC);
-		ts->tv_nsec = FIELD_GET(RTL9602C_PTP_NSEC_TICKS, nsec) * RTL9602C_PTP_NSEC_TICK_NS;
-	}
 	rtl9602c_w(p, RTL9602C_PTP_RX_TSTAMP,
 		   FIELD_PREP(RTL9602C_PTP_RX_TSTAMP_SEC, ts->tv_sec & 7));
 	rtl9602c_w(p, RTL9602C_PTP_RX_TSTAMP + 4,
@@ -641,39 +675,15 @@ static void rtl9602c_ptp_reference(struct rtl9602c_priv *p, struct timespec64 *t
 }
 
 /*
- * A one-step Sync: write the clock's time now into its originTimestamp and
- * into the reference time, from which the switch's egress action adds the
- * time the Sync spent until it left to the correctionField, modulo 8 s.  The
- * receiver, which adds the correction to the origin, gets the time it left.
+ * A one-step Sync: the switch's egress action writes the time the Sync leaves
+ * into its originTimestamp (measured), so the driver only marks it for the
+ * conduit, which sends it so that the switch applies the action.
  */
-static void rtl9602c_ptp_onestep(struct rtl9602c_priv *p, struct sk_buff *skb,
-				 unsigned int type)
+static void rtl9602c_ptp_onestep(struct rtl9602c_priv *p, struct sk_buff *skb)
 {
-	struct ptp_header *hdr;
-	struct timespec64 now;
-	u8 *origin;
-
-	hdr = ptp_parse_header(skb, type);
-	if (!hdr)
-		return;
-	origin = (u8 *)(hdr + 1);
-	if (skb_ensure_writable(skb, origin - skb->data + 10))
-		return;
-	/* The head may have moved. */
-	hdr = ptp_parse_header(skb, type);
-	if (!hdr)
-		return;
-	origin = (u8 *)(hdr + 1);
-
-	rtl9602c_ptp_reference(p, &now, true);
 	spin_lock_bh(&p->ptp_tx_lock);
 	p->ptp_tx_onestep++;
 	spin_unlock_bh(&p->ptp_tx_lock);
-
-	put_unaligned_be16(upper_16_bits(now.tv_sec), origin);
-	put_unaligned_be32(lower_32_bits(now.tv_sec), origin + 2);
-	put_unaligned_be32(now.tv_nsec, origin + 6);
-	/* Sent so that the switch applies its egress action. */
 	skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
 }
 
@@ -712,7 +722,7 @@ static void rtl9602c_ptp_onestep_p2p(struct rtl9602c_priv *p, int port,
 	if (!match)
 		return;
 
-	rtl9602c_ptp_reference(p, &t2, false);
+	rtl9602c_ptp_reference(p, &t2);
 	skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
 }
 
@@ -767,7 +777,7 @@ void rtl9602c_port_txtstamp(struct dsa_switch *ds, int port,
 	msgtype = ptp_get_msgtype(hdr, type);
 	if (msgtype == PTP_MSGTYPE_SYNC && tx != HWTSTAMP_TX_ON &&
 	    !(hdr->flag_field[0] & PTP_FLAG_TWOSTEP)) {
-		rtl9602c_ptp_onestep(p, skb, type);
+		rtl9602c_ptp_onestep(p, skb);
 		return;
 	}
 	if (msgtype == PTP_MSGTYPE_PDELAY_RESP && tx == HWTSTAMP_TX_ONESTEP_P2P) {
@@ -858,6 +868,7 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 {
 	struct rtl9602c_priv *p = ds->priv;
 	bool tx_on = false, onestep = false, p2p = false, resp_2step = false;
+	bool rx_any = false;
 	int i;
 
 	switch (config->tx_type) {
@@ -907,6 +918,8 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 			   tx == HWTSTAMP_TX_ONESTEP_P2P;
 		resp_2step |= tx == HWTSTAMP_TX_ON || tx == HWTSTAMP_TX_ONESTEP_SYNC;
 		tx_on |= tx != HWTSTAMP_TX_OFF;
+		rx_any |= (i == port ? config->rx_filter : p->hwtstamp[i].rx_filter) !=
+			  HWTSTAMP_FILTER_NONE;
 	}
 
 	/*
@@ -922,6 +935,8 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 
 	p->hwtstamp[port] = *config;
 	rtl9602c_ptp_tx_reports(p, tx_on, onestep, p2p);
+	rtl9602c_ptp_rx_trap(p, port, config->rx_filter != HWTSTAMP_FILTER_NONE,
+			     rx_any);
 	return 0;
 }
 
