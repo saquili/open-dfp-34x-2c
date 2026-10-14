@@ -1123,9 +1123,15 @@ Receive descriptor:
      - ``RTL9602C_NIC_RXD_CPUTAG_VALID``
      - The switch attached a CPU tag; word 3 is valid.
    * - 2
+     - 30
+     - ``RTL9602C_NIC_RXD_PTP_TAG``
+     - The frame holds the switch's whole PTP timestamp tag; bits 26:20 then
+       hold the low 7 bits of the message's sequenceId.
+   * - 2
      - 26:20
      - ``RTL9602C_NIC_RXD_FLOW``
-     - The PON flow the frame arrived on, 0 to 127.
+     - The PON flow the frame arrived on, 0 to 127, but for a PTP message the
+       switch stamped (see "The timestamp tag on PTP frames").
    * - 3
      - 31:28
      - ``RTL9602C_NIC_RXD_SRC_PORT``
@@ -1491,6 +1497,29 @@ message has no Ethernet header (see "The OMCI channel").
      - T
      - GEM downstream: frames on GEM Port-ID 4095 were delivered to that GEM
        interface, 80 of 80.
+   * - A PTP message from the PON port that comes up with the whole timestamp
+       tag has bit 30 of word 2 set (``RTL9602C_NIC_RXD_PTP_TAG``), and bits
+       26:20 then hold the low 7 bits of its sequenceId, not its flow. One that
+       comes up with the half tag of a message to this device's own address
+       has word 2 at ``0x80000000``: no flow either. Neither tag holds the
+       flow. The conduit gives the flow handler ``RTL9602C_FLOW_UNKNOWN`` for
+       both, so that no such message reaches a GEM interface by the wrong
+       flow; they reach the pon interface.
+     - M
+     - Syncs to the PTP group from beyond the OLT with sequenceIds 0 to 11
+       came up with 0 to 11 in bits 26:20, and before the fix the one with
+       sequenceId 0 reached the GEM interface of flow 0, the one with 1 that
+       of flow 1 and the others the pon interface. Syncs to the stick's own
+       address came up with word 2 at ``0x80000000`` and reached the GEM
+       interface of flow 0, while the GEM port counters had seen every one of
+       them arrive in the GEM port of flow 1. With the fix, both kinds reached
+       the pon interface, stamped.
+   * - Word 0 bit 16 (``RTL9602C_NIC_RXD_ROUTED``) is set on a frame that came
+       up through the routing engine, a PTP message to this device's own
+       address among them.
+     - M
+     - Set on every such message from the PON port, clear on the other
+       frames logged.
    * - Word 3: ``RTL9602C_NIC_RXD_SRC_PORT`` (bits 31:28) is the switch port the
        frame entered by: 0 for the SerDes, 2 for the PON.
      - M, T
@@ -1586,9 +1615,10 @@ EtherType, and the tag opens with EtherType ``0x8899``. The conduit takes the
 tag off before DSA or a PTP stack sees the frame: it keeps the time as the
 frame's hardware timestamp (``skb_hwtstamps()``), moves the two addresses
 forward by 16 bytes and pulls the tag, so that the frame reaches the stack as
-it was sent. The tag carries only the low 16 bits of the seconds of the
-switch's PTP clock; the switch driver completes them from the clock
-(``rtl9602c_port_rxtstamp()``, Documentation/networking/dsa/rtl9602c.rst).
+it was sent. The tag carries all 48 bits of the seconds of the switch's PTP
+clock. It holds no PON flow, and the receive descriptor of a frame with the
+tag holds part of the message's sequenceId where it otherwise holds the flow,
+so the conduit cannot tell which GEM port such a message came in by.
 
 The tag, with offsets from the start of the frame as the switch delivers it:
 
@@ -1609,11 +1639,12 @@ The tag, with offsets from the start of the frame as the switch delivers it:
      - 1
      - Reason (``RTL9602C_PTP_TAG_REASON_OFFSET``): 240 or 241.
    * - 16
-     - 6
-     - Not read.
-   * - 22
      - 2
-     - The low 16 bits of the seconds (``RTL9602C_PTP_TAG_SEC_OFFSET``).
+     - The low 7 bits of the message's sequenceId in bits 9:3, the port the
+       message came in by in bits 2:0. Not read.
+   * - 18
+     - 6
+     - The seconds, all 48 bits (``RTL9602C_PTP_TAG_SEC48_OFFSET``).
    * - 24
      - 4
      - The nanoseconds (``RTL9602C_PTP_TAG_NSEC_OFFSET``).
@@ -1659,37 +1690,45 @@ The tag, with offsets from the start of the frame as the switch delivers it:
        whole, without a hardware stamp. I: the descriptor's reason for a
        mirrored copy, taken to be 241 like its tag.
    * - A PTP message addressed to this device's own address comes up with
-       ``RTL9602C_RX_REASON_PTP_OWN`` (245) and only the last
-       ``RTL9602C_PTP_HALF_TAG_LEN`` (8) bytes of the tag, before the message's
-       EtherType or its VLAN tag: two zero bytes, the low 16 bits of the seconds
-       at offset 14 (``RTL9602C_PTP_HALF_TAG_SEC_OFFSET``) and the nanoseconds
-       at offset 16 (``RTL9602C_PTP_HALF_TAG_NSEC_OFFSET``). The driver takes
-       such a half tag off a frame with a CPU tag, that reason and the two zero
-       bytes, as it takes a whole one.
+       ``RTL9602C_RX_REASON_PTP_OWN`` (245) and a half tag of
+       ``RTL9602C_PTP_HALF_TAG_LEN`` (8) bytes before the message's EtherType
+       or its VLAN tag: the low 32 bits of the seconds at offset 12
+       (``RTL9602C_PTP_HALF_TAG_SEC_OFFSET``) and the nanoseconds at offset 16
+       (``RTL9602C_PTP_HALF_TAG_NSEC_OFFSET``). The driver takes such a half
+       tag off a frame with a CPU tag and that reason when the PTP EtherType
+       or a VLAN tag follows it, as it takes a whole one; the switch driver
+       completes the upper seconds from its clock.
      - M
      - Five untagged Syncs and five in VLAN 4094 from the host to the stick's
        address: the ``rxreason`` view counted them at reason 245, they came up
        8 bytes longer with the half tag after the source address, and with it
        taken off each reached a packet socket as sent, with a hardware stamp.
-   * - Offsets 22 and 23 (``RTL9602C_PTP_TAG_SEC_OFFSET``) are the low 16 bits
-       of the seconds of the switch's PTP clock at the moment the switch
-       stamped the frame; offsets 24 to 27 (``RTL9602C_PTP_TAG_NSEC_OFFSET``)
-       the nanoseconds, 32 bits, big-endian, counted in nanoseconds. The
-       conduit stores the two as the frame's hardware timestamp; the switch
-       driver fills in the upper seconds from its clock.
+       With the clock below 65,536 s the half tag opened with two zero bytes,
+       which the driver first took for its mark; with the clock on the TAI
+       time scale it opened with ``6acf``, the seconds' bits 31 to 16, and
+       until the driver looked at the EtherType instead, such messages
+       reached the stack 8 bytes longer and no PTP stack saw them.
+   * - Offsets 18 to 23 (``RTL9602C_PTP_TAG_SEC48_OFFSET``) are the seconds
+       of the switch's PTP clock at the moment the switch stamped the frame,
+       all 48 bits; offsets 24 to 27 (``RTL9602C_PTP_TAG_NSEC_OFFSET``) the
+       nanoseconds, 32 bits, big-endian, counted in nanoseconds. The conduit
+       stores the two as the frame's hardware timestamp.
      - M
      - The seconds tracked the PTP clock read alongside; frames sent 250 ms
        apart were stamped 250.221 and 250.177 ms apart, frames 200 ms apart
        200,209,520 and 200,212,192 ns apart, read through ``SO_TIMESTAMPING``
-       on the switch port.
-   * - Offsets 16 to 21 are not read (one dump read ``00 08 00 00 00 00``).
-       Whether offsets 18 to 21 carry higher bits of the seconds is not
-       established, nor whether the stamp is taken when the frame enters the
-       switch or when it leaves toward the CPU.
+       on the switch port. With the clock on the TAI time scale, offsets 18
+       to 23 read ``0000 6acf e145``, the clock's seconds then.
+   * - Offsets 16 and 17 hold the low 7 bits of the message's sequenceId in
+       bits 9:3 and the port it came in by in bits 2:0; the driver does not
+       read them.
+     - M
+     - Syncs with sequenceIds 0 to 11 from the PON port: ``0002``, ``000a``,
+       ``0012`` and on; one dump of a Sync from the host read ``0008``.
+   * - Whether the stamp is taken when the frame enters the switch or when it
+       leaves toward the CPU is not established.
      - I
-     - Not load-bearing for this driver: the upper seconds come from the clock,
-       and the stamp is passed on as it is. Reading the bytes with the clock set
-       past 65,536 s would settle the first question.
+     - Not load-bearing for this driver: the stamp is passed on as it is.
    * - The insertion does not depend on the port's PTP enable nor on the ingress
        action, and the EtherType alone does not cause it: bare frames with
        EtherType ``0x88f7``, ``0x88f8`` or ``0x0800`` and a zero body arrive
@@ -1753,8 +1792,9 @@ The report, with offsets from the start of the frame:
    * - 12
      - 16
      - A timestamp tag as on a received PTP message ("The timestamp tag on PTP
-       frames"): ``0x8899``, protocol byte 4, reason byte 243, six zero bytes,
-       the low 16 bits of the seconds and the nanoseconds.
+       frames"): ``0x8899``, protocol byte 4, reason byte 243, the low 7 bits
+       of the message's sequenceId and the port it left by, all 48 bits of the
+       seconds and the nanoseconds.
    * - 28
      - 32
      - Zero.
@@ -1770,12 +1810,15 @@ The report, with offsets from the start of the frame:
        and ``RTL9602C_NIC_TXD_L34_BYPASS`` clear, under the egress action that
        latches and mirrors, makes the switch send the CPU a 60-byte report
        with a CPU tag and the trap reason 243
-       (``RTL9602C_RX_REASON_PTP_DEPARTURE``), laid out as above. It holds
-       nothing of the message, so it does not say which message left.
+       (``RTL9602C_RX_REASON_PTP_DEPARTURE``), laid out as above. Of the
+       message it holds only the port it left by and the low 7 bits of its
+       sequenceId; the conduit passes on the time alone.
      - M
      - Delay_Req, Sync with and without the two-step flag, and Follow_Up from
        a packet socket on ``sfp``: the reports dumped by a lab-only kernel,
-       and the ``rxreason`` view counting one report per message.
+       and the ``rxreason`` view counting one report per message. A Delay_Req
+       with sequenceId 0 sent up a GEM interface: ``0002``, port 2, at offset
+       16, and ``0000 6acf e145``, the clock's seconds, at offset 18.
    * - The report's time is when the message left the switch: it lay between
        two reads of the switch's clock, one before the message was sent and
        one after.
@@ -1952,16 +1995,17 @@ The three handler types:
        unsigned int port, unsigned int flow)``
      - From the receive poll, while DSA uses the conduit, for each frame with a
        CPU tag that the OMCI handler has not taken and that is not a departure
-       report. The frame is as it arrived,
-       from its Ethernet header, before DSA sees it and before a PTP timestamp
-       tag is taken off. ``flow`` (0 to 127) means something only for a frame
-       from the PON port. Returns true if it took the frame; false lets DSA
-       deliver it to the user port of ``port``.
+       report. The frame is from its Ethernet header, with a PTP timestamp tag
+       taken off and its time the frame's hardware timestamp, as DSA would see
+       it. ``flow`` (0 to 127) means something only for a frame from the PON
+       port, and is ``RTL9602C_FLOW_UNKNOWN`` for a PTP message the switch
+       stamped, whose descriptor and tag do not hold it. Returns true if it
+       took the frame; false lets DSA deliver it to the user port of
+       ``port``.
    * - ``rtl9602c_tstamp_rx_t``: ``void (*)(void *ctx, ktime_t stamp)``
      - From the receive poll, while DSA uses the conduit, for each departure
-       report, with its time in the form of a receive timestamp: the low 16
-       bits of the seconds and the nanoseconds. The conduit consumes the
-       report.
+       report, with its time, all of the seconds and the nanoseconds. The
+       conduit consumes the report.
 
 .. list-table::
    :header-rows: 1

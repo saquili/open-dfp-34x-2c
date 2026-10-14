@@ -194,8 +194,13 @@
 /*
  * The timestamp tag the switch inserts into a PTP message it sends to the CPU:
  * 16 bytes between the source address and the message's own EtherType, opening
- * with EtherType 0x8899. Offsets are from the start of the frame; bytes
- * 16 to 21 are not used.
+ * with EtherType 0x8899. Offsets are from the start of the frame. The half-word
+ * at offset 16 holds the low 7 bits of the message's sequenceId in bits 9 to 3
+ * and the port the message came in by in bits 2 to 0; the seconds of the PTP
+ * clock follow at offset 18, all 48 bits, and the nanoseconds at offset 24
+ * (measured on this board: the seconds were those of the clock, the PHC, and
+ * the port 2 for messages from the PON port). Unlike the CPU tag of other
+ * frames, the tag holds no PON flow (see RTL9602C_NIC_RXD_PTP_TAG).
  */
 #define RTL9602C_ETH_P_REALTEK	0x8899
 #define RTL9602C_PTP_TAG_LEN	16
@@ -203,6 +208,7 @@
 /* The protocol byte of a PTP tag: 4 in every tag seen on this board. */
 #define RTL9602C_PTP_TAG_PROTO_PTP	4
 #define RTL9602C_PTP_TAG_REASON_OFFSET	15
+#define RTL9602C_PTP_TAG_SEC48_OFFSET	18
 /*
  * The trap reasons in the receive descriptor of a frame that carries a tag:
  * a PTP message sent to the CPU, and a copy made by the ingress mirror
@@ -217,21 +223,27 @@
  * 60-byte frame of its own for this reason (measured on this board). It holds
  * a whole timestamp tag, reason byte 243 included, after a broadcast
  * destination and a zero source address, and zeros after the tag: the time
- * of the departure and nothing of the message.
+ * of the departure, all 48 bits of its seconds, and of the message only the
+ * port it left by and the low 7 bits of its sequenceId, in the half-word at
+ * offset 16 as in a received message's tag (measured).
  */
 #define RTL9602C_RX_REASON_PTP_DEPARTURE	243
-#define RTL9602C_PTP_TAG_SEC_OFFSET	22
 #define RTL9602C_PTP_TAG_NSEC_OFFSET	24
 
 /*
  * A PTP message addressed to this device's own address comes up with the
- * trap reason PTP_OWN and only the last 8 bytes of the tag: two zero bytes,
- * the low 16 bits of the seconds and the nanoseconds, between the source
- * address and the message's EtherType or VLAN tag.
+ * trap reason PTP_OWN and a half tag of 8 bytes, the low 32 bits of the PTP
+ * clock's seconds and the nanoseconds, between the source address and the
+ * message's EtherType or VLAN tag (measured on this board: with the clock
+ * below 65,536 s the half tag opened with two zero bytes, with the clock on
+ * the TAI time scale with the seconds' bits 31 to 16). Its receive descriptor
+ * marks it routed (RTL9602C_NIC_RXD_ROUTED) and holds no PON flow: word 2 is
+ * 0 but for RTL9602C_NIC_RXD_CPUTAG_VALID (measured with messages from the
+ * PON port, which the GEM counters had seen arrive on a GEM port in flow 1).
  */
 #define RTL9602C_RX_REASON_PTP_OWN	245
 #define RTL9602C_PTP_HALF_TAG_LEN	8
-#define RTL9602C_PTP_HALF_TAG_SEC_OFFSET	14
+#define RTL9602C_PTP_HALF_TAG_SEC_OFFSET	12
 #define RTL9602C_PTP_HALF_TAG_NSEC_OFFSET	16
 
 /*
@@ -329,6 +341,24 @@
  */
 #define RTL9602C_NIC_RXD_CPUTAG_VALID	BIT(31)
 #define RTL9602C_NIC_RXD_FLOW	GENMASK(26, 20)
+
+/*
+ * Receive word 0 of a frame that came up through the routing engine, a PTP
+ * message to this device's own address among them (measured).
+ */
+#define RTL9602C_NIC_RXD_ROUTED	BIT(16)
+
+/*
+ * Receive word 2 of a frame that holds the switch's whole PTP timestamp tag
+ * (see RTL9602C_ETH_P_REALTEK) has this bit set, and RTL9602C_NIC_RXD_FLOW then
+ * holds the low 7 bits of the message's sequenceId instead of its PON flow
+ * (measured on this board: Syncs with sequenceIds 0 to 11 from the PON port
+ * came up with 0 to 11 there, whatever GEM port carried them). Neither the
+ * descriptor nor the tag then says which PON flow the message arrived on. A
+ * message with the half tag of one addressed to this device keeps its flow
+ * and does not have the bit.
+ */
+#define RTL9602C_NIC_RXD_PTP_TAG	BIT(30)
 #define RTL9602C_NIC_RXD_SRC_PORT	GENMASK(31, 28)
 
 /*
@@ -1170,7 +1200,8 @@ static bool rtl9602c_eth_rx_departure(struct net_device *dev,
 {
 	struct rtl9602c_eth *priv = netdev_priv(dev);
 	rtl9602c_tstamp_rx_t rx;
-	u32 sec, nsec;
+	u64 sec;
+	u32 nsec;
 
 	if (skb->len < 2 * ETH_ALEN + RTL9602C_PTP_TAG_LEN ||
 	    get_unaligned_be16(skb->data + 2 * ETH_ALEN) !=
@@ -1184,7 +1215,7 @@ static bool rtl9602c_eth_rx_departure(struct net_device *dev,
 		eth_info(dev, "ptp departure report: %16phN\n",
 			 skb->data + 2 * ETH_ALEN);
 
-	sec = get_unaligned_be16(skb->data + RTL9602C_PTP_TAG_SEC_OFFSET);
+	sec = get_unaligned_be48(skb->data + RTL9602C_PTP_TAG_SEC48_OFFSET);
 	nsec = get_unaligned_be32(skb->data + RTL9602C_PTP_TAG_NSEC_OFFSET);
 
 	/*
@@ -1199,6 +1230,90 @@ static bool rtl9602c_eth_rx_departure(struct net_device *dev,
 
 	consume_skb(skb);
 	return true;
+}
+
+/* Whether @type, an EtherType in a frame, is PTP's or a VLAN tag's. */
+static bool rtl9602c_eth_ptp_follows(const u8 *type)
+{
+	switch (get_unaligned_be16(type)) {
+	case ETH_P_1588:
+	case ETH_P_8021Q:
+	case ETH_P_8021AD:
+		return true;
+	}
+	return false;
+}
+
+/*
+ * Take off the timestamp tag of a PTP message (see RTL9602C_ETH_P_REALTEK),
+ * frame @skb with the CPU-tag word @w2 and the trap reason @why of its first
+ * descriptor. Its time, the PTP clock's seconds and nanoseconds, becomes the
+ * frame's hardware timestamp. The reason byte, 240 for a message sent
+ * to the CPU and 241 for a copy made by the ingress mirror action (measured on
+ * this board), is logged once per value and otherwise not interpreted. The
+ * addresses then move up over the tag, so the frame reaches the stack as it
+ * was sent: a PTP message over Ethernet is recognised by its own EtherType,
+ * 0x88F7 (IEEE 1588-2008 Annex F), which neither DSA nor a PTP stack would
+ * find behind the tag.
+ *
+ * A frame longer than the tag with 0x8899 at offset 12 and the protocol byte 4
+ * at offset 14, as in every tag seen on this board, is taken to carry one, but
+ * only if the switch sent it up for one of the two PTP trap reasons: a host can
+ * send such a frame itself, and the switch then floods it to the CPU with the
+ * reason of an ordinary frame (measured). Other frames use that EtherType with
+ * other protocol bytes, among them the switch's own loop-detection probes, and
+ * go up as they came.
+ *
+ * A message addressed to this device carries only a half tag, its time with
+ * the low 32 bits of the seconds, and comes up for RTL9602C_RX_REASON_PTP_OWN
+ * (measured): the half tag is taken off the same way when a PTP EtherType or
+ * a VLAN tag follows it, and the switch driver fills in the upper seconds from
+ * its clock.
+ */
+static void rtl9602c_eth_rx_ptp_tag(struct net_device *dev, struct sk_buff *skb,
+				    u32 w2, unsigned int why)
+{
+	struct rtl9602c_eth *priv = netdev_priv(dev);
+	u64 sec;
+	u32 nsec;
+
+	if (!(w2 & RTL9602C_NIC_RXD_CPUTAG_VALID))
+		return;
+
+	if ((why == RTL9602C_RX_REASON_PTP ||
+	     why == RTL9602C_RX_REASON_PTP_MIRROR) &&
+	    skb->len > RTL9602C_PTP_TAG_LEN &&
+	    get_unaligned_be16(skb->data + 2 * ETH_ALEN) ==
+	    RTL9602C_ETH_P_REALTEK &&
+	    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] ==
+	    RTL9602C_PTP_TAG_PROTO_PTP) {
+		u8 reason = skb->data[RTL9602C_PTP_TAG_REASON_OFFSET];
+
+		sec = get_unaligned_be48(skb->data + RTL9602C_PTP_TAG_SEC48_OFFSET);
+		nsec = get_unaligned_be32(skb->data + RTL9602C_PTP_TAG_NSEC_OFFSET);
+		if (!test_and_set_bit(reason, priv->ptp_reason_seen))
+			eth_info(dev, "ptp tag reason %u, protocol %u: %16phN\n",
+				 reason, skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET],
+				 skb->data + 2 * ETH_ALEN);
+
+		skb_hwtstamps(skb)->hwtstamp = ktime_set(sec, nsec);
+		memmove(skb->data + RTL9602C_PTP_TAG_LEN, skb->data,
+			2 * ETH_ALEN);
+		skb_pull(skb, RTL9602C_PTP_TAG_LEN);
+	} else if (why == RTL9602C_RX_REASON_PTP_OWN &&
+		   skb->len > RTL9602C_PTP_HALF_TAG_LEN + ETH_HLEN &&
+		   rtl9602c_eth_ptp_follows(skb->data + 2 * ETH_ALEN +
+					    RTL9602C_PTP_HALF_TAG_LEN)) {
+		sec = get_unaligned_be32(skb->data +
+					 RTL9602C_PTP_HALF_TAG_SEC_OFFSET);
+		nsec = get_unaligned_be32(skb->data +
+					  RTL9602C_PTP_HALF_TAG_NSEC_OFFSET);
+
+		skb_hwtstamps(skb)->hwtstamp = ktime_set(sec, nsec);
+		memmove(skb->data + RTL9602C_PTP_HALF_TAG_LEN, skb->data,
+			2 * ETH_ALEN);
+		skb_pull(skb, RTL9602C_PTP_HALF_TAG_LEN);
+	}
 }
 
 /*
@@ -1223,6 +1338,9 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 		return;
 	}
 
+	/* Before the flow handler sees the frame, so that it sees it as DSA does. */
+	rtl9602c_eth_rx_ptp_tag(dev, skb, w2, why);
+
 	/*
 	 * With DSA, a frame with a CPU tag is counted under its
 	 * trap reason and offered to the flow handler. If the
@@ -1235,10 +1353,19 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 	if (netdev_uses_dsa(dev) && (w2 & RTL9602C_NIC_RXD_CPUTAG_VALID)) {
 		unsigned int port =
 			FIELD_GET(RTL9602C_NIC_RXD_SRC_PORT, w3);
+		unsigned int flow = FIELD_GET(RTL9602C_NIC_RXD_FLOW, w2);
 		rtl9602c_flow_rx_t flow_rx;
 		struct metadata_dst *md = NULL;
 
 		priv->rx_reason[why]++;
+
+		/*
+		 * A whole timestamp tag leaves no flow in the descriptor, and
+		 * a half tag none either (RTL9602C_RX_REASON_PTP_OWN).
+		 */
+		if ((w2 & RTL9602C_NIC_RXD_PTP_TAG) ||
+		    why == RTL9602C_RX_REASON_PTP_OWN)
+			flow = RTL9602C_FLOW_UNKNOWN;
 
 		/* A departure report is no port's frame. */
 		if (why == RTL9602C_RX_REASON_PTP_DEPARTURE &&
@@ -1257,8 +1384,7 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 		/* The handler owns @skb once it takes it. */
 		len = skb->len;
 		if (flow_rx &&
-		    flow_rx(READ_ONCE(priv->flow_ctx), skb, port,
-			    FIELD_GET(RTL9602C_NIC_RXD_FLOW, w2))) {
+		    flow_rx(READ_ONCE(priv->flow_ctx), skb, port, flow)) {
 			dev->stats.rx_packets++;
 			dev->stats.rx_bytes += len;
 			return;
@@ -1272,82 +1398,6 @@ static void rtl9602c_eth_rx_frame(struct net_device *dev, unsigned int r,
 			md = priv->port_meta[port];
 		if (md)
 			skb_dst_set_noref(skb, &md->dst);
-	}
-
-	/*
-	 * Take off the timestamp tag of a PTP message (see
-	 * RTL9602C_ETH_P_REALTEK). Its time, the low 16 bits of
-	 * the PTP clock's seconds and the nanoseconds, becomes
-	 * the frame's hardware timestamp; the switch driver
-	 * fills in the upper seconds from its clock. The reason
-	 * byte, 240 for a message sent to the CPU and 241 for a
-	 * copy made by the ingress mirror action (measured on
-	 * this board), is logged once per value and otherwise
-	 * not interpreted. The addresses then move up over the
-	 * tag, so the frame reaches the stack as it was sent: a
-	 * PTP message over Ethernet is recognised by its own
-	 * EtherType, 0x88F7 (IEEE 1588-2008 Annex F), which
-	 * neither DSA nor a PTP stack would find behind the
-	 * tag.
-	 *
-	 * A frame longer than the tag with 0x8899 at offset 12
-	 * and the protocol byte 4 at offset 14, as in every tag
-	 * seen on this board, is taken to carry one, but only
-	 * if the switch sent it up for one of the two PTP trap
-	 * reasons: a host can send such a frame itself, and the
-	 * switch then floods it to the CPU with the reason of
-	 * an ordinary frame (measured). Other frames use that
-	 * EtherType with other protocol bytes, among them the
-	 * switch's own loop-detection probes, and go up as they
-	 * came.
-	 *
-	 * A message addressed to this device carries only the
-	 * tag's last 8 bytes, its time, and comes up for
-	 * RTL9602C_RX_REASON_PTP_OWN (measured): the half tag
-	 * is taken off the same way, when it opens with its two
-	 * zero bytes.
-	 */
-	if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
-	    (why == RTL9602C_RX_REASON_PTP ||
-	     why == RTL9602C_RX_REASON_PTP_MIRROR) &&
-	    skb->len > RTL9602C_PTP_TAG_LEN &&
-	    get_unaligned_be16(skb->data + 2 * ETH_ALEN) ==
-	    RTL9602C_ETH_P_REALTEK &&
-	    skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET] ==
-	    RTL9602C_PTP_TAG_PROTO_PTP) {
-		u32 sec = get_unaligned_be16(skb->data +
-					     RTL9602C_PTP_TAG_SEC_OFFSET);
-		u32 nsec = get_unaligned_be32(skb->data +
-					      RTL9602C_PTP_TAG_NSEC_OFFSET);
-		u8 reason = skb->data[RTL9602C_PTP_TAG_REASON_OFFSET];
-
-		if (!test_and_set_bit(reason,
-				      priv->ptp_reason_seen))
-			eth_info(dev,
-				 "ptp tag reason %u, protocol %u: %16phN\n",
-				 reason,
-				 skb->data[RTL9602C_PTP_TAG_PROTO_OFFSET],
-				 skb->data + 2 * ETH_ALEN);
-
-		skb_hwtstamps(skb)->hwtstamp =
-			ktime_set(sec, nsec);
-		memmove(skb->data + RTL9602C_PTP_TAG_LEN,
-			skb->data, 2 * ETH_ALEN);
-		skb_pull(skb, RTL9602C_PTP_TAG_LEN);
-	} else if ((w2 & RTL9602C_NIC_RXD_CPUTAG_VALID) &&
-		   why == RTL9602C_RX_REASON_PTP_OWN &&
-		   skb->len > RTL9602C_PTP_HALF_TAG_LEN + ETH_HLEN &&
-		   !get_unaligned_be16(skb->data + 2 * ETH_ALEN)) {
-		u32 sec = get_unaligned_be16(skb->data +
-					     RTL9602C_PTP_HALF_TAG_SEC_OFFSET);
-		u32 nsec = get_unaligned_be32(skb->data +
-					      RTL9602C_PTP_HALF_TAG_NSEC_OFFSET);
-
-		skb_hwtstamps(skb)->hwtstamp =
-			ktime_set(sec, nsec);
-		memmove(skb->data + RTL9602C_PTP_HALF_TAG_LEN,
-			skb->data, 2 * ETH_ALEN);
-		skb_pull(skb, RTL9602C_PTP_HALF_TAG_LEN);
 	}
 
 	/* The frame's length with its Ethernet header, which the next line pulls. */
@@ -1940,9 +1990,13 @@ EXPORT_SYMBOL_GPL(rtl9602c_conduit_ctrl_detach);
  *
  * While DSA uses the conduit, every received frame with a CPU tag that the OMCI
  * handler has not taken, other than a departure report (see
- * rtl9602c_conduit_tstamp_attach()), is offered to @rx as it arrived: from its Ethernet
- * header, before any PTP timestamp tag is taken off. The flow means something
- * only for frames from the PON port. A frame the handler takes is its own; one
+ * rtl9602c_conduit_tstamp_attach()), is offered to @rx from its Ethernet
+ * header, with the PTP timestamp tag of a PTP message taken off and its time
+ * made the frame's hardware timestamp, as for a frame that goes to DSA. The
+ * flow means something only for frames from the PON port, and is
+ * RTL9602C_FLOW_UNKNOWN for a PTP message that came up with the whole tag,
+ * whose descriptor does not hold it (RTL9602C_NIC_RXD_PTP_TAG). A frame the
+ * handler takes is its own; one
  * it leaves goes on to its user port. There is one handler at a time.
  *
  * Return: 0, -EINVAL if @dev is not this driver's conduit or @rx is NULL, or

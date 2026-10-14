@@ -25,6 +25,7 @@
 #include <linux/errno.h>
 #include <linux/kconfig.h>
 #include <linux/ktime.h>
+#include <linux/limits.h>
 #include <linux/types.h>
 
 struct net_device;
@@ -49,17 +50,25 @@ struct sk_buff;
 typedef bool (*rtl9602c_ctrl_rx_t)(void *ctx, struct sk_buff *skb,
 				   unsigned int port);
 
+/*
+ * The flow given to the receive handler for data frames when the conduit
+ * cannot tell it: for a PTP message with the switch's whole timestamp tag,
+ * whose receive descriptor holds part of the message's sequenceId where it
+ * otherwise holds the flow, and whose tag holds no flow either.
+ */
+#define RTL9602C_FLOW_UNKNOWN	UINT_MAX
+
 /**
  * typedef rtl9602c_flow_rx_t - receive handler for tagged data frames
  * @ctx: the context given to rtl9602c_conduit_flow_attach()
  * @skb: the frame, from its Ethernet header
  * @port: the switch port the frame came in by
- * @flow: the PON flow the frame arrived on, 0 to 127; meaningful only for
- *	a frame from the PON port
+ * @flow: the PON flow the frame arrived on, 0 to 127, or
+ *	%RTL9602C_FLOW_UNKNOWN; meaningful only for a frame from the PON port
  *
  * Called from the conduit's NAPI poll for each frame that carries a CPU
- * tag, before DSA sees it and before the conduit takes off a PTP
- * timestamp tag.
+ * tag, before DSA sees it. The conduit has taken off the timestamp tag of a
+ * PTP message and made its time the frame's hardware timestamp.
  *
  * Return: true if the handler took @skb, which it then owns; false to let
  * DSA deliver the frame to the user port of @port.
@@ -70,15 +79,14 @@ typedef bool (*rtl9602c_flow_rx_t)(void *ctx, struct sk_buff *skb,
 /**
  * typedef rtl9602c_tstamp_rx_t - handler for departure reports
  * @ctx: the context given to rtl9602c_conduit_tstamp_attach()
- * @stamp: the time at which a PTP message left the switch, in the form of a
- *	receive timestamp: the low 16 bits of the PTP clock's seconds and the
- *	nanoseconds
+ * @stamp: the time at which a PTP message left the switch, the PTP clock's
+ *	seconds and nanoseconds
  *
  * Called from the conduit's NAPI poll for each departure report, a frame the
  * switch sends to the CPU when a PTP message leaves under the egress action
- * that latches its time and mirrors it to the CPU. The report carries the
- * time and nothing of the message, so it does not say which message left.
- * The conduit consumes the report.
+ * that latches its time and mirrors it to the CPU. Of the message the report
+ * carries only the port it left by and the low 7 bits of its sequenceId,
+ * which the conduit does not pass on. The conduit consumes the report.
  */
 typedef void (*rtl9602c_tstamp_rx_t)(void *ctx, ktime_t stamp);
 
