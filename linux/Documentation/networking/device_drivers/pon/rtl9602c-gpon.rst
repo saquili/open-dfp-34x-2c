@@ -2213,6 +2213,81 @@ signal-detect and burst-merge registers that the bring-up writes.
      - Required: unverified; the ONU reaches O5 on an OLT and upstream GEM
        frames reach the OLT with the ONU's state held.
 
+The time of day
+===============
+
+The OLT tells the ONU the time of day through the OMCC (ITU-T G.984.3
+Amendment 2 clause 10.4.6): it names a downstream frame N by its superframe
+counter and gives TstampN, the time at which the frame's first bit reaches a
+hypothetical ONU with an equalization delay and a response time of zero. The
+OMCI daemon passes the pair, the Time of day information of the OLT-G managed
+entity (ITU-T G.988 clause 9.12.2), to the PON class's ``tod-set``, and
+``rtl9602c_gpon_tod_set()`` sets the switch's PTP clock at frame N to the time
+at which the frame reaches this ONU:
+
+    TrecvN = TstampN - (EqD + RspTime) x n1490 / (n1310 + n1490)
+
+with the equalization delay last written (``gpon_eqd_delay``), the response
+time of ``RTL9602C_GTC_US_RESP_DELAY`` (both parts, in units of 128 bits), and
+the group indices that clause 10.4.6.3.2 gives for typical fibre, a factor of
+0.500085 (``rtl9602c_gpon_tod_delta_ns()``). The clock takes the switch's PON
+time as the superframe counter passes from N to N + 1, a frame after frame N
+began, so the driver gives the switch TrecvN + 125 us (the host operation
+``tod_arm``, which writes the PON time and its enable; see "The PON time of
+day" in Documentation/networking/dsa/rtl9602c-ptp.rst), then arms N with an
+edge of ``RTL9602C_GTC_DS_TOD_SUPERFRAME_REQ``. A Ranging_Time or
+Ranging_Adjustment that changes the delay before frame N gives the switch the
+time again (clause 10.4.6.2, step 7); a new ``tod-set`` replaces one not yet
+taken. The ONU's internal delays, from the optical connector to the
+superframe counter, are not compensated.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_GTC_DS_TOD_SUPERFRAME`` (``0x70104c``): a 0-to-1 edge of
+       bit 31 (``_REQ``) arms the frame in bits 29:0 (``_CNT``), and the PTP
+       clock takes the PON time when the superframe counter passes from that
+       frame to the next, while the PON time's enable is set; the hardware
+       then clears the enable. With the enable clear, or with bit 31 written
+       while it reads 1, the clock does not take the time. Bit 30 reads 1
+       before and after, whatever is written.
+     - M
+     - The clock read with lab-only register writes: a load with the edge,
+       none without the enable, none without the edge, none with bit 31
+       written again; the enable read 0 after the load.
+   * - The clock takes the time 124 us after the counter turns to N, one
+       frame within the measurement: 131.0, 131.2, 121.9 and 112.4 us in four
+       loads, each fitted over 130 reads of the clock latched beside the
+       counter in 22 s, the latch taken as uniform within a frame (residuals
+       +/-65 us). The clock ran 13.6 to 15.6 ppm fast of the OLT's frames.
+     - M
+     - Lab-only debugfs reads of the latched clock and the counter, back to
+       back with the interrupts off.
+   * - Through ``tod-set`` the clock at the start of frame N read TrecvN less
+       2.5 us, within the measurement: frame N 7917 frames ahead, TstampN
+       1000000000.0 s, EqD 97328 bits and the response time 43520 bits, a
+       Delta of 56613 ns; the PON time read 1000000000.000068384 and its
+       enable 0 after the frame.
+     - M
+     - The ``tod`` line of the ``gpon`` view, ``ptpstat``, and the fit above
+       over 130 reads.
+   * - ``tod-set`` is refused with ``-ERANGE`` for a frame passed, fewer than
+       ``RTL9602C_GPON_TOD_MIN_AHEAD`` (16) frames ahead, or half the
+       counter's span or more ahead, and with ``-EAGAIN`` outside O5.
+     - M, T
+     - M: the refusals on the board for a frame 100 frames past, 5 frames
+       ahead and half the span plus 20000 frames ahead, and an acceptance just
+       under half the span. T: ``rtl9602c_test_tod_delta`` (KUnit); outside
+       O5 is not exercised.
+   * - A change of the equalization delay before frame N is followed.
+     - I
+     - Not exercised: an OLT that sends Ranging_Time in O5 with a new delay
+       while a time of day is pending.
+
 The bandwidth map
 =================
 
@@ -3083,7 +3158,10 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        ``RTL9602C_GTC_DS_LOS`` with its ``cdr`` and ``optical`` loss bits (1 is
        loss); ``sig`` is ``RTL9602C_SERDES_PON_RX_STAT`` with its signal bit
        (``signok``, 1 is present) and its sync bit (``lecsync``); ``frame`` is
-       the superframe counter; then come the totals of the counters (``cntr``:
+       the superframe counter; ``tod`` is the time of day the OLT gave last,
+       its frame and TstampN, whether the clock is still to take it, and
+       ``RTL9602C_GTC_DS_TOD_SUPERFRAME`` (see "The time of day"); then come
+       the totals of the counters (``cntr``:
        ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
        maps accepted, CRC errors, overflows, non-idle GEM frames, the BIP
        errors in bits and the frames they were in); ``rei``, the BER interval

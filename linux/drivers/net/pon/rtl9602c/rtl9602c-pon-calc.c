@@ -135,6 +135,26 @@ void rtl9602c_gpon_eqd_split(u32 eqd, u32 *frames, u32 *bits)
 }
 
 /**
+ * rtl9602c_gpon_tod_delta_ns() - the ONU's share of the round trip
+ * @bits: the equalization delay plus the response time, in upstream bits at
+ *	1.24416 Gbit/s
+ *
+ * Delta_i = (EqD_i + RspTime_i) x n1490 / (n1310 + n1490), ITU-T G.984.3
+ * Amendment 2 clause 10.4.6.2, with the group indices that clause 10.4.6.3.2
+ * gives for typical fibre, n1310 = 1.4677 and n1490 = 1.4682: a factor of
+ * 0.500085, where 0.5 would be 34 ns off over a 200 us PON.
+ *
+ * Return: Delta_i in nanoseconds, rounded to the nearest.
+ */
+u32 rtl9602c_gpon_tod_delta_ns(u32 bits)
+{
+	/* bits x 10^9 / 1.24416e9, x 1.4682 / 2.9359; the divisor fits a u32 */
+	const u32 div = 124416U * 29359U;
+
+	return div_u64((u64)bits * 100000 * 14682 + div / 2, div);
+}
+
+/**
  * rtl9602c_gem_rate_units() - the units of a queue's rates
  * @cir: the sum of the committed rates of the GEM ports in the queue, in
  *	bytes a second

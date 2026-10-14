@@ -130,6 +130,15 @@ struct rtl9602c_pon {
 	bool gpon_bwm_o4_valid;
 	/** @gpon_eqd_delay: the equalization delay last written, in bits */
 	u32 gpon_eqd_delay;
+	/**
+	 * @gpon_tod: the time of day the OLT gave last: the superframe, its
+	 * TstampN, and whether the clock is still to take it
+	 */
+	struct {
+		u32 superframe;
+		struct timespec64 tstamp;
+		bool armed;
+	} gpon_tod;
 
 	/**
 	 * @gpon_ebl_seen: Extended_Burst_Length came after Upstream_Overhead
@@ -392,6 +401,9 @@ int rtl9602c_gem_setup(struct rtl9602c_pon *p);
 void rtl9602c_gem_teardown(struct rtl9602c_pon *p);
 void rtl9602c_gem_restore(struct rtl9602c_pon *p);
 void rtl9602c_gem_tcont_ready(struct rtl9602c_pon *p, u32 tcont);
+int rtl9602c_gpon_tod_set(struct rtl9602c_pon *p, u32 superframe,
+			  const struct timespec64 *tstamp,
+			  struct netlink_ext_ack *extack);
 int rtl9602c_gpon_tcont_map(struct rtl9602c_pon *p, unsigned int n, u16 alloc,
 			    struct netlink_ext_ack *extack);
 bool rtl9602c_gem_us_ready(struct rtl9602c_pon *p, unsigned int flow);
@@ -414,6 +426,7 @@ int rtl9602c_gpon_password_parse(const char *s,
 unsigned int rtl9602c_gpon_boh_bytes_of(const u8 *ovh, u8 type3);
 u8 rtl9602c_gpon_boh_len_of(const u8 *ovh, u8 type3);
 void rtl9602c_gpon_eqd_split(u32 eqd, u32 *frames, u32 *bits);
+u32 rtl9602c_gpon_tod_delta_ns(u32 bits);
 const char *rtl9602c_ploam_ds_name(u8 id);
 const char *rtl9602c_ploam_us_name(u8 id);
 void rtl9602c_gem_rate_units(u64 cir, u64 pir, bool limited, u32 *cir_u,

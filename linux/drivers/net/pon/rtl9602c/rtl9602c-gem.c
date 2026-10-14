@@ -759,6 +759,15 @@ static int rtl9602c_tcont_set(struct pon_device *pon, unsigned int index,
 				       extack);
 }
 
+/* The OLT's time of day (rtl9602c_gpon_tod_set()). */
+static int rtl9602c_tod_set(struct pon_device *pon, u32 superframe,
+			    const struct timespec64 *tstamp,
+			    struct netlink_ext_ack *extack)
+{
+	return rtl9602c_gpon_tod_set(pon_device_get_drvdata(pon), superframe,
+				     tstamp, extack);
+}
+
 static const struct pon_device_ops rtl9602c_pon_ops = {
 	.owns_netdev		= rtl9602c_gem_owns_netdev,
 	.gem_add		= rtl9602c_gem_add,
@@ -775,6 +784,7 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 	.gem_stats		= rtl9602c_gem_stats,
 	.tcont_get		= rtl9602c_tcont_get,
 	.tcont_set		= rtl9602c_tcont_set,
+	.tod_set		= rtl9602c_tod_set,
 };
 
 /*

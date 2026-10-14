@@ -258,6 +258,17 @@ static inline unsigned int rtl9602c_gem_tcont(unsigned int n)
 #define RTL9602C_GTC_DS_SUPERFRAME_CNT		GENMASK(29, 0)
 
 /*
+ * The time-of-day superframe: a 0-to-1 edge of REQ arms CNT, and the PTP
+ * clock takes the switch's PON time, while that time's enable is set, as
+ * the counter above passes from CNT to CNT + 1, after which the enable reads
+ * 0 (measured). A write of REQ while it reads 1 arms nothing. Bit 30 reads 1
+ * whatever is written; what it says is not established.
+ */
+#define RTL9602C_GTC_DS_TOD_SUPERFRAME	0x70104c
+#define RTL9602C_GTC_DS_TOD_SUPERFRAME_REQ	BIT(31)
+#define RTL9602C_GTC_DS_TOD_SUPERFRAME_CNT	GENMASK(29, 0)
+
+/*
  * More GTC counters. BWMAP_RX is taken to be 16 bits wide (not verified);
  * GEM_FRAMES is also RTL9602C_GTC_DS_GEM_NON_IDLE_CNT.
  */

@@ -190,6 +190,17 @@ static void rtl9602c_test_boh_len(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_boh_len_of(ovh, 255), RTL9602C_BURST_CFG_LEN_MAX);
 }
 
+static void rtl9602c_test_tod_delta(struct kunit *test)
+{
+	/* 200 us of round trip, 248832 bits: 0.500085 of it. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_tod_delta_ns(248832), 100017);
+	/* A live ranging's delay with the default response time. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_tod_delta_ns(97331 + 43520), 56614);
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_tod_delta_ns(0), 0);
+	/* The largest delay does not overflow: 3.452 s of round trip. */
+	KUNIT_EXPECT_EQ(test, rtl9602c_gpon_tod_delta_ns(U32_MAX), 1726344984);
+}
+
 static void rtl9602c_test_eqd_split(struct kunit *test)
 {
 	u32 frames, bits;
@@ -331,6 +342,7 @@ static struct kunit_case rtl9602c_pon_test_cases[] = {
 	KUNIT_CASE(rtl9602c_test_boh_bytes),
 	KUNIT_CASE(rtl9602c_test_boh_len),
 	KUNIT_CASE(rtl9602c_test_eqd_split),
+	KUNIT_CASE(rtl9602c_test_tod_delta),
 	KUNIT_CASE(rtl9602c_test_rate_units),
 	KUNIT_CASE(rtl9602c_test_tcont_numbers),
 	KUNIT_CASE(rtl9602c_test_ploam_names),

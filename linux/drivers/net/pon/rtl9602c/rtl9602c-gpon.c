@@ -349,6 +349,132 @@ static bool rtl9602c_ploam_pop(struct rtl9602c_pon *p, u8 *msg)
 }
 
 /*
+ * The time of day (ITU-T G.984.3 Amendment 2 clause 10.4.6). The OLT names a
+ * downstream frame N by its superframe counter and gives TstampN, the time
+ * at which the frame's first bit reaches a hypothetical ONU with an
+ * equalization delay and a response time of zero; the frame reaches this ONU
+ * Delta_i = (EqD + RspTime) x 0.500085 earlier (rtl9602c_gpon_tod_delta_ns()).
+ * The switch's PTP clock takes the PON time as the superframe counter passes
+ * from N to N + 1 (RTL9602C_GTC_DS_TOD_SUPERFRAME), one frame after frame N
+ * began, so the PON time is TstampN - Delta_i + 125 us.
+ */
+#define RTL9602C_GPON_FRAME_NS		125000
+/* The fewest frames ahead a time of day is taken for: time to arm it. */
+#define RTL9602C_GPON_TOD_MIN_AHEAD	16
+
+/* The response time in bits, both parts of RTL9602C_GTC_US_RESP_DELAY. */
+static u32 rtl9602c_gpon_rsp_bits(struct rtl9602c_pon *p)
+{
+	u32 v = rtl9602c_pon_r(p, RTL9602C_GTC_US_RESP_DELAY);
+
+	return (FIELD_GET(RTL9602C_GTC_US_RESP_DELAY_COARSE, v) +
+		FIELD_GET(RTL9602C_GTC_US_RESP_DELAY_FINE, v)) *
+	       RTL9602C_GTC_US_RESP_DELAY_COARSE_BITS;
+}
+
+/* Frames until the time-of-day frame, or 0 when it has passed. */
+static u32 rtl9602c_gpon_tod_ahead(struct rtl9602c_pon *p)
+{
+	u32 now = FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
+			    rtl9602c_pon_r(p, RTL9602C_GTC_DS_SUPERFRAME));
+	u32 ahead = (p->gpon_tod.superframe - now) &
+		    RTL9602C_GTC_DS_SUPERFRAME_CNT;
+
+	return ahead && ahead <= RTL9602C_GTC_DS_SUPERFRAME_CNT / 2 ? ahead : 0;
+}
+
+/*
+ * Give the switch the PON time for the time-of-day frame, @ahead frames
+ * away, with the present equalization delay, and with @arm arm the frame:
+ * the edge of REQ, from 0. Called again without @arm when the delay changes
+ * before the frame (clause 10.4.6.2, step 7).
+ */
+static int rtl9602c_gpon_tod_arm(struct rtl9602c_pon *p, u32 ahead, bool arm)
+{
+	u32 bits = p->gpon_eqd_delay + rtl9602c_gpon_rsp_bits(p);
+	struct timespec64 t;
+	int err;
+
+	lockdep_assert_held(&p->gpon_lock);
+
+	set_normalized_timespec64(&t, p->gpon_tod.tstamp.tv_sec,
+				  (s64)p->gpon_tod.tstamp.tv_nsec +
+				  RTL9602C_GPON_FRAME_NS -
+				  rtl9602c_gpon_tod_delta_ns(bits));
+	err = p->pd->host_ops->tod_arm(p->pd->host, &t,
+				       msecs_to_jiffies(ahead / 8));
+	if (err || !arm)
+		return err;
+
+	rtl9602c_pon_w(p, RTL9602C_GTC_DS_TOD_SUPERFRAME,
+		       FIELD_PREP(RTL9602C_GTC_DS_TOD_SUPERFRAME_CNT,
+				  p->gpon_tod.superframe));
+	rtl9602c_pon_w(p, RTL9602C_GTC_DS_TOD_SUPERFRAME,
+		       RTL9602C_GTC_DS_TOD_SUPERFRAME_REQ |
+		       FIELD_PREP(RTL9602C_GTC_DS_TOD_SUPERFRAME_CNT,
+				  p->gpon_tod.superframe));
+	pr_info("<GPON> time of day: frame %u in %u frames, TstampN %lld.%09ld, EqD + response %u bits\n",
+		p->gpon_tod.superframe, ahead,
+		(long long)p->gpon_tod.tstamp.tv_sec, p->gpon_tod.tstamp.tv_nsec,
+		bits);
+	return 0;
+}
+
+/**
+ * rtl9602c_gpon_tod_set() - set the PTP clock at a downstream frame
+ * @p: the PON driver
+ * @superframe: the frame's superframe counter, N
+ * @tstamp: the OLT's TstampN
+ * @extack: where a refusal is explained
+ *
+ * The clock takes the time at which frame N reaches the ONU when the frame
+ * arrives, once; a setting not yet taken is dropped for this one, and a
+ * change of the equalization delay before the frame is followed
+ * (rtl9602c_gpon_set_eqd()).
+ *
+ * Context: takes gpon_lock.
+ * Return: 0; -EAGAIN outside O5, when the ONU has no equalization delay;
+ * -ERANGE when the frame is fewer than RTL9602C_GPON_TOD_MIN_AHEAD frames
+ * ahead, has passed, or lies half the counter's span or more ahead; or
+ * -EOPNOTSUPP when the switch has no PTP clock.
+ */
+int rtl9602c_gpon_tod_set(struct rtl9602c_pon *p, u32 superframe,
+			  const struct timespec64 *tstamp,
+			  struct netlink_ext_ack *extack)
+{
+	u32 ahead;
+	int err;
+
+	mutex_lock(&p->gpon_lock);
+	if (p->gpon_state != RTL9602C_ONU_O5_OPERATION) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "no equalization delay: the ONU is not in O5");
+		err = -EAGAIN;
+		goto out;
+	}
+
+	p->gpon_tod.armed = false;
+	p->gpon_tod.superframe = superframe;
+	p->gpon_tod.tstamp = *tstamp;
+	ahead = rtl9602c_gpon_tod_ahead(p);
+	if (ahead < RTL9602C_GPON_TOD_MIN_AHEAD) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "the frame has passed, is too near, or lies too far ahead");
+		err = -ERANGE;
+		goto out;
+	}
+
+	err = rtl9602c_gpon_tod_arm(p, ahead, true);
+	if (err)
+		NL_SET_ERR_MSG_MOD(extack, "the switch has no PTP clock");
+	else
+		p->gpon_tod.armed = true;
+out:
+	mutex_unlock(&p->gpon_lock);
+	return err;
+}
+
+/*
  * Set the equalization delay to @delay bits. RTL9602C_RANGING_EQD takes @delay
  * plus the coarse part of the response delay, in its units of 128 bits, split
  * into whole upstream frames and the bits left over; with that sum the bursts
@@ -369,6 +495,13 @@ static void rtl9602c_gpon_set_eqd(struct rtl9602c_pon *p, u32 delay)
 		   FIELD_PREP(RTL9602C_RANGING_EQD_BITS, intra));
 	pr_info("<GPON> EQD: %u + %u * 128 = %u -> mf %u, in-frame %u\n",
 		delay, min_delay, eqd1, multi, intra);
+
+	/* A time of day still to be taken follows the new delay. */
+	if (p->gpon_tod.armed) {
+		u32 ahead = rtl9602c_gpon_tod_ahead(p);
+
+		p->gpon_tod.armed = ahead && !rtl9602c_gpon_tod_arm(p, ahead, false);
+	}
 }
 
 /*
@@ -2965,6 +3098,13 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 			     rtl9602c_pon_r(p, RTL9602C_GTC_DS_SUPERFRAME)));
 
 	mutex_lock(&p->gpon_lock);
+	if (p->gpon_tod.armed && !rtl9602c_gpon_tod_ahead(p))
+		p->gpon_tod.armed = false;
+	seq_printf(s, "tod   frame %u  TstampN %lld.%09ld  %s, request %08x\n",
+		   p->gpon_tod.superframe, (long long)p->gpon_tod.tstamp.tv_sec,
+		   p->gpon_tod.tstamp.tv_nsec,
+		   p->gpon_tod.armed ? "to come" : "none to come",
+		   rtl9602c_pon_r(p, RTL9602C_GTC_DS_TOD_SUPERFRAME));
 	rtl9602c_gpon_cntr_sync(p);
 	c = p->gpon_stats;
 	bip_blocks = p->gpon_bip_blocks;
