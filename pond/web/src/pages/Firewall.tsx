@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The firewall, a tab of the internet page. Over the list, what it does where
+ * The firewall, a page of the internet. Over the list, what it does where
  * no rule decides: from the internet in it blocks, but for NAT's forwards and
  * DMZ; from the local networks to the internet it lets through; between the
  * networks it blocks, so that guests do not reach the house; the last two
@@ -42,7 +42,7 @@ const FAMILIES = ["any", "ipv4", "ipv6"] as const;
 /* The select's value of a part of the internet still to be typed. */
 const SOME = "internet:";
 
-/** How many rules there are, for the tab that shows them. */
+/** How many rules there are, for the menu that shows them. */
 export function useFwCount() {
   return rules(useLive().data).length;
 }
@@ -551,7 +551,7 @@ function RuleCard({
 /** What the panel at the list's right is open on: a rule (none for a new one), or the defaults. */
 type Open = { rule: RuleInfo | null } | { defaults: true };
 
-/** The firewall tab: the defaults, the rules in order, and their forms. */
+/** The firewall: the defaults, the rules in order, and their forms. */
 function Firewall() {
   const { t } = useI18n();
   const { data: live } = useLive();
@@ -641,8 +641,8 @@ function Firewall() {
   );
 }
 
-/* The firewall tab, or that the stick has no firewall yet. */
-export function FirewallTab() {
+/* The firewall, or that the stick has no firewall yet. */
+export function FirewallSection() {
   const { t } = useI18n();
   const { data: live } = useLive();
   if (!live) return null;

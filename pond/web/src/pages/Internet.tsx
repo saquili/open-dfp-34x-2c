@@ -2,12 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet, in five tabs: WAN, the stick's connections to the operator;
- * LAN, the local networks that go out through them; their clients, the
- * devices in those (pages/Lan.tsx); NAT, what comes in to them from the
- * internet (pages/Nat.tsx); and the firewall's rules (pages/Firewall.tsx). In the first, the connections, and at their right, while
- * it is open, the form that adds or changes one (components/SidePanel); with
- * no connection yet it is open from the start. A connection is PPPoE, a
+ * The internet, in five pages under one entry of the menu: WAN, the stick's
+ * connections to the operator; LAN, the local networks that go out through
+ * them; their clients, the devices in those (pages/Lan.tsx); NAT, what comes
+ * in to them from the internet (pages/Nat.tsx); and the firewall's rules
+ * (pages/Firewall.tsx). On the first, the connections, and at their right,
+ * while it is open, the form that adds or changes one (components/SidePanel);
+ * with no connection yet it is open from the start. A connection is PPPoE, a
  * static address or DHCP, and runs in a VLAN of the operator's; a VLAN
  * without one goes through the stick as a bridge, to the host.
  *
@@ -16,20 +17,21 @@
  * wait; they can still be added, changed and removed.
  */
 
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { useLive } from "../api/live";
-import { Page, Tabs, useTab } from "../components/Page";
+import { Page } from "../components/Page";
 import { SidePanel, withPanel } from "../components/SidePanel";
 import { Dot } from "../components/ui";
 import { useI18n } from "../i18n";
 import { type FibreView, fibre, served } from "../lib/state";
-import { FirewallTab, useFwCount } from "./Firewall";
+import { FirewallSection, useFwCount } from "./Firewall";
 import { ConnForm } from "./internet/ConnForm";
 import { ConnList } from "./internet/ConnList";
 import { type Conn, conns, type Kind, room } from "./internet/conns";
 import { useServices } from "./internet/shared";
 import { LanDevices, LanNets, useLanCounts } from "./Lan";
-import { NatTab, useNatCount } from "./Nat";
+import { NatSection, useNatCount } from "./Nat";
 
 /** Why there are no services: the fibre, or the OLT. */
 function NoServices({ fib }: { fib: FibreView }) {
@@ -55,9 +57,6 @@ function NoServices({ fib }: { fib: FibreView }) {
     </div>
   );
 }
-
-/* The page's tabs: the connections, the local networks, their clients, and what comes in to them. */
-const TABS = ["wan", "lan", "clients", "nat", "fw"] as const;
 
 /** The connections, and at their right while it is open, the form that adds or changes one. */
 function Conns() {
@@ -116,72 +115,82 @@ function Conns() {
   );
 }
 
-export function Internet() {
-  const { t } = useI18n();
+/** The pages of the internet, by the name each has in the menu and in its address. */
+export const INTERNET_PAGES = ["wan", "lan", "clients", "nat", "fw"] as const;
+export type InternetPage = (typeof INTERNET_PAGES)[number];
+
+/**
+ * How many things each page of the internet holds, for the menu; null for a
+ * page the stick has no backend for yet, which shows no count.
+ */
+export function useInternetCounts(): Record<InternetPage, number | null> {
   const { data: live } = useLive();
-  const [tab, setTab] = useTab(TABS);
-  /* The network the devices are narrowed to, from a network's card, or all. */
-  const [net, setNet] = useState<number | null>(null);
   const lan = useLanCounts();
   const nat = useNatCount();
   const fw = useFwCount();
-  /* A tab the stick has no backend for yet shows no count. */
-  const count = (n: number, has = true) =>
-    has && <span className="font-normal tabular-nums text-base-content/60">{n}</span>;
+  const lans = served(live, "lans");
+  return {
+    wan: conns(live).length,
+    lan: lans ? lan.nets : null,
+    clients: lans ? lan.devices : null,
+    nat: served(live, "forwards") ? nat : null,
+    fw: served(live, "rules") ? fw : null,
+  };
+}
+
+export function WanPage() {
+  const { t } = useI18n();
   return (
-    <Page
-      title={t("internet.title")}
-      hint={
-        tab === "wan"
-          ? t("internet.hint")
-          : tab === "nat"
-            ? t("nat.hint")
-            : tab === "fw"
-              ? t("fw.hint")
-              : t("lan.hint")
-      }
-      tabs={
-        <Tabs
-          items={[
-            { id: "wan", label: t("internet.tabWan"), badge: count(conns(live).length) },
-            {
-              id: "lan",
-              label: t("internet.tabLan"),
-              badge: count(lan.nets, served(live, "lans")),
-            },
-            {
-              id: "clients",
-              label: t("internet.tabClients"),
-              badge: count(lan.devices, served(live, "lans")),
-            },
-            { id: "nat", label: t("internet.tabNat"), badge: count(nat, served(live, "forwards")) },
-            { id: "fw", label: t("internet.tabFw"), badge: count(fw, served(live, "rules")) },
-          ]}
-          value={tab}
-          onChange={(v) => {
-            setNet(null);
-            setTab(v);
-          }}
-          label={t("internet.title")}
-        />
-      }
-    >
-      {tab === "wan" ? (
-        <Conns />
-      ) : tab === "lan" ? (
-        <LanNets
-          onDevices={(id) => {
-            setNet(id);
-            setTab("clients");
-          }}
-        />
-      ) : tab === "clients" ? (
-        <LanDevices net={net} onNet={setNet} />
-      ) : tab === "nat" ? (
-        <NatTab />
-      ) : (
-        <FirewallTab />
-      )}
+    <Page title={t("nav.wan")} hint={t("internet.hint")}>
+      <Conns />
+    </Page>
+  );
+}
+
+export function LanPage() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  return (
+    <Page title={t("nav.lan")} hint={t("lan.hint")}>
+      <LanNets
+        onDevices={(id) => navigate({ to: "/internet/clients", search: { net: id } as never })}
+      />
+    </Page>
+  );
+}
+
+/* The devices, narrowed to one network from that network's card, or all; the address keeps which. */
+export function ClientsPage() {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const search = useSearch({ strict: false }) as { net?: unknown };
+  const net = typeof search.net === "number" ? search.net : null;
+  return (
+    <Page title={t("nav.clients")} hint={t("lan.hint")}>
+      <LanDevices
+        net={net}
+        onNet={(n) =>
+          navigate({ to: ".", search: { net: n ?? undefined } as never, replace: true })
+        }
+      />
+    </Page>
+  );
+}
+
+export function NatPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.nat")} hint={t("nat.hint")}>
+      <NatSection />
+    </Page>
+  );
+}
+
+export function FirewallPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.fw")} hint={t("fw.hint")}>
+      <FirewallSection />
     </Page>
   );
 }

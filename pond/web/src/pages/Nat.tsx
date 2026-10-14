@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * NAT, a tab of the internet page: what comes in from the internet to the
+ * NAT, a page of the internet: what comes in from the internet to the
  * devices of the local networks. The devices go out with their connection's
  * address by themselves (the stick translates them, in silicon); in, only
  * what a forward lets through: a port, or a range, of a connection to a
@@ -54,7 +54,7 @@ function useNets() {
   return places.filter((p): p is Net => p.lan != null);
 }
 
-/** How many forwards there are, for the tab that shows them. */
+/** How many forwards there are, for the menu that shows them. */
 export function useNatCount() {
   return forwards(useLive().data).length;
 }
@@ -501,7 +501,7 @@ function ForwardCard({
 /** What the panel at the list's right is open on: a forward (none for a new one), or a connection's DMZ. */
 type Open = { forward: ForwardInfo | null } | { dmz: string };
 
-/** The NAT tab: each connection's DMZ, the forwards, and their forms. */
+/** NAT: each connection's DMZ, the forwards, and their forms. */
 function Nat() {
   const { t } = useI18n();
   const { data: live } = useLive();
@@ -594,8 +594,8 @@ function Nat() {
   );
 }
 
-/* The NAT tab, or that the stick does no NAT yet. */
-export function NatTab() {
+/* NAT, or that the stick does no NAT yet. */
+export function NatSection() {
   const { t } = useI18n();
   const { data: live } = useLive();
   if (!live) return null;

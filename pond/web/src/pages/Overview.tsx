@@ -121,7 +121,7 @@ export function Overview() {
           </Tile>
 
           <Tile
-            to="/internet"
+            to="/internet/wan"
             icon={<Globe className="size-4" />}
             title={t("overview.internet")}
             badge={

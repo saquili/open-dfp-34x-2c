@@ -9,13 +9,13 @@
  * each can have a network of its own, apart from the others by its VLAN to
  * the switch behind the stick, or untagged, for one of them.
  *
- * Two tabs of the internet page (pages/Internet.tsx). The networks: the
+ * Two pages of the internet (pages/Internet.tsx). The networks: the
  * networks there are, one at most for each connection that makes the stick a
  * router, and at their right, while it is open (components/SidePanel), the
  * form that adds a network or changes one, the connection first: its name,
  * its VLAN to the switch, the stick's address in it, and the DHCP server that
  * gives the devices theirs, with the operator's name servers; the panels
- * stand on the lines of the connections' tab.
+ * stand on the lines of the connections' page.
  * The devices: every device of the networks, a line each, to be searched and
  * narrowed to one network, since a big house has fifty of them, which no card
  * would hold; and the form of a fixed address beside them while it is open.
@@ -1276,7 +1276,7 @@ export function usePlaces() {
   return { all, places };
 }
 
-/** How many networks there are, and how many devices in them, for the tabs that show them. */
+/** How many networks there are, and how many devices in them, for the menu that shows them. */
 export function useLanCounts() {
   const { places } = usePlaces();
   const ids = places.flatMap((p) => (p.lan ? [p.lan.id] : []));
@@ -1339,7 +1339,7 @@ function Nets({ onDevices }: { onDevices: (lan: number) => void }) {
   );
 }
 
-/* The networks tab: the networks, or that the stick has none yet. */
+/* The networks, or that the stick has none yet. */
 export function LanNets({ onDevices }: { onDevices: (lan: number) => void }) {
   const { t } = useI18n();
   const { data: live } = useLive();
@@ -1354,7 +1354,7 @@ function Clients({ net, onNet }: { net: number | null; onNet: (lan: number | nul
   return <Devices places={places} net={net} onNet={onNet} />;
 }
 
-/* The devices tab: the devices, or that the stick has none yet. */
+/* The devices, or that the stick has none yet. */
 export function LanDevices(props: { net: number | null; onNet: (lan: number | null) => void }) {
   const { t } = useI18n();
   const { data: live } = useLive();

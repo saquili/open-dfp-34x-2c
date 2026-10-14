@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * What the internet page's form and list share: the operator's services a
+ * What the WAN page's form and list share: the operator's services a
  * connection runs in and their names, a connection's name, and the small
  * pieces values are set in.
  */

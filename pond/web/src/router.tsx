@@ -23,7 +23,14 @@ import { OfflineError } from "./api/client";
 import { AppShell } from "./components/AppShell";
 import { useI18n } from "./i18n";
 import { Fibre } from "./pages/Fibre";
-import { Internet } from "./pages/Internet";
+import {
+  ClientsPage,
+  FirewallPage,
+  INTERNET_PAGES,
+  LanPage,
+  NatPage,
+  WanPage,
+} from "./pages/Internet";
 import { Overview } from "./pages/Overview";
 import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";
@@ -112,14 +119,39 @@ const app = createRoute({
 
 const overview = createRoute({ getParentRoute: () => app, path: "/", component: Overview });
 const fibre = createRoute({ getParentRoute: () => app, path: "/fibre", component: Fibre });
-const internet = createRoute({ getParentRoute: () => app, path: "/internet", component: Internet });
-/* The local network was a page of its own; its tabs are the internet page's now. */
+/*
+ * The internet is five pages, each of its own in the menu. They were the
+ * tabs of one page, and the local network a page of its own before that: an
+ * address of either opens the page its tab named.
+ */
+const wan = createRoute({ getParentRoute: () => app, path: "/internet/wan", component: WanPage });
+const lan = createRoute({ getParentRoute: () => app, path: "/internet/lan", component: LanPage });
+const clients = createRoute({
+  getParentRoute: () => app,
+  path: "/internet/clients",
+  component: ClientsPage,
+});
+const nat = createRoute({ getParentRoute: () => app, path: "/internet/nat", component: NatPage });
+const fw = createRoute({
+  getParentRoute: () => app,
+  path: "/internet/fw",
+  component: FirewallPage,
+});
+const internet = createRoute({
+  getParentRoute: () => app,
+  path: "/internet",
+  beforeLoad: ({ search }) => {
+    const tab = (search as { tab?: unknown }).tab;
+    const page = INTERNET_PAGES.find((p) => p === tab) ?? "wan";
+    throw redirect({ to: `/internet/${page}` });
+  },
+});
 const lanPage = createRoute({
   getParentRoute: () => app,
   path: "/lan",
   beforeLoad: ({ search }) => {
-    const tab = (search as { tab?: unknown }).tab === "devices" ? "clients" : "lan";
-    throw redirect({ to: "/internet", search: { tab } as never });
+    const devices = (search as { tab?: unknown }).tab === "devices";
+    throw redirect({ to: devices ? "/internet/clients" : "/internet/lan" });
   },
 });
 const sfpPage = createRoute({
@@ -134,7 +166,21 @@ const stats = createRoute({ getParentRoute: () => app, path: "/stats", component
 const tree = root.addChildren([
   signIn,
   forcedPassword,
-  app.addChildren([overview, fibre, internet, lanPage, sfpPage, switchPage, stats, system]),
+  app.addChildren([
+    overview,
+    fibre,
+    wan,
+    lan,
+    clients,
+    nat,
+    fw,
+    internet,
+    lanPage,
+    sfpPage,
+    switchPage,
+    stats,
+    system,
+  ]),
 ]);
 
 export function makeRouter(queryClient: QueryClient) {

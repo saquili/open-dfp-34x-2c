@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * A table whose rows are cards, as the internet page and the local network
+ * A table whose rows are cards, as the WAN page and the local network
  * page show their lists: a caret that opens a card, its name, three cells
  * and its buttons, the names of the columns once over the cards, and what a
  * card opens on under it. The columns line up from card to card (subgrid).
