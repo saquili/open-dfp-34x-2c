@@ -859,6 +859,20 @@ struct rtl9602c_field {
  *	ptp_path_delay_ns parameter; the peer delay messages go to the CPU
  *	(IEEE 1588-2008 11.5.4)
  */
+/**
+ * struct rtl9602c_ptp_pon_grid - where the OLT's seconds fall in the frames
+ * @frame: the superframe count at the last second reported, if @frame_valid
+ * @prev: the count at the last second, reported or not, if @prev_valid
+ * @frame_valid: @frame holds a count
+ * @prev_valid: @prev holds a count
+ */
+struct rtl9602c_ptp_pon_grid {
+	u32	frame;
+	u32	prev;
+	bool	frame_valid;
+	bool	prev_valid;
+};
+
 enum rtl9602c_ptp_tc {
 	RTL9602C_PTP_TC_OFF,
 	RTL9602C_PTP_TC_E2E,
@@ -2243,15 +2257,12 @@ struct rtl9602c_priv {
 	 */
 	u32		ptp_pon_irq_frame;
 	u64		ptp_pon_irq_ns;
+	/** @ptp_pon_grid: the frames of the seconds before */
+	struct rtl9602c_ptp_pon_grid ptp_pon_grid;
 	/**
-	 * @ptp_pon_frame: the frame of the last second reported, if
-	 * @ptp_pon_frame_valid
-	 */
-	u32		ptp_pon_frame;
-	bool		ptp_pon_frame_valid;
-	/**
-	 * @ptp_pon_seconds: seconds reported, and @ptp_pon_late: those whose
-	 * interrupt came a frame or more late, not reported
+	 * @ptp_pon_seconds: seconds reported, and @ptp_pon_late: those not
+	 * reported, whose interrupt came a frame or more late or which came
+	 * first after the counter started again
 	 */
 	u32		ptp_pon_seconds;
 	u32		ptp_pon_late;

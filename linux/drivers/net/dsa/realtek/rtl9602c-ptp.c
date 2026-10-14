@@ -242,6 +242,30 @@ void rtl9602c_ptp_pon_irq(struct rtl9602c_priv *p)
 	p->ptp_pon_irq_ns = timespec64_to_ns(&ts);
 }
 
+/* Whether the counter stood at @frame a whole number of seconds after @since. */
+static bool rtl9602c_ptp_pon_whole(u32 frame, u32 since)
+{
+	return !(((frame - since) & RTL9602C_GTC_DS_SUPERFRAME_CNT) %
+		 RTL9602C_PTP_PON_SECOND_FRAMES);
+}
+
+/*
+ * Whether the second whose interrupt read the counter at @frame is reported
+ * (rtl9602c_ptp_pon_second()), with @g brought up to it.
+ */
+static bool rtl9602c_ptp_pon_take(struct rtl9602c_ptp_pon_grid *g, u32 frame)
+{
+	bool grid = g->prev_valid && rtl9602c_ptp_pon_whole(frame, g->prev);
+
+	g->prev = frame;
+	g->prev_valid = true;
+	if (g->frame_valid && !grid && !rtl9602c_ptp_pon_whole(frame, g->frame))
+		return false;
+	g->frame = frame;
+	g->frame_valid = true;
+	return true;
+}
+
 /**
  * rtl9602c_ptp_pon_second() - report a second of the OLT's clock
  * @p: driver state
@@ -251,34 +275,25 @@ void rtl9602c_ptp_pon_irq(struct rtl9602c_priv *p)
  * in the interrupt's first half (rtl9602c_ptp_pon_irq()) is reported as an
  * external timestamp of channel 0 when the interrupt came in the frame the
  * second began in, that is a whole number of seconds of frames after the one
- * reported last.  An interrupt that came a frame or more late is counted and
- * not reported; one that finds the last reported late reports nothing and
- * starts the count of frames from itself.
+ * reported last, or after the second before it: the counter starts again
+ * when the OLT does, and two seconds that agree with each other and not with
+ * the one reported last count the frames from themselves.  An interrupt that
+ * agrees with neither came a frame or more late, and is counted and not
+ * reported.
  *
  * Context: the GPON interrupt's thread.
  */
 void rtl9602c_ptp_pon_second(struct rtl9602c_priv *p)
 {
 	struct ptp_clock_event ev = { .type = PTP_CLOCK_EXTTS, .index = 0 };
-	u32 frame = p->ptp_pon_irq_frame;
-	u32 off;
 
 	if (!READ_ONCE(p->ptp_pon_extts) || !p->ptp_clock)
 		return;
 
-	off = ((frame - p->ptp_pon_frame) & RTL9602C_GTC_DS_SUPERFRAME_CNT) %
-	      RTL9602C_PTP_PON_SECOND_FRAMES;
-	if (p->ptp_pon_frame_valid && off) {
-		if (off < RTL9602C_PTP_PON_SECOND_FRAMES / 2) {
-			p->ptp_pon_late++;
-			return;
-		}
-		p->ptp_pon_frame = frame;
+	if (!rtl9602c_ptp_pon_take(&p->ptp_pon_grid, p->ptp_pon_irq_frame)) {
+		p->ptp_pon_late++;
 		return;
 	}
-
-	p->ptp_pon_frame = frame;
-	p->ptp_pon_frame_valid = true;
 	p->ptp_pon_seconds++;
 	ev.timestamp = p->ptp_pon_irq_ns;
 	ptp_clock_event(p->ptp_clock, &ev);
@@ -293,7 +308,7 @@ static int rtl9602c_ptp_pon_extts(struct rtl9602c_priv *p, bool on)
 	int err;
 
 	if (on) {
-		p->ptp_pon_frame_valid = false;
+		memset(&p->ptp_pon_grid, 0, sizeof(p->ptp_pon_grid));
 		WRITE_ONCE(p->ptp_pon_extts, true);
 	}
 	err = rtl9602c_pon_second_enable(p, on);
@@ -1259,7 +1274,7 @@ static int rtl9602c_ptpstat_show(struct seq_file *s, void *unused)
 		      RTL9602C_IRQ_SRC_PTP_PPS));
 	seq_printf(s, "olt seconds %u  late %u  wanted %u  last at frame %u\n",
 		   READ_ONCE(p->ptp_pon_seconds), READ_ONCE(p->ptp_pon_late),
-		   READ_ONCE(p->ptp_pon_extts), READ_ONCE(p->ptp_pon_frame));
+		   READ_ONCE(p->ptp_pon_extts), READ_ONCE(p->ptp_pon_grid.frame));
 
 	spin_lock_bh(&p->ptp_tx_lock);
 	seq_printf(s, "tx stamps %u  busy %u  lost %u  orphan reports %u  awaited %u\n",
@@ -1394,3 +1409,7 @@ void rtl9602c_ptp_debugfs_init(struct rtl9602c_priv *p)
 }
 
 #endif /* CONFIG_DEBUG_FS */
+
+#if IS_ENABLED(CONFIG_NET_DSA_RTL9602C_KUNIT_TEST)
+#include "rtl9602c-ptp-test.c"
+#endif

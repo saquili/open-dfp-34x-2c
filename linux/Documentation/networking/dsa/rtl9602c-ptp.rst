@@ -1568,11 +1568,14 @@ A second, in order:
    (M)
 3. ``rtl9602c_ptp_pon_second()`` reports the time of step 1 as the event when
    the counter then stood a whole number of seconds of frames after it stood
-   at the second reported last. An interrupt that came a frame or more late
-   is counted and not reported, and one that finds the last one reported
-   late reports nothing and counts the frames from itself. Purpose: every
-   second reported was read within the frame it began in. (M for the count,
-   I for a late interrupt: none was seen)
+   at the second reported last, or at the second before
+   (``rtl9602c_ptp_pon_take()``): the counter starts again when the OLT does,
+   and two seconds that agree with each other and not with the one reported
+   last count the frames from themselves. An interrupt that agrees with
+   neither came a frame or more late, and is counted and not reported.
+   Purpose: every second reported was read within the frame it began in, also
+   after the counter started again. (M for the count; T for the rule, the
+   KUnit suite ``rtl9602c-ptp``; I for a late interrupt: none was seen)
 
 .. list-table::
    :header-rows: 1
@@ -1599,6 +1602,13 @@ A second, in order:
        34 s 40 lab-only reads of the clock latched beside the counter, each
        batch placing the start of a frame within 4 to 22 us. The test was cut
        short when the lab OLT was taken out.
+   * - When the OLT starts again, so does the counter, and the seconds fall
+       on other frames. Counted from the second reported last alone, every
+       second after counted as late and none was reported: 3012 in a row,
+       after the lab OLT was moved and powered again.
+     - M
+     - ``ptpstat`` (``olt seconds 2889  late 3012``) with the rule of before;
+       the rule of step 3 takes the case in the KUnit suite.
    * - What the MAC's pulse offset (``RTL9602C_GTC_DS_PPS_OFFSET``) counts,
        and whether the pulse marks the start of a frame or a point inside one.
      - I
