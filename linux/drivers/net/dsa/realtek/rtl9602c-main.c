@@ -1189,6 +1189,12 @@ static int rtl9602c_devlink_param_get(struct dsa_switch *ds, u32 id,
 			sizeof(ctx->val.vstr));
 		mutex_unlock(&p->sds_lock);
 		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_PTP_TC:
+		rtl9602c_ptp_tc_get(p, ctx->val.vstr, sizeof(ctx->val.vstr));
+		return 0;
+	case RTL9602C_DEVLINK_PARAM_ID_PTP_PATH_DELAY:
+		ctx->val.vu32 = rtl9602c_ptp_path_delay_get(p);
+		return 0;
 	default:
 		break;
 	}
@@ -1340,6 +1346,10 @@ static int rtl9602c_devlink_param_set(struct dsa_switch *ds, u32 id,
 	/* What the lane runs in is read only. */
 	case RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW:
 		return -EOPNOTSUPP;
+	case RTL9602C_DEVLINK_PARAM_ID_PTP_TC:
+		return rtl9602c_ptp_tc_set(p, ctx->val.vstr);
+	case RTL9602C_DEVLINK_PARAM_ID_PTP_PATH_DELAY:
+		return rtl9602c_ptp_path_delay_set(p, ctx->val.vu32);
 	default:
 		break;
 	}
@@ -1469,6 +1479,14 @@ static const struct devlink_param rtl9602c_devlink_params[] = {
 	/* The setting the lane runs in, or "searching". */
 	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW,
 				 "sfp_lane_now", DEVLINK_PARAM_TYPE_STRING,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/* The switch as a PTP transparent clock: "off", "e2e" or "p2p". */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_PTP_TC,
+				 "ptp_transparent_clock", DEVLINK_PARAM_TYPE_STRING,
+				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
+	/* The path delay a peer-to-peer transparent clock adds to a Sync. */
+	DSA_DEVLINK_PARAM_DRIVER(RTL9602C_DEVLINK_PARAM_ID_PTP_PATH_DELAY,
+				 "ptp_path_delay_ns", DEVLINK_PARAM_TYPE_U32,
 				 BIT(DEVLINK_PARAM_CMODE_RUNTIME)),
 };
 
@@ -2429,6 +2447,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	mutex_init(&p->meter_lock);
 	spin_lock_init(&p->ptp_lock);
 	spin_lock_init(&p->ptp_tx_lock);
+	mutex_init(&p->ptp_cfg_lock);
 	p->reg = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(p->reg))
 		return dev_err_probe(&pdev->dev, PTR_ERR(p->reg),

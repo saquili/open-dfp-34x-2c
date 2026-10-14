@@ -243,7 +243,8 @@ defaults, and the serial number is empty.
      - M: ``devlink dev param show platform/1b000000.switch`` listed the first
        24 after boot, and every measurement below sets or reads one of them.
        I: ``l3_ttl_decrement``, ``sfp_lane`` and ``sfp_lane_now``, added
-       since, are read from the code until they are listed after a boot.
+       since, are read from the code until they are listed after a boot;
+       ``ptp_transparent_clock`` and ``ptp_path_delay_ns`` were listed.
    * - Every range check is made in the set callback, and a value too wide for
        its field is refused with ``-ERANGE``, not truncated.
      - M
@@ -823,6 +824,49 @@ To keep the lane in 1000BaseX with negotiation, and to let it look again::
      - I
      - Read from the code; ``sfp_lane_now`` read once a second across a set
        would confirm it.
+
+PTP transparent clock
+---------------------
+
+The switch can be a PTP transparent clock between its wire ports (see "The
+transparent clock" in Documentation/networking/dsa/rtl9602c-ptp.rst). Its
+egress actions are the clock's, so it and transmit stamping exclude each other.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 6 8 64
+
+   * - Name
+     - Type
+     - Mode
+     - Meaning
+   * - ``ptp_transparent_clock``
+     - string
+     - runtime
+     - ``off``, ``e2e`` (end-to-end: every event message forwarded between the
+       wire ports gets its residence time) or ``p2p`` (peer-to-peer: the Syncs
+       get their residence time and ``ptp_path_delay_ns``, and the peer delay
+       messages go to the CPU). Refused with ``-EBUSY`` while a port stamps
+       what it sends, and any other value with ``-EINVAL``. ``off`` at probe.
+   * - ``ptp_path_delay_ns``
+     - u32
+     - runtime
+     - The path delay a peer-to-peer clock adds to a Sync, in nanoseconds:
+       the mean path delay of the link the Syncs arrive by. One value for the
+       switch; above 31 bits refused with ``-ERANGE``. 0 at probe.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - Both parameters are listed and set at run time; the clock corrects
+       forwarded messages end-to-end and peer-to-peer as the PTP page states.
+     - M
+     - ``devlink dev param show`` and ``set`` on the board, with Syncs through
+       the lab OLT measured at both ends.
 
 GPON serial number
 ------------------

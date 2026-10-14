@@ -371,33 +371,121 @@ static void rtl9602c_ptp_tx_reports(struct rtl9602c_priv *p, bool on, bool onest
 	rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * RTL9602C_PORT_CPU, 1, on);
 }
 
-/*
- * Take the PTP messages that arrive on @port to the CPU only (@on), or let the
- * switch forward them as other frames: a clock behind a port that stamps what
- * it receives answers its peer itself, and a copy the switch forwarded would
- * reach the next port unstamped and uncorrected.  The ingress action of every
- * message type traps while any port asks (@any); it acts on a message only
- * when the PTP enable of the port the message arrives by is set, as the
- * egress action does on the CPU's (measured for the egress action).  A
- * message from the CPU, which names its port, is not trapped (measured).
- */
-static void rtl9602c_ptp_rx_trap(struct rtl9602c_priv *p, int port, bool on,
-				 bool any)
+/* The slots of the two Syncs, and those of the peer delay messages. */
+#define RTL9602C_PTP_SYNC_SLOTS		(BIT(RTL9602C_PTP_SLOT_SYNC) |		\
+					 BIT(RTL9602C_PTP_SLOT_SYNC_1STEP))
+#define RTL9602C_PTP_PDELAY_SLOTS	(BIT(RTL9602C_PTP_SLOT_PDELAY_REQ_2STEP) | \
+					 BIT(RTL9602C_PTP_SLOT_PDELAY_RESP) |	\
+					 BIT(RTL9602C_PTP_SLOT_PDELAY_REQ))
+#define RTL9602C_PTP_ALL_SLOTS		GENMASK(RTL9602C_PTP_MSG_TYPES - 1, 0)
+
+/* An action register's value with @act in each of @slots. */
+static u32 rtl9602c_ptp_actions(unsigned long slots, u32 act)
 {
 	unsigned int slot;
-	u32 igr = 0;
+	u32 v = 0;
 
-	if (any)
-		for (slot = 0; slot < RTL9602C_PTP_MSG_TYPES; slot++)
-			igr |= RTL9602C_PTP_ACTION_TRAP << (2 * slot);
-	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, igr);
-	rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1, on);
+	for_each_set_bit(slot, &slots, RTL9602C_PTP_MSG_TYPES)
+		v |= act << (2 * slot);
+	return v;
 }
 
 /*
- * The state the PTP block starts from: no port enabled, no ingress action and
- * no path delay added to a correction.  The CPU port's enable and the egress
- * actions follow transmit stamping (rtl9602c_ptp_tx_reports()).
+ * The transparent clock (@p->ptp_tc), on the user ports: their PTP enables and
+ * transparent-clock bits are set, the event messages that arrive on them are
+ * forwarded through the clock, and leave with their residence time added to
+ * their correctionField (action 3, which for a forwarded message takes its
+ * time of arrival where it takes the reference for one from the CPU).  A
+ * peer-to-peer clock corrects only the Syncs, adds the path delay to them,
+ * and takes the peer delay messages to the CPU, which answers them per link.
+ * While a port stamps what it receives (@rx_any) every message is copied to
+ * the CPU as well.  Transmit stamping is off, as the egress actions are the
+ * clock's.
+ */
+static void rtl9602c_ptp_tc_apply(struct rtl9602c_priv *p, bool rx_any)
+{
+	bool p2p = p->ptp_tc == RTL9602C_PTP_TC_P2P;
+	unsigned long fwd = p2p ? RTL9602C_PTP_SYNC_SLOTS : RTL9602C_PTP_EVENT_SLOTS;
+	struct dsa_port *dp;
+	u32 ports = 0, igr;
+	int port;
+
+	dsa_switch_for_each_user_port(dp, &p->ds)
+		ports |= BIT(dp->index);
+
+	if (rx_any)
+		igr = rtl9602c_ptp_actions(RTL9602C_PTP_ALL_SLOTS &
+					   ~(p2p ? RTL9602C_PTP_PDELAY_SLOTS : 0),
+					   RTL9602C_PTP_ACTION_FORWARD_TC_MIRROR);
+	else
+		igr = rtl9602c_ptp_actions(fwd, RTL9602C_PTP_ACTION_FORWARD_TC);
+	if (p2p)
+		igr |= rtl9602c_ptp_actions(RTL9602C_PTP_PDELAY_SLOTS,
+					    RTL9602C_PTP_ACTION_TRAP);
+
+	rtl9602c_w(p, RTL9602C_PTP_ACTION_EGRESS,
+		   rtl9602c_ptp_actions(fwd, RTL9602C_PTP_ACTION_CORRECT));
+	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, igr);
+	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, p2p ? p->ptp_path_delay : 0);
+	rtl9602c_w(p, RTL9602C_PTP_TRANSPARENT_PORTS, ports);
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
+		rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1,
+			     !!(ports & BIT(port)));
+}
+
+/*
+ * Write the PTP block from the timestamping configuration of the ports and the
+ * transparent clock.  Without the clock: the departure reports and one-step
+ * actions of rtl9602c_ptp_tx_reports(); and a port that stamps what it
+ * receives takes the PTP messages that arrive on it to the CPU only, as a
+ * clock behind it answers its peer itself and a copy the switch forwarded
+ * would reach the next port unstamped and uncorrected: its PTP enable is set
+ * and every message type's ingress action traps while any port stamps; an
+ * action acts on a message only when the PTP enable of the port the message
+ * arrives by is set, and a message from the CPU, which names its port, is not
+ * trapped (measured).
+ *
+ * Context: under @p->ptp_cfg_lock.
+ */
+static void rtl9602c_ptp_apply(struct rtl9602c_priv *p)
+{
+	bool tx_on = false, onestep = false, p2p = false, rx_any = false;
+	int i;
+
+	lockdep_assert_held(&p->ptp_cfg_lock);
+
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++) {
+		int tx = p->hwtstamp[i].tx_type;
+
+		p2p |= tx == HWTSTAMP_TX_ONESTEP_P2P;
+		onestep |= tx == HWTSTAMP_TX_ONESTEP_SYNC ||
+			   tx == HWTSTAMP_TX_ONESTEP_P2P;
+		tx_on |= tx != HWTSTAMP_TX_OFF;
+		rx_any |= p->hwtstamp[i].rx_filter != HWTSTAMP_FILTER_NONE;
+	}
+
+	if (p->ptp_tc != RTL9602C_PTP_TC_OFF) {
+		rtl9602c_ptp_tc_apply(p, rx_any);
+		return;
+	}
+
+	rtl9602c_w(p, RTL9602C_PTP_TRANSPARENT_PORTS, 0);
+	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, 0);
+	rtl9602c_ptp_tx_reports(p, tx_on, onestep, p2p);
+	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS,
+		   rx_any ? rtl9602c_ptp_actions(RTL9602C_PTP_ALL_SLOTS,
+						 RTL9602C_PTP_ACTION_TRAP) : 0);
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		if (i != RTL9602C_PORT_CPU)
+			rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * i, 1,
+				     p->hwtstamp[i].rx_filter != HWTSTAMP_FILTER_NONE);
+}
+
+/*
+ * The state the PTP block starts from: no port enabled, no ingress action, no
+ * transparent-clock bit and no path delay added to a correction.  The CPU
+ * port's enable and the egress actions follow transmit stamping
+ * (rtl9602c_ptp_tx_reports()).
  */
 static void rtl9602c_ptp_block_reset(struct rtl9602c_priv *p)
 {
@@ -408,6 +496,7 @@ static void rtl9602c_ptp_block_reset(struct rtl9602c_priv *p)
 			rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1, 0);
 	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, 0);
 	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, 0);
+	rtl9602c_w(p, RTL9602C_PTP_TRANSPARENT_PORTS, 0);
 }
 
 /*
@@ -545,6 +634,10 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 
 	rtl9602c_ptp_block_reset(p);
 	rtl9602c_ptp_tx_reports(p, false, false, false);
+	mutex_lock(&p->ptp_cfg_lock);
+	if (p->ptp_tc != RTL9602C_PTP_TC_OFF)
+		rtl9602c_ptp_apply(p);
+	mutex_unlock(&p->ptp_cfg_lock);
 	err = rtl9602c_conduit_tstamp_attach(cpu ? cpu->conduit : NULL,
 					     rtl9602c_ptp_departure, p);
 	if (err)
@@ -867,8 +960,7 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 			       struct netlink_ext_ack *extack)
 {
 	struct rtl9602c_priv *p = ds->priv;
-	bool tx_on = false, onestep = false, p2p = false, resp_2step = false;
-	bool rx_any = false;
+	bool p2p = false, resp_2step = false;
 	int i;
 
 	switch (config->tx_type) {
@@ -914,12 +1006,7 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 		int tx = i == port ? config->tx_type : p->hwtstamp[i].tx_type;
 
 		p2p |= tx == HWTSTAMP_TX_ONESTEP_P2P;
-		onestep |= tx == HWTSTAMP_TX_ONESTEP_SYNC ||
-			   tx == HWTSTAMP_TX_ONESTEP_P2P;
 		resp_2step |= tx == HWTSTAMP_TX_ON || tx == HWTSTAMP_TX_ONESTEP_SYNC;
-		tx_on |= tx != HWTSTAMP_TX_OFF;
-		rx_any |= (i == port ? config->rx_filter : p->hwtstamp[i].rx_filter) !=
-			  HWTSTAMP_FILTER_NONE;
 	}
 
 	/*
@@ -933,11 +1020,105 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 		return -ERANGE;
 	}
 
+	mutex_lock(&p->ptp_cfg_lock);
+	if (p->ptp_tc != RTL9602C_PTP_TC_OFF &&
+	    config->tx_type != HWTSTAMP_TX_OFF) {
+		mutex_unlock(&p->ptp_cfg_lock);
+		NL_SET_ERR_MSG_MOD(extack,
+				   "the transparent clock holds the egress actions: no transmit stamps while it is on");
+		return -EBUSY;
+	}
 	p->hwtstamp[port] = *config;
-	rtl9602c_ptp_tx_reports(p, tx_on, onestep, p2p);
-	rtl9602c_ptp_rx_trap(p, port, config->rx_filter != HWTSTAMP_FILTER_NONE,
-			     rx_any);
+	rtl9602c_ptp_apply(p);
+	mutex_unlock(&p->ptp_cfg_lock);
 	return 0;
+}
+
+static const char * const rtl9602c_ptp_tc_names[] = {
+	[RTL9602C_PTP_TC_OFF]	= "off",
+	[RTL9602C_PTP_TC_E2E]	= "e2e",
+	[RTL9602C_PTP_TC_P2P]	= "p2p",
+};
+
+/**
+ * rtl9602c_ptp_tc_set() - make the switch a transparent clock, or stop it
+ * @p: driver state
+ * @mode: "off", "e2e" or "p2p" (enum rtl9602c_ptp_tc)
+ *
+ * The devlink parameter ptp_transparent_clock.  The clock holds the egress
+ * actions, so it is refused while a port has transmit stamping on, and
+ * transmit stamping is refused while it is on (rtl9602c_port_hwtstamp_set()).
+ *
+ * Context: process context.
+ * Return: 0, -EINVAL for an unknown mode, or -EBUSY while a port stamps what
+ * it sends.
+ */
+int rtl9602c_ptp_tc_set(struct rtl9602c_priv *p, const char *mode)
+{
+	int tc, i, err = 0;
+
+	tc = match_string(rtl9602c_ptp_tc_names,
+			  ARRAY_SIZE(rtl9602c_ptp_tc_names), mode);
+	if (tc < 0)
+		return -EINVAL;
+
+	mutex_lock(&p->ptp_cfg_lock);
+	for (i = 0; i < RTL9602C_NUM_PORTS && tc != RTL9602C_PTP_TC_OFF; i++)
+		if (p->hwtstamp[i].tx_type != HWTSTAMP_TX_OFF)
+			err = -EBUSY;
+	if (!err) {
+		p->ptp_tc = tc;
+		rtl9602c_ptp_apply(p);
+	}
+	mutex_unlock(&p->ptp_cfg_lock);
+	if (err)
+		dev_warn(p->ds.dev,
+			 "no transparent clock while a port stamps what it sends\n");
+	return err;
+}
+
+/* The transparent clock's mode as rtl9602c_ptp_tc_set() takes it. */
+void rtl9602c_ptp_tc_get(struct rtl9602c_priv *p, char *buf, size_t len)
+{
+	mutex_lock(&p->ptp_cfg_lock);
+	strscpy(buf, rtl9602c_ptp_tc_names[p->ptp_tc], len);
+	mutex_unlock(&p->ptp_cfg_lock);
+}
+
+/**
+ * rtl9602c_ptp_path_delay_set() - set the path delay of a P2P transparent clock
+ * @p: driver state
+ * @ns: the delay, in nanoseconds
+ *
+ * The devlink parameter ptp_path_delay_ns: what a peer-to-peer transparent
+ * clock adds to a Sync's correctionField besides its residence time, the
+ * mean path delay of the link the Syncs arrive by (IEEE 1588-2008 11.5.4).
+ * The switch holds one value for every port.
+ *
+ * Context: process context.
+ * Return: 0, or -ERANGE for a delay over 31 bits.
+ */
+int rtl9602c_ptp_path_delay_set(struct rtl9602c_priv *p, u32 ns)
+{
+	if (ns > FIELD_MAX(RTL9602C_PTP_PATH_DELAY_NS))
+		return -ERANGE;
+
+	mutex_lock(&p->ptp_cfg_lock);
+	p->ptp_path_delay = ns;
+	rtl9602c_ptp_apply(p);
+	mutex_unlock(&p->ptp_cfg_lock);
+	return 0;
+}
+
+/* The path delay rtl9602c_ptp_path_delay_set() last took. */
+u32 rtl9602c_ptp_path_delay_get(struct rtl9602c_priv *p)
+{
+	u32 ns;
+
+	mutex_lock(&p->ptp_cfg_lock);
+	ns = p->ptp_path_delay;
+	mutex_unlock(&p->ptp_cfg_lock);
+	return ns;
 }
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
@@ -999,6 +1180,10 @@ static int rtl9602c_ptpstat_show(struct seq_file *s, void *unused)
 		   p->ptp_tx_stamped, p->ptp_tx_busy, p->ptp_tx_lost,
 		   p->ptp_tx_orphans, !!p->ptp_tx_skb);
 	spin_unlock_bh(&p->ptp_tx_lock);
+	seq_printf(s, "transparent clock %s  path delay %lu ns\n",
+		   rtl9602c_ptp_tc_names[READ_ONCE(p->ptp_tc)],
+		   FIELD_GET(RTL9602C_PTP_PATH_DELAY_NS,
+			     rtl9602c_r(p, RTL9602C_PTP_PATH_DELAY)));
 	seq_printf(s, "one-step syncs %u  pdelay_resp %u  without their pdelay_req %u\n",
 		   READ_ONCE(p->ptp_tx_onestep), READ_ONCE(p->ptp_tx_p2p),
 		   READ_ONCE(p->ptp_tx_p2p_missed));

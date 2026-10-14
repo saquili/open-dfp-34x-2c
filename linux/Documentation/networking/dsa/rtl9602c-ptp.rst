@@ -1168,6 +1168,75 @@ port while another port stamps Pdelay_Resp two-step (``HWTSTAMP_TX_ON`` or
      - T
      - ``SIOCSHWTSTAMP`` on ``pon`` beside ``sfp``, each way.
 
+The transparent clock
+---------------------
+
+The switch is a PTP transparent clock between its wire ports, the SFP port and
+the PON port, when the devlink parameter ``ptp_transparent_clock`` says so:
+``off`` (the default), ``e2e`` or ``p2p`` (IEEE 1588-2008 11.5.2 and 11.5.4;
+``enum rtl9602c_ptp_tc``). ``rtl9602c_ptp_tc_apply()`` then sets the PTP
+enable and the transparent-clock bit of the user ports, the ingress action
+that forwards a message through the clock (2) for the event messages, and the
+egress action that adds the time from the message's arrival to its departure
+to its correctionField (3). End-to-end, every event message is corrected;
+peer-to-peer, only the Syncs, which also get the path delay of the parameter
+``ptp_path_delay_ns`` (``RTL9602C_PTP_PATH_DELAY``), and the peer delay
+messages go to the CPU, which answers them per link. While a port stamps what
+it receives, every message is forwarded and copied to the CPU (ingress action
+3). The egress actions are the clock's, so the clock and transmit stamping
+exclude each other: the parameter is refused with ``-EBUSY`` while a port
+stamps what it sends, and ``SIOCSHWTSTAMP`` with a transmit type other than
+off while the clock is on. ``ptpstat`` shows the mode and the path delay.
+
+::
+
+    devlink dev param set platform/1b000000.switch \
+            name ptp_transparent_clock value e2e cmode runtime
+
+The residence time ends where the message leaves the switch. Upstream that is
+the GPON MAC, where a message then waits for its allocation before it reaches
+the fibre; that wait is not in the correction.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - End-to-end, a Sync forwarded from the SFP port to the PON port leaves
+       with its residence time in its correctionField: 1808 to 1912 ns,
+       against 0 with the clock off. A two-step Sync, a Delay_Req and a
+       Pdelay_Req are corrected alike; a Follow_Up is not.
+     - M
+     - Messages from a host on the SFP side to one on the lab OLT's side, in
+       a VLAN the stick bridged between the two ports, through the lab OLT;
+       the router at both ends: 5 to 8 of each, all received.
+   * - The correction follows the queue in the switch: with about 1 Gbit/s
+       sent the same way, four Syncs carried 19 to 404 us; after it, 1.8 us
+       again. The transit through the lab chain grew to 8.3 to 9.2 ms, most
+       of it the wait in the GPON MAC, which the correction does not hold.
+     - M
+     - The same, with two senders of 1500-byte frames for 3 s; the transit
+       from the router's send to its receive, one clock at both ends.
+   * - Peer-to-peer with a path delay of 100000 ns, a Sync carried 101800 to
+       101904 ns, the delay and its residence time; a Delay_Req carried 0,
+       and a Pdelay_Req reached no other port. End-to-end, the Pdelay_Req was
+       forwarded and corrected.
+     - M
+     - As above, through the devlink parameters.
+   * - With the clock off and a port stamping what it receives, PTP messages
+       arriving on that port reached no other port: Syncs to the lab OLT's
+       side were trapped while other frames passed.
+     - M
+     - As above, with timed's filter on ``sfp``.
+   * - Downstream, from the PON port to the SFP port, the clock corrects as
+       upstream.
+     - I
+     - The lab chain delivered no frame from the lab OLT's side to the SFP
+       side in a bridged VLAN, PTP or not: a test of the data path first,
+       then Syncs downstream.
+
 The egress capture
 ==================
 
@@ -1582,18 +1651,13 @@ All but the last concern values that only the debugfs views print.
    * - What the identifier, mode and reason fields of the egress capture mean
        ("The egress capture").
      - A capture with a reason that only some of the traffic carries.
-   * - Whether a trapped message reaches no other port, and what the ingress
-       actions that forward through the transparent clock do ("Per-port
-       configuration and message actions").
-     - Messages forwarded between the SFP and PON ports, received at both
-       ends.
    * - Why the nanoseconds of a transmit stamp lie on a 128 ns grid: a coarse
        latch, or departures that fall on it ("Transmit timestamps").
      - A second stamped port, or a scope on the SFP lane.
-   * - What a transparent-clock bit does to a message forwarded between two
-       wire ports ("Per-port configuration and message actions").
-     - A Sync forwarded between the SFP and PON ports, its correction field
-       read at both ends.
+   * - Whether the transparent clock corrects downstream as upstream ("The
+       transparent clock").
+     - Syncs from the lab OLT's side to the SFP side, once the lab chain
+       carries frames that way in a bridged VLAN.
    * - The baud rate of the time-of-day transmitter and the clock its divisor
        divides ("The time-of-day transmitter").
      - A capture of the serial output.

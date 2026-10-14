@@ -776,6 +776,7 @@ struct rtl9602c_field {
 #define RTL9602C_PTP_RX_TSTAMP_SEC	GENMASK(2, 0)
 #define RTL9602C_PTP_RX_TSTAMP_NSEC	GENMASK(29, 3)
 #define RTL9602C_PTP_PATH_DELAY		0x01b020
+#define RTL9602C_PTP_PATH_DELAY_NS		GENMASK(30, 0)
 
 /*
  * Set when a PTP message leaves the port, cleared when read; no timestamp
@@ -829,6 +830,30 @@ struct rtl9602c_field {
 #define RTL9602C_PTP_ACTION_LATCH_REPORT	2
 #define RTL9602C_PTP_ACTION_CORRECT		3
 #define RTL9602C_PTP_ACTION_TRAP		1
+/*
+ * The ingress actions that forward a message through the transparent clock,
+ * to the ports whose transparent-clock bit is set, and that do so and copy it
+ * to the CPU as well (measured upstream).
+ */
+#define RTL9602C_PTP_ACTION_FORWARD_TC		2
+#define RTL9602C_PTP_ACTION_FORWARD_TC_MIRROR	3
+
+/**
+ * enum rtl9602c_ptp_tc - what the switch does as a transparent clock
+ * @RTL9602C_PTP_TC_OFF: nothing: it forwards PTP messages as other frames
+ * @RTL9602C_PTP_TC_E2E: an end-to-end transparent clock: every event message
+ *	forwarded between the wire ports gets its residence time added to its
+ *	correctionField (IEEE 1588-2008 11.5.2)
+ * @RTL9602C_PTP_TC_P2P: a peer-to-peer transparent clock: a forwarded Sync
+ *	gets its residence time and the path delay set with the
+ *	ptp_path_delay_ns parameter; the peer delay messages go to the CPU
+ *	(IEEE 1588-2008 11.5.4)
+ */
+enum rtl9602c_ptp_tc {
+	RTL9602C_PTP_TC_OFF,
+	RTL9602C_PTP_TC_E2E,
+	RTL9602C_PTP_TC_P2P,
+};
 #define RTL9602C_PTP_SLOT_SYNC			0
 #define RTL9602C_PTP_SLOT_DELAY_REQ		1
 #define RTL9602C_PTP_SLOT_PDELAY_REQ_2STEP	2
@@ -1991,7 +2016,7 @@ struct rtl9602c_priv {
 	/**
 	 * @ptp_lock: makes a clock latch and its reads, a step and its
 	 * writes, or a write of the reference time, one operation; a spinlock,
-	 * as the transmit path reads the clock for a one-step Sync;
+	 * as the transmit path writes the reference time;
 	 * initialised at probe, before any view that reads the clock exists
 	 */
 	spinlock_t		ptp_lock;
@@ -2158,6 +2183,19 @@ struct rtl9602c_priv {
 	 */
 	bool		ptp_tx_ready;
 	/**
+	 * @ptp_cfg_lock: serialises the PTP block's settings, which the
+	 * timestamping configuration (under RTNL) and the transparent clock's
+	 * devlink parameters change
+	 */
+	struct mutex	ptp_cfg_lock;
+	/** @ptp_tc: the transparent clock's mode, under @ptp_cfg_lock */
+	enum rtl9602c_ptp_tc ptp_tc;
+	/**
+	 * @ptp_path_delay: the path delay a peer-to-peer transparent clock
+	 * adds to a Sync, in ns, under @ptp_cfg_lock
+	 */
+	u32		ptp_path_delay;
+	/**
 	 * @ptp_onestep_at: when the reference time was last written for a
 	 * one-step message, under @ptp_lock
 	 */
@@ -2307,6 +2345,10 @@ struct rtl9602c_priv {
  *	may be brought up in
  * @RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW: sfp_lane_now, the setting it
  *	runs in
+ * @RTL9602C_DEVLINK_PARAM_ID_PTP_TC: ptp_transparent_clock, "off", "e2e" or
+ *	"p2p" (enum rtl9602c_ptp_tc)
+ * @RTL9602C_DEVLINK_PARAM_ID_PTP_PATH_DELAY: ptp_path_delay_ns, the path
+ *	delay a peer-to-peer transparent clock adds to a Sync
  */
 enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_BASE = DEVLINK_PARAM_GENERIC_ID_MAX,
@@ -2337,6 +2379,8 @@ enum rtl9602c_devlink_param_id {
 	RTL9602C_DEVLINK_PARAM_ID_L3_TTL_DEC,
 	RTL9602C_DEVLINK_PARAM_ID_SFP_LANE,
 	RTL9602C_DEVLINK_PARAM_ID_SFP_LANE_NOW,
+	RTL9602C_DEVLINK_PARAM_ID_PTP_TC,
+	RTL9602C_DEVLINK_PARAM_ID_PTP_PATH_DELAY,
 };
 
 /*
@@ -2494,6 +2538,10 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p);
 void rtl9602c_ptp_unregister(struct rtl9602c_priv *p);
 int rtl9602c_ptp_pon_tod(struct rtl9602c_priv *p, const struct timespec64 *ts,
 			 unsigned long delay);
+int rtl9602c_ptp_tc_set(struct rtl9602c_priv *p, const char *mode);
+void rtl9602c_ptp_tc_get(struct rtl9602c_priv *p, char *buf, size_t len);
+int rtl9602c_ptp_path_delay_set(struct rtl9602c_priv *p, u32 ns);
+u32 rtl9602c_ptp_path_delay_get(struct rtl9602c_priv *p);
 u32 rtl9602c_r(struct rtl9602c_priv *p, u32 off);
 void rtl9602c_rmw(struct rtl9602c_priv *p, u32 off, u32 clr, u32 set);
 void rtl9602c_irq_enable(struct rtl9602c_priv *p, u32 clr, u32 set);
