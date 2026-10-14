@@ -12,6 +12,7 @@ import {
   lightQuality,
   linkSpeed,
   memory,
+  registration,
   type SessionView,
   served,
   session,
@@ -143,5 +144,53 @@ describe("what the stick serves of the routing settings", () => {
 
   it("serves nothing before the first reading", () => {
     expect(served(undefined, "lans")).toBe(false);
+  });
+});
+
+describe("how far the stick got in registering on the OLT", () => {
+  const at = (state: string, more: Partial<Parameters<typeof registration>[0]> = {}) =>
+    registration({
+      state,
+      alarms: [],
+      omcc: true,
+      ploamSet: false,
+      omciFrames: 120,
+      services: 3,
+      ...more,
+    });
+
+  it("has every step done in O5, the password not used where none is set", () => {
+    expect(at("o5")).toEqual({
+      sync: "done",
+      serial: "done",
+      ranging: "done",
+      ploam: "off",
+      omcc: "done",
+      mib: "done",
+      services: "done",
+    });
+    expect(at("o5", { ploamSet: true }).ploam).toBe("done");
+  });
+
+  it("is at the serial number in O3 and at the ranging in O4", () => {
+    expect(at("o3")).toMatchObject({ sync: "done", serial: "now", ranging: "wait", omcc: "wait" });
+    expect(at("o4")).toMatchObject({ serial: "done", ranging: "now", ploam: "wait" });
+  });
+
+  it("waits for the OMCI channel, then for the OLT to talk on it, then for services", () => {
+    expect(at("o5", { omcc: false })).toMatchObject({ omcc: "now", mib: "wait" });
+    expect(at("o5", { omciFrames: 0 })).toMatchObject({ mib: "now", services: "wait" });
+    expect(at("o5", { services: 0 }).services).toBe("now");
+  });
+
+  it("fails the signal on LOS in O1 and in O6, and the serial number in O7", () => {
+    expect(at("o1").sync).toBe("now");
+    expect(at("o1", { alarms: ["LOS"] }).sync).toBe("fail");
+    expect(at("o6")).toMatchObject({ sync: "fail", serial: "done", ranging: "done", omcc: "wait" });
+    expect(at("o7")).toMatchObject({ sync: "done", serial: "fail", ranging: "wait" });
+  });
+
+  it("waits at every step without a PON interface", () => {
+    expect(Object.values(at("noPon")).every((s) => s === "wait")).toBe(true);
   });
 });

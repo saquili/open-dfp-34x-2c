@@ -80,6 +80,51 @@ export function fibre(live: Live | undefined): FibreView {
   };
 }
 
+/** The steps of the stick's registration on the OLT, in their order. */
+export const REG_STEPS = ["sync", "serial", "ranging", "ploam", "omcc", "mib", "services"] as const;
+export type RegStep = (typeof REG_STEPS)[number];
+
+/** How far a step got: done, under way, failed, not reached yet, or not used. */
+export type RegState = "done" | "now" | "fail" | "wait" | "off";
+
+/**
+ * How far the stick got in registering on the OLT, step by step, from its
+ * activation state (ITU-T G.984.3, "o1" to "o7"), the alarms on the line,
+ * whether the OLT gave it a GEM port for OMCI, whether a PLOAM password is
+ * set, how many OMCI messages it handled and how many services the OLT set
+ * up. The stick sends its serial number in O3, is ranged in O4 and works in
+ * O5; in O6 it lost the signal and keeps its ranging, in O7 the OLT stopped
+ * it. Whether the OLT asked for the password the stick does not tell: the
+ * step says only whether one is set, for the OLT that asks.
+ */
+export function registration(r: {
+  state: string;
+  alarms: string[];
+  omcc: boolean;
+  ploamSet: boolean;
+  omciFrames: number;
+  services: number;
+}): Record<RegStep, RegState> {
+  const n = /^o([1-7])$/.exec(r.state) ? Number(r.state[1]) : 0;
+  const working = n === 5;
+  return {
+    sync:
+      n === 0
+        ? "wait"
+        : n === 6 || (n === 1 && r.alarms.length)
+          ? "fail"
+          : n === 1
+            ? "now"
+            : "done",
+    serial: n === 7 ? "fail" : n === 3 ? "now" : n >= 4 ? "done" : "wait",
+    ranging: n === 4 ? "now" : n === 5 || n === 6 ? "done" : "wait",
+    ploam: working ? (r.ploamSet ? "done" : "off") : "wait",
+    omcc: working ? (r.omcc ? "done" : "now") : "wait",
+    mib: working && r.omcc ? (r.omciFrames > 0 ? "done" : "now") : "wait",
+    services: working && r.omciFrames > 0 ? (r.services > 0 ? "done" : "now") : "wait",
+  };
+}
+
 /** The most PPPoE sessions the stick holds, as many as the switch has rows for. */
 export const MAX_SESSIONS = 7;
 

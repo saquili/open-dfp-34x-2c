@@ -12,7 +12,7 @@
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, ChevronRight, CircleAlert, KeyRound, Lock } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, KeyRound, Lock, Minus, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
@@ -51,9 +51,13 @@ import {
   GPON_UP_BPS,
   gems,
   LIGHT_TONE,
+  REG_STEPS,
+  type RegState,
+  type RegStep,
   RX_MAX_DBM,
   RX_MIN_DBM,
   RX_WEAK_DBM,
+  registration,
   sessions,
 } from "../lib/state";
 
@@ -105,6 +109,136 @@ function useMib() {
 
 /* ------------------------------------------------------------------ state */
 
+/* A step's mark: its colour by how far it got, and a tick, a cross, a dash or its number. */
+const MARK: Record<RegState, string> = {
+  done: "bg-success text-success-content",
+  now: "bg-warning text-warning-content animate-pulse",
+  fail: "bg-error text-error-content",
+  wait: "bg-base-200 text-base-content/60 ring-1 ring-base-300",
+  off: "bg-base-200 text-base-content/50 ring-1 ring-base-300",
+};
+
+const STEP: Record<RegStep, { title: Key; hint: Key }> = {
+  sync: { title: "fibre.stepSync", hint: "fibre.stepSyncHint" },
+  serial: { title: "fibre.stepSerial", hint: "fibre.stepSerialHint" },
+  ranging: { title: "fibre.stepRanging", hint: "fibre.stepRangingHint" },
+  ploam: { title: "fibre.stepPassword", hint: "fibre.stepPasswordHint" },
+  omcc: { title: "fibre.stepOmcc", hint: "fibre.stepOmccHint" },
+  mib: { title: "fibre.stepMib", hint: "fibre.stepMibHint" },
+  services: { title: "fibre.stepServices", hint: "fibre.stepServicesHint" },
+};
+
+/**
+ * The stick's registration on the OLT, step by step: synchronisation, the
+ * serial number, the ONU number and the ranging, the PLOAM password, the OMCI
+ * channel, the OLT's reading of the database and the services it set up;
+ * each with how far it got and what the stick knows of it. Across the card on
+ * a wide screen, one under the other with what each step is on a narrow one.
+ */
+function Registration() {
+  const { t, lang } = useI18n();
+  const { data: live } = useLive();
+  const { omci, mib } = useMib();
+  const identity = useIdentity();
+  const f = fibre(live);
+  const onu = live?.onu;
+  const frames = omci.data?.frames?.handled ?? 0;
+  const svc = mib.empty ? 0 : servicesOf(mib).length;
+  const steps = registration({
+    state: f.state,
+    alarms: f.alarms,
+    omcc: !!onu?.omcc_port_id,
+    ploamSet: !!identity.data?.ploam_set,
+    omciFrames: frames,
+    services: svc,
+  });
+  const n = (v: number | undefined) => integer(v ?? 0, lang);
+  /* What the stick knows of a step, by how far it got. */
+  const detail = (id: RegStep, at: RegState): string[] => {
+    if (at === "wait") return [];
+    switch (id) {
+      case "sync":
+        return [
+          t(
+            at === "done"
+              ? "fibre.regSignal"
+              : at === "now"
+                ? "fibre.regSearching"
+                : "fibre.regLost",
+          ),
+        ];
+      case "serial":
+        return at === "fail"
+          ? [t("fibre.regStopped")]
+          : [t("fibre.regAsked", { n: n(onu?.counters.sn_requests) })];
+      case "ranging":
+        return [
+          t("fibre.regOnu", { id: onu?.onu_id ?? "–", n: n(onu?.counters.ranging_requests) }),
+        ];
+      case "ploam":
+        return [t(at === "done" ? "fibre.regPasswordSet" : "fibre.regPasswordNone")];
+      case "omcc":
+        return [
+          at === "done"
+            ? t("fibre.regOmcc", { port: onu?.omcc_port_id ?? "" })
+            : t("fibre.regWaitOlt"),
+        ];
+      case "mib":
+        return [at === "done" ? t("fibre.regMib", { n: n(frames) }) : t("fibre.regWaitOlt")];
+      case "services":
+        return [
+          at === "done"
+            ? t("fibre.regServices", { s: svc, g: gems(live).length })
+            : t("fibre.regNoServices"),
+        ];
+    }
+  };
+  return (
+    <Card
+      title={t("fibre.regTitle")}
+      action={
+        <span className="hidden text-xs text-base-content/55 sm:inline">{t("fibre.regHint")}</span>
+      }
+    >
+      <ol className="grid gap-4 lg:grid-cols-7 lg:gap-2">
+        {REG_STEPS.map((id, i) => {
+          const at = steps[id];
+          return (
+            <li
+              key={id}
+              title={t(STEP[id].hint)}
+              className="relative flex gap-3 lg:flex-col lg:items-center lg:text-center lg:not-last:after:absolute lg:not-last:after:top-3.5 lg:not-last:after:left-[calc(50%+1.25rem)] lg:not-last:after:right-[calc(-50%+1.25rem)] lg:not-last:after:h-px lg:not-last:after:bg-base-300"
+            >
+              <span
+                className={`grid size-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${MARK[at]}`}
+              >
+                {at === "done" ? (
+                  <Check className="size-4" />
+                ) : at === "fail" ? (
+                  <X className="size-4" />
+                ) : at === "off" ? (
+                  <Minus className="size-4" />
+                ) : (
+                  i + 1
+                )}
+              </span>
+              <span className="grid min-w-0 gap-0.5">
+                <span className="text-sm font-medium">{t(STEP[id].title)}</span>
+                {detail(id, at).map((line) => (
+                  <span key={line} className="tabular truncate text-xs text-base-content/65">
+                    {line}
+                  </span>
+                ))}
+                <span className="text-xs text-base-content/55 lg:hidden">{t(STEP[id].hint)}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </Card>
+  );
+}
+
 function LineState() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
@@ -119,7 +253,7 @@ function LineState() {
     c && c.fec_codewords > 0 ? (c.fec_corrected_codewords / c.fec_codewords) * 100 : null;
 
   return (
-    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(min-content,1fr)]">
+    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_min-content_minmax(min-content,1fr)]">
       <div className="grid gap-4 lg:grid-cols-3">
         <Card
           title={t("fibre.status")}
@@ -233,6 +367,7 @@ function LineState() {
           )}
         </Card>
       </div>
+      <Registration />
       <LineHistory />
     </div>
   );
