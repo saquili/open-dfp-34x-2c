@@ -1051,8 +1051,10 @@ static void test_a_group_is_filed_under_the_vlan_the_olt_sends_it_in(void)
 	CHECK(!filed(IP4(239, 1, 1, 5), 1420));
 	CHECK(held(IP4(239, 1, 2, 5)));
 
-	/* A permanent group that is no static group and no entry of the agent
-	 * is a leftover of an agent that ended, and goes. */
+	/*
+	 * A permanent group that is no static group and no entry of the agent
+	 * is a leftover of an agent that ended, and goes.
+	 */
 	a4(stale.group, IP4(239, 1, 1, 7));
 	CHECK_EQ(omci_hw_mcast_group_add(&stale), OMCI_OK);
 	CHECK(filed(IP4(239, 1, 1, 7), 1420));

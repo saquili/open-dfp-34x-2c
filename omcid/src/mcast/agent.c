@@ -491,7 +491,9 @@ static enum verdict judge(struct omci_mcast *m, const struct omci_mib *mib,
 	pkg = k < c.n ? &c.pkg[k] : &none;
 	out->bandwidth = row.bandwidth;
 	out->package = pkg->key;
-	out->vlan = k < c.n && row.vlan >= 1u && row.vlan <= 4094u ? row.vlan : 0u;
+	out->vlan = 0u;
+	if (k < c.n && row.vlan >= 1u && row.vlan <= 4094u)
+		out->vlan = row.vlan;
 	return how == JUDGE_RENEW ? ALLOWED :
 				    limits(m, mib, sub, pkg, g, s, out);
 }
@@ -574,9 +576,9 @@ static struct asker vlan_noted(const struct omci_mcast *m, const uint8_t *g,
 static void alias_del(struct omci_mcast *m, size_t i)
 {
 	const struct active *x = &m->active[i];
-	struct omci_hw_mcast_group g = {
-		.vid = x->olt_vlan, .permanent = true, .alias = true
-	};
+	struct omci_hw_mcast_group g = { .vid = x->olt_vlan,
+					 .permanent = true,
+					 .alias = true };
 
 	if (!x->aliased)
 		return;
@@ -1019,9 +1021,9 @@ static void alias_sync(struct omci_mcast *m)
 {
 	for (size_t i = 0; i < m->n_active; i++) {
 		struct active *x = &m->active[i];
-		struct omci_hw_mcast_group g = {
-			.vid = x->olt_vlan, .permanent = true, .alias = true
-		};
+		struct omci_hw_mcast_group g = { .vid = x->olt_vlan,
+						 .permanent = true,
+						 .alias = true };
 
 		if (!x->held || x->alias_tried || x->olt_vlan == 0u ||
 		    x->olt_vlan == x->mdb_vid)
@@ -1052,20 +1054,39 @@ static void alias_sync(struct omci_mcast *m)
  * on with nobody to watch it. It goes. (A bridge that does not filter VLANs
  * holds every group under VID 0, and none is taken for a leftover there.)
  */
+static bool a_static(const struct omci_mcast *m,
+		     const struct omci_hw_mcast_group *g)
+{
+	for (size_t k = 0; k < m->n_statics; k++) {
+		const struct omci_hw_mcast_group *s = &m->statics[k];
+
+		if (g->vid == s->vid && memcmp(g->group, s->group, ADDR) == 0 &&
+		    memcmp(g->source, s->source, ADDR) == 0)
+			return true;
+	}
+	return false;
+}
+
+static bool an_alias(const struct omci_mcast *m,
+		     const struct omci_hw_mcast_group *g)
+{
+	for (size_t k = 0; k < m->n_active; k++) {
+		const struct active *x = &m->active[k];
+
+		if (x->aliased && x->olt_vlan == g->vid &&
+		    same_channel(x, g->group, g->source))
+			return true;
+	}
+	return false;
+}
+
 static void leftovers(const struct omci_mcast *m,
 		      const struct omci_hw_mcast_group *g, size_t n)
 {
 	for (size_t i = 0; i < n; i++) {
-		bool known = !g[i].permanent || g[i].vid == 0u;
+		const bool known = !g[i].permanent || g[i].vid == 0u ||
+				   a_static(m, &g[i]) || an_alias(m, &g[i]);
 
-		for (size_t k = 0; k < m->n_statics && !known; k++)
-			known = g[i].vid == m->statics[k].vid &&
-				memcmp(g[i].group, m->statics[k].group, ADDR) == 0 &&
-				memcmp(g[i].source, m->statics[k].source, ADDR) == 0;
-		for (size_t k = 0; k < m->n_active && !known; k++)
-			known = m->active[k].aliased &&
-				m->active[k].olt_vlan == g[i].vid &&
-				same_channel(&m->active[k], g[i].group, g[i].source);
 		if (!known)
 			(void)!omci_hw()->mcast_group_del(&g[i]);
 	}
