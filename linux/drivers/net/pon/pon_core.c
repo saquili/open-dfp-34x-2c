@@ -398,6 +398,41 @@ int pon_device_tcont_set(struct pon_device *pon, unsigned int index,
 	return err;
 }
 
+/**
+ * pon_device_tod_set() - set the ONU's clock at a downstream frame
+ * @pon: the PON device
+ * @superframe: the superframe counter of the frame
+ * @tstamp: the OLT's TstampN for that frame
+ * @extack: where a refusal is explained
+ *
+ * The MAC's tod_set runs under the registration lock, as tcont_set does in
+ * pon_device_tcont_set().
+ *
+ * Context: process context; may sleep.
+ * Return: 0; -ENODEV when no data path is registered; -EOPNOTSUPP when the
+ * MAC has no tod_set; or the MAC's error.
+ */
+int pon_device_tod_set(struct pon_device *pon, u32 superframe,
+		       const struct timespec64 *tstamp,
+		       struct netlink_ext_ack *extack)
+{
+	int err;
+
+	mutex_lock(&pon_register_lock);
+	if (!pon->ops) {
+		NL_SET_ERR_MSG(extack, "the ONU has no data path");
+		err = -ENODEV;
+	} else if (!pon->ops->tod_set) {
+		NL_SET_ERR_MSG(extack, "the MAC cannot set a clock at a frame");
+		err = -EOPNOTSUPP;
+	} else {
+		err = pon->ops->tod_set(pon, superframe, tstamp, extack);
+	}
+	mutex_unlock(&pon_register_lock);
+
+	return err;
+}
+
 struct pon_device *pon_device_register(struct device *parent,
 				       const struct pon_device_ops *ops,
 				       unsigned int num_flows,

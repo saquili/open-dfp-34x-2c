@@ -21,6 +21,7 @@
 #include <linux/err.h>
 #include <linux/if_ether.h>
 #include <linux/skbuff.h>
+#include <linux/time64.h>
 #include <linux/types.h>
 #include <uapi/linux/pon.h>
 
@@ -377,6 +378,22 @@ struct pon_device_ops {
 	 */
 	int (*tcont_set)(struct pon_device *pon, unsigned int index,
 			 int alloc_id, struct netlink_ext_ack *extack);
+	/**
+	 * @tod_set: Set the ONU's PTP hardware clock, when the downstream
+	 * frame whose superframe counter is superframe arrives, to the time
+	 * at which that frame reaches the ONU: tstamp, the OLT's TstampN, less
+	 * (EqD + response time) x n1490 / (n1310 + n1490) (ITU-T G.984.3
+	 * Amendment 2 clause 10.4.6.2). Set the clock once, follow a change of
+	 * the equalization delay until the frame, and drop a pending setting
+	 * for a new one. Return 0, -EAGAIN while the ONU has no equalization
+	 * delay, -ERANGE when the frame has passed or lies half the counter's
+	 * span or more ahead, or another negative error code, with a message
+	 * in extack. Called with the class's registration lock held; may
+	 * sleep. Optional: without it, tod-set fails with -EOPNOTSUPP.
+	 */
+	int (*tod_set)(struct pon_device *pon, u32 superframe,
+		       const struct timespec64 *tstamp,
+		       struct netlink_ext_ack *extack);
 };
 
 /**

@@ -294,6 +294,27 @@ def tcont_map(_cfg) -> None:
             raise AssertionError(f"{op} {attrs} did not fail")
 
 
+def tod_refused(_cfg) -> None:
+    """tod-set: the policy, the ONU, and a MAC without a clock to set."""
+    nf = SIM.nf
+    tod = {"id": SIM.id, "superframe": 1000, "sec": 1000000000, "nsec": 0}
+
+    for attrs, want in (
+            ({k: v for k, v in tod.items() if k != "superframe"}, errno.EINVAL),
+            ({k: v for k, v in tod.items() if k != "nsec"}, errno.EINVAL),
+            (tod | {"superframe": 1 << 30}, errno.ERANGE),
+            (tod | {"sec": 1 << 48}, errno.ERANGE),
+            (tod | {"nsec": 1000000000}, errno.ERANGE),
+            (tod | {"id": 4000}, errno.ENODEV),
+            (tod, errno.EOPNOTSUPP)):
+        try:
+            nf.tod_set(attrs)
+        except NlError as e:
+            ksft_eq(e.error, want, comment=f"tod_set {attrs}")
+        else:
+            raise AssertionError(f"tod_set {attrs} did not fail")
+
+
 def gem_lifecycle(_cfg) -> None:
     gem_add("gemt0", SIM.ifname, port_id=100, direction=DIR_BOTH, tcont=0)
     try:
@@ -511,8 +532,8 @@ def main() -> None:
     global SIM
     SIM = Sim()
     ksft_run([dev_dump, dev_get_errors, dev_status, dev_notify, tcont_map,
-              gem_lifecycle, gem_refused, gem_change, gem_downstream, gem_bridge,
-              gem_traffic, omci_loopback], args=(None,))
+              tod_refused, gem_lifecycle, gem_refused, gem_change, gem_downstream,
+              gem_bridge, gem_traffic, omci_loopback], args=(None,))
     ksft_exit()
 
 

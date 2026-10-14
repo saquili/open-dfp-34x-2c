@@ -16,6 +16,7 @@ int pon_nl_dev_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb);
 int pon_nl_tcont_get_doit(struct sk_buff *skb, struct genl_info *info);
 int pon_nl_tcont_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb);
 int pon_nl_tcont_set_doit(struct sk_buff *skb, struct genl_info *info);
+int pon_nl_tod_set_doit(struct sk_buff *skb, struct genl_info *info);
 
 enum {
 	PON_NLGRP_MONITOR,

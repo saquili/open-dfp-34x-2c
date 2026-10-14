@@ -1271,9 +1271,10 @@ operation table and the uAPI header ``include/uapi/linux/pon.h``.
 The objects are registered by the MAC driver, as in the kernel's DPLL family:
 user space reads them and is told of changes, but can neither create nor change
 any, because the kernel runs the transmission convergence layer and user space
-only observes it. There is no set operation. The family has two objects: a
-*dev* object for each ONU, and a *tcont* object for each of its T-CONTs. The
-kernel tree's generic client reads them::
+only observes it. Its two set operations write what management owns and the
+convergence layer does not: ``tcont-set`` and ``tod-set``. The family has two
+objects: a *dev* object for each ONU, and a *tcont* object for each of its
+T-CONTs. The kernel tree's generic client reads them::
 
     tools/net/ynl/pyynl/cli.py --spec Documentation/netlink/specs/pon.yaml \
         --do dev-get --json '{"id": 0}'
@@ -1330,6 +1331,11 @@ notifications, need ``CAP_NET_ADMIN``.
    * - ``tcont-set``, do
      - 4
      - ``id``, ``index``, and ``alloc-id`` to map, none to unmap
+     - Nothing but the acknowledgment.
+     - ``CAP_NET_ADMIN``
+   * - ``tod-set``, do
+     - 5
+     - ``id``, ``superframe``, ``sec``, ``nsec``
      - Nothing but the acknowledgment.
      - ``CAP_NET_ADMIN``
 
@@ -1410,10 +1416,16 @@ The ``dev-stats`` nest holds fourteen counters numbered from 1 in this order:
 ``fec-corrected-codewords``, ``fec-uncorrectable-codewords`` and
 ``fec-codewords``. The tcont object has ``id`` (1), the ONU's
 number, ``index`` (2), the T-CONT's index, and ``alloc-id`` (3), the Alloc-ID
-bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
-``PON_A_TCONT_*`` in ``include/uapi/linux/pon.h``; the commands are
-``PON_CMD_DEV_GET`` (1), ``PON_CMD_DEV_CHANGE_NTF`` (2) and
-``PON_CMD_TCONT_GET`` (3), and the group is ``PON_MCGRP_MONITOR``.
+bound to it. The time of day of ``tod-set`` has ``id`` (1), the ONU's
+number, ``superframe`` (2, u32, below 2^30), the superframe counter of the
+downstream frame N, and ``sec`` (3, u64, below 2^48) and ``nsec`` (4, u32,
+below 10^9), TstampN: the Time of day information of the OLT-G managed
+entity, as the OLT sets it (ITU-T G.988 clause 9.12.2). The C names are
+``PON_A_DEV_*``, ``PON_A_DEV_STATS_*``, ``PON_A_TCONT_*`` and ``PON_A_TOD_*``
+in ``include/uapi/linux/pon.h``; the commands are ``PON_CMD_DEV_GET`` (1),
+``PON_CMD_DEV_CHANGE_NTF`` (2), ``PON_CMD_TCONT_GET`` (3),
+``PON_CMD_TCONT_SET`` (4) and ``PON_CMD_TOD_SET`` (5), and the group is
+``PON_MCGRP_MONITOR``.
 
 .. list-table::
    :header-rows: 1
@@ -1429,7 +1441,7 @@ bound to it. The C names are ``PON_A_DEV_*``, ``PON_A_DEV_STATS_*`` and
        ``num-tconts``, ``num-tcont-queues`` and ``power-level``. Their
        numbers, the values of ``power-level``, and the command numbers
        (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3, ``tcont-set``
-       4), are ABI.
+       4, ``tod-set`` 5), are ABI.
      - M
      - The daemon reads the serial number and the alarms by these numbers and
        announces the serial number the driver holds.
@@ -1463,22 +1475,24 @@ The family and its permissions
        (``dev-get``; see "Status, alarms and notifications").
    * - The objects are registered by the MAC driver, as in the kernel's DPLL
        family: user space reads them and is told of changes, but cannot create
-       any. The kernel runs the convergence layer, so the one set operation,
-       ``tcont-set``, writes what management owns and the convergence layer
-       does not: which T-CONT an Alloc-ID serves, a mapping the OLT makes
-       through the OMCC (ITU-T G.984.3 clause 5.5.4).
+       any. The kernel runs the convergence layer, so the two set operations
+       write what management owns and the convergence layer does not:
+       ``tcont-set``, which T-CONT an Alloc-ID serves, a mapping the OLT makes
+       through the OMCC (ITU-T G.984.3 clause 5.5.4); and ``tod-set``, the
+       time of day the OLT gives through the OMCC.
      - I
      - Design choice; the operation table has no ``set``.
    * - The operations are ``dev-get`` (do needs ``id``; dump returns every
        ONU), ``tcont-get`` (do needs ``id`` and ``index``; dump returns every
        T-CONT of every ONU), ``tcont-set`` (do only, with ``id``, ``index``
-       and an optional ``alloc-id``), and the notification ``dev-change-ntf``
-       on the multicast group ``monitor``.
+       and an optional ``alloc-id``), ``tod-set`` (do only, with ``id``,
+       ``superframe``, ``sec`` and ``nsec``), and the notification
+       ``dev-change-ntf`` on the multicast group ``monitor``.
      - M, I
      - M: a ``dev-get`` dump and ``dev-change-ntf`` on the board. I:
        ``tcont-get`` is a design choice not exercised; a ``tcont-get`` dump
        would exercise it.
-   * - ``tcont-set`` needs ``CAP_NET_ADMIN`` (``admin-perm``), and so does
+   * - ``tcont-set`` and ``tod-set`` need ``CAP_NET_ADMIN`` (``admin-perm``), and so does
        joining ``monitor`` (``GENL_MCAST_CAP_NET_ADMIN``, which the generator
        writes for a group with ``admin-perm``). ``dev-get`` and ``tcont-get``
        need none (see "Operations").
@@ -1494,6 +1508,45 @@ The family and its permissions
        one holds a reference on the device it reports.
      - I
      - Design choice, not exercised: concurrent dumps during registration.
+
+The time of day
+---------------
+
+``tod-set`` has the MAC set the ONU's PTP hardware clock, when downstream
+frame N arrives, to the time at which that frame reaches the ONU (ITU-T G.984.3
+Amendment 2 clause 10.4.6.2):
+
+    TrecvN = TstampN - (EqD + RspTime) x n1490 / (n1310 + n1490)
+
+TstampN is the time at which the first bit of frame N reaches a hypothetical
+ONU with an equalization delay and a response time of zero, and only the MAC
+knows the ONU's equalization delay and response time, so user space passes the
+OLT's pair as it came. The MAC sets the clock once, follows a change of the
+equalization delay until frame N (step 7 of that clause), and drops a pending
+setting for a new one. The superframe counter rolls over every 2^30 frames,
+about 37 hours, so a frame half that span or more ahead cannot be told from
+one passed; the MAC refuses both.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``tod-set`` fails with ``-EINVAL`` without ``id``, ``superframe``,
+       ``sec`` or ``nsec``; ``-ERANGE`` from the policy for a ``superframe``
+       of 2^30 or more, a ``sec`` of 2^48 or more and an ``nsec`` of 10^9 or
+       more; ``-ENODEV`` for an unknown ONU; ``-EOPNOTSUPP`` when the MAC has
+       no ``tod_set``; and with the MAC's error otherwise, ``-EAGAIN`` while
+       the ONU has no equalization delay and ``-ERANGE`` for a frame passed
+       or too far ahead.
+     - M, T
+     - M: a lab client on the board: an unknown id, each attribute out of
+       range, and frames passed, near and far (see "The time of day" in
+       Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst for the
+       clock it set). T: ``pon.tod_refused`` of the selftest, over the
+       stand-in MAC, which has no ``tod_set``.
 
 Reports
 -------

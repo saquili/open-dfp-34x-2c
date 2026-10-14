@@ -368,6 +368,44 @@ attribute-sets:
         type: u32
         checks:
           max: 4095
+  -
+    name: tod
+    doc: >-
+      The time of day that the OLT gives an ONU through the OMCC, with the
+      Time of day information attribute of the OLT-G managed entity (ITU-T
+      G.988 clause 9.12.2): a downstream frame N and TstampN, the time at
+      which the first bit of frame N reaches a hypothetical ONU with an
+      equalization delay and a response time of zero (ITU-T G.984.3
+      Amendment 2 clause 10.4.6.1).
+    attributes:
+      -
+        name: id
+        doc: >-
+          The ONU, by the id of its dev object.
+        type: u32
+      -
+        name: superframe
+        doc: >-
+          N: the superframe counter of the downstream frame, the attribute's
+          first four bytes.
+        type: u32
+        checks:
+          max: 1073741823
+      -
+        name: sec
+        doc: >-
+          The seconds of TstampN, an IEEE 1588 timestamp: the attribute's
+          next six bytes.
+        type: u64
+        checks:
+          max: 281474976710655
+      -
+        name: nsec
+        doc: >-
+          The nanoseconds of TstampN: the attribute's last four bytes.
+        type: u32
+        checks:
+          max: 999999999
 operations:
   list:
     -
@@ -468,6 +506,29 @@ operations:
             - id
             - index
             - alloc-id
+    -
+      name: tod-set
+      doc: >-
+        Set the ONU's PTP hardware clock, when downstream frame N arrives, to
+        the time at which that frame reaches the ONU: TstampN less (EqD +
+        response time) x n1490 / (n1310 + n1490), as ITU-T G.984.3
+        Amendment 2 clause 10.4.6.2 has the ONU compute it. The MAC sets the
+        clock once, follows a change of the equalization delay until frame N,
+        and drops a pending setting for a new one. Fails with EINVAL without
+        id, superframe, sec or nsec, with ENODEV for an unknown ONU, with
+        EOPNOTSUPP when the MAC cannot set a clock at a frame, with EAGAIN
+        while the ONU has no equalization delay, and with ERANGE when frame N
+        has passed or lies half the counter's span or more ahead.
+      attribute-set: tod
+      flags: [admin-perm]
+
+      do:
+        request:
+          attributes:
+            - id
+            - superframe
+            - sec
+            - nsec
 
 mcast-groups:
   list:

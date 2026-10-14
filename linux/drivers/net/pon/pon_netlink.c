@@ -296,6 +296,45 @@ int pon_nl_tcont_set_doit(struct sk_buff *skb, struct genl_info *info)
 }
 
 /**
+ * pon_nl_tod_set_doit() - set the ONU's clock at a downstream frame
+ * @skb: the request
+ * @info: the request's attributes
+ *
+ * Return: 0; -EINVAL without id, superframe, sec or nsec; -ENODEV for an
+ * unknown ONU, or one without a data path; -EOPNOTSUPP when the MAC cannot
+ * set a clock at a frame; -EAGAIN while the ONU has no equalization delay;
+ * -ERANGE when the frame has passed or lies too far ahead; or another
+ * negative error code.
+ */
+int pon_nl_tod_set_doit(struct sk_buff *skb, struct genl_info *info)
+{
+	struct timespec64 tstamp;
+	struct pon_device *pon;
+	int err;
+
+	if (GENL_REQ_ATTR_CHECK(info, PON_A_TOD_ID) ||
+	    GENL_REQ_ATTR_CHECK(info, PON_A_TOD_SUPERFRAME) ||
+	    GENL_REQ_ATTR_CHECK(info, PON_A_TOD_SEC) ||
+	    GENL_REQ_ATTR_CHECK(info, PON_A_TOD_NSEC))
+		return -EINVAL;
+
+	pon = pon_device_get_by_id(nla_get_u32(info->attrs[PON_A_TOD_ID]));
+	if (!pon) {
+		NL_SET_ERR_MSG_ATTR(info->extack, info->attrs[PON_A_TOD_ID],
+				    "no ONU with that id");
+		return -ENODEV;
+	}
+
+	tstamp.tv_sec = nla_get_u64(info->attrs[PON_A_TOD_SEC]);
+	tstamp.tv_nsec = nla_get_u32(info->attrs[PON_A_TOD_NSEC]);
+	err = pon_device_tod_set(pon,
+				 nla_get_u32(info->attrs[PON_A_TOD_SUPERFRAME]),
+				 &tstamp, info->extack);
+	pon_device_put(pon);
+	return err;
+}
+
+/**
  * pon_nl_tcont_get_dumpit() - dump every T-CONT of every ONU
  * @skb: the part of the dump to fill
  * @cb: the dump, whose args[0] and args[1] hold the id of the ONU and the
