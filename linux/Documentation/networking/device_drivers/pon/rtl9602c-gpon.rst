@@ -2275,6 +2275,19 @@ superframe counter, are not compensated.
      - M
      - The ``tod`` line of the ``gpon`` view, ``ptpstat``, and the fit above
        over 130 reads.
+   * - From the OLT through the OMCI daemon: a Set of the OLT-G's Time of day
+       information, put into the OMCI port as if the OLT had sent it, reached
+       ``tod-set`` with its frame and TstampN, and the clock at the start of
+       frame N read TrecvN less 3 to 5 us, as through ``tod-set`` alone; the
+       clock then ran 14.7 and 15.0 ppm fast of the OLT's frames. A Set naming
+       a frame 1000 frames past was refused with ``-ERANGE``, the daemon
+       logged that the clock was not set, and the clock ran on.
+     - M
+     - Two Sets 15172 and 31399 frames ahead, EqD and response time 140851
+       bits, a Delta of 56614 ns; the daemon's log, the kernel's, the ``tod``
+       line of the ``gpon`` view, and the fit above over 130 reads each. The
+       messages went in through the lab-only ``CONFIG_PON_OMCI_INJECT``: the
+       lab OLT sends no time of day.
    * - ``tod-set`` is refused with ``-ERANGE`` for a frame passed, fewer than
        ``RTL9602C_GPON_TOD_MIN_AHEAD`` (16) frames ahead, or half the
        counter's span or more ahead, and with ``-EAGAIN`` outside O5.
