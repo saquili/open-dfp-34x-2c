@@ -2066,6 +2066,55 @@ static void test_system(void)
 	unsetenv("POND_HOSTNAME");
 }
 
+static void test_clock(void)
+{
+	char buf[2048], path[512];
+	const char *s;
+	int e;
+
+	puts("the clock, and what timed says of it");
+	mkdir(prov_path("/run", path, sizeof(path)), 0755);
+	mkdir(prov_path("/run/timed", path, sizeof(path)), 0755);
+	unlink(prov_path("/run/timed/state", path, sizeof(path)));
+	s = render(prov_clock, buf, sizeof(buf), &e);
+	check(!e && !strncmp(s, "{\"now_s\":", 9) &&
+		      strstr(s, ",\"source\":null,\"state\":null,\"offset_ns\":null,"
+				"\"updated_s\":null,\"steps\":null,\"freq_ppb\":null,\"ntp\":null,"
+				"\"ptp\":null,\"olt\":null}") != NULL,
+	      "without timed's state the clock has its time and no source");
+
+	put("/run/timed/state",
+	    "source=ptp\nstate=locked\noffset_ns=-1200\nupdated=1791892800\nsteps=1\nfreq_ppb=-5120\n"
+	    "ntp_server=192.0.2.1\nntp_good=1\nntp_offset_ns=-30005728\n"
+	    "ntp_delay_ns=180625\nntp_stratum=2\n"
+	    "ptp_interface=mgmt\nptp_good=1\nptp_master=001b19fffe000001\n"
+	    "ptp_via=l2\nptp_delay_ns=48229\nptp_offset_ns=-1200\n"
+	    "olt_file=/run/omcid/clock\nolt_good=0\n",
+	    0644);
+	s = render(prov_clock, buf, sizeof(buf), &e);
+	check(!e && strstr(s, ",\"source\":\"ptp\",\"state\":\"locked\",\"offset_ns\":-1200,"
+			      "\"updated_s\":1791892800,\"steps\":1,\"freq_ppb\":-5120,") != NULL,
+	      "the source in use, the state, the offset, the frequency");
+	check(strstr(s, "\"ntp\":{\"server\":\"192.0.2.1\",\"good\":true,"
+			"\"offset_ns\":-30005728,\"delay_ns\":180625,\"stratum\":2}") != NULL,
+	      "what NTP gave");
+	check(strstr(s, "\"ptp\":{\"interface\":\"mgmt\",\"good\":true,"
+			"\"master\":\"001b19fffe000001\",\"via\":\"l2\","
+			"\"delay_ns\":48229,\"offset_ns\":-1200}") != NULL,
+	      "what PTP gave");
+	check(strstr(s, "\"olt\":{\"good\":false,\"utc_s\":null,\"offset_ns\":null}}") != NULL,
+	      "the OLT asked, and nothing from it yet");
+
+	put("/run/timed/state", "source=none\nstate=unsynchronized\nsteps=x\nntp_server=192.0.2.1\nntp_good=2\n",
+	    0644);
+	s = render(prov_clock, buf, sizeof(buf), &e);
+	check(!e && strstr(s, "\"steps\":null,\"freq_ppb\":null,\"ntp\":{\"server\":\"192.0.2.1\",\"good\":null,"
+			      "\"offset_ns\":null,\"delay_ns\":null,\"stratum\":null},"
+			      "\"ptp\":null,\"olt\":null}") != NULL,
+	      "a source not asked is null, and a value that is none is null");
+	unlink(prov_path("/run/timed/state", path, sizeof(path)));
+}
+
 /* omcid's answer to "mib", as its ubus object gives it. */
 #define OMCID_MIB                                                              \
 	"{\"mes\":[{\"class\":256,\"instance\":0,\"attrs\":{\"1\":\"5a5a5a5a\"},"  \
@@ -2186,6 +2235,7 @@ int main(void)
 	test_panel_values();
 	test_omci();
 	test_system();
+	test_clock();
 	test_table();
 	test_failure_paths();
 

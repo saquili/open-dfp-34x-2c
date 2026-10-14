@@ -18,7 +18,7 @@ import type {
   Settings,
   SfpLane,
 } from "../api/types";
-import { BANKS, BRIDGE, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
+import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
 import { OMCI, withServices } from "./omci";
 
 let rootSecret = "admin";
@@ -669,6 +669,13 @@ export const handlers = [
   http.get("*/api/get/tls", async () => {
     await delay(200);
     return away() ?? (signedIn ? HttpResponse.json({ id: "tls", value: TLS }) : unauthorized());
+  }),
+
+  http.get("*/api/get/clock", async () => {
+    await delay(150);
+    return (
+      away() ?? (signedIn ? HttpResponse.json({ id: "clock", value: clockNow() }) : unauthorized())
+    );
   }),
 
   http.get("*/api/get/banks", async () => {

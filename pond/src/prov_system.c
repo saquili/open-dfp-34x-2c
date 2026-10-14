@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* The value of KEY= in KEY=VALUE lines, or NULL. */
 static const char *line_of(const char *text, const char *key, char *out, size_t cap)
@@ -269,6 +270,113 @@ int prov_mgmt(struct prov_buf *out)
 	} else {
 		pv_null(out);
 	}
+	pv_close(out, '}');
+	return 0;
+}
+
+/* A flag of KEY= in @text, 0 or 1, as JSON, or null. */
+static void pv_line_bool(struct prov_buf *out, const char *text, const char *key)
+{
+	char v[8];
+
+	if (line_of(text, key, v, sizeof(v)) && (!strcmp(v, "0") || !strcmp(v, "1")))
+		pv_bool(out, v[0] == '1');
+	else
+		pv_null(out);
+}
+
+/* The keys of a source in the state file, by their name there and in JSON. */
+struct clock_key {
+	const char *line;
+	const char *json;
+	char kind;		/* 's' string, 'n' number, 'b' flag */
+};
+
+static const struct clock_key ntp_keys[] = {
+	{ "ntp_server", "server", 's' },	{ "ntp_good", "good", 'b' },
+	{ "ntp_offset_ns", "offset_ns", 'n' },	{ "ntp_delay_ns", "delay_ns", 'n' },
+	{ "ntp_stratum", "stratum", 'n' },
+};
+
+static const struct clock_key ptp_keys[] = {
+	{ "ptp_interface", "interface", 's' },	{ "ptp_good", "good", 'b' },
+	{ "ptp_master", "master", 's' },	{ "ptp_via", "via", 's' },
+	{ "ptp_delay_ns", "delay_ns", 'n' },	{ "ptp_offset_ns", "offset_ns", 'n' },
+};
+
+static const struct clock_key olt_keys[] = {
+	{ "olt_good", "good", 'b' },
+	{ "olt_utc", "utc_s", 'n' },
+	{ "olt_offset_ns", "offset_ns", 'n' },
+};
+
+/* One source as an object, or null when timed does not ask it (its first key is missing). */
+static void pv_source(struct prov_buf *out, const char *text, const struct clock_key *k, size_t n)
+{
+	char v[96];
+
+	if (!line_of(text, k[0].line, v, sizeof(v))) {
+		pv_null(out);
+		return;
+	}
+	pv_open(out, '{');
+	for (size_t i = 0; i < n; i++) {
+		if (i)
+			pv_comma(out);
+		pv_key(out, k[i].json);
+		if (k[i].kind == 's')
+			pv_line_str(out, text, k[i].line);
+		else if (k[i].kind == 'n')
+			pv_line_num(out, text, k[i].line);
+		else
+			pv_line_bool(out, text, k[i].line);
+	}
+	pv_close(out, '}');
+}
+
+/*
+ * The clock: the time it reads, and what timed says of it in its state file
+ * (timed/README.rst), the source in use and how near the clock is to it, and
+ * what each source it asks last gave. Without the file, nothing sets the
+ * clock: the source and the state are null.
+ */
+int prov_clock(struct prov_buf *out)
+{
+	char text[2048];
+	bool have = !prov_slurp("/run/timed/state", text, sizeof(text), NULL);
+
+	if (!have)
+		text[0] = '\0';
+	pv_open(out, '{');
+	pv_key(out, "now_s");
+	pv_num(out, (long long)time(NULL));
+	pv_comma(out);
+	pv_key(out, "source");
+	pv_line_str(out, text, "source");
+	pv_comma(out);
+	pv_key(out, "state");
+	pv_line_str(out, text, "state");
+	pv_comma(out);
+	pv_key(out, "offset_ns");
+	pv_line_num(out, text, "offset_ns");
+	pv_comma(out);
+	pv_key(out, "updated_s");
+	pv_line_num(out, text, "updated");
+	pv_comma(out);
+	pv_key(out, "steps");
+	pv_line_num(out, text, "steps");
+	pv_comma(out);
+	pv_key(out, "freq_ppb");
+	pv_line_num(out, text, "freq_ppb");
+	pv_comma(out);
+	pv_key(out, "ntp");
+	pv_source(out, text, ntp_keys, ARRAY_SIZE(ntp_keys));
+	pv_comma(out);
+	pv_key(out, "ptp");
+	pv_source(out, text, ptp_keys, ARRAY_SIZE(ptp_keys));
+	pv_comma(out);
+	pv_key(out, "olt");
+	pv_source(out, text, olt_keys, ARRAY_SIZE(olt_keys));
 	pv_close(out, '}');
 	return 0;
 }

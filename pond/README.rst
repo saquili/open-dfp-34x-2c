@@ -271,7 +271,14 @@ its tables, and omcid's counts of the frames: omcid's answer on ubus (method
 ``mib`` of the object ``omcid``), which never gives the ONU-G's logical
 password, only whether one is set; ``tls``, whether the daemon serves HTTPS
 and, for each address it does, the port, the certificate's SHA-256 as
-browsers show it and the start and end of its validity.
+browsers show it and the start and end of its validity; ``clock``, the time
+the stick's clock reads and what timed says of it in ``/run/timed/state``
+(``timed/README.rst``): the source in use, ``ptp``, ``ntp``, ``olt`` or
+``none``, the state (``locked``, ``syncing``, ``set``, ``holdover`` or
+``unsynchronized``), the offset of the last sample, the correction of the
+clock's frequency in parts per billion, and for each source it asks
+what it last gave, null for one it does not ask; without the file, as before
+timed starts, the source and the state are null.
 
 The panel
 =========

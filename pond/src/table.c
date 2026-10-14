@@ -16,6 +16,10 @@ const struct prov pond_provs[] = {
 	  prov_cpu, NULL, PROV_VOLATILE },
 	{ "hostname", "System", "The name the stick goes by", prov_hostname,
 	  prov_hostname_write, 0 },
+	{ "clock", "System",
+	  "The stick's clock: its time, the source that sets it and how near "
+	  "it is, and what NTP, PTP and the OLT gave",
+	  prov_clock, NULL, PROV_VOLATILE },
 	{ "sfp_lane", "System",
 	  "The SFP lane's setting, the one it runs in, and a change on trial",
 	  prov_sfp_lane, prov_sfp_lane_write, PROV_VOLATILE },

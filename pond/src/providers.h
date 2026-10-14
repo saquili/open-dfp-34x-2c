@@ -15,6 +15,7 @@
 
 int prov_banks(struct prov_buf *out);
 int prov_bridge(struct prov_buf *out);
+int prov_clock(struct prov_buf *out);
 int prov_cpu(struct prov_buf *out);
 int prov_firmware(struct prov_buf *out);
 int prov_gem_counters(struct prov_buf *out);

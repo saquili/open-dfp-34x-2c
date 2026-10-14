@@ -12,6 +12,7 @@ import { ApiError, lines, OfflineError, request } from "./client";
 import type {
   Banks,
   Bridge,
+  Clock,
   Firmware,
   Identity,
   Mgmt,
@@ -40,6 +41,14 @@ export const tlsQuery = queryOptions({
   staleTime: 300_000,
 });
 
+/* The clock and its source: timed writes its state every 10 s. */
+export const clockQuery = queryOptions({
+  queryKey: ["clock"],
+  queryFn: async () => (await request<Value<Clock>>("/api/get/clock")).value,
+  staleTime: 5_000,
+  refetchInterval: 10_000,
+});
+
 export const identityQuery = queryOptions({
   queryKey: ["identity"],
   queryFn: async () => (await request<Value<Identity>>("/api/get/identity")).value,
@@ -64,6 +73,10 @@ export function useBanks() {
 
 export function useTls() {
   return useQuery(tlsQuery);
+}
+
+export function useClock() {
+  return useQuery(clockQuery);
 }
 
 export function useIdentity() {

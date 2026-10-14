@@ -15,7 +15,7 @@
  * two-year periods from CERT_EPOCH, each certificate valid for CERT_DAYS
  * days from the start of its period, the 825 days that Apple's systems take
  * at most, so that two periods overlap by three months. A clock that reads
- * before CERT_EPOCH, as one does until ntpd set it, counts as the first
+ * before CERT_EPOCH, as one does until timed sets it, counts as the first
  * period.
  */
 

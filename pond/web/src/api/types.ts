@@ -386,6 +386,39 @@ export interface Tls {
   }[];
 }
 
+/**
+ * The stick's clock (pond's value "clock"): the time it reads, and what its
+ * time daemon says of it. source and state are null without the daemon's
+ * state; a source it does not ask is null.
+ */
+export interface Clock {
+  now_s: number;
+  source: "ptp" | "ntp" | "olt" | "none" | null;
+  state: "locked" | "syncing" | "set" | "holdover" | "unsynchronized" | null;
+  offset_ns: number | null;
+  /** When the daemon last wrote its state, by the stick's clock. */
+  updated_s: number | null;
+  steps: number | null;
+  /** The correction of the clock's frequency, ppb; positive speeds it up. */
+  freq_ppb: number | null;
+  ntp: {
+    server: string | null;
+    good: boolean | null;
+    offset_ns: number | null;
+    delay_ns: number | null;
+    stratum: number | null;
+  } | null;
+  ptp: {
+    interface: string | null;
+    good: boolean | null;
+    master: string | null;
+    via: "l2" | "udp" | null;
+    delay_ns: number | null;
+    offset_ns: number | null;
+  } | null;
+  olt: { good: boolean | null; utc_s: number | null; offset_ns: number | null } | null;
+}
+
 export interface Banks {
   partitions: {
     name: string;

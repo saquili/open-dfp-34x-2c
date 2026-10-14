@@ -6,8 +6,8 @@
  * the flash, as gauges, the last ten minutes of the first two, and a map of
  * the flash with what each partition holds. Software: the two systems of
  * the flash and the update of the one that does not run. Settings: the
- * stick's name, security with the panel's certificate, a restart and a
- * report of every figure.
+ * stick's name, its clock, security with the panel's certificate, a restart
+ * and a report of every figure.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -21,6 +21,7 @@ import { ApiError, request } from "../api/client";
 import {
   uploadFirmware,
   useBanks,
+  useClock,
   useFirmware,
   useHostnameChange,
   useRestart,
@@ -34,6 +35,7 @@ import { Page, Tabs, useTab } from "../components/Page";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Gauge, Meter, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
+import { clockState, offsetText, ppmText, sourceKey, spanText, stale } from "../lib/clock";
 import {
   type BankTag,
   bankLetter,
@@ -656,6 +658,70 @@ function Certificate() {
   );
 }
 
+/*
+ * The stick's clock: the time it reads, the source that sets it and how near
+ * it is, and what each source the daemon asks last gave.
+ */
+function ClockCard() {
+  const { t, lang } = useI18n();
+  const { data: c } = useClock();
+  const when = (s: number) =>
+    new Intl.DateTimeFormat(lang, { dateStyle: "medium", timeStyle: "short" }).format(s * 1000);
+  if (!c)
+    return (
+      <Card title={t("system.clock")}>
+        <p className="text-sm text-base-content/60">–</p>
+      </Card>
+    );
+  const [state, tone] = clockState(c);
+  const inUse = c.source != null && c.source !== "none" && !stale(c);
+  return (
+    <Card title={t("system.clock")}>
+      <Facts
+        rows={[
+          [t("system.clockTime"), when(c.now_s)],
+          [
+            t("system.clockState"),
+            <Badge key="state" tone={tone}>
+              {t(state)}
+            </Badge>,
+          ],
+          [t("system.clockSource"), t(sourceKey(c))],
+          inUse && [t("system.clockOffset"), offsetText(c.offset_ns, lang)],
+          c.freq_ppb != null && [t("system.clockFreq"), ppmText(c.freq_ppb, lang)],
+          c.ptp && [
+            t("system.clockPtp"),
+            c.ptp.master
+              ? t("system.clockPtpMaster", {
+                  master: c.ptp.master,
+                  via: c.ptp.via === "udp" ? "UDP" : "L2",
+                  delay: spanText(c.ptp.delay_ns, lang),
+                })
+              : t("system.clockPtpNone", { iface: c.ptp.interface ?? "–" }),
+          ],
+          c.ntp && [
+            t("system.clockNtp"),
+            c.ntp.good
+              ? t("system.clockNtpAnswers", {
+                  server: c.ntp.server ?? "–",
+                  stratum: c.ntp.stratum ?? "–",
+                  delay: spanText(c.ntp.delay_ns, lang),
+                })
+              : t("system.clockNtpSilent", { server: c.ntp.server ?? "–" }),
+          ],
+          c.olt && [
+            t("system.clockOlt"),
+            c.olt.utc_s != null
+              ? t("system.clockOltGave", { date: when(c.olt.utc_s) })
+              : t("system.clockOltNone"),
+          ],
+        ]}
+      />
+      <p className="text-xs text-base-content/60">{t("system.clockHint")}</p>
+    </Card>
+  );
+}
+
 async function report() {
   const ids = (await request<{ items: { id: string }[] }>("/api/schema")).items.map((i) => i.id);
   const values: Record<string, unknown> = {};
@@ -716,6 +782,8 @@ function SettingsTab() {
           <p className="text-xs text-base-content/60">{t("system.hostnameUnavailable")}</p>
         )}
       </Card>
+
+      <ClockCard />
 
       <Card title={t("system.security")}>
         <Certificate />

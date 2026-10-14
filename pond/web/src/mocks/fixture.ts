@@ -6,7 +6,17 @@
  * replaced by a documentation value. The mocks start from it.
  */
 
-import type { Banks, Bridge, Firmware, Link, Live, Network, TcRules, Tls } from "../api/types";
+import type {
+  Banks,
+  Bridge,
+  Clock,
+  Firmware,
+  Link,
+  Live,
+  Network,
+  TcRules,
+  Tls,
+} from "../api/types";
 
 export const LIVE: Live = {
   uptime: {
@@ -586,6 +596,36 @@ export const TLS: Tls = {
     },
   ],
 };
+
+/* The clock as timed keeps it from a PTP master on the management link, NTP from the router beside it. */
+export function clockNow(): Clock {
+  const now_s = Math.floor(Date.now() / 1000);
+  return {
+    now_s,
+    source: "ptp",
+    state: "locked",
+    offset_ns: -1200,
+    updated_s: now_s - 4,
+    steps: 1,
+    freq_ppb: 5120,
+    ntp: {
+      server: "192.0.2.1",
+      good: true,
+      offset_ns: -30005,
+      delay_ns: 180625,
+      stratum: 2,
+    },
+    ptp: {
+      interface: "mgmt",
+      good: true,
+      master: "001b19fffe000001",
+      via: "l2",
+      delay_ns: 48229,
+      offset_ns: -1200,
+    },
+    olt: { good: false, utc_s: null, offset_ns: null },
+  };
+}
 
 export const BANKS: Banks = {
   partitions: [
