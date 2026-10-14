@@ -14,6 +14,14 @@ of UTC (--utc-offset), and plus --skew-ms, to give a slave a clock to step to.
 It is for the tests of the stick's timed: a host with a real master, such as
 ptp4l, needs nothing of this one.
 
+The times are the kernel's software stamps where it gives them, as ptp4l -S
+takes them: the Follow_Up of a Sync carries the time the kernel sent it
+(SO_TIMESTAMPING), and a Delay_Resp the time a Delay_Req arrived
+(SO_TIMESTAMPNS). The time of sending is the device driver's stamp, or,
+from a driver that gives none, the time the Sync entered the device's queue;
+a time read before sending, as a one-step Sync carries, is late by what the
+stack takes, some tens of microseconds on a busy host.
+
 The interface is named with SO_BINDTODEVICE or bound by index, which needs
 CAP_NET_RAW (run it as root on Linux). It ends after --seconds (60 by
 default), so that nothing is left running in a namespace.
@@ -37,6 +45,16 @@ GENERAL_PORT = 320
 SYNC, DELAY_REQ, FOLLOW_UP, DELAY_RESP, ANNOUNCE = 0x0, 0x1, 0x8, 0x9, 0xB
 HEADER_LEN = 34
 SO_TIMESTAMPNS = 35
+SO_TIMESTAMPING = 37
+# Software stamps of what is sent, by the driver and at the device's queue, without the message.
+TX_STAMP_FLAGS = (1 << 1) | (1 << 4) | (1 << 8) | (1 << 11)  # TX_SOFTWARE, SOFTWARE, TX_SCHED, OPT_TSONLY
+MSG_ERRQUEUE = 0x2000
+TX_STAMP_WAIT = 0.05
+# A driver's stamp comes within this of the queue's, or not at all.
+TX_SND_WAIT = 0.005
+# sock_extended_err.ee_info: the stamp of the driver's sending, and of the queue.
+SCM_TSTAMP_SND, SCM_TSTAMP_SCHED = 0, 1
+SOL_IP, IP_RECVERR, SOL_PACKET, PACKET_TX_TIMESTAMP = 0, 11, 263, 16
 
 
 def clock_identity(mac):
@@ -144,6 +162,62 @@ def stamp_of(ancdata):
     return None
 
 
+def tx_stamp_of(ancdata):
+    """The kernel's software stamp of a message sent, from the error queue's data: (ns, kind) or (None, None).
+
+    The kind is SCM_TSTAMP_SND (the driver sent it) or SCM_TSTAMP_SCHED (it
+    entered the device's queue), from the extended error beside the stamp.
+    """
+    fmt = "@ll"  # the first of three struct timespec
+    stamp = kind = None
+    for level, ctype, data in ancdata:
+        if level == socket.SOL_SOCKET and ctype == SO_TIMESTAMPING and len(data) >= 3 * struct.calcsize(fmt):
+            sec, nsec = struct.unpack(fmt, data[:struct.calcsize(fmt)])
+            if sec or nsec:
+                stamp = sec * 1_000_000_000 + nsec
+        elif (level, ctype) in ((SOL_IP, IP_RECVERR), (SOL_PACKET, PACKET_TX_TIMESTAMP)) and len(data) >= 12:
+            kind = struct.unpack("@I", data[8:12])[0]  # ee_info, after ee_errno and four bytes
+    return (stamp, kind) if stamp is not None else (None, None)
+
+
+def drain_tx_stamps(sock):
+    """Throw away the stamps of what was sent before, which the next one's must not be taken for."""
+    while True:
+        try:
+            sock.recvmsg(1, 256, MSG_ERRQUEUE | socket.MSG_DONTWAIT)
+        except OSError:
+            return
+
+
+def tx_stamp(sock):
+    """The kernel's stamp of the message just sent: the driver's, else the queue's; waited for a little, or None."""
+    end = time.monotonic() + TX_STAMP_WAIT
+    queued = None
+    while time.monotonic() < end:
+        try:
+            _, anc, _, _ = sock.recvmsg(1, 256, MSG_ERRQUEUE | socket.MSG_DONTWAIT)
+        except OSError:
+            time.sleep(0.0005)
+            continue
+        stamp, kind = tx_stamp_of(anc)
+        if stamp is None:
+            continue
+        if kind != SCM_TSTAMP_SCHED:
+            return stamp
+        if queued is None:
+            queued = stamp
+            end = min(end, time.monotonic() + TX_SND_WAIT)
+    return queued
+
+
+def ask_tx_stamps(sock):
+    """Software stamps of what the socket sends; a kernel without them leaves the times read before sending."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPING, TX_STAMP_FLAGS)
+    except OSError:
+        pass
+
+
 def mac_of(iface):
     """The MAC address of an interface (SIOCGIFHWADDR)."""
     import fcntl
@@ -159,6 +233,7 @@ def open_l2(iface):
     mreq = struct.pack("@iHH8s", index, 0, 6, L2_GROUP.ljust(8, b"\0"))  # PACKET_MR_MULTICAST = 0
     s.setsockopt(263, 1, mreq)  # SOL_PACKET, PACKET_ADD_MEMBERSHIP
     s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    ask_tx_stamps(s)
     return s
 
 
@@ -173,6 +248,8 @@ def open_udp(iface, port):
     s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
     s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
     s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    if port == EVENT_PORT:
+        ask_tx_stamps(s)
     return s
 
 
@@ -191,12 +268,18 @@ def run(opt, out=sys.stdout):
     next_tick = time.monotonic()
     seq = 0
     answered = 0
+    stamped = 0
     out.write(f"ptpmaster on {iface} over {opt['transport']}, domain {domain}, skew {opt['skew_ms']} ms\n")
     while time.monotonic() < end:
         timeout = max(0.0, min(end, next_tick) - time.monotonic())
         ready, _, _ = select.select(sockets, [], [], timeout)
         for sock in ready:
-            msg, anc, _, _ = sock.recvmsg(512, 128)
+            # A stamp on the error queue makes the socket ready too, with nothing to read.
+            try:
+                msg, anc, _, _ = sock.recvmsg(512, 128, socket.MSG_DONTWAIT)
+            except BlockingIOError:
+                drain_tx_stamps(sock)
+                continue
             stamp = stamp_of(anc)
             now = host_ns(opt["skew_ms"], opt["utc_offset"])
             req = parse_delay_req(msg, domain)
@@ -208,11 +291,16 @@ def run(opt, out=sys.stdout):
             next_tick += 1.0
             seq = (seq + 1) & 0xFFFF
             general.sendto(build_announce(domain, seq, ident, opt["utc_offset"]), dest_general)
+            drain_tx_stamps(event)
             t1 = host_ns(opt["skew_ms"], opt["utc_offset"])
             event.sendto(build_sync(domain, seq, ident, t1, opt["two_step"]), dest_event)
             if opt["two_step"]:
+                sent = tx_stamp(event)
+                if sent is not None:
+                    t1 = sent + opt["utc_offset"] * 1_000_000_000 + opt["skew_ms"] * 1_000_000
+                    stamped += 1
                 general.sendto(build_follow_up(domain, seq, ident, t1), dest_general)
-    out.write(f"ptpmaster done: {seq} Syncs, {answered} Delay_Resp\n")
+    out.write(f"ptpmaster done: {seq} Syncs ({stamped} stamped by the kernel), {answered} Delay_Resp\n")
     return 0
 
 

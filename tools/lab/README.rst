@@ -49,7 +49,13 @@ stick's ``timed`` (``timed/README.rst``) where the host has neither::
                             [--skew-ms MS] [--stratum N]
 
 ``ptpmaster`` announces itself on IFACE, sends a Sync a second, two-step unless
-``--one-step``, and answers each Delay_Req, over layer 2 or UDP. ``ntpserve``
+``--one-step``, and answers each Delay_Req, over layer 2 or UDP. Its times are
+the kernel's software stamps, as ``ptp4l -S`` takes them: the Follow_Up carries
+the time the driver sent the Sync or, from a driver that stamps nothing, the
+time it entered the device's queue (``SO_TIMESTAMPING``), and a Delay_Resp the
+time the Delay_Req arrived. A time read before sending was some tens of
+microseconds late on the lab's router, and the stick's PHC followed that; the
+summary at the end counts the Syncs the kernel stamped. ``ntpserve``
 answers the NTP requests that come to ADDR (every address of the host by
 default) on port 123. Each gives the host's ``CLOCK_REALTIME`` plus
 ``--skew-ms``, so that the stick has a clock to move to, and neither sets a
@@ -62,5 +68,6 @@ Tests
 
 ``tests/run`` checks the arguments and the pace of ``bsend`` on a socket and a
 clock that the test makes up, the messages ``ptpmaster`` builds, byte by byte,
+the stamps it reads from the error queue,
 and the answer ``ntpserve`` builds and one exchange of it on loopback, so that
 it needs no root, no interface and no time. It is part of ``make check``.

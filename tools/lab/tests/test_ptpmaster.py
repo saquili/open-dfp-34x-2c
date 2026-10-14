@@ -5,6 +5,7 @@
 import importlib.machinery
 import importlib.util
 import os
+import socket
 import struct
 import unittest
 
@@ -96,6 +97,27 @@ class Messages(unittest.TestCase):
         req[0] = 0x00  # a Sync
         self.assertIsNone(ptpmaster.parse_delay_req(bytes(req), 0))
         self.assertIsNone(ptpmaster.parse_delay_req(bytes(req)[:30], 0))
+
+    def test_the_kernel_stamp_of_a_message_sent(self):
+        three = struct.pack("@ll", 1791892800, 123456789) + struct.pack("@ll", 0, 0) * 2
+        stamp = (socket.SOL_SOCKET, ptpmaster.SO_TIMESTAMPING, three)
+        t = 1791892800 * 1_000_000_000 + 123456789
+
+        def err(info, level=ptpmaster.SOL_PACKET, ctype=ptpmaster.PACKET_TX_TIMESTAMP):
+            return (level, ctype, struct.pack("@IBBBBII", 42, 4, 0, 0, 0, info, 0))
+
+        # The driver's stamp and the queue's, by the extended error beside them, over layer 2 and UDP.
+        self.assertEqual(ptpmaster.tx_stamp_of([stamp, err(ptpmaster.SCM_TSTAMP_SND)]), (t, ptpmaster.SCM_TSTAMP_SND))
+        self.assertEqual(ptpmaster.tx_stamp_of([stamp, err(ptpmaster.SCM_TSTAMP_SCHED)]),
+                         (t, ptpmaster.SCM_TSTAMP_SCHED))
+        self.assertEqual(ptpmaster.tx_stamp_of([err(ptpmaster.SCM_TSTAMP_SCHED, ptpmaster.SOL_IP, ptpmaster.IP_RECVERR),
+                                                stamp]), (t, ptpmaster.SCM_TSTAMP_SCHED))
+        # No software stamp, another message, or too short: none.
+        zero = struct.pack("@ll", 0, 0) * 3
+        self.assertEqual(ptpmaster.tx_stamp_of([(socket.SOL_SOCKET, ptpmaster.SO_TIMESTAMPING, zero)]), (None, None))
+        self.assertEqual(ptpmaster.tx_stamp_of([(socket.SOL_SOCKET, ptpmaster.SO_TIMESTAMPNS, three)]), (None, None))
+        self.assertEqual(ptpmaster.tx_stamp_of([(socket.SOL_SOCKET, ptpmaster.SO_TIMESTAMPING, three[:8])]),
+                         (None, None))
 
     def test_clock_identity_from_a_mac(self):
         self.assertEqual(ptpmaster.clock_identity(bytes.fromhex("40ed0081 5bfb".replace(" ", ""))),
