@@ -224,7 +224,7 @@ wrong sign-in, 429 while sign-ins are stopped.
   networks behind the stick with their devices; ``forwards``, ``dmz``, the
   NAT; ``rules`` and ``fw``, the firewall) are in the reply only from
   software that has them. Without them the panel says "Not on the stick yet"
-  on those tabs and saves nothing there.
+  on those pages and saves nothing there.
 * ``changes``: ``CONFIRM=1`` keeps every change on trial (``onu-change``),
   a new management pair only from a request that came to its new address,
   and ``REVERT=1`` takes them all back; pond then listens on the management

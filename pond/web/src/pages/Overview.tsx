@@ -107,7 +107,7 @@ export function Overview() {
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(12rem,1fr)_min-content]">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Tile
-            to="/fibre"
+            to="/switch/fibre"
             icon={<Activity className="size-4" />}
             title={t("overview.fibre")}
             badge={<Badge tone={f.tone}>{t(`state.${f.stateKey}`)}</Badge>}
@@ -153,7 +153,7 @@ export function Overview() {
           </Tile>
 
           <Tile
-            to="/sfp"
+            to="/switch/sfp"
             icon={<EthernetPort className="size-4" />}
             title={t("overview.sfp")}
             badge={

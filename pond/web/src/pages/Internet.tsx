@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The internet, in five pages under one entry of the menu: WAN, the stick's
+ * The internet, in pages under one entry of the menu: WAN, the stick's
  * connections to the operator; LAN, the local networks that go out through
  * them; their clients, the devices in those (pages/Lan.tsx); NAT, what comes
  * in to them from the internet (pages/Nat.tsx); and the firewall's rules
@@ -116,7 +116,7 @@ function Conns() {
 }
 
 /** The pages of the internet, by the name each has in the menu and in its address. */
-export const INTERNET_PAGES = ["wan", "lan", "clients", "nat", "fw"] as const;
+export const INTERNET_PAGES = ["wan", "lan", "clients", "nat", "fw", "routes"] as const;
 export type InternetPage = (typeof INTERNET_PAGES)[number];
 
 /**
@@ -135,6 +135,7 @@ export function useInternetCounts(): Record<InternetPage, number | null> {
     clients: lans ? lan.devices : null,
     nat: served(live, "forwards") ? nat : null,
     fw: served(live, "rules") ? fw : null,
+    routes: null,
   };
 }
 

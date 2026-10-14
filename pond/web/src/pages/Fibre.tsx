@@ -2,27 +2,17 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The fibre, in five tabs: the state of the connection, the light and the
- * errors on the line; the services the OLT set up, each a VLAN with its
- * channels, the host's VLAN for it and multicast; the channels one by one;
- * how the stick introduces itself to the OLT, which the owner may change to
- * what the operator expects; and the managed entities as omcid holds them,
- * for the curious.
+ * The fibre and what the operator set up on it, in five pages. Under the
+ * switch, the fibre: the state of the connection, the light and the errors
+ * on the line. Under the operator, the services the OLT set up, each a VLAN
+ * with its channels, the host's VLAN for it and multicast; the channels one
+ * by one; how the stick introduces itself to the OLT, which the owner may
+ * change to what the operator expects; and the managed entities as omcid
+ * holds them, for the curious.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import {
-  Activity,
-  Check,
-  ChevronRight,
-  CircleAlert,
-  Database,
-  Fingerprint,
-  KeyRound,
-  Layers,
-  ListTree,
-  Lock,
-} from "lucide-react";
+import { Check, ChevronRight, CircleAlert, KeyRound, Lock } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
@@ -30,7 +20,7 @@ import { useLive, useTraffic } from "../api/live";
 import type { Identity } from "../api/types";
 import { SaveState, SecretInput, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
-import { Page, Tabs, useTab } from "../components/Page";
+import { Page } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
@@ -66,10 +56,6 @@ import {
   RX_WEAK_DBM,
   sessions,
 } from "../lib/state";
-
-const TABS = ["state", "services", "channels", "identity", "omci"] as const;
-
-type Tab = (typeof TABS)[number];
 
 /**
  * Where the received light sits: the receiver's working range, its weak end
@@ -119,7 +105,7 @@ function useMib() {
 
 /* ------------------------------------------------------------------ state */
 
-function StateTab() {
+function LineState() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const { omci, mib } = useMib();
@@ -666,7 +652,7 @@ function OmciState({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function ServicesTab() {
+function ServiceList() {
   const { t } = useI18n();
   const { omci, mib } = useMib();
   const [view, setView] = useState<"services" | "rules">("services");
@@ -770,7 +756,7 @@ function RateBar({
 /* The columns of a channel's row, its heading's as well. */
 const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_minmax(10rem,14rem)_8rem]";
 
-function ChannelsTab() {
+function ChannelList() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const rates = useTraffic().at(-1)?.gems;
@@ -1364,7 +1350,7 @@ function IdentityForm({ identity }: { identity: Identity }) {
   );
 }
 
-function IdentityTab() {
+function IdentityView() {
   const { t } = useI18n();
   const identity = useIdentity();
   return (
@@ -1465,7 +1451,7 @@ function Instances({ cls }: { cls: number }) {
   );
 }
 
-function OmciTab() {
+function OmciBrowser() {
   const { t } = useI18n();
   const { omci, mib } = useMib();
   const [cls, setCls] = useState<number | null>(null);
@@ -1539,29 +1525,54 @@ function OmciTab() {
   );
 }
 
-export function Fibre() {
+/* The state of the connection to the operator, at the right of each of these pages' titles. */
+function FibreState() {
   const { t } = useI18n();
-  const [tab, setTab] = useTab(TABS);
-  const { data: live } = useLive();
-  const f = fibre(live);
-  const tabs: { id: Tab; label: string; icon: ReactNode }[] = [
-    { id: "state", label: t("fibre.tabState"), icon: <Activity className="size-4" /> },
-    { id: "services", label: t("fibre.tabServices"), icon: <Layers className="size-4" /> },
-    { id: "channels", label: t("fibre.tabChannels"), icon: <ListTree className="size-4" /> },
-    { id: "identity", label: t("fibre.tabIdentity"), icon: <Fingerprint className="size-4" /> },
-    { id: "omci", label: t("fibre.tabOmci"), icon: <Database className="size-4" /> },
-  ];
+  const f = fibre(useLive().data);
+  return <Badge tone={f.tone}>{t(`state.${f.stateKey}`)}</Badge>;
+}
+
+export function FibrePage() {
+  const { t } = useI18n();
   return (
-    <Page
-      title={t("fibre.title")}
-      tabs={<Tabs items={tabs} value={tab} onChange={setTab} label={t("fibre.title")} />}
-      actions={<Badge tone={f.tone}>{t(`state.${f.stateKey}`)}</Badge>}
-    >
-      {tab === "state" && <StateTab />}
-      {tab === "services" && <ServicesTab />}
-      {tab === "channels" && <ChannelsTab />}
-      {tab === "identity" && <IdentityTab />}
-      {tab === "omci" && <OmciTab />}
+    <Page title={t("nav.fibre")} actions={<FibreState />}>
+      <LineState />
+    </Page>
+  );
+}
+
+export function ServicesPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.services")} actions={<FibreState />}>
+      <ServiceList />
+    </Page>
+  );
+}
+
+export function ChannelsPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.channels")} actions={<FibreState />}>
+      <ChannelList />
+    </Page>
+  );
+}
+
+export function IdentityPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.identity")} actions={<FibreState />}>
+      <IdentityView />
+    </Page>
+  );
+}
+
+export function OmciPage() {
+  const { t } = useI18n();
+  return (
+    <Page title={t("nav.omci")} actions={<FibreState />}>
+      <OmciBrowser />
     </Page>
   );
 }

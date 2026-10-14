@@ -19,7 +19,6 @@ import type {
   Network,
   OmciValue,
   SfpLane,
-  TcRules,
   Tls,
 } from "./types";
 
@@ -214,4 +213,3 @@ const switchQuery = <T>(id: string) =>
 
 export const useNetwork = () => useQuery(switchQuery<Network>("network"));
 export const useBridge = () => useQuery(switchQuery<Bridge>("bridge"));
-export const useTcRules = () => useQuery(switchQuery<TcRules>("tc_rules"));

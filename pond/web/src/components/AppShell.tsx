@@ -3,24 +3,23 @@
 
 /*
  * The frame around every page: the menu (a drawer on a phone), with the
- * internet's pages under an entry of their own, each with how many things it
- * holds; whether the stick answers, the language and the user. When the stick stops answering,
+ * pages of the internet, of the switch and of the operator under an entry
+ * each, the internet's with how many things each holds; whether the stick
+ * answers, the language and the user. When the stick stops answering,
  * the pages keep the last figures and a bar says since when. A change of the
  * settings on trial is confirmed here, whatever the page (ADR 0014).
  */
 
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Activity,
-  BarChart3,
   Cable,
-  EthernetPort,
   Globe,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
   Network,
+  RadioTower,
   Settings2,
   ShieldCheck,
   WifiOff,
@@ -36,14 +35,48 @@ import { clock } from "../lib/format";
 import { confirmable, trialsToConfirm } from "../lib/trial";
 import { INTERNET_PAGES, useInternetCounts } from "../pages/Internet";
 
-/* The menu; "internet" stands for the internet's pages, under an entry of their own. */
-const NAV: ({ to: string; key: Key; icon: ReactNode } | "internet")[] = [
+/** A page of the menu. */
+interface Entry {
+  to: string;
+  key: Key;
+}
+
+/** A section of the menu: an entry that folds its pages. */
+interface Section {
+  key: Key;
+  icon: ReactNode;
+  pages: Entry[];
+}
+
+/* The switch with its ports, and what the operator set up on the fibre. */
+const SWITCH: Section = {
+  key: "nav.switch",
+  icon: <Network className="size-4" />,
+  pages: [
+    { to: "/switch/sfp", key: "nav.sfp" },
+    { to: "/switch/fibre", key: "nav.fibre" },
+    { to: "/switch/vlans", key: "nav.vlans" },
+    { to: "/switch/mac", key: "nav.mac" },
+    { to: "/switch/stats", key: "nav.stats" },
+  ],
+};
+const OPERATOR: Section = {
+  key: "nav.operator",
+  icon: <RadioTower className="size-4" />,
+  pages: [
+    { to: "/operator/services", key: "nav.services" },
+    { to: "/operator/channels", key: "nav.channels" },
+    { to: "/operator/identity", key: "nav.identity" },
+    { to: "/operator/omci", key: "nav.omci" },
+  ],
+};
+
+/* The menu; "internet" stands for the internet's section, whose pages show their counts. */
+const NAV: ((Entry & { icon: ReactNode }) | Section | "internet")[] = [
   { to: "/", key: "nav.overview", icon: <LayoutDashboard className="size-4" /> },
-  { to: "/fibre", key: "nav.fibre", icon: <Activity className="size-4" /> },
   "internet",
-  { to: "/sfp", key: "nav.sfp", icon: <EthernetPort className="size-4" /> },
-  { to: "/switch", key: "nav.switch", icon: <Network className="size-4" /> },
-  { to: "/stats", key: "nav.stats", icon: <BarChart3 className="size-4" /> },
+  SWITCH,
+  OPERATOR,
   { to: "/system", key: "nav.system", icon: <Settings2 className="size-4" /> },
 ];
 
@@ -117,34 +150,66 @@ function Clock({ now }: { now: number }) {
   );
 }
 
-/* The internet's pages in the menu, open from the start; a click on its name folds them. */
-function InternetMenu({ path, onGo }: { path: string; onGo: () => void }) {
+/*
+ * A section's pages in the menu, open from the start, each with how many
+ * things it holds where @counts says; a click on the section's name folds
+ * them.
+ */
+function MenuSection({
+  section,
+  counts = {},
+  path,
+  onGo,
+}: {
+  section: Section;
+  counts?: Record<string, number | null>;
+  path: string;
+  onGo: () => void;
+}) {
   const { t } = useI18n();
-  const counts = useInternetCounts();
   return (
     <li>
       <details open>
         <summary>
-          <Globe className="size-4" />
-          {t("nav.internet")}
+          {section.icon}
+          {t(section.key)}
         </summary>
         <ul className="flex flex-col gap-0.5">
-          {INTERNET_PAGES.map((p) => {
-            const to = `/internet/${p}`;
-            return (
-              <li key={p}>
-                <Link to={to} className={`flex ${path === to ? "menu-active" : ""}`} onClick={onGo}>
-                  {t(`nav.${p}`)}
-                  {counts[p] != null && (
-                    <span className="tabular ml-auto text-xs opacity-60">{counts[p]}</span>
-                  )}
-                </Link>
-              </li>
-            );
-          })}
+          {section.pages.map((p) => (
+            <li key={p.to}>
+              <Link
+                to={p.to}
+                className={`flex ${path === p.to ? "menu-active" : ""}`}
+                onClick={onGo}
+              >
+                {t(p.key)}
+                {counts[p.to] != null && (
+                  <span className="tabular ml-auto text-xs opacity-60">{counts[p.to]}</span>
+                )}
+              </Link>
+            </li>
+          ))}
         </ul>
       </details>
     </li>
+  );
+}
+
+/* The internet's section, with the counts of its pages. */
+function InternetSection({ path, onGo }: { path: string; onGo: () => void }) {
+  const counts = useInternetCounts();
+  const section: Section = {
+    key: "nav.internet",
+    icon: <Globe className="size-4" />,
+    pages: INTERNET_PAGES.map((p) => ({ to: `/internet/${p}`, key: `nav.${p}` })),
+  };
+  return (
+    <MenuSection
+      section={section}
+      counts={Object.fromEntries(INTERNET_PAGES.map((p) => [`/internet/${p}`, counts[p]]))}
+      path={path}
+      onGo={onGo}
+    />
   );
 }
 
@@ -237,7 +302,9 @@ export function AppShell({ children }: { children?: ReactNode }) {
     <ul className="menu w-full gap-1 p-0">
       {NAV.map((n) =>
         n === "internet" ? (
-          <InternetMenu key={n} path={path} onGo={shut} />
+          <InternetSection key={n} path={path} onGo={shut} />
+        ) : "pages" in n ? (
+          <MenuSection key={n.key} section={n} path={path} onGo={shut} />
         ) : (
           <li key={n.to}>
             <Link to={n.to} className={path === n.to ? "menu-active" : ""} onClick={shut}>

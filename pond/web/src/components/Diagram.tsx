@@ -461,7 +461,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
                 : t("overview.noLink"),
           ]}
           tone={link.up ? "good" : "bad"}
-          onOpen={go("/sfp")}
+          onOpen={go("/switch/sfp")}
           tip={t("diagram.hostTip")}
         />
         <Node
@@ -470,7 +470,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           title={t("diagram.sfp")}
           lines={[lane ?? "–", link.up ? t("sfp.up") : t("overview.noLink")]}
           tone={link.up ? "good" : "bad"}
-          onOpen={go("/sfp")}
+          onOpen={go("/switch/sfp")}
           tip={t("diagram.sfpTip")}
         />
         <Node
@@ -479,7 +479,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           title={t("diagram.switch")}
           lines={["RTL9602C"]}
           tone="neutral"
-          onOpen={go("/switch")}
+          onOpen={go("/switch/vlans")}
           tip={t("diagram.switchTip")}
         />
         <Node
@@ -502,7 +502,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
               : t(`state.${f.stateKey}`),
           ]}
           tone={f.tone}
-          onOpen={go("/fibre")}
+          onOpen={go("/switch/fibre")}
           tip={t("diagram.ponmacTip")}
         />
         <Node
@@ -511,7 +511,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
           title={tall ? t("diagram.olt") : "OLT"}
           lines={[t(`light.${f.quality}`)]}
           tone={LIGHT_TONE[f.quality]}
-          onOpen={go("/fibre")}
+          onOpen={go("/switch/fibre")}
           tip={t("diagram.olt")}
         />
 
@@ -542,7 +542,7 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
                   key={v.gem.name}
                   v={v}
                   rate={rate?.gems[v.gem.name]}
-                  onOpen={go("/fibre")}
+                  onOpen={go("/operator/channels")}
                   box={{
                     x: L.gems.x + col * (L.gems.w + L.gems.gap),
                     y: cardsY + row * (L.gems.h + L.gems.gap),
