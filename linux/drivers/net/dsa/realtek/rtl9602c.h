@@ -158,6 +158,16 @@
 #define RTL9602C_UC_UNKNOWN_ACT_DROP		1
 
 /*
+ * What becomes of a frame whose source address the table holds for another
+ * port, by the port it came in by, two bits a port: MOVE moves the entry to
+ * that port, and DROP drops the frame and learns nothing from it.
+ */
+#define RTL9602C_SA_MOVED			0x01c000
+#define RTL9602C_SA_MOVED_ACT(p)		(GENMASK(1, 0) << (2 * (p)))
+#define RTL9602C_SA_MOVED_ACT_MOVE		0
+#define RTL9602C_SA_MOVED_ACT_DROP		1
+
+/*
  * What becomes of a multicast frame that no address-table entry knows, by the
  * port it came in by, two bits a port: FLOOD sends it by the unknown-multicast
  * flood mask, as at reset, and DROP drops it. IPv4 and IPv6 frames, as the
@@ -2475,6 +2485,7 @@ int rtl9602c_port_bridge_flags(struct dsa_switch *ds, int port,
 			       struct switchdev_brport_flags flags, struct netlink_ext_ack *extack);
 void rtl9602c_bridge_refresh(struct dsa_switch *ds);
 void rtl9602c_mcast_reset(struct rtl9602c_priv *p);
+void rtl9602c_l2_moves_init(struct rtl9602c_priv *p);
 void rtl9602c_mcast_refresh(struct rtl9602c_priv *p);
 void rtl9602c_gem_hosts_sync(struct rtl9602c_priv *p);
 void rtl9602c_acl_snoop_setup(struct rtl9602c_priv *p);

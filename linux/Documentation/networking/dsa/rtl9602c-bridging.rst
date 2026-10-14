@@ -1090,6 +1090,46 @@ Setting learning on a port, ``rtl9602c_port_learning()``, in order:
 3. Evaluate the alarm subscription again (``rtl9602c_lrn_over_intr_sync()``).
    Purpose: the alarm is on only while a port has a limit that somebody set. (M)
 
+Addresses that move
+===================
+
+A frame whose source address the table holds for another port moves the entry
+to the port it came in by, by default. A register says, per port the frame came
+in by, what happens instead, and the driver keeps the default except on the PON
+port, where such a frame is dropped and nothing is learned from it
+(``rtl9602c_l2_moves_init()``, in setup). An OLT may send the stick's upstream
+frames back down its GEM port; learned from them, the subscriber's addresses
+would move to the PON port, and the switch would drop the downstream frames to
+them as frames to the port they came in by. A host that does move from the SFP
+side to the PON side is reached again once its entry ages out. ``l2learn``
+prints the action of each port (column ``moved``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_SA_MOVED`` (``0x01c000``) holds two bits per port,
+       ``RTL9602C_SA_MOVED_ACT(p)`` at bit ``2 * p``, for the frames that come
+       in by port p. ``RTL9602C_SA_MOVED_ACT_MOVE`` (0), every port's value
+       after the boot loader, moves the entry to that port;
+       ``RTL9602C_SA_MOVED_ACT_DROP`` (1) drops the frame and leaves the entry
+       where it is.
+     - M
+     - The lab OLT sends every frame from the stick back down its GEM port: of
+       20 frames sent upstream, 20 reached the router and 20 came back. With
+       0 on the PON port, a ping from the SFP side moved the host's address to
+       the PON port (``fdb``) and pings failed both ways; with 1, the address
+       stayed on the SFP port and 10 of 10 pings passed both ways, while the
+       frames sent back still arrived at the GEM port. After setup the
+       register reads ``0x00000010``.
+   * - The values 2 and 3 are taken to trap such a frame to the CPU and to copy
+       it there.
+     - I
+     - Not load-bearing: the driver writes 1, on the PON port only.
+
 Ageing
 ======
 
@@ -2520,7 +2560,10 @@ exist with ``CONFIG_DEBUG_FS`` in ``/sys/kernel/debug/rtl9602c/``, mode 0400.
        ``RTL9602C_ISOLATE_EXT_HAIRPIN`` raw. Then a line for each port with the
        columns ``limit`` (the learning limit), ``count`` (the addresses
        learned), ``over`` (the over-limit action raw, ``=fw`` for 0 and ``=?``
-       otherwise), ``flood(uc mc bc)`` (the port's three flood bits) and a note:
+       otherwise), ``moved`` (the action on an address held for another port
+       raw, ``=move`` for 0, ``=drop`` for 1 and ``=?`` otherwise; see
+       "Addresses that move"), ``flood(uc mc bc)`` (the port's three flood
+       bits) and a note:
        ``learning OFF, overflows per frame`` when the limit is 0, and ``(cpu)``
        for the CPU port.
    * - ``svlan``

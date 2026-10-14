@@ -1187,6 +1187,29 @@ void rtl9602c_mcast_reset(struct rtl9602c_priv *p)
 	p->uc_drop = false;
 }
 
+/**
+ * rtl9602c_l2_moves_init() - keep the addresses of the other ports off the PON port
+ * @p: the switch
+ *
+ * A frame whose source address the table holds for another port moves the
+ * entry to the port it came in by, except on the PON port: a frame from the
+ * PON side with an address of the SFP side or of the CPU is dropped, and
+ * nothing is learned from it. An OLT may send the stick's upstream frames
+ * back down the stick's GEM port, and the lab OLT sends every one
+ * (measured): learned from them, the subscriber's addresses would move to the
+ * PON port, and the switch would drop the downstream frames to them as frames
+ * to the port they came in by.
+ *
+ * Context: setup.
+ */
+void rtl9602c_l2_moves_init(struct rtl9602c_priv *p)
+{
+	rtl9602c_rmw(p, RTL9602C_SA_MOVED,
+		     RTL9602C_SA_MOVED_ACT(RTL9602C_PORT_PON),
+		     FIELD_PREP(RTL9602C_SA_MOVED_ACT(RTL9602C_PORT_PON),
+				RTL9602C_SA_MOVED_ACT_DROP));
+}
+
 /*
  * Whether the PON port drops the unicast that no entry knows: only while
  * nothing needs it. A bridge of the SFP port and the GEM interfaces floods it

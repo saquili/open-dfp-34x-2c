@@ -6631,18 +6631,20 @@ static const struct file_operations rtl9602c_cf_fops = {
 /*
  * l2learn: the three flood masks and RTL9602C_ISOLATE_EXT_HAIRPIN, raw; then
  * per port the learning limit, the count learned, the action once the limit is
- * reached, "=fw" for forwarding without learning, the port's flood bits for
- * unknown unicast, unknown multicast and broadcast, and a note when the limit
- * is 0: learning is off, and every frame from an unknown source counts as an
- * overflow.
+ * reached, "=fw" for forwarding without learning, the action on a source
+ * address the table holds for another port, "=move" or "=drop"
+ * (RTL9602C_SA_MOVED), the port's flood bits for unknown unicast, unknown
+ * multicast and broadcast, and a note when the limit is 0: learning is off,
+ * and every frame from an unknown source counts as an overflow.
  */
 static int rtl9602c_l2learn_show(struct seq_file *s, void *unused)
 {
 	struct rtl9602c_priv *p = s->private;
-	u32 over, uc, mc, bc, ext;
+	u32 over, moved, uc, mc, bc, ext;
 	unsigned int port;
 
 	over = rtl9602c_r(p, RTL9602C_FDB_LEARN_LIMIT_ACT);
+	moved = rtl9602c_r(p, RTL9602C_SA_MOVED);
 	uc = rtl9602c_r(p, RTL9602C_FLOOD_UNKNOWN_UCAST);
 	mc = rtl9602c_r(p, RTL9602C_FLOOD_UNKNOWN_MCAST);
 	bc = rtl9602c_r(p, RTL9602C_FLOOD_BCAST);
@@ -6651,10 +6653,10 @@ static int rtl9602c_l2learn_show(struct seq_file *s, void *unused)
 	seq_printf(s, "flood masks   unknown-uc %08x  unknown-mc %08x  bc %08x\n",
 		   uc, mc, bc);
 	seq_printf(s, "src ext perm  %08x\n\n", ext);
-	seq_puts(s, "port  limit  count  over  flood(uc mc bc)  note\n");
+	seq_puts(s, "port  limit  count  over  moved   flood(uc mc bc)  note\n");
 
 	for (port = 0; port < RTL9602C_NUM_PORTS; port++) {
-		unsigned int limit, count, act;
+		unsigned int limit, count, act, mv;
 
 		limit = (rtl9602c_r(p, RTL9602C_FDB_LEARN_LIMIT(port)) >>
 			 RTL9602C_FDB_LEARN_SHIFT(port)) & RTL9602C_FDB_LEARN_MASK;
@@ -6662,10 +6664,13 @@ static int rtl9602c_l2learn_show(struct seq_file *s, void *unused)
 			 RTL9602C_FDB_LEARN_SHIFT(port)) & RTL9602C_FDB_LEARN_MASK;
 		act = (over >> RTL9602C_FDB_LEARN_LIMIT_ACT_SHIFT(port)) &
 		      RTL9602C_FDB_LEARN_LIMIT_ACT_MASK;
+		mv = (moved & RTL9602C_SA_MOVED_ACT(port)) >> (2 * port);
 
-		seq_printf(s, "%4u  %5u  %5u  %u%-3s  %u  %u  %u          %s%s\n",
+		seq_printf(s, "%4u  %5u  %5u  %u%-3s  %u%-5s  %u  %u  %u          %s%s\n",
 			   port, limit, count, act,
 			   act == RTL9602C_FDB_LEARN_LIMIT_ACT_FORWARD ? "=fw" : "=?",
+			   mv, mv == RTL9602C_SA_MOVED_ACT_MOVE ? "=move" :
+			   mv == RTL9602C_SA_MOVED_ACT_DROP ? "=drop" : "=?",
 			   !!(uc & BIT(port)), !!(mc & BIT(port)),
 			   !!(bc & BIT(port)),
 			   limit ? "" : "learning OFF, overflows per frame",
