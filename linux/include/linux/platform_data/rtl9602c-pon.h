@@ -50,6 +50,14 @@ struct timespec64;
 /* The GPON MAC's revision register, which devlink info reads too. */
 #define RTL9602C_GPON_REVISION		0x700010
 
+/*
+ * The received superframe count, advancing once per 125 us frame while the
+ * downstream is framed; the switch's PTP clock reads it beside its time in
+ * the first half of the GPON interrupt.
+ */
+#define RTL9602C_GTC_DS_SUPERFRAME	0x701048
+#define RTL9602C_GTC_DS_SUPERFRAME_CNT		GENMASK(29, 0)
+
 /**
  * struct rtl9602c_pon_host_ops - what the switch driver does for the MAC
  * @irq_enable: change the sources of the switch interrupt: clear the bits of
@@ -82,6 +90,9 @@ struct timespec64;
  * @tod_arm: give the PTP clock @ts to take at the MAC's time-of-day
  *	superframe, about @delay jiffies from now; -EOPNOTSUPP without a
  *	clock. The MAC arms the superframe after this call.
+ * @second: a second of the OLT's downstream frames began, in the GPON
+ *	interrupt the switch driver noted the time of in its first half
+ *	(rtl9602c_pon_ops.second_enable())
  *
  * All are called in process context, with the PON driver's lock not held but
  * for @power_level_changed and @tod_arm.
@@ -111,6 +122,7 @@ struct rtl9602c_pon_host_ops {
 			    struct netlink_ext_ack *extack);
 	int (*tod_arm)(void *host, const struct timespec64 *ts,
 		       unsigned long delay);
+	void (*second)(void *host);
 };
 
 /**
@@ -129,6 +141,9 @@ struct rtl9602c_pon_host_ops {
  * @power_mode: the transmit power level mode the MAC asks for
  * @power_applied: the laser was set to @mode when the MAC had asked @asked,
  *	with @err
+ * @second_enable: whether the GPON interrupt comes once every 8000
+ *	downstream frames, a second of the OLT's clock, for
+ *	rtl9602c_pon_host_ops.second()
  */
 struct rtl9602c_pon_ops {
 	int (*start)(void *pon);
@@ -143,6 +158,7 @@ struct rtl9602c_pon_ops {
 	bool (*us_ready)(void *pon, unsigned int flow);
 	u8 (*power_mode)(void *pon);
 	void (*power_applied)(void *pon, u8 asked, u8 mode, int err);
+	void (*second_enable)(void *pon, bool on);
 };
 
 /**

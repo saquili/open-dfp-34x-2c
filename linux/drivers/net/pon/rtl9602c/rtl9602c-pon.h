@@ -178,6 +178,11 @@ struct rtl9602c_pon {
 
 	/** @gpon_up: the PON is up, brought up with the pon interface */
 	bool gpon_up;
+	/**
+	 * @gpon_second: the switch driver wants the interrupt of every second
+	 * of downstream frames (rtl9602c_gpon_second_enable())
+	 */
+	bool gpon_second;
 	/** @gpon_to1: when TO1 expires, in jiffies; 0 while it is not armed */
 	unsigned long gpon_to1;
 	/** @gpon_to2: when TO2 expires, in jiffies; 0 while it is not armed */
@@ -370,6 +375,7 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p);
 void rtl9602c_gpon_report(struct rtl9602c_pon *p);
 void rtl9602c_gpon_work(struct work_struct *w);
 void rtl9602c_gpon_irq(struct rtl9602c_pon *p);
+void rtl9602c_gpon_second_enable(struct rtl9602c_pon *p, bool on);
 int rtl9602c_gpon_reboot_register(struct rtl9602c_pon *p);
 void rtl9602c_gpon_power_applied(struct rtl9602c_pon *p, u8 asked, u8 mode,
 				 int err);

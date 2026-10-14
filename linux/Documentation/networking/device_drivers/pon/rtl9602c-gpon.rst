@@ -1063,10 +1063,14 @@ detects a signal.
        the same bit positions, with ``RTL9602C_GTC_DS_IRQ_SN_REQ`` (bit 8, a
        grant classified as a serial-number request),
        ``RTL9602C_GTC_DS_IRQ_RANGING_REQ`` (bit 9, one classified as a ranging
-       request) and ``RTL9602C_GTC_DS_IRQ_PLOAM_RX`` (bit 10, a PLOAM message
-       waits). Reading it clears it, and the read is the acknowledgment.
-       ``RTL9602C_GTC_DS_IRQ_EN`` (``0x701004``) uses the same positions; the
-       bring-up enables all seven (``0x70f``; 0 at reset).
+       request), ``RTL9602C_GTC_DS_IRQ_PLOAM_RX`` (bit 10, a PLOAM message
+       waits) and ``RTL9602C_GTC_DS_IRQ_SECOND`` (bit 11, the pulse of
+       ``RTL9602C_GTC_DS_PPS``). Reading it clears it, and the read is the
+       acknowledgment. ``RTL9602C_GTC_DS_IRQ_EN`` (``0x701004``) uses the same
+       positions; the bring-up enables the first seven (``0x70f``; 0 at
+       reset), and SECOND while the switch driver wants the seconds
+       (``rtl9602c_gpon_second_enable()``, the PON operation
+       ``second_enable``).
      - T
      - The ONU reaches O5 on an OLT: activation runs from this interrupt, and it
        does not assert again once the latch is read (see "PLOAM receive").
@@ -1095,10 +1099,13 @@ detects a signal.
        ``RTL9602C_GTC_DS_PPS_PERIOD`` (bits 12:0) =
        ``RTL9602C_GTC_DS_PPS_PERIOD_1S`` (7999: a pulse every 8000 downstream
        frames, one second at 125 us a frame) and ``RTL9602C_GTC_DS_PPS_OFFSET``
-       (bits 31:26) = 1. Nothing the driver reports uses the pulse.
-     - I
-     - What consumes the pulse and what the offset counts are not identified.
-       Required: unverified.
+       (bits 31:26) = 1. The pulse latches ``RTL9602C_GTC_DS_IRQ_SECOND``,
+       which the switch's PTP clock reports as the OLT's seconds (see "The
+       OLT's seconds" in Documentation/networking/dsa/rtl9602c-ptp.rst).
+     - M, I
+     - M: 120 pulses in a row, 8000 frames apart by the superframe counter
+       read in the interrupt. I: what else consumes the pulse and what the
+       offset counts are not identified.
 
 The upstream write key
 ======================
@@ -1336,9 +1343,11 @@ as a safety net and normally finds nothing.
 
 The interrupt path, in order:
 
-1. The hard interrupt handler (``rtl9602c_irq()``) notes the time and wakes the
-   thread, leaving the GPON source pending and the line masked. Purpose: the
-   source asserts again until the GTC latches are read. (M)
+1. The hard interrupt handler (``rtl9602c_irq()``) notes the time, and while
+   the PTP clock wants the OLT's seconds the superframe counter and the
+   clock, and wakes the thread, leaving the GPON source pending and the line
+   masked. Purpose: the source asserts again until the GTC latches are read.
+   (M)
 2. The thread (``rtl9602c_irq_thread()``, which calls ``rtl9602c_gpon_irq()``)
    reads ``RTL9602C_GPON_IRQ_STAT``. (M)
 3. If ``RTL9602C_GPON_IRQ_GTC_US`` is set, it reads the upstream latch (see
@@ -1346,7 +1355,8 @@ The interrupt path, in order:
    (M)
 4. If ``RTL9602C_GPON_IRQ_GTC_DS`` is set, it reads
    ``RTL9602C_GTC_DS_IRQ_LATCH``, which clears it, records any bit other than
-   PLOAM_RX in the ``ploamlog`` ring, and on a change of LOS or LOF moves the
+   PLOAM_RX and SECOND in the ``ploamlog`` ring, hands SECOND to the switch
+   driver (the host operation ``second``), and on a change of LOS or LOF moves the
    state under ``gpon_lock`` (``rtl9602c_gpon_ds_sync()``). On SN_REQ in O3 it
    notes, under the same lock, that a serial-number request has come, which
    ends the taking of Extended_Burst_Length. Purpose: the note is made before

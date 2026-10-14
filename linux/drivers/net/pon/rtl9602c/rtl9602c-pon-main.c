@@ -101,6 +101,11 @@ static void rtl9602c_pon_op_power_applied(void *pon, u8 asked, u8 mode, int err)
 	rtl9602c_gpon_power_applied(pon, asked, mode, err);
 }
 
+static void rtl9602c_pon_op_second_enable(void *pon, bool on)
+{
+	rtl9602c_gpon_second_enable(pon, on);
+}
+
 static const struct rtl9602c_pon_ops rtl9602c_pon_ops = {
 	.start		= rtl9602c_pon_op_start,
 	.stop		= rtl9602c_pon_op_stop,
@@ -114,6 +119,7 @@ static const struct rtl9602c_pon_ops rtl9602c_pon_ops = {
 	.us_ready	= rtl9602c_pon_op_us_ready,
 	.power_mode	= rtl9602c_pon_op_power_mode,
 	.power_applied	= rtl9602c_pon_op_power_applied,
+	.second_enable	= rtl9602c_pon_op_second_enable,
 };
 
 /**

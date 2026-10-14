@@ -233,10 +233,12 @@ static inline unsigned int rtl9602c_gem_tcont(unsigned int n)
 /*
  * Downstream GTC events, latched at these bits and at those of the conditions
  * above; a read clears the latch. SN_REQ and RANGING_REQ: a grant taken as a
- * serial-number or a ranging request.
+ * serial-number or a ranging request. SECOND: the pulse of RTL9602C_GTC_DS_PPS,
+ * once every 8000 downstream frames.
  */
 #define RTL9602C_GTC_DS_IRQ_LATCH	0x701000
 #define RTL9602C_GTC_DS_IRQ_EN	0x701004
+#define RTL9602C_GTC_DS_IRQ_SECOND	BIT(11)
 #define RTL9602C_GTC_DS_IRQ_PLOAM_RX	BIT(10)
 #define RTL9602C_GTC_DS_IRQ_RANGING_REQ	BIT(9)
 #define RTL9602C_GTC_DS_IRQ_SN_REQ	BIT(8)
@@ -251,11 +253,9 @@ static inline unsigned int rtl9602c_gem_tcont(unsigned int n)
 #define RTL9602C_GPON_CNT_ACTIVATION_SN	GENMASK(15, 0)
 
 /*
- * The received superframe count, advancing once per 125 us frame while the
- * downstream is framed.
+ * The received superframe count is the switch driver's too
+ * (RTL9602C_GTC_DS_SUPERFRAME in <linux/platform_data/rtl9602c-pon.h>).
  */
-#define RTL9602C_GTC_DS_SUPERFRAME	0x701048
-#define RTL9602C_GTC_DS_SUPERFRAME_CNT		GENMASK(29, 0)
 
 /*
  * The time-of-day superframe: a 0-to-1 edge of REQ arms CNT, and the PTP

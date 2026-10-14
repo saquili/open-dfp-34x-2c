@@ -2610,8 +2610,13 @@ void rtl9602c_gpon_irq(struct rtl9602c_pon *p)
 	 * below is dispatched.
 	 */
 	ds = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_LATCH);
-	if (ds & ~RTL9602C_GTC_DS_IRQ_PLOAM_RX)
+	if (ds & ~(RTL9602C_GTC_DS_IRQ_PLOAM_RX | RTL9602C_GTC_DS_IRQ_SECOND))
 		rtl9602c_ploam_log(p, RTL9602C_EV_DS_INTR, NULL, ds);
+
+	/* A second of downstream frames, for the switch's PTP clock. */
+	if (ds & RTL9602C_GTC_DS_IRQ_SECOND)
+		p->pd->host_ops->second(p->pd->host);
+
 	if (ds & (RTL9602C_GTC_DS_IRQ_LOS | RTL9602C_GTC_DS_IRQ_LOF |
 		  RTL9602C_GTC_DS_IRQ_SN_REQ)) {
 		mutex_lock(&p->gpon_lock);
@@ -2719,9 +2724,10 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 	rtl9602c_pon_w(p, RTL9602C_GTC_US_WRITE_KEY, RTL9602C_GTC_US_WRITE_KEY_LOCK);
 
 	/*
-	 * A pulse every 8000 downstream frames, once a second, at offset 1.
-	 * Nothing the driver reports uses it; what consumes it, what the offset
-	 * counts and whether it is needed are not known.
+	 * A pulse every 8000 downstream frames, once a second of the OLT's
+	 * clock, at offset 1: the interrupt RTL9602C_GTC_DS_IRQ_SECOND, which
+	 * the switch's PTP clock takes as an external timestamp. What else
+	 * consumes it and what the offset counts are not known.
 	 */
 	rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_PPS,
 			 RTL9602C_GTC_DS_PPS_PERIOD | RTL9602C_GTC_DS_PPS_OFFSET,
@@ -2802,14 +2808,16 @@ static int rtl9602c_gpon_bringup(struct rtl9602c_pon *p)
 	/*
 	 * Every downstream GTC event: a received PLOAM, which the interrupt
 	 * dispatches, and the serial-number and ranging requests and the LOM,
-	 * FEC, LOF and LOS conditions, which it only records. Then the two
+	 * FEC, LOF and LOS conditions, which it only records; and the second
+	 * of downstream frames while the switch driver wants it. Then the two
 	 * sub-blocks at the top level.
 	 */
 	rtl9602c_pon_w(p, RTL9602C_GTC_DS_IRQ_EN,
 		       RTL9602C_GTC_DS_IRQ_PLOAM_RX | RTL9602C_GTC_DS_IRQ_RANGING_REQ |
 		   RTL9602C_GTC_DS_IRQ_SN_REQ | RTL9602C_GTC_DS_IRQ_LOM |
 		   RTL9602C_GTC_DS_IRQ_FEC | RTL9602C_GTC_DS_IRQ_LOF |
-		   RTL9602C_GTC_DS_IRQ_LOS);
+		   RTL9602C_GTC_DS_IRQ_LOS |
+		   (p->gpon_second ? RTL9602C_GTC_DS_IRQ_SECOND : 0));
 	rtl9602c_pon_w(p, RTL9602C_GPON_IRQ_EN,
 		       RTL9602C_GPON_IRQ_GTC_US | RTL9602C_GPON_IRQ_GTC_DS);
 
@@ -3017,6 +3025,29 @@ int rtl9602c_gpon_start(struct rtl9602c_pon *p)
 out:
 	mutex_unlock(&p->gpon_lock);
 	return err;
+}
+
+/**
+ * rtl9602c_gpon_second_enable() - interrupt once a second of downstream frames
+ * @p: the PON driver
+ * @on: whether to
+ *
+ * The pulse of RTL9602C_GTC_DS_PPS raises the GPON interrupt while @on, and
+ * the interrupt's thread hands it to the switch driver
+ * (rtl9602c_pon_host_ops.second()). A MAC that is not up takes the setting
+ * when it is brought up.
+ *
+ * Context: process context; takes gpon_lock.
+ */
+void rtl9602c_gpon_second_enable(struct rtl9602c_pon *p, bool on)
+{
+	mutex_lock(&p->gpon_lock);
+	p->gpon_second = on;
+	if (p->gpon_up)
+		rtl9602c_pon_rmw(p, RTL9602C_GTC_DS_IRQ_EN,
+				 RTL9602C_GTC_DS_IRQ_SECOND,
+				 on ? RTL9602C_GTC_DS_IRQ_SECOND : 0);
+	mutex_unlock(&p->gpon_lock);
 }
 
 /**
