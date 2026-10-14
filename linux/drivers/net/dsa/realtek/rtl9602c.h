@@ -692,14 +692,19 @@ struct rtl9602c_field {
 #define RTL9602C_TOD_BAUD_DIVISOR		GENMASK(15, 0)
 
 /*
- * A second time value, taken to be the PON's time of day (not verified), and
- * a per-port PTP enable that receive stamping does not depend on.
+ * The PON time, which the clock takes when the GPON MAC's time-of-day
+ * superframe arrives while PON_TIME_EN is set (measured), in the layout of
+ * the clock, and a per-port PTP enable that receive stamping does not depend
+ * on.
  */
 #define RTL9602C_PTP_PON_TIME_SEC	0x01b024
 #define RTL9602C_PTP_PON_TIME_NSEC	0x01b02c
 #define RTL9602C_PTP_PORT_EN		0x0111e8
 
-/* In RTL9602C_PTP_CLK_CTRL; LATCH and STEP act once per 1 written. */
+/*
+ * In RTL9602C_PTP_CLK_CTRL; LATCH and STEP act once per 1 written, and the
+ * hardware clears PON_TIME_EN when the clock has taken the PON time.
+ */
 #define RTL9602C_PTP_CLK_CTRL_PON_TIME_EN	BIT(2)
 #define RTL9602C_PTP_CLK_CTRL_LATCH		BIT(1)
 #define RTL9602C_PTP_CLK_CTRL_STEP		BIT(0)
@@ -2479,6 +2484,8 @@ u64 rtl9602c_ptp_rd_sec(struct rtl9602c_priv *p, u32 base);
 void rtl9602c_ptp_now(struct rtl9602c_priv *p, struct timespec64 *ts);
 int rtl9602c_ptp_register(struct rtl9602c_priv *p);
 void rtl9602c_ptp_unregister(struct rtl9602c_priv *p);
+int rtl9602c_ptp_pon_tod(struct rtl9602c_priv *p, const struct timespec64 *ts,
+			 unsigned long delay);
 u32 rtl9602c_r(struct rtl9602c_priv *p, u32 off);
 void rtl9602c_rmw(struct rtl9602c_priv *p, u32 off, u32 clr, u32 set);
 void rtl9602c_irq_enable(struct rtl9602c_priv *p, u32 clr, u32 set);

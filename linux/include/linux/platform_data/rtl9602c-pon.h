@@ -31,6 +31,7 @@ struct dsa_switch;
 struct net_device;
 struct netlink_ext_ack;
 struct pon_gem_rx_filter;
+struct timespec64;
 
 /* The switch port whose DMA engine is the conduit. */
 #define RTL9602C_PORT_CPU		3
@@ -78,9 +79,12 @@ struct pon_gem_rx_filter;
  *	@rate bytes per second, with a bucket of @burst bytes, 0 for the
  *	switch's own; a @rate of 0 takes the limit away; refuse with a message
  *	in @extack what the switch cannot do
+ * @tod_arm: give the PTP clock @ts to take at the MAC's time-of-day
+ *	superframe, about @delay jiffies from now; -EOPNOTSUPP without a
+ *	clock. The MAC arms the superframe after this call.
  *
  * All are called in process context, with the PON driver's lock not held but
- * for @power_level_changed.
+ * for @power_level_changed and @tod_arm.
  */
 struct rtl9602c_pon_host_ops {
 	void (*irq_enable)(void *host, u32 clr, u32 set);
@@ -105,6 +109,8 @@ struct rtl9602c_pon_host_ops {
 			      const struct pon_gem_rx_filter *f);
 	int (*gem_ds_limit)(void *host, unsigned int flow, u64 rate, u32 burst,
 			    struct netlink_ext_ack *extack);
+	int (*tod_arm)(void *host, const struct timespec64 *ts,
+		       unsigned long delay);
 };
 
 /**

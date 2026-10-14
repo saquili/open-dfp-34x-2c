@@ -143,8 +143,8 @@ The blocks
      - The ``ptpstat`` view.
      - "Per-port configuration and message actions"
    * - The PON time of day
-     - A second time value beside the clock and its enable, never written by
-       the driver.
+     - A second time value beside the clock and its enable: the clock takes
+       it at the GPON MAC's time-of-day frame.
      - The ``pon tod`` line of ``ptpstat``.
      - "The PON time of day"
    * - The time-of-day transmitter
@@ -243,6 +243,7 @@ The files that hold this page:
      - What of this page it holds
    * - ``drivers/net/dsa/realtek/rtl9602c-ptp.c``
      - The PHC callbacks, ``rtl9602c_ptp_rd_sec()``, the five DSA operations,
+       the PON time (``rtl9602c_ptp_pon_tod()``),
        the handler of departure reports and the views ``ptpstat`` and
        ``todstat``.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
@@ -257,6 +258,9 @@ The files that hold this page:
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - Registration of the PHC at setup and its removal at teardown, and the
        branch of the interrupt handler for the once-per-second source.
+   * - ``drivers/net/dsa/realtek/rtl9602c-pon-host.c``
+     - The host operation ``tod_arm``, through which the GPON MAC's driver
+       gives the PON time.
    * - ``drivers/net/dsa/realtek/rtl9602c-offload.c``
      - The ``egress_capture`` view, which reads the egress capture and the clock.
    * - ``drivers/net/ethernet/realtek/rtl9602c-eth.c``
@@ -1338,9 +1342,18 @@ The lines of ``ptpstat``, in order:
 The PON time of day
 ===================
 
-Beside the clock the switch has a second time value and an enable for it. The
-driver writes neither. They are taken to hold the time of day that an ONU
-learns from the OLT, in the layout of the clock.
+Beside the clock the switch has a second time value, the PON time, and an
+enable for it: while the enable is set, the clock takes the PON time when the
+GPON MAC's time-of-day superframe arrives, and the hardware then clears the
+enable. That is how the ONU sets its clock from the time of day the OLT gives
+(ITU-T G.984.3 Amendment 2 clause 10.4.6): the GPON MAC's driver computes the
+time and names the frame (see "The time of day" in
+Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst), and calls the
+host operation ``tod_arm``, for which ``rtl9602c_ptp_pon_tod()`` writes the
+PON time and sets its enable under ``ptp_lock``. It also has the PHC's worker
+read the clock 100 ms after the frame (``RTL9602C_PTP_TOD_SETTLE``), so that
+receive stamps complete their seconds from the new time. The time replaces
+one given before and not yet taken.
 
 .. list-table::
    :header-rows: 1
@@ -1349,21 +1362,27 @@ learns from the OLT, in the layout of the clock.
    * - Fact
      - Tag
      - Checked by
-   * - ``RTL9602C_PTP_PON_TIME_SEC`` (``0x01b024``) and
-       ``RTL9602C_PTP_PON_TIME_NSEC`` (``0x01b02c``) are a second time value
-       beside the clock, and ``RTL9602C_PTP_CLK_CTRL_PON_TIME_EN`` (bit 2 of
-       ``RTL9602C_PTP_CLK_CTRL``) is its enable. Nothing in the driver writes
-       them; they read zero and the enable reads 0.
+   * - ``RTL9602C_PTP_PON_TIME_SEC`` (``0x01b024``, two words) and
+       ``RTL9602C_PTP_PON_TIME_NSEC`` (``0x01b02c``) hold the PON time in the
+       layout of the clock, the seconds over two words and the nanoseconds in
+       8 ns ticks; ``RTL9602C_PTP_CLK_CTRL_PON_TIME_EN`` (bit 2 of
+       ``RTL9602C_PTP_CLK_CTRL``) is its enable. They read zero, and the
+       enable 0, until written.
      - M
-     - ``ptpstat``: the line ``pon tod 0.000000000  enabled 0``.
-   * - They are meant for the time of day an ONU learns from the OLT (ITU-T
-       G.988 9.12.2, OLT-G "Time of day information": a GEM superframe number
-       and an IEEE 1588-2008 5.3.3 timestamp), in the layouts of the clock
-       (seconds over two words, nanoseconds in 8 ns ticks), which is how
-       ``ptpstat`` decodes them.
+     - ``ptpstat``: the line ``pon tod 0.000000000  enabled 0`` after boot,
+       and the time written read back.
+   * - The clock takes the PON time at the armed superframe only with the
+       enable set, the hardware clears the enable when it has, and the clock
+       runs on from that time: loaded with 1000.5 s, it read 1018.4536 s
+       143509 frames (17.94 s) later.
+     - M
+     - Lab-only register writes and the egress capture's clock; the timing
+       to a frame is on the page of the GPON MAC.
+   * - The worker's read after the frame keeps the completion of receive
+       stamps right across a load.
      - I
-     - Debugfs only. Writing a time into them and observing what the hardware
-       does with it would settle it.
+     - Not exercised: PTP messages received across a load that moves the
+       clock by more than 32768 s.
 
 The time-of-day transmitter
 ===========================
@@ -1543,9 +1562,6 @@ All but the last concern values that only the debugfs views print.
        actions").
      - Setting a bit and checking the correction field of a Sync forwarded
        between two wire ports.
-   * - Whether the PON time-of-day registers hold the time of day of the OLT
-       ("The PON time of day").
-     - Writing a time into them and observing what the hardware does with it.
    * - The baud rate of the time-of-day transmitter and the clock its divisor
        divides ("The time-of-day transmitter").
      - A capture of the serial output.

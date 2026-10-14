@@ -351,6 +351,13 @@ static int rtl9602c_host_gem_ds_limit(void *host, unsigned int flow, u64 rate,
 	return rtl9602c_gem_ds_limit(host, flow, rate, burst, extack);
 }
 
+/* The time the PTP clock takes at the MAC's superframe (rtl9602c_ptp_pon_tod()). */
+static int rtl9602c_host_tod_arm(void *host, const struct timespec64 *ts,
+				 unsigned long delay)
+{
+	return rtl9602c_ptp_pon_tod(host, ts, delay);
+}
+
 static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.irq_enable		= rtl9602c_host_irq_enable,
 	.tx_disable		= rtl9602c_host_tx_disable,
@@ -367,6 +374,7 @@ static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.gem_mrouter		= rtl9602c_host_gem_mrouter,
 	.gem_rx_filter		= rtl9602c_host_gem_rx_filter,
 	.gem_ds_limit		= rtl9602c_host_gem_ds_limit,
+	.tod_arm		= rtl9602c_host_tod_arm,
 };
 
 /**

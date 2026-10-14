@@ -431,6 +431,46 @@ static long rtl9602c_ptp_aux_work(struct ptp_clock_info *info)
 	return RTL9602C_PTP_AUX_PERIOD;
 }
 
+/* How long after the time-of-day superframe the worker reads the clock. */
+#define RTL9602C_PTP_TOD_SETTLE		(HZ / 10)
+
+/**
+ * rtl9602c_ptp_pon_tod() - give the clock a time to take at a PON frame
+ * @p: driver state
+ * @ts: the time
+ * @delay: jiffies until the frame, about
+ *
+ * Writes @ts into the PON time and sets its enable; the clock takes the time
+ * when the GPON MAC's time-of-day superframe arrives, which the MAC arms
+ * after this, and the hardware then clears the enable.  The time replaces
+ * one given before and not yet taken.  The worker reads the clock shortly
+ * after the frame, so that receive stamps complete their seconds from the
+ * new time (rtl9602c_ptp_complete()).
+ *
+ * Context: process context.
+ * Return: 0, or -EOPNOTSUPP when no clock is registered.
+ */
+int rtl9602c_ptp_pon_tod(struct rtl9602c_priv *p, const struct timespec64 *ts,
+			 unsigned long delay)
+{
+	unsigned long flags;
+
+	if (!p->ptp_clock)
+		return -EOPNOTSUPP;
+
+	spin_lock_irqsave(&p->ptp_lock, flags);
+	rtl9602c_ptp_wr_sec(p, RTL9602C_PTP_PON_TIME_SEC, ts->tv_sec);
+	rtl9602c_w(p, RTL9602C_PTP_PON_TIME_NSEC,
+		   FIELD_PREP(RTL9602C_PTP_NSEC_TICKS,
+			      ts->tv_nsec / RTL9602C_PTP_NSEC_TICK_NS));
+	rtl9602c_rmw(p, RTL9602C_PTP_CLK_CTRL, 0,
+		     RTL9602C_PTP_CLK_CTRL_PON_TIME_EN);
+	spin_unlock_irqrestore(&p->ptp_lock, flags);
+
+	ptp_schedule_worker(p->ptp_clock, delay + RTL9602C_PTP_TOD_SETTLE);
+	return 0;
+}
+
 int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 {
 	struct dsa_port *cpu = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
