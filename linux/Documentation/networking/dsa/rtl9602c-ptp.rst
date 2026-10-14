@@ -1195,7 +1195,8 @@ off while the clock is on. ``ptpstat`` shows the mode and the path delay.
 
 The residence time ends where the message leaves the switch. Upstream that is
 the GPON MAC, where a message then waits for its allocation before it reaches
-the fibre; that wait is not in the correction.
+the fibre; that wait is not in the correction. Downstream it is the SFP port,
+so the wait behind other frames there is.
 
 .. list-table::
    :header-rows: 1
@@ -1231,11 +1232,32 @@ the fibre; that wait is not in the correction.
      - M
      - As above, with timed's filter on ``sfp``.
    * - Downstream, from the PON port to the SFP port, the clock corrects as
-       upstream.
-     - I
-     - The lab chain delivered no frame from the lab OLT's side to the SFP
-       side in a bridged VLAN, PTP or not: a test of the data path first,
-       then Syncs downstream.
+       upstream. End-to-end, Syncs of both kinds, Delay_Reqs and Pdelay_Reqs
+       carried 1680 to 1792 ns, Follow_Ups 0, and every one 0 with the clock
+       off. Peer-to-peer with a path delay of 100000 ns, Syncs carried 101688
+       to 101792 ns, Delay_Reqs 0, and no Pdelay_Req reached the SFP side.
+     - M
+     - Messages from a host on the lab OLT's side to one on the SFP side, in
+       the bridged VLAN, through the lab OLT: 3 to 8 of each, all received.
+   * - Downstream the correction holds the wait at the SFP port: with about
+       1 Gbit/s sent the same way, Syncs carried 6424 to 6504 ns, about the
+       residence time and one 1500-byte frame on the 2.5 Gbit/s SFP link
+       (4.9 us).
+     - M
+     - The same, with one sender of 1500-byte frames for 4 s: 8 of 12 Syncs
+       received. The other 4 were lost before the stick, which passed on
+       every frame it received: the sender offered 1.56 Gbit/s to the lab
+       OLT's 1 Gbit/s link.
+   * - The lab OLT sends every frame it receives upstream back downstream. A
+       learned address of the SFP side then moves to the PON port with the
+       first frame sent back, and the switch drops what is sent to it from
+       the PON side; a static entry of the SFP port does not move.
+     - M
+     - 20 frames from the SFP-side host to the lab OLT's side: all 20 reached
+       the router and 20 more arrived on the stick's GEM port. After a ping,
+       the host's address stood on the PON port and pings failed both ways;
+       with ``bridge fdb replace ... static sticky`` on the SFP port, they
+       all passed and the downstream tests above ran.
 
 The egress capture
 ==================
@@ -1654,10 +1676,6 @@ All but the last concern values that only the debugfs views print.
    * - Why the nanoseconds of a transmit stamp lie on a 128 ns grid: a coarse
        latch, or departures that fall on it ("Transmit timestamps").
      - A second stamped port, or a scope on the SFP lane.
-   * - Whether the transparent clock corrects downstream as upstream ("The
-       transparent clock").
-     - Syncs from the lab OLT's side to the SFP side, once the lab chain
-       carries frames that way in a bridged VLAN.
    * - The baud rate of the time-of-day transmitter and the clock its divisor
        divides ("The time-of-day transmitter").
      - A capture of the serial output.
