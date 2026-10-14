@@ -109,12 +109,12 @@ jobs:
             CHECKPATCH="$PWD/linux/scripts/checkpatch.pl"
           make -C omcid -j4 CC=gcc coverage
           make -C omcid -j4 CC=gcc CPPFLAGS=-I/tmp/uapi/include board
-      - name: onu-utils, pppoed, dhcp6d and pond
+      - name: onu-utils, pppoed, dhcp6d, timed and pond
         # Their tests, and checkpatch, which may report checks but no warning
         # and no error. VOLATILE is the kernel's rule, not these programs':
         # the flag a signal handler sets is a volatile sig_atomic_t in C.
         run: |
-          for p in onu-utils pppoed dhcp6d pond; do
+          for p in onu-utils pppoed dhcp6d timed pond; do
             make -C "$p" check CPPFLAGS=-I/tmp/uapi/include
             # checkpatch exits non-zero on checks too, so its totals decide.
             (cd "$p" && find src tests -name '*.[ch]' | sort |

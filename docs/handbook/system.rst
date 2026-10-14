@@ -51,9 +51,12 @@ The parts
      - The PPPoE client, which netifd runs for each session, and the server
        that hands a session's delegated IPv6 prefix on to the host
        (``pppoed/README.rst``, ``dhcp6d/README.rst``).
+   * - timed
+     - The clock: it sets the time from the host, by PTP when the host has a
+       master and by NTP otherwise, and from the date the OLT gives when the
+       host gives none (``timed/README.rst``).
    * - BusyBox, dropbear
-     - The shell and the tools, the log, the NTP client, the DHCP client and
-       server; the ssh server.
+     - The shell and the tools, the log, the DHCP server; the ssh server.
 
 Every program loads one C library, cut to what the programs use (ADR 0011).
 The root filesystem is a read-only SquashFS image (``building.rst``).
@@ -214,10 +217,10 @@ may do on ubus. Each writes into a directory it owns, or into one of the group
      - 200
      - ``net_bind_service``
      - ``/run/pond``; the calls of the panel (``pond/acl.json``).
-   * - ntpd
+   * - timed
      - ntp, 201
-     - ``sys_time``
-     - Nothing; no use of ubus.
+     - ``sys_time``, ``net_raw``, ``net_bind_service``
+     - ``/run/timed`` (its state, which pond reads); no use of ubus.
    * - dhcp6d
      - dhcp6d, 202
      - ``net_bind_service``, ``net_admin``, ``net_raw``

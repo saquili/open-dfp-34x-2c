@@ -100,6 +100,18 @@ Shared by two components
      - ``onu-apply``
      - The OLT's VLAN translations, and a ``VID PORT-ID`` line for each VID a
        GEM port lets through (``omcid/README.rst``).
+   * - ``/run/omcid/clock``
+     - ``omcid``, as a file beside it that is then moved in place
+     - ``timed``
+     - The date and time the OLT gave with Synchronize time, and the
+       monotonic time they came at: ``utc=`` and ``monotonic_ns=`` lines
+       (``timed/README.rst``). Written only when the OLT gives a date.
+   * - ``/run/timed/state``
+     - ``timed``, as a file beside it that is then moved in place
+     - ``pond``
+     - What sets the clock and how near it is: the source in use, the state,
+       the offset, and what each source last gave, ``KEY=value`` lines
+       (``timed/README.rst``).
    * - ``/run/omcid/ctl``
      - ``omcid``
      - ``omcivlan`` and ``omcitap`` of the RAM image
@@ -210,19 +222,21 @@ Private to one program or to onu-utils
    * - ``/run/omcid/mib``
      - The MIB the OLT gave ``omcid``, kept so that a start again goes
        unseen; mode 0600, account ``omcid``.
-   * - ``/run/omcid/``, ``/run/dhcp6d/``, ``/run/pond/``
+   * - ``/run/omcid/``, ``/run/dhcp6d/``, ``/run/pond/``, ``/run/timed/``
      - The directories the boot script makes for the accounts of ``omcid``,
-       ``dhcp6d`` and ``pond``, each owned by its account. The one of ``pond``
-       is closed to all others (mode 0700).
+       ``dhcp6d``, ``pond`` and ``ntp`` (``timed``), each owned by its
+       account. The one of ``pond`` is closed to all others (mode 0700).
    * - ``/run/udhcpd-lanN.conf``, ``.leases`` and ``.pid``
      - The DHCP server of a local network: its configuration, its leases and
        its PID.
    * - ``/run/dropbear.pid``, ``/run/dropbear-pending.pid``
      - The ssh server's PID, and that of the one a management pair on trial
        starts beside it.
-   * - ``/run/ntpd.pid``
-     - The PID of the clock, which ``onu-run`` writes. BusyBox's own daemons
-       write their PID files here too (``klogd.pid``, ``syslogd.pid``).
+   * - ``/run/timed.pid``
+     - The PID of the clock's daemon, which ``onu-run`` writes and
+       ``onu-mgmt`` ends when the management link changes. BusyBox's own
+       daemons write their PID files here too (``klogd.pid``,
+       ``syslogd.pid``).
    * - ``/run/messages``, ``/run/omcid.log``, ``/run/dhcp6d.log``,
        ``/run/pond/log``, ``/run/onu-trial.log``
      - The system log (``syslogd``, one older copy beside it) and the logs of

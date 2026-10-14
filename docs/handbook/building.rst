@@ -227,7 +227,7 @@ BusyBox 1.37.0
     system
         mount umount mountpoint ps top free uptime dmesg kill killall pidof
         sleep date uname hostname id whoami env which tty stty watch time
-        syslogd klogd logger ntpd
+        syslogd klogd logger
     network
         ip ping netstat nc traceroute traceroute6 arping nslookup
     archives
@@ -251,7 +251,9 @@ The programs of the ONU, from this tree
     (``onu-utils/README.rst``); ``pppoed``, the
     PPPoE client and netifd's protocol ``pppoed`` (``pppoed/README.rst``),
     which links libubus to tell netifd; ``dhcp6d``, which hands a session's
-    delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``pond``, the
+    delegated IPv6 prefix on to the host (``dhcp6d/README.rst``); ``timed``,
+    which sets the clock from the host by PTP or NTP, or from the OLT's date
+    (``timed/README.rst``); ``pond``, the
     status daemon and its panel, over HTTPS (``pond/README.rst``); and
     ``onu-config``, ``onu-apply``, ``onu-update`` and the other programs of
     ``onu-utils`` (``onu-utils/README.rst``).
@@ -296,12 +298,15 @@ The start
 
     The boot script starts the stick's programs as procd's services
     (``onu-svc``): the log first, ``netifd`` once its configuration is
-    written, the ssh server, ``pond`` and ``ntpd`` once the management
-    address is up. The stick has no clock that runs while it is off, and the
-    OLT gives no date: ``ntpd`` sets the time from the router at the other end
-    of the management link, or from the server that the stick's settings name
-    (``NTP_SERVER``, ``onu-config system``); when the settings name a server of
-    the host side for the log (``LOG_SERVER``), the log goes there as well,
+    written, the ssh server, ``pond`` and ``timed`` once the management
+    address is up. The stick has no clock that runs while it is off, and keeps
+    no time in the flash: ``timed`` sets the time by PTP from a master on the
+    management link, or by NTP from the router at the other end of it or from
+    the server that the stick's settings name (``NTP_SERVER``, ``onu-config
+    system``), or, when the host gives none, from the date the OLT gives with
+    OMCI, if it gives one; until then the clock reads 1970. When the settings
+    name a server of the host side for the log (``LOG_SERVER``), the log goes
+    there as well,
     the stick keeping its own copy. Both are addresses, not names: the stick
     runs offline, has no name server to ask and no ``/etc/resolv.conf``.
     procd starts a service again 2 s after it ends and never gives up;
@@ -356,7 +361,7 @@ The boot script
        to send a browser there (ADR 0016), as an account of its own, ``pond``,
        with which no one logs in; ``onu-act`` does, as root, what pond asks of
        the stick from a fixed list, and ubusd's access list lets pond ask
-       nothing else (ADR 0014). Then ``ntpd``. The stick has no packet filter,
+       nothing else (ADR 0014). Then ``timed``. The stick has no packet filter,
        so its servers keep off the PON side by where they listen;
     #. gives the PON driver the serial number and the PLOAM password through
        its devlink parameters (``onu-apply identity``, with ``onu-nl``) and

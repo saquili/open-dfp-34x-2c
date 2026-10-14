@@ -49,7 +49,7 @@ repository does not hold, so a build starts from nothing.
 ``programs``
     The tests of omcid on the host, its style gate and its coverage gate,
     and its programs for the board; then the tests of onu-utils, pppoed,
-    dhcp6d and pond, and checkpatch over their sources, which may report
+    dhcp6d, timed and pond, and checkpatch over their sources, which may report
     checks but no warning or error. They build against the user-space
     headers of this tree's kernel.
 ``isa-gate``
