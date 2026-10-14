@@ -753,8 +753,9 @@ struct rtl9602c_field {
 #define RTL9602C_SCHED_WFQ_QUEUES	0x02d85c
 
 /*
- * Per-port and per-message PTP settings, only read; the transparent-clock
- * bits and the receive capture's layout are not verified.
+ * Per-port and per-message PTP settings. Of these the driver writes only the
+ * egress actions of the event messages, while transmit stamping is on; the
+ * transparent-clock bits and the receive capture's layout are not verified.
  */
 #define RTL9602C_PTP_TRANSPARENT_PORTS	0x0111d4
 #define RTL9602C_PTP_ACTION_INGRESS	0x0111d8
@@ -797,6 +798,20 @@ struct rtl9602c_field {
 
 /* A message type's action in RTL9602C_PTP_ACTION_INGRESS and _EGRESS. */
 #define RTL9602C_PTP_ACTION_MASK		GENMASK(1, 0)
+
+/*
+ * The egress action that latches the time a message leaves and sends the CPU
+ * a departure report with it (measured for the slots below), and the slots
+ * of the event messages in the action registers, which are not the
+ * messageType field: a Sync goes by slot 0 with the twoStepFlag set and by
+ * slot 8 without it.
+ */
+#define RTL9602C_PTP_ACTION_LATCH_REPORT	2
+#define RTL9602C_PTP_SLOT_SYNC			0
+#define RTL9602C_PTP_SLOT_DELAY_REQ		1
+#define RTL9602C_PTP_SLOT_PDELAY_REQ		2
+#define RTL9602C_PTP_SLOT_PDELAY_RESP		3
+#define RTL9602C_PTP_SLOT_SYNC_1STEP		8
 
 /*
  * Port 0 enforces its shaper only with the rate here as well, in units of
@@ -2093,6 +2108,32 @@ struct rtl9602c_priv {
 	/** @hwtstamp: each port's timestamping configuration, as set */
 	struct kernel_hwtstamp_config hwtstamp[RTL9602C_NUM_PORTS];
 	/**
+	 * @ptp_tx_lock: protects @ptp_tx_skb, @ptp_tx_start and the four
+	 * counters after them; taken on the transmit path and in the
+	 * conduit's receive poll
+	 */
+	spinlock_t	ptp_tx_lock;
+	/**
+	 * @ptp_tx_skb: the clone of the one PTP message whose departure
+	 * report is awaited, NULL when none is
+	 */
+	struct sk_buff	*ptp_tx_skb;
+	/** @ptp_tx_start: jiffies when @ptp_tx_skb was taken */
+	unsigned long	ptp_tx_start;
+	/** @ptp_tx_stamped: messages given their departure time */
+	u32		ptp_tx_stamped;
+	/** @ptp_tx_busy: messages refused a stamp, one being awaited */
+	u32		ptp_tx_busy;
+	/** @ptp_tx_lost: awaited messages whose report never came */
+	u32		ptp_tx_lost;
+	/** @ptp_tx_orphans: reports that came with no message awaited */
+	u32		ptp_tx_orphans;
+	/**
+	 * @ptp_tx_ready: the conduit hands departure reports on; without
+	 * it no port offers transmit stamping
+	 */
+	bool		ptp_tx_ready;
+	/**
 	 * @meter_lock: serialises the meters, @meter_used and @cpu_meter, and
 	 * the storm-control state, @storm, @storm_seq and @storm_meter, which
 	 * tc and devlink both change
@@ -2385,6 +2426,8 @@ int rtl9602c_port_pre_bridge_flags(struct dsa_switch *ds, int port,
 				   struct netlink_ext_ack *extack);
 bool rtl9602c_port_rxtstamp(struct dsa_switch *ds, int port,
 			    struct sk_buff *skb, unsigned int type);
+void rtl9602c_port_txtstamp(struct dsa_switch *ds, int port,
+			    struct sk_buff *skb);
 int rtl9602c_port_set_apptrust(struct dsa_switch *ds, int port, const u8 *sel, int nsel);
 int rtl9602c_port_set_pcp_rewr(struct dsa_switch *ds, int port, const u8 *pcp, u8 mapped);
 int rtl9602c_port_set_default_prio(struct dsa_switch *ds, int port, u8 prio);

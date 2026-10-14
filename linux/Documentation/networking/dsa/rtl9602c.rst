@@ -155,7 +155,7 @@ is prefixed ``rtl9602c_``.
      - *acl-qos*; the flowtable offload of ``port_setup_tc`` is *l3-nat*'s.
    * - ``rtl9602c-ptp.c``
      - ``get_ts_info``, ``port_hwtstamp_get``, ``port_hwtstamp_set``,
-       ``port_rxtstamp``
+       ``port_rxtstamp``, ``port_txtstamp``
      - *ptp*
 
 What the switch offloads
@@ -183,8 +183,9 @@ Each item names the page that describes it.
   its tables follow the kernel's address, neighbour and route notifiers, and
   each flow that netfilter's flowtable offload hands over gets its entries
   (*l3-nat*).
-- Time. The switch's IEEE 1588 clock is a PTP hardware clock, and the PTP
-  messages the switch sends to the CPU carry the time of the frame (*ptp*).
+- Time. The switch's IEEE 1588 clock is a PTP hardware clock, the PTP
+  messages the switch sends to the CPU carry the time of the frame, and the
+  switch reports when a PTP event message the CPU sends leaves (*ptp*).
 - The PON side. The GPON MAC and the PON MAC are driven through the PON class:
   the ONU's activation, the OMCI channel and a network interface for each GEM
   port (*PON* and *PON class*).

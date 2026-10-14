@@ -2338,6 +2338,7 @@ static void rtl9602c_get_eth_ctrl_stats(struct dsa_switch *ds, int port,
 
 static const struct dsa_switch_ops rtl9602c_switch_ops = {
 	.port_rxtstamp		= rtl9602c_port_rxtstamp,
+	.port_txtstamp		= rtl9602c_port_txtstamp,
 	.get_ts_info		= rtl9602c_get_ts_info,
 	.port_hwtstamp_get	= rtl9602c_port_hwtstamp_get,
 	.port_hwtstamp_set	= rtl9602c_port_hwtstamp_set,
@@ -2427,6 +2428,7 @@ static int rtl9602c_probe(struct platform_device *pdev)
 	mutex_init(&p->acl_lock);
 	mutex_init(&p->meter_lock);
 	mutex_init(&p->ptp_lock);
+	spin_lock_init(&p->ptp_tx_lock);
 	p->reg = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(p->reg))
 		return dev_err_probe(&pdev->dev, PTR_ERR(p->reg),

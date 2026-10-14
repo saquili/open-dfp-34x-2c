@@ -11,12 +11,14 @@ The switch of the RTL9602C has an IEEE 1588 clock of its own and a few blocks
 that work with it. This page describes them as the driver uses them: the
 clock, which the driver registers as a PTP hardware clock (PHC); the source of
 the switch interrupt that fires once a second; the receive timestamps, which
-the switch writes into the PTP messages it sends to the CPU; the lack of
-transmit timestamps; the capture of the last frame descriptor that left by a
-port, which shows the PTP fields of a frame; the per-port and per-message PTP
-settings and the PON's time-of-day registers, which the driver only reads; and
-the time-of-day transmitter, which the driver also only reads. The switch core,
-its interrupt and the order of setup are on the *main* page.
+the switch writes into the PTP messages it sends to the CPU; the transmit
+timestamps, which the switch reports for the PTP messages the CPU sends; the
+capture of the last frame descriptor that left by a port, which shows the PTP
+fields of a frame; the per-port and per-message PTP settings, of which the
+driver writes only those that transmit timestamps need; the PON's time-of-day
+registers, which the driver only reads; and the time-of-day transmitter, which
+the driver also only reads. The switch core, its interrupt and the order of
+setup are on the *main* page.
 
 The path of a PTP message that arrives from the host::
 
@@ -37,6 +39,31 @@ The path of a PTP message that arrives from the host::
     +--------------+
       |
     user port sfp: SO_TIMESTAMPING
+
+The path of a PTP event message that a socket sends with transmit stamping
+on::
+
+    user port sfp: SO_TIMESTAMPING
+      |
+    +--------------+  rtl9602c_port_txtstamp() keeps a clone and marks
+    | DSA          |  the message SKBTX_IN_PROGRESS
+    +--------------+
+      |
+    +--------------+  sends the marked message with two descriptor bits
+    | conduit      |  clear, so that the switch applies its egress action
+    +--------------+
+      |
+    port 3 (CPU)
+    +--------------+  latches the time the message leaves and sends the
+    | switch core  |  CPU a departure report with it
+    +--------------+
+      |                         |
+    port 0 (sfp): the message   port 3: the report
+                                  |
+                                conduit: rtl9602c_ptp_departure() completes
+                                the seconds and the clone
+                                  |
+                                the socket's error queue
 
 The other pages of the port are named by short names on this page:
 
@@ -64,8 +91,9 @@ What the driver offers
   timestamp. The receive filters are the layer-2 PTP version 2 ones, all
   answered as ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``. A Sync over Ethernet is the
   only message seen stamped.
-- No hardware transmit timestamps. The switch produces no departure time for a
-  PTP message that the CPU sends.
+- Hardware transmit timestamps, two-step (``HWTSTAMP_TX_ON``): the time at
+  which each Sync, Delay_Req, Pdelay_Req and Pdelay_Resp over Ethernet that a
+  port sends leaves the switch, one message at a time.
 - Debugfs views of registers that the driver does not use for timestamping:
   the per-port and per-message settings, the PON's time-of-day value and the
   time-of-day transmitter (``ptpstat`` and ``todstat``), and the egress
@@ -98,8 +126,10 @@ The blocks
      - ``SO_TIMESTAMPING`` on ``sfp`` or ``pon``; ``SIOCSHWTSTAMP``.
      - "Receive timestamps"
    * - Transmit timestamps
-     - None: a per-port indication that a PTP message left, without a time.
-     - The ``tx_latched`` column of ``ptpstat``.
+     - A departure report, which the switch sends the CPU when a PTP message
+       the CPU sent leaves under the egress action that asks for it.
+     - ``SO_TIMESTAMPING`` on ``sfp`` or ``pon``; ``SIOCSHWTSTAMP``; the
+       ``tx stamps`` line of ``ptpstat``.
      - "Transmit timestamps"
    * - Egress descriptor capture
      - The descriptor of the last frame that left by a port, with the PTP
@@ -108,7 +138,8 @@ The blocks
      - "The egress capture"
    * - Per-port and per-message settings
      - A PTP enable per port, a transparent-clock bit per port and an action
-       per message type, which the driver never writes.
+       per message type, of which the driver writes the egress actions of the
+       event messages and the CPU port's enable while transmit stamping is on.
      - The ``ptpstat`` view.
      - "Per-port configuration and message actions"
    * - The PON time of day
@@ -141,21 +172,29 @@ name is prefixed ``rtl9602c_``. DSA calls them for the user ports ``sfp`` and
        receive stamping, hardware receive stamping, raw hardware stamps, the
        PHC index (-1 when no clock is registered), the transmit type off and
        the receive filters none, ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``,
-       ``_L2_SYNC`` and ``_L2_DELAY_REQ``.
+       ``_L2_SYNC`` and ``_L2_DELAY_REQ``; and, while the conduit hands the
+       departure reports on, hardware transmit stamping and the transmit type
+       on.
      - "Transmit timestamps"
    * - ``port_hwtstamp_get``
      - Returns the configuration last set on the port. It is all zero, no
        transmit stamping and no receive filter, until something sets it.
      - "Receive timestamps"
    * - ``port_hwtstamp_set``
-     - Records a configuration after checking it; it writes no register. A
-       transmit type other than off, and a receive filter the port cannot
-       provide, are refused with ``-ERANGE``.
+     - Records a configuration after checking it, and turns the departure
+       reports on while any port's transmit type is on and off when none is.
+       A transmit type other than off and on, the type on while the conduit
+       hands no reports on, and a receive filter the port cannot provide are
+       refused with ``-ERANGE``.
      - "Transmit timestamps"; "Receive timestamps"
    * - ``port_rxtstamp``
      - Completes the seconds of the hardware timestamp of a received PTP
        message.
      - "Receive timestamps"
+   * - ``port_txtstamp``
+     - Keeps a clone of a PTP event message to be stamped and marks the
+       message for the conduit, one message at a time.
+     - "Transmit timestamps"
 
 The PHC is a ``struct ptp_clock_info`` with the name ``rtl9602c-ptp``,
 ``max_adj`` 32,767,000 (parts per billion), ``n_ext_ts`` 0 and ``pps`` 1.
@@ -200,14 +239,17 @@ The files that hold this page:
    * - File
      - What of this page it holds
    * - ``drivers/net/dsa/realtek/rtl9602c-ptp.c``
-     - The PHC callbacks, ``rtl9602c_ptp_rd_sec()``, the four DSA operations
-       and the views ``ptpstat`` and ``todstat``.
+     - The PHC callbacks, ``rtl9602c_ptp_rd_sec()``, the five DSA operations,
+       the handler of departure reports and the views ``ptpstat`` and
+       ``todstat``.
    * - ``drivers/net/dsa/realtek/rtl9602c.h``
      - The registers (``RTL9602C_PTP_*``, ``RTL9602C_TOD_*``, the egress
        capture ``RTL9602C_PKTDBG_DATA``, ``RTL9602C_PKTDBG_CFG`` and
-       ``RTL9602C_PKTDBG_PTP_*``, and ``RTL9602C_IRQ_SRC_PTP_PPS``) and the
-       driver's state for them: ``ptp_info``, ``ptp_clock``, ``ptp_lock``,
-       ``ptp_pps_count``, ``ptp_sec_seen`` and ``hwtstamp``.
+       ``RTL9602C_PKTDBG_PTP_*``, ``RTL9602C_PTP_ACTION_LATCH_REPORT`` and
+       the message slots ``RTL9602C_PTP_SLOT_*``, and
+       ``RTL9602C_IRQ_SRC_PTP_PPS``) and the driver's state for them:
+       ``ptp_info``, ``ptp_clock``, ``ptp_lock``, ``ptp_pps_count``,
+       ``ptp_sec_seen``, ``hwtstamp`` and the ``ptp_tx_*`` fields.
    * - ``drivers/net/dsa/realtek/rtl9602c-main.c``
      - Registration of the PHC at setup and its removal at teardown, and the
        branch of the interrupt handler for the once-per-second source.
@@ -215,7 +257,13 @@ The files that hold this page:
      - The ``egress_capture`` view, which reads the egress capture and the clock.
    * - ``drivers/net/ethernet/realtek/rtl9602c-eth.c``
      - The conduit's side of the timestamp tag: the ``RTL9602C_ETH_P_REALTEK``
-       and ``RTL9602C_PTP_TAG_*`` macros and the code that takes the tag off.
+       and ``RTL9602C_PTP_TAG_*`` macros and the code that takes the tag off;
+       and of the transmit stamps: the descriptor bits it clears for a marked
+       message and the departure reports it hands on.
+   * - ``include/linux/dsa/rtl9602c.h``
+     - The contract between the conduit and the switch driver:
+       ``rtl9602c_conduit_tstamp_attach()``, ``rtl9602c_tstamp_rx_t`` and the
+       mark of a message awaiting its departure time.
    * - ``drivers/net/dsa/realtek/Kconfig``, ``Makefile``
      - ``rtl9602c-ptp.o`` is one of the objects of ``rtl9602c.o``.
 
@@ -242,7 +290,9 @@ Configuration
        driver's own entry neither selects it nor depends on it.
    * - ``CONFIG_RTL9602C_ETH``
      - The conduit, which takes the timestamp tag off a received PTP message
-       and keeps its time as the frame's hardware timestamp.
+       and keeps its time as the frame's hardware timestamp, and hands the
+       departure reports on. Without it ``get_ts_info`` offers no transmit
+       stamping.
    * - ``CONFIG_DEBUG_FS``
      - The views ``ptpstat`` and ``todstat``, and ``egress_capture`` of the egress
        capture.
@@ -285,25 +335,32 @@ Interfaces to user space
   once-per-second interrupt").
 - ``ethtool -T sfp``, or ``pon``, lists the capabilities that
   ``rtl9602c_get_ts_info()`` reports: software transmit and receive stamping,
-  software system clock, hardware receive stamping, raw hardware clock, the
-  PHC index, the transmit type off and the receive filters none and PTP v2
-  event.
+  software system clock, hardware transmit and receive stamping, raw hardware
+  clock, the PHC index, the transmit types off and on and the receive filters
+  none and PTP v2 event.
 - ``SIOCSHWTSTAMP`` and ``SIOCGHWTSTAMP``, or the ``tsconfig`` request of the
   ethtool netlink interface, on ``sfp`` or ``pon``, set and read the
   timestamping configuration (see "Receive timestamps" and "Transmit
   timestamps").
 - ``SO_TIMESTAMPING`` with ``SOF_TIMESTAMPING_RX_HARDWARE`` and
   ``SOF_TIMESTAMPING_RAW_HARDWARE`` on a socket of ``sfp`` or ``pon`` returns
-  the hardware timestamp of a received PTP message.
+  the hardware timestamp of a received PTP message; with
+  ``SOF_TIMESTAMPING_TX_HARDWARE``, and the port's transmit type on, the
+  departure time of each event message the socket sends comes back on its
+  error queue (``MSG_ERRQUEUE``). A VLAN interface on the port passes both
+  on.
 - Three debugfs views in ``/sys/kernel/debug/rtl9602c/``. ``ptpstat`` and
   ``todstat`` (mode 0400) are created by ``rtl9602c-ptp.c``; ``egress_capture`` (mode
   0600, because a write changes the capture's setting) is created by
   ``rtl9602c-offload.c``. Reading ``ptpstat`` clears the per-port transmit
-  indications.
+  indications; its line ``tx stamps`` counts the transmit stamps (see
+  "Transmit timestamps").
 - The kernel log. At setup ``rtl9602c-switch: no PTP clock: <error>`` when the
-  registration of the clock fails. The conduit logs
-  ``ptp tag reason <reason>, protocol <byte>: <tag>``, the 16 bytes of the tag
-  in hex, the first time it sees each reason value in a timestamp tag.
+  registration of the clock fails, and ``rtl9602c-switch: no transmit
+  timestamps: <error>`` when the conduit cannot hand departure reports on.
+  The conduit logs ``ptp tag reason <reason>, protocol <byte>: <tag>``, the
+  16 bytes of the tag in hex, the first time it sees each reason value in a
+  timestamp tag, and ``ptp departure report: <tag>`` for the first report.
 
 How to read the fact tables
 ===========================
@@ -843,18 +900,64 @@ The receive capture register
        (``RTL9602C_PTP_RX_TSTAMP_SEC``), nanoseconds in 8 ns ticks at bits 29:3
        of the second (``RTL9602C_PTP_RX_TSTAMP_NSEC``).
      - I
-     - Never seen non-zero; a capture that changes would settle it. Debugfs
-       only.
+     - Never seen non-zero, not even after a lab-only write to it; a capture
+       that changes would settle it. Debugfs only.
+   * - Under egress action 3 a one-step Sync from the CPU leaves with its
+       correctionField raised by the time it left, less a reference, modulo
+       8 s: with this register zero, three Syncs sent about 1.135 s apart
+       carried 0.532176864, 1.666959584 and 2.802885728 s, which step with
+       the sending to within 9 us. Eight seconds is the reach of the 3-bit
+       seconds of this register, which is taken to be the reference; the
+       driver offers no one-step stamping and does not use it.
+     - M, I
+     - M: the three Syncs captured at the far end of the SFP lane, the
+       register zero. I: that the register is the reference; a Sync sent
+       after writing a known time into it would settle it.
 
 Transmit timestamps
 ===================
 
-The switch produces no departure time for a PTP message that the CPU sends.
-It has a per-port indication that a PTP message left, and nothing that says
-when. The driver therefore offers ``HWTSTAMP_TX_OFF`` only: ``get_ts_info``
-lists no other transmit type, and ``rtl9602c_port_hwtstamp_set()`` refuses any
-other with ``-ERANGE`` and the message "transmit timestamping is not
-implemented" in the netlink extended ack.
+The switch reports when a PTP message that the CPU sends leaves it. Each of
+the ten message types has an egress action, and the action that latches the
+departure time and mirrors it to the CPU (``RTL9602C_PTP_ACTION_LATCH_REPORT``,
+2) makes the switch send the CPU a departure report: a frame of its own with
+the time, which the conduit hands to ``rtl9602c_ptp_departure()`` (the report
+is described on the *CPU port* page, "Departure reports"). The switch applies
+an egress action to a message from the CPU only when the conduit sends it with
+two descriptor bits clear that it sets on every other frame, and only while
+the CPU port's PTP enable is set.
+
+The driver offers two-step stamps, ``HWTSTAMP_TX_ON``. While any port asks for
+them, ``rtl9602c_ptp_tx_reports()`` sets the egress action of the event
+messages' slots to 2 and the CPU port's enable; when none does, it clears
+both. ``rtl9602c_port_txtstamp()`` takes a Sync, Delay_Req, Pdelay_Req or
+Pdelay_Resp over Ethernet, with or without a VLAN tag, keeps a clone of it and
+marks the message ``SKBTX_IN_PROGRESS``, which tells the conduit to clear the
+two bits. The report carries the time and nothing of the message, so one
+message at a time awaits its report (``ptp_tx_skb``): a message sent while
+another waits goes unstamped and is counted as busy, unless the other has
+waited longer than ``RTL9602C_PTP_TX_TIMEOUT`` (100 ms), when it is given up
+and counted as lost. The report completes the clone's seconds as a receive
+stamp's are completed and delivers it with ``skb_complete_tx_timestamp()``. A
+report with no message awaited is counted as an orphan.
+
+The order, for one message:
+
+1. DSA calls ``port_txtstamp`` for a frame whose socket asked for a hardware
+   transmit stamp. On a port with ``HWTSTAMP_TX_ON``, an event message over
+   Ethernet is cloned (``skb_clone_sk()``) and, if no other message awaits a
+   report, kept with the time it was taken and marked
+   ``SKBTX_IN_PROGRESS``. Purpose: the report will not say which message
+   left. (T)
+2. The conduit sends the marked message without ``RTL9602C_NIC_TXD_NO_REWRITE``
+   and ``RTL9602C_NIC_TXD_L34_BYPASS``. Purpose: with either set the switch
+   applies no egress action. (M)
+3. The message leaves; the switch latches the time and sends the report to
+   the CPU port. (M)
+4. The conduit hands the report's time to ``rtl9602c_ptp_departure()``, which
+   takes the clone, completes the seconds from the last clock read and
+   delivers the stamp to the socket's error queue. Purpose: the stamp in the
+   form ``SO_TIMESTAMPING`` returns. (T)
 
 .. list-table::
    :header-rows: 1
@@ -863,48 +966,86 @@ implemented" in the netlink extended ack.
    * - Fact
      - Tag
      - Checked by
-   * - No departure time is produced for a PTP message the CPU sends: with the
-       egress action for Sync at each of its four values, the per-port enable
-       on all ports, the destination given or left to the switch's lookup,
-       and the PTP multicast destination, no copy came back to the CPU and the
-       egress capture of the frame had its PTP flag set and a zero time. Nor
-       did the switch write anything into the message: at the far end its
-       correctionField and originTimestamp read 0 under each action. The
-       driver therefore offers only ``HWTSTAMP_TX_OFF`` and answers any other
-       ``tx_type`` with ``-ERANGE`` and a message.
-     - M
-     - ``egress_capture``, ``ptpstat`` and the conduit's receive log, for each setting;
-       for the fields, three Syncs per action from a packet socket on
-       ``sfp``, captured at the far end.
-   * - The test above was repeated for Sync, Delay_Req, Pdelay_Req and
-       Pdelay_Resp, each at the egress actions 0 to 3, with the per-port
-       enable on all four ports and with bit 0, 1 or 2 of the descriptor's
-       word 3 toggled (bit 0, which the driver never sets, sits where a PTP
-       flag of a transmit descriptor would). No copy came back to the CPU,
-       and the egress capture of the frame read the PTP flag set, action 0
-       and a zero time every time. Toggling bit 3 stopped the frame from
-       leaving by port 0.
+   * - A message that the CPU sends gets the egress action of its type only
+       when the descriptor bits ``RTL9602C_NIC_TXD_NO_REWRITE`` and
+       ``RTL9602C_NIC_TXD_L34_BYPASS`` are both clear. With either set, as on
+       every other frame the conduit sends, the egress capture of the frame
+       read action 0 under each of the four egress actions, with the per-port
+       enable on all four ports, the destination given or left to the switch,
+       and the PTP multicast address; no report came and nothing was written
+       into the message.
      - M
      - ``egress_capture`` (filter 0x18), ``ptpstat`` and the receive reasons,
-       three messages per case from a packet socket on ``sfp``, with the
-       actions and the descriptor bits set by lab-only debugfs files.
-   * - That the part cannot produce a departure time for a message the CPU
-       sends under any setting is not shown: no setting tried produced one,
-       and the receive reason 243 that a copy of a departing message would
-       carry was never seen, though reasons of 242 and above were looked for in
-       every case.
+       with the actions and the descriptor bits set by lab-only debugfs files,
+       a message at a time from a packet socket on ``sfp``.
+   * - The action needs the PTP enable (``RTL9602C_PTP_PORT_EN``) of the CPU
+       port, the port the message enters the switch by; the enable of the
+       port it leaves by makes no difference.
+     - M
+     - Delay_Req with the bits clear and action 2: no report with every enable
+       clear or with only port 0's set; a report with only port 3's set, and
+       with ports 0 and 3.
+   * - Under ``RTL9602C_PTP_ACTION_LATCH_REPORT`` (2) the switch sends the CPU
+       one departure report per message, holding the time the message left;
+       under action 1 no report comes, and where that action keeps the time is
+       not established; action 3 writes into the message (see "The receive
+       capture register"). The egress capture of the frame reads the action
+       applied.
+     - M
+     - The egress capture read action 1, 2 or 3 as set, and the ``rxreason``
+       view one report per message under action 2 only.
+   * - Message slots of the egress actions: a Sync with the twoStepFlag set
+       goes by slot 0 (``RTL9602C_PTP_SLOT_SYNC``) and one without it by
+       slot 8 (``RTL9602C_PTP_SLOT_SYNC_1STEP``); Delay_Req by slot 1
+       (``RTL9602C_PTP_SLOT_DELAY_REQ``) and Follow_Up by slot 4. Pdelay_Req
+       and Pdelay_Resp are taken to go by slots 2 and 3
+       (``RTL9602C_PTP_SLOT_PDELAY_REQ``, ``_PDELAY_RESP``), as ``ptpstat``
+       names them.
+     - M, I
+     - M: each message took the action set on its slot: a two-step Sync that
+       of slot 0, a one-step Sync none from slot 0 and that of slot 8, a
+       Delay_Req that of slot 1, a Follow_Up that of slot 4. I: slots 2 and 3;
+       a Pdelay_Req and a Pdelay_Resp sent with their slot's action would
+       settle them.
+   * - The stamp is the time the message left the switch: it lies between a
+       read of the clock before the message was sent and one after, and the
+       report comes 58 us to 9.2 ms after the send returns, most within
+       170 us. The nanoseconds lie on a 128 ns grid, their low seven bits one
+       value through a boot (see the *CPU port* page).
+     - M
+     - 21 Delay_Req and Sync through ``SO_TIMESTAMPING`` on ``sfp`` and on its
+       VLAN 4094 interface, timed by the sender against the PHC.
+   * - A message sent with the two bits clear leaves byte for byte as one sent
+       with them set, VLAN tag included.
+     - M
+     - Three Delay_Req each way captured at the far end of the SFP lane, the
+       same 60 bytes; three stamped Delay_Req on the VLAN 4094 interface
+       arrived in the VLAN, as sent.
+   * - One message awaits its report at a time; another sent meanwhile goes
+       unstamped. Messages sent three at a time got one stamp, or two when the
+       first report came before the third message was sent; every stamp was
+       its own message's.
+     - M
+     - ``ptpstat`` counted the busy messages; the sender matched each stamp
+       to its message by the sequence ID of the message on the error queue.
+   * - A report never comes later than ``RTL9602C_PTP_TX_TIMEOUT`` (100 ms)
+       after its message; one that did would be handed to the next message
+       awaited.
      - I
-     - A departure copy, or a documented account of the part producing one,
-       would refute it; a search of every field of the transmit descriptor and
-       of the registers around ``RTL9602C_PTP_ACTION_EGRESS`` would back it.
-   * - Without a transmit stamp a port can timestamp the Syncs it receives but
-       cannot time its own Delay_Req, which the delay request-response
-       mechanism needs: it can listen, not synchronise. ``get_ts_info``
-       reports software transmit and receive stamping, hardware receive and
-       raw hardware stamps, and the PHC index (-1 when no PHC is registered).
+     - The slowest report seen took 9.2 ms. The ``lost`` count of ``ptpstat``
+       would show messages given up; a report that matched no message, the
+       ``orphan reports`` count.
+   * - A message over UDP is not stamped: the switch recognises no PTP message
+       over UDP on receive, so ``rtl9602c_port_txtstamp()`` takes only
+       layer-2 messages.
+     - M, I
+     - M: three Syncs over UDP to port 319 reached the CPU without a tag (see
+       "The filter"). I: that the egress side does not recognise them either.
+   * - With the departure time a port can time its own Delay_Req, which the
+       delay request-response mechanism needs to measure the path delay, and,
+       as a master, send the precise origin of its Syncs in a Follow_Up.
      - P
-     - IEEE 1588-2008, 11.3, for the mechanism; the capabilities are the
-       driver's own report.
+     - IEEE 1588-2008, 11.3 and 9.5.10.
    * - A PTP message arriving from the host goes to the CPU port and to no
        other port. A message that the switch forwards between the PON and SFP
        ports leaves as it came too: under each egress action for Sync, with
@@ -997,14 +1138,19 @@ The view prints four lines::
      - M
      - ``egress_capture``: a configuration written through the view read back with the bit
        clear, and with it set once traffic had left by the selected port.
-   * - Printed by ``egress_capture`` but not interpreted: a 2-bit action at bits 180:179
-       (``RTL9602C_PKTDBG_PTP_ACTION_LSB``,
-       ``RTL9602C_PKTDBG_PTP_ACTION_BITS``), a 7-bit identifier at bits
-       178:172 (``RTL9602C_PKTDBG_PTP_ID_LSB``,
+   * - The 2-bit action at bits 180:179 (``RTL9602C_PKTDBG_PTP_ACTION_LSB``,
+       ``RTL9602C_PKTDBG_PTP_ACTION_BITS``) is the egress action the switch
+       applied to the frame: 0 for a message sent with the conduit's usual
+       descriptor bits, the configured action for one sent with them clear.
+     - M
+     - Delay_Req and Sync under each egress action, with the bits set and
+       clear (see "Transmit timestamps").
+   * - Printed by ``egress_capture`` but not interpreted: a 7-bit identifier
+       at bits 178:172 (``RTL9602C_PKTDBG_PTP_ID_LSB``,
        ``RTL9602C_PKTDBG_PTP_ID_BITS``), and in ``RTL9602C_PKTDBG_CFG``
        ``RTL9602C_PKTDBG_CFG_MODE`` (bits 7:6) and
-       ``RTL9602C_PKTDBG_CFG_REASON`` (bits 15:8). Every PTP capture seen had
-       action 0 and identifier 1.
+       ``RTL9602C_PKTDBG_CFG_REASON`` (bits 15:8). The identifier read 0 to 3
+       and 22 in the captures seen.
      - I
      - The meanings are unverified; debugfs only.
 
@@ -1013,8 +1159,10 @@ Per-port configuration and message actions
 
 The switch has a PTP enable for each port, a transparent-clock bit for each
 port, and an ingress and an egress action for each of ten message types. The
-driver never writes any of them, and the receive stamping does not depend on
-them (see "Receive timestamps"); the ``ptpstat`` view prints them. The
+driver writes the egress actions of the event messages and the CPU port's
+enable while transmit stamping is on, and none of the others (see "Transmit
+timestamps"); the receive stamping does not depend on them (see "Receive
+timestamps"). The ``ptpstat`` view prints them all. The
 message types are numbered in the order of the action registers, which is not
 the ``messageType`` field of the PTP header (IEEE 1588-2008, clause 13.3.2.2).
 
@@ -1026,8 +1174,10 @@ the ``messageType`` field of the PTP header (IEEE 1588-2008, clause 13.3.2.2).
      - Tag
      - Checked by
    * - ``RTL9602C_PTP_PORT_EN`` = ``0x0111e8`` + 4 x port, bit 0: a per-port
-       PTP enable. The driver never writes it; ``ptpstat`` prints it
-       (``enabled``). Receive stamping does not depend on it.
+       PTP enable. The driver sets it on the CPU port while transmit stamping
+       is on, and a message from the CPU gets its egress action only then;
+       ``ptpstat`` prints it (``enabled``). Receive stamping does not depend
+       on it.
      - M
      - Set on every port and read back per port in ``ptpstat`` at the 4-byte
        stride.
@@ -1036,18 +1186,21 @@ the ``messageType`` field of the PTP header (IEEE 1588-2008, clause 13.3.2.2).
        (``RTL9602C_PTP_ACTION_MASK``) per message type, type n at bits
        2n+1:2n, for ``RTL9602C_PTP_MSG_TYPES`` = 10 types. Type 0 is Sync: its
        ingress action at 3 changed the tag's reason byte from 240 to 241. The
-       driver never writes these registers; ``ptpstat`` prints both, per type.
+       driver writes the egress actions of the event messages while transmit
+       stamping is on, and never the ingress actions; ``ptpstat`` prints both,
+       per type.
      - M
      - ``ptpstat`` and the kernel log, with the ingress action for Sync at 0
        and at 3.
    * - Types 1 to 9 as ``ptpstat`` names them (``delay_req``, ``pdelay_req``,
        ``pdelay_resp``, ``follow_up``, ``delay_resp``, ``pdelay_resp_fup``,
-       ``announce``, ``sync_1step``, ``pdelay_req_1step``), and what each
-       action value does.
-     - I
-     - Debugfs only. Setting the ingress action of a type to 3 and sending that
-       message would settle it per type: the reason byte should change as it
-       did for Sync.
+       ``announce``, ``sync_1step``, ``pdelay_req_1step``). On the egress side
+       types 0 (a two-step Sync), 1, 4 and 8 (a one-step Sync) are measured,
+       and what the egress actions 1 to 3 do (see "Transmit timestamps").
+     - M, I
+     - M: the egress capture and the reports, per type (see "Transmit
+       timestamps"). I: the other types, and the ingress actions but 3 on
+       Sync; sending each message under its slot's action would settle them.
    * - ``RTL9602C_PTP_TRANSPARENT_PORTS`` (``0x0111d4``): one bit per port,
        read 0 on every port; ``ptpstat`` prints it (``transparent``). What a
        set bit does is not exercised.
@@ -1218,11 +1371,12 @@ bytes of the software message in message order)::
 Known limitations
 =================
 
-- No setting has been found under which a port stamps what it sends, or
-  writes a time into it, so a request for any transmit type but
-  ``HWTSTAMP_TX_OFF`` is refused with ``-ERANGE``. A port can stamp the Syncs
-  it receives but not time its own Delay_Req, which the delay request-response
-  mechanism needs: it can listen, not synchronise (see "Transmit timestamps").
+- Transmit stamps are two-step and one message at a time: a message sent
+  while another awaits its departure report goes unstamped, and only event
+  messages over Ethernet are stamped. One-step stamping
+  (``HWTSTAMP_TX_ONESTEP_SYNC``) is not offered, though the switch can write a
+  time into a Sync (see "The receive capture register"). The nanoseconds of a
+  transmit stamp lie on a 128 ns grid (see "Transmit timestamps").
 - Only the layer-2 PTP version 2 receive filters are taken, answered as
   ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``. A request for every frame, for UDP, for
   PTP version 1 or for NTP is refused with ``-ERANGE`` and leaves the port's
@@ -1253,8 +1407,20 @@ resolve.
 Assumptions the driver depends on
 ---------------------------------
 
-None is left open: each has been measured on this board (see the tables
-above).
+.. list-table::
+   :header-rows: 1
+   :widths: 58 42
+
+   * - Assumption
+     - What would settle it
+   * - Pdelay_Req and Pdelay_Resp take their egress action from slots 2 and 3
+       ("Transmit timestamps"); if not, those messages get no transmit stamp.
+     - A Pdelay_Req and a Pdelay_Resp sent with transmit stamping on.
+   * - A departure report never comes more than 100 ms after its message; one
+       that did would be handed to the next message awaited ("Transmit
+       timestamps").
+     - Watching the ``lost`` and ``orphan reports`` counts of ``ptpstat``
+       under load.
 
 Questions the code does not depend on
 -------------------------------------
@@ -1270,22 +1436,21 @@ All but the last concern values that only the debugfs views print.
    * - Whether the receive capture register has the layout ``ptpstat`` decodes
        ("The receive capture register").
      - A capture that changes.
-   * - Whether the receive capture register is rather an input: a time that
-       software writes, which an egress action then uses for a message that the
-       CPU sends, together with the word at ``0x01b020``, which may hold a mean
-       path delay. Every egress action was tried with both at zero, and none
-       wrote a time into a message ("Transmit timestamps"). If so, a message
-       could carry its departure time without a transmit stamp to read.
-     - Writing a time into the register and a delay into the word, then a Sync
-       from the CPU under each egress action, captured at the far end.
-   * - What the action, identifier, mode and reason fields of the egress
-       capture mean ("The egress capture").
-     - A PTP frame forwarded out of a wire port under a known action; a
-       capture with a reason that only some of the traffic carries.
-   * - The names of message types 1 to 9 and what each action value does
-       ("Per-port configuration and message actions").
-     - Setting the ingress action of a type to 3 and sending that message: the
-       reason byte should change as it did for Sync.
+   * - Whether the receive capture register is the reference that egress
+       action 3 subtracts from a Sync's departure time, and what the word at
+       ``0x01b020``, which may hold a mean path delay, adds ("The receive
+       capture register"). One-step stamping would need it.
+     - Writing a time into the register and a delay into the word, then a
+       one-step Sync from the CPU under action 3, captured at the far end.
+   * - What the identifier, mode and reason fields of the egress capture mean
+       ("The egress capture").
+     - A capture with a reason that only some of the traffic carries.
+   * - The names of the message types not yet measured and what each ingress
+       action does ("Per-port configuration and message actions").
+     - Sending each message under each action of its slot.
+   * - Why the nanoseconds of a transmit stamp lie on a 128 ns grid: a coarse
+       latch, or departures that fall on it ("Transmit timestamps").
+     - A second stamped port, or a scope on the SFP lane.
    * - What a transparent-clock bit does ("Per-port configuration and message
        actions").
      - Setting a bit and checking the correction field of a Sync forwarded

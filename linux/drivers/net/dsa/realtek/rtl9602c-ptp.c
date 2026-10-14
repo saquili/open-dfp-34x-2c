@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * RTL9602C switch: the IEEE 1588 clock and receive timestamps
+ * RTL9602C switch: the IEEE 1588 clock and its timestamps
  *
  * The switch has a clock of its own, with 48-bit seconds and 8 ns ticks,
  * which is registered here as a PTP hardware clock.  It is read by latching
@@ -8,17 +8,24 @@
  * word.  Each PTP message the switch sends to the CPU port carries a tag
  * with the clock's time at the frame; the CPU-port driver turns the tag
  * into the frame's hardware timestamp, and rtl9602c_port_rxtstamp()
- * completes its seconds.  The switch produces no departure time for a
- * message the CPU sends, so only receive stamping is offered.
+ * completes its seconds.
+ *
+ * A PTP event message the CPU sends is stamped when it leaves: under the
+ * egress action that latches the time and reports it, the switch sends the
+ * CPU a departure report, which the CPU-port driver hands to
+ * rtl9602c_ptp_departure().  The report does not say which message left, so
+ * one message at a time awaits its report (rtl9602c_port_txtstamp()).
  *
  * The debugfs views show the per-port and per-message PTP settings and the
- * time-of-day transmitter, which the driver reads and never writes.
+ * time-of-day transmitter.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
 
 #include <linux/bitfield.h>
 #include <linux/debugfs.h>
+#include <linux/dsa/rtl9602c.h>
+#include <linux/ptp_classify.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/unaligned.h>
 #include <net/ipv6.h>
@@ -239,12 +246,11 @@ static int rtl9602c_ptp_enable(struct ptp_clock_info *info,
  * @port: the port
  * @ts: filled with the capabilities
  *
- * Hardware stamps cover received PTP event messages only.  The switch
- * produces no departure time for a message the CPU sends, so the only
- * transmit type is %HWTSTAMP_TX_OFF.  Without that departure time a port
- * can stamp the Syncs it receives but cannot time its own Delay_Req, which
- * the delay request-response mechanism needs to measure the path delay
- * (IEEE 1588-2008 11.3).  The PHC index is -1 when no clock is registered.
+ * Hardware stamps cover the PTP messages over Ethernet that a port receives
+ * and the event messages over Ethernet that it sends, the latter as two-step
+ * stamps (%HWTSTAMP_TX_ON) and only while the CPU-port driver hands the
+ * switch's departure reports on (@p->ptp_tx_ready).  The PHC index is -1
+ * when no clock is registered.
  *
  * Return: 0.
  */
@@ -260,11 +266,114 @@ int rtl9602c_get_ts_info(struct dsa_switch *ds, int port,
 			      SOF_TIMESTAMPING_RAW_HARDWARE;
 	ts->phc_index = p->ptp_clock ? ptp_clock_index(p->ptp_clock) : -1;
 	ts->tx_types = BIT(HWTSTAMP_TX_OFF);
+	if (p->ptp_tx_ready) {
+		ts->so_timestamping |= SOF_TIMESTAMPING_TX_HARDWARE;
+		ts->tx_types |= BIT(HWTSTAMP_TX_ON);
+	}
 	ts->rx_filters = BIT(HWTSTAMP_FILTER_NONE) |
 			 BIT(HWTSTAMP_FILTER_PTP_V2_L2_EVENT) |
 			 BIT(HWTSTAMP_FILTER_PTP_V2_L2_SYNC) |
 			 BIT(HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ);
 	return 0;
+}
+
+/*
+ * A stamp from the switch, in a receive tag or a departure report, carries
+ * the low 16 bits of the clock's seconds.  The rest come from the seconds of
+ * the last clock read, in the 65,536-second window that puts the stamp
+ * nearest to them.  The result is right only while the clock has been read
+ * within about nine hours (32,768 s) of the stamp, which
+ * rtl9602c_ptp_aux_work() makes sure of by reading it at registration and
+ * once a minute after.
+ */
+static ktime_t rtl9602c_ptp_complete(struct rtl9602c_priv *p, ktime_t stamp)
+{
+	u64 tag_sec, seen, sec;
+	u32 rem;
+
+	tag_sec = div_u64_rem(ktime_to_ns(stamp), NSEC_PER_SEC, &rem) & 0xffff;
+	seen = (u64)atomic64_read(&p->ptp_sec_seen);
+	sec = (seen & ~0xffffULL) | tag_sec;
+
+	/* Move to the neighbouring window when that one is nearer. */
+	if (sec > seen + 0x8000)
+		sec -= 0x10000;
+	else if (seen > sec + 0x8000)
+		sec += 0x10000;
+
+	return ktime_set(sec, rem);
+}
+
+/*
+ * The egress action slots of the event messages: the two kinds of Sync,
+ * Delay_Req, Pdelay_Req and Pdelay_Resp.
+ */
+#define RTL9602C_PTP_EVENT_SLOTS	(BIT(RTL9602C_PTP_SLOT_SYNC) |		\
+					 BIT(RTL9602C_PTP_SLOT_DELAY_REQ) |	\
+					 BIT(RTL9602C_PTP_SLOT_PDELAY_REQ) |	\
+					 BIT(RTL9602C_PTP_SLOT_PDELAY_RESP) |	\
+					 BIT(RTL9602C_PTP_SLOT_SYNC_1STEP))
+
+/*
+ * How long a message waits for its departure report before the next message
+ * may take its place.  Reports come within milliseconds; a report that comes
+ * later than this is handed to the next message awaited, if there is one.
+ */
+#define RTL9602C_PTP_TX_TIMEOUT		(HZ / 10)
+
+/*
+ * Turn the departure reports on or off.  A message the CPU sends gets its
+ * egress action only when the PTP enable of the port it enters by, the CPU
+ * port, is set: the enable of the port it leaves by makes no difference
+ * (measured).  The action latches the time and reports it for each event
+ * message; the general messages keep no action.  A message gets the action
+ * only when the CPU-port driver sends it so (see the transmit path of
+ * rtl9602c-eth), so the other messages the CPU sends, and those the switch
+ * forwards between ports, leave unchanged and unreported (measured).
+ *
+ * Context: process context, at registration and teardown or under RTNL
+ * (rtl9602c_port_hwtstamp_set()), which keeps the callers apart.
+ */
+static void rtl9602c_ptp_tx_reports(struct rtl9602c_priv *p, bool on)
+{
+	u32 clr = 0, set = 0;
+	unsigned int slot;
+
+	for (slot = 0; slot < RTL9602C_PTP_MSG_TYPES; slot++) {
+		if (!(RTL9602C_PTP_EVENT_SLOTS & BIT(slot)))
+			continue;
+		clr |= RTL9602C_PTP_ACTION_MASK << (2 * slot);
+		if (on)
+			set |= RTL9602C_PTP_ACTION_LATCH_REPORT << (2 * slot);
+	}
+	rtl9602c_rmw(p, RTL9602C_PTP_ACTION_EGRESS, clr, set);
+	rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * RTL9602C_PORT_CPU, 1, on);
+}
+
+/*
+ * A departure report, from the CPU-port driver's receive poll: the time goes
+ * to the message awaited, if any, and completes it.
+ */
+static void rtl9602c_ptp_departure(void *ctx, ktime_t stamp)
+{
+	struct skb_shared_hwtstamps hw = {};
+	struct rtl9602c_priv *p = ctx;
+	struct sk_buff *skb;
+
+	spin_lock_bh(&p->ptp_tx_lock);
+	skb = p->ptp_tx_skb;
+	p->ptp_tx_skb = NULL;
+	if (skb)
+		p->ptp_tx_stamped++;
+	else
+		p->ptp_tx_orphans++;
+	spin_unlock_bh(&p->ptp_tx_lock);
+
+	if (!skb)
+		return;
+
+	hw.hwtstamp = rtl9602c_ptp_complete(p, stamp);
+	skb_complete_tx_timestamp(skb, &hw);
 }
 
 /**
@@ -277,6 +386,11 @@ int rtl9602c_get_ts_info(struct dsa_switch *ds, int port,
  * periodic output channel; no pulse is driven out of the chip.  Without
  * CONFIG_PTP_1588_CLOCK no clock is registered and @p->ptp_clock stays
  * NULL.
+ *
+ * Transmit stamping needs the clock and the departure reports, which reach
+ * the switch driver through the CPU port's conduit; without either the ports
+ * offer receive stamping only.  The reports start off, as the board comes
+ * up, until a port asks for transmit stamps.
  *
  * Return: 0 or a negative error code.
  */
@@ -299,6 +413,9 @@ static long rtl9602c_ptp_aux_work(struct ptp_clock_info *info)
 
 int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 {
+	struct dsa_port *cpu = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
+	int err;
+
 	p->ptp_info = (struct ptp_clock_info) {
 		.owner		= THIS_MODULE,
 		.name		= "rtl9602c-ptp",
@@ -320,21 +437,47 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 
 	p->ptp_clock = ptp_clock_register(&p->ptp_info, p->dev);
 	if (IS_ERR(p->ptp_clock)) {
-		int err = PTR_ERR(p->ptp_clock);
-
+		err = PTR_ERR(p->ptp_clock);
 		p->ptp_clock = NULL;
 		return err;
 	}
 	ptp_schedule_worker(p->ptp_clock, 0);
+
+	rtl9602c_ptp_tx_reports(p, false);
+	err = rtl9602c_conduit_tstamp_attach(cpu ? cpu->conduit : NULL,
+					     rtl9602c_ptp_departure, p);
+	if (err)
+		pr_warn("no transmit timestamps: %pe\n", ERR_PTR(err));
+	p->ptp_tx_ready = !err;
 	return 0;
 }
 
 /**
  * rtl9602c_ptp_unregister() - remove the PTP hardware clock, if registered
  * @p: driver state
+ *
+ * Detaches the handler of departure reports first, turns the reports off and
+ * drops the message still awaiting one, if any.
+ *
+ * Context: process context; sleeps.
  */
 void rtl9602c_ptp_unregister(struct rtl9602c_priv *p)
 {
+	if (p->ptp_tx_ready) {
+		struct dsa_port *cpu = dsa_to_port(&p->ds, RTL9602C_PORT_CPU);
+		struct sk_buff *skb;
+
+		rtl9602c_conduit_tstamp_detach(cpu ? cpu->conduit : NULL);
+		p->ptp_tx_ready = false;
+		rtl9602c_ptp_tx_reports(p, false);
+
+		spin_lock_bh(&p->ptp_tx_lock);
+		skb = p->ptp_tx_skb;
+		p->ptp_tx_skb = NULL;
+		spin_unlock_bh(&p->ptp_tx_lock);
+		kfree_skb(skb);
+	}
+
 	if (p->ptp_clock) {
 		ptp_clock_unregister(p->ptp_clock);
 		p->ptp_clock = NULL;
@@ -351,15 +494,10 @@ void rtl9602c_ptp_unregister(struct rtl9602c_priv *p)
  * The switch puts a 16-byte tag into each PTP message it sends to the CPU
  * port, holding the time of its clock at the frame; the CPU-port driver
  * has already taken the tag off and made that time the frame's hardware
- * timestamp.  The tag carries only the low 16 bits of the seconds.  The
- * rest come from the seconds of the last clock read, in the 65,536-second
- * window that puts the stamp nearest to them.  The result is right only
- * while the clock has been read within about nine hours (32,768 s) of the
- * frame, which rtl9602c_ptp_aux_work() makes sure of by reading it at
- * registration and once a minute after.  The choice of window is an
- * assumption, not verified across a window boundary.  The
- * switch tags its PTP messages whatever the filter, so on a port whose
- * receive filter is %HWTSTAMP_FILTER_NONE the stamp is taken off instead.
+ * timestamp.  The tag carries only the low 16 bits of the seconds, and
+ * rtl9602c_ptp_complete() adds the rest.  The switch tags its PTP messages
+ * whatever the filter, so on a port whose receive filter is
+ * %HWTSTAMP_FILTER_NONE the stamp is taken off instead.
  *
  * Return: false; the frame is delivered at once.
  */
@@ -368,8 +506,6 @@ bool rtl9602c_port_rxtstamp(struct dsa_switch *ds, int port,
 {
 	struct skb_shared_hwtstamps *hw = skb_hwtstamps(skb);
 	struct rtl9602c_priv *p = ds->priv;
-	u64 ns, tag_sec, seen, sec;
-	u32 rem;
 
 	/* No tag, no stamp to complete. */
 	if (!hw->hwtstamp)
@@ -380,19 +516,83 @@ bool rtl9602c_port_rxtstamp(struct dsa_switch *ds, int port,
 		return false;
 	}
 
-	ns = ktime_to_ns(hw->hwtstamp);
-	tag_sec = div_u64_rem(ns, NSEC_PER_SEC, &rem) & 0xffff;
-	seen = (u64)atomic64_read(&p->ptp_sec_seen);
-	sec = (seen & ~0xffffULL) | tag_sec;
-
-	/* Move to the neighbouring window when that one is nearer. */
-	if (sec > seen + 0x8000)
-		sec -= 0x10000;
-	else if (seen > sec + 0x8000)
-		sec += 0x10000;
-
-	hw->hwtstamp = ktime_set(sec, rem);
+	hw->hwtstamp = rtl9602c_ptp_complete(p, hw->hwtstamp);
 	return false;
+}
+
+/**
+ * rtl9602c_port_txtstamp() - ask for the departure time of a PTP message
+ * @ds: the switch
+ * @port: the port the message leaves by
+ * @skb: the message
+ *
+ * Called by DSA for a frame whose socket asked for a hardware transmit
+ * stamp.  On a port with %HWTSTAMP_TX_ON, an event message over Ethernet
+ * (Sync, Delay_Req, Pdelay_Req or Pdelay_Resp, IEEE 1588-2008 6.4; with or
+ * without a VLAN tag) is kept as a clone and marked %SKBTX_IN_PROGRESS,
+ * which makes the CPU-port driver send it under the switch's egress action;
+ * the departure report then completes the clone, in
+ * rtl9602c_ptp_departure().  The report does not say which message left,
+ * so one message at a time awaits it: a message sent while another waits
+ * goes unstamped (@p->ptp_tx_busy), unless the other has waited longer than
+ * %RTL9602C_PTP_TX_TIMEOUT and is given up (@p->ptp_tx_lost).  A message
+ * over UDP is not stamped: the switch does not recognise one (measured on
+ * the receive side).
+ *
+ * Context: the transmit path, with bottom halves disabled.
+ */
+void rtl9602c_port_txtstamp(struct dsa_switch *ds, int port,
+			    struct sk_buff *skb)
+{
+	struct rtl9602c_priv *p = ds->priv;
+	struct sk_buff *clone, *stale = NULL;
+	struct ptp_header *hdr;
+	unsigned int type;
+
+	if (p->hwtstamp[port].tx_type != HWTSTAMP_TX_ON || !p->ptp_tx_ready)
+		return;
+
+	type = ptp_classify_raw(skb);
+	if ((type & PTP_CLASS_PMASK) != PTP_CLASS_L2 ||
+	    (type & PTP_CLASS_VMASK) != PTP_CLASS_V2)
+		return;
+
+	hdr = ptp_parse_header(skb, type);
+	if (!hdr)
+		return;
+
+	switch (ptp_get_msgtype(hdr, type)) {
+	case PTP_MSGTYPE_SYNC:
+	case PTP_MSGTYPE_DELAY_REQ:
+	case PTP_MSGTYPE_PDELAY_REQ:
+	case PTP_MSGTYPE_PDELAY_RESP:
+		break;
+	default:
+		return;
+	}
+
+	clone = skb_clone_sk(skb);
+	if (!clone)
+		return;
+
+	spin_lock_bh(&p->ptp_tx_lock);
+	if (p->ptp_tx_skb &&
+	    time_before(jiffies, p->ptp_tx_start + RTL9602C_PTP_TX_TIMEOUT)) {
+		p->ptp_tx_busy++;
+		spin_unlock_bh(&p->ptp_tx_lock);
+		kfree_skb(clone);
+		return;
+	}
+	if (p->ptp_tx_skb) {
+		stale = p->ptp_tx_skb;
+		p->ptp_tx_lost++;
+	}
+	p->ptp_tx_skb = clone;
+	p->ptp_tx_start = jiffies;
+	skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+	spin_unlock_bh(&p->ptp_tx_lock);
+
+	kfree_skb(stale);
 }
 
 /**
@@ -418,27 +618,41 @@ int rtl9602c_port_hwtstamp_get(struct dsa_switch *ds, int port,
  * @port: the port
  * @config: the requested configuration, updated to the receive filter
  *	applied
- * @extack: netlink extended ack, told why a transmit type is refused
+ * @extack: netlink extended ack, told why a transmit type or a receive
+ *	filter is refused
  *
  * The switch tags every PTP message it sends to the CPU port whatever the
- * per-port PTP enable and the message actions say, so there is nothing to
- * switch on: the configuration is recorded and no register is written, and
- * rtl9602c_port_rxtstamp() takes the stamps off under %HWTSTAMP_FILTER_NONE.
- * Transmit timestamping stays off, as no departure time is produced for a
- * message the CPU sends.
+ * per-port PTP enable and the message actions say, so the receive filter
+ * needs no register: rtl9602c_port_rxtstamp() takes the stamps off under
+ * %HWTSTAMP_FILTER_NONE.  Transmit stamps are two-step only
+ * (%HWTSTAMP_TX_ON): while any port asks for them, the switch reports the
+ * departures of event messages (rtl9602c_ptp_tx_reports()).
  *
- * Return: 0, or -ERANGE for a transmit type other than %HWTSTAMP_TX_OFF or
- * a receive filter the port cannot provide.
+ * Context: under RTNL.
+ *
+ * Return: 0, or -ERANGE for a transmit type or a receive filter the port
+ * cannot provide, which leaves the configuration as it was.
  */
 int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 			       struct kernel_hwtstamp_config *config,
 			       struct netlink_ext_ack *extack)
 {
 	struct rtl9602c_priv *p = ds->priv;
+	bool tx_on = false;
+	int i;
 
-	if (config->tx_type != HWTSTAMP_TX_OFF) {
+	switch (config->tx_type) {
+	case HWTSTAMP_TX_OFF:
+		break;
+	case HWTSTAMP_TX_ON:
+		if (p->ptp_tx_ready)
+			break;
 		NL_SET_ERR_MSG_MOD(extack,
-				   "transmit timestamping is not implemented: the hardware has a per-port indication and no driver behind it");
+				   "no transmit timestamps: the switch's departure reports do not reach the driver");
+		return -ERANGE;
+	default:
+		NL_SET_ERR_MSG_MOD(extack,
+				   "only two-step transmit timestamps are offered");
 		return -ERANGE;
 	}
 
@@ -465,6 +679,10 @@ int rtl9602c_port_hwtstamp_set(struct dsa_switch *ds, int port,
 	}
 
 	p->hwtstamp[port] = *config;
+
+	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
+		tx_on |= p->hwtstamp[i].tx_type == HWTSTAMP_TX_ON;
+	rtl9602c_ptp_tx_reports(p, tx_on);
 	return 0;
 }
 
@@ -487,9 +705,10 @@ static const char * const rtl9602c_ptp_msg_names[RTL9602C_PTP_MSG_TYPES] = {
  * a PTP message has left the port since the last read.  That indication
  * says a message left, not that a timestamp is ready, and reading it clears
  * it.  Then the ingress and egress action of each message type, the count
- * of once-per-second pulses and whether their interrupt is enabled, the PON
- * time of day and the receive capture.  Apart from that interrupt enable,
- * the driver writes none of these registers.
+ * of once-per-second pulses and whether their interrupt is enabled, the
+ * transmit stamps, the PON time of day and the receive capture.  Apart from
+ * that interrupt enable, and the egress actions and the CPU port's enable
+ * while transmit stamping is on, the driver writes none of these registers.
  */
 static int rtl9602c_ptpstat_show(struct seq_file *s, void *unused)
 {
@@ -519,6 +738,12 @@ static int rtl9602c_ptpstat_show(struct seq_file *s, void *unused)
 	seq_printf(s, "\npulses %u  armed %u\n", READ_ONCE(p->ptp_pps_count),
 		   !!(rtl9602c_r(p, RTL9602C_IRQ_ENABLE) &
 		      RTL9602C_IRQ_SRC_PTP_PPS));
+
+	spin_lock_bh(&p->ptp_tx_lock);
+	seq_printf(s, "tx stamps %u  busy %u  lost %u  orphan reports %u  awaited %u\n",
+		   p->ptp_tx_stamped, p->ptp_tx_busy, p->ptp_tx_lost,
+		   p->ptp_tx_orphans, !!p->ptp_tx_skb);
+	spin_unlock_bh(&p->ptp_tx_lock);
 
 	/*
 	 * A second time value beside the clock, with its enable in CLK_CTRL;
