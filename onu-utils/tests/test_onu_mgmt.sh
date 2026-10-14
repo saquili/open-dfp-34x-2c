@@ -35,10 +35,11 @@ setup() {
 	sleep 60 &
 	OLD_SSH=$!
 	echo "$OLD_SSH" >"$ONU_ROOT/run/dropbear.pid"
-	# ntpd, with the router of the boot's link for its time server.
+	# timed, with the router of the boot's link for its time server and the
+	# link's interface for PTP.
 	sleep 60 &
-	OLD_NTP=$!
-	echo "$OLD_NTP" >"$ONU_ROOT/run/ntpd.pid"
+	OLD_TIME=$!
+	echo "$OLD_TIME" >"$ONU_ROOT/run/timed.pid"
 	for c in onu-nl logger onu-apply; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
@@ -52,7 +53,7 @@ setup() {
 }
 
 teardown() {
-	kill "$OLD_SSH" "$OLD_NTP" 2>/dev/null
+	kill "$OLD_SSH" "$OLD_TIME" 2>/dev/null
 	rm -rf "$T"
 }
 
@@ -153,8 +154,8 @@ check '[ "$(part)" = "$(printf "device mgmt100 100\ninterface $name mgmt100 192.
 check '! kill -0 "$OLD_SSH" 2>/dev/null'
 check '[ "$(grep -c "^dropbear " "$LOG")" -eq 1 ]'
 check '! grep -q "^dropbear .*-[sB]\b" "$LOG"'
-# ntpd ends as well, and procd starts it again for the new link's router.
-check '! kill -0 "$OLD_NTP" 2>/dev/null'
+# timed ends as well, and procd starts it again for the new link.
+check '! kill -0 "$OLD_TIME" 2>/dev/null'
 run status
 check 'echo "$out" | grep -qx VLAN=100 && echo "$out" | grep -qx IFACE=mgmt100'
 check '! echo "$out" | grep -q PENDING_'
@@ -193,8 +194,8 @@ run cancel
 check '[ "$(part)" = "$(printf "device mgmt 4094\ninterface mgmt mgmt 198.51.100.2/30")" ]'
 check '[ ! -e "$ONU_ROOT/run/onu-trial.d/mgmt" ] && [ ! -e "$T/stored" ]'
 check 'grep -qx ADDRESS=198.51.100.2/30 "$ONU_ROOT/run/onu-mgmt"'
-# The link stays as it was, and so do its servers and ntpd.
-check 'kill -0 "$OLD_SSH" 2>/dev/null && kill -0 "$OLD_NTP" 2>/dev/null'
+# The link stays as it was, and so do its servers and timed.
+check 'kill -0 "$OLD_SSH" 2>/dev/null && kill -0 "$OLD_TIME" 2>/dev/null'
 teardown
 
 echo "a new address in the same VLAN, committed: the new one's interface stays as it was"

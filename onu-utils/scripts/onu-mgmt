@@ -286,9 +286,9 @@ commit() {
 	done
 	rm -f "$RUN/dropbear-pending.pid"
 	# The time comes from the router at the other end of the management link
-	# unless the settings name a server: procd starts ntpd again (onu-run
-	# ntp) once it ends, for the new link's.
-	pid=$(cat "$RUN/ntpd.pid" 2>/dev/null)
+	# unless the settings name a server, and PTP over the link's interface:
+	# procd starts timed again (onu-run time) once it ends, for the new link.
+	pid=$(cat "$RUN/timed.pid" 2>/dev/null)
 	[ -n "$pid" ] && kill "$pid" 2>/dev/null
 	log "the management address is now $address in VLAN $vlan"
 }

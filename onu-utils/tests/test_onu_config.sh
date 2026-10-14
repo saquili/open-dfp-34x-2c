@@ -423,7 +423,7 @@ rc=$?
 check '[ $rc -ne 0 ] && cmp -s "$ONU_STORE" "$T/before"'
 # The time server and the server of the system log: an address, the latter with
 # a port; no name, as the stick runs offline and has no resolver, and nothing
-# that ntpd or syslogd would read as an option.
+# that timed or syslogd would read as an option.
 printf 'NTP_SERVER=192.0.2.123\nLOG_SERVER=[2001:db8::1]:5514\n' | "$STORE_SCRIPT" system 2>/dev/null
 check 'grep -q -x NTP_SERVER=192.0.2.123 "$ONU_ROOT/run/onu-system"'
 check 'grep -q -x "LOG_SERVER=\[2001:db8::1\]:5514" "$ONU_ROOT/run/onu-system"'

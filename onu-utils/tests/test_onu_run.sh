@@ -29,7 +29,7 @@ setup() {
 	# The OMCI port of the PON driver, and chown, which the group of it needs.
 	mkdir -p "$ONU_ROOT/dev"
 	: >"$ONU_ROOT/dev/pon0omci0"
-	for c in dropbear pond getty login omcid sleep ntpd reboot chown; do
+	for c in dropbear pond getty login omcid sleep timed reboot chown; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
 	printf '#!/bin/sh\necho "dropbearkey $*" >>"$LOG"\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && echo key >"$2"; shift; done\n' \
@@ -164,45 +164,55 @@ run omcid
 check '[ "$(grep -c -x -F "omcid -m $ONU_ROOT/run/omcid/mib -x $ONU_ROOT/usr/lib/onu/onu-call" "$LOG")" -eq 2 ] && ! grep -q "^sleep" "$LOG"'
 teardown
 
-echo "the time from the router at the other end of the management link"
+echo "the time by NTP from the router at the other end of the management link, by PTP on its interface"
 setup
-run ntp
-check '[ $rc -eq 0 ] && logged "ntpd -n -p 198.51.100.1"'
-check '[ -s "$ONU_ROOT/run/ntpd.pid" ]'
-# It runs as the account ntp with the power to set the clock, and no other.
-check 'logged "onu-drop -c sys_time ntp ntpd -n -p 198.51.100.1"'
+# Where timed reads the OLT's date and tells its state.
+FILES="-o $ONU_ROOT/run/omcid/clock -s $ONU_ROOT/run/timed/state"
+run time
+check '[ $rc -eq 0 ] && logged "timed -n 198.51.100.1 -p mgmt $FILES"'
+check '[ -s "$ONU_ROOT/run/timed.pid" ]'
+# It runs as the account ntp with the powers to set the clock, to listen for
+# PTP over layer 2 and on its UDP ports below 1024, and no other.
+check 'logged "onu-drop -c sys_time,net_raw,net_bind_service ntp timed -n 198.51.100.1 -p mgmt $FILES"'
 : >"$LOG"
 for pair in 198.51.100.1/30:198.51.100.2 198.51.100.6/30:198.51.100.5 \
 	198.51.100.4/31:198.51.100.5 198.51.100.5/31:198.51.100.4 198.051.100.002/30:198.51.100.1; do
 	sed -i.bak "s#^ADDRESS=.*#ADDRESS=${pair%%:*}#" "$ONU_ROOT/run/onu-mgmt"
-	run ntp
-	check 'logged "ntpd -n -p ${pair#*:}"'
+	run time
+	check 'logged "timed -n ${pair#*:} -p mgmt $FILES"'
 done
 teardown
 
-echo "no router that is known: a wait of an hour, then a failure"
+echo "no router that is known: PTP alone, on the management link's interface"
 setup
+FILES="-o $ONU_ROOT/run/omcid/clock -s $ONU_ROOT/run/timed/state"
 for address in 198.51.100.2/24 198.51.100.0/30 198.51.100.3/30 198.51.100.300/30 198.51.100/30; do
 	sed -i.bak "s#^ADDRESS=.*#ADDRESS=$address#" "$ONU_ROOT/run/onu-mgmt"
-	run ntp
-	check '[ $rc -eq 1 ]'
+	run time
+	check '[ $rc -eq 0 ]'
 done
-check '[ "$(grep -c "^sleep 3600$" "$LOG")" -eq 5 ] && ! grep -q "^ntpd" "$LOG"'
+check '[ "$(grep -c -x -F "timed -p mgmt $FILES" "$LOG")" -eq 5 ] && ! grep -q "^sleep" "$LOG"'
+teardown
+
+echo "no router and no management link: a wait of an hour, then a failure"
+setup
 rm "$ONU_ROOT/run/onu-mgmt"
-run ntp
-check '[ $rc -eq 1 ] && ! grep -q "^ntpd" "$LOG"'
+run time
+check '[ $rc -eq 1 ] && logged "sleep 3600" && ! grep -q "^timed" "$LOG"'
+check '[ ! -e "$ONU_ROOT/run/timed.pid" ]'
 teardown
 
 echo "the time server the settings name, read as data"
 setup
+FILES="-o $ONU_ROOT/run/omcid/clock -s $ONU_ROOT/run/timed/state"
 sed -i.bak "s#^ADDRESS=.*#ADDRESS=198.51.100.2/24#" "$ONU_ROOT/run/onu-mgmt"
 printf 'HOSTNAME=stick\nNTP_SERVER=192.0.2.123\n' >"$ONU_ROOT/run/onu-system"
-run ntp
-check 'logged "ntpd -n -p 192.0.2.123"'
+run time
+check 'logged "timed -n 192.0.2.123 -p mgmt $FILES"'
 rm "$ONU_ROOT/run/onu-mgmt"
 printf 'NTP_SERVER=$(reboot)\n' >"$ONU_ROOT/run/onu-system"
-run ntp
-check 'logged "ntpd -n -p \$(reboot)" && ! grep -q "^reboot" "$LOG"'
+run time
+check 'logged "timed -n \$(reboot) $FILES" && ! grep -q "^reboot" "$LOG"'
 teardown
 
 echo "what is not a server"

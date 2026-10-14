@@ -33,12 +33,17 @@
 #                   OLT sees no new ONU. It runs as the account omcid with the
 #                   two powers it uses (onu-drop), in /run/omcid, and tells
 #                   onu-apply of each change it publishes by onu-call (omcid -x)
-#   onu-run ntp     ntpd, which sets the clock and keeps it, as the account ntp
-#                   with the one power to set the clock (onu-drop), from the
-#                   server that the stick's settings name (NTP_SERVER of
-#                   /run/onu-system) or, without one, from the router at the
-#                   other end of the management link: the stick has no way of
-#                   its own to the internet, and the OLT gives no date
+#   onu-run time    timed, which sets the clock and keeps it, as the account
+#                   ntp with the powers to set the clock, to listen for PTP
+#                   over layer 2 and on its UDP ports 319 and 320 (onu-drop):
+#                   by NTP from the server that the
+#                   stick's settings name (NTP_SERVER of /run/onu-system) or,
+#                   without one, from the router at the other end of the
+#                   management link; by PTP from a master on the management
+#                   link's interface; and from the date the OLT gave, which
+#                   omcid writes in /run/omcid/clock, when the host gives none.
+#                   The stick has no way of its own to the internet. Its state
+#                   is /run/timed/state, which the status daemon reads
 #
 # The addresses are the pair in use, from /run/onu-mgmt, which onu-mgmt keeps:
 # a server started again after a change of the pair listens on the new one.
@@ -124,22 +129,26 @@ peer() {
 }
 
 # The time. The server is read as data, never run; onu-config took it only in
-# the shape of an address: the stick runs offline and resolves no name. It is
-# the host side's, for now; the clock is to be kept by PTP later. Without a
-# server it waits an hour before
-# it fails, so that procd asks again once an hour, as the link may change.
-# Its process is ntpd's, whose id onu-mgmt takes to end it when the
-# management link changes, and procd starts it again for the new one.
-if [ "${1:-}" = ntp ]; then
+# the shape of an address: the stick runs offline and resolves no name. PTP is
+# listened for on the management link's interface, which onu-mgmt records.
+# With neither a server nor that interface it waits an hour before it fails,
+# so that procd asks again once an hour, as the link may change. Its process
+# is timed's, whose id onu-mgmt takes to end it when the management link
+# changes, and procd starts it again for the new one.
+if [ "${1:-}" = time ]; then
 	server=$(sed -n 's/^NTP_SERVER=//p' "$SYSTEM" 2>/dev/null | tail -n 1)
 	[ -n "$server" ] || server=$(peer "$(field ADDRESS)")
-	if [ -z "$server" ]; then
-		echo "onu-run: no time server: NTP_SERVER is not set and the management link is no /30 or /31" >&2
+	iface=$(field IFACE)
+	if [ -z "$server" ] && [ -z "$iface" ]; then
+		echo "onu-run: no time source: no NTP_SERVER, no /30 or /31 management link, no management interface" >&2
 		sleep 3600
 		exit 1
 	fi
-	echo $$ >"$RUN/ntpd.pid"
-	exec "$DROP" -c sys_time ntp ntpd -n -p "$server"
+	[ -n "$server" ] ||
+		echo "onu-run: no NTP server: NTP_SERVER is not set and the management link is no /30 or /31" >&2
+	echo $$ >"$RUN/timed.pid"
+	exec "$DROP" -c sys_time,net_raw,net_bind_service ntp timed ${server:+-n "$server"} ${iface:+-p "$iface"} \
+		-o "$RUN/omcid/clock" -s "$RUN/timed/state"
 fi
 
 mgmt=$(field ADDRESS)

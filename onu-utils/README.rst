@@ -456,7 +456,7 @@ by its whole path where procd starts it.
    gives procd the stick's programs as its services, over ubus, which procd
    starts, and again a set time after one ends; OpenWrt's shell scripts and
    jshn do that elsewhere. The boot script starts the log, netifd, the ssh
-   server, ``pond`` and ntpd with it, each a service of its own. ``-r`` gives
+   server, ``pond`` and timed with it, each a service of its own. ``-r`` gives
    the threshold under which a run is a crash, the wait before the next start
    and the crashes in a row after which procd gives up, 60,2,0 unless given
    (0: never); ``-l`` sends the program's output to the system log, ``-o``
@@ -543,18 +543,19 @@ by its whole path where procd starts it.
    ``/run/onu-mgmt``, so that one started again after a change of the pair
    listens on the new one; omcid, in the mode ``onu-apply`` last gave it
    (``/run/omcid.mode``), so that one started again after a crash comes up in
-   the mode the stick is in; ``ntpd``, which sets the clock and keeps it,
-   from ``NTP_SERVER`` of ``/run/onu-system`` or, without one, from the router
-   at the other end of the management link, the other address of its /30 or
-   /31, as the stick has no way of its own to the internet and the OLT gives
-   no date; and the console's login prompt, or, on a bench whose
-   ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's shell without
-   the password::
+   the mode the stick is in; ``timed``, which sets the clock and keeps it, by
+   NTP from ``NTP_SERVER`` of ``/run/onu-system`` or, without one, from the
+   router at the other end of the management link, the other address of its
+   /30 or /31, by PTP on the management link's interface, and from the date
+   the OLT gave (``/run/omcid/clock``) when the host gives none, as the stick
+   has no way of its own to the internet; and the console's login prompt, or,
+   on a bench whose ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's
+   shell without the password::
 
       onu-run ssh
       onu-run pond
       onu-run omcid
-      onu-run ntp
+      onu-run time
       onu-run console
 
 Building and testing::

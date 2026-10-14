@@ -398,7 +398,7 @@ system() {
 			exit 1
 		if (k == "SFP_LANE" && v !~ /^(auto|2500basex|1000basex-an|1000basex)?$/)
 			exit 1
-		# A time server: an address, which cannot read as an option of ntpd.
+		# A time server: an address, which cannot read as an option of timed.
 		if (k == "NTP_SERVER" && !address(v))
 			exit 1
 		# A server of the system log: an address, with a port after it.
