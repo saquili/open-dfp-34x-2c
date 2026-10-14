@@ -549,8 +549,8 @@ export interface Identity {
   source: "store" | "factory" | null;
 }
 
-/** The modes of the SFP lane: the driver's, and the chip's that are to come. */
-export type LaneMode = "auto" | "2500basex" | "1000basex-an" | "1000basex" | "sgmii" | "hsgmii";
+/** The modes of the SFP lane, the driver's: its own search, or one of four it keeps to. */
+export type LaneMode = "auto" | "2500basex" | "2500basex-an" | "1000basex-an" | "1000basex";
 
 /**
  * The SFP lane (pond's value "sfp_lane"): the mode chosen, the one the lane

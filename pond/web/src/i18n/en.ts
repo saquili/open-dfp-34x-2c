@@ -741,25 +741,25 @@ export const en = {
     modeActive: "now",
     modeAuto: "Automatic",
     modeAutoHint:
-      "The stick tries 2500BASE-X and 1000BASE-X (with and without negotiation) in turn and keeps the one the host takes.",
-    mode2500: "2500BASE-X",
+      "The stick tries 2.5G without negotiation and 1G with and without it in turn by itself, and keeps the one the host takes. 2.5G with negotiation has to be chosen by hand.",
+    mode2500: "2.5G",
     mode2500Hint:
-      "2.5 Gb/s, no in-band negotiation. For 2.5G ports, e.g. a 10G SFP+ port in 2.5G mode.",
-    mode1000an: "1000BASE-X with negotiation",
-    mode1000anHint: "1 Gb/s with in-band negotiation (clause 37), like an ordinary 1G SFP port.",
-    mode1000: "1000BASE-X without negotiation",
-    mode1000Hint: "1 Gb/s fixed, for ports that do not negotiate.",
-    modeSgmii: "SGMII",
-    modeSgmiiHint:
-      "Up to 1 Gb/s with SGMII negotiation. The chip has it; the driver gets it after a lab measurement.",
-    modeHsgmii: "HSGMII",
-    modeHsgmiiHint:
-      "2.5 Gb/s, the SGMII kind. The chip has it; the driver gets it after a lab measurement.",
+      "2.5 Gb/s without negotiation, as most 2.5G ports, e.g. a 10G SFP+ port in 2.5G mode. Tested with a host.",
+    mode2500anHint:
+      "2.5 Gb/s with negotiation (clause 37): once the link is up, the stick agrees duplex and pause with the host. For a host that asks for it at 2.5G. Not tested with a host yet.",
+    mode1000: "1G",
+    mode1000Hint:
+      "1 Gb/s without negotiation, for ports that do not negotiate. Not tested with a host yet.",
+    mode1000anHint:
+      "1 Gb/s with negotiation (clause 37), as most 1G SFP ports: once the link is up, the stick agrees duplex and pause with the host. Tested with a host.",
+    withAn: "with negotiation",
+    withoutAn: "without negotiation",
+    untested: "not tested",
     modeTry: "Switch on trial",
     modeConfirm:
-      "Switch the SFP lane to the chosen mode? If the host does not take it, the link goes and the panel with it; the stick goes back to the current mode after 60 s unless you keep the change.",
+      "Switch the SFP lane to the chosen mode? If the host does not take it, the link goes and the panel with it; the stick goes back to the current mode after 90 s unless you keep the change.",
     modeSafety:
-      "A mode change is on trial: it stays only when you keep it from the panel within a minute. Otherwise the stick goes back to the previous mode by itself.",
+      "A mode change is on trial: it stays only when you keep it from the panel within 90 s. Otherwise the stick goes back to the previous mode by itself.",
     modeUnavailable:
       "This stick cannot change the mode from the panel yet (it needs a software update).",
     trial:

@@ -644,7 +644,7 @@ export const handlers = [
     if (b.MODE)
       lane = {
         ...lane,
-        trial: { mode: b.MODE as LaneMode, previous: lane.choice, until_s: upNow() + 60 },
+        trial: { mode: b.MODE as LaneMode, previous: lane.choice, until_s: upNow() + 90 },
         choice: b.MODE as LaneMode,
       };
     else if (b.KEEP) lane = { ...lane, trial: null };

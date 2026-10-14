@@ -28,17 +28,60 @@ import { bitrate, integer } from "../lib/format";
 import { vlan, z } from "../lib/schemas";
 import { hostLink, laneMode, linkSpeed, port } from "../lib/state";
 
-const MODES: { id: LaneMode; label: Key; hint: Key; ready: boolean }[] = [
-  { id: "auto", label: "sfp.modeAuto", hint: "sfp.modeAutoHint", ready: true },
-  { id: "2500basex", label: "sfp.mode2500", hint: "sfp.mode2500Hint", ready: true },
-  { id: "1000basex-an", label: "sfp.mode1000an", hint: "sfp.mode1000anHint", ready: true },
-  { id: "1000basex", label: "sfp.mode1000", hint: "sfp.mode1000Hint", ready: true },
-  { id: "sgmii", label: "sfp.modeSgmii", hint: "sfp.modeSgmiiHint", ready: false },
-  { id: "hsgmii", label: "sfp.modeHsgmii", hint: "sfp.modeHsgmiiHint", ready: false },
+/*
+ * The lane's modes: the stick's own search, and the four it keeps to, each
+ * speed with in-band negotiation and without, named by their speed with
+ * their standard's name and the negotiation under it. The two not tested
+ * with a host say so.
+ */
+const MODES: {
+  id: LaneMode;
+  label: Key;
+  hint: Key;
+  standard?: string;
+  an?: boolean;
+  tested?: boolean;
+}[] = [
+  { id: "auto", label: "sfp.modeAuto", hint: "sfp.modeAutoHint", tested: true },
+  {
+    id: "2500basex",
+    label: "sfp.mode2500",
+    hint: "sfp.mode2500Hint",
+    standard: "2500BASE-X",
+    an: false,
+    tested: true,
+  },
+  {
+    id: "2500basex-an",
+    label: "sfp.mode2500",
+    hint: "sfp.mode2500anHint",
+    standard: "2500BASE-X",
+    an: true,
+  },
+  {
+    id: "1000basex",
+    label: "sfp.mode1000",
+    hint: "sfp.mode1000Hint",
+    standard: "1000BASE-X",
+    an: false,
+  },
+  {
+    id: "1000basex-an",
+    label: "sfp.mode1000",
+    hint: "sfp.mode1000anHint",
+    standard: "1000BASE-X",
+    an: true,
+    tested: true,
+  },
 ];
 
 function LaneCard() {
   const { t, lang } = useI18n();
+  /* A mode's whole name: its speed, and with negotiation or without. */
+  const modeName = (m: (typeof MODES)[number] | undefined) =>
+    !m || m.an == null
+      ? t(m?.label ?? "sfp.modeAuto")
+      : `${t(m.label)} ${t(m.an ? "sfp.withAn" : "sfp.withoutAn")}`;
   const { data: live, dataUpdatedAt } = useLive();
   const lane = useSfpLane();
   const change = useLaneChange();
@@ -50,7 +93,7 @@ function LaneCard() {
   const left = useCountdown(l?.trial?.until_s, live?.uptime.up_s, dataUpdatedAt);
   const chosen = pick ?? l?.choice ?? "auto";
   const active = l?.active ?? laneMode(live)?.toLowerCase().replace("base-x", "basex") ?? null;
-  const activeName = MODES.find((m) => m.id === active)?.label;
+  const activeMode = MODES.find((m) => m.id === active);
 
   const apply = () => {
     if (!window.confirm(t("sfp.modeConfirm"))) return;
@@ -68,8 +111,14 @@ function LaneCard() {
         <Figure value={linkSpeed(link.speedMbit, lang) ?? "–"} caption={t("sfp.speed")} />
         <Stat
           label={t("sfp.modeNow")}
-          value={activeName ? t(activeName) : (laneMode(live) ?? "–")}
-          sub={l?.choice === "auto" ? t("sfp.foundByAuto") : undefined}
+          value={activeMode ? t(activeMode.label) : (laneMode(live) ?? "–")}
+          sub={
+            l?.choice === "auto"
+              ? t("sfp.foundByAuto")
+              : activeMode?.an != null
+                ? t(activeMode.an ? "sfp.withAn" : "sfp.withoutAn")
+                : undefined
+          }
         />
         <Stat label={t("sfp.mtu")} value={sfp?.mtu ?? "–"} />
         <Stat
@@ -85,7 +134,7 @@ function LaneCard() {
         >
           <span className="text-sm">
             {t("sfp.trial", {
-              mode: t(MODES.find((m) => m.id === l.trial?.mode)?.label ?? "sfp.modeAuto"),
+              mode: modeName(MODES.find((m) => m.id === l.trial?.mode)),
               left: left ?? "…",
             })}
           </span>
@@ -110,24 +159,32 @@ function LaneCard() {
         </div>
       ) : (
         <>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {/* The search across, then a row for each speed: without negotiation, with it. */}
+          <div className="grid gap-2 sm:grid-cols-2">
             {MODES.map((m) => (
               <label
                 key={m.id}
                 title={t(m.hint)}
-                className={`flex items-center gap-2 rounded-box border px-3 py-2 ${m.ready ? "cursor-pointer" : "opacity-55"} ${chosen === m.id ? "border-primary bg-primary/5" : "border-base-300"}`}
+                className={`flex cursor-pointer items-center gap-2 rounded-box border px-3 py-2 ${m.id === "auto" ? "sm:col-span-2" : ""} ${chosen === m.id ? "border-primary bg-primary/5" : "border-base-300"}`}
               >
                 <input
                   type="radio"
                   name="lane"
                   className="radio radio-sm radio-primary"
                   checked={chosen === m.id}
-                  disabled={!m.ready || !l}
+                  disabled={!l}
                   onChange={() => setPick(m.id)}
                 />
-                <span className="text-sm font-medium">{t(m.label)}</span>
+                <span className="grid min-w-0 flex-1 leading-tight">
+                  <span className="text-sm font-medium">{t(m.label)}</span>
+                  {m.standard && (
+                    <span className="text-xs whitespace-nowrap text-base-content/60">
+                      {m.standard} · {t(m.an ? "sfp.withAn" : "sfp.withoutAn")}
+                    </span>
+                  )}
+                </span>
+                {!m.tested && <Badge tone="neutral">{t("sfp.untested")}</Badge>}
                 {m.id === active && <Badge tone="good">{t("sfp.modeActive")}</Badge>}
-                {!m.ready && <Badge tone="neutral">{t("internet.soon")}</Badge>}
               </label>
             ))}
           </div>
@@ -321,7 +378,7 @@ export function SfpPage() {
   return (
     <Page title={t("sfp.title")}>
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(min-content,1fr)]">
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] xl:items-start">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           <LaneCard />
           <MgmtCard />
         </div>

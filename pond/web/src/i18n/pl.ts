@@ -741,24 +741,25 @@ export const pl: Dictionary = {
     modeActive: "teraz",
     modeAuto: "Automatycznie",
     modeAutoHint:
-      "Wkładka próbuje po kolei 2500BASE-X i 1000BASE-X (z negocjacją i bez) i zostaje przy tym, który złapie host.",
-    mode2500: "2500BASE-X",
-    mode2500Hint: "2,5 Gb/s, bez negocjacji w paśmie. Dla portów 2,5G, np. 10G SFP+ w trybie 2,5G.",
-    mode1000an: "1000BASE-X z negocjacją",
-    mode1000anHint: "1 Gb/s z negocjacją w paśmie (clause 37), jak zwykły port SFP 1G.",
-    mode1000: "1000BASE-X bez negocjacji",
-    mode1000Hint: "1 Gb/s na sztywno, dla portów, które nie negocjują.",
-    modeSgmii: "SGMII",
-    modeSgmiiHint:
-      "Do 1 Gb/s z negocjacją SGMII. Chip go ma; sterownik dostanie go po pomiarze w labie.",
-    modeHsgmii: "HSGMII",
-    modeHsgmiiHint:
-      "2,5 Gb/s w odmianie SGMII. Chip go ma; sterownik dostanie go po pomiarze w labie.",
+      "Wkładka sama próbuje po kolei 2,5G bez negocjacji i 1G z negocjacją i bez niej, i zostaje przy tym, który przyjmie host. 2,5G z negocjacją trzeba wybrać ręcznie.",
+    mode2500: "2,5G",
+    mode2500Hint:
+      "2,5 Gb/s bez negocjacji, jak większość portów 2,5G, np. 10G SFP+ w trybie 2,5G. Sprawdzony z hostem.",
+    mode2500anHint:
+      "2,5 Gb/s z negocjacją (clause 37): po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Dla hosta, który jej przy 2,5G wymaga. Jeszcze niesprawdzony z hostem.",
+    mode1000: "1G",
+    mode1000Hint:
+      "1 Gb/s bez negocjacji, dla portów, które jej nie robią. Jeszcze niesprawdzony z hostem.",
+    mode1000anHint:
+      "1 Gb/s z negocjacją (clause 37), jak większość portów SFP 1G: po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Sprawdzony z hostem.",
+    withAn: "z negocjacją",
+    withoutAn: "bez negocjacji",
+    untested: "niesprawdzony",
     modeTry: "Przełącz na próbę",
     modeConfirm:
-      "Przełączyć linię SFP na wybrany tryb? Jeśli urządzenie hosta go nie obsłuży, łącze zniknie razem z panelem; wkładka sama wróci do obecnego trybu po 60 s, jeśli nie potwierdzisz zmiany.",
+      "Przełączyć linię SFP na wybrany tryb? Jeśli urządzenie hosta go nie obsłuży, łącze zniknie razem z panelem; wkładka sama wróci do obecnego trybu po 90 s, jeśli nie potwierdzisz zmiany.",
     modeSafety:
-      "Zmiana trybu działa na próbę: zostaje tylko wtedy, gdy potwierdzisz ją z panelu w ciągu minuty. Inaczej wkładka sama wraca do poprzedniego trybu.",
+      "Zmiana trybu działa na próbę: zostaje tylko wtedy, gdy potwierdzisz ją z panelu w ciągu 90 s. Inaczej wkładka sama wraca do poprzedniego trybu.",
     modeUnavailable:
       "Ta wkładka nie pozwala jeszcze zmieniać trybu z panelu (wymaga aktualizacji oprogramowania).",
     trial:
