@@ -843,7 +843,7 @@ struct rtl9602c_field {
 /*
  * The ingress actions that forward a message through the transparent clock,
  * to the ports whose transparent-clock bit is set, and that do so and copy it
- * to the CPU as well (measured upstream).
+ * to the CPU as well (measured both ways between the SFP and PON ports).
  */
 #define RTL9602C_PTP_ACTION_FORWARD_TC		2
 #define RTL9602C_PTP_ACTION_FORWARD_TC_MIRROR	3
@@ -868,6 +868,7 @@ enum rtl9602c_ptp_tc {
 #define RTL9602C_PTP_SLOT_DELAY_REQ		1
 #define RTL9602C_PTP_SLOT_PDELAY_REQ_2STEP	2
 #define RTL9602C_PTP_SLOT_PDELAY_RESP		3
+#define RTL9602C_PTP_SLOT_PDELAY_RESP_FUP	6
 #define RTL9602C_PTP_SLOT_SYNC_1STEP		8
 #define RTL9602C_PTP_SLOT_PDELAY_REQ		9
 

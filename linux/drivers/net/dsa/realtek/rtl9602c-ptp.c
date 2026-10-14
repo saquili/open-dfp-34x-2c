@@ -376,6 +376,7 @@ static void rtl9602c_ptp_tx_reports(struct rtl9602c_priv *p, bool on, bool onest
 					 BIT(RTL9602C_PTP_SLOT_SYNC_1STEP))
 #define RTL9602C_PTP_PDELAY_SLOTS	(BIT(RTL9602C_PTP_SLOT_PDELAY_REQ_2STEP) | \
 					 BIT(RTL9602C_PTP_SLOT_PDELAY_RESP) |	\
+					 BIT(RTL9602C_PTP_SLOT_PDELAY_RESP_FUP) | \
 					 BIT(RTL9602C_PTP_SLOT_PDELAY_REQ))
 #define RTL9602C_PTP_ALL_SLOTS		GENMASK(RTL9602C_PTP_MSG_TYPES - 1, 0)
 
@@ -434,16 +435,33 @@ static void rtl9602c_ptp_tc_apply(struct rtl9602c_priv *p, bool rx_any)
 }
 
 /*
+ * The state the PTP block starts from: no port enabled, no ingress action, no
+ * transparent-clock bit and no path delay added to a correction.  The CPU
+ * port's enable and the egress actions follow transmit stamping
+ * (rtl9602c_ptp_tx_reports()).
+ */
+static void rtl9602c_ptp_block_reset(struct rtl9602c_priv *p)
+{
+	int port;
+
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
+		if (port != RTL9602C_PORT_CPU)
+			rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1, 0);
+	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, 0);
+	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, 0);
+	rtl9602c_w(p, RTL9602C_PTP_TRANSPARENT_PORTS, 0);
+}
+
+/*
  * Write the PTP block from the timestamping configuration of the ports and the
- * transparent clock.  Without the clock: the departure reports and one-step
- * actions of rtl9602c_ptp_tx_reports(); and a port that stamps what it
- * receives takes the PTP messages that arrive on it to the CPU only, as a
- * clock behind it answers its peer itself and a copy the switch forwarded
- * would reach the next port unstamped and uncorrected: its PTP enable is set
- * and every message type's ingress action traps while any port stamps; an
- * action acts on a message only when the PTP enable of the port the message
- * arrives by is set, and a message from the CPU, which names its port, is not
- * trapped (measured).
+ * transparent clock.  Without the clock the switch forwards PTP messages as
+ * other frames, whatever the ports stamp: the ingress actions are off, and so
+ * are the PTP enables of the ports other than the CPU's, as an action acts on a
+ * message only when the PTP enable of the port it arrives by is set
+ * (measured), and the departure reports and one-step actions of
+ * rtl9602c_ptp_tx_reports() must not change the messages the switch forwards.
+ * The CPU's copies of the messages that reach it carry their stamps whatever
+ * the actions and enables say (see rtl9602c_port_hwtstamp_set()).
  *
  * Context: under @p->ptp_cfg_lock.
  */
@@ -469,34 +487,8 @@ static void rtl9602c_ptp_apply(struct rtl9602c_priv *p)
 		return;
 	}
 
-	rtl9602c_w(p, RTL9602C_PTP_TRANSPARENT_PORTS, 0);
-	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, 0);
+	rtl9602c_ptp_block_reset(p);
 	rtl9602c_ptp_tx_reports(p, tx_on, onestep, p2p);
-	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS,
-		   rx_any ? rtl9602c_ptp_actions(RTL9602C_PTP_ALL_SLOTS,
-						 RTL9602C_PTP_ACTION_TRAP) : 0);
-	for (i = 0; i < RTL9602C_NUM_PORTS; i++)
-		if (i != RTL9602C_PORT_CPU)
-			rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * i, 1,
-				     p->hwtstamp[i].rx_filter != HWTSTAMP_FILTER_NONE);
-}
-
-/*
- * The state the PTP block starts from: no port enabled, no ingress action, no
- * transparent-clock bit and no path delay added to a correction.  The CPU
- * port's enable and the egress actions follow transmit stamping
- * (rtl9602c_ptp_tx_reports()).
- */
-static void rtl9602c_ptp_block_reset(struct rtl9602c_priv *p)
-{
-	int port;
-
-	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
-		if (port != RTL9602C_PORT_CPU)
-			rtl9602c_rmw(p, RTL9602C_PTP_PORT_EN + 4 * port, 1, 0);
-	rtl9602c_w(p, RTL9602C_PTP_ACTION_INGRESS, 0);
-	rtl9602c_w(p, RTL9602C_PTP_PATH_DELAY, 0);
-	rtl9602c_w(p, RTL9602C_PTP_TRANSPARENT_PORTS, 0);
 }
 
 /*

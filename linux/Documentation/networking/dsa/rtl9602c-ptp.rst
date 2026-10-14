@@ -1181,7 +1181,8 @@ egress action that adds the time from the message's arrival to its departure
 to its correctionField (3). End-to-end, every event message is corrected;
 peer-to-peer, only the Syncs, which also get the path delay of the parameter
 ``ptp_path_delay_ns`` (``RTL9602C_PTP_PATH_DELAY``), and the peer delay
-messages go to the CPU, which answers them per link. While a port stamps what
+messages, Pdelay_Req, Pdelay_Resp and Pdelay_Resp_Follow_Up, go to the CPU
+only, which answers them per link. While a port stamps what
 it receives, every message is forwarded and copied to the CPU (ingress action
 3). The egress actions are the clock's, so the clock and transmit stamping
 exclude each other: the parameter is refused with ``-EBUSY`` while a port
@@ -1226,11 +1227,36 @@ so the wait behind other frames there is.
        forwarded and corrected.
      - M
      - As above, through the devlink parameters.
-   * - With the clock off and a port stamping what it receives, PTP messages
-       arriving on that port reached no other port: Syncs to the lab OLT's
-       side were trapped while other frames passed.
+   * - Peer-to-peer, a Pdelay_Resp_Follow_Up goes to the CPU only, as the
+       other peer delay messages: slot 6 (``RTL9602C_PTP_SLOT_PDELAY_RESP_FUP``)
+       is among ``RTL9602C_PTP_PDELAY_SLOTS``. A Follow_Up and a Delay_Req are
+       forwarded as other frames.
      - M
-     - As above, with timed's filter on ``sfp``.
+     - Upstream, three of each: no Pdelay_Resp_Follow_Up or Pdelay_Req reached
+       the lab OLT's side and three of each came up with reason 240, while
+       all Follow_Ups did. With slot 6's ingress action cleared by hand, the
+       three Pdelay_Resp_Follow_Ups reached it and none came up.
+   * - With the clock off, what a port stamps changes no forwarding: the
+       ingress actions and the enables of the wire ports are off. Syncs,
+       Follow_Ups and Announces from the SFP side reached the lab OLT's side,
+       unicast and to 01-1B-19-00-00-00, each once, and the CPU took a stamped
+       copy of each that the switch sent it as well (reason 240). With the
+       clock on and a port stamping, each message reached the far side once,
+       corrected, and its copy came up with reason 241.
+     - M
+     - As above, with timed's filter on ``sfp``: 3 to 5 of each, all
+       received once. Before, every ingress action trapped while a port
+       stamped, and none reached the far side. Letting the bridge forward the
+       trapped messages could not serve: DSA hands the driver the event
+       messages only (``ptp_classify_raw()``), and the Follow_Ups and
+       Announces stayed at the CPU.
+   * - A peer delay message to the nearest-bridge address 01-80-C2-00-00-0E
+       stays at the CPU, stamped, whether or not the clock is on: the
+       reserved-multicast control of that address takes it there (see the
+       *bridging* page).
+     - M
+     - Three Pdelay_Reqs from the SFP side: none reached the lab OLT's side,
+       and a packet socket on ``sfp`` received all three with hardware stamps.
    * - Downstream, from the PON port to the SFP port, the clock corrects as
        upstream. End-to-end, Syncs of both kinds, Delay_Reqs and Pdelay_Reqs
        carried 1680 to 1792 ns, Follow_Ups 0, and every one 0 with the clock
@@ -1349,15 +1375,15 @@ The switch has a PTP enable for each port, a transparent-clock bit for each
 port, and an ingress and an egress action for each of ten message types. The
 driver writes the egress actions of the event messages and the CPU port's
 enable while transmit stamping is on (see "Transmit timestamps"), and the
-enable of a port that stamps what it receives together with the ingress
-actions (``rtl9602c_ptp_rx_trap()``): while any port does, every message
-type's ingress action takes the message to the CPU only, and acts on the
-messages arriving by an enabled port. A clock behind such a port answers its
-peer itself, and a copy the switch forwarded would reach the next port
-unstamped and uncorrected. At registration and teardown
-``rtl9602c_ptp_block_reset()`` clears every enable but the CPU port's, the
-ingress actions and the path delay. The receive stamping does not depend on
-them (see "Receive timestamps"). The ``ptpstat`` view prints them all. The
+enables of the wire ports, their transparent-clock bits and the ingress
+actions only for the transparent clock (see "The transparent clock"). An
+action acts on the messages arriving by an enabled port. Without the clock
+``rtl9602c_ptp_apply()`` leaves them as ``rtl9602c_ptp_block_reset()`` does,
+which clears every enable but the CPU port's, the ingress actions, the
+transparent-clock bits and the path delay, also at registration and teardown:
+the switch then forwards PTP messages as other frames, whatever the ports
+stamp. The receive stamping does not depend on them (see "Receive
+timestamps"). The ``ptpstat`` view prints them all. The
 message types are numbered in the order of the action registers, which is not
 the ``messageType`` field of the PTP header (IEEE 1588-2008, clause 13.3.2.2).
 
@@ -1371,21 +1397,20 @@ the ``messageType`` field of the PTP header (IEEE 1588-2008, clause 13.3.2.2).
    * - ``RTL9602C_PTP_PORT_EN`` = ``0x0111e8`` + 4 x port, bit 0: a per-port
        PTP enable. The driver sets it on the CPU port while transmit stamping
        is on, and a message from the CPU gets its egress action only then; and
-       on a port whose receive filter is not ``HWTSTAMP_FILTER_NONE``.
+       on the user ports while the transparent clock is on.
        ``ptpstat`` prints it (``enabled``). Receive stamping does not depend
        on it.
      - M
      - Set on every port and read back per port in ``ptpstat`` at the 4-byte
-       stride; after boot, with timed's filter on ``sfp``, ports 0 and 3 read
-       1.
+       stride; after boot, with timed's filter on ``sfp`` and the clock off,
+       only port 3 reads 1, and Syncs from the SFP side come up stamped.
    * - With every ingress action at 1 (``RTL9602C_PTP_ACTION_TRAP``) and the
        enable of port 0 set, Syncs from the far end reached the CPU with
        their stamps, and the CPU's own event messages still left: two-step
        stamps (eight of Sync, Delay_Req and both Pdelay_Req), one-step Syncs
-       and one-step Pdelay_Resp all as without it. That a trapped message is
-       forwarded to no other port is not exercised: in VLAN 4094 the CPU is
-       the only other member.
-     - M, I
+       and one-step Pdelay_Resp all as without it. A trapped message reaches
+       no other port (see "The transparent clock").
+     - M
      - Three Syncs received, eight two-step stamps, three one-step Syncs and
        six one-step Pdelay_Resp on the VLAN 4094 interface, with the
        registers read in ``ptpstat``.
