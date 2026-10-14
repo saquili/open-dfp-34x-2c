@@ -485,6 +485,23 @@ void *pon_device_get_drvdata(struct pon_device *pon);
  */
 bool pon_gem_rx(struct pon_device *pon, unsigned int flow, struct sk_buff *skb);
 /**
+ * pon_gem_rx_vlan() - deliver a downstream frame by its VLAN
+ * @pon: the PON device
+ * @skb: the frame, with skb->data at its Ethernet header
+ *
+ * For a frame whose flow the MAC cannot tell, which it would otherwise leave
+ * to the lower. A frame with a VLAN tag goes, as pon_gem_rx() delivers it, to
+ * the one GEM interface with a VLAN device of its VID and protocol directly
+ * over it, where that device receives it. A frame without a VLAN tag, or whose
+ * VLAN no GEM interface or more than one has such a device for, is not
+ * delivered.
+ *
+ * Context: the MAC's receive path, as for netif_receive_skb().
+ * Return: true when the frame went to a GEM interface, as for pon_gem_rx();
+ * false when it is still the caller's.
+ */
+bool pon_gem_rx_vlan(struct pon_device *pon, struct sk_buff *skb);
+/**
  * pon_gem_netdev_flow() - the flow of a GEM interface
  * @dev: any network device
  * @flow: set to the flow of @dev when it is a GEM interface
@@ -594,6 +611,12 @@ static inline void *pon_device_get_drvdata(struct pon_device *pon)
 
 static inline bool pon_gem_rx(struct pon_device *pon, unsigned int flow,
 			      struct sk_buff *skb)
+{
+	return false;
+}
+
+static inline bool pon_gem_rx_vlan(struct pon_device *pon,
+				   struct sk_buff *skb)
 {
 	return false;
 }

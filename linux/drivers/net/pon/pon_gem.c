@@ -23,6 +23,7 @@
 #include <linux/if_vlan.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
+#include <linux/unaligned.h>
 #include <net/dst_metadata.h>
 #include <net/rtnetlink.h>
 #include <net/switchdev.h>
@@ -136,6 +137,54 @@ bool pon_gem_rx(struct pon_device *pon, unsigned int flow, struct sk_buff *skb)
 	return true;
 }
 EXPORT_SYMBOL_GPL(pon_gem_rx);
+
+bool pon_gem_rx_vlan(struct pon_device *pon, struct sk_buff *skb)
+{
+	struct net_device *dev, *vdev, *found = NULL;
+	bool taken = false;
+	unsigned int flow;
+	__be16 proto;
+	u16 vid;
+
+	if (skb->len < VLAN_ETH_HLEN)
+		return false;
+	proto = get_unaligned((__be16 *)(skb->data + 2 * ETH_ALEN));
+	if (!eth_type_vlan(proto))
+		return false;
+	vid = get_unaligned_be16(skb->data + 2 * ETH_ALEN + ETH_TLEN) &
+	      VLAN_VID_MASK;
+
+	/* The flow table is published under RCU (pon_gem_newlink()). */
+	rcu_read_lock();
+	for (flow = 0; flow < pon->num_flows; flow++) {
+		dev = rcu_dereference(pon->gem[flow]);
+		if (!dev)
+			continue;
+		/*
+		 * Only a VLAN device over the GEM interface itself: the lookup
+		 * also finds one over the bridge or bond the interface is a
+		 * port of, which every port of it would share.
+		 */
+		vdev = __vlan_find_dev_deep_rcu(dev, proto, vid);
+		if (!vdev || vlan_dev_real_dev(vdev) != dev)
+			continue;
+		/* A VLAN that two GEM interfaces carry names neither. */
+		if (found) {
+			rcu_read_unlock();
+			return false;
+		}
+		found = dev;
+	}
+
+	if (found) {
+		const struct pon_gem *gem = netdev_priv(found);
+
+		taken = pon_gem_rx(pon, gem->flow, skb);
+	}
+	rcu_read_unlock();
+	return taken;
+}
+EXPORT_SYMBOL_GPL(pon_gem_rx_vlan);
 
 /*
  * A GEM interface does not open while its lower is administratively down. So

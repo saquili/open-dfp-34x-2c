@@ -1048,6 +1048,21 @@ Transmit and receive
      - 80 of 80 downstream frames are delivered to a downstream-only multicast
        GEM interface. A routed-traffic check: downstream frames reach the GEM
        interface.
+   * - A frame whose flow the MAC cannot tell, which it would otherwise leave
+       to the lower, it may give to ``pon_gem_rx_vlan()``: a frame with a VLAN
+       tag goes, as ``pon_gem_rx()`` delivers it, to the one GEM interface
+       with a VLAN device of its VID and protocol directly over it, where that
+       device receives it. A frame without a VLAN tag, or whose VLAN no GEM
+       interface or more than one has such a device for, stays the MAC's. A
+       VLAN device over a bridge or bond the GEM interface is a port of does
+       not count, as every port of it would share it. The lookup walks the
+       flow table under RCU, which the few frames the MAC cannot place
+       afford.
+     - M
+     - PTP messages in VLAN 2002 from beyond the OLT, which the RTL9602C MAC
+       cannot place, reached a VLAN 2002 device of one GEM interface. With a
+       second VLAN 2002 device on another GEM interface they reached the
+       lower instead, and with it deleted the first device again.
    * - Timestamping of a GEM interface is its lower's, as for a VLAN device:
        ``get_ts_info`` reports the lower's capabilities and PTP clock, and
        ``ndo_hwtstamp_get`` and ``ndo_hwtstamp_set`` read and set the lower's
@@ -2004,8 +2019,8 @@ Registration and lifetime
        from the host.
    * - With ``CONFIG_PON`` off, the registration and creation calls return
        ``ERR_PTR(-EOPNOTSUPP)``, ``pon_omci_port_rx()`` frees the message,
-       ``pon_gem_rx()`` and ``pon_gem_netdev_flow()`` return false, and the
-       rest do nothing. So a MAC driver builds either way.
+       ``pon_gem_rx()``, ``pon_gem_rx_vlan()`` and ``pon_gem_netdev_flow()``
+       return false, and the rest do nothing. So a MAC driver builds either way.
      - I
      - Design choice, not exercised: a build without ``CONFIG_PON``.
 
