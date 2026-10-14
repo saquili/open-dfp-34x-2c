@@ -169,13 +169,13 @@ teardown
 echo "the time by NTP from the router at the other end of the management link, by PTP on its interface"
 setup
 # Where timed reads the OLT's date and tells its state.
-FILES="-o $ONU_ROOT/run/omcid/clock -s $ONU_ROOT/run/timed/state"
+FILES="-o $ONU_ROOT/run/omcid/clock -t $ONU_ROOT/run/omcid/tod -s $ONU_ROOT/run/timed/state"
 run time
-check '[ $rc -eq 0 ] && logged "timed -n 198.51.100.1 -p mgmt $FILES"'
+check '[ $rc -eq 0 ] && logged "timed -n 198.51.100.1 -p mgmt -M $FILES"'
 check '[ -s "$ONU_ROOT/run/timed.pid" ]'
 # It runs as the account ntp with the powers to set the clock, to listen for
 # PTP over layer 2 and on its UDP ports below 1024, and no other.
-check 'logged "onu-drop -c sys_time,net_raw,net_bind_service ntp timed -n 198.51.100.1 -p mgmt $FILES"'
+check 'logged "onu-drop -c sys_time,net_raw,net_bind_service ntp timed -n 198.51.100.1 -p mgmt -M $FILES"'
 # The PHC is the group ntp's, and the interface's hardware stamps are turned
 # on as root, before timed runs as ntp.
 check 'logged "chown :ntp $ONU_ROOT/dev/ptp0"'
@@ -185,19 +185,19 @@ for pair in 198.51.100.1/30:198.51.100.2 198.51.100.6/30:198.51.100.5 \
 	198.51.100.4/31:198.51.100.5 198.51.100.5/31:198.51.100.4 198.051.100.002/30:198.51.100.1; do
 	sed -i.bak "s#^ADDRESS=.*#ADDRESS=${pair%%:*}#" "$ONU_ROOT/run/onu-mgmt"
 	run time
-	check 'logged "timed -n ${pair#*:} -p mgmt $FILES"'
+	check 'logged "timed -n ${pair#*:} -p mgmt -M $FILES"'
 done
 teardown
 
 echo "no router that is known: PTP alone, on the management link's interface"
 setup
-FILES="-o $ONU_ROOT/run/omcid/clock -s $ONU_ROOT/run/timed/state"
+FILES="-o $ONU_ROOT/run/omcid/clock -t $ONU_ROOT/run/omcid/tod -s $ONU_ROOT/run/timed/state"
 for address in 198.51.100.2/24 198.51.100.0/30 198.51.100.3/30 198.51.100.300/30 198.51.100/30; do
 	sed -i.bak "s#^ADDRESS=.*#ADDRESS=$address#" "$ONU_ROOT/run/onu-mgmt"
 	run time
 	check '[ $rc -eq 0 ]'
 done
-check '[ "$(grep -c -x -F "timed -p mgmt $FILES" "$LOG")" -eq 5 ] && ! grep -q "^sleep" "$LOG"'
+check '[ "$(grep -c -x -F "timed -p mgmt -M $FILES" "$LOG")" -eq 5 ] && ! grep -q "^sleep" "$LOG"'
 teardown
 
 echo "no router and no management link: a wait of an hour, then a failure"
@@ -210,11 +210,11 @@ teardown
 
 echo "the time server the settings name, read as data"
 setup
-FILES="-o $ONU_ROOT/run/omcid/clock -s $ONU_ROOT/run/timed/state"
+FILES="-o $ONU_ROOT/run/omcid/clock -t $ONU_ROOT/run/omcid/tod -s $ONU_ROOT/run/timed/state"
 sed -i.bak "s#^ADDRESS=.*#ADDRESS=198.51.100.2/24#" "$ONU_ROOT/run/onu-mgmt"
 printf 'HOSTNAME=stick\nNTP_SERVER=192.0.2.123\n' >"$ONU_ROOT/run/onu-system"
 run time
-check 'logged "timed -n 192.0.2.123 -p mgmt $FILES"'
+check 'logged "timed -n 192.0.2.123 -p mgmt -M $FILES"'
 rm "$ONU_ROOT/run/onu-mgmt"
 printf 'NTP_SERVER=$(reboot)\n' >"$ONU_ROOT/run/onu-system"
 run time

@@ -40,11 +40,15 @@
 #                   stick's settings name (NTP_SERVER of /run/onu-system) or,
 #                   without one, from the router at the other end of the
 #                   management link; by PTP from a master on the management
-#                   link's interface; and from the date the OLT gave, which
+#                   link's interface; by the PON, once the OLT gave the PTP
+#                   hardware clock its time of day, which omcid tells in
+#                   /run/omcid/tod; and from the date the OLT gave, which
 #                   omcid writes in /run/omcid/clock, when the host gives none.
 #                   Where the interface stamps PTP in hardware, timed steers
 #                   its PTP hardware clock too, which is the group ntp's, and
-#                   the stamps are turned on first, as root (timed -H).
+#                   the stamps are turned on first, as root (timed -H); and
+#                   it is the PTP master on the management link while it hears
+#                   no better clock there and has a time worth giving (-M).
 #                   The stick has no way of its own to the internet. Its state
 #                   is /run/timed/state, which the status daemon reads
 #
@@ -161,8 +165,8 @@ if [ "${1:-}" = time ]; then
 	done
 	[ -z "$iface" ] || timed -H "$iface" || :
 	echo $$ >"$RUN/timed.pid"
-	exec "$DROP" -c sys_time,net_raw,net_bind_service ntp timed ${server:+-n "$server"} ${iface:+-p "$iface"} \
-		-o "$RUN/omcid/clock" -s "$RUN/timed/state"
+	exec "$DROP" -c sys_time,net_raw,net_bind_service ntp timed ${server:+-n "$server"} ${iface:+-p "$iface" -M} \
+		-o "$RUN/omcid/clock" -t "$RUN/omcid/tod" -s "$RUN/timed/state"
 fi
 
 mgmt=$(field ADDRESS)
