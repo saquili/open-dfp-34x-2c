@@ -29,6 +29,8 @@ setup() {
 	# The OMCI port of the PON driver, and chown, which the group of it needs.
 	mkdir -p "$ONU_ROOT/dev"
 	: >"$ONU_ROOT/dev/pon0omci0"
+	# The PTP hardware clock, which timed steers.
+	: >"$ONU_ROOT/dev/ptp0"
 	for c in dropbear pond getty login omcid sleep timed reboot chown; do
 		printf '#!/bin/sh\necho "%s $*" >>"$LOG"\n' "$c" >"$T/bin/$c"
 	done
@@ -174,6 +176,10 @@ check '[ -s "$ONU_ROOT/run/timed.pid" ]'
 # It runs as the account ntp with the powers to set the clock, to listen for
 # PTP over layer 2 and on its UDP ports below 1024, and no other.
 check 'logged "onu-drop -c sys_time,net_raw,net_bind_service ntp timed -n 198.51.100.1 -p mgmt $FILES"'
+# The PHC is the group ntp's, and the interface's hardware stamps are turned
+# on as root, before timed runs as ntp.
+check 'logged "chown :ntp $ONU_ROOT/dev/ptp0"'
+check '[ "$(grep -n -x -F "timed -H mgmt" "$LOG" | cut -d: -f1)" -lt "$(grep -n "^onu-drop .* ntp timed" "$LOG" | cut -d: -f1)" ]'
 : >"$LOG"
 for pair in 198.51.100.1/30:198.51.100.2 198.51.100.6/30:198.51.100.5 \
 	198.51.100.4/31:198.51.100.5 198.51.100.5/31:198.51.100.4 198.051.100.002/30:198.51.100.1; do

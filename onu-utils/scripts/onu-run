@@ -42,6 +42,9 @@
 #                   management link; by PTP from a master on the management
 #                   link's interface; and from the date the OLT gave, which
 #                   omcid writes in /run/omcid/clock, when the host gives none.
+#                   Where the interface stamps PTP in hardware, timed steers
+#                   its PTP hardware clock too, which is the group ntp's, and
+#                   the stamps are turned on first, as root (timed -H).
 #                   The stick has no way of its own to the internet. Its state
 #                   is /run/timed/state, which the status daemon reads
 #
@@ -65,6 +68,8 @@ LIB=${ONU_ROOT:-}/usr/lib/onu
 DROP=$LIB/onu-drop
 # The OMCI port of the PON driver, which omcid opens.
 OMCI_PORT=${ONU_ROOT:-}/dev/pon0omci0
+# The PTP hardware clocks, /dev/ptp0 and on, which timed steers.
+PHC=${ONU_ROOT:-}/dev/ptp
 
 # The console: a login prompt, or on a bench that says so root's shell.
 # board.conf is read as data, never run.
@@ -146,6 +151,15 @@ if [ "${1:-}" = time ]; then
 	fi
 	[ -n "$server" ] ||
 		echo "onu-run: no NTP server: NTP_SERVER is not set and the management link is no /30 or /31" >&2
+	# The PTP hardware clocks are the group ntp's, as the driver makes them
+	# root's. The interface's hardware stamps are turned on here, as root,
+	# which timed itself may not; an interface without them leaves timed its
+	# software stamps, and so does a failure here.
+	for phc in "$PHC"[0-9]*; do
+		[ -e "$phc" ] || continue
+		{ chown :ntp "$phc" && chmod 660 "$phc"; } || echo "onu-run: timed cannot steer $phc" >&2
+	done
+	[ -z "$iface" ] || timed -H "$iface" || :
 	echo $$ >"$RUN/timed.pid"
 	exec "$DROP" -c sys_time,net_raw,net_bind_service ntp timed ${server:+-n "$server"} ${iface:+-p "$iface"} \
 		-o "$RUN/omcid/clock" -s "$RUN/timed/state"

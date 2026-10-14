@@ -548,7 +548,9 @@ by its whole path where procd starts it.
    router at the other end of the management link, the other address of its
    /30 or /31, by PTP on the management link's interface, and from the date
    the OLT gave (``/run/omcid/clock``) when the host gives none, as the stick
-   has no way of its own to the internet; and the console's login prompt, or,
+   has no way of its own to the internet, with the hardware stamps of that
+   interface turned on first (``timed -H``, as root) and the PTP hardware
+   clocks ``/dev/ptp*`` given to the group ``ntp``; and the console's login prompt, or,
    on a bench whose ``/etc/board.conf`` has ``CONSOLE_AUTOLOGIN=root``, root's
    shell without the password::
 
