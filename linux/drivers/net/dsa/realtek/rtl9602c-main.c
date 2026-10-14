@@ -1674,8 +1674,8 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 	 * -02, -03 and -0E (IEEE 802.1Q Table 8-1), out of storm control, so
 	 * that a broadcast or unknown-multicast limit does not police them.
 	 * Read-modify-write, since _01 and _02 carry an action from reset.
-	 * That the registers after _00 serve the addresses their names give
-	 * is not verified.
+	 * That _01, _02 and _03 serve the addresses their names give is not
+	 * verified.
 	 */
 	rtl9602c_rmw(p, RTL9602C_RSVDMC_CTRL_00, 0,
 		     RTL9602C_RSVDMC_CTRL_STORM_EXEMPT);
@@ -1687,6 +1687,16 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 		     RTL9602C_RSVDMC_CTRL_STORM_EXEMPT);
 	rtl9602c_rmw(p, RTL9602C_RSVDMC_CTRL_0E, 0,
 		     RTL9602C_RSVDMC_CTRL_STORM_EXEMPT);
+
+	/*
+	 * Frames to the nearest-bridge address, 01-80-C2-00-00-0E, go to the
+	 * CPU only: no bridge forwards them (IEEE 802.1Q 8.6.3), and the
+	 * Linux bridge, which receives them, does not either. The peer delay
+	 * messages of PTP (IEEE 1588-2008 annex F) and LLDP are sent to it.
+	 */
+	rtl9602c_rmw(p, RTL9602C_RSVDMC_CTRL_0E, RTL9602C_RSVDMC_CTRL_ACTION,
+		     FIELD_PREP(RTL9602C_RSVDMC_CTRL_ACTION,
+				RTL9602C_RSVDMC_CTRL_ACTION_TRAP));
 
 	/*
 	 * Loop detection off: a loaded driver must not start sending probes

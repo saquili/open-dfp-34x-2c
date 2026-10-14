@@ -1965,7 +1965,10 @@ Reserved multicast addresses
 The switch has a control for each of nineteen well-known destination addresses,
 and one global word. A control says what the switch does with frames to its
 address before it forwards them. The driver uses one bit of five of them, the
-exemption from storm control; the ``rma`` view displays the rest. Storm control
+exemption from storm control, and the action of one: frames to 01-80-C2-00-00-0E
+go to the CPU only, as no bridge forwards them (IEEE 802.1Q 8.6.3) and the Linux
+bridge, which receives them, does not either. The ``rma`` view displays the
+rest. Storm control
 itself is on the *acl-qos* page. The registers are named after the last byte of
 the address 01:80:c2:00:00:xx that they are taken to control; the suffixes skip,
 so an address is not the register's position in the block.
@@ -2105,23 +2108,34 @@ so an address is not the register's position in the block.
        port access entity, -0E the nearest-bridge address (LLDP).
      - P
      - IEEE 802.1Q-2022, clause 8.6.3, Table 8-1.
-   * - The registers other than ``_00`` control the address their suffix names.
-       The two non-zero reset values falling on the pause and slow-protocol
-       entries fit.
+   * - ``RTL9602C_RSVDMC_CTRL_0E`` controls frames to 01-80-C2-00-00-0E, and
+       its ``RTL9602C_RSVDMC_CTRL_ACTION`` (bits 5:4) says where they go: 0
+       forwards them as other frames, the CPU included; 1
+       (``RTL9602C_RSVDMC_CTRL_ACTION_TRAP``) takes them to the CPU only; 2
+       drops them; 3 forwards them but not to the CPU. A PTP message trapped
+       so keeps its timestamp tag (reason 240). In setup the driver writes 1.
+     - M
+     - Three Pdelay_Reqs to 01-80-C2-00-00-0E from a host on the SFP side, in
+       a VLAN bridged to the PON port, for each value: 0, all three reached
+       the lab OLT's side and the CPU; 1, the CPU only, a packet socket on
+       ``sfp`` receiving them with hardware stamps; 2, neither; 3, the lab
+       OLT's side only.
+   * - The registers other than ``_00`` and ``_0E`` control the address their
+       suffix names. The two non-zero reset values falling on the pause and
+       slow-protocol entries fit.
      - I
      - An exemption test as in the third row, for each address. The driver
-       depends on it for ``_01``, ``_02``, ``_03`` and ``_0E``.
-   * - ``RTL9602C_RSVDMC_CTRL_ACTION`` (bits 5:4),
+       depends on it for ``_01``, ``_02`` and ``_03``.
+   * - The action values mean the same on the other controls, whose actions
+       the driver leaves as reset leaves them.
        ``RTL9602C_RSVDMC_CTRL_KEEP_TAG`` (bit 2),
        ``RTL9602C_RSVDMC_CTRL_VLAN_BYPASS`` (bit 1),
        ``RTL9602C_RSVDMC_CTRL_ISOLATE_BYPASS`` (bit 0) and
        ``RTL9602C_RSVDMC_GLOBAL_CFG`` are only displayed (``rma`` columns
-       ``oper``, ``keep``, ``vleak``, ``isoleak``, and the ``cfg`` line). What
-       the four action values do and what the three flags and the global word
-       mean is unverified.
+       ``keep``, ``vleak``, ``isoleak``, and the ``cfg`` line); what the three
+       flags and the global word mean is unverified.
      - I
-     - Frames to 01:80:c2:00:00:00 with the action at each value, counted at the
-       CPU and at the host, would settle the action. Nothing depends on them.
+     - The test of ``_0E`` for each address. Nothing depends on them.
 
 VLAN tag operations
 ===================

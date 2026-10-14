@@ -1278,7 +1278,9 @@ enum rtl9602c_ptp_tc {
 
 /*
  * Controls for the reserved group addresses 01-80-C2-00-00-xx and the CDP
- * and SSTP ones; only _00 is verified to serve the address it names.
+ * and SSTP ones; only _00 and _0E are verified to serve the addresses they
+ * name. ACTION: 0 forward, the CPU included, 1 to the CPU only, 2 drop, 3
+ * forward but not to the CPU (measured on _0E).
  */
 #define RTL9602C_RSVDMC_CTRL_00		0x01c038
 #define RTL9602C_RSVDMC_CTRL_01		0x01c03c
@@ -1303,6 +1305,7 @@ enum rtl9602c_ptp_tc {
 
 /* Fields of each control; only STORM_EXEMPT is verified. */
 #define RTL9602C_RSVDMC_CTRL_ACTION		GENMASK(5, 4)
+#define RTL9602C_RSVDMC_CTRL_ACTION_TRAP	1
 #define RTL9602C_RSVDMC_CTRL_STORM_EXEMPT BIT(3)
 #define RTL9602C_RSVDMC_CTRL_KEEP_TAG	BIT(2)
 #define RTL9602C_RSVDMC_CTRL_VLAN_BYPASS		BIT(1)
