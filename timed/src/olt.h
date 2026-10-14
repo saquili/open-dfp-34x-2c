@@ -29,6 +29,12 @@
  */
 bool olt_parse(const char *text, size_t len, ns_t *utc, ns_t *at);
 
+/*
+ * The decimal number of at most @max after "KEY=" at the start of a line of
+ * @text, up to the line's end, into @out. False when there is none.
+ */
+bool olt_number(const char *text, size_t len, const char *key, int64_t max, int64_t *out);
+
 /* The local clock less the OLT's, at local time @real and monotonic time @mono. */
 ns_t olt_offset(ns_t utc, ns_t at, ns_t real, ns_t mono);
 

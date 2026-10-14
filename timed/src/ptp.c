@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The PTP slave. IEEE 1588-2008 gives the header (clause 13.3), the messages
- * (13.5 to 13.8) and the delay request-response mechanism (11.3):
+ * The PTP slave and master. IEEE 1588-2008 gives the header (clause 13.3), the
+ * messages (13.5 to 13.8) and the delay request-response mechanism (11.3):
  *
  *	t1 the master's time of sending the Sync, t2 the slave's of receiving it,
  *	t3 the slave's of sending the Delay_Req, t4 the master's of receiving it;
@@ -33,6 +33,13 @@
 #define FLAG0_TWO_STEP 0x02
 #define FLAG1_UTC_VALID 0x04
 #define FLAG1_PTP_TIMESCALE 0x08
+#define FLAG1_TIME_TRACEABLE 0x10
+#define FLAG1_FREQUENCY_TRACEABLE 0x20
+
+/* controlField (table 23), of version 1 still filled in. */
+#define CONTROL_SYNC 0
+#define CONTROL_DELAY_RESP 3
+#define CONTROL_OTHER 5
 
 /* Announce body, by byte of the message. */
 #define A_UTC_OFFSET 44
@@ -43,10 +50,11 @@
 #define A_PRIORITY2 52
 #define A_GRANDMASTER 53
 #define A_STEPS 61
-#define ANNOUNCE_LEN 64
+#define A_TIME_SOURCE 63
+#define ANNOUNCE_LEN PTP_ANNOUNCE_LEN
 
 #define TIMESTAMP_LEN 10	/* 48 bits of seconds and 32 of nanoseconds */
-#define DELAY_RESP_LEN 54
+#define DELAY_RESP_LEN PTP_DELAY_RESP_LEN
 
 #define ANNOUNCE_TIMEOUT_MIN (8 * NS_PER_SEC)
 
@@ -100,8 +108,7 @@ static ns_t read_correction(const uint8_t *p)
 	return (ns_t)((int64_t)get64(p) >> 16);
 }
 
-/* Lower is better (clause 9.3.2.5: the dataset comparison, the single-port case). */
-static int dataset_cmp(const struct ptp_dataset *a, const struct ptp_dataset *b)
+int ptp_dataset_cmp(const struct ptp_dataset *a, const struct ptp_dataset *b)
 {
 	if (a->priority1 != b->priority1)
 		return a->priority1 < b->priority1 ? -1 : 1;
@@ -167,7 +174,7 @@ static bool announce(struct ptp_slave *s, const uint8_t *m, size_t len, ns_t mon
 
 	/* The first master heard, a better one, or the one in place gone quiet. */
 	take = !s->have_master || !ptp_master_alive(s, mono) ||
-	       (!same_id(&from, &s->master) && dataset_cmp(&ds, &s->master_ds) < 0);
+	       (!same_id(&from, &s->master) && ptp_dataset_cmp(&ds, &s->master_ds) < 0);
 	if (!take && !same_id(&from, &s->master))
 		return false;
 
@@ -354,4 +361,87 @@ void ptp_delay_req_sent(struct ptp_slave *s, ns_t t3)
 		return;
 	s->request_t3 = t3;
 	s->request_t3_known = true;
+}
+
+/* ---- the master ---- */
+
+void ptp_master_init(struct ptp_master *m, uint8_t domain, const uint8_t clock_id[8])
+{
+	memset(m, 0, sizeof(*m));
+	m->domain = domain;
+	memcpy(m->own.clock, clock_id, 8);
+	m->own.port = 1;
+	m->ds.priority1 = PTP_PRIORITY_DEFAULT;
+	m->ds.clock_class = PTP_CLASS_DEFAULT;
+	m->ds.accuracy = PTP_ACCURACY_UNKNOWN;
+	m->ds.variance = 0xffff;
+	m->ds.priority2 = PTP_PRIORITY_DEFAULT;
+	memcpy(m->ds.grandmaster, clock_id, 8);
+	m->time_source = PTP_TIME_SOURCE_INTERNAL;
+	m->utc_offset = PTP_UTC_OFFSET_DEFAULT;
+}
+
+/* The header every message the master sends begins with. */
+static void master_header(const struct ptp_master *m, uint8_t *buf, unsigned int type, size_t len,
+			  uint16_t seq, uint8_t control)
+{
+	memset(buf, 0, len);
+	buf[H_TYPE] = (uint8_t)type;
+	buf[H_VERSION] = 2;
+	put16(buf + H_LENGTH, (uint16_t)len);
+	buf[H_DOMAIN] = m->domain;
+	memcpy(buf + H_SOURCE, m->own.clock, 8);
+	put16(buf + H_SOURCE + 8, m->own.port);
+	put16(buf + H_SEQ, seq);
+	buf[H_CONTROL] = control;
+	buf[H_LOG_INTERVAL] = 0;	/* once a second, 2^0 s */
+}
+
+static void put_timestamp(uint8_t *p, ns_t t)
+{
+	if (t < 0)
+		t = 0;
+	put48(p, (uint64_t)(t / NS_PER_SEC));
+	put32(p + 6, (uint32_t)(t % NS_PER_SEC));
+}
+
+size_t ptp_announce_build(struct ptp_master *m, uint8_t *buf, ns_t now)
+{
+	master_header(m, buf, PTP_ANNOUNCE, PTP_ANNOUNCE_LEN, m->announce_seq++, CONTROL_OTHER);
+	buf[H_FLAGS + 1] = FLAG1_PTP_TIMESCALE | FLAG1_UTC_VALID |
+			   (m->traceable ? FLAG1_TIME_TRACEABLE | FLAG1_FREQUENCY_TRACEABLE : 0);
+	put_timestamp(buf + PTP_HEADER_LEN, now);
+	put16(buf + A_UTC_OFFSET, (uint16_t)m->utc_offset);
+	buf[A_PRIORITY1] = m->ds.priority1;
+	buf[A_CLASS] = m->ds.clock_class;
+	buf[A_ACCURACY] = m->ds.accuracy;
+	put16(buf + A_VARIANCE, m->ds.variance);
+	buf[A_PRIORITY2] = m->ds.priority2;
+	memcpy(buf + A_GRANDMASTER, m->ds.grandmaster, 8);
+	put16(buf + A_STEPS, m->ds.steps_removed);
+	buf[A_TIME_SOURCE] = m->time_source;
+	return PTP_ANNOUNCE_LEN;
+}
+
+size_t ptp_sync_build(struct ptp_master *m, uint8_t *buf)
+{
+	/* One-step: no twoStepFlag, and the interface writes the time it leaves into originTimestamp. */
+	master_header(m, buf, PTP_SYNC, PTP_SYNC_LEN, m->sync_seq++, CONTROL_SYNC);
+	buf[H_FLAGS + 1] = FLAG1_PTP_TIMESCALE;
+	return PTP_SYNC_LEN;
+}
+
+size_t ptp_delay_resp_build(const struct ptp_master *m, const uint8_t *req, size_t len, ns_t t4,
+			    uint8_t *buf)
+{
+	if (len < PTP_DELAY_REQ_LEN || (req[H_VERSION] & 0x0f) != 2 || (req[H_TYPE] & 0x0f) != PTP_DELAY_REQ ||
+	    req[H_DOMAIN] != m->domain || get16(req + H_LENGTH) > len)
+		return 0;
+	master_header(m, buf, PTP_DELAY_RESP, PTP_DELAY_RESP_LEN, get16(req + H_SEQ), CONTROL_DELAY_RESP);
+	buf[H_FLAGS + 1] = FLAG1_PTP_TIMESCALE;
+	/* The request's correction comes back with it (clause 11.3.2). */
+	memcpy(buf + H_CORRECTION, req + H_CORRECTION, 8);
+	put_timestamp(buf + PTP_HEADER_LEN, t4);
+	memcpy(buf + PTP_HEADER_LEN + TIMESTAMP_LEN, req + H_SOURCE, 10);
+	return PTP_DELAY_RESP_LEN;
 }

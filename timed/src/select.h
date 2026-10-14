@@ -4,7 +4,8 @@
 /*
  * Which source sets the clock. Only one does at a time, so that two never
  * pull the clock two ways: the best of those that are good, in the order PTP,
- * NTP, the OLT. A source is good once it has given enough samples in a row
+ * the PON (the PHC on the time of day the OLT gives, pon.h), NTP, the OLT's
+ * date. A source is good once it has given enough samples in a row
  * and until its last one grows old; the one in use is dropped for a better
  * one as soon as that one is good, and for a worse one only when it is not.
  */
@@ -18,6 +19,7 @@ enum source {
 	SRC_NONE = 0,
 	SRC_OLT,
 	SRC_NTP,
+	SRC_PON,
 	SRC_PTP,
 	SRC_COUNT
 };

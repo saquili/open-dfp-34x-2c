@@ -1054,6 +1054,178 @@ static void test_pon(void)
 	CHECK_EQ(off, 0);
 }
 
+/* ---- the ToD and the PON source ---- */
+
+static void test_pon_tod(void)
+{
+	static const char good[] = "superframe=1071060394\nsec=1791994973\nnsec=500\nmonotonic_ns=980927561000\n";
+	static const char *const bad[] = {
+		"superframe=1\nsec=2\nmonotonic_ns=3\n",
+		"superframe=1073741824\nsec=2\nnsec=0\nmonotonic_ns=3\n",
+		"superframe=1\nsec=2\nnsec=1000000000\nmonotonic_ns=3\n",
+		"superframe=1\nsec=x\nnsec=0\nmonotonic_ns=3\n",
+	};
+	struct pon_tod t;
+	unsigned int i;
+
+	CHECK(pon_tod_parse(good, sizeof(good) - 1, &t));
+	CHECK_EQ(t.superframe, 1071060394U);
+	CHECK_EQ(t.tstamp, SEC(1791994973) + 500);
+	CHECK_EQ(t.at, 980927561000LL);
+	for (i = 0; i < ARRAY_SIZE(bad); i++)
+		CHECK(!pon_tod_parse(bad[i], strlen(bad[i]), &t));
+}
+
+/* The PON comes after PTP and before NTP. */
+static void test_select_pon(void)
+{
+	struct select sel;
+	ns_t t = SEC(100);
+
+	select_init(&sel);
+	CHECK_EQ(select_sample(&sel, SRC_NTP, 5, t, SEC(200)), SRC_NTP);
+	CHECK_EQ(select_sample(&sel, SRC_PON, 1, t + SEC(1), SEC(4)), SRC_NTP);
+	CHECK_EQ(select_sample(&sel, SRC_PON, 1, t + SEC(2), SEC(4)), SRC_NTP);
+	CHECK_EQ(select_sample(&sel, SRC_PON, 1, t + SEC(3), SEC(4)), SRC_PON);
+	CHECK_EQ(select_sample(&sel, SRC_PTP, 1, t + SEC(4), SEC(8)), SRC_PON);
+	CHECK_EQ(select_sample(&sel, SRC_PTP, 1, t + SEC(5), SEC(8)), SRC_PON);
+	CHECK_EQ(select_sample(&sel, SRC_PTP, 1, t + SEC(6), SEC(8)), SRC_PTP);
+	/* Both gone quiet: NTP again. */
+	CHECK_EQ(select_pick(&sel, t + SEC(60)), SRC_NTP);
+	CHECK(!strcmp(source_name(SRC_PON), "pon"));
+}
+
+/* ---- the PTP master ---- */
+
+static const uint8_t STICK[8] = { 0x00, 0xe0, 0x4c, 0xff, 0xfe, 0x86, 0x70, 0x01 };
+
+/* What the master sends: an Announce of itself, a one-step Sync, and the Delay_Resp to a Delay_Req. */
+static void test_ptp_master_messages(void)
+{
+	uint8_t a[PTP_ANNOUNCE_LEN], y[PTP_SYNC_LEN], req[PTP_DELAY_REQ_LEN], resp[PTP_DELAY_RESP_LEN];
+	struct ptp_master mm;
+	struct ptp_result r;
+	struct ptp_slave s;
+
+	ptp_master_init(&mm, 0, STICK);
+	mm.ds.accuracy = PTP_ACCURACY_1MS;
+	mm.time_source = PTP_TIME_SOURCE_NTP;
+	CHECK_EQ(ptp_announce_build(&mm, a, SEC(T0 + 37) + 5), (size_t)PTP_ANNOUNCE_LEN);
+	CHECK_EQ(a[0], PTP_ANNOUNCE);
+	CHECK_EQ(a[1], 2);
+	CHECK_EQ(get16(a + 2), 64);
+	CHECK_EQ(a[7], 0x0c);
+	CHECK(!memcmp(a + 20, STICK, 8));
+	CHECK_EQ(get16(a + 28), 1);
+	CHECK_EQ(get16(a + 30), 0);
+	CHECK_EQ(a[32], 5);
+	CHECK_EQ(a[33], 0);
+	CHECK_EQ(get48(a + 34), (uint64_t)(T0 + 37));
+	CHECK_EQ(get32(a + 40), 5U);
+	CHECK_EQ(get16(a + 44), 37);
+	CHECK_EQ(a[47], 128);
+	CHECK_EQ(a[48], 248);
+	CHECK_EQ(a[49], 0x29);
+	CHECK_EQ(get16(a + 50), 0xffff);
+	CHECK_EQ(a[52], 128);
+	CHECK(!memcmp(a + 53, STICK, 8));
+	CHECK_EQ(get16(a + 61), 0);
+	CHECK_EQ(a[63], 0x50);
+	ptp_announce_build(&mm, a, 0);
+	CHECK_EQ(get16(a + 30), 1);
+
+	CHECK_EQ(ptp_sync_build(&mm, y), (size_t)PTP_SYNC_LEN);
+	CHECK_EQ(y[0], PTP_SYNC);
+	CHECK_EQ(get16(y + 2), 44);
+	CHECK_EQ(y[6], 0);
+	CHECK_EQ(y[32], 0);
+	CHECK_EQ(get48(y + 34), 0U);
+	CHECK_EQ(get32(y + 40), 0U);
+
+	/* A slave's Delay_Req, its correction carried back with the time it came. */
+	ptp_slave_init(&s, 0, SLAVE);
+	CHECK(ptp_rx(&s, a, sizeof(a), 0, SEC(10), &r));
+	CHECK_EQ(ptp_delay_req(&s, req, SEC(T0)), (size_t)PTP_DELAY_REQ_LEN);
+	put64(req + 8, 3 * 65536);
+	CHECK_EQ(ptp_delay_resp_build(&mm, req, sizeof(req), SEC(T0 + 37) + 123, resp), (size_t)PTP_DELAY_RESP_LEN);
+	CHECK_EQ(resp[0], PTP_DELAY_RESP);
+	CHECK_EQ(get16(resp + 2), 54);
+	CHECK_EQ(resp[32], 3);
+	CHECK_EQ(get16(resp + 30), get16(req + 30));
+	CHECK_EQ(get64(resp + 8), get64(req + 8));
+	CHECK_EQ(get48(resp + 34), (uint64_t)(T0 + 37));
+	CHECK_EQ(get32(resp + 40), 123U);
+	CHECK(!memcmp(resp + 44, SLAVE, 8));
+	CHECK_EQ(get16(resp + 52), 1);
+	/* No answer to another domain's, to a message that is no Delay_Req, or to a short one. */
+	req[4] = 1;
+	CHECK_EQ(ptp_delay_resp_build(&mm, req, sizeof(req), 0, resp), 0U);
+	req[4] = 0;
+	CHECK_EQ(ptp_delay_resp_build(&mm, y, sizeof(y), 0, resp), 0U);
+	CHECK_EQ(ptp_delay_resp_build(&mm, req, 20, 0, resp), 0U);
+}
+
+/*
+ * The master's messages to a slave: the slave takes the master, its time on
+ * the PTP timescale with the UTC offset of its Announce, and the path, the
+ * interface having written the time into the one-step Sync. The slave's
+ * clock (UTC) is 250 us ahead; the path 30 us each way.
+ */
+static void test_ptp_master_to_slave(void)
+{
+	uint8_t a[PTP_ANNOUNCE_LEN], y[PTP_SYNC_LEN], req[PTP_DELAY_REQ_LEN], resp[PTP_DELAY_RESP_LEN];
+	struct ptp_master mm;
+	struct ptp_result r;
+	struct ptp_slave s;
+	ns_t utc = SEC(T0);
+
+	ptp_master_init(&mm, 0, STICK);
+	ptp_slave_init(&s, 0, SLAVE);
+	ptp_announce_build(&mm, a, utc + SEC(37));
+	CHECK(ptp_rx(&s, a, sizeof(a), 0, SEC(10), &r));
+	CHECK_EQ(r.ev, PTP_EV_MASTER);
+
+	ptp_sync_build(&mm, y);
+	ptp_stamp(y + 34, utc + SEC(37));
+	CHECK(ptp_rx(&s, y, sizeof(y), utc + 280 * NS_PER_US, SEC(11), &r));
+	CHECK_EQ(r.ev, PTP_EV_OFFSET);
+	CHECK_EQ(r.offset, 280 * NS_PER_US);
+
+	CHECK_EQ(ptp_delay_req(&s, req, utc + SEC(1) + 250 * NS_PER_US), (size_t)PTP_DELAY_REQ_LEN);
+	CHECK_EQ(ptp_delay_resp_build(&mm, req, sizeof(req), utc + SEC(38) + 30 * NS_PER_US, resp),
+		 (size_t)PTP_DELAY_RESP_LEN);
+	CHECK(!ptp_rx(&s, resp, sizeof(resp), 0, SEC(12), &r));
+	CHECK(s.delay_known);
+	CHECK_EQ(s.delay, 30 * NS_PER_US);
+
+	ptp_sync_build(&mm, y);
+	ptp_stamp(y + 34, utc + SEC(39));
+	CHECK(ptp_rx(&s, y, sizeof(y), utc + SEC(2) + 280 * NS_PER_US, SEC(13), &r));
+	CHECK_EQ(r.offset, 250 * NS_PER_US);
+}
+
+/* The master gives way to a better clock (lower is better). */
+static void test_ptp_bmca(void)
+{
+	struct ptp_dataset heard;
+	struct ptp_master mm;
+
+	ptp_master_init(&mm, 0, STICK);
+	mm.ds.accuracy = PTP_ACCURACY_1MS;
+	heard = mm.ds;
+	memcpy(heard.grandmaster, MASTER, 8);
+	heard.clock_class = 6;
+	CHECK(ptp_dataset_cmp(&heard, &mm.ds) < 0);
+	heard.clock_class = PTP_CLASS_DEFAULT;
+	heard.accuracy = PTP_ACCURACY_1S;
+	CHECK(ptp_dataset_cmp(&heard, &mm.ds) > 0);
+	/* As good: the lower identity is the better. */
+	heard.accuracy = PTP_ACCURACY_1MS;
+	CHECK(ptp_dataset_cmp(&heard, &mm.ds) < 0);
+	heard.priority1 = 200;
+	CHECK(ptp_dataset_cmp(&heard, &mm.ds) > 0);
+}
+
 /* ---- the receive stamp ---- */
 
 static void test_stamp(void)
@@ -1162,6 +1334,11 @@ int main(void)
 	test_servo();
 	test_median3();
 	test_pon();
+	test_pon_tod();
+	test_select_pon();
+	test_ptp_master_messages();
+	test_ptp_master_to_slave();
+	test_ptp_bmca();
 	test_stamp();
 	test_stamp_hw();
 	test_phc_sys_offset();

@@ -7,10 +7,11 @@ timed
 
 The clock of the stick. The stick has no clock that runs while it is off and
 keeps no time in the flash, so it starts in 1970. timed sets the clock from the
-host, in the two ways a host may give the time, and from the date the OLT gives
-when the host gives none::
+host, in the two ways a host may give the time, from the time of day the OLT
+gives the PON, and from the date the OLT gives when nothing else does; and it
+gives the host the time, as a PTP master, when the host has none better::
 
-   timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]
+   timed [-n SERVER] [-p IFACE] [-o FILE] [-t FILE] [-M] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]
    timed -H IFACE
 
 ``-n`` names an NTP server (RFC 5905), by its address: the stick runs offline
@@ -18,13 +19,17 @@ and resolves no name. ``-p`` names the interface on which timed is a PTP slave
 (IEEE 1588-2008: an ordinary clock that is never a master, with the delay
 request-response mechanism), over layer 2 (EtherType 0x88f7 to
 01:1b:19:00:00:00) and over UDP (224.0.1.129, ports 319 and 320) at once;
-``-d`` gives its domain, 0 unless given. ``-o`` names the file in which omcid
-writes the date the OLT gave. ``-s`` names the file of the state,
+``-d`` gives its domain, 0 unless given. ``-M`` lets timed be the PTP master on
+that interface (see "The master"). ``-o`` names the file in which omcid writes
+the date the OLT gave, and ``-t`` the one in which it tells the time of day the
+OLT gave the PTP hardware clock (see "The OLT's seconds"). ``-s`` names the file of the state,
 ``/run/timed/state`` unless given. ``-f`` keeps the log on stderr rather than
 the system log, ``-v`` logs every sample, and ``-D`` sets no clock: timed
 measures and chooses, for the tests and for looking at what a host gives.
 ``-H`` turns on the hardware stamps of an interface (``SIOCSHWTSTAMP``:
-transmit stamps on, the receive filter for PTP over layer 2) and exits; that
+one-step Syncs and two-step stamps of the other messages, or, where the
+interface has no one-step Syncs, two-step stamps alone, and the receive filter
+for PTP over layer 2) and exits; that
 takes ``CAP_NET_ADMIN``, which the daemon does not have, so root runs it before
 the daemon starts.
 
@@ -32,11 +37,11 @@ The sources
 ===========
 
 One source sets the clock at a time, so that two never pull it two ways: the
-best of those that are good, PTP before NTP before the OLT. A source is good
-after three Sync messages in a row (PTP), one answer (NTP) or one date (the
-OLT), and stays good while its samples keep coming: four Sync intervals and at
-least 8 s for PTP, three polls of 64 s for NTP, ten minutes after its date for
-the OLT. The source in use gives way to a better one as soon as that one is
+best of those that are good, PTP before the PON before NTP before the OLT. A
+source is good after three Sync messages in a row (PTP), three readings of the
+PHC (the PON), one answer (NTP) or one date (the OLT), and stays good while its
+samples keep coming: four Sync intervals and at least 8 s for PTP, 4 s for the
+PON, three polls of 64 s for NTP, ten minutes after its date for the OLT. The source in use gives way to a better one as soon as that one is
 good, and to a worse one only when it is not good any more.
 
 PTP
@@ -49,6 +54,11 @@ PTP
    Announce gives, 37 s when it gives none. Over layer 2, on an interface that
    stamps in hardware, the stamps are the interface's (see "Hardware
    stamps").
+The PON
+   The PHC on the time of day the OLT gave (see "The OLT's seconds"), read
+   against the system clock once a second as for a master's time, and put in
+   UTC 37 s behind it: the time of day is taken to be on the PTP timescale
+   (TAI), as a PTP master's is.
 NTP
    timed polls the server every 2 s for the first four polls, every 16 s up
    to the twelfth, then every 64 s, and every 16 s again after three polls go
@@ -167,8 +177,56 @@ and its offsets from the seconds within 3 us, it kept to the frames within
 15 us over 8 minutes (read beside the superframe counter, apart from timed), a
 drift of -0.005 ppm.
 
-The system clock does not follow the PHC on the OLT's seconds: they give a
-rate, not a date.
+The OLT's seconds give a rate, not a date. The date comes with the time of day
+the OLT may give in OMCI (the Time of day information of OLT-G, ITU-T G.988
+9.12.2), which the kernel puts into the PHC at the frame the OLT names; omcid
+tells it in the file of ``-t`` once the kernel took it, as ``superframe=``,
+``sec=``, ``nsec=`` and ``monotonic_ns=`` lines. The PHC holds the OLT's time
+once it jumps under the OLT's seconds after that, or, when it does not, 30 s
+after: it held a time within a millisecond of the OLT's already. From then on
+the OLT's seconds steer the PHC and the system clock follows it, as the PON
+source. The OLT of the operator this stick runs on gives no time of day.
+
+The master
+==========
+
+With ``-M`` timed is the PTP master on the interface of ``-p`` (IEEE 1588-2008,
+an ordinary clock with one port: the best master clock algorithm decides
+between it and the masters it hears), over layer 2 with the interface's
+hardware stamps, while:
+
+- the interface writes the time into a Sync as it leaves (one-step,
+  ``timed -H``);
+- the PHC holds a time worth giving: the OLT's, on its time of day, or the
+  system clock's, set by NTP or by the OLT's date, which the PHC then follows
+  (read against it once a second, on the PTP timescale, 37 s ahead of UTC,
+  with the gains of an exact reading);
+- no better clock is heard: a master whose Announce wins the dataset
+  comparison against this one's (clause 9.3.2.5). Then timed is its slave, as
+  without ``-M``, and the messages of a worse master are not followed.
+
+As a master it sends an Announce and a one-step Sync to 01:1b:19:00:00:00 once
+a second, and answers each Delay_Req with a Delay_Resp holding the time the
+request came by the interface's stamp, with its correction. It says of itself
+priority1 and priority2 128, class 248 (a clock not traceable to a primary
+reference, which may also be a slave), its accuracy and the source of its
+time: within 10 us and other on the OLT's time of day, within 1 ms and NTP on
+NTP, within 1 s and other on the OLT's date; the PTP timescale, a UTC offset of
+37 s, valid.
+
+Measured on the stick, with a slave on the router at the other end of the
+management VLAN that takes the kernel's software stamps (and the time before
+it sends its Delay_Req): on NTP, the router's Announce read class 248, accuracy
+0x29 and source 0x50, and its clock was 98 to 155 us behind the stick's time,
+the path 29 to 63 us, every Sync of 20 answered. Given a time of day 5 ms ahead
+of the PHC through OMCI, the PHC jumped to it at the frame named, timed took it
+("PHC on the OLT's time of day ... (the PHC jumped to it)"), the OLT's seconds
+steered the PHC at -8.5 to -10.6 ppm within a few microseconds, the system
+clock went over to the PON and stepped by 4.9 ms, and the router's slave read
+accuracy 0x25 and source 0x90 and its clock 3.9 ms behind (the stick had been
+1 ms behind NTP). A second time of day, back on NTP's time, took the PHC there
+in the same way: the router's clock then read within -19 to +41 us of the
+stick's. The router's software stamps are what limits these figures.
 
 The state
 =========
@@ -178,7 +236,7 @@ each change of source, as ``KEY=VALUE`` lines. An offset is the stick's clock
 less the source's, in nanoseconds.
 
 ``source``
-   ``ptp``, ``ntp``, ``olt`` or ``none``: the source that sets the clock.
+   ``ptp``, ``pon``, ``ntp``, ``olt`` or ``none``: the source that sets the clock.
 ``state``
    ``locked``, a source in use and the clock within 1 ms of it; ``syncing``,
    a source in use and the clock farther; ``set``, the OLT's time in use;
@@ -205,6 +263,17 @@ less the source's, in nanoseconds.
    to read the PHC, at the last reading.
 ``ptp_tx_stamps``, ``ptp_tx_missed``
    Delay_Req stamped as they left, and those whose stamp never came.
+``ptp_phc_owner``
+   With hardware stamps: what steers the PHC, ``ptp`` (a master), ``pon`` (the
+   OLT's seconds), ``system`` (the system clock, for a master) or ``none``.
+``ptp_role``, ``ptp_syncs_sent``, ``ptp_delay_resps_sent``
+   With ``-M``: ``master``, ``slave`` (to a better master) or ``listening``
+   (no time to give and no master heard); the Syncs sent and the Delay_Req
+   answered.
+``pon_tod_file``, ``pon_tod_set``, ``pon_good``, ``pon_tod_frame``, ``pon_tod_sec``
+   With ``-t``: the file, whether the PHC holds the OLT's time of day, whether
+   the PON source is good, and the frame and the seconds of the time of day
+   the OLT gave last.
 ``pon_seconds``, ``pon_steers``, ``pon_offset_ns``, ``pon_count``, ``pon_jumps``
    With a PHC that gives the OLT's seconds: whether they come, the last at most
    3 s old (``1`` or ``0``); whether they steer the PHC; the PHC's offset from
@@ -226,7 +295,8 @@ and 320, below the 1024 an account may take without it (``onu-drop -c
 sys_time,net_raw,net_bind_service``): NTP from ``NTP_SERVER`` of the stick's settings or,
 without one, from the router at the other end of the management link, the
 other address of its /30 or /31; PTP on the management link's interface;
-the OLT's time from ``/run/omcid/clock``. Before it, as root, ``onu-run``
+the OLT's date from ``/run/omcid/clock`` and its time of day from
+``/run/omcid/tod``; and master on the management link (``-M``). Before it, as root, ``onu-run``
 turns on the hardware stamps of that interface (``timed -H``) and gives the
 PHCs to the group ``ntp``, which steers them through the device. When the
 management pair changes, ``onu-mgmt`` ends timed and procd starts it again for

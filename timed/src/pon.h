@@ -31,6 +31,22 @@ enum pon_second {
 	PON_OFFSET,	/* an offset of the PHC from the OLT's seconds */
 };
 
+/*
+ * The time of day the OLT gave (ITU-T G.984.3 Amendment 2 clause 10.4.6),
+ * which omcid tells once the kernel took it, as KEY=VALUE lines:
+ *	superframe=N		the frame at which the PHC takes the time
+ *	sec=S, nsec=NS		TstampN, on the PTP timescale (TAI)
+ *	monotonic_ns=NS		CLOCK_MONOTONIC when the kernel took it
+ */
+struct pon_tod {
+	uint32_t superframe;
+	ns_t tstamp;
+	ns_t at;
+};
+
+/* Read the file's @len bytes of @text. False when a line is missing or not a number. */
+bool pon_tod_parse(const char *text, size_t len, struct pon_tod *t);
+
 /* Forget the anchor: the next second is counted from. */
 void pon_reset(struct pon *p);
 

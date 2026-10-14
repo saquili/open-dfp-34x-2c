@@ -5,8 +5,7 @@
 
 #include "olt.h"
 
-/* The decimal number after "KEY=" at the start of a line, up to the line's end. */
-static bool field(const char *text, size_t len, const char *key, int64_t max, int64_t *out)
+bool olt_number(const char *text, size_t len, const char *key, int64_t max, int64_t *out)
 {
 	size_t klen = strlen(key);
 	size_t i = 0;
@@ -40,7 +39,7 @@ bool olt_parse(const char *text, size_t len, ns_t *utc, ns_t *at)
 	int64_t sec, mono;
 
 	/* Seconds up to the year 2200, as omcid takes them, and a monotonic time that fits in ns_t. */
-	if (!field(text, len, "utc", 7258118400LL, &sec) || !field(text, len, "monotonic_ns", INT64_MAX, &mono))
+	if (!olt_number(text, len, "utc", 7258118400LL, &sec) || !olt_number(text, len, "monotonic_ns", INT64_MAX, &mono))
 		return false;
 	*utc = sec * NS_PER_SEC;
 	*at = mono;

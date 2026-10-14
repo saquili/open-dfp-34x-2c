@@ -14,6 +14,7 @@ static const unsigned int need[SRC_COUNT] = {
 	[SRC_NONE] = 0,
 	[SRC_OLT] = 1,
 	[SRC_NTP] = 1,
+	[SRC_PON] = 3,
 	[SRC_PTP] = 3,
 };
 
@@ -80,6 +81,8 @@ const char *source_name(enum source src)
 		return "olt";
 	case SRC_NTP:
 		return "ntp";
+	case SRC_PON:
+		return "pon";
 	case SRC_PTP:
 		return "ptp";
 	case SRC_COUNT:
