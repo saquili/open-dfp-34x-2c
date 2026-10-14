@@ -1048,6 +1048,18 @@ Transmit and receive
      - 80 of 80 downstream frames are delivered to a downstream-only multicast
        GEM interface. A routed-traffic check: downstream frames reach the GEM
        interface.
+   * - Timestamping of a GEM interface is its lower's, as for a VLAN device:
+       ``get_ts_info`` reports the lower's capabilities and PTP clock, and
+       ``ndo_hwtstamp_get`` and ``ndo_hwtstamp_set`` read and set the lower's
+       configuration, which every GEM interface on that lower shares. A GEM
+       interface in another network namespace than its lower does not set
+       it. The MAC gives a GEM interface's frames the stamps the lower's
+       configuration asks for.
+     - M
+     - ``ethtool -T`` on a GEM interface and on a VLAN device over it listed
+       the lower's PTP clock and modes. ``SIOCSHWTSTAMP`` on that VLAN device
+       turned on the lower's transmit stamping: its Delay_Req got hardware
+       stamps.
    * - With ``CONFIG_NET_SWITCHDEV``, a frame received on an offloaded GEM
        interface carries ``offload_fwd_mark``: the switch has already
        forwarded it where the bridge wanted it, and the bridge must not

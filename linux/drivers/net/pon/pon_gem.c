@@ -220,11 +220,50 @@ static void pon_gem_get_ethtool_stats(struct net_device *dev,
 	data[3] = st.rx_octets;
 }
 
+/*
+ * Timestamping is the lower's, as for a VLAN device: a GEM interface reports
+ * the lower's capabilities and its PTP clock, and its configuration is the
+ * lower's, which every GEM interface on that lower shares. The MAC gives the
+ * frames of a GEM interface the stamps the lower's configuration asks for.
+ */
+static int pon_gem_get_ts_info(struct net_device *dev,
+			       struct kernel_ethtool_ts_info *info)
+{
+	const struct pon_gem *gem = netdev_priv(dev);
+
+	return ethtool_get_ts_info_by_layer(gem->lower, info);
+}
+
 static const struct ethtool_ops pon_gem_ethtool_ops = {
 	.get_sset_count		= pon_gem_get_sset_count,
 	.get_strings		= pon_gem_get_strings,
 	.get_ethtool_stats	= pon_gem_get_ethtool_stats,
+	.get_ts_info		= pon_gem_get_ts_info,
 };
+
+static int pon_gem_hwtstamp_get(struct net_device *dev,
+				struct kernel_hwtstamp_config *cfg)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	return generic_hwtstamp_get_lower(gem->lower, cfg);
+}
+
+/*
+ * A GEM interface moved to another network namespace does not change the
+ * lower's configuration, which the interfaces left behind share.
+ */
+static int pon_gem_hwtstamp_set(struct net_device *dev,
+				struct kernel_hwtstamp_config *cfg,
+				struct netlink_ext_ack *extack)
+{
+	struct pon_gem *gem = netdev_priv(dev);
+
+	if (!net_eq(dev_net(dev), dev_net(gem->lower)))
+		return -EOPNOTSUPP;
+
+	return generic_hwtstamp_set_lower(gem->lower, cfg, extack);
+}
 
 /*
  * Only flowtable offload (TC_SETUP_FT) is passed down to the lower. An
@@ -432,6 +471,8 @@ static const struct net_device_ops pon_gem_netdev_ops = {
 	.ndo_setup_tc		= pon_gem_setup_tc,
 	.ndo_vlan_rx_add_vid	= pon_gem_vlan_rx_add_vid,
 	.ndo_vlan_rx_kill_vid	= pon_gem_vlan_rx_kill_vid,
+	.ndo_hwtstamp_get	= pon_gem_hwtstamp_get,
+	.ndo_hwtstamp_set	= pon_gem_hwtstamp_set,
 };
 
 bool pon_gem_netdev_flow(const struct net_device *dev, unsigned int *flow)
