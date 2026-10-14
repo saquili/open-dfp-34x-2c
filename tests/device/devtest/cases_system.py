@@ -310,7 +310,7 @@ RECOVER_WAIT = 120
 SESSIONS_WAIT = 300
 # The order the programs are killed in: the small ones first, the ones that the others hang
 # from last, ubusd the very last.
-KILL_ORDER = ("syslogd", "klogd", "act", "ntp", "trials", "udhcpd", "dhcp6d", "pond", "omcid",
+KILL_ORDER = ("syslogd", "klogd", "act", "time", "trials", "udhcpd", "dhcp6d", "pond", "omcid",
               "ssh", "pppoed", "netifd", "ubus")
 
 
