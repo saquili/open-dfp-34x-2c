@@ -320,7 +320,7 @@ export function SfpPage() {
 
   return (
     <Page title={t("sfp.title")}>
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(12rem,1fr)]">
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(min-content,1fr)]">
         <div className="grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] xl:items-start">
           <LaneCard />
           <MgmtCard />

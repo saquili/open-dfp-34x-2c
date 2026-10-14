@@ -133,7 +133,7 @@ function StateTab() {
     c && c.fec_codewords > 0 ? (c.fec_corrected_codewords / c.fec_codewords) * 100 : null;
 
   return (
-    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(10rem,1fr)]">
+    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(min-content,1fr)]">
       <div className="grid gap-4 lg:grid-cols-3">
         <Card
           title={t("fibre.status")}

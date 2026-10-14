@@ -99,7 +99,12 @@ export function Overview() {
 
   return (
     <Page title={t("overview.title")}>
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_auto_minmax(11rem,1fr)]">
+      {/*
+       * On a large screen the traffic keeps the height its figures need and
+       * the drawing takes the rest; when even that is too little, the page
+       * scrolls rather than cut either.
+       */}
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_minmax(12rem,1fr)_min-content]">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Tile
             to="/fibre"

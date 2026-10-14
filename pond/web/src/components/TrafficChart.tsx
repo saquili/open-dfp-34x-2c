@@ -52,63 +52,69 @@ export function TrafficChart({
 
   return (
     <div className={`relative ${fill ? "flex h-full min-h-0 flex-col" : ""}`}>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className={`w-full touch-none text-base-content ${fill ? "min-h-24 flex-1" : "h-40"}`}
-        role="img"
-        aria-label={t("overview.lastMinutes")}
-        onPointerMove={(e) => pick(e.clientX, e.currentTarget.getBoundingClientRect())}
-        onPointerDown={(e) => pick(e.clientX, e.currentTarget.getBoundingClientRect())}
-        onPointerLeave={() => setHover(null)}
-      >
-        {[0, 0.5, 1].map((f) => (
-          <line
-            key={f}
-            x1={0}
-            x2={W}
-            y1={y(scale * f)}
-            y2={y(scale * f)}
-            stroke="currentColor"
-            strokeOpacity={0.12}
-            vectorEffect="non-scaling-stroke"
-          />
-        ))}
-        {data.length > 1 && (
-          <>
-            <polygon
-              points={`${x(0)},${BOTTOM} ${path(down)} ${x(data.length - 1)},${BOTTOM}`}
-              fill="var(--color-down)"
-              fillOpacity={0.15}
-            />
-            <polyline
-              points={path(down)}
-              fill="none"
-              stroke="var(--color-down)"
-              strokeWidth={2}
+      {/*
+       * The drawing fills its box and asks no height of its own, so that a
+       * card sized to its content is sized by the figures beside the chart.
+       */}
+      <div className={`relative ${fill ? "min-h-24 flex-1" : "h-40"}`}>
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          className="absolute inset-0 size-full touch-none text-base-content"
+          role="img"
+          aria-label={t("overview.lastMinutes")}
+          onPointerMove={(e) => pick(e.clientX, e.currentTarget.getBoundingClientRect())}
+          onPointerDown={(e) => pick(e.clientX, e.currentTarget.getBoundingClientRect())}
+          onPointerLeave={() => setHover(null)}
+        >
+          {[0, 0.5, 1].map((f) => (
+            <line
+              key={f}
+              x1={0}
+              x2={W}
+              y1={y(scale * f)}
+              y2={y(scale * f)}
+              stroke="currentColor"
+              strokeOpacity={0.12}
               vectorEffect="non-scaling-stroke"
             />
-            <polyline
-              points={path(up)}
-              fill="none"
-              stroke="var(--color-up)"
-              strokeWidth={2}
+          ))}
+          {data.length > 1 && (
+            <>
+              <polygon
+                points={`${x(0)},${BOTTOM} ${path(down)} ${x(data.length - 1)},${BOTTOM}`}
+                fill="var(--color-down)"
+                fillOpacity={0.15}
+              />
+              <polyline
+                points={path(down)}
+                fill="none"
+                stroke="var(--color-down)"
+                strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+              />
+              <polyline
+                points={path(up)}
+                fill="none"
+                stroke="var(--color-up)"
+                strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+              />
+            </>
+          )}
+          {point && hover != null && (
+            <line
+              x1={x(hover)}
+              x2={x(hover)}
+              y1={TOP}
+              y2={BOTTOM}
+              stroke="currentColor"
+              strokeOpacity={0.4}
               vectorEffect="non-scaling-stroke"
             />
-          </>
-        )}
-        {point && hover != null && (
-          <line
-            x1={x(hover)}
-            x2={x(hover)}
-            y1={TOP}
-            y2={BOTTOM}
-            stroke="currentColor"
-            strokeOpacity={0.4}
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-      </svg>
+          )}
+        </svg>
+      </div>
       <div className="pointer-events-none absolute top-0 left-1 text-[11px] text-base-content/55">
         {bitrate(scale, lang)}
       </div>
@@ -167,48 +173,51 @@ export function Sparkline({
     BOTTOM - ((BOTTOM - TOP) * (Math.min(max, Math.max(min, v)) - min)) / (max - min || 1);
   return (
     <div className="relative flex h-full min-h-20 flex-col">
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="min-h-16 w-full flex-1 text-base-content"
-        role="img"
-        aria-label={label}
-      >
-        {[0, 0.5, 1].map((f) => (
-          <line
-            key={f}
-            x1={0}
-            x2={W}
-            y1={TOP + (BOTTOM - TOP) * f}
-            y2={TOP + (BOTTOM - TOP) * f}
-            stroke="currentColor"
-            strokeOpacity={0.12}
-            vectorEffect="non-scaling-stroke"
-          />
-        ))}
-        {bars
-          ? points.map((p) => (
-              <line
-                key={p.i}
-                x1={x(p.i)}
-                x2={x(p.i)}
-                y1={BOTTOM}
-                y2={p.v > 0 ? Math.min(BOTTOM - 2, y(p.v)) : BOTTOM}
-                stroke={tone}
-                strokeWidth={3}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))
-          : points.length > 1 && (
-              <polyline
-                points={points.map((p) => `${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")}
-                fill="none"
-                stroke={tone}
-                strokeWidth={2}
-                vectorEffect="non-scaling-stroke"
-              />
-            )}
-      </svg>
+      {/* Like the traffic's, the drawing asks no height of its own. */}
+      <div className="relative min-h-24 flex-1 lg:min-h-16">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          className="absolute inset-0 size-full text-base-content"
+          role="img"
+          aria-label={label}
+        >
+          {[0, 0.5, 1].map((f) => (
+            <line
+              key={f}
+              x1={0}
+              x2={W}
+              y1={TOP + (BOTTOM - TOP) * f}
+              y2={TOP + (BOTTOM - TOP) * f}
+              stroke="currentColor"
+              strokeOpacity={0.12}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+          {bars
+            ? points.map((p) => (
+                <line
+                  key={p.i}
+                  x1={x(p.i)}
+                  x2={x(p.i)}
+                  y1={BOTTOM}
+                  y2={p.v > 0 ? Math.min(BOTTOM - 2, y(p.v)) : BOTTOM}
+                  stroke={tone}
+                  strokeWidth={3}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))
+            : points.length > 1 && (
+                <polyline
+                  points={points.map((p) => `${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ")}
+                  fill="none"
+                  stroke={tone}
+                  strokeWidth={2}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+        </svg>
+      </div>
       <div className="pointer-events-none absolute top-0 left-1 text-[11px] text-base-content/55">
         {format(max)}
       </div>

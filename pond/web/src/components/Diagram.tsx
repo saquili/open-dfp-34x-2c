@@ -21,7 +21,7 @@ import {
   Radio,
   ServerCog,
 } from "lucide-react";
-import { type CSSProperties, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { Rates } from "../api/live";
 import type { Live } from "../api/types";
 import { useI18n } from "../i18n";
@@ -375,19 +375,16 @@ export function Diagram({ live, rate }: { live: Live | undefined; rate: Rates | 
 
   return (
     /*
-     * On a large screen the drawing may take the height the page leaves it
-     * (the viewport less 38rem of tiles, titles and traffic), at its own proportions,
-     * which grow taller with every row of channels.
+     * On a large screen the drawing takes the height the page leaves it and
+     * fits in it at its own proportions, which grow taller with every row of
+     * channels; on a smaller one it takes the width. The wrapper is always
+     * as wide as the card, so its width alone chooses the layout.
      */
-    <div
-      ref={wrap}
-      className="mx-auto w-full lg:max-w-[min(100%,calc((100dvh_-_38rem)*var(--aspect)))]"
-      style={{ "--aspect": L.width / height } as CSSProperties}
-    >
+    <div ref={wrap} className="w-full lg:min-h-0 lg:flex-1">
       {/* biome-ignore lint/a11y/useSemanticElements: the drawing groups its clickable parts */}
       <svg
         viewBox={`0 0 ${L.width} ${height}`}
-        className="w-full text-base-content"
+        className="w-full text-base-content lg:h-full"
         role="group"
         aria-label={t("diagram.title")}
       >
