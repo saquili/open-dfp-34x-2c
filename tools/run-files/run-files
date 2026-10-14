@@ -42,6 +42,7 @@ SOURCES = (
     "pond/src",
     "pppoed/src",
     "dhcp6d/src",
+    "timed/src",
     "br2-external/board",
 )
 SKIP_DIRS = {"tests", "build", ".git", "__pycache__"}
