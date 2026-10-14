@@ -186,10 +186,23 @@ static bool announce(struct ptp_slave *s, const uint8_t *m, size_t len, ns_t mon
 	return take;
 }
 
-/* The time to take off a PTP-timescale time to get UTC. */
-static ns_t timescale_shift(const struct ptp_slave *s)
+ns_t ptp_utc_shift(const struct ptp_slave *s)
 {
 	return s->ptp_timescale ? (ns_t)s->utc_offset * NS_PER_SEC : 0;
+}
+
+/* The time to take off a master's time to get the local clock's timescale. */
+static ns_t timescale_shift(const struct ptp_slave *s)
+{
+	return s->local_timescale ? 0 : ptp_utc_shift(s);
+}
+
+void ptp_set_local_timescale(struct ptp_slave *s, bool master)
+{
+	if (s->local_timescale == master)
+		return;
+	s->local_timescale = master;
+	ptp_clock_stepped(s);
 }
 
 /* A Sync is complete with its t1: the offset, and the master-to-slave leg of the delay. */
@@ -260,6 +273,11 @@ bool ptp_rx(struct ptp_slave *s, const uint8_t *m, size_t len, ns_t rx, ns_t mon
 
 		if (len < DELAY_RESP_LEN || !s->request_wait)
 			return false;
+		/* Its Delay_Req's time of sending is not known: there is no delay to measure. */
+		if (!s->request_t3_known) {
+			s->request_wait = false;
+			return false;
+		}
 		read_id(&req, m + PTP_HEADER_LEN + TIMESTAMP_LEN);
 		if (!same_id(&req, &s->own) || get16(m + H_SEQ) != s->request_sent_seq)
 			return false;
@@ -290,7 +308,7 @@ void ptp_clock_stepped(struct ptp_slave *s)
 	s->request_wait = false;
 }
 
-size_t ptp_delay_req(struct ptp_slave *s, uint8_t *buf, ns_t t3)
+static size_t delay_req_build(struct ptp_slave *s, uint8_t *buf)
 {
 	if (!s->have_master)
 		return 0;
@@ -306,7 +324,34 @@ size_t ptp_delay_req(struct ptp_slave *s, uint8_t *buf, ns_t t3)
 	buf[H_CONTROL] = 1;
 	buf[H_LOG_INTERVAL] = 0x7f;
 	s->request_sent_seq = s->request_seq;
-	s->request_t3 = t3;
 	s->request_wait = true;
 	return PTP_DELAY_REQ_LEN;
+}
+
+size_t ptp_delay_req(struct ptp_slave *s, uint8_t *buf, ns_t t3)
+{
+	size_t len = delay_req_build(s, buf);
+
+	if (len) {
+		s->request_t3 = t3;
+		s->request_t3_known = true;
+	}
+	return len;
+}
+
+size_t ptp_delay_req_later(struct ptp_slave *s, uint8_t *buf)
+{
+	size_t len = delay_req_build(s, buf);
+
+	if (len)
+		s->request_t3_known = false;
+	return len;
+}
+
+void ptp_delay_req_sent(struct ptp_slave *s, ns_t t3)
+{
+	if (!s->request_wait)
+		return;
+	s->request_t3 = t3;
+	s->request_t3_known = true;
 }

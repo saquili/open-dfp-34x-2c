@@ -18,4 +18,12 @@
 /* The stamp in nanoseconds from @len bytes at @data, or false when they are not one. */
 bool stamp_parse(const void *data, size_t len, ns_t *out);
 
+/*
+ * The hardware stamp of SCM_TIMESTAMPING: its data are three stamps in one of
+ * the two sizes above, the software stamp, one no longer used and the raw
+ * hardware stamp, in the clock of the network device (its PHC). Return the
+ * third, or false when the data are not three stamps or the device gave none.
+ */
+bool stamp_parse_hw(const void *data, size_t len, ns_t *out);
+
 #endif

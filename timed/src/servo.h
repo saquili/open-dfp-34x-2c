@@ -21,6 +21,15 @@
  * second for PTP, 2 to 64 s for NTP. Offsets are the local clock less the
  * reference, in nanoseconds; the frequency is in parts per billion, positive
  * to slow the clock down.
+ *
+ * Those gains are too slow for a clock read near exactly: the system clock
+ * that follows a PHC, whose rate is steered from a master a part per million
+ * at a time, lagged some 10 us behind it while the integral caught up. Read
+ * off the PHC, the offsets take the gains of linuxptp for hardware stamps
+ * (SERVO_GAINS_HARD). The PHC itself is set from a master's stamps, as noisy
+ * as the master stamps them, through a median of three, and the sample of
+ * delay that the median adds makes the hard gains swing: it takes gains in
+ * between (SERVO_GAINS_FILTERED), which hold with that delay.
  */
 
 #ifndef TIMED_SERVO_H
@@ -30,6 +39,12 @@
 
 /* The most the kernel takes: 500 ppm. */
 #define SERVO_MAX_PPB 500000.0
+
+enum servo_gains {
+	SERVO_GAINS_SOFT,	/* software stamps: linuxptp's 0.1 and 0.001 */
+	SERVO_GAINS_HARD,	/* exact offsets, as read off a PHC: linuxptp's 0.7 and 0.3 */
+	SERVO_GAINS_FILTERED,	/* offsets through a median of three: 0.3 and 0.05 */
+};
 
 enum servo_action {
 	SERVO_HOLD,	/* keep the frequency: a sample before the rate is known, or one at the same time */
@@ -48,6 +63,7 @@ struct servo {
 	ns_t last_at;
 	double drift;		/* the frequency that holds the clock's rate, ppb */
 	double freq;		/* the frequency last given, ppb */
+	enum servo_gains gains;	/* set by the caller, as the baseline */
 };
 
 /*
@@ -65,7 +81,9 @@ ns_t median3_add(struct median3 *m, ns_t v);
 
 /*
  * A servo whose clock runs with @freq_ppb now (what the kernel holds at the
- * start); with @known, that rate is right and is not estimated again.
+ * start); with @known, that rate is right and is not estimated again. A rate
+ * more than 300 ppm out is no crystal's: the servo starts from 0 instead,
+ * which the caller sets when it differs from what the clock holds.
  */
 void servo_init(struct servo *s, ns_t step_limit, double freq_ppb, bool known);
 

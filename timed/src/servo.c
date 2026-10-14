@@ -25,6 +25,22 @@
 #define KI_SCALE 0.001
 #define KI_NORM_MAX 0.3
 
+/*
+ * linuxptp's gains for hardware stamps: kp = min(0.7, 0.7 / t) and
+ * ki = min(0.3, 0.3 / t), the same caps on what one sample corrects.
+ */
+#define KP_HARD 0.7
+#define KI_HARD 0.3
+
+/*
+ * With a median of three before it, a sample comes a step late; the loop is
+ * then z^3 - 2z^2 + (1 + kp + ki)z - kp = 0, whose roots with the hard gains
+ * lie outside the unit circle (|z|^2 = 1.16): it swings. These put a root at
+ * 0.5 and two at |z| = 0.77, settling in some five samples.
+ */
+#define KP_FILTERED 0.3
+#define KI_FILTERED 0.05
+
 /* An estimate this far from the rate in force is no crystal's. */
 #define SANE_PPB 300000.0
 
@@ -70,6 +86,11 @@ ns_t median3_add(struct median3 *m, ns_t v)
 
 void servo_init(struct servo *s, ns_t step_limit, double freq_ppb, bool known)
 {
+	/* A rate no crystal runs at (one a servo left at its limit) is not taken over. */
+	if (freq_ppb > SANE_PPB || freq_ppb < -SANE_PPB) {
+		freq_ppb = 0;
+		known = false;
+	}
 	s->step_limit = step_limit;
 	s->count = 0;
 	s->rate_known = known;
@@ -79,6 +100,7 @@ void servo_init(struct servo *s, ns_t step_limit, double freq_ppb, bool known)
 	s->last_at = 0;
 	s->drift = clamp_ppb(freq_ppb);
 	s->freq = s->drift;
+	s->gains = SERVO_GAINS_SOFT;
 }
 
 void servo_reset(struct servo *s)
@@ -130,8 +152,20 @@ enum servo_action servo_sample(struct servo *s, ns_t offset, ns_t at, double *fr
 			return SERVO_HOLD;
 		t = (double)(at - s->last_at) / 1e9;
 		t = t < INTERVAL_MIN ? INTERVAL_MIN : t > INTERVAL_MAX ? INTERVAL_MAX : t;
-		kp = min2(KP_MAX, KP_NORM_MAX / t);
-		ki = min2(KI_SCALE * (1.0 + t / 8.0), KI_NORM_MAX / t);
+		switch (s->gains) {
+		case SERVO_GAINS_HARD:
+			kp = min2(KP_HARD, KP_NORM_MAX / t);
+			ki = min2(KI_HARD, KI_NORM_MAX / t);
+			break;
+		case SERVO_GAINS_FILTERED:
+			kp = min2(KP_FILTERED, KP_NORM_MAX / t);
+			ki = min2(KI_FILTERED, KI_NORM_MAX / t);
+			break;
+		default:
+			kp = min2(KP_MAX, KP_NORM_MAX / t);
+			ki = min2(KI_SCALE * (1.0 + t / 8.0), KI_NORM_MAX / t);
+			break;
+		}
 		term = ki * (double)offset;
 		f = kp * (double)offset + s->drift + term;
 		/* At the limit the integral stops: it would only wind up. */

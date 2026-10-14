@@ -8,6 +8,7 @@
 
 #include "ntp.h"
 #include "olt.h"
+#include "phc.h"
 #include "ptp.h"
 #include "select.h"
 #include "servo.h"
@@ -410,6 +411,90 @@ static void test_ptp_timescale(void)
 	CHECK_EQ(r.offset, 5);
 }
 
+/*
+ * With a PHC for its clock the slave keeps the master's timescale: no shift
+ * to UTC, which the caller applies when it sets the system clock from the PHC.
+ */
+static void test_ptp_phc_timescale(void)
+{
+	struct ptp_slave s;
+	struct ptp_result r;
+	uint8_t m[64];
+	ns_t tai = SEC(T0) + SEC(37);
+
+	ptp_slave_init(&s, 0, SLAVE);
+	make_announce(m, 128, 6, true, 37);
+	ptp_rx(&s, m, 64, 0, SEC(1), &r);
+	CHECK_EQ(ptp_utc_shift(&s), SEC(37));
+	ptp_set_local_timescale(&s, true);
+	make_sync(m, 1, false, tai, 0);
+	CHECK(ptp_rx(&s, m, 44, tai + 250, SEC(2), &r));
+	CHECK_EQ(r.offset, 250);
+
+	/* A change of clock drops a two-step Sync in flight: its stamp is of the other clock. */
+	make_sync(m, 2, true, 0, 0);
+	CHECK(!ptp_rx(&s, m, 44, tai, SEC(3), &r));
+	ptp_set_local_timescale(&s, false);
+	make_follow_up(m, 2, tai, 0);
+	CHECK(!ptp_rx(&s, m, 44, 0, SEC(3), &r));
+
+	/* Back on the system clock, the shift applies again. */
+	make_sync(m, 3, false, tai, 0);
+	CHECK(ptp_rx(&s, m, 44, SEC(T0) + 250, SEC(4), &r));
+	CHECK_EQ(r.offset, 250);
+
+	/* An arbitrary timescale has no shift: the UTC offset of the Announce is not applied. */
+	make_announce(m, 128, 6, true, 37);
+	m[7] = 0x04;
+	ptp_rx(&s, m, 64, 0, SEC(5), &r);
+	CHECK_EQ(ptp_utc_shift(&s), 0);
+}
+
+/* A Delay_Req stamped as it leaves: its time comes after it is sent. */
+static void test_ptp_delay_req_stamped_later(void)
+{
+	struct ptp_slave s;
+	struct ptp_result r;
+	uint8_t m[64], req[PTP_DELAY_REQ_LEN];
+	ns_t tai = SEC(T0) + SEC(37);
+	ns_t offset = 300, delay = 2 * NS_PER_US;
+	ns_t t2 = tai + offset + delay, t3, t4;
+	uint16_t seq;
+
+	ptp_slave_init(&s, 0, SLAVE);
+	ptp_set_local_timescale(&s, true);
+	make_announce(m, 128, 6, true, 37);
+	ptp_rx(&s, m, 64, 0, SEC(1), &r);
+	make_sync(m, 1, false, tai, 0);
+	CHECK(ptp_rx(&s, m, 44, t2, SEC(2), &r));
+
+	/* The answer before the stamp: no delay measured, and the request is done with. */
+	CHECK_EQ(ptp_delay_req_later(&s, req), PTP_DELAY_REQ_LEN);
+	seq = get16(req + 30);
+	t3 = tai + SEC(1) + offset;
+	t4 = t3 - offset + delay;
+	make_delay_resp(m, seq, t4, SLAVE, 0);
+	CHECK(!ptp_rx(&s, m, 54, 0, SEC(3), &r));
+	CHECK(!s.delay_known);
+	CHECK(!s.request_wait);
+	/* A stamp that comes after that is of no request. */
+	ptp_delay_req_sent(&s, t3);
+	CHECK(!s.request_t3_known);
+
+	/* The stamp first, then the answer: the delay. */
+	CHECK_EQ(ptp_delay_req_later(&s, req), PTP_DELAY_REQ_LEN);
+	seq = get16(req + 30);
+	ptp_delay_req_sent(&s, t3);
+	make_delay_resp(m, seq, t4, SLAVE, 0);
+	CHECK(!ptp_rx(&s, m, 54, 0, SEC(4), &r));
+	CHECK(s.delay_known);
+	CHECK_EQ(s.delay, delay);
+
+	make_sync(m, 2, false, tai, 0);
+	CHECK(ptp_rx(&s, m, 44, t2, SEC(5), &r));
+	CHECK_EQ(r.offset, offset);
+}
+
 static void test_ptp_rejects(void)
 {
 	struct ptp_slave s;
@@ -724,11 +809,80 @@ static struct run simulate(double gain_ppb, ns_t start, ns_t interval, ns_t amp,
 	return simulate_spikes(gain_ppb, start, interval, amp, n, 0, false);
 }
 
+/*
+ * A reference whose rate moves 1 ppm every 30 s, as a PHC steered from a
+ * master does, read with @noise once a second, the samples through a median
+ * of three or not: the largest error over the second half.
+ */
+static double simulate_wander(enum servo_gains gains, ns_t noise_amp, bool median)
+{
+	struct servo s;
+	struct median3 m;
+	double e = 50 * NS_PER_US, freq = 0, worst = 0;
+	unsigned int seed = 3;
+	ns_t at = SEC(100);
+
+	servo_init(&s, 128 * NS_PER_MS, 0, false);
+	s.baseline = SERVO_BASELINE_PTP;
+	s.gains = gains;
+	median3_reset(&m);
+	for (int i = 0; i < 300; i++) {
+		double gain = (i / 30) % 2 ? 6000 : 5000;
+		ns_t measured = (ns_t)e + noise(&seed, noise_amp);
+		double f = 0;
+
+		if (median)
+			measured = median3_add(&m, measured);
+		switch (servo_sample(&s, measured, at, &f)) {
+		case SERVO_STEP:
+			e -= (double)measured;
+			median3_reset(&m);
+			break;
+		case SERVO_JUMP:
+			e -= (double)measured;
+			freq = f;
+			break;
+		case SERVO_FREQ:
+			freq = f;
+			break;
+		case SERVO_HOLD:
+			break;
+		}
+		if (i >= 150 && (e < 0 ? -e : e) > worst)
+			worst = e < 0 ? -e : e;
+		e += (gain - freq) / 1e9 * (double)NS_PER_SEC;
+		at += SEC(1);
+	}
+	return worst;
+}
+
 static void test_servo(void)
 {
 	struct servo s;
 	struct run r;
 	double f = 0;
+
+	/*
+	 * A PHC whose rate moves, read near exactly: the software gains lag
+	 * by microseconds, the hardware ones keep within a few of the noise.
+	 */
+	CHECK(simulate_wander(SERVO_GAINS_SOFT, NS_PER_US, false) > 5 * NS_PER_US);
+	CHECK(simulate_wander(SERVO_GAINS_HARD, NS_PER_US, false) < 3 * NS_PER_US);
+	/*
+	 * Through a median of three, a sample late: the hard gains swing, the
+	 * filtered ones hold, with 1 us of noise and with a master's 10 us.
+	 */
+	CHECK(simulate_wander(SERVO_GAINS_HARD, NS_PER_US, true) > 100 * NS_PER_US);
+	CHECK(simulate_wander(SERVO_GAINS_FILTERED, NS_PER_US, true) < 4 * NS_PER_US);
+	CHECK(simulate_wander(SERVO_GAINS_FILTERED, 10 * NS_PER_US, true) < 20 * NS_PER_US);
+
+	/* A rate left at the limit by a servo before is not taken over. */
+	servo_init(&s, 128 * NS_PER_MS, -500000, true);
+	CHECK(!s.rate_known);
+	CHECK_EQ((long long)s.freq, 0);
+	servo_init(&s, 128 * NS_PER_MS, -6300, true);
+	CHECK(s.rate_known);
+	CHECK_EQ((long long)s.freq, -6300);
 
 	/* PTP: a crystal 5 ppm fast, 200 us out, a sample a second: below 1 us, the rate found. */
 	r = simulate(5000, 200 * NS_PER_US, SEC(1), 0, 240);
@@ -825,9 +979,9 @@ static void test_servo(void)
 	CHECK_EQ(servo_sample(&s, 0, SEC(10), &f), SERVO_HOLD);
 	CHECK_EQ(servo_sample(&s, 40 * NS_PER_US, SEC(14), &f), SERVO_JUMP);
 	CHECK(f > 9999 && f < 10001);
-	/* A start at a frequency beyond the limit is taken at the limit. */
+	/* A start at a frequency beyond the limit, no crystal's, starts from 0. */
 	servo_init(&s, 128 * NS_PER_MS, -2 * SERVO_MAX_PPB, false);
-	CHECK_EQ(s.freq, -SERVO_MAX_PPB);
+	CHECK_EQ(s.freq, 0);
 	/* A rate the kernel held at the start is not estimated again: the first sample locks. */
 	servo_init(&s, 128 * NS_PER_MS, 6000, true);
 	CHECK_EQ(servo_sample(&s, 300 * NS_PER_US, SEC(10), &f), SERVO_JUMP);
@@ -891,6 +1045,61 @@ static void test_stamp(void)
 	CHECK(!stamp_parse(wide, sizeof(wide), &t));
 }
 
+/* ---- the hardware stamp ---- */
+
+static void test_stamp_hw(void)
+{
+	int64_t wide[6] = { 9, 1, 0, 0, 1791915498, 433484729 };
+	int32_t narrow[6] = { 9, 1, 0, 0, 51, 8 };
+	ns_t t = 0;
+
+	/* The third of three stamps, in either size. */
+	CHECK(stamp_parse_hw(wide, sizeof(wide), &t));
+	CHECK_EQ(t, 1791915498LL * NS_PER_SEC + 433484729);
+	CHECK(stamp_parse_hw(narrow, sizeof(narrow), &t));
+	CHECK_EQ(t, 51 * NS_PER_SEC + 8);
+	/* No hardware stamp (zero), or not three stamps. */
+	wide[4] = 0;
+	wide[5] = 0;
+	CHECK(!stamp_parse_hw(wide, sizeof(wide), &t));
+	CHECK(!stamp_parse_hw(narrow, 5 * sizeof(int32_t), &t));
+}
+
+/* ---- the system clock against the PHC ---- */
+
+static void test_phc_sys_offset(void)
+{
+	struct phc_reading r;
+	ns_t off = 0, win = 0;
+
+	/* The PHC 37 s ahead and 1 us more; the second pair is the closest, 4 us apart. */
+	memset(&r, 0, sizeof(r));
+	r.n = 3;
+	r.sys[0] = SEC(T0);
+	r.phc[0] = SEC(T0 + 37) + 20 * NS_PER_US;
+	r.sys[1] = SEC(T0) + 30 * NS_PER_US;
+	r.phc[1] = SEC(T0 + 37) + 33 * NS_PER_US;
+	r.sys[2] = SEC(T0) + 34 * NS_PER_US;
+	r.phc[2] = SEC(T0 + 37) + 50 * NS_PER_US;
+	r.sys[3] = SEC(T0) + 60 * NS_PER_US;
+	CHECK(phc_sys_offset(&r, &off, &win));
+	CHECK_EQ(win, 4 * NS_PER_US);
+	CHECK_EQ(off, -SEC(37) - NS_PER_US);
+
+	/* A pair out of order (the system clock stepped back between) is passed over. */
+	r.sys[2] = SEC(T0) + 20 * NS_PER_US;
+	CHECK(phc_sys_offset(&r, &off, &win));
+	CHECK_EQ(win, 30 * NS_PER_US);
+	CHECK_EQ(off, SEC(T0) + 15 * NS_PER_US - r.phc[0]);
+
+	/* None in order, or none at all. */
+	r.n = 1;
+	r.sys[1] = r.sys[0] - 1;
+	CHECK(!phc_sys_offset(&r, &off, &win));
+	r.n = 0;
+	CHECK(!phc_sys_offset(&r, &off, &win));
+}
+
 int main(void)
 {
 	test_ntp_time_conversion();
@@ -901,6 +1110,8 @@ int main(void)
 	test_ptp_master_and_one_step();
 	test_ptp_two_step_and_delay();
 	test_ptp_timescale();
+	test_ptp_phc_timescale();
+	test_ptp_delay_req_stamped_later();
 	test_ptp_rejects();
 	test_ptp_master_choice_and_loss();
 	test_ptp_step_drops_stamps_in_flight();
@@ -911,6 +1122,8 @@ int main(void)
 	test_servo();
 	test_median3();
 	test_stamp();
+	test_stamp_hw();
+	test_phc_sys_offset();
 	printf("%d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

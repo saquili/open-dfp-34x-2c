@@ -5,6 +5,7 @@
  * timed: sets the clock of the stick from the host, by NTP and by PTP.
  *
  *   timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]
+ *   timed -H IFACE
  *
  * -n names the NTP server, an address (the stick runs offline and resolves
  * no name); -p the interface of the management link, on which PTP is listened
@@ -12,13 +13,21 @@
  * the OLT gave (olt.h), looked at once a second; -d the PTP domain, 0 unless
  * given; -s the file that tells the state (/run/timed/state); -f keeps timed
  * in the foreground, its log on stderr; -v logs each sample; -D sets nothing
- * (a dry run, for the tests and for looking at what the host gives).
+ * (a dry run, for the tests and for looking at what the host gives). -H turns
+ * on the hardware stamps of an interface and exits; it is run as root, before
+ * the daemon, which may not.
  *
  * Only one source sets the clock at a time (select.h). It is stepped when it
  * is more than 128 ms out, and steered by its frequency otherwise, by the
  * servo of servo.h; the OLT's time, which is to the second, only steps it when
  * it is a second out or more. The stamps are the kernel's, taken when a frame
  * is received, and the clock's when one is sent.
+ *
+ * Where the interface stamps PTP over layer 2 in hardware, those stamps are
+ * taken instead, in the clock of the interface (its PHC): the PHC is set from
+ * the master as the system clock would be, and the system clock follows the
+ * PHC, read against it once a second (phc.h), as ptp4l and phc2sys of
+ * linuxptp do between them.
  */
 
 #define _GNU_SOURCE
@@ -26,8 +35,12 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/ethtool.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
+#include <linux/net_tstamp.h>
+#include <linux/ptp_clock.h>
+#include <linux/sockios.h>
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -47,6 +60,7 @@
 
 #include "ntp.h"
 #include "olt.h"
+#include "phc.h"
 #include "ptp.h"
 #include "select.h"
 #include "servo.h"
@@ -58,6 +72,9 @@
 #ifndef ADJ_NANO
 #define ADJ_NANO 0x2000
 #endif
+#ifndef ADJ_SETOFFSET
+#define ADJ_SETOFFSET 0x0100
+#endif
 #ifndef STA_NANO
 #define STA_NANO 0x2000
 #endif
@@ -67,6 +84,13 @@
 #ifndef SCM_TIMESTAMPNS
 #define SCM_TIMESTAMPNS SO_TIMESTAMPNS
 #endif
+
+#ifndef SOF_TIMESTAMPING_OPT_TSONLY
+#define SOF_TIMESTAMPING_OPT_TSONLY (1 << 11)
+#endif
+
+/* The clock of a PTP device, open as @fd (clock_gettime(2)). */
+#define FD_TO_CLOCKID(fd) ((~(clockid_t)(fd) << 3) | 3)
 
 #define DEFAULT_STATE "/run/timed/state"
 
@@ -89,6 +113,14 @@ static const uint8_t ptp_l2_group[6] = { 0x01, 0x1b, 0x19, 0x00, 0x00, 0x00 };
 /* A Delay_Req each so many seconds: often until the delay is known. */
 #define PTP_DELAY_REQ_FIRST (2 * NS_PER_SEC)
 #define PTP_DELAY_REQ_NORMAL (16 * NS_PER_SEC)
+
+/*
+ * The system clock is read against the PHC once a second. A master heard over
+ * layer 2 with hardware stamps within the last 4 s is that way only: its
+ * messages over UDP, stamped in software, are not mixed in.
+ */
+#define PHC_FOLLOW_PERIOD NS_PER_SEC
+#define PHC_L2_HOLD (4 * NS_PER_SEC)
 
 #define REOPEN_PERIOD (5 * NS_PER_SEC)
 #define STATE_PERIOD (10 * NS_PER_SEC)
@@ -151,6 +183,26 @@ struct daemon {
 	ns_t ptp_last_offset;
 	bool ptp_have_offset;
 	struct median3 ptp_med;	/* the PTP offsets, filtered */
+
+	/*
+	 * PTP with hardware stamps: the PHC of the interface, set from the
+	 * master by a servo of its own, and the system clock read against it.
+	 */
+	bool hw_ready;			/* the layer-2 socket takes hardware stamps */
+	int phc_fd;
+	int phc_index;
+	clockid_t phc;
+	struct servo phc_servo;
+	struct median3 phc_med;		/* the PHC's offsets from the master, filtered */
+	bool phc_set;			/* the PHC holds the master's time */
+	unsigned int phc_steps;
+	ns_t l2_sync_at;		/* monotonic time of the last Sync stamped in hardware */
+	ns_t phc_follow_at;
+	ns_t sys_phc_offset;		/* the system clock less the PHC's time in UTC */
+	ns_t sys_phc_window;		/* the time the kernel took to read the PHC */
+	bool have_sys_phc;
+	unsigned int tx_stamps;		/* Delay_Req stamped in hardware */
+	unsigned int tx_missed;		/* and those whose stamp never came */
 
 	/* the OLT's time: the file as last read, and what it said */
 	ns_t olt_check_at;
@@ -346,7 +398,20 @@ static void write_state(const struct daemon *d, ns_t mono)
 			fprintf(f, "ptp_delay_ns=%lld\n", (long long)d->ptp.delay);
 		}
 		if (d->ptp_have_offset)
-			fprintf(f, "ptp_offset_ns=%lld\n", (long long)d->sel.s[SRC_PTP].offset);
+			fprintf(f, "ptp_offset_ns=%lld\n", (long long)d->ptp_last_offset);
+		fprintf(f, "ptp_stamps=%s\n", d->hw_ready ? "hardware" : "software");
+		if (d->hw_ready) {
+			fprintf(f, "ptp_phc=/dev/ptp%d\n", d->phc_index);
+			fprintf(f, "ptp_phc_set=%d\n", d->phc_set);
+			fprintf(f, "ptp_phc_freq_ppb=%lld\n", (long long)-d->phc_servo.freq);
+			fprintf(f, "ptp_phc_steps=%u\n", d->phc_steps);
+			if (d->have_sys_phc) {
+				fprintf(f, "ptp_sys_phc_offset_ns=%lld\n", (long long)d->sys_phc_offset);
+				fprintf(f, "ptp_sys_phc_window_ns=%lld\n", (long long)d->sys_phc_window);
+			}
+			fprintf(f, "ptp_tx_stamps=%u\n", d->tx_stamps);
+			fprintf(f, "ptp_tx_missed=%u\n", d->tx_missed);
+		}
 	}
 	if (d->olt_path) {
 		fprintf(f, "olt_file=%s\n", d->olt_path);
@@ -375,8 +440,11 @@ static bool step(struct daemon *d, enum source src, ns_t offset)
 	d->steps++;
 	d->dirty = true;
 	ntp_filter_init(&d->ntp_filter);
-	ptp_clock_stepped(&d->ptp);
-	median3_reset(&d->ptp_med);
+	/* Stamps in the PHC are not of the system clock: a step leaves them. */
+	if (!d->ptp.local_timescale) {
+		ptp_clock_stepped(&d->ptp);
+		median3_reset(&d->ptp_med);
+	}
 	LOG(d, "clock stepped by %s from %s", show(-offset, buf, sizeof(buf)), source_name(src));
 	return true;
 }
@@ -401,6 +469,8 @@ static void discipline(struct daemon *d, enum source src, ns_t offset, ns_t at)
 		return;
 	}
 	d->servo.baseline = src == SRC_NTP ? SERVO_BASELINE_NTP : SERVO_BASELINE_PTP;
+	/* PTP with hardware stamps gives the PHC, which the system clock reads near exactly. */
+	d->servo.gains = src == SRC_PTP && d->ptp.local_timescale ? SERVO_GAINS_HARD : SERVO_GAINS_SOFT;
 	switch (servo_sample(&d->servo, offset, at, &freq)) {
 	case SERVO_STEP:
 		step(d, src, offset);
@@ -579,6 +649,304 @@ static void ptp_close(struct daemon *d)
 		close(d->general_fd);
 	d->l2_fd = d->event_fd = d->general_fd = -1;
 	d->ptp_ready = false;
+	d->hw_ready = false;
+}
+
+/* ---- PTP with hardware stamps ---- */
+
+/* The receive filters that stamp a Sync over layer 2. */
+static bool l2_filter(int filter)
+{
+	switch (filter) {
+	case HWTSTAMP_FILTER_ALL:
+	case HWTSTAMP_FILTER_PTP_V2_EVENT:
+	case HWTSTAMP_FILTER_PTP_V2_SYNC:
+	case HWTSTAMP_FILTER_PTP_V2_L2_EVENT:
+	case HWTSTAMP_FILTER_PTP_V2_L2_SYNC:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+ * timed -H: turn on the hardware stamps of @iface, transmit and the layer-2
+ * PTP receive filter (SIOCSHWTSTAMP). That takes CAP_NET_ADMIN, which the
+ * daemon does not have; root runs this before it. Return the exit status.
+ */
+static int hw_enable(const char *iface)
+{
+	struct hwtstamp_config cfg;
+	struct ifreq ifr;
+	int fd, err = 0;
+
+	fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (fd < 0) {
+		perror("timed: socket");
+		return 1;
+	}
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.tx_type = HWTSTAMP_TX_ON;
+	cfg.rx_filter = HWTSTAMP_FILTER_PTP_V2_L2_EVENT;
+	memset(&ifr, 0, sizeof(ifr));
+	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", iface);
+	ifr.ifr_data = (void *)&cfg;
+	if (ioctl(fd, SIOCSHWTSTAMP, &ifr) < 0) {
+		err = errno;
+		fprintf(stderr, "timed: %s: no hardware stamps: %s\n", iface, strerror(err));
+	}
+	close(fd);
+	return err ? 1 : 0;
+}
+
+/* The PHC's frequency, in the servo's parts per billion. */
+static double phc_freq_now(const struct daemon *d)
+{
+	struct timex tx;
+
+	memset(&tx, 0, sizeof(tx));
+	if (clock_adjtime(d->phc, &tx) < 0)
+		return 0;
+	return (double)tx.freq / PPB_TO_FREQ;
+}
+
+static int phc_freq_set(const struct daemon *d, double ppb)
+{
+	struct timex tx;
+
+	if (d->dry)
+		return 0;
+	memset(&tx, 0, sizeof(tx));
+	tx.modes = ADJ_FREQUENCY;
+	tx.freq = (long)(ppb * PPB_TO_FREQ);
+	return clock_adjtime(d->phc, &tx) < 0 ? -1 : 0;
+}
+
+/* Step the PHC by -@offset: it adds an offset to the running clock, losing nothing. */
+static bool phc_step(struct daemon *d, ns_t offset)
+{
+	ns_t by = -offset;
+	struct timex tx;
+	char buf[32];
+
+	if (!d->dry) {
+		memset(&tx, 0, sizeof(tx));
+		tx.modes = ADJ_SETOFFSET | ADJ_NANO;
+		tx.time.tv_sec = (time_t)(by / NS_PER_SEC);
+		tx.time.tv_usec = (long)(by % NS_PER_SEC);
+		if (tx.time.tv_usec < 0) {
+			tx.time.tv_usec += NS_PER_SEC;
+			tx.time.tv_sec -= 1;
+		}
+		if (clock_adjtime(d->phc, &tx) < 0) {
+			WARN(d, "cannot step the PHC: %s", strerror(errno));
+			return false;
+		}
+	}
+	d->phc_steps++;
+	d->dirty = true;
+	/* What was stamped in the PHC before is of another clock. */
+	ptp_clock_stepped(&d->ptp);
+	median3_reset(&d->phc_med);
+	LOG(d, "PHC stepped by %s", show(by, buf, sizeof(buf)));
+	return true;
+}
+
+/*
+ * Take the hardware stamps of the layer-2 socket, when the interface gives
+ * them and has them on: a PHC, transmit stamps and a receive filter for PTP
+ * over layer 2 (set by timed -H). Otherwise the software stamps stay.
+ */
+static void hw_open(struct daemon *d)
+{
+	struct ethtool_ts_info info;
+	struct hwtstamp_config cfg;
+	const char *why = NULL;
+	struct ifreq ifr;
+	int flags;
+
+	memset(&ifr, 0, sizeof(ifr));
+	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", d->iface);
+	memset(&info, 0, sizeof(info));
+	info.cmd = ETHTOOL_GET_TS_INFO;
+	ifr.ifr_data = (void *)&info;
+	memset(&cfg, 0, sizeof(cfg));
+	if (ioctl(d->l2_fd, SIOCETHTOOL, &ifr) < 0 || info.phc_index < 0 ||
+	    !(info.so_timestamping & SOF_TIMESTAMPING_TX_HARDWARE) ||
+	    !(info.so_timestamping & SOF_TIMESTAMPING_RX_HARDWARE)) {
+		why = "the interface gives none";
+		goto out;
+	}
+	ifr.ifr_data = (void *)&cfg;
+	if (ioctl(d->l2_fd, SIOCGHWTSTAMP, &ifr) < 0 || cfg.tx_type != HWTSTAMP_TX_ON ||
+	    !l2_filter(cfg.rx_filter)) {
+		why = "not turned on (timed -H)";
+		goto out;
+	}
+	if (d->phc_fd < 0 || d->phc_index != info.phc_index) {
+		char path[32];
+		double freq;
+
+		if (d->phc_fd >= 0)
+			close(d->phc_fd);
+		snprintf(path, sizeof(path), "/dev/ptp%d", info.phc_index);
+		d->phc_fd = open(path, (d->dry ? O_RDONLY : O_RDWR) | O_CLOEXEC);
+		if (d->phc_fd < 0) {
+			why = strerror(errno);
+			goto out;
+		}
+		d->phc_index = info.phc_index;
+		d->phc = FD_TO_CLOCKID(d->phc_fd);
+		d->phc_set = false;
+		freq = phc_freq_now(d);
+		servo_init(&d->phc_servo, STEP_LIMIT, freq, freq != 0);
+		if (d->phc_servo.freq != freq)
+			phc_freq_set(d, d->phc_servo.freq);
+	}
+	flags = SOF_TIMESTAMPING_TX_HARDWARE | SOF_TIMESTAMPING_RX_HARDWARE |
+		SOF_TIMESTAMPING_RAW_HARDWARE | SOF_TIMESTAMPING_OPT_TSONLY;
+	if (setsockopt(d->l2_fd, SOL_SOCKET, SO_TIMESTAMPING, &flags, sizeof(flags)) < 0) {
+		why = strerror(errno);
+		goto out;
+	}
+	d->hw_ready = true;
+out:
+	if (d->hw_ready)
+		LOG(d, "PTP stamps: hardware, PHC /dev/ptp%d", d->phc_index);
+	else
+		LOG(d, "PTP stamps: software (hardware: %s)", why);
+}
+
+/* The hardware stamp of a frame, when it came with one. */
+static bool rx_stamp_hw(struct msghdr *mh, ns_t *t)
+{
+	struct cmsghdr *c;
+
+	for (c = CMSG_FIRSTHDR(mh); c; c = CMSG_NXTHDR(mh, c))
+		if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == (int)SO_TIMESTAMPING &&
+		    c->cmsg_len > CMSG_LEN(0) && stamp_parse_hw(CMSG_DATA(c), c->cmsg_len - CMSG_LEN(0), t))
+			return true;
+	return false;
+}
+
+/*
+ * The error queue of the layer-2 socket: the time a Delay_Req left, stamped
+ * by the interface. The stamp comes without the message (OPT_TSONLY); the
+ * driver stamps one message at a time and timed sends only Delay_Req, so it
+ * is the last one's.
+ */
+static void hw_tx_read(struct daemon *d)
+{
+	bool any = false;
+
+	for (;;) {
+		uint8_t cbuf[256];
+		struct msghdr mh;
+		ns_t t3;
+
+		memset(&mh, 0, sizeof(mh));
+		mh.msg_control = cbuf;
+		mh.msg_controllen = sizeof(cbuf);
+		if (recvmsg(d->l2_fd, &mh, MSG_ERRQUEUE | MSG_DONTWAIT) < 0)
+			break;
+		any = true;
+		if (rx_stamp_hw(&mh, &t3)) {
+			d->tx_stamps++;
+			ptp_delay_req_sent(&d->ptp, t3);
+		}
+	}
+	/* Nothing queued: an error of the socket itself, which reading clears; then open again. */
+	if (!any) {
+		int err = 0;
+		socklen_t len = sizeof(err);
+
+		if (getsockopt(d->l2_fd, SOL_SOCKET, SO_ERROR, &err, &len) == 0 && err) {
+			WARN(d, "PTP: %s: %s", d->iface, strerror(err));
+			ptp_close(d);
+			d->ptp_reopen_at = mono_now() + REOPEN_PERIOD;
+		}
+	}
+}
+
+/*
+ * An offset of the PHC from the master: the PHC's servo, as discipline() is
+ * the system clock's. The stamps are the PHC's but the master's are only as
+ * good as the master: one that stamps in software gave offsets some 20 us
+ * apart, and stalls. They go through a median of three, as the software
+ * stamps do, and the servo takes the gains that hold with its delay: the
+ * hard gains of linuxptp swung to the 500 ppm limit either way (measured).
+ */
+static void phc_sample(struct daemon *d, ns_t offset, ns_t mono)
+{
+	double freq = 0;
+	char buf[32];
+	ns_t off;
+
+	off = median3_add(&d->phc_med, offset);
+	/* Three to take the median of, but a clock far out is set at once. */
+	if (d->phc_med.n < 3 && offset < STEP_LIMIT && offset > -STEP_LIMIT)
+		return;
+	d->phc_servo.baseline = SERVO_BASELINE_PTP;
+	d->phc_servo.gains = SERVO_GAINS_FILTERED;
+	switch (servo_sample(&d->phc_servo, off, mono, &freq)) {
+	case SERVO_STEP:
+		if (phc_step(d, off))
+			d->phc_set = true;
+		return;
+	case SERVO_JUMP:
+		if (phc_step(d, off) && phc_freq_set(d, freq) < 0)
+			WARN(d, "cannot set the PHC's frequency: %s", strerror(errno));
+		d->phc_set = true;
+		return;
+	case SERVO_FREQ:
+		if (phc_freq_set(d, freq) < 0)
+			WARN(d, "cannot set the PHC's frequency: %s", strerror(errno));
+		break;
+	case SERVO_HOLD:
+		break;
+	}
+	if (!d->phc_set) {
+		d->phc_set = true;
+		d->dirty = true;
+		LOG(d, "PHC in step with the master, offset %s", show(off, buf, sizeof(buf)));
+	}
+	DEBUG(d, "PHC: offset %lld ns, frequency %+.0f ppb", (long long)off, -d->phc_servo.freq);
+}
+
+/*
+ * The system clock against the PHC, whose time is the master's, as a PTP
+ * sample: the PHC is read between two readings of the system clock, five
+ * times (PTP_SYS_OFFSET), and its time put in UTC.
+ */
+static void phc_follow(struct daemon *d, ns_t mono)
+{
+	struct ptp_sys_offset req;
+	struct phc_reading r;
+	ns_t offset, window;
+	unsigned int i;
+
+	memset(&req, 0, sizeof(req));
+	req.n_samples = PHC_SAMPLES;
+	if (ioctl(d->phc_fd, PTP_SYS_OFFSET, &req) < 0) {
+		DEBUG(d, "PHC: cannot read it against the system clock: %s", strerror(errno));
+		return;
+	}
+	r.n = req.n_samples;
+	for (i = 0; i <= 2 * r.n; i++) {
+		ns_t t = (ns_t)req.ts[i].sec * NS_PER_SEC + req.ts[i].nsec;
+
+		if (i % 2)
+			r.phc[i / 2] = t;
+		else
+			r.sys[i / 2] = t;
+	}
+	if (!phc_sys_offset(&r, &offset, &window))
+		return;
+	offset += ptp_utc_shift(&d->ptp);
+	d->sys_phc_offset = offset;
+	d->sys_phc_window = window;
+	d->have_sys_phc = true;
+	on_sample(d, SRC_PTP, offset, mono, PHC_L2_HOLD);
 }
 
 static int udp_socket(const struct daemon *d, unsigned int port, struct in_addr group)
@@ -664,6 +1032,7 @@ static int ptp_open(struct daemon *d)
 			d->l2_fd = -1;
 		} else {
 			setsockopt(d->l2_fd, SOL_SOCKET, SO_TIMESTAMPNS, &one, sizeof(one));
+			hw_open(d);
 		}
 	}
 
@@ -688,10 +1057,16 @@ static void ptp_send_delay_req(struct daemon *d)
 {
 	uint8_t buf[PTP_DELAY_REQ_LEN];
 	size_t len;
-	ns_t t3 = real_now();
 
-	/* The time of sending is taken before the send, so that the message carries it back. */
-	len = ptp_delay_req(&d->ptp, buf, t3);
+	if (d->ptp.local_timescale) {
+		/* The interface stamps it as it leaves; the stamp comes on the error queue. */
+		if (d->ptp.request_wait && !d->ptp.request_t3_known)
+			d->tx_missed++;
+		len = ptp_delay_req_later(&d->ptp, buf);
+	} else {
+		/* The time of sending is taken before the send, so that the message carries it back. */
+		len = ptp_delay_req(&d->ptp, buf, real_now());
+	}
 	if (!len)
 		return;
 	if (d->via == VIA_L2 && d->l2_fd >= 0) {
@@ -744,6 +1119,25 @@ static void ptp_read(struct daemon *d, int fd, enum transport via)
 	}
 	rx = rx_stamp(&mh);
 	mono = mono_now();
+	if (d->hw_ready && (buf[0] & 0x0f) != PTP_ANNOUNCE) {
+		bool hw = via == VIA_L2;
+
+		/*
+		 * Over layer 2 a Sync is taken with its hardware stamp, or
+		 * not at all; over UDP, while the master is heard over layer 2,
+		 * not at all either: the two kinds of stamp are of two clocks.
+		 */
+		if (hw && (buf[0] & 0x0f) == PTP_SYNC) {
+			if (!rx_stamp_hw(&mh, &rx))
+				return;
+			d->l2_sync_at = mono;
+		}
+		if (!hw && mono - d->l2_sync_at < PHC_L2_HOLD)
+			return;
+		ptp_set_local_timescale(&d->ptp, hw);
+	} else if (!d->hw_ready) {
+		ptp_set_local_timescale(&d->ptp, false);
+	}
 	if (d->verbose && (buf[0] & 0x0f) <= PTP_SYNC)
 		DEBUG(d, "PTP: Sync seq %u received at %lld, now %lld", get16(buf + 30), (long long)rx,
 		      (long long)real_now());
@@ -755,6 +1149,8 @@ static void ptp_read(struct daemon *d, int fd, enum transport via)
 		d->via = via;
 		d->delay_req_at = mono + NS_PER_SEC;
 		median3_reset(&d->ptp_med);
+		median3_reset(&d->phc_med);
+		servo_reset(&d->phc_servo);
 		LOG(d, "PTP master %02x%02x%02x%02x%02x%02x%02x%02x over %s, class %u, UTC offset %d s", c[0],
 		    c[1], c[2], c[3], c[4], c[5], c[6], c[7], via == VIA_L2 ? "layer 2" : "UDP",
 		    d->ptp.master_ds.clock_class, d->ptp.utc_offset);
@@ -769,6 +1165,11 @@ static void ptp_read(struct daemon *d, int fd, enum transport via)
 			hold = 8 * NS_PER_SEC;
 		d->ptp_last_offset = r.offset;
 		d->ptp_have_offset = true;
+		/* With hardware stamps the offset is the PHC's; the system clock follows the PHC. */
+		if (d->ptp.local_timescale) {
+			phc_sample(d, r.offset, mono);
+			return;
+		}
 		off = median3_add(&d->ptp_med, r.offset);
 		/* The servo takes the median once there are three to take it of. */
 		if (d->ptp_med.n >= 3)
@@ -790,6 +1191,11 @@ static void ptp_tick(struct daemon *d, ns_t mono)
 		ptp_master_lost(&d->ptp);
 		d->ptp_have_offset = false;
 		median3_reset(&d->ptp_med);
+	}
+	if (d->hw_ready && d->phc_set && d->ptp.have_master && d->ptp.local_timescale &&
+	    mono - d->l2_sync_at < PHC_L2_HOLD && mono >= d->phc_follow_at) {
+		d->phc_follow_at = mono + PHC_FOLLOW_PERIOD;
+		phc_follow(d, mono);
 	}
 	if (d->ptp.have_master && mono >= d->delay_req_at) {
 		ptp_send_delay_req(d);
@@ -842,7 +1248,8 @@ static void olt_check(struct daemon *d, ns_t mono)
 
 static void print_usage(void)
 {
-	fprintf(stderr, "usage: timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]\n");
+	fprintf(stderr, "usage: timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]\n"
+			"       timed -H IFACE\n");
 	exit(2);
 }
 
@@ -875,7 +1282,7 @@ int main(int argc, char **argv)
 
 	memset(&d, 0, sizeof(d));
 	d.state_path = DEFAULT_STATE;
-	d.ntp_fd = d.l2_fd = d.event_fd = d.general_fd = -1;
+	d.ntp_fd = d.l2_fd = d.event_fd = d.general_fd = d.phc_fd = -1;
 	select_init(&d.sel);
 	ntp_filter_init(&d.ntp_filter);
 	{
@@ -884,8 +1291,10 @@ int main(int argc, char **argv)
 		ptp_slave_init(&d.ptp, 0, none);
 	}
 
-	while ((opt = getopt(argc, argv, "n:p:o:d:s:fvD")) != -1) {
+	while ((opt = getopt(argc, argv, "n:p:o:d:s:fvDH:")) != -1) {
 		switch (opt) {
+		case 'H':
+			return hw_enable(optarg);
 		case 'n':
 			d.ntp_server = optarg;
 			break;
@@ -924,6 +1333,8 @@ int main(int argc, char **argv)
 
 		/* A frequency the kernel holds is one a timed before this one set: right, and kept. */
 		servo_init(&d.servo, STEP_LIMIT, freq, freq != 0);
+		if (d.servo.freq != freq)
+			freq_set(&d, d.servo.freq);
 	}
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = on_signal;
@@ -968,6 +1379,8 @@ int main(int argc, char **argv)
 
 		if (idx_ntp >= 0 && (pfd[idx_ntp].revents & POLLIN))
 			ntp_read(&d);
+		if (idx_l2 >= 0 && (pfd[idx_l2].revents & POLLERR) && d.l2_fd >= 0 && d.hw_ready)
+			hw_tx_read(&d);
 		if (idx_l2 >= 0 && (pfd[idx_l2].revents & POLLIN) && d.l2_fd >= 0)
 			ptp_read(&d, d.l2_fd, VIA_L2);
 		if (idx_ev >= 0 && (pfd[idx_ev].revents & POLLIN) && d.event_fd >= 0)

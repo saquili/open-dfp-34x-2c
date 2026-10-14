@@ -7,8 +7,11 @@
  * it sends, the choice of the master and the offset from it.
  *
  * Times are the receiver's own stamps of the messages, taken by the caller
- * in the clock that is to be set. The messages are the same over layer 2 and
- * over UDP; the caller strips the Ethernet or the UDP header.
+ * in the clock that is to be set. That clock counts UTC (the system clock),
+ * or the master's own timescale (a PTP hardware clock, which a master on the
+ * PTP timescale keeps in TAI): ptp_set_local_timescale(). The messages are the
+ * same over layer 2 and over UDP; the caller strips the Ethernet or the UDP
+ * header.
  */
 
 #ifndef TIMED_PTP_H
@@ -70,6 +73,7 @@ struct ptp_slave {
 	ns_t announce_at;	/* local monotonic time of the last Announce */
 	int utc_offset;		/* seconds, TAI less UTC */
 	bool ptp_timescale;	/* the master's times are TAI */
+	bool local_timescale;	/* the clock to be set counts the master's timescale, not UTC */
 	int announce_log_interval;
 	int sync_log_interval;	/* the master's own, 2^n seconds, from the headers */
 
@@ -85,6 +89,7 @@ struct ptp_slave {
 	bool request_wait;
 	uint16_t request_sent_seq;
 	ns_t request_t3;
+	bool request_t3_known;	/* false until the time of sending is known (ptp_delay_req_sent()) */
 	ns_t delay;		/* mean path delay */
 	bool delay_known;
 };
@@ -113,6 +118,26 @@ void ptp_clock_stepped(struct ptp_slave *s);
  * @t3 as the local time of its sending. Return its length, 0 without a master.
  */
 size_t ptp_delay_req(struct ptp_slave *s, uint8_t *buf, ns_t t3);
+
+/*
+ * Build a Delay_Req whose time of sending is known only once it has left: a
+ * hardware stamp, given with ptp_delay_req_sent(). A Delay_Resp that comes
+ * before it is not used.
+ */
+size_t ptp_delay_req_later(struct ptp_slave *s, uint8_t *buf);
+
+/* The Delay_Req last built left at local time @t3. */
+void ptp_delay_req_sent(struct ptp_slave *s, ns_t t3);
+
+/*
+ * Whether the clock to be set counts the master's timescale (true: a PHC) or
+ * UTC (false: the system clock, the default). A change drops what is in
+ * flight, as a step does.
+ */
+void ptp_set_local_timescale(struct ptp_slave *s, bool master);
+
+/* What a time of the master's timescale is ahead of UTC: the UTC offset on the PTP timescale, else 0. */
+ns_t ptp_utc_shift(const struct ptp_slave *s);
 
 /* A node's clock identity from its MAC address (IEEE EUI-64: ff:fe in the middle). */
 void ptp_clock_id_from_mac(uint8_t id[8], const uint8_t mac[6]);

@@ -11,6 +11,7 @@ host, in the two ways a host may give the time, and from the date the OLT gives
 when the host gives none::
 
    timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]
+   timed -H IFACE
 
 ``-n`` names an NTP server (RFC 5905), by its address: the stick runs offline
 and resolves no name. ``-p`` names the interface on which timed is a PTP slave
@@ -22,6 +23,10 @@ writes the date the OLT gave. ``-s`` names the file of the state,
 ``/run/timed/state`` unless given. ``-f`` keeps the log on stderr rather than
 the system log, ``-v`` logs every sample, and ``-D`` sets no clock: timed
 measures and chooses, for the tests and for looking at what a host gives.
+``-H`` turns on the hardware stamps of an interface (``SIOCSHWTSTAMP``:
+transmit stamps on, the receive filter for PTP over layer 2) and exits; that
+takes ``CAP_NET_ADMIN``, which the daemon does not have, so root runs it before
+the daemon starts.
 
 The sources
 ===========
@@ -41,7 +46,9 @@ PTP
    is lost. Sync is taken one-step or two-step (with its Follow_Up), and the
    path delay comes from a Delay_Req every 2 s until it is known, then every
    16 s. The master's times are on its timescale: TAI less the UTC offset its
-   Announce gives, 37 s when it gives none.
+   Announce gives, 37 s when it gives none. Over layer 2, on an interface that
+   stamps in hardware, the stamps are the interface's (see "Hardware
+   stamps").
 NTP
    timed polls the server every 2 s for the first four polls, every 16 s up
    to the twelfth, then every 64 s, and every 16 s again after three polls go
@@ -87,11 +94,50 @@ step with ptp, offset -0.000012 s"), each change of source ("time source: ptp
 (was ntp)"), and a master found or lost.
 
 The time a frame came is the kernel's stamp of it (``SO_TIMESTAMPNS``), and the
-time timed sends a Delay_Req or an NTP request is read just before it sends it.
-The switch stamps the PTP frames it gives the CPU on its own clock, but gives no
-time of departure for one the CPU sends (``rtl9602c-ptp.c``), and its clock is
-not the system clock: the software stamps, tens of microseconds off, are plenty
-for the time of day.
+time timed sends a Delay_Req or an NTP request is read just before it sends it,
+unless the interface stamps PTP in hardware (below).
+
+Hardware stamps
+===============
+
+The stick's switch stamps the PTP messages over layer 2 that it gives the CPU,
+and those the CPU sends, on its own clock, a PTP hardware clock (PHC,
+``/dev/ptp0``; the driver is ``rtl9602c-ptp.c``). Where the interface of ``-p``
+has those stamps on (``timed -H``) and its PHC can be opened, timed takes them
+for PTP over layer 2, as ptp4l and phc2sys of linuxptp do between them:
+
+- The time a Sync came is its stamp, and the time a Delay_Req left is the
+  stamp the switch reports, which timed reads from the socket's error queue
+  (``SO_TIMESTAMPING``); a Delay_Resp that comes before it is not used. A Sync
+  without a stamp is not used either: the two kinds of stamp are of two
+  clocks.
+- The PHC is set from the master by a servo of its own, in the master's
+  timescale (TAI for a master on the PTP timescale). A PHC far out is stepped
+  (``ADJ_SETOFFSET``), a near one steered by its frequency.
+- The system clock follows the PHC: once a second the kernel reads the two in
+  turn (``PTP_SYS_OFFSET``, five readings, the closest pair taken), and the
+  offset, with the PHC's time put in UTC, is the PTP sample that sets the
+  system clock.
+- A master heard over layer 2 with hardware stamps in the last 4 s is that way
+  only: its messages over UDP, which the switch does not stamp, are not mixed
+  in. Without hardware stamps, over UDP, or with the PHC not to be opened,
+  timed takes the software stamps as before; the log says which
+  ("PTP stamps: hardware, PHC /dev/ptp0").
+
+The two servos take other gains than the software stamps' (``src/servo.h``).
+The system clock reads the PHC near exactly and takes linuxptp's gains for
+hardware stamps, 0.7 and 0.3: with the software gains it lagged some 10 us
+behind a PHC whose rate the master moves. The PHC is only as exact as the
+master's stamps; its offsets go through a median of three, against a master
+that stamps in software and stalls, and the sample of delay the median adds
+made linuxptp's gains swing to the 500 ppm limit (measured), so the PHC takes
+0.3 and 0.05, which hold with it.
+
+Measured on the stick, the host a master of ``tools/lab/ptpmaster`` that takes
+the kernel's software stamps of its Syncs: the PHC within some 1 to 3 us of
+the master, the system clock within 1 us of the PHC, the PHC's frequency some
+-6.5 ppm. With a master that reads the time before it sends, the PHC followed
+that master's tens of microseconds.
 
 The state
 =========
@@ -116,7 +162,18 @@ less the source's, in nanoseconds.
    The server and whether it is good (``1`` or ``0``), and its last sample.
 ``ptp_interface``, ``ptp_good``, ``ptp_master``, ``ptp_via``, ``ptp_delay_ns``, ``ptp_offset_ns``
    The interface and whether PTP is good; the master's clock identity, the way
-   it is heard (``l2`` or ``udp``), the path delay and the last offset.
+   it is heard (``l2`` or ``udp``), the path delay and the last offset
+   measured: of the system clock, or with hardware stamps of the PHC.
+``ptp_stamps``
+   ``hardware`` or ``software``: the stamps PTP over layer 2 takes.
+``ptp_phc``, ``ptp_phc_set``, ``ptp_phc_freq_ppb``, ``ptp_phc_steps``
+   With hardware stamps: the PHC, whether it holds the master's time, the
+   correction of its frequency and its steps.
+``ptp_sys_phc_offset_ns``, ``ptp_sys_phc_window_ns``
+   The system clock less the PHC's time in UTC, and the time the kernel took
+   to read the PHC, at the last reading.
+``ptp_tx_stamps``, ``ptp_tx_missed``
+   Delay_Req stamped as they left, and those whose stamp never came.
 ``olt_file``, ``olt_good``, ``olt_utc``, ``olt_offset_ns``
    The file of the OLT's time and whether it is good; the time the OLT gave,
    in seconds since 1970, and its offset.
@@ -133,10 +190,13 @@ and 320, below the 1024 an account may take without it (``onu-drop -c
 sys_time,net_raw,net_bind_service``): NTP from ``NTP_SERVER`` of the stick's settings or,
 without one, from the router at the other end of the management link, the
 other address of its /30 or /31; PTP on the management link's interface;
-the OLT's time from ``/run/omcid/clock``. When the management pair changes,
-``onu-mgmt`` ends timed and procd starts it again for the new link. A host
-gives the stick PTP with a master on its interface of the management VLAN, such
-as ptp4l of linuxptp, over layer 2 or UDP over IPv4.
+the OLT's time from ``/run/omcid/clock``. Before it, as root, ``onu-run``
+turns on the hardware stamps of that interface (``timed -H``) and gives the
+PHCs to the group ``ntp``, which steers them through the device. When the
+management pair changes, ``onu-mgmt`` ends timed and procd starts it again for
+the new link. A host gives the stick PTP with a master on its interface of the
+management VLAN, such as ptp4l of linuxptp, over layer 2 or UDP over IPv4;
+over layer 2 the stick's stamps are its switch's.
 
 Building and testing::
 

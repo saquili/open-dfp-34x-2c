@@ -31,3 +31,15 @@ bool stamp_parse(const void *data, size_t len, ns_t *out)
 	*out = sec * NS_PER_SEC + nsec;
 	return true;
 }
+
+bool stamp_parse_hw(const void *data, size_t len, ns_t *out)
+{
+	const unsigned char *p = data;
+
+	/* The third of three: after two stamps of 16 bytes, or of 8. */
+	if (len >= 6 * sizeof(int64_t))
+		return stamp_parse(p + 4 * sizeof(int64_t), 2 * sizeof(int64_t), out);
+	if (len >= 6 * sizeof(int32_t))
+		return stamp_parse(p + 4 * sizeof(int32_t), 2 * sizeof(int32_t), out);
+	return false;
+}

@@ -16,7 +16,7 @@ override CPPFLAGS += -Isrc
 override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototypes \
                  -Wshadow -Wpointer-arith -Wwrite-strings
 
-PROTO := $(addprefix $(BUILD)/src/,ntp.o olt.o ptp.o select.o servo.o stamp.o)
+PROTO := $(addprefix $(BUILD)/src/,ntp.o olt.o phc.o ptp.o select.o servo.o stamp.o)
 
 .PHONY: all check clean
 
