@@ -45,6 +45,7 @@
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <time.h>
 
 #include "hw/hw.h"
 #include "hw_kernel.h"
@@ -1500,6 +1501,36 @@ static void kernel_mode_done(bool router)
 	}
 	if (!ok)
 		OMCI_WARN("mode: not told in %s", APPLIED_PATH);
+}
+
+/*
+ * The date and time the OLT gave, with the monotonic time they came at, for
+ * the stick's time daemon (timed -o), which takes the time now as the one
+ * given plus the time since. Replaced whole, as KEY=VALUE lines.
+ */
+#define CLOCK_PATH OMCI_RUN_DIR "/clock"
+
+static void kernel_time_of_day(uint64_t utc)
+{
+	struct timespec mono;
+	char tmp[64];
+	FILE *f;
+	bool ok = false;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &mono) != 0)
+		return;
+	snprintf(tmp, sizeof(tmp), "%s.new", CLOCK_PATH);
+	f = fopen(tmp, "we");
+	if (f != NULL) {
+		ok = fprintf(f, "utc=%llu\nmonotonic_ns=%lld\n",
+			     (unsigned long long)utc,
+			     (long long)mono.tv_sec * 1000000000LL +
+				     mono.tv_nsec) > 0;
+		ok = fclose(f) == 0 && ok;
+		ok = ok && rename(tmp, CLOCK_PATH) == 0;
+	}
+	if (!ok)
+		OMCI_WARN("sync-time: not told in %s", CLOCK_PATH);
 }
 
 /* Whether an address is already among those read, for the same side. */
@@ -4402,4 +4433,5 @@ const struct omci_hw_ops omci_hw_kernel_ops = {
 	.mcast_seen = kernel_mcast_seen,
 	.uni_rate = kernel_uni_rate,
 	.mode_done = kernel_mode_done,
+	.time_of_day = kernel_time_of_day,
 };

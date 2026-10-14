@@ -1868,8 +1868,9 @@ static void handle_get_all_alarms_next(struct omci_engine *eng,
  * Synchronize time (G.988 A.3.33, A.3.34): the performance monitoring
  * starts again, its intervals ending on the quarter hours of the time the
  * OLT gives, or fifteen minutes from now when it gives none. With a date
- * the clock is set too; without one, the year, month and day 0, only the
- * time of day places the boundary. A date that does not exist, or a time
+ * the clock is set too, and handed to the backend for the stick's time
+ * daemon; without one, the year, month and day 0, only the time of day
+ * places the boundary. A date that does not exist, or a time
  * of day that does not, is refused with a parameter error and changes
  * nothing.
  */
@@ -1891,6 +1892,9 @@ static void handle_sync_time(struct omci_engine *eng,
 		OMCI_INFO(
 			"sync-time: clock set to %04u-%02u-%02u %02u:%02u:%02u UTC",
 			year, month, day, hour, minute, second);
+		if (omci_hw()->time_of_day != NULL)
+			omci_hw()->time_of_day(
+				omci_clock_now(&eng->clock, eng->now_sec));
 		offset = (unsigned int)(omci_clock_now(&eng->clock,
 						       eng->now_sec) %
 					OMCI_PM_INTERVAL_SEC);

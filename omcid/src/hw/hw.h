@@ -1057,6 +1057,10 @@ uint64_t omci_hw_uni_rate_recorded(unsigned int *changes);
  *	for. NULL in a backend that says nothing
  * @uni_rate: limit the rate at which the UNI sends to the subscriber; NULL
  *	in a backend without a limit
+ * @time_of_day: the date and time the OLT gave with Synchronize time, as
+ *	seconds since 1970 (UTC); the kernel backend writes them, with the
+ *	monotonic time they came at, in /run/omcid/clock, which the stick's
+ *	time daemon reads. NULL in a backend that keeps nothing
  */
 struct omci_hw_ops {
 	enum omci_status (*caps)(struct omci_hw_caps *out);
@@ -1102,6 +1106,7 @@ struct omci_hw_ops {
 					 size_t n);
 	enum omci_status (*uni_rate)(uint64_t bytes_ps);
 	void (*mode_done)(bool router);
+	void (*time_of_day)(uint64_t utc);
 };
 
 /* The host backend, and the backend of the kernel interfaces of the board. */

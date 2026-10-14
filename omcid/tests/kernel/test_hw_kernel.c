@@ -28,6 +28,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "hw/hw.h"
@@ -259,6 +260,33 @@ static const char *whole(const char *path)
 	}
 	text[n] = '\0';
 	return text;
+}
+
+static long long monotonic_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static void time_of_day(void)
+{
+	unsigned long long utc = 0;
+	long long at = -1, before, after;
+
+	puts("the OLT's date and time are told in /run/omcid/clock, with the monotonic time");
+	mkdir("/run/omcid", 0755);
+	unlink("/run/omcid/clock");
+	before = monotonic_ns();
+	omci_hw_kernel_ops.time_of_day(1786797045u);
+	after = monotonic_ns();
+	CHECK(sscanf(whole("/run/omcid/clock"), "utc=%llu\nmonotonic_ns=%lld\n",
+		     &utc, &at) == 2);
+	CHECK(utc == 1786797045u);
+	CHECK(at >= before && at <= after);
+	CHECK(access("/run/omcid/clock.new", F_OK) != 0);
+	unlink("/run/omcid/clock");
 }
 
 /* How many times @needle is in @hay. */
@@ -552,6 +580,7 @@ int main(void)
 	}
 	port_filters();
 	mode_applied();
+	time_of_day();
 	mgmt_vlan_clash();
 	if (tbf_qdisc())
 		uni_rate();

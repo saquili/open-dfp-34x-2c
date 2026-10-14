@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "harness.h"
+#include "hw/hw.h"
 #include "mib/store.h"
 #include "omci/clock.h"
 #include "omcid/array_size.h"
@@ -354,6 +355,49 @@ static void test_every_sync_starts_the_numbering_again(void)
 	omci_t_down(&fx);
 }
 
+static uint64_t g_told[4];
+static unsigned int g_tells;
+
+static void tell(uint64_t utc)
+{
+	if (g_tells < ARRAY_SIZE(g_told))
+		g_told[g_tells] = utc;
+	g_tells++;
+}
+
+/*
+ * A date reaches the backend, for the stick's time daemon, as seconds since
+ * 1970; a time of day alone and a refused stamp do not.
+ */
+static void test_a_date_is_handed_to_the_backend(void)
+{
+	struct omci_hw_ops ops = omci_hw_host_ops;
+	struct omci_t_fixture fx;
+
+	ops.time_of_day = tell;
+	g_tells = 0;
+	omci_hw_ops_set(&ops);
+	if (!omci_t_up(&fx)) {
+		omci_hw_ops_set(NULL);
+		return;
+	}
+	omci_engine_tick(fx.eng, 1000u);
+
+	CHECK_EQ(send_sync(fx.eng, 0x0140u, 2026u, 8u, 15u, 12u, 30u, 45u),
+		 OMCI_OK);
+	CHECK_EQ(g_tells, 1u);
+	/* 2026-08-15 is day 20680; 12:30:45 is 45045 s into it. */
+	CHECK_EQ(g_told[0], 20680u * 86400u + 45045u);
+
+	CHECK_EQ(send_sync(fx.eng, 0x0141u, 0u, 0u, 0u, 0u, 20u, 0u), OMCI_OK);
+	CHECK_EQ(send_sync(fx.eng, 0x0142u, 2026u, 0u, 15u, 12u, 0u, 0u),
+		 OMCI_OK);
+	CHECK_EQ(g_tells, 1u);
+
+	omci_t_down(&fx);
+	omci_hw_ops_set(NULL);
+}
+
 int main(void)
 {
 	RUN(test_days_from_civil);
@@ -366,6 +410,7 @@ int main(void)
 	RUN(test_a_sync_numbers_the_intervals_from_zero);
 	RUN(test_a_mib_reset_keeps_the_intervals);
 	RUN(test_every_sync_starts_the_numbering_again);
+	RUN(test_a_date_is_handed_to_the_backend);
 
 	return OMCI_T_REPORT("clock");
 }
