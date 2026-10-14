@@ -6,8 +6,8 @@ tools/lab
 =========
 
 Small tools for the host that stands on the other side of the stick in a lab:
-the one that makes the traffic a test needs and that no other program makes as
-steadily.
+the ones that make the traffic or give the time a test needs, which no other
+program on that host gives as a test wants it.
 
 ``bsend``
 =========
@@ -37,9 +37,30 @@ rate is the rate that was kept, not the rate asked for.
 Exit status: 0 when it sent, 2 on a usage error or when the interface cannot be
 used.
 
+``ptpmaster`` and ``ntpserve``
+==============================
+
+A PTP master and an NTP server on the clock of the host, for the tests of the
+stick's ``timed`` (``timed/README.rst``) where the host has neither::
+
+    sudo tools/lab/ptpmaster [--transport l2|udp] [--domain N] [--seconds N]
+                             [--skew-ms MS] [--utc-offset S] [--one-step] IFACE
+    sudo tools/lab/ntpserve [--address ADDR] [--port N] [--seconds N]
+                            [--skew-ms MS] [--stratum N]
+
+``ptpmaster`` announces itself on IFACE, sends a Sync a second, two-step unless
+``--one-step``, and answers each Delay_Req, over layer 2 or UDP. ``ntpserve``
+answers the NTP requests that come to ADDR (every address of the host by
+default) on port 123. Each gives the host's ``CLOCK_REALTIME`` plus
+``--skew-ms``, so that the stick has a clock to move to, and neither sets a
+clock. Each ends after ``--seconds`` (60 by default), so that nothing is left
+running in a namespace. They need root for the raw socket and the ports below
+1024.
+
 Tests
 =====
 
-``tests/run`` checks the arguments and the pace on a socket and a clock that
-the test makes up, so that it needs no root, no interface and no time. It is
-part of ``make check``.
+``tests/run`` checks the arguments and the pace of ``bsend`` on a socket and a
+clock that the test makes up, the messages ``ptpmaster`` builds, byte by byte,
+and the answer ``ntpserve`` builds and one exchange of it on loopback, so that
+it needs no root, no interface and no time. It is part of ``make check``.

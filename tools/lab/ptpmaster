@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""ptpmaster: a PTP master (IEEE 1588-2008) for a lab, on the clock of its host.
+
+Usage: ptpmaster [--transport l2|udp] [--domain N] [--seconds N]
+                 [--skew-ms MS] [--utc-offset S] [--one-step] IFACE
+
+Announces itself, sends a Sync a second (two-step: a Follow_Up carries the
+time) and answers each Delay_Req with a Delay_Resp, on IFACE, over layer 2
+(EtherType 0x88f7, 01:1b:19:00:00:00) or over UDP (224.0.1.129, ports 319 and
+320). The time is the host's own CLOCK_REALTIME plus the 37 s that TAI is ahead
+of UTC (--utc-offset), and plus --skew-ms, to give a slave a clock to step to.
+It is for the tests of the stick's timed: a host with a real master, such as
+ptp4l, needs nothing of this one.
+
+The interface is named with SO_BINDTODEVICE or bound by index, which needs
+CAP_NET_RAW (run it as root on Linux). It ends after --seconds (60 by
+default), so that nothing is left running in a namespace.
+
+Exit status: 0 when it ran; 2 on a usage error or when a socket could not be
+made.
+"""
+
+import select
+import socket
+import struct
+import sys
+import time
+
+ETH_P_1588 = 0x88F7
+L2_GROUP = bytes.fromhex("011b19000000")
+UDP_GROUP = "224.0.1.129"
+EVENT_PORT = 319
+GENERAL_PORT = 320
+
+SYNC, DELAY_REQ, FOLLOW_UP, DELAY_RESP, ANNOUNCE = 0x0, 0x1, 0x8, 0x9, 0xB
+HEADER_LEN = 34
+SO_TIMESTAMPNS = 35
+
+
+def clock_identity(mac):
+    """The EUI-64 of a MAC address."""
+    return mac[:3] + b"\xff\xfe" + mac[3:]
+
+
+def header(msg_type, length, domain, flags, seq, control, interval, ident, correction=0):
+    """The 34-byte header of a message (clause 13.3)."""
+    return struct.pack(">BBHBBHq4s8sHHBb", msg_type, 2, length, domain, 0, flags, correction << 16, b"",
+                       ident, 1, seq, control, interval)
+
+
+def timestamp(ns):
+    """A 10-byte timestamp: 48 bits of seconds, 32 of nanoseconds."""
+    sec, nsec = divmod(ns, 1_000_000_000)
+    return struct.pack(">HII", sec >> 32, sec & 0xFFFFFFFF, nsec)
+
+
+def build_announce(domain, seq, ident, utc_offset, priority1=128):
+    """An Announce of 64 bytes (clause 13.5): class 6, accuracy 0x21 (within 100 ns), GPS as time source."""
+    flags = 0x0008 | 0x0004 | 0x0010 | 0x0020  # PTP timescale, UTC offset valid, traceable
+    body = timestamp(0)
+    body += struct.pack(">hB", utc_offset, 0)
+    body += struct.pack(">B", priority1)
+    body += struct.pack(">BBH", 6, 0x21, 0x4E5D)
+    body += struct.pack(">B", 128)
+    body += ident
+    body += struct.pack(">HB", 0, 0x20)
+    return header(ANNOUNCE, HEADER_LEN + len(body), domain, flags, seq, 5, 0, ident) + body
+
+
+def build_sync(domain, seq, ident, ns, two_step):
+    flags = 0x0008 | (0x0200 if two_step else 0)
+    body = timestamp(0 if two_step else ns)
+    return header(SYNC, HEADER_LEN + len(body), domain, flags, seq, 0, 0, ident) + body
+
+
+def build_follow_up(domain, seq, ident, ns):
+    body = timestamp(ns)
+    return header(FOLLOW_UP, HEADER_LEN + len(body), domain, 0x0008, seq, 2, 0, ident) + body
+
+
+def build_delay_resp(domain, seq, ident, ns, requester):
+    """A Delay_Resp (clause 13.8): the receive time and the port that asked."""
+    body = timestamp(ns) + requester
+    return header(DELAY_RESP, HEADER_LEN + len(body), domain, 0x0008, seq, 3, 0, ident) + body
+
+
+def parse_delay_req(msg, domain):
+    """(sequence id, requesting port identity) of a Delay_Req of the domain, or None."""
+    if len(msg) < HEADER_LEN + 10 or msg[0] & 0x0F != DELAY_REQ or msg[1] & 0x0F != 2 or msg[4] != domain:
+        return None
+    return struct.unpack(">H", msg[30:32])[0], bytes(msg[20:30])
+
+
+def host_ns(skew_ms, utc_offset):
+    """The PTP time now: the host's clock, on the TAI timescale, and a skew."""
+    return time.time_ns() + (utc_offset * 1_000_000_000) + skew_ms * 1_000_000
+
+
+def usage(out):
+    out.write(__doc__.split("\n\n")[0].replace("ptpmaster: ", "") + "\n")
+    out.write("usage: ptpmaster [--transport l2|udp] [--domain N] [--seconds N] [--skew-ms MS] "
+              "[--utc-offset S] [--one-step] IFACE\n")
+
+
+def parse(argv):
+    """The options as a dict, or an error text."""
+    opt = {"transport": "l2", "domain": 0, "seconds": 60, "skew_ms": 0, "utc_offset": 37, "two_step": True}
+    args = list(argv)
+    names = {"--transport": ("transport", str), "--domain": ("domain", int), "--seconds": ("seconds", int),
+             "--skew-ms": ("skew_ms", int), "--utc-offset": ("utc_offset", int)}
+    while args and args[0].startswith("--"):
+        name = args.pop(0)
+        if name == "--one-step":
+            opt["two_step"] = False
+        elif name in names:
+            if not args:
+                return f"{name} needs a value"
+            key, conv = names[name]
+            try:
+                opt[key] = conv(args.pop(0))
+            except ValueError:
+                return f"{name} takes a number"
+        else:
+            return f"unknown option {name}"
+    if opt["transport"] not in ("l2", "udp"):
+        return "--transport is l2 or udp"
+    if not 0 <= opt["domain"] <= 255:
+        return "--domain is 0 to 255"
+    if len(args) != 1:
+        return "one interface is needed"
+    opt["iface"] = args[0]
+    return opt
+
+
+def stamp_of(ancdata):
+    """The kernel's receive stamp of a message, in ns, or None."""
+    fmt = "@ll"  # a struct timespec of this host
+    for level, kind, data in ancdata:
+        if level == socket.SOL_SOCKET and kind == SO_TIMESTAMPNS and len(data) >= struct.calcsize(fmt):
+            sec, nsec = struct.unpack(fmt, data[:struct.calcsize(fmt)])
+            return sec * 1_000_000_000 + nsec
+    return None
+
+
+def mac_of(iface):
+    """The MAC address of an interface (SIOCGIFHWADDR)."""
+    import fcntl
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        info = fcntl.ioctl(probe.fileno(), 0x8927, struct.pack("256s", iface.encode()[:15]))
+    return bytes(info[18:24])
+
+
+def open_l2(iface):
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(ETH_P_1588))
+    s.bind((iface, ETH_P_1588))
+    index = socket.if_nametoindex(iface)
+    mreq = struct.pack("@iHH8s", index, 0, 6, L2_GROUP.ljust(8, b"\0"))  # PACKET_MR_MULTICAST = 0
+    s.setsockopt(263, 1, mreq)  # SOL_PACKET, PACKET_ADD_MEMBERSHIP
+    s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    return s
+
+
+def open_udp(iface, port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, iface.encode())
+    s.bind(("", port))
+    mreqn = socket.inet_aton(UDP_GROUP) + socket.inet_aton("0.0.0.0") + struct.pack("@i", socket.if_nametoindex(iface))
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreqn)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, mreqn)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+    s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+    s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)
+    return s
+
+
+def run(opt, out=sys.stdout):
+    iface, domain = opt["iface"], opt["domain"]
+    ident = clock_identity(mac_of(iface))
+    if opt["transport"] == "l2":
+        general = open_l2(iface)
+        event = general
+        dest_event = dest_general = (iface, ETH_P_1588, 0, 0, L2_GROUP)
+    else:
+        event, general = open_udp(iface, EVENT_PORT), open_udp(iface, GENERAL_PORT)
+        dest_event, dest_general = (UDP_GROUP, EVENT_PORT), (UDP_GROUP, GENERAL_PORT)
+    sockets = [event] if event is general else [event, general]
+    end = time.monotonic() + opt["seconds"]
+    next_tick = time.monotonic()
+    seq = 0
+    answered = 0
+    out.write(f"ptpmaster on {iface} over {opt['transport']}, domain {domain}, skew {opt['skew_ms']} ms\n")
+    while time.monotonic() < end:
+        timeout = max(0.0, min(end, next_tick) - time.monotonic())
+        ready, _, _ = select.select(sockets, [], [], timeout)
+        for sock in ready:
+            msg, anc, _, _ = sock.recvmsg(512, 128)
+            stamp = stamp_of(anc)
+            now = host_ns(opt["skew_ms"], opt["utc_offset"])
+            req = parse_delay_req(msg, domain)
+            if req:
+                t4 = now if stamp is None else stamp + opt["utc_offset"] * 1_000_000_000 + opt["skew_ms"] * 1_000_000
+                general.sendto(build_delay_resp(domain, req[0], ident, t4, req[1]), dest_general)
+                answered += 1
+        if time.monotonic() >= next_tick:
+            next_tick += 1.0
+            seq = (seq + 1) & 0xFFFF
+            general.sendto(build_announce(domain, seq, ident, opt["utc_offset"]), dest_general)
+            t1 = host_ns(opt["skew_ms"], opt["utc_offset"])
+            event.sendto(build_sync(domain, seq, ident, t1, opt["two_step"]), dest_event)
+            if opt["two_step"]:
+                general.sendto(build_follow_up(domain, seq, ident, t1), dest_general)
+    out.write(f"ptpmaster done: {seq} Syncs, {answered} Delay_Resp\n")
+    return 0
+
+
+def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        usage(sys.stdout)
+        return 0
+    opt = parse(argv)
+    if isinstance(opt, str):
+        sys.stderr.write(f"ptpmaster: {opt}\n")
+        usage(sys.stderr)
+        return 2
+    try:
+        return run(opt)
+    except OSError as err:
+        sys.stderr.write(f"ptpmaster: {err}\n")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

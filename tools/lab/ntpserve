@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+"""ntpserve: an NTP server (RFC 5905) for a lab, on the clock of its host.
+
+Usage: ntpserve [--address ADDR] [--port N] [--seconds N] [--skew-ms MS]
+                [--stratum N]
+
+Answers each client request that comes to ADDR (every address of the host by
+default) on UDP port N (123) with the host's own CLOCK_REALTIME plus --skew-ms,
+to give a client a clock to move to, at stratum N (2 by default; 16 answers
+"no time to give"). It is for the tests of the stick's timed, in a network
+namespace whose host has no NTP server of its own: a host with chronyd or ntpd
+needs nothing of this one, and this one never sets a clock.
+
+Port 123 needs CAP_NET_BIND_SERVICE (root on Linux). It ends after --seconds
+(60 by default), so that nothing is left running in a namespace.
+
+Exit status: 0 when it ran; 2 on a usage error or when the socket could not be
+made.
+"""
+
+import select
+import socket
+import struct
+import sys
+import time
+
+PACKET_LEN = 48
+NTP_UNIX_EPOCH = 2_208_988_800
+
+
+def ntp_time(ns):
+    """64-bit NTP timestamp (era 0) of a time in ns since 1970."""
+    sec, nsec = divmod(ns, 1_000_000_000)
+    return struct.pack(">II", (sec + NTP_UNIX_EPOCH) & 0xFFFFFFFF, (nsec << 32) // 1_000_000_000)
+
+
+def answer(request, received_ns, sent_ns, stratum):
+    """The server's answer to a client request, or None for anything else (RFC 5905, 7.3)."""
+    if len(request) < PACKET_LEN:
+        return None
+    version = (request[0] >> 3) & 7
+    if request[0] & 7 != 3 or not 1 <= version <= 4:
+        return None
+    leap = 3 if stratum >= 16 else 0
+    head = struct.pack(">BBbb", leap << 6 | version << 3 | 4, stratum, request[2], -20)
+    # Root delay and dispersion of a server one step from a good clock; the reference id of a lab.
+    head += struct.pack(">II", 0x0000_0100, 0x0000_0100) + b"LAB\0"
+    return head + ntp_time(received_ns) + request[40:48] + ntp_time(received_ns) + ntp_time(sent_ns)
+
+
+def usage(out):
+    out.write(__doc__.split("\n\n")[0].replace("ntpserve: ", "") + "\n")
+    out.write("usage: ntpserve [--address ADDR] [--port N] [--seconds N] [--skew-ms MS] [--stratum N]\n")
+
+
+def parse(argv):
+    """The options as a dict, or an error text."""
+    opt = {"address": "", "port": 123, "seconds": 60, "skew_ms": 0, "stratum": 2}
+    names = {"--address": ("address", str), "--port": ("port", int), "--seconds": ("seconds", int),
+             "--skew-ms": ("skew_ms", int), "--stratum": ("stratum", int)}
+    args = list(argv)
+    while args:
+        name = args.pop(0)
+        if name not in names:
+            return f"unknown argument {name}"
+        if not args:
+            return f"{name} needs a value"
+        key, conv = names[name]
+        try:
+            opt[key] = conv(args.pop(0))
+        except ValueError:
+            return f"{name} takes a number"
+    if not 0 < opt["port"] < 65536:
+        return "--port is 1 to 65535"
+    if not 1 <= opt["stratum"] <= 16:
+        return "--stratum is 1 to 16"
+    return opt
+
+
+def run(opt, out=sys.stdout, clock=time.time_ns):
+    family = socket.AF_INET6 if ":" in opt["address"] else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_DGRAM)
+    sock.bind((opt["address"], opt["port"]))
+    skew = opt["skew_ms"] * 1_000_000
+    end = time.monotonic() + opt["seconds"]
+    answered = 0
+    out.write(f"ntpserve on port {opt['port']}, stratum {opt['stratum']}, skew {opt['skew_ms']} ms\n")
+    while time.monotonic() < end:
+        ready, _, _ = select.select([sock], [], [], max(0.0, end - time.monotonic()))
+        if not ready:
+            continue
+        msg, peer = sock.recvfrom(512)
+        received = clock() + skew
+        reply = answer(msg, received, clock() + skew, opt["stratum"])
+        if reply:
+            sock.sendto(reply, peer)
+            answered += 1
+    out.write(f"ntpserve done: {answered} answers\n")
+    return 0
+
+
+def main(argv):
+    if argv[:1] in (["-h"], ["--help"]):
+        usage(sys.stdout)
+        return 0
+    opt = parse(argv)
+    if isinstance(opt, str):
+        sys.stderr.write(f"ntpserve: {opt}\n")
+        usage(sys.stderr)
+        return 2
+    try:
+        return run(opt)
+    except OSError as err:
+        sys.stderr.write(f"ntpserve: {err}\n")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
