@@ -840,10 +840,12 @@ static irqreturn_t rtl9602c_irq(int irq, void *dev_id)
 	/*
 	 * The GPON source asserts again until the GTC latches that raised it
 	 * are read, so it is left pending for the thread; the time of the
-	 * interrupt is noted here, for the GPON code.
+	 * interrupt is noted here, for the GPON code, and the PTP clock's, for
+	 * a second of the OLT's frames.
 	 */
 	if (pending & RTL9602C_IRQ_SRC_GPON) {
 		rtl9602c_pon_irq_note(p);
+		rtl9602c_ptp_pon_irq(p);
 		pending &= ~RTL9602C_IRQ_SRC_GPON;
 		ret = IRQ_WAKE_THREAD;
 	}

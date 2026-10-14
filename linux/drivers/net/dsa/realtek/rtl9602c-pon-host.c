@@ -358,6 +358,12 @@ static int rtl9602c_host_tod_arm(void *host, const struct timespec64 *ts,
 	return rtl9602c_ptp_pon_tod(host, ts, delay);
 }
 
+/* A second of the OLT's frames, for the PTP clock (rtl9602c_ptp_pon_second()). */
+static void rtl9602c_host_second(void *host)
+{
+	rtl9602c_ptp_pon_second(host);
+}
+
 static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.irq_enable		= rtl9602c_host_irq_enable,
 	.tx_disable		= rtl9602c_host_tx_disable,
@@ -375,6 +381,7 @@ static const struct rtl9602c_pon_host_ops rtl9602c_pon_host_ops = {
 	.gem_rx_filter		= rtl9602c_host_gem_rx_filter,
 	.gem_ds_limit		= rtl9602c_host_gem_ds_limit,
 	.tod_arm		= rtl9602c_host_tod_arm,
+	.second			= rtl9602c_host_second,
 };
 
 /**
@@ -597,4 +604,18 @@ void rtl9602c_pon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
 	if (pd->pon_ops)
 		pd->pon_ops->power_applied(pd->pon, asked, mode, err);
 	up_read(&pd->sem);
+}
+
+int rtl9602c_pon_second_enable(struct rtl9602c_priv *p, bool on)
+{
+	struct rtl9602c_pon_data *pd = &p->pon;
+	int err = -ENODEV;
+
+	down_read(&pd->sem);
+	if (pd->pon_ops) {
+		pd->pon_ops->second_enable(pd->pon, on);
+		err = 0;
+	}
+	up_read(&pd->sem);
+	return err;
 }

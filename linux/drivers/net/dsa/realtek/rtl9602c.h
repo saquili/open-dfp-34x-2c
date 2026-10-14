@@ -2232,6 +2232,30 @@ struct rtl9602c_priv {
 	/** @ptp_tx_p2p_missed: one-step Pdelay_Resp whose Pdelay_Req was not known */
 	u32		ptp_tx_p2p_missed;
 	/**
+	 * @ptp_pon_extts: the OLT's seconds are wanted as external timestamps
+	 * (rtl9602c_ptp_pon_second())
+	 */
+	bool		ptp_pon_extts;
+	/**
+	 * @ptp_pon_irq_frame: the superframe counter in the first half of the
+	 * last GPON interrupt, and @ptp_pon_irq_ns: the clock then, in
+	 * nanoseconds (rtl9602c_ptp_pon_irq())
+	 */
+	u32		ptp_pon_irq_frame;
+	u64		ptp_pon_irq_ns;
+	/**
+	 * @ptp_pon_frame: the frame of the last second reported, if
+	 * @ptp_pon_frame_valid
+	 */
+	u32		ptp_pon_frame;
+	bool		ptp_pon_frame_valid;
+	/**
+	 * @ptp_pon_seconds: seconds reported, and @ptp_pon_late: those whose
+	 * interrupt came a frame or more late, not reported
+	 */
+	u32		ptp_pon_seconds;
+	u32		ptp_pon_late;
+	/**
 	 * @meter_lock: serialises the meters, @meter_used and @cpu_meter, and
 	 * the storm-control state, @storm, @storm_seq and @storm_meter, which
 	 * tc and devlink both change
@@ -2553,6 +2577,8 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p);
 void rtl9602c_ptp_unregister(struct rtl9602c_priv *p);
 int rtl9602c_ptp_pon_tod(struct rtl9602c_priv *p, const struct timespec64 *ts,
 			 unsigned long delay);
+void rtl9602c_ptp_pon_irq(struct rtl9602c_priv *p);
+void rtl9602c_ptp_pon_second(struct rtl9602c_priv *p);
 int rtl9602c_ptp_tc_set(struct rtl9602c_priv *p, const char *mode);
 void rtl9602c_ptp_tc_get(struct rtl9602c_priv *p, char *buf, size_t len);
 int rtl9602c_ptp_path_delay_set(struct rtl9602c_priv *p, u32 ns);
@@ -2598,5 +2624,6 @@ bool rtl9602c_pon_us_ready(struct rtl9602c_priv *p, unsigned int flow);
 u8 rtl9602c_pon_power_mode(struct rtl9602c_priv *p);
 void rtl9602c_pon_power_applied(struct rtl9602c_priv *p, u8 asked, u8 mode,
 				int err);
+int rtl9602c_pon_second_enable(struct rtl9602c_priv *p, bool on);
 
 #endif /* _RTL9602C_H */

@@ -82,8 +82,9 @@ What the driver offers
 ----------------------
 
 - A PTP hardware clock, ``rtl9602c-ptp``, on the switch's clock. It reads,
-  steps and slews the clock and reports the once-per-second pulse as a PPS
-  event. The clock has no external timestamp input, no periodic output and no
+  steps and slews the clock, reports the once-per-second pulse as a PPS event,
+  and the seconds of the OLT's downstream frames as external timestamps of
+  channel 0 (see "The OLT's seconds"). The clock has no periodic output and no
   pins. All ports share it.
 - Hardware receive timestamps, in the form the switch provides them: a PTP
   message that the switch sends to the CPU port arrives on the user port it
@@ -328,7 +329,7 @@ Interfaces to user space
 
 - The PTP hardware clock. ``/sys/class/ptp/ptp<N>/clock_name`` reads
   ``rtl9602c-ptp``, ``max_adjustment`` reads 32767000 (parts per billion),
-  ``pps_available`` reads 1, and ``n_alarms``, ``n_external_timestamps``,
+  ``pps_available`` and ``n_external_timestamps`` read 1, and ``n_alarms``,
   ``n_periodic_outputs`` and ``n_pins`` read 0. The character device
   ``/dev/ptp<N>`` serves ``clock_gettime()``, ``clock_settime()`` and
   ``clock_adjtime()`` on the clock (see "The clock"); ``N`` is the index that
@@ -341,6 +342,10 @@ Interfaces to user space
   event of the PPS source ``ptp<N>`` of the kernel's PPS subsystem, which
   stamps it with the system clock when the interrupt handler runs (see "The
   once-per-second interrupt").
+- The OLT's seconds. ``PTP_EXTTS_REQUEST`` or ``PTP_EXTTS_REQUEST2`` for
+  channel 0, on ``/dev/ptp<N>`` open for writing, turns them on and off; each
+  second is then a ``struct ptp_extts_event`` to ``read()`` from the device
+  (see "The OLT's seconds").
 - ``ethtool -T sfp``, or ``pon``, lists the capabilities that
   ``rtl9602c_get_ts_info()`` reports: software transmit and receive stamping,
   software system clock, hardware transmit and receive stamping, raw hardware
@@ -1532,6 +1537,73 @@ one given before and not yet taken.
      - I
      - Not exercised: PTP messages received across a load that moves the
        clock by more than 32768 s.
+
+The OLT's seconds
+=================
+
+The GPON MAC raises its interrupt once every 8000 downstream frames, a second
+of the OLT's clock, while the switch driver asks it to (the PON operation
+``second_enable``; see "Downstream lock, LOS and alarms" in
+Documentation/networking/device_drivers/pon/rtl9602c-gpon.rst). The clock
+reports those seconds as external timestamps of channel 0: the time of the
+clock when a second began, as near as an interrupt reads it. They let a PTP
+daemon keep the clock at the OLT's rate, and at the OLT's time once the time
+of day the OLT gives has set it (see "The PON time of day"). Asking the clock
+for channel 0 (``PTP_CLK_REQ_EXTTS``) asks the MAC for the interrupt
+(``rtl9602c_ptp_pon_extts()``); a request without a MAC bound fails with
+``-ENODEV``. The only edge is ``PTP_RISING_EDGE``. ``ptpstat`` counts the
+seconds reported and those come late (``olt seconds``, ``late``), says whether
+they are wanted, and gives the frame of the last one.
+
+A second, in order:
+
+1. While the seconds are wanted, the first half of every GPON interrupt
+   (``rtl9602c_irq()``) reads the superframe counter,
+   ``RTL9602C_GTC_DS_SUPERFRAME``, and then the clock
+   (``rtl9602c_ptp_pon_irq()``). Purpose: both are read as near to the
+   frame as the interrupt comes; the thread runs later. (M)
+2. The interrupt's thread reads the MAC's latch, and on
+   ``RTL9602C_GTC_DS_IRQ_SECOND`` calls the host operation ``second``.
+   Purpose: the pulse is told from the other events of the same interrupt.
+   (M)
+3. ``rtl9602c_ptp_pon_second()`` reports the time of step 1 as the event when
+   the counter then stood a whole number of seconds of frames after it stood
+   at the second reported last. An interrupt that came a frame or more late
+   is counted and not reported, and one that finds the last one reported
+   late reports nothing and counts the frames from itself. Purpose: every
+   second reported was read within the frame it began in. (M for the count,
+   I for a late interrupt: none was seen)
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - The seconds come 8000 frames apart: 120 in a row, none late and none
+       missed, 1000014406.5 ns apart on average by the clock, which ran
+       14.4 ppm fast of the OLT's frames. An interval differed from the mean
+       by 2.0 us (standard deviation), at most 5.0 us short and 5.8 us long,
+       the time the interrupt took to be read.
+     - M
+     - ``testptp -e 120`` on ``/dev/ptp0`` (tools/testing/selftests/ptp), on
+       the lab chain in O5, with nothing steering the clock.
+   * - Steered by them, the clock keeps to the OLT's frames: over 8 minutes
+       its time at the start of a frame, against the superframe counter, kept
+       within 15 us (-112.9 to -98.0 us from where it started), a drift of
+       -0.005 ppm, where unsteered it ran 14.4 ppm fast; 547 seconds came,
+       none late.
+     - M
+     - timed steering the clock (its README, "The OLT's seconds"), and every
+       34 s 40 lab-only reads of the clock latched beside the counter, each
+       batch placing the start of a frame within 4 to 22 us. The test was cut
+       short when the lab OLT was taken out.
+   * - What the MAC's pulse offset (``RTL9602C_GTC_DS_PPS_OFFSET``) counts,
+       and whether the pulse marks the start of a frame or a point inside one.
+     - I
+     - A constant either way, which a daemon that follows the seconds takes
+       as part of the clock's phase.
 
 The time-of-day transmitter
 ===========================

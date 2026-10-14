@@ -216,8 +216,95 @@ static int rtl9602c_ptp_adjfine(struct ptp_clock_info *info, long scaled_ppm)
 	return 0;
 }
 
+/* Downstream frames in a second of the OLT's clock, the period of its pulse. */
+#define RTL9602C_PTP_PON_SECOND_FRAMES	8000
+
+/**
+ * rtl9602c_ptp_pon_irq() - note the clock at a GPON interrupt
+ * @p: driver state
+ *
+ * While the OLT's seconds are wanted (rtl9602c_ptp_pon_second()), the first
+ * half of every GPON interrupt reads the superframe counter and the clock,
+ * as near to the frame the interrupt came for as the interrupt itself.
+ *
+ * Context: the first half of the switch interrupt.
+ */
+void rtl9602c_ptp_pon_irq(struct rtl9602c_priv *p)
+{
+	struct timespec64 ts;
+
+	if (!READ_ONCE(p->ptp_pon_extts))
+		return;
+
+	p->ptp_pon_irq_frame = FIELD_GET(RTL9602C_GTC_DS_SUPERFRAME_CNT,
+					 rtl9602c_r(p, RTL9602C_GTC_DS_SUPERFRAME));
+	rtl9602c_ptp_now(p, &ts);
+	p->ptp_pon_irq_ns = timespec64_to_ns(&ts);
+}
+
+/**
+ * rtl9602c_ptp_pon_second() - report a second of the OLT's clock
+ * @p: driver state
+ *
+ * The GPON MAC raises its interrupt once every 8000 downstream frames, a
+ * second of the OLT's clock (rtl9602c_pon_second_enable()).  The time noted
+ * in the interrupt's first half (rtl9602c_ptp_pon_irq()) is reported as an
+ * external timestamp of channel 0 when the interrupt came in the frame the
+ * second began in, that is a whole number of seconds of frames after the one
+ * reported last.  An interrupt that came a frame or more late is counted and
+ * not reported; one that finds the last reported late reports nothing and
+ * starts the count of frames from itself.
+ *
+ * Context: the GPON interrupt's thread.
+ */
+void rtl9602c_ptp_pon_second(struct rtl9602c_priv *p)
+{
+	struct ptp_clock_event ev = { .type = PTP_CLOCK_EXTTS, .index = 0 };
+	u32 frame = p->ptp_pon_irq_frame;
+	u32 off;
+
+	if (!READ_ONCE(p->ptp_pon_extts) || !p->ptp_clock)
+		return;
+
+	off = ((frame - p->ptp_pon_frame) & RTL9602C_GTC_DS_SUPERFRAME_CNT) %
+	      RTL9602C_PTP_PON_SECOND_FRAMES;
+	if (p->ptp_pon_frame_valid && off) {
+		if (off < RTL9602C_PTP_PON_SECOND_FRAMES / 2) {
+			p->ptp_pon_late++;
+			return;
+		}
+		p->ptp_pon_frame = frame;
+		return;
+	}
+
+	p->ptp_pon_frame = frame;
+	p->ptp_pon_frame_valid = true;
+	p->ptp_pon_seconds++;
+	ev.timestamp = p->ptp_pon_irq_ns;
+	ptp_clock_event(p->ptp_clock, &ev);
+}
+
 /*
- * The clock's only request is PPS.  The switch raises an interrupt once a
+ * The OLT's seconds as external timestamps of channel 0, on or off: the GPON
+ * MAC's interrupt once a second, and the clock noted at it.
+ */
+static int rtl9602c_ptp_pon_extts(struct rtl9602c_priv *p, bool on)
+{
+	int err;
+
+	if (on) {
+		p->ptp_pon_frame_valid = false;
+		WRITE_ONCE(p->ptp_pon_extts, true);
+	}
+	err = rtl9602c_pon_second_enable(p, on);
+	if (err || !on)
+		WRITE_ONCE(p->ptp_pon_extts, false);
+	return err;
+}
+
+/*
+ * The clock's requests are PPS and an external timestamp, the OLT's seconds
+ * (rtl9602c_ptp_pon_second()).  For PPS the switch raises an interrupt once a
  * second, which the interrupt handler counts and reports as a
  * PTP_CLOCK_PPS event.  The source is enabled only while the PTP core
  * wants PPS events: enabled with no consumer, it is one interrupt a second
@@ -232,6 +319,8 @@ static int rtl9602c_ptp_enable(struct ptp_clock_info *info,
 {
 	struct rtl9602c_priv *p = to_rtl9602c_ptp(info);
 
+	if (rq->type == PTP_CLK_REQ_EXTTS)
+		return rtl9602c_ptp_pon_extts(p, on);
 	if (rq->type != PTP_CLK_REQ_PPS)
 		return -EOPNOTSUPP;
 
@@ -606,7 +695,8 @@ int rtl9602c_ptp_register(struct rtl9602c_priv *p)
 		 * well inside the word's range.
 		 */
 		.max_adj	= (S32_MAX >> 16) * 1000,
-		.n_ext_ts	= 0,
+		.n_ext_ts	= 1,
+		.supported_extts_flags = PTP_RISING_EDGE | PTP_STRICT_FLAGS,
 		.pps		= 1,
 		.adjfine	= rtl9602c_ptp_adjfine,
 		.adjtime	= rtl9602c_ptp_adjtime,
@@ -1134,6 +1224,7 @@ static const char * const rtl9602c_ptp_msg_names[RTL9602C_PTP_MSG_TYPES] = {
  * says a message left, not that a timestamp is ready, and reading it clears
  * it.  Then the ingress and egress action of each message type, the count
  * of once-per-second pulses and whether their interrupt is enabled, the
+ * OLT's seconds reported and those come late (rtl9602c_ptp_pon_second()), the
  * transmit stamps, the PON time of day and the receive capture.  Apart from
  * that interrupt enable, and the egress actions and the CPU port's enable
  * while transmit stamping is on, the driver writes none of these registers.
@@ -1166,6 +1257,9 @@ static int rtl9602c_ptpstat_show(struct seq_file *s, void *unused)
 	seq_printf(s, "\npulses %u  armed %u\n", READ_ONCE(p->ptp_pps_count),
 		   !!(rtl9602c_r(p, RTL9602C_IRQ_ENABLE) &
 		      RTL9602C_IRQ_SRC_PTP_PPS));
+	seq_printf(s, "olt seconds %u  late %u  wanted %u  last at frame %u\n",
+		   READ_ONCE(p->ptp_pon_seconds), READ_ONCE(p->ptp_pon_late),
+		   READ_ONCE(p->ptp_pon_extts), READ_ONCE(p->ptp_pon_frame));
 
 	spin_lock_bh(&p->ptp_tx_lock);
 	seq_printf(s, "tx stamps %u  busy %u  lost %u  orphan reports %u  awaited %u\n",
