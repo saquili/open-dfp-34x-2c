@@ -1,0 +1,989 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+/*
+ * timed: sets the clock of the stick from the host, by NTP and by PTP.
+ *
+ *   timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]
+ *
+ * -n names the NTP server, an address (the stick runs offline and resolves
+ * no name); -p the interface of the management link, on which PTP is listened
+ * for over layer 2 and over UDP; -o the file in which omcid writes the time
+ * the OLT gave (olt.h), looked at once a second; -d the PTP domain, 0 unless
+ * given; -s the file that tells the state (/run/timed/state); -f keeps timed
+ * in the foreground, its log on stderr; -v logs each sample; -D sets nothing
+ * (a dry run, for the tests and for looking at what the host gives).
+ *
+ * Only one source sets the clock at a time (select.h). It is stepped when it
+ * is more than 128 ms out, and steered by its frequency otherwise, by the
+ * servo of servo.h; the OLT's time, which is to the second, only steps it when
+ * it is a second out or more. The stamps are the kernel's, taken when a frame
+ * is received, and the clock's when one is sent.
+ */
+
+#define _GNU_SOURCE
+
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <net/if.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/timex.h>
+#include <syslog.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "ntp.h"
+#include "olt.h"
+#include "ptp.h"
+#include "select.h"
+#include "servo.h"
+#include "stamp.h"
+
+#ifndef ETH_P_1588
+#define ETH_P_1588 0x88F7
+#endif
+#ifndef ADJ_NANO
+#define ADJ_NANO 0x2000
+#endif
+#ifndef STA_NANO
+#define STA_NANO 0x2000
+#endif
+#ifndef SO_TIMESTAMPNS
+#define SO_TIMESTAMPNS 35
+#endif
+#ifndef SCM_TIMESTAMPNS
+#define SCM_TIMESTAMPNS SO_TIMESTAMPNS
+#endif
+
+#define DEFAULT_STATE "/run/timed/state"
+
+/* A clock out by more than this is stepped; less is slewed (as ntpd: 128 ms). */
+#define STEP_LIMIT (128 * NS_PER_MS)
+
+/* The PTP addresses (IEEE 1588-2008 annex D and F). */
+#define PTP_EVENT_PORT 319
+#define PTP_GENERAL_PORT 320
+#define PTP_UDP_GROUP "224.0.1.129"
+static const uint8_t ptp_l2_group[6] = { 0x01, 0x1b, 0x19, 0x00, 0x00, 0x00 };
+
+/* The NTP poll intervals: quick at first, then 16 s, then 64 s once the filter is full. */
+#define NTP_PORT "123"
+#define NTP_POLL_FIRST (2 * NS_PER_SEC)
+#define NTP_POLL_NORMAL (16 * NS_PER_SEC)
+#define NTP_POLL_STEADY (64 * NS_PER_SEC)
+#define NTP_REPLY_WAIT (3 * NS_PER_SEC)
+
+/* A Delay_Req each so many seconds: often until the delay is known. */
+#define PTP_DELAY_REQ_FIRST (2 * NS_PER_SEC)
+#define PTP_DELAY_REQ_NORMAL (16 * NS_PER_SEC)
+
+#define REOPEN_PERIOD (5 * NS_PER_SEC)
+#define STATE_PERIOD (10 * NS_PER_SEC)
+
+/*
+ * The OLT's file is looked at once a second; the time it gave holds for ten
+ * minutes, and after that the clock runs on by itself (holdover), as the OLT
+ * gave one reading and no more.
+ */
+#define OLT_PERIOD NS_PER_SEC
+#define OLT_HOLD (10 * 60 * NS_PER_SEC)
+
+enum transport { VIA_NONE, VIA_L2, VIA_UDP };
+
+struct daemon {
+	/* options */
+	const char *ntp_server;
+	const char *iface;
+	const char *olt_path;
+	uint8_t domain;
+	const char *state_path;
+	bool verbose;
+	bool foreground;
+	bool dry;
+	bool dirty;			/* the state file is out of date */
+
+	/* the choice of source and the clock */
+	struct select sel;
+	struct servo servo;
+	bool clock_set;			/* the clock has been set by a source since start */
+	unsigned int steps;
+	enum source last_src;
+	ns_t last_offset;
+	ns_t last_applied_at;
+
+	/* NTP */
+	int ntp_fd;
+	struct sockaddr_storage ntp_addr;
+	socklen_t ntp_addrlen;
+	ns_t ntp_next;			/* monotonic time of the next query */
+	ns_t ntp_t1;			/* local time the query went out */
+	ns_t ntp_sent_mono;
+	bool ntp_waiting;
+	unsigned int ntp_polls;
+	unsigned int ntp_misses;
+	struct ntp_filter ntp_filter;
+	struct ntp_sample ntp_last;
+	bool ntp_have_last;
+
+	/* PTP */
+	int l2_fd;
+	int event_fd;
+	int general_fd;
+	int ifindex;
+	struct ptp_slave ptp;
+	bool ptp_ready;
+	enum transport via;		/* the way the master was heard */
+	ns_t ptp_reopen_at;
+	ns_t delay_req_at;
+	ns_t ptp_last_offset;
+	bool ptp_have_offset;
+	struct median3 ptp_med;	/* the PTP offsets, filtered */
+
+	/* the OLT's time: the file as last read, and what it said */
+	ns_t olt_check_at;
+	struct timespec olt_mtime;
+	off_t olt_size;
+	bool olt_have;
+	ns_t olt_utc;
+	ns_t olt_at;
+};
+
+static volatile sig_atomic_t g_stop;
+
+static void on_signal(int sig)
+{
+	(void)sig;
+	g_stop = 1;
+}
+
+/* ---- log ---- */
+
+static void say(const struct daemon *d, int prio, const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	if (d->foreground) {
+		vfprintf(stderr, fmt, ap);
+		fputc('\n', stderr);
+	} else {
+		vsyslog(prio, fmt, ap);
+	}
+	va_end(ap);
+}
+
+#define LOG(d, ...) say(d, LOG_NOTICE, __VA_ARGS__)
+#define WARN(d, ...) say(d, LOG_WARNING, __VA_ARGS__)
+#define DEBUG(d, ...) do { if ((d)->verbose) say(d, LOG_INFO, __VA_ARGS__); } while (0)
+
+/* ---- the clocks ---- */
+
+static ns_t clock_ns(clockid_t id)
+{
+	struct timespec ts;
+
+	clock_gettime(id, &ts);
+	return (ns_t)ts.tv_sec * NS_PER_SEC + ts.tv_nsec;
+}
+
+static ns_t real_now(void)
+{
+	return clock_ns(CLOCK_REALTIME);
+}
+
+static ns_t mono_now(void)
+{
+	return clock_ns(CLOCK_MONOTONIC);
+}
+
+/* A signed time as "+1.234567 s". */
+static const char *show(ns_t t, char *buf, size_t cap)
+{
+	ns_t a = t < 0 ? -t : t;
+
+	snprintf(buf, cap, "%c%lld.%06lld s", t < 0 ? '-' : '+', (long long)(a / NS_PER_SEC),
+		 (long long)(a % NS_PER_SEC / 1000));
+	return buf;
+}
+
+/*
+ * The kernel's frequency is in parts per million scaled by 2^16; the servo's
+ * is in parts per billion, positive to slow the clock down.
+ */
+#define PPB_TO_FREQ (-65.536)
+
+/*
+ * Set the clock's frequency, with the kernel's own loop off and the clock
+ * told synchronised (the status word cleared but for its read-only bits).
+ */
+static int freq_set(const struct daemon *d, double ppb)
+{
+	struct timex tx;
+
+	if (d->dry)
+		return 0;
+	memset(&tx, 0, sizeof(tx));
+	tx.modes = ADJ_FREQUENCY | ADJ_STATUS | ADJ_MAXERROR | ADJ_ESTERROR;
+	tx.freq = (long)(ppb * PPB_TO_FREQ);
+	tx.status = 0;
+	tx.maxerror = 1000;
+	tx.esterror = 1000;
+	return adjtimex(&tx) < 0 ? -1 : 0;
+}
+
+/*
+ * At the start: end what the kernel's loop may still be slewing (an offset of
+ * a daemon before this one), and take the frequency the clock runs at now,
+ * which a timed started again by procd left right.
+ */
+static double freq_start(const struct daemon *d)
+{
+	struct timex tx;
+	double freq;
+
+	if (d->dry)
+		return 0;
+	memset(&tx, 0, sizeof(tx));
+	tx.modes = ADJ_OFFSET | ADJ_STATUS | ADJ_NANO;
+	tx.status = STA_PLL;
+	tx.offset = 0;
+	if (adjtimex(&tx) < 0)
+		return 0;
+	freq = (double)tx.freq / PPB_TO_FREQ;
+	/* The kernel's loop off, and the clock not synchronised yet. */
+	memset(&tx, 0, sizeof(tx));
+	tx.modes = ADJ_STATUS;
+	tx.status = STA_UNSYNC;
+	adjtimex(&tx);
+	return freq;
+}
+
+static int clock_step(const struct daemon *d, ns_t offset)
+{
+	ns_t t = real_now() - offset;
+	struct timespec ts;
+
+	if (d->dry)
+		return 0;
+	ts.tv_sec = (time_t)(t / NS_PER_SEC);
+	ts.tv_nsec = (long)(t % NS_PER_SEC);
+	if (ts.tv_nsec < 0) {
+		ts.tv_nsec += NS_PER_SEC;
+		ts.tv_sec -= 1;
+	}
+	if (clock_settime(CLOCK_REALTIME, &ts) < 0)
+		return -1;
+	freq_set(d, d->servo.freq);
+	return 0;
+}
+
+/* ---- the state file ---- */
+
+/*
+ * locked: a source in use, and the clock within a millisecond of it; syncing:
+ * a source in use, and the clock still farther; set: the OLT's time in use,
+ * which is to the second; holdover: no source now, but the clock was set and
+ * runs on; unsynchronized: never set since the start.
+ */
+static const char *state_name(const struct daemon *d)
+{
+	if (d->sel.cur == SRC_OLT)
+		return "set";
+	if (d->sel.cur != SRC_NONE) {
+		ns_t off = d->last_offset < 0 ? -d->last_offset : d->last_offset;
+
+		return off < NS_PER_MS ? "locked" : "syncing";
+	}
+	return d->clock_set ? "holdover" : "unsynchronized";
+}
+
+static void write_state(const struct daemon *d, ns_t mono)
+{
+	char tmp[256];
+	FILE *f;
+
+	snprintf(tmp, sizeof(tmp), "%s.tmp", d->state_path);
+	f = fopen(tmp, "w");
+	if (!f)
+		return;
+	fprintf(f, "source=%s\n", source_name(d->sel.cur));
+	fprintf(f, "state=%s\n", state_name(d));
+	fprintf(f, "offset_ns=%lld\n", (long long)d->last_offset);
+	fprintf(f, "updated=%lld\n", (long long)(real_now() / NS_PER_SEC));
+	fprintf(f, "steps=%u\n", d->steps);
+	fprintf(f, "freq_ppb=%lld\n", (long long)-d->servo.freq);
+	if (d->ntp_server) {
+		fprintf(f, "ntp_server=%s\n", d->ntp_server);
+		fprintf(f, "ntp_good=%d\n", select_good(&d->sel, SRC_NTP, mono));
+		if (d->ntp_have_last) {
+			fprintf(f, "ntp_offset_ns=%lld\n", (long long)d->sel.s[SRC_NTP].offset);
+			fprintf(f, "ntp_delay_ns=%lld\n", (long long)d->ntp_last.delay);
+			fprintf(f, "ntp_stratum=%u\n", d->ntp_last.stratum);
+		}
+	}
+	if (d->iface) {
+		fprintf(f, "ptp_interface=%s\n", d->iface);
+		fprintf(f, "ptp_good=%d\n", select_good(&d->sel, SRC_PTP, mono));
+		if (d->ptp.have_master) {
+			const uint8_t *c = d->ptp.master.clock;
+
+			fprintf(f, "ptp_master=%02x%02x%02x%02x%02x%02x%02x%02x\n", c[0], c[1], c[2], c[3],
+				c[4], c[5], c[6], c[7]);
+			fprintf(f, "ptp_via=%s\n", d->via == VIA_L2 ? "l2" : "udp");
+			fprintf(f, "ptp_delay_ns=%lld\n", (long long)d->ptp.delay);
+		}
+		if (d->ptp_have_offset)
+			fprintf(f, "ptp_offset_ns=%lld\n", (long long)d->sel.s[SRC_PTP].offset);
+	}
+	if (d->olt_path) {
+		fprintf(f, "olt_file=%s\n", d->olt_path);
+		fprintf(f, "olt_good=%d\n", select_good(&d->sel, SRC_OLT, mono));
+		if (d->olt_have) {
+			fprintf(f, "olt_utc=%lld\n", (long long)(d->olt_utc / NS_PER_SEC));
+			fprintf(f, "olt_offset_ns=%lld\n", (long long)d->sel.s[SRC_OLT].offset);
+		}
+	}
+	if (fclose(f) == 0)
+		rename(tmp, d->state_path);
+}
+
+/* ---- applying a sample ---- */
+
+/* Step the clock by @offset; the stamps taken before are of a clock that is no more. */
+static bool step(struct daemon *d, enum source src, ns_t offset)
+{
+	char buf[32];
+
+	if (clock_step(d, offset) < 0) {
+		WARN(d, "cannot set the clock: %s", strerror(errno));
+		return false;
+	}
+	d->clock_set = true;
+	d->steps++;
+	d->dirty = true;
+	ntp_filter_init(&d->ntp_filter);
+	ptp_clock_stepped(&d->ptp);
+	median3_reset(&d->ptp_med);
+	LOG(d, "clock stepped by %s from %s", show(-offset, buf, sizeof(buf)), source_name(src));
+	return true;
+}
+
+static void discipline(struct daemon *d, enum source src, ns_t offset, ns_t at)
+{
+	char buf[32];
+	double freq = 0;
+
+	d->last_src = src;
+	d->last_offset = offset;
+	/* The OLT's time is to the second: within that it says nothing, and it never steers. */
+	if (src == SRC_OLT) {
+		if (offset >= OLT_RESOLUTION || offset <= -OLT_RESOLUTION) {
+			if (step(d, src, offset))
+				servo_reset(&d->servo);
+		} else if (!d->clock_set) {
+			d->clock_set = true;
+			d->dirty = true;
+			LOG(d, "clock agrees with olt to the second");
+		}
+		return;
+	}
+	d->servo.baseline = src == SRC_NTP ? SERVO_BASELINE_NTP : SERVO_BASELINE_PTP;
+	switch (servo_sample(&d->servo, offset, at, &freq)) {
+	case SERVO_STEP:
+		step(d, src, offset);
+		return;
+	case SERVO_JUMP:
+		if (step(d, src, offset) && freq_set(d, freq) < 0)
+			WARN(d, "cannot set the clock's frequency: %s", strerror(errno));
+		DEBUG(d, "%s: rate %+.0f ppb", source_name(src), -freq);
+		return;
+	case SERVO_FREQ:
+		if (freq_set(d, freq) < 0)
+			WARN(d, "cannot set the clock's frequency: %s", strerror(errno));
+		break;
+	case SERVO_HOLD:
+		break;
+	}
+	if (!d->clock_set) {
+		d->clock_set = true;
+		d->dirty = true;
+		LOG(d, "clock in step with %s, offset %s", source_name(src), show(offset, buf, sizeof(buf)));
+	}
+	DEBUG(d, "%s: offset %s, frequency %+.0f ppb", source_name(src), show(offset, buf, sizeof(buf)),
+	      -d->servo.freq);
+}
+
+/* A new source in use: the servo finds the rate again, keeping what it knows of it. */
+static void source_changed(struct daemon *d, enum source before, enum source after)
+{
+	LOG(d, "time source: %s (was %s)", source_name(after), source_name(before));
+	d->dirty = true;
+	servo_reset(&d->servo);
+}
+
+/* A sample of @src, taken at monotonic time @at, good for @hold. */
+static void on_sample(struct daemon *d, enum source src, ns_t offset, ns_t at, ns_t hold)
+{
+	enum source before = d->sel.cur;
+	enum source after = select_sample(&d->sel, src, offset, mono_now(), hold);
+
+	if (after != before)
+		source_changed(d, before, after);
+	if (after == src)
+		discipline(d, src, offset, at);
+	else
+		DEBUG(d, "%s: offset %lld ns, not used (%s in use)", source_name(src), (long long)offset,
+		      source_name(after));
+}
+
+/* The stamp of a frame: the kernel's when it came with the message, else the clock now. */
+static ns_t rx_stamp(struct msghdr *mh)
+{
+	struct cmsghdr *c;
+
+	for (c = CMSG_FIRSTHDR(mh); c; c = CMSG_NXTHDR(mh, c)) {
+		ns_t t;
+
+		if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_TIMESTAMPNS &&
+		    c->cmsg_len > CMSG_LEN(0) && stamp_parse(CMSG_DATA(c), c->cmsg_len - CMSG_LEN(0), &t))
+			return t;
+	}
+	return real_now();
+}
+
+/* ---- NTP ---- */
+
+static int ntp_open(struct daemon *d)
+{
+	struct addrinfo hints, *res;
+	int one = 1;
+	int fd;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_socktype = SOCK_DGRAM;
+	hints.ai_flags = AI_NUMERICHOST;	/* the stick resolves no name */
+	if (getaddrinfo(d->ntp_server, NTP_PORT, &hints, &res) != 0 || !res) {
+		WARN(d, "NTP server %s is not an address", d->ntp_server);
+		return -1;
+	}
+	memcpy(&d->ntp_addr, res->ai_addr, res->ai_addrlen);
+	d->ntp_addrlen = res->ai_addrlen;
+	fd = socket(res->ai_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	freeaddrinfo(res);
+	if (fd < 0)
+		return -1;
+	/* The kernel's stamp of an answer's arrival: the daemon may come to read it late. */
+	setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPNS, &one, sizeof(one));
+	d->ntp_fd = fd;
+	return 0;
+}
+
+static void ntp_query(struct daemon *d, ns_t mono)
+{
+	uint8_t buf[NTP_PACKET_LEN];
+	ns_t interval;
+
+	if (d->ntp_waiting) {
+		d->ntp_misses++;
+		d->ntp_waiting = false;
+		DEBUG(d, "NTP: no answer from %s", d->ntp_server);
+	}
+	d->ntp_t1 = real_now();
+	ntp_request(buf, d->ntp_t1);
+	d->ntp_sent_mono = mono;
+	if (sendto(d->ntp_fd, buf, sizeof(buf), 0, (struct sockaddr *)&d->ntp_addr, d->ntp_addrlen) < 0) {
+		/* No route yet: the management link comes up after timed. Try again at the next poll. */
+		DEBUG(d, "NTP: send to %s: %s", d->ntp_server, strerror(errno));
+	} else {
+		d->ntp_waiting = true;
+	}
+	d->ntp_polls++;
+	interval = d->ntp_polls < 4 ? NTP_POLL_FIRST : d->ntp_polls < 12 ? NTP_POLL_NORMAL : NTP_POLL_STEADY;
+	if (d->ntp_misses >= 3 && interval > NTP_POLL_NORMAL)
+		interval = NTP_POLL_NORMAL;
+	d->ntp_next = mono + interval;
+}
+
+static void ntp_read(struct daemon *d)
+{
+	uint8_t buf[128];
+	uint8_t cbuf[128];
+	struct iovec iov = { buf, sizeof(buf) };
+	struct msghdr mh;
+	struct ntp_sample s;
+	enum ntp_status st;
+	ns_t t4, mono, at;
+	ssize_t n;
+
+	memset(&mh, 0, sizeof(mh));
+	mh.msg_iov = &iov;
+	mh.msg_iovlen = 1;
+	mh.msg_control = cbuf;
+	mh.msg_controllen = sizeof(cbuf);
+	n = recvmsg(d->ntp_fd, &mh, 0);
+	if (n < 0)
+		return;
+	t4 = rx_stamp(&mh);
+	mono = mono_now();
+	if (!d->ntp_waiting)
+		return;
+	st = ntp_answer(buf, (size_t)n, d->ntp_t1, t4, &s);
+	if (st != NTP_OK) {
+		DEBUG(d, "NTP: answer from %s refused: %s", d->ntp_server, ntp_status_name(st));
+		if (st == NTP_KOD) {
+			d->ntp_waiting = false;
+			d->ntp_misses = 3;
+			d->ntp_next = mono + NTP_POLL_STEADY;
+		}
+		return;
+	}
+	d->ntp_waiting = false;
+	d->ntp_misses = 0;
+	d->ntp_last = s;
+	d->ntp_have_last = true;
+	DEBUG(d, "NTP: answer, offset %lld ns, delay %lld ns", (long long)s.offset, (long long)s.delay);
+	ntp_filter_add(&d->ntp_filter, &s, mono);
+	/*
+	 * A step makes the filter forget. An answer kept out for its delay is
+	 * still an answer: the server stays good.
+	 */
+	if (!ntp_filter_take(&d->ntp_filter, mono, 10 * 60 * NS_PER_SEC, &s, &at)) {
+		select_refresh(&d->sel, SRC_NTP, mono, 3 * NTP_POLL_STEADY);
+		return;
+	}
+	on_sample(d, SRC_NTP, s.offset, at, 3 * NTP_POLL_STEADY);
+}
+
+/* ---- PTP ---- */
+
+static void ptp_close(struct daemon *d)
+{
+	if (d->l2_fd >= 0)
+		close(d->l2_fd);
+	if (d->event_fd >= 0)
+		close(d->event_fd);
+	if (d->general_fd >= 0)
+		close(d->general_fd);
+	d->l2_fd = d->event_fd = d->general_fd = -1;
+	d->ptp_ready = false;
+}
+
+static int udp_socket(const struct daemon *d, unsigned int port, struct in_addr group)
+{
+	struct ip_mreqn mr;
+	struct sockaddr_in sa;
+	int one = 1, zero = 0, ttl = 1;
+	int fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+
+	if (fd < 0)
+		return -1;
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, d->iface, (socklen_t)strlen(d->iface) + 1) < 0)
+		goto fail;
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family = AF_INET;
+	sa.sin_port = htons((uint16_t)port);
+	if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+		goto fail;
+	memset(&mr, 0, sizeof(mr));
+	mr.imr_multiaddr = group;
+	mr.imr_ifindex = d->ifindex;
+	if (setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof(mr)) < 0)
+		goto fail;
+	setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, &mr, sizeof(mr));
+	setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
+	setsockopt(fd, IPPROTO_IP, IP_MULTICAST_LOOP, &zero, sizeof(zero));
+	setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPNS, &one, sizeof(one));
+	return fd;
+fail:
+	close(fd);
+	return -1;
+}
+
+static int ptp_open(struct daemon *d)
+{
+	struct sockaddr_ll sll;
+	struct packet_mreq pm;
+	struct in_addr group;
+	struct ifreq ifr;
+	int one = 1;
+	int udp_err;
+	int s;
+
+	d->ifindex = (int)if_nametoindex(d->iface);
+	if (!d->ifindex)
+		return -1;
+
+	/* The clock identity of this node, from the interface's MAC. */
+	s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if (s < 0)
+		return -1;
+	memset(&ifr, 0, sizeof(ifr));
+	snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "%s", d->iface);
+	if (ioctl(s, SIOCGIFHWADDR, &ifr) < 0) {
+		close(s);
+		return -1;
+	}
+	close(s);
+	{
+		uint8_t id[8];
+
+		ptp_clock_id_from_mac(id, (const uint8_t *)ifr.ifr_hwaddr.sa_data);
+		/* A new identity restarts the slave; the same one leaves what it has learned. */
+		if (memcmp(id, d->ptp.own.clock, 8))
+			ptp_slave_init(&d->ptp, d->domain, id);
+	}
+
+	d->l2_fd = socket(AF_PACKET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, htons(ETH_P_1588));
+	if (d->l2_fd >= 0) {
+		memset(&sll, 0, sizeof(sll));
+		sll.sll_family = AF_PACKET;
+		sll.sll_protocol = htons(ETH_P_1588);
+		sll.sll_ifindex = d->ifindex;
+		memset(&pm, 0, sizeof(pm));
+		pm.mr_ifindex = d->ifindex;
+		pm.mr_type = PACKET_MR_MULTICAST;
+		pm.mr_alen = 6;
+		memcpy(pm.mr_address, ptp_l2_group, 6);
+		if (bind(d->l2_fd, (struct sockaddr *)&sll, sizeof(sll)) < 0 ||
+		    setsockopt(d->l2_fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &pm, sizeof(pm)) < 0) {
+			close(d->l2_fd);
+			d->l2_fd = -1;
+		} else {
+			setsockopt(d->l2_fd, SOL_SOCKET, SO_TIMESTAMPNS, &one, sizeof(one));
+		}
+	}
+
+	inet_pton(AF_INET, PTP_UDP_GROUP, &group);
+	d->event_fd = udp_socket(d, PTP_EVENT_PORT, group);
+	udp_err = d->event_fd < 0 ? errno : 0;
+	d->general_fd = udp_socket(d, PTP_GENERAL_PORT, group);
+	if (d->general_fd < 0 && !udp_err)
+		udp_err = errno;
+
+	if (d->l2_fd < 0 && (d->event_fd < 0 || d->general_fd < 0)) {
+		ptp_close(d);
+		return -1;
+	}
+	d->ptp_ready = true;
+	LOG(d, "PTP on %s, domain %u: layer 2 %s, UDP %s", d->iface, d->domain, d->l2_fd >= 0 ? "yes" : "no",
+	    udp_err ? strerror(udp_err) : "yes");
+	return 0;
+}
+
+static void ptp_send_delay_req(struct daemon *d)
+{
+	uint8_t buf[PTP_DELAY_REQ_LEN];
+	size_t len;
+	ns_t t3 = real_now();
+
+	/* The time of sending is taken before the send, so that the message carries it back. */
+	len = ptp_delay_req(&d->ptp, buf, t3);
+	if (!len)
+		return;
+	if (d->via == VIA_L2 && d->l2_fd >= 0) {
+		struct sockaddr_ll sll;
+
+		memset(&sll, 0, sizeof(sll));
+		sll.sll_family = AF_PACKET;
+		sll.sll_protocol = htons(ETH_P_1588);
+		sll.sll_ifindex = d->ifindex;
+		sll.sll_halen = 6;
+		memcpy(sll.sll_addr, ptp_l2_group, 6);
+		if (sendto(d->l2_fd, buf, len, 0, (struct sockaddr *)&sll, sizeof(sll)) < 0)
+			DEBUG(d, "PTP: Delay_Req over layer 2: %s", strerror(errno));
+	} else if (d->event_fd >= 0) {
+		struct sockaddr_in sa;
+
+		memset(&sa, 0, sizeof(sa));
+		sa.sin_family = AF_INET;
+		sa.sin_port = htons(PTP_EVENT_PORT);
+		inet_pton(AF_INET, PTP_UDP_GROUP, &sa.sin_addr);
+		if (sendto(d->event_fd, buf, len, 0, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+			DEBUG(d, "PTP: Delay_Req over UDP: %s", strerror(errno));
+	}
+}
+
+static void ptp_read(struct daemon *d, int fd, enum transport via)
+{
+	uint8_t buf[256];
+	uint8_t cbuf[128];
+	struct iovec iov = { buf, sizeof(buf) };
+	struct msghdr mh;
+	struct ptp_result r;
+	ssize_t n;
+	ns_t rx, mono, off;
+
+	memset(&mh, 0, sizeof(mh));
+	mh.msg_iov = &iov;
+	mh.msg_iovlen = 1;
+	mh.msg_control = cbuf;
+	mh.msg_controllen = sizeof(cbuf);
+	n = recvmsg(fd, &mh, 0);
+	if (n <= 0) {
+		if (n < 0 && errno != EAGAIN && errno != EINTR) {
+			/* The interface went away or down: close, and open again later. */
+			WARN(d, "PTP: %s: %s", d->iface, strerror(errno));
+			ptp_close(d);
+			d->ptp_reopen_at = mono_now() + REOPEN_PERIOD;
+		}
+		return;
+	}
+	rx = rx_stamp(&mh);
+	mono = mono_now();
+	if (d->verbose && (buf[0] & 0x0f) <= PTP_SYNC)
+		DEBUG(d, "PTP: Sync seq %u received at %lld, now %lld", get16(buf + 30), (long long)rx,
+		      (long long)real_now());
+	if (!ptp_rx(&d->ptp, buf, (size_t)n, rx, mono, &r))
+		return;
+	if (r.ev == PTP_EV_MASTER) {
+		const uint8_t *c = d->ptp.master.clock;
+
+		d->via = via;
+		d->delay_req_at = mono + NS_PER_SEC;
+		median3_reset(&d->ptp_med);
+		LOG(d, "PTP master %02x%02x%02x%02x%02x%02x%02x%02x over %s, class %u, UTC offset %d s", c[0],
+		    c[1], c[2], c[3], c[4], c[5], c[6], c[7], via == VIA_L2 ? "layer 2" : "UDP",
+		    d->ptp.master_ds.clock_class, d->ptp.utc_offset);
+	} else if (r.ev == PTP_EV_OFFSET) {
+		int log2 = d->ptp.sync_log_interval;
+		ns_t hold = 4 * (log2 > 0 ? NS_PER_SEC << log2 : NS_PER_SEC);
+
+		/* The way the master's Syncs come now, which its Delay_Req follow. */
+		d->via = via;
+
+		if (hold < 8 * NS_PER_SEC)
+			hold = 8 * NS_PER_SEC;
+		d->ptp_last_offset = r.offset;
+		d->ptp_have_offset = true;
+		off = median3_add(&d->ptp_med, r.offset);
+		/* The servo takes the median once there are three to take it of. */
+		if (d->ptp_med.n >= 3)
+			on_sample(d, SRC_PTP, off, mono, hold);
+	}
+}
+
+static void ptp_tick(struct daemon *d, ns_t mono)
+{
+	if (!d->ptp_ready) {
+		if (mono >= d->ptp_reopen_at) {
+			d->ptp_reopen_at = mono + REOPEN_PERIOD;
+			ptp_open(d);
+		}
+		return;
+	}
+	if (d->ptp.have_master && !ptp_master_alive(&d->ptp, mono)) {
+		LOG(d, "PTP master lost");
+		ptp_master_lost(&d->ptp);
+		d->ptp_have_offset = false;
+		median3_reset(&d->ptp_med);
+	}
+	if (d->ptp.have_master && mono >= d->delay_req_at) {
+		ptp_send_delay_req(d);
+		d->delay_req_at = mono + (d->ptp.delay_known ? PTP_DELAY_REQ_NORMAL : PTP_DELAY_REQ_FIRST);
+	}
+}
+
+/* ---- the OLT ---- */
+
+/* The file once a second: a new time when omcid wrote another. */
+static void olt_check(struct daemon *d, ns_t mono)
+{
+	char text[128];
+	struct stat st;
+	ns_t utc, at;
+	ssize_t n;
+	int fd;
+
+	if (mono < d->olt_check_at)
+		return;
+	d->olt_check_at = mono + OLT_PERIOD;
+	if (stat(d->olt_path, &st) < 0)
+		return;
+	if (st.st_mtim.tv_sec == d->olt_mtime.tv_sec && st.st_mtim.tv_nsec == d->olt_mtime.tv_nsec &&
+	    st.st_size == d->olt_size)
+		return;
+	d->olt_mtime = st.st_mtim;
+	d->olt_size = st.st_size;
+	fd = open(d->olt_path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return;
+	n = read(fd, text, sizeof(text));
+	close(fd);
+	if (n <= 0 || !olt_parse(text, (size_t)n, &utc, &at)) {
+		WARN(d, "OLT: %s does not give a time", d->olt_path);
+		return;
+	}
+	if (d->olt_have && utc == d->olt_utc && at == d->olt_at)
+		return;
+	d->olt_have = true;
+	d->olt_utc = utc;
+	d->olt_at = at;
+	LOG(d, "OLT gave the time %lld", (long long)(utc / NS_PER_SEC));
+	d->dirty = true;
+	mono = mono_now();
+	on_sample(d, SRC_OLT, olt_offset(utc, at, real_now(), mono), mono, OLT_HOLD);
+}
+
+/* ---- main ---- */
+
+static void print_usage(void)
+{
+	fprintf(stderr, "usage: timed [-n SERVER] [-p IFACE] [-o FILE] [-d DOMAIN] [-s FILE] [-f] [-v] [-D]\n");
+	exit(2);
+}
+
+static void tick(struct daemon *d, ns_t mono)
+{
+	enum source before = d->sel.cur;
+	enum source after = select_pick(&d->sel, mono);
+
+	if (after != before)
+		source_changed(d, before, after);
+	if (d->ntp_fd >= 0 && mono >= d->ntp_next)
+		ntp_query(d, mono);
+	if (d->ntp_waiting && mono - d->ntp_sent_mono > NTP_REPLY_WAIT) {
+		d->ntp_waiting = false;
+		d->ntp_misses++;
+		DEBUG(d, "NTP: no answer from %s", d->ntp_server);
+	}
+	if (d->iface)
+		ptp_tick(d, mono);
+	if (d->olt_path)
+		olt_check(d, mono);
+}
+
+int main(int argc, char **argv)
+{
+	struct daemon d;
+	struct sigaction sa;
+	ns_t state_at = 0;
+	int opt;
+
+	memset(&d, 0, sizeof(d));
+	d.state_path = DEFAULT_STATE;
+	d.ntp_fd = d.l2_fd = d.event_fd = d.general_fd = -1;
+	select_init(&d.sel);
+	ntp_filter_init(&d.ntp_filter);
+	{
+		static const uint8_t none[8] = { 0 };
+
+		ptp_slave_init(&d.ptp, 0, none);
+	}
+
+	while ((opt = getopt(argc, argv, "n:p:o:d:s:fvD")) != -1) {
+		switch (opt) {
+		case 'n':
+			d.ntp_server = optarg;
+			break;
+		case 'p':
+			d.iface = optarg;
+			break;
+		case 'o':
+			d.olt_path = optarg;
+			break;
+		case 'd':
+			d.domain = (uint8_t)atoi(optarg);
+			break;
+		case 's':
+			d.state_path = optarg;
+			break;
+		case 'f':
+			d.foreground = true;
+			break;
+		case 'v':
+			d.verbose = true;
+			break;
+		case 'D':
+			d.dry = true;
+			break;
+		default:
+			print_usage();
+		}
+	}
+	if (optind != argc || (!d.ntp_server && !d.iface && !d.olt_path))
+		print_usage();
+
+	if (!d.foreground)
+		openlog("timed", LOG_PID, LOG_DAEMON);
+	{
+		double freq = freq_start(&d);
+
+		/* A frequency the kernel holds is one a timed before this one set: right, and kept. */
+		servo_init(&d.servo, STEP_LIMIT, freq, freq != 0);
+	}
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = on_signal;
+	sigaction(SIGTERM, &sa, NULL);
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGHUP, &sa, NULL);
+
+	if (d.ntp_server && ntp_open(&d) < 0)
+		return 1;
+	LOG(&d, "start: NTP %s, PTP %s, OLT %s", d.ntp_server ? d.ntp_server : "off", d.iface ? d.iface : "off",
+	    d.olt_path ? d.olt_path : "off");
+
+	while (!g_stop) {
+		struct pollfd pfd[4];
+		int idx_ntp = -1, idx_l2 = -1, idx_ev = -1, idx_gen = -1, n = 0;
+		ns_t mono = mono_now();
+
+		memset(pfd, 0, sizeof(pfd));
+		if (d.ntp_fd >= 0) {
+			idx_ntp = n;
+			pfd[n].fd = d.ntp_fd;
+			pfd[n++].events = POLLIN;
+		}
+		if (d.l2_fd >= 0) {
+			idx_l2 = n;
+			pfd[n].fd = d.l2_fd;
+			pfd[n++].events = POLLIN;
+		}
+		if (d.event_fd >= 0) {
+			idx_ev = n;
+			pfd[n].fd = d.event_fd;
+			pfd[n++].events = POLLIN;
+		}
+		if (d.general_fd >= 0) {
+			idx_gen = n;
+			pfd[n].fd = d.general_fd;
+			pfd[n++].events = POLLIN;
+		}
+		/* A tick each 200 ms is enough for every timer here. */
+		if (poll(pfd, (nfds_t)n, 200) < 0 && errno != EINTR)
+			break;
+
+		if (idx_ntp >= 0 && (pfd[idx_ntp].revents & POLLIN))
+			ntp_read(&d);
+		if (idx_l2 >= 0 && (pfd[idx_l2].revents & POLLIN) && d.l2_fd >= 0)
+			ptp_read(&d, d.l2_fd, VIA_L2);
+		if (idx_ev >= 0 && (pfd[idx_ev].revents & POLLIN) && d.event_fd >= 0)
+			ptp_read(&d, d.event_fd, VIA_UDP);
+		if (idx_gen >= 0 && (pfd[idx_gen].revents & POLLIN) && d.general_fd >= 0)
+			ptp_read(&d, d.general_fd, VIA_UDP);
+
+		mono = mono_now();
+		tick(&d, mono);
+		if (d.dirty || mono >= state_at) {
+			write_state(&d, mono);
+			d.dirty = false;
+			state_at = mono + STATE_PERIOD;
+		}
+	}
+	LOG(&d, "stop");
+	write_state(&d, mono_now());
+	return 0;
+}
