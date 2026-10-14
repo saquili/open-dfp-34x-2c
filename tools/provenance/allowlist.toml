@@ -187,11 +187,13 @@ as a router's LAN; they identify no unit.
 [[allow]]
 gate = "unit-ids"
 rules = ["host-name"]
-paths = ["pond/web/src/components/AppShell.tsx"]
+paths = ["pond/web/src/components/AppShell.tsx", "pond/web/src/pages/Internet.tsx"]
 match = '"nav\.lan"'
 reason = """
 The key of the menu's translation for the local network page, a property path
-of the panel's messages, not a host name under a private top-level name.
+of the panel's messages, not a host name under a private top-level name. The
+menu named it until the internet's pages came to build their entries from
+their names; the page titled with it names it since.
 """
 
 [[allow]]
