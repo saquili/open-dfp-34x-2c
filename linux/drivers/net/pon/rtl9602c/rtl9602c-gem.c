@@ -608,11 +608,20 @@ void rtl9602c_gem_tcont_ready(struct rtl9602c_pon *p, u32 tcont)
  * port-mux dst into the transmit descriptor, and that gives the frame its
  * stream. Sent through the pon interface instead, the frame would lose the
  * dst, and the flow with it.
+ *
+ * A frame whose socket asked for a hardware transmit stamp is first given to
+ * the switch driver for the PON port, as DSA gives one sent on the pon
+ * interface (dsa_skb_tx_timestamp()), and is stamped under the pon
+ * interface's timestamping configuration.
  */
 static int rtl9602c_gem_xmit(struct pon_device *pon, struct sk_buff *skb)
 {
 	struct rtl9602c_pon *p = pon_device_get_drvdata(pon);
 	struct dsa_port *cpu_dp = dsa_to_port(p->ds, RTL9602C_PORT_CPU);
+
+	if ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP_NOBPF) &&
+	    p->ds->ops->port_txtstamp)
+		p->ds->ops->port_txtstamp(p->ds, RTL9602C_PORT_PON, skb);
 
 	skb->dev = cpu_dp->conduit;
 	skb_set_queue_mapping(skb, RTL9602C_PORT_PON);
@@ -790,14 +799,18 @@ static const struct pon_device_ops rtl9602c_pon_ops = {
 /*
  * The receive handler for data frames: a frame from the PON port in any flow
  * but the OMCC's goes to the GEM interface of its flow, if there is one. A
- * frame not taken goes on to its user port.
+ * frame not taken goes on to its user port, the pon interface, and so does
+ * one whose flow the conduit cannot tell (%RTL9602C_FLOW_UNKNOWN): every PTP
+ * message the switch stamps on its way up, so that no GEM interface receives
+ * a hardware timestamp, and the pon interface receives them all.
  */
 static bool rtl9602c_gem_rx(void *ctx, struct sk_buff *skb,
 			    unsigned int port, unsigned int flow)
 {
 	struct rtl9602c_pon *p = ctx;
 
-	if (port != RTL9602C_PORT_PON || flow == RTL9602C_GPON_OMCC_FLOW)
+	if (port != RTL9602C_PORT_PON || flow == RTL9602C_GPON_OMCC_FLOW ||
+	    flow == RTL9602C_FLOW_UNKNOWN)
 		return false;
 
 	return pon_gem_rx(p->pon, flow, skb);

@@ -1752,6 +1752,26 @@ Transmit and receive
        conduit reads the flow from the descriptor (the CPU port page).
      - M
      - The 80 frames of the downstream row above.
+   * - A PTP message from port 2 that the switch stamps on its way to the CPU
+       comes up without its flow: the conduit gives the receive handler
+       ``RTL9602C_FLOW_UNKNOWN`` (the CPU port page), and the handler leaves
+       the message to the ``pon`` interface, where it arrives with its
+       hardware stamp. No GEM interface receives a stamped PTP message.
+     - M
+     - Syncs, Follow_Ups and Announces from beyond the OLT, to the PTP group
+       and to the stick's own address, reached a packet socket on ``pon`` with
+       hardware stamps on the PTP clock's time scale; the GEM port counters
+       had counted them in the GEM port of flow 1.
+   * - Transmit timestamps: a frame whose socket asked for a hardware transmit
+       stamp is given to the switch driver's ``port_txtstamp`` for port 2
+       before it goes to the conduit, as DSA does for a frame sent on ``pon``,
+       and gets its departure time under the ``pon`` interface's timestamping
+       configuration (Documentation/networking/dsa/rtl9602c-ptp.rst).
+     - M
+     - Delay_Req sent up a VLAN of a GEM interface with ``SO_TIMESTAMPING``,
+       with transmit stamping on: each got a hardware stamp 185 to 328 us
+       after a read of the PTP clock before the send and 10 us to 12 ms
+       before one after it; the departure report named port 2.
 
 The GEM port counts
 -------------------
