@@ -1868,6 +1868,12 @@ static netdev_tx_t rtl9602c_eth_start_xmit(struct sk_buff *skb,
 				       flow | bypass);
 	priv->tx[i].lso = 0;
 	/*
+	 * The software transmit stamp, which the switch's ports offer, while
+	 * the frame is still the driver's: once OWN is set the engine may send
+	 * it and the reap free it.
+	 */
+	skb_tx_timestamp(skb);
+	/*
 	 * Word 0 last, carrying OWN. The words are stores to uncached memory in
 	 * program order, and the kick's barrier follows them; this relies on
 	 * the engine not taking a descriptor before all five words are in
