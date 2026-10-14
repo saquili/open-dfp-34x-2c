@@ -387,28 +387,31 @@ int rtl9602c_get_ts_info(struct dsa_switch *ds, int port,
 }
 
 /*
- * A stamp from the switch, in a receive tag or a departure report, carries
- * the low 16 bits of the clock's seconds.  The rest come from the seconds of
- * the last clock read, in the 65,536-second window that puts the stamp
- * nearest to them.  The result is right only while the clock has been read
- * within about nine hours (32,768 s) of the stamp, which
- * rtl9602c_ptp_aux_work() makes sure of by reading it at registration and
- * once a minute after.
+ * A stamp from the switch carries all 48 bits of the clock's seconds in a
+ * whole tag or a departure report, and the low 32 bits in the half tag of a
+ * message to this device's own address (see rtl9602c-eth).  The upper 16
+ * bits come from the seconds of the last clock read, in the window of 2^32
+ * seconds that puts the stamp nearest to them, so that a half tag's stamp is
+ * right while the clock has been read within 68 years of it, and a whole
+ * tag's stamp keeps its own seconds.
  */
+#define RTL9602C_PTP_STAMP_SEC_BITS	32
+
 static ktime_t rtl9602c_ptp_complete(struct rtl9602c_priv *p, ktime_t stamp)
 {
+	const u64 window = BIT_ULL(RTL9602C_PTP_STAMP_SEC_BITS);
 	u64 tag_sec, seen, sec;
 	u32 rem;
 
-	tag_sec = div_u64_rem(ktime_to_ns(stamp), NSEC_PER_SEC, &rem) & 0xffff;
+	tag_sec = div_u64_rem(ktime_to_ns(stamp), NSEC_PER_SEC, &rem) & (window - 1);
 	seen = (u64)atomic64_read(&p->ptp_sec_seen);
-	sec = (seen & ~0xffffULL) | tag_sec;
+	sec = (seen & ~(window - 1)) | tag_sec;
 
 	/* Move to the neighbouring window when that one is nearer. */
-	if (sec > seen + 0x8000)
-		sec -= 0x10000;
-	else if (seen > sec + 0x8000)
-		sec += 0x10000;
+	if (sec > seen + window / 2)
+		sec -= window;
+	else if (seen > sec + window / 2)
+		sec += window;
 
 	return ktime_set(sec, rem);
 }
@@ -640,11 +643,11 @@ static void rtl9602c_ptp_departure(void *ctx, ktime_t stamp)
  * Return: 0 or a negative error code.
  */
 /*
- * The tag of a received PTP message carries the low 16 bits of the seconds,
- * and rtl9602c_port_rxtstamp() takes the rest from the last read of the
- * clock. Reading the clock once a minute keeps that read within a minute of
- * the clock, far inside half the tag's window of 65536 s, whether or not
- * anything else reads it; the first read comes at registration.
+ * The half tag of a received PTP message carries the low 32 bits of the
+ * seconds, and rtl9602c_port_rxtstamp() takes the rest from the last read of
+ * the clock (rtl9602c_ptp_complete()). The first read comes at registration,
+ * and reading the clock once a minute after keeps the read current whether or
+ * not anything else reads it.
  */
 #define RTL9602C_PTP_AUX_PERIOD		(60 * HZ)
 
@@ -786,8 +789,9 @@ void rtl9602c_ptp_unregister(struct rtl9602c_priv *p)
  * The switch puts a 16-byte tag into each PTP message it sends to the CPU
  * port, holding the time of its clock at the frame; the CPU-port driver
  * has already taken the tag off and made that time the frame's hardware
- * timestamp.  The tag carries only the low 16 bits of the seconds, and
- * rtl9602c_ptp_complete() adds the rest.  On a port that answers Pdelay_Req
+ * timestamp.  The half tag of a message to this device's own address
+ * carries only the low 32 bits of the seconds, and rtl9602c_ptp_complete()
+ * adds the rest.  On a port that answers Pdelay_Req
  * one-step (%HWTSTAMP_TX_ONESTEP_P2P) the receive time of a Pdelay_Req is
  * kept for its Pdelay_Resp.  The switch tags its PTP messages
  * whatever the filter, so on a port whose receive filter is

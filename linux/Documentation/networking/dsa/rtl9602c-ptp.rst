@@ -31,11 +31,11 @@ The path of a PTP message that arrives from the host::
     port 3 (CPU)
       |
     +--------------+  takes the tag off and keeps its time as the frame's
-    | conduit      |  hardware timestamp (the low 16 bits of the seconds)
+    | conduit      |  hardware timestamp (all 48 bits of the seconds)
     +--------------+
       |
     +--------------+  ptp_classify_raw(), then rtl9602c_port_rxtstamp(),
-    | DSA          |  which completes the seconds from the last clock read
+    | DSA          |  which applies the port's receive filter
     +--------------+
       |
     user port sfp: SO_TIMESTAMPING
@@ -710,9 +710,10 @@ DMA engine. The conduit takes the tag off before DSA sees the frame and keeps
 its time as the frame's hardware timestamp (``skb_hwtstamps()``); the
 conduit's side is described in
 Documentation/networking/device_drivers/ethernet/realtek/rtl9602c.rst. The tag
-holds only the low 16 bits of the seconds, so the DSA operation
-``port_rxtstamp``, ``rtl9602c_port_rxtstamp()``, completes the seconds from the
-last read of the clock.
+holds all 48 bits of the seconds. The half tag of a message to this device's
+own address holds the low 32, and the DSA operation ``port_rxtstamp``,
+``rtl9602c_port_rxtstamp()``, completes the seconds from the last read of the
+clock.
 
 The driver has no setting to change for this: the tag is there whatever the
 per-port enable and the message actions say (see "The tag").
@@ -741,15 +742,17 @@ The tag
    * - Tag fields the driver uses, as offsets from the start of the frame: 14,
        a protocol byte (``RTL9602C_PTP_TAG_PROTO_OFFSET``; 4 in every tagged
        frame seen); 15, a reason byte (``RTL9602C_PTP_TAG_REASON_OFFSET``);
-       22 and 23, the low 16 bits of the PTP clock's seconds, big-endian
-       (``RTL9602C_PTP_TAG_SEC_OFFSET``); 24 to 27, the nanoseconds,
+       18 to 23, the PTP clock's seconds, all 48 bits, big-endian
+       (``RTL9602C_PTP_TAG_SEC48_OFFSET``); 24 to 27, the nanoseconds,
        big-endian, in units of 1 ns rather than the 8 ns ticks of the clock
        registers (``RTL9602C_PTP_TAG_NSEC_OFFSET``). The tag length is
        ``RTL9602C_PTP_TAG_LEN``, 16.
      - M
      - ``SO_TIMESTAMPING`` on a packet socket stamped Syncs sent 250 ms apart
        250.221 ms and 250.177 ms apart; the seconds and nanoseconds equal the
-       egress capture of the same frame (see the next row).
+       egress capture of the same frame (see the next row). With the clock on
+       the TAI time scale, offsets 18 to 23 read ``0000 6acf ddbb``, the
+       clock's seconds then.
    * - The stamp is the switch's PTP clock at the frame: the egress capture of
        the same frame on its way to the CPU (see "The egress capture") holds
        the same instant to the nanosecond, with all 48 bits of seconds, while
@@ -788,19 +791,20 @@ A received PTP message, from the conduit's receive path to DSA, in order:
 
 1. A frame that came up with a CPU tag and the trap reason 240 or 241, longer
    than 16 bytes, with ``0x8899`` at offset 12 and the protocol byte 4 at
-   offset 14: read the seconds (offset 22, 16 bits) and the nanoseconds
+   offset 14: read the seconds (offset 18, 48 bits) and the nanoseconds
    (offset 24, 32 bits), and log the reason byte once per value. A frame that
-   came up with the trap reason 245 and two zero bytes at offset 12 carries
-   the half tag of a message to this device's own address: read the seconds
-   at offset 14 and the nanoseconds at offset 16. Purpose: the tag holds the
-   time of the frame. (M)
+   came up with the trap reason 245, with the PTP EtherType or a VLAN tag at
+   offset 20, carries the half tag of a message to this device's own address:
+   read the seconds at offset 12 (32 bits) and the nanoseconds at offset 16.
+   Purpose: the tag holds the time of the frame. (M)
 2. Set the frame's hardware timestamp to those seconds and nanoseconds.
    Purpose: the time travels with the frame. (M)
 3. Move the 12 address bytes 16 bytes forward and pull 16 bytes, or 8 bytes
    for a half tag. Purpose: the frame reaches DSA as it was sent, with its own
    EtherType at offset 12. (M)
 4. DSA classifies the frame as PTP and calls ``port_rxtstamp``, which
-   completes the seconds. Purpose: a stamp with all its seconds. (I)
+   completes the seconds of a half tag. Purpose: a stamp with all its
+   seconds. (I)
 
 The steps are checked by the rows below and by those of "The tag".
 
@@ -819,20 +823,20 @@ The steps are checked by the rows below and by those of "The tag".
      - M
      - After the strip the Sync reached a packet socket as 60 bytes with
        EtherType ``0x88F7``.
-   * - ``rtl9602c_port_rxtstamp()`` completes the 16 bits of seconds from the
-       seconds of the last clock read (``ptp_sec_seen``, set by every read
-       through ``rtl9602c_ptp_now()``), choosing the 65,536-second window that
-       puts the stamp nearest to them (a difference over 32,768 s moves it one
-       window), and delivers the frame at once (it returns false). The result is right
-       while the PHC has been read within about nine hours of the frame. The
-       PHC's auxiliary work (``do_aux_work``) reads the clock at registration
-       and then once a minute, so the seconds are never older than a minute,
-       whether or not a PTP daemon reads the clock.
+   * - ``rtl9602c_port_rxtstamp()`` keeps the low 32 bits of the stamp's
+       seconds and takes the upper 16 from the seconds of the last clock read
+       (``ptp_sec_seen``, set by every read through ``rtl9602c_ptp_now()``),
+       choosing the window of 2^32 seconds that puts the stamp nearest to
+       them, and delivers the frame at once (it returns false). A stamp from a
+       whole tag keeps its own seconds; one from a half tag is right while the
+       PHC has been read within 68 years of the frame. The PHC's auxiliary
+       work (``do_aux_work``) reads the clock at registration and then once a
+       minute, whether or not a PTP daemon reads the clock.
      - M
      - With the PHC set to 65,530 s, 24 Syncs from the host half a second
        apart were stamped 65,532.76 to 65,544.27 s, without a jump where the
-       tag's seconds went from 65,535 to 0; the auxiliary work is read from
-       the code.
+       16 bits of seconds the driver then took from the tag went from 65,535
+       to 0; the auxiliary work is read from the code.
    * - The conduit takes the tag off only a frame that came up with a CPU tag
        and one of the two PTP trap reasons, 240 or 241, and that carries
        ``0x8899`` at offset 12 and the protocol byte 4 at offset 14. Other
@@ -847,19 +851,26 @@ The steps are checked by the rows below and by those of "The tag".
        time as its hardware stamp. A ``0x8899`` frame with protocol byte
        ``0x23`` from the host did not reach the CPU.
    * - A PTP message addressed to this device's own address comes up with the
-       trap reason 245 and only the last 8 bytes of the tag between the source
-       address and the message's EtherType, or its VLAN tag: two zero bytes,
-       the low 16 bits of the seconds and the nanoseconds. The conduit takes
-       them off as it takes a whole tag, so the message reaches the stack as
-       sent and stamped. A message to a group address, the PTP one or
-       broadcast, comes up with the whole tag.
+       trap reason 245 and a half tag of 8 bytes between the source address
+       and the message's EtherType, or its VLAN tag: the low 32 bits of the
+       seconds and the nanoseconds. The conduit takes it off as it takes a
+       whole tag, so the message reaches the stack as sent and stamped. A
+       message to a group address, the PTP one or broadcast, or to another
+       unicast address, comes up with the whole tag.
      - M
      - Five untagged Syncs from the host to the stick's address: each came up
        with reason 245, 68 bytes long with the half tag at offset 12; once the
        conduit took it off, 60 bytes with EtherType ``0x88F7`` and a hardware
        stamp. Five Syncs in VLAN 4094: the half tag before the VLAN tag, reason
        245, and once taken off, stamped. Before, the frames reached the stack
-       8 bytes longer, with EtherType 0, and no PTP stack saw them.
+       8 bytes longer, with EtherType 0, and no PTP stack saw them. The half
+       tag opened with two zero bytes while the PHC was below 65,536 s and
+       with ``6acf``, the seconds' bits 31 to 16, once it held TAI; the
+       conduit had taken the zeros for the half tag's mark, and with TAI the
+       messages again reached the stack 8 bytes longer, until it looked for the
+       EtherType after the half tag instead. Syncs to a unicast address of a
+       VLAN interface other than the stick's own came up with the whole
+       tag.
 
 The filter
 ----------
@@ -1733,9 +1744,9 @@ Known limitations
   classification finds a PTP message in it, and that classification,
   ``CONFIG_NET_PTP_CLASSIFY``, is selected by ``CONFIG_PTP_1588_CLOCK``.
   Without it the function is never called, and the hardware timestamp of a
-  received PTP message stays the tag's time as it stands: the low 16 bits of
-  the seconds and the nanoseconds. ``rtl9602c_defconfig`` does not name the
-  clock, but the symbol follows ``CONFIG_ETHERNET``, so a kernel configured
+  received PTP message stays the tag's time as it stands, which for a half tag
+  holds only the low 32 bits of the seconds. ``rtl9602c_defconfig`` does not
+  name the clock, but the symbol follows ``CONFIG_ETHERNET``, so a kernel configured
   from the defconfig has the clock and the classification.
 
 Open questions
