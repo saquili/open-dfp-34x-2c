@@ -806,18 +806,22 @@ struct rtl9602c_field {
 
 /*
  * The egress action that latches the time a message leaves and sends the CPU
- * a departure report with it (measured for the slots below), and the slots
- * of the event messages in the action registers, which are not the
- * messageType field: a Sync goes by slot 0 with the twoStepFlag set and by
- * slot 8 without it.
+ * a departure report with it, and the one that adds the time from the
+ * reference to the departure to the correctionField. The slots of the event
+ * messages in the action registers, measured for every message: a Sync goes
+ * by slot 0 with the twoStepFlag set and by slot 8 without it, a Pdelay_Req
+ * by slot 2 with it and by slot 9 without it; a Pdelay_Resp by slot 3 either
+ * way. The general messages go by slots 4 to 7: Follow_Up, Delay_Resp,
+ * Pdelay_Resp_Follow_Up and Announce.
  */
 #define RTL9602C_PTP_ACTION_LATCH_REPORT	2
 #define RTL9602C_PTP_ACTION_CORRECT		3
 #define RTL9602C_PTP_SLOT_SYNC			0
 #define RTL9602C_PTP_SLOT_DELAY_REQ		1
-#define RTL9602C_PTP_SLOT_PDELAY_REQ		2
+#define RTL9602C_PTP_SLOT_PDELAY_REQ_2STEP	2
 #define RTL9602C_PTP_SLOT_PDELAY_RESP		3
 #define RTL9602C_PTP_SLOT_SYNC_1STEP		8
+#define RTL9602C_PTP_SLOT_PDELAY_REQ		9
 
 /*
  * Port 0 enforces its shaper only with the rate here as well, in units of
@@ -2115,9 +2119,9 @@ struct rtl9602c_priv {
 	/** @hwtstamp: each port's timestamping configuration, as set */
 	struct kernel_hwtstamp_config hwtstamp[RTL9602C_NUM_PORTS];
 	/**
-	 * @ptp_tx_lock: protects @ptp_tx_skb, @ptp_tx_start and the four
-	 * counters after them; taken on the transmit path and in the
-	 * conduit's receive poll
+	 * @ptp_tx_lock: protects @ptp_tx_skb, @ptp_tx_start, @ptp_pdelay and
+	 * the counters of transmit stamps; taken on the transmit path and in
+	 * the conduit's receive poll
 	 */
 	spinlock_t	ptp_tx_lock;
 	/**
@@ -2142,11 +2146,26 @@ struct rtl9602c_priv {
 	bool		ptp_tx_ready;
 	/**
 	 * @ptp_onestep_at: when the reference time was last written for a
-	 * one-step Sync, under @ptp_lock
+	 * one-step message, under @ptp_lock
 	 */
 	ktime_t		ptp_onestep_at;
-	/** @ptp_tx_onestep: one-step Syncs sent, under @ptp_lock */
+	/** @ptp_tx_onestep: one-step Syncs sent */
 	u32		ptp_tx_onestep;
+	/**
+	 * @ptp_pdelay: per port, the last Pdelay_Req received on a port that
+	 * answers one-step: its sequence ID, its source port identity and its
+	 * receive time
+	 */
+	struct {
+		bool		valid;
+		u16		seq;
+		u8		id[10];
+		ktime_t		t2;
+	} ptp_pdelay[RTL9602C_NUM_PORTS];
+	/** @ptp_tx_p2p: one-step Pdelay_Resp sent with their turnaround */
+	u32		ptp_tx_p2p;
+	/** @ptp_tx_p2p_missed: one-step Pdelay_Resp whose Pdelay_Req was not known */
+	u32		ptp_tx_p2p_missed;
 	/**
 	 * @meter_lock: serialises the meters, @meter_used and @cpu_meter, and
 	 * the storm-control state, @storm, @storm_seq and @storm_meter, which

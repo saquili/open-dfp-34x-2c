@@ -10,8 +10,8 @@
  * rtl9602c_conduit_ctrl_xmit().
  *
  * Transmit timestamps take both drivers as well. The switch driver marks a
- * PTP message whose departure time it awaits, or a one-step Sync into which
- * the switch writes its time, with SKBTX_IN_PROGRESS in
+ * PTP message whose departure time it awaits, or a one-step Sync or
+ * Pdelay_Resp into which the switch writes a time, with SKBTX_IN_PROGRESS in
  * skb_shinfo()->tx_flags, which reaches the conduit's transmit path where
  * skb->cb does not; the conduit sends such a frame so that the switch
  * applies its PTP egress action to it, and hands the departure report that
