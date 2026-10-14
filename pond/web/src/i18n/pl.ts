@@ -969,6 +969,9 @@ export const pl: Dictionary = {
     clockNtpSilent: "{server} nie odpowiada",
     clockOltGave: "podał {date}",
     clockOltNone: "nie podaje daty",
+    clockStamps: "Znaczniki PTP",
+    clockStampsHw: "sprzętowe, zegar przełącznika {freq}, zegar systemowy {offset} od niego",
+    clockStampsSw: "programowe (jądro)",
     clockHint:
       "Wkładka bierze czas z hosta: przez PTP, gdy host ma mastera, a inaczej przez NTP od routera po drugiej stronie łącza zarządzania albo od serwera z ustawień. Datę z OLT bierze tylko wtedy, gdy host nic nie daje. Czasu nie zapisuje: do pierwszego ustawienia zegar wskazuje rok 1970.",
     restart: "Uruchom wkładkę ponownie",

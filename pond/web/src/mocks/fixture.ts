@@ -622,6 +622,11 @@ export function clockNow(): Clock {
       via: "l2",
       delay_ns: 48229,
       offset_ns: -1200,
+      stamps: "hardware",
+      phc_freq_ppb: 6512,
+      sys_phc_offset_ns: -830,
+      tx_stamps: 12,
+      tx_missed: 0,
     },
     olt: { good: false, utc_s: null, offset_ns: null },
   };

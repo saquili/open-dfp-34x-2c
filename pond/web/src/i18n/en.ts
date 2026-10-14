@@ -969,6 +969,9 @@ export const en = {
     clockNtpSilent: "{server} does not answer",
     clockOltGave: "gave {date}",
     clockOltNone: "gives no date",
+    clockStamps: "PTP stamps",
+    clockStampsHw: "hardware, switch clock {freq}, system clock {offset} from it",
+    clockStampsSw: "software (kernel)",
     clockHint:
       "The stick takes its time from the host: by PTP when the host has a master, otherwise by NTP from the router at the other end of the management link, or from the server in the settings. It takes the OLT's date only when the host gives nothing. The time is not saved: until the first setting the clock reads 1970.",
     restart: "Restart the stick",

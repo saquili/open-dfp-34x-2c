@@ -415,6 +415,14 @@ export interface Clock {
     via: "l2" | "udp" | null;
     delay_ns: number | null;
     offset_ns: number | null;
+    /** The stamps of PTP over layer 2: the switch's, or the kernel's. */
+    stamps?: "hardware" | "software" | null;
+    /** With hardware stamps: the correction of the switch clock's (PHC) frequency, ppb. */
+    phc_freq_ppb?: number | null;
+    /** With hardware stamps: the system clock less the PHC's time. */
+    sys_phc_offset_ns?: number | null;
+    tx_stamps?: number | null;
+    tx_missed?: number | null;
   } | null;
   olt: { good: boolean | null; utc_s: number | null; offset_ns: number | null } | null;
 }

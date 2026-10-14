@@ -699,6 +699,15 @@ function ClockCard() {
                 })
               : t("system.clockPtpNone", { iface: c.ptp.interface ?? "–" }),
           ],
+          c.ptp?.stamps && [
+            t("system.clockStamps"),
+            c.ptp.stamps === "hardware"
+              ? t("system.clockStampsHw", {
+                  freq: ppmText(c.ptp.phc_freq_ppb, lang),
+                  offset: offsetText(c.ptp.sys_phc_offset_ns, lang),
+                })
+              : t("system.clockStampsSw"),
+          ],
           c.ntp && [
             t("system.clockNtp"),
             c.ntp.good

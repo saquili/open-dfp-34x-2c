@@ -2089,6 +2089,8 @@ static void test_clock(void)
 	    "ntp_delay_ns=180625\nntp_stratum=2\n"
 	    "ptp_interface=mgmt\nptp_good=1\nptp_master=001b19fffe000001\n"
 	    "ptp_via=l2\nptp_delay_ns=48229\nptp_offset_ns=-1200\n"
+	    "ptp_stamps=hardware\nptp_phc=/dev/ptp0\nptp_phc_set=1\nptp_phc_freq_ppb=-6512\n"
+	    "ptp_sys_phc_offset_ns=-830\nptp_sys_phc_window_ns=2880\nptp_tx_stamps=12\nptp_tx_missed=0\n"
 	    "olt_file=/run/omcid/clock\nolt_good=0\n",
 	    0644);
 	s = render(prov_clock, buf, sizeof(buf), &e);
@@ -2100,8 +2102,10 @@ static void test_clock(void)
 	      "what NTP gave");
 	check(strstr(s, "\"ptp\":{\"interface\":\"mgmt\",\"good\":true,"
 			"\"master\":\"001b19fffe000001\",\"via\":\"l2\","
-			"\"delay_ns\":48229,\"offset_ns\":-1200}") != NULL,
-	      "what PTP gave");
+			"\"delay_ns\":48229,\"offset_ns\":-1200,\"stamps\":\"hardware\","
+			"\"phc_freq_ppb\":-6512,\"sys_phc_offset_ns\":-830,"
+			"\"tx_stamps\":12,\"tx_missed\":0}") != NULL,
+	      "what PTP gave, with the switch's hardware stamps");
 	check(strstr(s, "\"olt\":{\"good\":false,\"utc_s\":null,\"offset_ns\":null}}") != NULL,
 	      "the OLT asked, and nothing from it yet");
 

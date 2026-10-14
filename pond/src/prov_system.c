@@ -298,10 +298,18 @@ static const struct clock_key ntp_keys[] = {
 	{ "ntp_stratum", "stratum", 'n' },
 };
 
+/*
+ * With the switch's hardware stamps PTP sets the switch's clock (the PHC),
+ * and the system clock follows it: the stamps, the PHC's frequency, the
+ * system clock's offset from it and the Delay_Req stamped as they left.
+ */
 static const struct clock_key ptp_keys[] = {
 	{ "ptp_interface", "interface", 's' },	{ "ptp_good", "good", 'b' },
 	{ "ptp_master", "master", 's' },	{ "ptp_via", "via", 's' },
 	{ "ptp_delay_ns", "delay_ns", 'n' },	{ "ptp_offset_ns", "offset_ns", 'n' },
+	{ "ptp_stamps", "stamps", 's' },	{ "ptp_phc_freq_ppb", "phc_freq_ppb", 'n' },
+	{ "ptp_sys_phc_offset_ns", "sys_phc_offset_ns", 'n' },
+	{ "ptp_tx_stamps", "tx_stamps", 'n' },	{ "ptp_tx_missed", "tx_missed", 'n' },
 };
 
 static const struct clock_key olt_keys[] = {
