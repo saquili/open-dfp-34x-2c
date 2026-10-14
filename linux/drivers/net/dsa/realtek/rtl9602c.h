@@ -753,9 +753,14 @@ struct rtl9602c_field {
 #define RTL9602C_SCHED_WFQ_QUEUES	0x02d85c
 
 /*
- * Per-port and per-message PTP settings. Of these the driver writes only the
- * egress actions of the event messages, while transmit stamping is on; the
- * transparent-clock bits and the receive capture's layout are not verified.
+ * Per-port and per-message PTP settings. Of these the driver writes the egress
+ * actions of the event messages while transmit stamping is on, and the
+ * reference time for a one-step Sync; the transparent-clock bits are not
+ * verified. RTL9602C_PTP_RX_TSTAMP is the reference time that the egress
+ * action RTL9602C_PTP_ACTION_CORRECT takes off a message's departure time
+ * before it adds the difference, modulo 8 s, to the correctionField: the
+ * seconds' low three bits in the first word, the nanoseconds in 8 ns ticks in
+ * the second (both measured).
  */
 #define RTL9602C_PTP_TRANSPARENT_PORTS	0x0111d4
 #define RTL9602C_PTP_ACTION_INGRESS	0x0111d8
@@ -807,6 +812,7 @@ struct rtl9602c_field {
  * slot 8 without it.
  */
 #define RTL9602C_PTP_ACTION_LATCH_REPORT	2
+#define RTL9602C_PTP_ACTION_CORRECT		3
 #define RTL9602C_PTP_SLOT_SYNC			0
 #define RTL9602C_PTP_SLOT_DELAY_REQ		1
 #define RTL9602C_PTP_SLOT_PDELAY_REQ		2
@@ -1966,11 +1972,12 @@ struct rtl9602c_priv {
 	struct mutex acl_lock;
 
 	/**
-	 * @ptp_lock: makes a clock latch and its reads, or a step and its
-	 * writes, one operation; initialised at probe, before any view that
-	 * reads the clock exists
+	 * @ptp_lock: makes a clock latch and its reads, a step and its
+	 * writes, or a write of the reference time, one operation; a spinlock,
+	 * as the transmit path reads the clock for a one-step Sync;
+	 * initialised at probe, before any view that reads the clock exists
 	 */
-	struct mutex		ptp_lock;
+	spinlock_t		ptp_lock;
 
 	/** @debugfs: the driver's debugfs directory */
 	struct dentry		*debugfs;
@@ -2133,6 +2140,13 @@ struct rtl9602c_priv {
 	 * it no port offers transmit stamping
 	 */
 	bool		ptp_tx_ready;
+	/**
+	 * @ptp_onestep_at: when the reference time was last written for a
+	 * one-step Sync, under @ptp_lock
+	 */
+	ktime_t		ptp_onestep_at;
+	/** @ptp_tx_onestep: one-step Syncs sent, under @ptp_lock */
+	u32		ptp_tx_onestep;
 	/**
 	 * @meter_lock: serialises the meters, @meter_used and @cpu_meter, and
 	 * the storm-control state, @storm, @storm_seq and @storm_meter, which

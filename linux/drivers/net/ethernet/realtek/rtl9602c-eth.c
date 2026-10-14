@@ -1736,8 +1736,9 @@ static int rtl9602c_eth_stop(struct net_device *dev)
  * 60 bytes, which with the FCS the engine appends makes the 64-byte minimum
  * (IEEE 802.3 clause 4.4.2). Word 3 aims the frame at the port of its queue.
  *
- * A PTP message whose departure time the switch driver awaits, marked
- * SKBTX_IN_PROGRESS (see include/linux/dsa/rtl9602c.h), goes without
+ * A PTP message that the switch driver marks SKBTX_IN_PROGRESS, one whose
+ * departure report it awaits or a one-step Sync (see
+ * include/linux/dsa/rtl9602c.h), goes without
  * RTL9602C_NIC_TXD_NO_REWRITE and RTL9602C_NIC_TXD_L34_BYPASS, so that the
  * switch applies its PTP egress action to it; every other frame goes with
  * both.

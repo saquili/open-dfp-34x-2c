@@ -173,8 +173,8 @@ name is prefixed ``rtl9602c_``. DSA calls them for the user ports ``sfp`` and
        PHC index (-1 when no clock is registered), the transmit type off and
        the receive filters none, ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``,
        ``_L2_SYNC`` and ``_L2_DELAY_REQ``; and, while the conduit hands the
-       departure reports on, hardware transmit stamping and the transmit type
-       on.
+       departure reports on, hardware transmit stamping and the transmit types
+       on and one-step Sync.
      - "Transmit timestamps"
    * - ``port_hwtstamp_get``
      - Returns the configuration last set on the port. It is all zero, no
@@ -193,7 +193,8 @@ name is prefixed ``rtl9602c_``. DSA calls them for the user ports ``sfp`` and
      - "Receive timestamps"
    * - ``port_txtstamp``
      - Keeps a clone of a PTP event message to be stamped and marks the
-       message for the conduit, one message at a time.
+       message for the conduit, one message at a time; writes the time into
+       a one-step Sync.
      - "Transmit timestamps"
 
 The PHC is a ``struct ptp_clock_info`` with the name ``rtl9602c-ptp``,
@@ -336,8 +337,8 @@ Interfaces to user space
 - ``ethtool -T sfp``, or ``pon``, lists the capabilities that
   ``rtl9602c_get_ts_info()`` reports: software transmit and receive stamping,
   software system clock, hardware transmit and receive stamping, raw hardware
-  clock, the PHC index, the transmit types off and on and the receive filters
-  none and PTP v2 event.
+  clock, the PHC index, the transmit types off, on and one-step-sync and the
+  receive filters none and PTP v2 event.
 - ``SIOCSHWTSTAMP`` and ``SIOCGHWTSTAMP``, or the ``tsconfig`` request of the
   ethtool netlink interface, on ``sfp`` or ``pon``, set and read the
   timestamping configuration (see "Receive timestamps" and "Transmit
@@ -880,40 +881,6 @@ The filter
        through a packet socket with ``SO_TIMESTAMPING``, carried no hardware
        timestamp under the filter none and one under the layer-2 filter.
 
-The receive capture register
-----------------------------
-
-.. list-table::
-   :header-rows: 1
-   :widths: 58 6 36
-
-   * - Fact
-     - Tag
-     - Checked by
-   * - ``RTL9602C_PTP_RX_TSTAMP`` (``0x0111e0``, two words) is a receive
-       capture that the driver does not use for timestamps: it stayed zero
-       with Syncs arriving, the port enable on or off and every ingress
-       action. ``ptpstat`` prints it (``capture``).
-     - M
-     - ``ptpstat`` with Syncs arriving under each setting.
-   * - As ``ptpstat`` decodes it: seconds bits 2:0 in the first word
-       (``RTL9602C_PTP_RX_TSTAMP_SEC``), nanoseconds in 8 ns ticks at bits 29:3
-       of the second (``RTL9602C_PTP_RX_TSTAMP_NSEC``).
-     - I
-     - Never seen non-zero, not even after a lab-only write to it; a capture
-       that changes would settle it. Debugfs only.
-   * - Under egress action 3 a one-step Sync from the CPU leaves with its
-       correctionField raised by the time it left, less a reference, modulo
-       8 s: with this register zero, three Syncs sent about 1.135 s apart
-       carried 0.532176864, 1.666959584 and 2.802885728 s, which step with
-       the sending to within 9 us. Eight seconds is the reach of the 3-bit
-       seconds of this register, which is taken to be the reference; the
-       driver offers no one-step stamping and does not use it.
-     - M, I
-     - M: the three Syncs captured at the far end of the SFP lane, the
-       register zero. I: that the register is the reference; a Sync sent
-       after writing a known time into it would settle it.
-
 Transmit timestamps
 ===================
 
@@ -927,10 +894,12 @@ an egress action to a message from the CPU only when the conduit sends it with
 two descriptor bits clear that it sets on every other frame, and only while
 the CPU port's PTP enable is set.
 
-The driver offers two-step stamps, ``HWTSTAMP_TX_ON``. While any port asks for
+The driver offers two-step stamps, ``HWTSTAMP_TX_ON``, and one-step Syncs,
+``HWTSTAMP_TX_ONESTEP_SYNC`` (see "One-step Sync and the reference time"),
+with which the other event messages stay two-step. While any port asks for
 them, ``rtl9602c_ptp_tx_reports()`` sets the egress action of the event
-messages' slots to 2 and the CPU port's enable; when none does, it clears
-both. ``rtl9602c_port_txtstamp()`` takes a Sync, Delay_Req, Pdelay_Req or
+messages' slots to 2, that of the one-step Sync to 3 while a port asks for
+one-step Syncs, and the CPU port's enable; when none does, it clears them. ``rtl9602c_port_txtstamp()`` takes a Sync, Delay_Req, Pdelay_Req or
 Pdelay_Resp over Ethernet, with or without a VLAN tag, keeps a clone of it and
 marks the message ``SKBTX_IN_PROGRESS``, which tells the conduit to clear the
 two bits. The report carries the time and nothing of the message, so one
@@ -988,8 +957,8 @@ The order, for one message:
    * - Under ``RTL9602C_PTP_ACTION_LATCH_REPORT`` (2) the switch sends the CPU
        one departure report per message, holding the time the message left;
        under action 1 no report comes, and where that action keeps the time is
-       not established; action 3 writes into the message (see "The receive
-       capture register"). The egress capture of the frame reads the action
+       not established; action 3 writes into the message (see "One-step
+       Sync and the reference time"). The egress capture of the frame reads the action
        applied.
      - M
      - The egress capture read action 1, 2 or 3 as set, and the ``rxreason``
@@ -1070,6 +1039,63 @@ The order, for one message:
        under each of the four egress actions and 0 on the next read; after an
        ordinary frame, 0; after a Sync forwarded to the CPU, only port 3 read
        1.
+
+One-step Sync and the reference time
+------------------------------------
+
+Under egress action 3 (``RTL9602C_PTP_ACTION_CORRECT``) the switch writes the
+time a message spends until it leaves into the message itself: it adds the
+departure time less a reference time to the correctionField, modulo 8 s. The
+reference is one register for the switch, ``RTL9602C_PTP_RX_TSTAMP``
+(``0x0111e0``, two words). For a one-step Sync, ``rtl9602c_ptp_onestep()``
+reads the clock, writes that time into the Sync's originTimestamp and into the
+reference, and marks the Sync for the conduit like a message awaiting its
+report; the receiver, which adds the correction to the origin, gets the time
+the Sync left. As the register is shared, a one-step Sync waits until
+``RTL9602C_PTP_ONESTEP_GAP_US`` (250 us) have passed since the last one's was
+written, with the interrupts off; ``ptpstat`` counts them (``one-step syncs``)
+and shows the reference (``reference``).
+
+.. list-table::
+   :header-rows: 1
+   :widths: 58 6 36
+
+   * - Fact
+     - Tag
+     - Checked by
+   * - ``RTL9602C_PTP_RX_TSTAMP`` holds the seconds' low three bits in bits
+       2:0 of the first word (``RTL9602C_PTP_RX_TSTAMP_SEC``) and the
+       nanoseconds in 8 ns ticks in bits 29:3 of the second
+       (``RTL9602C_PTP_RX_TSTAMP_NSEC``); the other bits read 0. The switch
+       does not write it: it stayed zero with Syncs arriving under every
+       setting.
+     - M
+     - All ones written to both words read back 7 and ``0x3ffffff8``
+       (lab-only debugfs write); ``ptpstat`` with Syncs arriving.
+   * - Under action 3 the correctionField of a message from the CPU grows by
+       its departure time less the reference, modulo 8 s, the reach of the
+       reference's three bits of seconds.
+     - M
+     - One-step Syncs captured at the far end: with the reference zero, a
+       Sync left at 74.864 s carried 2.864012376 s; with the reference at
+       3.5 s, one that left at 75.8776 s carried 0.377608664 s.
+   * - Through ``HWTSTAMP_TX_ONESTEP_SYNC`` the origin plus the correction is
+       the time the Sync left: it lay between two reads of the clock, before
+       and after the send. The correction, the time from the driver's write
+       to the departure, was 51 to 84 us.
+     - M
+     - Six one-step Syncs from a packet socket on the VLAN 4094 interface,
+       captured at the far end, against the clock read by the sender.
+   * - A one-step Sync has left the switch 250 us after its reference was
+       written, so the next one's cannot change the reference under it.
+     - I
+     - The slowest of six took 84 us; two ports sending one-step Syncs
+       together under load would test the margin.
+   * - The word at ``0x01b020``, 31 bits, taken to hold a mean path delay, is
+       writable; what it adds to a correction is not established.
+     - M, I
+     - M: a lab-only write read back. I: a transparent clock's or a peer
+       delay's use of it.
 
 The egress capture
 ==================
@@ -1240,8 +1266,12 @@ The lines of ``ptpstat``, in order:
      - The PON time-of-day value and its enable.
      - ``RTL9602C_PTP_PON_TIME_SEC``, ``RTL9602C_PTP_PON_TIME_NSEC``,
        ``RTL9602C_PTP_CLK_CTRL``
-   * - ``capture <s>.<ns>  (raw <word> <word>)``
-     - The receive capture register.
+   * - ``one-step syncs <n>``
+     - The one-step Syncs whose time the switch wrote.
+     - ``ptp_tx_onestep``
+   * - ``reference <s>.<ns>  (raw <word> <word>)``
+     - The reference time of the last one-step Sync, the seconds' low three
+       bits and the nanoseconds.
      - ``RTL9602C_PTP_RX_TSTAMP``
 
 The PON time of day
@@ -1373,9 +1403,9 @@ Known limitations
 
 - Transmit stamps are two-step and one message at a time: a message sent
   while another awaits its departure report goes unstamped, and only event
-  messages over Ethernet are stamped. One-step stamping
-  (``HWTSTAMP_TX_ONESTEP_SYNC``) is not offered, though the switch can write a
-  time into a Sync (see "The receive capture register"). The nanoseconds of a
+  messages over Ethernet are stamped. One-step stamping is offered for Sync
+  only; a one-step Sync waits up to 250 us, with the interrupts off, for the
+  last one to leave (see "One-step Sync and the reference time"). The nanoseconds of a
   transmit stamp lie on a 128 ns grid (see "Transmit timestamps").
 - Only the layer-2 PTP version 2 receive filters are taken, answered as
   ``HWTSTAMP_FILTER_PTP_V2_L2_EVENT``. A request for every frame, for UDP, for
@@ -1416,6 +1446,9 @@ Assumptions the driver depends on
    * - Pdelay_Req and Pdelay_Resp take their egress action from slots 2 and 3
        ("Transmit timestamps"); if not, those messages get no transmit stamp.
      - A Pdelay_Req and a Pdelay_Resp sent with transmit stamping on.
+   * - A one-step Sync has left the switch 250 us after its reference was
+       written ("One-step Sync and the reference time").
+     - Two ports sending one-step Syncs together, under load.
    * - A departure report never comes more than 100 ms after its message; one
        that did would be handed to the next message awaited ("Transmit
        timestamps").
@@ -1433,15 +1466,10 @@ All but the last concern values that only the debugfs views print.
 
    * - Question
      - What would settle it
-   * - Whether the receive capture register has the layout ``ptpstat`` decodes
-       ("The receive capture register").
-     - A capture that changes.
-   * - Whether the receive capture register is the reference that egress
-       action 3 subtracts from a Sync's departure time, and what the word at
-       ``0x01b020``, which may hold a mean path delay, adds ("The receive
-       capture register"). One-step stamping would need it.
-     - Writing a time into the register and a delay into the word, then a
-       one-step Sync from the CPU under action 3, captured at the far end.
+   * - What the word at ``0x01b020``, which may hold a mean path delay, adds
+       to a correction ("One-step Sync and the reference time").
+     - A delay written into it, then a one-step Sync under action 3, captured
+       at the far end.
    * - What the identifier, mode and reason fields of the egress capture mean
        ("The egress capture").
      - A capture with a reason that only some of the traffic carries.

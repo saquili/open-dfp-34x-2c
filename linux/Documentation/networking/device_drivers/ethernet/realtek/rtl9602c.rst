@@ -1023,7 +1023,7 @@ Transmit descriptor:
    * - 0
      - 25
      - ``RTL9602C_NIC_TXD_NO_REWRITE``
-     - Set on every frame but a PTP message awaiting its departure time (see
+     - Set on every frame but a PTP message the switch driver marks (see
        "Departure reports").
    * - 0
      - 23
@@ -1072,7 +1072,7 @@ Transmit descriptor:
    * - 3
      - 1
      - ``RTL9602C_NIC_TXD_L34_BYPASS``
-     - Set on every frame but a PTP message awaiting its departure time (see
+     - Set on every frame but a PTP message the switch driver marks (see
        "Departure reports").
    * - 4
      - 31:0
@@ -1292,7 +1292,7 @@ from a data frame (see "The OMCI channel").
      - P
      - IEEE 802.3, clause 4.4.2 (minFrameSize, 512 bits).
    * - Word 0: ``RTL9602C_NIC_TXD_NO_REWRITE`` (bit 25) is set on every frame
-       but a PTP message awaiting its departure time, and is meant to keep the
+       but a PTP message the switch driver marks, and is meant to keep the
        switch from rewriting a frame the CPU has already aimed. With it set,
        or with ``RTL9602C_NIC_TXD_L34_BYPASS`` set, the switch applies no PTP
        egress action to the frame; with both clear it applies the egress
@@ -1359,7 +1359,7 @@ from a data frame (see "The OMCI channel").
        descriptor. All four PPPoE actions, with the L3 engine off and on, left
        the frame an unchanged IPv4 frame.
    * - Word 3: ``RTL9602C_NIC_TXD_L34_BYPASS`` (bit 1) is set on every frame
-       but a PTP message awaiting its departure time. With it clear, and with
+       but a PTP message the switch driver marks. With it clear, and with
        the L3 engine enabled, a frame aimed by port mask still left unchanged.
        With it set the switch applies no PTP egress action to the frame, as
        with ``RTL9602C_NIC_TXD_NO_REWRITE``; what else it changes is not
@@ -1727,7 +1727,8 @@ It applies an egress action only to a frame sent with
 ``RTL9602C_NIC_TXD_NO_REWRITE`` and ``RTL9602C_NIC_TXD_L34_BYPASS`` both clear.
 The conduit clears them for a message that the switch driver has marked
 ``SKBTX_IN_PROGRESS`` in ``skb_shinfo()->tx_flags`` (its ``port_txtstamp``
-operation), and for no other frame; the mark travels in the shared info
+operation: a message that awaits its departure report, or a one-step Sync,
+into which the switch writes the time it leaves), and for no other frame; the mark travels in the shared info
 because ``skb->cb`` does not survive the conduit's queueing discipline. On
 receive the conduit hands the report's time to the handler that the switch
 driver attached with ``rtl9602c_conduit_tstamp_attach()``, in the form of a
