@@ -941,7 +941,8 @@ void rtl9602c_gpon_cntr_sync(struct rtl9602c_pon *p)
  * unless unassigned; the OMCC's Port-ID while it is bound; the Alloc-IDs of
  * T-CONTs 0 to 15 in use, the default Alloc-ID not among them; the counter
  * totals, brought up to date; the transmit power level, the one
- * Serial_Number_ONU carries; and the alarms.
+ * Serial_Number_ONU carries; how long the ONU has been in its state; in O5,
+ * the equalization delay of Ranging_Time; and the alarms.
  *
  * The alarms are the levels in RTL9602C_GTC_DS_IRQ_STAT, the conditions present
  * now: loss of signal, loss of frame, and the MAC's LOM bit, reported as loss
@@ -989,6 +990,14 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 	st->power_level = PON_POWER_LEVEL_HIGH - p->gpon_power_mode;
 	st->have_power_level = true;
 
+	st->onu_state_ms = jiffies64_to_msecs(get_jiffies_64() -
+					      p->gpon_state_since);
+	st->have_onu_state_time = true;
+	if (p->gpon_state == RTL9602C_ONU_O5_OPERATION) {
+		st->eqd = p->gpon_eqd_delay;
+		st->have_eqd = true;
+	}
+
 	i = rtl9602c_pon_r(p, RTL9602C_GTC_DS_IRQ_STAT);
 	st->have_alarms = true;
 	if (i & RTL9602C_GTC_DS_IRQ_LOS)
@@ -1003,8 +1012,8 @@ void rtl9602c_gpon_fill_status(struct rtl9602c_pon *p,
 
 /*
  * Send the PON class the ONU's status when it differs from the last one sent,
- * counters left out of the comparison: counters moving is no change, and a
- * steady O5 sends nothing.
+ * counters and the time in the state left out of the comparison: counters
+ * moving and time passing are no change, and a steady O5 sends nothing.
  */
 static void rtl9602c_gpon_notify(struct rtl9602c_pon *p)
 {
@@ -1019,6 +1028,7 @@ static void rtl9602c_gpon_notify(struct rtl9602c_pon *p)
 
 	key = st;
 	memset(&key.stats, 0, sizeof(key.stats));
+	key.onu_state_ms = 0;
 	if (!memcmp(&key, &p->gpon_status, sizeof(key)))
 		return;
 
@@ -1032,7 +1042,8 @@ static void rtl9602c_gpon_notify(struct rtl9602c_pon *p)
  * counts no serial-number request, in O3 it takes the discovery grants
  * (measured on this board). The transition is logged last, once the state, the
  * ONU-ID and TX_DISABLE are written, since a console line takes milliseconds;
- * leaving O5 logs how long the session lasted.
+ * leaving O5 logs how long the session lasted, in a count of milliseconds that
+ * a session of more than 49 days does not overflow.
  */
 static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 {
@@ -1045,12 +1056,17 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 		[RTL9602C_ONU_O6_POPUP]		= "O6 popup",
 		[RTL9602C_ONU_O7_EMERGENCY_STOP] = "O7 emergency stop",
 	};
+	u64 now, ms;
+	u32 rem;
 	u8 from;
 
 	if (p->gpon_state == state)
 		return;
 
 	from = p->gpon_state;
+	now = get_jiffies_64();
+	ms = jiffies64_to_msecs(now - p->gpon_state_since);
+	p->gpon_state_since = now;
 	WRITE_ONCE(p->gpon_state, state);
 	rtl9602c_gpon_operstate(p);
 	rtl9602c_ploam_log(p, RTL9602C_EV_STATE, NULL, from);
@@ -1106,7 +1122,6 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 		      state > RTL9602C_ONU_O5_OPERATION);
 
 	if (state == RTL9602C_ONU_O5_OPERATION) {
-		p->gpon_o5_since = jiffies;
 		p->gpon_rei_sent = 0;
 		p->gpon_pst_seen = false;
 	}
@@ -1114,10 +1129,9 @@ static void rtl9602c_gpon_apply_state(struct rtl9602c_pon *p, u8 state)
 	if (state == RTL9602C_ONU_O1_INITIAL)
 		p->gpon_pee = false;
 	if (from == RTL9602C_ONU_O5_OPERATION) {
-		unsigned int ms = jiffies_to_msecs(jiffies - p->gpon_o5_since);
-
-		pr_info("<GPON> %s -> %s after %u.%03u s in O5\n", name[from],
-			name[state] ?: "?", ms / 1000, ms % 1000);
+		ms = div_u64_rem(ms, MSEC_PER_SEC, &rem);
+		pr_info("<GPON> %s -> %s after %llu.%03u s in O5\n", name[from],
+			name[state] ?: "?", ms, rem);
 		return;
 	}
 
@@ -1769,13 +1783,15 @@ static void rtl9602c_gpon_ploam_ack(struct rtl9602c_pon *p, const u8 *dm)
  * Answer Request_Password (G.984.3 clause 9.2.3.9) with the Password message
  * (clause 9.2.4.2) three times, on the normal queue: the ONU-ID, the
  * identifier, then the ten octets of the password. Without a password set
- * the request is not answered, and the OLT decides what that means.
+ * the request is not answered, and the OLT decides what that means. Both
+ * the request and the answer are counted, for the PON class's report.
  */
 static void rtl9602c_gpon_password_send(struct rtl9602c_pon *p)
 {
 	u8 msg[RTL9602C_GPON_PLOAM_WORDS * 2] = {};
 	unsigned int i;
 
+	p->gpon_stats.password_requests++;
 	if (!p->gpon_have_password) {
 		dev_warn_ratelimited(p->dev,
 				     "<GPON> the OLT asks for the password, and none is set\n");
@@ -1788,6 +1804,7 @@ static void rtl9602c_gpon_password_send(struct rtl9602c_pon *p)
 	for (i = 0; i < 3; i++)
 		rtl9602c_ploam_enqueue(p, msg, RTL9602C_PLOAM_TX_CTRL_SLOT_NORMAL);
 	memzero_explicit(msg, sizeof(msg));
+	p->gpon_stats.password_replies++;
 	pr_debug("<GPON> password sent\n");
 }
 
@@ -3022,6 +3039,7 @@ int rtl9602c_gpon_start(struct rtl9602c_pon *p)
 	memset(&p->gpon_stats, 0, sizeof(p->gpon_stats));
 	p->gpon_bip_blocks = 0;
 	p->gpon_fec_frame_valid = false;
+	p->gpon_state_since = get_jiffies_64();
 
 	err = rtl9602c_gpon_bringup(p);
 	if (!err) {
@@ -3157,8 +3175,9 @@ static int rtl9602c_gpon_show(struct seq_file *s, void *unused)
 	}
 	mutex_unlock(&p->gpon_lock);
 
-	seq_printf(s, "cntr  sn-requests %llu ranging-requests %llu   (totals)\n",
-		   c.sn_requests, c.ranging_requests);
+	seq_printf(s, "cntr  sn-requests %llu ranging-requests %llu password-requests %llu password-replies %llu   (totals)\n",
+		   c.sn_requests, c.ranging_requests, c.password_requests,
+		   c.password_replies);
 	seq_printf(s, "ploam %llu accepted, %llu crc err, %llu overflow\n",
 		   c.ploam_rx, c.ploam_crc_errors, c.ploam_overflows);
 	seq_printf(s, "bwmap %llu accepted, %llu crc err, %llu overflow\n",

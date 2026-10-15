@@ -187,8 +187,8 @@ struct rtl9602c_pon {
 	unsigned long gpon_to1;
 	/** @gpon_to2: when TO2 expires, in jiffies; 0 while it is not armed */
 	unsigned long gpon_to2;
-	/** @gpon_o5_since: when the ONU entered O5, in jiffies */
-	unsigned long gpon_o5_since;
+	/** @gpon_state_since: when the ONU entered @gpon_state, in jiffies */
+	u64 gpon_state_since;
 	/**
 	 * @gpon_rei_every: the BER interval in jiffies; 0 while the OLT has
 	 * set none and no REI is sent

@@ -1474,7 +1474,9 @@ not in it is recorded in the ``ploamlog`` ring and dropped.
      - Three Password messages (2) on the normal queue, with the password of
        the devlink parameter ``gpon_password``; none, and a rate-limited
        warning, while no password is set. The ``ploamlog`` ring records them
-       with the password zeroed.
+       with the password zeroed. The request counts in ``password-requests``
+       of the PON class's report, and an answered one in
+       ``password-replies`` too.
    * - Assign_Alloc-ID (10)
      - The ONU-ID
      - O4, O5
@@ -3110,16 +3112,25 @@ serial number that the ONU presents to the OLT is the devlink parameter
        driver's numbers 1 to 5 equal the class's O1 to O5), the ONU-ID unless it
        is 255, the OMCC Port-ID when bound, the Alloc-IDs of T-CONTs 0 to 15 in
        use, the totals of the counters, the transmit power level (high less the
-       level mode, as Serial_Number_ONU carries it), LOS, LOF and LOM from
-       ``RTL9602C_GTC_DS_IRQ_STAT``, and the driver's PEE alarm. With the PON
-       down there is no state, no level, no alarm and no counter: an absent
-       value, not a zero.
+       level mode, as Serial_Number_ONU carries it), the time since the state
+       was entered (from ``jiffies_64``, so that a session of years does not
+       wrap it), in O5 the equalization delay that Ranging_Time set, LOS, LOF
+       and LOM from ``RTL9602C_GTC_DS_IRQ_STAT``, and the driver's PEE alarm.
+       With the PON down there is no state, no level, no alarm and no counter:
+       an absent value, not a zero.
      - M
      - The PON class report in O5 on an OLT: state O5, ONU-ID 1, Alloc-ID 257,
-       OMCC Port-ID 1, no alarms, agreeing with the ``gpon`` view.
-   * - ``rtl9602c_gpon_notify()`` compares the report, counters left out, with
-       the last one sent and sends the full report when they differ; it runs
-       after every transition and from the worker every 50 ms.
+       OMCC Port-ID 1, no alarms, agreeing with the ``gpon`` view; ``eqd``
+       97328, the value of the OLT's Ranging_Time in the log, and the time in
+       the state from 0 again after the ``pon`` interface went down and up,
+       with ``after 85.164 s in O5`` logged on leaving O5. The OLT at hand
+       never sends Request_Password, so one was injected through
+       ``ploaminject``: ``password-requests`` and ``password-replies`` went
+       from 0 to 1, and ``ploamlog`` showed the three Password messages.
+   * - ``rtl9602c_gpon_notify()`` compares the report, counters and the time
+       in the state left out, with the last one sent and sends the full report
+       when they differ; it runs after every transition and from the worker
+       every 50 ms.
      - M
      - Across a down and up a listener on the class's ``monitor`` group received
        O1; a report with no state and no alarms; O2; O3; O4 with the ONU-ID; O5;
@@ -3185,7 +3196,8 @@ steps of 10 ns on this board (Documentation/arch/mips/rtl9602c.rst).
        its frame and TstampN, whether the clock is still to take it, and
        ``RTL9602C_GTC_DS_TOD_SUPERFRAME`` (see "The time of day"); then come
        the totals of the counters (``cntr``:
-       ``sn-requests`` and ``ranging-requests``; PLOAM messages and bandwidth
+       ``sn-requests``, ``ranging-requests``, ``password-requests`` and
+       ``password-replies``; PLOAM messages and bandwidth
        maps accepted, CRC errors, overflows, non-idle GEM frames, the BIP
        errors in bits and the frames they were in); ``rei``, the BER interval
        in ms (0 while none is set) and the REI messages sent since the ONU
