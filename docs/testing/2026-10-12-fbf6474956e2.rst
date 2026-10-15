@@ -6,9 +6,9 @@ Device tests of 2026-10-12
 ==========================
 
 :Date: 2026-10-12 23:26 UTC
-:Source: 60d26e04fc11
+:Source: 438587fcdb48
 :Kernel: 6.18.48 #1 Thu Sep 10 19:15:00 UTC 2026
-:Image: open-dfp-34x-2c on the ODI DFP-34X-2C3, build fd90fa47fb2f
+:Image: open-dfp-34x-2c on the ODI DFP-34X-2C3, build fbf6474956e2
 :Tools: tc, bridge, devlink, dcb, ethtool and ubus put on the stick in /run/devtest-tools, in memory
 :Result: 32 passed, 0 failed, 16 skipped, of 48
 
@@ -255,7 +255,7 @@ Device tests of 2026-10-12
      - Updates
      - An update written into the other bank starts there on trial and is kept, and the stick goes back to the bank it came from by the same way
      - **PASS**
-     - written into bank 1 (3045730 B, was valid) in 37 s; on trial it ran and committed after 38 s (version fd90fa47fb2f); back in bank 0, committed, after 37 s
+     - written into bank 1 (3045730 B, was valid) in 37 s; on trial it ran and committed after 38 s (version fbf6474956e2); back in bank 0, committed, after 37 s
    * - ``system.watchdog-reset``
      - System
      - An armed watchdog that nobody feeds resets the stick within its timeout

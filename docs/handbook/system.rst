@@ -101,7 +101,7 @@ What the data path carries
 The switch carries the frames in hardware, so the speed of the stick is that
 of the PON and of its ports, not of its CPU, which saw 20 to 24 frames in each
 run below and was busy 6 % to 7 % of the time. The figures are of one lab (M:
-the bench's stick on a RAM image, ``c82dd9affe55``, at O5 on the lab OLT with
+the bench's stick on a RAM image, ``33449f2628fb``, at O5 on the lab OLT with
 two PPPoE sessions to the lab concentrator; a host behind the stick's host
 link; runs of 12 s of ``iperf3`` against servers on the concentrator's router;
 2026-10-12):

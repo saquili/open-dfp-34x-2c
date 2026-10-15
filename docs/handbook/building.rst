@@ -778,7 +778,7 @@ Open items
   latest record, ``docs/testing/2026-10-07-run23.rst``, is of an image
   of before those, whose programs were linked statically. The other cases
   are recorded on the current image
-  (``docs/testing/2026-10-12-fd90fa47fb2f.rst``).
+  (``docs/testing/2026-10-12-fbf6474956e2.rst``).
 * Whether the host's link comes up and the addresses answer depends on the host
   side having the matching addresses (``flashing.rst``); the VLAN of the second
   address has to exist on the host's interface too.

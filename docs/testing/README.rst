@@ -242,10 +242,10 @@ The runs, the oldest first:
     reset case brought it back from bank 1 with its two sessions up. 37 of
     46 passed, with the same four failures and the same five skipped.
 
-``2026-10-12-fd90fa47fb2f``
-    The first run on the image as it is now, built from ``fd90fa47fb2f``,
-    run from the flash, with the cases of the suite as of ``60d26e04fc11``,
-    whose commits after ``fd90fa47fb2f`` change the tests alone. The image
+``2026-10-12-fbf6474956e2``
+    The first run on the image as it is now, built from ``fbf6474956e2``,
+    run from the flash, with the cases of the suite as of ``438587fcdb48``,
+    whose commits after ``fbf6474956e2`` change the tests alone. The image
     went into both banks by its update path, over ssh: into bank 1 from the
     flash image of before, started on trial and committed, then into bank 0
     from bank 1. The stick ran bank 0, committed, with its settings in the
@@ -263,9 +263,6 @@ The runs, the oldest first:
     ``system.config-store``, ``system.log-limits``, ``system.loader-listener``
     and ``mgmt.pond-no-store``.
 
-The series was rebased after the first, the second and the fourth run, before
-any of it was published, so the commits they name are not in the history. The
-same code, as far as the stick and the bench host run it, is at
-``run01``, ``run02`` and ``run04``: the rebase added
-documentation, and for the first run changed test data of the unit tests
-alone.
+The runs named ``runNN`` ran on images built from commits that a rebase
+replaced before the history was first published, so those commits are not in
+the history.
