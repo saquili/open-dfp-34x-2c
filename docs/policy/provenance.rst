@@ -71,6 +71,16 @@ interface facts, without describing the bootloader's internals. Prefer our own
 configuration (device-tree partitions) wherever it removes the need to state
 them at all.
 
+The firmware a stick ships with stays in its other bank as the way back, and
+its web page is one way in. What this system must know to live beside it may
+be stated the same way, as interface facts: the format of the update its web
+page takes, the partitions and files it owns and this system leaves alone,
+and how it splits a bank. Its behaviour at that interface -- that it keeps to
+its own files, that it installs such a package -- may be stated as a measured
+or tested fact, with its tag. How it works inside, its versions and builds by
+name, and how it behaves where this system does not depend on it, are not
+stated.
+
 How hardware facts are written
 ==============================
 
