@@ -318,11 +318,15 @@ static void test_bank_rules(void)
 #define T_PON_A_DEV_ALARMS 8
 #define T_PON_A_DEV_STATS 9
 #define T_PON_A_DEV_SERIAL_NUMBER 10
+#define T_PON_A_DEV_EQD 15
+#define T_PON_A_DEV_ONU_STATE_TIME 16
 #define T_PON_A_DEV_STATS_SN_REQUESTS 1
 #define T_PON_A_DEV_STATS_PLOAM_RX 3
 #define T_PON_A_DEV_STATS_BWMAP_RX 6
 #define T_PON_A_DEV_STATS_BIP_ERRORS 10
 #define T_PON_A_DEV_STATS_FEC_CODEWORDS 14
+#define T_PON_A_DEV_STATS_PASSWORD_REQUESTS 15
+#define T_PON_A_DEV_STATS_PASSWORD_REPLIES 16
 #define T_PON_CMD_DEV_GET 1
 #define T_PON_FAMILY_ID 25
 
@@ -1322,8 +1326,12 @@ static void test_netlink_onu(void)
 	nlb_u64(&dev, T_PON_A_DEV_STATS_BWMAP_RX, 4300000000ULL);
 	nlb_u32(&dev, T_PON_A_DEV_STATS_BIP_ERRORS, 0);
 	nlb_u64(&dev, T_PON_A_DEV_STATS_FEC_CODEWORDS, 1224000ULL);
+	nlb_u32(&dev, T_PON_A_DEV_STATS_PASSWORD_REQUESTS, 2);
+	nlb_u32(&dev, T_PON_A_DEV_STATS_PASSWORD_REPLIES, 2);
 	nlb_nest_end(&dev);
 	nlb_attr(&dev, T_PON_A_DEV_SERIAL_NUMBER, sn, sizeof(sn));
+	nlb_u32(&dev, T_PON_A_DEV_EQD, 97328);
+	nlb_u64(&dev, T_PON_A_DEV_ONU_STATE_TIME, 5000000000ULL);
 	nlb_msg_end(&dev);
 
 	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
@@ -1358,6 +1366,12 @@ static void test_netlink_onu(void)
 	      "the FEC counts follow the BIP errors");
 	check(strstr(s, "\"fec_corrected_bytes\":null") != NULL,
 	      "each under its own name");
+	check(strstr(s, "\"password_requests\":2,\"password_replies\":2") != NULL,
+	      "the OLT's requests for the password, and the answers");
+	check(strstr(s, "\"eqd\":97328") != NULL,
+	      "the equalization delay of Ranging_Time");
+	check(strstr(s, "\"state_ms\":5000000000") != NULL,
+	      "the time in the state, past what four bytes hold");
 	check(well_formed(s), "the object is balanced");
 
 	memset(&dev, 0, sizeof(dev));
@@ -1376,6 +1390,9 @@ static void test_netlink_onu(void)
 		    dev.len, &b);
 
 	check(strstr(s, "\"state\":\"o3\"") != NULL, "O3 is O3");
+	check(strstr(s, "\"eqd\":null") != NULL &&
+		      strstr(s, "\"state_ms\":null") != NULL,
+	      "no equalization delay before O5, and no time the MAC did not give");
 	check(strstr(s, "\"onu_id\":null") != NULL,
 	      "an unassigned ONU-ID is null and never 0");
 	check(strstr(s, "\"omcc_port_id\":null") != NULL,

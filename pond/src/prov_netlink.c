@@ -269,6 +269,8 @@ struct genlmsghdr {
 #define PON_A_DEV_SERIAL_NUMBER 10
 #define PON_A_DEV_NUM_GEM_PORTS 11
 #define PON_A_DEV_NUM_TCONTS 12
+#define PON_A_DEV_EQD 15
+#define PON_A_DEV_ONU_STATE_TIME 16
 
 #define PON_A_TCONT_ID 1
 #define PON_A_TCONT_INDEX 2
@@ -291,6 +293,8 @@ struct genlmsghdr {
 #define PON_A_DEV_STATS_FEC_CORRECTED_CODEWORDS 12
 #define PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS 13
 #define PON_A_DEV_STATS_FEC_CODEWORDS 14
+#define PON_A_DEV_STATS_PASSWORD_REQUESTS 15
+#define PON_A_DEV_STATS_PASSWORD_REPLIES 16
 
 #define PON_CMD_DEV_GET 1
 
@@ -394,7 +398,8 @@ static_assert(PON_A_DEV_ID == 1 && PON_A_DEV_IFINDEX == 2 &&
 		      PON_A_DEV_OMCC_PORT_ID == 7 && PON_A_DEV_ALARMS == 8 &&
 		      PON_A_DEV_STATS == 9 && PON_A_DEV_SERIAL_NUMBER == 10 &&
 		      PON_A_DEV_NUM_GEM_PORTS == 11 &&
-		      PON_A_DEV_NUM_TCONTS == 12,
+		      PON_A_DEV_NUM_TCONTS == 12 && PON_A_DEV_EQD == 15 &&
+		      PON_A_DEV_ONU_STATE_TIME == 16,
 	      "our own pon dev attributes");
 static_assert(PON_A_TCONT_ID == 1 && PON_A_TCONT_INDEX == 2 &&
 		      PON_A_TCONT_ALLOC_ID == 3,
@@ -403,7 +408,9 @@ static_assert(PON_A_DEV_STATS_SN_REQUESTS == 1 &&
 		      PON_A_DEV_STATS_PLOAM_RX == 3 &&
 		      PON_A_DEV_STATS_BWMAP_RX == 6 &&
 		      PON_A_DEV_STATS_BIP_ERRORS == 10 &&
-		      PON_A_DEV_STATS_FEC_CODEWORDS == 14,
+		      PON_A_DEV_STATS_FEC_CODEWORDS == 14 &&
+		      PON_A_DEV_STATS_PASSWORD_REQUESTS == 15 &&
+		      PON_A_DEV_STATS_PASSWORD_REPLIES == 16,
 	      "the pon stats nest");
 
 static_assert(PON_CMD_DEV_GET == 1 && PON_CMD_DEV_CHANGE_NTF == 2 &&
@@ -1858,6 +1865,8 @@ static void pon_pv_stats(struct prov_buf *out, const char *p, size_t len)
 		{ PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS,
 		  "fec_uncorrectable_codewords" },
 		{ PON_A_DEV_STATS_FEC_CODEWORDS, "fec_codewords" },
+		{ PON_A_DEV_STATS_PASSWORD_REQUESTS, "password_requests" },
+		{ PON_A_DEV_STATS_PASSWORD_REPLIES, "password_replies" },
 	};
 	struct nl_attrs a;
 	unsigned int i;
@@ -1978,6 +1987,14 @@ int prov_nl_onu(const char *links, size_t llen, const char *dev, size_t dlen,
 	else
 		pv_null(out);
 
+	/* How long the ONU has been in that state; the kernel's uint. */
+	pv_comma(out);
+	pv_key(out, "state_ms");
+	if (nl_has(&a, PON_A_DEV_ONU_STATE_TIME))
+		pv_num(out, (long long)nl_get_uint(&a, PON_A_DEV_ONU_STATE_TIME, 0));
+	else
+		pv_null(out);
+
 	pv_comma(out);
 	pv_key(out, "onu_id");
 	if (nl_has(&a, PON_A_DEV_ONU_ID))
@@ -1993,6 +2010,14 @@ int prov_nl_onu(const char *links, size_t llen, const char *dev, size_t dlen,
 	pv_key(out, "omcc_port_id");
 	if (nl_has(&a, PON_A_DEV_OMCC_PORT_ID))
 		pv_num(out, nl_get_u32(&a, PON_A_DEV_OMCC_PORT_ID, 0));
+	else
+		pv_null(out);
+
+	/* The equalization delay from Ranging_Time, in upstream bits; O5 only. */
+	pv_comma(out);
+	pv_key(out, "eqd");
+	if (nl_has(&a, PON_A_DEV_EQD))
+		pv_num(out, nl_get_u32(&a, PON_A_DEV_EQD, 0));
 	else
 		pv_null(out);
 
