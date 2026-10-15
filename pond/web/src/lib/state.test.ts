@@ -172,6 +172,13 @@ describe("how far the stick got in registering on the OLT", () => {
     expect(at("o5", { ploamSet: true }).ploam).toBe("done");
   });
 
+  it("takes the password from the OLT's requests and the stick's answers when it has them", () => {
+    expect(at("o5", { ploamSet: true, passwordAsked: 0, passwordAnswered: 0 }).ploam).toBe("off");
+    expect(at("o5", { ploamSet: true, passwordAsked: 2, passwordAnswered: 2 }).ploam).toBe("done");
+    expect(at("o5", { passwordAsked: 1, passwordAnswered: 0 }).ploam).toBe("fail");
+    expect(at("o4", { passwordAsked: 1, passwordAnswered: 0 }).ploam).toBe("wait");
+  });
+
   it("is at the serial number in O3 and at the ranging in O4", () => {
     expect(at("o3")).toMatchObject({ sync: "done", serial: "now", ranging: "wait", omcc: "wait" });
     expect(at("o4")).toMatchObject({ serial: "done", ranging: "now", ploam: "wait" });

@@ -120,6 +120,10 @@ export interface OnuCounters {
   fec_corrected_codewords: number;
   fec_uncorrectable_codewords: number;
   fec_codewords: number;
+  /** Requests for the PLOAM password the stick acted on; null from a kernel that does not count them. */
+  password_requests?: number | null;
+  /** Of those, the ones it answered: fewer when it had no password to give. */
+  password_replies?: number | null;
 }
 
 export type OnuState = "o1" | "o2" | "o3" | "o4" | "o5" | "o6" | "o7";
@@ -131,9 +135,13 @@ export interface Onu {
   interface: string;
   type: string;
   state: OnuState | string;
+  /** How long the ONU has been in that state, in milliseconds; null when unknown. */
+  state_ms?: number | null;
   onu_id: number;
   alloc_ids: number[];
   omcc_port_id: number;
+  /** The equalization delay of Ranging_Time, in upstream bit periods; null outside O5. */
+  eqd?: number | null;
   alarms: string[];
   counters: OnuCounters;
   serial: string;

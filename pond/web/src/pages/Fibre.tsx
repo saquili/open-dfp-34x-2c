@@ -25,7 +25,7 @@ import { Filter, Pager, usePages } from "../components/Pager";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
-import { bitrate, bytes, dbmText, decimal, integer } from "../lib/format";
+import { bitrate, bytes, dbmText, decimal, duration, integer } from "../lib/format";
 import {
   type Channel,
   hex,
@@ -149,6 +149,8 @@ function Registration() {
     alarms: f.alarms,
     omcc: !!onu?.omcc_port_id,
     ploamSet: !!identity.data?.ploam_set,
+    passwordAsked: onu?.counters?.password_requests,
+    passwordAnswered: onu?.counters?.password_replies,
     omciFrames: frames,
     services: svc,
   });
@@ -174,9 +176,22 @@ function Registration() {
       case "ranging":
         return [
           t("fibre.regOnu", { id: onu?.onu_id ?? "–", n: n(onu?.counters.ranging_requests) }),
+          ...(onu?.eqd != null
+            ? /* The delay in bit periods of the upstream, as microseconds. */
+              [t("fibre.regEqd", { us: decimal(onu.eqd / (GPON_UP_BPS / 1e6), 1, lang) })]
+            : []),
         ];
-      case "ploam":
-        return [t(at === "done" ? "fibre.regPasswordSet" : "fibre.regPasswordNone")];
+      case "ploam": {
+        const asked = onu?.counters?.password_requests;
+        if (asked == null)
+          return [t(at === "done" ? "fibre.regPasswordSet" : "fibre.regPasswordNone")];
+        if (asked === 0) return [t("fibre.regNotAsked")];
+        return [
+          t(at === "fail" ? "fibre.regPasswordMissing" : "fibre.regPasswordGiven", {
+            n: n(asked),
+          }),
+        ];
+      }
       case "omcc":
         return [
           at === "done"
@@ -262,6 +277,7 @@ function LineState() {
           <Facts
             rows={[
               [t("fibre.onuId"), f.onuId ?? "–"],
+              onu?.state_ms != null && [t("fibre.inState"), duration(onu.state_ms / 1000, lang)],
               [
                 t("fibre.lineRate"),
                 t("fibre.lineRateValue", {

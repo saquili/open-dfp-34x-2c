@@ -91,22 +91,37 @@ export type RegState = "done" | "now" | "fail" | "wait" | "off";
  * How far the stick got in registering on the OLT, step by step, from its
  * activation state (ITU-T G.984.3, "o1" to "o7"), the alarms on the line,
  * whether the OLT gave it a GEM port for OMCI, whether a PLOAM password is
- * set, how many OMCI messages it handled and how many services the OLT set
- * up. The stick sends its serial number in O3, is ranged in O4 and works in
- * O5; in O6 it lost the signal and keeps its ranging, in O7 the OLT stopped
- * it. Whether the OLT asked for the password the stick does not tell: the
- * step says only whether one is set, for the OLT that asks.
+ * set, how often the OLT asked for it and how often the stick answered, how
+ * many OMCI messages it handled and how many services the OLT set up. The
+ * stick sends its serial number in O3, is ranged in O4 and works in O5; in
+ * O6 it lost the signal and keeps its ranging, in O7 the OLT stopped it. The
+ * password is not used when the OLT never asked, and failed when it asked
+ * and the stick had none to give. A kernel that does not count the requests
+ * leaves only whether a password is set.
  */
 export function registration(r: {
   state: string;
   alarms: string[];
   omcc: boolean;
   ploamSet: boolean;
+  passwordAsked?: number | null;
+  passwordAnswered?: number | null;
   omciFrames: number;
   services: number;
 }): Record<RegStep, RegState> {
   const n = /^o([1-7])$/.exec(r.state) ? Number(r.state[1]) : 0;
   const working = n === 5;
+  const asked = r.passwordAsked;
+  const ploamStep: RegState =
+    asked == null
+      ? r.ploamSet
+        ? "done"
+        : "off"
+      : asked === 0
+        ? "off"
+        : (r.passwordAnswered ?? 0) < asked
+          ? "fail"
+          : "done";
   return {
     sync:
       n === 0
@@ -118,7 +133,7 @@ export function registration(r: {
             : "done",
     serial: n === 7 ? "fail" : n === 3 ? "now" : n >= 4 ? "done" : "wait",
     ranging: n === 4 ? "now" : n === 5 || n === 6 ? "done" : "wait",
-    ploam: working ? (r.ploamSet ? "done" : "off") : "wait",
+    ploam: working ? ploamStep : "wait",
     omcc: working ? (r.omcc ? "done" : "now") : "wait",
     mib: working && r.omcc ? (r.omciFrames > 0 ? "done" : "now") : "wait",
     services: working && r.omciFrames > 0 ? (r.services > 0 ? "done" : "now") : "wait",

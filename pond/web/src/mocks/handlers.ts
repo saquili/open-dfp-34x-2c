@@ -488,6 +488,8 @@ function tick() {
 
 /* The fibre without light: the ONU waits in O1, and omcid has no services. */
 let dark = false;
+/* When the fibre went dark or came back, for the time in the ONU's state. */
+let darkChanged = 0;
 
 /* A connection gone, or handing its address down, takes its network behind the stick along. */
 function dropLans(conn: string) {
@@ -537,9 +539,23 @@ function live() {
     cpu: LIVE.cpu ? { ...LIVE.cpu, ticks: { ...ticks } } : null,
     hostname,
     settings,
+    onu: LIVE.onu && {
+      ...LIVE.onu,
+      state_ms: darkChanged
+        ? Date.now() - darkChanged
+        : (LIVE.onu.state_ms ?? 0) + Date.now() - started,
+    },
     ...(dark
       ? {
-          onu: LIVE.onu ? { ...LIVE.onu, state: "o1", onu_id: null } : null,
+          onu: LIVE.onu
+            ? {
+                ...LIVE.onu,
+                state: "o1",
+                onu_id: null,
+                eqd: null,
+                state_ms: Date.now() - darkChanged,
+              }
+            : null,
           optics: LIVE.optics ? { ...LIVE.optics, rx_power_uw: null } : null,
         }
       : {}),
@@ -568,7 +584,9 @@ export const handlers = [
 
   /* POST /api/__mock/fibre?on=0 takes the light away, and with it the OLT's services; on=1 brings them back. */
   http.post("*/api/__mock/fibre", ({ request }) => {
-    dark = new URL(request.url).searchParams.get("on") === "0";
+    const off = new URL(request.url).searchParams.get("on") === "0";
+    if (off !== dark) darkChanged = Date.now();
+    dark = off;
     return HttpResponse.json({ dark });
   }),
 
