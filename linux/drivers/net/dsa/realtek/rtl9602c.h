@@ -1593,6 +1593,8 @@ struct rtl9602c_l34_route6 {
  * @v6: an IPv6 route, in @route6
  * @add: the route was added or replaced, or the nexthop became usable
  * @nh: a nexthop event: @route holds only its device and gateway
+ * @resync: commit every route of the family @v6 names again, for a change
+ *	the shadow does not hold (rtl9602c_l34_fib_resync())
  *
  * The route notifier can be called under rcu_read_lock(), and the table
  * writes sleep, so the event is queued and applied under flow_lock.
@@ -2252,19 +2254,19 @@ struct rtl9602c_priv {
 	bool		ptp_pon_extts;
 	/**
 	 * @ptp_pon_irq_frame: the superframe counter in the first half of the
-	 * last GPON interrupt, and @ptp_pon_irq_ns: the clock then, in
-	 * nanoseconds (rtl9602c_ptp_pon_irq())
+	 * last GPON interrupt (rtl9602c_ptp_pon_irq())
 	 */
 	u32		ptp_pon_irq_frame;
+	/** @ptp_pon_irq_ns: the clock at that interrupt, in nanoseconds */
 	u64		ptp_pon_irq_ns;
 	/** @ptp_pon_grid: the frames of the seconds before */
 	struct rtl9602c_ptp_pon_grid ptp_pon_grid;
-	/**
-	 * @ptp_pon_seconds: seconds reported, and @ptp_pon_late: those not
-	 * reported, whose interrupt came a frame or more late or which came
-	 * first after the counter started again
-	 */
+	/** @ptp_pon_seconds: the seconds reported */
 	u32		ptp_pon_seconds;
+	/**
+	 * @ptp_pon_late: the seconds not reported, whose interrupt came a frame
+	 * or more late or which came first after the counter started again
+	 */
 	u32		ptp_pon_late;
 	/**
 	 * @meter_lock: serialises the meters, @meter_used and @cpu_meter, and
