@@ -17353,7 +17353,7 @@ F:	drivers/platform/mips/cpu_hwmon.c
 MIPS/REALTEK RTL9602C ARCHITECTURE
 M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	linux-mips@vger.kernel.org
-S:	Maintained
+S:	Odd Fixes
 F:	Documentation/arch/mips/rtl9602c.rst
 F:	Documentation/devicetree/bindings/interrupt-controller/realtek,rtl9602c-intc.yaml
 F:	Documentation/devicetree/bindings/mips/realtek-rtl9602c.yaml
@@ -20497,7 +20497,7 @@ F:	include/linux/pnp.h
 PON ONU CLASS
 M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	netdev@vger.kernel.org
-S:	Maintained
+S:	Odd Fixes
 F:	Documentation/ABI/testing/sysfs-class-pon
 F:	Documentation/netlink/specs/pon.yaml
 F:	Documentation/networking/pon.rst
@@ -21719,7 +21719,7 @@ F:	drivers/net/dsa/realtek/*
 REALTEK RTL9602C SWITCH AND GPON DRIVERS
 M:	Paweł Phan <szop.hektar_1w@icloud.com>
 L:	netdev@vger.kernel.org
-S:	Maintained
+S:	Odd Fixes
 F:	Documentation/devicetree/bindings/net/dsa/realtek,rtl9602c-switch.yaml
 F:	Documentation/devicetree/bindings/net/realtek,rtl9602c-eth.yaml
 F:	Documentation/i2c/busses/i2c-rtl9602c.rst
