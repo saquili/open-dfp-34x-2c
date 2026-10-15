@@ -164,7 +164,7 @@ function LaneCard() {
             {MODES.map((m) => (
               <label
                 key={m.id}
-                title={t(m.hint)}
+                title={m.id === "auto" ? undefined : t(m.hint)}
                 className={`flex cursor-pointer items-center gap-2 rounded-box border px-3 py-2 ${m.id === "auto" ? "sm:col-span-2" : ""} ${chosen === m.id ? "border-primary bg-primary/5" : "border-base-300"}`}
               >
                 <input
@@ -177,10 +177,12 @@ function LaneCard() {
                 />
                 <span className="grid min-w-0 flex-1 leading-tight">
                   <span className="text-sm font-medium">{t(m.label)}</span>
-                  {m.standard && (
+                  {m.standard ? (
                     <span className="text-xs whitespace-nowrap text-base-content/60">
                       {m.standard} · {t(m.an ? "sfp.withAn" : "sfp.withoutAn")}
                     </span>
+                  ) : (
+                    <span className="text-xs text-base-content/60">{t(m.hint)}</span>
                   )}
                 </span>
                 {!m.tested && <Badge tone="neutral">{t("sfp.untested")}</Badge>}
@@ -188,9 +190,6 @@ function LaneCard() {
               </label>
             ))}
           </div>
-          <p className="text-xs text-base-content/70">
-            {t(MODES.find((m) => m.id === chosen)?.hint ?? "sfp.modeAutoHint")}
-          </p>
           <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
@@ -205,8 +204,10 @@ function LaneCard() {
             {!l && lane.isFetched && (
               <span className="text-xs text-base-content/60">{t("sfp.modeUnavailable")}</span>
             )}
+            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/60">
+              {t("sfp.modeSafety")}
+            </span>
           </div>
-          <p className="text-xs text-base-content/60">{t("sfp.modeSafety")}</p>
         </>
       )}
     </Card>

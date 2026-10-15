@@ -746,7 +746,7 @@ export const en = {
     modeActive: "now",
     modeAuto: "Automatic",
     modeAutoHint:
-      "The stick tries 2.5G without negotiation and 1G with and without it in turn by itself, and keeps the one the host takes. 2.5G with negotiation has to be chosen by hand.",
+      "The stick tries 2.5G without negotiation, 1G with it and 1G without it in turn, and keeps the first one the host takes. 2.5G with negotiation has to be chosen by hand.",
     mode2500: "2.5G",
     mode2500Hint:
       "2.5 Gb/s without negotiation, as most 2.5G ports, e.g. a 10G SFP+ port in 2.5G mode. Tested with a host.",

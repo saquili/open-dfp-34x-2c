@@ -746,7 +746,7 @@ export const pl: Dictionary = {
     modeActive: "teraz",
     modeAuto: "Automatycznie",
     modeAutoHint:
-      "Wkładka sama próbuje po kolei 2,5G bez negocjacji i 1G z negocjacją i bez niej, i zostaje przy tym, który przyjmie host. 2,5G z negocjacją trzeba wybrać ręcznie.",
+      "Wkładka sama próbuje po kolei 2,5G bez negocjacji, 1G z negocjacją i 1G bez niej, i zostaje przy pierwszym, który przyjmie host. 2,5G z negocjacją trzeba wybrać ręcznie.",
     mode2500: "2,5G",
     mode2500Hint:
       "2,5 Gb/s bez negocjacji, jak większość portów 2,5G, np. 10G SFP+ w trybie 2,5G. Sprawdzony z hostem.",
