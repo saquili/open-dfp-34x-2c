@@ -4245,7 +4245,12 @@ static enum omci_status mdb_change(const struct omci_hw_mcast_group *g,
 	*(uint32_t *)&req[0] = (uint32_t)off;
 
 	err = rtnl_talk(req, off, NULL, 0, NULL);
-	if (err == -ENOENT && !add)
+	/*
+	 * A group gone already is declined: the bridge says -ENOENT, or, from
+	 * __br_mdb_del() when its own leave took the snooped entry first,
+	 * -EINVAL with no reason, where a request it cannot read gets one.
+	 */
+	if (!add && (err == -ENOENT || (err == -EINVAL && !g_rtnl_extack[0])))
 		return OMCI_DECLINED;
 	if (err) {
 		OMCI_WARN("mcast: %s would not %s a group: %s (%s)",

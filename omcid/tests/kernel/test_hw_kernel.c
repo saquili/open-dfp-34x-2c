@@ -557,6 +557,34 @@ static bool vlan_action(void)
 	return sh("tc actions del action vlan index 4242 >/dev/null 2>&1") == 0;
 }
 
+/*
+ * A group removed when it is gone already, as the bridge's own leave takes the
+ * snooped entry before the agent removes it: declined, which the agent passes
+ * over, rather than refused with a warning.
+ */
+static void mcast_group_gone(void)
+{
+	struct omci_hw_mcast_group g = { .permanent = true };
+	const uint8_t addr[4] = { 233, 252, 0, 1 };
+
+	puts("a group removed when it is gone already is declined, not refused");
+	/* A bridge of its own, in place of what the earlier cases left. */
+	sh("ip link del omcibr0 2>/dev/null");
+	if (sh("ip link add omcibr0 type bridge") != 0 ||
+	    sh("ip link set omcibr0 up") != 0 ||
+	    sh("ip link set sfp master omcibr0") != 0) {
+		puts("(no bridge: skipped)");
+		return;
+	}
+	g.group[10] = 0xff;
+	g.group[11] = 0xff;
+	memcpy(&g.group[12], addr, sizeof(addr));
+	CHECK(omci_hw_kernel_ops.mcast_group_add(&g) == OMCI_OK);
+	CHECK(omci_hw_kernel_ops.mcast_group_del(&g) == OMCI_OK);
+	CHECK(omci_hw_kernel_ops.mcast_group_del(&g) == OMCI_DECLINED);
+	sh("ip link set sfp nomaster; ip link del omcibr0");
+}
+
 int main(void)
 {
 	if (geteuid() != 0 || unshare(CLONE_NEWNET) != 0 ||
@@ -587,6 +615,7 @@ int main(void)
 	else
 		puts("(this kernel has no tbf qdisc: the UNI's rate is skipped)");
 	multicast_frames();
+	mcast_group_gone();
 
 	printf("test_hw_kernel: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
