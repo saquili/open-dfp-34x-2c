@@ -32,7 +32,7 @@ env:
 
 jobs:
   provenance:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     # The pinned host build environment: Debian 13, by digest.
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
@@ -53,7 +53,7 @@ jobs:
         run: tools/provenance/check all --history
 
   equivalence-tools:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -67,7 +67,7 @@ jobs:
         run: tools/equiv/tests/run -v
 
   bench:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -86,7 +86,7 @@ jobs:
         run: cd tests/device && python3 -m unittest discover -s devtest/tests -t .
 
   programs:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 30
     steps:
@@ -130,7 +130,7 @@ jobs:
           done
 
   isa-gate:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -147,7 +147,7 @@ jobs:
         run: tools/isa-gate/tests/run -v
 
   lib-trim:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -164,7 +164,7 @@ jobs:
         run: tools/lib-trim/tests/run -v
 
   buildroot-fetch:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -197,7 +197,7 @@ jobs:
         run: make buildroot
 
   image-budget:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -213,7 +213,7 @@ jobs:
         run: tools/image-budget/tests/run -v
 
   image-scripts:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:
@@ -240,7 +240,7 @@ jobs:
           fi
 
   licensing:
-    runs-on: [self-hosted, linux, x64]
+    runs-on: ubuntu-24.04
     container: debian:trixie@sha256:f324c7ff54321e8d9c588493a20244965938ce0aa50bbd1022d38010e9ffc4b1
     timeout-minutes: 20
     steps:

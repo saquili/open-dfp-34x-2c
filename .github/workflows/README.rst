@@ -25,12 +25,13 @@ REUSE tool, pinned to a version, and the device-tree schema checker, which is
 the latest release of dtschema (pin it if a release disagrees with the
 kernel's bindings).
 
-The jobs run on the project's own runner, a self-hosted one with the labels
-every such runner has (``self-hosted``, ``linux``, ``x64``): a Linux x86-64
-host with Docker, which starts each job's container.
-It runs one job at a time, so the jobs of a workflow wait their turn. Its
-workspace stays between runs; ``actions/checkout`` cleans it of everything the
-repository does not hold, so a build starts from nothing.
+The jobs run on GitHub's hosted runners (``ubuntu-24.04``), which start each
+job's container on a machine of their own and discard it afterwards. No job
+asks for a self-hosted runner: the workflows run on pull requests, and on a
+public repository a pull request from a fork could otherwise run its code on
+a machine of the project's. The two builds of ``image.yml`` and
+``toolchain.yml`` need some 9 GB of disk each; neither workflow has run on a
+hosted runner yet.
 
 ``gates.yml`` -- on every change
 ================================
