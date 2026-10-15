@@ -345,10 +345,12 @@ function MgmtCard() {
               {t("sfp.mgmtAdd")}
             </button>
             <SaveState {...state} />
+            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/60">
+              {t("sfp.mgmtSafety")}
+            </span>
           </div>
         </form>
       )}
-      <p className="text-xs text-base-content/60">{t("sfp.mgmtSafety")}</p>
     </Card>
   );
 }
