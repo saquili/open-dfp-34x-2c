@@ -775,6 +775,7 @@ export const en = {
     mgmtHint:
       "The VLAN and address the panel and ssh answer on. This VLAN never goes out to the fibre.",
     mgmtVlan: "Management VLAN",
+    mgmtVlanHint: "A number from 1 to 4094; management always has a VLAN of its own.",
     mgmtAddress: "Management address",
     mgmtAddressHint: "An address with its prefix, e.g. 192.0.2.2/30.",
     mgmtAddressRule: "An IPv4 address with its prefix, e.g. 192.0.2.2/30",

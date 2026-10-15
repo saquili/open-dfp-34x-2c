@@ -322,6 +322,7 @@ function MgmtCard() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field
               label={t("sfp.mgmtVlan")}
+              hint={t("sfp.mgmtVlanHint")}
               inputMode="numeric"
               error={errors.vlan?.message}
               disabled={!m}

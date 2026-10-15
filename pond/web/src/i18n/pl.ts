@@ -775,6 +775,7 @@ export const pl: Dictionary = {
     mgmtHint:
       "VLAN i adres, pod którymi odpowiada panel i ssh. Ten VLAN nigdy nie wychodzi na światłowód.",
     mgmtVlan: "VLAN zarządzania",
+    mgmtVlanHint: "Liczba od 1 do 4094; zarządzanie zawsze idzie osobnym VLAN-em.",
     mgmtAddress: "Adres zarządzania",
     mgmtAddressHint: "Adres z maską, np. 192.0.2.2/30.",
     mgmtAddressRule: "Adres IPv4 z maską, np. 192.0.2.2/30",
