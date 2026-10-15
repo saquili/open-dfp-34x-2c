@@ -791,7 +791,7 @@ export const en = {
     mgmtCommit: "Confirm the new address",
     mgmtCancel: "Give up",
     mgmtSafety:
-      "The new address comes beside the old one first. The old one goes only when you confirm the change from a panel opened at the new address: you cannot lock yourself out.",
+      "The new VLAN and address come beside the ones in use, which keep working. Those go only when you confirm the change from a panel opened at the new address; unconfirmed, the new ones go by themselves after 10\u00a0min. You cannot lock yourself out.",
     mgmtUnavailable:
       "This stick cannot change its management address from the panel yet (it needs a software update).",
     crcErrors: "CRC errors (from the host)",

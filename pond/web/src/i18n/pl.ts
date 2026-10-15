@@ -791,7 +791,7 @@ export const pl: Dictionary = {
     mgmtCommit: "Potwierdź nowy adres",
     mgmtCancel: "Zrezygnuj",
     mgmtSafety:
-      "Najpierw nowy adres dochodzi obok starego. Stary znika dopiero, gdy potwierdzisz zmianę z panelu otwartego pod nowym adresem; nie da się odciąć od wkładki.",
+      "Nowy VLAN i adres dochodzą obok obecnych, które działają dalej. Obecne znikają dopiero, gdy potwierdzisz zmianę z panelu otwartego pod nowym adresem; bez potwierdzenia nowe same znikają po 10\u00a0min. Nie da się odciąć od wkładki.",
     mgmtUnavailable:
       "Ta wkładka nie pozwala jeszcze zmieniać adresu zarządzania z panelu (wymaga aktualizacji oprogramowania).",
     crcErrors: "Błędy CRC (od hosta)",
