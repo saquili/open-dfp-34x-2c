@@ -7,7 +7,8 @@ tools/lab
 
 Small tools for the host that stands on the other side of the stick in a lab:
 the ones that make the traffic or give the time a test needs, which no other
-program on that host gives as a test wants it.
+program on that host gives as a test wants it. And three for the stick itself,
+which look at what its image has no tool for (`On the stick`_).
 
 ``bsend``
 =========
@@ -63,6 +64,42 @@ clock. Each ends after ``--seconds`` (60 by default), so that nothing is left
 running in a namespace. They need root for the raw socket and the ports below
 1024.
 
+On the stick
+============
+
+Three programs in C for a stick of the bench, whose image has neither
+tcpdump, nor ethtool, nor the bridge tool of iproute2::
+
+    mcsniff SECONDS IFACE...
+    mdbadd add|del BRIDGE PORT GROUP VID
+    sstats IFACE [PATTERN]
+
+``mcsniff`` listens on each interface for SECONDS seconds, sends nothing, and
+prints a line for each IGMP and MLD message (the time, the interface, the
+direction, the VLAN and its priority, the addresses, the group) and once a
+second a line for each stream of IPv4 multicast data (the interface, the VLAN,
+the group, frames and bytes). ``mdbadd`` adds a permanent IPv4 group of PORT to
+the multicast database of BRIDGE under VLAN VID, 0 for the bridge's untagged
+entry, or removes it, and prints what the kernel answered. ``sstats`` prints
+the driver statistics of an interface, as ``ethtool -S`` does, those whose name
+holds PATTERN when one is given. They took the multicast of the stick apart
+when the switch discarded a group that its bridge held under another VLAN.
+
+They are diagnostics, so they go into an image booted from RAM, not into the
+image of the flash. Built static with the image's own compiler and laid over
+the RAM image (``docs/handbook/building.rst``)::
+
+    CC=build/image/host/bin/mips-buildroot-linux-uclibc-gcc
+    mkdir -p overlay/usr/bin
+    for t in mcsniff mdbadd sstats; do
+        $CC -static -O2 -Wall -o overlay/usr/bin/$t tools/lab/$t.c
+    done
+    make ram-image OPEN_DFP_34X_2C_LOCAL_OVERLAY=$PWD/overlay
+
+Each needs root on the stick: a packet socket, the route netlink, the ethtool
+ioctl. Exit status: 0 when it ran, 1 when the kernel or an interface refused
+it, 2 on a usage error.
+
 Tests
 =====
 
@@ -70,4 +107,7 @@ Tests
 clock that the test makes up, the messages ``ptpmaster`` builds, byte by byte,
 the stamps it reads from the error queue,
 and the answer ``ntpserve`` builds and one exchange of it on loopback, so that
-it needs no root, no interface and no time. It is part of ``make check``.
+it needs no root, no interface and no time; and it compiles the three programs
+for the stick with the host's compiler and every warning an error, where the
+host has a compiler and the headers of Linux, and says it skipped them where it
+has not. It is part of ``make check``.
