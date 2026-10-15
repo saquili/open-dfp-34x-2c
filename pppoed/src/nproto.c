@@ -71,10 +71,10 @@ int nproto_dump_json(char *buf, size_t cap)
 		return -1;
 	/* 5 is blobmsg's 32-bit integer. */
 	/* 3 is a string, 7 a bool. */
-	put(&o, "{\"name\":\"pppoed\",\"config\":[[\"session\",5],[\"family\",3],"
-		"[\"pass\",7],[\"defaultroute\",7]],"
-		"\"no-device\":false,\"available\":true,"
-		"\"teardown-on-l3-link-down\":true}");
+	put(&o, "{\"name\":\"pppoed\",\"config\":[[\"session\",5],[\"family\",3],");
+	put(&o, "[\"pass\",7],[\"defaultroute\",7]],");
+	put(&o, "\"no-device\":false,\"available\":true,");
+	put(&o, "\"teardown-on-l3-link-down\":true}");
 	return done(&o);
 }
 
