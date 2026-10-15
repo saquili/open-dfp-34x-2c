@@ -46,7 +46,7 @@ export const pl: Dictionary = {
     stale: "Zaktualizowano {time}",
     trialConfirming: "Zmiana zastosowana. Panel ma połączenie z wkładką, więc ją zachowuje…",
     trialWaiting:
-      "Zmiana działa na próbę. Jeśli panel nie połączy się ponownie z wkładką, za {left} s wkładka wróci do poprzednich ustawień.",
+      "Zmiana działa na próbę. Jeśli panel nie połączy się ponownie z wkładką, za {left}\u00a0s wkładka wróci do poprzednich ustawień.",
     trialElsewhere:
       "Nowy adres zarządzania {address} czeka na potwierdzenie z panelu otwartego pod tym adresem. Bez tego wkładka wróci do starego adresu.",
   },
@@ -57,7 +57,7 @@ export const pl: Dictionary = {
     passwordField: "Hasło",
     signIn: "Zaloguj",
     wrong: "Zły użytkownik lub hasło.",
-    tooMany: "Za dużo prób. Spróbuj za {seconds} s.",
+    tooMany: "Za dużo prób. Spróbuj za {seconds}\u00a0s.",
     noStore:
       "Wkładka nie może odczytać swoich ustawień, więc nie zna hasła. Zaloguj się przez konsolę szeregową, tam działa hasło domyślne.",
     offline: "Wkładka nie odpowiada. Sprawdź połączenie i spróbuj ponownie.",
@@ -114,7 +114,7 @@ export const pl: Dictionary = {
     inHardware: "Przekazywane sprzętowo",
     inHardwareHint: "Procesor widzi {frames} ramek/s z tego ruchu.",
     viaCpu: "Procesor obsługuje {frames} ramek/s.",
-    lastMinutes: "Ostatnie 10 minut",
+    lastMinutes: "Ostatnie 10\u00a0minut",
   },
   diagram: {
     hostLinked: "połączony",
@@ -122,10 +122,10 @@ export const pl: Dictionary = {
     sfpTip: "Linia SFP: tryb i stan",
     switchTip: "Switch wkładki: porty, VLAN-y, tablica MAC",
     cpuTip:
-      "Procesor wkładki (Linux: PPPoE, OMCI, DHCP); jego port do switcha przenosi najwyżej 1 Gb/s",
+      "Procesor wkładki (Linux: PPPoE, OMCI, DHCP); jego port do switcha przenosi najwyżej 1\u00a0Gb/s",
     ponmacTip: "GPON MAC: prędkość linii i stan",
-    cpuLimit: "maks. 1 Gb/s",
-    gponRate: "↓ {down} · ↑ {up} Gb/s",
+    cpuLimit: "maks. 1\u00a0Gb/s",
+    gponRate: "↓ {down} · ↑ {up}\u00a0Gb/s",
     useSession: "PPPoE",
     useBridged: "most",
     useEnds: "wkładka",
@@ -191,7 +191,7 @@ export const pl: Dictionary = {
     changedN: "Zmienione pola: {n}",
     classFilter: "Szukaj klasy…",
     instancesN: "Instancje: {n}",
-    history: "Światło i błędy w ostatnich 10 minutach",
+    history: "Światło i błędy w ostatnich 10\u00a0minutach",
     regTitle: "Rejestracja na OLT",
     regHint: "Kroki, którymi wkładka melduje się u operatora",
     stepSync: "Synchronizacja",
@@ -234,7 +234,7 @@ export const pl: Dictionary = {
     lost: "utracone",
     ploamRx: "Wiadomości PLOAM",
     lineRate: "Prędkość linii",
-    lineRateValue: "GPON ↓ {down} Gb/s · ↑ {up} Gb/s",
+    lineRateValue: "GPON ↓ {down}\u00a0Gb/s · ↑ {up}\u00a0Gb/s",
     encryption: "Szyfrowanie",
     encryptedN: "AES-128 na {n} kanałach",
     encryptedNone: "bez szyfrowania",
@@ -749,26 +749,26 @@ export const pl: Dictionary = {
       "Wkładka sama próbuje po kolei 2,5G bez negocjacji, 1G z negocjacją i 1G bez niej, i zostaje przy pierwszym, który przyjmie host. 2,5G z negocjacją trzeba wybrać ręcznie.",
     mode2500: "2,5G",
     mode2500Hint:
-      "2,5 Gb/s bez negocjacji, jak większość portów 2,5G, np. 10G SFP+ w trybie 2,5G. Sprawdzony z hostem.",
+      "2,5\u00a0Gb/s bez negocjacji, jak większość portów 2,5G, np. 10G SFP+ w trybie 2,5G. Sprawdzony z hostem.",
     mode2500anHint:
-      "2,5 Gb/s z negocjacją (clause 37): po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Dla hosta, który jej przy 2,5G wymaga. Jeszcze niesprawdzony z hostem.",
+      "2,5\u00a0Gb/s z negocjacją (clause 37): po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Dla hosta, który jej przy 2,5G wymaga. Jeszcze niesprawdzony z hostem.",
     mode1000: "1G",
     mode1000Hint:
-      "1 Gb/s bez negocjacji, dla portów, które jej nie robią. Jeszcze niesprawdzony z hostem.",
+      "1\u00a0Gb/s bez negocjacji, dla portów, które jej nie robią. Jeszcze niesprawdzony z hostem.",
     mode1000anHint:
-      "1 Gb/s z negocjacją (clause 37), jak większość portów SFP 1G: po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Sprawdzony z hostem.",
+      "1\u00a0Gb/s z negocjacją (clause 37), jak większość portów SFP 1G: po podniesieniu łącza wkładka uzgadnia z hostem dupleks i pauzy. Sprawdzony z hostem.",
     withAn: "z negocjacją",
     withoutAn: "bez negocjacji",
     untested: "niesprawdzony",
     modeTry: "Przełącz na próbę",
     modeConfirm:
-      "Przełączyć linię SFP na wybrany tryb? Jeśli urządzenie hosta go nie obsłuży, łącze zniknie razem z panelem; wkładka sama wróci do obecnego trybu po 90 s, jeśli nie potwierdzisz zmiany.",
+      "Przełączyć linię SFP na wybrany tryb? Jeśli urządzenie hosta go nie obsłuży, łącze zniknie razem z panelem; wkładka sama wróci do obecnego trybu po 90\u00a0s, jeśli nie potwierdzisz zmiany.",
     modeSafety:
-      "Zmiana trybu działa na próbę: zostaje tylko wtedy, gdy potwierdzisz ją z panelu w ciągu 90 s. Inaczej wkładka sama wraca do poprzedniego trybu.",
+      "Zmiana trybu działa na próbę: zostaje tylko wtedy, gdy potwierdzisz ją z panelu w ciągu 90\u00a0s. Inaczej wkładka sama wraca do poprzedniego trybu.",
     modeUnavailable:
       "Ta wkładka nie pozwala jeszcze zmieniać trybu z panelu (wymaga aktualizacji oprogramowania).",
     trial:
-      "Linia działa na próbę w trybie {mode}. Wkładka wróci do poprzedniego za {left} s, jeśli nie zostawisz zmiany.",
+      "Linia działa na próbę w trybie {mode}. Wkładka wróci do poprzedniego za {left}\u00a0s, jeśli nie zostawisz zmiany.",
     keep: "Zostaw ten tryb",
     revert: "Wróć teraz",
     mgmtTitle: "Zarządzanie wkładką",
@@ -888,7 +888,7 @@ export const pl: Dictionary = {
     cpu: "Procesor",
     cpuBusy: "zajęty",
     cpuModel: "Rdzeń",
-    load: "Obciążenie 1 / 5 / 15 min",
+    load: "Obciążenie 1 / 5 / 15\u00a0min",
     loadHint: "wątki gotowe do pracy, średnio",
     memInUse: "w użyciu",
     memUsed: "Zajęta",
@@ -909,17 +909,17 @@ export const pl: Dictionary = {
     bankUse: "zajmuje {used} z {size}",
     startAfter: "Po wgraniu od razu uruchom na próbę",
     startAfterHint:
-      "Wkładka uruchomi się z nowego systemu raz, na próbę; jeśli nie wstanie w 5 minut, sama wróci do obecnego.",
+      "Wkładka uruchomi się z nowego systemu raz, na próbę; jeśli nie wstanie w 5\u00a0minut, sama wróci do obecnego.",
     overShippedConfirm:
       "W systemie {letter} jest firmware, z którym wkładka przyszła. Aktualizacja go nadpisze i wtedy wrócić do niego można tylko z kopii całego flasha zrobionej wcześniej. Nadpisać?",
     uploadStartConfirm:
-      "Po wgraniu wkładka od razu uruchomi się z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5 minut, sama wróci do systemu {back}. Kontynuować?",
+      "Po wgraniu wkładka od razu uruchomi się z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5\u00a0minut, sama wróci do systemu {back}. Kontynuować?",
     howUpdate: "Jak przebiega aktualizacja",
     step1: "Plik trafia do systemu, który teraz nie działa; działający zostaje nietknięty.",
     step2: "Wkładka zapisuje go, czyta z powrotem i sprawdza sumy kontrolne.",
     step3: "Start nowego systemu jest na próbę: raz, przy następnym uruchomieniu.",
     step4:
-      "Nowy system zostaje na stałe, gdy w 5 minut działa OMCI, panel i połączenie z OLT; inaczej wkładka sama wraca do starego.",
+      "Nowy system zostaje na stałe, gdy w 5\u00a0minut działa OMCI, panel i połączenie z OLT; inaczej wkładka sama wraca do starego.",
     hostname: "Nazwa wkładki (hostname)",
     hostnameHint: "Litery, cyfry i myślniki, do 63 znaków.",
     hostnameRule: "Litery, cyfry i myślniki (nie na początku ani końcu), do 63 znaków",
@@ -981,7 +981,7 @@ export const pl: Dictionary = {
     report: "Pobierz raport diagnostyczny",
     maintenance: "Konserwacja",
     restarting: "Wkładka uruchamia się ponownie. Strona połączy się sama.",
-    sessionsHint: "Najwyżej trzy sesje naraz. Sesja kończy się po 15 minutach bezczynności.",
+    sessionsHint: "Najwyżej trzy sesje naraz. Sesja kończy się po 15\u00a0minutach bezczynności.",
     partBoot: "Program rozruchowy",
     partEnv: "Ustawienia programu rozruchowego",
     partConfig: "Twoje ustawienia",
@@ -1017,7 +1017,7 @@ export const pl: Dictionary = {
     download: "Pobierz obecne oprogramowanie",
     switchTo: "Uruchom system {letter}",
     switchConfirm:
-      "Wkładka uruchomi się ponownie z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5 minut, sama wróci do systemu {back}. Kontynuować?",
+      "Wkładka uruchomi się ponownie z systemu {letter}, na próbę. Jeśli nie wstanie w ciągu 5\u00a0minut, sama wróci do systemu {back}. Kontynuować?",
     switching: "Wkładka uruchamia się z systemu {letter}. Strona połączy się sama.",
     trialNow: "System {letter} działa na próbę i zostanie zachowany, gdy wkładka w pełni wstanie.",
     failedNote:
@@ -1091,7 +1091,7 @@ export const pl: Dictionary = {
   common: {
     history: "od otwarcia panelu",
     historyHint:
-      "Wykres zbiera przeglądarka: od chwili otwarcia panelu, co 5 sekund, najwyżej 10 minut wstecz. Wkładka nie przechowuje historii; po odświeżeniu strony wykres zaczyna się od nowa.",
+      "Wykres zbiera przeglądarka: od chwili otwarcia panelu, co 5\u00a0sekund, najwyżej 10\u00a0minut wstecz. Wkładka nie przechowuje historii; po odświeżeniu strony wykres zaczyna się od nowa.",
     yes: "Tak",
     no: "Nie",
     none: "Brak",

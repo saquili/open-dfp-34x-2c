@@ -44,7 +44,7 @@ export const en = {
     stale: "Updated {time}",
     trialConfirming: "The change is applied. The panel reaches the stick, so it keeps the change…",
     trialWaiting:
-      "The change is on trial. Unless the panel reaches the stick again, the stick goes back to the settings of before in {left} s.",
+      "The change is on trial. Unless the panel reaches the stick again, the stick goes back to the settings of before in {left}\u00a0s.",
     trialElsewhere:
       "The new management address {address} waits to be confirmed by a panel opened at it; without that the stick goes back to the old one.",
   },
@@ -55,7 +55,7 @@ export const en = {
     passwordField: "Password",
     signIn: "Sign in",
     wrong: "Wrong user or password.",
-    tooMany: "Too many attempts. Try again in {seconds} s.",
+    tooMany: "Too many attempts. Try again in {seconds}\u00a0s.",
     noStore:
       "The stick cannot read its settings, so no password is known. Sign in on the serial console, where the default password works.",
     offline: "The stick does not answer. Check the cable and try again.",
@@ -112,7 +112,7 @@ export const en = {
     inHardware: "Forwarded in hardware",
     inHardwareHint: "The processor sees {frames} frames/s of this traffic.",
     viaCpu: "The processor handles {frames} frames/s.",
-    lastMinutes: "Last 10 minutes",
+    lastMinutes: "Last 10\u00a0minutes",
   },
   diagram: {
     hostLinked: "linked",
@@ -120,10 +120,10 @@ export const en = {
     sfpTip: "The SFP lane: its mode and state",
     switchTip: "The stick's switch: ports, VLANs, MAC table",
     cpuTip:
-      "The stick's processor (Linux: PPPoE, OMCI, DHCP); its port to the switch carries at most 1 Gb/s",
+      "The stick's processor (Linux: PPPoE, OMCI, DHCP); its port to the switch carries at most 1\u00a0Gb/s",
     ponmacTip: "The GPON MAC: line rate and state",
-    cpuLimit: "max 1 Gb/s",
-    gponRate: "↓ {down} · ↑ {up} Gb/s",
+    cpuLimit: "max 1\u00a0Gb/s",
+    gponRate: "↓ {down} · ↑ {up}\u00a0Gb/s",
     useSession: "PPPoE",
     useBridged: "bridge",
     useEnds: "stick",
@@ -190,7 +190,7 @@ export const en = {
     changedN: "Fields changed: {n}",
     classFilter: "Find a class…",
     instancesN: "Instances: {n}",
-    history: "Light and errors over the last 10 minutes",
+    history: "Light and errors over the last 10\u00a0minutes",
     regTitle: "Registration on the OLT",
     regHint: "The steps by which the stick reports to the operator",
     stepSync: "Synchronisation",
@@ -234,7 +234,7 @@ export const en = {
     lost: "lost",
     ploamRx: "PLOAM messages",
     lineRate: "Line rate",
-    lineRateValue: "GPON ↓ {down} Gb/s · ↑ {up} Gb/s",
+    lineRateValue: "GPON ↓ {down}\u00a0Gb/s · ↑ {up}\u00a0Gb/s",
     encryption: "Encryption",
     encryptedN: "AES-128 on {n} channels",
     encryptedNone: "none",
@@ -749,26 +749,26 @@ export const en = {
       "The stick tries 2.5G without negotiation, 1G with it and 1G without it in turn, and keeps the first one the host takes. 2.5G with negotiation has to be chosen by hand.",
     mode2500: "2.5G",
     mode2500Hint:
-      "2.5 Gb/s without negotiation, as most 2.5G ports, e.g. a 10G SFP+ port in 2.5G mode. Tested with a host.",
+      "2.5\u00a0Gb/s without negotiation, as most 2.5G ports, e.g. a 10G SFP+ port in 2.5G mode. Tested with a host.",
     mode2500anHint:
-      "2.5 Gb/s with negotiation (clause 37): once the link is up, the stick agrees duplex and pause with the host. For a host that asks for it at 2.5G. Not tested with a host yet.",
+      "2.5\u00a0Gb/s with negotiation (clause 37): once the link is up, the stick agrees duplex and pause with the host. For a host that asks for it at 2.5G. Not tested with a host yet.",
     mode1000: "1G",
     mode1000Hint:
-      "1 Gb/s without negotiation, for ports that do not negotiate. Not tested with a host yet.",
+      "1\u00a0Gb/s without negotiation, for ports that do not negotiate. Not tested with a host yet.",
     mode1000anHint:
-      "1 Gb/s with negotiation (clause 37), as most 1G SFP ports: once the link is up, the stick agrees duplex and pause with the host. Tested with a host.",
+      "1\u00a0Gb/s with negotiation (clause 37), as most 1G SFP ports: once the link is up, the stick agrees duplex and pause with the host. Tested with a host.",
     withAn: "with negotiation",
     withoutAn: "without negotiation",
     untested: "not tested",
     modeTry: "Switch on trial",
     modeConfirm:
-      "Switch the SFP lane to the chosen mode? If the host does not take it, the link goes and the panel with it; the stick goes back to the current mode after 90 s unless you keep the change.",
+      "Switch the SFP lane to the chosen mode? If the host does not take it, the link goes and the panel with it; the stick goes back to the current mode after 90\u00a0s unless you keep the change.",
     modeSafety:
-      "A mode change is on trial: it stays only when you keep it from the panel within 90 s. Otherwise the stick goes back to the previous mode by itself.",
+      "A mode change is on trial: it stays only when you keep it from the panel within 90\u00a0s. Otherwise the stick goes back to the previous mode by itself.",
     modeUnavailable:
       "This stick cannot change the mode from the panel yet (it needs a software update).",
     trial:
-      "The lane runs in {mode} on trial. The stick goes back to the previous mode in {left} s unless you keep the change.",
+      "The lane runs in {mode} on trial. The stick goes back to the previous mode in {left}\u00a0s unless you keep the change.",
     keep: "Keep this mode",
     revert: "Go back now",
     mgmtTitle: "Managing the stick",
@@ -888,7 +888,7 @@ export const en = {
     cpu: "Processor",
     cpuBusy: "busy",
     cpuModel: "Core",
-    load: "Load 1 / 5 / 15 min",
+    load: "Load 1 / 5 / 15\u00a0min",
     loadHint: "threads ready to run, on average",
     memInUse: "in use",
     memUsed: "Used",
@@ -909,17 +909,17 @@ export const en = {
     bankUse: "uses {used} of {size}",
     startAfter: "Start it on trial right after the upload",
     startAfterHint:
-      "The stick starts the new system once, on trial; if it does not come up in 5 minutes, it goes back to the current one by itself.",
+      "The stick starts the new system once, on trial; if it does not come up in 5\u00a0minutes, it goes back to the current one by itself.",
     overShippedConfirm:
       "System {letter} holds the firmware the stick shipped with. An update writes over it, and then the only way back to it is a copy of the whole flash taken before. Write over it?",
     uploadStartConfirm:
-      "After the upload the stick starts system {letter} at once, on trial. If it does not come up within 5 minutes, it goes back to system {back} by itself. Go on?",
+      "After the upload the stick starts system {letter} at once, on trial. If it does not come up within 5\u00a0minutes, it goes back to system {back} by itself. Go on?",
     howUpdate: "How an update goes",
     step1: "The file goes into the system that does not run now; the running one is left alone.",
     step2: "The stick writes it, reads it back and checks its checksums.",
     step3: "The new system starts on trial: once, at the next start.",
     step4:
-      "It stays for good when OMCI, the panel and the link to the OLT work within 5 minutes; otherwise the stick goes back to the old one by itself.",
+      "It stays for good when OMCI, the panel and the link to the OLT work within 5\u00a0minutes; otherwise the stick goes back to the old one by itself.",
     hostname: "The stick's name (hostname)",
     hostnameHint: "Letters, digits and hyphens, up to 63 characters.",
     hostnameRule: "Letters, digits and hyphens (not first or last), up to 63 characters",
@@ -982,7 +982,7 @@ export const en = {
     maintenance: "Maintenance",
     restarting: "The stick is restarting. This page reconnects by itself.",
     sessionsHint:
-      "Up to three sessions at a time. A session ends after 15 minutes without activity.",
+      "Up to three sessions at a time. A session ends after 15\u00a0minutes without activity.",
     partBoot: "Boot loader",
     partEnv: "Boot loader settings",
     partConfig: "Your settings",
@@ -1018,7 +1018,7 @@ export const en = {
     download: "Download the current software",
     switchTo: "Start system {letter}",
     switchConfirm:
-      "The stick restarts from system {letter}, on trial. If it does not come up within 5 minutes, it goes back to system {back} by itself. Go on?",
+      "The stick restarts from system {letter}, on trial. If it does not come up within 5\u00a0minutes, it goes back to system {back} by itself. Go on?",
     switching: "The stick is restarting from system {letter}. This page reconnects by itself.",
     trialNow: "System {letter} runs on trial and is kept once the stick is fully up.",
     failedNote:
@@ -1091,7 +1091,7 @@ export const en = {
   common: {
     history: "since the panel opened",
     historyHint:
-      "The browser gathers the chart: from the moment the panel was opened, every 5 seconds, ten minutes back at most. The stick keeps no history; a reload starts the chart again.",
+      "The browser gathers the chart: from the moment the panel was opened, every 5\u00a0seconds, ten minutes back at most. The stick keeps no history; a reload starts the chart again.",
     yes: "Yes",
     no: "No",
     none: "None",
