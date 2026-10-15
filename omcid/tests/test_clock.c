@@ -434,9 +434,9 @@ static enum omci_status send_tod(struct omci_engine *eng, uint16_t tci,
 static void test_olt_g_time_of_day_is_handed_to_the_backend(void)
 {
 	static const uint8_t info[14] = {
-		0x02u, 0x34u, 0x56u, 0x78u,			/* N */
-		0x00u, 0x01u, 0x6au, 0x0bu, 0x9cu, 0x00u,	/* seconds */
-		0x07u, 0x5bu, 0xcdu, 0x15u,			/* nanoseconds */
+		0x02u, 0x34u, 0x56u, 0x78u, /* N */
+		0x00u, 0x01u, 0x6au, 0x0bu, 0x9cu, 0x00u, /* seconds */
+		0x07u, 0x5bu, 0xcdu, 0x15u, /* nanoseconds */
 	};
 	static const uint8_t none[14];
 	struct omci_hw_ops ops = omci_hw_host_ops;

@@ -1593,7 +1593,8 @@ static void kernel_tod_info(uint32_t superframe, uint64_t sec, uint32_t nsec)
 		alen = nla_put(attrs, alen, PON_A_TOD_SUPERFRAME, &superframe,
 			       sizeof(superframe));
 		alen = nla_put(attrs, alen, PON_A_TOD_SEC, &sec, sizeof(sec));
-		alen = nla_put(attrs, alen, PON_A_TOD_NSEC, &nsec, sizeof(nsec));
+		alen = nla_put(attrs, alen, PON_A_TOD_NSEC, &nsec,
+			       sizeof(nsec));
 		err = nl_request(family, PON_CMD_TOD_SET, attrs, alen,
 				 NLM_F_ACK, rsp, sizeof(rsp), &rlen);
 	}
@@ -1601,8 +1602,9 @@ static void kernel_tod_info(uint32_t superframe, uint64_t sec, uint32_t nsec)
 		OMCI_WARN("tod: the clock is not set at superframe %u: %s",
 			  superframe, strerror(-err));
 	else {
-		OMCI_INFO("tod: the clock takes TstampN %llu.%09u at superframe %u",
-			  (unsigned long long)sec, nsec, superframe);
+		OMCI_INFO(
+			"tod: the clock takes TstampN %llu.%09u at superframe %u",
+			(unsigned long long)sec, nsec, superframe);
 		kernel_tod_tell(superframe, sec, nsec);
 	}
 }
