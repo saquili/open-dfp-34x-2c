@@ -441,6 +441,8 @@ one part of the tree, carries a ``Signed-off-by:`` line, and passes the
 provenance gates (`docs/policy/provenance.rst
 <docs/policy/provenance.rst>`__), which keep out anything that is not ours
 to publish. ``make check`` runs the gates and the tools' tests offline.
+Report a security weakness privately, as `SECURITY.md <SECURITY.md>`__
+says.
 
 Licensing
 =========

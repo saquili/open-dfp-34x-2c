@@ -1,0 +1,40 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!-- SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com> -->
+
+# Security
+
+The stick sits between an operator's fibre and a router, with an ssh server
+and a web panel on the router's side. Please report a weakness privately
+before you make it public.
+
+## How to report
+
+* Through GitHub: the repository's **Security** tab, **Report a
+  vulnerability**, which opens a private advisory.
+* Or by e-mail to Paweł Phan <szop.hektar_1w@icloud.com>.
+
+Say what is affected (the program, and the commit or the build), how to
+reproduce it, and what it lets an attacker do. Leave out your stick's serial
+numbers, MAC addresses, registration password and captures of your
+operator's line: a report does not need them, and the project keeps them out
+of the repository (`docs/policy/provenance.rst`).
+
+## What to expect
+
+One person maintains the project. You get an answer as soon as they can give
+one; a fix goes into the tree and into the next update file, and the
+advisory names the commit that has it. There are no releases yet: the images
+are test builds (`README.rst`, "Status").
+
+## Scope
+
+* In scope: the code of this repository -- the kernel series under `linux/`,
+  omcid, onu-utils, pond and its panel, pppoed, dhcp6d, timed, netifd as
+  carried here, and the build and its update files.
+* Known and documented, so not a new finding: update files carry a checksum
+  but no signature (ADR 0017); the panel's certificate is signed by the stick
+  itself (ADR 0016); the one account keeps its default password until one is
+  set (ADR 0012); the stick has no packet filter (`README.rst`, "Not done
+  yet").
+* Not in scope: the shipped firmware, the boot loader and the operator's
+  equipment.
