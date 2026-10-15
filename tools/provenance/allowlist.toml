@@ -69,10 +69,10 @@ upstream MIPS tree uses above that area.
 gate = "commit-message"
 rules = ["subject-prefix", "body-line-length"]
 commits = [
-    "f9aad8a876201d3f872d626b74c884bf072fda1d",
-    "c69daae4d46f3076e4de9dac3b73e8cecf176905",
-    "1a14e501b20f11d16e5cac04146d6c979b73de5d",
-    "11d9c9446f9d94afa1a40e2ea92083f94b7c1422",
+    "8e8b550689bf04445ea08c697946c98ceac321f8",
+    "40ff8824737b57402aca9d0ddeb4b38ab5b10a5b",
+    "8bb3cf7894cbd376e0ec9942481cdcfe95418ccd",
+    "1a66b4c08e522fe2237bd4097fe39ba56ada3a09",
 ]
 reason = """
 The four founding commits were written before the commit-message gate
@@ -83,7 +83,7 @@ these commits are accepted as they are; later commits follow the rule.
 
 [[allow]]
 gate = "one-component"
-commits = ["11d9c9446f9d94afa1a40e2ea92083f94b7c1422"]
+commits = ["1a66b4c08e522fe2237bd4097fe39ba56ada3a09"]
 reason = """
 The skeleton commit created the placeholder README of every top-level
 directory at once, founding the component layout that this rule protects. It
