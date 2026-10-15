@@ -56,6 +56,7 @@ struct pon_sim_stats {
  * @omci: its OMCI port
  * @lock: protects the rest
  * @state: the activation state, a PON_ONU_STATE_* value
+ * @since: when @state last changed, in jiffies
  * @omci_up: the OMCI channel exists
  * @flows: the flows with a GEM port
  * @cfg: the configuration of each, by flow
@@ -73,7 +74,6 @@ struct pon_sim {
 	/* protects the members below it */
 	struct mutex lock;
 	u32 state;
-	/* when @state was entered, in jiffies */
 	u64 since;
 	bool omci_up;
 	DECLARE_BITMAP(flows, PON_SIM_FLOWS);
