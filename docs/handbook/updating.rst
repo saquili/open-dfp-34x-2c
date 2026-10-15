@@ -325,7 +325,8 @@ keeps for this stick, the one the stick shipped with among them.
 * A package other than the one a stick shipped with may write the shipped
   firmware's own files anew: on the bench one wrote the PLOAM password's
   format differently, so going back to another package than the stick's own
-  can change how the stick introduces itself to an OLT.
+  can change how the stick introduces itself to an OLT. Going back, take the
+  package the stick shipped with.
 
 Measured on the board
 =====================
