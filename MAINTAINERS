@@ -12,15 +12,15 @@ can gain an entry of its own in the same style. Field letters used here:
 	F: Files and directories; wildcards allowed, a trailing slash means a
 	   whole subtree.
 
-One person maintains the whole tree for now, so there is one section. Kernel
-code under linux/ additionally keeps its own entries in linux/MAINTAINERS,
-upstream style.
+One person maintains the whole tree for now, as time allows, so there is one
+section, and its status is Odd Fixes. Kernel code under linux/ additionally
+keeps its own entries in linux/MAINTAINERS, upstream style.
 
 Maintainers List
 ----------------
 
 OPEN-DFP-34X-2C (WHOLE TREE)
 M:	Paweł Phan <szop.hektar_1w@icloud.com>
-S:	Maintained
+S:	Odd Fixes
 F:	*
 F:	*/

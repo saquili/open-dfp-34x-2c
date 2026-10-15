@@ -464,6 +464,10 @@ to publish. ``make check`` runs the gates and the tools' tests offline.
 Report a security weakness privately, as `SECURITY.md <SECURITY.md>`__
 says.
 
+The system was built for one use, its maintainer's own stick and line, and it
+is kept as time allows: pull requests and reports from other lines are
+welcome, with no promise of when they are answered.
+
 Licensing
 =========
 
