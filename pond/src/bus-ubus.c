@@ -146,7 +146,7 @@ static int lookup(const char *object, uint32_t *id)
 }
 
 int bus_status(const char *object, const char *const *paths, size_t n,
-	       char (*out)[BUS_VALUE])
+	       char out[][BUS_VALUE])
 {
 	uint32_t id;
 	int err;

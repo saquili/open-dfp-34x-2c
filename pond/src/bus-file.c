@@ -19,7 +19,7 @@
 #include "prov.h"
 
 int bus_status(const char *object, const char *const *paths, size_t n,
-	       char (*out)[BUS_VALUE])
+	       char out[][BUS_VALUE])
 {
 	char path[160], text[2048];
 
@@ -76,7 +76,7 @@ static const char *program_of(const struct act_method *m)
 static bool password_ok(const char *secret)
 {
 	static const struct act_method check = { .program = "/usr/sbin/onu-config" };
-	const char *argv[] = { "password-check", NULL };
+	const char *const argv[] = { "password-check", NULL };
 	char line[ACT_PASSWORD_MAX + 2], out[64];
 	int rc;
 

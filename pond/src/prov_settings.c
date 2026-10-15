@@ -153,7 +153,7 @@ static void pv_trials(struct prov_buf *out, const char *st)
 	bool first = true;
 
 	pv_open(out, '[');
-	for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+	for (size_t i = 0; i < ARRAY_SIZE(names); i++) {
 		char key[32], v[32];
 
 		snprintf(key, sizeof(key), "trial.%s", names[i]);
@@ -210,7 +210,7 @@ static void pv_str_or_null(struct prov_buf *out, const char *value)
 }
 
 /* Whether session @n hands @fam down, as onu-apply says in @st. */
-static bool hands(const char *st, int n, const char *fam)
+static bool session_hands(const char *st, int n, const char *fam)
 {
 	char key[48], line[64];
 	size_t len = strlen(fam);
@@ -279,7 +279,7 @@ static void pv_sessions(struct prov_buf *out, const struct account acct[SESSIONS
 		}
 		pv_comma(out);
 		pv_key(out, "hands_on");
-		pv_bool(out, hands(st, n, "ipv4"));
+		pv_bool(out, session_hands(st, n, "ipv4"));
 		pv_comma(out);
 		pv_key(out, "dev");
 		pv_session_fact(out, st, n, "dev");

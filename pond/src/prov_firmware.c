@@ -30,7 +30,7 @@ int fw_run(const char *const *args, const char *password, char *out, size_t cap)
 	if (!strcmp(args[0], "status"))
 		return bus_act("update_status", NULL, NULL, 0, NULL, out, cap);
 	if (!strcmp(args[0], "try")) {
-		const char *values[] = { args[1], password };
+		const char *const values[] = { args[1], password };
 
 		return bus_act("update_try", names, values, 2, NULL, out, cap);
 	}

@@ -153,7 +153,8 @@ static void wrap(struct der *out, uint8_t tag, const struct der *in)
 }
 
 /* An unsigned big-endian number as a DER INTEGER: no leading zeros but one
- * that keeps it positive. */
+ * that keeps it positive.
+ */
 static void integer(struct der *d, const uint8_t *v, size_t n)
 {
 	uint8_t buf[33];
@@ -213,7 +214,7 @@ static void sha_init(const MG_UECC_HashContext *base)
 	mg_sha256_init(&((struct sha_ctx *)(uintptr_t)base)->sha);
 }
 
-static void sha_update(const MG_UECC_HashContext *base, const uint8_t *m, unsigned n)
+static void sha_update(const MG_UECC_HashContext *base, const uint8_t *m, unsigned int n)
 {
 	mg_sha256_update(&((struct sha_ctx *)(uintptr_t)base)->sha, m, n);
 }
@@ -345,7 +346,7 @@ size_t cert_make(const uint8_t ip[4], time_t now, uint8_t *der, size_t cap)
 	integer(&t, sig + 32, 32);
 	{
 		struct der bits = { .n = 0 };
-		static const uint8_t unused = 0;
+		static const uint8_t unused;
 
 		put(&bits, &unused, 1);
 		tlv(&bits, 0x30, t.b, t.n);

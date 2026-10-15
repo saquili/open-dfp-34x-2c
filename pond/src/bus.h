@@ -26,7 +26,7 @@
  * answer.
  */
 int bus_status(const char *object, const char *const *paths, size_t n,
-	       char (*out)[BUS_VALUE]);
+	       char out[][BUS_VALUE]);
 
 /* An argument of a method: a number, or with @array an array of @n. */
 struct bus_arg {
