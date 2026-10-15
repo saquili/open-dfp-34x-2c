@@ -21,16 +21,23 @@
  * keeps its ranging and sends nothing until POPUP or TO2; O1 moves on to O2
  * once both have cleared. Disable_Serial_Number stops the ONU in O7, laser off,
  * until it is enabled again. It acts on Upstream_Overhead,
- * Extended_Burst_Length, Assign_ONU-ID, Ranging_Time, Deactivate_ONU-ID,
- * Disable_Serial_Number, POPUP, Request_Password, Assign_Alloc-ID and
- * Configure_Port-ID, and drops every other downstream message, even where
- * G.984.3 asks for an answer: BER_Interval, Key_Switching_Time and
- * Encrypted_Port-ID get no Acknowledge. No encryption
- * key is programmed and nothing is set up for upstream FEC; that neither is
- * needed is an assumption, not verified, and a Port-ID an OLT encrypts would
- * arrive as ciphertext. There is no power levelling, no REI message and no
- * signal-fail or signal-degrade alarm, and nothing in the driver sends the
- * Dying_Gasp message armed in the MAC.
+ * Extended_Burst_Length, Assign_ONU-ID, Ranging_Time, Ranging_Adjustment,
+ * Deactivate_ONU-ID, Disable_Serial_Number, POPUP, Swift_POPUP,
+ * Request_Password, Request_Key, Key_Switching_Time, Encrypted_Port-ID,
+ * Assign_Alloc-ID, Configure_Port-ID, BER_Interval, Change_Power_Level, PST and
+ * PEE, acknowledging those G.984.3 asks it to; it ignores Sleep_Allow, as no
+ * OMCI entity offers power management, and drops every other downstream
+ * message.
+ *
+ * Downstream encryption is G.984.3's: Request_Key is answered with a new random
+ * AES key, which the MAC takes from the superframe Key_Switching_Time names,
+ * and Encrypted_Port-ID turns it on or off for a Port-ID. On an operator's OLT
+ * that encrypts the OMCC and every data Port-ID and asks for a new key once a
+ * day, the traffic is decrypted throughout. REI reports go up at the interval
+ * BER_Interval sets, Change_Power_Level steps the transmit power level, and
+ * Dying_Gasp is sent before an orderly restart. Nothing is set up for upstream
+ * FEC, there is no signal-fail or signal-degrade alarm, and what makes the MAC
+ * send the Dying_Gasp template it holds by itself is not known.
  */
 
 #define pr_fmt(fmt) "rtl9602c-switch: " fmt
