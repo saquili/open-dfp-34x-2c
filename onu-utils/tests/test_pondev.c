@@ -63,12 +63,16 @@ static struct nlmsghdr *full_dev(char *buf)
 	mnl_attr_put_u64(nlh, PON_A_DEV_STATS_BWMAP_RX, 5000000000ull);
 	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_BIP_ERRORS, 0);
 	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS, 7);
+	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_PASSWORD_REQUESTS, 2);
+	mnl_attr_put_u32(nlh, PON_A_DEV_STATS_PASSWORD_REPLIES, 1);
 	mnl_attr_nest_end(nlh, stats);
 	mnl_attr_put(nlh, PON_A_DEV_SERIAL_NUMBER, sizeof(serial), serial);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_GEM_PORTS, 2);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_TCONTS, 1);
 	mnl_attr_put_u32(nlh, PON_A_DEV_NUM_TCONT_QUEUES, 8);
 	mnl_attr_put_u32(nlh, PON_A_DEV_POWER_LEVEL, PON_POWER_LEVEL_MEDIUM);
+	mnl_attr_put_u32(nlh, PON_A_DEV_EQD, 97328);
+	mnl_attr_put_u64(nlh, PON_A_DEV_ONU_STATE_TIME, 5000003723456ull);
 	return nlh;
 }
 
@@ -97,7 +101,11 @@ static void test_a_full_device_is_read(void)
 	CHECK(d.stats_have & (1u << PON_A_DEV_STATS_BIP_ERRORS));
 	CHECK(d.stats[PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS] == 7);
 	CHECK(!(d.stats_have & (1u << PON_A_DEV_STATS_GEM_FRAMES)));
+	CHECK(d.stats[PON_A_DEV_STATS_PASSWORD_REQUESTS] == 2);
+	CHECK(d.stats[PON_A_DEV_STATS_PASSWORD_REPLIES] == 1);
 	CHECK(d.have & (1u << PON_A_DEV_SERIAL_NUMBER));
+	CHECK(d.eqd == 97328);
+	CHECK(d.state_ms == 5000003723456ull);
 }
 
 /* The second line of the full device, after its alarms. */
@@ -113,7 +121,8 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	CHECK(pon_dev_parse(full_dev(buf), &d) == 0);
 	hidden = printed(&d, false);
 	shown = printed(&d, true);
-	CHECK(strstr(hidden, "pon  GPON  O5 operation  ONU-ID 3  Alloc-ID 3"));
+	CHECK(strstr(hidden,
+		     "pon  GPON  O5 operation for 5000003723 s  ONU-ID 3  Alloc-ID 3  OMCC 3  EqD 97328 bits\n"));
 	CHECK(strstr(hidden, CAPACITIES));
 	CHECK(strstr(hidden, "serial number set (-s shows it)"));
 	CHECK(!strstr(hidden, "ABCD"));
@@ -121,6 +130,8 @@ static void test_the_serial_number_is_printed_only_when_asked(void)
 	CHECK(strstr(hidden, "bandwidth maps"));
 	CHECK(strstr(hidden, "5000000000"));
 	CHECK(strstr(hidden, "FEC uncorrectable codewords  7"));
+	CHECK(strstr(hidden, "password requests            2"));
+	CHECK(strstr(hidden, "password replies             1"));
 	CHECK(!strstr(hidden, "GEM frames"));
 	free(hidden);
 	free(shown);

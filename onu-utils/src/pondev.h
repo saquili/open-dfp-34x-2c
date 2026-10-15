@@ -35,6 +35,8 @@
  * @tconts: the T-CONTs
  * @tcont_queues: the upstream queues of each T-CONT
  * @power_level: the transmit power level, an &enum pon_power_level
+ * @eqd: the equalization delay, in upstream bit periods
+ * @state_ms: how long the ONU has been in @state, in milliseconds
  * @serial: the serial number
  * @stats_have: bit N set when counter N was there
  * @stats: the counters, by attribute number
@@ -42,7 +44,8 @@
 struct pon_dev {
 	uint32_t have;
 	uint32_t id, ifindex, type, state, onu_id, alloc_id, omcc, alarms;
-	uint32_t gem_ports, tconts, tcont_queues, power_level;
+	uint32_t gem_ports, tconts, tcont_queues, power_level, eqd;
+	uint64_t state_ms;
 	uint8_t serial[PON_SERIAL_LEN];
 	uint32_t stats_have;
 	uint64_t stats[PON_A_DEV_STATS_MAX + 1];

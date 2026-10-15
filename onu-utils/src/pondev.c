@@ -68,6 +68,7 @@ int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d)
 		[PON_A_DEV_NUM_TCONTS] = &d->tconts,
 		[PON_A_DEV_NUM_TCONT_QUEUES] = &d->tcont_queues,
 		[PON_A_DEV_POWER_LEVEL] = &d->power_level,
+		[PON_A_DEV_EQD] = &d->eqd,
 	};
 	const struct nlattr *a;
 
@@ -82,6 +83,9 @@ int pon_dev_parse(const struct nlmsghdr *nlh, struct pon_dev *d)
 				return -EINVAL;
 		} else if (type == PON_A_DEV_STATS) {
 			if (parse_stats(a, d))
+				return -EINVAL;
+		} else if (type == PON_A_DEV_ONU_STATE_TIME) {
+			if (get_uint(a, &d->state_ms))
 				return -EINVAL;
 		} else if (type == PON_A_DEV_SERIAL_NUMBER) {
 			if (mnl_attr_get_payload_len(a) != PON_SERIAL_LEN)
@@ -214,6 +218,8 @@ static void print_stats(FILE *f, const struct pon_dev *d)
 		{ PON_A_DEV_STATS_FEC_UNCORRECTABLE_CODEWORDS,
 		  "FEC uncorrectable codewords" },
 		{ PON_A_DEV_STATS_FEC_CODEWORDS, "FEC codewords" },
+		{ PON_A_DEV_STATS_PASSWORD_REQUESTS, "password requests" },
+		{ PON_A_DEV_STATS_PASSWORD_REPLIES, "password replies" },
 	};
 
 	for (size_t i = 0; i < ARRAY_SIZE(counter); i++)
@@ -229,9 +235,13 @@ void pon_dev_print(FILE *f, const struct pon_dev *d, const char *ifname,
 		type_name(d->type));
 	if (has(d, PON_A_DEV_ONU_STATE))
 		fprintf(f, "  %s", pon_state_name(d->state));
+	if (has(d, PON_A_DEV_ONU_STATE_TIME))
+		fprintf(f, " for %llu s", (unsigned long long)(d->state_ms / 1000));
 	print_u32(f, d, PON_A_DEV_ONU_ID, "ONU-ID", d->onu_id);
 	print_u32(f, d, PON_A_DEV_ALLOC_ID, "Alloc-ID", d->alloc_id);
 	print_u32(f, d, PON_A_DEV_OMCC_PORT_ID, "OMCC", d->omcc);
+	if (has(d, PON_A_DEV_EQD))
+		fprintf(f, "  EqD %u bits", d->eqd);
 	fputc('\n', f);
 
 	fputs("   ", f);
