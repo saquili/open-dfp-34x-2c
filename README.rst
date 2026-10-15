@@ -5,7 +5,8 @@
 
    <h1 align="center">open-dfp-34x-2c</h1>
    <p align="center">
-     Open firmware for the ODI DFP-34X-2C GPON stick, built from source.
+     Open firmware for the ODI DFP-34X-2C GPON stick, built from source
+     and written with LLMs.
    </p>
    <p align="center">
      <img alt="Status: test builds"
@@ -15,6 +16,7 @@
    </p>
    <p align="center">
      <a href="#what-it-does">What it does</a> ·
+     <a href="#how-it-was-made">How it was made</a> ·
      <a href="#status">Status</a> ·
      <a href="#before-you-install">Before you install</a> ·
      <a href="#where-to-start">Where to start</a> ·
@@ -68,6 +70,23 @@ What it does
 
 How the parts fit together is in `docs/handbook/system.rst
 <docs/handbook/system.rst>`__.
+
+How it was made
+===============
+
+This project was written using large language models (LLMs): the drivers, the
+programs, the tests and the documentation. The commits say so in their
+``Co-Authored-By:`` lines.
+
+So that nothing here has to be taken on trust, the work is checked: the
+kernel's coding style and checkpatch over every commit of the kernel series,
+tests for each program on the host, device tests on the stick (`docs/testing/
+<docs/testing/README.rst>`__), and every fact about the hardware written down
+together with how it was measured (`docs/policy/provenance.rst
+<docs/policy/provenance.rst>`__).
+
+If you know the kernel, DSA, GPON or OMCI, please have a look: you will find
+what the tests did not, and every review is welcome.
 
 Status
 ======
