@@ -5,8 +5,9 @@
 The kernel series and the kernel under it
 =========================================
 
-``linux/`` is Linux 6.18.48 with this project's commits on top (ADR 0018: the
-series aims at mainline). This page says what those commits change in code
+``linux/`` is Linux 6.18.48 with this project's commits on top, kept to
+mainline's rules, though the project does not submit them (ADR 0018, ADR
+0021). This page says what those commits change in code
 that the kernel owns, and why, so that a maintainer who is offered one of them
 sees its reason, and so that nothing changes upstream's code without a line
 here. Files the series adds are its own and are not listed.

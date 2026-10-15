@@ -5,7 +5,7 @@
 ADR 0018: The kernel series aims at mainline
 =========================================================
 
-:Status: Accepted, amended (see "Amendments")
+:Status: Accepted, amended (see "Amendments"), and amended by 0021
 :Date: 2026-10-11
 :Decided-by: the owner, 2026-10-11
 

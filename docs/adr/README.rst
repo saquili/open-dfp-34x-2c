@@ -102,10 +102,13 @@ The index
      - Accepted
    * - 0018
      - The kernel series aims at mainline
-     - Accepted, amended
+     - Accepted, amended, and amended by 0021
    * - 0019
      - The settings are a file in the config partition's file system
      - Accepted
    * - 0020
      - The flash's image has no iproute2 and the scripts run no ip
+     - Accepted
+   * - 0021
+     - The kernel series keeps mainline's rules, without a submission
      - Accepted

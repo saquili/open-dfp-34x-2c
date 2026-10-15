@@ -292,9 +292,10 @@ Everything needed to build the system and put it on a stick:
 
 Each part keeps the layout of its upstream project: the kernel tree is laid
 out like Linux, the build like Buildroot. So each can be read, reused or sent
-upstream on its own (`ADR 0003 <docs/adr/0003-structure-and-scope.rst>`__);
-the kernel series aims at mainline Linux (`ADR 0018
-<docs/adr/0018-the-kernel-series-aims-at-mainline.rst>`__).
+upstream on its own (`ADR 0003 <docs/adr/0003-structure-and-scope.rst>`__).
+The kernel series keeps to mainline Linux's rules, so that anyone can take it
+there, but this project does not submit it (`ADR 0021
+<docs/adr/0021-the-kernel-series-keeps-mainline-rules-without-a-submission.rst>`__).
 
 Repository map
 --------------
