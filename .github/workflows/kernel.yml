@@ -89,7 +89,13 @@ jobs:
       # that adds a file would otherwise ask whether MAINTAINERS needs
       # updating. REPEATED_WORD takes a correct "had had" in a published
       # commit message for a typo, and a published message cannot change.
-      CHECKPATCH_IGNORE: "FILE_PATH_CHANGES,REPEATED_WORD"
+      # DT_SPLIT_BINDING_PATCH takes a binding that a commit deletes for a
+      # file outside the bindings (its new name is /dev/null);
+      # MACRO_ARG_PRECEDENCE asks for a macro argument that names a member,
+      # as in p->ops->op(), to be put in parentheses, which C does not allow;
+      # and UNCOMMENTED_DEFINITION misses the comment of a lock whose old
+      # definition the patch removes between the comment and the new one.
+      CHECKPATCH_IGNORE: "FILE_PATH_CHANGES,REPEATED_WORD,DT_SPLIT_BINDING_PATCH,MACRO_ARG_PRECEDENCE,UNCOMMENTED_DEFINITION"
     steps:
       - name: Install the tools
         # With python3-ply and python3-git, checkpatch validates SPDX

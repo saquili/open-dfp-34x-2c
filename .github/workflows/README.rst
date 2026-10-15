@@ -135,10 +135,15 @@ that stops with an error does.
     ``scripts/checkpatch.pl --strict`` on every commit above the imported
     release, with SPDX expressions validated by ``scripts/spdxcheck.py``.
     The ``Co-Authored-By:`` trailer, which checkpatch does not know, is
-    taken out of the patches first, and two types are not reported:
+    taken out of the patches first, and five types are not reported:
     ``FILE_PATH_CHANGES``, as a series adds its MAINTAINERS entries in its
-    last commit, and ``REPEATED_WORD``, which takes a correct "had had" in a
-    published commit message for a typo.
+    last commit; ``REPEATED_WORD``, which takes a correct "had had" in a
+    published commit message for a typo; ``DT_SPLIT_BINDING_PATCH``, which
+    takes a binding a commit deletes for a file outside the bindings;
+    ``MACRO_ARG_PRECEDENCE``, which asks for parentheses around a macro
+    argument that names a member, where C allows none; and
+    ``UNCOMMENTED_DEFINITION``, which misses the comment of a lock when the
+    patch removes the old definition between the comment and the new one.
     With no commits there yet, it checks that the split is the imported
     release. The split needs the commit the import was squashed from, which
     the repository keeps with a tag (``CONTRIBUTING.rst``); push that tag
