@@ -8,6 +8,8 @@
 
 #include "act.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 #define LIB "/usr/lib/onu/"
 #define LOWER "abcdefghijklmnopqrstuvwxyz"
 #define UPPER "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -79,7 +81,7 @@ const struct act_method act_methods[] = {
 	  .fd_out = true, .timeout_s = 600 },
 };
 
-const size_t act_method_count = sizeof(act_methods) / sizeof(act_methods[0]);
+const size_t act_method_count = ARRAY_SIZE(act_methods);
 
 const struct act_method *act_find(const char *name)
 {

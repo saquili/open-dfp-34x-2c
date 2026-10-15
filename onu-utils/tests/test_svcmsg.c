@@ -9,6 +9,8 @@
 
 #include "svcmsg.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 static int failures;
 static int checks;
 
@@ -181,24 +183,21 @@ static void test_respawn(void)
 static void test_set(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
-	const char *argv[] = { "/usr/sbin/netifd", "-c", "/run/config", NULL };
+	const char *const argv[] = { "/usr/sbin/netifd", "-c", "/run/config", NULL };
+	const char *const one[] = { "pond", NULL };
 
 	CHECK(svc_set_msg(text_begin(-1), "netifd", &r, false, NULL, NULL, argv) == 0);
-	CHECK(!strcmp(text_end(), "{\"name\":\"netifd\",\"instances\":{\"netifd\":{\"command\":"
-			   "[\"/usr/sbin/netifd\",\"-c\",\"/run/config\"],"
-			   "\"respawn\":[\"60\",\"2\",\"0\"]}}}"));
+	CHECK(!strcmp(text_end(), "{\"name\":\"netifd\",\"instances\":{\"netifd\":{\"command\":[\"/usr/sbin/netifd\",\"-c\",\"/run/config\"],\"respawn\":[\"60\",\"2\",\"0\"]}}}"));
 
-	const char *one[] = { "pond", NULL };
 	r = (struct svc_respawn){ 3600, 5, 3 };
 	CHECK(svc_set_msg(text_begin(-1), "pond", &r, true, NULL, NULL, one) == 0);
-	CHECK(!strcmp(text_end(), "{\"name\":\"pond\",\"instances\":{\"pond\":{\"command\":[\"pond\"],"
-			   "\"respawn\":[\"3600\",\"5\",\"3\"],\"stdout\":true,\"stderr\":true}}}"));
+	CHECK(!strcmp(text_end(), "{\"name\":\"pond\",\"instances\":{\"pond\":{\"command\":[\"pond\"],\"respawn\":[\"3600\",\"5\",\"3\"],\"stdout\":true,\"stderr\":true}}}"));
 }
 
 static void test_escapes(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
-	const char *argv[] = { "sh", "-c", "echo \"a\\b\"\n\t", NULL };
+	const char *const argv[] = { "sh", "-c", "echo \"a\\b\"\n\t", NULL };
 
 	/* The words reach the writer as they are. */
 	CHECK(svc_set_msg(text_begin(-1), "x", &r, false, NULL, NULL, argv) == 0);
@@ -208,7 +207,7 @@ static void test_escapes(void)
 static void test_no_room(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
-	const char *argv[] = { "a-program", "-x", NULL };
+	const char *const argv[] = { "a-program", "-x", NULL };
 	int calls;
 
 	CHECK(svc_set_msg(text_begin(-1), "x", &r, true, NULL, "pond", argv) == 0);
@@ -225,21 +224,19 @@ static void test_no_room(void)
 static void test_to_file(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
-	const char *argv[] = { "dhcp6d", "-w", "ppp1", NULL };
+	const char *const argv[] = { "dhcp6d", "-w", "ppp1", NULL };
 	const char *buf;
 
 	CHECK(svc_set_msg(text_begin(-1), "dhcp6d1", &r, false, "/run/dhcp6d.log", NULL, argv) == 0);
 	buf = text_end();
-	CHECK(strstr(buf, "\"command\":[\"/bin/sh\",\"-c\","
-			  "\"f=$1; shift; exec \\\"$@\\\" >>\\\"$f\\\" 2>&1\",\"sh\","
-			  "\"/run/dhcp6d.log\",\"dhcp6d\",\"-w\",\"ppp1\"]") != NULL);
+	CHECK(strstr(buf, "\"command\":[\"/bin/sh\",\"-c\",\"f=$1; shift; exec \\\"$@\\\" >>\\\"$f\\\" 2>&1\",\"sh\",\"/run/dhcp6d.log\",\"dhcp6d\",\"-w\",\"ppp1\"]") != NULL);
 	CHECK(strstr(buf, "stdout") == NULL);
 }
 
 static void test_user(void)
 {
 	struct svc_respawn r = SVC_RESPAWN_DEFAULT;
-	const char *argv[] = { "/usr/lib/onu/onu-run", "pond", NULL };
+	const char *const argv[] = { "/usr/lib/onu/onu-run", "pond", NULL };
 	struct svc_instance in;
 	const char *words[SVC_WORDS_MAX];
 	char line[128];
@@ -288,7 +285,7 @@ static void test_parse_instance(void)
 		"", "onu-run omcid", "--", "-l -o /run/x.log -- prog", "-r 60,2 -- prog",
 		"-r", "-o", "-x -- prog", "-l prog -- prog",
 	};
-	for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
 		snprintf(line, sizeof(line), "%s", bad[i]);
 		CHECK(svc_parse_instance(line, "x", &in, words, SVC_WORDS_MAX) == -1);
 	}
@@ -301,8 +298,8 @@ static void test_parse_instance(void)
 
 static void test_service(void)
 {
-	const char *omcid[] = { "onu-run", "omcid", NULL };
-	const char *dhcp6d[] = { "dhcp6d", "-w", "ppp1", NULL };
+	const char *const omcid[] = { "onu-run", "omcid", NULL };
+	const char *const dhcp6d[] = { "dhcp6d", "-w", "ppp1", NULL };
 	struct svc_instance in[2] = {
 		{ .name = "dhcp6d1", .respawn = SVC_RESPAWN_DEFAULT, .out = "/run/dhcp6d.log",
 		  .argv = dhcp6d },
@@ -314,13 +311,11 @@ static void test_service(void)
 
 	CHECK(svc_service_msg(text_begin(-1), "onu", in, 2) == 0);
 	buf = text_end();
-	static const char head[] = "{\"name\":\"onu\",\"instances\":{\"dhcp6d1\":{\"command\":"
-				   "[\"/bin/sh\",";
+	static const char head[] = "{\"name\":\"onu\",\"instances\":{\"dhcp6d1\":{\"command\":[\"/bin/sh\",";
 
 	CHECK(!strncmp(buf, head, strlen(head)));
 	CHECK(strstr(buf, "\"/run/dhcp6d.log\",\"dhcp6d\",\"-w\",\"ppp1\"]") != NULL);
-	CHECK(strstr(buf, "},\"omcid\":{\"command\":[\"onu-run\",\"omcid\"],"
-			  "\"respawn\":[\"60\",\"2\",\"0\"],\"stdout\":true,\"stderr\":true}}}") != NULL);
+	CHECK(strstr(buf, "},\"omcid\":{\"command\":[\"onu-run\",\"omcid\"],\"respawn\":[\"60\",\"2\",\"0\"],\"stdout\":true,\"stderr\":true}}}") != NULL);
 	/* With none, the service has no program left. */
 	CHECK(svc_service_msg(text_begin(-1), "onu", in, 0) == 0 &&
 	      !strcmp(text_end(), "{\"name\":\"onu\",\"instances\":{}}"));

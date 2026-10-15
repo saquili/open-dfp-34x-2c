@@ -39,7 +39,7 @@ int svc_parse_respawn(const char *s, struct svc_respawn *r)
 
 	if (strlen(s) >= sizeof(copy))
 		return -1;
-	strcpy(copy, s);
+	memcpy(copy, s, strlen(s) + 1);
 	threshold = copy;
 	timeout = strchr(threshold, ',');
 	if (!timeout)

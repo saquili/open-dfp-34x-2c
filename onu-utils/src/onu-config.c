@@ -131,6 +131,8 @@
 #include "password.h"
 #include "settings.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 /* The store, unless --store or ONU_STORE names another, and its most. */
 #define STORE_PATH "/config/open-dfp-34x-2c.conf"
 #define STORE_MAX 65536u
@@ -428,7 +430,7 @@ static bool files_verb(const char *verb)
 		"tls", "ssh", "token",
 	};
 
-	for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++)
+	for (size_t i = 0; i < ARRAY_SIZE(verbs); i++)
 		if (!strcmp(verb, verbs[i]))
 			return true;
 	return false;
@@ -919,9 +921,8 @@ int main(int argc, char **argv)
 			      !strcmp(argv[optind], "password-state") ||
 			      !strcmp(argv[optind], "identity-current"))) {
 		if (argc - optind != 1) {
-			fputs("usage: onu-config check | settings | current | defaults |"
-			      " change | password-check | password-state |"
-			      " identity-current\n", stderr);
+			fputs("usage: onu-config check | settings | current | defaults | change | password-check | password-state | identity-current\n",
+			      stderr);
 			return 2;
 		}
 		if (!strcmp(argv[optind], "password-check"))

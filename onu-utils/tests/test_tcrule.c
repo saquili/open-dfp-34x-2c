@@ -131,7 +131,8 @@ static void test_clsact(void)
 }
 
 /* tc filter add dev 3 ingress pref 1 protocol 802.1Q flower skip_sw
- * vlan_id 410 action trap: the boot's rule of the management VLAN. */
+ * vlan_id 410 action trap: the boot's rule of the management VLAN.
+ */
 static void test_vlan_trap_in_the_switch(void)
 {
 	const struct tc_rule r = {
@@ -186,7 +187,8 @@ static void test_vlan_drop(void)
 
 /* tc filter add dev 6 ingress pref 2 protocol ip flower dst_ip
  * 192.0.2.10/32 action drop: a session's packets to an address of the
- * stick's host side; a prefix keeps only its own bits. */
+ * stick's host side; a prefix keeps only its own bits.
+ */
 static void test_ipv4_destination_dropped(void)
 {
 	struct tc_rule r = {
@@ -221,7 +223,8 @@ static void test_ipv4_destination_dropped(void)
 }
 
 /* tc filter add dev 5 ingress matchall action mirred ingress redirect
- * dev 9: a feed of onu-apply, with the priority the kernel picks. */
+ * dev 9: a feed of onu-apply, with the priority the kernel picks.
+ */
 static void test_everything_redirected(void)
 {
 	const struct tc_rule r = {

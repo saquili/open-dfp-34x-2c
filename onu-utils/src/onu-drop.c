@@ -35,6 +35,8 @@
 
 #include <linux/capability.h>
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 static const struct {
 	const char *name;
 	int cap;
@@ -45,7 +47,7 @@ static const struct {
 	{ "sys_time", CAP_SYS_TIME },
 };
 
-static int usage(void)
+static int help(void)
 {
 	fprintf(stderr, "usage: onu-drop [-c CAP[,CAP...]] USER PROGRAM [ARGUMENT...]\n");
 	return 2;
@@ -58,10 +60,10 @@ static int caps_parse(const char *list, uint64_t *mask)
 	for (;;) {
 		size_t n = strcspn(list, ","), i;
 
-		for (i = 0; i < sizeof(caps_known) / sizeof(caps_known[0]); i++)
+		for (i = 0; i < ARRAY_SIZE(caps_known); i++)
 			if (strlen(caps_known[i].name) == n && !strncmp(list, caps_known[i].name, n))
 				break;
-		if (i == sizeof(caps_known) / sizeof(caps_known[0]))
+		if (i == ARRAY_SIZE(caps_known))
 			return -1;
 		*mask |= 1ull << caps_known[i].cap;
 		if (!list[n])
@@ -115,11 +117,11 @@ int main(int argc, char **argv)
 
 	if (argc > 2 && !strcmp(argv[1], "-c")) {
 		if (caps_parse(argv[2], &mask))
-			return usage();
+			return help();
 		first = 3;
 	}
 	if (argc - first < 2)
-		return usage();
+		return help();
 	pw = getpwnam(argv[first]);
 	if (!pw || !pw->pw_uid) {
 		fprintf(stderr, "onu-drop: %s is no account to run as\n", argv[first]);

@@ -54,7 +54,7 @@
 
 #define TIMEOUT_MS 3000
 
-static int usage(void)
+static int help(void)
 {
 	fputs("usage: onu-svc start NAME [-r THRESHOLD,TIMEOUT,RETRY] [-l | -o FILE] [-u USER] --\n"
 	      "                       PROGRAM [ARG...]\n"
@@ -194,13 +194,13 @@ static int start(int argc, char **argv)
 	int ch, ret;
 
 	if (argc < 2 || !svc_name_ok(name))
-		return usage();
+		return help();
 	optind = 2;
 	while ((ch = getopt(argc, argv, "+r:lo:u:")) != -1) {
 		switch (ch) {
 		case 'r':
 			if (svc_parse_respawn(optarg, &r))
-				return usage();
+				return help();
 			break;
 		case 'l':
 			log = true;
@@ -210,16 +210,16 @@ static int start(int argc, char **argv)
 			break;
 		case 'u':
 			if (!svc_name_ok(optarg))
-				return usage();
+				return help();
 			user = optarg;
 			break;
 		default:
-			return usage();
+			return help();
 		}
 	}
 	/* The program follows "--", which getopt has taken. */
 	if (optind >= argc || strcmp(argv[optind - 1], "--") || (log && out))
-		return usage();
+		return help();
 	w = writer(&b, &bw);
 	if (svc_set_msg(&w, name, &r, log, out, user, (const char *const *)(argv + optind))) {
 		fprintf(stderr, "onu-svc: no room for the message of %s\n", name);
@@ -276,7 +276,7 @@ static int dir_msg(const char *name, const char *dir, struct blob_buf *b)
 			fprintf(stderr, "onu-svc: %s: more than %d instances\n", dir, INSTANCES_MAX);
 			goto out;
 		}
-		strcpy(names[n++], e->d_name);
+		memcpy(names[n++], e->d_name, strlen(e->d_name) + 1);
 	}
 	qsort(names, n, sizeof(names[0]), by_name);
 	for (size_t i = 0; i < n; i++) {
@@ -327,7 +327,7 @@ static int sync_dir(const char *name, const char *dir)
 	int ret = 1;
 
 	if (!svc_name_ok(name))
-		return usage();
+		return help();
 	for (int round = 0; round < 8; round++) {
 		if (dir_msg(name, dir, now))
 			goto out;
@@ -365,23 +365,23 @@ static int by_service(const char *method, const char *name, ubus_data_handler_t 
 int main(int argc, char **argv)
 {
 	if (argc < 2)
-		return usage();
+		return help();
 	if (!strcmp(argv[1], "start"))
 		return start(argc - 1, argv + 1);
 	if (!strcmp(argv[1], "sync")) {
 		if (argc != 4)
-			return usage();
+			return help();
 		return sync_dir(argv[2], argv[3]);
 	}
 	if (!strcmp(argv[1], "stop")) {
 		if (argc != 3 || !svc_name_ok(argv[2]))
-			return usage();
+			return help();
 		return by_service("delete", argv[2], NULL);
 	}
 	if (!strcmp(argv[1], "list")) {
 		if (argc > 3 || (argc == 3 && !svc_name_ok(argv[2])))
-			return usage();
+			return help();
 		return by_service("list", argc == 3 ? argv[2] : NULL, print_list);
 	}
-	return usage();
+	return help();
 }

@@ -41,6 +41,8 @@
 
 #include "act.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 #define OUTPUT_MAX 16384
 #define TIMEOUT_S 30
 
@@ -313,7 +315,7 @@ int main(void)
 {
 	int err;
 
-	if (act_method_count > sizeof(g_methods) / sizeof(g_methods[0]))
+	if (act_method_count > ARRAY_SIZE(g_methods))
 		return 1;
 	for (size_t i = 0; i < act_method_count; i++) {
 		const struct act_method *m = &act_methods[i];

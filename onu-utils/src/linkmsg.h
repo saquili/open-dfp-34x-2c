@@ -50,7 +50,8 @@ struct link_set {
 struct nlmsghdr *link_set_msg(char *buf, const struct link_set *s, uint32_t seq);
 
 /* A VLAN interface @name of VLAN @vid on the interface @link_ifindex; it is
- * refused when the name is taken. */
+ * refused when the name is taken.
+ */
 struct nlmsghdr *link_vlan_add_msg(char *buf, int link_ifindex, const char *name,
 				   uint16_t vid, uint32_t seq);
 

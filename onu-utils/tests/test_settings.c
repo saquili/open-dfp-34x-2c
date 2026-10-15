@@ -28,7 +28,8 @@ static char g_out[8192];
 
 /* Take the lines of @text over the defaults, as onu-config check does: 0, or
  * -1 at the first line that is not taken, or -2 when the whole makes no
- * sense; the settings are in @s and their lines in g_out. */
+ * sense; the settings are in @s and their lines in g_out.
+ */
 static unsigned int g_mgmt[2];
 
 static int judge(struct settings *s, const char *text)

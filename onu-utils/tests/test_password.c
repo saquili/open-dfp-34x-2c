@@ -43,8 +43,7 @@ static void test_pbkdf2(void)
 
 /* PBKDF2-HMAC-SHA256 of "example-secret", 1000 iterations, salt 01..10. */
 static const char g_older[] =
-	"pbkdf2-sha256$1000$0102030405060708090a0b0c0d0e0f10$"
-	"682b24383b17ce055ed70ead8c23895db05d4a3717dffd00133fc69d366d3627";
+	"pbkdf2-sha256$1000$0102030405060708090a0b0c0d0e0f10$682b24383b17ce055ed70ead8c23895db05d4a3717dffd00133fc69d366d3627";
 
 /* The SHA-256 crypt specification's own vectors. */
 static const char g_crypt[] = "$5$saltstring$5B8vYYiY.CVt1RlTTf8KbXBH3hsxY/GNooZaBBGWEc5";

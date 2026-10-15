@@ -10,6 +10,8 @@
 
 #include "settings.h"
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
 enum kind {
 	K_GEM,
 	K_VLAN,
@@ -242,7 +244,7 @@ int settings_line(struct settings *s, const char *line, char *err,
 		return 0;
 	}
 
-	for (size_t g = 0; g < sizeof(g_gone) / sizeof(g_gone[0]); g++)
+	for (size_t g = 0; g < ARRAY_SIZE(g_gone); g++)
 		if (!strcmp(key, g_gone[g]))
 			return 0;
 	k = key_index(key);

@@ -192,7 +192,7 @@ static struct mnl_socket *open_bus(int bus)
 	return nl;
 }
 
-static int usage(void)
+static int help(void)
 {
 	fprintf(stderr,
 		"usage: onu-nl clsact add|del DEV\n"
@@ -218,7 +218,7 @@ static bool decimal(const char *s, unsigned long min, unsigned long max,
 	return *v >= min && *v <= max;
 }
 
-static int interface(const char *name)
+static int ifindex_of(const char *name)
 {
 	int ifindex = (int)if_nametoindex(name);
 
@@ -227,7 +227,7 @@ static int interface(const char *name)
 	return ifindex;
 }
 
-static int clsact(int argc, char **argv)
+static int clsact_cmd(int argc, char **argv)
 {
 	char buf[MNL_SOCKET_BUFFER_SIZE];
 	struct mnl_socket *nl;
@@ -235,9 +235,9 @@ static int clsact(int argc, char **argv)
 	int ifindex, err;
 
 	if (argc != 2 || (strcmp(argv[0], "add") && strcmp(argv[0], "del")))
-		return usage();
+		return help();
 	add = !strcmp(argv[0], "add");
-	ifindex = interface(argv[1]);
+	ifindex = ifindex_of(argv[1]);
 	if (!ifindex)
 		return 1;
 	nl = open_bus(NETLINK_ROUTE);
@@ -294,15 +294,14 @@ static bool rule_args(int argc, char **argv, struct tc_rule *r)
 			break;
 		}
 	}
-	if (i == argc - 1 && !strcmp(argv[i], "trap")) {
+	if (i == argc - 1 && !strcmp(argv[i], "trap"))
 		r->action = TC_RULE_TRAP;
-	} else if (i == argc - 1 && !strcmp(argv[i], "drop")) {
+	else if (i == argc - 1 && !strcmp(argv[i], "drop"))
 		r->action = TC_RULE_DROP;
-	} else if (i == argc - 2 && !strcmp(argv[i], "redirect")) {
+	else if (i == argc - 2 && !strcmp(argv[i], "redirect"))
 		r->action = TC_RULE_REDIRECT;
-	} else {
+	else
 		return false;
-	}
 	return true;
 }
 
@@ -316,7 +315,7 @@ static int pref_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
-static int filter(int argc, char **argv)
+static int filter_cmd(int argc, char **argv)
 {
 	static uint8_t seen[65536 / 8];
 	char buf[MNL_SOCKET_BUFFER_SIZE];
@@ -326,24 +325,24 @@ static int filter(int argc, char **argv)
 	int ifindex, err;
 
 	if (argc < 2)
-		return usage();
+		return help();
 	if (!strcmp(argv[0], "add")) {
 		if (!rule_args(argc - 1, argv + 1, &r))
-			return usage();
+			return help();
 	} else if (!strcmp(argv[0], "del")) {
 		if (argc != 4 || strcmp(argv[2], "pref") ||
 		    !decimal(argv[3], 1, 65535, &pref))
-			return usage();
+			return help();
 	} else if (strcmp(argv[0], "prefs") || argc != 2) {
-		return usage();
+		return help();
 	}
-	ifindex = interface(argv[1]);
+	ifindex = ifindex_of(argv[1]);
 	if (!ifindex)
 		return 1;
 	if (!strcmp(argv[0], "add")) {
 		r.ifindex = ifindex;
 		if (r.action == TC_RULE_REDIRECT) {
-			r.to_ifindex = interface(argv[argc - 1]);
+			r.to_ifindex = ifindex_of(argv[argc - 1]);
 			if (!r.to_ifindex)
 				return 1;
 		}
@@ -399,7 +398,7 @@ static int param(int argc, char **argv)
 	int err;
 
 	if (argc < 1 || argc > 2 || !*name || strlen(name) >= DL_NAME_MAX)
-		return usage();
+		return help();
 	nl = open_bus(NETLINK_GENERIC);
 	if (!nl)
 		return 1;
@@ -513,23 +512,23 @@ static int link_cmd(int argc, char **argv)
 	int ifindex, err;
 
 	if (argc < 2)
-		return usage();
+		return help();
 	if (!strcmp(argv[0], "set")) {
 		if (!link_set_args(argc - 1, argv + 1, &s))
-			return usage();
+			return help();
 		what = "link not set";
 	} else if (!strcmp(argv[0], "add")) {
 		if (argc != 5 || strcmp(argv[1], "vlan") || !name_arg(argv[3]) ||
 		    !decimal(argv[4], 1, 4094, &vid))
-			return usage();
+			return help();
 		what = "link not added";
 	} else if (!strcmp(argv[0], "del") && argc == 2) {
 		what = "link not removed";
 	} else {
-		return usage();
+		return help();
 	}
 	/* "set" and "del" name the interface first, "add vlan" the one it goes on. */
-	ifindex = interface(argv[!strcmp(argv[0], "add") ? 2 : 1]);
+	ifindex = ifindex_of(argv[!strcmp(argv[0], "add") ? 2 : 1]);
 	if (!ifindex)
 		return 1;
 	nl = open_bus(NETLINK_ROUTE);
@@ -627,11 +626,11 @@ static int addr_wait(int argc, char **argv)
 	    (size_t)(slash - argv[1]) >= sizeof(text) ||
 	    !decimal(slash + 1, 1, 32, &plen) ||
 	    (argc == 3 && !decimal(argv[2], 0, 3600, &seconds)))
-		return usage();
+		return help();
 	memcpy(text, argv[1], (size_t)(slash - argv[1]));
 	text[slash - argv[1]] = '\0';
 	if (inet_pton(AF_INET, text, &w.addr) != 1)
-		return usage();
+		return help();
 	w.plen = (uint8_t)plen;
 
 	/* Listen first, so that no address that comes during the dump is lost. */
@@ -675,16 +674,16 @@ static int addr_wait(int argc, char **argv)
 int main(int argc, char **argv)
 {
 	if (argc < 3)
-		return usage();
+		return help();
 	if (!strcmp(argv[1], "addr-wait"))
 		return addr_wait(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "clsact"))
-		return clsact(argc - 2, argv + 2);
+		return clsact_cmd(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "filter"))
-		return filter(argc - 2, argv + 2);
+		return filter_cmd(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "param"))
 		return param(argc - 2, argv + 2);
 	if (!strcmp(argv[1], "link"))
 		return link_cmd(argc - 2, argv + 2);
-	return usage();
+	return help();
 }
