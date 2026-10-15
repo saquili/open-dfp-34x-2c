@@ -173,7 +173,7 @@ Not done yet
   been tested.
 * An update file carries a checksum against damage, but no signature
   (`ADR 0017 <docs/adr/0017-update-files-carry-no-signature.rst>`__).
-* The other known gaps are kept as the repository's issues.
+* Gaps found from here on are kept as the repository's issues.
 
 Other sticks
 ============
