@@ -89,6 +89,10 @@ static int pon_nl_stats_fill(struct sk_buff *msg,
 		  offsetof(struct pon_dev_stats, fec_uncorrectable_codewords) },
 		{ PON_A_DEV_STATS_FEC_CODEWORDS,
 		  offsetof(struct pon_dev_stats, fec_codewords) },
+		{ PON_A_DEV_STATS_PASSWORD_REQUESTS,
+		  offsetof(struct pon_dev_stats, password_requests) },
+		{ PON_A_DEV_STATS_PASSWORD_REPLIES,
+		  offsetof(struct pon_dev_stats, password_replies) },
 	};
 	struct nlattr *nest;
 	unsigned int i;
@@ -156,6 +160,11 @@ static int pon_nl_dev_fill(struct sk_buff *msg, struct pon_device *pon,
 		goto cancel;
 	if (st->have_power_level &&
 	    nla_put_u32(msg, PON_A_DEV_POWER_LEVEL, st->power_level))
+		goto cancel;
+	if (st->have_eqd && nla_put_u32(msg, PON_A_DEV_EQD, st->eqd))
+		goto cancel;
+	if (st->have_onu_state_time &&
+	    nla_put_uint(msg, PON_A_DEV_ONU_STATE_TIME, st->onu_state_ms))
 		goto cancel;
 
 	/*

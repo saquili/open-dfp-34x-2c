@@ -124,6 +124,10 @@ struct pon_gem_config {
  *				 FEC corrects
  * @fec_codewords: downstream codewords received while the downstream
  *		   carried FEC, all of them decoded
+ * @password_requests: Request_Password messages the ONU acted on, those
+ *		       directed to it in O5 (G.984.3 clause 9.2.3.9)
+ * @password_replies: of those, the requests answered with the Password
+ *		      message; fewer when the ONU had no password to give
  *
  * Totals since the MAC was brought up, not register values: a MAC whose
  * counters clear when read adds them up, so that every reader sees the same
@@ -146,6 +150,8 @@ struct pon_dev_stats {
 	u64 fec_corrected_codewords;
 	u64 fec_uncorrectable_codewords;
 	u64 fec_codewords;
+	u64 password_requests;
+	u64 password_replies;
 };
 
 /**
@@ -169,6 +175,13 @@ struct pon_dev_stats {
  * @power_level: the transmit power level, a PON_POWER_LEVEL_* value; valid
  *		 with @have_power_level
  * @have_power_level: @power_level is set
+ * @eqd: the equalization delay the OLT assigned with Ranging_Time, in
+ *	 upstream bit periods; valid with @have_eqd
+ * @have_eqd: @eqd is set, which a MAC does in O5 only
+ * @onu_state_ms: how long the ONU has been in @onu_state, in milliseconds;
+ *		  valid with @have_onu_state_time. A MAC leaves it out when it
+ *		  compares two reports for a change, as it does the counters.
+ * @have_onu_state_time: @onu_state_ms is set
  *
  * What is not known stays "nothing known": @onu_id and @omcc_port_id -1,
  * everything else 0. The class hands the structure to
@@ -192,6 +205,10 @@ struct pon_dev_status {
 	bool have_stats;
 	u32 power_level;
 	bool have_power_level;
+	u32 eqd;
+	bool have_eqd;
+	u64 onu_state_ms;
+	bool have_onu_state_time;
 };
 
 /**

@@ -1435,13 +1435,23 @@ Attributes of the dev object
      - u32, ``power-level``
      - While the MAC transmits at a level the OLT can change: 0 low,
        1 medium, 2 high, as Serial_Number_ONU carries it.
+   * - ``eqd``
+     - 15
+     - u32
+     - In O5. The equalization delay from Ranging_Time, in upstream bit
+       periods.
+   * - ``onu-state-time``
+     - 16
+     - uint
+     - With ``onu-state``, when the MAC knows it. How long the ONU has been
+       in that state, in milliseconds.
 
-The ``dev-stats`` nest holds fourteen counters numbered from 1 in this order:
+The ``dev-stats`` nest holds sixteen counters numbered from 1 in this order:
 ``sn-requests``, ``ranging-requests``, ``ploam-rx``, ``ploam-crc-errors``,
 ``ploam-overflows``, ``bwmap-rx``, ``bwmap-crc-errors``, ``bwmap-overflows``,
 ``gem-frames``, ``bip-errors``, ``fec-corrected-bytes``,
-``fec-corrected-codewords``, ``fec-uncorrectable-codewords`` and
-``fec-codewords``. The tcont object has ``id`` (1), the ONU's
+``fec-corrected-codewords``, ``fec-uncorrectable-codewords``,
+``fec-codewords``, ``password-requests`` and ``password-replies``. The tcont object has ``id`` (1), the ONU's
 number, ``index`` (2), the T-CONT's index, and ``alloc-id`` (3), the Alloc-ID
 bound to it. The time of day of ``tod-set`` has ``id`` (1), the ONU's
 number, ``superframe`` (2, u32, below 2^30), the superframe counter of the
@@ -1465,8 +1475,9 @@ in ``include/uapi/linux/pon.h``; the commands are ``PON_CMD_DEV_GET`` (1),
        interface the GEM ports stack on), ``type``, ``onu-state``, ``onu-id``,
        ``alloc-id`` (repeated), ``omcc-port-id``, ``alarms``, ``stats`` (a
        nest), ``serial-number`` (binary, exactly 8 bytes), ``num-gem-ports``,
-       ``num-tconts``, ``num-tcont-queues`` and ``power-level``. Their
-       numbers, the values of ``power-level``, and the command numbers
+       ``num-tconts``, ``num-tcont-queues``, ``power-level``, ``eqd`` and
+       ``onu-state-time``. Their numbers, the values of ``power-level``, and
+       the command numbers
        (``dev-get`` 1, ``dev-change-ntf`` 2, ``tcont-get`` 3, ``tcont-set``
        4, ``tod-set`` 5), are ABI.
      - M
@@ -1476,8 +1487,9 @@ in ``include/uapi/linux/pon.h``; the commands are ``PON_CMD_DEV_GET`` (1),
        ``ploam-rx``, ``ploam-crc-errors``, ``ploam-overflows``, ``bwmap-rx``,
        ``bwmap-crc-errors``, ``bwmap-overflows``, ``gem-frames``,
        ``bip-errors``, ``fec-corrected-bytes``, ``fec-corrected-codewords``,
-       ``fec-uncorrectable-codewords`` and ``fec-codewords``, numbered from 1
-       in that order (ABI).
+       ``fec-uncorrectable-codewords``, ``fec-codewords``,
+       ``password-requests`` and ``password-replies``, numbered from 1 in that
+       order (ABI).
      - I
      - Design choice; no check on the board reads the nest. A ``dev-get`` with
        ``stats`` decoded against the header would.
@@ -1608,7 +1620,9 @@ claim a MAC in reset cannot make. The counters are the exception: inside the
        ``ifindex``, ``type`` and ``onu-state`` when 0; ``onu-id`` and
        ``omcc-port-id`` when negative; ``alarms`` without ``have_alarms``;
        ``stats`` without ``have_stats``; ``serial-number`` without
-       ``have_serial``. ONU-ID 0, Port-ID 0 and Alloc-ID 0 are valid values,
+       ``have_serial``; ``power-level``, ``eqd`` and ``onu-state-time``
+       without ``have_power_level``, ``have_eqd`` and
+       ``have_onu_state_time``. ONU-ID 0, Port-ID 0 and Alloc-ID 0 are valid values,
        and "no alarms" is a claim a MAC in reset cannot make.
      - M
      - Notifications watched across ``ip link set pon down`` and ``up`` (see
@@ -1645,6 +1659,31 @@ claim a MAC in reset cannot make. The counters are the exception: inside the
      - I
      - Design choice. The 3 dB is the step this driver measures (see the
        driver's page).
+   * - ``password-requests`` counts the Request_Password messages the ONU
+       acted on, those directed to it in O5 (ITU-T G.984.3 clause 9.2.3.9),
+       and ``password-replies`` those of them it answered with the Password
+       message. An OLT that does not check passwords never asks, so 0
+       requests is the common case; fewer replies than requests means that
+       the ONU had no password to give, and what the OLT does then is its
+       own. The password itself is never reported.
+     - T
+     - ``pon.dev_status`` of the selftest, over the stand-in MAC, reads both
+       counters from the nest.
+   * - ``eqd`` is the equalization delay the OLT assigned with Ranging_Time
+       (clause 9.2.3.4), in upstream bit periods, sent in O5 only: before,
+       the delay is the one Upstream_Overhead preassigned, or none. An ONU
+       further from the OLT gets less, but the distance cannot be told from
+       it without the OLT's own equalization target.
+     - T
+     - ``pon.dev_status``: ``eqd`` in O5, none in O1.
+   * - ``onu-state-time`` is how long the ONU has been in ``onu-state``, in
+       milliseconds, so that a reader that polls can tell how long a
+       session has lasted. Its passing is not a change: a MAC compares
+       reports without it, as without the counters, and sends no
+       notification for it.
+     - T
+     - ``pon.dev_status``: it grows by the time slept, and starts again in a
+       new state.
 
 Dumps
 -----

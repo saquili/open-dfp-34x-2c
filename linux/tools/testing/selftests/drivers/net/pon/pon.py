@@ -15,6 +15,7 @@ import select
 import socket
 import struct
 import sys
+import time
 from pathlib import Path
 
 KSFT_DIR = Path(__file__).resolve().parents[3]
@@ -22,6 +23,7 @@ sys.path.insert(0, (KSFT_DIR / "net").as_posix())
 
 # pylint: disable=wrong-import-position
 from lib.py import ksft_run, ksft_exit, ksft_eq, ksft_ne, ksft_true, ksft_in
+from lib.py import ksft_ge, ksft_lt
 from lib.py import KsftSkipEx, NlError, YnlFamily, cmd, ip
 from lib.py.ynl import SPEC_PATH
 
@@ -226,13 +228,23 @@ def dev_status(_cfg) -> None:
     ksft_eq(dev["serial-number"], b"SIMU\0\0\0\1")
     ksft_eq(dev["power-level"], "high")
     ksft_eq(dev["stats"]["gem-frames"], 42)
+    ksft_eq(dev["stats"]["password-requests"], 3)
+    ksft_eq(dev["stats"]["password-replies"], 2)
+    ksft_eq(dev["eqd"], 12345)
     ksft_true(not dev.get("alarms"), "no alarm in O5")
+
+    # The time in the state runs on, and a new state starts it again.
+    first = dev["onu-state-time"]
+    time.sleep(0.3)
+    ksft_ge(SIM.get()["onu-state-time"] - first, 250)
 
     # Below O4 the ONU has no ONU-ID, and in O1 the downstream is lost.
     dfs_write("state", 1)
     dev = SIM.get()
     ksft_eq(dev["onu-state"], "o1")
     ksft_true("onu-id" not in dev, "no ONU-ID in O1")
+    ksft_true("eqd" not in dev, "no equalization delay in O1")
+    ksft_lt(dev["onu-state-time"], 250)
     ksft_in("los", dev["alarms"])
     dfs_write("state", 5)
 

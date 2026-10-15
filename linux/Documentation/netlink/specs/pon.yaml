@@ -221,6 +221,21 @@ attribute-sets:
           Downstream codewords received while the downstream carried FEC,
           all of them decoded. 0 while it carries none.
         type: uint
+      -
+        name: password-requests
+        doc: >-
+          Request_Password messages (ITU-T G.984.3 clause 9.2.3.9) the ONU
+          acted on: those directed to it while it was in O5. 0 when the OLT
+          never asked, as an OLT that does not check passwords does not.
+        type: uint
+      -
+        name: password-replies
+        doc: >-
+          Of those, the requests the ONU answered with the Password message
+          (clause 9.2.4.2). Fewer than password-requests means that the ONU
+          had no password to give when the OLT asked; what the OLT then does
+          is its own.
+        type: uint
   -
     name: dev
     doc: >-
@@ -339,6 +354,23 @@ attribute-sets:
           levels the OLT can change.
         type: u32
         enum: power-level
+      -
+        name: eqd
+        doc: >-
+          The equalization delay the OLT assigned with Ranging_Time (ITU-T
+          G.984.3 clause 9.2.3.4), in upstream bit periods: the time the ONU
+          waits, beyond its response time, before it transmits, so that every
+          ONU's bursts reach the OLT as though from one distance. An ONU
+          further from the OLT gets less. Absent outside O5.
+        type: u32
+      -
+        name: onu-state-time
+        doc: >-
+          How long the ONU has been in its activation state onu-state, in
+          milliseconds. Absent with onu-state, and when the MAC does not
+          know. Its passing is no change of the ONU's status: a MAC sends
+          dev-change-ntf for a change of the other attributes, not for this.
+        type: uint
   -
     name: tcont
     doc: >-
@@ -441,6 +473,8 @@ operations:
             - num-tconts
             - num-tcont-queues
             - power-level
+            - eqd
+            - onu-state-time
 
       dump:
         reply: *dev-attrs

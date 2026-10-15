@@ -30,6 +30,7 @@
 #define PON_SIM_QUEUES		4
 #define PON_SIM_ONU_ID		7
 #define PON_SIM_OMCC_PORT_ID	4095
+#define PON_SIM_EQD		12345
 #define PON_SIM_RX_LEN		64
 
 /**
@@ -72,6 +73,8 @@ struct pon_sim {
 	/* protects the members below it */
 	struct mutex lock;
 	u32 state;
+	/* when @state was entered, in jiffies */
+	u64 since;
 	bool omci_up;
 	DECLARE_BITMAP(flows, PON_SIM_FLOWS);
 	struct pon_gem_config cfg[PON_SIM_FLOWS];
@@ -294,8 +297,16 @@ static void pon_sim_fill_status(struct pon_sim *sim, struct pon_dev_status *st)
 	st->num_alloc_ids = n;
 	st->have_stats = true;
 	st->stats.gem_frames = 42;
+	st->stats.password_requests = 3;
+	st->stats.password_replies = 2;
 	st->power_level = PON_POWER_LEVEL_HIGH;
 	st->have_power_level = true;
+	if (sim->state == PON_ONU_STATE_O5) {
+		st->eqd = PON_SIM_EQD;
+		st->have_eqd = true;
+	}
+	st->onu_state_ms = jiffies64_to_msecs(get_jiffies_64() - sim->since);
+	st->have_onu_state_time = true;
 }
 
 static int pon_sim_dev_status(struct pon_device *pon, struct pon_dev_status *st)
@@ -428,6 +439,8 @@ static ssize_t pon_sim_state_write(struct file *file, const char __user *ubuf,
 		return -EINVAL;
 
 	mutex_lock(&sim->lock);
+	if (sim->state != state)
+		sim->since = get_jiffies_64();
 	sim->state = state;
 	pon_sim_fill_status(sim, &st);
 	pon_device_notify(sim->pon, &st);
@@ -566,6 +579,7 @@ static int __init pon_sim_init(void)
 		return -ENOMEM;
 	mutex_init(&sim->lock);
 	sim->state = PON_ONU_STATE_O5;
+	sim->since = get_jiffies_64();
 	sim->omci_up = true;
 
 	sim->pdev = platform_device_register_simple("pon-sim", PLATFORM_DEVID_NONE,
