@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 from . import cases_system, cases_net, cases_pon, cases_data, cases_update  # noqa: F401
-from .access import Settings, bench_remote, redact, stick_remote
+from .access import NETNS, Settings, bench_remote, redact, stick_remote
 from .core import CASES, FAIL, Context, run_case, select
 from .tools import PROGRAMS, TOOLS_DIR, remove
 from .report import as_json, counts, log, page
@@ -40,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="the bench host, as ssh knows it (DEVTEST_BENCH)")
     parser.add_argument("--stick", default=os.environ.get("DEVTEST_STICK", ""),
                         help="the stick's management address (DEVTEST_STICK)")
+    parser.add_argument("--bench-netns", default=os.environ.get("DEVTEST_BENCH_NETNS", ""),
+                        metavar="NAME",
+                        help="the bench host's network namespace that holds the stick: the "
+                             "stick is reached, and every bench command run, inside it, as "
+                             "root (DEVTEST_BENCH_NETNS)")
     parser.add_argument("--olt-port", default=os.environ.get("DEVTEST_OLT_PORT", ""),
                         help="the bench host's port on the network side, behind the OLT")
     parser.add_argument("--subscriber-port", default=os.environ.get("DEVTEST_SUBSCRIBER_PORT", ""),
@@ -77,12 +82,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if not args.bench or not args.stick:
         parser.error("--bench and --stick are needed")
+    if args.bench_netns and not NETNS.fullmatch(args.bench_netns):
+        parser.error(f"--bench-netns: {args.bench_netns!r} is not a namespace's name")
 
     token = ""
     if args.token_file:
         with open(args.token_file, encoding="utf-8") as handle:
             token = handle.read().strip()
-    settings = Settings(bench=args.bench, stick=args.stick, bench_sudo=not args.no_sudo,
+    settings = Settings(bench=args.bench, stick=args.stick, bench_netns=args.bench_netns,
+                        bench_sudo=not args.no_sudo,
                         olt_port=args.olt_port, subscriber_port=args.subscriber_port,
                         pond_token=token, reload=args.reload, tools=args.tools,
                         update=args.update, overwrite_shipped=args.overwrite_shipped)

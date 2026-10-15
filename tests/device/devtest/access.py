@@ -8,6 +8,12 @@ link ends, and the network side, behind the OLT. Its host key is made again at
 every boot, so it is not checked. Commands run with the shell of the remote end
 and come back as a Reply.
 
+A bench host may keep the stick in a network namespace of its own, as one that
+serves two sticks with the same management address does, each behind its own
+namespace. The address alone then names whichever stick the bench's own
+namespace has, so with a namespace given the bench reaches the stick from
+inside it, with nc, and runs every command of a case there too.
+
 Whatever a test keeps, its evidence and its log, passes through redact(), which
 takes out what names one unit or one bench: MAC addresses, GPON serial numbers,
 and the names and addresses that the settings give for the bench host and the
@@ -22,7 +28,7 @@ import re
 import shlex
 import subprocess
 import time
-from typing import Sequence
+from typing import Callable, Sequence
 
 MAC = re.compile(r"\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b")
 # A GPON serial number: the four letters of the vendor ID, then eight hex
@@ -39,6 +45,9 @@ class Settings:
     subscriber_port: str = ""
     pond_token: str = ""
     ssh_options: tuple[str, ...] = ()
+    # The bench host's network namespace that holds the stick, or "" for its
+    # own; see the module's description.
+    bench_netns: str = ""
     reload: str = ""
     # A build's diag directory, which has the tools that a case needs and the
     # stick lacks (tools.py).
@@ -117,17 +126,22 @@ def redact(text: str, settings: Settings | None = None) -> str:
 class Remote:
     """One end that runs shell commands: the stick or the bench host."""
 
-    def __init__(self, name: str, ssh: Sequence[str], log: list[str]):
+    def __init__(self, name: str, ssh: Sequence[str], log: list[str],
+                 wrap: Callable[[str], str] | None = None):
         self.name = name
         self.ssh = list(ssh)
         self.log = log
         # Run before each command, not recorded with it: the path to tools
         # that were put on the stick for the run (tools.py).
         self.prefix = ""
+        # What each command is run in, not recorded with it either: the
+        # bench's namespace that holds the stick.
+        self.wrap = wrap
 
     def run(self, command: str, *, timeout: float = 60.0, check: bool = False,
             stdin: str | bytes | None = None) -> Reply:
-        argv = self.ssh + [self.prefix + command]
+        remote = self.prefix + command
+        argv = self.ssh + [self.wrap(remote) if self.wrap else remote]
         start = time.monotonic()
         binary = isinstance(stdin, bytes)
         try:
@@ -160,16 +174,41 @@ def ssh_base(settings: Settings) -> list[str]:
             *settings.ssh_options]
 
 
+# A name that "ip netns" takes and that needs no quoting.
+NETNS = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}")
+
+
+def in_netns(settings: Settings, command: str) -> str:
+    """@command as the bench runs it inside the stick's namespace, as root."""
+    return (f"sudo -n ip netns exec {settings.bench_netns} sh -c "
+            + shlex.quote(command))
+
+
+def jump(settings: Settings) -> list[str]:
+    """The ssh options that reach the stick through the bench host.
+
+    Without a namespace, ssh's own jump. With one, the bench connects to the
+    stick from inside it with nc: a jump connects from the bench's own
+    namespace, where the stick's address may be another stick's.
+    """
+    if not settings.bench_netns:
+        return ["-J", settings.bench]
+    inner = ssh_base(settings) + [settings.bench, "sudo", "-n", "ip", "netns", "exec",
+                                  settings.bench_netns, "nc", "%h", "%p"]
+    return ["-o", "ProxyCommand=" + shlex.join(inner)]
+
+
 def bench_remote(settings: Settings, log: list[str]) -> Remote:
     argv = ssh_base(settings) + ["-o", "RequestTTY=no", "-o", "RemoteCommand=none",
                                  settings.bench]
-    return Remote("bench", argv, log)
+    wrap = (lambda command: in_netns(settings, command)) if settings.bench_netns else None
+    return Remote("bench", argv, log, wrap)
 
 
 def stick_remote(settings: Settings, log: list[str]) -> Remote:
     argv = ssh_base(settings) + ["-o", "StrictHostKeyChecking=no",
                                  "-o", "UserKnownHostsFile=/dev/null",
-                                 "-J", settings.bench, f"root@{settings.stick}"]
+                                 *jump(settings), f"root@{settings.stick}"]
     return Remote("stick", argv, log)
 
 

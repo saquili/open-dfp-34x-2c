@@ -37,6 +37,18 @@ What it needs
   10 s, then lifts the limit for 3 s and sets it back; the stick answers slowly
   while the flood lasts. The hardware clock's case switches the clock's pulse
   on for a few seconds and off again.
+* A bench host that serves more than one stick may give each its own network
+  namespace, so that two sticks can keep the same management address: the
+  address in the bench's own namespace is then another stick's, and a run
+  through it would test, and with ``--destructive`` restart, the wrong one.
+  ``--bench-netns NAME`` names the namespace that holds the stick under test:
+  ssh reaches the stick through the bench host with ``nc``, started inside the
+  namespace, instead of ssh's own jump, which connects from the bench's own
+  namespace; and every command of a case that runs on the bench host, such as
+  the requests to the status daemon, runs inside it too, as root. This needs
+  ``nc`` on the bench host and ``sudo`` without a password for
+  ``ip netns exec``. The ports that the data path names must then be in that
+  namespace as well.
 * The host-link search changes the subscriber-side port itself, which it takes
   to run 2500BaseX without negotiation: it sets the port to 1000BaseX with
   in-band negotiation and back to the speed and negotiation it had, with
@@ -118,7 +130,7 @@ Running
 
 From this directory::
 
-    python3 -m devtest --bench BENCH --stick ADDRESS \
+    python3 -m devtest --bench BENCH --stick ADDRESS [--bench-netns NAME] \
         --olt-port PORT --subscriber-port PORT \
         --token-file FILE [--tools ../../build/image/diag] \
         [--update ../../build/image/images/update.bin] --out ../../docs/testing/NAME
@@ -140,7 +152,7 @@ take minutes; ``--reload COMMAND`` names a command, run on the machine that
 runs the tests as soon as the stick is gone, that brings it back at once, such
 as the bench tool's RAM boot of the image under test, which breaks into the
 countdown (``tools/bench``). The settings can also come from the environment:
-``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_OLT_PORT``,
+``DEVTEST_BENCH``, ``DEVTEST_STICK``, ``DEVTEST_BENCH_NETNS``, ``DEVTEST_OLT_PORT``,
 ``DEVTEST_SUBSCRIBER_PORT``, ``DEVTEST_TOKEN_FILE``, ``DEVTEST_TOOLS``,
 ``DEVTEST_UPDATE`` and ``DEVTEST_RELOAD``.
 

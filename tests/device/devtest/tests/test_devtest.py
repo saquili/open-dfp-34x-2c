@@ -4,14 +4,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import io
 import json
 import re
+import shlex
+import subprocess
 import unittest
 import unittest.mock
 
 from devtest import cases_data, cases_net, cases_pon, cases_system
-from devtest.access import Reply, Settings, redact
+from devtest.__main__ import main
+from devtest.access import Reply, Settings, bench_remote, redact, stick_remote
 from devtest.core import FAIL, PASS, SKIP, Case, Context, failed, passed, run_case, select
 from devtest.report import LOG_LINES, as_json, cell, counts, log, page
 
@@ -65,6 +70,60 @@ def context(stick=(), bench=()) -> Context:
     trail: list[str] = []
     return Context(SETTINGS, Canned("stick", list(stick), trail), Canned("bench", list(bench), trail),
                    trail)
+
+
+class Access(unittest.TestCase):
+    """How the stick and the bench host are reached, with the bench's namespace and without."""
+
+    LAB = dataclasses.replace(SETTINGS, bench_netns="lab")
+
+    def bench_run(self, settings, command):
+        log: list[str] = []
+        done = subprocess.CompletedProcess([], 0, "ok\n", "")
+        with unittest.mock.patch("devtest.access.subprocess.run", return_value=done) as run:
+            bench_remote(settings, log).run(command)
+        return run.call_args[0][0][-1], log
+
+    def test_without_a_namespace_the_stick_is_a_jump_away(self):
+        argv = stick_remote(SETTINGS, []).ssh
+        self.assertEqual(argv[-3:], ["-J", "bench.example.org", "root@192.0.2.2"])
+
+    def test_with_a_namespace_the_bench_connects_to_the_stick_from_inside_it(self):
+        argv = stick_remote(self.LAB, []).ssh
+        self.assertNotIn("-J", argv)
+        proxy = [a for a in argv if a.startswith("ProxyCommand=")]
+        self.assertEqual(len(proxy), 1)
+        self.assertTrue(proxy[0].endswith(" bench.example.org sudo -n ip netns exec lab nc %h %p"),
+                        proxy[0])
+        self.assertIn("BatchMode=yes", proxy[0])
+        self.assertEqual(argv[-1], "root@192.0.2.2")
+
+    def test_with_a_namespace_every_bench_command_runs_inside_it_and_is_logged_as_given(self):
+        command = "curl -s -k 'https://192.0.2.2/'"
+        sent, log = self.bench_run(self.LAB, command)
+        self.assertEqual(sent, "sudo -n ip netns exec lab sh -c " + shlex.quote(command))
+        self.assertTrue(log[0].startswith(f"bench$ {command}\n"), log[0])
+
+    def test_without_one_a_bench_command_goes_as_it_is(self):
+        sent, _ = self.bench_run(SETTINGS, "uptime")
+        self.assertEqual(sent, "uptime")
+
+    def test_a_namespace_must_be_a_plain_name(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            main(["--bench", "bench.example.org", "--stick", "192.0.2.2",
+                  "--bench-netns", "lab; reboot"])
+        self.assertIn("not a namespace's name", err.getvalue())
+
+    def test_the_ssh_login_case_goes_the_same_way_as_the_stick(self):
+        seen = []
+        trail: list[str] = []
+        ctx = Context(self.LAB, Canned("stick", [], trail), Canned("bench", [], trail), trail)
+        with unittest.mock.patch.object(cases_net, "local_run",
+                                        lambda argv, timeout: seen.append(argv) or (255, "")):
+            cases_net.ssh_login(ctx)
+        self.assertNotIn("-J", seen[0])
+        self.assertTrue(any(a.startswith("ProxyCommand=") and "netns exec lab" in a
+                            for a in seen[0]))
 
 
 class Redaction(unittest.TestCase):

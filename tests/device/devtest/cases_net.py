@@ -12,7 +12,7 @@ import shlex
 import subprocess
 import time
 
-from .access import ssh_base, sudo
+from .access import jump, ssh_base, sudo
 from .core import Context, case, failed, skipped, verdict
 
 # A TCP connection attempt from the bench host: "refused", "timeout" or
@@ -177,7 +177,7 @@ def ssh_login(ctx: Context):
                                      "-o", "PubkeyAuthentication=no",
                                      "-o", "StrictHostKeyChecking=no",
                                      "-o", "UserKnownHostsFile=/dev/null",
-                                     "-J", ctx.settings.bench, f"root@{ctx.settings.stick}", "true"]
+                                     *jump(ctx.settings), f"root@{ctx.settings.stick}", "true"]
     code, err = local_run(argv, 60)
     ctx.log.append(f"local$ {' '.join(argv)}\n{err}[exit {code}]\n")
     denied = [l for l in err.splitlines() if "Permission denied" in l]
