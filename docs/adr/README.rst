@@ -112,3 +112,6 @@ The index
    * - 0021
      - The kernel series keeps mainline's rules, without a submission
      - Accepted
+   * - 0022
+     - Programs of our own for PPPoE, DHCPv6 and the time
+     - Accepted
