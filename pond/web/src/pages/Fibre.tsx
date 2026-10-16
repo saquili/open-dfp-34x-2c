@@ -34,6 +34,7 @@ import {
   type Channel,
   hex,
   isDefault,
+  isDefaultEntry,
   Mib,
   type Multicast,
   num,
@@ -504,25 +505,26 @@ function MulticastFacts({ m }: { m: Multicast }) {
     m.version === 16 ? "MLDv1" : m.version === 17 ? "MLDv2" : `IGMPv${m.version ?? "?"}`;
   const fn = [t("fibre.mcSnoop"), t("fibre.mcSnoopReport"), t("fibre.mcProxy")][m.fn ?? 0];
   return (
-    <div className="rounded-box bg-base-200/60 px-3 py-2 text-sm">
-      <div className="font-semibold">
-        {t("fibre.multicastTitle")} · {version} · {fn}
-      </div>
-      <div className="text-xs text-base-content/70">
-        {[
-          m.immediateLeave && t("fibre.immediateLeave"),
-          m.rate ? t("fibre.igmpRate", { n: integer(m.rate, lang) }) : null,
-          m.downstreamVid != null && t("fibre.mcastVlan", { vid: m.downstreamVid }),
-        ]
-          .filter(Boolean)
-          .join(" · ")}
-      </div>
-      {m.acl.map((a) => (
-        <div key={`${a.portId}-${a.from}`} className="tabular text-xs text-base-content/70">
-          {t("fibre.mcastGroups", { from: a.from, to: a.to, gem: a.portId, vlan: a.vlan })}
-        </div>
-      ))}
-    </div>
+    <li className={DETAIL_ROW}>
+      <span className="grid content-start gap-1">
+        <span className="font-semibold">{t("fibre.multicastTitle")}</span>
+        <Detail>
+          {version}, {fn}
+        </Detail>
+      </span>
+      <span className="grid content-start gap-1 @4xl:col-span-3">
+        {m.immediateLeave && <Detail>{t("fibre.immediateLeave")}</Detail>}
+        {m.rate ? <Detail>{t("fibre.igmpRate", { n: integer(m.rate, lang) })}</Detail> : null}
+        {m.downstreamVid != null && (
+          <Detail>{t("fibre.mcastVlan", { vid: m.downstreamVid })}</Detail>
+        )}
+        {m.acl.map((a) => (
+          <Detail key={`${a.portId}-${a.from}`}>
+            {t("fibre.mcastGroups", { from: a.from, to: a.to, gem: a.portId, vlan: a.vlan })}
+          </Detail>
+        ))}
+      </span>
+    </li>
   );
 }
 
@@ -583,7 +585,20 @@ function hostText(t: (k: Key, v?: Record<string, string | number>) => string, s:
     : s.hostVlans.map((v) => (v == null ? t("switch.untagged") : String(v))).join(", ");
 }
 
-/* The details of a service: its channels one by one, multicast, the stick's sessions. */
+/* A line of detail under a value: 12 px, in the secondary colour. */
+function Detail({ children }: { children: ReactNode }) {
+  return <span className="text-xs text-base-content/70">{children}</span>;
+}
+
+/*
+ * A channel of a service's details: the channel and what the stick does with
+ * it, its priorities, its upstream allocation, its traffic; one under
+ * another in a narrow card. A line parts one from the next.
+ */
+const DETAIL_ROW =
+  "grid gap-x-6 gap-y-2 border-t border-base-300 py-3 first:border-t-0 first:pt-0 @xl:grid-cols-2 @4xl:grid-cols-[minmax(10rem,14rem)_minmax(0,1fr)_minmax(0,1fr)_11rem]";
+
+/* The details of a service: its channels one by one, and multicast. */
 function ServiceDetails({ s }: { s: Service }) {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
@@ -593,51 +608,50 @@ function ServiceDetails({ s }: { s: Service }) {
   const views = gems(live);
   const seen = new Set<number>();
   return (
-    <div className="grid gap-2 py-1">
-      <ul className="grid gap-1">
-        {s.ports.flatMap((port) =>
-          port.channels.map((c) => {
-            if (seen.has(c.portId)) return null;
-            seen.add(c.portId);
-            const v = views.find((x) => x.gem.port_id === c.portId);
-            const r = v ? rates?.[v.gem.name] : undefined;
-            return (
-              <li
-                key={c.portId}
-                className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 rounded-field bg-base-200/60 px-3 py-1.5 text-sm"
-              >
-                <span className="tabular w-20 font-semibold">GEM {c.portId}</span>
-                <span className="text-base-content/70">{ct.dir(c)}</span>
-                {ct.pbits(c) && <span className="text-base-content/70">{ct.pbits(c)}</span>}
-                {(port.vlans?.length ?? 0) > 1 && (
-                  <span className="text-xs text-base-content/70">{t("fibre.sharedBroadcast")}</span>
-                )}
-                {c.allocId != null && (
-                  <span className="tabular text-xs text-base-content/70">
-                    T-CONT · Alloc-ID {c.allocId}
-                  </span>
-                )}
+    <ul className="grid">
+      {s.ports.flatMap((port) =>
+        port.channels.map((c) => {
+          if (seen.has(c.portId)) return null;
+          seen.add(c.portId);
+          const v = views.find((x) => x.gem.port_id === c.portId);
+          const r = v ? rates?.[v.gem.name] : undefined;
+          return (
+            <li key={c.portId} className={DETAIL_ROW}>
+              <span className="grid content-start gap-1">
+                <span className="tabular font-semibold">GEM {c.portId}</span>
+                <Detail>{ct.dir(c)}</Detail>
+                {v && <Detail>{gem.use(v)}</Detail>}
+              </span>
+              <span className="grid content-start gap-1">
+                <span>{ct.pbits(c) ?? "–"}</span>
+                {c.encrypted && <Detail>{t("fibre.aes")}</Detail>}
+                {(port.vlans?.length ?? 0) > 1 && <Detail>{t("fibre.sharedBroadcast")}</Detail>}
+              </span>
+              <span className="grid content-start gap-1">
+                <span className="tabular whitespace-nowrap">
+                  {v?.gem.tcont != null
+                    ? t("fibre.tcontGroup", { n: v.gem.tcont, alloc: c.allocId ?? "–" })
+                    : c.allocId != null
+                      ? `Alloc-ID ${c.allocId}`
+                      : t("fibre.noUpstream")}
+                </span>
                 {c.queue && (
-                  <span className="text-xs text-base-content/70">
+                  <Detail>
                     {t("fibre.queue", { p: c.queue.priority, w: c.queue.weight ?? "–" })}
-                  </span>
+                  </Detail>
                 )}
-                {c.encrypted && <span className="text-xs text-base-content/70">AES</span>}
-                {ct.rate(c.up) && <span className="text-xs">↑ {ct.rate(c.up)}</span>}
-                {ct.rate(c.down) && <span className="text-xs">↓ {ct.rate(c.down)}</span>}
-                {v && <span className="text-xs text-base-content/70">{gem.use(v)}</span>}
-                {r && (
-                  <span className="tabular ml-auto text-xs">
-                    ↓ {bitrate(r.down, lang)} ↑ {bitrate(r.up, lang)}
-                  </span>
-                )}
-              </li>
-            );
-          }),
-        )}
-      </ul>
+                {ct.rate(c.up) && <Detail>↑ {ct.rate(c.up)}</Detail>}
+                {ct.rate(c.down) && <Detail>↓ {ct.rate(c.down)}</Detail>}
+              </span>
+              <span className="tabular whitespace-nowrap @4xl:text-right">
+                {r ? `↓ ${bitrate(r.down, lang)} ↑ ${bitrate(r.up, lang)}` : "–"}
+              </span>
+            </li>
+          );
+        }),
+      )}
       {s.multicast && <MulticastFacts m={s.multicast} />}
-    </div>
+    </ul>
   );
 }
 
@@ -698,7 +712,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               return (
                 <Fragment key={k}>
                   <tr
-                    className={`cursor-pointer hover:bg-base-200/40 ${NARROW_ROW}`}
+                    className={`cursor-pointer hover:bg-base-200/40 ${isOpen ? "[&>td]:border-b-0" : ""} ${NARROW_ROW}`}
                     onClick={opens(() => toggle(k))}
                   >
                     <td className="w-px @max-4xl:col-start-1 @max-4xl:row-start-1 @max-4xl:p-0">
@@ -763,7 +777,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                   {isOpen && (
                     <tr id={more} data-more className="@max-4xl:block @max-4xl:pb-2">
                       <td className="@max-4xl:hidden" />
-                      <td colSpan={5} className="@max-4xl:block @max-4xl:p-0 @max-4xl:pl-10">
+                      <td colSpan={5} className="pt-0 @max-4xl:block @max-4xl:p-0 @max-4xl:pl-10">
                         <ServiceDetails s={s} />
                       </td>
                     </tr>
@@ -810,9 +824,14 @@ function RulesTable({ mib, q }: { mib: Mib; q: string }) {
           </thead>
           <tbody>
             {pager.shown.map((x) => (
-              <tr key={`${x.me}-${x.i}`} className={x.r.remove === 3 ? "text-base-content/70" : ""}>
+              <tr key={`${x.me}-${x.i}`}>
                 <td className="tabular text-base-content/70">{x.i + 1}</td>
-                <td>{text.match(x.r)}</td>
+                <td>
+                  <span className="grid gap-1">
+                    {text.match(x.r)}
+                    {isDefaultEntry(x.r) && <Detail>{t("fibre.ruleDefault")}</Detail>}
+                  </span>
+                </td>
                 <td>{text.action(x.r)}</td>
               </tr>
             ))}
@@ -922,37 +941,8 @@ function Pbits({ list }: { list: number[] }) {
   );
 }
 
-/** A rate as a bar on a logarithmic scale, so that kilobits and gigabits both show. */
-function RateBar({
-  bps,
-  max,
-  arrow,
-  tone,
-}: {
-  bps: number;
-  max: number;
-  arrow: string;
-  tone: string;
-}) {
-  const { lang } = useI18n();
-  const share = bps > 0 ? Math.log10(1 + bps / 1e3) / Math.log10(1 + Math.max(max, 1e6) / 1e3) : 0;
-  return (
-    <span className="grid grid-cols-[minmax(0,1fr)_6.5rem] items-center gap-2">
-      <span className="h-1.5 overflow-hidden rounded-full bg-base-200">
-        <span
-          className={`block h-full rounded-full ${tone}`}
-          style={{ width: `${Math.round(share * 100)}%` }}
-        />
-      </span>
-      <span className="tabular text-right text-sm whitespace-nowrap">
-        {arrow} {bitrate(bps, lang)}
-      </span>
-    </span>
-  );
-}
-
 /* The columns of a channel's row, its heading's as well. */
-const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_minmax(11rem,15rem)_8rem]";
+const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_8rem_8rem]";
 
 function ChannelList() {
   const { t, lang } = useI18n();
@@ -968,10 +958,7 @@ function ChannelList() {
         const had = info.get(c.portId);
         info.set(c.portId, { c, vlans: [...(had?.vlans ?? []), s.vlan] });
       }
-  const max = Math.max(
-    1e6,
-    ...views.map((v) => Math.max(rates?.[v.gem.name]?.down ?? 0, rates?.[v.gem.name]?.up ?? 0)),
-  );
+
   const groups = new Map<number | null, typeof views>();
   for (const v of views) groups.set(v.gem.tcont, [...(groups.get(v.gem.tcont) ?? []), v]);
   const order = [...groups.keys()].sort((a, z) => (a ?? 99) - (z ?? 99));
@@ -979,13 +966,6 @@ function ChannelList() {
   return (
     <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
       <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h2 className="card-title text-base">{t("fibre.gemPorts")}</h2>
-          <span className="flex items-center gap-4 text-xs text-base-content/70">
-            <span>{t("fibre.channelsHint")}</span>
-            <HistoryNote />
-          </span>
-        </div>
         <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto pr-1">
           <div
             className={`sticky top-0 z-10 hidden gap-x-4 border-b border-base-300 bg-base-100 px-2 pb-1.5 text-xs font-semibold text-base-content/70 md:grid ${CHANNEL_COLS}`}
@@ -994,7 +974,7 @@ function ChannelList() {
             <span>{t("fibre.direction")}</span>
             <span>{t("fibre.colUse")}</span>
             <span>{t("fibre.colPbits")}</span>
-            <span>{t("fibre.now")}</span>
+            <span className="text-right">{t("fibre.now")}</span>
             <span className="text-right">{t("fibre.colTotal")}</span>
           </div>
           {order.map((tc) => {
@@ -1002,15 +982,15 @@ function ChannelList() {
             const alloc = list[0]?.allocId;
             return (
               <div key={String(tc)} className="grid gap-1.5">
-                <div className="flex items-baseline gap-2 border-b border-base-300 pb-1">
-                  <span className="text-sm font-semibold">
+                <div className="flex flex-wrap items-baseline gap-x-2 border-b border-base-300 pb-1">
+                  <span className="text-sm font-semibold whitespace-nowrap">
                     {tc == null
                       ? t("fibre.downOnlyGroup")
                       : t("fibre.tcontGroup", { n: tc, alloc: alloc ?? "–" })}
                   </span>
-                  <span className="text-xs text-base-content/70">
-                    {tc == null ? t("fibre.downOnlyHint") : t("fibre.tcontHint")}
-                  </span>
+                  {tc == null && (
+                    <span className="text-xs text-base-content/70">{t("fibre.downOnlyHint")}</span>
+                  )}
                 </div>
                 {list.map((v) => {
                   const g = v.gem;
@@ -1038,10 +1018,10 @@ function ChannelList() {
                         <span className="text-base-content/70">{gem.use(v)}</span>
                       </span>
                       <Pbits list={o?.c.pbits ?? []} />
-                      <span className="grid gap-0.5">
-                        <RateBar bps={r?.down ?? 0} max={max} arrow="↓" tone="bg-primary" />
+                      <span className="tabular text-right text-sm whitespace-nowrap">
+                        <span className="block">↓ {bitrate(r?.down ?? 0, lang)}</span>
                         {g.direction !== "downstream" && (
-                          <RateBar bps={r?.up ?? 0} max={max} arrow="↑" tone="bg-secondary" />
+                          <span className="block">↑ {bitrate(r?.up ?? 0, lang)}</span>
                         )}
                       </span>
                       <span className="tabular text-right text-sm">
@@ -1788,7 +1768,7 @@ export function ServicesPage() {
 export function ChannelsPage() {
   const { t } = useI18n();
   return (
-    <Page title={t("nav.channels")} actions={<FibreState />}>
+    <Page title={t("nav.channels")} hint={t("fibre.channelsHint")} actions={<FibreState />}>
       <ChannelList />
     </Page>
   );

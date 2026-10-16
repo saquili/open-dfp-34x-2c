@@ -297,6 +297,15 @@ export function isDefault(r: VlanRule): boolean {
   return r.outer.prio === 14 || r.inner.prio === 14;
 }
 
+/**
+ * One of the three rules every table holds from its start (G.988 9.3.13):
+ * for the untagged frames, and the default ones for one tag and for two.
+ * The OLT may change what they do, never take them away.
+ */
+export function isDefaultEntry(r: VlanRule): boolean {
+  return isDefault(r) || (tagsMatched(r) === 0 && r.ethertype === 0);
+}
+
 export interface VlanRules {
   me: number;
   /** What the rules sit on: 2 a UNI, 10 a VEIP, 0 a bridge port… */

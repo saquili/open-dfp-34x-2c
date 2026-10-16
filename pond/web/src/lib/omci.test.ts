@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { OMCI } from "../mocks/omci";
 import {
   bridgePorts,
-  isDefault,
+  isDefaultEntry,
   Mib,
   multicast,
   services,
@@ -58,7 +58,7 @@ describe("a rule of an extended VLAN tagging operation", () => {
 
   it("drops what no other rule takes", () => {
     const rules = vlanRules(mib)[0]?.rules ?? [];
-    const defaults = rules.filter((r) => isDefault(r) || tagsMatched(r) === 0);
+    const defaults = rules.filter(isDefaultEntry);
     expect(defaults.length).toBe(3);
     expect(defaults.every((r) => r.remove === 3 && translation(r) === null)).toBe(true);
   });
