@@ -165,6 +165,7 @@ export const en = {
     colHost: "At the host",
     colChannels: "GEM channels",
     colStick: "What the stick does",
+    serviceDetails: "Details of the service: VLAN {vlan}",
     noMatch: "Nothing matches the search.",
     channelsHint: "Grouped by upstream bandwidth allocation (T-CONT)",
     tcontGroup: "T-CONT {n} · Alloc-ID {alloc}",
@@ -179,7 +180,7 @@ export const en = {
     colOnStick: "On the stick",
     colOlt: "What the OLT reads now",
     oltSame: "the same",
-    oltDiffers: "different",
+    oltDiffers: "not what the stick holds",
     oltDiffersHint:
       "The OLT still reads another value; the new one shows after the next registration.",
     oltDefaultHint: "The field is empty, so the stick reports its factory value.",

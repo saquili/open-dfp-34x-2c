@@ -15,12 +15,13 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
-import { Check, ChevronRight, CircleAlert, KeyRound, Lock, Minus, X } from "lucide-react";
+import { Check, CircleAlert, CircleX, KeyRound, Lock, Minus, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
 import { type Resolver, useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Identity } from "../api/types";
+import { Caret, opens } from "../components/CardTable";
 import { SaveState, SecretInput, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
 import { Page } from "../components/Page";
@@ -458,6 +459,22 @@ function LineHistory() {
 
 /* --------------------------------------------------------------- services */
 
+/*
+ * A table of the panel's look (docs/handbook/panel-design.rst, Tables): the
+ * names of the columns at 12 px in the secondary colour, the cells at 14 px
+ * with their content at their top.
+ */
+const TABLE = "table [&_thead]:text-xs [&_thead]:text-base-content/70 [&_td]:align-top";
+
+/*
+ * A service's row in a card too narrow for the table: the caret, and beside
+ * it the cells one under another, each under its column's name.
+ */
+const NARROW_ROW =
+  "@max-4xl:grid @max-4xl:grid-cols-[2.5rem_minmax(0,1fr)] @max-4xl:border-t @max-4xl:border-base-300 @max-4xl:py-2 @max-4xl:first:border-t-0";
+const NARROW_CELL =
+  "@max-4xl:col-start-2 @max-4xl:border-0 @max-4xl:px-0 @max-4xl:py-1 @max-4xl:before:block @max-4xl:before:text-xs @max-4xl:before:font-normal @max-4xl:before:text-base-content/70 @max-4xl:before:content-[attr(data-h)]";
+
 function useChannelText() {
   const { t, lang } = useI18n();
   const dir = (c: Channel) =>
@@ -488,7 +505,7 @@ function MulticastFacts({ m }: { m: Multicast }) {
   const fn = [t("fibre.mcSnoop"), t("fibre.mcSnoopReport"), t("fibre.mcProxy")][m.fn ?? 0];
   return (
     <div className="rounded-box bg-base-200/60 px-3 py-2 text-sm">
-      <div className="font-medium">
+      <div className="font-semibold">
         {t("fibre.multicastTitle")} · {version} · {fn}
       </div>
       <div className="text-xs text-base-content/70">
@@ -540,7 +557,7 @@ function useRuleText() {
   return { match, action };
 }
 
-/** What the stick does with a service: the channels' uses, as words. */
+/** What the stick does with a service: the channels' uses, as words, each a neutral pill. */
 function useServiceUse() {
   const { t } = useI18n();
   const { data: live } = useLive();
@@ -549,15 +566,11 @@ function useServiceUse() {
     const ports = new Set(s.ports.flatMap((p) => p.channels.map((c) => c.portId)));
     const uses = new Set(views.filter((v) => ports.has(v.gem.port_id)).map((v) => v.use));
     const own = sessions(live).filter((x) => s.vlan != null && fibreVlan(x) === String(s.vlan));
-    const tags: { text: string; tone: "info" | "neutral" | "good" }[] = [];
-    if (own.length)
-      tags.push({
-        text: t("fibre.tagSession", { list: own.map((x) => x.id).join(", ") }),
-        tone: "info",
-      });
-    if (uses.has("bridged")) tags.push({ text: t("fibre.tagBridged"), tone: "good" });
-    if (s.multicast) tags.push({ text: t("fibre.tagMulticast"), tone: "neutral" });
-    if (!tags.length) tags.push({ text: t("fibre.tagStick"), tone: "neutral" });
+    const tags: string[] = [];
+    if (own.length) tags.push(t("fibre.tagSession", { list: own.map((x) => x.id).join(", ") }));
+    if (uses.has("bridged")) tags.push(t("fibre.tagBridged"));
+    if (s.multicast) tags.push(t("fibre.tagMulticast"));
+    if (!tags.length) tags.push(t("fibre.tagStick"));
     return tags;
   };
 }
@@ -597,19 +610,19 @@ function ServiceDetails({ s }: { s: Service }) {
                 <span className="text-base-content/70">{ct.dir(c)}</span>
                 {ct.pbits(c) && <span className="text-base-content/70">{ct.pbits(c)}</span>}
                 {(port.vlans?.length ?? 0) > 1 && (
-                  <span className="text-xs text-base-content/60">{t("fibre.sharedBroadcast")}</span>
+                  <span className="text-xs text-base-content/70">{t("fibre.sharedBroadcast")}</span>
                 )}
                 {c.allocId != null && (
-                  <span className="tabular text-xs text-base-content/60">
+                  <span className="tabular text-xs text-base-content/70">
                     T-CONT · Alloc-ID {c.allocId}
                   </span>
                 )}
                 {c.queue && (
-                  <span className="text-xs text-base-content/60">
+                  <span className="text-xs text-base-content/70">
                     {t("fibre.queue", { p: c.queue.priority, w: c.queue.weight ?? "–" })}
                   </span>
                 )}
-                {c.encrypted && <span className="text-xs text-base-content/60">AES</span>}
+                {c.encrypted && <span className="text-xs text-base-content/70">AES</span>}
                 {ct.rate(c.up) && <span className="text-xs">↑ {ct.rate(c.up)}</span>}
                 {ct.rate(c.down) && <span className="text-xs">↓ {ct.rate(c.down)}</span>}
                 {v && <span className="text-xs text-base-content/70">{gem.use(v)}</span>}
@@ -655,11 +668,11 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-auto">
-        <table className="table table-sm table-pin-rows">
-          <thead>
+      <div className="@container min-h-0 flex-1 overflow-auto">
+        <table className={`${TABLE} table-pin-rows @max-4xl:block`}>
+          <thead className="@max-4xl:hidden">
             <tr>
-              <th className="w-6" />
+              <th className="w-px" />
               <th>{t("fibre.colVlan")}</th>
               <th>{t("fibre.colHost")}</th>
               <th>{t("fibre.colChannels")}</th>
@@ -667,7 +680,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               <th className="text-right">{t("fibre.now")}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="@max-4xl:block">
             {pager.shown.map((s) => {
               const k = key(s);
               const ids = [...new Set(s.ports.flatMap((p) => p.channels))];
@@ -680,19 +693,32 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                 up += r?.up ?? 0;
               }
               const isOpen = open.has(k);
+              const more = `service-${k}`;
+              const vlan = s.vlan == null ? t("fibre.noVlan") : String(s.vlan);
               return (
                 <Fragment key={k}>
-                  <tr className="cursor-pointer hover:bg-base-200/60" onClick={() => toggle(k)}>
-                    <td>
-                      <ChevronRight
-                        className={`size-4 transition-transform ${isOpen ? "rotate-90" : ""}`}
+                  <tr
+                    className={`cursor-pointer hover:bg-base-200/40 ${NARROW_ROW}`}
+                    onClick={opens(() => toggle(k))}
+                  >
+                    <td className="w-px @max-4xl:col-start-1 @max-4xl:row-start-1 @max-4xl:p-0">
+                      <Caret
+                        open={isOpen}
+                        controls={more}
+                        label={t("fibre.serviceDetails", { vlan })}
+                        onToggle={() => toggle(k)}
                       />
                     </td>
-                    <td className="tabular font-semibold">
-                      {s.vlan == null ? t("fibre.noVlan") : s.vlan}
+                    <td
+                      data-h={t("fibre.colVlan")}
+                      className={`tabular font-semibold ${NARROW_CELL}`}
+                    >
+                      {vlan}
                     </td>
-                    <td className="tabular">{hostText(t, s)}</td>
-                    <td>
+                    <td data-h={t("fibre.colHost")} className={`tabular ${NARROW_CELL}`}>
+                      {hostText(t, s)}
+                    </td>
+                    <td data-h={t("fibre.colChannels")} className={NARROW_CELL}>
                       <span className="flex flex-wrap gap-1">
                         {s.ports.flatMap((p) =>
                           p.channels.map((c) => (
@@ -705,7 +731,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                             >
                               {c.portId}
                               {c.pbits.length > 0 && c.pbits.length < 8 && (
-                                <span className="text-base-content/55">
+                                <span className="text-base-content/70">
                                   {" "}
                                   p
                                   {c.pbits.length > 1
@@ -718,23 +744,26 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                         )}
                       </span>
                     </td>
-                    <td>
-                      <span className="flex flex-wrap gap-1">
+                    <td data-h={t("fibre.colStick")} className={NARROW_CELL}>
+                      <span className="flex flex-wrap gap-1 *:whitespace-nowrap">
                         {use(s).map((u) => (
-                          <Badge key={u.text} tone={u.tone}>
-                            {u.text}
+                          <Badge key={u} tone="neutral">
+                            {u}
                           </Badge>
                         ))}
                       </span>
                     </td>
-                    <td className="tabular text-right text-xs whitespace-nowrap">
+                    <td
+                      data-h={t("fibre.now")}
+                      className={`tabular text-right whitespace-nowrap @max-4xl:text-left ${NARROW_CELL}`}
+                    >
                       ↓ {bitrate(down, lang)} ↑ {bitrate(up, lang)}
                     </td>
                   </tr>
                   {isOpen && (
-                    <tr>
-                      <td />
-                      <td colSpan={5}>
+                    <tr id={more} data-more className="@max-4xl:block @max-4xl:pb-2">
+                      <td className="@max-4xl:hidden" />
+                      <td colSpan={5} className="@max-4xl:block @max-4xl:p-0 @max-4xl:pl-10">
                         <ServiceDetails s={s} />
                       </td>
                     </tr>
@@ -743,8 +772,8 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               );
             })}
             {!pager.shown.length && (
-              <tr>
-                <td colSpan={6} className="text-sm text-base-content/65">
+              <tr className="@max-4xl:block">
+                <td colSpan={6} className="text-base-content/70 @max-4xl:block">
                   {t("fibre.noMatch")}
                 </td>
               </tr>
@@ -771,7 +800,7 @@ function RulesTable({ mib, q }: { mib: Mib; q: string }) {
   return (
     <>
       <div className="min-h-0 flex-1 overflow-auto">
-        <table className="table table-sm table-pin-rows">
+        <table className={`${TABLE} table-pin-rows`}>
           <thead>
             <tr>
               <th className="w-10">#</th>
@@ -781,15 +810,15 @@ function RulesTable({ mib, q }: { mib: Mib; q: string }) {
           </thead>
           <tbody>
             {pager.shown.map((x) => (
-              <tr key={`${x.me}-${x.i}`} className={x.r.remove === 3 ? "text-base-content/60" : ""}>
-                <td className="tabular text-base-content/55">{x.i + 1}</td>
+              <tr key={`${x.me}-${x.i}`} className={x.r.remove === 3 ? "text-base-content/70" : ""}>
+                <td className="tabular text-base-content/70">{x.i + 1}</td>
                 <td>{text.match(x.r)}</td>
                 <td>{text.action(x.r)}</td>
               </tr>
             ))}
             {!pager.shown.length && (
               <tr>
-                <td colSpan={3} className="text-sm text-base-content/65">
+                <td colSpan={3} className="text-base-content/70">
                   {rows.length ? t("fibre.noMatch") : t("fibre.rulesNone")}
                 </td>
               </tr>
@@ -853,7 +882,7 @@ function ServiceList() {
             </div>
             <Filter value={q} onChange={setQ} placeholder={t("fibre.filterVlan")} />
           </div>
-          <p className="text-xs text-base-content/65">
+          <p className="text-xs text-base-content/70">
             {view === "services" ? t("fibre.servicesHint") : t("fibre.rulesHint")}
           </p>
           {omci.data?.truncated && (
@@ -877,14 +906,14 @@ function ServiceList() {
 /** The eight priorities of IEEE 802.1p, those a channel carries filled in. */
 function Pbits({ list }: { list: number[] }) {
   const { t } = useI18n();
-  if (!list.length) return <span className="text-xs text-base-content/45">–</span>;
+  if (!list.length) return <span>–</span>;
   return (
     <span className="flex gap-0.5" title={t("fibre.pbits", { list: list.join(", ") })}>
       {Array.from({ length: 8 }, (_, p) => (
         <span
           // biome-ignore lint/suspicious/noArrayIndexKey: the eight priorities are fixed
           key={p}
-          className={`grid size-4 place-items-center rounded-[3px] text-[9px] tabular ${list.includes(p) ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/35"}`}
+          className={`grid size-4 place-items-center rounded-[3px] text-xs leading-none tabular ${list.includes(p) ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/70"}`}
         >
           {p}
         </span>
@@ -908,14 +937,14 @@ function RateBar({
   const { lang } = useI18n();
   const share = bps > 0 ? Math.log10(1 + bps / 1e3) / Math.log10(1 + Math.max(max, 1e6) / 1e3) : 0;
   return (
-    <span className="grid grid-cols-[minmax(0,1fr)_5.5rem] items-center gap-2">
+    <span className="grid grid-cols-[minmax(0,1fr)_6.5rem] items-center gap-2">
       <span className="h-1.5 overflow-hidden rounded-full bg-base-200">
         <span
           className={`block h-full rounded-full ${tone}`}
           style={{ width: `${Math.round(share * 100)}%` }}
         />
       </span>
-      <span className="tabular text-right text-xs">
+      <span className="tabular text-right text-sm whitespace-nowrap">
         {arrow} {bitrate(bps, lang)}
       </span>
     </span>
@@ -923,7 +952,7 @@ function RateBar({
 }
 
 /* The columns of a channel's row, its heading's as well. */
-const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_minmax(10rem,14rem)_8rem]";
+const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_minmax(11rem,15rem)_8rem]";
 
 function ChannelList() {
   const { t, lang } = useI18n();
@@ -952,14 +981,14 @@ function ChannelList() {
       <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <h2 className="card-title text-base">{t("fibre.gemPorts")}</h2>
-          <span className="flex items-center gap-4 text-xs text-base-content/60">
+          <span className="flex items-center gap-4 text-xs text-base-content/70">
             <span>{t("fibre.channelsHint")}</span>
             <HistoryNote />
           </span>
         </div>
         <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto pr-1">
           <div
-            className={`sticky top-0 z-10 hidden gap-x-4 border-b border-base-300 bg-base-100 px-2 pb-1.5 text-xs font-medium text-base-content/60 md:grid ${CHANNEL_COLS}`}
+            className={`sticky top-0 z-10 hidden gap-x-4 border-b border-base-300 bg-base-100 px-2 pb-1.5 text-xs font-semibold text-base-content/70 md:grid ${CHANNEL_COLS}`}
           >
             <span>{t("fibre.channel")}</span>
             <span>{t("fibre.direction")}</span>
@@ -979,7 +1008,7 @@ function ChannelList() {
                       ? t("fibre.downOnlyGroup")
                       : t("fibre.tcontGroup", { n: tc, alloc: alloc ?? "–" })}
                   </span>
-                  <span className="text-xs text-base-content/55">
+                  <span className="text-xs text-base-content/70">
                     {tc == null ? t("fibre.downOnlyHint") : t("fibre.tcontHint")}
                   </span>
                 </div>
@@ -996,17 +1025,17 @@ function ChannelList() {
                       <span className="flex items-center gap-1.5">
                         <span className="tabular font-semibold">GEM {g.port_id}</span>
                         {o?.c.encrypted && (
-                          <Lock className="size-3.5 text-base-content/50" aria-label="AES" />
+                          <Lock className="size-3.5 text-base-content/70" aria-label="AES" />
                         )}
                       </span>
-                      <span className="text-xs text-base-content/70">{gem.direction(g)}</span>
+                      <span className="text-sm">{gem.direction(g)}</span>
                       <span className="flex flex-wrap items-center gap-1 text-xs">
                         {(o?.vlans ?? []).map((x) => (
                           <span key={String(x)} className="badge badge-sm badge-outline tabular">
                             {x == null ? "–" : `VLAN ${x}`}
                           </span>
                         ))}
-                        <span className="text-base-content/65">{gem.use(v)}</span>
+                        <span className="text-base-content/70">{gem.use(v)}</span>
                       </span>
                       <Pbits list={o?.c.pbits ?? []} />
                       <span className="grid gap-0.5">
@@ -1015,7 +1044,7 @@ function ChannelList() {
                           <RateBar bps={r?.up ?? 0} max={max} arrow="↑" tone="bg-secondary" />
                         )}
                       </span>
-                      <span className="tabular text-right text-xs text-base-content/60">
+                      <span className="tabular text-right text-sm">
                         <span className="block">↓ {bytes(c?.pon_rx_octets, lang)}</span>
                         {g.direction !== "downstream" && (
                           <span className="block">↑ {bytes(c?.pon_tx_octets, lang)}</span>
@@ -1256,9 +1285,9 @@ function OltValue({
 }) {
   const { t } = useI18n();
   if (olt === undefined)
-    return <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>;
+    return <span className="text-xs text-base-content/70">{t("fibre.oltNotRead")}</span>;
   if (olt === null)
-    return <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>;
+    return <span className="text-xs text-base-content/70">{t("fibre.oltNone")}</span>;
   const empty = olt === "";
   const shown = empty
     ? t("fibre.oltEmpty")
@@ -1267,28 +1296,24 @@ function OltValue({
       : String(olt);
   const same = sameAsOlt(stick, olt, numeric);
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {same === true && (
-        <Check className="size-3.5 shrink-0 text-success" aria-label={t("fibre.oltSame")} />
-      )}
-      {same === false && (
-        <CircleAlert
-          className="size-3.5 shrink-0 text-warning"
-          aria-label={t("fibre.oltDiffers")}
-        />
-      )}
-      <span
-        className={`truncate text-sm ${mono && !empty ? "font-mono" : ""} ${empty ? "italic text-base-content/55" : ""} ${same === false ? "text-warning" : ""}`}
-        title={
-          same === false
-            ? t("fibre.oltDiffersHint")
-            : same === null
-              ? t("fibre.oltDefaultHint")
-              : undefined
-        }
-      >
-        {shown}
+    <span className="grid min-w-0 gap-0.5">
+      <span className="flex min-w-0 items-center gap-1.5">
+        {same === true && (
+          <Check className="size-3.5 shrink-0 text-success" aria-label={t("fibre.oltSame")} />
+        )}
+        {same === false && <CircleAlert className="size-3.5 shrink-0 text-warning" aria-hidden />}
+        <span
+          className={`min-w-0 break-words text-sm ${mono && !empty ? "font-mono" : ""} ${empty ? "italic text-base-content/70" : ""}`}
+          title={same === null ? t("fibre.oltDefaultHint") : undefined}
+        >
+          {shown}
+        </span>
       </span>
+      {same === false && (
+        <span className="text-xs text-base-content/70" title={t("fibre.oltDiffersHint")}>
+          {t("fibre.oltDiffers")}
+        </span>
+      )}
     </span>
   );
 }
@@ -1380,14 +1405,12 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
       className={`grid items-center gap-x-6 gap-y-1 border-b border-base-200 py-2 last:border-0 ${IDENTITY_COLS}`}
     >
       <div className="min-w-0">
-        <div className="text-sm font-medium">{label}</div>
-        {hint && <div className="text-xs text-base-content/55">{hint}</div>}
+        <div className="text-sm font-semibold">{label}</div>
+        {hint && <div className="text-xs text-base-content/70">{hint}</div>}
       </div>
       <div className="min-w-0">{input}</div>
       <div className="min-w-0">
-        <span className="text-[11px] uppercase tracking-wide text-base-content/45 md:hidden">
-          {t("fibre.colOlt")}:{" "}
-        </span>
+        <span className="block text-xs text-base-content/70 md:hidden">{t("fibre.colOlt")}</span>
         {olt}
       </div>
     </div>
@@ -1434,7 +1457,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
         t("fibre.ploam"),
         t("fibre.ploamHint"),
         secret("ploam", identity.ploam_set),
-        <span className="text-xs text-base-content/45">{t("fibre.oltNone")}</span>,
+        <span className="text-xs text-base-content/70">{t("fibre.oltNone")}</span>,
         "ploam",
       )}
       {extended &&
@@ -1447,7 +1470,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
               {omci.data?.logical_password_set ? t("fibre.secretSet") : t("fibre.secretNone")}
             </span>
           ) : (
-            <span className="text-xs text-base-content/40">{t("fibre.oltNotRead")}</span>
+            <span className="text-xs text-base-content/70">{t("fibre.oltNotRead")}</span>
           ),
           "loid_secret",
         )}
@@ -1477,26 +1500,29 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
                   onClick={() => setGroup(g.id)}
                   className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
                 >
-                  <span className="flex w-full items-center gap-2 text-sm font-medium">
+                  <span className="flex w-full items-center gap-2 text-sm font-semibold">
                     {t(g.label)}
                     <span className="ml-auto flex items-center gap-1.5">
                       {n.errors > 0 && (
-                        <span className="badge badge-error badge-xs" title={t("fibre.groupErrors")}>
-                          !
+                        <span title={t("fibre.groupErrors")}>
+                          <CircleX
+                            className="size-3.5 text-error"
+                            aria-label={t("fibre.groupErrors")}
+                          />
                         </span>
                       )}
                       {n.differs > 0 && (
                         <span
-                          className="tabular flex items-center gap-0.5 text-xs text-warning"
+                          className="tabular flex items-center gap-0.5 text-xs font-normal text-base-content"
                           title={t("fibre.differsN", { n: n.differs })}
                         >
-                          <CircleAlert className="size-3.5" />
+                          <CircleAlert className="size-3.5 text-warning" />
                           {n.differs}
                         </span>
                       )}
                       {n.changed > 0 && (
                         <span
-                          className="badge badge-primary badge-xs tabular"
+                          className="badge badge-primary badge-sm tabular"
                           title={t("fibre.changedN", { n: n.changed })}
                         >
                           {n.changed}
@@ -1504,9 +1530,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
                       )}
                     </span>
                   </span>
-                  <span
-                    className={`hidden text-xs lg:block ${active ? "text-primary/70" : "text-base-content/55"}`}
-                  >
+                  <span className="hidden text-xs font-normal text-base-content/70 lg:block">
                     {t(g.hint)}
                   </span>
                 </button>
@@ -1516,7 +1540,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
         )}
         <div className="flex min-h-0 flex-col">
           <div
-            className={`hidden gap-x-6 border-b border-base-300 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-base-content/50 md:grid ${IDENTITY_COLS}`}
+            className={`hidden gap-x-6 border-b border-base-300 pb-1.5 text-xs font-semibold text-base-content/70 md:grid ${IDENTITY_COLS}`}
           >
             <span>{t("fibre.colField")}</span>
             <span>{t("fibre.colOnStick")}</span>
@@ -1550,7 +1574,10 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
           </span>
         )}
         <SaveState {...state} />
-        <span className="ml-auto max-w-xl text-xs text-warning">{t("fibre.identityWarning")}</span>
+        <span className="ml-auto flex max-w-xl items-start gap-1.5 text-xs text-base-content/70">
+          <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+          {t("fibre.identityWarning")}
+        </span>
       </div>
     </form>
   );
@@ -1569,7 +1596,7 @@ function IdentityCard({ groups, title, hint }: { groups: Groups; title: Key; hin
             <p className="text-sm text-base-content/70">{t(hint)}</p>
           </div>
           {identity.data?.source && (
-            <Badge tone={identity.data.source === "store" ? "good" : "info"}>
+            <Badge tone="neutral">
               {t(identity.data.source === "store" ? "fibre.fromStore" : "fibre.fromFactory")}
             </Badge>
           )}
@@ -1615,12 +1642,15 @@ function Instances({ cls }: { cls: number }) {
             <div className="flex items-baseline gap-2 bg-base-200/70 px-3 py-1.5 text-sm">
               <span className="font-semibold">{t("fibre.instance")}</span>
               <span className="tabular font-mono">0x{me.id.toString(16).padStart(4, "0")}</span>
-              <span className="tabular text-xs text-base-content/55">({me.id})</span>
+              <span className="tabular text-xs text-base-content/70">({me.id})</span>
             </div>
             {me.error ? (
-              <p className="px-3 py-2 text-xs text-warning">{t("fibre.omciTooBig")}</p>
+              <p className="flex items-center gap-1.5 px-3 py-2 text-xs text-base-content/70">
+                <CircleAlert className="size-3.5 shrink-0 text-warning" aria-hidden />
+                {t("fibre.omciTooBig")}
+              </p>
             ) : (
-              <table className="table table-xs table-zebra">
+              <table className={TABLE}>
                 <thead>
                   <tr>
                     <th className="w-8">#</th>
@@ -1632,19 +1662,17 @@ function Instances({ cls }: { cls: number }) {
                 <tbody>
                   {[...me.attrs.entries()].map(([n, b]) => (
                     <tr key={n}>
-                      <td className="tabular w-8 text-base-content/50">{n}</td>
+                      <td className="tabular w-8 text-base-content/70">{n}</td>
                       <td className="w-72">
                         {CLASSES[cls]?.attrs[n] ?? n}
                         {me.tables.has(n) && (
-                          <span className="ml-1.5 badge badge-ghost badge-xs">
+                          <span className="ml-1.5 badge badge-ghost badge-sm">
                             {t("fibre.table")}
                           </span>
                         )}
                       </td>
-                      <td className="font-mono text-xs break-all text-base-content/80">
-                        {hex(b) || "–"}
-                      </td>
-                      <td className="w-40 text-xs text-base-content/70">{decoded(b)}</td>
+                      <td className="font-mono break-all">{hex(b) || "–"}</td>
+                      <td className="w-40">{decoded(b)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1688,10 +1716,10 @@ function OmciBrowser() {
                   <button
                     type="button"
                     onClick={() => setCls(c)}
-                    className={`grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2 rounded-field px-2.5 py-2 text-left text-sm transition-colors ${c === shown ? "bg-primary/10 font-medium text-primary" : "hover:bg-base-200"}`}
+                    className={`grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2 rounded-field px-2.5 py-2 text-left text-sm transition-colors ${c === shown ? "bg-primary/10 font-semibold text-primary" : "hover:bg-base-200"}`}
                   >
                     <span
-                      className={`tabular text-xs ${c === shown ? "text-primary/80" : "text-base-content/50"}`}
+                      className={`tabular text-xs ${c === shown ? "text-primary" : "text-base-content/70"}`}
                     >
                       {c}
                     </span>
@@ -1702,7 +1730,7 @@ function OmciBrowser() {
               ))}
             </ul>
             {omci.data?.frames && (
-              <p className="border-t border-base-200 pt-2 text-xs text-base-content/60">
+              <p className="border-t border-base-200 pt-2 text-xs text-base-content/70">
                 {t("fibre.omciFramesValue", {
                   handled: omci.data.frames.handled,
                   rejected: omci.data.frames.rejected,
@@ -1716,7 +1744,7 @@ function OmciBrowser() {
             <h2 className="card-title text-base">
               {shown != null && (
                 <>
-                  <span className="tabular text-base-content/50">{shown}</span>
+                  <span className="tabular text-base-content/70">{shown}</span>
                   {CLASSES[shown]?.name ?? ""}
                   <span className="badge badge-sm badge-ghost">
                     {t("fibre.instancesN", { n: mib.all(shown).length })}
