@@ -26,7 +26,7 @@ export const pl: Dictionary = {
     vlans: "VLAN",
     mac: "Tablica MAC",
     operator: "Operator",
-    services: "Usługi operatora",
+    services: "Usługi",
     channels: "Kanały GEM",
     identity: "Tożsamość",
     omci: "Baza OMCI",
@@ -194,6 +194,9 @@ export const pl: Dictionary = {
     history: "Światło i błędy w ostatnich 10\u00a0minutach",
     regTitle: "Rejestracja na OLT",
     regHint: "Kroki, którymi wkładka melduje się u operatora",
+    regData: "Dane rejestracyjne",
+    regDataHint:
+      "Po nich OLT rozpoznaje Twoją linię: numer seryjny albo LOID, i hasło, jeśli operator je podał.",
     stepSync: "Synchronizacja",
     stepSyncHint: "Wkładka słucha strumienia od OLT i łapie jego rytm. Jeszcze nic nie wysyła.",
     stepSerial: "Numer seryjny",
@@ -328,7 +331,7 @@ export const pl: Dictionary = {
     multicast: "Multicast w dół (IPTV)",
     identity: "Jak wkładka przedstawia się operatorowi",
     identityHint:
-      "To, co wkładka mówi operatorowi. Zmieniaj tylko tak, jak oczekuje tego operator.",
+      "To, co wkładka mówi o sobie operatorowi przez OMCI. Zmieniaj tylko tak, jak oczekuje tego operator.",
     serial: "Numer seryjny",
     serialRule: "Cztery litery lub cyfry, potem osiem cyfr szesnastkowych, np. ABCD1234ABCD",
     serialHint: "Numer, pod którym operator zarejestrował Twoją linię.",

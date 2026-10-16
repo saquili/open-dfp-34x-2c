@@ -24,7 +24,7 @@ export const en = {
     vlans: "VLANs",
     mac: "MAC table",
     operator: "Operator",
-    services: "Operator services",
+    services: "Services",
     channels: "GEM channels",
     identity: "Identity",
     omci: "OMCI database",
@@ -193,6 +193,9 @@ export const en = {
     history: "Light and errors over the last 10\u00a0minutes",
     regTitle: "Registration on the OLT",
     regHint: "The steps by which the stick reports to the operator",
+    regData: "Registration data",
+    regDataHint:
+      "What the OLT knows your line by: the serial number or the LOID, and a password if the operator gave one.",
     stepSync: "Synchronisation",
     stepSyncHint:
       "The stick listens to the OLT's stream and locks to its rhythm. It sends nothing yet.",
@@ -328,7 +331,7 @@ export const en = {
     multicast: "Multicast down (IPTV)",
     identity: "How the stick introduces itself",
     identityHint:
-      "What the stick tells the operator. Change it only to match what the operator expects.",
+      "What the stick tells the operator of itself over OMCI. Change it only to match what the operator expects.",
     serial: "Serial number",
     serialRule: "Four letters or digits, then eight hex digits, for example ABCD1234ABCD",
     serialHint: "The number the operator registered your line with.",

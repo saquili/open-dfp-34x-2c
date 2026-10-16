@@ -3,18 +3,21 @@
 
 /*
  * The fibre and what the operator set up on it, in five pages. Under the
- * switch, the fibre: the state of the connection, the light and the errors
- * on the line. Under the operator, the services the OLT set up, each a VLAN
+ * switch, the fibre: the state of the connection, the light, the
+ * registration with the OLT and what the line registers with (the serial
+ * number or the LOID, and the passwords), and the errors on the line. Under
+ * the operator, what OMCI carries: the services the OLT set up, each a VLAN
  * with its channels, the host's VLAN for it and multicast; the channels one
- * by one; how the stick introduces itself to the OLT, which the owner may
- * change to what the operator expects; and the managed entities as omcid
- * holds them, for the curious.
+ * by one; what the stick tells the OLT of itself, which the owner may change
+ * to what the operator expects; and the managed entities as omcid holds
+ * them, for the curious.
  */
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Link } from "@tanstack/react-router";
 import { Check, ChevronRight, CircleAlert, KeyRound, Lock, Minus, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { type Resolver, useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Identity } from "../api/types";
@@ -118,14 +121,19 @@ const MARK: Record<RegState, string> = {
   off: "bg-base-200 text-base-content/50 ring-1 ring-base-300",
 };
 
-const STEP: Record<RegStep, { title: Key; hint: Key }> = {
+/* A step, and the operator's page that shows what the OLT did in it over OMCI. */
+const STEP: Record<RegStep, { title: Key; hint: Key; to?: string }> = {
   sync: { title: "fibre.stepSync", hint: "fibre.stepSyncHint" },
   serial: { title: "fibre.stepSerial", hint: "fibre.stepSerialHint" },
   ranging: { title: "fibre.stepRanging", hint: "fibre.stepRangingHint" },
   ploam: { title: "fibre.stepPassword", hint: "fibre.stepPasswordHint" },
   omcc: { title: "fibre.stepOmcc", hint: "fibre.stepOmccHint" },
-  mib: { title: "fibre.stepMib", hint: "fibre.stepMibHint" },
-  services: { title: "fibre.stepServices", hint: "fibre.stepServicesHint" },
+  mib: { title: "fibre.stepMib", hint: "fibre.stepMibHint", to: "/operator/omci" },
+  services: {
+    title: "fibre.stepServices",
+    hint: "fibre.stepServicesHint",
+    to: "/operator/services",
+  },
 };
 
 /**
@@ -238,7 +246,16 @@ function Registration() {
                 )}
               </span>
               <span className="grid min-w-0 gap-0.5">
-                <span className="text-sm font-medium">{t(STEP[id].title)}</span>
+                {STEP[id].to ? (
+                  <Link
+                    to={STEP[id].to}
+                    className="link link-hover link-primary text-sm font-medium"
+                  >
+                    {t(STEP[id].title)}
+                  </Link>
+                ) : (
+                  <span className="text-sm font-medium">{t(STEP[id].title)}</span>
+                )}
                 {detail(id, at).map((line) => (
                   <span key={line} className="tabular truncate text-xs text-base-content/65">
                     {line}
@@ -268,7 +285,7 @@ function LineState() {
     c && c.fec_codewords > 0 ? (c.fec_corrected_codewords / c.fec_codewords) * 100 : null;
 
   return (
-    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_min-content_minmax(min-content,1fr)]">
+    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_min-content_min-content_minmax(min-content,1fr)]">
       <div className="grid gap-4 lg:grid-cols-3">
         <Card
           title={t("fibre.status")}
@@ -384,6 +401,7 @@ function LineState() {
         </Card>
       </div>
       <Registration />
+      <IdentityCard groups={REGISTER_GROUPS} title="fibre.regData" hint="fibre.regDataHint" />
       <LineHistory />
     </div>
   );
@@ -1140,6 +1158,15 @@ const GROUPS: { id: Group; label: Key; hint: Key }[] = [
   { id: "software", label: "fibre.groupSoftware", hint: "fibre.groupSoftwareHint" },
 ];
 
+/*
+ * Where the groups stand: what the line registers with, beside the
+ * registration under the switch, since the port does it with PLOAM; what
+ * OMCI tells the OLT of the stick, under the operator.
+ */
+type Groups = [Group, ...Group[]];
+const REGISTER_GROUPS: Groups = ["register"];
+const OMCI_GROUPS: Groups = ["unit", "software"];
+
 const numberOrEmpty = (max: number) =>
   z.string().check(
     z.trim(),
@@ -1165,6 +1192,13 @@ const identitySchema = (rule: string) =>
     loid_secret: z.string().check(z.maxLength(12)),
   });
 type Values = z.infer<ReturnType<typeof identitySchema>>;
+
+/* The checks of the fields @names only: a field a form does not show cannot stop it. */
+function identityResolver(rule: string, names: (keyof Values)[]): Resolver<Values> {
+  const mask: { [k in keyof Values]?: true } = {};
+  for (const n of names) mask[n] = true;
+  return zodResolver(z.pick(identitySchema(rule), mask)) as unknown as Resolver<Values>;
+}
 
 function initial(i: Identity): Values {
   return {
@@ -1259,23 +1293,38 @@ function OltValue({
   );
 }
 
-function IdentityForm({ identity }: { identity: Identity }) {
+/*
+ * The identity's fields of @groups, one group at a time, chosen from tabs
+ * beside them when there are more. Only those fields are checked and sent,
+ * and with them the serial number, which every change of the identity carries.
+ */
+function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups }) {
   const { t } = useI18n();
   const change = useIdentityChange();
   const state = useChangeState(change);
   const { omci, mib } = useMib();
   const u = mib.empty ? null : unitOf(mib);
-  const form = useForm<Values>({
-    resolver: zodResolver(identitySchema(t("fibre.serialRule"))),
-    defaultValues: initial(identity),
-  });
+  const extended = identity.loid !== undefined;
+  const registers = groups.includes("register");
+  const visible = IDENTITY_FIELDS.filter(
+    (f) => groups.includes(f.group) && (extended || !EXTENDED_FIELDS.includes(f.field)),
+  );
+  const secrets: (keyof Values)[] = !registers
+    ? []
+    : extended
+      ? ["ploam", "loid_secret"]
+      : ["ploam"];
+  const rule = t("fibre.serialRule");
+  const names = [...visible.map((f) => f.field), ...secrets].join(" ");
+  const resolver = useMemo(
+    () => identityResolver(rule, names.split(" ") as (keyof Values)[]),
+    [rule, names],
+  );
+  const form = useForm<Values>({ resolver, defaultValues: initial(identity) });
   const { errors, isDirty, dirtyFields } = form.formState;
   const values = form.watch();
-  const extended = identity.loid !== undefined;
   const changed = Object.keys(dirtyFields).length;
-  const [group, setGroup] = useState<Group>("register");
-  const visible = IDENTITY_FIELDS.filter((f) => extended || !EXTENDED_FIELDS.includes(f.field));
-  const secrets: (keyof Values)[] = extended ? ["ploam", "loid_secret"] : ["ploam"];
+  const [group, setGroup] = useState<Group>(groups[0]);
   const groupOf = (name: string): Group | undefined =>
     secrets.includes(name as keyof Values)
       ? "register"
@@ -1306,9 +1355,8 @@ function IdentityForm({ identity }: { identity: Identity }) {
   const submit = form.handleSubmit(
     (v) => {
       if (!window.confirm(t("fibre.identityConfirm"))) return;
-      const out: Record<string, string> = {};
-      for (const f of IDENTITY_FIELDS)
-        if (dirtyFields[f.field] || f.field === "serial") out[f.key] = v[f.field];
+      const out: Record<string, string> = { SERIAL: registers ? v.serial : identity.serial };
+      for (const f of visible) if (dirtyFields[f.field]) out[f.key] = v[f.field];
       if (v.ploam) out.PLOAM = v.ploam;
       if (v.loid_secret) out.LOID_PASSWORD = v.loid_secret;
       change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
@@ -1408,60 +1456,64 @@ function IdentityForm({ identity }: { identity: Identity }) {
 
   return (
     <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
-        <div
-          role="tablist"
-          aria-orientation="vertical"
-          className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible lg:border-r lg:border-base-200 lg:pr-4"
-        >
-          {GROUPS.map((g) => {
-            const n = tally(g.id);
-            const active = g.id === group;
-            return (
-              <button
-                key={g.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setGroup(g.id)}
-                className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
-              >
-                <span className="flex w-full items-center gap-2 text-sm font-medium">
-                  {t(g.label)}
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {n.errors > 0 && (
-                      <span className="badge badge-error badge-xs" title={t("fibre.groupErrors")}>
-                        !
-                      </span>
-                    )}
-                    {n.differs > 0 && (
-                      <span
-                        className="tabular flex items-center gap-0.5 text-xs text-warning"
-                        title={t("fibre.differsN", { n: n.differs })}
-                      >
-                        <CircleAlert className="size-3.5" />
-                        {n.differs}
-                      </span>
-                    )}
-                    {n.changed > 0 && (
-                      <span
-                        className="badge badge-primary badge-xs tabular"
-                        title={t("fibre.changedN", { n: n.changed })}
-                      >
-                        {n.changed}
-                      </span>
-                    )}
-                  </span>
-                </span>
-                <span
-                  className={`hidden text-xs lg:block ${active ? "text-primary/70" : "text-base-content/55"}`}
+      <div
+        className={`grid min-h-0 flex-1 gap-4 ${groups.length > 1 ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : ""}`}
+      >
+        {groups.length > 1 && (
+          <div
+            role="tablist"
+            aria-orientation="vertical"
+            className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible lg:border-r lg:border-base-200 lg:pr-4"
+          >
+            {GROUPS.filter((g) => groups.includes(g.id)).map((g) => {
+              const n = tally(g.id);
+              const active = g.id === group;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setGroup(g.id)}
+                  className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
                 >
-                  {t(g.hint)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+                  <span className="flex w-full items-center gap-2 text-sm font-medium">
+                    {t(g.label)}
+                    <span className="ml-auto flex items-center gap-1.5">
+                      {n.errors > 0 && (
+                        <span className="badge badge-error badge-xs" title={t("fibre.groupErrors")}>
+                          !
+                        </span>
+                      )}
+                      {n.differs > 0 && (
+                        <span
+                          className="tabular flex items-center gap-0.5 text-xs text-warning"
+                          title={t("fibre.differsN", { n: n.differs })}
+                        >
+                          <CircleAlert className="size-3.5" />
+                          {n.differs}
+                        </span>
+                      )}
+                      {n.changed > 0 && (
+                        <span
+                          className="badge badge-primary badge-xs tabular"
+                          title={t("fibre.changedN", { n: n.changed })}
+                        >
+                          {n.changed}
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                  <span
+                    className={`hidden text-xs lg:block ${active ? "text-primary/70" : "text-base-content/55"}`}
+                  >
+                    {t(g.hint)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
         <div className="flex min-h-0 flex-col">
           <div
             className={`hidden gap-x-6 border-b border-base-300 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-base-content/50 md:grid ${IDENTITY_COLS}`}
@@ -1470,7 +1522,10 @@ function IdentityForm({ identity }: { identity: Identity }) {
             <span>{t("fibre.colOnStick")}</span>
             <span>{t("fibre.colOlt")}</span>
           </div>
-          <div role="tabpanel" className="min-h-0 flex-1 overflow-auto">
+          <div
+            role={groups.length > 1 ? "tabpanel" : undefined}
+            className="min-h-0 flex-1 overflow-auto"
+          >
             {visible.filter((f) => f.group === group).map(fieldRow)}
             {group === "register" && secretRows()}
           </div>
@@ -1501,7 +1556,8 @@ function IdentityForm({ identity }: { identity: Identity }) {
   );
 }
 
-function IdentityView() {
+/* A card of the identity's @groups, with its @title and @hint. */
+function IdentityCard({ groups, title, hint }: { groups: Groups; title: Key; hint: Key }) {
   const { t } = useI18n();
   const identity = useIdentity();
   return (
@@ -1509,8 +1565,8 @@ function IdentityView() {
       <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="card-title text-base">{t("fibre.identity")}</h2>
-            <p className="text-sm text-base-content/70">{t("fibre.identityHint")}</p>
+            <h2 className="card-title text-base">{t(title)}</h2>
+            <p className="text-sm text-base-content/70">{t(hint)}</p>
           </div>
           {identity.data?.source && (
             <Badge tone={identity.data.source === "store" ? "good" : "info"}>
@@ -1519,7 +1575,7 @@ function IdentityView() {
           )}
         </div>
         {identity.data ? (
-          <IdentityForm identity={identity.data} />
+          <IdentityForm identity={identity.data} groups={groups} />
         ) : identity.isError ? (
           <p className="text-sm text-error">{identity.error.message}</p>
         ) : (
@@ -1714,7 +1770,7 @@ export function IdentityPage() {
   const { t } = useI18n();
   return (
     <Page title={t("nav.identity")} actions={<FibreState />}>
-      <IdentityView />
+      <IdentityCard groups={OMCI_GROUPS} title="fibre.identity" hint="fibre.identityHint" />
     </Page>
   );
 }
