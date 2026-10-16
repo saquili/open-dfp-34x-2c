@@ -152,7 +152,7 @@ export const pl: Dictionary = {
     differsN: "OLT czyta inaczej: {n}",
     colAttr: "Atrybut",
     colRaw: "Wartość (szesnastkowo)",
-    colRead: "Odczytana",
+    colRead: "Jako tekst lub liczba",
     factoryValue: "Puste: wkładka podaje wartość fabryczną.",
     oltEmpty: "puste",
     colUse: "VLAN i co robi wkładka",

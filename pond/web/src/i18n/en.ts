@@ -150,7 +150,7 @@ export const en = {
     differsN: "The OLT reads otherwise: {n}",
     colAttr: "Attribute",
     colRaw: "Value (hex)",
-    colRead: "Read as",
+    colRead: "As text or number",
     factoryValue: "Empty: the stick gives its factory value.",
     oltEmpty: "empty",
     colUse: "VLAN and what the stick does",

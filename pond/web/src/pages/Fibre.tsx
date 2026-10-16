@@ -16,7 +16,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
 import { Check, CircleAlert, CircleX, KeyRound, Lock, Minus, X } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Resolver, useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
@@ -32,7 +32,6 @@ import { type Key, useI18n } from "../i18n";
 import { bitrate, bytes, dbmText, decimal, duration, integer } from "../lib/format";
 import {
   type Channel,
-  hex,
   isDefault,
   isDefaultEntry,
   Mib,
@@ -1620,41 +1619,60 @@ function decoded(b: Uint8Array | null): string {
   return "";
 }
 
-/* The instances of a class, a page at a time: a class may have hundreds. */
+/* A value's bytes in hexadecimal, a space between two: a long one wraps between bytes only. */
+function hexBytes(b: Uint8Array | null): string {
+  return b ? [...b].map((x) => x.toString(16).padStart(2, "0")).join(" ") : "";
+}
+
+/*
+ * An attribute's row in a card as narrow as a phone's: its number, and
+ * beside it the cells one under another, each under its column's name.
+ */
+const ATTR_ROW =
+  "@max-xl:grid @max-xl:grid-cols-[2rem_minmax(0,1fr)] @max-xl:border-t @max-xl:border-base-300 @max-xl:py-2 @max-xl:first:border-t-0";
+const ATTR_CELL =
+  "@max-xl:col-start-2 @max-xl:border-0 @max-xl:px-0 @max-xl:py-1 @max-xl:before:block @max-xl:before:font-sans @max-xl:before:text-xs @max-xl:before:text-base-content/70 @max-xl:before:content-[attr(data-h)]";
+
+/*
+ * The instances of a class, a page at a time: a class may have hundreds.
+ * Each is a section of the card, its title over its attributes.
+ */
 function Instances({ cls }: { cls: number }) {
   const { t } = useI18n();
   const { mib } = useMib();
   const pager = usePages(mib.all(cls), 10);
   return (
     <>
-      <div className="grid min-h-0 flex-1 auto-rows-max content-start gap-4 overflow-auto pr-1">
+      <div className="@container grid min-h-0 min-w-0 flex-1 auto-rows-max grid-cols-[minmax(0,1fr)] content-start gap-6 overflow-auto pr-1">
         {pager.shown.map((me) => (
-          <div key={me.id} className="overflow-hidden rounded-box border border-base-300">
-            <div className="flex items-baseline gap-2 bg-base-200/70 px-3 py-1.5 text-sm">
-              <span className="font-semibold">{t("fibre.instance")}</span>
+          <section key={me.id} className="grid gap-1">
+            <h3 className="flex items-baseline gap-2 px-4 text-sm font-semibold @max-xl:px-0">
+              {t("fibre.instance")}
               <span className="tabular font-mono">0x{me.id.toString(16).padStart(4, "0")}</span>
-              <span className="tabular text-xs text-base-content/70">({me.id})</span>
-            </div>
+              <span className="tabular text-xs font-normal text-base-content/70">({me.id})</span>
+            </h3>
             {me.error ? (
-              <p className="flex items-center gap-1.5 px-3 py-2 text-xs text-base-content/70">
+              <p className="flex items-center gap-1.5 px-4 text-xs text-base-content/70 @max-xl:px-0">
                 <CircleAlert className="size-3.5 shrink-0 text-warning" aria-hidden />
                 {t("fibre.omciTooBig")}
               </p>
             ) : (
-              <table className={TABLE}>
-                <thead>
+              <table className={`${TABLE} @max-xl:block`}>
+                <thead className="@max-xl:hidden">
                   <tr>
                     <th className="w-8">#</th>
-                    <th className="w-72">{t("fibre.colAttr")}</th>
+                    <th className="lg:w-72">{t("fibre.colAttr")}</th>
                     <th>{t("fibre.colRaw")}</th>
-                    <th className="w-40">{t("fibre.colRead")}</th>
+                    <th className="lg:w-40">{t("fibre.colRead")}</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="@max-xl:block">
                   {[...me.attrs.entries()].map(([n, b]) => (
-                    <tr key={n}>
-                      <td className="tabular w-8 text-base-content/70">{n}</td>
-                      <td className="w-72">
+                    <tr key={n} className={ATTR_ROW}>
+                      <td className="tabular w-8 text-base-content/70 @max-xl:col-start-1 @max-xl:row-start-1 @max-xl:border-0 @max-xl:p-0 @max-xl:pt-1">
+                        {n}
+                      </td>
+                      <td data-h={t("fibre.colAttr")} className={`lg:w-72 ${ATTR_CELL}`}>
                         {CLASSES[cls]?.attrs[n] ?? n}
                         {me.tables.has(n) && (
                           <span className="ml-1.5 badge badge-ghost badge-sm">
@@ -1662,14 +1680,21 @@ function Instances({ cls }: { cls: number }) {
                           </span>
                         )}
                       </td>
-                      <td className="font-mono break-all">{hex(b) || "–"}</td>
-                      <td className="w-40">{decoded(b)}</td>
+                      <td data-h={t("fibre.colRaw")} className={`font-mono ${ATTR_CELL}`}>
+                        {hexBytes(b) || "–"}
+                      </td>
+                      <td
+                        data-h={t("fibre.colRead")}
+                        className={`break-words lg:w-40 ${ATTR_CELL}`}
+                      >
+                        {decoded(b) || "–"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
-          </div>
+          </section>
         ))}
       </div>
       <Pager pager={pager} />
@@ -1678,10 +1703,15 @@ function Instances({ cls }: { cls: number }) {
 }
 
 function OmciBrowser() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const { omci, mib } = useMib();
   const [cls, setCls] = useState<number | null>(null);
   const [q, setQ] = useState("");
+  const details = useRef<HTMLElement>(null);
+  const pick = (c: number) => {
+    setCls(c);
+    requestAnimationFrame(() => details.current?.scrollIntoView({ block: "nearest" }));
+  };
   const classes = [...mib.byClass.keys()].filter(
     (c) =>
       !q ||
@@ -1691,7 +1721,7 @@ function OmciBrowser() {
   const shown = cls != null && mib.byClass.has(cls) ? cls : (classes[0] ?? null);
   return (
     <OmciState>
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[22rem_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[22rem_minmax(0,1fr)]">
         <section className="card flex min-h-0 border border-base-300 bg-base-100">
           <div className="card-body min-h-0 gap-3 p-4">
             <h2 className="card-title text-base">{t("fibre.omciClasses")}</h2>
@@ -1706,7 +1736,8 @@ function OmciBrowser() {
                 <li key={c}>
                   <button
                     type="button"
-                    onClick={() => setCls(c)}
+                    onClick={() => pick(c)}
+                    aria-current={c === shown ? "true" : undefined}
                     className={`grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-2 rounded-field px-2.5 py-2 text-left text-sm transition-colors ${c === shown ? "bg-primary/10 font-semibold text-primary" : "hover:bg-base-200"}`}
                   >
                     <span
@@ -1721,16 +1752,22 @@ function OmciBrowser() {
               ))}
             </ul>
             {omci.data?.frames && (
-              <p className="border-t border-base-200 pt-2 text-xs text-base-content/70">
-                {t("fibre.omciFramesValue", {
-                  handled: omci.data.frames.handled,
-                  rejected: omci.data.frames.rejected,
-                })}
+              <p className="grid gap-1 border-t border-base-200 pt-2">
+                <span className="text-xs text-base-content/70">{t("fibre.omciFrames")}</span>
+                <span className="tabular text-sm">
+                  {t("fibre.omciFramesValue", {
+                    handled: integer(omci.data.frames.handled, lang),
+                    rejected: integer(omci.data.frames.rejected, lang),
+                  })}
+                </span>
               </p>
             )}
           </div>
         </section>
-        <section className="card flex min-h-0 border border-base-300 bg-base-100">
+        <section
+          ref={details}
+          className="card flex min-h-0 scroll-mt-20 border border-base-300 bg-base-100"
+        >
           <div className="card-body min-h-0 gap-3 p-4">
             <h2 className="card-title text-base">
               {shown != null && (
