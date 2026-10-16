@@ -1382,30 +1382,37 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
   ) => (
     <div
       key={key}
-      className={`grid items-center gap-x-6 gap-y-1 border-b border-base-200 py-2 last:border-0 ${IDENTITY_COLS}`}
+      className={`grid items-start gap-x-6 gap-y-1 border-b border-base-200 py-2 last:border-0 ${IDENTITY_COLS}`}
     >
-      <div className="min-w-0">
+      <div className="min-w-0 md:pt-1.5">
         <div className="text-sm font-semibold">{label}</div>
         {hint && <div className="text-xs text-base-content/70">{hint}</div>}
       </div>
-      <div className="min-w-0">{input}</div>
-      <div className="min-w-0">
+      <div className="grid min-w-0 gap-1">{input}</div>
+      <div className="min-w-0 md:pt-1.5">
         <span className="block text-xs text-base-content/70 md:hidden">{t("fibre.colOlt")}</span>
         {olt}
       </div>
     </div>
   );
 
-  const secret = (name: "ploam" | "loid_secret", set: boolean | undefined) => (
-    <SecretInput
-      small
-      icon={<KeyRound className="size-3.5 shrink-0 opacity-50" />}
-      invalid={!!errors[name]}
-      autoComplete="new-password"
-      placeholder={set ? t("internet.passwordSaved") : t("internet.passwordNone")}
-      title={set ? t("internet.passwordKept") : undefined}
-      {...form.register(name)}
-    />
+  const secret = (name: "ploam" | "loid_secret", label: string, set: boolean | undefined) => (
+    <>
+      <SecretInput
+        small
+        icon={<KeyRound className="size-3.5 shrink-0 opacity-50" />}
+        invalid={!!errors[name]}
+        autoComplete="new-password"
+        aria-label={label}
+        placeholder={set ? t("internet.passwordSaved") : t("internet.passwordNone")}
+        {...form.register(name)}
+      />
+      {errors[name] ? (
+        <p className="text-xs text-error">{errors[name]?.message}</p>
+      ) : (
+        <Detail>{set ? t("internet.passwordKept") : t("fibre.secretNoneHint")}</Detail>
+      )}
+    </>
   );
 
   const fieldRow = (f: (typeof IDENTITY_FIELDS)[number]) =>
@@ -1417,10 +1424,14 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
           className={`input input-sm w-full ${f.mono ? "font-mono" : ""} ${errors[f.field] ? "input-error" : ""} ${dirtyFields[f.field] ? "border-primary" : ""}`}
           spellcheck={false}
           autoComplete="off"
-          placeholder={t("fibre.factoryValue")}
+          aria-label={t(f.label)}
           {...form.register(f.field)}
         />
-        {errors[f.field] && <p className="mt-0.5 text-xs text-error">{errors[f.field]?.message}</p>}
+        {errors[f.field] ? (
+          <p className="text-xs text-error">{errors[f.field]?.message}</p>
+        ) : (
+          !(values[f.field] ?? "").trim() && <Detail>{t("fibre.factoryValue")}</Detail>
+        )}
       </>,
       <OltValue
         stick={values[f.field] ?? ""}
@@ -1436,7 +1447,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
       {row(
         t("fibre.ploam"),
         t("fibre.ploamHint"),
-        secret("ploam", identity.ploam_set),
+        secret("ploam", t("fibre.ploam"), identity.ploam_set),
         <span className="text-xs text-base-content/70">{t("fibre.oltNone")}</span>,
         "ploam",
       )}
@@ -1444,7 +1455,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
         row(
           t("fibre.loidPassword"),
           undefined,
-          secret("loid_secret", identity.loid_password_set),
+          secret("loid_secret", t("fibre.loidPassword"), identity.loid_password_set),
           u ? (
             <span className="text-sm">
               {omci.data?.logical_password_set ? t("fibre.secretSet") : t("fibre.secretNone")}
@@ -1554,7 +1565,7 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
           </span>
         )}
         <SaveState {...state} />
-        <span className="ml-auto flex max-w-xl items-start gap-1.5 text-xs text-base-content/70">
+        <span className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-base-content/70">
           <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
           {t("fibre.identityWarning")}
         </span>

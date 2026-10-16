@@ -202,9 +202,9 @@ function LaneCard() {
             </button>
             <SaveState {...state} />
             {!l && lane.isFetched && (
-              <span className="text-xs text-base-content/60">{t("sfp.modeUnavailable")}</span>
+              <span className="text-xs text-base-content/70">{t("sfp.modeUnavailable")}</span>
             )}
-            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/60">
+            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/70">
               {t("sfp.modeSafety")}
             </span>
           </div>
@@ -345,7 +345,7 @@ function MgmtCard() {
               {t("sfp.mgmtAdd")}
             </button>
             <SaveState {...state} />
-            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/60">
+            <span className="min-w-0 flex-1 basis-64 text-xs text-base-content/70">
               {t("sfp.mgmtSafety")}
             </span>
           </div>
