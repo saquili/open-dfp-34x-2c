@@ -1163,6 +1163,60 @@ static int rtl9602c_eeblocks_show(struct seq_file *s, void *unused)
 DEFINE_SHOW_ATTRIBUTE(rtl9602c_eeblocks);
 
 /*
+ * The SoC's SFP slave, read and nothing else: whether the slave is enabled
+ * and how, and its RAM, A0h then A2h, as the host would be served it. Whether
+ * the host's 0x50/0x51 is this RAM or a separate EEPROM is not known; this
+ * view and the host's own read of the cage tell. A byte whose read does not
+ * complete ends the dump.
+ */
+static int rtl9602c_sfpslave_show(struct seq_file *s, void *unused)
+{
+	struct rtl9602c_priv *p = s->private;
+	u32 aux = rtl9602c_r(p, RTL9602C_SFPSLV_AUX);
+	u32 ctl = rtl9602c_r(p, RTL9602C_SFPSLV_CTL);
+	u8 ram[RTL9602C_SFPSLV_RAM_SIZE];
+	unsigned int a, n;
+	u32 v = 0;
+
+	seq_printf(s, "aux %08x  ctl %08x\n", aux, ctl);
+	seq_printf(s, "slave %s, standard mode %lu, byte mode %lu, burst read %lu, endian %lu, open drain %lu, SDA delay %lu, TX_DISABLE control %lu (inverted %lu)\n",
+		   ctl & RTL9602C_SFPSLV_CTL_ENABLE ? "enabled" : "disabled",
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_STANDARD, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_BYTES, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_BURST, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_BYTE_ORDER, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_OPEN_DRAIN, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_SDA_DELAY, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_TXDIS, ctl),
+		   FIELD_GET(RTL9602C_SFPSLV_CTL_TXDIS_INVERT, ctl));
+
+	for (a = 0; a < RTL9602C_SFPSLV_RAM_SIZE; a++) {
+		rtl9602c_w(p, RTL9602C_SFPSLV_RAM_ACC, RTL9602C_SFPSLV_RAM_ACC_GO |
+			   FIELD_PREP(RTL9602C_SFPSLV_RAM_ACC_ADDR, a));
+		for (n = 0; n < 1000; n++) {
+			v = rtl9602c_r(p, RTL9602C_SFPSLV_RAM_ACC);
+			if (!(v & RTL9602C_SFPSLV_RAM_ACC_GO))
+				break;
+			udelay(1);
+		}
+		if (v & RTL9602C_SFPSLV_RAM_ACC_GO) {
+			seq_printf(s, "byte %u: the read did not complete (%08x)\n", a, v);
+			break;
+		}
+		ram[a] = FIELD_GET(RTL9602C_SFPSLV_RAM_ACC_DATA, v);
+	}
+
+	seq_puts(s, "A0h\n");
+	seq_hex_dump(s, "", DUMP_PREFIX_OFFSET, 16, 1, ram, min(a, 256u), false);
+	if (a > 256) {
+		seq_puts(s, "A2h\n");
+		seq_hex_dump(s, "", DUMP_PREFIX_OFFSET, 16, 1, ram + 256, a - 256, false);
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(rtl9602c_sfpslave);
+
+/*
  * The "tables" view: A2h bytes 128-255 for each table the page select can
  * show, 0, 1, 2, 4, 5 and 6.  Table 2 holds the laser driver's
  * configuration, among it the receiver's loss-of-signal control (BBh) and
@@ -1401,8 +1455,8 @@ static const struct file_operations rtl9602c_t2write_fops = {
  * rtl9602c_optics_debugfs_init() - create the optics' debugfs views
  * @p: driver state
  *
- * Creates "a2" and "eeblocks", both mode 0400, in the switch's debugfs
- * directory.  Both only read the part, so a CONFIG_RTL9602C_OPTICS_RO
+ * Creates "a2", "eeblocks" and "sfpslave", mode 0400, in the switch's
+ * debugfs directory.  They only read, so a CONFIG_RTL9602C_OPTICS_RO
  * build has them too.  "tables" writes the page select, and only a build
  * without it has that view.  "t2write", mode 0200,
  * stores table 2 bytes in the module's EEPROM, where they outlive every
@@ -1415,6 +1469,8 @@ void rtl9602c_optics_debugfs_init(struct rtl9602c_priv *p)
 			    &rtl9602c_a2_fops);
 	debugfs_create_file("eeblocks", 0400, p->debugfs, p,
 			    &rtl9602c_eeblocks_fops);
+	debugfs_create_file("sfpslave", 0400, p->debugfs, p,
+			    &rtl9602c_sfpslave_fops);
 	if (IS_ENABLED(CONFIG_RTL9602C_OPTICS_RO))
 		return;
 	debugfs_create_file("tables", 0400, p->debugfs, p,

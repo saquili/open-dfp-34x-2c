@@ -662,6 +662,30 @@ struct rtl9602c_field {
 #define RTL9602C_VLAN_PVID_SHIFT(p)	(12 * ((p) % 2))
 #define RTL9602C_VLAN_PVID_MASK		GENMASK(11, 0)
 
+/*
+ * The SoC's SFP slave: an I2C slave, enabled by CTL_ENABLE, that can serve a
+ * 512-byte RAM to the host as the module's identity, A0h then A2h. The CPU
+ * reaches the RAM a byte at a time through RAM_ACC: GO with an address, WRITE
+ * clear to read; GO clears when the byte is in DATA. AUX is shown, not known.
+ */
+#define RTL9602C_SFPSLV_AUX		0x000224
+#define RTL9602C_SFPSLV_RAM_ACC		0x0002a8
+#define RTL9602C_SFPSLV_RAM_ACC_GO		BIT(26)
+#define RTL9602C_SFPSLV_RAM_ACC_WRITE		BIT(25)
+#define RTL9602C_SFPSLV_RAM_ACC_ADDR		GENMASK(24, 16)
+#define RTL9602C_SFPSLV_RAM_ACC_DATA		GENMASK(7, 0)
+#define RTL9602C_SFPSLV_CTL		0x0002ac
+#define RTL9602C_SFPSLV_CTL_TXDIS_INVERT	BIT(15)
+#define RTL9602C_SFPSLV_CTL_TXDIS		BIT(14)
+#define RTL9602C_SFPSLV_CTL_SDA_DELAY		GENMASK(13, 8)
+#define RTL9602C_SFPSLV_CTL_BYTES		GENMASK(7, 6)
+#define RTL9602C_SFPSLV_CTL_BURST		BIT(5)
+#define RTL9602C_SFPSLV_CTL_OPEN_DRAIN		GENMASK(4, 3)
+#define RTL9602C_SFPSLV_CTL_BYTE_ORDER		BIT(2)
+#define RTL9602C_SFPSLV_CTL_STANDARD		BIT(1)
+#define RTL9602C_SFPSLV_CTL_ENABLE		BIT(0)
+#define RTL9602C_SFPSLV_RAM_SIZE	512
+
 /* The part number, then three letters counting A as 1; this is RTL9602C. */
 #define RTL9602C_CHIP_MODEL	0x010000
 #define RTL9602C_CHIP_MODEL_FAMILY		GENMASK(31, 16)

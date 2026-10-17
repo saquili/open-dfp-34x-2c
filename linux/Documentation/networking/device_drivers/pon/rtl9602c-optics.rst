@@ -30,8 +30,8 @@ The optics have no driver of their own. The code is part of the switch driver,
 - It turns the laser driver's automatic extinction-ratio loop off at every PON
   bring-up, so that the modulation of the laser runs from the value the module
   loads at power-up. This is the modulation hold.
-- It offers two debugfs views that only read, ``a2`` and ``eeblocks``, a
-  third, ``tables``, that selects each table of the upper page to read it, and,
+- It offers three debugfs views that only read, ``a2``, ``eeblocks`` and
+  ``sfpslave``, a fourth, ``tables``, that selects each table of the upper page to read it, and,
   with ``CONFIG_NET_DSA_RTL9602C_OPTICS_STORE``, an entry, ``t2write``, that
   stores a byte of the configuration table in the module's EEPROM, or resets
   the laser driver, when root writes to it.
@@ -225,7 +225,8 @@ Interfaces to user space
   "The management interface").
 - ``/sys/kernel/debug/rtl9602c/a2``, ``/sys/kernel/debug/rtl9602c/eeblocks``
   and ``/sys/kernel/debug/rtl9602c/tables``, views that read the laser driver
-  one byte at a time and print it (see "The debugfs views"). They have mode
+  one byte at a time and print it, and ``/sys/kernel/debug/rtl9602c/sfpslave``,
+  which reads the SoC's SFP slave (see "The debugfs views"). They have mode
   ``0400`` and exist only with ``CONFIG_DEBUG_FS``.
 - ``/sys/kernel/debug/rtl9602c/t2write``, mode ``0200``, which stores a byte
   of table 2 in the module's EEPROM or resets the laser driver (see "Storing
@@ -630,11 +631,13 @@ read then, there is no hwmon device until the switch is set up again.
 The debugfs views
 -----------------
 
-Both views read the part and never write it. They are created in the driver's
-debugfs directory, ``/sys/kernel/debug/rtl9602c/``, with mode ``0400``::
+The ``a2``, ``eeblocks`` and ``sfpslave`` views read and never write what
+they show. They are created in the driver's debugfs directory,
+``/sys/kernel/debug/rtl9602c/``, with mode ``0400``::
 
     # cat /sys/kernel/debug/rtl9602c/a2
     # cat /sys/kernel/debug/rtl9602c/eeblocks
+    # cat /sys/kernel/debug/rtl9602c/sfpslave
 
 The ``a2`` view reads A2h bytes 0 to 127 one byte at a time, stopping at the
 first failed read with the line ``A2h read failed at 0x<byte>: <error>``, and
@@ -669,6 +672,26 @@ The blocks follow for ``0x51`` (image ``0x100``), ``0x52`` (``0x200``) and
 the word ``silent``. An unanswered read shows as ``00`` in the dump. The view
 never writes byte 127, so A2h bytes 128 to 255 show the page that byte selects
 at that moment, which is page ``02h`` while the modulation hold runs.
+
+The ``sfpslave`` view reads the SoC's SFP slave: an I2C slave that can serve
+a 512-byte RAM to the host as a module's identity, A0h then A2h. It prints
+the slave's two words, ``aux`` and ``ctl`` (``RTL9602C_SFPSLV_AUX`` and
+``RTL9602C_SFPSLV_CTL``), whether the slave is enabled and how, then the RAM,
+read a byte at a time through the access register
+(``RTL9602C_SFPSLV_RAM_ACC``), as two blocks headed ``A0h`` and ``A2h``. A byte
+whose read does not complete ends the dump with a line saying so. The view
+writes only the access register's command, to read.
+
+What the host in the cage reads is not the SoC's slave on this board. Measured
+on one stick, with this driver, from both sides at once (2026-10-17): the slave
+is disabled (``RTL9602C_SFPSLV_CTL_ENABLE`` 0) and its RAM holds 512 zero
+bytes, while the host reads at ``0x50`` an A0h byte for byte equal to the laser
+driver's and at ``0x51`` a static page left over from another module's EEPROM,
+not the laser driver's diagnostics, which the SoC reads at its own ``0x51`` at
+the same moment. The host's pair is therefore a separate memory on a bus the
+SoC does not reach: the stick cannot change what the host reads, and a host
+sees no diagnostics and no loss-of-signal state through it. Why the two A0h
+pages are equal the measurement does not say.
 
 The ``tables`` view reads A2h bytes 128 to 255 for each table the page select
 can show, 0, 1, 2, 4, 5 and 6, and prints each as eight rows of sixteen bytes
