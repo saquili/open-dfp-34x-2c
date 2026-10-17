@@ -377,8 +377,11 @@ static int import_lines(FILE *in, char *payload, size_t cap)
 	return err;
 }
 
-/* The longest set of settings that check and settings take. */
-#define SETTINGS_TEXT_MAX 16384
+/*
+ * The longest set of settings that check and settings take: as much as the
+ * store holds.
+ */
+#define SETTINGS_TEXT_MAX STORE_MAX
 
 /* check (@strict) or settings, on the standard input and output. */
 static int settings_cmd(bool strict)

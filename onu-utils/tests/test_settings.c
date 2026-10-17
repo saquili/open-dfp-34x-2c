@@ -276,6 +276,152 @@ static void test_defaults_format(void)
 	CHECK(need == strlen(out) && strlen(small) == sizeof(small) - 1);
 }
 
+/* Session 1 keeps its address, and network 1 goes out by it. */
+#define KEEPS ONE "SESSION1_PASS=off\n"
+#define NET1 "LAN1_CONN=pppoe:1\nLAN1_VLAN=100\nLAN1_ADDRESS=192.168.1.1/24\n"
+
+static void test_lans(void)
+{
+	static const char *const bad[] = {
+		"LAN9_CONN=pppoe:1",
+		"LAN0_CONN=pppoe:1",
+		"LAN1_CONN=pppoe:8",
+		"LAN1_CONN=ipoe:1",
+		"LAN1_FOO=1",
+		"LAN1_ADDRESS=192.168.1.0/24",
+		"LAN1_ADDRESS=192.168.1.255/24",
+		"LAN1_ADDRESS=192.168.1.1/31",
+		"LAN1_ADDRESS=192.168.1.1/7",
+		"LAN1_ADDRESS=192.168.1.1",
+		"LAN1_ADDRESS=192.168.01.1/24",
+		"LAN1_ADDRESS=256.168.1.1/24",
+		"LAN1_VLAN=4095",
+		"LAN1_DHCP=yes",
+		"LAN1_POOL_FROM=192.168.1",
+		"LAN1_LEASE=59",
+		"LAN1_LEASE=604801",
+		"LAN1_LEASE=0600",
+		"LAN1_IPV6_SUBNET=g",
+		"LAN1_IPV6_SUBNET=10000",
+		"LAN1_NAME=a\tb",
+		"LAN1_NAME=123456789012345678901234567890123",
+	};
+	struct settings s;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		int rc = judge(&s, bad[i]);
+
+		CHECK(rc == -1 && *g_err);
+		if (rc != -1)
+			printf("    taken: %s\n", bad[i]);
+	}
+
+	/* A network is written whole, with the defaults filled in. */
+	CHECK(judge(&s, KEEPS NET1 "LAN1_NAME=Biuro \xc5\xbcó\xc5\x82te\n") == 0);
+	CHECK(has("LAN1_CONN=pppoe:1") && has("LAN1_VLAN=100") &&
+	      has("LAN1_ADDRESS=192.168.1.1/24") && has("LAN1_DHCP=on") &&
+	      has("LAN1_LEASE=86400") && has("LAN1_IPV6=off") &&
+	      has("LAN1_NAME=Biuro \xc5\xbcó\xc5\x82te"));
+	/* 32 characters of a name, each of four bytes. */
+	CHECK(judge(&s, KEEPS NET1 "LAN1_NAME="
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0"
+			"\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\xf0\x9f\x8f\xa0\n") == 0);
+	/* Without a connection there is no network to write. */
+	CHECK(judge(&s, KEEPS "LAN2_VLAN=200\n") == 0 && !strstr(g_out, "LAN2_"));
+	/* Untagged on the host link. */
+	CHECK(judge(&s, KEEPS "LAN1_CONN=pppoe:1\nLAN1_ADDRESS=10.0.0.1/8\n") == 0 &&
+	      has("LAN1_VLAN="));
+
+	/* What a network needs, and what keeps two apart. */
+	CHECK(judge(&s, KEEPS "LAN1_CONN=pppoe:1\n") == -2 &&
+	      strstr(g_err, "LAN1_ADDRESS"));
+	CHECK(judge(&s, ONE NET1) == -2 && strstr(g_err, "hands its address down"));
+	CHECK(judge(&s, "SESSION1_PASS=off\n" NET1) == -2 &&
+	      strstr(g_err, "no account"));
+	CHECK(judge(&s, KEEPS TWO "SESSION2_HOST_VLAN=100\n" NET1) == -2 &&
+	      strstr(g_err, "session 2 hands its address down in 100"));
+	CHECK(judge(&s, KEEPS TWO NET1 "LAN2_CONN=pppoe:1\nLAN2_ADDRESS=10.0.0.1/24\n"
+			"SESSION2_HOST_VLAN=untagged\n") == -2 &&
+	      strstr(g_err, "untagged link"));
+	CHECK(judge(&s, KEEPS NET1 "LAN2_CONN=pppoe:1\nLAN2_VLAN=100\n"
+			"LAN2_ADDRESS=10.0.0.1/24\n") == -2 &&
+	      strstr(g_err, "networks 1 and 2 are in one VLAN"));
+	CHECK(judge(&s, KEEPS NET1 "LAN2_CONN=pppoe:1\nLAN2_VLAN=200\n"
+			"LAN2_ADDRESS=192.168.0.1/16\n") == -2 &&
+	      strstr(g_err, "networks 1 and 2 share addresses"));
+	g_mgmt[0] = 100;
+	CHECK(judge(&s, KEEPS NET1) == -2 && strstr(g_err, "management VLAN"));
+	g_mgmt[0] = 0;
+
+	/* The pool: a range of the network's addresses without the stick's. */
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.100\n"
+			"LAN1_POOL_TO=192.168.1.199\n") == 0 &&
+	      has("LAN1_POOL_FROM=192.168.1.100"));
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.100\n") == -2 &&
+	      strstr(g_err, "pool"));
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.100\n"
+			"LAN1_POOL_TO=192.168.1.50\n") == -2);
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.100\n"
+			"LAN1_POOL_TO=192.168.2.50\n") == -2);
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.0\n"
+			"LAN1_POOL_TO=192.168.1.50\n") == -2);
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.100\n"
+			"LAN1_POOL_TO=192.168.1.255\n") == -2);
+	CHECK(judge(&s, KEEPS NET1 "LAN1_POOL_FROM=192.168.1.1\n"
+			"LAN1_POOL_TO=192.168.1.50\n") == -2);
+}
+
+#define DEV "00:00:5e:00:53:a1"
+
+static void test_fixed(void)
+{
+	static const char *const bad[] = {
+		"FIXED0=1/" DEV "/192.168.1.10",
+		"FIXED513=1/" DEV "/192.168.1.10",
+		"FIXED01=1/" DEV "/192.168.1.10",
+		"FIXED1_FOO=x",
+		"FIXED1=9/" DEV "/192.168.1.10",
+		"FIXED1=1/" DEV,
+		"FIXED1=1/01:00:5e:00:00:01/192.168.1.10",
+		"FIXED1=1-" DEV "-192.168.1.10",
+		"FIXED1=1/" DEV "/192.168.1.300",
+		"FIXED1_NAME=a\nb",
+	};
+	struct settings s;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		int rc = judge(&s, bad[i]);
+
+		CHECK(rc == -1 && *g_err);
+		if (rc != -1)
+			printf("    taken: %s\n", bad[i]);
+	}
+	CHECK(judge(&s, KEEPS NET1 "FIXED512=1/" DEV "/192.168.1.10\n"
+			"FIXED512_NAME=Drukarka\n") == 0 &&
+	      has("FIXED512=1/" DEV "/192.168.1.10") && has("FIXED512_NAME=Drukarka"));
+	/* An empty one is none, its name gone with it. */
+	CHECK(judge(&s, KEEPS NET1 "FIXED3=1/" DEV "/192.168.1.10\nFIXED3_NAME=x\n"
+			"FIXED3=\n") == 0 && !strstr(g_out, "FIXED3"));
+	CHECK(judge(&s, KEEPS "FIXED1=1/" DEV "/192.168.1.10\n") == -2 &&
+	      strstr(g_err, "network 1 is not set up"));
+	CHECK(judge(&s, KEEPS NET1 "FIXED1=1/" DEV "/192.168.2.10\n") == -2 &&
+	      strstr(g_err, "not an address of network 1"));
+	CHECK(judge(&s, KEEPS NET1 "FIXED1=1/" DEV "/192.168.1.1\n") == -2);
+	CHECK(judge(&s, KEEPS NET1 "FIXED1=1/" DEV "/192.168.1.255\n") == -2);
+	CHECK(judge(&s, KEEPS NET1 "FIXED1=1/" DEV "/192.168.1.10\n"
+			"FIXED2=1/00:00:5E:00:53:A1/192.168.1.11\n") == -2 &&
+	      strstr(g_err, "of one device"));
+	CHECK(judge(&s, KEEPS NET1 "FIXED1=1/" DEV "/192.168.1.10\n"
+			"FIXED2=1/00:00:5e:00:53:a2/192.168.1.10\n") == -2 &&
+	      strstr(g_err, "give one address"));
+}
+
 int main(void)
 {
 	test_defaults();
@@ -287,6 +433,8 @@ int main(void)
 	test_mgmt();
 	test_before();
 	test_format();
+	test_lans();
+	test_fixed();
 	printf("test_settings: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }

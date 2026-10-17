@@ -23,8 +23,12 @@
 #define ACT_VALUE_MAX 64
 #define ACT_ARGV_MAX (2 + ACT_FIXED_MAX + ACT_PARAMS_MAX)
 
-/* The most text a method takes on its standard input. */
-#define ACT_INPUT_MAX 8192
+/*
+ * The most text a method takes on its standard input: a whole set of
+ * settings, as much as the configuration store holds (64 KiB), fits it and
+ * the pipe it is written to at once.
+ */
+#define ACT_INPUT_MAX 65536
 
 /* The longest password a call carries (onu-config password: 128). */
 #define ACT_PASSWORD_MAX 128

@@ -43,7 +43,8 @@
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
-#define OUTPUT_MAX 16384
+/* As much as a set of settings takes (ACT_INPUT_MAX). */
+#define OUTPUT_MAX 65536
 #define TIMEOUT_S 30
 
 /* A program run for a caller who waits for it. */

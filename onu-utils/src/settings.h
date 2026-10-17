@@ -21,6 +21,18 @@
  * WAN_GATEWAY, LAN_ADDRESS, LAN_DHCP, LAN_DHCP_START and LAN_DHCP_END, are
  * taken with any value and left out. Empty lines and lines that begin with
  * '#' are not settings.
+ *
+ * The local networks 1 to 8, which the stick routes for the devices on the
+ * host side, are LANn_CONN (the connection they go out by, pppoe:N, a session
+ * that keeps its address on the stick), LANn_NAME (for people only),
+ * LANn_VLAN (on the host link, nothing for untagged), LANn_ADDRESS (the
+ * stick's address in the network, with its prefix length), LANn_DHCP (on or
+ * off), LANn_POOL_FROM and LANn_POOL_TO (the addresses DHCP leases), LANn_LEASE
+ * (seconds), LANn_IPV6 (on or off) and LANn_IPV6_SUBNET (the /64 of the
+ * connection's delegated prefix, in hexadecimal); a network without a
+ * connection is none. The fixed addresses 1 to 512 are FIXEDn, "L/MAC/IP",
+ * the address IP that DHCP gives the device MAC in network L, and FIXEDn_NAME;
+ * an empty FIXEDn removes one.
  */
 
 #ifndef SETTINGS_H
@@ -30,9 +42,12 @@
 #include <stddef.h>
 
 #define SETTINGS_SESSIONS 7
-#define SETTINGS_VALUE_MAX 64
+/* A value, a name for people included: 32 characters of UTF-8 fit it. */
+#define SETTINGS_VALUE_MAX 132
 #define SETTINGS_USER_MAX 63
 #define SETTINGS_SECRET_MAX 255
+#define SETTINGS_LANS 8
+#define SETTINGS_FIXED 512
 
 /* The keys of before that are not a session's, read and never written. */
 enum settings_key {
@@ -53,6 +68,27 @@ enum settings_skey {
 	SETTINGS_NSKEYS
 };
 
+/* The settings of a local network, LANn_<suffix>. */
+enum settings_lkey {
+	SET_L_CONN,
+	SET_L_NAME,
+	SET_L_VLAN,
+	SET_L_ADDRESS,
+	SET_L_DHCP,
+	SET_L_POOL_FROM,
+	SET_L_POOL_TO,
+	SET_L_LEASE,
+	SET_L_IPV6,
+	SET_L_IPV6_SUBNET,
+	SETTINGS_NLKEYS
+};
+
+/* A fixed address: FIXEDn, "L/MAC/IP", and FIXEDn_NAME; empty for none. */
+struct settings_fixed {
+	char spec[48];
+	char name[SETTINGS_VALUE_MAX];
+};
+
 struct settings_account {
 	char user[SETTINGS_USER_MAX + 1];
 	char secret[SETTINGS_SECRET_MAX + 1];
@@ -70,6 +106,8 @@ struct settings {
 	char val[SETTINGS_NKEYS][SETTINGS_VALUE_MAX];
 	char sval[SETTINGS_SESSIONS][SETTINGS_NSKEYS][SETTINGS_VALUE_MAX];
 	struct settings_account acct[SETTINGS_SESSIONS];
+	char lval[SETTINGS_LANS][SETTINGS_NLKEYS][SETTINGS_VALUE_MAX];
+	struct settings_fixed fixed[SETTINGS_FIXED];
 	char legacy_lan[SETTINGS_VALUE_MAX];
 	bool had_legacy_lan;
 	/*
