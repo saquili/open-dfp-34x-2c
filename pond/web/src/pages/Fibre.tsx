@@ -3,9 +3,9 @@
 
 /*
  * The fibre and what the operator set up on it, in five pages. Under the
- * switch, the fibre: the state of the connection, the light, the
- * registration with the OLT and what the line registers with (the serial
- * number or the LOID, and the passwords), and the errors on the line. Under
+ * switch, the fibre, in two tabs: the state of the connection, the light,
+ * the registration with the OLT and the errors on the line; and what the
+ * line registers with (the serial number or the LOID, and the passwords). Under
  * the operator, what OMCI carries: the services the OLT set up, each a VLAN
  * with its channels, the host's VLAN for it and multicast; the channels one
  * by one; what the stick tells the OLT of itself, which the owner may change
@@ -24,7 +24,7 @@ import type { Identity } from "../api/types";
 import { Caret, opens } from "../components/CardTable";
 import { SaveState, SecretInput, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
-import { Page } from "../components/Page";
+import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
 import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
@@ -122,12 +122,25 @@ const MARK: Record<RegState, string> = {
   off: "bg-base-200 text-base-content/50 ring-1 ring-base-300",
 };
 
-/* A step, and the operator's page that shows what the OLT did in it over OMCI. */
-const STEP: Record<RegStep, { title: Key; hint: Key; to?: string }> = {
+/*
+ * A step, and where to look at it further: the line's configuration for what
+ * the stick gives the OLT, the operator's page for what the OLT did over OMCI.
+ */
+const STEP: Record<RegStep, { title: Key; hint: Key; to?: string; tab?: FibreTab }> = {
   sync: { title: "fibre.stepSync", hint: "fibre.stepSyncHint" },
-  serial: { title: "fibre.stepSerial", hint: "fibre.stepSerialHint" },
+  serial: {
+    title: "fibre.stepSerial",
+    hint: "fibre.stepSerialHint",
+    to: "/switch/fibre",
+    tab: "config",
+  },
   ranging: { title: "fibre.stepRanging", hint: "fibre.stepRangingHint" },
-  ploam: { title: "fibre.stepPassword", hint: "fibre.stepPasswordHint" },
+  ploam: {
+    title: "fibre.stepPassword",
+    hint: "fibre.stepPasswordHint",
+    to: "/switch/fibre",
+    tab: "config",
+  },
   omcc: { title: "fibre.stepOmcc", hint: "fibre.stepOmccHint" },
   mib: { title: "fibre.stepMib", hint: "fibre.stepMibHint", to: "/operator/omci" },
   services: {
@@ -250,6 +263,7 @@ function Registration() {
                 {STEP[id].to ? (
                   <Link
                     to={STEP[id].to}
+                    search={STEP[id].tab ? ({ tab: STEP[id].tab } as never) : undefined}
                     className="link link-hover link-primary text-sm font-medium"
                   >
                     {t(STEP[id].title)}
@@ -286,7 +300,7 @@ function LineState() {
     c && c.fec_codewords > 0 ? (c.fec_corrected_codewords / c.fec_codewords) * 100 : null;
 
   return (
-    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_min-content_min-content_minmax(min-content,1fr)]">
+    <div className="grid min-h-0 flex-1 gap-4 lg:grid-rows-[auto_min-content_minmax(min-content,1fr)]">
       <div className="grid gap-4 lg:grid-cols-3">
         <Card
           title={t("fibre.status")}
@@ -402,7 +416,6 @@ function LineState() {
         </Card>
       </div>
       <Registration />
-      <IdentityCard groups={REGISTER_GROUPS} title="fibre.regData" hint="fibre.regDataHint" />
       <LineHistory />
     </div>
   );
@@ -1795,11 +1808,33 @@ function FibreState() {
   return <Badge tone={f.tone}>{t(`state.${f.stateKey}`)}</Badge>;
 }
 
+/* The fibre's tabs: the state of the line, and what it registers with. */
+const FIBRE_TABS = ["state", "config"] as const;
+type FibreTab = (typeof FIBRE_TABS)[number];
+
 export function FibrePage() {
   const { t } = useI18n();
+  const [tab, setTab] = useTab(FIBRE_TABS);
   return (
-    <Page title={t("nav.fibre")} actions={<FibreState />}>
-      <LineState />
+    <Page
+      title={t("nav.fibre")}
+      tabs={
+        <Tabs
+          items={[
+            { id: "state", label: t("fibre.tabState") },
+            { id: "config", label: t("fibre.tabConfig") },
+          ]}
+          value={tab}
+          onChange={setTab}
+          label={t("nav.fibre")}
+        />
+      }
+      actions={<FibreState />}
+    >
+      {tab === "state" && <LineState />}
+      {tab === "config" && (
+        <IdentityCard groups={REGISTER_GROUPS} title="fibre.regData" hint="fibre.regDataHint" />
+      )}
     </Page>
   );
 }
