@@ -26,6 +26,7 @@
 #include "omcid/ctl_proto.h"
 #include "omcid/status.h"
 #include "sys/ctl.h"
+#include "sys/history.h"
 #include "sys/log.h"
 #include "sys/transport_pipe.h"
 
@@ -229,12 +230,6 @@ static void on_send(void *ctx, const uint8_t frame[static OMCI_FRAME_LEN])
 	b->transport->ops->send(b->transport->ctx, frame);
 }
 
-static void on_tap(void *ctx, uint8_t verdict, uint8_t detail,
-		   const uint8_t frame[static OMCI_FRAME_LEN])
-{
-	omci_ctl_tap_publish(ctx, verdict, detail, frame);
-}
-
 uint64_t omcid_monotonic_seconds(void)
 {
 	struct timespec ts;
@@ -256,6 +251,28 @@ static uint64_t g_clock_at;
 static uint64_t clock_now(void)
 {
 	return g_clock_held ? g_clock_at : omcid_monotonic_seconds();
+}
+
+/*
+ * The conversation with the OLT, kept for the bus, and the control socket's
+ * followers, which may be none. A frame is stamped with the wall clock, or
+ * with the second -t holds the clock at, which reads no clock.
+ */
+static struct omci_history g_history;
+
+static void on_tap(void *ctx, uint8_t verdict, uint8_t detail,
+		   const uint8_t frame[static OMCI_FRAME_LEN])
+{
+	struct timespec ts = { 0, 0 };
+
+	if (g_clock_held)
+		ts.tv_sec = (time_t)g_clock_at;
+	else
+		(void)clock_gettime(CLOCK_REALTIME, &ts);
+	omci_history_add(&g_history, (uint32_t)ts.tv_sec,
+			 (uint16_t)(ts.tv_nsec / 1000000), verdict, detail,
+			 frame);
+	omci_ctl_tap_publish(ctx, verdict, detail, frame);
 }
 
 /* A number of seconds in decimal digits, and nothing else. */
@@ -417,10 +434,10 @@ int omcid_serve(struct omci_transport *transport, const char *ctl_path)
 
 	static const struct omci_tap_ops tap_ops = { .frame = on_tap };
 
-	if (ctl != NULL)
-		omci_engine_tap_set(eng, &tap_ops, ctl);
+	g_history.head = 0;
+	omci_engine_tap_set(eng, &tap_ops, ctl);
 	if (g_bus != NULL)
-		g_bus->open(mib, &counters);
+		g_bus->open(mib, &counters, &g_history);
 
 	size_t handled = 0;
 	size_t rejected = 0;

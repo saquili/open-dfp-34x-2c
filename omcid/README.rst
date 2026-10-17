@@ -273,7 +273,18 @@ given; an instance that does not fit is left out with the rest, and
 ``truncated`` says so. The answers are blobmsg, ubus's own binary form,
 written straight from the MIB with no text in between: a reader that needs
 JSON, such as the panel's, makes it once, at the end. The ONU-G's logical password is never given, only whether one is set
-(``logical_password_set``). It sends no event: a change the OLT makes is
+(``logical_password_set``). ``frames`` gives the conversation with the OLT:
+the daemon keeps the last 1024 frames it received and sent, numbered from its
+start, each with the wall clock when it passed (the second ``-t`` holds the
+clock at, under ``-t``), what it did with the frame (the verdicts of the
+control socket's tap) and its message type, and gives them from the number
+``since`` on, at most ``max`` and never more than 200 at a time, with the next
+frame's number (``head``) and the oldest one kept (``first``); a ``since``
+older than the oldest, or past the head, which a reader of a daemon that has
+since started again holds, gives the oldest. The logical password is zeroed
+in a frame before it is kept, wherever a frame carries the ONU-G's values (a
+Set, a Get's answer, an attribute change, a step of the MIB upload), and
+``masked`` says so. It sends no event: a change the OLT makes is
 told to the program of ``-x``. A daemon that finds no ubusd, or loses it,
 tries again every ten seconds, and serves the OLT meanwhile.
 

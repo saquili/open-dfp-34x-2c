@@ -22,6 +22,7 @@
 #include "omcid/array_size.h"
 #include "omcid/byteorder.h"
 #include "omcid/ctl_proto.h"
+#include "sys/history.h"
 #include "sys/log.h"
 
 #include "fault.h"
@@ -1008,14 +1009,17 @@ static void test_a_kept_file_it_cannot_go_on_from(void)
 /* A bus that counts what the loop asks of it, its descriptor a pipe. */
 static unsigned int g_bus_opens, g_bus_handles, g_bus_closes;
 static const struct omci_mib *g_bus_mib;
+static const struct omci_history *g_bus_history;
 static int g_bus_pipe[2] = { -1, -1 };
 
 static void fake_open(const struct omci_mib *mib,
-		      const struct omci_ctl_counters *counters)
+		      const struct omci_ctl_counters *counters,
+		      const struct omci_history *history)
 {
 	(void)counters;
 	g_bus_opens++;
 	g_bus_mib = mib;
+	g_bus_history = history;
 }
 
 static int fake_fd(void)
@@ -1063,6 +1067,18 @@ static void test_the_bus_is_served_in_the_loop(void)
 	CHECK_EQ(g_bus_opens, 1u);
 	CHECK(g_bus_mib != NULL);
 	CHECK_EQ(g_bus_handles, 1u);
+
+	/*
+	 * The bus is given the conversation: both frames received and both
+	 * answers, in their order, stamped with the second -t holds the
+	 * clock at.
+	 */
+	CHECK(g_bus_history != NULL);
+	CHECK_EQ(g_bus_history->head, 4u);
+	CHECK_EQ(g_bus_history->rec[0].verdict, OMCI_CTL_TAP_RX_DISPATCH);
+	CHECK_EQ(g_bus_history->rec[1].verdict, OMCI_CTL_TAP_TX);
+	CHECK_EQ(memcmp(g_bus_history->rec[2].frame, frame, OMCI_FRAME_LEN), 0);
+	CHECK_EQ(g_bus_history->rec[3].sec, 1u);
 	CHECK_EQ(g_bus_closes, 1u);
 
 	omcid_bus_set(NULL);

@@ -3,10 +3,11 @@
 
 /*
  * omcid on ubus (ADR 0014): the object "omcid", whose method "status" gives
- * the number of instances and the counts of the frames, and "mib" the MIB
+ * the number of instances and the counts of the frames, "mib" the MIB
  * (src/sys/publish.h), of the classes of its argument "classes", an array of
  * numbers, or of every class, in at most "max" bytes of JSON text, when
- * given. The answers are written straight into blobmsg, with no text in
+ * given, and "frames" the conversation with the OLT (src/sys/history.h),
+ * from the frame numbered "since", at most "max" frames. The answers are written straight into blobmsg, with no text in
  * between. A change the OLT makes is told to the program of -x, which is how
  * the stick follows it; ubus carries no event of it. A daemon that finds no ubusd, or loses it, tries again
  * every ten seconds.
@@ -21,6 +22,7 @@
 #include "bus_ubus.h"
 #include "daemon.h"
 #include "omcid/array_size.h"
+#include "sys/history.h"
 #include "sys/log.h"
 #include "sys/publish.h"
 
@@ -33,6 +35,7 @@
 static struct ubus_context *g_ctx;
 static const struct omci_mib *g_mib;
 static const struct omci_ctl_counters *g_counters;
+static const struct omci_history *g_history;
 static uint64_t g_next_try;
 static bool g_told;
 static struct blob_buf g_buf;
@@ -141,9 +144,39 @@ static int mib(struct ubus_context *ctx, struct ubus_object *obj,
 	return 0;
 }
 
+enum { FRAMES_SINCE, FRAMES_MAX, __FRAMES_MAX };
+
+static const struct blobmsg_policy g_frames_policy[] = {
+	[FRAMES_SINCE] = { .name = "since", .type = BLOBMSG_TYPE_INT32 },
+	[FRAMES_MAX] = { .name = "max", .type = BLOBMSG_TYPE_INT32 },
+};
+
+static int frames(struct ubus_context *ctx, struct ubus_object *obj,
+		  struct ubus_request_data *req, const char *method,
+		  struct blob_attr *msg)
+{
+	struct blob_attr *tb[__FRAMES_MAX];
+	struct writer w = { .b = &g_buf };
+
+	(void)obj;
+	(void)method;
+	blobmsg_parse(g_frames_policy, __FRAMES_MAX, tb, blob_data(msg),
+		      blob_len(msg));
+	blob_buf_init(&g_buf, 0);
+	omci_publish_frames(
+		g_history,
+		tb[FRAMES_SINCE] != NULL ? blobmsg_get_u32(tb[FRAMES_SINCE]) :
+					   0u,
+		tb[FRAMES_MAX] != NULL ? blobmsg_get_u32(tb[FRAMES_MAX]) : 0u,
+		&g_ops, &w);
+	ubus_send_reply(ctx, req, g_buf.head);
+	return 0;
+}
+
 static const struct ubus_method g_methods[] = {
 	UBUS_METHOD_NOARG("status", status),
 	UBUS_METHOD("mib", mib, g_mib_policy),
+	UBUS_METHOD("frames", frames, g_frames_policy),
 };
 
 static struct ubus_object_type g_type = UBUS_OBJECT_TYPE("omcid", g_methods);
@@ -209,10 +242,12 @@ static void connect_now(void)
 }
 
 static void bus_open(const struct omci_mib *m,
-		     const struct omci_ctl_counters *counters)
+		     const struct omci_ctl_counters *counters,
+		     const struct omci_history *history)
 {
 	g_mib = m;
 	g_counters = counters;
+	g_history = history;
 	g_next_try = 0;
 	connect_now();
 }
