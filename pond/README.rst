@@ -269,7 +269,11 @@ Among the values read only: ``cpu``, the processor's clock ticks in each state
 unit and its services, every attribute of each in hexadecimal and the rows of
 its tables, and omcid's counts of the frames: omcid's answer on ubus (method
 ``mib`` of the object ``omcid``), which never gives the ONU-G's logical
-password, only whether one is set; ``tls``, whether the daemon serves HTTPS
+password, only whether one is set; ``omci_frames``, the conversation with
+the OLT as omcid keeps it (method ``frames``): its last frames, each with the
+time it passed and what omcid did with it, and with ``?since=N`` in the
+address only those from number N on, so that a reader that follows the
+conversation comes back for what is new; ``tls``, whether the daemon serves HTTPS
 and, for each address it does, the port, the certificate's SHA-256 as
 browsers show it and the start and end of its validity; ``clock``, the time
 the stick's clock reads and what timed says of it in ``/run/timed/state``
@@ -320,8 +324,9 @@ onu-act's table, which it builds from ``../onu-utils``, each program from
 ``$POND_<PROGRAM>`` when set: those of the identity and the stick's own
 settings start stand-ins for onu-config, onu-apply, onu-lane, onu-mgmt and
 hostname (``POND_ONU_CONFIG``, ``POND_ONU_APPLY``, ``POND_ONU_LANE``,
-``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci`` read omcid's
-answer from ``run/ubus/omcid.mib``.
+``POND_ONU_MGMT``, ``POND_HOSTNAME``), and those of ``omci`` and
+``omci_frames`` read omcid's answers from ``run/ubus/omcid.mib`` and
+``run/ubus/omcid.frames``.
 The tests of the sign-in run onu-config, behind a stand-in that keeps a new
 password, and check the default password, the stop after wrong passwords,
 the end of sessions, a change of password and a hash of the older form that

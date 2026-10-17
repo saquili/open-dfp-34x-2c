@@ -12,7 +12,7 @@
 			"update_status", "update_write", "update_read", "update_try",
 			"restart"
 		] },
-		"omcid": { "methods": [ "status", "mib" ] },
+		"omcid": { "methods": [ "status", "mib", "frames" ] },
 		"network.interface.*": { "methods": [ "status" ] },
 		"dhcp6d.*": { "methods": [ "status" ] }
 	}

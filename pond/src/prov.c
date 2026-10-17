@@ -220,6 +220,16 @@ const struct prov *prov_find(const char *id)
 	return NULL;
 }
 
+const struct prov_from *prov_find_from(const char *id)
+{
+	size_t i;
+
+	for (i = 0; i < pond_nprovs_from; i++)
+		if (!strcmp(pond_provs_from[i].id, id))
+			return &pond_provs_from[i];
+	return NULL;
+}
+
 bool prov_present(const struct prov *p)
 {
 	return p && !(p->flags & PROV_ABSENT) && (p->read || p->write);

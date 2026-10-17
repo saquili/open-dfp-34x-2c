@@ -83,6 +83,16 @@ const struct prov pond_provs[] = {
 	{ "omci", "OMCI",
 	  "What the OLT set up: the managed entities omcid holds, and its "
 	  "counts of the frames", prov_omci, NULL, PROV_SLOW },
+	{ "omci_frames", "OMCI",
+	  "The conversation with the OLT: the last frames omcid received and "
+	  "sent, with their times, from the number since=N on",
+	  prov_omci_frames, NULL, PROV_SLOW | PROV_VOLATILE },
 };
 
 const size_t pond_nprovs = ARRAY_SIZE(pond_provs);
+
+const struct prov_from pond_provs_from[] = {
+	{ "omci_frames", prov_omci_frames_from },
+};
+
+const size_t pond_nprovs_from = ARRAY_SIZE(pond_provs_from);

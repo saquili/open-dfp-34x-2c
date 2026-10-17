@@ -139,6 +139,24 @@ extern const size_t pond_nprovs;
 
 /* Find a provider by name, and tell whether it is there. */
 const struct prov *prov_find(const char *id);
+
+/**
+ * struct prov_from - A value that is a log a reader follows: read from the
+ *	point the reader names with since=N in the query. Its &struct prov
+ *	reads it from the start.
+ * @id: its name in the API, as its &struct prov has it
+ * @read: write the value from the point @since on
+ */
+struct prov_from {
+	const char *id;
+	int (*read)(struct prov_buf *out, unsigned long since);
+};
+
+extern const struct prov_from pond_provs_from[];
+extern const size_t pond_nprovs_from;
+
+/* Find how to read a value from a point, or NULL for a value that has none. */
+const struct prov_from *prov_find_from(const char *id);
 bool prov_present(const struct prov *p);
 
 /*

@@ -10,7 +10,7 @@
  *   /api/auth/logout   a POST: end the session
  *   /api/auth/password a POST of {current, next}: a new password
  *   /api/schema        the list of values
- *   /api/get/ID        one value
+ *   /api/get/ID        one value; ?since=N from a point on, for a log
  *   /api/getm?ids=A,B  several values at once, slow ones left out
  *   /api/set/ID        a POST: change a value to the body of the request
  *   /api/set/changes   a POST: keep the changes on trial, or take them back
@@ -165,7 +165,8 @@ static void api_schema(struct mg_connection *c)
 	reply_json(c, 200, body);
 }
 
-static void api_get(struct mg_connection *c, struct mg_str id)
+static void api_get(struct mg_connection *c, struct mg_str id,
+		    struct mg_str query)
 {
 	static char body[POND_VALUE_CAP + 256];
 	static char val[POND_VALUE_CAP];
@@ -173,6 +174,7 @@ static void api_get(struct mg_connection *c, struct mg_str id)
 	const struct prov *p;
 	struct prov_buf v = { val, sizeof(val), 0, false };
 	struct prov_buf b = { body, sizeof(body), 0, false };
+	struct mg_str since = mg_http_var(query, mg_str("since"));
 	int err;
 
 	if (id.len >= sizeof(name)) {
@@ -189,7 +191,14 @@ static void api_get(struct mg_connection *c, struct mg_str id)
 		return;
 	}
 
-	err = p->read(&v);
+	if (prov_find_from(name) && since.len) {
+		char num[16];
+
+		snprintf(num, sizeof(num), "%.*s", (int)since.len, since.buf);
+		err = prov_find_from(name)->read(&v, strtoul(num, NULL, 10));
+	} else {
+		err = p->read(&v);
+	}
 	if (err) {
 		char why[128];
 
@@ -784,7 +793,7 @@ static void handler(struct mg_connection *c, int ev, void *ev_data)
 	else if (mg_match(hm->uri, mg_str("/api/getm"), NULL))
 		api_getm(c, hm->query);
 	else if (mg_match(hm->uri, mg_str("/api/get/*"), caps))
-		api_get(c, caps[0]);
+		api_get(c, caps[0], hm->query);
 	else if (mg_match(hm->uri, mg_str("/api/set/mgmt"), NULL) && post)
 		mgmt_set(c, hm, handler);
 	else if (mg_match(hm->uri, mg_str("/api/set/changes"), NULL) && post)

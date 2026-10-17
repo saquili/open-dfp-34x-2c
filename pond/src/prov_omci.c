@@ -76,3 +76,39 @@ int prov_omci(struct prov_buf *out)
 	out->len += (size_t)n;
 	return 0;
 }
+
+/*
+ * The conversation with the OLT, as omcid keeps it (its method "frames"):
+ * the frames from the number @since on, and the next one's number, so that
+ * a reader that comes back with it gets only what is new. A frame is at
+ * most this long as JSON text, and omcid gives at most 200 at a time.
+ */
+#define FRAME_TEXT 200u
+#define FRAMES_MAX 200u
+
+int prov_omci_frames_from(struct prov_buf *out, unsigned long since)
+{
+	uint32_t from = (uint32_t)since, max;
+	struct bus_arg args[] = {
+		{ .name = "since", .values = &from, .n = 1 },
+		{ .name = "max", .values = &max, .n = 1 },
+	};
+	int n;
+
+	if (out->overflow || out->cap - out->len < ROOM + FRAME_TEXT)
+		return -ENOSPC;
+	max = (uint32_t)((out->cap - out->len - ROOM) / FRAME_TEXT);
+	if (max > FRAMES_MAX)
+		max = FRAMES_MAX;
+	n = bus_call("omcid", "frames", args, ARRAY_SIZE(args),
+		     out->buf + out->len, out->cap - out->len);
+	if (n < 0)
+		return n;
+	out->len += (size_t)n;
+	return 0;
+}
+
+int prov_omci_frames(struct prov_buf *out)
+{
+	return prov_omci_frames_from(out, 0);
+}

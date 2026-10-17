@@ -2173,6 +2173,46 @@ static void test_omci(void)
 	check(err < 0, "without omcid the value is an error, not an empty unit");
 }
 
+/* omcid's answer to "frames", as its ubus object gives it. */
+#define OMCID_FRAMES                                                           \
+	"{\"head\":2,\"first\":0,\"frames\":[{\"seq\":1,\"sec\":1792270000,"     \
+	"\"ms\":5,\"verdict\":5,\"type\":9,\"masked\":false,\"frame\":\"12\"}]}"
+
+static int frames_from_one(struct prov_buf *out)
+{
+	return prov_find_from("omci_frames")->read(out, 1);
+}
+
+static void test_omci_frames(void)
+{
+	char buf[16384], path[200];
+	const char *s;
+	FILE *f;
+	int err;
+
+	puts("the conversation with the OLT, from omcid on ubus");
+
+	snprintf(path, sizeof(path), "%s/run/ubus/omcid.frames", getenv("POND_ROOT"));
+	f = fopen(path, "w");
+	check(f != NULL, "omcid's answer is in place");
+	if (!f)
+		return;
+	fputs(OMCID_FRAMES "\n", f);
+	fclose(f);
+
+	s = render(prov_omci_frames, buf, sizeof(buf), &err);
+	check(!err && !strcmp(s, OMCID_FRAMES), "omcid's answer is the value as it is");
+	s = render(frames_from_one, buf, sizeof(buf), &err);
+	check(!err && !strcmp(s, OMCID_FRAMES), "a reader that names a point gets the answer");
+	check(!prov_find_from("omci"), "a value that is no log has no point to read from");
+	s = render(prov_omci_frames, buf, 300, &err);
+	check(err < 0, "a buffer without room for a frame is an error");
+
+	unlink(path);
+	s = render(prov_omci_frames, buf, sizeof(buf), &err);
+	check(err < 0, "without omcid the value is an error, not an empty conversation");
+}
+
 static void test_table(void)
 {
 	const struct prov *p;
@@ -2255,6 +2295,7 @@ int main(void)
 	test_firmware();
 	test_panel_values();
 	test_omci();
+	test_omci_frames();
 	test_system();
 	test_clock();
 	test_table();
