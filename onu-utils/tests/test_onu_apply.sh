@@ -520,6 +520,17 @@ check 'logged "^onu-nl filter add gem4095 vlan 1410 redirect gem256"'
 check 'logged "^onu-nl filter add gem1024 vlan 1410 redirect gem256"'
 check '! logged "^onu-nl clsact add gem256$"'
 check '! logged "matchall"'
+# The same ports again: their filters stay as they are.
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "^onu-nl filter add"'
+# The OLT provisions its GEM ports again: the interfaces come back under the
+# same names, with new indexes and without filters, and get them again.
+for dev in gem4095 gem256 gem1024; do echo 9 >"$ONU_ROOT/sys/class/net/$dev/ifindex"; done
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check 'logged "^onu-nl filter add gem4095 vlan 1410 redirect gem256"'
+check 'logged "^onu-nl filter add gem1024 vlan 1410 redirect gem256"'
 # A second session in another VLAN: omcid builds its bridge again without both.
 : >"$LOG"
 printf 'SESSION1_VLAN=1410\nSESSION2_VLAN=410\n' >"$ONU_ROOT/run/onu.conf"

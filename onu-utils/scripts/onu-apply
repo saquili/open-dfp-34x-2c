@@ -812,7 +812,15 @@ feeds_sync() {
 	to=$1
 	shift
 	ports=$(pon gem 2>/dev/null | awk -v wan="$to" '$1 != wan { print $1 }' | sort)
-	key=$(echo "$to" $ports "$@")
+	# The interfaces by name and index. When the OLT provisions its GEM ports
+	# again, their interfaces come back under the same names without the
+	# filters the old ones had, and only the index tells them apart; by name
+	# alone the filters stayed away and the session's discovery frames with
+	# them, until the stick restarted (measured on the operator's fibre).
+	key=$(for dev in "$to" $ports; do
+		printf '%s:%s ' "$dev" "$(cat "$NET/$dev/ifindex" 2>/dev/null)"
+	done
+	echo "$@")
 	[ "$key" = "$(cat "$RUN/onu-feeds.key" 2>/dev/null)" ] && return 0
 	feeds_down
 	for port in $ports; do
