@@ -70,6 +70,8 @@ type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
   secret?: boolean;
   /** The value in the font of figures and codes. */
   mono?: boolean;
+  /** The id of a datalist whose values the field offers. */
+  list?: string;
 };
 
 export const Field = forwardRef<HTMLInputElement, Props>(function Field(

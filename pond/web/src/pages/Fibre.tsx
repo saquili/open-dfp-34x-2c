@@ -15,7 +15,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
-import { Check, CircleAlert, CircleX, Minus, X } from "lucide-react";
+import { Check, CircleAlert, Minus, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Resolver, useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
@@ -1143,7 +1143,6 @@ const IDENTITY_FIELDS: {
   field: Exclude<keyof Values, "serial" | "loid" | "ploam" | "loid_secret">;
   key: string;
   label: Key;
-  hint?: Key;
   group: Group;
   olt: ((u: Unit) => string | number | null) | null;
   numeric?: boolean;
@@ -1153,7 +1152,6 @@ const IDENTITY_FIELDS: {
     field: "vendor_id",
     key: "VENDOR_ID",
     label: "fibre.vendorId",
-    hint: "fibre.vendorIdHint",
     group: "unit",
     olt: (u) => u.vendorId,
     mono: true,
@@ -1184,7 +1182,6 @@ const IDENTITY_FIELDS: {
     field: "omcc_version",
     key: "OMCC_VERSION",
     label: "fibre.omccVersion",
-    hint: "fibre.omccHint",
     group: "software",
     olt: (u) => u.omcc,
     numeric: true,
@@ -1201,7 +1198,6 @@ const IDENTITY_FIELDS: {
     field: "tm_option",
     key: "TM_OPTION",
     label: "fibre.tmOption",
-    hint: "fibre.tmHint",
     group: "software",
     olt: (u) => u.tmOption,
     numeric: true,
@@ -1227,11 +1223,6 @@ const IDENTITY_FIELDS: {
     group: "software",
     olt: (u) => u.packVersion,
   },
-];
-
-const GROUPS: { id: Group; label: Key; hint: Key }[] = [
-  { id: "unit", label: "fibre.groupUnit", hint: "fibre.groupUnitHint" },
-  { id: "software", label: "fibre.groupSoftware", hint: "fibre.groupSoftwareHint" },
 ];
 
 const numberOrEmpty = (max: number) =>
@@ -1287,9 +1278,6 @@ function initial(i: Identity): Values {
   };
 }
 
-/* The identity form's columns: the field, the stick's value, what the OLT reads. */
-const IDENTITY_COLS = "md:grid-cols-[minmax(11rem,16rem)_minmax(12rem,26rem)_minmax(10rem,1fr)]";
-
 /*
  * Whether the stick's value is the one the OLT reads: true or false, null when
  * the field is empty and the stick gives its factory value, undefined when
@@ -1309,255 +1297,6 @@ function sameAsOlt(
     : stick.trim().toUpperCase() === String(olt).trim().toUpperCase();
 }
 
-/* What the OLT reads beside what the stick holds: the same, another value, or a default. */
-function OltValue({
-  stick,
-  olt,
-  numeric,
-  mono,
-}: {
-  stick: string;
-  olt: string | number | null | undefined;
-  numeric?: boolean;
-  mono?: boolean;
-}) {
-  const { t } = useI18n();
-  if (olt === undefined)
-    return <span className="text-xs text-base-content/70">{t("fibre.oltNotRead")}</span>;
-  if (olt === null)
-    return <span className="text-xs text-base-content/70">{t("fibre.oltNone")}</span>;
-  const empty = olt === "";
-  const shown = empty
-    ? t("fibre.oltEmpty")
-    : numeric && typeof olt === "number"
-      ? `${olt} (0x${olt.toString(16)})`
-      : String(olt);
-  const same = sameAsOlt(stick, olt, numeric);
-  return (
-    <span className="grid min-w-0 gap-0.5">
-      <span className="flex min-w-0 items-center gap-1.5">
-        {same === true && (
-          <Check className="size-3.5 shrink-0 text-success" aria-label={t("fibre.oltSame")} />
-        )}
-        {same === false && <CircleAlert className="size-3.5 shrink-0 text-warning" aria-hidden />}
-        <span
-          className={`min-w-0 break-words text-sm ${mono && !empty ? "font-mono" : ""} ${empty ? "italic text-base-content/70" : ""}`}
-          title={same === null ? t("fibre.oltDefaultHint") : undefined}
-        >
-          {shown}
-        </span>
-      </span>
-      {same === false && (
-        <span className="text-xs text-base-content/70" title={t("fibre.oltDiffersHint")}>
-          {t("fibre.oltDiffers")}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/*
- * What OMCI tells the OLT of the stick, one group at a time, chosen from tabs
- * beside them. Only those fields are checked and sent, and with them the
- * serial number as it is, which every change of the identity carries.
- */
-function IdentityForm({ identity }: { identity: Identity }) {
-  const { t } = useI18n();
-  const change = useIdentityChange();
-  const state = useChangeState(change);
-  const { mib } = useMib();
-  const u = mib.empty ? null : unitOf(mib);
-  const extended = identity.loid !== undefined;
-  const visible = IDENTITY_FIELDS.filter((f) => extended || !EXTENDED_FIELDS.includes(f.field));
-  const rule = t("fibre.serialRule");
-  const names = visible.map((f) => f.field).join(" ");
-  const resolver = useMemo(
-    () => identityResolver(rule, names.split(" ") as (keyof Values)[]),
-    [rule, names],
-  );
-  const form = useForm<Values>({ resolver, defaultValues: initial(identity) });
-  const { errors, isDirty, dirtyFields } = form.formState;
-  const values = form.watch();
-  const changed = Object.keys(dirtyFields).length;
-  const [group, setGroup] = useState<Group>("unit");
-  /* What a group holds that the reader is to see before opening it. */
-  const tally = (g: Group) => {
-    const fields = visible.filter((f) => f.group === g);
-    return {
-      changed: fields.filter((f) => dirtyFields[f.field]).length,
-      errors: fields.filter((f) => errors[f.field]).length,
-      differs: fields.filter(
-        (f) => u && f.olt && sameAsOlt(values[f.field] ?? "", f.olt(u), f.numeric) === false,
-      ).length,
-    };
-  };
-
-  useEffect(() => {
-    if (!form.formState.isDirty) form.reset(initial(identity));
-  }, [identity, form]);
-
-  const submit = form.handleSubmit(
-    (v) => {
-      if (!window.confirm(t("fibre.identityConfirm"))) return;
-      const out: Record<string, string> = { SERIAL: identity.serial };
-      for (const f of visible) if (dirtyFields[f.field]) out[f.key] = v[f.field];
-      change.mutate(out, { onSuccess: () => form.reset(v) });
-    },
-    (bad) => {
-      /* An error in a group not shown opens that group. */
-      const g = visible.find((f) => f.field in bad)?.group;
-      if (g) setGroup(g);
-    },
-  );
-
-  const row = (
-    label: string,
-    hint: string | undefined,
-    input: ReactNode,
-    olt: ReactNode,
-    key: string,
-  ) => (
-    <div
-      key={key}
-      className={`grid items-start gap-x-6 gap-y-1 border-b border-base-200 py-2 last:border-0 ${IDENTITY_COLS}`}
-    >
-      <div className="min-w-0 md:pt-1.5">
-        <div className="text-sm font-semibold">{label}</div>
-        {hint && <div className="text-xs text-base-content/70">{hint}</div>}
-      </div>
-      <div className="grid min-w-0 gap-1">{input}</div>
-      <div className="min-w-0 md:pt-1.5">
-        <span className="block text-xs text-base-content/70 md:hidden">{t("fibre.colOlt")}</span>
-        {olt}
-      </div>
-    </div>
-  );
-
-  const fieldRow = (f: (typeof IDENTITY_FIELDS)[number]) =>
-    row(
-      t(f.label),
-      f.hint ? t(f.hint) : undefined,
-      <>
-        <input
-          className={`input input-sm w-full ${f.mono ? "font-mono" : ""} ${errors[f.field] ? "input-error" : ""} ${dirtyFields[f.field] ? "border-primary" : ""}`}
-          spellcheck={false}
-          autoComplete="off"
-          aria-label={t(f.label)}
-          {...form.register(f.field)}
-        />
-        {errors[f.field] ? (
-          <p className="text-xs text-error">{errors[f.field]?.message}</p>
-        ) : (
-          !(values[f.field] ?? "").trim() && <Detail>{t("fibre.factoryValue")}</Detail>
-        )}
-      </>,
-      <OltValue
-        stick={values[f.field] ?? ""}
-        olt={!u ? undefined : f.olt ? f.olt(u) : null}
-        numeric={f.numeric}
-        mono={f.mono}
-      />,
-      f.field,
-    );
-
-  return (
-    <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
-        <div
-          role="tablist"
-          aria-orientation="vertical"
-          className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible lg:border-r lg:border-base-200 lg:pr-4"
-        >
-          {GROUPS.map((g) => {
-            const n = tally(g.id);
-            const active = g.id === group;
-            return (
-              <button
-                key={g.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setGroup(g.id)}
-                className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
-              >
-                <span className="flex w-full items-center gap-2 text-sm font-semibold">
-                  {t(g.label)}
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {n.errors > 0 && (
-                      <span title={t("fibre.groupErrors")}>
-                        <CircleX
-                          className="size-3.5 text-error"
-                          aria-label={t("fibre.groupErrors")}
-                        />
-                      </span>
-                    )}
-                    {n.differs > 0 && (
-                      <span
-                        className="tabular flex items-center gap-0.5 text-xs font-normal text-base-content"
-                        title={t("fibre.differsN", { n: n.differs })}
-                      >
-                        <CircleAlert className="size-3.5 text-warning" />
-                        {n.differs}
-                      </span>
-                    )}
-                    {n.changed > 0 && (
-                      <span
-                        className="badge badge-primary badge-sm tabular"
-                        title={t("fibre.changedN", { n: n.changed })}
-                      >
-                        {n.changed}
-                      </span>
-                    )}
-                  </span>
-                </span>
-                <span className="hidden text-xs font-normal text-base-content/70 lg:block">
-                  {t(g.hint)}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="flex min-h-0 flex-col">
-          <div
-            className={`hidden gap-x-6 border-b border-base-300 pb-1.5 text-xs font-semibold text-base-content/70 md:grid ${IDENTITY_COLS}`}
-          >
-            <span>{t("fibre.colField")}</span>
-            <span>{t("fibre.colOnStick")}</span>
-            <span>{t("fibre.colOlt")}</span>
-          </div>
-          <div role="tabpanel" className="min-h-0 flex-1 overflow-auto">
-            {visible.filter((f) => f.group === group).map(fieldRow)}
-          </div>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
-        <button
-          type="submit"
-          className="btn btn-primary btn-sm"
-          disabled={!isDirty || change.isPending}
-        >
-          {t("internet.save")}
-        </button>
-        {isDirty && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => form.reset()}>
-            {t("form.discard")}
-          </button>
-        )}
-        {changed > 0 && (
-          <span className="text-sm text-base-content/70">
-            {t("fibre.changedN", { n: changed })}
-          </span>
-        )}
-        <SaveState {...state} />
-        <span className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-base-content/70">
-          <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-          {t("fibre.identityWarning")}
-        </span>
-      </div>
-    </form>
-  );
-}
-
 /* A line under a field: what it says, with a mark when it agrees or not. */
 function Note({ mark, children }: { mark: "same" | "differs"; children: ReactNode }) {
   return (
@@ -1569,6 +1308,295 @@ function Note({ mark, children }: { mark: "same" | "differs"; children: ReactNod
       )}
       {children}
     </span>
+  );
+}
+
+/*
+ * What the OLT sees of a field that holds @stick, the line under the field:
+ * the same, another value, the factory value for an empty field, or not yet
+ * read. A number above 9 shows in decimal and hexadecimal.
+ */
+function useOltNote() {
+  const { t } = useI18n();
+  const shown = (olt: string | number, numeric?: boolean) =>
+    numeric && typeof olt === "number" && olt > 9 ? `${olt} (0x${olt.toString(16)})` : String(olt);
+  return (stick: string, olt: string | number | null | undefined, numeric?: boolean): ReactNode => {
+    const same = sameAsOlt(stick, olt, numeric);
+    if (olt == null || same === undefined) return t("fibre.oltNotYet");
+    if (same === null) return t("fibre.oltSeesFactory", { v: shown(olt, numeric) });
+    if (same)
+      return <Note mark="same">{t(olt === "" ? "fibre.oltSeesEmpty" : "fibre.oltSeesSame")}</Note>;
+    return (
+      <Note mark="differs">
+        {olt === "" ? t("fibre.oltSeesNone") : t("fibre.oltSeesOther", { v: shown(olt, numeric) })}
+      </Note>
+    );
+  };
+}
+
+/*
+ * The foot of a form whose change makes the stick register with the OLT
+ * again: the button says so; asked, the foot asks once more where it stood,
+ * and the second click of a double one on the button that asked does not
+ * answer.
+ */
+function ReregisterFoot({
+  asking,
+  dirty,
+  pending,
+  state,
+  onConfirm,
+  onCancel,
+  onDiscard,
+}: {
+  asking: boolean;
+  dirty: boolean;
+  pending: boolean;
+  state: ReturnType<typeof useChangeState>;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onDiscard: () => void;
+}) {
+  const { t } = useI18n();
+  const yes = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (asking) yes.current?.focus();
+  }, [asking]);
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
+      {asking ? (
+        <>
+          <button
+            ref={yes}
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={(e) => e.detail < 2 && onConfirm()}
+          >
+            {t("fibre.registerAgain")}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
+            {t("common.cancel")}
+          </button>
+          <span role="alert" className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-sm">
+            <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+            {t("fibre.identityConfirm")}
+          </span>
+        </>
+      ) : (
+        <>
+          <button type="submit" className="btn btn-primary btn-sm" disabled={!dirty || pending}>
+            {t("fibre.saveRegister")}
+          </button>
+          {dirty && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onDiscard}>
+              {t("form.discard")}
+            </button>
+          )}
+          <SaveState {...state} />
+          <span className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-base-content/70">
+            <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+            {t("fibre.identityWarning")}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* A group of fields' heading: its name and what it holds. */
+function FieldsHead({ title, hint }: { title: Key; hint: Key }) {
+  const { t } = useI18n();
+  return (
+    <div>
+      <h3 className="text-base font-semibold">{t(title)}</h3>
+      <p className="text-xs text-base-content/70">{t(hint)}</p>
+    </div>
+  );
+}
+
+/*
+ * The OMCC versions of ITU-T G.988 (ONU2-G), offered in the field: up to
+ * 0x85 the editions of G.984.4, then each edition with the baseline message
+ * set only, or with the extended one too, which omcid does not handle. The
+ * stick gives 0xA3 when the field is empty.
+ */
+const OMCC_VERSIONS: { v: number; std: string; set?: "base" | "ext" }[] = [
+  { v: 0x80, std: "G.984.4 (2004)" },
+  { v: 0x81, std: "G.984.4 Amd. 1 (2005)" },
+  { v: 0x82, std: "G.984.4 Amd. 2 (2006)" },
+  { v: 0x83, std: "G.984.4 Amd. 3 (2006)" },
+  { v: 0x84, std: "G.984.4 (2008)" },
+  { v: 0x85, std: "G.984.4 (2008) Amd. 1 (2009)" },
+  { v: 0x86, std: "G.984.4 (2008) Amd. 2 (2009)", set: "base" },
+  { v: 0x96, std: "G.984.4 (2008) Amd. 2 (2009)", set: "ext" },
+  { v: 0xa0, std: "G.988 (2010)", set: "base" },
+  { v: 0xa1, std: "G.988 Amd. 1 (2011)", set: "base" },
+  { v: 0xa2, std: "G.988 Amd. 2 (2012)", set: "base" },
+  { v: 0xa3, std: "G.988 (2012)", set: "base" },
+  { v: 0xb0, std: "G.988 (2010)", set: "ext" },
+  { v: 0xb1, std: "G.988 Amd. 1 (2011)", set: "ext" },
+  { v: 0xb2, std: "G.988 Amd. 2 (2012)", set: "ext" },
+  { v: 0xb3, std: "G.988 (2012)", set: "ext" },
+];
+
+/* The traffic management options of ONU-G, by their value. */
+const TM_OPTIONS: Key[] = ["fibre.tm0", "fibre.tm1", "fibre.tm2"];
+
+/*
+ * What OMCI tells the OLT of the stick, in its two groups side by side, in
+ * rows shared across both, so that the fields of a row are level, as in the
+ * registration's form. Under each field one line: what the OLT sees of it,
+ * and for the OMCC version first what that version is. The traffic
+ * management option is a choice of its three values. Only these fields are
+ * checked and sent, and with them the serial number as it is, which every
+ * change of the identity carries.
+ */
+function IdentityForm({ identity }: { identity: Identity }) {
+  const { t } = useI18n();
+  const change = useIdentityChange();
+  const state = useChangeState(change);
+  const { mib } = useMib();
+  const u = mib.empty ? null : unitOf(mib);
+  const note = useOltNote();
+  const extended = identity.loid !== undefined;
+  const visible = IDENTITY_FIELDS.filter((f) => extended || !EXTENDED_FIELDS.includes(f.field));
+  const rule = t("fibre.serialRule");
+  const names = visible.map((f) => f.field).join(" ");
+  const resolver = useMemo(
+    () => identityResolver(rule, names.split(" ") as (keyof Values)[]),
+    [rule, names],
+  );
+  const form = useForm<Values>({ resolver, defaultValues: initial(identity) });
+  const { errors, isDirty, dirtyFields } = form.formState;
+  const values = form.watch();
+  const [asking, setAsking] = useState(false);
+
+  useEffect(() => {
+    if (!form.formState.isDirty) form.reset(initial(identity));
+  }, [identity, form]);
+
+  const ask = form.handleSubmit(() => setAsking(isDirty));
+  const save = form.handleSubmit((v) => {
+    setAsking(false);
+    const out: Record<string, string> = { SERIAL: identity.serial };
+    for (const f of visible) if (dirtyFields[f.field]) out[f.key] = v[f.field];
+    change.mutate(out, { onSuccess: () => form.reset(v) });
+  });
+
+  /* The OMCC version a field's value names, in words; nothing for an empty one. */
+  const omcc = (value: string) => {
+    if (!value.trim()) return null;
+    const o = OMCC_VERSIONS.find((x) => x.v === Number(value));
+    if (!o) return t("fibre.omccUnknown");
+    return [
+      o.std,
+      o.set && t(o.set === "base" ? "fibre.omccBase" : "fibre.omccExt"),
+      o.v === 0xa3 && t("fibre.omccDefault"),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  };
+  const line = (f: (typeof IDENTITY_FIELDS)[number]) => {
+    const value = values[f.field] ?? "";
+    if (!f.olt)
+      return [!value.trim() && t("fibre.factoryValue"), t("fibre.oltNone")]
+        .filter(Boolean)
+        .join(" ");
+    return note(value, u ? f.olt(u) : undefined, f.numeric);
+  };
+  const field = (f: (typeof IDENTITY_FIELDS)[number]) => {
+    if (f.field === "tm_option")
+      return (
+        <div key={f.field} className="grid content-start gap-1">
+          <label htmlFor={f.field} className="text-sm font-semibold">
+            {t(f.label)}
+          </label>
+          <select
+            id={f.field}
+            className={`select w-full ${errors[f.field] ? "select-error" : ""}`}
+            {...form.register(f.field)}
+          >
+            <option value="">{t("fibre.tmFactory")}</option>
+            {TM_OPTIONS.map((k, n) => (
+              <option key={k} value={String(n)}>
+                {t(k)}
+              </option>
+            ))}
+          </select>
+          {errors[f.field] ? (
+            <p className="text-xs text-error">{errors[f.field]?.message}</p>
+          ) : (
+            <p className="text-xs text-base-content/70">{line(f)}</p>
+          )}
+        </div>
+      );
+    const named = f.field === "omcc_version" ? omcc(values[f.field] ?? "") : null;
+    return (
+      <Field
+        key={f.field}
+        label={t(f.label)}
+        mono={f.mono || f.field === "omcc_version"}
+        list={f.field === "omcc_version" ? "omcc-versions" : undefined}
+        error={errors[f.field]?.message}
+        hint={
+          named ? (
+            <span className="grid gap-0.5">
+              <span>{named}</span>
+              <span>{line(f)}</span>
+            </span>
+          ) : (
+            line(f)
+          )
+        }
+        {...form.register(f.field)}
+      />
+    );
+  };
+
+  const unit = visible.filter((f) => f.group === "unit");
+  const soft = visible.filter((f) => f.group === "software");
+  const rows = 1 + Math.max(unit.length, soft.length);
+  /* Empty cells fill the shorter group, so that the other's fields keep to their rows. */
+  const fill = (n: number, key: string) =>
+    Array.from({ length: n }, (_, i) => (
+      // biome-ignore lint/suspicious/noArrayIndexKey: empty cells, all alike
+      <div key={`${key}${i}`} aria-hidden />
+    ));
+
+  return (
+    <form onSubmit={ask} noValidate className="grid gap-3">
+      <div
+        className="grid max-w-5xl gap-x-10 gap-y-2.5 md:grid-flow-col md:grid-cols-2"
+        style={{ gridTemplateRows: `repeat(${rows}, auto)` }}
+      >
+        <FieldsHead title="fibre.groupUnit" hint="fibre.groupUnitHint" />
+        {unit.map(field)}
+        {fill(rows - 1 - unit.length, "u")}
+        <FieldsHead title="fibre.groupSoftware" hint="fibre.groupSoftwareHint" />
+        {soft.map(field)}
+        {fill(rows - 1 - soft.length, "s")}
+      </div>
+      <datalist id="omcc-versions">
+        {OMCC_VERSIONS.map((o) => (
+          <option
+            key={o.v}
+            value={`0x${o.v.toString(16)}`}
+            label={[o.std, o.set && t(o.set === "base" ? "fibre.omccBase" : "fibre.omccExt")]
+              .filter(Boolean)
+              .join(" · ")}
+          />
+        ))}
+      </datalist>
+      <ReregisterFoot
+        asking={asking}
+        dirty={isDirty}
+        pending={change.isPending}
+        state={state}
+        onConfirm={save}
+        onCancel={() => setAsking(false)}
+        onDiscard={() => form.reset()}
+      />
+    </form>
   );
 }
 
@@ -1587,6 +1615,7 @@ function RegistrationForm({ identity }: { identity: Identity }) {
   const { omci, mib } = useMib();
   const counters = useLive().data?.onu?.counters;
   const u = mib.empty ? null : unitOf(mib);
+  const note = useOltNote();
   const loid = identity.loid !== undefined;
   const rule = t("fibre.serialRule");
   const resolver = useMemo(
@@ -1601,14 +1630,10 @@ function RegistrationForm({ identity }: { identity: Identity }) {
   const { errors, isDirty, dirtyFields } = form.formState;
   const values = form.watch();
   const [asking, setAsking] = useState(false);
-  const yes = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!form.formState.isDirty) form.reset(initial(identity));
   }, [identity, form]);
-  useEffect(() => {
-    if (asking) yes.current?.focus();
-  }, [asking]);
 
   const ask = form.handleSubmit(() => setAsking(isDirty));
   const save = form.handleSubmit((v) => {
@@ -1620,39 +1645,21 @@ function RegistrationForm({ identity }: { identity: Identity }) {
     change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
   });
 
-  /* What the OLT sees of a field that holds @stick. */
-  const seen = (stick: string, olt: string | null | undefined): ReactNode => {
-    if (olt == null) return t("fibre.oltNotYet");
-    const same = sameAsOlt(stick, olt);
-    if (same === null) return t("fibre.oltSeesFactory", { v: olt });
-    if (same) return <Note mark="same">{t(olt ? "fibre.oltSeesSame" : "fibre.oltSeesEmpty")}</Note>;
-    return (
-      <Note mark="differs">
-        {olt ? t("fibre.oltSeesOther", { v: olt }) : t("fibre.oltSeesNone")}
-      </Note>
-    );
-  };
   const kept = (set: boolean | undefined) =>
     t(set ? "internet.passwordKept" : "fibre.secretNoneHint");
   const asked = counters?.password_requests;
-  const head = (title: Key, hint: Key) => (
-    <div>
-      <h3 className="text-base font-semibold">{t(title)}</h3>
-      <p className="text-xs text-base-content/70">{t(hint)}</p>
-    </div>
-  );
 
   return (
     <form onSubmit={ask} noValidate className="grid gap-4">
       <div
         className={`grid gap-x-10 gap-y-4 ${loid ? "max-w-4xl md:grid-flow-col md:grid-cols-2 md:grid-rows-[auto_auto_auto]" : "max-w-md"}`}
       >
-        {head("fibre.bySerial", "fibre.bySerialHint")}
+        <FieldsHead title="fibre.bySerial" hint="fibre.bySerialHint" />
         <Field
           label={t("fibre.serial")}
           mono
           error={errors.serial?.message}
-          hint={seen(values.serial, u?.serial)}
+          hint={note(values.serial, u?.serial ?? undefined)}
           {...form.register("serial")}
         />
         <Field
@@ -1675,11 +1682,11 @@ function RegistrationForm({ identity }: { identity: Identity }) {
         />
         {loid && (
           <>
-            {head("fibre.byLoid", "fibre.byLoidHint")}
+            <FieldsHead title="fibre.byLoid" hint="fibre.byLoidHint" />
             <Field
               label={t("fibre.loid")}
               error={errors.loid?.message}
-              hint={seen(values.loid, u?.loid)}
+              hint={note(values.loid, u?.loid ?? undefined)}
               {...form.register("loid")}
             />
             <Field
@@ -1702,73 +1709,37 @@ function RegistrationForm({ identity }: { identity: Identity }) {
           </>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
-        {asking ? (
-          <>
-            {/* The second click of a double one on the button that asked does not answer. */}
-            <button
-              ref={yes}
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={(e) => e.detail < 2 && save()}
-            >
-              {t("fibre.registerAgain")}
-            </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAsking(false)}>
-              {t("common.cancel")}
-            </button>
-            <span role="alert" className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-sm">
-              <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
-              {t("fibre.identityConfirm")}
-            </span>
-          </>
-        ) : (
-          <>
-            <button
-              type="submit"
-              className="btn btn-primary btn-sm"
-              disabled={!isDirty || change.isPending}
-            >
-              {t("fibre.saveRegister")}
-            </button>
-            {isDirty && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => form.reset()}>
-                {t("form.discard")}
-              </button>
-            )}
-            <SaveState {...state} />
-            <span className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-base-content/70">
-              <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
-              {t("fibre.identityWarning")}
-            </span>
-          </>
-        )}
-      </div>
+      <ReregisterFoot
+        asking={asking}
+        dirty={isDirty}
+        pending={change.isPending}
+        state={state}
+        onConfirm={save}
+        onCancel={() => setAsking(false)}
+        onDiscard={() => form.reset()}
+      />
     </form>
   );
 }
 
 /*
  * A card of the identity, with its @title and @hint, whose values these are,
- * and the @form of them; @fill stretches it down the page, for a form that
- * scrolls inside it.
+ * and the @form of them: as tall as the form.
  */
 function IdentityCard({
   title,
   hint,
-  fill,
   form,
 }: {
   title: Key;
   hint: Key;
-  fill?: boolean;
   form: (i: Identity) => ReactNode;
 }) {
   const { t } = useI18n();
   const identity = useIdentity();
   return (
-    <section className={`card min-h-0 border border-base-300 bg-base-100 ${fill ? "flex-1" : ""}`}>
-      <div className="card-body min-h-0 gap-4 p-4 sm:p-5">
+    <section className="card min-h-0 border border-base-300 bg-base-100">
+      <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-1">
           <div>
             <h2 className="card-title text-base">{t(title)}</h2>
@@ -2067,7 +2038,6 @@ export function IdentityPage() {
       <IdentityCard
         title="fibre.identity"
         hint="fibre.identityHint"
-        fill
         form={(i) => <IdentityForm identity={i} />}
       />
     </Page>
