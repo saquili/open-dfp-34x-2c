@@ -537,13 +537,18 @@ function MulticastFacts({ m }: { m: Multicast }) {
 function useRuleText() {
   const { t } = useI18n();
   const prio = (p: number) => (p <= 7 ? t("fibre.prioN", { p }) : "");
-  const match = (r: VlanRule) => {
+  /* What a rule matches by its VLAN alone: the VLAN, any, or none. */
+  const vlan = (r: VlanRule) => {
     const tags = tagsMatched(r);
     if (isDefault(r)) return tags === 1 ? t("fibre.matchOtherSingle") : t("fibre.matchOtherDouble");
     if (tags === 0) return t("fibre.matchUntagged");
     const tag = tags === 1 ? r.inner : r.outer;
-    const vid = tag.vid === 4096 ? t("fibre.anyVlan") : t("switch.vlanN", { id: tag.vid });
-    return [vid, prio(tag.prio)].filter(Boolean).join(", ");
+    return tag.vid === 4096 ? t("fibre.anyVlan") : t("switch.vlanN", { id: tag.vid });
+  };
+  const match = (r: VlanRule) => {
+    const tags = tagsMatched(r);
+    if (isDefault(r) || tags === 0) return vlan(r);
+    return [vlan(r), prio((tags === 1 ? r.inner : r.outer).prio)].filter(Boolean).join(", ");
   };
   const action = (r: VlanRule) => {
     if (r.remove === 3) return t("fibre.actDrop");
@@ -561,33 +566,48 @@ function useRuleText() {
       .filter(Boolean)
       .join(", ");
   };
-  return { match, action };
+  return { vlan, match, action };
 }
 
 /** What the stick does with a service: the channels' uses, as words, each a neutral pill. */
+/*
+ * What the stick does with a service's VLAN, as the VLAN page says it: its
+ * sessions in it, or a bridge to the SFP port, or it ends on the stick; and
+ * whether it carries multicast. The shared broadcast channel, which every
+ * service has, says nothing of any one of them.
+ */
 function useServiceUse() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const views = gems(live);
-  return (s: Service) => {
-    const ports = new Set(s.ports.flatMap((p) => p.channels.map((c) => c.portId)));
-    const uses = new Set(views.filter((v) => ports.has(v.gem.port_id)).map((v) => v.use));
+  return (s: Service): { title: string; to?: string; more: string[] } => {
     const own = sessions(live).filter((x) => s.vlan != null && fibreVlan(x) === String(s.vlan));
-    const tags: string[] = [];
-    if (own.length) tags.push(t("fibre.tagSession", { list: own.map((x) => x.id).join(", ") }));
-    if (uses.has("bridged")) tags.push(t("fibre.tagBridged"));
-    if (s.multicast) tags.push(t("fibre.tagMulticast"));
-    if (!tags.length) tags.push(t("fibre.tagStick"));
-    return tags;
+    const ports = new Set(
+      s.ports
+        .filter((p) => (p.vlans?.length ?? 0) <= 1)
+        .flatMap((p) => p.channels.map((c) => c.portId)),
+    );
+    const bridged = views.some((v) => ports.has(v.gem.port_id) && v.use === "bridged");
+    const more = s.multicast ? [t("fibre.tagMulticast")] : [];
+    if (own.length)
+      return {
+        title: t("fibre.svcSessions"),
+        to: "/internet/wan",
+        more: [`PPPoE ${own.map((x) => x.id).join(", ")}`, ...more],
+      };
+    return { title: t(bridged ? "fibre.svcBridged" : "fibre.svcEnds"), more };
   };
 }
 
-function hostText(t: (k: Key, v?: Record<string, string | number>) => string, s: Service) {
-  return s.hostVlans.length === 0
-    ? s.vlan == null
-      ? t("fibre.hostAll")
-      : t("fibre.hostSame", { vid: s.vlan })
-    : s.hostVlans.map((v) => (v == null ? t("switch.untagged") : String(v))).join(", ");
+/* A service's VLAN as the host knows it, and the fibre's when the OLT translates it. */
+function vlanName(
+  t: (k: Key, v?: Record<string, string | number>) => string,
+  s: Service,
+): { main: string; fibre: number | null } {
+  if (!s.hostVlans.length)
+    return { main: s.vlan == null ? t("fibre.hostAll") : String(s.vlan), fibre: null };
+  const main = s.hostVlans.map((v) => (v == null ? t("switch.untagged") : String(v))).join(", ");
+  return { main, fibre: s.vlan != null && main !== String(s.vlan) ? s.vlan : null };
 }
 
 /*
@@ -687,10 +707,9 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
           <thead className="@max-4xl:hidden">
             <tr>
               <th className="w-px" />
-              <th>{t("fibre.colVlan")}</th>
-              <th>{t("fibre.colHost")}</th>
-              <th>{t("fibre.colChannels")}</th>
+              <th>VLAN</th>
               <th>{t("fibre.colStick")}</th>
+              <th>{t("fibre.colChannels")}</th>
               <th className="text-right">{t("fibre.now")}</th>
             </tr>
           </thead>
@@ -710,7 +729,9 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               }
               const isOpen = open.has(k);
               const more = `service-${k}`;
-              const vlan = s.vlan == null ? t("fibre.noVlan") : String(s.vlan);
+              const name = vlanName(t, s);
+              const u = use(s);
+              const channels = [...new Set(ids.map((c) => c.portId))];
               return (
                 <Fragment key={k}>
                   <tr
@@ -721,53 +742,41 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                       <Caret
                         open={isOpen}
                         controls={more}
-                        label={t("fibre.serviceDetails", { vlan })}
+                        label={t("fibre.serviceDetails", { vlan: name.main })}
                         onToggle={() => toggle(k)}
                       />
                     </td>
-                    <td
-                      data-h={t("fibre.colVlan")}
-                      className={`tabular font-semibold ${NARROW_CELL}`}
-                    >
-                      {vlan}
-                    </td>
-                    <td data-h={t("fibre.colHost")} className={`tabular ${NARROW_CELL}`}>
-                      {hostText(t, s)}
-                    </td>
-                    <td data-h={t("fibre.colChannels")} className={NARROW_CELL}>
-                      <span className="flex flex-wrap gap-1">
-                        {s.ports.flatMap((p) =>
-                          p.channels.map((c) => (
-                            <span
-                              key={`${p.id}-${c.portId}`}
-                              className={`badge badge-sm tabular ${(p.vlans?.length ?? 0) > 1 ? "badge-ghost" : "badge-outline"}`}
-                              title={
-                                (p.vlans?.length ?? 0) > 1 ? t("fibre.sharedBroadcast") : undefined
-                              }
-                            >
-                              {c.portId}
-                              {c.pbits.length > 0 && c.pbits.length < 8 && (
-                                <span className="text-base-content/70">
-                                  {" "}
-                                  p
-                                  {c.pbits.length > 1
-                                    ? `${c.pbits[0]}–${c.pbits.at(-1)}`
-                                    : c.pbits[0]}
-                                </span>
-                              )}
-                            </span>
-                          )),
+                    <td data-h="VLAN" className={NARROW_CELL}>
+                      <span className="grid gap-0.5">
+                        <span className="tabular font-semibold">{name.main}</span>
+                        {name.fibre != null && (
+                          <Detail>{t("internet.onFibre", { vid: name.fibre })}</Detail>
                         )}
                       </span>
                     </td>
                     <td data-h={t("fibre.colStick")} className={NARROW_CELL}>
-                      <span className="flex flex-wrap gap-1 *:whitespace-nowrap">
-                        {use(s).map((u) => (
-                          <Badge key={u} tone="neutral">
-                            {u}
-                          </Badge>
-                        ))}
+                      <span className="grid gap-0.5">
+                        {u.to ? (
+                          <Link to={u.to} className="link link-hover link-primary">
+                            {u.title}
+                          </Link>
+                        ) : (
+                          <span>{u.title}</span>
+                        )}
+                        {u.more.length > 0 && <Detail>{u.more.join(" · ")}</Detail>}
                       </span>
+                    </td>
+                    <td data-h={t("fibre.colChannels")} className={NARROW_CELL}>
+                      {channels.length ? (
+                        <Link
+                          to="/operator/channels"
+                          className="link link-hover link-primary tabular"
+                        >
+                          GEM {channels.join(", ")}
+                        </Link>
+                      ) : (
+                        "–"
+                      )}
                     </td>
                     <td
                       data-h={t("fibre.now")}
@@ -779,7 +788,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                   {isOpen && (
                     <tr id={more} data-more className="@max-4xl:block @max-4xl:pb-2">
                       <td className="@max-4xl:hidden" />
-                      <td colSpan={5} className="pt-0 @max-4xl:block @max-4xl:p-0 @max-4xl:pl-10">
+                      <td colSpan={4} className="pt-0 @max-4xl:block @max-4xl:p-0 @max-4xl:pl-10">
                         <ServiceDetails s={s} />
                       </td>
                     </tr>
@@ -789,7 +798,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
             })}
             {!pager.shown.length && (
               <tr className="@max-4xl:block">
-                <td colSpan={6} className="text-base-content/70 @max-4xl:block">
+                <td colSpan={5} className="text-base-content/70 @max-4xl:block">
                   {t("fibre.noMatch")}
                 </td>
               </tr>
@@ -802,39 +811,83 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
   );
 }
 
+/*
+ * The VLAN rules, those next to each other that match the same VLAN and do
+ * the same with it one row, their priorities listed under it; the default
+ * rules, when they do the same, one row too, numbered from the first to the
+ * last.
+ */
 function RulesTable({ mib, q }: { mib: Mib; q: string }) {
   const { t } = useI18n();
   const text = useRuleText();
-  const rows = vlanRules(mib).flatMap((set) => set.rules.map((r, i) => ({ me: set.me, i, r })));
+  const rows: { me: number; first: number; last: number; rules: VlanRule[]; key: string }[] = [];
+  for (const set of vlanRules(mib))
+    set.rules.forEach((r, i) => {
+      const tag = tagsMatched(r) === 2 ? r.outer : r.inner;
+      const key = `${isDefaultEntry(r) ? "default" : `${tagsMatched(r)}-${tag.vid}`}|${text.action(r)}`;
+      const prev = rows.at(-1);
+      if (prev && prev.me === set.me && prev.key === key && prev.last === i - 1) {
+        prev.last = i;
+        prev.rules.push(r);
+      } else rows.push({ me: set.me, first: i, last: i, rules: [r], key });
+    });
   const needle = q.trim();
-  const shown = rows.filter((x) => {
-    if (!needle) return true;
-    const tr = translation(x.r);
-    return String(tr?.from ?? "").includes(needle) || String(tr?.to ?? "").includes(needle);
-  });
+  const shown = rows.filter(
+    (x) =>
+      !needle ||
+      x.rules.some((r) => {
+        const tr = translation(r);
+        return String(tr?.from ?? "").includes(needle) || String(tr?.to ?? "").includes(needle);
+      }),
+  );
   const pager = usePages(shown);
+  /* What a row matches: the VLAN, the priorities under it; or the default rules by name. */
+  const match = (rules: VlanRule[]) => {
+    const [r] = rules as [VlanRule, ...VlanRule[]];
+    if (isDefaultEntry(r))
+      return rules.length > 1 ? (
+        <>
+          <span>{t("fibre.matchAnyOther")}</span>
+          <Detail>
+            {t("fibre.ruleDefaults", { list: rules.map((x) => text.match(x)).join(" · ") })}
+          </Detail>
+        </>
+      ) : (
+        <>
+          <span>{text.match(r)}</span>
+          <Detail>{t("fibre.ruleDefault")}</Detail>
+        </>
+      );
+    const tag = (x: VlanRule) => (tagsMatched(x) === 2 ? x.outer : x.inner);
+    const prios = rules.map((x) => tag(x).prio);
+    return (
+      <>
+        <span>{text.vlan(r)}</span>
+        {prios.every((p) => p <= 7) && <Detail>{t("fibre.prioN", { p: prios.join(", ") })}</Detail>}
+      </>
+    );
+  };
   return (
     <>
       <div className="min-h-0 flex-1 overflow-auto">
         <table className={`${TABLE} table-pin-rows`}>
           <thead>
             <tr>
-              <th className="w-10">#</th>
+              <th className="w-14">#</th>
               <th>{t("fibre.ruleFrom")}</th>
               <th>{t("fibre.ruleDo")}</th>
             </tr>
           </thead>
           <tbody>
             {pager.shown.map((x) => (
-              <tr key={`${x.me}-${x.i}`}>
-                <td className="tabular text-base-content/70">{x.i + 1}</td>
-                <td>
-                  <span className="grid gap-1">
-                    {text.match(x.r)}
-                    {isDefaultEntry(x.r) && <Detail>{t("fibre.ruleDefault")}</Detail>}
-                  </span>
+              <tr key={`${x.me}-${x.first}`}>
+                <td className="tabular whitespace-nowrap text-base-content/70">
+                  {x.first === x.last ? x.first + 1 : `${x.first + 1}–${x.last + 1}`}
                 </td>
-                <td>{text.action(x.r)}</td>
+                <td>
+                  <span className="grid gap-0.5">{match(x.rules)}</span>
+                </td>
+                <td>{text.action(x.rules[0] as VlanRule)}</td>
               </tr>
             ))}
             {!pager.shown.length && (
@@ -871,48 +924,25 @@ function OmciState({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-function ServiceList() {
+/* The services, or the VLAN rules, as the page's tab asks; a card that fits its table. */
+function ServiceList({ view }: { view: ServiceTab }) {
   const { t } = useI18n();
   const { omci, mib } = useMib();
-  const [view, setView] = useState<"services" | "rules">("services");
   const [q, setQ] = useState("");
-  const list = servicesOf(mib);
-  const rules = vlanRules(mib).reduce((n, set) => n + set.rules.length, 0);
   return (
     <OmciState>
-      <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
+      <section className="card min-h-0 border border-base-300 bg-base-100">
         <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div role="tablist" className="tabs tabs-border">
-              <button
-                type="button"
-                role="tab"
-                className={`tab ${view === "services" ? "tab-active" : ""}`}
-                onClick={() => setView("services")}
-              >
-                {t("fibre.viewServices", { n: list.length })}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                className={`tab ${view === "rules" ? "tab-active" : ""}`}
-                onClick={() => setView("rules")}
-              >
-                {t("fibre.viewRules", { n: rules })}
-              </button>
-            </div>
+          <div className="flex justify-end">
             <Filter value={q} onChange={setQ} placeholder={t("fibre.filterVlan")} />
           </div>
-          <p className="text-xs text-base-content/70">
-            {view === "services" ? t("fibre.servicesHint") : t("fibre.rulesHint")}
-          </p>
           {omci.data?.truncated && (
             <div role="alert" className="alert alert-warning alert-soft text-sm">
               {t("fibre.truncated")}
             </div>
           )}
           {view === "services" ? (
-            <ServicesTable list={list} q={q} />
+            <ServicesTable list={servicesOf(mib)} q={q} />
           ) : (
             <RulesTable mib={mib} q={q} />
           )}
@@ -1942,11 +1972,34 @@ export function FibrePage() {
   );
 }
 
+/* The services' tabs: the services, and the VLAN rules they come of. */
+const SERVICE_TABS = ["services", "rules"] as const;
+type ServiceTab = (typeof SERVICE_TABS)[number];
+
 export function ServicesPage() {
   const { t } = useI18n();
+  const { mib } = useMib();
+  const [tab, setTab] = useTab(SERVICE_TABS);
+  const services = mib.empty ? 0 : servicesOf(mib).length;
+  const rules = vlanRules(mib).reduce((n, set) => n + set.rules.length, 0);
   return (
-    <Page title={t("nav.services")} actions={<FibreState />}>
-      <ServiceList />
+    <Page
+      title={t("nav.services")}
+      hint={t(tab === "services" ? "fibre.servicesHint" : "fibre.rulesHint")}
+      tabs={
+        <Tabs
+          items={[
+            { id: "services", label: t("fibre.viewServices", { n: services }) },
+            { id: "rules", label: t("fibre.viewRules", { n: rules }) },
+          ]}
+          value={tab}
+          onChange={setTab}
+          label={t("nav.services")}
+        />
+      }
+      actions={<FibreState />}
+    >
+      <ServiceList view={tab} />
     </Page>
   );
 }

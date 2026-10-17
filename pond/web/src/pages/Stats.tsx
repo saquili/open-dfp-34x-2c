@@ -283,8 +283,8 @@ const LINE: {
 /* What a channel carries, in a few words. */
 const GEM_USE: Record<GemUse, Key> = {
   session: "stats.gemSession",
-  bridged: "stats.gemBridged",
-  ends: "stats.gemEnds",
+  bridged: "fibre.svcBridged",
+  ends: "fibre.svcEnds",
 };
 
 const MESSAGES: { label: Key; rx: string; crc: string; lost: string }[] = [

@@ -25,7 +25,7 @@ export function useGemText() {
         ? t("fibre.useSession", { vlan: v.vlan })
         : t("fibre.useSessionNoVlan")
       : v.use === "bridged"
-        ? t("fibre.useBridged", { bridge: v.bridge ?? "" })
+        ? t("fibre.useBridged")
         : t("fibre.useEnds");
 
   /** A word or two for the drawing. */
