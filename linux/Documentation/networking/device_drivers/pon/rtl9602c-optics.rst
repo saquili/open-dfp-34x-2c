@@ -693,6 +693,19 @@ SoC does not reach: the stick cannot change what the host reads, and a host
 sees no diagnostics and no loss-of-signal state through it. Why the two A0h
 pages are equal the measurement does not say.
 
+The cage's RX_LOS contact is the laser driver's own loss-of-signal output,
+not the SoC's. Measured on the same stick (2026-10-17), the host reading the
+line through its GPIO driver: with the fibre pulled twice, for 9 s and 42 s,
+the line was high within a second of the PON leaving O5 and low again within a
+second of light returning, and low at every other moment. The SoC's LED output
+15, which the shipped firmware drives on a loss of signal,
+held on, off and inverted in CPU force mode with the PON kind, left the line
+low. So the host has a loss-of-signal signal with no help from the SoC, and
+this driver drives none. A host that honours byte 65 of the A0h page in front
+of it takes the link down while the line is high; that page, written on the
+host's side, declares no RX_LOS on this stick, which keeps the stick reachable
+over the link while the fibre is dark.
+
 The ``tables`` view reads A2h bytes 128 to 255 for each table the page select
 can show, 0, 1, 2, 4, 5 and 6, and prints each as eight rows of sixteen bytes
 under a line ``=== table <n>``. It puts byte 127 back as it found it at the end, also when a table fails (``=== table <n>:
