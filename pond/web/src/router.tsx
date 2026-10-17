@@ -22,7 +22,7 @@ import { sessionQuery } from "./api/auth";
 import { OfflineError } from "./api/client";
 import { AppShell } from "./components/AppShell";
 import { useI18n } from "./i18n";
-import { ChannelsPage, FibrePage, IdentityPage, OmciPage, ServicesPage } from "./pages/Fibre";
+import { ChannelsPage, FibrePage, IdentityPage, ServicesPage } from "./pages/Fibre";
 import {
   ClientsPage,
   FirewallPage,
@@ -31,6 +31,7 @@ import {
   NatPage,
   WanPage,
 } from "./pages/Internet";
+import { OmciPage } from "./pages/Omci";
 import { Overview } from "./pages/Overview";
 import { SfpPage } from "./pages/SfpPage";
 import { ChangePassword, SignIn } from "./pages/SignIn";

@@ -19,6 +19,7 @@ import type {
   SfpLane,
 } from "../api/types";
 import { MAX_FIXED, MAX_FORWARDS, MAX_LANS, MAX_RULES } from "../lib/state";
+import { conversation } from "./conversation";
 import { BANKS, BRIDGE, clockNow, FIRMWARE, LIVE, NETWORK, TC_RULES, TLS } from "./fixture";
 import { OMCI, withServices } from "./omci";
 
@@ -708,6 +709,16 @@ export const handlers = [
         ? HttpResponse.json({ id: "omci", value: dark ? { mes: [] } : omci })
         : unauthorized())
     );
+  }),
+
+  /* The conversation began 20 minutes before the mock stick did. */
+  http.get("*/api/get/omci_frames", async ({ request }) => {
+    await delay(150);
+    const since = Number(new URL(request.url).searchParams.get("since") ?? 0) || 0;
+    const value = dark
+      ? { head: 0, first: 0, frames: [] }
+      : conversation(omci, Date.now(), Date.now() - started + 20 * 60_000, since);
+    return away() ?? (signedIn ? HttpResponse.json({ id: "omci_frames", value }) : unauthorized());
   }),
 
   http.get("*/api/get/tls", async () => {

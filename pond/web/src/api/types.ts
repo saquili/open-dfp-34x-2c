@@ -602,6 +602,29 @@ export interface OmciValue {
   frames: { handled: number; rejected: number; answered: number } | null;
 }
 
+/**
+ * A frame of the conversation with the OLT, as omcid keeps it: its number
+ * from omcid's start, the wall clock when it passed, what omcid did with it
+ * (its enum omci_ctl_tap_verdict), its message type, whether the logical
+ * password was zeroed in it, and the frame in hexadecimal.
+ */
+export interface OmciFrame {
+  seq: number;
+  sec: number;
+  ms: number;
+  verdict: number;
+  type: number;
+  masked: boolean;
+  frame: string;
+}
+
+/** The frames from a number on: the next one's number, and the oldest kept. */
+export interface OmciFrames {
+  head: number;
+  first: number;
+  frames: OmciFrame[];
+}
+
 export interface LinkAddress {
   family: "ipv4" | "ipv6";
   address: string;
