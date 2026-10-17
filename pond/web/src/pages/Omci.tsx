@@ -2,20 +2,21 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * The OMCI database: what the OLT set up, entity by entity, and under it the
- * conversation in which it did, as it goes on. The two are one view: a
- * message picked in the conversation shows its entity above with the
- * attributes it touched, and each attribute says when it last changed and
- * by whom, as far as the conversation omcid keeps reaches back.
+ * The OMCI database in two tabs: what the OLT set up, entity by entity, and
+ * the conversation in which it did, as it goes on. They point at each
+ * other: an attribute says when it last changed and by whom, as far as the
+ * conversation omcid keeps reaches back, and opens that message; a message
+ * opened shows what it carried, its frames, and its entity in the database
+ * with the attributes it touched.
  */
 
 import { Link } from "@tanstack/react-router";
-import { CircleAlert, Pause, Play } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useMemo, useState } from "react";
+import { CircleAlert, Pause, Play, X } from "lucide-react";
+import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Conversation, useConversation } from "../api/conversation";
-import { Page } from "../components/Page";
+import { Page, Tabs, useTab } from "../components/Page";
 import { Filter } from "../components/Pager";
-import { Detail, Dot, TABLE } from "../components/ui";
+import { Detail, Dot, Facts, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { integer } from "../lib/format";
 import type { Me } from "../lib/omci";
@@ -25,6 +26,7 @@ import {
   type Change,
   type Exchange,
   exchanges,
+  type Frame,
   frameOf,
   isRead,
   lastChanges,
@@ -149,10 +151,12 @@ function LastChange({
   change,
   current,
   kept,
+  open,
 }: {
   change: Change | undefined;
   current: boolean;
   kept: number;
+  open: (seq: number) => void;
 }) {
   const { t, lang } = useI18n();
   if (!change)
@@ -164,13 +168,18 @@ function LastChange({
   const who =
     change.mt === MT.create ? "omci.created" : change.byOlt ? "omci.setByOlt" : "omci.changedByOnu";
   return (
-    <span className="grid">
+    <button
+      type="button"
+      className="grid text-left hover:underline"
+      title={t("omci.openTalk")}
+      onClick={() => open(change.seq)}
+    >
       <span>{t(who)}</span>
       <Detail>
         {clock(change.at, lang)}
         {current && ` · ${t("omci.thisMessage")}`}
       </Detail>
-    </span>
+    </button>
   );
 }
 
@@ -183,6 +192,7 @@ function Entity({
   touched,
   pickedSeq,
   kept,
+  open,
 }: {
   cls: number;
   inst: number;
@@ -192,6 +202,7 @@ function Entity({
   touched: Set<number>;
   pickedSeq: number | null;
   kept: number;
+  open: (seq: number) => void;
 }) {
   const { t } = useI18n();
   const { mib } = useMib();
@@ -289,6 +300,7 @@ function Entity({
                             change={change}
                             current={current && pickedSeq != null && change?.seq === pickedSeq}
                             kept={kept}
+                            open={open}
                           />
                         </td>
                       </tr>
@@ -367,12 +379,15 @@ function Talk({
   cls,
   picked,
   pick,
+  narrow,
 }: {
   talk: Conversation;
   list: Exchange[];
   cls: number | null;
   picked: number | null;
   pick: (e: Exchange) => void;
+  /** A message is open beside the list: the attributes are left to it. */
+  narrow: boolean;
 }) {
   const { t, lang } = useI18n();
   const { omci, mib } = useMib();
@@ -396,12 +411,18 @@ function Talk({
   const toggle = (on: boolean) =>
     `btn btn-xs ${on ? "btn-primary btn-soft" : "btn-ghost border-base-300"}`;
 
+  /* A message opened from the database is brought into view. */
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (picked == null) return;
+    box.current?.querySelector(`[data-seq="${picked}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [picked]);
+
   return (
     <section className="card flex min-h-0 border border-base-300 bg-base-100">
       <div className="card-body min-h-0 gap-2 p-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h2 className="card-title text-base">{t("omci.talk")}</h2>
-          <span className="flex items-center gap-1.5 text-xs text-base-content/70">
+          <span className="flex items-center gap-1.5 text-sm">
             <Dot tone={state === "live" ? "good" : state === "paused" ? "neutral" : "bad"} />
             {t(`omci.${state}`)}
           </span>
@@ -445,7 +466,7 @@ function Talk({
             </button>
           </span>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div ref={box} className="min-h-0 flex-1 overflow-auto">
           {visible.length === 0 ? (
             <p className="py-4 text-sm text-base-content/70">
               {talk.loading
@@ -459,11 +480,11 @@ function Talk({
               <thead className="sticky top-0 bg-base-100">
                 <tr>
                   <th className="w-20">{t("omci.colTime")}</th>
-                  <th className="w-24">{t("omci.colWho")}</th>
-                  <th className="w-48">{t("omci.colWhat")}</th>
-                  <th className="w-64">{t("omci.colEntity")}</th>
-                  <th>{t("omci.colAttrs")}</th>
-                  <th className="w-40">{t("omci.colResult")}</th>
+                  <th className={narrow ? "w-20" : "w-24"}>{t("omci.colWho")}</th>
+                  <th className={narrow ? "w-36" : "w-48"}>{t("omci.colWhat")}</th>
+                  <th className={narrow ? "" : "w-64"}>{t("omci.colEntity")}</th>
+                  {!narrow && <th>{t("omci.colAttrs")}</th>}
+                  <th className={narrow ? "w-32" : "w-40"}>{t("omci.colResult")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -476,6 +497,7 @@ function Talk({
                   return (
                     <tr
                       key={e.seq}
+                      data-seq={e.seq}
                       tabIndex={0}
                       onClick={() => pick(e)}
                       onKeyDown={(k) => onKey(k, e)}
@@ -488,10 +510,10 @@ function Talk({
                       <td className="whitespace-nowrap">
                         {e.kind === "onu" ? t("omci.fromOnu") : t("omci.fromOlt")}
                       </td>
-                      <td>{whatText(t, e)}</td>
-                      <td>
+                      <td className="truncate">{whatText(t, e)}</td>
+                      <td className="truncate">
                         {steps ? (
-                          <span className="text-base-content/70">–</span>
+                          <span className="text-base-content/70">{narrow ? said || "–" : "–"}</span>
                         ) : (
                           <span className={inMib ? "" : "text-base-content/70"}>
                             {className(t, e.cls)}{" "}
@@ -499,11 +521,13 @@ function Talk({
                           </span>
                         )}
                       </td>
-                      <td>
-                        <span className="block truncate" title={said}>
-                          {said}
-                        </span>
-                      </td>
+                      {!narrow && (
+                        <td>
+                          <span className="block truncate" title={said}>
+                            {said}
+                          </span>
+                        </td>
+                      )}
                       <td>
                         <Result e={e} />
                       </td>
@@ -528,9 +552,142 @@ function Talk({
   );
 }
 
+/* A frame in hexadecimal, by its parts: the header, the contents and the trailer. */
+function FrameBytes({ f }: { f: Frame }) {
+  const { t, lang } = useI18n();
+  const part = (from: number, to: number) => hexBytes(f.bytes.subarray(from, to));
+  return (
+    <div className="grid gap-1">
+      <span className="text-xs text-base-content/70">
+        {f.fromOlt ? t("omci.oltToStick") : t("omci.stickToOlt")} · {clock(f.at, lang)}.
+        {String(f.at % 1000).padStart(3, "0")}
+      </span>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 font-mono text-xs">
+        <dt className="font-sans text-base-content/70">{t("omci.frameHeader")}</dt>
+        <dd className="break-all">{part(0, 8)}</dd>
+        <dt className="font-sans text-base-content/70">{t("omci.frameContents")}</dt>
+        <dd className="break-all">{part(8, 40)}</dd>
+        <dt className="font-sans text-base-content/70">{t("omci.frameTrailer")}</dt>
+        <dd className="break-all">{part(40, 48)}</dd>
+      </dl>
+    </div>
+  );
+}
+
+/** The message opened: what it carried, its result, its frames, and its entity. */
+function ExchangeCard({
+  e,
+  close,
+  show,
+}: {
+  e: Exchange;
+  close: () => void;
+  show: (e: Exchange) => void;
+}) {
+  const { t, lang } = useI18n();
+  const { mib } = useMib();
+  const inMib = !!mib.get(e.cls, e.inst);
+  const steps = e.kind !== "request" && e.kind !== "onu";
+  const when = new Date(e.at);
+  return (
+    <section className="card flex min-h-0 border border-base-300 bg-base-100">
+      <div className="card-body min-h-0 gap-3 overflow-auto p-4">
+        <div className="flex items-start gap-2">
+          <h2 className="card-title text-base">{whatText(t, e)}</h2>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs btn-square ml-auto"
+            aria-label={t("common.close")}
+            onClick={close}
+          >
+            <X className="size-4" aria-hidden />
+          </button>
+        </div>
+        <Facts
+          rows={[
+            [
+              t("omci.colTime"),
+              `${when.toLocaleDateString(lang === "pl" ? "pl-PL" : "en-GB")} ${clock(e.at, lang)}.${String(e.at % 1000).padStart(3, "0")}`,
+            ],
+            [t("omci.direction"), e.kind === "onu" ? t("omci.stickToOlt") : t("omci.oltToStick")],
+            !steps && [
+              t("omci.colEntity"),
+              <span key="e" className="grid justify-items-start gap-0.5">
+                <span>
+                  {className(t, e.cls)} <span className="font-mono text-xs">{hex4(e.inst)}</span>
+                </span>
+                {inMib && (
+                  <button
+                    type="button"
+                    className="link link-primary text-xs font-normal"
+                    onClick={() => show(e)}
+                  >
+                    {t("omci.showInDb")}
+                  </button>
+                )}
+              </span>,
+            ],
+            steps && [t("omci.colAttrs"), attrsText(t, e) || "–"],
+            e.frames[0] && [t("omci.tci"), hex4(e.frames[0].tci)],
+            [t("omci.colResult"), <Result key="r" e={e} />],
+            e.rejected && ["", word(t, `omci.fate.${e.rejected}`)],
+          ]}
+        />
+        {!steps && e.attrs.length > 0 && (
+          <table className={`${TABLE} table-sm`}>
+            <thead>
+              <tr>
+                <th className="w-8">#</th>
+                <th>{t("omci.colAttr")}</th>
+                <th>{t("omci.colValue")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {e.attrs.map((a) => {
+                const s = a.bytes
+                  ? shown(e.cls, a.attr, a.bytes, {
+                      other: (n) => e.attrs.find((x) => x.attr === n)?.bytes,
+                    })
+                  : null;
+                const words = s && !a.tableSize ? valueText(t, s) : null;
+                return (
+                  <tr key={a.attr}>
+                    <td className="tabular text-base-content/70">{a.attr}</td>
+                    <td className="break-words">{CLASSES[e.cls]?.attrs[a.attr] ?? a.attr}</td>
+                    <td className="break-words">
+                      <span className="grid gap-0.5">
+                        {words != null && <span>{words}</span>}
+                        {a.bytes && !(s?.kind === "num" && a.bytes.length === 1) && (
+                          <span className="font-mono text-xs break-all text-base-content/70">
+                            {hexBytes(a.bytes)}
+                          </span>
+                        )}
+                        {!a.bytes && <span className="text-base-content/70">–</span>}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        <div className="grid gap-2">
+          <h3 className="text-sm font-semibold">{t("omci.frames")}</h3>
+          {e.frames.map((f) => (
+            <FrameBytes key={f.seq} f={f} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ---------------------------------------------------------------- the page */
 
-function OmciView() {
+const OMCI_TABS = ["db", "talk"] as const;
+type OmciTab = (typeof OMCI_TABS)[number];
+
+function OmciView({ tab, setTab }: { tab: OmciTab; setTab: (t: OmciTab) => void }) {
   const { t } = useI18n();
   const { mib } = useMib();
   const talk = useConversation();
@@ -562,9 +719,18 @@ function OmciView() {
     setCls(c);
     setInst(i);
   };
-  const pickExchange = (e: Exchange) => {
+  /* A message in the database: its entity, with the attributes it touched. */
+  const show = (e: Exchange) => {
     setPicked(e);
-    if (mib.get(e.cls, e.inst)) go(e.cls, e.inst);
+    go(e.cls, e.inst);
+    setTab("db");
+  };
+  /* A change of an attribute in the conversation: its message, opened. */
+  const open = (seq: number) => {
+    const e = list.find((x) => x.seq === seq);
+    if (!e) return;
+    setPicked(e);
+    setTab("talk");
   };
   const touched = new Set(
     picked && picked.cls === shownCls && picked.inst === shownInst
@@ -572,50 +738,75 @@ function OmciView() {
       : [],
   );
 
-  return (
-    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(15rem,40%)] gap-4">
-      <div className="grid min-h-0 grid-cols-[16rem_minmax(0,1fr)] gap-4">
-        <ClassList
-          classes={classes}
-          shownCls={shownCls}
-          q={q}
-          setQ={setQ}
-          pick={(c) => {
-            setCls(c);
-            setInst(null);
-          }}
+  if (tab === "talk")
+    return (
+      <div
+        className={`grid min-h-0 flex-1 gap-4 ${picked ? "grid-cols-[minmax(0,1fr)_26rem]" : "grid-cols-[minmax(0,1fr)]"}`}
+      >
+        <Talk
+          talk={talk}
+          list={list}
+          cls={shownCls}
+          picked={picked?.seq ?? null}
+          pick={setPicked}
+          narrow={picked != null}
         />
-        {shownCls != null && (
-          <Entity
-            key={shownCls}
-            cls={shownCls}
-            inst={shownInst}
-            setInst={setInst}
-            go={go}
-            changes={changes}
-            touched={touched}
-            pickedSeq={picked?.seq ?? null}
-            kept={talk.frames.length}
-          />
-        )}
+        {picked && <ExchangeCard e={picked} close={() => setPicked(null)} show={show} />}
       </div>
-      <Talk
-        talk={talk}
-        list={list}
-        cls={shownCls}
-        picked={picked?.seq ?? null}
-        pick={pickExchange}
+    );
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)] gap-4">
+      <ClassList
+        classes={classes}
+        shownCls={shownCls}
+        q={q}
+        setQ={setQ}
+        pick={(c) => {
+          setCls(c);
+          setInst(null);
+        }}
       />
+      {shownCls != null && (
+        <Entity
+          key={shownCls}
+          cls={shownCls}
+          inst={shownInst}
+          setInst={setInst}
+          go={go}
+          changes={changes}
+          touched={touched}
+          pickedSeq={picked?.seq ?? null}
+          kept={talk.frames.length}
+          open={open}
+        />
+      )}
     </div>
   );
 }
 
 export function OmciPage() {
   const { t } = useI18n();
+  const [tab, setTab] = useTab(OMCI_TABS);
   return (
-    <Page title={t("nav.omci")} hint={t("omci.hint")} actions={<FibreState />}>
+    <Page
+      title={t("nav.omci")}
+      hint={t(tab === "db" ? "omci.hintDb" : "omci.hintTalk")}
+      tabs={
+        <Tabs
+          items={[
+            { id: "db", label: t("omci.tabDb") },
+            { id: "talk", label: t("omci.tabTalk") },
+          ]}
+          value={tab}
+          onChange={setTab}
+          label={t("nav.omci")}
+        />
+      }
+      actions={<FibreState />}
+    >
       <OmciState>
-        <OmciView />
+        <OmciView tab={tab} setTab={setTab} />
       </OmciState>
     </Page>
   );

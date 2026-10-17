@@ -103,6 +103,7 @@ describe("the exchanges", () => {
     );
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ kind: "request", mt: MT.set, result: 0, took: 4 });
+    expect(list[0]?.frames.map((f) => f.seq)).toEqual([0, 1]);
     expect(list[0]?.waiting).toBeUndefined();
   });
 
@@ -130,6 +131,8 @@ describe("the exchanges", () => {
     );
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ kind: "upload", from: 0, to: 1, of: 2 });
+    /* Of a run, the request that started it and its answer. */
+    expect(list[0]?.frames.map((f) => f.seq)).toEqual([0, 1]);
     expect(list[0]?.waiting).toBeUndefined();
   });
 

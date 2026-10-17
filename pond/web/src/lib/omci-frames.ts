@@ -83,6 +83,8 @@ export interface Frame {
   contents: Uint8Array;
   /** omcid zeroed the logical password in it. */
   masked: boolean;
+  /** The frame as it passed, all 48 bytes. */
+  bytes: Uint8Array;
 }
 
 /* A byte of a frame; one past its end reads as zero. */
@@ -107,6 +109,7 @@ export function frameOf(f: OmciFrame): Frame {
     inst: be16(b, 6),
     contents: b.slice(8, 40),
     masked: f.masked,
+    bytes: b,
   };
 }
 
@@ -261,6 +264,8 @@ export interface Exchange {
   to?: number;
   of?: number;
   masked?: boolean;
+  /** Its frames: the request and the answer, or what the stick said; of a run, the first two. */
+  frames: Frame[];
 }
 
 /*
@@ -305,6 +310,7 @@ export function exchanges(frames: Frame[]): Exchange[] {
       if (!e) continue;
       open.delete(f.tci);
       e.waiting = undefined;
+      if (e.frames.length < 2) e.frames.push(f);
       e.took = Math.max(0, f.at - e.at);
       if (s.result != null && e.kind === "request") e.result = s.result;
       if (f.masked) e.masked = true;
@@ -327,6 +333,7 @@ export function exchanges(frames: Frame[]): Exchange[] {
         inst: s.inst,
         attrs: s.attrs,
         masked: f.masked || undefined,
+        frames: [f],
       });
       continue;
     }
@@ -371,6 +378,7 @@ export function exchanges(frames: Frame[]): Exchange[] {
       attrs: s.attrs,
       rejected,
       masked: f.masked || undefined,
+      frames: [f],
     };
     if (run) {
       e.from = s.step;
