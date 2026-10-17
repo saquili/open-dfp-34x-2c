@@ -23,6 +23,13 @@
  * them, and starts "onu-apply try" without waiting for it: the change is on
  * trial, and goes back unless it is confirmed (ADR 0014, changes.c). Until
  * onu-apply ends, a write is refused.
+ *
+ * The local networks the stick routes, LANn_*, the fixed addresses of their
+ * devices, FIXEDn, and the devices that have an address from a network's
+ * DHCP server are read apart from the other settings, as the panel shows
+ * them; the devices from udhcpd's lease file of each network,
+ * /run/udhcpd-netN.leases, which onu-apply names so. The panel's writes of
+ * a network and of a fixed address become the keys of the store here.
  */
 
 #define _GNU_SOURCE
@@ -37,10 +44,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <time.h>
 
 #define SESSIONS 7
-#define TEXT_MAX 8192
+/* A whole set of settings, as much as the configuration store holds. */
+#define TEXT_MAX 65536
 #define VALUE_MAX 64
+/* The local networks, the fixed addresses, and a name's bytes. */
+#define LANS 8
+#define FIXED_MAX 512
+#define NAME_MAX 132
 #define USER_MAX 63
 #define SECRET_MAX 255
 
@@ -82,7 +96,8 @@ static bool setting_line(const char *line)
  */
 static int settings_current(char *out, size_t cap)
 {
-	char got[TEXT_MAX], *line, *save = NULL;
+	static char got[TEXT_MAX];
+	char *line, *save = NULL;
 	size_t olen = 0;
 	int rc = bus_act("settings_current", NULL, NULL, 0, NULL, got, sizeof(got));
 
@@ -336,10 +351,196 @@ static void state_of(char *out, size_t cap)
 		out[0] = '\0';
 }
 
+/* A key of network @n and its value, as a member of an object. */
+static void pv_lan_field(struct prov_buf *out, const char *text, int n,
+			 const char *key, const char *member)
+{
+	char k[32], v[NAME_MAX];
+
+	snprintf(k, sizeof(k), "LAN%d_%s", n, key);
+	pv_comma(out);
+	pv_key(out, member);
+	pv_str(out, line_value(text, k, v, sizeof(v)) ? v : "");
+}
+
+/* The local networks, each with its settings. */
+static void pv_lans(struct prov_buf *out, const char *text)
+{
+	char k[32], v[VALUE_MAX];
+	bool first = true;
+
+	pv_open(out, '[');
+	for (int n = 1; n <= LANS; n++) {
+		snprintf(k, sizeof(k), "LAN%d_CONN", n);
+		if (!line_value(text, k, v, sizeof(v)) || !*v)
+			continue;
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "id");
+		pv_num(out, n);
+		pv_lan_field(out, text, n, "CONN", "conn");
+		pv_lan_field(out, text, n, "NAME", "name");
+		pv_lan_field(out, text, n, "VLAN", "vlan");
+		pv_lan_field(out, text, n, "ADDRESS", "address");
+		pv_lan_field(out, text, n, "DHCP", "dhcp");
+		pv_lan_field(out, text, n, "POOL_FROM", "pool_from");
+		pv_lan_field(out, text, n, "POOL_TO", "pool_to");
+		snprintf(k, sizeof(k), "LAN%d_LEASE", n);
+		pv_comma(out);
+		pv_key(out, "lease_s");
+		pv_num(out, line_value(text, k, v, sizeof(v)) ? atol(v) : 0);
+		pv_lan_field(out, text, n, "IPV6", "ipv6");
+		pv_lan_field(out, text, n, "IPV6_SUBNET", "ipv6_subnet");
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
+/*
+ * A fixed address of the settings, FIXEDn: its number, its network, MAC
+ * and address; false for a line that is none.
+ */
+static bool fixed_of(const char *line, int *n, int *lan, char mac[18],
+		     char ip[16])
+{
+	const char *p = line + 5;
+	size_t d = strspn(p, "0123456789");
+	size_t len;
+
+	if (strncmp(line, "FIXED", 5) || !d || p[d] != '=')
+		return false;
+	*n = atoi(p);
+	p += d + 1;
+	len = strcspn(p, "\n");
+	if (len < 21 || len > 2 + 18 + 15 || p[1] != '/' || p[19] != '/')
+		return false;
+	*lan = p[0] - '0';
+	memcpy(mac, p + 2, 17);
+	mac[17] = '\0';
+	snprintf(ip, 16, "%.*s", (int)(len - 20), p + 20);
+	return true;
+}
+
+/* The fixed addresses, each with its name. */
+static void pv_fixed_addrs(struct prov_buf *out, const char *text)
+{
+	char mac[18], ip[16], k[32], name[NAME_MAX];
+	bool first = true;
+
+	pv_open(out, '[');
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int n, lan;
+
+		if (!fixed_of(p, &n, &lan, mac, ip))
+			continue;
+		snprintf(k, sizeof(k), "FIXED%d_NAME", n);
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "lan");
+		pv_num(out, lan);
+		pv_comma(out);
+		pv_key(out, "mac");
+		pv_str(out, mac);
+		pv_comma(out);
+		pv_key(out, "ip");
+		pv_str(out, ip);
+		pv_comma(out);
+		pv_key(out, "name");
+		pv_str(out, line_value(text, k, name, sizeof(name)) ? name : "");
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
+/*
+ * udhcpd's lease file: the time it was written, eight bytes, then a lease
+ * after another: the seconds it had left then, its address, the device's
+ * MAC, the name the device gave, NUL-padded, and two bytes of padding; all
+ * numbers big-endian (BusyBox, networking/udhcp/dhcpd.c, write_leases()).
+ */
+#define LEASE_LEN 36
+#define LEASE_FILE_MAX (8 + LEASE_LEN * 256)
+
+static uint32_t be32(const unsigned char *b)
+{
+	return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
+}
+
+/* The devices with a lease of network @n, after those of @first. */
+static void pv_leases_of(struct prov_buf *out, int n, time_t now, bool *first)
+{
+	static char file[LEASE_FILE_MAX];
+	const unsigned char *b = (const unsigned char *)file;
+	char path[48], mac[18], ip[16], name[21];
+	uint64_t written = 0;
+	size_t len;
+
+	snprintf(path, sizeof(path), "/run/udhcpd-net%d.leases", n);
+	if (prov_slurp(path, file, sizeof(file), &len) || len < 8)
+		return;
+	for (int i = 0; i < 8; i++)
+		written = written << 8 | b[i];
+	for (size_t at = 8; at + LEASE_LEN <= len; at += LEASE_LEN) {
+		const unsigned char *l = b + at;
+		long long left = (long long)be32(l) - ((long long)now - (long long)written);
+
+		if (left <= 0 || !be32(l + 4))
+			continue;
+		snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x", l[8], l[9],
+			 l[10], l[11], l[12], l[13]);
+		snprintf(ip, sizeof(ip), "%u.%u.%u.%u", l[4], l[5], l[6], l[7]);
+		memcpy(name, l + 14, 20);
+		name[20] = '\0';
+		if (!*first)
+			pv_comma(out);
+		*first = false;
+		pv_open(out, '{');
+		pv_key(out, "lan");
+		pv_num(out, n);
+		pv_comma(out);
+		pv_key(out, "mac");
+		pv_str(out, mac);
+		pv_comma(out);
+		pv_key(out, "ip");
+		pv_str(out, ip);
+		pv_comma(out);
+		pv_key(out, "name");
+		if (*name)
+			pv_str(out, name);
+		else
+			pv_null(out);
+		pv_comma(out);
+		pv_key(out, "left_s");
+		pv_num(out, left);
+		pv_close(out, '}');
+	}
+}
+
+/* The devices that have an address from a network's DHCP server. */
+static void pv_leases(struct prov_buf *out, const char *text)
+{
+	char k[32], v[VALUE_MAX];
+	time_t now = time(NULL);
+	bool first = true;
+
+	pv_open(out, '[');
+	for (int n = 1; n <= LANS; n++) {
+		snprintf(k, sizeof(k), "LAN%d_CONN", n);
+		if (line_value(text, k, v, sizeof(v)) && *v)
+			pv_leases_of(out, n, now, &first);
+	}
+	pv_close(out, ']');
+}
+
 int prov_settings(struct prov_buf *out)
 {
 	struct account acct[SESSIONS];
-	char text[TEXT_MAX], st[TEXT_MAX], line[128];
+	static char text[TEXT_MAX], st[TEXT_MAX];
+	char line[128];
 	bool first = true;
 	int rc;
 
@@ -358,7 +559,8 @@ int prov_settings(struct prov_buf *out)
 		char name[32];
 		size_t klen;
 
-		if (!eq || !strncmp(p, "SESSION", 7))
+		if (!eq || !strncmp(p, "SESSION", 7) || !strncmp(p, "FIXED", 5) ||
+		    (!strncmp(p, "LAN", 3) && p[3] >= '1' && p[3] <= '9'))
 			continue;
 		klen = (size_t)(eq - p);
 		if (klen >= sizeof(name))
@@ -376,6 +578,16 @@ int prov_settings(struct prov_buf *out)
 
 	pv_key(out, "sessions");
 	pv_sessions(out, acct, text, st);
+	pv_comma(out);
+
+	pv_key(out, "lans");
+	pv_lans(out, text);
+	pv_comma(out);
+	pv_key(out, "fixed");
+	pv_fixed_addrs(out, text);
+	pv_comma(out);
+	pv_key(out, "leases");
+	pv_leases(out, text);
 	pv_comma(out);
 	explicit_bzero(acct, sizeof(acct));
 
@@ -529,9 +741,10 @@ static const char *line_value(const char *text, const char *key, char *out,
 int prov_session_write(const char *val, char *err, size_t errcap,
 		       prov_done done, void *ctx)
 {
+	static char text[TEXT_MAX];
 	char id[VALUE_MAX], user[USER_MAX + 2], secret[SECRET_MAX + 2],
 		vlan[VALUE_MAX], mac[VALUE_MAX], gem[VALUE_MAX], fam[VALUE_MAX],
-		pass[VALUE_MAX], host[VALUE_MAX], text[TEXT_MAX];
+		pass[VALUE_MAX], host[VALUE_MAX];
 	const char *i = line_value(val, "ID", id, sizeof(id));
 	const char *u = line_value(val, "USER", user, sizeof(user));
 	const char *sec = line_value(val, "SECRET", secret, sizeof(secret));
@@ -612,4 +825,145 @@ int prov_session_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_session_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * A local network: ID, 1 to 8, or none for the first free one, which needs
+ * CONN; CONN, the connection it goes out by, empty to remove the network with
+ * its fixed addresses; NAME, VLAN, ADDRESS, DHCP, POOL_FROM, POOL_TO, LEASE,
+ * IPV6 and IPV6_SUBNET. onu-config judges them.
+ */
+int prov_lan_write(const char *val, char *err, size_t errcap, prov_done done,
+		   void *ctx)
+{
+	static const char *const keys[] = {
+		"NAME", "VLAN", "ADDRESS", "DHCP", "POOL_FROM", "POOL_TO",
+		"LEASE", "IPV6", "IPV6_SUBNET",
+	};
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	char id[VALUE_MAX], c[VALUE_MAX], k[32], v[NAME_MAX];
+	const char *i = line_value(val, "ID", id, sizeof(id));
+	const char *conn = line_value(val, "CONN", c, sizeof(c));
+	size_t len = 0;
+	int n = 0, rc;
+
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	if (i) {
+		if (strlen(i) != 1 || *i < '1' || *i > '0' + LANS) {
+			snprintf(err, errcap, "ID: 1 to %d", LANS);
+			return -EINVAL;
+		}
+		n = *i - '0';
+	} else {
+		for (int m = 1; m <= LANS && !n; m++) {
+			snprintf(k, sizeof(k), "LAN%d_CONN", m);
+			if (!line_value(text, k, v, sizeof(v)) || !*v)
+				n = m;
+		}
+		if (!n || !conn || !*conn) {
+			snprintf(err, errcap, n ? "a new network needs CONN" :
+						  "all %d local networks are taken",
+				 LANS);
+			return -EINVAL;
+		}
+	}
+	change[0] = '\0';
+	if (conn && !*conn) {
+		/* The network goes, and the fixed addresses in it with it. */
+		char mac[18], ip[16];
+
+		append(change, sizeof(change), &len, "LAN%d_CONN=\n", n);
+		for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+			int f, lan;
+
+			if (fixed_of(p, &f, &lan, mac, ip) && lan == n)
+				append(change, sizeof(change), &len, "FIXED%d=\n", f);
+		}
+	} else {
+		if (conn)
+			append(change, sizeof(change), &len, "LAN%d_CONN=%s\n", n, conn);
+		for (size_t j = 0; j < ARRAY_SIZE(keys); j++)
+			if (line_value(val, keys[j], v, sizeof(v)))
+				append(change, sizeof(change), &len, "LAN%d_%s=%s\n", n,
+				       keys[j], v);
+	}
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_lan_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_lan_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * A device's fixed address: LAN, the network, MAC, the device, IP, the
+ * address it gets, empty or absent to take it away, and NAME. A device has
+ * one in a network: a new IP replaces the one it had.
+ */
+int prov_fixed_write(const char *val, char *err, size_t errcap,
+		     prov_done done, void *ctx)
+{
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	static bool used[FIXED_MAX + 1];
+	char lanv[VALUE_MAX], macv[VALUE_MAX], ipv[VALUE_MAX], name[NAME_MAX];
+	char mac[18], ip[16];
+	const char *l = line_value(val, "LAN", lanv, sizeof(lanv));
+	const char *m = line_value(val, "MAC", macv, sizeof(macv));
+	const char *a = line_value(val, "IP", ipv, sizeof(ipv));
+	const char *nm = line_value(val, "NAME", name, sizeof(name));
+	size_t len = 0;
+	int n = 0, rc;
+
+	if (!l || strlen(l) != 1 || *l < '1' || *l > '0' + LANS || !m) {
+		snprintf(err, errcap, "a fixed address needs a network, LAN, and a device, MAC");
+		return -EINVAL;
+	}
+	for (char *p = macv; *p; p++)
+		if (*p >= 'A' && *p <= 'Z')
+			*p += 'a' - 'A';
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	memset(used, 0, sizeof(used));
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int f, lan;
+
+		if (!fixed_of(p, &f, &lan, mac, ip) || f < 1 || f > FIXED_MAX)
+			continue;
+		used[f] = true;
+		if (lan == *l - '0' && !strcasecmp(mac, macv))
+			n = f;
+	}
+	change[0] = '\0';
+	if (!a || !*a) {
+		if (n)
+			append(change, sizeof(change), &len, "FIXED%d=\n", n);
+		return prov_settings_write(change, err, errcap, done, ctx);
+	}
+	for (int f = 1; f <= FIXED_MAX && !n; f++)
+		if (!used[f])
+			n = f;
+	if (!n) {
+		snprintf(err, errcap, "all %d fixed addresses are taken", FIXED_MAX);
+		return -EINVAL;
+	}
+	append(change, sizeof(change), &len, "FIXED%d=%s/%s/%s\n", n, l, macv, a);
+	if (nm)
+		append(change, sizeof(change), &len, "FIXED%d_NAME=%s\n", n, nm);
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_fixed_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_fixed_write(val, err, errcap, prov_waited, &w), &w);
 }

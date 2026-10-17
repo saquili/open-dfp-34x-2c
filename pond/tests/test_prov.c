@@ -1940,6 +1940,118 @@ static void test_panel_values(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
+/*
+ * A lease as udhcpd writes it: seconds left, address, MAC, name, padding. The
+ * MAC of device @last is 00:00:5e:00:53:aN, N being @last, of the documentation
+ * range of RFC 7042.
+ */
+static void lease_at(unsigned char *b, uint32_t left, const char *ip4, unsigned int last,
+		     const char *name)
+{
+	memset(b, 0, 36);
+	b[0] = left >> 24;
+	b[1] = left >> 16;
+	b[2] = left >> 8;
+	b[3] = left;
+	memcpy(b + 4, ip4, 4);
+	memcpy(b + 8, "\x00\x00\x5e\x00\x53", 5);
+	b[13] = 0xa0 | (last & 0x0f);
+	snprintf((char *)b + 14, 20, "%s", name);
+}
+
+static void test_lans(void)
+{
+	static char buf[16384];
+	unsigned char leases[8 + 2 * 36];
+	char file[512], err[256], stub[512];
+	uint64_t written = (uint64_t)time(NULL) - 10;
+	const char *s;
+	FILE *f;
+	int rc;
+
+	puts("the local networks, their fixed addresses and devices");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		char path[32];
+
+		snprintf(path, sizeof(path), "/run/onu-pppoe%d", n);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
+	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && strstr(s, "\"lans\":[]") && strstr(s, "\"fixed\":[]") &&
+		      strstr(s, "\"leases\":[]"),
+	      "a stick without networks serves them as empty lists: the panel's pages are there");
+
+	check(prov_lan_set("VLAN=100\n", err, sizeof(err)) == -EINVAL && strstr(err, "needs CONN"),
+	      "a new network needs a connection");
+	rc = prov_lan_set("CONN=pppoe:1\nNAME=Dom\nVLAN=100\nADDRESS=192.168.1.1/24\n"
+			  "POOL_FROM=192.168.1.100\nPOOL_TO=192.168.1.199\nLEASE=3600\n",
+			  err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN1_CONN=pppoe:1") &&
+		      strstr(s, "\"lans\":[{\"id\":1,\"conn\":\"pppoe:1\",\"name\":\"Dom\","
+				"\"vlan\":\"100\",\"address\":\"192.168.1.1/24\",\"dhcp\":\"on\","
+				"\"pool_from\":\"192.168.1.100\",\"pool_to\":\"192.168.1.199\","
+				"\"lease_s\":3600,\"ipv6\":\"off\",\"ipv6_subnet\":\"\"}]"),
+	      "a network is taken, and served as the panel reads it");
+	check(!strstr(s, "\"LAN1_CONN\""), "and not again among the other settings");
+	check(prov_lan_set("CONN=pppoe:1\nVLAN=100\nADDRESS=10.0.0.1/24\n", err, sizeof(err)) ==
+			      -EINVAL &&
+		      strstr(err, "networks 1 and 2 are in one VLAN"),
+	      "a second network in its VLAN is refused, as onu-config judges it");
+
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5E:00:53:A1\nIP=192.168.1.10\nNAME=Drukarka\n",
+			    err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a1/192.168.1.10") &&
+		      strstr(s, "\"fixed\":[{\"lan\":1,\"mac\":\"00:00:5e:00:53:a1\","
+				"\"ip\":\"192.168.1.10\",\"name\":\"Drukarka\"}]"),
+	      "a fixed address is taken, its MAC in small letters");
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a1\nIP=192.168.1.11\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a1/192.168.1.11") &&
+		      !file_has("/run/onu.conf", "FIXED2"),
+	      "a device's new address replaces the one it had");
+	check(prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a2\nIP=192.168.1.11\n", err, sizeof(err)) ==
+			      -EINVAL &&
+		      strstr(err, "give one address"),
+	      "another device's address is refused");
+	check(prov_fixed_set("MAC=00:00:5e:00:53:a2\nIP=192.168.1.12\n", err, sizeof(err)) == -EINVAL,
+	      "a fixed address without a network is refused");
+
+	/* Two leases, written ten seconds ago: one with an hour left, one with five seconds. */
+	for (int i = 0; i < 8; i++)
+		leases[i] = (unsigned char)(written >> (56 - 8 * i));
+	lease_at(leases + 8, 3600, "\xc0\xa8\x01\x64", 0x03, "laptop");
+	lease_at(leases + 8 + 36, 5, "\xc0\xa8\x01\x65", 0x04, "");
+	f = fopen(prov_path("/run/udhcpd-net1.leases", file, sizeof(file)), "w");
+	if (f) {
+		fwrite(leases, 1, sizeof(leases), f);
+		fclose(f);
+	}
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"leases\":[{\"lan\":1,\"mac\":\"00:00:5e:00:53:a3\",\"ip\":\"192.168.1.100\","
+			"\"name\":\"laptop\",\"left_s\":35") &&
+		      !strstr(s, "192.168.1.101"),
+	      "a device with a lease is served with the time it has left, and an expired one not");
+
+	rc = prov_lan_set("ID=1\nCONN=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "LAN1_") && !file_has("/run/onu.conf", "FIXED") &&
+		      strstr(s, "\"lans\":[]") && strstr(s, "\"fixed\":[]"),
+	      "a network removed takes its fixed addresses with it");
+	rc = prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+}
+
 /* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
 static const char update_stub[] =
 	"#!/bin/sh\n"
@@ -2294,6 +2406,7 @@ int main(void)
 	test_settings();
 	test_firmware();
 	test_panel_values();
+	test_lans();
 	test_omci();
 	test_omci_frames();
 	test_system();

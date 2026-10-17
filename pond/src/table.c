@@ -38,6 +38,12 @@ const struct prov pond_provs[] = {
 	  prov_identity, prov_identity_write, 0 },
 	{ "session", "Mode", "A PPPoE session of the stick's own: add, change or remove",
 	  NULL, prov_session_write, 0 },
+	{ "lan", "Mode",
+	  "A local network the stick routes out by a session: add, change or remove",
+	  NULL, prov_lan_write, 0 },
+	{ "fixed", "Mode",
+	  "A device's fixed address in a local network: add, change or remove",
+	  NULL, prov_fixed_write, 0 },
 	{ "settings", "Mode",
 	  "The data path: the sessions and where they hand their addresses down, "
 	  "kept in the configuration store",
