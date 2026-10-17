@@ -632,14 +632,17 @@ and together:
      - fits k0 by 111518 bytes
 
 The measurements above are against the shipped split of bank 0, whose ``k0``
-took 1359872 bytes. The board's configuration now leaves out netfilter (the
-stick translates no address and keeps no packet filter: a router behind it does
-both), the initial RAM disk and kexec, and smaller parts that the board does not
-use, which the configuration's history names; it keeps IPv6, the symbol table,
-debugfs and dynamic debug, through which a problem on the operator's line is
-read. The kernel image was 1652846 bytes then, and 1698834 once it took JFFS2
-for the partition ``config`` (ADR 0014); bank 0 as this system splits it gives
-the kernel room for it (``boot-contract.rst``).
+took 1359872 bytes. The board's configuration left out netfilter for a while
+(the stick translated no address then: a router behind it did), the initial RAM
+disk and kexec, and smaller parts that the board does not use, which the
+configuration's history names; it keeps IPv6, the symbol table, debugfs and
+dynamic debug, through which a problem on the operator's line is read. The
+kernel image was 1652846 bytes then, and 1698834 once it took JFFS2 for the
+partition ``config`` (ADR 0014); bank 0 as this system splits it gives the
+kernel room for it (``boot-contract.rst``). Netfilter is back since the stick
+routes for the devices behind it: its connection tracking and NAT feed the
+switch's NAPT engine through the flowtable offload, while the rules of the
+firewall and the port forwards go to the switch's hardware.
 
 Reproducibility
 ===============
