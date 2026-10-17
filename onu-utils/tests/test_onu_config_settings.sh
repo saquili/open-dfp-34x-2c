@@ -67,7 +67,8 @@ rc=$?
 check '[ $rc -eq 2 ]'
 
 echo "more than it takes, and what is not one of its words"
-awk 'BEGIN { for (i = 0; i < 2000; i++) print "SESSION1_PASS=on" }' >"$T/long"
+# More than the store holds, 64 KiB.
+awk 'BEGIN { for (i = 0; i < 4000; i++) print "SESSION1_PASS=on" }' >"$T/long"
 "$ONUCFG" check <"$T/long" >"$T/out" 2>"$T/err"
 rc=$?
 check '[ $rc -eq 1 ] && grep -q "too long" "$T/err"'

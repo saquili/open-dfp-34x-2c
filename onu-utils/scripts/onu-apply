@@ -81,6 +81,20 @@
 # session hands down, its route, proxy ARP entry and table, the part
 # "pass-N" (onu-net).
 #
+# A local network, N from 1 to 8, routes the devices of the host side out by
+# a session that keeps its address on the stick, LANn_CONN=pppoe:S: a VLAN of
+# the host link, netN, or the host link itself, with the stick's address in
+# the network, LANn_ADDRESS; a rule sends what comes from the network to the
+# session's table, which holds the session's default route and the routes to
+# all of the networks, so that the networks reach each other without the
+# session; and a DHCP server, udhcpd-netN, leases its addresses, LANn_POOL_FROM
+# to LANn_POOL_TO, for LANn_LEASE seconds, with the stick as the router, the
+# session's name servers, and the fixed address of each device FIXEDk gives
+# ("N/MAC/IP"), its leases in /run/udhcpd-netN.leases. netifd holds the
+# networks, their rules and routes, the part "nets"; the NAT through which the
+# networks go out, and the protection that keeps the internet's new
+# connections from them, is onu-fw's table of nf_tables (lans_fw()).
+#
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
 
@@ -92,6 +106,7 @@ CONF=$RUN/onu.conf
 IDENTITY=$RUN/onu-identity
 SESSIONS=$RUN/session
 MAX_SESSIONS=7
+MAX_LANS=8
 # The priorities of the filters on sfp and pon are the registry's
 # (omcid/target/tcprio.h): omcid's VLAN rules take those from VLAN_PREF up,
 # and the management VLAN's, below, are onu-mgmt's alone. The drops on a
@@ -158,6 +173,13 @@ load() {
 		eval "SESSION${n}_PASS= SESSION${n}_HOST_VLAN="
 		n=$((n + 1))
 	done
+	n=1
+	while [ $n -le $MAX_LANS ]; do
+		eval "LAN${n}_CONN= LAN${n}_VLAN= LAN${n}_ADDRESS= LAN${n}_DHCP="
+		eval "LAN${n}_POOL_FROM= LAN${n}_POOL_TO= LAN${n}_LEASE="
+		eval "LAN${n}_IPV6= LAN${n}_IPV6_SUBNET="
+		n=$((n + 1))
+	done
 	defaults=$(onu-config defaults) || {
 		log "the defaults of the settings are not known: onu-config does not say them"
 		defaults=
@@ -195,6 +217,11 @@ load_file() {
 		LAN_VLAN) LEGACY_LAN=1 ;;
 		SESSION[1-7]_GEM | SESSION[1-7]_VLAN | SESSION[1-7]_MAC | \
 			SESSION[1-7]_FAMILY | SESSION[1-7]_PASS | SESSION[1-7]_HOST_VLAN) ;;
+		# A network's name is for people; its fixed addresses are read
+		# where they are needed (lan_dhcp()).
+		LAN[1-8]_CONN | LAN[1-8]_VLAN | LAN[1-8]_ADDRESS | LAN[1-8]_DHCP | \
+			LAN[1-8]_POOL_FROM | LAN[1-8]_POOL_TO | LAN[1-8]_LEASE | \
+			LAN[1-8]_IPV6 | LAN[1-8]_IPV6_SUBNET) ;;
 		*) continue ;;
 		esac
 		case $value in
@@ -644,6 +671,10 @@ session_brought() {
 		case $role in
 		pass | routed) pass_lease "$1" "$addr" "$dev" "$(cat "$d/peer" 2>/dev/null)" ;;
 		esac
+		# Its networks' devices get its name servers.
+		for bn in $(lans); do
+			[ "$(lan_session "$bn")" = "$1" ] && lan_dhcp "$bn"
+		done
 		log "session $1: IPv4 up on $dev"
 	fi
 	if [ -s "$d/ipv6" ] && [ "$role6" = pd ] && [ ! -e "$SVC_DIR/dhcp6d$1" ]; then
@@ -1098,6 +1129,9 @@ sessions_sync() {
 sync_all() {
 	[ "$(cat "$RUN/onu-mode" 2>/dev/null)" = passthrough ] || return 0
 	sessions_sync
+	# The sessions' GEM ports, which the OLT may have moved, carry the
+	# networks' flows.
+	lans_fw
 }
 
 # Take $1 for this process: a symbolic link to its PID, which ln makes, or
@@ -1126,6 +1160,200 @@ lock() {
 
 # Whether the switch's L3 engine decrements the TTL or hop limit of what it
 # routes, true or false.
+# The local networks set up, by number, one a line: those with a connection.
+lans() {
+	for ln in 1 2 3 4 5 6 7 8; do
+		[ -n "$(lan_setting "$ln" CONN)" ] && echo "$ln"
+	done
+	return 0
+}
+
+# Setting $2 of network $1.
+lan_setting() {
+	eval "echo \"\${LAN$1_$2:-}\""
+}
+
+# Network $1's interface: netN, a VLAN on the host link, or the host link
+# itself.
+lan_if() {
+	if [ -n "$(lan_setting "$1" VLAN)" ]; then
+		echo "net$1"
+	else
+		echo sfp
+	fi
+}
+
+# The session network $1 goes out by.
+lan_session() {
+	ls_c=$(lan_setting "$1" CONN)
+	echo "${ls_c#pppoe:}"
+}
+
+# The address a.b.c.d $1 as a number, and the number $1 as an address.
+ip_num() {
+	echo "$1" | {
+		IFS=. read -r a b c d
+		echo $(((a << 24) | (b << 16) | (c << 8) | d))
+	}
+}
+
+num_ip() {
+	echo "$((($1 >> 24) & 255)).$((($1 >> 16) & 255)).$((($1 >> 8) & 255)).$(($1 & 255))"
+}
+
+# The mask of a prefix length $1, as a number.
+len_mask() {
+	echo $(((0xffffffff << (32 - $1)) & 0xffffffff))
+}
+
+# Network $1 as address/length: its first address and its prefix length.
+lan_net() {
+	la=$(lan_setting "$1" ADDRESS)
+	lm=$(len_mask "${la#*/}")
+	echo "$(num_ip $(($(ip_num "${la%/*}") & lm)))/${la#*/}"
+}
+
+# The local networks as netifd's part "nets": each one's interface, a VLAN on
+# the host link or the host link itself, with the stick's address in it and
+# a strict reverse-path check, and a rule that sends what comes from the
+# network to its session's table; in the table of each session that networks
+# go out by, its default route and the routes to all the networks. Without
+# networks the part goes.
+lans_net() {
+	ln_all=$(lans)
+	if [ -z "$ln_all" ]; then
+		onu-net del nets
+		return
+	fi
+	{
+		for ln in $ln_all; do
+			ln_if=$(lan_if "$ln")
+			printf "config device\n"
+			[ "$ln_if" = sfp ] ||
+				printf "\toption type '8021q'\n\toption ifname 'sfp'\n\toption vid '%s'\n" \
+					"$(lan_setting "$ln" VLAN)"
+			printf "\toption name '%s'\n\toption rpfilter 'strict'\n\toption ipv6 '0'\n\n" "$ln_if"
+			printf "config interface 'net%s'\n\toption device '%s'\n\toption proto 'static'\n" \
+				"$ln" "$ln_if"
+			printf "\toption ipaddr '%s'\n\n" "$(lan_setting "$ln" ADDRESS)"
+			printf "config rule\n\toption src '%s'\n\toption lookup '%s'\n\n" \
+				"$(lan_net "$ln")" "$(table_of "$(lan_session "$ln")")"
+		done
+		for ls in $(for ln in $ln_all; do lan_session "$ln"; done | sort -u); do
+			printf "config route\n\toption interface 'ses%s'\n" "$ls"
+			printf "\toption target '0.0.0.0/0'\n\toption table '%s'\n\n" "$(table_of "$ls")"
+			for ln in $ln_all; do
+				printf "config route\n\toption interface 'net%s'\n" "$ln"
+				printf "\toption target '%s'\n\toption table '%s'\n\n" \
+					"$(lan_net "$ln")" "$(table_of "$ls")"
+			done
+		done
+	} | onu-net set nets || log "netifd was not given the local networks"
+}
+
+# Network $1's DHCP server, when its DHCP is on: the addresses of its pool,
+# all of the network's but its first and last when none is given (the server
+# never leases its own), the stick as the router, the session's name servers
+# once the session brought them, the lease's time, and the fixed address of
+# each of its devices. It writes its leases every ten seconds, so that the
+# status daemon shows a device soon.
+lan_dhcp() {
+	svc_stop "udhcpd-net$1"
+	if [ "$(lan_setting "$1" DHCP)" != on ] || [ -z "$(lan_setting "$1" CONN)" ]; then
+		rm -f "$RUN/udhcpd-net$1.conf"
+		return 0
+	fi
+	ld_addr=$(lan_setting "$1" ADDRESS)
+	ld_mask=$(len_mask "${ld_addr#*/}")
+	ld_net=$(($(ip_num "${ld_addr%/*}") & ld_mask))
+	ld_from=$(lan_setting "$1" POOL_FROM)
+	ld_to=$(lan_setting "$1" POOL_TO)
+	[ -n "$ld_from" ] || ld_from=$(num_ip $((ld_net + 1)))
+	[ -n "$ld_to" ] || ld_to=$(num_ip $((ld_net + (~ld_mask & 0xffffffff) - 1)))
+	ld_count=$(($(ip_num "$ld_to") - $(ip_num "$ld_from") + 1))
+	[ "$ld_count" -le 512 ] || ld_count=512
+	ld_dns=$(cat "$SESSIONS/$(lan_session "$1")/dns" 2>/dev/null)
+	{
+		echo "interface $(lan_if "$1")"
+		echo "start $ld_from"
+		echo "end $ld_to"
+		echo "max_leases $ld_count"
+		echo "lease_file $RUN/udhcpd-net$1.leases"
+		echo "pidfile $RUN/udhcpd-net$1.pid"
+		echo "auto_time 10"
+		echo "opt subnet $(num_ip "$ld_mask")"
+		echo "opt router ${ld_addr%/*}"
+		[ -n "$ld_dns" ] && echo "opt dns $ld_dns"
+		echo "opt lease $(lan_setting "$1" LEASE)"
+		grep "^FIXED[0-9]*=$1/" "$CONF" 2>/dev/null |
+			while IFS='=/' read -r _ _ ld_mac ld_ip; do
+				echo "static_lease $ld_mac $ld_ip"
+			done
+	} >"$RUN/udhcpd-net$1.conf"
+	[ -e "$RUN/udhcpd-net$1.leases" ] || : >"$RUN/udhcpd-net$1.leases"
+	svc_start "udhcpd-net$1" -- udhcpd -f "$RUN/udhcpd-net$1.conf"
+}
+
+# The local networks up: netifd's part, each network's DHCP server, and the
+# NAT they go out through; a network that went takes its server with it.
+lans_up() {
+	lans_net
+	for lu in 1 2 3 4 5 6 7 8; do
+		lan_dhcp "$lu"
+	done
+	lans_fw
+}
+
+lans_down() {
+	for lu in 1 2 3 4 5 6 7 8; do
+		svc_stop "udhcpd-net$lu"
+		rm -f "$RUN/udhcpd-net$lu.conf"
+	done
+	onu-net del nets
+	fw_clear
+	return 0
+}
+
+# onu-fw's table away, once one was put in place.
+fw_clear() {
+	[ -e "$RUN/onu-fw.conf" ] || return 0
+	onu-fw clear || log "onu-fw did not take its table away"
+	rm -f "$RUN/onu-fw.conf"
+}
+
+# The NAT the local networks go out through, and the protection that keeps
+# the internet's new connections from them, as onu-fw's table: each
+# network's interface and addresses, and the GEM interface of each session
+# they go out by, whose flows the switch carries. Without networks the
+# table goes.
+lans_fw() {
+	lf_all=$(lans)
+	if [ -z "$lf_all" ]; then
+		fw_clear
+		return 0
+	fi
+	{
+		for lf in $lf_all; do
+			echo "lan $(lan_if "$lf") $(lan_net "$lf")"
+		done
+		for lf in $(for ln in $lf_all; do lan_session "$ln"; done | sort -u); do
+			lf_gem=$(cat "$SESSIONS/$lf/gem" 2>/dev/null)
+			[ -n "$lf_gem" ] && echo "wan $lf_gem"
+		done
+	} >"$RUN/onu-fw.conf.new"
+	# What onu-fw holds already is not put in place again.
+	if [ -e "$RUN/onu-fw.conf" ] &&
+		[ "$(cat "$RUN/onu-fw.conf.new")" = "$(cat "$RUN/onu-fw.conf")" ]; then
+		rm -f "$RUN/onu-fw.conf.new"
+		return 0
+	fi
+	mv "$RUN/onu-fw.conf.new" "$RUN/onu-fw.conf"
+	onu-fw apply "$RUN/onu-fw.conf" || {
+		log "onu-fw did not take the NAT of the local networks"
+		rm -f "$RUN/onu-fw.conf"
+	}
+}
+
 ttl_decrement() {
 	onu-nl param l3_ttl_decrement "$1" ||
 		log "the switch did not take l3_ttl_decrement $1"
@@ -1145,7 +1373,12 @@ ttl_decrement() {
 # only the handed address's own packets in hardware.
 pass_up() {
 	echo 1 >"$FORWARD"
-	ttl_decrement false
+	# A router of local networks is a hop: what it routes counts it.
+	if [ -n "$(lans)" ]; then
+		ttl_decrement true
+	else
+		ttl_decrement false
+	fi
 	# $(pass_links) is a list of names, split on purpose.
 	links_net $(pass_links)
 }
@@ -1175,6 +1408,7 @@ links_net() {
 }
 
 pass_down() {
+	lans_down
 	sessions_down
 	links_net
 	rm -f "$RUN/onu-lan" "$RUN/onu-pass" "$RUN/onu-pass-proxy"
@@ -1272,6 +1506,7 @@ apply() {
 	omcid_sync "$(omcid_want)"
 	echo "$MODE" >"$RUN/onu-mode"
 	[ "$MODE" != passthrough ] || pass_up
+	[ "$MODE" != passthrough ] || lans_up
 	cp "$CONF" "$RUN/onu-mode.conf" 2>/dev/null
 	settings_copy "$APPLIED"
 	log "$MODE mode"

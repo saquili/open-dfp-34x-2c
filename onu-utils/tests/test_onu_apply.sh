@@ -124,8 +124,11 @@ setup() {
 	printf '#!/bin/sh\necho "omcid $*" >>"$LOG"\n: >"%s/omcid.running"\n' "$T" >"$T/bin/omcid"
 	printf '#!/bin/sh\n[ "$1" = omcid ] && [ -e "%s/omcid.running" ]\n' "$T" >"$T/bin/pidof"
 	# nft stays a stand-in, so that a call to it would show in the log: the
-	# stick has no packet filter, and onu-apply must not need one.
+	# stick has no nft, and onu-apply puts its table in place with onu-fw,
+	# whose stand-in keeps the file it is given.
 	printf '#!/bin/sh\necho "nft $*" >>"$LOG"\n' >"$T/bin/nft"
+	printf '#!/bin/sh\necho "onu-fw $*" >>"$LOG"\n[ "$1" = apply ] && cp "$2" "%s/fw.conf"\nexit 0\n' \
+		"$T" >"$T/bin/onu-fw"
 	# pppoed opens IPv4, or IPv6 alone when told -6, and keeps it two seconds.
 	printf '#!/bin/sh\necho "pppoed $*" >>"$LOG"\ncase " $* " in\n%s\n%s\nesac\n%s 2\n' \
 		'*" -6 "*) echo "up6 ppp1 local fe80::2 peer fe80::1 session 18" ;;' \
@@ -161,6 +164,74 @@ check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ]'
 # A boot applies what the store gave and saves nothing.
 check '! logged "^onu-config"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 0 ]'
+teardown
+
+echo "a local network, routed out by a session that keeps its address"
+setup
+mkdir -p "$ONU_ROOT/sys/class/net/ppp0"
+conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 \
+	LAN1_NAME=Dom LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on \
+	LAN1_POOL_FROM=192.168.1.100 LAN1_POOL_TO=192.168.1.199 LAN1_LEASE=3600 \
+	FIXED1=1/00:00:5e:00:53:a1/192.168.1.10 FIXED1_NAME=Drukarka \
+	FIXED2=2/00:00:5e:00:53:a2/10.0.0.10
+echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
+"$MODE_SCRIPT" start 2>/dev/null
+"$MODE_SCRIPT" sync 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	logged "IPv4 up on ppp0" && break
+	"$REAL_SLEEP" 0.2
+done
+check 'has nets "device: type=8021q ifname=sfp vid=100 name=net1 rpfilter=strict ipv6=0"'
+check 'has nets "interface net1: device=net1 proto=static ipaddr=192.168.1.1/24"'
+check 'has nets "rule: src=192.168.1.0/24 lookup=101"'
+check 'has nets "route: interface=ses1 target=0.0.0.0/0 table=101"'
+check 'has nets "route: interface=net1 target=192.168.1.0/24 table=101"'
+U=$ONU_ROOT/run/udhcpd-net1.conf
+check 'grep -qx "interface net1" "$U" && grep -qx "start 192.168.1.100" "$U" &&
+	grep -qx "end 192.168.1.199" "$U" && grep -qx "max_leases 100" "$U"'
+check 'grep -qx "opt router 192.168.1.1" "$U" && grep -qx "opt subnet 255.255.255.0" "$U" &&
+	grep -qx "opt lease 3600" "$U" && grep -qx "auto_time 10" "$U"'
+# A device of the network gets its fixed address; one of another network not.
+check 'grep -qx "static_lease 00:00:5e:00:53:a1 192.168.1.10" "$U" && ! grep -q "10.0.0.10" "$U"'
+# The session's name servers, once it brought them.
+check 'grep -qx "opt dns 198.51.100.53" "$U"'
+check 'logged "procd start udhcpd-net1 .*udhcpd -f .*/run/udhcpd-net1.conf"'
+check 'logged "^onu-fw apply" && grep -qx "lan net1 192.168.1.0/24" "$T/fw.conf" &&
+	grep -qx "wan gem256" "$T/fw.conf"'
+# A router of networks is a hop, and forwards.
+check 'logged "l3_ttl_decrement true"'
+check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'
+check '! logged "^nft"'
+# A sync with nothing changed puts the table in place no second time.
+: >"$LOG"
+"$MODE_SCRIPT" sync 2>/dev/null
+check '! logged "^onu-fw"'
+
+echo "a network untagged on the host link, its pool all of its addresses"
+printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 \
+	LAN1_ADDRESS=10.0.0.1/24 LAN1_DHCP=on LAN1_LEASE=86400 >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'has nets "interface net1: device=sfp proto=static ipaddr=10.0.0.1/24"'
+check '! part nets | grep -q "8021q"'
+check 'grep -qx "interface sfp" "$U" && grep -qx "start 10.0.0.1" "$U" && grep -qx "end 10.0.0.254" "$U"'
+check 'grep -qx "lan sfp 10.0.0.0/24" "$T/fw.conf"'
+
+echo "a network without DHCP has no server"
+printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 \
+	LAN1_ADDRESS=10.0.0.1/24 LAN1_DHCP=off LAN1_LEASE=86400 >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'logged "procd stop udhcpd-net1" && [ ! -e "$U" ]'
+check 'has nets "interface net1: device=sfp proto=static ipaddr=10.0.0.1/24"'
+
+echo "the network gone"
+printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_ROOT/run/onu.conf"
+: >"$LOG"
+"$MODE_SCRIPT" reload 2>/dev/null
+check '[ ! -e "$ONU_ROOT/run/network.d/nets" ] && logged "^onu-fw clear"'
+check '[ ! -e "$ONU_ROOT/run/onu-fw.conf" ]'
+check 'logged "l3_ttl_decrement false"'
 teardown
 
 echo "a PPPoE session without name servers"
