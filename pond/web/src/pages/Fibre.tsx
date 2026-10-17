@@ -15,14 +15,14 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
-import { Check, CircleAlert, CircleX, KeyRound, Lock, Minus, X } from "lucide-react";
+import { Check, CircleAlert, CircleX, Lock, Minus, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Resolver, useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Identity } from "../api/types";
 import { Caret, opens } from "../components/CardTable";
-import { SaveState, SecretInput, useChangeState } from "../components/Field";
+import { Field, SaveState, useChangeState } from "../components/Field";
 import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
@@ -1056,18 +1056,18 @@ function ChannelList() {
 
 /* --------------------------------------------------------------- identity */
 
-type Group = "register" | "unit" | "software";
+type Group = "unit" | "software";
 
 /* The fields a stick of older software has none of. */
-const EXTENDED_FIELDS: string[] = ["loid", "sw_version0", "sw_version1", "pack_version"];
+const EXTENDED_FIELDS: string[] = ["sw_version0", "sw_version1", "pack_version"];
 
 /*
- * A field of the identity: where it goes, its words, and what the OLT reads
- * of it now, from the stick's OMCI database; null where no managed entity
- * carries it.
+ * A field of what OMCI tells the OLT of the stick: where it goes, its words,
+ * and what the OLT reads of it now, from the stick's OMCI database; null
+ * where no managed entity carries it.
  */
 const IDENTITY_FIELDS: {
-  field: Exclude<keyof Values, "ploam" | "loid_secret">;
+  field: Exclude<keyof Values, "serial" | "loid" | "ploam" | "loid_secret">;
   key: string;
   label: Key;
   hint?: Key;
@@ -1076,23 +1076,6 @@ const IDENTITY_FIELDS: {
   numeric?: boolean;
   mono?: boolean;
 }[] = [
-  {
-    field: "serial",
-    key: "SERIAL",
-    label: "fibre.serial",
-    hint: "fibre.serialHint",
-    group: "register",
-    olt: (u) => u.serial,
-    mono: true,
-  },
-  {
-    field: "loid",
-    key: "LOID",
-    label: "fibre.loid",
-    hint: "fibre.loidHint",
-    group: "register",
-    olt: (u) => u.loid,
-  },
   {
     field: "vendor_id",
     key: "VENDOR_ID",
@@ -1174,19 +1157,9 @@ const IDENTITY_FIELDS: {
 ];
 
 const GROUPS: { id: Group; label: Key; hint: Key }[] = [
-  { id: "register", label: "fibre.groupRegister", hint: "fibre.groupRegisterHint" },
   { id: "unit", label: "fibre.groupUnit", hint: "fibre.groupUnitHint" },
   { id: "software", label: "fibre.groupSoftware", hint: "fibre.groupSoftwareHint" },
 ];
-
-/*
- * Where the groups stand: what the line registers with, beside the
- * registration under the switch, since the port does it with PLOAM; what
- * OMCI tells the OLT of the stick, under the operator.
- */
-type Groups = [Group, ...Group[]];
-const REGISTER_GROUPS: Groups = ["register"];
-const OMCI_GROUPS: Groups = ["unit", "software"];
 
 const numberOrEmpty = (max: number) =>
   z.string().check(
@@ -1311,28 +1284,20 @@ function OltValue({
 }
 
 /*
- * The identity's fields of @groups, one group at a time, chosen from tabs
- * beside them when there are more. Only those fields are checked and sent,
- * and with them the serial number, which every change of the identity carries.
+ * What OMCI tells the OLT of the stick, one group at a time, chosen from tabs
+ * beside them. Only those fields are checked and sent, and with them the
+ * serial number as it is, which every change of the identity carries.
  */
-function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups }) {
+function IdentityForm({ identity }: { identity: Identity }) {
   const { t } = useI18n();
   const change = useIdentityChange();
   const state = useChangeState(change);
-  const { omci, mib } = useMib();
+  const { mib } = useMib();
   const u = mib.empty ? null : unitOf(mib);
   const extended = identity.loid !== undefined;
-  const registers = groups.includes("register");
-  const visible = IDENTITY_FIELDS.filter(
-    (f) => groups.includes(f.group) && (extended || !EXTENDED_FIELDS.includes(f.field)),
-  );
-  const secrets: (keyof Values)[] = !registers
-    ? []
-    : extended
-      ? ["ploam", "loid_secret"]
-      : ["ploam"];
+  const visible = IDENTITY_FIELDS.filter((f) => extended || !EXTENDED_FIELDS.includes(f.field));
   const rule = t("fibre.serialRule");
-  const names = [...visible.map((f) => f.field), ...secrets].join(" ");
+  const names = visible.map((f) => f.field).join(" ");
   const resolver = useMemo(
     () => identityResolver(rule, names.split(" ") as (keyof Values)[]),
     [rule, names],
@@ -1341,26 +1306,15 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
   const { errors, isDirty, dirtyFields } = form.formState;
   const values = form.watch();
   const changed = Object.keys(dirtyFields).length;
-  const [group, setGroup] = useState<Group>(groups[0]);
-  const groupOf = (name: string): Group | undefined =>
-    secrets.includes(name as keyof Values)
-      ? "register"
-      : IDENTITY_FIELDS.find((f) => f.field === name)?.group;
+  const [group, setGroup] = useState<Group>("unit");
   /* What a group holds that the reader is to see before opening it. */
   const tally = (g: Group) => {
-    const names = [
-      ...visible.filter((f) => f.group === g).map((f) => f.field),
-      ...(g === "register" ? secrets : []),
-    ];
+    const fields = visible.filter((f) => f.group === g);
     return {
-      changed: names.filter((n) => dirtyFields[n]).length,
-      errors: names.filter((n) => errors[n]).length,
-      differs: visible.filter(
-        (f) =>
-          f.group === g &&
-          u &&
-          f.olt &&
-          sameAsOlt(values[f.field] ?? "", f.olt(u), f.numeric) === false,
+      changed: fields.filter((f) => dirtyFields[f.field]).length,
+      errors: fields.filter((f) => errors[f.field]).length,
+      differs: fields.filter(
+        (f) => u && f.olt && sameAsOlt(values[f.field] ?? "", f.olt(u), f.numeric) === false,
       ).length,
     };
   };
@@ -1372,15 +1326,13 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
   const submit = form.handleSubmit(
     (v) => {
       if (!window.confirm(t("fibre.identityConfirm"))) return;
-      const out: Record<string, string> = { SERIAL: registers ? v.serial : identity.serial };
+      const out: Record<string, string> = { SERIAL: identity.serial };
       for (const f of visible) if (dirtyFields[f.field]) out[f.key] = v[f.field];
-      if (v.ploam) out.PLOAM = v.ploam;
-      if (v.loid_secret) out.LOID_PASSWORD = v.loid_secret;
-      change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
+      change.mutate(out, { onSuccess: () => form.reset(v) });
     },
     (bad) => {
       /* An error in a group not shown opens that group. */
-      const g = Object.keys(bad).map(groupOf).find(Boolean);
+      const g = visible.find((f) => f.field in bad)?.group;
       if (g) setGroup(g);
     },
   );
@@ -1406,25 +1358,6 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
         {olt}
       </div>
     </div>
-  );
-
-  const secret = (name: "ploam" | "loid_secret", label: string, set: boolean | undefined) => (
-    <>
-      <SecretInput
-        small
-        icon={<KeyRound className="size-3.5 shrink-0 opacity-50" />}
-        invalid={!!errors[name]}
-        autoComplete="new-password"
-        aria-label={label}
-        placeholder={set ? t("internet.passwordSaved") : t("internet.passwordNone")}
-        {...form.register(name)}
-      />
-      {errors[name] ? (
-        <p className="text-xs text-error">{errors[name]?.message}</p>
-      ) : (
-        <Detail>{set ? t("internet.passwordKept") : t("fibre.secretNoneHint")}</Detail>
-      )}
-    </>
   );
 
   const fieldRow = (f: (typeof IDENTITY_FIELDS)[number]) =>
@@ -1454,93 +1387,63 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
       f.field,
     );
 
-  const secretRows = () => (
-    <>
-      {row(
-        t("fibre.ploam"),
-        t("fibre.ploamHint"),
-        secret("ploam", t("fibre.ploam"), identity.ploam_set),
-        <span className="text-xs text-base-content/70">{t("fibre.oltNone")}</span>,
-        "ploam",
-      )}
-      {extended &&
-        row(
-          t("fibre.loidPassword"),
-          undefined,
-          secret("loid_secret", t("fibre.loidPassword"), identity.loid_password_set),
-          u ? (
-            <span className="text-sm">
-              {omci.data?.logical_password_set ? t("fibre.secretSet") : t("fibre.secretNone")}
-            </span>
-          ) : (
-            <span className="text-xs text-base-content/70">{t("fibre.oltNotRead")}</span>
-          ),
-          "loid_secret",
-        )}
-    </>
-  );
-
   return (
     <form onSubmit={submit} noValidate className="flex min-h-0 flex-1 flex-col gap-3">
-      <div
-        className={`grid min-h-0 flex-1 gap-4 ${groups.length > 1 ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : ""}`}
-      >
-        {groups.length > 1 && (
-          <div
-            role="tablist"
-            aria-orientation="vertical"
-            className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible lg:border-r lg:border-base-200 lg:pr-4"
-          >
-            {GROUPS.filter((g) => groups.includes(g.id)).map((g) => {
-              const n = tally(g.id);
-              const active = g.id === group;
-              return (
-                <button
-                  key={g.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setGroup(g.id)}
-                  className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
-                >
-                  <span className="flex w-full items-center gap-2 text-sm font-semibold">
-                    {t(g.label)}
-                    <span className="ml-auto flex items-center gap-1.5">
-                      {n.errors > 0 && (
-                        <span title={t("fibre.groupErrors")}>
-                          <CircleX
-                            className="size-3.5 text-error"
-                            aria-label={t("fibre.groupErrors")}
-                          />
-                        </span>
-                      )}
-                      {n.differs > 0 && (
-                        <span
-                          className="tabular flex items-center gap-0.5 text-xs font-normal text-base-content"
-                          title={t("fibre.differsN", { n: n.differs })}
-                        >
-                          <CircleAlert className="size-3.5 text-warning" />
-                          {n.differs}
-                        </span>
-                      )}
-                      {n.changed > 0 && (
-                        <span
-                          className="badge badge-primary badge-sm tabular"
-                          title={t("fibre.changedN", { n: n.changed })}
-                        >
-                          {n.changed}
-                        </span>
-                      )}
-                    </span>
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[15rem_minmax(0,1fr)]">
+        <div
+          role="tablist"
+          aria-orientation="vertical"
+          className="flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible lg:border-r lg:border-base-200 lg:pr-4"
+        >
+          {GROUPS.map((g) => {
+            const n = tally(g.id);
+            const active = g.id === group;
+            return (
+              <button
+                key={g.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setGroup(g.id)}
+                className={`flex min-w-44 shrink-0 flex-col items-start gap-0.5 rounded-field px-3 py-2 text-left transition-colors lg:min-w-0 ${active ? "bg-primary/10 text-primary" : "hover:bg-base-200"}`}
+              >
+                <span className="flex w-full items-center gap-2 text-sm font-semibold">
+                  {t(g.label)}
+                  <span className="ml-auto flex items-center gap-1.5">
+                    {n.errors > 0 && (
+                      <span title={t("fibre.groupErrors")}>
+                        <CircleX
+                          className="size-3.5 text-error"
+                          aria-label={t("fibre.groupErrors")}
+                        />
+                      </span>
+                    )}
+                    {n.differs > 0 && (
+                      <span
+                        className="tabular flex items-center gap-0.5 text-xs font-normal text-base-content"
+                        title={t("fibre.differsN", { n: n.differs })}
+                      >
+                        <CircleAlert className="size-3.5 text-warning" />
+                        {n.differs}
+                      </span>
+                    )}
+                    {n.changed > 0 && (
+                      <span
+                        className="badge badge-primary badge-sm tabular"
+                        title={t("fibre.changedN", { n: n.changed })}
+                      >
+                        {n.changed}
+                      </span>
+                    )}
                   </span>
-                  <span className="hidden text-xs font-normal text-base-content/70 lg:block">
-                    {t(g.hint)}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+                </span>
+                <span className="hidden text-xs font-normal text-base-content/70 lg:block">
+                  {t(g.hint)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
         <div className="flex min-h-0 flex-col">
           <div
             className={`hidden gap-x-6 border-b border-base-300 pb-1.5 text-xs font-semibold text-base-content/70 md:grid ${IDENTITY_COLS}`}
@@ -1549,12 +1452,8 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
             <span>{t("fibre.colOnStick")}</span>
             <span>{t("fibre.colOlt")}</span>
           </div>
-          <div
-            role={groups.length > 1 ? "tabpanel" : undefined}
-            className="min-h-0 flex-1 overflow-auto"
-          >
+          <div role="tabpanel" className="min-h-0 flex-1 overflow-auto">
             {visible.filter((f) => f.group === group).map(fieldRow)}
-            {group === "register" && secretRows()}
           </div>
         </div>
       </div>
@@ -1586,26 +1485,230 @@ function IdentityForm({ identity, groups }: { identity: Identity; groups: Groups
   );
 }
 
-/* A card of the identity's @groups, with its @title and @hint. */
-function IdentityCard({ groups, title, hint }: { groups: Groups; title: Key; hint: Key }) {
+/* A line under a field: what it says, with a mark when it agrees or not. */
+function Note({ mark, children }: { mark: "same" | "differs"; children: ReactNode }) {
+  return (
+    <span className="flex items-start gap-1.5">
+      {mark === "same" ? (
+        <Check className="mt-px size-3.5 shrink-0 text-success" aria-hidden />
+      ) : (
+        <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+      )}
+      {children}
+    </span>
+  );
+}
+
+/*
+ * What the line registers with, in the two ways an operator may ask for:
+ * the serial number with the PLOAM password, or the LOID with its password.
+ * They stand side by side, in rows shared across both, so that the fields of
+ * a row are level. Under each field, one line: what the OLT sees of it, or of
+ * a password whether it is kept. A change makes the stick register again, so
+ * the button says so, and the form asks once more at its foot before it does.
+ */
+function RegistrationForm({ identity }: { identity: Identity }) {
+  const { t, lang } = useI18n();
+  const change = useIdentityChange();
+  const state = useChangeState(change);
+  const { omci, mib } = useMib();
+  const counters = useLive().data?.onu?.counters;
+  const u = mib.empty ? null : unitOf(mib);
+  const loid = identity.loid !== undefined;
+  const rule = t("fibre.serialRule");
+  const resolver = useMemo(
+    () =>
+      identityResolver(
+        rule,
+        loid ? ["serial", "loid", "ploam", "loid_secret"] : ["serial", "ploam"],
+      ),
+    [rule, loid],
+  );
+  const form = useForm<Values>({ resolver, defaultValues: initial(identity) });
+  const { errors, isDirty, dirtyFields } = form.formState;
+  const values = form.watch();
+  const [asking, setAsking] = useState(false);
+  const yes = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!form.formState.isDirty) form.reset(initial(identity));
+  }, [identity, form]);
+  useEffect(() => {
+    if (asking) yes.current?.focus();
+  }, [asking]);
+
+  const ask = form.handleSubmit(() => setAsking(isDirty));
+  const save = form.handleSubmit((v) => {
+    setAsking(false);
+    const out: Record<string, string> = { SERIAL: v.serial };
+    if (dirtyFields.loid) out.LOID = v.loid;
+    if (v.ploam) out.PLOAM = v.ploam;
+    if (v.loid_secret) out.LOID_PASSWORD = v.loid_secret;
+    change.mutate(out, { onSuccess: () => form.reset({ ...v, ploam: "", loid_secret: "" }) });
+  });
+
+  /* What the OLT sees of a field that holds @stick. */
+  const seen = (stick: string, olt: string | null | undefined): ReactNode => {
+    if (olt == null) return t("fibre.oltNotYet");
+    const same = sameAsOlt(stick, olt);
+    if (same === null) return t("fibre.oltSeesFactory", { v: olt });
+    if (same) return <Note mark="same">{t(olt ? "fibre.oltSeesSame" : "fibre.oltSeesEmpty")}</Note>;
+    return (
+      <Note mark="differs">
+        {olt ? t("fibre.oltSeesOther", { v: olt }) : t("fibre.oltSeesNone")}
+      </Note>
+    );
+  };
+  const kept = (set: boolean | undefined) =>
+    t(set ? "internet.passwordKept" : "fibre.secretNoneHint");
+  const asked = counters?.password_requests;
+  const head = (title: Key, hint: Key) => (
+    <div>
+      <h3 className="text-base font-semibold">{t(title)}</h3>
+      <p className="text-xs text-base-content/70">{t(hint)}</p>
+    </div>
+  );
+
+  return (
+    <form onSubmit={ask} noValidate className="grid gap-4">
+      <div
+        className={`grid gap-x-10 gap-y-4 ${loid ? "max-w-4xl md:grid-flow-col md:grid-cols-2 md:grid-rows-[auto_auto_auto]" : "max-w-md"}`}
+      >
+        {head("fibre.bySerial", "fibre.bySerialHint")}
+        <Field
+          label={t("fibre.serial")}
+          mono
+          error={errors.serial?.message}
+          hint={seen(values.serial, u?.serial)}
+          {...form.register("serial")}
+        />
+        <Field
+          label={t("fibre.ploam")}
+          secret
+          autoComplete="new-password"
+          error={errors.ploam?.message}
+          hint={[
+            kept(identity.ploam_set),
+            asked == null
+              ? ""
+              : asked === 0
+                ? t("fibre.ploamNotAsked")
+                : t("fibre.ploamAsked", {
+                    n: integer(asked, lang),
+                    m: integer(counters?.password_replies ?? 0, lang),
+                  }),
+          ].join(" ")}
+          {...form.register("ploam")}
+        />
+        {loid && (
+          <>
+            {head("fibre.byLoid", "fibre.byLoidHint")}
+            <Field
+              label={t("fibre.loid")}
+              error={errors.loid?.message}
+              hint={seen(values.loid, u?.loid)}
+              {...form.register("loid")}
+            />
+            <Field
+              label={t("fibre.loidPassword")}
+              secret
+              autoComplete="new-password"
+              error={errors.loid_secret?.message}
+              hint={[
+                kept(identity.loid_password_set),
+                u
+                  ? t(
+                      omci.data?.logical_password_set
+                        ? "fibre.oltSeesSecret"
+                        : "fibre.oltSeesNoSecret",
+                    )
+                  : "",
+              ].join(" ")}
+              {...form.register("loid_secret")}
+            />
+          </>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-base-300 pt-3">
+        {asking ? (
+          <>
+            {/* The second click of a double one on the button that asked does not answer. */}
+            <button
+              ref={yes}
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={(e) => e.detail < 2 && save()}
+            >
+              {t("fibre.registerAgain")}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setAsking(false)}>
+              {t("common.cancel")}
+            </button>
+            <span role="alert" className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-sm">
+              <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden />
+              {t("fibre.identityConfirm")}
+            </span>
+          </>
+        ) : (
+          <>
+            <button
+              type="submit"
+              className="btn btn-primary btn-sm"
+              disabled={!isDirty || change.isPending}
+            >
+              {t("fibre.saveRegister")}
+            </button>
+            {isDirty && (
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => form.reset()}>
+                {t("form.discard")}
+              </button>
+            )}
+            <SaveState {...state} />
+            <span className="flex min-w-0 flex-1 basis-64 items-start gap-1.5 text-xs text-base-content/70">
+              <CircleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+              {t("fibre.identityWarning")}
+            </span>
+          </>
+        )}
+      </div>
+    </form>
+  );
+}
+
+/*
+ * A card of the identity, with its @title and @hint, whose values these are,
+ * and the @form of them; @fill stretches it down the page, for a form that
+ * scrolls inside it.
+ */
+function IdentityCard({
+  title,
+  hint,
+  fill,
+  form,
+}: {
+  title: Key;
+  hint: Key;
+  fill?: boolean;
+  form: (i: Identity) => ReactNode;
+}) {
   const { t } = useI18n();
   const identity = useIdentity();
   return (
-    <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
-      <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className={`card min-h-0 border border-base-300 bg-base-100 ${fill ? "flex-1" : ""}`}>
+      <div className="card-body min-h-0 gap-4 p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-1">
           <div>
             <h2 className="card-title text-base">{t(title)}</h2>
             <p className="text-sm text-base-content/70">{t(hint)}</p>
           </div>
           {identity.data?.source && (
-            <Badge tone="neutral">
+            <span className="text-xs text-base-content/70">
               {t(identity.data.source === "store" ? "fibre.fromStore" : "fibre.fromFactory")}
-            </Badge>
+            </span>
           )}
         </div>
         {identity.data ? (
-          <IdentityForm identity={identity.data} groups={groups} />
+          form(identity.data)
         ) : identity.isError ? (
           <p className="text-sm text-error">{identity.error.message}</p>
         ) : (
@@ -1833,7 +1936,11 @@ export function FibrePage() {
     >
       {tab === "state" && <LineState />}
       {tab === "config" && (
-        <IdentityCard groups={REGISTER_GROUPS} title="fibre.regData" hint="fibre.regDataHint" />
+        <IdentityCard
+          title="fibre.regData"
+          hint="fibre.regDataHint"
+          form={(i) => <RegistrationForm identity={i} />}
+        />
       )}
     </Page>
   );
@@ -1861,7 +1968,12 @@ export function IdentityPage() {
   const { t } = useI18n();
   return (
     <Page title={t("nav.identity")} actions={<FibreState />}>
-      <IdentityCard groups={OMCI_GROUPS} title="fibre.identity" hint="fibre.identityHint" />
+      <IdentityCard
+        title="fibre.identity"
+        hint="fibre.identityHint"
+        fill
+        form={(i) => <IdentityForm identity={i} />}
+      />
     </Page>
   );
 }

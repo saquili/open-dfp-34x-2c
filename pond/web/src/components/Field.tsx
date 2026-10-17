@@ -65,13 +65,15 @@ export const SecretInput = forwardRef<HTMLInputElement, SecretProps>(function Se
 
 type Props = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
   label: string;
-  hint?: string;
+  hint?: ReactNode;
   error?: string;
   secret?: boolean;
+  /** The value in the font of figures and codes. */
+  mono?: boolean;
 };
 
 export const Field = forwardRef<HTMLInputElement, Props>(function Field(
-  { label, hint, error, secret, id, className = "", ...input },
+  { label, hint, error, secret, mono, id, className = "", ...input },
   ref,
 ) {
   const name = id ?? input.name;
@@ -92,7 +94,7 @@ export const Field = forwardRef<HTMLInputElement, Props>(function Field(
           ref={ref}
           {...({
             id: name,
-            className: `input w-full ${error ? "input-error" : ""}`,
+            className: `input w-full ${mono ? "font-mono" : ""} ${error ? "input-error" : ""}`,
             type: "text",
             spellcheck: false,
             autoComplete: "off",
