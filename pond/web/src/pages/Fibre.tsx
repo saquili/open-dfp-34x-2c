@@ -700,9 +700,11 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
               const ids = [...new Set(s.ports.flatMap((p) => p.channels))];
               let down = 0;
               let up = 0;
+              let known = false;
               for (const c of new Set(ids.map((c) => c.portId))) {
                 const v = views.find((x) => x.gem.port_id === c);
                 const r = v ? rates?.[v.gem.name] : undefined;
+                known ||= r != null;
                 down += r?.down ?? 0;
                 up += r?.up ?? 0;
               }
@@ -771,7 +773,7 @@ function ServicesTable({ list, q }: { list: Service[]; q: string }) {
                       data-h={t("fibre.now")}
                       className={`tabular text-right whitespace-nowrap @max-4xl:text-left ${NARROW_CELL}`}
                     >
-                      ↓ {bitrate(down, lang)} ↑ {bitrate(up, lang)}
+                      {known ? `↓ ${bitrate(down, lang)} ↑ ${bitrate(up, lang)}` : "–"}
                     </td>
                   </tr>
                   {isOpen && (
@@ -1019,9 +1021,15 @@ function ChannelList() {
                       </span>
                       <Pbits list={o?.c.pbits ?? []} />
                       <span className="tabular text-right text-sm whitespace-nowrap">
-                        <span className="block">↓ {bitrate(r?.down ?? 0, lang)}</span>
-                        {g.direction !== "downstream" && (
-                          <span className="block">↑ {bitrate(r?.up ?? 0, lang)}</span>
+                        {r ? (
+                          <>
+                            <span className="block">↓ {bitrate(r.down, lang)}</span>
+                            {g.direction !== "downstream" && (
+                              <span className="block">↑ {bitrate(r.up, lang)}</span>
+                            )}
+                          </>
+                        ) : (
+                          "–"
                         )}
                       </span>
                       <span className="tabular text-right text-sm">

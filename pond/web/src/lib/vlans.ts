@@ -10,7 +10,7 @@
  * its bridges, and the translations the OLT asked for.
  */
 
-import type { Bridge, Live, Network } from "../api/types";
+import type { Bridge, Link, Live, Network } from "../api/types";
 import { sessions } from "./state";
 
 /** How a VLAN crosses a port: tagged, untagged, untagged and the port's own (PVID). */
@@ -31,6 +31,13 @@ export interface VlanMatrix {
   /** The columns: the SFP port, the processor, then the GEM channels by Port-ID. */
   columns: { id: string; label: string; side: "host" | "stick" | "operator"; port?: number }[];
   rows: VlanRow[];
+}
+
+/** What a VLAN interface of the stick's own is for. */
+export function linkRole(l: Link, live: Live | undefined): VlanRole {
+  if (l.name === live?.settings?.pass?.lan) return "handover";
+  if (sessions(live).some((x) => x.dev === l.name)) return "session";
+  return l.addresses.some((a) => a.family === "ipv4" && !a.link_local) ? "management" : "other";
 }
 
 export function vlanMatrix(
@@ -61,19 +68,9 @@ export function vlanMatrix(
   };
 
   /* A VLAN interface of the stick's own: its VLAN ends on the processor. */
-  const s = live?.settings;
-  const sessionDevs = new Set(sessions(live).map((x) => x.dev));
   for (const l of net?.links ?? []) {
     if (l.kind !== "vlan" || l.vlan == null || !l.lower) continue;
-    const role: VlanRole =
-      l.name === s?.pass?.lan
-        ? "handover"
-        : sessionDevs.has(l.name)
-          ? "session"
-          : l.addresses.some((a) => a.family === "ipv4" && !a.link_local)
-            ? "management"
-            : "other";
-    const r = row(l.vlan, role);
+    const r = row(l.vlan, linkRole(l, live));
     r.cells[l.lower] = "tagged";
     r.cells.cpu = "tagged";
   }

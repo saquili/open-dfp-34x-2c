@@ -24,7 +24,7 @@ import { type MacPlace, macRows, multicastOf, shownRoutes } from "../lib/switch"
 import { type Member, type VlanRole, vlanMatrix, vlanPaths } from "../lib/vlans";
 import { useDevices, useNets } from "./Lan";
 
-const VLAN_ROLE: Record<VlanRole, Key> = {
+export const VLAN_ROLE: Record<VlanRole, Key> = {
   management: "switch.roleManagement",
   handover: "switch.roleHandover",
   session: "switch.roleWan",
