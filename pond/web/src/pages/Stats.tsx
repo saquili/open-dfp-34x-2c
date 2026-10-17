@@ -282,7 +282,7 @@ const LINE: {
 
 /* What a channel carries, in a few words. */
 const GEM_USE: Record<GemUse, Key> = {
-  session: "stats.gemSession",
+  session: "fibre.chanSession",
   bridged: "fibre.svcBridged",
   ends: "fibre.svcEnds",
 };
@@ -363,7 +363,7 @@ function GponTab({ get, live }: { get: Get; live: Live | undefined }) {
                         GEM {g.gem.port_id}
                       </Link>
                     </td>
-                    <td>{t(g.gem.multicast ? "stats.gemMulticast" : GEM_USE[g.use])}</td>
+                    <td>{t(g.gem.multicast ? "fibre.chanMulticast" : GEM_USE[g.use])}</td>
                     <td className="tabular text-right">
                       <Volume
                         octets={get(`${k}.pon_rx_octets`)}

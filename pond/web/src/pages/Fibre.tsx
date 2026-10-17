@@ -15,7 +15,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
-import { Check, CircleAlert, CircleX, Lock, Minus, X } from "lucide-react";
+import { Check, CircleAlert, CircleX, Minus, X } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { type Resolver, useForm } from "react-hook-form";
 import { useIdentity, useIdentityChange, useOmci } from "../api/config";
@@ -27,9 +27,9 @@ import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
-import { Badge, Card, Detail, Facts, Figure, Stat, TABLE } from "../components/ui";
+import { Badge, Card, Detail, Facts, Figure, GroupRow, Stat, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
-import { bitrate, bytes, dbmText, decimal, duration, integer } from "../lib/format";
+import { bitrate, dbmText, decimal, duration, integer } from "../lib/format";
 import {
   type Channel,
   isDefault,
@@ -51,6 +51,7 @@ import { upTo, z } from "../lib/schemas";
 import {
   fibre,
   fibreVlan,
+  type GemView,
   GPON_DOWN_BPS,
   GPON_UP_BPS,
   gems,
@@ -954,129 +955,175 @@ function ServiceList({ view }: { view: ServiceTab }) {
 
 /* --------------------------------------------------------------- channels */
 
-/** The eight priorities of IEEE 802.1p, those a channel carries filled in. */
-function Pbits({ list }: { list: number[] }) {
+/*
+ * What a channel carries, in the statistics' words, and what more to say of
+ * it. A channel that carries a session's VLAN beside the session's own hands
+ * its frames to the session (onu-apply's feeds): an operator sends the
+ * session's discovery and control frames by such a channel, so it is the
+ * session's too.
+ */
+function useChannelUse() {
   const { t } = useI18n();
-  if (!list.length) return <span>–</span>;
-  return (
-    <span className="flex gap-0.5" title={t("fibre.pbits", { list: list.join(", ") })}>
-      {Array.from({ length: 8 }, (_, p) => (
-        <span
-          // biome-ignore lint/suspicious/noArrayIndexKey: the eight priorities are fixed
-          key={p}
-          className={`grid size-4 place-items-center rounded-[3px] text-xs leading-none tabular ${list.includes(p) ? "bg-primary text-primary-content" : "bg-base-200 text-base-content/70"}`}
-        >
-          {p}
-        </span>
-      ))}
-    </span>
-  );
+  const { data: live } = useLive();
+  const views = gems(live);
+  const own = sessions(live);
+  return (v: GemView, vlans: (number | null)[]): { title: string; to?: string; more?: string } => {
+    if (v.gem.multicast) return { title: t("fibre.chanMulticast") };
+    const ids = (vid: string | number | null | undefined) =>
+      own.filter((x) => vid != null && fibreVlan(x) === String(vid)).map((x) => x.id);
+    if (v.use === "session") {
+      const list = ids(v.vlan);
+      return {
+        title: t("fibre.chanSession"),
+        to: "/internet/wan",
+        more: list.length ? `PPPoE ${list.join(", ")}` : undefined,
+      };
+    }
+    const shared = vlans.length > 1 ? t("fibre.sharedBroadcast") : undefined;
+    const feeds = views.find(
+      (x) => x.use === "session" && vlans.some((vid) => vid != null && String(vid) === x.vlan),
+    );
+    if (v.use === "ends" && feeds)
+      return {
+        title: t("fibre.chanSession"),
+        to: "/internet/wan",
+        more: t("fibre.chanFeeds", { gem: feeds.gem.port_id }),
+      };
+    return { title: t(v.use === "bridged" ? "fibre.svcBridged" : "fibre.svcEnds"), more: shared };
+  };
 }
 
-/* The columns of a channel's row, its heading's as well. */
-const CHANNEL_COLS = "md:grid-cols-[6.5rem_9rem_minmax(0,1fr)_9.5rem_8rem_8rem]";
-
+/*
+ * The channels the OLT set up, a table grouped by T-CONT, the upstream
+ * allocation, the downstream-only ones last: each with its VLAN as the host
+ * knows it, what it carries, its direction, its IEEE 802.1p priorities and
+ * its traffic now. The counts since the start are the statistics' page's.
+ */
 function ChannelList() {
   const { t, lang } = useI18n();
   const { data: live } = useLive();
   const rates = useTraffic().at(-1)?.gems;
   const { mib } = useMib();
-  const gem = useGemText();
+  const use = useChannelUse();
   const views = gems(live);
-  const info = new Map<number, { c: Channel; vlans: (number | null)[] }>();
+  const info = new Map<number, { c: Channel; services: Service[] }>();
   for (const s of servicesOf(mib))
     for (const p of s.ports)
       for (const c of p.channels) {
         const had = info.get(c.portId);
-        info.set(c.portId, { c, vlans: [...(had?.vlans ?? []), s.vlan] });
+        info.set(c.portId, { c, services: [...(had?.services ?? []), s] });
       }
 
   const groups = new Map<number | null, typeof views>();
   for (const v of views) groups.set(v.gem.tcont, [...(groups.get(v.gem.tcont) ?? []), v]);
   const order = [...groups.keys()].sort((a, z) => (a ?? 99) - (z ?? 99));
+  const prios = (list: number[]) =>
+    !list.length ? "–" : list.length === 8 ? t("fibre.prioAny") : list.join(", ");
 
   return (
-    <section className="card flex min-h-0 flex-1 border border-base-300 bg-base-100">
-      <div className="card-body min-h-0 gap-3 p-4 sm:p-5">
-        <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto pr-1">
-          <div
-            className={`sticky top-0 z-10 hidden gap-x-4 border-b border-base-300 bg-base-100 px-2 pb-1.5 text-xs font-semibold text-base-content/70 md:grid ${CHANNEL_COLS}`}
-          >
-            <span>{t("fibre.channel")}</span>
-            <span>{t("fibre.direction")}</span>
-            <span>{t("fibre.colUse")}</span>
-            <span>{t("fibre.colPbits")}</span>
-            <span className="text-right">{t("fibre.now")}</span>
-            <span className="text-right">{t("fibre.colTotal")}</span>
-          </div>
-          {order.map((tc) => {
+    <Card scroll className="min-h-0">
+      <table className={`${TABLE} table-pin-rows`}>
+        <thead>
+          <tr>
+            <th className="w-32">{t("fibre.channel")}</th>
+            <th className="w-44">VLAN</th>
+            <th>{t("switch.vlanUse")}</th>
+            <th className="w-40">{t("fibre.direction")}</th>
+            <th className="w-28">{t("fibre.colPbits")}</th>
+            <th className="w-36 text-right">{t("fibre.now")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {order.map((tc, i) => {
             const list = groups.get(tc) ?? [];
             const alloc = list[0]?.allocId;
             return (
-              <div key={String(tc)} className="grid gap-1.5">
-                <div className="flex flex-wrap items-baseline gap-x-2 border-b border-base-300 pb-1">
-                  <span className="text-sm font-semibold whitespace-nowrap">
-                    {tc == null
-                      ? t("fibre.downOnlyGroup")
-                      : t("fibre.tcontGroup", { n: tc, alloc: alloc ?? "–" })}
-                  </span>
+              <Fragment key={String(tc)}>
+                <GroupRow span={6} first={i === 0}>
+                  {tc == null
+                    ? t("fibre.downOnlyGroup")
+                    : t("fibre.tcontGroup", { n: tc, alloc: alloc ?? "–" })}
                   {tc == null && (
-                    <span className="text-xs text-base-content/70">{t("fibre.downOnlyHint")}</span>
+                    <span className="ml-2 font-normal">{t("fibre.downOnlyHint")}</span>
                   )}
-                </div>
+                </GroupRow>
                 {list.map((v) => {
                   const g = v.gem;
                   const o = info.get(g.port_id);
+                  const names = (o?.services ?? []).map((s) => vlanName(t, s));
+                  const mains = [...new Set(names.map((n) => n.main))];
+                  const fibres = [
+                    ...new Set(names.flatMap((n) => (n.fibre == null ? [] : [n.fibre]))),
+                  ];
+                  const u = use(
+                    v,
+                    (o?.services ?? []).map((s) => s.vlan),
+                  );
                   const r = rates?.[g.name];
-                  const c = live?.gem_counters?.[g.name];
+                  const down = g.multicast || g.direction === "downstream";
                   return (
-                    <div
-                      key={g.name}
-                      className={`grid items-center gap-x-4 gap-y-1 rounded-field px-2 py-1.5 hover:bg-base-200/50 ${CHANNEL_COLS}`}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span className="tabular font-semibold">GEM {g.port_id}</span>
-                        {o?.c.encrypted && (
-                          <Lock className="size-3.5 text-base-content/70" aria-label="AES" />
-                        )}
-                      </span>
-                      <span className="text-sm">{gem.direction(g)}</span>
-                      <span className="flex flex-wrap items-center gap-1 text-xs">
-                        {(o?.vlans ?? []).map((x) => (
-                          <span key={String(x)} className="badge badge-sm badge-outline tabular">
-                            {x == null ? "–" : `VLAN ${x}`}
+                    <tr key={g.name}>
+                      <td>
+                        <span className="grid gap-0.5">
+                          <span className="tabular font-semibold whitespace-nowrap">
+                            GEM {g.port_id}
                           </span>
-                        ))}
-                        <span className="text-base-content/70">{gem.use(v)}</span>
-                      </span>
-                      <Pbits list={o?.c.pbits ?? []} />
-                      <span className="tabular text-right text-sm whitespace-nowrap">
+                          {o?.c.encrypted && (
+                            <span title={t("fibre.aes")}>
+                              <Detail>{t("fibre.encShort")}</Detail>
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="grid gap-0.5">
+                          <span className="tabular">{mains.length ? mains.join(", ") : "–"}</span>
+                          {fibres.length > 0 && (
+                            <Detail>{t("internet.onFibre", { vid: fibres.join(", ") })}</Detail>
+                          )}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="grid gap-0.5">
+                          {u.to ? (
+                            <Link to={u.to} className="link link-hover link-primary">
+                              {u.title}
+                            </Link>
+                          ) : (
+                            <span>{u.title}</span>
+                          )}
+                          {u.more && <Detail>{u.more}</Detail>}
+                        </span>
+                      </td>
+                      <td>
+                        {t(
+                          g.direction === "both"
+                            ? "fibre.both"
+                            : g.direction === "upstream"
+                              ? "fibre.upstream"
+                              : "fibre.downstream",
+                        )}
+                      </td>
+                      <td className="tabular">{prios(o?.c.pbits ?? [])}</td>
+                      <td className="tabular text-right whitespace-nowrap">
                         {r ? (
-                          <>
-                            <span className="block">↓ {bitrate(r.down, lang)}</span>
-                            {g.direction !== "downstream" && (
-                              <span className="block">↑ {bitrate(r.up, lang)}</span>
-                            )}
-                          </>
+                          <span className="grid gap-0.5">
+                            <span>↓ {bitrate(r.down, lang)}</span>
+                            {!down && <span>↑ {bitrate(r.up, lang)}</span>}
+                          </span>
                         ) : (
                           "–"
                         )}
-                      </span>
-                      <span className="tabular text-right text-sm">
-                        <span className="block">↓ {bytes(c?.pon_rx_octets, lang)}</span>
-                        {g.direction !== "downstream" && (
-                          <span className="block">↑ {bytes(c?.pon_tx_octets, lang)}</span>
-                        )}
-                      </span>
-                    </div>
+                      </td>
+                    </tr>
                   );
                 })}
-              </div>
+              </Fragment>
             );
           })}
-        </div>
-      </div>
-    </section>
+        </tbody>
+      </table>
+    </Card>
   );
 }
 
