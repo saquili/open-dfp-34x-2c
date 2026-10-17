@@ -21,7 +21,7 @@ override WARN := -std=gnu11 -Wall -Wextra -Wmissing-prototypes -Wstrict-prototyp
 .PHONY: all check clean
 
 all: $(BUILD)/ponid $(BUILD)/pon $(BUILD)/onu-config $(BUILD)/onu-update $(BUILD)/onu-svc \
-	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop $(BUILD)/onu-call
+	$(BUILD)/onu-act $(BUILD)/onu-nl $(BUILD)/onu-drop $(BUILD)/onu-call $(BUILD)/onu-fw
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -38,6 +38,12 @@ $(BUILD)/pon: $(BUILD)/src/pon.o $(BUILD)/src/pondev.o $(BUILD)/src/genl.o \
 # devlink: libmnl.
 $(BUILD)/onu-nl: $(BUILD)/src/onu-nl.o $(BUILD)/src/tcrule.o $(BUILD)/src/dlparam.o \
 		$(BUILD)/src/linkmsg.o $(BUILD)/src/genl.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+$(BUILD)/onu-fw: $(BUILD)/src/onu-fw.o $(BUILD)/src/fwmsg.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
+
+$(BUILD)/test_fwmsg: $(BUILD)/tests/test_fwmsg.o $(BUILD)/src/fwmsg.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) -lmnl
 
 $(BUILD)/test_tcrule: $(BUILD)/tests/test_tcrule.o $(BUILD)/src/tcrule.o
@@ -109,12 +115,14 @@ $(BUILD)/test_settings: $(BUILD)/tests/test_settings.o $(BUILD)/src/settings.o
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 # test_genl asks the kernel it runs on, through a generic netlink socket;
-# test_onu_nl.sh sets filters on it, and skips without the right to.
+# test_onu_nl.sh sets filters on it, and test_onu_fw.sh puts a table of
+# nf_tables in place; both skip without the right to.
 check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/test_genl \
 	$(BUILD)/test_tcrule $(BUILD)/test_linkmsg $(BUILD)/test_dlparam $(BUILD)/onu-nl \
 	$(BUILD)/test_cfgstore $(BUILD)/onu-config $(BUILD)/mkslots $(BUILD)/test_update \
 	$(BUILD)/onu-update \
-	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password
+	$(BUILD)/test_svcmsg $(BUILD)/test_settings $(BUILD)/test_act $(BUILD)/test_password \
+	$(BUILD)/test_fwmsg $(BUILD)/onu-fw
 	$(BUILD)/test_factory
 	$(BUILD)/test_pondev
 	$(BUILD)/test_genl
@@ -127,6 +135,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	$(BUILD)/test_settings
 	$(BUILD)/test_act
 	$(BUILD)/test_password
+	$(BUILD)/test_fwmsg
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config_settings.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_update.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_drop.sh
@@ -140,6 +149,7 @@ check: $(BUILD)/onu-drop $(BUILD)/test_factory $(BUILD)/test_pondev $(BUILD)/tes
 	sh tests/test_onu_apply.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_config.sh
 	BUILD=$(abspath $(BUILD)) sh tests/test_onu_nl.sh
+	BUILD=$(abspath $(BUILD)) sh tests/test_onu_fw.sh
 
 clean:
 	rm -rf $(BUILD)

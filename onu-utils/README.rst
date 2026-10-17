@@ -10,8 +10,8 @@ The small programs of the ONU. A person at the stick runs ``onu-config``,
 ``passwd``, which are in ``/usr/sbin`` and ``/usr/bin``. The others only other
 programs run, and they are in ``/usr/lib/onu``, out of a person's way (ADR
 0015): ``ponid``, ``onu-mgmt``, ``onu-net``, ``onu-run``, ``onu-lane``,
-``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call`` and
-``onu-config.sh``. A script that runs one of them finds it there, and names it
+``onu-change``, ``onu-trial``, ``onu-act``, ``onu-drop``, ``onu-call``,
+``onu-fw`` and ``onu-config.sh``. A script that runs one of them finds it there, and names it
 by its whole path where procd starts it.
 
 ``ponid``
@@ -535,6 +535,26 @@ by its whole path where procd starts it.
    name as the method (``omcid``, ``dhcp6d``): each is the method that runs
    ``onu-apply`` for that name, and ubusd's list lets each program call its own
    and no other (``tests/test_acl.py`` reads the lists).
+
+``onu-fw``
+   puts the stick's own table of nf_tables, ``inet onu``, in place for the
+   local networks, through netlink, since the image carries no ``nft``::
+
+      onu-fw apply FILE
+      onu-fw clear
+
+   The table is the NAT the networks go out through, behind the address of
+   the PPPoE session each goes out by, a flowtable that hands their TCP and
+   UDP flows to the switch, and the protection that keeps the sessions' new
+   connections out of the networks; ``src/fwmsg.h`` shows it as nft would.
+   ``onu-apply`` writes the file, ``/run/onu-fw.conf``: a line ``lan IFNAME
+   ADDRESS/LEN`` for each network, a line ``wan IFNAME`` for the GEM interface
+   of each session the networks go out by, and ``offload off`` for none of
+   the flowtable. The kernel takes the table whole or not at all, in place of
+   the one there was; when it refuses the flowtable, as one whose devices
+   carry no flow in hardware does, the table goes in without it, and the CPU
+   carries the flows. ``tests/test_onu_fw.sh`` reads the table back with nft
+   on dummy interfaces, with root's CAP_NET_ADMIN.
 
 ``onu-run``
    starts a service of the stick in the foreground, as procd wants it, from
