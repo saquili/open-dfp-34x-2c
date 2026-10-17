@@ -2,11 +2,12 @@
 // SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 
 /*
- * Pages of the switch: which VLAN crosses which port, tagged or not, and
- * what each is for; and the MAC table. And the routes and neighbours, which
+ * Pages of the switch: which way each VLAN goes through the stick, from the
+ * host to the operator, and what it is for; and the MAC table. And the routes and neighbours, which
  * the menu shows under the internet.
  */
 
+import { Link } from "@tanstack/react-router";
 import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ApiError, OfflineError } from "../api/client";
@@ -14,11 +15,12 @@ import { useBridge, useNetwork, useOmci } from "../api/config";
 import { useLive } from "../api/live";
 import type { Neighbour, Route } from "../api/types";
 import { Page } from "../components/Page";
-import { Badge, Card } from "../components/ui";
+import { Badge, Card, Detail, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { Mib, services } from "../lib/omci";
+import { fibreVlan, sessions } from "../lib/state";
 import { isSystemEntry, shownRoutes } from "../lib/switch";
-import { type Member, type VlanRole, vlanMatrix } from "../lib/vlans";
+import { type Member, type VlanRole, vlanMatrix, vlanPaths } from "../lib/vlans";
 
 const VLAN_ROLE: Record<VlanRole, Key> = {
   management: "switch.roleManagement",
@@ -56,95 +58,108 @@ function failure(t: (k: Key, v?: Record<string, string>) => string, e: Error) {
 
 /* ------------------------------------------------------------------- VLANs */
 
-const MEMBER: Record<Member, { mark: string; cls: string; key: Key }> = {
-  tagged: { mark: "T", cls: "bg-info/15 text-info", key: "switch.mTagged" },
-  untagged: { mark: "U", cls: "bg-success/15 text-success", key: "switch.mUntagged" },
-  pvid: { mark: "U*", cls: "bg-success/25 text-success", key: "switch.mPvid" },
+/* How a VLAN crosses the SFP port, to the host. */
+const HOST: Record<Member, Key> = {
+  tagged: "switch.mTagged",
+  untagged: "switch.mUntagged",
+  pvid: "switch.mPvid",
 };
 
+/* The page that tells of a VLAN's use in full. */
+const ROLE_PAGE: Partial<Record<VlanRole, string>> = {
+  session: "/internet/wan",
+  bridged: "/operator/services",
+};
+
+/*
+ * The VLANs, a row for each way through the stick, read as a frame goes:
+ * from the host on the SFP port, through the stick, to the operator on the
+ * fibre. A VLAN the OLT translates is one row, under the host's VID.
+ */
 function Vlans() {
   const { t } = useI18n();
   const { data: live } = useLive();
   const net = useNetwork();
   const bridge = useBridge();
   const omci = useOmci();
+  const list = useMemo(() => services(new Mib(omci.data)), [omci.data]);
   const translations = useMemo(
-    () =>
-      services(new Mib(omci.data)).flatMap((s) =>
-        s.hostVlans.map((h) => ({ host: h, fibre: s.vlan })),
-      ),
-    [omci.data],
+    () => list.flatMap((s) => s.hostVlans.map((h) => ({ host: h, fibre: s.vlan }))),
+    [list],
   );
-  const m = vlanMatrix(net.data, bridge.data, live, translations);
+  const paths = vlanPaths(vlanMatrix(net.data, bridge.data, live, translations), translations);
+  /* What a way carries that its columns do not show: the stick's sessions, multicast. */
+  const carries = (vid: number) => {
+    const own = sessions(live).filter((x) => fibreVlan(x) === String(vid));
+    return [
+      own.length && t("fibre.tagSession", { list: own.map((x) => x.id).join(", ") }),
+      list.find((x) => x.vlan === vid)?.multicast && t("fibre.tagMulticast"),
+    ].filter(Boolean);
+  };
   if (net.error) return <p className="text-sm text-error">{failure(t, net.error)}</p>;
 
   return (
-    <Card title={t("switch.vlanMatrix")} scroll className="min-h-0 flex-1">
-      <p className="text-xs text-base-content/65">{t("switch.vlanMatrixHint")}</p>
-      <div className="flex flex-wrap gap-3 text-xs">
-        {(Object.keys(MEMBER) as Member[]).map((k) => (
-          <span key={k} className="flex items-center gap-1">
-            <span className={`rounded px-1.5 py-0.5 font-semibold ${MEMBER[k].cls}`}>
-              {MEMBER[k].mark}
-            </span>
-            {t(MEMBER[k].key)}
-          </span>
-        ))}
-        <span className="flex items-center gap-1">
-          <span className="rounded px-1.5 py-0.5 text-base-content/40">·</span>
-          {t("switch.mNone")}
-        </span>
-      </div>
-      <table className="table table-sm table-pin-rows">
+    <Card scroll className="min-h-0">
+      <table className={`${TABLE} table-pin-rows`}>
         <thead>
-          <tr>
-            <th>VLAN</th>
+          <tr className="[&>th]:align-bottom">
+            <th className="w-40">VLAN</th>
             <th>{t("switch.vlanUse")}</th>
-            {m.columns.map((c) => (
-              <th
-                key={c.id}
-                className={`text-center ${c.side === "host" ? "bg-primary/5" : c.side === "stick" ? "bg-base-200" : ""}`}
-              >
-                <div className="tabular whitespace-nowrap">{c.label}</div>
-                <div className="text-[10px] font-normal text-base-content/50">
-                  {c.side === "host"
-                    ? t("switch.hostSide")
-                    : c.side === "stick"
-                      ? t("switch.stick")
-                      : t("switch.operatorSide")}
-                </div>
-              </th>
-            ))}
+            <th className="w-48">
+              {t("switch.hostSide")}
+              <span className="block font-normal">{t("switch.sfpPort")}</span>
+            </th>
+            <th className="w-40">{t("switch.stick")}</th>
+            <th className="w-56">
+              {t("switch.operatorSide")}
+              <span className="block font-normal">{t("switch.fibreSide")}</span>
+            </th>
           </tr>
         </thead>
         <tbody>
-          {m.rows.map((r) => (
-            <tr key={r.vid}>
-              <td className="tabular font-semibold">
-                {r.vid}
-                {r.peer != null && (
-                  <span className="ml-1 text-xs font-normal text-base-content/60">⇄ {r.peer}</span>
-                )}
-              </td>
-              <td className="text-sm">{t(VLAN_ROLE[r.role])}</td>
-              {m.columns.map((c) => {
-                const mem = r.cells[c.id];
-                return (
-                  <td key={c.id} className="text-center">
-                    {mem ? (
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-xs font-semibold ${MEMBER[mem].cls}`}
-                      >
-                        {MEMBER[mem].mark}
-                      </span>
+          {paths.map((p) => {
+            const more = carries(p.fibre ?? p.vid);
+            const to = ROLE_PAGE[p.role];
+            return (
+              <tr key={p.vid}>
+                <td>
+                  <span className="grid gap-0.5">
+                    <span className="tabular font-semibold">{p.vid}</span>
+                    {p.fibre != null && <Detail>{t("internet.onFibre", { vid: p.fibre })}</Detail>}
+                  </span>
+                </td>
+                <td>
+                  <span className="grid gap-0.5">
+                    {to ? (
+                      <Link to={to} className="link link-hover link-primary">
+                        {t(VLAN_ROLE[p.role])}
+                      </Link>
                     ) : (
-                      <span className="text-base-content/30">·</span>
+                      <span>{t(VLAN_ROLE[p.role])}</span>
                     )}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
+                    {more.length > 0 && <Detail>{more.join(" · ")}</Detail>}
+                  </span>
+                </td>
+                <td>{p.host ? t(HOST[p.host]) : "–"}</td>
+                <td>
+                  {p.ends
+                    ? t("switch.endsHere")
+                    : p.host && p.gems.length
+                      ? t("switch.passes")
+                      : "–"}
+                </td>
+                <td>
+                  {p.gems.length ? (
+                    <Link to="/operator/channels" className="link link-hover link-primary tabular">
+                      GEM {p.gems.join(", ")}
+                    </Link>
+                  ) : (
+                    "–"
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </Card>
@@ -304,7 +319,7 @@ function Routing() {
 export function VlansPage() {
   const { t } = useI18n();
   return (
-    <Page title={t("nav.vlans")}>
+    <Page title={t("nav.vlans")} hint={t("switch.vlanHint")}>
       <Vlans />
     </Page>
   );

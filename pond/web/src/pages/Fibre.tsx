@@ -27,7 +27,7 @@ import { useGemText } from "../components/Gem";
 import { Page, Tabs, useTab } from "../components/Page";
 import { Filter, Pager, usePages } from "../components/Pager";
 import { HistoryNote, Sparkline } from "../components/TrafficChart";
-import { Badge, Card, Facts, Figure, Stat } from "../components/ui";
+import { Badge, Card, Detail, Facts, Figure, Stat, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, bytes, dbmText, decimal, duration, integer } from "../lib/format";
 import {
@@ -473,13 +473,6 @@ function LineHistory() {
 /* --------------------------------------------------------------- services */
 
 /*
- * A table of the panel's look (docs/handbook/panel-design.rst, Tables): the
- * names of the columns at 12 px in the secondary colour, the cells at 14 px
- * with their content at their top.
- */
-const TABLE = "table [&_thead]:text-xs [&_thead]:text-base-content/70 [&_td]:align-top";
-
-/*
  * A service's row in a card too narrow for the table: the caret, and beside
  * it the cells one under another, each under its column's name.
  */
@@ -595,11 +588,6 @@ function hostText(t: (k: Key, v?: Record<string, string | number>) => string, s:
       ? t("fibre.hostAll")
       : t("fibre.hostSame", { vid: s.vlan })
     : s.hostVlans.map((v) => (v == null ? t("switch.untagged") : String(v))).join(", ");
-}
-
-/* A line of detail under a value: 12 px, in the secondary colour. */
-function Detail({ children }: { children: ReactNode }) {
-  return <span className="text-xs text-base-content/70">{children}</span>;
 }
 
 /*

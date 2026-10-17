@@ -7,6 +7,18 @@ import type { ReactNode } from "react";
 import { useI18n } from "../i18n";
 import type { Tone } from "../lib/state";
 
+/*
+ * A table of the panel's look (docs/handbook/panel-design.rst, Tables): the
+ * names of the columns at 12 px in the secondary colour, the cells at 14 px
+ * with their content at their top.
+ */
+export const TABLE = "table [&_thead]:text-xs [&_thead]:text-base-content/70 [&_td]:align-top";
+
+/* A line of detail under a value: 12 px, in the secondary colour. */
+export function Detail({ children }: { children: ReactNode }) {
+  return <span className="text-xs text-base-content/70">{children}</span>;
+}
+
 const BADGE: Record<Tone, string> = {
   good: "badge-success",
   warn: "badge-warning",

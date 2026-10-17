@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { BRIDGE, LIVE, NETWORK } from "../mocks/fixture";
-import { vlanMatrix } from "./vlans";
+import { vlanMatrix, vlanPaths } from "./vlans";
 
 describe("the VLANs on the ports", () => {
   const m = vlanMatrix(NETWORK, BRIDGE, LIVE, [
@@ -45,5 +45,48 @@ describe("the VLANs on the ports", () => {
     expect(row(420)?.peer).toBe(200);
     expect(row(200)?.peer).toBe(420);
     expect(row(420)?.role).toBe("bridged");
+  });
+});
+
+describe("the ways of the VLANs through the stick", () => {
+  const translations = [
+    { host: 420, fibre: 200 },
+    { host: 421, fibre: 300 },
+    { host: 410, fibre: 100 },
+  ];
+  const paths = vlanPaths(vlanMatrix(NETWORK, BRIDGE, LIVE, translations), translations);
+  const path = (vid: number) => paths.find((p) => p.vid === vid);
+
+  it("makes a VLAN and its translation one way, under the host's VID", () => {
+    expect(paths.map((p) => p.vid)).toEqual([36, 410, 420, 421, 4094]);
+    expect(path(420)).toEqual({
+      vid: 420,
+      fibre: 200,
+      role: "bridged",
+      host: "tagged",
+      ends: false,
+      gems: [280, 2046, 2047],
+    });
+  });
+
+  it("ends the stick's session on the processor, with its channel on the fibre", () => {
+    expect(path(410)).toEqual({
+      vid: 410,
+      fibre: 100,
+      role: "session",
+      host: null,
+      ends: true,
+      gems: [278],
+    });
+  });
+
+  it("keeps a VLAN of the stick's own, untranslated, between the host and the processor", () => {
+    expect(path(4094)).toMatchObject({
+      fibre: null,
+      role: "management",
+      host: "tagged",
+      ends: true,
+    });
+    expect(path(4094)?.gems).toEqual([]);
   });
 });
