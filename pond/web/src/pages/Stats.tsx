@@ -15,16 +15,14 @@
 import { Link } from "@tanstack/react-router";
 import { RotateCcw } from "lucide-react";
 import { Fragment, type ReactNode, useState } from "react";
-import { useNetwork } from "../api/config";
 import { useLive, useTraffic } from "../api/live";
 import type { Live } from "../api/types";
 import { Page, Tabs, useTab } from "../components/Page";
-import { Card, Detail, Dot, TABLE } from "../components/ui";
+import { Card, Detail, Dot, GroupRow, TABLE } from "../components/ui";
 import { type Key, useI18n } from "../i18n";
 import { bitrate, bytes, clock, decimal, integer } from "../lib/format";
-import { type GemUse, gems, sessions } from "../lib/state";
-import { linkRole } from "../lib/vlans";
-import { VLAN_ROLE } from "./Switch";
+import { type GemUse, gems } from "../lib/state";
+import { useIfaceText } from "./Switch";
 
 const TABS = ["ports", "gpon", "ifaces"] as const;
 
@@ -97,20 +95,6 @@ function useCounts() {
 }
 
 type Get = (key: string) => number | null;
-
-/* A group's name across a table, as the names of its columns are set. */
-function Group({ span, first, children }: { span: number; first?: boolean; children: ReactNode }) {
-  return (
-    <tr>
-      <td
-        colSpan={span}
-        className={`pb-1.5 text-xs font-semibold text-base-content/70 ${first ? "pt-1" : "pt-5"}`}
-      >
-        {children}
-      </td>
-    </tr>
-  );
-}
 
 /* A count of errors, with a mark when there are any. */
 function Errors({ n, children }: { n: number | null; children: ReactNode }) {
@@ -226,11 +210,11 @@ function PortsTab({ get }: { get: Get }) {
           </tr>
         </thead>
         <tbody>
-          <Group span={5} first>
+          <GroupRow span={5} first>
             {t("stats.groupTraffic")}
-          </Group>
+          </GroupRow>
           {TRAFFIC.map((r) => row(r))}
-          <Group span={5}>{t("stats.groupErrors")}</Group>
+          <GroupRow span={5}>{t("stats.groupErrors")}</GroupRow>
           {ERRORS.filter((r) => allErrors || some(r)).map((r) => row(r, true))}
           {zero.length > 0 && (
             <tr>
@@ -247,7 +231,7 @@ function PortsTab({ get }: { get: Get }) {
               </td>
             </tr>
           )}
-          <Group span={5}>
+          <GroupRow span={5}>
             {t("stats.groupSizes")}
             <button
               type="button"
@@ -257,7 +241,7 @@ function PortsTab({ get }: { get: Get }) {
             >
               {sizes ? t("stats.collapse") : t("stats.showRows", { n: SIZES.length })}
             </button>
-          </Group>
+          </GroupRow>
           {sizes && SIZES.map((r) => row(r))}
         </tbody>
       </table>
@@ -326,9 +310,9 @@ function GponTab({ get, live }: { get: Get; live: Live | undefined }) {
           <tbody>
             {LINE.map((g, i) => (
               <Fragment key={g.group}>
-                <Group span={2} first={i === 0}>
+                <GroupRow span={2} first={i === 0}>
                   {t(g.group)}
-                </Group>
+                </GroupRow>
                 {g.rows.map((r) => {
                   const v = n(r.key);
                   return (
@@ -444,36 +428,6 @@ function GponTab({ get, live }: { get: Get; live: Live | undefined }) {
 }
 
 /* ---------------------------------------------------------- the interfaces */
-
-/*
- * What a network interface is for, and its place in the list: the ports
- * first, then the stick's VLANs, its sessions, its GEM channels.
- */
-function useIfaceText() {
-  const { t } = useI18n();
-  const { data: live } = useLive();
-  const net = useNetwork();
-  const omcc = live?.onu?.omcc_port_id;
-  return (name: string): { rank: number; text: string | null } => {
-    if (name === "sfp")
-      return { rank: 0, text: `${t("switch.hostSide")} · ${t("switch.sfpPort")}` };
-    if (name === "pon")
-      return { rank: 1, text: `${t("switch.operatorSide")} · ${t("switch.fibreSide")}` };
-    if (name === "cpu") return { rank: 2, text: t("stats.ifCpu") };
-    const l = net.data?.links.find((x) => x.name === name);
-    if (l?.kind === "vlan" && l.vlan != null)
-      return { rank: 3, text: `${t(VLAN_ROLE[linkRole(l, live)])} · VLAN ${l.vlan}` };
-    const s = sessions(live).find((x) => x.ppp === name);
-    if (s) return { rank: 4, text: `PPPoE ${s.id}` };
-    const id = /^gem(\d+)$/.exec(name)?.[1];
-    if (id)
-      return {
-        rank: 5,
-        text: Number(id) === omcc ? t("stats.ifOmci", { id }) : t("stats.ifGem", { id }),
-      };
-    return { rank: 3, text: null };
-  };
-}
 
 /* Every network interface's counters, with what it is for and its link. */
 function IfacesTab({ get, live }: { get: Get; live: Live | undefined }) {

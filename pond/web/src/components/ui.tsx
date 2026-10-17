@@ -19,6 +19,28 @@ export function Detail({ children }: { children: ReactNode }) {
   return <span className="text-xs text-base-content/70">{children}</span>;
 }
 
+/* A group's name across a table, as the names of its columns are set. */
+export function GroupRow({
+  span,
+  first,
+  children,
+}: {
+  span: number;
+  first?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <tr>
+      <td
+        colSpan={span}
+        className={`pb-1.5 text-xs font-semibold text-base-content/70 ${first ? "pt-1" : "pt-5"}`}
+      >
+        {children}
+      </td>
+    </tr>
+  );
+}
+
 const BADGE: Record<Tone, string> = {
   good: "badge-success",
   warn: "badge-warning",
