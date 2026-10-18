@@ -22,9 +22,18 @@
  * taken with any value and left out. Empty lines and lines that begin with
  * '#' are not settings.
  *
+ * The connections 1 to 7 that take their address as a router does, IPoE, are
+ * IPOEn_KIND (static, an address typed in, or dhcp, one from the operator's
+ * DHCP server; empty for none, which removes it), IPOEn_GEM, IPOEn_VLAN and
+ * IPOEn_MAC, as a session's, IPOEn_FAMILY (ipv4, ipv6 or both), and for a
+ * static one IPOEn_ADDRESS (with its prefix length), IPOEn_GATEWAY,
+ * IPOEn_DNS (the name servers, apart by blanks), IPOEn_ADDRESS6,
+ * IPOEn_GATEWAY6 and IPOEn_PREFIX6 (the IPv6 prefix of the networks behind
+ * the stick). Sessions with an account and these together are seven at most.
+ *
  * The local networks 1 to 8, which the stick routes for the devices on the
- * host side, are LANn_CONN (the connection they go out by, pppoe:N, a session
- * that keeps its address on the stick), LANn_NAME (for people only),
+ * host side, are LANn_CONN (the connection they go out by: pppoe:N, a session
+ * that keeps its address on the stick, or ipoe:N), LANn_NAME (for people only),
  * LANn_VLAN (on the host link, nothing for untagged), LANn_ADDRESS (the
  * stick's address in the network, with its prefix length), LANn_DHCP (on or
  * off), LANn_POOL_FROM and LANn_POOL_TO (the addresses DHCP leases), LANn_LEASE
@@ -42,6 +51,9 @@
 #include <stddef.h>
 
 #define SETTINGS_SESSIONS 7
+/* The IPoE connections, and the connections of every kind together. */
+#define SETTINGS_IPOE 7
+#define SETTINGS_CONNS 7
 /* A value, a name for people included: 32 characters of UTF-8 fit it. */
 #define SETTINGS_VALUE_MAX 132
 #define SETTINGS_USER_MAX 63
@@ -66,6 +78,22 @@ enum settings_skey {
 	SET_S_PASS,
 	SET_S_HOST_VLAN,
 	SETTINGS_NSKEYS
+};
+
+/* The settings of an IPoE connection, IPOEn_<suffix>. */
+enum settings_ikey {
+	SET_I_KIND,
+	SET_I_GEM,
+	SET_I_VLAN,
+	SET_I_MAC,
+	SET_I_FAMILY,
+	SET_I_ADDRESS,
+	SET_I_GATEWAY,
+	SET_I_DNS,
+	SET_I_ADDRESS6,
+	SET_I_GATEWAY6,
+	SET_I_PREFIX6,
+	SETTINGS_NIKEYS
 };
 
 /* The settings of a local network, LANn_<suffix>. */
@@ -99,6 +127,9 @@ struct settings_account {
  * @val: the value of each key that is not a session's
  * @sval: the value of each key of each session
  * @acct: the account of each session, an empty user for none
+ * @ival: the value of each key of each IPoE connection
+ * @lval: the value of each key of each local network
+ * @fixed: the fixed addresses
  * @legacy_lan: LAN_VLAN, the one link of before, when @had_legacy_lan
  * @had_legacy_lan: whether the set named LAN_VLAN
  */
@@ -106,6 +137,7 @@ struct settings {
 	char val[SETTINGS_NKEYS][SETTINGS_VALUE_MAX];
 	char sval[SETTINGS_SESSIONS][SETTINGS_NSKEYS][SETTINGS_VALUE_MAX];
 	struct settings_account acct[SETTINGS_SESSIONS];
+	char ival[SETTINGS_IPOE][SETTINGS_NIKEYS][SETTINGS_VALUE_MAX];
 	char lval[SETTINGS_LANS][SETTINGS_NLKEYS][SETTINGS_VALUE_MAX];
 	struct settings_fixed fixed[SETTINGS_FIXED];
 	char legacy_lan[SETTINGS_VALUE_MAX];
@@ -182,8 +214,9 @@ size_t settings_format_defaults(char *out, size_t cap);
  * @out: where the lines go
  * @cap: the size of @out
  *
- * The keys of each session that has an account; never an account, nor a
- * key of before.
+ * The keys of each session that has an account, of each IPoE connection, of
+ * each local network and the fixed addresses; never an account, nor a key of
+ * before.
  *
  * Return: the length of the lines, which is @cap or more when they did not
  *         fit.

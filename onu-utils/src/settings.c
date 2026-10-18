@@ -3,6 +3,7 @@
 
 /* The settings of the stick's data path, as one table (settings.h). */
 
+#include <arpa/inet.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,11 @@ enum kind {
 	K_IPV4_OPT,
 	K_LEASE,
 	K_SUBNET6,
+	K_IPOE_KIND,
+	K_ADDRS,
+	K_CIDR6,
+	K_IPV6_OPT,
+	K_PREFIX6,
 };
 
 /*
@@ -69,6 +75,29 @@ static const struct {
 	[SET_S_FAMILY] = { "FAMILY", K_FAMILY, "both" },
 	[SET_S_PASS] = { "PASS", K_ONOFF, "on" },
 	[SET_S_HOST_VLAN] = { "HOST_VLAN", K_HOST_VLAN, "" },
+};
+
+/*
+ * The settings of each IPoE connection and their defaults: KIND, static or
+ * dhcp, none for no connection; the family IPv4, as a router's WAN has it
+ * where nothing else is said. The addresses are a static connection's.
+ */
+static const struct {
+	const char *suffix;
+	enum kind kind;
+	const char *dflt;
+} g_ikeys[SETTINGS_NIKEYS] = {
+	[SET_I_KIND] = { "KIND", K_IPOE_KIND, "" },
+	[SET_I_GEM] = { "GEM", K_GEM, "auto" },
+	[SET_I_VLAN] = { "VLAN", K_VLAN, "" },
+	[SET_I_MAC] = { "MAC", K_MAC_OPT, "" },
+	[SET_I_FAMILY] = { "FAMILY", K_FAMILY, "ipv4" },
+	[SET_I_ADDRESS] = { "ADDRESS", K_CIDR, "" },
+	[SET_I_GATEWAY] = { "GATEWAY", K_IPV4_OPT, "" },
+	[SET_I_DNS] = { "DNS", K_ADDRS, "" },
+	[SET_I_ADDRESS6] = { "ADDRESS6", K_CIDR6, "" },
+	[SET_I_GATEWAY6] = { "GATEWAY6", K_IPV6_OPT, "" },
+	[SET_I_PREFIX6] = { "PREFIX6", K_PREFIX6, "" },
 };
 
 /*
@@ -196,6 +225,75 @@ static bool cidr(const char *s, uint32_t *addr, unsigned long *len)
 	return true;
 }
 
+/* An IPv6 address, as inet_pton(3) takes it: no zone, no length. */
+static bool ipv6(const char *s, struct in6_addr *out)
+{
+	struct in6_addr a;
+
+	if (strlen(s) >= INET6_ADDRSTRLEN || inet_pton(AF_INET6, s, &a) != 1)
+		return false;
+	if (out)
+		*out = a;
+	return true;
+}
+
+/* addr/len, an IPv6 address with a prefix length from @lo to @hi. */
+static bool cidr6(const char *s, unsigned long lo, unsigned long hi,
+		  struct in6_addr *addr, unsigned long *len)
+{
+	char a[INET6_ADDRSTRLEN];
+	const char *slash = strchr(s, '/');
+	unsigned long l;
+
+	if (!slash || (size_t)(slash - s) >= sizeof(a))
+		return false;
+	memcpy(a, s, (size_t)(slash - s));
+	a[slash - s] = '\0';
+	if (!ipv6(a, addr) || !number(slash + 1, lo, hi, &l))
+		return false;
+	if (len)
+		*len = l;
+	return true;
+}
+
+/*
+ * prefix/len, an IPv6 prefix of 16 to 64 bits for the networks behind the
+ * stick, each a /64 of it: its first address, nothing after the prefix.
+ */
+static bool prefix6(const char *s)
+{
+	struct in6_addr a;
+	unsigned long len;
+
+	if (!cidr6(s, 16, 64, &a, &len))
+		return false;
+	for (unsigned long bit = len; bit < 128; bit++)
+		if (a.s6_addr[bit / 8] & (0x80 >> (bit % 8)))
+			return false;
+	return true;
+}
+
+/* Addresses, IPv4 or IPv6, one blank between two: name servers. */
+static bool addrs(const char *v)
+{
+	char a[INET6_ADDRSTRLEN];
+
+	while (*v) {
+		size_t n = strcspn(v, " ");
+
+		if (!n || n >= sizeof(a))
+			return false;
+		memcpy(a, v, n);
+		a[n] = '\0';
+		if (!ipv4(a, NULL) && !ipv6(a, NULL))
+			return false;
+		v += n;
+		if (*v && !*++v)
+			return false;
+	}
+	return true;
+}
+
 /* A name for people: printable, UTF-8 too, up to 32 characters. */
 #define NAME_CHARS 32
 
@@ -212,14 +310,22 @@ static bool name(const char *v)
 	return chars <= NAME_CHARS && strlen(v) < SETTINGS_VALUE_MAX;
 }
 
-/* pppoe:N, the PPPoE session N. */
-static bool conn(const char *v, int *n)
+/*
+ * pppoe:N, the PPPoE session N, or ipoe:N, the IPoE connection N: whether it
+ * is the latter in @ipoe, N from 0 in @n.
+ */
+static bool conn(const char *v, bool *ipoe, int *n)
 {
-	if (strncmp(v, "pppoe:", 6) || v[6] < '1' ||
-	    v[6] > '0' + SETTINGS_SESSIONS || v[7])
+	bool i = !strncmp(v, "ipoe:", 5);
+	const char *d = v + (i ? 5 : 6);
+
+	if ((!i && strncmp(v, "pppoe:", 6)) || d[0] < '1' ||
+	    d[0] > '0' + (i ? SETTINGS_IPOE : SETTINGS_SESSIONS) || d[1])
 		return false;
+	if (ipoe)
+		*ipoe = i;
 	if (n)
-		*n = v[6] - '1';
+		*n = d[0] - '1';
 	return true;
 }
 
@@ -240,7 +346,7 @@ static bool valid(enum kind kind, const char *v)
 	case K_MAC_OPT:
 		return !*v || mac(v);
 	case K_CONN:
-		return !*v || conn(v, NULL);
+		return !*v || conn(v, NULL, NULL);
 	case K_NAME:
 		return name(v);
 	case K_CIDR:
@@ -261,6 +367,16 @@ static bool valid(enum kind kind, const char *v)
 
 		return !n || (n <= 4 && strspn(v, "0123456789abcdef") == n);
 	}
+	case K_IPOE_KIND:
+		return !*v || !strcmp(v, "static") || !strcmp(v, "dhcp");
+	case K_ADDRS:
+		return addrs(v);
+	case K_CIDR6:
+		return !*v || cidr6(v, 1, 128, NULL, NULL);
+	case K_IPV6_OPT:
+		return !*v || ipv6(v, NULL);
+	case K_PREFIX6:
+		return !*v || prefix6(v);
 	}
 	return false;
 }
@@ -317,6 +433,22 @@ static bool skey_index(const char *name, int *n, int *k)
 	for (int i = 0; i < SETTINGS_NSKEYS; i++) {
 		if (!strcmp(name + 9, g_skeys[i].suffix)) {
 			*n = name[7] - '1';
+			*k = i;
+			return true;
+		}
+	}
+	return false;
+}
+
+/* IPOEn_<suffix>: the connection, from 0, and the setting; or false. */
+static bool ikey_index(const char *name, int *n, int *k)
+{
+	if (strncmp(name, "IPOE", 4) || name[4] < '1' ||
+	    name[4] > '0' + SETTINGS_IPOE || name[5] != '_')
+		return false;
+	for (int i = 0; i < SETTINGS_NIKEYS; i++) {
+		if (!strcmp(name + 6, g_ikeys[i].suffix)) {
+			*n = name[4] - '1';
 			*k = i;
 			return true;
 		}
@@ -397,6 +529,10 @@ void settings_defaults(struct settings *s)
 		for (int k = 0; k < SETTINGS_NSKEYS; k++)
 			snprintf(s->sval[n][k], SETTINGS_VALUE_MAX, "%s",
 				 g_skeys[k].dflt);
+	for (int n = 0; n < SETTINGS_IPOE; n++)
+		for (int k = 0; k < SETTINGS_NIKEYS; k++)
+			snprintf(s->ival[n][k], SETTINGS_VALUE_MAX, "%s",
+				 g_ikeys[k].dflt);
 	for (int n = 0; n < SETTINGS_LANS; n++)
 		for (int k = 0; k < SETTINGS_NLKEYS; k++)
 			snprintf(s->lval[n][k], SETTINGS_VALUE_MAX, "%s",
@@ -465,6 +601,14 @@ int settings_line(struct settings *s, const char *line, char *err,
 			return -1;
 		}
 		snprintf(s->sval[n][k], SETTINGS_VALUE_MAX, "%s", v);
+		return 0;
+	}
+	if (ikey_index(key, &n, &k)) {
+		if (!valid(g_ikeys[k].kind, v)) {
+			snprintf(err, errcap, "%s: not a value of it", key);
+			return -1;
+		}
+		snprintf(s->ival[n][k], SETTINGS_VALUE_MAX, "%s", v);
 		return 0;
 	}
 	if (lkey_index(key, &n, &k)) {
@@ -562,6 +706,20 @@ static bool mgmt(const struct settings *s, const char *v)
 	return *v && vid && (vid == s->mgmt_vlan[0] || vid == s->mgmt_vlan[1]);
 }
 
+/* Whether IPoE connection @n is set up: it has a kind. */
+static bool ipoe_on(const struct settings *s, int n)
+{
+	return *s->ival[n][SET_I_KIND];
+}
+
+/* Whether IPoE connection @n carries the family @fam, "ipv4" or "ipv6". */
+static bool ipoe_carries(const struct settings *s, int n, const char *fam)
+{
+	const char *f = s->ival[n][SET_I_FAMILY];
+
+	return !strcmp(f, "both") || !strcmp(f, fam);
+}
+
 /* Whether network @n is set up: it has a connection. */
 static bool lan_on(const struct settings *s, int n)
 {
@@ -582,6 +740,7 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 		const char *vlan = la[SET_L_VLAN];
 		uint32_t ip, m, from = 0, to = 0;
 		unsigned long len;
+		bool by_ipoe = false;
 		int sn = 0;
 
 		if (!lan_on(s, a))
@@ -592,14 +751,27 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 				 a + 1, a + 1);
 			return false;
 		}
-		(void)conn(la[SET_L_CONN], &sn);
-		if (!*s->acct[sn].user) {
+		(void)conn(la[SET_L_CONN], &by_ipoe, &sn);
+		if (by_ipoe && !ipoe_on(s, sn)) {
+			snprintf(err, errcap,
+				 "network %d: connection %d is not set up",
+				 a + 1, sn + 1);
+			return false;
+		}
+		/* Its devices go out behind the connection's IPv4 address. */
+		if (by_ipoe && !ipoe_carries(s, sn, "ipv4")) {
+			snprintf(err, errcap,
+				 "network %d: connection %d carries no IPv4",
+				 a + 1, sn + 1);
+			return false;
+		}
+		if (!by_ipoe && !*s->acct[sn].user) {
 			snprintf(err, errcap,
 				 "network %d: session %d has no account", a + 1,
 				 sn + 1);
 			return false;
 		}
-		if (strcmp(s->sval[sn][SET_S_PASS], "off")) {
+		if (!by_ipoe && strcmp(s->sval[sn][SET_S_PASS], "off")) {
 			snprintf(err, errcap,
 				 "network %d: session %d hands its address down; a network goes out by a session that keeps it",
 				 a + 1, sn + 1);
@@ -618,6 +790,22 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 				 "network %d: session %d hands its address down in %s",
 				 a + 1, n + 1, *vlan ? vlan : "the untagged link");
 			return false;
+		}
+		/* A route to the one would take what goes to the other. */
+		for (int c = 0; c < SETTINGS_IPOE; c++) {
+			uint32_t ipc;
+			unsigned long lenc;
+
+			if (!ipoe_on(s, c) ||
+			    !cidr(s->ival[c][SET_I_ADDRESS], &ipc, &lenc))
+				continue;
+			m = mask_of(len < lenc ? len : lenc);
+			if ((ip & m) == (ipc & m)) {
+				snprintf(err, errcap,
+					 "network %d and connection %d share addresses",
+					 a + 1, c + 1);
+				return false;
+			}
 		}
 		m = mask_of(len);
 		if (*la[SET_L_POOL_FROM] || *la[SET_L_POOL_TO]) {
@@ -649,6 +837,103 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 			if ((ip & mb) == (ipb & mb)) {
 				snprintf(err, errcap,
 					 "networks %d and %d share addresses",
+					 a + 1, b + 1);
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+/*
+ * An IPoE connection runs in a VLAN of the PON, one at most in a VLAN, which
+ * is no management VLAN; a static one has an address and a gateway of each
+ * family it carries, the IPv4 gateway another address of the address's
+ * network. Sessions with an account and these connections are seven at most.
+ */
+static bool ipoe_coherent(const struct settings *s, char *err, size_t errcap)
+{
+	int conns = 0;
+
+	for (int n = 0; n < SETTINGS_SESSIONS; n++)
+		conns += *s->acct[n].user != '\0';
+	for (int n = 0; n < SETTINGS_IPOE; n++)
+		conns += ipoe_on(s, n);
+	if (conns > SETTINGS_CONNS) {
+		snprintf(err, errcap,
+			 "%d connections: sessions and the others together are %d at most",
+			 conns, SETTINGS_CONNS);
+		return false;
+	}
+	for (int a = 0; a < SETTINGS_IPOE; a++) {
+		const char(*ia)[SETTINGS_VALUE_MAX] = s->ival[a];
+		uint32_t ip, gw, m;
+		unsigned long len;
+
+		if (!ipoe_on(s, a))
+			continue;
+		if (!*ia[SET_I_VLAN]) {
+			snprintf(err, errcap,
+				 "connection %d: it needs a VLAN, IPOE%d_VLAN", a + 1,
+				 a + 1);
+			return false;
+		}
+		if (mgmt(s, ia[SET_I_VLAN])) {
+			snprintf(err, errcap,
+				 "connection %d: VLAN %s is the management VLAN",
+				 a + 1, ia[SET_I_VLAN]);
+			return false;
+		}
+		for (int b = a + 1; b < SETTINGS_IPOE; b++) {
+			if (ipoe_on(s, b) &&
+			    !strcmp(ia[SET_I_VLAN], s->ival[b][SET_I_VLAN])) {
+				snprintf(err, errcap,
+					 "connections %d and %d are in one VLAN",
+					 a + 1, b + 1);
+				return false;
+			}
+		}
+		if (strcmp(ia[SET_I_KIND], "static"))
+			continue;
+		if (ipoe_carries(s, a, "ipv4")) {
+			if (!cidr(ia[SET_I_ADDRESS], &ip, &len) ||
+			    !ipv4(ia[SET_I_GATEWAY], &gw)) {
+				snprintf(err, errcap,
+					 "connection %d: a static one needs IPOE%d_ADDRESS and IPOE%d_GATEWAY",
+					 a + 1, a + 1, a + 1);
+				return false;
+			}
+			m = mask_of(len);
+			if ((gw & m) != (ip & m) || gw == ip || (gw & ~m) == 0 ||
+			    (gw & ~m) == ~m) {
+				snprintf(err, errcap,
+					 "connection %d: the gateway is no other address of its network",
+					 a + 1);
+				return false;
+			}
+		}
+		if (ipoe_carries(s, a, "ipv6") &&
+		    (!*ia[SET_I_ADDRESS6] || !*ia[SET_I_GATEWAY6])) {
+			snprintf(err, errcap,
+				 "connection %d: a static one with IPv6 needs IPOE%d_ADDRESS6 and IPOE%d_GATEWAY6",
+				 a + 1, a + 1, a + 1);
+			return false;
+		}
+	}
+
+	/* A connection in a session's VLAN shares its interface and MAC address. */
+	for (int a = 0; a < SETTINGS_IPOE; a++) {
+		for (int b = 0; b < SETTINGS_SESSIONS; b++) {
+			const char *ma = s->ival[a][SET_I_MAC];
+			const char *mb = s->sval[b][SET_S_MAC];
+
+			if (!ipoe_on(s, a) || !*s->acct[b].user ||
+			    strcmp(s->ival[a][SET_I_GEM], s->sval[b][SET_S_GEM]) ||
+			    strcmp(s->ival[a][SET_I_VLAN], s->sval[b][SET_S_VLAN]))
+				continue;
+			if (*ma && *mb && strcasecmp(ma, mb)) {
+				snprintf(err, errcap,
+					 "connection %d and session %d are in one VLAN and send from one MAC address",
 					 a + 1, b + 1);
 				return false;
 			}
@@ -774,7 +1059,8 @@ bool settings_coherent(const struct settings *s, char *err, size_t errcap)
 			}
 		}
 	}
-	return lans_coherent(s, err, errcap) && fixed_coherent(s, err, errcap);
+	return ipoe_coherent(s, err, errcap) && lans_coherent(s, err, errcap) &&
+	       fixed_coherent(s, err, errcap);
 }
 
 size_t settings_format_defaults(char *out, size_t cap)
@@ -800,7 +1086,7 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 {
 	size_t len = 0;
 
-	/* Without a session there is nothing to write. */
+	/* Without a session, a connection or a network there is nothing to write. */
 	if (cap)
 		out[0] = '\0';
 
@@ -813,6 +1099,17 @@ size_t settings_format(const struct settings *s, char *out, size_t cap)
 						len < cap ? cap - len : 0,
 						"SESSION%d_%s=%s\n", n + 1,
 						g_skeys[k].suffix, s->sval[n][k]);
+	}
+
+	/* A connection's settings are kept while it has a kind. */
+	for (int n = 0; n < SETTINGS_IPOE; n++) {
+		if (!ipoe_on(s, n))
+			continue;
+		for (int k = 0; k < SETTINGS_NIKEYS; k++)
+			len += (size_t)snprintf(out + (len < cap ? len : cap),
+						len < cap ? cap - len : 0,
+						"IPOE%d_%s=%s\n", n + 1,
+						g_ikeys[k].suffix, s->ival[n][k]);
 	}
 
 	/* A network's settings are kept while it has a connection. */

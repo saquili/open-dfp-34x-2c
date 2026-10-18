@@ -286,7 +286,9 @@ static void test_lans(void)
 		"LAN9_CONN=pppoe:1",
 		"LAN0_CONN=pppoe:1",
 		"LAN1_CONN=pppoe:8",
-		"LAN1_CONN=ipoe:1",
+		"LAN1_CONN=ipoe:8",
+		"LAN1_CONN=ipoe:0",
+		"LAN1_CONN=ipoe:",
 		"LAN1_FOO=1",
 		"LAN1_ADDRESS=192.168.1.0/24",
 		"LAN1_ADDRESS=192.168.1.255/24",
@@ -423,6 +425,127 @@ static void test_fixed(void)
 	      strstr(g_err, "give one address"));
 }
 
+/* A static connection in VLAN 420, and one by DHCP in 421. */
+#define STATIC1 "IPOE1_KIND=static\nIPOE1_VLAN=420\nIPOE1_ADDRESS=192.0.2.10/24\n" \
+		"IPOE1_GATEWAY=192.0.2.1\n"
+#define DHCP2 "IPOE2_KIND=dhcp\nIPOE2_VLAN=421\n"
+
+static void test_ipoe(void)
+{
+	static const char *const bad[] = {
+		"IPOE0_KIND=static",
+		"IPOE8_KIND=static",
+		"IPOE1_KIND=pppoe",
+		"IPOE1_FOO=1",
+		"IPOE1_VLAN=4095",
+		"IPOE1_GEM=auto1",
+		"IPOE1_FAMILY=ipx",
+		"IPOE1_MAC=01:00:5e:00:00:01",
+		"IPOE1_ADDRESS=192.0.2.0/24",
+		"IPOE1_ADDRESS=192.0.2.10",
+		"IPOE1_GATEWAY=192.0.2",
+		"IPOE1_DNS=198.51.100.53,198.51.100.54",
+		"IPOE1_DNS=198.51.100.53  198.51.100.54",
+		"IPOE1_DNS= 198.51.100.53",
+		"IPOE1_DNS=198.51.100.53 ",
+		"IPOE1_DNS=example.net",
+		"IPOE1_ADDRESS6=2001:db8::2",
+		"IPOE1_ADDRESS6=2001:db8::2/129",
+		"IPOE1_ADDRESS6=2001:db8::g/64",
+		"IPOE1_GATEWAY6=2001:db8::1/64",
+		"IPOE1_GATEWAY6=fe80::1%wan420",
+		"IPOE1_PREFIX6=2001:db8:5100::1/56",
+		"IPOE1_PREFIX6=2001:db8::/65",
+		"IPOE1_PREFIX6=2001:db8::/8",
+	};
+	struct settings s;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		int rc = judge(&s, bad[i]);
+
+		CHECK(rc == -1 && *g_err);
+		if (rc != -1)
+			printf("    taken: %s\n", bad[i]);
+	}
+
+	/* A connection is written whole, with the defaults filled in. */
+	CHECK(judge(&s, STATIC1 "IPOE1_DNS=198.51.100.53 2001:db8::53\n") == 0);
+	CHECK(has("IPOE1_KIND=static") && has("IPOE1_GEM=auto") && has("IPOE1_VLAN=420") &&
+	      has("IPOE1_MAC=") && has("IPOE1_FAMILY=ipv4") &&
+	      has("IPOE1_ADDRESS=192.0.2.10/24") && has("IPOE1_GATEWAY=192.0.2.1") &&
+	      has("IPOE1_DNS=198.51.100.53 2001:db8::53") && has("IPOE1_ADDRESS6=") &&
+	      has("IPOE1_GATEWAY6=") && has("IPOE1_PREFIX6="));
+	CHECK(judge(&s, DHCP2) == 0 && has("IPOE2_KIND=dhcp") && !strstr(g_out, "IPOE1_"));
+	/* An empty kind is no connection, and nothing of it is written. */
+	CHECK(judge(&s, STATIC1 "IPOE1_KIND=\n") == 0 && !strstr(g_out, "IPOE1_"));
+	/* Both families, IPv6 typed in too, a link-local gateway among them. */
+	CHECK(judge(&s, STATIC1 "IPOE1_FAMILY=both\nIPOE1_ADDRESS6=2001:db8:5::2/64\n"
+			"IPOE1_GATEWAY6=fe80::1\nIPOE1_PREFIX6=2001:db8:5100::/56\n") == 0 &&
+	      has("IPOE1_PREFIX6=2001:db8:5100::/56") && has("IPOE1_GATEWAY6=fe80::1"));
+
+	/* What a connection needs. */
+	CHECK(judge(&s, "IPOE1_KIND=dhcp\n") == -2 && strstr(g_err, "IPOE1_VLAN"));
+	CHECK(judge(&s, "IPOE1_KIND=static\nIPOE1_VLAN=420\n") == -2 &&
+	      strstr(g_err, "IPOE1_ADDRESS and IPOE1_GATEWAY"));
+	CHECK(judge(&s, STATIC1 "IPOE1_GATEWAY=192.0.3.1\n") == -2 &&
+	      strstr(g_err, "the gateway is no other address of its network"));
+	CHECK(judge(&s, STATIC1 "IPOE1_GATEWAY=192.0.2.10\n") == -2);
+	CHECK(judge(&s, STATIC1 "IPOE1_GATEWAY=192.0.2.255\n") == -2);
+	CHECK(judge(&s, STATIC1 "IPOE1_FAMILY=both\n") == -2 &&
+	      strstr(g_err, "IPOE1_ADDRESS6 and IPOE1_GATEWAY6"));
+	/* IPv6 alone needs no IPv4. */
+	CHECK(judge(&s, "IPOE1_KIND=static\nIPOE1_VLAN=420\nIPOE1_FAMILY=ipv6\n"
+			"IPOE1_ADDRESS6=2001:db8:5::2/64\nIPOE1_GATEWAY6=2001:db8:5::1\n") == 0);
+	/* DHCP needs nothing typed in. */
+	CHECK(judge(&s, DHCP2 "IPOE2_FAMILY=both\n") == 0);
+
+	/* One in a VLAN, none in the management VLAN. */
+	CHECK(judge(&s, STATIC1 DHCP2 "IPOE2_VLAN=420\n") == -2 &&
+	      strstr(g_err, "connections 1 and 2 are in one VLAN"));
+	g_mgmt[0] = 421;
+	CHECK(judge(&s, DHCP2) == -2 && strstr(g_err, "VLAN 421 is the management VLAN"));
+	g_mgmt[0] = 0;
+	/* Beside a session in its VLAN, the session's interface and MAC address. */
+	CHECK(judge(&s, ONE DHCP2 "SESSION1_VLAN=421\nIPOE2_VLAN=421\n") == 0);
+	CHECK(judge(&s, ONE DHCP2 "SESSION1_VLAN=421\nSESSION1_MAC=00:00:5e:00:53:01\n"
+			"IPOE2_MAC=00:00:5e:00:53:02\n") == -2 &&
+	      strstr(g_err, "connection 2 and session 1 are in one VLAN"));
+	CHECK(judge(&s, ONE DHCP2 "SESSION1_VLAN=421\nSESSION1_MAC=00:00:5e:00:53:01\n"
+			"IPOE2_MAC=00:00:5E:00:53:01\n") == 0);
+
+	/* Seven connections at most, of every kind together. */
+	{
+		char text[1024];
+		size_t at = 0;
+
+		for (int n = 1; n <= 4; n++)
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "PPPOE%d_USER=u%d\nPPPOE%d_SECRET=x\nSESSION%d_PASS=off\n",
+					       n, n, n, n);
+		for (int n = 1; n <= 3; n++)
+			at += (size_t)snprintf(text + at, sizeof(text) - at,
+					       "IPOE%d_KIND=dhcp\nIPOE%d_VLAN=%d\n", n, n, 100 + n);
+		CHECK(judge(&s, text) == 0);
+		snprintf(text + at, sizeof(text) - at, "IPOE7_KIND=dhcp\nIPOE7_VLAN=200\n");
+		CHECK(judge(&s, text) == -2 && strstr(g_err, "8 connections"));
+	}
+
+	/* A network out by a connection: one set up, with IPv4. */
+	CHECK(judge(&s, STATIC1 "LAN1_CONN=ipoe:1\nLAN1_ADDRESS=192.168.1.1/24\n") == 0 &&
+	      has("LAN1_CONN=ipoe:1"));
+	CHECK(judge(&s, DHCP2 "LAN1_CONN=ipoe:2\nLAN1_ADDRESS=192.168.1.1/24\n"
+			"LAN2_CONN=ipoe:2\nLAN2_VLAN=20\nLAN2_ADDRESS=192.168.2.1/24\n") == 0);
+	CHECK(judge(&s, STATIC1 "LAN1_CONN=ipoe:2\nLAN1_ADDRESS=192.168.1.1/24\n") == -2 &&
+	      strstr(g_err, "network 1: connection 2 is not set up"));
+	CHECK(judge(&s, DHCP2 "IPOE2_FAMILY=ipv6\nLAN1_CONN=ipoe:2\n"
+			"LAN1_ADDRESS=192.168.1.1/24\n") == -2 &&
+	      strstr(g_err, "connection 2 carries no IPv4"));
+	CHECK(judge(&s, STATIC1 "LAN1_CONN=ipoe:1\nLAN1_ADDRESS=192.0.2.129/25\n") == -2 &&
+	      strstr(g_err, "network 1 and connection 1 share addresses"));
+	/* Sessions and connections are networks' ways out side by side. */
+	CHECK(judge(&s, KEEPS NET1 DHCP2 "LAN2_CONN=ipoe:2\nLAN2_ADDRESS=10.0.0.1/24\n") == 0);
+}
+
 int main(void)
 {
 	test_defaults();
@@ -436,6 +559,7 @@ int main(void)
 	test_format();
 	test_lans();
 	test_fixed();
+	test_ipoe();
 	printf("test_settings: %d checks, %d failed\n", checks, failures);
 	return failures != 0;
 }
