@@ -273,8 +273,10 @@ wrong sign-in, 429 while sign-ins are stopped.
   device of a local network: ``ID`` (none for the first free one, of 96),
   ``CONN``, the connection it comes in by (empty removes it), ``NAME``,
   ``PROTO`` (``tcp``, ``udp`` or ``both``), ``EXT_FROM`` and ``EXT_TO``, the
-  device by ``LAN`` and ``MAC``, ``INT_PORT``, its port (a range goes to the
-  same ports), and ``ON`` (``off`` keeps it, not in force); and ``dmz``, a
+  device by ``LAN`` and ``MAC``, ``INT_PORT``, its port (a range goes to as
+  many from it, the same or others; the ranges moved to others move 1024
+  ports at most, a range of both protocols twice), and ``ON`` (``off`` keeps
+  it, not in force); and ``dmz``, a
   connection's DMZ, the device that takes what no forward takes, ``CONN``,
   ``LAN`` and ``MAC`` (empty removes it). The device keeps its address: the
   one its lease gives it becomes its fixed address in the same write when it

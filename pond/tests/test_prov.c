@@ -2551,10 +2551,22 @@ static void test_forwards(void)
 			       "MAC=00:00:5e:00:53:a3\n", err, sizeof(err)) == -EINVAL &&
 		      strstr(err, "forwards 2 and 3 take the same ports of pppoe:1"),
 	      "a port another forward of the connection takes is refused, as onu-config judges it");
-	check(prov_forward_set("CONN=pppoe:1\nEXT_FROM=7000\nEXT_TO=7010\nINT_PORT=8000\nLAN=1\n"
+	rc = prov_forward_set("CONN=pppoe:1\nEXT_FROM=7000\nEXT_TO=7010\nINT_PORT=8000\nLAN=1\n"
+			      "MAC=00:00:5e:00:53:a3\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 &&
+		      file_has("/run/onu.conf",
+			       "FORWARD3=pppoe:1/tcp/7000-7010/1/00:00:5e:00:53:a3/8000/on") &&
+		      strstr(s, "\"ext_from\":7000,\"ext_to\":7010,\"lan\":1,"
+				"\"mac\":\"00:00:5e:00:53:a3\",\"int_port\":8000,\"on\":true}"),
+	      "a range moved to other ports is taken");
+	rc = prov_forward_set("ID=3\nCONN=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "FORWARD3"), "and taken away");
+	check(prov_forward_set("CONN=pppoe:1\nEXT_FROM=7000\nEXT_TO=8024\nINT_PORT=20000\nLAN=1\n"
 			       "MAC=00:00:5e:00:53:a3\n", err, sizeof(err)) == -EINVAL &&
-		      strstr(err, "a range of ports goes to the ports of the same numbers"),
-	      "and so is a range moved to other ports");
+		      strstr(err, "ranges moved to other ports move 1025 ports, more than 1024"),
+	      "but one that moves more ports than a table holds is refused, as onu-config judges it");
 	check(prov_forward_set("CONN=pppoe:1\nEXT_FROM=22\nLAN=1\nMAC=00:00:5e:00:53:a4\n", err,
 			       sizeof(err)) == -EINVAL &&
 		      strstr(err, "00:00:5e:00:53:a4 has no address in network 1 to keep"),

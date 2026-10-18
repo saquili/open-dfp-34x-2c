@@ -1513,7 +1513,7 @@ static int pin(const char *text, int lan, const char *mac, char *change, size_t 
  * address (pin()); INT_PORT, the device's port (EXT_FROM when none), for a
  * range its first; and ON, on (none) or off for one kept but not in force.
  * onu-config judges them: no two forwards of a connection take a port of
- * one protocol, and a range goes to the same ports.
+ * one protocol, and the ranges moved to other ports move 1024 ports at most.
  */
 int prov_forward_write(const char *val, char *err, size_t errcap, prov_done done,
 		       void *ctx)
