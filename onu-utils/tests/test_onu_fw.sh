@@ -60,6 +60,7 @@ run apply "$T/fw"
 check '[ $rc -eq 0 ] && echo "$err" | grep -q "flowtable was refused"'
 check 'has "chain forward" && has "chain postrouting"'
 check 'has "ct state established,related accept"'
+check "has 'oifname \"ppp*\" tcp flags syn tcp option maxseg size set rt mtu'"
 check "has 'iifname \"ppp*\" oifname \"net1\" ct state new drop'"
 check "has 'oifname \"ppp*\" ip saddr 192.168.1.0/24 masquerade'"
 check "has 'oifname \"ppp*\" ip saddr 10.0.0.0/8 masquerade'"

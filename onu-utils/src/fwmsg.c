@@ -28,6 +28,9 @@
 /* The priority of the source NAT, nft's "srcnat". */
 #define SRCNAT_PRIORITY 100
 
+/* The kind of TCP's option of the maximum segment size (RFC 9293). */
+#define TCP_OPT_MSS 2
+
 void fw_spec_init(struct fw_spec *s)
 {
 	memset(s, 0, sizeof(*s));
@@ -198,6 +201,18 @@ static void cmp(struct nlmsghdr *nlh, uint32_t op, const void *data, uint16_t le
 	expr_end(nlh, e);
 }
 
+/* @len bytes at @offset of the header @base into the first register. */
+static void payload(struct nlmsghdr *nlh, uint32_t base, uint32_t offset, uint32_t len)
+{
+	struct expr e = expr_begin(nlh, "payload");
+
+	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_DREG, htonl(NFT_REG_1));
+	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_BASE, htonl(base));
+	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_OFFSET, htonl(offset));
+	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_LEN, htonl(len));
+	expr_end(nlh, e);
+}
+
 /* The first register as itself AND @mask, of @len bytes. */
 static void bitwise(struct nlmsghdr *nlh, const void *mask, uint16_t len)
 {
@@ -318,6 +333,47 @@ static void destroy(struct batch *bt)
 	done(bt);
 }
 
+/*
+ * The SYN of a connection that goes out by a session has its maximum segment
+ * size cut to what the route out carries, as nft's "tcp option maxseg size
+ * set rt mtu", which never raises it: the far end then sends no packet larger
+ * than the session takes. A SYN goes through the CPU before its flow is handed
+ * to the switch.
+ */
+static void clamp_mss(struct batch *bt)
+{
+	static const uint8_t tcp = IPPROTO_TCP, syn = 0x02, none;
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
+	struct expr e;
+
+	ifname_is(nlh, NFT_META_OIFNAME, WAN_PREFIX, true);
+	meta(nlh, NFT_META_L4PROTO);
+	cmp(nlh, NFT_CMP_EQ, &tcp, sizeof(tcp));
+	payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 13, 1);
+	bitwise(nlh, &syn, sizeof(syn));
+	cmp(nlh, NFT_CMP_NEQ, &none, sizeof(none));
+	e = expr_begin(nlh, "rt");
+	mnl_attr_put_u32(nlh, NFTA_RT_KEY, htonl(NFT_RT_TCPMSS));
+	mnl_attr_put_u32(nlh, NFTA_RT_DREG, htonl(NFT_REG_1));
+	expr_end(nlh, e);
+	e = expr_begin(nlh, "byteorder");
+	mnl_attr_put_u32(nlh, NFTA_BYTEORDER_SREG, htonl(NFT_REG_1));
+	mnl_attr_put_u32(nlh, NFTA_BYTEORDER_DREG, htonl(NFT_REG_1));
+	mnl_attr_put_u32(nlh, NFTA_BYTEORDER_OP, htonl(NFT_BYTEORDER_HTON));
+	mnl_attr_put_u32(nlh, NFTA_BYTEORDER_LEN, htonl(2));
+	mnl_attr_put_u32(nlh, NFTA_BYTEORDER_SIZE, htonl(2));
+	expr_end(nlh, e);
+	e = expr_begin(nlh, "exthdr");
+	mnl_attr_put_u8(nlh, NFTA_EXTHDR_TYPE, TCP_OPT_MSS);
+	mnl_attr_put_u32(nlh, NFTA_EXTHDR_OFFSET, htonl(2));
+	mnl_attr_put_u32(nlh, NFTA_EXTHDR_LEN, htonl(2));
+	mnl_attr_put_u32(nlh, NFTA_EXTHDR_SREG, htonl(NFT_REG_1));
+	mnl_attr_put_u32(nlh, NFTA_EXTHDR_OP, htonl(NFT_EXTHDR_OP_TCPOPT));
+	expr_end(nlh, e);
+	rule_end(bt, nlh, exprs);
+}
+
 /* A TCP or UDP flow of network @l handed to the flowtable. */
 static void flow_add(struct batch *bt, const struct fw_lan *l, uint8_t proto)
 {
@@ -370,12 +426,7 @@ static void masquerade(struct batch *bt, const struct fw_lan *l)
 	ifname_is(nlh, NFT_META_OIFNAME, WAN_PREFIX, true);
 	meta(nlh, NFT_META_NFPROTO);
 	cmp(nlh, NFT_CMP_EQ, &ipv4, sizeof(ipv4));
-	e = expr_begin(nlh, "payload");
-	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_DREG, htonl(NFT_REG_1));
-	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_BASE, htonl(NFT_PAYLOAD_NETWORK_HEADER));
-	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_OFFSET, htonl(12));
-	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_LEN, htonl(4));
-	expr_end(nlh, e);
+	payload(nlh, NFT_PAYLOAD_NETWORK_HEADER, 12, 4);
 	if (l->len < 32)
 		bitwise(nlh, &mask, sizeof(mask));
 	cmp(nlh, NFT_CMP_EQ, &net, sizeof(net));
@@ -417,6 +468,7 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		flowtable(&bt, s);
 	chain(&bt, FORWARD, "filter", NF_INET_FORWARD, 0);
 	chain(&bt, POSTROUTING, "nat", NF_INET_POST_ROUTING, SRCNAT_PRIORITY);
+	clamp_mss(&bt);
 	for (int i = 0; s->offload && i < s->nlans; i++) {
 		flow_add(&bt, &s->lan[i], IPPROTO_TCP);
 		flow_add(&bt, &s->lan[i], IPPROTO_UDP);

@@ -135,28 +135,29 @@ static void test_batch(void)
 
 	/*
 	 * The table there is goes, then the table, the flowtable, the two
-	 * chains, and the rules: two flows of each network, the answers, the
-	 * protection and the NAT of each.
+	 * chains, and the rules: the cut of the segment size, two flows of
+	 * each network, the answers, the protection and the NAT of each.
 	 */
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 100, &last);
 	kinds(len, k, sizeof(k), &acked);
-	CHECK(len > 0 && !strcmp(k, "<DTFCCRRRRRRRRR>"));
-	CHECK(last == acked && last == 100 + 14);
+	CHECK(len > 0 && !strcmp(k, "<DTFCCRRRRRRRRRR>"));
+	CHECK(last == acked && last == 100 + 15);
 	CHECK(has_bytes(len, "flow_offload") && has_bytes(len, "masq") &&
 	      has_bytes(len, "gem257") && has_bytes(len, "sfp") && has_bytes(len, "net2"));
+	CHECK(has_bytes(len, "rt") && has_bytes(len, "byteorder") && has_bytes(len, "exthdr"));
 
 	/* Without the flowtable, no flow goes to it. */
 	s.offload = false;
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
 	kinds(len, k, sizeof(k), &acked);
-	CHECK(len > 0 && !strcmp(k, "<DTCCRRRRR>") && last == acked);
+	CHECK(len > 0 && !strcmp(k, "<DTCCRRRRRR>") && last == acked);
 	CHECK(!has_bytes(len, "flow_offload"));
 
 	/* A table without networks keeps nothing out and translates nothing. */
 	fw_spec_init(&s);
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
 	kinds(len, k, sizeof(k), &acked);
-	CHECK(len > 0 && !strcmp(k, "<DTFCCR>"));
+	CHECK(len > 0 && !strcmp(k, "<DTFCCRR>"));
 
 	/* A batch that does not fit is none. */
 	fw_spec_init(&s);

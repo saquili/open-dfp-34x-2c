@@ -14,6 +14,7 @@
  *     }
  *     chain forward {
  *       type filter hook forward priority 0; policy accept;
+ *       oifname "ppp*" tcp flags syn tcp option maxseg size set rt mtu
  *       iifname LAN meta l4proto tcp flow add @ft       for each network
  *       iifname LAN meta l4proto udp flow add @ft       for each network
  *       ct state established,related accept
@@ -28,6 +29,8 @@
  * The networks go out by PPPoE sessions, whose interfaces are pppN; the
  * flowtable hands their flows to the switch, which carries them in its NAPT
  * engine, on the host link, sfp, and on the sessions' GEM interfaces, WAN.
+ * A connection's SYN, which the CPU carries, has its maximum segment size cut
+ * to what the session takes.
  * A batch replaces the table there is, in the same transaction.
  *
  * The networks and the WANs are lines of a file, which onu-apply writes:
