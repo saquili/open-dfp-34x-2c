@@ -359,6 +359,26 @@ class QuietTowardsThePon(unittest.TestCase):
         self.assertLess(text.index("arp_ignore"), text.index("onu-nl link set sfp up"))
 
 
+class PacketsHeldToTheMemory(unittest.TestCase):
+    """What waiting packets may hold suits the stick's 24 MB, before traffic flows."""
+
+    def test_fragments_wait_in_256_kb_for_10_s(self):
+        text = read(RCS)
+        loop = text.index("for f in ipv4/ipfrag ipv6/ip6frag netfilter/nf_conntrack_frag6; do")
+        low = text.index("echo 196608 >/proc/sys/net/${f}_low_thresh", loop)
+        high = text.index("echo 262144 >/proc/sys/net/${f}_high_thresh", loop)
+        # Neither threshold may pass the other: the low one comes down first.
+        self.assertLess(low, high)
+        self.assertIn("echo 10 >/proc/sys/net/${f}_$t", text)
+        self.assertLess(loop, text.index("onu-apply start"))
+
+    def test_a_session_queues_300_frames(self):
+        text = read(RCS)
+        line = "echo 300 >/proc/sys/net/core/netdev_max_backlog"
+        self.assertIn(line, text)
+        self.assertLess(text.index(line), text.index("onu-apply start"))
+
+
 class Inittab(unittest.TestCase):
     # procd's actions (inittab.c).
     ACTIONS = {"sysinit", "shutdown", "askfirst", "askconsole", "respawn", "askconsolelate",

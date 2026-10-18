@@ -156,6 +156,24 @@ echo 0 >/proc/sys/net/ipv4/neigh/default/proxy_delay &&
 echo 1 >/proc/sys/net/ipv4/ip_nonlocal_bind &&
 	echo 1 >/proc/sys/net/ipv6/ip_nonlocal_bind ||
 	warn "a server does not listen on an address that comes later"
+# What packets may hold of the stick's 24 MB while they wait. The kernel's
+# limits suit a computer: 4 MB of fragments, kept up to 30 s for the rest of
+# their packet, for IPv4, for IPv6 and for the connection tracking's IPv6, and
+# 1000 frames in the queue a PPP session hands its frames on by. A session's
+# flood of fragments, which the connection tracking of the local networks puts
+# together, took the stick out of memory with them, and its daemons were
+# killed (measured). Here 256 KB of fragments, kept 10 s, and 300 frames. A
+# low threshold goes first: neither may pass the other.
+for f in ipv4/ipfrag ipv6/ip6frag netfilter/nf_conntrack_frag6; do
+	t=time
+	[ "$f" = netfilter/nf_conntrack_frag6 ] && t=timeout
+	echo 196608 >/proc/sys/net/${f}_low_thresh &&
+		echo 262144 >/proc/sys/net/${f}_high_thresh &&
+		echo 10 >/proc/sys/net/${f}_$t ||
+		warn "fragments waiting for their packet may take ${f%%/*}'s 4 MB"
+done
+echo 300 >/proc/sys/net/core/netdev_max_backlog ||
+	warn "a PPP session's frames may queue up to the kernel's limit"
 
 # The setting of the SFP lane its owner kept (onu-lane), if any; the driver
 # looks for the host's otherwise.
