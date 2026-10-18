@@ -81,7 +81,8 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 			snprintf(err, errcap, "lan %s %s: no network of the table", a, b);
 			return -1;
 		}
-		snprintf(l->ifname, sizeof(l->ifname), "%s", a);
+		/* ifname_ok() took no more than the field holds. */
+		memcpy(l->ifname, a, strlen(a) + 1);
 		s->nlans++;
 		return 0;
 	}
@@ -94,7 +95,7 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 		for (int i = 0; i < s->nwans; i++)
 			if (!strcmp(s->wan[i], a))
 				return 0;
-		snprintf(s->wan[s->nwans++], FW_IFNAMSIZ, "%s", a);
+		memcpy(s->wan[s->nwans++], a, strlen(a) + 1);
 		return 0;
 	}
 	if (n == 2 && !strcmp(word, "offload") &&
