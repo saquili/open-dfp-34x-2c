@@ -212,9 +212,10 @@ The C library
 BusyBox 1.37.0
     The applets the boot script and a shell session use, by purpose, as of
     2026-10-08, when there were 94; the console's ``getty`` and ``login``,
-    ``cryptpw``, and the DHCP server ``udhcpd`` and ``dumpleases`` came after
-    (the DHCP client ``udhcpc`` served the bench's router of before and is out
-    of the configuration):
+    ``cryptpw``, the DHCP server ``udhcpd`` and ``dumpleases`` came after,
+    and on 2026-10-18 the DHCP client ``udhcpc`` again, for the IPoE
+    connections whose address comes from the operator's DHCP server (it had
+    served the bench's router of before, and left with it):
 
     shell and init
         ash sh halt poweroff reboot
@@ -368,7 +369,8 @@ The boot script
        its devlink parameters (``onu-apply identity``, with ``onu-nl``) and
        brings the PON up;
     #. starts ``omcid``, which answers the OLT, and what the settings ask for:
-       per session ``dhcp6d``, per local network ``udhcpd``, as the instances
+       per session ``dhcp6d``, per local network ``udhcpd``, per IPoE
+       connection by DHCP ``udhcpc``, as the instances
        of one service of procd, ``onu``, which ``onu-apply`` gives procd whole
        (``onu-svc sync``): procd starts what is new, ends what is gone and
        starts again only what changed. ``omcid`` keeps what the OLT set up in

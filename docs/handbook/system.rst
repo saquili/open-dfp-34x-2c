@@ -178,7 +178,8 @@ Who owns what
      - Its owner
    * - The programs, and starting one again when it ends
      - procd; ``onu-svc`` gives it the services, and ``onu-apply`` the
-       instances of the service ``onu`` (omcid, dhcp6d, udhcpd) as one list.
+       instances of the service ``onu`` (omcid, dhcp6d, udhcpd, udhcpc) as one
+       list.
    * - The host side's addresses, the management VLAN, the sessions, the links
        to the host, their routes and rules
      - netifd, from the configuration ``onu-net`` writes in ``/run/config``.
@@ -229,6 +230,11 @@ may do on ubus. Each writes into a directory it owns, or into one of the group
      - ``net_bind_service``, ``net_admin``, ``net_raw``
      - ``/run/dhcp6d`` (the host's binding) and its session's directory;
        it publishes ``dhcp6d.*`` and calls the method ``dhcp6d`` of onu-act.
+   * - udhcpc, an IPoE connection's DHCP client, and its script ``onu-dhcpc``
+     - dhcpc, 205
+     - ``net_raw``, ``net_bind_service``
+     - Its connection's directory, ``/run/ipoe/K``; it calls the method
+       ``dhcpc`` of onu-act, which puts the lease in place.
    * - pppoed
      - pppoed, 203
      - ``net_admin``, ``net_raw``
@@ -243,8 +249,9 @@ may do on ubus. Each writes into a directory it owns, or into one of the group
        the PLOAM password.
 
 A program that is not root's cannot run ``onu-apply``, which changes the data
-path: omcid and dhcp6d tell it of a change through ``onu-call``, which asks
-onu-act for the method of their own name, and onu-act, root's, runs it.
+path: omcid, dhcp6d and the DHCP client's script tell it of a change through
+``onu-call``, which asks onu-act for the method of their own name, and
+onu-act, root's, runs it.
 
 netifd, onu-act, procd, ubusd and the scripts are root's. netifd starts the
 sessions as the account pppoed, writes the kernel's sysctls of the interfaces,
