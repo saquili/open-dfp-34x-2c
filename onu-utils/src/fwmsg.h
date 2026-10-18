@@ -34,6 +34,8 @@
  *       type nat hook prerouting priority -100; policy accept;
  *       iifname IN ip daddr ADDR tcp dport PORT dnat ip to DEV:TO
  *       iifname IN ip daddr ADDR tcp dport FROM-LAST dnat ip to DEV
+ *       iifname IN ip daddr ADDR tcp dport FROM-LAST dnat ip to
+ *         DEV:tcp dport map { FROM : TO, FROM+1 : TO+1, ..., LAST : ... }
  *                                                        for each forward
  *       iifname IN ip daddr ADDR udp dport 68 accept
  *       iifname IN ip daddr ADDR meta l4proto != icmp dnat ip to DEV
@@ -52,8 +54,19 @@
  * A forward takes a new connection that comes in by a connection's interface
  * IN to its address there, ADDR, of TCP or UDP, to a port or a range of
  * them, to a device's address: a port to another port, a range to the same
- * ports. netfilter then lets it through to the network, and hands its flow
- * to the switch as any other. A DMZ takes what no forward takes, but ICMP,
+ * ports, or to as many others from TO. netfilter then lets it through to the
+ * network, and hands its flow to the switch as any other.
+ *
+ * nf_tables' NAT translates to one port, or keeps the port within a range,
+ * but moves no range by an offset: nft_nat has no base port to count from
+ * (iptables' DNAT has one, nft's not). A range moved to other ports takes a
+ * map of its own, as nft makes one for "dnat ... map": an anonymous set,
+ * constant, of each port of the range to its own of the device's, which the
+ * rule looks the port up in. A port moved costs an element of 28 bytes in
+ * the batch and some 32 of the kernel's memory, and a new connection one
+ * lookup in a hash table; a rule for each port would cost 640 bytes, and a
+ * rule more that each new connection goes through, the devices' own going
+ * out among them. A DMZ takes what no forward takes, but ICMP,
  * which the stick answers, and DHCP's answers to the client's port, 68, which
  * a connection by DHCP takes itself; answers to what went out are no new
  * connections, and never reach the chain.
@@ -69,7 +82,7 @@
  *   fwd IFNAME ADDR PROTO PORTS DEV PORT
  *                            a forward: PROTO is tcp or udp, PORTS a port
  *                            or FROM-LAST, PORT the device's port, for a
- *                            range its first, FROM
+ *                            range the first of as many
  *   dmz IFNAME ADDR DEV      a DMZ
  */
 
@@ -92,11 +105,21 @@
 #define FW_FWDS_MAX (2 * 96)
 #define FW_DMZS_MAX 7
 /*
- * The longest batch: the most of everything, at about 640 bytes for each
- * forward's rule. The buffer for it is twice as large, for the request that
- * goes past it (mnl_nlmsg_batch_start()).
+ * The most ports of ranges moved to other ports, of every forward and each
+ * protocol apart, an element of a map each: what the settings take
+ * (SETTINGS_MOVED_MAX). Ranges of a thousand ports moved, beside the most
+ * of everything else, keep the batch near 255 KiB and the maps' elements
+ * near 32 KiB of the 24 MiB the stick has; a rule for each port would have
+ * taken 640 KiB of batch.
  */
-#define FW_BATCH_MAX (256 * 1024)
+#define FW_MOVED_MAX 1024
+/*
+ * The longest batch, of the most of everything, is 255 KiB: about 640 bytes
+ * for each forward's rule, 280 more for a range moved, which takes a map,
+ * and 28 for each of its ports. The buffer for it is twice as large, for
+ * the request that goes past it (mnl_nlmsg_batch_start()).
+ */
+#define FW_BATCH_MAX (320 * 1024)
 
 /**
  * struct fw_lan - A local network.
@@ -128,7 +151,7 @@ struct fw_out {
  * @from: the first port it takes
  * @last: the last, @from for one
  * @dev: the device's address, in host order
- * @port: the device's port, for a range @from
+ * @port: the device's port, for a range the first of as many
  */
 struct fw_fwd {
 	char ifname[FW_IFNAMSIZ];
@@ -138,6 +161,12 @@ struct fw_fwd {
 	uint32_t dev;
 	uint16_t port;
 };
+
+/* Whether @f is a range moved to other ports, which takes a map. */
+static inline bool fw_fwd_moved(const struct fw_fwd *f)
+{
+	return f->last > f->from && f->port != f->from;
+}
 
 /**
  * struct fw_dmz - A connection's DMZ.
@@ -157,6 +186,8 @@ struct fw_dmz {
  * @out: the interfaces they go out by, @nouts of them
  * @wan: the connections' GEM interfaces, @nwans of them
  * @fwd: the forwards, @nfwds of them
+ * @nmoved: the ports of those of them moved to other ports, FW_MOVED_MAX
+ *          at most
  * @dmz: the DMZs, @ndmzs of them, after the forwards
  * @offload: with the flowtable
  */
@@ -169,6 +200,7 @@ struct fw_spec {
 	int nwans;
 	struct fw_fwd fwd[FW_FWDS_MAX];
 	int nfwds;
+	int nmoved;
 	struct fw_dmz dmz[FW_DMZS_MAX];
 	int ndmzs;
 	bool offload;

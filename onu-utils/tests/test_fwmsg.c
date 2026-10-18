@@ -63,6 +63,12 @@ static void kinds(size_t len, char *out, size_t cap, uint32_t *ack_last)
 		case NFNL_SUBSYS_NFTABLES << 8 | NFT_MSG_NEWRULE:
 			k = 'R';
 			break;
+		case NFNL_SUBSYS_NFTABLES << 8 | NFT_MSG_NEWSET:
+			k = 'S';
+			break;
+		case NFNL_SUBSYS_NFTABLES << 8 | NFT_MSG_NEWSETELEM:
+			k = 'E';
+			break;
 		}
 		if (nlh->nlmsg_flags & NLM_F_ACK)
 			*ack_last = nlh->nlmsg_seq;
@@ -75,6 +81,24 @@ static void kinds(size_t len, char *out, size_t cap, uint32_t *ack_last)
 static bool has_bytes(size_t len, const char *what)
 {
 	return memmem(g_buf, len, what, strlen(what) + 1) != NULL;
+}
+
+/*
+ * Whether the batch of @len bytes maps the port @key to @to: an element of
+ * a map, the key's value, its padding, and the value's two headers (of its
+ * nest and of the data) before it.
+ */
+static bool element(size_t len, uint16_t key, uint16_t to)
+{
+	const unsigned char k[2] = { key >> 8, key & 0xff }, t[2] = { to >> 8, to & 0xff };
+	const char *p = g_buf;
+
+	while ((p = memmem(p, len - (size_t)(p - g_buf), k, sizeof(k)))) {
+		if ((size_t)(p - g_buf) + 14 <= len && !memcmp(p + 12, t, sizeof(t)))
+			return true;
+		p++;
+	}
+	return false;
 }
 
 static void test_lines(void)
@@ -248,8 +272,8 @@ static void test_forward_lines(void)
 		"fwd ppp0 203.0.113.24 tcp 443x 192.168.1.20 443",
 		"fwd ppp0 203.0.113.24 tcp 9000-8000 192.168.1.20 9000",
 		"fwd ppp0 203.0.113.24 tcp 8000- 192.168.1.20 8000",
-		/* A range to other ports: the kernel's NAT keeps no offset. */
-		"fwd ppp0 203.0.113.24 tcp 8000-8010 192.168.1.20 9000",
+		/* A range moved past the last port. */
+		"fwd ppp0 203.0.113.24 tcp 8000-8010 192.168.1.20 65530",
 		"dmz ppp0 203.0.113.24",
 		"dmz ppp0 203.0.113.24 192.168.1.30 x",
 		"dmz ppp0 203.0.113.24 192.168.1.300",
@@ -276,8 +300,38 @@ static void test_forward_lines(void)
 	      s.fwd[1].port == 8000);
 	CHECK(!strcmp(s.dmz[0].ifname, "wan420") && s.dmz[0].addr == 0xc000020au &&
 	      s.dmz[0].dev == 0xc0a80207u);
+	CHECK(!fw_fwd_moved(&s.fwd[0]) && !fw_fwd_moved(&s.fwd[1]) && s.nmoved == 0);
 	/* A network line takes no word more than it has. */
 	CHECK(fw_spec_line(&s, "lan net1 192.168.1.0/24 x", g_err, sizeof(g_err)) == -1);
+
+	/* A range moved to other ports, up to the last port there is. */
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 tcp 8000-8010 192.168.1.20 9000", g_err,
+			    sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 udp 8000-8010 192.168.1.20 65525", g_err,
+			    sizeof(g_err)));
+	CHECK(s.nfwds == 4 && fw_fwd_moved(&s.fwd[2]) && s.fwd[2].from == 8000 &&
+	      s.fwd[2].last == 8010 && s.fwd[2].port == 9000 && s.fwd[3].port == 65525);
+	CHECK(s.nmoved == 2 * 11);
+
+	/* No more ports moved than a table holds, of every forward and protocol together. */
+	fw_spec_init(&s);
+	for (int i = 0; i < FW_MOVED_MAX / 64; i++) {
+		char line[96];
+
+		snprintf(line, sizeof(line), "fwd ppp0 203.0.113.24 %s %d-%d 192.168.1.20 %d",
+			 i % 2 ? "udp" : "tcp", 1000 + 64 * i, 1063 + 64 * i, 30000 + 64 * i);
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+	}
+	CHECK(s.nmoved == FW_MOVED_MAX);
+	CHECK(fw_spec_line(&s, "fwd ppp0 203.0.113.24 tcp 2000-2001 192.168.1.20 3000", g_err,
+			   sizeof(g_err)) == -1 &&
+	      strstr(g_err, "more than 1024 ports moved"));
+	/* A port, or a range kept, is moved by no map. */
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 tcp 2000 192.168.1.20 3000", g_err,
+			    sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 tcp 2001-2100 192.168.1.20 2001", g_err,
+			    sizeof(g_err)));
+	CHECK(s.nmoved == FW_MOVED_MAX && s.nfwds == FW_MOVED_MAX / 64 + 2);
 
 	/* No more forwards than the panel's, of each protocol; nor DMZs than connections. */
 	fw_spec_init(&s);
@@ -320,12 +374,40 @@ static void test_forward_batch(void)
 	CHECK(len > 0 && !strcmp(k, "<DTFCCCRRRRRRRRRRR>") && last == acked);
 	CHECK(has_bytes(len, "prerouting") && has_bytes(len, "range") &&
 	      has_bytes(len, "immediate"));
+	CHECK(!has_bytes(len, "lookup") && !has_bytes(len, "__map%d"));
 
-	/* A DMZ: DHCP's answers kept, and the rest but ICMP to the device. */
+	/*
+	 * A range moved to other ports: its map, then its elements, then the
+	 * rule that looks it up, where the forward is; each port to its own.
+	 */
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 tcp 8000-8002 192.168.1.20 9000", g_err,
+			    sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 udp 7000 192.168.1.20 7000", g_err,
+			    sizeof(g_err)));
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && !strcmp(k, "<DTFCCCRRRRRRRRRRRSERR>") && last == acked);
+	CHECK(has_bytes(len, "lookup") && has_bytes(len, "__map%d"));
+	CHECK(element(len, 8000, 9000) && element(len, 8001, 9001) && element(len, 8002, 9002));
+	CHECK(!element(len, 8003, 9003));
+
+	/* A DMZ, after the forwards: DHCP's answers kept, and the rest but ICMP to the device. */
 	CHECK(!fw_spec_line(&s, "dmz ppp0 203.0.113.24 192.168.1.30", g_err, sizeof(g_err)));
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
 	kinds(len, k, sizeof(k), &acked);
-	CHECK(len > 0 && !strcmp(k, "<DTFCCCRRRRRRRRRRRRR>") && last == acked);
+	CHECK(len > 0 && !strcmp(k, "<DTFCCCRRRRRRRRRRRSERRRR>") && last == acked);
+
+	/* A map of more elements than a request holds takes two of them. */
+	fw_spec_init(&s);
+	CHECK(!fw_spec_line(&s, "out ppp*", g_err, sizeof(g_err)));
+	CHECK(!fw_spec_line(&s, "fwd ppp0 203.0.113.24 tcp 10000-11023 192.168.1.20 20000", g_err,
+			    sizeof(g_err)));
+	s.offload = false;
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	kinds(len, k, sizeof(k), &acked);
+	CHECK(len > 0 && !strcmp(k, "<DTCCCRRRSEER>") && last == acked);
+	CHECK(element(len, 10000, 20000) && element(len, 10511, 20511) &&
+	      element(len, 10512, 20512) && element(len, 11023, 21023));
 
 	/* A DMZ alone makes the chain, too. */
 	fw_spec_init(&s);
@@ -376,6 +458,27 @@ static void test_forward_batch(void)
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
 	CHECK(len > 0 && len <= FW_BATCH_MAX &&
 	      last == 1 + 6 + 7 + 4 * 8 + 2 + 2 * 8 * 7 + FW_FWDS_MAX + 2 * FW_DMZS_MAX);
+	printf("  the longest batch of ranges kept: %zu bytes\n", len);
+
+	/*
+	 * And with every forward a range moved to other ports, which takes a
+	 * map and its elements each, the ports moved as many as there may be.
+	 */
+	s.nfwds = 0;
+	s.nmoved = 0;
+	for (int i = 0; i < FW_FWDS_MAX; i++) {
+		int n = FW_MOVED_MAX / FW_FWDS_MAX + (i < FW_MOVED_MAX % FW_FWDS_MAX);
+		char line[96];
+
+		snprintf(line, sizeof(line),
+			 "fwd averylongname1 203.0.113.24 %s 60000-%d 192.168.255.254 50000",
+			 i % 2 ? "udp" : "tcp", 60000 + n - 1);
+		CHECK(!fw_spec_line(&s, line, g_err, sizeof(g_err)));
+	}
+	CHECK(s.nmoved == FW_MOVED_MAX);
+	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
+	CHECK(len > 0 && len <= FW_BATCH_MAX &&
+	      last == 1 + 6 + 7 + 4 * 8 + 2 + 2 * 8 * 7 + 3 * FW_FWDS_MAX + 2 * FW_DMZS_MAX);
 	printf("  the longest batch: %zu bytes\n", len);
 }
 

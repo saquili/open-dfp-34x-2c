@@ -85,6 +85,7 @@ echo "the ports forwarded and a DMZ"
 	printf 'lan net1 192.168.1.0/24\nwan gem257\nout ppp*\nout wan421\n'
 	printf 'fwd ppp0 203.0.113.24 tcp 8080 192.168.1.20 80\n'
 	printf 'fwd ppp0 203.0.113.24 udp 6000-6010 192.168.1.20 6000\n'
+	printf 'fwd ppp0 203.0.113.24 tcp 8000-8002 192.168.1.20 9000\n'
 	printf 'fwd wan421 192.0.2.10 tcp 443 192.168.1.21 443\n'
 	printf 'dmz wan421 192.0.2.10 192.168.1.30\n'
 } >"$T/fw"
@@ -93,6 +94,8 @@ check '[ $rc -eq 0 ] && echo "$err" | grep -q "flowtable was refused"'
 check 'has "chain prerouting" && has "type nat hook prerouting priority dstnat; policy accept;"'
 check "has 'iifname \"ppp0\" ip daddr 203.0.113.24 tcp dport 8080 dnat ip to 192.168.1.20:80'"
 check "has 'iifname \"ppp0\" ip daddr 203.0.113.24 udp dport 6000-6010 dnat ip to 192.168.1.20'"
+# A range moved to other ports, each to its own by a map.
+check "has 'iifname \"ppp0\" ip daddr 203.0.113.24 tcp dport 8000-8002 dnat ip to 192.168.1.20:tcp dport map { 8000 : 9000, 8001 : 9001, 8002 : 9002 }'"
 check "has 'iifname \"wan421\" ip daddr 192.0.2.10 tcp dport 443 dnat ip to 192.168.1.21:443'"
 check "has 'iifname \"wan421\" ip daddr 192.0.2.10 udp dport 68 accept'"
 check "has 'iifname \"wan421\" ip daddr 192.0.2.10 meta l4proto != icmp dnat ip to 192.168.1.30'"
@@ -114,6 +117,8 @@ nft add table inet ref &&
 		dnat ip to 192.168.1.20:80 &&
 	nft add rule inet ref prerouting iifname "ppp0" ip daddr 203.0.113.24 udp dport 6000-6010 \
 		dnat ip to 192.168.1.20 &&
+	nft add rule inet ref prerouting iifname "ppp0" ip daddr 203.0.113.24 tcp dport 8000-8002 \
+		dnat ip to 192.168.1.20 : tcp dport map { 8000 : 9000, 8001 : 9001, 8002 : 9002 } &&
 	nft add rule inet ref prerouting iifname "wan421" ip daddr 192.0.2.10 tcp dport 443 \
 		dnat ip to 192.168.1.21:443 &&
 	nft add rule inet ref prerouting iifname "wan421" ip daddr 192.0.2.10 udp dport 68 accept &&
@@ -127,6 +132,12 @@ bytecode() {
 check '[ -n "$(bytecode ref prerouting)" ] &&
 	[ "$(bytecode onu prerouting)" = "$(bytecode ref prerouting)" ]'
 check '[ "$(bytecode onu forward | grep -A3 "ct load status")" = "$(bytecode ref forward)" ]'
+# The map's elements, as the kernel gives them back, the same as nft's; a
+# hash table gives them in an order of its own.
+elements() {
+	nft --debug=netlink list table inet "$1" 2>/dev/null | grep '^	element' | sort
+}
+check '[ "$(elements onu | wc -l)" -eq 3 ] && [ "$(elements onu)" = "$(elements ref)" ]'
 nft delete table inet ref
 
 echo "the longest table: every network by every way out, every forward of each protocol"
@@ -152,6 +163,31 @@ echo "the longest table: every network by every way out, every forward of each p
 run apply "$T/fw"
 check '[ $rc -eq 0 ] && [ -z "$err" ]'
 check '[ "$(table | grep -c "dnat ip to")" -eq $((192 + 7)) ]'
+
+echo "the longest table of ranges moved: every forward, and every port a table moves"
+# 1024 ports of 192 forwards: the first 64 of six ports, the others of five,
+# and the last of $1 more.
+moved() {
+	awk '!/^fwd/' "$T/fw"
+	i=0
+	while [ $i -lt 192 ]; do
+		n=$((5 + (i < 64) + (i == 191) * $1))
+		p=$((10000 + 10 * i))
+		echo "fwd averylongname1 203.0.113.24 $([ $((i % 2)) -eq 0 ] && echo tcp || echo udp) $p-$((p + n - 1)) 192.168.1.20 $((p + 20000))"
+		i=$((i + 1))
+	done
+}
+moved 0 >"$T/fw.moved"
+run apply "$T/fw.moved"
+check '[ $rc -eq 0 ] && [ -z "$err" ]'
+check '[ "$(table | grep -c "dport map {")" -eq 192 ] &&
+	[ "$(nft --debug=netlink list table inet onu | grep -c "^	element")" -eq 1024 ]'
+check "has '10000 : 30000, 10001 : 30001, 10002 : 30002, 10003 : 30003, 10004 : 30004, 10005 : 30005 }'"
+# A port more than a table moves is no table: the one there is stays.
+moved 1 >"$T/fw.over"
+run apply "$T/fw.over"
+check '[ $rc -eq 2 ] && echo "$err" | grep -q "more than 1024 ports moved"'
+check '[ "$(table | grep -c "dport map {")" -eq 192 ]'
 
 echo "a table replaces the one there is, whole"
 printf 'lan net1 172.16.0.0/12\nout ppp*\noffload off\n' >"$T/fw"

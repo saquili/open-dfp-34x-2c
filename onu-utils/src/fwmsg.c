@@ -31,6 +31,17 @@
 /* The kind of TCP's option of the maximum segment size (RFC 9293). */
 #define TCP_OPT_MSS 2
 
+/*
+ * A map of ports is named as nft names an anonymous one, which the kernel
+ * numbers in its table. Its keys and values are of nft's type of a port of
+ * TCP or UDP (inet_service), by which nft lists them; and a request holds
+ * 512 of its elements at most, at 28 bytes each, well within the 64 KiB an
+ * attribute holds, their list.
+ */
+#define MAP_NAME "__map%d"
+#define TYPE_INET_SERVICE 13
+#define MAP_ELEMS_MAX 512
+
 void fw_spec_init(struct fw_spec *s)
 {
 	memset(s, 0, sizeof(*s));
@@ -96,8 +107,7 @@ static bool port_of(const char *v, uint16_t *port)
 
 /*
  * fwd IFNAME ADDR PROTO PORTS DEV PORT: a forward, of the words after "fwd".
- * A range goes to the same ports, as the kernel's NAT keeps no offset into
- * one.
+ * A range goes to as many ports of the device from PORT, which are all ports.
  */
 static bool fwd_of(struct fw_fwd *f, const char *ifn, const char *addr,
 		   const char *proto, char *ports, const char *dev,
@@ -117,7 +127,7 @@ static bool fwd_of(struct fw_fwd *f, const char *ifn, const char *addr,
 	if (dash)
 		*dash = '\0';
 	if (!port_of(ports, &f->from) || !port_of(dash ? dash + 1 : ports, &f->last) ||
-	    f->last < f->from || (f->last > f->from && f->port != f->from))
+	    f->last < f->from || f->port + (f->last - f->from) > 65535)
 		return false;
 	memcpy(f->ifname, ifn, strlen(ifn) + 1);
 	return true;
@@ -133,11 +143,20 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 	n = sscanf(line, "%15s %63s %63s %63s %63s %63s %63s %1s", word, a, b, c, d, e,
 		   f, x);
 	if (n == 7 && !strcmp(word, "fwd")) {
-		if (s->nfwds == FW_FWDS_MAX ||
-		    !fwd_of(&s->fwd[s->nfwds], a, b, c, d, e, f)) {
+		struct fw_fwd *w = &s->fwd[s->nfwds];
+		int moved;
+
+		if (s->nfwds == FW_FWDS_MAX || !fwd_of(w, a, b, c, d, e, f)) {
 			snprintf(err, errcap, "%.40s: no forward of the table", line);
 			return -1;
 		}
+		moved = fw_fwd_moved(w) ? w->last - w->from + 1 : 0;
+		if (s->nmoved + moved > FW_MOVED_MAX) {
+			snprintf(err, errcap, "%.40s: more than %d ports moved", line,
+				 FW_MOVED_MAX);
+			return -1;
+		}
+		s->nmoved += moved;
 		s->nfwds++;
 		return 0;
 	}
@@ -297,16 +316,23 @@ static void cmp(struct nlmsghdr *nlh, uint32_t op, const void *data, uint16_t le
 	expr_end(nlh, e);
 }
 
-/* @len bytes at @offset of the header @base into the first register. */
-static void payload(struct nlmsghdr *nlh, uint32_t base, uint32_t offset, uint32_t len)
+/* @len bytes at @offset of the header @base into the register @reg. */
+static void payload_into(struct nlmsghdr *nlh, uint32_t reg, uint32_t base,
+			 uint32_t offset, uint32_t len)
 {
 	struct expr e = expr_begin(nlh, "payload");
 
-	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_DREG, htonl(NFT_REG_1));
+	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_DREG, htonl(reg));
 	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_BASE, htonl(base));
 	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_OFFSET, htonl(offset));
 	mnl_attr_put_u32(nlh, NFTA_PAYLOAD_LEN, htonl(len));
 	expr_end(nlh, e);
+}
+
+/* @len bytes at @offset of the header @base into the first register. */
+static void payload(struct nlmsghdr *nlh, uint32_t base, uint32_t offset, uint32_t len)
+{
+	payload_into(nlh, NFT_REG_1, base, offset, len);
 }
 
 /* The first register as itself AND @mask, of @len bytes. */
@@ -611,22 +637,22 @@ static void to_connection(struct nlmsghdr *nlh, const char *ifname, uint32_t add
 	cmp(nlh, NFT_CMP_EQ, &a, sizeof(a));
 }
 
-/*
- * The destination translated to @dev, the address in the first register;
- * with @port, to that port, in the second, which nft names in its flags.
- */
-static void dnat(struct nlmsghdr *nlh, uint32_t dev, const uint16_t *port)
+/* The device's address @dev into the first register, before its port, as nft orders them. */
+static void dnat_addr(struct nlmsghdr *nlh, uint32_t dev)
 {
 	uint32_t a = htonl(dev);
-	struct expr e;
 
 	immediate(nlh, NFT_REG_1, &a, sizeof(a));
-	if (port) {
-		uint16_t p = htons(*port);
+}
 
-		immediate(nlh, NFT_REG_2, &p, sizeof(p));
-	}
-	e = expr_begin(nlh, "nat");
+/*
+ * The destination translated to the address in the first register; with
+ * @port, to the port in the second, which nft names in its flags.
+ */
+static void dnat(struct nlmsghdr *nlh, bool port)
+{
+	struct expr e = expr_begin(nlh, "nat");
+
 	mnl_attr_put_u32(nlh, NFTA_NAT_TYPE, htonl(NFT_NAT_DNAT));
 	mnl_attr_put_u32(nlh, NFTA_NAT_FAMILY, htonl(NFPROTO_IPV4));
 	mnl_attr_put_u32(nlh, NFTA_NAT_REG_ADDR_MIN, htonl(NFT_REG_1));
@@ -638,15 +664,88 @@ static void dnat(struct nlmsghdr *nlh, uint32_t dev, const uint16_t *port)
 }
 
 /*
- * A forward: a port to the device's port, and a range to the same ports of
- * the device, which a translation of the address alone keeps.
+ * The map of a range moved to other ports: an anonymous set of nf_tables,
+ * constant, that maps each port of the range to its own of the device's, as
+ * nft makes for "tcp dport map { FROM : PORT, ... }". The batch numbers it
+ * @id, by which its elements and the rule that looks it up name it, as the
+ * kernel names it only once it takes it. The elements come before the rule:
+ * a constant set bound to a rule takes no more.
  */
-static void forward_rule(struct batch *bt, const struct fw_fwd *f)
+static void port_map(struct batch *bt, const struct fw_fwd *f, uint32_t id)
 {
-	struct nlattr *exprs;
-	struct nlmsghdr *nlh = rule_begin(bt, PREROUTING, &exprs);
-	uint16_t from = htons(f->from), last = htons(f->last);
+	uint32_t n = (uint32_t)(f->last - f->from) + 1;
+	struct nlmsghdr *nlh = request(bt, NFT_MSG_NEWSET, NLM_F_CREATE);
+	struct nlattr *desc;
 
+	mnl_attr_put_strz(nlh, NFTA_SET_TABLE, TABLE);
+	mnl_attr_put_strz(nlh, NFTA_SET_NAME, MAP_NAME);
+	mnl_attr_put_u32(nlh, NFTA_SET_FLAGS,
+			 htonl(NFT_SET_ANONYMOUS | NFT_SET_CONSTANT | NFT_SET_MAP));
+	mnl_attr_put_u32(nlh, NFTA_SET_KEY_TYPE, htonl(TYPE_INET_SERVICE));
+	mnl_attr_put_u32(nlh, NFTA_SET_KEY_LEN, htonl(sizeof(uint16_t)));
+	mnl_attr_put_u32(nlh, NFTA_SET_DATA_TYPE, htonl(TYPE_INET_SERVICE));
+	mnl_attr_put_u32(nlh, NFTA_SET_DATA_LEN, htonl(sizeof(uint16_t)));
+	mnl_attr_put_u32(nlh, NFTA_SET_ID, htonl(id));
+	/* Its size, by which the kernel takes a hash table of that size, not one that grows. */
+	desc = mnl_attr_nest_start(nlh, NFTA_SET_DESC);
+	mnl_attr_put_u32(nlh, NFTA_SET_DESC_SIZE, htonl(n));
+	mnl_attr_nest_end(nlh, desc);
+	done(bt);
+	for (uint32_t at = 0; at < n; at += MAP_ELEMS_MAX) {
+		struct nlattr *list;
+
+		nlh = request(bt, NFT_MSG_NEWSETELEM, NLM_F_CREATE);
+		mnl_attr_put_strz(nlh, NFTA_SET_ELEM_LIST_TABLE, TABLE);
+		mnl_attr_put_strz(nlh, NFTA_SET_ELEM_LIST_SET, MAP_NAME);
+		mnl_attr_put_u32(nlh, NFTA_SET_ELEM_LIST_SET_ID, htonl(id));
+		list = mnl_attr_nest_start(nlh, NFTA_SET_ELEM_LIST_ELEMENTS);
+		for (uint32_t i = at; i < n && i - at < MAP_ELEMS_MAX; i++) {
+			uint16_t key = htons((uint16_t)(f->from + i));
+			uint16_t to = htons((uint16_t)(f->port + i));
+			struct nlattr *elem = mnl_attr_nest_start(nlh, NFTA_LIST_ELEM);
+			struct nlattr *d = mnl_attr_nest_start(nlh, NFTA_SET_ELEM_KEY);
+
+			mnl_attr_put(nlh, NFTA_DATA_VALUE, sizeof(key), &key);
+			mnl_attr_nest_end(nlh, d);
+			d = mnl_attr_nest_start(nlh, NFTA_SET_ELEM_DATA);
+			mnl_attr_put(nlh, NFTA_DATA_VALUE, sizeof(to), &to);
+			mnl_attr_nest_end(nlh, d);
+			mnl_attr_nest_end(nlh, elem);
+		}
+		mnl_attr_nest_end(nlh, list);
+		done(bt);
+	}
+}
+
+/* The second register looked up in the map numbered @id: its port, into it. */
+static void lookup(struct nlmsghdr *nlh, uint32_t id)
+{
+	struct expr e = expr_begin(nlh, "lookup");
+
+	mnl_attr_put_strz(nlh, NFTA_LOOKUP_SET, MAP_NAME);
+	mnl_attr_put_u32(nlh, NFTA_LOOKUP_SET_ID, htonl(id));
+	mnl_attr_put_u32(nlh, NFTA_LOOKUP_SREG, htonl(NFT_REG_2));
+	mnl_attr_put_u32(nlh, NFTA_LOOKUP_DREG, htonl(NFT_REG_2));
+	expr_end(nlh, e);
+}
+
+/*
+ * A forward: a port to the device's port; a range to the same ports of the
+ * device, which a translation of the address alone keeps; and a range moved
+ * to other ports by its map (port_map()), numbered @id: nf_tables' NAT
+ * translates to one port, or keeps the port within a range, but moves none
+ * by an offset, as nft_nat has no base port to count from.
+ */
+static void forward_rule(struct batch *bt, const struct fw_fwd *f, uint32_t id)
+{
+	uint16_t from = htons(f->from), last = htons(f->last), port = htons(f->port);
+	bool moved = fw_fwd_moved(f);
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh;
+
+	if (moved)
+		port_map(bt, f, id);
+	nlh = rule_begin(bt, PREROUTING, &exprs);
 	to_connection(nlh, f->ifname, f->addr);
 	meta(nlh, NFT_META_L4PROTO);
 	cmp(nlh, NFT_CMP_EQ, &f->proto, sizeof(f->proto));
@@ -655,7 +754,14 @@ static void forward_rule(struct batch *bt, const struct fw_fwd *f)
 		range(nlh, &from, &last, sizeof(from));
 	else
 		cmp(nlh, NFT_CMP_EQ, &from, sizeof(from));
-	dnat(nlh, f->dev, f->last > f->from ? NULL : &f->port);
+	dnat_addr(nlh, f->dev);
+	if (moved) {
+		payload_into(nlh, NFT_REG_2, NFT_PAYLOAD_TRANSPORT_HEADER, 2, 2);
+		lookup(nlh, id);
+	} else if (f->last == f->from) {
+		immediate(nlh, NFT_REG_2, &port, sizeof(port));
+	}
+	dnat(nlh, moved || f->last == f->from);
 	rule_end(bt, nlh, exprs);
 }
 
@@ -683,7 +789,8 @@ static void dmz_rules(struct batch *bt, const struct fw_dmz *z)
 	to_connection(nlh, z->ifname, z->addr);
 	meta(nlh, NFT_META_L4PROTO);
 	cmp(nlh, NFT_CMP_NEQ, &icmp, sizeof(icmp));
-	dnat(nlh, z->dev, NULL);
+	dnat_addr(nlh, z->dev);
+	dnat(nlh, false);
 	rule_end(bt, nlh, exprs);
 }
 
@@ -749,7 +856,7 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		for (int o = 0; o < s->nouts; o++)
 			masquerade(&bt, &s->lan[i], &s->out[o]);
 	for (int i = 0; i < s->nfwds; i++)
-		forward_rule(&bt, &s->fwd[i]);
+		forward_rule(&bt, &s->fwd[i], (uint32_t)i + 1);
 	for (int i = 0; i < s->ndmzs; i++)
 		dmz_rules(&bt, &s->dmz[i]);
 	return end(&bt, last);

@@ -55,8 +55,9 @@ static int run(size_t len, uint32_t last)
 	setsockopt(mnl_socket_get_fd(nl), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	/*
 	 * The kernel takes a message no longer than the socket's send buffer,
-	 * 208 KiB by default (net.core.wmem_default): a batch with every
-	 * forward comes near it, at 176 KiB.
+	 * some 200 KiB by default (net.core.wmem_default): a batch with every
+	 * forward and every port moved goes past it, at 255 KiB. The buffer
+	 * asked for is doubled, up to net.core.wmem_max, 4 MiB.
 	 */
 	setsockopt(mnl_socket_get_fd(nl), SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 	if (mnl_socket_sendto(nl, g_buf, len) < 0) {
