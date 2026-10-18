@@ -200,7 +200,7 @@ check 'grep -qx "static_lease 00:00:5e:00:53:a1 192.168.1.10" "$U" && ! grep -q 
 check 'grep -qx "opt dns 198.51.100.53" "$U"'
 check 'logged "procd start udhcpd-net1 .*udhcpd -f .*/run/udhcpd-net1.conf"'
 check 'logged "^onu-fw apply" && grep -qx "lan net1 192.168.1.0/24" "$T/fw.conf" &&
-	grep -qx "wan gem256" "$T/fw.conf"'
+	grep -qx "wan gem256" "$T/fw.conf" && grep -qxF "out ppp*" "$T/fw.conf"'
 # A router of networks is a hop, and forwards.
 check 'logged "l3_ttl_decrement true"'
 check '[ "$(cat "$ONU_ROOT/proc/sys/net/ipv4/ip_forward")" = 1 ]'

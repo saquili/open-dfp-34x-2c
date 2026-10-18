@@ -22,9 +22,6 @@
 #define FORWARD "forward"
 #define POSTROUTING "postrouting"
 
-/* The interfaces of the PPPoE sessions, the networks' way out. */
-#define WAN_PREFIX "ppp"
-
 /* The priority of the source NAT, nft's "srcnat". */
 #define SRCNAT_PRIORITY 100
 
@@ -87,6 +84,23 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 		/* ifname_ok() took no more than the field holds. */
 		memcpy(l->ifname, a, strlen(a) + 1);
 		s->nlans++;
+		return 0;
+	}
+	if (n == 2 && !strcmp(word, "out")) {
+		size_t len = strlen(a);
+		bool prefix = len > 1 && a[len - 1] == '*';
+
+		if (prefix)
+			a[--len] = '\0';
+		if (s->nouts == FW_OUTS_MAX || !ifname_ok(a)) {
+			snprintf(err, errcap, "out %s: no interface of the table", a);
+			return -1;
+		}
+		for (int i = 0; i < s->nouts; i++)
+			if (!strcmp(s->out[i].ifname, a) && s->out[i].prefix == prefix)
+				return 0;
+		memcpy(s->out[s->nouts].ifname, a, len + 1);
+		s->out[s->nouts++].prefix = prefix;
 		return 0;
 	}
 	if (n == 2 && !strcmp(word, "wan")) {
@@ -333,21 +347,27 @@ static void destroy(struct batch *bt)
 	done(bt);
 }
 
+/* An interface's name, @key of meta, that of the way out @o. */
+static void ifname_out(struct nlmsghdr *nlh, uint32_t key, const struct fw_out *o)
+{
+	ifname_is(nlh, key, o->ifname, o->prefix);
+}
+
 /*
- * The SYN of a connection that goes out by a session has its maximum segment
- * size cut to what the route out carries, as nft's "tcp option maxseg size
- * set rt mtu", which never raises it: the far end then sends no packet larger
- * than the session takes. A SYN goes through the CPU before its flow is handed
- * to the switch.
+ * The SYN of a connection that goes out by @o has its maximum segment size
+ * cut to what the route out carries, as nft's "tcp option maxseg size set rt
+ * mtu", which never raises it: the far end then sends no packet larger than a
+ * session takes. A SYN goes through the CPU before its flow is handed to the
+ * switch.
  */
-static void clamp_mss(struct batch *bt)
+static void clamp_mss(struct batch *bt, const struct fw_out *o)
 {
 	static const uint8_t tcp = IPPROTO_TCP, syn = 0x02, none;
 	struct nlattr *exprs;
 	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
 	struct expr e;
 
-	ifname_is(nlh, NFT_META_OIFNAME, WAN_PREFIX, true);
+	ifname_out(nlh, NFT_META_OIFNAME, o);
 	meta(nlh, NFT_META_L4PROTO);
 	cmp(nlh, NFT_CMP_EQ, &tcp, sizeof(tcp));
 	payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 13, 1);
@@ -405,21 +425,21 @@ static void accept_answers(struct batch *bt)
 	rule_end(bt, nlh, exprs);
 }
 
-/* A new connection from a session into network @l, dropped. */
-static void keep_out(struct batch *bt, const struct fw_lan *l)
+/* A new connection from the way out @o into network @l, dropped. */
+static void keep_out(struct batch *bt, const struct fw_lan *l, const struct fw_out *o)
 {
 	struct nlattr *exprs;
 	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
 
-	ifname_is(nlh, NFT_META_IIFNAME, WAN_PREFIX, true);
+	ifname_out(nlh, NFT_META_IIFNAME, o);
 	ifname_is(nlh, NFT_META_OIFNAME, l->ifname, false);
 	ct_state_any(nlh, NF_CT_STATE_BIT(IP_CT_NEW));
 	verdict(nlh, NF_DROP);
 	rule_end(bt, nlh, exprs);
 }
 
-/* What network @l sends into a session, behind the session's address. */
-static void masquerade(struct batch *bt, const struct fw_lan *l)
+/* What network @l sends out by @o, behind the address there. */
+static void masquerade(struct batch *bt, const struct fw_lan *l, const struct fw_out *o)
 {
 	static const uint8_t ipv4 = NFPROTO_IPV4;
 	struct nlattr *exprs;
@@ -428,7 +448,7 @@ static void masquerade(struct batch *bt, const struct fw_lan *l)
 	uint32_t net = htonl(l->net);
 	struct expr e;
 
-	ifname_is(nlh, NFT_META_OIFNAME, WAN_PREFIX, true);
+	ifname_out(nlh, NFT_META_OIFNAME, o);
 	meta(nlh, NFT_META_NFPROTO);
 	cmp(nlh, NFT_CMP_EQ, &ipv4, sizeof(ipv4));
 	payload(nlh, NFT_PAYLOAD_NETWORK_HEADER, 12, 4);
@@ -473,7 +493,8 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		flowtable(&bt, s);
 	chain(&bt, FORWARD, "filter", NF_INET_FORWARD, 0);
 	chain(&bt, POSTROUTING, "nat", NF_INET_POST_ROUTING, SRCNAT_PRIORITY);
-	clamp_mss(&bt);
+	for (int o = 0; o < s->nouts; o++)
+		clamp_mss(&bt, &s->out[o]);
 	for (int i = 0; s->offload && i < s->nlans; i++) {
 		flow_add(&bt, &s->lan[i], NFT_META_IIFNAME, IPPROTO_TCP);
 		flow_add(&bt, &s->lan[i], NFT_META_IIFNAME, IPPROTO_UDP);
@@ -482,9 +503,11 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 	}
 	accept_answers(&bt);
 	for (int i = 0; i < s->nlans; i++)
-		keep_out(&bt, &s->lan[i]);
+		for (int o = 0; o < s->nouts; o++)
+			keep_out(&bt, &s->lan[i], &s->out[o]);
 	for (int i = 0; i < s->nlans; i++)
-		masquerade(&bt, &s->lan[i]);
+		for (int o = 0; o < s->nouts; o++)
+			masquerade(&bt, &s->lan[i], &s->out[o]);
 	return end(&bt, last);
 }
 

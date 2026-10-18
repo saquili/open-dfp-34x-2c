@@ -14,31 +14,38 @@
  *     }
  *     chain forward {
  *       type filter hook forward priority 0; policy accept;
- *       oifname "ppp*" tcp flags syn tcp option maxseg size set rt mtu
+ *       oifname OUT tcp flags syn tcp option maxseg size set rt mtu
+ *                                                        for each way out
  *       iifname LAN meta l4proto tcp flow add @ft       for each network
  *       iifname LAN meta l4proto udp flow add @ft       for each network
  *       oifname LAN meta l4proto tcp flow add @ft       for each network
  *       oifname LAN meta l4proto udp flow add @ft       for each network
  *       ct state established,related accept
- *       iifname "ppp*" oifname LAN ct state new drop    for each network
+ *       iifname OUT oifname LAN ct state new drop       for each network
+ *                                                        and way out
  *     }
  *     chain postrouting {
  *       type nat hook postrouting priority 100; policy accept;
- *       oifname "ppp*" ip saddr NET masquerade          for each network
+ *       oifname OUT ip saddr NET masquerade             for each network
+ *                                                        and way out
  *     }
  *   }
  *
- * The networks go out by PPPoE sessions, whose interfaces are pppN; the
- * flowtable hands their flows to the switch, which carries them in its NAPT
- * engine, on the host link, sfp, and on the sessions' GEM interfaces, WAN.
- * A connection's SYN, which the CPU carries, has its maximum segment size cut
- * to what the session takes.
+ * The networks go out by the stick's connections: PPPoE sessions, whose
+ * interfaces are pppN ("ppp*"), and the IPoE connections, each on the
+ * interface of its VLAN (wanVID). The flowtable hands their flows to the
+ * switch, which carries them in its NAPT engine, on the host link, sfp, and
+ * on the connections' GEM interfaces, WAN. A connection's SYN, which the CPU
+ * carries, has its maximum segment size cut to what the way out takes.
  * A batch replaces the table there is, in the same transaction.
  *
- * The networks and the WANs are lines of a file, which onu-apply writes:
+ * The networks, the ways out and the WANs are lines of a file, which
+ * onu-apply writes:
  *
  *   lan IFNAME ADDRESS/LEN   a network: its interface and its addresses
- *   wan IFNAME               a session's GEM interface
+ *   out IFNAME               an interface the networks go out by, or with
+ *                            a '*' at its end every one whose name begins so
+ *   wan IFNAME               a connection's GEM interface
  *   offload off              no flowtable: the CPU carries every flow
  */
 
@@ -51,6 +58,11 @@
 
 #define FW_LANS_MAX 8
 #define FW_WANS_MAX 8
+/*
+ * The sessions' "ppp*" and an interface of each IPoE connection: seven at
+ * most, as the connections are.
+ */
+#define FW_OUTS_MAX 7
 #define FW_IFNAMSIZ 16
 
 /**
@@ -66,20 +78,33 @@ struct fw_lan {
 };
 
 /**
+ * struct fw_out - An interface the networks go out by.
+ * @ifname: its name, or the beginning of the names when @prefix
+ * @prefix: whether it stands for every interface whose name begins so
+ */
+struct fw_out {
+	char ifname[FW_IFNAMSIZ];
+	bool prefix;
+};
+
+/**
  * struct fw_spec - What the table is made of.
  * @lan: the networks, @nlans of them
- * @wan: the sessions' GEM interfaces, @nwans of them
+ * @out: the interfaces they go out by, @nouts of them
+ * @wan: the connections' GEM interfaces, @nwans of them
  * @offload: with the flowtable
  */
 struct fw_spec {
 	struct fw_lan lan[FW_LANS_MAX];
 	int nlans;
+	struct fw_out out[FW_OUTS_MAX];
+	int nouts;
 	char wan[FW_WANS_MAX][FW_IFNAMSIZ];
 	int nwans;
 	bool offload;
 };
 
-/* An empty spec: no network, no WAN, with the flowtable. */
+/* An empty spec: no network, no way out, no WAN, with the flowtable. */
 void fw_spec_init(struct fw_spec *s);
 
 /*

@@ -3,7 +3,8 @@
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
 # Tests of onu-fw against the kernel it runs on, read back with nft, on dummy
-# interfaces named as the stick's: sfp, a VLAN on it, and a GEM interface.
+# interfaces named as the stick's: sfp, a VLAN on it, a GEM interface and a
+# VLAN on that, the interface of an IPoE connection.
 # A dummy interface carries no flow in hardware, so the kernel refuses the
 # flowtable and the table falls back to the CPU, which is tried here; the
 # flowtable itself needs the stick, and is tried there. Making the
@@ -33,12 +34,14 @@ T=$(mktemp -d)
 cleanup() {
 	nft delete table inet onu 2>/dev/null
 	ip link del net1 2>/dev/null
+	ip link del wan421 2>/dev/null
 	ip link del sfp 2>/dev/null
 	ip link del gem257 2>/dev/null
 	rm -rf "$T"
 }
 trap cleanup EXIT
-ip link add gem257 type dummy && ip link add link sfp name net1 type vlan id 100 || exit 1
+ip link add gem257 type dummy && ip link add link sfp name net1 type vlan id 100 &&
+	ip link add link gem257 name wan421 type vlan id 421 || exit 1
 
 run() {
 	out=$("$FW" "$@" 2>"$T/err")
@@ -55,7 +58,7 @@ has() {
 }
 
 echo "the NAT and the protection of the local networks"
-printf 'lan net1 192.168.1.0/24\nlan sfp 10.0.0.0/8\nwan gem257\n' >"$T/fw"
+printf 'lan net1 192.168.1.0/24\nlan sfp 10.0.0.0/8\nwan gem257\nout ppp*\n' >"$T/fw"
 run apply "$T/fw"
 check '[ $rc -eq 0 ] && echo "$err" | grep -q "flowtable was refused"'
 check 'has "chain forward" && has "chain postrouting"'
@@ -66,8 +69,17 @@ check "has 'oifname \"ppp*\" ip saddr 192.168.1.0/24 masquerade'"
 check "has 'oifname \"ppp*\" ip saddr 10.0.0.0/8 masquerade'"
 check '! has "flowtable" && ! has "flow add"'
 
+echo "out by a session and by an IPoE connection"
+printf 'lan net1 192.168.1.0/24\nwan gem257\nout ppp*\nout wan421\n' >"$T/fw"
+run apply "$T/fw"
+check '[ $rc -eq 0 ]'
+check "has 'oifname \"wan421\" tcp flags syn tcp option maxseg size set rt mtu'"
+check "has 'iifname \"wan421\" oifname \"net1\" ct state new drop'"
+check "has 'oifname \"wan421\" ip saddr 192.168.1.0/24 masquerade'"
+check "has 'oifname \"ppp*\" ip saddr 192.168.1.0/24 masquerade'"
+
 echo "a table replaces the one there is, whole"
-printf 'lan net1 172.16.0.0/12\noffload off\n' >"$T/fw"
+printf 'lan net1 172.16.0.0/12\nout ppp*\noffload off\n' >"$T/fw"
 run apply "$T/fw"
 check '[ $rc -eq 0 ] && [ -z "$err" ]'
 check "has 'ip saddr 172.16.0.0/12 masquerade' && ! has '192.168.1.0' && ! has '10.0.0.0'"

@@ -29,7 +29,7 @@
 #include "fwmsg.h"
 
 /* A batch and room for the last request of it (mnl_nlmsg_batch_start()). */
-static char g_buf[2 * 32768];
+static char g_buf[2 * 65536];
 
 static void usage(void)
 {

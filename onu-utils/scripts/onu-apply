@@ -1362,6 +1362,8 @@ lans_fw() {
 			lf_gem=$(cat "$SESSIONS/$lf/gem" 2>/dev/null)
 			[ -n "$lf_gem" ] && echo "wan $lf_gem"
 		done
+		# The sessions' interfaces, pppN, by which the networks go out.
+		echo "out ppp*"
 	} >"$RUN/onu-fw.conf.new"
 	# What onu-fw holds already is not put in place again.
 	if [ -e "$RUN/onu-fw.conf" ] &&
