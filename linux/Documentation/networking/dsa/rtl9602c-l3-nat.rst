@@ -2475,15 +2475,15 @@ What the driver takes from a rule:
        remaining block owns (a flow is marked with the ports whose blocks
        offered it).
      - M
-     - Fourteen rounds of load, offer and flush, each taking slot 0 again and
-       logging ``released with it`` in the ``<flow>`` debug line; the flush of a
-       PPPoE test.
+     - Fourteen rounds of load, offer and flush, while the driver kept eight
+       fixed slots: each took slot 0 again and logged ``released with it`` in
+       the ``<flow>`` debug line; the flush of a PPPoE test.
    * - netfilter offers the same flow once per device in the flowtable (one
        cookie, two blocks). A ``REPLACE`` for a cookie already held reuses its
-       slot and its bucket ways (its old entries zeroed first) and adds the
-       offering port to its owners; ``DESTROY`` frees every slot with the
-       cookie. Without the reuse four flows filled the eight slots and later
-       offers failed with ``-ENOSPC``.
+       record and its bucket ways (its old entries zeroed first) and adds the
+       offering port to its owners; ``DESTROY`` frees the cookie's record.
+       Without the reuse, while the driver kept eight fixed slots, four flows
+       filled them and later offers failed with ``-ENOSPC``.
      - M
      - The ``<flow>`` debug line ``not programmed: -28`` on a board that had
        been offloading.
@@ -2499,8 +2499,9 @@ What the driver takes from a rule:
        - a GEM egress has the routed-frame stream and its upstream is ready;
        - the external address is an external-address row (Ethernet) or can be
          given one (PPPoE);
-       - a slot (of 8), an outbound way and an inbound way are free, and the
-         inbound-bucket rule of "The NAPT hashes" does not apply.
+       - fewer than 4096 flows are held, a record can be allocated, an
+         outbound way and an inbound way are free, and the inbound-bucket rule
+         of "The NAPT hashes" does not apply.
 
        Otherwise it is declined. IPv6 flows are declined (``not IPv4``) and stay
        on the software fast path.
@@ -2548,8 +2549,9 @@ What the driver takes from a rule:
 2. Find the external-address row of the translated address; for PPPoE, take one
    and set up the WAN (see "The PPPoE encapsulation path"). Purpose: the inbound
    entry names it. (T)
-3. Take the flow's slot by its cookie, or a free one. Purpose: netfilter offers
-   a flow once per device (see the table above). (T)
+3. Find the flow's record by its cookie and zero its old entries, or make a new
+   record; ``-ENOSPC`` when 4096 flows are held. Purpose: netfilter offers a
+   flow once per device (see the table above). (T)
 4. Find a free outbound way, reading ``RTL9602C_NAPT_VALID`` from the hardware.
    Purpose: entries survive a warm restart, so the driver's records do not say
    which ways are free. (T)
@@ -2562,25 +2564,46 @@ What the driver takes from a rule:
 7. Write the outbound entry, pointing at it. Purpose: the inbound entry goes
    first because the engine reads the tables continuously, and a pointer written
    first could name an entry that still holds another flow. (T)
-8. Take the WAN reference and record the slot. Purpose: the driver's record of
-   the flow for statistics, removal and the release of a block. (T)
+8. Take the WAN reference and fill in the record. Purpose: the driver's record
+   of the flow for statistics, removal and the release of a block. A new record
+   is dropped again when the flow is declined in steps 4 to 7. (T)
 
 The steps are checked by a routing test, in which the ``<flow>`` debug line
-names the slot, the outbound bucket and way, the inbound entry and bucket and
-the remote digest.
+names the outbound entry with its bucket and way, the inbound entry and bucket,
+the remote digest and the number of flows held.
 
 Removal, for ``FLOW_CLS_DESTROY`` and for the release of a block, is
 ``rtl9602c_l34_flow_free()``: the outbound entry is zeroed first, then the
-inbound entry; the flow's hit bit is consumed; and the PPPoE WAN's reference is
-dropped, its rows staying for the next flow. It is checked by the flush of a
-PPPoE test.
+inbound entry; the flow's hit bit is consumed; the PPPoE WAN's reference is
+dropped, its rows staying for the next flow; and the record is freed. It is
+checked by the flush of a PPPoE test.
 
-The driver keeps eight flow slots, ``l34_flow[8]``, a limit of the driver and
-not of the engine. Each slot records the cookie, the outbound and inbound
-entries, the PPPoE WAN and the owning ports. A PPPoE flow whose session runs in
-an 802.1Q VLAN takes the VLAN from its one VLAN push (see "The PPPoE
-encapsulation path"); one with two VLAN pushes, or with a tag other than 802.1Q,
-is declined.
+The driver keeps one record per flow, ``struct rtl9602c_l34_flow``: the cookie,
+the outbound and inbound entries, the PPPoE WAN and the owning ports. The
+records are in a hash table keyed by the cookie (``l34_flows``, 256 heads), so
+that ``REPLACE``, ``DESTROY`` and ``STATS`` find their flow without a walk:
+netfilter's garbage collector asks for the statistics of every offloaded flow
+every few seconds. The release of a block walks them all. The records come from
+a slab cache of their own, 20 bytes each and 24 in the cache, because
+``kmalloc()`` gives no less than ``ARCH_DMA_MINALIGN``, 128 bytes on this CPU.
+Setup starts them empty with the cleared tables, and ``rtl9602c_l34_fini()``
+frees them with the tables.
+
+The driver holds at most 4096 flows, one per outbound entry; the inbound table
+has as many entries, and a full bucket declines a flow before then. In practice
+netfilter's connection limit comes first. Unless the hash size is given as a
+parameter, ``nf_conntrack_max`` is the size of the connection hash table, which
+on a board with this little memory is the minimum of 1024
+(``nf_conntrack_init_start()``), and only one direction of a connection is
+programmed, the one whose source is translated. So at most 1024 flows reach the engine unless
+``net.netfilter.nf_conntrack_max`` is raised, and their records take 24 KiB at
+most. The driver used to keep eight fixed slots, and a ninth flow
+stayed on the CPU (measured); that the engine carries a flow in any of its 4096
+entries is not verified (see "Open questions").
+
+A PPPoE flow whose session runs in an 802.1Q VLAN takes the VLAN from its one
+VLAN push (see "The PPPoE encapsulation path"); one with two VLAN pushes, or
+with a tag other than 802.1Q, is declined.
 
 The PPPoE encapsulation path
 ============================
@@ -2982,7 +3005,7 @@ only printed.
      - A neighbour's CAM row hit by traffic, with two reads of the bitmaps,
        would settle both. Nothing in the driver depends on them.
    * - The engine does not remove a NAPT entry by itself (no hardware ageing):
-       an entry stays until the driver removes it, as the driver's slot
+       an entry stays until the driver removes it, as the driver's flow
        records and its free-way scan assume.
      - M
      - A UDP flow kept offloaded with netfilter's UDP flowtable timeout raised
@@ -3346,6 +3369,8 @@ Known limitations
   route through a PPP device is carried only through that WAN.
 - An IPv6 host that is on a link of this device, rather than behind a gateway
   route, is not carried: the IPv6 neighbour table is not filled.
+- The driver programs at most 4096 flows, and fewer when buckets fill.
+  netfilter's default connection limit on this board, 1024, bounds them first.
 - The address-table entries on which the engine depends have limitations of
   their own, described on the *bridging* page.
 
@@ -3376,6 +3401,13 @@ Assumptions the driver depends on
        flow in one bucket is carried from way 1 ("Outbound NAPT (selector 10)").
      - Two flows forced into one outbound bucket by the choice of source ports,
        both carried by the engine.
+   * - The engine carries a flow from any of its 4096 outbound entries and the
+       inbound entry it names, so that it carries as many flows at once as the
+       driver programs ("The flowtable offload"). Eight at once have been
+       measured.
+     - Hundreds of flows offered at once, up to netfilter's connection limit:
+       the ``<flow>`` debug lines count them, and the CPU port's counter stays
+       flat while all of them carry traffic.
    * - The remote digest function is right, and the outbound lookup does not
        compare the field in a way that the function gets wrong ("The NAPT
        hashes").
