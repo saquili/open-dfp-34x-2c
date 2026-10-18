@@ -10,7 +10,8 @@
 # flowtable itself needs the stick, and is tried there. Making the
 # interfaces needs root with CAP_NET_ADMIN, as in a container started with
 # --cap-add NET_ADMIN; without that, or without nft, the test says that it
-# skipped.
+# skipped. Last, packets go through a table in network namespaces, sent and
+# taken by python3, without which that part says that it skipped.
 
 set -u
 FW=${BUILD:-$(cd "$(dirname "$0")/.." && pwd)/build}/onu-fw
@@ -38,6 +39,9 @@ cleanup() {
 	ip link del wan421 2>/dev/null
 	ip link del sfp 2>/dev/null
 	ip link del gem257 2>/dev/null
+	for ns in onudev onuinet onustick; do
+		ip netns del $ns 2>/dev/null
+	done
 	rm -rf "$T"
 }
 trap cleanup EXIT
@@ -98,7 +102,8 @@ check "has 'iifname \"ppp0\" ip daddr 203.0.113.24 udp dport 6000-6010 dnat ip t
 check "has 'iifname \"ppp0\" ip daddr 203.0.113.24 tcp dport 8000-8002 dnat ip to 192.168.1.20:tcp dport map { 8000 : 9000, 8001 : 9001, 8002 : 9002 }'"
 check "has 'iifname \"wan421\" ip daddr 192.0.2.10 tcp dport 443 dnat ip to 192.168.1.21:443'"
 check "has 'iifname \"wan421\" ip daddr 192.0.2.10 udp dport 68 accept'"
-check "has 'iifname \"wan421\" ip daddr 192.0.2.10 meta l4proto != icmp dnat ip to 192.168.1.30'"
+check "has 'iifname \"wan421\" ip daddr 192.0.2.10 dnat ip to 192.168.1.30'"
+check '! has "icmp"'
 # What the forwards took is let through after the answers, before the drops.
 at() {
 	table | grep -nF -- "$1" | head -n 1 | cut -d: -f1
@@ -107,7 +112,7 @@ check '[ "$(at "ct state established,related accept")" -lt "$(at "ct status dnat
 	[ "$(at "ct status dnat accept")" -lt "$(at "ct state new drop")" ]'
 # The DMZ comes after the forwards of its connection.
 check '[ "$(at "tcp dport 443 dnat")" -lt "$(at "udp dport 68 accept")" ] &&
-	[ "$(at "udp dport 68 accept")" -lt "$(at "l4proto != icmp")" ]'
+	[ "$(at "udp dport 68 accept")" -lt "$(at "dnat ip to 192.168.1.30")" ]'
 
 echo "the forwards as nft itself makes them"
 nft add table inet ref &&
@@ -123,7 +128,7 @@ nft add table inet ref &&
 		dnat ip to 192.168.1.21:443 &&
 	nft add rule inet ref prerouting iifname "wan421" ip daddr 192.0.2.10 udp dport 68 accept &&
 	nft add rule inet ref prerouting iifname "wan421" ip daddr 192.0.2.10 \
-		meta l4proto != icmp dnat ip to 192.168.1.30 &&
+		dnat ip to 192.168.1.30 &&
 	nft add rule inet ref forward ct status dnat accept
 # The expressions of the rules of a chain, as the kernel gives them back.
 bytecode() {
@@ -212,6 +217,90 @@ run clear
 check '[ $rc -eq 0 ] && ! nft list tables | grep -q "inet onu"'
 run clear
 check '[ $rc -eq 0 ]'
+
+# Packets, by three network namespaces: the stick, with the table; the
+# internet, by a connection's interface; and the DMZ, a device of a network.
+# The answer to a ping tells who gave it: the stick's own leaves with a TTL
+# of 64, the device's, which the stick routes, with 63.
+echo "what a DMZ takes, and what stays with the stick, packet by packet"
+if ! command -v python3 >/dev/null 2>&1 || ! ip netns add onustick 2>/dev/null; then
+	echo "  skipped: it needs python3 and network namespaces"
+else
+	cat >"$T/pkt.py" <<'EOF'
+# echo DST: the TTL of the answer to a ping of DST. listen PORT: what one UDP
+# datagram to PORT brings. send DST PORT TEXT. ask DST PORT: the answer to a
+# datagram. answer PORT TEXT: answer one datagram with TEXT.
+import os, socket, struct, sys, time
+m, a = sys.argv[1], sys.argv[2:]
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+u.settimeout(3)
+if m == "echo":
+    s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
+    s.settimeout(2)
+    ident = os.getpid() & 0xffff
+    body = struct.pack("!BBHHH", 8, 0, 0, ident, 1) + b"onu!"
+    c = sum(struct.unpack("!6H", body))
+    c = (c >> 16) + (c & 0xffff)
+    c = ~(c + (c >> 16)) & 0xffff
+    s.sendto(struct.pack("!BBHHH", 8, 0, c, ident, 1) + b"onu!", (a[0], 0))
+    end = time.time() + 2
+    while time.time() < end:
+        try:
+            d, src = s.recvfrom(1500)
+        except socket.timeout:
+            break
+        h = (d[0] & 15) * 4
+        if d[h] == 0 and struct.unpack("!H", d[h + 4:h + 6])[0] == ident and src[0] == a[0]:
+            print(d[8])
+            sys.exit(0)
+    sys.exit(1)
+if m in ("listen", "answer"):
+    u.bind(("0.0.0.0", int(a[0])))
+    d, src = u.recvfrom(100)
+    if m == "answer":
+        u.sendto(a[1].encode(), src)
+    else:
+        print(d.decode())
+if m in ("send", "ask"):
+    u.sendto((a[2] if m == "send" else "?").encode(), (a[0], int(a[1])))
+    if m == "ask":
+        print(u.recvfrom(100)[0].decode())
+EOF
+	S="ip netns exec onustick" I="ip netns exec onuinet" D="ip netns exec onudev"
+	ip netns add onuinet && ip netns add onudev &&
+		ip link add wan840 type veth peer name inet0 &&
+		ip link set wan840 netns onustick && ip link set inet0 netns onuinet &&
+		ip link add net2 type veth peer name dev0 &&
+		ip link set net2 netns onustick && ip link set dev0 netns onudev &&
+		$S ip addr add 192.0.2.10/24 dev wan840 && $S ip addr add 192.168.2.1/24 dev net2 &&
+		$I ip addr add 192.0.2.1/24 dev inet0 && $D ip addr add 192.168.2.30/24 dev dev0 &&
+		$S ip link set wan840 up && $S ip link set net2 up && $S ip link set lo up &&
+		$I ip link set inet0 up && $I ip link set lo up &&
+		$D ip link set dev0 up && $D ip link set lo up &&
+		$D ip route add default via 192.168.2.1 &&
+		$S sh -c 'echo 1 >/proc/sys/net/ipv4/ip_forward' || exit 1
+	printf 'lan net2 192.168.2.0/24\nout wan840\noffload off\n' >"$T/stick"
+	$S "$FW" apply "$T/stick"
+	check '[ "$($I python3 "$T/pkt.py" echo 192.0.2.10)" = 64 ]'
+	echo "dmz wan840 192.0.2.10 192.168.2.30" >>"$T/stick"
+	$S "$FW" apply "$T/stick"
+	# A ping of the connection's address goes to the DMZ, which answers.
+	check '[ "$($I python3 "$T/pkt.py" echo 192.0.2.10)" = 63 ]'
+	# The answers to the stick's own ping and UDP come back to it.
+	check '[ "$($S python3 "$T/pkt.py" echo 192.0.2.1)" = 64 ]'
+	$I python3 "$T/pkt.py" answer 9999 back &
+	sleep 0.5
+	check '[ "$($S python3 "$T/pkt.py" ask 192.0.2.1 9999)" = back ]'
+	wait
+	# DHCP's answer to the client's port stays with the stick; another port goes on.
+	$S python3 "$T/pkt.py" listen 68 >"$T/s68" &
+	$D python3 "$T/pkt.py" listen 5000 >"$T/d5000" &
+	sleep 0.5
+	$I python3 "$T/pkt.py" send 192.0.2.10 68 offer
+	$I python3 "$T/pkt.py" send 192.0.2.10 5000 hello
+	wait
+	check '[ "$(cat "$T/s68")" = offer ] && [ "$(cat "$T/d5000")" = hello ]'
+fi
 
 echo "test_onu_fw: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

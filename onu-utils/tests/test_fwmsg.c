@@ -391,7 +391,7 @@ static void test_forward_batch(void)
 	CHECK(element(len, 8000, 9000) && element(len, 8001, 9001) && element(len, 8002, 9002));
 	CHECK(!element(len, 8003, 9003));
 
-	/* A DMZ, after the forwards: DHCP's answers kept, and the rest but ICMP to the device. */
+	/* A DMZ, after the forwards: DHCP's answers kept, and the rest, ping too, to the device. */
 	CHECK(!fw_spec_line(&s, "dmz ppp0 203.0.113.24 192.168.1.30", g_err, sizeof(g_err)));
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 1, &last);
 	kinds(len, k, sizeof(k), &acked);

@@ -767,12 +767,15 @@ static void forward_rule(struct batch *bt, const struct fw_fwd *f, uint32_t id)
 
 /*
  * A DMZ, after the forwards: DHCP's answers to the client's port stay with
- * the stick, which a connection by DHCP takes its address by, and so does
- * ICMP, which the stick answers; the rest goes to the device.
+ * the stick, which a connection by DHCP takes its address by; the rest goes
+ * to the device, a ping (an echo request, new) as well. What answers the
+ * stick's own traffic, an echo reply or an error of ICMP among it, belongs
+ * to a connection there is, and never comes to this chain, which sees a
+ * connection's first packet only (nf_nat_ipv4_fn()).
  */
 static void dmz_rules(struct batch *bt, const struct fw_dmz *z)
 {
-	static const uint8_t udp = IPPROTO_UDP, icmp = IPPROTO_ICMP;
+	static const uint8_t udp = IPPROTO_UDP;
 	uint16_t client = htons(68);
 	struct nlattr *exprs;
 	struct nlmsghdr *nlh = rule_begin(bt, PREROUTING, &exprs);
@@ -787,8 +790,6 @@ static void dmz_rules(struct batch *bt, const struct fw_dmz *z)
 
 	nlh = rule_begin(bt, PREROUTING, &exprs);
 	to_connection(nlh, z->ifname, z->addr);
-	meta(nlh, NFT_META_L4PROTO);
-	cmp(nlh, NFT_CMP_NEQ, &icmp, sizeof(icmp));
 	dnat_addr(nlh, z->dev);
 	dnat(nlh, false);
 	rule_end(bt, nlh, exprs);

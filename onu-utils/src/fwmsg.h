@@ -38,8 +38,7 @@
  *         DEV:tcp dport map { FROM : TO, FROM+1 : TO+1, ..., LAST : ... }
  *                                                        for each forward
  *       iifname IN ip daddr ADDR udp dport 68 accept
- *       iifname IN ip daddr ADDR meta l4proto != icmp dnat ip to DEV
- *                                                        for each DMZ
+ *       iifname IN ip daddr ADDR dnat ip to DEV          for each DMZ
  *     }
  *   }
  *
@@ -66,10 +65,14 @@
  * the batch and some 32 of the kernel's memory, and a new connection one
  * lookup in a hash table; a rule for each port would cost 640 bytes, and a
  * rule more that each new connection goes through, the devices' own going
- * out among them. A DMZ takes what no forward takes, but ICMP,
- * which the stick answers, and DHCP's answers to the client's port, 68, which
- * a connection by DHCP takes itself; answers to what went out are no new
- * connections, and never reach the chain.
+ * out among them.
+ *
+ * A DMZ takes what no forward takes, a ping as well, but DHCP's answers to
+ * the client's port, 68, which a connection by DHCP takes itself. The chain
+ * sees the first packet of a connection only: what answers the stick's own
+ * traffic, and an error of ICMP about it, belongs to a connection there is,
+ * and stays with the stick. A session's PPP is no IP, and no chain of the
+ * table sees it.
  *
  * The networks, the ways out, the WANs, the forwards and the DMZs are lines
  * of a file, which onu-apply writes:
