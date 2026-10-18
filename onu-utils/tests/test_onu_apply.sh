@@ -1343,5 +1343,69 @@ rm -f "$ONU_ROOT/run/onu-pppoe1"
 check '[ "$(cat "$ONU_ROOT/run/onu-mode")" = bridge ] && [ ! -e "$ONU_ROOT/run/network.d/ipoe-1" ]'
 teardown
 
+echo "a connection with an address alone, its gateway on the link"
+setup
+conf IPOE1_KIND=static IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_MAC= IPOE1_FAMILY=ipv4 \
+	IPOE1_ADDRESS=203.0.113.7/32 IPOE1_GATEWAY=198.51.100.1 IPOE1_DNS=198.51.100.53 \
+	IPOE1_ADDRESS6= IPOE1_GATEWAY6= IPOE1_PREFIX6= \
+	LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on LAN1_LEASE=3600
+"$MODE_SCRIPT" start 2>/dev/null
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=static ipaddr=203.0.113.7/32"'
+# No network to route to: the gateway alone, on the link, ahead of the default route.
+check '! part ipoe-1 | grep -q "target=203.0.113"'
+check 'has ipoe-1 "route: interface=ipoe1 target=198.51.100.1/32 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1 onlink=1 table=111"'
+check 'has ipoe-1 "rule: src=203.0.113.7/32 lookup=111"'
+# The stick's own default route too, by the network's connection.
+check 'has ipoe-1 "route: interface=ipoe1 target=198.51.100.1/32"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1 onlink=1"'
+check '[ "$(part ipoe-1 | grep -n "target=198.51.100.1/32 table" | cut -d: -f1)" -lt \
+	"$(part ipoe-1 | grep -n "gateway=198.51.100.1 onlink=1 table" | cut -d: -f1)" ] &&
+	[ "$(part ipoe-1 | grep -nx "route: interface=ipoe1 target=198.51.100.1/32" | cut -d: -f1)" -lt \
+	"$(part ipoe-1 | grep -nx "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1 onlink=1" |
+		cut -d: -f1)" ]'
+check 'has nets "rule: src=192.168.1.0/24 lookup=111"'
+
+echo "a connection of a /31"
+# The settings of a /31 connection with the gateway $1, and a network out by it.
+conf31() {
+	printf '%s\n' IPOE1_KIND=static IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
+		IPOE1_ADDRESS=192.0.2.10/31 "IPOE1_GATEWAY=$1" \
+		LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on \
+		LAN1_LEASE=3600 >"$ONU_ROOT/run/onu.conf"
+}
+# The gateway the other address: in its network, as a /24's.
+conf31 192.0.2.11
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=static ipaddr=192.0.2.10/31"'
+check 'has ipoe-1 "route: interface=ipoe1 target=192.0.2.10/31 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=192.0.2.11 table=111"'
+check '! part ipoe-1 | grep -q "onlink\|target=192.0.2.11/32"'
+# A gateway outside it: on the link.
+conf31 198.51.100.1
+"$MODE_SCRIPT" reload 2>/dev/null
+check 'has ipoe-1 "route: interface=ipoe1 target=192.0.2.10/31 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=198.51.100.1/32 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1 onlink=1 table=111"'
+
+echo "a lease of an address alone"
+# A DHCP server that names no network gives the address alone (onu-dhcpc).
+printf '%s\n' IPOE1_KIND=dhcp IPOE1_GEM=auto IPOE1_VLAN=420 IPOE1_FAMILY=ipv4 \
+	LAN1_CONN=ipoe:1 LAN1_VLAN=100 LAN1_ADDRESS=192.168.1.1/24 LAN1_DHCP=on \
+	LAN1_LEASE=3600 >"$ONU_ROOT/run/onu.conf"
+printf '#!/bin/sh\necho "udhcpc $*" >>"$LOG"\n' >"$T/bin/udhcpc"
+mkdir -p "$ONU_ROOT/usr/lib/onu"
+printf '#!/bin/sh\necho "onu-call $*" >>"$LOG"\n' >"$ONU_ROOT/usr/lib/onu/onu-call"
+chmod +x "$T/bin/udhcpc" "$ONU_ROOT/usr/lib/onu/onu-call"
+echo "1000.25 99.0" >"$ONU_ROOT/proc/uptime"
+"$MODE_SCRIPT" reload 2>/dev/null
+interface=wan420 ip=203.0.113.9 router=198.51.100.1 lease=600 "$HERE/scripts/onu-dhcpc" bound
+"$MODE_SCRIPT" dhcpc 2>/dev/null
+check 'has ipoe-1 "interface ipoe1: device=wan420 proto=static ipaddr=203.0.113.9/32"'
+check 'has ipoe-1 "route: interface=ipoe1 target=198.51.100.1/32 table=111"'
+check 'has ipoe-1 "route: interface=ipoe1 target=0.0.0.0/0 gateway=198.51.100.1 onlink=1 table=111"'
+check '! part ipoe-1 | grep -q "target=203.0.113"'
+teardown
+
 echo "test_onu_apply: $checks checks, $failures failed"
 [ "$failures" -eq 0 ]

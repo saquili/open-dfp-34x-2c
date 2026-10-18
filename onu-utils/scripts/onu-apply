@@ -110,11 +110,13 @@
 # onu-call). netifd holds the interface, ipoeK, with the address, the part
 # "ipoe-K": a table of the connection's own holds its default route, a rule
 # sends what comes from its address there, and the connection is the
-# stick's own default route when main_route() names it. A local network
-# goes out by it as by a session, LANn_CONN=ipoe:K. What it has is in
-# /run/ipoe/K: gem, dev, kind, and once it has an address ipv4, router,
-# dns, until (the end of a lease, in seconds of the uptime), ipv6 and
-# prefix. No DHCPv6 client runs for a connection by DHCP.
+# stick's own default route when main_route() names it. A gateway outside
+# the address's network, as an operator gives with an address alone, a /32,
+# is reached on the link, by a route to it alone. A local network goes out
+# by it as by a session, LANn_CONN=ipoe:K. What it has is in /run/ipoe/K:
+# gem, dev, kind, and once it has an address ipv4, router, dns, until (the
+# end of a lease, in seconds of the uptime), ipv6 and prefix. No DHCPv6
+# client runs for a connection by DHCP.
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -1180,14 +1182,38 @@ ipoe_main6() {
 	done
 }
 
+# IPoE connection $1's default route by the gateway $2, as netifd's
+# sections, in the table $4, or in the main table without it. A gateway
+# outside the address's network, $3 set (an operator that gives an address
+# alone, a /32, or a /31 whose other address the gateway is not), is on the
+# link all the same: a route to it alone comes first, as the kernel takes a
+# gateway only where a route on the link leads to it, and the default route
+# is netifd's "onlink" too, which the kernel takes without one: netifd adds
+# a part's routes in an order of its own when it reads the parts again.
+ipoe_gw_routes() {
+	if [ -n "$3" ]; then
+		printf "config route\n\toption interface 'ipoe%s'\n" "$1"
+		printf "\toption target '%s/32'\n" "$2"
+		[ -z "${4:-}" ] || printf "\toption table '%s'\n" "$4"
+		printf "\n"
+	fi
+	printf "config route\n\toption interface 'ipoe%s'\n" "$1"
+	printf "\toption target '0.0.0.0/0'\n\toption gateway '%s'\n" "$2"
+	[ -z "$3" ] || printf "\toption onlink '1'\n"
+	[ -z "${4:-}" ] || printf "\toption table '%s'\n" "$4"
+	printf "\n"
+}
+
 # IPoE connection $1 as netifd's part "ipoe-K": its interface, ipoeK, on its
 # device, with the address it has, of /run/ipoe/K, or none yet (protocol
 # "none", which brings the interface up for the DHCP client); its table
-# with its default route by the gateway and the route to its network; a
-# rule that sends what comes from its address there; and the stick's own
-# default route when main_route() names it. The text given last is kept in
-# /run/ipoe/K/net, and the same is not given again. What changed also gives
-# its networks' devices the name servers now.
+# with its default route by the gateway and the route to its network, which
+# an address alone, a /32, has none of; a rule that sends what comes from
+# its address there; and the stick's own default route when main_route()
+# names it. A gateway outside the address's network is reached on the link
+# (ipoe_gw_routes()). The text given last is kept in /run/ipoe/K/net, and
+# the same is not given again. What changed also gives its networks'
+# devices the name servers now.
 ipoe_net() {
 	d=$IPOE_DIR/$1
 	in_dev=$(cat "$d/dev" 2>/dev/null)
@@ -1206,18 +1232,22 @@ ipoe_net() {
 			printf "\n"
 		fi
 		if [ -n "$in_addr" ] && [ -n "$in_gw" ]; then
-			in_mask=$(len_mask "${in_addr#*/}")
-			printf "config route\n\toption interface 'ipoe%s'\n" "$1"
-			printf "\toption target '%s/%s'\n\toption table '%s'\n\n" \
-				"$(num_ip $(($(ip_num "${in_addr%/*}") & in_mask)))" "${in_addr#*/}" "$in_table"
-			printf "config route\n\toption interface 'ipoe%s'\n" "$1"
-			printf "\toption target '0.0.0.0/0'\n\toption gateway '%s'\n" "$in_gw"
-			printf "\toption table '%s'\n\n" "$in_table"
+			in_len=${in_addr#*/}
+			in_mask=$(len_mask "$in_len")
+			in_net=$(($(ip_num "${in_addr%/*}") & in_mask))
+			in_onlink=
+			[ $(($(ip_num "$in_gw") & in_mask)) -eq "$in_net" ] || in_onlink=1
+			# An address alone, a /32, has no network to route to.
+			if [ "$in_len" -lt 32 ]; then
+				printf "config route\n\toption interface 'ipoe%s'\n" "$1"
+				printf "\toption target '%s/%s'\n\toption table '%s'\n\n" \
+					"$(num_ip "$in_net")" "$in_len" "$in_table"
+			fi
+			ipoe_gw_routes "$1" "$in_gw" "$in_onlink" "$in_table"
 			printf "config rule\n\toption src '%s/32'\n\toption lookup '%s'\n\n" \
 				"${in_addr%/*}" "$in_table"
 			if [ "ipoe:$1" = "$(main_route)" ]; then
-				printf "config route\n\toption interface 'ipoe%s'\n" "$1"
-				printf "\toption target '0.0.0.0/0'\n\toption gateway '%s'\n\n" "$in_gw"
+				ipoe_gw_routes "$1" "$in_gw" "$in_onlink"
 			fi
 		fi
 		in_gw6=$(ipoe_setting "$1" GATEWAY6)
