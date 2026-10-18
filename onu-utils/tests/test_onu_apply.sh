@@ -186,6 +186,9 @@ check 'has nets "interface net1: device=net1 proto=static ipaddr=192.168.1.1/24"
 check 'has nets "rule: src=192.168.1.0/24 lookup=101"'
 check 'has nets "route: interface=ses1 target=0.0.0.0/0 table=101"'
 check 'has nets "route: interface=net1 target=192.168.1.0/24 table=101"'
+# No session hands an address down: the stick's own way out is the network's
+# session, the default route of the main table, which the switch routes by.
+check 'has ses1 "interface ses1: device=wan410 proto=pppoed session=1 family=ipv4 pass=0 defaultroute=1"'
 U=$ONU_ROOT/run/udhcpd-net1.conf
 check 'grep -qx "interface net1" "$U" && grep -qx "start 192.168.1.100" "$U" &&
 	grep -qx "end 192.168.1.199" "$U" && grep -qx "max_leases 100" "$U"'
@@ -232,6 +235,8 @@ printf '%s\n' SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off >"$ONU_RO
 check '[ ! -e "$ONU_ROOT/run/network.d/nets" ] && logged "^onu-fw clear"'
 check '[ ! -e "$ONU_ROOT/run/onu-fw.conf" ]'
 check 'logged "l3_ttl_decrement false"'
+# The session is the stick's way out no more, and comes up again without it.
+check 'logged "session 1 down" && has ses1 "interface ses1: device=wan410 proto=pppoed session=1 family=ipv4 pass=0 defaultroute=0"'
 teardown
 
 echo "a PPPoE session without name servers"

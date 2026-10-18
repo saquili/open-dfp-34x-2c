@@ -93,7 +93,9 @@
 # ("N/MAC/IP"), its leases in /run/udhcpd-netN.leases. netifd holds the
 # networks, their rules and routes, the part "nets"; the NAT through which the
 # networks go out, and the protection that keeps the internet's new
-# connections from them, is onu-fw's table of nf_tables (lans_fw()).
+# connections from them, is onu-fw's table of nf_tables (lans_fw()). When no
+# session hands an address down, the first network's session is the stick's
+# own default route too (main_route()).
 #
 # ONU_ROOT names another root for the files it reads and writes, which the
 # tests use.
@@ -346,6 +348,22 @@ main_pd() {
 			return 0
 		fi
 	done
+}
+
+# The session the stick's own IPv4 default route goes by: main_pass(), and
+# when no session hands an address down, the first a local network goes out
+# by. The stick reaches out by it, and the switch's engine, which routes by
+# the main table alone, finds a way out there for the networks' translated
+# frames, each of which leaves by the session its flow was translated for.
+main_route() {
+	mr=$(main_pass)
+	if [ -z "$mr" ]; then
+		for ml in $(lans); do
+			mr=$(lan_session "$ml")
+			break
+		done
+	fi
+	echo "$mr"
 }
 
 # The routing table of session $1, for what comes from the address or the
@@ -909,6 +927,8 @@ session_makings() {
 	if hands "$1" ipv4; then
 		mk_role=routed
 		[ "$1" = "$(main_pass)" ] && mk_role=pass
+	elif [ "$(family "$1")" != ipv6 ] && [ "$1" = "$(main_route)" ]; then
+		mk_role=route
 	fi
 	if hands "$1" ipv6; then
 		mk_role6=pd
@@ -982,6 +1002,8 @@ session_up() {
 		else
 			role=routed
 		fi
+	elif [ "$fam" != ipv6 ] && [ "$n" = "$(main_route)" ]; then
+		route=1
 	fi
 	role6=none
 	hands "$n" ipv6 && role6=pd
