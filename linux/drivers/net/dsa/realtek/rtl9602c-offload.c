@@ -5875,15 +5875,38 @@ static int rtl9602c_l34_wan_alloc(struct rtl9602c_priv *p)
 }
 
 /*
+ * The largest packet a flow's session carries: its PPP device's MTU, which
+ * LCP agreed, the device being the one that holds the external address
+ * @addr; without such a device, that of the device the session runs over less
+ * the PPPoE header and the PPP protocol field, 8 octets, at most 1492 over a
+ * 1500-octet payload (RFC 2516, section 7). A larger packet goes to the CPU.
+ */
+static unsigned int rtl9602c_l34_ppp_mtu(__be32 addr,
+					 const struct net_device *lower)
+{
+	unsigned int mtu = lower->mtu > PPPOE_SES_HLEN ?
+			   lower->mtu - PPPOE_SES_HLEN : lower->mtu;
+	struct net_device *dev = ip_dev_find(&init_net, addr);
+
+	if (dev) {
+		if (dev->type == ARPHRD_PPP)
+			mtu = min(mtu, dev->mtu);
+		dev_put(dev);
+	}
+	return mtu;
+}
+
+/*
  * The WAN for a flow's session. A WAN already on @extip is kept when session,
- * port, VLAN and concentrator agree, and rewritten in place when they do not.
- * Its rows: the session; an address-table entry for the concentrator's MAC on
- * the egress port, in the session's VLAN or under VID 0 outside one, since PPP
- * has no neighbour to put one there; the L3-interface row, with the egress
+ * port, VLAN, MTU and concentrator agree, and rewritten in place when they do
+ * not. Its rows: the session; an address-table entry for the concentrator's MAC
+ * on the egress port, in the session's VLAN or under VID 0 outside one, since
+ * PPP has no neighbour to put one there; the L3-interface row, with the egress
  * port's MAC and that VLAN, as the WAN of a default route has it
- * (rtl9602c_l34_wan_sync()); the next hop, encapsulating, naming that row, the
- * session and the entry; and the external address, pointed at the next hop. A
- * failure undoes all of it. Returns w, or a negative error code.
+ * (rtl9602c_l34_wan_sync()), and the session's MTU; the next hop,
+ * encapsulating, naming that row, the session and the entry; and the external
+ * address, pointed at the next hop. A failure undoes all of it. Returns w, or a
+ * negative error code.
  */
 static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 				const struct rtl9602c_flow_pppoe *ppp,
@@ -5900,6 +5923,7 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 	port = rtl9602c_l34_port_of(p, ppp->dev);
 	if (port < 0)
 		return -ENODEV;
+	mtu = rtl9602c_l34_ppp_mtu(addr, ppp->dev);
 
 	for (w = 1; w < (int)ARRAY_SIZE(p->l34_pppoe); w++)
 		if (p->l34_pppoe[w].extip == addr)
@@ -5907,7 +5931,7 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 	if (w < (int)ARRAY_SIZE(p->l34_pppoe)) {
 		r = &p->l34_pppoe[w];
 		if (r->sid == ppp->sid && r->port == port && r->vid == ppp->vid &&
-		    ether_addr_equal(r->dmac, ppp->dmac))
+		    r->mtu == mtu && ether_addr_equal(r->dmac, ppp->dmac))
 			return w;
 
 		took_extip = r->took_extip;
@@ -5927,12 +5951,6 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 		goto fail;
 	rtl9602c_l34_nh_l2_set(p, w, ppp->dmac, vid);
 
-	/*
-	 * The PPPoE header and the PPP protocol field take 8 octets: at most
-	 * 1492 over a 1500-octet payload (RFC 2516, section 7).
-	 */
-	mtu = ppp->dev->mtu > PPPOE_SES_HLEN ? ppp->dev->mtu - PPPOE_SES_HLEN
-					     : ppp->dev->mtu;
 	err = rtl9602c_l34_netif_set(p, w, ppp->smac, vid, addr, mtu);
 	if (err)
 		goto fail;
@@ -5958,6 +5976,7 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 	r->extidx = extidx;
 	r->took_extip = took_extip;
 	r->vid = ppp->vid;
+	r->mtu = mtu;
 	ether_addr_copy(r->dmac, ppp->dmac);
 
 	pr_debug("<flow> PPPoE WAN %d: session %d to %pM on port %d vlan %u, l3if/nexthop/pppoe[%d], extaddr[%d] nexthop %d, %pI4 mtu %u, L2 slot %u\n",

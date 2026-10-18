@@ -2608,11 +2608,16 @@ it.
        ``0x00023167``, external address third word ``0x00000019``.
      - T
      - A PPPoE test; the ``l3nat`` rows of the WAN.
-   * - The row MTU is the egress device's MTU less 8: the PPPoE header is 6
-       octets and the PPP protocol field 2, so the MRU over a 1500-octet
-       Ethernet payload is at most 1492.
-     - P
-     - RFC 2516 clause 4 (packet format) and clause 7 (MRU at most 1492).
+   * - The row MTU is the session's: the MTU of its PPP device, the one that
+       holds the external address, which LCP agreed. Without that device it is
+       the egress device's MTU less 8: the PPPoE header is 6 octets and the PPP
+       protocol field 2, so the MRU over a 1500-octet Ethernet payload is at
+       most 1492. A GEM interface has room for PPPoE's headers (MTU 1508), so
+       the egress device alone would give 1500 where the session took 1492.
+     - M
+     - RFC 2516 clause 4 (packet format) and clause 7 (MRU at most 1492); a
+       throughput test over a session of MTU 1492 on a GEM interface of MTU
+       1508, the WAN logged with ``mtu 1492`` where it had been 1500.
    * - The encapsulated frames are whole: of 300 frames 300 left the board, 296
        carried by the engine and 4 by the CPU, and all 300 UDP checksums
        verified at the concentrator.
@@ -2641,18 +2646,17 @@ it.
 ``rtl9602c_l34_wan_get()``, for a flow that leaves over PPPoE, in order:
 
 1. Find the WAN that already has the flow's external address. If its session,
-   port, VLAN and concentrator agree, use it as it is. If they differ, write
-   its rows again in place (steps 2 to 6). If there is none, take a free index
-   w, recycling a WAN that has no flows when none is free, and write its rows
-   (steps 2 to 6). Purpose: one index w ties the rows together. (T)
+   port, VLAN, MTU and concentrator agree, use it as it is. If they differ,
+   write its rows again in place (steps 2 to 6). If there is none, take a free
+   index w, recycling a WAN that has no flows when none is free, and write its
+   rows (steps 2 to 6). Purpose: one index w ties the rows together. (T)
 2. Write PPPoE row w: the session. (T)
 3. Place an address-table entry for the concentrator's MAC on the egress port,
    in the session's VLAN or under VID 0 outside one, with
    ``RTL9602C_FDB_W2_NEXTHOP`` set. Purpose: PPP has no ARP neighbour that
    would put it there. (M)
 4. Write L3-interface row w: the egress MAC (from the source-MAC mangle), the
-   session's VLAN or VID 0, the PPP address, and the egress device's MTU less
-   8. (M)
+   session's VLAN or VID 0, the PPP address, and the session's MTU. (M)
 5. Write next-hop row w: PPPoE, interface w, session row w and the address-table
    slot. (T)
 6. Point the external-address row of the WAN at next hop w. (T)
