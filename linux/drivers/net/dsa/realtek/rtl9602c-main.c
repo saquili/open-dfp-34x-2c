@@ -1644,6 +1644,29 @@ static int rtl9602c_setup(struct dsa_switch *ds)
 		     RTL9602C_PORT_PAGE_LIMIT_SHIFT(RTL9602C_PORT_CPU));
 
 	/*
+	 * That limit holds back only what comes from a port without flow
+	 * control. Frames for the CPU from the SFP port, which sends pause,
+	 * stay in the buffer while the switch pauses the host, which may
+	 * ignore it: a burst of fragments for the CPU to put together took
+	 * 1003 of the buffer's pages, and the frames the CPU sent meanwhile,
+	 * which nothing pauses, were dropped where they entered, half of a
+	 * forwarded stream (measured). So the CPU port's queues drop what
+	 * comes for them beyond RTL9602C_CPU_QUEUE_PAGES each, whoever sends
+	 * it, which keeps them with a queue of the PON port below the global
+	 * pause mark and leaves the CPU's own frames their room. The
+	 * thresholds go by queue number for every port that drops by queue,
+	 * which no other port does.
+	 */
+	for (i = 0; i < RTL9602C_QUEUES; i++)
+		rtl9602c_rmw(p, RTL9602C_QUEUE_DROP_TH(i),
+			     RTL9602C_QUEUE_DROP_TH_MAX <<
+			     RTL9602C_QUEUE_DROP_TH_SHIFT(i),
+			     RTL9602C_CPU_QUEUE_PAGES <<
+			     RTL9602C_QUEUE_DROP_TH_SHIFT(i));
+	rtl9602c_rmw(p, RTL9602C_PORT_QUEUE_FC(RTL9602C_PORT_CPU),
+		     GENMASK(RTL9602C_QUEUES - 1, 0), 0);
+
+	/*
 	 * A flood to the CPU is held at the switch, at a rate that leaves the
 	 * CPU most of its time (see rtl9602c_cpu_rate_set()).
 	 */

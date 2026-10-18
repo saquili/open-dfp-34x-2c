@@ -780,6 +780,20 @@ struct rtl9602c_field {
 #define RTL9602C_CPU_PAGE_LIMIT			128
 
 /*
+ * Per queue number, three to a word, the buffer pages a queue may hold on a
+ * port that drops by queue, 60 after reset; and per port, a bit per queue,
+ * set while the queue is held back by flow control instead of dropping by
+ * queue, every bit of every port after reset.
+ */
+#define RTL9602C_QUEUE_DROP_TH(q)		(0x02d00c + 4 * ((q) / 3))
+#define RTL9602C_QUEUE_DROP_TH_SHIFT(q)		(10 * ((q) % 3))
+#define RTL9602C_QUEUE_DROP_TH_MAX		GENMASK(9, 0)
+#define RTL9602C_PORT_QUEUE_FC(port)		(0x01c0a0 + 4 * (port))
+
+/* The pages each of the CPU port's queues may hold (rtl9602c_setup()). */
+#define RTL9602C_CPU_QUEUE_PAGES		768
+
+/*
  * The egress scheduler and shaper: strict queues first, the highest first,
  * then weighted ones by weight. Queue 0's weight is 16 bits, two ports to a
  * word; those of queues 1 to 7 are 10 bits, three to a word, three words a

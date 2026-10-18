@@ -2624,11 +2624,47 @@ the queue that a frame took is seen.
      - M
      - Read 1012 for ports 0 to 3 after reset; the CPU port at 64 and 128 and
        the flood of "The limit on frames to the CPU".
+   * - ``RTL9602C_QUEUE_DROP_TH`` (``0x02d00c`` to ``0x02d014``), ten bits a
+       queue number, three to a word: the pages a queue may hold on a port
+       that drops by queue, 60 for every queue number after reset.
+       ``RTL9602C_PORT_QUEUE_FC`` (``0x01c0a0`` + 4p), a bit per queue of port
+       p: set, the queue is held back by flow control; clear, it drops what
+       comes for it beyond its threshold, whichever port the frame comes
+       from. Every bit of every port is set after reset.
+     - M
+     - Read 60 and ``0xff`` for ports 0 to 3 after a chip reset; with port 3's
+       bits clear and the thresholds at 512, 768 and 896, the excess of a
+       burst for the CPU was counted in the SFP port's
+       ``rx_forward_discards``, the SFP port sent no pause, and the CPU port's
+       discards stayed where they were.
+   * - The CPU port's page limit holds back only frames from a port without
+       flow control. Frames for the CPU from the SFP port, which sends pause,
+       stay in the buffer while the switch pauses the host; a host that
+       ignores pause then fills the buffer with them, and frames that the CPU
+       sends, which nothing pauses, are dropped where they enter, counted in
+       the CPU port's ``rx_forward_discards`` and ``rx_drops``. The driver
+       therefore has the CPU port's queues drop by queue, at 768 pages each
+       (``RTL9602C_CPU_QUEUE_PAGES``).
+     - M
+     - A host behind a network on the SFP side sent 1500-byte UDP datagrams
+       as two fragments each, in bursts of 250 datagrams every 100 ms (30
+       Mbit/s), for the CPU to put together, translate and send up a PPPoE
+       session. With every queue held by flow control: the CPU port's queue 0
+       at 1003 pages, 16,224 pause frames sent to a host that ignored them,
+       24,962 frames sent by the CPU and 12,536 leaving by the PON port, the
+       12,426 missing counted as 8,881 ``rx_forward_discards`` and 3,550
+       ``rx_drops`` of the CPU port; 3,788 whole datagrams reached the far
+       end. With the CPU port dropping by queue: no frame the CPU sent was
+       lost, the bursts' excess was dropped as it entered, and 2,802, 3,684
+       and 4,092 whole datagrams reached the far end at 512, 768 and 896
+       pages. 768 keeps a CPU queue and an ordinary PON queue together below
+       the global pause mark.
    * - ``qdepth`` (debugfs, mode 0600): reading prints port, queue, current and
-       peak pages for all 32 queues, then each port's page limit; writing
-       ``clear`` sets ``RTL9602C_BUF_PEAK_CLR_PORT``, waits 1 to 2 ms and
-       clears it again, which clears the per-port marks only and changes
-       nothing the view shows.
+       peak pages for all 32 queues, then each port's page limit, each queue
+       number's drop threshold and each port's bits of queues held by flow
+       control; writing ``clear`` sets ``RTL9602C_BUF_PEAK_CLR_PORT``, waits 1
+       to 2 ms and clears it again, which clears the per-port marks only and
+       changes nothing the view shows.
      - M
      - ``cat`` and ``echo clear >`` on ``/sys/kernel/debug/rtl9602c/qdepth``.
 

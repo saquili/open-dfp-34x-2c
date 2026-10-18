@@ -3745,9 +3745,11 @@ void rtl9602c_nat_clear(struct rtl9602c_priv *p)
 
 /*
  * qdepth: for each port and queue, the buffer pages it holds now and the most
- * it has held, then each port's page limit. Writing "clear" pulses the clear
- * of the per-port high-water marks, which leaves these per-queue ones as they
- * are: nothing but a full chip reset is known to clear them.
+ * it has held, then each port's page limit, each queue number's drop
+ * threshold and each port's queues held back by flow control. Writing "clear"
+ * pulses the clear of the per-port high-water marks, which leaves these
+ * per-queue ones as they are: nothing but a full chip reset is known to clear
+ * them.
  */
 static int rtl9602c_qdepth_show(struct seq_file *s, void *unused)
 {
@@ -3769,6 +3771,16 @@ static int rtl9602c_qdepth_show(struct seq_file *s, void *unused)
 			   (rtl9602c_r(p, RTL9602C_PORT_PAGE_LIMIT(port)) >>
 			    RTL9602C_PORT_PAGE_LIMIT_SHIFT(port)) &
 			   RTL9602C_PORT_PAGE_LIMIT_MAX);
+	seq_puts(s, "queue drop thresholds");
+	for (q = 0; q < RTL9602C_QUEUES; q++)
+		seq_printf(s, " %lu",
+			   (rtl9602c_r(p, RTL9602C_QUEUE_DROP_TH(q)) >>
+			    RTL9602C_QUEUE_DROP_TH_SHIFT(q)) &
+			   RTL9602C_QUEUE_DROP_TH_MAX);
+	seq_putc(s, '\n');
+	for (port = 0; port < RTL9602C_NUM_PORTS; port++)
+		seq_printf(s, "port %u queues held by flow control %08x\n", port,
+			   rtl9602c_r(p, RTL9602C_PORT_QUEUE_FC(port)));
 	return 0;
 }
 
