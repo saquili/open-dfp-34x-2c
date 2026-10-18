@@ -2093,6 +2093,31 @@ static void test_ipoe(void)
 				"\"ipv6\":null,\"prefix\":null,\"lease\":null}]"),
 	      "a static connection is taken, its name servers one blank apart, and served as the panel reads it");
 	check(!strstr(s, "\"IPOE1_KIND\""), "and not again among the other settings");
+
+	/* What onu-apply brought up for it, as it says in its state. */
+	mkdir(prov_path("/run/ipoe", file, sizeof(file)), 0755);
+	mkdir(prov_path("/run/ipoe/1", file, sizeof(file)), 0755);
+	put("/run/ipoe/1/dev", "wan420\n", 0644);
+	put("/run/ipoe/1/gem", "gem256\n", 0644);
+	put("/run/ipoe/1/ipv4", "192.0.2.10/24\n", 0644);
+	put("/run/ipoe/1/router", "192.0.2.1\n", 0644);
+	put("/run/ipoe/1/dns", "198.51.100.53 198.51.100.54\n", 0644);
+	put("/run/ipoe/1/until", "999999999\n", 0644);
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(strstr(s, "\"dev\":\"wan420\",\"gem_dev\":\"gem256\",\"up\":true,"
+			"\"ipv4\":\"192.0.2.10/24\",\"router\":\"192.0.2.1\","
+			"\"dns_now\":\"198.51.100.53 198.51.100.54\",\"ipv6\":null,"
+			"\"prefix\":null,\"lease\":") &&
+		      !strstr(s, "\"lease\":null"),
+	      "with what onu-apply brought up for it: the address in effect, and the lease's time");
+	for (const char *const *f = (const char *const[]){ "dev", "gem", "ipv4", "router", "dns",
+							     "until", NULL };
+	     *f; f++) {
+		char path[48];
+
+		snprintf(path, sizeof(path), "/run/ipoe/1/%s", *f);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
 	check(prov_ipoe_set("KIND=dhcp\nVLAN=420\n", err, sizeof(err)) == -EINVAL &&
 		      strstr(err, "connections 1 and 2 are in one VLAN"),
 	      "a second connection in its VLAN is refused, as onu-config judges it");
