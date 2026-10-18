@@ -258,7 +258,10 @@ export interface LanInfo {
   ipv6_subnet?: string;
 }
 
-/** A device behind the stick that has an address from its DHCP server. */
+/**
+ * A device behind the stick that has an address from its DHCP server: the
+ * value leases is a list of them, of every network.
+ */
 export interface LeaseInfo {
   /** The network it is in. */
   lan: number;
@@ -358,9 +361,12 @@ export interface Settings {
   sessions: SessionInfo[];
   /** The connections that take their address as a router does; absent on a stick of before. */
   ipoe?: IpoeInfo[];
-  /** The networks behind the stick, and the devices in them; absent on a stick of before. */
+  /**
+   * The networks behind the stick, and their devices' fixed addresses; absent
+   * on a stick of before. The devices with an address are a value of their
+   * own, leases (LeaseInfo), which the settings do not carry.
+   */
   lans?: LanInfo[];
-  leases?: LeaseInfo[];
   fixed?: FixedInfo[];
   forwards?: ForwardInfo[];
   dmz?: DmzInfo[];

@@ -24,12 +24,15 @@
  * trial, and goes back unless it is confirmed (ADR 0014, changes.c). Until
  * onu-apply ends, a write is refused.
  *
- * The local networks the stick routes, LANn_*, the fixed addresses of their
- * devices, FIXEDn, and the devices that have an address from a network's
- * DHCP server are read apart from the other settings, as the panel shows
- * them; the devices from udhcpd's lease file of each network,
- * /run/udhcpd-netN.leases, which onu-apply names so. The panel's writes of
- * a network and of a fixed address become the keys of the store here.
+ * The local networks the stick routes, LANn_*, and the fixed addresses of
+ * their devices, FIXEDn, are read apart from the other settings, as the
+ * panel shows them. The devices that have an address from a network's DHCP
+ * server are a value of their own, leases, from udhcpd's lease file of each
+ * network, /run/udhcpd-netN.leases, which onu-apply names so: the panel
+ * reads them where it shows them, less often than the settings, which it
+ * polls every few seconds: 512 devices of each of eight networks come to
+ * 836 KiB, the largest settings without them to 81 KiB. The panel's writes
+ * of a network and of a fixed address become the keys of the store here.
  *
  * So are the connections that take their address as a router does, IPOEn_*
  * (IPoE: an address typed in, or one from the operator's DHCP server), each
@@ -647,13 +650,21 @@ static void pv_leases_of(struct prov_buf *out, int n, time_t now, bool *first)
 	}
 }
 
-/* The devices that have an address from a network's DHCP server. */
-static void pv_leases(struct prov_buf *out, const char *text)
+/*
+ * The devices that have an address from the DHCP server of a network set up
+ * in the settings in force, the value leases: those of a network removed
+ * are no longer its, though udhcpd's file may outlast it.
+ */
+int prov_leases(struct prov_buf *out)
 {
+	static char text[TEXT_MAX];
 	char k[32], v[VALUE_MAX];
 	time_t now = time(NULL);
 	bool first = true;
+	int rc = settings_current(text, sizeof(text));
 
+	if (rc)
+		return rc;
 	pv_open(out, '[');
 	for (int n = 1; n <= LANS; n++) {
 		snprintf(k, sizeof(k), "LAN%d_CONN", n);
@@ -661,6 +672,7 @@ static void pv_leases(struct prov_buf *out, const char *text)
 			pv_leases_of(out, n, now, &first);
 	}
 	pv_close(out, ']');
+	return 0;
 }
 
 /**
@@ -912,9 +924,6 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "fixed");
 	pv_fixed_addrs(out, text);
-	pv_comma(out);
-	pv_key(out, "leases");
-	pv_leases(out, text);
 	pv_comma(out);
 	pv_key(out, "forwards");
 	pv_forwards(out, text);

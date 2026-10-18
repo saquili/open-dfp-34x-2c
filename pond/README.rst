@@ -180,7 +180,8 @@ A value is written straight into the send buffer of the connection that asked
 for it, which grows with the reply and goes back once the reply has gone: the
 daemon keeps no buffer of its own for values, and a large one costs memory
 only while it is sent. A value is at most 1.25 MiB of JSON, which the largest
-settings fit with room to spare (``src/value.h``); one that would be larger is
+settings and the most leases fit with room to spare (``src/value.h``); one
+that would be larger is
 not served cut short, but answered with an error that says so (500, and in
 ``/api/getm`` an object ``{"error": "too large", "detail"}`` in its place), and
 the daemon's log says so too.
@@ -230,8 +231,9 @@ wrong sign-in, 429 while sign-ins are stopped.
   ``/run`` for it.
   The parts of the settings that come with a stick that does the routing
   (``ipoe``, the connections with a fixed address or from DHCP; ``lans``, the
-  networks behind the stick with their devices; ``forwards``, ``dmz``, the
-  NAT; ``rules`` and ``fw``, the firewall) are in the reply only from
+  networks behind the stick, and ``fixed``, their devices' fixed addresses;
+  ``forwards``, ``dmz``, the NAT; ``rules`` and ``fw``, the firewall) are in
+  the reply only from
   software that has them. Without them the panel says "Not on the stick yet"
   on those pages and saves nothing there.
 * ``changes``: ``CONFIRM=1`` keeps every change on trial (``onu-change``),
@@ -269,7 +271,15 @@ wrong sign-in, 429 while sign-ins are stopped.
   ``POOL_FROM``, ``POOL_TO``, ``LEASE``, ``IPV6`` and ``IPV6_SUBNET``; and
   ``fixed``, a device's fixed address in one, ``LAN``, ``MAC``, ``IP`` (empty
   removes it, with the forwards to the device and the DMZ that is the device,
-  which go to that address) and ``NAME``.
+  which go to that address) and ``NAME``. The devices that have an address
+  from a network's DHCP server are not among the settings but a value of
+  their own, ``leases``, read only: each with its network, MAC, address, the
+  name it gave and the seconds its lease has left, of udhcpd's lease file of
+  each network set up. The panel polls the settings every 5 s, and reads
+  the leases only on the pages that show them, when such a page opens and
+  every 30 s while it is open: 512 devices in each of eight networks, each
+  with a name that needs escaping, come to 836 KiB of JSON, beside 81 KiB of
+  the largest settings.
 * ``forward``: a port, or a range of ports, forwarded from the internet to a
   device of a local network: ``ID`` (none for the first free one, of 96),
   ``CONN``, the connection it comes in by (empty removes it), ``NAME``,

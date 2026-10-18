@@ -15,6 +15,7 @@ import type {
   Clock,
   Firmware,
   Identity,
+  LeaseInfo,
   Mgmt,
   Network,
   OmciValue,
@@ -66,6 +67,37 @@ export function useOmci() {
   return useQuery(omciQuery);
 }
 
+/*
+ * The devices with an address from the stick's DHCP servers: thousands of
+ * them in a big house, which change as leases end, an hour or a day apart.
+ * Only the pages that show them read them: when such a page opens, unless
+ * a read of the last 10 s is there, and every 30 s while it is open; the
+ * settings, which the panel polls every 5 s, do not carry them.
+ */
+export const LEASES_POLL_MS = 30_000;
+
+export const leasesQuery = queryOptions({
+  queryKey: ["leases"],
+  queryFn: async () => (await request<Value<LeaseInfo[]>>("/api/get/leases")).value,
+  staleTime: 10_000,
+  refetchInterval: LEASES_POLL_MS,
+  retry: false,
+});
+
+/** The leases, read where they are shown. */
+export function useLeases() {
+  return useQuery(leasesQuery);
+}
+
+/**
+ * The leases as the last read left them, without a read of its own: for
+ * what counts them beside every page, the menu; undefined before a page
+ * that shows them was opened.
+ */
+export function useLeasesRead() {
+  return useQuery({ ...leasesQuery, enabled: false });
+}
+
 export function useBanks() {
   return useQuery(banksQuery);
 }
@@ -94,11 +126,13 @@ function useChange(id: string, refresh: string[][]) {
   });
 }
 
-export const useSessionChange = () => useChange("session", [["live"]]);
+/* A session, a connection or a network removed takes its networks' devices with it. */
+export const useSessionChange = () => useChange("session", [["live"], ["leases"]]);
 /** CONFIRM=1 keeps the changes on trial, REVERT=1 takes them all back. */
-export const useChanges = () => useChange("changes", [["live"], ["sfp_lane"], ["mgmt"]]);
-export const useIpoeChange = () => useChange("ipoe", [["live"]]);
-export const useLanChange = () => useChange("lan", [["live"]]);
+export const useChanges = () =>
+  useChange("changes", [["live"], ["sfp_lane"], ["mgmt"], ["leases"]]);
+export const useIpoeChange = () => useChange("ipoe", [["live"], ["leases"]]);
+export const useLanChange = () => useChange("lan", [["live"], ["leases"]]);
 export const useFixedChange = () => useChange("fixed", [["live"]]);
 export const useForwardChange = () => useChange("forward", [["live"]]);
 export const useDmzChange = () => useChange("dmz", [["live"]]);

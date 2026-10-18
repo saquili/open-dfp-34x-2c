@@ -2162,7 +2162,7 @@ static void lease_at(unsigned char *b, uint32_t left, const char *ip4, unsigned 
 
 static void test_lans(void)
 {
-	static char buf[16384];
+	static char buf[16384], lbuf[4096];
 	unsigned char leases[8 + 2 * 36];
 	char file[512], err[256], stub[512];
 	uint64_t written = (uint64_t)time(NULL) - 10;
@@ -2185,9 +2185,11 @@ static void test_lans(void)
 	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
 			      err, sizeof(err));
 	s = settled(buf, sizeof(buf));
-	check(rc == 0 && strstr(s, "\"lans\":[]") && strstr(s, "\"fixed\":[]") &&
-		      strstr(s, "\"leases\":[]"),
+	check(rc == 0 && strstr(s, "\"lans\":[]") && strstr(s, "\"fixed\":[]"),
 	      "a stick without networks serves them as empty lists: the panel's pages are there");
+	check(!strstr(s, "\"leases\""), "and no leases among the settings, which the panel polls");
+	s = render(prov_leases, lbuf, sizeof(lbuf), &rc);
+	check(rc == 0 && !strcmp(s, "[]"), "the leases are a value of their own, an empty list");
 
 	check(prov_lan_set("VLAN=100\n", err, sizeof(err)) == -EINVAL && strstr(err, "needs CONN"),
 	      "a new network needs a connection");
@@ -2236,17 +2238,25 @@ static void test_lans(void)
 		fwrite(leases, 1, sizeof(leases), f);
 		fclose(f);
 	}
-	s = render(prov_settings, buf, sizeof(buf), &rc);
-	check(strstr(s, "\"leases\":[{\"lan\":1,\"mac\":\"00:00:5e:00:53:a3\",\"ip\":\"192.168.1.100\","
-			"\"name\":\"laptop\",\"left_s\":35") &&
+	s = render(prov_leases, lbuf, sizeof(lbuf), &rc);
+	check(rc == 0 && s[0] == '[' &&
+		      strstr(s, "{\"lan\":1,\"mac\":\"00:00:5e:00:53:a3\",\"ip\":\"192.168.1.100\","
+				"\"name\":\"laptop\",\"left_s\":35") &&
 		      !strstr(s, "192.168.1.101"),
 	      "a device with a lease is served with the time it has left, and an expired one not");
+	s = render(prov_settings, buf, sizeof(buf), &rc);
+	check(rc == 0 && !strstr(s, "laptop") && !strstr(s, "\"leases\""),
+	      "and not among the settings");
 
 	rc = prov_lan_set("ID=1\nCONN=\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	check(rc == 0 && !file_has("/run/onu.conf", "LAN1_") && !file_has("/run/onu.conf", "FIXED") &&
 		      strstr(s, "\"lans\":[]") && strstr(s, "\"fixed\":[]"),
 	      "a network removed takes its fixed addresses with it");
+	s = render(prov_leases, lbuf, sizeof(lbuf), &rc);
+	check(rc == 0 && !strcmp(s, "[]"),
+	      "and its devices are no longer served, though udhcpd's file is still there");
+	unlink(prov_path("/run/udhcpd-net1.leases", file, sizeof(file)));
 	rc = prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
 	s = settled(buf, sizeof(buf));
 	(void)s;
@@ -2875,8 +2885,9 @@ static void test_clock(void)
  * through the providers, and judged by onu-config: seven sessions, eight
  * networks, 512 fixed addresses, each name of 32 characters, the most that
  * need escaping that the store holds, and 512 devices with a lease in each
- * network, each name of 20 bytes that need \u00XX. They are served whole:
- * alone, as a reply, and among other values as the panel polls them.
+ * network, each name of 20 bytes that need \u00XX, a value of their own.
+ * They are served whole: alone, as a reply, and the settings among other
+ * values as the panel polls them.
  */
 static void test_largest_settings(void)
 {
@@ -2887,7 +2898,7 @@ static void test_largest_settings(void)
 	uint64_t written = (uint64_t)time(NULL);
 	struct mg_connection *c = conn_new();
 	struct prov_buf b;
-	size_t len = 0, whole;
+	size_t len = 0, whole, leased;
 	char *body = NULL;
 	int grows = 0, rc = 0, status;
 	FILE *f;
@@ -2977,13 +2988,23 @@ static void test_largest_settings(void)
 	printf("  the largest settings come to %zu bytes of JSON\n", whole);
 	check(rc == 0 && !b.overflow && well_formed(b.buf) &&
 		      occurrences(b.buf, "\"mac\":\"02:00:00:00:") == 512 &&
-		      occurrences(b.buf, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512 &&
-		      occurrences(b.buf, "\"left_s\":42949672") == 8 * 512 &&
-		      occurrences(b.buf, "\\u0001") == 8 * 512 * 20 &&
 		      occurrences(b.buf, "\"name\":\"\\\"\\\"") == 512 + 8 &&
 		      occurrences(b.buf, "\"user\":\"") == 7,
-	      "the settings are whole: every fixed address and every device, each name escaped");
-	check(whole > 96 * 1024 && whole <= VALUE_MAX,
+	      "the settings are whole: every fixed address, each name escaped");
+	check(!strstr(b.buf, "\"leases\"") && !strstr(b.buf, "aa:bb:cc:dd:") && whole < 96 * 1024,
+	      "without the devices, which are a value of their own: what the panel polls stays small");
+	free(b.buf);
+
+	b = (struct prov_buf){ .max = VALUE_MAX + 1, .grow = heap_grow, .ctx = &grows };
+	rc = prov_leases(&b);
+	leased = b.len;
+	printf("  the most leases come to %zu bytes of JSON\n", leased);
+	check(rc == 0 && !b.overflow && well_formed(b.buf) && b.buf[0] == '[' &&
+		      occurrences(b.buf, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512 &&
+		      occurrences(b.buf, "\"left_s\":42949672") == 8 * 512 &&
+		      occurrences(b.buf, "\\u0001") == 8 * 512 * 20,
+	      "the leases are whole: every device of every network, each name escaped");
+	check(leased > 96 * 1024 && leased <= VALUE_MAX,
 	      "more than a reply had room for before, within the most a value may be");
 	free(b.buf);
 
@@ -2992,8 +3013,19 @@ static void test_largest_settings(void)
 	check(status == 200 && body && well_formed(body) &&
 		      !strncmp(body, "{\"id\":\"settings\",\"value\":{\"settings\":", 37) &&
 		      strlen(body) >= whole + 26 &&
-		      occurrences(body, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512,
+		      occurrences(body, "\"mac\":\"02:00:00:00:") == 512,
 	      "and as a reply, its length as the headers say");
+	free(body);
+	c->send.len = 0;
+	value_sent(c);
+
+	value_get(c, prov_find("leases"), NULL, 0);
+	status = reply_of(c, &body);
+	check(status == 200 && body && well_formed(body) &&
+		      !strncmp(body, "{\"id\":\"leases\",\"value\":[{", 25) &&
+		      strlen(body) >= leased + 24 &&
+		      occurrences(body, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512,
+	      "the leases as a reply of their own");
 	free(body);
 	c->send.len = 0;
 	value_sent(c);
@@ -3002,8 +3034,9 @@ static void test_largest_settings(void)
 	status = reply_of(c, &body);
 	check(status == 200 && body && well_formed(body) && strstr(body, "\"uptime\":{") &&
 		      strstr(body, "\"memory\":{") &&
-		      occurrences(body, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512,
-	      "and among the values the panel polls together");
+		      occurrences(body, "\"mac\":\"02:00:00:00:") == 512 &&
+		      !strstr(body, "aa:bb:cc:dd:"),
+	      "and the settings among the values the panel polls together, without the devices");
 	free(body);
 	conn_free(c);
 

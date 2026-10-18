@@ -26,9 +26,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Pin, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type UseFormRegisterReturn, useForm } from "react-hook-form";
-import { useFixedChange, useLanChange } from "../api/config";
+import { useFixedChange, useLanChange, useLeases, useLeasesRead } from "../api/config";
 import { useLive } from "../api/live";
-import type { FixedInfo } from "../api/types";
+import type { FixedInfo, LeaseInfo, Live } from "../api/types";
 import { Acts, AT, CARD, Cell, HEAD, ROWS } from "../components/CardTable";
 import { Field, SaveState, useChangeState } from "../components/Field";
 import { Filter } from "../components/Pager";
@@ -609,13 +609,15 @@ export interface Device {
   v6: string[];
 }
 
-/** The devices of the networks @ids: those on now, and those with a fixed address that are off. */
-export function useDevices(ids: number[]): Device[] {
-  const { data: live } = useLive();
+/**
+ * The devices of the networks @ids: those on now, of the leases @list, and
+ * those with a fixed address that are off.
+ */
+function devicesOf(live: Live | undefined, list: LeaseInfo[] | undefined, ids: number[]) {
   const pins = fixed(live).filter((f) => ids.includes(f.lan));
-  const on = leases(live).filter((l) => ids.includes(l.lan));
+  const on = leases(list).filter((l) => ids.includes(l.lan));
   const pinOf = (lan: number, m: string) => pins.find((f) => f.lan === lan && f.mac === m);
-  const list: Device[] = [
+  const all: Device[] = [
     ...on.map((l) => {
       const f = pinOf(l.lan, l.mac);
       return {
@@ -643,7 +645,12 @@ export function useDevices(ids: number[]): Device[] {
       })),
   ];
   const at = (d: Device) => ip4(d.fixed?.ip ?? d.now ?? "") ?? 0;
-  return list.sort((x, y) => at(x) - at(y));
+  return all.sort((x, y) => at(x) - at(y));
+}
+
+/** The devices of the networks @ids, on a page that shows them: it reads the leases. */
+export function useDevices(ids: number[]): Device[] {
+  return devicesOf(useLive().data, useLeases().data, ids);
 }
 
 /**
@@ -833,7 +840,7 @@ function FixedForm({
   const d = target.d;
   const editing = !!d?.fixed;
   const pins = fixed(live);
-  const on = leases(live);
+  const on = leases(useLeases().data);
   const full = !editing && pins.length >= MAX_FIXED;
   /* A new fixed address goes in a network whose DHCP server gives addresses. */
   const choices = d ? nets.filter((p) => p.lan.id === d.lan) : nets.filter((p) => p.lan.dhcp);
@@ -1033,7 +1040,7 @@ function NetCard({
   const change = useLanChange();
   const state = useChangeState(change);
   const x = p.lan;
-  const list = leases(useLive().data).filter((l) => l.lan === x.id);
+  const list = leases(useLeases().data).filter((l) => l.lan === x.id);
   const net = net4(x.address);
   const remove = () => {
     if (!window.confirm(t("lan.removeConfirm", { name: netName(t, x, [p]) }))) return;
@@ -1132,7 +1139,9 @@ function Places({
   onAdd: (() => void) | undefined;
 }) {
   const { t } = useI18n();
-  const devices = leases(useLive().data).filter((l) => nets.some((p) => p.lan.id === l.lan)).length;
+  const devices = leases(useLeases().data).filter((l) =>
+    nets.some((p) => p.lan.id === l.lan),
+  ).length;
   return (
     <section aria-labelledby="lans" className="@container flex flex-col xl:h-full xl:min-h-0">
       <div className="mt-px flex min-h-14 shrink-0 items-center gap-3 pt-4 pb-2">
@@ -1328,11 +1337,18 @@ export function useNets() {
   return { all, routers, nets };
 }
 
-/** How many networks there are, and how many devices in them, for the menu that shows them. */
+/**
+ * How many networks there are, and how many devices in them, for the menu
+ * that shows them beside every page: the devices as the last read of the
+ * leases left them, which only the pages that show them read; null before
+ * one was opened.
+ */
 export function useLanCounts() {
+  const { data: live } = useLive();
+  const { data: list } = useLeasesRead();
   const { nets } = useNets();
   const ids = nets.map((p) => p.lan.id);
-  return { nets: ids.length, devices: useDevices(ids).length };
+  return { nets: ids.length, devices: list ? devicesOf(live, list, ids).length : null };
 }
 
 /**

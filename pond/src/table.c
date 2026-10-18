@@ -47,6 +47,9 @@ const struct prov pond_provs[] = {
 	{ "fixed", "Mode",
 	  "A device's fixed address in a local network: add, change or remove",
 	  NULL, prov_fixed_write, 0 },
+	{ "leases", "Mode",
+	  "The devices that have an address from a local network's DHCP server, "
+	  "with the time each has left", prov_leases, NULL, PROV_VOLATILE },
 	{ "forward", "Mode",
 	  "A port forwarded from the internet to a device of a local network: "
 	  "add, change or remove", NULL, prov_forward_write, 0 },

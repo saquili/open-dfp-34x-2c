@@ -6,7 +6,7 @@
  * of the link to the host. Pages show these; they never read raw keys.
  */
 
-import type { Family, GemPort, Live, Port } from "../api/types";
+import type { Family, GemPort, LeaseInfo, Live, Port } from "../api/types";
 import type { Lang } from "../i18n";
 import { dbm } from "./format";
 
@@ -458,9 +458,9 @@ export function lans(live: Live | undefined): LanView[] {
 /* An address as a number, for ordering. */
 const order = (ip: string) => ip.split(".").reduce((a, o) => a * 256 + Number(o), 0);
 
-/** The devices behind the stick with an address from it, by their address. */
-export function leases(live: Live | undefined) {
-  return (live?.settings?.leases ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
+/** The devices behind the stick with an address from it, of the value leases, by their address. */
+export function leases(list: LeaseInfo[] | undefined) {
+  return (list ?? []).slice().sort((a, z) => order(a.ip) - order(z.ip));
 }
 
 /** The ports forwarded from the internet, by their connection and first port. */

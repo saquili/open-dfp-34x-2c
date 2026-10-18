@@ -12,6 +12,7 @@ import type {
   Identity,
   IpoeInfo,
   LaneMode,
+  LeaseInfo,
   Mgmt,
   Session,
   SessionInfo,
@@ -41,6 +42,8 @@ const cpu = structuredClone(
   },
 );
 const settings: Settings = structuredClone(LIVE.settings);
+/* The devices with an address from the networks' DHCP servers: a value of their own, as on the stick. */
+let leases: LeaseInfo[] = [];
 
 /*
  * POND_MOCK_SCENARIO=sessions: the stick's own connections in the shapes
@@ -272,7 +275,7 @@ if (SCENARIO === "sessions") {
    * /64 network 1: one made of their MAC (EUI-64), and most a temporary one
    * besides; Dom's connection has none yet.
    */
-  settings.leases = HOUSE.map((name, i) => {
+  leases = HOUSE.map((name, i) => {
     const lan = i < 38 ? 1 : i < 42 ? 3 : 2;
     const host = 100 + (lan === 1 ? i : lan === 3 ? i - 38 : i - 42) * 2 + (i % 3 === 0 ? 1 : 0);
     const last = (0x10 + i).toString(16).padStart(2, "0");
@@ -497,7 +500,7 @@ let darkChanged = 0;
 function dropLans(conn: string) {
   const gone = (settings.lans ?? []).filter((y) => y.conn === conn).map((y) => y.id);
   settings.lans = (settings.lans ?? []).filter((y) => y.conn !== conn);
-  settings.leases = (settings.leases ?? []).filter((y) => !gone.includes(y.lan));
+  leases = leases.filter((y) => !gone.includes(y.lan));
   settings.fixed = (settings.fixed ?? []).filter((y) => !gone.includes(y.lan));
   settings.forwards = (settings.forwards ?? []).filter((y) => !gone.includes(y.lan));
   settings.dmz = (settings.dmz ?? []).filter((y) => !gone.includes(y.lan));
@@ -513,7 +516,7 @@ function dropRules(id: number) {
 /* A forward's or a DMZ's device keeps its address: the one it has now, fixed, if it has none fixed. */
 function pin(lan: number, mac: string) {
   if ((settings.fixed ?? []).some((y) => y.lan === lan && y.mac === mac)) return;
-  const now = (settings.leases ?? []).find((y) => y.lan === lan && y.mac === mac);
+  const now = leases.find((y) => y.lan === lan && y.mac === mac);
   if (now) settings.fixed = [...(settings.fixed ?? []), { lan, mac, ip: now.ip, name: "" }];
 }
 
@@ -633,6 +636,21 @@ export const handlers = [
   http.get("*/api/getm", async () => {
     await delay(120);
     return away() ?? (signedIn ? HttpResponse.json(live()) : unauthorized());
+  }),
+
+  /*
+   * The devices with a lease, a value apart from the settings, as pond
+   * serves it; a stick whose software has no networks has no such value.
+   */
+  http.get("*/api/get/leases", async () => {
+    await delay(150);
+    if (!signedIn) return away() ?? unauthorized();
+    return (
+      away() ??
+      (settings.lans
+        ? HttpResponse.json({ id: "leases", value: leases })
+        : HttpResponse.json({ error: "no such value" }, { status: 404 }))
+    );
   }),
 
   ...(
@@ -865,7 +883,7 @@ export const handlers = [
     const id = body.ID ? Number(body.ID) : Math.max(0, ...list.map((y) => y.id)) + 1;
     if (body.CONN === "") {
       settings.lans = list.filter((y) => y.id !== id);
-      settings.leases = (settings.leases ?? []).filter((y) => y.lan !== id);
+      leases = leases.filter((y) => y.lan !== id);
       settings.fixed = (settings.fixed ?? []).filter((y) => y.lan !== id);
       settings.forwards = (settings.forwards ?? []).filter((y) => y.lan !== id);
       settings.dmz = (settings.dmz ?? []).filter((y) => y.lan !== id);
