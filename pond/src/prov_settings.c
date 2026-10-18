@@ -576,9 +576,12 @@ static void pv_fixed_addrs(struct prov_buf *out, const char *text)
  * after another: the seconds it had left then, its address, the device's
  * MAC, the name the device gave, NUL-padded, and two bytes of padding; all
  * numbers big-endian (BusyBox, networking/udhcp/dhcpd.c, write_leases()).
+ * It holds max_leases of them, which onu-apply makes at most 512; the file
+ * buffer has the room prov_slurp() needs past the last.
  */
 #define LEASE_LEN 36
-#define LEASE_FILE_MAX (8 + LEASE_LEN * 256)
+#define LEASES_MAX 512
+#define LEASE_FILE_MAX (8 + LEASE_LEN * LEASES_MAX + 2)
 
 static uint32_t be32(const unsigned char *b)
 {
