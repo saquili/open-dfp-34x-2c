@@ -269,6 +269,19 @@ wrong sign-in, 429 while sign-ins are stopped.
   ``POOL_FROM``, ``POOL_TO``, ``LEASE``, ``IPV6`` and ``IPV6_SUBNET``; and
   ``fixed``, a device's fixed address in one, ``LAN``, ``MAC``, ``IP`` (empty
   removes it) and ``NAME``.
+* ``forward``: a port, or a range of ports, forwarded from the internet to a
+  device of a local network: ``ID`` (none for the first free one, of 96),
+  ``CONN``, the connection it comes in by (empty removes it), ``NAME``,
+  ``PROTO`` (``tcp``, ``udp`` or ``both``), ``EXT_FROM`` and ``EXT_TO``, the
+  device by ``LAN`` and ``MAC``, ``INT_PORT``, its port (a range goes to the
+  same ports), and ``ON`` (``off`` keeps it, not in force); and ``dmz``, a
+  connection's DMZ, the device that takes what no forward takes, ``CONN``,
+  ``LAN`` and ``MAC`` (empty removes it). The device keeps its address: the
+  one its lease gives it becomes its fixed address in the same write when it
+  has none. A read gives them as ``forwards`` and ``dmz``; a network removed
+  takes its forwards and its DMZ with it. They take no entry of the switch's
+  ACL table: netfilter translates a connection's first packet, and its
+  flowtable then offers the flow to the switch as any other.
 * ``identity``: how the stick introduces itself to the OLT, ``SERIAL`` (four
   letters or digits and eight hex digits), ``VENDOR_ID``, ``EQUIPMENT_ID``,
   ``VERSION``, ``EQUIPMENT_SERIAL``, ``MODEL``, ``OMCC_VERSION``,

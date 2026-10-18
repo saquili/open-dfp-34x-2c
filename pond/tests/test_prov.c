@@ -2475,6 +2475,154 @@ static void test_session_pass(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
+static void test_forwards(void)
+{
+	static char buf[16384];
+	unsigned char leases[8 + 2 * 36];
+	char file[512], err[256], stub[512];
+	uint64_t written = (uint64_t)time(NULL) - 10;
+	const char *s;
+	FILE *f;
+	int rc;
+
+	puts("the ports forwarded and the DMZs");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		char path[32];
+
+		snprintf(path, sizeof(path), "/run/onu-pppoe%d", n);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
+	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("CONN=pppoe:1\nVLAN=100\nADDRESS=192.168.1.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && strstr(s, "\"forwards\":[]") && strstr(s, "\"dmz\":[]"),
+	      "a stick without forwards serves them as empty lists: the panel's page is there");
+
+	/* A device with an hour of its lease left, and one whose lease ran out. */
+	for (int i = 0; i < 8; i++)
+		leases[i] = (unsigned char)(written >> (56 - 8 * i));
+	lease_at(leases + 8, 3600, "\xc0\xa8\x01\x64", 0x03, "nas");
+	lease_at(leases + 8 + 36, 5, "\xc0\xa8\x01\x65", 0x04, "");
+	f = fopen(prov_path("/run/udhcpd-net1.leases", file, sizeof(file)), "w");
+	if (f) {
+		fwrite(leases, 1, sizeof(leases), f);
+		fclose(f);
+	}
+
+	rc = prov_forward_set("NAME=Serwer WWW\nCONN=pppoe:1\nPROTO=tcp\nEXT_FROM=443\nEXT_TO=443\n"
+			      "LAN=1\nMAC=00:00:5E:00:53:A3\nINT_PORT=8443\nON=on\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 &&
+		      file_has("/run/onu.conf",
+			       "FORWARD1=pppoe:1/tcp/443/1/00:00:5e:00:53:a3/8443/on\n"
+			       "FORWARD1_NAME=Serwer WWW\n") &&
+		      strstr(s, "\"forwards\":[{\"id\":1,\"name\":\"Serwer WWW\",\"conn\":\"pppoe:1\","
+				"\"proto\":\"tcp\",\"ext_from\":443,\"ext_to\":443,\"lan\":1,"
+				"\"mac\":\"00:00:5e:00:53:a3\",\"int_port\":8443,\"on\":true}]"),
+	      "a forward is taken, its MAC in small letters, and served as the panel reads it");
+	check(file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a3/192.168.1.100") &&
+		      strstr(s, "\"fixed\":[{\"lan\":1,\"mac\":\"00:00:5e:00:53:a3\","
+				"\"ip\":\"192.168.1.100\""),
+	      "its device keeps the address of its lease, fixed in the same write");
+	check(!strstr(s, "\"FORWARD1\"") && !strstr(s, "\"FORWARD1_NAME\""),
+	      "and the forward is not again among the other settings");
+
+	rc = prov_forward_set("CONN=pppoe:1\nPROTO=both\nEXT_FROM=6000\nEXT_TO=6010\nLAN=1\n"
+			      "MAC=00:00:5e:00:53:a3\nON=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 &&
+		      file_has("/run/onu.conf",
+			       "FORWARD2=pppoe:1/both/6000-6010/1/00:00:5e:00:53:a3/6000/off") &&
+		      !file_has("/run/onu.conf", "FIXED2") &&
+		      strstr(s, "\"id\":2,\"name\":\"\",\"conn\":\"pppoe:1\",\"proto\":\"both\","
+				"\"ext_from\":6000,\"ext_to\":6010,\"lan\":1,"
+				"\"mac\":\"00:00:5e:00:53:a3\",\"int_port\":6000,\"on\":false}"),
+	      "a range of both protocols kept off takes the next number, to the same ports, the address fixed once");
+	check(prov_forward_set("CONN=pppoe:1\nPROTO=udp\nEXT_FROM=6005\nLAN=1\n"
+			       "MAC=00:00:5e:00:53:a3\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "forwards 2 and 3 take the same ports of pppoe:1"),
+	      "a port another forward of the connection takes is refused, as onu-config judges it");
+	check(prov_forward_set("CONN=pppoe:1\nEXT_FROM=7000\nEXT_TO=7010\nINT_PORT=8000\nLAN=1\n"
+			       "MAC=00:00:5e:00:53:a3\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "a range of ports goes to the ports of the same numbers"),
+	      "and so is a range moved to other ports");
+	check(prov_forward_set("CONN=pppoe:1\nEXT_FROM=22\nLAN=1\nMAC=00:00:5e:00:53:a4\n", err,
+			       sizeof(err)) == -EINVAL &&
+		      strstr(err, "00:00:5e:00:53:a4 has no address in network 1 to keep"),
+	      "a device whose lease ran out has no address to keep");
+	check(prov_forward_set("CONN=pppoe:1\nEXT_FROM=22\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "a device is"),
+	      "a forward without a device is refused");
+	check(prov_forward_set("ID=97\nCONN=\n", err, sizeof(err)) == -EINVAL && strstr(err, "ID"),
+	      "and one past the 96th");
+
+	rc = prov_forward_set("ID=1\nNAME=WWW\nCONN=pppoe:1\nPROTO=tcp\nEXT_FROM=443\nEXT_TO=443\n"
+			      "LAN=1\nMAC=00:00:5e:00:53:a3\nINT_PORT=443\nON=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 &&
+		      file_has("/run/onu.conf",
+			       "FORWARD1=pppoe:1/tcp/443/1/00:00:5e:00:53:a3/443/off\n"
+			       "FORWARD1_NAME=WWW\n") &&
+		      !file_has("/run/onu.conf", "FORWARD3"),
+	      "a forward is changed by its ID");
+	check(prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a3\nIP=\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "forward 1: the device 00:00:5e:00:53:a3 has no fixed address"),
+	      "the fixed address of a forward's device stays while the forward does");
+
+	rc = prov_dmz_set("CONN=pppoe:1\nLAN=1\nMAC=00:00:5e:00:53:a3\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "DMZ1=pppoe:1/1/00:00:5e:00:53:a3") &&
+		      strstr(s, "\"dmz\":[{\"conn\":\"pppoe:1\",\"lan\":1,"
+				"\"mac\":\"00:00:5e:00:53:a3\"}]") &&
+		      !strstr(s, "\"DMZ1\""),
+	      "a connection's DMZ is taken, and served as the panel reads it");
+	rc = prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a5\nIP=192.168.1.50\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_dmz_set("CONN=pppoe:1\nLAN=1\nMAC=00:00:5E:00:53:A5\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "DMZ1=pppoe:1/1/00:00:5e:00:53:a5") &&
+		      !file_has("/run/onu.conf", "DMZ2") &&
+		      !file_has("/run/onu.conf", "FIXED3"),
+	      "another device replaces it, at the fixed address it has");
+	check(prov_dmz_set("LAN=1\nMAC=00:00:5e:00:53:a5\n", err, sizeof(err)) == -EINVAL,
+	      "a DMZ without a connection is refused");
+	rc = prov_dmz_set("CONN=pppoe:1\nMAC=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "DMZ") && strstr(s, "\"dmz\":[]"),
+	      "MAC= takes the DMZ away");
+
+	rc = prov_forward_set("ID=2\nCONN=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "FORWARD2") &&
+		      file_has("/run/onu.conf", "FORWARD1="),
+	      "CONN= takes a forward away");
+
+	rc = prov_dmz_set("CONN=pppoe:1\nLAN=1\nMAC=00:00:5e:00:53:a5\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("ID=1\nCONN=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && !file_has("/run/onu.conf", "FORWARD") && !file_has("/run/onu.conf", "DMZ") &&
+		      !file_has("/run/onu.conf", "FIXED") && strstr(s, "\"forwards\":[]") &&
+		      strstr(s, "\"dmz\":[]"),
+	      "a network removed takes its forwards and its DMZ with it");
+
+	unlink(prov_path("/run/udhcpd-net1.leases", file, sizeof(file)));
+	prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+}
+
 /* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
 static const char update_stub[] =
 	"#!/bin/sh\n"
@@ -2984,6 +3132,7 @@ int main(void)
 	test_ipoe();
 	test_session_pass();
 	test_largest_settings();
+	test_forwards();
 	test_omci();
 	test_omci_frames();
 	test_system();

@@ -37,6 +37,13 @@
  * connection or a session removed takes the networks that go out by it
  * with it, and their fixed addresses; so does a session that comes to hand
  * its address down.
+ *
+ * So are the ports forwarded from the internet to the networks' devices,
+ * FORWARDn, and each connection's DMZ, DMZn. A forward's or a DMZ's device
+ * keeps its address: the one it has from its network's DHCP server becomes
+ * its fixed address in the same write when it has none, as the panel's
+ * stand-in does it. A network removed takes its forwards and its DMZs with
+ * it.
  */
 
 #define _GNU_SOURCE
@@ -61,9 +68,11 @@
 /* A whole set of settings, as much as the configuration store holds. */
 #define TEXT_MAX 65536
 #define VALUE_MAX 64
-/* The local networks, the fixed addresses, and a name's bytes. */
+/* The local networks, the fixed addresses, the forwards, the DMZs, and a name's bytes. */
 #define LANS 8
 #define FIXED_MAX 512
+#define FORWARDS 96
+#define DMZS CONNS
 #define NAME_MAX 132
 #define USER_MAX 63
 #define SECRET_MAX 255
@@ -654,6 +663,201 @@ static void pv_leases(struct prov_buf *out, const char *text)
 	pv_close(out, ']');
 }
 
+/**
+ * struct fwd - A forward of the settings, FORWARDn,
+ * "CONN/PROTO/PORTS/L/MAC/PORT/ON", which onu-config has judged.
+ * @n: its number
+ * @conn: the connection it comes in by
+ * @proto: tcp, udp or both
+ * @from: the first port it takes
+ * @to: the last
+ * @lan: the device's network
+ * @mac: the device's MAC address
+ * @port: the device's port, the first of a range
+ * @on: whether it is in force
+ */
+struct fwd {
+	int n;
+	char conn[16];
+	char proto[8];
+	long from, to;
+	int lan;
+	char mac[18];
+	long port;
+	bool on;
+};
+
+/*
+ * The @n fields apart by '/' of the value of the line @line, KEY=VALUE, in
+ * @v of @cap bytes, each in @field: false for another number of them.
+ */
+static bool fields_of(const char *line, char *v, size_t cap, char **field, int n)
+{
+	const char *eq = strchr(line, '=');
+	size_t len = eq ? strcspn(eq + 1, "\n") : 0;
+	int i = 0;
+
+	if (!eq || !len || len >= cap)
+		return false;
+	memcpy(v, eq + 1, len);
+	v[len] = '\0';
+	for (char *p = v; i < n; i++) {
+		field[i] = p;
+		p = strchr(p, '/');
+		if (!p)
+			break;
+		*p++ = '\0';
+	}
+	return i == n - 1;
+}
+
+/* A forward of the settings, the line FORWARDn=...: false for one that is none. */
+static bool fwd_of(const char *line, struct fwd *f)
+{
+	const char *p = line + 7;
+	size_t d = strspn(p, "0123456789");
+	char v[80], *field[7], *dash;
+
+	if (strncmp(line, "FORWARD", 7) || !d || p[d] != '=' ||
+	    !fields_of(line, v, sizeof(v), field, 7))
+		return false;
+	f->n = atoi(p);
+	snprintf(f->conn, sizeof(f->conn), "%s", field[0]);
+	snprintf(f->proto, sizeof(f->proto), "%s", field[1]);
+	dash = strchr(field[2], '-');
+	f->from = atol(field[2]);
+	f->to = dash ? atol(dash + 1) : f->from;
+	f->lan = atoi(field[3]);
+	snprintf(f->mac, sizeof(f->mac), "%s", field[4]);
+	f->port = atol(field[5]);
+	f->on = !strcmp(field[6], "on");
+	return true;
+}
+
+/* A DMZ of the settings, the line DMZn=CONN/L/MAC: false for one that is none. */
+static bool dmz_of(const char *line, int *n, char conn[16], int *lan, char mac[18])
+{
+	const char *p = line + 3;
+	size_t d = strspn(p, "0123456789");
+	char v[48], *field[3];
+
+	if (strncmp(line, "DMZ", 3) || !d || p[d] != '=' ||
+	    !fields_of(line, v, sizeof(v), field, 3))
+		return false;
+	*n = atoi(p);
+	snprintf(conn, 16, "%s", field[0]);
+	*lan = atoi(field[1]);
+	snprintf(mac, 18, "%s", field[2]);
+	return true;
+}
+
+/* The ports forwarded from the internet, each with its name. */
+static void pv_forwards(struct prov_buf *out, const char *text)
+{
+	char k[32], name[NAME_MAX];
+	bool first = true;
+	struct fwd f;
+
+	pv_open(out, '[');
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		if (!fwd_of(p, &f))
+			continue;
+		snprintf(k, sizeof(k), "FORWARD%d_NAME", f.n);
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "id");
+		pv_num(out, f.n);
+		pv_comma(out);
+		pv_key(out, "name");
+		pv_str(out, line_value(text, k, name, sizeof(name)) ? name : "");
+		pv_comma(out);
+		pv_key(out, "conn");
+		pv_str(out, f.conn);
+		pv_comma(out);
+		pv_key(out, "proto");
+		pv_str(out, f.proto);
+		pv_comma(out);
+		pv_key(out, "ext_from");
+		pv_num(out, f.from);
+		pv_comma(out);
+		pv_key(out, "ext_to");
+		pv_num(out, f.to);
+		pv_comma(out);
+		pv_key(out, "lan");
+		pv_num(out, f.lan);
+		pv_comma(out);
+		pv_key(out, "mac");
+		pv_str(out, f.mac);
+		pv_comma(out);
+		pv_key(out, "int_port");
+		pv_num(out, f.port);
+		pv_comma(out);
+		pv_key(out, "on");
+		pv_bool(out, f.on);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
+/* Each connection's DMZ: its device. */
+static void pv_dmzs(struct prov_buf *out, const char *text)
+{
+	char conn[16], mac[18];
+	bool first = true;
+	int n, lan;
+
+	pv_open(out, '[');
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		if (!dmz_of(p, &n, conn, &lan, mac))
+			continue;
+		if (!first)
+			pv_comma(out);
+		first = false;
+		pv_open(out, '{');
+		pv_key(out, "conn");
+		pv_str(out, conn);
+		pv_comma(out);
+		pv_key(out, "lan");
+		pv_num(out, lan);
+		pv_comma(out);
+		pv_key(out, "mac");
+		pv_str(out, mac);
+		pv_close(out, '}');
+	}
+	pv_close(out, ']');
+}
+
+/* The address the device @mac has now from network @lan's DHCP server, in @ip. */
+static bool lease_ip(int lan, const char *mac, char ip[16])
+{
+	static char file[LEASE_FILE_MAX];
+	const unsigned char *b = (const unsigned char *)file;
+	time_t now = time(NULL);
+	uint64_t written = 0;
+	char path[48], m[18];
+	size_t len;
+
+	snprintf(path, sizeof(path), "/run/udhcpd-net%d.leases", lan);
+	if (prov_slurp(path, file, sizeof(file), &len) || len < 8)
+		return false;
+	for (int i = 0; i < 8; i++)
+		written = written << 8 | b[i];
+	for (size_t at = 8; at + LEASE_LEN <= len; at += LEASE_LEN) {
+		const unsigned char *l = b + at;
+		long long left = (long long)be32(l) - ((long long)now - (long long)written);
+
+		snprintf(m, sizeof(m), "%02x:%02x:%02x:%02x:%02x:%02x", l[8], l[9], l[10],
+			 l[11], l[12], l[13]);
+		if (left <= 0 || !be32(l + 4) || strcasecmp(m, mac))
+			continue;
+		snprintf(ip, 16, "%u.%u.%u.%u", l[4], l[5], l[6], l[7]);
+		return true;
+	}
+	return false;
+}
+
 int prov_settings(struct prov_buf *out)
 {
 	struct account acct[SESSIONS];
@@ -678,7 +882,8 @@ int prov_settings(struct prov_buf *out)
 		size_t klen;
 
 		if (!eq || !strncmp(p, "SESSION", 7) || !strncmp(p, "FIXED", 5) ||
-		    !strncmp(p, "IPOE", 4) ||
+		    !strncmp(p, "IPOE", 4) || !strncmp(p, "FORWARD", 7) ||
+		    !strncmp(p, "DMZ", 3) ||
 		    (!strncmp(p, "LAN", 3) && p[3] >= '1' && p[3] <= '9'))
 			continue;
 		klen = (size_t)(eq - p);
@@ -710,6 +915,12 @@ int prov_settings(struct prov_buf *out)
 	pv_comma(out);
 	pv_key(out, "leases");
 	pv_leases(out, text);
+	pv_comma(out);
+	pv_key(out, "forwards");
+	pv_forwards(out, text);
+	pv_comma(out);
+	pv_key(out, "dmz");
+	pv_dmzs(out, text);
 	pv_comma(out);
 	explicit_bzero(acct, sizeof(acct));
 
@@ -855,11 +1066,13 @@ static const char *line_value(const char *text, const char *key, char *out,
 
 /*
  * Network @n removed in @change, which holds @len bytes of @cap: LANn_CONN
- * empty, and the fixed addresses in it gone with it, of the settings @text.
+ * empty, and the fixed addresses in it, the forwards to its devices and the
+ * DMZs among them gone with it, of the settings @text.
  */
 static void lan_drop(const char *text, int n, char *change, size_t cap, size_t *len)
 {
-	char mac[18], ip[16];
+	char mac[18], ip[16], conn[16];
+	struct fwd w;
 
 	append(change, cap, len, "LAN%d_CONN=\n", n);
 	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
@@ -867,6 +1080,10 @@ static void lan_drop(const char *text, int n, char *change, size_t cap, size_t *
 
 		if (fixed_of(p, &f, &lan, mac, ip) && lan == n)
 			append(change, cap, len, "FIXED%d=\n", f);
+		else if (fwd_of(p, &w) && w.lan == n)
+			append(change, cap, len, "FORWARD%d=\n", w.n);
+		else if (dmz_of(p, &f, conn, &lan, mac) && lan == n)
+			append(change, cap, len, "DMZ%d=\n", f);
 	}
 }
 
@@ -1227,4 +1444,216 @@ int prov_fixed_set(const char *val, char *err, size_t errcap)
 	struct prov_wait w = { .err = err, .errcap = errcap };
 
 	return prov_wait(prov_fixed_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * A device of a forward or a DMZ, LAN, 1 to 8, and MAC, xx:xx:xx:xx:xx:xx,
+ * which goes into @mac in small letters: false, with why in @err, for one
+ * that is none.
+ */
+static bool device_of(const char *lan, const char *mac, char m[18], char *err,
+		      size_t errcap)
+{
+	if (!lan || strlen(lan) != 1 || *lan < '1' || *lan > '0' + LANS || !mac ||
+	    strlen(mac) != 17 || strspn(mac, "0123456789abcdefABCDEF:") != 17) {
+		snprintf(err, errcap, "a device is a network, LAN, and a MAC address, MAC");
+		return false;
+	}
+	for (int i = 0; i < 18; i++)
+		m[i] = mac[i] >= 'A' && mac[i] <= 'Z' ? (char)(mac[i] - 'A' + 'a') : mac[i];
+	return true;
+}
+
+/*
+ * The device @mac of network @lan keeps its address, which a forward or a
+ * DMZ sends to: when it has no fixed address in the settings @text, the one
+ * it has now from the network's DHCP server becomes one, a FIXEDk line of
+ * @change, which holds @len bytes of @cap. 0, or -EINVAL with why in @err
+ * when it has no address to keep, or no fixed address is free.
+ */
+static int pin(const char *text, int lan, const char *mac, char *change, size_t cap,
+	       size_t *len, char *err, size_t errcap)
+{
+	static bool used[FIXED_MAX + 1];
+	char m[18], ip[16];
+	int k = 0;
+
+	memset(used, 0, sizeof(used));
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int f, l;
+
+		if (!fixed_of(p, &f, &l, m, ip) || f < 1 || f > FIXED_MAX)
+			continue;
+		if (l == lan && !strcasecmp(m, mac))
+			return 0;
+		used[f] = true;
+	}
+	for (int f = 1; f <= FIXED_MAX && !k; f++)
+		if (!used[f])
+			k = f;
+	if (!k) {
+		snprintf(err, errcap, "all %d fixed addresses are taken", FIXED_MAX);
+		return -EINVAL;
+	}
+	if (!lease_ip(lan, mac, ip)) {
+		snprintf(err, errcap, "%s has no address in network %d to keep: give it a fixed one",
+			 mac, lan);
+		return -EINVAL;
+	}
+	append(change, cap, len, "FIXED%d=%d/%s/%s\n", k, lan, mac, ip);
+	return 0;
+}
+
+/*
+ * A port, or a range of ports, forwarded from the internet to a device of a
+ * local network: ID, 1 to 96, or none for the first free one; CONN, the
+ * connection it comes in by, pppoe:N or ipoe:N, empty to remove it; NAME;
+ * PROTO, tcp (none), udp or both; EXT_FROM and EXT_TO, the ports it takes
+ * (EXT_FROM alone when none); LAN and MAC, the device, which keeps its
+ * address (pin()); INT_PORT, the device's port (EXT_FROM when none), for a
+ * range its first; and ON, on (none) or off for one kept but not in force.
+ * onu-config judges them: no two forwards of a connection take a port of
+ * one protocol, and a range goes to the same ports.
+ */
+int prov_forward_write(const char *val, char *err, size_t errcap, prov_done done,
+		       void *ctx)
+{
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	char id[VALUE_MAX], c[VALUE_MAX], name[NAME_MAX], proto[VALUE_MAX],
+		from[VALUE_MAX], to[VALUE_MAX], lanv[VALUE_MAX], macv[VALUE_MAX],
+		port[VALUE_MAX], on[VALUE_MAX], mac[18], ports[2 * VALUE_MAX];
+	const char *i = line_value(val, "ID", id, sizeof(id));
+	const char *conn = line_value(val, "CONN", c, sizeof(c));
+	const char *nm = line_value(val, "NAME", name, sizeof(name));
+	const char *pr = line_value(val, "PROTO", proto, sizeof(proto));
+	const char *f = line_value(val, "EXT_FROM", from, sizeof(from));
+	const char *t = line_value(val, "EXT_TO", to, sizeof(to));
+	const char *l = line_value(val, "LAN", lanv, sizeof(lanv));
+	const char *m = line_value(val, "MAC", macv, sizeof(macv));
+	const char *ip = line_value(val, "INT_PORT", port, sizeof(port));
+	const char *o = line_value(val, "ON", on, sizeof(on));
+	bool used[FORWARDS + 1] = { false };
+	struct fwd w;
+	size_t len = 0;
+	int n = 0, rc;
+
+	if (i) {
+		if (*i && strlen(i) <= 2 && strspn(i, "0123456789") == strlen(i))
+			n = atoi(i);
+		if (n < 1 || n > FORWARDS) {
+			snprintf(err, errcap, "ID: 1 to %d", FORWARDS);
+			return -EINVAL;
+		}
+	}
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL)
+		if (fwd_of(p, &w) && w.n >= 1 && w.n <= FORWARDS)
+			used[w.n] = true;
+	change[0] = '\0';
+	if (conn && !*conn) {
+		if (n && used[n])
+			append(change, sizeof(change), &len, "FORWARD%d=\n", n);
+		return prov_settings_write(change, err, errcap, done, ctx);
+	}
+	if (!conn || !f || !*f) {
+		snprintf(err, errcap, "a forward needs CONN and EXT_FROM");
+		return -EINVAL;
+	}
+	if (!device_of(l, m, mac, err, errcap))
+		return -EINVAL;
+	for (int k = 1; k <= FORWARDS && !n; k++)
+		if (!used[k])
+			n = k;
+	if (!n) {
+		snprintf(err, errcap, "all %d forwards are taken", FORWARDS);
+		return -EINVAL;
+	}
+	if (t && *t && strcmp(t, f))
+		snprintf(ports, sizeof(ports), "%s-%s", f, t);
+	else
+		snprintf(ports, sizeof(ports), "%s", f);
+	append(change, sizeof(change), &len, "FORWARD%d=%s/%s/%s/%s/%s/%s/%s\n", n, conn,
+	       pr && *pr ? pr : "tcp", ports, l, mac, ip && *ip ? ip : f,
+	       o && !strcmp(o, "off") ? "off" : "on");
+	append(change, sizeof(change), &len, "FORWARD%d_NAME=%s\n", n, nm ? nm : "");
+	rc = pin(text, *l - '0', mac, change, sizeof(change), &len, err, errcap);
+	if (rc)
+		return rc;
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_forward_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_forward_write(val, err, errcap, prov_waited, &w), &w);
+}
+
+/*
+ * A connection's DMZ, the device that takes what comes in by it that no
+ * forward takes: CONN, the connection; LAN and MAC, the device, which keeps
+ * its address (pin()), or MAC empty for none. A connection has one: a new
+ * device replaces the one it had.
+ */
+int prov_dmz_write(const char *val, char *err, size_t errcap, prov_done done,
+		   void *ctx)
+{
+	static char text[TEXT_MAX], change[TEXT_MAX];
+	char c[VALUE_MAX], lanv[VALUE_MAX], macv[VALUE_MAX], mac[18], dc[16], dm[18];
+	const char *conn = line_value(val, "CONN", c, sizeof(c));
+	const char *l = line_value(val, "LAN", lanv, sizeof(lanv));
+	const char *m = line_value(val, "MAC", macv, sizeof(macv));
+	bool used[DMZS + 1] = { false };
+	size_t len = 0;
+	int n = 0, rc;
+
+	if (!conn || !*conn) {
+		snprintf(err, errcap, "a DMZ is a connection's, CONN");
+		return -EINVAL;
+	}
+	rc = settings_current(text, sizeof(text));
+	if (rc) {
+		snprintf(err, errcap, "onu-config: the settings in force cannot be read");
+		return rc;
+	}
+	for (const char *p = text; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL) {
+		int d, dl;
+
+		if (!dmz_of(p, &d, dc, &dl, dm) || d < 1 || d > DMZS)
+			continue;
+		used[d] = true;
+		if (!strcmp(dc, conn))
+			n = d;
+	}
+	change[0] = '\0';
+	if (!m || !*m) {
+		if (n)
+			append(change, sizeof(change), &len, "DMZ%d=\n", n);
+		return prov_settings_write(change, err, errcap, done, ctx);
+	}
+	if (!device_of(l, m, mac, err, errcap))
+		return -EINVAL;
+	for (int k = 1; k <= DMZS && !n; k++)
+		if (!used[k])
+			n = k;
+	if (!n) {
+		snprintf(err, errcap, "all %d DMZs are taken", DMZS);
+		return -EINVAL;
+	}
+	append(change, sizeof(change), &len, "DMZ%d=%s/%s/%s\n", n, conn, l, mac);
+	rc = pin(text, *l - '0', mac, change, sizeof(change), &len, err, errcap);
+	if (rc)
+		return rc;
+	return prov_settings_write(change, err, errcap, done, ctx);
+}
+
+int prov_dmz_set(const char *val, char *err, size_t errcap)
+{
+	struct prov_wait w = { .err = err, .errcap = errcap };
+
+	return prov_wait(prov_dmz_write(val, err, errcap, prov_waited, &w), &w);
 }

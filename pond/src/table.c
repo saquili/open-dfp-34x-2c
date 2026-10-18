@@ -47,6 +47,12 @@ const struct prov pond_provs[] = {
 	{ "fixed", "Mode",
 	  "A device's fixed address in a local network: add, change or remove",
 	  NULL, prov_fixed_write, 0 },
+	{ "forward", "Mode",
+	  "A port forwarded from the internet to a device of a local network: "
+	  "add, change or remove", NULL, prov_forward_write, 0 },
+	{ "dmz", "Mode",
+	  "A connection's DMZ, the device that takes what no forward takes: "
+	  "set or remove", NULL, prov_dmz_write, 0 },
 	{ "settings", "Mode",
 	  "The data path: the sessions and where they hand their addresses down, "
 	  "kept in the configuration store",
