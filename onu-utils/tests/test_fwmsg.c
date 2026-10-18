@@ -136,12 +136,13 @@ static void test_batch(void)
 	/*
 	 * The table there is goes, then the table, the flowtable, the two
 	 * chains, and the rules: the cut of the segment size, two flows of
-	 * each network, the answers, the protection and the NAT of each.
+	 * each network each way, the answers, the protection and the NAT of
+	 * each.
 	 */
 	len = fw_batch(&s, g_buf, sizeof(g_buf), 100, &last);
 	kinds(len, k, sizeof(k), &acked);
-	CHECK(len > 0 && !strcmp(k, "<DTFCCRRRRRRRRRR>"));
-	CHECK(last == acked && last == 100 + 15);
+	CHECK(len > 0 && !strcmp(k, "<DTFCCRRRRRRRRRRRRRR>"));
+	CHECK(last == acked && last == 100 + 19);
 	CHECK(has_bytes(len, "flow_offload") && has_bytes(len, "masq") &&
 	      has_bytes(len, "gem257") && has_bytes(len, "sfp") && has_bytes(len, "net2"));
 	CHECK(has_bytes(len, "rt") && has_bytes(len, "byteorder") && has_bytes(len, "exthdr"));

@@ -374,14 +374,19 @@ static void clamp_mss(struct batch *bt)
 	rule_end(bt, nlh, exprs);
 }
 
-/* A TCP or UDP flow of network @l handed to the flowtable. */
-static void flow_add(struct batch *bt, const struct fw_lan *l, uint8_t proto)
+/*
+ * A TCP or UDP flow of network @l handed to the flowtable, by a packet that
+ * comes from the network (@key NFT_META_IIFNAME) or goes into it
+ * (NFT_META_OIFNAME): a stream that flows one way only, into the network, is
+ * handed over by its own packets.
+ */
+static void flow_add(struct batch *bt, const struct fw_lan *l, uint32_t key, uint8_t proto)
 {
 	struct nlattr *exprs;
 	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
 	struct expr e;
 
-	ifname_is(nlh, NFT_META_IIFNAME, l->ifname, false);
+	ifname_is(nlh, key, l->ifname, false);
 	meta(nlh, NFT_META_L4PROTO);
 	cmp(nlh, NFT_CMP_EQ, &proto, sizeof(proto));
 	e = expr_begin(nlh, "flow_offload");
@@ -470,8 +475,10 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 	chain(&bt, POSTROUTING, "nat", NF_INET_POST_ROUTING, SRCNAT_PRIORITY);
 	clamp_mss(&bt);
 	for (int i = 0; s->offload && i < s->nlans; i++) {
-		flow_add(&bt, &s->lan[i], IPPROTO_TCP);
-		flow_add(&bt, &s->lan[i], IPPROTO_UDP);
+		flow_add(&bt, &s->lan[i], NFT_META_IIFNAME, IPPROTO_TCP);
+		flow_add(&bt, &s->lan[i], NFT_META_IIFNAME, IPPROTO_UDP);
+		flow_add(&bt, &s->lan[i], NFT_META_OIFNAME, IPPROTO_TCP);
+		flow_add(&bt, &s->lan[i], NFT_META_OIFNAME, IPPROTO_UDP);
 	}
 	accept_answers(&bt);
 	for (int i = 0; i < s->nlans; i++)

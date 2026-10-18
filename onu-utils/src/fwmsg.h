@@ -17,6 +17,8 @@
  *       oifname "ppp*" tcp flags syn tcp option maxseg size set rt mtu
  *       iifname LAN meta l4proto tcp flow add @ft       for each network
  *       iifname LAN meta l4proto udp flow add @ft       for each network
+ *       oifname LAN meta l4proto tcp flow add @ft       for each network
+ *       oifname LAN meta l4proto udp flow add @ft       for each network
  *       ct state established,related accept
  *       iifname "ppp*" oifname LAN ct state new drop    for each network
  *     }
