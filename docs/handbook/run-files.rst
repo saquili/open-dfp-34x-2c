@@ -69,6 +69,13 @@ Shared by two components
      - What session N has and what it brought. The directory belongs to the
        group ``onu``, so that ``pppoed`` can write in it
        (``onu-utils/scripts/onu-apply``, its header).
+   * - ``/run/ipoe/K/``
+     - ``onu-dhcpc``, udhcpc's script (``ipv4``, ``router``, ``dns``,
+       ``until``, of a lease); ``onu-apply`` (``dev``, ``gem``, ``kind``,
+       ``makings``, ``net``, and the addresses of a static connection)
+     - ``onu-apply``
+     - What IPoE connection K has and what it brought. The directory belongs
+       to the group ``onu``, so that the DHCP client can write in it.
    * - ``/run/onu-identity``
      - ``onu-config`` (what ``ponid`` reads from the shipped firmware's
        files, with the store's ``ID_*`` keys over it), and the boot script
