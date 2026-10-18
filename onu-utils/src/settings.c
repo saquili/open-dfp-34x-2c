@@ -1222,13 +1222,16 @@ static bool device_coherent(const struct settings *s, const char *what, int i,
 
 /*
  * A forward goes to a device of a network that goes out by its connection.
- * A range of ports goes to the ports of the same numbers: the kernel's NAT
- * moves a range by no offset (nft_nat has no base port). No two forwards of
- * a connection take a port of one protocol. A DMZ's device is as a
- * forward's, and a connection has one DMZ.
+ * A range of ports goes to the ports of the same numbers, or to as many
+ * others: the ports of the ranges moved to others, of the forwards in
+ * force, TCP's and UDP's apart, are SETTINGS_MOVED_MAX at most. No two
+ * forwards of a connection take a port of one protocol. A DMZ's device is
+ * as a forward's, and a connection has one DMZ.
  */
 static bool forwards_coherent(const struct settings *s, char *err, size_t errcap)
 {
+	unsigned long moved = 0;
+
 	for (int i = 0; i < SETTINGS_FORWARDS; i++) {
 		struct fwd a, b;
 
@@ -1238,10 +1241,13 @@ static bool forwards_coherent(const struct settings *s, char *err, size_t errcap
 		if (!device_coherent(s, "forward", i, a.conn, a.lan, a.mac, err,
 				     errcap))
 			return false;
-		if (a.to > a.from && a.port != a.from) {
+		if (a.on && a.to > a.from && a.port != a.from)
+			moved += (a.to - a.from + 1) *
+				 (!!(a.proto & PROTO_TCP) + !!(a.proto & PROTO_UDP));
+		if (moved > SETTINGS_MOVED_MAX) {
 			snprintf(err, errcap,
-				 "forward %d: a range of ports goes to the ports of the same numbers",
-				 i + 1);
+				 "forward %d: with it, ranges moved to other ports move %lu ports, more than %d (TCP and UDP count apart)",
+				 i + 1, moved, SETTINGS_MOVED_MAX);
 			return false;
 		}
 		for (int j = i + 1; j < SETTINGS_FORWARDS; j++) {

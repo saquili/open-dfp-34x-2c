@@ -251,6 +251,7 @@ conf SESSION1_VLAN=410 SESSION1_FAMILY=ipv4 SESSION1_PASS=off LAN1_CONN=pppoe:1 
 	FORWARD1=pppoe:1/tcp/8080/1/00:00:5e:00:53:a1/80/on FORWARD1_NAME=Serwer \
 	FORWARD2=pppoe:1/both/6000-6010/1/00:00:5e:00:53:a1/6000/on \
 	FORWARD3=pppoe:1/udp/3074/1/00:00:5e:00:53:a1/3074/off \
+	FORWARD4=pppoe:1/tcp/7000-7010/1/00:00:5e:00:53:a1/9000/on \
 	DMZ1=pppoe:1/1/00:00:5E:00:53:A2
 echo "user secret" >"$ONU_ROOT/etc/onu-pppoe"
 "$MODE_SCRIPT" start 2>/dev/null
@@ -268,6 +269,8 @@ F=$T/fw.conf
 check 'grep -qx "fwd ppp0 192.0.2.2 tcp 8080 192.168.1.10 80" "$F"'
 check 'grep -qx "fwd ppp0 192.0.2.2 tcp 6000-6010 192.168.1.10 6000" "$F" &&
 	grep -qx "fwd ppp0 192.0.2.2 udp 6000-6010 192.168.1.10 6000" "$F"'
+# A range moved to other ports, which onu-fw maps port by port.
+check 'grep -qx "fwd ppp0 192.0.2.2 tcp 7000-7010 192.168.1.10 9000" "$F"'
 check '! grep -q 3074 "$F"'
 check 'grep -qx "dmz ppp0 192.0.2.2 192.168.1.20" "$F"'
 check '[ "$(grep -n "^dmz" "$F" | cut -d: -f1)" -gt "$(grep -n "^fwd" "$F" | tail -n 1 | cut -d: -f1)" ]'

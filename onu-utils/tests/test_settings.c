@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "fwmsg.h"
 #include "settings.h"
 
 static int failures;
@@ -646,12 +647,32 @@ static void test_forwards(void)
 			"FORWARD3=\nDMZ1=pppoe:1/1/" DEV "\nDMZ1=\n") == 0 &&
 	      !strstr(g_out, "FORWARD3") && !strstr(g_out, "DMZ1"));
 
-	/* A port alone may go to another; a range keeps its numbers. */
+	/* A port may go to another, and a range to the same ports or to others. */
 	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8080/1/" DEV "/80/on\n") == 0);
 	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/8000/on\n") == 0);
-	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/9000/on\n") == -2 &&
-	      strstr(g_err, "forward 1: a range of ports goes to the ports of the same numbers"));
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/9000/on\n") == 0 &&
+	      has("FORWARD1=pppoe:1/tcp/8000-8010/1/" DEV "/9000/on"));
 	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/65530-65535/1/" DEV "/65530/on\n") == 0);
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/both/1000-1010/1/" DEV "/65525/on\n") == 0);
+
+	/*
+	 * The ranges moved to other ports move 1024 ports at most, of the
+	 * forwards in force, a range of both protocols twice; a range kept
+	 * and a port alone move none.
+	 */
+	CHECK(SETTINGS_MOVED_MAX == FW_MOVED_MAX);
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/both/10000-10511/1/" DEV "/20000/on\n"
+			"FORWARD2=pppoe:1/tcp/30000-39999/1/" DEV "/30000/on\n"
+			"FORWARD3=pppoe:1/udp/443/1/" DEV "/8443/on\n") == 0);
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/both/10000-10511/1/" DEV "/20000/on\n"
+			"FORWARD4=pppoe:1/udp/2000-2001/1/" DEV "/3000/on\n") == -2 &&
+	      strstr(g_err,
+		     "forward 4: with it, ranges moved to other ports move 1026 ports, more than 1024 (TCP and UDP count apart)"));
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/tcp/10000-11024/1/" DEV "/20000/on\n") == -2 &&
+	      strstr(g_err, "forward 1: with it, ranges moved to other ports move 1025 ports"));
+	/* One kept but not in force moves none. */
+	CHECK(judge(&s, PINNED "FORWARD1=pppoe:1/both/10000-10511/1/" DEV "/20000/on\n"
+			"FORWARD4=pppoe:1/udp/2000-2001/1/" DEV "/3000/off\n") == 0);
 
 	/* Its device: in a network out by its connection, at a fixed address. */
 	CHECK(judge(&s, KEEPS NET1 "FORWARD1=pppoe:1/tcp/443/1/" DEV "/443/on\n") == -2 &&

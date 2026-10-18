@@ -50,8 +50,10 @@
  * connection CONN (pppoe:N or ipoe:N), of PROTO (tcp, udp or both), to the
  * port or the range of ports PORTS (443, or 8000-8010), goes to the device
  * MAC of network L, which goes out by CONN, at its fixed address, to the
- * port PORT, or for a range to the ports of the same numbers; ON is on, or
- * off for one kept but not in force. FORWARDn_NAME is its name. An empty
+ * port PORT, or for a range to as many ports from PORT, the same or others;
+ * ON is on, or off for one kept but not in force. The ranges moved to other
+ * ports of the forwards in force move 1024 ports at most, TCP's and UDP's
+ * apart (SETTINGS_MOVED_MAX). FORWARDn_NAME is its name. An empty
  * FORWARDn removes one. DMZn, 1 to 7, "CONN/L/MAC", is a connection's DMZ:
  * the device that takes what comes in by it that no forward takes; an empty
  * DMZn removes one.
@@ -74,6 +76,13 @@
 #define SETTINGS_LANS 8
 #define SETTINGS_FIXED 512
 #define SETTINGS_FORWARDS 96
+/*
+ * The most ports of ranges moved to other ports, a protocol's apart: the
+ * NAT of nf_tables moves no range by an offset, and onu-fw's table maps
+ * each port of one to its own, an element of a map of the table each, of
+ * FW_MOVED_MAX at most (fwmsg.h, which says why so many).
+ */
+#define SETTINGS_MOVED_MAX 1024
 /* A DMZ for each connection at most. */
 #define SETTINGS_DMZS SETTINGS_CONNS
 

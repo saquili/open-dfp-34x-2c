@@ -121,8 +121,9 @@
 # A forward, FORWARDk ("CONN/PROTO/PORTS/L/MAC/PORT/ON"), sends what comes in
 # new by the connection CONN to its IPv4 address, of TCP, UDP or both, to a
 # port or a range of ports, to the device MAC of network L at its fixed
-# address: a port to the port PORT, a range to the same ports; one with ON
-# off is kept and not in force. A connection's DMZ, DMZk ("CONN/L/MAC"),
+# address: a port to the port PORT, a range to as many ports from PORT, the
+# same or others, which onu-fw maps one by one; one with ON off is kept and
+# not in force. A connection's DMZ, DMZk ("CONN/L/MAC"),
 # takes what no forward takes, but ICMP and DHCP's answers, which stay with
 # the stick. They are lines of onu-fw's table (forwards_fw()), by the
 # connection's interface and its address there while it has one: a
