@@ -2573,8 +2573,10 @@ PPPoE test.
 
 The driver keeps eight flow slots, ``l34_flow[8]``, a limit of the driver and
 not of the engine. Each slot records the cookie, the outbound and inbound
-entries, the PPPoE WAN and the owning ports. A PPPoE flow that also pushes a
-VLAN is declined without having been measured.
+entries, the PPPoE WAN and the owning ports. A PPPoE flow whose session runs in
+an 802.1Q VLAN takes the VLAN from its one VLAN push (see "The PPPoE
+encapsulation path"); one with two VLAN pushes, or with a tag other than 802.1Q,
+is declined.
 
 The PPPoE encapsulation path
 ============================
@@ -2623,20 +2625,34 @@ it.
      - M
      - A throughput test, NAT over PPPoE downstream, 875.8 Mbit/s with the CPU
        port moving by 24 frames.
+   * - A session in an 802.1Q VLAN is carried with its rows in that VLAN, as the
+       WAN of the default route has them: the address-table entry of the
+       concentrator filed under the VID, and the VID in the L3-interface row.
+       The VLAN arrives as the rule's one ``FLOW_ACTION_VLAN_PUSH``, after the
+       ``FLOW_ACTION_PPPOE_PUSH``.
+     - M
+     - A throughput test, NAT from a local network in VLAN 410 on ``sfp`` over a
+       session in VLAN 2001 on a GEM interface: both flows ``[HW_OFFLOAD]``,
+       the WAN logged with ``vlan 2001``, 928 Mbit/s up and 925 Mbit/s down
+       with the CPU's interfaces moving by a few kilobytes while about 3.7 GB
+       crossed ``sfp`` each way; the same flows declined and carried by the CPU
+       had made 53 and 38 Mbit/s.
 
 ``rtl9602c_l34_wan_get()``, for a flow that leaves over PPPoE, in order:
 
 1. Find the WAN that already has the flow's external address. If its session,
-   port and concentrator agree, use it as it is. If they differ, write its rows
-   again in place (steps 2 to 6). If there is none, take a free index w,
-   recycling a WAN that has no flows when none is free, and write its rows
+   port, VLAN and concentrator agree, use it as it is. If they differ, write
+   its rows again in place (steps 2 to 6). If there is none, take a free index
+   w, recycling a WAN that has no flows when none is free, and write its rows
    (steps 2 to 6). Purpose: one index w ties the rows together. (T)
 2. Write PPPoE row w: the session. (T)
 3. Place an address-table entry for the concentrator's MAC on the egress port,
-   VID 0, with ``RTL9602C_FDB_W2_NEXTHOP`` set. Purpose: PPP has no ARP
-   neighbour that would put it there. (T)
-4. Write L3-interface row w: the egress MAC (from the source-MAC mangle), VID 0,
-   the PPP address, and the egress device's MTU less 8. (T)
+   in the session's VLAN or under VID 0 outside one, with
+   ``RTL9602C_FDB_W2_NEXTHOP`` set. Purpose: PPP has no ARP neighbour that
+   would put it there. (M)
+4. Write L3-interface row w: the egress MAC (from the source-MAC mangle), the
+   session's VLAN or VID 0, the PPP address, and the egress device's MTU less
+   8. (M)
 5. Write next-hop row w: PPPoE, interface w, session row w and the address-table
    slot. (T)
 6. Point the external-address row of the WAN at next hop w. (T)

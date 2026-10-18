@@ -1517,14 +1517,15 @@ static void rtl9602c_flow_dump_actions(struct rtl9602c_priv *p,
 
 /*
  * A flow's PPPoE egress, from its rule: the session, -1 for none; the
- * concentrator's and the egress port's Ethernet addresses; and the device the
- * flow leaves by.
+ * concentrator's and the egress port's Ethernet addresses; the device the
+ * flow leaves by; and the VLAN the session runs in, 0 for none.
  */
 struct rtl9602c_flow_pppoe {
 	int			sid;
 	u8			dmac[ETH_ALEN];
 	u8			smac[ETH_ALEN];
 	struct net_device	*dev;
+	u16			vid;
 };
 
 /* The L3/NAT engine's side, below. */
@@ -1541,7 +1542,7 @@ static void rtl9602c_l34_nh_state(struct rtl9602c_priv *p, int ifindex,
 				  __be32 gw, bool down);
 static int rtl9602c_flow_pppoe_of(struct flow_rule *rule);
 static int rtl9602c_flow_eth_of(struct flow_rule *rule, u8 *dmac, u8 *smac);
-static bool rtl9602c_flow_has(struct flow_rule *rule, enum flow_action_id id);
+static int rtl9602c_flow_vlan_of(struct flow_rule *rule, u16 *vid);
 static bool rtl9602c_l34_egress_ok(struct rtl9602c_priv *p,
 				   struct net_device *dev);
 static struct net_device *rtl9602c_flow_dev_of(struct flow_rule *rule);
@@ -1603,11 +1604,10 @@ static int rtl9602c_flow_snat_of(struct flow_rule *rule, u8 ip_proto,
 /*
  * One flowtable command. A flow is programmed only if the engine can carry it
  * whole: IPv4 TCP or UDP with ports; a source translation; over PPPoE, the
- * egress device and both Ethernet addresses; out of a GEM interface, the routed
- * flow with its upstream ready. A PPPoE flow that also pushes a VLAN is
- * declined, that case not being verified. Whatever is declined answers
- * -EOPNOTSUPP and stays in software: a 0 would make netfilter stop forwarding
- * the flow there.
+ * egress device and both Ethernet addresses, and at most one 802.1Q VLAN the
+ * session runs in; out of a GEM interface, the routed flow with its upstream
+ * ready. Whatever is declined answers -EOPNOTSUPP and stays in software: a 0
+ * would make netfilter stop forwarding the flow there.
  */
 static int rtl9602c_flow_offload_cmd(struct dsa_port *dp,
 				     struct flow_cls_offload *cls)
@@ -1695,9 +1695,9 @@ static int rtl9602c_flow_offload_cmd(struct dsa_port *dp,
 				 cls->cookie, ppp.sid);
 			return -EOPNOTSUPP;
 		}
-		if (rtl9602c_flow_has(rule, FLOW_ACTION_VLAN_PUSH)) {
-			pr_debug("<flow> cookie %lx: PPPoE inside a VLAN is not measured, declining\n",
-				 cls->cookie);
+		if (rtl9602c_flow_vlan_of(rule, &ppp.vid)) {
+			pr_debug("<flow> cookie %lx: session %d runs in two VLANs or one not 802.1Q, declining\n",
+				 cls->cookie, ppp.sid);
 			return -EOPNOTSUPP;
 		}
 	}
@@ -5741,15 +5741,28 @@ static int rtl9602c_flow_eth_of(struct flow_rule *rule, u8 *dmac, u8 *smac)
 	return have == (BIT(0) | BIT(1) | BIT(2) | BIT(3)) ? 0 : -EOPNOTSUPP;
 }
 
-static bool rtl9602c_flow_has(struct flow_rule *rule, enum flow_action_id id)
+/*
+ * The VLAN a flow's session runs in, from its rule: the VID of its one VLAN
+ * push, or 0 without one. A session in two VLANs, or in one whose tag is not
+ * 802.1Q, gives -EOPNOTSUPP: the L3-interface row holds one VID, and a session
+ * under an S-tag is not measured.
+ */
+static int rtl9602c_flow_vlan_of(struct flow_rule *rule, u16 *vid)
 {
 	struct flow_action_entry *act;
+	unsigned int n = 0;
 	int i;
 
-	flow_action_for_each(i, act, &rule->action)
-		if (act->id == id)
-			return true;
-	return false;
+	*vid = 0;
+	flow_action_for_each(i, act, &rule->action) {
+		if (act->id != FLOW_ACTION_VLAN_PUSH)
+			continue;
+		if (n++ || act->vlan.proto != htons(ETH_P_8021Q) ||
+		    !act->vlan.vid || act->vlan.vid >= VLAN_VID_MASK)
+			return -EOPNOTSUPP;
+		*vid = act->vlan.vid;
+	}
+	return 0;
 }
 
 static struct net_device *rtl9602c_flow_dev_of(struct flow_rule *rule)
@@ -5863,13 +5876,14 @@ static int rtl9602c_l34_wan_alloc(struct rtl9602c_priv *p)
 
 /*
  * The WAN for a flow's session. A WAN already on @extip is kept when session,
- * port and concentrator agree, and rewritten in place when they do not. Its
- * rows: the session; an address-table entry for the concentrator's MAC on the
- * egress port, under VID 0, since PPP has no neighbour to put one there; the
- * L3-interface row, with the egress port's MAC; the next hop, encapsulating,
- * naming that row, the session and the entry; and the external address, pointed
- * at the next hop. A failure undoes all of it. Returns w, or a negative error
- * code.
+ * port, VLAN and concentrator agree, and rewritten in place when they do not.
+ * Its rows: the session; an address-table entry for the concentrator's MAC on
+ * the egress port, in the session's VLAN or under VID 0 outside one, since PPP
+ * has no neighbour to put one there; the L3-interface row, with the egress
+ * port's MAC and that VLAN, as the WAN of a default route has it
+ * (rtl9602c_l34_wan_sync()); the next hop, encapsulating, naming that row, the
+ * session and the entry; and the external address, pointed at the next hop. A
+ * failure undoes all of it. Returns w, or a negative error code.
  */
 static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 				const struct rtl9602c_flow_pppoe *ppp,
@@ -5880,7 +5894,7 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 	__be32 addr = cpu_to_be32(extip);
 	struct rtl9602c_pppoe_wan *r;
 	unsigned int slot, mtu;
-	u16 vid = 0;
+	u16 vid = ppp->vid;
 	int port, w, err;
 
 	port = rtl9602c_l34_port_of(p, ppp->dev);
@@ -5892,7 +5906,7 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 			break;
 	if (w < (int)ARRAY_SIZE(p->l34_pppoe)) {
 		r = &p->l34_pppoe[w];
-		if (r->sid == ppp->sid && r->port == port &&
+		if (r->sid == ppp->sid && r->port == port && r->vid == ppp->vid &&
 		    ether_addr_equal(r->dmac, ppp->dmac))
 			return w;
 
@@ -5943,10 +5957,12 @@ static int rtl9602c_l34_wan_get(struct rtl9602c_priv *p,
 	r->port = port;
 	r->extidx = extidx;
 	r->took_extip = took_extip;
+	r->vid = ppp->vid;
 	ether_addr_copy(r->dmac, ppp->dmac);
 
-	pr_debug("<flow> PPPoE WAN %d: session %d to %pM on port %d, l3if/nexthop/pppoe[%d], extaddr[%d] nexthop %d, %pI4 mtu %u, L2 slot %u\n",
-		 w, ppp->sid, ppp->dmac, port, w, extidx, w, &extip, mtu, slot);
+	pr_debug("<flow> PPPoE WAN %d: session %d to %pM on port %d vlan %u, l3if/nexthop/pppoe[%d], extaddr[%d] nexthop %d, %pI4 mtu %u, L2 slot %u\n",
+		 w, ppp->sid, ppp->dmac, port, vid, w, extidx, w, &extip, mtu,
+		 slot);
 	return w;
 
 fail:
