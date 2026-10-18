@@ -29,7 +29,7 @@
 #include "fwmsg.h"
 
 /* A batch and room for the last request of it (mnl_nlmsg_batch_start()). */
-static char g_buf[2 * 65536];
+static char g_buf[2 * FW_BATCH_MAX];
 
 static void usage(void)
 {
@@ -46,13 +46,19 @@ static int run(size_t len, uint32_t last)
 	struct timeval tv = { .tv_sec = 2 };
 	struct mnl_socket *nl = mnl_socket_open(NETLINK_NETFILTER);
 	char ack[MNL_SOCKET_BUFFER_SIZE];
-	int rc = -ETIMEDOUT;
+	int sndbuf = (int)len, rc = -ETIMEDOUT;
 
 	if (!nl || mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0) {
 		rc = -errno;
 		goto out;
 	}
 	setsockopt(mnl_socket_get_fd(nl), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	/*
+	 * The kernel takes a message no longer than the socket's send buffer,
+	 * 208 KiB by default (net.core.wmem_default): a batch with every
+	 * forward comes near it, at 176 KiB.
+	 */
+	setsockopt(mnl_socket_get_fd(nl), SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 	if (mnl_socket_sendto(nl, g_buf, len) < 0) {
 		rc = -errno;
 		goto out;

@@ -11,6 +11,7 @@
 #include <libmnl/libmnl.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/nf_conntrack_common.h>
+#include <linux/netfilter/nf_nat.h>
 #include <linux/netfilter/nf_tables.h>
 #include <linux/netfilter/nfnetlink.h>
 #include <netinet/in.h>
@@ -21,9 +22,11 @@
 #define FLOWTABLE "ft"
 #define FORWARD "forward"
 #define POSTROUTING "postrouting"
+#define PREROUTING "prerouting"
 
-/* The priority of the source NAT, nft's "srcnat". */
+/* The priorities of the source NAT and the destination NAT, nft's "srcnat" and "dstnat". */
 #define SRCNAT_PRIORITY 100
+#define DSTNAT_PRIORITY (-100)
 
 /* The kind of TCP's option of the maximum segment size (RFC 9293). */
 #define TCP_OPT_MSS 2
@@ -65,14 +68,91 @@ static bool net_of(const char *v, uint32_t *net, uint8_t *len)
 	return !(*net & ~(l == 32 ? ~0u : ~(~0u >> l)));
 }
 
+/* a.b.c.d, an address, in host order: false for anything else. */
+static bool addr_of(const char *v, uint32_t *addr)
+{
+	struct in_addr in;
+
+	if (inet_pton(AF_INET, v, &in) != 1)
+		return false;
+	*addr = ntohl(in.s_addr);
+	return true;
+}
+
+/* A port, 1 to 65535, in decimal: false for anything else. */
+static bool port_of(const char *v, uint16_t *port)
+{
+	char *end;
+	unsigned long p;
+
+	if (*v < '1' || *v > '9')
+		return false;
+	p = strtoul(v, &end, 10);
+	if (*end || p > 65535)
+		return false;
+	*port = (uint16_t)p;
+	return true;
+}
+
+/*
+ * fwd IFNAME ADDR PROTO PORTS DEV PORT: a forward, of the words after "fwd".
+ * A range goes to the same ports, as the kernel's NAT keeps no offset into
+ * one.
+ */
+static bool fwd_of(struct fw_fwd *f, const char *ifn, const char *addr,
+		   const char *proto, char *ports, const char *dev,
+		   const char *port)
+{
+	char *dash = strchr(ports, '-');
+
+	if (!ifname_ok(ifn) || !addr_of(addr, &f->addr) ||
+	    !addr_of(dev, &f->dev) || !port_of(port, &f->port))
+		return false;
+	if (!strcmp(proto, "tcp"))
+		f->proto = IPPROTO_TCP;
+	else if (!strcmp(proto, "udp"))
+		f->proto = IPPROTO_UDP;
+	else
+		return false;
+	if (dash)
+		*dash = '\0';
+	if (!port_of(ports, &f->from) || !port_of(dash ? dash + 1 : ports, &f->last) ||
+	    f->last < f->from || (f->last > f->from && f->port != f->from))
+		return false;
+	memcpy(f->ifname, ifn, strlen(ifn) + 1);
+	return true;
+}
+
 int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 {
-	char word[16], a[64], b[64];
+	char word[16], a[64], b[64], c[64], d[64], e[64], f[64], x[2];
 	int n;
 
 	if (!*line || *line == '#')
 		return 0;
-	n = sscanf(line, "%15s %63s %63s", word, a, b);
+	n = sscanf(line, "%15s %63s %63s %63s %63s %63s %63s %1s", word, a, b, c, d, e,
+		   f, x);
+	if (n == 7 && !strcmp(word, "fwd")) {
+		if (s->nfwds == FW_FWDS_MAX ||
+		    !fwd_of(&s->fwd[s->nfwds], a, b, c, d, e, f)) {
+			snprintf(err, errcap, "%.40s: no forward of the table", line);
+			return -1;
+		}
+		s->nfwds++;
+		return 0;
+	}
+	if (n == 4 && !strcmp(word, "dmz")) {
+		struct fw_dmz *z = &s->dmz[s->ndmzs];
+
+		if (s->ndmzs == FW_DMZS_MAX || !ifname_ok(a) ||
+		    !addr_of(b, &z->addr) || !addr_of(c, &z->dev)) {
+			snprintf(err, errcap, "%.40s: no DMZ of the table", line);
+			return -1;
+		}
+		memcpy(z->ifname, a, strlen(a) + 1);
+		s->ndmzs++;
+		return 0;
+	}
 	if (n == 3 && !strcmp(word, "lan")) {
 		struct fw_lan *l = &s->lan[s->nlans];
 
@@ -124,11 +204,12 @@ int fw_spec_line(struct fw_spec *s, const char *line, char *err, size_t errcap)
 	return -1;
 }
 
-/* The batch being made, and the number of its next request. */
+/* The batch being made, the number of its next request, and its last one. */
 struct batch {
 	struct mnl_nlmsg_batch *b;
 	uint32_t seq;
 	bool full;
+	struct nlmsghdr *tail;
 };
 
 static struct nlmsghdr *request(struct batch *bt, uint16_t type, uint16_t flags)
@@ -137,8 +218,9 @@ static struct nlmsghdr *request(struct batch *bt, uint16_t type, uint16_t flags)
 	struct nfgenmsg *nfg;
 
 	nlh->nlmsg_type = NFNL_SUBSYS_NFTABLES << 8 | type;
-	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | flags;
+	nlh->nlmsg_flags = NLM_F_REQUEST | flags;
 	nlh->nlmsg_seq = bt->seq++;
+	bt->tail = nlh;
 	nfg = mnl_nlmsg_put_extra_header(nlh, sizeof(*nfg));
 	nfg->nfgen_family = NFPROTO_INET;
 	nfg->version = NFNETLINK_V0;
@@ -256,17 +338,55 @@ static void ifname_is(struct nlmsghdr *nlh, uint32_t key, const char *name, bool
 	cmp(nlh, NFT_CMP_EQ, v, prefix ? (uint16_t)strlen(name) : FW_IFNAMSIZ);
 }
 
-/* The connection's state, in the kernel's order, has one of @bits. */
-static void ct_state_any(struct nlmsghdr *nlh, uint32_t bits)
+/*
+ * The connection's state (@key NFT_CT_STATE) or status (NFT_CT_STATUS), in
+ * the kernel's order, has one of @bits.
+ */
+static void ct_any(struct nlmsghdr *nlh, uint32_t key, uint32_t bits)
 {
 	static const uint32_t none;
 	struct expr e = expr_begin(nlh, "ct");
 
-	mnl_attr_put_u32(nlh, NFTA_CT_KEY, htonl(NFT_CT_STATE));
+	mnl_attr_put_u32(nlh, NFTA_CT_KEY, htonl(key));
 	mnl_attr_put_u32(nlh, NFTA_CT_DREG, htonl(NFT_REG_1));
 	expr_end(nlh, e);
 	bitwise(nlh, &bits, sizeof(bits));
 	cmp(nlh, NFT_CMP_NEQ, &none, sizeof(none));
+}
+
+static void ct_state_any(struct nlmsghdr *nlh, uint32_t bits)
+{
+	ct_any(nlh, NFT_CT_STATE, bits);
+}
+
+/* The first register from @from to @to, each of @len bytes. */
+static void range(struct nlmsghdr *nlh, const void *from, const void *to, uint16_t len)
+{
+	struct expr e = expr_begin(nlh, "range");
+	struct nlattr *d;
+
+	mnl_attr_put_u32(nlh, NFTA_RANGE_SREG, htonl(NFT_REG_1));
+	mnl_attr_put_u32(nlh, NFTA_RANGE_OP, htonl(NFT_RANGE_EQ));
+	d = mnl_attr_nest_start(nlh, NFTA_RANGE_FROM_DATA);
+	mnl_attr_put(nlh, NFTA_DATA_VALUE, len, from);
+	mnl_attr_nest_end(nlh, d);
+	d = mnl_attr_nest_start(nlh, NFTA_RANGE_TO_DATA);
+	mnl_attr_put(nlh, NFTA_DATA_VALUE, len, to);
+	mnl_attr_nest_end(nlh, d);
+	expr_end(nlh, e);
+}
+
+/* @len bytes of @data into the register @reg. */
+static void immediate(struct nlmsghdr *nlh, uint32_t reg, const void *data, uint16_t len)
+{
+	struct expr e = expr_begin(nlh, "immediate");
+	struct nlattr *d;
+
+	mnl_attr_put_u32(nlh, NFTA_IMMEDIATE_DREG, htonl(reg));
+	d = mnl_attr_nest_start(nlh, NFTA_IMMEDIATE_DATA);
+	mnl_attr_put(nlh, NFTA_DATA_VALUE, len, data);
+	mnl_attr_nest_end(nlh, d);
+	expr_end(nlh, e);
 }
 
 static void verdict(struct nlmsghdr *nlh, int code)
@@ -460,6 +580,113 @@ static void masquerade(struct batch *bt, const struct fw_lan *l, const struct fw
 	rule_end(bt, nlh, exprs);
 }
 
+/*
+ * A new connection a forward or a DMZ took, let through before the
+ * protection drops what comes in: only the prerouting chain's rules
+ * translate a connection's destination, and each to its own device.
+ */
+static void accept_forwarded(struct batch *bt)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, FORWARD, &exprs);
+
+	ct_any(nlh, NFT_CT_STATUS, IPS_DST_NAT);
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+}
+
+/*
+ * What comes in by the interface @ifname to the address @addr there, IPv4:
+ * the beginning of each rule of the prerouting chain, as nft orders it.
+ */
+static void to_connection(struct nlmsghdr *nlh, const char *ifname, uint32_t addr)
+{
+	static const uint8_t ipv4 = NFPROTO_IPV4;
+	uint32_t a = htonl(addr);
+
+	ifname_is(nlh, NFT_META_IIFNAME, ifname, false);
+	meta(nlh, NFT_META_NFPROTO);
+	cmp(nlh, NFT_CMP_EQ, &ipv4, sizeof(ipv4));
+	payload(nlh, NFT_PAYLOAD_NETWORK_HEADER, 16, 4);
+	cmp(nlh, NFT_CMP_EQ, &a, sizeof(a));
+}
+
+/*
+ * The destination translated to @dev, the address in the first register;
+ * with @port, to that port, in the second, which nft names in its flags.
+ */
+static void dnat(struct nlmsghdr *nlh, uint32_t dev, const uint16_t *port)
+{
+	uint32_t a = htonl(dev);
+	struct expr e;
+
+	immediate(nlh, NFT_REG_1, &a, sizeof(a));
+	if (port) {
+		uint16_t p = htons(*port);
+
+		immediate(nlh, NFT_REG_2, &p, sizeof(p));
+	}
+	e = expr_begin(nlh, "nat");
+	mnl_attr_put_u32(nlh, NFTA_NAT_TYPE, htonl(NFT_NAT_DNAT));
+	mnl_attr_put_u32(nlh, NFTA_NAT_FAMILY, htonl(NFPROTO_IPV4));
+	mnl_attr_put_u32(nlh, NFTA_NAT_REG_ADDR_MIN, htonl(NFT_REG_1));
+	if (port) {
+		mnl_attr_put_u32(nlh, NFTA_NAT_REG_PROTO_MIN, htonl(NFT_REG_2));
+		mnl_attr_put_u32(nlh, NFTA_NAT_FLAGS, htonl(NF_NAT_RANGE_PROTO_SPECIFIED));
+	}
+	expr_end(nlh, e);
+}
+
+/*
+ * A forward: a port to the device's port, and a range to the same ports of
+ * the device, which a translation of the address alone keeps.
+ */
+static void forward_rule(struct batch *bt, const struct fw_fwd *f)
+{
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, PREROUTING, &exprs);
+	uint16_t from = htons(f->from), last = htons(f->last);
+
+	to_connection(nlh, f->ifname, f->addr);
+	meta(nlh, NFT_META_L4PROTO);
+	cmp(nlh, NFT_CMP_EQ, &f->proto, sizeof(f->proto));
+	payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 2, 2);
+	if (f->last > f->from)
+		range(nlh, &from, &last, sizeof(from));
+	else
+		cmp(nlh, NFT_CMP_EQ, &from, sizeof(from));
+	dnat(nlh, f->dev, f->last > f->from ? NULL : &f->port);
+	rule_end(bt, nlh, exprs);
+}
+
+/*
+ * A DMZ, after the forwards: DHCP's answers to the client's port stay with
+ * the stick, which a connection by DHCP takes its address by, and so does
+ * ICMP, which the stick answers; the rest goes to the device.
+ */
+static void dmz_rules(struct batch *bt, const struct fw_dmz *z)
+{
+	static const uint8_t udp = IPPROTO_UDP, icmp = IPPROTO_ICMP;
+	uint16_t client = htons(68);
+	struct nlattr *exprs;
+	struct nlmsghdr *nlh = rule_begin(bt, PREROUTING, &exprs);
+
+	to_connection(nlh, z->ifname, z->addr);
+	meta(nlh, NFT_META_L4PROTO);
+	cmp(nlh, NFT_CMP_EQ, &udp, sizeof(udp));
+	payload(nlh, NFT_PAYLOAD_TRANSPORT_HEADER, 2, 2);
+	cmp(nlh, NFT_CMP_EQ, &client, sizeof(client));
+	verdict(nlh, NF_ACCEPT);
+	rule_end(bt, nlh, exprs);
+
+	nlh = rule_begin(bt, PREROUTING, &exprs);
+	to_connection(nlh, z->ifname, z->addr);
+	meta(nlh, NFT_META_L4PROTO);
+	cmp(nlh, NFT_CMP_NEQ, &icmp, sizeof(icmp));
+	dnat(nlh, z->dev, NULL);
+	rule_end(bt, nlh, exprs);
+}
+
 static struct batch begin(char *buf, size_t cap, uint32_t seq)
 {
 	struct batch bt = { .b = mnl_nlmsg_batch_start(buf, cap / 2), .seq = seq };
@@ -472,6 +699,13 @@ static size_t end(struct batch *bt, uint32_t *last)
 {
 	size_t len;
 
+	/*
+	 * The kernel answers the requests of a batch all at once, at its end:
+	 * an acknowledgement of each of a long one overran the socket's
+	 * receive buffer (ENOBUFS) though the table was taken. The last asks
+	 * for one, and a request that fails is answered before it anyway.
+	 */
+	bt->tail->nlmsg_flags |= NLM_F_ACK;
 	*last = bt->seq - 1;
 	edge(bt, NFNL_MSG_BATCH_END);
 	len = bt->full ? 0 : mnl_nlmsg_batch_size(bt->b);
@@ -483,6 +717,7 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		uint32_t *last)
 {
 	struct batch bt = begin(buf, cap, seq);
+	bool forwards = s->nfwds || s->ndmzs;
 	struct nlmsghdr *nlh;
 
 	destroy(&bt);
@@ -493,6 +728,9 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		flowtable(&bt, s);
 	chain(&bt, FORWARD, "filter", NF_INET_FORWARD, 0);
 	chain(&bt, POSTROUTING, "nat", NF_INET_POST_ROUTING, SRCNAT_PRIORITY);
+	/* Without forwards, no packet goes through a chain of them. */
+	if (forwards)
+		chain(&bt, PREROUTING, "nat", NF_INET_PRE_ROUTING, DSTNAT_PRIORITY);
 	for (int o = 0; o < s->nouts; o++)
 		clamp_mss(&bt, &s->out[o]);
 	for (int i = 0; s->offload && i < s->nlans; i++) {
@@ -502,12 +740,18 @@ size_t fw_batch(const struct fw_spec *s, char *buf, size_t cap, uint32_t seq,
 		flow_add(&bt, &s->lan[i], NFT_META_OIFNAME, IPPROTO_UDP);
 	}
 	accept_answers(&bt);
+	if (forwards)
+		accept_forwarded(&bt);
 	for (int i = 0; i < s->nlans; i++)
 		for (int o = 0; o < s->nouts; o++)
 			keep_out(&bt, &s->lan[i], &s->out[o]);
 	for (int i = 0; i < s->nlans; i++)
 		for (int o = 0; o < s->nouts; o++)
 			masquerade(&bt, &s->lan[i], &s->out[o]);
+	for (int i = 0; i < s->nfwds; i++)
+		forward_rule(&bt, &s->fwd[i]);
+	for (int i = 0; i < s->ndmzs; i++)
+		dmz_rules(&bt, &s->dmz[i]);
 	return end(&bt, last);
 }
 
