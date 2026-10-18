@@ -26,7 +26,9 @@
  * IPOEn_KIND (static, an address typed in, or dhcp, one from the operator's
  * DHCP server; empty for none, which removes it), IPOEn_GEM, IPOEn_VLAN and
  * IPOEn_MAC, as a session's, IPOEn_FAMILY (ipv4, ipv6 or both), and for a
- * static one IPOEn_ADDRESS (with its prefix length), IPOEn_GATEWAY,
+ * static one IPOEn_ADDRESS (with its prefix length, 8 to 32 bits),
+ * IPOEn_GATEWAY (another address of the network, or for a /32, and a /31
+ * whose other address it is not, any host's on the link outside it),
  * IPOEn_DNS (the name servers, apart by blanks), IPOEn_ADDRESS6,
  * IPOEn_GATEWAY6 and IPOEn_PREFIX6 (the IPv6 prefix of the networks behind
  * the stick). Sessions with an account and these together are seven at most.

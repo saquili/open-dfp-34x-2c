@@ -293,6 +293,7 @@ static void test_lans(void)
 		"LAN1_ADDRESS=192.168.1.0/24",
 		"LAN1_ADDRESS=192.168.1.255/24",
 		"LAN1_ADDRESS=192.168.1.1/31",
+		"LAN1_ADDRESS=192.168.1.1/32",
 		"LAN1_ADDRESS=192.168.1.1/7",
 		"LAN1_ADDRESS=192.168.1.1",
 		"LAN1_ADDRESS=192.168.01.1/24",
@@ -429,6 +430,9 @@ static void test_fixed(void)
 #define STATIC1 "IPOE1_KIND=static\nIPOE1_VLAN=420\nIPOE1_ADDRESS=192.0.2.10/24\n" \
 		"IPOE1_GATEWAY=192.0.2.1\n"
 #define DHCP2 "IPOE2_KIND=dhcp\nIPOE2_VLAN=421\n"
+/* A static connection with an address alone and a gateway outside it. */
+#define STATIC32 "IPOE1_KIND=static\nIPOE1_VLAN=420\nIPOE1_ADDRESS=203.0.113.7/32\n" \
+		 "IPOE1_GATEWAY=198.51.100.1\n"
 
 static void test_ipoe(void)
 {
@@ -442,6 +446,9 @@ static void test_ipoe(void)
 		"IPOE1_FAMILY=ipx",
 		"IPOE1_MAC=01:00:5e:00:00:01",
 		"IPOE1_ADDRESS=192.0.2.0/24",
+		"IPOE1_ADDRESS=192.0.2.3/30",
+		"IPOE1_ADDRESS=192.0.2.10/33",
+		"IPOE1_ADDRESS=10.0.0.1/7",
 		"IPOE1_ADDRESS=192.0.2.10",
 		"IPOE1_GATEWAY=192.0.2",
 		"IPOE1_DNS=198.51.100.53,198.51.100.54",
@@ -491,6 +498,30 @@ static void test_ipoe(void)
 	      strstr(g_err, "the gateway is no other address of its network"));
 	CHECK(judge(&s, STATIC1 "IPOE1_GATEWAY=192.0.2.10\n") == -2);
 	CHECK(judge(&s, STATIC1 "IPOE1_GATEWAY=192.0.2.255\n") == -2);
+	/* Up to a /30 the gateway is in the network, from /8 on. */
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=192.0.2.9/30\nIPOE1_GATEWAY=192.0.2.13\n") == -2 &&
+	      strstr(g_err, "the gateway is no other address of its network"));
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=10.1.2.3/8\nIPOE1_GATEWAY=11.0.0.1\n") == -2 &&
+	      strstr(g_err, "the gateway is no other address of its network"));
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=10.1.2.3/8\nIPOE1_GATEWAY=10.0.0.1\n") == 0);
+
+	/* An address alone, its gateway outside it, on the link. */
+	CHECK(judge(&s, STATIC32) == 0 && has("IPOE1_ADDRESS=203.0.113.7/32") &&
+	      has("IPOE1_GATEWAY=198.51.100.1"));
+	/* Both addresses of a /31 are hosts', the gateway the other or outside it. */
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=192.0.2.10/31\nIPOE1_GATEWAY=192.0.2.11\n") == 0 &&
+	      has("IPOE1_ADDRESS=192.0.2.10/31"));
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=192.0.2.11/31\nIPOE1_GATEWAY=192.0.2.10\n") == 0);
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=192.0.2.10/31\nIPOE1_GATEWAY=198.51.100.1\n") == 0);
+	/* Not its own address, nor one no host has. */
+	CHECK(judge(&s, STATIC32 "IPOE1_GATEWAY=203.0.113.7\n") == -2 &&
+	      strstr(g_err, "the gateway is no other host's address"));
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=192.0.2.10/31\nIPOE1_GATEWAY=192.0.2.10\n") == -2 &&
+	      strstr(g_err, "the gateway is no other host's address"));
+	CHECK(judge(&s, STATIC32 "IPOE1_GATEWAY=255.255.255.255\n") == -2);
+	CHECK(judge(&s, STATIC32 "IPOE1_GATEWAY=224.0.0.1\n") == -2);
+	CHECK(judge(&s, STATIC32 "IPOE1_GATEWAY=0.0.0.0\n") == -2);
+	CHECK(judge(&s, STATIC32 "IPOE1_GATEWAY=127.0.0.1\n") == -2);
 	CHECK(judge(&s, STATIC1 "IPOE1_FAMILY=both\n") == -2 &&
 	      strstr(g_err, "IPOE1_ADDRESS6 and IPOE1_GATEWAY6"));
 	/* IPv6 alone needs no IPv4. */
@@ -541,6 +572,15 @@ static void test_ipoe(void)
 			"LAN1_ADDRESS=192.168.1.1/24\n") == -2 &&
 	      strstr(g_err, "connection 2 carries no IPv4"));
 	CHECK(judge(&s, STATIC1 "LAN1_CONN=ipoe:1\nLAN1_ADDRESS=192.0.2.129/25\n") == -2 &&
+	      strstr(g_err, "network 1 and connection 1 share addresses"));
+	/* An address alone: a network that holds it, or the gateway outside it. */
+	CHECK(judge(&s, STATIC32 "LAN1_CONN=ipoe:1\nLAN1_ADDRESS=192.168.1.1/24\n") == 0);
+	CHECK(judge(&s, STATIC32 "LAN1_CONN=ipoe:1\nLAN1_ADDRESS=203.0.113.1/24\n") == -2 &&
+	      strstr(g_err, "network 1 and connection 1 share addresses"));
+	CHECK(judge(&s, STATIC32 "LAN1_CONN=ipoe:1\nLAN1_ADDRESS=198.51.100.254/24\n") == -2 &&
+	      strstr(g_err, "network 1 holds the gateway of connection 1"));
+	CHECK(judge(&s, STATIC1 "IPOE1_ADDRESS=192.0.2.10/31\nIPOE1_GATEWAY=192.0.2.11\n"
+			"LAN1_CONN=ipoe:1\nLAN1_ADDRESS=192.0.2.1/24\n") == -2 &&
 	      strstr(g_err, "network 1 and connection 1 share addresses"));
 	/* Sessions and connections are networks' ways out side by side. */
 	CHECK(judge(&s, KEEPS NET1 DHCP2 "LAN2_CONN=ipoe:2\nLAN2_ADDRESS=10.0.0.1/24\n") == 0);

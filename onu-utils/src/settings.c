@@ -24,6 +24,7 @@ enum kind {
 	K_CONN,
 	K_NAME,
 	K_CIDR,
+	K_WAN_CIDR,
 	K_IPV4_OPT,
 	K_LEASE,
 	K_SUBNET6,
@@ -92,7 +93,7 @@ static const struct {
 	[SET_I_VLAN] = { "VLAN", K_VLAN, "" },
 	[SET_I_MAC] = { "MAC", K_MAC_OPT, "" },
 	[SET_I_FAMILY] = { "FAMILY", K_FAMILY, "ipv4" },
-	[SET_I_ADDRESS] = { "ADDRESS", K_CIDR, "" },
+	[SET_I_ADDRESS] = { "ADDRESS", K_WAN_CIDR, "" },
 	[SET_I_GATEWAY] = { "GATEWAY", K_IPV4_OPT, "" },
 	[SET_I_DNS] = { "DNS", K_ADDRS, "" },
 	[SET_I_ADDRESS6] = { "ADDRESS6", K_CIDR6, "" },
@@ -199,10 +200,22 @@ static uint32_t mask_of(unsigned long len)
 }
 
 /*
- * a.b.c.d/len: an address of a network of 8 to 30 bits of prefix, neither
- * its first address nor its last.
+ * Whether @ip is an address a host on a link may have: none of 0.0.0.0/8,
+ * the loopback 127.0.0.0/8, nor from 224.0.0.0 up, a group's or the
+ * broadcast address.
  */
-static bool cidr(const char *s, uint32_t *addr, unsigned long *len)
+static bool host4(uint32_t ip)
+{
+	return ip >> 24 != 0 && ip >> 24 != 127 && ip < 0xe0000000u;
+}
+
+/*
+ * a.b.c.d/len: an address of a network of 8 to @hi bits of prefix. In a
+ * network of 30 bits or fewer it is neither the first address nor the last;
+ * both of a /31 are hosts' (RFC 3021), and a /32 is the address alone.
+ */
+static bool cidr_upto(const char *s, unsigned long hi, uint32_t *addr,
+		      unsigned long *len)
 {
 	char a[16];
 	const char *slash = strchr(s, '/');
@@ -213,16 +226,31 @@ static bool cidr(const char *s, uint32_t *addr, unsigned long *len)
 		return false;
 	memcpy(a, s, (size_t)(slash - s));
 	a[slash - s] = '\0';
-	if (!ipv4(a, &ip) || !number(slash + 1, 8, 30, &l))
+	if (!ipv4(a, &ip) || !number(slash + 1, 8, hi, &l))
 		return false;
 	m = mask_of(l);
-	if ((ip & ~m) == 0 || (ip & ~m) == ~m)
+	if (l <= 30 && ((ip & ~m) == 0 || (ip & ~m) == ~m))
 		return false;
 	if (addr)
 		*addr = ip;
 	if (len)
 		*len = l;
 	return true;
+}
+
+/* The stick's address in a local network, which has room for devices. */
+static bool cidr(const char *s, uint32_t *addr, unsigned long *len)
+{
+	return cidr_upto(s, 30, addr, len);
+}
+
+/*
+ * An IPoE connection's address, which an operator may give alone, as a /32
+ * with a gateway outside it, or as one of a /31.
+ */
+static bool wan_cidr(const char *s, uint32_t *addr, unsigned long *len)
+{
+	return cidr_upto(s, 32, addr, len);
 }
 
 /* An IPv6 address, as inet_pton(3) takes it: no zone, no length. */
@@ -351,6 +379,8 @@ static bool valid(enum kind kind, const char *v)
 		return name(v);
 	case K_CIDR:
 		return !*v || cidr(v, NULL, NULL);
+	case K_WAN_CIDR:
+		return !*v || wan_cidr(v, NULL, NULL);
 	case K_IPV4_OPT:
 		return !*v || ipv4(v, NULL);
 	case K_LEASE: {
@@ -731,7 +761,8 @@ static bool lan_on(const struct settings *s, int n)
  * stick, in a VLAN of its own on the host link, which no session hands an
  * address down in and which is no management VLAN, with an address of its
  * own; the addresses DHCP leases are in it, and do not hold the stick's.
- * No two networks share a VLAN, or addresses.
+ * No two networks share a VLAN, or addresses, nor does a network share
+ * addresses with an IPoE connection or hold its gateway.
  */
 static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 {
@@ -791,18 +822,32 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
 				 a + 1, n + 1, *vlan ? vlan : "the untagged link");
 			return false;
 		}
-		/* A route to the one would take what goes to the other. */
+		/*
+		 * A route to the one would take what goes to the other; so
+		 * would the route to a gateway outside a connection's address,
+		 * which goes to the gateway alone.
+		 */
 		for (int c = 0; c < SETTINGS_IPOE; c++) {
-			uint32_t ipc;
+			const char(*ic)[SETTINGS_VALUE_MAX] = s->ival[c];
+			uint32_t ipc, gwc;
 			unsigned long lenc;
 
 			if (!ipoe_on(s, c) ||
-			    !cidr(s->ival[c][SET_I_ADDRESS], &ipc, &lenc))
+			    !wan_cidr(ic[SET_I_ADDRESS], &ipc, &lenc))
 				continue;
 			m = mask_of(len < lenc ? len : lenc);
 			if ((ip & m) == (ipc & m)) {
 				snprintf(err, errcap,
 					 "network %d and connection %d share addresses",
+					 a + 1, c + 1);
+				return false;
+			}
+			m = mask_of(len);
+			if (!strcmp(ic[SET_I_KIND], "static") &&
+			    ipoe_carries(s, c, "ipv4") &&
+			    ipv4(ic[SET_I_GATEWAY], &gwc) && (gwc & m) == (ip & m)) {
+				snprintf(err, errcap,
+					 "network %d holds the gateway of connection %d",
 					 a + 1, c + 1);
 				return false;
 			}
@@ -849,7 +894,9 @@ static bool lans_coherent(const struct settings *s, char *err, size_t errcap)
  * An IPoE connection runs in a VLAN of the PON, one at most in a VLAN, which
  * is no management VLAN; a static one has an address and a gateway of each
  * family it carries, the IPv4 gateway another address of the address's
- * network. Sessions with an account and these connections are seven at most.
+ * network, or of a /32's or a /31's any other host's, which is on the link
+ * outside it. Sessions with an account and these connections are seven at
+ * most.
  */
 static bool ipoe_coherent(const struct settings *s, char *err, size_t errcap)
 {
@@ -896,7 +943,7 @@ static bool ipoe_coherent(const struct settings *s, char *err, size_t errcap)
 		if (strcmp(ia[SET_I_KIND], "static"))
 			continue;
 		if (ipoe_carries(s, a, "ipv4")) {
-			if (!cidr(ia[SET_I_ADDRESS], &ip, &len) ||
+			if (!wan_cidr(ia[SET_I_ADDRESS], &ip, &len) ||
 			    !ipv4(ia[SET_I_GATEWAY], &gw)) {
 				snprintf(err, errcap,
 					 "connection %d: a static one needs IPOE%d_ADDRESS and IPOE%d_GATEWAY",
@@ -904,10 +951,18 @@ static bool ipoe_coherent(const struct settings *s, char *err, size_t errcap)
 				return false;
 			}
 			m = mask_of(len);
-			if ((gw & m) != (ip & m) || gw == ip || (gw & ~m) == 0 ||
-			    (gw & ~m) == ~m) {
+			if (len <= 30 &&
+			    ((gw & m) != (ip & m) || gw == ip || (gw & ~m) == 0 ||
+			     (gw & ~m) == ~m)) {
 				snprintf(err, errcap,
 					 "connection %d: the gateway is no other address of its network",
+					 a + 1);
+				return false;
+			}
+			/* A /32's gateway, or a /31's but the other address, is on the link. */
+			if (len > 30 && (gw == ip || !host4(gw))) {
+				snprintf(err, errcap,
+					 "connection %d: the gateway is no other host's address",
 					 a + 1);
 				return false;
 			}
