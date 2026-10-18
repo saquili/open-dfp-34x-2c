@@ -239,7 +239,9 @@ wrong sign-in, 429 while sign-ins are stopped.
   session's own VLAN, ``untagged`` for none). With an account the stick holds
   the session, and in each VLAN towards the host the first that hands down and
   carries IPv4 hands its address to the router; ``USER=`` removes it, with
-  the local networks that go out by it. The panel names no mode: without
+  the local networks that go out by it, and ``PASS=on`` takes those networks
+  away too, with their fixed addresses, as the session keeps no address on
+  the stick for them to go out behind. The panel names no mode: without
   accounts the router dials through the stick.
 * ``ipoe``: a connection that takes its address as a router does: ``ID``
   (none for the first free one), ``KIND`` (``static``, an address typed in,

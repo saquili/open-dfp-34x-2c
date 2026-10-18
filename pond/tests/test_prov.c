@@ -2189,6 +2189,91 @@ static void test_ipoe(void)
 	unsetenv("POND_ONU_APPLY");
 }
 
+static void test_session_pass(void)
+{
+	static char buf[16384];
+	char file[512], err[256], stub[512];
+	const char *s;
+	int rc;
+
+	puts("a session that comes to hand its address down");
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		char path[32];
+
+		snprintf(path, sizeof(path), "/run/onu-pppoe%d", n);
+		unlink(prov_path(path, file, sizeof(file)));
+	}
+	rc = prov_session_set("USER=user@example.net\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
+			      err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_ipoe_set("KIND=dhcp\nVLAN=420\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("CONN=pppoe:1\nVLAN=100\nADDRESS=192.168.1.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("CONN=ipoe:1\nVLAN=20\nADDRESS=192.168.2.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_fixed_set("LAN=1\nMAC=00:00:5e:00:53:a1\nIP=192.168.1.10\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_fixed_set("LAN=2\nMAC=00:00:5e:00:53:a2\nIP=192.168.2.10\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN1_CONN=pppoe:1") &&
+		      file_has("/run/onu.conf", "LAN2_CONN=ipoe:1") &&
+		      file_has("/run/onu.conf", "FIXED1=1/00:00:5e:00:53:a1/192.168.1.10") &&
+		      file_has("/run/onu.conf", "FIXED2=2/00:00:5e:00:53:a2/192.168.2.10"),
+	      "a network out by a session that keeps its address, one out by a connection, a fixed address in each");
+
+	/* onu-config's own rule stays: the settings alone are refused. */
+	check(prov_settings_set("SESSION1_PASS=on\n", err, sizeof(err)) == -EINVAL &&
+		      strstr(err, "network 1: session 1 hands its address down"),
+	      "onu-config still refuses a network out by a session that hands its address down");
+	check(file_has("/run/onu.conf", "SESSION1_PASS=off") &&
+		      file_has("/run/onu.conf", "LAN1_CONN=pppoe:1"),
+	      "and nothing of it is written");
+
+	rc = prov_session_set("ID=1\nPASS=on\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION1_PASS=on") &&
+		      file_has("/run/onu-pppoe1", "user@example.net") &&
+		      !file_has("/run/onu.conf", "LAN1_") &&
+		      !file_has("/run/onu.conf", "00:00:5e:00:53:a1") &&
+		      !strstr(s, "\"conn\":\"pppoe:1\"") && !strstr(s, "00:00:5e:00:53:a1"),
+	      "PASS=on takes the session's networks and their fixed addresses away in the same write");
+	check(file_has("/run/onu.conf", "LAN2_CONN=ipoe:1") &&
+		      file_has("/run/onu.conf", "FIXED2=2/00:00:5e:00:53:a2/192.168.2.10") &&
+		      strstr(s, "\"conn\":\"ipoe:1\"") && strstr(s, "00:00:5e:00:53:a2"),
+	      "and leaves the other connection's network and its fixed address");
+
+	/* A write that keeps the session handing down drops nothing more. */
+	rc = prov_session_set("ID=1\nVLAN=36\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "SESSION1_VLAN=36") &&
+		      file_has("/run/onu.conf", "LAN2_CONN=ipoe:1"),
+	      "a change of a session that hands its address down leaves the other networks");
+	/* Kept on the stick again, the session takes a network once more. */
+	rc = prov_session_set("ID=1\nPASS=off\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	rc |= prov_lan_set("CONN=pppoe:1\nVLAN=100\nADDRESS=192.168.1.1/24\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN1_CONN=pppoe:1"),
+	      "a session that keeps its address has a network again");
+	rc = prov_session_set("ID=1\nVLAN=410\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	check(rc == 0 && file_has("/run/onu.conf", "LAN1_CONN=pppoe:1"),
+	      "and a change that leaves PASS off keeps it");
+
+	prov_session_set("ID=1\nUSER=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	prov_ipoe_set("ID=1\nKIND=\n", err, sizeof(err));
+	s = settled(buf, sizeof(buf));
+	(void)s;
+	unsetenv("POND_ONU_APPLY");
+}
+
 /* onu-update's stand-in: the status of a stick that runs bank 1 on trial. */
 static const char update_stub[] =
 	"#!/bin/sh\n"
@@ -2545,6 +2630,7 @@ int main(void)
 	test_panel_values();
 	test_lans();
 	test_ipoe();
+	test_session_pass();
 	test_omci();
 	test_omci_frames();
 	test_system();

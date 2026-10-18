@@ -35,7 +35,8 @@
  * (IPoE: an address typed in, or one from the operator's DHCP server), each
  * with what onu-apply says it brought up (ipoe.N.* of onu-apply state). A
  * connection or a session removed takes the networks that go out by it
- * with it, and their fixed addresses.
+ * with it, and their fixed addresses; so does a session that comes to hand
+ * its address down.
  */
 
 #define _GNU_SOURCE
@@ -885,8 +886,9 @@ static void lans_drop(const char *text, const char *conn, char *change, size_t c
  * absent SECRET keeps the one there is); VLAN, MAC, GEM, FAMILY, PASS and
  * HOST_VLAN. onu-config judges them, and takes over the WAN's settings of before,
  * which the first session took when it had none of its own. A session
- * removed takes the networks that go out by it with it. Sessions and the
- * IPoE connections are seven at most together.
+ * removed takes the networks that go out by it with it, and so does one
+ * that hands its address down, PASS=on. Sessions and the IPoE connections
+ * are seven at most together.
  */
 int prov_session_write(const char *val, char *err, size_t errcap,
 		       prov_done done, void *ctx)
@@ -905,6 +907,7 @@ int prov_session_write(const char *val, char *err, size_t errcap,
 	const char *p = line_value(val, "PASS", pass, sizeof(pass));
 	const char *h = line_value(val, "HOST_VLAN", host, sizeof(host));
 	struct account acct[SESSIONS];
+	char conn[16], key[32];
 	int n = 0;
 	size_t len = 0;
 	int rc;
@@ -947,11 +950,9 @@ int prov_session_write(const char *val, char *err, size_t errcap,
 	explicit_bzero(acct, sizeof(acct));
 
 	change[0] = '\0';
+	snprintf(conn, sizeof(conn), "pppoe:%d", n);
 	if (u && !*u) {
-		char conn[16];
-
 		append(change, sizeof(change), &len, "PPPOE%d_USER=\n", n);
-		snprintf(conn, sizeof(conn), "pppoe:%d", n);
 		lans_drop(text, conn, change, sizeof(change), &len);
 	} else {
 		if (u)
@@ -970,6 +971,19 @@ int prov_session_write(const char *val, char *err, size_t errcap,
 			append(change, sizeof(change), &len, "SESSION%d_PASS=%s\n", n, p);
 		if (h)
 			append(change, sizeof(change), &len, "SESSION%d_HOST_VLAN=%s\n", n, h);
+		/*
+		 * A session that hands its address down, PASS on as told or
+		 * as it is (on, as a new one's, where the settings name
+		 * none), keeps none on the stick for a network to go out
+		 * behind, which onu-config refuses: its networks go with the
+		 * change, as the panel's stand-in does it.
+		 */
+		if (!p) {
+			snprintf(key, sizeof(key), "SESSION%d_PASS", n);
+			p = line_value(text, key, pass, sizeof(pass));
+		}
+		if (!p || !strcmp(p, "on"))
+			lans_drop(text, conn, change, sizeof(change), &len);
 	}
 
 	rc = prov_settings_write(change, err, errcap, done, ctx);
