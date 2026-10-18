@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+
+version = 1
+
+# ubusd's access list cannot carry a comment.
+[[annotations]]
+path = "acl/dhcpc.json"
+SPDX-FileCopyrightText = "2026 Paweł Phan <szop.hektar_1w@icloud.com>"
+SPDX-License-Identifier = "GPL-2.0-only"

@@ -1,0 +1,72 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
+#
+# onu-dhcpc: the script of udhcpc, BusyBox's DHCP client, for an IPoE
+# connection whose address comes from the operator's DHCP server
+# (onu-apply). udhcpc runs it as the account dhcpc, with the event as its
+# argument and the lease in its environment: interface, ip, mask (the prefix
+# length), router, dns and lease (seconds). It writes what the lease brings
+# into the connection's directory, /run/ipoe/K, the one whose dev is the
+# interface, and has onu-apply follow it (onu-call dhcpc) when the address,
+# the gateway or the name servers changed: onu-apply, which only root may
+# run, puts them in place. A lease renewed as it was moves only its end.
+#
+#   bound, renew   ipv4 (address/length), router (the first gateway), dns
+#                  (one blank apart) and until (the lease's end, in seconds
+#                  of the uptime)
+#   deconfig       no lease: what the last one brought goes
+#   leasefail, nak nothing: deconfig comes after them
+#
+# ONU_ROOT names another root for the files it reads and writes, and for
+# onu-call, which the tests use.
+
+set -u
+ROOT=${ONU_ROOT:-}
+RUN=$ROOT/run
+CALL=$ROOT/usr/lib/onu/onu-call
+
+dir=
+for d in "$RUN"/ipoe/*; do
+	if [ "$(cat "$d/dev" 2>/dev/null)" = "${interface:-}" ]; then
+		dir=$d
+		break
+	fi
+done
+[ -n "$dir" ] || exit 0
+
+# The fact $1 with the value $2, or none for an empty one; true when it
+# changed. A new value is renamed into place, so that onu-apply never reads
+# half of it.
+fact() {
+	[ "$(cat "$dir/$1" 2>/dev/null)" != "$2" ] || return 1
+	if [ -n "$2" ]; then
+		echo "$2" >"$dir/.$1" && mv "$dir/.$1" "$dir/$1"
+	else
+		rm -f "$dir/$1"
+	fi
+	return 0
+}
+
+changed=
+case ${1:-} in
+bound | renew)
+	up=0
+	read -r up _ 2>/dev/null <"$ROOT/proc/uptime"
+	fact until "$((${up%%.*} + ${lease:-0}))"
+	gw=${router:-}
+	# $dns is a list of addresses, one blank apart once split.
+	fact ipv4 "${ip:-}/${mask:-32}" && changed=1
+	fact router "${gw%% *}" && changed=1
+	fact dns "$(echo ${dns:-})" && changed=1
+	;;
+deconfig)
+	for f in ipv4 router dns until; do
+		fact "$f" "" && changed=1
+	done
+	;;
+esac
+if [ -n "$changed" ]; then
+	"$CALL" dhcpc >/dev/null || echo "onu-dhcpc: onu-apply was not told of the lease" >&2
+fi
+exit 0

@@ -1,0 +1,6 @@
+{
+	"user": "dhcpc",
+	"access": {
+		"onu-act": { "methods": [ "dhcpc" ] }
+	}
+}
