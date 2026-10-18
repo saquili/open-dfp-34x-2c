@@ -233,9 +233,12 @@ Private to one program or to onu-utils
      - The directories the boot script makes for the accounts of ``omcid``,
        ``dhcp6d``, ``pond`` and ``ntp`` (``timed``), each owned by its
        account. The one of ``pond`` is closed to all others (mode 0700).
-   * - ``/run/udhcpd-lanN.conf``, ``.leases`` and ``.pid``
-     - The DHCP server of a local network: its configuration, its leases and
-       its PID.
+   * - ``/run/udhcpd-lanV.conf``, ``.leases`` and ``.pid``
+     - The DHCP server that hands a session's address down on the host link
+       of VLAN V (``lanV``): its configuration, its one lease and its PID.
+   * - ``/run/udhcpd-netN.conf``, ``.leases`` and ``.pid``
+     - The DHCP server of local network N: its configuration, its leases,
+       written every ten seconds and read by ``pond``, and its PID.
    * - ``/run/dropbear.pid``, ``/run/dropbear-pending.pid``
      - The ssh server's PID, and that of the one a management pair on trial
        starts beside it.
