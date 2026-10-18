@@ -2677,6 +2677,155 @@ static void test_clock(void)
 	"\"tables\":[]}],\"truncated\":false,\"logical_password_set\":true,"       \
 	"\"frames\":{\"handled\":5,\"rejected\":1,\"answered\":4}}"
 
+/*
+ * The largest settings the stick can have, made as the panel makes them,
+ * through the providers, and judged by onu-config: seven sessions, eight
+ * networks, 512 fixed addresses, each name of 32 characters, the most that
+ * need escaping that the store holds, and 512 devices with a lease in each
+ * network, each name of 20 bytes that need \u00XX. They are served whole:
+ * alone, as a reply, and among other values as the panel polls them.
+ */
+static void test_largest_settings(void)
+{
+	static char buf[2 << 20], change[65536];
+	char name[57];
+	static unsigned char leases[8 + 36 * 512];
+	char file[512], err[256], stub[512], user[64], line[512];
+	uint64_t written = (uint64_t)time(NULL);
+	struct mg_connection *c = conn_new();
+	struct prov_buf b;
+	size_t len = 0, whole;
+	char *body = NULL;
+	int grows = 0, rc = 0, status;
+	FILE *f;
+
+	puts("the largest settings, served whole");
+	if (!c)
+		return;
+	/*
+	 * A name of the most that the store holds for each: 24 quotes and 8
+	 * characters of four bytes, 56 bytes, 80 as JSON.
+	 */
+	memset(name, '"', 24);
+	for (int i = 0; i < 8; i++)
+		memcpy(name + 24 + 4 * i, "\xf0\x9f\x98\x80", 4);
+	name[56] = '\0';
+	mkdir(prov_path("/run", file, sizeof(file)), 0755);
+	put("/apply-stub", apply_stub, 0755);
+	put("/run/release", "", 0644);
+	setenv("POND_ONU_APPLY", prov_path("/apply-stub", stub, sizeof(stub)), 1);
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		snprintf(line, sizeof(line), "/run/onu-pppoe%d", n);
+		unlink(prov_path(line, file, sizeof(file)));
+	}
+
+	/* Users of 63 characters, each one that JSON escapes. */
+	for (int n = 1; n <= 7; n++) {
+		memset(user, n & 1 ? '"' : '\\', 63);
+		user[63] = '\0';
+		snprintf(line, sizeof(line), "USER=%s\nSECRET=example-secret\nVLAN=410\nPASS=off\n",
+			 user);
+		rc |= prov_session_set(line, err, sizeof(err));
+		settled(buf, sizeof(buf));
+	}
+	for (int n = 1; n <= 8; n++) {
+		int net = 100 + 4 * n;
+
+		snprintf(line, sizeof(line),
+			 "CONN=pppoe:%d\nNAME=%s\nVLAN=%d\nADDRESS=192.168.%d.1/22\n"
+			 "POOL_FROM=192.168.%d.0\nPOOL_TO=192.168.%d.255\nLEASE=604800\n",
+			 (n - 1) % 7 + 1, name, 100 + n, net, net + 1, net + 2);
+		rc |= prov_lan_set(line, err, sizeof(err));
+		settled(buf, sizeof(buf));
+	}
+	/* The fixed addresses, 64 in each network, in one change: one by one is slow. */
+	for (int i = 0; i < 512; i++) {
+		int lan = i / 64 + 1, j = i % 64;
+
+		len += (size_t)snprintf(change + len, sizeof(change) - len,
+					"FIXED%d=%d/02:00:00:00:%02x:%02x/192.168.%d.%d\n"
+					"FIXED%d_NAME=%s\n",
+					i + 1, lan, lan, j, 103 + 4 * lan, 100 + j, i + 1, name);
+	}
+	rc |= prov_settings_set(change, err, sizeof(err));
+	settled(buf, sizeof(buf));
+	check(rc == 0 && len < sizeof(change),
+	      "seven sessions, eight networks and 512 fixed addresses are taken");
+
+	for (int i = 0; i < 8; i++)
+		leases[i] = (unsigned char)(written >> (56 - 8 * i));
+	for (int n = 1; n <= 8; n++) {
+		for (int i = 0; i < 512; i++) {
+			unsigned char *l = leases + 8 + 36 * i;
+
+			memset(l, 0, 36);
+			memset(l, 0xff, 4);
+			l[4] = 192;
+			l[5] = 168;
+			l[6] = (unsigned char)(100 + 4 * n + i / 156);
+			l[7] = (unsigned char)(100 + i % 156);
+			memcpy(l + 8, "\xaa\xbb\xcc\xdd", 4);
+			l[12] = (unsigned char)n;
+			l[13] = (unsigned char)i;
+			memset(l + 14, 0x01, 20);
+		}
+		snprintf(line, sizeof(line), "/run/udhcpd-net%d.leases", n);
+		f = fopen(prov_path(line, file, sizeof(file)), "w");
+		if (f) {
+			fwrite(leases, 1, sizeof(leases), f);
+			fclose(f);
+		}
+	}
+
+	b = (struct prov_buf){ .max = VALUE_MAX + 1, .grow = heap_grow, .ctx = &grows };
+	rc = prov_settings(&b);
+	whole = b.len;
+	printf("  the largest settings come to %zu bytes of JSON\n", whole);
+	check(rc == 0 && !b.overflow && well_formed(b.buf) &&
+		      occurrences(b.buf, "\"mac\":\"02:00:00:00:") == 512 &&
+		      occurrences(b.buf, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512 &&
+		      occurrences(b.buf, "\"left_s\":42949672") == 8 * 512 &&
+		      occurrences(b.buf, "\\u0001") == 8 * 512 * 20 &&
+		      occurrences(b.buf, "\"name\":\"\\\"\\\"") == 512 + 8 &&
+		      occurrences(b.buf, "\"user\":\"") == 7,
+	      "the settings are whole: every fixed address and every device, each name escaped");
+	check(whole > 96 * 1024 && whole <= VALUE_MAX,
+	      "more than a reply had room for before, within the most a value may be");
+	free(b.buf);
+
+	value_get(c, prov_find("settings"), NULL, 0);
+	status = reply_of(c, &body);
+	check(status == 200 && body && well_formed(body) &&
+		      !strncmp(body, "{\"id\":\"settings\",\"value\":{\"settings\":", 37) &&
+		      strlen(body) >= whole + 26 &&
+		      occurrences(body, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512,
+	      "and as a reply, its length as the headers say");
+	free(body);
+	c->send.len = 0;
+	value_sent(c);
+
+	value_getm(c, mg_str("uptime,settings,memory"));
+	status = reply_of(c, &body);
+	check(status == 200 && body && well_formed(body) && strstr(body, "\"uptime\":{") &&
+		      strstr(body, "\"memory\":{") &&
+		      occurrences(body, "\"mac\":\"aa:bb:cc:dd:") == 8 * 512,
+	      "and among the values the panel polls together");
+	free(body);
+	conn_free(c);
+
+	for (int n = 1; n <= 8; n++) {
+		snprintf(line, sizeof(line), "/run/udhcpd-net%d.leases", n);
+		unlink(prov_path(line, file, sizeof(file)));
+	}
+	unlink(prov_path("/run/onu.conf", file, sizeof(file)));
+	for (int n = 1; n <= 7; n++) {
+		snprintf(line, sizeof(line), "/run/onu-pppoe%d", n);
+		unlink(prov_path(line, file, sizeof(file)));
+	}
+	unsetenv("POND_ONU_APPLY");
+}
+
 static void test_omci(void)
 {
 	char buf[16384], path[200];
@@ -2834,6 +2983,7 @@ int main(void)
 	test_lans();
 	test_ipoe();
 	test_session_pass();
+	test_largest_settings();
 	test_omci();
 	test_omci_frames();
 	test_system();
