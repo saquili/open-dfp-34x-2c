@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # SPDX-FileCopyrightText: 2026 Paweł Phan <szop.hektar_1w@icloud.com>
 #
-# onu-utils, built from the onu-utils/ directory of this repository.
+# onu-utils, built from the onu-utils/ directory of this repository. ubusd's
+# access list for the account dhcpc, acl/dhcpc.json, lets the script of the
+# IPoE connections' DHCP client, onu-dhcpc, tell onu-apply of a lease, and
+# nothing else.
 
 ONU_UTILS_VERSION = local
 ONU_UTILS_SITE = $(BR2_EXTERNAL_OPEN_DFP_34X_2C_PATH)/../onu-utils
@@ -35,6 +38,8 @@ define ONU_UTILS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-change $(TARGET_DIR)/usr/lib/onu/onu-change
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-net $(TARGET_DIR)/usr/lib/onu/onu-net
 	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-run $(TARGET_DIR)/usr/lib/onu/onu-run
+	$(INSTALL) -D -m 0755 $(@D)/scripts/onu-dhcpc $(TARGET_DIR)/usr/lib/onu/onu-dhcpc
+	$(INSTALL) -D -m 0644 $(@D)/acl/dhcpc.json $(TARGET_DIR)/usr/share/acl.d/dhcpc.json
 	$(INSTALL) -D -m 0755 $(@D)/scripts/passwd $(TARGET_DIR)/usr/bin/passwd
 endef
 

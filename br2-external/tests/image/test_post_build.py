@@ -243,7 +243,7 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\ndhcp6d:*:::::::\n", shadow)
         # The programs that write into a session's directory share a group.
         self.assertEqual(group.count("\nonu:"), 1)
-        self.assertIn("\nonu:x:210:dhcp6d,pppoed\n", group)
+        self.assertIn("\nonu:x:210:dhcp6d,pppoed,dhcpc\n", group)
         self.assertEqual(passwd.count("\npppoed:"), 1)
         self.assertIn("\npppoed:x:203:203:The PPPoE client:/var/empty:/bin/false\n", passwd)
         self.assertIn("\npppoed:x:203:\n", group)
@@ -252,6 +252,10 @@ class PostBuild(unittest.TestCase):
         self.assertIn("\nomcid:x:204:204:The OMCI daemon:/var/empty:/bin/false\n", passwd)
         self.assertIn("\nomcid:x:204:\n", group)
         self.assertIn("\nomcid:*:::::::\n", shadow)
+        self.assertEqual(passwd.count("\ndhcpc:"), 1)
+        self.assertIn("\ndhcpc:x:205:205:The DHCP client:/var/empty:/bin/false\n", passwd)
+        self.assertIn("\ndhcpc:x:205:\n", group)
+        self.assertIn("\ndhcpc:*:::::::\n", shadow)
 
     def test_a_line_of_an_earlier_build_is_replaced_and_the_mode_stays(self):
         etc = os.path.join(self.target, "etc")
@@ -266,7 +270,7 @@ class PostBuild(unittest.TestCase):
         with open(group, encoding="utf-8") as handle:
             text = handle.read()
         self.assertEqual(text.count("\nonu:"), 1)
-        self.assertIn("\nonu:x:210:dhcp6d,pppoed\n", text)
+        self.assertIn("\nonu:x:210:dhcp6d,pppoed,dhcpc\n", text)
         self.assertEqual(os.stat(os.path.join(etc, "shadow")).st_mode & 0o777, 0o600)
         self.assertFalse(os.path.exists(os.path.join(etc, "shadow.new")))
 

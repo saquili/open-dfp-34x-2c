@@ -119,6 +119,8 @@ class TheScripts(unittest.TestCase):
             for name in names:
                 if label == "onu-run":
                     self.assertIn(f"DROP=$LIB/{name}\n", text)
+                elif label == "onu-dhcpc":
+                    self.assertIn(f"CALL=$ROOT/usr/lib/onu/{name}\n", text)
                 else:
                     # verbs(): the program that made a change, the first word of its line.
                     self.assertRegex(text, rf'(?m)^\t[a-z]+\) echo "{name} ')

@@ -52,6 +52,8 @@ DYNAMIC = {
     # prog is the first word of what verbs() echoes for a change on trial.
     ("onu-change", '"$prog"'): ("onu-lane", "onu-mgmt"),
     ("onu-change", '"${v%% *}"'): ("onu-lane", "onu-mgmt"),
+    # CALL=$ROOT/usr/lib/onu/onu-call
+    ("onu-dhcpc", '"$CALL"'): ("onu-call",),
 }
 
 # What ash holds whatever the configuration, and what it holds with a symbol
