@@ -55,6 +55,12 @@ static const uint32_t g_classes[] = {
 /* The room kept besides what omcid is asked to fit its answer in. */
 #define ROOM 256u
 
+/*
+ * The most omcid is given for the managed entities, however much room the
+ * buffer has: the room a value had when values had a buffer of a fixed size.
+ */
+#define MIB_TEXT (64u * 1024u)
+
 int prov_omci(struct prov_buf *out)
 {
 	uint32_t max;
@@ -65,12 +71,15 @@ int prov_omci(struct prov_buf *out)
 	};
 	int n;
 
-	if (out->overflow || out->cap - out->len < ROOM)
+	pv_reserve(out, MIB_TEXT);
+	if (pv_room(out) < ROOM)
 		return -ENOSPC;
 	/* omcid leaves out what does not fit, and says so. */
-	max = (uint32_t)(out->cap - out->len - ROOM);
+	max = (uint32_t)(pv_room(out) - ROOM);
+	if (max > MIB_TEXT - ROOM)
+		max = MIB_TEXT - ROOM;
 	n = bus_call("omcid", "mib", args, ARRAY_SIZE(args), out->buf + out->len,
-		     out->cap - out->len);
+		     pv_room(out));
 	if (n < 0)
 		return n;
 	out->len += (size_t)n;
@@ -95,13 +104,14 @@ int prov_omci_frames_from(struct prov_buf *out, unsigned long since)
 	};
 	int n;
 
-	if (out->overflow || out->cap - out->len < ROOM + FRAME_TEXT)
+	pv_reserve(out, ROOM + FRAMES_MAX * FRAME_TEXT);
+	if (pv_room(out) < ROOM + FRAME_TEXT)
 		return -ENOSPC;
-	max = (uint32_t)((out->cap - out->len - ROOM) / FRAME_TEXT);
+	max = (uint32_t)((pv_room(out) - ROOM) / FRAME_TEXT);
 	if (max > FRAMES_MAX)
 		max = FRAMES_MAX;
 	n = bus_call("omcid", "frames", args, ARRAY_SIZE(args),
-		     out->buf + out->len, out->cap - out->len);
+		     out->buf + out->len, pv_room(out));
 	if (n < 0)
 		return n;
 	out->len += (size_t)n;

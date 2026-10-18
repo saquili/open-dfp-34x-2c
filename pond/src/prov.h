@@ -22,13 +22,33 @@
  * @cap: room in @buf
  * @len: what is written so far
  * @overflow: set when something did not fit; the text is then not used
+ * @max: the room @grow may give @buf at most, the text's end included
+ * @grow: give @buf at least @cap bytes of room, what is written kept, and
+ *	say whether it did; NULL for a buffer of a fixed size
+ * @ctx: the caller's, for @grow
+ *
+ * A buffer that grows is as large as its text, and no larger than @max: a
+ * value takes the memory it needs only while it is written and sent, and
+ * one that would pass @max overflows, as a fixed buffer does when full.
  */
 struct prov_buf {
 	char *buf;
 	size_t cap;
 	size_t len;
 	bool overflow;
+	size_t max;
+	bool (*grow)(struct prov_buf *b, size_t cap);
+	void *ctx;
 };
+
+/*
+ * Make room in @b for @n more bytes, as far as it grows: for a provider
+ * that has another program write into the buffer, which it cannot grow.
+ * pv_room() is the room there is now, for a text and its end, which such a
+ * provider gives that program: none once @b has overflowed.
+ */
+void pv_reserve(struct prov_buf *b, size_t n);
+size_t pv_room(const struct prov_buf *b);
 
 /* Write JSON: raw text, strings, numbers, a fixed-point number, true or false, null. */
 void pv_raw(struct prov_buf *b, const char *s);

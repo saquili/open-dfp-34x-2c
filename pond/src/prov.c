@@ -17,17 +17,60 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/*
+ * Grow @b to hold @want bytes: twice what it had until that is enough, so
+ * that a long text is copied a few times in all, never at each write.
+ */
+static bool grow(struct prov_buf *b, size_t want)
+{
+	size_t cap = b->cap ? b->cap : 256;
+
+	if (!b->grow || want > b->max)
+		return false;
+	while (cap < want && cap <= b->max / 2)
+		cap *= 2;
+	if (cap < want || cap > b->max)
+		cap = b->max;
+	return b->grow(b, cap) && b->cap >= want;
+}
+
+/*
+ * Whether @need more bytes fit @b, and its end: within its room, and for a
+ * buffer that grows within its most too, which its room, rounded up by
+ * whoever gave it, may pass.
+ */
 static bool room(struct prov_buf *b, size_t need)
 {
+	size_t want = b->len + need + 1;
+
 	if (b->overflow)
 		return false;
-	if (b->len + need + 1 > b->cap) {
+	if ((want > b->cap || (b->grow && want > b->max)) && !grow(b, want)) {
 		b->overflow = true;
 		if (b->cap)
 			b->buf[b->len] = '\0';
 		return false;
 	}
 	return true;
+}
+
+size_t pv_room(const struct prov_buf *b)
+{
+	size_t end = b->grow && b->max < b->cap ? b->max : b->cap;
+
+	return b->overflow || end < b->len ? 0 : end - b->len;
+}
+
+void pv_reserve(struct prov_buf *b, size_t n)
+{
+	size_t want = b->len + n + 1;
+
+	if (b->overflow || want <= b->cap || !b->grow)
+		return;
+	if (want > b->max)
+		want = b->max;
+	if (want > b->cap)
+		b->grow(b, want);
 }
 
 void pv_raw(struct prov_buf *b, const char *s)

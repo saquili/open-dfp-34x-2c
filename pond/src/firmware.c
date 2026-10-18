@@ -94,7 +94,7 @@ static void reply(struct mg_connection *c, int code, const char *what,
 		  const char *detail)
 {
 	char body[512];
-	struct prov_buf b = { body, sizeof(body), 0, false };
+	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 
 	pv_open(&b, '{');
 	pv_key(&b, code == 200 ? "ok" : "error");

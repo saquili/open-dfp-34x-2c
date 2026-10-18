@@ -36,7 +36,7 @@ static void check(bool cond, const char *what)
 static const char *render(int (*fn)(struct prov_buf *), char *buf, size_t cap,
 			  int *err)
 {
-	struct prov_buf b = { buf, cap, 0, false };
+	struct prov_buf b = { .buf = buf, .cap = cap };
 
 	*err = fn(&b);
 	if (*err)
@@ -491,7 +491,7 @@ static const char *nlb_render(int (*fn)(const char *, size_t,
 					struct prov_buf *),
 			      const struct nlb *in, char *buf, size_t cap)
 {
-	struct prov_buf b = { buf, cap, 0, false };
+	struct prov_buf b = { .buf = buf, .cap = cap };
 
 	if (fn((const char *)in->buf, in->len, &b))
 		return "";
@@ -732,7 +732,7 @@ static void test_netlink_fdb(void)
 	nlb_u32(&fdb, T_NDA_MASTER, 5);
 	nlb_msg_end(&fdb);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_nl_fdb((const char *)links.buf, links.len,
 			  (const char *)fdb.buf, fdb.len, &b) == 0 &&
 		      !b.overflow,
@@ -1145,7 +1145,7 @@ static void test_netlink_network(void)
 	nlb_addr(&addrs, T_AF_INET, 32, 0, 6, T_IFA_LOCAL, lan_ip, 4);
 	nlb_addr(&addrs, T_AF_INET6, 64, 253, 5, T_IFA_ADDRESS, ll6, 16);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_nl_links((const char *)links.buf, links.len,
 			    (const char *)addrs.buf, addrs.len, &b) == 0 &&
 		      !b.overflow && well_formed(buf),
@@ -1184,7 +1184,7 @@ static void test_netlink_network(void)
 	nlb_route(&routes, T_AF_INET6, 64, 254, 2, 1, doc6, 16, NULL, 5);
 	nlb_route(&routes, T_AF_INET6, 8, 254, 2, 5, doc6, 16, NULL, 5);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_nl_routes((const char *)links.buf, links.len,
 			     (const char *)routes.buf, routes.len, &b) == 0 &&
 		      !b.overflow && well_formed(buf),
@@ -1212,7 +1212,7 @@ static void test_netlink_network(void)
 	nlb_neigh(&neigh, T_AF_INET6, 5, T_NUD_NOARP, ll6, 16, NULL);
 	nlb_neigh(&neigh, 7, 3, T_NUD_PERMANENT, host, 6, host);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_nl_neighbours((const char *)links.buf, links.len,
 				 (const char *)neigh.buf, neigh.len, &b) == 0 &&
 		      !b.overflow && well_formed(buf),
@@ -1274,7 +1274,7 @@ static void test_netlink_malformed(void)
 
 	{
 		struct nlb links;
-		struct prov_buf pb = { buf, sizeof(buf), 0, false };
+		struct prov_buf pb = { .buf = buf, .cap = sizeof(buf) };
 		static const unsigned char shortmac[4] = { 1, 2, 3, 4 };
 
 		nlb_links(&links);
@@ -1334,7 +1334,7 @@ static void test_netlink_onu(void)
 	nlb_u64(&dev, T_PON_A_DEV_ONU_STATE_TIME, 5000000000ULL);
 	nlb_msg_end(&dev);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_nl_onu((const char *)links.buf, links.len,
 			  (const char *)dev.buf, dev.len, &b) == 0,
 	      "a dev-get reply parses");
@@ -1385,7 +1385,7 @@ static void test_netlink_onu(void)
 	nlb_attr(&dev, T_PON_A_DEV_SERIAL_NUMBER, sn, sizeof(sn));
 	nlb_msg_end(&dev);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	prov_nl_onu((const char *)links.buf, links.len, (const char *)dev.buf,
 		    dev.len, &b);
 
@@ -1407,7 +1407,7 @@ static void test_netlink_onu(void)
 	nlb_u32(&dev, T_PON_A_DEV_ID, 0);
 	nlb_msg_end(&dev);
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	prov_nl_onu((const char *)links.buf, links.len, (const char *)dev.buf,
 		    dev.len, &b);
 
@@ -1421,12 +1421,12 @@ static void test_netlink_onu(void)
 	check(strstr(s, "\"serial\":null") != NULL,
 	      "including the serial number");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_nl_onu((const char *)links.buf, links.len, "", 0, &b) == 0 &&
 		      strcmp(buf, "null") == 0,
 	      "a kernel with no ONU answers null rather than failing");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	prov_nl_onu((const char *)links.buf, links.len, (const char *)dev.buf,
 		    8, &b);
 	check(strcmp(buf, "null") == 0, "and half a message is not an ONU");
@@ -1439,7 +1439,7 @@ static void test_optics(void)
 
 	puts("the optics, found by name among the hwmon devices");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	check(prov_optics(&b) == 0, "the row reads");
 
 	check(strstr(buf, "\"temperature_c\":44.050") != NULL,
@@ -1463,34 +1463,84 @@ static void test_writers(void)
 
 	puts("json writers");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	pv_str(&b, "a\"b\\c\nd");
 	check(!strcmp(buf, "\"a\\\"b\\\\c\\nd\""),
 	      "quotes, backslashes and newlines are escaped");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	pv_str(&b, "esc\033[2J");
 	check(strstr(buf, "\\u001b") != NULL,
 	      "a control byte from the kernel log cannot reach a terminal as an escape");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	pv_fixed(&b, -1234, 2);
 	check(!strcmp(buf, "-12.34"),
 	      "a negative fixed-point keeps its fraction");
 
-	b = (struct prov_buf){ buf, sizeof(buf), 0, false };
+	b = (struct prov_buf){ .buf = buf, .cap = sizeof(buf) };
 	pv_fixed(&b, 5, 3);
 	check(!strcmp(buf, "0.005"),
 	      "a small fixed-point keeps its leading zeros");
 
 	memset(small, 'X', sizeof(small));
-	b = (struct prov_buf){ small, sizeof(small), 0, false };
+	b = (struct prov_buf){ .buf = small, .cap = sizeof(small) };
 	pv_str(&b, "this string is far too long for the buffer");
 	check(b.overflow, "a value that does not fit sets overflow");
 	check(memchr(small, '\0', sizeof(small)) != NULL,
 	      "and still terminates the string, so the caller's strlen stays in bounds");
 	check(strlen(small) < sizeof(small),
 	      "and does not run past the buffer");
+}
+
+/* A buffer that grows on the heap, as a reply's does (value.c); @ctx counts. */
+static bool heap_grow(struct prov_buf *b, size_t cap)
+{
+	char *p = realloc(b->buf, cap);
+
+	if (!p)
+		return false;
+	b->buf = p;
+	b->cap = cap;
+	(*(int *)b->ctx)++;
+	return true;
+}
+
+static void test_growth(void)
+{
+	char fixed[64];
+	int grows = 0;
+	struct prov_buf b = { .max = 4096, .grow = heap_grow, .ctx = &grows };
+
+	puts("a buffer that grows");
+
+	for (int i = 0; i < 1000; i++)
+		pv_str(&b, "ab");
+	check(!b.overflow && b.len == 4000 && strlen(b.buf) == 4000,
+	      "a text of 4000 bytes is written whole into a buffer that started with none");
+	check(grows == 5 && b.cap == 4096,
+	      "the buffer grew five times, twice its size each time, not at each write");
+	for (int i = 0; i < 10; i++)
+		pv_str(&b, "a little more than there is room for");
+	check(b.overflow && b.cap == 4096 && strlen(b.buf) < b.cap,
+	      "a text that would pass its most overflows, and the buffer stays within it");
+	free(b.buf);
+
+	grows = 0;
+	b = (struct prov_buf){ .max = 100000, .grow = heap_grow, .ctx = &grows };
+	pv_raw(&b, "{");
+	pv_reserve(&b, 65536);
+	check(!b.overflow && b.cap - b.len > 65536 && grows == 2,
+	      "room is made for what another program writes into the buffer");
+	pv_reserve(&b, 200000);
+	check(!b.overflow && b.cap == 100000,
+	      "as far as the buffer grows, and no further");
+	free(b.buf);
+
+	b = (struct prov_buf){ .buf = fixed, .cap = sizeof(fixed) };
+	pv_reserve(&b, 65536);
+	check(b.cap == sizeof(fixed) && !b.overflow,
+	      "a buffer of a fixed size keeps its size");
 }
 
 /* A file of the test tree: write it with @mode, or read it whole. */
@@ -2625,6 +2675,7 @@ int main(void)
 	test_netlink_onu();
 	test_optics();
 	test_writers();
+	test_growth();
 	test_settings();
 	test_firmware();
 	test_panel_values();

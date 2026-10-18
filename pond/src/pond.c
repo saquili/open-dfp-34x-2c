@@ -100,7 +100,7 @@ static void reply_err(struct mg_connection *c, int code, const char *what,
 		      const char *why)
 {
 	char body[512];
-	struct prov_buf b = { body, sizeof(body), 0, false };
+	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 
 	pv_open(&b, '{');
 	pv_key(&b, "error");
@@ -115,7 +115,7 @@ static void reply_err(struct mg_connection *c, int code, const char *what,
 static void api_schema(struct mg_connection *c)
 {
 	static char body[POND_REPLY_CAP];
-	struct prov_buf b = { body, sizeof(body), 0, false };
+	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 	size_t i;
 	bool first = true;
 
@@ -172,8 +172,8 @@ static void api_get(struct mg_connection *c, struct mg_str id,
 	static char val[POND_VALUE_CAP];
 	char name[64];
 	const struct prov *p;
-	struct prov_buf v = { val, sizeof(val), 0, false };
-	struct prov_buf b = { body, sizeof(body), 0, false };
+	struct prov_buf v = { .buf = val, .cap = sizeof(val) };
+	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 	struct mg_str since = mg_http_var(query, mg_str("since"));
 	int err;
 
@@ -226,7 +226,7 @@ static void api_getm(struct mg_connection *c, struct mg_str query)
 {
 	static char body[POND_REPLY_CAP];
 	static char val[POND_VALUE_CAP];
-	struct prov_buf b = { body, sizeof(body), 0, false };
+	struct prov_buf b = { .buf = body, .cap = sizeof(body) };
 	struct mg_str ids = mg_http_var(query, mg_str("ids"));
 	const char *s, *end;
 	bool first = true;
@@ -244,7 +244,7 @@ static void api_getm(struct mg_connection *c, struct mg_str query)
 		size_t n = comma ? (size_t)(comma - s) : (size_t)(end - s);
 		char name[64];
 		const struct prov *p;
-		struct prov_buf v = { val, sizeof(val), 0, false };
+		struct prov_buf v = { .buf = val, .cap = sizeof(val) };
 
 		if (n && n < sizeof(name)) {
 			memcpy(name, s, n);
