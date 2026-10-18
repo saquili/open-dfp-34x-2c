@@ -6319,8 +6319,9 @@ static bool rtl9602c_l34_route6_wan_sync(struct rtl9602c_priv *p)
  * another flow. Free ways are read from the hardware, since entries survive a
  * warm restart. That the engine searches every way of a bucket is not verified.
  * A cookie already held reuses its record, its old entries zeroed first:
- * netfilter offers a flow once to each device of its flowtable. A new record is
- * dropped again if the flow is declined.
+ * netfilter offers a flow once to each device of its flowtable. A declined flow
+ * keeps no record: a held one's entries are zeroed by then, and its record,
+ * kept, would free them again once another flow had taken them.
  */
 static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 				 u32 lip, u16 lport, u32 rip, u16 rport,
@@ -6335,8 +6336,7 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 	unsigned int bucket, way, inbucket, rway, free_way;
 	unsigned int naptr_idx = 0;
 	unsigned int wan = 0, old_wan = 0;
-	struct rtl9602c_l34_flow *f;
-	bool created = false;
+	struct rtl9602c_l34_flow *f = NULL;
 	int extidx, err = -ENOSPC;
 
 	bucket = rtl9602c_napt_bucket(lip, lport, rip, rport, tcp);
@@ -6385,12 +6385,12 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 		f = rtl9602c_l34_flow_new(p, cookie);
 		if (IS_ERR(f)) {
 			err = PTR_ERR(f);
+			f = NULL;
 			if (err == -ENOSPC)
 				pr_debug("<flow> %u flows held, as many as the engine has entries\n",
 					 p->l34_flows_n);
 			goto out;
 		}
-		created = true;
 	}
 
 	for (way = 0; way < RTL9602C_NAPT_WAYS; way++) {
@@ -6484,8 +6484,11 @@ static int rtl9602c_l34_flow_add(struct rtl9602c_priv *p, unsigned long cookie,
 		 way, naptr_idx, inbucket, rtl9602c_napt_rem_hash(rip, rport),
 		 p->l34_flows_n);
 out:
-	if (err && created)
+	if (err && f) {
+		if (old_wan && p->l34_pppoe[old_wan].refs)
+			p->l34_pppoe[old_wan].refs--;
 		rtl9602c_l34_flow_forget(p, f);
+	}
 	mutex_unlock(&p->flow_lock);
 	return err;
 }

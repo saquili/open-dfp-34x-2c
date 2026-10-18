@@ -2565,8 +2565,11 @@ What the driver takes from a rule:
    first because the engine reads the tables continuously, and a pointer written
    first could name an entry that still holds another flow. (T)
 8. Take the WAN reference and fill in the record. Purpose: the driver's record
-   of the flow for statistics, removal and the release of a block. A new record
-   is dropped again when the flow is declined in steps 4 to 7. (T)
+   of the flow for statistics, removal and the release of a block. A flow
+   declined in steps 4 to 7 keeps no record: a new one is dropped, and a held
+   one, whose entries step 3 zeroed, is dropped with its WAN reference, since a
+   record kept would free those entries again once another flow had taken them.
+   (T; no test has declined a held flow)
 
 The steps are checked by a routing test, in which the ``<flow>`` debug line
 names the outbound entry with its bucket and way, the inbound entry and bucket,
