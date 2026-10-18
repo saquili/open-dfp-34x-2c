@@ -2177,24 +2177,28 @@ The address notifier
        ``NETDEV_UP`` and ``NETDEV_DOWN`` while ``l34_up``. First the routed GEM
        stream is claimed or given back (see the rows below); then only a netdev
        that is a user port of this switch, or whose ``ndo_get_iflink`` names one
-       (a GEM interface, a VLAN device), is handled. It keeps one L3-interface
-       row per netdev, by ifindex, in the first free of the 16 rows. ``UP``
-       writes the netdev's MAC, VLAN (see "L3 interface (selector 3)"), the
-       address and the MTU, and puts the address in the external-address table
-       with the uplink's next hop (see the row below), where netfilter's
-       translated source will be looked up; a second address replaces the
-       first in the row. ``DOWN`` gives back the
-       address's external-address row, then rewrites the interface row with an
-       address that remains, or clears it. Then the route table is committed
-       again, since a directly attached route names the row. A netdevice
-       notifier writes the row again, with the device's first address, when
-       its MAC address or its MTU changes (``NETDEV_CHANGEADDR``,
-       ``NETDEV_CHANGEMTU``).
-     - T, I
+       (a GEM interface, a VLAN device), or names a GEM interface that does (a
+       VLAN on a GEM interface, an IPoE connection's), is handled. It keeps one
+       L3-interface row per netdev, by ifindex, in the first free of the 16
+       rows. ``UP`` writes the netdev's MAC, VLAN (see "L3 interface (selector
+       3)"), the address and the MTU, and puts the address in the
+       external-address table with the uplink's next hop (see the row below),
+       where netfilter's translated source will be looked up; a second address
+       replaces the first in the row. ``DOWN`` gives back the address's
+       external-address row, then rewrites the interface row with an address
+       that remains, or clears it. Then the route table is committed again,
+       since a directly attached route names the row. A netdevice notifier
+       writes the row again, with the device's first address, when its MAC
+       address or its MTU changes (``NETDEV_CHANGEADDR``, ``NETDEV_CHANGEMTU``).
+     - T, I, M
      - A routing test, and the route rows following ``ip route``: ``ip address
        add`` and ``ip address del`` change the ``l3nat`` L3-interface row of the
        interface. That ``ip address del`` frees the external-address row is read
-       from the code; the ``l3nat`` view after it would show the row empty.
+       from the code; the ``l3nat`` view after it would show the row empty. An
+       IPoE connection on VLAN 2002 of a GEM interface: its row on the PON
+       port with VID 2002, its gateway a next hop in that VLAN, and NAT from a
+       local network at 936 Mbit/s up and 939 down, both flows
+       ``[HW_OFFLOAD]``.
    * - The external-address rows of the addresses and of the flows name the
        uplink's next hop: the next-hop row of the default route's gateway,
        once its neighbour holds one, else row 0

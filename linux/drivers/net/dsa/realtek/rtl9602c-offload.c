@@ -4133,34 +4133,33 @@ static int rtl9602c_l34_extip_set(struct rtl9602c_priv *p, unsigned int idx,
 
 /*
  * The switch port @dev is, or runs over: a GEM interface or a VLAN upper names
- * its lower device as its iflink. -1 for any other device.
+ * its lower device as its iflink, and a VLAN on a GEM interface, an IPoE
+ * connection's device, is two devices above the PON port. -1 for any other
+ * device.
  */
 static int rtl9602c_l34_port_of(struct rtl9602c_priv *p, struct net_device *dev)
 {
-	struct net_device *lower;
 	struct dsa_port *dp;
+	unsigned int depth;
 	int iflink;
 
-	if (dsa_user_dev_check(dev)) {
-		dp = dsa_port_from_netdev(dev);
-		if (!IS_ERR(dp) && dp->ds == &p->ds)
-			return dp->index;
-		return -1;
+	for (depth = 0; depth < 3; depth++) {
+		if (dsa_user_dev_check(dev)) {
+			dp = dsa_port_from_netdev(dev);
+			if (!IS_ERR(dp) && dp->ds == &p->ds)
+				return dp->index;
+			return -1;
+		}
+
+		iflink = dev_get_iflink(dev);
+		if (!iflink || iflink == dev->ifindex)
+			return -1;
+
+		dev = __dev_get_by_index(dev_net(dev), iflink);
+		if (!dev)
+			return -1;
 	}
-
-	iflink = dev_get_iflink(dev);
-	if (!iflink || iflink == dev->ifindex)
-		return -1;
-
-	lower = __dev_get_by_index(dev_net(dev), iflink);
-	if (!lower || !dsa_user_dev_check(lower))
-		return -1;
-
-	dp = dsa_port_from_netdev(lower);
-	if (IS_ERR(dp) || dp->ds != &p->ds)
-		return -1;
-
-	return dp->index;
+	return -1;
 }
 
 static int rtl9602c_l34_netif_row(struct rtl9602c_priv *p, int ifindex)
